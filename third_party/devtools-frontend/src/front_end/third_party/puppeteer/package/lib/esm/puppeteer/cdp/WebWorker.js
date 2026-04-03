@@ -1,10 +1,10 @@
+import { CDPSessionEvent } from '../api/CDPSession.js';
 import { TargetType } from '../api/Target.js';
 import { WebWorker } from '../api/WebWorker.js';
 import { TimeoutSettings } from '../common/TimeoutSettings.js';
 import { debugError } from '../common/util.js';
 import { ExecutionContext } from './ExecutionContext.js';
 import { IsolatedWorld } from './IsolatedWorld.js';
-import { CdpJSHandle } from './JSHandle.js';
 /**
  * @internal
  */
@@ -13,7 +13,7 @@ export class CdpWebWorker extends WebWorker {
     #client;
     #id;
     #targetType;
-    constructor(client, url, targetId, targetType, consoleAPICalled, exceptionThrown) {
+    constructor(client, url, targetId, targetType, consoleAPICalled, exceptionThrown, networkManager) {
         super(url);
         this.#id = targetId;
         this.#client = client;
@@ -22,18 +22,20 @@ export class CdpWebWorker extends WebWorker {
         this.#client.once('Runtime.executionContextCreated', async (event) => {
             this.#world.setContext(new ExecutionContext(client, event.context, this.#world));
         });
-        this.#client.on('Runtime.consoleAPICalled', async (event) => {
+        this.#world.emitter.on('consoleapicalled', async (event) => {
             try {
-                return consoleAPICalled(event.type, event.args.map((object) => {
-                    return new CdpJSHandle(this.#world, object);
-                }), event.stackTrace);
+                return consoleAPICalled(this.#world, event);
             }
             catch (err) {
                 debugError(err);
             }
         });
         this.#client.on('Runtime.exceptionThrown', exceptionThrown);
+        this.#client.once(CDPSessionEvent.Disconnected, () => {
+            this.#world.dispose();
+        });
         // This might fail if the target is closed before we receive all execution contexts.
+        networkManager?.addClient(this.#client).catch(debugError);
         this.#client.send('Runtime.enable').catch(debugError);
     }
     mainRealm() {
@@ -44,15 +46,20 @@ export class CdpWebWorker extends WebWorker {
     }
     async close() {
         switch (this.#targetType) {
-            case TargetType.SERVICE_WORKER:
-            case TargetType.SHARED_WORKER: {
-                // For service and shared workers we need to close the target and detach to allow
+            case TargetType.SERVICE_WORKER: {
+                // For service workers we need to close the target and detach to allow
                 // the worker to stop.
                 await this.client.connection()?.send('Target.closeTarget', {
                     targetId: this.#id,
                 });
                 await this.client.connection()?.send('Target.detachFromTarget', {
                     sessionId: this.client.id(),
+                });
+                break;
+            }
+            case TargetType.SHARED_WORKER: {
+                await this.client.connection()?.send('Target.closeTarget', {
+                    targetId: this.#id,
                 });
                 break;
             }

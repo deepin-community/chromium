@@ -20,6 +20,7 @@
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "net/base/hash_value.h"
 #include "net/base/net_errors.h"
 #include "net/disk_cache/disk_cache.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -84,14 +85,15 @@ class ServiceWorkerStorageTest : public testing::Test {
   ~ServiceWorkerStorageTest() override = default;
 
   void SetUp() override {
-    storage_ = ServiceWorkerStorage::Create(
-        user_data_directory_path_,
-        /*database_task_runner=*/base::SingleThreadTaskRunner::
-            GetCurrentDefault());
+    storage_shared_buffer_ =
+        base::MakeRefCounted<ServiceWorkerStorage::StorageSharedBuffer>();
+    storage_ = ServiceWorkerStorage::Create(user_data_directory_path_,
+                                            storage_shared_buffer_);
   }
 
   void TearDown() override {
     storage_.reset();
+    storage_shared_buffer_ = nullptr;
     disk_cache::FlushCacheThreadForTesting();
     base::RunLoop().RunUntilIdle();
   }
@@ -451,7 +453,8 @@ class ServiceWorkerStorageTest : public testing::Test {
     base::RunLoop loop;
 
     mojo::Remote<mojom::ServiceWorkerResourceReader> reader;
-    storage()->CreateResourceReader(id, reader.BindNewPipeAndPassReceiver());
+    storage()->CreateResourceReader(id, /*sha256_checksum=*/std::nullopt,
+                                    reader.BindNewPipeAndPassReceiver());
     reader.set_disconnect_handler(base::BindLambdaForTesting([&]() {
       out.result = net::ERR_CACHE_MISS;
       loop.Quit();
@@ -561,6 +564,8 @@ class ServiceWorkerStorageTest : public testing::Test {
   base::ScopedTempDir user_data_directory_;
   base::FilePath user_data_directory_path_;
   std::unique_ptr<ServiceWorkerStorage> storage_;
+  scoped_refptr<ServiceWorkerStorage::StorageSharedBuffer>
+      storage_shared_buffer_;
   base::test::TaskEnvironment task_environment_;
 };
 

@@ -27,10 +27,11 @@ limitations under the License.
 
 namespace tensorflow {
 
-Status ValidateEinsumEquation(const string& equation,
-                              gtl::InlinedVector<string, 2>* input_subscripts,
-                              string* output_subscript) {
-  gtl::InlinedVector<string, 2> inputs_and_output_subscripts =
+absl::Status ValidateEinsumEquation(
+    const std::string& equation,
+    absl::InlinedVector<std::string, 2UL>* input_subscripts,
+    std::string* output_subscript) {
+  absl::InlinedVector<std::string, 2UL> inputs_and_output_subscripts =
       absl::StrSplit(equation, "->");
   if (inputs_and_output_subscripts.size() != 2) {
     return errors::InvalidArgument(
@@ -44,7 +45,7 @@ Status ValidateEinsumEquation(const string& equation,
         "Expecting 1 or 2 input subscripts in equation '", equation,
         "' but got: ", input_subscripts->size());
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 // Returns the EinsumDimensionType given whether the corresponding label is
@@ -63,7 +64,7 @@ EinsumDimensionType GetDimensionType(bool is_removed, bool is_unique) {
 }
 
 // Maps the character labels to consecutive integers.
-void MapToLabels(const string& subscript, Labels* labels,
+void MapToLabels(const std::string& subscript, Labels* labels,
                  absl::flat_hash_map<char, int>* label_mapping) {
   for (int i = 0; i < subscript.size(); ++i) {
     const char label_char = subscript[i];
@@ -81,15 +82,14 @@ void MapToLabels(const string& subscript, Labels* labels,
   }
 }
 
-Status ParseEinsumEquation(const string& equation, OperandLabels* input_labels,
-                           Labels* output_labels,
-                           std::vector<EinsumDimensionType>* label_types,
-                           OperandLabelCounts* input_label_counts,
-                           LabelCounts* output_label_counts,
-                           gtl::InlinedVector<bool, 2>* input_has_ellipsis,
-                           bool* output_has_ellipsis) {
-  gtl::InlinedVector<string, 2> input_str;
-  string output_str;
+absl::Status ParseEinsumEquation(
+    const std::string& equation, OperandLabels* input_labels,
+    Labels* output_labels, std::vector<EinsumDimensionType>* label_types,
+    OperandLabelCounts* input_label_counts, LabelCounts* output_label_counts,
+    absl::InlinedVector<bool, 2UL>* input_has_ellipsis,
+    bool* output_has_ellipsis) {
+  absl::InlinedVector<std::string, 2UL> input_str;
+  std::string output_str;
   TF_RETURN_IF_ERROR(ValidateEinsumEquation(equation, &input_str, &output_str));
 
   // Temporary map from single character labels to (consecutive) integer labels.
@@ -135,7 +135,7 @@ Status ParseEinsumEquation(const string& equation, OperandLabels* input_labels,
                   (*input_label_counts)[1][label] == 0;
     (*label_types)[label] = GetDimensionType(removed, unique);
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace tensorflow

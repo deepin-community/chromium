@@ -34,7 +34,8 @@ TEST(WebAppHelpers, GenerateAppId) {
 
 TEST(WebAppHelpers, GenerateAppIdForSubApps) {
   const std::string subapp_starturl = "https://example.com/subapp";
-  const webapps::ManifestId parent_manifest_id = GURL("https://example.com");
+  const webapps::ManifestId parent_manifest_id =
+      webapps::ManifestId(GURL("https://example.com"));
 
   EXPECT_EQ("emdpgjhffapdncpmnindbhiapcohmjga",
             GenerateAppId(/*manifest_id_path=*/std::nullopt,
@@ -46,22 +47,34 @@ TEST(WebAppHelpers, GenerateAppIdForSubApps) {
 }
 
 TEST(WebAppHelpers, GenerateManifestIdFromStartUrlOnly) {
-  EXPECT_EQ(GURL("https://example.com/"),
-            GenerateManifestIdFromStartUrlOnly(GURL("https://example.com/")));
-  EXPECT_EQ(GURL("https://example.com"),
-            GenerateManifestIdFromStartUrlOnly(GURL("https://example.com")));
-  EXPECT_EQ(GURL("https://example.com/start?a=b"),
+  EXPECT_EQ(
+      GURL("https://example.com/").spec(),
+      GenerateManifestIdFromStartUrlOnly(GURL("https://example.com/")).spec());
+  EXPECT_EQ(
+      GURL("https://example.com").spec(),
+      GenerateManifestIdFromStartUrlOnly(GURL("https://example.com")).spec());
+  EXPECT_EQ(
+      GURL("https://example.com/start?a=b").spec(),
+      GenerateManifestIdFromStartUrlOnly(GURL("https://example.com/start?a=b"))
+          .spec());
+  EXPECT_EQ(GURL("https://example.com/start").spec(),
             GenerateManifestIdFromStartUrlOnly(
-                GURL("https://example.com/start?a=b")));
-  EXPECT_EQ(GURL("https://example.com/start"),
-            GenerateManifestIdFromStartUrlOnly(
-                GURL("https://example.com/start#fragment")));
+                GURL("https://example.com/start#fragment"))
+                .spec());
 }
 
 TEST(WebAppHelpers, IsValidWebAppUrl) {
-  // TODO(crbug.com/1253234): Remove chrome-extension scheme.
-  EXPECT_TRUE(IsValidWebAppUrl(
-      GURL("chrome-extension://oafaagfgbdpldilgjjfjocjglfbolmac")));
+  // TODO(crbug.com/40793595): Remove chrome-extension scheme from being
+  // installed as PWAs on ChromeOS.
+  bool is_chrome_extension_valid_web_app = true;
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  // chrome-extension:// URLs can no longer be PWAs, but they can be shortcuts.
+  is_chrome_extension_valid_web_app = false;
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+
+  EXPECT_EQ(IsValidWebAppUrl(
+                GURL("chrome-extension://oafaagfgbdpldilgjjfjocjglfbolmac")),
+            is_chrome_extension_valid_web_app);
 
   EXPECT_TRUE(IsValidWebAppUrl(GURL("https://chromium.org")));
   EXPECT_TRUE(IsValidWebAppUrl(GURL("https://www.chromium.org")));
@@ -110,17 +123,21 @@ TEST(WebAppHelpers, ManifestIdWithQueriesAndFragments) {
   GURL url_with_query_and_fragment =
       GURL("https://example.com/test?id#fragment");
 
-  EXPECT_EQ(url, GenerateManifestIdFromStartUrlOnly(url));
-  EXPECT_EQ(url, GenerateManifestIdFromStartUrlOnly(url_with_fragment));
-  EXPECT_EQ(url_with_query, GenerateManifestIdFromStartUrlOnly(url_with_query));
-  EXPECT_EQ(url_with_query,
-            GenerateManifestIdFromStartUrlOnly(url_with_query_and_fragment));
+  EXPECT_EQ(url.spec(), GenerateManifestIdFromStartUrlOnly(url).spec());
+  EXPECT_EQ(url.spec(),
+            GenerateManifestIdFromStartUrlOnly(url_with_fragment).spec());
+  EXPECT_EQ(url_with_query.spec(),
+            GenerateManifestIdFromStartUrlOnly(url_with_query).spec());
+  EXPECT_EQ(
+      url_with_query.spec(),
+      GenerateManifestIdFromStartUrlOnly(url_with_query_and_fragment).spec());
 
-  EXPECT_EQ(url, GenerateManifestId("test", start_url_long));
-  EXPECT_EQ(url, GenerateManifestId("test#id", start_url_long));
-  EXPECT_EQ(url_with_query, GenerateManifestId("test?id", start_url_long));
-  EXPECT_EQ(url_with_query,
-            GenerateManifestId("test?id#fragment", start_url_long));
+  EXPECT_EQ(url.spec(), GenerateManifestId("test", start_url_long).spec());
+  EXPECT_EQ(url.spec(), GenerateManifestId("test#id", start_url_long).spec());
+  EXPECT_EQ(url_with_query.spec(),
+            GenerateManifestId("test?id", start_url_long).spec());
+  EXPECT_EQ(url_with_query.spec(),
+            GenerateManifestId("test?id#fragment", start_url_long).spec());
 }
 
 }  // namespace web_app

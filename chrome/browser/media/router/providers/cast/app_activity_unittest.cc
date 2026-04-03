@@ -54,7 +54,7 @@ class AppActivityTest : public CastActivityTestBase {
     activity_ = std::make_unique<AppActivity>(
         MediaRoute(kRouteId, MediaSource("https://example.com/receiver.html"),
                    kSinkId, "", false),
-        kAppId, &message_handler_, &session_tracker_);
+        kAppId, &message_handler_, &session_tracker_, logger_, debugger_);
   }
 
   void SetUpSession() { activity_->SetOrUpdateSession(*session_, sink_, ""); }
@@ -66,8 +66,9 @@ class AppActivityTest : public CastActivityTestBase {
   MediaRoute& route() const { return activity_->route_; }
 
   MockCastSessionClient* AddMockClient(const std::string& client_id) {
-    return CastActivityTestBase::AddMockClient(activity_.get(), client_id,
-                                               tab_id_counter_++);
+    return CastActivityTestBase::AddMockClient(
+        activity_.get(), client_id,
+        content::FrameTreeNodeId(tab_id_counter_++));
   }
 
   int tab_id_counter_ = 239;  // Arbitrary number.
@@ -75,20 +76,22 @@ class AppActivityTest : public CastActivityTestBase {
 };
 
 TEST_F(AppActivityTest, SendAppMessageToReceiver) {
-  // TODO(crbug.com/954797): Test case where there is no session.
-  // TODO(crbug.com/954797): Test case where message has invalid namespace.
+  // TODO(crbug.com/40623998): Test case where there is no session.
+  // TODO(crbug.com/40623998): Test case where message has invalid namespace.
 
   EXPECT_CALL(message_handler_, SendAppMessage(kChannelId, _))
       .WillOnce(Return(cast_channel::Result::kFailed))
-      .WillOnce(WithArg<1>([](const cast::channel::CastMessage& cast_message) {
-        EXPECT_EQ("theClientId", cast_message.source_id());
-        EXPECT_EQ("theTransportId", cast_message.destination_id());
-        EXPECT_EQ("urn:x-cast:com.google.foo", cast_message.namespace_());
-        EXPECT_TRUE(cast_message.has_payload_utf8());
-        EXPECT_THAT(cast_message.payload_utf8(), IsJson(R"({"foo": "bar"})"));
-        EXPECT_FALSE(cast_message.has_payload_binary());
-        return cast_channel::Result::kOk;
-      }));
+      .WillOnce(WithArg<1>(
+          [](const openscreen::cast::proto::CastMessage& cast_message) {
+            EXPECT_EQ("theClientId", cast_message.source_id());
+            EXPECT_EQ("theTransportId", cast_message.destination_id());
+            EXPECT_EQ("urn:x-cast:com.google.foo", cast_message.namespace_());
+            EXPECT_TRUE(cast_message.has_payload_utf8());
+            EXPECT_THAT(cast_message.payload_utf8(),
+                        IsJson(R"({"foo": "bar"})"));
+            EXPECT_FALSE(cast_message.has_payload_binary());
+            return cast_channel::Result::kOk;
+          }));
 
   std::unique_ptr<CastInternalMessage> message =
       CastInternalMessage::From(ParseJsonDict(R"({
@@ -110,7 +113,7 @@ TEST_F(AppActivityTest, SendAppMessageToReceiver) {
 }
 
 TEST_F(AppActivityTest, SendMediaRequestToReceiver) {
-  // TODO(crbug.com/954797): Test case where there is no session.
+  // TODO(crbug.com/40623998): Test case where there is no session.
 
   const std::optional<int> request_id = 1234;
 
@@ -141,7 +144,7 @@ TEST_F(AppActivityTest, SendMediaRequestToReceiver) {
 }
 
 TEST_F(AppActivityTest, SendSetVolumeRequestToReceiver) {
-  // TODO(crbug.com/954797): Test case where no socket is found kChannelId.
+  // TODO(crbug.com/40623998): Test case where no socket is found kChannelId.
   EXPECT_CALL(
       message_handler_,
       SendSetVolumeRequest(
@@ -235,7 +238,7 @@ TEST_F(AppActivityTest, SendMessageToClient) {
 }
 
 TEST_F(AppActivityTest, AddRemoveClient) {
-  // TODO(crbug.com/954797): Check value returned by AddClient().
+  // TODO(crbug.com/40623998): Check value returned by AddClient().
 
   // Adding clients works as expected.
   ASSERT_TRUE(connected_clients().empty());
@@ -314,9 +317,9 @@ TEST_F(AppActivityTest, OnAppMessage) {
   SetUpSession();
 
   auto* client = AddMockClient("theClientId");
-  auto message = cast_channel::CreateCastMessage(
-      "urn:x-cast:com.google.foo", base::Value(base::Value::Dict()), "sourceId",
-      "theClientId");
+  auto message = cast_channel::CreateCastMessage("urn:x-cast:com.google.foo",
+                                                 base::Value(base::DictValue()),
+                                                 "sourceId", "theClientId");
   EXPECT_CALL(*client,
               SendMessageToClient(IsPresentationConnectionMessage(
                   CreateAppMessage("theSessionId", "theClientId", message)
@@ -329,9 +332,9 @@ TEST_F(AppActivityTest, OnAppMessageAllClients) {
 
   auto* client1 = AddMockClient("theClientId1");
   auto* client2 = AddMockClient("theClientId2");
-  auto message = cast_channel::CreateCastMessage(
-      "urn:x-cast:com.google.foo", base::Value(base::Value::Dict()), "sourceId",
-      "*");
+  auto message = cast_channel::CreateCastMessage("urn:x-cast:com.google.foo",
+                                                 base::Value(base::DictValue()),
+                                                 "sourceId", "*");
   EXPECT_CALL(*client1,
               SendMessageToClient(IsPresentationConnectionMessage(
                   CreateAppMessage("theSessionId", "theClientId1", message)
@@ -369,7 +372,7 @@ TEST_F(AppActivityTest, RemoveConnectionOnReceiver) {
 
 TEST_F(AppActivityTest, ForwardInternalMediaMessage) {
   const std::string client_id = "theClientId";
-  base::Value::Dict payload = ParseJsonDict(R"({
+  base::DictValue payload = ParseJsonDict(R"({
     "type": "v2_message",
     "clientId": "theClientId",
     "message": {
@@ -388,7 +391,7 @@ TEST_F(AppActivityTest, ForwardInternalMediaMessage) {
 
 TEST_F(AppActivityTest, IgnoreInternalMediaStatusMessage) {
   const std::string client_id = "theClientId";
-  base::Value::Dict media_status_payload = ParseJsonDict(R"({
+  base::DictValue media_status_payload = ParseJsonDict(R"({
     "type": "v2_message",
     "clientId": "theClientId",
     "message": {

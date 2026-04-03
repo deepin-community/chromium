@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include <stdint.h>
 
-#include "base/at_exit.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/path_service.h"
 #include "media/base/test_data_util.h"
@@ -77,7 +77,7 @@ TEST(JpegParserTest, Parsing) {
   EXPECT_EQ(3, result.scan.components[2].component_selector);
   EXPECT_EQ(1, result.scan.components[2].dc_selector);
   EXPECT_EQ(1, result.scan.components[2].ac_selector);
-  EXPECT_EQ(121148u, result.data_size);
+  EXPECT_EQ(121148u, result.data.size());
   EXPECT_EQ(121358u, result.image_size);
 }
 
@@ -100,7 +100,7 @@ TEST(JpegParserTest, TrailingZerosShouldBeIgnored) {
   // Verify selected fields
 
   // SOS fields
-  EXPECT_EQ(121148u, result.data_size);
+  EXPECT_EQ(121148u, result.data.size());
   EXPECT_EQ(121358u, result.image_size);
 }
 

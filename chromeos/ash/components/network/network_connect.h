@@ -12,8 +12,6 @@
 
 namespace ash {
 
-class NetworkTypePattern;
-
 // NetworkConnect is a state machine designed to handle the complex UI flows
 // associated with connecting to a network (and related tasks). Any showing
 // of UI is handled by the NetworkConnect::Delegate implementation.
@@ -90,12 +88,6 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConnect {
   // Requests a network disconnection. Ignores any errors and notifications.
   virtual void DisconnectFromNetworkId(const std::string& network_id) = 0;
 
-  // Enables or disables a network technology. If |technology| refers to
-  // cellular and the device cannot be enabled due to a SIM lock, this function
-  // will launch the SIM unlock dialog.
-  virtual void SetTechnologyEnabled(const NetworkTypePattern& technology,
-                                    bool enabled_state) = 0;
-
   // Determines whether or not a network requires a connection to activate or
   // setup and either shows a notification or opens the mobile setup dialog.
   virtual void ShowMobileSetup(const std::string& network_id) = 0;
@@ -115,19 +107,19 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConnect {
   // TODO(stevenjb): Use ONC properties instead of shill.
   virtual void ConfigureNetworkIdAndConnect(
       const std::string& network_id,
-      const base::Value::Dict& shill_properties,
+      const base::DictValue& shill_properties,
       bool shared) = 0;
 
   // Requests a new network configuration to be created from a dictionary of
   // Shill properties and sends a connect request if the configuration succeeds.
   // The profile used is determined by |shared|.
   // TODO(stevenjb): Use ONC properties instead of shill.
-  virtual void CreateConfigurationAndConnect(base::Value::Dict shill_properties,
+  virtual void CreateConfigurationAndConnect(base::DictValue shill_properties,
                                              bool shared) = 0;
 
   // Requests a new network configuration to be created from a dictionary of
   // Shill properties. The profile used is determined by |shared|.
-  virtual void CreateConfiguration(base::Value::Dict shill_properties,
+  virtual void CreateConfiguration(base::DictValue shill_properties,
                                    bool shared) = 0;
 
  protected:

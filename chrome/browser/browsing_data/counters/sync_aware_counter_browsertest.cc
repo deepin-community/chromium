@@ -8,6 +8,8 @@
 #include "base/run_loop.h"
 #include "base/threading/platform_thread.h"
 #include "build/build_config.h"
+#include "chrome/browser/autofill/autofill_entity_data_manager_factory.h"
+#include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/web_history_service_factory.h"
 #include "chrome/browser/password_manager/account_password_store_factory.h"
@@ -16,7 +18,7 @@
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
@@ -46,7 +48,7 @@ class SyncAwareCounterTest : public SyncTest {
   SyncAwareCounterTest(const SyncAwareCounterTest&) = delete;
   SyncAwareCounterTest& operator=(const SyncAwareCounterTest&) = delete;
 
-  ~SyncAwareCounterTest() override {}
+  ~SyncAwareCounterTest() override = default;
 
   void SetUpOnMainThread() override {
     fake_web_history_service_ =
@@ -101,7 +103,7 @@ class SyncAwareCounterTest : public SyncTest {
 };
 
 // Test that the counting restarts when autofill sync state changes.
-// TODO(crbug.com/553421): Move this to the sync/test/integration directory?
+// TODO(crbug.com/40443942): Move this to the sync/test/integration directory?
 IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, AutofillCounter) {
   // Set up the Sync client.
   ASSERT_TRUE(SetupClients());
@@ -109,8 +111,10 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, AutofillCounter) {
   Profile* profile = GetProfile(kFirstProfileIndex);
   // Set up the counter.
   browsing_data::AutofillCounter counter(
+      autofill::PersonalDataManagerFactory::GetForBrowserContext(profile),
       WebDataServiceFactory::GetAutofillWebDataForProfile(
           profile, ServiceAccessType::IMPLICIT_ACCESS),
+      autofill::AutofillEntityDataManagerFactory::GetForProfile(profile),
       sync_service);
 
   counter.Init(profile->GetPrefs(),
@@ -121,7 +125,8 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, AutofillCounter) {
   // We sync all datatypes by default, so starting Sync means that we start
   // syncing autofill, and this should restart the counter.
   ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(sync_service->IsSyncFeatureActive());
+  ASSERT_TRUE(sync_service->GetTransportState() ==
+              syncer::SyncService::TransportState::ACTIVE);
   ASSERT_TRUE(sync_service->GetActiveDataTypes().Has(syncer::AUTOFILL));
   WaitForCounting();
   EXPECT_TRUE(IsSyncEnabled());
@@ -157,17 +162,17 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, AutofillCounter) {
   WaitForCounting();
   EXPECT_TRUE(IsSyncEnabled());
 
-  // Signout isn't possible on ChromeOS (Ash).
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+  // Signout isn't possible on ChromeOS.
+#if !BUILDFLAG(IS_CHROMEOS)
   // Stopping the Sync service triggers a restart.
   GetClient(0)->SignOutPrimaryAccount();
   WaitForCounting();
   EXPECT_FALSE(IsSyncEnabled());
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 }
 
 // Test that the counting restarts when password sync state changes.
-// TODO(crbug.com/553421): Move this to the sync/test/integration directory?
+// TODO(crbug.com/40443942): Move this to the sync/test/integration directory?
 IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, PasswordCounter) {
   // Set up the Sync client.
   ASSERT_TRUE(SetupClients());
@@ -189,7 +194,8 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, PasswordCounter) {
   // We sync all datatypes by default, so starting Sync means that we start
   // syncing passwords, and this should restart the counter.
   ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(sync_service->IsSyncFeatureActive());
+  ASSERT_TRUE(sync_service->GetTransportState() ==
+              syncer::SyncService::TransportState::ACTIVE);
   ASSERT_TRUE(sync_service->GetUserSettings()->GetSelectedTypes().Has(
       syncer::UserSelectableType::kPasswords));
   WaitForCounting();
@@ -230,17 +236,17 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, PasswordCounter) {
   WaitForCounting();
   EXPECT_TRUE(IsSyncEnabled());
 
-  // Signout isn't possible on ChromeOS (Ash).
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+  // Signout isn't possible on ChromeOS.
+#if !BUILDFLAG(IS_CHROMEOS)
   // Stopping the Sync service triggers a restart.
   GetClient(0)->SignOutPrimaryAccount();
   WaitForCounting();
   EXPECT_FALSE(IsSyncEnabled());
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 }
 
 // Test that the counting restarts when history sync state changes.
-// TODO(crbug.com/553421): Move this to the sync/test/integration directory?
+// TODO(crbug.com/40443942): Move this to the sync/test/integration directory?
 IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, HistoryCounter) {
   // Set up the Sync client.
   ASSERT_TRUE(SetupClients());
@@ -263,7 +269,8 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, HistoryCounter) {
   // We sync all datatypes by default, so starting Sync means that we start
   // syncing history deletion, and this should restart the counter.
   ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(sync_service->IsSyncFeatureActive());
+  ASSERT_TRUE(sync_service->GetTransportState() ==
+              syncer::SyncService::TransportState::ACTIVE);
   ASSERT_TRUE(sync_service->GetUserSettings()->GetSelectedTypes().Has(
       syncer::UserSelectableType::kHistory));
   ASSERT_TRUE(sync_service->GetActiveDataTypes().Has(
@@ -321,13 +328,13 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, HistoryCounter) {
   // notifications, one that history sync has stopped and another that it is
   // active again.
 
-  // Signout isn't possible on ChromeOS (Ash).
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+  // Signout isn't possible on ChromeOS.
+#if !BUILDFLAG(IS_CHROMEOS)
   // Stopping the Sync service triggers a restart.
   GetClient(0)->SignOutPrimaryAccount();
   WaitForCounting();
   EXPECT_FALSE(IsSyncEnabled());
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 }
 
 }  // namespace

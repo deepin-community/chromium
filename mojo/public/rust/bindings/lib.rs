@@ -1,21 +1,15 @@
-// Copyright 2023 The Chromium Authors
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#![feature(int_roundings)]
-// Require unsafe blocks for unsafe operations even in an unsafe fn.
-#![deny(unsafe_op_in_unsafe_fn)]
+//! This crate defines various utilities for working with Mojo from Rust code.
+//! The types in this crate are designed as ergonomic, high-level
+//! representations of the underlying Mojo types. Developers should prefer to
+//! use these types when possible. However, there is an abstraction cost, and
+//! performance-critical code may need to use the lower-level types in the
+//! `mojo_rust_system_bindings` crate instead.
 
-chromium::import! {
-    // `pub` since a macro refers to `$crate::system`.
-    pub "//mojo/public/rust:mojo_system" as system;
-}
-
-pub mod macros;
-
-pub mod decoding;
-pub mod encoding;
+pub mod interface;
 pub mod message;
-pub mod mojom;
-
-pub use system::util::run_loop;
+pub mod message_header;
+pub mod message_pipe_watcher;

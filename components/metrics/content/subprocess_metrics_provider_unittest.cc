@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "base/metrics/histogram.h"
-#include "base/metrics/histogram_flattener.h"
 #include "base/metrics/histogram_snapshot_manager.h"
 #include "base/metrics/persistent_histogram_allocator.h"
 #include "base/metrics/persistent_memory_allocator.h"
@@ -30,8 +29,13 @@ const uint32_t TEST_MEMORY_SIZE = 64 << 10;  // 64 KiB
 
 struct HistogramData {
   const std::string histogram_name;
-  const base::HistogramBase::Count total_count;
+  const base::HistogramBase::Count32 total_count;
   const int64_t sum;
+
+  HistogramData(std::string_view name,
+                base::HistogramBase::Count32 count,
+                int64_t sum)
+      : histogram_name(name), total_count(count), sum(sum) {}
 
   bool operator==(const HistogramData& other) const {
     return histogram_name == other.histogram_name &&
@@ -39,16 +43,17 @@ struct HistogramData {
   }
 };
 
-class HistogramFlattenerDeltaRecorder : public base::HistogramFlattener {
+class DeltaRecordingHistogramSnapshotManager
+    : public base::HistogramSnapshotManager {
  public:
-  HistogramFlattenerDeltaRecorder() = default;
+  DeltaRecordingHistogramSnapshotManager() = default;
 
-  HistogramFlattenerDeltaRecorder(const HistogramFlattenerDeltaRecorder&) =
-      delete;
-  HistogramFlattenerDeltaRecorder& operator=(
-      const HistogramFlattenerDeltaRecorder&) = delete;
+  DeltaRecordingHistogramSnapshotManager(
+      const DeltaRecordingHistogramSnapshotManager&) = delete;
+  DeltaRecordingHistogramSnapshotManager& operator=(
+      const DeltaRecordingHistogramSnapshotManager&) = delete;
 
-  ~HistogramFlattenerDeltaRecorder() override = default;
+  ~DeltaRecordingHistogramSnapshotManager() override = default;
 
   void RecordDelta(const base::HistogramBase& histogram,
                    const base::HistogramSamples& snapshot) override {
@@ -111,7 +116,7 @@ class SubprocessMetricsProviderTest : public testing::Test {
     SubprocessMetricsProvider::CreateInstance();
 
     // Need to recreate a task runner, otherwise it may be a stale one from a
-    // previous test (it's possible the global instance is re-used across
+    // previous test (it's possible the global instance is reused across
     // tests).
     RecreateTaskRunnerForTesting();
 
@@ -144,13 +149,12 @@ class SubprocessMetricsProviderTest : public testing::Test {
 
   std::vector<HistogramData> GetSnapshotHistograms() {
     // Flatten what is known to see what has changed since the last time.
-    HistogramFlattenerDeltaRecorder flattener;
-    base::HistogramSnapshotManager snapshot_manager(&flattener);
+    DeltaRecordingHistogramSnapshotManager snapshot_manager;
     // "true" to the begin() includes histograms held in persistent storage.
     base::StatisticsRecorder::PrepareDeltas(true, base::Histogram::kNoFlags,
                                             base::Histogram::kNoFlags,
                                             &snapshot_manager);
-    return flattener.GetRecordedDeltaHistograms();
+    return snapshot_manager.GetRecordedDeltaHistograms();
   }
 
   void RegisterSubprocessAllocator(

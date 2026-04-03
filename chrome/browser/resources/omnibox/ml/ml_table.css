@@ -3,7 +3,7 @@
  * found in the LICENSE file. */
 
 :host {
-  display: block
+  display: block;
 }
 
 select {
@@ -30,7 +30,7 @@ select:active {
   grid-template-columns:
       repeat(2, minmax(1%, 120px))
       repeat(2, minmax(120px, 1fr))
-      repeat(27, minmax(1%, 50px));
+      repeat(34, minmax(1%, 50px));
   grid-template-rows: 8em;
   grid-auto-rows: 3em;
   line-height: 1em;
@@ -58,13 +58,15 @@ select:active {
   border-color: var(--theme);
 }
 
-.th:only-child, .td:only-child {
+.th:only-child,
+.td:only-child {
   grid-column: 1 / -1;
 }
 
 .th:only-child {
   font-size: 14px;
   font-weight: bold;
+  color: var(--text);
 }
 
 .tbody .tr:nth-child(even) .td {
@@ -85,10 +87,6 @@ select:active {
 .th:nth-child(3n+2),
 .td:nth-child(3n+2) {
   color: var(--blue-text);
-}
-
-.th:only-child {
-  color: var(--text);
 }
 
 .tbody .tr:hover .td:not(:only-child) {

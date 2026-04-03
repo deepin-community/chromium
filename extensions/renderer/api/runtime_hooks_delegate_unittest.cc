@@ -34,7 +34,7 @@ void CallAPIAndExpectError(v8::Local<v8::Context> context,
   SCOPED_TRACE(base::StringPrintf("Args: `%s`", args.data()));
   constexpr char kTemplate[] = "(function() { chrome.runtime.%s(%s); })";
 
-  v8::Isolate* isolate = context->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
 
   // Just verify some error was thrown. Expecting the exact error message
   // tends to rely too much on our argument spec code, which is tested
@@ -81,6 +81,7 @@ class RuntimeHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
     bindings_system()->UpdateBindingsForContext(script_context_);
   }
   void TearDown() override {
+    messaging_service_->InvalidatePorts(script_context_);
     script_context_ = nullptr;
     extension_ = nullptr;
     messaging_service_.reset();
@@ -89,7 +90,10 @@ class RuntimeHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
   bool UseStrictIPCMessageSender() override { return true; }
 
   virtual scoped_refptr<const Extension> BuildExtension() {
-    return ExtensionBuilder("foo").Build();
+    // TODO(https://crbug.com/40804030): Update this to use MV3.
+    // SendMessageTester needs to be updated since runtime.sendMessage() now
+    // returns a promise.
+    return ExtensionBuilder("foo").SetManifestVersion(2).Build();
   }
 
   NativeRendererMessagingService* messaging_service() {
@@ -101,7 +105,7 @@ class RuntimeHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
  private:
   std::unique_ptr<NativeRendererMessagingService> messaging_service_;
 
-  raw_ptr<ScriptContext, ExperimentalRenderer> script_context_ = nullptr;
+  raw_ptr<ScriptContext> script_context_ = nullptr;
   scoped_refptr<const Extension> extension_;
 };
 
@@ -113,7 +117,7 @@ TEST_F(RuntimeHooksDelegateTest, RuntimeId) {
     scoped_refptr<const Extension> connectable_extension =
         ExtensionBuilder("connectable")
             .SetManifestPath("externally_connectable.matches",
-                             base::Value::List().Append("*://example.com/*"))
+                             base::ListValue().Append("*://example.com/*"))
             .Build();
     RegisterExtension(connectable_extension);
   }
@@ -154,6 +158,20 @@ TEST_F(RuntimeHooksDelegateTest, GetManifest) {
   ASSERT_TRUE(manifest->IsObject());
   EXPECT_EQ(ValueToString(*extension()->manifest()->value()),
             V8ToString(manifest, context));
+}
+
+TEST_F(RuntimeHooksDelegateTest, GetVersion) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  v8::Local<v8::Function> get_version = FunctionFromString(
+      context, "(function() { return chrome.runtime.getVersion(); })");
+  v8::Local<v8::Value> version =
+      RunFunction(get_version, context, 0, nullptr);
+  ASSERT_FALSE(version.IsEmpty());
+  ASSERT_TRUE(version->IsString());
+  EXPECT_EQ(extension()->VersionString(),
+            V8ToBaseValue(version, context)->GetString());
 }
 
 TEST_F(RuntimeHooksDelegateTest, GetURL) {
@@ -227,17 +245,20 @@ TEST_F(RuntimeHooksDelegateTest, SendMessage) {
   SendMessageTester tester(ipc_message_sender(), script_context(), 0,
                            "runtime");
 
+  // We expect the port to remain OPEN for all these cases, as even when a
+  // callback isn't supplied we return a promise which may be fulfilled with a
+  // response if any of the associated event listeners choose to reply.
   MessageTarget self_target = MessageTarget::ForExtension(extension()->id());
-  tester.TestSendMessage("''", R"("")", self_target, SendMessageTester::CLOSED);
+  tester.TestSendMessage("''", R"("")", self_target, SendMessageTester::OPEN);
 
   constexpr char kStandardMessage[] = R"({"data":"hello"})";
   tester.TestSendMessage("{data: 'hello'}", kStandardMessage, self_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("{data: 'hello'}, function() {}", kStandardMessage,
                          self_target, SendMessageTester::OPEN);
   tester.TestSendMessage("{data: 'hello'}, {includeTlsChannelId: true}",
                          kStandardMessage, self_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage(
       "{data: 'hello'}, {includeTlsChannelId: true}, function() {}",
       kStandardMessage, self_target, SendMessageTester::OPEN);
@@ -248,13 +269,13 @@ TEST_F(RuntimeHooksDelegateTest, SendMessage) {
 
   tester.TestSendMessage(base::StringPrintf("'%s', {data: 'hello'}", other_id),
                          kStandardMessage, other_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage(
       base::StringPrintf("'%s', {data: 'hello'}, function() {}", other_id),
       kStandardMessage, other_target, SendMessageTester::OPEN);
   tester.TestSendMessage(base::StringPrintf("'%s', 'string message'", other_id),
                          R"("string message")", other_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
 
   // The sender could omit the ID by passing null or undefined explicitly.
   // Regression tests for https://crbug.com/828664.
@@ -264,7 +285,7 @@ TEST_F(RuntimeHooksDelegateTest, SendMessage) {
   tester.TestSendMessage("null, 'test', function() {}", R"("test")",
                          self_target, SendMessageTester::OPEN);
   tester.TestSendMessage("null, 'test'", R"("test")", self_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("undefined, 'test', function() {}", R"("test")",
                          self_target, SendMessageTester::OPEN);
 
@@ -281,8 +302,7 @@ TEST_F(RuntimeHooksDelegateTest, SendMessage) {
   // But probably not worth it at this time.
   tester.TestSendMessage(
       base::StringPrintf("'%s', {includeTlsChannelId: true}", other_id),
-      R"({"includeTlsChannelId":true})", other_target,
-      SendMessageTester::CLOSED);
+      R"({"includeTlsChannelId":true})", other_target, SendMessageTester::OPEN);
   tester.TestSendMessage(
       base::StringPrintf("'%s', {includeTlsChannelId: true}, function() {}",
                          other_id),
@@ -352,7 +372,7 @@ class RuntimeHooksDelegateNativeMessagingTest
   ~RuntimeHooksDelegateNativeMessagingTest() override {}
 
   scoped_refptr<const Extension> BuildExtension() override {
-    return ExtensionBuilder("foo").AddPermission("nativeMessaging").Build();
+    return ExtensionBuilder("foo").AddAPIPermission("nativeMessaging").Build();
   }
 };
 
@@ -564,7 +584,7 @@ class RuntimeHooksDelegateNativeMessagingMV3Test
   scoped_refptr<const Extension> BuildExtension() override {
     return ExtensionBuilder("foo")
         .SetManifestKey("manifest_version", 3)
-        .AddPermission("nativeMessaging")
+        .AddAPIPermission("nativeMessaging")
         .Build();
   }
 };

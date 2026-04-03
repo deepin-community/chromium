@@ -10,7 +10,6 @@
 #include <map>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -61,7 +60,7 @@ const size_t kZoneIdentifierLength = sizeof(":Zone.Identifier") - 1;
 // Map of download path reservations. Each reserved path is associated with a
 // ReservationKey=DownloadItem*. This object is destroyed in |Revoke()| when
 // there are no more reservations.
-ReservationMap* g_reservation_map = NULL;
+ReservationMap* g_reservation_map = nullptr;
 
 base::LazyThreadPoolSequencedTaskRunner g_sequenced_task_runner =
     LAZY_THREAD_POOL_SEQUENCED_TASK_RUNNER_INITIALIZER(
@@ -248,7 +247,6 @@ PathValidationResult ResolveReservationConflicts(
       return PathValidationResult::CONFLICT;
   }
   NOTREACHED();
-  return PathValidationResult::SUCCESS;
 }
 
 // Verify that |target_path| can be written to and also resolve any conflicts if
@@ -316,8 +314,9 @@ PathValidationResult CreateReservation(const CreateReservationInfo& info,
                                        base::FilePath* reserved_path) {
   // Create a reservation map if one doesn't exist. It will be automatically
   // deleted when all the reservations are revoked.
-  if (g_reservation_map == NULL)
+  if (g_reservation_map == nullptr) {
     g_reservation_map = new ReservationMap;
+  }
 
   // Erase the reservation if it already exists. This can happen during
   // automatic resumption where a new target determination request may be issued
@@ -372,7 +371,7 @@ PathValidationResult CreateReservation(const CreateReservationInfo& info,
 // Called on a background thread to update the path of the reservation
 // associated with |key| to |new_path|.
 void UpdateReservation(ReservationKey key, const base::FilePath& new_path) {
-  DCHECK(g_reservation_map != NULL);
+  DCHECK(g_reservation_map != nullptr);
   auto iter = g_reservation_map->find(key);
   if (iter != g_reservation_map->end()) {
     bool use_download_collection = false;
@@ -396,13 +395,13 @@ void UpdateReservation(ReservationKey key, const base::FilePath& new_path) {
 // Called on the FILE thread to remove the path reservation associated with
 // |key|.
 void RevokeReservation(ReservationKey key) {
-  DCHECK(g_reservation_map != NULL);
-  DCHECK(base::Contains(*g_reservation_map, key));
+  DCHECK(g_reservation_map != nullptr);
+  DCHECK(g_reservation_map->contains(key));
   g_reservation_map->erase(key);
   if (g_reservation_map->size() == 0) {
     // No more reservations. Delete map.
     delete g_reservation_map;
-    g_reservation_map = NULL;
+    g_reservation_map = nullptr;
   }
 }
 
@@ -482,9 +481,6 @@ void DownloadItemObserver::OnDownloadUpdated(DownloadItem* download) {
 void DownloadItemObserver::OnDownloadDestroyed(DownloadItem* download) {
   // Items should be COMPLETE/INTERRUPTED/CANCELLED before being destroyed.
   NOTREACHED();
-  DownloadPathReservationTracker::GetTaskRunner()->PostTask(
-      FROM_HERE, base::BindOnce(&RevokeReservation,
-                                reinterpret_cast<ReservationKey>(download)));
 }
 
 // static

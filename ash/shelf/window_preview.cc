@@ -48,15 +48,16 @@ WindowPreview::WindowPreview(aura::Window* window, Delegate* delegate)
       &WindowPreview::CloseButtonPressed, base::Unretained(this)));
   close_button_->SetFocusBehavior(FocusBehavior::NEVER);
 
-  AddChildView(preview_container_view_.get());
-  AddChildView(preview_view_.get());
-  AddChildView(title_.get());
-  AddChildView(close_button_.get());
+  AddChildViewRaw(preview_container_view_.get());
+  AddChildViewRaw(preview_view_.get());
+  AddChildViewRaw(title_.get());
+  AddChildViewRaw(close_button_.get());
 }
 
 WindowPreview::~WindowPreview() = default;
 
-gfx::Size WindowPreview::CalculatePreferredSize() const {
+gfx::Size WindowPreview::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   // The preview itself will always be strictly contained within its container,
   // so only the container's size matters to calculate the preferred size.
   const gfx::Size container_size = GetPreviewContainerSize();
@@ -69,7 +70,7 @@ gfx::Size WindowPreview::CalculatePreferredSize() const {
 void WindowPreview::Layout(PassKey) {
   gfx::Rect content_rect = GetContentsBounds();
 
-  gfx::Size title_size = title_->CalculatePreferredSize();
+  gfx::Size title_size = title_->CalculatePreferredSize({});
   int title_height_with_padding =
       kTitleLineHeight + kTitleMarginTop + kTitleMarginBottom;
   int title_width =
@@ -84,7 +85,7 @@ void WindowPreview::Layout(PassKey) {
                 content_rect.y(), kCloseButtonSize, kCloseButtonSize));
 
   const gfx::Size container_size = GetPreviewContainerSize();
-  gfx::Size mirror_size = preview_view_->CalculatePreferredSize();
+  gfx::Size mirror_size = preview_view_->CalculatePreferredSize({});
   float preview_ratio = static_cast<float>(mirror_size.width()) /
                         static_cast<float>(mirror_size.height());
 

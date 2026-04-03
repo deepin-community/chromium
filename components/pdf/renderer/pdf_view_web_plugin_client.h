@@ -7,9 +7,12 @@
 
 #include <memory>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "pdf/pdf_view_web_plugin.h"
+#include "services/screen_ai/public/mojom/screen_ai_service.mojom.h"
 
 namespace blink {
 class WebLocalFrame;
@@ -44,7 +47,7 @@ class PdfViewWebPluginClient : public chrome_pdf::PdfViewWebPlugin::Client {
   v8::Isolate* GetIsolate() override;
   net::SiteForCookies SiteForCookies() const override;
   blink::WebURL CompleteURL(const blink::WebString& partial_url) const override;
-  void PostMessage(base::Value::Dict message) override;
+  void PostMessage(base::DictValue message) override;
   void Invalidate() override;
   void RequestTouchEventType(
       blink::WebPluginContainer::TouchEventRequestType request_type) override;
@@ -81,18 +84,34 @@ class PdfViewWebPluginClient : public chrome_pdf::PdfViewWebPlugin::Client {
   std::unique_ptr<chrome_pdf::PdfAccessibilityDataHandler>
   CreateAccessibilityDataHandler(
       chrome_pdf::PdfAccessibilityActionHandler* action_handler,
-      chrome_pdf::PdfAccessibilityImageFetcher* image_fetcher,
       blink::WebPluginContainer* plugin_element) override;
+#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+  void GetOcrMaxImageDimension(
+      base::OnceCallback<void(uint32_t)> callback) override;
+  void PerformOcr(
+      const SkBitmap& image,
+      base::OnceCallback<void(screen_ai::mojom::VisualAnnotationPtr)> callback)
+      override;
+  void SetOcrDisconnectedCallback(base::RepeatingClosure callback) override;
+#endif
 
  private:
   blink::WebLocalFrame* GetFrame() const;
 
-  const raw_ptr<content::RenderFrame, ExperimentalRenderer> render_frame_;
+#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+  void OnOcrDisconnected();
+  void ConnectOcrIfNeeded();
+#endif
+
+  const raw_ptr<content::RenderFrame> render_frame_;
 
   const std::unique_ptr<content::V8ValueConverter> v8_value_converter_;
-  const raw_ptr<v8::Isolate, ExperimentalRenderer> isolate_;
+  const raw_ptr<v8::Isolate> isolate_;
 
-  raw_ptr<blink::WebPluginContainer, ExperimentalRenderer> plugin_container_;
+  raw_ptr<blink::WebPluginContainer> plugin_container_;
+
+  mojo::Remote<screen_ai::mojom::ScreenAIAnnotator> screen_ai_annotator_;
+  base::RepeatingClosure ocr_disconnect_callback_;
 
   base::WeakPtrFactory<PdfViewWebPluginClient> weak_factory_{this};
 };

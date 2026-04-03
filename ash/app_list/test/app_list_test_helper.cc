@@ -14,6 +14,7 @@
 #include "ash/app_list/model/app_list_item.h"
 #include "ash/app_list/model/app_list_test_model.h"
 #include "ash/app_list/model/search/test_search_result.h"
+#include "ash/app_list/views/app_list_bubble_apps_collections_page.h"
 #include "ash/app_list/views/app_list_bubble_apps_page.h"
 #include "ash/app_list/views/app_list_bubble_search_page.h"
 #include "ash/app_list/views/app_list_bubble_view.h"
@@ -31,6 +32,7 @@
 #include "ash/shell.h"
 #include "ash/test/ash_test_util.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/views/widget/root_view.h"
@@ -46,7 +48,7 @@ constexpr gfx::Size kIconImageSize(56, 56);
 // Returns true if a bubble app list should be used under the current mode.
 bool ShouldUseBubbleAppList() {
   // A bubble app list should be used only when ot is in clamshell mode.
-  return !Shell::Get()->IsInTabletMode();
+  return !display::Screen::Get()->InTabletMode();
 }
 
 }  // namespace
@@ -64,6 +66,7 @@ AppListTestHelper::AppListTestHelper() {
   // Disable app list nudge as default.
   DisableAppListNudge(true);
   AppListNudgeController::SetPrivacyNoticeAcceptedForTest(true);
+  AppListControllerImpl::SetSunfishNudgeDisabledForTest(true);
 }
 
 AppListTestHelper::~AppListTestHelper() {
@@ -209,6 +212,22 @@ void AppListTestHelper::AddRecentApps(int num_apps) {
   }
 }
 
+void AppListTestHelper::AddAppListItemsWithCollection(
+    AppCollection collection_id,
+    int num_apps) {
+  AppListModel* model = AppListModelProvider::Get()->model();
+  for (int i = 0; i < num_apps; i++) {
+    const std::string id(test::AppListTestModel::GetItemName(i));
+    auto item = std::make_unique<AppListItem>(id);
+    item->SetAppCollectionId(collection_id);
+    AppListItem* item_ptr = model->AddItem(std::move(item));
+
+    // Give each item a name so that the accessibility paint checks pass.
+    // (Focusable items should have accessible names.)
+    model->SetItemName(item_ptr, item_ptr->id());
+  }
+}
+
 bool AppListTestHelper::IsInFolderView() {
   if (ShouldUseBubbleAppList())
     return GetBubbleView()->showing_folder_for_test();
@@ -239,7 +258,7 @@ AppListView* AppListTestHelper::GetAppListView() {
 
 SearchBoxView* AppListTestHelper::GetSearchBoxView() {
   if (ShouldUseBubbleAppList())
-    return GetBubbleView()->search_box_view_for_test();
+    return GetBubbleView()->search_box_view();
 
   return GetAppListView()->search_box_view();
 }
@@ -334,6 +353,10 @@ ScrollableAppsGridView* AppListTestHelper::GetScrollableAppsGridView() {
   return GetBubbleAppsPage()->scrollable_apps_grid_view_;
 }
 
+views::View* AppListTestHelper::GetAppCollectionsSectionsContainer() {
+  return GetBubbleAppsCollectionsPage()->sections_container_;
+}
+
 AppListBubbleSearchPage* AppListTestHelper::GetBubbleSearchPage() {
   return app_list_controller_->bubble_presenter_for_test()
       ->bubble_view_for_test()
@@ -344,11 +367,6 @@ SearchResultPageAnchoredDialog* AppListTestHelper::GetBubbleSearchPageDialog() {
   return app_list_controller_->bubble_presenter_for_test()
       ->bubble_view_for_test()
       ->search_page_dialog_controller_->dialog();
-}
-AppListBubbleAssistantPage* AppListTestHelper::GetBubbleAssistantPage() {
-  return app_list_controller_->bubble_presenter_for_test()
-      ->bubble_view_for_test()
-      ->assistant_page_;
 }
 
 SearchModel::SearchResults* AppListTestHelper::GetSearchResults() {

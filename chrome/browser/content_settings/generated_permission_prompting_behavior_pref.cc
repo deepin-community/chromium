@@ -5,6 +5,7 @@
 #include "chrome/browser/content_settings/generated_permission_prompting_behavior_pref.h"
 
 #include "base/check.h"
+#include "base/metrics/histogram_functions.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/common/extensions/api/settings_private.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
@@ -86,14 +87,20 @@ GeneratedPermissionPromptingBehaviorPref::SetPref(const base::Value* value) {
   switch (selection) {
     case SettingsState::kBlocked:
     case SettingsState::kCanPromptWithAlwaysLoudUI:
+      base::UmaHistogramEnumeration("Permissions.CPSS.SiteSettingsChanged.Loud",
+                                    content_settings_type_);
       pref_service->SetBoolean(quiet_ui_pref_name_, /*value=*/false);
       pref_service->SetBoolean(cpss_pref_name_, /*value=*/false);
       break;
     case SettingsState::kCanPromptWithAlwaysQuietUI:
+      base::UmaHistogramEnumeration(
+          "Permissions.CPSS.SiteSettingsChanged.Quiet", content_settings_type_);
       pref_service->SetBoolean(quiet_ui_pref_name_, /*value=*/true);
       pref_service->SetBoolean(cpss_pref_name_, /*value=*/false);
       break;
     case SettingsState::kCanPromptWithCPSS:
+      base::UmaHistogramEnumeration("Permissions.CPSS.SiteSettingsChanged.CPSS",
+                                    content_settings_type_);
       pref_service->SetBoolean(quiet_ui_pref_name_, /*value=*/false);
       pref_service->SetBoolean(cpss_pref_name_, /*value=*/true);
       break;
@@ -122,16 +129,15 @@ GeneratedPermissionPromptingBehaviorPref::GetPrefObject() const {
   pref_object.key = generated_pref_name_;
   pref_object.type = settings_api::PrefType::kNumber;
 
-  std::string content_setting_provider;
+  content_settings::ProviderType content_setting_provider;
   const auto content_setting =
       host_content_settings_map_->GetDefaultContentSetting(
           content_settings_type_, &content_setting_provider);
   auto content_setting_source =
-      HostContentSettingsMap::GetSettingSourceFromProviderName(
+      content_settings::GetSettingSourceFromProviderType(
           content_setting_provider);
   const bool content_setting_managed =
-      content_setting_source !=
-      content_settings::SettingSource::SETTING_SOURCE_USER;
+      content_setting_source != content_settings::SettingSource::kUser;
 
   if (content_setting == CONTENT_SETTING_ASK && !content_setting_managed) {
     if (is_quiet_ui_enabled) {
@@ -155,7 +161,7 @@ GeneratedPermissionPromptingBehaviorPref::GetPrefObject() const {
   if (content_setting_managed) {
     pref_object.enforcement = settings_api::Enforcement::kEnforced;
     GeneratedPref::ApplyControlledByFromContentSettingSource(
-        &pref_object, SETTING_SOURCE_POLICY);
+        &pref_object, SettingSource::kPolicy);
   }
   return pref_object;
 }

@@ -100,7 +100,7 @@ class EinsumDescriptor {
         begin, end, [val](EinsumDimensionType t) { return t == val; }));
   }
 
-  // Appends indices to the "permute" vector where types maches value.
+  // Appends indices to the "permute" vector where types matches value.
   void AppendMatchingIndicesToPermute(
       const std::vector<EinsumDimensionType>& types, EinsumDimensionType val) {
     for (int i = 0; i < types.size(); i++) {
@@ -739,16 +739,16 @@ class ReIndexer {
   // Initializes the index map with existing lowercase labels.
   ReIndexer(std::string eq) {
     for (char c : eq) {
-      if (islower(c)) {
+      if (absl::ascii_islower(c)) {
         idx_map_[c] = c;
       }
     }
   }
   // Finds new character for uppercase character c.
   char operator()(char c) {
-    if (!std::isupper(c)) return c;
+    if (!absl::ascii_isupper(c)) return c;
     if (idx_map_.count(c) > 0) return idx_map_[c];
-    char new_idx = std::tolower(c);
+    char new_idx = absl::ascii_tolower(c);
 
     // If lower(c) is not used in the equation, use it to replace c.
     if (idx_map_.count(new_idx) == 0) {

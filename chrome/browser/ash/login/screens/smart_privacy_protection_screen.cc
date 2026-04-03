@@ -6,10 +6,10 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
-#include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/ash/login/smart_privacy_protection_screen_handler.h"
+#include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "components/prefs/pref_service.h"
 
 namespace ash {
@@ -24,6 +24,7 @@ constexpr const char kUserActionShowLearnMore[] = "show-learn-more";
 
 // static
 std::string SmartPrivacyProtectionScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::kProceedWithFeatureOn:
       return "ContinueWithFeatureOn";
@@ -32,6 +33,7 @@ std::string SmartPrivacyProtectionScreen::GetResultString(Result result) {
     case Result::kNotApplicable:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 SmartPrivacyProtectionScreen::SmartPrivacyProtectionScreen(
@@ -49,7 +51,7 @@ bool SmartPrivacyProtectionScreen::MaybeSkip(WizardContext& context) {
   // SnoopingProtection and QuickDim. The screen should be skipped if none of
   // them is enabled.
   if (!context.skip_post_login_screens_for_tests &&
-      features::IsQuickDimEnabled() && !DemoSession::IsDeviceInDemoMode()) {
+      features::IsQuickDimEnabled() && !ash::demo_mode::IsDeviceInDemoMode()) {
     return false;
   }
   exit_callback_.Run(Result::kNotApplicable);
@@ -63,7 +65,7 @@ void SmartPrivacyProtectionScreen::ShowImpl() {
 
 void SmartPrivacyProtectionScreen::HideImpl() {}
 
-void SmartPrivacyProtectionScreen::OnUserAction(const base::Value::List& args) {
+void SmartPrivacyProtectionScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionFeatureTurnOn) {
     Profile* profile = ProfileManager::GetActiveUserProfile();

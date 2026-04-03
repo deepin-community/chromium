@@ -60,6 +60,8 @@ public:
         // If set, all rendering will have dithering enabled
         // Currently this only impacts GPU backends
         kAlwaysDither_Flag = 1 << 2,
+        // The surface will preserve transparent draws (instead of skipping them).
+        kPreservesTransparentDraws_Flag = 1 << 3,
     };
 
     /** No flags, unknown pixel geometry, platform-default contrast/gamma. */
@@ -76,6 +78,11 @@ public:
         return SkSurfaceProps(fFlags, newPixelGeometry, fTextContrast, fTextGamma);
     }
 
+    static constexpr SkScalar kMaxContrastInclusive = 1;
+    static constexpr SkScalar kMinContrastInclusive = 0;
+    static constexpr SkScalar kMaxGammaExclusive = 4;
+    static constexpr SkScalar kMinGammaInclusive = 0;
+
     uint32_t flags() const { return fFlags; }
     SkPixelGeometry pixelGeometry() const { return fPixelGeometry; }
     SkScalar textContrast() const { return fTextContrast; }
@@ -87,6 +94,10 @@ public:
 
     bool isAlwaysDither() const {
         return SkToBool(fFlags & kAlwaysDither_Flag);
+    }
+
+    bool preservesTransparentDraws() const {
+        return SkToBool(fFlags & kPreservesTransparentDraws_Flag);
     }
 
     bool operator==(const SkSurfaceProps& that) const {

@@ -9,7 +9,6 @@
 #include <optional>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/values.h"
 #include "chromeos/ui/base/window_state_type.h"
 #include "components/app_constants/constants.h"
@@ -24,6 +23,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -86,12 +86,12 @@ constexpr chromeos::WindowStateType kWindowStateType2 =
 constexpr chromeos::WindowStateType kWindowStateType3 =
     chromeos::WindowStateType::kPrimarySnapped;
 
-constexpr ui::WindowShowState kPreMinimizedWindowStateType1 =
-    ui::SHOW_STATE_DEFAULT;
-constexpr ui::WindowShowState kPreMinimizedWindowStateType2 =
-    ui::SHOW_STATE_MAXIMIZED;
-constexpr ui::WindowShowState kPreMinimizedWindowStateType3 =
-    ui::SHOW_STATE_DEFAULT;
+constexpr ui::mojom::WindowShowState kPreMinimizedWindowStateType1 =
+    ui::mojom::WindowShowState::kDefault;
+constexpr ui::mojom::WindowShowState kPreMinimizedWindowStateType2 =
+    ui::mojom::WindowShowState::kMaximized;
+constexpr ui::mojom::WindowShowState kPreMinimizedWindowStateType3 =
+    ui::mojom::WindowShowState::kDefault;
 
 constexpr int32_t kSnapPercentage = 75;
 
@@ -246,7 +246,7 @@ class RestoreDataTest : public testing::Test {
       const base::Uuid& desk_guid,
       const gfx::Rect& current_bounds,
       chromeos::WindowStateType window_state_type,
-      ui::WindowShowState pre_minimized_show_state_type,
+      ui::mojom::WindowShowState pre_minimized_show_state_type,
       uint32_t snap_percentage,
       std::optional<gfx::Size> max_size,
       std::optional<gfx::Size> min_size,
@@ -444,10 +444,10 @@ TEST_F(RestoreDataTest, ModifyWindowId) {
   EXPECT_EQ(2u, launch_list_it1->second.size());
 
   // Verify the restore data for |kAppId1| and |kWindowId1| still exists.
-  EXPECT_TRUE(base::Contains(launch_list_it1->second, kWindowId1));
+  EXPECT_TRUE(launch_list_it1->second.contains(kWindowId1));
 
   // Verify the restore data for |kAppId1| and |kWindowId2| doesn't exist.
-  EXPECT_FALSE(base::Contains(launch_list_it1->second, kWindowId2));
+  EXPECT_FALSE(launch_list_it1->second.contains(kWindowId2));
 
   // Verify the restore data for |kWindowId2| is migrated to |kWindowId4|.
   const auto app_restore_data_it4 = launch_list_it1->second.find(kWindowId4);
@@ -489,15 +489,15 @@ TEST_F(RestoreDataTest, RemoveAppRestoreData) {
   EXPECT_TRUE(launch_list_it1 != app_id_to_launch_list().end());
   EXPECT_EQ(1u, launch_list_it1->second.size());
 
-  EXPECT_FALSE(base::Contains(launch_list_it1->second, kWindowId1));
-  EXPECT_TRUE(base::Contains(launch_list_it1->second, kWindowId2));
+  EXPECT_FALSE(launch_list_it1->second.contains(kWindowId1));
+  EXPECT_TRUE(launch_list_it1->second.contains(kWindowId2));
 
   // Verify for |kAppId2|.
   auto launch_list_it2 = app_id_to_launch_list().find(kAppId2);
   EXPECT_TRUE(launch_list_it2 != app_id_to_launch_list().end());
   EXPECT_EQ(1u, launch_list_it2->second.size());
 
-  EXPECT_TRUE(base::Contains(launch_list_it2->second, kWindowId3));
+  EXPECT_TRUE(launch_list_it2->second.contains(kWindowId3));
 
   EXPECT_TRUE(restore_data().HasAppRestoreData(kAppId1, kWindowId2));
 
@@ -509,14 +509,14 @@ TEST_F(RestoreDataTest, RemoveAppRestoreData) {
   EXPECT_EQ(1u, app_id_to_launch_list().size());
 
   // Verify for |kAppId1|.
-  EXPECT_FALSE(base::Contains(app_id_to_launch_list(), kAppId1));
+  EXPECT_FALSE(app_id_to_launch_list().contains(kAppId1));
 
   // Verify for |kAppId2|.
   launch_list_it2 = app_id_to_launch_list().find(kAppId2);
   EXPECT_TRUE(launch_list_it2 != app_id_to_launch_list().end());
   EXPECT_EQ(1u, launch_list_it2->second.size());
 
-  EXPECT_TRUE(base::Contains(launch_list_it2->second, kWindowId3));
+  EXPECT_TRUE(launch_list_it2->second.contains(kWindowId3));
 
   EXPECT_TRUE(restore_data().HasAppRestoreData(kAppId2, kWindowId3));
 
@@ -742,30 +742,6 @@ TEST_F(RestoreDataTest, HasBrowser) {
       std::make_unique<AppLaunchInfo>(app_constants::kChromeAppId, kWindowId2);
   restore_data().AddAppLaunchInfo(std::move(app_launch_info2));
   EXPECT_TRUE(restore_data().HasBrowser());
-}
-
-TEST_F(RestoreDataTest, UpdateAppIdToLacros) {
-  auto app_launch_info1 =
-      std::make_unique<AppLaunchInfo>(app_constants::kChromeAppId, kWindowId1);
-
-  restore_data().AddAppLaunchInfo(std::move(app_launch_info1));
-  // Verify that ash chrome is added.
-  const auto ash_chrome_it =
-      restore_data().app_id_to_launch_list().find(app_constants::kChromeAppId);
-  EXPECT_TRUE(ash_chrome_it != restore_data().app_id_to_launch_list().end());
-  EXPECT_FALSE(ash_chrome_it->second.empty());
-
-  restore_data().UpdateBrowserAppIdToLacros();
-  // Verify that ash chrome app id is modified to lacros version.
-  const auto lacros_chrome_it =
-      restore_data().app_id_to_launch_list().find(app_constants::kLacrosAppId);
-  const auto ash_chrome_after_update_it =
-      restore_data().app_id_to_launch_list().find(app_constants::kChromeAppId);
-  EXPECT_TRUE(lacros_chrome_it != restore_data().app_id_to_launch_list().end());
-  EXPECT_FALSE(lacros_chrome_it->second.empty());
-  EXPECT_TRUE(ash_chrome_after_update_it ==
-              restore_data().app_id_to_launch_list().end());
-  EXPECT_EQ(1u, restore_data().app_id_to_launch_list().size());
 }
 
 TEST_F(RestoreDataTest, CompareAppRestoreData) {

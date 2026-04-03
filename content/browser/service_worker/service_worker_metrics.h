@@ -116,6 +116,18 @@ class ServiceWorkerMetrics {
     kMaxValue = INACCURATE_CLOCK,
   };
 
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  //
+  // LINT.IfChange(SyntheticResponseEligibility)
+  enum class SyntheticResponseEligibility {
+    kEligible = 0,
+    kNotEligibleByReload = 1,
+    kNotEligibleByNoHeaderStored = 2,
+    kMaxValue = kNotEligibleByNoHeaderStored,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:SyntheticResponseEligibility)
+
   // These are prefixed with "local" or "remote" to indicate whether the browser
   // process or renderer process recorded the timing (browser is local).
   struct StartTimes {
@@ -167,7 +179,7 @@ class ServiceWorkerMetrics {
   // Records the time taken to successfully start a worker. |is_installed|
   // indicates whether the version has been installed.
   //
-  // TODO(crbug.com/855952): Replace this with RecordStartWorkerTiming().
+  // TODO(crbug.com/40582160): Replace this with RecordStartWorkerTiming().
   static void RecordStartWorkerTime(base::TimeDelta time,
                                     bool is_installed,
                                     StartSituation start_situation,

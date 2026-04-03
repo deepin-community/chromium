@@ -30,6 +30,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -40,7 +41,7 @@
 #include "chromeos/ash/components/network/network_state_test_helper.h"
 #include "chromeos/ash/services/quick_pair/public/cpp/account_key_filter.h"
 #include "components/prefs/testing_pref_service.h"
-#include "crypto/sha2.h"
+#include "crypto/hash.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/public/cpp/bluetooth_address.h"
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
@@ -93,10 +94,8 @@ std::string GenerateSha256AccountKeyMacAddress(const std::string& account_key,
 
   concat_bytes.insert(concat_bytes.end(), mac_address_bytes.begin(),
                       mac_address_bytes.end());
-  std::array<uint8_t, crypto::kSHA256Length> hashed =
-      crypto::SHA256Hash(concat_bytes);
 
-  return std::string(hashed.begin(), hashed.end());
+  return std::string(base::as_string_view(crypto::hash::Sha256(concat_bytes)));
 }
 
 std::string Base64Decode(const std::string& encoded) {
@@ -885,7 +884,7 @@ TEST_F(FastPairRepositoryImplTest, RetriesForgetDevice_AfterNetworkAvailable) {
   ASSERT_EQ(0u, pending_write_store_->GetPendingDeletes().size());
 }
 
-// TODO(crbug.com/1434879): Re-enable this test
+// TODO(crbug.com/40264951): Re-enable this test
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_RetriesForgetDevice_AlreadyDeleted \
   DISABLED_RetriesForgetDevice_AlreadyDeleted
@@ -1170,7 +1169,7 @@ TEST_F(FastPairRepositoryImplTest, EvictDeviceImages) {
   ASSERT_FALSE(device_image_store_->GetImagesForDeviceModel(kValidModelId));
 }
 
-// TODO(crbug.com/1434879): Re-enable this test
+// TODO(crbug.com/40264951): Re-enable this test
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_UpdateOptInStatus_OptedIn DISABLED_UpdateOptInStatus_OptedIn
 #else
@@ -1206,7 +1205,7 @@ TEST_F(FastPairRepositoryImplTest, UpdateOptInStatus_OptedOut) {
   fast_pair_repository_->CheckOptInStatus(callback2.Get());
 }
 
-// TODO(crbug.com/1434879): Re-enable this test
+// TODO(crbug.com/40264951): Re-enable this test
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_UpdateOptInStatus_StatusUnknown \
   DISABLED_UpdateOptInStatus_StatusUnknown
@@ -1238,7 +1237,7 @@ TEST_F(FastPairRepositoryImplTest, UpdateOptInStatus_NoFootprintsResponse) {
   fast_pair_repository_->CheckOptInStatus(callback.Get());
 }
 
-// TODO(crbug.com/1434879): Re-enable this test
+// TODO(crbug.com/40264951): Re-enable this test
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_UpdateOptInStatus_OptedInUpdateFailed \
   DISABLED_UpdateOptInStatus_OptedInUpdateFailed
@@ -1377,7 +1376,7 @@ TEST_F(FastPairRepositoryImplTest,
   EXPECT_FALSE(fast_pair_repository_->IsAccountKeyPairedLocally(kAccountKey2));
 }
 
-// TODO(crbug.com/1434879): Re-enable this test
+// TODO(crbug.com/40264951): Re-enable this test
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_IsAccountKeyPairedLocally_PairedNotSavedLocally \
   DISABLED_IsAccountKeyPairedLocally_PairedNotSavedLocally
@@ -1460,7 +1459,7 @@ TEST_F(FastPairRepositoryImplTest,
   base::RunLoop().RunUntilIdle();
 }
 
-// TODO(crbug.com/1434879): Re-enable this test
+// TODO(crbug.com/40264951): Re-enable this test
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_IsDeviceSavedToAccount_IgnoreForgetPattern \
   DISABLED_IsDeviceSavedToAccount_IgnoreForgetPattern
@@ -1542,7 +1541,7 @@ TEST_F(FastPairRepositoryImplTest, IsDeviceSavedToAccount_MissingAccountKey) {
   base::RunLoop().RunUntilIdle();
 }
 
-// TODO(crbug.com/1434879): Re-enable this test
+// TODO(crbug.com/40264951): Re-enable this test
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_IsDeviceSavedToAccount_MissingSha \
   DISABLED_IsDeviceSavedToAccount_MissingSha
@@ -1618,7 +1617,7 @@ TEST_F(FastPairRepositoryImplTest,
   ASSERT_EQ(0u, pending_write_store_->GetPendingWrites().size());
 }
 
-// TODO(crbug.com/1434879): Re-enable this test
+// TODO(crbug.com/40264951): Re-enable this test
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_RetriesWriteDevice_AfterNetworkAvailable \
   DISABLED_RetriesWriteDevice_AfterNetworkAvailable

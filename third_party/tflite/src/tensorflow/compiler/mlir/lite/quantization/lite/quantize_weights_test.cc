@@ -15,25 +15,35 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/lite/quantization/lite/quantize_weights.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "llvm/ADT/Twine.h"
-#include "tensorflow/core/lib/io/path.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "flatbuffers/vector.h"  // from @flatbuffers
+#include "tensorflow/compiler/mlir/lite/core/absl_error_model_builder.h"
+#include "tensorflow/compiler/mlir/lite/quantization/lite/test_util.h"
+#include "tensorflow/compiler/mlir/lite/schema/schema_generated.h"
+#include "tensorflow/compiler/mlir/lite/schema/schema_utils.h"
+#include "xla/tsl/platform/logging.h"
 #include "tensorflow/core/platform/init_main.h"
+#include "tensorflow/core/platform/path.h"
+#include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/util/command_line_flags.h"
-#include "tensorflow/lite/schema/schema_generated.h"
-#include "tensorflow/lite/schema/schema_utils.h"
-#include "tensorflow/lite/tools/optimize/test_util.h"
-#include "tsl/platform/logging.h"
 
 // Note: branched from tensorflow/lite/tools/optimize/quantize_weights_test.cc
 
 namespace {
-tensorflow::string* g_test_model_dir = nullptr;
+std::string* g_test_model_dir = nullptr;
 }  // namespace
 
 namespace tflite {
@@ -43,6 +53,7 @@ namespace {
 using mlir::lite::BufferType;
 using mlir::lite::CustomOpMap;
 using mlir::lite::QuantizeWeights;
+using mlir::TFL::FlatBufferModelAbslError;
 constexpr bool kUseUpdatedHybridSchemeDefault = true;
 
 std::unique_ptr<ModelT> CreateMutableModelFromFile(const Model* input_model) {
@@ -51,28 +62,28 @@ std::unique_ptr<ModelT> CreateMutableModelFromFile(const Model* input_model) {
   return copied_model;
 }
 
-std::unique_ptr<FlatBufferModel> ReadTestModel() {
+std::unique_ptr<FlatBufferModelAbslError> ReadTestModel() {
   auto model_path = tensorflow::io::JoinPath(
-      *g_test_model_dir, internal::kConvModelWith0Plus10Weights);
-  return FlatBufferModel::BuildFromFile(model_path.c_str());
+      *g_test_model_dir, ::mlir::lite::internal::kConvModelWith0Plus10Weights);
+  return FlatBufferModelAbslError::BuildFromFile(model_path.c_str());
 }
 
-std::unique_ptr<FlatBufferModel> ReadSharedWeightsTestModel() {
-  auto model_path = tensorflow::io::JoinPath(*g_test_model_dir,
-                                             internal::kModelWithSharedWeights);
-  return FlatBufferModel::BuildFromFile(model_path.c_str());
+std::unique_ptr<FlatBufferModelAbslError> ReadSharedWeightsTestModel() {
+  auto model_path = tensorflow::io::JoinPath(
+      *g_test_model_dir, ::mlir::lite::internal::kModelWithSharedWeights);
+  return FlatBufferModelAbslError::BuildFromFile(model_path.c_str());
 }
 
-std::unique_ptr<FlatBufferModel> ReadGatherTestModel() {
-  auto model_path = tensorflow::io::JoinPath(*g_test_model_dir,
-                                             internal::kQuantizedWithGather);
-  return FlatBufferModel::BuildFromFile(model_path.c_str());
+std::unique_ptr<FlatBufferModelAbslError> ReadGatherTestModel() {
+  auto model_path = tensorflow::io::JoinPath(
+      *g_test_model_dir, ::mlir::lite::internal::kQuantizedWithGather);
+  return FlatBufferModelAbslError::BuildFromFile(model_path.c_str());
 }
 
-std::unique_ptr<FlatBufferModel> ReadCustomOpTestModel() {
-  auto model_path =
-      tensorflow::io::JoinPath(*g_test_model_dir, internal::kModelWithCustomOp);
-  return FlatBufferModel::BuildFromFile(model_path.c_str());
+std::unique_ptr<FlatBufferModelAbslError> ReadCustomOpTestModel() {
+  auto model_path = tensorflow::io::JoinPath(
+      *g_test_model_dir, ::mlir::lite::internal::kModelWithCustomOp);
+  return FlatBufferModelAbslError::BuildFromFile(model_path.c_str());
 }
 
 template <typename T>
@@ -82,7 +93,7 @@ std::vector<T> GetAsVector(const flatbuffers::Vector<T>* vec) {
 
 class QuantizeWeightsTest : public testing::Test {
  protected:
-  QuantizeWeightsTest() {}
+  QuantizeWeightsTest() = default;
 
   void LoadBasicModel() {
     input_model_ = ReadTestModel();
@@ -104,7 +115,7 @@ class QuantizeWeightsTest : public testing::Test {
     model_ = input_model_->GetModel();
   }
 
-  std::unique_ptr<FlatBufferModel> input_model_;
+  std::unique_ptr<FlatBufferModelAbslError> input_model_;
   const Model* model_;
 
   bool IsModelInputOrOutput(const Model* model, uint32_t tensor_idx) {
@@ -204,8 +215,7 @@ const Tensor* FindMatchingExpectedTensor(
 TEST_F(QuantizeWeightsTest, QuantizationSucceeds) {
   LoadBasicModel();
   flatbuffers::FlatBufferBuilder builder;
-  auto status = QuantizeWeights(&builder, model_, 0);
-  EXPECT_EQ(status, kTfLiteOk);
+  EXPECT_OK(QuantizeWeights(&builder, model_, 0));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -215,10 +225,8 @@ TEST_F(QuantizeWeightsTest, QuantizationSucceeds) {
 TEST_F(QuantizeWeightsTest, QuantizationFails) {
   LoadBasicModel();
   flatbuffers::FlatBufferBuilder builder;
-  tflite::StderrReporter error_reporter;
-  auto status = QuantizeWeights(&builder, model_, &error_reporter,
-                                TensorType_UINT8, {}, {});
-  EXPECT_EQ(status, kTfLiteError);
+  EXPECT_EQ(QuantizeWeights(&builder, model_, TensorType_UINT8, {}, {}, 1024),
+            absl::InternalError("Quantize weights transformation failed."));
 }
 
 TEST_F(QuantizeWeightsTest, WeightsMinNumElements) {
@@ -228,7 +236,7 @@ TEST_F(QuantizeWeightsTest, WeightsMinNumElements) {
   flatbuffers::FlatBufferBuilder builder;
   const uint64_t kWeightsMinNumElements = 1000000;
   EXPECT_EQ(QuantizeWeights(&builder, model_, kWeightsMinNumElements),
-            kTfLiteOk);
+            absl::InternalError("Quantize weights transformation failed."));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -257,8 +265,7 @@ TEST_F(QuantizeWeightsTest, WeightsMinNumElements) {
 TEST_F(QuantizeWeightsTest, HybridConv) {
   LoadBasicModel();
   flatbuffers::FlatBufferBuilder builder;
-  auto status = QuantizeWeights(&builder, model_, 0);
-  EXPECT_EQ(status, kTfLiteOk);
+  EXPECT_OK(QuantizeWeights(&builder, model_, 0));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -317,9 +324,8 @@ TEST_F(QuantizeWeightsTest, HybridConv) {
 TEST_F(QuantizeWeightsTest, DequantizeConv) {
   LoadBasicModel();
   flatbuffers::FlatBufferBuilder builder;
-  auto status = QuantizeWeights(&builder, model_, 0,
-                                /*use_hybrid_evaluation=*/false);
-  EXPECT_EQ(status, kTfLiteOk);
+  EXPECT_OK(QuantizeWeights(&builder, model_, 0,
+                            /*use_hybrid_evaluation=*/false));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -383,9 +389,7 @@ TEST_F(QuantizeWeightsTest, DequantizeConv) {
 TEST_F(QuantizeWeightsTest, DequantizeConvFloat16) {
   LoadBasicModel();
   flatbuffers::FlatBufferBuilder builder;
-  auto status =
-      QuantizeWeights(&builder, model_, BufferType::QUANTIZED_FLOAT16);
-  EXPECT_EQ(status, kTfLiteOk);
+  EXPECT_OK(QuantizeWeights(&builder, model_, BufferType::QUANTIZED_FLOAT16));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -445,8 +449,7 @@ TEST_F(QuantizeWeightsTest, DequantizeConvFloat16) {
 TEST_F(QuantizeWeightsTest, SharedWeights_Hybrid) {
   LoadSharedWeightsModel();
   flatbuffers::FlatBufferBuilder builder;
-  auto status = QuantizeWeights(&builder, model_, 0);
-  EXPECT_EQ(status, kTfLiteOk);
+  EXPECT_OK(QuantizeWeights(&builder, model_, 0));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -478,9 +481,8 @@ TEST_F(QuantizeWeightsTest, SharedWeights_Hybrid) {
 TEST_F(QuantizeWeightsTest, SharedWeights_Dequantize) {
   LoadSharedWeightsModel();
   flatbuffers::FlatBufferBuilder builder;
-  auto status = QuantizeWeights(&builder, model_, 0,
-                                /*use_hybrid_evaluation=*/false);
-  EXPECT_EQ(status, kTfLiteOk);
+  EXPECT_OK(
+      QuantizeWeights(&builder, model_, 0, /*use_hybrid_evaluation=*/false));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -520,8 +522,7 @@ TEST_F(QuantizeWeightsTest, SharedWeights_Dequantize) {
 TEST_F(QuantizeWeightsTest, VerifyGatherQuantization) {
   LoadGatherTestModel();
   flatbuffers::FlatBufferBuilder builder;
-  auto status = QuantizeWeights(&builder, model_, 0);
-  EXPECT_EQ(status, kTfLiteOk);
+  EXPECT_OK(QuantizeWeights(&builder, model_, 0));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -558,8 +559,7 @@ TEST_F(QuantizeWeightsTest, VerifyCustomOpQuantizationDequantize) {
   };
 
   flatbuffers::FlatBufferBuilder builder;
-  auto status = QuantizeWeights(&builder, model_, 0, custom_op_map);
-  ASSERT_EQ(status, kTfLiteOk);
+  EXPECT_OK(QuantizeWeights(&builder, model_, 0, custom_op_map));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -605,8 +605,7 @@ TEST_F(QuantizeWeightsTest, VerifyCustomOpQuantizationHybrid) {
   };
 
   flatbuffers::FlatBufferBuilder builder;
-  auto status = QuantizeWeights(&builder, model_, 0, custom_op_map);
-  ASSERT_EQ(status, kTfLiteOk);
+  ASSERT_OK(QuantizeWeights(&builder, model_, 0, custom_op_map));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -637,8 +636,7 @@ TEST_F(QuantizeWeightsTest, VerifyUpdatedHybridSchemeFalseQuantizationHybrid) {
   LoadBasicModel();
   flatbuffers::FlatBufferBuilder builder;
   const CustomOpMap custom_op_map;
-  auto status = QuantizeWeights(&builder, model_, 0, custom_op_map, false);
-  EXPECT_EQ(status, kTfLiteOk);
+  EXPECT_OK(QuantizeWeights(&builder, model_, 0, custom_op_map, false));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -694,10 +692,9 @@ TEST_F(QuantizeWeightsTest, DequantizeConvBlocklisted) {
   LoadBasicModel();
   flatbuffers::FlatBufferBuilder builder;
   const CustomOpMap custom_op_map;
-  auto status = QuantizeWeights(&builder, model_, 0, custom_op_map,
-                                /*use_updated_hybrid_scheme=*/true,
-                                {BuiltinOperator_CONV_2D});
-  EXPECT_EQ(status, kTfLiteOk);
+  EXPECT_OK(QuantizeWeights(&builder, model_, 0, custom_op_map,
+                            /*use_updated_hybrid_scheme=*/true,
+                            {BuiltinOperator_CONV_2D}));
 
   const uint8_t* buffer = builder.GetBufferPointer();
   const Model* output_model = GetModel(buffer);
@@ -769,7 +766,7 @@ TEST_F(QuantizeWeightsTest, DequantizeConvBlocklisted) {
 }  // namespace tflite
 
 int main(int argc, char** argv) {
-  tensorflow::string model_file;
+  std::string model_file;
   const std::vector<tensorflow::Flag> flag_list = {
       tensorflow::Flag("test_model_file", &model_file,
                        "Path to test tflite model file."),
@@ -780,8 +777,7 @@ int main(int argc, char** argv) {
     std::cerr << "Required test_model_file\n";
     std::abort();
   }
-  g_test_model_dir =
-      new tensorflow::string(tensorflow::io::Dirname(model_file));
+  g_test_model_dir = new std::string(tensorflow::io::Dirname(model_file));
   ::tensorflow::port::InitMain(argv[0], &argc, &argv);
   return RUN_ALL_TESTS();
 }

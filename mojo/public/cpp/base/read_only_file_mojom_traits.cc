@@ -39,8 +39,7 @@ bool IsReadOnlyFile(base::File& file) {
   is_readonly = !(flags.value() &
                   (FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES | FILE_WRITE_DATA |
                    FILE_WRITE_EA | WRITE_DAC | WRITE_OWNER | DELETE));
-#elif BUILDFLAG(IS_FUCHSIA) || \
-    (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_AIX))
+#elif BUILDFLAG(IS_FUCHSIA) || (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AIX))
   is_readonly =
       (fcntl(file.GetPlatformFile(), F_GETFL) & O_ACCMODE) == O_RDONLY;
 #endif
@@ -56,8 +55,9 @@ bool IsPhysicalFile(base::File& file) {
   // This may block but in practice this is unlikely for already opened
   // physical files.
   struct stat st;
-  if (fstat(file.GetPlatformFile(), &st) != 0)
+  if (fstat(file.GetPlatformFile(), &st) != 0) {
     return false;
+  }
   return S_ISREG(st.st_mode);
 #endif
 }

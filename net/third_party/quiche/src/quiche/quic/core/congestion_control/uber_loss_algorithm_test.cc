@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "quiche/quic/core/congestion_control/rtt_stats.h"
 #include "quiche/quic/core/crypto/crypto_protocol.h"
@@ -40,7 +41,7 @@ class UberLossAlgorithmTest : public QuicTest {
     frame.stream_id = QuicUtils::GetFirstBidirectionalStreamId(
         version, Perspective::IS_CLIENT);
     if (encryption_level == ENCRYPTION_INITIAL) {
-      if (QuicVersionUsesCryptoFrames(version)) {
+      if (VersionIsIetfQuic(version)) {
         frame.stream_id = QuicUtils::GetFirstBidirectionalStreamId(
             version, Perspective::IS_CLIENT);
       } else {

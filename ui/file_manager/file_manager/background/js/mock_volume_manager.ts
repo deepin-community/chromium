@@ -68,10 +68,6 @@ export class MockVolumeManager extends VolumeManager {
         str('DOWNLOADS_DIRECTORY_LABEL'));
   }
 
-  override getFuseBoxOnlyFilterEnabled() {
-    return false;
-  }
-
   override getMediaStoreFilesOnlyFilterEnabled() {
     return false;
   }
@@ -252,19 +248,6 @@ export class MockVolumeManager extends VolumeManager {
   override async configure(_volumeInfo: VolumeInfo): Promise<void> {
     throw new Error('Not implemented');
   }
-
-  override addEventListener(_type: string, _handler: any) {
-    throw new Error('Not implemented');
-  }
-
-  override removeEventListener(_type: string, _handler: any) {
-    throw new Error('Not implemented');
-  }
-
-  override dispatchEvent(_event: Event): boolean {
-    throw new Error('Not implemented');
-  }
-
 
   override hasDisabledVolumes(): boolean {
     return false;

@@ -4,105 +4,31 @@
 
 #include "components/optimization_guide/core/model_execution/model_execution_features_controller.h"
 
-#include "base/containers/contains.h"
+#include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_split.h"
+#include "components/component_updater/pref_names.h"
+#include "components/optimization_guide/core/feature_registry/mqls_feature_registry.h"
+#include "components/optimization_guide/core/feature_registry/settings_ui_registry.h"
+#include "components/optimization_guide/core/model_execution/feature_keys.h"
 #include "components/optimization_guide/core/model_execution/model_execution_features.h"
 #include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
+#include "components/optimization_guide/core/model_execution/performance_class.h"
+#include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_prefs.h"
+#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
+#include "components/policy/core/common/management/management_service.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/account_info.h"
+#include "third_party/tflite/buildflags.h"
 
 namespace optimization_guide {
 
 namespace {
-
-bool ShouldCheckSettingForFeature(proto::ModelExecutionFeature feature) {
-  return feature != proto::MODEL_EXECUTION_FEATURE_UNSPECIFIED &&
-         feature != proto::MODEL_EXECUTION_FEATURE_TEST;
-}
-
-// Util class for recording the construction and validation of Settings
-// Visibility histogram.
-class ScopedSettingsVisibilityResultHistogramRecorder {
- public:
-  explicit ScopedSettingsVisibilityResultHistogramRecorder() = default;
-
-  ~ScopedSettingsVisibilityResultHistogramRecorder() {
-    CHECK(is_valid_);
-    base::UmaHistogramEnumeration(
-        base::StrCat(
-            {"OptimizationGuide.ModelExecution.SettingsVisibilityResult.",
-             GetStringNameForModelExecutionFeature(feature_)}),
-        result_);
-  }
-
-  void SetValid() { is_valid_ = true; }
-
-  void SetResult(
-      proto::ModelExecutionFeature feature,
-      ModelExecutionFeaturesController::SettingsVisibilityResult result) {
-    is_valid_ = true;
-    feature_ = feature;
-    result_ = result;
-  }
-
- private:
-  bool is_valid_ = false;
-  proto::ModelExecutionFeature feature_;
-  ModelExecutionFeaturesController::SettingsVisibilityResult result_;
-};
-
-enum class FeatureCurrentlyEnabledResult {
-  kUnknown = 0,
-  // Not enabled because user is not signed-in.
-  kNotEnabledUnsignedUser = 1,
-  // Returned result as enabled because feature was enabled at startup.
-  kEnabledAtStartup = 2,
-  // Returned result as not enabled because feature was not enabled at startup.
-  kNotEnabledAtStartup = 3,
-  // Returned result as not enabled because feature was disabled by enterprise
-  // policy.
-  kNotEnabledEnterprisePolicy = 4,
-  // Returned result as not enabled because model execution capability was
-  // disabled for the user account.
-  kNotEnabledModelExecutionCapability = 5,
-  // Returned result as enabled because the feature has graduated from
-  // experimental AI settings.
-  kEnabledByGraduation = 6,
-  // Updates should match with FeatureCurrentlyEnabledResult enum in enums.xml.
-  kMaxValue = kEnabledByGraduation
-};
-
-// Util class for recording the construction and validation of Settings
-// Visibility histogram.
-class ScopedFeatureCurrentlyEnabledHistogramRecorder {
- public:
-  explicit ScopedFeatureCurrentlyEnabledHistogramRecorder() = default;
-
-  ~ScopedFeatureCurrentlyEnabledHistogramRecorder() {
-    CHECK(is_valid_);
-    base::UmaHistogramEnumeration(
-        base::StrCat(
-            {"OptimizationGuide.ModelExecution.FeatureCurrentlyEnabledResult.",
-             GetStringNameForModelExecutionFeature(feature_)}),
-        result_);
-  }
-
-  void SetResult(proto::ModelExecutionFeature feature,
-                 FeatureCurrentlyEnabledResult result) {
-    is_valid_ = true;
-    feature_ = feature;
-    result_ = result;
-  }
-
- private:
-  bool is_valid_ = false;
-  proto::ModelExecutionFeature feature_;
-  FeatureCurrentlyEnabledResult result_;
-};
 
 // Returns whether the model execution capability is enabled. Use this whenever
 // the `AccountInfo` is available which has more recent data, instead of
@@ -140,11 +66,19 @@ bool CanUseModelExecutionFeatures(signin::IdentityManager* identity_manager) {
 
 ModelExecutionFeaturesController::ModelExecutionFeaturesController(
     PrefService* browser_context_profile_service,
-    signin::IdentityManager* identity_manager)
+    signin::IdentityManager* identity_manager,
+    PrefService* local_state,
+    policy::ManagementService* management_service,
+    DogfoodStatus dogfood_status,
+    bool is_official_build)
     : browser_context_profile_service_(browser_context_profile_service),
       identity_manager_(identity_manager),
+      local_state_(local_state),
       features_allowed_for_unsigned_user_(
-          features::internal::GetAllowedFeaturesForUnsignedUser()) {
+          features::internal::GetAllowedFeaturesForUnsignedUser()),
+      management_service_(management_service),
+      dogfood_status_(dogfood_status),
+      is_official_build_(is_official_build) {
   CHECK(browser_context_profile_service_);
 
   pref_change_registrar_.Init(browser_context_profile_service_);
@@ -155,7 +89,7 @@ ModelExecutionFeaturesController::ModelExecutionFeaturesController(
   is_signed_in_ = identity_manager && identity_manager->HasPrimaryAccount(
                                           signin::ConsentLevel::kSignin);
   if (is_signed_in_) {
-    can_use_model_execution_features_ =
+    account_allows_model_execution_features_ =
         CanUseModelExecutionFeatures(identity_manager);
   }
 
@@ -165,93 +99,118 @@ ModelExecutionFeaturesController::ModelExecutionFeaturesController(
 ModelExecutionFeaturesController::~ModelExecutionFeaturesController() = default;
 
 bool ModelExecutionFeaturesController::ShouldFeatureBeCurrentlyEnabledForUser(
-    proto::ModelExecutionFeature feature) const {
+    UserVisibleFeatureKey feature) const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-  ScopedFeatureCurrentlyEnabledHistogramRecorder metrics_recorder;
+  const FeatureCurrentlyEnabledResult result = GetFeatureEnabledState(feature);
 
-  if (features::internal::IsGraduatedFeature(feature)) {
-    UserValidityResult user_validity = GetCurrentUserValidityResult(feature);
-    // TODO(b/328523679): also report the FeatureCurrentlyEnabledResult values
-    // below for non-graduated features.
-    FeatureCurrentlyEnabledResult fcer;
-    switch (user_validity) {
-      case UserValidityResult::kValid:
-        fcer = FeatureCurrentlyEnabledResult::kEnabledByGraduation;
-        break;
-      case UserValidityResult::kInvalidUnsignedUser:
-        fcer = FeatureCurrentlyEnabledResult::kNotEnabledUnsignedUser;
-        break;
-      case UserValidityResult::kInvalidEnterprisePolicy:
-        fcer = FeatureCurrentlyEnabledResult::kNotEnabledEnterprisePolicy;
-        break;
-      case UserValidityResult::kInvalidModelExecutionCapability:
-        fcer =
-            FeatureCurrentlyEnabledResult::kNotEnabledModelExecutionCapability;
-        break;
-    };
-    metrics_recorder.SetResult(feature, fcer);
-    return user_validity == UserValidityResult::kValid;
-  }
+  base::UmaHistogramEnumeration(
+      base::StrCat(
+          {"OptimizationGuide.ModelExecution.FeatureCurrentlyEnabledResult.",
+           GetStringNameForModelExecutionFeature(feature)}),
+      result);
 
-  bool is_enabled = GetPrefState(feature) == prefs::FeatureOptInState::kEnabled;
-  metrics_recorder.SetResult(
-      feature, is_enabled
-                   ? FeatureCurrentlyEnabledResult::kEnabledAtStartup
-                   : FeatureCurrentlyEnabledResult::kNotEnabledAtStartup);
-  return is_enabled;
+  return result == FeatureCurrentlyEnabledResult::kEnabledByGraduation ||
+         result == FeatureCurrentlyEnabledResult::kEnabledAtStartup;
+}
+
+bool ModelExecutionFeaturesController::
+    ShouldFeatureAllowModelExecutionForSignedInUser(
+        optimization_guide::UserVisibleFeatureKey feature) const {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  // Check common things like enterprise policy, etc. first. The basic feature
+  // with `allow_unsigned_user` true is more permissive. This check adds the
+  // additional requirement that user is signed in and allowed execution.
+  // This is needed by kHistorySearch feature to gate answer generation
+  // on account details while allowing all users (including unsigned users)
+  // access to basic embeddings search functionality.
+  return ShouldFeatureBeCurrentlyEnabledForUser(feature) &&
+         ShouldModelExecutionBeAllowedForUser();
 }
 
 bool ModelExecutionFeaturesController::
     ShouldFeatureBeCurrentlyAllowedForLogging(
-        proto::ModelExecutionFeature feature) const {
+        const MqlsFeatureMetadata* metadata) const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  if (!ShouldFeatureBeCurrentlyEnabledForUser(feature)) {
-    return false;
+  // For dogfood users and developer builds only, allow the relevant
+  // chrome://flags option to override the default enterprise policy.
+  bool is_eligible_for_override =
+      dogfood_status_ == DogfoodStatus::DOGFOOD || !is_official_build_;
+  bool has_logging_force_enabled =
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableModelQualityDogfoodLogging);
+  if (is_eligible_for_override && has_logging_force_enabled) {
+    return true;
   }
-  return GetEnterprisePolicyValue(feature) ==
+
+  std::optional<EnterprisePolicyPref> enterprise_policy =
+      metadata->enterprise_policy();
+  if (!enterprise_policy) {
+    if (!management_service_) {
+      return false;
+    }
+    // If the user is managed, logging is disabled by default.
+    return !management_service_->IsManaged();
+  }
+
+  return enterprise_policy->GetValue(browser_context_profile_service_) ==
          model_execution::prefs::ModelExecutionEnterprisePolicyValue::kAllow;
 }
 
 prefs::FeatureOptInState ModelExecutionFeaturesController::GetPrefState(
-    proto::ModelExecutionFeature feature) const {
+    UserVisibleFeatureKey feature) const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-
-  if (!ShouldCheckSettingForFeature(feature)) {
-    NOTREACHED();
-    return prefs::FeatureOptInState::kNotInitialized;
-  }
-
   return static_cast<prefs::FeatureOptInState>(
       browser_context_profile_service_->GetInteger(
           prefs::GetSettingEnabledPrefName(feature)));
 }
 
+ModelExecutionFeaturesController::FeatureCurrentlyEnabledResult
+ModelExecutionFeaturesController::GetFeatureEnabledState(
+    UserVisibleFeatureKey feature) const {
+  if (features::internal::IsGraduatedFeature(feature)) {
+    UserValidityResult user_validity =
+        GetCurrentUserValidityResult(feature, /*skip_enterprise_check=*/false);
+    switch (user_validity) {
+      case UserValidityResult::kValid:
+        return FeatureCurrentlyEnabledResult::kEnabledByGraduation;
+      case UserValidityResult::kInvalidUnsignedUser:
+        return FeatureCurrentlyEnabledResult::kNotEnabledUnsignedUser;
+      case UserValidityResult::kInvalidEnterprisePolicy:
+        return FeatureCurrentlyEnabledResult::kNotEnabledEnterprisePolicy;
+      case UserValidityResult::kInvalidModelExecutionCapability:
+        return FeatureCurrentlyEnabledResult::
+            kNotEnabledModelExecutionCapability;
+    };
+  }
+
+  return GetPrefState(feature) == prefs::FeatureOptInState::kEnabled
+             ? FeatureCurrentlyEnabledResult::kEnabledAtStartup
+             : FeatureCurrentlyEnabledResult::kNotEnabledAtStartup;
+}
+
 ModelExecutionFeaturesController::UserValidityResult
 ModelExecutionFeaturesController::GetCurrentUserValidityResult(
-    proto::ModelExecutionFeature feature) const {
+    UserVisibleFeatureKey feature,
+    bool skip_enterprise_check) const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  CHECK(ShouldCheckSettingForFeature(feature));
+  bool require_account = !features_allowed_for_unsigned_user_.contains(feature);
 
-  // Sign-in check.
-  if (!is_signed_in_ &&
-      !base::Contains(features_allowed_for_unsigned_user_, feature)) {
-    return ModelExecutionFeaturesController::UserValidityResult::
-        kInvalidUnsignedUser;
+  if (require_account) {
+    UserValidityResult signin_checks_result = PerformSigninChecks();
+    if (signin_checks_result != UserValidityResult::kValid) {
+      return signin_checks_result;
+    }
   }
 
-  // Check user account is allowed to use model execution, when signed-in.
-  if (is_signed_in_ && !can_use_model_execution_features_) {
-    return ModelExecutionFeaturesController::UserValidityResult::
-        kInvalidModelExecutionCapability;
-  }
-
-  DCHECK(!is_signed_in_ || can_use_model_execution_features_)
-      << "At this point, the user must be either signed out or allowed to use "
-         "MES";
-
-  if (GetEnterprisePolicyValue(feature) ==
-      model_execution::prefs::ModelExecutionEnterprisePolicyValue::kDisable) {
+  const SettingsUiMetadata* metadata =
+      SettingsUiRegistry::GetInstance().GetFeature(feature);
+  CHECK(metadata);
+  if (!skip_enterprise_check &&
+      metadata->enterprise_policy().GetValue(
+          browser_context_profile_service_) ==
+          model_execution::prefs::ModelExecutionEnterprisePolicyValue::
+              kDisable) {
     return ModelExecutionFeaturesController::UserValidityResult::
         kInvalidEnterprisePolicy;
   }
@@ -259,71 +218,84 @@ ModelExecutionFeaturesController::GetCurrentUserValidityResult(
   return ModelExecutionFeaturesController::UserValidityResult::kValid;
 }
 
-bool ModelExecutionFeaturesController::IsSettingVisible(
-    proto::ModelExecutionFeature feature) const {
+ModelExecutionFeaturesController::UserValidityResult
+ModelExecutionFeaturesController::PerformSigninChecks() const {
+  // Sign-in check.
+  if (!is_signed_in_) {
+    return UserValidityResult::kInvalidUnsignedUser;
+  }
+
+  // Check user account is allowed to use model execution, when signed-in.
+  if (!account_allows_model_execution_features_) {
+    return UserValidityResult::kInvalidModelExecutionCapability;
+  }
+
+  return UserValidityResult::kValid;
+}
+
+bool ModelExecutionFeaturesController::ShouldModelExecutionBeAllowedForUser()
+    const {
+  return PerformSigninChecks() == UserValidityResult::kValid;
+}
+
+ModelExecutionFeaturesController::SettingsVisibilityResult
+ModelExecutionFeaturesController::ShouldHideHistorySearch() const {
+#if !BUILDFLAG(BUILD_TFLITE_WITH_XNNPACK)
+  return SettingsVisibilityResult::kNotVisibleHardwareUnsupported;
+#else
+  // Component updates policy check.
+  if (!local_state_->GetBoolean(::prefs::kComponentUpdatesEnabled)) {
+    return SettingsVisibilityResult::kNotVisibleEnterprisePolicy;
+  }
+
+  // Performance class check.
+  if (!IsPerformanceClassCompatible(
+          features::internal::kPerformanceClassListForHistorySearch.Get(),
+          PerformanceClassFromPref(*local_state_))) {
+    return SettingsVisibilityResult::kNotVisibleHardwareUnsupported;
+  }
+  return SettingsVisibilityResult::kUnknown;
+#endif
+}
+
+ModelExecutionFeaturesController::SettingsVisibilityResult
+ModelExecutionFeaturesController::GetSettingsVisibility(
+    UserVisibleFeatureKey feature) const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-  ScopedSettingsVisibilityResultHistogramRecorder metrics_recorder;
-
-  switch (GetCurrentUserValidityResult(feature)) {
+  switch (
+      GetCurrentUserValidityResult(feature, /*skip_enterprise_check=*/true)) {
     case ModelExecutionFeaturesController::UserValidityResult::
         kInvalidUnsignedUser:
-      metrics_recorder.SetResult(
-          feature, SettingsVisibilityResult::kNotVisibleUnsignedUser);
-      return false;
+      return SettingsVisibilityResult::kNotVisibleUnsignedUser;
     case ModelExecutionFeaturesController::UserValidityResult::
         kInvalidEnterprisePolicy:
-      metrics_recorder.SetResult(
-          feature, SettingsVisibilityResult::kNotVisibleEnterprisePolicy);
-      return false;
+      return SettingsVisibilityResult::kNotVisibleEnterprisePolicy;
     case ModelExecutionFeaturesController::UserValidityResult::
         kInvalidModelExecutionCapability:
-      metrics_recorder.SetResult(
-          feature,
-          SettingsVisibilityResult::kNotVisibleModelExecutionCapability);
-      return false;
+      return SettingsVisibilityResult::kNotVisibleModelExecutionCapability;
     case ModelExecutionFeaturesController::UserValidityResult::kValid:
       break;
   }
 
-  // Graduated feature should never be visible in settings.
-  if (features::internal::IsGraduatedFeature(feature)) {
-    metrics_recorder.SetResult(
-        feature, SettingsVisibilityResult::kNotVisibleGraduatedFeature);
-    return false;
+  // Check feature-specific requirements.
+  if (feature == UserVisibleFeatureKey::kHistorySearch) {
+    SettingsVisibilityResult result = ShouldHideHistorySearch();
+    if (result != SettingsVisibilityResult::kUnknown) {
+      return result;
+    }
   }
 
   // If the setting is currently enabled by user, then we should show the
   // setting to the user regardless of any other checks.
   if (ShouldFeatureBeCurrentlyEnabledForUser(feature)) {
-    metrics_recorder.SetResult(
-        feature, SettingsVisibilityResult::kVisibleFeatureAlreadyEnabled);
-    return true;
-  }
-
-  if (!ShouldCheckSettingForFeature(feature)) {
-    metrics_recorder.SetValid();
-    return false;
+    return SettingsVisibilityResult::kVisibleFeatureAlreadyEnabled;
   }
 
   bool result = base::FeatureList::IsEnabled(
       *features::internal::GetFeatureToUseToCheckSettingsVisibility(feature));
-  SettingsVisibilityResult visibility_result =
-      result ? SettingsVisibilityResult::kVisibleFieldTrialEnabled
-             : SettingsVisibilityResult::kNotVisibleFieldTrialDisabled;
-  metrics_recorder.SetResult(feature, visibility_result);
-  return result;
-}
-
-model_execution::prefs::ModelExecutionEnterprisePolicyValue
-ModelExecutionFeaturesController::GetEnterprisePolicyValue(
-    proto::ModelExecutionFeature feature) const {
-  const char* enterprise_policy_pref =
-      model_execution::prefs::GetEnterprisePolicyPrefName(feature);
-  CHECK(enterprise_policy_pref);
-  return static_cast<
-      model_execution::prefs::ModelExecutionEnterprisePolicyValue>(
-      browser_context_profile_service_->GetInteger(enterprise_policy_pref));
+  return result ? SettingsVisibilityResult::kVisibleFieldTrialEnabled
+                : SettingsVisibilityResult::kNotVisibleFieldTrialDisabled;
 }
 
 void ModelExecutionFeaturesController::AddObserver(
@@ -351,7 +323,7 @@ void ModelExecutionFeaturesController::OnIdentityManagerShutdown(
 }
 
 void ModelExecutionFeaturesController::OnFeatureSettingPrefChanged(
-    proto::ModelExecutionFeature feature) {
+    UserVisibleFeatureKey feature) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   auto pref_value = GetPrefState(feature);
@@ -360,9 +332,9 @@ void ModelExecutionFeaturesController::OnFeatureSettingPrefChanged(
   // When the feature is enabled, check the user is valid to enable the
   // feature.
   CHECK(!is_enabled ||
-            GetCurrentUserValidityResult(feature) ==
-                ModelExecutionFeaturesController::UserValidityResult::kValid,
-        base::NotFatalUntil::M125);
+        GetCurrentUserValidityResult(feature,
+                                     /*skip_enterprise_check=*/false) ==
+            ModelExecutionFeaturesController::UserValidityResult::kValid);
 
   if (pref_value != prefs::FeatureOptInState::kNotInitialized) {
     base::UmaHistogramBoolean(
@@ -380,7 +352,7 @@ void ModelExecutionFeaturesController::OnFeatureSettingPrefChanged(
 }
 
 void ModelExecutionFeaturesController::OnFeatureEnterprisePolicyPrefChanged(
-    proto::ModelExecutionFeature feature) {
+    UserVisibleFeatureKey feature) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   // When enterprise policy changes from allowed to disallowed, the feature
   // settings prefs need to be cleared. This in turn triggers
@@ -390,17 +362,12 @@ void ModelExecutionFeaturesController::OnFeatureEnterprisePolicyPrefChanged(
 }
 
 void ModelExecutionFeaturesController::InitializeFeatureSettings() {
-  for (int i = 0; i < proto::ModelExecutionFeature_ARRAYSIZE; ++i) {
-    proto::ModelExecutionFeature feature = proto::ModelExecutionFeature(i);
-    if (!ShouldCheckSettingForFeature(feature)) {
-      continue;
-    }
-
+  for (auto key : kAllUserVisibleFeatureKeys) {
     base::UmaHistogramBoolean(
         base::StrCat(
             {"OptimizationGuide.ModelExecution.FeatureEnabledAtStartup.",
-             GetStringNameForModelExecutionFeature(feature)}),
-        ShouldFeatureBeCurrentlyEnabledForUser(feature));
+             GetStringNameForModelExecutionFeature(key)}),
+        ShouldFeatureBeCurrentlyEnabledForUser(key));
   }
 }
 
@@ -423,11 +390,11 @@ void ModelExecutionFeaturesController::OnPrimaryAccountChanged(
   }
 
   if (!is_signed_in_) {
-    can_use_model_execution_features_ = false;
+    account_allows_model_execution_features_ = false;
     ResetInvalidFeaturePrefs();
     return;
   }
-  can_use_model_execution_features_ =
+  account_allows_model_execution_features_ =
       CanUseModelExecutionFeatures(identity_manager_);
   ResetInvalidFeaturePrefs();
 }
@@ -437,43 +404,24 @@ void ModelExecutionFeaturesController::OnExtendedAccountInfoUpdated(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   if (!is_signed_in_) {
-    can_use_model_execution_features_ = false;
+    account_allows_model_execution_features_ = false;
     ResetInvalidFeaturePrefs();
     return;
   }
-  can_use_model_execution_features_ =
+  account_allows_model_execution_features_ =
       CanUseModelExecutionFeaturesFromAccountInfo(info);
   ResetInvalidFeaturePrefs();
 }
 
 void ModelExecutionFeaturesController::ResetInvalidFeaturePrefs() {
-  bool main_toggle_enabled =
-      (browser_context_profile_service_->GetInteger(
-           prefs::kModelExecutionMainToggleSettingState) ==
-       static_cast<int>(prefs::FeatureOptInState::kEnabled));
-
-  for (int i = proto::ModelExecutionFeature_MIN;
-       i <= proto::ModelExecutionFeature_MAX; ++i) {
-    proto::ModelExecutionFeature feature =
-        static_cast<proto::ModelExecutionFeature>(i);
-    if (!ShouldCheckSettingForFeature(feature)) {
-      continue;
-    }
+  for (auto feature : kAllUserVisibleFeatureKeys) {
     auto pref_state = GetPrefState(feature);
-
-    // When the main toggle is enabled, and the feature pref was never disabled
-    // by the user, it can be enabled, if it is visible in settings.
-    if (main_toggle_enabled && IsSettingVisible(feature) &&
-        (pref_state == prefs::FeatureOptInState::kNotInitialized)) {
-      browser_context_profile_service_->SetInteger(
-          prefs::GetSettingEnabledPrefName(feature),
-          static_cast<int>(prefs::FeatureOptInState::kEnabled));
-    }
 
     // Reset prefs that were enabled to `kNotInitialized` when the conditions
     // disallow the feature.
     if (pref_state == prefs::FeatureOptInState::kEnabled &&
-        GetCurrentUserValidityResult(feature) !=
+        GetCurrentUserValidityResult(feature,
+                                     /*skip_enterprise_check=*/false) !=
             ModelExecutionFeaturesController::UserValidityResult::kValid) {
       browser_context_profile_service_->SetInteger(
           optimization_guide::prefs::GetSettingEnabledPrefName(feature),
@@ -482,57 +430,23 @@ void ModelExecutionFeaturesController::ResetInvalidFeaturePrefs() {
   }
 }
 
-void ModelExecutionFeaturesController::OnMainToggleSettingStatePrefChanged() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-
-  bool is_now_enabled = (browser_context_profile_service_->GetInteger(
-                             prefs::kModelExecutionMainToggleSettingState) ==
-                         static_cast<int>(prefs::FeatureOptInState::kEnabled));
-
-  prefs::FeatureOptInState feature_optin_state =
-      is_now_enabled ? prefs::FeatureOptInState::kEnabled
-                     : prefs::FeatureOptInState::kDisabled;
-
-  for (int i = proto::ModelExecutionFeature_MIN;
-       i <= proto::ModelExecutionFeature_MAX; ++i) {
-    proto::ModelExecutionFeature feature =
-        static_cast<proto::ModelExecutionFeature>(i);
-    if (!ShouldCheckSettingForFeature(feature)) {
-      continue;
-    }
-    // Do not change the pref for invisible features.
-    if (!IsSettingVisible(feature)) {
-      continue;
-    }
-    // Set the feature pref the same state as the main toggle.
-    browser_context_profile_service_->SetInteger(
-        prefs::GetSettingEnabledPrefName(feature),
-        static_cast<int>(feature_optin_state));
-  }
+void ModelExecutionFeaturesController::AllowUnsignedUserForTesting(
+    UserVisibleFeatureKey feature) {
+  features_allowed_for_unsigned_user_.insert(feature);
 }
 
 void ModelExecutionFeaturesController::InitializePrefListener() {
-  pref_change_registrar_.Add(
-      optimization_guide::prefs::kModelExecutionMainToggleSettingState,
-      base::BindRepeating(&ModelExecutionFeaturesController::
-                              OnMainToggleSettingStatePrefChanged,
-                          base::Unretained(this)));
-
-  for (int i = proto::ModelExecutionFeature_MIN;
-       i <= proto::ModelExecutionFeature_MAX; ++i) {
-    proto::ModelExecutionFeature feature =
-        static_cast<proto::ModelExecutionFeature>(i);
-    if (!ShouldCheckSettingForFeature(feature)) {
-      continue;
-    }
-
+  SettingsUiRegistry& registry = SettingsUiRegistry::GetInstance();
+  for (auto feature : kAllUserVisibleFeatureKeys) {
     pref_change_registrar_.Add(
         optimization_guide::prefs::GetSettingEnabledPrefName(feature),
         base::BindRepeating(
             &ModelExecutionFeaturesController::OnFeatureSettingPrefChanged,
             base::Unretained(this), feature));
+    const SettingsUiMetadata* metadata = registry.GetFeature(feature);
+    CHECK(metadata);
     pref_change_registrar_.Add(
-        model_execution::prefs::GetEnterprisePolicyPrefName(feature),
+        metadata->enterprise_policy().name(),
         base::BindRepeating(&ModelExecutionFeaturesController::
                                 OnFeatureEnterprisePolicyPrefChanged,
                             base::Unretained(this), feature));

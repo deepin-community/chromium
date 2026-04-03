@@ -4,16 +4,20 @@
 
 #include "services/device/generic_sensor/platform_sensor_reader_win.h"
 
+#include <objbase.h>
+
 #include <Sensors.h>
 #include <comdef.h>
-#include <objbase.h>
 #include <wrl/implements.h>
 
 #include <iomanip>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
+#include "base/numerics/angle_conversions.h"
 #include "base/numerics/math_constants.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -21,7 +25,6 @@
 #include "services/device/generic_sensor/generic_sensor_consts.h"
 #include "services/device/public/cpp/generic_sensor/platform_sensor_configuration.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading.h"
-#include "ui/gfx/geometry/angle_conversions.h"
 
 namespace device {
 
@@ -132,9 +135,9 @@ std::unique_ptr<ReaderInitParams> CreateGyroscopeReaderInitParams() {
     }
 
     // Values are converted from degrees to radians.
-    reading->gyro.x = gfx::DegToRad(x);
-    reading->gyro.y = gfx::DegToRad(y);
-    reading->gyro.z = gfx::DegToRad(z);
+    reading->gyro.x = base::DegToRad(x);
+    reading->gyro.y = base::DegToRad(y);
+    reading->gyro.z = base::DegToRad(z);
     return S_OK;
   };
   return params;
@@ -212,9 +215,9 @@ CreateAbsoluteOrientationQuaternionReaderInitParams() {
     float* quat = reinterpret_cast<float*>(quat_variant.get().caub.pElems);
 
     reading->orientation_quat.x = quat[0];  // x*sin(Theta/2)
-    reading->orientation_quat.y = quat[1];  // y*sin(Theta/2)
-    reading->orientation_quat.z = quat[2];  // z*sin(Theta/2)
-    reading->orientation_quat.w = quat[3];  // cos(Theta/2)
+    reading->orientation_quat.y = UNSAFE_TODO(quat[1]);  // y*sin(Theta/2)
+    reading->orientation_quat.z = UNSAFE_TODO(quat[2]);  // z*sin(Theta/2)
+    reading->orientation_quat.w = UNSAFE_TODO(quat[3]);  // cos(Theta/2)
     return S_OK;
   };
   return params;

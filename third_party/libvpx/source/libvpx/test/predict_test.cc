@@ -8,11 +8,12 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <tuple>
 
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include "./vp8_rtcd.h"
 #include "./vpx_config.h"
@@ -23,18 +24,17 @@
 #include "test/util.h"
 #include "vpx/vpx_integer.h"
 #include "vpx_mem/vpx_mem.h"
-#include "vpx_ports/msvc.h"
 
 namespace {
 
 using libvpx_test::ACMRandom;
 using std::make_tuple;
 
-typedef void (*PredictFunc)(uint8_t *src_ptr, int src_pixels_per_line,
-                            int xoffset, int yoffset, uint8_t *dst_ptr,
-                            int dst_pitch);
+using PredictFunc = void (*)(uint8_t *src_ptr, int src_pixels_per_line,
+                             int xoffset, int yoffset, uint8_t *dst_ptr,
+                             int dst_pitch);
 
-typedef std::tuple<int, int, PredictFunc> PredictParam;
+using PredictParam = std::tuple<int, int, PredictFunc>;
 
 class PredictTestBase : public AbstractBench,
                         public ::testing::TestWithParam<PredictParam> {
@@ -312,19 +312,19 @@ INSTANTIATE_TEST_SUITE_P(
                       make_tuple(8, 4, &vp8_sixtap_predict8x4_neon),
                       make_tuple(4, 4, &vp8_sixtap_predict4x4_neon)));
 #endif
-#if HAVE_MMX
+#if HAVE_MMX && HAVE_X86_ASM
 INSTANTIATE_TEST_SUITE_P(
     MMX, SixtapPredictTest,
     ::testing::Values(make_tuple(4, 4, &vp8_sixtap_predict4x4_mmx)));
 #endif
-#if HAVE_SSE2
+#if HAVE_SSE2 && HAVE_X86_ASM
 INSTANTIATE_TEST_SUITE_P(
     SSE2, SixtapPredictTest,
     ::testing::Values(make_tuple(16, 16, &vp8_sixtap_predict16x16_sse2),
                       make_tuple(8, 8, &vp8_sixtap_predict8x8_sse2),
                       make_tuple(8, 4, &vp8_sixtap_predict8x4_sse2)));
 #endif
-#if HAVE_SSSE3
+#if HAVE_SSSE3 && HAVE_X86_ASM
 INSTANTIATE_TEST_SUITE_P(
     SSSE3, SixtapPredictTest,
     ::testing::Values(make_tuple(16, 16, &vp8_sixtap_predict16x16_ssse3),
@@ -397,7 +397,7 @@ INSTANTIATE_TEST_SUITE_P(
                       make_tuple(8, 4, &vp8_bilinear_predict8x4_sse2),
                       make_tuple(4, 4, &vp8_bilinear_predict4x4_sse2)));
 #endif
-#if HAVE_SSSE3
+#if HAVE_SSSE3 && HAVE_X86_ASM
 INSTANTIATE_TEST_SUITE_P(
     SSSE3, BilinearPredictTest,
     ::testing::Values(make_tuple(16, 16, &vp8_bilinear_predict16x16_ssse3),

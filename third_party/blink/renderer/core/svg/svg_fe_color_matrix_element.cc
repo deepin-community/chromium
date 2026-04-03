@@ -20,23 +20,26 @@
 
 #include "third_party/blink/renderer/core/svg/svg_fe_color_matrix_element.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_number_list.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_string.h"
 #include "third_party/blink/renderer/core/svg/svg_enumeration_map.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
 template <>
 const SVGEnumerationMap& GetEnumerationMap<ColorMatrixType>() {
-  static const SVGEnumerationMap::Entry enum_items[] = {
-      {FECOLORMATRIX_TYPE_MATRIX, "matrix"},
-      {FECOLORMATRIX_TYPE_SATURATE, "saturate"},
-      {FECOLORMATRIX_TYPE_HUEROTATE, "hueRotate"},
-      {FECOLORMATRIX_TYPE_LUMINANCETOALPHA, "luminanceToAlpha"},
-  };
+  static constexpr auto enum_items = std::to_array<const char* const>({
+      "matrix",
+      "saturate",
+      "hueRotate",
+      "luminanceToAlpha",
+  });
   static const SVGEnumerationMap entries(enum_items);
   return entries;
 }
@@ -78,13 +81,11 @@ void SVGFEColorMatrixElement::SvgAttributeChanged(
   const QualifiedName& attr_name = params.name;
   if (attr_name == svg_names::kTypeAttr ||
       attr_name == svg_names::kValuesAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     PrimitiveAttributeChanged(attr_name);
     return;
   }
 
   if (attr_name == svg_names::kInAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
@@ -94,6 +95,7 @@ void SVGFEColorMatrixElement::SvgAttributeChanged(
 
 FilterEffect* SVGFEColorMatrixElement::Build(SVGFilterBuilder* filter_builder,
                                              Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFEColorMatrixElement);
   FilterEffect* input1 = filter_builder->GetEffectById(
       AtomicString(in1_->CurrentValue()->Value()));
   DCHECK(input1);

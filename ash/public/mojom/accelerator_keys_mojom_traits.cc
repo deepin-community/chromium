@@ -4,6 +4,7 @@
 
 #include "ash/public/mojom/accelerator_keys_mojom_traits.h"
 
+#include "ash/public/mojom/accelerator_keys.mojom-shared.h"
 #include "ash/public/mojom/accelerator_keys.mojom.h"
 #include "base/notreached.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
@@ -407,6 +408,16 @@ mojom_vkey EnumTraits<mojom_vkey, ui::KeyboardCode>::ToMojom(
       return mojom_vkey::kDictate;
     case ui::KeyboardCode::VKEY_ALL_APPLICATIONS:
       return mojom_vkey::kAllApplications;
+    case ui::VKEY_FUNCTION:
+      return mojom_vkey::kFunction;
+    case ui::VKEY_QUICK_INSERT:
+      return mojom_vkey::kQuickInsert;
+    case ui::VKEY_ACCESSIBILITY:
+      return mojom_vkey::kAccessibility;
+    case ui::VKEY_DO_NOT_DISTURB:
+      return mojom_vkey::kDoNotDisturb;
+    case ui::VKEY_CAMERA_ACCESS_TOGGLE:
+      return mojom_vkey::kCameraAccessToggle;
     case ui::VKEY_BUTTON_0:
       return mojom_vkey::kButton0;
     case ui::VKEY_BUTTON_1:
@@ -442,7 +453,6 @@ mojom_vkey EnumTraits<mojom_vkey, ui::KeyboardCode>::ToMojom(
   }
 
   NOTREACHED();
-  return mojom_vkey::kUnknown;
 }
 
 bool EnumTraits<mojom_vkey, ui::KeyboardCode>::FromMojom(
@@ -1037,6 +1047,21 @@ bool EnumTraits<mojom_vkey, ui::KeyboardCode>::FromMojom(
     case mojom_vkey::kAllApplications:
       *out = ui::KeyboardCode::VKEY_ALL_APPLICATIONS;
       return true;
+    case ash::mojom::VKey::kQuickInsert:
+      *out = ui::KeyboardCode::VKEY_QUICK_INSERT;
+      return true;
+    case ash::mojom::VKey::kAccessibility:
+      *out = ui::KeyboardCode::VKEY_ACCESSIBILITY;
+      return true;
+    case ash::mojom::VKey::kDoNotDisturb:
+      *out = ui::KeyboardCode::VKEY_DO_NOT_DISTURB;
+      return true;
+    case ash::mojom::VKey::kCameraAccessToggle:
+      *out = ui::KeyboardCode::VKEY_CAMERA_ACCESS_TOGGLE;
+      return true;
+    case ash::mojom::VKey::kFunction:
+      *out = ui::KeyboardCode::VKEY_FUNCTION;
+      return true;
     case mojom_vkey::kButton0:
       *out = ui::KeyboardCode::VKEY_BUTTON_0;
       return true;
@@ -1087,7 +1112,6 @@ bool EnumTraits<mojom_vkey, ui::KeyboardCode>::FromMojom(
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 }  // namespace mojo

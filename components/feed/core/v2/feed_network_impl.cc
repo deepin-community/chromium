@@ -5,6 +5,9 @@
 #include "components/feed/core/v2/feed_network_impl.h"
 
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/base64.h"
@@ -35,10 +38,6 @@
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
-#include "components/signin/public/identity_manager/scope_set.h"
-#include "components/supervised_user/core/browser/proto/get_discover_feed_request.pb.h"
-#include "components/supervised_user/core/browser/proto/get_discover_feed_response.pb.h"
-#include "components/supervised_user/core/common/features.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "net/base/isolation_info.h"
@@ -61,14 +60,9 @@ constexpr char kApplicationXProtobuf[] = "application/x-protobuf";
 constexpr base::TimeDelta kNetworkTimeout = base::Seconds(30);
 constexpr char kDiscoverHost[] = "https://discover-pa.googleapis.com/";
 
-signin::ScopeSet GetAuthScopes() {
-  return {GaiaConstants::kFeedOAuth2Scope};
-}
-
 int EstimateFeedQueryRequestSize(const network::ResourceRequest& request) {
   int total_size = 14 +  // GET <path> HTTP/1.1
-                   request.url.path_piece().size() +
-                   request.url.query_piece().size();
+                   request.url.path().size() + request.url.query().size();
   for (const net::HttpRequestHeaders::HeaderKeyValuePair& header :
        request.headers.GetHeaderVector()) {
     total_size += header.key.size() + header.value.size() + 2;
@@ -152,34 +146,6 @@ void ParseAndForwardQueryResponse(
   std::move(result_callback).Run(std::move(result));
 }
 
-void ParseAndForwardKidFriendlyQueryResponse(
-    base::OnceCallback<void(FeedNetwork::KidFriendlyQueryRequestResult)>
-        result_callback,
-    RawResponse raw_response) {
-  MetricsReporter::NetworkRequestComplete(NetworkRequestType::kSupervisedFeed,
-                                          raw_response.response_info);
-  FeedNetwork::KidFriendlyQueryRequestResult result;
-  result.response_info = raw_response.response_info;
-  result.response_info.fetch_time_ticks = base::TimeTicks::Now();
-  if (result.response_info.status_code == 200) {
-    ::google::protobuf::io::CodedInputStream input_stream(
-        reinterpret_cast<const uint8_t*>(raw_response.response_bytes.data()),
-        raw_response.response_bytes.size());
-
-    // The first few bytes of the body are a varint containing the size of the
-    // message. We need to skip over them.
-    int message_size;
-    input_stream.ReadVarintSizeAsInt(&message_size);
-
-    auto response_message =
-        std::make_unique<supervised_user::GetDiscoverFeedResponse>();
-    if (response_message->ParseFromCodedStream(&input_stream)) {
-      result.response_body = std::move(response_message);
-    }
-  }
-  std::move(result_callback).Run(std::move(result));
-}
-
 void AddMothershipPayloadQueryParams(const std::string& payload,
                                      const std::string& language_tag,
                                      GURL& url) {
@@ -204,9 +170,9 @@ int PopulateRequestBody(const std::string& request_body,
 GURL OverrideUrlSchemeHostPort(const GURL& url,
                                const GURL& override_scheme_host_port) {
   GURL::Replacements replacements;
-  replacements.SetSchemeStr(override_scheme_host_port.scheme_piece());
-  replacements.SetHostStr(override_scheme_host_port.host_piece());
-  replacements.SetPortStr(override_scheme_host_port.port_piece());
+  replacements.SetSchemeStr(override_scheme_host_port.scheme());
+  replacements.SetHostStr(override_scheme_host_port.host());
+  replacements.SetPortStr(override_scheme_host_port.port());
   return url.ReplaceComponents(replacements);
 }
 
@@ -219,7 +185,7 @@ GURL OverrideUrlSchemeHostPort(const GURL& url,
 class FeedNetworkImpl::NetworkFetch {
  public:
   NetworkFetch(const GURL& url,
-               base::StringPiece request_method,
+               std::string_view request_method,
                std::string request_body,
                FeedNetworkImpl::Delegate* delegate,
                signin::IdentityManager* identity_manager,
@@ -266,7 +232,7 @@ class FeedNetworkImpl::NetworkFetch {
   void StartAccessTokenFetch() {
     DVLOG(1) << "Feed access token fetch started.";
     token_fetcher_ = std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-        "feed", identity_manager_, GetAuthScopes(),
+        signin::OAuthConsumerId::kFeedNetwork, identity_manager_,
         base::BindOnce(&NetworkFetch::AccessTokenFetchFinished, GetWeakPtr(),
                        base::TimeTicks::Now()),
         signin::PrimaryAccountAccessTokenFetcher::Mode::kWaitUntilAvailable,
@@ -311,8 +277,8 @@ class FeedNetworkImpl::NetworkFetch {
         GoogleServiceAuthError::NUM_STATES);
 
     base::TimeDelta token_duration = base::TimeTicks::Now() - token_start_ticks;
-    UMA_HISTOGRAM_MEDIUM_TIMES("ContentSuggestions.Feed.Network.TokenDuration",
-                               token_duration);
+    DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+        "ContentSuggestions.Feed.Network.TokenDuration", token_duration);
 
     access_token_ = access_token_info.token;
 
@@ -391,7 +357,7 @@ class FeedNetworkImpl::NetworkFetch {
       resource_request->trusted_params =
           network::ResourceRequest::TrustedParams();
       resource_request->trusted_params->isolation_info =
-          net::IsolationInfo::CreateTransient();
+          net::IsolationInfo::CreateTransient(/*nonce=*/std::nullopt);
     }
 
     SetRequestHeaders(!request_body_.empty(), *resource_request);
@@ -432,7 +398,7 @@ class FeedNetworkImpl::NetworkFetch {
 
     variations::SignedIn signed_in_status = variations::SignedIn::kNo;
     if (!access_token_.empty()) {
-      base::StringPiece token = access_token_;
+      std::string_view token = access_token_;
       std::string token_override =
           base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
               "feed-token-override");
@@ -449,7 +415,7 @@ class FeedNetworkImpl::NetworkFetch {
                                        signed_in_status, &request);
   }
 
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response) {
+  void OnSimpleLoaderComplete(std::optional<std::string> response) {
     const network::mojom::URLResponseHead* loader_response_info =
         simple_loader_->ResponseInfo();
     std::optional<network::URLLoaderCompletionStatus> completion_status =
@@ -499,20 +465,21 @@ class FeedNetworkImpl::NetworkFetch {
           loader_response_info->headers->response_code();
       response_info.response_body_bytes = response->size();
 
-      response_body = std::move(*response);
+      response_body = std::move(response).value();
 
       if (response_info.status_code == net::HTTP_UNAUTHORIZED) {
         CoreAccountId account_id = identity_manager_->GetPrimaryAccountId(
             signin::ConsentLevel::kSignin);
         if (!account_id.empty()) {
           identity_manager_->RemoveAccessTokenFromCache(
-              account_id, GetAuthScopes(), access_token_);
+              account_id, signin::OAuthConsumerId::kFeedNetwork, access_token_);
         }
       }
     }
 
-    UMA_HISTOGRAM_MEDIUM_TIMES("ContentSuggestions.Feed.Network.Duration",
-                               response_info.fetch_duration);
+    DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+        "ContentSuggestions.Feed.Network.Duration",
+        response_info.fetch_duration);
 
     base::TimeDelta loader_only_duration =
         base::TimeTicks::Now() - loader_only_start_ticks_;
@@ -606,16 +573,16 @@ void FeedNetworkImpl::SendQueryRequest(
     GURL override_host_url(host_override);
     if (override_host_url.is_valid()) {
       GURL::Replacements replacements;
-      replacements.SetSchemeStr(override_host_url.scheme_piece());
-      replacements.SetHostStr(override_host_url.host_piece());
-      replacements.SetPortStr(override_host_url.port_piece());
+      replacements.SetSchemeStr(override_host_url.scheme());
+      replacements.SetHostStr(override_host_url.host());
+      replacements.SetPortStr(override_host_url.port());
       // Allow the host override to also add a prefix for the path. Ignore
       // trailing slashes if they are provided, as the path part of |url| will
       // always include "/".
-      base::StringPiece trimmed_path_prefix = base::TrimString(
-          override_host_url.path_piece(), "/", base::TRIM_TRAILING);
+      std::string_view trimmed_path_prefix =
+          base::TrimString(override_host_url.path(), "/", base::TRIM_TRAILING);
       std::string replacement_path =
-          base::StrCat({trimmed_path_prefix, url.path_piece()});
+          base::StrCat({trimmed_path_prefix, url.path()});
 
       replacements.SetPathStr(replacement_path);
 
@@ -639,7 +606,7 @@ void FeedNetworkImpl::CancelRequests() {
 }
 
 void FeedNetworkImpl::Send(const GURL& url,
-                           base::StringPiece request_method,
+                           std::string_view request_method,
                            std::string request_body,
                            bool allow_bless_auth,
                            const AccountInfo& account_info,
@@ -662,44 +629,10 @@ void FeedNetworkImpl::Send(const GURL& url,
                                       std::move(callback)));
 }
 
-void FeedNetworkImpl::SendKidFriendlyApiRequest(
-    const supervised_user::GetDiscoverFeedRequest& request,
-    const AccountInfo& account_info,
-    base::OnceCallback<void(FeedNetwork::KidFriendlyQueryRequestResult)>
-        callback) {
-  std::string binary_proto;
-  request.SerializeToString(&binary_proto);
-  std::string base64proto;
-  base::Base64UrlEncode(
-      binary_proto, base::Base64UrlEncodePolicy::INCLUDE_PADDING, &base64proto);
-
-  GURL url(supervised_user::kKidFriendlyContentFeedEndpoint.Get());
-  bool host_overriden = false;
-
-  // Overrides with a custom endpoint if available.
-  std::string host_override =
-      pref_service_->GetString(feed::prefs::kDiscoverAPIEndpointOverride);
-  if (!host_override.empty()) {
-    GURL override_url(host_override);
-    if (override_url.is_valid()) {
-      url = override_url;
-      host_overriden = true;
-    }
-  }
-
-  AddMothershipPayloadQueryParams(base64proto, "", url);
-  Send(url, "GET", /*request_body=*/{},
-       /*allow_bless_auth=*/host_overriden, account_info,
-       net::HttpRequestHeaders(),
-       /*is_feed_query=*/false,
-       base::BindOnce(&ParseAndForwardKidFriendlyQueryResponse,
-                      std::move(callback)));
-}
-
 void FeedNetworkImpl::SendDiscoverApiRequest(
     NetworkRequestType request_type,
-    base::StringPiece request_path,
-    base::StringPiece method,
+    std::string_view request_path,
+    std::string_view method,
     std::string request_body,
     const AccountInfo& account_info,
     std::optional<RequestMetadata> request_metadata,
@@ -721,7 +654,7 @@ void FeedNetworkImpl::SendDiscoverApiRequest(
 
 void FeedNetworkImpl::SendAsyncDataRequest(
     const GURL& url,
-    base::StringPiece request_method,
+    std::string_view request_method,
     net::HttpRequestHeaders request_headers,
     std::string request_body,
     const AccountInfo& account_info,

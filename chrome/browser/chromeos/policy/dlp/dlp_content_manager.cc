@@ -4,6 +4,7 @@
 
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_manager.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -11,13 +12,10 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "base/time/time.h"
 #include "chrome/browser/chromeos/policy/dlp/dialogs/dlp_warn_notifier.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_confidential_contents.h"
@@ -27,10 +25,11 @@
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager_factory.h"
 #include "chrome/browser/enterprise/data_controls/dlp_reporting_manager.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "components/enterprise/data_controls/dlp_histogram_helper.h"
+#include "components/enterprise/data_controls/core/browser/dlp_histogram_helper.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
@@ -101,8 +100,8 @@ const std::optional<std::string> RestrictionToWarnProceededUMASuffix(
     case DlpRulesManager::Restriction::kClipboard:
     case DlpRulesManager::Restriction::kPrivacyScreen:
     case DlpRulesManager::Restriction::kFiles:
+    case DlpRulesManager::Restriction::kFileDownload:
       NOTREACHED();
-      return std::nullopt;
   }
 }
 
@@ -133,9 +132,11 @@ DlpContentManager* DlpContentManager::Get() {
 
 DlpContentRestrictionSet DlpContentManager::GetConfidentialRestrictions(
     content::WebContents* web_contents) const {
-  if (!base::Contains(confidential_web_contents_, web_contents))
-    return DlpContentRestrictionSet();
-  return confidential_web_contents_.at(web_contents);
+  if (auto it = confidential_web_contents_.find(web_contents);
+      it != confidential_web_contents_.end()) {
+    return it->second;
+  }
+  return DlpContentRestrictionSet();
 }
 
 bool DlpContentManager::IsScreenShareBlocked(
@@ -293,11 +294,6 @@ bool DlpContentManager::ScreenShareInfo::operator==(
   return label_ == other.label_ && media_id_ == other.media_id_;
 }
 
-bool DlpContentManager::ScreenShareInfo::operator!=(
-    const DlpContentManager::ScreenShareInfo& other) const {
-  return !(*this == other);
-}
-
 const content::DesktopMediaID& DlpContentManager::ScreenShareInfo::media_id()
     const {
   return media_id_;
@@ -378,11 +374,13 @@ void DlpContentManager::ScreenShareInfo::Resume() {
       web_contents_ && source_callback_) {
     content::RenderFrameHost* main_frame = web_contents_->GetPrimaryMainFrame();
     DCHECK(main_frame);
-    source_callback_.Run(content::DesktopMediaID(
-        content::DesktopMediaID::TYPE_WEB_CONTENTS,
-        content::DesktopMediaID::kNullId,
-        content::WebContentsMediaCaptureId(main_frame->GetProcess()->GetID(),
-                                           main_frame->GetRoutingID())));
+    source_callback_.Run(
+        content::DesktopMediaID(content::DesktopMediaID::TYPE_WEB_CONTENTS,
+                                content::DesktopMediaID::kNullId,
+                                content::WebContentsMediaCaptureId(
+                                    main_frame->GetProcess()->GetDeprecatedID(),
+                                    main_frame->GetRoutingID())),
+        captured_surface_control_active_);
     // Start after source will be changed and notified.
     pending_start_on_source_change_ = true;
   } else {
@@ -435,6 +433,10 @@ bool DlpContentManager::ScreenShareInfo::HasOpenDialogWidget() {
   return dialog_widget_ && !dialog_widget_->IsClosed();
 }
 
+void DlpContentManager::ScreenShareInfo::SetCapturedSurfaceControlActive() {
+  captured_surface_control_active_ = true;
+}
+
 base::WeakPtr<DlpContentManager::ScreenShareInfo>
 DlpContentManager::ScreenShareInfo::GetWeakPtr() {
   return weak_factory_.GetWeakPtr();
@@ -476,13 +478,18 @@ void DlpContentManager::AddObserver(DlpContentManagerObserver* observer,
 void DlpContentManager::OnScreenShareSourceChanging(
     const std::string& label,
     const content::DesktopMediaID& old_media_id,
-    const content::DesktopMediaID& new_media_id) {
+    const content::DesktopMediaID& new_media_id,
+    bool captured_surface_control_active) {
   for (auto& screen_share : running_screen_shares_) {
     if (screen_share->label() == label &&
-        screen_share->media_id() == old_media_id &&
-        screen_share->new_media_id() != new_media_id) {
-      screen_share->ChangeStateBeforeSourceChange();
-      screen_share->set_new_media_id(new_media_id);
+        screen_share->media_id() == old_media_id) {
+      if (captured_surface_control_active) {
+        screen_share->SetCapturedSurfaceControlActive();
+      }
+      if (screen_share->new_media_id() != new_media_id) {
+        screen_share->ChangeStateBeforeSourceChange();
+        screen_share->set_new_media_id(new_media_id);
+      }
     }
   }
 }
@@ -511,18 +518,17 @@ DlpContentManager::GetWebContentsInfo() const {
 
 DlpContentManager::DlpContentManager() {
   // Start observing tab strip models for all browsers.
-  BrowserList* browser_list = BrowserList::GetInstance();
-  for (Browser* browser : *browser_list)
-    browser->tab_strip_model()->AddObserver(this);
-  browser_list->AddObserver(this);
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [this](BrowserWindowInterface* browser_window_interface) {
+        // TODO(crbug.com/452120900): TabStripModel auto-unregistered by dtor
+        browser_window_interface->GetTabStripModel()->AddObserver(this);
+        return true;
+      });
+  browser_collection_observation_.Observe(
+      GlobalBrowserCollection::GetInstance());
 }
 
-DlpContentManager::~DlpContentManager() {
-  BrowserList* browser_list = BrowserList::GetInstance();
-  browser_list->RemoveObserver(this);
-  for (Browser* browser : *browser_list)
-    browser->tab_strip_model()->RemoveObserver(this);
-}
+DlpContentManager::~DlpContentManager() = default;
 
 // static
 void DlpContentManager::ReportWarningProceededEvent(
@@ -580,8 +586,9 @@ void DlpContentManager::OnConfidentialityChanged(
     content::WebContents* web_contents,
     const DlpContentRestrictionSet& restriction_set) {
   DlpContentRestrictionSet old_restriction_set;
-  if (confidential_web_contents_.contains(web_contents)) {
-    old_restriction_set = confidential_web_contents_[web_contents];
+  if (auto it = confidential_web_contents_.find(web_contents);
+      it != confidential_web_contents_.end()) {
+    old_restriction_set = it->second;
   }
   UpdateConfidentiality(web_contents, restriction_set);
   NotifyOnConfidentialityChanged(old_restriction_set, restriction_set,
@@ -593,12 +600,9 @@ void DlpContentManager::OnWebContentsDestroyed(
   RemoveFromConfidential(web_contents);
 }
 
-void DlpContentManager::OnBrowserAdded(Browser* browser) {
-  browser->tab_strip_model()->AddObserver(this);
-}
-
-void DlpContentManager::OnBrowserRemoved(Browser* browser) {
-  browser->tab_strip_model()->RemoveObserver(this);
+void DlpContentManager::OnBrowserCreated(BrowserWindowInterface* browser) {
+  // TODO(crbug.com/452120900): TabStripModel auto-unregistered by dtor
+  browser->GetTabStripModel()->AddObserver(this);
 }
 
 void DlpContentManager::OnTabStripModelChanged(
@@ -701,7 +705,7 @@ void DlpContentManager::AddOrUpdateScreenShare(
     base::RepeatingClosure stop_callback,
     content::MediaStreamUI::StateChangeCallback state_change_callback,
     content::MediaStreamUI::SourceCallback source_callback) {
-  auto screen_share_it = base::ranges::find_if(
+  auto screen_share_it = std::ranges::find_if(
       running_screen_shares_,
       [&label, media_id](const std::unique_ptr<ScreenShareInfo>& info) {
         return info && info->label() == label &&
@@ -735,7 +739,7 @@ void DlpContentManager::AddOrUpdateScreenShare(
 void DlpContentManager::RemoveScreenShare(
     const std::string& label,
     const content::DesktopMediaID& media_id) {
-  base::EraseIf(
+  std::erase_if(
       running_screen_shares_,
       [=](const std::unique_ptr<ScreenShareInfo>& screen_share_info) -> bool {
         return screen_share_info->label() == label &&
@@ -759,7 +763,6 @@ void DlpContentManager::CheckRunningScreenShares() {
                   info.restriction_info.level, reporting_manager_);
     }
 
-    // TODO(crbug.com/1326541): Fix for new tab shares.
     if (screen_share->GetLatestRestriction() == info.restriction_info &&
         screen_share->GetConfidentialContents() == info.confidential_contents) {
       // No change in restrictions that apply to this screen share.
@@ -927,7 +930,6 @@ void DlpContentManager::OnDlpWarnDialogReply(
 void DlpContentManager::MaybeReportEvent(
     const RestrictionLevelAndUrl& restriction_info,
     DlpRulesManager::Restriction restriction) {
-  // TODO(crbug.com/1260302): Add reporting and metrics for WARN restrictions.
   if (IsReported(restriction_info) && reporting_manager_) {
     ReportEvent(restriction_info.url, restriction, restriction_info.level,
                 reporting_manager_);
@@ -947,7 +949,7 @@ void DlpContentManager::RemoveAllowedContents(
     DlpConfidentialContents& contents,
     DlpRulesManager::Restriction restriction) {
   base::EraseIf(
-      contents.GetContents(), [=](const DlpConfidentialContent& content) {
+      contents.GetContents(), [=, this](const DlpConfidentialContent& content) {
         return user_allowed_contents_cache_.Contains(content, restriction);
       });
 }

@@ -5,11 +5,16 @@
 #include "chromeos/ash/components/osauth/impl/early_login_auth_policy_connector.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "ash/constants/ash_pref_names.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "chromeos/ash/components/early_prefs/early_prefs_reader.h"
+#include "chromeos/ash/components/osauth/public/auth_policy_connector.h"
+#include "chromeos/ash/components/osauth/public/auth_policy_utils.h"
+#include "chromeos/ash/components/osauth/public/common_types.h"
+#include "components/account_id/account_id.h"
 
 namespace ash {
 
@@ -45,6 +50,29 @@ std::optional<bool> EarlyLoginAuthPolicyConnector::GetRecoveryMandatoryState(
         ->GetIfBool();
   }
   return std::nullopt;
+}
+
+std::optional<LocalAuthFactorsComplexity>
+EarlyLoginAuthPolicyConnector::GetLocalAuthFactorsComplexity(
+    const AccountId& account) {
+  if (!early_prefs_->HasPref(prefs::kLocalAuthFactorsComplexity)) {
+    return std::nullopt;
+  }
+  int val =
+      early_prefs_->GetValue(prefs::kLocalAuthFactorsComplexity)->GetInt();
+  return static_cast<LocalAuthFactorsComplexity>(val);
+}
+
+std::optional<AuthFactorsSet>
+EarlyLoginAuthPolicyConnector::AllowedLocalAuthFactors(
+    const AccountId& account) {
+  if (!early_prefs_->HasPref(prefs::kAllowedLocalAuthFactors)) {
+    return std::nullopt;
+  }
+
+  const base::ListValue* allowed_auth_factors =
+      &early_prefs_->GetValue(prefs::kAllowedLocalAuthFactors)->GetList();
+  return GetAuthFactorsSetFromPolicyList(allowed_auth_factors);
 }
 
 bool EarlyLoginAuthPolicyConnector::IsAuthFactorManaged(

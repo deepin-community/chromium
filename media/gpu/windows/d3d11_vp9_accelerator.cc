@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "media/gpu/windows/d3d11_vp9_picture.h"
@@ -17,7 +18,9 @@ using DecodeStatus = VP9Decoder::VP9Accelerator::Status;
 
 D3D11VP9Accelerator::D3D11VP9Accelerator(D3D11VideoDecoderClient* client,
                                          MediaLog* media_log)
-    : D3DAccelerator(client, media_log), status_feedback_(0) {}
+    : media_log_(media_log->Clone()), client_(client), status_feedback_(0) {
+  DCHECK(client_);
+}
 
 D3D11VP9Accelerator::~D3D11VP9Accelerator() = default;
 
@@ -29,7 +32,7 @@ scoped_refptr<VP9Picture> D3D11VP9Accelerator::CreateVP9Picture() {
 }
 
 bool D3D11VP9Accelerator::BeginFrame(const D3D11VP9Picture& pic) {
-  return video_decoder_wrapper_->WaitForFrameBegins(pic.picture_buffer());
+  return client_->GetWrapper()->WaitForFrameBegins(pic.picture_buffer());
 }
 
 void D3D11VP9Accelerator::CopyFrameParams(const D3D11VP9Picture& pic,
@@ -95,13 +98,16 @@ void D3D11VP9Accelerator::CopyReferenceFrames(
     if (ref_pic) {
       scoped_refptr<D3D11VP9Picture> our_ref_pic(
           static_cast<D3D11VP9Picture*>(ref_pic.get()));
-      pic_params->ref_frame_map[i].Index7Bits = our_ref_pic->picture_index();
-      pic_params->ref_frame_coded_width[i] = texture_descriptor.Width;
-      pic_params->ref_frame_coded_height[i] = texture_descriptor.Height;
+      UNSAFE_TODO(pic_params->ref_frame_map[i]).Index7Bits =
+          our_ref_pic->picture_index();
+      UNSAFE_TODO(pic_params->ref_frame_coded_width[i]) =
+          texture_descriptor.Width;
+      UNSAFE_TODO(pic_params->ref_frame_coded_height[i]) =
+          texture_descriptor.Height;
     } else {
-      pic_params->ref_frame_map[i].bPicEntry = 0xff;
-      pic_params->ref_frame_coded_width[i] = 0;
-      pic_params->ref_frame_coded_height[i] = 0;
+      UNSAFE_TODO(pic_params->ref_frame_map[i]).bPicEntry = 0xff;
+      UNSAFE_TODO(pic_params->ref_frame_coded_width[i]) = 0;
+      UNSAFE_TODO(pic_params->ref_frame_coded_height[i]) = 0;
     }
   }
 }
@@ -109,12 +115,13 @@ void D3D11VP9Accelerator::CopyReferenceFrames(
 void D3D11VP9Accelerator::CopyFrameRefs(DXVA_PicParams_VP9* pic_params,
                                         const D3D11VP9Picture& pic) {
   for (size_t i = 0; i < std::size(pic_params->frame_refs); i++) {
-    pic_params->frame_refs[i] =
-        pic_params->ref_frame_map[pic.frame_hdr->ref_frame_idx[i]];
+    UNSAFE_TODO(pic_params->frame_refs[i]) =
+        UNSAFE_TODO(pic_params->ref_frame_map[pic.frame_hdr->ref_frame_idx[i]]);
   }
 
   for (size_t i = 0; i < std::size(pic_params->ref_frame_sign_bias); i++) {
-    pic_params->ref_frame_sign_bias[i] = pic.frame_hdr->ref_frame_sign_bias[i];
+    UNSAFE_TODO(pic_params->ref_frame_sign_bias[i]) =
+        UNSAFE_TODO(pic.frame_hdr->ref_frame_sign_bias[i]);
   }
 }
 
@@ -134,12 +141,13 @@ void D3D11VP9Accelerator::CopyLoopFilterParams(
     // The update_ref_deltas[i] is _only_ for parsing! it allows omission of the
     // 6 bytes that would otherwise be needed for a new value to overwrite the
     // global one. It has nothing to do with setting the ref_deltas here.
-    pic_params->ref_deltas[i] = loop_filter_params.ref_deltas[i];
+    UNSAFE_TODO(pic_params->ref_deltas[i]) = loop_filter_params.ref_deltas[i];
   }
 
   DCHECK_EQ(2lu, std::size(pic_params->mode_deltas));
   for (size_t i = 0; i < std::size(pic_params->mode_deltas); i++) {
-    pic_params->mode_deltas[i] = loop_filter_params.mode_deltas[i];
+    UNSAFE_TODO(pic_params->mode_deltas[i]) =
+        UNSAFE_TODO(loop_filter_params.mode_deltas[i]);
   }
 }
 
@@ -164,18 +172,19 @@ void D3D11VP9Accelerator::CopySegmentationParams(
   SET_PARAM(abs_delta, abs_or_delta_update);
 
   for (size_t i = 0; i < std::size(segmentation_params.tree_probs); i++) {
-    COPY_PARAM(tree_probs[i]);
+    UNSAFE_TODO(COPY_PARAM(tree_probs[i]));
   }
 
   for (size_t i = 0; i < std::size(segmentation_params.pred_probs); i++) {
-    COPY_PARAM(pred_probs[i]);
+    UNSAFE_TODO(COPY_PARAM(pred_probs[i]));
   }
 
   for (size_t i = 0; i < 8; i++) {
     for (size_t j = 0; j < 4; j++) {
-      COPY_PARAM(feature_data[i][j]);
-      if (segmentation_params.feature_enabled[i][j])
-        pic_params->stVP9Segments.feature_mask[i] |= (1 << j);
+      UNSAFE_TODO(COPY_PARAM(feature_data[i][j]));
+      if (UNSAFE_TODO(segmentation_params.feature_enabled[i][j])) {
+        UNSAFE_TODO(pic_params->stVP9Segments.feature_mask[i]) |= (1 << j);
+      }
     }
   }
 #undef COPY_PARAM
@@ -197,25 +206,26 @@ bool D3D11VP9Accelerator::SubmitDecoderBuffer(
     const DXVA_PicParams_VP9& pic_params,
     const D3D11VP9Picture& pic) {
   auto pic_params_buffer =
-      video_decoder_wrapper_->GetPictureParametersBuffer(sizeof(pic_params));
+      client_->GetWrapper()->GetPictureParametersBuffer(sizeof(pic_params));
   if (pic_params_buffer.size() < sizeof(pic_params)) {
-    RecordFailure("Insufficient picture parameter buffer size",
-                  D3D11StatusCode::kGetPicParamBufferFailed);
+    MEDIA_LOG(ERROR, media_log_)
+        << "Insufficient picture parameter buffer size";
     return false;
   }
 
-  memcpy(pic_params_buffer.data(), &pic_params, sizeof(pic_params));
+  pic_params_buffer.data().copy_prefix_from(
+      base::byte_span_from_ref(pic_params));
 
   if (!pic_params_buffer.Commit()) {
     return false;
   }
 
   bool ok =
-      video_decoder_wrapper_
+      client_->GetWrapper()
           ->AppendBitstreamAndSliceDataWithStartCode<DXVA_Slice_VPx_Short>(
-              {pic.frame_hdr->data, pic.frame_hdr->frame_size});
+              pic.frame_hdr->data);
 
-  return ok && video_decoder_wrapper_->SubmitSlice();
+  return ok && client_->GetWrapper()->SubmitSlice();
 }
 
 DecodeStatus D3D11VP9Accelerator::SubmitDecode(
@@ -240,7 +250,7 @@ DecodeStatus D3D11VP9Accelerator::SubmitDecode(
   if (!SubmitDecoderBuffer(pic_params, *pic))
     return DecodeStatus::kFail;
 
-  if (!video_decoder_wrapper_->SubmitDecode()) {
+  if (!client_->GetWrapper()->SubmitDecode()) {
     return DecodeStatus::kFail;
   }
 
@@ -250,10 +260,6 @@ DecodeStatus D3D11VP9Accelerator::SubmitDecode(
 bool D3D11VP9Accelerator::OutputPicture(scoped_refptr<VP9Picture> picture) {
   D3D11VP9Picture* pic = static_cast<D3D11VP9Picture*>(picture.get());
   return client_->OutputResult(picture.get(), pic->picture_buffer());
-}
-
-bool D3D11VP9Accelerator::NeedsCompressedHeaderParsed() const {
-  return false;
 }
 
 }  // namespace media

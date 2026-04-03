@@ -46,10 +46,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocket : public mojom::P2PSocket {
     // Destroys |socket| and removes it from the list of sockets.
     virtual void DestroySocket(P2PSocket* socket) = 0;
 
-    // Called by P2PSocketTcpServer after a new socket is created for an
-    // incoming connection.
-    virtual void AddAcceptedConnection(std::unique_ptr<P2PSocket> socket) = 0;
-
     // Called for each incoming/outgoing packet.
     virtual void DumpPacket(base::span<const uint8_t> data, bool incoming) = 0;
 
@@ -70,7 +66,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocket : public mojom::P2PSocket {
       net::NetLog* net_log,
       ProxyResolvingClientSocketFactory* proxy_resolving_socket_factory,
       P2PMessageThrottler* throttler,
-      absl::optional<base::UnguessableToken> devtools_token);
+      std::optional<base::UnguessableToken> devtools_token);
 
   P2PSocket(const P2PSocket&) = delete;
   P2PSocket& operator=(const P2PSocket&) = delete;

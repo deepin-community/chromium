@@ -750,11 +750,8 @@ void store_core_info_per_processor(
 	if (cores) {
 		processors[processor_global_index].core = cores + core_id;
 		cores[core_id].core_id = core_id;
-		get_core_uarch_for_efficiency(
-			chip_info->chip_name,
-			core_info->Processor.EfficiencyClass,
-			&(cores[core_id].uarch),
-			&(cores[core_id].frequency));
+		cores[core_id].uarch = chip_info->uarchs[0].uarch;
+		cores[core_id].frequency = chip_info->uarchs[0].frequency;
 
 		/* We don't have cluster information, so we handle it as
 		 * fixed 1 to (cluster / cores).
@@ -839,7 +836,6 @@ static bool connect_packages_cores_clusters_by_processors(
 		processor->cluster = cluster;
 
 		if (chip_info) {
-			size_t converted_chars = 0;
 			if (!WideCharToMultiByte(
 				    CP_UTF8,
 				    WC_ERR_INVALID_CHARS,

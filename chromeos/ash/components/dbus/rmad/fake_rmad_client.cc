@@ -5,7 +5,6 @@
 #include "chromeos/ash/components/dbus/rmad/fake_rmad_client.h"
 
 #include "base/files/file_path.h"
-#include "base/functional/callback_forward.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 
@@ -86,7 +85,6 @@ rmad::RmadState* CreateState(rmad::RmadState::StateCase state_case) {
       break;
     default:
       NOTREACHED();
-      break;
   }
   return state;
 }
@@ -129,7 +127,7 @@ void FakeRmadClient::GetCurrentState(
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), std::move(reply)));
   }
-  TriggerHardwareVerificationResultObservation(true, "");
+  TriggerHardwareVerificationResultObservation(true, "", false);
 }
 
 void FakeRmadClient::TransitionNextState(
@@ -498,10 +496,12 @@ void FakeRmadClient::TriggerExternalDiskStateObservation(bool detected) {
 
 void FakeRmadClient::TriggerHardwareVerificationResultObservation(
     bool is_compliant,
-    const std::string& error_str) {
+    const std::string& error_str,
+    bool is_skipped) {
   rmad::HardwareVerificationResult verificationStatus;
   verificationStatus.set_is_compliant(is_compliant);
   verificationStatus.set_error_str(error_str);
+  verificationStatus.set_is_skipped(is_skipped);
   for (auto& observer : observers_) {
     observer.HardwareVerificationResult(verificationStatus);
   }

@@ -71,12 +71,12 @@ class NetworkStateTest : public testing::Test {
     network_state_->SetConnectionState(connection_state);
   }
 
-  void UpdateCaptivePortalState(const base::Value::Dict& properties) {
+  void UpdateCaptivePortalState(const base::DictValue& properties) {
     network_state_->UpdateCaptivePortalState(properties);
   }
 
-  NetworkState::PortalState GetShillPortalState() {
-    return network_state_->shill_portal_state_;
+  NetworkState::PortalState GetPortalState() {
+    return network_state_->portal_state_;
   }
 
   std::unique_ptr<NetworkState> network_state_;
@@ -91,7 +91,7 @@ class NetworkStateTest : public testing::Test {
   base::test::SingleThreadTaskEnvironment task_environment_;
   NetworkStateTestHelper helper_{/*use_default_devices_and_services=*/false};
 
-  base::Value::Dict properties_;
+  base::DictValue properties_;
 };
 
 // Setting kNameProperty should set network name after call to
@@ -163,7 +163,7 @@ TEST_F(NetworkStateTest, SsidHex) {
   EXPECT_EQ(wifi_hex_result, network_state_->name());
 
   // Check HexSSID via network state dictionary.
-  base::Value::Dict dictionary;
+  base::DictValue dictionary;
   network_state_->GetStateProperties(&dictionary);
   std::string* value = dictionary.FindString(shill::kWifiHexSsid);
   EXPECT_NE(nullptr, value);
@@ -208,34 +208,32 @@ TEST_F(NetworkStateTest, CaptivePortalState) {
   // State != portal or online -> portal_state() == kUnknown
   EXPECT_TRUE(SetStringProperty(shill::kStateProperty, shill::kStateReady));
   SignalInitialPropertiesReceived();
-  EXPECT_EQ(network_state_->GetPortalState(),
+  EXPECT_EQ(network_state_->portal_state(),
             NetworkState::PortalState::kUnknown);
 
   // State == online -> portal_state() == kOnline
   EXPECT_TRUE(SetStringProperty(shill::kStateProperty, shill::kStateOnline));
   SignalInitialPropertiesReceived();
-  EXPECT_EQ(network_state_->GetPortalState(),
-            NetworkState::PortalState::kOnline);
+  EXPECT_EQ(network_state_->portal_state(), NetworkState::PortalState::kOnline);
 
   // State == redirect-found -> portal_state() == kPortal
   EXPECT_TRUE(
       SetStringProperty(shill::kStateProperty, shill::kStateRedirectFound));
   SignalInitialPropertiesReceived();
-  EXPECT_EQ(network_state_->GetPortalState(),
-            NetworkState::PortalState::kPortal);
+  EXPECT_EQ(network_state_->portal_state(), NetworkState::PortalState::kPortal);
 
   // State == portal-suspected -> portal_state() == kPortalSuspected
   EXPECT_TRUE(
       SetStringProperty(shill::kStateProperty, shill::kStatePortalSuspected));
   SignalInitialPropertiesReceived();
-  EXPECT_EQ(network_state_->GetPortalState(),
+  EXPECT_EQ(network_state_->portal_state(),
             NetworkState::PortalState::kPortalSuspected);
 
   // State == no-connectivity -> portal_state() == kOffline
   EXPECT_TRUE(
       SetStringProperty(shill::kStateProperty, shill::kStateNoConnectivity));
   SignalInitialPropertiesReceived();
-  EXPECT_EQ(network_state_->GetPortalState(),
+  EXPECT_EQ(network_state_->portal_state(),
             NetworkState::PortalState::kNoInternet);
 }
 
@@ -245,7 +243,7 @@ TEST_F(NetworkStateTest, VPNThirdPartyProvider) {
   EXPECT_TRUE(SetStringProperty(shill::kNameProperty, "VPN"));
 
   auto provider =
-      base::Value::Dict()
+      base::DictValue()
           .Set(shill::kTypeProperty, shill::kProviderThirdPartyVpn)
           .Set(shill::kHostProperty, "third-party-vpn-provider-extension-id");
   EXPECT_TRUE(
@@ -263,7 +261,7 @@ TEST_F(NetworkStateTest, VPNArcProvider) {
   EXPECT_TRUE(SetStringProperty(shill::kTypeProperty, shill::kTypeVPN));
   EXPECT_TRUE(SetStringProperty(shill::kNameProperty, "VPN"));
 
-  auto provider = base::Value::Dict()
+  auto provider = base::DictValue()
                       .Set(shill::kTypeProperty, shill::kProviderArcVpn)
                       .Set(shill::kHostProperty, "package.name.foo");
   EXPECT_TRUE(
@@ -375,7 +373,7 @@ TEST_F(NetworkStateTest, TetherProperties) {
   network_state_->set_tether_has_connected_to_host(true);
   network_state_->set_signal_strength(75);
 
-  base::Value::Dict dictionary;
+  base::DictValue dictionary;
   network_state_->GetStateProperties(&dictionary);
 
   std::optional<int> signal_strength =
@@ -409,7 +407,7 @@ TEST_F(NetworkStateTest, CelularPaymentPortalPost) {
                                 shill::kActivationStateActivated));
 
   auto payment_portal =
-      base::Value::Dict()
+      base::DictValue()
           .Set(shill::kPaymentPortalURL, "http://test-portal.com")
           .Set(shill::kPaymentPortalMethod, "POST")
           .Set(shill::kPaymentPortalPostData, "fake_data");
@@ -439,7 +437,7 @@ TEST_F(NetworkStateTest, CelularPaymentPortalGet) {
                                 shill::kActivationStateActivated));
 
   auto payment_portal =
-      base::Value::Dict()
+      base::DictValue()
           .Set(shill::kPaymentPortalURL, "http://test-portal.com")
           .Set(shill::kPaymentPortalMethod, "GET")
           .Set(shill::kPaymentPortalPostData, "ignored");
@@ -491,7 +489,7 @@ TEST_F(NetworkStateTest, NonShillCellular) {
   EXPECT_EQ(kTestGuid, non_shill_cellular->guid());
   EXPECT_FALSE(non_shill_cellular->IsManagedByPolicy());
 
-  base::Value::Dict dictionary;
+  base::DictValue dictionary;
   non_shill_cellular->GetStateProperties(&dictionary);
   EXPECT_EQ(kTestIccid, *dictionary.FindString(shill::kIccidProperty));
   EXPECT_EQ(kTestEid, *dictionary.FindString(shill::kEidProperty));
@@ -512,30 +510,46 @@ TEST_F(NetworkStateTest, NonShillCellular) {
 }
 
 TEST_F(NetworkStateTest, UpdateCaptivePortalState) {
-  base::Value::Dict shill_properties;
+  base::DictValue shill_properties;
 
   network_state_->set_visible(true);
-  EXPECT_EQ(GetShillPortalState(), NetworkState::PortalState::kUnknown);
+  EXPECT_EQ(GetPortalState(), NetworkState::PortalState::kUnknown);
 
   SetConnectionState(shill::kStateIdle);
   UpdateCaptivePortalState(shill_properties);
-  EXPECT_EQ(GetShillPortalState(), NetworkState::PortalState::kUnknown);
+  EXPECT_EQ(GetPortalState(), NetworkState::PortalState::kUnknown);
 
   SetConnectionState(shill::kStateNoConnectivity);
   UpdateCaptivePortalState(shill_properties);
-  EXPECT_EQ(GetShillPortalState(), NetworkState::PortalState::kNoInternet);
+  EXPECT_EQ(GetPortalState(), NetworkState::PortalState::kNoInternet);
 
   SetConnectionState(shill::kStateRedirectFound);
   UpdateCaptivePortalState(shill_properties);
-  EXPECT_EQ(GetShillPortalState(), NetworkState::PortalState::kPortal);
+  EXPECT_EQ(GetPortalState(), NetworkState::PortalState::kPortal);
 
   SetConnectionState(shill::kStatePortalSuspected);
   UpdateCaptivePortalState(shill_properties);
-  EXPECT_EQ(GetShillPortalState(), NetworkState::PortalState::kPortalSuspected);
+  EXPECT_EQ(GetPortalState(), NetworkState::PortalState::kPortalSuspected);
 
   SetConnectionState(shill::kStateOnline);
   UpdateCaptivePortalState(shill_properties);
-  EXPECT_EQ(GetShillPortalState(), NetworkState::PortalState::kOnline);
+  EXPECT_EQ(GetPortalState(), NetworkState::PortalState::kOnline);
+}
+
+TEST_F(NetworkStateTest, UpdateNetworkConfig) {
+  // This test only verifies that update of NetworkConfig can be reflected on
+  // NetworkState. The parsing of the NetworkConfig dict is tested in
+  // network_config_unittest.cc.
+  base::DictValue properties;
+  properties.Set(shill::kNetworkConfigIPv4AddressProperty, "1.2.3.4/24");
+
+  network_state_->PropertyChanged(shill::kNetworkConfigProperty,
+                                  base::Value(std::move(properties)));
+
+  const NetworkConfig* config = network_state_->network_config();
+  ASSERT_TRUE(config);
+  EXPECT_EQ(config->ipv4_address->addr.ToString(), "1.2.3.4");
+  EXPECT_EQ(config->ipv4_address->prefix_len, 24);
 }
 
 }  // namespace ash

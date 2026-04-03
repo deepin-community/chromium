@@ -7,8 +7,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/tcp_socket.mojom.h"
 #include "services/network/public/mojom/tls_socket.mojom.h"
@@ -32,7 +30,7 @@ namespace openscreen_platform {
 class TlsConnectionFactory final : public openscreen::TlsConnectionFactory {
  public:
   explicit TlsConnectionFactory(
-      openscreen::TlsConnectionFactory::Client* client);
+      openscreen::TlsConnectionFactory::Client& client);
 
   ~TlsConnectionFactory() final;
 
@@ -100,7 +98,7 @@ class TlsConnectionFactory final : public openscreen::TlsConnectionFactory {
                     mojo::ScopedDataPipeProducerHandle send_stream,
                     const std::optional<net::SSLInfo>& ssl_info);
 
-  raw_ptr<openscreen::TlsConnectionFactory::Client> client_;
+  raw_ref<openscreen::TlsConnectionFactory::Client> client_;
   base::WeakPtrFactory<TlsConnectionFactory> weak_factory_{this};
 };
 

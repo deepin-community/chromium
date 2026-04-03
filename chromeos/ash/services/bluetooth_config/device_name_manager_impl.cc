@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "chromeos/ash/services/bluetooth_config/device_name_manager_impl.h"
 
 #include "base/containers/span.h"
@@ -154,7 +155,7 @@ void DeviceNameManagerImpl::MigrateExistingNicknames() {
 
   const re2::RE2 kFlossIdRegex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$");
 
-  const base::Value::Dict& existing_prefs =
+  const base::DictValue& existing_prefs =
       local_state_->GetDict(kDeviceIdToNicknameMapPrefNameLegacy);
 
   for (const auto [id, nickname] : existing_prefs) {
@@ -191,8 +192,7 @@ void DeviceNameManagerImpl::MigrateExistingNicknames() {
       continue;
     }
 
-    auto floss_id =
-        base::JoinString(base::make_span(parts.end() - 6, parts.end()), ":");
+    auto floss_id = base::JoinString(base::span(parts).last<6>(), ":");
 
     // Avoid overwriting an existing entry with a BlueZ nickname. This allows us
     // to guarantee that Floss nicknames are migrated and outdate BlueZ

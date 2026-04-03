@@ -35,10 +35,6 @@
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "v8/include/v8.h"
 
-namespace WTF {
-class TextPosition;
-}
-
 namespace blink {
 
 class ClassicScript;
@@ -114,11 +110,12 @@ class CORE_EXPORT V8ScriptRunner final {
       const ClassicScript&,
       v8::ScriptOrigin,
       v8::ScriptCompiler::CompileOptions,
-      v8::ScriptCompiler::NoCacheReason);
+      v8::ScriptCompiler::NoCacheReason,
+      bool can_use_crowdsourced_compile_hints = false);
   static v8::MaybeLocal<v8::Module> CompileModule(
       v8::Isolate*,
       const ModuleScriptCreationParams&,
-      const WTF::TextPosition&,
+      const TextPosition&,
       v8::ScriptCompiler::CompileOptions,
       v8::ScriptCompiler::NoCacheReason,
       const ReferrerScriptInfo&);
@@ -150,7 +147,7 @@ class CORE_EXPORT V8ScriptRunner final {
   static void ReportExceptionForModule(v8::Isolate*,
                                        v8::Local<v8::Value> exception,
                                        const String& file_name,
-                                       const WTF::TextPosition&);
+                                       const TextPosition&);
 
   // Reports an exception to the message handler, as if it were an uncaught
   // exception. Can only be called on the main thread.

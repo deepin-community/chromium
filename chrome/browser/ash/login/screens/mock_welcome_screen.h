@@ -31,7 +31,7 @@ class MockWelcomeScreen : public WelcomeScreen {
   void ExitScreen(Result result);
 };
 
-class MockWelcomeView : public WelcomeView {
+class MockWelcomeView final : public WelcomeView {
  public:
   MockWelcomeView();
 
@@ -41,7 +41,7 @@ class MockWelcomeView : public WelcomeView {
   ~MockWelcomeView() override;
 
   MOCK_METHOD(void, Show, ());
-  MOCK_METHOD(void, SetLanguageList, (base::Value::List));
+  MOCK_METHOD(void, SetLanguageList, (base::ListValue));
   MOCK_METHOD(void, SetInputMethodId, (const std::string& input_method_id));
   MOCK_METHOD(void, SetTimezoneId, (const std::string& timezone_id));
   MOCK_METHOD(void, ShowDemoModeConfirmationDialog, ());
@@ -51,6 +51,13 @@ class MockWelcomeView : public WelcomeView {
   MOCK_METHOD(void, CancelChromeVoxHintIdleDetection, ());
   MOCK_METHOD(void, UpdateA11yState, (const A11yState&));
   MOCK_METHOD(void, SetQuickStartEnabled, ());
+
+  base::WeakPtr<WelcomeView> AsWeakPtr() override {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
+ private:
+  base::WeakPtrFactory<WelcomeView> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

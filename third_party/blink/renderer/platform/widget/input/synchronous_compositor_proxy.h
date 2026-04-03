@@ -14,6 +14,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/writable_shared_memory_region.h"
 #include "components/viz/common/frame_timing_details_map.h"
+#include "components/viz/common/performance_hint_utils.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -48,6 +49,7 @@ class SynchronousCompositorProxy : public blink::SynchronousInputHandler,
           host,
       mojo::PendingAssociatedReceiver<mojom::blink::SynchronousCompositor>
           compositor_request);
+  void SetThreads(const Vector<viz::Thread>& threads);
 
   // blink::SynchronousInputHandler overrides.
   void UpdateRootLayerState(const gfx::PointF& total_scroll_offset,
@@ -92,9 +94,9 @@ class SynchronousCompositorProxy : public blink::SynchronousInputHandler,
       uint32_t layer_tree_frame_sink_id,
       uint32_t sequence_id) final;
   void SetScroll(const gfx::PointF& total_scroll_offset) final;
-  void BeginFrame(const viz::BeginFrameArgs& args,
-                  const WTF::HashMap<uint32_t, viz::FrameTimingDetails>&
-                      timing_details) final;
+  void BeginFrame(
+      const viz::BeginFrameArgs& args,
+      const HashMap<uint32_t, viz::FrameTimingDetails>& timing_details) final;
   void SetBeginFrameSourcePaused(bool paused) final;
 
  protected:
@@ -113,8 +115,7 @@ class SynchronousCompositorProxy : public blink::SynchronousInputHandler,
   DemandDrawHwCallback hardware_draw_reply_;
   DemandDrawSwCallback software_draw_reply_;
   ZoomByCallback zoom_by_reply_;
-  raw_ptr<SynchronousLayerTreeFrameSink, ExperimentalRenderer>
-      layer_tree_frame_sink_ = nullptr;
+  raw_ptr<SynchronousLayerTreeFrameSink> layer_tree_frame_sink_ = nullptr;
   bool begin_frame_paused_ = false;
 
  private:
@@ -124,7 +125,7 @@ class SynchronousCompositorProxy : public blink::SynchronousInputHandler,
 
   struct SharedMemoryWithSize;
 
-  const raw_ptr<InputHandlerProxy, ExperimentalRenderer> input_handler_proxy_;
+  const raw_ptr<InputHandlerProxy> input_handler_proxy_;
   mojo::Remote<mojom::blink::SynchronousCompositorControlHost> control_host_;
   mojo::AssociatedRemote<mojom::blink::SynchronousCompositorHost> host_;
   mojo::AssociatedReceiver<mojom::blink::SynchronousCompositor> receiver_{this};
@@ -133,6 +134,7 @@ class SynchronousCompositorProxy : public blink::SynchronousInputHandler,
   const bool viz_frame_submission_enabled_;
 
   bool needs_begin_frames_ = false;
+  Vector<viz::Thread> threads_;
 
   // From browser.
   std::unique_ptr<SharedMemoryWithSize> software_draw_shm_;

@@ -4,11 +4,12 @@
 
 #include "components/history/core/browser/history_types.h"
 
+#include <algorithm>
 #include <limits>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "components/history/core/browser/page_usage_data.h"
@@ -43,6 +44,24 @@ VisitRow::VisitRow(URLID arg_url_id,
 VisitRow::~VisitRow() = default;
 
 VisitRow::VisitRow(const VisitRow&) = default;
+
+// VisitedURLInfo
+// --------------------------------------------------------------------
+
+VisitedURLInfo::VisitedURLInfo() = default;
+
+VisitedURLInfo::VisitedURLInfo(URLRow url_row,
+                               VisitRow visit_row,
+                               VisitResponseCodeCategory response_code_category,
+                               std::optional<int64_t> local_navigation_id)
+    : url_row(std::move(url_row)),
+      visit_row(std::move(visit_row)),
+      response_code_category(response_code_category),
+      local_navigation_id(local_navigation_id) {}
+
+VisitedURLInfo::~VisitedURLInfo() = default;
+
+VisitedURLInfo::VisitedURLInfo(const VisitedURLInfo& other) = default;
 
 // QueryResults ----------------------------------------------------------------
 
@@ -117,7 +136,6 @@ void QueryResults::DeleteRange(size_t begin, size_t end) {
     auto found = url_to_results_.find(url);
     if (found == url_to_results_.end()) {
       NOTREACHED();
-      continue;
     }
 
     // Need a signed loop type since we do -- which may take us to -1.
@@ -125,7 +143,7 @@ void QueryResults::DeleteRange(size_t begin, size_t end) {
          match++) {
       if (found->second[match] >= begin && found->second[match] <= end) {
         // Remove this reference from the list.
-        found->second.erase(found->second.begin() + match);
+        found->second.erase(UNSAFE_TODO(found->second.begin() + match));
         match--;
       }
     }
@@ -211,6 +229,24 @@ QueryURLResult& QueryURLResult::operator=(const QueryURLResult&) = default;
 
 QueryURLResult& QueryURLResult::operator=(QueryURLResult&&) noexcept = default;
 
+// QueryURLAndVisitsResult ----------------------------------------------------
+
+QueryURLAndVisitsResult::QueryURLAndVisitsResult() = default;
+
+QueryURLAndVisitsResult::~QueryURLAndVisitsResult() = default;
+
+QueryURLAndVisitsResult::QueryURLAndVisitsResult(
+    const QueryURLAndVisitsResult&) = default;
+
+QueryURLAndVisitsResult::QueryURLAndVisitsResult(
+    QueryURLAndVisitsResult&&) noexcept = default;
+
+QueryURLAndVisitsResult& QueryURLAndVisitsResult::operator=(
+    const QueryURLAndVisitsResult&) = default;
+
+QueryURLAndVisitsResult& QueryURLAndVisitsResult::operator=(
+    QueryURLAndVisitsResult&&) noexcept = default;
+
 // MostVisitedURL --------------------------------------------------------------
 
 MostVisitedURL::MostVisitedURL() = default;
@@ -243,6 +279,17 @@ FilteredURL::~FilteredURL() = default;
 // FilteredURL::ExtendedInfo ---------------------------------------------------
 
 FilteredURL::ExtendedInfo::ExtendedInfo() = default;
+
+// GetAllAppIdsResult -------------------------------------------------------
+
+GetAllAppIdsResult::GetAllAppIdsResult() = default;
+
+GetAllAppIdsResult::GetAllAppIdsResult(GetAllAppIdsResult&& other) = default;
+
+GetAllAppIdsResult& GetAllAppIdsResult::operator=(GetAllAppIdsResult&& other) =
+    default;
+
+GetAllAppIdsResult::~GetAllAppIdsResult() = default;
 
 // DomainsVisitedResult -------------------------------------------------------
 
@@ -289,8 +336,11 @@ HistoryAddPageArgs::HistoryAddPageArgs()
                          ui::PAGE_TRANSITION_LINK,
                          false,
                          SOURCE_BROWSED,
+                         VisitResponseCodeCategory::kNot404,
                          false,
                          true,
+                         VisitContextEphemerality::kNotEphemeral,
+                         std::nullopt,
                          std::nullopt,
                          std::nullopt,
                          std::nullopt,
@@ -309,14 +359,18 @@ HistoryAddPageArgs::HistoryAddPageArgs(
     ui::PageTransition transition,
     bool hidden,
     VisitSource source,
+    VisitResponseCodeCategory response_code_category,
     bool did_replace_entry,
     bool consider_for_ntp_most_visited,
+    VisitContextEphemerality visit_context_ephemerality,
     std::optional<std::u16string> title,
     std::optional<GURL> top_level_url,
+    std::optional<GURL> frame_url,
     std::optional<Opener> opener,
     std::optional<int64_t> bookmark_id,
     std::optional<std::string> app_id,
-    std::optional<VisitContextAnnotations::OnVisitFields> context_annotations)
+    std::optional<VisitContextAnnotations::OnVisitFields> context_annotations,
+    std::optional<int32_t> actor_task_id)
     : url(url),
       time(time),
       context_id(context_id),
@@ -327,14 +381,18 @@ HistoryAddPageArgs::HistoryAddPageArgs(
       transition(transition),
       hidden(hidden),
       visit_source(source),
+      response_code_category(response_code_category),
       did_replace_entry(did_replace_entry),
       consider_for_ntp_most_visited(consider_for_ntp_most_visited),
+      visit_context_ephemerality(visit_context_ephemerality),
       title(title),
       top_level_url(top_level_url),
+      frame_url(frame_url),
       opener(opener),
       bookmark_id(bookmark_id),
       app_id(app_id),
-      context_annotations(std::move(context_annotations)) {}
+      context_annotations(std::move(context_annotations)),
+      actor_task_id(actor_task_id) {}
 
 HistoryAddPageArgs::HistoryAddPageArgs(const HistoryAddPageArgs& other) =
     default;
@@ -408,6 +466,7 @@ DeletionInfo::DeletionInfo(const DeletionTimeRange& time_range,
                    is_from_expiration,
                    Reason::kOther,
                    std::move(deleted_rows),
+                   /*deleted_visit_ids=*/{},
                    std::move(favicon_urls),
                    std::move(restrict_urls)) {}
 
@@ -415,12 +474,14 @@ DeletionInfo::DeletionInfo(const DeletionTimeRange& time_range,
                            bool is_from_expiration,
                            Reason deletion_reason,
                            URLRows deleted_rows,
+                           std::set<VisitID> deleted_visit_ids,
                            std::set<GURL> favicon_urls,
                            std::optional<std::set<GURL>> restrict_urls)
     : time_range_(time_range),
       is_from_expiration_(is_from_expiration),
       deletion_reason_(deletion_reason),
       deleted_rows_(std::move(deleted_rows)),
+      deleted_visit_ids_(std::move(deleted_visit_ids)),
       favicon_urls_(std::move(favicon_urls)),
       restrict_urls_(std::move(restrict_urls)) {
   // If time_range is all time or invalid, restrict_urls should be empty.
@@ -436,6 +497,20 @@ DeletionInfo::DeletionInfo(DeletionInfo&& other) noexcept = default;
 
 DeletionInfo& DeletionInfo::operator=(DeletionInfo&& rhs) noexcept = default;
 
+// DeletedVisit ----------------------------------------------------------------
+
+DeletedVisit::DeletedVisit(VisitRow visit)
+    : visit_row(visit), deleted_visited_link(std::nullopt) {}
+
+DeletedVisit::DeletedVisit(VisitRow visit,
+                           DeletedVisitedLink deleted_visited_link)
+    : visit_row(visit), deleted_visited_link(deleted_visited_link) {}
+
+DeletedVisit::DeletedVisit(const DeletedVisit& other) = default;
+DeletedVisit& DeletedVisit::operator=(const DeletedVisit& other) = default;
+
+DeletedVisit::~DeletedVisit() = default;
+
 // Clusters --------------------------------------------------------------------
 
 VisitContextAnnotations::VisitContextAnnotations() = default;
@@ -444,39 +519,6 @@ VisitContextAnnotations::VisitContextAnnotations(
     const VisitContextAnnotations& other) = default;
 
 VisitContextAnnotations::~VisitContextAnnotations() = default;
-
-bool VisitContextAnnotations::operator==(
-    const VisitContextAnnotations& other) const {
-  return on_visit == other.on_visit &&
-         omnibox_url_copied == other.omnibox_url_copied &&
-         is_existing_part_of_tab_group == other.is_existing_part_of_tab_group &&
-         is_placed_in_tab_group == other.is_placed_in_tab_group &&
-         is_existing_bookmark == other.is_existing_bookmark &&
-         is_new_bookmark == other.is_new_bookmark &&
-         is_ntp_custom_link == other.is_ntp_custom_link &&
-         duration_since_last_visit == other.duration_since_last_visit &&
-         page_end_reason == other.page_end_reason &&
-         total_foreground_duration == other.total_foreground_duration;
-}
-
-bool VisitContextAnnotations::operator!=(
-    const VisitContextAnnotations& other) const {
-  return !(*this == other);
-}
-
-bool VisitContextAnnotations::OnVisitFields::operator==(
-    const VisitContextAnnotations::OnVisitFields& other) const {
-  return browser_type == other.browser_type && window_id == other.window_id &&
-         tab_id == other.tab_id && task_id == other.task_id &&
-         root_task_id == other.root_task_id &&
-         parent_task_id == other.parent_task_id &&
-         response_code == other.response_code;
-}
-
-bool VisitContextAnnotations::OnVisitFields::operator!=(
-    const VisitContextAnnotations::OnVisitFields& other) const {
-  return !(*this == other);
-}
 
 AnnotatedVisit::AnnotatedVisit() = default;
 AnnotatedVisit::AnnotatedVisit(URLRow url_row,
@@ -515,13 +557,9 @@ ClusterVisit& ClusterVisit::operator=(ClusterVisit&&) = default;
 
 ClusterKeywordData::ClusterKeywordData() = default;
 ClusterKeywordData::ClusterKeywordData(
-    const std::vector<std::string>& entity_collections)
-    : entity_collections(entity_collections) {}
-ClusterKeywordData::ClusterKeywordData(
     ClusterKeywordData::ClusterKeywordType type,
-    float score,
-    const std::vector<std::string>& entity_collections)
-    : type(type), score(score), entity_collections(entity_collections) {}
+    float score)
+    : type(type), score(score) {}
 ClusterKeywordData::ClusterKeywordData(const ClusterKeywordData&) = default;
 ClusterKeywordData::ClusterKeywordData(ClusterKeywordData&&) = default;
 ClusterKeywordData& ClusterKeywordData::operator=(const ClusterKeywordData&) =
@@ -531,13 +569,11 @@ ClusterKeywordData& ClusterKeywordData::operator=(ClusterKeywordData&&) =
 ClusterKeywordData::~ClusterKeywordData() = default;
 
 bool ClusterKeywordData::operator==(const ClusterKeywordData& data) const {
-  return type == data.type && std::fabs(score - data.score) < kScoreEpsilon &&
-         entity_collections == data.entity_collections;
+  return type == data.type && std::fabs(score - data.score) < kScoreEpsilon;
 }
 
 std::string ClusterKeywordData::ToString() const {
-  return base::StringPrintf("ClusterKeywordData{%d, %f, {%s}}", type, score,
-                            base::JoinString(entity_collections, ",").c_str());
+  return base::StringPrintf("ClusterKeywordData{%d, %f}", type, score);
 }
 
 std::ostream& operator<<(std::ostream& out, const ClusterKeywordData& data) {
@@ -595,7 +631,7 @@ Cluster& Cluster::operator=(Cluster&&) = default;
 Cluster::~Cluster() = default;
 
 const ClusterVisit& Cluster::GetMostRecentVisit() const {
-  return *base::ranges::max_element(
+  return *std::ranges::max_element(
       visits, [](auto time1, auto time2) { return time1 < time2; },
       [](const auto& cluster_visit) {
         return cluster_visit.annotated_visit.visit_row.visit_time;

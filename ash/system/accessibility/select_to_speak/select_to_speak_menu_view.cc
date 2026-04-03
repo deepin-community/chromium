@@ -25,6 +25,7 @@
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/metadata/view_factory.h"
 
 namespace ash {
 
@@ -33,6 +34,16 @@ namespace {
 constexpr int kButtonSize = 36;
 constexpr int kStopButtonPadding = 14;
 constexpr int kSeparatorHeight = 16;
+
+void RecordButtonMetric(SelectToSpeakPanelAction action) {
+  base::UmaHistogramEnumeration(
+      "Accessibility.CrosSelectToSpeak.BubbleButtonPress", action);
+}
+
+void RecordKeyPressMetric(SelectToSpeakPanelAction action) {
+  base::UmaHistogramEnumeration(
+      "Accessibility.CrosSelectToSpeak.BubbleKeyPress", action);
+}
 
 // Histograms in which user action statistics are recorded. These values
 // correspond to their respective entries in histograms.xml, so if they are
@@ -68,7 +79,6 @@ SelectToSpeakPanelAction PanelActionForButtonID(int button_id, bool is_paused) {
   }
 
   NOTREACHED();
-  return SelectToSpeakPanelAction::kNone;
 }
 
 }  // namespace
@@ -197,7 +207,8 @@ void SelectToSpeakMenuView::SetInitialSpeechRate(double initial_speech_rate) {
 }
 
 void SelectToSpeakMenuView::OnKeyEvent(ui::KeyEvent* key_event) {
-  if (key_event->type() != ui::ET_KEY_PRESSED || key_event->is_repeat()) {
+  if (key_event->type() != ui::EventType::kKeyPressed ||
+      key_event->is_repeat()) {
     // Only process key when first pressed.
     return;
   }
@@ -247,6 +258,8 @@ void SelectToSpeakMenuView::OnKeyEvent(ui::KeyEvent* key_event) {
       return;
   }
 
+  RecordKeyPressMetric(action);
+
   delegate_->OnActionSelected(action);
   key_event->SetHandled();
   key_event->StopPropagation();
@@ -276,6 +289,8 @@ void SelectToSpeakMenuView::SetSpeedButtonToggled(bool toggled) {
 void SelectToSpeakMenuView::OnButtonPressed(views::Button* sender) {
   SelectToSpeakPanelAction action =
       PanelActionForButtonID(sender->GetID(), is_paused_);
+
+  RecordButtonMetric(action);
 
   switch (action) {
     case SelectToSpeakPanelAction::kPreviousParagraph:

@@ -7,8 +7,7 @@
 
 #include <cstdint>
 #include <string>
-
-#include "base/types/cxx23_to_underlying.h"
+#include <utility>
 
 namespace cast_channel {
 
@@ -16,7 +15,7 @@ namespace cast_channel {
 // with ostreams.
 template <typename Enumeration>
 auto AsInteger(Enumeration const value) {
-  return base::to_underlying(value);
+  return std::to_underlying(value);
 }
 
 enum class ReadyState {
@@ -142,7 +141,7 @@ enum class WriteState {
 std::string ReadyStateToString(ReadyState ready_state);
 std::string ChannelErrorToString(ChannelError channel_error);
 
-constexpr int kNumCastChannelFlags = 8;
+constexpr int kNumCastChannelFlags = 9;
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.

@@ -1,11 +1,4 @@
-<style
-<if expr="not chromeos_ash">
-  include="cr-radio-button-style"
-</if>
-<if expr="chromeos_ash">
-  include="cr-radio-button-style cros-color-overrides"
-</if>
->
+<style include="cr-radio-button-style">
   :host([disabled]) {
     opacity: 1;
   }
@@ -31,6 +24,7 @@
     aria-labelledby="label"
     class="disc-wrapper"
     id="button"
+    part="disc"
     role="radio"
     tabindex$="[[buttonTabIndex_]]"
     on-keydown="onInputKeydown_">
@@ -46,8 +40,10 @@
   </span>
 </div>
 
+<slot name="additional-content"></slot>
+
 <template is="dom-if" if="[[showIndicator_(disabled, name, pref.*)]]">
-  <cr-policy-pref-indicator pref="[[pref]]" on-click="onIndicatorClick_"
-      icon-aria-label="[[label]]">
+  <cr-policy-pref-indicator part="policy-indicator" pref="[[pref]]"
+      on-click="onIndicatorClick_" icon-aria-label="[[label]]">
   </cr-policy-pref-indicator>
 </template>

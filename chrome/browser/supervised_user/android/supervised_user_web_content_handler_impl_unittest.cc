@@ -12,7 +12,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/supervised_user/android/website_parent_approval.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/supervised_user/core/browser/supervised_user_settings_service.h"
+#include "components/supervised_user/core/browser/family_link_settings_service.h"
+#include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
@@ -21,8 +22,8 @@
 #include "url/gurl.h"
 
 namespace {
-class MockSupervisedUserSettingsService
-    : public supervised_user::SupervisedUserSettingsService {
+class MockFamilyLinkSettingsService
+    : public supervised_user::FamilyLinkSettingsService {
  public:
   MOCK_METHOD1(RecordLocalWebsiteApproval, void(const std::string& host));
 };
@@ -59,8 +60,8 @@ TEST_F(SupervisedUserWebContentHandlerImplTest,
 
   GURL url("http://www.example.com");
   base::TimeTicks start_time = base::TimeTicks::Now();
-  testing::NiceMock<MockSupervisedUserSettingsService>
-      supervisedUserSettingsServiceMock;
+  testing::NiceMock<MockFamilyLinkSettingsService>
+      FamilyLinkSettingsServiceMock;
 
   // Receive a request rejected by the parent with a total duration of 1 minute.
   // Check that duration metric is recorded.
@@ -72,16 +73,16 @@ TEST_F(SupervisedUserWebContentHandlerImplTest,
           content::WebContents::CreateParams(GetProfilePtr()));
   SupervisedUserWebContentHandlerImpl web_content_handler =
       SupervisedUserWebContentHandlerImpl(web_contents.get(),
-                                          /*frame_id=*/0,
+                                          content::FrameTreeNodeId(),
                                           /*interstitial_navigation_id=*/0);
 
   web_content_handler.OnLocalApprovalRequestCompleted(
-      supervisedUserSettingsServiceMock, url, start_time,
+      FamilyLinkSettingsServiceMock, url, start_time,
       AndroidLocalWebApprovalFlowOutcome::kRejected);
 
   histogram_tester.ExpectBucketCount(
       supervised_user::WebContentHandler::GetLocalApprovalResultHistogram(),
-      supervised_user::WebContentHandler::LocalApprovalResult::kDeclined, 1);
+      supervised_user::LocalApprovalResult::kDeclined, 1);
   histogram_tester.ExpectTotalCount(
       supervised_user::WebContentHandler::
           GetLocalApprovalDurationMillisecondsHistogram(),
@@ -98,8 +99,8 @@ TEST_F(SupervisedUserWebContentHandlerImplTest,
 
   GURL url("http://www.example.com");
   base::TimeTicks start_time = base::TimeTicks::Now();
-  testing::NiceMock<MockSupervisedUserSettingsService>
-      supervisedUserSettingsServiceMock;
+  testing::NiceMock<MockFamilyLinkSettingsService>
+      FamilyLinkSettingsServiceMock;
 
   base::TimeDelta elapsed_time = base::Minutes(5);
   task_environment().FastForwardBy(elapsed_time);
@@ -109,18 +110,18 @@ TEST_F(SupervisedUserWebContentHandlerImplTest,
           content::WebContents::CreateParams(GetProfilePtr()));
   SupervisedUserWebContentHandlerImpl web_content_handler =
       SupervisedUserWebContentHandlerImpl(web_contents.get(),
-                                          /*frame_id=*/0,
+                                          content::FrameTreeNodeId(),
                                           /*interstitial_navigation_id=*/0);
 
   // Receive a request canceled by the parent.
   // Check that no duration metric is recorded for incomplete requests.
   web_content_handler.OnLocalApprovalRequestCompleted(
-      supervisedUserSettingsServiceMock, url, start_time,
+      FamilyLinkSettingsServiceMock, url, start_time,
       AndroidLocalWebApprovalFlowOutcome::kIncomplete);
 
   histogram_tester.ExpectBucketCount(
       supervised_user::WebContentHandler::GetLocalApprovalResultHistogram(),
-      supervised_user::WebContentHandler::LocalApprovalResult::kCanceled, 1);
+      supervised_user::LocalApprovalResult::kCanceled, 1);
   histogram_tester.ExpectTotalCount(
       supervised_user::WebContentHandler::
           GetLocalApprovalDurationMillisecondsHistogram(),
@@ -133,8 +134,8 @@ TEST_F(SupervisedUserWebContentHandlerImplTest,
 
   GURL url("http://www.example.com");
   base::TimeTicks start_time = base::TimeTicks::Now();
-  testing::NiceMock<MockSupervisedUserSettingsService>
-      supervisedUserSettingsServiceMock;
+  testing::NiceMock<MockFamilyLinkSettingsService>
+      FamilyLinkSettingsServiceMock;
 
   base::TimeDelta elapsed_time = base::Minutes(5);
   task_environment().FastForwardBy(elapsed_time);
@@ -144,20 +145,20 @@ TEST_F(SupervisedUserWebContentHandlerImplTest,
           content::WebContents::CreateParams(GetProfilePtr()));
   SupervisedUserWebContentHandlerImpl web_content_handler =
       SupervisedUserWebContentHandlerImpl(web_contents.get(),
-                                          /*frame_id=*/0,
+                                          content::FrameTreeNodeId(),
                                           /*interstitial_navigation_id=*/0);
 
   // Receive a request accepted by the parent with a total duration of 5
   // minutes. Check that duration metric is recorded.
-  EXPECT_CALL(supervisedUserSettingsServiceMock,
-              RecordLocalWebsiteApproval(url.host()));
+  EXPECT_CALL(FamilyLinkSettingsServiceMock,
+              RecordLocalWebsiteApproval(url.GetHost()));
   web_content_handler.OnLocalApprovalRequestCompleted(
-      supervisedUserSettingsServiceMock, url, start_time,
+      FamilyLinkSettingsServiceMock, url, start_time,
       AndroidLocalWebApprovalFlowOutcome::kApproved);
 
   histogram_tester.ExpectBucketCount(
       supervised_user::WebContentHandler::GetLocalApprovalResultHistogram(),
-      supervised_user::WebContentHandler::LocalApprovalResult::kApproved, 1);
+      supervised_user::LocalApprovalResult::kApproved, 1);
   histogram_tester.ExpectTotalCount(
       supervised_user::WebContentHandler::GetLocalApprovalResultHistogram(), 1);
   histogram_tester.ExpectTotalCount(

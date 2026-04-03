@@ -12,6 +12,7 @@
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/data_pipe_producer.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace content {
 
@@ -38,13 +39,61 @@ class CONTENT_EXPORT PrefetchDataPipeTee final
     : public base::RefCounted<PrefetchDataPipeTee> {
  public:
   explicit PrefetchDataPipeTee(mojo::ScopedDataPipeConsumerHandle source,
-                               size_t buffer_limit);
+                               size_t buffer_limit,
+                               perfetto::Flow flow);
 
   PrefetchDataPipeTee(const PrefetchDataPipeTee&) = delete;
   PrefetchDataPipeTee& operator=(const PrefetchDataPipeTee&) = delete;
 
   // Returns a cloned data pipe, or a null handle when failed.
   mojo::ScopedDataPipeConsumerHandle Clone();
+
+  // Public for unit tests.
+  //
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  //
+  // LINT.IfChange(PrefetchDataPipeTee_State)
+  enum class State {
+    // Reading data from `source_`, and adding the data to `buffer_`.
+    // `buffer_` represents the whole data read from `source_` so far.
+    // The number of active cloned data pipes (not counting already closed ones)
+    // is limited to up to 1 (which is `target_`), and if `target_` is not null,
+    // the data is also written to `target_`.
+    kLoading = 0,
+
+    // The data size read from `source_` exceeded the limit, and there is no
+    // target.
+    // `buffer_` represents the whole data read from `source_` so far.
+    //
+    // Reading data from `source_` is blocked, and when a new target is added by
+    // `Clone()`, `buffer_` is written to the new target and cleared, and
+    // transition to `kSizeExceeded`.
+    kSizeExceededNoTarget = 1,
+
+    // The data size read from `source_` exceeded the limit.
+    // Reading data from `source_` might or might not be completed.
+    // `buffer_` just stores the current chunk read from `source_` while writing
+    // to a target, and the early parts of the data from `source_` are already
+    // discarded.
+    //
+    // Data read from `source_` is written to a target (`target_`, if any) in a
+    // streaming fashion (i.e. the current chunk is tentatively stored in
+    // `buffer_` but not accumulated).
+    // If there is no target anymore, then the data can be just discarded (we
+    // can't transition to `kSizeExceededNoTarget` because th data from
+    // `source_` is already discarded).
+    kSizeExceeded = 2,
+
+    // Reading data from `source_` is completed and the data is fully stored in
+    // `buffer_` without reaching the buffer limit.
+    // `target_` is null.
+    // Any number of cloned data pipes can be created.
+    kLoaded = 3,
+
+    kMaxValue = kLoaded,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/enums.xml:PrefetchDataPipeTeeState)
 
  private:
   friend class base::RefCounted<PrefetchDataPipeTee>;
@@ -72,44 +121,6 @@ class CONTENT_EXPORT PrefetchDataPipeTee final
   void WriteData(ProducerPair target, base::span<const char> data);
   void OnDataWritten(ProducerPair target, MojoResult result);
 
-  enum class State {
-    // Reading data from `source_`, and adding the data to `buffer_`.
-    // `buffer_` represents the whole data read from `source_` so far.
-    // The number of active cloned data pipes (not counting already closed ones)
-    // is limited to up to 1 (which is `target_`), and if `target_` is not null,
-    // the data is also written to `target_`.
-    kLoading,
-
-    // The data size read from `source_` exceeded the limit, and there is no
-    // target.
-    // `buffer_` represents the whole data read from `source_` so far.
-    //
-    // Reading data from `source_` is blocked, and when a new target is added by
-    // `Clone()`, `buffer_` is written to the new target and cleared, and
-    // transition to `kSizeExceeded`.
-    kSizeExceededNoTarget,
-
-    // The data size read from `source_` exceeded the limit.
-    // Reading data from `source_` might or might not be completed.
-    // `buffer_` just stores the current chunk read from `source_` while writing
-    // to a target, and the early parts of the data from `source_` are already
-    // discarded.
-    //
-    // Data read from `source_` is written to a target (`target_`, if any) in a
-    // streaming fashion (i.e. the current chunk is tentatively stored in
-    // `buffer_` but not accumulated).
-    // If there is no target anymore, then the data can be just discarded (we
-    // can't transition to `kSizeExceededNoTarget` because th data from
-    // `source_` is already discarded).
-    kSizeExceeded,
-
-    // Reading data from `source_` is completed and the data is fully stored in
-    // `buffer_` without reaching the buffer limit.
-    // `target_` is null.
-    // Any number of cloned data pipes can be created.
-    kLoaded,
-  };
-
   State state_ = State::kLoading;
 
   // Number of cloned data pipes waiting for `OnDataWritten()`.
@@ -124,11 +135,16 @@ class CONTENT_EXPORT PrefetchDataPipeTee final
   // `buffer_.size()` is limited up to `buffer_limit_`.
   const size_t buffer_limit_;
 
+  perfetto::Flow flow_;
+
   // The cloned data pipe while `state_` is `kLoading` or `kSizeExceeded`.
   // In these states, the number of cloned data pipes is at most 1.
   // Should be modified only by `ResetTarget()`.
   ProducerPair target_;
   mojo::SimpleWatcher target_watcher_;
+
+  // How many times `Clone()` is called.
+  int count_clone_called_ = 0;
 
   base::WeakPtrFactory<PrefetchDataPipeTee> weak_factory_{this};
 };

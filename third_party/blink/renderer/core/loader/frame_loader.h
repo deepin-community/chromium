@@ -36,7 +36,6 @@
 #include <memory>
 #include <optional>
 
-#include "base/functional/callback_helpers.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-blink-forward.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
@@ -52,7 +51,6 @@
 #include "third_party/blink/renderer/core/frame/frame_types.h"
 #include "third_party/blink/renderer/core/loader/frame_loader_types.h"
 #include "third_party/blink/renderer/core/loader/history_item.h"
-#include "third_party/blink/renderer/core/loader/old_document_info_for_commit.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/loader_freeze_mode.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -181,14 +179,17 @@ class CORE_EXPORT FrameLoader final {
       const KURL&,
       WebFrameLoadType,
       std::optional<HistoryItem::ViewState>,
-      mojom::blink::ScrollRestorationType);
+      mojom::blink::ScrollRestorationType,
+      mojom::blink::ScrollBehavior scroll_behavior);
 
   // This will attempt to detach the current document. It will dispatch unload
   // events and abort XHR requests. Returns true if the frame is ready to
   // receive the next document commit, or false otherwise.
   bool DetachDocument();
 
-  bool ShouldClose(bool is_reload = false);
+  bool ShouldClose(bool is_reload,
+                   base::TimeTicks& out_before_unload_dialog_opened_time,
+                   base::TimeTicks& out_before_unload_dialog_closed_time);
 
   // Dispatches the Unload event for the current document and fills in this
   // document's info in OldDocumentInfoForCommit if
@@ -204,6 +205,7 @@ class CORE_EXPORT FrameLoader final {
   void SaveScrollState();
   void RestoreScrollPositionAndViewState();
 
+  bool IsCommittingNavigation() const { return committing_navigation_; }
   bool HasProvisionalNavigation() const {
     return committing_navigation_ || client_navigation_.get();
   }
@@ -254,11 +256,11 @@ class CORE_EXPORT FrameLoader final {
 
   void WriteIntoTrace(perfetto::TracedValue context) const;
 
+  bool AllowRequestForThisFrame(const FrameLoadRequest&);
+
   mojo::PendingRemote<mojom::blink::CodeCacheHost> CreateWorkerCodeCacheHost();
 
  private:
-  bool AllowRequestForThisFrame(const FrameLoadRequest&);
-
   bool ShouldPerformFragmentNavigation(bool is_form_submission,
                                        const String& http_method,
                                        WebFrameLoadType,
@@ -271,9 +273,11 @@ class CORE_EXPORT FrameLoader final {
   // Clears any information about client navigation, see client_navigation_.
   void ClearClientNavigation();
 
-  void RestoreScrollPositionAndViewState(WebFrameLoadType,
-                                         const HistoryItem::ViewState&,
-                                         mojom::blink::ScrollRestorationType);
+  void RestoreScrollPositionAndViewState(
+      WebFrameLoadType,
+      const HistoryItem::ViewState&,
+      mojom::blink::ScrollRestorationType,
+      mojom::blink::ScrollBehavior scroll_behavior);
 
   void DetachDocumentLoader(Member<DocumentLoader>&,
                             bool flush_microtask_queue = false);

@@ -10,6 +10,7 @@
 #include "ash/style/icon_button.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ash/arc/input_overlay/actions/action.h"
+#include "chrome/browser/ash/arc/input_overlay/arc_input_overlay_metrics.h"
 #include "chrome/browser/ash/arc/input_overlay/constants.h"
 #include "chrome/browser/ash/arc/input_overlay/display_overlay_controller.h"
 #include "chrome/browser/ash/arc/input_overlay/ui/action_view_list_item.h"
@@ -17,11 +18,14 @@
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_border.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view_class_properties.h"
@@ -40,16 +44,30 @@ DeleteEditShortcut::DeleteEditShortcut(DisplayOverlayController* controller,
                                        ActionViewListItem* anchor_view)
     : views::BubbleDialogDelegateView(anchor_view,
                                       views::BubbleBorder::LEFT_CENTER,
-                                      views::BubbleBorder::DIALOG_SHADOW),
+                                      views::BubbleBorder::NO_SHADOW),
       controller_(controller) {
+  SetBackgroundColor(cros_tokens::kCrosSysSystemBaseElevatedOpaque);
   set_margins(gfx::Insets(12));
   set_corner_radius(20);
   set_close_on_deactivate(false);
   set_focus_traversable_from_anchor_view(true);
   set_internal_name(kDeleteEditShortcut);
   set_parent_window(anchor_view->GetWidget()->GetNativeWindow());
-  SetButtons(ui::DIALOG_BUTTON_NONE);
-  SetAccessibleWindowRole(ax::mojom::Role::kMenu);
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+  SetEnableArrowKeyTraversal(true);
+
+  // BubbleDialogDelegate::GetAccessibleWindowRole() is a final method which
+  // can't override. If the window role is `kWindow`, it will force set it to
+  // alert dialog and reads all the tooltips inside.
+  // SetAccessibleWindowRole(kDialog) can prevent it.
+  // SetAccessibleWindowRole(ax::mojom::Role::kMenu) results in screenreader to
+  // announce the menu having only one item.
+  SetAccessibleWindowRole(ax::mojom::Role::kDialog);
+
+  // Set root view to menu.
+  GetViewAccessibility().SetRole(ax::mojom::Role::kMenu);
+  SetAccessibleTitle(
+      l10n_util::GetStringUTF16(IDS_INPUT_OVERLAY_SHORTCUT_MENU_A11Y_LABEL));
 
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical,
@@ -63,12 +81,15 @@ DeleteEditShortcut::DeleteEditShortcut(DisplayOverlayController* controller,
                           base::Unretained(this)),
       ash::IconButton::Type::kMedium, &kGameControlsEditPenIcon, u"",
       /*is_togglable=*/false, /*has_border=*/false));
+  edit_button_->GetViewAccessibility().SetRole(ax::mojom::Role::kMenuItem);
 
   delete_button_ = AddChildView(std::make_unique<ash::IconButton>(
       base::BindRepeating(&DeleteEditShortcut::OnDeleteButtonPressed,
                           base::Unretained(this)),
       ash::IconButton::Type::kMedium, &kGameControlsDeleteIcon, u"",
       /*is_togglable=*/false, /*has_border=*/false));
+  delete_button_->GetViewAccessibility().SetRole(ax::mojom::Role::kMenuItem);
+
   UpdateTooltipText(anchor_view);
 }
 
@@ -101,6 +122,8 @@ void DeleteEditShortcut::UpdateTooltipText(ActionViewListItem* anchor_view) {
 }
 
 void DeleteEditShortcut::OnEditButtonPressed() {
+  RecordEditDeleteMenuFunctionTriggered(controller_->GetPackageName(),
+                                        EditDeleteMenuFunction::kEdit);
   if (auto* anchor_view =
           views::AsViewClass<ActionViewListItem>(GetAnchorView())) {
     controller_->AddButtonOptionsMenuWidget(anchor_view->action());
@@ -108,6 +131,8 @@ void DeleteEditShortcut::OnEditButtonPressed() {
 }
 
 void DeleteEditShortcut::OnDeleteButtonPressed() {
+  RecordEditDeleteMenuFunctionTriggered(controller_->GetPackageName(),
+                                        EditDeleteMenuFunction::kDelete);
   if (auto* anchor_view =
           views::AsViewClass<ActionViewListItem>(GetAnchorView())) {
     controller_->RemoveAction(anchor_view->action());
@@ -115,32 +140,25 @@ void DeleteEditShortcut::OnDeleteButtonPressed() {
   }
 }
 
-std::unique_ptr<views::NonClientFrameView>
-DeleteEditShortcut::CreateNonClientFrameView(views::Widget* widget) {
+std::unique_ptr<views::FrameView> DeleteEditShortcut::CreateFrameView(
+    views::Widget* widget) {
   // Create the customized bubble border.
   auto bubble_border =
       std::make_unique<views::BubbleBorder>(arrow(), GetShadow());
-  bubble_border->SetColor(color());
+  bubble_border->SetColor(background_color());
   if (GetParams().round_corners) {
-    bubble_border->SetCornerRadius(GetCornerRadius());
+    bubble_border->set_rounded_corners(gfx::RoundedCornersF(GetCornerRadius()));
   }
   bubble_border->set_avoid_shadow_overlap(true);
   bubble_border->set_insets(
       gfx::Insets::VH(0, kSpaceToEditingList + kEditingListInsideBorderInsets));
 
-  auto frame =
-      views::BubbleDialogDelegateView::CreateNonClientFrameView(widget);
-  static_cast<views::BubbleFrameView*>(frame.get())
-      ->SetBubbleBorder(std::move(bubble_border));
-  return frame;
-}
-
-void DeleteEditShortcut::OnThemeChanged() {
-  views::BubbleDialogDelegateView::OnThemeChanged();
-  if (auto* color_provider = GetColorProvider()) {
-    set_color(color_provider->GetColor(
-        cros_tokens::kCrosSysSystemBaseElevatedOpaque));
+  auto frame = views::BubbleDialogDelegateView::CreateFrameView(widget);
+  if (auto* frame_view =
+          views::AsViewClass<views::BubbleFrameView>(frame.get())) {
+    frame_view->SetBubbleBorder(std::move(bubble_border));
   }
+  return frame;
 }
 
 void DeleteEditShortcut::OnMouseExited(const ui::MouseEvent& event) {

@@ -3,17 +3,22 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/device_notifications/device_status_icon_renderer.h"
+
 #include "base/i18n/message_formatter.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/status_icons/status_tray.h"
+#include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "extensions/buildflags/buildflags.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/color_palette.h"
+#include "ui/gfx/paint_vector_icon.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "extensions/browser/extension_registry.h"
@@ -47,7 +52,7 @@ std::u16string GetOriginConnectionCountLabel(Profile* profile,
         connection_count, base::UTF8ToUTF16(name));
   }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 }  // namespace
@@ -64,7 +69,10 @@ DeviceStatusIconRenderer::~DeviceStatusIconRenderer() {
   if (status_icon_) {
     auto* status_tray = g_browser_process->status_tray();
     DCHECK(status_tray);
-    status_tray->RemoveStatusIcon(status_icon_);
+    std::unique_ptr<StatusIcon> removed_icon =
+        status_tray->RemoveStatusIcon(status_icon_);
+    status_icon_ = nullptr;
+    removed_icon.reset();
   }
 }
 
@@ -133,28 +141,30 @@ void DeviceStatusIconRenderer::RefreshIcon() {
   DCHECK(status_tray);
   if (device_system_tray_icon_->profiles().empty()) {
     if (status_icon_) {
-      status_tray->RemoveStatusIcon(status_icon_);
+      std::unique_ptr<StatusIcon> removed_icon =
+          status_tray->RemoveStatusIcon(status_icon_);
       status_icon_ = nullptr;
+      removed_icon.reset();
     }
     return;
   }
 
   // This tries to construct this:
   // ------------------------------------------------
-  // |Google Chrome is accessing Device device(s)      |
-  // |About Device device                              |
+  // |Google Chrome is accessing Device device(s)   |
+  // |About Device device                           |
   // |---------------Separator----------------------|
   // |Profile1 section (see below profile for loop) |
   // |...                                           |
   // |---------------Separator----------------------|
   // |ProfileN section                              |
   auto menu = std::make_unique<StatusIconMenuModel>(this);
-  int total_connection_count = 0;
-  int total_origin_count = 0;
+  size_t total_connection_count = 0;
+  size_t total_origin_count = 0;
+  const size_t total_profile_count =
+      device_system_tray_icon_->profiles().size();
   // Title will be updated after looping through profiles below.
-#if !BUILDFLAG(IS_MAC)
   menu->AddTitle(u"");
-#endif  //! BUILDFLAG(IS_MAC)
   AddItem(menu.get(), GetAboutDeviceLabel(),
           base::BindRepeating(&DeviceStatusIconRenderer::ShowHelpCenterUrl,
                               weak_factory_.GetWeakPtr()));
@@ -191,18 +201,28 @@ void DeviceStatusIconRenderer::RefreshIcon() {
   }
   auto title_label = device_system_tray_icon_->GetTitleLabel(
       total_origin_count, total_connection_count);
-#if !BUILDFLAG(IS_MAC)
   menu->SetLabel(0, title_label);
-#endif  //! BUILDFLAG(IS_MAC)
 
   if (!status_icon_) {
     status_icon_ = status_tray->CreateStatusIcon(
-        StatusTray::OTHER_ICON, device_system_tray_icon_->GetIcon(),
+        StatusTray::OTHER_ICON,
+        gfx::CreateVectorIcon(device_system_tray_icon_->GetIcon(),
+                              gfx::kGoogleGrey300),
         title_label);
   } else {
     status_icon_->SetToolTip(title_label);
   }
   status_icon_->SetContextMenu(std::move(menu));
+
+  if (command_id_callbacks_.size() + IDC_DEVICE_SYSTEM_TRAY_ICON_FIRST >
+      IDC_DEVICE_SYSTEM_TRAY_ICON_LAST) {
+    UMA_HISTOGRAM_COUNTS_100(
+        "DeviceNotifications.StatusIconMenu.Overflow.ProfileCount",
+        total_profile_count);
+    UMA_HISTOGRAM_COUNTS_100(
+        "DeviceNotifications.StatusIconMenu.Overflow.ConnectionCount",
+        total_origin_count);
+  }
 }
 
 void DeviceStatusIconRenderer::AddItem(StatusIconMenuModel* menu,
@@ -213,7 +233,6 @@ void DeviceStatusIconRenderer::AddItem(StatusIconMenuModel* menu,
   if (index > IDC_DEVICE_SYSTEM_TRAY_ICON_LAST) {
     // This case should be fairly rare, but if we have more items than
     // pre-defined command ids, we don't put those in the status icon menu.
-    // TODO(crbug.com/1433378): Add a metric to capture this.
     return;
   }
   menu->AddItem(index, label);

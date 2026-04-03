@@ -60,7 +60,7 @@ class WebSocketEndpointLockManager;
 // ConnectJobs that wrap other ConnectJobs typically have different values for
 // those.
 struct NET_EXPORT_PRIVATE CommonConnectJobParams {
-  // TODO(https://crbug.com/1505765): Look into passing in HttpNetworkSession
+  // TODO(crbug.com/40946406): Look into passing in HttpNetworkSession
   // instead.
   CommonConnectJobParams(
       ClientSocketFactory* client_socket_factory,
@@ -114,7 +114,7 @@ struct NET_EXPORT_PRIVATE CommonConnectJobParams {
 
 // When a host resolution completes, OnHostResolutionCallback() is invoked. If
 // it returns |kContinue|, the ConnectJob can continue immediately. If it
-// returns |kMayBeDeletedAsync|, the ConnectJob may be slated for asychronous
+// returns |kMayBeDeletedAsync|, the ConnectJob may be slated for asynchronous
 // destruction, so should post a task before continuing, in case it will be
 // deleted. The purpose of kMayBeDeletedAsync is to avoid needlessly creating
 // and connecting a socket when it might not be needed.
@@ -215,10 +215,6 @@ class NET_EXPORT_PRIVATE ConnectJob {
   // |delegate_| via OnConnectJobComplete.  In both asynchronous and synchronous
   // completion, ReleaseSocket() can be called to acquire the connected socket
   // if it succeeded.
-  //
-  // On completion, the ConnectJob must be destroyed synchronously, since it
-  // doesn't bother to stop its timer when complete.
-  // TODO(mmenke): Can that be fixed?
   int Connect();
 
   // Returns the current LoadState of the ConnectJob. Each ConnectJob class must
@@ -324,7 +320,7 @@ class NET_EXPORT_PRIVATE ConnectJob {
   virtual void ChangePriorityInternal(RequestPriority priority) = 0;
 
   void LogConnectStart();
-  void LogConnectCompletion(int net_error);
+  void StopTimerAndLogConnectCompletion(int net_error);
 
   // Alerts the delegate that the ConnectJob has timed out.
   void OnTimeout();

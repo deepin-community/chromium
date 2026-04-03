@@ -64,7 +64,7 @@ const char kSpellCheckEnabledKey[] = "spell_check_enabled";
 const char kVoiceInputEnabledKey[] = "voice_input_enabled";
 
 std::optional<display::Display> GetFirstTouchDisplay() {
-  for (const auto& display : display::Screen::GetScreen()->GetAllDisplays()) {
+  for (const auto& display : display::Screen::Get()->GetAllDisplays()) {
     if (display.touch_support() == display::Display::TouchSupport::AVAILABLE)
       return display;
   }
@@ -74,7 +74,7 @@ std::optional<display::Display> GetFirstTouchDisplay() {
 bool GetVirtualKeyboardFeatureValue(PrefService* prefs,
                                     const std::string& feature_path) {
   DCHECK(prefs);
-  const base::Value::Dict& features =
+  const base::DictValue& features =
       prefs->GetDict(prefs::kAccessibilityVirtualKeyboardFeatures);
 
   return features.FindBool(feature_path).value_or(false);
@@ -242,7 +242,7 @@ void KeyboardControllerImpl::SetKeyboardLocked(bool locked) {
 
 void KeyboardControllerImpl::SetOccludedBounds(
     const std::vector<gfx::Rect>& bounds) {
-  // TODO(https://crbug.com/826617): Support occluded bounds with multiple
+  // TODO(crbug.com/41379402): Support occluded bounds with multiple
   // rectangles.
   keyboard_ui_controller_->SetOccludedBounds(bounds.empty() ? gfx::Rect()
                                                             : bounds[0]);
@@ -298,13 +298,9 @@ KeyboardControllerImpl::GetKeyRepeatSettings() {
 }
 
 bool KeyboardControllerImpl::AreTopRowKeysFunctionKeys() {
-  if (ash::features::IsInputDeviceSettingsSplitEnabled()) {
-    return Shell::Get()
-        ->input_device_settings_controller()
-        ->GetGeneralizedTopRowAreFKeys();
-  }
-  PrefService* prefs = pref_change_registrar_->prefs();
-  return prefs->GetBoolean(ash::prefs::kSendFunctionKeys);
+  return Shell::Get()
+      ->input_device_settings_controller()
+      ->GetGeneralizedTopRowAreFKeys();
 }
 
 void KeyboardControllerImpl::SetSmartVisibilityEnabled(bool enabled) {
@@ -431,7 +427,7 @@ aura::Window* KeyboardControllerImpl::GetContainerForDisplay(
 }
 
 aura::Window* KeyboardControllerImpl::GetContainerForDefaultDisplay() {
-  const display::Screen* screen = display::Screen::GetScreen();
+  const display::Screen* screen = display::Screen::Get();
   const std::optional<display::Display> first_touch_display =
       GetFirstTouchDisplay();
   const bool has_touch_display = first_touch_display.has_value();
@@ -460,9 +456,12 @@ void KeyboardControllerImpl::TransferGestureEventToShelf(
       ash::Shelf::ForWindow(keyboard_ui_controller_->GetKeyboardWindow());
   if (shelf) {
     shelf->ProcessGestureEvent(e);
-    aura::Env::GetInstance()->gesture_recognizer()->TransferEventsTo(
-        keyboard_ui_controller_->GetGestureConsumer(), shelf->GetWindow(),
-        ui::TransferTouchesBehavior::kCancel);
+    auto* current_consumer = keyboard_ui_controller_->GetGestureConsumer();
+    if (current_consumer) {
+      aura::Env::GetInstance()->gesture_recognizer()->TransferEventsTo(
+          current_consumer, shelf->GetWindow(),
+          ui::TransferTouchesBehavior::kCancel);
+    }
     HideKeyboard(HideReason::kUser);
   }
 }

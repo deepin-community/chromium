@@ -22,7 +22,7 @@ The TensorFlow Lite Task API wraps the Interpreter API and provides a high-level
 programming interface for common machine learning tasks that use visual, audio,
 and text data. You should use the Task API if your application requires one of
 the
-[supported tasks](../inference_with_metadata/task_library/overview#supported_tasks).
+[supported tasks](../inference_with_metadata/task_library/overview.md#supported-tasks).
 
 #### 1. Add project dependencies
 
@@ -133,9 +133,9 @@ services API for TensorFlow Lite:
 dependencies {
 ...
     // Tensorflow Lite dependencies for Google Play services
-    implementation 'com.google.android.gms:play-services-tflite-java:16.0.1'
+    implementation 'com.google.android.gms:play-services-tflite-java:16.4.0'
     // Optional: include Tensorflow Lite Support Library
-    implementation 'com.google.android.gms:play-services-tflite-support:16.0.1'
+    implementation 'com.google.android.gms:play-services-tflite-support:16.4.0'
 ...
 }
 ```
@@ -387,7 +387,7 @@ To use the GPU delegate with the Task APIs:
 1.  Update the project dependencies to use the GPU delegate from Play services:
 
     ```
-    implementation 'com.google.android.gms:play-services-tflite-gpu:16.1.0'
+    implementation 'com.google.android.gms:play-services-tflite-gpu:16.4.0'
     ```
 
 1.  Initialize the GPU delegate with `setEnableGpuDelegateSupport`. For example,
@@ -465,7 +465,7 @@ To use the GPU delegate with the Interpreter APIs:
 1.  Update the project dependencies to use the GPU delegate from Play services:
 
     ```
-    implementation 'com.google.android.gms:play-services-tflite-gpu:16.1.0'
+    implementation 'com.google.android.gms:play-services-tflite-gpu:16.4.0'
     ```
 
 1.  Enable the GPU delegate option in the TFlite initialization:

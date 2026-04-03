@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/renderer/core/layout/base_layout_algorithm_test.h"
-
 #include <sstream>
+
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/renderer/core/dom/tag_collection.h"
 #include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
+#include "third_party/blink/renderer/core/layout/base_layout_algorithm_test.h"
 #include "third_party/blink/renderer/core/layout/box_fragment_builder.h"
 #include "third_party/blink/renderer/core/layout/constraint_space_builder.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_box_state.h"
@@ -19,9 +19,25 @@
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_result.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/web_test_support.h"
 
 namespace blink {
 namespace {
+
+// Compute the result of the effects of the `text-box-trim` property.
+struct TextBoxTrimResult {
+  explicit TextBoxTrimResult(const LayoutBox& layout_object) {
+    const LayoutResult* result = layout_object.GetCachedLayoutResult(nullptr);
+    const ConstraintSpace& space = result->GetConstraintSpaceForCaching();
+    should_trim_start = space.ShouldTextBoxTrimNodeStart();
+    should_trim_end = space.ShouldTextBoxTrimNodeEnd();
+  }
+
+  bool should_trim_start;
+  bool should_trim_end;
+};
 
 const PhysicalLineBoxFragment* FindBlockInInlineLineBoxFragment(
     Element* container) {
@@ -52,8 +68,10 @@ class InlineLayoutAlgorithmTest : public BaseLayoutAlgorithmTest {
     HTMLTextAreaElement* textarea = To<HTMLTextAreaElement>(GetElementById(id));
     DCHECK(textarea);
 
-    InlineCursor cursor(*To<LayoutBlockFlow>(
-        textarea->InnerEditorElement()->GetLayoutObject()));
+    LayoutBlockFlow* block_flow =
+        To<LayoutBlockFlow>(textarea->InnerEditorElement()->GetLayoutObject());
+    block_flow = To<LayoutBlockFlow>(block_flow->FirstChild());
+    InlineCursor cursor(*block_flow);
     cursor.MoveToFirstLine();
     EXPECT_TRUE(cursor.IsNotNull());
 
@@ -449,13 +467,13 @@ TEST_F(InlineLayoutAlgorithmTest, TextFloatsAroundFloatsBefore) {
     </div>
   )HTML");
 
-  const auto& html_fragment =
-      To<LayoutBox>(GetDocument()
-                        .getElementsByTagName(AtomicString("html"))
-                        ->item(0)
-                        ->GetLayoutObject())
-          ->GetSingleCachedLayoutResult()
-          ->GetPhysicalFragment();
+  const LayoutBox& html_object =
+      *To<LayoutBox>(GetDocument()
+                         .getElementsByTagName(AtomicString("html"))
+                         ->item(0)
+                         ->GetLayoutObject());
+  const auto& html_fragment = To<PhysicalBoxFragment>(
+      html_object.GetSingleCachedLayoutResult()->GetPhysicalFragment());
 
   auto* body_fragment =
       To<PhysicalBoxFragment>(html_fragment.Children()[0].get());
@@ -853,6 +871,200 @@ TEST_F(InlineLayoutAlgorithmTest, LineBoxWithHangingWidthRTLCenterAligned) {
   EXPECT_EQ(PhysicalRect(35, 0, 30, 10), TextAreaFirstLineRect("f"));
 }
 
+TEST_F(InlineLayoutAlgorithmTest, TextBoxTrimConstraintSpace) {
+  SetBodyInnerHTML(R"HTML(
+    <!DOCTYPE html>
+    <div id="parent" style="text-box-trim: trim-both; position: relative">
+      <div id="abs1" style="position: absolute">abs1</div>
+      <div id="float1" style="float: left">float1</div>
+      <div id="empty_before"> </div>
+      <div id="nested_empty_before">
+        <div id="nested_empty_before_child"> </div>
+      </div>
+      <div>
+        <div id="middle">middle<br>middle L2</div>
+      </div>
+      <div id="nested_empty_after">
+        <div id="nested_empty_after_child"> </div>
+      </div>
+      <div id="empty_after"> </div>
+      <div id="abs2" style="position: absolute">abs1</div>
+      <div id="float2" style="float: left">float1</div>
+    </div>
+  )HTML");
+
+  const TextBoxTrimResult parent{*GetLayoutBlockFlowByElementId("parent")};
+  EXPECT_FALSE(parent.should_trim_start);
+  EXPECT_FALSE(parent.should_trim_end);
+
+  // `ShouldTextBoxTrim*` should be set only to in-flow children.
+  for (const char* id : {"abs1", "abs2", "float1", "float2"}) {
+    const TextBoxTrimResult result{*GetLayoutBlockFlowByElementId(id)};
+    EXPECT_FALSE(result.should_trim_start) << id;
+    EXPECT_FALSE(result.should_trim_end) << id;
+  }
+
+  // The first formatted line has to be inside the first in-flow block child, or
+  // there is no first formatted line.
+  const TextBoxTrimResult empty_before{
+      *GetLayoutBlockFlowByElementId("empty_before")};
+  EXPECT_TRUE(empty_before.should_trim_start);
+  EXPECT_FALSE(empty_before.should_trim_end);
+
+  for (const char* id :
+       {"nested_empty_before", "nested_empty_before_child", "middle",
+        "nested_empty_after", "nested_empty_after_child"}) {
+    const TextBoxTrimResult result{*GetLayoutBlockFlowByElementId(id)};
+    EXPECT_FALSE(result.should_trim_start) << id;
+    EXPECT_FALSE(result.should_trim_end) << id;
+  }
+
+  // The last formatted line has to be inside the last in-flow block child, or
+  // there is no last formatted line.
+  const TextBoxTrimResult empty_after{
+      *GetLayoutBlockFlowByElementId("empty_after")};
+  EXPECT_FALSE(empty_after.should_trim_start);
+  EXPECT_TRUE(empty_after.should_trim_end);
+}
+
+TEST_F(InlineLayoutAlgorithmTest, TextBoxTrimConstraintSpaceSingle) {
+  SetBodyInnerHTML(R"HTML(
+    <!DOCTYPE html>
+    <div id="parent" style="text-box-trim: trim-both">
+      <div id="single">single<br>single L2</div>
+      <div id="empty_after"> </div>
+    </div>
+  )HTML");
+
+  const TextBoxTrimResult parent{*GetLayoutBlockFlowByElementId("parent")};
+  EXPECT_FALSE(parent.should_trim_start);
+  EXPECT_FALSE(parent.should_trim_end);
+
+  const TextBoxTrimResult single{*GetLayoutBlockFlowByElementId("single")};
+  EXPECT_TRUE(single.should_trim_start);
+  EXPECT_FALSE(single.should_trim_end);
+
+  const TextBoxTrimResult empty_after{
+      *GetLayoutBlockFlowByElementId("empty_after")};
+  EXPECT_FALSE(empty_after.should_trim_start);
+  EXPECT_TRUE(empty_after.should_trim_end);
+}
+
+TEST_F(InlineLayoutAlgorithmTest, TextBoxTrimConstraintSpaceEmptyOnly) {
+  SetBodyInnerHTML(R"HTML(
+    <!DOCTYPE html>
+    <div id="parent" style="text-box-trim: trim-both">
+      <div id="empty"> </div>
+    </div>
+  )HTML");
+
+  const TextBoxTrimResult parent{*GetLayoutBlockFlowByElementId("parent")};
+  EXPECT_FALSE(parent.should_trim_start);
+  EXPECT_FALSE(parent.should_trim_end);
+
+  const TextBoxTrimResult empty{*GetLayoutBlockFlowByElementId("empty")};
+  EXPECT_TRUE(empty.should_trim_start);
+  EXPECT_TRUE(empty.should_trim_end);
+}
+
+TEST_F(InlineLayoutAlgorithmTest, TextBoxTrimConstraintSpaceNone) {
+  SetBodyInnerHTML(R"HTML(
+    <!DOCTYPE html>
+    <div id="parent" style="text-box-trim: both">
+    </div>
+  )HTML");
+
+  const TextBoxTrimResult parent{*GetLayoutBlockFlowByElementId("parent")};
+  EXPECT_FALSE(parent.should_trim_start);
+  EXPECT_FALSE(parent.should_trim_end);
+}
+
 #undef MAYBE_VerticalAlignBottomReplaced
+
+// crbug.com/430665516
+TEST_F(InlineLayoutAlgorithmTest, FitTextDivisionByZero) {
+  SetBodyInnerHTML(R"HTML(
+<div style="text-grow: per-line scale;"><span style="display:inline-block;">
+A</span></div>)HTML");
+
+  // This test passes if no crashes.
+}
+
+// crbug.com/341126037
+TEST_F(InlineLayoutAlgorithmTest, BoxFragmentInRubyCrash) {
+  SetBodyInnerHTML(R"HTML(
+<table>
+<caption>
+<ruby>
+<select></select>
+<svg></svg>
+<span dir="rtl">
+</span>
+foo
+<rt>
+<input></ruby>)HTML");
+  // We had a crash in a case that the first base item in a kOpenRubyColumn
+  // InlineItemResult creates a BoxFragment
+
+  // This test passes if no crashes.
+}
+
+TEST_F(InlineLayoutAlgorithmTest, BidiControlsInLineClampedLines) {
+  ScopedCSSLineClampLineBreakingEllipsisForTest
+      enable_line_breaking_ellipsis_for_test(true);
+
+  SetBodyInnerHTML(R"HTML(
+<div style="line-clamp: 1; font: monospace; width: 7ch;">
+    <bdi>Line 1
+    L</bdi>ine 2
+</div>
+)HTML");
+
+  // There was a crash in the case where a line-breaking ellipsis is followed in
+  // the clamped lines by bidi controls (such as closing a <bdi>) which could
+  // fit in the ellipsis line if it didn't have the ellipsis.
+
+  // This test passes if no crashes.
+}
+
+TEST_F(InlineLayoutAlgorithmTest, LineClampAndMaxContent) {
+  ScopedCSSLineClampLineBreakingEllipsisForTest
+      enable_line_breaking_ellipsis_for_test(true);
+  ScopedWebTestMode web_test_mode(false);
+
+  LoadFontFromFile(GetFrame(), blink::test::CoreTestDataPath("Revalia.woff"),
+                   AtomicString("Revalia"));
+
+  SetBodyInnerHTML(R"HTML(
+<style>
+  #test {
+    font: 20px Revalia;
+    width: max-content;
+    line-clamp: 1;
+
+    /* The bug that this test tests was only present with subpixel positioning.
+     * In Linux content_shell, it seems like subpixel positioning is enabled by
+     * default, but in unit tests it needs this property as well as disabling
+     * WebTestMode. */
+    text-rendering: geometricPrecision;
+  }
+</style>
+
+<!-- This bug happens only for some specific string and font combinations. -->
+<div id="test">sfd sdof jkl</div>
+)HTML");
+
+  // If there are no forced line breaks, `width: max-content` should leave
+  // enough space for the content to fit in one line without the line-clamp
+  // ellipsis, so the content should not clamp. But with subpixel positioning,
+  // this might not be the case.
+  LayoutBlockFlow* test =
+      To<LayoutBlockFlow>(GetLayoutObjectByElementId("test"));
+
+  InlineCursor cursor(*test);
+  cursor.MoveToLastLogicalLeaf();
+  EXPECT_FALSE(cursor.Current().IsEllipsis());
+}
+
 }  // namespace
 }  // namespace blink

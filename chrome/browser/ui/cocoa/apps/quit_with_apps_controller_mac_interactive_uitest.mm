@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/cocoa/apps/quit_with_apps_controller_mac.h"
-
 #import "base/apple/foundation_util.h"
 #include "base/command_line.h"
 #include "base/memory/raw_ptr.h"
@@ -20,8 +18,9 @@
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/cocoa/apps/quit_with_apps_controller_mac.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
@@ -77,7 +76,7 @@ IN_PROC_BROWSER_TEST_F(QuitWithAppsControllerInteractiveTest, QuitBehavior) {
   ASSERT_TRUE(listener.WaitUntilSatisfied());
 
   // One browser and one app window at this point.
-  EXPECT_FALSE(BrowserList::GetInstance()->empty());
+  EXPECT_FALSE(GlobalBrowserCollection::GetInstance()->IsEmpty());
   EXPECT_TRUE(AppWindowRegistryUtil::IsAppWindowVisibleInAnyProfile(0));
 
   // On the first quit, show notification.
@@ -98,7 +97,7 @@ IN_PROC_BROWSER_TEST_F(QuitWithAppsControllerInteractiveTest, QuitBehavior) {
   EXPECT_TRUE(display_service.GetNotification(
       QuitWithAppsController::kQuitWithAppsNotificationID));
 
-  EXPECT_FALSE(BrowserList::GetInstance()->empty());
+  EXPECT_FALSE(GlobalBrowserCollection::GetInstance()->IsEmpty());
   EXPECT_TRUE(AppWindowRegistryUtil::IsAppWindowVisibleInAnyProfile(0));
 
   // If notification is closed by user, don't show it next time.
@@ -110,17 +109,18 @@ IN_PROC_BROWSER_TEST_F(QuitWithAppsControllerInteractiveTest, QuitBehavior) {
   EXPECT_FALSE(display_service.GetNotification(
       QuitWithAppsController::kQuitWithAppsNotificationID));
 
-  EXPECT_FALSE(BrowserList::GetInstance()->empty());
+  EXPECT_FALSE(GlobalBrowserCollection::GetInstance()->IsEmpty());
   EXPECT_TRUE(AppWindowRegistryUtil::IsAppWindowVisibleInAnyProfile(0));
 
   // Get a reference to the open app window before the browser closes.
   extensions::AppWindow* app_window = GetFirstAppWindow();
 
+  ui_test_utils::BrowserDestroyedObserver observer(browser());
   // Quitting should not quit but close all browsers
   chrome_browser_application_mac::Terminate();
-  ui_test_utils::WaitForBrowserToClose();
+  observer.Wait();
 
-  EXPECT_TRUE(BrowserList::GetInstance()->empty());
+  EXPECT_TRUE(GlobalBrowserCollection::GetInstance()->IsEmpty());
   EXPECT_TRUE(AppWindowRegistryUtil::IsAppWindowVisibleInAnyProfile(0));
 
   // Trying to quit while there are no browsers always shows notification.

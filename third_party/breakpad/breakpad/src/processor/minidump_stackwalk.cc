@@ -36,16 +36,15 @@
 #endif
 
 #include <stdio.h>
-#include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "common/path_helper.h"
-#include "common/scoped_ptr.h"
-#include "common/using_std_string.h"
 #include "google_breakpad/processor/basic_source_line_resolver.h"
 #include "google_breakpad/processor/minidump.h"
 #include "google_breakpad/processor/minidump_processor.h"
@@ -62,9 +61,11 @@ struct Options {
   bool output_stack_contents;
   bool output_requesting_thread_only;
   bool brief;
+  int output_thread_index;
+  bool dump_stack_pointers;
 
-  string minidump_file;
-  std::vector<string> symbol_paths;
+  std::string minidump_file;
+  std::vector<std::string> symbol_paths;
 };
 
 using google_breakpad::BasicSourceLineResolver;
@@ -74,7 +75,6 @@ using google_breakpad::MinidumpThreadList;
 using google_breakpad::MinidumpProcessor;
 using google_breakpad::ProcessState;
 using google_breakpad::SimpleSymbolSupplier;
-using google_breakpad::scoped_ptr;
 
 // Processes |options.minidump_file| using MinidumpProcessor.
 // |options.symbol_path|, if non-empty, is the base directory of a
@@ -88,7 +88,7 @@ using google_breakpad::scoped_ptr;
 // call stacks for each thread contained in the minidump.  All information
 // is printed to stdout.
 bool PrintMinidumpProcess(const Options& options) {
-  scoped_ptr<SimpleSymbolSupplier> symbol_supplier;
+  std::unique_ptr<SimpleSymbolSupplier> symbol_supplier;
   if (!options.symbol_paths.empty()) {
     // TODO(mmentovai): check existence of symbol_path if specified?
     symbol_supplier.reset(new SimpleSymbolSupplier(options.symbol_paths));
@@ -119,7 +119,9 @@ bool PrintMinidumpProcess(const Options& options) {
     PrintRequestingThreadBrief(process_state);
   } else {
     PrintProcessState(process_state, options.output_stack_contents,
-                      options.output_requesting_thread_only, &resolver);
+                      options.dump_stack_pointers,
+                      options.output_requesting_thread_only,
+                      options.output_thread_index, &resolver);
   }
 
   return true;
@@ -138,6 +140,8 @@ static void Usage(int argc, const char *argv[], bool error) {
           "  -m         Output in machine-readable format\n"
           "  -s         Output stack contents\n"
           "  -c         Output thread that causes crash or dump only\n"
+          "  -t <index> Output thread with given index only\n"
+          "  -d         Dump pointers on stack\n"
           "  -b         Brief of the thread that causes crash or dump\n",
           google_breakpad::BaseName(argv[0]).c_str());
 }
@@ -149,8 +153,10 @@ static void SetupOptions(int argc, const char *argv[], Options* options) {
   options->output_stack_contents = false;
   options->output_requesting_thread_only = false;
   options->brief = false;
+  options->output_thread_index = -1;
+  options->dump_stack_pointers = false;
 
-  while ((ch = getopt(argc, (char* const*)argv, "bchms")) != -1) {
+  while ((ch = getopt(argc, (char* const*)argv, "bcdhmst:")) != -1) {
     switch (ch) {
       case 'h':
         Usage(argc, argv, false);
@@ -161,13 +167,29 @@ static void SetupOptions(int argc, const char *argv[], Options* options) {
         options->brief = true;
         break;
       case 'c':
+        if (options->output_thread_index != -1) {
+          fprintf(stderr, "%s: -c and -t cannot be used together.\n", argv[0]);
+          Usage(argc, argv, true);
+          exit(1);
+        }
         options->output_requesting_thread_only = true;
+        break;
+      case 'd':
+        options->dump_stack_pointers = true;
         break;
       case 'm':
         options->machine_readable = true;
         break;
       case 's':
         options->output_stack_contents = true;
+        break;
+      case 't':
+        if (options->output_requesting_thread_only) {
+          fprintf(stderr, "%s: -c and -t cannot be used together.\n", argv[0]);
+          Usage(argc, argv, true);
+          exit(1);
+        }
+        options->output_thread_index = atoi(optarg);
         break;
 
       case '?':

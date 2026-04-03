@@ -9,21 +9,17 @@
 #include "base/values.h"
 #include "chromeos/components/quick_answers/quick_answers_model.h"
 #include "chromeos/components/quick_answers/search_result_parsers/definition_result_parser.h"
-#include "chromeos/components/quick_answers/search_result_parsers/kp_entity_result_parser.h"
 #include "chromeos/components/quick_answers/search_result_parsers/unit_conversion_result_parser.h"
 
 namespace quick_answers {
 namespace {
-using base::Value;
-
 const constexpr char* kKnownHTMLTags[] = {"<b>", "</b>", "<i>", "</i>"};
-
 }  // namespace
 
-const Value::Dict* ResultParser::GetFirstDictElementFromList(
-    const Value::Dict& dict,
+const base::DictValue* ResultParser::GetFirstDictElementFromList(
+    const base::DictValue& dict,
     const std::string& path) {
-  const Value::List* entries = dict.FindListByDottedPath(path);
+  const base::ListValue* entries = dict.FindListByDottedPath(path);
 
   if (!entries) {
     // No list found.
@@ -47,7 +43,7 @@ std::string ResultParser::RemoveKnownHtmlTags(const std::string& input) {
 }
 
 std::unique_ptr<StructuredResult> ResultParser::ParseInStructuredResult(
-    const base::Value::Dict& result) {
+    const base::DictValue& result) {
   return nullptr;
 }
 
@@ -65,20 +61,15 @@ bool ResultParser::SupportsNewInterface() const {
 std::unique_ptr<ResultParser> ResultParserFactory::Create(
     int one_namespace_type) {
   switch (static_cast<ResultType>(one_namespace_type)) {
-    case ResultType::kKnowledgePanelEntityResult:
-      return std::make_unique<KpEntityResultParser>();
     case ResultType::kDefinitionResult:
       return std::make_unique<DefinitionResultParser>();
     case ResultType::kUnitConversionResult:
       return std::make_unique<UnitConversionResultParser>();
-      // TODO(llin): Add other result parsers.
-
     // Translation responses are from the Clound server and parsed
     // separately.
     case ResultType::kTranslationResult:
     case ResultType::kNoResult:
       NOTREACHED();
-      break;
   }
 
   return nullptr;

@@ -1,88 +1,83 @@
-/*
- * Copyright (C) 2012 Google Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// Copyright 2012 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 import * as Common from '../../core/common/common.js';
+import * as VisualLogging from '../visual_logging/visual_logging.js';
 
 import * as ARIAUtils from './ARIAUtils.js';
+import dialogStyles from './dialog.css.js';
 import {GlassPane, PointerEventsBehavior} from './GlassPane.js';
 import {InspectorView} from './InspectorView.js';
 import {KeyboardShortcut, Keys} from './KeyboardShortcut.js';
-import {type SplitWidget} from './SplitWidget.js';
-import {type DevToolsCloseButton} from './UIUtils.js';
-
-import {WidgetFocusRestorer, type WidgetElement} from './Widget.js';
-
-import dialogStyles from './dialog.css.legacy.js';
+import type {SplitWidget} from './SplitWidget.js';
+import {WidgetFocusRestorer} from './Widget.js';
 
 export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof GlassPane>(GlassPane) {
-  private tabIndexBehavior: OutsideTabIndexBehavior;
-  private tabIndexMap: Map<HTMLElement, number>;
-  private focusRestorer: WidgetFocusRestorer|null;
-  private closeOnEscape: boolean;
-  private targetDocument!: Document|null;
-  private readonly targetDocumentKeyDownHandler: (event: Event) => void;
-  private escapeKeyCallback: ((arg0: Event) => void)|null;
+  private tabIndexBehavior = OutsideTabIndexBehavior.DISABLE_ALL_OUTSIDE_TAB_INDEX;
+  private tabIndexMap = new Map<HTMLElement, number>();
+  private focusRestorer: WidgetFocusRestorer|null = null;
+  private closeOnEscape = true;
+  private targetDocument: Document|null = null;
+  private readonly targetDocumentKeyDownHandler: (event: KeyboardEvent) => void;
+  private escapeKeyCallback: ((arg0: KeyboardEvent) => void)|null = null;
 
-  constructor() {
+  constructor(jslogContext?: string) {
     super();
     this.registerRequiredCSS(dialogStyles);
     this.contentElement.tabIndex = 0;
     this.contentElement.addEventListener('focus', () => this.widget().focus(), false);
-    this.widget().setDefaultFocusedElement(this.contentElement);
-    this.setPointerEventsBehavior(PointerEventsBehavior.BlockedByGlassPane);
+    if (jslogContext) {
+      this.contentElement.setAttribute(
+          'jslog', `${VisualLogging.dialog(jslogContext).track({resize: true, keydown: 'Escape'})}`);
+    }
+    this.setPointerEventsBehavior(PointerEventsBehavior.BLOCKED_BY_GLASS_PANE);
     this.setOutsideClickCallback(event => {
+      // If there are stacked dialogs, we only want to
+      // handle the outside click for the top most dialog.
+      if (Dialog.getInstance() !== this) {
+        return;
+      }
+
       this.hide();
       event.consume(true);
     });
     ARIAUtils.markAsModalDialog(this.contentElement);
-    this.tabIndexBehavior = OutsideTabIndexBehavior.DisableAllOutsideTabIndex;
-    this.tabIndexMap = new Map();
-    this.focusRestorer = null;
-    this.closeOnEscape = true;
     this.targetDocumentKeyDownHandler = this.onKeyDown.bind(this);
-    this.escapeKeyCallback = null;
   }
 
   static hasInstance(): boolean {
-    return Boolean(Dialog.instance);
+    return Dialog.dialogs.length > 0;
   }
 
-  override show(where?: Document | Element): void {
-    const document = (where instanceof Document ? where : (where || InspectorView.instance().element).ownerDocument as Document);
+  /**
+   * If there is only one dialog, returns that.
+   * If there are stacked dialogs, returns the topmost one.
+   */
+  static getInstance(): Dialog|null {
+    return Dialog.dialogs[Dialog.dialogs.length - 1] || null;
+  }
+
+  /**
+   * `stack` parameter is needed for being able to open a dialog on top
+   * of an existing dialog. The main reason is, Settings Tab is
+   * implemented as a Dialog. So, if we want to open a dialog on the
+   * Settings Tab, we need to stack it on top of that dialog.
+   *
+   * @param where Container element of the dialog.
+   * @param stack Whether to open this dialog on top of an existing dialog.
+   */
+  override show(where?: Document|Element, stack?: boolean): void {
+    const document = (where instanceof Document ? where : (where || InspectorView.instance().element).ownerDocument);
     this.targetDocument = document;
     this.targetDocument.addEventListener('keydown', this.targetDocumentKeyDownHandler, true);
 
-    if (Dialog.instance) {
-      Dialog.instance.hide();
+    if (!stack && Dialog.dialogs.length) {
+      Dialog.dialogs.forEach(dialog => dialog.hide());
     }
-    Dialog.instance = this;
+    Dialog.dialogs.push(this);
     this.disableTabIndexOnElements(document);
     super.show(document);
     this.focusRestorer = new WidgetFocusRestorer(this.widget());
@@ -98,22 +93,28 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
       this.targetDocument.removeEventListener('keydown', this.targetDocumentKeyDownHandler, true);
     }
     this.restoreTabIndexOnElements();
-    this.dispatchEventToListeners(Events.Hidden);
-    Dialog.instance = null;
+    this.dispatchEventToListeners(Events.HIDDEN);
+    const index = Dialog.dialogs.indexOf(this);
+    if (index !== -1) {
+      Dialog.dialogs.splice(index, 1);
+    }
+  }
+
+  setAriaLabel(label: string): void {
+    ARIAUtils.setLabel(this.contentElement, label);
   }
 
   setCloseOnEscape(close: boolean): void {
     this.closeOnEscape = close;
   }
 
-  setEscapeKeyCallback(callback: (arg0: Event) => void): void {
+  setEscapeKeyCallback(callback: (arg0: KeyboardEvent) => void): void {
     this.escapeKeyCallback = callback;
   }
 
   addCloseButton(): void {
-    const closeButton =
-        (this.contentElement.createChild('div', 'dialog-close-button', 'dt-close-button') as DevToolsCloseButton);
-    closeButton.addEventListener('click', () => this.hide(), false);
+    const closeButton = this.contentElement.createChild('dt-close-button', 'dialog-close-button');
+    closeButton.addEventListener('click', this.hide.bind(this), false);
   }
 
   setOutsideTabIndexBehavior(tabIndexBehavior: OutsideTabIndexBehavior): void {
@@ -121,12 +122,12 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
   }
 
   private disableTabIndexOnElements(document: Document): void {
-    if (this.tabIndexBehavior === OutsideTabIndexBehavior.PreserveTabIndex) {
+    if (this.tabIndexBehavior === OutsideTabIndexBehavior.PRESERVE_TAB_INDEX) {
       return;
     }
 
     let exclusionSet: Set<HTMLElement>|(Set<HTMLElement>| null) = (null as Set<HTMLElement>| null);
-    if (this.tabIndexBehavior === OutsideTabIndexBehavior.PreserveMainViewTabIndex) {
+    if (this.tabIndexBehavior === OutsideTabIndexBehavior.PRESERVE_MAIN_VIEW_TAB_INDEX) {
       exclusionSet = this.getMainWidgetTabIndexElements(InspectorView.instance().ownerSplit());
     }
 
@@ -134,7 +135,7 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
     let node: (Node|null)|Document = document;
     for (; node; node = node.traverseNextNode(document)) {
       if (node instanceof HTMLElement) {
-        const element = (node as HTMLElement);
+        const element = (node);
         const tabIndex = element.tabIndex;
         if (!exclusionSet?.has(element)) {
           if (tabIndex >= 0) {
@@ -150,23 +151,23 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
   }
 
   private getMainWidgetTabIndexElements(splitWidget: SplitWidget|null): Set<HTMLElement> {
-    const elementSet = (new Set() as Set<HTMLElement>);
+    const elementSet = new Set<HTMLElement>();
     if (!splitWidget) {
       return elementSet;
     }
 
     const mainWidget = splitWidget.mainWidget();
-    if (!mainWidget || !mainWidget.element) {
+    if (!mainWidget?.element) {
       return elementSet;
     }
 
-    let node: Node|null|WidgetElement = mainWidget.element;
+    let node: Node|null = mainWidget.element;
     for (; node; node = node.traverseNextNode(mainWidget.element)) {
       if (!(node instanceof HTMLElement)) {
         continue;
       }
 
-      const element = (node as HTMLElement);
+      const element = (node);
       const tabIndex = element.tabIndex;
       if (tabIndex < 0) {
         continue;
@@ -185,8 +186,11 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
     this.tabIndexMap.clear();
   }
 
-  private onKeyDown(event: Event): void {
-    const keyboardEvent = (event as KeyboardEvent);
+  private onKeyDown(event: KeyboardEvent): void {
+    const keyboardEvent = event;
+    if (Dialog.getInstance() !== this) {
+      return;
+    }
     if (keyboardEvent.keyCode === Keys.Esc.code && KeyboardShortcut.hasNoModifiers(event)) {
       if (this.escapeKeyCallback) {
         this.escapeKeyCallback(event);
@@ -203,19 +207,19 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
     }
   }
 
-  private static instance: Dialog|null = null;
+  private static dialogs: Dialog[] = [];
 }
 
 export const enum Events {
-  Hidden = 'hidden',
+  HIDDEN = 'hidden',
 }
 
-export type EventTypes = {
-  [Events.Hidden]: void,
-};
+export interface EventTypes {
+  [Events.HIDDEN]: void;
+}
 
 export const enum OutsideTabIndexBehavior {
-  DisableAllOutsideTabIndex = 'DisableAllTabIndex',
-  PreserveMainViewTabIndex = 'PreserveMainViewTabIndex',
-  PreserveTabIndex = 'PreserveTabIndex',
+  DISABLE_ALL_OUTSIDE_TAB_INDEX = 'DisableAllTabIndex',
+  PRESERVE_MAIN_VIEW_TAB_INDEX = 'PreserveMainViewTabIndex',
+  PRESERVE_TAB_INDEX = 'PreserveTabIndex',
 }

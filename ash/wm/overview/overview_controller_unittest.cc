@@ -4,7 +4,9 @@
 
 #include "ash/wm/overview/overview_controller.h"
 
+#include <array>
 #include <memory>
+#include <vector>
 
 #include "ash/app_list/test/app_list_test_helper.h"
 #include "ash/frame_throttler/frame_throttling_controller.h"
@@ -19,6 +21,8 @@
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
+#include "ash/wallpaper/views/wallpaper_view.h"
+#include "ash/wallpaper/views/wallpaper_widget_controller.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/desks/desks_test_util.h"
 #include "ash/wm/overview/overview_metrics.h"
@@ -32,14 +36,15 @@
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/window_types.h"
 #include "ui/base/hit_test.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/display/screen.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace ash {
 namespace {
@@ -197,7 +202,7 @@ using OverviewControllerTest = AshTestBase;
 // in clamshell mode should not toggle overview.
 TEST_F(OverviewControllerTest,
        PressOverviewKeyDuringWindowDragInClamshellMode) {
-  ASSERT_FALSE(display::Screen::GetScreen()->InTabletMode());
+  ASSERT_FALSE(display::Screen::Get()->InTabletMode());
   std::unique_ptr<aura::Window> dragged_window = CreateTestWindow();
   std::unique_ptr<WindowResizer> resizer =
       CreateWindowResizer(dragged_window.get(), gfx::PointF(), HTCAPTION,
@@ -215,10 +220,9 @@ TEST_F(OverviewControllerTest, OcclusionTestWithSnapshot) {
   Shell::Get()
       ->overview_controller()
       ->set_occlusion_pause_duration_for_end_for_test(base::Milliseconds(500));
-  Shell::Get()->overview_controller()->set_windows_have_snapshot_for_test(true);
   TestOverviewObserver observer(/*should_monitor_animation_state = */ true);
-  ui::ScopedAnimationDurationScaleMode non_zero(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   constexpr gfx::Rect kBounds(0, 0, 100, 100);
   std::unique_ptr<aura::Window> window1(CreateAppWindow(kBounds));
   std::unique_ptr<aura::Window> window2(CreateAppWindow(kBounds));
@@ -280,79 +284,11 @@ TEST_F(OverviewControllerTest, OcclusionTestWithSnapshot) {
   EXPECT_EQ(OcclusionState::VISIBLE, window1->GetOcclusionState());
 }
 
-TEST_F(OverviewControllerTest, OcclusionTestWithoutSnapshot) {
-  using OcclusionState = aura::Window::OcclusionState;
-
-  Shell::Get()
-      ->overview_controller()
-      ->set_occlusion_pause_duration_for_end_for_test(base::Milliseconds(500));
-  Shell::Get()->overview_controller()->set_windows_have_snapshot_for_test(
-      false);
-  TestOverviewObserver observer(/*should_monitor_animation_state = */ true);
-  ui::ScopedAnimationDurationScaleMode non_zero(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
-  constexpr gfx::Rect kBounds(0, 0, 100, 100);
-  std::unique_ptr<aura::Window> window1(CreateAppWindow(kBounds));
-  std::unique_ptr<aura::Window> window2(CreateAppWindow(kBounds));
-  // Wait for show/hide animation because occlusion tracker because
-  // the test depends on opacity.
-  WaitForShowAnimation(window1.get());
-  WaitForShowAnimation(window2.get());
-
-  window1->TrackOcclusionState();
-  window2->TrackOcclusionState();
-  EXPECT_EQ(OcclusionState::OCCLUDED, window1->GetOcclusionState());
-  EXPECT_EQ(OcclusionState::VISIBLE, window2->GetOcclusionState());
-
-  // Enter with windows.
-  EnterOverview();
-  // Tracker is not paused for enter, and items are forced visible.
-  EXPECT_EQ(OcclusionState::VISIBLE, window1->GetOcclusionState());
-  EXPECT_EQ(OcclusionState::VISIBLE, window2->GetOcclusionState());
-
-  observer.WaitForStartingAnimationComplete();
-  EXPECT_EQ(OcclusionState::VISIBLE, window1->GetOcclusionState());
-  EXPECT_EQ(OcclusionState::VISIBLE, window2->GetOcclusionState());
-
-  // Exit with windows.
-  ExitOverview();
-  EXPECT_EQ(OcclusionState::VISIBLE, window1->GetOcclusionState());
-  EXPECT_EQ(OcclusionState::VISIBLE, window2->GetOcclusionState());
-  observer.WaitForEndingAnimationComplete();
-  EXPECT_EQ(OcclusionState::VISIBLE, window1->GetOcclusionState());
-  EXPECT_EQ(OcclusionState::VISIBLE, window2->GetOcclusionState());
-  WaitForOcclusionStateChange(window1.get(), OcclusionState::OCCLUDED);
-
-  observer.Reset();
-
-  // Enter again.
-  EnterOverview();
-  EXPECT_EQ(OcclusionState::VISIBLE, window1->GetOcclusionState());
-  EXPECT_EQ(OcclusionState::VISIBLE, window2->GetOcclusionState());
-  auto* active = window_util::GetActiveWindow();
-  EXPECT_EQ(window2.get(), active);
-
-  observer.WaitForStartingAnimationComplete();
-
-  EXPECT_EQ(OcclusionState::VISIBLE, window1->GetOcclusionState());
-  EXPECT_EQ(OcclusionState::VISIBLE, window2->GetOcclusionState());
-
-  wm::ActivateWindow(window1.get());
-  observer.WaitForEndingAnimationComplete();
-
-  // Windows are visible because tracker is paused (tracker is paused for exit).
-  EXPECT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
-  EXPECT_EQ(OcclusionState::VISIBLE, window2->GetOcclusionState());
-  EXPECT_EQ(OcclusionState::VISIBLE, window1->GetOcclusionState());
-  WaitForOcclusionStateChange(window2.get(), OcclusionState::OCCLUDED);
-  EXPECT_EQ(OcclusionState::VISIBLE, window1->GetOcclusionState());
-}
-
 // Tests that PIP windows are not shown in overview.
 TEST_F(OverviewControllerTest, PipMustNotInOverviewGridTest) {
   gfx::Rect bounds{100, 100};
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(bounds));
+      CreateTestWindowInShell({.bounds = bounds}));
   WaitForShowAnimation(window.get());
   auto* controller = Shell::Get()->overview_controller();
   EnterOverview();
@@ -418,8 +354,8 @@ TEST_F(OverviewControllerTest, ExcludedWindowsHidden) {
 // amount of starts should match the amount of ends). This test verifies that
 // behavior. Tests for both tablet and clamshell mode.
 TEST_F(OverviewControllerTest, ObserverCallsMatch) {
-  ui::ScopedAnimationDurationScaleMode non_zero(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   TestOverviewObserver observer(/*should_monitor_animation_state=*/false);
 
   // Helper which waits for an overview animation to finish.
@@ -497,7 +433,7 @@ TEST_F(OverviewControllerTest, OverviewEnterExitAnimationTablet) {
 
   const gfx::Rect bounds(200, 200);
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(bounds));
+      CreateTestWindowInShell({.bounds = bounds}));
 
   EnterOverview();
   EXPECT_FALSE(observer.last_animation_was_fade());
@@ -524,7 +460,7 @@ TEST_F(OverviewControllerTest, OverviewEnterExitAnimationClamshell) {
 
   const gfx::Rect bounds(200, 200);
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(bounds));
+      CreateTestWindowInShell({.bounds = bounds}));
 
   EnterOverview();
   EXPECT_FALSE(observer.last_animation_was_fade());
@@ -549,13 +485,13 @@ TEST_F(OverviewControllerTest, OverviewExitWhileStillEntering) {
 
   const gfx::Rect bounds(200, 200);
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(bounds));
+      CreateTestWindowInShell({.bounds = bounds}));
   wm::ActivateWindow(window.get());
 
   // Start overview session - set non zero animation duration so overview is
   // started asynchronously.
-  ui::ScopedAnimationDurationScaleMode non_zero(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   EnterOverview();
 
   // Exit to home launcher using fade out animation. This should minimize all
@@ -581,8 +517,8 @@ TEST_F(OverviewControllerTest, CloseWindowDuringAnimation) {
   std::unique_ptr<aura::Window> window2 =
       CreateAppWindow(gfx::Rect(250, 250, 250, 100));
 
-  ui::ScopedAnimationDurationScaleMode non_zero(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   EnterOverview();
 
   // Destroy a window during the enter animation.
@@ -707,8 +643,8 @@ TEST_F(OverviewControllerTest, OverviewEnterExitWhileDeskAnimation) {
   const Desk* desk1 = desks_controller->GetDeskAtIndex(0);
   const Desk* desk2 = desks_controller->GetDeskAtIndex(1);
 
-  ui::ScopedAnimationDurationScaleMode non_zero(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Animate to desk 2. Try to enter overview while animating. On desk animation
   // finished, we shouldn't be in overview.
@@ -734,8 +670,8 @@ TEST_F(OverviewControllerTest, WindowClipping) {
   window->SetProperty(aura::client::kTopViewInset, 20);
   ASSERT_EQ(gfx::Rect(), window->layer()->GetTargetClipRect());
 
-  ui::ScopedAnimationDurationScaleMode non_zero(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Tests that the clipping bounds in overview will clip away the top inset.
   // There is a extra pixel added to account for what seems to be a rounding
@@ -766,7 +702,7 @@ class OverviewVirtualKeyboardTest : public OverviewControllerTest {
     keyboard::test::WaitUntilLoaded();
 
     keyboard_ui_controller()->GetKeyboardWindow()->SetBounds(
-        keyboard::KeyboardBoundsFromRootBounds(
+        keyboard::test::KeyboardBoundsFromRootBounds(
             Shell::GetPrimaryRootWindow()->bounds(), 100));
     // Wait for keyboard window to load.
     base::RunLoop().RunUntilIdle();
@@ -779,21 +715,21 @@ class OverviewVirtualKeyboardTest : public OverviewControllerTest {
 
 TEST_F(OverviewVirtualKeyboardTest, ToggleOverviewModeHidesVirtualKeyboard) {
   keyboard_ui_controller()->ShowKeyboard(false /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   EnterOverview();
 
   // Timeout failure here if the keyboard does not hide.
-  keyboard::WaitUntilHidden();
+  keyboard::test::WaitUntilHidden();
 }
 
 TEST_F(OverviewVirtualKeyboardTest,
        ToggleOverviewModeDoesNotHideLockedVirtualKeyboard) {
   keyboard_ui_controller()->ShowKeyboard(true /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   EnterOverview();
-  EXPECT_FALSE(keyboard::IsKeyboardHiding());
+  EXPECT_FALSE(keyboard::test::IsKeyboardHiding());
 }
 
 // Tests that frame throttling starts and ends accordingly when overview starts
@@ -803,21 +739,23 @@ TEST_F(OverviewControllerTest, FrameThrottling) {
   FrameThrottlingController* frame_throttling_controller =
       Shell::Get()->frame_throttling_controller();
   frame_throttling_controller->AddArcObserver(&observer);
-  const int browser_window_count = 3;
-  const int arc_window_count = 2;
+  constexpr int browser_window_count = 3;
+  constexpr int arc_window_count = 2;
 
   const std::vector<viz::FrameSinkId> ids{{1u, 1u}, {2u, 2u}, {3u, 3u}};
-  std::unique_ptr<aura::Window>
-      created_windows[browser_window_count + arc_window_count];
+  std::array<std::unique_ptr<aura::Window>,
+             browser_window_count + arc_window_count>
+      created_windows;
   for (int i = 0; i < browser_window_count; ++i) {
-    created_windows[i] = CreateAppWindow(gfx::Rect(), AppType::BROWSER);
+    created_windows[i] =
+        CreateAppWindow(gfx::Rect(), chromeos::AppType::BROWSER);
     created_windows[i]->SetEmbedFrameSinkId(ids[i]);
   }
 
   std::vector<aura::Window*> arc_windows(arc_window_count, nullptr);
   for (int i = 0; i < arc_window_count; ++i) {
     created_windows[i + browser_window_count] =
-        CreateAppWindow(gfx::Rect(), AppType::ARC_APP);
+        CreateAppWindow(gfx::Rect(), chromeos::AppType::ARC_APP);
     arc_windows[i] = created_windows[i + browser_window_count].get();
   }
 
@@ -834,6 +772,57 @@ TEST_F(OverviewControllerTest, FrameThrottling) {
   EXPECT_TRUE(frame_throttling_controller->GetFrameSinkIdsToThrottle().empty());
 
   frame_throttling_controller->RemoveArcObserver(&observer);
+}
+
+// Tests that Ash.Overview.DeskCount metric is recorded.
+TEST_F(OverviewControllerTest, RecordsDeskCountMetric) {
+  base::HistogramTester histogram_tester;
+  EnterOverview();
+  ExitOverview();
+  histogram_tester.ExpectUniqueSample("Ash.Overview.DeskCount", 1, 1);
+
+  DesksController::Get()->NewDesk(DesksCreationRemovalSource::kKeyboard);
+  ASSERT_EQ(2u, DesksController::Get()->desks().size());
+  EnterOverview();
+  ExitOverview();
+  histogram_tester.ExpectBucketCount("Ash.Overview.DeskCount", 1, 1);
+  histogram_tester.ExpectBucketCount("Ash.Overview.DeskCount", 2, 1);
+}
+
+class OverviewEnterFromWallpaperTest : public OverviewControllerTest {
+ public:
+  OverviewEnterFromWallpaperTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {features::kEnterOverviewFromWallpaper}, {});
+  }
+  ~OverviewEnterFromWallpaperTest() override = default;
+
+  WallpaperView* wallpaper_view() {
+    return Shell::Get()
+        ->GetPrimaryRootWindowController()
+        ->wallpaper_widget_controller()
+        ->wallpaper_view();
+  }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Tests that the user can enter/exit overview by clicking on the wallpaper.
+TEST_F(OverviewEnterFromWallpaperTest,
+       OverviewEnterExitClamshellFromWallpaper) {
+  std::unique_ptr<aura::Window> window1(
+      CreateTestWindowInShell({.bounds = {400, 400}}));
+
+  ASSERT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
+
+  GetEventGenerator()->set_current_screen_location(
+      wallpaper_view()->GetBoundsInScreen().right_center());
+  GetEventGenerator()->ClickLeftButton();
+  ASSERT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+
+  GetEventGenerator()->ClickLeftButton();
+  ASSERT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
 }
 
 }  // namespace ash

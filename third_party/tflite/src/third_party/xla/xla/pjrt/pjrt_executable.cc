@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/pjrt/pjrt_executable.h"
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,28 +25,36 @@ limitations under the License.
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "google/protobuf/descriptor.h"
 #include "xla/client/executable_build_options.h"
+#include "xla/debug_options_flags.h"
 #include "xla/layout.h"
-#include "xla/pjrt/compile_options.pb.h"
-#include "xla/pjrt/execute_options.pb.h"
 #include "xla/pjrt/pjrt_common.h"
+#include "xla/pjrt/pjrt_layout.h"
+#include "xla/pjrt/proto/compile_options.pb.h"
+#include "xla/pjrt/proto/executable_metadata.pb.h"
+#include "xla/pjrt/proto/execute_options.pb.h"
+#include "xla/service/buffer_assignment.h"
+#include "xla/service/compiler.h"
 #include "xla/service/computation_layout.h"
 #include "xla/service/hlo_cost_analysis.h"
+#include "xla/service/hlo_value.h"
 #include "xla/shape.h"
-#include "xla/shape_layout.h"
 #include "xla/shape_util.h"
-#include "xla/status.h"
-#include "xla/statusor.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace {
@@ -68,19 +77,23 @@ void SetOptionOverride(OptionOverrideProto& option, double value) {
 
 }  // namespace
 
-StatusOr<CompileOptionsProto> CompileOptions::ToProto() const {
+absl::StatusOr<CompileOptionsProto> CompileOptions::ToProto() const {
   CompileOptionsProto output;
   if (argument_layouts.has_value()) {
     for (const auto& layout : *argument_layouts) {
       *output.add_argument_layouts() = layout.ToProto();
     }
   }
+  output.set_allow_in_place_mlir_modification(allow_in_place_mlir_modification);
+  output.set_matrix_unit_operand_precision(matrix_unit_operand_precision);
   output.set_parameter_is_tupled_arguments(parameter_is_tupled_arguments);
   TF_ASSIGN_OR_RETURN(*output.mutable_executable_build_options(),
                       executable_build_options.ToProto());
   output.set_compile_portable_executable(compile_portable_executable);
   output.set_profile_version(profile_version);
-  if (multi_slice_config != nullptr) {
+  if (!serialized_multi_slice_config.empty()) {
+    output.set_serialized_multi_slice_config(serialized_multi_slice_config);
+  } else if (multi_slice_config != nullptr) {
     output.set_serialized_multi_slice_config(multi_slice_config->Serialize());
   }
   for (auto& env_option_override : env_option_overrides) {
@@ -90,38 +103,36 @@ StatusOr<CompileOptionsProto> CompileOptions::ToProto() const {
                env_option_override.second);
   }
 
-  if (target_config.has_value()) {
-    *output.mutable_target_config() = target_config->ToProto();
+  if (gpu_target_config.has_value()) {
+    *output.mutable_target_config() = gpu_target_config->ToProto();
+  }
+  if (compiler_variant.has_value()) {
+    output.set_compiler_variant(*compiler_variant);
   }
   return output;
 }
 
-void CompileOptions::SerializeEnvOptionOverrides(
-    google::protobuf::Map<std::string, xla::OptionOverrideProto>*
-        output_env_option_overrides) const {
-  for (auto& env_option_override : env_option_overrides) {
-    auto& tmp = (*output_env_option_overrides)[env_option_override.first];
-    std::visit([&](const auto& arg) { SetOptionOverride(tmp, arg); },
-               env_option_override.second);
-  }
-}
-
-StatusOr<CompileOptions> CompileOptions::FromProto(
+absl::StatusOr<CompileOptions> CompileOptions::FromProto(
     const CompileOptionsProto& proto) {
+  CompileOptions output;
   if (!proto.serialized_multi_slice_config().empty()) {
-    return Unimplemented(
-        "multi_slice_config not supported in CompileOptions::FromProto.");
+    LOG(WARNING) << "Multi slice config from proto, must deserialize to use.";
+    output.serialized_multi_slice_config =
+        proto.serialized_multi_slice_config();
   }
 
-  CompileOptions output;
   if (proto.argument_layouts_size() > 0) {
     std::vector<Shape> output_argument_layouts;
     output_argument_layouts.reserve(proto.argument_layouts_size());
     for (const auto& argument_layout : proto.argument_layouts()) {
-      output_argument_layouts.emplace_back(Shape(argument_layout));
+      TF_ASSIGN_OR_RETURN(Shape shape, Shape::FromProto(argument_layout));
+      output_argument_layouts.emplace_back(std::move(shape));
     }
     output.argument_layouts = std::move(output_argument_layouts);
   }
+  output.allow_in_place_mlir_modification =
+      proto.allow_in_place_mlir_modification();
+  output.matrix_unit_operand_precision = proto.matrix_unit_operand_precision();
   output.parameter_is_tupled_arguments = proto.parameter_is_tupled_arguments();
   TF_ASSIGN_OR_RETURN(
       ExecutableBuildOptions executable_build_options,
@@ -133,9 +144,26 @@ StatusOr<CompileOptions> CompileOptions::FromProto(
                       LoadEnvOptionOverrides(proto.env_option_overrides()));
 
   if (proto.has_target_config()) {
-    output.target_config = xla::Compiler::TargetConfig(proto.target_config());
+    TF_ASSIGN_OR_RETURN(
+        output.gpu_target_config,
+        Compiler::GpuTargetConfig::FromProto(proto.target_config()));
+  }
+  if (proto.has_compiler_variant()) {
+    output.compiler_variant = proto.compiler_variant();
   }
   return output;
+}
+
+bool IsEarlyExitCompilation(const xla::CompileOptions& compile_options) {
+  for (int i = compile_options.env_option_overrides.size() - 1; i >= 0; --i) {
+    const auto& [k, v] = compile_options.env_option_overrides[i];
+    if (k == "xla_early_exit_with_layouts") {
+      return std::get<bool>(v);
+    }
+  }
+  return compile_options.executable_build_options.has_debug_options() &&
+         compile_options.executable_build_options.debug_options()
+             .xla_early_exit_with_layouts();
 }
 
 MultiSliceConfig::~MultiSliceConfig() = default;
@@ -143,8 +171,8 @@ MultiSliceConfig::~MultiSliceConfig() = default;
 absl::StatusOr<ExecuteOptionsProto> ExecuteOptions::ToProto() const {
   ExecuteOptionsProto proto;
 
-  proto.set_arguments_are_tupled(arguments_are_tupled);
-  proto.set_untuple_result(untuple_result);
+  proto.set_arguments_are_tupled(false);
+  proto.set_untuple_result(true);
   proto.set_launch_id(launch_id);
   if (context != nullptr) {
     return absl::UnimplementedError(
@@ -179,6 +207,12 @@ absl::StatusOr<ExecuteOptionsProto> ExecuteOptions::ToProto() const {
   proto.mutable_non_donatable_input_indices()->Add(
       non_donatable_input_indices.begin(), non_donatable_input_indices.end());
 
+  if (execution_profile != nullptr) {
+    return absl::UnimplementedError(
+        "ExecuteOptions with non-nullptr execution_profile is not "
+        "serializable");
+  }
+
   return proto;
 }
 
@@ -186,8 +220,6 @@ absl::StatusOr<ExecuteOptions> ExecuteOptions::FromProto(
     const ExecuteOptionsProto& proto) {
   ExecuteOptions options;
 
-  options.arguments_are_tupled = proto.arguments_are_tupled();
-  options.untuple_result = proto.untuple_result();
   options.launch_id = proto.launch_id();
   options.strict_shape_checking = proto.strict_shape_checking();
   options.use_major_to_minor_data_layout_for_callbacks =
@@ -213,6 +245,118 @@ absl::StatusOr<ExecuteOptions> ExecuteOptions::FromProto(
       proto.non_donatable_input_indices().end());
 
   return options;
+}
+
+CompiledMemoryStatsProto CompiledMemoryStats::ToProto() const {
+  CompiledMemoryStatsProto proto;
+  proto.set_generated_code_size_in_bytes(generated_code_size_in_bytes);
+  proto.set_argument_size_in_bytes(argument_size_in_bytes);
+  proto.set_output_size_in_bytes(output_size_in_bytes);
+  proto.set_alias_size_in_bytes(alias_size_in_bytes);
+  proto.set_temp_size_in_bytes(temp_size_in_bytes);
+  proto.set_serialized_buffer_assignment(serialized_buffer_assignment);
+  proto.set_host_generated_code_size_in_bytes(
+      host_generated_code_size_in_bytes);
+  proto.set_host_argument_size_in_bytes(host_argument_size_in_bytes);
+  proto.set_host_output_size_in_bytes(host_output_size_in_bytes);
+  proto.set_host_alias_size_in_bytes(host_alias_size_in_bytes);
+  proto.set_host_temp_size_in_bytes(host_temp_size_in_bytes);
+  proto.set_peak_memory_in_bytes(peak_memory_in_bytes);
+  proto.set_total_size_in_bytes(total_size_in_bytes);
+  return proto;
+}
+
+CompiledMemoryStats CompiledMemoryStats::FromProto(
+    const CompiledMemoryStatsProto& proto) {
+  CompiledMemoryStats stats;
+  stats.generated_code_size_in_bytes = proto.generated_code_size_in_bytes();
+  stats.argument_size_in_bytes = proto.argument_size_in_bytes();
+  stats.output_size_in_bytes = proto.output_size_in_bytes();
+  stats.alias_size_in_bytes = proto.alias_size_in_bytes();
+  stats.temp_size_in_bytes = proto.temp_size_in_bytes();
+  stats.serialized_buffer_assignment = proto.serialized_buffer_assignment();
+  stats.host_generated_code_size_in_bytes =
+      proto.host_generated_code_size_in_bytes();
+  stats.host_argument_size_in_bytes = proto.host_argument_size_in_bytes();
+  stats.host_output_size_in_bytes = proto.host_output_size_in_bytes();
+  stats.host_alias_size_in_bytes = proto.host_alias_size_in_bytes();
+  stats.host_temp_size_in_bytes = proto.host_temp_size_in_bytes();
+  stats.peak_memory_in_bytes = proto.peak_memory_in_bytes();
+  stats.total_size_in_bytes = proto.total_size_in_bytes();
+  return stats;
+}
+
+// Recomputes the memory stats from allocations. Why recompute?
+// Firstly, there are cases in which gpu::Executable inherits its allocations
+// from elsewhere, and no buffer assignment is available.
+// Secondly, exec->buffer_assignment()->GetStats() provides the statistics we
+// want, but does not distinguish between device and host memory, and does
+// not account for aliased memory.
+void CompiledMemoryStats::PopulateBufferStatsFromAllocations(
+    absl::Span<const BufferAllocation* const> allocs) {
+  argument_size_in_bytes = 0;
+  output_size_in_bytes = 0;
+  temp_size_in_bytes = 0;
+  alias_size_in_bytes = 0;
+  host_argument_size_in_bytes = 0;
+  host_output_size_in_bytes = 0;
+  host_temp_size_in_bytes = 0;
+  host_alias_size_in_bytes = 0;
+
+  for (const BufferAllocation* alloc : allocs) {
+    // All logical buffers assigned to a buffer allocation share a color.
+    // With buffer assigner's default colorer the color happens to be the
+    // memory space of the underlying HLO value. Callers may choose other
+    // colorers, however, e.g.:
+    // https://github.com/openxla/xla/blob/50c6489cb058881cc65622605c9c55029abebc5b/xla/service/gpu/compile_module_to_llvm_ir.cc#L152
+    // Until buffer allocations provide a stronger guarantee about colors,
+    // we sanity-check that the default coloring behavior was used.
+    int64_t alloc_memory_space = -1;
+    for (const auto& [value, _] : alloc->assigned_buffers()) {
+      const HloPosition& defining_position = value->defining_position();
+      int64_t memory_space = Layout::kDefaultMemorySpace;
+      if (defining_position.shape().has_layout()) {
+        memory_space = defining_position.shape().layout().memory_space();
+      }
+      if (alloc_memory_space == -1) {
+        alloc_memory_space = memory_space;
+      } else {
+        CHECK(alloc_memory_space == memory_space &&
+              "expected same memory space for all assignments in allocation");
+      }
+    }
+
+    bool is_host = alloc_memory_space == Layout::kHostMemorySpace;
+    int64_t size = alloc->size();
+    if (alloc->is_entry_computation_parameter()) {
+      if (is_host) {
+        host_argument_size_in_bytes += size;
+      } else {
+        argument_size_in_bytes += size;
+      }
+      if (alloc->is_parameter_aliased_with_output()) {
+        if (is_host) {
+          host_alias_size_in_bytes += size;
+        } else {
+          alias_size_in_bytes += size;
+        }
+      }
+    }
+    if (alloc->maybe_live_out()) {
+      if (is_host) {
+        host_output_size_in_bytes += size;
+      } else {
+        output_size_in_bytes += size;
+      }
+    }
+    if (alloc->IsPreallocatedTempBuffer()) {
+      if (is_host) {
+        host_temp_size_in_bytes += size;
+      } else {
+        temp_size_in_bytes += size;
+      }
+    }
+  }
 }
 
 void GetOpSharding(std::vector<OpSharding>& out, const OpSharding& sharding) {
@@ -253,7 +397,7 @@ std::optional<std::vector<OpSharding>> PjRtExecutable::GetParameterShardings()
   return out;
 }
 
-StatusOr<std::vector<Shape>> PjRtExecutable::GetOutputShapes() const {
+absl::StatusOr<std::vector<Shape>> PjRtExecutable::GetOutputShapes() const {
   TF_ASSIGN_OR_RETURN(auto modules, GetHloModules());
   std::vector<Shape> output_shapes;
   output_shapes.reserve(modules.size());
@@ -263,7 +407,7 @@ StatusOr<std::vector<Shape>> PjRtExecutable::GetOutputShapes() const {
   return output_shapes;
 }
 
-StatusOr<std::vector<std::vector<PrimitiveType>>>
+absl::StatusOr<std::vector<std::vector<PrimitiveType>>>
 PjRtExecutable::GetOutputElementTypes() const {
   TF_ASSIGN_OR_RETURN(auto output_shapes, GetOutputShapes());
   std::vector<std::vector<PrimitiveType>> output_element_types;
@@ -291,7 +435,7 @@ PjRtExecutable::GetOutputElementTypes() const {
   return output_element_types;
 }
 
-StatusOr<std::vector<std::vector<DimensionVector>>>
+absl::StatusOr<std::vector<std::vector<DimensionVector>>>
 PjRtExecutable::GetOutputDimensions() const {
   TF_ASSIGN_OR_RETURN(auto output_shapes, GetOutputShapes());
   std::vector<std::vector<DimensionVector>> output_dimensions;
@@ -321,7 +465,8 @@ PjRtExecutable::GetOutputDimensions() const {
   return output_dimensions;
 }
 
-StatusOr<std::vector<Layout>> PjRtExecutable::GetParameterLayouts() const {
+absl::StatusOr<std::vector<std::shared_ptr<const PjRtLayout>>>
+PjRtExecutable::GetParameterLayouts() const {
   TF_ASSIGN_OR_RETURN(std::vector<std::shared_ptr<HloModule>> hlo_modules,
                       GetHloModules());
   if (hlo_modules.size() > 1) {
@@ -335,10 +480,18 @@ StatusOr<std::vector<Layout>> PjRtExecutable::GetParameterLayouts() const {
         "from executable.");
   }
   ComputationLayout comp_layout = hlo_modules[0]->entry_computation_layout();
-  return comp_layout.FlattenedParameterLayouts();
+  TF_ASSIGN_OR_RETURN(std::vector<Layout> layouts,
+                      comp_layout.FlattenedParameterLayouts());
+  std::vector<std::shared_ptr<const PjRtLayout>> result;
+  result.reserve(layouts.size());
+  for (const Layout& layout : layouts) {
+    result.push_back(std::make_shared<PjRtLayout>(layout));
+  }
+  return result;
 }
 
-StatusOr<std::vector<Layout>> PjRtExecutable::GetOutputLayouts() const {
+absl::StatusOr<std::vector<std::shared_ptr<const PjRtLayout>>>
+PjRtExecutable::GetOutputLayouts() const {
   TF_ASSIGN_OR_RETURN(std::vector<std::shared_ptr<HloModule>> hlo_modules,
                       GetHloModules());
   if (hlo_modules.size() > 1) {
@@ -352,10 +505,17 @@ StatusOr<std::vector<Layout>> PjRtExecutable::GetOutputLayouts() const {
         "from executable.");
   }
   ComputationLayout comp_layout = hlo_modules[0]->entry_computation_layout();
-  return comp_layout.FlattenedResultLayouts();
+  TF_ASSIGN_OR_RETURN(std::vector<Layout> layouts,
+                      comp_layout.FlattenedResultLayouts());
+  std::vector<std::shared_ptr<const PjRtLayout>> result;
+  result.reserve(layouts.size());
+  for (const Layout& layout : layouts) {
+    result.push_back(std::make_shared<PjRtLayout>(layout));
+  }
+  return result;
 }
 
-StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
+absl::StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
 PjRtExecutableUtil::RunHloCostAnalysis(const PjRtExecutable& executable,
                                        HloCostAnalysis* hlo_cost_analysis) {
   TF_ASSIGN_OR_RETURN(std::vector<std::shared_ptr<HloModule>> modules,
@@ -374,7 +534,7 @@ PjRtExecutableUtil::RunHloCostAnalysis(const PjRtExecutable& executable,
   return RunHloCostAnalysis(modules, hlo_cost_analysis);
 }
 
-StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
+absl::StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
 PjRtExecutableUtil::RunHloCostAnalysis(
     const std::vector<std::shared_ptr<xla::HloModule>>& hlo_modules,
     HloCostAnalysis* hlo_cost_analysis) {
@@ -396,7 +556,7 @@ PjRtExecutableUtil::RunHloCostAnalysis(
   return ret;
 }
 
-StatusOr<std::vector<std::pair<std::string, CompileOptions::OptionOverride>>>
+absl::StatusOr<CompileOptions::EnvironmentOptionOverrides>
 CompileOptions::LoadEnvOptionOverrides(
     const google::protobuf::Map<std::string, xla::OptionOverrideProto>&
         env_option_overrides) {
@@ -430,98 +590,250 @@ CompileOptions::LoadEnvOptionOverrides(
   return result;
 }
 
-Status CompileOptions::ApplyOption(const std::string& key,
-                                   const OptionOverride& value) {
-  if (auto* xla_field = xla::DebugOptions::descriptor()->FindFieldByName(key)) {
-    xla::DebugOptions& debug_options =
-        *executable_build_options.mutable_debug_options();
-    const tsl::protobuf::Reflection* reflection = debug_options.GetReflection();
-    if (!reflection) {
-      return InvalidArgument(
-          "No reflection object associated with xla::DebugOptions.");
-    }
-    if (xla_field->type() == tsl::protobuf::FieldDescriptor::TYPE_BOOL &&
-        std::holds_alternative<bool>(value)) {
-      reflection->SetBool(&debug_options, xla_field, std::get<bool>(value));
-      return OkStatus();
-    } else if (std::holds_alternative<std::string>(value)) {
-      TF_RETURN_IF_ERROR(
-          ApplyOptionFromString(xla_field, std::get<std::string>(value)));
-      return OkStatus();
-    } else if (xla_field->type() ==
-                   tsl::protobuf::FieldDescriptor::TYPE_INT32 &&
-               std::holds_alternative<int64_t>(value)) {
-      reflection->SetInt32(&debug_options, xla_field, std::get<int64_t>(value));
-      return OkStatus();
-    } else if (xla_field->type() ==
-                   tsl::protobuf::FieldDescriptor::TYPE_INT64 &&
-               std::holds_alternative<int64_t>(value)) {
-      reflection->SetInt64(&debug_options, xla_field, std::get<int64_t>(value));
-      return OkStatus();
-    } else if (xla_field->type() ==
-                   tsl::protobuf::FieldDescriptor::TYPE_FLOAT &&
-               std::holds_alternative<double>(value)) {
-      reflection->SetFloat(&debug_options, xla_field, std::get<double>(value));
-      return OkStatus();
-    } else if (xla_field->type() ==
-                   tsl::protobuf::FieldDescriptor::TYPE_DOUBLE &&
-               std::holds_alternative<double>(value)) {
-      reflection->SetDouble(&debug_options, xla_field, std::get<double>(value));
-      return OkStatus();
-    } else {
-      return InvalidArgument(
-          "While setting option %s, '%s' is not a valid %s value.", key,
-          std::visit([](auto&& arg) { return absl::StrCat(arg); }, value),
-          xla_field->type_name());
-    }
+absl::Status ApplyStringOption(const tsl::protobuf::FieldDescriptor* field,
+                               const std::string& value,
+                               xla::DebugOptions& debug_options) {
+  if (field->is_repeated()) {
+    debug_options.GetReflection()->AddString(&debug_options, field, value);
   } else {
+    debug_options.GetReflection()->SetString(&debug_options, field, value);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ApplyInt32Option(const tsl::protobuf::FieldDescriptor* field,
+                              int32_t value, xla::DebugOptions& debug_options) {
+  if (field->is_repeated()) {
+    debug_options.GetReflection()->AddInt32(&debug_options, field, value);
+  } else {
+    debug_options.GetReflection()->SetInt32(&debug_options, field, value);
+  }
+  return absl::OkStatus();
+}
+absl::Status ApplyInt64Option(const tsl::protobuf::FieldDescriptor* field,
+                              int64_t value, xla::DebugOptions& debug_options) {
+  if (field->is_repeated()) {
+    debug_options.GetReflection()->AddInt64(&debug_options, field, value);
+  } else {
+    debug_options.GetReflection()->SetInt64(&debug_options, field, value);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ApplyFloatOption(const tsl::protobuf::FieldDescriptor* field,
+                              float value, xla::DebugOptions& debug_options) {
+  if (field->is_repeated()) {
+    debug_options.GetReflection()->AddFloat(&debug_options, field, value);
+  } else {
+    debug_options.GetReflection()->SetFloat(&debug_options, field, value);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ApplyDoubleOption(const tsl::protobuf::FieldDescriptor* field,
+                               double value, xla::DebugOptions& debug_options) {
+  if (field->is_repeated()) {
+    debug_options.GetReflection()->AddDouble(&debug_options, field, value);
+  } else {
+    debug_options.GetReflection()->SetDouble(&debug_options, field, value);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ApplyBoolOption(const tsl::protobuf::FieldDescriptor* field,
+                             bool value, xla::DebugOptions& debug_options) {
+  if (field->is_repeated()) {
+    debug_options.GetReflection()->AddBool(&debug_options, field, value);
+  } else {
+    debug_options.GetReflection()->SetBool(&debug_options, field, value);
+  }
+  return absl::OkStatus();
+}
+absl::Status ApplyEnumOption(const tsl::protobuf::FieldDescriptor* field,
+                             int value, xla::DebugOptions& debug_options) {
+  if (field->is_repeated()) {
+    debug_options.GetReflection()->AddEnumValue(&debug_options, field, value);
+  } else {
+    debug_options.GetReflection()->SetEnumValue(&debug_options, field, value);
+  }
+  return absl::OkStatus();
+}
+absl::Status ApplyEnumOption(const tsl::protobuf::FieldDescriptor* field,
+                             const tsl::protobuf::EnumValueDescriptor* value,
+                             xla::DebugOptions& debug_options) {
+  if (field->is_repeated()) {
+    debug_options.GetReflection()->AddEnum(&debug_options, field, value);
+  } else {
+    debug_options.GetReflection()->SetEnum(&debug_options, field, value);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status CompileOptions::ApplyOption(const std::string& key,
+                                         const OptionOverride& value) {
+  auto* xla_field = xla::DebugOptions::descriptor()->FindFieldByName(key);
+  if (xla_field == nullptr) {
     return InvalidArgument("No such compile option: '%s'", key);
   }
-}
-
-Status CompileOptions::ApplyAllOptionOverrides() {
-  for (auto& option : env_option_overrides) {
-    TF_RETURN_IF_ERROR(ApplyOption(option.first, option.second));
+  if (xla::GetFlagStatus(key) == xla::FlagStatus::kDeprecated) {
+    LOG(WARNING) << "Compile option '" << key
+                 << "' is deprecated and will not be supported when 6 months "
+                    "deprecation period ends. Check the flag description "
+                    "for more details.";
   }
-  return OkStatus();
-}
-
-Status CompileOptions::ApplyOptionFromString(
-    const tsl::protobuf::FieldDescriptor* field, const std::string& value) {
   xla::DebugOptions& debug_options =
       *executable_build_options.mutable_debug_options();
   const tsl::protobuf::Reflection* reflection = debug_options.GetReflection();
-  if (field->type() == tsl::protobuf::FieldDescriptor::TYPE_STRING) {
-    reflection->SetString(&debug_options, field, value);
-    return OkStatus();
-  } else if (field->type() == tsl::protobuf::FieldDescriptor::TYPE_INT32) {
-    int int_value;
-    if (absl::SimpleAtoi(value, &int_value)) {
-      reflection->SetInt32(&debug_options, field, int_value);
-      return OkStatus();
+  if (reflection == nullptr) {
+    return InvalidArgument(
+        "No reflection object associated with xla::DebugOptions.");
+  }
+  if (xla_field->is_repeated()) {
+    debug_options.GetReflection()->ClearField(&debug_options, xla_field);
+  }
+  if (std::holds_alternative<std::string>(value)) {
+    return ApplyOptionFromString(xla_field, std::get<std::string>(value));
+  }
+  switch (xla_field->type()) {
+    case tsl::protobuf::FieldDescriptor::TYPE_BOOL: {
+      if (std::holds_alternative<bool>(value)) {
+        return ApplyBoolOption(xla_field, std::get<bool>(value), debug_options);
+      }
+      break;
     }
-  } else if (field->type() == tsl::protobuf::FieldDescriptor::TYPE_INT64) {
-    int int_value;
-    if (absl::SimpleAtoi(value, &int_value)) {
-      reflection->SetInt64(&debug_options, field, int_value);
-      return OkStatus();
+    case tsl::protobuf::FieldDescriptor::TYPE_INT32: {
+      if (std::holds_alternative<int64_t>(value)) {
+        int64_t int64_value = std::get<int64_t>(value);
+        if (int64_value >= std::numeric_limits<int32_t>::min() &&
+            int64_value <= std::numeric_limits<int32_t>::max()) {
+          return ApplyInt32Option(xla_field, static_cast<int32_t>(int64_value),
+                                  debug_options);
+        }
+      }
+      break;
     }
-  } else if (field->type() == tsl::protobuf::FieldDescriptor::TYPE_FLOAT) {
-    float float_value;
-    if (absl::SimpleAtof(value, &float_value)) {
-      reflection->SetFloat(&debug_options, field, float_value);
-      return OkStatus();
+    case tsl::protobuf::FieldDescriptor::TYPE_INT64: {
+      if (std::holds_alternative<int64_t>(value)) {
+        return ApplyInt64Option(xla_field, std::get<int64_t>(value),
+                                debug_options);
+      }
+      break;
     }
-  } else if (field->type() == tsl::protobuf::FieldDescriptor::TYPE_BOOL) {
-    bool bvalue = value == "True";
-    if (value == "True" || value == "False") {
-      reflection->SetBool(&debug_options, field, bvalue);
-      return OkStatus();
+    case tsl::protobuf::FieldDescriptor::TYPE_FLOAT: {
+      if (std::holds_alternative<double>(value)) {
+        double double_value = std::get<double>(value);
+        if (double_value >= std::numeric_limits<float>::min() &&
+            double_value <= std::numeric_limits<float>::max()) {
+          return ApplyFloatOption(xla_field, static_cast<float>(double_value),
+                                  debug_options);
+        }
+      }
+      break;
     }
+    case tsl::protobuf::FieldDescriptor::TYPE_DOUBLE: {
+      if (std::holds_alternative<double>(value)) {
+        return ApplyFloatOption(xla_field, std::get<double>(value),
+                                debug_options);
+      }
+      break;
+    }
+    case tsl::protobuf::FieldDescriptor::TYPE_ENUM: {
+      if (std::holds_alternative<int64_t>(value)) {
+        return ApplyEnumOption(xla_field, std::get<int64_t>(value),
+                               debug_options);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  return InvalidArgument(
+      "While setting option %s, '%s' is not a valid %s value.", key,
+      std::visit([](auto&& arg) { return absl::StrCat(arg); }, value),
+      xla_field->type_name());
+}
+
+absl::Status CompileOptions::ApplyAllOptionOverrides() {
+  for (auto& option : env_option_overrides) {
+    TF_RETURN_IF_ERROR(ApplyOption(option.first, option.second));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ApplyOptionFromSingleString(
+    const tsl::protobuf::FieldDescriptor* field, const std::string& value,
+    xla::DebugOptions& debug_options) {
+  switch (field->type()) {
+    case tsl::protobuf::FieldDescriptor::TYPE_STRING:
+      return ApplyStringOption(field, value, debug_options);
+    case tsl::protobuf::FieldDescriptor::TYPE_INT32: {
+      int32_t int_value;
+      if (absl::SimpleAtoi(value, &int_value)) {
+        return ApplyInt32Option(field, int_value, debug_options);
+      }
+      break;
+    }
+    case tsl::protobuf::FieldDescriptor::TYPE_INT64: {
+      int64_t int_value;
+      if (absl::SimpleAtoi(value, &int_value)) {
+        return ApplyInt64Option(field, int_value, debug_options);
+      }
+      break;
+    }
+    case tsl::protobuf::FieldDescriptor::TYPE_FLOAT: {
+      float float_value;
+      if (absl::SimpleAtof(value, &float_value)) {
+        return ApplyFloatOption(field, float_value, debug_options);
+      }
+      break;
+    }
+    case tsl::protobuf::FieldDescriptor::TYPE_DOUBLE: {
+      double double_value;
+      if (absl::SimpleAtod(value, &double_value)) {
+        return ApplyDoubleOption(field, double_value, debug_options);
+      }
+      break;
+    }
+    case tsl::protobuf::FieldDescriptor::TYPE_BOOL: {
+      if (value == "True" || value == "False") {
+        return ApplyBoolOption(field, value == "True", debug_options);
+      }
+      break;
+    }
+    case tsl::protobuf::FieldDescriptor::TYPE_ENUM: {
+      int int_value;
+      if (absl::SimpleAtoi(value, &int_value)) {
+        return ApplyEnumOption(field, int_value, debug_options);
+      }
+      auto enum_desc = field->enum_type()->FindValueByName(value);
+      if (enum_desc != nullptr) {
+        return ApplyEnumOption(field, enum_desc, debug_options);
+      }
+      break;
+    }
+    default:
+      break;
   }
   return InvalidArgument(
       "While setting option %s, '%s' is not a valid %s value.", field->name(),
       value, field->type_name());
+}
+
+absl::Status CompileOptions::ApplyOptionFromString(
+    const tsl::protobuf::FieldDescriptor* field, const std::string& value) {
+  if (!field->is_repeated()) {
+    return ApplyOptionFromSingleString(
+        field, value, *executable_build_options.mutable_debug_options());
+  }
+  if (value.empty()) {
+    return absl::OkStatus();
+  }
+  for (const auto& v : absl::StrSplit(value, ',')) {
+    TF_RETURN_IF_ERROR(ApplyOptionFromSingleString(
+        field, std::string(v),
+        *executable_build_options.mutable_debug_options()));
+  }
+  return absl::OkStatus();
 }
 
 }  // namespace xla

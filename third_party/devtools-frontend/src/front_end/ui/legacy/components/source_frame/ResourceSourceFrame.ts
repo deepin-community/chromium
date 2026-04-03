@@ -1,6 +1,7 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 /*
  * Copyright (C) 2007, 2008 Apple Inc.  All rights reserved.
@@ -31,44 +32,46 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+import '../../legacy.js';
+
 import * as Common from '../../../../core/common/common.js';
 import * as i18n from '../../../../core/i18n/i18n.js';
-import * as FormatterActions from '../../../../entrypoints/formatter_worker/FormatterActions.js';  // eslint-disable-line rulesdir/es_modules_import
+import * as FormatterActions from '../../../../entrypoints/formatter_worker/FormatterActions.js';  // eslint-disable-line @devtools/es-modules-import
 import * as TextUtils from '../../../../models/text_utils/text_utils.js';
 import * as UI from '../../legacy.js';
 
-import resourceSourceFrameStyles from './resourceSourceFrame.css.legacy.js';
+import resourceSourceFrameStyles from './resourceSourceFrame.css.js';
 import {type RevealPosition, SourceFrameImpl, type SourceFrameOptions} from './SourceFrame.js';
 
 const UIStrings = {
   /**
-   *@description Text to find an item
+   * @description Text to find an item
    */
   find: 'Find',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('ui/legacy/components/source_frame/ResourceSourceFrame.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
 export class ResourceSourceFrame extends SourceFrameImpl {
-  private readonly resourceInternal: TextUtils.ContentProvider.ContentProvider;
+  readonly #resource: TextUtils.ContentProvider.ContentProvider;
   readonly #givenContentType: string;
 
   constructor(
       resource: TextUtils.ContentProvider.ContentProvider, givenContentType: string, options?: SourceFrameOptions) {
     const isStreamingProvider = TextUtils.ContentProvider.isStreamingContentProvider(resource);
-    /* eslint-disable @typescript-eslint/explicit-function-return-type */
+
     const lazyContent = isStreamingProvider ?
-        () => resource.requestStreamingContent().then(TextUtils.StreamingContentData.asDeferredContent.bind(null)) :
-        () => resource.requestContent();
+        () => resource.requestStreamingContent().then(TextUtils.StreamingContentData.asContentDataOrError) :
+        () => resource.requestContentData();
     super(lazyContent, options);
-    /* eslint-enable @typescript-eslint/explicit-function-return-type */
+
     this.#givenContentType = givenContentType;
-    this.resourceInternal = resource;
+    this.#resource = resource;
     if (isStreamingProvider) {
       void resource.requestStreamingContent().then(streamingContent => {
         if (!TextUtils.StreamingContentData.isError(streamingContent)) {
-          streamingContent.addEventListener(TextUtils.StreamingContentData.Events.ChunkAdded, () => {
-            void this.setDeferredContent(Promise.resolve(streamingContent.content().asDeferedContent()));
+          streamingContent.addEventListener(TextUtils.StreamingContentData.Events.CHUNK_ADDED, () => {
+            void this.setContentDataOrError(Promise.resolve(streamingContent.content()));
           });
         }
       });
@@ -85,21 +88,21 @@ export class ResourceSourceFrame extends SourceFrameImpl {
   }
 
   get resource(): TextUtils.ContentProvider.ContentProvider {
-    return this.resourceInternal;
+    return this.#resource;
   }
 
   protected override populateTextAreaContextMenu(
       contextMenu: UI.ContextMenu.ContextMenu, lineNumber: number, columnNumber: number): void {
     super.populateTextAreaContextMenu(contextMenu, lineNumber, columnNumber);
-    contextMenu.appendApplicableItems(this.resourceInternal);
+    contextMenu.appendApplicableItems(this.#resource);
   }
 }
 
 export class SearchableContainer extends UI.Widget.VBox {
   private readonly sourceFrame: ResourceSourceFrame;
 
-  constructor(resource: TextUtils.ContentProvider.ContentProvider, contentType: string) {
-    super(true);
+  constructor(resource: TextUtils.ContentProvider.ContentProvider, contentType: string, element?: HTMLElement) {
+    super(element, {useShadowDom: true});
     this.registerRequiredCSS(resourceSourceFrameStyles);
     const simpleContentType = Common.ResourceType.ResourceType.simplifyContentType(contentType);
     const sourceFrame = new ResourceSourceFrame(resource, simpleContentType);
@@ -113,7 +116,7 @@ export class SearchableContainer extends UI.Widget.VBox {
     sourceFrame.setSearchableView(searchableView);
     searchableView.show(this.contentElement);
 
-    const toolbar = new UI.Toolbar.Toolbar('toolbar', this.contentElement);
+    const toolbar = this.contentElement.createChild('devtools-toolbar', 'toolbar');
     void sourceFrame.toolbarItems().then(items => {
       items.map(item => toolbar.appendToolbarItem(item));
     });

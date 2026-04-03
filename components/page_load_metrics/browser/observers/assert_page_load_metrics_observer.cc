@@ -84,6 +84,15 @@ AssertPageLoadMetricsObserver::OnPreviewStart(
 }
 
 PageLoadMetricsObserver::ObservePolicy
+AssertPageLoadMetricsObserver::OnNavigationHandleTimingUpdated(
+    content::NavigationHandle* navigation_handle) {
+  CHECK(started_);
+  CHECK(!committed_);
+
+  return CONTINUE_OBSERVING;
+}
+
+PageLoadMetricsObserver::ObservePolicy
 AssertPageLoadMetricsObserver::OnRedirect(
     content::NavigationHandle* navigation_handle) {
   CHECK(started_);
@@ -185,6 +194,11 @@ AssertPageLoadMetricsObserver::ShouldObserveMimeTypeByDefault(
 }
 
 PageLoadMetricsObserver::ObservePolicy
+AssertPageLoadMetricsObserver::ShouldObserveScheme(const GURL& url) const {
+  return url.SchemeIsHTTPOrHTTPS() ? CONTINUE_OBSERVING : STOP_OBSERVING;
+}
+
+PageLoadMetricsObserver::ObservePolicy
 AssertPageLoadMetricsObserver::OnEnterBackForwardCache(
     const page_load_metrics::mojom::PageLoadTiming& timing) {
   CHECK(committed_);
@@ -273,6 +287,15 @@ void AssertPageLoadMetricsObserver::OnParseStop(
   CHECK(timing.parse_timing->parse_stop.has_value());
 }
 
+void AssertPageLoadMetricsObserver::OnConnectStart(
+    const page_load_metrics::mojom::PageLoadTiming& timing) {}
+void AssertPageLoadMetricsObserver::OnConnectEnd(
+    const page_load_metrics::mojom::PageLoadTiming& timing) {}
+void AssertPageLoadMetricsObserver::OnDomainLookupStart(
+    const page_load_metrics::mojom::PageLoadTiming& timing) {}
+void AssertPageLoadMetricsObserver::OnDomainLookupEnd(
+    const page_load_metrics::mojom::PageLoadTiming& timing) {}
+
 void AssertPageLoadMetricsObserver::OnDomContentLoadedEventStart(
     const page_load_metrics::mojom::PageLoadTiming& timing) {
   CHECK(started_);
@@ -304,6 +327,24 @@ void AssertPageLoadMetricsObserver::OnFirstImagePaintInPage(
 }
 
 void AssertPageLoadMetricsObserver::OnFirstContentfulPaintInPage(
+    const page_load_metrics::mojom::PageLoadTiming& timing) {
+  CHECK(committed_);
+  if (IsPrerendered()) {
+    CHECK(activated_);
+  }
+  CHECK(timing.paint_timing->first_contentful_paint.has_value());
+}
+
+void AssertPageLoadMetricsObserver::OnMonotonicFirstPaintInPage(
+    const page_load_metrics::mojom::PageLoadTiming& timing) {
+  CHECK(committed_);
+  if (IsPrerendered()) {
+    CHECK(activated_);
+  }
+  CHECK(timing.paint_timing->first_paint.has_value());
+}
+
+void AssertPageLoadMetricsObserver::OnMonotonicFirstContentfulPaintInPage(
     const page_load_metrics::mojom::PageLoadTiming& timing) {
   CHECK(committed_);
   if (IsPrerendered()) {
@@ -366,7 +407,7 @@ void AssertPageLoadMetricsObserver::OnUserInput(
   }
 }
 
-void AssertPageLoadMetricsObserver::OnPageInputTimingUpdate(
+void AssertPageLoadMetricsObserver::OnPageEventTimingUpdate(
     uint64_t num_interactions) {
   CHECK(committed_);
   // If prerendered, input events are triggered after activation.
@@ -375,9 +416,10 @@ void AssertPageLoadMetricsObserver::OnPageInputTimingUpdate(
   }
 }
 
-void AssertPageLoadMetricsObserver::OnInputTimingUpdate(
+void AssertPageLoadMetricsObserver::OnEventTimingUpdate(
     content::RenderFrameHost* subframe_rfh,
-    const page_load_metrics::mojom::InputTiming& input_timing_delta) {
+    const std::vector<page_load_metrics::mojom::EventTimingPtr>&
+        event_timings) {
   // This callback is triggered even if there's no input, even before
   // activation.
   CHECK(committed_);
@@ -388,7 +430,8 @@ void AssertPageLoadMetricsObserver::OnRenderFrameDeleted(
   CHECK(started_);
 }
 
-void AssertPageLoadMetricsObserver::OnSubFrameDeleted(int frame_tree_node_id) {
+void AssertPageLoadMetricsObserver::OnSubFrameDeleted(
+    content::FrameTreeNodeId frame_tree_node_id) {
   CHECK(started_);
 }
 

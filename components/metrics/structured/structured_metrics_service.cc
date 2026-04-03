@@ -4,13 +4,30 @@
 
 #include "components/metrics/structured/structured_metrics_service.h"
 
+#include <memory>
+
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "components/metrics/metrics_log.h"
 #include "components/metrics/metrics_service_client.h"
 #include "components/metrics/structured/reporting/structured_metrics_reporting_service.h"
 #include "components/metrics/structured/structured_metrics_features.h"
+#include "components/metrics/structured/structured_metrics_scheduler.h"
 #include "third_party/metrics_proto/system_profile.pb.h"
 
 namespace metrics::structured {
+
+// Controls the minimum number of logs to be stored.
+constexpr size_t kMinLogQueueCount = 10;
+
+// Controls the minimum size of all logs that can be stored in bytes.
+constexpr size_t kMinLogQueueSizeBytes = 300 * 1024;  // 300 KiB
+
+// Controls the maximum size of a single log in bytes.
+constexpr size_t kMaxLogSizeBytes = 1024 * 1024;  // 1 MiB
+
+// Controls the upload interval.
+constexpr base::TimeDelta kUploadInterval = base::Minutes(10);
 
 StructuredMetricsService::StructuredMetricsService(
     MetricsServiceClient* client,
@@ -20,8 +37,7 @@ StructuredMetricsService::StructuredMetricsService(
       // This service is only enabled if both structured metrics and the service
       // flags are enabled.
       structured_metrics_enabled_(
-          base::FeatureList::IsEnabled(metrics::features::kStructuredMetrics) &&
-          base::FeatureList::IsEnabled(kEnabledStructuredMetricsService)),
+          base::FeatureList::IsEnabled(metrics::features::kStructuredMetrics)),
       client_(client) {
   CHECK(client_);
   CHECK(local_state);
@@ -51,9 +67,9 @@ StructuredMetricsService::StructuredMetricsService(
       base::BindRepeating(&StructuredMetricsService::GetUploadTimeInterval,
                           base::Unretained(this));
 
-  const bool fast_startup_for_test = client->ShouldStartUpFastForTesting();
+  const bool fast_startup = client->ShouldStartUpFast();
   scheduler_ = std::make_unique<StructuredMetricsScheduler>(
-      rotate_callback, get_upload_interval_callback, fast_startup_for_test);
+      rotate_callback, get_upload_interval_callback, fast_startup);
 }
 
 StructuredMetricsService::~StructuredMetricsService() {
@@ -96,6 +112,7 @@ void StructuredMetricsService::EnableReporting() {
     return;
   }
   if (!reporting_active()) {
+    log_creation_time_ = base::TimeTicks::Now();
     scheduler_->Start();
   }
   reporting_service_->EnableReporting();
@@ -119,12 +136,12 @@ void StructuredMetricsService::Flush(
     metrics::MetricsLogsEventManager::CreateReason reason) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // The log should not be built if there aren't any events to log.
-  // This is mirroring a check in RotateLogsAndSend.
   if (!recorder_->event_storage()->HasEvents()) {
     return;
   }
-  BuildAndStoreLog(reason);
-  reporting_service_->log_store()->TrimAndPersistUnsentLogs(true);
+
+  recorder_->ProvideEventMetrics(base::BindOnce(
+      &StructuredMetricsService::StoreLog, weak_factory_.GetWeakPtr(), reason));
 }
 
 void StructuredMetricsService::Purge() {
@@ -137,7 +154,7 @@ void StructuredMetricsService::Purge() {
 }
 
 base::TimeDelta StructuredMetricsService::GetUploadTimeInterval() {
-  return base::Seconds(GetUploadInterval());
+  return kUploadInterval;
 }
 
 void StructuredMetricsService::RotateLogsAndSend() {
@@ -150,21 +167,72 @@ void StructuredMetricsService::RotateLogsAndSend() {
     return;
   }
 
+  // If we do not have any logs then nothing to do.
   if (!reporting_service_->log_store()->has_unsent_logs()) {
-    BuildAndStoreLog(metrics::MetricsLogsEventManager::CreateReason::kPeriodic);
+    CreateLogs(metrics::MetricsLogsEventManager::CreateReason::kPeriodic,
+               /*notify_scheduler=*/true);
+    return;
   }
+
+  // If we already have a completed log then we can upload here.
   reporting_service_->Start();
   scheduler_->RotationFinished();
 }
 
-void StructuredMetricsService::BuildAndStoreLog(
-    metrics::MetricsLogsEventManager::CreateReason reason) {
-  ChromeUserMetricsExtension uma_proto;
+void StructuredMetricsService::CreateLogs(
+    metrics::MetricsLogsEventManager::CreateReason reason,
+    bool notify_scheduler) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  recorder_->ProvideEventMetrics(
+      base::BindOnce(&StructuredMetricsService::StoreLogAndStartUpload,
+                     weak_factory_.GetWeakPtr(), reason, notify_scheduler));
+}
+
+void StructuredMetricsService::StoreLog(
+    metrics::MetricsLogsEventManager::CreateReason reason,
+    StructuredDataProto structured_data) {
+  if (structured_data.events_size() == 0) {
+    // If there are no events then we do not need to create a log.
+    return;
+  }
+
+  ChromeUserMetricsExtension uma_proto;
   InitializeUmaProto(uma_proto);
-  recorder_->ProvideEventMetrics(uma_proto);
+
+  uma_proto.mutable_structured_data()->Swap(&structured_data);
+
   const std::string serialized_log = SerializeLog(uma_proto);
   reporting_service_->StoreLog(serialized_log, reason);
+  log_creation_time_ = base::TimeTicks::Now();
+  reporting_service_->log_store()->TrimAndPersistUnsentLogs(true);
+}
+
+void StructuredMetricsService::StoreLogAndStartUpload(
+    metrics::MetricsLogsEventManager::CreateReason reason,
+    bool notify_scheduler,
+    StructuredDataProto structured_data) {
+  ChromeUserMetricsExtension uma_proto;
+  InitializeUmaProto(uma_proto);
+
+  uma_proto.mutable_structured_data()->Swap(&structured_data);
+
+  const std::string serialized_log = SerializeLog(uma_proto);
+  reporting_service_->StoreLog(serialized_log, reason);
+
+  log_creation_time_ = base::TimeTicks::Now();
+
+  // If this callback is set, then run it and return.
+  // It will only be set from tests where we do not want to upload.
+  if (create_log_callback_for_tests_) {
+    std::move(create_log_callback_for_tests_).Run();
+    return;
+  }
+
+  reporting_service_->Start();
+  if (notify_scheduler) {
+    scheduler_->RotationFinished();
+  }
 }
 
 void StructuredMetricsService::Initialize() {
@@ -184,12 +252,21 @@ void StructuredMetricsService::InitializeUmaProto(
     uma_proto.set_product(product);
   }
 
+  recorder_->ProvideLogMetadata(uma_proto);
+
   SystemProfileProto* system_profile = uma_proto.mutable_system_profile();
   metrics::MetricsLog::RecordCoreSystemProfile(client_, system_profile);
+  metrics_providers_.ProvideSystemProfileMetricsWithLogCreationTime(
+      log_creation_time_, uma_proto.mutable_system_profile());
 }
 
 void StructuredMetricsService::RegisterPrefs(PrefRegistrySimple* registry) {
   reporting::StructuredMetricsReportingService::RegisterPrefs(registry);
+}
+
+void StructuredMetricsService::RegisterMetricsProvider(
+    std::unique_ptr<metrics::MetricsProvider> provider) {
+  metrics_providers_.RegisterMetricsProvider(std::move(provider));
 }
 
 void StructuredMetricsService::SetRecorderForTest(
@@ -211,7 +288,9 @@ void StructuredMetricsService::ManualUpload() {
   }
 
   if (!reporting_service_->log_store()->has_unsent_logs()) {
-    BuildAndStoreLog(metrics::MetricsLogsEventManager::CreateReason::kUnknown);
+    CreateLogs(metrics::MetricsLogsEventManager::CreateReason::kUnknown,
+               /*notify_scheduler=*/false);
+    return;
   }
   reporting_service_->Start();
 }
@@ -233,6 +312,12 @@ void StructuredMetricsService::MaybeStartUpload() {
   reporting_service_->Start();
 }
 
+void StructuredMetricsService::SetCreateLogsCallbackInTests(
+    base::OnceClosure callback) {
+  create_log_callback_for_tests_ = std::move(callback);
+}
+
+
 // static:
 std::string StructuredMetricsService::SerializeLog(
     const ChromeUserMetricsExtension& uma_proto) {
@@ -246,9 +331,9 @@ std::string StructuredMetricsService::SerializeLog(
 UnsentLogStore::UnsentLogStoreLimits
 StructuredMetricsService::GetLogStoreLimits() {
   return UnsentLogStore::UnsentLogStoreLimits{
-      .min_log_count = static_cast<size_t>(kMinLogQueueCount.Get()),
-      .min_queue_size_bytes = static_cast<size_t>(kMinLogQueueSizeBytes.Get()),
-      .max_log_size_bytes = static_cast<size_t>(kMaxLogSizeBytes.Get()),
+      .min_log_count = kMinLogQueueCount,
+      .min_queue_size_bytes = kMinLogQueueSizeBytes,
+      .max_log_size_bytes = kMaxLogSizeBytes,
   };
 }
 

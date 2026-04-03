@@ -16,7 +16,7 @@ class Button;
 class View;
 }  // namespace views
 
-constexpr float kToolbarInkDropVisibleOpacity = 0.06f;
+inline constexpr float kToolbarInkDropVisibleOpacity = 0.06f;
 
 // Creates insets for a host view so that when insetting from the host view
 // the resulting mask or inkdrop has the desired inkdrop size.
@@ -28,6 +28,7 @@ SkColor GetToolbarInkDropBaseColor(const views::View* host_view);
 
 // Installs `highlight_generator` and configures the inkdrop for `host` in
 // toolbar. Creates a highlight generator when it's not provided.
+// TODO(crbug.com/467794124): Rename this function.
 void ConfigureInkDropForToolbar(views::Button* host,
                                 std::unique_ptr<views::HighlightPathGenerator>
                                     highlight_generator = nullptr);

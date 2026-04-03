@@ -27,7 +27,7 @@ void CallAPIAndExpectError(v8::Local<v8::Context> context,
   SCOPED_TRACE(base::StringPrintf("Args: `%s`", args));
   constexpr char kTemplate[] = "(function() { chrome.tabs.%s(%s); })";
 
-  v8::Isolate* isolate = context->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
 
   // Just verify some error was thrown. Expecting the exact error message
   // tends to rely too much on our argument spec code, which is tested
@@ -45,12 +45,12 @@ void CallAPIAndExpectError(v8::Local<v8::Context> context,
 
 class TabsHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
  public:
-  TabsHooksDelegateTest() {}
+  TabsHooksDelegateTest() = default;
 
   TabsHooksDelegateTest(const TabsHooksDelegateTest&) = delete;
   TabsHooksDelegateTest& operator=(const TabsHooksDelegateTest&) = delete;
 
-  ~TabsHooksDelegateTest() override {}
+  ~TabsHooksDelegateTest() override = default;
 
   // NativeExtensionBindingsSystemUnittest:
   void SetUp() override {
@@ -75,6 +75,7 @@ class TabsHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
     bindings_system()->UpdateBindingsForContext(script_context_);
   }
   void TearDown() override {
+    messaging_service_->InvalidatePorts(script_context_);
     script_context_ = nullptr;
     extension_ = nullptr;
     messaging_service_.reset();
@@ -83,7 +84,10 @@ class TabsHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
   bool UseStrictIPCMessageSender() override { return true; }
 
   virtual scoped_refptr<const Extension> BuildExtension() {
-    return ExtensionBuilder("foo").Build();
+    // TODO(https://crbug.com/40804030): Update this to use MV3.
+    // SendMessageTester needs to be updated since runtime.sendMessage() now
+    // returns a promise.
+    return ExtensionBuilder("foo").SetManifestVersion(2).Build();
   }
 
   NativeRendererMessagingService* messaging_service() {
@@ -95,7 +99,7 @@ class TabsHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
  private:
   std::unique_ptr<NativeRendererMessagingService> messaging_service_;
 
-  raw_ptr<ScriptContext, ExperimentalRenderer> script_context_ = nullptr;
+  raw_ptr<ScriptContext> script_context_ = nullptr;
   scoped_refptr<const Extension> extension_;
 };
 
@@ -126,27 +130,29 @@ TEST_F(TabsHooksDelegateTest, SendMessage) {
 
   SendMessageTester tester(ipc_message_sender(), script_context(), 0, "tabs");
 
+  // We expect the port to remain OPEN for all these cases, as even when a
+  // callback isn't supplied we return a promise which may be fulfilled with a
+  // response if any of the associated event listeners choose to reply.
   tester.TestSendMessage("1, ''", R"("")",
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
 
   constexpr char kStandardMessage[] = R"({"data":"hello"})";
   tester.TestSendMessage("1, {data: 'hello'}", kStandardMessage,
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("-0, {data: 'hello'}", kStandardMessage,
                          MessageTarget::ForTab(0, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("1, {data: 'hello'}, function() {}", kStandardMessage,
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
                          SendMessageTester::OPEN);
   tester.TestSendMessage("1, {data: 'hello'}, {frameId: null}",
                          kStandardMessage,
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("1, {data: 'hello'}, {frameId: 10}", kStandardMessage,
-                         MessageTarget::ForTab(1, 10),
-                         SendMessageTester::CLOSED);
+                         MessageTarget::ForTab(1, 10), SendMessageTester::OPEN);
   tester.TestSendMessage("1, {data: 'hello'}, {frameId: 10}, function() {}",
                          kStandardMessage, MessageTarget::ForTab(1, 10),
                          SendMessageTester::OPEN);
@@ -161,14 +167,17 @@ TEST_F(TabsHooksDelegateTest, SendRequest) {
 
   SendMessageTester tester(ipc_message_sender(), script_context(), 0, "tabs");
 
+  // We expect the port to remain OPEN for all these cases, as even when a
+  // callback isn't supplied we return a promise which may be fulfilled with a
+  // response if any of the associated event listeners choose to reply.
   tester.TestSendRequest("1, ''", R"("")",
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
 
   constexpr char kStandardMessage[] = R"({"data":"hello"})";
   tester.TestSendRequest("1, {data: 'hello'}", kStandardMessage,
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendRequest("1, {data: 'hello'}, function() {}", kStandardMessage,
                          MessageTarget::ForTab(1, messaging_util::kNoFrameId),
                          SendMessageTester::OPEN);

@@ -5,15 +5,16 @@
 #include "chrome/updater/tag.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
@@ -23,15 +24,42 @@
 #include "base/no_destructor.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/types/cxx23_to_underlying.h"
+#include "base/types/expected.h"
+#include "base/uuid.h"
+#include "build/build_config.h"
 #include "chrome/updater/certificate_tag.h"
+
+#if BUILDFLAG(IS_MAC)
+#include <sys/types.h>
+#include <sys/xattr.h>
+#endif  // BUILDFLAG(IS_MAC)
 
 namespace updater::tagging {
 namespace {
+
+// Magic string used to identify the tag in the binary.
+constexpr uint8_t kTagMagicUtf8[] = {'G', 'a', 'c', 't', '2', '.',
+                                     '0', 'O', 'm', 'a', 'h', 'a'};
+
+// These constants are conceptually cross-platform, but only currently used
+// on Mac.
+#if BUILDFLAG(IS_MAC)
+// Maximum length for the string representation of a tag that can be written
+// into a binary. This is the amount of space that must be reserved in a binary
+// for dynamic tagging, in a file format where tags can only be patched in place
+// rather than inserted, immediately after the magic signature and size bytes.
+// Because binary tag format includes an explicit tag size, no null terminator
+// is included in this count.
+constexpr size_t kMaxTagStringBytes = 8192;
+
+// Maximum length for the binary representation of a tag, including its magic
+// signature and length bytes.
+constexpr size_t kMaxBinaryTagBytes =
+    kMaxTagStringBytes + 2 + sizeof(kTagMagicUtf8);
+#endif  // BUILDFLAG(IS_MAC)
 
 // The name of the bundle being installed. If not specified, the first app's
 // appname is used.
@@ -85,6 +113,13 @@ constexpr std::string_view kTagArgBrowserType = "browser";
 //   "runtime=true&needsadmin=true"
 constexpr std::string_view kTagArgRuntimeMode = "runtime";
 
+// Enrollment token: "etoken" argument in the tag tells the per-machine updater
+// to register the machine to the device management server. The value must be a
+// GUID.
+// Example:
+//   "etoken=5d086552-4514-4dfb-8a3e-337024ec35ac"
+constexpr std::string_view kTagArgErollmentToken = "etoken";
+
 // The list of arguments that are needed for a meta-installer, to
 // indicate which application is being installed. These are stamped
 // inside the meta-installer binary.
@@ -103,10 +138,6 @@ constexpr std::string_view kAppArgInstallerData = "installerdata";
 
 // Character that is disallowed from appearing in the tag.
 constexpr char kDisallowedCharInTag = '/';
-
-// Magic string used to identify the tag in the binary.
-constexpr uint8_t kTagMagicUtf8[] = {'G', 'a', 'c', 't', '2', '.',
-                                     '0', 'O', 'm', 'a', 'h', 'a'};
 
 std::optional<NeedsAdmin> ParseNeedsAdminEnum(std::string_view str) {
   if (base::EqualsCaseInsensitiveASCII("false", str)) {
@@ -200,7 +231,7 @@ ErrorCode ParseBrowserType(std::string_view value, TagArgs& args) {
   }
 
   args.browser_type =
-      browser_type < base::to_underlying(TagArgs::BrowserType::kMax)
+      browser_type < std::to_underlying(TagArgs::BrowserType::kMax)
           ? TagArgs::BrowserType(browser_type)
           : TagArgs::BrowserType::kUnknown;
 
@@ -253,7 +284,7 @@ ErrorCode ParseAppId(std::string_view value, TagArgs& args) {
 }
 
 ErrorCode ParseRuntimeMode(std::string_view value, TagArgs& args) {
-  for (const std::string expected_value : {"true", "persist", "false"}) {
+  for (const std::string_view expected_value : {"true", "persist", "false"}) {
     if (base::EqualsCaseInsensitiveASCII(expected_value, value)) {
       args.runtime_mode = RuntimeModeArgs();
       return ErrorCode::kSuccess;
@@ -261,6 +292,14 @@ ErrorCode ParseRuntimeMode(std::string_view value, TagArgs& args) {
   }
 
   return ErrorCode::kGlobal_RuntimeModeValueIsInvalid;
+}
+
+ErrorCode ParseEnrollmentToken(std::string_view value, TagArgs& args) {
+  if (!base::Uuid::ParseCaseInsensitive(value).is_valid()) {
+    return ErrorCode::kGlobal_EnrollmentTokenValueIsInvalid;
+  }
+  args.enrollment_token = value;
+  return ErrorCode::kSuccess;
 }
 
 // |value| must not be empty.
@@ -272,20 +311,20 @@ using GlobalParseTable = std::map<std::string_view,
                                   CaseInsensitiveASCIICompare>;
 
 const GlobalParseTable& GetTable() {
-  static const base::NoDestructor<GlobalParseTable> instance{{
-      {kTagArgBundleName, &ParseBundleName},
-      {kTagArgInstallationId, &ParseInstallationId},
-      {kTagArgBrandCode, &ParseBrandCode},
-      {kTagArgClientId, &ParseClientId},
-      {kTagArgOmahaExperimentLabels, &ParseOmahaExperimentLabels},
-      {kTagArgReferralId, &ParseReferralId},
-      {kTagArgBrowserType, &ParseBrowserType},
-      {kTagArgLanguage, &ParseLanguage},
-      {kTagArgFlighting, &ParseFlighting},
-      {kTagArgUsageStats, &ParseUsageStats},
-      {kTagArgAppId, &ParseAppId},
-      {kTagArgRuntimeMode, &ParseRuntimeMode},
-  }};
+  static const base::NoDestructor<GlobalParseTable> instance{
+      {{kTagArgBundleName, &ParseBundleName},
+       {kTagArgInstallationId, &ParseInstallationId},
+       {kTagArgBrandCode, &ParseBrandCode},
+       {kTagArgClientId, &ParseClientId},
+       {kTagArgOmahaExperimentLabels, &ParseOmahaExperimentLabels},
+       {kTagArgReferralId, &ParseReferralId},
+       {kTagArgBrowserType, &ParseBrowserType},
+       {kTagArgLanguage, &ParseLanguage},
+       {kTagArgFlighting, &ParseFlighting},
+       {kTagArgUsageStats, &ParseUsageStats},
+       {kTagArgAppId, &ParseAppId},
+       {kTagArgRuntimeMode, &ParseRuntimeMode},
+       {kTagArgErollmentToken, &ParseEnrollmentToken}}};
   return *instance;
 }
 
@@ -504,12 +543,9 @@ ErrorCode ParseTag(std::string_view tag, TagArgs& args) {
 
   const std::vector<std::pair<std::string, std::string>> attributes =
       query_string::Split(tag);
-  for (const auto& attribute : attributes) {
+  for (const auto& [name, value] : attributes) {
     // Attribute names are only ASCII, so no i18n case folding needed.
-    const std::string_view name = attribute.first;
-    const std::string_view value = attribute.second;
-
-    if (global_func_lookup_table.find(name) != global_func_lookup_table.end()) {
+    if (global_func_lookup_table.contains(name)) {
       if (value.empty()) {
         return ErrorCode::kAttributeMustHaveValue;
       }
@@ -518,8 +554,7 @@ ErrorCode ParseTag(std::string_view tag, TagArgs& args) {
       if (result != ErrorCode::kSuccess) {
         return result;
       }
-    } else if ((runtime_mode_func_lookup_table.find(name) !=
-                runtime_mode_func_lookup_table.end()) &&
+    } else if ((runtime_mode_func_lookup_table.contains(name)) &&
                args.runtime_mode) {
       if (value.empty()) {
         return ErrorCode::kAttributeMustHaveValue;
@@ -530,8 +565,7 @@ ErrorCode ParseTag(std::string_view tag, TagArgs& args) {
       if (result != ErrorCode::kSuccess) {
         return result;
       }
-    } else if (app_func_lookup_table.find(name) !=
-               app_func_lookup_table.end()) {
+    } else if (app_func_lookup_table.contains(name)) {
       if (args.apps.empty()) {
         return ErrorCode::kApp_AppIdNotSpecified;
       }
@@ -577,7 +611,7 @@ ErrorCode ParseAppInstallerDataArgs(std::string_view app_installer_data_args,
     }
 
     const auto& func_lookup_table = installer_data_attributes::GetTable();
-    if (func_lookup_table.find(name) == func_lookup_table.end()) {
+    if (!func_lookup_table.contains(name)) {
       return ErrorCode::kUnrecognizedName;
     }
 
@@ -593,7 +627,7 @@ ErrorCode ParseAppInstallerDataArgs(std::string_view app_installer_data_args,
 
 // Checks that |args| does not contain |kDisallowedCharInTag|.
 bool IsValidArgs(std::string_view args) {
-  return !base::Contains(args, kDisallowedCharInTag);
+  return !args.contains(kDisallowedCharInTag);
 }
 
 // Returns a `uint16_t` value as big-endian bytes.
@@ -611,7 +645,7 @@ uint16_t BigEndianReadU16(std::vector<uint8_t>::const_iterator it) {
 
 // Loads up to the last 80K bytes from `filename`.
 std::vector<uint8_t> ReadFileTail(const base::FilePath& filename) {
-  constexpr int64_t kMaxBytesToRead = 81920;  // 80K
+  static constexpr int64_t kMaxBytesToRead = 81920;  // 80K
 
   base::File file(filename, base::File::FLAG_OPEN | base::File::FLAG_READ);
   if (!file.IsValid()) {
@@ -624,13 +658,8 @@ std::vector<uint8_t> ReadFileTail(const base::FilePath& filename) {
       (file_length > bytes_to_read) ? file_length - bytes_to_read : 0;
 
   std::vector<uint8_t> buffer(bytes_to_read);
-  const int num_bytes_read =
-      file.Read(offset, reinterpret_cast<char*>(&buffer[0]), bytes_to_read);
-  if (num_bytes_read != bytes_to_read) {
-    return {};
-  }
-
-  return buffer;
+  return file.ReadAndCheck(offset, base::span(buffer)) ? buffer
+                                                       : std::vector<uint8_t>();
 }
 
 std::string ParseTagBuffer(const std::vector<uint8_t>& tag_buffer) {
@@ -644,18 +673,16 @@ std::string ParseTagBuffer(const std::vector<uint8_t>& tag_buffer) {
 }
 
 std::vector<uint8_t> ReadEntireFile(const base::FilePath& file) {
-  int64_t file_size = 0;
-  if (!base::GetFileSize(file, &file_size)) {
-    LOG(ERROR) << __func__ << ": Could not get file size: " << file << ": "
-               << logging::GetLastSystemErrorCode();
+  std::optional<int64_t> file_size = base::GetFileSize(file);
+  if (!file_size.has_value()) {
+    PLOG(ERROR) << __func__ << ": Could not get file size: " << file;
     return {};
   }
 
-  std::vector<uint8_t> contents(file_size);
+  std::vector<uint8_t> contents(file_size.value());
   if (base::ReadFile(file, reinterpret_cast<char*>(&contents.front()),
                      contents.size()) == -1) {
-    LOG(ERROR) << __func__ << ": Could not read file: " << file << ": "
-               << logging::GetLastSystemErrorCode();
+    PLOG(ERROR) << __func__ << ": Could not read file: " << file;
     return {};
   }
   return contents;
@@ -773,8 +800,12 @@ std::ostream& operator<<(std::ostream& os, const ErrorCode& error_code) {
       return os << "ErrorCode::kGlobal_UsageStatsValueIsInvalid";
     case ErrorCode::kGlobal_RuntimeModeValueIsInvalid:
       return os << "ErrorCode::kGlobal_RuntimeModeValueIsInvalid";
+    case ErrorCode::kGlobal_EnrollmentTokenValueIsInvalid:
+      return os << "ErrorCode::kGlobal_EnrollmentTokenValueIsInvalid";
     case ErrorCode::kRuntimeMode_NeedsAdminValueIsInvalid:
       return os << "ErrorCode::kRuntimeMode_NeedsAdminValueIsInvalid";
+    case ErrorCode::kTagNotFound:
+      return os << "ErrorCode::kTagNotFound";
   }
 }
 
@@ -961,11 +992,75 @@ bool BinaryWriteTag(const base::FilePath& in_file,
     out_file = in_file;
   }
   if (!base::WriteFile(out_file, *new_contents)) {
-    LOG(ERROR) << __func__ << "Error while writing updated file: " << out_file
-               << ": " << logging::GetLastSystemErrorCode();
+    PLOG(ERROR) << __func__ << "Error while writing updated file: " << out_file;
     return false;
   }
   return true;
 }
+
+#if BUILDFLAG(IS_MAC)
+
+base::expected<TagArgs, ErrorCode> ReadTagFromApplicationInstanceXattr(
+    const base::FilePath& path) {
+  if (path.empty()) {
+    VLOG(0) << "no path in ReadTagFromApplicationInstanceXattr";
+    return base::unexpected(ErrorCode::kTagNotFound);
+  }
+
+  std::vector<uint8_t> raw_tag(kMaxBinaryTagBytes, 0);
+  ssize_t got_bytes =
+      getxattr(path.value().c_str(), "com.apple.application-instance",
+               raw_tag.data(), kMaxBinaryTagBytes, 0, 0);
+  // If a C API says it wrote past the end of a buffer, believe it.
+  CHECK(got_bytes <= static_cast<ssize_t>(kMaxBinaryTagBytes))
+      << "getxattr wrote " << got_bytes << " bytes into a "
+      << kMaxBinaryTagBytes << " byte buffer!";
+  if (got_bytes < 0) {
+    VPLOG(1) << "getxattr could not read com.apple.application-instance on "
+             << path;
+    return base::unexpected(ErrorCode::kTagNotFound);
+  }
+  std::vector<uint8_t>::iterator tag_data_begin = raw_tag.begin();
+  std::string tag_string = ReadTag(tag_data_begin, tag_data_begin + got_bytes);
+  if (tag_string.empty()) {
+    return base::unexpected(ErrorCode::kTagNotFound);
+  }
+  TagArgs value;
+  ErrorCode code = Parse(tag_string, {}, value);
+  if (code != ErrorCode::kSuccess) {
+    return base::unexpected(code);
+  }
+  return value;
+}
+
+bool WriteTagStringToApplicationInstanceXattr(const base::FilePath& path,
+                                              const std::string& tag_string) {
+  if (path.empty()) {
+    VLOG(0) << "no path provided when writing xattr tag";
+    return false;
+  }
+  if (tag_string.size() > kMaxTagStringBytes) {
+    VLOG(1) << "xattr tag too big, will be truncated when read";
+    // warning only; continue
+  }
+  if (tag_string.empty()) {
+    VLOG(1) << "writing empty xattr tag";
+    // warning only; continue
+  }
+  std::vector<uint8_t> tag_bytes = GetTagFromTagString(tag_string);
+  if (tag_bytes.empty()) {
+    VLOG(0) << "could not create xattr tag";
+    return false;
+  }
+  int result = setxattr(path.value().c_str(), "com.apple.application-instance",
+                        tag_bytes.data(), tag_bytes.size(), 0, 0);
+  if (result) {
+    VPLOG(0) << "setxattr failed on " << path;
+    return false;
+  }
+  return true;
+}
+
+#endif  // BUILDFLAG(IS_MAC)
 
 }  // namespace updater::tagging

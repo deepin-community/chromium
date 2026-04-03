@@ -1,60 +1,60 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as i18n from '../../core/i18n/i18n.js';
-import * as UI from '../../ui/legacy/legacy.js';
 import type * as Protocol from '../../generated/protocol.js';
+import * as UI from '../../ui/legacy/legacy.js';
 
 import {PlayerEventsView} from './EventDisplayTable.js';
 import {PlayerEventsTimeline} from './EventTimelineView.js';
-import {type TriggerHandler} from './MainView.js';
-import {type PlayerEvent} from './MediaModel.js';
+import type {TriggerHandler} from './MainView.js';
+import type {PlayerEvent} from './MediaModel.js';
 import {PlayerMessagesView} from './PlayerMessagesView.js';
 import {PlayerPropertiesView} from './PlayerPropertiesView.js';
 
 const UIStrings = {
   /**
-   *@description Title of the 'Properties' tool in the sidebar of the elements tool
+   * @description Title of the 'Properties' tool in the sidebar of the elements tool
    */
   properties: 'Properties',
   /**
-   *@description Button text for viewing properties.
+   * @description Button text for viewing properties.
    */
   playerProperties: 'Player properties',
   /**
-   *@description Button text for viewing events.
+   * @description Button text for viewing events.
    */
   events: 'Events',
   /**
-   *@description Hover text for the Events button.
+   * @description Hover text for the Events button.
    */
   playerEvents: 'Player events',
   /**
-   *@description Text in Network Item View of the Network panel
+   * @description Text in Network Item View of the Network panel
    */
   messages: 'Messages',
   /**
-   *@description Column header for messages view.
+   * @description Column header for messages view.
    */
   playerMessages: 'Player messages',
   /**
-   *@description Title for the timeline tab.
+   * @description Title for the timeline tab.
    */
   timeline: 'Timeline',
   /**
-   *@description Hovertext for Timeline tab.
+   * @description Hovertext for Timeline tab.
    */
   playerTimeline: 'Player timeline',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/media/PlayerDetailView.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
 export const enum PlayerDetailViewTabs {
-  Events = 'events',
-  Properties = 'properties',
-  Messages = 'messages',
-  Timeline = 'timeline',
+  EVENTS = 'events',
+  PROPERTIES = 'properties',
+  MESSAGES = 'messages',
+  TIMELINE = 'timeline',
 }
 
 export class PlayerDetailView extends UI.TabbedPane.TabbedPane implements TriggerHandler {
@@ -72,15 +72,15 @@ export class PlayerDetailView extends UI.TabbedPane.TabbedPane implements Trigge
     this.timelineView = new PlayerEventsTimeline();
 
     this.appendTab(
-        PlayerDetailViewTabs.Properties, i18nString(UIStrings.properties), this.propertyView,
+        PlayerDetailViewTabs.PROPERTIES, i18nString(UIStrings.properties), this.propertyView,
         i18nString(UIStrings.playerProperties));
     this.appendTab(
-        PlayerDetailViewTabs.Events, i18nString(UIStrings.events), this.eventView, i18nString(UIStrings.playerEvents));
+        PlayerDetailViewTabs.EVENTS, i18nString(UIStrings.events), this.eventView, i18nString(UIStrings.playerEvents));
     this.appendTab(
-        PlayerDetailViewTabs.Messages, i18nString(UIStrings.messages), this.messageView,
+        PlayerDetailViewTabs.MESSAGES, i18nString(UIStrings.messages), this.messageView,
         i18nString(UIStrings.playerMessages));
     this.appendTab(
-        PlayerDetailViewTabs.Timeline, i18nString(UIStrings.timeline), this.timelineView,
+        PlayerDetailViewTabs.TIMELINE, i18nString(UIStrings.timeline), this.timelineView,
         i18nString(UIStrings.playerTimeline));
   }
 

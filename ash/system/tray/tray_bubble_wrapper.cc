@@ -29,10 +29,10 @@ TrayBubbleWrapper::~TrayBubbleWrapper() {
     // transient children before destruction.
     auto* transient_manager = ::wm::TransientWindowManager::GetOrCreate(
         bubble_widget_->GetNativeWindow());
-    if (transient_manager) {
-      for (aura::Window* window : transient_manager->transient_children()) {
-        transient_manager->RemoveTransientChild(window);
-      }
+    while (transient_manager &&
+           !transient_manager->transient_children().empty()) {
+      transient_manager->RemoveTransientChild(
+          transient_manager->transient_children().back());
     }
     bubble_widget_->RemoveObserver(this);
     bubble_widget_->Close();
@@ -55,7 +55,7 @@ void TrayBubbleWrapper::ShowBubble(
   bubble_view_->InitializeAndShowBubble();
 
   // We need to explicitly dismiss app list bubble here due to b/1186479.
-  if (!display::Screen::GetScreen()->InTabletMode()) {
+  if (!display::Screen::Get()->InTabletMode()) {
     Shell::Get()->app_list_controller()->DismissAppList();
   }
 

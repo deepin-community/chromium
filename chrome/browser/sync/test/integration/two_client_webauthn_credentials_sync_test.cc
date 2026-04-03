@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/test/scoped_feature_list.h"
+#include "base/location.h"
 #include "chrome/browser/sync/test/integration/multi_client_status_change_checker.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_integration_test_util.h"
@@ -10,7 +10,6 @@
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/sync/test/integration/webauthn_credentials_helper.h"
 #include "chrome/browser/ui/browser.h"
-#include "components/sync/base/features.h"
 #include "components/sync/protocol/entity_specifics.pb.h"
 #include "components/sync/protocol/webauthn_credential_specifics.pb.h"
 #include "components/webauthn/core/browser/passkey_model.h"
@@ -23,19 +22,35 @@ using webauthn_credentials_helper::AwaitAllModelsMatch;
 using webauthn_credentials_helper::GetModel;
 using webauthn_credentials_helper::NewPasskey;
 
-class TwoClientWebAuthnCredentialsSyncTest : public SyncTest {
+class TwoClientWebAuthnCredentialsSyncTest
+    : public SyncTest,
+      public testing::WithParamInterface<SyncTest::SetupSyncMode> {
  public:
-  TwoClientWebAuthnCredentialsSyncTest() : SyncTest(TWO_CLIENT) {}
+  TwoClientWebAuthnCredentialsSyncTest() : SyncTest(TWO_CLIENT) {
+    if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
+      scoped_feature_list_.InitAndEnableFeature(
+          syncer::kReplaceSyncPromosWithSignInPromos);
+    }
+  }
   ~TwoClientWebAuthnCredentialsSyncTest() override = default;
 
-  base::test::ScopedFeatureList scoped_feature_list_{
-      syncer::kSyncWebauthnCredentials};
+  SyncTest::SetupSyncMode GetSetupSyncMode() const override {
+    return GetParam();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(TwoClientWebAuthnCredentialsSyncTest,
+INSTANTIATE_TEST_SUITE_P(,
+                         TwoClientWebAuthnCredentialsSyncTest,
+                         GetSyncTestModes(),
+                         testing::PrintToStringParamName());
+
+IN_PROC_BROWSER_TEST_P(TwoClientWebAuthnCredentialsSyncTest,
                        E2E_ENABLED(AddAndDelete)) {
-  ResetSyncForPrimaryAccount();
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+  ASSERT_TRUE(ResetSyncForPrimaryAccount());
+  ASSERT_TRUE(SetupSync());
 
   webauthn::PasskeyModel& model0 = GetModel(0);
   EXPECT_EQ(model0.GetAllSyncIds().size(), 0u);
@@ -51,7 +66,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientWebAuthnCredentialsSyncTest,
   ASSERT_TRUE(AwaitAllModelsMatch());
   EXPECT_EQ(model1.GetAllSyncIds().size(), 2u);
 
-  ASSERT_TRUE(model1.DeletePasskey(passkey0.credential_id()));
+  ASSERT_TRUE(model1.DeletePasskey(passkey0.credential_id(), FROM_HERE));
   ASSERT_TRUE(AwaitAllModelsMatch());
   EXPECT_EQ(model1.GetAllSyncIds().size(), 1u);
 }

@@ -9,7 +9,7 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
 #include "components/policy/core/common/cloud/policy_invalidation_scope.h"
 #include "components/policy/policy_export.h"
@@ -102,6 +102,8 @@ class POLICY_EXPORT CloudPolicyCore {
   // Shuts down the cloud connection.
   void Disconnect();
 
+  bool IsConnected() const { return client() && service(); }
+
   // Starts a remote commands service, with the provided factory. Will attempt
   // to fetch commands immediately, thus requiring the cloud policy client to
   // be registered.
@@ -133,6 +135,13 @@ class POLICY_EXPORT CloudPolicyCore {
   // Initializes the cloud connection using injected |service| and |client|.
   void ConnectForTesting(std::unique_ptr<CloudPolicyService> service,
                          std::unique_ptr<CloudPolicyClient> client);
+
+  scoped_refptr<base::SequencedTaskRunner> GetTaskRunner() {
+    return task_runner_;
+  }
+
+  const std::string& policy_type() const { return policy_type_; }
+  const std::string& settings_entity_id() const { return settings_entity_id_; }
 
  private:
   // Updates the refresh scheduler on refresh delay changes.

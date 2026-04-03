@@ -7,6 +7,7 @@
 #include <limits>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "cc/paint/paint_op_writer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
@@ -70,12 +71,11 @@ TestOptionsProvider::TestOptionsProvider()
                          can_use_lcd_text_,
                          context_supports_distance_field_text_,
                          max_texture_size_),
-      deserialize_options_(this,
-                           &service_paint_cache_,
-                           &strike_client_,
-                           &scratch_buffer_,
-                           true,
-                           nullptr) {}
+      deserialize_options_{.transfer_cache = this,
+                           .paint_cache = &service_paint_cache_,
+                           .strike_client = &strike_client_,
+                           .scratch_buffer = scratch_buffer_,
+                           .is_privileged = true} {}
 
 TestOptionsProvider::~TestOptionsProvider() = default;
 
@@ -113,14 +113,16 @@ ImageProvider::ScopedResult TestOptionsProvider::GetRasterContent(
   // Create a transfer cache entry for this image.
   ClientImageTransferCacheEntry cache_entry(
       ClientImageTransferCacheEntry::Image(&bitmap.pixmap()),
-      false /* needs_mips */, std::nullopt);
+      false /* needs_mips */, gfx::HDRMetadata());
   const uint32_t data_size = cache_entry.SerializedSize();
   auto data = PaintOpWriter::AllocateAlignedBuffer<uint8_t>(data_size);
-  if (!cache_entry.Serialize(base::span<uint8_t>(data.get(), data_size))) {
+  if (!cache_entry.Serialize(
+          UNSAFE_TODO(base::span<uint8_t>(data.get(), data_size)))) {
     return ScopedResult();
   }
 
-  CreateEntryDirect(entry_key, base::span<uint8_t>(data.get(), data_size));
+  CreateEntryDirect(entry_key,
+                    UNSAFE_TODO(base::span<uint8_t>(data.get(), data_size)));
 
   return ScopedResult(DecodedDrawImage(
       image_id, nullptr, SkSize::MakeEmpty(), draw_image.scale(),

@@ -34,6 +34,8 @@ class TabCaptureRegistry : public BrowserContextKeyedAPI,
                            public ExtensionRegistryObserver,
                            public MediaCaptureDevicesDispatcher::Observer {
  public:
+  explicit TabCaptureRegistry(content::BrowserContext* context);
+  ~TabCaptureRegistry() override;
   TabCaptureRegistry(const TabCaptureRegistry&) = delete;
   TabCaptureRegistry& operator=(const TabCaptureRegistry&) = delete;
 
@@ -45,7 +47,7 @@ class TabCaptureRegistry : public BrowserContextKeyedAPI,
 
   // List all pending, active and stopped capture requests.
   void GetCapturedTabs(const std::string& extension_id,
-                       base::Value::List* capture_info_list) const;
+                       base::ListValue* capture_info_list) const;
 
   // Add a tab capture request to the registry when a stream is requested
   // through the API and create a randomly generated device id after user
@@ -84,9 +86,6 @@ class TabCaptureRegistry : public BrowserContextKeyedAPI,
  private:
   friend class BrowserContextKeyedAPIFactory<TabCaptureRegistry>;
   class LiveRequest;
-
-  explicit TabCaptureRegistry(content::BrowserContext* context);
-  ~TabCaptureRegistry() override;
 
   // Used by BrowserContextKeyedAPI.
   static const char* service_name() {

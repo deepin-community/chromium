@@ -33,8 +33,9 @@ import itertools
 import _re2
 
 
-class error(Exception):
-  pass
+# pybind11 translates C++ exceptions to Python exceptions.
+# We use that same Python exception class for consistency.
+error = _re2.Error
 
 
 class Options(_re2.RE2.Options):
@@ -63,7 +64,7 @@ def compile(pattern, options=None):
     if options:
       raise error('pattern is already compiled, so '
                   'options may not be specified')
-    pattern = pattern._pattern
+    return pattern
   options = options or Options()
   values = tuple(getattr(options, name) for name in Options.NAMES)
   return _Regexp._make(pattern, values)

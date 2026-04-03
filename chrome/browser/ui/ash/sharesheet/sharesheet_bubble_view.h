@@ -12,7 +12,7 @@
 #include "chrome/browser/sharesheet/sharesheet_types.h"
 #include "components/services/app_service/public/cpp/intent.h"
 #include "ui/display/display_observer.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/widget/widget.h"
 
@@ -66,8 +66,6 @@ class SharesheetBubbleView : public views::BubbleDialogDelegateView,
   void CloseBubble(views::Widget::ClosedReason reason);
 
  private:
-  class SharesheetParentWidgetObserver;
-
   // ui::AcceleratorTarget:
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
 
@@ -75,11 +73,12 @@ class SharesheetBubbleView : public views::BubbleDialogDelegateView,
   bool OnKeyPressed(const ui::KeyEvent& event) override;
 
   // views::WidgetDelegate:
-  std::unique_ptr<views::NonClientFrameView> CreateNonClientFrameView(
+  std::unique_ptr<views::FrameView> CreateFrameView(
       views::Widget* widget) override;
 
   // views::BubbleDialogDelegateView:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
   // display::DisplayObserver:
@@ -93,6 +92,9 @@ class SharesheetBubbleView : public views::BubbleDialogDelegateView,
   // launching. Creates the bubble and shows it to the user.
   void SetUpAndShowBubble();
 
+  // Returns the designed bubble widget's bounds.
+  gfx::Rect GetDesiredBubbleBounds();
+
   std::unique_ptr<views::View> MakeScrollableTargetView(
       std::vector<TargetInfo> targets);
   void PopulateLayoutsWithTargets(std::vector<TargetInfo> targets,
@@ -101,16 +103,12 @@ class SharesheetBubbleView : public views::BubbleDialogDelegateView,
   void ExpandButtonPressed();
   void AnimateToExpandedState();
   void TargetButtonPressed(TargetInfo target);
-  void UpdateAnchorPosition();
   void SetToDefaultBubbleSizing();
   void ShowWidgetWithAnimateFadeIn();
-  void CloseWidgetWithAnimateFadeOut(views::Widget::ClosedReason closed_reason);
   void CloseWidgetWithReason(views::Widget::ClosedReason closed_reason);
 
-  // Owns this class.
-  raw_ptr<::sharesheet::SharesheetServiceDelegator, DanglingUntriaged>
-      delegator_;
-  std::u16string active_target_;
+  raw_ptr<::sharesheet::SharesheetServiceDelegator> delegator_;
+  std::optional<::sharesheet::ShareActionType> active_share_action_type_;
   apps::IntentPtr intent_;
   ::sharesheet::DeliveredCallback delivered_callback_;
   ::sharesheet::CloseCallback close_callback_;
@@ -118,7 +116,6 @@ class SharesheetBubbleView : public views::BubbleDialogDelegateView,
   int width_ = 0;
   int height_ = 0;
   bool show_expanded_view_ = false;
-  bool is_bubble_closing_ = false;
   bool close_on_deactivate_ = true;
   bool escape_pressed_ = false;
 
@@ -139,8 +136,6 @@ class SharesheetBubbleView : public views::BubbleDialogDelegateView,
   raw_ptr<views::Separator> expanded_view_separator_ = nullptr;
   raw_ptr<views::View> parent_view_ = nullptr;
   raw_ptr<SharesheetExpandButton> expand_button_ = nullptr;
-
-  std::unique_ptr<SharesheetParentWidgetObserver> parent_widget_observer_;
 };
 
 }  // namespace sharesheet

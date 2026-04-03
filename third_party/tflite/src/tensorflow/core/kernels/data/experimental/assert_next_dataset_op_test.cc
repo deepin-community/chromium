@@ -11,6 +11,11 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/kernels/data/experimental/assert_next_dataset_op.h"
 
+#include <cstdint>
+#include <memory>
+#include <utility>
+#include <vector>
+
 #include "tensorflow/core/data/dataset_test_base.h"
 #include "tensorflow/core/kernels/data/range_dataset_op.h"
 #include "tensorflow/core/kernels/data/take_dataset_op.h"
@@ -29,7 +34,7 @@ class AssertNextDatasetParams : public DatasetParams {
                           const std::vector<tstring>& transformations,
                           DataTypeVector output_dtypes,
                           std::vector<PartialTensorShape> output_shapes,
-                          string node_name)
+                          std::string node_name)
       : DatasetParams(std::move(output_dtypes), std::move(output_shapes),
                       std::move(node_name)),
         transformations_(transformations) {
@@ -45,20 +50,21 @@ class AssertNextDatasetParams : public DatasetParams {
                                   transformations_)};
   }
 
-  Status GetInputNames(std::vector<string>* input_names) const override {
+  absl::Status GetInputNames(
+      std::vector<std::string>* input_names) const override {
     input_names->reserve(input_dataset_params_.size() + 1);
     input_names->emplace_back(AssertNextDatasetOp::kInputDataset);
     input_names->emplace_back(AssertNextDatasetOp::kTransformations);
     return absl::OkStatus();
   }
 
-  Status GetAttributes(AttributeVector* attr_vector) const override {
+  absl::Status GetAttributes(AttributeVector* attr_vector) const override {
     *attr_vector = {{AssertNextDatasetOp::kOutputShapes, output_shapes_},
                     {AssertNextDatasetOp::kOutputTypes, output_dtypes_}};
     return absl::OkStatus();
   }
 
-  string dataset_type() const override {
+  std::string dataset_type() const override {
     return AssertNextDatasetOp::kDatasetType;
   }
 

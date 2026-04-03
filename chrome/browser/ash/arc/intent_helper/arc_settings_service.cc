@@ -7,27 +7,22 @@
 #include <string>
 #include <string_view>
 
-#include "ash/components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/mojom/backup_settings.mojom.h"
-#include "ash/components/arc/mojom/intent_helper.mojom.h"
-#include "ash/components/arc/mojom/pip.mojom.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/system/privacy_hub/privacy_hub_controller.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/gtest_prod_util.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/singleton.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
@@ -37,9 +32,9 @@
 #include "chrome/browser/ash/settings/stats_reporting_controller.h"
 #include "chrome/browser/ash/system/timezone_resolver_manager.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state.h"
@@ -48,8 +43,16 @@
 #include "chromeos/ash/components/network/onc/network_onc_utils.h"
 #include "chromeos/ash/components/network/proxy/proxy_config_service_impl.h"
 #include "chromeos/ash/components/settings/timezone_settings.h"
-#include "components/arc/common/intent_helper/arc_intent_helper_package.h"
-#include "components/arc/intent_helper/arc_intent_helper_bridge.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_bridge.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_package.h"
+#include "chromeos/ash/experiences/arc/mojom/backup_settings.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/intent_helper.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/pip.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/live_caption/pref_names.h"
 #include "components/onc/onc_pref_names.h"
@@ -60,8 +63,8 @@
 #include "components/proxy_config/proxy_config_pref_names.h"
 #include "components/proxy_config/proxy_prefs.h"
 #include "net/base/url_util.h"
-#include "net/proxy_resolution/proxy_bypass_rules.h"
 #include "net/proxy_resolution/proxy_config.h"
+#include "net/proxy_resolution/proxy_host_matching_rules.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/base_type_conversion.h"
@@ -194,8 +197,7 @@ bool GetHttpProxyServer(const ProxyConfigDictionary* proxy_config_dict,
   return !host->empty() && *port;
 }
 
-bool IsProxyAutoDetectionConfigured(
-    const base::Value::Dict& proxy_config_dict) {
+bool IsProxyAutoDetectionConfigured(const base::DictValue& proxy_config_dict) {
   ProxyConfigDictionary dict(proxy_config_dict.Clone());
   ProxyPrefs::ProxyMode mode;
   dict.GetMode(&mode);
@@ -234,8 +236,13 @@ class ArcSettingsServiceImpl : public TimezoneSettings::Observer,
                                public ConnectionObserver<mojom::AppInstance>,
                                public ash::NetworkStateHandlerObserver {
  public:
-  ArcSettingsServiceImpl(Profile* profile,
-                         ArcBridgeService* arc_bridge_service);
+  // `local_state` and `application_locale_storage` must be non-null and must
+  // outlive `this`.
+  ArcSettingsServiceImpl(
+      PrefService* local_state,
+      const ApplicationLocaleStorage* application_locale_storage,
+      Profile* profile,
+      ArcBridgeService* arc_bridge_service);
   ArcSettingsServiceImpl(const ArcSettingsServiceImpl&) = delete;
   ArcSettingsServiceImpl& operator=(const ArcSettingsServiceImpl&) = delete;
   ~ArcSettingsServiceImpl() override;
@@ -291,6 +298,7 @@ class ArcSettingsServiceImpl : public TimezoneSettings::Observer,
   void SyncTimeZoneByGeolocation() const;
   void SyncUse24HourClock() const;
   void SyncUserGeolocation() const;
+  void SyncUserGeolocationAccuracy() const;
 
   // Resets Android's font scale to the default value.
   void ResetFontScaleToDefault() const;
@@ -330,10 +338,13 @@ class ArcSettingsServiceImpl : public TimezoneSettings::Observer,
 
   // Sends a broadcast to the delegate.
   void SendSettingsBroadcast(const std::string& action,
-                             const base::Value::Dict& extras) const;
+                             const base::DictValue& extras) const;
 
   // ConnectionObserver<mojom::AppInstance>:
   void OnConnectionReady() override;
+
+  const raw_ref<PrefService> local_state_;
+  const raw_ref<const ApplicationLocaleStorage> application_locale_storage_;
 
   const raw_ptr<Profile> profile_;
   const raw_ptr<ArcBridgeService>
@@ -358,7 +369,7 @@ class ArcSettingsServiceImpl : public TimezoneSettings::Observer,
   std::string default_network_name_;
 
   // Proxy configuration of the default network.
-  std::optional<base::Value::Dict> default_proxy_config_;
+  std::optional<base::DictValue> default_proxy_config_;
 
   // The PAC URL associated with `default_network_name_`, received via the DHCP
   // discovery method.
@@ -366,9 +377,14 @@ class ArcSettingsServiceImpl : public TimezoneSettings::Observer,
 };
 
 ArcSettingsServiceImpl::ArcSettingsServiceImpl(
+    PrefService* local_state,
+    const ApplicationLocaleStorage* application_locale_storage,
     Profile* profile,
     ArcBridgeService* arc_bridge_service)
-    : profile_(profile), arc_bridge_service_(arc_bridge_service) {
+    : local_state_(CHECK_DEREF(local_state)),
+      application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      profile_(profile),
+      arc_bridge_service_(arc_bridge_service) {
   StartObservingSettingsChanges();
   SyncBootTimeSettings();
 
@@ -416,6 +432,8 @@ void ArcSettingsServiceImpl::OnPrefChanged(const std::string& pref_name) const {
     SyncAccessibilityVirtualKeyboardEnabled();
   } else if (pref_name == ash::prefs::kUserGeolocationAccessLevel) {
     SyncUserGeolocation();
+  } else if (pref_name == ash::prefs::kUserGeolocationAccuracyEnabled) {
+    SyncUserGeolocationAccuracy();
   } else if (pref_name == ::language::prefs::kApplicationLocale ||
              pref_name == ::language::prefs::kPreferredLanguages) {
     SyncLocale();
@@ -501,6 +519,12 @@ void ArcSettingsServiceImpl::DefaultNetworkChanged(
     sync_proxy = true;
   }
 
+  // If the default network change is triggered by establishment of ARC VPN, we
+  // should not report back the proxy settings. Details: crbug.com/401900912
+  if (network->GetVpnProviderType() == shill::kProviderArcVpn) {
+    sync_proxy = false;
+  }
+
   if (!sync_proxy)
     return;
 
@@ -515,7 +539,7 @@ bool ArcSettingsServiceImpl::IsPrefProxyConfigApplied() const {
 
 void ArcSettingsServiceImpl::StartObservingSettingsChanges() {
   registrar_.Init(GetPrefs());
-  local_state_registrar_.Init(g_browser_process->local_state());
+  local_state_registrar_.Init(&local_state_.get());
 
   // Keep these lines ordered lexicographically.
   AddPrefToObserve(::prefs::kAccessibilityCaptionsBackgroundColor);
@@ -537,6 +561,7 @@ void ArcSettingsServiceImpl::StartObservingSettingsChanges() {
   AddPrefToObserve(ash::prefs::kAccessibilityVirtualKeyboardEnabled);
   AddPrefToObserve(ash::prefs::kDockedMagnifierEnabled);
   AddPrefToObserve(ash::prefs::kUserGeolocationAccessLevel);
+  AddPrefToObserve(ash::prefs::kUserGeolocationAccuracyEnabled);
   AddPrefToObserve(onc::prefs::kDeviceOpenNetworkConfiguration);
   AddPrefToObserve(onc::prefs::kOpenNetworkConfiguration);
   AddPrefToObserve(proxy_config::prefs::kProxy);
@@ -688,11 +713,13 @@ void ArcSettingsServiceImpl::SyncLocale() const {
 
   std::string locale;
   std::string preferred_languages;
-  base::Value::Dict extras;
   // Chrome OS locale may contain only the language part (e.g. fr) but country
   // code (e.g. fr_FR).  Since Android expects locale to contain country code,
   // ARC will derive a likely locale with country code from such
-  GetLocaleAndPreferredLanguages(profile_, &locale, &preferred_languages);
+  GetLocaleAndPreferredLanguages(application_locale_storage_.get(), profile_,
+                                 &locale, &preferred_languages);
+
+  base::DictValue extras;
   extras.Set("locale", locale);
   extras.Set("preferredLanguages", preferred_languages);
   SendSettingsBroadcast("org.chromium.arc.intent_helper.SET_LOCALE", extras);
@@ -704,13 +731,10 @@ void ArcSettingsServiceImpl::SyncLocationServiceEnabled() const {
       "org.chromium.arc.intent_helper.SET_LOCATION_SERVICE_ENABLED");
 }
 
-// TODO(b/159871128, hugobenichi, acostinas) The current implementation only
-// syncs the global proxy from Chrome's default network settings. ARC has
-// multi-network support so we should sync per-network proxy configuration.
 void ArcSettingsServiceImpl::SyncProxySettings() const {
   std::unique_ptr<ProxyConfigDictionary> proxy_config_dict =
       ash::ProxyConfigServiceImpl::GetActiveProxyConfigDictionary(
-          GetPrefs(), g_browser_process->local_state());
+          GetPrefs(), &local_state_.get());
 
   ProxyPrefs::ProxyMode mode;
   if (!proxy_config_dict || !proxy_config_dict->GetMode(&mode))
@@ -721,7 +745,7 @@ void ArcSettingsServiceImpl::SyncProxySettings() const {
     return;
   }
 
-  base::Value::Dict extras;
+  base::DictValue extras;
   extras.Set("mode", ProxyPrefs::ProxyModeToString(mode));
 
   switch (mode) {
@@ -766,7 +790,7 @@ void ArcSettingsServiceImpl::SyncProxySettings() const {
         // while ARC expects comma [,] delimiter.  Using the wrong delimiter
         // causes loss of network connectivity for many apps in ARC.
         auto bypassed_hosts = base::SplitStringPiece(
-            bypass_list, net::ProxyBypassRules::kBypassListDelimeter,
+            bypass_list, net::ProxyHostMatchingRules::kBypassListDelimeter,
             base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
         bypass_list =
             base::JoinString(bypassed_hosts, kArcProxyBypassListDelimiter);
@@ -803,7 +827,7 @@ void ArcSettingsServiceImpl::SyncProxySettingsForSystemProxy() const {
   if (!net::ParseHostAndPort(proxy_host_and_port, &host, &port))
     return;
 
-  base::Value::Dict extras;
+  base::DictValue extras;
   extras.Set("mode",
              ProxyPrefs::ProxyModeToString(ProxyPrefs::MODE_FIXED_SERVERS));
   extras.Set("host", host);
@@ -827,34 +851,31 @@ void ArcSettingsServiceImpl::SyncReportingConsent(bool initial_sync) const {
     // managed users.
     consent = false;
   }
-  base::Value::Dict extras;
+  base::DictValue extras;
   extras.Set("reportingConsent", consent);
   SendSettingsBroadcast("org.chromium.arc.intent_helper.SET_REPORTING_CONSENT",
                         extras);
 }
 
 void ArcSettingsServiceImpl::SyncPictureInPictureEnabled() const {
-  bool isPipEnabled =
-      base::FeatureList::IsEnabled(arc::kPictureInPictureFeature);
-
   auto* instance = ARC_GET_INSTANCE_FOR_METHOD(arc_bridge_service_->pip(),
                                                SetPipSuppressionStatus);
   if (!instance)
     return;
 
-  instance->SetPipSuppressionStatus(!isPipEnabled);
+  instance->SetPipSuppressionStatus(false);
 }
 
 void ArcSettingsServiceImpl::SyncTimeZone() const {
   TimezoneSettings* timezone_settings = TimezoneSettings::GetInstance();
   std::u16string timezoneID = timezone_settings->GetCurrentTimezoneID();
-  base::Value::Dict extras;
+  base::DictValue extras;
   extras.Set("olsonTimeZone", timezoneID);
   SendSettingsBroadcast("org.chromium.arc.intent_helper.SET_TIME_ZONE", extras);
 }
 
 void ArcSettingsServiceImpl::SyncTimeZoneByGeolocation() const {
-  base::Value::Dict extras;
+  base::DictValue extras;
   extras.Set("autoTimeZone", ash::system::TimeZoneResolverManager::
                                      GetEffectiveUserTimeZoneResolveMethod(
                                          registrar_.prefs(), false) !=
@@ -870,7 +891,7 @@ void ArcSettingsServiceImpl::SyncUse24HourClock() const {
   DCHECK(pref);
   DCHECK(pref->GetValue()->is_bool());
   bool use24HourClock = pref->GetValue()->GetBool();
-  base::Value::Dict extras;
+  base::DictValue extras;
   extras.Set("use24HourClock", use24HourClock);
   SendSettingsBroadcast("org.chromium.arc.intent_helper.SET_USE_24_HOUR_CLOCK",
                         extras);
@@ -896,6 +917,12 @@ void ArcSettingsServiceImpl::SyncUserGeolocation() const {
       "org.chromium.arc.intent_helper.SET_USER_GEOLOCATION");
 }
 
+void ArcSettingsServiceImpl::SyncUserGeolocationAccuracy() const {
+  SendBoolPrefSettingsBroadcast(
+      ash::prefs::kUserGeolocationAccuracyEnabled,
+      "org.chromium.arc.intent_helper.SET_USER_GEOLOCATION_ACCURACY_ENABLED");
+}
+
 void ArcSettingsServiceImpl::SyncConsumerAutoUpdateToggle() const {
   SendBoolLocalStatePrefSettingsBroadcast(
       ::prefs::kConsumerAutoUpdateToggle,
@@ -903,13 +930,13 @@ void ArcSettingsServiceImpl::SyncConsumerAutoUpdateToggle() const {
 }
 
 void ArcSettingsServiceImpl::ResetFontScaleToDefault() const {
-  base::Value::Dict extras;
+  base::DictValue extras;
   extras.Set("scale", kAndroidFontScaleNormal);
   SendSettingsBroadcast(kSetFontScaleAction, extras);
 }
 
 void ArcSettingsServiceImpl::ResetPageZoomToDefault() const {
-  base::Value::Dict extras;
+  base::DictValue extras;
   extras.Set("zoomFactor", 1.0);
   SendSettingsBroadcast(kSetPageZoomAction, extras);
 }
@@ -957,13 +984,10 @@ bool ArcSettingsServiceImpl::IsBooleanPrefManaged(
 void ArcSettingsServiceImpl::SendBoolLocalStatePrefSettingsBroadcast(
     const std::string& pref_name,
     const std::string& action) const {
-  DCHECK(g_browser_process);
-  const PrefService* local_state = g_browser_process->local_state();
-  DCHECK(local_state);
   const PrefService::Preference* local_state_pref =
-      local_state->FindPreference(pref_name);
+      local_state_->FindPreference(pref_name);
   DCHECK(local_state_pref);
-  bool enabled = local_state->GetBoolean(pref_name);
+  bool enabled = local_state_->GetBoolean(pref_name);
   SendBoolValueSettingsBroadcast(enabled, !local_state_pref->IsUserModifiable(),
                                  action);
 }
@@ -983,7 +1007,7 @@ void ArcSettingsServiceImpl::SendBoolValueSettingsBroadcast(
     bool enabled,
     bool managed,
     const std::string& action) const {
-  base::Value::Dict extras;
+  base::DictValue extras;
   extras.Set("enabled", enabled);
   extras.Set("managed", managed);
   SendSettingsBroadcast(action, extras);
@@ -991,7 +1015,7 @@ void ArcSettingsServiceImpl::SendBoolValueSettingsBroadcast(
 
 void ArcSettingsServiceImpl::SendSettingsBroadcast(
     const std::string& action,
-    const base::Value::Dict& extras) const {
+    const base::DictValue& extras) const {
   auto* instance = ARC_GET_INSTANCE_FOR_METHOD(
       arc_bridge_service_->intent_helper(), SendBroadcast);
   if (!instance)
@@ -1021,7 +1045,12 @@ ArcSettingsService* ArcSettingsService::GetForBrowserContext(
 
 ArcSettingsService::ArcSettingsService(content::BrowserContext* context,
                                        ArcBridgeService* bridge_service)
-    : profile_(Profile::FromBrowserContext(context)),
+    :  // Allow `g_browser_process` usage here for now since this is created by
+       // `ArcSettingsServiceFactory`, which lives in a base::Singleton.
+      local_state_(CHECK_DEREF(g_browser_process->local_state())),
+      application_locale_storage_(CHECK_DEREF(
+          g_browser_process->GetFeatures()->application_locale_storage())),
+      profile_(Profile::FromBrowserContext(context)),
       arc_bridge_service_(bridge_service) {
   arc_bridge_service_->intent_helper()->AddObserver(this);
   ArcSessionManager::Get()->AddObserver(this);
@@ -1036,8 +1065,9 @@ ArcSettingsService::~ArcSettingsService() {
 }
 
 void ArcSettingsService::OnConnectionReady() {
-  impl_ =
-      std::make_unique<ArcSettingsServiceImpl>(profile_, arc_bridge_service_);
+  impl_ = std::make_unique<ArcSettingsServiceImpl>(
+      &local_state_.get(), &application_locale_storage_.get(), profile_,
+      arc_bridge_service_);
   if (!IsInitialSettingsPending())
     return;
   impl_->SyncInitialSettings();

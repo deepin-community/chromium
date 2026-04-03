@@ -7,6 +7,8 @@
 #include "base/notreached.h"
 #include "base/task/sequence_manager/sequence_manager.h"
 #include "base/tracing/protos/chrome_track_event.pbzero.h"
+#include "components/performance_manager/scenario_api/performance_scenarios.h"
+#include "content/public/common/content_features.h"
 
 namespace content::internal {
 
@@ -30,7 +32,6 @@ ProtoPriority ToProtoPriority(BrowserTaskPriority priority) {
       return ProtoPriority::BEST_EFFORT_PRIORITY;
     case BrowserTaskPriority::kPriorityCount:
       NOTREACHED();
-      return ProtoPriority::UNKNOWN;
   }
 }
 

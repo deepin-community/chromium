@@ -6,10 +6,12 @@
 #define COMPONENTS_PERFORMANCE_MANAGER_PUBLIC_RESOURCE_ATTRIBUTION_QUERY_RESULTS_H_
 
 #include <compare>
-#include <map>
 #include <optional>
 
+#include "base/byte_size.h"
+#include "base/containers/variant_map.h"
 #include "base/time/time.h"
+#include "base/types/pass_key.h"
 #include "components/performance_manager/public/resource_attribution/resource_contexts.h"
 #include "components/performance_manager/public/resource_attribution/resource_types.h"
 
@@ -75,6 +77,12 @@ struct CPUTimeResult {
   // ProcessMetrics::GetPlatformIndependentCPUUsage().
   base::TimeDelta cumulative_cpu;
 
+  // Total time the context spent on CPU in a background process between
+  // `start_time` and `metadata.measurement_time`. Time spent on CPU in a
+  // foreground process doesn't affect this, even if the context itself was
+  // backgrounded.
+  base::TimeDelta cumulative_background_cpu;
+
   friend constexpr auto operator<=>(const CPUTimeResult&,
                                     const CPUTimeResult&) = default;
   friend constexpr bool operator==(const CPUTimeResult&,
@@ -84,8 +92,11 @@ struct CPUTimeResult {
 // Results of a kMemorySummary query.
 struct MemorySummaryResult {
   ResultMetadata metadata;
-  uint64_t resident_set_size_kb = 0;
-  uint64_t private_footprint_kb = 0;
+  base::ByteSize resident_set_size;
+  base::ByteSize private_footprint;
+
+  // The private swapped memory. Only reported on Linux, ChromeOS and Android.
+  base::ByteSize private_swap;
 
   friend constexpr auto operator<=>(const MemorySummaryResult&,
                                     const MemorySummaryResult&) = default;
@@ -106,7 +117,14 @@ struct QueryResults {
 };
 
 // A map from a ResourceContext to all query results received for that context.
-using QueryResultMap = std::map<ResourceContext, QueryResults>;
+// TODO(crbug.com/433462519): Replace this with a concrete map type after
+// using VariantMap to measure the performance of various impls.
+class QueryResultMap : public base::VariantMap<ResourceContext, QueryResults> {
+ public:
+  QueryResultMap()
+      : base::VariantMap<ResourceContext, QueryResults>(
+            base::PassKey<QueryResultMap>{}) {}
+};
 
 }  // namespace resource_attribution
 

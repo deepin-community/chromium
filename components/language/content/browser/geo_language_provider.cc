@@ -18,6 +18,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/device/public/cpp/geolocation/geoposition.h"
+#include "services/device/public/mojom/geolocation_client_id.mojom.h"
 
 namespace language {
 namespace {
@@ -78,7 +79,7 @@ void GeoLanguageProvider::StartUp(PrefService* const prefs) {
 
   prefs_ = prefs;
 
-  const base::Value::List& cached_languages_list =
+  const base::ListValue& cached_languages_list =
       prefs_->GetList(kCachedGeoLanguagesPref);
   for (const auto& language_value : cached_languages_list) {
     languages_.push_back(language_value.GetString());
@@ -167,7 +168,8 @@ void GeoLanguageProvider::BindIpGeolocationService() {
   ip_geolocation_provider->CreateGeolocation(
       static_cast<net::MutablePartialNetworkTrafficAnnotationTag>(
           partial_traffic_annotation),
-      geolocation_provider_.BindNewPipeAndPassReceiver());
+      geolocation_provider_.BindNewPipeAndPassReceiver(),
+      device::mojom::GeolocationClientId::kGeoLanguageProvider);
   // No error handler required: If the connection is broken, QueryNextPosition
   // will bind it again.
 }
@@ -223,7 +225,7 @@ void GeoLanguageProvider::SetGeoLanguages(
   DCHECK_CALLED_ON_VALID_SEQUENCE(creation_sequence_checker_);
   languages_ = languages;
 
-  base::Value::List cache_list;
+  base::ListValue cache_list;
   for (const std::string& language : languages_) {
     cache_list.Append(language);
   }

@@ -4,7 +4,6 @@
 
 #include "extensions/renderer/bindings/api_bindings_system_unittest.h"
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/stringprintf.h"
@@ -120,10 +119,6 @@ bool AllowAllAPIs(v8::Local<v8::Context> context, const std::string& name) {
   return true;
 }
 
-bool AllowPromises(v8::Local<v8::Context> context) {
-  return true;
-}
-
 }  // namespace
 
 APIBindingsSystemTest::APIBindingsSystemTest() = default;
@@ -134,7 +129,7 @@ void APIBindingsSystemTest::SetUp() {
 
   // Create the fake API schemas.
   for (const auto& api : GetAPIs()) {
-    base::Value::Dict api_schema = DictValueFromString(api.spec);
+    base::DictValue api_schema = DictValueFromString(api.spec);
     api_schemas_[api.name] = std::move(api_schema);
   }
 
@@ -146,7 +141,7 @@ void APIBindingsSystemTest::SetUp() {
   bindings_system_ = std::make_unique<APIBindingsSystem>(
       base::BindRepeating(&APIBindingsSystemTest::GetAPISchema,
                           base::Unretained(this)),
-      base::BindRepeating(&AllowAllAPIs), base::BindRepeating(&AllowPromises),
+      base::BindRepeating(&AllowAllAPIs),
       base::BindRepeating(&APIBindingsSystemTest::OnAPIRequest,
                           base::Unretained(this)),
       std::make_unique<TestInteractionProvider>(),
@@ -191,9 +186,9 @@ void APIBindingsSystemTest::AddConsoleError(v8::Local<v8::Context> context,
   console_errors_.push_back(error);
 }
 
-const base::Value::Dict& APIBindingsSystemTest::GetAPISchema(
+const base::DictValue& APIBindingsSystemTest::GetAPISchema(
     const std::string& api_name) {
-  EXPECT_TRUE(base::Contains(api_schemas_, api_name));
+  EXPECT_TRUE(api_schemas_.contains(api_name));
   return api_schemas_[api_name];
 }
 
@@ -207,7 +202,7 @@ void APIBindingsSystemTest::OnAPIRequest(
 void APIBindingsSystemTest::OnEventListenersChanged(
     const std::string& event_name,
     binding::EventListenersChanged changed,
-    const base::Value::Dict* filter,
+    const base::DictValue* filter,
     bool was_manual,
     v8::Local<v8::Context> context) {}
 
@@ -287,7 +282,7 @@ TEST_F(APIBindingsSystemTest, TestInitializationAndCallbacks) {
                         "[{'prop1':'alpha','prop2':42}]");
 
     bindings_system()->CompleteRequest(last_request()->request_id,
-                                       base::Value::List(), std::string());
+                                       base::ListValue(), std::string());
 
     EXPECT_EQ("[]", GetStringPropertyFromObject(context->Global(), context,
                                                 "callbackArguments"));
@@ -320,7 +315,7 @@ TEST_F(APIBindingsSystemTest, TestInitializationAndCallbacks) {
     CallFunctionOnObject(context, alpha_api, kTestCall);
 
     const char kResponseArgsJson[] = R"([{"key":42}])";
-    base::Value::List expected_args = ListValueFromString(kResponseArgsJson);
+    base::ListValue expected_args = ListValueFromString(kResponseArgsJson);
     bindings_system()->FireEventInContext("alpha.alphaEvent", context,
                                           expected_args, nullptr);
 
@@ -356,13 +351,13 @@ TEST_F(APIBindingsSystemTest, TestCustomHooks) {
       return result;
     }
     std::string argument;
-    EXPECT_EQ("foo", gin::V8ToString(context->GetIsolate(), arguments->at(0)));
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    EXPECT_EQ("foo", gin::V8ToString(isolate, arguments->at(0)));
     if (!arguments->at(1)->IsFunction()) {
       EXPECT_TRUE(arguments->at(1)->IsFunction());
       return result;
     }
-    v8::Local<v8::String> response =
-        gin::StringToV8(context->GetIsolate(), "bar");
+    v8::Local<v8::String> response = gin::StringToV8(isolate, "bar");
     v8::Local<v8::Value> response_args[] = {response};
     RunFunctionOnGlobal(arguments->at(1).As<v8::Function>(),
                         context, 1, response_args);
@@ -585,7 +580,7 @@ TEST_F(APIBindingsSystemTest, TestCustomEvent) {
 
   auto create_custom_event = [](v8::Local<v8::Context> context,
                                 const std::string& event_name) {
-    v8::Isolate* isolate = context->GetIsolate();
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
     v8::Local<v8::Object> ret = v8::Object::New(isolate);
     ret->Set(context, gin::StringToSymbol(isolate, "name"),
              gin::StringToSymbol(isolate, event_name))

@@ -27,6 +27,7 @@
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/label.h"
+#include "ui/views/metadata/view_factory.h"
 #include "url/gurl.h"
 
 namespace ash {
@@ -82,17 +83,23 @@ SavedDeskIconView::SavedDeskIconView(int count, size_t sorting_key)
 
 SavedDeskIconView::~SavedDeskIconView() = default;
 
-gfx::Size SavedDeskIconView::CalculatePreferredSize() const {
+gfx::Size SavedDeskIconView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   // The width for the icon. The overflow icon doesn't have an icon so it's
   // zero.
   int width = (IsOverflowIcon() ? 0 : kIconViewSize);
 
-  // Add the label width if the label view exists. The reason for having the max
-  // is to have a minimum width.
-  width += count_label_
-               ? std::max(kIconViewSize,
-                          count_label_->CalculatePreferredSize().width())
-               : 0;
+  if (count_label_) {
+    views::SizeBound label_width = std::max<views::SizeBound>(
+        kIconViewSize, available_size.width() - width);
+
+    // Add the label width if the label view exists. The reason for having the
+    // max is to have a minimum width.
+    width += std::max(
+        kIconViewSize,
+        count_label_->CalculatePreferredSize(views::SizeBounds(label_width, {}))
+            .width());
+  }
 
   return gfx::Size(width, kIconViewSize);
 }
@@ -112,8 +119,8 @@ void SavedDeskIconView::CreateCountLabelChildView(bool show_plus,
                        .SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(
                            kCountLabelInsetSize, kCountLabelInsetSize,
                            kCountLabelInsetSize, inset_size)))
-                       .SetEnabledColorId(cros_tokens::kCrosSysSecondary)
-                       .SetBackgroundColorId(cros_tokens::kCrosSysSystemOnBase)
+                       .SetEnabledColor(cros_tokens::kCrosSysSecondary)
+                       .SetBackgroundColor(cros_tokens::kCrosSysSystemOnBase)
                        .SetAutoColorReadabilityEnabled(false)
                        .Build());
 }
@@ -134,9 +141,9 @@ SavedDeskRegularIconView::SavedDeskRegularIconView(
       icon_identifier_(icon_identifier),
       on_icon_loaded_(std::move(on_icon_loaded)) {
   if (GetCountToShow()) {
-    SetBackground(views::CreateThemedRoundedRectBackground(
-        cros_tokens::kCrosSysSystemOnBase,
-        /*radius=*/kIconViewSize / 2.0f));
+    SetBackground(
+        views::CreateRoundedRectBackground(cros_tokens::kCrosSysSystemOnBase,
+                                           /*radius=*/kIconViewSize / 2.0f));
   }
 
   CreateChildViews(incognito_window_color_provider, app_title);
@@ -146,7 +153,7 @@ SavedDeskRegularIconView::~SavedDeskRegularIconView() = default;
 
 void SavedDeskRegularIconView::Layout(PassKey) {
   DCHECK(icon_view_);
-  gfx::Size icon_preferred_size = icon_view_->CalculatePreferredSize();
+  gfx::Size icon_preferred_size = icon_view_->CalculatePreferredSize({});
   icon_view_->SetBoundsRect(gfx::Rect(
       base::ClampFloor((kIconViewSize - icon_preferred_size.width()) / 2.0),
       base::ClampFloor((kIconViewSize - icon_preferred_size.height()) / 2.0),
@@ -208,7 +215,8 @@ void SavedDeskRegularIconView::CreateChildViews(
 
   icon_view_->GetViewAccessibility().SetRole(ax::mojom::Role::kImage);
   if (!app_title.empty())
-    icon_view_->GetViewAccessibility().OverrideName(app_title);
+    icon_view_->GetViewAccessibility().SetName(app_title,
+                                               ax::mojom::NameFrom::kAttribute);
 
   // PWAs (e.g. Messages) should use icon identifier as they share the same app
   // id as Chrome and would return short name for app id as "Chromium" (see
@@ -234,7 +242,7 @@ void SavedDeskRegularIconView::CreateChildViews(
   }
 
   delegate->GetFaviconForUrl(
-      icon_identifier_.url_or_id, icon_identifier_.lacros_profile_id,
+      icon_identifier_.url_or_id,
       base::BindOnce(&SavedDeskRegularIconView::OnIconLoaded,
                      weak_ptr_factory_.GetWeakPtr()),
       &cancelable_task_tracker_);
@@ -257,12 +265,12 @@ void SavedDeskRegularIconView::OnIconLoaded(const gfx::ImageSkia& icon) {
 void SavedDeskRegularIconView::LoadDefaultIcon() {
   is_showing_default_icon_ = true;
 
-  const ui::NativeTheme* native_theme =
-      ui::NativeTheme::GetInstanceForNativeUi();
   // Use a higher resolution image as it will look better after resizing.
-  const int resource_id = native_theme && native_theme->ShouldUseDarkColors()
-                              ? IDR_DEFAULT_FAVICON_DARK_64
-                              : IDR_DEFAULT_FAVICON_64;
+  const int resource_id =
+      (ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==
+       ui::NativeTheme::PreferredColorScheme::kDark)
+          ? IDR_DEFAULT_FAVICON_DARK_64
+          : IDR_DEFAULT_FAVICON_64;
 
   // `color_provider` only exist when view is created, otherwise it will be a
   // nullptr. This will be called on `OnThemeChanged` again to ensure `SetImage`
@@ -285,9 +293,9 @@ END_METADATA
 // SavedDeskOverflowIconView:
 SavedDeskOverflowIconView::SavedDeskOverflowIconView(int count, bool show_plus)
     : SavedDeskIconView(count, kOverflowIconSortingKey) {
-  SetBackground(views::CreateThemedRoundedRectBackground(
-      cros_tokens::kCrosSysSystemOnBase,
-      /*radius=*/kIconViewSize / 2.0f));
+  SetBackground(
+      views::CreateRoundedRectBackground(cros_tokens::kCrosSysSystemOnBase,
+                                         /*radius=*/kIconViewSize / 2.0f));
 
   CreateCountLabelChildView(show_plus, kCountLabelInsetSize);
 }

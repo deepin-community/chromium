@@ -42,6 +42,8 @@ BLINK_COMMON_EXPORT bool IsScreenCaptureMediaType(mojom::MediaStreamType type);
 BLINK_COMMON_EXPORT bool IsVideoScreenCaptureMediaType(
     mojom::MediaStreamType type);
 BLINK_COMMON_EXPORT bool IsDesktopCaptureMediaType(mojom::MediaStreamType type);
+BLINK_COMMON_EXPORT bool IsAudioDesktopCaptureMediaType(
+    mojom::MediaStreamType type);
 BLINK_COMMON_EXPORT bool IsVideoDesktopCaptureMediaType(
     mojom::MediaStreamType type);
 BLINK_COMMON_EXPORT bool IsTabCaptureMediaType(mojom::MediaStreamType type);
@@ -76,6 +78,7 @@ struct BLINK_COMMON_EXPORT MediaStreamDevice {
   MediaStreamDevice& operator=(const MediaStreamDevice& other);
 
   bool IsSameDevice(const MediaStreamDevice& other_device) const;
+  bool operator==(const MediaStreamDevice& other_device) const;
 
   base::UnguessableToken session_id() const {
     return session_id_ ? *session_id_ : base::UnguessableToken();

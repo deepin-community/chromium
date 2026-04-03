@@ -64,18 +64,16 @@ class NetworkConnectImpl : public NetworkConnect {
   // NetworkConnect
   void ConnectToNetworkId(const std::string& network_id) override;
   void DisconnectFromNetworkId(const std::string& network_id) override;
-  void SetTechnologyEnabled(const NetworkTypePattern& technology,
-                            bool enabled_state) override;
   void ShowMobileSetup(const std::string& network_id) override;
   void ShowCarrierAccountDetail(const std::string& network_id) override;
   void ShowCarrierUnlockNotification() override;
   void ShowPortalSignin(const std::string& network_id, Source source) override;
   void ConfigureNetworkIdAndConnect(const std::string& network_id,
-                                    const base::Value::Dict& shill_properties,
+                                    const base::DictValue& shill_properties,
                                     bool shared) override;
-  void CreateConfigurationAndConnect(base::Value::Dict shill_properties,
+  void CreateConfigurationAndConnect(base::DictValue shill_properties,
                                      bool shared) override;
-  void CreateConfiguration(base::Value::Dict shill_properties,
+  void CreateConfiguration(base::DictValue shill_properties,
                            bool shared) override;
 
  private:
@@ -91,19 +89,19 @@ class NetworkConnectImpl : public NetworkConnect {
   void OnConfigureSucceeded(bool connect_on_configure,
                             const std::string& service_path,
                             const std::string& network_id);
-  void CallCreateConfiguration(base::Value::Dict properties,
+  void CallCreateConfiguration(base::DictValue properties,
                                bool shared,
                                bool connect_on_configure);
   void SetPropertiesFailed(const std::string& desc,
                            const std::string& network_id,
                            const std::string& config_error_name);
-  void SetPropertiesToClear(base::Value::Dict* properties_to_set,
+  void SetPropertiesToClear(base::DictValue* properties_to_set,
                             std::vector<std::string>* properties_to_clear);
   void ClearPropertiesAndConnect(
       const std::string& network_id,
       const std::vector<std::string>& properties_to_clear);
   void ConfigureSetProfileSucceeded(const std::string& network_id,
-                                    base::Value::Dict properties_to_set);
+                                    base::DictValue properties_to_set);
 
   raw_ptr<Delegate> delegate_;
   base::WeakPtrFactory<NetworkConnectImpl> weak_factory_{this};
@@ -159,8 +157,7 @@ void NetworkConnectImpl::HandleUnconfiguredNetwork(
     if (network->GetError() == shill::kErrorSimLocked) {
       return;
     }
-    if (features::IsCellularCarrierLockEnabled() &&
-        network->GetError() == shill::kErrorSimCarrierLocked) {
+    if (network->GetError() == shill::kErrorSimCarrierLocked) {
       return;
     }
 
@@ -182,7 +179,7 @@ void NetworkConnectImpl::HandleUnconfiguredNetwork(
     return;
   }
 
-  DUMP_WILL_BE_NOTREACHED_NORETURN();
+  DUMP_WILL_BE_NOTREACHED();
 }
 
 // If |shared| is true, sets |profile_path| to the shared profile path.
@@ -274,7 +271,7 @@ void NetworkConnectImpl::OnConfigureSucceeded(bool connect_on_configure,
 }
 
 void NetworkConnectImpl::CallCreateConfiguration(
-    base::Value::Dict shill_properties,
+    base::DictValue shill_properties,
     bool shared,
     bool connect_on_configure) {
   std::string profile_path;
@@ -305,7 +302,7 @@ void NetworkConnectImpl::SetPropertiesFailed(
 }
 
 void NetworkConnectImpl::SetPropertiesToClear(
-    base::Value::Dict* properties_to_set,
+    base::DictValue* properties_to_set,
     std::vector<std::string>* properties_to_clear) {
   // Move empty string properties to properties_to_clear.
   for (auto iter : *properties_to_set) {
@@ -345,7 +342,7 @@ void NetworkConnectImpl::ClearPropertiesAndConnect(
 
 void NetworkConnectImpl::ConfigureSetProfileSucceeded(
     const std::string& network_id,
-    base::Value::Dict properties_to_set) {
+    base::DictValue properties_to_set) {
   std::vector<std::string> properties_to_clear;
   SetPropertiesToClear(&properties_to_set, &properties_to_clear);
   const NetworkState* network = GetNetworkStateFromId(network_id);
@@ -402,59 +399,6 @@ void NetworkConnectImpl::DisconnectFromNetworkId(
       base::BindOnce(&IgnoreDisconnectError));
 }
 
-void NetworkConnectImpl::SetTechnologyEnabled(
-    const NetworkTypePattern& technology,
-    bool enabled_state) {
-  const std::string technology_string = technology.ToDebugString();
-  std::string log_string = base::StringPrintf(
-      "technology %s, target state: %s", technology_string.c_str(),
-      (enabled_state ? "ENABLED" : "DISABLED"));
-  NET_LOG(USER) << "SetTechnologyEnabled: " << log_string;
-  NetworkStateHandler* handler = NetworkHandler::Get()->network_state_handler();
-  TechnologyStateController* controller =
-      NetworkHandler::Get()->technology_state_controller();
-  bool enabled = handler->IsTechnologyEnabled(technology);
-  if (enabled_state == enabled) {
-    NET_LOG(USER) << "Technology already in target state: " << log_string;
-    return;
-  }
-  if (enabled) {
-    // User requested to disable the technology.
-    NET_LOG(USER) << __func__ << " " << technology_string << ":" << false;
-    controller->SetTechnologiesEnabled(technology, false,
-                                       network_handler::ErrorCallback());
-    return;
-  }
-  // If we're dealing with a cellular network, then handle SIM lock here.
-  // SIM locking only applies to cellular.
-  if (technology.MatchesPattern(NetworkTypePattern::Cellular())) {
-    const DeviceState* mobile = handler->GetDeviceStateByType(technology);
-    if (!mobile) {
-      NET_LOG(ERROR) << "SetTechnologyEnabled with no device: " << log_string;
-      return;
-    }
-    if (mobile->IsSimAbsent()) {
-      // If this is true, then we have a cellular device with no SIM
-      // inserted. TODO(armansito): Chrome should display a notification here,
-      // prompting the user to insert a SIM card and restart the device to
-      // enable cellular. See crbug.com/125171.
-      NET_LOG(USER) << "Cannot enable cellular device without SIM: "
-                    << log_string;
-      return;
-    }
-    if (!mobile->IsSimLocked()) {
-      // A SIM has been inserted, but it is locked. Let the user unlock it
-      // via Settings or the details dialog.
-      const NetworkState* network = handler->FirstNetworkByType(technology);
-      delegate_->ShowNetworkSettings(network ? network->guid() : "");
-      return;
-    }
-  }
-  NET_LOG(USER) << __func__ << " " << technology_string << ":" << true;
-  controller->SetTechnologiesEnabled(technology, true,
-                                     network_handler::ErrorCallback());
-}
-
 void NetworkConnectImpl::ActivateCellular(const std::string& network_id) {
   NET_LOG(USER) << "ActivateCellular: " << NetworkGuidId(network_id);
   const NetworkState* cellular = GetNetworkStateFromId(network_id);
@@ -496,7 +440,6 @@ void NetworkConnectImpl::ShowCarrierAccountDetail(
 }
 
 void NetworkConnectImpl::ShowCarrierUnlockNotification() {
-  CHECK(features::IsCellularCarrierLockEnabled());
   delegate_->ShowCarrierUnlockNotification();
 }
 
@@ -507,12 +450,12 @@ void NetworkConnectImpl::ShowPortalSignin(const std::string& network_id,
 
 void NetworkConnectImpl::ConfigureNetworkIdAndConnect(
     const std::string& network_id,
-    const base::Value::Dict& properties,
+    const base::DictValue& properties,
     bool shared) {
   NET_LOG(USER) << "ConfigureNetworkIdAndConnect: "
                 << NetworkGuidId(network_id);
 
-  base::Value::Dict properties_to_set = properties.Clone();
+  base::DictValue properties_to_set = properties.Clone();
 
   std::string profile_path;
   if (!GetNetworkProfilePath(shared, &profile_path)) {
@@ -537,14 +480,14 @@ void NetworkConnectImpl::ConfigureNetworkIdAndConnect(
 }
 
 void NetworkConnectImpl::CreateConfigurationAndConnect(
-    base::Value::Dict properties,
+    base::DictValue properties,
     bool shared) {
   NET_LOG(USER) << "CreateConfigurationAndConnect";
   CallCreateConfiguration(std::move(properties), shared,
                           true /* connect_on_configure */);
 }
 
-void NetworkConnectImpl::CreateConfiguration(base::Value::Dict properties,
+void NetworkConnectImpl::CreateConfiguration(base::DictValue properties,
                                              bool shared) {
   NET_LOG(USER) << "CreateConfiguration";
   CallCreateConfiguration(std::move(properties), shared,

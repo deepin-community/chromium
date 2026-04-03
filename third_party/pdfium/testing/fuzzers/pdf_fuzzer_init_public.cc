@@ -25,9 +25,6 @@
 #include <windows.h>
 #elif defined(__APPLE__)
 #include <mach-o/dyld.h>
-#elif defined(__Fuchsia__)
-#include <limits.h>
-#include <unistd.h>
 #else  // Linux
 #include <linux/limits.h>
 #include <unistd.h>
@@ -46,22 +43,25 @@ std::string ProgramPath() {
 #ifdef _WIN32
   char path[MAX_PATH];
   DWORD len = GetModuleFileNameA(nullptr, path, MAX_PATH);
-  if (len != 0)
+  if (len != 0) {
     result = std::string(path, len);
+  }
 #elif defined(__APPLE__)
   char path[PATH_MAX];
   unsigned int len = PATH_MAX;
   if (!_NSGetExecutablePath(path, &len)) {
     std::unique_ptr<char, pdfium::FreeDeleter> resolved_path(
         realpath(path, nullptr));
-    if (resolved_path.get())
+    if (resolved_path.get()) {
       result = std::string(resolved_path.get());
+    }
   }
 #else  // Linux
   char path[PATH_MAX];
   ssize_t len = readlink("/proc/self/exe", path, PATH_MAX);
-  if (len > 0)
+  if (len > 0) {
     result = std::string(path, len);
+  }
 #endif
   return result;
 }
@@ -85,7 +85,7 @@ PDFFuzzerInitPublic::PDFFuzzerInitPublic() {
 #endif  // PDF_ENABLE_XFA
 #endif  // PDF_ENABLE_V8
   memset(&config_, '\0', sizeof(config_));
-  config_.version = 3;
+  config_.version = 4;
   config_.m_pUserFontPaths = nullptr;
   config_.m_pPlatform = nullptr;
   config_.m_pIsolate = nullptr;
@@ -94,6 +94,11 @@ PDFFuzzerInitPublic::PDFFuzzerInitPublic() {
   config_.m_pPlatform = platform_.get();
   config_.m_pIsolate = isolate_.get();
 #endif  // PDF_ENABLE_V8
+#if defined(PDF_USE_SKIA)
+  config_.m_RendererType = FPDF_RENDERERTYPE_SKIA;
+#else
+  config_.m_RendererType = FPDF_RENDERERTYPE_AGG;
+#endif
   FPDF_InitLibraryWithConfig(&config_);
 
   memset(&unsupport_info_, '\0', sizeof(unsupport_info_));

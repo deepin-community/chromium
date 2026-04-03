@@ -3,78 +3,74 @@
 // found in the LICENSE file.
 
 import * as fillConstants from '//components/autofill/ios/form_util/resources/fill_constants.js';
-import {findChildText} from '//components/autofill/ios/form_util/resources/fill_element_inference_util.js';
+import * as inferenceUtil from '//components/autofill/ios/form_util/resources/fill_element_inference_util.js';
+import {findChildText, hasTagName, isFormControlElement, isSelectElement} from '//components/autofill/ios/form_util/resources/fill_element_inference_util.js';
+import {setUniqueIDIfNeeded} from '//components/autofill/ios/form_util/resources/renderer_id.js';
 import {gCrWeb} from '//ios/web/public/js_messaging/resources/gcrweb.js';
-import {trim} from '//ios/web/public/js_messaging/resources/utils.js';
+import {isTextField, removeQueryAndReferenceFromURL, trim} from '//ios/web/public/js_messaging/resources/utils.js';
 
-declare global {
-    // Defines an additional property, `angular`, on the Window object.
-    // The code below assumes that this property exists within the object.
-    interface Window {
-        angular: any;
-    }
-
-    // Extends the Document object to add the ability to access its
-    // properties via the [] notation and defines a property that is
-    // assumed to exist within the object.
-    interface Document {
-      [key: symbol]: number;
-
-      __gCrWebURLNormalizer: HTMLAnchorElement;
-    }
+/**
+ * Base class for objects that are intended to be JSON stringified.
+ * This class ensures that any `toJSON` method on the prototype is nulled out
+ * to prevent unexpected behavior from site-defined `toJSON` overrides.
+ */
+class JsonSafeObject {
+  static {
+    (this.prototype as any).toJSON = null;
+  }
 }
 
-// Extends the Element to add the ability to access its properties
-// via the [] notation.
-declare interface IndexableElement extends Element {
-    [key: symbol]: number;
-}
-
-declare interface AutofillFormFieldData {
-  name: string;
-  value: string;
-  renderer_id: string;
-  form_control_type: string;
-  autocomplete_attribute: string;
-  max_length: number;
-  is_autofilled: boolean;
-  is_user_edited: boolean;
-  is_checkable: boolean;
-  is_focusable: boolean;
-  should_autocomplete: boolean;
-  role: number;
-  placeholder_attribute: string;
-  aria_label: string;
-  aria_description: string;
-  option_contents: string[];
-  option_values: string[];
+// TODO(crbug.com/469457516): Update the variables in the classes to follow the
+// naming convention.
+/* eslint-disable @typescript-eslint/naming-convention */
+export class AutofillFormFieldData extends JsonSafeObject {
+  name!: string;
+  value!: string;
+  renderer_id!: string;
+  form_control_type!: string;
+  autocomplete_attribute!: string;
+  max_length!: number;
+  is_autofilled!: boolean;
+  is_user_edited!: boolean;
+  is_checkable!: boolean;
+  is_focusable!: boolean;
+  should_autocomplete!: boolean;
+  role!: number;
+  placeholder_attribute!: string;
+  aria_label!: string;
+  aria_description!: string;
+  option_texts!: string[];
+  option_values!: string[];
   label?: string;
   identifier?: string;
   name_attribute?: string;
   id_attribute?: string;
+  pattern_attribute?: string;
 }
 
-declare interface AutofillFormData {
-  name: string;
-  renderer_id: string;
-  origin: string;
-  action: string;
-  fields: AutofillFormFieldData[];
-  frame_id: string;
+export class AutofillFormData extends JsonSafeObject {
+  name!: string;
+  renderer_id!: string;
+  origin!: string;
+  action!: string;
+  fields!: AutofillFormFieldData[];
+  host_frame!: string;
   child_frames?: FrameTokenWithPredecessor[];
   name_attribute?: string;
   id_attribute?: string;
 }
+/* eslint-enable @typescript-eslint/naming-convention */
 
-declare interface FrameTokenWithPredecessor {
+export declare interface FrameTokenWithPredecessor {
   token: string;
   predecessor: number;
 }
 
-/**
- * Maps elements using their unique ID
+/*
+ Name of the html attribute used for storing the remote frame token assigned to
+ the current html document.
  */
-const elementMap = new Map();
+const REMOTE_FRAME_TOKEN_ATTRIBUTE = '__gChrome_remoteFrameToken';
 
 /**
  * Acquires the specified DOM `attribute` from the DOM `element` and returns
@@ -114,7 +110,7 @@ function autoComplete(element: fillConstants.FormControlElement|null): boolean {
   if (getLowerCaseAttribute(element, 'autocomplete') === 'off') {
     return false;
   }
-  if (getLowerCaseAttribute(element.form, 'autocomplete') == 'off') {
+  if (getLowerCaseAttribute(element.form, 'autocomplete') === 'off') {
     return false;
   }
   return true;
@@ -126,7 +122,7 @@ function autoComplete(element: fillConstants.FormControlElement|null): boolean {
  * @param element An element to check if it can be autocompleted.
  * @return true if autocomplete dropdown should be suggested.
  */
-gCrWeb.fill.shouldAutocomplete = function(
+export function shouldAutocomplete(
     element: fillConstants.FormControlElement|null): boolean {
   if (!autoComplete(element)) {
     return false;
@@ -139,7 +135,7 @@ gCrWeb.fill.shouldAutocomplete = function(
     return false;
   }
   return true;
-};
+}
 
 /**
  * Sets the value of a data-bound input using AngularJS.
@@ -200,7 +196,7 @@ function setInputElementAngularValue(
  *     element's value is changed.
  * @return Whether the value has been set successfully.
  */
-gCrWeb.fill.setInputElementValue = function(
+export function setInputElementValue(
     value: string, input: HTMLInputElement|null,
     callback: Function|undefined = undefined): boolean {
   if (!input) {
@@ -213,7 +209,7 @@ gCrWeb.fill.setInputElementValue = function(
     createAndDispatchHTMLEvent(input, 'focus', true, false);
   }
 
-  const filled = setInputElementValue(value, input);
+  const filled = setInputElementValueInternal(value, input);
   if (callback) {
     callback();
   }
@@ -223,7 +219,7 @@ gCrWeb.fill.setInputElementValue = function(
     createAndDispatchHTMLEvent(activeElement, 'focus', true, false);
   }
   return filled;
-};
+}
 
 declare interface PropertyDescriptor {
     get(): string;
@@ -238,7 +234,8 @@ declare interface PropertyDescriptor {
  * @param input The input element of which the value is set.
  * @return Whether the value has been set successfully.
  */
-function setInputElementValue(value: string, input: HTMLInputElement): boolean {
+function setInputElementValueInternal(
+    value: string, input: HTMLInputElement): boolean {
   const propertyName = (input.type === 'checkbox' || input.type === 'radio') ?
       'checked' :
       'value';
@@ -310,7 +307,7 @@ function setInputElementValue(value: string, input: HTMLInputElement): boolean {
 
   if (overrideProperty) {
     Object.defineProperty(input, propertyName, oldPropertyDescriptor);
-    if (!setterCalled && input[propertyName] !== value) {
+    if (!setterCalled) {
       // The setter was never called. This may be intentional (the framework
       // ignored the input event) or not (the event did not conform to what
       // framework expected). The whole function will likely fail, but try to
@@ -349,7 +346,7 @@ function sanitizeValueForInputElement(
   // chromium/src/third_party/WebKit/Source/core/html/). Currently only
   // TextFieldInputType is relevant and sanitizeValue() for other types of
   // input elements has not been implemented.
-  if (gCrWeb.common.isTextField(element)) {
+  if (isTextField(element)) {
     return sanitizeValueForTextFieldInputType(
         proposedValue, element as HTMLInputElement);
   }
@@ -509,16 +506,16 @@ function absoluteURL(doc: Document, relativeURL: string): string {
  * function GetCanonicalActionForForm.
  * @return Canonical action.
  */
-gCrWeb.fill.getCanonicalActionForForm = function(
-    formElement: HTMLFormElement): string {
+export function getCanonicalActionForForm(formElement: HTMLFormElement):
+    string {
   const rawAction = formElement.getAttribute('action') || '';
   const absoluteUrl = absoluteURL(formElement.ownerDocument, rawAction);
-  return gCrWeb.common.removeQueryAndReferenceFromURL(absoluteUrl);
-};
+  return removeQueryAndReferenceFromURL(absoluteUrl);
+}
 
 declare interface OptionFieldStrings {
     option_values: string[] & {toJSON?: string|null};
-    option_contents: string[] & {toJSON?: string|null};
+    option_texts: string[]&{toJSON?: string | null};
 }
 
 /**
@@ -528,7 +525,7 @@ declare interface OptionFieldStrings {
  * It is based on the logic in
  *     void GetOptionStringsFromElement(const WebSelectElement& select_element,
  *                                      std::vector<string16>* option_values,
- *                                      std::vector<string16>* option_contents)
+ *                                      std::vector<string16>* option_texts)
  * in chromium/src/components/autofill/content/renderer/form_autofill_util.cc.
  *
  * @param selectElement A select element from which option data are
@@ -536,22 +533,22 @@ declare interface OptionFieldStrings {
  * @param field A field that will contain the extracted option
  *     information.
  */
-gCrWeb.fill.getOptionStringsFromElement = function(
+export function getOptionStringsFromElement(
     selectElement: HTMLSelectElement, field: OptionFieldStrings): void {
   field.option_values = [];
   // Protect against custom implementation of Array.toJSON in host pages.
   field.option_values.toJSON = null;
-  field.option_contents = [];
-  field.option_contents.toJSON = null;
+  field.option_texts = [];
+  field.option_texts.toJSON = null;
   const options = selectElement.options;
   for (let i = 0; i < options.length; ++i) {
     const option = options[i]!;
     field.option_values.push(
         option.value.substring(0, fillConstants.MAX_STRING_LENGTH));
-    field.option_contents.push(
+    field.option_texts.push(
         option.text.substring(0, fillConstants.MAX_STRING_LENGTH));
   }
-};
+}
 
 /**
  * Returns the value in a way similar to the C++ version of node.value,
@@ -568,10 +565,10 @@ gCrWeb.fill.getOptionStringsFromElement = function(
  * @param element An element to examine.
  * @return The value for `element`.
  */
-gCrWeb.fill.value = function(
+export function valueForElement(
     element: fillConstants.FormControlElement|HTMLOptionElement): string {
   let value = element.value;
-  if (gCrWeb.fill.isSelectElement(element)) {
+  if (isSelectElement(element)) {
     const selectElement = element as HTMLSelectElement;
     if (selectElement.options.length > 0 && selectElement.selectedIndex === 0 &&
         selectElement.options[0]!.disabled &&
@@ -585,7 +582,7 @@ gCrWeb.fill.value = function(
     }
   }
   return (value || '').replace(/[\n\t]/gm, '');
-};
+}
 
 /**
  * Returns the coalesced child text of the elements who's ids are found in
@@ -641,20 +638,20 @@ function coalesceTextByIdList(
  * or the value of the aria-label attribute, with priority given to the
  * aria-labelledby text.
  */
-gCrWeb.fill.getAriaLabel = function(element: Element): string {
+export function getAriaLabel(element: Element): string {
   let label = coalesceTextByIdList(element, 'aria-labelledby');
   if (!label) {
     label = element.getAttribute('aria-label') || '';
   }
   return label.trim();
-};
+}
 
 /**
  * Returns the coalesced text referenced by the aria-describedby attribute.
  */
-gCrWeb.fill.getAriaDescription = function(element: Element): string {
+export function getAriaDescription(element: Element): string {
   return coalesceTextByIdList(element, 'aria-describedby');
-};
+}
 
 /**
  * Searches an element's ancestors to see if the element is inside a <form> or
@@ -667,78 +664,199 @@ gCrWeb.fill.getAriaDescription = function(element: Element): string {
  * @param element An element to examine.
  * @return Whether the element is inside a <form> or <fieldset>.
  */
-gCrWeb.fill.isElementInsideFormOrFieldSet = function(
+// TODO(crbug.com/454044167): Cleanup autofill TS type casting.
+export function isElementInsideFormOrFieldSet(
     element: fillConstants.FormControlElement): boolean {
   let parentNode = element.parentNode;
   while (parentNode) {
     if ((parentNode.nodeType === Node.ELEMENT_NODE) &&
-        (gCrWeb.fill.hasTagName(parentNode, 'form') ||
-         gCrWeb.fill.hasTagName(parentNode, 'fieldset'))) {
+        (hasTagName(parentNode as Element, 'form') ||
+         hasTagName(parentNode as Element, 'fieldset'))) {
       return true;
     }
     parentNode = parentNode.parentNode;
   }
   return false;
-};
+}
 
 /**
- * @param nextAvailableID Next available integer.
+ * Check if the node is visible.
+ *
+ * @param node The node to be processed.
+ * @return Whether the node is visible or not.
  */
-gCrWeb.fill['setUpForUniqueIDs'] = function(nextAvailableID: number): void {
-  const uniqueID = gCrWeb.fill.ID_SYMBOL;
-  document[uniqueID] = nextAvailableID;
-};
-
-/**
- * @param element Form or form input element.
- */
-gCrWeb.fill.setUniqueIDIfNeeded = function(element: IndexableElement): void {
-  try {
-    const uniqueID = gCrWeb.fill.ID_SYMBOL;
-    // Do not assign element id value if the base value for the document
-    // is not set.
-    if (typeof document[uniqueID] !== 'undefined' &&
-        typeof element[uniqueID] === 'undefined') {
-      element[uniqueID] = document[uniqueID]++;
-      // TODO(crbug.com/1350973): WeakRef starts in 14.5, remove checks once 14
-      // is deprecated.
-      elementMap.set(
-          element[uniqueID], window.WeakRef ? new WeakRef(element) : element);
-    }
-  } catch (e) {
+export function isVisibleNode(node: Node): boolean {
+  if (!node) {
+    return false;
   }
-};
+
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    const style = window.getComputedStyle(node as Element);
+    if (style.visibility === 'hidden' || style.display === 'none') {
+      return false;
+    }
+  }
+
+  // Verify all ancestors are focusable.
+  return !node.parentNode || isVisibleNode(node.parentNode);
+}
 
 /**
  * @param element Form or form input element.
  * @return Unique stable ID converted to string..
  */
-gCrWeb.fill.getUniqueID = function(element: any): string {
+export function getUniqueID(element: any): string {
+  // `setUniqueIDIfNeeded` is only available in the isolated content world,
+  // so we check for the autofill API to confirm the context before invoking.
+  if (gCrWeb.hasRegisteredApi('autofill')) {
+    setUniqueIDIfNeeded(element);
+  }
+
   try {
-    const uniqueID = gCrWeb.fill.ID_SYMBOL;
-    if (typeof element[uniqueID]! !== 'undefined' &&
-        !isNaN(element[uniqueID]!)) {
-      return element[uniqueID].toString();
+    const uniqueIDSymbol = fillConstants.ID_SYMBOL;
+    if (typeof element[uniqueIDSymbol] !== 'undefined' &&
+        !isNaN(element[uniqueIDSymbol]!)) {
+      return element[uniqueIDSymbol].toString();
     } else {
-      return fillConstants.RENDERER_ID_NOT_SET;
+      // Use the fallback value stored in the DOM. This will happen when the
+      // script is running in the page content world. JavaScript properties are
+      // not shared across content worlds. This means that `element[uniqueID]`
+      // will not have value in the page content world because it was set in the
+      // isolated content world.
+      const valueInDOM =
+          element.getAttribute(fillConstants.UNIQUE_ID_ATTRIBUTE);
+
+      // Check that there is a valid integer ID stored in the DOM. If not,
+      // return the fallback value.
+      return isNaN(parseInt(valueInDOM)) ? fillConstants.RENDERER_ID_NOT_SET :
+                                           valueInDOM;
     }
   } catch (e) {
     return fillConstants.RENDERER_ID_NOT_SET;
   }
-};
+}
+
+export function setRemoteFrameToken(token: string) {
+  document.documentElement.setAttribute(REMOTE_FRAME_TOKEN_ATTRIBUTE, token);
+}
+
+export function getRemoteFrameToken(): string|null {
+  return document.documentElement.getAttribute(REMOTE_FRAME_TOKEN_ATTRIBUTE);
+}
 
 /**
- * @param id Unique ID.
- * @return element Form or form input element.
+ * Get all form control elements from |elements| that are not part of a form.
+ * Also append the fieldsets encountered that are not part of a form to
+ * |fieldsets|.
+ *
+ * It is based on the logic in:
+ *     std::vector<WebFormControlElement>
+ *     GetUnownedAutofillableFormFieldElements(
+ *         const WebElementCollection& elements,
+ *         std::vector<WebElement>* fieldsets);
+ * in chromium/src/components/autofill/content/renderer/form_autofill_util.cc.
+ *
+ * In the C++ version, |fieldsets| can be NULL, in which case we do not try to
+ * append to it.
+ *
+ * @param elements elements to look through.
+ * @param fieldsets out param for unowned fieldsets.
+ * @return The elements that are not part of a form.
  */
-gCrWeb.fill.getElementByUniqueID = function(id: number): Element | null {
-  try {
-    // TODO(crbug.com/1350973): WeakRef starts in 14.5, remove checks once 14 is
-    // deprecated.
-    return window.WeakRef ? elementMap.get(id).deref() : elementMap.get(id);
-  } catch (e) {
-    return null;
-  }
-};
+export function getUnownedAutofillableFormFieldElements(
+    elements: fillConstants.FormControlElement[],
+    fieldsets: Element[]): fillConstants.FormControlElement[] {
+  const unownedFieldsetChildren: fillConstants.FormControlElement[] = [];
+  for (const element of elements) {
+    if (isFormControlElement(element)) {
+      if (!element.form) {
+        unownedFieldsetChildren.push(element);
+      }
+    }
 
-export {AutofillFormFieldData, AutofillFormData, FrameTokenWithPredecessor};
+    if (inferenceUtil.hasTagName(element, 'fieldset') &&
+        !isElementInsideFormOrFieldSet(element)) {
+      fieldsets.push(element);
+    }
+  }
+  return extractAutofillableElementsFromSet(unownedFieldsetChildren);
+}
+
+/**
+ * Returns the auto-fillable form control elements in |formElement|.
+ *
+ * It is based on the logic in:
+ *     std::vector<blink::WebFormControlElement>
+ *     ExtractAutofillableElementsFromSet(
+ *         const WebVector<WebFormControlElement>& control_elements);
+ * in chromium/src/components/autofill/content/renderer/form_autofill_util.h.
+ *
+ * @param controlElements Set of control elements.
+ * @return The array of autofillable elements.
+ */
+function extractAutofillableElementsFromSet(
+    controlElements: fillConstants.FormControlElement[]):
+    fillConstants.FormControlElement[] {
+  const autofillableElements: fillConstants.FormControlElement[] = [];
+  for (const element of controlElements) {
+    if (!inferenceUtil.isAutofillableElement(element)) {
+      continue;
+    }
+    autofillableElements.push(element);
+  }
+  return autofillableElements;
+}
+
+/**
+ * Stores a reference to the original JSON.stringify function.
+ * This is done to prevent websites from overriding JSON.stringify and
+ * potentially breaking autofill functionalities that rely on it.
+ */
+const JSONStringify = JSON.stringify;
+
+/**
+ * Returns a string that is formatted according to the JSON syntax rules.
+ * This is equivalent to the built-in JSON.stringify() function, but is
+ * less likely to be overridden by the website itself.
+ * @param value The value to convert to JSON.
+ * @return The JSON representation of value.
+ */
+export function stringify(value: any): string {
+  if (value === null) {
+    return 'null';
+  }
+  if (value === undefined) {
+    return 'undefined';
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  const objectPrototypeToJSON = prototype ? prototype.toJSON : undefined;
+
+  let valueToJSON: unknown;
+  let JSONStringifyResult: string;
+  if (value && typeof value.toJSON === 'function') {
+    valueToJSON = value.toJSON;
+  }
+
+  try {
+    // Temporarily delete toJSON from Object.prototype to
+    // avoid being affected by site-specific overrides.
+    if (objectPrototypeToJSON) {
+      delete prototype.toJSON;
+    }
+    if (valueToJSON) {
+      value.toJSON = undefined;
+    }
+    JSONStringifyResult = JSONStringify(value);
+  } finally {
+    // Restore toJSON to Object.prototype if it was
+    // originally present.
+    if (objectPrototypeToJSON) {
+      prototype.toJSON = objectPrototypeToJSON;
+    }
+    if (valueToJSON) {
+      value.toJSON = valueToJSON;
+    }
+  }
+  return JSONStringifyResult;
+}

@@ -12,6 +12,7 @@
 #include <string>
 
 #include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "base/sequence_checker.h"
 
 namespace syncer {
@@ -72,12 +73,12 @@ struct ServerConnectionEvent {
       : connection_code(code) {}
 };
 
-class ServerConnectionEventListener {
+class ServerConnectionEventListener : public base::CheckedObserver {
  public:
   virtual void OnServerConnectionEvent(const ServerConnectionEvent& event) = 0;
 
  protected:
-  virtual ~ServerConnectionEventListener() = default;
+  ~ServerConnectionEventListener() override = default;
 };
 
 // Use this class to interact with the sync server.
@@ -92,7 +93,7 @@ class ServerConnectionManager {
 
   virtual ~ServerConnectionManager();
 
-  // POSTs |buffer_in| and reads the body of the response into |buffer_out|.
+  // POSTs `buffer_in` and reads the body of the response into `buffer_out`.
   // Uses the currently set access token in the headers.
   HttpResponse PostBufferWithCachedAuth(const std::string& buffer_in,
                                         std::string* buffer_out);
@@ -115,7 +116,7 @@ class ServerConnectionManager {
     return server_response_.http_status_code;
   }
 
-  // Sets a new access token. If |access_token| is empty, the current token is
+  // Sets a new access token. If `access_token` is empty, the current token is
   // invalidated and cleared. Returns false if the server is in authentication
   // error state.
   bool SetAccessToken(const std::string& access_token);
@@ -123,7 +124,7 @@ class ServerConnectionManager {
   bool HasInvalidAccessToken() { return access_token_.empty(); }
 
  protected:
-  // Updates |server_response_| and notifies listeners if the server status
+  // Updates `server_response_` and notifies listeners if the server status
   // changed.
   void SetServerResponse(const HttpResponse& server_response);
 
@@ -141,7 +142,7 @@ class ServerConnectionManager {
   // The access token to use in authenticated requests.
   std::string access_token_;
 
-  base::ObserverList<ServerConnectionEventListener>::Unchecked listeners_;
+  base::ObserverList<ServerConnectionEventListener> listeners_;
 
   HttpResponse server_response_;
 

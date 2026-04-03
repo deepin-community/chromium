@@ -11,10 +11,15 @@
 #ifndef TEST_FUZZERS_FUZZ_DATA_HELPER_H_
 #define TEST_FUZZERS_FUZZ_DATA_HELPER_H_
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <type_traits>
 
 #include "api/array_view.h"
 #include "modules/rtp_rtcp/source/byte_io.h"
+#include "rtc_base/checks.h"
 
 namespace webrtc {
 namespace test {
@@ -23,7 +28,7 @@ namespace test {
 // of when the end of the data has been reached.
 class FuzzDataHelper {
  public:
-  explicit FuzzDataHelper(rtc::ArrayView<const uint8_t> data);
+  explicit FuzzDataHelper(ArrayView<const uint8_t> data);
 
   // Returns true if n bytes can be read.
   bool CanReadBytes(size_t n) const { return data_ix_ + n <= data_.size(); }
@@ -70,9 +75,18 @@ class FuzzDataHelper {
     return select_from[index];
   }
 
-  rtc::ArrayView<const uint8_t> ReadByteArray(size_t bytes) {
+  // Same as `SelectOneOf` but move the selected item from the array.
+  template <typename T, size_t N>
+  T MoveOneOf(T (&select_from)[N]) {
+    static_assert(N <= std::numeric_limits<uint8_t>::max(), "");
+    // Read an index between 0 and select_from.size() - 1 from the fuzzer data.
+    uint8_t index = ReadOrDefaultValue<uint8_t>(0) % N;
+    return std::move(select_from[index]);
+  }
+
+  ArrayView<const uint8_t> ReadByteArray(size_t bytes) {
     if (!CanReadBytes(bytes)) {
-      return rtc::ArrayView<const uint8_t>(nullptr, 0);
+      return ArrayView<const uint8_t>(nullptr, 0);
     }
     const size_t index_to_return = data_ix_;
     data_ix_ += bytes;
@@ -95,7 +109,7 @@ class FuzzDataHelper {
   size_t BytesLeft() const { return data_.size() - data_ix_; }
 
  private:
-  rtc::ArrayView<const uint8_t> data_;
+  ArrayView<const uint8_t> data_;
   size_t data_ix_ = 0;
 };
 

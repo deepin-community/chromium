@@ -7,6 +7,7 @@
 #include "ash/quick_pair/common/quick_pair_browser_delegate.h"
 #include "base/base64.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/types/fixed_array.h"
 #include "components/cross_device/logging/logging.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -60,8 +61,8 @@ void PendingWriteStore::WritePairedDevice(
   // |fast_pair_info| must be converted first to bytes and then to
   // hex-encoded string format so that no UTF-8 encoding errors are thrown.
   size_t fp_info_size = fast_pair_info.ByteSizeLong();
-  uint8_t fp_info_bytes[fp_info_size];
-  if (!fast_pair_info.SerializeToArray(fp_info_bytes, fp_info_size)) {
+  base::FixedArray<uint8_t> fp_info_bytes(fp_info_size);
+  if (!fast_pair_info.SerializeToArray(fp_info_bytes.data(), fp_info_size)) {
     CD_LOG(WARNING, Feature::FP)
         << __func__ << ": couldn't serialize fast pair info of device "
         << "with mac address " << mac_address
@@ -70,7 +71,7 @@ void PendingWriteStore::WritePairedDevice(
   }
 
   ScopedDictPrefUpdate update(pref_service, kFastPairPendingWritesPref);
-  update->Set(mac_address, base::HexEncode(fp_info_bytes, fp_info_size));
+  update->Set(mac_address, base::HexEncode(fp_info_bytes));
 }
 
 std::vector<PendingWriteStore::PendingWrite>
@@ -84,7 +85,7 @@ PendingWriteStore::GetPendingWrites() {
     return list;
   }
 
-  const base::Value::Dict& result =
+  const base::DictValue& result =
       pref_service->GetDict(kFastPairPendingWritesPref);
 
   for (const auto item : result) {
@@ -172,7 +173,7 @@ PendingWriteStore::GetPendingDeletes() {
     return list;
   }
 
-  const base::Value::Dict& result =
+  const base::DictValue& result =
       pref_service->GetDict(kFastPairPendingDeletesPref);
 
   for (const auto item : result) {
@@ -207,7 +208,7 @@ void PendingWriteStore::OnPairedDeviceDeleted(
 
   std::string hex_account_key = base::HexEncode(account_key);
   ScopedDictPrefUpdate update(pref_service, kFastPairPendingDeletesPref);
-  const base::Value::Dict result =
+  const base::DictValue result =
       pref_service->GetDict(kFastPairPendingDeletesPref).Clone();
   for (const auto item : result) {
     if (item.second == hex_account_key) {

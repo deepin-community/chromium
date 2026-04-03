@@ -7,15 +7,15 @@
 #include <memory>
 
 #include "ash/app_list/views/app_list_search_view.h"
-#include "ash/app_list/views/search_notifier_controller.h"
 #include "ash/bubble/bubble_constants.h"
 #include "base/check_op.h"
 #include "base/time/time.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_type.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/animation/animation_builder.h"
+#include "ui/views/border.h"
 #include "ui/views/layout/fill_layout.h"
 
 namespace ash {
@@ -23,7 +23,7 @@ namespace {
 
 // The animation spec says 40 dips up over 250ms, but the opacity animation
 // renders the view invisible after 50ms, so animate the visible fraction.
-constexpr int kHideAnimationVerticalOffset = -40 * 250 / 50;
+constexpr int kHideAnimationVerticalOffset = -40 * 50 / 250;
 
 // Duration for the hide animation (both transform and opacity).
 constexpr base::TimeDelta kHideAnimationDuration = base::Milliseconds(50);
@@ -44,21 +44,9 @@ AppListBubbleSearchPage::AppListBubbleSearchPage(
 
 AppListBubbleSearchPage::~AppListBubbleSearchPage() = default;
 
-void AppListBubbleSearchPage::VisibilityChanged(View* starting_from,
-                                                bool is_visible) {
-  auto* notifier_controller = search_view_->search_notifier_controller();
-  if (starting_from == this && notifier_controller) {
-    notifier_controller->UpdateNotifierVisibility(is_visible);
-    if (search_view_->search_notifier_view() &&
-        !notifier_controller->ShouldShowPrivacyNotice()) {
-      search_view_->RemoveSearchNotifierView();
-    }
-  }
-}
-
 void AppListBubbleSearchPage::AnimateShowPage() {
   // If skipping animations, just update visibility.
-  if (ui::ScopedAnimationDurationScaleMode::is_zero()) {
+  if (gfx::ScopedAnimationDurationScaleMode::is_zero()) {
     SetVisible(true);
     return;
   }
@@ -85,7 +73,7 @@ void AppListBubbleSearchPage::AnimateShowPage() {
 
 void AppListBubbleSearchPage::AnimateHidePage() {
   // If skipping animations, just update visibility.
-  if (ui::ScopedAnimationDurationScaleMode::is_zero()) {
+  if (gfx::ScopedAnimationDurationScaleMode::is_zero()) {
     SetVisible(false);
     return;
   }

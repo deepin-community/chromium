@@ -112,21 +112,32 @@ void TestChannel::WaitForAndValidateConsoleMessage(std::string_view type,
       message.value.GetDict().FindStringByDottedPath("params.type");
   ASSERT_TRUE(actual_type);
   EXPECT_EQ(type, *actual_type);
-  const base::Value::List* args =
+  const base::ListValue* args =
       message.value.GetDict().FindListByDottedPath("params.args");
   ASSERT_TRUE(args);
   EXPECT_THAT(*args, base::test::IsJson(json_args));
 
-  const base::Value::List* stack_trace =
+  const base::ListValue* stack_trace =
       message.value.GetDict().FindListByDottedPath(
           "params.stackTrace.callFrames");
   ASSERT_TRUE(stack_trace);
   ASSERT_EQ(stack_trace_size, stack_trace->size());
-  const base::Value::Dict* stack_trace_dict = (*stack_trace)[0].GetIfDict();
+  const base::DictValue* stack_trace_dict = (*stack_trace)[0].GetIfDict();
   ASSERT_TRUE(stack_trace_dict);
   EXPECT_EQ(function, *stack_trace_dict->FindString("functionName"));
   EXPECT_EQ(url.spec(), *stack_trace_dict->FindString("url"));
   EXPECT_EQ(line_number, stack_trace_dict->FindInt("lineNumber"));
+}
+
+void TestChannel::ExpectNoMoreConsoleEvents() {
+  base::RunLoop().RunUntilIdle();
+  base::AutoLock hold_lock(lock_);
+  for (const auto& event : events_) {
+    if (event.type == TestChannel::Event::Type::Notification) {
+      EXPECT_NE(*event.value.GetDict().FindString("method"),
+                "Runtime.consoleAPICalled");
+    }
+  }
 }
 
 void TestChannel::sendResponse(
@@ -155,7 +166,8 @@ void TestChannel::LogEvent(
   // For TestChannel we always talk JSON.  Make it into a base::Value, to make
   // it easy to look stuff up in it.
   std::string message_str = ToString(message->string());
-  std::optional<base::Value> val = base::JSONReader::Read(message_str);
+  std::optional<base::Value> val =
+      base::JSONReader::Read(message_str, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   CHECK(val.has_value()) << message_str;
   Event event;
   event.type = type;

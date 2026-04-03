@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/web_applications/os_integration/web_app_protocol_handler_manager.h"
+
 #include "base/strings/escape.h"
 #include "chrome/browser/web_applications/test/fake_os_integration_manager.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
@@ -12,6 +13,7 @@
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
+#include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "components/custom_handlers/protocol_handler.h"
 
 using custom_handlers::ProtocolHandler;
@@ -23,25 +25,23 @@ class WebAppProtocolHandlerManagerTest : public WebAppTest {
   void SetUp() override {
     WebAppTest::SetUp();
 
-    provider_ = FakeWebAppProvider::Get(profile());
-    provider_->SetOsIntegrationManager(
+    fake_provider().SetOsIntegrationManager(
         std::make_unique<FakeOsIntegrationManager>(
-            profile(), /*app_shortcut_manager=*/nullptr,
+            profile(),
             /*file_handler_manager=*/nullptr,
-            std::make_unique<WebAppProtocolHandlerManager>(profile()),
-            /*url_handler_manager=*/nullptr));
+            std::make_unique<WebAppProtocolHandlerManager>(profile())));
     test::AwaitStartWebAppProviderAndSubsystems(profile());
   }
 
   WebAppProtocolHandlerManager& protocol_handler_manager() {
-    return provider()
+    return fake_provider()
         .os_integration_manager()
         .protocol_handler_manager_for_testing();
   }
 
-  WebAppProvider& provider() { return *provider_; }
-
-  WebAppRegistrar& app_registrar() { return provider().registrar_unsafe(); }
+  WebAppRegistrar& app_registrar() {
+    return fake_provider().registrar_unsafe();
+  }
 
   webapps::AppId CreateWebAppWithProtocolHandlers(
       const GURL& start_url,
@@ -55,7 +55,7 @@ class WebAppProtocolHandlerManagerTest : public WebAppTest {
     web_app->SetDisallowedLaunchProtocols(disallowed_launch_protocols);
     {
       ScopedRegistryUpdate update =
-          provider().sync_bridge_unsafe().BeginUpdate();
+          fake_provider().sync_bridge_unsafe().BeginUpdate();
       update->CreateApp(std::move(web_app));
     }
     return app_id;
@@ -76,9 +76,6 @@ class WebAppProtocolHandlerManagerTest : public WebAppTest {
             CreateProtocolHandlerInfo("web+test2",
                                       GURL("http://example.com/test2=%s"))};
   }
-
- private:
-  raw_ptr<FakeWebAppProvider, DanglingUntriaged> provider_ = nullptr;
 };
 
 TEST_F(WebAppProtocolHandlerManagerTest, GetAppProtocolHandlerInfos) {
@@ -93,7 +90,8 @@ TEST_F(WebAppProtocolHandlerManagerTest, GetAppProtocolHandlerInfos) {
       protocol_handler_manager().GetAppProtocolHandlerInfos(app_id).size(), 0U);
 
   {
-    ScopedRegistryUpdate update = provider().sync_bridge_unsafe().BeginUpdate();
+    ScopedRegistryUpdate update =
+        fake_provider().sync_bridge_unsafe().BeginUpdate();
     update->CreateApp(std::move(web_app));
   }
 

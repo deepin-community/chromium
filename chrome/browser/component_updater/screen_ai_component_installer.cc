@@ -13,14 +13,14 @@
 #include "chrome/browser/screen_ai/screen_ai_install_state.h"
 #include "components/component_updater/component_updater_service.h"
 #include "components/crx_file/id_util.h"
-#include "components/services/screen_ai/public/cpp/utilities.h"
 #include "components/update_client/update_client_errors.h"
 #include "content/public/browser/browser_thread.h"
 #include "crypto/sha2.h"
-
-using content::BrowserThread;
+#include "services/screen_ai/public/cpp/utilities.h"
 
 namespace {
+
+using content::BrowserThread;
 
 // The SHA256 of the SubjectPublicKeyInfo used to sign the component.
 // The component id is: mfhmdacoffpmifoibamicehhklffanao
@@ -29,8 +29,7 @@ constexpr uint8_t kScreenAIPublicKeySHA256[32] = {
     0x77, 0xab, 0x55, 0x0d, 0x0e, 0x5a, 0xed, 0x04, 0x7b, 0x1e, 0x16,
     0x86, 0x7c, 0xf0, 0x42, 0x71, 0x85, 0xe4, 0x31, 0x2d, 0xc5};
 
-static_assert(std::size(kScreenAIPublicKeySHA256) == crypto::kSHA256Length,
-              "Wrong hash length");
+static_assert(std::size(kScreenAIPublicKeySHA256) == crypto::kSHA256Length);
 
 constexpr char kScreenAIManifestName[] = "ScreenAI Library";
 
@@ -55,7 +54,7 @@ bool ScreenAIComponentInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 ScreenAIComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(update_client::InstallError::NONE);
 }
@@ -65,31 +64,16 @@ void ScreenAIComponentInstallerPolicy::OnCustomUninstall() {}
 void ScreenAIComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   VLOG(1) << "Screen AI Component ready, version " << version.GetString()
           << " in " << install_dir.value();
 
-  // Verifying library availability requires I/O and hence a blocking thread.
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE,
-      {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-      base::BindOnce(&screen_ai::ScreenAIInstallState::VerifyLibraryAvailablity,
-                     install_dir),
-      base::BindOnce(
-          [](base::FilePath install_dir, bool library_available) {
-            auto* state = screen_ai::ScreenAIInstallState::GetInstance();
-            if (library_available) {
-              state->SetComponentFolder(install_dir);
-            } else {
-              state->SetState(
-                  screen_ai::ScreenAIInstallState::State::kDownloadFailed);
-            }
-          },
-          install_dir));
+  screen_ai::ScreenAIInstallState::GetInstance()->SetComponentFolder(
+      install_dir);
 }
 
 bool ScreenAIComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   VLOG(1) << "Verifying Screen AI component in " << install_dir.value();
 
@@ -115,8 +99,8 @@ std::string ScreenAIComponentInstallerPolicy::GetOmahaId() {
 
 void ScreenAIComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(kScreenAIPublicKeySHA256,
-               kScreenAIPublicKeySHA256 + std::size(kScreenAIPublicKeySHA256));
+  hash->assign(std::begin(kScreenAIPublicKeySHA256),
+               std::end(kScreenAIPublicKeySHA256));
 }
 
 std::string ScreenAIComponentInstallerPolicy::GetName() const {
@@ -130,14 +114,7 @@ ScreenAIComponentInstallerPolicy::GetInstallerAttributes() const {
 
 // static
 void ScreenAIComponentInstallerPolicy::DeleteComponent() {
-  if (screen_ai::GetLatestComponentBinaryPath().empty()) {
-    return;
-  }
-
   base::DeletePathRecursively(screen_ai::GetComponentDir());
-  screen_ai::ScreenAIInstallState::RecordComponentInstallationResult(
-      /*install=*/false,
-      /*successful=*/true);
 }
 
 void ManageScreenAIComponentRegistration(ComponentUpdateService* cus,
@@ -148,7 +125,7 @@ void ManageScreenAIComponentRegistration(ComponentUpdateService* cus,
   }
 
   // Clean up.
-  if (!screen_ai::GetLatestComponentBinaryPath().empty()) {
+  if (base::PathExists(screen_ai::GetComponentDir())) {
     ScreenAIComponentInstallerPolicy::DeleteComponent();
   }
 }

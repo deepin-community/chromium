@@ -14,9 +14,9 @@
 #include "base/json/json_writer.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/core/common/cloud/dm_auth.h"
@@ -30,7 +30,7 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
 #endif
 
@@ -80,29 +80,28 @@ class RequestPayloadBuilder {
     if (client_automated_test) {
       payload_.Set(reporting::json_keys::kSource, "tast");
     }
-    payload_.Set(reporting::json_keys::kEncryptedRecordList,
-                 base::Value::List());
+    payload_.Set(reporting::json_keys::kEncryptedRecordList, base::ListValue());
   }
 
   RequestPayloadBuilder& AddRecord(const base::Value& record) {
-    base::Value::List* records_list =
+    base::ListValue* records_list =
         payload_.FindList(reporting::json_keys::kEncryptedRecordList);
     records_list->Append(record.Clone());
     return *this;
   }
 
-  base::Value::Dict Build() { return std::move(payload_); }
+  base::DictValue Build() { return std::move(payload_); }
 
  private:
-  base::Value::Dict payload_;
+  base::DictValue payload_;
 };
 
 class ResponseValueBuilder {
  public:
-  static base::Value::Dict CreateResponse(
-      const base::Value::Dict& sequence_information,
+  static base::DictValue CreateResponse(
+      const base::DictValue& sequence_information,
       std::optional<base::Value> upload_failure) {
-    base::Value::Dict response;
+    base::DictValue response;
 
     response.Set(reporting::json_keys::kLastSucceedUploadedRecord,
                  sequence_information.Clone());
@@ -114,10 +113,8 @@ class ResponseValueBuilder {
     return response;
   }
 
-  static std::string CreateResponseString(const base::Value::Dict& response) {
-    std::string response_string;
-    base::JSONWriter::Write(response, &response_string);
-    return response_string;
+  static std::string CreateResponseString(const base::DictValue& response) {
+    return base::WriteJson(response).value_or("");
   }
 
   static std::string GetUploadFailureFailedUploadSequencingIdPath() {
@@ -176,7 +173,7 @@ class ResponseValueBuilder {
 class EncryptedReportingJobConfigurationTest : public testing::Test {
  public:
   EncryptedReportingJobConfigurationTest()
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       : fake_serial_number_(&fake_statistics_provider_)
 #endif
   {
@@ -186,14 +183,14 @@ class EncryptedReportingJobConfigurationTest : public testing::Test {
   using MockCompleteCb = MockFunction<void(DeviceManagementService::Job* upload,
                                            DeviceManagementStatus code,
                                            int response_code,
-                                           std::optional<base::Value::Dict>)>;
+                                           std::optional<base::DictValue>)>;
   using MockUploadResponseCb =
       MockFunction<void(int /*net_error*/, int /*response_code*/)>;
   struct TestUpload {
     std::unique_ptr<EncryptedReportingJobConfiguration> configuration;
     std::unique_ptr<StrictMock<MockCompleteCb>> completion_cb;
     std::unique_ptr<StrictMock<MockUploadResponseCb>> upload_response_cb;
-    base::Value::Dict response;
+    base::DictValue response;
     DeviceManagementService::Job job;
   };
 
@@ -217,9 +214,9 @@ class EncryptedReportingJobConfigurationTest : public testing::Test {
         std::make_unique<StrictMock<MockUploadResponseCb>>();
     test_upload.configuration =
         std::make_unique<EncryptedReportingJobConfiguration>(
-            shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-            kServerUrl, RequestPayloadBuilder().AddRecord(record_value).Build(),
-            &client_,
+            shared_url_loader_factory_, kServerUrl,
+            RequestPayloadBuilder().AddRecord(record_value).Build(),
+            client_.dm_token(), client_.client_id(),
             base::BindOnce(
                 &MockUploadResponseCb::Call,
                 base::Unretained(test_upload.upload_response_cb.get())),
@@ -230,21 +227,20 @@ class EncryptedReportingJobConfigurationTest : public testing::Test {
 
   base::Value GenerateSingleRecord(std::string_view encrypted_wrapped_record,
                                    ::reporting::Priority priority = kPriority) {
-    base::Value::Dict record_dictionary;
+    base::DictValue record_dictionary;
     std::string base64_encode = base::Base64Encode(encrypted_wrapped_record);
     record_dictionary.Set(reporting::json_keys::kEncryptedWrappedRecord,
                           base64_encode);
 
-    base::Value::Dict* const sequencing_dictionary =
-        record_dictionary.EnsureDict(
-            reporting::json_keys::kSequenceInformation);
+    base::DictValue* const sequencing_dictionary = record_dictionary.EnsureDict(
+        reporting::json_keys::kSequenceInformation);
     sequencing_dictionary->Set(reporting::json_keys::kSequencingId,
                                base::NumberToString(GetNextSequenceId()));
     sequencing_dictionary->Set(reporting::json_keys::kGenerationId,
                                base::NumberToString(kGenerationId));
     sequencing_dictionary->Set(reporting::json_keys::kPriority, priority);
 
-    base::Value::Dict* const encryption_info_dictionary =
+    base::DictValue* const encryption_info_dictionary =
         record_dictionary.EnsureDict(reporting::json_keys::kEncryptionInfo);
     encryption_info_dictionary->Set(reporting::json_keys::kEncryptionKey,
                                     kEncryptionKeyValue);
@@ -254,14 +250,14 @@ class EncryptedReportingJobConfigurationTest : public testing::Test {
     return base::Value(std::move(record_dictionary));
   }
 
-  static base::Value::Dict GenerateContext(std::string_view key,
-                                           std::string_view value) {
-    base::Value::Dict context;
+  static base::DictValue GenerateContext(std::string_view key,
+                                         std::string_view value) {
+    base::DictValue context;
     context.SetByDottedPath(key, value);
     return context;
   }
 
-  base::Value::List* GetRecordList(
+  base::ListValue* GetRecordList(
       EncryptedReportingJobConfiguration* configuration) {
     base::Value* const payload = GetPayload(configuration);
     auto* const record_list =
@@ -297,8 +293,8 @@ class EncryptedReportingJobConfigurationTest : public testing::Test {
   }
 
   base::Value* GetPayload(EncryptedReportingJobConfiguration* configuration) {
-    std::optional<base::Value> payload_result =
-        base::JSONReader::Read(configuration->GetPayload());
+    std::optional<base::Value> payload_result = base::JSONReader::Read(
+        configuration->GetPayload(), base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
     EXPECT_TRUE(payload_result.has_value());
     payload_ = std::move(payload_result.value());
@@ -310,7 +306,7 @@ class EncryptedReportingJobConfigurationTest : public testing::Test {
 
   policy::MockCloudPolicyClient client_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::system::ScopedFakeStatisticsProvider fake_statistics_provider_;
   class ScopedFakeSerialNumber {
    public:
@@ -319,7 +315,7 @@ class EncryptedReportingJobConfigurationTest : public testing::Test {
       // The fake serial number must be set before |configuration| is
       // constructed below.
       fake_statistics_provider->SetMachineStatistic(
-          ash::system::kSerialNumberKeyForTest, "fake_serial_number");
+          ash::system::kSerialNumberKey, "fake_serial_number");
     }
   };
   ScopedFakeSerialNumber fake_serial_number_;
@@ -338,12 +334,12 @@ TEST_F(EncryptedReportingJobConfigurationTest, ValidatePayload) {
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
   auto* payload = GetPayload(&configuration);
-  const base::Value::Dict& payload_dict = payload->GetDict();
+  const base::DictValue& payload_dict = payload->GetDict();
   EXPECT_FALSE(GetDeviceName().empty());
   EXPECT_EQ(*payload_dict.FindStringByDottedPath(
                 ReportingJobConfigurationBase::DeviceDictionaryBuilder::
@@ -380,13 +376,13 @@ TEST_F(EncryptedReportingJobConfigurationTest,
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
 
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::NoAuth(), kServerUrl,
-      RequestPayloadBuilder().Build(), /*cloud_policy_client=*/nullptr,
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      /*dm_token=*/"", /*client_id=*/"",
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
   auto* payload = GetPayload(&configuration);
   ASSERT_THAT(payload, NotNull());
-  const base::Value::Dict& payload_dict = payload->GetDict();
+  const base::DictValue& payload_dict = payload->GetDict();
 
   // Expect that the payload does not contain any device info
   EXPECT_THAT(payload_dict.FindStringByDottedPath(
@@ -430,9 +426,9 @@ TEST_F(EncryptedReportingJobConfigurationTest, CorrectlyAddEncryptedRecord) {
 
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().AddRecord(record_value).Build(),
-      &client_,
+      shared_url_loader_factory_, kServerUrl,
+      RequestPayloadBuilder().AddRecord(record_value).Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -452,7 +448,7 @@ TEST_F(EncryptedReportingJobConfigurationTest, CorrectlyAddEncryptedRecord) {
 TEST_F(EncryptedReportingJobConfigurationTest, CorrectlyAddsMultipleRecords) {
   const std::vector<std::string> kEncryptedWrappedRecords{
       "T", "E", "S", "T", "_", "I", "N", "F", "O"};
-  base::Value::List records;
+  base::ListValue records;
   RequestPayloadBuilder builder;
   for (auto value : kEncryptedWrappedRecords) {
     records.Append(GenerateSingleRecord(value));
@@ -462,8 +458,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, CorrectlyAddsMultipleRecords) {
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -481,8 +477,8 @@ TEST_F(EncryptedReportingJobConfigurationTest,
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -496,7 +492,7 @@ TEST_F(EncryptedReportingJobConfigurationTest,
        CorrectlyAddsMultipleRecordsWithAttachEncryptionSettings) {
   const std::vector<std::string> kEncryptedWrappedRecords{
       "T", "E", "S", "T", "_", "I", "N", "F", "O"};
-  base::Value::List records;
+  base::ListValue records;
   RequestPayloadBuilder builder{/*attach_encryption_settings=*/true};
   for (auto value : kEncryptedWrappedRecords) {
     records.Append(GenerateSingleRecord(value));
@@ -506,8 +502,8 @@ TEST_F(EncryptedReportingJobConfigurationTest,
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -524,8 +520,8 @@ TEST_F(EncryptedReportingJobConfigurationTest,
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -542,8 +538,8 @@ TEST_F(EncryptedReportingJobConfigurationTest,
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -559,7 +555,7 @@ TEST_F(
     CorrectlyAddsMultipleRecordsWithAttachConfigurationFileAndAttachEncryptionKey) {
   const std::vector<std::string> kEncryptedWrappedRecords{
       "T", "E", "S", "T", "_", "I", "N", "F", "O"};
-  base::Value::List records;
+  base::ListValue records;
   RequestPayloadBuilder builder{/*attach_encryption_settings=*/true,
                                 /*request_configuration_file=*/true};
   for (auto value : kEncryptedWrappedRecords) {
@@ -570,8 +566,8 @@ TEST_F(
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -589,8 +585,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, AllowsSourceTastAlone) {
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -609,8 +605,8 @@ TEST_F(
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -627,7 +623,7 @@ TEST_F(
     CorrectlyAddsMultipleRecordsWithAttachConfigurationFileAttachEncryptionKeyAndSourceTast) {
   const std::vector<std::string> kEncryptedWrappedRecords{
       "T", "E", "S", "T", "_", "I", "N", "F", "O"};
-  base::Value::List records;
+  base::ListValue records;
   RequestPayloadBuilder builder{/*attach_encryption_settings=*/true,
                                 /*request_configuration_file=*/true,
                                 /*client_automated_test=*/true};
@@ -639,8 +635,8 @@ TEST_F(
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, builder.Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, builder.Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
@@ -657,19 +653,19 @@ TEST_F(EncryptedReportingJobConfigurationTest, CorrectlyAddsAndUpdatesContext) {
   StrictMock<MockCompleteCb> completion_cb;
   EXPECT_CALL(completion_cb, Call(_, _, _, _)).Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      client_.dm_token(), client_.client_id(),
       /*response_cb=*/base::DoNothing(),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
 
   const std::string kTestKey = "device.name";
   const std::string kTestValue = "1701-A";
-  base::Value::Dict context = GenerateContext(kTestKey, kTestValue);
+  base::DictValue context = GenerateContext(kTestKey, kTestValue);
   configuration.UpdateContext(std::move(context));
 
   // Ensure the payload includes the path and value.
   base::Value* payload = GetPayload(&configuration);
-  const base::Value::Dict& payload_dict = payload->GetDict();
+  const base::DictValue& payload_dict = payload->GetDict();
   const std::string* good_result =
       payload_dict.FindStringByDottedPath(kTestKey);
   ASSERT_THAT(good_result, NotNull());
@@ -716,7 +712,7 @@ TEST_F(EncryptedReportingJobConfigurationTest, OnURLLoadComplete_Success) {
 
   const std::string kTestString = "device.clientId";
   const std::string kTestInt = "1701-A";
-  base::Value::Dict context = GenerateContext(kTestString, kTestInt);
+  base::DictValue context = GenerateContext(kTestString, kTestInt);
   upload.configuration->UpdateContext(std::move(context));
 
   upload.configuration->OnURLLoadComplete(
@@ -735,8 +731,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, OnURLLoadComplete_NetError) {
   EXPECT_CALL(upload_response_cb, Call(Eq(net::ERR_CONNECTION_RESET), _))
       .Times(1);
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().Build(), &client_,
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      client_.dm_token(), client_.client_id(),
       base::BindOnce(&MockUploadResponseCb::Call,
                      base::Unretained(&upload_response_cb)),
       base::BindOnce(&MockCompleteCb::Call, base::Unretained(&completion_cb)));
@@ -746,8 +742,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, OnURLLoadComplete_NetError) {
 TEST_F(EncryptedReportingJobConfigurationTest, ManagedDeviceUmaName) {
   // Non-null cloud policy client indicates device is unmanaged.
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().Build(), &client_, base::DoNothing(),
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      client_.dm_token(), client_.client_id(), base::DoNothing(),
       base::DoNothing());
 
   EXPECT_EQ(configuration.GetUmaName(),
@@ -757,9 +753,8 @@ TEST_F(EncryptedReportingJobConfigurationTest, ManagedDeviceUmaName) {
 TEST_F(EncryptedReportingJobConfigurationTest, UnmanagedDeviceUmaName) {
   // Null cloud policy client indicates device is unmanaged.
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, RequestPayloadBuilder().Build(),
-      /*cloud_policy_client=*/nullptr, base::DoNothing(), base::DoNothing());
+      shared_url_loader_factory_, kServerUrl, RequestPayloadBuilder().Build(),
+      /*dm_token=*/"", /*client_id=*/"", base::DoNothing(), base::DoNothing());
 
   EXPECT_EQ(configuration.GetUmaName(),
             "Browser.ERP.UnmanagedUploadEncryptedReport");
@@ -768,23 +763,23 @@ TEST_F(EncryptedReportingJobConfigurationTest, UnmanagedDeviceUmaName) {
 TEST_F(EncryptedReportingJobConfigurationTest, PayloadTopLevelFields) {
   static constexpr char kInvalidKey[] = "invalid";
 
-  base::Value::Dict request;
-  request.Set(reporting::json_keys::kEncryptedRecordList, base::Value::List());
+  base::DictValue request;
+  request.Set(reporting::json_keys::kEncryptedRecordList, base::ListValue());
   request.Set(reporting::json_keys::kConfigurationFileVersion, 1234);
   request.Set(reporting::json_keys::kAttachEncryptionSettings, true);
   request.Set(reporting::json_keys::kSource, "tast");
-  request.Set(reporting::json_keys::kDevice, base::Value::Dict());
-  request.Set(reporting::json_keys::kBrowser, base::Value::Dict());
-  request.Set(kInvalidKey, base::Value::Dict());
+  request.Set(reporting::json_keys::kDevice, base::DictValue());
+  request.Set(reporting::json_keys::kBrowser, base::DictValue());
+  request.Set(kInvalidKey, base::DictValue());
   request.Set(reporting::json_keys::kRequestId, "request-id");
 
   EncryptedReportingJobConfiguration configuration(
-      shared_url_loader_factory_, DMAuth::FromDMToken(client_.dm_token()),
-      kServerUrl, std::move(request), &client_, base::DoNothing(),
+      shared_url_loader_factory_, kServerUrl, std::move(request),
+      client_.dm_token(), client_.client_id(), base::DoNothing(),
       base::DoNothing());
 
-  std::optional<base::Value> payload =
-      base::JSONReader::Read(configuration.GetPayload());
+  std::optional<base::Value> payload = base::JSONReader::Read(
+      configuration.GetPayload(), base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ASSERT_TRUE(payload);
   ASSERT_TRUE(payload->is_dict());

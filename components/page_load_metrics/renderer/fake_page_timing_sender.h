@@ -80,7 +80,6 @@ class FakePageTimingSender : public PageTimingSender {
 
     void UpdateExpectedInteractionTiming(
         const base::TimeDelta interaction_duration,
-        mojom::UserInteractionType interaction_type,
         uint64_t interaction_offset,
         const base::TimeTicks interaction_time);
 
@@ -118,7 +117,7 @@ class FakePageTimingSender : public PageTimingSender {
         const std::vector<mojom::ResourceDataUpdatePtr>& resources,
         const mojom::FrameRenderDataUpdate& render_data,
         const mojom::CpuTimingPtr& cpu_timing,
-        const mojom::InputTimingPtr& input_timing,
+        const std::vector<mojom::EventTimingPtr>& event_timings,
         const std::optional<blink::SubresourceLoadMetrics>&
             subresource_load_metrics,
         const mojom::SoftNavigationMetricsPtr& soft_navigation_metrics);
@@ -140,8 +139,8 @@ class FakePageTimingSender : public PageTimingSender {
     std::optional<gfx::Rect> actual_main_frame_intersection_rect_;
     std::optional<gfx::Rect> expected_main_frame_viewport_rect_;
     std::optional<gfx::Rect> actual_main_frame_viewport_rect_;
-    mojom::InputTiming expected_input_timing;
-    mojom::InputTiming actual_input_timing;
+    std::vector<mojom::EventTimingPtr> expected_event_timings_;
+    std::vector<mojom::EventTimingPtr> actual_event_timings_;
     std::optional<blink::SubresourceLoadMetrics>
         expected_subresource_load_metrics_;
     std::optional<blink::SubresourceLoadMetrics>
@@ -162,16 +161,18 @@ class FakePageTimingSender : public PageTimingSender {
       std::vector<mojom::ResourceDataUpdatePtr> resources,
       const mojom::FrameRenderDataUpdate& render_data,
       const mojom::CpuTimingPtr& cpu_timing,
-      mojom::InputTimingPtr new_input_timing,
+      std::vector<mojom::EventTimingPtr> event_timings,
       const std::optional<blink::SubresourceLoadMetrics>&
           subresource_load_metrics,
       const mojom::SoftNavigationMetricsPtr& soft_navigation_metrics) override;
 
-  void SetUpSmoothnessReporting(
-      base::ReadOnlySharedMemoryRegion shared_memory) override;
+  void SetUpDroppedFramesReporting(
+      base::ReadOnlySharedMemoryRegion dropped_frames_memory) override;
+
+  void SendCustomUserTiming(mojom::CustomUserTimingMarkPtr timing) override;
 
  private:
-  const raw_ptr<PageTimingValidator, ExperimentalRenderer> validator_;
+  const raw_ptr<PageTimingValidator> validator_;
 };
 
 }  // namespace page_load_metrics

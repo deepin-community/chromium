@@ -222,7 +222,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_BINDING_2D',
       'GL_TEXTURE_BINDING_CUBE_MAP',
       'GL_UNPACK_ALIGNMENT',
-      'GL_BIND_GENERATES_RESOURCE_CHROMIUM',
       # we can add this because we emulate it if the driver does not support it.
       'GL_VERTEX_ARRAY_BINDING_OES',
       'GL_VIEWPORT',
@@ -313,9 +312,6 @@ _NAMED_TYPE_INFO = {
       # GL_VERTEX_ARRAY_BINDING is the same as GL_VERTEX_ARRAY_BINDING_OES
       # 'GL_VERTEX_ARRAY_BINDING',
     ],
-    'invalid': [
-      'GL_FOG_HINT',
-    ],
   },
   'IndexedGLState': {
     'type': 'GLenum',
@@ -334,9 +330,6 @@ _NAMED_TYPE_INFO = {
       'GL_BLEND_DST_ALPHA',
       'GL_COLOR_WRITEMASK',
     ],
-    'invalid': [
-      'GL_FOG_HINT',
-    ],
   },
   'GetTexParamTarget': {
     'type': 'GLenum',
@@ -348,9 +341,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_2D_ARRAY',
       'GL_TEXTURE_3D',
     ],
-    'invalid': [
-      'GL_PROXY_TEXTURE_CUBE_MAP',
-    ]
   },
   'ReadBuffer': {
     'type': 'GLenum',
@@ -389,9 +379,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_CUBE_MAP_POSITIVE_Z',
       'GL_TEXTURE_CUBE_MAP_NEGATIVE_Z',
     ],
-    'invalid': [
-      'GL_PROXY_TEXTURE_CUBE_MAP',
-    ]
   },
   'TextureFboTarget': {
     'type': 'GLenum',
@@ -404,9 +391,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_CUBE_MAP_POSITIVE_Z',
       'GL_TEXTURE_CUBE_MAP_NEGATIVE_Z',
     ],
-    'invalid': [
-      'GL_PROXY_TEXTURE_CUBE_MAP',
-    ]
   },
   'Texture3DTarget': {
     'type': 'GLenum',
@@ -430,7 +414,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_2D_ARRAY',
     ],
     'invalid': [
-      'GL_TEXTURE_1D',
       'GL_TEXTURE_3D',
     ],
   },
@@ -564,10 +547,6 @@ _NAMED_TYPE_INFO = {
                   for cap in build_cmd_buffer_lib._CAPABILITY_FLAGS
                   if ('es3' in cap and cap['es3'] == True)
                   and 'extension_flag' not in cap],
-    'invalid': [
-      'GL_CLIP_PLANE0',
-      'GL_POINT_SPRITE',
-    ],
   },
   'DrawMode': {
     'type': 'GLenum',
@@ -756,7 +735,6 @@ _NAMED_TYPE_INFO = {
       'GL_ANY_SAMPLES_PASSED_EXT',
       'GL_ANY_SAMPLES_PASSED_CONSERVATIVE_EXT',
       'GL_COMMANDS_ISSUED_CHROMIUM',
-      'GL_COMMANDS_ISSUED_TIMESTAMP_CHROMIUM',
       'GL_ASYNC_PIXEL_PACK_COMPLETED_CHROMIUM',
       'GL_COMMANDS_COMPLETED_CHROMIUM',
       'GL_READBACK_SHADOW_COPIES_UPDATED_CHROMIUM',
@@ -800,9 +778,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_WRAP_R',
       'GL_TEXTURE_COMPARE_MODE',
       'GL_TEXTURE_COMPARE_FUNC',
-    ],
-    'invalid': [
-      'GL_GENERATE_MIPMAP',
     ],
   },
   'ShaderParameter': {
@@ -865,9 +840,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_MAX_LOD',
       'GL_TEXTURE_MIN_LOD',
       'GL_TEXTURE_WRAP_R',
-    ],
-    'invalid': [
-      'GL_GENERATE_MIPMAP',
     ],
   },
   'TextureWrapMode': {
@@ -979,9 +951,6 @@ _NAMED_TYPE_INFO = {
     ],
     'valid_es3': [
       'GL_FRAGMENT_SHADER_DERIVATIVE_HINT',
-    ],
-    'invalid': [
-      'GL_PERSPECTIVE_CORRECTION_HINT',
     ],
   },
   'HintMode': {
@@ -1331,9 +1300,6 @@ _NAMED_TYPE_INFO = {
       'GL_RGBA4',
       'GL_RGB10_A2',
       'GL_RGBA16F',
-      'GL_RGB_YCRCB_420_CHROMIUM',
-      'GL_RGB_YCBCR_420V_CHROMIUM',
-      'GL_RGB_YCBCR_P010_CHROMIUM',
       'GL_R16_EXT',
     ],
   },
@@ -1418,9 +1384,6 @@ _NAMED_TYPE_INFO = {
     'type': 'GLenum',
     'valid': [
       'GL_RGB',
-      'GL_RGB_YCRCB_420_CHROMIUM',
-      'GL_RGB_YCBCR_420V_CHROMIUM',
-      'GL_RGB_YCBCR_P010_CHROMIUM',
       'GL_RGBA',
     ],
   },
@@ -1522,9 +1485,9 @@ _NAMED_TYPE_INFO = {
     'type': 'GLenum',
     'is_complete': True,
     'valid': [
-      'GL_GUILTY_CONTEXT_RESET_ARB',
-      'GL_INNOCENT_CONTEXT_RESET_ARB',
-      'GL_UNKNOWN_CONTEXT_RESET_ARB',
+      'GL_GUILTY_CONTEXT_RESET',
+      'GL_INNOCENT_CONTEXT_RESET',
+      'GL_UNKNOWN_CONTEXT_RESET',
     ],
   },
   'SyncCondition': {
@@ -1576,14 +1539,6 @@ _NAMED_TYPE_INFO = {
     'valid': [
       'GL_INCLUSIVE_EXT',
       'GL_EXCLUSIVE_EXT',
-    ],
-  },
-  'SwapBuffersFlags': {
-    'type': 'GLbitfield',
-    'is_complete': True,
-    'valid': [
-      '0',
-      'gpu::SwapBuffersFlags::kVSyncParams',
     ],
   },
   'SharedImageAccessMode': {
@@ -1656,8 +1611,6 @@ _NAMED_TYPE_INFO = {
 #               'extension': True.
 # not_shared:   For GENn types, True if objects can't be shared between contexts
 # es3:          ES3 API. True if the function requires an ES3 or WebGL2 context.
-# es31:         ES31 API. True if the function requires an WebGL2Compute
-#               context.
 
 _FUNCTION_INFO = {
   'ActiveTexture': {
@@ -1676,11 +1629,13 @@ _FUNCTION_INFO = {
     'type': 'Bind',
     'decoder_func': 'DoBindBuffer',
     'gen_func': 'GenBuffersARB',
+    'client_test': False,
   },
   'BindBufferBase': {
     'type': 'Bind',
     'decoder_func': 'DoBindBufferBase',
     'gen_func': 'GenBuffersARB',
+    'client_test': False,
     'unit_test': False,
     'es3': True,
   },
@@ -1688,6 +1643,7 @@ _FUNCTION_INFO = {
     'type': 'Bind',
     'decoder_func': 'DoBindBufferRange',
     'gen_func': 'GenBuffersARB',
+    'client_test': False,
     'unit_test': False,
     'valid_args': {
       '3': '4',
@@ -1700,24 +1656,20 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoBindFramebuffer',
     'gl_test_func': 'glBindFramebufferEXT',
     'gen_func': 'GenFramebuffersEXT',
+    'client_test': False,
     'trace_level': 1,
-  },
-  'BindImageTexture':{
-    'cmd_args': 'GLuint unit, GLuint texture, GLint level, GLboolean layered, '
-                'GLint layer, GLenum access, GLenum format',
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
   },
   'BindRenderbuffer': {
     'type': 'Bind',
     'decoder_func': 'DoBindRenderbuffer',
     'gl_test_func': 'glBindRenderbufferEXT',
     'gen_func': 'GenRenderbuffersEXT',
+    'client_test': False,
   },
   'BindSampler': {
     'type': 'Bind',
     'decoder_func': 'DoBindSampler',
+    'client_test': False,
     'es3': True,
   },
   'BindTexture': {
@@ -1742,8 +1694,6 @@ _FUNCTION_INFO = {
     'extension_flag': 'chromium_framebuffer_multisample',
     'pepper_interface': 'FramebufferBlit',
     'pepper_name': 'BlitFramebufferEXT',
-    'defer_reads': True,
-    'defer_draws': True,
     'trace_level': 1,
   },
   'BufferData': {
@@ -1773,7 +1723,6 @@ _FUNCTION_INFO = {
   },
   'Clear': {
     'decoder_func': 'DoClear',
-    'defer_draws': True,
     'trace_level': 2,
     'valid_args': {
       '0': 'GL_COLOR_BUFFER_BIT'
@@ -1862,20 +1811,6 @@ _FUNCTION_INFO = {
     'unit_test': False,
     'es3': True,
   },
-  'CreateAndConsumeTextureCHROMIUM': {
-    'type': 'NoCommand',
-    'extension': "CHROMIUM_texture_mailbox",
-    'trace_level': 2,
-  },
-  'CreateAndConsumeTextureINTERNAL': {
-    'decoder_func': 'DoCreateAndConsumeTextureINTERNAL',
-    'internal': True,
-    'type': 'PUT',
-    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
-    'impl_func': False,
-    'unit_test': False,
-    'trace_level': 2,
-  },
   'ClearStencil': {
     'type': 'StateSet',
     'state': 'ClearStencil',
@@ -1903,12 +1838,10 @@ _FUNCTION_INFO = {
   'CopyTexImage2D': {
     'decoder_func': 'DoCopyTexImage2D',
     'unit_test': False,
-    'defer_reads': True,
     'trace_level': 1,
   },
   'CopyTexSubImage2D': {
     'decoder_func': 'DoCopyTexSubImage2D',
-    'defer_reads': True,
     'trace_level': 1,
   },
   'CompressedTexImage3D': {
@@ -1926,7 +1859,6 @@ _FUNCTION_INFO = {
   'CopyTexSubImage3D': {
     'decoder_func': 'DoCopyTexSubImage3D',
     'unit_test': False,
-    'defer_reads': True,
     'es3': True,
     'trace_level': 1,
   },
@@ -2130,33 +2062,11 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'unit_test': False,
   },
-  'DispatchCompute': {
-    'cmd_args': 'GLuint num_groups_x, GLuint num_groups_y, GLuint num_groups_z',
-    'trace_level': 2,
-    'es31': True,
-    'unit_test': False,
-  },
-  'DispatchComputeIndirect': {
-    'cmd_args': 'GLintptrNotNegative offset',
-    'trace_level': 2,
-    'es31': True,
-    'unit_test': False,
-  },
   'DrawArrays': {
     'type': 'Custom',
     'impl_func': False,
     'cmd_args': 'GLenumDrawMode mode, GLint first, GLsizei count',
-    'defer_draws': True,
     'trace_level': 2,
-  },
-  'DrawArraysIndirect': {
-    'type': 'Custom',
-    'impl_func': False,
-    'cmd_args': 'GLenumDrawMode mode, GLuint offset',
-    'trace_level': 2,
-    'es31': True,
-    'unit_test': False,
-    'client_test': False,
   },
   'DrawElements': {
     'type': 'Custom',
@@ -2164,17 +2074,7 @@ _FUNCTION_INFO = {
     'cmd_args': 'GLenumDrawMode mode, GLsizei count, '
                 'GLenumIndexType type, GLuint index_offset',
     'client_test': False,
-    'defer_draws': True,
     'trace_level': 2,
-  },
-  'DrawElementsIndirect': {
-    'type': 'Custom',
-    'impl_func': False,
-    'cmd_args': 'GLenumDrawMode mode, GLenumIndexType type, GLuint offset',
-    'trace_level': 2,
-    'es31': True,
-    'unit_test': False,
-    'client_test': False,
   },
   'DrawRangeElements': {
     'type': 'NoCommand',
@@ -2208,7 +2108,6 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'client_test': False,
     'decoder_func': 'DoFinish',
-    'defer_reads': True,
     'trace_level': 1,
   },
   'Flush': {
@@ -2378,15 +2277,6 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoGetBooleanv',
     'gl_test_func': 'glGetIntegerv',
   },
-  'GetBooleani_v': {
-    'type': 'GETn',
-    'result': ['SizedResult<GLboolean>'],
-    'decoder_func': 'DoGetBooleani_v',
-    'shadowed': True,
-    'client_test': False,
-    'unit_test': False,
-    'es3': True
-  },
   'GetBufferParameteri64v': {
     'type': 'GETn',
     'result': ['SizedResult<GLint64>'],
@@ -2498,60 +2388,6 @@ _FUNCTION_INFO = {
     'type': 'STRn',
     'expectation': False,
   },
-  'GetProgramInterfaceiv': {
-    'type': 'GETn',
-    'decoder_func': 'DoGetProgramInterfaceiv',
-    'result': ['SizedResult<GLint>'],
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
-  },
-  'GetProgramResourceiv': {
-    'type': 'Custom',
-    'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLenum program_interface, GLuint index, '
-        'uint32_t props_bucket_id, GLint* params',
-    'result': ['SizedResult<GLint>'],
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
-  },
-  'GetProgramResourceIndex': {
-    'type': 'Custom',
-    'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLenum program_interface, '
-        'uint32_t name_bucket_id, GLuint* index',
-    'result': ['GLuint'],
-    'error_return': 'GL_INVALID_INDEX',
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
-  },
-  'GetProgramResourceLocation': {
-    'type': 'Custom',
-    'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLenum program_interface, '
-        'uint32_t name_bucket_id, GLint* location',
-    'result': ['GLint'],
-    'error_return': -1,
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
-  },
-  'GetProgramResourceName': {
-    'type': 'Custom',
-    'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLenum program_interface, GLuint index, '
-        'uint32_t name_bucket_id, void* result',
-    'result': ['int32_t'],
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
-  },
   'GetRenderbufferParameteriv': {
     'type': 'GETn',
     'decoder_func': 'DoGetRenderbufferParameteriv',
@@ -2620,12 +2456,14 @@ _FUNCTION_INFO = {
   'GetTexParameterfv': {
     'type': 'GETn',
     'decoder_func': 'DoGetTexParameterfv',
-    'result': ['SizedResult<GLfloat>']
+    'result': ['SizedResult<GLfloat>'],
+    'unit_test': False,
   },
   'GetTexParameteriv': {
     'type': 'GETn',
     'decoder_func': 'DoGetTexParameteriv',
-    'result': ['SizedResult<GLint>']
+    'result': ['SizedResult<GLint>'],
+    'unit_test': False,
   },
   'GetTranslatedShaderSourceANGLE': {
     'type': 'STRn',
@@ -2876,20 +2714,6 @@ _FUNCTION_INFO = {
     'result': ['uint32_t'],
     'trace_level': 1,
   },
-  # MemoryBarrierEXT is in order to avoid the conflicting MemoryBarrier macro
-  # in windows.
-  'MemoryBarrierEXT': {
-    'cmd_args': 'GLbitfield barriers',
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True
-  },
-  'MemoryBarrierByRegion': {
-    'cmd_args': 'GLbitfield barriers',
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True
-  },
   'MultiDrawBeginCHROMIUM': {
     'decoder_func': 'DoMultiDrawBeginCHROMIUM',
     'extension': 'WEBGL_multi_draw',
@@ -2920,7 +2744,6 @@ _FUNCTION_INFO = {
     'size_args': {
       'firsts': 'drawcount * sizeof(GLint)',
       'counts': 'drawcount * sizeof(GLsizei)', },
-    'defer_draws': True,
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -2940,7 +2763,6 @@ _FUNCTION_INFO = {
       'firsts': 'drawcount * sizeof(GLint)',
       'counts': 'drawcount * sizeof(GLsizei)',
       'instance_counts': 'drawcount * sizeof(GLsizei)', },
-    'defer_draws': True,
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -2965,7 +2787,6 @@ _FUNCTION_INFO = {
       'instance_counts': 'drawcount * sizeof(GLsizei)',
       'baseinstances': 'drawcount * sizeof(GLuint)',
     },
-    'defer_draws': True,
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -2984,7 +2805,6 @@ _FUNCTION_INFO = {
     'size_args': {
       'counts': 'drawcount * sizeof(GLsizei)',
       'offsets': 'drawcount * sizeof(GLsizei)', },
-    'defer_draws': True,
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -3005,7 +2825,6 @@ _FUNCTION_INFO = {
       'counts': 'drawcount * sizeof(GLsizei)',
       'offsets': 'drawcount * sizeof(GLsizei)',
       'instance_counts': 'drawcount * sizeof(GLsizei)', },
-    'defer_draws': True,
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -3034,7 +2853,6 @@ _FUNCTION_INFO = {
       'basevertices': 'drawcount * sizeof(GLint)',
       'baseinstances': 'drawcount * sizeof(GLuint)',
     },
-    'defer_draws': True,
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -3078,16 +2896,6 @@ _FUNCTION_INFO = {
   'PixelStorei': {
     'type': 'Custom',
     'impl_func': False,
-  },
-  'ProduceTextureDirectCHROMIUM': {
-    'decoder_func': 'DoProduceTextureDirectCHROMIUM',
-    'impl_func': False,
-    'type': 'PUT',
-    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
-    'unit_test': False,
-    'client_test': False,
-    'extension': "CHROMIUM_texture_mailbox",
-    'trace_level': 1,
   },
   'ProvokingVertexANGLE': {
     'extension_flag': 'angle_provoking_vertex',
@@ -3158,7 +2966,6 @@ _FUNCTION_INFO = {
       'int32_t row_length',
       'int32_t num_rows',
     ],
-    'defer_reads': True,
     'trace_level': 1,
   },
   'ReleaseShaderCompiler': {
@@ -3227,15 +3034,6 @@ _FUNCTION_INFO = {
     'state': 'StencilMask',
     'no_gl': True,
     'expectation': False,
-  },
-  'SwapBuffers': {
-    'impl_func': False,
-    'decoder_func': 'DoSwapBuffers',
-    'client_test': False,
-    'expectation': False,
-    'extension': True,
-    'trace_level': 1,
-    'trace_queueing_flow': True,
   },
   'TexImage2D': {
     'type': 'Custom',
@@ -3586,16 +3384,6 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'decoder_func': 'DoViewport',
   },
-  'ResizeCHROMIUM': {
-    'type': 'Custom',
-    'impl_func': False,
-    'client_test': False,
-    'cmd_args': 'GLint width, GLint height, GLfloat scale_factor, GLboolean '
-                'alpha, GLuint shm_id, GLuint shm_offset, GLsizei '
-                'color_space_size',
-    'extension': True,
-    'trace_level': 1,
-  },
   'GetRequestableExtensionsCHROMIUM': {
     'type': 'Custom',
     'impl_func': False,
@@ -3635,7 +3423,6 @@ _FUNCTION_INFO = {
                 'GLsizei primcount',
     'extension': 'ANGLE_instanced_arrays',
     'pepper_interface': 'InstancedArrays',
-    'defer_draws': True,
     'trace_level': 2,
   },
   'DrawArraysInstancedBaseInstanceANGLE': {
@@ -3644,7 +3431,6 @@ _FUNCTION_INFO = {
     'cmd_args': 'GLenumDrawMode mode, GLint first, GLsizei count, '
                 'GLsizei primcount, GLuint baseinstance',
     'extension': 'ANGLE_base_vertex_base_instance',
-    'defer_draws': True,
     'trace_level': 2,
   },
   'DrawBuffersEXT': {
@@ -3666,7 +3452,6 @@ _FUNCTION_INFO = {
     'extension': 'ANGLE_instanced_arrays',
     'client_test': False,
     'pepper_interface': 'InstancedArrays',
-    'defer_draws': True,
     'trace_level': 2,
   },
   'DrawElementsInstancedBaseVertexBaseInstanceANGLE': {
@@ -3677,7 +3462,6 @@ _FUNCTION_INFO = {
                 'GLint basevertex, GLuint baseinstance',
     'extension': 'ANGLE_base_vertex_base_instance',
     'client_test': False,
-    'defer_draws': True,
     'trace_level': 2,
   },
   'VertexAttribDivisorANGLE': {
@@ -3913,33 +3697,6 @@ _FUNCTION_INFO = {
     'extension': 'CHROMIUM_lose_context',
     'trace_level': 1,
   },
-  'DiscardBackbufferCHROMIUM': {
-    'type': 'Custom',
-    'extension': True,
-    'trace_level': 2,
-  },
-  'InitializeDiscardableTextureCHROMIUM': {
-    'type': 'Custom',
-    'cmd_args': 'GLuint texture_id, uint32_t shm_id, '
-                'uint32_t shm_offset',
-    'impl_func': False,
-    'client_test': False,
-    'extension': True,
-  },
-  'UnlockDiscardableTextureCHROMIUM': {
-    'type': 'Custom',
-    'cmd_args': 'GLuint texture_id',
-    'impl_func': False,
-    'client_test': False,
-    'extension': True,
-  },
-  'LockDiscardableTextureCHROMIUM': {
-    'type': 'Custom',
-    'cmd_args': 'GLuint texture_id',
-    'impl_func': False,
-    'client_test': False,
-    'extension': True,
-  },
   'WindowRectanglesEXT': {
     'type': 'PUTn',
     'count': 4,
@@ -4049,38 +3806,6 @@ _FUNCTION_INFO = {
   # from RasterImplementationGLES to be used with Passthrough Command Decoder.
   # Also, they have similar implementations to corresponding functions for
   # Raster Decoder.
-  # TODO(hitawala): Remove these methods once OOP-C is launched and we prefer
-  # Raster Decoder over Passthrough Command Decoder everywhere.
-  'ConvertRGBAToYUVAMailboxesINTERNAL': {
-    'decoder_func': 'DoConvertRGBAToYUVAMailboxesINTERNAL',
-    'extension': 'CHROMIUM_shared_image',
-    'internal': False,
-    'type': 'PUT',
-    'count': 80, #GL_MAILBOX_SIZE_CHROMIUM x5
-    'impl_func': True,
-    'unit_test': False,
-    'trace_level': 2,
-  },
-  'ConvertYUVAMailboxesToRGBINTERNAL': {
-    'decoder_func': 'DoConvertYUVAMailboxesToRGBINTERNAL',
-    'extension': 'CHROMIUM_shared_image',
-    'internal': False,
-    'type': 'PUT',
-    'count': 144, #GL_MAILBOX_SIZE_CHROMIUM x5 + 16 floats
-    'impl_func': True,
-    'unit_test': False,
-    'trace_level': 2,
-  },
-  'ConvertYUVAMailboxesToTextureINTERNAL': {
-    'decoder_func': 'DoConvertYUVAMailboxesToTextureINTERNAL',
-    'extension': 'CHROMIUM_shared_image',
-    'internal': False,
-    'type': 'PUT',
-    'count': 64, #GL_MAILBOX_SIZE_CHROMIUM x4
-    'impl_func': True,
-    'unit_test': False,
-    'trace_level': 2,
-  },
   'CopySharedImageINTERNAL': {
     'decoder_func': 'DoCopySharedImageINTERNAL',
     'extension': 'CHROMIUM_shared_image',
@@ -4283,7 +4008,8 @@ def main(argv):
 
   # This script lives under src/gpu/command_buffer.
   script_dir = os.path.dirname(os.path.abspath(__file__))
-  assert script_dir.endswith(os.path.normpath("src/gpu/command_buffer"))
+  assert script_dir.endswith((os.path.normpath("src/gpu/command_buffer"),
+                              os.path.normpath("chromium/gpu/command_buffer")))
   # os.path.join doesn't do the right thing with relative paths.
   chromium_root_dir = os.path.abspath(script_dir + "/../..")
 
@@ -4300,11 +4026,6 @@ def main(argv):
       chromium_root_dir)
   gen.ParseGLH("gpu/command_buffer/gles2_cmd_buffer_functions.txt")
 
-  gen.WritePepperGLES2Interface("ppapi/api/ppb_opengles2.idl", False)
-  gen.WritePepperGLES2Interface("ppapi/api/dev/ppb_opengles2ext_dev.idl", True)
-  gen.WriteGLES2ToPPAPIBridge("ppapi/lib/gl/gles2/gles2.c")
-  gen.WritePepperGLES2Implementation(
-      "ppapi/shared_impl/ppb_opengles2_shared.cc")
   gen.WriteCommandIds("gpu/command_buffer/common/gles2_cmd_ids_autogen.h")
   gen.WriteFormat("gpu/command_buffer/common/gles2_cmd_format_autogen.h")
   gen.WriteFormatTest(

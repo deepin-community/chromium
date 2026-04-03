@@ -9,14 +9,17 @@
 #include <utility>
 #include <vector>
 
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/timer/elapsed_timer.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/time.h"
 #include "components/sync/protocol/session_specifics.pb.h"
 #include "components/sync/protocol/sync_enums.pb.h"
+#include "components/sync_sessions/session_store.h"
 #include "components/sync_sessions/sync_sessions_client.h"
 #include "components/sync_sessions/synced_session_tracker.h"
 #include "components/sync_sessions/synced_tab_delegate.h"
@@ -32,13 +35,16 @@ using sessions::SerializedNavigationEntry;
 // resynced. Used in UMA metrics. Do not re-order or delete these entries; they
 // are used in a UMA histogram. Please edit SyncPlaceholderTabResyncResult in
 // enums.xml if a value is added.
+// LINT.IfChange(SyncPlaceholderTabResyncResult)
 enum PlaceholderTabResyncResultHistogramValue {
   PLACEHOLDER_TAB_FOUND = 0,
   PLACEHOLDER_TAB_RESYNCED = 1,
-  PLACEHOLDER_TAB_NOT_SYNCED = 2,
+  // PLACEHOLDER_TAB_NOT_SYNCED = 2,
+  PLACEHOLDER_TAB_RESYNC_FAILED = 3,
 
-  kMaxValue = PLACEHOLDER_TAB_NOT_SYNCED
+  kMaxValue = PLACEHOLDER_TAB_RESYNC_FAILED
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncPlaceholderTabResyncResult)
 
 // The maximum number of navigations in each direction we care to sync.
 const int kMaxSyncNavigationCount = 6;
@@ -90,12 +96,24 @@ sync_pb::SyncEnums_BrowserType BrowserTypeFromWindowDelegate(
 }
 
 #if BUILDFLAG(IS_ANDROID)
-void RecordPlaceholderTabResyncResult(
-    PlaceholderTabResyncResultHistogramValue result_value) {
-  base::UmaHistogramEnumeration("Sync.PlaceholderTabResyncResult",
-                                result_value);
+void RecordPlaceholderResync(
+    PlaceholderTabResyncResultHistogramValue result_value,
+    bool is_session_restore) {
+  const char* name = is_session_restore
+                         ? "Sync.PlaceholderResync.OnSessionRestore"
+                         : "Sync.PlaceholderResync.OnTabModification";
+  base::UmaHistogramEnumeration(name, result_value);
 }
+
 #endif  // BUILDFLAG(IS_ANDROID)
+
+void RecordAssociateWindowsTime(const base::ElapsedTimer& timer,
+                                bool is_session_restore) {
+  const char* name = is_session_restore
+                         ? "Sync.AssociateWindowsTime.OnSessionRestore"
+                         : "Sync.AssociateWindowsTime.OnTabModification";
+  UmaHistogramMediumTimes(name, timer.Elapsed());
+}
 
 }  // namespace
 
@@ -108,7 +126,8 @@ LocalSessionEventHandlerImpl::Delegate::~Delegate() = default;
 LocalSessionEventHandlerImpl::LocalSessionEventHandlerImpl(
     Delegate* delegate,
     SyncSessionsClient* sessions_client,
-    SyncedSessionTracker* session_tracker)
+    SyncedSessionTracker* session_tracker,
+    bool is_new_session)
     : delegate_(delegate),
       sessions_client_(sessions_client),
       session_tracker_(session_tracker) {
@@ -118,6 +137,10 @@ LocalSessionEventHandlerImpl::LocalSessionEventHandlerImpl(
 
   current_session_tag_ = session_tracker_->GetLocalSessionTag();
   DCHECK(!current_session_tag_.empty());
+
+  if (is_new_session) {
+    session_tracker_->SetLocalSessionStartTime(base::Time::Now());
+  }
 
   if (!IsSessionRestoreInProgress(sessions_client)) {
     OnSessionRestoreComplete();
@@ -155,6 +178,7 @@ void LocalSessionEventHandlerImpl::AssociateWindows(ReloadTabsOption option,
                                                     WriteBatch* batch,
                                                     bool is_session_restore) {
   DCHECK(!IsSessionRestoreInProgress(sessions_client_));
+  base::ElapsedTimer timer;
 
   const bool has_tabbed_window =
       ScanForTabbedWindow(sessions_client_->GetSyncedWindowDelegatesGetter());
@@ -201,18 +225,15 @@ void LocalSessionEventHandlerImpl::AssociateWindows(ReloadTabsOption option,
       continue;
     }
 
+    const int tab_count_in_window = window_delegate->GetTabCount();
     DCHECK_EQ(window_id, window_delegate->GetSessionId());
     DVLOG(1) << "Associating window " << window_id.id() << " with "
-             << window_delegate->GetTabCount() << " tabs.";
+             << tab_count_in_window << " tabs.";
 
     bool found_tabs = false;
-    for (int j = 0; j < window_delegate->GetTabCount(); ++j) {
+    for (int j = 0; j < tab_count_in_window; ++j) {
       SessionID tab_id = window_delegate->GetTabIdAt(j);
-      SyncedTabDelegate* synced_tab = window_delegate->GetTabAt(j);
-
-      // IsWindowSyncable(), via ShouldSync(), guarantees that tabs are not
-      // null.
-      DCHECK(synced_tab);
+      const bool placeholder_tab = window_delegate->IsPlaceholderTabAt(j);
 
       // If for some reason the tab ID is invalid, skip it.
       if (!tab_id.is_valid()) {
@@ -227,7 +248,8 @@ void LocalSessionEventHandlerImpl::AssociateWindows(ReloadTabsOption option,
       // noone really cares, because the window/tab hierarchy is constructed
       // from the header entity (which has up-to-date IDs). Hence, in order to
       // avoid unnecessary traffic, we avoid updating the entity.
-      if (!synced_tab->IsPlaceholderTab() && RELOAD_TABS == option) {
+      if (!placeholder_tab && RELOAD_TABS == option) {
+        SyncedTabDelegate* synced_tab = window_delegate->GetTabAt(j);
         AssociateTab(synced_tab, batch);
       }
 
@@ -239,37 +261,10 @@ void LocalSessionEventHandlerImpl::AssociateWindows(ReloadTabsOption option,
           session_tracker_->LookupSessionTab(current_session_tag_, tab_id);
 
 #if BUILDFLAG(IS_ANDROID)
-      // Metrics recording will only occur if AssociateWindows is called through
-      // a session restore, denoted by is_session_restore.
-      if (synced_tab->IsPlaceholderTab()) {
-        if (tab && is_session_restore) {
-          RecordPlaceholderTabResyncResult(PLACEHOLDER_TAB_FOUND);
-        } else if (!tab && base::FeatureList::IsEnabled(
-                               syncer::kRestoreSyncedPlaceholderTabs)) {
-          // The placeholder tab doesn't have a tracked counterpart. This is
-          // possible, for example, if the tab was created as a placeholder tab.
-          bool was_tab_resynced = AssociatePlaceholderTab(
-              synced_tab->CreatePlaceholderTabSyncedTabDelegate(), batch);
-
-          if (was_tab_resynced) {
-            // If the tab was presumed to have resynced successfully, perform
-            // another lookup.
-            tab = session_tracker_->LookupSessionTab(current_session_tag_,
-                                                     tab_id);
-
-            if (tab && is_session_restore) {
-              RecordPlaceholderTabResyncResult(PLACEHOLDER_TAB_RESYNCED);
-            }
-          } else if (is_session_restore) {
-            RecordPlaceholderTabResyncResult(PLACEHOLDER_TAB_NOT_SYNCED);
-          }
-        } else if (is_session_restore) {
-          // This metric logic path will likely record no tab data as long as
-          // the RestoreSyncedPlaceholderTabs flag is enabled. If it is
-          // disabled, this path will record all placeholder tabs that the
-          // flag-guarded logic would have attempted to target.
-          RecordPlaceholderTabResyncResult(PLACEHOLDER_TAB_NOT_SYNCED);
-        }
+      if (placeholder_tab) {
+        HandlePlaceholderTabForAssociate(is_session_restore,
+                                         window_delegate->GetTabAt(j), &tab,
+                                         batch);
       }
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -302,7 +297,20 @@ void LocalSessionEventHandlerImpl::AssociateWindows(ReloadTabsOption option,
   auto specifics = std::make_unique<sync_pb::SessionSpecifics>();
   specifics->set_session_tag(current_session_tag_);
   current_session->ToSessionHeaderProto().Swap(specifics->mutable_header());
-  batch->Put(std::move(specifics));
+
+  // TODO(crbug.com/408182457): Some reports indicate that `specifics` is
+  // occasionally invalid here. In that case, avoid sending it to the sync
+  // machinery to avoid CHECK failures.
+  std::optional<SessionStore::SpecificsInvalidReason> invalid_reason =
+      SessionStore::GetSpecificsInvalidReason(*specifics);
+  if (!invalid_reason.has_value()) {
+    batch->Put(std::move(specifics));
+  } else {
+    base::UmaHistogramEnumeration("Sync.InvalidSessionHeader.AssociateWindows",
+                                  *invalid_reason);
+  }
+
+  RecordAssociateWindowsTime(timer, is_session_restore);
 }
 
 void LocalSessionEventHandlerImpl::AssociateTab(
@@ -370,7 +378,7 @@ void LocalSessionEventHandlerImpl::OnLocalTabModified(
   }
 
   // Don't track empty tabs.
-  if (modified_tab->GetEntryCount() != 0) {
+  if (modified_tab && modified_tab->GetEntryCount() != 0) {
     sessions::SerializedNavigationEntry current;
     modified_tab->GetSerializedNavigationAtIndex(
         modified_tab->GetCurrentEntryIndex(), &current);
@@ -378,11 +386,26 @@ void LocalSessionEventHandlerImpl::OnLocalTabModified(
   }
 
   std::unique_ptr<WriteBatch> batch = delegate_->CreateLocalSessionWriteBatch();
-  AssociateTab(modified_tab, batch.get());
+  if (modified_tab) {
+    AssociateTab(modified_tab, batch.get());
+  }
   // Note, we always associate windows because it's possible a tab became
   // "interesting" by going to a valid URL, in which case it needs to be added
   // to the window's tab information. Similarly, if a tab became
   // "uninteresting", we remove it from the window's tab information.
+  AssociateWindows(DONT_RELOAD_TABS, batch.get(), /*is_session_restore=*/false);
+  batch->Commit();
+}
+
+void LocalSessionEventHandlerImpl::OnLocalTabClosed() {
+  DCHECK(!current_session_tag_.empty());
+
+  // Defers updates if session restore is in progress.
+  if (IsSessionRestoreInProgress(sessions_client_)) {
+    return;
+  }
+
+  std::unique_ptr<WriteBatch> batch = delegate_->CreateLocalSessionWriteBatch();
   AssociateWindows(DONT_RELOAD_TABS, batch.get(), /*is_session_restore=*/false);
   batch->Commit();
 }
@@ -401,11 +424,10 @@ sync_pb::SessionTab LocalSessionEventHandlerImpl::GetTabSpecificsFromDelegate(
   specifics.set_pinned(
       window_delegate ? window_delegate->IsTabPinned(&tab_delegate) : false);
   specifics.set_extension_app_id(tab_delegate.GetExtensionAppId());
-  if (base::FeatureList::IsEnabled(syncer::kSyncSessionOnVisibilityChanged)) {
-    specifics.set_last_active_time_unix_epoch_millis(
-        (tab_delegate.GetLastActiveTime() - base::Time::UnixEpoch())
-            .InMilliseconds());
-  }
+  specifics.set_last_active_time_unix_epoch_millis(
+      (tab_delegate.GetLastActiveTime() - base::Time::UnixEpoch())
+          .InMilliseconds());
+
   const int current_index = tab_delegate.GetCurrentEntryIndex();
   const int min_index = std::max(0, current_index - kMaxSyncNavigationCount);
   const int max_index = std::min(current_index + kMaxSyncNavigationCount,
@@ -452,6 +474,38 @@ sync_pb::SessionTab LocalSessionEventHandlerImpl::GetTabSpecificsFromDelegate(
 
   return specifics;
 }
+
+#if BUILDFLAG(IS_ANDROID)
+void LocalSessionEventHandlerImpl::HandlePlaceholderTabForAssociate(
+    bool is_session_restore,
+    SyncedTabDelegate* synced_tab,
+    const sessions::SessionTab** tab,
+    WriteBatch* batch) {
+  if (*tab) {
+    RecordPlaceholderResync(PLACEHOLDER_TAB_FOUND, is_session_restore);
+    return;
+  }
+
+  // The placeholder tab doesn't have a tracked counterpart. This is
+  // possible, for example, if the tab was created as a placeholder tab.
+  SessionID tab_id = synced_tab->GetSessionId();
+  bool was_tab_resynced = AssociatePlaceholderTab(
+      synced_tab->ReadPlaceholderTabSnapshotIfItShouldSync(sessions_client_),
+      batch);
+
+  if (!was_tab_resynced) {
+    RecordPlaceholderResync(PLACEHOLDER_TAB_RESYNC_FAILED, is_session_restore);
+    return;
+  }
+
+  // If the tab was presumed to have resynced successfully, perform another
+  // lookup.
+  *tab = session_tracker_->LookupSessionTab(current_session_tag_, tab_id);
+  RecordPlaceholderResync(
+      *tab ? PLACEHOLDER_TAB_RESYNCED : PLACEHOLDER_TAB_RESYNC_FAILED,
+      is_session_restore);
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 bool LocalSessionEventHandlerImpl::AssociatePlaceholderTab(
     std::unique_ptr<SyncedTabDelegate> snapshot,

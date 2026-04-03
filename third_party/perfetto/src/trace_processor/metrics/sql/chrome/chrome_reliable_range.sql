@@ -23,12 +23,12 @@
 -- from track_event's.
 
 -- Extracts an int value with the given name from the metadata table.
-CREATE PERFETTO FUNCTION _extract_int_metadata(
+CREATE OR REPLACE PERFETTO FUNCTION _extract_int_metadata(
   -- The name of the metadata entry.
   name STRING)
 -- int_value for the given name. NULL if there's no such entry.
 RETURNS LONG AS
-SELECT int_value FROM metadata WHERE name = ($name);
+SELECT int_value FROM metadata WHERE name = ($name) LIMIT 1;
 
 DROP VIEW IF EXISTS chrome_event_stats_per_thread;
 
@@ -150,7 +150,7 @@ FROM
     SELECT upid, NULL AS reliable_from
     FROM chrome_processes_with_missing_main
   )
-ORDER BY start DESC
+ORDER BY start DESC, upid
 LIMIT 1;
 
 DROP VIEW IF EXISTS chrome_reliable_range;

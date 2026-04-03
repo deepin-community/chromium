@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "chrome/browser/ash/wallpaper/wallpaper_drivefs_delegate_impl.h"
 
 #include <memory>
@@ -45,10 +46,9 @@ namespace ash {
 namespace {
 
 scoped_refptr<base::RefCountedBytes> EncodeImage(const gfx::ImageSkia& image) {
-  auto output = base::MakeRefCounted<base::RefCountedBytes>();
-  SkBitmap bitmap = *(image.bitmap());
-  gfx::JPEGCodec::Encode(bitmap, /*quality=*/90, &(output)->data());
-  return output;
+  std::optional<std::vector<uint8_t>> data =
+      gfx::JPEGCodec::Encode(*(image.bitmap()), /*quality=*/90);
+  return base::MakeRefCounted<base::RefCountedBytes>(std::move(data).value());
 }
 
 WallpaperDriveFsDelegate* GetWallpaperDriveFsDelegate() {
@@ -66,8 +66,7 @@ void SaveTestWallpaperFile(const AccountId& account_id, base::FilePath target) {
     ASSERT_TRUE(base::CreateDirectory(target.DirName()));
   }
   auto data = EncodeImage(gfx::test::CreateImageSkia(/*size=*/16));
-  ASSERT_TRUE(
-      base::WriteFile(target, base::make_span(data->front(), data->size())));
+  ASSERT_TRUE(base::WriteFile(target, base::span(*data)));
 }
 
 }  // namespace

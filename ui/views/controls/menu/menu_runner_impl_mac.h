@@ -9,11 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "components/remote_cocoa/common/menu.mojom.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "ui/views/controls/menu/menu_runner_impl_interface.h"
 
@@ -38,10 +36,11 @@ class VIEWS_EXPORT MenuRunnerImplMac : public MenuRunnerImplInterface {
       MenuButtonController* button_controller,
       const gfx::Rect& bounds,
       MenuAnchorPosition anchor,
+      ui::mojom::MenuSourceType source_type,
       int32_t run_types,
       gfx::NativeView native_view_for_gestures,
-      absl::optional<gfx::RoundedCornersF> corners,
-      absl::optional<std::string> show_menu_host_duration_histogram) override;
+      std::optional<gfx::RoundedCornersF> corners,
+      std::optional<std::string> show_menu_host_duration_histogram) override;
   void Cancel() override;
   base::TimeTicks GetClosingEventTime() const override;
 

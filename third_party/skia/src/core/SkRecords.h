@@ -38,6 +38,7 @@
 
 enum class SkBlendMode;
 enum class SkClipOp;
+enum class SkTileMode;
 struct SkPoint;
 struct SkRSXform;
 
@@ -105,7 +106,8 @@ enum Type { SK_RECORD_TYPES(ENUM) };
 
 #define ACT_AS_PTR(ptr)                 \
     operator T*() const { return ptr; } \
-    T* operator->() const { return ptr; }
+    T* operator->() const { return ptr; } \
+    T* data() const { return ptr; }
 
 // An Optional doesn't own the pointer's memory, but may need to destroy non-POD data.
 template <typename T>
@@ -167,17 +169,23 @@ enum Tags {
 };
 
 // A macro to make it a little easier to define a struct that can be stored in SkRecord.
-#define RECORD(T, tags, ...)            \
-struct T {                              \
-    static const Type kType = T##_Type; \
-    static const int kTags = tags;      \
-    __VA_ARGS__;                        \
-};
+#define RECORD(T, tags, ...)                \
+    struct T {                              \
+        static const Type kType = T##_Type; \
+        static const int kTags = tags;      \
+        __VA_ARGS__;                        \
+    };
 
-RECORD(NoOp, 0)
+#define RECORD_TRIVIAL(T, tags)             \
+    struct T {                              \
+        static const Type kType = T##_Type; \
+        static const int kTags = tags;      \
+    };
+
+RECORD_TRIVIAL(NoOp, 0)
 RECORD(Restore, 0,
         TypedMatrix matrix)
-RECORD(Save, 0)
+RECORD_TRIVIAL(Save, 0)
 
 RECORD(SaveLayer, kHasPaint_Tag,
        Optional<SkRect> bounds;
@@ -185,6 +193,7 @@ RECORD(SaveLayer, kHasPaint_Tag,
        sk_sp<const SkImageFilter> backdrop;
        SkCanvas::SaveLayerFlags saveLayerFlags;
        SkScalar backdropScale;
+       SkTileMode backdropTileMode;
        skia_private::AutoTArray<sk_sp<SkImageFilter>> filters)
 
 RECORD(SaveBehind, 0,
@@ -235,7 +244,7 @@ RECORD(ClipRegion, 0,
 RECORD(ClipShader, 0,
         sk_sp<SkShader> shader;
         SkClipOp op)
-RECORD(ResetClip, 0)
+RECORD_TRIVIAL(ResetClip, 0)
 
 // While not strictly required, if you have an SkPaint, it's fastest to put it first.
 RECORD(DrawArc, kDraw_Tag|kHasPaint_Tag,
@@ -311,7 +320,8 @@ RECORD(DrawTextBlob, kDraw_Tag|kHasText_Tag|kHasPaint_Tag,
         sk_sp<const SkTextBlob> blob;
         SkScalar x;
         SkScalar y)
-RECORD(DrawSlug, kDraw_Tag|kHasText_Tag,
+RECORD(DrawSlug, kDraw_Tag|kHasText_Tag|kHasPaint_Tag,
+       SkPaint paint;
        sk_sp<const sktext::gpu::Slug> slug)
 RECORD(DrawPatch, kDraw_Tag|kHasPaint_Tag,
         SkPaint paint;
@@ -325,7 +335,7 @@ RECORD(DrawAtlas, kDraw_Tag|kHasImage_Tag|kHasPaint_Tag|kMultiDraw_Tag,
         PODArray<SkRSXform> xforms;
         PODArray<SkRect> texs;
         PODArray<SkColor> colors;
-        int count;
+        unsigned count;
         SkBlendMode mode;
         SkSamplingOptions sampling;
         Optional<SkRect> cull)
@@ -340,7 +350,7 @@ RECORD(DrawMesh, kDraw_Tag|kHasPaint_Tag|kMultiDraw_Tag,
 RECORD(DrawShadowRec, kDraw_Tag,
        PreCachedPath path;
        SkDrawShadowRec rec)
-RECORD(DrawAnnotation, 0,  // TODO: kDraw_Tag, skia:5548
+RECORD(DrawAnnotation, 0,  // TODO: kDraw_Tag, skbug.com/40036727
        SkRect rect;
        SkString key;
        sk_sp<SkData> value)

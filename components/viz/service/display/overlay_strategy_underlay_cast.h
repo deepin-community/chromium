@@ -33,10 +33,10 @@ class VIZ_SERVICE_EXPORT OverlayStrategyUnderlayCast
       const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
       const OverlayProcessorInterface::FilterOperationsMap&
           render_pass_backdrop_filters,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_pass_list,
       SurfaceDamageRectList* surface_damage_rect_list,
-      const PrimaryPlane* primary_plane,
+      const std::optional<OverlayCandidate>& primary_plane,
       std::vector<OverlayProposedCandidate>* candidates,
       std::vector<gfx::Rect>* content_bounds) override;
 
@@ -45,10 +45,10 @@ class VIZ_SERVICE_EXPORT OverlayStrategyUnderlayCast
       const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
       const OverlayProcessorInterface::FilterOperationsMap&
           render_pass_backdrop_filters,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_pass_list,
       SurfaceDamageRectList* surface_damage_rect_list,
-      const PrimaryPlane* primary_plane,
+      const std::optional<OverlayCandidate>& primary_plane,
       OverlayCandidateList* candidates,
       std::vector<gfx::Rect>* content_bounds,
       const OverlayProposedCandidate& proposed_candidate) override;

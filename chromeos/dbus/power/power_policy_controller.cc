@@ -25,6 +25,11 @@ namespace {
 
 PowerPolicyController* g_power_policy_controller = nullptr;
 
+// See crbug.com/439382852 - if the policy for screen lock delay is set but no
+// value is specified we should use the system defaults.
+const int kDefaultACScreenlockDelayMs = 510000;
+const int kDefaultBatteryScreenlockDelayMs = 390000;
+
 // Appends a description of |field|, a field within |delays|, a
 // power_manager::PowerManagementPolicy::Delays object, to |str|, an
 // std::string, if the field is set.  |name| is a char* describing the
@@ -65,7 +70,6 @@ power_manager::PowerManagementPolicy_Action GetProtoAction(
       return power_manager::PowerManagementPolicy_Action_DO_NOTHING;
     default:
       NOTREACHED() << "Unhandled action " << action;
-      return power_manager::PowerManagementPolicy_Action_DO_NOTHING;
   }
 }
 
@@ -145,18 +149,18 @@ const char PowerPolicyController::kPrefsReason[] = "Prefs";
 
 // static
 bool PowerPolicyController::GetPeakShiftDayConfigs(
-    const base::Value::Dict& value,
+    const base::DictValue& value,
     std::vector<PeakShiftDayConfig>* configs_out) {
   DCHECK(configs_out);
   configs_out->clear();
 
-  const base::Value::List* entries = value.FindList("entries");
+  const base::ListValue* entries = value.FindList("entries");
   if (!entries) {
     return false;
   }
 
   for (const base::Value& item : *entries) {
-    const base::Value::Dict* item_dict = item.GetIfDict();
+    const base::DictValue* item_dict = item.GetIfDict();
     if (!item_dict) {
       return false;
     }
@@ -204,18 +208,18 @@ bool PowerPolicyController::GetPeakShiftDayConfigs(
 
 // static
 bool PowerPolicyController::GetAdvancedBatteryChargeModeDayConfigs(
-    const base::Value::Dict& value,
+    const base::DictValue& value,
     std::vector<AdvancedBatteryChargeModeDayConfig>* configs_out) {
   DCHECK(configs_out);
   configs_out->clear();
 
-  const base::Value::List* entries = value.FindList("entries");
+  const base::ListValue* entries = value.FindList("entries");
   if (!entries) {
     return false;
   }
 
   for (const base::Value& item : *entries) {
-    const base::Value::Dict* item_dict = item.GetIfDict();
+    const base::DictValue* item_dict = item.GetIfDict();
     if (!item_dict) {
       return false;
     }
@@ -365,11 +369,6 @@ std::string PowerPolicyController::GetPolicyDebugString(
   if (policy.has_send_feedback_if_undimmed()) {
     StringAppendF(&str, "send_feedback_if_undimmed=%d ",
                   policy.send_feedback_if_undimmed());
-  }
-
-  if (policy.has_hibernate_delay_sec()) {
-    StringAppendF(&str, "hibernate_delay_sec=%d ",
-                  policy.hibernate_delay_sec());
   }
 
   if (policy.has_reason()) {
@@ -583,8 +582,8 @@ void PowerPolicyController::ApplyPrefs(const PrefValues& values) {
     }
   }
 
-  if (values.hibernate_delay_sec.has_value()) {
-    prefs_policy_.set_hibernate_delay_sec(values.hibernate_delay_sec.value());
+  if (values.charge_limit_enabled.has_value()) {
+    prefs_policy_.set_charge_limit_enabled(values.charge_limit_enabled.value());
   }
 
   prefs_were_set_ = true;
@@ -592,11 +591,22 @@ void PowerPolicyController::ApplyPrefs(const PrefValues& values) {
 }
 
 base::TimeDelta PowerPolicyController::GetMaxPolicyAutoScreenLockDelay() {
-  if (!prefs_were_set_ || !auto_screen_lock_enabled_) {
+  if (!auto_screen_lock_enabled_) {
     return base::TimeDelta();
   }
-  int ac_delay = prefs_policy_.ac_delays().screen_lock_ms();
-  int battery_delay = prefs_policy_.battery_delays().screen_lock_ms();
+
+  int ac_delay = kDefaultACScreenlockDelayMs;
+  if (prefs_policy_.ac_delays().has_screen_lock_ms() &&
+      prefs_policy_.ac_delays().screen_lock_ms() >= 0) {
+    ac_delay = prefs_policy_.ac_delays().screen_lock_ms();
+  }
+
+  int battery_delay = kDefaultBatteryScreenlockDelayMs;
+  if (prefs_policy_.battery_delays().has_screen_lock_ms() &&
+      prefs_policy_.battery_delays().screen_lock_ms() >= 0) {
+    battery_delay = prefs_policy_.battery_delays().screen_lock_ms();
+  }
+
   return base::Milliseconds(std::max(ac_delay, battery_delay));
 }
 
@@ -641,6 +651,14 @@ void PowerPolicyController::NotifyChromeIsExiting() {
   if (chrome_is_exiting_)
     return;
   chrome_is_exiting_ = true;
+  SendCurrentPolicy();
+}
+
+void PowerPolicyController::SetShouldDoNothingWhenIdleInDemoMode() {
+  if (should_do_nothing_when_idle_in_demo_mode_) {
+    return;
+  }
+  should_do_nothing_when_idle_in_demo_mode_ = true;
   SendCurrentPolicy();
 }
 
@@ -755,6 +773,18 @@ void PowerPolicyController::SendCurrentPolicy() {
         power_manager::PowerManagementPolicy_Action_SUSPEND);
     causes +=
         std::string((causes.empty() ? "" : ", ")) + "encryption migration";
+  }
+
+  if (should_do_nothing_when_idle_in_demo_mode_ &&
+      (policy.ac_idle_action() !=
+           power_manager::PowerManagementPolicy_Action_DO_NOTHING ||
+       policy.battery_idle_action() !=
+           power_manager::PowerManagementPolicy_Action_DO_NOTHING)) {
+    LOG(WARNING) << "Idle action is overriden to DO_NOTHING by demo mode.";
+    policy.set_ac_idle_action(
+        power_manager::PowerManagementPolicy_Action_DO_NOTHING);
+    policy.set_battery_idle_action(
+        power_manager::PowerManagementPolicy_Action_DO_NOTHING);
   }
 
   // To avoid a race in the case where the user asks Chrome to sign out

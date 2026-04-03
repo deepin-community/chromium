@@ -12,11 +12,13 @@
 #include "base/android/jni_string.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/translate/android/jni_headers/AutoTranslateSnackbarController_jni.h"
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/translate/core/browser/translate_metrics_logger.h"
 #include "components/translate/core/common/translate_metrics.h"
 #include "content/public/browser/web_contents.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/translate/android/jni_headers/AutoTranslateSnackbarController_jni.h"
 
 namespace translate {
 
@@ -130,15 +132,16 @@ void AutoTranslateSnackbarController::OnDismissNoAction(JNIEnv* env) {
 
 void AutoTranslateSnackbarController::OnUndoActionPressed(
     JNIEnv* env,
-    base::android::JavaParamRef<jstring> j_target_language) {
-  const std::string target_language =
+    const base::android::JavaRef<jstring>& j_target_language) {
+  const std::string target_code =
       base::android::ConvertJavaStringToUTF8(env, j_target_language);
 
   ReportCompactInfobarEvent(InfobarEvent::INFOBAR_REVERT);
   translate_manager_->GetActiveTranslateMetricsLogger()->LogUIInteraction(
       UIInteraction::kRevert);
   translate_manager_->RevertTranslation();
-  translate_manager_->ShowTranslateUI(target_language,
+  translate_manager_->ShowTranslateUI(/* source_code */ std::nullopt,
+                                      target_code,
                                       /* auto_translate */ false,
                                       /* triggered_from_menu */ false);
   bridge_->WasDismissed();
@@ -150,3 +153,5 @@ void AutoTranslateSnackbarController::NativeDismissSnackbar() {
 }
 
 }  // namespace translate
+
+DEFINE_JNI(AutoTranslateSnackbarController)

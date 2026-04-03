@@ -57,6 +57,13 @@ class OwnerSettingsServiceAsh : public ownership::OwnerSettingsService,
     std::string device_id;
   };
 
+  // Use OwnerSettingsServiceAshFactory::BuildServiceInstanceForBrowserContext
+  // instead.
+  OwnerSettingsServiceAsh(
+      DeviceSettingsService* device_settings_service,
+      Profile* profile,
+      const scoped_refptr<ownership::OwnerKeyUtil>& owner_key_util);
+
   OwnerSettingsServiceAsh(const OwnerSettingsServiceAsh&) = delete;
   OwnerSettingsServiceAsh& operator=(const OwnerSettingsServiceAsh&) = delete;
 
@@ -117,12 +124,6 @@ class OwnerSettingsServiceAsh : public ownership::OwnerSettingsService,
   void SetPrivateKeyForTesting(
       scoped_refptr<ownership::PrivateKey> private_key);
 
- protected:
-  OwnerSettingsServiceAsh(
-      DeviceSettingsService* device_settings_service,
-      Profile* profile,
-      const scoped_refptr<ownership::OwnerKeyUtil>& owner_key_util);
-
  private:
   friend class OwnerSettingsServiceAshFactory;
 
@@ -156,7 +157,7 @@ class OwnerSettingsServiceAsh : public ownership::OwnerSettingsService,
   void StorePendingChanges();
 
   // Returns the latest list for setting.
-  base::Value::List GetListForSetting(const std::string& setting) const;
+  base::ListValue GetListForSetting(const std::string& setting) const;
 
   // Called when current device settings are successfully signed. |public_key|
   // is the public part of the key that was used for signing. Sends signed

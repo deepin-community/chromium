@@ -23,7 +23,7 @@
 #include "gpu/ipc/common/surface_handle.h"
 #include "gpu/vulkan/vulkan_device_queue.h"
 #include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
-#include "ui/gfx/gpu_memory_buffer.h"
+#include "ui/gfx/gpu_memory_buffer_handle.h"
 
 namespace gpu {
 
@@ -35,6 +35,7 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
  public:
   static std::unique_ptr<ExternalVkImageBacking> Create(
       scoped_refptr<SharedContextState> context_state,
+      bool enable_webgpu_on_vk_via_gl_interop,
       VulkanCommandPool* command_pool,
       const Mailbox& mailbox,
       viz::SharedImageFormat format,
@@ -42,13 +43,14 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
       const gfx::ColorSpace& color_space,
       GrSurfaceOrigin surface_origin,
       SkAlphaType alpha_type,
-      uint32_t usage,
+      SharedImageUsageSet usage,
       std::string debug_label,
       const base::flat_map<VkFormat, VkImageUsageFlags>& image_usage_cache,
       base::span<const uint8_t> pixel_data);
 
   static std::unique_ptr<ExternalVkImageBacking> CreateFromGMB(
       scoped_refptr<SharedContextState> context_state,
+      bool enable_webgpu_on_vk_via_gl_interop,
       VulkanCommandPool* command_pool,
       const Mailbox& mailbox,
       gfx::GpuMemoryBufferHandle handle,
@@ -57,12 +59,13 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
       const gfx::ColorSpace& color_space,
       GrSurfaceOrigin surface_origin,
       SkAlphaType alpha_type,
-      uint32_t usage,
+      gpu::SharedImageUsageSet usage,
       std::string debug_label,
       std::optional<gfx::BufferUsage> buffer_usage = std::nullopt);
 
   static std::unique_ptr<ExternalVkImageBacking> CreateWithPixmap(
       scoped_refptr<SharedContextState> context_state,
+      bool enable_webgpu_on_vk_via_gl_interop,
       VulkanCommandPool* command_pool,
       const Mailbox& mailbox,
       viz::SharedImageFormat format,
@@ -71,7 +74,7 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
       const gfx::ColorSpace& color_space,
       GrSurfaceOrigin surface_origin,
       SkAlphaType alpha_type,
-      uint32_t usage,
+      SharedImageUsageSet usage,
       std::string debug_label,
       gfx::BufferUsage buffer_usage);
 
@@ -83,13 +86,14 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
       const gfx::ColorSpace& color_space,
       GrSurfaceOrigin surface_origin,
       SkAlphaType alpha_type,
-      uint32_t usage,
+      SharedImageUsageSet usage,
       std::string debug_label,
       size_t estimated_size_bytes,
       scoped_refptr<SharedContextState> context_state,
       std::vector<TextureHolderVk> vk_textures,
       VulkanCommandPool* command_pool,
       bool use_separate_gl_texture,
+      bool enable_webgpu_on_vk_via_gl_interop,
       gfx::GpuMemoryBufferHandle handle = gfx::GpuMemoryBufferHandle(),
       std::optional<gfx::BufferUsage> buffer_usage = std::nullopt);
 
@@ -116,9 +120,13 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
     return context_state()->external_semaphore_pool();
   }
   bool use_separate_gl_texture() const { return use_separate_gl_texture_; }
+  bool enable_webgpu_on_vk_via_gl_interop() const {
+    return enable_webgpu_on_vk_via_gl_interop_;
+  }
+
   bool need_synchronization() const {
-    if (usage() &
-        (SHARED_IMAGE_USAGE_WEBGPU_READ | SHARED_IMAGE_USAGE_WEBGPU_WRITE)) {
+    if (usage().HasAny(SHARED_IMAGE_USAGE_WEBGPU_READ |
+                       SHARED_IMAGE_USAGE_WEBGPU_WRITE)) {
       return true;
     }
 
@@ -126,9 +134,9 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
       return !use_separate_gl_texture() && !gl_textures_.empty();
     }
 
-    if ((usage() &
-         (SHARED_IMAGE_USAGE_RASTER_READ | SHARED_IMAGE_USAGE_RASTER_WRITE)) &&
-        (usage() & SHARED_IMAGE_USAGE_SCANOUT)) {
+    if (usage().HasAny(SHARED_IMAGE_USAGE_RASTER_READ |
+                       SHARED_IMAGE_USAGE_RASTER_WRITE) &&
+        usage().Has(SHARED_IMAGE_USAGE_SCANOUT)) {
       return true;
     }
 
@@ -161,11 +169,15 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
   SharedImageBackingType GetType() const override;
   void Update(std::unique_ptr<gfx::GpuFence> in_fence) override;
   bool UploadFromMemory(const std::vector<SkPixmap>& pixmaps) override;
+  bool ReadbackToMemory(const std::vector<SkPixmap>& pixmaps) override;
   scoped_refptr<gfx::NativePixmap> GetNativePixmap() override;
   gfx::GpuMemoryBufferHandle GetGpuMemoryBufferHandle() override;
 
   // Add semaphores to a pending list for reusing or being released immediately.
   void AddSemaphoresToPendingListOrRelease(
+      std::vector<ExternalSemaphore> semaphores);
+  // Release semaphores immediately.
+  void ReleaseSemaphoresWithFenceHelper(
       std::vector<ExternalSemaphore> semaphores);
   // Return |pending_semaphores_| and passed in |semaphores| to
   // ExternalSemaphorePool for reusing.
@@ -225,17 +237,22 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
   void CopyPixelsFromGLTextureToVkImage();
   void CopyPixelsFromVkImageToGLTexture();
 
+  void CopyPixelsFromGLTextureToVkImageUsingStagingBuffer();
+  void CopyPixelsFromVKImageToGLTextureUsingStagingBuffer();
+
   scoped_refptr<SharedContextState> context_state_;
   std::vector<TextureHolderVk> vk_textures_;
 
   const raw_ptr<VulkanCommandPool, DanglingUntriaged> command_pool_;
   const bool use_separate_gl_texture_;
+  const bool enable_webgpu_on_vk_via_gl_interop_;
 
   ExternalSemaphore write_semaphore_;
   std::vector<ExternalSemaphore> read_semaphores_;
 
   bool is_write_in_progress_ = false;
   uint32_t reads_in_progress_ = 0;
+  bool is_updating_content_ = false;
   uint32_t gl_reads_in_progress_ = 0;
 
   std::vector<GLTextureHolder> gl_textures_;

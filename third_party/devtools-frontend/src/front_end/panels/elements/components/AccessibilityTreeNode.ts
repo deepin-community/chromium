@@ -1,28 +1,30 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-lit-render-outside-of-view */
 
 import * as i18n from '../../../core/i18n/i18n.js';
 import * as Platform from '../../../core/platform/platform.js';
 import * as Protocol from '../../../generated/protocol.js';
-
-import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
-import * as Coordinator from '../../../ui/components/render_coordinator/render_coordinator.js';
-import * as LitHtml from '../../../ui/lit-html/lit-html.js';
+import * as RenderCoordinator from '../../../ui/components/render_coordinator/render_coordinator.js';
+import * as UI from '../../../ui/legacy/legacy.js';
+import {html, nothing, render} from '../../../ui/lit/lit.js';
 
 import accessibilityTreeNodeStyles from './accessibilityTreeNode.css.js';
 
 const UIStrings = {
   /**
-   *@description Ignored node element text content in Accessibility Tree View of the Elements panel
+   * @description Ignored node element text content in Accessibility Tree View of the Elements panel
    */
   ignored: 'Ignored',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/elements/components/AccessibilityTreeNode.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
-// TODO(jobay) move this to Platform.StringUtilities if still needed.
-// This function is a variant of setTextContentTruncatedIfNeeded found in DOMExtension.
+/**
+ * TODO(jobay) move this to Platform.StringUtilities if still needed.
+ * This function is a variant of setTextContentTruncatedIfNeeded found in DOMExtension.
+ **/
 function truncateTextIfNeeded(text: string): string {
   const maxTextContentLength = 10000;
 
@@ -53,8 +55,7 @@ export interface AccessibilityTreeNodeData {
 }
 
 export class AccessibilityTreeNode extends HTMLElement {
-  static readonly litTagName = LitHtml.literal`devtools-accessibility-tree-node`;
-  readonly #shadow = this.attachShadow({mode: 'open'});
+  readonly #shadow = UI.UIUtils.createShadowRootWithCoreStyles(this, {cssFile: accessibilityTreeNodeStyles});
 
   #ignored = true;
   #name = '';
@@ -71,36 +72,30 @@ export class AccessibilityTreeNode extends HTMLElement {
     void this.#render();
   }
 
-  connectedCallback(): void {
-    this.#shadow.adoptedStyleSheets = [accessibilityTreeNodeStyles];
-  }
-
   async #render(): Promise<void> {
-    const role = LitHtml.html`<span class='role-value'>${truncateTextIfNeeded(this.#role)}</span>`;
-    const name = LitHtml.html`"<span class='attribute-value'>${this.#name}</span>"`;
+    const role = html`<span class='role-value'>${truncateTextIfNeeded(this.#role)}</span>`;
+    const name = html`"<span class='attribute-value'>${this.#name}</span>"`;
     const properties = this.#properties.map(
         ({name, value}) => isPrintable(value.type) ?
-            LitHtml.html` <span class='attribute-name'>${name}</span>:&nbsp;<span class='attribute-value'>${
+            html` <span class='attribute-name'>${name}</span>:&nbsp;<span class='attribute-value'>${
                 value.value}</span>` :
-            LitHtml.nothing);
-    const content = this.#ignored ? LitHtml.html`<span>${i18nString(UIStrings.ignored)}</span>` :
-                                    LitHtml.html`${role}&nbsp;${name}${properties}`;
-    await Coordinator.RenderCoordinator.RenderCoordinator.instance().write(
-        `Accessibility node ${this.#id} render`, () => {
-          // clang-format off
-      LitHtml.render(
-        LitHtml.html`<div class='container'>${content}</div>`,
+            nothing);
+    const content =
+        this.#ignored ? html`<span>${i18nString(UIStrings.ignored)}</span>` : html`${role}&nbsp;${name}${properties}`;
+    await RenderCoordinator.write(`Accessibility node ${this.#id} render`, () => {
+      // clang-format off
+      render(
+        html`<div class='container'>${content}</div>`,
         this.#shadow,
         {host: this});
-          // clang-format on
-        });
+      // clang-format on
+    });
   }
 }
 
-ComponentHelpers.CustomElements.defineComponent('devtools-accessibility-tree-node', AccessibilityTreeNode);
+customElements.define('devtools-accessibility-tree-node', AccessibilityTreeNode);
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface HTMLElementTagNameMap {
     'devtools-accessibility-tree-node': AccessibilityTreeNode;
   }

@@ -1,80 +1,54 @@
-/*
- * Copyright (C) 2013 Google Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// Copyright 2013 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as Platform from '../../core/platform/platform.js';
+import type * as SDK from '../../core/sdk/sdk.js';
+import type * as Protocol from '../../generated/protocol.js';
 import * as PerfUI from '../../ui/legacy/components/perf_ui/perf_ui.js';
+import * as UI from '../../ui/legacy/legacy.js';
 
 import paintProfilerStyles from './paintProfiler.css.js';
 
-import type * as Protocol from '../../generated/protocol.js';
-
-import type * as SDK from '../../core/sdk/sdk.js';
-import * as UI from '../../ui/legacy/legacy.js';
-
 const UIStrings = {
   /**
-   *@description Text to indicate the progress of a profile
+   * @description Text to indicate the progress of a profile
    */
   profiling: 'Profiling…',
   /**
-   *@description Text in Paint Profiler View of the Layers panel
+   * @description Text in Paint Profiler View of the Layers panel
    */
   shapes: 'Shapes',
   /**
-   *@description Text in Paint Profiler View of the Layers panel
+   * @description Text in Paint Profiler View of the Layers panel
    */
   bitmap: 'Bitmap',
   /**
-   *@description Generic label for any text
+   * @description Generic label for any text
    */
   text: 'Text',
   /**
-   *@description Text in Paint Profiler View of the Layers panel
+   * @description Text in Paint Profiler View of the Layers panel
    */
   misc: 'Misc',
   /**
-   *@description ARIA label for a pie chart that shows the results of the paint profiler
+   * @description ARIA label for a pie chart that shows the results of the paint profiler
    */
   profilingResults: 'Profiling results',
   /**
-   *@description Label for command log tree in the Profiler tab
+   * @description Label for command log tree in the Profiler tab
    */
   commandLog: 'Command Log',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/layer_viewer/PaintProfilerView.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
-let categories: {[x: string]: PaintProfilerCategory}|null = null;
+let categories: Record<string, PaintProfilerCategory>|null = null;
 
-let logItemCategoriesMap: {[x: string]: PaintProfilerCategory}|null = null;
+let logItemCategoriesMap: Record<string, PaintProfilerCategory>|null = null;
 
 export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventTypes, typeof UI.Widget.HBox>(
     UI.Widget.HBox) {
@@ -84,7 +58,7 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
   private readonly showImageCallback: (arg0?: string|undefined) => void;
   private canvas: HTMLCanvasElement;
   private context: CanvasRenderingContext2D;
-  private readonly selectionWindowInternal: PerfUI.OverviewGrid.Window;
+  readonly #selectionWindow: PerfUI.OverviewGrid.Window;
   private readonly innerBarWidth: number;
   private minBarHeight: number;
   private readonly barPaddingWidth: number;
@@ -99,11 +73,12 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
   private updateImageTimer?: number;
 
   constructor(showImageCallback: (arg0?: string|undefined) => void) {
-    super(true);
+    super({useShadowDom: true});
+    this.registerRequiredCSS(paintProfilerStyles);
 
     this.contentElement.classList.add('paint-profiler-overview');
     this.canvasContainer = this.contentElement.createChild('div', 'paint-profiler-canvas-container');
-    this.progressBanner = this.contentElement.createChild('div', 'full-widget-dimmed-banner hidden');
+    this.progressBanner = this.contentElement.createChild('div', 'empty-state hidden');
     this.progressBanner.textContent = i18nString(UIStrings.profiling);
     this.pieChart = new PerfUI.PieChart.PieChart();
     this.populatePieChart(0, []);
@@ -111,10 +86,10 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
     this.contentElement.appendChild(this.pieChart);
 
     this.showImageCallback = showImageCallback;
-    this.canvas = this.canvasContainer.createChild('canvas', 'fill') as HTMLCanvasElement;
+    this.canvas = this.canvasContainer.createChild('canvas', 'fill');
     this.context = this.canvas.getContext('2d') as CanvasRenderingContext2D;
-    this.selectionWindowInternal = new PerfUI.OverviewGrid.Window(this.canvasContainer);
-    this.selectionWindowInternal.addEventListener(PerfUI.OverviewGrid.Events.WindowChanged, this.onWindowChanged, this);
+    this.#selectionWindow = new PerfUI.OverviewGrid.Window(this.canvasContainer);
+    this.#selectionWindow.addEventListener(PerfUI.OverviewGrid.Events.WINDOW_CHANGED, this.onWindowChanged, this);
 
     this.innerBarWidth = 4 * window.devicePixelRatio;
     this.minBarHeight = window.devicePixelRatio;
@@ -128,7 +103,7 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
     this.reset();
   }
 
-  static categories(): {[x: string]: PaintProfilerCategory} {
+  static categories(): Record<string, PaintProfilerCategory> {
     if (!categories) {
       categories = {
         shapes: new PaintProfilerCategory('shapes', i18nString(UIStrings.shapes), 'rgb(255, 161, 129)'),
@@ -140,11 +115,11 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
     return categories;
   }
 
-  private static initLogItemCategories(): {[x: string]: PaintProfilerCategory} {
+  private static initLogItemCategories(): Record<string, PaintProfilerCategory> {
     if (!logItemCategoriesMap) {
       const categories = PaintProfilerView.categories();
 
-      const logItemCategories: {[x: string]: PaintProfilerCategory} = {};
+      const logItemCategories: Record<string, PaintProfilerCategory> = {};
       logItemCategories['Clear'] = categories['misc'];
       logItemCategories['DrawPaint'] = categories['misc'];
       logItemCategories['DrawData'] = categories['misc'];
@@ -218,11 +193,11 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
     if (!snapshot) {
       this.update();
       this.populatePieChart(0, []);
-      this.selectionWindowInternal.setEnabled(false);
+      this.#selectionWindow.setResizeEnabled(false);
       return;
     }
 
-    this.selectionWindowInternal.setEnabled(true);
+    this.#selectionWindow.setResizeEnabled(true);
     this.progressBanner.classList.remove('hidden');
     this.updateImage();
 
@@ -243,11 +218,11 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
     }
   }
 
-  private update(): void {
+  update(): void {
     this.canvas.width = this.canvasContainer.clientWidth * window.devicePixelRatio;
     this.canvas.height = this.canvasContainer.clientHeight * window.devicePixelRatio;
     this.samplesPerBar = 0;
-    if (!this.profiles || !this.profiles.length || !this.logCategories) {
+    if (!this.profiles?.length || !this.logCategories) {
       return;
     }
 
@@ -258,9 +233,9 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
     let maxBarTime = 0;
     const barTimes = [];
     const barHeightByCategory = [];
-    let heightByCategory: {[category: string]: number} = {};
+    let heightByCategory: Record<string, number> = {};
     for (let i = 0, lastBarIndex = 0, lastBarTime = 0; i < sampleCount;) {
-      let categoryName = (this.logCategories[i] && this.logCategories[i].name) || 'misc';
+      let categoryName = (this.logCategories[i]?.name) || 'misc';
       const sampleIndex = this.log[i].commandIndex;
       for (let row = 0; row < this.profiles.length; row++) {
         const sample = this.profiles[row][sampleIndex];
@@ -298,7 +273,7 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
     }
   }
 
-  private renderBar(index: number, heightByCategory: {[x: string]: number}): void {
+  private renderBar(index: number, heightByCategory: Record<string, number>): void {
     const categories = PaintProfilerView.categories();
     let currentHeight = 0;
     const x = this.barPaddingWidth + index * this.outerBarWidth;
@@ -314,7 +289,7 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
   }
 
   private onWindowChanged(): void {
-    this.dispatchEventToListeners(Events.WindowChanged);
+    this.dispatchEventToListeners(Events.WINDOW_CHANGED);
     this.updatePieChart();
     if (this.updateImageTimer) {
       return;
@@ -329,11 +304,11 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
 
   private calculatePieChart(): {total: number, slices: Array<{value: number, color: string, title: string}>} {
     const window = this.selectionWindow();
-    if (!this.profiles || !this.profiles.length || !window) {
+    if (!this.profiles?.length || !window) {
       return {total: 0, slices: []};
     }
     let totalTime = 0;
-    const timeByCategory: {[x: string]: number} = {};
+    const timeByCategory: Record<string, number> = {};
     for (let i = window.left; i < window.right; ++i) {
       const logEntry = this.log[i];
       const category = PaintProfilerView.categoryForLogItem(logEntry);
@@ -371,8 +346,8 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
       return null;
     }
 
-    const screenLeft = (this.selectionWindowInternal.windowLeft || 0) * this.canvas.width;
-    const screenRight = (this.selectionWindowInternal.windowRight || 0) * this.canvas.width;
+    const screenLeft = (this.#selectionWindow.windowLeftRatio || 0) * this.canvas.width;
+    const screenRight = (this.#selectionWindow.windowRightRatio || 0) * this.canvas.width;
     const barLeft = Math.floor(screenLeft / this.outerBarWidth);
     const barRight = Math.floor((screenRight + this.innerBarWidth - this.barPaddingWidth / 2) / this.outerBarWidth);
     const stepLeft = Platform.NumberUtilities.clamp(barLeft * this.samplesPerBar, 0, this.log.length - 1);
@@ -386,7 +361,7 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
     let left;
     let right;
     const window = this.selectionWindow();
-    if (this.profiles && this.profiles.length && window) {
+    if (this.profiles?.length && window) {
       left = this.log[window.left].commandIndex;
       right = this.log[window.right - 1].commandIndex;
     }
@@ -409,24 +384,20 @@ export class PaintProfilerView extends Common.ObjectWrapper.eventMixin<EventType
     }
     this.snapshot = null;
     this.profiles = null;
-    this.selectionWindowInternal.reset();
-    this.selectionWindowInternal.setEnabled(false);
-  }
-  override wasShown(): void {
-    super.wasShown();
-    this.registerCSSFiles([paintProfilerStyles]);
+    this.#selectionWindow.reset();
+    this.#selectionWindow.setResizeEnabled(false);
   }
 }
 
 export const enum Events {
-  WindowChanged = 'WindowChanged',
+  WINDOW_CHANGED = 'WindowChanged',
 }
 
-export type EventTypes = {
-  [Events.WindowChanged]: void,
-};
+export interface EventTypes {
+  [Events.WINDOW_CHANGED]: void;
+}
 
-export class PaintProfilerCommandLogView extends UI.ThrottledWidget.ThrottledWidget {
+export class PaintProfilerCommandLogView extends UI.Widget.VBox {
   private readonly treeOutline: UI.TreeOutline.TreeOutlineInShadow;
   private log: SDK.PaintProfiler.PaintProfilerLogItem[];
   private readonly treeItemCache: Map<SDK.PaintProfiler.PaintProfilerLogItem, LogTreeElement>;
@@ -454,7 +425,7 @@ export class PaintProfilerCommandLogView extends UI.ThrottledWidget.ThrottledWid
   private appendLogItem(logItem: SDK.PaintProfiler.PaintProfilerLogItem): void {
     let treeElement = this.treeItemCache.get(logItem);
     if (!treeElement) {
-      treeElement = new LogTreeElement(this, logItem);
+      treeElement = new LogTreeElement(logItem);
       this.treeItemCache.set(logItem, treeElement);
     } else if (treeElement.parent) {
       return;
@@ -464,10 +435,10 @@ export class PaintProfilerCommandLogView extends UI.ThrottledWidget.ThrottledWid
 
   updateWindow(selectionWindow: {left: number, right: number}|null): void {
     this.selectionWindow = selectionWindow;
-    this.update();
+    this.requestUpdate();
   }
 
-  override doUpdate(): Promise<void> {
+  override performUpdate(): Promise<void> {
     if (!this.selectionWindow || !this.log.length) {
       this.treeOutline.removeChildren();
       return Promise.resolve();
@@ -496,14 +467,10 @@ export class PaintProfilerCommandLogView extends UI.ThrottledWidget.ThrottledWid
 
 export class LogTreeElement extends UI.TreeOutline.TreeElement {
   readonly logItem: SDK.PaintProfiler.PaintProfilerLogItem;
-  private readonly ownerView: PaintProfilerCommandLogView;
-  private readonly filled: boolean;
 
-  constructor(ownerView: PaintProfilerCommandLogView, logItem: SDK.PaintProfiler.PaintProfilerLogItem) {
+  constructor(logItem: SDK.PaintProfiler.PaintProfilerLogItem) {
     super('', Boolean(logItem.params));
     this.logItem = logItem;
-    this.ownerView = ownerView;
-    this.filled = false;
   }
 
   override onattach(): void {
@@ -524,8 +491,7 @@ export class LogTreeElement extends UI.TreeOutline.TreeElement {
     let keyCount = 0;
     for (const key in param) {
       const paramKey = param[key];
-      if (++keyCount > 4 || paramKey === 'object' ||
-          (paramKey=== 'string' && paramKey.length > 100)) {
+      if (++keyCount > 4 || paramKey === 'object' || (paramKey === 'string' && paramKey.length > 100)) {
         return name;
       }
       if (str) {
@@ -565,7 +531,7 @@ export class LogPropertyTreeElement extends UI.TreeOutline.TreeElement {
   static appendLogPropertyItem(
       element: UI.TreeOutline.TreeElement, name: string,
       value: SDK.PaintProfiler.RawPaintProfilerLogItemParamValue): void {
-    const treeElement = new LogPropertyTreeElement({name: name, value: value});
+    const treeElement = new LogPropertyTreeElement({name, value});
     element.appendChild(treeElement);
     if (value && typeof value === 'object') {
       for (const property in value) {

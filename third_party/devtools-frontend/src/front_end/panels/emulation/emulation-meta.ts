@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,11 @@ import type * as Emulation from './emulation.js';
 
 const UIStrings = {
   /**
-   *@description Title of an action in the emulation tool to toggle device mode
+   * @description Title of an action in the emulation tool to toggle device mode
    */
   toggleDeviceToolbar: 'Toggle device toolbar',
   /**
-   *@description Title of an action in the emulation tool to capture screenshot
+   * @description Title of an action in the emulation tool to capture screenshot
    */
   captureScreenshot: 'Capture screenshot',
   /**
@@ -39,28 +39,28 @@ const UIStrings = {
    */
   device: 'device',
   /**
-   *@description Command in the Device Mode Toolbar, to hide media query boundaries in the UI.
+   * @description Command in the Device Mode Toolbar, to hide media query boundaries in the UI.
    * https://developer.mozilla.org/en-US/docs/Web/CSS/Media_Queries/Using_media_queries
    */
   hideMediaQueries: 'Hide media queries',
   /**
-   *@description Command that shows measuring rulers next to the emulated device.
+   * @description Command that shows measuring rulers next to the emulated device.
    */
   showRulers: 'Show rulers in the Device Mode toolbar',
   /**
-   *@description Command that hides measuring rulers next to the emulated device.
+   * @description Command that hides measuring rulers next to the emulated device.
    */
   hideRulers: 'Hide rulers in the Device Mode toolbar',
   /**
-   *@description Command that shows a frame (like a picture frame) around the emulated device.
+   * @description Command that shows a frame (like a picture frame) around the emulated device.
    */
   showDeviceFrame: 'Show device frame',
   /**
-   *@description Command that hides a frame (like a picture frame) around the emulated device.
+   * @description Command that hides a frame (like a picture frame) around the emulated device.
    */
   hideDeviceFrame: 'Hide device frame',
 
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/emulation/emulation-meta.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
 
@@ -86,11 +86,11 @@ UI.ActionRegistration.registerActionExtension({
   iconClass: UI.ActionRegistration.IconClass.LARGEICON_PHONE,
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Shift+Ctrl+M',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Shift+Meta+M',
     },
   ],
@@ -188,7 +188,6 @@ UI.Toolbar.registerToolbarItem({
   condition: Root.Runtime.conditions.canDock,
   location: UI.Toolbar.ToolbarItemLocation.MAIN_TOOLBAR_LEFT,
   order: 1,
-  showLabel: undefined,
   loadItem: undefined,
   separator: undefined,
 });

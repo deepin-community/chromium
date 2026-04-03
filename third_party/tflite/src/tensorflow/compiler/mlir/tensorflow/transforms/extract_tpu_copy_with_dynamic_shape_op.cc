@@ -22,6 +22,7 @@ limitations under the License.
 #include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/IR/Visitors.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
@@ -47,7 +48,7 @@ class ExtractTPUCopyWithDynamicShapeOpPass
 // Finds op that created a given value. If the value is a BlockArgument, this
 // returns the owner of the Block.
 Operation* GetOpOfValue(Value value) {
-  if (auto block_arg = value.dyn_cast<BlockArgument>())
+  if (auto block_arg = mlir::dyn_cast<BlockArgument>(value))
     return block_arg.getOwner()->getParentOp();
 
   return value.getDefiningOp();
@@ -60,6 +61,7 @@ LogicalResult CheckOpIsValid(Operation* op) {
   auto launch_op = llvm::dyn_cast<tf_device::LaunchOp>(op->getParentOp());
   if (!launch_op) {
     op->emitError() << "TPUCopyWithDynamicShapeOp is not in a launch";
+    return failure();
   }
   std::string device_str = launch_op.getDeviceAttr().getValue().str();
   std::string cpu0_device;
@@ -126,8 +128,8 @@ tf_device::LaunchOp CreateNewHostLaunchOpWithNewResult(
   for (Value result : new_launch_op_results)
     new_launch_op_results_types.push_back(result.getType());
 
-  auto new_launch_op = builder.create<tf_device::LaunchOp>(
-      old_launch_op->getLoc(), old_launch_op->getDeviceAttr(),
+  auto new_launch_op = tf_device::LaunchOp::create(
+      builder, old_launch_op->getLoc(), old_launch_op->getDeviceAttr(),
       /*result_types=*/new_launch_op_results_types);
 
   new_launch_op.getBody().takeBody(old_launch_op->getBody());
@@ -153,17 +155,16 @@ LogicalResult CreateNewDeviceLaunchOp(
     return failure();
   }
 
-  new_device_launch_op = builder.create<tf_device::LaunchOp>(
-      tpu_copy_with_dynamic_shape_op->getLoc(),
+  new_device_launch_op = tf_device::LaunchOp::create(
+      builder, tpu_copy_with_dynamic_shape_op->getLoc(),
       builder.getStringAttr(device_str),
       /*result_types=*/tpu_copy_with_dynamic_shape_op->getResultTypes());
 
   new_device_launch_op.getBody().push_back(new Block);
   builder.setInsertionPointToEnd(&new_device_launch_op.GetBody());
-  auto* return_op = builder
-                        .create<tf_device::ReturnOp>(
-                            tpu_copy_with_dynamic_shape_op->getLoc(),
-                            tpu_copy_with_dynamic_shape_op->getResults())
+  auto* return_op = tf_device::ReturnOp::create(
+                        builder, tpu_copy_with_dynamic_shape_op->getLoc(),
+                        tpu_copy_with_dynamic_shape_op->getResults())
                         .getOperation();
   tpu_copy_with_dynamic_shape_op->moveBefore(return_op);
   return success();

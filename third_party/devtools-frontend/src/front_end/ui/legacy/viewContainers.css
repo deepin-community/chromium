@@ -1,3 +1,7 @@
+/* Copyright 2025 The Chromium Authors
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file. */
+
 /*
  * Copyright (C) 2006, 2007, 2008 Apple Inc.  All rights reserved.
  * Copyright (C) 2009 Anthony Ricaud <rik@webkit.org>
@@ -44,17 +48,17 @@
   border-bottom: 1px solid var(--sys-color-divider);
 }
 
-.expandable-view-title .toolbar {
+.expandable-view-title devtools-toolbar {
   margin-top: -3px;
 }
 
-.expandable-view-title > .toolbar {
+.expandable-view-title > devtools-toolbar {
   position: absolute;
   right: 0;
   top: 0;
 }
 
-.expandable-view-title:not(.expanded) .toolbar {
+.expandable-view-title:not(.expanded) devtools-toolbar {
   display: none;
 }
 
@@ -65,6 +69,10 @@
 
 .expandable-view-title:focus-visible {
   background-color: var(--sys-color-state-focus-highlight);
+
+  :host-context(.accessibility-sidebar-view) & {
+    background-color: var(--sys-color-tonal-container);
+  }
 }
 
 @media (forced-colors: active) {

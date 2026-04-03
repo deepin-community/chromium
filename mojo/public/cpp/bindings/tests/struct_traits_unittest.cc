@@ -16,9 +16,9 @@
 #include "mojo/public/cpp/bindings/tests/struct_with_traits_impl_traits.h"
 #include "mojo/public/cpp/bindings/tests/variant_test_util.h"
 #include "mojo/public/cpp/system/wait.h"
-#include "mojo/public/interfaces/bindings/tests/struct_with_traits.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/test_native_types.mojom-blink.h"
-#include "mojo/public/interfaces/bindings/tests/test_native_types.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/struct_with_traits.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_native_types.test-mojom-blink.h"
+#include "mojo/public/interfaces/bindings/tests/test_native_types.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -64,8 +64,9 @@ class ChromiumRectServiceImpl : public RectService {
 
   // mojo::test::RectService:
   void AddRect(const RectChromium& r) override {
-    if (r.GetArea() > largest_rect_.GetArea())
+    if (r.GetArea() > largest_rect_.GetArea()) {
       largest_rect_ = r;
+    }
   }
 
   void GetLargestRect(GetLargestRectCallback callback) override {
@@ -110,8 +111,7 @@ class BlinkRectServiceImpl : public blink::RectService {
 };
 
 // A test which runs both Chromium and Blink implementations of a RectService.
-class StructTraitsTest : public testing::Test,
-                         public TraitsTestService {
+class StructTraitsTest : public testing::Test, public TraitsTestService {
  public:
   StructTraitsTest() = default;
 
@@ -362,8 +362,8 @@ TEST_F(StructTraitsTest, EchoTrivialStructWithTraits) {
 void CaptureMessagePipe(ScopedMessagePipeHandle* storage,
                         base::OnceClosure closure,
                         MoveOnlyStructWithTraitsImpl passed) {
-  storage->reset(MessagePipeHandle(
-      passed.get_mutable_handle().release().value()));
+  storage->reset(
+      MessagePipeHandle(passed.get_mutable_handle().release().value()));
   std::move(closure).Run();
 }
 
@@ -446,7 +446,7 @@ TEST_F(StructTraitsTest, SerializeStructWithTraits) {
   input.set_uint32(7);
   input.set_uint64(42);
   input.set_string("hello world!");
-  input.get_mutable_string_array().assign({ "hello", "world!" });
+  input.get_mutable_string_array().assign({"hello", "world!"});
   input.get_mutable_string_set().insert("hello");
   input.get_mutable_string_set().insert("world!");
   input.get_mutable_struct().value = 42;
@@ -476,8 +476,9 @@ void ExpectUniquePtr(std::unique_ptr<int> expected,
                      base::OnceClosure closure,
                      std::unique_ptr<int> value) {
   ASSERT_EQ(!expected, !value);
-  if (expected)
+  if (expected) {
     EXPECT_EQ(*expected, *value);
+  }
   std::move(closure).Run();
 }
 

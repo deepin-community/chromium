@@ -43,15 +43,34 @@ static constexpr uint32_t kNumStages = 3;
 static constexpr uint8_t kMaxColorAttachments = 8u;
 static constexpr uint32_t kTextureBytesPerRowAlignment = 256u;
 static constexpr uint32_t kQueryResolveAlignment = 256u;
-static constexpr uint32_t kMaxInterStageShaderComponents = 60u;
 static constexpr uint32_t kMaxInterStageShaderVariables = 16u;
 static constexpr uint64_t kAssumedMaxBufferSize =
     0x80000000u;  // Use 2 GB when the limit is unavailable
 
+// All Immediate constants are 32 bit
+static constexpr uint32_t kImmediateConstantElementByteSize = sizeof(uint32_t);
+
+// Total number of "internal" 32-bit immediates, which includes both external (user) immediates
+// and any other immediates used by Dawn internally (e.g. workgroup sizes).
+// Vulkan's min-max push constant limit is 128 bytes / 4 = 32 values,
+// while D3D12's limit is 256 bytes / 4 = 64 values, so we pick 32 here.
+static constexpr uint32_t kMaxImmediateConstantsPerPipeline = 32u;
+
+// Adapter Max limitation for user immediate constants is 64 bytes.
+static constexpr uint32_t kMaxImmediateDataBytes = 64u;
+
+// Known as 'Immediate Data' that users can update via the API
+static constexpr uint32_t kMaxExternalImmediateConstantsPerPipeline =
+    kMaxImmediateDataBytes / kImmediateConstantElementByteSize;
+
+// Default subgroup sizes.
+static constexpr uint32_t kDefaultSubgroupMinSize = 4u;
+static constexpr uint32_t kDefaultSubgroupMaxSize = 128u;
+
 // Per stage maximum limits used to optimized Dawn internals.
-static constexpr uint32_t kMaxSampledTexturesPerShaderStage = 16;
+static constexpr uint32_t kMaxSampledTexturesPerShaderStage = 48;
 static constexpr uint32_t kMaxSamplersPerShaderStage = 16;
-static constexpr uint32_t kMaxStorageBuffersPerShaderStage = 10;
+static constexpr uint32_t kMaxStorageBuffersPerShaderStage = 16;
 static constexpr uint32_t kMaxStorageTexturesPerShaderStage = 8;
 static constexpr uint32_t kMaxUniformBuffersPerShaderStage = 12;
 
@@ -87,6 +106,17 @@ static constexpr size_t kWireBufferAlignment = 8u;
 
 // Timestamp query quantization mask to perform a granularity of ~0.1ms.
 static constexpr uint32_t kTimestampQuantizationMask = 0xFFFF0000;
+
+// Max dynamic offset counts used to optimize Dawn internals.
+static constexpr uint32_t kMaxDynamicUniformBuffersPerPipelineLayout = 16u;
+static constexpr uint32_t kMaxDynamicStorageBuffersPerPipelineLayout = 16u;
+
+// Default limit for the ResourceTable size.
+// TODO(https://issues.chromium.org/465122000): Update once the spec decides on a value.
+static constexpr uint32_t kMaxResourceTableSize = 50'000;
+// TODO(https://issues.chromium.org/465122000): Find if this is a reasonable amount to
+// reserve for placeholders.
+static constexpr uint32_t kReservedResourceTableSlots = 1000;
 
 }  // namespace dawn
 

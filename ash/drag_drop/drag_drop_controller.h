@@ -9,7 +9,6 @@
 #include <optional>
 
 #include "ash/ash_export.h"
-#include "ash/display/window_tree_host_manager.h"
 #include "ash/drag_drop/drag_drop_capture_delegate.h"
 #include "ash/drag_drop/tab_drag_drop_delegate.h"
 #include "base/functional/callback.h"
@@ -22,6 +21,7 @@
 #include "ui/aura/window_observer.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-shared.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/display/manager/display_manager_observer.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_handler.h"
 #include "ui/gfx/animation/animation_delegate.h"
@@ -43,7 +43,7 @@ class ASH_EXPORT DragDropController : public aura::client::DragDropClient,
                                       public ui::EventHandler,
                                       public gfx::AnimationDelegate,
                                       public aura::WindowObserver,
-                                      public WindowTreeHostManager::Observer {
+                                      public display::DisplayManagerObserver {
  public:
   DragDropController();
 
@@ -109,11 +109,6 @@ class ASH_EXPORT DragDropController : public aura::client::DragDropClient,
 
   void SetDisableNestedLoopForTesting(bool disable);
 
-  // Deprecated: Use `SetDisableNestedLoopForTesting`.
-  void set_should_block_during_drag_drop(bool should_block_during_drag_drop) {
-    SetDisableNestedLoopForTesting(!should_block_during_drag_drop);
-  }
-
   void enable_no_image_touch_drag_for_test() {
     allow_no_image_touch_drag_for_test_ = true;
   }
@@ -146,8 +141,8 @@ class ASH_EXPORT DragDropController : public aura::client::DragDropClient,
   void AnimationProgressed(const gfx::Animation* animation) override;
   void AnimationCanceled(const gfx::Animation* animation) override;
 
-  // WindowTreeHostManager::Observer:
-  void OnDisplayConfigurationChanging() override;
+  // display::DisplayManagerObserver
+  void OnWillApplyDisplayChanges() override;
 
   // Helper method to start drag widget flying back animation.
   void StartCanceledAnimation(base::TimeDelta animation_duration);
@@ -232,8 +227,8 @@ class ASH_EXPORT DragDropController : public aura::client::DragDropClient,
   gfx::Point start_location_;
   gfx::Point current_location_;
 
-  base::ObserverList<aura::client::DragDropClientObserver>::Unchecked
-      observers_;
+  base::ObserverList<aura::client::DragDropClientObserver>::
+      UncheckedAndDanglingUntriaged observers_;
 
   raw_ptr<ToplevelWindowDragDelegate, DanglingUntriaged>
       toplevel_window_drag_delegate_ = nullptr;

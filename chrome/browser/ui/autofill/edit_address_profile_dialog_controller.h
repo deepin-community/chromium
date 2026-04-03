@@ -5,7 +5,7 @@
 #ifndef CHROME_BROWSER_UI_AUTOFILL_EDIT_ADDRESS_PROFILE_DIALOG_CONTROLLER_H_
 #define CHROME_BROWSER_UI_AUTOFILL_EDIT_ADDRESS_PROFILE_DIALOG_CONTROLLER_H_
 
-#include "components/autofill/core/browser/autofill_client.h"
+#include "components/autofill/core/browser/foundations/autofill_client.h"
 
 namespace autofill {
 
@@ -24,7 +24,7 @@ class EditAddressProfileDialogController {
   // button has been clicked. `profile_with_edits` contains the address profile
   // including the edits performed by the user.
   virtual void OnDialogClosed(
-      AutofillClient::SaveAddressProfileOfferUserDecision decision,
+      AutofillClient::AddressPromptUserDecision decision,
       base::optional_ref<const AutofillProfile> profile_with_edits) = 0;
 };
 

@@ -24,6 +24,7 @@
 #include "build/build_config.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-forward.h"
+#include "ui/base/mojom/menu_source_type.mojom-shared.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/platform/platform_event_dispatcher.h"
@@ -74,10 +75,8 @@ class MenuControllerUITest;
 // MenuController is used internally by the various menu classes to manage
 // showing, selecting and drag/drop for menus. All relevant events are
 // forwarded to the MenuController from SubmenuView and MenuHost.
-class VIEWS_EXPORT MenuController
-    : public base::SupportsWeakPtr<MenuController>,
-      public gfx::AnimationDelegate,
-      public WidgetObserver {
+class VIEWS_EXPORT MenuController final : public gfx::AnimationDelegate,
+                                          public WidgetObserver {
  public:
   // Enumeration of how the menu should exit.
   enum class ExitType {
@@ -108,6 +107,12 @@ class VIEWS_EXPORT MenuController
     kTrailing,
   };
 
+  enum class MenuType {
+    kNormal,               // Regular menu
+    kContextMenu,          // Context menu
+    kMenuItemContextMenu,  // Context menu for a menu item
+  };
+
   // Callback that is used to pass events to an "annotation" bubble or widget,
   // such as a help bubble, that floats alongside the menu and acts as part of
   // the menu for event-handling purposes. These require special handling
@@ -132,14 +137,16 @@ class VIEWS_EXPORT MenuController
   MenuController& operator=(const MenuController&) = delete;
 
   // Runs the menu at the specified location.
-  void Run(Widget* parent,
-           MenuButtonController* button_controller,
-           MenuItemView* root,
-           const gfx::Rect& anchor_bounds,
-           MenuAnchorPosition position,
-           bool context_menu,
-           bool is_nested_drag,
-           gfx::NativeView native_view_for_gestures = gfx::NativeView());
+  void Run(
+      Widget* parent,
+      MenuButtonController* button_controller,
+      MenuItemView* root,
+      const gfx::Rect& anchor_bounds,
+      MenuAnchorPosition position,
+      ui::mojom::MenuSourceType source_type = ui::mojom::MenuSourceType::kNone,
+      MenuType menu_type = MenuType::kNormal,
+      bool is_nested_drag = false,
+      gfx::NativeView native_view_for_gestures = gfx::NativeView());
 
   bool for_drop() const { return for_drop_; }
 
@@ -147,10 +154,6 @@ class VIEWS_EXPORT MenuController
 
   // Whether or not drag operation is in progress.
   bool drag_in_progress() const { return drag_in_progress_; }
-
-  // Whether the MenuController initiated the drag in progress. False if there
-  // is no drag in progress.
-  bool did_initiate_drag() const { return did_initiate_drag_; }
 
   bool send_gesture_events_to_owner() const {
     return send_gesture_events_to_owner_;
@@ -250,6 +253,7 @@ class VIEWS_EXPORT MenuController
 
   // WidgetObserver overrides:
   void OnWidgetDestroying(Widget* widget) override;
+  void OnWidgetShowStateChanged(Widget* widget) override;
 
   // Only used for testing.
   bool IsCancelAllTimerRunningForTest();
@@ -270,6 +274,9 @@ class VIEWS_EXPORT MenuController
   std::optional<gfx::RoundedCornersF> rounded_corners() const {
     return rounded_corners_;
   }
+
+  // Returns the separator color ID according to the menu layout type.
+  ui::ColorId GetSeparatorColorId() const;
 
   // Notifies |this| that |menu_item| is being destroyed.
   void OnMenuItemDestroying(MenuItemView* menu_item);
@@ -303,6 +310,10 @@ class VIEWS_EXPORT MenuController
         std::move(show_menu_host_duration_histogram_);
     show_menu_host_duration_histogram_.reset();
     return value;
+  }
+
+  base::WeakPtr<MenuController> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
   }
 
  private:
@@ -352,7 +363,7 @@ class VIEWS_EXPORT MenuController
     ~State();
 
     // The selected menu item.
-    raw_ptr<MenuItemView, DanglingUntriaged> item = nullptr;
+    raw_ptr<MenuItemView> item = nullptr;
 
     // Used to capture a hot tracked child button when a nested menu is opened
     // and to restore the hot tracked state when exiting a nested menu.
@@ -370,8 +381,8 @@ class VIEWS_EXPORT MenuController
     // Bounds for the monitor we're showing on.
     gfx::Rect monitor_bounds;
 
-    // Is the current menu a context menu.
-    bool context_menu = false;
+    // Type of the current menu.
+    MenuType menu_type = MenuType::kNormal;
   };
 
   // Sets the selection to |menu_item|. A value of NULL unselects
@@ -402,7 +413,7 @@ class VIEWS_EXPORT MenuController
 
   void UpdateInitialLocation(const gfx::Rect& anchor_bounds,
                              MenuAnchorPosition position,
-                             bool context_menu);
+                             MenuType menu_type);
 
   // Returns the anchor position adjusted for RTL languages. For example,
   // in RTL MenuAnchorPosition::kBubbleLeft is mapped to kBubbleRight.
@@ -422,7 +433,7 @@ class VIEWS_EXPORT MenuController
   // Returns whether a context menu was shown.
   bool ShowContextMenu(MenuItemView* menu_item,
                        const gfx::Point& screen_location,
-                       ui::MenuSourceType source_type);
+                       ui::mojom::MenuSourceType source_type);
 
   // Closes all menus, including any menus of nested invocations of Run.
   void CloseAllNestedMenus();
@@ -554,6 +565,10 @@ class VIEWS_EXPORT MenuController
 
   // If possible, closes the submenu.
   void CloseSubmenu();
+
+  // Show a context menu for the currently hot-tracked view if available.
+  // Triggered by keyboard events, e.g., APPS key, Shift+F10.
+  void ShowContextMenu();
 
   // Returns details about which menu items match the mnemonic |key|.
   // |match_function| is used to determine which menus match.
@@ -709,7 +724,8 @@ class VIEWS_EXPORT MenuController
   // When Run is invoked during an active Run, it may be called from a separate
   // MenuControllerDelegate. If not empty it means we are nested, and the
   // stacked delegates should be notified instead of |delegate_|.
-  std::list<internal::MenuControllerDelegate*> delegate_stack_;
+  std::list<raw_ptr<internal::MenuControllerDelegate, CtnExperimental>>
+      delegate_stack_;
 
   // As the mouse moves around submenus are not opened immediately. Instead
   // they open after this timer fires.
@@ -739,11 +755,6 @@ class VIEWS_EXPORT MenuController
 
   // True when drag operation is in progress.
   bool drag_in_progress_ = false;
-
-  // True when the drag operation in progress was initiated by the
-  // MenuController for a child MenuItemView (as opposed to initiated separately
-  // by a child View).
-  bool did_initiate_drag_ = false;
 
   // Location the mouse was pressed at. Used to detect d&d.
   gfx::Point press_pt_;
@@ -795,8 +806,8 @@ class VIEWS_EXPORT MenuController
 
   // Whether the menu |owner_| needs gesture events. When set to true, the menu
   // will preserve the gesture events of the |owner_| and MenuController will
-  // forward the gesture events to |owner_| until no |ET_GESTURE_END| event is
-  // captured.
+  // forward the gesture events to |owner_| until no |EventType::kGestureEnd|
+  // event is captured.
   bool send_gesture_events_to_owner_ = false;
 
   // Set to true if the menu item was selected by touch.
@@ -825,7 +836,7 @@ class VIEWS_EXPORT MenuController
   gfx::ThrobAnimation alert_animation_;
 
   // Currently showing alerted menu items. Updated when submenus open and close.
-  base::flat_set<MenuItemView*> alerted_items_;
+  base::flat_set<raw_ptr<MenuItemView, CtnExperimental>> alerted_items_;
 
   // The rounded corners of the context menu.
   std::optional<gfx::RoundedCornersF> rounded_corners_ = std::nullopt;
@@ -839,6 +850,8 @@ class VIEWS_EXPORT MenuController
   // A histogram name for recording the time from menu host initialization to
   // its successful presentation
   std::optional<std::string> show_menu_host_duration_histogram_;
+
+  base::WeakPtrFactory<MenuController> weak_ptr_factory_{this};
 };
 
 }  // namespace views

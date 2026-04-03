@@ -13,8 +13,7 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 
-namespace ash {
-namespace nearby {
+namespace ash::nearby {
 
 // Manages the life cycle of the Nearby utility process, which hosts
 // functionality for both Nearby Connections and Nearby Share.
@@ -29,7 +28,7 @@ class NearbyProcessManager : public KeyedService {
     virtual const mojo::SharedRemote<
         ::ash::nearby::presence::mojom::NearbyPresence>&
     GetNearbyPresence() const = 0;
-    virtual const mojo::SharedRemote<sharing::mojom::NearbySharingDecoder>&
+    virtual const mojo::SharedRemote<::sharing::mojom::NearbySharingDecoder>&
     GetNearbySharingDecoder() const = 0;
     virtual const mojo::SharedRemote<quick_start::mojom::QuickStartDecoder>&
     GetQuickStartDecoder() const = 0;
@@ -37,7 +36,11 @@ class NearbyProcessManager : public KeyedService {
 
   // These values are used for metrics. Entries should not be renumbered and
   // numeric values should never be reused. If entries are added, kMaxValue
-  // should be updated.
+  // should be updated. Keep in sync with the
+  // `NearbyConnectionsUtilityProcessShutdownReason` enum found at
+  // //tools/metrics/histograms/metadata/nearby/enums.xml.
+  //
+  // LINT.IfChange(NearbyConnectionsUtilityProcessShutdownReason)
   enum class NearbyProcessShutdownReason {
     kNormal = 0,
     kCrash = 1,
@@ -46,6 +49,7 @@ class NearbyProcessManager : public KeyedService {
     kPresenceMojoPipeDisconnection = 5,
     kMaxValue = kPresenceMojoPipeDisconnection
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/nearby/enums.xml:NearbyConnectionsUtilityProcessShutdownReason)
 
   using NearbyProcessStoppedCallback =
       base::OnceCallback<void(NearbyProcessShutdownReason)>;
@@ -83,7 +87,6 @@ std::ostream& operator<<(
     std::ostream& os,
     const NearbyProcessManager::NearbyProcessShutdownReason& reason);
 
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby
 
 #endif  // CHROMEOS_ASH_SERVICES_NEARBY_PUBLIC_CPP_NEARBY_PROCESS_MANAGER_H_

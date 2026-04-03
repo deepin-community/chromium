@@ -40,7 +40,6 @@ class GLES3DecoderTest1 : public GLES2DecoderTest1 {
   void SetUp() override {
     InitState init;
     init.gl_version = "OpenGL ES 3.0";
-    init.bind_generates_resource = true;
     init.context_type = CONTEXT_TYPE_OPENGLES3;
     InitDecoder(init);
   }
@@ -71,8 +70,7 @@ void GLES2DecoderTestBase::SpecializedSetup<cmds::CheckFramebufferStatus, 0>(
                     kServiceRenderbufferId);
   DoBindFramebuffer(GL_FRAMEBUFFER, client_framebuffer_id_,
                     kServiceFramebufferId);
-  DoRenderbufferStorage(
-      GL_RENDERBUFFER, GL_RGBA4, GL_RGBA, 1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA4, 1, 1, GL_NO_ERROR);
   DoFramebufferRenderbuffer(
       GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
       client_renderbuffer_id_, kServiceRenderbufferId, GL_NO_ERROR);
@@ -187,8 +185,21 @@ void GLES2DecoderTestBase::
   }
 }
 
+template <>
+void GLES2DecoderTestBase::SpecializedSetup<cmds::GetProgramiv, 0>(bool valid) {
+  if (valid) {
+    // GetProgramiv calls ClearGLError then GetError to make sure
+    // it actually got a value so it can report correctly to the client.
+    EXPECT_CALL(*gl_, GetError())
+        .WillOnce(Return(GL_NO_ERROR))
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, GetError())
+        .WillOnce(Return(GL_NO_ERROR))
+        .RetiresOnSaturation();
+  }
+}
+
 #include "gpu/command_buffer/service/gles2_cmd_decoder_unittest_1_autogen.h"
 
 }  // namespace gles2
 }  // namespace gpu
-

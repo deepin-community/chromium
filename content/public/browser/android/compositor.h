@@ -5,26 +5,25 @@
 #ifndef CONTENT_PUBLIC_BROWSER_ANDROID_COMPOSITOR_H_
 #define CONTENT_PUBLIC_BROWSER_ANDROID_COMPOSITOR_H_
 
+#include <optional>
+
 #include "base/android/scoped_java_ref.h"
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "cc/resources/ui_resource_bitmap.h"
 #include "cc/slim/layer.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "content/common/content_export.h"
 #include "gpu/ipc/common/surface_handle.h"
 #include "ui/android/resources/ui_resource_provider.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/presentation_feedback.h"
 
 namespace cc::slim {
 class Layer;
 }
-
-namespace gpu {
-struct SharedMemoryLimits;
-}  // namespace gpu
 
 namespace ui {
 class ResourceManager;
@@ -47,13 +46,10 @@ class CONTENT_EXPORT Compositor {
   // instance can be used. This should be called only once.
   static void Initialize();
 
-  // Creates a GL context for the provided |handle|. If a null handle is passed,
-  // an offscreen context is created. This must be called on the UI thread.
+  // Creates an offscreen GL context. This must be called on the UI thread.
   using ContextProviderCallback =
       base::OnceCallback<void(scoped_refptr<viz::ContextProvider>)>;
   static void CreateContextProvider(
-      gpu::SurfaceHandle handle,
-      gpu::SharedMemoryLimits shared_memory_limits,
       ContextProviderCallback callback);
 
   // Creates and returns a compositor instance.  |root_window| needs to outlive
@@ -73,8 +69,10 @@ class CONTENT_EXPORT Compositor {
   virtual const gfx::Size& GetWindowBounds() = 0;
 
   // Set the output surface which the compositor renders into.
-  virtual void SetSurface(const base::android::JavaRef<jobject>& surface,
-                          bool can_be_used_with_surface_control) = 0;
+  virtual std::optional<gpu::SurfaceHandle> SetSurface(
+      const base::android::JavaRef<jobject>& surface,
+      bool can_be_used_with_surface_control,
+      const base::android::JavaRef<jobject>& host_input_token) = 0;
 
   // Set the background color used by the layer tree host.
   virtual void SetBackgroundColor(int color) = 0;
@@ -121,7 +119,7 @@ class CONTENT_EXPORT Compositor {
   // to the screen (it's entirely possible some frames may be dropped between
   // the time this is called and the callback is run).
   using SuccessfulPresentationTimeCallback =
-      base::OnceCallback<void(base::TimeTicks)>;
+      base::OnceCallback<void(const viz::FrameTimingDetails&)>;
   virtual void RequestSuccessfulPresentationTimeForNextFrame(
       SuccessfulPresentationTimeCallback callback) = 0;
 

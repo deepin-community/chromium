@@ -79,20 +79,21 @@ class FilterDatasetOp::Dataset : public DatasetBase {
     return name_utils::DatasetDebugString(kDatasetType);
   }
 
-  Status InputDatasets(std::vector<const DatasetBase*>* inputs) const override {
+  absl::Status InputDatasets(
+      std::vector<const DatasetBase*>* inputs) const override {
     inputs->push_back(input_);
     return absl::OkStatus();
   }
 
-  Status CheckExternalState() const override {
+  absl::Status CheckExternalState() const override {
     TF_RETURN_IF_ERROR(captured_func_->CheckExternalState());
     return input_->CheckExternalState();
   }
 
  protected:
-  Status AsGraphDefInternal(SerializationContext* ctx,
-                            DatasetGraphDefBuilder* b,
-                            Node** output) const override {
+  absl::Status AsGraphDefInternal(SerializationContext* ctx,
+                                  DatasetGraphDefBuilder* b,
+                                  Node** output) const override {
     Node* input_graph_node;
     TF_RETURN_IF_ERROR(b->AddInputDataset(ctx, input_, &input_graph_node));
     std::vector<Node*> other_arguments;
@@ -120,7 +121,7 @@ class FilterDatasetOp::Dataset : public DatasetBase {
 
     bool SymbolicCheckpointCompatible() const override { return true; }
 
-    Status Initialize(IteratorContext* ctx) override {
+    absl::Status Initialize(IteratorContext* ctx) override {
       TF_RETURN_IF_ERROR(
           dataset()->input_->MakeIterator(ctx, this, prefix(), &input_impl_));
       return dataset()->captured_func_->Instantiate(
@@ -130,9 +131,9 @@ class FilterDatasetOp::Dataset : public DatasetBase {
     // NOTE(mrry): This method is thread-safe as long as `input_impl_` and `f`
     // are thread-safe. However, if multiple threads enter this method,
     // outputs may be observed in a non-deterministic order.
-    Status GetNextInternal(IteratorContext* ctx,
-                           std::vector<Tensor>* out_tensors,
-                           bool* end_of_sequence) override {
+    absl::Status GetNextInternal(IteratorContext* ctx,
+                                 std::vector<Tensor>* out_tensors,
+                                 bool* end_of_sequence) override {
       auto stats_aggregator = ctx->stats_aggregator();
       bool matched;
       do {
@@ -152,8 +153,11 @@ class FilterDatasetOp::Dataset : public DatasetBase {
         }
 
         std::vector<Tensor> result;
-        TF_RETURN_IF_ERROR(instantiated_captured_func_->RunWithBorrowedArgs(
-            ctx, *out_tensors, &result, model_node()));
+        auto status = instantiated_captured_func_->RunWithBorrowedArgs(
+            ctx, *out_tensors, &result, model_node());
+        if (!status.ok()) {
+          return AddErrorContext(status);
+        }
 
         if (result.size() != 1 || result[0].dtype() != DT_BOOL ||
             result[0].NumElements() != 1) {
@@ -210,8 +214,8 @@ class FilterDatasetOp::Dataset : public DatasetBase {
       return model::MakeUnknownRatioNode(std::move(args));
     }
 
-    Status SaveInternal(SerializationContext* ctx,
-                        IteratorStateWriter* writer) override {
+    absl::Status SaveInternal(SerializationContext* ctx,
+                              IteratorStateWriter* writer) override {
       TF_RETURN_IF_ERROR(ctx->HandleCheckExternalStateStatus(
           dataset()->captured_func_->CheckExternalState()));
       mutex_lock l(mu_);
@@ -227,8 +231,8 @@ class FilterDatasetOp::Dataset : public DatasetBase {
       return absl::OkStatus();
     }
 
-    Status RestoreInternal(IteratorContext* ctx,
-                           IteratorStateReader* reader) override {
+    absl::Status RestoreInternal(IteratorContext* ctx,
+                                 IteratorStateReader* reader) override {
       mutex_lock l(mu_);
       int64_t input_empty;
       TF_RETURN_IF_ERROR(
@@ -250,7 +254,7 @@ class FilterDatasetOp::Dataset : public DatasetBase {
       data::TraceMeMetadata result;
       result.push_back(std::make_pair(
           "passed",
-          strings::Printf("%lld", static_cast<long long>(filtered_elements_))));
+          absl::StrFormat("%lld", static_cast<long long>(filtered_elements_))));
       result.push_back(std::make_pair(
           "filtered",
           strings::Printf("%lld", static_cast<long long>(dropped_elements_))));

@@ -4,6 +4,7 @@
 
 #include <vector>
 
+#include "base/strings/string_number_conversions.h"
 #include "chrome/browser/interstitials/security_interstitial_page_test_utils.h"
 #include "chrome/browser/policy/safe_browsing_policy_test.h"
 #include "chrome/browser/profiles/profile.h"
@@ -86,7 +87,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest,
 
   // Add a policy to allow overriding on specific sites only. Since
   // kSSLErrorOverrideAllowed is enabled, this should do nothing.
-  base::Value::List allow_list;
+  base::ListValue allow_list;
   allow_list.Append("example.com");
   PolicyMap policies;
   policies.Set(key::kSSLErrorOverrideAllowedForOrigins, POLICY_LEVEL_MANDATORY,
@@ -175,7 +176,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(false),
                nullptr);
   // Add a policy to allow overriding on specific sites only.
-  base::Value::List allow_list;
+  base::ListValue allow_list;
   allow_list.Append("example.com");
   policies.Set(key::kSSLErrorOverrideAllowedForOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
@@ -225,7 +226,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest,
   policies.Set(key::kSSLErrorOverrideAllowed, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(false),
                nullptr);
-  base::Value::List allow_list;
+  base::ListValue allow_list;
   // We ignore "*" or badly formed patterns as inputs.
   allow_list.Append("*");
   allow_list.Append("bad 127.0.0.1 input");
@@ -277,7 +278,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(false),
                nullptr);
   // The policy is intentionally configured with an empty list for this test.
-  base::Value::List allow_list;
+  base::ListValue allow_list;
   policies.Set(key::kSSLErrorOverrideAllowedForOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
                base::Value(std::move(allow_list)), nullptr);
@@ -331,7 +332,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPolicyTest,
                nullptr);
   // Add a policy to allow overriding on specific sites only. The path should be
   // ignored.
-  base::Value::List allow_list;
+  base::ListValue allow_list;
   allow_list.Append("127.0.0.1/my/path/to/file.ext");
   policies.Set(key::kSSLErrorOverrideAllowedForOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,

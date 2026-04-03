@@ -38,8 +38,10 @@ void FakeLocalFrame::GetTextSurroundingSelection(
   std::move(callback).Run(std::u16string(), 0, 0);
 }
 
-void FakeLocalFrame::SendInterventionReport(const std::string& id,
-                                            const std::string& message) {}
+void FakeLocalFrame::SendInterventionReport(
+    const std::string& id,
+    const std::string& message,
+    const std::optional<blink::FrameToken>& child_frame_token) {}
 
 void FakeLocalFrame::SetFrameOwnerProperties(
     blink::mojom::FrameOwnerPropertiesPtr properties) {}
@@ -48,6 +50,8 @@ void FakeLocalFrame::NotifyUserActivation(
     blink::mojom::UserActivationNotificationType notification_type) {}
 
 void FakeLocalFrame::NotifyVirtualKeyboardOverlayRect(const gfx::Rect&) {}
+
+void FakeLocalFrame::ShowInterestInElement(int) {}
 
 void FakeLocalFrame::AddMessageToConsole(
     blink::mojom::ConsoleMessageLevel level,
@@ -79,18 +83,21 @@ void FakeLocalFrame::RenderFallbackContent() {}
 void FakeLocalFrame::BeforeUnload(bool is_reload,
                                   BeforeUnloadCallback callback) {
   base::TimeTicks now = base::TimeTicks::Now();
-  std::move(callback).Run(true /*leave the page*/, now, now);
+  std::move(callback).Run(
+      true /*leave the page*/, now, now,
+      /*before_unload_dialog_opened_time=*/base::TimeTicks(),
+      /*before_unload_dialog_closed_time=*/base::TimeTicks());
 }
 
 void FakeLocalFrame::MediaPlayerActionAt(
     const gfx::Point& location,
     blink::mojom::MediaPlayerActionPtr action) {}
 
-void FakeLocalFrame::RequestVideoFrameAt(const gfx::Point& window_point,
-                                         const gfx::Size& max_size,
-                                         int max_area,
-                                         RequestVideoFrameAtCallback callback) {
-}
+void FakeLocalFrame::RequestVideoFrameAtWithBoundsHint(
+    const gfx::Point& window_point,
+    const gfx::Size& max_size,
+    int max_area,
+    RequestVideoFrameAtWithBoundsHintCallback callback) {}
 
 void FakeLocalFrame::PluginActionAt(const gfx::Point& location,
                                     blink::mojom::PluginActionType action) {}
@@ -107,16 +114,19 @@ void FakeLocalFrame::ReportContentSecurityPolicyViolation(
 void FakeLocalFrame::DidUpdateFramePolicy(
     const blink::FramePolicy& frame_policy) {}
 
+void FakeLocalFrame::OnFrameVisibilityChanged(
+    blink::mojom::FrameVisibility visibility) {}
+
 void FakeLocalFrame::PostMessageEvent(
     const std::optional<blink::RemoteFrameToken>& source_frame_token,
-    const std::u16string& source_origin,
-    const std::u16string& target_origin,
+    const std::optional<url::Origin>& source_origin,
+    const std::optional<url::Origin>& target_origin,
     blink::TransferableMessage message) {}
 
 void FakeLocalFrame::JavaScriptMethodExecuteRequest(
     const std::u16string& object_name,
     const std::u16string& method_name,
-    base::Value::List arguments,
+    base::ListValue arguments,
     bool wants_result,
     JavaScriptMethodExecuteRequestCallback callback) {}
 
@@ -127,8 +137,9 @@ void FakeLocalFrame::JavaScriptExecuteRequest(
 
 void FakeLocalFrame::JavaScriptExecuteRequestForTests(
     const std::u16string& javascript,
-    bool wants_result,
     bool has_user_gesture,
+    bool resolve_promises,
+    bool honor_js_content_settings,
     int32_t world_id,
     JavaScriptExecuteRequestForTestsCallback callback) {}
 
@@ -142,8 +153,12 @@ void FakeLocalFrame::GetSavableResourceLinks(
     GetSavableResourceLinksCallback callback) {}
 
 #if BUILDFLAG(IS_MAC)
-void FakeLocalFrame::GetCharacterIndexAtPoint(const gfx::Point& point) {}
-void FakeLocalFrame::GetFirstRectForRange(const gfx::Range& range) {}
+void FakeLocalFrame::GetCharacterIndexAtPoint(
+    const base::UnguessableToken& request_token,
+    const gfx::Point& point) {}
+void FakeLocalFrame::GetFirstRectForRange(
+    const base::UnguessableToken& request_token,
+    const gfx::Range& range) {}
 void FakeLocalFrame::GetStringForRange(const gfx::Range& range,
                                        GetStringForRangeCallback callback) {
   std::move(callback).Run(nullptr, gfx::Point());
@@ -202,8 +217,13 @@ void FakeLocalFrame::DispatchNavigateEventForCrossDocumentTraversal(
     bool is_browser_initiated) {}
 
 void FakeLocalFrame::SnapshotDocumentForViewTransition(
-    blink::mojom::PageConcealEventParamsPtr,
+    const blink::ViewTransitionToken& transition_token,
+    blink::mojom::PageSwapEventParamsPtr,
     SnapshotDocumentForViewTransitionCallback callback) {}
+
+void FakeLocalFrame::NotifyViewTransitionAbortedToOldDocument() {}
+
+void FakeLocalFrame::DispatchPageSwap(blink::mojom::PageSwapEventParamsPtr) {}
 
 void FakeLocalFrame::AddResourceTimingEntryForFailedSubframeNavigation(
     const ::blink::FrameToken& subframe_token,
@@ -222,12 +242,23 @@ void FakeLocalFrame::AddResourceTimingEntryForFailedSubframeNavigation(
     const std::string& normalized_server_timing,
     const ::network::URLLoaderCompletionStatus& completion_status) {}
 
-void FakeLocalFrame::RequestFullscreenDocumentElement() {}
-
 void FakeLocalFrame::BindFrameHostReceiver(
     mojo::ScopedInterfaceEndpointHandle handle) {
   receiver_.Bind(mojo::PendingAssociatedReceiver<blink::mojom::LocalFrame>(
       std::move(handle)));
 }
+
+void FakeLocalFrame::UpdatePrerenderURL(const ::GURL& matched_url,
+                                        UpdatePrerenderURLCallback callback) {
+  std::move(callback).Run();
+}
+
+void FakeLocalFrame::GetScrollPosition(GetScrollPositionCallback callback) {
+  std::move(callback).Run(gfx::Point(0, 0));
+}
+
+#if BUILDFLAG(IS_ANDROID)
+void FakeLocalFrame::PerformFullContentSpellCheck() {}
+#endif
 
 }  // namespace content

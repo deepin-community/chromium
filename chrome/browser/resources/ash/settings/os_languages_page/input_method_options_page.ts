@@ -13,31 +13,33 @@ import '../settings_shared.css.js';
 import './os_japanese_clear_ime_data_dialog.js';
 import './os_japanese_manage_user_dictionary_page.js';
 
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {afterNextRender, DomRepeatEvent, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {DomRepeatEvent} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {afterNextRender, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {assertExhaustive} from '../assert_extras.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
 import {OsSettingsSubpageElement} from '../os_settings_page/os_settings_subpage.js';
-import {Route, Router, routes} from '../router.js';
+import type {Route} from '../router.js';
+import {Router, routes} from '../router.js';
 
 import {getTemplate} from './input_method_options_page.html.js';
-import {AUTOCORRECT_OPTION_MAP_OVERRIDE, generateOptions, getDefaultValue, getFirstPartyInputMethodEngineId, getOptionLabelName, getOptionMenuItems, getOptionSubtitleName, getOptionUiType, getOptionUrl, getSubmenuButtonType, getUntranslatedOptionLabelName, isOptionLabelTranslated, OPTION_DEFAULT, OptionType, PHYSICAL_KEYBOARD_AUTOCORRECT_ENABLED_BY_DEFAULT, SettingsHeaders, shouldStoreAsNumber, SubmenuButton, UiType} from './input_method_util.js';
-import {LanguageHelper} from './languages_types.js';
+import {OptionType, PHYSICAL_KEYBOARD_AUTOCORRECT_ENABLED_BY_DEFAULT} from './input_method_prefs_consts.js';
+import type {OPTION_DEFAULT} from './input_method_prefs_defaults.js';
+import type {UiOptionType} from './input_method_util.js';
+import {AUTOCORRECT_OPTION_MAP_OVERRIDE, generateOptions, getDefaultValue, getFirstPartyInputMethodEngineId, getOptionLabelName, getOptionMenuItems, getOptionSubtitleName, getOptionUiType, getOptionUrl, getSubmenuButtonType, getUntranslatedOptionLabelName, isOptionLabelTranslated, SettingsHeaders, shouldStoreAsNumber, SubmenuButton, UiType} from './input_method_util.js';
+import type {LanguageHelper} from './languages_types.js';
 
 /**
  * The root path of input method options in Prefs.
  */
 const PREFS_PATH = 'settings.language.input_method_specific_settings';
 
-// This type seems incorrect, as this includes
-// OPTION_DEFAULT[OptionType.PINYIN_FUZZY_CONFIG] which is a big object literal.
-// TODO(b/263829863): Investigate and fix this type.
 type OptionValue = ReturnType<typeof getDefaultValue>;
 
 // This type is the expected type of the dictionary pref stored in PREFS_PATH,
@@ -53,7 +55,7 @@ type PrefsObjectType =
  */
 // TODO(b/263829863): Use a discriminated union for better type-safety.
 interface Option {
-  name: OptionType;
+  name: OptionType|UiOptionType;
   uiType: UiType;
   value: OptionValue;
   label: string;
@@ -117,13 +119,7 @@ export class SettingsInputMethodOptionsPageElement extends
        * The content to be displayed in the page, auto generated every time when
        * the user enters the page.
        */
-      optionSections_: {
-        type: Array,
-        // This array is shared between all instances of the class:
-        // https://crrev.com/c/3897703/comment/fa845200_e10503c6/
-        // TODO(b/265556004): Move this to the constructor to avoid this.
-        value: [],
-      },
+      optionSections_: Array,
 
       showClearPersonalizedData_: {
         type: Boolean,
@@ -158,8 +154,8 @@ export class SettingsInputMethodOptionsPageElement extends
   // TODO(b/238031866): Convert these to be Polymer computed properties.
   /** Computed from id_. */
   private engineId_: string;
-  /** Computed from engineId_ */
-  private optionSections_: Section[];
+  /** Computed from engineId_. */
+  private optionSections_: Section[] = [];
 
   /**
    * RouteObserverMixin override
@@ -218,6 +214,13 @@ export class SettingsInputMethodOptionsPageElement extends
    * For some engineId, we want to store the data in a different storage
    * engineId. i.e. we want to use the nacl_mozc_jp settings data for
    * the nacl_mozc_us settings.
+   *
+   * TODO(b:203464079): Use distinct CrOS-Prefs for nacl_mozc_jp (Japanese) &
+   * nacl_mozc_us (Japanese for US keyboard) input methods. Due to singleton
+   * constraints in legacy impl, unlike all other input methods whose settings
+   * were distinct from one another, these two shared the the same settings.
+   * Upon CrOS-Prefs migration, the unintended sharing was retained till the
+   * issue is separately addressed outside the scope of the said migration.
    */
   private getStorageEngineId_(): string {
     return this.engineId_ !== 'nacl_mozc_us' ? this.engineId_ : 'nacl_mozc_jp';
@@ -227,7 +230,7 @@ export class SettingsInputMethodOptionsPageElement extends
    * Get menu items for an option, and enrich the items with selected status and
    * i18n label.
    */
-  getMenuItems(name: OptionType, value: OptionValue): Array<{
+  getMenuItems(name: OptionType|UiOptionType, value: OptionValue): Array<{
     selected: boolean,
     label: string|number,
     name?: string, value: string|number,
@@ -252,20 +255,15 @@ export class SettingsInputMethodOptionsPageElement extends
           loadTimeData.getBoolean('isPhysicalKeyboardAutocorrectAllowed'),
       isPhysicalKeyboardPredictiveWritingAllowed:
           loadTimeData.getBoolean('isPhysicalKeyboardPredictiveWritingAllowed'),
-      isJapaneseSettingsAllowed:
-          loadTimeData.getBoolean('systemJapanesePhysicalTyping'),
       isVietnameseFirstPartyInputSettingsAllowed:
           loadTimeData.getBoolean('allowFirstPartyVietnameseInput'),
     });
-    // The settings for Japanese for both engine nacl_mozc_us and nacl_mozc_jp
-    // types will be stored in nacl_mozc_us. See:
-    // https://crsrc.org/c/chrome/browser/ash/input_method/input_method_settings.cc;drc=5b784205e8043fb7d1c11e3d80521e80704947ca;l=25
     const engineId = this.getStorageEngineId_();
     const currentSettings = inputMethodSpecificSettings[engineId] ?? {};
     const defaultOverrides = this.getDefaultValueOverrides_(engineId);
 
     const makeOption = (option: {
-      name: OptionType,
+      name: OptionType|UiOptionType,
       dependentOptions?: OptionType[],
     }): Option => {
       const name = option.name;
@@ -288,8 +286,7 @@ export class SettingsInputMethodOptionsPageElement extends
             name as keyof typeof OPTION_DEFAULT, defaultOverrides);
         needsPrefUpdate = true;
       }
-      if (loadTimeData.getBoolean('allowAutocorrectToggle') &&
-          name in AUTOCORRECT_OPTION_MAP_OVERRIDE) {
+      if (name in AUTOCORRECT_OPTION_MAP_OVERRIDE) {
         // Safety: We checked that `name` is a key above.
         value = AUTOCORRECT_OPTION_MAP_OVERRIDE[name as AutocorrectOptionMapKey]
                     // Safety: All autocorrect prefs have values that are
@@ -299,8 +296,7 @@ export class SettingsInputMethodOptionsPageElement extends
       }
       if (needsPrefUpdate) {
         // This function call is unsafe if this option is
-        // `JAPANESE_NUMBER_OF_SUGGESTIONS`, or `allowAutocorrectToggle` is off
-        // and this option is an autocorrect option.
+        // `JAPANESE_NUMBER_OF_SUGGESTIONS`.
         // In this case, `this.updatePref_` expects the value to be a string, as
         // the `shouldStoreAsNumber` branch is hit - but `getDefaultValue`
         // returns a number, not a string, in this case.
@@ -378,7 +374,7 @@ export class SettingsInputMethodOptionsPageElement extends
     };
   }
 
-  private dependentOptionsDisabled_(value: OptionValue): boolean {
+  private dependentOptionsDisabled_(value: OptionValue|string): boolean {
     // TODO(b/189909728): Sometimes the value comes as a string, other times as
     // an integer, other times as a boolean, so handle all cases. Try to
     // understand and fix this.
@@ -401,7 +397,8 @@ export class SettingsInputMethodOptionsPageElement extends
     });
   }
 
-  private isSettingValueValid_(name: OptionType, value: OptionValue): boolean {
+  private isSettingValueValid_(
+      name: OptionType|UiOptionType, value: OptionValue): boolean {
     // TODO(b/238031866): Move this to be a function, as this method does not
     // use `this`.
     const uiType = getOptionUiType(name);
@@ -418,7 +415,8 @@ export class SettingsInputMethodOptionsPageElement extends
    * Callers must ensure that `newValue` is the value DISPLAYED for `optionName`
    * as this method maps back displayed values to stored prefs values.
    */
-  private updatePref_(optionName: OptionType, newValue: OptionValue): void {
+  private updatePref_(
+      optionName: OptionType|UiOptionType, newValue: OptionValue): void {
     // Get the existing settings dictionary, in order to update it later.
     // |PrefsMixin.setPrefValue| will update Cros Prefs only if the reference
     // of variable has changed, so we need to copy the current content into a
@@ -431,8 +429,7 @@ export class SettingsInputMethodOptionsPageElement extends
     if (updatedSettings[engineId] === undefined) {
       updatedSettings[engineId] = {};
     }
-    if (loadTimeData.getBoolean('allowAutocorrectToggle') &&
-        optionName in AUTOCORRECT_OPTION_MAP_OVERRIDE) {
+    if (optionName in AUTOCORRECT_OPTION_MAP_OVERRIDE) {
       // newValue is passed in as the value for display, so map it back to a
       // number.
       newValue =
@@ -443,22 +440,18 @@ export class SettingsInputMethodOptionsPageElement extends
               // a boolean here.
               .mapValueForWrite(newValue as boolean);
     } else if (shouldStoreAsNumber(optionName)) {
-      // Safety: The above if statements ensure that `optionName` is one of:
-      // - `PHYSICAL_KEYBOARD_AUTO_CORRECTION_LEVEL, if `allowAutocorrectToggle`
-      //   is not set
-      // - `VIRTUAL_KEYBOARD_AUTO_CORRECTION_LEVEL, if `allowAutocorrectToggle`
-      //   is not set
-      // - `JAPANESE_NUMBER_OF_SUGGESTIONS`
-      // All of the above returns `UiType.DROPDOWN` in `getOptionUiType`, so
-      // they are incorrectly passed as a string from Polymer's two-way native
-      // binding, and all of the above return numbers from `getOptionMenuItems`.
+      // Safety: The above if statements ensure that `optionName` is
+      // `JAPANESE_NUMBER_OF_SUGGESTIONS`.
+      // The above returns `UiType.DROPDOWN` in `getOptionUiType`, so
+      // it is incorrectly passed as a string from Polymer's two-way native
+      // binding, and it returns numbers from `getOptionMenuItems`.
       // TODO(b/265557721): Remove this when we remove Polymer's two-way native
       // binding of value changes.
       newValue = parseInt(newValue as string, 10);
     }
     // Safety: `updatedSettings[engineId]` is guaranteed to be defined as we
     // defined it above.
-    updatedSettings[engineId]![optionName] = newValue;
+    updatedSettings[engineId][optionName] = newValue;
 
     this.setPrefValue(PREFS_PATH, updatedSettings);
   }
@@ -515,6 +508,13 @@ export class SettingsInputMethodOptionsPageElement extends
    */
   private shouldShowTitle(section: Section): boolean {
     return section.title.length > 0;
+  }
+
+  /**
+   * @return true if |item| needs label to be shown.
+   */
+  private shouldShowLabel_(item: UiType) {
+    return !this.isSubmenuButton_(item) && !this.isLink_(item);
   }
 
   /**

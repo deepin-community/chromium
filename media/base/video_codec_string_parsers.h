@@ -11,10 +11,13 @@
 #include <string>
 #include <string_view>
 
+#include "base/feature_list.h"
 #include "media/base/media_export.h"
 #include "media/base/media_types.h"
 
 namespace media {
+
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kHEVCRextCodecStringParsing);
 
 // ParseNewStyleVp9CodecID handles parsing of new style vp9 codec IDs per
 // proposed VP Codec ISO Media File Format Binding specification:
@@ -35,9 +38,6 @@ MEDIA_EXPORT std::optional<VideoType> ParseAVCCodecId(
     std::string_view codec_id);
 
 MEDIA_EXPORT std::optional<VideoType> ParseHEVCCodecId(
-    std::string_view codec_id);
-
-MEDIA_EXPORT std::optional<VideoType> ParseVVCCodecId(
     std::string_view codec_id);
 
 MEDIA_EXPORT std::optional<VideoType> ParseDolbyVisionCodecId(

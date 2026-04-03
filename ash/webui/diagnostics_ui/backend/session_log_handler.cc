@@ -24,7 +24,7 @@
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/shell_dialogs/select_file_policy.h"
 #include "ui/shell_dialogs/selected_file_info.h"
 
@@ -87,8 +87,7 @@ void SessionLogHandler::RegisterMessages() {
 }
 
 void SessionLogHandler::FileSelected(const ui::SelectedFileInfo& file,
-                                     int index,
-                                     void* params) {
+                                     int index) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(session_log_handler_sequence_checker_);
   task_runner_->PostTaskAndReplyWithResult(
       FROM_HERE,
@@ -103,7 +102,7 @@ void SessionLogHandler::FileSelected(const ui::SelectedFileInfo& file,
   select_file_dialog_.reset();
 }
 
-void SessionLogHandler::FileSelectionCanceled(void* params) {
+void SessionLogHandler::FileSelectionCanceled() {
   RejectJavascriptCallback(save_session_log_callback_id_,
                            /*response=*/false);
   save_session_log_callback_id_ = "";
@@ -151,7 +150,7 @@ void SessionLogHandler::SetLogCreatedClosureForTest(base::OnceClosure closure) {
 }
 
 void SessionLogHandler::HandleSaveSessionLogRequest(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(session_log_handler_sequence_checker_);
   CHECK_EQ(1U, args.size());
   DCHECK(save_session_log_callback_id_.empty());
@@ -175,11 +174,10 @@ void SessionLogHandler::HandleSaveSessionLogRequest(
       /*default_path=*/base::FilePath(kDefaultSessionLogFileName),
       /*file_types=*/nullptr,
       /*file_type_index=*/0,
-      /*default_extension=*/base::FilePath::StringType(), owning_window,
-      /*params=*/nullptr);
+      /*default_extension=*/base::FilePath::StringType(), owning_window);
 }
 
-void SessionLogHandler::HandleInitialize(const base::Value::List& args) {
+void SessionLogHandler::HandleInitialize(const base::ListValue& args) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(session_log_handler_sequence_checker_);
   DCHECK(args.empty());
   AllowJavascript();

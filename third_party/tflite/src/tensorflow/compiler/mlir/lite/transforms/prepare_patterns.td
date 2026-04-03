@@ -15,15 +15,16 @@ limitations under the License.
 
 include "tensorflow/compiler/mlir/tensorflow/transforms/optimize.td"
 include "tensorflow/compiler/mlir/lite/ir/tfl_ops.td"
+include "tensorflow/compiler/mlir/lite/utils/utils.td"
 
 def FalseBoolAttr : AttrConstraint<CPred<"!$_self.getValue()">>;
 
 def DenseElementsAttr : ElementsAttrBase<
-  CPred<"$_self.isa<DenseElementsAttr>()">,
+  CPred<"llvm::isa<DenseElementsAttr>($_self)">,
   "non-opaque constant tensor">;
 
 def CreateGatherNdOp : NativeCodeCall<
-    "$_builder.create<TF::GatherNdOp>($0.getLoc(), $0.getType(), $1, $2)">;
+    "TF::GatherNdOp::create($_builder, $0.getLoc(), $0.getType(), $1, $2, $3)">;
 
 def CreateTFCastOpI32 : NativeCodeCall<
     "CreateTFCastOpI32(&$_builder, $_loc, $0, $1)">;
@@ -67,6 +68,28 @@ def ConvertMatmulWithTranspose : Pat<(TF_MatMulOp $a, $b, ConstBoolAttrTrue, $bt
              /*delta=*/(TF_ConstOp TFi32<-1>)), (TF_ConstOp TFi32<1>))), $b,
            ConstBoolAttrFalse, $bt, $grad_a, $grad_b)>;
 
+// Pattern to fuse redundant tanspose op
+def FoldDoubleTranspose : Pat<
+  (TF_TransposeOp
+    (TF_TransposeOp:$transpose_out1 $input, (Arith_ConstantOp:$permutation1 $p1)),
+    (Arith_ConstantOp:$permutation2 $p2)),
+  (TF_TransposeOp $input,
+    (Arith_ConstantOp (RemapPermutation $permutation1, $permutation2))),
+  [(HasOneUse $transpose_out1)]>;
+
+// Pattern to fuse trivial reshape op into transpose op
+def FoldTrivialReshapeIntoTranspose : Pat<
+  (TF_ReshapeOp:$output
+      (TF_TransposeOp:$transpose_out1 $input, (Arith_ConstantOp:$permutation1 $p1)), $_),
+  (TF_TransposeOp:$transpose_op $input,
+      (Arith_ConstantOp
+        (RemapPermutation $permutation1,
+            (GetPermutationFromTrivialReshape $transpose_out1, $output)))),
+  [(IsReshapeEquivalentToTranspose $transpose_out1, $output),
+   (AnyStaticShapeTensor $input),
+   (AnyStaticShapeTensor $output),
+   (HasOneUse $transpose_out1)]>;
+
 // Partially supported in TFLite, treated as passthrough IdentityOp
 def ConvertCheckNumerics : Pat<(TF_CheckNumericsOp $arg, $msg), (TF_IdentityOp $arg)>;
 def ConvertSnapshot : Pat<(TF_SnapshotOp $arg), (TF_IdentityOp $arg)>;
@@ -77,7 +100,7 @@ def ConvertPlaceholderWithDefault : Pat<(TF_PlaceholderWithDefaultOp $arg), (TF_
 // Op removal patterns.
 //===----------------------------------------------------------------------===//
 def RemovePreventGradient : Pat<(TF_PreventGradientOp $op, $msg), (replaceWithValue $op)>;
-def RemoveXlaSharding : Pat<(TF_XlaShardingOp $a, $b, $c), (replaceWithValue $a)>;
+def RemoveXlaSharding : Pat<(TF_XlaShardingOp $a, $b, $c, $d), (replaceWithValue $a)>;
 def RemoveIdentityN : Pat<(TF_IdentityNOp $arg), (replaceWithValue $arg)>;
 
 //===----------------------------------------------------------------------===//
@@ -86,10 +109,10 @@ def RemoveIdentityN : Pat<(TF_IdentityNOp $arg), (replaceWithValue $arg)>;
 // Casts result type of $1 to a quantized type by using the quantization
 // parameters from the type in $0.
 class UpdateShapeWithAxis<int i> : NativeCodeCall<
-  "quant::CastQuantizedTypeAttrFromExpressedType($_builder, $0, $1.getType(), " # i # ")">;
+  "CastQuantizedTypeAttrFromExpressedType($_builder, $0, $1.getType(), " # i # ")">;
 
 class CanUpdateShapeWithAxis<int i> : Constraint<
-  CPred<"quant::CastQuantizedTypeAttrFromExpressedType($_builder, $0, $1.getType(), " # i # ")">>;
+  CPred<"CastQuantizedTypeAttrFromExpressedType($_builder, $0, $1.getType(), " # i # ")">>;
 
 class UsedBy<string op> : Constraint<
   CPred<"llvm::isa<mlir::TFL::" # op # "Op>(*$0.getUsers().begin())">>;
@@ -136,6 +159,19 @@ def ReorderReshapeDequantQuantUsedByDepthwiseConv :
    (CanUpdateShapeWithAxis<3> $qtype, $old_value)],
   [], (addBenefit 10)>;
 
+// The axis is set to 3, because this transpose is from the legalization of
+// tf.depthwiseconvnative and the new channel axis is the last dimension.
+def ReorderTransposeDequantQuantUsedByDepthwiseConv :
+      Pat<(TF_TransposeOp:$old_value
+              (TFL_DequantizeOp (TFL_QuantizeOp $input, $qtype)), $perm),
+          (TFL_DequantizeOp
+              (TFL_QuantizeOp
+                  (TF_TransposeOp $input, $perm),
+                  (UpdateShapeWithAxis<3> $qtype, $old_value))),
+  [(UsedBy<"DepthwiseConv2D"> $old_value),
+   (CanUpdateShapeWithAxis<3> $qtype, $old_value)],
+  [], (addBenefit 10)>;
+
 // The Rank op produces result which is independent with the quantization
 // parameters of the input, so we can remove the quantization ops.
 def OptimizeAwayRankDequantQuant :
@@ -161,9 +197,14 @@ def ConvertMatrixSetDiagV3ToMatrixSetDiag :
 //===----------------------------------------------------------------------===//
 
 def LowerTensorScatterAdd: Pat<
-  (TF_TensorScatterAddOp $input, $indices, $updates),
-  (TF_TensorScatterUpdateOp $input, $indices,
-     (TF_AddOp $updates, (CreateGatherNdOp $updates, $input, $indices)))>;
+  (TF_TensorScatterAddOp $input, $indices, $updates, $bad_indices_policy),
+  (TF_TensorScatterUpdateOp
+    $input,
+    $indices,
+    (TF_AddOp
+      $updates,
+      (CreateGatherNdOp $updates, $input, $indices, $bad_indices_policy)),
+    $bad_indices_policy)>;
 
 //===----------------------------------------------------------------------===//
 // AddV2 op patterns.

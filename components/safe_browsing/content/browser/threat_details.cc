@@ -9,20 +9,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <memory>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "components/back_forward_cache/back_forward_cache_disable.h"
@@ -30,12 +27,11 @@
 #include "components/safe_browsing/content/browser/async_check_tracker.h"
 #include "components/safe_browsing/content/browser/base_ui_manager.h"
 #include "components/safe_browsing/content/browser/client_report_util.h"
+#include "components/safe_browsing/content/browser/content_unsafe_resource_util.h"
 #include "components/safe_browsing/content/browser/threat_details_cache.h"
 #include "components/safe_browsing/content/browser/threat_details_history.h"
-#include "components/safe_browsing/content/browser/unsafe_resource_util.h"
 #include "components/safe_browsing/content/browser/web_contents_key.h"
 #include "components/safe_browsing/content/browser/web_ui/safe_browsing_ui.h"
-#include "components/safe_browsing/core/browser/db/hit_report.h"
 #include "components/safe_browsing/core/browser/referrer_chain_provider.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
@@ -50,6 +46,7 @@
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/protobuf/src/google/protobuf/repeated_ptr_field.h"
 
 using content::BrowserThread;
@@ -73,24 +70,14 @@ const int kElementIdNoParent = -1;
 // The number of user gestures to trace back for the referrer chain.
 const int kThreatDetailsUserGestureLimit = 2;
 
-typedef std::unordered_set<std::string> StringSet;
 // A set of HTTPS headers that are allowed to be collected. Contains both
 // request and response headers. All entries in this list should be lower-case
 // to support case-insensitive comparison.
-struct AllowlistedHttpsHeadersTraits
-    : base::internal::DestructorAtExitLazyInstanceTraits<StringSet> {
-  static StringSet* New(void* instance) {
-    StringSet* headers =
-        base::internal::DestructorAtExitLazyInstanceTraits<StringSet>::New(
-            instance);
-    headers->insert({"google-creative-id", "google-lineitem-id", "referer",
-                     "content-type", "content-length", "date", "server",
-                     "cache-control", "pragma", "expires"});
-    return headers;
-  }
-};
-base::LazyInstance<StringSet, AllowlistedHttpsHeadersTraits>
-    g_https_headers_allowlist = LAZY_INSTANCE_INITIALIZER;
+static constexpr auto kAllowlistedHttpsHeaders =
+    base::MakeFixedFlatSet<std::string_view>(
+        {"google-creative-id", "google-lineitem-id", "referer", "content-type",
+         "content-length", "date", "server", "cache-control", "pragma",
+         "expires"});
 
 // Clears the specified HTTPS resource of any sensitive data, only retaining
 // data that is allowlisted for collection.
@@ -103,8 +90,8 @@ void ClearHttpsResource(ClientSafeBrowsingReportRequest::Resource* resource) {
   for (int i = 0; i < orig_resource.request().headers_size(); ++i) {
     ClientSafeBrowsingReportRequest::HTTPHeader* orig_header =
         orig_resource.mutable_request()->mutable_headers(i);
-    if (g_https_headers_allowlist.Get().count(
-            base::ToLowerASCII(orig_header->name())) > 0) {
+    if (kAllowlistedHttpsHeaders.contains(
+            base::ToLowerASCII(orig_header->name()))) {
       resource->mutable_request()->add_headers()->Swap(orig_header);
     }
   }
@@ -119,8 +106,8 @@ void ClearHttpsResource(ClientSafeBrowsingReportRequest::Resource* resource) {
   for (int i = 0; i < orig_resource.response().headers_size(); ++i) {
     ClientSafeBrowsingReportRequest::HTTPHeader* orig_header =
         orig_resource.mutable_response()->mutable_headers(i);
-    if (g_https_headers_allowlist.Get().count(
-            base::ToLowerASCII(orig_header->name())) > 0) {
+    if (kAllowlistedHttpsHeaders.contains(
+            base::ToLowerASCII(orig_header->name()))) {
       resource->mutable_response()->add_headers()->Swap(orig_header);
     }
   }
@@ -133,9 +120,10 @@ void ClearHttpsResource(ClientSafeBrowsingReportRequest::Resource* resource) {
       *orig_resource.mutable_response()->mutable_remote_ip());
 }
 
-std::string GetElementKey(const int frame_tree_node_id,
-                          const int element_node_id) {
-  return base::StringPrintf("%d-%d", frame_tree_node_id, element_node_id);
+std::string GetElementKey(const content::FrameTreeNodeId frame_tree_node_id,
+                          const content::FrameTreeNodeId element_node_id) {
+  return base::StringPrintf("%d-%d", frame_tree_node_id.value(),
+                            element_node_id.value());
 }
 
 void TrimElements(const std::set<int> target_ids,
@@ -194,7 +182,7 @@ void TrimElements(const std::set<int> target_ids,
     // Otherwise, insert the parent ID into the list of ids to keep. This will
     // capture the parent and siblings of the target element, as well as each of
     // their children.
-    if (!base::Contains(element_ids_to_keep, parent_id)) {
+    if (!std::ranges::contains(element_ids_to_keep, parent_id)) {
       element_ids_to_keep.push_back(parent_id);
 
       // Check if this element has a resource. If so, remember to also keep the
@@ -237,17 +225,17 @@ void TrimElements(const std::set<int> target_ids,
     const HTMLElement& element = *element_iter->second;
 
     // Delete any elements that we do not want to keep.
-    if (!base::Contains(element_ids_to_keep, element.id())) {
+    if (!std::ranges::contains(element_ids_to_keep, element.id())) {
       // If this element has a resource then maybe delete the resouce too. Some
       // resources may be shared between kept and trimmed elements, and those
       // ones should not be deleted.
       if (element.has_resource_id() &&
-          !base::Contains(kept_resource_ids, element.resource_id())) {
+          !std::ranges::contains(kept_resource_ids, element.resource_id())) {
         const std::string& resource_url =
             resource_id_to_url[element.resource_id()];
         resources->erase(resource_url);
       }
-      element_iter = elements->erase(element_iter);
+      elements->erase(element_iter++);
     } else {
       ++element_iter;
     }
@@ -286,7 +274,7 @@ class ThreatDetailsFactoryImpl : public ThreatDetailsFactory {
  private:
   friend struct base::LazyInstanceTraitsBase<ThreatDetailsFactoryImpl>;
 
-  ThreatDetailsFactoryImpl() {}
+  ThreatDetailsFactoryImpl() = default;
 };
 
 static base::LazyInstance<ThreatDetailsFactoryImpl>::DestructorAtExit
@@ -414,8 +402,9 @@ ClientSafeBrowsingReportRequest::Resource* ThreatDetails::AddUrl(
   }
   if (children) {
     for (auto it = children->begin(); it != children->end(); ++it) {
-      // TODO(lpz): Should this first check if the child URL is reportable
-      // before creating the resource?
+      if (it->is_empty() || !client_report_utils::IsReportableUrl(*it)) {
+        continue;
+      }
       ClientSafeBrowsingReportRequest::Resource* child_resource =
           FindOrCreateResource(*it);
       bool duplicate_child = false;
@@ -435,10 +424,10 @@ ClientSafeBrowsingReportRequest::Resource* ThreatDetails::AddUrl(
 }
 
 void ThreatDetails::AddDomElement(
-    const int frame_tree_node_id,
-    const int element_node_id,
+    const content::FrameTreeNodeId frame_tree_node_id,
+    const content::FrameTreeNodeId element_node_id,
     const std::string& tagname,
-    const int parent_element_node_id,
+    const content::FrameTreeNodeId parent_element_node_id,
     const std::vector<mojom::AttributeNameValuePtr> attributes,
     const std::string& inner_html,
     const ClientSafeBrowsingReportRequest::Resource* resource) {
@@ -476,7 +465,7 @@ void ThreatDetails::AddDomElement(
   // Next we try to lookup the parent of the current element and add ourselves
   // as a child of it.
   HTMLElement* parent_element = nullptr;
-  if (parent_element_node_id == 0) {
+  if (parent_element_node_id.is_null()) {
     // No parent indicates that this element is at the top of the current frame.
     // Remember that this is a top-level element of the frame with the
     // current |frame_tree_node_id|. If this element is inside an iframe, a
@@ -488,8 +477,8 @@ void ThreatDetails::AddDomElement(
     // of our current frame. We can easily lookup our parent.
     const std::string& parent_key =
         GetElementKey(frame_tree_node_id, parent_element_node_id);
-    if (base::Contains(elements_, parent_key)) {
-      parent_element = elements_[parent_key].get();
+    if (auto it = elements_.find(parent_key); it != elements_.end()) {
+      parent_element = it->second.get();
     }
   }
 
@@ -552,7 +541,7 @@ void ThreatDetails::StartCollection() {
     AddUrl(referrer_url, GURL(), std::string(), nullptr);
   }
 
-  if (!AsyncCheckTracker::IsMainPageLoadPending(resource_)) {
+  if (!AsyncCheckTracker::IsMainPageResourceLoadPending(resource_)) {
     // Get URLs of frames, scripts etc from the DOM.
     // OnReceivedThreatDOMDetails will be called when the renderer replies.
     // TODO(mattm): In theory, if the user proceeds through the warning DOM
@@ -600,21 +589,21 @@ void ThreatDetails::OnReceivedThreatDOMDetails(
   }
 
   // Lookup the FrameTreeNode ID of any child frames in the list of DOM nodes.
-  const int sender_process_id = sender_rfh->GetProcess()->GetID();
-  const int sender_frame_tree_node_id = sender_rfh->GetFrameTreeNodeId();
+  const int sender_process_id = sender_rfh->GetProcess()->GetDeprecatedID();
+  const content::FrameTreeNodeId sender_frame_tree_node_id =
+      sender_rfh->GetFrameTreeNodeId();
   KeyToFrameTreeIdMap child_frame_tree_map;
   for (const mojom::ThreatDOMDetailsNodePtr& node : params) {
     if (!node->child_frame_token) {
       continue;
     }
 
-    const std::string cur_element_key =
-        GetElementKey(sender_frame_tree_node_id, node->node_id);
-    int child_frame_tree_node_id =
+    const std::string cur_element_key = GetElementKey(
+        sender_frame_tree_node_id, content::FrameTreeNodeId(node->node_id));
+    content::FrameTreeNodeId child_frame_tree_node_id =
         content::RenderFrameHost::GetFrameTreeNodeIdForFrameToken(
             sender_process_id, node->child_frame_token.value());
-    if (child_frame_tree_node_id !=
-        content::RenderFrameHost::kNoFrameTreeNodeId) {
+    if (child_frame_tree_node_id) {
       child_frame_tree_map[cur_element_key] = child_frame_tree_node_id;
     }
   }
@@ -624,7 +613,7 @@ void ThreatDetails::OnReceivedThreatDOMDetails(
 }
 
 void ThreatDetails::AddDOMDetails(
-    const int frame_tree_node_id,
+    const content::FrameTreeNodeId frame_tree_node_id,
     std::vector<mojom::ThreatDOMDetailsNodePtr> params,
     const KeyToFrameTreeIdMap& child_frame_tree_map) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -663,9 +652,10 @@ void ThreatDetails::AddDOMDetails(
     }
     // Check for a tag_name to avoid adding the summary node to the DOM.
     if (!node.tag_name.empty()) {
-      AddDomElement(frame_tree_node_id, node.node_id, node.tag_name,
-                    node.parent_node_id, std::move(node.attributes),
-                    node.inner_html, resource);
+      AddDomElement(frame_tree_node_id, content::FrameTreeNodeId(node.node_id),
+                    node.tag_name,
+                    content::FrameTreeNodeId(node.parent_node_id),
+                    std::move(node.attributes), node.inner_html, resource);
     }
   }
 }
@@ -691,10 +681,10 @@ void ThreatDetails::FinishCollection(
   for (auto& element_pair : elements_) {
     const std::string& element_key = element_pair.first;
     HTMLElement* element = element_pair.second.get();
-    if (base::Contains(iframe_key_to_frame_tree_id_map_, element_key)) {
-      int frame_tree_id_of_iframe_renderer =
-          iframe_key_to_frame_tree_id_map_[element_key];
-      const std::unordered_set<int>& child_ids =
+    if (auto it = iframe_key_to_frame_tree_id_map_.find(element_key);
+        it != iframe_key_to_frame_tree_id_map_.end()) {
+      content::FrameTreeNodeId frame_tree_id_of_iframe_renderer = it->second;
+      const absl::flat_hash_set<int>& child_ids =
           frame_tree_id_to_children_map_[frame_tree_id_of_iframe_renderer];
       for (const int child_id : child_ids) {
         element->add_child_ids(child_id);
@@ -776,13 +766,6 @@ void ThreatDetails::OnCacheCollectionReady() {
   }
   report_->set_complete(cache_result_);
 
-  report_->mutable_client_properties()->set_url_api_type(
-      client_report_utils::GetUrlApiTypeForThreatSource(
-          resource_.threat_source));
-
-  report_->mutable_client_properties()->set_is_async_check(
-      resource_.is_async_check);
-
   // Fill the referrer chain if applicable.
   if (ShouldFillReferrerChain()) {
     FillReferrerChain(report_->mutable_referrer_chain());
@@ -817,7 +800,7 @@ bool ThreatDetails::ShouldFillReferrerChain() {
       base::MakeFixedFlatSet<ClientSafeBrowsingReportRequest::ReportType>(
           {ClientSafeBrowsingReportRequest::URL_SUSPICIOUS,
            ClientSafeBrowsingReportRequest::APK_DOWNLOAD});
-  return base::Contains(valid_report_types, report_->type());
+  return valid_report_types.contains(report_->type());
 }
 
 void ThreatDetails::FillReferrerChain(
@@ -838,7 +821,7 @@ bool ThreatDetails::ShouldFillInterstitialInteractions() {
       base::MakeFixedFlatSet<ClientSafeBrowsingReportRequest::ReportType>(
           {ClientSafeBrowsingReportRequest::URL_PHISHING,
            ClientSafeBrowsingReportRequest::URL_CLIENT_SIDE_PHISHING});
-  return base::Contains(valid_report_types, report_->type());
+  return valid_report_types.contains(report_->type());
 }
 
 void ThreatDetails::MaybeAttachThreatDetailsAndLaunchSurvey() {

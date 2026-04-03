@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
+#include "components/live_caption/translation_util.h"
 #include "content/public/browser/document_service.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "media/mojo/mojom/speech_recognition.mojom.h"
@@ -81,7 +82,7 @@ class LiveCaptionSpeechRecognitionHost
                              const std::string& source_language,
                              const std::string& target_language,
                              bool is_final,
-                             const std::string& result);
+                             const captions::TranslateEvent& result);
 
   // Returns the WebContents if it exists. If it does not exist, sets the
   // RenderFrameHost reference to nullptr and returns nullptr.
@@ -104,13 +105,9 @@ class LiveCaptionSpeechRecognitionHost
   // should stop.
   bool stop_transcriptions_ = false;
 
-  // Used to cache translations to avoid retranslating the same string. The key
-  // is the source and target language codes followed by a `|` separator
-  // character and the original text. The value is the translated text. This
-  // cache is cleared upon receiving a final recognition event. The size of this
-  // cache depends on the frequency of partial and final recognition events, but
-  // is typically under ~10.
-  std::unordered_map<std::string, std::string> translation_cache_;
+  // Used to cache translations to avoid retranslating the same string. Cleared
+  // after every Final to manage the size appropriately.
+  TranslationCache translation_cache_;
 
   // The source language code of the audio stream.
   std::string source_language_;
@@ -130,6 +127,10 @@ class LiveCaptionSpeechRecognitionHost
 
   // The automatically detected language of the audio stream.
   std::string auto_detected_language_;
+
+  // Flag indicating whether the current source language was automatically
+  // detected and switched to.
+  bool language_auto_switched_ = false;
 
   // The number of consecutive highly confident language identification events.
   int language_identification_event_count_ = 0;

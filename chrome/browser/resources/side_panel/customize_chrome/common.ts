@@ -31,11 +31,38 @@ export enum CustomizeChromeAction {
   SHOW_SHORTCUTS_TOGGLE_CLICKED,
   SHOW_CARDS_TOGGLE_CLICKED,
   WALLPAPER_SEARCH_APPEARANCE_BUTTON_CLICKED,
-  MAX_VALUE = WALLPAPER_SEARCH_APPEARANCE_BUTTON_CLICKED,
+  DEFAULT_COLOR_CLICKED,
+  CHROME_COLOR_CLICKED,
+  CUSTOM_COLOR_CLICKED,
+  SHOW_FOOTER_TOGGLE_CLICKED,
+  SHOW_ACTION_CHIPS_TOGGLE_CLICKED,
+  MAX_VALUE = SHOW_ACTION_CHIPS_TOGGLE_CLICKED,
 }
 
 export function recordCustomizeChromeAction(action: CustomizeChromeAction) {
   chrome.metricsPrivate.recordEnumerationValue(
       'NewTabPage.CustomizeChromeSidePanelAction', action,
       CustomizeChromeAction.MAX_VALUE + 1);
+}
+
+/**
+ * Types of images that are shown on the NTP (and therefore also appear in
+ * Customize Chrome). This enum must match the numbering for NtpImageType in
+ * enums.xml. These values are persisted to logs. Entries should not be
+ * renumbered, removed or reused.
+ *
+ * MAX_VALUE should always be at the end to help get the current number of
+ * buckets.
+ */
+export enum NtpImageType {
+  BACKGROUND_IMAGE,
+  COLLECTIONS,
+  COLLECTION_IMAGES,
+  MAX_VALUE = COLLECTION_IMAGES,
+}
+
+export function recordCustomizeChromeImageError(imageType: NtpImageType) {
+  chrome.metricsPrivate.recordEnumerationValue(
+      'NewTabPage.BackgroundService.Images.Headers.ErrorDetected', imageType,
+      NtpImageType.MAX_VALUE + 1);
 }

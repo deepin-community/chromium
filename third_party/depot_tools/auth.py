@@ -3,6 +3,8 @@
 # found in the LICENSE file.
 """Google OAuth2 related functions."""
 
+from __future__ import annotations
+
 import collections
 import datetime
 import functools
@@ -10,6 +12,8 @@ import httplib2
 import json
 import logging
 import os
+from typing import Optional
+from dataclasses import dataclass
 
 import subprocess2
 
@@ -22,6 +26,25 @@ OAUTH_SCOPE_EMAIL = 'https://www.googleapis.com/auth/userinfo.email'
 OAUTH_SCOPE_GERRIT = 'https://www.googleapis.com/auth/gerritcodereview'
 # Deprecated. Use OAUTH_SCOPE_EMAIL instead.
 OAUTH_SCOPES = OAUTH_SCOPE_EMAIL
+
+
+@dataclass
+class ReAuthContext:
+    """Provides contextual information for ReAuth."""
+    host: str  # Hostname (e.g. chromium-review.googlesource.com)
+    project: str  # Project on host (e.g. chromium/src)
+
+    def to_git_cred_attrs(self) -> bytes:
+        """Returns bytes to be used as the input of `git-credentials-luci` in
+           exchange for a ReAuth token.
+        """
+        assert self.project
+        return f"""
+capability[]=authtype
+protocol=https
+host={self.host}
+path={self.project}
+""".lstrip().encode('utf-8')
 
 
 # Mockable datetime.datetime.utcnow for testing.
@@ -48,9 +71,61 @@ class Token(collections.namedtuple('Token', [
 class LoginRequiredError(Exception):
     """Interaction with the user is required to authenticate."""
     def __init__(self, scopes=OAUTH_SCOPE_EMAIL):
+        self.scopes = scopes
         msg = ('You are not logged in. Please login first by running:\n'
-               '  luci-auth login -scopes %s' % scopes)
+               '  %s' % self.login_command)
         super(LoginRequiredError, self).__init__(msg)
+
+    @property
+    def login_command(self) -> str:
+        return 'luci-auth login -scopes "%s"' % self.scopes
+
+
+class GitLoginRequiredError(Exception):
+    """Interaction with the user is required to authenticate.
+
+    This is for git-credential-luci, not luci-auth.
+    """
+
+    def __init__(self):
+        msg = (
+            'You are not logged in to Gerrit. Please login first by running:\n'
+            '  %s' % self.login_command)
+        super(GitLoginRequiredError, self).__init__(msg)
+
+    @property
+    def login_command(self) -> str:
+        return 'git credential-luci login'
+
+
+class GitReAuthRequiredError(Exception):
+    """Interaction with the user is required to ReAuth.
+
+    This is for git-credential-luci, not luci-auth.
+    """
+
+    def __init__(self):
+        msg = (
+            'You have not done ReAuth. Please complete ReAuth first, then try again:\n'
+            '  %s' % self.reauth_command)
+        super(GitReAuthRequiredError, self).__init__(msg)
+
+    @property
+    def reauth_command(self) -> str:
+        return 'git credential-luci reauth'
+
+
+class GitUnknownError(Exception):
+    """Unknown error from git-credential-luci."""
+
+    def __init__(self):
+        msg = ('Unknown error from git-credential-luci. Try logging in? Run:\n'
+               '  %s' % self.login_command)
+        super(GitLoginRequiredError, self).__init__(msg)
+
+    @property
+    def login_command(self) -> str:
+        return 'git credential-luci login'
 
 
 def has_luci_context_local_auth():
@@ -107,7 +182,7 @@ class Authenticator(object):
             return self._access_token
 
         # Nope, still expired. Needs user interaction.
-        logging.error('Failed to create access token')
+        logging.debug('Failed to create access token')
         raise LoginRequiredError(self._scopes)
 
     def get_id_token(self):
@@ -127,7 +202,7 @@ class Authenticator(object):
             return self._id_token
 
         # Nope, still expired. Needs user interaction.
-        logging.error('Failed to create id token')
+        logging.debug('Failed to create id token')
         raise LoginRequiredError()
 
     def authorize(self, http, use_id_token=False):
@@ -164,16 +239,6 @@ class Authenticator(object):
 
     ## Private methods.
 
-    def _run_luci_auth_login(self):
-        """Run luci-auth login.
-
-        Returns:
-            AccessToken with credentials.
-        """
-        logging.debug('Running luci-auth login')
-        subprocess2.check_call(['luci-auth', 'login', '-scopes', self._scopes])
-        return self._get_luci_auth_token()
-
     def _get_luci_auth_token(self, use_id_token=False):
         logging.debug('Running luci-auth token')
         if use_id_token:
@@ -196,3 +261,125 @@ class Authenticator(object):
             # stdout/stderr.
             logging.error('luci-auth token failed: %s', e)
             return None
+
+
+class GerritAuthenticator(object):
+    """Object that knows how to refresh access tokens for Gerrit.
+
+    Unlike Authenticator, this is specifically for authenticating Gerrit
+    requests.
+    """
+
+    # Exitcodes for `git-credential-luci`.
+    # See: https://chromium.googlesource.com/infra/luci/luci-go/+/main/client/cmd/git-credential-luci/main.go
+    _GCL_EXITCODE_SUCCESS = 0
+    _GCL_EXITCODE_UNCLASSIFIED = 1
+    _GCL_EXITCODE_LOGIN_REQUIRED = 2
+    _GCL_EXITCODE_REAUTH_REQUIRED = 3
+
+    def __init__(self):
+        self._access_token: Optional[str] = None
+
+    def get_access_token(self) -> str:
+        """Returns AccessToken, refreshing it if necessary.
+
+        This token can't satisfy ReAuth requirements. Use
+        `get_authorization_header` method instead.
+
+        Raises:
+            GitLoginRequiredError: if user login is required.
+        """
+        logging.debug('Running git-credential-luci')
+        env = os.environ.copy()
+        env['LUCI_ENABLE_REAUTH'] = '0'
+        out_bytes = self._call_helper(['git-credential-luci', 'get'],
+                                      stdin=subprocess2.DEVNULL,
+                                      stdout=subprocess2.PIPE,
+                                      stderr=subprocess2.PIPE,
+                                      env=env)
+        out = self._parse_creds_helper_out(out_bytes)
+        if password := out.get("password", None):
+            return password
+
+        logging.error('git-credential-luci did not return a token')
+        raise GitUnknownError()
+
+    def get_authorization_header(self, context: ReAuthContext) -> str:
+        """Returns an HTTP Authorization header to authenticate requests.
+
+        This method supports ReAuth, but it may be missing ReAuth credentials
+        (i.e. RAPT token), if ReAuth isn't required based on the context, or if
+        ReAuth support is disabled.
+
+        Raises:
+            GitLoginRequiredError: if user login is required.
+            GitReAuthRequiredError: if ReAuth is required.
+        """
+        logging.debug('Running git-credential-luci (with reauth)')
+        creds_attrs = context.to_git_cred_attrs()
+        logging.debug('git-credential-luci stdin:\n%s', creds_attrs)
+        out_bytes = self._call_helper(['git-credential-luci', 'get'],
+                                      stdin=creds_attrs,
+                                      stdout=subprocess2.PIPE,
+                                      stderr=subprocess2.PIPE)
+        if header := self._extract_authorization_header(out_bytes):
+            return header
+
+        logging.error('git-credential-luci did not return a token')
+        raise GitUnknownError()
+
+    def _extract_authorization_header(self, out_bytes: bytes) -> Optional[str]:
+        out = self._parse_creds_helper_out(out_bytes)
+        # Check for ReAuth token and return it's available.
+        authtype = out.get("authtype", None)
+        credential = out.get("credential", None)
+        if authtype and credential:
+            return f"{authtype} {credential}"
+
+        # If the helper returns non-reauth token, it means ReAuth isn't required and
+        # the access token already satisfies the request.
+        if password := out.get("password", None):
+            return f"Bearer {password}"
+
+        # If the helper also didn't return an access token, something is wrong.
+        logging.error(
+            'git-credential-luci did not return a token or a ReAuth token')
+        return None
+
+    def _parse_creds_helper_out(self, out_bytes: str) -> Dict[str, str]:
+        """Parse credential helper's output to a dictionary.
+
+        Note, this function doesn't handle arrays (e.g. key[]=value).
+        """
+        result = {}
+        for line in out_bytes.decode().splitlines():
+            if '=' in line:
+                key, value = line.split('=', 1)
+                result[key] = value.strip()
+        return result
+
+    def _call_helper(self, args, **kwargs) -> bytes:
+        """Calls the helper executable and propagate errors based on exit code.
+
+        Returns output as bytes if successful.
+        Raises:
+            GitLoginRequiredError
+            GitReAuthRequiredError
+            GitUnknownError
+        """
+        stdout_stderr, exitcode = subprocess2.communicate(args, **kwargs)
+        stdout, stderr = stdout_stderr
+        logging.debug('git-credential-luci stderr:\n%s', stderr)
+
+        if exitcode == self._GCL_EXITCODE_SUCCESS:
+            return stdout
+
+        if exitcode == self._GCL_EXITCODE_LOGIN_REQUIRED:
+            raise GitLoginRequiredError()
+        if exitcode == self._GCL_EXITCODE_REAUTH_REQUIRED:
+            raise GitReAuthRequiredError()
+
+        err = subprocess2.CalledProcessError(exitcode, args, kwargs.get('cwd'),
+                                             stdout, stderr)
+        logging.error('git-credential-luci failed: %s', err)
+        raise err

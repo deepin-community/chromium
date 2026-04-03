@@ -17,10 +17,15 @@
 
 #include "perfetto/ext/trace_processor/rpc/query_result_serializer.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <deque>
+#include <memory>
 #include <ostream>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "perfetto/ext/base/string_utils.h"
@@ -30,8 +35,7 @@
 
 #include "protos/perfetto/trace_processor/trace_processor.pbzero.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
 // For ASSERT_THAT(ElementsAre(...))
 inline bool operator==(const SqlValue& a, const SqlValue& b) {
@@ -89,6 +93,7 @@ class TestDeserializer {
   std::vector<SqlValue> cells;
   std::string error;
   bool eof_reached = false;
+  std::optional<double> elapsed_time_ms;
 
  private:
   std::vector<std::unique_ptr<char[]>> copied_buf_;
@@ -110,6 +115,10 @@ void TestDeserializer::DeserializeBuffer(const uint8_t* start, size_t size) {
   error += result.error().ToStdString();
   for (auto it = result.column_names(); it; ++it)
     columns.push_back(it->as_std_string());
+
+  if (result.has_elapsed_time_ms()) {
+    elapsed_time_ms = result.elapsed_time_ms();
+  }
 
   for (auto batch_it = result.batch(); batch_it; ++batch_it) {
     ASSERT_FALSE(eof_reached);
@@ -215,10 +224,9 @@ TEST(QueryResultSerializerTest, ShortBatch) {
 TEST(QueryResultSerializerTest, LongBatch) {
   auto tp = TraceProcessor::CreateInstance(trace_processor::Config());
 
-  RunQueryChecked(tp.get(), "create virtual table win using window;");
-  RunQueryChecked(tp.get(),
-                  "update win set window_start=0, window_dur=8192, quantum=1 "
-                  "where rowid = 0");
+  RunQueryChecked(
+      tp.get(),
+      "create virtual table win using __intrinsic_window(0, 8192, 1);");
 
   auto iter = tp->ExecuteQuery(
       "select 'x' as x, ts, dur * 1.0 as dur, quantum_ts from win");
@@ -248,10 +256,9 @@ TEST(QueryResultSerializerTest, LongBatch) {
 TEST(QueryResultSerializerTest, BatchSaturatingBinaryPayload) {
   auto tp = TraceProcessor::CreateInstance(trace_processor::Config());
 
-  RunQueryChecked(tp.get(), "create virtual table win using window;");
-  RunQueryChecked(tp.get(),
-                  "update win set window_start=0, window_dur=1024, quantum=1 "
-                  "where rowid = 0");
+  RunQueryChecked(
+      tp.get(),
+      "create virtual table win using __intrinsic_window(0, 1024, 1);");
   auto iter = tp->ExecuteQuery(
       "select 'x' as x, ts, dur * 1.0 as dur, quantum_ts from win");
   QueryResultSerializer ser(std::move(iter));
@@ -267,10 +274,8 @@ TEST(QueryResultSerializerTest, BatchSaturatingBinaryPayload) {
 TEST(QueryResultSerializerTest, BatchSaturatingNumCells) {
   auto tp = TraceProcessor::CreateInstance(trace_processor::Config());
 
-  RunQueryChecked(tp.get(), "create virtual table win using window;");
-  RunQueryChecked(tp.get(),
-                  "update win set window_start=0, window_dur=4, quantum=1 "
-                  "where rowid = 0");
+  RunQueryChecked(
+      tp.get(), "create virtual table win using __intrinsic_window(0, 4, 1);");
   auto iter = tp->ExecuteQuery(
       "select 'x' as x, ts, dur * 1.0 as dur, quantum_ts from win");
   QueryResultSerializer ser(std::move(iter));
@@ -376,7 +381,7 @@ TEST(QueryResultSerializerTest, RandomSizes) {
       insert_values += ",";
     } else {
       insert_values += "),";
-      if (insert_values.size() > 1024 * 1024 || i == kNumCells - 1) {
+      if (insert_values.size() > 100 * 1024 || i == kNumCells - 1) {
         insert_values[insert_values.size() - 1] = ';';
         auto query = "insert into tab (a,b,c) values " + insert_values;
         insert_values = "";
@@ -410,7 +415,8 @@ TEST(QueryResultSerializerTest, ErrorBeforeStartingQuery) {
   EXPECT_EQ(deser.cells.size(), 0u);
   EXPECT_EQ(deser.error,
             "Traceback (most recent call last):\n  File \"stdin\" line 1 col "
-            "1\n    insert into incomplete_input\n    ^\nincomplete input");
+            "29\n    insert into incomplete_input\n                            "
+            "    ^\nincomplete input");
   EXPECT_TRUE(deser.eof_reached);
 }
 
@@ -452,6 +458,25 @@ TEST(QueryResultSerializerTest, NoResultQuery) {
   }
 }
 
+TEST(QueryResultSerializerTest, ElapsedTime) {
+  auto tp = TraceProcessor::CreateInstance(trace_processor::Config());
+  {
+    auto iter = tp->ExecuteQuery("select 1");
+    QueryResultSerializer ser(std::move(iter));
+    TestDeserializer deser;
+    deser.SerializeAndDeserialize(&ser);
+    EXPECT_FALSE(deser.elapsed_time_ms.has_value());
+  }
+
+  {
+    // TODO test that if elapsed time is passed to serialize then
+    auto iter = tp->ExecuteQuery("select 1");
+    QueryResultSerializer ser(std::move(iter), base::GetWallTimeNs());
+    TestDeserializer deser;
+    deser.SerializeAndDeserialize(&ser);
+    EXPECT_GT(deser.elapsed_time_ms, 0.0);
+  }
+}
+
 }  // namespace
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

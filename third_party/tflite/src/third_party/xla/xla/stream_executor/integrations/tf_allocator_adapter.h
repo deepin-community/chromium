@@ -16,22 +16,24 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_INTEGRATIONS_TF_ALLOCATOR_ADAPTER_H_
 #define XLA_STREAM_EXECUTOR_INTEGRATIONS_TF_ALLOCATOR_ADAPTER_H_
 
+#include <cstdint>
 #include <memory>
-#include <tuple>
+#include <optional>
 #include <utility>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/str_format.h"
-#include "xla/stream_executor/device_memory.h"
-#include "xla/stream_executor/device_memory_allocator.h"
+#include "absl/synchronization/mutex.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
-#include "tsl/framework/allocator.h"
-#include "tsl/platform/statusor.h"
+#include "xla/tsl/framework/allocator.h"
 
 namespace stream_executor {
 
@@ -39,22 +41,22 @@ namespace stream_executor {
 //
 // Assumes that the Tensorflow allocator permits asynchronous deallocation:
 // see comment on `AllowsAsynchronousDeallocation()`.
-class TfAllocatorAdapter : public DeviceMemoryAllocator {
+class TfAllocatorAdapter : public DeviceAddressAllocator {
  public:
   // stream: a Stream on which the allocator can only be used. If non-null, the
   // allocator can not be used on any other stream.
   TfAllocatorAdapter(tsl::Allocator *wrapped, Stream *stream);
 
   // Constructor for the cases where `stream` can not be provided.
-  TfAllocatorAdapter(tsl::Allocator *wrapped, Platform *platform);
+  TfAllocatorAdapter(tsl::Allocator *wrapped, const Platform *platform);
 
   ~TfAllocatorAdapter() override;
 
-  absl::StatusOr<OwningDeviceMemory> Allocate(int device_ordinal, uint64_t size,
-                                              bool retry_on_failure,
-                                              int64_t memory_space) override;
+  absl::StatusOr<ScopedDeviceAddress<uint8_t>> Allocate(
+      int device_ordinal, uint64_t size, bool retry_on_failure,
+      int64_t memory_space) override;
 
-  absl::Status Deallocate(int device_ordinal, DeviceMemoryBase mem) override;
+  absl::Status Deallocate(int device_ordinal, DeviceAddressBase mem) override;
 
   // The Tensorflow BFC allocator used on GPU allows host-side deallocation
   // before GPU execution takes place. Tensorflow uses the ordering of the main
@@ -77,47 +79,57 @@ class TfAllocatorAdapter : public DeviceMemoryAllocator {
 // Adapter class that wraps per-device TF allocators with corresponding streams
 // as a TfAllocatorAdapter. Assumes that the Tensorflow allocator permits
 // asynchronous deallocation; see comment on `AllowsAsynchronousDeallocation()`.
-class MultiDeviceAdapter : public DeviceMemoryAllocator {
+class MultiDeviceAdapter : public DeviceAddressAllocator {
  public:
   struct AllocatorInfo {
     std::unique_ptr<tsl::Allocator> allocator;
     Stream *stream;
     int64_t memory_space;
     std::optional<int> device_ordinal = std::nullopt;
+    const Platform *platform = nullptr;
 
     AllocatorInfo(std::unique_ptr<tsl::Allocator> allocator, Stream *stream,
                   int64_t memory_space,
-                  std::optional<int> device_ordinal = std::nullopt)
+                  std::optional<int> device_ordinal = std::nullopt,
+                  const Platform *platform = nullptr)
         : allocator(std::move(allocator)),
           stream(stream),
           memory_space(memory_space),
-          device_ordinal(device_ordinal) {}
+          device_ordinal(device_ordinal),
+          platform(platform) {}
   };
 
-  MultiDeviceAdapter(const Platform *platform,
+  MultiDeviceAdapter(const Platform* platform,
                      std::vector<AllocatorInfo> tf_allocators)
-      : DeviceMemoryAllocator(platform) {
+      : DeviceAddressAllocator(platform) {
     tf_allocators_.reserve(tf_allocators.size());
     for (AllocatorInfo &info : tf_allocators) {
       auto &per_device_allocators =
           memory_space_to_per_device_allocators_[info.memory_space];
-      int device_ordinal = info.device_ordinal.has_value()
-                               ? *info.device_ordinal
-                               : info.stream->parent()->device_ordinal();
+      int device_ordinal =
+          info.device_ordinal.has_value()
+              ? *info.device_ordinal
+              : CHECK_NOTNULL(info.stream)->parent()->device_ordinal();
       if (per_device_allocators.size() <= device_ordinal) {
         per_device_allocators.resize(device_ordinal + 1);
       }
       CHECK(!per_device_allocators[device_ordinal]);
-      per_device_allocators[device_ordinal] =
-          std::make_unique<TfAllocatorAdapter>(info.allocator.get(),
-                                               info.stream);
+      if (info.stream != nullptr) {
+        per_device_allocators[device_ordinal] =
+            std::make_unique<TfAllocatorAdapter>(info.allocator.get(),
+                                                 info.stream);
+      } else {
+        per_device_allocators[device_ordinal] =
+            std::make_unique<TfAllocatorAdapter>(info.allocator.get(),
+                                                 info.platform);
+      }
       tf_allocators_.push_back(std::move(info.allocator));
     }
   }
 
-  absl::StatusOr<OwningDeviceMemory> Allocate(int device_ordinal, uint64_t size,
-                                              bool retry_on_failure,
-                                              int64_t memory_space) override {
+  absl::StatusOr<ScopedDeviceAddress<uint8_t>> Allocate(
+      int device_ordinal, uint64_t size, bool retry_on_failure,
+      int64_t memory_space) override {
     // memory_space is used here to select allocator. This isn't a need to pass
     // it any lower to TfAllocatorAdapter.
     auto it = memory_space_to_per_device_allocators_.find(memory_space);
@@ -127,23 +139,27 @@ class MultiDeviceAdapter : public DeviceMemoryAllocator {
         auto result, it->second[device_ordinal]->Allocate(
                          device_ordinal, size, retry_on_failure, memory_space));
 
-    absl::MutexLock lock(&mu_);
+    absl::MutexLock lock(mu_);
     buffer_memory_spaces_[{device_ordinal, result->opaque()}] = memory_space;
     return result;
   }
 
-  absl::Status Deallocate(int device_ordinal, DeviceMemoryBase mem) override {
+  absl::Status Deallocate(int device_ordinal, DeviceAddressBase mem) override {
     if (mem.opaque() == nullptr) return absl::OkStatus();
     // Memory space is not passed to deallocate, look up in
     // buffer_memory_spaces_.
     int64_t memory_space;
     {
-      absl::MutexLock lock(&mu_);
+      absl::MutexLock lock(mu_);
       auto it = buffer_memory_spaces_.find({device_ordinal, mem.opaque()});
       if (it == buffer_memory_spaces_.end()) {
-        return absl::InternalError(
-            absl::StrFormat("Memory %p was not allocated on device %d.",
-                            mem.opaque(), device_ordinal));
+        // There might be situation when device memory was allocated somewhere
+        // outside of the current allocator. For backward compatibility in
+        // this case we are falling back to the first allocator to deallocate
+        // the memory.
+        // See b/325527293 for more details.
+        return memory_space_to_per_device_allocators_[0][device_ordinal]
+            ->Deallocate(device_ordinal, mem);
       }
       memory_space = it->second;
       buffer_memory_spaces_.erase(it);
@@ -188,6 +204,13 @@ class MultiDeviceAdapter : public DeviceMemoryAllocator {
   // (TfAllocatorAdapter does not take ownership of its underlying Allocator).
   std::vector<std::unique_ptr<tsl::Allocator>> tf_allocators_;
 };
+
+// Creates a status with a payload indicating an error while allocating `size`
+// bytes of memory.
+absl::Status MemoryAllocationError(uint64_t size, bool is_host_mem);
+
+// Checks whether the status is a memory allocation error.
+bool IsMemoryAllocationError(absl::Status status);
 
 }  // namespace stream_executor
 

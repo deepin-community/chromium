@@ -7,6 +7,10 @@
 // Image11.h: Implements the rx::Image11 class, which acts as the interface to
 // the actual underlying resources of a Texture
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/d3d/d3d11/Image11.h"
 
 #include "common/utilities.h"
@@ -394,7 +398,8 @@ angle::Result Image11::copyFromFramebuffer(const gl::Context *context,
         TextureHelper11 textureHelper  = rt11->getTexture();
         unsigned int sourceSubResource = rt11->getSubresourceIndex();
 
-        gl::Box sourceBox(sourceArea.x, sourceArea.y, 0, sourceArea.width, sourceArea.height, 1);
+        const int z = textureHelper.is3D() ? srcAttachment->layer() : 0;
+        gl::Box sourceBox(sourceArea.x, sourceArea.y, z, sourceArea.width, sourceArea.height, 1);
         return copyWithoutConversion(context, destOffset, sourceBox, textureHelper,
                                      sourceSubResource);
     }

@@ -4,15 +4,14 @@
 
 #include "components/content_settings/core/browser/cookie_settings.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/synchronization/lock.h"
-#include "build/blink_buildflags.h"
 #include "build/build_config.h"
 #include "components/content_settings/core/browser/content_settings_info.h"
 #include "components/content_settings/core/browser/content_settings_registry.h"
@@ -27,13 +26,13 @@
 #include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/common/host_indexed_content_settings.h"
 #include "components/content_settings/core/common/pref_names.h"
-#include "components/permissions/features.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
-#include "components/privacy_sandbox/tracking_protection_prefs.h"
-#include "components/privacy_sandbox/tracking_protection_settings.h"
+#include "components/privacy_sandbox/privacy_sandbox_features.h"
+#include "components/tpcd/metadata/browser/manager.h"
 #include "extensions/buildflags/buildflags.h"
+#include "net/base/schemeful_site.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/cookies/cookie_util.h"
 #include "net/cookies/site_for_cookies.h"
@@ -45,24 +44,20 @@ namespace content_settings {
 CookieSettings::CookieSettings(
     HostContentSettingsMap* host_content_settings_map,
     PrefService* prefs,
-    privacy_sandbox::TrackingProtectionSettings* tracking_protection_settings,
     bool is_incognito,
+    ComputeFedCmSharingPermissionsCallback compute_fedcm_sharing_permissions,
+    tpcd::metadata::Manager* tpcd_metadata_manager,
     const char* extension_scheme)
-    : tracking_protection_settings_(tracking_protection_settings),
-      host_content_settings_map_(host_content_settings_map),
+    : host_content_settings_map_(host_content_settings_map),
       is_incognito_(is_incognito),
+      tpcd_metadata_manager_(tpcd_metadata_manager),
       extension_scheme_(extension_scheme),
       block_third_party_cookies_(
           net::cookie_util::IsForceThirdPartyCookieBlockingEnabled()),
       mitigations_enabled_for_3pcd_(
-          net::cookie_util::IsForceThirdPartyCookieBlockingEnabled()) {
+          net::cookie_util::IsForceThirdPartyCookieBlockingEnabled()),
+      compute_fedcm_sharing_permissions_(compute_fedcm_sharing_permissions) {
   content_settings_observation_.Observe(host_content_settings_map_.get());
-  if (tracking_protection_settings_) {
-    tracking_protection_settings_observation_.Observe(
-        tracking_protection_settings_.get());
-    tracking_protection_enabled_for_3pcd_ =
-        tracking_protection_settings_->IsTrackingProtection3pcdEnabled();
-  }
   pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
   pref_change_registrar_->Init(prefs);
   pref_change_registrar_->Add(
@@ -70,17 +65,11 @@ CookieSettings::CookieSettings(
       base::BindRepeating(&CookieSettings::OnCookiePreferencesChanged,
                           base::Unretained(this)));
   OnCookiePreferencesChanged();
-  OnBlockAllThirdPartyCookiesChanged();
-
-  if (base::FeatureList::IsEnabled(features::kHostIndexedMetadataGrants)) {
-    settings_for_3pcd_metadata_grants_ = HostIndexedContentSettings();
-  } else {
-    settings_for_3pcd_metadata_grants_ = ContentSettingsForOneType();
-  }
+  UpdateFedCmSharingPermissions();
 }
 
 ContentSetting CookieSettings::GetDefaultCookieSetting(
-    std::string* provider_id) const {
+    content_settings::ProviderType* provider_id) const {
   return host_content_settings_map_->GetDefaultContentSetting(
       ContentSettingsType::COOKIES, provider_id);
 }
@@ -114,40 +103,11 @@ void CookieSettings::SetCookieSetting(const GURL& primary_url,
 bool CookieSettings::IsAllowedByTpcdMetadataGrant(const GURL& url,
                                                   const GURL& first_party_url,
                                                   SettingInfo* out_info) const {
-  if (!ShouldConsider3pcdMetadataGrantsSettings(
-          net::CookieSettingOverrides())) {
+  if (!tpcd_metadata_manager_) {
     return false;
   }
-  SCOPED_UMA_HISTOGRAM_TIMER_MICROS(
-      "ContentSettings.IsAllowedByTpcdMetadataGrant.Duration");
-  base::AutoLock lock(tpcd_lock_);
-  ContentSetting result = CONTENT_SETTING_DEFAULT;
-  if (base::FeatureList::IsEnabled(features::kHostIndexedMetadataGrants)) {
-    auto* found = absl::get<HostIndexedContentSettings>(
-                      settings_for_3pcd_metadata_grants_)
-                      .Find(url, first_party_url);
-    if (found) {
-      result = ValueToContentSetting(found->second.value);
-      if (out_info) {
-        out_info->primary_pattern = found->first.primary_pattern;
-        out_info->secondary_pattern = found->first.secondary_pattern;
-        out_info->metadata = found->second.metadata;
-      }
-    }
-  } else {
-    auto* found = FindContentSetting(url, first_party_url,
-                                     absl::get<ContentSettingsForOneType>(
-                                         settings_for_3pcd_metadata_grants_));
-    if (found) {
-      result = found->GetContentSetting();
-      if (out_info) {
-        out_info->primary_pattern = found->primary_pattern;
-        out_info->secondary_pattern = found->secondary_pattern;
-        out_info->metadata = found->metadata;
-      }
-    }
-  }
-  return result == CONTENT_SETTING_ALLOW;
+
+  return tpcd_metadata_manager_->IsAllowed(url, first_party_url, out_info);
 }
 
 void CookieSettings::SetTemporaryCookieGrantForHeuristic(
@@ -205,7 +165,7 @@ void CookieSettings::SetCookieSettingForUserBypass(
         content_settings::features::kUserBypassUIExceptionExpiration.Get());
   }
 
-  constraints.set_session_model(SessionModel::Durable);
+  constraints.set_session_model(mojom::SessionModel::DURABLE);
 
   host_content_settings_map_->SetContentSettingCustomScope(
       ContentSettingsPattern::Wildcard(),
@@ -214,31 +174,20 @@ void CookieSettings::SetCookieSettingForUserBypass(
       constraints);
 }
 
-bool CookieSettings::IsStoragePartitioningBypassEnabled(
-    const GURL& first_party_url) {
-  SettingInfo info;
-  ContentSetting setting = host_content_settings_map_->GetContentSetting(
-      GURL(), first_party_url, ContentSettingsType::COOKIES, &info);
-
-  bool is_default = info.primary_pattern.MatchesAllHosts() &&
-                    info.secondary_pattern.MatchesAllHosts();
-
-  return is_default ? false : IsAllowed(setting);
-}
-
 void CookieSettings::ResetCookieSetting(const GURL& primary_url) {
   host_content_settings_map_->SetNarrowestContentSetting(
       primary_url, GURL(), ContentSettingsType::COOKIES,
       CONTENT_SETTING_DEFAULT);
 }
 
-// TODO(crbug.com/1386190): Update to take in CookieSettingOverrides.
+// TODO(crbug.com/40247160): Update to take in CookieSettingOverrides.
 bool CookieSettings::IsThirdPartyAccessAllowed(
     const GURL& first_party_url,
     content_settings::SettingInfo* info) const {
   // Use GURL() as an opaque primary url to check if any site
   // could access cookies in a 3p context on |first_party_url|.
-  return IsAllowed(GetCookieSetting(GURL(), first_party_url,
+  return IsAllowed(GetCookieSetting(GURL(), net::SiteForCookies(),
+                                    first_party_url,
                                     net::CookieSettingOverrides(), info));
 }
 
@@ -257,8 +206,6 @@ void CookieSettings::ResetThirdPartyCookieSetting(const GURL& first_party_url) {
   // created manually, or through the previous UI. Resetting should support
   // both of these.
 
-  // TODO(crbug.com/1446230): Log metrics when there is pattern that has domain
-  // as wildcard.
   auto pattern =
       ContentSettingsPattern::FromURLToSchemefulSitePattern(first_party_url);
 
@@ -273,12 +220,12 @@ void CookieSettings::ResetThirdPartyCookieSetting(const GURL& first_party_url) {
       CONTENT_SETTING_DEFAULT);
 }
 
-bool CookieSettings::IsStorageDurable(const GURL& origin) const {
+bool CookieSettings::IsStoragePersistent(const GURL& origin) const {
   // TODO(dgrogan): Don't use host_content_settings_map_ directly.
   // https://crbug.com/539538
   ContentSetting setting = host_content_settings_map_->GetContentSetting(
       origin /*primary*/, origin /*secondary*/,
-      ContentSettingsType::DURABLE_STORAGE);
+      ContentSettingsType::PERSISTENT_STORAGE);
   return setting == CONTENT_SETTING_ALLOW;
 }
 
@@ -315,8 +262,6 @@ bool CookieSettings::ShouldIgnoreSameSiteRestrictions(
 
 void CookieSettings::ShutdownOnUIThread() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  tracking_protection_settings_ = nullptr;
-  tracking_protection_settings_observation_.Reset();
   pref_change_registrar_.reset();
 }
 
@@ -341,6 +286,9 @@ bool CookieSettings::ShouldAlwaysAllowCookies(
       first_party_url.SchemeIs(extension_scheme_)) {
     return true;
   }
+#else
+  // Suppress -Wunused-private-field warning.
+  (void)extension_scheme_;
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
   return false;
@@ -357,49 +305,37 @@ ContentSetting CookieSettings::GetContentSetting(
                : CONTENT_SETTING_BLOCK;
   }
 
+  if (content_type == ContentSettingsType::FEDERATED_IDENTITY_SHARING) {
+    return HasFedCmSharingPermission(primary_url, secondary_url)
+               ? ContentSetting::CONTENT_SETTING_ALLOW
+               : ContentSetting::CONTENT_SETTING_BLOCK;
+  }
+
   return host_content_settings_map_->GetContentSetting(
       primary_url, secondary_url, content_type, info);
 }
 
 bool CookieSettings::IsThirdPartyCookiesAllowedScheme(
-    const std::string& scheme) const {
-  const content_settings::ContentSettingsInfo* content_settings_info =
-      content_settings::ContentSettingsRegistry::GetInstance()->Get(
-          ContentSettingsType::COOKIES);
-  const std::vector<std::string> allowed_schemes =
-      content_settings_info->third_party_cookie_allowed_secondary_schemes();
-  return base::Contains(allowed_schemes, scheme);
-}
-
-bool CookieSettings::IsStorageAccessApiEnabled() const {
-  // TODO(https://crbug.com/1411765): instead of explicitly checking for
-  // USE_BLINK throughout the core code of this component, we should rely on
-  // CookieSettingsFactory to plumb in the necessary configuration instead.
-#if BUILDFLAG(USE_BLINK)
-  return true;
-#else
-  return false;
-#endif
+    std::string_view scheme) const {
+  return std::ranges::contains(
+      ContentSettingsRegistry::GetInstance()
+          ->Get(ContentSettingsType::COOKIES)
+          ->third_party_cookie_allowed_secondary_schemes(),
+      scheme);
 }
 
 CookieSettings::~CookieSettings() = default;
 
+bool CookieSettings::ShouldBlockThirdPartyCookiesInternal() const {
 #if BUILDFLAG(IS_IOS)
-bool CookieSettings::ShouldBlockThirdPartyCookiesInternal() {
   return false;
-}
 #else
-bool CookieSettings::ShouldBlockThirdPartyCookiesInternal() {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(pref_change_registrar_);
 
-  if (net::cookie_util::IsForceThirdPartyCookieBlockingEnabled()) {
-    return true;
-  }
-
-  // Cookies should always be blocked in 3PCD experiment.
-  if (tracking_protection_settings_ &&
-      tracking_protection_settings_->IsTrackingProtection3pcdEnabled()) {
+  if (net::cookie_util::IsForceThirdPartyCookieBlockingEnabled() ||
+      base::FeatureList::IsEnabled(
+          content_settings::features::kTrackingProtection3pcd)) {
     return true;
   }
 
@@ -410,26 +346,17 @@ bool CookieSettings::ShouldBlockThirdPartyCookiesInternal() {
     case CookieControlsMode::kBlockThirdParty:
       return true;
     case CookieControlsMode::kIncognitoOnly:
-      return is_incognito_;
     case CookieControlsMode::kOff:
-      return false;
+      return is_incognito_;
   }
-  return false;
-}
 #endif
+}
 
-bool CookieSettings::MitigationsEnabledFor3pcdInternal() {
-  if (tracking_protection_settings_ &&
-      tracking_protection_settings_->IsTrackingProtection3pcdEnabled()) {
-    // Mitigations should be on iff we are not blocking all 3PC in 3PCD.
-    return !tracking_protection_settings_->AreAllThirdPartyCookiesBlocked();
-  }
-
-  if (net::cookie_util::IsForceThirdPartyCookieBlockingEnabled()) {
-    return true;
-  }
-
-  return false;
+bool CookieSettings::MitigationsEnabledFor3pcdInternal() const {
+  return (base::FeatureList::IsEnabled(
+              content_settings::features::kTrackingProtection3pcd) &&
+          !is_incognito_) ||
+         net::cookie_util::IsForceThirdPartyCookieBlockingEnabled();
 }
 
 void CookieSettings::OnContentSettingChanged(
@@ -441,9 +368,14 @@ void CookieSettings::OnContentSettingChanged(
       observer.OnCookieSettingChanged();
     }
   }
+
+  if (content_type_set.Contains(
+          ContentSettingsType::FEDERATED_IDENTITY_SHARING)) {
+    UpdateFedCmSharingPermissions();
+  }
 }
 
-void CookieSettings::OnBlockAllThirdPartyCookiesChanged() {
+void CookieSettings::OnMitigationsEnabledChanged() {
   bool new_mitigations_enabled_for_3pcd = MitigationsEnabledFor3pcdInternal();
   {
     base::AutoLock auto_lock(lock_);
@@ -458,41 +390,15 @@ void CookieSettings::OnBlockAllThirdPartyCookiesChanged() {
   }
 }
 
-void CookieSettings::OnTrackingProtection3pcdChanged() {
-  DCHECK(pref_change_registrar_);
-
-  bool new_tracking_protection_enabled_for_3pcd =
-      tracking_protection_settings_->IsTrackingProtection3pcdEnabled();
-  {
-    base::AutoLock auto_lock(lock_);
-    if (tracking_protection_enabled_for_3pcd_ ==
-        new_tracking_protection_enabled_for_3pcd) {
-      return;
-    }
-    tracking_protection_enabled_for_3pcd_ =
-        new_tracking_protection_enabled_for_3pcd;
-  }
-  for (Observer& obs : observers_) {
-    obs.OnTrackingProtectionEnabledFor3pcdChanged(
-        new_tracking_protection_enabled_for_3pcd);
-  }
-  // If the user opted to block all 3PC while in the experiment, preserve that
-  // preference if they are offboarded.
-  if (!new_tracking_protection_enabled_for_3pcd &&
-      pref_change_registrar_->prefs()->GetBoolean(
-          prefs::kBlockAll3pcToggleEnabled)) {
-    pref_change_registrar_->prefs()->SetInteger(
-        prefs::kCookieControlsMode,
-        static_cast<int>(CookieControlsMode::kBlockThirdParty));
-  }
-  OnCookiePreferencesChanged();
-}
-
 void CookieSettings::OnCookiePreferencesChanged() {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  bool new_block_third_party_cookies = ShouldBlockThirdPartyCookiesInternal();
+  if (base::FeatureList::IsEnabled(
+          content_settings::features::kTrackingProtection3pcd)) {
+    OnMitigationsEnabledChanged();
+  }
 
+  bool new_block_third_party_cookies = ShouldBlockThirdPartyCookiesInternal();
   {
     base::AutoLock auto_lock(lock_);
     if (block_third_party_cookies_ == new_block_third_party_cookies) {
@@ -506,6 +412,19 @@ void CookieSettings::OnCookiePreferencesChanged() {
 }
 
 bool CookieSettings::ShouldBlockThirdPartyCookies() const {
+  return ShouldBlockThirdPartyCookies(std::nullopt,
+                                      net::CookieSettingOverrides());
+}
+
+bool CookieSettings::ShouldBlockThirdPartyCookies(
+    base::optional_ref<const url::Origin> top_frame_origin,
+    net::CookieSettingOverrides overrides) const {
+  if (std::optional<bool> modifier_decision =
+          MaybeBlockThirdPartyCookiesPerModifiers(top_frame_origin,
+                                                  overrides)) {
+    return modifier_decision.value();
+  }
+
   base::AutoLock auto_lock(lock_);
   return block_third_party_cookies_;
 }
@@ -515,9 +434,35 @@ bool CookieSettings::MitigationsEnabledFor3pcd() const {
   return mitigations_enabled_for_3pcd_;
 }
 
-bool CookieSettings::TrackingProtectionEnabledFor3pcd() const {
-  base::AutoLock auto_lock(lock_);
-  return tracking_protection_enabled_for_3pcd_;
+void CookieSettings::UpdateFedCmSharingPermissions() {
+  base::AutoLock lock(fedcm_sharing_permissions_lock_);
+  ContentSettingsForOneType settings = compute_fedcm_sharing_permissions_.Run();
+  if (settings.empty()) {
+    fedcm_sharing_permissions_ = HostIndexedContentSettings();
+  } else {
+    std::vector<HostIndexedContentSettings> indices =
+        HostIndexedContentSettings::Create(settings);
+    // All FedCM sharing permissions should use the same source attribute.
+    CHECK_EQ(indices.size(), 1u);
+    fedcm_sharing_permissions_ = std::move(indices.front());
+  }
+}
+
+bool CookieSettings::HasFedCmSharingPermission(
+    const GURL& primary_url,
+    const GURL& secondary_url) const {
+  base::AutoLock lock(fedcm_sharing_permissions_lock_);
+
+  const RuleEntry* entry =
+      fedcm_sharing_permissions_.Find(primary_url, secondary_url);
+
+  return entry && content_settings::ValueToContentSetting(
+                      entry->second.value) == CONTENT_SETTING_ALLOW;
+}
+
+ContentSettingsForOneType CookieSettings::GetTpcdMetadataGrants() const {
+  return tpcd_metadata_manager_ ? tpcd_metadata_manager_->GetGrants()
+                                : ContentSettingsForOneType();
 }
 
 }  // namespace content_settings

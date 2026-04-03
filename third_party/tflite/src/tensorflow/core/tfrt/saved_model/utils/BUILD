@@ -1,3 +1,4 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//tensorflow:tensorflow.bzl", "tf_cc_shared_test")
 
 package(
@@ -31,8 +32,8 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Support",
-        "@local_tsl//tsl/platform:env",
         "@tf_runtime//:bef",
+        "@tsl//tsl/platform:env",
     ],
 )
 
@@ -55,11 +56,14 @@ tf_cc_shared_test(
         "//tensorflow/core/tfrt/fallback:fallback_state",
         "//tensorflow/core/tfrt/mlrt/bytecode",
         "//tensorflow/core/tfrt/saved_model:saved_model_testutil",
+        "//tensorflow/core/tfrt/saved_model:saved_model_util",
         "//tensorflow/core/tfrt/utils",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest_main",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Parser",
-        "@local_tsl//tsl/lib/core:status_test_util",
         "@tf_runtime//:bef",
+        "@tsl//tsl/platform:env",
+        "@xla//xla/tsl/lib/core:status_test_util",
     ],
 )

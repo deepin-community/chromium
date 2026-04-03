@@ -4,9 +4,11 @@
 
 #include "media/base/android/jni_hdr_metadata.h"
 
-#include "media/base/android/media_jni_headers/HdrMetadata_jni.h"
 #include "media/base/video_color_space.h"
 #include "ui/gfx/hdr_metadata.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "media/base/android/media_jni_headers/HdrMetadata_jni.h"
 
 namespace media {
 
@@ -21,7 +23,7 @@ JniHdrMetadata::JniHdrMetadata(const VideoColorSpace& color_space,
                                const gfx::HDRMetadata& hdr_metadata)
     : color_space_(color_space), hdr_metadata_(hdr_metadata) {
   JNIEnv* env = base::android::AttachCurrentThread();
-  jobject_ = Java_HdrMetadata_create(env, reinterpret_cast<jlong>(this));
+  jobject_ = Java_HdrMetadata_create(env, reinterpret_cast<int64_t>(this));
   base::android::CheckException(env);
 }
 
@@ -30,95 +32,68 @@ JniHdrMetadata::~JniHdrMetadata() {
   Java_HdrMetadata_close(env, obj());
 }
 
-jint JniHdrMetadata::Primaries(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+int32_t JniHdrMetadata::Primaries(JNIEnv* env) {
   return static_cast<int>(color_space_->primaries);
 }
 
-jint JniHdrMetadata::ColorTransfer(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+int32_t JniHdrMetadata::ColorTransfer(JNIEnv* env) {
   return static_cast<int>(color_space_->transfer);
 }
 
-jint JniHdrMetadata::Range(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& obj) {
+int32_t JniHdrMetadata::Range(JNIEnv* env) {
   return static_cast<int>(color_space_->range);
 }
 
-jfloat JniHdrMetadata::PrimaryRChromaticityX(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+float JniHdrMetadata::PrimaryRChromaticityX(JNIEnv* env) {
   return hdr_metadata_->smpte_st_2086.value_or(kDefault2086).primaries.fRX;
 }
 
-jfloat JniHdrMetadata::PrimaryRChromaticityY(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+float JniHdrMetadata::PrimaryRChromaticityY(JNIEnv* env) {
   return hdr_metadata_->smpte_st_2086.value_or(kDefault2086).primaries.fRY;
 }
 
-jfloat JniHdrMetadata::PrimaryGChromaticityX(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+float JniHdrMetadata::PrimaryGChromaticityX(JNIEnv* env) {
   return hdr_metadata_->smpte_st_2086.value_or(kDefault2086).primaries.fGX;
 }
 
-jfloat JniHdrMetadata::PrimaryGChromaticityY(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+float JniHdrMetadata::PrimaryGChromaticityY(JNIEnv* env) {
   return hdr_metadata_->smpte_st_2086.value_or(kDefault2086).primaries.fGY;
 }
 
-jfloat JniHdrMetadata::PrimaryBChromaticityX(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+float JniHdrMetadata::PrimaryBChromaticityX(JNIEnv* env) {
   return hdr_metadata_->smpte_st_2086.value_or(kDefault2086).primaries.fBX;
 }
 
-jfloat JniHdrMetadata::PrimaryBChromaticityY(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+float JniHdrMetadata::PrimaryBChromaticityY(JNIEnv* env) {
   return hdr_metadata_->smpte_st_2086.value_or(kDefault2086).primaries.fBY;
 }
 
-jfloat JniHdrMetadata::WhitePointChromaticityX(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+float JniHdrMetadata::WhitePointChromaticityX(JNIEnv* env) {
   return hdr_metadata_->smpte_st_2086.value_or(kDefault2086).primaries.fWX;
 }
 
-jfloat JniHdrMetadata::WhitePointChromaticityY(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+float JniHdrMetadata::WhitePointChromaticityY(JNIEnv* env) {
   return hdr_metadata_->smpte_st_2086.value_or(kDefault2086).primaries.fWY;
 }
 
-jfloat JniHdrMetadata::MaxColorVolumeLuminance(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+float JniHdrMetadata::MaxColorVolumeLuminance(JNIEnv* env) {
   return hdr_metadata_->smpte_st_2086.value_or(kDefault2086).luminance_max;
 }
 
-jfloat JniHdrMetadata::MinColorVolumeLuminance(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+float JniHdrMetadata::MinColorVolumeLuminance(JNIEnv* env) {
   return hdr_metadata_->smpte_st_2086.value_or(kDefault2086).luminance_min;
 }
 
-jint JniHdrMetadata::MaxContentLuminance(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+int32_t JniHdrMetadata::MaxContentLuminance(JNIEnv* env) {
   return hdr_metadata_->cta_861_3.value_or(kDefault861_3)
       .max_content_light_level;
 }
 
-jint JniHdrMetadata::MaxFrameAverageLuminance(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+int32_t JniHdrMetadata::MaxFrameAverageLuminance(JNIEnv* env) {
   return hdr_metadata_->cta_861_3.value_or(kDefault861_3)
       .max_frame_average_light_level;
 }
 
 }  // namespace media
+
+DEFINE_JNI(HdrMetadata)

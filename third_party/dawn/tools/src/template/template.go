@@ -25,22 +25,23 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// package template wraps the golang "text/template" package to provide an
+// Package template wraps the golang "text/template" package to provide an
 // enhanced template generator.
 package template
 
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"text/template"
 
+	"dawn.googlesource.com/dawn/tools/src/container"
 	"dawn.googlesource.com/dawn/tools/src/fileutils"
+	"dawn.googlesource.com/dawn/tools/src/oswrapper"
 	"dawn.googlesource.com/dawn/tools/src/text"
+	"dawn.googlesource.com/dawn/tools/src/transform"
 )
 
 // The template function binding table
@@ -51,10 +52,10 @@ type Template struct {
 	content string
 }
 
-// FromFile loads the template file at path and builds and returns a Template
-// using the file content
-func FromFile(path string) (*Template, error) {
-	content, err := os.ReadFile(path)
+// FromFile loads the template file at path using the provided FilesystemReader
+// and builds and returns a Template using the file content
+func FromFile(path string, fs oswrapper.FilesystemReader) (*Template, error) {
+	content, err := fs.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -79,30 +80,33 @@ func (t *Template) Run(w io.Writer, data any, funcs Functions) error {
 
 	// Add a bunch of generic useful functions
 	g.funcs = Functions{
+		"Append":     listAppend,
+		"Concat":     listConcat,
 		"Contains":   strings.Contains,
 		"Eval":       g.eval,
 		"Globals":    func() Map { return globals },
 		"HasPrefix":  strings.HasPrefix,
 		"HasSuffix":  strings.HasSuffix,
 		"Import":     g.importTmpl,
+		"Index":      index,
 		"Is":         is,
 		"Iterate":    iterate,
+		"Join":       strings.Join,
 		"List":       list,
 		"Map":        newMap,
 		"PascalCase": text.PascalCase,
-		"ToUpper":    strings.ToUpper,
-		"ToLower":    strings.ToLower,
 		"Repeat":     strings.Repeat,
+		"Replace":    replace,
+		"SortUnique": listSortUnique,
 		"Split":      strings.Split,
-		"Join":       strings.Join,
+		"Sum":        sum,
 		"Title":      strings.Title,
+		"ToLower":    strings.ToLower,
+		"ToUpper":    strings.ToUpper,
 		"TrimLeft":   strings.TrimLeft,
 		"TrimPrefix": strings.TrimPrefix,
 		"TrimRight":  strings.TrimRight,
 		"TrimSuffix": strings.TrimSuffix,
-		"Replace":    replace,
-		"Index":      index,
-		"Sum":        sum,
 		"Error":      func(err string, args ...any) string { panic(fmt.Errorf(err, args...)) },
 	}
 
@@ -125,7 +129,7 @@ type generator struct {
 
 func (g *generator) bindAndParse(t *template.Template, tmpl string) error {
 	_, err := t.
-		Funcs(map[string]any(g.funcs)).
+		Funcs(g.funcs).
 		Option("missingkey=error").
 		Parse(tmpl)
 	return err
@@ -159,20 +163,26 @@ func (g *generator) eval(template string, args ...any) (string, error) {
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("while evaluating '%v': %v", template, err)
+		return "", fmt.Errorf("while evaluating '%v' with args '%v'\n%v", template, args, err)
 	}
 	return sb.String(), nil
 }
 
+// TODO(crbug.com/344014313): Add unittest coverage.
 // importTmpl parses the template at the given project-relative path, merging
 // the template definitions into the global namespace.
 // Note: The body of the template is not executed.
 func (g *generator) importTmpl(path string) (string, error) {
+	// TODO(crbug.com/344014313): Use a properly injected interface instead of
+	// hard-coding the real wrapper. We cannot easily take it as an argument due
+	// to "tools/src/cmd/gen/main.go --check-stale" complaining about a
+	// mismatched number of arguments despite all relevant Go code being updated.
+	fsReader := oswrapper.GetRealOSWrapper()
 	if strings.Contains(path, "..") {
 		return "", fmt.Errorf("import path must not contain '..'")
 	}
-	path = filepath.Join(fileutils.DawnRoot(), path)
-	data, err := ioutil.ReadFile(path)
+	path = filepath.Join(fileutils.DawnRoot(fsReader), path)
+	data, err := fsReader.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("failed to open '%v': %w", path, err)
 	}
@@ -180,7 +190,7 @@ func (g *generator) importTmpl(path string) (string, error) {
 	if err := g.bindAndParse(t, string(data)); err != nil {
 		return "", fmt.Errorf("failed to parse '%v': %w", path, err)
 	}
-	if err := t.Execute(ioutil.Discard, nil); err != nil {
+	if err := t.Execute(io.Discard, nil); err != nil {
 		return "", fmt.Errorf("failed to execute '%v': %w", path, err)
 	}
 	return "", nil
@@ -235,8 +245,34 @@ func iterate(n int) []int {
 	return out
 }
 
+// listAppend returns the slice list with items appended
+func listAppend(list any, items ...any) any {
+	itemValues := transform.SliceNoErr(items, reflect.ValueOf)
+	return reflect.Append(reflect.ValueOf(list), itemValues...).Interface()
+}
+
+// listConcat returns a slice formed from concatenating all the elements of all
+// the slice arguments
+func listConcat(firstList any, otherLists ...any) any {
+	out := reflect.ValueOf(firstList)
+	for _, list := range otherLists {
+		out = reflect.AppendSlice(out, reflect.ValueOf(list))
+	}
+	return out.Interface()
+}
+
+// listSortUnique returns items sorted by the string-formatted value of each element, with
+// items with the same strings deduplicated.
+func listSortUnique(items []any) []any {
+	m := make(container.Map[string, any], len(items))
+	for _, item := range items {
+		m.Add(fmt.Sprint(item), item)
+	}
+	return m.Values()
+}
+
 // list returns a new slice of elements from the argument list
-// Useful for: {{- range Slice "a" "b" "c" -}}{{.}}{{end}}
+// Useful for: {{- range List "a" "b" "c" -}}{{.}}{{end}}
 func list(elements ...any) []any { return elements }
 
 func index(obj any, indices ...any) (any, error) {

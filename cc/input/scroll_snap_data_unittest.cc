@@ -25,7 +25,7 @@ class ScrollSnapDataTest : public testing::Test {
       float expected_covered_end = std::numeric_limits<float>::max()) {
     float invalid = std::numeric_limits<float>::max();
     std::unique_ptr<SnapSelectionStrategy> strategy =
-        SnapSelectionStrategy::CreateForEndAndDirection(
+        SnapSelectionStrategy::CreateForDisplacement(
             gfx::PointF(cur_pos, 0), gfx::Vector2dF(delta, 0),
             false /* use_fractional_deltas */);
 
@@ -50,7 +50,7 @@ class ScrollSnapDataTest : public testing::Test {
       float expected_covered_end = std::numeric_limits<float>::max()) {
     float invalid = std::numeric_limits<float>::max();
     std::unique_ptr<SnapSelectionStrategy> strategy =
-        SnapSelectionStrategy::CreateForEndAndDirection(
+        SnapSelectionStrategy::CreateForDisplacement(
             gfx::PointF(0, cur_pos), gfx::Vector2dF(0, delta),
             false /* use_fractional_deltas */);
 
@@ -334,7 +334,7 @@ TEST_F(ScrollSnapDataTest, MandatoryReturnsToCurrentIfNoValidAreaForward) {
             result.target_element_ids);
 
   std::unique_ptr<SnapSelectionStrategy> end_direction_strategy =
-      SnapSelectionStrategy::CreateForEndAndDirection(
+      SnapSelectionStrategy::CreateForDisplacement(
           gfx::PointF(600, 0), gfx::Vector2dF(15, 15),
           false /* use_fractional_deltas */);
   result = container.FindSnapPosition(*end_direction_strategy);
@@ -381,7 +381,7 @@ TEST_F(ScrollSnapDataTest, MandatorySnapsBackwardIfNoValidAreaForward) {
             result.target_element_ids);
 
   std::unique_ptr<SnapSelectionStrategy> end_direction_strategy =
-      SnapSelectionStrategy::CreateForEndAndDirection(
+      SnapSelectionStrategy::CreateForDisplacement(
           gfx::PointF(650, 10), gfx::Vector2d(15, 15),
           false /* use_fractional_deltas */);
   result = container.FindSnapPosition(*end_direction_strategy);
@@ -423,7 +423,7 @@ TEST_F(ScrollSnapDataTest, ShouldNotPassScrollSnapStopAlwaysElement) {
   container.AddSnapAreaData(closer_to_target);
 
   std::unique_ptr<SnapSelectionStrategy> end_direction_strategy =
-      SnapSelectionStrategy::CreateForEndAndDirection(
+      SnapSelectionStrategy::CreateForDisplacement(
           gfx::PointF(0, 0), gfx::Vector2d(600, 0),
           false /* use_fractional_deltas */);
 
@@ -453,7 +453,7 @@ TEST_F(ScrollSnapDataTest, SnapStopAlwaysOverridesCoveringSnapArea) {
   container.AddSnapAreaData(covering_area);
 
   std::unique_ptr<SnapSelectionStrategy> strategy =
-      SnapSelectionStrategy::CreateForEndAndDirection(
+      SnapSelectionStrategy::CreateForDisplacement(
           gfx::PointF(0, 0), gfx::Vector2d(300, 0),
           false /* use_fractional_deltas */);
 
@@ -479,7 +479,7 @@ TEST_F(ScrollSnapDataTest, SnapStopAlwaysInReverseDirection) {
   container.AddSnapAreaData(stop_area);
 
   std::unique_ptr<SnapSelectionStrategy> strategy =
-      SnapSelectionStrategy::CreateForEndAndDirection(
+      SnapSelectionStrategy::CreateForDisplacement(
           gfx::PointF(150, 0), gfx::Vector2d(200, 0),
           false /* use_fractional_deltas */);
 
@@ -649,7 +649,7 @@ TEST_F(ScrollSnapDataTest, SnapToTwoTargetElementsNotMutualVisible) {
       TargetSnapAreaElementIds(ElementId(10), ElementId(20)));
 
   // The container cannot snap to both targets, so it should snap to the one
-  // closer to the scroll offset, and then snap to the closest mutually visible
+  // in the block axis, and then snap to the closest mutually visible
   // snap area on the other axis.
   std::unique_ptr<SnapSelectionStrategy> target_element_strategy =
       SnapSelectionStrategy::CreateForTargetElement(gfx::PointF(10, 0));
@@ -657,9 +657,9 @@ TEST_F(ScrollSnapDataTest, SnapToTwoTargetElementsNotMutualVisible) {
   SnapPositionData result =
       container.FindSnapPosition(*target_element_strategy);
   EXPECT_EQ(Type::kAligned, result.type);
-  EXPECT_EQ(100, result.position.x());
-  EXPECT_EQ(350, result.position.y());
-  EXPECT_EQ(TargetSnapAreaElementIds(ElementId(10), ElementId(30)),
+  EXPECT_EQ(350, result.position.x());
+  EXPECT_EQ(100, result.position.y());
+  EXPECT_EQ(TargetSnapAreaElementIds(ElementId(30), ElementId(20)),
             result.target_element_ids);
 }
 
@@ -773,7 +773,7 @@ TEST_F(ScrollSnapDataTest, ReportCoveringArea) {
   container.AddSnapAreaData(area);
 
   std::unique_ptr<SnapSelectionStrategy> end_direction_strategy =
-      SnapSelectionStrategy::CreateForEndAndDirection(
+      SnapSelectionStrategy::CreateForDisplacement(
           gfx::PointF(0, 100), gfx::Vector2dF(0, 300),
           false /* use_fractional_deltas */);
 
@@ -785,7 +785,7 @@ TEST_F(ScrollSnapDataTest, ReportCoveringArea) {
   EXPECT_EQ(50, result.covered_range_y->start());
   EXPECT_EQ(850, result.covered_range_y->end());
 
-  end_direction_strategy = SnapSelectionStrategy::CreateForEndAndDirection(
+  end_direction_strategy = SnapSelectionStrategy::CreateForDisplacement(
       gfx::PointF(0, 100), gfx::Vector2dF(0, -100),
       false /* use_fractional_deltas */);
   result = container.FindSnapPosition(*end_direction_strategy);

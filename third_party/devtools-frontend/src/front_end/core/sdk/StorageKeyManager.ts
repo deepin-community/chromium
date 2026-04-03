@@ -1,51 +1,52 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {Capability, type Target} from './Target.js';
-import {SDKModel} from './SDKModel.js';
 import * as Common from '../common/common.js';
 import type * as Platform from '../platform/platform.js';
 
+import {SDKModel} from './SDKModel.js';
+import {Capability, type Target} from './Target.js';
+
 export class StorageKeyManager extends SDKModel<EventTypes> {
-  #mainStorageKeyInternal: string;
-  #storageKeysInternal: Set<string>;
+  #mainStorageKey: string;
+  #storageKeys: Set<string>;
   constructor(target: Target) {
     super(target);
 
-    this.#mainStorageKeyInternal = '';
-    this.#storageKeysInternal = new Set();
+    this.#mainStorageKey = '';
+    this.#storageKeys = new Set();
   }
 
   updateStorageKeys(storageKeys: Set<string>): void {
-    const oldStorageKeys = this.#storageKeysInternal;
-    this.#storageKeysInternal = storageKeys;
+    const oldStorageKeys = this.#storageKeys;
+    this.#storageKeys = storageKeys;
 
     for (const storageKey of oldStorageKeys) {
-      if (!this.#storageKeysInternal.has(storageKey)) {
-        this.dispatchEventToListeners(Events.StorageKeyRemoved, storageKey);
+      if (!this.#storageKeys.has(storageKey)) {
+        this.dispatchEventToListeners(Events.STORAGE_KEY_REMOVED, storageKey);
       }
     }
 
-    for (const storageKey of this.#storageKeysInternal) {
+    for (const storageKey of this.#storageKeys) {
       if (!oldStorageKeys.has(storageKey)) {
-        this.dispatchEventToListeners(Events.StorageKeyAdded, storageKey);
+        this.dispatchEventToListeners(Events.STORAGE_KEY_ADDED, storageKey);
       }
     }
   }
 
   storageKeys(): string[] {
-    return [...this.#storageKeysInternal];
+    return [...this.#storageKeys];
   }
 
   mainStorageKey(): string {
-    return this.#mainStorageKeyInternal;
+    return this.#mainStorageKey;
   }
 
   setMainStorageKey(storageKey: string): void {
-    this.#mainStorageKeyInternal = storageKey;
-    this.dispatchEventToListeners(Events.MainStorageKeyChanged, {
-      mainStorageKey: this.#mainStorageKeyInternal,
+    this.#mainStorageKey = storageKey;
+    this.dispatchEventToListeners(Events.MAIN_STORAGE_KEY_CHANGED, {
+      mainStorageKey: this.#mainStorageKey,
     });
   }
 }
@@ -78,20 +79,20 @@ export interface StorageKey {
 }
 
 export const enum Events {
-  StorageKeyAdded = 'StorageKeyAdded',
-  StorageKeyRemoved = 'StorageKeyRemoved',
-  MainStorageKeyChanged = 'MainStorageKeyChanged',
+  STORAGE_KEY_ADDED = 'StorageKeyAdded',
+  STORAGE_KEY_REMOVED = 'StorageKeyRemoved',
+  MAIN_STORAGE_KEY_CHANGED = 'MainStorageKeyChanged',
 }
 
 export interface MainStorageKeyChangedEvent {
   mainStorageKey: string;
 }
 
-export type EventTypes = {
-  [Events.StorageKeyAdded]: string,
-  [Events.StorageKeyRemoved]: string,
-  [Events.MainStorageKeyChanged]: MainStorageKeyChangedEvent,
-};
+export interface EventTypes {
+  [Events.STORAGE_KEY_ADDED]: string;
+  [Events.STORAGE_KEY_REMOVED]: string;
+  [Events.MAIN_STORAGE_KEY_CHANGED]: MainStorageKeyChangedEvent;
+}
 
 // TODO(jarhar): this is the one of the two usages of Capability.None. Do something about it!
-SDKModel.register(StorageKeyManager, {capabilities: Capability.None, autostart: false});
+SDKModel.register(StorageKeyManager, {capabilities: Capability.NONE, autostart: false});

@@ -25,7 +25,6 @@ class RecentFile;
 
 namespace crostini {
 enum class CrostiniResult;
-struct LinuxPackageInfo;
 }  // namespace crostini
 
 namespace file_manager::util {
@@ -307,51 +306,6 @@ class FileManagerPrivateInternalGetCrostiniSharedPathsFunction
   ResponseAction Run() override;
 };
 
-// Implements the chrome.fileManagerPrivate.getLinuxPackageInfo method.
-// Retrieves information about a Linux package.
-class FileManagerPrivateInternalGetLinuxPackageInfoFunction
-    : public LoggedExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("fileManagerPrivateInternal.getLinuxPackageInfo",
-                             FILEMANAGERPRIVATEINTERNAL_GETLINUXPACKAGEINFO)
-  FileManagerPrivateInternalGetLinuxPackageInfoFunction() = default;
-
-  FileManagerPrivateInternalGetLinuxPackageInfoFunction(
-      const FileManagerPrivateInternalGetLinuxPackageInfoFunction&) = delete;
-  FileManagerPrivateInternalGetLinuxPackageInfoFunction operator=(
-      const FileManagerPrivateInternalGetLinuxPackageInfoFunction&) = delete;
-
- protected:
-  ~FileManagerPrivateInternalGetLinuxPackageInfoFunction() override = default;
-
- private:
-  ResponseAction Run() override;
-  void OnGetLinuxPackageInfo(
-      const crostini::LinuxPackageInfo& linux_package_info);
-};
-
-// Implements the chrome.fileManagerPrivate.installLinuxPackage method.
-// Starts installation of a Linux package.
-class FileManagerPrivateInternalInstallLinuxPackageFunction
-    : public LoggedExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("fileManagerPrivateInternal.installLinuxPackage",
-                             FILEMANAGERPRIVATEINTERNAL_INSTALLLINUXPACKAGE)
-  FileManagerPrivateInternalInstallLinuxPackageFunction() = default;
-
-  FileManagerPrivateInternalInstallLinuxPackageFunction(
-      const FileManagerPrivateInternalInstallLinuxPackageFunction&) = delete;
-  FileManagerPrivateInternalInstallLinuxPackageFunction operator=(
-      const FileManagerPrivateInternalInstallLinuxPackageFunction&) = delete;
-
- protected:
-  ~FileManagerPrivateInternalInstallLinuxPackageFunction() override = default;
-
- private:
-  ResponseAction Run() override;
-  void OnInstallLinuxPackage(crostini::CrostiniResult result);
-};
-
 // Implements the chrome.fileManagerPrivate.getCustomActions method.
 class FileManagerPrivateInternalGetCustomActionsFunction
     : public LoggedExtensionFunction {
@@ -429,19 +383,6 @@ class FileManagerPrivateIsTabletModeEnabledFunction : public ExtensionFunction {
 
  protected:
   ~FileManagerPrivateIsTabletModeEnabledFunction() override = default;
-
- private:
-  ResponseAction Run() override;
-};
-
-// Implements the chrome.fileManagerPrivate.openURL method.
-class FileManagerPrivateOpenURLFunction : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("fileManagerPrivate.openURL",
-                             FILEMANAGERPRIVATE_OPENURL)
-
- protected:
-  ~FileManagerPrivateOpenURLFunction() override = default;
 
  private:
   ResponseAction Run() override;

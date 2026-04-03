@@ -5,10 +5,12 @@
 #include "components/segmentation_platform/public/android/prediction_options_android.h"
 
 #include "base/memory/scoped_refptr.h"
-#include "components/segmentation_platform/public/jni_headers/PredictionOptions_jni.h"
 #include "components/segmentation_platform/public/prediction_options.h"
 
 #include <jni.h>
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/segmentation_platform/public/jni_headers/PredictionOptions_jni.h"
 
 namespace segmentation_platform {
 
@@ -26,20 +28,30 @@ PredictionOptions PredictionOptionsAndroid::ToNativePredictionOptions(
 
 void PredictionOptionsAndroid::FromJavaParams(
     JNIEnv* env,
-    const jlong target,
-    const jboolean on_demand_execution) {
+    const int64_t target,
+    const bool on_demand_execution,
+    const bool can_update_cache_for_future_requests,
+    const bool fallback_allowed) {
   PredictionOptions* prediction_options =
       reinterpret_cast<PredictionOptions*>(target);
 
   prediction_options->on_demand_execution = on_demand_execution;
+  prediction_options->can_update_cache_for_future_requests =
+      can_update_cache_for_future_requests;
+  prediction_options->fallback_allowed = fallback_allowed;
 }
 
 static void JNI_PredictionOptions_FillNative(
     JNIEnv* env,
-    const jlong prediction_options_ptr,
-    const jboolean on_demand_execution) {
+    const int64_t prediction_options_ptr,
+    const bool on_demand_execution,
+    const bool can_update_cache_for_future_requests,
+    const bool fallback_allowed) {
   segmentation_platform::PredictionOptionsAndroid::FromJavaParams(
-      env, prediction_options_ptr, on_demand_execution);
+      env, prediction_options_ptr, on_demand_execution,
+      can_update_cache_for_future_requests, fallback_allowed);
 }
 
 }  // namespace segmentation_platform
+
+DEFINE_JNI(PredictionOptions)

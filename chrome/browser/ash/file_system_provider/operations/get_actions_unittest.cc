@@ -77,7 +77,8 @@ void CreateRequestValueFromJSON(const std::string& json, RequestValue* result) {
   using extensions::api::file_system_provider_internal::
       GetActionsRequestedSuccess::Params;
 
-  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(json);
+  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
+      json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(parsed_json.has_value()) << parsed_json.error().message;
 
   ASSERT_TRUE(parsed_json->is_list());
@@ -96,12 +97,12 @@ class FileSystemProviderOperationsGetActionsTest : public testing::Test {
 
   void SetUp() override {
     file_system_info_ = ProvidedFileSystemInfo(
-        kExtensionId, MountOptions(kFileSystemId, "" /* display_name */),
-        base::FilePath(), false /* configurable */, true /* watchable */,
+        kExtensionId, MountOptions(kFileSystemId, /*display_name=*/""),
+        base::FilePath(), /*configurable=*/false, /*watchable=*/true,
         extensions::SOURCE_FILE, IconSet());
     entry_paths_.clear();
-    entry_paths_.push_back(base::FilePath(kDirectoryPath));
-    entry_paths_.push_back(base::FilePath(kFilePath));
+    entry_paths_.emplace_back(kDirectoryPath);
+    entry_paths_.emplace_back(kFilePath);
   }
 
   ProvidedFileSystemInfo file_system_info_;
@@ -111,7 +112,7 @@ class FileSystemProviderOperationsGetActionsTest : public testing::Test {
 TEST_F(FileSystemProviderOperationsGetActionsTest, Execute) {
   using extensions::api::file_system_provider::GetActionsRequestedOptions;
 
-  util::LoggingDispatchEventImpl dispatcher(true /* dispatch_reply */);
+  util::LoggingDispatchEventImpl dispatcher(/*dispatch_reply=*/true);
   CallbackLogger callback_logger;
 
   GetActions get_actions(&dispatcher, file_system_info_, entry_paths_,
@@ -125,7 +126,7 @@ TEST_F(FileSystemProviderOperationsGetActionsTest, Execute) {
   EXPECT_EQ(
       extensions::api::file_system_provider::OnGetActionsRequested::kEventName,
       event->event_name);
-  const base::Value::List& event_args = event->event_args;
+  const base::ListValue& event_args = event->event_args;
   ASSERT_EQ(1u, event_args.size());
 
   const base::Value* options_as_value = &event_args[0];
@@ -142,7 +143,7 @@ TEST_F(FileSystemProviderOperationsGetActionsTest, Execute) {
 }
 
 TEST_F(FileSystemProviderOperationsGetActionsTest, Execute_NoListener) {
-  util::LoggingDispatchEventImpl dispatcher(false /* dispatch_reply */);
+  util::LoggingDispatchEventImpl dispatcher(/*dispatch_reply=*/false);
   CallbackLogger callback_logger;
 
   GetActions get_actions(&dispatcher, file_system_info_, entry_paths_,
@@ -153,7 +154,7 @@ TEST_F(FileSystemProviderOperationsGetActionsTest, Execute_NoListener) {
 }
 
 TEST_F(FileSystemProviderOperationsGetActionsTest, OnSuccess) {
-  util::LoggingDispatchEventImpl dispatcher(true /* dispatch_reply */);
+  util::LoggingDispatchEventImpl dispatcher(/*dispatch_reply=*/true);
   CallbackLogger callback_logger;
 
   GetActions get_actions(&dispatcher, file_system_info_, entry_paths_,
@@ -209,7 +210,7 @@ TEST_F(FileSystemProviderOperationsGetActionsTest, OnSuccess) {
 }
 
 TEST_F(FileSystemProviderOperationsGetActionsTest, OnError) {
-  util::LoggingDispatchEventImpl dispatcher(true /* dispatch_reply */);
+  util::LoggingDispatchEventImpl dispatcher(/*dispatch_reply=*/true);
   CallbackLogger callback_logger;
 
   GetActions get_actions(&dispatcher, file_system_info_, entry_paths_,

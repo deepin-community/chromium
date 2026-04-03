@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,13 @@ import * as Marked from '../../third_party/marked/marked.js';
 export interface MarkdownIssueDescription {
   file: string;
   substitutions?: Map<string, string>;
-  links: {link: string, linkTitle: string}[];
+  links: Array<{link: string, linkTitle: string}>;
 }
 
 export interface LazyMarkdownIssueDescription {
   file: string;
   substitutions?: Map<string, () => string>;
-  links: {link: string, linkTitle: () => string}[];
+  links: Array<{link: string, linkTitle: () => string}>;
 }
 
 /**
@@ -52,21 +52,21 @@ export function resolveLazyDescription(lazyDescription: LazyMarkdownIssueDescrip
 export interface IssueDescription {
   title: string;
   markdown: Marked.Marked.Token[];
-  links: {link: string, linkTitle: string}[];
+  links: Array<{link: string, linkTitle: string}>;
 }
 
 export async function getFileContent(url: URL): Promise<string> {
   try {
     const response = await fetch(url.toString());
-    return response.text();
-  } catch (error) {
+    return await response.text();
+  } catch {
     throw new Error(
         `Markdown file ${url.toString()} not found. Make sure it is correctly listed in the relevant BUILD.gn files.`);
   }
 }
 
 export async function getMarkdownFileContent(filename: string): Promise<string> {
-  return getFileContent(new URL(`descriptions/${filename}`, import.meta.url));
+  return await getFileContent(new URL(`descriptions/${filename}`, import.meta.url));
 }
 
 export async function createIssueDescriptionFromMarkdown(description: MarkdownIssueDescription):
@@ -105,7 +105,7 @@ const validPlaceholderNamePattern = /PLACEHOLDER_[a-zA-Z][a-zA-Z0-9]*/;
  *
  * Example:
  *   const str = "This is markdown with `code` and two placeholders, namely {PLACEHOLDER_PH1} and {PLACEHOLDER_PH2}".
- *   const result = substitePlaceholders(str, new Map([['PLACEHOLDER_PH1', 'foo'], ['PLACEHOLDER_PH2', 'bar']]));
+ *   const result = substitutePlaceholders(str, new Map([['PLACEHOLDER_PH1', 'foo'], ['PLACEHOLDER_PH2', 'bar']]));
  *
  * Exported only for unit testing.
  */
@@ -129,7 +129,7 @@ export function substitutePlaceholders(markdown: string, substitutions?: Map<str
   return result;
 }
 
-// Ensure that all provided placeholders match the naming pattern.
+/** Ensure that all provided placeholders match the naming pattern. **/
 function validatePlaceholders(placeholders: Set<string>): void {
   const invalidPlaceholders = [...placeholders].filter(placeholder => !validPlaceholderNamePattern.test(placeholder));
   if (invalidPlaceholders.length > 0) {

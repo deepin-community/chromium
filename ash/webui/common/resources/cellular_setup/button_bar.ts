@@ -8,13 +8,14 @@ import '//resources/ash/common/cr_elements/cr_button/cr_button.js';
 import '//resources/ash/common/cr_elements/cr_shared_style.css.js';
 import '//resources/ash/common/cr_elements/cr_shared_vars.css.js';
 
+import {I18nMixin} from '//resources/ash/common/cr_elements/i18n_mixin.js';
+import {assert, assertNotReached} from '//resources/js/assert.js';
+import {focusWithoutInk} from '//resources/js/focus_without_ink.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
-import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
-import {focusWithoutInk} from 'chrome://resources/js/focus_without_ink.js';
 
 import {getTemplate} from './button_bar.html.js';
-import {Button, ButtonBarState, ButtonState} from './cellular_types.js';
+import type {ButtonBarState} from './cellular_types.js';
+import {Button, ButtonState} from './cellular_types.js';
 
 const ButtonBarElementBase = I18nMixin(PolymerElement);
 
@@ -37,7 +38,7 @@ export class ButtonBarElement extends ButtonBarElementBase {
         value: {},
       },
 
-      Button: {
+      buttonEnum_: {
         type: Object,
         value: Button,
       },
@@ -74,13 +75,6 @@ export class ButtonBarElement extends ButtonBarElementBase {
     }
   }
 
-  private onBackwardButtonClicked_(): void {
-    this.dispatchEvent(new CustomEvent('backward-nav-requested', {
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
   private onCancelButtonClicked_(): void {
     this.dispatchEvent(new CustomEvent('cancel-requested', {
       bubbles: true,
@@ -98,8 +92,6 @@ export class ButtonBarElement extends ButtonBarElementBase {
   private getButtonBarState_(button: Button): ButtonState|undefined {
     assert(this.buttonState);
     switch (button) {
-      case Button.BACKWARD:
-        return this.buttonState.backward;
       case Button.CANCEL:
         return this.buttonState.cancel;
       case Button.FORWARD:

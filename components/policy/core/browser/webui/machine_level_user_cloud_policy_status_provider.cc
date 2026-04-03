@@ -33,9 +33,6 @@ std::string GetMachineStatusDescriptionKey() {
 
 namespace policy {
 
-const char kDeviceIdKey[] = "deviceId";
-const char kMachineKey[] = "machine";
-
 MachineLevelUserCloudPolicyStatusProvider::
     MachineLevelUserCloudPolicyStatusProvider(
         CloudPolicyCore* core,
@@ -52,20 +49,11 @@ MachineLevelUserCloudPolicyStatusProvider::
     core_->store()->RemoveObserver(this);
 }
 
-base::Value::Dict MachineLevelUserCloudPolicyStatusProvider::GetStatus() {
+base::DictValue MachineLevelUserCloudPolicyStatusProvider::GetStatus() {
   CloudPolicyRefreshScheduler* refresh_scheduler = core_->refresh_scheduler();
 
-  base::Value::Dict dict;
-  dict.Set("refreshInterval",
-           ui::TimeFormat::Simple(
-               ui::TimeFormat::FORMAT_DURATION, ui::TimeFormat::LENGTH_SHORT,
-               base::Milliseconds(
-                   refresh_scheduler
-                       ? refresh_scheduler->GetActualRefreshDelay()
-                       : CloudPolicyRefreshScheduler::kDefaultRefreshDelayMs)));
-  dict.Set(
-      "policiesPushAvailable",
-      refresh_scheduler ? refresh_scheduler->invalidations_available() : false);
+  base::DictValue dict;
+  SetPolicyPushAndRefreshStatus(dict, refresh_scheduler);
 
   if (!context_->enrollmentToken.empty())
     dict.Set(kEnrollmentTokenKey, context_->enrollmentToken);
@@ -93,17 +81,10 @@ base::Value::Dict MachineLevelUserCloudPolicyStatusProvider::GetStatus() {
     }
   }
   dict.Set(kMachineKey, GetMachineName());
-
-  if (prefs_->HasPrefPath(context_->lastReportTimestampPrefName)) {
-    base::Time last_report_timestamp =
-        prefs_->GetTime(context_->lastReportTimestampPrefName);
-    dict.Set(
-        "lastCloudReportSentTimestamp",
-        base::TimeFormatShortDateAndTimeWithTimeZone(last_report_timestamp));
-    dict.Set("timeSinceLastCloudReportSent",
-             GetTimeSinceLastActionString(last_report_timestamp));
-  }
   dict.Set(policy::kPolicyDescriptionKey, GetMachineStatusDescriptionKey());
+
+  UpdateLastReportTimestamp(dict, prefs_,
+                            context_->lastReportTimestampPrefName);
   return dict;
 }
 

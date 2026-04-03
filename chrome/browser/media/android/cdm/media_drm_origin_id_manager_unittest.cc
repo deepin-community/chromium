@@ -4,15 +4,15 @@
 
 #include "chrome/browser/media/android/cdm/media_drm_origin_id_manager.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/json/json_string_value_serializer.h"
+#include "base/json/json_writer.h"
 #include "base/json/values_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -95,14 +95,13 @@ class MediaDrmOriginIdManagerTest : public testing::Test {
     origin_id_manager_->PreProvisionIfNecessary();
   }
 
-  std::string DisplayPref(const base::Value::Dict& value) {
-    std::string output;
-    JSONStringValueSerializer serializer(&output);
-    EXPECT_TRUE(serializer.Serialize(value));
-    return output;
+  std::string DisplayPref(const base::DictValue& value) {
+    std::optional<std::string> output = base::WriteJson(value);
+    EXPECT_TRUE(output);
+    return output.value_or(std::string());
   }
 
-  const base::Value::Dict& GetDict(const std::string& path) const {
+  const base::DictValue& GetDict(const std::string& path) const {
     return profile_->GetTestingPrefService()->GetDict(path);
   }
 
@@ -256,7 +255,7 @@ TEST_F(MediaDrmOriginIdManagerTest, PreProvisionFailAtStartup) {
 
   // Trigger a network connection to force pre-provisioning to run again.
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_ETHERNET);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
   task_environment_.RunUntilIdle();
 
   // Pre-provisioning should have run again. Should return the same result as if
@@ -294,8 +293,8 @@ TEST_F(MediaDrmOriginIdManagerTest, OriginIdNotInList) {
   DVLOG(1) << "Checking preference " << kMediaDrmOriginIds;
   auto& dict = GetDict(kMediaDrmOriginIds);
   auto* list = dict.FindList(kAvailableOriginIds);
-  EXPECT_FALSE(
-      base::Contains(*list, base::UnguessableTokenToValue(origin_id.value())));
+  EXPECT_FALSE(std::ranges::contains(
+      *list, base::UnguessableTokenToValue(origin_id.value())));
 }
 
 TEST_F(MediaDrmOriginIdManagerTest, ProvisioningFail) {
@@ -414,9 +413,7 @@ TEST_F(MediaDrmOriginIdManagerTest, NetworkChange) {
   // Try to pre-provision a bunch of origin IDs. Provisioning will fail, so
   // there will not be a bunch of origin IDs created. However, it should be
   // watching for a network change.
-  // TODO(crbug.com/917527): Currently the code returns an origin ID even if
-  // provisioning fails. Update this once it returns an empty origin ID when
-  // pre-provisioning fails.
+
   EXPECT_CALL(*this, GetProvisioningResult())
       .WillOnce(Return(std::nullopt))
       .WillRepeatedly(InvokeWithoutArgs(&base::UnguessableToken::Create));
@@ -436,7 +433,7 @@ TEST_F(MediaDrmOriginIdManagerTest, NetworkChange) {
   // Provisioning will now "succeed", so trigger a network change to
   // unconnected.
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_NONE);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE);
   task_environment_.RunUntilIdle();
 
   // Check that |kAvailableOriginIds| is still empty.
@@ -449,7 +446,7 @@ TEST_F(MediaDrmOriginIdManagerTest, NetworkChange) {
 
   // Now trigger a network change to connected.
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_ETHERNET);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
   task_environment_.RunUntilIdle();
 
   // Pre-provisioning should have run and filled up the list.
@@ -464,9 +461,7 @@ TEST_F(MediaDrmOriginIdManagerTest, NetworkChangeFails) {
   // |kConnectionAttempts| connections to a network. GetProvisioningResult()
   // should only be called once for the GetOriginId() call +
   // |kConnectionAttempts| when a network connection is detected.
-  // TODO(crbug.com/917527): Currently the code returns an origin ID even if
-  // provisioning fails. Update this once it returns an empty origin ID when
-  // pre-provisioning fails.
+
   EXPECT_CALL(*this, GetProvisioningResult())
       .Times(kConnectionAttempts + 1)
       .WillOnce(Return(std::nullopt));
@@ -488,7 +483,7 @@ TEST_F(MediaDrmOriginIdManagerTest, NetworkChangeFails) {
   // after several failed attempts.
   for (size_t i = 0; i < kConnectionAttempts + 3; ++i) {
     network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-        network::mojom::ConnectionType::CONNECTION_ETHERNET);
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
     task_environment_.RunUntilIdle();
   }
 
@@ -519,7 +514,7 @@ TEST_F(MediaDrmOriginIdManagerTest, InvalidEntry) {
   {
     ScopedDictPrefUpdate update(profile_->GetTestingPrefService(),
                                 kMediaDrmOriginIds);
-    base::Value::List* origin_ids = update->FindList(kAvailableOriginIds);
+    base::ListValue* origin_ids = update->FindList(kAvailableOriginIds);
     EXPECT_FALSE(origin_ids->empty());
     auto first_entry = origin_ids->begin();
     *first_entry = base::Value(true);

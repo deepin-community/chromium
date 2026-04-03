@@ -9,12 +9,12 @@
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 class FakeBluetoothAdapter
     : public testing::NiceMock<device::MockBluetoothAdapter> {
  public:
+  FakeBluetoothAdapter();
 
   void SetBluetoothIsPowered(bool powered);
 
@@ -43,6 +43,7 @@ class FakeBluetoothAdapter
       device::BluetoothRemoteGattCharacteristic* characteristic);
 
   void NotifyConfirmPasskey(uint32_t passkey, device::BluetoothDevice* device);
+  void NotifyDisplayPasskey(device::BluetoothDevice* device, uint32_t passkey);
 
   void NotifyDevicePairedChanged(device::BluetoothDevice* device,
                                  bool new_paired_status);
@@ -87,7 +88,6 @@ class FakeBluetoothAdapter
           LowEnergyScanSessionHardwareOffloadingStatus::kSupported;
 };
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair
 
 #endif  // ASH_QUICK_PAIR_COMMON_FAKE_BLUETOOTH_ADAPTER_H_

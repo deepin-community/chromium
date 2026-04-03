@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// IWYU pragma: private, include "fuzztest/fuzztest.h"
+// IWYU pragma: friend fuzztest/.*
+
 #ifndef FUZZTEST_FUZZTEST_DOMAIN_CORE_H_
 #define FUZZTEST_FUZZTEST_DOMAIN_CORE_H_
 
 #include <array>
 #include <cmath>
-#include <cstdint>
+#include <cstddef>
 #include <deque>
 #include <initializer_list>
 #include <limits>
@@ -38,17 +41,18 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/random/bit_gen_ref.h"
-#include "absl/random/random.h"
-#include "absl/strings/str_format.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "absl/time/time.h"
 #include "absl/types/span.h"
+#include "./common/logging.h"
 #include "./fuzztest/internal/any.h"
 #include "./fuzztest/internal/domains/aggregate_of_impl.h"
 #include "./fuzztest/internal/domains/arbitrary_impl.h"
 #include "./fuzztest/internal/domains/bit_flag_combination_of_impl.h"
 #include "./fuzztest/internal/domains/container_of_impl.h"
-#include "./fuzztest/internal/domains/domain_base.h"
+#include "./fuzztest/internal/domains/domain.h"  // IWYU pragma: export
+#include "./fuzztest/internal/domains/domain_base.h"  // IWYU pragma: export
 #include "./fuzztest/internal/domains/element_of_impl.h"
 #include "./fuzztest/internal/domains/filter_impl.h"
 #include "./fuzztest/internal/domains/flat_map_impl.h"
@@ -56,162 +60,18 @@
 #include "./fuzztest/internal/domains/map_impl.h"
 #include "./fuzztest/internal/domains/one_of_impl.h"
 #include "./fuzztest/internal/domains/optional_of_impl.h"
+#include "./fuzztest/internal/domains/overlap_of_impl.h"
 #include "./fuzztest/internal/domains/smart_pointer_of_impl.h"
 #include "./fuzztest/internal/domains/unique_elements_container_of_impl.h"
+#include "./fuzztest/internal/domains/utf.h"
 #include "./fuzztest/internal/domains/variant_of_impl.h"
 #include "./fuzztest/internal/logging.h"
 #include "./fuzztest/internal/meta.h"
+#include "./fuzztest/internal/printer.h"  // IWYU pragma: export
 #include "./fuzztest/internal/serialization.h"
 #include "./fuzztest/internal/type_support.h"
 
 namespace fuzztest {
-
-// Type erased version of the domain concept.
-// It can be constructed from any object that follows the domain concept for the
-// right `value_type`. This class implements the domain concept too.
-// TODO(sbenzaquen): Document the domain concept when it is stable enough.
-
-template <typename T>
-class Domain {
- public:
-  using value_type = T;
-  using corpus_type = internal::GenericDomainCorpusType;
-  static constexpr bool has_custom_corpus_type = true;
-
-  // Intentionally not marked as explicit to allow implicit conversion from the
-  // inner domain implementations.
-  template <typename Inner, typename CorpusType>
-  Domain(const internal::DomainBase<Inner, T, CorpusType>& inner)
-      : inner_(new auto(static_cast<const Inner&>(inner))) {}
-
-  Domain(const Domain& other) { *this = other; }
-  Domain& operator=(const Domain& other) {
-    inner_.reset(static_cast<internal::TypedDomainInterface<T>*>(
-        other.inner_->Clone().release()));
-    return *this;
-  }
-  // No default constructor or move operations to avoid a null state.
-
-  // GetRandomValue() returns a random user value from the domain. This is
-  // useful e.g., for generation-based black-box fuzzing, when coverage-guided
-  // fuzzing is not possible, or for other use cases when manually sampling the
-  // domain makes sense (e.g., getting random values for benchmarking). These
-  // are the only uses cases when the users should use domains directly, and
-  // this is the only method that the users should call.
-  //
-  // In general, GetRandomValue() doesn't provide any guarantees on the
-  // distribution of the returned values.
-  //
-  // Note about stability: GetRandomValue() doesn't guarantee stability of the
-  // generated values even if `prng` is seeded with a fixed seed. With a seeded
-  // `prng`, it is possible to reproduce the sequence of generated values by
-  // setting the environment variable FUZZTEST_PRNG_SEED to the value output to
-  // stderr on the first invocation. However, this is only guaranteed to work
-  // with the same version of the binary.
-  //
-  value_type GetRandomValue(absl::BitGenRef prng) {
-    return inner_->TypedGetRandomValue(prng);
-  }
-
-  // The methods below are used by the FuzzTest framework and custom domain
-  // implementations.
-
-  // Init() generates a random value of corpus_type.
-  //
-  // The generated value can often be a "special value" (e.g., 0, MAX_INT, NaN,
-  // infinity, empty vector, etc.). For basic, fixed sized data types (e.g.,
-  // optional<int>) Init() might give any value. For variable-sized data types
-  // (e.g., containers, linked lists, trees, etc) Init() typically returns a
-  // smaller sized value. Larger sized values however can be created through
-  // Mutate() calls.
-  //
-  // ENSURES: That Init() is non-deterministic, i.e., it doesn't always return
-  // the same value. This is because Mutate() often relies on Init() giving
-  // different values (e.g., when growing a std::set<T> and adding new T
-  // values).
-  corpus_type Init(absl::BitGenRef prng) { return inner_->UntypedInit(prng); }
-
-  // Mutate() makes a relatively small modification on `val` of corpus_type.
-  //
-  // When `only_shrink` is enabled, the mutated value is always "simpler" (e.g.,
-  // smaller).
-  //
-  // ENSURES: That the mutated value is not the same as the original.
-  void Mutate(corpus_type& val, absl::BitGenRef prng, bool only_shrink) {
-    return inner_->UntypedMutate(val, prng, only_shrink);
-  }
-
-  // Try to update the dynamic memory dictionary.
-  // If it propagates to a domain that's compatible with dynamic
-  // dictionary, it will try to match and save dictionary entries from
-  // dynamic data collected by SanCov.
-  void UpdateMemoryDictionary(const corpus_type& val) {
-    return inner_->UntypedUpdateMemoryDictionary(val);
-  }
-
-  auto GetPrinter() const { return Printer{*inner_}; }
-
-  value_type GetValue(const corpus_type& v) const {
-    return inner_->TypedGetValue(v);
-  }
-
-  std::optional<corpus_type> FromValue(const value_type& v) const {
-    return inner_->TypedFromValue(v);
-  }
-
-  // Parses corpus value _without validating it_. Validation must be done with
-  // ValidateCorpusValue().
-  //
-  // TODO(lszekeres): Return StatusOr<corpus_type>.
-  std::optional<corpus_type> ParseCorpus(const internal::IRObject& obj) const {
-    return inner_->UntypedParseCorpus(obj);
-  }
-
-  internal::IRObject SerializeCorpus(const corpus_type& v) const {
-    return inner_->UntypedSerializeCorpus(v);
-  }
-
-  // After creating a corpus value, either via ParseCorpus() or via FromValue()
-  // this method is used to determine if the corpus value is valid.
-  absl::Status ValidateCorpusValue(const corpus_type& corpus_value) const {
-    return inner_->UntypedValidateCorpusValue(corpus_value);
-  }
-
-  // TODO(JunyangShao): Get rid of this API so it won't be exposed
-  // to outside.
-  // Return the field counts of `val` if `val` is
-  // a `ProtobufDomainImpl::corpus_type`. Otherwise propagate it
-  // to inner domains and returns the sum of inner results.
-  uint64_t CountNumberOfFields(const corpus_type& val) {
-    return inner_->UntypedCountNumberOfFields(val);
-  }
-
-  // Mutate the selected protobuf field using `selected_field_index`.
-  // Return value is the same as CountNumberOfFields.
-  uint64_t MutateSelectedField(corpus_type& val, absl::BitGenRef prng,
-                               bool only_shrink,
-                               uint64_t selected_field_index) {
-    return inner_->UntypedMutateSelectedField(val, prng, only_shrink,
-                                              selected_field_index);
-  }
-
-  auto Clone() const { return inner_->Clone(); }
-
- private:
-  // Have a subinterface just for the type traits to not expose more than
-  // necessary through GetPrinter().
-  friend class DomainBuilder;
-
-  struct Printer {
-    const internal::UntypedDomainInterface& inner;
-    void PrintCorpusValue(const corpus_type& val, absl::FormatRawSink out,
-                          internal::PrintMode mode) const {
-      inner.UntypedPrintCorpusValue(val, out, mode);
-    }
-  };
-
-  std::unique_ptr<internal::TypedDomainInterface<T>> inner_;
-};
 
 class DomainBuilder {
  public:
@@ -225,18 +85,18 @@ class DomainBuilder {
   // values it can handle until we call Set on the name.
   template <typename T>
   Domain<T> Get(std::string_view name) {
-    FUZZTEST_INTERNAL_CHECK(domain_lookup_table_ != nullptr,
-                            "Finalize() has been called!");
+    FUZZTEST_CHECK(domain_lookup_table_ != nullptr)
+        << "Finalize() has been called!";
     return IndirectDomain<T>(GetIndirect<T>(name));
   }
 
   template <typename T>
   void Set(std::string_view name, const Domain<T>& domain) {
-    FUZZTEST_INTERNAL_CHECK(domain_lookup_table_ != nullptr,
-                            "Finalize() has been called!");
+    FUZZTEST_CHECK(domain_lookup_table_ != nullptr)
+        << "Finalize() has been called!";
     auto* indirect = GetIndirect<T>(name);
-    FUZZTEST_INTERNAL_CHECK(!indirect->has_value(),
-                            "Cannot set the same domain twice!");
+    FUZZTEST_CHECK(!indirect->has_value())
+        << "Cannot set the same domain twice!";
     *indirect = internal::MoveOnlyAny(std::in_place_type<Domain<T>>, domain);
   }
 
@@ -247,21 +107,16 @@ class DomainBuilder {
   // anymore.
   template <typename T>
   Domain<T> Finalize(std::string_view name) && {
-    FUZZTEST_INTERNAL_CHECK(domain_lookup_table_ != nullptr,
-                            "Finalize() has been called!");
-    FUZZTEST_INTERNAL_CHECK(
-        GetIndirect<T>(name)->has_value(),
-        // FUZZTEST_INTERNAL_CHECK uses absl::StrCat, which does not accept
-        // std::string_view in iOS builds, so convert to absl::string_view.
-        "Finalize() has been called with an unknown name: ",
-        absl::string_view{name.data(), name.size()});
+    FUZZTEST_CHECK(domain_lookup_table_ != nullptr)
+        << "Finalize() has been called!";
+    FUZZTEST_CHECK(GetIndirect<T>(name)->has_value())
+        << "Finalize() has been called with an unknown name: " << name;
     for (auto& iter : *domain_lookup_table_) {
-      FUZZTEST_INTERNAL_CHECK(
-          iter.second != nullptr && iter.second->has_value(),
-          "Some domain is not set yet!");
+      FUZZTEST_CHECK(iter.second != nullptr && iter.second->has_value())
+          << "Some domain is not set yet!";
     }
-    return OwningDomain<T>(GetIndirect<T>(name)->template GetAs<Domain<T>>(),
-                           std::move(domain_lookup_table_));
+    auto domain = GetIndirect<T>(name)->template GetAs<Domain<T>>();
+    return OwningDomain<T>(std::move(domain), std::move(domain_lookup_table_));
   }
 
  private:
@@ -282,9 +137,8 @@ class DomainBuilder {
     if (!indirection) {
       indirection = std::make_unique<internal::MoveOnlyAny>();
     }
-    FUZZTEST_INTERNAL_CHECK(
-        !indirection->has_value() || indirection->Has<Domain<T>>(),
-        "The indirection must either be empty or hold a value of Domain<T>");
+    FUZZTEST_CHECK(!indirection->has_value() || indirection->Has<Domain<T>>())
+        << "The indirection must either be empty or hold a value of Domain<T>";
     return indirection.get();
   }
 
@@ -292,9 +146,9 @@ class DomainBuilder {
   // for recursive data structures.
   template <typename T>
   class IndirectDomain
-      : public internal::DomainBase<IndirectDomain<T>,
-                                    internal::value_type_t<Domain<T>>,
-                                    internal::corpus_type_t<Domain<T>>> {
+      : public domain_implementor::DomainBase<
+            IndirectDomain<T>, internal::value_type_t<Domain<T>>,
+            internal::corpus_type_t<Domain<T>>> {
    public:
     using typename IndirectDomain::DomainBase::corpus_type;
     using typename IndirectDomain::DomainBase::value_type;
@@ -306,12 +160,16 @@ class DomainBuilder {
       return GetInnerDomain().Init(prng);
     }
 
-    void Mutate(corpus_type& val, absl::BitGenRef prng, bool only_shrink) {
-      GetInnerDomain().Mutate(val, prng, only_shrink);
+    void Mutate(corpus_type& val, absl::BitGenRef prng,
+                const domain_implementor::MutationMetadata& metadata,
+                bool only_shrink) {
+      GetInnerDomain().Mutate(val, prng, metadata, only_shrink);
     }
 
-    void UpdateMemoryDictionary(const corpus_type& val) {
-      return GetInnerDomain().UpdateMemoryDictionary(val);
+    void UpdateMemoryDictionary(
+        const corpus_type& val,
+        domain_implementor::ConstCmpTablesPtr cmp_tables) {
+      return GetInnerDomain().UpdateMemoryDictionary(val, cmp_tables);
     }
 
     auto GetPrinter() const { return GetInnerDomain().GetPrinter(); }
@@ -347,10 +205,9 @@ class DomainBuilder {
   // Same as Domain<T>, but also holds ownership of the lookup table.
   // This is for toplevel domains.
   template <typename T>
-  class OwningDomain
-      : public internal::DomainBase<OwningDomain<T>,
-                                    internal::value_type_t<Domain<T>>,
-                                    internal::corpus_type_t<Domain<T>>> {
+  class OwningDomain : public domain_implementor::DomainBase<
+                           OwningDomain<T>, internal::value_type_t<Domain<T>>,
+                           internal::corpus_type_t<Domain<T>>> {
    public:
     using typename OwningDomain::DomainBase::corpus_type;
     using typename OwningDomain::DomainBase::value_type;
@@ -361,12 +218,16 @@ class DomainBuilder {
 
     corpus_type Init(absl::BitGenRef prng) { return inner_.Init(prng); }
 
-    void Mutate(corpus_type& val, absl::BitGenRef prng, bool only_shrink) {
-      inner_.Mutate(val, prng, only_shrink);
+    void Mutate(corpus_type& val, absl::BitGenRef prng,
+                const domain_implementor::MutationMetadata& metadata,
+                bool only_shrink) {
+      inner_.Mutate(val, prng, metadata, only_shrink);
     }
 
-    void UpdateMemoryDictionary(const corpus_type& val) {
-      return inner_.UpdateMemoryDictionary(val);
+    void UpdateMemoryDictionary(
+        const corpus_type& val,
+        domain_implementor::ConstCmpTablesPtr cmp_tables) {
+      return inner_.UpdateMemoryDictionary(val, cmp_tables);
     }
 
     auto GetPrinter() const { return inner_.GetPrinter(); }
@@ -438,6 +299,12 @@ auto ElementOf(std::vector<T> values) {
   return internal::ElementOfImpl<T>(std::move(values));
 }
 
+template <typename T, std::size_t N>
+auto ElementOf(std::array<T, N> values) {
+  return internal::ElementOfImpl<T>(
+      std::vector<T>(values.begin(), values.end()));
+}
+
 template <typename T>
 auto Just(T val) {
   return internal::ElementOfImpl<T>({std::move(val)});
@@ -446,6 +313,23 @@ auto Just(T val) {
 template <int&... ExplicitArgumentBarrier, typename... Inner>
 auto OneOf(Inner... domains) {
   return internal::OneOfImpl<Inner...>(std::move(domains)...);
+}
+
+// OverlapOf(inner...) combinator creates a domain with elements that satisfy
+// the conditions of all `inner` domains.
+//
+// Example usage:
+//
+//   OverlapOf(InRange<int>(-10, 10), NonZero<int>())
+//
+template <int&... ExplicitArgumentBarrier, typename... Inner>
+auto OverlapOf(Inner... domains) {
+  auto MaybeWrapDomain =
+      [](auto domain) -> Domain<internal::value_type_t<decltype(domain)>> {
+    return domain;
+  };
+  return internal::OverlapOfImpl<Domain<internal::value_type_t<Inner>>...>(
+      MaybeWrapDomain(std::move(domains))...);
 }
 
 // Filter(predicate, inner) combinator creates a domain that filters out values
@@ -460,8 +344,8 @@ auto OneOf(Inner... domains) {
 //
 template <int&... ExplicitArgumentBarrier, typename Inner, typename Pred>
 auto Filter(Pred predicate, Inner inner) {
-  return internal::FilterImpl<Pred, Inner>(std::move(predicate),
-                                           std::move(inner));
+  return internal::FilterImpl<internal::value_type_t<Inner>>(
+      std::move(predicate), std::move(inner));
 }
 
 // InRange(min, max) represents any value between [min, max], closed interval.
@@ -525,8 +409,8 @@ auto NonNegative() {
 template <typename T>
 auto Negative() {
   static_assert(!std::is_unsigned_v<T>,
-                "Negative<T>() can only be used with with signed T-s! "
-                "For char, consider using signed char.");
+                "Negative<T>() can only be used with signed T-s! For char, "
+                "consider using signed char.");
   if constexpr (std::is_floating_point_v<T>) {
     return InRange<T>(std::numeric_limits<T>::lowest(),
                       -std::numeric_limits<T>::denorm_min());
@@ -544,8 +428,8 @@ auto Negative() {
 template <typename T>
 auto NonPositive() {
   static_assert(!std::is_unsigned_v<T>,
-                "NonPositive<T>() can only be used with with signed T-s! "
-                "For char, consider using signed char.");
+                "NonPositive<T>() can only be used with signed T-s! For char, "
+                "consider using signed char.");
   return InRange<T>(std::numeric_limits<T>::lowest(), T{});
 }
 
@@ -609,7 +493,7 @@ auto BitFlagCombinationOf(const std::vector<T>& flags) {
 template <typename T, int&... ExplicitArgumentBarrier, typename Inner>
 auto ContainerOf(Inner inner) {
   static_assert(
-      std::is_same_v<internal::DropConst<internal::value_type_t<T>>,
+      std::is_same_v<internal::DropConst<typename T::value_type>,
                      internal::DropConst<internal::value_type_t<Inner>>>);
   return internal::ContainerOfImpl<T, Inner>(std::move(inner));
 }
@@ -627,7 +511,7 @@ template <template <typename, typename...> class T,
           typename C = T<internal::value_type_t<Inner>>>
 auto ContainerOf(Inner inner) {
   static_assert(
-      std::is_same_v<internal::DropConst<internal::value_type_t<C>>,
+      std::is_same_v<internal::DropConst<typename C::value_type>,
                      internal::DropConst<internal::value_type_t<Inner>>>);
   return internal::ContainerOfImpl<C, Inner>(std::move(inner));
 }
@@ -750,17 +634,19 @@ auto VariantOf(Inner... inner) {
 //   OptionalOf(InRange(0, 10))
 //
 //
-// OptionalOf<T>(inner) allows specifying a custom optional type `T`.
+// OptionalOf<OptionalT>(inner) allows specifying a custom optional type
+// `OptionalT`.
 //
 // Example usage:
 //
 //   OptionalOf<absl::optional<int>>(InRange(0, 10))
 //
-// `T` can be an instantiation of `std::optional` or any other class that
-// matches its API. E.g., `absl::optional`.
-template <typename T, int&... ExplicitArgumentBarrier, typename Inner>
+// `OptionalT` can be an instantiation of `std::optional` or any other class
+// that matches its API. E.g., `absl::optional`.
+
+template <typename OptionalT, int&... ExplicitArgumentBarrier, typename Inner>
 auto OptionalOf(Inner inner) {
-  return internal::OptionalOfImpl<T, Inner>(std::move(inner));
+  return internal::OptionalOfImpl<OptionalT>(std::move(inner));
 }
 
 template <int&... ExplicitArgumentBarrier, typename Inner>
@@ -772,9 +658,7 @@ auto OptionalOf(Inner inner) {
 // NullOpt<T>() creates an optional<T> domain with a single value std::nullopt.
 template <typename T>
 auto NullOpt() {
-  return internal::OptionalOfImpl<std::optional<T>, internal::ArbitraryImpl<T>>(
-             internal::ArbitraryImpl<T>())
-      .SetAlwaysNull();
+  return OptionalOf(internal::ArbitraryImpl<T>()).SetAlwaysNull();
 }
 
 // NonNull(inner) excludes `std::nullopt` from `inner` which needs to be
@@ -789,8 +673,8 @@ auto NonNull(Inner inner) {
   return inner.SetWithoutNull();
 }
 
-// SmartPointerOf<T>(inner) combinator creates a domain for a smart pointer type
-// `T` to the object of `inner` domain.
+// SmartPointerOf<Ptr>(inner) combinator creates a domain for a smart pointer
+// type `Ptr` to the object of `inner` domain.
 //
 // Example usage:
 //
@@ -803,7 +687,7 @@ auto NonNull(Inner inner) {
 // SharedPtrOf() instead.
 template <typename Ptr, int&... ExplicitArgumentBarrier, typename Inner>
 auto SmartPointerOf(Inner inner) {
-  return internal::SmartPointerOfImpl<Ptr, Inner>(std::move(inner));
+  return internal::SmartPointerOfImpl<Ptr>(std::move(inner));
 }
 
 // UniquePtrOf(inner) combinator creates a `std::unique_ptr` domain with the
@@ -1100,7 +984,7 @@ auto ArrayOf(const Inner& inner) {
 template <typename T, int&... ExplicitArgumentBarrier, typename Inner>
 auto UniqueElementsContainerOf(Inner inner) {
   static_assert(
-      std::is_same_v<internal::DropConst<internal::value_type_t<T>>,
+      std::is_same_v<internal::DropConst<typename T::value_type>,
                      internal::DropConst<internal::value_type_t<Inner>>>);
   return internal::UniqueElementsContainerImpl<T, Inner>(std::move(inner));
 }
@@ -1157,6 +1041,63 @@ auto NonEmpty(Inner inner) {
   return inner.WithMinSize(1);
 }
 
+inline auto Utf8String() {
+  // Generate valid UTF-8 by first generating a sequence of valid Unicode code
+  // points and converting it into UTF-8. This will improve the efficiency of
+  // the test.
+  // Valid Unicode code point values are in [0, 0x10FFFF], excluding
+  // [0xD800, 0xDFFF], so generate code points from the two valid subranges.
+  auto utf8_string = ReversibleMap(
+      internal::EncodeAsUTF8,
+      [](const std::string& utf8)
+          -> std::optional<std::tuple<std::vector<int>>> {
+        auto code_points = internal::DecodeFromUTF8(utf8);
+        if (!code_points.has_value()) return std::nullopt;
+        return *code_points;
+      },
+      ContainerOf<std::vector<int>>(
+          OneOf(InRange(0, 0xD7FF), InRange(0xE000, 0x10FFFF))));
+  // We further overlap it with String() to be able to use the
+  // dictionary-based mutation.
+  return OverlapOf(utf8_string, String())
+      // Use the same serialization as the previous domain definition to avoid
+      // widely invalidating the existing corpora/reproducers.
+      .WithSerializationDomain(0);
+}
+
+// UNSTABLE APIs.
+//
+// IMPORTANT: These functions are internal-facing utility functions and are NOT
+// part of the stable public API. They may be changed or removed in a future
+// release without notice.
+namespace unstable {
+
+// **UNSABLE API**: Parses raw reproducer data back into the original typed
+// input values.
+//
+// This function can be useful when you need to deserialize the raw byte
+// contents of a reproducer file to analyze a failing input with external tools.
+//
+// Note that the `domains` provided to this function must be identical to those
+// used in the `WithDomains(...)` clause of the original FUZZ_TEST. This
+// includes the type, order, and configuration of each domain. This function
+// cannot verify this condition; any mismatch will lead to garbage output. Any
+// change to the version of FuzzTest or the underlying types of the fuzzed
+// values may also cause garbage output.
+//
+// Futhermore 'T' must be a value (not reference) type in passed in
+// `Domain<T>`-s and be copyable or movable. This is because unlike with normal
+// fuzztest the returned value has a longer lifetime then the fuzztest values
+// used to create it.
+template <typename... DomainT,
+          typename ReturnT = std::tuple<typename DomainT::value_type...>>
+absl::StatusOr<ReturnT> ParseReproducerValue(std::string_view data,
+                                             DomainT... domains) {
+  return internal::ParseOneReproducerValue(
+      data, TupleOf(std::forward<DomainT>(domains)...));
+}
+
+}  // namespace unstable
 }  // namespace internal_no_adl
 
 // Inject the names from internal_no_adl into fuzztest, without allowing for

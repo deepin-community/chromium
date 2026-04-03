@@ -11,9 +11,9 @@
 #include "base/at_exit.h"
 #include "base/cancelable_callback.h"
 #include "base/command_line.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -28,14 +28,16 @@
 
 #if BUILDFLAG(IS_APPLE)
 #include "base/apple/scoped_nsautorelease_pool.h"
+#elif BUILDFLAG(IS_WIN)
+#include <windows.h>
 #endif
 
 namespace wifi {
 
 class WiFiTest {
  public:
-  WiFiTest() {}
-  ~WiFiTest() {}
+  WiFiTest() = default;
+  ~WiFiTest() = default;
 
   enum Result {
     RESULT_ERROR = -2,
@@ -60,7 +62,7 @@ class WiFiTest {
   void OnNetworksChanged(
       const WiFiService::NetworkGuidList& network_guid_list) {
     VLOG(0) << "Networks Changed: " << network_guid_list[0];
-    base::Value::Dict properties;
+    base::DictValue properties;
     std::string error;
     wifi_service_->GetProperties(network_guid_list[0], &properties, &error);
     VLOG(0) << error << ":\n" << properties;
@@ -136,7 +138,7 @@ bool WiFiTest::ParseCommandLine(int argc, const char* argv[]) {
   wifi_service_->Initialize(executor.task_runner());
 
   if (parsed_command_line.HasSwitch("list")) {
-    base::Value::List network_list;
+    base::ListValue network_list;
     wifi_service_->GetVisibleNetworks(std::string(), /*include_details=*/true,
                                       &network_list);
     VLOG(0) << network_list;
@@ -145,7 +147,7 @@ bool WiFiTest::ParseCommandLine(int argc, const char* argv[]) {
 
   if (parsed_command_line.HasSwitch("get_properties")) {
     if (network_guid.length() > 0) {
-      base::Value::Dict properties;
+      base::DictValue properties;
       std::string error;
       wifi_service_->GetProperties(network_guid, &properties, &error);
       VLOG(0) << error << ":\n" << properties;
@@ -154,7 +156,7 @@ bool WiFiTest::ParseCommandLine(int argc, const char* argv[]) {
   }
 
   // Optional properties (frequency, password) to use for connect or create.
-  base::Value::Dict properties;
+  base::DictValue properties;
 
   if (!frequency.empty()) {
     int value = 0;

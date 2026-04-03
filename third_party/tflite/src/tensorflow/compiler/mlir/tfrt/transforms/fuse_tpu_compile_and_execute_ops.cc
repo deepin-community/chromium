@@ -13,15 +13,27 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cassert>
+#include <memory>
+
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
+#include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/Types.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
-#include "mlir/Transforms/Passes.h"  // from @llvm-project
+#include "mlir/IR/ValueRange.h"  // from @llvm-project
+#include "mlir/IR/Visitors.h"  // from @llvm-project
+#include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/TypeID.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 
@@ -147,12 +159,11 @@ void FuseCompileAndExecuteOps(
   auto producer_name =
       used_exec_op->getAttrOfType<mlir::StringAttr>("_producer_name");
   if (!producer_name) producer_name = mlir::StringAttr::get(context, "default");
-  auto compile_and_execute_op =
-      builder.create<mlir::TF::TPUCompileMlirAndExecuteOp>(
-          used_exec_op.getLoc(), output_types, exec_op_args,
-          static_shape_tensors,
-          builder.getI32ArrayAttr(static_shaped_operand_indices_attr),
-          compile_op.getMlirModule(), compile_op.getMetadata(), producer_name);
+  auto compile_and_execute_op = mlir::TF::TPUCompileMlirAndExecuteOp::create(
+      builder, used_exec_op.getLoc(), output_types, exec_op_args,
+      static_shape_tensors,
+      builder.getI32ArrayAttr(static_shaped_operand_indices_attr),
+      compile_op.getMlirModule(), compile_op.getMetadata(), producer_name);
 
   for (auto exec_op : exec_op_in_group) {
     exec_op.replaceAllUsesWith(compile_and_execute_op.getResults());

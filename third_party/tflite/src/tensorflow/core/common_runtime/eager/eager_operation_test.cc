@@ -42,7 +42,7 @@ TEST(EagerOperationTest, DeviceName) {
   TF_ASSERT_OK(op->SetDeviceName("/job:localhost"));
   EXPECT_EQ("/job:localhost", op->DeviceName());
 
-  EXPECT_NE(OkStatus(), op->SetDeviceName("/not/a/valid/name"));
+  EXPECT_NE(absl::OkStatus(), op->SetDeviceName("/not/a/valid/name"));
 
   delete op;
   ctx->Unref();
@@ -68,7 +68,7 @@ TEST(EagerOperationTest, EagerFunctionParamsAndStepId) {
   auto op = new EagerOperation(ctx);
   EXPECT_FALSE(op->eager_func_params().has_value());
 
-  string device_name = "/job:localhost/replica:0/task:0/device:CPU:0";
+  std::string device_name = "/job:localhost/replica:0/task:0/device:CPU:0";
   TF_ASSERT_OK(op->SetDeviceName(device_name.c_str()));
   TF_ASSERT_OK(op->Reset("DummyFunction", device_name.c_str()));
 

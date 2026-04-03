@@ -4,6 +4,7 @@
 
 #include "chrome/browser/media/media_engagement_score.h"
 
+#include <string_view>
 #include <utility>
 
 #include "base/metrics/field_trial_params.h"
@@ -35,11 +36,11 @@ const int kScoreMinVisitsParamDefault = 20;
 const double kHighScoreLowerThresholdParamDefault = 0.2;
 const double kHighScoreUpperThresholdParamDefault = 0.3;
 
-base::Value::Dict GetMediaEngagementScoreDictForSettings(
+base::DictValue GetMediaEngagementScoreDictForSettings(
     const HostContentSettingsMap* settings,
     const url::Origin& origin) {
   if (!settings)
-    return base::Value::Dict();
+    return base::DictValue();
 
   base::Value value = settings->GetWebsiteSetting(
       origin.GetURL(), origin.GetURL(), ContentSettingsType::MEDIA_ENGAGEMENT,
@@ -47,11 +48,11 @@ base::Value::Dict GetMediaEngagementScoreDictForSettings(
   if (value.is_dict())
     return std::move(value).TakeDict();
 
-  return base::Value::Dict();
+  return base::DictValue();
 }
 
-void GetIntegerFromScore(const base::Value::Dict& dict,
-                         base::StringPiece key,
+void GetIntegerFromScore(const base::DictValue& dict,
+                         std::string_view key,
                          int* out) {
   if (std::optional<int> v = dict.FindInt(key)) {
     *out = v.value();
@@ -92,7 +93,7 @@ MediaEngagementScore::MediaEngagementScore(base::Clock* clock,
 
 MediaEngagementScore::MediaEngagementScore(base::Clock* clock,
                                            const url::Origin& origin,
-                                           base::Value::Dict score_dict,
+                                           base::DictValue score_dict,
                                            HostContentSettingsMap* settings)
     : origin_(origin),
       clock_(clock),

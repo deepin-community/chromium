@@ -7,6 +7,8 @@
 #ifndef FXBARCODE_ONED_BC_ONEDUPCAWRITER_H_
 #define FXBARCODE_ONED_BC_ONEDUPCAWRITER_H_
 
+#include <stdint.h>
+
 #include <memory>
 
 #include "core/fxcrt/fx_string.h"
@@ -35,7 +37,7 @@ class CBC_OnedUPCAWriter final : public CBC_OneDimEANWriter {
                  const CFX_Matrix& matrix,
                  int32_t barWidth) override;
 
-  std::unique_ptr<CBC_OnedEAN13Writer> m_subWriter;
+  std::unique_ptr<CBC_OnedEAN13Writer> sub_writer_;
 };
 
 #endif  // FXBARCODE_ONED_BC_ONEDUPCAWRITER_H_

@@ -13,7 +13,7 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "chrome/test/chromedriver/command.h"
@@ -156,7 +156,7 @@ class HttpHandler {
 
   void SendResponseOverWebSocket(HttpServerInterface* http_server,
                                  int connection_id,
-                                 std::optional<double> maybe_id,
+                                 const std::optional<base::Value>& maybe_id,
                                  const Status& status,
                                  std::unique_ptr<base::Value> result,
                                  const std::string& session_id,
@@ -182,9 +182,10 @@ class HttpHandler {
                            std::unique_ptr<base::Value> result,
                            const std::string& session_id,
                            bool w3c);
+  void OnSessionTerminated(std::string session_id);
   void OnNewBidiSessionOnCmdThread(HttpServerInterface* http_server,
                                    int connection_id,
-                                   std::optional<double> maybe_id,
+                                   const std::optional<base::Value>& maybe_id,
                                    const Status& status,
                                    std::unique_ptr<base::Value> result,
                                    const std::string& session_id,
@@ -233,15 +234,15 @@ bool MatchesCommand(const std::string& method,
                     const std::string& path,
                     const CommandMapping& command,
                     std::string* session_id,
-                    base::Value::Dict* out_params);
+                    base::DictValue* out_params);
 
 bool IsNewSession(const CommandMapping& command);
 
-Status ParseBidiCommand(const std::string& data, base::Value::Dict& parsed);
+Status ParseBidiCommand(const std::string& data, base::DictValue& parsed);
 
-base::Value::Dict CreateBidiErrorResponse(
+base::DictValue CreateBidiErrorResponse(
     Status status,
-    std::optional<double> maybe_id = std::nullopt);
+    std::optional<base::Value> maybe_id = std::nullopt);
 
 }  // namespace internal
 

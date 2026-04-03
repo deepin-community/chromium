@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_MEDIA_ROUTER_DISCOVERY_ACCESS_CODE_ACCESS_CODE_CAST_PREF_UPDATER_H_
 #define CHROME_BROWSER_MEDIA_ROUTER_DISCOVERY_ACCESS_CODE_ACCESS_CODE_CAST_PREF_UPDATER_H_
 
+#include <vector>
+
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/media_router/common/discovery/media_sink_internal.h"
@@ -12,8 +14,7 @@
 
 namespace media_router {
 
-// An interface used by both LaCros and other desktop platforms for pref
-// updating in AccessCodeCasting.
+// An interface used for pref updating in AccessCodeCasting.
 class AccessCodeCastPrefUpdater {
  public:
   AccessCodeCastPrefUpdater() = default;
@@ -40,13 +41,12 @@ class AccessCodeCastPrefUpdater {
   // Runs the |get_devices_callback| with the devices dictionary fetched from
   // the pref service.
   virtual void GetDevicesDict(
-      base::OnceCallback<void(base::Value::Dict)> get_devices_callback) = 0;
+      base::OnceCallback<void(base::DictValue)> get_devices_callback) = 0;
 
   // Runs the |get_device_added_time_callback| with the device added time
   // dictionary fetched from the pref service.
-  virtual void GetDeviceAddedTimeDict(
-      base::OnceCallback<void(base::Value::Dict)>
-          get_device_added_time_callback) = 0;
+  virtual void GetDeviceAddedTimeDict(base::OnceCallback<void(base::DictValue)>
+                                          get_device_added_time_callback) = 0;
 
   // Removes the given |sink_id| from all instances in the devices dictionary
   // stored in the pref service. Nothing occurs if the |sink_id| was not there
@@ -71,7 +71,7 @@ class AccessCodeCastPrefUpdater {
   // value, otherwise runs the callback with an empty dictionary.
   void GetMediaSinkInternalValueBySinkId(
       const MediaSink::Id sink_id,
-      base::OnceCallback<void(base::Value::Dict)> get_sink_callback);
+      base::OnceCallback<void(base::DictValue)> get_sink_callback);
 
   // Fetches the devices added time dictionary from the pref service and finds
   // the entry with |sink_id|. If found a valid time, runs the
@@ -85,12 +85,12 @@ class AccessCodeCastPrefUpdater {
   // endpoints are identical to the given |ip_endpoint|. If no existing ip
   // endpoints are found, the list will be empty.
   static std::vector<MediaSink::Id> GetMatchingIPEndPoints(
-      const base::Value::Dict& devices_dict,
+      const base::DictValue& devices_dict,
       net::IPEndPoint ip_endpoint);
 
   // Sets the key for the given |sink| id with the actual |sink| itself. This
   // function will overwrite a sink id if it already exists.
-  virtual void UpdateDevicesDictForTest(const MediaSinkInternal& sink) = 0;
+  virtual void UpdateDevicesDictForTesting(const MediaSinkInternal& sink) = 0;
 };
 
 }  // namespace media_router

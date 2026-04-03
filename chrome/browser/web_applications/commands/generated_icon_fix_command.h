@@ -13,6 +13,7 @@
 #include "chrome/browser/web_applications/commands/web_app_command.h"
 #include "chrome/browser/web_applications/locks/shared_web_contents_with_app_lock.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
+#include "chrome/browser/web_applications/scheduler/generated_icon_fix_result.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
@@ -22,25 +23,18 @@ namespace web_app {
 
 class WebAppIconDownloader;
 
-// Used by metrics.
-enum class GeneratedIconFixResult {
-  kAppUninstalled = 0,
-  kShutdown = 1,
-  kDownloadFailure = 2,
-  kStillGenerated = 3,
-  kWriteFailure = 4,
-  kSuccess = 5,
-
-  kMaxValue = kSuccess,
-};
-
+// This command attempts to fix an app that has a generated icon by
+// re-downloading the icon from the app's manifest. This is typically used for
+// apps that were installed from sync and failed to download their icon
+// initially, or for apps whose icons were not available during a manifest
+// update.
 class GeneratedIconFixCommand
     : public WebAppCommand<SharedWebContentsWithAppLock,
                            GeneratedIconFixResult> {
  public:
   explicit GeneratedIconFixCommand(
       webapps::AppId app_id,
-      GeneratedIconFixSource source,
+      proto::GeneratedIconFixSource source,
       base::OnceCallback<void(GeneratedIconFixResult)> callback);
   ~GeneratedIconFixCommand() override;
 
@@ -57,11 +51,11 @@ class GeneratedIconFixCommand
   void Stop(GeneratedIconFixResult result, base::Location location);
 
   webapps::AppId app_id_;
-  GeneratedIconFixSource source_;
+  proto::GeneratedIconFixSource source_;
   std::unique_ptr<SharedWebContentsWithAppLock> lock_;
 
   std::unique_ptr<WebAppIconDownloader> icon_downloader_;
-  WebAppInstallInfo install_info_;
+  std::unique_ptr<WebAppInstallInfo> install_info_;
 
   base::Location stop_location_;
 

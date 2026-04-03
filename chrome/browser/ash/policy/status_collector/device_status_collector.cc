@@ -4,95 +4,100 @@
 
 #include "chrome/browser/ash/policy/status_collector/device_status_collector.h"
 
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <string_view>
 
-#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <map>
+#include <memory>
 #include <optional>
 #include <set>
-#include <sstream>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
-#include "ash/components/arc/mojom/enterprise_reporting.mojom.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
 #include "ash/constants/ash_features.h"
 #include "base/check.h"
 #include "base/check_op.h"
-#include "base/feature_list.h"
+#include "base/compiler_specific.h"
+#include "base/containers/circular_deque.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
-#include "base/format_macros.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
+#include "base/location.h"
 #include "base/logging.h"
-#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/posix/eintr_wrapper.h"
+#include "base/notreached.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "base/version.h"
-#include "chrome/browser/ash/app_mode/arc/arc_kiosk_app_manager.h"
+#include "base/version_info/version_info.h"
 #include "chrome/browser/ash/app_mode/kiosk_chrome_app_manager.h"
-#include "chrome/browser/ash/crosapi/browser_util.h"
 #include "chrome/browser/ash/crostini/crostini_pref_names.h"
 #include "chrome/browser/ash/crostini/crostini_reporting_util.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
 #include "chrome/browser/ash/login/demo_mode/demo_mode_dimensions.h"
-#include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/policy/core/reporting_user_tracker.h"
 #include "chrome/browser/ash/policy/status_collector/enterprise_activity_storage.h"
-#include "chrome/browser/ash/policy/status_collector/interval_map.h"
+#include "chrome/browser/ash/policy/status_collector/managed_session_service.h"
+#include "chrome/browser/ash/policy/status_collector/status_collector.h"
 #include "chrome/browser/ash/policy/status_collector/status_collector_state.h"
 #include "chrome/browser/ash/policy/status_collector/tpm_status_combiner.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/crash_upload_list/crash_upload_list.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/storage/device_storage_util.h"
-#include "chrome/common/channel_info.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
+#include "chromeos/ash/components/channel/channel_info.h"
 #include "chromeos/ash/components/dbus/attestation/attestation_client.h"
-#include "chromeos/ash/components/dbus/cryptohome/rpc.pb.h"
+#include "chromeos/ash/components/dbus/attestation/interface.pb.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_euicc_client.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_manager_client.h"
 #include "chromeos/ash/components/dbus/spaced/spaced_client.h"
 #include "chromeos/ash/components/dbus/update_engine/update_engine_client.h"
+#include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/ash/components/disks/disk_mount_manager.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/components/network/device_state.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
+#include "chromeos/ash/components/network/network_type_pattern.h"
+#include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
-#include "chromeos/ash/components/settings/timezone_settings.h"
+#include "chromeos/ash/components/settings/cros_settings_provider.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
+#include "chromeos/ash/experiences/arc/mojom/enterprise_reporting.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/session/connection_holder.h"
+#include "chromeos/ash/services/cros_healthd/public/cpp/service_connection.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom.h"
-#include "chromeos/dbus/power_manager/idle.pb.h"
+#include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager.pb.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager_client.h"
 #include "chromeos/version/version_loader.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
-#include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -100,19 +105,19 @@
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
-#include "components/user_manager/user_type.h"
-#include "components/version_info/version_info.h"
+#include "components/user_manager/user_names.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
+#include "google_apis/gaia/gaia_auth_util.h"
 #include "gpu/config/gpu_info.h"
 #include "gpu/ipc/common/memory_stats.h"
 #include "storage/browser/file_system/external_mount_points.h"
-#include "third_party/cros_system_api/dbus/service_constants.h"
+#include "storage/browser/file_system/mount_points.h"
+#include "ui/base/idle/idle.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
-#include "ui/gfx/geometry/rect.h"
 
 namespace policy {
 
@@ -187,16 +192,18 @@ std::vector<em::VolumeInfo> GetVolumeInfo(
       continue;
     }
 
-    int64_t free_size = base::SysInfo::AmountOfFreeDiskSpace(mount_path);
-    int64_t total_size = base::SysInfo::AmountOfTotalDiskSpace(mount_path);
-    if (free_size < 0 || total_size < 0) {
+    std::optional<int64_t> free_size =
+        base::SysInfo::AmountOfFreeDiskSpace(mount_path);
+    std::optional<int64_t> total_size =
+        base::SysInfo::AmountOfTotalDiskSpace(mount_path);
+    if (!free_size.has_value() || !total_size.has_value()) {
       LOG(ERROR) << "Unable to get volume status for " << mount_point;
       continue;
     }
     em::VolumeInfo info;
     info.set_volume_id(mount_point);
-    info.set_storage_total(total_size);
-    info.set_storage_free(free_size);
+    info.set_storage_total(*total_size);
+    info.set_storage_free(*free_size);
     result.push_back(info);
   }
   return result;
@@ -270,7 +277,8 @@ bool ReadTemperatureSensorInfo(const base::FilePath& sensor_dir,
     std::string temperature_string;
     int32_t temperature = 0;
     if (base::ReadFileToString(temperature_path, &temperature_string) &&
-        sscanf(temperature_string.c_str(), "%d", &temperature) == 1) {
+        UNSAFE_TODO(sscanf(temperature_string.c_str(), "%d", &temperature)) ==
+            1) {
       has_data = true;
       // CPU temp in millidegree Celsius to Celsius
       temperature /= 1000;
@@ -366,30 +374,30 @@ em::DiskLifetimeEstimation ReadDiskLifeTimeEstimation() {
 em::StatefulPartitionInfo ReadStatefulPartitionInfo() {
   em::StatefulPartitionInfo spi;
   const base::FilePath statefulPartitionPath(kStatefulPartitionPath);
-  const int64_t available_space =
+  const auto available_space =
       base::SysInfo::AmountOfFreeDiskSpace(statefulPartitionPath);
-  const int64_t total_space =
+  const auto total_space =
       base::SysInfo::AmountOfTotalDiskSpace(statefulPartitionPath);
 
-  if (available_space == -1) {
+  if (!available_space) {
     LOG(ERROR) << "ReadStatefulPartitionInfo failed fetching available space.";
     return spi;
   }
 
-  if (total_space == -1) {
+  if (!total_space) {
     LOG(ERROR) << "ReadStatefulPartitionInfo failed fetching total space.";
     return spi;
   }
 
-  spi.set_available_space(available_space);
-  spi.set_total_space(total_space);
+  spi.set_available_space(*available_space);
+  spi.set_total_space(*total_space);
   return spi;
 }
 
 // Collects all the display related information.
 void GetDisplayStatus(em::GraphicsStatus* graphics_status) {
   const std::vector<display::Display> displays =
-      display::Screen::GetScreen()->GetAllDisplays();
+      display::Screen::Get()->GetAllDisplays();
   for (const auto& display : displays) {
     em::DisplayInfo* display_info = graphics_status->add_displays();
     display_info->set_resolution_width(display.GetSizeInPixel().width());
@@ -484,10 +492,6 @@ int ConvertWifiSignalStrength(int signal_strength) {
   //
   // To convert back to dBm, we use the inverse of the function above to yield
   // a clamped dBm value in the range of -88 to -44dBm.
-  //
-  // TODO(atwilson): Tunnel the raw dBm signal strength from Shill instead of
-  // doing the conversion here so we can report non-clamped values
-  // (crbug.com/463334).
   DCHECK_GT(signal_strength, 0);
   DCHECK_LE(signal_strength, 100);
   return (signal_strength - 200) * 11 / 25;
@@ -640,48 +644,60 @@ void ReadCrashReportInfo(
 
 em::ActiveTimePeriod::SessionType GetSessionType(
     const std::string& user_email) {
-  DeviceLocalAccount::Type type;
-  if (!IsDeviceLocalAccountUser(user_email, &type)) {
+  auto type = GetDeviceLocalAccountType(user_email);
+  if (!type.has_value()) {
     return em::ActiveTimePeriod::SESSION_AFFILIATED_USER;
   }
 
-  switch (type) {
-    case DeviceLocalAccount::TYPE_PUBLIC_SESSION:
-    case DeviceLocalAccount::TYPE_SAML_PUBLIC_SESSION:
+  switch (type.value()) {
+    case DeviceLocalAccountType::kPublicSession:
+    case DeviceLocalAccountType::kSamlPublicSession:
       return em::ActiveTimePeriod::SESSION_MANAGED_GUEST;
 
-    case DeviceLocalAccount::TYPE_KIOSK_APP:
+    case DeviceLocalAccountType::kKioskApp:
       return em::ActiveTimePeriod::SESSION_KIOSK;
 
-    case DeviceLocalAccount::TYPE_ARC_KIOSK_APP:
-      return em::ActiveTimePeriod::SESSION_ARC_KIOSK;
-
-    case DeviceLocalAccount::TYPE_WEB_KIOSK_APP:
+    case DeviceLocalAccountType::kWebKioskApp:
       return em::ActiveTimePeriod::SESSION_WEB_KIOSK;
+
+    case DeviceLocalAccountType::kKioskIsolatedWebApp:
+      return em::ActiveTimePeriod::SESSION_IWA_KIOSK;
+
+    case DeviceLocalAccountType::kArcvmKioskApp:
+      if (ash::features::IsHeliumArcvmKioskEnabled()) {
+        return em::ActiveTimePeriod::SESSION_ARC_KIOSK;
+      }
+      break;
 
     default:
       NOTREACHED();
   }
 
   NOTREACHED();
-  return em::ActiveTimePeriod::SESSION_UNKNOWN;
 }
 
 // Remap GscVersion using switch-case even though the values match
 // to ensure that the compiler complains if a new value has been added.
-em::TpmVersionInfo_GscVersion ConvertTpmGscVersion(
-    tpm_manager::GscVersion gsc_version) {
-  switch (gsc_version) {
-    case tpm_manager::GscVersion::GSC_VERSION_NOT_GSC:
+em::TpmVersionInfo_GscVersion ConvertTpmGscDevice(
+    tpm_manager::GscDevice gsc_device) {
+  switch (gsc_device) {
+    case tpm_manager::GscDevice::GSC_DEVICE_NOT_GSC:
       return em::TpmVersionInfo::GSC_VERSION_NOT_GSC;
-    case tpm_manager::GscVersion::GSC_VERSION_CR50:
+    case tpm_manager::GscDevice::GSC_DEVICE_H1:
       return em::TpmVersionInfo::GSC_VERSION_CR50;
-    case tpm_manager::GscVersion::GSC_VERSION_TI50:
+    case tpm_manager::GscDevice::GSC_DEVICE_DT:
       return em::TpmVersionInfo::GSC_VERSION_TI50;
+    case tpm_manager::GscDevice::GSC_DEVICE_NT:
+      return em::TpmVersionInfo::GSC_VERSION_NT;
   }
 
   NOTREACHED();
-  return em::TpmVersionInfo::GSC_VERSION_UNSPECIFIED;
+}
+
+// Do not report session type and email for deprecated user types.
+bool IsDeprecatedArcKioskAccount(std::string_view user_email) {
+  return gaia::ExtractDomainName(gaia::SanitizeEmail(user_email)) ==
+         user_manager::kArcKioskDomain;
 }
 
 }  // namespace
@@ -1001,8 +1017,10 @@ class DeviceStatusCollectorState : public StatusCollectorState {
               case cros_healthd::StorageDevicePurpose::kBootDevice:
                 disk_info_out->set_purpose(em::DiskInfo::PURPOSE_BOOT);
                 break;
-              case cros_healthd::StorageDevicePurpose::kSwapDevice:
+              case cros_healthd::StorageDevicePurpose::DEPRECATED_kSwapDevice:
                 disk_info_out->set_purpose(em::DiskInfo::PURPOSE_SWAP);
+                break;
+              case cros_healthd::StorageDevicePurpose::kNonBootDevice:
                 break;
             }
           }
@@ -1995,8 +2013,9 @@ void DeviceStatusCollector::SampleMemoryUsage() {
     return;
   }
 
-  MemoryUsage usage = {base::SysInfo::AmountOfAvailablePhysicalMemory(),
-                       base::Time::Now()};
+  MemoryUsage usage = {
+      base::SysInfo::AmountOfAvailablePhysicalMemory().AsDeprecatedByteCount(),
+      base::Time::Now()};
   memory_usage_.push_back(usage);
 
   if (memory_usage_.size() > kMaxResourceUsageSamples) {
@@ -2041,9 +2060,9 @@ void DeviceStatusCollector::ReceiveCPUStatistics(const std::string& stats) {
     // We only care about the first four numbers: user_time, nice_time,
     // sys_time, and idle_time.
     uint64_t user = 0, nice = 0, system = 0, idle = 0;
-    int vals = sscanf(stats.c_str(),
-                      "cpu %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64, &user,
-                      &nice, &system, &idle);
+    int vals = UNSAFE_TODO(sscanf(
+        stats.c_str(), "cpu %" SCNu64 " %" SCNu64 " %" SCNu64 " %" SCNu64,
+        &user, &nice, &system, &idle));
     DCHECK_EQ(4, vals);
 
     // The values returned from /proc/stat are cumulative totals, so calculate
@@ -2289,17 +2308,16 @@ bool DeviceStatusCollector::GetActivityTimes(
       period->set_end_timestamp(end_timestamp);
       active_period->set_active_duration(activity_period.end_timestamp() -
                                          activity_period.start_timestamp());
-      // Report user email and session_type only if users reporting is on.
-      if (!user_email.empty()) {
+      // Report user email and session_type for non-deprecated accounts only
+      // if users reporting is on.
+      if (!user_email.empty() && !IsDeprecatedArcKioskAccount(user_email)) {
         em::ActiveTimePeriod::SessionType session_type =
             GetSessionType(user_email);
         // Don't report the email address for MGS / Kiosk apps
         if (session_type == em::ActiveTimePeriod::SESSION_AFFILIATED_USER) {
           active_period->set_user_email(user_email);
         }
-        if (session_type != em::ActiveTimePeriod::SESSION_UNKNOWN &&
-            base::FeatureList::IsEnabled(
-                features::kActivityReportingSessionType)) {
+        if (session_type != em::ActiveTimePeriod::SESSION_UNKNOWN) {
           active_period->set_session_type(session_type);
         }
       }
@@ -2316,9 +2334,7 @@ bool DeviceStatusCollector::GetVersionInfo(
     em::DeviceStatusReportRequest* status) {
   status->set_os_version(os_version_);
   status->set_browser_version(std::string(version_info::GetVersionNumber()));
-  status->set_is_lacros_primary_browser(
-      crosapi::browser_util::IsLacrosEnabled());
-  status->set_channel(ConvertToProtoChannel(chrome::GetChannel()));
+  status->set_channel(ConvertToProtoChannel(ash::GetChannel()));
 
   // TODO(b/144081278): Remove when resolved.
   // When firmware version is not fetched, report error instead.
@@ -2334,7 +2350,16 @@ bool DeviceStatusCollector::GetVersionInfo(
   tpm_version_info->set_firmware_version(tpm_version_reply_.firmware_version());
   tpm_version_info->set_vendor_specific(tpm_version_reply_.vendor_specific());
   tpm_version_info->set_gsc_version(
-      ConvertTpmGscVersion(tpm_version_reply_.gsc_version()));
+      ConvertTpmGscDevice(tpm_version_reply_.gsc_device()));
+
+  const std::optional<std::string_view> kernel_key_version =
+      statistics_provider_->GetMachineStatistic(ash::system::kKernelKeyVersion);
+  if (kernel_key_version.has_value()) {
+    tpm_version_info->set_kernel_key_version(kernel_key_version.value());
+  } else {
+    LOG(WARNING) << "Failed to retrieve kernel key version";
+  }
+
   return true;
 }
 
@@ -2391,7 +2416,8 @@ bool DeviceStatusCollector::GetNetworkConfiguration(
     // Determine the type enum constant for |device|.
     size_t type_idx = 0;
     for (; type_idx < std::size(kDeviceTypeMap); ++type_idx) {
-      if ((*device)->type() == kDeviceTypeMap[type_idx].type_string) {
+      if ((*device)->type() ==
+          UNSAFE_TODO(kDeviceTypeMap[type_idx]).type_string) {
         break;
       }
     }
@@ -2403,7 +2429,7 @@ bool DeviceStatusCollector::GetNetworkConfiguration(
     }
 
     em::NetworkInterface* interface = status->add_network_interfaces();
-    interface->set_type(kDeviceTypeMap[type_idx].type_constant);
+    interface->set_type(UNSAFE_TODO(kDeviceTypeMap[type_idx]).type_constant);
     if (!(*device)->mac_address().empty()) {
       interface->set_mac_address((*device)->mac_address());
     }
@@ -2455,7 +2481,7 @@ bool DeviceStatusCollector::GetNetworkStatus(
       {shill::kStateRedirectFound, em::NetworkState::PORTAL},
       {shill::kStatePortalSuspected, em::NetworkState::PORTAL},
       {shill::kStateOnline, em::NetworkState::ONLINE},
-      {shill::kStateDisconnect, em::NetworkState::DISCONNECT},
+      {shill::kStateDisconnecting, em::NetworkState::DISCONNECT},
       {shill::kStateFailure, em::NetworkState::FAILURE},
   };
 
@@ -2486,8 +2512,10 @@ bool DeviceStatusCollector::GetNetworkStatus(
         em::NetworkState::UNKNOWN;
     const std::string connection_state_string(state->connection_state());
     for (size_t i = 0; i < std::size(kConnectionStateMap); ++i) {
-      if (connection_state_string == kConnectionStateMap[i].state_string) {
-        connection_state_enum = kConnectionStateMap[i].state_constant;
+      if (connection_state_string ==
+          UNSAFE_TODO(kConnectionStateMap[i]).state_string) {
+        connection_state_enum =
+            UNSAFE_TODO(kConnectionStateMap[i]).state_constant;
         break;
       }
     }
@@ -2528,7 +2556,7 @@ bool DeviceStatusCollector::GetNetworkStatus(
 
 bool DeviceStatusCollector::GetUsers(em::DeviceStatusReportRequest* status) {
   const user_manager::UserList& users =
-      user_manager::UserManager::Get()->GetUsers();
+      user_manager::UserManager::Get()->GetPersistedUsers();
 
   bool anything_reported = false;
   for (user_manager::User* user : users) {
@@ -2554,12 +2582,13 @@ bool DeviceStatusCollector::GetUsers(em::DeviceStatusReportRequest* status) {
 bool DeviceStatusCollector::GetMemoryInfo(
     em::DeviceStatusReportRequest* status) {
   status->clear_system_ram_free_infos();
-  status->set_system_ram_total(base::SysInfo::AmountOfPhysicalMemory());
+  status->set_system_ram_total(
+      base::SysInfo::AmountOfPhysicalMemory().InBytes());
 
   for (const MemoryUsage& usage : memory_usage_) {
     em::SystemFreeRamInfo* system_ram_free_info =
         status->add_system_ram_free_infos();
-    system_ram_free_info->set_size_in_bytes(usage.bytes_of_ram_free);
+    system_ram_free_info->set_size_in_bytes(usage.bytes_of_ram_free.InBytes());
     system_ram_free_info->set_timestamp(
         usage.timestamp.InMillisecondsSinceUnixEpoch());
   }
@@ -2687,30 +2716,42 @@ bool DeviceStatusCollector::GetRunningKioskApp(
   }
 
   em::AppStatus* running_kiosk_app = status->mutable_running_kiosk_app();
-  if (account->type == DeviceLocalAccount::TYPE_KIOSK_APP) {
-    running_kiosk_app->set_app_id(account->kiosk_app_id);
+  switch (account->type) {
+    case DeviceLocalAccountType::kKioskApp: {
+      running_kiosk_app->set_app_id(account->kiosk_app_id);
 
-    const std::string app_version = GetAppVersion(account->kiosk_app_id);
-    if (app_version.empty()) {
-      DLOG(ERROR) << "Unable to get version for extension: "
-                  << account->kiosk_app_id;
-    } else {
-      running_kiosk_app->set_extension_version(app_version);
-    }
+      const std::string app_version = GetAppVersion(account->kiosk_app_id);
+      if (app_version.empty()) {
+        DLOG(ERROR) << "Unable to get version for extension: "
+                    << account->kiosk_app_id;
+      } else {
+        running_kiosk_app->set_extension_version(app_version);
+      }
 
-    ash::KioskChromeAppManager::App app_info;
-    if (ash::KioskChromeAppManager::Get()->GetApp(account->kiosk_app_id,
-                                                  &app_info)) {
-      running_kiosk_app->set_required_platform_version(
-          app_info.required_platform_version);
+      auto app =
+          ash::KioskChromeAppManager::Get()->GetApp(account->kiosk_app_id);
+      if (app.has_value()) {
+        running_kiosk_app->set_required_platform_version(
+            app->required_platform_version);
+      }
+      break;
     }
-  } else if (account->type == DeviceLocalAccount::TYPE_ARC_KIOSK_APP) {
-    // Use package name as app ID for ARC Kiosks.
-    running_kiosk_app->set_app_id(account->arc_kiosk_app_info.package_name());
-  } else if (account->type == DeviceLocalAccount::TYPE_WEB_KIOSK_APP) {
-    running_kiosk_app->set_app_id(account->web_kiosk_app_info.url());
-  } else {
-    NOTREACHED();
+    case DeviceLocalAccountType::kWebKioskApp:
+      running_kiosk_app->set_app_id(account->web_kiosk_app_info.url());
+      break;
+    case DeviceLocalAccountType::kKioskIsolatedWebApp:
+      running_kiosk_app->set_app_id(account->kiosk_iwa_info.web_bundle_id());
+      break;
+    case DeviceLocalAccountType::kArcvmKioskApp:
+      if (ash::features::IsHeliumArcvmKioskEnabled()) {
+        // Use package name as app ID for ARC Kiosks.
+        running_kiosk_app->set_app_id(
+            account->arcvm_kiosk_app_info.package_name());
+      }
+      break;
+    case DeviceLocalAccountType::kPublicSession:
+    case DeviceLocalAccountType::kSamlPublicSession:
+      NOTREACHED();
   }
   return true;
 }
@@ -2729,7 +2770,7 @@ bool DeviceStatusCollector::GetDeviceBootMode(
 
 bool DeviceStatusCollector::GetDemoModeDimensions(
     em::DeviceStatusReportRequest* status) {
-  bool anything_reported = ash::DemoSession::IsDeviceInDemoMode();
+  bool anything_reported = ash::demo_mode::IsDeviceInDemoMode();
   if (anything_reported) {
     *status->mutable_demo_mode_dimensions() =
         ash::demo_mode::GetDemoModeDimensions();
@@ -2980,24 +3021,35 @@ bool DeviceStatusCollector::GetKioskSessionStatus(
   // Get the account ID associated with this user.
   status->set_device_local_account_id(account->account_id);
   em::AppStatus* app_status = status->add_installed_apps();
-  if (account->type == DeviceLocalAccount::TYPE_KIOSK_APP) {
-    app_status->set_app_id(account->kiosk_app_id);
+  switch (account->type) {
+    case DeviceLocalAccountType::kKioskApp: {
+      app_status->set_app_id(account->kiosk_app_id);
 
-    // Look up the app and get the version.
-    const std::string app_version = GetAppVersion(account->kiosk_app_id);
-    if (app_version.empty()) {
-      DLOG(ERROR) << "Unable to get version for extension: "
-                  << account->kiosk_app_id;
-    } else {
-      app_status->set_extension_version(app_version);
+      // Look up the app and get the version.
+      const std::string app_version = GetAppVersion(account->kiosk_app_id);
+      if (app_version.empty()) {
+        DLOG(ERROR) << "Unable to get version for extension: "
+                    << account->kiosk_app_id;
+      } else {
+        app_status->set_extension_version(app_version);
+      }
+      break;
     }
-  } else if (account->type == DeviceLocalAccount::TYPE_ARC_KIOSK_APP) {
-    // Use package name as app ID for ARC Kiosks.
-    app_status->set_app_id(account->arc_kiosk_app_info.package_name());
-  } else if (account->type == DeviceLocalAccount::TYPE_WEB_KIOSK_APP) {
-    app_status->set_app_id(account->web_kiosk_app_info.url());
-  } else {
-    NOTREACHED();
+    case DeviceLocalAccountType::kWebKioskApp:
+      app_status->set_app_id(account->web_kiosk_app_info.url());
+      break;
+    case DeviceLocalAccountType::kKioskIsolatedWebApp:
+      app_status->set_app_id(account->kiosk_iwa_info.web_bundle_id());
+      break;
+    case DeviceLocalAccountType::kArcvmKioskApp:
+      if (ash::features::IsHeliumArcvmKioskEnabled()) {
+        // Use package name as app ID for ARC Kiosks.
+        app_status->set_app_id(account->arcvm_kiosk_app_info.package_name());
+      }
+      break;
+    case DeviceLocalAccountType::kPublicSession:
+    case DeviceLocalAccountType::kSamlPublicSession:
+      NOTREACHED();
   }
 
   return true;
@@ -3026,9 +3078,7 @@ bool DeviceStatusCollector::GetCrostiniUsage(
       last_launch_time_window_start);
   crostini_status->set_last_launch_vm_image_version(termina_version);
 
-  if (profile->GetPrefs()->GetBoolean(crostini::prefs::kCrostiniEnabled) &&
-      base::FeatureList::IsEnabled(
-          features::kCrostiniAdditionalEnterpriseReporting)) {
+  if (profile->GetPrefs()->GetBoolean(crostini::prefs::kCrostiniEnabled)) {
     const std::string& vm_kernel_version = profile->GetPrefs()->GetString(
         crostini::prefs::kCrostiniLastLaunchTerminaKernelVersion);
     crostini_status->set_last_launch_vm_kernel_version(vm_kernel_version);
@@ -3058,7 +3108,7 @@ std::string DeviceStatusCollector::GetAppVersion(
   return extension->VersionString();
 }
 
-// TODO(crbug.com/827386): move public API methods above private ones after
+// TODO(crbug.com/40569404): move public API methods above private ones after
 // common methods are extracted.
 void DeviceStatusCollector::OnSubmittedSuccessfully() {
   activity_storage_->TrimActivityPeriods(last_reported_end_timestamp_,
@@ -3075,7 +3125,7 @@ bool DeviceStatusCollector::IsReportingActivityTimes() const {
     return false;
   }
   std::string user_email = GetUserForActivityReporting();
-  return !user_email.empty() && !IsDeviceLocalAccountUser(user_email, nullptr);
+  return !user_email.empty() && !IsDeviceLocalAccountUser(user_email);
 }
 bool DeviceStatusCollector::IsReportingNetworkData() const {
   return report_network_configuration_ || report_network_status_;
@@ -3094,7 +3144,7 @@ bool DeviceStatusCollector::IsReportingUsers() const {
     return false;
   }
   std::string user_email = GetUserForActivityReporting();
-  return !user_email.empty() && !IsDeviceLocalAccountUser(user_email, nullptr);
+  return !user_email.empty() && !IsDeviceLocalAccountUser(user_email);
 }
 bool DeviceStatusCollector::IsReportingCrashReportInfo() const {
   return report_crash_report_info_ && stat_reporting_pref_;
@@ -3103,7 +3153,7 @@ bool DeviceStatusCollector::IsReportingAppInfoAndActivity() const {
   return report_app_info_;
 }
 
-// TODO(https://crbug.com/1364428)
+// TODO(crbug.com/40239083)
 // Make this function fallible when the optional received is empty
 void DeviceStatusCollector::OnOSVersion(
     const std::optional<std::string>& version) {

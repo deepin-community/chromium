@@ -69,14 +69,13 @@ const DevicePolicyToUserPolicyMapEntry kDevicePoliciesWithPolicyOptionsMap[] = {
     {key::kDeviceLoginScreenWebUsbAllowDevicesForUrls,
      key::kWebUsbAllowDevicesForUrls},
     {key::kDeviceLoginScreenExtensions, key::kExtensionInstallForcelist},
-    {key::kDeviceLoginScreenExtensionManifestV2Availability,
-     key::kExtensionManifestV2Availability},
     {key::kDeviceLoginScreenPromptOnMultipleMatchingCertificates,
      key::kPromptOnMultipleMatchingCertificates},
     {key::kDeviceLoginScreenContextAwareAccessSignalsAllowlist,
      key::kUserContextAwareAccessSignalsAllowlist},
     {key::kDeviceLoginScreenTouchVirtualKeyboardEnabled,
      key::kTouchVirtualKeyboardEnabled},
+    {key::kDeviceLoginScreenFaceGazeEnabled, key::kFaceGazeEnabled},
 
     // The authentication URL blocklist and allowlist policies implement content
     // control for authentication flows, including in the login screen and lock
@@ -100,6 +99,17 @@ const DevicePolicyToUserPolicyMapEntry kDevicePoliciesWithPolicyOptionsMap[] = {
      key::kScreensaverLockScreenImageDisplayIntervalSeconds},
     {key::kDeviceScreensaverLoginScreenImages,
      key::kScreensaverLockScreenImages},
+    {key::kDeviceLoginScreenSecurityKeyPermitAttestation,
+     key::kSecurityKeyPermitAttestation},
+
+    // kPreferSlowKexAlgorithms and kPreferSlowCiphers are user policies that
+    // are primarily stored in local_state prefs (as they need to configure the
+    // SystemNetworkContextManager), but those same prefs when used with the
+    // ChromeOS device login screen are profile-level prefs that only apply
+    // to the login screen profile.
+    {key::kDeviceLoginScreenPreferSlowKexAlgorithms,
+     key::kPreferSlowKexAlgorithms},
+    {key::kDeviceLoginScreenPreferSlowCiphers, key::kPreferSlowCiphers},
 };
 
 const DevicePolicyToUserPolicyMapEntry kRecommendedDevicePoliciesMap[] = {
@@ -182,7 +192,7 @@ LoginProfilePolicyProvider::LoginProfilePolicyProvider(
     : device_policy_service_(device_policy_service),
       waiting_for_device_policy_refresh_(false) {}
 
-LoginProfilePolicyProvider::~LoginProfilePolicyProvider() {}
+LoginProfilePolicyProvider::~LoginProfilePolicyProvider() = default;
 
 void LoginProfilePolicyProvider::Init(SchemaRegistry* registry) {
   ConfigurationPolicyProvider::Init(registry);
@@ -235,6 +245,12 @@ void LoginProfilePolicyProvider::UpdateFromDevicePolicy() {
   PolicyBundle bundle;
   PolicyMap& user_policy_map = bundle.Get(chrome_namespaces);
 
+  // We generally do not want the dino game being played on the login screen,
+  // see crbug.com/375062959.
+  user_policy_map.Set(key::kAllowDinosaurEasterEgg,
+                      PolicyLevel::POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+                      POLICY_SOURCE_CLOUD, base::Value(false), nullptr);
+
   // The device policies which includes the policy options
   // |kDevicePoliciesWithPolicyOptionsMap| should be applied after
   // |kRecommendedDevicePoliciesMap|, because its overrides some deprecated ones
@@ -254,7 +270,7 @@ void LoginProfilePolicyProvider::UpdateFromDevicePolicy() {
   const base::Value* value = device_policy_map.GetValue(
       key::kDeviceLoginScreenPowerManagement, base::Value::Type::DICT);
   if (value) {
-    base::Value::Dict policy_dict = value->GetDict().Clone();
+    base::DictValue policy_dict = value->GetDict().Clone();
     const std::string* lid_close_action =
         policy_dict.FindString(kLidCloseAction);
 

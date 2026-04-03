@@ -22,6 +22,8 @@ limitations under the License.
 #include <cfloat>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
 #include "tensorflow/core/common_runtime/device.h"
 #include "tensorflow/core/framework/kernel_shape_util.h"
@@ -41,8 +43,9 @@ namespace tensorflow {
 typedef Eigen::ThreadPoolDevice CPUDevice;
 typedef Eigen::GpuDevice GPUDevice;
 
-void ParseAttributes(OpKernelConstruction* context, std::vector<int32>* strides,
-                     std::vector<int32>* rates, Padding* padding) {
+void ParseAttributes(OpKernelConstruction* context,
+                     std::vector<int32_t>* strides, std::vector<int32_t>* rates,
+                     Padding* padding) {
   OP_REQUIRES_OK(context, context->GetAttr("strides", strides));
   OP_REQUIRES(context, strides->size() == 4,
               errors::InvalidArgument("Sliding window stride field must "
@@ -62,8 +65,8 @@ void ParseAttributes(OpKernelConstruction* context, std::vector<int32>* strides,
   OP_REQUIRES_OK(context, context->GetAttr("padding", padding));
 }
 
-void ParseSizes(OpKernelContext* context, const std::vector<int32>& strides,
-                const std::vector<int32>& rates, const Padding& padding,
+void ParseSizes(OpKernelContext* context, const std::vector<int32_t>& strides,
+                const std::vector<int32_t>& rates, const Padding& padding,
                 int* stride_rows, int* stride_cols, int* rate_rows,
                 int* rate_cols, int64_t* pad_top, int64_t* pad_left,
                 int64_t* out_rows, int64_t* out_cols) {
@@ -154,8 +157,8 @@ class DilationOp : public OpKernel {
         pad_top, pad_left, output->tensor<T, 4>());
   }
 
-  std::vector<int32> strides_;
-  std::vector<int32> rates_;
+  std::vector<int32_t> strides_;
+  std::vector<int32_t> rates_;
   Padding padding_;
 };
 
@@ -238,6 +241,11 @@ class DilationBackpropInputOp : public OpKernel {
                &out_cols);
     if (!context->status().ok()) return;
 
+    OP_REQUIRES(context, out_backprop.dims() == 4,
+                absl::InvalidArgumentError(
+                    absl::StrCat("out_backprop must be 4-dimensional",
+                                 out_backprop.shape().DebugString())));
+
     // Verify that the incoming gradient tensor has the expected size
     // [ batch, out_rows, out_cols, depth ]
     const int batch = input.dim_size(0);
@@ -267,8 +275,8 @@ class DilationBackpropInputOp : public OpKernel {
         in_backprop->tensor<T, 4>());
   }
 
-  std::vector<int32> strides_;
-  std::vector<int32> rates_;
+  std::vector<int32_t> strides_;
+  std::vector<int32_t> rates_;
   Padding padding_;
 };
 
@@ -366,6 +374,11 @@ class DilationBackpropFilterOp : public OpKernel {
                &out_cols);
     if (!context->status().ok()) return;
 
+    OP_REQUIRES(context, out_backprop.dims() == 4,
+                absl::InvalidArgumentError(
+                    absl::StrCat("out_backprop must be 4-dimensional",
+                                 out_backprop.shape().DebugString())));
+
     // Verify that the incoming gradient tensor has the expected size
     // [ batch, out_rows, out_cols, depth ]
     const int batch = input.dim_size(0);
@@ -395,8 +408,8 @@ class DilationBackpropFilterOp : public OpKernel {
         filter_backprop->tensor<T, 3>());
   }
 
-  std::vector<int32> strides_;
-  std::vector<int32> rates_;
+  std::vector<int32_t> strides_;
+  std::vector<int32_t> rates_;
   Padding padding_;
 };
 

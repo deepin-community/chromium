@@ -40,7 +40,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@local_tsl//tsl/platform:status",
+        "@xla//xla/tsl/platform:status",
     ],
     alwayslink = 1,
 )
@@ -54,6 +54,7 @@ cc_library(
     deps = [
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
+        "@com_google_absl//absl/status",
     ],
     alwayslink = 1,
 )
@@ -77,6 +78,7 @@ cc_library(
     deps = [
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
+        "@com_google_absl//absl/status",
     ],
     alwayslink = 1,
 )
@@ -106,6 +108,7 @@ cc_library(
     deps = [
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
+        "@com_google_absl//absl/status",
     ],
     alwayslink = 1,
 )
@@ -119,6 +122,7 @@ cc_library(
     deps = [
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
+        "@com_google_absl//absl/status",
     ],
     alwayslink = 1,
 )
@@ -149,7 +153,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
-        "@local_xla//xla:util",
+        "@xla//xla:util",
     ],
 )
 
@@ -170,12 +174,14 @@ cc_library(
         "//tensorflow/core/protobuf/tpu:tpu_embedding_configuration_proto_cc",
         "//tensorflow/core/tpu:tpu_embedding_optimization_parameters_utils",
         "//tensorflow/core/tpu:tpu_embedding_output_layout_utils",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
-        "@local_tsl//tsl/platform:errors",
-        "@local_tsl//tsl/platform:logging",
-        "@local_xla//xla:status_macros",
+        "@xla//xla:status_macros",
+        "@xla//xla/tsl/platform:errors",
+        "@xla//xla/tsl/platform:logging",
     ],
     alwayslink = 1,
 )
@@ -189,7 +195,9 @@ cc_library(
     deps = [
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
-        "@local_xla//xla:util",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@xla//xla:util",
     ],
     alwayslink = 1,
 )
@@ -202,9 +210,11 @@ cc_library(
     deps = [
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
-        "//tensorflow/core:protos_all_cc",
-        "//tensorflow/core/tpu:tpu_embedding_optimization_parameters_utils",
-        "@com_google_absl//absl/strings",
+        "//tensorflow/core/framework:types_proto_cc",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:str_format",
+        "@xla//xla:util",
     ],
     alwayslink = 1,
 )
@@ -217,6 +227,8 @@ cc_library(
     deps = [
         "//tensorflow/core:framework",
         "//tensorflow/core/lib/core:status",
+        "@com_google_absl//absl/status",
+        "@xla//xla/tsl/platform:errors",
     ],
     alwayslink = 1,
 )

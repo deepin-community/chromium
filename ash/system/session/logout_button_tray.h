@@ -46,18 +46,19 @@ class ASH_EXPORT LogoutButtonTray : public TrayBackgroundView,
   void UpdateAfterLoginStatusChange() override;
   void UpdateLayout() override;
   void UpdateBackground() override;
-  void ClickedOutsideBubble() override;
+  void ClickedOutsideBubble(const ui::LocatedEvent& event) override;
   // No need to override since this view doesn't have an active/inactive state.
   // Clicking on it will log out of the session and make this view disappear.
   void UpdateTrayItemColor(bool is_active) override {}
   void HideBubbleWithView(const TrayBubbleView* bubble_view) override;
   void HideBubble(const TrayBubbleView* bubble_view) override;
-  std::u16string GetAccessibleNameForTray() override;
   void HandleLocaleChange() override;
   void OnThemeChanged() override;
 
   // SessionObserver:
   void OnActiveUserPrefServiceChanged(PrefService* prefs) override;
+
+  std::u16string GetLoginStatusString();
 
   views::MdTextButton* button_for_test() const { return button_; }
 
@@ -66,6 +67,9 @@ class ASH_EXPORT LogoutButtonTray : public TrayBackgroundView,
   void UpdateLogoutDialogDuration();
   void UpdateVisibility();
   void UpdateButtonTextAndImage();
+  void OnButtonTextChangedCallback(ax::mojom::StringAttribute attribute,
+                                   const std::optional<std::string>& name);
+  void SubscribeCallbacksForAccessibility();
 
   void ButtonPressed();
 
@@ -75,6 +79,8 @@ class ASH_EXPORT LogoutButtonTray : public TrayBackgroundView,
 
   // Observes user profile prefs.
   std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
+
+  base::CallbackListSubscription button_text_changed_subscription_;
 };
 
 }  // namespace ash

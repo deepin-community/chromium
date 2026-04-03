@@ -102,7 +102,7 @@ class ContextProviderObserver : viz::ContextLostObserver {
             base::BindPostTaskToCurrentDefault(on_gpu_capabilities_fetched)) {
     DETACH_FROM_SEQUENCE(main_sequence_checker_);
 
-    content::GetUIThreadTaskRunner({})->PostTask(
+    GetUIThreadTaskRunner({})->PostTask(
         FROM_HERE,
         base::BindOnce(
             &ContextProviderObserver::GetContextProviderOnMainSequence,
@@ -174,7 +174,7 @@ FrameSinkVideoCaptureDevice::~FrameSinkVideoCaptureDevice() {
 bool FrameSinkVideoCaptureDevice::CanSupportNV12Format() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // TODO(crbug.com/1518528): Determine if we actually need to know the format
+  // TODO(crbug.com/41491504): Determine if we actually need to know the format
   // client-side (which is what this method is used for) beyond sending it over
   // to the service side. If not, compute this information service-side. If yes,
   // port all of the below code to be a check on SharedImageCapabilities once
@@ -305,8 +305,6 @@ void FrameSinkVideoCaptureDevice::AllocateAndStartWithReceiverInternal() {
 
   AllocateCapturer(pixel_format);
 
-  receiver_->OnStarted();
-
   if (!suspend_requested_) {
     MaybeStartConsuming();
   }
@@ -336,7 +334,7 @@ void FrameSinkVideoCaptureDevice::AllocateCapturer(
                                       constraints.fixed_aspect_ratio);
 
   if (target_) {
-    capturer_->ChangeTarget(target_, sub_capture_target_version_);
+    capturer_->ChangeTarget(target_, sub_capture_version_);
   }
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
@@ -401,7 +399,7 @@ void FrameSinkVideoCaptureDevice::Resume() {
 void FrameSinkVideoCaptureDevice::ApplySubCaptureTarget(
     media::mojom::SubCaptureTargetType type,
     const base::Token& target,
-    uint32_t sub_capture_target_version,
+    uint32_t sub_capture_version,
     base::OnceCallback<void(media::mojom::ApplySubCaptureTargetResult)>
         callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -500,6 +498,11 @@ void FrameSinkVideoCaptureDevice::OnFrameCaptured(
   info->metadata.interactive_content = true;
 #endif
 
+  if (!has_sent_on_started_to_client_) {
+    has_sent_on_started_to_client_ = true;
+    receiver_->OnStarted();
+  }
+
   // Pass the video frame to the VideoFrameReceiver. This is done by first
   // passing the shared memory buffer handle and then notifying it that a new
   // frame is ready to be read from the buffer.
@@ -512,15 +515,15 @@ void FrameSinkVideoCaptureDevice::OnFrameCaptured(
       std::move(info)));
 }
 
-void FrameSinkVideoCaptureDevice::OnNewSubCaptureTargetVersion(
-    uint32_t sub_capture_target_version) {
+void FrameSinkVideoCaptureDevice::OnNewCaptureVersion(
+    const media::CaptureVersion& capture_version) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!receiver_) {
     return;
   }
 
-  receiver_->OnNewSubCaptureTargetVersion(sub_capture_target_version);
+  receiver_->OnNewCaptureVersion(capture_version);
 }
 
 void FrameSinkVideoCaptureDevice::OnFrameWithEmptyRegionCapture() {
@@ -553,21 +556,20 @@ void FrameSinkVideoCaptureDevice::OnLog(const std::string& message) {
 
 void FrameSinkVideoCaptureDevice::OnTargetChanged(
     const std::optional<viz::VideoCaptureTarget>& target,
-    uint32_t sub_capture_target_version) {
+    uint32_t sub_capture_version) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_GE(sub_capture_target_version, sub_capture_target_version_);
 
   target_ = target;
-  sub_capture_target_version_ = sub_capture_target_version;
+  sub_capture_version_ = sub_capture_version;
 
   if (capturer_) {
-    capturer_->ChangeTarget(target_, sub_capture_target_version_);
+    capturer_->ChangeTarget(target_, sub_capture_version_);
   }
 }
 
 void FrameSinkVideoCaptureDevice::OnTargetPermanentlyLost() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  OnTargetChanged(std::nullopt, sub_capture_target_version_);
+  OnTargetChanged(std::nullopt, sub_capture_version_);
   OnFatalError("Capture target has been permanently lost.");
 }
 
@@ -577,25 +579,28 @@ void FrameSinkVideoCaptureDevice::DidStop() {}
 
 void FrameSinkVideoCaptureDevice::CreateCapturer(
     mojo::PendingReceiver<viz::mojom::FrameSinkVideoCapturer> receiver) {
-  CreateCapturerViaGlobalManager(std::move(receiver));
+  CreateCapturerViaGlobalManager(std::move(receiver),
+                                 capture_params_.capture_version_source);
 }
 
 // static
 void FrameSinkVideoCaptureDevice::CreateCapturerViaGlobalManager(
-    mojo::PendingReceiver<viz::mojom::FrameSinkVideoCapturer> receiver) {
+    mojo::PendingReceiver<viz::mojom::FrameSinkVideoCapturer> receiver,
+    uint32_t capture_version_source) {
   // Send the receiver to UI thread because that's where HostFrameSinkManager
   // lives.
   GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
-          [](mojo::PendingReceiver<viz::mojom::FrameSinkVideoCapturer>
-                 receiver) {
+          [](mojo::PendingReceiver<viz::mojom::FrameSinkVideoCapturer> receiver,
+             uint32_t capture_version_source) {
             viz::HostFrameSinkManager* const manager =
                 GetHostFrameSinkManager();
             DCHECK(manager);
-            manager->CreateVideoCapturer(std::move(receiver));
+            manager->CreateVideoCapturer(std::move(receiver),
+                                         capture_version_source);
           },
-          std::move(receiver)));
+          std::move(receiver), capture_version_source));
 }
 
 void FrameSinkVideoCaptureDevice::MaybeStartConsuming() {
@@ -605,8 +610,8 @@ void FrameSinkVideoCaptureDevice::MaybeStartConsuming() {
     return;
   }
 
-  capturer_->Start(this,
-                   viz::mojom::BufferFormatPreference::kPreferGpuMemoryBuffer);
+  capturer_->Start(
+      this, viz::mojom::BufferFormatPreference::kPreferMappableSharedImage);
 }
 
 void FrameSinkVideoCaptureDevice::MaybeStopConsuming() {

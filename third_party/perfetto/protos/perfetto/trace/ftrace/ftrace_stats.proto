@@ -61,6 +61,17 @@ message FtraceCpuStats {
   optional uint64 read_events = 9;
 }
 
+// Kprobe statistical data, gathered from /sys/kernel/tracing/kprobe_profile.
+message FtraceKprobeStats {
+  // Cumulative number of kprobe events generated for this function
+  optional int64 hits = 1;
+  // Cumulative number of kprobe events that could not be generated for this
+  // function and were missed.  This happens when too much nesting
+  // happens between a kprobe and its kretprobe, overflowing the
+  // maxactives buffer.
+  optional int64 misses = 2;
+}
+
 // Errors and kernel buffer stats for the ftrace data source.
 message FtraceStats {
   enum Phase {
@@ -94,6 +105,9 @@ message FtraceStats {
   // one or more atrace categories not available on the device.
   optional string atrace_errors = 5;
 
+  // Error message due to exclusivity violation of a single-tenant feature.
+  optional string exclusive_feature_error = 13;
+
   // Ftrace events requested by the config but not present on device.
   repeated string unknown_ftrace_events = 6;
 
@@ -112,6 +126,19 @@ message FtraceStats {
   // Any traces with entries in this field should be investigated, as they
   // indicate a bug in perfetto or the kernel.
   repeated FtraceParseStatus ftrace_parse_errors = 9;
+
+  // Kprobe profile stats for functions hits and misses
+  optional FtraceKprobeStats kprobe_stats = 10;
+
+  // Per-cpu buffer size as returned by buffer_size_kb in pages (rounded up).
+  // Added in: perfetto v52.
+  optional uint32 cpu_buffer_size_pages = 11;
+
+  // Per-cpu buffer size as cached by our implementation (ftrace muxer), based
+  // on the value we're writing into the tracefs control file. Might not be
+  // exactly equal to |cpu_buffer_size_pages| due to the kernel allocating extra
+  // scratch pages (and/or other factors). Added in: perfetto v52.
+  optional uint32 cached_cpu_buffer_size_pages = 12;
 }
 
 enum FtraceParseStatus {

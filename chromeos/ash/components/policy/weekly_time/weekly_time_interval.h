@@ -37,7 +37,7 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_POLICY) WeeklyTimeInterval {
       const enterprise_management::WeeklyTimeIntervalProto& container,
       std::optional<int> timezone_offset);
 
-  // Return time interval made from Value::Dict in format:
+  // Return time interval made from base::DictValue in format:
   // { "start" : WeeklyTime,
   //   "end" : WeeklyTime }
   // WeeklyTime dictionary format:
@@ -48,7 +48,7 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_POLICY) WeeklyTimeInterval {
   // }
   // Return nullptr if `dict` contains an invalid interval.
   static std::unique_ptr<WeeklyTimeInterval> ExtractFromDict(
-      const base::Value::Dict& dict,
+      const base::DictValue& dict,
       std::optional<int> timezone_offset);
 
   WeeklyTimeInterval(const WeeklyTime& start, const WeeklyTime& end);
@@ -78,11 +78,6 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_POLICY) WeeklyTimeInterval {
   // |w| must be in the same type of timezone as the interval (timezone agnostic
   // or in a set timezone).
   bool Contains(const WeeklyTime& w) const;
-
-  // Returns the timezone_offset that |start_| and |end_| have.
-  std::optional<int> GetIntervalOffset(int timezone_offset) const {
-    return start_.timezone_offset();
-  }
 
   WeeklyTime start() const { return start_; }
 

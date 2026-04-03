@@ -4,6 +4,7 @@
 
 #include "components/bookmarks/browser/bookmark_storage.h"
 
+#include <optional>
 #include <string>
 
 #include "base/files/file_path.h"
@@ -16,9 +17,8 @@
 #include "base/time/time.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/test/test_bookmark_client.h"
-#include "components/sync/base/features.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace bookmarks {
 
@@ -36,13 +36,13 @@ std::unique_ptr<BookmarkModel> CreateModelWithOneBookmark() {
   return model;
 }
 
-absl::optional<base::Value::Dict> ReadFileToDict(
-    const base::FilePath& file_path) {
+std::optional<base::DictValue> ReadFileToDict(const base::FilePath& file_path) {
   std::string file_content;
   if (!base::ReadFileToString(file_path, &file_content)) {
-    return absl::nullopt;
+    return std::nullopt;
   }
-  return base::JSONReader::ReadDict(file_content);
+  return base::JSONReader::ReadDict(file_content,
+                                    base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 }
 
 }  // namespace
@@ -178,7 +178,7 @@ TEST(BookmarkStorageTest, RecordTimeSinceLastScheduledSave) {
 
 TEST(BookmarkStorageTest, ShouldSaveAccountNodes) {
   base::test::ScopedFeatureList features{
-      syncer::kEnableBookmarkFoldersForAccountStorage};
+      switches::kSyncEnableBookmarksInTransportMode};
 
   std::unique_ptr<BookmarkModel> model = CreateModelWithOneBookmark();
   model->CreateAccountPermanentFolders();
@@ -203,15 +203,15 @@ TEST(BookmarkStorageTest, ShouldSaveAccountNodes) {
   EXPECT_TRUE(base::PathExists(bookmarks_file_path));
   EXPECT_FALSE(base::PathExists(backup_file_path));
 
-  absl::optional<base::Value::Dict> file_content =
+  std::optional<base::DictValue> file_content =
       ReadFileToDict(bookmarks_file_path);
   ASSERT_TRUE(file_content.has_value());
   EXPECT_FALSE(file_content->empty());
 }
 
-TEST(BookmarkStorageTest, ShouldSaveEmptyFileToDiskIfAccountBookmarksEmpty) {
+TEST(BookmarkStorageTest, ShouldSaveDespiteAccountBookmarksEmpty) {
   base::test::ScopedFeatureList features{
-      syncer::kEnableBookmarkFoldersForAccountStorage};
+      switches::kSyncEnableBookmarksInTransportMode};
 
   std::unique_ptr<BookmarkModel> model = CreateModelWithOneBookmark();
   ASSERT_EQ(nullptr, model->account_bookmark_bar_node());
@@ -224,13 +224,15 @@ TEST(BookmarkStorageTest, ShouldSaveEmptyFileToDiskIfAccountBookmarksEmpty) {
   BookmarkStorage storage(model.get(), BookmarkStorage::kSelectAccountNodes,
                           bookmarks_file_path);
 
-  ASSERT_EQ(ReadFileToDict(bookmarks_file_path), absl::nullopt);
+  ASSERT_EQ(ReadFileToDict(bookmarks_file_path), std::nullopt);
 
   storage.ScheduleSave();
   task_environment.FastForwardUntilNoTasksRemain();
 
-  EXPECT_EQ(ReadFileToDict(bookmarks_file_path),
-            absl::make_optional<base::Value::Dict>());
+  std::optional<base::DictValue> file_content =
+      ReadFileToDict(bookmarks_file_path);
+  ASSERT_TRUE(file_content.has_value());
+  EXPECT_FALSE(file_content->empty());
 }
 
 }  // namespace bookmarks

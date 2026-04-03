@@ -16,6 +16,7 @@ limitations under the License.
 // XLA-specific dynamic stitch Op.
 
 #include <algorithm>
+#include <cstdint>
 #include <vector>
 
 #include "tensorflow/compiler/tf2xla/shape_util.h"
@@ -23,12 +24,14 @@ limitations under the License.
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/xla_builder.h"
 #include "xla/literal_util.h"
+#include "xla/xla_data.pb.h"
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/types.pb.h"
 
 namespace tensorflow {
 namespace {
@@ -142,8 +145,8 @@ class DynamicStitchOp : public XlaOpKernel {
 
     // Construct the reverse mapping, for each index, of which slice of which
     // input it comes from.
-    std::vector<int32> src_input_vector(number_of_indices);
-    std::vector<int32> src_slice_vector(number_of_indices);
+    std::vector<int32_t> src_input_vector(number_of_indices);
+    std::vector<int32_t> src_slice_vector(number_of_indices);
     std::vector<bool> src_index_used(number_of_indices);
     int index_used_count = 0;
     for (int input_num = 0; input_num < indices.size(); input_num++) {

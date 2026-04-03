@@ -38,7 +38,7 @@ class SaveDatasetV2Params : public DatasetParams {
                       std::vector<FunctionDef> func_lib, bool use_shard_func,
                       DataTypeVector output_dtypes,
                       std::vector<PartialTensorShape> output_shapes,
-                      string node_name, DataTypeVector type_arguments)
+                      std::string node_name, DataTypeVector type_arguments)
       : DatasetParams(std::move(output_dtypes), std::move(output_shapes),
                       std::move(node_name)),
         path_(path),
@@ -59,14 +59,15 @@ class SaveDatasetV2Params : public DatasetParams {
     return input_tensors;
   }
 
-  Status GetInputNames(std::vector<string>* input_names) const override {
+  absl::Status GetInputNames(
+      std::vector<std::string>* input_names) const override {
     input_names->clear();
     input_names->emplace_back(SaveDatasetV2Op::kInputDataset);
     input_names->emplace_back(SaveDatasetV2Op::kPath);
     return absl::OkStatus();
   }
 
-  Status GetAttributes(AttributeVector* attr_vector) const override {
+  absl::Status GetAttributes(AttributeVector* attr_vector) const override {
     attr_vector->clear();
     attr_vector->emplace_back(SaveDatasetV2Op::kCompression, compression_);
     attr_vector->emplace_back(SaveDatasetV2Op::kShardFunc, shard_func_);
@@ -78,11 +79,13 @@ class SaveDatasetV2Params : public DatasetParams {
     return absl::OkStatus();
   }
 
-  string path() const { return path_; }
+  std::string path() const { return path_; }
 
-  string dataset_type() const override { return SaveDatasetV2Op::kDatasetType; }
+  std::string dataset_type() const override {
+    return SaveDatasetV2Op::kDatasetType;
+  }
 
-  string op_name() const override { return "SaveDatasetV2"; }
+  std::string op_name() const override { return "SaveDatasetV2"; }
 
   std::vector<FunctionDef> func_lib() const override { return func_lib_; }
 
@@ -97,7 +100,7 @@ class SaveDatasetV2Params : public DatasetParams {
 
 class SaveDatasetV2OpTest : public DatasetOpsTestBase {
  public:
-  Status Initialize(const DatasetParams& dataset_params) {
+  absl::Status Initialize(const DatasetParams& dataset_params) {
     TF_RETURN_IF_ERROR(DatasetOpsTestBase::Initialize(dataset_params));
     auto params = static_cast<const SaveDatasetV2Params&>(dataset_params);
     save_filename_ = params.path();

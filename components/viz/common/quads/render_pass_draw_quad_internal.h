@@ -10,7 +10,6 @@
 #include "cc/paint/filter_operations.h"
 #include "components/viz/common/quads/draw_quad.h"
 #include "components/viz/common/viz_common_export.h"
-
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
 
@@ -18,7 +17,9 @@ namespace viz {
 
 class VIZ_COMMON_EXPORT RenderPassDrawQuadInternal : public DrawQuad {
  public:
-  static const size_t kMaskResourceIdIndex = 0;
+  void SetFilters(const gfx::Vector2dF& scale,
+                  const gfx::PointF& origin,
+                  const float backdrop_quality);
 
   gfx::RectF mask_uv_rect;
   gfx::Size mask_texture_size;
@@ -43,9 +44,7 @@ class VIZ_COMMON_EXPORT RenderPassDrawQuadInternal : public DrawQuad {
   // to the same target.
   mutable bool intersects_damage_under = true;
 
-  ResourceId mask_resource_id() const {
-    return resources.ids[kMaskResourceIdIndex];
-  }
+  ResourceId mask_resource_id() const { return resource_id; }
 
  protected:
   RenderPassDrawQuadInternal();

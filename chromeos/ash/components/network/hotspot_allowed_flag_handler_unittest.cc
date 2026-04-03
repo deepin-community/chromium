@@ -33,7 +33,7 @@ class HotspotAllowedFlagHandlerTest : public ::testing::Test {
 
   void OnGetManagerCallback(const std::string& property_name,
                             bool expected_value,
-                            std::optional<base::Value::Dict> result) {
+                            std::optional<base::DictValue> result) {
     if (!result) {
       ADD_FAILURE() << "Error getting Shill manager properties";
       return;
@@ -53,28 +53,6 @@ class HotspotAllowedFlagHandlerTest : public ::testing::Test {
   base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<HotspotAllowedFlagHandler> hotspot_allowed_flag_handler_;
 };
-
-TEST_F(HotspotAllowedFlagHandlerTest, FeatureEnabled) {
-  feature_list_.InitAndEnableFeature(features::kHotspot);
-  hotspot_allowed_flag_handler_->Init();
-  base::RunLoop().RunUntilIdle();
-  ShillManagerClient::Get()->GetProperties(
-      base::BindOnce(&HotspotAllowedFlagHandlerTest::OnGetManagerCallback,
-                     base::Unretained(this), shill::kTetheringAllowedProperty,
-                     /*expected_value=*/true));
-  base::RunLoop().RunUntilIdle();
-}
-
-TEST_F(HotspotAllowedFlagHandlerTest, FeatureDisabled) {
-  feature_list_.InitAndDisableFeature(features::kHotspot);
-  hotspot_allowed_flag_handler_->Init();
-  base::RunLoop().RunUntilIdle();
-  ShillManagerClient::Get()->GetProperties(
-      base::BindOnce(&HotspotAllowedFlagHandlerTest::OnGetManagerCallback,
-                     base::Unretained(this), shill::kTetheringAllowedProperty,
-                     /*expected_value=*/false));
-  base::RunLoop().RunUntilIdle();
-}
 
 TEST_F(HotspotAllowedFlagHandlerTest, ExperimentalCarriersEnabled) {
   feature_list_.InitAndEnableFeature(

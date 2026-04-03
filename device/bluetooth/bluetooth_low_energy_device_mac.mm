@@ -7,13 +7,16 @@
 #import <CoreFoundation/CoreFoundation.h>
 #include <stddef.h>
 
+#include <algorithm>
+
 #include "base/apple/scoped_cftyperef.h"
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
 #include "base/memory/ptr_util.h"
-#include "base/ranges/algorithm.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/sys_string_conversions.h"
+#include "crypto/hash.h"
 #include "device/bluetooth/bluetooth_device.h"
 #include "device/bluetooth/bluetooth_low_energy_adapter_apple.h"
 #include "device/bluetooth/bluetooth_low_energy_peripheral_delegate.h"
@@ -84,7 +87,7 @@ uint16_t BluetoothLowEnergyDeviceMac::GetDeviceID() const {
 }
 
 uint16_t BluetoothLowEnergyDeviceMac::GetAppearance() const {
-  // TODO(crbug.com/588083): Implementing GetAppearance()
+  // TODO(crbug.com/41240161): Implementing GetAppearance()
   // on mac, win, and android platforms for chrome
   NOTIMPLEMENTED();
   return 0;
@@ -409,9 +412,9 @@ std::string BluetoothLowEnergyDeviceMac::GetPeripheralHashAddress(
 std::string BluetoothLowEnergyDeviceMac::GetPeripheralHashAddress(
     std::string_view device_identifier) {
   const size_t kCanonicalAddressNumberOfBytes = 6;
-  uint8_t raw[kCanonicalAddressNumberOfBytes];
-  crypto::SHA256HashString(device_identifier, raw, sizeof(raw));
-  return CanonicalizeBluetoothAddress(base::HexEncode(raw));
+  const auto hash = crypto::hash::Sha256(device_identifier);
+  return CanonicalizeBluetoothAddress(
+      base::span(hash).first<kCanonicalAddressNumberOfBytes>());
 }
 
 void BluetoothLowEnergyDeviceMac::DidConnectPeripheral() {
@@ -440,7 +443,7 @@ void BluetoothLowEnergyDeviceMac::SendNotificationIfDiscoveryComplete() {
   // Notify when all services have been discovered.
   bool discovery_complete =
       discovery_pending_count_ == 0 &&
-      base::ranges::all_of(
+      std::ranges::all_of(
           gatt_services_, [](GattServiceMap::value_type& pair) {
             BluetoothRemoteGattService* gatt_service = pair.second.get();
             return static_cast<BluetoothRemoteGattServiceMac*>(gatt_service)
@@ -537,7 +540,7 @@ void BluetoothLowEnergyDeviceMac::DidDisconnectPeripheral(NSError* error) {
 
 std::ostream& operator<<(std::ostream& out,
                          const BluetoothLowEnergyDeviceMac& device) {
-  // TODO(crbug.com/703878): Should use
+  // TODO(crbug.com/40511884): Should use
   // BluetoothLowEnergyDeviceMac::GetNameForDisplay() instead.
   std::optional<std::string> name = device.GetName();
   const char* is_gatt_connected =

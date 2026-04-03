@@ -49,8 +49,8 @@ TEST_F(DynamicStitchOpTest, Simple_OneD) {
   MakeOp(2, DT_FLOAT);
 
   // Feed and run.
-  AddInputFromArray<int32>(TensorShape({3}), {0, 4, 7});
-  AddInputFromArray<int32>(TensorShape({5}), {1, 6, 2, 3, 5});
+  AddInputFromArray<int32_t>(TensorShape({3}), {0, 4, 7});
+  AddInputFromArray<int32_t>(TensorShape({5}), {1, 6, 2, 3, 5});
   AddInputFromArray<float>(TensorShape({3}), {0, 40, 70});
   AddInputFromArray<float>(TensorShape({5}), {10, 60, 20, 30, 50});
   TF_ASSERT_OK(RunOpKernel());
@@ -65,9 +65,9 @@ TEST_F(DynamicStitchOpTest, Simple_TwoD) {
   MakeOp(3, DT_FLOAT);
 
   // Feed and run.
-  AddInputFromArray<int32>(TensorShape({3}), {0, 4, 7});
-  AddInputFromArray<int32>(TensorShape({2}), {1, 6});
-  AddInputFromArray<int32>(TensorShape({3}), {2, 3, 5});
+  AddInputFromArray<int32_t>(TensorShape({3}), {0, 4, 7});
+  AddInputFromArray<int32_t>(TensorShape({2}), {1, 6});
+  AddInputFromArray<int32_t>(TensorShape({3}), {2, 3, 5});
   AddInputFromArray<float>(TensorShape({3, 2}), {0, 1, 40, 41, 70, 71});
   AddInputFromArray<float>(TensorShape({2, 2}), {10, 11, 60, 61});
   AddInputFromArray<float>(TensorShape({3, 2}), {20, 21, 30, 31, 50, 51});
@@ -84,7 +84,7 @@ TEST_F(DynamicStitchOpTest, IndicesNotCoverAllPortions) {
   MakeOp(1, DT_FLOAT);
 
   // Feed and run.
-  AddInputFromArray<int32>(TensorShape({1}), {2});
+  AddInputFromArray<int32_t>(TensorShape({1}), {2});
   AddInputFromArray<float>(TensorShape({1}), {1});
   TF_ASSERT_OK(RunOpKernel());
 
@@ -98,11 +98,11 @@ TEST_F(DynamicStitchOpTest, Error_IndicesMultiDimensional) {
   MakeOp(2, DT_FLOAT);
 
   // Feed and run.
-  AddInputFromArray<int32>(TensorShape({3}), {0, 4, 7});
-  AddInputFromArray<int32>(TensorShape({1, 5}), {1, 6, 2, 3, 5});
+  AddInputFromArray<int32_t>(TensorShape({3}), {0, 4, 7});
+  AddInputFromArray<int32_t>(TensorShape({1, 5}), {1, 6, 2, 3, 5});
   AddInputFromArray<float>(TensorShape({3}), {0, 40, 70});
   AddInputFromArray<float>(TensorShape({5}), {10, 60, 20, 30, 50});
-  Status s = RunOpKernel();
+  absl::Status s = RunOpKernel();
   EXPECT_TRUE(absl::StrContains(
       s.ToString(),
       "data[1].shape = [5] does not start with indices[1].shape = [1,5]"))
@@ -113,11 +113,11 @@ TEST_F(DynamicStitchOpTest, Error_DataNumDimsMismatch) {
   MakeOp(2, DT_FLOAT);
 
   // Feed and run.
-  AddInputFromArray<int32>(TensorShape({3}), {0, 4, 7});
-  AddInputFromArray<int32>(TensorShape({5}), {1, 6, 2, 3, 5});
+  AddInputFromArray<int32_t>(TensorShape({3}), {0, 4, 7});
+  AddInputFromArray<int32_t>(TensorShape({5}), {1, 6, 2, 3, 5});
   AddInputFromArray<float>(TensorShape({3}), {0, 40, 70});
   AddInputFromArray<float>(TensorShape({1, 5}), {10, 60, 20, 30, 50});
-  Status s = RunOpKernel();
+  absl::Status s = RunOpKernel();
   EXPECT_TRUE(absl::StrContains(
       s.ToString(),
       "data[1].shape = [1,5] does not start with indices[1].shape = [5]"))
@@ -128,12 +128,12 @@ TEST_F(DynamicStitchOpTest, Error_DataDimSizeMismatch) {
   MakeOp(2, DT_FLOAT);
 
   // Feed and run.
-  AddInputFromArray<int32>(TensorShape({3}), {0, 4, 5});
-  AddInputFromArray<int32>(TensorShape({4}), {1, 6, 2, 3});
+  AddInputFromArray<int32_t>(TensorShape({3}), {0, 4, 5});
+  AddInputFromArray<int32_t>(TensorShape({4}), {1, 6, 2, 3});
   AddInputFromArray<float>(TensorShape({3, 1}), {0, 40, 70});
   AddInputFromArray<float>(TensorShape({4, 2}),
                            {10, 11, 60, 61, 20, 21, 30, 31});
-  Status s = RunOpKernel();
+  absl::Status s = RunOpKernel();
   EXPECT_TRUE(
       absl::StrContains(s.ToString(),
                         "Need data[0].shape[1:] = data[1].shape[1:], got "
@@ -145,11 +145,11 @@ TEST_F(DynamicStitchOpTest, Error_DataAndIndicesSizeMismatch) {
   MakeOp(2, DT_FLOAT);
 
   // Feed and run.
-  AddInputFromArray<int32>(TensorShape({3}), {0, 4, 7});
-  AddInputFromArray<int32>(TensorShape({5}), {1, 6, 2, 3, 5});
+  AddInputFromArray<int32_t>(TensorShape({3}), {0, 4, 7});
+  AddInputFromArray<int32_t>(TensorShape({5}), {1, 6, 2, 3, 5});
   AddInputFromArray<float>(TensorShape({3}), {0, 40, 70});
   AddInputFromArray<float>(TensorShape({4}), {10, 60, 20, 30});
-  Status s = RunOpKernel();
+  absl::Status s = RunOpKernel();
   EXPECT_TRUE(absl::StrContains(
       s.ToString(),
       "data[1].shape = [4] does not start with indices[1].shape = [5]"))

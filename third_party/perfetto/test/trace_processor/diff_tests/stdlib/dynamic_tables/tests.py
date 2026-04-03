@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -43,12 +43,13 @@ class DynamicTables(TestSuite):
         out=Path('descendant_slice.out'))
 
   # Ancestor slice by stack table.
-  def test_ancestor_slice_by_stack(self):
+  def testancestor_slice_by_stack(self):
     return DiffTestBlueprint(
         trace=Path('slice_stacks.textproto'),
         query="""
+        INCLUDE PERFETTO MODULE slices.stack;
         SELECT ts, name FROM ancestor_slice_by_stack((
-          SELECT stack_id FROM slice
+          SELECT stack_id FROM slice_with_stack_id
           WHERE name = 'event_depth_2'
           LIMIT 1
           ));
@@ -57,25 +58,30 @@ class DynamicTables(TestSuite):
         "ts","name"
         1000,"event_depth_0"
         2000,"event_depth_1"
+        3000,"event_depth_2"
         8000,"event_depth_0"
         9000,"event_depth_1"
+        10000,"event_depth_2"
         """))
 
   # Descendant slice by stack table.
-  def test_descendant_slice_by_stack(self):
+  def testdescendant_slice_by_stack(self):
     return DiffTestBlueprint(
         trace=Path('slice_stacks.textproto'),
         query="""
+        INCLUDE PERFETTO MODULE slices.stack;
         SELECT ts, name FROM descendant_slice_by_stack((
-          SELECT stack_id FROM slice
+          SELECT stack_id FROM slice_with_stack_id
           WHERE name = 'event_depth_0'
           LIMIT 1
           ));
         """,
         out=Csv("""
         "ts","name"
+        1000,"event_depth_0"
         2000,"event_depth_1"
         3000,"event_depth_2"
+        8000,"event_depth_0"
         9000,"event_depth_1"
         10000,"event_depth_2"
         """))
@@ -94,12 +100,11 @@ class DynamicTables(TestSuite):
         query="""
         SELECT eac.id, eac.depth, eac.frame_id, eac.annotation,
                spf.name
-        FROM experimental_annotated_callstack eac
-        JOIN perf_sample ps
-          ON (eac.start_id = ps.callsite_id)
+        FROM perf_sample ps
+        JOIN experimental_annotated_callstack(ps.callsite_id) eac
         JOIN stack_profile_frame spf
           ON (eac.frame_id = spf.id)
-        ORDER BY eac.start_id ASC, eac.depth ASC;
+        ORDER BY ps.callsite_id ASC, eac.depth ASC;
         """,
         out=Path('perf_sample_sc_annotated_callstack.out'))
 
@@ -203,9 +208,10 @@ class DynamicTables(TestSuite):
         query="""
         SELECT
           TO_TIMECODE(0) AS t0,
-          TO_TIMECODE(123456789123456789) AS tN
+          TO_TIMECODE(3599123456789) AS t1,
+          TO_TIMECODE(3600123456789) AS t2
         """,
         out=Csv("""
-        "t0","tN"
-        "00:00:00 000 000 000","33:33:09 123 456 789"
+        "t0","t1","t2"
+        "00:00:00 000 000 000","00:59:59 123 456 789","01:00:00 123 456 789"
         """))

@@ -24,8 +24,10 @@
 // CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "dawn/native/ShaderModule.h"
@@ -81,11 +83,6 @@ class ShaderModuleTests : public DawnTest {
     }
 
     bool SupportsCreatePipelineAsync() const {
-        // OpenGL and OpenGLES don't support it.
-        if (IsOpenGL() || IsOpenGLES()) {
-            return false;
-        }
-
         // Async pipeline creation is disabled with Metal AMD and Validation.
         // See crbug.com/dawn/1200.
         if (IsAMD() && IsMetal() && IsBackendValidationEnabled()) {
@@ -98,6 +95,7 @@ class ShaderModuleTests : public DawnTest {
     wgpu::RenderPipeline DoCreateRenderPipeline(const wgpu::ShaderModule& vsModule,
                                                 const wgpu::ShaderModule& fsModule) {
         utils::ComboRenderPipelineDescriptor renderPipelineDescriptor;
+        renderPipelineDescriptor.layout = utils::MakeBasicPipelineLayout(device, nullptr);
         renderPipelineDescriptor.vertex.module = vsModule;
         renderPipelineDescriptor.cFragment.module = fsModule;
         renderPipelineDescriptor.cTargets[0].format = kRenderAttachmentFormat;
@@ -109,51 +107,49 @@ class ShaderModuleTests : public DawnTest {
     void DoCreateRenderPipelineAsync(const wgpu::ShaderModule& vsModule,
                                      const wgpu::ShaderModule& fsModule) {
         utils::ComboRenderPipelineDescriptor renderPipelineDescriptor;
+        renderPipelineDescriptor.layout = utils::MakeBasicPipelineLayout(device, nullptr);
         renderPipelineDescriptor.vertex.module = vsModule;
         renderPipelineDescriptor.cFragment.module = fsModule;
         renderPipelineDescriptor.cTargets[0].format = kRenderAttachmentFormat;
         renderPipelineDescriptor.primitive.topology = wgpu::PrimitiveTopology::PointList;
 
         device.CreateRenderPipelineAsync(
-            &renderPipelineDescriptor,
-            [](WGPUCreatePipelineAsyncStatus status, WGPURenderPipeline returnPipeline,
-               const char* message, void* userdata) {
-                EXPECT_EQ(WGPUCreatePipelineAsyncStatus::WGPUCreatePipelineAsyncStatus_Success,
-                          status);
+            &renderPipelineDescriptor, wgpu::CallbackMode::AllowProcessEvents,
+            [this](wgpu::CreatePipelineAsyncStatus status, wgpu::RenderPipeline pipeline,
+                   wgpu::StringView message) {
+                EXPECT_EQ(wgpu::CreatePipelineAsyncStatus::Success, status);
 
-                CreatePipelineAsyncTask* currentTask =
-                    static_cast<CreatePipelineAsyncTask*>(userdata);
-                currentTask->renderPipeline = wgpu::RenderPipeline::Acquire(returnPipeline);
-                currentTask->isCompleted = true;
-                currentTask->message = message;
-            },
-            &task);
+                task.renderPipeline = std::move(pipeline);
+                task.isCompleted = true;
+                task.message = message;
+            });
     }
 
     wgpu::ComputePipeline DoCreateComputePipeline(const wgpu::ShaderModule& module) {
         wgpu::ComputePipelineDescriptor csDesc;
+        auto bgl = utils::MakeBindGroupLayout(
+            device, {{0, wgpu::ShaderStage::Compute, wgpu::BufferBindingType::Storage}});
+        csDesc.layout = utils::MakeBasicPipelineLayout(device, &bgl);
         csDesc.compute.module = module;
         return device.CreateComputePipeline(&csDesc);
     }
 
     void DoCreateComputePipelineAsync(const wgpu::ShaderModule& module) {
         wgpu::ComputePipelineDescriptor csDesc;
+        auto bgl = utils::MakeBindGroupLayout(
+            device, {{0, wgpu::ShaderStage::Compute, wgpu::BufferBindingType::Storage}});
+        csDesc.layout = utils::MakeBasicPipelineLayout(device, &bgl);
         csDesc.compute.module = module;
 
         device.CreateComputePipelineAsync(
-            &csDesc,
-            [](WGPUCreatePipelineAsyncStatus status, WGPUComputePipeline returnPipeline,
-               const char* message, void* userdata) {
-                EXPECT_EQ(WGPUCreatePipelineAsyncStatus::WGPUCreatePipelineAsyncStatus_Success,
-                          status);
-
-                CreatePipelineAsyncTask* currentTask =
-                    static_cast<CreatePipelineAsyncTask*>(userdata);
-                currentTask->computePipeline = wgpu::ComputePipeline::Acquire(returnPipeline);
-                currentTask->isCompleted = true;
-                currentTask->message = message;
-            },
-            &task);
+            &csDesc, wgpu::CallbackMode::AllowProcessEvents,
+            [this](wgpu::CreatePipelineAsyncStatus status, wgpu::ComputePipeline pipeline,
+                   wgpu::StringView message) {
+                EXPECT_EQ(wgpu::CreatePipelineAsyncStatus::Success, status);
+                task.computePipeline = std::move(pipeline);
+                task.isCompleted = true;
+                task.message = message;
+            });
     }
 
     CreatePipelineAsyncTask task;
@@ -175,7 +171,7 @@ TEST_P(ShaderModuleTests, CachedShader) {
     auto scopedUseTintProgram = shaderModule->UseTintProgram();
 
     // UseTintProgram() should increase the external ref count
-    EXPECT_TRUE(shaderModule->GetTintProgramForTesting());
+    EXPECT_TRUE(shaderModule->GetNullableTintProgramForTesting());
     EXPECT_EQ(shaderModule->GetTintProgramRecreateCountForTesting(), 0);
     EXPECT_EQ(shaderModule->GetExternalRefCountForTesting(), 2ull);
 
@@ -183,13 +179,14 @@ TEST_P(ShaderModuleTests, CachedShader) {
     module = {};
 
     // The mTintProgram should be alive.
-    EXPECT_TRUE(shaderModule->GetTintProgramForTesting());
+    EXPECT_TRUE(shaderModule->GetNullableTintProgramForTesting());
     EXPECT_EQ(shaderModule->GetTintProgramRecreateCountForTesting(), 0);
     EXPECT_EQ(shaderModule->GetExternalRefCountForTesting(), 1ull);
 
     // Drop the scopedUseTintProgram
     scopedUseTintProgram = nullptr;
-    EXPECT_FALSE(shaderModule->GetTintProgramForTesting());
+    // The mTintProgram should be released.
+    EXPECT_FALSE(shaderModule->GetNullableTintProgramForTesting());
     EXPECT_EQ(shaderModule->GetTintProgramRecreateCountForTesting(), 0);
     EXPECT_EQ(shaderModule->GetExternalRefCountForTesting(), 0ull);
 
@@ -199,14 +196,22 @@ TEST_P(ShaderModuleTests, CachedShader) {
     // The module should be from the cache.
     EXPECT_EQ(shaderModule.Get(), FromAPI(module.Get()));
 
-    // The mTintProgram should be null.
-    EXPECT_FALSE(shaderModule->GetTintProgramForTesting());
+    // The mTintProgram should be null, as it should be lazily recreated when calling
+    // GetTintProgram().
+    EXPECT_FALSE(shaderModule->GetNullableTintProgramForTesting());
     EXPECT_EQ(shaderModule->GetExternalRefCountForTesting(), 1ull);
     EXPECT_EQ(shaderModule->GetTintProgramRecreateCountForTesting(), 0);
 
-    // Call UseTintProgram() should re-create mTintProgram.
+    // Calling UseTintProgram() should add the ref count but not recreate mTintProgram, as it should
+    // be lazily recreated when calling GetTintProgram.
     scopedUseTintProgram = shaderModule->UseTintProgram();
-    EXPECT_TRUE(shaderModule->GetTintProgramForTesting());
+    EXPECT_FALSE(shaderModule->GetNullableTintProgramForTesting());
+    EXPECT_EQ(shaderModule->GetExternalRefCountForTesting(), 2ull);
+    EXPECT_EQ(shaderModule->GetTintProgramRecreateCountForTesting(), 0);
+
+    // Calling GetTintProgram() should recreate the mTintProgram.
+    EXPECT_TRUE(shaderModule->GetTintProgram());
+    EXPECT_TRUE(shaderModule->GetNullableTintProgramForTesting());
     EXPECT_EQ(shaderModule->GetExternalRefCountForTesting(), 2ull);
     EXPECT_EQ(shaderModule->GetTintProgramRecreateCountForTesting(), 1);
 }
@@ -220,11 +225,11 @@ TEST_P(ShaderModuleTests, CreateRenderPipeline) {
 
     Ref<ShaderModuleBase> vsShaderModule(FromAPI(vsModule.Get()));
     EXPECT_TRUE(vsShaderModule.Get());
-    EXPECT_TRUE(vsShaderModule->GetTintProgramForTesting());
+    EXPECT_TRUE(vsShaderModule->GetNullableTintProgramForTesting());
 
     Ref<ShaderModuleBase> fsShaderModule(FromAPI(fsModule.Get()));
     EXPECT_TRUE(fsShaderModule.Get());
-    EXPECT_TRUE(fsShaderModule->GetTintProgramForTesting());
+    EXPECT_TRUE(fsShaderModule->GetNullableTintProgramForTesting());
 
     EXPECT_EQ(vsShaderModule->GetExternalRefCountForTesting(), 1ull);
     EXPECT_EQ(fsShaderModule->GetExternalRefCountForTesting(), 1ull);
@@ -238,8 +243,8 @@ TEST_P(ShaderModuleTests, CreateRenderPipeline) {
     EXPECT_EQ(fsShaderModule->GetExternalRefCountForTesting(), 0ull);
 
     // mTintProgram should be released already.
-    EXPECT_FALSE(vsShaderModule->GetTintProgramForTesting());
-    EXPECT_FALSE(fsShaderModule->GetTintProgramForTesting());
+    EXPECT_FALSE(vsShaderModule->GetNullableTintProgramForTesting());
+    EXPECT_FALSE(fsShaderModule->GetNullableTintProgramForTesting());
 
     vsModule = utils::CreateShaderModule(device, kVertexShader);
     fsModule = utils::CreateShaderModule(device, kFragmentShader);
@@ -257,8 +262,8 @@ TEST_P(ShaderModuleTests, CreateRenderPipeline) {
     EXPECT_EQ(fsShaderModule->GetExternalRefCountForTesting(), 1ull);
 
     // mTintProgram should be released already.
-    EXPECT_FALSE(vsShaderModule->GetTintProgramForTesting());
-    EXPECT_FALSE(fsShaderModule->GetTintProgramForTesting());
+    EXPECT_FALSE(vsShaderModule->GetNullableTintProgramForTesting());
+    EXPECT_FALSE(fsShaderModule->GetNullableTintProgramForTesting());
 }
 
 // Check mTintProgram in ShaderModule is released after async creation of a RenderPipeline is done.
@@ -269,11 +274,11 @@ TEST_P(ShaderModuleTests, CreateRenderPipelineAsync) {
 
     Ref<ShaderModuleBase> vsShaderModule(FromAPI(vsModule.Get()));
     EXPECT_TRUE(vsShaderModule.Get());
-    EXPECT_TRUE(vsShaderModule->GetTintProgramForTesting());
+    EXPECT_TRUE(vsShaderModule->GetNullableTintProgramForTesting());
 
     Ref<ShaderModuleBase> fsShaderModule(FromAPI(fsModule.Get()));
     EXPECT_TRUE(fsShaderModule.Get());
-    EXPECT_TRUE(fsShaderModule->GetTintProgramForTesting());
+    EXPECT_TRUE(fsShaderModule->GetNullableTintProgramForTesting());
 
     if (!SupportsCreatePipelineAsync()) {
         EXPECT_EQ(vsShaderModule->GetExternalRefCountForTesting(), 1ull);
@@ -313,8 +318,8 @@ TEST_P(ShaderModuleTests, CreateRenderPipelineAsync) {
     EXPECT_EQ(fsShaderModule->GetExternalRefCountForTesting(), 0ull);
 
     // mTintProgram should be released already.
-    EXPECT_FALSE(vsShaderModule->GetTintProgramForTesting());
-    EXPECT_FALSE(fsShaderModule->GetTintProgramForTesting());
+    EXPECT_FALSE(vsShaderModule->GetNullableTintProgramForTesting());
+    EXPECT_FALSE(fsShaderModule->GetNullableTintProgramForTesting());
 }
 
 // Check mTintProgram in ShaderModule is released after creation of a ComputePipeline is done.
@@ -325,7 +330,7 @@ TEST_P(ShaderModuleTests, CreateComputePipeline) {
 
     Ref<ShaderModuleBase> shaderModule(FromAPI(module.Get()));
     EXPECT_TRUE(shaderModule.Get());
-    EXPECT_TRUE(shaderModule->GetTintProgramForTesting());
+    EXPECT_TRUE(shaderModule->GetNullableTintProgramForTesting());
 
     EXPECT_EQ(shaderModule->GetExternalRefCountForTesting(), 1ull);
 
@@ -337,7 +342,7 @@ TEST_P(ShaderModuleTests, CreateComputePipeline) {
     EXPECT_EQ(shaderModule->GetExternalRefCountForTesting(), 0ull);
 
     // mTintProgram should be released already.
-    EXPECT_FALSE(shaderModule->GetTintProgramForTesting());
+    EXPECT_FALSE(shaderModule->GetNullableTintProgramForTesting());
 
     // Create a pipeline with the same shader source code
     module = utils::CreateShaderModule(device, kComputeShader);
@@ -351,7 +356,7 @@ TEST_P(ShaderModuleTests, CreateComputePipeline) {
     EXPECT_EQ(shaderModule->GetExternalRefCountForTesting(), 1ull);
 
     // mTintProgram should be released already.
-    EXPECT_FALSE(shaderModule->GetTintProgramForTesting());
+    EXPECT_FALSE(shaderModule->GetNullableTintProgramForTesting());
 }
 
 // Check mTintProgram in ShaderModule is released after async creation of a ComputePipeline is done.
@@ -361,13 +366,12 @@ TEST_P(ShaderModuleTests, CreateComputePipelineAsync) {
 
     Ref<ShaderModuleBase> shaderModule(FromAPI(module.Get()));
     EXPECT_TRUE(shaderModule.Get());
-    EXPECT_TRUE(shaderModule->GetTintProgramForTesting());
+    EXPECT_TRUE(shaderModule->GetNullableTintProgramForTesting());
 
-    if (SupportsCreatePipelineAsync()) {
-        EXPECT_LE(shaderModule->GetExternalRefCountForTesting(), 2ull);
-        EXPECT_NE(shaderModule->GetExternalRefCountForTesting(), 0ull);
-    } else {
-        EXPECT_EQ(shaderModule->GetExternalRefCountForTesting(), 1ull);
+    EXPECT_LE(shaderModule->GetExternalRefCountForTesting(), 2ull);
+    EXPECT_NE(shaderModule->GetExternalRefCountForTesting(), 0ull);
+
+    if (!SupportsCreatePipelineAsync()) {
         do {
             WaitABit();
         } while (!task.isCompleted);
@@ -391,7 +395,7 @@ TEST_P(ShaderModuleTests, CreateComputePipelineAsync) {
     EXPECT_EQ(shaderModule->GetExternalRefCountForTesting(), 0ull);
 
     // mTintProgram should be released already.
-    EXPECT_FALSE(shaderModule->GetTintProgramForTesting());
+    EXPECT_FALSE(shaderModule->GetNullableTintProgramForTesting());
 }
 
 DAWN_INSTANTIATE_TEST(ShaderModuleTests,

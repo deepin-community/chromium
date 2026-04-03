@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ref.h"
 #include "base/strings/string_util.h"
 
@@ -73,7 +74,8 @@ std::ostream& operator<<(std::ostream& os, const AsHex<N, T>& as_hex) {
   buf[N] = '\0';
   T value = as_hex.value;
   for (int i = N - 1; i >= 0; --i, value >>= 4)
-    buf[i] = "0123456789ABCDEF"[static_cast<int>(value & 0x0F)];
+    UNSAFE_TODO(buf[i]) =
+        UNSAFE_TODO("0123456789ABCDEF"[static_cast<int>(value & 0x0F)]);
   if (value)
     os << "...";  // To indicate data truncation, or negative values.
   os << buf;

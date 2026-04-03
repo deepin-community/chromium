@@ -30,11 +30,12 @@
 #include "third_party/blink/renderer/core/editing/selection_controller.h"
 
 #include "base/auto_reset.h"
+#include "base/trace_event/trace_event.h"
 #include "third_party/blink/public/common/input/web_menu_source_type.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
+#include "third_party/blink/renderer/core/annotation/annotation_agent_impl.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/editing/bidi_adjustment.h"
 #include "third_party/blink/renderer/core/editing/editing_behavior.h"
 #include "third_party/blink/renderer/core/editing/editing_boundary.h"
@@ -44,12 +45,12 @@
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker_controller.h"
+#include "third_party/blink/renderer/core/editing/position_iterator.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/set_selection_options.h"
 #include "third_party/blink/renderer/core/editing/spellcheck/spell_checker.h"
 #include "third_party/blink/renderer/core/editing/suggestion/text_suggestion_controller.h"
 #include "third_party/blink/renderer/core/editing/visible_position.h"
-#include "third_party/blink/renderer/core/fragment_directive/text_fragment_handler.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
@@ -61,6 +62,7 @@
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "ui/gfx/geometry/point_conversions.h"
 
 namespace blink {
@@ -237,16 +239,9 @@ SelectionInFlatTree AdjustSelectionByUserSelect(
     }
   }
 
-  if (RuntimeEnabledFeatures::AvoidCaretVisibleSelectionAdjusterEnabled()) {
-    return SelectionInFlatTree::Builder()
-        .SetBaseAndExtent(new_start_pos, new_end_pos)
-        .Build();
-  } else {
-    return SelectionInFlatTree::Builder()
-        .SetBaseAndExtent(MostBackwardCaretPosition(new_start_pos),
-                          MostForwardCaretPosition(new_end_pos))
-        .Build();
-  }
+  return SelectionInFlatTree::Builder()
+      .SetBaseAndExtent(new_start_pos, new_end_pos)
+      .Build();
 }
 
 SelectionController::~SelectionController() = default;
@@ -432,12 +427,25 @@ bool SelectionController::HandleSingleClick(
       Selection().ComputeVisibleSelectionInFlatTree();
   const bool is_editable = IsEditable(*inner_node);
 
-  if (frame_->GetEditor().Behavior().ShouldToggleMenuWhenCaretTapped() &&
-      is_editable && event.Event().FromTouch() && selection.IsCaret() &&
-      selection.Anchor() == position_to_use.GetPosition()) {
+  // `IsEquivalent` accounts for sub-pixel layout offsets in high-DPI
+  // environments to ensure clicks visually on the caret are correctly
+  // identified.
+  const bool is_click_on_existing_caret =
+      is_editable && selection.IsCaret() &&
+      selection.Anchor().IsEquivalent(position_to_use.GetPosition());
+
+  if (is_click_on_existing_caret) {
+    // Setting this flag informs UpdateSelectionForContextMenuEvent that
+    // the click was on the caret, preventing it from expanding to a word.
     mouse_down_was_single_click_on_caret_ = true;
-    HandleTapOnCaret(event, selection.AsSelection());
-    return false;
+
+    if (event.Event().FromTouch() &&
+        frame_->GetEditor().Behavior().ShouldToggleMenuWhenCaretTapped()) {
+      // For touch, we must trigger the selection handles and the mobile-style
+      // floating menu (lollipops).
+      HandleTapOnCaret(event, selection.AsSelection());
+      return false;
+    }
   }
 
   // Don't restart the selection when the mouse is pressed on an
@@ -521,7 +529,11 @@ bool SelectionController::HandleSingleClick(
 
   // SelectionControllerTest_SetCaretAtHitTestResultWithDisconnectedPosition
   // makes the IsValidFor() check fail.
-  if (is_editable && event.Event().FromTouch() &&
+  bool event_should_trigger_suggestion =
+      event.Event().FromTouch() ||
+      (RuntimeEnabledFeatures::LeftClickToHandleSuggestionEnabled() &&
+       event.Event().button == WebPointerProperties::Button::kLeft);
+  if (is_editable && event_should_trigger_suggestion &&
       position_to_use.IsValidFor(*frame_->GetDocument())) {
     frame_->GetTextSuggestionController().HandlePotentialSuggestionTap(
         position_to_use.GetPosition());
@@ -670,7 +682,7 @@ WebInputEventResult SelectionController::UpdateSelectionForMouseDrag(
     return WebInputEventResult::kNotHandled;
   }
   const bool selection_is_directional =
-      should_extend_selection ? Selection().IsDirectional() : false;
+      should_extend_selection && Selection().IsDirectional();
   SetNonDirectionalSelectionIfNeeded(
       new_visible_selection,
       SetSelectionOptions::Builder()
@@ -1264,6 +1276,13 @@ bool SelectionController::HandlePasteGlobalSelection(
 
   if (!frame_->GetPage())
     return false;
+
+  // Do not paste if the user has opted out of middle-click pasting.
+  if (auto* settings = frame_->GetSettings();
+      settings && !settings->GetMiddleClickPasteAllowed()) {
+    return false;
+  }
+
   Frame* focus_frame =
       frame_->GetPage()->GetFocusController().FocusedOrMainFrame();
   // Do not paste here if the focus was moved somewhere else.
@@ -1279,8 +1298,10 @@ bool SelectionController::HandleGestureLongPress(
 
   if (!Selection().IsAvailable())
     return false;
-  if (hit_test_result.IsLiveLink())
+  if (!RuntimeEnabledFeatures::LongPressLinkSelectTextEnabled() &&
+      hit_test_result.IsLiveLink()) {
     return false;
+  }
 
   Node* inner_node = hit_test_result.InnerPossiblyPseudoNode();
   inner_node->GetDocument().UpdateStyleAndLayoutTree();
@@ -1358,8 +1379,9 @@ void SelectionController::UpdateSelectionForContextMenuEvent(
 
   // Opening a context menu from an existing text fragment/highlight should not
   // select additional text.
-  if (TextFragmentHandler::IsOverTextFragment(hit_test_result))
+  if (AnnotationAgentImpl::IsOverAnnotation(hit_test_result)) {
     return;
+  }
 
   // Opening the context menu, triggered by long press or keyboard, should not
   // change the selected text.
@@ -1451,11 +1473,13 @@ bool IsUserNodeDraggable(const MouseEventWithHitTestResults& event) {
   // tests WebFrameTest.FrameWidgetTest and WebViewTest.ClientTapHandling fail
   // without a nullptr check, as they don't set the InnerNode() appropriately.
   // Remove the if statement nullptr check when those tests are fixed.
-  if (!inner_node)
+  if (!inner_node) {
     return false;
+  }
 
-  const ComputedStyle* kStyle = inner_node->GetComputedStyle();
-  return kStyle && kStyle->UserDrag() == EUserDrag::kElement;
+  const ComputedStyle* style =
+      GetComputedStyleForElementOrLayoutObject(*inner_node);
+  return style && style->UserDrag() == EUserDrag::kElement;
 }
 
 bool IsExtendingSelection(const MouseEventWithHitTestResults& event) {

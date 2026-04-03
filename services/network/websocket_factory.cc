@@ -8,6 +8,7 @@
 #include "mojo/public/cpp/bindings/message.h"
 #include "net/base/isolation_info.h"
 #include "net/base/url_util.h"
+#include "net/storage_access_api/status.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/network_context.h"
 #include "services/network/network_service.h"
@@ -17,6 +18,51 @@
 #include "url/url_constants.h"
 
 namespace network {
+
+namespace {
+
+bool IsValidSubprotocolCharacter(char character) {
+  constexpr auto kMinimumProtocolCharacter = '!';  // U+0021.
+  constexpr auto kMaximumProtocolCharacter = '~';  // U+007E.
+  // Set to true if character does not matches "separators" ABNF defined in
+  // RFC2616. SP and HT are excluded since the range check excludes them.
+  const bool is_separator =
+      character == '"' || character == '(' || character == ')' ||
+      character == ',' || character == '/' ||
+      (character >= ':' &&
+       character <=
+           '@')  // U+003A - U+0040 (':', ';', '<', '=', '>', '?', '@').
+      || (character >= '[' &&
+          character <= ']')  // U+005B - U+005D ('[', '\\', ']').
+      || character == '{' || character == '}';
+  return character >= kMinimumProtocolCharacter &&
+         character <= kMaximumProtocolCharacter && !is_separator;
+}
+
+bool IsValidSubprotocolString(const std::string& protocol) {
+  if (protocol.empty()) {
+    return false;
+  }
+  return std::ranges::all_of(protocol, IsValidSubprotocolCharacter);
+}
+
+bool IsValidProtocols(const std::vector<std::string>& requested_protocols) {
+  // Fail if not all elements in |protocols| are valid.
+  if (!std::ranges::all_of(requested_protocols, IsValidSubprotocolString)) {
+    return false;
+  }
+
+  // Fail if there're duplicated elements in |protocols|.
+  std::vector<std::string> protocols = requested_protocols;
+  std::ranges::sort(protocols);
+  if (std::ranges::adjacent_find(protocols) != protocols.end()) {
+    return false;
+  }
+
+  return true;
+}
+
+}  // namespace
 
 WebSocketFactory::WebSocketFactory(NetworkContext* context)
     : context_(context) {}
@@ -31,11 +77,12 @@ void WebSocketFactory::CreateWebSocket(
     const GURL& url,
     const std::vector<std::string>& requested_protocols,
     const net::SiteForCookies& site_for_cookies,
-    bool has_storage_access,
+    net::StorageAccessApiStatus storage_access_api_status,
     const net::IsolationInfo& isolation_info,
     std::vector<mojom::HttpHeaderPtr> additional_headers,
-    int32_t process_id,
+    const network::OriginatingProcess& process_id,
     const url::Origin& origin,
+    network::mojom::ClientSecurityStatePtr client_security_state,
     uint32_t options,
     net::NetworkTrafficAnnotationTag traffic_annotation,
     mojo::PendingRemote<mojom::WebSocketHandshakeClient> handshake_client,
@@ -48,6 +95,16 @@ void WebSocketFactory::CreateWebSocket(
       net::IsolationInfo::RequestType::kOther) {
     mojo::ReportBadMessage(
         "WebSocket's IsolationInfo::RequestType must be kOther");
+    return;
+  }
+
+  if (!url.SchemeIsWSOrWSS()) {
+    mojo::ReportBadMessage("Invalid scheme.");
+    return;
+  }
+
+  if (!IsValidProtocols(requested_protocols)) {
+    mojo::ReportBadMessage("Invalid protocols.");
     return;
   }
 
@@ -66,13 +123,23 @@ void WebSocketFactory::CreateWebSocket(
     handshake_client_remote.reset();
     return;
   }
+  if (isolation_info.nonce().has_value() &&
+      !context_->IsNetworkForNonceAndUrlAllowed(*isolation_info.nonce(), url)) {
+    mojo::Remote<mojom::WebSocketHandshakeClient> handshake_client_remote(
+        std::move(handshake_client));
+    handshake_client_remote->OnFailure("Network access revoked",
+                                       net::ERR_NETWORK_ACCESS_REVOKED, -1);
+    handshake_client_remote.reset();
+    return;
+  }
   WebSocket::HasRawHeadersAccess has_raw_headers_access(
       context_->network_service()->HasRawHeadersAccess(
           process_id, net::ChangeWebSocketSchemeToHttpScheme(url)));
   connections_.insert(std::make_unique<WebSocket>(
-      this, url, requested_protocols, site_for_cookies, has_storage_access,
-      isolation_info, std::move(additional_headers), origin, options,
-      traffic_annotation, has_raw_headers_access, std::move(handshake_client),
+      this, url, requested_protocols, site_for_cookies,
+      storage_access_api_status, isolation_info, std::move(additional_headers),
+      origin, std::move(client_security_state), options, traffic_annotation,
+      has_raw_headers_access, std::move(handshake_client),
       std::move(url_loader_network_observer), std::move(auth_handler),
       std::move(header_client),
       throttler_.IssuePendingConnectionTracker(process_id),
@@ -91,6 +158,13 @@ void WebSocketFactory::Remove(WebSocket* impl) {
     return;
   }
   connections_.erase(it);
+}
+
+void WebSocketFactory::RemoveIfNonceMatches(
+    const base::UnguessableToken& nonce) {
+  std::erase_if(connections_, [&nonce](const auto& connection) {
+    return connection->RevokeIfNonceMatches(nonce);
+  });
 }
 
 }  // namespace network

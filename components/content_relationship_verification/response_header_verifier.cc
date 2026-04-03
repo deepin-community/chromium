@@ -6,7 +6,8 @@
 
 #include <stdio.h>
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/strings/string_split.h"
 
 namespace {
@@ -21,13 +22,13 @@ namespace content_relationship_verification {
 //   -  <List of package names>: package names with access to the web content.
 const char kEmbedderAncestorHeader[] = "X-Embedder-Ancestors";
 
-// TODO(crbug.com/1376958): Also support fingerprints.
+// TODO(crbug.com/40243409): Also support fingerprints.
 ResponseHeaderVerificationResult ResponseHeaderVerifier::Verify(
     const std::string& package_name,
     const std::string& embedder_ancestors_header_value) {
   // No embedder-ancestor-header defaults to verified.
   if (embedder_ancestors_header_value.empty()) {
-    // TODO(crbug.com/1376958): Set to false if undecided content should be
+    // TODO(crbug.com/40243409): Set to false if undecided content should be
     // treated like explicitly unconsenting content.
     return ResponseHeaderVerificationResult::kMissing;
   }
@@ -43,7 +44,7 @@ ResponseHeaderVerificationResult ResponseHeaderVerifier::Verify(
       SplitString(embedder_ancestors_header_value, kNormalizedHeaderDelimiter,
                   base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
 
-  if (base::Contains(allowed_package_names, package_name)) {
+  if (std::ranges::contains(allowed_package_names, package_name)) {
     return ResponseHeaderVerificationResult::kAllow;
   }
 

@@ -13,21 +13,29 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <memory>
 #include <utility>
+#include <vector>
 
+#include "absl/algorithm/container.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/Dialect/Quant/QuantTypes.h"  // from @llvm-project
+#include "mlir/Dialect/Quant/IR/QuantTypes.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/DialectRegistry.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
+#include "mlir/IR/Matchers.h"  // from @llvm-project
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
@@ -36,17 +44,21 @@ limitations under the License.
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "mlir/Support/TypeID.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
-#include "tensorflow/compiler/mlir/lite/quantization/ir/QuantOps.h"
 #include "tensorflow/compiler/mlir/quantization/common/attrs_and_constraints.h"
+#include "tensorflow/compiler/mlir/quantization/common/ir/QuantOps.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/cc/constant_fold.h"
+#include "tensorflow/compiler/mlir/quantization/tensorflow/passes/passes.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/passes/remove_identity_op_pattern.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/quantization_options.pb.h"
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_dialect.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/einsum.h"
 
 namespace mlir {
 namespace quant {
 namespace {
+
+using ::tensorflow::quantization::OpSet;
 
 class PrepareLiftingPass
     : public PassWrapper<PrepareLiftingPass, OperationPass<func::FuncOp>> {
@@ -95,8 +107,8 @@ class PrepareLiftingPass
 // indices in `val2`.
 bool HasEqualElementSize(Value val1, Value val2, ArrayRef<int> val1_indices,
                          ArrayRef<int> val2_indices) {
-  ShapedType val1_shape = val1.getType().cast<ShapedType>();
-  ShapedType val2_shape = val2.getType().cast<ShapedType>();
+  ShapedType val1_shape = mlir::cast<ShapedType>(val1.getType());
+  ShapedType val2_shape = mlir::cast<ShapedType>(val2.getType());
   if (!val1_shape.hasRank() || !val2_shape.hasRank()) return false;
 
   int val1_result = 1;
@@ -120,6 +132,27 @@ bool HasEqualElementSize(Value val1, Value val2, ArrayRef<int> val1_indices,
   return val1_result == val2_result;
 }
 
+// Checks if a shape has dim sizes of all ones except the right most dim.
+bool ReshapableTo1DTensor(ShapedType rhs_shape) {
+  for (auto rank = 0; rank < rhs_shape.getRank() - 1; rank++) {
+    if (rhs_shape.getDimSize(rank) != 1) {
+      return false;
+    }
+  }
+  return true;
+}
+
+Value ReshapeTo1DTensor(OpBuilder& builder, Location loc, Value value) {
+  auto shape = mlir::cast<ShapedType>(value.getType());
+  if (shape.getRank() != 1) {
+    SmallVector<int64_t> new_shape;
+    new_shape.push_back(shape.getNumElements());
+    value = TF::ReshapeOp::create(builder, loc, value,
+                                  Create1DConstValue(builder, loc, new_shape));
+  }
+  return ConstantFoldOpIfPossible(value.getDefiningOp()).front();
+}
+
 // Matches convolution op with "NHWC" data format or matmul op with false adj_y.
 // The list of supported ops in this function is:
 // - Conv2DOp
@@ -133,8 +166,8 @@ LogicalResult MatchSupportedAffineOp(Operation* op, Value& binding_output,
   bool is_supported_affine_op = false;
   if (llvm::isa<TF::Conv2DOp, TF::Conv3DOp, TF::DepthwiseConv2dNativeOp>(op)) {
     if (const auto data_format = op->getAttrOfType<StringAttr>("data_format")) {
-      is_supported_affine_op = data_format.getValue().equals("NHWC") ||
-                               data_format.getValue().equals("NDHWC");
+      is_supported_affine_op =
+          data_format.getValue() == "NHWC" || data_format.getValue() == "NDHWC";
     }
   } else if (llvm::isa<TF::BatchMatMulV2Op>(op)) {
     if (const auto adj_y = op->getAttrOfType<BoolAttr>("adj_y")) {
@@ -158,7 +191,7 @@ LogicalResult MatchSupportedAffineOp(Operation* op, Value& binding_output,
 // Makes the 1D value broadcastable with the `rhs_shape`.
 Value MakeOneDimValueBroadcastable(OpBuilder& builder, Location loc,
                                    Value value, ShapedType rhs_shape) {
-  ShapedType value_shape = value.getType().dyn_cast_or_null<ShapedType>();
+  ShapedType value_shape = mlir::dyn_cast_or_null<ShapedType>(value.getType());
   if (!value_shape || value_shape.getRank() != 1 ||
       !value_shape.hasStaticShape() || !rhs_shape.hasStaticShape()) {
     return {};
@@ -177,17 +210,18 @@ Value MakeOneDimValueBroadcastable(OpBuilder& builder, Location loc,
   }
   absl::c_reverse(new_shape);
 
-  auto reshape_op = builder.create<TF::ReshapeOp>(
-      loc, value, Create1DConstValue(builder, loc, new_shape));
+  auto reshape_op = TF::ReshapeOp::create(
+      builder, loc, value, Create1DConstValue(builder, loc, new_shape));
   return ConstantFoldOpIfPossible(reshape_op).front();
 }
 
 // Checks if a value can be symmetrically quantized.
 bool CanBeSymmetricallyQuantized(Value weight) {
-  auto dq_op = weight.getDefiningOp<quantfork::DequantizeCastOp>();
+  auto dq_op = weight.getDefiningOp<mlir::quant::ir::DequantizeCastOp>();
   if (!dq_op) return true;
 
-  auto qtype = dq_op.getArg().getType().cast<TensorType>().getElementType();
+  auto qtype =
+      mlir::cast<TensorType>(dq_op.getArg().getType()).getElementType();
   if (auto uniform_type = llvm::dyn_cast_or_null<UniformQuantizedType>(qtype)) {
     return uniform_type.getZeroPoint() == 0;
   } else if (auto per_axis_type =
@@ -218,22 +252,22 @@ SmallVector<T> MultiplyTwoArrays(ArrayRef<T> a, ArrayRef<T> b) {
 // params. This function only supports symmetrically quantized values.
 Value MultiplyFakeQuantValue(OpBuilder& builder, Location loc, Value value,
                              Value multiplier) {
-  auto dq_op = value.getDefiningOp<quantfork::DequantizeCastOp>();
+  auto dq_op = value.getDefiningOp<mlir::quant::ir::DequantizeCastOp>();
   if (!dq_op) {
-    auto mul_op = builder.create<TF::MulOp>(loc, value, multiplier);
+    auto mul_op = TF::MulOp::create(builder, loc, value, multiplier);
     return mul_op.getResult();
   }
-  auto q_op = dq_op.getArg().getDefiningOp<quantfork::QuantizeCastOp>();
+  auto q_op = dq_op.getArg().getDefiningOp<mlir::quant::ir::QuantizeCastOp>();
   if (!q_op) return {};
 
   Value float_value = q_op.getArg();
-  Value new_value = builder.create<TF::MulOp>(loc, float_value, multiplier);
-  auto new_value_type = new_value.getType().cast<TensorType>();
+  Value new_value = TF::MulOp::create(builder, loc, float_value, multiplier);
+  auto new_value_type = mlir::cast<TensorType>(new_value.getType());
 
   // Get multiplier value in double.
   DenseFPElementsAttr multiplier_attr;
   if (!matchPattern(multiplier, m_Constant(&multiplier_attr)) ||
-      multiplier_attr.getType().cast<ShapedType>().getRank() > 1) {
+      mlir::cast<ShapedType>(multiplier_attr.getType()).getRank() > 1) {
     return {};
   }
   std::vector<double> multiplier_values;
@@ -244,7 +278,7 @@ Value MultiplyFakeQuantValue(OpBuilder& builder, Location loc, Value value,
 
   // Multiply the quantization parameters by the multiplier.
   QuantizedType new_qtype;
-  auto element_type = q_op.getType().cast<TensorType>().getElementType();
+  auto element_type = mlir::cast<TensorType>(q_op.getType()).getElementType();
   if (auto uniform_type = llvm::dyn_cast<UniformQuantizedType>(element_type)) {
     if (multiplier_attr.isSplat()) {
       double new_scale = multiplier_array.front() * uniform_type.getScale();
@@ -277,10 +311,10 @@ Value MultiplyFakeQuantValue(OpBuilder& builder, Location loc, Value value,
         per_axis_type.getStorageTypeMin(), per_axis_type.getStorageTypeMax());
   }
 
-  auto quantize = builder.create<quantfork::QuantizeCastOp>(
-      q_op.getLoc(), new_value_type.clone(new_qtype), new_value);
-  auto dequantize = builder.create<quantfork::DequantizeCastOp>(
-      dq_op.getLoc(), new_value_type, quantize.getResult());
+  auto quantize = mlir::quant::ir::QuantizeCastOp::create(
+      builder, q_op.getLoc(), new_value_type.clone(new_qtype), new_value);
+  auto dequantize = mlir::quant::ir::DequantizeCastOp::create(
+      builder, dq_op.getLoc(), new_value_type, quantize.getResult());
   return dequantize.getResult();
 }
 
@@ -303,7 +337,7 @@ void PrepareLiftingPass::runOnOperation() {
     patterns.add<TF::ConvertTFEinsumOp>(ctx);
   }
 
-  if (failed(applyPatternsAndFoldGreedily(func, std::move(patterns)))) {
+  if (failed(applyPatternsGreedily(func, std::move(patterns)))) {
     func.emitError() << "quant-prepare-lifting failed.";
     signalPassFailure();
   }

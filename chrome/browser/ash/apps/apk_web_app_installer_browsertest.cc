@@ -2,16 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/apps/apk_web_app_installer.h"
+
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "ash/components/arc/mojom/app.mojom.h"
-#include "ash/components/arc/test/arc_util_test_support.h"
-#include "ash/components/arc/test/connection_holder_util.h"
-#include "ash/components/arc/test/fake_app_instance.h"
 #include "ash/public/cpp/shelf_model.h"
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -20,7 +18,6 @@
 #include "base/test/test_future.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/ash/apps/apk_web_app_installer.h"
 #include "chrome/browser/ash/apps/apk_web_app_service.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
@@ -34,13 +31,19 @@
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_icon_generator.h"
 #include "chrome/browser/web_applications/web_app_install_finalizer.h"
+#include "chrome/browser/web_applications/web_app_proto_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
+#include "chromeos/ash/experiences/arc/test/connection_holder_util.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/browser/uninstall_result_code.h"
 #include "components/webapps/common/web_app_id.h"
@@ -64,11 +67,11 @@ const char kAppScope1[] = "https://www.test.app/";
 
 std::unique_ptr<web_app::WebAppInstallInfo> CreateWebAppInstallInfo(
     const GURL& url) {
-  auto web_app_install_info = std::make_unique<web_app::WebAppInstallInfo>();
-  web_app_install_info->start_url = url;
+  auto web_app_install_info =
+      web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(url);
   web_app_install_info->title = u"App Title";
   web_app_install_info->theme_color = SK_ColorBLUE;
-  web_app_install_info->scope = url.Resolve("scope");
+  web_app_install_info->scope = url;
   web_app_install_info->display_mode = web_app::DisplayMode::kBrowser;
   web_app_install_info->user_display_mode =
       web_app::mojom::UserDisplayMode::kStandalone;
@@ -104,25 +107,29 @@ void ExpectInitialManifestFieldsFromWebAppInstallInfo(
   // Manifest fields:
   EXPECT_EQ(web_app->untranslated_name(), "App Title");
   EXPECT_EQ(web_app->start_url(), url);
-  EXPECT_EQ(web_app->scope().spec(), url.Resolve("scope"));
+  EXPECT_EQ(web_app->scope().spec(), url);
   EXPECT_EQ(web_app->display_mode(), web_app::DisplayMode::kBrowser);
 
   ASSERT_TRUE(web_app->theme_color().has_value());
   EXPECT_EQ(SK_ColorBLUE, web_app->theme_color().value());
 
-  ASSERT_TRUE(web_app->sync_fallback_data().theme_color.has_value());
-  EXPECT_EQ(SK_ColorBLUE, web_app->sync_fallback_data().theme_color.value());
+  ASSERT_TRUE(web_app->sync_proto().has_theme_color());
+  EXPECT_EQ(SK_ColorBLUE, web_app->sync_proto().theme_color());
 
-  EXPECT_EQ("App Title", web_app->sync_fallback_data().name);
-  EXPECT_EQ(url.Resolve("scope"), web_app->sync_fallback_data().scope);
+  EXPECT_EQ("App Title", web_app->sync_proto().name());
+  EXPECT_EQ(url.spec(), web_app->sync_proto().scope());
   {
     SCOPED_TRACE("web_app->manifest_icons()");
     ExpectInitialIconInfosFromWebAppInstallInfo(web_app->manifest_icons(), url);
   }
   {
-    SCOPED_TRACE("web_app->sync_fallback_data().icon_infos");
-    ExpectInitialIconInfosFromWebAppInstallInfo(
-        web_app->sync_fallback_data().icon_infos, url);
+    SCOPED_TRACE("web_app->sync_proto().icon_infos");
+    std::optional<std::vector<apps::IconInfo>> parsed_icon_infos =
+        web_app::ParseAppIconInfos(
+            "ExpectInitialManifestFieldsFromWebAppInstallInfo",
+            web_app->sync_proto().icon_infos());
+    ASSERT_TRUE(parsed_icon_infos.has_value());
+    ExpectInitialIconInfosFromWebAppInstallInfo(parsed_icon_infos.value(), url);
   }
 
   // Manifest Resources:
@@ -458,7 +465,7 @@ IN_PROC_BROWSER_TEST_F(ApkWebAppInstallerDelayedArcStartBrowserTest,
     provider_->scheduler().RemoveUserUninstallableManagements(
         id, webapps::WebappUninstallSource::kShelf,
         base::BindLambdaForTesting([&](webapps::UninstallResultCode code) {
-          EXPECT_EQ(code, webapps::UninstallResultCode::kSuccess);
+          EXPECT_EQ(code, webapps::UninstallResultCode::kAppRemoved);
           run_loop.Quit();
         }));
     run_loop.Run();
@@ -474,8 +481,8 @@ IN_PROC_BROWSER_TEST_F(ApkWebAppInstallerDelayedArcStartBrowserTest,
   app_instance_->SendRefreshPackageList(std::move(packages));
 
   EXPECT_EQ(2u, removed_packages_.size());
-  EXPECT_TRUE(base::Contains(removed_packages_, kPackageName));
-  EXPECT_TRUE(base::Contains(removed_packages_, kPackageName1));
+  EXPECT_TRUE(std::ranges::contains(removed_packages_, kPackageName));
+  EXPECT_TRUE(std::ranges::contains(removed_packages_, kPackageName1));
   EXPECT_EQ(std::nullopt, service->GetPackageNameForWebApp(kAppUrl));
   EXPECT_EQ(std::nullopt, service->GetPackageNameForWebApp(kAppUrl1));
 

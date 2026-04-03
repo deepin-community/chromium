@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
@@ -19,7 +20,6 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/webui/constrained_web_dialog_ui.h"
 #include "chrome/services/printing/public/mojom/pdf_nup_converter.mojom.h"
 #include "components/printing/common/print.mojom.h"
@@ -51,18 +51,17 @@ class BrowserContext;
 namespace printing {
 
 class PrintPreviewHandler;
+class PrintPreviewUI;
 
-class PrintPreviewUIConfig : public content::WebUIConfig {
+class PrintPreviewUIConfig
+    : public content::DefaultWebUIConfig<PrintPreviewUI> {
  public:
   PrintPreviewUIConfig();
   ~PrintPreviewUIConfig() override;
 
-  // content::WebUIConfig:
+  // content::DefaultWebUIConfig:
   bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
   bool ShouldHandleURL(const GURL& url) override;
-  std::unique_ptr<content::WebUIController> CreateWebUIController(
-      content::WebUI* web_ui,
-      const GURL& url) override;
 };
 
 // PrintPreviewUI lives on the UI thread.
@@ -78,11 +77,10 @@ class PrintPreviewUI : public ConstrainedWebDialogUI,
 
   mojo::PendingAssociatedRemote<mojom::PrintPreviewUI> BindPrintPreviewUI();
 
-  // Gets the print preview |data|. |index| is zero-based, and can be
-  // |COMPLETE_PREVIEW_DOCUMENT_INDEX| to get the entire preview document.
-  virtual void GetPrintPreviewDataForIndex(
-      int index,
-      scoped_refptr<base::RefCountedMemory>* data) const;
+  // Gets the print preview `data`. `index` is zero-based, and can be
+  // `COMPLETE_PREVIEW_DOCUMENT_INDEX` to get the entire preview document.
+  virtual scoped_refptr<base::RefCountedMemory> GetPrintPreviewDataForIndex(
+      int index) const;
 
   // printing::mojo::PrintPreviewUI:
   void SetOptionsFromDocument(const mojom::OptionsFromDocumentParamsPtr params,
@@ -184,7 +182,8 @@ class PrintPreviewUI : public ConstrainedWebDialogUI,
 
     // Notifies that the document to print from preview is ready.  This occurs
     // after any possible N-up processing.
-    virtual void PreviewDocumentReady(content::WebContents* preview_dialog) {}
+    virtual void PreviewDocumentReady(content::WebContents* preview_dialog,
+                                      base::span<const uint8_t> data) {}
 
    protected:
     virtual ~TestDelegate() = default;

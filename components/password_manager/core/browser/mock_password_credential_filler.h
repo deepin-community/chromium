@@ -6,8 +6,8 @@
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_MOCK_PASSWORD_CREDENTIAL_FILLER_H_
 
 #include <string>
+
 #include "base/memory/weak_ptr.h"
-#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/password_manager/core/browser/password_credential_filler.h"
 #include "components/password_manager/core/browser/password_manager_driver.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -21,7 +21,9 @@ class MockPasswordCredentialFiller final : public PasswordCredentialFiller {
 
   MOCK_METHOD(void,
               FillUsernameAndPassword,
-              (const std::u16string&, const std::u16string&),
+              (const std::u16string&,
+               const std::u16string&,
+               base::OnceCallback<void(bool)>),
               (override));
   MOCK_METHOD(void, UpdateTriggerSubmission, (bool), (override));
   MOCK_METHOD(bool, ShouldTriggerSubmission, (), (const override));
@@ -34,7 +36,6 @@ class MockPasswordCredentialFiller final : public PasswordCredentialFiller {
               (),
               (const override));
   MOCK_METHOD(GURL, GetFrameUrl, (), (const override));
-  MOCK_METHOD(void, Dismiss, (ToShowVirtualKeyboard), (override));
 
   base::WeakPtr<PasswordCredentialFiller> AsWeakPtr() override;
 
@@ -44,4 +45,4 @@ class MockPasswordCredentialFiller final : public PasswordCredentialFiller {
 
 }  // namespace password_manager
 
-#endif  // COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_PASSWORD_CREDENTIAL_FILLER_H_
+#endif  // COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_MOCK_PASSWORD_CREDENTIAL_FILLER_H_

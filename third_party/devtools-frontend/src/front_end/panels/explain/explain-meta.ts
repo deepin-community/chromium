@@ -1,37 +1,48 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
-import * as Root from '../../core/root/root.js';
+import type * as Platform from '../../core/platform/platform.js';
+import type * as Root from '../../core/root/root.js';
 import * as Console from '../../panels/console/console.js';
 import * as UI from '../../ui/legacy/legacy.js';
 
 const UIStrings = {
   /**
-   *@description Message to offer insights for a console error message
+   * @description Message to offer insights for a console error message
    */
-  explainThisError: 'Explain this error',
+  explainThisError: 'Understand this error',
   /**
-   *@description Message to offer insights for a console warning message
+   * @description Message to offer insights for a console warning message
    */
-  explainThisWarning: 'Explain this warning',
+  explainThisWarning: 'Understand this warning',
   /**
-   *@description Message to offer insights for a console message
+   * @description Message to offer insights for a console message
    */
-  explainThisMessage: 'Explain this message',
+  explainThisMessage: 'Understand this message',
   /**
    * @description The setting title to enable the console insights feature via
    * the settings tab.
    */
-  enableConsoleInsights: 'Enable Console Insights',
+  enableConsoleInsights: 'Understand console messages with AI',
   /**
    * @description Message shown to the user if the DevTools locale is not
    * supported.
    */
-  wrongLocale: 'Only English locales are currently supported.',
-};
+  wrongLocale: 'To use this feature, set your language preference to English in DevTools settings.',
+  /**
+   * @description Message shown to the user if the user's region is not
+   * supported.
+   */
+  geoRestricted: 'This feature is unavailable in your region.',
+  /**
+   * @description Message shown to the user if the enterprise policy does
+   * not allow this feature.
+   */
+  policyRestricted: 'This setting is managed by your administrator.',
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/explain/explain-meta.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
@@ -44,6 +55,13 @@ const actions = [
     title: i18nLazyString(UIStrings.explainThisMessage),
     contextTypes(): [typeof Console.ConsoleViewMessage.ConsoleViewMessage] {
       return [Console.ConsoleViewMessage.ConsoleViewMessage];
+    },
+  },
+  {
+    actionId: 'explain.console-message.teaser',
+    title: i18nLazyString(UIStrings.explainThisMessage),
+    contextTypes(): [] {
+      return [];
     },
   },
   {
@@ -69,44 +87,44 @@ const actions = [
   },
 ];
 
-function isActionAvailable(): boolean {
-  return isLocaleAllowed() === true && isSettingAvailable();
-}
-
-function isSettingAvailable(): boolean {
-  return isFeatureEnabled();
-}
-
-/**
- * Additional checks for the availability of the feature event if enabled via
- * the server. Returns true if locale is supported, or a string containing the
- * reason why not.
- */
-function isLocaleAllowed(): true|string {
+function isLocaleRestricted(): boolean {
   const devtoolsLocale = i18n.DevToolsLocale.DevToolsLocale.instance();
-  if (!devtoolsLocale.locale.startsWith('en-')) {
-    return i18nString(UIStrings.wrongLocale);
-  }
-
-  return true;
+  return !devtoolsLocale.locale.startsWith('en-');
 }
 
-function isFeatureEnabled(): boolean {
-  return Root.Runtime.Runtime.queryParam('enableAida') === 'true';
+function isGeoRestricted(config?: Root.Runtime.HostConfig): boolean {
+  return config?.aidaAvailability?.blockedByGeo === true;
+}
+
+function isPolicyRestricted(config?: Root.Runtime.HostConfig): boolean {
+  return config?.aidaAvailability?.blockedByEnterprisePolicy === true;
+}
+
+function isFeatureEnabled(config?: Root.Runtime.HostConfig): boolean {
+  return (config?.aidaAvailability?.enabled && config?.devToolsConsoleInsights?.enabled) === true;
 }
 
 Common.Settings.registerSettingExtension({
-  category: Common.Settings.SettingCategory.CONSOLE,
+  category: Common.Settings.SettingCategory.AI,
   settingName: setting,
   settingType: Common.Settings.SettingType.BOOLEAN,
   title: i18nLazyString(UIStrings.enableConsoleInsights),
-  defaultValue: true,
-  reloadRequired: true,
-  condition: isSettingAvailable,
-  disabledCondition: () => {
-    const localeCheck = isLocaleAllowed();
-    if (localeCheck !== true) {
-      return {disabled: true, reason: localeCheck};
+  defaultValue: false,
+  reloadRequired: false,
+  condition: config => isFeatureEnabled(config),
+  disabledCondition: config => {
+    const reasons: Platform.UIString.LocalizedString[] = [];
+    if (isGeoRestricted(config)) {
+      reasons.push(i18nString(UIStrings.geoRestricted));
+    }
+    if (isPolicyRestricted(config)) {
+      reasons.push(i18nString(UIStrings.policyRestricted));
+    }
+    if (isLocaleRestricted()) {
+      reasons.push(i18nString(UIStrings.wrongLocale));
+    }
+    if (reasons.length > 0) {
+      return {disabled: true, reasons};
     }
     return {disabled: false};
   },
@@ -115,12 +133,13 @@ Common.Settings.registerSettingExtension({
 for (const action of actions) {
   UI.ActionRegistration.registerActionExtension({
     ...action,
-    setting,
     category: UI.ActionRegistration.ActionCategory.CONSOLE,
     async loadActionDelegate() {
       const Explain = await import('./explain.js');
       return new Explain.ActionDelegate();
     },
-    condition: isActionAvailable,
+    condition: config => {
+      return isFeatureEnabled(config) && !isPolicyRestricted(config) && !isGeoRestricted(config);
+    },
   });
 }

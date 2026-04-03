@@ -25,8 +25,6 @@ class TestPermissionsClient : public PermissionsClient {
       content::BrowserContext* browser_context) override;
   scoped_refptr<content_settings::CookieSettings> GetCookieSettings(
       content::BrowserContext* browser_context) override;
-  privacy_sandbox::TrackingProtectionSettings* GetTrackingProtectionSettings(
-      content::BrowserContext* browser_context) override;
   bool IsSubresourceFilterActivated(content::BrowserContext* browser_context,
                                     const GURL& url) override;
   OriginKeyedPermissionActionService* GetOriginKeyedPermissionActionService(
@@ -40,7 +38,7 @@ class TestPermissionsClient : public PermissionsClient {
       ContentSettingsType type) override;
   void GetUkmSourceId(ContentSettingsType permission_type,
                       content::BrowserContext* browser_context,
-                      content::WebContents* web_contents,
+                      content::RenderFrameHost* render_frame_host,
                       const GURL& requesting_origin,
                       GetUkmSourceIdCallback callback) override;
 
@@ -49,6 +47,11 @@ class TestPermissionsClient : public PermissionsClient {
   bool CanRequestDevicePermission(ContentSettingsType type) const override;
   void SetHasDevicePermission(bool has_device_permission);
   void SetCanRequestDevicePermission(bool can_request_device_permission);
+
+#if BUILDFLAG(IS_ANDROID)
+  // Gets the name of the embedder.
+  const std::u16string GetClientApplicationName() const override;
+#endif
 
  private:
   TestPermissionsClient(const TestPermissionsClient&) = delete;

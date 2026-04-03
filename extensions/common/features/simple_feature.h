@@ -15,9 +15,8 @@
 #include <string_view>
 #include <vector>
 
-#include "base/functional/callback_forward.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/lazy_instance.h"
 #include "components/version_info/channel.h"
 #include "extensions/common/context_data.h"
 #include "extensions/common/extension.h"
@@ -110,18 +109,14 @@ class SimpleFeature : public Feature {
       DelegatedAvailabilityCheckHandler handler) override;
   bool HasDelegatedAvailabilityCheckHandler() const override;
 
-  static bool IsIdInArray(const ExtensionId& extension_id,
-                          const char* const array[],
-                          size_t array_length);
-
   // Similar to mojom::ManifestLocation, these are the classes of locations
   // supported in feature files. These should only be used in this class and in
   // generated files.
-  enum Location {
-    COMPONENT_LOCATION,
-    EXTERNAL_COMPONENT_LOCATION,
-    POLICY_LOCATION,
-    UNPACKED_LOCATION,
+  enum class Location {
+    kComponent,
+    kExternalComponent,
+    kPolicy,
+    kUnpacked,
   };
 
   // Setters used by generated code to create the feature.
@@ -252,7 +247,7 @@ class SimpleFeature : public Feature {
 
   bool MatchesManifestLocation(mojom::ManifestLocation manifest_location) const;
 
-  // Checks if the feature is allowed in a session of type |session_type|
+  // Checks if the feature is allowed in a session of type `session_type`
   // (based on session type feature restrictions).
   bool MatchesSessionTypes(mojom::FeatureSessionType session_type) const;
 

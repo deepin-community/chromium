@@ -34,7 +34,6 @@
 #include "src/dawn/node/binding/GPUBuffer.h"
 #include "src/dawn/node/binding/GPURenderBundle.h"
 #include "src/dawn/node/binding/GPURenderPipeline.h"
-#include "src/dawn/node/utils/Debug.h"
 
 namespace wgpu::binding {
 
@@ -43,7 +42,7 @@ namespace wgpu::binding {
 ////////////////////////////////////////////////////////////////////////////////
 GPURenderBundleEncoder::GPURenderBundleEncoder(const RenderBundleEncoderDescriptor& desc,
                                                wgpu::RenderBundleEncoder enc)
-    : enc_(std::move(enc)), label_(desc.label ? desc.label : "") {}
+    : enc_(std::move(enc)), label_(CopyLabel(desc.label)) {}
 
 interop::Interface<interop::GPURenderBundle> GPURenderBundleEncoder::finish(
     Napi::Env env,
@@ -90,6 +89,19 @@ void GPURenderBundleEncoder::setBindGroup(
 
     enc_.SetBindGroup(index, bg, dynamicOffsetsDataLength,
                       dynamicOffsetsData.Data() + dynamicOffsetsDataStart);
+}
+
+void GPURenderBundleEncoder::setImmediates(Napi::Env env,
+                                           interop::GPUSize32 rangeOffset,
+                                           interop::AllowSharedBufferSource data,
+                                           interop::GPUSize64 dataOffsetElements,
+                                           std::optional<interop::GPUSize64> sizeElements) {
+    std::span<const uint8_t> dataSpan;
+    if (!ConvertDataElementsToSpan(env, &dataSpan, data, dataOffsetElements, sizeElements)) {
+        return;
+    }
+
+    enc_.SetImmediates(rangeOffset, dataSpan.data(), dataSpan.size());
 }
 
 void GPURenderBundleEncoder::pushDebugGroup(Napi::Env, std::string groupLabel) {
@@ -206,7 +218,7 @@ std::string GPURenderBundleEncoder::getLabel(Napi::Env) {
 }
 
 void GPURenderBundleEncoder::setLabel(Napi::Env, std::string value) {
-    enc_.SetLabel(value.c_str());
+    enc_.SetLabel(std::string_view(value));
     label_ = value;
 }
 

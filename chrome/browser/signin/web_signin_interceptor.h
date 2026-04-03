@@ -9,11 +9,8 @@
 #include <optional>
 
 #include "base/cancelable_callback.h"
-#include "base/feature_list.h"
 #include "base/functional/callback_forward.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -27,6 +24,7 @@ class WebContents;
 
 struct AccountInfo;
 class Browser;
+class SigninUIError;
 
 // Outcome of the interception heuristic (decision whether the interception
 // bubble is shown or not).
@@ -89,8 +87,10 @@ enum class SigninInterceptionHeuristicOutcome {
   // This is not the first account in the identity manager but there is no
   // primary account.
   kAbortNotFirstAccountButNoPrimaryAccount = 21,
+  // The profile management disclaimer service is already handling an account.
+  kAbortDisclaimerServiceInProgress = 22,
 
-  kMaxValue = kAbortNotFirstAccountButNoPrimaryAccount,
+  kMaxValue = kAbortDisclaimerServiceInProgress,
 };
 
 // Returns whether the heuristic outcome is a success (the signin should be
@@ -131,7 +131,12 @@ enum class SigninInterceptionDismissReason {
   kEscKey = 0,
   kIdentityPillPressed = 1,
 
-  kMaxValue = kIdentityPillPressed,
+  // The user is no longer eligible for the interception. This can happen for
+  // example if the user signs out of the account while the interception is in
+  // progress.
+  kUserNotEligible = 2,
+
+  kMaxValue = kUserNotEligible,
 };
 
 // The ScopedWebSigninInterceptionBubbleHandle closes the signin intercept
@@ -152,6 +157,7 @@ class WebSigninInterceptor {
     kEnterpriseAcceptManagement,
     kProfileSwitchForced,
     kChromeSignin,
+    kEnterpriseOIDC
   };
 
   // Delegate class responsible for showing the various interception UIs.
@@ -201,12 +207,23 @@ class WebSigninInterceptor {
         const BubbleParameters& bubble_parameters,
         base::OnceCallback<void(SigninInterceptionResult)> callback) = 0;
 
+    virtual std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle>
+    ShowOidcInterceptionDialog(
+        content::WebContents* web_contents,
+        const BubbleParameters& bubble_parameters,
+        signin::SigninChoiceWithConfirmAndRetryCallback callback,
+        base::OnceClosure dialog_closed_closure,
+        base::RepeatingClosure retry_callback) = 0;
+
     // Shows the first run experience for `account_id` in `browser` opened for
     // a newly created profile.
     virtual void ShowFirstRunExperienceInNewProfile(
         Browser* browser,
         const CoreAccountId& account_id,
         SigninInterceptionType interception_type) = 0;
+
+    virtual void ShowSigninError(content::WebContents* web_contents,
+                                 const SigninUIError& error) = 0;
   };
 
   WebSigninInterceptor(const WebSigninInterceptor&) = delete;

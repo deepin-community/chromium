@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string>
 
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
@@ -16,16 +17,26 @@
 #include "base/scoped_observation.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "ui/accessibility/ax_mode_observer.h"
+#include "ui/accessibility/platform/ax_mode_observer.h"
 #include "ui/accessibility/platform/ax_platform.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
+#include "ui/views/accessibility/tree/widget_ax_manager_observer.h"
 #include "ui/views/controls/native/native_view_host.h"
 #include "ui/views/controls/webview/webview_export.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/view.h"
 #include "ui/views/view_tracker.h"
 
+class GURL;
+
+namespace content {
+class BrowserContext;
+class WebContents;
+}  // namespace content
+
 namespace views {
+
+class WidgetAXManager;
 
 // Provides a view of a WebContents instance.  WebView can be used standalone,
 // creating and displaying an internally-owned WebContents; or within a full
@@ -44,11 +55,24 @@ namespace views {
 class WEBVIEW_EXPORT WebView : public View,
                                public content::WebContentsDelegate,
                                public content::WebContentsObserver,
-                               public ui::AXModeObserver {
+                               public ui::AXModeObserver,
+                               public WidgetAXManagerObserver {
   METADATA_HEADER(WebView, View)
 
  public:
+  // Whether the navigation should be allowed to be automatically upgraded to
+  // HTTPS. Only applies to initial loads.
+  enum class HttpsUpgradePolicy {
+    // Allows the navigation to be upgraded to HTTPS when possible.
+    kAllowUpgrade,
+    // Exempts the navigation from being upgraded to HTTPS (e.g. when loading
+    // a captive portal login page).
+    kNoUpgrade,
+  };
+
   using WebContentsAttachedCallback = base::RepeatingCallback<void(WebView*)>;
+  using WebContentsDetachedCallback = base::RepeatingCallback<void(WebView*)>;
+  using WebContentsFocusedCallback = base::RepeatingCallback<void(WebView*)>;
 
   explicit WebView(content::BrowserContext* browser_context = nullptr);
 
@@ -61,13 +85,16 @@ class WEBVIEW_EXPORT WebView : public View,
 
   // This creates a WebContents if |browser_context_| has been set and there is
   // not yet a WebContents associated with this WebView, otherwise it will
-  // return a nullptr.
+  // return the existing web contents. `url` is used to create a `SiteInstance`
+  // for the `WebContents`. If `url` is empty, a default `SiteInstance` will be
+  // used.
   content::WebContents* GetWebContents(
+      const GURL& url = GURL(),
       base::Location creator_location = base::Location::Current());
 
   // WebView does not assume ownership of WebContents set via this method, only
   // those it implicitly creates via GetWebContents() above.
-  void SetWebContents(content::WebContents* web_contents);
+  virtual void SetWebContents(content::WebContents* web_contents);
 
   content::BrowserContext* GetBrowserContext();
   void SetBrowserContext(content::BrowserContext* browser_context);
@@ -77,7 +104,11 @@ class WEBVIEW_EXPORT WebView : public View,
   // convenience for loading the initial URL, and so URLs are navigated with
   // PAGE_TRANSITION_AUTO_TOPLEVEL, so this is not intended as a general purpose
   // navigation method - use WebContents' API directly.
-  void LoadInitialURL(const GURL& url);
+  void LoadInitialURL(
+      const GURL& url,
+      HttpsUpgradePolicy https_upgrade_policy =
+          HttpsUpgradePolicy::kAllowUpgrade,
+      base::Location invoke_location = base::Location::Current());
 
   // Controls how the attached WebContents is resized.
   // false = WebContents' views' bounds are updated continuously as the
@@ -87,6 +118,7 @@ class WEBVIEW_EXPORT WebView : public View,
   //         a continuous size operation completes. This allows for smoother
   //         resizing performance during interactive resizes and animations.
   void SetFastResize(bool fast_resize);
+  bool GetFastResize() const;
 
   // If enabled, this will make the WebView's preferred size dependent on the
   // WebContents' size.
@@ -98,13 +130,21 @@ class WEBVIEW_EXPORT WebView : public View,
   // if the web contents is changed. The passed-in overlay view must be owned by
   // the client; this method never takes ownership of it.
   //
-  // TODO(https://crbug.com/1471674): This method should take ownership of
+  // TODO(crbug.com/40278361): This method should take ownership of
   // `crashed_overlay_view`.
   void SetCrashedOverlayView(View* crashed_overlay_view);
 
   // Adds a callback for when a WebContents is attached to this WebView.
   base::CallbackListSubscription AddWebContentsAttachedCallback(
       WebContentsAttachedCallback callback);
+
+  // Adds a callback for when a WebContents is detached from this WebView.
+  base::CallbackListSubscription AddWebContentsDetachedCallback(
+      WebContentsDetachedCallback callback);
+
+  // Adds a callback for when the attached WebContents is focused.
+  base::CallbackListSubscription AddWebContentsFocusedCallback(
+      WebContentsFocusedCallback callback);
 
   // Sets whether this is the primary web contents for the window.
   void set_is_primary_web_contents_for_window(bool is_primary) {
@@ -146,9 +186,6 @@ class WEBVIEW_EXPORT WebView : public View,
     ~ScopedWebContentsCreatorForTesting();
   };
 
-  // View:
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
-
  protected:
   // Called when letterboxing (scaling the native view to preserve aspect
   // ratio) is enabled or disabled.
@@ -185,13 +222,22 @@ class WEBVIEW_EXPORT WebView : public View,
   // Override from ui::AXModeObserver
   void OnAXModeAdded(ui::AXMode mode) override;
 
+  // WidgetAXManagerObserver:
+  void OnWidgetAXManagerEnabled() override;
+
+  bool IsWebContentsAlive() const;
+
  private:
   friend class WebViewUnitTest;
+  bool IsObservingAXModeForTesting();
+  bool IsObservingWidgetAXManagerForTesting();
 
   void AttachWebContentsNativeView();
   void DetachWebContentsNativeView();
   void UpdateCrashedOverlayView();
+  void UpdateNativeViewHostAccessibleParent();
   void NotifyAccessibilityWebContentsChanged();
+  void HandleWidgetAXManagerEnablement();
 
   // Called when the main frame in the renderer becomes present.
   void SetUpNewMainFrame(content::RenderFrameHost* frame_host);
@@ -203,17 +249,22 @@ class WEBVIEW_EXPORT WebView : public View,
   // EnableSizingFromWebContents() has been called. This should only be called
   // for main frames; other frames can not have auto resize set.
   void MaybeEnableAutoResize(content::RenderFrameHost* frame_host);
+  void EnsureHostNodeReplacementRegistration();
+  void ClearHostNodeReplacementRegistration();
 
   // Create a regular or test web contents (based on whether we're running
   // in a unit test or not).
   std::unique_ptr<content::WebContents> CreateWebContents(
       content::BrowserContext* browser_context,
-      base::Location creator_location = base::Location::Current());
+      const GURL& url,
+      base::Location creator_location);
 
   const raw_ptr<NativeViewHost> holder_ =
       AddChildView(std::make_unique<NativeViewHost>());
   base::ScopedObservation<ui::AXPlatform, ui::AXModeObserver>
       ax_mode_observation_{this};
+  base::ScopedObservation<WidgetAXManager, WidgetAXManagerObserver>
+      widget_ax_manager_observation_{this};
   // Non-NULL if |web_contents()| was created and is owned by this WebView.
   std::unique_ptr<content::WebContents> wc_owner_;
   // Set to true when |holder_| is letterboxed (scaled to be smaller than this
@@ -225,6 +276,7 @@ class WEBVIEW_EXPORT WebView : public View,
   bool is_primary_web_contents_for_window_ = false;
 
   bool lock_child_ax_tree_id_override_ = false;
+  std::string host_node_replacement_id_;
 
   // Minimum and maximum sizes to determine WebView bounds for auto-resizing.
   // Empty if auto resize is not enabled.
@@ -234,6 +286,13 @@ class WEBVIEW_EXPORT WebView : public View,
   // List of subscriptions listening for new WebContents being attached to this
   // WebView.
   base::RepeatingCallbackList<void(WebView*)> web_contents_attached_callbacks_;
+
+  // List of subscriptions listening for the WebContents being detached from
+  // this WebView.
+  base::RepeatingCallbackList<void(WebView*)> web_contents_detached_callbacks_;
+
+  // List of subscriptions listening for attached WebContents being focused.
+  base::RepeatingCallbackList<void(WebView*)> web_contents_focused_callbacks_;
 };
 
 BEGIN_VIEW_BUILDER(WEBVIEW_EXPORT, WebView, View)

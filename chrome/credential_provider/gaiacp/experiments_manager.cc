@@ -4,11 +4,14 @@
 
 #include "chrome/credential_provider/gaiacp/experiments_manager.h"
 
+#include <string_view>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
 #include "base/json/json_reader.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/credential_provider/gaiacp/gcp_utils.h"
 #include "chrome/credential_provider/gaiacp/logging.h"
@@ -67,20 +70,19 @@ bool ExperimentsManager::ReloadExperiments(const std::wstring& sid) {
     return false;
   }
 
-  std::vector<char> buffer(experiments_file->GetLength());
-  experiments_file->Read(0, buffer.data(), buffer.size());
+  std::vector<uint8_t> buffer(experiments_file->GetLength());
+  experiments_file->Read(0, buffer);
   experiments_file.reset();
 
-  std::optional<base::Value> experiments_data =
-      base::JSONReader::Read(base::StringPiece(buffer.data(), buffer.size()),
-                             base::JSON_ALLOW_TRAILING_COMMAS);
-  if (!experiments_data || !experiments_data->is_dict()) {
+  std::optional<base::DictValue> experiments_data = base::JSONReader::ReadDict(
+      base::as_string_view(buffer), base::JSON_ALLOW_TRAILING_COMMAS);
+  if (!experiments_data) {
     LOGFN(ERROR) << "Failed to read experiments data from file!";
     return false;
   }
 
-  const base::Value::List* experiments_value =
-      experiments_data->GetDict().FindList(kResponseExperimentsKeyName);
+  const base::ListValue* experiments_value =
+      experiments_data->FindList(kResponseExperimentsKeyName);
   if (!experiments_value) {
     LOGFN(ERROR) << "User experiments not found!";
     return false;
@@ -99,7 +101,7 @@ bool ExperimentsManager::ReloadExperiments(const std::wstring& sid) {
   return true;
 }
 
-// TODO(crbug.com/1143829): Reload experiments if they were fetched by ESA.
+// TODO(crbug.com/40155245): Reload experiments if they were fetched by ESA.
 void ExperimentsManager::ReloadAllExperiments() {
   std::map<std::wstring, UserTokenHandleInfo> sid_to_gaia_id;
   HRESULT hr = GetUserTokenHandles(&sid_to_gaia_id);

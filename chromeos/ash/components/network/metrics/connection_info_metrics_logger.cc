@@ -4,7 +4,6 @@
 
 #include "chromeos/ash/components/network/metrics/connection_info_metrics_logger.h"
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "chromeos/ash/components/network/metrics/connection_results.h"
 #include "chromeos/ash/components/network/metrics/network_metrics_helper.h"
@@ -21,14 +20,17 @@ ConnectionInfoMetricsLogger::ConnectionInfo::ConnectionInfo(
     : guid(network->guid()),
       shill_error(network->GetError()),
       is_user_initiated(is_user_initiated) {
-  if (network->IsConnectedState())
+  if (network->IsConnectedState()) {
     status = Status::kConnected;
-  else if (network->IsConnectingState())
+  } else if (network->IsConnectingState()) {
     status = Status::kConnecting;
-  else if (network->connection_state() == shill::kStateDisconnect)
+  } else if (network->connection_state() == shill::kStateDisconnecting) {
     status = Status::kDisconnecting;
-  else
+  } else if (network->connection_state() == shill::kStateFailure) {
+    status = Status::kFailure;
+  } else {
     status = Status::kDisconnected;
+  }
 }
 
 ConnectionInfoMetricsLogger::ConnectionInfo::~ConnectionInfo() = default;
@@ -86,7 +88,7 @@ void ConnectionInfoMetricsLogger::NetworkListChanged() {
   // Only store visible network ConnectionInfo in |guid_to_connection_info_|.
   for (const auto& connection_info : old_guid_to_connection_info) {
     const std::string& guid = connection_info.first;
-    if (!base::Contains(visible_guids, guid))
+    if (!visible_guids.contains(guid))
       continue;
     guid_to_connection_info_.insert_or_assign(
         guid, old_guid_to_connection_info.find(guid)->second);
@@ -98,22 +100,25 @@ void ConnectionInfoMetricsLogger::NetworkConnectionStateChanged(
   UpdateConnectionInfo(network);
 }
 
-void ConnectionInfoMetricsLogger::ConnectToNetworkRequested(
+ConnectToNetworkRequestVerdict
+ConnectionInfoMetricsLogger::ConnectToNetworkRequested(
     const std::string& service_path) {
   if (!network_state_handler_) {
-    return;
+    return ConnectToNetworkRequestVerdict::kProceed;
   }
 
   const NetworkState* network =
       network_state_handler_->GetNetworkState(service_path);
 
   if (!network) {
-    return;
+    return ConnectToNetworkRequestVerdict::kProceed;
   }
 
   guid_to_connection_info_.insert_or_assign(
       network->guid(), ConnectionInfo(network,
                                       /*is_user_initiated=*/true));
+
+  return ConnectToNetworkRequestVerdict::kProceed;
 }
 
 void ConnectionInfoMetricsLogger::OnShuttingDown() {
@@ -214,7 +219,7 @@ void ConnectionInfoMetricsLogger::AttemptLogConnectionStateResult(
   // as a result of a shill error.
   if (prev_info && prev_info->status == ConnectionInfo::Status::kConnected &&
       (curr_info.status == ConnectionInfo::Status::kDisconnected ||
-       curr_info.status == ConnectionInfo::Status::kDisconnecting) &&
+       curr_info.status == ConnectionInfo::Status::kFailure) &&
       NetworkState::ErrorIsValid(curr_info.shill_error)) {
     NetworkMetricsHelper::LogConnectionStateResult(
         curr_info.guid,

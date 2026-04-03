@@ -70,14 +70,17 @@ class DeleteDirectiveHandler final : public syncer::SyncableService {
   // syncer::SyncableService implementation.
   void WaitUntilReadyToSync(base::OnceClosure done) override;
   std::optional<syncer::ModelError> MergeDataAndStartSyncing(
-      syncer::ModelType type,
+      syncer::DataType type,
       const syncer::SyncDataList& initial_sync_data,
       std::unique_ptr<syncer::SyncChangeProcessor> sync_processor) override;
-  void StopSyncing(syncer::ModelType type) override;
+  void StopSyncing(syncer::DataType type) override;
   std::optional<syncer::ModelError> ProcessSyncChanges(
       const base::Location& from_here,
       const syncer::SyncChangeList& change_list) override;
   base::WeakPtr<SyncableService> AsWeakPtr() override;
+  std::string GetClientTag(
+      const syncer::EntityData& entity_data) const override;
+  bool SupportsGetClientTag() const override;
 
  private:
   class DeleteDirectiveTask;

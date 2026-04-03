@@ -15,6 +15,7 @@
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkPathTypes.h"
 #include "third_party/skia/include/core/SkPoint.h"
+#include "third_party/skia/include/core/SkRRect.h"
 #include "third_party/skia/include/core/SkScalar.h"
 #include "third_party/skia/include/core/SkTileMode.h"
 #include "ui/color/color_id.h"
@@ -269,12 +270,15 @@ void MediaNotificationBackgroundImpl::Paint(gfx::Canvas* canvas,
     const SkScalar top_radius = SkIntToScalar(top_radius_);
     const SkScalar bottom_radius = SkIntToScalar(bottom_radius_);
 
-    const SkScalar radii[8] = {top_radius,    top_radius,    top_radius,
-                               top_radius,    bottom_radius, bottom_radius,
-                               bottom_radius, bottom_radius};
+    const SkVector radii[4] = {
+        {top_radius, top_radius},
+        {top_radius, top_radius},
+        {bottom_radius, bottom_radius},
+        {bottom_radius, bottom_radius},
+    };
 
-    SkPath path;
-    path.addRoundRect(gfx::RectToSkRect(bounds), radii, SkPathDirection::kCW);
+    const SkPath path =
+        SkPath::RRect(SkRRect::MakeRectRadii(gfx::RectToSkRect(bounds), radii));
     canvas->ClipPath(path, true);
   }
 
@@ -301,7 +305,7 @@ void MediaNotificationBackgroundImpl::Paint(gfx::Canvas* canvas,
     // Draw a gradient to fade the color background and the image together.
     gfx::Rect draw_bounds = GetGradientBounds(*view);
 
-    // TODO(crbug/1308932): Remove FromColor and make all SkColor4f.
+    // TODO(crbug.com/40219248): Remove FromColor and make all SkColor4f.
     const SkColor4f colors[2] = {SkColor4f::FromColor(background_color),
                                  SkColor4f::FromColor(SkColorSetA(
                                      background_color, SK_AlphaTRANSPARENT))};
@@ -322,7 +326,7 @@ void MediaNotificationBackgroundImpl::Paint(gfx::Canvas* canvas,
     // and the image together.
     gfx::Rect draw_bounds = GetBottomGradientBounds(*view);
 
-    // TODO(crbug/1308932): Remove FromColor and make all SkColor4f.
+    // TODO(crbug.com/40219248): Remove FromColor and make all SkColor4f.
     const SkColor4f colors[2] = {SkColor4f::FromColor(background_color),
                                  SkColor4f::FromColor(SkColorSetA(
                                      background_color, SK_AlphaTRANSPARENT))};

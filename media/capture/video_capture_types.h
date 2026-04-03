@@ -55,8 +55,8 @@ enum class PowerLineFrequency {
 
 enum class VideoCaptureBufferType {
   kSharedMemory,
-  kMailboxHolder,
-  kGpuMemoryBuffer
+  kGpuMemoryBuffer,
+  kSharedImage,
 };
 
 // These values are persisted to logs. Entries should not be renumbered and
@@ -108,7 +108,7 @@ enum class VideoCaptureError {
   kCrosHalV3DeviceDelegateWrongNumberOfStreamsConfigured = 43,
   kCrosHalV3DeviceDelegateFailedToGetDefaultRequestSettings = 44,
   kCrosHalV3BufferManagerHalRequestedTooManyBuffers = 45,
-  kCrosHalV3BufferManagerFailedToCreateGpuMemoryBuffer = 46,
+  kCrosHalV3BufferManagerFailedToCreateMappableSI = 46,
   kCrosHalV3BufferManagerFailedToMapGpuMemoryBuffer = 47,
   kCrosHalV3BufferManagerUnsupportedVideoPixelFormat = 48,
   kCrosHalV3BufferManagerFailedToDupFd = 49,
@@ -212,7 +212,8 @@ enum class VideoCaptureError {
   kVideoCaptureDeviceFactorySecondCreateDenied = 147,
   kScreenCaptureKitResetStreamError = 148,
   kWinMediaFoundationCameraBusy = 149,
-  kMaxValue = 149
+  kWebRtcStartCaptureFailed = 150,
+  kMaxValue = 150
 };
 
 // WARNING: Do not change the values assigned to the entries. They are used for
@@ -246,8 +247,13 @@ enum class VideoCaptureFrameDropReason {
   kRendererSinkFrameDelivererIsNotStarted = 26,
   kCropVersionNotCurrent_DEPRECATED = 27,
   kGpuMemoryBufferMapFailed = 28,
-  kSubCaptureTargetVersionNotCurrent = 29,
-  kMaxValue = kSubCaptureTargetVersionNotCurrent
+  kSubCaptureTargetVersionNotCurrent_DEPRECATED = 29,
+  kPostProcessingFailed = 30,
+  kResolutionAdapterFrameIsNotMappable = 31,
+  kResolutionAdapterCannotCreateConvertFrame = 32,
+  kResolutionAdapterConvertAndScaleFailed = 33,
+  kOldCaptureVersion = 34,
+  kMaxValue = kOldCaptureVersion
 };
 
 // Assert that the int:frequency mapping is correct.
@@ -330,7 +336,8 @@ struct CAPTURE_EXPORT VideoCaptureParams {
     return requested_format == other.requested_format &&
            resolution_change_policy == other.resolution_change_policy &&
            power_line_frequency == other.power_line_frequency &&
-           is_high_dpi_enabled == other.is_high_dpi_enabled;
+           is_high_dpi_enabled == other.is_high_dpi_enabled &&
+           capture_version_source == other.capture_version_source;
   }
 
   // Requests a resolution and format at which the capture will occur.
@@ -353,6 +360,11 @@ struct CAPTURE_EXPORT VideoCaptureParams {
   // Flag indicating whether HiDPI mode should be enabled for tab capture
   // sessions.
   bool is_high_dpi_enabled = true;
+
+  // Starts at 0 when the capture starts, and is incremented whenever the target
+  // of the capture is dynamically changed, as for example when using
+  // share-this-tab-instead.
+  uint32_t capture_version_source = 0;
 };
 
 CAPTURE_EXPORT std::ostream& operator<<(

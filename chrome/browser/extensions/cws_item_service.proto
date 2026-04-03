@@ -60,3 +60,86 @@ message BatchGetStoreMetadatasResponse {
   // included in the response.
   repeated StoreMetadata store_metadatas = 1;
 }
+
+// Request message for FetchItemSnippet.
+message FetchItemSnippetRequest {
+  // The name of the item to retrieve.
+  // Format: items/{item_id}
+  // If no resource name is provided or the format is incorrect, the API returns
+  // error code INVALID_ARGUMENT.
+  string name = 1;
+}
+
+// Response message for FetchItemSnippet.
+// The localized title and summary are based on the language of the client
+// making the API request. If no client language is available, the language
+// falls back to the item’s primary language.
+message FetchItemSnippetResponse {
+  // Extension/item id.
+  string item_id = 1;
+
+  // Manifest string.
+  string manifest = 2;
+
+  // Localized title, which maps to the "name" field in the manifest.
+  string title = 3;
+
+  // Localized summary, which maps to the "description" field in the manifest.
+  string summary = 4;
+
+  // Logo uri.
+  string logo_uri = 5;
+
+  // Localized user count string.
+  string user_count_string = 6;
+
+  // User review rating count.
+  int64 rating_count = 7;
+
+  // Average user review rating.
+  double average_rating = 8;
+
+  // Localized user review rating count string.
+  string rating_count_string = 9;
+
+  // next tag: 10
+}
+
+// Request message for BatchFetchItemBlockStatusForEnterprise.
+message BatchFetchItemBlockStatusForEnterpriseRequest {
+  // The IDs of the items to retrieve. If no IDs are provided, the API returns
+  // error code INVALID_ARGUMENT.
+  repeated string item_ids = 1;
+
+  // The encrypted DM token of the device.
+  string dm_token = 2;
+
+  // The client id unique to the device.
+  string client_device_id = 3;
+
+  // next tag: 4
+}
+
+// Response message for FetchItemBlockStatusForEnterprise.
+message FetchItemBlockStatusForEnterpriseResponse {
+   // Item id
+  string item_id = 1;
+
+  // Whether the item is blocked by CWS for the caller.
+  bool blocked = 2;
+
+  // The code for the block reason. This will be a short string (eg, "CATEGORY")
+  // that can be used for logging or metrics. Only set if blocked is true.
+  string block_code = 3;
+
+  // next tag: 4
+}
+
+// Response message for BatchFetchItemBlockStatusForEnterprise.
+message BatchFetchItemBlockStatusForEnterpriseResponse {
+  // The responses for each item. The order of the responses is the same as the
+  // order of the names in the request.
+  repeated FetchItemBlockStatusForEnterpriseResponse responses = 1;
+
+  // next tag: 2
+}

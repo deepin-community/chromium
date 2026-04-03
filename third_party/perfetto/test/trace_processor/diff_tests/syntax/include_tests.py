@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -23,121 +23,40 @@ class PerfettoInclude(TestSuite):
 
   def test_import(self):
     return DiffTestBlueprint(
-        trace=TextProto(r"""
-        packet {
-          ftrace_events {
-            cpu: 1
-            event {
-              timestamp: 1000
-              pid: 1
-              print {
-                buf: "C|1000|battery_stats.data_conn|13\n"
-              }
-            }
-            event {
-              timestamp: 4000
-              pid: 1
-              print {
-                buf: "C|1000|battery_stats.data_conn|20\n"
-              }
-            }
-            event {
-              timestamp: 1000
-              pid: 1
-              print {
-                buf: "C|1000|battery_stats.audio|1\n"
-              }
-            }
-          }
-        }
-        """),
+        trace=TextProto(''),
         query="""
-        SELECT IMPORT('common.timestamps');
+        SELECT IMPORT('time.conversion');
 
-        SELECT TRACE_START();
+        SELECT 1 AS x;
         """,
         out=Csv("""
-        "TRACE_START()"
-        1000
+        "x"
+        1
         """))
 
   def test_include_perfetto_module(self):
     return DiffTestBlueprint(
-        trace=TextProto(r"""
-        packet {
-          ftrace_events {
-            cpu: 1
-            event {
-              timestamp: 1000
-              pid: 1
-              print {
-                buf: "C|1000|battery_stats.data_conn|13\n"
-              }
-            }
-            event {
-              timestamp: 4000
-              pid: 1
-              print {
-                buf: "C|1000|battery_stats.data_conn|20\n"
-              }
-            }
-            event {
-              timestamp: 1000
-              pid: 1
-              print {
-                buf: "C|1000|battery_stats.audio|1\n"
-              }
-            }
-          }
-        }
-        """),
+        trace=TextProto(''),
         query="""
-        INCLUDE PERFETTO MODULE common.timestamps;
+        INCLUDE PERFETTO MODULE time.conversion;
 
-        SELECT TRACE_START();
+        SELECT time_to_ns(1) AS x
         """,
         out=Csv("""
-        "TRACE_START()"
-        1000
+        "x"
+        1
         """))
 
   def test_include_and_import(self):
     return DiffTestBlueprint(
-        trace=TextProto(r"""
-        packet {
-          ftrace_events {
-            cpu: 1
-            event {
-              timestamp: 1000
-              pid: 1
-              print {
-                buf: "C|1000|battery_stats.data_conn|13\n"
-              }
-            }
-            event {
-              timestamp: 4000
-              pid: 1
-              print {
-                buf: "C|1000|battery_stats.data_conn|20\n"
-              }
-            }
-            event {
-              timestamp: 1000
-              pid: 1
-              print {
-                buf: "C|1000|battery_stats.audio|1\n"
-              }
-            }
-          }
-        }
-        """),
+        trace=TextProto(''),
         query="""
-        SELECT IMPORT('common.timestamps');
-        INCLUDE PERFETTO MODULE common.timestamps;
+        SELECT IMPORT('time.conversion');
+        INCLUDE PERFETTO MODULE time.conversion;
 
-        SELECT TRACE_START();
+        SELECT 1 AS x
         """,
         out=Csv("""
-        "TRACE_START()"
-        1000
+        "x"
+        1
         """))

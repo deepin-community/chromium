@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/trace_event/trace_event.h"
 #include "chrome/common/extensions/api/file_system_provider.h"
 #include "chrome/common/extensions/api/file_system_provider_internal.h"
@@ -36,7 +37,8 @@ int CopyRequestValueToBuffer(const RequestValue& value,
   if (chunk_size > static_cast<size_t>(buffer_length) - buffer_offset)
     return -1;
 
-  memcpy(buffer->data() + buffer_offset, params->data.data(), chunk_size);
+  UNSAFE_TODO(
+      memcpy(buffer->data() + buffer_offset, params->data.data(), chunk_size));
 
   return chunk_size;
 }
@@ -80,7 +82,7 @@ bool ReadFile::Execute(int request_id) {
           options));
 }
 
-void ReadFile::OnSuccess(int /* request_id */,
+void ReadFile::OnSuccess(/*request_id=*/int,
                          const RequestValue& result,
                          bool has_more) {
   TRACE_EVENT0("file_system_provider", "ReadFile::OnSuccess");
@@ -90,7 +92,7 @@ void ReadFile::OnSuccess(int /* request_id */,
   if (copy_result < 0) {
     LOG(ERROR) << "Failed to parse a response for the read file operation.";
     callback_.Run(
-        0 /* chunk_length */, false /* has_more */, base::File::FILE_ERROR_IO);
+        /*chunk_length=*/0, /*has_more=*/false, base::File::FILE_ERROR_IO);
     return;
   }
 
@@ -99,11 +101,11 @@ void ReadFile::OnSuccess(int /* request_id */,
   callback_.Run(copy_result, has_more, base::File::FILE_OK);
 }
 
-void ReadFile::OnError(int /* request_id */,
-                       const RequestValue& /* result */,
+void ReadFile::OnError(/*request_id=*/int,
+                       /*result=*/const RequestValue&,
                        base::File::Error error) {
   TRACE_EVENT0("file_system_provider", "ReadFile::OnError");
-  callback_.Run(0 /* chunk_length */, false /* has_more */, error);
+  callback_.Run(/*chunk_length=*/0, /*has_more=*/false, error);
 }
 
 }  // namespace ash::file_system_provider::operations

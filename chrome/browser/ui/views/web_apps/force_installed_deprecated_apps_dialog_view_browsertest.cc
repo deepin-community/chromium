@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include "base/feature_list.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/web_apps/force_installed_preinstalled_deprecated_app_dialog_view.h"
 #include "chrome/browser/ui/webui/app_home/app_home.mojom.h"
 #include "chrome/browser/ui/webui/app_home/app_home_page_handler.h"
@@ -12,7 +14,6 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_web_ui.h"
 #include "extensions/browser/test_management_policy.h"
@@ -85,7 +86,7 @@ class ForceInstalledDeprecatedAppsDialogViewBrowserTest
   base::test::ScopedFeatureList feature_list_;
   extensions::TestManagementPolicyProvider policy_provider_{
       extensions::TestManagementPolicyProvider::MUST_REMAIN_INSTALLED};
-  content::TestWebUI test_web_ui_{};
+  content::TestWebUI test_web_ui_;
 };
 
 IN_PROC_BROWSER_TEST_F(ForceInstalledDeprecatedAppsDialogViewBrowserTest,
@@ -134,8 +135,7 @@ IN_PROC_BROWSER_TEST_F(ForceInstalledDeprecatedAppsDialogViewBrowserTest,
   // Widget is shown.
   EXPECT_NE(view, nullptr);
   ui_test_utils::UrlLoadObserver url_observer(
-      embedded_test_server()->GetURL("/"),
-      content::NotificationService::AllSources());
+      embedded_test_server()->GetURL("/"));
   views::test::AcceptDialog(view);
   url_observer.Wait();
 }

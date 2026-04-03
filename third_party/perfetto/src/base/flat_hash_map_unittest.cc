@@ -17,16 +17,18 @@
 #include "perfetto/ext/base/flat_hash_map.h"
 
 #include <array>
-#include <functional>
+#include <cstddef>
 #include <random>
 #include <set>
 #include <unordered_map>
+#include <vector>
 
+#include "perfetto/ext/base/flat_hash_map_v1.h"
+#include "perfetto/ext/base/fnv_hash.h"
 #include "perfetto/ext/base/hash.h"
 #include "test/gtest_and_gmock.h"
 
-namespace perfetto {
-namespace base {
+namespace perfetto::base {
 namespace {
 
 using ::testing::Types;
@@ -35,13 +37,46 @@ struct CollidingHasher {
   size_t operator()(int n) const { return static_cast<size_t>(n % 1000); }
 };
 
+// Helper traits to select the map implementation
+template <int Version>
+struct MapSelector;
+
+template <>
+struct MapSelector<1> {
+  template <typename K, typename V, typename H, typename P>
+  using Map = FlatHashMap<K, V, H, P>;
+};
+
+template <>
+struct MapSelector<2> {
+  template <typename K, typename V, typename H, typename P>
+  using Map = FlatHashMapV2<K, V, H>;
+};
+
+// Helper struct to combine map version and probe type for parameterized testing
+template <int Version, typename ProbeImpl>
+struct MapProbeConfig {
+  static constexpr int version = Version;
+  using Probe = ProbeImpl;
+  template <typename K, typename V, typename H, typename P>
+  using Map = typename MapSelector<Version>::template Map<K, V, H, P>;
+};
+
 template <typename T>
 class FlatHashMapTest : public testing::Test {
  public:
-  using Probe = T;
+  using Probe = typename T::Probe;
+  template <typename K, typename V, typename H, typename P>
+  using Map = typename T::template Map<K, V, H, P>;
 };
 
-using ProbeTypes = Types<LinearProbe, QuadraticHalfProbe, QuadraticProbe>;
+using ProbeTypes = Types<
+    // V1 tests with different probe strategies
+    MapProbeConfig<1, LinearProbe>,
+    MapProbeConfig<1, QuadraticHalfProbe>,
+    MapProbeConfig<1, QuadraticProbe>,
+    // V2 test - uses fixed linear probing (Probe parameter ignored)
+    MapProbeConfig<2, LinearProbe>>;
 TYPED_TEST_SUITE(FlatHashMapTest, ProbeTypes, /* trailing ',' for GCC*/);
 
 struct Key {
@@ -72,7 +107,7 @@ struct Value {
   int id = instances++;
 };
 
-struct Hasher {
+struct KeyHasher {
   size_t operator()(const Key& k) const { return static_cast<size_t>(k.val); }
 };
 
@@ -80,7 +115,9 @@ int Key::instances = 0;
 int Value::instances = 0;
 
 TYPED_TEST(FlatHashMapTest, NonTrivialKeyValues) {
-  FlatHashMap<Key, Value, Hasher, typename TestFixture::Probe> fmap;
+  typename TestFixture::template Map<Key, Value, KeyHasher,
+                                     typename TestFixture::Probe>
+      fmap;
 
   for (int iteration = 0; iteration < 3; iteration++) {
     const int kNum = 10;
@@ -100,8 +137,9 @@ TYPED_TEST(FlatHashMapTest, NonTrivialKeyValues) {
     ASSERT_EQ(Key::instances, kNum - 3);
     ASSERT_EQ(Value::instances, kNum - 3);
 
-    FlatHashMap<Key, Value, Hasher, typename TestFixture::Probe> fmap2(
-        std::move(fmap));
+    typename TestFixture::template Map<Key, Value, KeyHasher,
+                                       typename TestFixture::Probe>
+        fmap2(std::move(fmap));
     ASSERT_EQ(fmap.size(), 0u);
     ASSERT_EQ(fmap2.size(), static_cast<size_t>(kNum - 3));
 
@@ -145,8 +183,8 @@ TYPED_TEST(FlatHashMapTest, NonTrivialKeyValues) {
 }
 
 TYPED_TEST(FlatHashMapTest, AllTagsAreValid) {
-  FlatHashMap<size_t, size_t, base::AlreadyHashed<size_t>,
-              typename TestFixture::Probe>
+  typename TestFixture::template Map<
+      size_t, size_t, base::AlreadyHashed<size_t>, typename TestFixture::Probe>
       fmap;
   auto make_key = [](size_t tag) {
     return tag << ((sizeof(size_t) - 1) * size_t(8));
@@ -169,8 +207,13 @@ TYPED_TEST(FlatHashMapTest, AllTagsAreValid) {
   }
 }
 
-TYPED_TEST(FlatHashMapTest, FillWithTombstones) {
-  FlatHashMap<Key, Value, Hasher, typename TestFixture::Probe> fmap(
+// This test fills the table completely, then erases everything (creating
+// tombstones), then repeats. This is a pathological case that only works
+// with V1's probing strategy. V2 (Swiss Table) requires at least one empty
+// slot to terminate the probe loop, so 100% load + all tombstones is not
+// supported.
+TEST(FlatHashMapV1Test, FillWithTombstones) {
+  FlatHashMap<Key, Value, KeyHasher, LinearProbe> fmap(
       /*initial_capacity=*/0, /*load_limit_pct=*/100);
 
   for (int rep = 0; rep < 3; rep++) {
@@ -192,8 +235,10 @@ TYPED_TEST(FlatHashMapTest, FillWithTombstones) {
 }
 
 TYPED_TEST(FlatHashMapTest, Collisions) {
-  FlatHashMap<int, int, CollidingHasher, typename TestFixture::Probe> fmap(
-      /*initial_capacity=*/0, /*load_limit_pct=*/100);
+  typename TestFixture::template Map<int, int, CollidingHasher,
+                                     typename TestFixture::Probe>
+      fmap(
+          /*initial_capacity=*/0, /*load_limit_pct=*/100);
 
   for (int rep = 0; rep < 3; rep++) {
     // Insert four values which collide on the same bucket.
@@ -225,8 +270,10 @@ TYPED_TEST(FlatHashMapTest, Collisions) {
 
 TYPED_TEST(FlatHashMapTest, ProbeVisitsAllSlots) {
   const int kIterations = 1024;
-  FlatHashMap<int, int, CollidingHasher, typename TestFixture::Probe> fmap(
-      /*initial_capacity=*/kIterations, /*load_limit_pct=*/100);
+  typename TestFixture::template Map<int, int, CollidingHasher,
+                                     typename TestFixture::Probe>
+      fmap(
+          /*initial_capacity=*/kIterations, /*load_limit_pct=*/100);
   for (int i = 0; i < kIterations; i++) {
     ASSERT_TRUE(fmap.Insert(i, i).second);
   }
@@ -236,7 +283,8 @@ TYPED_TEST(FlatHashMapTest, ProbeVisitsAllSlots) {
 }
 
 TYPED_TEST(FlatHashMapTest, Iterator) {
-  FlatHashMap<int, int, base::AlreadyHashed<int>, typename TestFixture::Probe>
+  typename TestFixture::template Map<int, int, base::AlreadyHashed<int>,
+                                     typename TestFixture::Probe>
       fmap;
 
   auto it = fmap.GetIterator();
@@ -279,8 +327,8 @@ TYPED_TEST(FlatHashMapTest, DontRehashIfKeyAlreadyExists) {
   static std::array<size_t, 3> kLimitPct{25, 50, 100};
 
   for (size_t limit_pct : kLimitPct) {
-    FlatHashMap<size_t, size_t, AlreadyHashed<size_t>,
-                typename TestFixture::Probe>
+    typename TestFixture::template Map<size_t, size_t, AlreadyHashed<size_t>,
+                                       typename TestFixture::Probe>
         fmap(kInitialCapacity, static_cast<int>(limit_pct));
 
     const size_t limit = kInitialCapacity * limit_pct / 100u;
@@ -308,7 +356,9 @@ TYPED_TEST(FlatHashMapTest, DontRehashIfKeyAlreadyExists) {
 
 TYPED_TEST(FlatHashMapTest, VsUnorderedMap) {
   std::unordered_map<int, int, CollidingHasher> umap;
-  FlatHashMap<int, int, CollidingHasher, typename TestFixture::Probe> fmap;
+  typename TestFixture::template Map<int, int, CollidingHasher,
+                                     typename TestFixture::Probe>
+      fmap;
   std::minstd_rand0 rng(0);
 
   for (int rep = 0; rep < 2; rep++) {
@@ -383,6 +433,104 @@ TYPED_TEST(FlatHashMapTest, VsUnorderedMap) {
   }
 }
 
+TYPED_TEST(FlatHashMapTest, Clear) {
+  {
+    typename TestFixture::template Map<Key, Value, KeyHasher,
+                                       typename TestFixture::Probe>
+        fmap;
+    ASSERT_EQ(Key::instances, 0);
+    ASSERT_EQ(Value::instances, 0);
+
+    fmap.Insert(Key(1), Value(1));
+    fmap.Insert(Key(2), Value(2));
+    ASSERT_EQ(Key::instances, 2);
+    ASSERT_EQ(Value::instances, 2);
+
+    fmap.Clear();
+    ASSERT_EQ(fmap.size(), 0u);
+    ASSERT_EQ(Key::instances, 0);
+    ASSERT_EQ(Value::instances, 0);
+
+    fmap.Insert(Key(3), Value(3));
+    ASSERT_EQ(fmap.size(), 1u);
+    ASSERT_EQ(Key::instances, 1);
+    ASSERT_EQ(Value::instances, 1);
+  }
+  ASSERT_EQ(Key::instances, 0);
+  ASSERT_EQ(Value::instances, 0);
+
+  {
+    typename TestFixture::template Map<int, int, base::FnvHash<int>,
+                                       typename TestFixture::Probe>
+        fmap;
+    fmap.Insert(1, 1);
+    fmap.Insert(2, 2);
+    ASSERT_EQ(fmap.size(), 2u);
+
+    fmap.Clear();
+    ASSERT_EQ(fmap.size(), 0u);
+
+    fmap.Insert(3, 3);
+    ASSERT_EQ(fmap.size(), 1u);
+    ASSERT_NE(fmap.Find(3), nullptr);
+    ASSERT_EQ(*fmap.Find(3), 3);
+  }
+}
+
+TYPED_TEST(FlatHashMapTest, TombstoneGrowthRehash) {
+  typename TestFixture::template Map<int, int, base::FnvHash<int>,
+                                     typename TestFixture::Probe>
+      fmap;
+  // Insert 100 elements. This will cause the capacity to become 128.
+  for (int i = 0; i < 100; ++i) {
+    fmap.Insert(i, i);
+  }
+
+  // Erase 50 elements. This will leave us with size = 50 and tombstones = 50.
+  for (int i = 0; i < 50; ++i) {
+    fmap.Erase(i);
+  }
+
+  // The next insert should trigger a growth rehash because size + tombstones
+  // (100) is close to the load limit (112) and a new element would exceed it.
+  fmap.Insert(101, 101);
+
+  // Check that all the old values are still there.
+  for (int i = 50; i < 100; ++i) {
+    ASSERT_NE(fmap.Find(i), nullptr);
+    ASSERT_EQ(*fmap.Find(i), i);
+  }
+  ASSERT_NE(fmap.Find(101), nullptr);
+  ASSERT_EQ(*fmap.Find(101), 101);
+}
+
+TYPED_TEST(FlatHashMapTest, TombstoneCompactionRehash) {
+  typename TestFixture::template Map<int, int, base::FnvHash<int>,
+                                     typename TestFixture::Probe>
+      fmap;
+  // Insert 300 elements. This will cause the capacity to become 512.
+  for (int i = 0; i < 300; ++i) {
+    fmap.Insert(i, i);
+  }
+
+  // Erase 160 elements. This will leave us with size = 140 and tombstones =
+  // 160.
+  for (int i = 0; i < 160; ++i) {
+    fmap.Erase(i);
+  }
+
+  // The next insert should trigger a compaction rehash because tombstones >
+  // size and size > 128.
+  fmap.Insert(301, 301);
+
+  // Check that all the old values are still there.
+  for (int i = 160; i < 300; ++i) {
+    ASSERT_NE(fmap.Find(i), nullptr);
+    ASSERT_EQ(*fmap.Find(i), i);
+  }
+  ASSERT_NE(fmap.Find(301), nullptr);
+  ASSERT_EQ(*fmap.Find(301), 301);
+}
+
 }  // namespace
-}  // namespace base
-}  // namespace perfetto
+}  // namespace perfetto::base

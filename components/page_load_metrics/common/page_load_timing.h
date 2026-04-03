@@ -16,10 +16,15 @@ mojom::LargestContentfulPaintTimingPtr CreateLargestContentfulPaintTiming();
 mojom::SoftNavigationMetricsPtr CreateSoftNavigationMetrics();
 
 bool IsEmpty(const mojom::DocumentTiming& timing);
+bool IsEmpty(const mojom::DomainLookupTiming& timing);
 bool IsEmpty(const mojom::PaintTiming& timing);
 bool IsEmpty(const mojom::ParseTiming& timing);
 bool IsEmpty(const mojom::PageLoadTiming& timing);
 bool IsEmpty(const mojom::InteractiveTiming& timing);
+bool IsEmpty(const mojom::LcpResourceLoadTimings& timing);
+bool IsEmpty(const mojom::LargestContentfulPaintTiming& timing);
+bool IsEmpty(const mojom::MonotonicPaintTiming& timing);
+bool IsEmpty(const mojom::SoftNavigationMetrics& timing);
 
 void InitPageLoadTimingForTest(mojom::PageLoadTiming* timing);
 

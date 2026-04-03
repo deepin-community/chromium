@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from pkg_resources import packaging
 from typing import Optional
 
+from chrome.test.variations.test_utils.helper import retry
+
 import attr
 
 from selenium import webdriver
@@ -19,8 +21,9 @@ from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common import service
 from selenium.webdriver.chrome.service import Service as ChromeService
 
-DEFAULT_WAIT_TIMEOUT = 10     # 10 seconds timeout
-DEFAULT_WAIT_INTERVAL = 0.3   # 0.3 seconds wait intervals
+DEFAULT_WAIT_TIMEOUT_SECONDS = 60
+DEFAULT_WAIT_INTERVAL_SECONDS = 1
+DRIVER_CREATION_RETRY_COUNT = 3
 
 @attr.attrs()
 class DriverFactory:
@@ -63,6 +66,10 @@ class DriverFactory:
       options.add_experimental_option('browserStartupTimeout', 10000)
     return options
 
+  @retry(DRIVER_CREATION_RETRY_COUNT)
+  def get_driver(self, options):
+    return webdriver.Chrome(service=self.get_driver_service(), options=options)
+
   def get_driver_session_folder(self, session_counter: int) -> str:
     folder = os.path.join(self.artifacts_path, f'session-{session_counter}')
     if not os.path.exists(folder):
@@ -85,17 +92,30 @@ class DriverFactory:
 
   def wait_for_window(self,
                       driver: webdriver.Remote,
-                      timeout: float = DEFAULT_WAIT_TIMEOUT):
+                      timeout: float = DEFAULT_WAIT_TIMEOUT_SECONDS):
     """Waits for the window handle to be available."""
     start_time = time.time()
     while time.time() - start_time <= timeout:
+      # Check if current window handle is set by changing the window size.
       try:
-        driver.current_window_handle
+        driver.set_window_size(800, 600)
         return
       except WebDriverException:
+        pass
+      # Wait for the window to become available.
+      time.sleep(DEFAULT_WAIT_INTERVAL_SECONDS)
+      # Try manually setting window handle to the first available window.
+      try:
+        driver.switch_to.window(driver.window_handles[0])
+        driver.set_window_size(800, 600)
+        return
+      except (IndexError, WebDriverException):
         logging.info('continue to wait on window handles.')
-        time.sleep(DEFAULT_WAIT_INTERVAL)
     raise RuntimeError('Failed to get window handles.')
+
+  def wait_for_screenshot(self) -> None:
+    """Allows a platform to wait before the website screenshot is taken."""
+    return
 
   @contextmanager
   def create_driver(self,

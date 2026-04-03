@@ -9,6 +9,7 @@
 #include "base/files/file_path.h"
 #include "base/json/json_writer.h"
 #include "base/path_service.h"
+#include "chrome/browser/ash/login/test/user_auth_config.h"
 #include "chrome/browser/ash/policy/affiliation/affiliation_test_helper.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/browser_process.h"
@@ -39,6 +40,9 @@ ForceInstalledAffiliatedExtensionApiTest::
   set_chromeos_user_ = false;
   affiliation_mixin_.set_affiliated(is_affiliated);
   cryptohome_mixin_.MarkUserAsExisting(affiliation_mixin_.account_id());
+  cryptohome_mixin_.ApplyAuthConfig(
+      affiliation_mixin_.account_id(),
+      ash::test::UserAuthConfig::Create(ash::test::kDefaultAuthSetup));
 }
 
 ForceInstalledAffiliatedExtensionApiTest::
@@ -74,7 +78,7 @@ void ForceInstalledAffiliatedExtensionApiTest::
 void ForceInstalledAffiliatedExtensionApiTest::SetUpOnMainThread() {
   // Log in user that was created with
   // policy::AffiliationTestHelper::PreLoginUser() in the PRE_ test.
-  const base::Value::List& users =
+  const base::ListValue& users =
       g_browser_process->local_state()->GetList("LoggedInUsers");
   if (!users.empty()) {
     policy::AffiliationTestHelper::LoginUser(affiliation_mixin_.account_id());
@@ -100,12 +104,10 @@ ForceInstalledAffiliatedExtensionApiTest::ForceInstallExtension(
 void ForceInstalledAffiliatedExtensionApiTest::TestExtension(
     Browser* browser,
     const GURL& page_url,
-    const base::Value::Dict& custom_arg_value) {
+    const base::DictValue& custom_arg_value) {
   DCHECK(page_url.is_valid()) << "page_url must be valid";
 
-  std::string custom_arg;
-  base::JSONWriter::Write(custom_arg_value, &custom_arg);
-  SetCustomArg(custom_arg);
+  SetCustomArg(base::WriteJson(custom_arg_value).value_or(""));
 
   extensions::ResultCatcher catcher;
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, GURL(page_url)));

@@ -33,11 +33,24 @@ export interface NotificationPermission {
   notificationInfoString: string;
 }
 
+// LINT.IfChange(PermissionsRevocationType)
+export enum PermissionsRevocationType {
+  UNUSED_PERMISSIONS,
+  ABUSIVE_NOTIFICATION_PERMISSIONS,
+  DISRUPTIVE_NOTIFICATION_PERMISSIONS,
+  UNUSED_PERMISSIONS_AND_ABUSIVE_NOTIFICATIONS,
+  UNUSED_PERMISSIONS_AND_DISRUPTIVE_NOTIFICATIONS,
+  SUSPICIOUS_NOTIFICATION_PERMISSIONS,
+  UNUSED_PERMISSIONS_AND_SUSPICIOUS_NOTIFICATIONS
+}
+// LINT.ThenChange(//chrome/browser/ui/safety_hub/revoked_permissions_result.h:PermissionsRevocationType)
+
 // The unused site permission information passed from safety_hub_handler.cc.
 export interface UnusedSitePermissions {
   origin: string;
   permissions: ContentSettingsTypes[];
   expiration: string;
+  revocationType: PermissionsRevocationType;
 }
 
 // The information for top cards in Safety Hub page.
@@ -58,6 +71,14 @@ export enum CardState {
   WEAK,
   INFO,
   SAFE,
+}
+
+// The information for the entry point of the Safety Hub on Privacy and Security
+// page.
+export interface EntryPointInfo {
+  hasRecommendations: boolean;
+  header: string;
+  subheader: string;
 }
 
 export interface SafetyHubBrowserProxy {
@@ -133,11 +154,14 @@ export interface SafetyHubBrowserProxy {
   /** Get the number of extensions that should be reviewed by the user. */
   getNumberOfExtensionsThatNeedReview(): Promise<number>;
 
-  /** Returns true if Safety Hub has recommendations for the user. */
-  getSafetyHubHasRecommendations(): Promise<boolean>;
-
   /** Get the subheader for Safety Hub entry point in settings. */
-  getSafetyHubEntryPointSubheader(): Promise<string>;
+  getSafetyHubEntryPointData(): Promise<EntryPointInfo>;
+
+  /* Record a visit to the Safety Hub page. */
+  recordSafetyHubPageVisit(): void;
+
+  /* Record an interaction on the Safety Hub page. */
+  recordSafetyHubInteraction(): void;
 }
 
 export class SafetyHubBrowserProxyImpl implements SafetyHubBrowserProxy {
@@ -210,12 +234,16 @@ export class SafetyHubBrowserProxyImpl implements SafetyHubBrowserProxy {
     return sendWithPromise('getNumberOfExtensionsThatNeedReview');
   }
 
-  getSafetyHubHasRecommendations() {
-    return sendWithPromise('getSafetyHubHasRecommendations');
+  getSafetyHubEntryPointData() {
+    return sendWithPromise('getSafetyHubEntryPointData');
   }
 
-  getSafetyHubEntryPointSubheader() {
-    return sendWithPromise('getSafetyHubEntryPointSubheader');
+  recordSafetyHubPageVisit() {
+    return sendWithPromise('recordSafetyHubPageVisit');
+  }
+
+  recordSafetyHubInteraction() {
+    return sendWithPromise('recordSafetyHubInteraction');
   }
 
   static getInstance(): SafetyHubBrowserProxy {

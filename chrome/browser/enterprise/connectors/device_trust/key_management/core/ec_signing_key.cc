@@ -9,18 +9,24 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
-#include "crypto/ec_signature_creator.h"
+#include "build/build_config.h"
+#include "crypto/keypair.h"
+#include "crypto/sign.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "base/notreached.h"
+#endif  // BUILDFLAG(IS_MAC)
 
 namespace enterprise_connectors {
 
 namespace {
 
 // An implementation of crypto::UnexportableSigningKey that is backed by an
-// instance of crypto::ECPrivateKey.
+// instance of crypto::keypair::PrivateKey.
 class ECSigningKey : public crypto::UnexportableSigningKey {
  public:
   ECSigningKey();
-  explicit ECSigningKey(base::span<const uint8_t> wrapped);
+  explicit ECSigningKey(crypto::keypair::PrivateKey&& key);
   ~ECSigningKey() override;
 
   // crypto::UnexportableSigningKey:
@@ -30,19 +36,22 @@ class ECSigningKey : public crypto::UnexportableSigningKey {
   std::optional<std::vector<uint8_t>> SignSlowly(
       base::span<const uint8_t> data) override;
 
+#if BUILDFLAG(IS_MAC)
+  SecKeyRef GetSecKeyRef() const override;
+#elif BUILDFLAG(IS_WIN)
+  bool SupportsTls13() override { return true; }
+#endif  // BUILDFLAG(IS_MAC)
+
+  crypto::StatefulUnexportableSigningKey* AsStatefulUnexportableSigningKey()
+      override;
+
  private:
-  std::unique_ptr<crypto::ECPrivateKey> key_;
+  crypto::keypair::PrivateKey key_;
 };
 
-ECSigningKey::ECSigningKey() {
-  key_ = crypto::ECPrivateKey::Create();
-  DCHECK(key_);
-}
-
-ECSigningKey::ECSigningKey(base::span<const uint8_t> wrapped) {
-  key_ = crypto::ECPrivateKey::CreateFromPrivateKeyInfo(wrapped);
-  DCHECK(key_);
-}
+ECSigningKey::ECSigningKey()
+    : key_(crypto::keypair::PrivateKey::GenerateEcP256()) {}
+ECSigningKey::ECSigningKey(crypto::keypair::PrivateKey&& key) : key_(key) {}
 
 ECSigningKey::~ECSigningKey() = default;
 
@@ -51,27 +60,28 @@ crypto::SignatureVerifier::SignatureAlgorithm ECSigningKey::Algorithm() const {
 }
 
 std::vector<uint8_t> ECSigningKey::GetSubjectPublicKeyInfo() const {
-  std::vector<uint8_t> pubkey;
-  bool ok = key_->ExportPublicKey(&pubkey);
-  DCHECK(ok);
-  return pubkey;
+  return key_.ToSubjectPublicKeyInfo();
 }
 
 std::vector<uint8_t> ECSigningKey::GetWrappedKey() const {
-  std::vector<uint8_t> wrapped;
-  bool ok = key_->ExportPrivateKey(&wrapped);
-  DCHECK(ok);
-  return wrapped;
+  return key_.ToPrivateKeyInfo();
 }
 
 std::optional<std::vector<uint8_t>> ECSigningKey::SignSlowly(
     base::span<const uint8_t> data) {
-  std::vector<uint8_t> signature;
-  auto signer = crypto::ECSignatureCreator::Create(key_.get());
-  DCHECK(signer);
-  bool ok = signer->Sign(data, &signature);
-  DCHECK(ok);
-  return signature;
+  return crypto::sign::Sign(crypto::sign::SignatureKind::ECDSA_SHA256, key_,
+                            data);
+}
+
+#if BUILDFLAG(IS_MAC)
+SecKeyRef ECSigningKey::GetSecKeyRef() const {
+  NOTREACHED();
+}
+#endif  // BUILDFLAG(IS_MAC)
+
+crypto::StatefulUnexportableSigningKey*
+ECSigningKey::AsStatefulUnexportableSigningKey() {
+  return nullptr;
 }
 
 }  // namespace
@@ -84,8 +94,9 @@ ECSigningKeyProvider::SelectAlgorithm(
     base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
         acceptable_algorithms) {
   for (auto algo : acceptable_algorithms) {
-    if (algo == crypto::SignatureVerifier::ECDSA_SHA256)
+    if (algo == crypto::SignatureVerifier::ECDSA_SHA256) {
       return crypto::SignatureVerifier::ECDSA_SHA256;
+    }
   }
 
   return std::nullopt;
@@ -96,17 +107,28 @@ ECSigningKeyProvider::GenerateSigningKeySlowly(
     base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
         acceptable_algorithms) {
   auto algo = SelectAlgorithm(acceptable_algorithms);
-  if (!algo)
+  if (!algo) {
     return nullptr;
+  }
 
-  DCHECK_EQ(crypto::SignatureVerifier::ECDSA_SHA256, *algo);
+  CHECK_EQ(crypto::SignatureVerifier::ECDSA_SHA256, *algo);
   return std::make_unique<ECSigningKey>();
 }
 
 std::unique_ptr<crypto::UnexportableSigningKey>
 ECSigningKeyProvider::FromWrappedSigningKeySlowly(
     base::span<const uint8_t> wrapped_key) {
-  return std::make_unique<ECSigningKey>(wrapped_key);
+  auto unwrapped_key =
+      crypto::keypair::PrivateKey::FromPrivateKeyInfo(wrapped_key);
+  return unwrapped_key && unwrapped_key->IsEc()
+             ? std::make_unique<ECSigningKey>(std::move(*unwrapped_key))
+             : nullptr;
+}
+
+crypto::StatefulUnexportableKeyProvider*
+ECSigningKeyProvider::AsStatefulUnexportableKeyProvider() {
+  // Software keys are stateless.
+  return nullptr;
 }
 
 }  // namespace enterprise_connectors

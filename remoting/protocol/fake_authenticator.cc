@@ -122,6 +122,14 @@ void FakeAuthenticator::Resume() {
   std::move(resume_closure_).Run();
 }
 
+CredentialsType FakeAuthenticator::credentials_type() const {
+  return config_.credentials_type;
+}
+
+const Authenticator& FakeAuthenticator::implementing_authenticator() const {
+  return *this;
+}
+
 Authenticator::State FakeAuthenticator::state() const {
   EXPECT_LE(messages_, config_.round_trips * 2);
 
@@ -160,6 +168,11 @@ bool FakeAuthenticator::started() const {
 Authenticator::RejectionReason FakeAuthenticator::rejection_reason() const {
   EXPECT_EQ(REJECTED, state());
   return RejectionReason::INVALID_CREDENTIALS;
+}
+
+Authenticator::RejectionDetails FakeAuthenticator::rejection_details() const {
+  EXPECT_EQ(REJECTED, state());
+  return {};
 }
 
 void FakeAuthenticator::ProcessMessage(const jingle_xmpp::XmlElement* message,
@@ -227,6 +240,11 @@ const std::string& FakeAuthenticator::GetAuthKey() const {
   return auth_key_;
 }
 
+const SessionPolicies* FakeAuthenticator::GetSessionPolicies() const {
+  EXPECT_EQ(ACCEPTED, state());
+  return nullptr;
+}
+
 std::unique_ptr<ChannelAuthenticator>
 FakeAuthenticator::CreateChannelAuthenticator() const {
   EXPECT_EQ(ACCEPTED, state());
@@ -260,6 +278,12 @@ FakeHostAuthenticatorFactory::CreateAuthenticator(
       FakeAuthenticator::HOST, config_, local_jid, remote_jid));
   authenticator->set_messages_till_started(messages_till_started_);
   return std::move(authenticator);
+}
+
+std::unique_ptr<AuthenticatorFactory> FakeHostAuthenticatorFactory::Clone()
+    const {
+  return std::make_unique<FakeHostAuthenticatorFactory>(messages_till_started_,
+                                                        config_);
 }
 
 }  // namespace remoting::protocol

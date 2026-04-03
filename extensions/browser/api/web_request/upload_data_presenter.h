@@ -14,6 +14,9 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/values.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace base {
 class FilePath;
@@ -33,10 +36,10 @@ namespace subtle {
 
 // Helpers shared with unit-tests.
 
-// Appends a dictionary {'key': 'value'} to |list|.
+// Appends a dictionary {'key': 'value'} to `list`.
 void AppendKeyValuePair(const char* key,
                         base::Value value,
-                        base::Value::List& list);
+                        base::ListValue& list);
 
 }  // namespace subtle
 
@@ -61,7 +64,7 @@ class UploadDataPresenter {
   virtual std::optional<base::Value> TakeResult() = 0;
 
  protected:
-  UploadDataPresenter() {}
+  UploadDataPresenter() = default;
 };
 
 // This class passes all the bytes from bytes elements as a BinaryValue for each
@@ -83,11 +86,11 @@ class RawDataPresenter : public UploadDataPresenter {
   std::optional<base::Value> TakeResult() override;
 
  private:
-  void FeedNextBytes(const char* bytes, size_t size);
+  void FeedNextBytes(base::span<const uint8_t> bytes);
   void FeedNextFile(const std::string& filename);
   FRIEND_TEST_ALL_PREFIXES(WebRequestUploadDataPresenterTest, RawData);
 
-  base::Value::List list_;
+  base::ListValue list_;
 };
 
 // This class inspects the contents of bytes elements. It uses the
@@ -128,7 +131,7 @@ class ParsedDataPresenter : public UploadDataPresenter {
 
   std::unique_ptr<FormDataParser> parser_;
   bool success_;
-  std::optional<base::Value::Dict> dictionary_;
+  std::optional<base::DictValue> dictionary_;
 };
 
 }  // namespace extensions

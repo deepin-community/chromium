@@ -148,7 +148,8 @@ TEST(HostResolverInternalResultTest, SerializepDataResult) {
           "timed_expiration": "0",
           "type": "data"
         }
-        )");
+        )",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(expected.has_value());
 
   EXPECT_EQ(value, expected.value());
@@ -223,7 +224,7 @@ TEST(HostResolverInternalResultTest, MetadataResult) {
   const ConnectionEndpointMetadata kMetadata(
       /*supported_protocol_alpns=*/{"http/1.1", "h3"},
       /*ech_config_list=*/{0x01, 0x13},
-      /*target_name*/ "target.test");
+      /*target_name*/ "target.test", {{0x01, 0x02, 0x03}, {0x02, 0x02}});
   auto result = std::make_unique<HostResolverInternalMetadataResult>(
       "domain1.test", DnsQueryType::HTTPS, base::TimeTicks(), base::Time(),
       HostResolverInternalResult::Source::kDns,
@@ -246,7 +247,7 @@ TEST(HostResolverInternalResultTest, CloneMetadataResult) {
   const ConnectionEndpointMetadata kMetadata(
       /*supported_protocol_alpns=*/{"http/1.1", "h3"},
       /*ech_config_list=*/{0x01, 0x13},
-      /*target_name*/ "target.test");
+      /*target_name*/ "target.test", {{0x01, 0x02, 0x03}, {0x02, 0x02}});
   auto result = std::make_unique<HostResolverInternalMetadataResult>(
       "domain1.test", DnsQueryType::HTTPS, base::TimeTicks(), base::Time(),
       HostResolverInternalResult::Source::kDns,
@@ -271,7 +272,7 @@ TEST(HostResolverInternalResultTest,
   const ConnectionEndpointMetadata kMetadata(
       /*supported_protocol_alpns=*/{"http/1.1", "h2", "h3"},
       /*ech_config_list=*/{0x01, 0x13, 0x15},
-      /*target_name*/ "target1.test");
+      /*target_name*/ "target1.test", {{0x01, 0x02, 0x03}, {0x02, 0x02}});
   auto result = std::make_unique<HostResolverInternalMetadataResult>(
       "domain2.test", DnsQueryType::HTTPS, base::TimeTicks(), base::Time(),
       HostResolverInternalResult::Source::kDns,
@@ -298,7 +299,7 @@ TEST(HostResolverInternalResultTest, SerializepMetadataResult) {
   const ConnectionEndpointMetadata kMetadata(
       /*supported_protocol_alpns=*/{"http/1.1", "h2", "h3"},
       /*ech_config_list=*/{0x01, 0x13, 0x15},
-      /*target_name*/ "target1.test");
+      /*target_name*/ "target1.test", {{0x01, 0x02, 0x3}, {0x02, 0x02}});
   auto result = std::make_unique<HostResolverInternalMetadataResult>(
       "domain2.test", DnsQueryType::HTTPS, base::TimeTicks(), base::Time(),
       HostResolverInternalResult::Source::kDns,
@@ -317,7 +318,8 @@ TEST(HostResolverInternalResultTest, SerializepMetadataResult) {
               {
                 "ech_config_list": "ARMV",
                 "supported_protocol_alpns": ["http/1.1", "h2", "h3"],
-                "target_name": "target1.test"
+                "target_name": "target1.test",
+                "trust_anchor_ids_list": ["AQID", "AgI="]
               },
               "metadata_weight": 2
             }
@@ -327,7 +329,8 @@ TEST(HostResolverInternalResultTest, SerializepMetadataResult) {
           "timed_expiration": "0",
           "type": "metadata"
         }
-        )");
+        )",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(expected.has_value());
 
   EXPECT_EQ(value, expected.value());
@@ -337,7 +340,7 @@ TEST(HostResolverInternalResultTest, DeserializeMalformedMetadataValue) {
   const ConnectionEndpointMetadata kMetadata(
       /*supported_protocol_alpns=*/{"http/1.1", "h2", "h3"},
       /*ech_config_list=*/{0x01, 0x13, 0x15},
-      /*target_name*/ "target1.test");
+      /*target_name*/ "target1.test", {});
   auto result = std::make_unique<HostResolverInternalMetadataResult>(
       "domain2.test", DnsQueryType::HTTPS, base::TimeTicks(), base::Time(),
       HostResolverInternalResult::Source::kDns,
@@ -481,7 +484,7 @@ TEST(HostResolverInternalResultTest, NoncachableErrorResult) {
 TEST(HostResolverInternalResultTest, RoundtripErrorResultThroughSerialization) {
   auto result = std::make_unique<HostResolverInternalErrorResult>(
       "domain4.test", DnsQueryType::A, base::TimeTicks(), base::Time(),
-      HostResolverInternalResult::Source::kDns, ERR_DNS_SERVER_FAILED);
+      HostResolverInternalResult::Source::kDns, ERR_DNS_SERVER_FAILURE);
 
   base::Value value = result->ToValue();
   auto deserialized = HostResolverInternalResult::FromValue(value);
@@ -499,23 +502,24 @@ TEST(HostResolverInternalResultTest, RoundtripErrorResultThroughSerialization) {
 
 // Expect results to serialize to a consistent base::Value format for
 // consumption by NetLog and similar.
-TEST(HostResolverInternalResultTest, SerializepErrorResult) {
+TEST(HostResolverInternalResultTest, SerializeErrorResult) {
   auto result = std::make_unique<HostResolverInternalErrorResult>(
       "domain4.test", DnsQueryType::A, base::TimeTicks(), base::Time(),
-      HostResolverInternalResult::Source::kDns, ERR_DNS_SERVER_FAILED);
+      HostResolverInternalResult::Source::kDns, ERR_DNS_SERVER_FAILURE);
   base::Value value = result->ToValue();
 
   std::optional<base::Value> expected = base::JSONReader::Read(
       R"(
         {
           "domain_name": "domain4.test",
-          "error": -802,
+          "error": -817,
           "query_type": "A",
           "source": "dns",
           "timed_expiration": "0",
           "type": "error"
         }
-        )");
+        )",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(expected.has_value());
 
   EXPECT_EQ(value, expected.value());
@@ -524,7 +528,7 @@ TEST(HostResolverInternalResultTest, SerializepErrorResult) {
 TEST(HostResolverInternalResultTest, DeserializeMalformedErrorValue) {
   auto result = std::make_unique<HostResolverInternalErrorResult>(
       "domain4.test", DnsQueryType::A, base::TimeTicks(), base::Time(),
-      HostResolverInternalResult::Source::kDns, ERR_DNS_SERVER_FAILED);
+      HostResolverInternalResult::Source::kDns, ERR_DNS_SERVER_FAILURE);
   base::Value valid_value = result->ToValue();
   ASSERT_TRUE(HostResolverInternalErrorResult::FromValue(valid_value));
 
@@ -636,7 +640,8 @@ TEST(HostResolverInternalResultTest, SerializepAliasResult) {
           "timed_expiration": "0",
           "type": "alias"
         }
-        )");
+        )",
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(expected.has_value());
 
   EXPECT_EQ(value, expected.value());

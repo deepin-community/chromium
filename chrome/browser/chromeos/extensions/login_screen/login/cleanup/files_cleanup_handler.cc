@@ -65,11 +65,14 @@ bool EnsureDirectoryIsEmpty(const base::FilePath& directory_path,
 
 }  // namespace
 
-FilesCleanupHandler::FilesCleanupHandler() {
-  task_runner_ = base::ThreadPool::CreateTaskRunner(
-      {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
-       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
-}
+FilesCleanupHandler::FilesCleanupHandler()
+    : FilesCleanupHandler(base::ThreadPool::CreateTaskRunner(
+          {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+           base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})) {}
+
+FilesCleanupHandler::FilesCleanupHandler(
+    scoped_refptr<base::TaskRunner> task_runner)
+    : task_runner_(task_runner) {}
 
 FilesCleanupHandler::~FilesCleanupHandler() = default;
 
@@ -94,7 +97,7 @@ bool FilesCleanupHandler::CleanupTaskOnTaskRunner(Profile* profile) {
   base::FilePath downloads_path =
       my_files_path.AppendASCII(kFolderNameDownloads);
 
-  // Delete all files and directories under My Files other than Downloads.
+  // Delete all files and directories under MyFiles other than Downloads.
   bool success =
       DeleteFilesAndDirectoriesUnderPath(my_files_path, downloads_path);
 

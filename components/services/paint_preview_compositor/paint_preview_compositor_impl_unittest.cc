@@ -10,6 +10,7 @@
 #include <optional>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/span.h"
 #include "base/files/file.h"
@@ -27,6 +28,8 @@
 #include "components/paint_preview/common/recording_map.h"
 #include "components/paint_preview/common/serialized_recording.h"
 #include "mojo/public/cpp/base/big_buffer.h"
+#include "mojo/public/cpp/base/proto_wrapper.h"
+#include "mojo/public/cpp/base/proto_wrapper_passkeys.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkCanvas.h"
@@ -98,21 +101,11 @@ void BitmapCallbackImpl(
   // Assert that all the bytes of the backing memory are equal. This check is
   // only safe if all of the width, height and bytesPerPixel are equal between
   // the two bitmaps.
-  EXPECT_EQ(memcmp(bitmap.getPixels(), expected_bitmap.getPixels(),
-                   expected_bitmap.bytesPerPixel() * expected_bitmap.width() *
-                       expected_bitmap.height()),
-            0);
-}
-
-// Encodes |proto| a ReadOnlySharedMemoryRegion.
-base::ReadOnlySharedMemoryRegion ToReadOnlySharedMemory(
-    const PaintPreviewProto& proto) {
-  auto region = base::WritableSharedMemoryRegion::Create(proto.ByteSizeLong());
-  EXPECT_TRUE(region.IsValid());
-  auto mapping = region.Map();
-  EXPECT_TRUE(mapping.IsValid());
-  proto.SerializeToArray(mapping.memory(), mapping.size());
-  return base::WritableSharedMemoryRegion::ConvertToReadOnly(std::move(region));
+  UNSAFE_TODO(
+      EXPECT_EQ(memcmp(bitmap.getPixels(), expected_bitmap.getPixels(),
+                       expected_bitmap.bytesPerPixel() *
+                           expected_bitmap.width() * expected_bitmap.height()),
+                0));
 }
 
 SkRect ToSkRect(const gfx::Size& size) {
@@ -297,7 +290,6 @@ class PaintPreviewCompositorBeginCompositeTest
       }
       default:
         NOTREACHED();
-        break;
     }
   }
 
@@ -372,7 +364,7 @@ TEST_P(PaintPreviewCompositorBeginCompositeTest, MissingSubFrameRecording) {
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map = std::move(recording_map);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
 
   BeginCompositeAndValidate(
       std::move(request),
@@ -405,7 +397,7 @@ TEST_P(PaintPreviewCompositorBeginCompositeTest, DuplicateFrame) {
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map = RecordingMapFromPaintPreviewProto(proto);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
 
   BeginCompositeAndValidate(
       std::move(request),
@@ -437,7 +429,7 @@ TEST_P(PaintPreviewCompositorBeginCompositeTest, FrameDependencyLoop) {
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map = RecordingMapFromPaintPreviewProto(proto);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
 
   BeginCompositeAndValidate(
       std::move(request),
@@ -466,7 +458,7 @@ TEST_P(PaintPreviewCompositorBeginCompositeTest, SelfReference) {
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map = RecordingMapFromPaintPreviewProto(proto);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
 
   BeginCompositeAndValidate(
       std::move(request),
@@ -494,19 +486,15 @@ TEST_P(PaintPreviewCompositorBeginCompositeTest, InvalidProto) {
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   std::string test_data = "hello world";
-  auto region = base::WritableSharedMemoryRegion::Create(test_data.size());
-  ASSERT_TRUE(region.IsValid());
-  auto mapping = region.Map();
-  ASSERT_TRUE(mapping.IsValid());
-  memcpy(mapping.memory(), test_data.data(), mapping.size());
 
   // These calls log errors without a newline (from the proto lib). As a
   // result, the Android gtest parser fails to parse the test status. To work
   // around this gobble the log message.
   {
     testing::internal::CaptureStdout();
-    request->proto =
-        base::WritableSharedMemoryRegion::ConvertToReadOnly(std::move(region));
+    request->preview = mojo_base::ProtoWrapper(
+        base::as_byte_span(test_data), "paint_preview.PaintPreviewProto",
+        mojo_base::ProtoWrapperBytes::GetPassKey());
     BeginCompositeAndValidate(
         std::move(request),
         mojom::PaintPreviewCompositor::BeginCompositeStatus::
@@ -531,7 +519,8 @@ TEST_P(PaintPreviewCompositorBeginCompositeTest, InvalidRootFrame) {
   recording_map.erase(
       kRootFrameID);  // Missing a SKP for the root file is invalid.
   request->recording_map = std::move(recording_map);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
+
   BeginCompositeAndValidate(
       std::move(request),
       mojom::PaintPreviewCompositor::BeginCompositeStatus::kCompositingFailure,
@@ -565,7 +554,7 @@ TEST_P(PaintPreviewCompositorBeginCompositeTest, SubframeWithScrollOffsets) {
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map = RecordingMapFromPaintPreviewProto(proto);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
 
   BeginCompositeAndValidate(
       std::move(request),
@@ -614,7 +603,7 @@ TEST_F(PaintPreviewCompositorTest, TestComposite) {
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map = RecordingMapFromPaintPreviewProto(proto);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
   compositor_.BeginSeparatedFrameComposite(
       std::move(request),
       base::BindOnce(
@@ -680,7 +669,7 @@ TEST_F(PaintPreviewCompositorTest, TestCompositeWithMemoryBuffer) {
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map.insert(
       {kRootFrameID, SerializedRecording(std::move(buffer))});
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
 
   compositor_.BeginSeparatedFrameComposite(
       std::move(request),
@@ -723,7 +712,7 @@ TEST_F(PaintPreviewCompositorTest, TestCompositeMainFrameNoDependencies) {
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map = RecordingMapFromPaintPreviewProto(proto);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
   compositor_.BeginMainFrameComposite(
       std::move(request),
       base::BindOnce(
@@ -770,7 +759,7 @@ TEST_F(PaintPreviewCompositorTest, TestCompositeMainFrameOneDependency) {
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map = RecordingMapFromPaintPreviewProto(proto);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
   expected_data.erase(kSubframe_0_ID);
   expected_data.find(kRootFrameID)->second->subframes.clear();
   compositor_.BeginMainFrameComposite(
@@ -824,7 +813,7 @@ TEST_F(PaintPreviewCompositorTest,
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map = RecordingMapFromPaintPreviewProto(proto);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
   expected_data.erase(kSubframe_0_ID);
   expected_data.find(kRootFrameID)->second->subframes.clear();
   compositor_.BeginMainFrameComposite(
@@ -880,7 +869,7 @@ TEST_F(PaintPreviewCompositorTest,
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map = RecordingMapFromPaintPreviewProto(proto);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
   expected_data.erase(kSubframe_0_ID);
   expected_data.find(kRootFrameID)->second->subframes.clear();
   compositor_.BeginMainFrameComposite(
@@ -938,7 +927,7 @@ TEST_F(PaintPreviewCompositorTest,
   mojom::PaintPreviewBeginCompositeRequestPtr request =
       mojom::PaintPreviewBeginCompositeRequest::New();
   request->recording_map = RecordingMapFromPaintPreviewProto(proto);
-  request->proto = ToReadOnlySharedMemory(proto);
+  request->preview = mojo_base::ProtoWrapper(proto);
   expected_data.erase(kSubframe_0_ID);
   expected_data.find(kRootFrameID)->second->subframes.clear();
   compositor_.BeginMainFrameComposite(

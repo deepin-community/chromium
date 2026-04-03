@@ -76,15 +76,15 @@ class DetachedClient final : public GarbageCollected<DetachedClient>,
   ~DetachedClient() override = default;
 
   void DidFinishLoading(uint64_t identifier) override {
-    LogKeepAliveDuration("Succeeded");
+    LogKeepAliveDuration();
     self_keep_alive_.Clear();
   }
   void DidFail(uint64_t identifier, const ResourceError&) override {
-    LogKeepAliveDuration("Failed");
+    LogKeepAliveDuration();
     self_keep_alive_.Clear();
   }
   void DidFailRedirectCheck(uint64_t identifier) override {
-    LogKeepAliveDuration("Failed");
+    LogKeepAliveDuration();
     self_keep_alive_.Clear();
   }
   void Trace(Visitor* visitor) const override {
@@ -93,16 +93,12 @@ class DetachedClient final : public GarbageCollected<DetachedClient>,
   }
 
  private:
-  void LogKeepAliveDuration(const std::string& name) {
-    CHECK(name == "Succeeded" || name == "Failed");
+  void LogKeepAliveDuration() {
     base::TimeDelta duration_after_detached =
         base::TimeTicks::Now() - detached_time_;
-    base::UmaHistogramMediumTimes(
-        "FetchKeepAlive.Renderer.DurationAfterDetached",
-        duration_after_detached);
-    base::UmaHistogramMediumTimes(
-        "FetchKeepAlive.Renderer.DurationAfterDetached." + name,
-        duration_after_detached);
+    // kKeepaliveLoadersTimeout > 10 sec, so UmaHistogramTimes can't be used.
+    base::UmaHistogramMediumTimes("FetchKeepAlive.RequestOutliveDuration",
+                                  duration_after_detached);
   }
 
   SelfKeepAlive<DetachedClient> self_keep_alive_{this};
@@ -316,6 +312,9 @@ void ThreadableLoader::ResponseReceived(Resource* resource,
   // Back/Forward cache will be disabled for the page if the main resource has
   // "Cache-Control: no-store" as well.
   if (response.CacheControlContainsNoStore()) {
+    base::UmaHistogramBoolean(
+        "BackForwardCache.CCNS.JSNetworkRequestIncludesCredentials",
+        response.RequestIncludeCredentials());
     execution_context_->GetScheduler()->RegisterStickyFeature(
         SchedulingPolicy::Feature::
             kJsNetworkRequestReceivedCacheControlNoStoreResource,
@@ -346,16 +345,13 @@ void ThreadableLoader::CachedMetadataReceived(
 }
 
 void ThreadableLoader::DataReceived(Resource* resource,
-                                    const char* data,
-                                    size_t data_length) {
+                                    base::span<const char> data) {
   DCHECK(client_);
   DCHECK_EQ(resource, GetResource());
 
   checker_.DataReceived();
 
-  // TODO(junov): Fix the ThreadableLoader ecosystem to use size_t. Until then,
-  // we use safeCast to trap potential overflows.
-  client_->DidReceiveData(data, base::checked_cast<unsigned>(data_length));
+  client_->DidReceiveData(data);
 }
 
 void ThreadableLoader::NotifyFinished(Resource* resource) {
@@ -407,6 +403,7 @@ void ThreadableLoader::Trace(Visitor* visitor) const {
   visitor->Trace(client_);
   visitor->Trace(resource_fetcher_);
   visitor->Trace(timeout_timer_);
+  visitor->Trace(resource_loader_options_);
   RawResourceClient::Trace(visitor);
 }
 

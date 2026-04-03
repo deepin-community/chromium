@@ -11,8 +11,7 @@
 
 namespace ash {
 
-class LocalPasswordSetupView
-    : public base::SupportsWeakPtr<LocalPasswordSetupView> {
+class LocalPasswordSetupView {
  public:
   inline constexpr static StaticOobeScreenId kScreenId{
       "local-password-setup", "LocalPasswordSetupScreen"};
@@ -22,13 +21,16 @@ class LocalPasswordSetupView
   LocalPasswordSetupView(const LocalPasswordSetupView&) = delete;
   LocalPasswordSetupView& operator=(const LocalPasswordSetupView&) = delete;
 
-  virtual void Show(bool can_go_back, bool is_recovery_flow) = 0;
+  virtual void Show(const std::string& auth_token,
+                    bool can_go_back,
+                    bool is_recovery_flow) = 0;
   virtual void ShowLocalPasswordSetupFailure() = 0;
+  virtual base::WeakPtr<LocalPasswordSetupView> AsWeakPtr() = 0;
 };
 
 // A class that handles WebUI hooks in Gaia screen.
-class LocalPasswordSetupHandler : public BaseScreenHandler,
-                                  public LocalPasswordSetupView {
+class LocalPasswordSetupHandler final : public BaseScreenHandler,
+                                        public LocalPasswordSetupView {
  public:
   using TView = LocalPasswordSetupView;
 
@@ -41,11 +43,17 @@ class LocalPasswordSetupHandler : public BaseScreenHandler,
   ~LocalPasswordSetupHandler() override;
 
   // LocalPasswordSetupView:
-  void Show(bool can_go_back, bool is_recovery_flow) override;
+  void Show(const std::string& auth_token,
+            bool can_go_back,
+            bool is_recovery_flow) override;
   void ShowLocalPasswordSetupFailure() override;
+  base::WeakPtr<LocalPasswordSetupView> AsWeakPtr() override;
 
   // BaseScreenHandler:
   void DeclareLocalizedValues(::login::LocalizedValuesBuilder* builder) final;
+
+ private:
+  base::WeakPtrFactory<LocalPasswordSetupView> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

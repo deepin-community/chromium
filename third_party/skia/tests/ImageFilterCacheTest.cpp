@@ -12,6 +12,7 @@
 #include "include/core/SkColorFilter.h"
 #include "include/core/SkColorSpace.h"
 #include "include/core/SkColorType.h"
+#include "include/core/SkGraphics.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkImageFilter.h"
 #include "include/core/SkImageInfo.h"
@@ -22,46 +23,50 @@
 #include "include/core/SkSurfaceProps.h"
 #include "include/core/SkTypes.h"
 #include "include/effects/SkImageFilters.h"
-#include "include/gpu/GrBackendSurface.h"
-#include "include/gpu/GrDirectContext.h"
-#include "include/gpu/GrTypes.h"
-#include "include/gpu/ganesh/SkImageGanesh.h"
 #include "include/private/base/SkDebug.h"
 #include "include/private/gpu/ganesh/GrTypesPriv.h"
 #include "src/core/SkImageFilterCache.h"
 #include "src/core/SkImageFilterTypes.h"
 #include "src/core/SkSpecialImage.h"
-#include "src/gpu/ganesh/GrColorInfo.h" // IWYU pragma: keep
+#include "tests/CtsEnforcement.h"
+#include "tests/Test.h"
+
+#if defined(SK_GANESH)
+#include "include/gpu/ganesh/GrBackendSurface.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/GrTypes.h"
+#include "include/gpu/ganesh/SkImageGanesh.h"
+#include "src/gpu/ganesh/GrColorInfo.h"  // IWYU pragma: keep
 #include "src/gpu/ganesh/GrDirectContextPriv.h"
 #include "src/gpu/ganesh/GrSurfaceProxy.h"
 #include "src/gpu/ganesh/GrSurfaceProxyView.h"
 #include "src/gpu/ganesh/GrTexture.h"
 #include "src/gpu/ganesh/SkGr.h"
+#include "src/gpu/ganesh/image/GrMippedBitmap.h"
 #include "src/gpu/ganesh/image/SkSpecialImage_Ganesh.h"
-#include "tests/CtsEnforcement.h"
-#include "tests/Test.h"
+#endif
 
 #include <cstddef>
 #include <tuple>
 #include <utility>
 
-class GrRecordingContext;
-struct GrContextOptions;
+ class GrRecordingContext;
+ struct GrContextOptions;
 
-static const int kSmallerSize = 10;
-static const int kPad = 3;
-static const int kFullSize = kSmallerSize + 2 * kPad;
+ static const int kSmallerSize = 10;
+ static const int kPad = 3;
+ static const int kFullSize = kSmallerSize + 2 * kPad;
 
-static SkBitmap create_bm() {
-    SkImageInfo ii = SkImageInfo::Make(kFullSize, kFullSize, kRGBA_8888_SkColorType,
-                                       kPremul_SkAlphaType);
+ static SkBitmap create_bm() {
+     SkImageInfo ii =
+             SkImageInfo::Make(kFullSize, kFullSize, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
 
-    SkBitmap bm;
-    bm.allocPixels(ii);
-    bm.eraseColor(SK_ColorTRANSPARENT);
-    bm.setImmutable();
-    return bm;
-}
+     SkBitmap bm;
+     bm.allocPixels(ii);
+     bm.eraseColor(SK_ColorTRANSPARENT);
+     bm.setImmutable();
+     return bm;
+ }
 
 static sk_sp<SkImageFilter> make_filter() {
     sk_sp<SkColorFilter> filter(SkColorFilters::Blend(SK_ColorBLUE, SkBlendMode::kSrcIn));
@@ -209,18 +214,24 @@ static void test_image_backed(skiatest::Reporter* reporter,
     const SkIRect& full = SkIRect::MakeWH(kFullSize, kFullSize);
 
     sk_sp<SkSpecialImage> fullImg;
+#if defined(SK_GANESH)
     if (rContext) {
         fullImg = SkSpecialImages::MakeFromTextureImage(rContext, full, srcImage, {});
-    } else {
+    } else
+#endif
+    {
         fullImg = SkSpecialImages::MakeFromRaster(full, srcImage, {});
     }
 
     const SkIRect& subset = SkIRect::MakeXYWH(kPad, kPad, kSmallerSize, kSmallerSize);
 
     sk_sp<SkSpecialImage> subsetImg;
+#if defined(SK_GANESH)
     if (rContext) {
         subsetImg = SkSpecialImages::MakeFromTextureImage(rContext, subset, srcImage, {});
-    } else {
+    } else
+#endif
+    {
         subsetImg = SkSpecialImages::MakeFromRaster(subset, srcImage, {});
     }
 
@@ -238,9 +249,10 @@ DEF_TEST(ImageFilterCache_ImageBackedRaster, reporter) {
     test_image_backed(reporter, nullptr, srcImage);
 }
 
+#if defined(SK_GANESH)
 static GrSurfaceProxyView create_proxy_view(GrRecordingContext* rContext) {
     SkBitmap srcBM = create_bm();
-    return std::get<0>(GrMakeUncachedBitmapProxyView(rContext, srcBM));
+    return std::get<0>(GrMakeUncachedBitmapProxyView(rContext, GrMippedBitmap(srcBM)));
 }
 
 DEF_GANESH_TEST_FOR_RENDERING_CONTEXTS(ImageFilterCache_ImageBackedGPU,
@@ -327,4 +339,26 @@ DEF_GANESH_TEST_FOR_RENDERING_CONTEXTS(ImageFilterCache_GPUBacked,
     test_dont_find_if_diff_key(reporter, fullImg, subsetImg);
     test_internal_purge(reporter, fullImg);
     test_explicit_purging(reporter, fullImg, subsetImg);
+}
+#endif
+
+DEF_SERIAL_TEST(PurgeImageFilterCache, r) {
+    auto cache = SkImageFilterCache::Get(SkImageFilterCache::CreateIfNecessary::kNo);
+    if (cache) {
+        // This test verifies that Get(false) does not create the cache, but
+        // another test has already created it, so there is nothing to test.
+        return;
+    }
+
+    // This method calls SkImageFilter_Base::PurgeCache(), which is private.
+    SkGraphics::PurgeResourceCache();
+    cache = SkImageFilterCache::Get(SkImageFilterCache::CreateIfNecessary::kNo);
+
+    // PurgeCache should not have created it.
+    REPORTER_ASSERT(r, !cache);
+
+    {
+        cache = SkImageFilterCache::Get(SkImageFilterCache::CreateIfNecessary::kYes);
+        REPORTER_ASSERT(r, cache);
+    }
 }

@@ -10,7 +10,7 @@
 #include "base/test/simple_test_tick_clock.h"
 #include "cc/metrics/predictor_jank_tracker.h"
 #include "cc/metrics/scroll_jank_dropped_frame_tracker.h"
-#include "cc/trees/ukm_manager.h"
+#include "cc/metrics/ukm_manager.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -55,13 +55,13 @@ class ScrollJankUkmReporterTest : public testing::Test {
     base::SimpleTestTickClock tick_clock;
     tick_clock.SetNowTicks(base::TimeTicks(first_input_ts));
     auto event = ScrollUpdateEventMetrics::CreateForTesting(
-        ui::ET_GESTURE_SCROLL_UPDATE, ui::ScrollInputType::kWheel,
+        ui::EventType::kGestureScrollUpdate, ui::ScrollInputType::kWheel,
         /*is_inertial=*/false,
         ScrollUpdateEventMetrics::ScrollUpdateType::kContinued,
         /*delta=*/10.0f, first_input_ts, base::TimeTicks(), &tick_clock,
         /*trace_id=*/std::nullopt);
     scroll_jank_dropped_frame_tracker_->ReportLatestPresentationData(
-        *event.get(), last_input_ts, presentation_ts, vsync_interval);
+        *event, last_input_ts, presentation_ts, vsync_interval);
   }
 
   void ReportFramesToPredictorJankTracker(double delta,
@@ -70,7 +70,7 @@ class ScrollJankUkmReporterTest : public testing::Test {
     base::SimpleTestTickClock tick_clock;
     tick_clock.SetNowTicks(first_input_ts);
     auto event = ScrollUpdateEventMetrics::CreateForTesting(
-        ui::ET_GESTURE_SCROLL_UPDATE, ui::ScrollInputType::kWheel,
+        ui::EventType::kGestureScrollUpdate, ui::ScrollInputType::kWheel,
         /*is_inertial=*/false,
         ScrollUpdateEventMetrics::ScrollUpdateType::kContinued,
         /*delta=*/10.0f, first_input_ts, base::TimeTicks(), &tick_clock,
@@ -97,24 +97,7 @@ TEST_F(ScrollJankUkmReporterTest, NoJankUkmRecorded) {
 
   auto entries = test_ukm_recorder_->GetEntriesByName(
       ukm::builders::Event_Scroll::kEntryName);
-  EXPECT_EQ(1u, entries.size());
-
-  test_ukm_recorder_->ExpectEntryMetric(
-      entries.back(), ukm::builders::Event_Scroll::kFrameCountName, 0);
-  test_ukm_recorder_->ExpectEntryMetric(
-      entries.back(),
-      ukm::builders::Event_Scroll::kPredictorJankyFrameCountName, 0);
-  test_ukm_recorder_->ExpectEntryMetric(
-      entries.back(),
-      ukm::builders::Event_Scroll::kScrollJank_DelayedFrameCountName, 0);
-  test_ukm_recorder_->ExpectEntryMetric(
-      entries.back(),
-      ukm::builders::Event_Scroll::kScrollJank_MissedVsyncsMaxName, 0);
-  test_ukm_recorder_->ExpectEntryMetric(
-      entries.back(),
-      ukm::builders::Event_Scroll::kScrollJank_MissedVsyncsSumName, 0);
-  test_ukm_recorder_->ExpectEntryMetric(
-      entries.back(), ukm::builders::Event_Scroll::kVsyncCountName, 0);
+  EXPECT_EQ(0u, entries.size());
 }
 
 TEST_F(ScrollJankUkmReporterTest, NoJankyFrames) {
@@ -273,9 +256,10 @@ TEST_F(ScrollJankUkmReporterTest, NoPredictorJank) {
                                      base_time_ + base::Milliseconds(119));
   ReportFramesToPredictorJankTracker(10, base_time_,
                                      base_time_ + base::Milliseconds(135));
-
+  scroll_jank_ukm_reporter_->IncrementFrameCount();
+  scroll_jank_ukm_reporter_->UpdateLatestFrameAndEmitPredictorJank(
+      base_time_ + base::Milliseconds(135));
   scroll_jank_ukm_reporter_->EmitScrollJankUkm();
-  scroll_jank_ukm_reporter_->EmitPredictorJankUkm();
 
   auto scroll_entries = test_ukm_recorder_->GetEntriesByName(
       ukm::builders::Event_Scroll::kEntryName);
@@ -298,8 +282,10 @@ TEST_F(ScrollJankUkmReporterTest, PredictorJankMissedVsync) {
   ReportFramesToPredictorJankTracker(10, base_time_,
                                      base_time_ + base::Milliseconds(151));
 
+  scroll_jank_ukm_reporter_->IncrementFrameCount();
+  scroll_jank_ukm_reporter_->UpdateLatestFrameAndEmitPredictorJank(
+      base_time_ + base::Milliseconds(151));
   scroll_jank_ukm_reporter_->EmitScrollJankUkm();
-  scroll_jank_ukm_reporter_->EmitPredictorJankUkm();
 
   auto entries = test_ukm_recorder_->GetEntriesByName(
       ukm::builders::Event_Scroll::kEntryName);
@@ -339,8 +325,10 @@ TEST_F(ScrollJankUkmReporterTest, PredictorJankNoMissedVsync) {
       50, base::TimeTicks::Now(),
       base::TimeTicks::Now() + base::Milliseconds(32));
 
+  scroll_jank_ukm_reporter_->IncrementFrameCount();
+  scroll_jank_ukm_reporter_->UpdateLatestFrameAndEmitPredictorJank(
+      base::TimeTicks::Now() + base::Milliseconds(32));
   scroll_jank_ukm_reporter_->EmitScrollJankUkm();
-  scroll_jank_ukm_reporter_->EmitPredictorJankUkm();
 
   auto entries = test_ukm_recorder_->GetEntriesByName(
       ukm::builders::Event_Scroll::kEntryName);

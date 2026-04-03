@@ -6,6 +6,9 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PRINTING_WEB_PRINTER_H_
 
 #include "third_party/blink/public/mojom/printing/web_printing.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/core/dom/abort_signal.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
@@ -13,11 +16,10 @@
 
 namespace blink {
 
+class Blob;
 class ExceptionState;
 class ExecutionContext;
-class ScriptPromise;
-class ScriptPromiseResolver;
-class WebPrintDocumentDescription;
+class WebPrintJob;
 class WebPrintJobTemplateAttributes;
 class WebPrinterAttributes;
 
@@ -30,25 +32,29 @@ class MODULES_EXPORT WebPrinter : public ScriptWrappable {
   ~WebPrinter() override;
 
   WebPrinterAttributes* cachedAttributes() const { return attributes_; }
-  ScriptPromise fetchAttributes(ScriptState* script_state,
-                                ExceptionState& exception_state);
-  ScriptPromise printJob(ScriptState* script_state,
-                         const String& job_name,
-                         const WebPrintDocumentDescription* document,
-                         const WebPrintJobTemplateAttributes* pjt_attributes,
-                         ExceptionState& exception_state);
+  ScriptPromise<WebPrinterAttributes> fetchAttributes(
+      ScriptState* script_state,
+      ExceptionState& exception_state);
+  ScriptPromise<WebPrintJob> submitPrintJob(
+      ScriptState* script_state,
+      const String& job_name,
+      Blob* document_data,
+      const WebPrintJobTemplateAttributes* pjt_attributes,
+      ExceptionState& exception_state);
 
   void Trace(Visitor* visitor) const override;
 
  private:
-  void OnFetchAttributes(ScriptPromiseResolver*,
+  void OnFetchAttributes(ScriptPromiseResolver<WebPrinterAttributes>*,
                          mojom::blink::WebPrinterFetchResultPtr result);
 
-  void OnPrint(ScriptPromiseResolver* resolver,
+  void OnPrint(AbortSignal* signal,
+               ScriptPromiseResolver<WebPrintJob>* resolver,
                mojom::blink::WebPrintResultPtr result);
 
   Member<WebPrinterAttributes> attributes_;
-  Member<ScriptPromiseResolver> fetch_attributes_resolver_;
+  Member<ScriptPromiseResolver<WebPrinterAttributes>>
+      fetch_attributes_resolver_;
   HeapMojoRemote<mojom::blink::WebPrinter> printer_;
 };
 

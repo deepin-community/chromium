@@ -12,13 +12,8 @@
 #include <optional>
 #include <set>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
-#include "ash/components/arc/compat_mode/arc_resize_lock_pref_delegate.h"
-#include "ash/components/arc/mojom/app.mojom.h"
-#include "ash/components/arc/net/arc_app_metadata_provider.h"
-#include "ash/components/arc/session/connection_observer.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -30,7 +25,12 @@
 #include "chrome/browser/ash/app_list/arc/arc_app_icon_descriptor.h"
 #include "chrome/browser/ash/arc/policy/arc_policy_bridge.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager_observer.h"
+#include "chromeos/ash/experiences/arc/compat_mode/arc_resize_lock_pref_delegate.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
+#include "chromeos/ash/experiences/arc/net/arc_app_metadata_provider.h"
+#include "chromeos/ash/experiences/arc/session/connection_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 class ArcDefaultAppList;
 class PrefService;
@@ -308,8 +308,8 @@ class ArcAppListPrefs : public KeyedService,
     ~Observer() override;
   };
 
-  static ArcAppListPrefs* Create(Profile* profile);
-  static ArcAppListPrefs* Create(
+  static std::unique_ptr<ArcAppListPrefs> Create(Profile* profile);
+  static std::unique_ptr<ArcAppListPrefs> Create(
       Profile* profile,
       arc::ConnectionHolder<arc::mojom::AppInstance, arc::mojom::AppHost>*
           app_connection_holder_for_testing);
@@ -334,6 +334,11 @@ class ArcAppListPrefs : public KeyedService,
 
   static void UprevCurrentIconsVersionForTesting();
 
+  // See the Create methods.
+  ArcAppListPrefs(
+      Profile* profile,
+      arc::ConnectionHolder<arc::mojom::AppInstance, arc::mojom::AppHost>*
+          app_connection_holder_for_testing);
   ArcAppListPrefs(const ArcAppListPrefs&) = delete;
   ArcAppListPrefs& operator=(const ArcAppListPrefs&) = delete;
   ~ArcAppListPrefs() override;
@@ -392,6 +397,8 @@ class ArcAppListPrefs : public KeyedService,
   void SetLastLaunchTime(const std::string& app_id);
   void SetLaunchRequestTimeForTesting(const std::string& app_id,
                                       base::Time timestamp);
+  void SetLastLaunchTimeForTesting(const std::string& app_id,
+                                   base::Time timestamp);
 
   // Calls RequestIcon to get the raw icon data.
   void RequestRawIconData(
@@ -466,7 +473,7 @@ class ArcAppListPrefs : public KeyedService,
 
   // Returns set of ARC apps for provided package name, not including shortcuts,
   // associated with this package.
-  std::unordered_set<std::string> GetAppsForPackage(
+  absl::flat_hash_set<std::string> GetAppsForPackage(
       const std::string& package_name) const;
 
   // Gets Chrome prefs for given |package_name| and |key|.
@@ -483,13 +490,6 @@ class ArcAppListPrefs : public KeyedService,
   void SetRemoveAllCallbackForTesting(base::OnceClosure callback);
   bool is_remove_all_in_progress() { return is_remove_all_in_progress_; }
 
-  // Returns true if:
-  // 1. specified package is new in the system
-  // 2. is not installed.
-  // 3. is not scheduled to install by sync
-  // 4. Is not currently installing.
-  bool IsUnknownPackage(const std::string& package_name) const;
-
   // Returns true if the package is a default package, even it's uninstalled.
   bool IsDefaultPackage(const std::string& package_name) const;
 
@@ -505,12 +505,6 @@ class ArcAppListPrefs : public KeyedService,
   friend class ChromeShelfControllerTestBase;
   friend class ArcAppModelBuilderTest;
   friend class app_list::test::ArcAppShortcutsSearchProviderTest;
-
-  // See the Create methods.
-  ArcAppListPrefs(
-      Profile* profile,
-      arc::ConnectionHolder<arc::mojom::AppInstance, arc::mojom::AppHost>*
-          app_connection_holder_for_testing);
 
   // arc::ConnectionObserver<arc::mojom::AppInstance>:
   void OnConnectionReady() override;
@@ -611,7 +605,7 @@ class ArcAppListPrefs : public KeyedService,
   // If |include_only_launchable_apps| is set to true then only launchable apps
   // are included and runtime apps are ignored. Otherwise all apps are returned.
   // |include_shortcuts| specifies if shorcuts needs to be included.
-  std::unordered_set<std::string> GetAppsAndShortcutsForPackage(
+  absl::flat_hash_set<std::string> GetAppsAndShortcutsForPackage(
       const std::string& package_name,
       bool include_only_launchable_apps,
       bool include_shortcuts) const;
@@ -696,6 +690,10 @@ class ArcAppListPrefs : public KeyedService,
   // Records UMA metrics on app counts on ARC start.
   void RecordAppIdsUma();
 
+  // Records "Arc.Data.AppCategory.{Target}.DataSize" UMA metric.
+  void RecordAppCategoryDataSizeListUma(
+      std::vector<arc::mojom::AppInfoPtr> apps);
+
   // Updates kArcPackagesIsUpToDate pref.
   void UpdateArcPackagesIsUpToDatePref();
 
@@ -714,9 +712,9 @@ class ArcAppListPrefs : public KeyedService,
   // stored.
   base::FilePath base_path_;
   // Contains set of ARC apps that are currently ready.
-  std::unordered_set<std::string> ready_apps_;
+  absl::flat_hash_set<std::string> ready_apps_;
   // Contains set of ARC apps that are currently tracked.
-  std::unordered_set<std::string> tracked_apps_;
+  absl::flat_hash_set<std::string> tracked_apps_;
   // Contains number of ARC packages that are currently installing.
   int installing_packages_count_ = 0;
   // Keeps record for icon request. Each app may contain several requests for
@@ -740,15 +738,17 @@ class ArcAppListPrefs : public KeyedService,
   bool package_list_initial_refreshed_ = false;
   // Used to detect first ARC app launch request.
   bool first_launch_app_request_ = true;
+  // True if RecordAppCategoryDataSizeUma is already executed in this session.
+  bool app_category_data_size_uma_recorded_ = false;
   // Play Store does not have publicly available observers for default app
   // installations. This timeout is for validating default app availability.
   // Default apps should be either already installed or their installations
   // should be started soon after initial app list refresh.
   base::OneShotTimer detect_default_app_availability_timeout_;
   // Set of currently installing apps_.
-  std::unordered_set<std::string> apps_installations_;
+  absl::flat_hash_set<std::string> apps_installations_;
   // Set of package names which are installed but not yet added to the prefs.
-  std::unordered_set<std::string> packages_to_be_added_;
+  absl::flat_hash_set<std::string> packages_to_be_added_;
   // To execute file operations in sequence.
   scoped_refptr<base::SequencedTaskRunner> file_task_runner_;
 

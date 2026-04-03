@@ -9,6 +9,7 @@
 #include <iterator>
 
 #include "core/fxcrt/cfx_datetime.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/fx_string.h"
 #include "public/fpdfview.h"
 #include "testing/fuzzers/pdfium_fuzzer_util.h"
@@ -29,8 +30,9 @@ const CFGAS_StringFormatter::DateTimeType kTypes[] = {
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
-  if (size < 5 || size > 128)  // Big strings are unlikely to help.
+  if (size < 5 || size > 128) {  // Big strings are unlikely to help.
     return 0;
+  }
 
   auto* state = static_cast<XFAProcessState*>(FPDF_GetFuzzerPerProcessState());
   cppgc::Heap* heap = state->GetHeap();
@@ -44,9 +46,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   size_t pattern_len = size / 2;
   size_t value_len = size - pattern_len;
   WideString pattern =
-      WideString::FromLatin1(ByteStringView(data, pattern_len));
-  WideString value =
-      WideString::FromLatin1(ByteStringView(data + pattern_len, value_len));
+      WideString::FromLatin1(UNSAFE_TODO(ByteStringView(data, pattern_len)));
+  WideString value = WideString::FromLatin1(
+      UNSAFE_TODO(ByteStringView(data + pattern_len, value_len)));
 
   auto fmt = std::make_unique<CFGAS_StringFormatter>(pattern);
 

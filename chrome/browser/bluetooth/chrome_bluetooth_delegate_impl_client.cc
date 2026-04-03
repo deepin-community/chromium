@@ -12,7 +12,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bluetooth/bluetooth_dialogs.h"
 #include "chrome/browser/ui/bluetooth/chrome_bluetooth_chooser_controller.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 
@@ -97,16 +97,11 @@ void ChromeBluetoothDelegateImplClient::ShowBluetoothDevicePairDialog(
       break;
     default:
       NOTREACHED();
-      std::move(callback).Run(content::BluetoothDelegate::PairPromptResult(
-          content::BluetoothDelegate::PairPromptStatus::kCancelled));
-      break;
   }
 #else
   // WebBluetoothServiceImpl will only start the pairing process (which prompts
   // for credentials) on devices that pair on demand. This should never be
   // reached.
   NOTREACHED();
-  std::move(callback).Run(content::BluetoothDelegate::PairPromptResult(
-      content::BluetoothDelegate::PairPromptStatus::kCancelled));
 #endif
 }

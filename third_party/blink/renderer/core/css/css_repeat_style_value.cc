@@ -41,10 +41,10 @@ String CSSRepeatStyleValue::CustomCSSText() const {
     result.Append(x_->CssText());
   } else if (x_->GetValueID() == CSSValueID::kRepeat &&
              y_->GetValueID() == CSSValueID::kNoRepeat) {
-    result.Append(getValueName(CSSValueID::kRepeatX));
+    result.Append(GetCSSValueNameAs<StringView>(CSSValueID::kRepeatX));
   } else if (x_->GetValueID() == CSSValueID::kNoRepeat &&
              y_->GetValueID() == CSSValueID::kRepeat) {
-    result.Append(getValueName(CSSValueID::kRepeatY));
+    result.Append(GetCSSValueNameAs<StringView>(CSSValueID::kRepeatY));
   } else {
     result.Append(x_->CssText());
     result.Append(' ');
@@ -62,6 +62,10 @@ bool CSSRepeatStyleValue::Equals(const CSSRepeatStyleValue& other) const {
 bool CSSRepeatStyleValue::IsRepeat() const {
   return x_->GetValueID() == CSSValueID::kRepeat &&
          y_->GetValueID() == CSSValueID::kRepeat;
+}
+
+bool CSSRepeatStyleValue::HasRandomFunctions() const {
+  return (x_ && x_->HasRandomFunctions()) || (y_ && y_->HasRandomFunctions());
 }
 
 void CSSRepeatStyleValue::TraceAfterDispatch(blink::Visitor* visitor) const {

@@ -10,7 +10,10 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
+#include "chrome/browser/signin/bound_session_credentials/bound_session_key.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_params.pb.h"
+#include "chrome/browser/signin/bound_session_credentials/bound_session_refresh_cookie_fetcher.h"
+#include "chrome/browser/signin/bound_session_credentials/rotation_debug_info.pb.h"
 #include "chrome/common/renderer_configuration.mojom.h"
 #include "url/gurl.h"
 
@@ -36,12 +39,23 @@ class BoundSessionCookieController {
     // Called when the cookie refresh request results in a persistent error that
     // can't be fixed by retrying. `BoundSessionCookieController` is expected to
     // be deleted after this call.
-    virtual void OnPersistentErrorEncountered() = 0;
+    // `controller` points at the caller object.
+    // `BoundSessionRefreshCookieFetcher::IsPersistentError(refresh_error)` is
+    // guaranteed to be true.
+    virtual void OnPersistentErrorEncountered(
+        BoundSessionCookieController* controller,
+        BoundSessionRefreshCookieFetcher::Result refresh_error) = 0;
 
     // Called when the bound session parameters change, for example the minimum
     // cookie expiration date changes. Cookie deletion is considered as a change
     // in the expiration date to the null time.
     virtual void OnBoundSessionThrottlerParamsChanged() = 0;
+
+    // Called when the cookie rotation has been stopped for more than a timeout
+    // period. `BoundSessionCookieController` is expected to be deleted after
+    // this call.
+    virtual void OnCookieRotationStoppedTimeout(
+        BoundSessionCookieController* controller) = 0;
   };
 
   BoundSessionCookieController(
@@ -50,7 +64,7 @@ class BoundSessionCookieController {
 
   virtual ~BoundSessionCookieController();
 
-  virtual void Initialize();
+  virtual void Initialize(bool is_new_session);
 
   // Called when a network request requires a fresh SIDTS cookie.
   // The callback will be called once the cookie is fresh or the session is
@@ -60,18 +74,59 @@ class BoundSessionCookieController {
       chrome::mojom::BoundSessionRequestThrottledHandler::
           HandleRequestBlockedOnCookieCallback resume_blocked_request) = 0;
 
-  const GURL& url() const { return url_; }
+  // Stops the cookie rotation for the given session.
+  //
+  // Once the cookie rotation is stopped, all throttled requests will remain
+  // throttled until the session is terminated. This is used by OAML to ensure
+  // all requests are throttled until the returned cookies are set.
+  //
+  // The session will be terminated after a timeout if it has not been
+  // terminated explicitly. This is a safety net to ensure the session is
+  // eventually terminated even if OAML fails to terminate the session.
+  virtual void StopCookieRotation() = 0;
+
+  // URL determining the scope of the bound session. All requests that are
+  // within the scope are subject to throttling.
+  const GURL& scope_url() const { return scope_url_; }
+  // Unique identifier of the session (within the same site).
   const std::string& session_id() const { return session_id_; }
+  // Time at which the session was initially registered.
   base::Time session_creation_time() const { return session_creation_time_; }
-  base::Time min_cookie_expiration_time();
-  chrome::mojom::BoundSessionThrottlerParamsPtr
-  bound_session_throttler_params();
+  // URL for refreshing bound cookies.
+  const GURL& refresh_url() const { return refresh_url_; }
+  // eTLD+1 of the session serving as a hard session boundary. Session IDs must
+  // be unique within a single site.
+  const GURL& site() const { return site_; }
+  // Where the session has been originated from.
+  bound_session_credentials::SessionOrigin session_origin() const {
+    return session_origin_;
+  }
+  // The earliest time at which one of the bound cookies expires.
+  base::Time min_cookie_expiration_time() const;
+  chrome::mojom::BoundSessionThrottlerParamsPtr bound_session_throttler_params()
+      const;
   base::flat_set<std::string> bound_cookie_names() const;
 
+  // Key that uniquely identifies the session across all sites.
+  BoundSessionKey GetBoundSessionKey() const;
+
+  // Extracts debug info information from the controller.
+  virtual bound_session_credentials::RotationDebugInfo TakeDebugInfo() = 0;
+
+  // Returns true in case of successive 5xx responses on the cookie rotation
+  // endpoint which indicates the server might be experiencing an outage.
+  // Throttling requests in this case might make the web (within the scope of
+  // the bound session) unusable.
+  virtual bool ShouldPauseThrottlingRequests() const = 0;
+
  protected:
-  const GURL url_;
+  const GURL scope_url_;
   const std::string session_id_;
   const base::Time session_creation_time_;
+  const GURL refresh_url_;
+  const GURL site_;
+  const bound_session_credentials::SessionOrigin session_origin_ =
+      bound_session_credentials::SessionOrigin::SESSION_ORIGIN_UNSPECIFIED;
   // Map from cookie name to cookie expiration time, it is expected to have two
   // elements the 1P and 3P cookies.
   // Cookie expiration time is reduced by threshold to guarantee cookie will be

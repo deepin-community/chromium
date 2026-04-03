@@ -83,7 +83,6 @@ std::unique_ptr<RemoteCommandJob> DeviceCommandsFactoryAsh::BuildJobForType(
       // These types of commands should be sent to `UserCommandsFactoryAsh`
       // instead of here.
       NOTREACHED();
-      return nullptr;
   }
 }
 

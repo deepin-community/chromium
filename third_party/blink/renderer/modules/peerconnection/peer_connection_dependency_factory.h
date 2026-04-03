@@ -5,7 +5,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_PEER_CONNECTION_DEPENDENCY_FACTORY_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_PEER_CONNECTION_DEPENDENCY_FACTORY_H_
 
-#include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/sequenced_task_runner.h"
@@ -13,6 +12,7 @@
 #include "base/threading/thread.h"
 #include "base/threading/thread_checker.h"
 #include "base/types/pass_key.h"
+#include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
@@ -31,22 +31,17 @@ namespace base {
 class WaitableEvent;
 }
 
-namespace cricket {
-class PortAllocator;
-}
-
 namespace media {
-class DecoderFactory;
 class GpuVideoAcceleratorFactories;
 class MojoVideoEncoderMetricsProviderFactory;
 }
 
-namespace rtc {
-class Thread;
-}
-
 namespace gfx {
 class ColorSpace;
+}
+
+namespace webrtc {
+class LocalNetworkAccessPermissionFactoryInterface;
 }
 
 namespace blink {
@@ -59,6 +54,25 @@ class RTCPeerConnectionHandlerClient;
 class RTCPeerConnectionHandler;
 class WebLocalFrame;
 class WebRtcAudioDeviceImpl;
+
+// The enum is used for logging. Entries should not be renumbered or reused.
+// Keep in sync with the corresponding enum in
+// tools/metrics/histograms/metadata/web_rtc/enums.xml.
+// LINT.IfChange(LocalNetworkAccessRequestType)
+enum class LocalNetworkAccessRequestType {
+  kUnknown = 0,
+  kLoopbackToLoopback = 1,
+  kLoopbackToLocal = 2,
+  kLoopbackToPublic = 3,
+  kLocalToLoopback = 4,
+  kLocalToLocal = 5,
+  kLocalToPublic = 6,
+  kPublicToLoopback = 7,
+  kPublicToLocal = 8,
+  kPublicToPublic = 9,
+  kMaxValue = kPublicToPublic,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/web_rtc/enums.xml:LocalNetworkAccessRequestType)
 
 // Object factory for RTC PeerConnections.
 class MODULES_EXPORT PeerConnectionDependencyFactory
@@ -106,7 +120,7 @@ class MODULES_EXPORT PeerConnectionDependencyFactory
   // Asks the libjingle PeerConnection factory to create a libjingle
   // PeerConnection object.
   // The PeerConnection object is owned by PeerConnectionHandler.
-  virtual rtc::scoped_refptr<webrtc::PeerConnectionInterface>
+  virtual webrtc::scoped_refptr<webrtc::PeerConnectionInterface>
   CreatePeerConnection(
       const webrtc::PeerConnectionInterface::RTCConfiguration& config,
       blink::WebLocalFrame* web_frame,
@@ -115,7 +129,7 @@ class MODULES_EXPORT PeerConnectionDependencyFactory
 
   // Creates a PortAllocator that uses Chrome IPC sockets and enforces privacy
   // controls according to the permissions granted on the page.
-  virtual std::unique_ptr<cricket::PortAllocator> CreatePortAllocator(
+  virtual std::unique_ptr<webrtc::PortAllocator> CreatePortAllocator(
       blink::WebLocalFrame* web_frame);
 
   // Creates an AsyncDnsResolverFactory that uses the networking Mojo service.
@@ -123,10 +137,9 @@ class MODULES_EXPORT PeerConnectionDependencyFactory
   CreateAsyncDnsResolverFactory();
 
   // Creates a libjingle representation of an ice candidate.
-  virtual webrtc::IceCandidateInterface* CreateIceCandidate(
-      const String& sdp_mid,
-      int sdp_mline_index,
-      const String& sdp);
+  virtual webrtc::IceCandidate* CreateIceCandidate(const String& sdp_mid,
+                                                   int sdp_mline_index,
+                                                   const String& sdp);
 
   // Returns the most optimistic view of the capabilities of the system for
   // sending or receiving media of the given kind ("audio" or "video").
@@ -140,8 +153,8 @@ class MODULES_EXPORT PeerConnectionDependencyFactory
   void EnsureInitialized();
 
   // Returns the SingleThreadTaskRunner corresponding to the WebRTC worker or
-  // network threads (rtc::Thread), if they exist. These threads are ensured to
-  // exist after an RTCPeerConnectionHandler has been Initialized().
+  // network threads (webrtc::Thread), if they exist. These threads are ensured
+  // to exist after an RTCPeerConnectionHandler has been Initialized().
   scoped_refptr<base::SingleThreadTaskRunner> GetWebRtcWorkerTaskRunner();
   virtual scoped_refptr<base::SingleThreadTaskRunner>
   GetWebRtcNetworkTaskRunner();
@@ -156,13 +169,21 @@ class MODULES_EXPORT PeerConnectionDependencyFactory
   // around the same ticks.
   virtual std::unique_ptr<webrtc::Metronome> CreateDecodeMetronome();
 
+  void BindPermissionService(
+      mojo::PendingReceiver<mojom::blink::PermissionService>
+          permission_service);
+  void CountLocalNetworkAccess(LocalNetworkAccessRequestType);
+
+  std::unique_ptr<webrtc::LocalNetworkAccessPermissionFactoryInterface>
+  CreateLocalNetworkAccessPermissionFactoryForTesting();
+
   void Trace(Visitor*) const override;
 
  protected:
   // Ctor for tests.
   PeerConnectionDependencyFactory();
 
-  virtual const rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface>&
+  virtual const webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface>&
   GetPcFactory();
   virtual bool PeerConnectionFactoryCreated();
 
@@ -183,9 +204,7 @@ class MODULES_EXPORT PeerConnectionDependencyFactory
 
   void InitializeSignalingThread(
       const gfx::ColorSpace& render_color_space,
-      scoped_refptr<base::SequencedTaskRunner> media_task_runner,
       media::GpuVideoAcceleratorFactories* gpu_factories,
-      base::WeakPtr<media::DecoderFactory> media_decoder_factory,
       scoped_refptr<media::MojoVideoEncoderMetricsProviderFactory>
           video_encoder_metrics_provider_factory,
       base::WaitableEvent* event);
@@ -210,15 +229,16 @@ class MODULES_EXPORT PeerConnectionDependencyFactory
 
   Member<WebrtcVideoPerfReporter> webrtc_video_perf_reporter_;
 
-  rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> pc_factory_;
+  webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> pc_factory_;
 
   // Dispatches all P2P sockets.
   Member<P2PSocketDispatcher> p2p_socket_dispatcher_;
 
   scoped_refptr<blink::WebRtcAudioDeviceImpl> audio_device_;
 
-  raw_ptr<media::GpuVideoAcceleratorFactories, ExperimentalRenderer>
-      gpu_factories_;
+  raw_ptr<media::GpuVideoAcceleratorFactories> gpu_factories_;
+
+  bool encode_decode_capabilities_reported_ = false;
 
   THREAD_CHECKER(thread_checker_);
 };

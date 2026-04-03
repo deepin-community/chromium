@@ -30,11 +30,14 @@
 #include <memory>
 #include <utility>
 
-#include "dawn/native/CreatePipelineAsyncTask.h"
+#include "dawn/native/CreatePipelineAsyncEvent.h"
+#include "dawn/native/ImmediateConstantsLayout.h"
 #include "dawn/native/d3d/D3DError.h"
 #include "dawn/native/d3d11/DeviceD3D11.h"
 #include "dawn/native/d3d11/ShaderModuleD3D11.h"
 #include "dawn/native/d3d11/UtilsD3D11.h"
+#include "dawn/platform/DawnPlatform.h"
+#include "dawn/platform/tracing/TraceEvent.h"
 
 namespace dawn::native::d3d11 {
 
@@ -51,6 +54,11 @@ MaybeError ComputePipeline::InitializeImpl() {
     Device* device = ToBackend(GetDevice());
     uint32_t compileFlags = 0;
 
+    if (UsesNumWorkgroups()) {
+        mImmediateMask |= GetImmediateConstantBlockBits(
+            offsetof(ComputeImmediateConstants, numWorkgroups), sizeof(NumWorkgroupsDimensions));
+    }
+
     if (!device->IsToggleEnabled(Toggle::UseDXC) &&
         !device->IsToggleEnabled(Toggle::FxcOptimizations)) {
         compileFlags |= D3DCOMPILE_OPTIMIZATION_LEVEL0;
@@ -59,24 +67,29 @@ MaybeError ComputePipeline::InitializeImpl() {
     if (device->IsToggleEnabled(Toggle::EmitHLSLDebugSymbols)) {
         compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
     }
+    if (device->IsToggleEnabled(Toggle::D3DSkipShaderOptimizations)) {
+        compileFlags |= D3DCOMPILE_SKIP_OPTIMIZATION;
+    }
 
     // Tint does matrix multiplication expecting row major matrices
     compileFlags |= D3DCOMPILE_PACK_MATRIX_ROW_MAJOR;
 
-    if (!device->IsToggleEnabled(Toggle::D3DDisableIEEEStrictness)) {
+    const ProgrammableStage& programmableStage = GetStage(SingleShaderStage::Compute);
+    if (programmableStage.module->GetStrictMath().value_or(
+            !device->IsToggleEnabled(Toggle::D3DDisableIEEEStrictness))) {
         compileFlags |= D3DCOMPILE_IEEE_STRICTNESS;
     }
 
-    const ProgrammableStage& programmableStage = GetStage(SingleShaderStage::Compute);
-
     d3d::CompiledShader compiledShader;
-    DAWN_TRY_ASSIGN(compiledShader, ToBackend(programmableStage.module)
-                                        ->Compile(programmableStage, SingleShaderStage::Compute,
-                                                  ToBackend(GetLayout()), compileFlags));
-    DAWN_TRY(CheckHRESULT(device->GetD3D11Device()->CreateComputeShader(
-                              compiledShader.shaderBlob.Data(), compiledShader.shaderBlob.Size(),
-                              nullptr, &mComputeShader),
-                          "D3D11 create compute shader"));
+    DAWN_TRY_ASSIGN(compiledShader,
+                    ToBackend(programmableStage.module)
+                        ->Compile(programmableStage, SingleShaderStage::Compute,
+                                  ToBackend(GetLayout()), compileFlags, GetImmediateMask()));
+    {
+        TRACE_EVENT0(device->GetPlatform(), General, "ComputePipelineD3D11::CreateComputeShader");
+        SCOPED_DAWN_HISTOGRAM_TIMER_MICROS(device->GetPlatform(), "D3D11.CreateComputeShaderUs");
+        DAWN_TRY_ASSIGN(mComputeShader, device->GetOrCreateComputeShader(compiledShader));
+    }
 
     SetLabelImpl();
 
@@ -88,21 +101,16 @@ void ComputePipeline::SetLabelImpl() {
 }
 
 void ComputePipeline::ApplyNow(const ScopedSwapStateCommandRecordingContext* commandContext) {
-    auto* d3dDeviceContext = commandContext->GetD3D11DeviceContext4();
+    auto* d3dDeviceContext = commandContext->GetD3D11DeviceContext3();
     d3dDeviceContext->CSSetShader(mComputeShader.Get(), nullptr, 0);
-}
-
-void ComputePipeline::InitializeAsync(Ref<ComputePipelineBase> computePipeline,
-                                      WGPUCreateComputePipelineAsyncCallback callback,
-                                      void* userdata) {
-    std::unique_ptr<CreateComputePipelineAsyncTask> asyncTask =
-        std::make_unique<CreateComputePipelineAsyncTask>(std::move(computePipeline), callback,
-                                                         userdata);
-    CreateComputePipelineAsyncTask::RunAsync(std::move(asyncTask));
 }
 
 bool ComputePipeline::UsesNumWorkgroups() const {
     return GetStage(SingleShaderStage::Compute).metadata->usesNumWorkgroups;
+}
+
+ID3D11ComputeShader* ComputePipeline::GetD3D11ComputeShaderForTesting() {
+    return mComputeShader.Get();
 }
 
 }  // namespace dawn::native::d3d11

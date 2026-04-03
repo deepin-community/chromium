@@ -33,6 +33,8 @@ source_set("test_support") {
     "utils/file_util.h",
     "utils/hash.cpp",
     "utils/hash.h",
+    "utils/png_encode.cpp",
+    "utils/png_encode.h",
   ]
   data = [ "resources/" ]
   public_deps = [
@@ -52,6 +54,12 @@ source_set("test_support") {
     "../:pdfium_noshorten_config",
   ]
   visibility = [ "../*" ]
+  if (is_posix) {
+    sources += [
+      "scoped_locale.cc",
+      "scoped_locale.h",
+    ]
+  }
   if (pdf_use_partition_alloc) {
     sources += [
       "allocator_shim_config.cpp",
@@ -70,6 +78,15 @@ source_set("test_support") {
     ]
     configs += [ "//v8:external_startup_data" ]
   }
+}
+
+source_set("pixel_diff_utils") {
+  testonly = true
+  sources = [
+    "utils/pixel_diff_util.cpp",
+    "utils/pixel_diff_util.h",
+  ]
+  configs += [ "../:pdfium_strict_config" ]
 }
 
 source_set("path_service") {
@@ -153,10 +170,7 @@ source_set("unit_test_support") {
         "fxgc_unittest.cpp",
         "fxgc_unittest.h",
       ]
-      deps += [
-        "../fxjs:gc",
-        "//testing/gtest",
-      ]
+      deps += [ "../fxjs:gc" ]
     }
   }
 }
@@ -166,7 +180,6 @@ source_set("embedder_test_support") {
   sources = [
     "embedder_test.cpp",
     "embedder_test.h",
-    "embedder_test_constants.cpp",
     "embedder_test_constants.h",
     "embedder_test_environment.cpp",
     "embedder_test_environment.h",
@@ -176,14 +189,19 @@ source_set("embedder_test_support") {
     "fake_file_access.h",
     "range_set.cpp",
     "range_set.h",
+    "utils/compare_coordinates.cc",
+    "utils/compare_coordinates.h",
   ]
   deps = [
+    ":pixel_diff_utils",
     "../:pdfium_public_headers",
     "../core/fdrm",
     "../core/fxge",
-    "../third_party:pdfium_base",
+    "../fpdfsdk",
+    "image_diff",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/simdutf",
   ]
   public_deps = [
     ":test_environments",
@@ -220,6 +238,88 @@ source_set("embedder_test_support") {
         "../xfa/fxfa/parser",
       ]
     }
+  }
+}
+
+config("pdfium_test_config") {
+  cflags = []
+  ldflags = []
+  defines = []
+  include_dirs = [ ".." ]
+  if (pdf_use_skia) {
+    defines += [ "PDF_ENABLE_SKIA" ]
+  }
+  if (is_asan) {
+    defines += [ "PDF_ENABLE_ASAN" ]
+  }
+  if (pdf_use_partition_alloc) {
+    defines += [ "PDF_USE_PARTITION_ALLOC" ]
+  }
+  if (enable_callgrind) {
+    defines += [ "ENABLE_CALLGRIND" ]
+  }
+  if (build_with_chromium) {
+    defines += [ "BUILD_WITH_CHROMIUM" ]
+  }
+}
+
+executable("pdfium_test") {
+  testonly = true
+  sources = [
+    "helpers/dump.cc",
+    "helpers/dump.h",
+    "helpers/event.cc",
+    "helpers/event.h",
+    "helpers/page_renderer.cc",
+    "helpers/page_renderer.h",
+    "helpers/write.cc",
+    "helpers/write.h",
+    "pdfium_test.cc",
+  ]
+
+  # Note: One should write programs that depend on ../:pdfium. Whereas this
+  # test program does not set a good example, and depends on PDFium internals,
+  # as well as test support code, for convenience.
+  deps = [
+    ":test_support",
+    "../:pdfium_public_headers",
+    "../fpdfsdk",
+    "image_diff",
+    "//build/win:default_exe_manifest",
+  ]
+  configs += [
+    ":pdfium_test_config",
+    "../:pdfium_common_config",
+  ]
+
+  if (is_win) {
+    sources += [
+      "helpers/win32/com_factory.cc",
+      "helpers/win32/com_factory.h",
+    ]
+  }
+
+  if (pdf_enable_v8) {
+    deps += [
+      "//v8:v8_headers",
+      "//v8:v8_libplatform",
+    ]
+    include_dirs = [ "//v8" ]
+    configs += [ "//v8:external_startup_data" ]
+  }
+  if (pdf_use_skia) {
+    deps += [ "//skia" ]
+    if (build_with_chromium) {
+      sources += [
+        "chromium_support/discardable_memory_allocator.cc",
+        "chromium_support/discardable_memory_allocator.h",
+      ]
+      deps += [ "//base/test:test_support" ]
+    }
+  }
+
+  if (!build_with_chromium) {
+    assert_no_deps = [ "//testing/gtest/*" ]
   }
 }
 

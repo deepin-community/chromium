@@ -1,0 +1,47 @@
+// Copyright 2025 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module content.mojom;
+
+// The interface for communicating with the MemoryCoordinator in a child
+// process.
+interface ChildMemoryCoordinator {
+  // Notifies the consumer with `consumer_id` to release memory.
+  NotifyReleaseMemory(string consumer_id);
+
+  // Notifies the consumer with `consumer_id` of a new memory limit.
+  NotifyUpdateMemoryLimit(string consumer_id, int32 percentage);
+};
+
+// This struct directly corresponds to base::MemoryConsumerTraits, from which it
+// is converted back and forth. See base/memory_coordinator/traits.h for a
+// description of each trait.
+struct MemoryConsumerTraits {
+  uint8 supports_memory_limit;
+  uint8 in_process;
+  uint8 estimated_memory_usage;
+  uint8 release_memory_cost;
+  uint8 recreate_memory_cost;
+  uint8 information_retention;
+  uint8 memory_release_behavior;
+  uint8 execution_type;
+  uint8 release_gc_references;
+  uint8 garbage_collects_v8_heap;
+};
+
+// The interface for communicating with the MemoryConsumerRegistry that lives in
+// the browser process.
+interface ChildMemoryConsumerRegistryHost {
+  // Binds the ChildMemoryCoordinator interface for the process associated with
+  // this host.
+  BindCoordinator(pending_remote<ChildMemoryCoordinator> coordinator);
+
+  // Registers a MemoryConsumer with the browser-side registry.
+  Register(
+      string consumer_id,
+      MemoryConsumerTraits traits);
+
+  // Unregisters a MemoryConsumer with the browser-side registry.
+  Unregister(string consumer_id);
+};

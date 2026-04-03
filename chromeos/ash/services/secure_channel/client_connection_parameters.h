@@ -12,7 +12,6 @@
 #include "base/observer_list.h"
 #include "base/unguessable_token.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/nearby_connector.mojom-shared.h"
-#include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom-shared.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -66,7 +65,7 @@ class ClientConnectionParameters {
 
   void SetBleDiscoveryState(
       mojom::DiscoveryResult discovery_state,
-      absl::optional<mojom::DiscoveryErrorCode> potential_error_code);
+      std::optional<mojom::DiscoveryErrorCode> potential_error_code);
   void SetNearbyConnectionState(mojom::NearbyConnectionStep step,
                                 mojom::NearbyConnectionStepResult result);
   void SetSecureChannelAuthenticationState(
@@ -86,7 +85,7 @@ class ClientConnectionParameters {
           nearby_connection_state_listener_receiver) = 0;
   virtual void UpdateBleDiscoveryState(
       mojom::DiscoveryResult discovery_result,
-      absl::optional<mojom::DiscoveryErrorCode> potential_error_code) = 0;
+      std::optional<mojom::DiscoveryErrorCode> potential_error_code) = 0;
   virtual void UpdateNearbyConnectionState(
       mojom::NearbyConnectionStep step,
       mojom::NearbyConnectionStepResult result) = 0;

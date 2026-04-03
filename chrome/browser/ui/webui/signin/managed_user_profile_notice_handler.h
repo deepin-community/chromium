@@ -8,14 +8,16 @@
 #include <optional>
 #include <string>
 
+#include "base/callback_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/timer/timer.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
-#include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/webui/signin/managed_user_profile_notice_ui.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -23,6 +25,7 @@
 #include "google_apis/gaia/core_account_id.h"
 
 class Browser;
+class BrowserWindowInterface;
 class Profile;
 struct AccountInfo;
 
@@ -35,16 +38,22 @@ class FilePath;
 class ManagedUserProfileNoticeHandler
     : public content::WebUIMessageHandler,
       public ProfileAttributesStorage::Observer,
-      public BrowserListObserver,
       public signin::IdentityManager::Observer {
  public:
+  enum State {
+    kDisclosure = 0,
+    kProcessing = 1,
+    kSuccess = 2,
+    kTimeout = 3,
+    kError = 4,
+    kValueProposition = 5,
+    kUserDataHandling = 6,
+  };
   ManagedUserProfileNoticeHandler(
       Browser* browser,
       ManagedUserProfileNoticeUI::ScreenType type,
-      bool profile_creation_required_by_policy,
-      bool show_link_data_option,
-      const AccountInfo& account_info,
-      signin::SigninChoiceCallback proceed_callback);
+      std::unique_ptr<signin::EnterpriseProfileCreationDialogParams>
+          create_param);
   ~ManagedUserProfileNoticeHandler() override;
 
   ManagedUserProfileNoticeHandler(const ManagedUserProfileNoticeHandler&) =
@@ -63,12 +72,11 @@ class ManagedUserProfileNoticeHandler
       const base::FilePath& profile_path) override;
   void OnProfileHostedDomainChanged(
       const base::FilePath& profile_path) override;
-
-  // BrowserListObserver:
-  void OnBrowserRemoved(Browser* browser) override;
+  void OnProfileIsManagedChanged(const base::FilePath& profile_path) override;
 
   // signin::IdentityManager::Observer:
   void OnExtendedAccountInfoUpdated(const AccountInfo& info) override;
+  void OnBrowserDidClose(BrowserWindowInterface* browser);
 
   // Access to construction parameters for tests.
   ManagedUserProfileNoticeUI::ScreenType GetTypeForTesting();
@@ -86,13 +94,15 @@ class ManagedUserProfileNoticeHandler
       ManagedUserProfileNoticeHandlerTest,
       GetManagedAccountTitleWithEmailInterceptionEnforcedByInterceptedAccount);
 
-  void HandleInitialized(const base::Value::List& args);
+  void HandleInitialized(const base::ListValue& args);
   // Handles the web ui message sent when the html content is done being laid
   // out and it's time to resize the native view hosting it to fit. |args| is
   // a single integer value for the height the native view should resize to.
-  void HandleInitializedWithSize(const base::Value::List& args);
-  void HandleProceed(const base::Value::List& args);
-  void HandleCancel(const base::Value::List& args);
+  void HandleInitializedWithSize(const base::ListValue& args);
+  void HandleProceed(const base::ListValue& args);
+  void HandleCancel(const base::ListValue& args);
+
+  void OnLongProcessingTime();
 
   // Sends an updated profile info (avatar and strings) to the WebUI.
   // `profile_path` is the path of the profile being updated, this function does
@@ -107,12 +117,17 @@ class ManagedUserProfileNoticeHandler
       const std::u16string& email);
 
   // Computes the profile info (avatar and strings) to be sent to the WebUI.
-  base::Value::Dict GetProfileInfoValue();
+  base::DictValue GetProfileInfoValue();
 
   // Returns the ProfilesAttributesEntry associated with the current profile.
   ProfileAttributesEntry* GetProfileEntry() const;
 
   std::string GetPictureUrl();
+  void OnUserChoiceHandled(signin::SigninChoiceOperationResult result,
+                           signin::SigninChoiceErrorType error_type =
+                               signin::SigninChoiceErrorType::kNoError);
+
+  void FireErrorEvent(signin::SigninChoiceErrorType error);
 
   base::FilePath profile_path_;
   base::ScopedObservation<ProfileAttributesStorage,
@@ -123,7 +138,10 @@ class ManagedUserProfileNoticeHandler
                           signin::IdentityManager::Observer>
       observed_account_{this};
 
+  base::OneShotTimer processing_timer_;
+
   raw_ptr<Browser> browser_ = nullptr;
+  base::CallbackListSubscription browser_did_close_subscription_;
   const ManagedUserProfileNoticeUI::ScreenType type_;
   const bool profile_creation_required_by_policy_;
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -132,7 +150,12 @@ class ManagedUserProfileNoticeHandler
   const std::u16string email_;
   const std::string domain_name_;
   const CoreAccountId account_id_;
-  signin::SigninChoiceCallback proceed_callback_;
+  signin::SigninChoiceWithConfirmAndRetryCallback
+      process_user_choice_with_confirmation_callback_;
+  base::OnceClosure done_callback_;
+  base::RepeatingClosure retry_callback_;
+  bool canceling_ = false;
+  base::WeakPtrFactory<ManagedUserProfileNoticeHandler> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_WEBUI_SIGNIN_MANAGED_USER_PROFILE_NOTICE_HANDLER_H_

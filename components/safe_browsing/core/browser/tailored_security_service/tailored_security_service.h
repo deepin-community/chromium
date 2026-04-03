@@ -15,7 +15,7 @@
 #include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -137,7 +137,7 @@ class TailoredSecurityService : public KeyedService {
   size_t GetNumberOfPendingTailoredSecurityServiceRequests();
 
   // Extracts a JSON-encoded HTTP response into a dictionary.
-  static base::Value::Dict ReadResponse(Request* request);
+  static base::DictValue ReadResponse(Request* request);
 
   // Unpacks the response and calls `callback`. Called by a `Request` when a
   // tailored security service query sequence has completed. When `success` is
@@ -176,14 +176,9 @@ class TailoredSecurityService : public KeyedService {
       HistorySyncEnabledForUserReturnsFalseWhenSyncServiceIsNull);
   FRIEND_TEST_ALL_PREFIXES(
       TailoredSecurityServiceTest,
-      RetryEnabledTimestampUpdateCallbackSetsStateToRetryNeeded);
+      RetryLogicTimestampUpdateCallbackSetsStateToRetryNeeded);
   FRIEND_TEST_ALL_PREFIXES(TailoredSecurityServiceTest,
-                           RetryEnabledTimestampUpdateCallbackRecordsStartTime);
-  FRIEND_TEST_ALL_PREFIXES(
-      TailoredSecurityServiceTest,
-      RetryDisabledTimestampUpdateCallbackDoesNotRecordStartTime);
-  FRIEND_TEST_ALL_PREFIXES(TailoredSecurityServiceTest,
-                           RetryDisabledStateRemainsUnset);
+                           RetryLogicTimestampUpdateCallbackRecordsStartTime);
   friend class TailoredSecurityTabHelperTest;
 
   // Saves the supplied `TailoredSecurityRetryState` to preferences.

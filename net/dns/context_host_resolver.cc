@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/strings/string_piece.h"
 #include "base/time/tick_clock.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_anonymization_key.h"
@@ -67,8 +66,8 @@ void ContextHostResolver::OnShutdown() {
 }
 
 std::unique_ptr<HostResolver::ResolveHostRequest>
-ContextHostResolver::CreateRequest(
-    url::SchemeHostPort host,
+ContextHostResolver::CreateRequestInternal(
+    HostResolver::Host host,
     NetworkAnonymizationKey network_anonymization_key,
     NetLogWithSource source_net_log,
     std::optional<ResolveHostParameters> optional_parameters) {
@@ -78,12 +77,29 @@ ContextHostResolver::CreateRequest(
     return HostResolver::CreateFailingRequest(ERR_CONTEXT_SHUT_DOWN);
   }
 
+  if (manager_->InvalidationInProgress()) {
+    return HostResolver::CreateFailingRequest(
+        ERR_DNS_CACHE_INVALIDATION_IN_PROGRESS);
+  }
+
   CHECK(resolve_context_);
 
   return manager_->CreateRequest(
-      Host(std::move(host)), std::move(network_anonymization_key),
+      std::move(host), std::move(network_anonymization_key),
       std::move(source_net_log), std::move(optional_parameters),
       resolve_context_.get());
+}
+
+std::unique_ptr<HostResolver::ResolveHostRequest>
+ContextHostResolver::CreateRequest(
+    url::SchemeHostPort host,
+    NetworkAnonymizationKey network_anonymization_key,
+    NetLogWithSource source_net_log,
+    std::optional<ResolveHostParameters> optional_parameters) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return CreateRequestInternal(
+      Host(std::move(host)), std::move(network_anonymization_key),
+      std::move(source_net_log), std::move(optional_parameters));
 }
 
 std::unique_ptr<HostResolver::ResolveHostRequest>
@@ -93,16 +109,23 @@ ContextHostResolver::CreateRequest(
     const NetLogWithSource& source_net_log,
     const std::optional<ResolveHostParameters>& optional_parameters) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return CreateRequestInternal(HostResolver::Host(std::move(host)),
+                               network_anonymization_key, source_net_log,
+                               optional_parameters);
+}
 
-  if (shutting_down_) {
-    return HostResolver::CreateFailingRequest(ERR_CONTEXT_SHUT_DOWN);
-  }
+std::unique_ptr<HostResolver::ServiceEndpointRequest>
+ContextHostResolver::CreateServiceEndpointRequest(
+    Host host,
+    NetworkAnonymizationKey network_anonymization_key,
+    NetLogWithSource net_log,
+    ResolveHostParameters parameters) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  CHECK(resolve_context_);
-
-  return manager_->CreateRequest(host, network_anonymization_key,
-                                 source_net_log, optional_parameters,
-                                 resolve_context_.get());
+  // ServiceEndpointRequestImpl::Start() takes care of context shut down.
+  return manager_->CreateServiceEndpointRequest(
+      std::move(host), std::move(network_anonymization_key), std::move(net_log),
+      std::move(parameters), resolve_context_.get());
 }
 
 std::unique_ptr<HostResolver::ProbeRequest>
@@ -128,7 +151,7 @@ HostCache* ContextHostResolver::GetHostCache() {
   return resolve_context_->host_cache();
 }
 
-base::Value::Dict ContextHostResolver::GetDnsConfigAsValue() const {
+base::DictValue ContextHostResolver::GetDnsConfigAsValue() const {
   return manager_->GetDnsConfigAsValue();
 }
 
@@ -139,6 +162,10 @@ void ContextHostResolver::SetRequestContext(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   resolve_context_->set_url_request_context(request_context);
+}
+
+bool ContextHostResolver::IsHappyEyeballsV3Enabled() const {
+  return manager_->IsHappyEyeballsV3Enabled();
 }
 
 HostResolverManager* ContextHostResolver::GetManagerForTesting() {

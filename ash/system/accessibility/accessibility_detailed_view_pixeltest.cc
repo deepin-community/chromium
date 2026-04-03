@@ -8,29 +8,31 @@
 #include "ash/system/unified/unified_system_tray_controller.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/test/pixel/ash_pixel_differ.h"
+#include "ash/test/pixel/ash_pixel_test_helper.h"
 #include "ash/test/pixel/ash_pixel_test_init_params.h"
-#include "base/test/scoped_feature_list.h"
-#include "chromeos/constants/chromeos_features.h"
 
 namespace ash {
 
 // Pixel tests for the quick settings accessibility detailed view.
-class AccessibilityDetailedViewPixelTest : public AshTestBase {
+class AccessibilityDetailedViewPixelTest
+    : public AshTestBase,
+      public testing::WithParamInterface</*enable_system_blur=*/bool> {
  public:
-  AccessibilityDetailedViewPixelTest() {
-    feature_list_.InitWithFeatureStates({{chromeos::features::kJelly, true}});
-  }
-
   // AshTestBase:
   std::optional<pixel_test::InitParams> CreatePixelTestInitParams()
       const override {
-    return pixel_test::InitParams();
+    pixel_test::InitParams init_params;
+    init_params.system_blur_enabled = GetParam();
+    return init_params;
   }
-
-  base::test::ScopedFeatureList feature_list_;
 };
 
-TEST_F(AccessibilityDetailedViewPixelTest, Basics) {
+INSTANTIATE_TEST_SUITE_P(
+    /* no prefix */,
+    AccessibilityDetailedViewPixelTest,
+    testing::Bool());
+
+TEST_P(AccessibilityDetailedViewPixelTest, Basics) {
   UnifiedSystemTray* system_tray = GetPrimaryUnifiedSystemTray();
   system_tray->ShowBubble();
   ASSERT_TRUE(system_tray->bubble());
@@ -45,8 +47,9 @@ TEST_F(AccessibilityDetailedViewPixelTest, Basics) {
   ASSERT_TRUE(detailed_view_container);
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "check_view",
-      /*revision_number=*/10, detailed_view_container));
+      GenerateScreenshotName("check_view"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 15 : 0,
+      detailed_view_container));
 }
 
 }  // namespace ash

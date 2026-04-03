@@ -86,12 +86,12 @@ Here are some examples for a 2D array/matrix \c A and a 1D array/vector \c v.
   <td></td>
 </tr>
 <tr>
-  <td>First \c n odd rows A</td>
+  <td>First \c n odd rows of A</td>
   <td>\code A(seqN(1,n,2), all) \endcode</td>
   <td></td>
 </tr>
 <tr>
-  <td>The last past one column</td>
+  <td>The second-last column</td>
   <td>\code A(all, last-1) \endcode</td>
   <td>\code A.col(A.cols()-2) \endcode</td>
 </tr>
@@ -114,8 +114,7 @@ Here are some examples for a 2D array/matrix \c A and a 1D array/vector \c v.
 
 As seen in the last example, referencing the <i> last n </i> elements (or rows/columns) is a bit cumbersome to write.
 This becomes even more tricky and error prone with a non-default increment.
-Here comes \link Eigen::placeholders::lastN(SizeType) Eigen::placeholders::lastN(size) \endlink, and
-\link Eigen::placeholders::lastN(SizeType,IncrType) Eigen::placeholders::lastN(size,incr) \endlink:
+Here comes \ref Eigen_placeholders_lastN :
 
 <table class="manual">
 <tr>
@@ -158,7 +157,7 @@ It is equivalent to:
 \endcode
 
 We can revisit the <i>even columns of A</i> example as follows:
-\code A(all, seq(0,last,fix<2>))
+\code A(all, seq(fix<0>,last,fix<2>))
 \endcode
 
 

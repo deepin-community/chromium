@@ -8,18 +8,21 @@
 #include <optional>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/numerics/byte_conversions.h"
+#include "base/strings/cstring_view.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/sys_byteorder.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/policy/core/common/schema.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/registry.h"
+#include "base/win/win_util.h"
 
 using base::win::RegistryKeyIterator;
 using base::win::RegistryValueIterator;
@@ -47,7 +50,7 @@ std::optional<base::Value> ConvertRegistryValue(const base::Value& value,
   if (value.type() == schema.type()) {
     // Recurse for complex types.
     if (value.is_dict()) {
-      base::Value::Dict result;
+      base::DictValue result;
       for (auto entry : value.GetDict()) {
         std::optional<base::Value> converted =
             ConvertRegistryValue(entry.second, schema.GetProperty(entry.first));
@@ -57,7 +60,7 @@ std::optional<base::Value> ConvertRegistryValue(const base::Value& value,
       }
       return base::Value(std::move(result));
     } else if (value.is_list()) {
-      base::Value::List result;
+      base::ListValue result;
       for (const auto& entry : value.GetList()) {
         std::optional<base::Value> converted =
             ConvertRegistryValue(entry, schema.GetItems());
@@ -109,7 +112,7 @@ std::optional<base::Value> ConvertRegistryValue(const base::Value& value,
       // Lists are encoded as subkeys with numbered value in the registry
       // (non-numerical keys are ignored).
       if (value.is_dict()) {
-        base::Value::List result;
+        base::ListValue result;
         for (auto it : value.GetDict()) {
           if (!IsKeyNumerical(it.first)) {
             continue;
@@ -250,18 +253,32 @@ void RegistryDict::ReadRegistry(HKEY hive, const std::wstring& root) {
   for (RegistryValueIterator it(hive, root.c_str()); it.Valid(); ++it) {
     const std::string name = base::WideToUTF8(it.Name());
     switch (it.Type()) {
-      case REG_SZ:
       case REG_EXPAND_SZ:
+        if (auto expanded_path = base::win::ExpandEnvironmentVariables(
+                UNSAFE_TODO(base::wcstring_view(it.Value())))) {
+          SetValue(name, base::Value(base::WideToUTF8(*expanded_path)));
+          continue;
+        }
+        [[fallthrough]];
+      case REG_SZ:
         SetValue(name, base::Value(base::WideToUTF8(it.Value())));
         continue;
       case REG_DWORD_LITTLE_ENDIAN:
       case REG_DWORD_BIG_ENDIAN:
         if (it.ValueSize() == sizeof(DWORD)) {
-          DWORD dword_value = *(reinterpret_cast<const DWORD*>(it.Value()));
-          if (it.Type() == REG_DWORD_BIG_ENDIAN)
-            dword_value = base::NetToHost32(dword_value);
-          else
-            dword_value = base::ByteSwapToLE32(dword_value);
+          auto value =
+              // TODO(crbug.com/40284755): it.Value() should return a
+              // wcstring_view which will be usable as a span directly. The
+              // ValueSize() here is the number of non-NUL *bytes* in the
+              // Value() string, so we cast the Value() to bytes which is what
+              // we want in the end anyway.
+              UNSAFE_TODO(
+                  base::span(reinterpret_cast<const uint8_t*>(it.Value()),
+                             it.ValueSize()))
+                  .first<sizeof(DWORD)>();
+          DWORD dword_value = it.Type() == REG_DWORD_BIG_ENDIAN
+                                  ? base::U32FromBigEndian(value)
+                                  : base::U32FromLittleEndian(value);
           SetValue(name, base::Value(static_cast<int>(dword_value)));
           continue;
         }
@@ -296,7 +313,7 @@ std::optional<base::Value> RegistryDict::ConvertToJSON(
       schema.valid() ? schema.type() : base::Value::Type::DICT;
   switch (type) {
     case base::Value::Type::DICT: {
-      base::Value::Dict result;
+      base::DictValue result;
       for (RegistryDict::ValueMap::const_iterator entry(values_.begin());
            entry != values_.end(); ++entry) {
         SchemaList matching_schemas =
@@ -334,7 +351,7 @@ std::optional<base::Value> RegistryDict::ConvertToJSON(
       return base::Value(std::move(result));
     }
     case base::Value::Type::LIST: {
-      base::Value::List result;
+      base::ListValue result;
       Schema item_schema = schema.valid() ? schema.GetItems() : Schema();
       for (RegistryDict::KeyMap::const_iterator entry(keys_.begin());
            entry != keys_.end(); ++entry) {

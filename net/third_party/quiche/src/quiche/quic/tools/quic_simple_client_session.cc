@@ -4,10 +4,13 @@
 
 #include "quiche/quic/tools/quic_simple_client_session.h"
 
+#include <memory>
 #include <utility>
 
+#include "quiche/quic/core/http/quic_spdy_client_session.h"
 #include "quiche/quic/core/quic_path_validator.h"
-#include "quiche/spdy/core/http2_header_block.h"
+#include "quiche/quic/core/quic_types.h"
+#include "quiche/common/http/http_header_block.h"
 
 namespace quic {
 
@@ -27,8 +30,28 @@ QuicSimpleClientSession::QuicSimpleClientSession(
     QuicClientBase::NetworkHelper* network_helper,
     const QuicServerId& server_id, QuicCryptoClientConfig* crypto_config,
     bool drop_response_body, bool enable_web_transport)
-    : QuicSpdyClientSession(config, supported_versions, connection, visitor,
-                            server_id, crypto_config),
+    : QuicSimpleClientSession(config, supported_versions, connection, visitor,
+                              /*writer=*/nullptr,
+                              /*migration_helper=*/nullptr,
+                              QuicConnectionMigrationConfig{
+                                  .allow_server_preferred_address = false},
+                              network_helper, server_id, crypto_config,
+                              drop_response_body, enable_web_transport) {}
+
+QuicSimpleClientSession::QuicSimpleClientSession(
+    const QuicConfig& config, const ParsedQuicVersionVector& supported_versions,
+    QuicConnection* connection, QuicSession::Visitor* visitor,
+    QuicForceBlockablePacketWriter* absl_nullable writer,
+    QuicMigrationHelper* absl_nullable migration_helper,
+    const QuicConnectionMigrationConfig& migration_config,
+    QuicClientBase::NetworkHelper* network_helper,
+    const QuicServerId& server_id, QuicCryptoClientConfig* crypto_config,
+    bool drop_response_body, bool enable_web_transport)
+    : QuicSpdyClientSession(
+          config, supported_versions, connection, visitor, writer,
+          migration_helper, migration_config, server_id, crypto_config,
+          enable_web_transport ? QuicPriorityType::kWebTransport
+                               : QuicPriorityType::kHttp),
       network_helper_(network_helper),
       drop_response_body_(drop_response_body),
       enable_web_transport_(enable_web_transport) {}
@@ -38,9 +61,10 @@ QuicSimpleClientSession::CreateClientStream() {
   auto stream = std::make_unique<QuicSimpleClientStream>(
       GetNextOutgoingBidirectionalStreamId(), this, BIDIRECTIONAL,
       drop_response_body_);
-  stream->set_on_interim_headers([this](const spdy::Http2HeaderBlock& headers) {
-    on_interim_headers_(headers);
-  });
+  stream->set_on_interim_headers(
+      [this](const quiche::HttpHeaderBlock& headers) {
+        on_interim_headers_(headers);
+      });
   return stream;
 }
 

@@ -9,7 +9,6 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
@@ -51,7 +50,8 @@ std::unique_ptr<URLLoader> URLLoaderMockFactoryImpl::CreateURLLoader() {
 
 void URLLoaderMockFactoryImpl::RegisterURL(const WebURL& url,
                                            const WebURLResponse& response,
-                                           const WebString& file_path) {
+                                           const WebString& file_path,
+                                           const size_t chunk_size) {
   ResponseInfo response_info;
   response_info.response = response;
   if (!file_path.IsNull() && !file_path.IsEmpty()) {
@@ -59,22 +59,23 @@ void URLLoaderMockFactoryImpl::RegisterURL(const WebURL& url,
     DCHECK(base::PathExists(response_info.file_path))
         << response_info.file_path.MaybeAsASCII() << " does not exist.";
   }
+  response_info.chunk_size = chunk_size;
 
-  DCHECK(!base::Contains(url_to_response_info_, url));
+  DCHECK(!url_to_response_info_.Contains(url));
   url_to_response_info_.Set(url, response_info);
 }
 
 void URLLoaderMockFactoryImpl::RegisterErrorURL(const WebURL& url,
                                                 const WebURLResponse& response,
                                                 const WebURLError& error) {
-  DCHECK(!base::Contains(url_to_response_info_, url));
+  DCHECK(!url_to_response_info_.Contains(url));
   RegisterURL(url, response, WebString());
   url_to_error_info_.Set(url, error);
 }
 
 void URLLoaderMockFactoryImpl::UnregisterURL(const blink::WebURL& url) {
   URLToResponseMap::iterator iter = url_to_response_info_.find(url);
-  DCHECK(iter != url_to_response_info_.end());
+  CHECK(iter != url_to_response_info_.end());
   url_to_response_info_.erase(iter);
 
   URLToErrorMap::iterator error_iter = url_to_error_info_.find(url);
@@ -97,7 +98,7 @@ void URLLoaderMockFactoryImpl::RegisterURLProtocol(
         << response_info.file_path.MaybeAsASCII() << " does not exist.";
   }
 
-  DCHECK(!base::Contains(protocol_to_response_info_, protocol));
+  DCHECK(!protocol_to_response_info_.Contains(protocol));
   protocol_to_response_info_.Set(protocol, response_info);
 }
 
@@ -105,7 +106,7 @@ void URLLoaderMockFactoryImpl::UnregisterURLProtocol(
     const WebString& protocol) {
   ProtocolToResponseMap::iterator iter =
       protocol_to_response_info_.find(protocol);
-  DCHECK(iter != protocol_to_response_info_.end());
+  CHECK(iter != protocol_to_response_info_.end());
   protocol_to_response_info_.erase(iter);
 }
 
@@ -163,11 +164,9 @@ void URLLoaderMockFactoryImpl::FillNavigationParamsResponse(
     DCHECK(buffer);
     DCHECK_EQ(net::OK, result);
     params->response = WrappedResourceResponse(response);
-    auto body_loader = std::make_unique<StaticDataNavigationBodyLoader>();
-    body_loader->Write(*buffer);
-    body_loader->Finish();
     params->is_static_data = true;
-    params->body_loader = std::move(body_loader);
+    params->body_loader =
+        StaticDataNavigationBodyLoader::CreateWithData(std::move(buffer));
     return;
   }
 
@@ -194,13 +193,9 @@ void URLLoaderMockFactoryImpl::FillNavigationParamsResponse(
     DCHECK(!error);
   }
 
-  auto body_loader = std::make_unique<StaticDataNavigationBodyLoader>();
-  if (data) {
-    body_loader->Write(*data);
-    body_loader->Finish();
-  }
   params->is_static_data = true;
-  params->body_loader = std::move(body_loader);
+  params->body_loader =
+      StaticDataNavigationBodyLoader::CreateWithData(std::move(data));
 }
 
 bool URLLoaderMockFactoryImpl::IsMockedURL(const blink::WebURL& url) {
@@ -246,12 +241,11 @@ void URLLoaderMockFactoryImpl::LoadRequest(const WebURL& url,
   if (!LookupURL(url, error, &response_info)) {
     // Non mocked URLs should not have been passed to the default URLLoader.
     NOTREACHED() << url;
-    return;
   }
 
-  if (!*error && !ReadFile(response_info.file_path, data)) {
+  if (!*error &&
+      !ReadFile(response_info.file_path, data, response_info.chunk_size)) {
     NOTREACHED();
-    return;
   }
 
   *response = response_info.response;
@@ -284,7 +278,8 @@ bool URLLoaderMockFactoryImpl::LookupURL(const WebURL& url,
 
 // static
 bool URLLoaderMockFactoryImpl::ReadFile(const base::FilePath& file_path,
-                                        scoped_refptr<SharedBuffer>& data) {
+                                        scoped_refptr<SharedBuffer>& data,
+                                        const size_t chunk_size) {
   // If the path is empty then we return an empty file so tests can simulate
   // requests without needing to actually load files.
   if (file_path.empty()) {
@@ -296,7 +291,18 @@ bool URLLoaderMockFactoryImpl::ReadFile(const base::FilePath& file_path,
     return false;
   }
 
-  data = SharedBuffer::Create(buffer.data(), buffer.size());
+  data = SharedBuffer::Create();
+
+  size_t effective_chunk_size = chunk_size ? chunk_size : buffer.size();
+  size_t offset = 0;
+  while (offset < buffer.size()) {
+    size_t current_chunk_size =
+        std::min(effective_chunk_size, buffer.size() - offset);
+    data->Append(
+        base::span<const char>(buffer).subspan(offset, current_chunk_size));
+    offset += current_chunk_size;
+  }
+
   return true;
 }
 

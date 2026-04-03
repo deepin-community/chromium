@@ -14,20 +14,29 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
+#include <cstdint>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"
+#include "Eigen/Core"  // from @eigen_archive
 #include "tensorflow/compiler/tf2xla/mlir_xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/matrix.h"
-#include "xla/client/xla_builder.h"
-#include "xla/primitive_util.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/matrix.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/util.h"
+#include "xla/xla_data.pb.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/op_requires.h"
+#include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/core/errors.h"
+#include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
 namespace {
@@ -49,7 +58,7 @@ static inline bool IsLeftAligned(int diag_index, bool left_align_superdiagonal,
 void ReadAlignment(OpKernelConstruction* context,
                    bool* left_align_superdiagonal,
                    bool* left_align_subdiagonal) {
-  string align;
+  std::string align;
   OP_REQUIRES_OK(context, context->GetAttr("align", &align));
 
   *left_align_superdiagonal = align == "LEFT_LEFT" || align == "LEFT_RIGHT";
@@ -335,7 +344,7 @@ class MatrixDiagOp : public XlaOpKernel {
   static constexpr int kNumV1Inputs = 1;
 };
 
-REGISTER_XLA_OP(Name("MatrixDiag"), MlirXlaOpKernel);
+REGISTER_XLA_OP(Name("MatrixDiag"), MatrixDiagOp);
 REGISTER_XLA_OP(Name("MatrixDiagV2")
                     .CompileTimeConstantInput("k")
                     .CompileTimeConstantInput("num_rows")

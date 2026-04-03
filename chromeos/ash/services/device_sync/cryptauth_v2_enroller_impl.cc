@@ -148,7 +148,6 @@ CryptAuthKey::Status ConvertKeyCreationToKeyStatus(KeyCreation key_creation) {
       return CryptAuthKey::Status::kInactive;
     default:
       NOTREACHED();
-      return CryptAuthKey::Status::kInactive;
   }
 }
 
@@ -769,9 +768,6 @@ void CryptAuthV2EnrollerImpl::OnKeysCreated(
           break;
         case CryptAuthKeyBundle::Name::kDeviceSyncBetterTogetherGroupKey:
           NOTREACHED();
-          result_code = CryptAuthEnrollmentResult::ResultCode::
-              kErrorUserKeyPairCreationFailed;
-          break;
       }
       FinishAttempt(result_code);
       return;

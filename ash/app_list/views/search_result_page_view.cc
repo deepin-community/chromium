@@ -12,15 +12,16 @@
 #include "ash/app_list/views/app_list_search_view.h"
 #include "ash/app_list/views/contents_view.h"
 #include "ash/app_list/views/search_box_view.h"
-#include "ash/app_list/views/search_notifier_controller.h"
 #include "ash/public/cpp/style/color_provider.h"
 #include "ash/search_box/search_box_constants.h"
 #include "ash/style/ash_color_id.h"
 #include "ash/style/system_shadow.h"
 #include "base/functional/bind.h"
 #include "base/time/time.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/color/color_id.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/animation/animation_builder.h"
@@ -85,7 +86,6 @@ END_METADATA
 
 SearchResultPageView::SearchResultPageView() {
   SetPaintToLayer();
-  layer()->SetFillsBoundsOpaquely(false);
   SetBorder(views::CreateEmptyBorder(
       gfx::Insets::TLBR(kActiveSearchBoxHeight, 0, 0, 0)));
   shadow_ = SystemShadow::CreateShadowOnNinePatchLayerForView(
@@ -95,9 +95,18 @@ SearchResultPageView::SearchResultPageView() {
   // Hides this view behind the search box by using the same color and
   // background border corner radius. All child views' background should be
   // set transparent so that the rounded corner is not overwritten.
-  SetBackground(views::CreateThemedSolidBackground(kColorAshShieldAndBase80));
-  layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-  layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+  const ui::ColorId background_color_id =
+      chromeos::features::IsSystemBlurEnabled()
+          ? static_cast<ui::ColorId>(kColorAshShieldAndBase80)
+          : cros_tokens::kCrosSysSystemOnBaseOpaque;
+  SetBackground(views::CreateSolidBackground(background_color_id));
+
+  if (chromeos::features::IsSystemBlurEnabled()) {
+    layer()->SetFillsBoundsOpaquely(false);
+    layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
+    layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+  }
+
   layer()->SetRoundedCornerRadius(
       gfx::RoundedCornersF(kExpandedSearchBoxCornerRadius));
   SetLayoutManager(std::make_unique<views::FillLayout>());
@@ -110,8 +119,8 @@ void SearchResultPageView::InitializeContainers(
     SearchBoxView* search_box_view) {
   DCHECK(view_delegate);
 
-  // For productivity launcher, the dialog will be anchored to the search box
-  // to keep the position of dialogs consistent.
+  // The dialog will be anchored to the search box to keep the position of
+  // dialogs consistent.
   dialog_controller_ =
       std::make_unique<SearchResultPageDialogController>(search_box_view);
   std::unique_ptr<AppListSearchView> search_view_ptr =
@@ -121,19 +130,8 @@ void SearchResultPageView::InitializeContainers(
   AddChildView(std::make_unique<SearchCardView>(std::move(search_view_ptr)));
 }
 
-void SearchResultPageView::VisibilityChanged(View* starting_from,
-                                             bool is_visible) {
-  auto* notifier_controller = search_view_->search_notifier_controller();
-  if (starting_from == this && notifier_controller) {
-    notifier_controller->UpdateNotifierVisibility(is_visible);
-    if (search_view_->search_notifier_view() &&
-        !notifier_controller->ShouldShowPrivacyNotice()) {
-      search_view_->RemoveSearchNotifierView();
-    }
-  }
-}
-
-gfx::Size SearchResultPageView::CalculatePreferredSize() const {
+gfx::Size SearchResultPageView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   int adjusted_height =
       std::min(std::max(kMinHeight, search_view_->TabletModePreferredHeight() +
                                         kActiveSearchBoxHeight +
@@ -399,9 +397,10 @@ gfx::Rect SearchResultPageView::GetPageBoundsForState(
   bounding_rect.Inset(
       gfx::Insets::TLBR(0, 0, kSearchResultPageMinimumBottomMargin, 0));
 
-  gfx::Rect preferred_bounds = gfx::Rect(
-      search_box_bounds.origin(),
-      gfx::Size(search_box_bounds.width(), CalculatePreferredSize().height()));
+  gfx::Rect preferred_bounds =
+      gfx::Rect(search_box_bounds.origin(),
+                gfx::Size(search_box_bounds.width(),
+                          CalculatePreferredSize({}).height()));
   preferred_bounds.Intersect(bounding_rect);
 
   return preferred_bounds;
@@ -427,10 +426,7 @@ void SearchResultPageView::OnAnimationStarted(AppListState from_state,
 }
 
 gfx::Size SearchResultPageView::GetPreferredSearchBoxSize() const {
-  auto* iph_view = search_view_->search_box_view()->GetIphView();
-  const int iph_height = iph_view ? iph_view->GetPreferredSize().height() : 0;
-
-  return gfx::Size(kWidth, kActiveSearchBoxHeight + iph_height);
+  return gfx::Size(kWidth, kActiveSearchBoxHeight);
 }
 
 BEGIN_METADATA(SearchResultPageView)

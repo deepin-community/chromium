@@ -78,6 +78,7 @@ EIGEN_BLAS_SYMV_SPECIALIZE(scomplex)
                                                                                                                    \
     static void run(Index size, const EIGTYPE* lhs, Index lhsStride, const EIGTYPE* _rhs, EIGTYPE* res,            \
                     EIGTYPE alpha) {                                                                               \
+      if (size == 0) return;                                                                                       \
       enum { IsRowMajor = StorageOrder == RowMajor ? 1 : 0, IsLower = UpLo == Lower ? 1 : 0 };                     \
       BlasIndex n = convert_index<BlasIndex>(size), lda = convert_index<BlasIndex>(lhsStride), incx = 1, incy = 1; \
       EIGTYPE beta(1);                                                                                             \
@@ -107,6 +108,8 @@ EIGEN_BLAS_SYMV_SPECIALIZATION(dcomplex, double, zhemv_)
 EIGEN_BLAS_SYMV_SPECIALIZATION(scomplex, float, chemv_)
 #endif
 
+#undef EIGEN_BLAS_SYMV_SPECIALIZATION
+#undef EIGEN_BLAS_SYMV_SPECIALIZE
 }  // end namespace internal
 
 }  // end namespace Eigen

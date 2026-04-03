@@ -8,8 +8,11 @@
 
 #include "chrome/browser/device_notifications/device_system_tray_icon.h"
 #include "chrome/browser/device_notifications/device_system_tray_icon_renderer.h"
+#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "extensions/browser/extension_registrar.h"
 
 namespace {
 
@@ -237,13 +240,13 @@ void DeviceConnectionTrackerTestBase::TestWhitelistedOrigin(
 scoped_refptr<const extensions::Extension>
 DeviceConnectionTrackerTestBase::CreateExtensionWithName(
     const std::string& extension_name) {
-  auto manifest = base::Value::Dict()
+  auto manifest = base::DictValue()
                       .Set("name", extension_name)
                       .Set("description", "For testing.")
                       .Set("version", "0.1")
                       .Set("manifest_version", 2)
                       .Set("web_accessible_resources",
-                           base::Value::List().Append("index.html"));
+                           base::ListValue().Append("index.html"));
   scoped_refptr<const extensions::Extension> extension =
       extensions::ExtensionBuilder(/*name=*/extension_name)
           .MergeManifest(std::move(manifest))
@@ -256,13 +259,13 @@ scoped_refptr<const extensions::Extension>
 DeviceConnectionTrackerTestBase::CreateExtensionWithNameAndId(
     const std::string& extension_name,
     const std::string& extension_id) {
-  auto manifest = base::Value::Dict()
+  auto manifest = base::DictValue()
                       .Set("name", extension_name)
                       .Set("description", "For testing.")
                       .Set("version", "0.1")
                       .Set("manifest_version", 2)
                       .Set("web_accessible_resources",
-                           base::Value::List().Append("index.html"));
+                           base::ListValue().Append("index.html"));
   scoped_refptr<const extensions::Extension> extension =
       extensions::ExtensionBuilder(/*name=*/extension_name)
           .SetID(extension_id)
@@ -281,11 +284,11 @@ void DeviceConnectionTrackerTestBase::AddExtensionToProfile(
   extensions::ExtensionService* extension_service =
       extension_system->extension_service();
   if (!extension_service) {
-    extension_service = extension_system->CreateExtensionService(
+    extension_system->CreateExtensionService(
         base::CommandLine::ForCurrentProcess(), base::FilePath(),
         /*autoupdate_enabled=*/false);
   }
-  extension_service->AddExtension(extension);
+  extensions::ExtensionRegistrar::Get(profile)->AddExtension(extension);
 }
 
 void DeviceConnectionTrackerTestBase::TestDeviceConnectionExtensionOrigins(

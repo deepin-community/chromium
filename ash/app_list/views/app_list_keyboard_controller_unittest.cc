@@ -19,7 +19,6 @@
 #include "ash/public/cpp/tablet_mode.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
-#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/views/controls/button/label_button.h"
@@ -47,6 +46,11 @@ class AppListKeyboardControllerTest : public AshTestBase,
     } else {
       app_list_test_helper_->ShowAppList();
     }
+  }
+
+  void TearDown() override {
+    app_list_test_helper_ = nullptr;
+    AshTestBase::TearDown();
   }
 
   void PressDown() {
@@ -83,7 +87,7 @@ class AppListKeyboardControllerTest : public AshTestBase,
   }
 
  private:
-  raw_ptr<AppListTestHelper, DanglingUntriaged> app_list_test_helper_ = nullptr;
+  raw_ptr<AppListTestHelper> app_list_test_helper_ = nullptr;
 };
 
 INSTANTIATE_TEST_SUITE_P(IsInTabletMode,

@@ -2,15 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/common/extensions/api/omnibox.h"
+
 #include <stddef.h>
 
 #include <utility>
 
 #include "base/values.h"
 #include "chrome/browser/extensions/api/omnibox/omnibox_api.h"
-#include "chrome/common/extensions/api/omnibox.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -44,17 +48,17 @@ void CompareClassification(const ACMatchClassifications& expected,
 // +       ddd
 // = nmmmmndddn
 TEST(ExtensionOmniboxTest, DescriptionStylesSimple) {
-  base::Value::List list =
-      base::Value::List().Append(42).Append(base::Value::List().Append(
-          base::Value::Dict()
+  base::ListValue list =
+      base::ListValue().Append(42).Append(base::ListValue().Append(
+          base::DictValue()
               .Set("content", "content")
               .Set("description", "description")
-              .Set("descriptionStyles", base::Value::List()
-                                            .Append(base::Value::Dict()
+              .Set("descriptionStyles", base::ListValue()
+                                            .Append(base::DictValue()
                                                         .Set("type", "match")
                                                         .Set("offset", 1)
                                                         .Set("length", 4))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "dim")
                                                         .Set("offset", 6)
                                                         .Set("length", 3)))));
@@ -70,21 +74,24 @@ TEST(ExtensionOmniboxTest, DescriptionStylesSimple) {
       SendSuggestions::Params::Create(list);
   EXPECT_TRUE(params);
   ASSERT_FALSE(params->suggest_results.empty());
-  CompareClassification(styles_expected, StyleTypesToACMatchClassifications(
-                                             params->suggest_results[0]));
+  CompareClassification(
+      styles_expected,
+      StyleTypesToACMatchClassifications(
+          &params->suggest_results[0].description_styles.value(),
+          params->suggest_results[0].description));
 
   // Same input, but swap the order. Ensure it still works.
-  base::Value::List swap_list =
-      base::Value::List().Append(42).Append(base::Value::List().Append(
-          base::Value::Dict()
+  base::ListValue swap_list =
+      base::ListValue().Append(42).Append(base::ListValue().Append(
+          base::DictValue()
               .Set("content", "content")
               .Set("description", "description")
-              .Set("descriptionStyles", base::Value::List()
-                                            .Append(base::Value::Dict()
+              .Set("descriptionStyles", base::ListValue()
+                                            .Append(base::DictValue()
                                                         .Set("type", "dim")
                                                         .Set("offset", 6)
                                                         .Set("length", 3))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "match")
                                                         .Set("offset", 1)
                                                         .Set("length", 4)))));
@@ -95,7 +102,9 @@ TEST(ExtensionOmniboxTest, DescriptionStylesSimple) {
   ASSERT_FALSE(swapped_params->suggest_results.empty());
   CompareClassification(
       styles_expected,
-      StyleTypesToACMatchClassifications(swapped_params->suggest_results[0]));
+      StyleTypesToACMatchClassifications(
+          &swapped_params->suggest_results[0].description_styles.value(),
+          swapped_params->suggest_results[0].description));
 }
 
 //   0123456789
@@ -106,29 +115,29 @@ TEST(ExtensionOmniboxTest, DescriptionStylesSimple) {
 // +  dd
 // = 3773unnnn66
 TEST(ExtensionOmniboxTest, DescriptionStylesCombine) {
-  base::Value::List list =
-      base::Value::List().Append(42).Append(base::Value::List().Append(
-          base::Value::Dict()
+  base::ListValue list =
+      base::ListValue().Append(42).Append(base::ListValue().Append(
+          base::DictValue()
               .Set("content", "content")
               .Set("description", "description")
-              .Set("descriptionStyles", base::Value::List()
-                                            .Append(base::Value::Dict()
+              .Set("descriptionStyles", base::ListValue()
+                                            .Append(base::DictValue()
                                                         .Set("type", "url")
                                                         .Set("offset", 0)
                                                         .Set("length", 5))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "dim")
                                                         .Set("offset", 9)
                                                         .Set("length", 2))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "match")
                                                         .Set("offset", 9)
                                                         .Set("length", 2))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "match")
                                                         .Set("offset", 0)
                                                         .Set("length", 4))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "dim")
                                                         .Set("offset", 1)
                                                         .Set("length", 2)))));
@@ -145,34 +154,37 @@ TEST(ExtensionOmniboxTest, DescriptionStylesCombine) {
       SendSuggestions::Params::Create(list);
   EXPECT_TRUE(params);
   ASSERT_FALSE(params->suggest_results.empty());
-  CompareClassification(styles_expected, StyleTypesToACMatchClassifications(
-                                             params->suggest_results[0]));
+  CompareClassification(
+      styles_expected,
+      StyleTypesToACMatchClassifications(
+          &params->suggest_results[0].description_styles.value(),
+          params->suggest_results[0].description));
 
   // Try moving the "dim/match" style pair at offset 9. Output should be the
   // same.
-  base::Value::List moved_list =
-      base::Value::List().Append(42).Append(base::Value::List().Append(
-          base::Value::Dict()
+  base::ListValue moved_list =
+      base::ListValue().Append(42).Append(base::ListValue().Append(
+          base::DictValue()
               .Set("content", "content")
               .Set("description", "description")
-              .Set("descriptionStyles", base::Value::List()
-                                            .Append(base::Value::Dict()
+              .Set("descriptionStyles", base::ListValue()
+                                            .Append(base::DictValue()
                                                         .Set("type", "url")
                                                         .Set("offset", 0)
                                                         .Set("length", 5))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "match")
                                                         .Set("offset", 0)
                                                         .Set("length", 4))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "dim")
                                                         .Set("offset", 9)
                                                         .Set("length", 2))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "match")
                                                         .Set("offset", 9)
                                                         .Set("length", 2))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "dim")
                                                         .Set("offset", 1)
                                                         .Set("length", 2)))));
@@ -181,8 +193,11 @@ TEST(ExtensionOmniboxTest, DescriptionStylesCombine) {
       SendSuggestions::Params::Create(moved_list);
   EXPECT_TRUE(moved_params);
   ASSERT_FALSE(moved_params->suggest_results.empty());
-  CompareClassification(styles_expected, StyleTypesToACMatchClassifications(
-                                             moved_params->suggest_results[0]));
+  CompareClassification(
+      styles_expected,
+      StyleTypesToACMatchClassifications(
+          &moved_params->suggest_results[0].description_styles.value(),
+          moved_params->suggest_results[0].description));
 }
 
 //   0123456789
@@ -193,29 +208,29 @@ TEST(ExtensionOmniboxTest, DescriptionStylesCombine) {
 // + ddd
 // = 77777nnnnn
 TEST(ExtensionOmniboxTest, DescriptionStylesCombine2) {
-  base::Value::List list =
-      base::Value::List().Append(42).Append(base::Value::List().Append(
-          base::Value::Dict()
+  base::ListValue list =
+      base::ListValue().Append(42).Append(base::ListValue().Append(
+          base::DictValue()
               .Set("content", "content")
               .Set("description", "description")
-              .Set("descriptionStyles", base::Value::List()
-                                            .Append(base::Value::Dict()
+              .Set("descriptionStyles", base::ListValue()
+                                            .Append(base::DictValue()
                                                         .Set("type", "url")
                                                         .Set("offset", 0)
                                                         .Set("length", 5))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "match")
                                                         .Set("offset", 0)
                                                         .Set("length", 5))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "match")
                                                         .Set("offset", 0)
                                                         .Set("length", 3))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "dim")
                                                         .Set("offset", 2)
                                                         .Set("length", 3))
-                                            .Append(base::Value::Dict()
+                                            .Append(base::DictValue()
                                                         .Set("type", "dim")
                                                         .Set("offset", 0)
                                                         .Set("length", 3)))));
@@ -228,8 +243,11 @@ TEST(ExtensionOmniboxTest, DescriptionStylesCombine2) {
       SendSuggestions::Params::Create(list);
   EXPECT_TRUE(params);
   ASSERT_FALSE(params->suggest_results.empty());
-  CompareClassification(styles_expected, StyleTypesToACMatchClassifications(
-                                             params->suggest_results[0]));
+  CompareClassification(
+      styles_expected,
+      StyleTypesToACMatchClassifications(
+          &params->suggest_results[0].description_styles.value(),
+          params->suggest_results[0].description));
 }
 
 //   0123456789
@@ -241,27 +259,27 @@ TEST(ExtensionOmniboxTest, DescriptionStylesCombine2) {
 // = 77777nnnnn
 TEST(ExtensionOmniboxTest, DefaultSuggestResult) {
   // Default suggestions should not have a content parameter.
-  base::Value::List list = base::Value::List().Append(
-      base::Value::Dict()
+  base::ListValue list = base::ListValue().Append(
+      base::DictValue()
           .Set("description", "description")
-          .Set("descriptionStyles", base::Value::List()
-                                        .Append(base::Value::Dict()
+          .Set("descriptionStyles", base::ListValue()
+                                        .Append(base::DictValue()
                                                     .Set("type", "url")
                                                     .Set("offset", 0)
                                                     .Set("length", 5))
-                                        .Append(base::Value::Dict()
+                                        .Append(base::DictValue()
                                                     .Set("type", "match")
                                                     .Set("offset", 0)
                                                     .Set("length", 5))
-                                        .Append(base::Value::Dict()
+                                        .Append(base::DictValue()
                                                     .Set("type", "match")
                                                     .Set("offset", 0)
                                                     .Set("length", 3))
-                                        .Append(base::Value::Dict()
+                                        .Append(base::DictValue()
                                                     .Set("type", "dim")
                                                     .Set("offset", 2)
                                                     .Set("length", 3))
-                                        .Append(base::Value::Dict()
+                                        .Append(base::DictValue()
                                                     .Set("type", "dim")
                                                     .Set("offset", 0)
                                                     .Set("length", 3))));

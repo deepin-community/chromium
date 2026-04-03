@@ -29,18 +29,31 @@ PasswordBubbleControllerBase::~PasswordBubbleControllerBase() {
 }
 
 void PasswordBubbleControllerBase::OnBubbleClosing() {
-  // This method can be reentered from OnBubbleHidden() below. Reset the things
-  // before calling it.
-  if (!std::exchange(interaction_reported_, true))
+  if (!std::exchange(interaction_reported_, true)) {
     ReportInteractions();
-  if (delegate_)
+  }
+  if (delegate_) {
     std::exchange(delegate_, nullptr)->OnBubbleHidden();
+  }
+}
+
+void PasswordBubbleControllerBase::OnMouseEntered() {
+  if (delegate_) {
+    delegate_->OnMouseEntered();
+  }
+}
+
+void PasswordBubbleControllerBase::OnMouseExited() {
+  if (delegate_) {
+    delegate_->OnMouseExited();
+  }
 }
 
 Profile* PasswordBubbleControllerBase::GetProfile() const {
   content::WebContents* web_contents = GetWebContents();
-  if (!web_contents)
+  if (!web_contents) {
     return nullptr;
+  }
   return Profile::FromBrowserContext(web_contents->GetBrowserContext());
 }
 

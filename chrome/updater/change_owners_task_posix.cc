@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include "base/files/file.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
@@ -30,7 +30,7 @@ void UpdateOwner(const base::FilePath& path, UpdaterScope scope) {
   }
 
   base::stat_wrapper_t stat_info = {};
-  if (base::File::Lstat(path.value().c_str(), &stat_info) != 0) {
+  if (base::File::Lstat(path, &stat_info) != 0) {
     VPLOG(1) << "Failed to lstat " << path.value();
     return;
   }

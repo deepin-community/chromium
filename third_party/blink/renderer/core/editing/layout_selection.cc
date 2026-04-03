@@ -23,7 +23,6 @@
 
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
@@ -31,6 +30,7 @@
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
+#include "third_party/blink/renderer/core/html/html_wbr_element.h"
 #include "third_party/blink/renderer/core/layout/block_node.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
@@ -156,7 +156,6 @@ static EphemeralRangeInFlatTree CalcSelectionInFlatTree(
     }
   }
   NOTREACHED();
-  return {};
 }
 
 // OldSelectedNodes is current selected Nodes with
@@ -338,9 +337,11 @@ static void SetShouldInvalidateSelection(
 }
 
 static bool IsDisplayContentElement(const Node& node) {
-  if (!node.IsElementNode())
+  const Element* element = DynamicTo<Element>(node);
+  if (!element) {
     return false;
-  const ComputedStyle* const style = node.GetComputedStyle();
+  }
+  const ComputedStyle* style = element->GetComputedStyle();
   return style && style->Display() == EDisplay::kContents;
 }
 
@@ -419,7 +420,6 @@ static OldSelectedNodes ResetOldSelectedNodes(
         }
         default: {
           NOTREACHED();
-          break;
         }
       }
     }
@@ -477,6 +477,8 @@ static std::optional<unsigned> GetTextContentOffset(const Position& position) {
   DCHECK(ShouldUseLayoutNGTextContent(*position.AnchorNode()));
   const OffsetMapping* const offset_mapping = OffsetMapping::GetFor(position);
   DCHECK(offset_mapping);
+  if (offset_mapping == nullptr)
+    return std::nullopt;
   const std::optional<unsigned>& ng_offset =
       offset_mapping->GetTextContentOffset(position);
   return ng_offset;
@@ -610,7 +612,6 @@ static LayoutTextSelectionStatus ComputeSelectionStatusForNode(
               SelectionIncludeEnd::kNotInclude};
     default:
       NOTREACHED();
-      return {0, 0, SelectionIncludeEnd::kNotInclude};
   }
 }
 
@@ -664,6 +665,11 @@ LayoutSelectionStatus LayoutSelection::ComputeSelectionStatus(
   // hyphen is generated from it, or the character before the hyphen if
   // automatic hyphenation.
   const unsigned offset = current->StartOffsetInContainer(cursor);
+  if (offset == 0) {
+    // StartOffsetInContainer() didn't find the offset.
+    // See crbug.com/372586875.
+    return {0, 0, SelectSoftLineBreak::kNotSelected};
+  }
   DCHECK_GT(offset, 0u);
   LayoutSelectionStatus status =
       ComputeSelectionStatus(cursor, {offset - 1, offset});
@@ -1002,11 +1008,11 @@ void LayoutSelection::InvalidateStyleAndPaintForSelection() {
         return;
       }
 
-      // Invalidate style to force an update to ::selection pseudo
+      // Invalidate style to force an update to ::selection pseudo-
       // elements so that ::selection::inactive-window style is applied
       // (or removed).
       if (auto* this_element = DynamicTo<Element>(node)) {
-        const ComputedStyle* element_style = node.GetComputedStyle();
+        const ComputedStyle* element_style = this_element->GetComputedStyle();
         if (element_style &&
             element_style->HasPseudoElementStyle(kPseudoIdSelection)) {
           node.SetNeedsStyleRecalc(

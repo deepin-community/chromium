@@ -35,7 +35,7 @@
 #include "mojo/public/cpp/bindings/tests/bindings_test_base.h"
 #include "mojo/public/cpp/bindings/tests/sync_method_unittest.test-mojom-shared-message-ids.h"
 #include "mojo/public/cpp/bindings/tests/sync_method_unittest.test-mojom.h"
-#include "mojo/public/interfaces/bindings/tests/test_sync_methods.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_sync_methods.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 // This needs to be included last, since it forward declares a bunch of classes
@@ -138,6 +138,9 @@ class TestSyncImpl : public TestSync, public TestSyncCommonImpl {
 
   // TestSync implementation:
   void Ping(PingCallback callback) override { PingImpl(std::move(callback)); }
+  void NoInterruptPing(NoInterruptPingCallback callback) override {
+    PingImpl(std::move(callback));
+  }
   void Echo(int32_t value, EchoCallback callback) override {
     EchoImpl(value, std::move(callback));
   }
@@ -190,6 +193,9 @@ class TestSyncAssociatedImpl : public TestSync, public TestSyncCommonImpl {
 
   // TestSync implementation:
   void Ping(PingCallback callback) override { PingImpl(std::move(callback)); }
+  void NoInterruptPing(NoInterruptPingCallback callback) override {
+    PingImpl(std::move(callback));
+  }
   void Echo(int32_t value, EchoCallback callback) override {
     EchoImpl(value, std::move(callback));
   }
@@ -528,31 +534,31 @@ TYPED_TEST(SyncMethodCommonTest, CallSyncMethodAsynchronously) {
 #define SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name) \
   fixture_name##name##_SequencedTaskRunnerTestSuffix
 
-#define SEQUENCED_TASK_RUNNER_TYPED_TEST(fixture_name, name)        \
-  template <typename TypeParam>                                     \
-  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name)   \
-      : public fixture_name<TypeParam> {                            \
-    void Run() override;                                            \
-  };                                                                \
-  TYPED_TEST(SequencedTaskRunnerTestLauncher, name) {               \
-    RunTestOnSequencedTaskRunner(                                   \
-        std::make_unique<SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(     \
-                             fixture_name, name) < TypeParam>> ()); \
-  }                                                                 \
-  template <typename TypeParam>                                     \
-  void SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name,          \
+#define SEQUENCED_TASK_RUNNER_TYPED_TEST(fixture_name, name)                \
+  template <typename TypeParam>                                             \
+  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name)           \
+      : public fixture_name<TypeParam> {                                    \
+    void Run() override;                                                    \
+  };                                                                        \
+  TYPED_TEST(SequencedTaskRunnerTestLauncher, name) {                       \
+    RunTestOnSequencedTaskRunner(std::make_unique <                         \
+                                 SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(     \
+                                     fixture_name, name) < TypeParam >>()); \
+  }                                                                         \
+  template <typename TypeParam>                                             \
+  void SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name,                  \
                                              name)<TypeParam>::Run()
 
-#define SEQUENCED_TASK_RUNNER_TYPED_TEST_F(fixture_name, name)      \
-  template <typename TypeParam>                                     \
-  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name);  \
-  TYPED_TEST(SequencedTaskRunnerTestLauncher, name) {               \
-    RunTestOnSequencedTaskRunner(                                   \
-        std::make_unique<SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(     \
-                             fixture_name, name) < TypeParam>> ()); \
-  }                                                                 \
-  template <typename TypeParam>                                     \
-  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name)   \
+#define SEQUENCED_TASK_RUNNER_TYPED_TEST_F(fixture_name, name)              \
+  template <typename TypeParam>                                             \
+  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name);          \
+  TYPED_TEST(SequencedTaskRunnerTestLauncher, name) {                       \
+    RunTestOnSequencedTaskRunner(std::make_unique <                         \
+                                 SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(     \
+                                     fixture_name, name) < TypeParam >>()); \
+  }                                                                         \
+  template <typename TypeParam>                                             \
+  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name)           \
       : public fixture_name<TypeParam>
 
 SEQUENCED_TASK_RUNNER_TYPED_TEST(SyncMethodOnSequenceCommonTest,
@@ -971,8 +977,9 @@ TYPED_TEST(SyncMethodCommonTest,
 
   // SharedRemote doesn't guarantee that messages are delivered before the
   // disconnect handler, so skip it for this test.
-  if (TypeParam::kIsSharedRemoteTest)
+  if (TypeParam::kIsSharedRemoteTest) {
     return;
+  }
 
   using Interface = typename TypeParam::Interface;
   Remote<Interface> remote;
@@ -1328,14 +1335,16 @@ class PingerImpl : public mojom::Pinger, public mojom::SimplePinger {
   }
 
   void Ping(PingCallback callback) override {
-    if (pong_sender_ && same_pipe_pong_sender_)
+    if (pong_sender_ && same_pipe_pong_sender_) {
       DoPong();
+    }
     std::move(callback).Run();
   }
 
   void PingNoInterrupt(PingNoInterruptCallback callback) override {
-    if (pong_sender_ && same_pipe_pong_sender_)
+    if (pong_sender_ && same_pipe_pong_sender_) {
       DoPong();
+    }
     std::move(callback).Run();
   }
 
@@ -1721,12 +1730,10 @@ class OneSyncImpl;
 
 class NoSyncImpl : public mojom::NoSync {
  public:
-  explicit NoSyncImpl(PendingReceiver<mojom::NoSync> receiver)
-      : receiver_(this, std::move(receiver)) {}
+  explicit NoSyncImpl(PendingReceiver<mojom::NoSync> receiver);
 
   explicit NoSyncImpl(
-      PendingAssociatedReceiver<mojom::NoSync> associated_receiver)
-      : associated_receiver_(this, std::move(associated_receiver)) {}
+      PendingAssociatedReceiver<mojom::NoSync> associated_receiver);
 
   // mojom::NoSync implementation:
   void Method(MethodCallback callback) override;
@@ -1763,6 +1770,13 @@ class OneSyncImpl : public mojom::OneSync {
   std::unique_ptr<NoSyncImpl> associated_no_sync_;
   std::unique_ptr<OneSyncImpl> associated_one_sync_;
 };
+
+NoSyncImpl::NoSyncImpl(PendingReceiver<mojom::NoSync> receiver)
+    : receiver_(this, std::move(receiver)) {}
+
+NoSyncImpl::NoSyncImpl(
+    PendingAssociatedReceiver<mojom::NoSync> associated_receiver)
+    : associated_receiver_(this, std::move(associated_receiver)) {}
 
 void NoSyncImpl::Method(MethodCallback callback) {
   EXPECT_TRUE(false);
@@ -1817,7 +1831,8 @@ class SyncFlagValidationTest : public ::testing::TestWithParam<uint32_t> {
         // InterfaceEndpointClient requires this flag if sending a message with
         // a responder.
         Message::kFlagExpectsResponse | GetParam();
-    Message message(mojom::internal::kNoSync_Method_Name, flags, 0, 0, nullptr);
+    Message message(std::to_underlying(mojom::messages::NoSync::kMethod), flags,
+                    0, 0, nullptr);
     ::mojo::internal::MessageFragment<
         mojom::internal::NoSync_Method_Params_Data>
         params(message);
@@ -1832,8 +1847,8 @@ class SyncFlagValidationTest : public ::testing::TestWithParam<uint32_t> {
         // InterfaceEndpointClient requires this flag if sending a message with
         // a responder.
         Message::kFlagExpectsResponse | GetParam();
-    Message message(mojom::internal::kOneSync_Method_Name, flags, 0, 0,
-                    nullptr);
+    Message message(std::to_underlying(mojom::messages::OneSync::kMethod),
+                    flags, 0, 0, nullptr);
     ::mojo::internal::MessageFragment<
         mojom::internal::NoSync_Method_Params_Data>
         params(message);

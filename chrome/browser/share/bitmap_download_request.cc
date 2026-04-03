@@ -6,7 +6,6 @@
 
 #include "base/android/jni_string.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/android/chrome_jni_headers/BitmapDownloadRequest_jni.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/download_request_utils.h"
@@ -14,13 +13,16 @@
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/gfx/android/java_bitmap.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/BitmapDownloadRequest_jni.h"
+
 using base::android::ConvertJavaStringToUTF16;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 
 static void JNI_BitmapDownloadRequest_DownloadBitmap(
     JNIEnv* env,
-    const JavaParamRef<jstring>& j_filename,
-    const JavaParamRef<jobject>& j_bitmap) {
+    const JavaRef<jstring>& j_filename,
+    const JavaRef<jobject>& j_bitmap) {
   std::u16string filename(ConvertJavaStringToUTF16(env, j_filename));
   SkBitmap bitmap =
       gfx::CreateSkBitmapFromJavaBitmap(gfx::JavaBitmap(j_bitmap));
@@ -51,3 +53,5 @@ static void JNI_BitmapDownloadRequest_DownloadBitmap(
   params->set_suggested_name(filename);
   download_manager->DownloadUrl(std::move(params));
 }
+
+DEFINE_JNI(BitmapDownloadRequest)

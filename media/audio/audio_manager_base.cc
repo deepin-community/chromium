@@ -4,6 +4,7 @@
 
 #include "media/audio/audio_manager_base.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 
@@ -15,7 +16,6 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
@@ -65,20 +65,26 @@ enum StreamFormat {
   STREAM_FORMAT_MAX = 4,
 };
 
-// Used to log errors in `AudioManagerBase::MakeAudioInputStream`.
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class MakeAudioInputStreamResult {
+// Used to log errors in `AudioManagerBase::MakeAudioInputStream` and
+// `AudioManagerBase::MakeAudioOutputStream`. These values are persisted to
+// logs. Entries should not be renumbered and numeric values should never be
+// reused.
+enum class MakeAudioStreamResult {
   kNoError = 0,
   kErrorSwitchFailAudioStreamCreation = 1,
   kErrorInvalidParams = 2,
-  kErrorExcessiveInputStreams = 3,
+  kErrorExcessiveStreams = 3,
   kErrorCreateStream = 4,
   kMaxValue = kErrorCreateStream
 };
 
-void LogMakeAudioInputStreamResult(MakeAudioInputStreamResult result) {
+void LogMakeAudioInputStreamResult(MakeAudioStreamResult result) {
   base::UmaHistogramEnumeration("Media.Audio.MakeAudioInputStreamStatus",
+                                result);
+}
+
+void LogMakeAudioOutputStreamResult(MakeAudioStreamResult result) {
+  base::UmaHistogramEnumeration("Media.Audio.MakeAudioOutputStreamStatus",
                                 result);
 }
 
@@ -90,7 +96,7 @@ void SendLogMessage(const AudioManagerBase::LogCallback& callback,
     return;
   va_list args;
   va_start(args, format);
-  callback.Run("AMB::" + base::StringPrintV(format, args));
+  callback.Run("AMB::" + UNSAFE_TODO(base::StringPrintV(format, args)));
   va_end(args);
 }
 
@@ -177,17 +183,30 @@ void AudioManagerBase::GetAudioDeviceDescriptions(
   }
 
   for (auto& name : device_names) {
-    bool is_system_default = name.unique_id == real_default_device_id;
+    // Checks whether `name.unique_id` is the id of the real device that is
+    // mapped to the virtual default and/or communications devices.
+    bool is_real_system_default = name.unique_id == real_default_device_id;
+    bool is_real_communications_device =
+        name.unique_id == real_communications_device_id;
+
+    bool is_virtual_system_default = false;
+    bool is_virtual_communications_device = false;
     if (AudioDeviceDescription::IsDefaultDevice(name.unique_id)) {
+      // Virtual default device.
       name.device_name = real_default_name;
-      is_system_default = true;
+      is_virtual_system_default = true;
     } else if (AudioDeviceDescription::IsCommunicationsDevice(name.unique_id)) {
+      // Virtual communications device.
       name.device_name = real_communications_name;
+      is_virtual_communications_device = true;
     }
+
     std::string group_id = (this->*get_group_id)(name.unique_id);
-    device_descriptions->emplace_back(std::move(name.device_name),
-                                      std::move(name.unique_id),
-                                      std::move(group_id), is_system_default);
+    device_descriptions->emplace_back(
+        std::move(name.device_name), std::move(name.unique_id),
+        std::move(group_id),
+        is_virtual_system_default || is_real_system_default,
+        is_virtual_communications_device || is_real_communications_device);
   }
 }
 
@@ -200,6 +219,8 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
 
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kFailAudioStreamCreation)) {
+    LogMakeAudioOutputStreamResult(
+        MakeAudioStreamResult::kErrorSwitchFailAudioStreamCreation);
     return nullptr;
   }
 
@@ -214,6 +235,8 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
     LOG(ERROR) << "Number of opened output audio streams "
                << num_output_streams_ << " exceed the max allowed number "
                << max_num_output_streams_;
+    LogMakeAudioOutputStreamResult(
+        MakeAudioStreamResult::kErrorExcessiveStreams);
     return nullptr;
   }
 
@@ -227,14 +250,20 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
     case AudioParameters::AUDIO_PCM_LOW_LATENCY:
       stream = MakeLowLatencyOutputStream(params, device_id, log_callback);
       break;
+
     case AudioParameters::AUDIO_BITSTREAM_AC3:
     case AudioParameters::AUDIO_BITSTREAM_EAC3:
     case AudioParameters::AUDIO_BITSTREAM_DTS:
     case AudioParameters::AUDIO_BITSTREAM_DTS_HD:
     case AudioParameters::AUDIO_BITSTREAM_DTSX_P2:
     case AudioParameters::AUDIO_BITSTREAM_IEC61937:
+#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
       stream = MakeBitstreamOutputStream(params, device_id, log_callback);
       break;
+#else
+      // This is forbidden by IPC validation.
+      NOTREACHED() << "Bitstream audio output is not supported.";
+#endif
     case AudioParameters::AUDIO_FAKE:
       stream = FakeAudioOutputStream::MakeFakeStream(this, params);
       break;
@@ -248,16 +277,21 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
     SendLogMessage(log_callback, "%s => (number of streams=%d)", __func__,
                    output_stream_count());
   }
+  LogMakeAudioOutputStreamResult(
+      stream ? MakeAudioStreamResult::kNoError
+             : MakeAudioStreamResult::kErrorCreateStream);
 
   return stream;
 }
 
+#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
 AudioOutputStream* AudioManagerBase::MakeBitstreamOutputStream(
     const AudioParameters& params,
     const std::string& device_id,
     const LogCallback& log_callback) {
   return nullptr;
 }
+#endif
 
 AudioInputStream* AudioManagerBase::MakeAudioInputStream(
     const AudioParameters& input_params,
@@ -268,7 +302,7 @@ AudioInputStream* AudioManagerBase::MakeAudioInputStream(
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kFailAudioStreamCreation)) {
     LogMakeAudioInputStreamResult(
-        MakeAudioInputStreamResult::kErrorSwitchFailAudioStreamCreation);
+        MakeAudioStreamResult::kErrorSwitchFailAudioStreamCreation);
     return nullptr;
   }
 
@@ -286,8 +320,7 @@ AudioInputStream* AudioManagerBase::MakeAudioInputStream(
       device_id.empty()) {
     DLOG(ERROR) << "Audio parameters are invalid for device " << device_id
                 << ", params: " << params.AsHumanReadableString();
-    LogMakeAudioInputStreamResult(
-        MakeAudioInputStreamResult::kErrorInvalidParams);
+    LogMakeAudioInputStreamResult(MakeAudioStreamResult::kErrorInvalidParams);
     return nullptr;
   }
 
@@ -296,7 +329,7 @@ AudioInputStream* AudioManagerBase::MakeAudioInputStream(
                << input_stream_count() << " exceed the max allowed number "
                << kMaxInputStreams;
     LogMakeAudioInputStreamResult(
-        MakeAudioInputStreamResult::kErrorExcessiveInputStreams);
+        MakeAudioStreamResult::kErrorExcessiveStreams);
     return nullptr;
   }
 
@@ -333,18 +366,22 @@ AudioInputStream* AudioManagerBase::MakeAudioInputStream(
       // created stream and cleans it up when it is Close()d, transparently to
       // the user of the stream. I the case where the audio manager closes the
       // stream (Mac), this will result in a dangling pointer.
+      AudioDebugRecordingStreamType stream_type =
+          AudioDeviceDescription::IsLoopbackDevice(device_id)
+              ? AudioDebugRecordingStreamType::kLoopback
+              : AudioDebugRecordingStreamType::kInput;
       stream = new AudioInputStreamDataInterceptor(
           base::BindRepeating(
               &AudioDebugRecordingManager::RegisterDebugRecordingSource,
-              base::Unretained(debug_recording_manager_.get()),
-              AudioDebugRecordingStreamType::kInput, params),
+              base::Unretained(debug_recording_manager_.get()), stream_type,
+              params),
           stream);
     }
   }
 
   LogMakeAudioInputStreamResult(
-      stream ? MakeAudioInputStreamResult::kNoError
-             : MakeAudioInputStreamResult::kErrorCreateStream);
+      stream ? MakeAudioStreamResult::kNoError
+             : MakeAudioStreamResult::kErrorCreateStream);
 
   return stream;
 }
@@ -427,10 +464,11 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStreamProxy(
         uma_stream_format = STREAM_FORMAT_FAKE;
         break;
       default:
-        if (output_params.IsBitstreamFormat())
+        if (output_params.IsBitstreamFormat()) {
           uma_stream_format = STREAM_FORMAT_BITSTREAM;
-        else
+        } else {
           NOTREACHED();
+        }
     }
   }
 
@@ -444,20 +482,28 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStreamProxy(
   auto dispatcher_params = std::make_unique<DispatcherParams>(
       params, output_params, output_device_id);
 
-  auto it = base::ranges::find_if(
-      output_dispatchers_,
-      [&](const std::unique_ptr<DispatcherParams>& dispatcher) {
-        // We will reuse the existing dispatcher when:
-        // 1) Unified IO is not used, input_params and output_params of the
-        //    existing dispatcher are the same as the requested dispatcher.
-        // 2) Unified IO is used, input_params and output_params of the existing
-        //    dispatcher are the same as the request dispatcher.
-        return params.Equals(dispatcher->input_params) &&
-               output_params.Equals(dispatcher->output_params) &&
-               output_device_id == dispatcher->output_device_id;
-      });
-  if (it != output_dispatchers_.end())
-    return (*it)->dispatcher->CreateStreamProxy();
+  // Do not reuse the output dispatcher if audio offload is requested.
+  // Their underlying audio client is configured differently to make
+  // it work with expected buffer size according to requested output
+  // param.
+  if (!output_params.RequireOffload()) {
+    auto it = std::ranges::find_if(
+        output_dispatchers_,
+        [&](const std::unique_ptr<DispatcherParams>& dispatcher) {
+          // We will reuse the existing dispatcher when:
+          // 1) Unified IO is not used, input_params and output_params of the
+          //    existing dispatcher are the same as the requested dispatcher.
+          // 2) Unified IO is used, input_params and output_params of the
+          // existing
+          //    dispatcher are the same as the request dispatcher.
+          return params.Equals(dispatcher->input_params) &&
+                 output_params.Equals(dispatcher->output_params) &&
+                 output_device_id == dispatcher->output_device_id;
+        });
+    if (it != output_dispatchers_.end()) {
+      return (*it)->dispatcher->CreateStreamProxy();
+    }
+  }
 
   const base::TimeDelta kCloseDelay = base::Seconds(kStreamCloseDelaySeconds);
   std::unique_ptr<AudioOutputDispatcher> dispatcher;
@@ -536,11 +582,6 @@ void AudioManagerBase::NotifyAllOutputDeviceChangeListeners() {
     observer.OnDeviceChange();
 }
 
-AudioParameters AudioManagerBase::GetDefaultOutputStreamParameters() {
-  return GetPreferredOutputStreamParameters(GetDefaultOutputDeviceID(),
-      AudioParameters());
-}
-
 AudioParameters AudioManagerBase::GetOutputStreamParameters(
     const std::string& device_id) {
   return GetPreferredOutputStreamParameters(device_id,
@@ -549,7 +590,7 @@ AudioParameters AudioManagerBase::GetOutputStreamParameters(
 
 AudioParameters AudioManagerBase::GetInputStreamParameters(
     const std::string& device_id) {
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 std::string AudioManagerBase::GetAssociatedOutputDeviceID(

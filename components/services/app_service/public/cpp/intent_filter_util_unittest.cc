@@ -529,8 +529,8 @@ TEST_F(IntentFilterUtilTest, TestIntentFilterUrlMatchLength) {
     const auto& test = tests[i];
     GURL filter_url(test.filter_url);
     GURL matched_url(test.matched_url);
-    auto filter = MakeFilter(filter_url.scheme(), filter_url.host(),
-                             filter_url.path(), test.pattern_match_type);
+    auto filter = MakeFilter(filter_url.GetScheme(), filter_url.GetHost(),
+                             filter_url.GetPath(), test.pattern_match_type);
     EXPECT_EQ(apps_util::IntentFilterUrlMatchLength(filter, matched_url),
               test.expected)
         << "Test #" << i << " url=" << test.matched_url
@@ -546,7 +546,7 @@ TEST_F(IntentFilterUtilTest, VerifyConvert) {
   {
     // Verify the convert function can work for null intent filter.
     auto intent_filter = std::make_unique<apps::IntentFilter>();
-    base::Value::Dict dict = apps_util::ConvertIntentFilterToDict(nullptr);
+    base::DictValue dict = apps_util::ConvertIntentFilterToDict(nullptr);
     EXPECT_EQ(*intent_filter, *apps_util::ConvertDictToIntentFilter(&dict));
   }
 
@@ -556,8 +556,7 @@ TEST_F(IntentFilterUtilTest, VerifyConvert) {
         MakeFilter(url::kHttpsScheme, kHostUrlGoogle, kPathLiteral,
                    apps::PatternMatchType::kLiteral);
 
-    base::Value::Dict dict =
-        apps_util::ConvertIntentFilterToDict(intent_filter);
+    base::DictValue dict = apps_util::ConvertIntentFilterToDict(intent_filter);
     EXPECT_EQ(*intent_filter, *apps_util::ConvertDictToIntentFilter(&dict));
   }
 
@@ -568,8 +567,7 @@ TEST_F(IntentFilterUtilTest, VerifyConvert) {
     intent_filter->activity_name = "activity_name";
     intent_filter->activity_label = "activity_label";
 
-    base::Value::Dict dict =
-        apps_util::ConvertIntentFilterToDict(intent_filter);
+    base::DictValue dict = apps_util::ConvertIntentFilterToDict(intent_filter);
     EXPECT_EQ(*intent_filter, *apps_util::ConvertDictToIntentFilter(&dict));
   }
 }

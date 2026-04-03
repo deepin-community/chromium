@@ -19,17 +19,14 @@
 #include "components/sync/engine/get_updates_delegate.h"
 #include "components/sync/engine/update_handler.h"
 #include "components/sync/protocol/data_type_progress_marker.pb.h"
+#include "components/sync/protocol/sync.pb.h"
+#include "components/sync/test/data_type_test_util.h"
 #include "components/sync/test/mock_debug_info_getter.h"
 #include "components/sync/test/mock_invalidation.h"
 #include "components/sync/test/mock_update_handler.h"
-#include "components/sync/test/model_type_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace syncer {
-
-namespace {
-
-}  // namespace
 
 // A test fixture for tests exercising download updates functions.
 class GetUpdatesProcessorBaseTest : public ::testing::Test {
@@ -40,7 +37,7 @@ class GetUpdatesProcessorBaseTest : public ::testing::Test {
   GetUpdatesProcessorBaseTest& operator=(const GetUpdatesProcessorBaseTest&) =
       delete;
 
-  ModelTypeSet enabled_types() { return enabled_types_; }
+  DataTypeSet enabled_types() { return enabled_types_; }
 
   std::unique_ptr<GetUpdatesProcessor> BuildGetUpdatesProcessor(
       const GetUpdatesDelegate& delegate) {
@@ -49,15 +46,15 @@ class GetUpdatesProcessorBaseTest : public ::testing::Test {
   }
 
   void InitFakeUpdateResponse(sync_pb::GetUpdatesResponse* response) {
-    ModelTypeSet types = enabled_types();
+    DataTypeSet types = enabled_types();
 
-    for (ModelType type : types) {
+    for (DataType type : types) {
       sync_pb::DataTypeProgressMarker* marker =
           response->add_new_progress_marker();
-      marker->set_data_type_id(GetSpecificsFieldNumberFromModelType(type));
+      marker->set_data_type_id(GetSpecificsFieldNumberFromDataType(type));
       marker->set_token("foobarbaz");
       sync_pb::DataTypeContext* context = response->add_context_mutations();
-      context->set_data_type_id(GetSpecificsFieldNumberFromModelType(type));
+      context->set_data_type_id(GetSpecificsFieldNumberFromDataType(type));
       context->set_version(1);
       context->set_context("context");
     }
@@ -65,7 +62,7 @@ class GetUpdatesProcessorBaseTest : public ::testing::Test {
     response->set_changes_remaining(0);
   }
 
-  MockUpdateHandler* AddUpdateHandler(ModelType type) {
+  MockUpdateHandler* AddUpdateHandler(DataType type) {
     enabled_types_.Put(type);
 
     std::unique_ptr<MockUpdateHandler> handler =
@@ -80,7 +77,7 @@ class GetUpdatesProcessorBaseTest : public ::testing::Test {
   const base::TimeTicks kTestStartTime = base::TimeTicks::Now();
 
  private:
-  ModelTypeSet enabled_types_;
+  DataTypeSet enabled_types_;
   std::set<std::unique_ptr<MockUpdateHandler>> update_handlers_;
   UpdateHandlerMap update_handler_map_;
   std::unique_ptr<GetUpdatesProcessor> get_updates_processor_;
@@ -115,11 +112,9 @@ TEST_F(GetUpdatesProcessorTest, BookmarkNudge) {
   processor->PrepareGetUpdates(enabled_types(), &message);
 
   const sync_pb::GetUpdatesMessage& gu_msg = message.get_updates();
-  EXPECT_EQ(sync_pb::GetUpdatesCallerInfo::UNKNOWN,
-            gu_msg.caller_info().source());
   EXPECT_EQ(sync_pb::SyncEnums::GU_TRIGGER, gu_msg.get_updates_origin());
   for (int i = 0; i < gu_msg.from_progress_marker_size(); ++i) {
-    ModelType type = GetModelTypeFromSpecificsFieldNumber(
+    DataType type = GetDataTypeFromSpecificsFieldNumber(
         gu_msg.from_progress_marker(i).data_type_id());
 
     const sync_pb::DataTypeProgressMarker& progress_marker =
@@ -146,7 +141,7 @@ TEST_F(GetUpdatesProcessorTest, NotifyNormalDelegate) {
   MockUpdateHandler* bookmarks_handler = GetBookmarksHandler();
   MockUpdateHandler* preferences_handler = GetPreferencesHandler();
 
-  ModelTypeSet notified_types;
+  DataTypeSet notified_types;
   notified_types.Put(AUTOFILL);
   notified_types.Put(BOOKMARKS);
   notified_types.Put(PREFERENCES);
@@ -160,8 +155,6 @@ TEST_F(GetUpdatesProcessorTest, NotifyNormalDelegate) {
   processor->PrepareGetUpdates(enabled_types(), &message);
 
   const sync_pb::GetUpdatesMessage& gu_msg = message.get_updates();
-  EXPECT_EQ(sync_pb::GetUpdatesCallerInfo::UNKNOWN,
-            gu_msg.caller_info().source());
   EXPECT_EQ(sync_pb::SyncEnums::GU_TRIGGER, gu_msg.get_updates_origin());
 
   EXPECT_EQ(1, autofill_handler->GetPrepareGetUpdatesCount());
@@ -176,7 +169,7 @@ TEST_F(GetUpdatesProcessorTest, NotifyConfigureDelegate) {
   MockUpdateHandler* bookmarks_handler = GetBookmarksHandler();
   MockUpdateHandler* preferences_handler = GetPreferencesHandler();
 
-  ModelTypeSet notified_types;
+  DataTypeSet notified_types;
   notified_types.Put(AUTOFILL);
   notified_types.Put(BOOKMARKS);
   notified_types.Put(PREFERENCES);
@@ -200,7 +193,7 @@ TEST_F(GetUpdatesProcessorTest, NotifyPollGetUpdatesDelegate) {
   MockUpdateHandler* bookmarks_handler = GetBookmarksHandler();
   MockUpdateHandler* preferences_handler = GetPreferencesHandler();
 
-  ModelTypeSet notified_types;
+  DataTypeSet notified_types;
   notified_types.Put(AUTOFILL);
   notified_types.Put(BOOKMARKS);
   notified_types.Put(PREFERENCES);
@@ -222,7 +215,7 @@ TEST_F(GetUpdatesProcessorTest, InitialSyncRequest) {
   nudge_tracker.RecordInitialSyncRequired(AUTOFILL);
   nudge_tracker.RecordInitialSyncRequired(PREFERENCES);
 
-  const ModelTypeSet initial_sync_types = {AUTOFILL, PREFERENCES};
+  const DataTypeSet initial_sync_types = {AUTOFILL, PREFERENCES};
 
   sync_pb::ClientToServerMessage message;
   NormalGetUpdatesDelegate normal_delegate(nudge_tracker);
@@ -231,11 +224,9 @@ TEST_F(GetUpdatesProcessorTest, InitialSyncRequest) {
   processor->PrepareGetUpdates(enabled_types(), &message);
 
   const sync_pb::GetUpdatesMessage& gu_msg = message.get_updates();
-  EXPECT_EQ(sync_pb::GetUpdatesCallerInfo::UNKNOWN,
-            gu_msg.caller_info().source());
   EXPECT_EQ(sync_pb::SyncEnums::GU_TRIGGER, gu_msg.get_updates_origin());
   for (int i = 0; i < gu_msg.from_progress_marker_size(); ++i) {
-    ModelType type = GetModelTypeFromSpecificsFieldNumber(
+    DataType type = GetDataTypeFromSpecificsFieldNumber(
         gu_msg.from_progress_marker(i).data_type_id());
 
     const sync_pb::DataTypeProgressMarker& progress_marker =
@@ -264,12 +255,10 @@ TEST_F(GetUpdatesProcessorTest, ConfigureTest) {
 
   const sync_pb::GetUpdatesMessage& gu_msg = message.get_updates();
   EXPECT_EQ(sync_pb::SyncEnums::RECONFIGURATION, gu_msg.get_updates_origin());
-  EXPECT_EQ(sync_pb::GetUpdatesCallerInfo::UNKNOWN,
-            gu_msg.caller_info().source());
 
-  ModelTypeSet progress_types;
+  DataTypeSet progress_types;
   for (int i = 0; i < gu_msg.from_progress_marker_size(); ++i) {
-    ModelType type = GetModelTypeFromSpecificsFieldNumber(
+    DataType type = GetDataTypeFromSpecificsFieldNumber(
         gu_msg.from_progress_marker(i).data_type_id());
     progress_types.Put(type);
   }
@@ -285,74 +274,14 @@ TEST_F(GetUpdatesProcessorTest, PollTest) {
 
   const sync_pb::GetUpdatesMessage& gu_msg = message.get_updates();
   EXPECT_EQ(sync_pb::SyncEnums::PERIODIC, gu_msg.get_updates_origin());
-  EXPECT_EQ(sync_pb::GetUpdatesCallerInfo::UNKNOWN,
-            gu_msg.caller_info().source());
 
-  ModelTypeSet progress_types;
+  DataTypeSet progress_types;
   for (int i = 0; i < gu_msg.from_progress_marker_size(); ++i) {
-    ModelType type = GetModelTypeFromSpecificsFieldNumber(
+    DataType type = GetDataTypeFromSpecificsFieldNumber(
         gu_msg.from_progress_marker(i).data_type_id());
     progress_types.Put(type);
   }
   EXPECT_EQ(enabled_types(), progress_types);
-}
-
-TEST_F(GetUpdatesProcessorTest, RetryTest) {
-  NudgeTracker nudge_tracker;
-
-  // Schedule a retry.
-  base::TimeTicks t1 = kTestStartTime;
-  nudge_tracker.SetNextRetryTime(t1);
-
-  // Get the nudge tracker to think the retry is due.
-  nudge_tracker.SetSyncCycleStartTime(t1 + base::Seconds(1));
-
-  sync_pb::ClientToServerMessage message;
-  NormalGetUpdatesDelegate normal_delegate(nudge_tracker);
-  std::unique_ptr<GetUpdatesProcessor> processor(
-      BuildGetUpdatesProcessor(normal_delegate));
-  processor->PrepareGetUpdates(enabled_types(), &message);
-
-  const sync_pb::GetUpdatesMessage& gu_msg = message.get_updates();
-  EXPECT_EQ(sync_pb::SyncEnums::RETRY, gu_msg.get_updates_origin());
-  EXPECT_EQ(sync_pb::GetUpdatesCallerInfo::UNKNOWN,
-            gu_msg.caller_info().source());
-  EXPECT_TRUE(gu_msg.is_retry());
-
-  ModelTypeSet progress_types;
-  for (int i = 0; i < gu_msg.from_progress_marker_size(); ++i) {
-    ModelType type = GetModelTypeFromSpecificsFieldNumber(
-        gu_msg.from_progress_marker(i).data_type_id());
-    progress_types.Put(type);
-  }
-  EXPECT_EQ(enabled_types(), progress_types);
-}
-
-TEST_F(GetUpdatesProcessorTest, NudgeWithRetryTest) {
-  NudgeTracker nudge_tracker;
-
-  // Schedule a retry.
-  base::TimeTicks t1 = kTestStartTime;
-  nudge_tracker.SetNextRetryTime(t1);
-
-  // Get the nudge tracker to think the retry is due.
-  nudge_tracker.SetSyncCycleStartTime(t1 + base::Seconds(1));
-
-  // Record a local change, too.
-  nudge_tracker.RecordLocalChange(BOOKMARKS, false);
-
-  sync_pb::ClientToServerMessage message;
-  NormalGetUpdatesDelegate normal_delegate(nudge_tracker);
-  std::unique_ptr<GetUpdatesProcessor> processor(
-      BuildGetUpdatesProcessor(normal_delegate));
-  processor->PrepareGetUpdates(enabled_types(), &message);
-
-  const sync_pb::GetUpdatesMessage& gu_msg = message.get_updates();
-  EXPECT_NE(sync_pb::SyncEnums::RETRY, gu_msg.get_updates_origin());
-  EXPECT_EQ(sync_pb::GetUpdatesCallerInfo::UNKNOWN,
-            gu_msg.caller_info().source());
-
-  EXPECT_TRUE(gu_msg.is_retry());
 }
 
 // Verify that a bogus response message is detected.
@@ -414,7 +343,7 @@ class GetUpdatesProcessorApplyUpdatesTest : public GetUpdatesProcessorBaseTest {
   GetUpdatesProcessorApplyUpdatesTest() = default;
   ~GetUpdatesProcessorApplyUpdatesTest() override = default;
 
-  ModelTypeSet GetGuTypes() { return {AUTOFILL}; }
+  DataTypeSet GetGuTypes() { return {AUTOFILL}; }
 
   MockUpdateHandler* GetNonAppliedHandler() { return bookmarks_handler_; }
 
@@ -438,7 +367,8 @@ TEST_F(GetUpdatesProcessorApplyUpdatesTest, Normal) {
   EXPECT_EQ(0, GetAppliedHandler()->GetApplyUpdatesCount());
 
   StatusController status;
-  processor->ApplyUpdates(GetGuTypes(), &status);
+  processor->ApplyUpdates(GetGuTypes(), /*data_types_with_failure=*/{},
+                          &status);
 
   EXPECT_EQ(0, GetNonAppliedHandler()->GetApplyUpdatesCount());
   EXPECT_EQ(1, GetAppliedHandler()->GetApplyUpdatesCount());
@@ -455,7 +385,8 @@ TEST_F(GetUpdatesProcessorApplyUpdatesTest, Configure) {
   EXPECT_EQ(0, GetAppliedHandler()->GetApplyUpdatesCount());
 
   StatusController status;
-  processor->ApplyUpdates(GetGuTypes(), &status);
+  processor->ApplyUpdates(GetGuTypes(), /*data_types_with_failure=*/{},
+                          &status);
 
   EXPECT_EQ(0, GetNonAppliedHandler()->GetApplyUpdatesCount());
   EXPECT_EQ(1, GetAppliedHandler()->GetApplyUpdatesCount());
@@ -471,7 +402,8 @@ TEST_F(GetUpdatesProcessorApplyUpdatesTest, Poll) {
   EXPECT_EQ(0, GetAppliedHandler()->GetApplyUpdatesCount());
 
   StatusController status;
-  processor->ApplyUpdates(GetGuTypes(), &status);
+  processor->ApplyUpdates(GetGuTypes(), /*data_types_with_failure=*/{},
+                          &status);
 
   EXPECT_EQ(0, GetNonAppliedHandler()->GetApplyUpdatesCount());
   EXPECT_EQ(1, GetAppliedHandler()->GetApplyUpdatesCount());

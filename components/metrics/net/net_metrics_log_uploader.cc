@@ -5,10 +5,13 @@
 #include "components/metrics/net/net_metrics_log_uploader.h"
 
 #include <sstream>
+#include <string>
+#include <string_view>
 
 #include "base/base64.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/strings/strcat.h"
@@ -19,6 +22,7 @@
 #include "components/metrics/metrics_log_uploader.h"
 #include "net/base/load_flags.h"
 #include "net/base/url_util.h"
+#include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -70,6 +74,19 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
           data:
             "A protocol buffer with usage statistics and crash related data."
           destination: GOOGLE_OWNED_SERVICE
+          last_reviewed: "2024-02-15"
+          user_data {
+            type: BIRTH_DATE
+            type: GENDER
+            type: HW_OS_INFO
+            type: USAGE_AND_PERFORMANCE_METRICS
+            type: OTHER
+          }
+          internal {
+            contacts {
+              owners: "//components/metrics/OWNERS"
+            }
+          }
         }
         policy {
           cookies_allowed: NO
@@ -86,6 +103,110 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
           }
         })");
   }
+
+  if (service_type == metrics::MetricsLogUploader::DWA) {
+    return net::DefineNetworkTrafficAnnotation("metrics_report_dwa", R"(
+      semantics {
+        sender: "Metrics DWA Log Uploader"
+        description:
+          "Report of usage statistics that are keyed by a third-party domain "
+          "to Google. These reports contains only DWA data. This includes "
+          "information about the web pages you visit and your usage of them, "
+          "such as API usage. The third-party domain used as a key could be, "
+          "for instance, an inline frame or script owner. Usage statistics "
+          "are sent with an ephemeral pseudonymous identifier."
+        trigger:
+          "Reports are automatically generated on startup and at intervals "
+          "while Chrome is running with usage statistics and 'Make searches "
+          "and browsing better' settings enabled."
+        data:
+          "Usage statistics and associated third-party domains are collected."
+        destination: GOOGLE_OWNED_SERVICE
+        last_reviewed: "2025-02-10"
+        user_data {
+          type: HW_OS_INFO
+          type: SENSITIVE_URL
+          type: USAGE_AND_PERFORMANCE_METRICS
+          type: OTHER
+        }
+        internal {
+          contacts {
+            owners: "//components/metrics/OWNERS"
+          }
+        }
+      }
+      policy {
+        cookies_allowed: NO
+        setting:
+          "Users can enable or disable this feature by disabling 'Make "
+          "searches and browsing better' in Chrome's settings under Advanced "
+          "Settings, Privacy. This has to be enabled for all active profiles. "
+          "This is only enabled if the user has 'Help improve Chrome's "
+          "features and performance enabled in the same settings menu."
+        chrome_policy {
+          MetricsReportingEnabled {
+            policy_options {mode: MANDATORY}
+            MetricsReportingEnabled: false
+          }
+          UrlKeyedAnonymizedDataCollectionEnabled {
+            policy_options {mode: MANDATORY}
+            UrlKeyedAnonymizedDataCollectionEnabled: false
+          }
+        }
+      })");
+  }
+
+  if (service_type == metrics::MetricsLogUploader::PRIVATE_METRICS) {
+    return net::DefineNetworkTrafficAnnotation(
+        "metrics_report_private_metrics",
+        R"(
+      semantics {
+        sender: "Private Metrics Log Uploader"
+        description:
+          "Report of usage statistics and crash-related data about Chrome. "
+          "Usage statistics contain information such as preferences, button "
+          "clicks, and memory usage and do not include web page URLs or "
+          "personal information. See more at "
+          "https://policies.google.com/privacy. Usage statistics are tied to a "
+          "pseudonymous machine identifier and not to your email address. The "
+          "identifier is not joinable with any other identifier, including "
+          "identifiers from other types of metrics. Private Metrics are "
+          "collected with a reduced amount of system information and are "
+          "stored separately from any other log sources."
+        trigger:
+          "Reports are automatically generated on startup and at intervals "
+          "while Chrome is running."
+        data:
+           "A protocol buffer with usage statistics and crash related data."
+        destination: GOOGLE_OWNED_SERVICE
+        last_reviewed: "2025-11-25"
+        user_data {
+          type: HW_OS_INFO
+          type: USAGE_AND_PERFORMANCE_METRICS
+          type: OTHER
+        }
+        internal {
+          contacts {
+            owners: "//components/metrics/OWNERS"
+          }
+        }
+      }
+      policy {
+        cookies_allowed: NO
+        setting:
+          "Users can enable or disable this feature via "
+          "\"Help improve Chrome's features and performance\" in Chrome "
+          "settings under Sync and Google services > Other Google services. "
+          "The feature is enabled by default."
+        chrome_policy {
+          MetricsReportingEnabled {
+            policy_options {mode: MANDATORY}
+            MetricsReportingEnabled: false
+          }
+        }
+      })");
+  }
+
   DCHECK_EQ(service_type, metrics::MetricsLogUploader::UKM);
 
   if (log_metadata.log_source_type.has_value() &&
@@ -111,6 +232,20 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
         data:
           "A protocol buffer with usage statistics and associated App Identifiers."
         destination: GOOGLE_OWNED_SERVICE
+        last_reviewed: "2024-02-15"
+        user_data {
+          type: BIRTH_DATE
+          type: GENDER
+          type: HW_OS_INFO
+          type: SENSITIVE_URL
+          type: USAGE_AND_PERFORMANCE_METRICS
+          type: OTHER
+        }
+        internal {
+          contacts {
+            owners: "//components/metrics/OWNERS"
+          }
+        }
       }
       policy {
         cookies_allowed: NO
@@ -161,6 +296,20 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
         data:
           "A protocol buffer with usage statistics and associated URLs."
         destination: GOOGLE_OWNED_SERVICE
+        last_reviewed: "2024-02-15"
+        user_data {
+          type: BIRTH_DATE
+          type: GENDER
+          type: HW_OS_INFO
+          type: SENSITIVE_URL
+          type: USAGE_AND_PERFORMANCE_METRICS
+          type: OTHER
+        }
+        internal {
+          contacts {
+            owners: "//components/metrics/OWNERS"
+          }
+        }
       }
       policy {
         cookies_allowed: NO
@@ -213,6 +362,20 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
         data:
           "A protocol buffer with usage statistics and associated URLs."
         destination: GOOGLE_OWNED_SERVICE
+        last_reviewed: "2024-02-15"
+        user_data {
+          type: BIRTH_DATE
+          type: GENDER
+          type: HW_OS_INFO
+          type: SENSITIVE_URL
+          type: USAGE_AND_PERFORMANCE_METRICS
+          type: OTHER
+        }
+        internal {
+          contacts {
+            owners: "//components/metrics/OWNERS"
+          }
+        }
       }
       policy {
         cookies_allowed: NO
@@ -251,16 +414,11 @@ std::string SerializeReportingInfo(
 // false if there was a problem encrypting.
 bool EncryptString(const std::string& plaintext, std::string* encrypted) {
   encrypted_messages::EncryptedMessage encrypted_message;
-  if (!encrypted_messages::EncryptSerializedMessage(
+  CHECK(encrypted_messages::EncryptSerializedMessage(
           kServerPublicKey, kServerPublicKeyVersion, kEncryptedMessageLabel,
-          plaintext, &encrypted_message)) {
-    NOTREACHED() << "Error encrypting string.";
-    return false;
-  }
-  if (!encrypted_message.SerializeToString(encrypted)) {
-    NOTREACHED() << "Error serializing encrypted string.";
-    return false;
-  }
+          plaintext, &encrypted_message)) << "Error encrypting string.";
+  CHECK(encrypted_message.SerializeToString(encrypted))
+    << "Error serializing encrypted string.";
   return true;
 }
 
@@ -301,7 +459,7 @@ void LogUploadingHistograms(const std::string& compressed_log_data) {
   auto get_histogram_name = [&](uint64_t name_hash) -> std::string {
     for (base::HistogramBase* histogram : histograms) {
       if (histogram->name_hash() == name_hash) {
-        return histogram->histogram_name();
+        return std::string(histogram->histogram_name());
       }
     }
     return base::StrCat({"unnamed ", base::NumberToString(name_hash)});
@@ -333,7 +491,7 @@ namespace metrics {
 NetMetricsLogUploader::NetMetricsLogUploader(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     const GURL& server_url,
-    base::StringPiece mime_type,
+    std::string_view mime_type,
     MetricsLogUploader::MetricServiceType service_type,
     const MetricsLogUploader::UploadCallback& on_upload_complete)
     : NetMetricsLogUploader(url_loader_factory,
@@ -347,7 +505,7 @@ NetMetricsLogUploader::NetMetricsLogUploader(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     const GURL& server_url,
     const GURL& insecure_server_url,
-    base::StringPiece mime_type,
+    std::string_view mime_type,
     MetricsLogUploader::MetricServiceType service_type,
     const MetricsLogUploader::UploadCallback& on_upload_complete)
     : url_loader_factory_(std::move(url_loader_factory)),
@@ -465,7 +623,7 @@ void NetMetricsLogUploader::UploadLogToURL(
   // It's safe to use |base::Unretained(this)| here, because |this| owns
   // the |url_loader_|, and the callback will be cancelled if the |url_loader_|
   // is destroyed.
-  url_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+  url_loader_->DownloadHeadersOnly(
       url_loader_factory_.get(),
       base::BindOnce(&NetMetricsLogUploader::OnURLLoadComplete,
                      base::Unretained(this)));
@@ -478,7 +636,7 @@ void NetMetricsLogUploader::HTTPFallbackAborted() {
   // attempt retransmission.
   bool force_discard =
       server_url_.is_empty() && insecure_server_url_.is_empty();
-  base::StringPiece force_discard_reason =
+  std::string_view force_discard_reason =
       force_discard ? kNoUploadUrlsReasonMsg : "";
   on_upload_complete_.Run(/*response_code=*/0, net::ERR_FAILED,
                           /*was_https=*/false, force_discard,
@@ -487,10 +645,10 @@ void NetMetricsLogUploader::HTTPFallbackAborted() {
 
 // The callback is only invoked if |url_loader_| it was bound against is alive.
 void NetMetricsLogUploader::OnURLLoadComplete(
-    std::unique_ptr<std::string> response_body) {
+    scoped_refptr<net::HttpResponseHeaders> headers) {
   int response_code = -1;
-  if (url_loader_->ResponseInfo() && url_loader_->ResponseInfo()->headers) {
-    response_code = url_loader_->ResponseInfo()->headers->response_code();
+  if (headers) {
+    response_code = headers->response_code();
   }
 
   int error_code = url_loader_->NetError();
@@ -502,7 +660,7 @@ void NetMetricsLogUploader::OnURLLoadComplete(
   // retransmission.
   bool force_discard =
       server_url_.is_empty() && insecure_server_url_.is_empty();
-  base::StringPiece force_discard_reason =
+  std::string_view force_discard_reason =
       force_discard ? kNoUploadUrlsReasonMsg : "";
   on_upload_complete_.Run(response_code, error_code, was_https, force_discard,
                           force_discard_reason);

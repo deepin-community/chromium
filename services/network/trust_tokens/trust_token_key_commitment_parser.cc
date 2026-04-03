@@ -4,10 +4,11 @@
 
 #include "services/network/trust_tokens/trust_token_key_commitment_parser.h"
 
+#include <algorithm>
+
 #include "base/base64.h"
 #include "base/json/json_reader.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "services/network/public/mojom/trust_tokens.mojom.h"
@@ -51,7 +52,7 @@ enum class ParseKeyResult {
 // key has expired but is otherwise valid, ignores the key rather than failing
 // the prase.
 ParseKeyResult ParseSingleKeyExceptLabel(
-    const base::Value::Dict& in,
+    const base::DictValue& in,
     mojom::TrustTokenVerificationKey* out) {
   const std::string* expiry =
       in.FindString(kTrustTokenKeyCommitmentExpiryField);
@@ -78,11 +79,11 @@ mojom::TrustTokenKeyCommitmentResultPtr ParseSingleIssuer(
     const base::Value& commitments_by_version) {
   if (!commitments_by_version.is_dict())
     return nullptr;
-  const base::Value::Dict& commitments_dict = commitments_by_version.GetDict();
+  const base::DictValue& commitments_dict = commitments_by_version.GetDict();
 
   auto result = mojom::TrustTokenKeyCommitmentResult::New();
 
-  const base::Value::Dict* dict = nullptr;
+  const base::DictValue* dict = nullptr;
   // Confirm that the protocol_version field is present. If the server supports
   // multiple versions, we prefer the VOPRF version, since it's more efficient
   // (and we're free to choose which version to use).
@@ -168,25 +169,24 @@ mojom::TrustTokenKeyCommitmentResultPtr& commitment(Entry& e) {
 
 mojom::TrustTokenKeyCommitmentResultPtr TrustTokenKeyCommitmentParser::Parse(
     std::string_view response_body) {
-  std::optional<base::Value> maybe_value =
-      base::JSONReader::Read(response_body);
-  if (!maybe_value)
+  std::optional<base::DictValue> maybe_value = base::JSONReader::ReadDict(
+      response_body, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!maybe_value) {
     return nullptr;
+  }
 
-  return ParseSingleIssuer(std::move(*maybe_value));
+  return ParseSingleIssuer(base::Value(std::move(*maybe_value)));
 }
 
 std::unique_ptr<base::flat_map<SuitableTrustTokenOrigin,
                                mojom::TrustTokenKeyCommitmentResultPtr>>
 TrustTokenKeyCommitmentParser::ParseMultipleIssuers(
     std::string_view response_body) {
-  std::optional<base::Value> maybe_value =
-      base::JSONReader::Read(response_body);
-  if (!maybe_value)
+  std::optional<base::DictValue> maybe_value = base::JSONReader::ReadDict(
+      response_body, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!maybe_value) {
     return nullptr;
-
-  if (!maybe_value->is_dict())
-    return nullptr;
+  }
 
   // The configuration might contain conflicting lists of keys for issuers with
   // the same canonicalized URLs but different string representations provided
@@ -197,7 +197,7 @@ TrustTokenKeyCommitmentParser::ParseMultipleIssuers(
 
   std::vector<Entry> parsed_entries;
 
-  for (auto kv : maybe_value->GetDict()) {
+  for (auto kv : *maybe_value) {
     const std::string& raw_key_from_json = kv.first;
     std::optional<SuitableTrustTokenOrigin> maybe_issuer =
         SuitableTrustTokenOrigin::Create(GURL(raw_key_from_json));

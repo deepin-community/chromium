@@ -18,11 +18,11 @@ limitations under the License.
 #include <string>
 #include <vector>
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "tensorflow/lite/core/interpreter.h"
 #include "tensorflow/lite/core/interpreter_builder.h"
 #include "tensorflow/lite/core/kernels/register.h"
+#include "tensorflow/lite/model_builder.h"
 #include "tensorflow/lite/testing/util.h"
 
 namespace tflite {
@@ -94,6 +94,103 @@ TEST(SignatureRunnerTest, TestMultiSignatures) {
   ASSERT_EQ(sub_output->data.f[0], -1);
   ASSERT_EQ(sub_output->data.f[1], 1);
   ASSERT_EQ(sub_output->data.f[2], 3);
+}
+
+TEST(SignatureRunnerTest, ReverseSignatureModel) {
+  auto model = FlatBufferModel::BuildFromFile(
+      "tensorflow/lite/testdata/reverse_signature_model.bin");
+  ASSERT_TRUE(model);
+
+  std::unique_ptr<Interpreter> interpreter;
+  ASSERT_EQ(InterpreterBuilder(*model,
+                               ops::builtin::BuiltinOpResolver{})(&interpreter),
+            kTfLiteOk);
+  ASSERT_TRUE(interpreter);
+
+  auto signature_runner = interpreter->GetSignatureRunner("serving_default");
+  ASSERT_NE(signature_runner, nullptr);
+
+  // Check the legacy the input and output names order.
+  auto& input_names = signature_runner->input_names();
+  ASSERT_EQ(input_names.size(), 2);
+  EXPECT_STREQ(input_names[0], "x");
+  EXPECT_STREQ(input_names[1], "y");
+
+  auto& output_names = signature_runner->output_names();
+  ASSERT_EQ(output_names.size(), 2);
+  EXPECT_STREQ(output_names[0], "prod");
+  EXPECT_STREQ(output_names[1], "sum");
+
+  // Check if the input and output names are in the order of the subgraph
+  // inputs and outputs instead of the signature appearance order.
+  auto& subgraph_input_names = signature_runner->subgraph_input_names();
+  ASSERT_EQ(subgraph_input_names.size(), 2);
+  EXPECT_STREQ(subgraph_input_names[0], "y");
+  EXPECT_STREQ(subgraph_input_names[1], "x");
+
+  auto& subgraph_output_names = signature_runner->subgraph_output_names();
+  ASSERT_EQ(subgraph_output_names.size(), 2);
+  EXPECT_STREQ(subgraph_output_names[0], "sum");
+  EXPECT_STREQ(subgraph_output_names[1], "prod");
+}
+
+TEST(SignatureRunnerTest, TestPlaceholderSignatures) {
+  TestErrorReporter reporter;
+  auto model = FlatBufferModel::BuildFromFile(
+      "tensorflow/lite/testdata/no_signatures.bin", &reporter);
+  ASSERT_TRUE(model);
+  ops::builtin::BuiltinOpResolver resolver;
+  InterpreterBuilder builder(*model, resolver);
+
+  std::unique_ptr<Interpreter> interpreter;
+  ASSERT_EQ(builder(&interpreter), kTfLiteOk);
+  ASSERT_NE(interpreter, nullptr);
+
+  std::vector<const std::string*> signature_defs =
+      interpreter->signature_keys();
+  ASSERT_EQ(signature_defs.size(), 0);
+
+  SignatureRunner* default_runner =
+      interpreter->GetSignatureRunner(/*signature_key=*/nullptr);
+  ASSERT_NE(default_runner, nullptr);
+  EXPECT_EQ(default_runner->signature_key(), "<placeholder signature>");
+  const std::vector<const char*>& input_names = default_runner->input_names();
+  const std::vector<const char*>& output_names = default_runner->output_names();
+  ASSERT_EQ(input_names.size(), 2);
+  EXPECT_EQ(std::string(input_names[0]), "x1");
+  EXPECT_EQ(std::string(input_names[1]), "x2");
+  ASSERT_EQ(output_names.size(), 1);
+  EXPECT_EQ(std::string(output_names[0]), "Identity");
+}
+
+TEST(SignatureRunnerTest, TestPlaceholderSignaturesDefaultNames) {
+  TestErrorReporter reporter;
+  auto model = FlatBufferModel::BuildFromFile(
+      "tensorflow/lite/testdata/no_signatures_no_tensor_names.bin",
+      &reporter);
+  ASSERT_TRUE(model);
+  ops::builtin::BuiltinOpResolver resolver;
+  InterpreterBuilder builder(*model, resolver);
+
+  std::unique_ptr<Interpreter> interpreter;
+  ASSERT_EQ(builder(&interpreter), kTfLiteOk);
+  ASSERT_NE(interpreter, nullptr);
+
+  std::vector<const std::string*> signature_defs =
+      interpreter->signature_keys();
+  ASSERT_EQ(signature_defs.size(), 0);
+
+  SignatureRunner* default_runner =
+      interpreter->GetSignatureRunner(/*signature_key=*/nullptr);
+  ASSERT_NE(default_runner, nullptr);
+  EXPECT_EQ(default_runner->signature_key(), "<placeholder signature>");
+  const std::vector<const char*>& input_names = default_runner->input_names();
+  const std::vector<const char*>& output_names = default_runner->output_names();
+  ASSERT_EQ(input_names.size(), 2);
+  EXPECT_EQ(std::string(input_names[0]), "input0");
+  EXPECT_EQ(std::string(input_names[1]), "input1");
+  ASSERT_EQ(output_names.size(), 1);
+  EXPECT_EQ(std::string(output_names[0]), "output0");
 }
 
 }  // namespace

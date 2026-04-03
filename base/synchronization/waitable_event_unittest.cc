@@ -7,10 +7,14 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <array>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
+#include "base/test/gtest_util.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -98,23 +102,24 @@ TEST(WaitableEventTest, WaitManyShortcut) {
   }
 
   ev[3]->Signal();
-  EXPECT_EQ(WaitableEvent::WaitMany(ev, 5), 3u);
+  EXPECT_EQ(WaitableEvent::WaitMany(ev), 3u);
 
   ev[3]->Signal();
-  EXPECT_EQ(WaitableEvent::WaitMany(ev, 5), 3u);
+  EXPECT_EQ(WaitableEvent::WaitMany(ev), 3u);
 
   ev[4]->Signal();
-  EXPECT_EQ(WaitableEvent::WaitMany(ev, 5), 4u);
+  EXPECT_EQ(WaitableEvent::WaitMany(ev), 4u);
 
   ev[0]->Signal();
-  EXPECT_EQ(WaitableEvent::WaitMany(ev, 5), 0u);
+  EXPECT_EQ(WaitableEvent::WaitMany(ev), 0u);
 
-  for (auto* i : ev)
+  for (auto* i : ev) {
     delete i;
+  }
 }
 
 TEST(WaitableEventTest, WaitManyLeftToRight) {
-  WaitableEvent* ev[5];
+  std::array<WaitableEvent*, 5> ev;
   for (auto*& i : ev) {
     i = new WaitableEvent(WaitableEvent::ResetPolicy::AUTOMATIC,
                           WaitableEvent::InitialState::NOT_SIGNALED);
@@ -125,36 +130,35 @@ TEST(WaitableEventTest, WaitManyLeftToRight) {
   // the WaitableEvents' addresses -- are relevant in determining who wins when
   // multiple events are signaled.
 
-  std::sort(ev, ev + 5);
+  std::ranges::sort(ev);
   do {
     ev[0]->Signal();
     ev[1]->Signal();
-    EXPECT_EQ(0u, WaitableEvent::WaitMany(ev, 5));
+    EXPECT_EQ(0u, WaitableEvent::WaitMany(ev));
 
     ev[2]->Signal();
-    EXPECT_EQ(1u, WaitableEvent::WaitMany(ev, 5));
-    EXPECT_EQ(2u, WaitableEvent::WaitMany(ev, 5));
+    EXPECT_EQ(1u, WaitableEvent::WaitMany(ev));
+    EXPECT_EQ(2u, WaitableEvent::WaitMany(ev));
 
     ev[3]->Signal();
     ev[4]->Signal();
     ev[0]->Signal();
-    EXPECT_EQ(0u, WaitableEvent::WaitMany(ev, 5));
-    EXPECT_EQ(3u, WaitableEvent::WaitMany(ev, 5));
+    EXPECT_EQ(0u, WaitableEvent::WaitMany(ev));
+    EXPECT_EQ(3u, WaitableEvent::WaitMany(ev));
     ev[2]->Signal();
-    EXPECT_EQ(2u, WaitableEvent::WaitMany(ev, 5));
-    EXPECT_EQ(4u, WaitableEvent::WaitMany(ev, 5));
-  } while (std::next_permutation(ev, ev + 5));
+    EXPECT_EQ(2u, WaitableEvent::WaitMany(ev));
+    EXPECT_EQ(4u, WaitableEvent::WaitMany(ev));
+  } while (std::ranges::next_permutation(ev).found);
 
-  for (auto* i : ev)
+  for (auto* i : ev) {
     delete i;
+  }
 }
 
 class WaitableEventSignaler : public PlatformThread::Delegate {
  public:
   WaitableEventSignaler(TimeDelta delay, WaitableEvent* event)
-      : delay_(delay),
-        event_(event) {
-  }
+      : delay_(delay), event_(event) {}
 
   void ThreadMain() override {
     PlatformThread::Sleep(delay_);
@@ -199,12 +203,12 @@ TEST(WaitableEventTest, WaitMany) {
     // Signaler can't outlive event.
     WaitableEventSignaler signaler(Milliseconds(10), ev[2]);
     PlatformThread::Create(0, &signaler, &thread);
-    size_t index = WaitableEvent::WaitMany(ev, 5);
-    EXPECT_EQ(2u, index);
+    EXPECT_EQ(2u, WaitableEvent::WaitMany(ev));
   }
 
-  for (auto* i : ev)
+  for (auto* i : ev) {
     delete i;
+  }
 
   PlatformThread::Join(thread);
 }
@@ -254,6 +258,37 @@ TEST(WaitableEventTest, ZeroTimeout) {
   start_time = TimeTicks::Now();
   EXPECT_TRUE(ev.TimedWait(TimeDelta()));
   EXPECT_LT(TimeTicks::Now() - start_time, Milliseconds(1));
+}
+
+// Tests that TimedWait() doesn't instantiate a ScopedBlockingCall if the
+// WaitableEvent is already signaled.
+TEST(WaitableEventTest, TimedWaitDoesNotBlockIfAlreadySignaled) {
+  WaitableEvent event(WaitableEvent::ResetPolicy::AUTOMATIC,
+                      WaitableEvent::InitialState::SIGNALED);
+
+  TimeDelta short_delay = Milliseconds(10);
+  TimeTicks start_time = TimeTicks::Now();
+  EXPECT_TRUE(event.TimedWait(short_delay));
+  TimeDelta actual_delay = TimeTicks::Now() - start_time;
+  // TimedWait() should return almost immediately.
+  EXPECT_LE(actual_delay, short_delay / 2);
+}
+
+// Verifies the suggestion that AssertBaseSyncPrimitivesAllowed() is called even
+// if the event is already signaled and the wait skipped.
+// EXPECT_DCHECK_DEATH() not available in iOS.
+#if BUILDFLAG(IS_IOS)
+#define MAYBE_TimedWaitRespectsRestrictionsEvenIfSignaled \
+  DISABLED_TimedWaitRespectsRestrictionsEvenIfSignaled
+#else
+#define MAYBE_TimedWaitRespectsRestrictionsEvenIfSignaled \
+  TimedWaitRespectsRestrictionsEvenIfSignaled
+#endif
+TEST(WaitableEventTest, MAYBE_TimedWaitRespectsRestrictionsEvenIfSignaled) {
+  WaitableEvent event(WaitableEvent::ResetPolicy::AUTOMATIC,
+                      WaitableEvent::InitialState::SIGNALED);
+  DisallowBaseSyncPrimitives();
+  EXPECT_DCHECK_DEATH({ event.TimedWait(Milliseconds(10)); });
 }
 
 // Same as ZeroTimeout for negative timeouts.

@@ -4,15 +4,16 @@
 
 #include "media/remoting/renderer_controller.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "media/base/remoting_constants.h"
 #include "media/remoting/metrics.h"
-#include "media/remoting/remoting_constants.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "media/base/android/media_codec_util.h"
@@ -323,7 +324,7 @@ void RendererController::OnDataSourceInitialized(
 
 void RendererController::OnHlsManifestDetected() {
   is_hls_ = true;
-  // TODO(crbug.com/1266991) Android used to rely solely on MediaPlayer for HLS
+  // TODO(crbug.com/40057824) Android used to rely solely on MediaPlayer for HLS
   // playback, but now there is an alternative native player. Should we still
   // be doing this in all cases? It does work in its current state, on both
   // android and desktop, but it is not thoroughly tested.
@@ -411,6 +412,9 @@ RemotingCompatibility RendererController::GetVideoCompatibility() const {
       break;
     case VideoCodec::kHEVC:
       compatible = HasVideoCapability(RemotingSinkVideoCapability::CODEC_HEVC);
+      break;
+    case VideoCodec::kAV1:
+      compatible = HasVideoCapability(RemotingSinkVideoCapability::CODEC_AV1);
       break;
     default:
       VLOG(2) << "Remoting does not support video codec: "
@@ -591,18 +595,19 @@ void RendererController::SetClient(MediaObserverClient* client) {
 bool RendererController::HasVideoCapability(
     mojom::RemotingSinkVideoCapability capability) const {
   return sink_metadata_ &&
-         base::Contains(sink_metadata_->video_capabilities, capability);
+         std::ranges::contains(sink_metadata_->video_capabilities, capability);
 }
 
 bool RendererController::HasAudioCapability(
     mojom::RemotingSinkAudioCapability capability) const {
   return sink_metadata_ &&
-         base::Contains(sink_metadata_->audio_capabilities, capability);
+         std::ranges::contains(sink_metadata_->audio_capabilities, capability);
 }
 
 bool RendererController::HasFeatureCapability(
     RemotingSinkFeature capability) const {
-  return sink_metadata_ && base::Contains(sink_metadata_->features, capability);
+  return sink_metadata_ &&
+         std::ranges::contains(sink_metadata_->features, capability);
 }
 
 bool RendererController::SinkSupportsRemoting() const {

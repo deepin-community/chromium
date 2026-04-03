@@ -36,6 +36,7 @@ cc_library(
         "//tensorflow/core:lib_internal",
         "//tensorflow/core/platform:gif",
         "@com_google_absl//absl/strings",
+        "@gif",
     ],
 )
 
@@ -44,27 +45,33 @@ cc_library(
     srcs = if_mobile([
         "gif_io.cc",
         "//tensorflow/core/platform:gif_hdrs",
-        "@local_tsl//tsl/platform:gif_hdrs",
     ]),
     hdrs = [
         "gif_io.h",
         "//tensorflow/core/lib/core:legacy_lib_core_stringpiece_header",
         "//tensorflow/core/lib/gtl:legacy_android_gif_internal_headers",
         "//tensorflow/core/platform:gif_internal_hdrs",
-        "@local_tsl//tsl/platform:gif_internal_hdrs",
-        "@local_tsl//tsl/platform/default:integral_types.h",
-        "@local_tsl//tsl/platform/default:logging.h",
+        "@tsl//tsl/platform:gif_internal_hdrs",
     ],
     copts = tf_copts(),
     features = ["-layering_check"],
     linkopts = if_android(["-ldl"]),
     deps = [
+        "//tensorflow/core/platform:byte_order",
+        "//tensorflow/core/platform:cord",
         "//tensorflow/core/platform:dynamic_annotations",
         "//tensorflow/core/platform:gif",
         "//tensorflow/core/platform:logging",
         "//tensorflow/core/platform:stringpiece",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:dynamic_annotations",
         "@com_google_absl//absl/strings",
+        "@eigen_archive//:eigen3",
+        "@gif",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:tstring",
+        "@tsl//tsl/platform:types",
+        "@xla//xla/tsl/platform:types",
     ],
 )
 

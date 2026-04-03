@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
+import type {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
 
 import {str, strf} from '../common/js/translations.js';
 
@@ -24,7 +24,7 @@ export class XfDlpRestrictionDetailsDialog extends HTMLElement {
     const fragment = template.content.cloneNode(true);
     this.attachShadow({mode: 'open'}).appendChild(fragment);
 
-    this.dialog = this.shadowRoot!.querySelector('#dialog')! as CrDialogElement;
+    this.dialog = this.shadowRoot!.querySelector<CrDialogElement>('#dialog')!;
   }
 
   /**

@@ -38,7 +38,6 @@
 #include <string.h>
 
 #include "breakpad_googletest_includes.h"
-#include "common/using_std_string.h"
 #include "processor/cfi_frame_info.h"
 #include "google_breakpad/processor/memory_region.h"
 
@@ -296,9 +295,9 @@ TEST_F(Scope, SeparateTempsRA) {
 
 class MockCFIRuleParserHandler: public CFIRuleParser::Handler {
  public:
-  MOCK_METHOD1(CFARule, void(const string&));
-  MOCK_METHOD1(RARule,  void(const string&));
-  MOCK_METHOD2(RegisterRule, void(const string&, const string&));
+  MOCK_METHOD1(CFARule, void(const std::string&));
+  MOCK_METHOD1(RARule, void(const std::string&));
+  MOCK_METHOD2(RegisterRule, void(const std::string&, const std::string&));
 };
 
 // A fixture class for testing CFIRuleParser.
@@ -485,11 +484,11 @@ struct SimpleCFIWalkerFixture {
 
 SimpleCFIWalkerFixture::CFIWalker::RegisterSet
 SimpleCFIWalkerFixture::register_map[7] = {
-  { "r0", NULL,   true,  R0_VALID, &RawContext::r0 },
-  { "r1", NULL,   true,  R1_VALID, &RawContext::r1 },
-  { "r2", NULL,   false, R2_VALID, &RawContext::r2 },
-  { "r3", NULL,   false, R3_VALID, &RawContext::r3 },
-  { "r4", NULL,   true,  R4_VALID, &RawContext::r4 },
+  { "r0", nullptr,   true,  R0_VALID, &RawContext::r0 },
+  { "r1", nullptr,   true,  R1_VALID, &RawContext::r1 },
+  { "r2", nullptr,   false, R2_VALID, &RawContext::r2 },
+  { "r3", nullptr,   false, R3_VALID, &RawContext::r3 },
+  { "r4", nullptr,   true,  R4_VALID, &RawContext::r4 },
   { "sp", ".cfa", true,  SP_VALID, &RawContext::sp },
   { "pc", ".ra",  true,  PC_VALID, &RawContext::pc },
 };

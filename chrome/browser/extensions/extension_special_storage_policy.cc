@@ -6,12 +6,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <utility>
 
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -34,6 +34,7 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/url_constants.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
@@ -42,9 +43,11 @@
 #include "url/gurl.h"
 #include "url/origin.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/common/webui_url_constants.h"
 #endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using content::BrowserThread;
 using extensions::APIPermission;
@@ -133,11 +136,11 @@ bool ExtensionSpecialStoragePolicy::IsStorageUnlimited(const GURL& origin) {
   }
 
   if (origin.SchemeIs(content::kChromeDevToolsScheme) &&
-      origin.host_piece() == chrome::kChromeUIDevToolsHost) {
+      origin.host() == chrome::kChromeUIDevToolsHost) {
     return true;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // chrome-untrusted://terminal/ runs the SSH extension code which can store
   // SSH known_hosts, config, and Identity keys. Use unlimitedStorage to match
   // extension config.
@@ -147,8 +150,7 @@ bool ExtensionSpecialStoragePolicy::IsStorageUnlimited(const GURL& origin) {
 #endif
 
   base::AutoLock locker(lock_);
-  if (base::Contains(origins_with_unlimited_storage_,
-                     url::Origin::Create(origin))) {
+  if (origins_with_unlimited_storage_.contains(url::Origin::Create(origin))) {
     // Origin was externally marked as having unlimited storage.
     return true;
   }
@@ -186,8 +188,8 @@ bool ExtensionSpecialStoragePolicy::HasIsolatedStorage(const GURL& origin) {
   return isolated_extensions_.Contains(origin);
 }
 
-bool ExtensionSpecialStoragePolicy::IsStorageDurable(const GURL& origin) {
-  return cookie_settings_->IsStorageDurable(origin);
+bool ExtensionSpecialStoragePolicy::IsStoragePersistent(const GURL& origin) {
+  return cookie_settings_->IsStoragePersistent(origin);
 }
 
 bool ExtensionSpecialStoragePolicy::NeedsProtection(
@@ -362,9 +364,10 @@ void ExtensionSpecialStoragePolicy::AddOriginWithUnlimitedStorage(
 // SpecialCollection helper class
 //-----------------------------------------------------------------------------
 
-ExtensionSpecialStoragePolicy::SpecialCollection::SpecialCollection() {}
+ExtensionSpecialStoragePolicy::SpecialCollection::SpecialCollection() = default;
 
-ExtensionSpecialStoragePolicy::SpecialCollection::~SpecialCollection() {}
+ExtensionSpecialStoragePolicy::SpecialCollection::~SpecialCollection() =
+    default;
 
 bool ExtensionSpecialStoragePolicy::SpecialCollection::Contains(
     const GURL& origin) {

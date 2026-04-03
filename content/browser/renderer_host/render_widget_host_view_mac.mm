@@ -9,9 +9,11 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
+#include "base/apple/foundation_util.h"
 #include "base/apple/owned_objc.h"
 #include "base/apple/scoped_cftyperef.h"
 #include "base/auto_reset.h"
@@ -20,36 +22,35 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
+#include "base/notreached.h"
+#include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #import "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "components/device_event_log/device_event_log.h"
+#include "components/input/cursor_manager.h"
+#import "components/input/events_helper.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "components/input/render_widget_host_input_event_router.h"
+#include "components/input/web_input_event_builders_mac.h"
 #include "components/remote_cocoa/browser/ns_view_ids.h"
 #include "components/remote_cocoa/common/application.mojom.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/switches.h"
 #import "content/app_shim_remote_cocoa/render_widget_host_ns_view_bridge.h"
 #import "content/app_shim_remote_cocoa/render_widget_host_view_cocoa.h"
-#import "content/browser/accessibility/browser_accessibility_cocoa.h"
-#import "content/browser/accessibility/browser_accessibility_mac.h"
-#include "content/browser/accessibility/browser_accessibility_manager_mac.h"
-#include "content/browser/renderer_host/cursor_manager.h"
 #include "content/browser/renderer_host/input/motion_event_web.h"
 #import "content/browser/renderer_host/input/synthetic_gesture_target_mac.h"
 #include "content/browser/renderer_host/render_view_host_delegate.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_helper.h"
-#include "content/browser/renderer_host/render_widget_host_input_event_router.h"
 #import "content/browser/renderer_host/text_input_client_mac.h"
-#import "content/browser/renderer_host/ui_events_helper.h"
 #include "content/browser/renderer_host/visible_time_request_trigger.h"
-#include "content/common/input/web_input_event_builders_mac.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_plugin_guest_manager.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/input/native_web_keyboard_event.h"
 #include "content/public/common/page_visibility_state.h"
 #include "media/base/media_switches.h"
 #include "skia/ext/platform_canvas.h"
@@ -57,14 +58,15 @@
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom.h"
 #include "third_party/blink/public/mojom/widget/record_content_to_visible_time_request.mojom.h"
+#import "ui/accessibility/platform/browser_accessibility_cocoa.h"
+#import "ui/accessibility/platform/browser_accessibility_mac.h"
+#include "ui/accessibility/platform/browser_accessibility_manager_mac.h"
 #import "ui/base/clipboard/clipboard_util_mac.h"
 #include "ui/base/cocoa/animation_utils.h"
 #include "ui/base/cocoa/cocoa_base_utils.h"
-#include "ui/base/cocoa/cursor_accessibility_scale_factor_observer.h"
-#include "ui/base/cocoa/cursor_utils.h"
+#include "ui/base/cocoa/cursor_accessibility_scale_factor.h"
 #include "ui/base/cocoa/remote_accessibility_api.h"
 #import "ui/base/cocoa/secure_password_input.h"
-#include "ui/base/cocoa/text_services_context_menu.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/ime/mojom/text_input_state.mojom.h"
 #include "ui/base/mojom/attributed_string.mojom.h"
@@ -80,6 +82,8 @@
 #include "ui/gfx/geometry/dip_util.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/mac/coordinate_conversion.h"
+#include "ui/gfx/native_ui_types.h"
+#include "ui/menus/cocoa/text_services_context_menu.h"
 
 using blink::WebInputEvent;
 using blink::WebMouseEvent;
@@ -95,7 +99,6 @@ namespace {
 // costly, and if the text input state is changing rapidly there is no need to
 // update it immediately.
 BASE_FEATURE(kDelayUpdateWindowsAfterTextInputStateChanged,
-             "DelayUpdateWindowsAfterTextInputStateChanged",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace
@@ -142,7 +145,7 @@ display::ScreenInfo RenderWidgetHostViewMac::GetCurrentScreenInfo() const {
 
 void RenderWidgetHostViewMac::SetCurrentDeviceScaleFactor(
     float device_scale_factor) {
-  // TODO(https://crbug.com/1337094): does this need to be upscaled by
+  // TODO(crbug.com/40229152): does this need to be upscaled by
   // scale_override_for_capture_ for HiDPI capture mode?
   screen_infos_.mutable_current().device_scale_factor = device_scale_factor;
 }
@@ -174,20 +177,18 @@ id RenderWidgetHostViewMac::GetAccessibilityFocusedUIElement() {
   // the UX acts as if focus is in the popup.
   gfx::NativeViewAccessible popup_focus_override =
       ui::AXPlatformNode::GetPopupFocusOverride();
-  if (popup_focus_override)
-    return popup_focus_override;
+  if (popup_focus_override) {
+    return popup_focus_override.Get();
+  }
 
-  BrowserAccessibilityManager* manager =
+  ui::BrowserAccessibilityManager* manager =
       host()->GetRootBrowserAccessibilityManager();
   if (manager) {
-    BrowserAccessibility* focused_item = manager->GetFocus();
+    ui::BrowserAccessibility* focused_item = manager->GetFocus();
     DCHECK(focused_item);
     if (focused_item) {
-      BrowserAccessibilityCocoa* focused_item_cocoa =
-          focused_item->GetNativeViewAccessible();
-      DCHECK(focused_item_cocoa);
-      if (focused_item_cocoa)
-        return focused_item_cocoa;
+      return base::apple::ObjCCastStrict<BrowserAccessibilityCocoa>(
+          focused_item->GetNativeViewAccessible().Get());
     }
   }
   return nil;
@@ -198,7 +199,6 @@ id RenderWidgetHostViewMac::GetAccessibilityFocusedUIElement() {
 
 RenderWidgetHostViewMac::RenderWidgetHostViewMac(RenderWidgetHost* widget)
     : RenderWidgetHostViewBase(widget),
-      page_at_minimum_scale_(true),
       mouse_wheel_phase_handler_(this),
       is_loading_(false),
       popup_parent_host_view_(nullptr),
@@ -218,15 +218,15 @@ RenderWidgetHostViewMac::RenderWidgetHostViewMac(RenderWidgetHost* widget)
   // Guess that the initial screen we will be on is the screen of the current
   // window (since that's the best guess that we have, and is usually right).
   // https://crbug.com/357443
-  auto* screen = display::Screen::GetScreen();
+  auto* screen = display::Screen::Get();
   screen_infos_ = screen->GetScreenInfosNearestDisplay(
-      screen->GetDisplayNearestWindow([NSApp keyWindow]).id());
+      screen->GetDisplayNearestWindow(gfx::NativeWindow(NSApp.keyWindow)).id());
   original_screen_infos_ = screen_infos_;
 
   viz::FrameSinkId frame_sink_id = host()->GetFrameSinkId();
 
   browser_compositor_ = std::make_unique<BrowserCompositorMac>(
-      this, this, host()->is_hidden(), frame_sink_id);
+      this, this, host()->IsHidden(), frame_sink_id);
   DCHECK(![GetInProcessNSView() window]);
 
   host()->SetView(this);
@@ -240,18 +240,18 @@ RenderWidgetHostViewMac::RenderWidgetHostViewMac(RenderWidgetHost* widget)
     std::ignore = owner_delegate->GetWebkitPreferencesForWidget();
   }
 
-  cursor_manager_ = std::make_unique<CursorManager>(this);
-  // Start observing changes to the system's cursor accessibility scale factor.
-  __block auto render_widget_host_view_mac = this;
+  cursor_manager_ = std::make_unique<input::CursorManager>(this);
+  // Start observing changes to the system's cursor accessibility scale factor,
+  // and when it changes, notify the renderers that there is a new value to
+  // synchronize.
   cursor_scale_observer_ =
-      [[CursorAccessibilityScaleFactorObserver alloc] initWithHandler:^{
-        ui::GetCursorAccessibilityScaleFactor(/*force_update=*/true);
-        // Notify renderers of the new system cursor accessibility scale factor.
-        render_widget_host_view_mac->host()->SynchronizeVisualProperties();
+      [CursorAccessibilityScaleFactorNotifier.sharedNotifier addObserver:^{
+        host()->SynchronizeVisualProperties();
       }];
 
-  if (GetTextInputManager())
+  if (GetTextInputManager()) {
     GetTextInputManager()->AddObserver(this);
+  }
 
   host()->render_frame_metadata_provider()->AddObserver(this);
 }
@@ -267,6 +267,8 @@ RenderWidgetHostViewMac::~RenderWidgetHostViewMac() {
            popup_child_host_view_->popup_parent_host_view_ == this);
     popup_child_host_view_->popup_parent_host_view_ = nullptr;
   }
+  [CursorAccessibilityScaleFactorNotifier.sharedNotifier
+      removeObserver:cursor_scale_observer_];
 }
 
 void RenderWidgetHostViewMac::MigrateNSViewBridge(
@@ -301,10 +303,9 @@ void RenderWidgetHostViewMac::MigrateNSViewBridge(
     // be an observer, and calling AddObserver here would cause a CHECK to fail.
     // To workaround that case, this code removes the observer first, which is a
     // safe no-op if the bridge is already not an observer.
-    // TODO(crbug.com/1204273): Maybe recreate `in_process_ns_view_bridge_`?
-    display::Screen::GetScreen()->RemoveObserver(
-        in_process_ns_view_bridge_.get());
-    display::Screen::GetScreen()->AddObserver(in_process_ns_view_bridge_.get());
+    // TODO(crbug.com/40179941): Maybe recreate `in_process_ns_view_bridge_`?
+    display::Screen::Get()->RemoveObserver(in_process_ns_view_bridge_.get());
+    display::Screen::Get()->AddObserver(in_process_ns_view_bridge_.get());
     return;
   }
 
@@ -333,11 +334,24 @@ void RenderWidgetHostViewMac::MigrateNSViewBridge(
     remote_ns_view_->SetVisible(false);
   }
 
+  // Re-send the current text input state to the new NSView bridge. This is
+  // necessary because the text input state may have been set before the
+  // migration (e.g., when a PWA launches with an auto-focused text field).
+  // Without this, the new NSView's inputContext will return nil because
+  // _textInputType remains TEXT_INPUT_TYPE_NONE, causing emoji picker and
+  // other IME features to fail. See https://crbug.com/478659019.
+  if (text_input_manager_) {
+    const ui::mojom::TextInputState* state =
+        text_input_manager_->GetTextInputState();
+    if (state) {
+      remote_ns_view_->SetTextInputState(state->type, state->flags);
+    }
+  }
+
   // End local display::Screen observation via `in_process_ns_view_bridge_`;
   // the remote NSWindow's display::Screen information will be sent by Mojo.
-  // TODO(crbug.com/1204273): Maybe just destroy `in_process_ns_view_bridge_`?
-  display::Screen::GetScreen()->RemoveObserver(
-      in_process_ns_view_bridge_.get());
+  // TODO(crbug.com/40179941): Maybe just destroy `in_process_ns_view_bridge_`?
+  display::Screen::Get()->RemoveObserver(in_process_ns_view_bridge_.get());
 
   // Popup windows will specify an invalid |parent_ns_view_id|, because popups
   // have their own NSWindows (of which they are the content NSView).
@@ -494,7 +508,7 @@ void RenderWidgetHostViewMac::WasUnOccluded() {
 
 void RenderWidgetHostViewMac::NotifyHostAndDelegateOnWasShown(
     blink::mojom::RecordContentToVisibleTimeRequestPtr tab_switch_start_state) {
-  DCHECK(host_->is_hidden());
+  DCHECK(host_->IsHidden());
 
   // SetRenderWidgetHostIsHidden may cause a state transition that switches to
   // a new instance of DelegatedFrameHost and calls WasShown, which causes
@@ -525,7 +539,7 @@ void RenderWidgetHostViewMac::
     RequestSuccessfulPresentationTimeFromHostOrDelegate(
         blink::mojom::RecordContentToVisibleTimeRequestPtr
             visible_time_request) {
-  DCHECK(!host_->is_hidden());
+  DCHECK(!host_->IsHidden());
   DCHECK(visible_time_request);
 
   // No state transition here so don't use
@@ -544,18 +558,28 @@ void RenderWidgetHostViewMac::
 
 void RenderWidgetHostViewMac::
     CancelSuccessfulPresentationTimeRequestForHostAndDelegate() {
-  DCHECK(!host_->is_hidden());
+  DCHECK(!host_->IsHidden());
   host()->CancelSuccessfulPresentationTimeRequest();
   browser_compositor_->GetDelegatedFrameHost()
       ->CancelSuccessfulPresentationTimeRequest();
 }
 
 void RenderWidgetHostViewMac::WasOccluded() {
-  if (host()->is_hidden())
+  if (host()->IsHidden()) {
     return;
+  }
 
   host()->WasHidden();
   browser_compositor_->SetRenderWidgetHostIsHidden(true);
+
+  // Headless mode forces focus change propagation inside Focus(), since there
+  // is no NSWindow to deliver the normal focus change notifications. As a
+  // result, when view is hidden, we must explicitly clear its focus state to
+  // keep focus behavior consistent and avoid leaving the view marked as focused
+  // wrongly.
+  if (IsHeadless() && HasFocus()) {
+    OnFirstResponderChanged(/*is_first_responder=*/false);
+  }
 }
 
 void RenderWidgetHostViewMac::SetSize(const gfx::Size& size) {
@@ -566,14 +590,21 @@ void RenderWidgetHostViewMac::SetSize(const gfx::Size& size) {
 
 void RenderWidgetHostViewMac::SetBounds(const gfx::Rect& rect) {
   ns_view_->SetBounds(rect);
+
+  // Check if running with no associated NSWindow and force bounds change
+  // propagation. This occurs while running headless and causes problems with
+  // RenderDocument. See more details here: http://crbug.com/444226873.
+  if (IsHeadless()) {
+    OnWindowFrameInScreenChanged(rect);
+  }
 }
 
 gfx::NativeView RenderWidgetHostViewMac::GetNativeView() {
-  return GetInProcessNSView();
+  return gfx::NativeView(GetInProcessNSView());
 }
 
 gfx::NativeViewAccessible RenderWidgetHostViewMac::GetNativeViewAccessible() {
-  return GetInProcessNSView();
+  return gfx::NativeViewAccessible(GetInProcessNSView());
 }
 
 void RenderWidgetHostViewMac::Focus() {
@@ -584,6 +615,20 @@ void RenderWidgetHostViewMac::Focus() {
 
   base::AutoReset<bool> is_getting_focus_bit(&is_getting_focus_, true);
   ns_view_->MakeFirstResponder();
+
+  // Check if running with no associated NSWindow and force focus change
+  // propagation. This occurs while running headless and causes problems with
+  // RenderDocument. See more details here: http://crbug.com/444244102.
+  // Here notification callback is invoked asynchronously because focus and
+  // activation notifications are nested so synchronous invocation does not
+  // always result in the correct state.
+  if (IsHeadless()) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&RenderWidgetHostViewMac::OnFirstResponderChanged,
+                       weak_factory_.GetWeakPtr(),
+                       /*is_first_responder=*/true));
+  }
 }
 
 bool RenderWidgetHostViewMac::HasFocus() {
@@ -616,16 +661,14 @@ void RenderWidgetHostViewMac::DisplayCursor(const ui::Cursor& cursor) {
   ns_view_->DisplayCursor(cursor);
 }
 
-CursorManager* RenderWidgetHostViewMac::GetCursorManager() {
+input::CursorManager* RenderWidgetHostViewMac::GetCursorManager() {
   return cursor_manager_.get();
 }
 
 void RenderWidgetHostViewMac::OnOldViewDidNavigatePreCommit() {
-  if (base::FeatureList::IsEnabled(
-          features::kInvalidateLocalSurfaceIdPreCommit)) {
-    CHECK(browser_compositor_) << "Shouldn't be called during destruction!";
-    browser_compositor_->DidNavigateMainFramePreCommit();
-  }
+  CHECK(browser_compositor_) << "Shouldn't be called during destruction!";
+  browser_compositor_->DidNavigateMainFramePreCommit();
+  gesture_provider_.ResetDetection();
 }
 
 void RenderWidgetHostViewMac::OnNewViewDidNavigatePostCommit() {
@@ -648,6 +691,11 @@ void RenderWidgetHostViewMac::DidEnterBackForwardCache() {
   //
   // Called after to prevent prematurely evict the BFCached surface.
   host()->ForceFirstFrameAfterNavigationTimeout();
+  mouse_wheel_phase_handler_.DidEnterBackForwardCache();
+}
+
+void RenderWidgetHostViewMac::ActivatedOrEvictedFromBackForwardCache() {
+  browser_compositor_->ActivatedOrEvictedFromBackForwardCache();
 }
 
 void RenderWidgetHostViewMac::SetIsLoading(bool is_loading) {
@@ -714,8 +762,7 @@ void RenderWidgetHostViewMac::OnImeCancelComposition(
 void RenderWidgetHostViewMac::OnImeCompositionRangeChanged(
     TextInputManager* text_input_manager,
     RenderWidgetHostViewBase* updated_view,
-    bool character_bounds_changed,
-    const std::optional<std::vector<gfx::Rect>>& line_bounds) {
+    bool character_bounds_changed) {
   const TextInputManager::CompositionRangeInfo* info =
       GetCompositionRangeInfo();
   if (!info)
@@ -754,7 +801,7 @@ void RenderWidgetHostViewMac::OnSelectionBoundsChanged(
   gfx_caret_rect += window_frame_in_screen_dip_.OffsetFromOrigin();
 
   // Note that UAZoomChangeFocus wants unflipped screen coordinates.
-  NSRect caret_rect = NSRectFromCGRect(gfx_caret_rect.ToCGRect());
+  NSRect caret_rect = gfx_caret_rect.ToCGRect();
   UAZoomChangeFocus(&caret_rect, &caret_rect, kUAZoomFocusTypeInsertionPoint);
 }
 
@@ -776,20 +823,21 @@ void RenderWidgetHostViewMac::OnGestureEvent(
   blink::WebGestureEvent web_gesture =
       ui::CreateWebGestureEventFromGestureEventData(gesture);
 
-  ui::LatencyInfo latency_info(ui::SourceEventType::TOUCH);
+  ui::LatencyInfo latency_info;
 
   if (ShouldRouteEvents()) {
     blink::WebGestureEvent gesture_event(web_gesture);
     host()->delegate()->GetInputEventRouter()->RouteGestureEvent(
         this, &gesture_event, latency_info);
   } else {
-    host()->ForwardGestureEventWithLatencyInfo(web_gesture, latency_info);
+    host()->GetRenderInputRouter()->ForwardGestureEventWithLatencyInfo(
+        web_gesture, latency_info);
   }
 }
 
 void RenderWidgetHostViewMac::OnRenderFrameMetadataChangedAfterActivation(
     base::TimeTicks activation_time) {
-  // TODO(crbug/1308932): Remove toSkColor and make all SkColor4f.
+  // TODO(crbug.com/40219248): Remove toSkColor and make all SkColor4f.
   last_frame_root_background_color_ = host()
                                           ->render_frame_metadata_provider()
                                           ->LastRenderFrameMetadata()
@@ -856,13 +904,13 @@ void RenderWidgetHostViewMac::UpdateScreenInfo() {
 
   // During auto-resize it is the responsibility of the caller to ensure that
   // the NSView and RenderWidgetHostImpl are kept in sync.
-  if (host()->auto_resize_enabled())
-    return;
-
-  if (host()->delegate())
-    host()->delegate()->SendScreenRects();
-  else
-    host()->SendScreenRects();
+  if (!host()->auto_resize_enabled()) {
+    if (host()->delegate()) {
+      host()->delegate()->SendScreenRects();
+    } else {
+      host()->SendScreenRects();
+    }
+  }
 
   // Update with the latest display list from the remote process if needed.
   bool current_display_changed = false;
@@ -877,29 +925,9 @@ void RenderWidgetHostViewMac::UpdateScreenInfo() {
     new_screen_infos_from_shim_.reset();
   }
 
-  if (base::FeatureList::IsEnabled(media::kWebContentsCaptureHiDpi)) {
-    // If HiDPI capture mode is active, adjust the device scale factor to
-    // increase the rendered pixel count. |new_screen_infos| always contains
-    // the unmodified original values for the display, and a copy of it is
-    // saved in |screen_infos_|, with a modification applied if applicable.
-    // When HiDPI mode is turned off (the scale override is 1.0), the original
-    // |new_screen_infos| value gets copied unchanged to |screen_infos_|.
-    display::ScreenInfos new_screen_infos = original_screen_infos_;
-    const float old_device_scale_factor =
-        new_screen_infos.current().device_scale_factor;
-    new_screen_infos.mutable_current().device_scale_factor =
-        old_device_scale_factor * scale_override_for_capture_;
-    if (screen_infos_ != new_screen_infos) {
-      DVLOG(1) << __func__ << ": Overriding device_scale_factor from "
-               << old_device_scale_factor << " to "
-               << new_screen_infos.current().device_scale_factor
-               << " for capture.";
-      any_display_changed = true;
-      current_display_changed |=
-          new_screen_infos.current() != screen_infos_.current();
-      screen_infos_ = new_screen_infos;
-    }
-  }
+  std::pair<bool, bool> was_updated = MaybeUpdateScreenInfosForHiDPI();
+  any_display_changed |= was_updated.first;
+  current_display_changed |= was_updated.second;
 
   bool dip_size_changed = view_bounds_in_window_dip_.size() !=
                           browser_compositor_->GetRendererSize();
@@ -909,7 +937,7 @@ void RenderWidgetHostViewMac::UpdateScreenInfo() {
         view_bounds_in_window_dip_.size());
   }
 
-  // TODO(crbug.com/1169312): Unify display info caching and change detection.
+  // TODO(crbug.com/40165361): Unify display info caching and change detection.
   // Notify the associated RenderWidgetHostImpl when screen info has changed.
   // That will synchronize visual properties needed for frame tree rendering
   // and for web platform APIs that expose screen and window info and events.
@@ -947,9 +975,11 @@ namespace {
 void AddTextNodesToVector(const ui::AXNode* node,
                           std::vector<std::u16string>* strings) {
   if (node->GetRole() == ax::mojom::Role::kStaticText) {
-    std::u16string value;
-    if (node->GetString16Attribute(ax::mojom::StringAttribute::kName, &value))
+    if (node->HasStringAttribute(ax::mojom::StringAttribute::kName)) {
+      std::u16string value =
+          node->GetString16Attribute(ax::mojom::StringAttribute::kName);
       strings->emplace_back(value);
+    }
     return;
   }
 
@@ -959,9 +989,9 @@ void AddTextNodesToVector(const ui::AXNode* node,
   }
 }
 
-using SpeechCallback = base::OnceCallback<void(const std::u16string&)>;
+using SpeechCallback = base::OnceCallback<void(std::u16string_view)>;
 void CombineTextNodesAndMakeCallback(SpeechCallback callback,
-                                     const ui::AXTreeUpdate& update) {
+                                     ui::AXTreeUpdate& update) {
   std::vector<std::u16string> text_node_contents;
   text_node_contents.reserve(update.nodes.size());
 
@@ -995,7 +1025,7 @@ void RenderWidgetHostViewMac::GetPageTextForSpeech(SpeechCallback callback) {
       base::BindOnce(CombineTextNodesAndMakeCallback, std::move(callback)),
       ui::AXMode::kWebContents,
       /* max_nodes= */ 5000,
-      /* timeout= */ {});
+      /* timeout= */ {}, WebContents::AXTreeSnapshotPolicy::kAll);
 }
 
 void RenderWidgetHostViewMac::SpeakSelection() {
@@ -1011,9 +1041,15 @@ void RenderWidgetHostViewMac::SpeakSelection() {
 }
 
 void RenderWidgetHostViewMac::SetWindowFrameInScreen(const gfx::Rect& rect) {
-  DCHECK(GetInProcessNSView() && ![GetInProcessNSView() window])
+  DCHECK(IsHeadless())
       << "This method should only be called in headless browser!";
   OnWindowFrameInScreenChanged(rect);
+
+  // Force screen info update because with no NSWindow in headless there is no
+  // notification to trigger it automatically. This ensures correct current
+  // screen association. Note the use of the generic variant of
+  // UpdateScreenInfo() that does not consider Cocoa provided screen info.
+  RenderWidgetHostViewBase::UpdateScreenInfo();
 }
 
 //
@@ -1032,7 +1068,8 @@ uint32_t RenderWidgetHostViewMac::GetCaptureSequenceNumber() const {
 void RenderWidgetHostViewMac::CopyFromSurface(
     const gfx::Rect& src_subrect,
     const gfx::Size& dst_size,
-    base::OnceCallback<void(const SkBitmap&)> callback) {
+    base::TimeDelta timeout,
+    base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback) {
   base::WeakPtr<RenderWidgetHostImpl> popup_host;
   base::WeakPtr<DelegatedFrameHost> popup_frame_host;
   if (popup_child_host_view_) {
@@ -1041,18 +1078,23 @@ void RenderWidgetHostViewMac::CopyFromSurface(
                            ->GetDelegatedFrameHost()
                            ->GetWeakPtr();
   }
-  // TODO(crbug.com/1169321): Resolve potential differences between display info
-  // caches in RenderWidgetHostViewMac and BrowserCompositorMac.
+  // TODO(crbug.com/40743791): Resolve potential differences between display
+  // info caches in RenderWidgetHostViewMac and BrowserCompositorMac.
   RenderWidgetHostViewBase::CopyMainAndPopupFromSurface(
       host()->GetWeakPtr(),
       browser_compositor_->GetDelegatedFrameHost()->GetWeakPtr(), popup_host,
-      popup_frame_host, src_subrect, dst_size, GetDeviceScaleFactor(),
+      popup_frame_host, src_subrect, dst_size, GetDeviceScaleFactor(), timeout,
       std::move(callback));
 }
 
 void RenderWidgetHostViewMac::EnsureSurfaceSynchronizedForWebTest() {
   ++latest_capture_sequence_number_;
   browser_compositor_->ForceNewSurfaceId();
+}
+
+ui::FilteredGestureProvider*
+RenderWidgetHostViewMac::GetFilteredGestureProviderForTesting() {
+  return &gesture_provider_;
 }
 
 void RenderWidgetHostViewMac::OnDidUpdateVisualPropertiesComplete(
@@ -1300,7 +1342,7 @@ void RenderWidgetHostViewMac::FocusedNodeChanged(
   // Don't do anything if it's an editable node, as this will be handled by
   // OnSelectionBoundsChanged instead.
   if (UAZoomEnabled() && !is_editable_node) {
-    NSRect bounds = NSRectFromCGRect(node_bounds_in_screen.ToCGRect());
+    NSRect bounds = node_bounds_in_screen.ToCGRect();
     UAZoomChangeFocus(&bounds, nullptr, kUAZoomFocusTypeOther);
   }
 }
@@ -1316,7 +1358,11 @@ void RenderWidgetHostViewMac::ResetFallbackToFirstNavigationSurface() {
       ->ResetFallbackToFirstNavigationSurface();
 }
 
-bool RenderWidgetHostViewMac::RequestRepaintForTesting() {
+void RenderWidgetHostViewMac::OnUnconfirmedTapConvertedToTap() {
+  gesture_provider_.OnUnconfirmedTapConvertedToTap();
+}
+
+bool RenderWidgetHostViewMac::RequestRepaintOnNewSurface() {
   return browser_compositor_->ForceNewSurfaceId();
 }
 
@@ -1334,10 +1380,6 @@ blink::mojom::PointerLockResult RenderWidgetHostViewMac::LockPointer(
     return blink::mojom::PointerLockResult::kSuccess;
   }
 
-  if (request_unadjusted_movement && !IsUnadjustedMouseMovementSupported()) {
-    return blink::mojom::PointerLockResult::kUnsupportedOptions;
-  }
-
   pointer_locked_ = true;
   pointer_lock_unadjusted_movement_ = request_unadjusted_movement;
 
@@ -1353,10 +1395,6 @@ blink::mojom::PointerLockResult RenderWidgetHostViewMac::LockPointer(
 
 blink::mojom::PointerLockResult RenderWidgetHostViewMac::ChangePointerLock(
     bool request_unadjusted_movement) {
-  if (request_unadjusted_movement && !IsUnadjustedMouseMovementSupported()) {
-    return blink::mojom::PointerLockResult::kUnsupportedOptions;
-  }
-
   pointer_lock_unadjusted_movement_ = request_unadjusted_movement;
   ns_view_->SetCursorLockedUnacceleratedMovement(request_unadjusted_movement);
   return blink::mojom::PointerLockResult::kSuccess;
@@ -1377,19 +1415,6 @@ void RenderWidgetHostViewMac::UnlockPointer() {
 
 bool RenderWidgetHostViewMac::GetIsPointerLockedUnadjustedMovementForTesting() {
   return pointer_locked_ && pointer_lock_unadjusted_movement_;
-}
-
-bool RenderWidgetHostViewMac::IsUnadjustedMouseMovementSupported() {
-  // kCGEventUnacceleratedPointerMovementX/Y were first added as CGEventField
-  // enum values in the 10.15.1 SDK.
-  //
-  // While they do seem to work at runtime back to 10.14, the safest approach is
-  // to limit their use to 10.15.1 and newer to avoid relying on private or
-  // undocumented APIs on earlier OSes.
-  if (@available(macOS 10.15.1, *)) {
-    return true;
-  }
-  return false;
 }
 
 bool RenderWidgetHostViewMac::CanBePointerLocked() {
@@ -1432,6 +1457,7 @@ RenderWidgetHostViewMac::GetKeyboardLayoutMap() {
 
 void RenderWidgetHostViewMac::GestureEventAck(
     const WebGestureEvent& event,
+    blink::mojom::InputEventResultSource ack_source,
     blink::mojom::InputEventResultState ack_result) {
   ForwardTouchpadZoomEventIfNecessary(event, ack_result);
 
@@ -1458,13 +1484,13 @@ void RenderWidgetHostViewMac::GestureEventAck(
 }
 
 void RenderWidgetHostViewMac::ProcessAckedTouchEvent(
-    const TouchEventWithLatencyInfo& touch,
+    const input::TouchEventWithLatencyInfo& touch,
     blink::mojom::InputEventResultState ack_result) {
   const bool event_consumed =
       ack_result == blink::mojom::InputEventResultState::kConsumed;
   gesture_provider_.OnTouchEventAck(
       touch.event.unique_touch_event_id, event_consumed,
-      InputEventResultStateIsSetBlocking(ack_result));
+      input::InputEventResultStateIsSetBlocking(ack_result));
   if (touch.event.touch_start_or_first_touch_move && event_consumed &&
       host()->delegate() && host()->delegate()->GetInputEventRouter()) {
     host()
@@ -1480,7 +1506,7 @@ void RenderWidgetHostViewMac::DidOverscroll(
   ns_view_->DidOverscroll(blink::mojom::DidOverscrollParams::New(
       params.accumulated_overscroll, params.latest_overscroll_delta,
       params.current_fling_velocity, params.causal_event_viewport_point,
-      params.overscroll_behavior));
+      params.overscroll_behavior, params.source_device));
 }
 
 std::unique_ptr<SyntheticGestureTarget>
@@ -1524,7 +1550,7 @@ void RenderWidgetHostViewMac::SendTouchpadZoomEvent(
   DCHECK(event->IsTouchpadZoomEvent());
   if (ShouldRouteEvents()) {
     host()->delegate()->GetInputEventRouter()->RouteGestureEvent(
-        this, event, ui::LatencyInfo(ui::SourceEventType::TOUCHPAD));
+        this, event, ui::LatencyInfo());
     return;
   }
   host()->ForwardGestureEvent(*event);
@@ -1543,7 +1569,8 @@ void RenderWidgetHostViewMac::InjectTouchEvent(
     host()->delegate()->GetInputEventRouter()->RouteTouchEvent(
         this, &touch_event, latency_info);
   } else {
-    host()->ForwardTouchEventWithLatencyInfo(event, latency_info);
+    host()->GetRenderInputRouter()->ForwardTouchEventWithLatencyInfo(
+        event, latency_info);
   }
 }
 
@@ -1553,15 +1580,15 @@ bool RenderWidgetHostViewMac::HasFallbackSurface() const {
 
 bool RenderWidgetHostViewMac::TransformPointToCoordSpaceForView(
     const gfx::PointF& point,
-    RenderWidgetHostViewBase* target_view,
+    RenderWidgetHostViewInput* target_view,
     gfx::PointF* transformed_point) {
   if (target_view == this) {
     *transformed_point = point;
     return true;
   }
 
-  return target_view->TransformPointToLocalCoordSpace(
-      point, GetCurrentSurfaceId(), transformed_point);
+  return target_view->TransformPointToLocalCoordSpace(point, GetFrameSinkId(),
+                                                      transformed_point);
 }
 
 viz::FrameSinkId RenderWidgetHostViewMac::GetRootFrameSinkId() {
@@ -1623,6 +1650,11 @@ std::optional<SkColor> RenderWidgetHostViewMac::GetBackgroundColor() {
   return (color && *color == SK_ColorTRANSPARENT) ? SK_ColorWHITE : color;
 }
 
+viz::SurfaceId RenderWidgetHostViewMac::GetFallbackSurfaceIdForTesting() const {
+  return browser_compositor_->GetDelegatedFrameHost()
+      ->GetFallbackSurfaceIdForTesting();  // IN-TEST
+}
+
 void RenderWidgetHostViewMac::SetBackgroundLayerColor(SkColor color) {
   if (color == background_layer_color_)
     return;
@@ -1634,24 +1666,32 @@ std::optional<DisplayFeature> RenderWidgetHostViewMac::GetDisplayFeature() {
   return display_feature_;
 }
 
-void RenderWidgetHostViewMac::SetDisplayFeatureForTesting(
+void RenderWidgetHostViewMac::DisableDisplayFeatureOverrideForEmulation() {
+  display_feature_ = std::nullopt;
+  host()->SynchronizeVisualProperties();
+}
+
+void RenderWidgetHostViewMac::OverrideDisplayFeatureForEmulation(
     const DisplayFeature* display_feature) {
   if (display_feature)
     display_feature_ = *display_feature;
   else
     display_feature_ = std::nullopt;
+  host()->SynchronizeVisualProperties();
 }
 
 gfx::NativeViewAccessible
 RenderWidgetHostViewMac::AccessibilityGetNativeViewAccessible() {
-  return GetInProcessNSView();
+  return gfx::NativeViewAccessible(GetInProcessNSView());
 }
 
 gfx::NativeViewAccessible
 RenderWidgetHostViewMac::AccessibilityGetNativeViewAccessibleForWindow() {
-  if (remote_window_accessible_)
-    return remote_window_accessible_;
-  return [GetInProcessNSView() window];
+  if (remote_window_accessible_) {
+    return gfx::NativeViewAccessible(
+        (id<NSAccessibility>)remote_window_accessible_);
+  }
+  return gfx::NativeViewAccessible([GetInProcessNSView() window]);
 }
 
 void RenderWidgetHostViewMac::SetTextInputActive(bool active) {
@@ -1673,7 +1713,7 @@ MouseWheelPhaseHandler* RenderWidgetHostViewMac::GetMouseWheelPhaseHandler() {
 void RenderWidgetHostViewMac::ShowSharePicker(
     const std::string& title,
     const std::string& text,
-    const std::string& url,
+    const GURL& url,
     const std::vector<std::string>& file_paths,
     blink::mojom::ShareService::ShareCallback callback) {
   ns_view_->ShowSharingServicePicker(title, text, url, file_paths,
@@ -1684,9 +1724,16 @@ void RenderWidgetHostViewMac::ShowSharePicker(
 // RenderWidgetHostNSViewHostHelper and mojom::RenderWidgetHostNSViewHost
 // implementation:
 
+id RenderWidgetHostViewMac::GetAccessibilityElement() {
+  return nil;
+}
+
 id RenderWidgetHostViewMac::GetRootBrowserAccessibilityElement() {
-  if (auto* manager = host()->GetRootBrowserAccessibilityManager())
-    return manager->GetBrowserAccessibilityRoot()->GetNativeViewAccessible();
+  if (auto* manager = host()->GetRootBrowserAccessibilityManager()) {
+    return manager->GetBrowserAccessibilityRoot()
+        ->GetNativeViewAccessible()
+        .Get();
+  }
   return nil;
 }
 
@@ -1727,12 +1774,34 @@ void RenderWidgetHostViewMac::OnFirstResponderChanged(bool is_first_responder) {
   is_first_responder_ = is_first_responder;
   accessibility_focus_overrider_.SetViewIsFirstResponder(is_first_responder_);
 
+  // Propagate focus changes to RenderWidgetHost only under the following
+  // conditions:
+  //
+  // - Headless mode:
+  //   IsHeadless() implies there is no NSWindow, so force focus change
+  //   propagation.
+  //
+  // - Gaining focus:
+  //   - When Focus() is being explicitly requested (is_getting_focus is true),
+  //   or
+  //   - When the window is key.
+  //   This avoids a race where claiming focus while the window is non-key could
+  //   be treated as invalid, resulting in a subsequent resignFirstResponder
+  //   overwriting the valid focus set by OnWindowIsKeyChanged.
+  //
+  // - Losing focus:
+  //   - Only when the host is currently focused.
+  //   This prevents duplicate LostFocus notifications.
   if (is_first_responder_) {
-    host()->GotFocus();
-    SetTextInputActive(true);
+    if (IsHeadless() || is_getting_focus_ || is_window_key_) {
+      host()->GotFocus();
+      SetTextInputActive(true);
+    }
   } else {
-    SetTextInputActive(false);
-    host()->LostFocus();
+    if (IsHeadless() || host()->is_focused()) {
+      SetTextInputActive(false);
+      host()->LostFocus();
+    }
   }
 }
 
@@ -1796,7 +1865,8 @@ void RenderWidgetHostViewMac::BeginKeyboardEvent() {
         widget_host->delegate()->GetFocusedRenderWidgetHost(widget_host);
   }
   if (widget_host) {
-    keyboard_event_widget_process_id_ = widget_host->GetProcess()->GetID();
+    keyboard_event_widget_process_id_ =
+        widget_host->GetProcess()->GetDeprecatedID();
     keyboard_event_widget_routing_id_ = widget_host->GetRoutingID();
   }
 }
@@ -1808,7 +1878,7 @@ void RenderWidgetHostViewMac::EndKeyboardEvent() {
 }
 
 void RenderWidgetHostViewMac::ForwardKeyboardEvent(
-    const NativeWebKeyboardEvent& key_event,
+    const input::NativeWebKeyboardEvent& key_event,
     const ui::LatencyInfo& latency_info) {
   if (auto* widget_host = GetWidgetForKeyboardEvent()) {
     widget_host->ForwardKeyboardEventWithLatencyInfo(key_event, latency_info);
@@ -1816,7 +1886,7 @@ void RenderWidgetHostViewMac::ForwardKeyboardEvent(
 }
 
 void RenderWidgetHostViewMac::ForwardKeyboardEventWithCommands(
-    const NativeWebKeyboardEvent& key_event,
+    const input::NativeWebKeyboardEvent& key_event,
     const ui::LatencyInfo& latency_info,
     std::vector<blink::mojom::EditCommandPtr> commands) {
   if (auto* widget_host = GetWidgetForKeyboardEvent()) {
@@ -1828,7 +1898,7 @@ void RenderWidgetHostViewMac::ForwardKeyboardEventWithCommands(
 void RenderWidgetHostViewMac::RouteOrProcessMouseEvent(
     const blink::WebMouseEvent& const_web_event) {
   blink::WebMouseEvent web_event = const_web_event;
-  ui::LatencyInfo latency_info(ui::SourceEventType::OTHER);
+  ui::LatencyInfo latency_info;
   latency_info.AddLatencyNumber(ui::INPUT_EVENT_LATENCY_UI_COMPONENT);
   if (ShouldRouteEvents()) {
     host()->delegate()->GetInputEventRouter()->RouteMouseEvent(this, &web_event,
@@ -1846,7 +1916,7 @@ void RenderWidgetHostViewMac::RouteOrProcessTouchEvent(
   if (!result.succeeded)
     return;
 
-  ui::LatencyInfo latency_info(ui::SourceEventType::OTHER);
+  ui::LatencyInfo latency_info;
   latency_info.AddLatencyNumber(ui::INPUT_EVENT_LATENCY_UI_COMPONENT);
   if (ShouldRouteEvents()) {
     host()->delegate()->GetInputEventRouter()->RouteTouchEvent(this, &web_event,
@@ -1859,10 +1929,10 @@ void RenderWidgetHostViewMac::RouteOrProcessTouchEvent(
 void RenderWidgetHostViewMac::RouteOrProcessWheelEvent(
     const blink::WebMouseWheelEvent& const_web_event) {
   blink::WebMouseWheelEvent web_event = const_web_event;
-  ui::LatencyInfo latency_info(ui::SourceEventType::WHEEL);
+  ui::LatencyInfo latency_info;
   latency_info.AddLatencyNumber(ui::INPUT_EVENT_LATENCY_UI_COMPONENT);
   mouse_wheel_phase_handler_.AddPhaseIfNeededAndScheduleEndEvent(
-      web_event, ShouldRouteEvents());
+      web_event, ShouldRouteEvents(), /*is_fling_capable=*/true);
   if (web_event.phase == blink::WebMouseWheelEvent::kPhaseEnded) {
     // A wheel end event is scheduled and will get dispatched if momentum
     // phase doesn't start in 100ms. Don't sent the wheel end event
@@ -1889,67 +1959,43 @@ void RenderWidgetHostViewMac::ForwardMouseEvent(
 void RenderWidgetHostViewMac::ForwardWheelEvent(
     const blink::WebMouseWheelEvent& const_web_event) {
   blink::WebMouseWheelEvent web_event = const_web_event;
-  mouse_wheel_phase_handler_.AddPhaseIfNeededAndScheduleEndEvent(web_event,
-                                                                 false);
+  mouse_wheel_phase_handler_.AddPhaseIfNeededAndScheduleEndEvent(
+      web_event,
+      /*should_route_event=*/false,
+      /*is_fling_capable=*/true);
 }
 
-void RenderWidgetHostViewMac::GestureBegin(blink::WebGestureEvent begin_event,
-                                           bool is_synthetically_injected) {
-  gesture_begin_event_ = std::make_unique<WebGestureEvent>(begin_event);
+void RenderWidgetHostViewMac::PinchEvent(blink::WebGestureEvent event,
+                                         bool is_synthetically_injected) {
+  switch (event.GetType()) {
+    case WebInputEvent::Type::kGesturePinchBegin:
+      // Require a threshold be reached before the pinch has an effect.
+      // Synthetic pinches are not subject to this threshold.
+      pinch_has_reached_zoom_threshold_ = is_synthetically_injected;
+      pinch_unused_amount_ = 1;
+      break;
+    case WebInputEvent::Type::kGesturePinchUpdate:
+      if (!pinch_has_reached_zoom_threshold_) {
+        pinch_unused_amount_ *= event.data.pinch_update.scale;
+        if (pinch_unused_amount_ < 0.667 || pinch_unused_amount_ > 1.5) {
+          pinch_has_reached_zoom_threshold_ = true;
+        }
+      }
 
-  // If the page is at the minimum zoom level, require a threshold be reached
-  // before the pinch has an effect. Synthetic pinches are not subject to this
-  // threshold.
-  // TODO(crbug.com/1038683): |page_at_minimum_scale_| is always true, should it
-  // be removed or correctly set based on RenderFrameMetadata?
-  if (page_at_minimum_scale_) {
-    pinch_has_reached_zoom_threshold_ = is_synthetically_injected;
-    pinch_unused_amount_ = 1;
+      event.data.pinch_update.zoom_disabled =
+          !pinch_has_reached_zoom_threshold_;
+      break;
+    case WebInputEvent::Type::kGesturePinchEnd:
+      // Expected; no special handling required, just send the event.
+      break;
+    default:
+      NOTREACHED();
   }
+
+  SendTouchpadZoomEvent(&event);
 }
 
-void RenderWidgetHostViewMac::GestureUpdate(
-    blink::WebGestureEvent update_event) {
-  // If, due to nesting of multiple gestures (e.g, from multiple touch
-  // devices), the beginning of the gesture has been lost, skip the remainder
-  // of the gesture.
-  if (!gesture_begin_event_)
-    return;
-
-  if (!pinch_has_reached_zoom_threshold_) {
-    pinch_unused_amount_ *= update_event.data.pinch_update.scale;
-    if (pinch_unused_amount_ < 0.667 || pinch_unused_amount_ > 1.5)
-      pinch_has_reached_zoom_threshold_ = true;
-  }
-
-  // Send a GesturePinchBegin event if none has been sent yet.
-  if (!gesture_begin_pinch_sent_) {
-    // Before starting a pinch sequence, send the pending wheel end event to
-    // finish scrolling.
-    mouse_wheel_phase_handler_.DispatchPendingWheelEndEvent();
-    WebGestureEvent begin_event(*gesture_begin_event_);
-    begin_event.SetType(WebInputEvent::Type::kGesturePinchBegin);
-    begin_event.SetSourceDevice(blink::WebGestureDevice::kTouchpad);
-    begin_event.SetNeedsWheelEvent(true);
-    SendTouchpadZoomEvent(&begin_event);
-    gesture_begin_pinch_sent_ = YES;
-  }
-
-  // Send a GesturePinchUpdate event.
-  update_event.data.pinch_update.zoom_disabled =
-      !pinch_has_reached_zoom_threshold_;
-  SendTouchpadZoomEvent(&update_event);
-}
-
-void RenderWidgetHostViewMac::GestureEnd(blink::WebGestureEvent end_event) {
-  gesture_begin_event_.reset();
-  if (gesture_begin_pinch_sent_) {
-    SendTouchpadZoomEvent(&end_event);
-    gesture_begin_pinch_sent_ = false;
-  }
-}
-
-void RenderWidgetHostViewMac::SmartMagnify(
+void RenderWidgetHostViewMac::SmartMagnifyEvent(
     const blink::WebGestureEvent& smart_magnify_event) {
   SendTouchpadZoomEvent(&smart_magnify_event);
 }
@@ -1999,7 +2045,8 @@ void RenderWidgetHostViewMac::LookUpDictionaryOverlayFromRange(
   if (!widget_host)
     return;
 
-  int32_t target_widget_process_id = widget_host->GetProcess()->GetID();
+  int32_t target_widget_process_id =
+      widget_host->GetProcess()->GetDeprecatedID();
   int32_t target_widget_routing_id = widget_host->GetRoutingID();
   TextInputClientMac::GetInstance()->GetStringFromRange(
       widget_host, range,
@@ -2020,9 +2067,17 @@ void RenderWidgetHostViewMac::LookUpDictionaryOverlayAtPoint(
   root_point.Scale(GetDeviceScaleFactor());
 
   gfx::PointF transformed_point;
-  RenderWidgetHostImpl* widget_host =
-      host()->delegate()->GetInputEventRouter()->GetRenderWidgetHostAtPoint(
-          this, root_point, &transformed_point);
+  auto* view = host()
+                   ->delegate()
+                   ->GetInputEventRouter()
+                   ->GetRenderWidgetHostViewInputAtPoint(this, root_point,
+                                                         &transformed_point);
+  if (!view) {
+    return;
+  }
+
+  RenderWidgetHostImpl* widget_host = RenderWidgetHostImpl::From(
+      static_cast<RenderWidgetHostViewBase*>(view)->GetRenderWidgetHost());
   if (!widget_host)
     return;
 
@@ -2030,7 +2085,8 @@ void RenderWidgetHostViewMac::LookUpDictionaryOverlayAtPoint(
   if (popup_parent_host_view_)
     return;
 
-  int32_t target_widget_process_id = widget_host->GetProcess()->GetID();
+  int32_t target_widget_process_id =
+      widget_host->GetProcess()->GetDeprecatedID();
   int32_t target_widget_routing_id = widget_host->GetRoutingID();
   TextInputClientMac::GetInstance()->GetStringAtPoint(
       widget_host, gfx::ToFlooredPoint(transformed_point),
@@ -2049,9 +2105,17 @@ bool RenderWidgetHostViewMac::SyncGetCharacterIndexAtPoint(
     return true;
 
   gfx::PointF transformed_point;
-  RenderWidgetHostImpl* widget_host =
-      host()->delegate()->GetInputEventRouter()->GetRenderWidgetHostAtPoint(
-          this, root_point, &transformed_point);
+  auto* view = host()
+                   ->delegate()
+                   ->GetInputEventRouter()
+                   ->GetRenderWidgetHostViewInputAtPoint(this, root_point,
+                                                         &transformed_point);
+  if (!view) {
+    return true;
+  }
+
+  RenderWidgetHostImpl* widget_host = RenderWidgetHostImpl::From(
+      static_cast<RenderWidgetHostViewBase*>(view)->GetRenderWidgetHost());
   if (!widget_host)
     return true;
 
@@ -2202,6 +2266,15 @@ void RenderWidgetHostViewMac::StopSpeaking() {
   ui::TextServicesContextMenu::StopSpeaking();
 }
 
+void RenderWidgetHostViewMac::GetRenderWidgetAccessibilityToken(
+    GetRenderWidgetAccessibilityTokenCallback callback) {
+  base::ProcessId pid = getpid();
+  id element_id = GetNativeViewAccessible().Get();
+  std::vector<uint8_t> token =
+      ui::RemoteAccessibility::GetTokenForLocalElement(element_id);
+  std::move(callback).Run(pid, token);
+}
+
 void RenderWidgetHostViewMac::SetRemoteAccessibilityWindowToken(
     const std::vector<uint8_t>& window_token) {
   if (window_token.empty()) {
@@ -2228,7 +2301,7 @@ void RenderWidgetHostViewMac::ForwardKeyboardEventWithCommands(
   }
   const blink::WebKeyboardEvent& keyboard_event =
       static_cast<const blink::WebKeyboardEvent&>(input_event->Event());
-  NativeWebKeyboardEvent native_event(keyboard_event, nil);
+  input::NativeWebKeyboardEvent native_event(keyboard_event, gfx::NativeView());
   native_event.skip_if_unhandled = skip_if_unhandled;
   // The NSEvent constructed from the InputEvent sent over mojo is not even
   // close to the original NSEvent, resulting in all sorts of bugs. Use the
@@ -2300,7 +2373,7 @@ void RenderWidgetHostViewMac::ForwardWheelEvent(
   ForwardWheelEvent(wheel_event);
 }
 
-void RenderWidgetHostViewMac::GestureBegin(
+void RenderWidgetHostViewMac::PinchEvent(
     std::unique_ptr<blink::WebCoalescedInputEvent> input_event,
     bool is_synthetically_injected) {
   if (!input_event || !blink::WebInputEvent::IsGestureEventType(
@@ -2310,12 +2383,10 @@ void RenderWidgetHostViewMac::GestureBegin(
   }
   blink::WebGestureEvent gesture_event =
       static_cast<const blink::WebGestureEvent&>(input_event->Event());
-  // Strip the gesture type, because it is not known.
-  gesture_event.SetType(blink::WebInputEvent::Type::kUndefined);
-  GestureBegin(gesture_event, is_synthetically_injected);
+  PinchEvent(gesture_event, is_synthetically_injected);
 }
 
-void RenderWidgetHostViewMac::GestureUpdate(
+void RenderWidgetHostViewMac::SmartMagnifyEvent(
     std::unique_ptr<blink::WebCoalescedInputEvent> input_event) {
   if (!input_event || !blink::WebInputEvent::IsGestureEventType(
                           input_event->Event().GetType())) {
@@ -2324,31 +2395,7 @@ void RenderWidgetHostViewMac::GestureUpdate(
   }
   const blink::WebGestureEvent& gesture_event =
       static_cast<const blink::WebGestureEvent&>(input_event->Event());
-  GestureUpdate(gesture_event);
-}
-
-void RenderWidgetHostViewMac::GestureEnd(
-    std::unique_ptr<blink::WebCoalescedInputEvent> input_event) {
-  if (!input_event || !blink::WebInputEvent::IsGestureEventType(
-                          input_event->Event().GetType())) {
-    DLOG(ERROR) << "Absent or non-GestureEventType event.";
-    return;
-  }
-  blink::WebGestureEvent gesture_event =
-      static_cast<const blink::WebGestureEvent&>(input_event->Event());
-  GestureEnd(gesture_event);
-}
-
-void RenderWidgetHostViewMac::SmartMagnify(
-    std::unique_ptr<blink::WebCoalescedInputEvent> input_event) {
-  if (!input_event || !blink::WebInputEvent::IsGestureEventType(
-                          input_event->Event().GetType())) {
-    DLOG(ERROR) << "Absent or non-GestureEventType event.";
-    return;
-  }
-  const blink::WebGestureEvent& gesture_event =
-      static_cast<const blink::WebGestureEvent&>(input_event->Event());
-  SmartMagnify(gesture_event);
+  SmartMagnifyEvent(gesture_event);
 }
 
 void RenderWidgetHostViewMac::OnGotStringForDictionaryOverlay(
@@ -2407,6 +2454,36 @@ void RenderWidgetHostViewMac::SetTooltipText(
 
 void RenderWidgetHostViewMac::UpdateWindowsNow() {
   [NSApp updateWindows];
+}
+
+std::pair<bool, bool>
+RenderWidgetHostViewMac::MaybeUpdateScreenInfosForHiDPI() {
+  // For HiDPI capture mode, adjust the device scale factor to
+  // increase the rendered pixel count. |new_screen_infos| always contains
+  // the unmodified original values for the display, and a copy of it is
+  // saved in |screen_infos_|, with a modification applied if applicable.
+  // When HiDPI mode is turned off (the scale override is 1.0), the original
+  // |new_screen_infos| value gets copied unchanged to |screen_infos_|.
+  display::ScreenInfos new_screen_infos = original_screen_infos_;
+  const float old_device_scale_factor =
+      new_screen_infos.current().device_scale_factor;
+  new_screen_infos.mutable_current().device_scale_factor =
+      old_device_scale_factor * scale_override_for_capture_;
+  if (screen_infos_ != new_screen_infos) {
+    DVLOG(1) << __func__ << ": Overriding device_scale_factor from "
+             << old_device_scale_factor << " to "
+             << new_screen_infos.current().device_scale_factor
+             << " for capture.";
+    const bool current_display_changed =
+        new_screen_infos.current() != screen_infos_.current();
+    screen_infos_ = new_screen_infos;
+    return {true, current_display_changed};
+  }
+  return {false, false};
+}
+
+bool RenderWidgetHostViewMac::IsHeadless() const {
+  return GetInProcessNSView() && ![GetInProcessNSView() window];
 }
 
 Class GetRenderWidgetHostViewCocoaClassForTesting() {

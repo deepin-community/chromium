@@ -2,30 +2,42 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/password_manager/android/password_manager_util_bridge.h"
+
 #include <jni.h>
-#include "chrome/browser/password_manager/android/jni_headers/PasswordManagerUtilBridge_jni.h"
+
+#include "base/android/jni_android.h"
+#include "base/android/jni_string.h"
+#include "base/files/file_path.h"
 #include "chrome/browser/password_manager/android/password_manager_android_util.h"
-#include "components/password_manager/core/browser/password_store/split_stores_and_local_upm.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/prefs/android/pref_service_android.h"
+#include "components/prefs/pref_service.h"
+#include "components/sync/android/sync_service_android_bridge.h"
 
-using password_manager::UsesSplitStoresAndUPMForLocal;
-using password_manager_android_util::CanUseUPMBackend;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/password_manager/android/jni_headers/PasswordManagerUtilBridge_jni.h"
 
-jboolean JNI_PasswordManagerUtilBridge_UsesSplitStoresAndUPMForLocal(
+static bool JNI_PasswordManagerUtilBridge_IsPasswordManagerAvailable(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& j_pref_service) {
-  PrefService* pref_service =
-      PrefServiceAndroid::FromPrefServiceAndroid(j_pref_service);
-  return UsesSplitStoresAndUPMForLocal(pref_service);
+    bool is_internal_backend_present) {
+  return password_manager_android_util::IsPasswordManagerAvailable(
+      is_internal_backend_present);
 }
 
-// Called via JNI when it's necessary to check that the user is either syncing
-// and enrolled in UPM or not syncing and ready to use local UPM.
-jboolean JNI_PasswordManagerUtilBridge_CanUseUPMBackend(
-    JNIEnv* env,
-    jboolean is_pwd_sync_enabled,
-    const base::android::JavaParamRef<jobject>& j_pref_service) {
-  PrefService* pref_service =
-      PrefServiceAndroid::FromPrefServiceAndroid(j_pref_service);
-  return CanUseUPMBackend(is_pwd_sync_enabled, pref_service);
+namespace password_manager_android_util {
+
+bool PasswordManagerUtilBridge::IsInternalBackendPresent() {
+  return Java_PasswordManagerUtilBridge_isInternalBackendPresent(
+      base::android::AttachCurrentThread());
 }
+
+bool PasswordManagerUtilBridge::IsGooglePlayServicesUpdatable() {
+  return Java_PasswordManagerUtilBridge_isGooglePlayServicesUpdatable(
+      base::android::AttachCurrentThread());
+}
+
+}  // namespace password_manager_android_util
+
+DEFINE_JNI(PasswordManagerUtilBridge)

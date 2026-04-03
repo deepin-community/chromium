@@ -16,51 +16,34 @@ limitations under the License.
 #include "xla/service/gpu/hlo_fusion_analysis.h"
 
 #include <algorithm>
-#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include "absl/algorithm/container.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
-#include "absl/status/status.h"
+#include "absl/log/log.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "xla/hlo/ir/hlo_casting_utils.h"
+#include "absl/types/span.h"
+#include "llvm/ADT/STLExtras.h"
+#include "xla/codegen/hlo_fusion_spec.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/utils/hlo_traversal.h"
 #include "xla/primitive_util.h"
 #include "xla/service/gpu/backend_configs.pb.h"
-#include "xla/service/gpu/hlo_traversal.h"
 #include "xla/service/gpu/ir_emission_utils.h"
-#include "xla/service/gpu/launch_dimensions.h"
 #include "xla/service/gpu/reduction_utils.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
 #include "xla/stream_executor/device_description.h"
 
 namespace xla {
 namespace gpu {
 namespace {
-
-// Returns true if the fusion output contains non-strided slices only.
-bool IsInputFusibleNonStridedSlices(
-    const std::vector<const HloInstruction*>& fusion_roots) {
-  return absl::c_all_of(fusion_roots, IsSliceWithUnitStrides);
-}
-
-// Returns true if all slice inputs in a tuple are equal (ignoring type).
-bool AllSliceInputsAreCompatible(
-    const std::vector<const HloInstruction*>& fusion_roots) {
-  const Shape& first_slice_operand_shape = fusion_roots[0]->operand(0)->shape();
-  return absl::c_all_of(fusion_roots, [&](const HloInstruction* slice) {
-    return ShapeUtil::EqualIgnoringElementType(slice->operand(0)->shape(),
-                                               first_slice_operand_shape);
-  });
-}
 
 // Returns a description of a transpose hero, that is compatible with all roots.
 //
@@ -68,13 +51,13 @@ bool AllSliceInputsAreCompatible(
 //   * Either the root has a traspose hero with the same normalized dimensions
 //   * Or the root output shape is equal to the the transpose input shape
 std::optional<TransposeDescription> FindConsistentTransposeHero(
-    const std::vector<const HloInstruction*>& hlo_roots,
-    const std::vector<const HloInstruction*>& heroes) {
+    const absl::InlinedVector<HloInstructionAdaptor, 2>& hlo_roots,
+    const absl::InlinedVector<HloInstructionAdaptor, 2>& heroes) {
   std::optional<TransposeDescription> tiled_transpose_hero;
   std::vector<const HloInstruction*> non_transpose_roots;
 
   for (auto [root, hero] : llvm::zip(hlo_roots, heroes)) {
-    if (auto tr = GetDescriptionForTiledTransposeEmitter(*root, *hero)) {
+    if (auto tr = GetDescriptionForTiledTransposeEmitter(hero.instruction())) {
       if (!tiled_transpose_hero) {
         // First transpose hero found.
         tiled_transpose_hero = tr;
@@ -83,11 +66,13 @@ std::optional<TransposeDescription> FindConsistentTransposeHero(
         return std::nullopt;
       }
     } else {
-      non_transpose_roots.push_back(root);
+      non_transpose_roots.push_back(&root.instruction());
     }
   }
 
-  if (!tiled_transpose_hero) return std::nullopt;
+  if (!tiled_transpose_hero) {
+    return std::nullopt;
+  }
 
   for (auto* root : non_transpose_roots) {
     // Roots that don't have a transpose hero, should have a shape compatible
@@ -102,30 +87,152 @@ std::optional<TransposeDescription> FindConsistentTransposeHero(
   return tiled_transpose_hero;
 }
 
-int SmallestInputDtypeBits(const std::vector<const HloInstruction*>& args) {
+bool UseConcatenateFusion(absl::Span<const HloInstructionAdaptor> roots,
+                          absl::Span<const HloInstructionAdaptor> heroes) {
+  if (heroes.size() != 1) {
+    return false;
+  }
+  if (heroes.front().opcode() != HloOpcode::kConcatenate) {
+    return false;
+  }
+  // The concat emitter does not support multiple outputs yet. TODO(csigg): fix.
+  if (roots.front().shape().IsTuple()) {
+    return false;
+  }
+  // Limit the number of operands because the concat emitter produces code for
+  // each operand, hurting occupancy.
+  if (heroes.front().instruction().operand_count() > 4) {
+    return false;
+  }
+  // The loop emitter is faster when warp divergence and occupancy are both low.
+  // TODO(csigg): exclude this case.
+  return true;
+}
+
+HloFusionAnalysis::EmitterFusionKind GetEmitterFusionKind(
+    const FusionBackendConfig& fusion_backend_config,
+    absl::Span<const HloInstructionAdaptor> fusion_roots,
+    absl::Span<const HloInstructionAdaptor> fusion_heroes,
+    const std::optional<TransposeDescription>& tiled_transpose,
+    const se::DeviceDescription& device_info) {
+  if (fusion_backend_config.kind() == kCustomFusionKind) {
+    return HloFusionAnalysis::EmitterFusionKind::kCustomFusion;
+  }
+
+  if (fusion_backend_config.kind() == kTritonFusionKind ||
+      fusion_backend_config.kind() == kTritonGemmFusionKind ||
+      fusion_backend_config.kind() == kTritonNestedGemmFusionKind ||
+      fusion_backend_config.kind() == kTritonCollectiveFusionKind) {
+    return HloFusionAnalysis::EmitterFusionKind::kTriton;
+  }
+
+  if (fusion_backend_config.kind() == kDynamicMemcpyFusionKind) {
+    return HloFusionAnalysis::EmitterFusionKind::kDynamicMemcpy;
+  }
+
+  if (fusion_backend_config.kind() == kCuDnnFusionKind) {
+    return HloFusionAnalysis::EmitterFusionKind::kCuDnn;
+  }
+
+  std::optional<HloInstructionAdaptor> first_reduce_hero;
+  for (auto [root, hero] : llvm::zip(fusion_roots, fusion_heroes)) {
+    if (IsRealReductionHero(root.instruction(), hero.instruction(),
+                            device_info)) {
+      first_reduce_hero = hero;
+      break;
+    }
+  }
+  if (first_reduce_hero.has_value()) {
+    bool valid_shapes = true;
+    Shape hero_operand_shape = first_reduce_hero->GetOperand(0).shape();
+    for (auto [root, hero] : llvm::zip(fusion_roots, fusion_heroes)) {
+      if (root == *first_reduce_hero) {
+        continue;
+      }
+      if (!IsRealReductionHero(root.instruction(), hero.instruction(),
+                               device_info)) {
+        // Needs to have a compatible shape to the reduce operand (compatible
+        // meaning same number of elements).
+        if (ShapeUtil::ElementsIn(root.shape()) !=
+            ShapeUtil::ElementsIn(hero_operand_shape)) {
+          valid_shapes = false;
+          break;
+        }
+      } else if (!AreReductionsMultiOutputFusionCompatible(
+                     &hero.instruction(), &first_reduce_hero->instruction())) {
+        valid_shapes = false;
+        break;
+      }
+    }
+    if (valid_shapes) {
+      return HloFusionAnalysis::EmitterFusionKind::kReduction;
+    }
+  }
+
+  // We expect that the last dimension is swapped with a different dimension.
+  if (tiled_transpose.has_value()) {
+    return HloFusionAnalysis::EmitterFusionKind::kTranspose;
+  }
+
+  if (fusion_roots.size() > 1) {
+    return HloFusionAnalysis::EmitterFusionKind::kLoop;
+  }
+
+  if (fusion_roots[0].opcode() == HloOpcode::kScatter) {
+    return HloFusionAnalysis::EmitterFusionKind::kScatter;
+  }
+
+  if (fusion_roots[0].opcode() == HloOpcode::kSort) {
+    return HloFusionAnalysis::EmitterFusionKind::kSort;
+  }
+
+  if (UseConcatenateFusion(fusion_roots, fusion_heroes)) {
+    return HloFusionAnalysis::EmitterFusionKind::kConcatenate;
+  }
+
+  return HloFusionAnalysis::EmitterFusionKind::kLoop;
+}
+
+const Shape& GetShape(const HloInstructionAdaptor& adaptor) {
+  return adaptor.shape();
+}
+
+const Shape& GetShape(const HloInstruction* instruction) {
+  return instruction->shape();
+}
+
+template <typename Container>
+int SmallestBitWidth(const Container& args) {
   int bits = std::numeric_limits<int>::max();
-  for (const HloInstruction* operand : args) {
-    if (!operand->shape().IsArray()) continue;
-    bits = std::min(bits,
-                    primitive_util::BitWidth(operand->shape().element_type()));
+  for (const auto& operand : args) {
+    const Shape& shape = GetShape(operand);
+    if (!shape.IsArray()) continue;
+    bits = std::min(bits, shape.element_type() == PRED
+                              ? 8
+                              : primitive_util::BitWidth(shape.element_type()));
   }
   return bits;
 }
 
 }  // namespace
 
+bool IsGpuFusionKind(const HloInstruction& hlo, absl::string_view kind) {
+  auto gpu_config = hlo.backend_config<GpuBackendConfig>();
+  if (!gpu_config.ok()) {
+    return false;
+  }
+  return gpu_config->fusion_backend_config().kind() == kind;
+}
+
 HloFusionAnalysis::HloFusionAnalysis(
-    FusionBackendConfig fusion_backend_config,
-    std::vector<const HloInstruction*> fusion_roots,
-    std::unique_ptr<HloFusionAdaptor> fusion,
-    std::vector<const HloInstruction*> fusion_heroes,
+    FusionBackendConfig fusion_backend_config, HloFusionSpec fusion_spec,
+    EmitterFusionKind emitter_fusion_kind,
     const se::DeviceDescription* device_info,
     std::optional<TransposeDescription> tiled_transpose,
     HloFusionAnalysis::InputOutputInfo input_output_info)
     : fusion_backend_config_(std::move(fusion_backend_config)),
-      fusion_roots_(std::move(fusion_roots)),
-      fusion_(std::move(fusion)),
-      fusion_heroes_(std::move(fusion_heroes)),
+      fusion_spec_(std::move(fusion_spec)),
+      emitter_fusion_kind_(emitter_fusion_kind),
       device_info_(device_info),
       tiled_transpose_(tiled_transpose),
       input_output_info_(std::move(input_output_info)) {}
@@ -135,189 +242,95 @@ HloFusionAnalysis HloFusionAnalysis::Create(
     FusionBackendConfig backend_config,
     std::unique_ptr<HloFusionAdaptor> fusion,
     const se::DeviceDescription* device_info) {
-  std::vector<const HloInstruction*> roots;
-  std::vector<const HloInstruction*> heroes;
-  for (auto root : fusion->GetRoots()) {
-    roots.push_back(&root.instruction());
-    heroes.push_back(&FindNonTrivialHero(*roots.back(), *fusion));
+  absl::InlinedVector<HloInstructionAdaptor, 2> roots = fusion->GetRoots();
+  absl::InlinedVector<HloInstructionAdaptor, 2> heroes;
+  for (auto root : roots) {
+    heroes.push_back(FindNonTrivialHero(root));
   }
 
-  std::vector<const HloInstruction*> fusion_arguments;
-  FindFusionArguments(*fusion, [&](auto argument) {
-    fusion_arguments.push_back(&argument.instruction());
-  });
-
-  auto is_4bit = [](const HloInstruction* arg) {
-    return primitive_util::Is4BitType(arg->shape().element_type());
-  };
-
   InputOutputInfo input_output_info{
-      .has_4_bit_input = absl::c_any_of(fusion_arguments, is_4bit),
-      .has_4_bit_output = absl::c_any_of(roots, is_4bit),
-      .smallest_input_dtype_bits = SmallestInputDtypeBits(fusion_arguments),
+      /*smallest_input_dtype_bits=*/SmallestBitWidth(fusion->GetParameters()),
+      /*smallest_output_dtype_bits=*/SmallestBitWidth(roots),
   };
 
   std::optional<TransposeDescription> tiled_transpose_hero =
       FindConsistentTransposeHero(roots, heroes);
 
-  return HloFusionAnalysis(std::move(backend_config), std::move(roots),
-                           std::move(fusion), std::move(heroes), device_info,
+  EmitterFusionKind emitter_fusion_kind = GetEmitterFusionKind(
+      backend_config, roots, heroes, tiled_transpose_hero, *device_info);
+
+  // The loop emitter always uses the roots as heroes. Even if we found some
+  // non-trivial heroes in the fusion, some logic in GetEmitterFusionKind might
+  // still decide to use the loop emitter and in that case we need to reset the
+  // heroes to the roots.
+  if (emitter_fusion_kind == EmitterFusionKind::kLoop) {
+    heroes = roots;
+    tiled_transpose_hero = std::nullopt;
+  }
+
+  HloFusionSpec fusion_spec(std::move(fusion), std::move(roots),
+                            std::move(heroes));
+
+  return HloFusionAnalysis(std::move(backend_config), std::move(fusion_spec),
+                           emitter_fusion_kind, device_info,
                            tiled_transpose_hero, std::move(input_output_info));
 }
 
 // static
 HloFusionAnalysis HloFusionAnalysis::Create(
-    const HloFusionInstruction* fusion,
-    const se::DeviceDescription* device_info) {
-  CHECK(device_info != nullptr);
-  FusionBackendConfig backend_config =
-      fusion->has_backend_config()
-          ? fusion->backend_config<GpuBackendConfig>()->fusion_backend_config()
-          : FusionBackendConfig::default_instance();
-  return Create(std::move(backend_config),
-                HloFusionAdaptor::ForInstruction(fusion), device_info);
+    const HloInstruction& instruction,
+    const se::DeviceDescription& device_info) {
+  absl::StatusOr<GpuBackendConfig> gpu_backend_config =
+      instruction.backend_config<GpuBackendConfig>();
+
+  FusionBackendConfig fusion_backend_config =
+      gpu_backend_config.ok() ? gpu_backend_config->fusion_backend_config()
+                              : FusionBackendConfig::default_instance();
+  return Create(std::move(fusion_backend_config),
+                HloFusionAdaptor::ForInstruction(&instruction), &device_info);
 }
 
-// Returns true if the fusion has consistent transpose heros.
-bool HloFusionAnalysis::HasConsistentTransposeHeros() const {
-  return tiled_transpose_.has_value();
-}
+// static
+HloFusionAnalysis HloFusionAnalysis::Create(
+    const HloInstruction& producer, const HloInstruction& consumer,
+    const se::DeviceDescription& device_info) {
+  absl::StatusOr<GpuBackendConfig> gpu_backend_config;
 
-static bool UseConcatenateFusion(
-    const std::vector<const HloInstruction*>& roots,
-    const std::vector<const HloInstruction*>& heroes) {
-  if (heroes.size() != 1) return false;
-  if (heroes.front()->opcode() != HloOpcode::kConcatenate) return false;
-  // The concat emitter does not support multiple outputs yet. TODO(csigg): fix.
-  if (roots.front()->shape().IsTuple()) return false;
-  // Limit the number of operands because the concat emitter produces code for
-  // each operand, hurting occupancy.
-  if (heroes.front()->operand_count() > 4) return false;
-  // The loop emitter is faster when warp divergence and occupancy are both low.
-  // TODO(csigg): exclude this case.
-  return true;
-}
-
-HloFusionAnalysis::EmitterFusionKind HloFusionAnalysis::GetEmitterFusionKind()
-    const {
-  if (fusion_backend_config_.kind() == kCustomFusionKind) {
-    return EmitterFusionKind::kCustomFusion;
+  if (consumer.has_backend_config()) {
+    gpu_backend_config = consumer.backend_config<GpuBackendConfig>();
   }
 
-#if GOOGLE_CUDA
-  if (fusion_backend_config_.kind() == kTritonGemmFusionKind ||
-      fusion_backend_config_.kind() == kTritonSoftmaxFusionKind) {
-    return EmitterFusionKind::kTriton;
-  }
-#endif
-
-  if (input_output_info_.has_4_bit_input ||
-      input_output_info_.has_4_bit_output) {
-    // Only loop and input slice fusions currently can handle int4
-    // inputs/outputs, due to the special handling with IrArray needed to deal
-    // with two values occupying a single byte.
-    if (fusion_roots_.size() > 1 &&
-        IsInputFusibleNonStridedSlices(fusion_roots_) &&
-        AllSliceInputsAreCompatible(fusion_roots_)) {
-      return EmitterFusionKind::kInputSlices;
-    }
-    return EmitterFusionKind::kLoop;
+  if (!gpu_backend_config.ok() && producer.has_backend_config()) {
+    gpu_backend_config = producer.backend_config<GpuBackendConfig>();
   }
 
-  const HloInstruction* first_reduce_hero = nullptr;
-  for (auto [root, hero] : llvm::zip(fusion_roots_, fusion_heroes_)) {
-    if (IsRealReductionHero(*root, *hero)) {
-      first_reduce_hero = hero;
-      break;
-    }
-  }
-  if (first_reduce_hero != nullptr) {
-    bool valid_shapes = true;
-    Shape hero_operand_shape = first_reduce_hero->operand(0)->shape();
-    for (auto [root, hero] : llvm::zip(fusion_roots_, fusion_heroes_)) {
-      if (root == first_reduce_hero) {
-        continue;
-      }
-      if (!IsRealReductionHero(*root, *hero)) {
-        // Needs to have a compatible shape to the reduce operand (compatible
-        // meaning same number of elements).
-        if (ShapeUtil::ElementsIn(root->shape()) !=
-            ShapeUtil::ElementsIn(hero_operand_shape)) {
-          valid_shapes = false;
-          break;
-        }
-      } else if (!AreReductionsMultiOutputFusionCompatible(hero,
-                                                           first_reduce_hero)) {
-        valid_shapes = false;
-        break;
-      }
-    }
-    if (valid_shapes) {
-      return EmitterFusionKind::kReduction;
-    }
-  }
+  FusionBackendConfig fusion_backend_config =
+      gpu_backend_config.ok() ? gpu_backend_config->fusion_backend_config()
+                              : FusionBackendConfig::default_instance();
 
-  // We expect that the last dimension is swapped with a different dimension.
-  if (HasConsistentTransposeHeros() && tiled_transpose_->permutation[2] != 2) {
-    return EmitterFusionKind::kTranspose;
-  }
-
-  if (fusion_roots_.size() > 1) {
-    if (IsInputFusibleNonStridedSlices(fusion_roots_) &&
-        AllSliceInputsAreCompatible(fusion_roots_)) {
-      return EmitterFusionKind::kInputSlices;
-    }
-    return EmitterFusionKind::kLoop;
-  }
-
-  if (fusion_roots_[0]->opcode() == HloOpcode::kScatter) {
-    return EmitterFusionKind::kScatter;
-  }
-
-  if (UseConcatenateFusion(fusion_roots_, fusion_heroes_)) {
-    return EmitterFusionKind::kConcatenate;
-  }
-
-  return EmitterFusionKind::kLoop;
+  return HloFusionAnalysis::Create(
+      std::move(fusion_backend_config),
+      HloFusionAdaptor::ForProducerConsumer(&producer, &consumer),
+      &device_info);
 }
 
 const HloInstruction* HloFusionAnalysis::FindHeroReduction() const {
-  if (GetEmitterFusionKind() != EmitterFusionKind::kReduction) {
+  if (emitter_fusion_kind_ != EmitterFusionKind::kReduction) {
     return nullptr;
   }
-  auto roots = fusion_roots();
+  const auto& roots = fusion_roots();
   CHECK(!roots.empty());
   // We always use the first reduce root that triggers unnested reduction
   // emitter as the hero reduction, since all the reductions are required to
   // have the same shape and layout as verified by
   // `IsFusedReductionOutputConsistent()`.
-  for (auto [root, hero] : llvm::zip(roots, fusion_heroes_)) {
-    if (IsRealReductionHero(*root, *hero)) {
-      return hero;
+  for (auto [root, hero] : llvm::zip(roots, fusion_heroes())) {
+    if (IsRealReductionHero(root.instruction(), hero.instruction(),
+                            *device_info_)) {
+      return &hero.instruction();
     }
   }
   LOG(FATAL) << "Did not find a hero reduction";
-}
-
-HloFusionAnalysis AnalyzeProducerConsumerFusion(
-    const HloInstruction& producer, const HloInstruction& consumer,
-    const se::DeviceDescription& device_info) {
-  return HloFusionAnalysis::Create(
-      consumer.has_backend_config()
-          ? consumer.backend_config<GpuBackendConfig>()->fusion_backend_config()
-          : producer.backend_config<GpuBackendConfig>()
-                ->fusion_backend_config(),
-      std::make_unique<ProducerConsumerFusion>(
-          HloFusionAdaptor::ForInstruction(&producer),
-          HloFusionAdaptor::ForInstruction(&consumer)),
-      &device_info);
-}
-
-HloFusionAnalysis AnalyzeFusion(const HloInstruction& consumer,
-                                const se::DeviceDescription& device_info) {
-  return HloFusionAnalysis::Create(
-      consumer.backend_config<GpuBackendConfig>()->fusion_backend_config(),
-      HloFusionAdaptor::ForInstruction(&consumer), &device_info);
 }
 
 }  // namespace gpu

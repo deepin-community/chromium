@@ -15,6 +15,8 @@ limitations under the License.
 #ifndef TENSORFLOW_C_EXPERIMENTAL_OPS_GEN_CPP_RENDERERS_CPP_CONFIG_H_
 #define TENSORFLOW_C_EXPERIMENTAL_OPS_GEN_CPP_RENDERERS_CPP_CONFIG_H_
 
+#include <vector>
+
 #include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
@@ -22,13 +24,13 @@ namespace generator {
 namespace cpp {
 
 struct CppConfig {
-  string category;
-  string unit;
-  std::vector<string> namespaces;
+  std::string category;
+  std::string unit;
+  std::vector<std::string> namespaces;
 
   explicit CppConfig() = default;
-  explicit CppConfig(const string &category,
-                     const string &name_space = "tensorflow::ops");
+  explicit CppConfig(const std::string& category,
+                     const std::string& name_space = "tensorflow::ops");
 };
 
 }  // namespace cpp

@@ -18,9 +18,10 @@ from __future__ import print_function
 
 import os
 import subprocess
+import shutil
 import sys
 
-from platform import system, machine
+from platform import system
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -38,6 +39,8 @@ def run_buildtools_binary(args):
     ext = '.exe'
   elif sys_name == 'darwin':
     os_dir = 'mac'
+  elif sys_name == 'freebsd':
+    os_dir = 'freebsd64'
   elif sys_name == 'linux':
     os_dir = 'linux64'
   else:
@@ -53,13 +56,17 @@ def run_buildtools_binary(args):
   if not os.path.exists(exe_path):
     exe_path = os.path.join(ROOT_DIR, 'buildtools', os_dir, cmd) + ext
 
+  # FreeBSD doesn't like prebuilts, so allow falling back to ports under PATH.
+  if not os.path.exists(exe_path) and sys_name == 'freebsd':
+    exe_path = shutil.which(cmd)
+
   if sys_name == 'windows':
     # execl() behaves oddly on Windows: the spawned process doesn't seem to
     # receive CTRL+C. Use subprocess instead.
-    return subprocess.call([exe_path] + args)
+    sys.exit(subprocess.call([exe_path] + args))
   else:
     os.execl(exe_path, os.path.basename(exe_path), *args)
 
 
 if __name__ == '__main__':
-  sys.exit(run_buildtools_binary(sys.argv[1:]))
+  run_buildtools_binary(sys.argv[1:])

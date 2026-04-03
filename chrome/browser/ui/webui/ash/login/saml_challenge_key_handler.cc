@@ -11,12 +11,12 @@
 #include "base/values.h"
 #include "chrome/browser/ash/attestation/tpm_challenge_key_result.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chrome/browser/enterprise/connectors/device_trust/prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
+#include "components/enterprise/device_trust/prefs.h"
 #include "components/prefs/pref_service.h"
 
 using enterprise_connectors::kUserContextAwareAccessSignalsAllowlistPref;
@@ -30,7 +30,7 @@ const char kResponseField[] = "response";
 
 const size_t kPatternsSizeWarningLevel = 500;
 
-bool UrlMatchesPattern(const GURL& url, const base::Value::List& patterns) {
+bool UrlMatchesPattern(const GURL& url, const base::ListValue& patterns) {
   if (!url.SchemeIs(url::kHttpsScheme)) {
     return false;
   }
@@ -110,7 +110,7 @@ void SamlChallengeKeyHandler::BuildResponseForAllowlistedUrl(const GURL& url) {
       base::BindOnce(&SamlChallengeKeyHandler::BuildResponseForAllowlistedUrl,
                      weak_factory_.GetWeakPtr(), url));
 
-  const base::Value::List* patterns = nullptr;
+  const base::ListValue* patterns = nullptr;
   switch (status) {
     case CrosSettingsProvider::TRUSTED:
       if (!settings->GetList(kDeviceWebBasedAttestationAllowedUrls,
@@ -170,7 +170,7 @@ base::TimeDelta SamlChallengeKeyHandler::GetTpmResponseTimeout() const {
 
 void SamlChallengeKeyHandler::ReturnResult(
     const attestation::TpmChallengeKeyResult& result) {
-  base::Value::Dict js_result;
+  base::DictValue js_result;
   if (!result.IsSuccess()) {
     LOG(WARNING) << "Device attestation error: " << result.GetErrorMessage();
   }

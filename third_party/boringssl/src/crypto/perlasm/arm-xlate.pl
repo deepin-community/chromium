@@ -1,10 +1,17 @@
 #! /usr/bin/env perl
 # Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
 #
-# Licensed under the OpenSSL license (the "License").  You may not use
-# this file except in compliance with the License.  You can obtain a copy
-# in the file LICENSE in the source distribution or at
-# https://www.openssl.org/source/license.html
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 use strict;
 
@@ -23,6 +30,26 @@ my $dotinlocallabels=($flavour=~/linux/)?1:0;
 my $arch = sub {
     if ($flavour =~ /linux/)	{ ".arch\t".join(',',@_); }
     elsif ($flavour =~ /win64/) { ".arch\t".join(',',@_); }
+    elsif ($flavour =~ /ios/) {
+        # Apple's assembler does not support the .arch directive, but does
+        # support .arch_extension. We parse the .arch directive to extract the
+        # extensions and emit .arch_extension directives.
+        my @args = split(/,\s*/,shift);
+        my @extensions = ();
+        foreach my $arg (@args) {
+            # Parse "armv8.2-a+crypto+sha3" -> extract "crypto", "sha3"
+            if ($arg =~ /\+/) {
+                my @parts = split(/\+/, $arg);
+                shift @parts; # remove arch version (e.g. armv8.2-a)
+                push @extensions, @parts;
+            }
+        }
+        my $ret = "";
+        foreach my $ext (@extensions) {
+            $ret .= ".arch_extension $ext\n";
+        }
+        return $ret;
+    }
     else			{ ""; }
 };
 my $fpu = sub {

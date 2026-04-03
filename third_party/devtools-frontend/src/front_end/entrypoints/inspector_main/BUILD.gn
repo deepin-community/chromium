@@ -1,10 +1,11 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../scripts/build/ninja/devtools_module.gni")
 import("../../../scripts/build/ninja/generate_css.gni")
+import("../../../scripts/build/typescript/typescript.gni")
 import("../visibility.gni")
 
 generate_css("css_files") {
@@ -26,13 +27,17 @@ devtools_module("inspector_main") {
     "../../core/common:bundle",
     "../../core/host:bundle",
     "../../core/i18n:bundle",
+    "../../core/platform:bundle",
     "../../core/root:bundle",
     "../../core/sdk:bundle",
     "../../generated:protocol",
+    "../../models/bindings:bundle",
     "../../panels/mobile_throttling:bundle",
-    "../../ui/components/icon_button:bundle",
     "../../ui/legacy:bundle",
+    "../../ui/legacy/components/settings_ui:bundle",
     "../../ui/legacy/components/utils:bundle",
+    "../../ui/lit:bundle",
+    "../../ui/visual_logging:bundle",
   ]
 }
 
@@ -46,8 +51,7 @@ devtools_entrypoint("bundle") {
 
   visibility = [
     ":*",
-    "../../../test/unittests/front_end/entrypoints/missing_entrypoints/*",
-    "../../../test/unittests/front_end/helpers/*",
+    "../../testing/*",
     "../main/*",
   ]
 
@@ -66,7 +70,29 @@ devtools_entrypoint("meta") {
   ]
 
   visibility = [
-    "../../../test/unittests/front_end/helpers/*",
+    "../../panels/greendev/*",
+    "../../testing/*",
     "../devtools_app/*",
+    "../greendev_floaty/*",
+    "../trace_app/*",
+  ]
+}
+
+ts_library("unittests") {
+  testonly = true
+
+  sources = [
+    "InspectorMain.test.ts",
+    "OutermostTargetSelector.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    "../../core/common:bundle",
+    "../../core/protocol_client:bundle",
+    "../../core/sdk:bundle",
+    "../../generated:protocol",
+    "../../testing",
+    "../../ui/legacy:bundle",
   ]
 }

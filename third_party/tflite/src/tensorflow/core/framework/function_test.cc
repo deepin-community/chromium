@@ -21,6 +21,7 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "xla/tsl/platform/status.h"
 #include "tensorflow/core/framework/function.pb.h"
 #include "tensorflow/core/framework/function_testlib.h"
 #include "tensorflow/core/framework/op.h"
@@ -38,7 +39,6 @@ limitations under the License.
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/protobuf/error_codes.pb.h"
-#include "tsl/platform/status.h"
 
 namespace tensorflow {
 namespace {
@@ -54,7 +54,7 @@ using ::testing::UnorderedElementsAreArray;
 class Attrs {
  public:
   Attrs(const std::initializer_list<  // NOLINT(runtime/explicit)
-        std::pair<string, FunctionDefHelper::AttrValueWrapper>>
+        std::pair<std::string, FunctionDefHelper::AttrValueWrapper>>
             attrs) {
     for (const auto& aval : attrs) {
       map_.insert({aval.first, aval.second.proto});
@@ -69,7 +69,7 @@ class Attrs {
 
 typedef FunctionDefHelper FDH;
 
-Status GetOpSig(const string& op, const OpDef** sig) {
+absl::Status GetOpSig(const std::string& op, const OpDef** sig) {
   return OpRegistry::Global()->LookUpOpDef(op, sig);
 }
 
@@ -490,7 +490,7 @@ WXPlusB[T:{float, double}](w:T, x:T, b:T) -> (y:T) {
 }
 
 TEST(TFunc, Body_TypeList) {
-  const Tensor kZero = test::AsScalar<int32>(0);
+  const Tensor kZero = test::AsScalar<int32_t>(0);
   auto fdef = FDH::Create(
       // Name
       "Test",
@@ -633,7 +633,7 @@ TEST(TFunc, IntsOnDeviceArgSet) {
   EXPECT_EQ("_DeviceRetval", result.nodes[4].op());
 }
 
-static void HasError(const Status& s, const string& substr) {
+static void HasError(const absl::Status& s, const std::string& substr) {
   EXPECT_TRUE(absl::StrContains(s.ToString(), substr))
       << ">>" << s << "<<, expected substring >>" << substr << "<<";
 }
@@ -1109,7 +1109,7 @@ TEST(FunctionLibraryDefinitionTest, AddFunctionDef) {
   // Test that adding a function with same name as existing op fails.
   FunctionDef fdef = test::function::XTimesTwo();
   fdef.mutable_signature()->set_name("Add");
-  Status s = lib_def.AddFunctionDef(fdef);
+  absl::Status s = lib_def.AddFunctionDef(fdef);
   EXPECT_FALSE(s.ok());
   EXPECT_EQ(s.message(),
             "Cannot add function 'Add' because an op with the same name "
@@ -1151,7 +1151,7 @@ TEST(FunctionLibraryDefinitionTest, AddGradientDef) {
 
   // Test that adding a duplicate gradient fails
   grad.set_gradient_func(test::function::XTimes16().signature().name());
-  Status s = lib_def.AddGradientDef(grad);
+  absl::Status s = lib_def.AddGradientDef(grad);
   EXPECT_EQ(s.code(), error::Code::INVALID_ARGUMENT);
   EXPECT_EQ(s.message(),
             "Cannot assign gradient function 'XTimes16' to 'XTimesTwo' because "
@@ -1162,7 +1162,7 @@ TEST(FunctionLibraryDefinitionTest, RemoveFunction) {
   FunctionLibraryDefinition lib_def(OpRegistry::Global(), FunctionDefLibrary());
   TF_CHECK_OK(lib_def.AddFunctionDef(test::function::XTimesTwo()));
 
-  Status s = lib_def.RemoveFunction("XTimes16");
+  absl::Status s = lib_def.RemoveFunction("XTimes16");
   EXPECT_FALSE(s.ok());
   EXPECT_EQ(s.message(), "Tried to remove non-existent function 'XTimes16'.");
 
@@ -1200,7 +1200,7 @@ TEST(FunctionLibraryDefinitionTest, AddLibrary) {
       test::function::XTimesTwo().signature().name());
   *proto.add_function() = fdef;
   FunctionLibraryDefinition lib_def2(OpRegistry::Global(), proto);
-  Status s = lib_def.AddLibrary(lib_def2);
+  absl::Status s = lib_def.AddLibrary(lib_def2);
   EXPECT_EQ(s.code(), error::Code::INVALID_ARGUMENT);
   EXPECT_EQ(s.message(),
             "Cannot add function 'XTimesTwo' because a different function with "
@@ -1229,7 +1229,7 @@ TEST(FunctionLibraryDefinitionTest, AddLibrary) {
   TF_EXPECT_OK(lib_def.AddLibrary(lib_def));
 }
 
-GradientDef MakeGradDef(const string& f, const string& g) {
+GradientDef MakeGradDef(const std::string& f, const std::string& g) {
   GradientDef grad;
   grad.set_function_name(f);
   grad.set_gradient_func(g);
@@ -1239,8 +1239,8 @@ GradientDef MakeGradDef(const string& f, const string& g) {
 TEST(FunctionLibraryDefinitionTest, AddLibrary_Atomic) {
   // Create lib def containing two functions with equal names
   FunctionDefLibrary proto;
-  const string x2_name = test::function::XTimesTwo().signature().name();
-  const string x4_name = test::function::XTimesFour().signature().name();
+  const std::string x2_name = test::function::XTimesTwo().signature().name();
+  const std::string x4_name = test::function::XTimesFour().signature().name();
   *proto.add_function() = test::function::XTimesTwo();
   FunctionDef fdef = test::function::XTimesFour();
   fdef.mutable_signature()->set_name(x2_name);
@@ -1248,7 +1248,7 @@ TEST(FunctionLibraryDefinitionTest, AddLibrary_Atomic) {
   FunctionLibraryDefinition lib_def(OpRegistry::Global(), FunctionDefLibrary());
 
   // Try adding the two functions to lib_def
-  Status s = lib_def.AddLibrary(proto);
+  absl::Status s = lib_def.AddLibrary(proto);
   EXPECT_EQ(error::Code::INVALID_ARGUMENT, s.code());
   EXPECT_EQ(
       "Cannot add function 'XTimesTwo' because a different function with "
@@ -1275,9 +1275,9 @@ TEST(FunctionLibraryDefinitionTest, AddLibrary_Atomic) {
 }
 
 TEST(FunctionLibraryDefinitionTest, AddLibraryDefinition_Atomic_FuncConflict) {
-  const string x2_name = test::function::XTimesTwo().signature().name();
-  const string x4_name = test::function::XTimesFour().signature().name();
-  const string wx_name = test::function::WXPlusB().signature().name();
+  const std::string x2_name = test::function::XTimesTwo().signature().name();
+  const std::string x4_name = test::function::XTimesFour().signature().name();
+  const std::string wx_name = test::function::WXPlusB().signature().name();
 
   // Create FunctionLibraryDefinition with
   // (func = XTimesTwo, grad = XTimesFour)
@@ -1299,7 +1299,7 @@ TEST(FunctionLibraryDefinitionTest, AddLibraryDefinition_Atomic_FuncConflict) {
 
   // Verify that adding lib_def2 will fail because of function conflict
   // and WXPlusB is not added.
-  Status s = lib_def.AddLibrary(lib_def2);
+  absl::Status s = lib_def.AddLibrary(lib_def2);
   EXPECT_EQ(error::Code::INVALID_ARGUMENT, s.code());
   EXPECT_EQ(
       "Cannot add function 'XTimesTwo' because a different function "
@@ -1311,9 +1311,9 @@ TEST(FunctionLibraryDefinitionTest, AddLibraryDefinition_Atomic_FuncConflict) {
 }
 
 TEST(FunctionLibraryDefinitionTest, AddLibraryDefinition_Atomic_GradConflict) {
-  const string x2_name = test::function::XTimesTwo().signature().name();
-  const string x4_name = test::function::XTimesFour().signature().name();
-  const string wx_name = test::function::WXPlusB().signature().name();
+  const std::string x2_name = test::function::XTimesTwo().signature().name();
+  const std::string x4_name = test::function::XTimesFour().signature().name();
+  const std::string wx_name = test::function::WXPlusB().signature().name();
 
   // Create FunctionLibraryDefinition with
   // (func = XTimesTwo, grad = XTimesFour)
@@ -1335,7 +1335,7 @@ TEST(FunctionLibraryDefinitionTest, AddLibraryDefinition_Atomic_GradConflict) {
 
   // Verify that adding lib_def2 will fail because of gradient conflict
   // and WXPlusB is not added.
-  Status s = lib_def.AddLibrary(lib_def2);
+  absl::Status s = lib_def.AddLibrary(lib_def2);
   EXPECT_EQ(error::Code::INVALID_ARGUMENT, s.code());
   EXPECT_EQ(
       "Cannot assign gradient function 'WXPlusB' to 'XTimesTwo'"
@@ -1372,8 +1372,8 @@ TEST(FunctionLibraryDefinitionTest, ListFunctionNames) {
   TF_CHECK_OK(lib_def.AddFunctionDef(test::function::XTimesTwo()));
   TF_CHECK_OK(lib_def.AddFunctionDef(test::function::WXPlusB()));
 
-  const std::vector<string> function_names = lib_def.ListFunctionNames();
-  const std::vector<string> expected = {"XTimesTwo", "WXPlusB"};
+  const std::vector<std::string> function_names = lib_def.ListFunctionNames();
+  const std::vector<std::string> expected = {"XTimesTwo", "WXPlusB"};
   EXPECT_EQ(function_names, expected);
 }
 
@@ -1399,7 +1399,7 @@ TEST(FunctionLibraryDefinitionTest, GetAttr_FuncNoAttr) {
 }
 
 template <typename T>
-void SetAttrValue(FunctionDef* fdef, const string& attr, const T& value) {
+void SetAttrValue(FunctionDef* fdef, const std::string& attr, const T& value) {
   AttrValue attr_value;
   SetAttrValue(value, &attr_value);
   fdef->mutable_attr()->insert({attr, attr_value});
@@ -1421,7 +1421,7 @@ TEST(FunctionLibraryDefinitionTest, GetAttr_FuncWithAttr) {
   TF_EXPECT_OK(lib.GetAttr(ndef, "annotation", &annotation));
   EXPECT_EQ(annotation, true);
 
-  string str;
+  std::string str;
   TF_EXPECT_OK(lib.GetAttr(ndef, "options", &str));
   EXPECT_EQ(str, "some string data");
 }
@@ -1462,8 +1462,8 @@ TEST(FunctionLibraryDefinitionTest, ReachableDefinitions) {
   using ::tensorflow::test::function::NDef;
   using FDH = ::tensorflow::FunctionDefHelper;
 
-  const auto make_simple_fdef = [](const string& name,
-                                   const string& interface_name) {
+  const auto make_simple_fdef = [](const std::string& name,
+                                   const std::string& interface_name) {
     auto func_def = FDH::Create(
         name, {"x:T", "y:T"}, {"z:T"}, {"T: {float, double}"},
         {{{"output"}, "Mul", {"x", "y"}, {{"T", "$T"}}}},
@@ -1530,12 +1530,15 @@ TEST(FunctionLibraryDefinitionTest, ReachableDefinitions) {
   EXPECT_FALSE(reachable_flib.Contains("Func6"));
 }
 
-TEST(FunctionLibraryDefinitionTest, AddAndFindOptimizedFunctionGraph) {
+TEST(FunctionLibraryDefinitionTest, AddHasAndFindOptimizedFunctionGraph) {
   FunctionLibraryDefinition lib_def(OpRegistry::Global(), FunctionDefLibrary());
-  EXPECT_EQ(lib_def.FindOptimizedFunctionGraph("test"), nullptr);
+  EXPECT_FALSE(lib_def.FindOptimizedFunctionGraph("test").has_value());
+  EXPECT_FALSE(lib_def.HasOptimizedFunctionGraph("test"));
   OptimizedFunctionGraph proto;
   lib_def.AddOptimizedFunctionGraph("test", proto);
-  EXPECT_NE(lib_def.FindOptimizedFunctionGraph("test"), nullptr);
+  EXPECT_TRUE(lib_def.FindOptimizedFunctionGraph("test").has_value());
+  EXPECT_TRUE(lib_def.FindOptimizedFunctionGraph("test").value().ok());
+  EXPECT_TRUE(lib_def.HasOptimizedFunctionGraph("test"));
 }
 
 TEST(FunctionLibraryDefinitionTest, MoveTest) {
@@ -1546,7 +1549,9 @@ TEST(FunctionLibraryDefinitionTest, MoveTest) {
 
   FunctionLibraryDefinition copy_lib_def = std::move(lib_def);
   EXPECT_TRUE(copy_lib_def.Contains("XTimesTwo"));
-  EXPECT_NE(copy_lib_def.FindOptimizedFunctionGraph("test"), nullptr);
+  EXPECT_TRUE(copy_lib_def.FindOptimizedFunctionGraph("test").has_value());
+  EXPECT_TRUE(copy_lib_def.FindOptimizedFunctionGraph("test").value().ok());
+  EXPECT_TRUE(copy_lib_def.HasOptimizedFunctionGraph("test"));
 }
 
 TEST(FunctionLibraryDefinitionTest, ConstructFromGraphDef) {
@@ -1611,7 +1616,7 @@ TEST(FunctionDefsEqualTest, TestFunctionDefsEqual) {
   // Equal functions
   const FunctionDef fdef1 = test::function::XTimesTwo();
   FunctionDef fdef2 = test::function::XTimesTwo();
-  uint64 hash1 = FunctionDefHash(fdef1);
+  uint64_t hash1 = FunctionDefHash(fdef1);
   EXPECT_TRUE(FunctionDefsEqual(fdef1, fdef2));
   EXPECT_EQ(hash1, FunctionDefHash(fdef2));
 
@@ -1755,7 +1760,7 @@ TEST(InstantiateFunctionTest, ResourceInputDevice) {
   *(*arg_attrs.mutable_attr())["_composite_device"].mutable_s() =
       "/device:COMPOSITE:0";
   (*fdef.mutable_arg_attr())[0] = arg_attrs;
-  absl::flat_hash_map<string, std::vector<string>> composite_devices;
+  absl::flat_hash_map<std::string, std::vector<std::string>> composite_devices;
 
   Tensor arg0(DT_RESOURCE, TensorShape({2}));
   ResourceHandle resource_handle0;
@@ -1768,9 +1773,9 @@ TEST(InstantiateFunctionTest, ResourceInputDevice) {
   Tensor arg1(DT_RESOURCE, TensorShape({}));
   arg1.scalar<ResourceHandle>()() = resource_handle0;
 
-  const string device0 = GetFunctionResourceInputDevice(
+  const std::string device0 = GetFunctionResourceInputDevice(
       arg0, /*arg_index=*/0, fdef, &composite_devices);
-  const string device1 = GetFunctionResourceInputDevice(
+  const std::string device1 = GetFunctionResourceInputDevice(
       arg1, /*arg_index=*/1, fdef, &composite_devices);
 
   EXPECT_EQ(device0, "/device:COMPOSITE:0");

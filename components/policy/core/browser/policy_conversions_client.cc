@@ -27,16 +27,17 @@
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
-using base::Value;
-
 namespace policy {
 
 namespace {
 const char* USER_SCOPE = "user";
 const char* DEVICE_SCOPE = "machine";
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-const char* ALL_USERS_SCOPE = "allUsers";
-#endif
+
+// Return true if machine policy information needs to be hidden.
+bool IsMachineInfoHidden(PolicyScope scope, bool show_machine_values) {
+  return !show_machine_values && scope == PolicyScope::POLICY_SCOPE_MACHINE;
+}
+
 }  // namespace
 
 PolicyConversionsClient::PolicyConversionsClient() = default;
@@ -70,8 +71,12 @@ void PolicyConversionsClient::SetDropDefaultValues(bool enabled) {
   drop_default_values_enabled_ = enabled;
 }
 
+void PolicyConversionsClient::EnableShowMachineValues(bool enabled) {
+  show_machine_values_ = enabled;
+}
+
 std::string PolicyConversionsClient::ConvertValueToJSON(
-    const Value& value) const {
+    const base::Value& value) const {
   std::string json_string;
   base::JSONWriter::WriteWithOptions(
       value,
@@ -80,14 +85,14 @@ std::string PolicyConversionsClient::ConvertValueToJSON(
   return json_string;
 }
 
-base::Value::Dict PolicyConversionsClient::GetChromePolicies() {
+base::DictValue PolicyConversionsClient::GetChromePolicies() {
   DCHECK(HasUserPolicies());
 
   PolicyService* policy_service = GetPolicyService();
 
   auto* schema_registry = GetPolicySchemaRegistry();
   if (!schema_registry) {
-    return Value::Dict();
+    return base::DictValue();
   }
 
   const scoped_refptr<SchemaMap> schema_map = schema_registry->schema_map();
@@ -109,15 +114,11 @@ base::Value::Dict PolicyConversionsClient::GetChromePolicies() {
   // Convert dictionary values to strings for display.
   handler_list->PrepareForDisplaying(&map);
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  PopulatePerProfileMap();
-#endif
-
   return GetPolicyValues(map, &errors, deprecated_policies, future_policies,
                          GetKnownPolicies(schema_map, policy_namespace));
 }
 
-base::Value::Dict PolicyConversionsClient::GetPrecedencePolicies() {
+base::DictValue PolicyConversionsClient::GetPrecedencePolicies() {
   DCHECK(HasUserPolicies());
 
   VLOG_POLICY(3, POLICY_FETCHING) << "Client has user policies; getting "
@@ -131,10 +132,10 @@ base::Value::Dict PolicyConversionsClient::GetPrecedencePolicies() {
   if (!schema_registry) {
     LOG_POLICY(ERROR, POLICY_PROCESSING)
         << "Cannot retrieve Chrome precedence policies, no schema registry";
-    return Value::Dict();
+    return base::DictValue();
   }
 
-  base::Value::Dict values;
+  base::DictValue values;
   // Iterate through all precedence metapolicies and retrieve their value only
   // if they are set in the PolicyMap.
   for (auto* policy : metapolicy::kPrecedence) {
@@ -152,7 +153,7 @@ base::Value::Dict PolicyConversionsClient::GetPrecedencePolicies() {
   return values;
 }
 
-base::Value::List PolicyConversionsClient::GetPrecedenceOrder() {
+base::ListValue PolicyConversionsClient::GetPrecedenceOrder() {
   DCHECK(HasUserPolicies());
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -210,7 +211,7 @@ base::Value::List PolicyConversionsClient::GetPrecedenceOrder() {
                                     IDS_POLICY_PRECEDENCE_CLOUD_USER};
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
-  base::Value::List precedence_order_localized;
+  base::ListValue precedence_order_localized;
   for (int label_id : precedence_order) {
     precedence_order_localized.Append(l10n_util::GetStringUTF16(label_id));
   }
@@ -218,25 +219,32 @@ base::Value::List PolicyConversionsClient::GetPrecedenceOrder() {
   return precedence_order_localized;
 }
 
-Value PolicyConversionsClient::CopyAndMaybeConvert(
-    const Value& value,
-    const std::optional<Schema>& schema) const {
-  Value value_copy = value.Clone();
-  if (schema.has_value())
+base::Value PolicyConversionsClient::CopyAndMaybeConvert(
+    const base::Value& value,
+    const std::optional<Schema>& schema,
+    PolicyScope scope) const {
+  if (IsMachineInfoHidden(scope, show_machine_values_)) {
+    return base::Value(kSensitiveValueMask);
+  }
+
+  base::Value value_copy = value.Clone();
+  if (schema.has_value()) {
     schema->MaskSensitiveValues(&value_copy);
+  }
+
   if (!convert_values_enabled_)
     return value_copy;
   if (value_copy.is_dict())
-    return Value(ConvertValueToJSON(value_copy));
+    return base::Value(ConvertValueToJSON(value_copy));
 
   if (!value_copy.is_list()) {
     return value_copy;
   }
 
-  Value::List result;
+  base::ListValue result;
   for (const auto& element : value_copy.GetList()) {
     if (element.is_dict()) {
-      result.Append(Value(ConvertValueToJSON(element)));
+      result.Append(base::Value(ConvertValueToJSON(element)));
     } else {
       result.Append(element.Clone());
     }
@@ -244,7 +252,7 @@ Value PolicyConversionsClient::CopyAndMaybeConvert(
   return base::Value(std::move(result));
 }
 
-Value::Dict PolicyConversionsClient::GetPolicyValue(
+base::DictValue PolicyConversionsClient::GetPolicyValue(
     const std::string& policy_name,
     const PolicyMap::Entry& policy,
     const PoliciesSet& deprecated_policies,
@@ -254,9 +262,9 @@ Value::Dict PolicyConversionsClient::GetPolicyValue(
         known_policy_schemas) const {
   std::optional<Schema> known_policy_schema =
       GetKnownPolicySchema(known_policy_schemas, policy_name);
-  Value::Dict value;
-  value.Set("value",
-            CopyAndMaybeConvert(*policy.value_unsafe(), known_policy_schema));
+  base::DictValue value;
+  value.Set("value", CopyAndMaybeConvert(*policy.value_unsafe(),
+                                         known_policy_schema, policy.scope));
   if (convert_types_enabled_) {
     value.Set("scope", GetPolicyScope(policy_name, policy.scope));
     value.Set("level", (policy.level == POLICY_LEVEL_RECOMMENDED)
@@ -292,44 +300,28 @@ Value::Dict PolicyConversionsClient::GetPolicyValue(
               (policy.conflicts.size() <= 1 || !policy_has_unmerged_source));
   }
 
-  std::u16string error;
-  if (!known_policy_schema.has_value()) {
-    // We don't know what this policy is. This is an important error to
-    // show.
-    error = l10n_util::GetStringUTF16(IDS_POLICY_UNKNOWN);
-  } else {
-    // The PolicyMap contains errors about retrieving the policy, while the
-    // PolicyErrorMap contains validation errors. Concat the errors.
-    auto policy_map_errors = policy.GetLocalizedMessages(
-        PolicyMap::MessageType::kError,
-        base::BindRepeating(&l10n_util::GetStringUTF16));
-    auto error_map_errors =
-        errors ? errors->GetErrorMessages(policy_name) : std::u16string();
-    if (policy_map_errors.empty())
-      error = error_map_errors;
-    else if (error_map_errors.empty())
-      error = policy_map_errors;
-    else
-      error = base::JoinString(
-          {policy_map_errors, errors->GetErrorMessages(policy_name)}, u"\n");
-  }
-  if (!error.empty()) {
+  if (std::u16string error =
+          GetPolicyMessage(policy_name, policy, PolicyMap::MessageType::kError,
+                           errors, known_policy_schema);
+      !error.empty()) {
     value.Set("error", error);
     LOG_POLICY(ERROR, POLICY_PROCESSING)
         << policy_name << " has an error of type: " << error;
   }
 
-  std::u16string warning = policy.GetLocalizedMessages(
-      PolicyMap::MessageType::kWarning,
-      base::BindRepeating(&l10n_util::GetStringUTF16));
-  if (!warning.empty())
+  if (std::u16string warning = GetPolicyMessage(
+          policy_name, policy, PolicyMap::MessageType::kWarning, errors,
+          known_policy_schema);
+      !warning.empty()) {
     value.Set("warning", warning);
+  }
 
-  std::u16string info = policy.GetLocalizedMessages(
-      PolicyMap::MessageType::kInfo,
-      base::BindRepeating(&l10n_util::GetStringUTF16));
-  if (!info.empty())
+  if (std::u16string info =
+          GetPolicyMessage(policy_name, policy, PolicyMap::MessageType::kInfo,
+                           errors, known_policy_schema);
+      !info.empty()) {
     value.Set("info", info);
+  }
 
   if (policy.ignored())
     value.Set("ignored", true);
@@ -341,13 +333,13 @@ Value::Dict PolicyConversionsClient::GetPolicyValue(
     value.Set("future", true);
 
   if (!policy.conflicts.empty()) {
-    Value::List override_values;
-    Value::List supersede_values;
+    base::ListValue override_values;
+    base::ListValue supersede_values;
 
     bool has_override_values = false;
     bool has_supersede_values = false;
     for (const auto& conflict : policy.conflicts) {
-      base::Value::Dict conflicted_policy_value =
+      base::DictValue conflicted_policy_value =
           GetPolicyValue(policy_name, conflict.entry(), deprecated_policies,
                          future_policies, errors, known_policy_schemas);
       switch (conflict.conflict_type()) {
@@ -374,7 +366,7 @@ Value::Dict PolicyConversionsClient::GetPolicyValue(
   return value;
 }
 
-Value::Dict PolicyConversionsClient::GetPolicyValues(
+base::DictValue PolicyConversionsClient::GetPolicyValues(
     const PolicyMap& map,
     PolicyErrorMap* errors,
     const PoliciesSet& deprecated_policies,
@@ -383,7 +375,7 @@ Value::Dict PolicyConversionsClient::GetPolicyValues(
         known_policy_schemas) const {
   DVLOG_POLICY(2, POLICY_PROCESSING) << "Retrieving map of policy values";
 
-  base::Value::Dict values;
+  base::DictValue values;
   for (const auto& entry : map) {
     const std::string& policy_name = entry.first;
     const PolicyMap::Entry& policy = entry.second;
@@ -391,7 +383,7 @@ Value::Dict PolicyConversionsClient::GetPolicyValues(
       continue;
     if (policy.IsDefaultValue() && drop_default_values_enabled_)
       continue;
-    base::Value::Dict value =
+    base::DictValue value =
         GetPolicyValue(policy_name, policy, deprecated_policies,
                        future_policies, errors, known_policy_schemas);
     values.Set(policy_name, std::move(value));
@@ -445,7 +437,7 @@ bool PolicyConversionsClient::GetUserPoliciesEnabled() const {
 }
 
 #if BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
-Value::Dict PolicyConversionsClient::ConvertUpdaterPolicies(
+base::DictValue PolicyConversionsClient::ConvertUpdaterPolicies(
     PolicyMap updater_policies,
     std::optional<PolicyConversions::PolicyToSchemaMap>
         updater_policy_schemas) {
@@ -460,45 +452,43 @@ std::string PolicyConversionsClient::GetPolicyScope(
   if (policy_scope != POLICY_SCOPE_USER) {
     return DEVICE_SCOPE;
   }
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  if (per_profile_map_) {
-    auto it = per_profile_map_->find(policy_name);
-    if (it != per_profile_map_->end()) {
-      return it->second ? USER_SCOPE : ALL_USERS_SCOPE;
-    }
-  }
-#endif
-
-  // In Lacros case, this policy is missing from the policy templates.
-  // Which means it's a policy for apps/extensions.
   return USER_SCOPE;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-void PolicyConversionsClient::PopulatePerProfileMap() {
-  if (per_profile_map_) {
-    return;
+std::u16string PolicyConversionsClient::GetPolicyMessage(
+    const std::string& policy_name,
+    const PolicyMap::Entry& policy,
+    PolicyMap::MessageType message_type,
+    PolicyErrorMap* errors,
+    std::optional<Schema> known_policy_schema) const {
+  if (IsMachineInfoHidden(policy.scope, show_machine_values_)) {
+    return u"";
+  }
+  if (!known_policy_schema.has_value() &&
+      message_type == PolicyMap::MessageType::kError) {
+    // We don't know what this policy is. This is an important error to
+    // show.
+    return l10n_util::GetStringUTF16(IDS_POLICY_UNKNOWN);
   }
 
-  per_profile_map_ = std::make_unique<std::map<std::string, bool>>();
-  for (const BooleanPolicyAccess& access : kBooleanPolicyAccess) {
-    per_profile_map_->emplace(std::string(access.policy_key),
-                              access.per_profile);
+  // The PolicyMap contains errors about retrieving the policy, while the
+  // PolicyErrorMap contains validation errors. Concat the errors.
+  auto policy_map_errors = policy.GetLocalizedMessages(
+      message_type, base::BindRepeating(&l10n_util::GetStringUTF16));
+  auto error_map_errors =
+      errors ? errors->GetErrorMessages(policy_name, message_type)
+             : std::u16string();
+  if (policy_map_errors.empty()) {
+    return error_map_errors;
   }
-  for (const IntegerPolicyAccess& access : kIntegerPolicyAccess) {
-    per_profile_map_->emplace(std::string(access.policy_key),
-                              access.per_profile);
+
+  if (error_map_errors.empty()) {
+    return policy_map_errors;
   }
-  for (const StringPolicyAccess& access : kStringPolicyAccess) {
-    per_profile_map_->emplace(std::string(access.policy_key),
-                              access.per_profile);
-  }
-  for (const StringListPolicyAccess& access : kStringListPolicyAccess) {
-    per_profile_map_->emplace(std::string(access.policy_key),
-                              access.per_profile);
-  }
+
+  return base::JoinString(
+      {policy_map_errors, errors->GetErrorMessages(policy_name, message_type)},
+      u"\n");
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
 }  // namespace policy

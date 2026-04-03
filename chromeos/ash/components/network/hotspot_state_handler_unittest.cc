@@ -4,10 +4,8 @@
 
 #include "chromeos/ash/components/network/hotspot_state_handler.h"
 
-#include "ash/constants/ash_features.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "chromeos/ash/components/dbus/shill/shill_clients.h"
@@ -45,9 +43,6 @@ class HotspotStateHandlerTest : public ::testing::Test {
     chromeos::PowerManagerClient::InitializeFake();
     power_client_ = chromeos::FakePowerManagerClient::Get();
     chromeos::PowerPolicyController::Initialize(power_client_);
-
-    feature_list_.InitAndEnableFeature(features::kHotspot);
-
     if (hotspot_state_handler_ &&
         hotspot_state_handler_->HasObserver(&observer_)) {
       hotspot_state_handler_->RemoveObserver(&observer_);
@@ -70,7 +65,6 @@ class HotspotStateHandlerTest : public ::testing::Test {
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   raw_ptr<chromeos::FakePowerManagerClient> power_client_;
-  base::test::ScopedFeatureList feature_list_;
   base::HistogramTester histogram_tester_;
   std::unique_ptr<HotspotStateHandler> hotspot_state_handler_;
   TestObserver observer_;
@@ -83,7 +77,7 @@ TEST_F(HotspotStateHandlerTest, GetHotspotState) {
             hotspot_config::mojom::HotspotState::kDisabled);
 
   // Update tethering status to active in Shill.
-  base::Value::Dict status_dict;
+  base::DictValue status_dict;
   status_dict.Set(shill::kTetheringStatusStateProperty,
                   shill::kTetheringStateActive);
   network_state_test_helper_.manager_test()->SetManagerProperty(
@@ -131,7 +125,7 @@ TEST_F(HotspotStateHandlerTest, GetHotspotState) {
 TEST_F(HotspotStateHandlerTest, GetHotspotActiveClientCount) {
   EXPECT_EQ(0u, hotspot_state_handler_->GetHotspotActiveClientCount());
 
-  base::Value::Dict status_dict;
+  base::DictValue status_dict;
   status_dict.Set(shill::kTetheringStatusStateProperty,
                   shill::kTetheringStateActive);
   network_state_test_helper_.manager_test()->SetManagerProperty(
@@ -145,8 +139,8 @@ TEST_F(HotspotStateHandlerTest, GetHotspotActiveClientCount) {
   // Update tethering status with one active client.
   status_dict.Set(
       shill::kTetheringStatusClientsProperty,
-      base::Value::List().Append(
-          base::Value::Dict()
+      base::ListValue().Append(
+          base::DictValue()
               .Set(shill::kTetheringStatusClientIPv4Property, "IPV4:001")
               .Set(shill::kTetheringStatusClientHostnameProperty, "hostname1")
               .Set(shill::kTetheringStatusClientMACProperty, "persist")));

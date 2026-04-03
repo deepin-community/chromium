@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/dns/dns_config_service_posix.h"
 
 #include <resolv.h>
@@ -10,7 +15,6 @@
 #include <optional>
 
 #include "base/cancelable_callback.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/sys_byteorder.h"

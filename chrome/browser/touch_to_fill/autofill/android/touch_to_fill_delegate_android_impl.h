@@ -5,38 +5,47 @@
 #ifndef CHROME_BROWSER_TOUCH_TO_FILL_AUTOFILL_ANDROID_TOUCH_TO_FILL_DELEGATE_ANDROID_IMPL_H_
 #define CHROME_BROWSER_TOUCH_TO_FILL_AUTOFILL_ANDROID_TOUCH_TO_FILL_DELEGATE_ANDROID_IMPL_H_
 
+#include <optional>
+#include <variant>
+#include <vector>
+
+#include "base/functional/callback.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
-#include "components/autofill/core/browser/autofill_manager.h"
-#include "components/autofill/core/browser/data_model/credit_card.h"
+#include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
+#include "components/autofill/core/browser/data_model/payments/credit_card.h"
+#include "components/autofill/core/browser/data_model/payments/iban.h"
+#include "components/autofill/core/browser/data_model/valuables/loyalty_card.h"
 #include "components/autofill/core/browser/form_structure.h"
-#include "components/autofill/core/browser/ui/fast_checkout_client.h"
-#include "components/autofill/core/browser/ui/touch_to_fill_delegate.h"
+#include "components/autofill/core/browser/foundations/autofill_manager.h"
+#include "components/autofill/core/browser/integrators/touch_to_fill/touch_to_fill_delegate.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
 
 namespace autofill {
 
 // Enum that describes different outcomes to an attempt of triggering the
-// Touch To Fill bottom sheet for credit cards.
+// Touch To Fill bottom sheet for credit cards or IBANs.
 // The enum values are not exhaustive to avoid excessive metric collection.
-// The cases where TTF is not shown because of other form type (not credit card)
-// or TTF being not supported are skipped.
+// The cases where TTF is not shown because of other form type (not payment
+// method) or TTF being not supported are skipped.
 // Do not remove or renumber entries in this enum. It needs to be kept in
 // sync with the enum of the same name in `enums.xml`.
-enum class TouchToFillCreditCardTriggerOutcome {
+enum class TouchToFillPaymentMethodTriggerOutcome {
   // The sheet was shown.
   kShown = 0,
   // The sheet was not shown because the clicked field was not focusable or
   // already had a value.
   kFieldNotEmptyOrNotFocusable = 1,
-  // The sheet was not shown because there were no valid credit cards to
-  // suggest.
-  kNoValidCards = 2,
+  // The sheet was not shown because there were no valid credit cards or IBANs
+  // to suggest.
+  kNoValidPaymentMethods = 2,
   // The sheet was not shown because either the client or the form was not
   // secure.
   kFormOrClientNotSecure = 3,
-  // The sheet was not shown because it has already been shown before.
-  kShownBefore = 4,
+  // The sheet was not shown because it has already been shown before and should
+  // not be shown again.
+  kShownBeforeAndShouldNotBeShownAgain = 4,
   // The sheet was not shown because Autofill UI cannot be shown.
   kCannotShowAutofillUi = 5,
   // There was a try to display the bottom sheet, but it failed due to unknown
@@ -57,23 +66,24 @@ enum class TouchToFillCreditCardTriggerOutcome {
   // TouchToFill is not supported for this field type. This value is not logged
   // to UMA.
   kUnsupportedFieldType = 10,
-  // Fast Checkout was shown before TouchToFill could be triggered.
-  kFastCheckoutWasShown = 11,
-  // Form is considered to be already filled if the credit card number or expiry
-  // date already have non-empty values.
+  // kFastCheckoutWasShown = 11, // DEPRECATED
+  // Form is considered to be already filled if fields of payment method info
+  // already have non-empty values.
   kFormAlreadyFilled = 12,
   kMaxValue = kFormAlreadyFilled
 };
 
 inline constexpr const char kUmaTouchToFillCreditCardTriggerOutcome[] =
     "Autofill.TouchToFill.CreditCard.TriggerOutcome";
+inline constexpr const char kUmaTouchToFillIbanTriggerOutcome[] =
+    "Autofill.TouchToFill.Iban.TriggerOutcome";
+inline constexpr const char kUmaTouchToFillLoyaltyCardTriggerOutcome[] =
+    "Autofill.TouchToFill.LoyaltyCard.TriggerOutcome";
 
 class BrowserAutofillManager;
 class FormStructure;
 
 // Delegate for in-browser Touch To Fill (TTF) surface display and selection.
-// Currently TTF surface is eligible only for credit card forms on click on
-// an empty focusable field.
 //
 // If the surface was shown once, it won't be triggered again on the same page.
 // But calling |Reset()| on navigation restores such showing eligibility.
@@ -87,7 +97,7 @@ class FormStructure;
 // It is supposed to be owned by the given |BrowserAutofillManager|, and
 // interact with it and its |AutofillClient| and |AutofillDriver|.
 //
-// TODO(crbug.com/1324900): Consider using more descriptive name.
+// TODO(crbug.com/40839529): Consider using more descriptive name.
 class TouchToFillDelegateAndroidImpl : public TouchToFillDelegate {
  public:
   explicit TouchToFillDelegateAndroidImpl(BrowserAutofillManager* manager);
@@ -100,13 +110,16 @@ class TouchToFillDelegateAndroidImpl : public TouchToFillDelegate {
   // Checks whether TTF is eligible for the given web form data.
   // Only if this is true, the controller will show the view.
   bool IntendsToShowTouchToFill(FormGlobalId form_id,
-                                FieldGlobalId field_id,
-                                const FormData& form) override;
+                                FieldGlobalId field_id) override;
 
   // Checks whether TTF is eligible for the given web form data and, if
   // successful, triggers the corresponding surface and returns |true|.
   bool TryToShowTouchToFill(const FormData& form,
                             const FormFieldData& field) override;
+
+  // Shows the TTF surface displaying the full list of loyalty cards.
+  bool ShowTouchToFillForAllLoyaltyCards(const FormData& form,
+                                         const FormFieldData& field) override;
 
   // Returns whether the TTF surface is currently being shown.
   bool IsShowingTouchToFill() override;
@@ -118,15 +131,27 @@ class TouchToFillDelegateAndroidImpl : public TouchToFillDelegate {
   void Reset() override;
 
   // TouchToFillDelegate:
-  AutofillManager* GetManager() override;
   bool ShouldShowScanCreditCard() override;
+  bool ShouldShowGPayLogo() const override;
   void ScanCreditCard() override;
   void OnCreditCardScanned(const CreditCard& card) override;
-  void ShowCreditCardSettings() override;
-  void SuggestionSelected(std::string unique_id, bool is_virtual) override;
-  void OnDismissed(bool dismissed_by_user) override;
+  void ShowPaymentMethodSettings() override;
+  void CreditCardSuggestionSelected(std::string unique_id,
+                                    bool is_virtual) override;
+  void BnplSuggestionSelected(std::optional<int64_t> extracted_amount) override;
+  void OnBnplTosAccepted() override;
+  void IbanSuggestionSelected(
+      std::variant<Iban::Guid, Iban::InstrumentId> backend_id) override;
+  void LoyaltyCardSuggestionSelected(const LoyaltyCard& loyalty_card) override;
+  void OnDismissed(bool dismissed_by_user, bool should_reshow) override;
+  void OnBnplIssuerSuggestionSelected(const std::string& issuer_id) override;
 
   void LogMetricsAfterSubmission(const FormStructure& submitted_form) override;
+
+  void SetCancelCallback(base::OnceClosure cancel_callback) override;
+  void SetSelectedIssuerCallback(
+      base::OnceCallback<void(BnplIssuer)> selected_issuer_callback) override;
+  void SetBnplTosAcceptCallback(base::OnceClosure accept_tos_callback) override;
 
   base::WeakPtr<TouchToFillDelegateAndroidImpl> GetWeakPtr();
 
@@ -134,58 +159,89 @@ class TouchToFillDelegateAndroidImpl : public TouchToFillDelegate {
   enum class TouchToFillState {
     kShouldShow,
     kIsShowing,
-    kWasShown,
+    kShownAndShouldBeShownAgain,
+    kShownAndShouldNotBeShownAgain
   };
 
-  using TriggerOutcome = TouchToFillCreditCardTriggerOutcome;
+  using TriggerOutcome = TouchToFillPaymentMethodTriggerOutcome;
 
   struct DryRunResult {
     DryRunResult(TriggerOutcome outcome,
-                 std::vector<CreditCard> cards_to_suggest);
+                 std::variant<std::vector<CreditCard>,
+                              std::vector<Iban>,
+                              std::vector<LoyaltyCard>> items_to_suggest);
     DryRunResult(DryRunResult&&);
     DryRunResult& operator=(DryRunResult&&);
     ~DryRunResult();
 
     TriggerOutcome outcome;
-    std::vector<CreditCard> cards_to_suggest;
+    std::variant<std::vector<CreditCard>,
+                 std::vector<Iban>,
+                 std::vector<LoyaltyCard>>
+        items_to_suggest;
+  };
+
+  // This groups the callbacks needed to handle user actions in the BNPL flow.
+  // When a bottom sheet is shown for the Issuer Selection, Terms of Service,
+  // or Progress screen, these callbacks are set here and are then triggered
+  // when the user interacts with that screen.
+  struct BnplCallbacks {
+    BnplCallbacks();
+    BnplCallbacks(BnplCallbacks&&);
+    BnplCallbacks& operator=(BnplCallbacks&&);
+    ~BnplCallbacks();
+
+    // This callback is set when the issuer selection screen is shown,
+    // and it runs when the user selects a BNPL issuer.
+    base::OnceCallback<void(BnplIssuer)> selected_issuer_callback;
+    // This callback is set when the issuer ToS screen is shown, and it runs
+    // when the user accepts the ToS.
+    base::OnceClosure accept_tos_callback;
+    // This callback runs when the user dismisses the bottom sheet. It is set
+    // for multiple screens, including the Issuer Selection, Terms of Service,
+    // and Progress screens.
+    base::OnceClosure cancel_callback;
   };
 
   // Checks all preconditions for showing the TTF, that is, for calling
-  // AutofillClient::ShowTouchToFillCreditCard().
+  // PaymentsAutofillClient::ShowTouchToFillCreditCard().
   //
-  // If the DryRunResult::outcome is TriggerOutcome::kShow, the
-  // DryRun::cards_to_suggest contains the cards; otherwise it is empty.
-  // TODO(crbug.com/1485693): Remove received FormData. received_form is the
-  // form received from the renderer, so it contains the current values. This is
-  // needed for the non-empty checks.
-  DryRunResult DryRun(FormGlobalId form_id,
-                      FieldGlobalId field_id,
-                      const FormData& received_form);
+  // If the DryRunResult::outcome is TriggerOutcome::kShown,
+  // DryRunResult::items_to_suggest is populated; otherwise it is empty.
+  DryRunResult DryRun(FormGlobalId form_id, FieldGlobalId field_id);
 
-  bool HasAnyAutofilledFields(const FormStructure& submitted_form) const;
+  // Returns a DryRunResult with the user's fillable IBANs, or
+  // `kNoValidPaymentMethods` if no IBANs are available.
+  DryRunResult DryRunForIban();
 
-  // The form is considered perfectly filled if all non-empty fields are
-  // autofilled without further edits.
-  bool IsFillingPerfect(const FormStructure& submitted_form) const;
+  // Returns a DryRunResult with the user's fillable credit cards, or
+  // an error reason if TTF should not be triggered.
+  DryRunResult DryRunForCreditCard(const AutofillField& field,
+                                   const FormStructure& form);
 
-  // The form is considered correctly filled if all autofilled fields were not
-  // edited by user afterwards.
-  bool IsFillingCorrect(const FormStructure& submitted_form) const;
+  // Returns a DryRunResult with the user's fillable affiliated loyalty cards,
+  // or an error reason if TTF should not be triggered.
+  DryRunResult DryRunForAffiliatedLoyaltyCard();
 
-  // Checks if the credit card form is already filled with values. The form is
-  // considered to be filled if the credit card number field is non-empty. The
-  // expiration date fields are not checked because they might have arbitrary
-  // placeholders.
-  // TODO(crbug.com/1331312): FormData is used here to ensure that we check the
-  // most recent form values. FormStructure knows only about the initial values.
-  bool IsFormPrefilled(const FormData& form);
+  // Creates a list of booleans which denotes if credit cards are acceptable by
+  // the merchant. The returned list has the same size as `credit_cards`, and
+  // the indices match (the acceptability of credit_cards[i] ==
+  // card_acceptability[i]).
+  std::vector<bool> GetCardAcceptabilities(
+      base::span<const CreditCard> credit_cards);
 
-  TouchToFillState ttf_credit_card_state_ = TouchToFillState::kShouldShow;
+  void LogTriggerOutcomeMetrics(const FormGlobalId& form_id,
+                                const FieldGlobalId& field_id,
+                                TriggerOutcome outcome);
 
-  const raw_ptr<BrowserAutofillManager> manager_;
+  TouchToFillState ttf_payment_method_state_ = TouchToFillState::kShouldShow;
+
+  const raw_ref<BrowserAutofillManager> manager_;
   FormData query_form_;
   FormFieldData query_field_;
-  bool dismissed_by_user_;
+  bool dismissed_by_user_ = false;
+
+  BnplCallbacks bnpl_callbacks_;
 
   base::WeakPtrFactory<TouchToFillDelegateAndroidImpl> weak_ptr_factory_{this};
 };

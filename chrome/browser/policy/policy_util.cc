@@ -4,8 +4,12 @@
 
 #include "chrome/browser/policy/policy_util.h"
 
+#include <stdint.h>
+
 #include "base/values.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
+#include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "components/policy/core/common/cloud/policy_invalidation_scope.h"
 #include "components/prefs/pref_service.h"
 #include "url/gurl.h"
 
@@ -21,8 +25,7 @@ bool IsOriginInAllowlist(const GURL& url,
     return true;
   }
 
-  const base::Value::List& allowlisted_urls =
-      prefs->GetList(allowlist_pref_name);
+  const base::ListValue& allowlisted_urls = prefs->GetList(allowlist_pref_name);
 
   if (allowlisted_urls.empty()) {
     return false;

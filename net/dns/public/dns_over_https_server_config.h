@@ -5,10 +5,10 @@
 #ifndef NET_DNS_PUBLIC_DNS_OVER_HTTPS_SERVER_CONFIG_H_
 #define NET_DNS_PUBLIC_DNS_OVER_HTTPS_SERVER_CONFIG_H_
 
-#include <string>
-
 #include <optional>
-#include "base/strings/string_piece.h"
+#include <string>
+#include <string_view>
+
 #include "base/values.h"
 #include "net/base/ip_address.h"
 #include "net/base/net_export.h"
@@ -18,7 +18,7 @@ namespace net {
 // Simple representation of a DoH server for use in configurations.
 class NET_EXPORT DnsOverHttpsServerConfig {
  public:
-  // TODO(crbug.com/1200908): Generalize endpoints to enable other capabilities
+  // TODO(crbug.com/40178456): Generalize endpoints to enable other capabilities
   // of HTTPS records, such as extended metadata and aliases.
   using Endpoints = std::vector<IPAddressList>;
 
@@ -36,20 +36,20 @@ class NET_EXPORT DnsOverHttpsServerConfig {
       Endpoints endpoints = {});
 
   static std::optional<DnsOverHttpsServerConfig> FromValue(
-      base::Value::Dict value);
+      base::DictValue value);
 
   bool operator==(const DnsOverHttpsServerConfig& other) const;
   bool operator<(const DnsOverHttpsServerConfig& other) const;
 
   const std::string& server_template() const;
-  base::StringPiece server_template_piece() const;
+  std::string_view server_template_piece() const;
   bool use_post() const;
   const Endpoints& endpoints() const;
 
   // Returns true if this server config can be represented as just a template.
   bool IsSimple() const;
 
-  base::Value::Dict ToValue() const;
+  base::DictValue ToValue() const;
 
  private:
   DnsOverHttpsServerConfig(std::string server_template,

@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ref.h"
@@ -91,6 +92,9 @@ class LoadStreamTask : public offline_pages::Task {
     // Experiments information from the server.
     Experiments experiments;
 
+    // Server-provided feed launch CUI metadata.
+    std::string feed_launch_cui_metadata;
+
     // Reliability logging feed launch result: CARDS_UNSPECIFIED if loading is
     // successful.
     feedwire::DiscoverLaunchResult launch_result;
@@ -130,8 +134,6 @@ class LoadStreamTask : public offline_pages::Task {
       DocViewDigest doc_view_digest);
   void LoadFromStoreComplete(LoadStreamFromStoreTask::Result result);
   void UploadActionsComplete(UploadActionsTask::Result result);
-  void KidFriendlyRequestComplete(
-      FeedNetwork::KidFriendlyQueryRequestResult result);
   void QueryApiRequestComplete(
       FeedNetwork::ApiResult<feedwire::Response> result);
   void QueryRequestComplete(FeedNetwork::QueryRequestResult result);

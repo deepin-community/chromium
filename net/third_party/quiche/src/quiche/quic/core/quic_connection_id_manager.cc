@@ -4,7 +4,12 @@
 
 #include "quiche/quic/core/quic_connection_id_manager.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "quiche/quic/core/quic_clock.h"
 #include "quiche/quic/core/quic_connection_id.h"
@@ -230,6 +235,7 @@ bool QuicPeerIssuedConnectionIdManager::IsConnectionIdActive(
 std::vector<uint64_t> QuicPeerIssuedConnectionIdManager::
     ConsumeToBeRetiredConnectionIdSequenceNumbers() {
   std::vector<uint64_t> result;
+  result.reserve(to_be_retired_connection_id_data_.size());
   for (auto const& cid_data : to_be_retired_connection_id_data_) {
     result.push_back(cid_data.sequence_number);
   }
@@ -368,12 +374,18 @@ QuicErrorCode QuicSelfIssuedConnectionIdManager::OnRetireConnectionIdFrame(
   active_connection_ids_.erase(it);
   MaybeSendNewConnectionIds();
 
+  if (active_connection_ids_.empty()) {
+    *error_detail = "The last active connection ID should not be retired.";
+    return IETF_QUIC_PROTOCOL_VIOLATION;
+  }
   return QUIC_NO_ERROR;
 }
 
 std::vector<QuicConnectionId>
 QuicSelfIssuedConnectionIdManager::GetUnretiredConnectionIds() const {
   std::vector<QuicConnectionId> unretired_ids;
+  unretired_ids.reserve(to_be_retired_connection_ids_.size() +
+                        active_connection_ids_.size());
   for (const auto& cid_pair : to_be_retired_connection_ids_) {
     unretired_ids.push_back(cid_pair.first);
   }

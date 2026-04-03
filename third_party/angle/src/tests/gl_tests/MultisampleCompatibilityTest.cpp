@@ -7,6 +7,10 @@
 //   Tests for the EXT_multisample_compatibility extension.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
 
@@ -172,7 +176,7 @@ TEST_P(EXTMultisampleCompatibilityTest, DrawAndResolve)
     if (!isApplicable())
         return;
 
-    // http://anglebug.com/5270
+    // http://anglebug.com/40644773
     ANGLE_SKIP_TEST_IF(IsMac() && IsIntelUHD630Mobile() && IsDesktopOpenGL());
 
     static const float kBlue[]  = {0.0f, 0.0f, 1.0f, 1.0f};
@@ -383,7 +387,7 @@ TEST_P(MultisampleCompatibilityTest, DrawCoverageAndResolve)
         prepareForDraw(samples);
         glEnable(GL_SAMPLE_COVERAGE);
         glSampleCoverage(1.0, false);
-        drawQuad(drawRed.get(), essl1_shaders::PositionAttrib(), 0.5f);
+        drawQuad(drawRed, essl1_shaders::PositionAttrib(), 0.5f);
 
         prepareForVerify();
         GLsizei pixelCount = kWidth * kHeight;

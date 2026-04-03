@@ -10,15 +10,20 @@
 #include <memory>
 #include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
-#include "chrome/browser/extensions/cws_info_service.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/safety_hub/menu_notification.h"
 #include "chrome/browser/ui/safety_hub/notification_permission_review_service.h"
-#include "chrome/browser/ui/safety_hub/password_status_check_service.h"
+#include "chrome/browser/ui/safety_hub/revoked_permissions_service.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_constants.h"
-#include "chrome/browser/ui/safety_hub/safety_hub_service.h"
-#include "chrome/browser/ui/safety_hub/unused_site_permissions_service.h"
+#include "chrome/browser/ui/safety_hub/safety_hub_result.h"
 #include "components/keyed_service/core/keyed_service.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/extensions/cws_info_service.h"
+#include "chrome/browser/ui/safety_hub/password_status_check_service.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 struct MenuNotificationEntry {
   int command = 0;
@@ -40,21 +45,19 @@ struct SafetyHubModuleInfoElement {
   SafetyHubModuleInfoElement(
       MenuNotificationPriority priority,
       base::TimeDelta interval,
-      base::RepeatingCallback<
-          std::optional<std::unique_ptr<SafetyHubService::Result>>()>
+      base::RepeatingCallback<std::optional<std::unique_ptr<SafetyHubResult>>()>
           result_getter,
       std::unique_ptr<SafetyHubMenuNotification> notification);
 
   MenuNotificationPriority priority;
   base::TimeDelta interval;
-  base::RepeatingCallback<
-      std::optional<std::unique_ptr<SafetyHubService::Result>>()>
+  base::RepeatingCallback<std::optional<std::unique_ptr<SafetyHubResult>>()>
       result_getter;
   std::unique_ptr<SafetyHubMenuNotification> notification;
 };
 
-using ResultMap = std::map<safety_hub::SafetyHubModuleType,
-                           std::unique_ptr<SafetyHubService::Result>>;
+using ResultMap =
+    std::map<safety_hub::SafetyHubModuleType, std::unique_ptr<SafetyHubResult>>;
 
 }  // namespace
 
@@ -67,10 +70,11 @@ class SafetyHubMenuNotificationService : public KeyedService {
  public:
   explicit SafetyHubMenuNotificationService(
       PrefService* pref_service,
-      UnusedSitePermissionsService* unused_site_permissions_service,
+      RevokedPermissionsService* revoked_permissions_service,
       NotificationPermissionsReviewService* notification_permissions_service,
-      extensions::CWSInfoService* extension_info_service,
+#if !BUILDFLAG(IS_ANDROID)
       PasswordStatusCheckService* password_check_service,
+#endif  // BUILDFLAG(IS_ANDROID)
       Profile* profile);
   SafetyHubMenuNotificationService(const SafetyHubMenuNotificationService&) =
       delete;
@@ -91,14 +95,9 @@ class SafetyHubMenuNotificationService : public KeyedService {
   void DismissActiveNotificationOfModule(
       safety_hub::SafetyHubModuleType module);
 
-  // Returns the |service_info_map_|. For testing purposes only.
-  SafetyHubMenuNotification* GetNotificationForTesting(
-      safety_hub::SafetyHubModuleType service_type);
-
   void UpdateResultGetterForTesting(
       safety_hub::SafetyHubModuleType type,
-      base::RepeatingCallback<
-          std::optional<std::unique_ptr<SafetyHubService::Result>>()>
+      base::RepeatingCallback<std::optional<std::unique_ptr<SafetyHubResult>>()>
           result_getter);
 
  private:
@@ -113,7 +112,7 @@ class SafetyHubMenuNotificationService : public KeyedService {
   // Creates a notification from the provided dictionary, for the specified
   // Safety Hub service type.
   std::unique_ptr<SafetyHubMenuNotification> GetNotificationFromDict(
-      const base::Value::Dict& dict,
+      const base::DictValue& dict,
       safety_hub::SafetyHubModuleType& type) const;
 
   // Sets the relevant, static meta information for the three-dot menu
@@ -124,24 +123,18 @@ class SafetyHubMenuNotificationService : public KeyedService {
       safety_hub::SafetyHubModuleType type,
       MenuNotificationPriority priority,
       base::TimeDelta interval,
-      base::RepeatingCallback<
-          std::optional<std::unique_ptr<SafetyHubService::Result>>()>
+      base::RepeatingCallback<std::optional<std::unique_ptr<SafetyHubResult>>()>
           result_getter,
-      const base::Value::Dict& stored_notifications);
+      const base::DictValue& stored_notifications);
 
   // Called when the pref for Safe Browsing has been updated.
   void OnSafeBrowsingPrefUpdate();
 
-  const std::map<safety_hub::SafetyHubModuleType, const char*>
-      pref_dict_key_map_ = {
-          {safety_hub::SafetyHubModuleType::UNUSED_SITE_PERMISSIONS,
-           "unused-site-permissions"},
-          {safety_hub::SafetyHubModuleType::NOTIFICATION_PERMISSIONS,
-           "notification-permissions"},
-          {safety_hub::SafetyHubModuleType::SAFE_BROWSING, "safe-browsing"},
-          {safety_hub::SafetyHubModuleType::EXTENSIONS, "extensions"},
-          {safety_hub::SafetyHubModuleType::PASSWORDS, "passwords"},
-      };
+  // Returns if any safety hub notification has been shown in the menu so far.
+  bool HasAnyNotificationBeenShown() const;
+
+  // Holds the mapping from module type to pref name.
+  std::map<safety_hub::SafetyHubModuleType, const char*> pref_dict_key_map_;
 
   // Preference service that persists the notifications.
   raw_ptr<PrefService> pref_service_;

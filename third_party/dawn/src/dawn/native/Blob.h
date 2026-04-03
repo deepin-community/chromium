@@ -61,25 +61,30 @@ class Blob {
     uint8_t* Data();
     size_t Size() const;
 
+    bool operator==(const Blob& other) const;
+
   private:
     // The constructor should be responsible to take ownership of |data| and releases ownership by
     // calling |deleter|. The deleter function is called at ~Blob() and during std::move.
     explicit Blob(uint8_t* data, size_t size, std::function<void()> deleter);
 
-    // TODO(https://crbug.com/dawn/2349): Investigate DanglingUntriaged in dawn/native.
-    raw_ptr<uint8_t, DanglingUntriaged> mData;
+    raw_ptr<uint8_t> mData;
     size_t mSize;
     std::function<void()> mDeleter;
 };
 
 Blob CreateBlob(size_t size);
 
-template <typename T, typename = std::enable_if_t<std::is_fundamental_v<T>>>
-Blob CreateBlob(std::vector<T> vec) {
-    uint8_t* data = reinterpret_cast<uint8_t*>(vec.data());
-    size_t size = vec.size() * sizeof(T);
+template <typename T>
+Blob CreateBlob(std::vector<T> vec)
+    requires std::is_fundamental_v<T>
+{
     // Move the vector into a new allocation so we can destruct it in the deleter.
     auto* wrapped_vec = new std::vector<T>(std::move(vec));
+
+    uint8_t* data = reinterpret_cast<uint8_t*>(wrapped_vec->data());
+    size_t size = wrapped_vec->size() * sizeof(T);
+
     return Blob::UnsafeCreateWithDeleter(data, size, [wrapped_vec] { delete wrapped_vec; });
 }
 

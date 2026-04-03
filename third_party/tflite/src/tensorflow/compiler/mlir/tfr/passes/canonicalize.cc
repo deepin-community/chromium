@@ -14,8 +14,6 @@ limitations under the License.
 ==============================================================================*/
 
 #include <cstdint>
-#include <iterator>
-#include <memory>
 
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"  // from @llvm-project
@@ -31,6 +29,7 @@ limitations under the License.
 #include "mlir/IR/Region.h"  // from @llvm-project
 #include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/Transforms/Inliner.h"  // from @llvm-project
 #include "mlir/Transforms/InliningUtils.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tfr/ir/tfr_ops.h"
@@ -76,12 +75,12 @@ class UnrollSCFForOp : public OpRewritePattern<scf::ForOp> {
     for (auto i = 0; i < trip_count; ++i) {
       if (!iv.use_empty()) {
         // iv' = iv + step * i;
-        Value iter = rewriter.create<arith::ConstantIndexOp>(loc, i);
+        Value iter = arith::ConstantIndexOp::create(rewriter, loc, i);
         Value step_cst =
-            rewriter.create<arith::ConstantIndexOp>(loc, step.getSExtValue());
-        Value stride = rewriter.create<arith::MulIOp>(loc, step_cst, iter);
+            arith::ConstantIndexOp::create(rewriter, loc, step.getSExtValue());
+        Value stride = arith::MulIOp::create(rewriter, loc, step_cst, iter);
         Value iv_unroll =
-            rewriter.create<arith::AddIOp>(loc, mapping.lookup(iv), stride);
+            arith::AddIOp::create(rewriter, loc, mapping.lookup(iv), stride);
         mapping.map(iv, iv_unroll);
       }
 
@@ -144,8 +143,9 @@ LogicalResult SimplifySCFIfOp::InlineRegion(Location loc,
                                             Operation *inline_point,
                                             Region *region) const {
   InlinerInterface interface(loc.getContext());
-  if (failed(inlineRegion(interface, region, inline_point, {},
-                          inline_point->getResults(), loc,
+  InlinerConfig config;
+  if (failed(inlineRegion(interface, config.getCloneCallback(), region,
+                          inline_point, {}, inline_point->getResults(), loc,
                           /*shouldCloneInlinedRegion=*/true))) {
     return failure();
   }

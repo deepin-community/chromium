@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/modules/file_system_access/file_system_directory_handle.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_cloud_identifier.mojom-blink.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_directory_handle.mojom-blink.h"
@@ -19,6 +20,7 @@
 #include "third_party/blink/renderer/modules/file_system_access/file_system_file_handle.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_deque.h"
+#include "third_party/blink/renderer/platform/heap/self_keep_alive.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -39,7 +41,8 @@ class FileSystemDirectoryHandle::IterationSource final
             kind),
         ExecutionContextClient(execution_context),
         directory_(directory),
-        receiver_(this, execution_context) {
+        receiver_(this, execution_context),
+        keep_alive_(this) {
     directory_->MojoHandle()->GetEntries(receiver_.BindNewPipeAndPassRemote(
         execution_context->GetTaskRunner(TaskType::kStorage)));
   }
@@ -47,22 +50,24 @@ class FileSystemDirectoryHandle::IterationSource final
   void DidReadDirectory(mojom::blink::FileSystemAccessErrorPtr result,
                         Vector<mojom::blink::FileSystemAccessEntryPtr> entries,
                         bool has_more_entries) override {
-    ExecutionContext* execution_context = GetExecutionContext();
+    is_waiting_for_more_entries_ = has_more_entries;
+    ExecutionContext* const execution_context = GetExecutionContext();
+    if (!has_more_entries || !execution_context) {
+      keep_alive_.Clear();
+    }
     if (!execution_context) {
       return;
     }
-
     if (result->status == mojom::blink::FileSystemAccessStatus::kOk) {
       for (auto& entry : entries) {
         file_system_handle_queue_.push_back(
             FileSystemHandle::CreateFromMojoEntry(std::move(entry),
                                                   execution_context));
       }
-      is_waiting_for_more_entries_ = has_more_entries;
     } else {
+      CHECK(!has_more_entries);
       error_ = std::move(result);
     }
-
     ScriptState::Scope script_state_scope(GetScriptState());
     TryResolvePromise();
   }
@@ -111,6 +116,9 @@ class FileSystemDirectoryHandle::IterationSource final
   HeapDeque<Member<FileSystemHandle>> file_system_handle_queue_;
   mojom::blink::FileSystemAccessErrorPtr error_;
   bool is_waiting_for_more_entries_ = true;
+  // HeapMojoReceived won't retain us, so maintain a keepalive while
+  // waiting for the browser to send all entries.
+  SelfKeepAlive<IterationSource> keep_alive_;
 };
 
 using mojom::blink::FileSystemAccessErrorPtr;
@@ -125,7 +133,7 @@ FileSystemDirectoryHandle::FileSystemDirectoryHandle(
   DCHECK(mojo_ptr_.is_bound());
 }
 
-ScriptPromise FileSystemDirectoryHandle::getFileHandle(
+ScriptPromise<FileSystemFileHandle> FileSystemDirectoryHandle::getFileHandle(
     ScriptState* script_state,
     const String& name,
     const FileSystemGetFileOptions* options,
@@ -133,17 +141,19 @@ ScriptPromise FileSystemDirectoryHandle::getFileHandle(
   if (!mojo_ptr_.is_bound()) {
     // TODO(crbug.com/1293949): Add an error message.
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError, "");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
-      script_state, exception_state.GetContext());
-  ScriptPromise result = resolver->Promise();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<FileSystemFileHandle>>(
+          script_state, exception_state.GetContext());
+  auto result = resolver->Promise();
 
   mojo_ptr_->GetFile(
       name, options->create(),
-      WTF::BindOnce(
-          [](FileSystemDirectoryHandle*, ScriptPromiseResolver* resolver,
+      BindOnce(
+          [](FileSystemDirectoryHandle*,
+             ScriptPromiseResolver<FileSystemFileHandle>* resolver,
              const String& name, FileSystemAccessErrorPtr result,
              mojo::PendingRemote<mojom::blink::FileSystemAccessFileHandle>
                  handle) {
@@ -165,7 +175,8 @@ ScriptPromise FileSystemDirectoryHandle::getFileHandle(
   return result;
 }
 
-ScriptPromise FileSystemDirectoryHandle::getDirectoryHandle(
+ScriptPromise<FileSystemDirectoryHandle>
+FileSystemDirectoryHandle::getDirectoryHandle(
     ScriptState* script_state,
     const String& name,
     const FileSystemGetDirectoryOptions* options,
@@ -173,17 +184,19 @@ ScriptPromise FileSystemDirectoryHandle::getDirectoryHandle(
   if (!mojo_ptr_.is_bound()) {
     // TODO(crbug.com/1293949): Add an error message.
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError, "");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
-      script_state, exception_state.GetContext());
-  ScriptPromise result = resolver->Promise();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<FileSystemDirectoryHandle>>(
+          script_state, exception_state.GetContext());
+  auto result = resolver->Promise();
 
   mojo_ptr_->GetDirectory(
       name, options->create(),
-      WTF::BindOnce(
-          [](FileSystemDirectoryHandle*, ScriptPromiseResolver* resolver,
+      BindOnce(
+          [](FileSystemDirectoryHandle*,
+             ScriptPromiseResolver<FileSystemDirectoryHandle>* resolver,
              const String& name, FileSystemAccessErrorPtr result,
              mojo::PendingRemote<mojom::blink::FileSystemAccessDirectoryHandle>
                  handle) {
@@ -205,7 +218,7 @@ ScriptPromise FileSystemDirectoryHandle::getDirectoryHandle(
   return result;
 }
 
-ScriptPromise FileSystemDirectoryHandle::removeEntry(
+ScriptPromise<IDLUndefined> FileSystemDirectoryHandle::removeEntry(
     ScriptState* script_state,
     const String& name,
     const FileSystemRemoveOptions* options,
@@ -213,47 +226,49 @@ ScriptPromise FileSystemDirectoryHandle::removeEntry(
   if (!mojo_ptr_.is_bound()) {
     // TODO(crbug.com/1293949): Add an error message.
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError, "");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
       script_state, exception_state.GetContext());
-  ScriptPromise result = resolver->Promise();
+  auto result = resolver->Promise();
 
-  mojo_ptr_->RemoveEntry(
-      name, options->recursive(),
-      WTF::BindOnce(
-          [](FileSystemDirectoryHandle*, ScriptPromiseResolver* resolver,
-             FileSystemAccessErrorPtr result) {
-            // Keep `this` alive so the handle will not be garbage-collected
-            // before the promise is resolved.
-            file_system_access_error::ResolveOrReject(resolver, *result);
-          },
-          WrapPersistent(this), WrapPersistent(resolver)));
+  mojo_ptr_->RemoveEntry(name, options->recursive(),
+                         BindOnce(
+                             [](FileSystemDirectoryHandle*,
+                                ScriptPromiseResolver<IDLUndefined>* resolver,
+                                FileSystemAccessErrorPtr result) {
+                               // Keep `this` alive so the handle will not be
+                               // garbage-collected before the promise is
+                               // resolved.
+                               file_system_access_error::ResolveOrReject(
+                                   resolver, *result);
+                             },
+                             WrapPersistent(this), WrapPersistent(resolver)));
 
   return result;
 }
 
-ScriptPromiseTyped<IDLNullable<IDLSequence<IDLUSVString>>>
+ScriptPromise<IDLNullable<IDLSequence<IDLUSVString>>>
 FileSystemDirectoryHandle::resolve(ScriptState* script_state,
                                    FileSystemHandle* possible_child,
                                    ExceptionState& exception_state) {
   if (!mojo_ptr_.is_bound()) {
     // TODO(crbug.com/1293949): Add an error message.
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError, "");
-    return ScriptPromiseTyped<IDLNullable<IDLSequence<IDLUSVString>>>();
+    return ScriptPromise<IDLNullable<IDLSequence<IDLUSVString>>>();
   }
 
   auto* resolver = MakeGarbageCollected<
-      ScriptPromiseResolverTyped<IDLNullable<IDLSequence<IDLUSVString>>>>(
+      ScriptPromiseResolver<IDLNullable<IDLSequence<IDLUSVString>>>>(
       script_state, exception_state.GetContext());
   auto result = resolver->Promise();
 
   mojo_ptr_->Resolve(
       possible_child->Transfer(),
-      WTF::BindOnce(
+      BindOnce(
           [](FileSystemDirectoryHandle*,
-             ScriptPromiseResolverTyped<IDLNullable<IDLSequence<IDLUSVString>>>*
+             ScriptPromiseResolver<IDLNullable<IDLSequence<IDLUSVString>>>*
                  resolver,
              FileSystemAccessErrorPtr result,
              const std::optional<Vector<String>>& path) {
@@ -289,17 +304,17 @@ void FileSystemDirectoryHandle::Trace(Visitor* visitor) const {
 }
 
 void FileSystemDirectoryHandle::QueryPermissionImpl(
-    bool writable,
+    mojom::blink::FileSystemAccessPermissionMode mode,
     base::OnceCallback<void(mojom::blink::PermissionStatus)> callback) {
   if (!mojo_ptr_.is_bound()) {
     std::move(callback).Run(mojom::blink::PermissionStatus::DENIED);
     return;
   }
-  mojo_ptr_->GetPermissionStatus(writable, std::move(callback));
+  mojo_ptr_->GetPermissionStatus(mode, std::move(callback));
 }
 
 void FileSystemDirectoryHandle::RequestPermissionImpl(
-    bool writable,
+    mojom::blink::FileSystemAccessPermissionMode mode,
     base::OnceCallback<void(mojom::blink::FileSystemAccessErrorPtr,
                             mojom::blink::PermissionStatus)> callback) {
   if (!mojo_ptr_.is_bound()) {
@@ -311,7 +326,7 @@ void FileSystemDirectoryHandle::RequestPermissionImpl(
     return;
   }
 
-  mojo_ptr_->RequestPermission(writable, std::move(callback));
+  mojo_ptr_->RequestPermission(mode, std::move(callback));
 }
 
 void FileSystemDirectoryHandle::MoveImpl(
@@ -360,7 +375,7 @@ void FileSystemDirectoryHandle::IsSameEntryImpl(
 
   mojo_ptr_->Resolve(
       std::move(other),
-      WTF::BindOnce(
+      blink::BindOnce(
           [](base::OnceCallback<void(mojom::blink::FileSystemAccessErrorPtr,
                                      bool)> callback,
              FileSystemAccessErrorPtr result,
@@ -373,7 +388,7 @@ void FileSystemDirectoryHandle::IsSameEntryImpl(
 
 void FileSystemDirectoryHandle::GetUniqueIdImpl(
     base::OnceCallback<void(mojom::blink::FileSystemAccessErrorPtr,
-                            const WTF::String&)> callback) {
+                            const String&)> callback) {
   if (!mojo_ptr_.is_bound()) {
     std::move(callback).Run(
         mojom::blink::FileSystemAccessError::New(

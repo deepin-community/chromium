@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -25,7 +25,24 @@ class TranslatedArgs(TestSuite):
     return DiffTestBlueprint(
         trace=Path('java_class_name_arg.textproto'),
         query=Path('chrome_args_test.sql'),
-        out=Path('java_class_name_arg.out'))
+        out=Csv('''
+          "flat_key","key","int_value","string_value"
+          "android_view_dump.activity.name","android_view_dump.activity[0].name","[NULL]","A1"
+          "android_view_dump.activity.view.class_name","android_view_dump.activity[0].view[0].class_name","[NULL]","class_A"
+          "android_view_dump.activity.view.class_name","android_view_dump.activity[0].view[1].class_name","[NULL]","def"
+          "android_view_dump.activity.view.class_name","android_view_dump.activity[0].view[2].class_name","[NULL]","ghi"
+          "android_view_dump.activity.name","android_view_dump.activity[1].name","[NULL]","B1"
+          "android_view_dump.activity.view.class_name","android_view_dump.activity[1].view[0].class_name","[NULL]","class_J"
+          "event.category","event.category","[NULL]","cat1"
+          "event.name","event.name","[NULL]","name1"
+          "is_root_in_scope","is_root_in_scope",1,"[NULL]"
+          "merge_key_type","merge_key_type",0,"[NULL]"
+          "merge_key_value","merge_key_value","[NULL]","Default Track"
+          "parent_track_uuid","parent_track_uuid",0,"[NULL]"
+          "source","source","[NULL]","descriptor"
+          "trace_id","trace_id",0,"[NULL]"
+          "track_compressor_idx","track_compressor_idx",0,"[NULL]"
+        '''))
 
   def test_chrome_histogram(self):
     return DiffTestBlueprint(
@@ -61,7 +78,7 @@ class TranslatedArgs(TestSuite):
             }
             parent_uuid: 0
             chrome_thread {
-              thread_type: THREAD_POOL_FG_WORKER
+              thread_type: 4
             }
           }
         }
@@ -93,6 +110,12 @@ class TranslatedArgs(TestSuite):
         query=Path('chrome_args_test.sql'),
         out=Path('chrome_performance_mark.out'))
 
+  def test_chrome_trigger(self):
+    return DiffTestBlueprint(
+        trace=Path('chrome_trigger.textproto'),
+        query=Path('chrome_args_test.sql'),
+        out=Path('chrome_trigger.out'))
+
   def test_slice_name(self):
     return DiffTestBlueprint(
         trace=Path('slice_name.textproto'),
@@ -107,18 +130,24 @@ class TranslatedArgs(TestSuite):
         "slice_begin"
         """))
 
-  def test_slice_name_2(self):
+  def test_process_track_name(self):
     return DiffTestBlueprint(
-        trace=Path('slice_name_negative_timestamp.textproto'),
+        trace=Path('process_track_name.textproto'),
         query="""
-        SELECT name FROM slice ORDER BY name;
+        SELECT name
+        FROM process_track
+        WHERE name IS NOT NULL
+        UNION ALL
+        SELECT name
+        FROM process_counter_track
+        WHERE name IS NOT NULL
+        ORDER BY name;
         """,
         out=Csv("""
         "name"
-        "mapped_name1"
-        "mapped_name2"
-        "raw_name3"
-        "slice_begin"
+        "explicitly_renamed"
+        "implicitly_renamed"
+        "renamed_counter"
         """))
 
   def test_native_symbol_arg(self):

@@ -59,8 +59,7 @@ class MIDI_EXPORT MidiManagerClient {
   // |length| is the number of bytes in |data|.
   // |timestamp| is the time the data was received, in seconds.
   virtual void ReceiveMidiData(uint32_t port_index,
-                               const uint8_t* data,
-                               size_t length,
+                               base::span<const uint8_t> data,
                                base::TimeTicks timestamp) = 0;
 
   // AccumulateMidiBytesSent() is called to acknowledge when bytes have
@@ -129,6 +128,8 @@ class MIDI_EXPORT MidiManager {
  protected:
   friend class MidiManagerUsb;
 
+  virtual const char* GetBackendName() const;
+
   // Initializes the platform dependent MIDI system. MidiManager class has a
   // default implementation that synchronously calls CompleteInitialization()
   // with mojom::Result::NOT_SUPPORTED. A derived class for a specific platform
@@ -159,8 +160,7 @@ class MIDI_EXPORT MidiManager {
 
   // Dispatches to all clients. Can be called on any thread.
   void ReceiveMidiData(uint32_t port_index,
-                       const uint8_t* data,
-                       size_t length,
+                       base::span<const uint8_t> data,
                        base::TimeTicks time);
 
   // Only for testing.

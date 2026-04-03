@@ -9,6 +9,7 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -313,7 +314,8 @@ const std::vector<uint8_t>& WMHelper::GetDisplayIdentificationData(
         // should derive it from the display info of this DisplaySnapshot..
         static const std::vector<uint8_t> kFablicatedFallbackEDID(
             kFablicatedFallbackEDIDData,
-            kFablicatedFallbackEDIDData + sizeof(kFablicatedFallbackEDIDData));
+            UNSAFE_TODO(kFablicatedFallbackEDIDData +
+                        sizeof(kFablicatedFallbackEDIDData)));
         return kFablicatedFallbackEDID;
       }
       return display->edid();
@@ -374,7 +376,7 @@ double WMHelper::GetDeviceScaleFactorForWindow(aura::Window* window) const {
   if (default_scale_cancellation_) {
     return GetDefaultDeviceScaleFactor();
   }
-  const display::Screen* screen = display::Screen::GetScreen();
+  const display::Screen* screen = display::Screen::Get();
   display::Display display = screen->GetDisplayNearestWindow(window);
   return display.device_scale_factor();
 }
@@ -392,13 +394,13 @@ void WMHelper::RemoveTabletModeObserver(ash::TabletModeObserver* observer) {
 }
 
 void WMHelper::AddDisplayConfigurationObserver(
-    ash::WindowTreeHostManager::Observer* observer) {
-  ash::Shell::Get()->window_tree_host_manager()->AddObserver(observer);
+    display::DisplayManagerObserver* observer) {
+  ash::Shell::Get()->display_manager()->AddDisplayManagerObserver(observer);
 }
 
 void WMHelper::RemoveDisplayConfigurationObserver(
-    ash::WindowTreeHostManager::Observer* observer) {
-  ash::Shell::Get()->window_tree_host_manager()->RemoveObserver(observer);
+    display::DisplayManagerObserver* observer) {
+  ash::Shell::Get()->display_manager()->RemoveDisplayManagerObserver(observer);
 }
 
 void WMHelper::AddFrameThrottlingObserver() {

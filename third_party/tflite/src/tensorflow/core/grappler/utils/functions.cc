@@ -38,7 +38,7 @@ namespace tensorflow {
 namespace grappler {
 
 GrapplerFunctionItem::GrapplerFunctionItem(
-    string func_name, string description, AttrSlice func_attr,
+    std::string func_name, std::string description, AttrSlice func_attr,
     std::vector<const FunctionDef::ArgAttrs*> arg_attr,
     std::vector<InputArgInstantiation> input_args,
     std::vector<OutputArgInstantiation> output_args,
@@ -73,7 +73,9 @@ GrapplerFunctionItem::GrapplerFunctionItem(
   optimization_options().allow_pruning_stateful_and_dataset_ops = false;
 }
 
-const string& GrapplerFunctionItem::description() const { return description_; }
+const std::string& GrapplerFunctionItem::description() const {
+  return description_;
+}
 
 const std::vector<InputArgInstantiation>& GrapplerFunctionItem::inputs() const {
   return input_args_;
@@ -154,15 +156,15 @@ bool IsParametrized(const FunctionDef& func) {
   return HasParametrizedType(func) || HasParametrizedBody(func);
 }
 
-Status InstantiationTypeParameters(
+absl::Status InstantiationTypeParameters(
     const FunctionDef& func, const AttrSlice& func_instantiation_attr,
-    absl::flat_hash_map<string, DataType>* type_parameters) {
+    absl::flat_hash_map<std::string, DataType>* type_parameters) {
   if (!type_parameters->empty()) {
     return absl::InvalidArgumentError(
         "Type parameters output map must be empty");
   }
 
-  const auto resolve_type_attr = [&](const OpDef::ArgDef& arg) -> Status {
+  const auto resolve_type_attr = [&](const OpDef::ArgDef& arg) -> absl::Status {
     if (!arg.type_attr().empty()) {
       DataType dtype;
       TF_RETURN_IF_ERROR(
@@ -191,9 +193,9 @@ Status InstantiationTypeParameters(
   return absl::OkStatus();
 }
 
-Status InstantiationBodyParameters(
+absl::Status InstantiationBodyParameters(
     const FunctionDef& func, const AttrSlice& func_instantiation_attr,
-    absl::flat_hash_map<string, AttrValue>* body_parameters) {
+    absl::flat_hash_map<std::string, AttrValue>* body_parameters) {
   if (!body_parameters->empty()) {
     return absl::InvalidArgumentError(
         "Body parameters output map must be empty");
@@ -201,7 +203,7 @@ Status InstantiationBodyParameters(
 
   for (const NodeDef& func_body_node : func.node_def()) {
     for (auto& attr : func_body_node.attr()) {
-      const string& placeholder = attr.second.placeholder();
+      const std::string& placeholder = attr.second.placeholder();
 
       if (placeholder.empty() || body_parameters->contains(placeholder)) {
         continue;
@@ -221,11 +223,11 @@ Status InstantiationBodyParameters(
   return absl::OkStatus();
 }
 
-Status MakeGrapplerFunctionItem(const FunctionDef& func,
-                                const AttrSlice& func_instantiation_attr,
-                                const FunctionLibraryDefinition& flib,
-                                const int graph_def_version,
-                                GrapplerFunctionItem* item) {
+absl::Status MakeGrapplerFunctionItem(const FunctionDef& func,
+                                      const AttrSlice& func_instantiation_attr,
+                                      const FunctionLibraryDefinition& flib,
+                                      const int graph_def_version,
+                                      GrapplerFunctionItem* item) {
   const OpDef& signature = func.signature();
 
   if (signature.name().empty()) {
@@ -311,16 +313,16 @@ Status MakeGrapplerFunctionItem(const FunctionDef& func,
   return absl::OkStatus();
 }
 
-Status MakeGrapplerFunctionItem(const FunctionDef& func,
-                                const FunctionLibraryDefinition& flib,
-                                const int graph_def_version,
-                                GrapplerFunctionItem* item) {
+absl::Status MakeGrapplerFunctionItem(const FunctionDef& func,
+                                      const FunctionLibraryDefinition& flib,
+                                      const int graph_def_version,
+                                      GrapplerFunctionItem* item) {
   return MakeGrapplerFunctionItem(func, AttrSlice(), flib, graph_def_version,
                                   item);
 }
 
-Status ReplaceInputWithConst(const NodeDef& input_const, int input_index,
-                             GrapplerFunctionItem* item) {
+absl::Status ReplaceInputWithConst(const NodeDef& input_const, int input_index,
+                                   GrapplerFunctionItem* item) {
   if (!IsConstant(input_const)) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Input node is not a constant: ", SummarizeNodeDef(input_const)));
@@ -360,9 +362,9 @@ Status ReplaceInputWithConst(const NodeDef& input_const, int input_index,
   return absl::OkStatus();
 }
 
-Status RemoveFunctionOutputs(const absl::flat_hash_set<int>& remove_outputs,
-                             GrapplerFunctionItem* item,
-                             std::vector<std::pair<int, int>>* output_mapping) {
+absl::Status RemoveFunctionOutputs(
+    const absl::flat_hash_set<int>& remove_outputs, GrapplerFunctionItem* item,
+    std::vector<std::pair<int, int>>* output_mapping) {
   DCHECK(output_mapping->empty());
 
   // Do some sanity checking of the removed outputs positions.
@@ -425,17 +427,17 @@ class MakeFunctionDefHelper {
  public:
   MakeFunctionDefHelper() = default;
 
-  Status Initialize(const GrapplerFunctionItem& item,
-                    const FunctionLibraryDefinition& flib);
+  absl::Status Initialize(const GrapplerFunctionItem& item,
+                          const FunctionLibraryDefinition& flib);
 
   // Converts input name from GraphDef format (name[:position]) to the
   // FunctionDef input format (name[:output][:position]) using registered input
   // arg instantiations and function body outputs.
-  Status AsFunctionDefInput(const string& graph_def_input,
-                            string* func_def_input) const;
+  absl::Status AsFunctionDefInput(const std::string& graph_def_input,
+                                  std::string* func_def_input) const;
 
   // Updates Node inputs from GraphDef to FunctionDef format.
-  Status AsFunctionDefNode(NodeDef* function_body_node) const;
+  absl::Status AsFunctionDefNode(NodeDef* function_body_node) const;
 
   bool IsInputNode(const NodeDef& node) const {
     return input_nodes_.contains(node.name());
@@ -449,10 +451,11 @@ class MakeFunctionDefHelper {
   absl::flat_hash_set<absl::string_view> input_nodes_;
   absl::flat_hash_set<absl::string_view> output_nodes_;
   // Mapping from function body node name to output names range map.
-  absl::flat_hash_map<string, tensorflow::NameRangeMap> function_body_outputs_;
+  absl::flat_hash_map<std::string, tensorflow::NameRangeMap>
+      function_body_outputs_;
 };
 
-Status MakeFunctionDefHelper::Initialize(
+absl::Status MakeFunctionDefHelper::Initialize(
     const GrapplerFunctionItem& item, const FunctionLibraryDefinition& flib) {
   for (const InputArgInstantiation& input_arg : item.inputs()) {
     input_nodes_.insert(input_arg.node_name);
@@ -475,8 +478,8 @@ Status MakeFunctionDefHelper::Initialize(
   return absl::OkStatus();
 }
 
-Status MakeFunctionDefHelper::AsFunctionDefInput(const string& graph_def_input,
-                                                 string* func_def_input) const {
+absl::Status MakeFunctionDefHelper::AsFunctionDefInput(
+    const std::string& graph_def_input, std::string* func_def_input) const {
   if (IsControlInput(graph_def_input)) {
     *func_def_input = graph_def_input;
     return absl::OkStatus();
@@ -514,9 +517,9 @@ Status MakeFunctionDefHelper::AsFunctionDefInput(const string& graph_def_input,
       absl::StrCat("Unknown graph def input: ", graph_def_input));
 }
 
-Status MakeFunctionDefHelper::AsFunctionDefNode(
+absl::Status MakeFunctionDefHelper::AsFunctionDefNode(
     NodeDef* function_body_node) const {
-  string func_def_input;
+  std::string func_def_input;
 
   for (int i = 0; i < function_body_node->input_size(); ++i) {
     TF_RETURN_IF_ERROR(
@@ -529,9 +532,9 @@ Status MakeFunctionDefHelper::AsFunctionDefNode(
 
 }  // namespace
 
-Status MakeFunctionDef(const GrapplerFunctionItem& item,
-                       const FunctionLibraryDefinition& flib,
-                       FunctionDef* func) {
+absl::Status MakeFunctionDef(const GrapplerFunctionItem& item,
+                             const FunctionLibraryDefinition& flib,
+                             FunctionDef* func) {
   func->mutable_signature()->set_name(item.id);
   func->mutable_signature()->set_description(item.description());
   func->mutable_signature()->set_is_stateful(item.is_stateful());
@@ -540,7 +543,7 @@ Status MakeFunctionDef(const GrapplerFunctionItem& item,
   TF_RETURN_IF_ERROR(helper.Initialize(item, flib));
 
   // Mapping from the '_Retval' node name to the output tensor.
-  absl::flat_hash_map<absl::string_view, string> output_tensors;
+  absl::flat_hash_map<absl::string_view, std::string> output_tensors;
   for (const NodeDef& func_body_node : item.function_body().node()) {
     if (!helper.IsOutputNode(func_body_node)) continue;
     if (func_body_node.input_size() != 1) {
@@ -561,7 +564,7 @@ Status MakeFunctionDef(const GrapplerFunctionItem& item,
 
   // Add function output arguments.
   for (const OutputArgInstantiation& output_arg : item.outputs()) {
-    const string output_name =
+    const std::string output_name =
         absl::StrReplaceAll(output_arg.node_name, {{"_RetVal", ""}});
 
     OpDef::ArgDef arg_def;

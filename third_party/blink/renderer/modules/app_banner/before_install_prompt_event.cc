@@ -59,7 +59,7 @@ Vector<String> BeforeInstallPromptEvent::platforms() const {
   return platforms_;
 }
 
-ScriptPromiseTyped<AppBannerPromptResult> BeforeInstallPromptEvent::userChoice(
+ScriptPromise<AppBannerPromptResult> BeforeInstallPromptEvent::userChoice(
     ScriptState* script_state,
     ExceptionState& exception_state) {
   UseCounter::Count(ExecutionContext::From(script_state),
@@ -71,10 +71,10 @@ ScriptPromiseTyped<AppBannerPromptResult> BeforeInstallPromptEvent::userChoice(
   exception_state.ThrowDOMException(
       DOMExceptionCode::kInvalidStateError,
       "userChoice cannot be accessed on this event.");
-  return ScriptPromiseTyped<AppBannerPromptResult>();
+  return EmptyPromise();
 }
 
-ScriptPromise BeforeInstallPromptEvent::prompt(
+ScriptPromise<AppBannerPromptResult> BeforeInstallPromptEvent::prompt(
     ScriptState* script_state,
     ExceptionState& exception_state) {
   // |m_bannerService| must be bound to allow us to inform the AppBannerService
@@ -82,7 +82,7 @@ ScriptPromise BeforeInstallPromptEvent::prompt(
   if (!banner_service_remote_.is_bound()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "The prompt() method cannot be called.");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   LocalDOMWindow* window = LocalDOMWindow::From(script_state);
@@ -91,7 +91,7 @@ ScriptPromise BeforeInstallPromptEvent::prompt(
     exception_state.ThrowDOMException(
         DOMExceptionCode::kNotAllowedError,
         "The prompt() method must be called with a user gesture");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   UseCounter::Count(window, WebFeature::kBeforeInstallPromptEventPrompt);
@@ -105,8 +105,8 @@ const AtomicString& BeforeInstallPromptEvent::InterfaceName() const {
 
 void BeforeInstallPromptEvent::preventDefault() {
   Event::preventDefault();
-  if (target()) {
-    UseCounter::Count(target()->GetExecutionContext(),
+  if (RawTarget()) {
+    UseCounter::Count(RawTarget()->GetExecutionContext(),
                       WebFeature::kBeforeInstallPromptEventPreventDefault);
   }
 }
@@ -119,14 +119,14 @@ bool BeforeInstallPromptEvent::HasPendingActivity() const {
 void BeforeInstallPromptEvent::BannerAccepted(const String& platform) {
   AppBannerPromptResult* result = AppBannerPromptResult::Create();
   result->setPlatform(platform);
-  result->setOutcome("accepted");
+  result->setOutcome(V8AppBannerPromptOutcome::Enum::kAccepted);
   user_choice_->Resolve(result);
 }
 
 void BeforeInstallPromptEvent::BannerDismissed() {
   AppBannerPromptResult* result = AppBannerPromptResult::Create();
   result->setPlatform(g_empty_atom);
-  result->setOutcome("dismissed");
+  result->setOutcome(V8AppBannerPromptOutcome::Enum::kDismissed);
   user_choice_->Resolve(result);
 }
 

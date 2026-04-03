@@ -17,11 +17,6 @@
   #changeChannelButton {
     margin-inline-start: 16px;
   }
-
-  :host-context(body:not(.revamp-wayfinding-enabled))
-      #buildDetailsLinkContainer {
-    border-bottom: var(--cr-separator-line);
-  }
 </style>
 <div class="settings-box two-line first">
   <div class="start">
@@ -104,38 +99,6 @@
     <settings-consumer-auto-update-toggle-dialog
         on-close="onConsumerAutoUpdateToggleDialogClosed_">
     </settings-consumer-auto-update-toggle-dialog>
-  </template>
-</template>
-<template is="dom-if" if="[[isHostnameSettingEnabled_]]">
-  <div class="settings-box two-line">
-    <div class="start">
-      <div role="heading">$i18n{aboutDeviceName}</div>
-      <div id="deviceName" aria-hidden="true" class="secondary">
-        [[getDeviceNameText_(deviceNameMetadata_)]]
-      </div>
-    </div>
-    <template is="dom-if" if="[[shouldShowPolicyIndicator_(
-        deviceNameMetadata_)]]">
-      <cr-policy-indicator
-          id="editHostnamePolicyIndicator"
-          indicator-type="[[getDeviceNameIndicatorType_(deviceNameMetadata_)]]">
-      </cr-policy-indicator>
-    </template>
-    <div class="separator"></div>
-    <cr-icon-button id="editHostnameButton"
-        class="icon-edit"
-        on-click="onEditHostnameClick_"
-        aria-label="[[i18n('aboutDeviceNameEditBtnA11yLabel')]]"
-        aria-description=
-            "[[getDeviceNameEditButtonA11yDescription_(deviceNameMetadata_)]]"
-        disabled="[[!canEditDeviceName_(deviceNameMetadata_)]]"
-        deep-link-focus-id$="[[Setting.kChangeDeviceName]]">
-    </cr-icon-button>
-  </div>
-  <template is="dom-if" if="[[showEditHostnameDialog_]]" restamp>
-    <edit-hostname-dialog
-        on-close="onEditHostnameDialogClosed_">
-    </edit-hostname-dialog>
   </template>
 </template>
 <div id="buildDetailsLinkContainer" class="settings-box">

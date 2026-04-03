@@ -11,7 +11,6 @@
 #include "ash/wm/overview/overview_session.h"
 #include "ash/wm/window_util.h"
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "ui/aura/client/screen_position_client.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_targeter.h"
@@ -44,7 +43,7 @@ bool IsWindowTargeted(aura::Window* window,
     gfx::Point point_in_root = local_point;
     aura::Window::ConvertPointToTarget(window, window->GetRootWindow(),
                                        &point_in_root);
-    ui::MouseEvent event(ui::ET_MOUSE_MOVED, local_point, point_in_root,
+    ui::MouseEvent event(ui::EventType::kMouseMoved, local_point, point_in_root,
                          base::TimeTicks::Now(), 0, 0);
     return targeter->SubtreeShouldBeExploredForEvent(window, event);
   }
@@ -72,7 +71,7 @@ aura::Window* GetTopmostWindowAtPointWithinWindow(
 
   if (IsTopLevelWindow(window)) {
     if (IsWindowTargeted(window, screen_point, targeter)) {
-      return base::Contains(ignore, window) ? nullptr : window;
+      return ignore.contains(window) ? nullptr : window;
     }
     return nullptr;
   }
@@ -115,7 +114,7 @@ aura::Window* GetToplevelWindowInOverviewAtPoint(
   }
 
   window = window->GetToplevelWindow();
-  return base::Contains(ignore, window) ? nullptr : window;
+  return ignore.contains(window) ? nullptr : window;
 }
 
 }  // namespace

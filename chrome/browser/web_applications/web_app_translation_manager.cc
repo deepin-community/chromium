@@ -5,6 +5,7 @@
 #include "chrome/browser/web_applications/web_app_translation_manager.h"
 
 #include "base/containers/span.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -26,9 +27,9 @@ base::FilePath GetDirectory(const base::FilePath& web_apps_directory) {
   return web_apps_directory.AppendASCII("Translations");
 }
 
-LocaleOverrides ConvertTranslationItemToLocaleOverrides(
+proto::LocaleOverrides ConvertTranslationItemToLocaleOverrides(
     blink::Manifest::TranslationItem translation) {
-  LocaleOverrides locale_overrides;
+  proto::LocaleOverrides locale_overrides;
   if (translation.name) {
     locale_overrides.set_name(translation.name.value());
   }
@@ -42,7 +43,7 @@ LocaleOverrides ConvertTranslationItemToLocaleOverrides(
 }
 
 blink::Manifest::TranslationItem ConvertLocaleOverridesToTranslationItem(
-    const LocaleOverrides& locale_overrides) {
+    const proto::LocaleOverrides& locale_overrides) {
   blink::Manifest::TranslationItem translation_item;
 
   if (locale_overrides.has_name()) {
@@ -60,23 +61,24 @@ blink::Manifest::TranslationItem ConvertLocaleOverridesToTranslationItem(
   return translation_item;
 }
 
-AllTranslations ReadProtoBlocking(scoped_refptr<FileUtilsWrapper> utils,
-                                  const base::FilePath& web_apps_directory) {
+proto::AllTranslations ReadProtoBlocking(
+    scoped_refptr<FileUtilsWrapper> utils,
+    const base::FilePath& web_apps_directory) {
   base::FilePath translations_dir = GetDirectory(web_apps_directory);
   std::string value;
   if (!utils->ReadFileToString(translations_dir, &value)) {
-    return AllTranslations();
+    return proto::AllTranslations();
   }
-  AllTranslations proto;
+  proto::AllTranslations proto;
   if (!proto.ParseFromString(value)) {
-    return AllTranslations();
+    return proto::AllTranslations();
   }
   return proto;
 }
 
 bool WriteProtoBlocking(scoped_refptr<FileUtilsWrapper> utils,
                         const base::FilePath& web_apps_directory,
-                        AllTranslations proto) {
+                        proto::AllTranslations proto) {
   base::FilePath translations_dir = GetDirectory(web_apps_directory);
   std::string proto_as_string = proto.SerializeAsString();
   return utils->WriteFile(translations_dir,
@@ -89,7 +91,7 @@ bool DeleteTranslationsBlocking(scoped_refptr<FileUtilsWrapper> utils,
   if (!utils->CreateDirectory(web_apps_directory)) {
     return false;
   }
-  AllTranslations proto = ReadProtoBlocking(utils, web_apps_directory);
+  proto::AllTranslations proto = ReadProtoBlocking(utils, web_apps_directory);
 
   proto.mutable_id_to_translations_map()->erase(app_id);
 
@@ -105,12 +107,12 @@ bool WriteTranslationsBlocking(
     return false;
   }
 
-  AllTranslations proto = ReadProtoBlocking(utils, web_apps_directory);
+  proto::AllTranslations proto = ReadProtoBlocking(utils, web_apps_directory);
 
   auto* mutable_id_to_translations_map = proto.mutable_id_to_translations_map();
   mutable_id_to_translations_map->erase(app_id);
 
-  WebAppTranslations locale_to_overrides_map;
+  proto::WebAppTranslations locale_to_overrides_map;
 
   for (const auto& translation : translations) {
     (*locale_to_overrides_map
@@ -154,7 +156,7 @@ void WebAppTranslationManager::WriteTranslations(
   }
 
   const std::string& locale = g_browser_process->GetApplicationLocale();
-  // TODO(crbug.com/1259777): Check other matching locales. Eg if no name
+  // TODO(crbug.com/40201597): Check other matching locales. Eg if no name
   // defined in en-US, check en.
   auto it = translations.find(locale);
   if (it != translations.end()) {
@@ -195,7 +197,7 @@ void WebAppTranslationManager::ReadTranslations(ReadCallback callback) {
 
 void WebAppTranslationManager::OnTranslationsRead(
     ReadCallback callback,
-    const AllTranslations& proto) {
+    const proto::AllTranslations& proto) {
   translation_cache_.clear();
   const std::string& locale = g_browser_process->GetApplicationLocale();
 
@@ -204,7 +206,7 @@ void WebAppTranslationManager::OnTranslationsRead(
 
     for (const auto& locale_to_overrides :
          id_to_translations.second.locale_to_overrides_map()) {
-      // TODO(crbug.com/1259777): Check other matching locales. Eg if no name
+      // TODO(crbug.com/40201597): Check other matching locales. Eg if no name
       // defined in en-US, check en.
       if (locale_to_overrides.first == locale) {
         translation_cache_[app_id] =

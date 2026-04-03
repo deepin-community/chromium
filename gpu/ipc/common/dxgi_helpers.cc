@@ -5,6 +5,7 @@
 #include "gpu/ipc/common/dxgi_helpers.h"
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/logging.h"
@@ -76,15 +77,9 @@ bool CopyDXGIBufferToShMem(
     Microsoft::WRL::ComPtr<ID3D11Texture2D>* staging_texture) {
   DCHECK(d3d11_device);
 
-  uint8_t* dest_buffer = shared_memory.data();
-  size_t dst_buffer_size = shared_memory.size_bytes();
-
   Microsoft::WRL::ComPtr<ID3D11Device1> device1;
   HRESULT hr = d3d11_device->QueryInterface(IID_PPV_ARGS(&device1));
-  if (FAILED(hr)) {
-    DLOG(ERROR) << "Failed to open D3D11_1 device. hr=" << std::hex << hr;
-    return false;
-  }
+  CHECK_EQ(hr, S_OK);
 
   Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
 
@@ -95,19 +90,18 @@ bool CopyDXGIBufferToShMem(
     return false;
   }
 
-  return CopyD3D11TexToMem(texture.Get(), dest_buffer, dst_buffer_size,
-                           d3d11_device, staging_texture);
+  return CopyD3D11TexToMem(texture.Get(), shared_memory, d3d11_device,
+                           staging_texture);
 }
 
 bool CopyD3D11TexToMem(
     ID3D11Texture2D* src_texture,
-    uint8_t* dst_buffer,
-    size_t buffer_size,
+    base::span<uint8_t> dst_buffer,
     ID3D11Device* d3d11_device,
     Microsoft::WRL::ComPtr<ID3D11Texture2D>* staging_texture) {
   DCHECK(d3d11_device);
   DCHECK(staging_texture);
-  DCHECK(dst_buffer);
+  DCHECK(!dst_buffer.empty());
   DCHECK(src_texture);
 
   D3D11_TEXTURE2D_DESC texture_desc = {};
@@ -119,7 +113,7 @@ bool CopyD3D11TexToMem(
     return false;
   }
   size_t copy_size = texture_desc.Height * texture_desc.Width * 3 / 2;
-  if (buffer_size < copy_size) {
+  if (dst_buffer.size() < copy_size) {
     DLOG(ERROR) << "Invalid buffer size for copy.";
     return false;
   }
@@ -157,23 +151,13 @@ bool CopyD3D11TexToMem(
 
     // Key equal to 0 is also used by the producer. Therefore, this keyed
     // mutex acts purely as a regular mutex.
-    //
-    // TODO(crbug.com/323751343): 5000ms is a temporary workaround to
-    // detect hangs. It should be `INFINITE` after the hang rootcause is
-    // fixed. Wait duration calculation and histogram reporting is also
-    // temporary.
-    base::Time before = base::Time::Now();
-    hr = keyed_mutex->AcquireSync(0, 5000);
-    int wait_duration_ms = (base::Time::Now() - before).InMilliseconds();
-    base::UmaHistogramCounts10000(
-        "Media.VideoCapture.Win.MappingAcquireMutexDelayMs", wait_duration_ms);
-    if (hr == WAIT_TIMEOUT) {
-      // Waited too long, likely a deadlock has happened. Crash report will
-      // have all the threads.
-      SCOPED_CRASH_KEY_NUMBER("KeyedMutexHangDebugging", "wait duration",
-                              wait_duration_ms);
-      base::debug::DumpWithoutCrashing();
-    }
+    // 300ms is long enough to get the mutex in 99.999% of cases. Yet we
+    // don't want to stall the callee indefinitely if the mutex is held by
+    // e.g. GpuMain thread while it's blocked on driver waiting for shader
+    // compilation.
+    // It's better to drop a frame in this case.
+    hr = keyed_mutex->AcquireSync(0, 300);
+
     // Can't check FAILED(hr), because AcquireSync may return e.g. WAIT_TIMEOUT
     // value.
     if (hr != S_OK) {
@@ -204,17 +188,17 @@ bool CopyD3D11TexToMem(
   const uint32_t source_stride = mapped_resource.RowPitch;
   const uint32_t dest_stride = texture_desc.Width;
 
-  return libyuv::NV12Copy(source_buffer, source_stride,
-                          source_buffer + texture_desc.Height * source_stride,
-                          source_stride, dst_buffer, dest_stride,
-                          dst_buffer + texture_desc.Height * dest_stride,
-                          dest_stride, texture_desc.Width,
-                          texture_desc.Height) == 0;
+  return libyuv::NV12Copy(
+             source_buffer, source_stride,
+             UNSAFE_TODO(source_buffer + texture_desc.Height * source_stride),
+             source_stride, dst_buffer.data(), dest_stride,
+             dst_buffer.subspan(texture_desc.Height * dest_stride).data(),
+             dest_stride, texture_desc.Width, texture_desc.Height) == 0;
 }
 
-GPU_EXPORT bool CopyShMemToDXGIBuffer(base::span<uint8_t> shared_memory,
-                                      HANDLE dxgi_handle,
-                                      ID3D11Device* d3d11_device) {
+bool CopyShMemToDXGIBuffer(base::span<uint8_t> shared_memory,
+                           HANDLE dxgi_handle,
+                           ID3D11Device* d3d11_device) {
   CHECK(d3d11_device);
 
   uint8_t* src_buffer = shared_memory.data();
@@ -222,10 +206,7 @@ GPU_EXPORT bool CopyShMemToDXGIBuffer(base::span<uint8_t> shared_memory,
 
   Microsoft::WRL::ComPtr<ID3D11Device1> device1;
   HRESULT hr = d3d11_device->QueryInterface(IID_PPV_ARGS(&device1));
-  if (FAILED(hr)) {
-    DLOG(ERROR) << "Failed to open D3D11_1 device. hr=" << std::hex << hr;
-    return false;
-  }
+  CHECK_EQ(hr, S_OK);
 
   Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
 
@@ -240,10 +221,10 @@ GPU_EXPORT bool CopyShMemToDXGIBuffer(base::span<uint8_t> shared_memory,
                            d3d11_device);
 }
 
-GPU_EXPORT bool CopyMemToD3D11Tex(uint8_t* src_buffer,
-                                  size_t buffer_size,
-                                  ID3D11Texture2D* output_texture,
-                                  ID3D11Device* d3d11_device) {
+bool CopyMemToD3D11Tex(uint8_t* src_buffer,
+                       size_t buffer_size,
+                       ID3D11Texture2D* output_texture,
+                       ID3D11Device* d3d11_device) {
   CHECK(d3d11_device);
   CHECK(src_buffer);
   CHECK(output_texture);

@@ -26,29 +26,18 @@ constexpr char kPrepareForUpdateSessionIdKey[] = "session_id";
 constexpr char kPrepareForUpdateAdvertisingIdKey[] = "advertising_id";
 constexpr char kPrepareForUpdateSecondarySharedSecretKey[] =
     "secondary_shared_secret";
+constexpr char kPrepareForUpdateDidTransferWifiKey[] = "did_transfer_wifi";
 
-bool IsResumeAfterUpdate() {
-  const base::Value::Dict& maybe_info =
-      g_browser_process->local_state()->GetDict(
-          prefs::kResumeQuickStartAfterRebootInfo);
+bool ShouldResumeAfterUpdate() {
+  const base::DictValue& maybe_info = g_browser_process->local_state()->GetDict(
+      prefs::kResumeQuickStartAfterRebootInfo);
   return maybe_info.FindString(kPrepareForUpdateSessionIdKey) &&
          maybe_info.FindString(kPrepareForUpdateAdvertisingIdKey);
 }
 
 }  // namespace
 
-SessionContext::SessionContext() {
-  is_resume_after_update_ = IsResumeAfterUpdate();
-  QS_LOG(INFO)
-      << "Going to fetch/generate session context. is_resume_after_update_: "
-      << is_resume_after_update_;
-
-  if (is_resume_after_update_) {
-    FetchPersistedSessionContext();
-  } else {
-    PopulateRandomSessionContext();
-  }
-}
+SessionContext::SessionContext() = default;
 
 SessionContext::SessionContext(SessionId session_id,
                                AdvertisingId advertising_id,
@@ -68,13 +57,25 @@ SessionContext& SessionContext::operator=(const SessionContext& other) =
 
 SessionContext::~SessionContext() = default;
 
-void SessionContext::ResetSession() {
-  is_resume_after_update_ = false;
-  PopulateRandomSessionContext();
+void SessionContext::FillOrResetSession() {
+  is_resume_after_update_ = ShouldResumeAfterUpdate();
+  QS_LOG(INFO)
+      << "Going to fetch/generate session context. is_resume_after_update_: "
+      << is_resume_after_update_;
+
+  if (is_resume_after_update_) {
+    FetchPersistedSessionContext();
+  } else {
+    PopulateRandomSessionContext();
+  }
 }
 
-base::Value::Dict SessionContext::GetPrepareForUpdateInfo() {
-  base::Value::Dict prepare_for_update_info;
+void SessionContext::CancelResume() {
+  is_resume_after_update_ = false;
+}
+
+base::DictValue SessionContext::GetPrepareForUpdateInfo() {
+  base::DictValue prepare_for_update_info;
   prepare_for_update_info.Set(kPrepareForUpdateSessionIdKey,
                               base::NumberToString(session_id_));
   prepare_for_update_info.Set(kPrepareForUpdateAdvertisingIdKey,
@@ -88,7 +89,17 @@ base::Value::Dict SessionContext::GetPrepareForUpdateInfo() {
       kPrepareForUpdateSecondarySharedSecretKey,
       base::Base64Encode(secondary_shared_secret_bytes));
 
+  // We persist the bit representing completion of the Wi-Fi transfer, but Gaia
+  // account setup happens after any updates are installed, so there is no need
+  // to persist the Gaia account setup bit.
+  prepare_for_update_info.Set(kPrepareForUpdateDidTransferWifiKey,
+                              did_transfer_wifi_);
+
   return prepare_for_update_info;
+}
+
+void SessionContext::SetDidTransferWifi(bool did_transfer_wifi) {
+  did_transfer_wifi_ = did_transfer_wifi;
 }
 
 void SessionContext::PopulateRandomSessionContext() {
@@ -99,21 +110,24 @@ void SessionContext::PopulateRandomSessionContext() {
   advertising_id_ = AdvertisingId();
   crypto::RandBytes(shared_secret_);
   crypto::RandBytes(secondary_shared_secret_);
+  did_transfer_wifi_ = false;
 }
 
 void SessionContext::FetchPersistedSessionContext() {
   PrefService* prefs = g_browser_process->local_state();
-  const base::Value::Dict& session_info =
+  const base::DictValue& session_info =
       prefs->GetDict(prefs::kResumeQuickStartAfterRebootInfo);
 
   const std::string* session_id_str =
       session_info.FindString(kPrepareForUpdateSessionIdKey);
-  CHECK(session_id_str);
+  CHECK(session_id_str)
+      << "kPrepareForUpdateSessionIdKey missing in session info.";
   base::StringToUint64(*session_id_str, &session_id_);
 
   const std::string* advertising_id_str =
       session_info.FindString(kPrepareForUpdateAdvertisingIdKey);
-  CHECK(advertising_id_str);
+  CHECK(advertising_id_str)
+      << "kPrepareForUpdateAdvertisingIdKey missing in session info.";
   std::optional<AdvertisingId> maybe_advertising_id =
       AdvertisingId::ParseFromBase64(*advertising_id_str);
   if (!maybe_advertising_id.has_value()) {
@@ -126,8 +140,14 @@ void SessionContext::FetchPersistedSessionContext() {
 
   const std::string* secondary_shared_secret_str =
       session_info.FindString(kPrepareForUpdateSecondarySharedSecretKey);
-  CHECK(secondary_shared_secret_str);
+  CHECK(secondary_shared_secret_str)
+      << "kPrepareForUpdateSecondarySharedSecretKey missing in session info.";
   DecodeSharedSecret(*secondary_shared_secret_str);
+
+  std::optional<bool> did_transfer_wifi =
+      session_info.FindBool(kPrepareForUpdateDidTransferWifiKey);
+  did_transfer_wifi_ = did_transfer_wifi.value_or(true);
+
   prefs->ClearPref(prefs::kResumeQuickStartAfterRebootInfo);
 }
 

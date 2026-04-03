@@ -78,21 +78,19 @@ class CPWL_Edit final : public CPWL_Wnd {
   CFX_PointF GetScrollPos() const;
   void SetScrollPos(const CFX_PointF& point);
 
-  void SetCharSet(FX_Charset nCharSet) { m_nCharSet = nCharSet; }
-  FX_Charset GetCharSet() const { return m_nCharSet; }
+  void SetCharSet(FX_Charset nCharSet) { char_set_ = nCharSet; }
+  FX_Charset GetCharSet() const { return char_set_; }
 
   void SetReadyToInput();
   void SetAlignFormatVerticalCenter();
   void SetCharArray(int32_t nCharArray);
   void SetLimitChar(int32_t nLimitChar);
   bool CanSelectAll() const;
-  bool CanCopy() const;
-  bool CanCut() const;
-  void CutText();
   void SetText(const WideString& csText);
   bool IsTextFull() const;
+  void SetMaxUndoItemsForTest(size_t items);
 
-  static float GetCharArrayAutoFontSize(const CPDF_Font* pFont,
+  static float GetCharArrayAutoFontSize(const CPDF_Font* font,
                                         const CFX_FloatRect& rcPlate,
                                         int32_t nCharArray);
 
@@ -101,22 +99,11 @@ class CPWL_Edit final : public CPWL_Wnd {
                 const CFX_PointF& ptFoot);
 
  private:
-  // In case of implementation swallow the OnKeyDown event. If the event is
-  // swallowed, implementation may do other unexpected things, which is not the
-  // control means to do.
-  static bool IsProceedtoOnChar(FWL_VKEYCODE nKeyCode,
-                                Mask<FWL_EVENTFLAG> nFlag);
-
   bool OnKeyDownInternal(FWL_VKEYCODE nKeyCode, Mask<FWL_EVENTFLAG> nFlag);
   bool OnCharInternal(uint16_t nChar, Mask<FWL_EVENTFLAG> nFlag);
 
-  void CopyText();
-  void PasteText();
-  void InsertWord(uint16_t word, FX_Charset nCharset);
-  void InsertReturn();
   bool IsWndHorV() const;
   void Delete();
-  void Backspace();
   void GetCaretInfo(CFX_PointF* ptHead, CFX_PointF* ptFoot) const;
   void SetEditCaret(bool bVisible);
 
@@ -126,12 +113,12 @@ class CPWL_Edit final : public CPWL_Wnd {
   bool IsVScrollBarVisible() const;
   void SetParamByFlag();
 
-  bool m_bMouseDown = false;
-  bool m_bFocus = false;
-  FX_Charset m_nCharSet = FX_Charset::kDefault;
-  CFX_FloatRect m_rcOldWindow;
-  std::unique_ptr<CPWL_EditImpl> const m_pEditImpl;
-  UnownedPtr<CPWL_Caret> m_pCaret;
+  bool mouse_down_ = false;
+  bool focus_ = false;
+  FX_Charset char_set_ = FX_Charset::kDefault;
+  CFX_FloatRect old_window_rect_;
+  std::unique_ptr<CPWL_EditImpl> const edit_impl_;
+  UnownedPtr<CPWL_Caret> caret_;
 };
 
 #endif  // FPDFSDK_PWL_CPWL_EDIT_H_

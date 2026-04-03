@@ -1,4 +1,5 @@
 load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//tensorflow:tensorflow.bzl", "if_google", "tf_cc_binary")
 
 package_group(
@@ -11,7 +12,6 @@ package_group(
         "//learning/brain/experimental/tfrt/...",
         "//learning/brain/tfrt/...",
         "//learning/brain/mobile/lite/...",
-        "//learning/infra/mira/distributed/...",
     ]),
 )
 
@@ -60,7 +60,7 @@ cc_library(
     testonly = True,
     srcs = ["bef_executor_flags.cc"],
     hdrs = ["bef_executor_flags.h"],
-    visibility = ["//third_party/tf_runtime_google:__pkg__"],
+    visibility = ["//visibility:private"],
     deps = [
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/strings",

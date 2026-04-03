@@ -26,6 +26,7 @@
 #include "absl/base/attributes.h"
 #include "absl/strings/str_format.h"
 #include "absl/types/span.h"
+#include "./common/logging.h"
 #include "./fuzztest/internal/flag_name.h"
 #include "./fuzztest/internal/logging.h"
 #include "./fuzztest/internal/table_of_recent_compares.h"
@@ -172,9 +173,19 @@ void ExecutionCoverage::UpdateMaxStack(uintptr_t PC) {
   }
 }
 
-// Coverage only available in Clang, but only for Linux.
-// iOS and Windows and Android might not have what we need.
-#if defined(__clang__) && defined(__linux__) && !defined(__ANDROID__)
+// Coverage only available in Clang, but only for Linux, macOS, and newer
+// versions of Android. Windows might not have what we need.
+#if /* Supported compilers */                         \
+    defined(__clang__) &&                             \
+    (/* Supported platforms */                        \
+     (defined(__linux__) && !defined(__ANDROID__)) || \
+     (defined(__ANDROID_MIN_SDK_VERSION__) &&         \
+      __ANDROID_MIN_SDK_VERSION__ >= 28) ||           \
+     defined(__APPLE__))
+#define FUZZTEST_COVERAGE_IS_AVAILABLE
+#endif
+
+#ifdef FUZZTEST_COVERAGE_IS_AVAILABLE
 namespace {
 // Use clang's vector extensions. This way it will implement with whatever the
 // platform supports.
@@ -188,8 +199,8 @@ constexpr size_t kVectorSize = sizeof(Vector);
 FUZZTEST_INTERNAL_NOSANITIZE bool UpdateVectorized(
     const uint8_t *execution_data, uint8_t *corpus_data, size_t size,
     size_t offset_to_align) {
-  FUZZTEST_INTERNAL_CHECK(size >= kVectorSize,
-                          "size cannot be smaller than block size!");
+  FUZZTEST_CHECK(size >= kVectorSize)
+      << "size cannot be smaller than block size!";
 
   // Avoid collapsing the "greater than" vector until the end.
   Vector any_greater{};
@@ -280,8 +291,8 @@ bool CorpusCoverage::Update(ExecutionCoverage* execution_coverage) {
   absl::Span<uint8_t> execution_map = execution_coverage->GetCounterMap();
   // Note: corpus_map_size_ will be larger than execution_map.size().
   // See the constructor for more details.
-  FUZZTEST_INTERNAL_CHECK(execution_map.size() <= corpus_map_size_,
-                          "Map size mismatch.");
+  FUZZTEST_CHECK(execution_map.size() <= corpus_map_size_)
+      << "Map size mismatch.";
 
   // Calculate the offset required to align `p` to alignof(Vector).
   void* p = execution_map.data();
@@ -315,7 +326,7 @@ bool CorpusCoverage::Update(ExecutionCoverage* execution_coverage) {
   return new_coverage || execution_coverage->NewCoverageFound();
 }
 
-#else  // __clang__ && __linux__
+#else  // FUZZTEST_COVERAGE_IS_AVAILABLE
 
 // On other compilers we just need it to build, but we know we don't have any
 // instrumentation.
@@ -326,21 +337,20 @@ bool CorpusCoverage::Update(ExecutionCoverage* execution_coverage) {
   return false;
 }
 
-#endif  // __clang__ && __linux__
+#endif  // FUZZTEST_COVERAGE_IS_AVAILABLE
 
 }  // namespace fuzztest::internal
 
-#if !defined(FUZZTEST_COMPATIBILITY_MODE) && !defined(FUZZTEST_USE_CENTIPEDE)
+#if !defined(FUZZTEST_COMPATIBILITY_MODE) && \
+    !defined(FUZZTEST_USE_CENTIPEDE) && !defined(FUZZTEST_NO_LEGACY_COVERAGE)
 // Sanitizer Coverage hooks.
 
 // The instrumentation runtime calls back the following function at startup,
 // where [start,end) is the array of 8-bit counters created for the current DSO.
 extern "C" void __sanitizer_cov_8bit_counters_init(uint8_t* start,
                                                    uint8_t* stop) {
-  FUZZTEST_INTERNAL_CHECK_PRECONDITION(start != nullptr,
-                                       "Invalid counter map address.");
-  FUZZTEST_INTERNAL_CHECK_PRECONDITION(start < stop,
-                                       "Invalid counter map size.");
+  FUZZTEST_PRECONDITION(start != nullptr) << "Invalid counter map address.";
+  FUZZTEST_PRECONDITION(start < stop) << "Invalid counter map size.";
   size_t map_size = stop - start;
 
   // For now, we assume single DSO. This means that this call back should get
@@ -387,16 +397,6 @@ ABSL_ATTRIBUTE_ALWAYS_INLINE      // To make __builtin_return_address(0) work.
       .Insert(arg1, arg2);
 
   fuzztest::internal::execution_coverage_instance->UpdateMaxStack(PC);
-}
-
-// Use NO_SANITIZE_MEMORY and ADDRESS to skip possible errors on reading buffer.
-FUZZTEST_INTERNAL_NOSANITIZE
-static size_t InternalStrnlen(const char *s, size_t n) {
-  size_t len = 0;
-  while (len < n && s[len]) {
-    len++;
-  }
-  return len;
 }
 
 FUZZTEST_INTERNAL_NOSANITIZE
@@ -497,11 +497,10 @@ FUZZTEST_INTERNAL_NOSANITIZE
 void __sanitizer_weak_hook_strncmp(void *, const char *s1, const char *s2,
                                    size_t n, int result) {
   if (s1 == nullptr || s2 == nullptr) return;
-  size_t len1 = InternalStrnlen(s1, n);
-  size_t len2 = InternalStrnlen(s2, n);
-  n = std::min(std::min(n, len1), len2);
+  size_t len = 0;
+  while (len < n && s1[len] && s2[len]) ++len;
   TraceMemCmp(reinterpret_cast<const uint8_t *>(s1),
-              reinterpret_cast<const uint8_t *>(s2), n, result);
+              reinterpret_cast<const uint8_t *>(s2), len, result);
 }
 
 FUZZTEST_INTERNAL_NOSANITIZE
@@ -522,4 +521,5 @@ void __sanitizer_weak_hook_strncasecmp(void *caller_pc, const char *s1,
 }
 
 #endif  // !defined(FUZZTEST_COMPATIBILITY_MODE) &&
-        // !defined(FUZZTEST_USE_CENTIPEDE)
+        // !defined(FUZZTEST_USE_CENTIPEDE) &&
+        // !defined(FUZZTEST_NO_LEGACY_COVERAGE)

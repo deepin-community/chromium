@@ -6,24 +6,32 @@
 #define THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_SCRIPT_PROMISE_RESOLVER_WITH_TRACKER_H_
 
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/strcat.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 
-// ScriptPromiseResolverWithTracker is a wrapper around ScriptPromiseResolver
-// which simplifies recording UMA metric and latency for APIs.
+// ScriptPromiseResolverWithTracker is a wrapper around
+// ScriptPromiseResolverBase which simplifies recording UMA metric and latency
+// for APIs.
 
 // Callers should ensure that the ResultEnumType has kOk and kTimedOut as
 // values. This is a sample usage CL: http://crrev.com/c/4053546.
 template <typename ResultEnumType, typename IDLResolvedType>
 class CORE_EXPORT ScriptPromiseResolverWithTracker
     : public GarbageCollected<
-          ScriptPromiseResolverWithTracker<ResultEnumType, IDLResolvedType>> {
+          ScriptPromiseResolverWithTracker<ResultEnumType, IDLResolvedType>>,
+      public ExecutionContextLifecycleObserver {
  public:
   // For a given metric |metric_name_prefix|, this class will record
-  // "|metric_name_prefix|.Result" and "|metric_name_prefix|.Latency",
-  // or "|metric_name_prefix|.|result_suffix_|" if a custom result-suffix
-  // is specified.
+  // "|metric_name_prefix|.Result" and "|metric_name_prefix|.Latency".
+  // It will use "|metric_name_prefix|.|result_suffix_|" if a custom
+  // result-suffix is specified and "|metric_name_prefix|.|latency_suffix_|" if
+  // a custom latency-suffix is specified.
   //
   // For example, if the targeted histograms are
   // "WebRTC.EnumerateDevices.Result" and "WebRTC.EnumerateDevices.Latency",
@@ -37,27 +45,31 @@ class CORE_EXPORT ScriptPromiseResolverWithTracker
   // max_latency_bucket).
   ScriptPromiseResolverWithTracker(
       ScriptState* script_state,
-      std::string metric_name_prefix,
+      String metric_name_prefix,
       base::TimeDelta timeout_interval,
       base::TimeDelta min_latency_bucket = base::Milliseconds(1),
       base::TimeDelta max_latency_bucket = base::Seconds(10),
       size_t n_buckets = 50)
-      : metric_name_prefix_(std::move(metric_name_prefix)),
+      : ExecutionContextLifecycleObserver(nullptr),
+        metric_name_prefix_(std::move(metric_name_prefix)),
         start_time_(base::TimeTicks::Now()),
         min_latency_bucket_(min_latency_bucket),
         max_latency_bucket_(max_latency_bucket),
         n_buckets_(n_buckets) {
     DCHECK(!metric_name_prefix_.empty());
-    resolver_ =
-        MakeGarbageCollected<ScriptPromiseResolverTyped<IDLResolvedType>>(
-            script_state);
+    resolver_ = MakeGarbageCollected<ScriptPromiseResolver<IDLResolvedType>>(
+        script_state);
     if (timeout_interval.is_positive()) {
-      ExecutionContext::From(script_state)
-          ->GetTaskRunner(TaskType::kInternalDefault)
+      auto* execution_context = ExecutionContext::From(script_state);
+      // We're goging to keep this class alive for the duration of timeout,
+      // so observe execution context to detach the underlying resolver when
+      // context is gone.
+      SetExecutionContext(execution_context);
+      execution_context->GetTaskRunner(TaskType::kInternalDefault)
           ->PostDelayedTask(
               FROM_HERE,
-              WTF::BindOnce(&ScriptPromiseResolverWithTracker::RecordResult,
-                            WrapPersistent(this), ResultEnumType::kTimedOut),
+              BindOnce(&ScriptPromiseResolverWithTracker::RecordResult,
+                       WrapPersistent(this), ResultEnumType::kTimedOut),
               timeout_interval);
     }
   }
@@ -66,7 +78,7 @@ class CORE_EXPORT ScriptPromiseResolverWithTracker
       delete;
   ScriptPromiseResolverWithTracker& operator=(
       const ScriptPromiseResolverWithTracker&) = delete;
-  ~ScriptPromiseResolverWithTracker() = default;
+  ~ScriptPromiseResolverWithTracker() override = default;
 
   template <typename T>
   void Resolve(T value, ResultEnumType result = ResultEnumType::kOk) {
@@ -80,9 +92,14 @@ class CORE_EXPORT ScriptPromiseResolverWithTracker
     resolver_->template Reject<IDLRejectType>(value);
   }
 
-  void SetResultSuffix(std::string result_suffix) {
+  void SetResultSuffix(String result_suffix) {
     CHECK(!result_suffix.empty());
     result_suffix_ = std::move(result_suffix);
+  }
+
+  void SetLatencySuffix(String latency_suffix) {
+    CHECK(!latency_suffix.empty());
+    latency_suffix_ = std::move(latency_suffix);
   }
 
   void RecordAndThrowDOMException(ExceptionState& exception_state,
@@ -119,8 +136,8 @@ class CORE_EXPORT ScriptPromiseResolverWithTracker
       return;
 
     is_result_recorded_ = true;
-    base::UmaHistogramEnumeration(metric_name_prefix_ + "." + result_suffix_,
-                                  result);
+    base::UmaHistogramEnumeration(
+        StrCat({metric_name_prefix_, ".", result_suffix_}).Utf8(), result);
   }
 
   void RecordLatency() {
@@ -129,25 +146,31 @@ class CORE_EXPORT ScriptPromiseResolverWithTracker
 
     is_latency_recorded_ = true;
     const base::TimeDelta elapsed = base::TimeTicks::Now() - start_time_;
-    base::UmaHistogramCustomTimes(metric_name_prefix_ + ".Latency", elapsed,
-                                  min_latency_bucket_, max_latency_bucket_,
-                                  n_buckets_);
+    base::UmaHistogramCustomTimes(
+        StrCat({metric_name_prefix_, ".", latency_suffix_}).Utf8(), elapsed,
+        min_latency_bucket_, max_latency_bucket_, n_buckets_);
   }
 
   ScriptState* GetScriptState() const { return resolver_->GetScriptState(); }
 
-  ScriptPromiseTyped<IDLResolvedType> Promise() { return resolver_->Promise(); }
+  ScriptPromise<IDLResolvedType> Promise() { return resolver_->Promise(); }
 
-  void Trace(Visitor* visitor) const { visitor->Trace(resolver_); }
+  void Trace(Visitor* visitor) const override {
+    ExecutionContextLifecycleObserver::Trace(visitor);
+    visitor->Trace(resolver_);
+  }
 
  private:
-  Member<ScriptPromiseResolverTyped<IDLResolvedType>> resolver_;
-  const std::string metric_name_prefix_;
+  void ContextDestroyed() override { resolver_->Detach(); }
+
+  Member<ScriptPromiseResolver<IDLResolvedType>> resolver_;
+  const String metric_name_prefix_;
   const base::TimeTicks start_time_;
   const base::TimeDelta min_latency_bucket_;
   const base::TimeDelta max_latency_bucket_;
   const size_t n_buckets_;
-  std::string result_suffix_ = "Result";  // Mutable through SetResultSuffix().
+  String result_suffix_ = "Result";    // Mutable through SetResultSuffix().
+  String latency_suffix_ = "Latency";  // Mutable through SetLatencySuffix().
   bool is_latency_recorded_ = false;
   bool is_result_recorded_ = false;
 };

@@ -44,7 +44,7 @@ TEST(TensorHandle_ShapeTest, AsyncShape) {
   EXPECT_TRUE(t.shape().IsSameSize(TensorShape({2, 2})));
   for (int64_t a = 0; a < t.shape().dim_size(0); a++) {
     for (int64_t b = 0; b < t.shape().dim_size(1); b++) {
-      t.matrix<uint16>()(a, b) = uint16(a * b);
+      t.matrix<uint16_t>()(a, b) = uint16_t(a * b);
     }
   }
 
@@ -84,7 +84,7 @@ class FakeDevice : public Device {
  public:
   explicit FakeDevice(const DeviceAttributes& attr, bool is_local)
       : Device(nullptr, attr), is_local_(is_local) {}
-  Status Sync() override { return OkStatus(); }
+  absl::Status Sync() override { return absl::OkStatus(); }
   Allocator* GetAllocator(AllocatorAttributes) override { return nullptr; }
   bool IsLocal() const override { return is_local_; }
 
@@ -141,7 +141,7 @@ class PackedTensorHandleTest : public ::testing::Test {
   }
 
   bool IsReady(TensorHandle* handle) const { return handle->IsReady(); }
-  Status WaitReady(TensorHandle* handle) const {
+  absl::Status WaitReady(TensorHandle* handle) const {
     return handle->WaitReady("Test");
   }
 
@@ -181,7 +181,7 @@ TEST_F(PackedTensorHandleTest, PackedHandle) {
   handles.push_back(h1);
 
   // Create 2 remote TensorHandles (not ready).
-  const string remote_task = "/job:worker/replica:0/task:1";
+  const std::string remote_task = "/job:worker/replica:0/task:1";
   Device* d2 = ListGPUDevices().at(2);
   TensorHandle* h2 = TensorHandle::CreateUnshapedRemoteHandle(
       /*op_id=*/0, /*output_num=*/0, remote_task, dtype, d2, context());
@@ -289,12 +289,12 @@ TEST_F(PackedTensorHandleTest, PoisonHandle) {
   TF_EXPECT_OK(WaitReady(packed_handle));
 
   // Poisoning the handle will make WaitReady fail.
-  tensorflow::Status fake_failure_status(absl::StatusCode::kAborted,
-                                         "Fake failure.");
+  absl::Status fake_failure_status(absl::StatusCode::kAborted, "Fake failure.");
   packed_handle->Poison(fake_failure_status, packed_handle->device());
-  EXPECT_THAT(WaitReady(packed_handle),
-              StatusIs(fake_failure_status.code(),
-                       std::string(fake_failure_status.message())));
+  EXPECT_THAT(
+      WaitReady(packed_handle),
+      absl_testing::StatusIs(fake_failure_status.code(),
+                             std::string(fake_failure_status.message())));
 }
 
 TEST(TensorHandle_ResourceDeviceTest, OnLocalDevice) {
@@ -439,7 +439,7 @@ TEST_F(RemoteTensorHandleTest, UnknownRemoteDevice) {
   tensorflow::DataType dtype = DT_FLOAT;
   TensorShape shape = {};
 
-  const string remote_task = "/job:worker/replica:0/task:1";
+  const std::string remote_task = "/job:worker/replica:0/task:1";
   Device* d1 = device_mgr.ListDevices().at(1);
   TensorHandle* h = TensorHandle::CreateUnshapedRemoteHandle(
       /*op_id=*/0, /*output_num=*/0, remote_task, dtype, d1, context,
@@ -450,7 +450,7 @@ TEST_F(RemoteTensorHandleTest, UnknownRemoteDevice) {
   Device* d2 = device_mgr.ListDevices().at(2);
   TF_ASSERT_OK(h->SetRemoteShapeAndDevice(
       shape, d1, context->GetContextViewId(), d2->name()));
-  Status s;
+  absl::Status s;
   EXPECT_EQ(h->BackingDeviceName(&s), d2->name());
   TF_EXPECT_OK(s);
   EXPECT_EQ(h->device(), d2);
@@ -478,7 +478,7 @@ TEST_F(RemoteTensorHandleTest, PoisonRemote) {
   tensorflow::DataType dtype = DT_FLOAT;
   TensorShape shape = {};
 
-  const string remote_task = "/job:worker/replica:0/task:1";
+  const std::string remote_task = "/job:worker/replica:0/task:1";
   Device* d1 = device_mgr.ListDevices().at(1);
   TensorHandle* h = TensorHandle::CreateUnshapedRemoteHandle(
       /*op_id=*/0, /*output_num=*/0, remote_task, dtype, d1, context,
@@ -486,15 +486,15 @@ TEST_F(RemoteTensorHandleTest, PoisonRemote) {
   absl::Cleanup h_cleanup = [&]() { h->Unref(); };
   EXPECT_EQ(h->device(), d1);
 
-  tensorflow::Status fake_failure_status(absl::StatusCode::kAborted,
-                                         "Fake failure.");
+  absl::Status fake_failure_status(absl::StatusCode::kAborted, "Fake failure.");
   h->PoisonRemote(fake_failure_status, d1, context->GetContextViewId());
 
   Device* d2 = device_mgr.ListDevices().at(2);
-  EXPECT_THAT(h->SetRemoteShapeAndDevice(shape, d1, context->GetContextViewId(),
-                                         d2->name()),
-              StatusIs(fake_failure_status.code(),
-                       std::string(fake_failure_status.message())));
+  EXPECT_THAT(
+      h->SetRemoteShapeAndDevice(shape, d1, context->GetContextViewId(),
+                                 d2->name()),
+      absl_testing::StatusIs(fake_failure_status.code(),
+                             std::string(fake_failure_status.message())));
 }
 
 TEST_F(RemoteTensorHandleTest, PoisonRemoteMirror) {
@@ -519,7 +519,7 @@ TEST_F(RemoteTensorHandleTest, PoisonRemoteMirror) {
   tensorflow::DataType dtype = DT_FLOAT;
   TensorShape shape = {};
 
-  const string remote_task = "/job:worker/replica:0/task:1";
+  const std::string remote_task = "/job:worker/replica:0/task:1";
   Device* d1 = device_mgr.ListDevices().at(1);
   TensorHandle* h = TensorHandle::CreateUnshapedRemoteHandle(
       /*op_id=*/0, /*output_num=*/0, remote_task, dtype, d1, context,
@@ -533,14 +533,14 @@ TEST_F(RemoteTensorHandleTest, PoisonRemoteMirror) {
   TF_ASSERT_OK(
       h->AddUnshapedRemoteMirror(d2, op_id, output_num, remote_task, context));
 
-  tensorflow::Status fake_failure_status(absl::StatusCode::kAborted,
-                                         "Fake failure.");
+  absl::Status fake_failure_status(absl::StatusCode::kAborted, "Fake failure.");
   h->PoisonRemote(fake_failure_status, d2, context->GetContextViewId());
 
-  EXPECT_THAT(h->SetRemoteShapeAndDevice(shape, d2, context->GetContextViewId(),
-                                         d2->name()),
-              StatusIs(fake_failure_status.code(),
-                       std::string(fake_failure_status.message())));
+  EXPECT_THAT(
+      h->SetRemoteShapeAndDevice(shape, d2, context->GetContextViewId(),
+                                 d2->name()),
+      absl_testing::StatusIs(fake_failure_status.code(),
+                             std::string(fake_failure_status.message())));
 }
 
 TEST_F(RemoteTensorHandleTest, SetRemoteTensorHandleShapeTwice) {
@@ -565,7 +565,7 @@ TEST_F(RemoteTensorHandleTest, SetRemoteTensorHandleShapeTwice) {
   tensorflow::DataType dtype = DT_FLOAT;
   TensorShape shape = {};
 
-  const string remote_task = "/job:worker/replica:0/task:1";
+  const std::string remote_task = "/job:worker/replica:0/task:1";
   Device* d1 = device_mgr.ListDevices().at(1);
   TensorHandle* h = TensorHandle::CreateUnshapedRemoteHandle(
       /*op_id=*/0, /*output_num=*/0, remote_task, dtype, d1, context,
@@ -597,8 +597,8 @@ TEST_F(RemoteTensorHandleTest, SetRemoteTensorHandleShapeTwice) {
   TensorShape another_shape({1});
   EXPECT_THAT(h->SetRemoteShapeAndDevice(
                   another_shape, d1, context->GetContextViewId(), d1->name()),
-              StatusIs(tensorflow::error::INTERNAL,
-                       HasSubstr("Trying to change shape to")));
+              absl_testing::StatusIs(tensorflow::error::INTERNAL,
+                                     HasSubstr("Trying to change shape to")));
 }
 
 TEST_F(RemoteTensorHandleTest, SetRemoteMirrorShapeTwice) {
@@ -623,7 +623,7 @@ TEST_F(RemoteTensorHandleTest, SetRemoteMirrorShapeTwice) {
   tensorflow::DataType dtype = DT_FLOAT;
   TensorShape shape = {};
 
-  const string remote_task = "/job:worker/replica:0/task:1";
+  const std::string remote_task = "/job:worker/replica:0/task:1";
   Device* d1 = device_mgr.ListDevices().at(1);
   TensorHandle* h = TensorHandle::CreateUnshapedRemoteHandle(
       /*op_id=*/0, /*output_num=*/0, remote_task, dtype, d1, context,
@@ -650,8 +650,8 @@ TEST_F(RemoteTensorHandleTest, SetRemoteMirrorShapeTwice) {
   TensorShape another_shape({1});
   EXPECT_THAT(h->SetRemoteShapeAndDevice(
                   another_shape, d1, context->GetContextViewId(), d2->name()),
-              StatusIs(tensorflow::error::INTERNAL,
-                       HasSubstr("Trying to change shape to")));
+              absl_testing::StatusIs(tensorflow::error::INTERNAL,
+                                     HasSubstr("Trying to change shape to")));
 }
 
 TEST(TensorHandle_LocalTest, TensorFromDeviceSameDevice) {
@@ -753,7 +753,7 @@ TEST(TensorHandle_LocalTest, TensorFromDeviceInvalidDevice) {
 
   const Tensor* tensor_from_device;
   EXPECT_THAT(h->TensorFromDevice(d1, &tensor_from_device),
-              StatusIs(tensorflow::error::INTERNAL));
+              absl_testing::StatusIs(tensorflow::error::INTERNAL));
 }
 
 TEST(TensorHandle_ResourceShapeMirror, CreateAndCheckMirror) {
@@ -797,7 +797,7 @@ TEST(TensorHandle_ResourceShapeMirror, CreateAndCheckMirror) {
 
   // Adding a duplicate mirror with inconsistent arguments leads to failure.
   EXPECT_THAT(h->AddResourceShapeMirror(d1, op_id + 1, output_num, context),
-              StatusIs(tensorflow::error::INTERNAL));
+              absl_testing::StatusIs(tensorflow::error::INTERNAL));
 }
 
 TEST(TensorHandle_DeviceNameTest, OnLocalDevice) {
@@ -820,7 +820,7 @@ TEST(TensorHandle_DeviceNameTest, OnLocalDevice) {
   TensorShape shape = {2};
   Tensor tcpu(dtype, shape);
   Tensor tgpu(dtype, shape);
-  Status s;
+  absl::Status s;
 
   TensorHandle* th_cpu =
       TensorHandle::CreateLocalHandle(std::move(tcpu), dcpu, dcpu, dcpu, ctx);

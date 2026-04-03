@@ -43,7 +43,8 @@ TEST(ClientTest, GetThreadStackRangeBase) {
   th.join();
 }
 
-#if defined(ADDRESS_SANITIZER)
+#if defined(ADDRESS_SANITIZER) || defined(LEAK_SANITIZER) || \
+    defined(THREAD_SANITIZER) || defined(MEMORY_SANITIZER)
 #define MAYBE_GetSigaltStackRange DISABLED_GetSigaltStackRange
 #else
 #define MAYBE_GetSigaltStackRange GetSigaltStackRange
@@ -58,7 +59,7 @@ TEST(ClientTest, MAYBE_GetSigaltStackRange) {
   ASSERT_NE(sigaltstack(&altstack, &old_altstack), -1);
 
   struct sigaction oldact;
-  struct sigaction newact {};
+  struct sigaction newact{};
 
   static StackRange stackrange;
   static const char* stackptr;

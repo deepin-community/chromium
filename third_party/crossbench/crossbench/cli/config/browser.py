@@ -4,27 +4,37 @@
 
 from __future__ import annotations
 
-import dataclasses
 import argparse
 import dataclasses
-import pathlib
+import logging
+import os
 import re
-from typing import (TYPE_CHECKING, Any, Dict, Final, Iterable, List, Optional,
-                    TextIO, Tuple, Type, Union, cast)
+from typing import Any, Optional, Self
 
-import hjson
+from typing_extensions import override
 
-from crossbench import cli_helper, exception, plt
-
-import crossbench.browsers.all as browsers
+import crossbench.browsers.all as all_browsers
+from crossbench import path as pth
+from crossbench import plt
+from crossbench.browsers.apk_config import ApkConfig
 from crossbench.browsers.chrome.downloader import ChromeDownloader
 from crossbench.browsers.firefox.downloader import FirefoxDownloader
-from crossbench.cli.config.network import NetworkConfig, NetworkSpeedPreset
+from crossbench.browsers.webkit.downloader import WebKitDownloader
+from crossbench.browsers.webview.embedder import EMBEDDER_SHORT_NAME_TO_PACKAGE
+from crossbench.cli.config.driver import DriverConfig
+from crossbench.cli.config.driver_type import BrowserDriverType
+from crossbench.cli.config.env import ENV_CONFIG_PRESETS, EnvConfig
+from crossbench.cli.config.extension import ExtensionConfig
+from crossbench.cli.config.network import NetworkConfig
+from crossbench.cli.config.network_speed import NetworkSpeedPreset
 from crossbench.config import ConfigObject, ConfigParser
+from crossbench.parse import NumberParser, ObjectParser, PathParser
+from crossbench.plt.android_adb import adb_devices
+from crossbench.plt.ios import ios_devices
 
-from .driver import DriverConfig, BrowserDriverType
-
-SUPPORTED_BROWSER = ("chromium", "chrome", "safari", "edge", "firefox")
+SUPPORTED_EMBEDDER = tuple(EMBEDDER_SHORT_NAME_TO_PACKAGE)
+SUPPORTED_BROWSER = ("chrome", "chromium", "d8", "edge", "firefox", "safari",
+                     "webkit") + SUPPORTED_EMBEDDER
 
 # Split inputs like:
 # - "/out/x64.release/chrome"
@@ -36,58 +46,162 @@ SUPPORTED_BROWSER = ("chromium", "chrome", "safari", "edge", "firefox")
 # - "selenium:C:\out\x64.release\chrome"
 # - "selenium:C:\out\x64.release\chrome:4G"
 NETWORK_PRESETS: str = "|".join(
-    re.escape(preset.value) for preset in NetworkSpeedPreset)  # pytype: disable=missing-parameter
-SHORT_FORM_RE = re.compile(r"((?P<driver>\w{3,}):)??"
-                           r"(?P<path>([A-Z]:[/\\])?[^:]+)"
-                           f"(:(?P<network>{NETWORK_PRESETS}))?")
+    re.escape(preset.value) for preset in NetworkSpeedPreset)
+ENV_PRESETS: str = "|".join(re.escape(preset) for preset in ENV_CONFIG_PRESETS)
+
+SHORT_FORM_RE: re.Pattern[str] = re.compile(
+    r"((?P<driver>[\w-]{3,}):)??"
+    r"(?P<path>([A-Z]:[/\\])?[^:]+)"
+    f"(:(?P<network>{NETWORK_PRESETS}))?"
+    f"(:(?P<env>{ENV_PRESETS}))?")
+ANDROID_PACKAGE_RE: re.Pattern[str] = re.compile(r"[a-z]+(\.[a-z]+){2,}")
+VERSION_FOR_RANGE_RE: re.Pattern[str] = re.compile(
+    r"(?P<prefix>[^\d]*)(?P<milestone>\d+)")
+
 
 @dataclasses.dataclass(frozen=True)
 class BrowserConfig(ConfigObject):
-  browser: Union[pathlib.Path, str]
+  browser: pth.AnyPathLike
   driver: DriverConfig = DriverConfig.default()
-  network: NetworkConfig = NetworkConfig.default()
+  # Make network optional since --network provides a global default and we do
+  # want to have the option to explicitly specify the default network in a
+  # browser config.
+  network: NetworkConfig | None = None
+  env: EnvConfig | None = None
+
+  cache_dir: pth.AnyPath | None = None
+  clear_cache: bool | None = None
+  extensions: tuple[ExtensionConfig, ...] = ()
+  apk: ApkConfig | None = None
 
   def __post_init__(self) -> None:
     if not self.browser:
       raise ValueError(f"{type(self).__name__}.browser cannot be None.")
     if not self.driver:
       raise ValueError(f"{type(self).__name__}.driver cannot be None.")
-    if not self.network:
-      raise ValueError(f"{type(self).__name__}.driver cannot be None.")
 
   @classmethod
-  def default(cls) -> BrowserConfig:
-    return cls(browsers.Chrome.stable_path(), DriverConfig.default())
+  def default(cls) -> Self:
+    return cls(
+        all_browsers.Chrome.stable_path(plt.PLATFORM), DriverConfig.default())
 
   @classmethod
-  def loads(cls, value: str) -> BrowserConfig:
+  @override
+  def parse_any_path(cls, path: pth.LocalPath, **kwargs) -> Self:
+    if cls.is_supported_browser_path(path):
+      return cls(path)
+    return super().parse_any_path(path, **kwargs)
+
+  @classmethod
+  @override
+  def parse_str(cls, value: str) -> Self:
     if not value:
       raise argparse.ArgumentTypeError("Cannot parse empty string")
-    network = NetworkConfig.default()
+    path: pth.AnyPathLike | None = None
     driver = DriverConfig.default()
-    path: Optional[Union[pathlib.Path, str]] = None
-    if ":" not in value or cls.value_has_path_prefix(value):
-      # Variant 1: $PATH_OR_IDENTIFIER
+    network: NetworkConfig | None = None
+    env: EnvConfig | None = None
+    if ":" not in value or cls.is_path_like(value):
+      # Variant: $PATH_OR_IDENTIFIER
       path = cls._parse_path_or_identifier(value)
-    elif value[0] != "{":
-      # Variant 2: ${DRIVER_TYPE}:${PATH_OR_IDENTIFIER}:${NETWORK}
-      driver, path, network = cls._parse_inline_short_form(value)
     else:
-      # Variant 3: Full inline hjson
-      config = cli_helper.parse_inline_hjson(value)
-      with exception.annotate(f"Parsing inline {cls.__name__}"):
-        return cls.load_dict(config)
+      # Variant: ${DRIVER_TYPE}:${PATH_OR_IDENTIFIER}:${NETWORK}
+      driver, path, network, env = cls._parse_inline_short_form(value)
     assert path, "Invalid path"
-    assert network, "Invalid network"
-    return cls(path, driver, network)
+    return cls(path, driver, network, env)
 
+  @classmethod
+  def parse_with_range(cls, value: Any) -> tuple[Self, ...]:
+    if isinstance(value, str):
+      return cls._parse_with_range(value)
+    return (cls.parse(value),)
+
+  @classmethod
+  def _parse_with_range(cls, value: str) -> tuple[Self, ...]:
+    if not value:
+      raise argparse.ArgumentTypeError("Cannot parse empty string")
+
+    if ":" not in value:
+      return tuple(
+          cls.parse(f"{browser}") for browser in cls._expand_versions(value))
+
+    [driver_str, browser_str] = value.split(":", maxsplit=1)
+    return tuple(
+        cls.parse(f"{driver}:{browser}")
+        for driver in cls._expand_devices(driver_str)
+        for browser in cls._expand_versions(browser_str))
+
+  @classmethod
+  def _expand_versions(cls, value: str) -> tuple[str, ...]:
+    """
+    A valid `value` can look like either of these:
+    - "chrome" (no range, a single version). The method returns ("chrome",).
+    - "chrome-m130...132", "chrome-m130...m132" or "chrome-m130...chrome-m132"
+      (a range). The method returns ("chrome-m130", "chrome-m131",
+      "chrome-m132").
+    """
+    parts = value.split("...", maxsplit=1)
+    start_version: str = parts.pop(0)
+    if not parts:
+      return (start_version,)
+    limit_version = parts[0]
+
+    start_match = VERSION_FOR_RANGE_RE.fullmatch(start_version)
+    if not start_match:
+      raise argparse.ArgumentTypeError(
+          f"Start of a browser range {repr(value)} must end in digits, "
+          f"but got {repr(start_version)}")
+    limit_match = VERSION_FOR_RANGE_RE.fullmatch(limit_version)
+    if not limit_match:
+      raise argparse.ArgumentTypeError(
+          f"Upper limit of a browser range {repr(value)} must end in digits, "
+          f"but got {repr(limit_version)}")
+
+    start_prefix = start_match["prefix"]
+    limit_prefix = limit_match["prefix"]
+    if limit_prefix and not start_prefix.endswith(limit_prefix):
+      raise argparse.ArgumentTypeError(
+          f"Browser version range start prefix {repr(start_prefix)} must match "
+          f"limit prefix {repr(limit_prefix)}: {repr(value)}")
+
+    start_milestone: int = NumberParser.positive_int(
+        start_match["milestone"], "browser version range start milestone")
+    limit_milestone: int = NumberParser.positive_int(
+        limit_match["milestone"], "browser version range limit milestone")
+    if start_milestone > limit_milestone:
+      raise argparse.ArgumentTypeError(
+          f"Browser version limit must be larger than start: {repr(value)}")
+
+    count = limit_milestone - start_milestone
+    logging.info("Creating %d intermediate browser versions from %s", count,
+                 value)
+    versions = []
+    for milestone in range(start_milestone, limit_milestone + 1):
+      version_str = f"{start_prefix}{milestone}"
+      versions.append(version_str)
+    return tuple(versions)
+
+  @classmethod
+  def _expand_devices(cls, value: str) -> tuple[str, ...]:
+    """
+    A valid `value` can look like either of these:
+    - "android", "ios", "win" or any other valid driver identifier. The method
+      returns (value,).
+    - "ios-all", "adb-all" or "android-all". The method returns ("<serial_id1>",
+      ..., "<serial_idN>")
+    """
+    if value in ("android-all", "adb-all"):
+      return tuple(adb_devices(plt.PLATFORM).keys())
+    if value == "ios-all":
+      return tuple(ios_devices(plt.PLATFORM).keys())
+    return (value,)
 
   @classmethod
   def _parse_path_or_identifier(
       cls,
       maybe_path_or_identifier: str,
       driver_type: Optional[BrowserDriverType] = None,
-      driver: Optional[DriverConfig] = None) -> Union[str, pathlib.Path]:
+      driver: Optional[DriverConfig] = None) -> pth.AnyPathLike:
     if not maybe_path_or_identifier:
       raise argparse.ArgumentTypeError("Got empty browser identifier.")
     if not driver_type:
@@ -97,26 +211,33 @@ class BrowserConfig(ConfigObject):
         driver_type = BrowserDriverType.default()
     identifier = maybe_path_or_identifier.lower()
     path = None
-    if "/" in maybe_path_or_identifier or "\\" in maybe_path_or_identifier:
+    if cls.is_path_like(maybe_path_or_identifier):
+      if cls._is_downloadable_identifier(maybe_path_or_identifier):
+        return maybe_path_or_identifier
       # Assume a path since short-names never contain back-/slashes.
-      if driver_type.is_remote:
-        path = cli_helper.parse_path(maybe_path_or_identifier)
+      if driver_type.is_remote_browser:
+        path = PathParser.path(maybe_path_or_identifier)
       else:
-        path = cli_helper.parse_existing_path(maybe_path_or_identifier)
+        path = cls.resolve_path(
+            PathParser.existing_path(maybe_path_or_identifier))
     else:
       if ":" in maybe_path_or_identifier:
         raise argparse.ArgumentTypeError(
-            f"Got unexpected short-form string '{maybe_path_or_identifier}'. \n"
-            "  Use it directly on the parent config attribute: \n"
+            "Got unexpected short-form string "
+            f"{repr(maybe_path_or_identifier)}. \n"
+            "  - Use a complex browser config with separate "
+            "'browser' and 'driver' attributes, or\n"
+            "  - Use the short-form directly on the parent config attribute: \n"
             f"   {{my-browser: '{maybe_path_or_identifier}'}}")
       if maybe_path := cls._try_parse_short_name(identifier, driver_type):
         return maybe_path
-      if ChromeDownloader.is_valid(maybe_path_or_identifier, plt.PLATFORM):
+      if cls._is_downloadable_identifier(maybe_path_or_identifier):
         return maybe_path_or_identifier
-      if FirefoxDownloader.is_valid(maybe_path_or_identifier, plt.PLATFORM):
-        return maybe_path_or_identifier
+      if driver_type == BrowserDriverType.ANDROID:
+        if ANDROID_PACKAGE_RE.fullmatch(maybe_path_or_identifier):
+          return pth.AnyPosixPath(maybe_path_or_identifier)
     if not path:
-      path = cli_helper.try_resolve_existing_path(maybe_path_or_identifier)
+      path = pth.try_resolve_existing_path(maybe_path_or_identifier)
       if not path:
         raise argparse.ArgumentTypeError(
             f"Unknown browser path or short name: '{maybe_path_or_identifier}'")
@@ -125,103 +246,106 @@ class BrowserConfig(ConfigObject):
     raise argparse.ArgumentTypeError(f"Unsupported browser path='{path}'")
 
   @classmethod
+  def _is_downloadable_identifier(cls, maybe_path_or_identifier: str) -> bool:
+    # TODO: handle remote platforms.
+    platform = plt.PLATFORM
+    return any(
+        downloader_cls.is_valid(maybe_path_or_identifier, platform)
+        for downloader_cls in (ChromeDownloader, FirefoxDownloader,
+                               WebKitDownloader))
+
+  @classmethod
   def _try_parse_short_name(
       cls, identifier: str,
-      driver_type: BrowserDriverType) -> Optional[pathlib.Path]:
+      driver_type: BrowserDriverType) -> Optional[pth.AnyPath]:
     # We're not using a dict-based lookup here, since not all browsers are
     # available on all platforms
+    # TODO: handle remote platforms.
+    platform = plt.PLATFORM
     if identifier in ("chrome", "chrome-stable", "chr-stable", "chr"):
       if driver_type == BrowserDriverType.ANDROID:
-        return pathlib.Path("com.android.chrome")
-      return browsers.Chrome.stable_path()
+        return pth.AnyPosixPath("com.android.chrome")
+      return all_browsers.Chrome.stable_path(platform)
+    if identifier in ("chrome-app"):
+      if driver_type == BrowserDriverType.ANDROID:
+        return pth.AnyPosixPath("com.google.android.apps.chrome")
     if identifier in ("chrome-beta", "chr-beta"):
       if driver_type == BrowserDriverType.ANDROID:
-        return pathlib.Path("com.chrome.beta")
-      return browsers.Chrome.beta_path()
+        return pth.AnyPosixPath("com.chrome.beta")
+      return all_browsers.Chrome.beta_path(platform)
     if identifier in ("chrome-dev", "chr-dev"):
       if driver_type == BrowserDriverType.ANDROID:
-        return pathlib.Path("com.chrome.dev")
-      return browsers.Chrome.dev_path()
+        return pth.AnyPosixPath("com.chrome.dev")
+      return all_browsers.Chrome.dev_path(platform)
     if identifier in ("chrome-canary", "chr-canary"):
       if driver_type == BrowserDriverType.ANDROID:
-        return pathlib.Path("com.chrome.canary")
-      return browsers.Chrome.canary_path()
+        return pth.AnyPosixPath("com.chrome.canary")
+      return all_browsers.Chrome.canary_path(platform)
     if identifier == "chromium":
       if driver_type == BrowserDriverType.ANDROID:
-        return pathlib.Path("org.chromium.chrome")
-      return browsers.Chromium.default_path()
+        return pth.AnyPosixPath("org.chromium.chrome")
+      return all_browsers.Chromium.default_path(platform)
     if identifier in ("edge", "edge-stable"):
-      return browsers.Edge.stable_path()
+      return all_browsers.Edge.stable_path(platform)
     if identifier == "edge-beta":
-      return browsers.Edge.beta_path()
+      return all_browsers.Edge.beta_path(platform)
     if identifier == "edge-dev":
-      return browsers.Edge.dev_path()
+      return all_browsers.Edge.dev_path(platform)
     if identifier == "edge-canary":
-      return browsers.Edge.canary_path()
-    if identifier in ("safari", "sf"):
-      return browsers.Safari.default_path()
-    if identifier in ("safari-technology-preview", "safari-tp", "sf-tp", "tp"):
-      return browsers.Safari.technology_preview_path()
+      return all_browsers.Edge.canary_path(platform)
+    if identifier in ("safari", "sf", "safari-stable", "sf-stable"):
+      return all_browsers.Safari.default_path(platform)
+    if identifier in ("safari-technology-preview", "safari-tech-preview",
+                      "safari-tp", "sf-tp", "stp", "tp"):
+      return all_browsers.Safari.technology_preview_path(platform)
     if identifier in ("firefox", "firefox-stable", "ff", "ff-stable"):
-      return browsers.Firefox.default_path()
+      return all_browsers.Firefox.default_path(platform)
     if identifier in ("firefox-dev", "firefox-developer-edition", "ff-dev"):
-      return browsers.Firefox.developer_edition_path()
+      return all_browsers.Firefox.developer_edition_path(platform)
     if identifier in ("firefox-nightly", "ff-nightly", "ff-trunk"):
-      return browsers.Firefox.nightly_path()
+      return all_browsers.Firefox.nightly_path(platform)
+    if identifier in ("webview", "org.chromium.webview_shell"):
+      return pth.AnyPosixPath("org.chromium.webview_shell")
     return None
 
   @classmethod
-  def is_supported_browser_path(cls, path: pathlib.Path) -> bool:
-    path_str = str(path).lower()
-    for short_name in SUPPORTED_BROWSER:
-      if short_name in path_str:
-        return True
-    return False
+  def is_supported_browser_path(cls, path: pth.AnyPath) -> bool:
+    path_str = os.fspath(path).lower()
+    return any(short_name in path_str for short_name in SUPPORTED_BROWSER)
 
   @classmethod
   def _parse_inline_short_form(
       cls, value: str
-  ) -> Tuple[DriverConfig, Union[str, pathlib.Path], NetworkConfig]:
-    assert ":" in value
+  ) -> tuple[DriverConfig, pth.AnyPathLike, Optional[NetworkConfig],
+             Optional[EnvConfig]]:
+    assert ":" in value, f"Invalid short config {repr(value)} for {cls}"
     match = SHORT_FORM_RE.fullmatch(value)
     if not match:
       raise argparse.ArgumentTypeError(
           f"Invalid browser short form: '{value}' \n"
           "A browser path/identifier and "
           "at least a driver or network preset have to be present")
-    driver_identifier = match.group("driver")
     path_or_identifier = match.group("path")
-    network_identifier = match.group("network")
     if not path_or_identifier:
       raise argparse.ArgumentTypeError(
           "Browser short form: missing path or browser identifier.")
     driver = DriverConfig.default()
-    if driver_identifier is not None:
-      driver = cast(DriverConfig, DriverConfig.parse(match.group("driver")))
-    path: Union[str, pathlib.Path] = cls._parse_path_or_identifier(
+    if driver_identifier := match.group("driver"):
+      driver = DriverConfig.parse(driver_identifier)
+    path: pth.AnyPathLike = cls._parse_path_or_identifier(
         path_or_identifier, driver.type)
-    network = NetworkConfig.default()
-    if network_identifier is not None:
-      network = NetworkConfig.loads(network_identifier)
-    return (driver, path, network)
+    network = None
+    if network_identifier := match.group("network"):
+      network = NetworkConfig.parse_str(network_identifier)
+    env = None
+    if env_identifier := match.group("env"):
+      env = EnvConfig.parse_str(env_identifier)
+    return (driver, path, network, env)
 
   @classmethod
-  def load(cls, f: TextIO) -> BrowserConfig:
-    with exception.annotate(f"Loading browser config file: {f.name}"):
-      config = {}
-      with exception.annotate(f"Parsing {hjson.__name__}"):
-        config = hjson.load(f)
-      with exception.annotate(f"Parsing config file: {f.name}"):
-        return cls.load_dict(config)
-    raise argparse.ArgumentTypeError(f"Could not parse : '{f.name}'")
-
-  @classmethod
-  def load_dict(cls, config: Dict[str, Any]) -> BrowserConfig:
-    return cls.config_parse().parse(config)
-
-  @classmethod
-  def config_parse(cls) -> ConfigParser[BrowserConfig]:
-    parser = ConfigParser("BrowserConfig parser", cls)
+  @override
+  def config_parser(cls) -> ConfigParser[Self]:
+    parser = ConfigParser(cls)
     parser.add_argument(
         "browser",
         aliases=("path",),
@@ -230,16 +354,35 @@ class BrowserConfig(ConfigObject):
         depends_on=("driver",))
     parser.add_argument(
         "driver", type=DriverConfig, default=DriverConfig.default())
+    parser.add_argument("network", type=NetworkConfig)
     parser.add_argument(
-        "network",
-        required=False,
-        default=NetworkConfig.default(),
-        type=NetworkConfig)
+        "cache_dir",
+        aliases=("browser_cache", "browser_cache_dir"),
+        type=PathParser.optional_any_path,
+        default=None)
+    parser.add_argument(
+        "clear_cache",
+        aliases=("clear_cache_dir", "clear_browser_cache",
+                 "clear_browser_cache_dir"),
+        type=ObjectParser.optional_bool,
+        default=None)
+    parser.add_argument(
+        "extensions", type=ExtensionConfig, is_list=True, default=())
+    parser.add_argument("apk", type=ApkConfig)
     return parser
 
   @property
-  def path(self) -> pathlib.Path:
-    assert isinstance(self.browser, pathlib.Path)
+  def is_remote(self) -> bool:
+    return self.driver.type.is_remote_browser
+
+  @property
+  def is_local(self) -> bool:
+    return self.driver.type.is_local_browser
+
+  @property
+  def path(self) -> pth.AnyPath:
+    assert isinstance(self.browser,
+                      pth.AnyPath), f"Expected path got {self.browser}"
     return self.browser
 
   def get_platform(self) -> plt.Platform:

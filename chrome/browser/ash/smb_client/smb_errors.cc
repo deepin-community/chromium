@@ -49,7 +49,6 @@ SmbMountResult TranslateErrorToMountResult(smbprovider::ErrorType error) {
     case smbprovider::ERROR_COPY_FAILED:
     case smbprovider::ERROR_OPERATION_PENDING:
       NOTREACHED() << "Unexpected smbprovider error: " << (int)error;
-      return SmbMountResult::kUnknownFailure;
   }
 }
 

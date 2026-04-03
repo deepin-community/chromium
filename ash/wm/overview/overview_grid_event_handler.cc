@@ -62,7 +62,7 @@ void OverviewGridEventHandler::OnMouseEvent(ui::MouseEvent* event) {
   // case, so just exit overview. Note that this is done here instead of on
   // release like usual, because pressing the mouse while dragging sends out a
   // ui::GESTURE_END_EVENT which may cause a bad state.
-  if (event->type() == ui::ET_MOUSE_PRESSED &&
+  if (event->type() == ui::EventType::kMousePressed &&
       !overview_session_->CanProcessEvent()) {
     OverviewController::Get()->EndOverview(
         OverviewEndAction::kClickingOutsideWindowsInOverview);
@@ -71,8 +71,9 @@ void OverviewGridEventHandler::OnMouseEvent(ui::MouseEvent* event) {
     return;
   }
 
-  if (event->type() == ui::ET_MOUSE_RELEASED)
+  if (event->type() == ui::EventType::kMouseReleased) {
     HandleClickOrTap(event);
+  }
 }
 
 void OverviewGridEventHandler::OnGestureEvent(ui::GestureEvent* event) {
@@ -84,38 +85,38 @@ void OverviewGridEventHandler::OnGestureEvent(ui::GestureEvent* event) {
 
   // TODO(crbug.com/1341128): Enable context menu via long-press in library page
   // `SavedDeskLibraryView` will take over gesture event if it's active. When
-  // it's `ET_GESTURE_TAP`, here it does not set event to handled, and thus
-  // `HandleClickOrTap()` would be executed from
+  // it's `EventType::kGestureTap`, here it does not set event to handled, and
+  // thus `HandleClickOrTap()` would be executed from
   // `SavedDeskLibraryView::OnLocatedEvent()`.
   if (grid_->IsShowingSavedDeskLibrary()) {
     return;
   }
 
-  if (event->type() == ui::ET_GESTURE_TAP) {
+  if (event->type() == ui::EventType::kGestureTap) {
     HandleClickOrTap(event);
     return;
   }
 
   // The following events are for scrolling the overview scroll layout, which is
   // tablet only.
-  if (!display::Screen::GetScreen()->InTabletMode()) {
+  if (!display::Screen::Get()->InTabletMode()) {
     return;
   }
 
   switch (event->type()) {
-    case ui::ET_SCROLL_FLING_START: {
+    case ui::EventType::kScrollFlingStart: {
       HandleFlingScroll(event);
       event->SetHandled();
       break;
     }
-    case ui::ET_GESTURE_SCROLL_BEGIN: {
+    case ui::EventType::kGestureScrollBegin: {
       scroll_offset_x_cumulative_ = 0.f;
       OnFlingEnd();
       grid_->StartScroll();
       event->SetHandled();
       break;
     }
-    case ui::ET_GESTURE_SCROLL_UPDATE: {
+    case ui::EventType::kGestureScrollUpdate: {
       // Only forward the scrolls to grid once they have exceeded the threshold.
       const float scroll_offset_x = event->details().scroll_x();
       scroll_offset_x_cumulative_ += scroll_offset_x;
@@ -126,7 +127,7 @@ void OverviewGridEventHandler::OnGestureEvent(ui::GestureEvent* event) {
       event->SetHandled();
       break;
     }
-    case ui::ET_GESTURE_SCROLL_END: {
+    case ui::EventType::kGestureScrollEnd: {
       grid_->EndScroll();
       event->SetHandled();
       break;
@@ -148,7 +149,7 @@ void OverviewGridEventHandler::HandleClickOrTap(ui::Event* event) {
     return;
   }
 
-  if (display::Screen::GetScreen()->InTabletMode()) {
+  if (display::Screen::Get()->InTabletMode()) {
     aura::Window* window = static_cast<views::View*>(event->target())
                                ->GetWidget()
                                ->GetNativeWindow();
@@ -158,7 +159,7 @@ void OverviewGridEventHandler::HandleClickOrTap(ui::Event* event) {
     // the event should be ignored).
     if (!SplitViewController::Get(window)->InSplitViewMode()) {
       int64_t display_id =
-          display::Screen::GetScreen()->GetDisplayNearestWindow(window).id();
+          display::Screen::Get()->GetDisplayNearestWindow(window).id();
       Shell::Get()->app_list_controller()->GoHome(display_id);
     }
   } else {

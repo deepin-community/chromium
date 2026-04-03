@@ -1,12 +1,11 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as Acorn from '../../third_party/acorn/acorn.js';
 
 import {ECMA_VERSION} from './AcornTokenizer.js';
-
-import {DefinitionKind, type ScopeTreeNode} from './FormatterActions.js';
+import {DefinitionKind, ScopeKind, type ScopeTreeNode} from './FormatterActions.js';
 
 export function parseScopes(expression: string, sourceType: 'module'|'script' = 'script'): Scope|null {
   // Parse the expression and find variables and scopes.
@@ -18,7 +17,7 @@ export function parseScopes(expression: string, sourceType: 'module'|'script' = 
   } catch {
     return null;
   }
-  return new ScopeVariableAnalysis(root).run();
+  return new ScopeVariableAnalysis(root, expression).run();
 }
 
 export interface Use {
@@ -37,12 +36,19 @@ export class Scope {
   readonly parent: Scope|null;
   readonly start: number;
   readonly end: number;
+  readonly kind: ScopeKind;
+  readonly name?: string;
+  readonly nameMappingLocations?: number[];
   readonly children: Scope[] = [];
 
-  constructor(start: number, end: number, parent: Scope|null) {
+  constructor(
+      start: number, end: number, parent: Scope|null, kind: ScopeKind, name?: string, nameMappingLocations?: number[]) {
     this.start = start;
     this.end = end;
     this.parent = parent;
+    this.kind = kind;
+    this.name = name;
+    this.nameMappingLocations = nameMappingLocations;
     if (parent) {
       parent.children.push(this);
     }
@@ -62,6 +68,9 @@ export class Scope {
       start: this.start,
       end: this.end,
       variables,
+      kind: this.kind,
+      name: this.name,
+      nameMappingLocations: this.nameMappingLocations,
       children,
     };
   }
@@ -74,7 +83,7 @@ export class Scope {
       this.variables.set(name, {definitionKind, uses: [use]});
       return;
     }
-    if (variable.definitionKind === DefinitionKind.None) {
+    if (variable.definitionKind === DefinitionKind.NONE) {
       variable.definitionKind = definitionKind;
     }
     variable.uses.push(use);
@@ -85,7 +94,7 @@ export class Scope {
     let scope: Scope|null = this;
     while (scope !== null) {
       const defUse = scope.variables.get(name);
-      if (defUse && defUse.definitionKind !== DefinitionKind.None) {
+      if (defUse && defUse.definitionKind !== DefinitionKind.NONE) {
         result.push(defUse);
       }
       scope = scope.parent;
@@ -100,13 +109,13 @@ export class Scope {
       return;
     }
     variable.uses.push(...defUses.uses);
-    if (defUses.definitionKind === DefinitionKind.Var) {
-      console.assert(variable.definitionKind !== DefinitionKind.Let);
-      if (variable.definitionKind === DefinitionKind.None) {
+    if (defUses.definitionKind === DefinitionKind.VAR) {
+      console.assert(variable.definitionKind !== DefinitionKind.LET);
+      if (variable.definitionKind === DefinitionKind.NONE) {
         variable.definitionKind = defUses.definitionKind;
       }
     } else {
-      console.assert(defUses.definitionKind === DefinitionKind.None);
+      console.assert(defUses.definitionKind === DefinitionKind.NONE);
     }
   }
 
@@ -120,8 +129,8 @@ export class Scope {
     // if the parent is not a function).
     const keysToRemove = [];
     for (const [name, defUse] of this.variables.entries()) {
-      if (defUse.definitionKind === DefinitionKind.None ||
-          (defUse.definitionKind === DefinitionKind.Var && !isFunctionScope)) {
+      if (defUse.definitionKind === DefinitionKind.NONE ||
+          (defUse.definitionKind === DefinitionKind.VAR && !isFunctionScope)) {
         this.parent.#mergeChildDefUses(name, defUse);
         keysToRemove.push(name);
       }
@@ -135,10 +144,14 @@ export class ScopeVariableAnalysis {
   readonly #allNames = new Set<string>();
   #currentScope: Scope;
   readonly #rootNode: Acorn.ESTree.Node;
+  readonly #sourceText: string;
+  #methodName: string|undefined;
+  #additionalMappingLocations: number[] = [];
 
-  constructor(node: Acorn.ESTree.Node) {
+  constructor(node: Acorn.ESTree.Node, sourceText: string) {
     this.#rootNode = node;
-    this.#rootScope = new Scope(node.start, node.end, null);
+    this.#sourceText = sourceText;
+    this.#rootScope = new Scope(node.start, node.end, null, ScopeKind.GLOBAL);
     this.#currentScope = this.#rootScope;
   }
 
@@ -170,8 +183,10 @@ export class ScopeVariableAnalysis {
         node.elements.forEach(item => this.#processNode(item));
         break;
       case 'ArrowFunctionExpression': {
-        this.#pushScope(node.start, node.end);
-        node.params.forEach(this.#processNodeAsDefinition.bind(this, DefinitionKind.Var, false));
+        this.#pushScope(
+            node.start, node.end, ScopeKind.ARROW_FUNCTION, undefined,
+            mappingLocationsForArrowFunctions(node, this.#sourceText));
+        node.params.forEach(this.#processNodeAsDefinition.bind(this, DefinitionKind.VAR, false));
         if (node.body.type === 'BlockStatement') {
           // Include the body of the arrow function in the same scope as the arguments.
           node.body.body.forEach(this.#processNode.bind(this));
@@ -189,7 +204,7 @@ export class ScopeVariableAnalysis {
         this.#processNode(node.right);
         break;
       case 'BlockStatement':
-        this.#pushScope(node.start, node.end);
+        this.#pushScope(node.start, node.end, ScopeKind.BLOCK);
         node.body.forEach(this.#processNode.bind(this));
         this.#popScope(false);
         break;
@@ -198,13 +213,13 @@ export class ScopeVariableAnalysis {
         node.arguments.forEach(this.#processNode.bind(this));
         break;
       case 'VariableDeclaration': {
-        const definitionKind = node.kind === 'var' ? DefinitionKind.Var : DefinitionKind.Let;
+        const definitionKind = node.kind === 'var' ? DefinitionKind.VAR : DefinitionKind.LET;
         node.declarations.forEach(this.#processVariableDeclarator.bind(this, definitionKind));
         break;
       }
       case 'CatchClause':
-        this.#pushScope(node.start, node.end);
-        this.#processNodeAsDefinition(DefinitionKind.Let, false, node.param);
+        this.#pushScope(node.start, node.end, ScopeKind.BLOCK);
+        this.#processNodeAsDefinition(DefinitionKind.LET, false, node.param);
         this.#processNode(node.body);
         this.#popScope(false);
         break;
@@ -212,7 +227,7 @@ export class ScopeVariableAnalysis {
         node.body.forEach(this.#processNode.bind(this));
         break;
       case 'ClassDeclaration':
-        this.#processNodeAsDefinition(DefinitionKind.Let, false, node.id);
+        this.#processNodeAsDefinition(DefinitionKind.LET, false, node.id);
         this.#processNode(node.superClass ?? null);
         this.#processNode(node.body);
         break;
@@ -235,14 +250,14 @@ export class ScopeVariableAnalysis {
         break;
       case 'ForInStatement':
       case 'ForOfStatement':
-        this.#pushScope(node.start, node.end);
+        this.#pushScope(node.start, node.end, ScopeKind.BLOCK);
         this.#processNode(node.left);
         this.#processNode(node.right);
         this.#processNode(node.body);
         this.#popScope(false);
         break;
       case 'ForStatement':
-        this.#pushScope(node.start, node.end);
+        this.#pushScope(node.start, node.end, ScopeKind.BLOCK);
         this.#processNode(node.init ?? null);
         this.#processNode(node.test ?? null);
         this.#processNode(node.update ?? null);
@@ -250,20 +265,26 @@ export class ScopeVariableAnalysis {
         this.#popScope(false);
         break;
       case 'FunctionDeclaration':
-        this.#processNodeAsDefinition(DefinitionKind.Var, false, node.id);
-        this.#pushScope(node.id?.end ?? node.start, node.end);
-        this.#addVariable('this', node.start, DefinitionKind.Fixed);
-        this.#addVariable('arguments', node.start, DefinitionKind.Fixed);
-        node.params.forEach(this.#processNodeAsDefinition.bind(this, DefinitionKind.Let, false));
+        this.#processNodeAsDefinition(DefinitionKind.VAR, false, node.id);
+        this.#pushScope(
+            node.id?.end ?? node.start, node.end, ScopeKind.FUNCTION, node.id.name,
+            mappingLocationsForFunctionDeclaration(node, this.#sourceText));
+        this.#addVariable('this', node.start, DefinitionKind.FIXED);
+        this.#addVariable('arguments', node.start, DefinitionKind.FIXED);
+        node.params.forEach(this.#processNodeAsDefinition.bind(this, DefinitionKind.LET, false));
         // Process the body of the block statement directly to avoid creating new scope.
         node.body.body.forEach(this.#processNode.bind(this));
         this.#popScope(true);
         break;
       case 'FunctionExpression':
-        this.#pushScope(node.id?.end ?? node.start, node.end);
-        this.#addVariable('this', node.start, DefinitionKind.Fixed);
-        this.#addVariable('arguments', node.start, DefinitionKind.Fixed);
-        node.params.forEach(this.#processNodeAsDefinition.bind(this, DefinitionKind.Let, false));
+        this.#pushScope(
+            node.id?.end ?? node.start, node.end, ScopeKind.FUNCTION, this.#methodName ?? node.id?.name,
+            [...this.#additionalMappingLocations, ...mappingLocationsForFunctionExpression(node, this.#sourceText)]);
+        this.#additionalMappingLocations = [];
+        this.#methodName = undefined;
+        this.#addVariable('this', node.start, DefinitionKind.FIXED);
+        this.#addVariable('arguments', node.start, DefinitionKind.FIXED);
+        node.params.forEach(this.#processNodeAsDefinition.bind(this, DefinitionKind.LET, false));
         // Process the body of the block statement directly to avoid creating new scope.
         node.body.body.forEach(this.#processNode.bind(this));
         this.#popScope(true);
@@ -284,6 +305,9 @@ export class ScopeVariableAnalysis {
       case 'MethodDefinition':
         if (node.computed) {
           this.#processNode(node.key);
+        } else {
+          this.#additionalMappingLocations = mappingLocationsForMethodDefinition(node);
+          this.#methodName = nameForMethodDefinition(node);
         }
         this.#processNode(node.value);
         break;
@@ -316,16 +340,19 @@ export class ScopeVariableAnalysis {
           console.assert(node.value.type === 'Identifier');
           console.assert(node.key.type === 'Identifier');
           console.assert((node.value as Acorn.ESTree.Identifier).name === (node.key as Acorn.ESTree.Identifier).name);
-          this.#addVariable((node.value as Acorn.ESTree.Identifier).name, node.value.start, DefinitionKind.None, true);
+          this.#addVariable((node.value as Acorn.ESTree.Identifier).name, node.value.start, DefinitionKind.NONE, true);
         } else {
           if (node.computed) {
             this.#processNode(node.key);
+          } else if (node.value.type === 'FunctionExpression') {
+            this.#additionalMappingLocations = mappingLocationsForMethodDefinition(node);
+            this.#methodName = nameForMethodDefinition(node);
           }
           this.#processNode(node.value);
         }
         break;
       case 'RestElement':
-        this.#processNodeAsDefinition(DefinitionKind.Let, false, node.argument);
+        this.#processNodeAsDefinition(DefinitionKind.LET, false, node.argument);
         break;
       case 'ReturnStatement':
         this.#processNode(node.argument ?? null);
@@ -409,7 +436,7 @@ export class ScopeVariableAnalysis {
   getFreeVariables(): Map<string, Use[]> {
     const result = new Map<string, Use[]>();
     for (const [name, defUse] of this.#rootScope.variables) {
-      if (defUse.definitionKind !== DefinitionKind.None) {
+      if (defUse.definitionKind !== DefinitionKind.NONE) {
         // Skip bound variables.
         continue;
       }
@@ -422,8 +449,8 @@ export class ScopeVariableAnalysis {
     return this.#allNames;
   }
 
-  #pushScope(start: number, end: number): void {
-    this.#currentScope = new Scope(start, end, this.#currentScope);
+  #pushScope(start: number, end: number, kind: ScopeKind, name?: string, nameMappingLocations?: number[]): void {
+    this.#currentScope = new Scope(start, end, this.#currentScope, kind, name, nameMappingLocations);
   }
 
   #popScope(isFunctionContext: boolean): void {
@@ -436,14 +463,14 @@ export class ScopeVariableAnalysis {
   }
 
   #addVariable(
-      name: string, offset: number, definitionKind: DefinitionKind = DefinitionKind.None,
-      isShorthandAssignmentProperty: boolean = false): void {
+      name: string, offset: number, definitionKind: DefinitionKind = DefinitionKind.NONE,
+      isShorthandAssignmentProperty = false): void {
     this.#allNames.add(name);
     this.#currentScope.addVariable(name, offset, definitionKind, isShorthandAssignmentProperty);
   }
 
   #processNodeAsDefinition(
-      definitionKind: DefinitionKind.Let|DefinitionKind.Var, isShorthandAssignmentProperty: boolean,
+      definitionKind: DefinitionKind.LET|DefinitionKind.VAR, isShorthandAssignmentProperty: boolean,
       node: Acorn.ESTree.Pattern|Acorn.ESTree.AssignmentProperty|null): void {
     if (node === null) {
       return;
@@ -481,8 +508,94 @@ export class ScopeVariableAnalysis {
   }
 
   #processVariableDeclarator(
-      definitionKind: DefinitionKind.Let|DefinitionKind.Var, decl: Acorn.ESTree.VariableDeclarator): void {
+      definitionKind: DefinitionKind.LET|DefinitionKind.VAR, decl: Acorn.ESTree.VariableDeclarator): void {
     this.#processNodeAsDefinition(definitionKind, false, decl.id);
     this.#processNode(decl.init ?? null);
   }
+}
+
+function mappingLocationsForFunctionDeclaration(node: Acorn.ESTree.FunctionDeclaration, sourceText: string): number[] {
+  // For function declarations we prefer the position of the identifier as per spec, but we'll also return
+  // the beginning of the opening parenthesis '('.
+  const result = [node.id.start];
+
+  const searchParenEndPos = node.params.length ? node.params[0].start : node.body.start;
+  const parenPos = indexOfCharInBounds(sourceText, '(', node.id.end, searchParenEndPos);
+  if (parenPos >= 0) {
+    // Note that this is not 100% accurate as there might be a comment containing a open parenthesis between
+    // the identifier the and the argument list (unlikely though).
+    result.push(parenPos);
+  }
+
+  return result;
+}
+
+function mappingLocationsForFunctionExpression(node: Acorn.ESTree.FunctionExpression, sourceText: string): number[] {
+  // For function expressions we prefer the position of the identifier or '(' if none is present, as per spec.
+  const result = [];
+  if (node.id) {
+    result.push(node.id.start);
+  }
+
+  const searchParenStartPos = node.id ? node.id.end : node.start;
+  const searchParenEndPos = node.params.length ? node.params[0].start : node.body.start;
+  const parenPos = indexOfCharInBounds(sourceText, '(', searchParenStartPos, searchParenEndPos);
+  if (parenPos >= 0) {
+    // Note that this is not 100% accurate as there might be a comment containing a open parenthesis between
+    // the identifier the and the argument list (unlikely though).
+    result.push(parenPos);
+  }
+
+  return result;
+}
+
+function mappingLocationsForMethodDefinition(node: Acorn.ESTree.MethodDefinition|Acorn.ESTree.Property): number[] {
+  // Method definitions use a FunctionExpression as their "value" child. So we only
+  // record the start of the "key" here and let 'mappingLocationsForFunctionExpression' handle
+  // the parenthesis.
+  if (node.key.type === 'Identifier' || node.key.type === 'PrivateIdentifier') {
+    const id = node.key as Acorn.ESTree.Identifier | Acorn.ESTree.PrivateIdentifier;
+    return [id.start];
+  }
+  return [];
+}
+
+function nameForMethodDefinition(node: Acorn.ESTree.MethodDefinition|Acorn.ESTree.Property): string|undefined {
+  if (node.key.type === 'Identifier') {
+    return node.key.name;
+  }
+  if (node.key.type === 'PrivateIdentifier') {
+    return '#' + node.key.name;
+  }
+  return undefined;
+}
+
+function mappingLocationsForArrowFunctions(node: Acorn.ESTree.ArrowFunctionExpression, sourceText: string): number[] {
+  // For arrow functions we use the `(' parenthesis if present, and the `=>` arrow as per spec.
+  // Both are not 100% accurate as acorn doesn't tell us their location so we have to search, which is brittle.
+  const result = [];
+
+  const searchParenStartPos = node.async ? node.start + 5 : node.start;
+  const searchParenEndPos = node.params.length ? node.params[0].start : node.body.start;
+  const parenPos = indexOfCharInBounds(sourceText, '(', searchParenStartPos, searchParenEndPos);
+  if (parenPos >= 0) {
+    result.push(parenPos);
+  }
+
+  const searchArrowStartPos = node.params.length ? node.params[node.params.length - 1].end : node.start;
+  const arrowPos = indexOfCharInBounds(sourceText, '=', searchArrowStartPos, node.body.start);
+  if (arrowPos >= 0 && sourceText[arrowPos + 1] === '>') {
+    result.push(arrowPos);
+  }
+
+  return result;
+}
+
+function indexOfCharInBounds(str: string, needle: string, start: number, end: number): number {
+  for (let i = start; i < end; ++i) {
+    if (str[i] === needle) {
+      return i;
+    }
+  }
+  return -1;
 }

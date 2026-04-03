@@ -9,9 +9,9 @@
 
 #include "ash/constants/ash_features.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/ash/printing/printer_installation_manager.h"
 #include "chrome/browser/ash/printing/usb_printer_notification_controller.h"
 #include "chromeos/printing/ppd_provider.h"
@@ -45,7 +45,7 @@ void AutomaticUsbPrinterConfigurer::UpdateListOfConnectedPrinters(
   base::flat_set<std::string> removed;
   for (PrinterDetector::DetectedPrinter& detected : new_list) {
     const std::string& id = detected.printer.id();
-    if (base::Contains(connected_printers_, id)) {
+    if (connected_printers_.contains(id)) {
       existing.insert(id);
     } else {
       added.insert(id);
@@ -53,7 +53,7 @@ void AutomaticUsbPrinterConfigurer::UpdateListOfConnectedPrinters(
     }
   }
   for (const auto& [id, detected] : connected_printers_) {
-    if (!base::Contains(added, id) && !base::Contains(existing, id)) {
+    if (!added.contains(id) && !existing.contains(id)) {
       removed.insert(id);
     }
   }
@@ -128,7 +128,8 @@ void AutomaticUsbPrinterConfigurer::OnResolvePpdReferenceDone(
   PrinterDetector::DetectedPrinter& detected = it->second;
 
   if (code != chromeos::PpdProvider::SUCCESS) {
-    PRINTER_LOG(EVENT) << "Failed to resolve PPD reference for " << printer_id;
+    PRINTER_LOG(EVENT) << printer_id << ": Failed to resolve PPD reference: "
+                       << chromeos::PpdProvider::CallbackResultCodeName(code);
     if (!detected.printer.supports_ippusb()) {
       // Detected printer does not supports ipp-over-usb, so we cannot set it
       // up automatically. We have to leave it as unconfigured.
@@ -144,7 +145,10 @@ void AutomaticUsbPrinterConfigurer::OnResolvePpdReferenceDone(
   // new printer's configuration is saved to `connected_printers_` only if the
   // setup succeeds.
   chromeos::Printer printer = detected.printer;
-  if (printer.supports_ippusb()) {
+  // If the printer supports ipp-over-usb and has a PPD, it will be affected by
+  // the PPD -> IPP-over-USB migration. We need to mark it to gather extra info
+  // in dedicated histograms.
+  if (printer.supports_ippusb() && code == chromeos::PpdProvider::SUCCESS) {
     printer.SetAffectedByIppUsbMigration(true);
   }
 
@@ -185,26 +189,13 @@ void AutomaticUsbPrinterConfigurer::OnSetupComplete(
     return;
   }
 
-  auto it_ref = ppd_references_.find(printer.id());
-
-  // Notify metrics when necessary.
-  if (printer.ppd_reference().autoconf) {
-    // This setup attempt was performed via IPP Everywhere.
-    if (it_ref != ppd_references_.end()) {
-      // And there is a PPD file for this printer.
-      base::UmaHistogramEnumeration(
-          "Printing.CUPS.AutomaticIppSetupResultOfUsbPrinterWithPpd", result);
-    }
-  } else {
-    // This setup attempt was performed with PPD file.
-    if (printer.supports_ippusb()) {
-      // And the printer supports IPP-over-USB.
-      base::UmaHistogramEnumeration(
-          "Printing.CUPS.AutomaticPpdSetupResultOfUsbPrinterSupportingIpp",
-          result);
-    }
+  if (printer.AffectedByIppUsbMigration()) {
+    base::UmaHistogramEnumeration(
+        "Printing.CUPS.AutomaticSetupResultOfUsbPrinterSupportingIppAndPpd",
+        result);
   }
 
+  auto it_ref = ppd_references_.find(printer.id());
   if (it_ref != ppd_references_.end()) {
     // We have a PPD for this printer. We can try to use it if IPP Everywhere
     // setup failed.
@@ -241,14 +232,14 @@ void AutomaticUsbPrinterConfigurer::FinalizeConfiguration(
     // The printer is ready to use
     PrinterConfigurer::RecordUsbPrinterSetupSource(
         UsbPrinterSetupSource::kAutoconfigured);
-    PRINTER_LOG(EVENT) << "Auto USB Printer setup successful for "
-                       << printer.id();
+    PRINTER_LOG(EVENT) << printer.id()
+                       << ": Automatic USB printer setup succeeded";
     notification_controller_->ShowEphemeralNotification(printer);
     configured_printers_.insert(printer.id());
   } else {
     // The printer cannot be configured automatically
-    PRINTER_LOG(EVENT) << "Unable to autoconfigure usb printer "
-                       << printer.id();
+    PRINTER_LOG(EVENT) << printer.id()
+                       << ": Unable to autoconfigure USB printer";
     notification_controller_->ShowConfigurationNotification(printer);
     unconfigured_printers_.insert(printer.id());
   }

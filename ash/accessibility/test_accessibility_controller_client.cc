@@ -54,10 +54,6 @@ bool TestAccessibilityControllerClient::ToggleDictation() {
 
 void TestAccessibilityControllerClient::SilenceSpokenFeedback() {}
 
-void TestAccessibilityControllerClient::OnTwoFingerTouchStart() {}
-
-void TestAccessibilityControllerClient::OnTwoFingerTouchStop() {}
-
 bool TestAccessibilityControllerClient::ShouldToggleSpokenFeedbackViaTouch()
     const {
   return true;
@@ -93,6 +89,9 @@ std::string TestAccessibilityControllerClient::GetDictationDefaultLocale(
     bool new_user) {
   return "";
 }
+
+void TestAccessibilityControllerClient::
+    SendFaceGazeDisableDialogResultToSettings(bool accepted) {}
 
 std::optional<Sound>
 TestAccessibilityControllerClient::GetPlayedEarconAndReset() {

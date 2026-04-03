@@ -423,11 +423,6 @@ GLint GL_APIENTRY GLES2GetAttribLocation(GLuint program, const char* name) {
 void GL_APIENTRY GLES2GetBooleanv(GLenum pname, GLboolean* params) {
   gles2::GetGLContext()->GetBooleanv(pname, params);
 }
-void GL_APIENTRY GLES2GetBooleani_v(GLenum pname,
-                                    GLuint index,
-                                    GLboolean* data) {
-  gles2::GetGLContext()->GetBooleani_v(pname, index, data);
-}
 void GL_APIENTRY GLES2GetBufferParameteri64v(GLenum target,
                                              GLenum pname,
                                              GLint64* params) {
@@ -1281,82 +1276,6 @@ void GL_APIENTRY GLES2FramebufferParameteri(GLenum target,
                                             GLint param) {
   gles2::GetGLContext()->FramebufferParameteri(target, pname, param);
 }
-void GL_APIENTRY GLES2BindImageTexture(GLuint unit,
-                                       GLuint texture,
-                                       GLint level,
-                                       GLboolean layered,
-                                       GLint layer,
-                                       GLenum access,
-                                       GLenum format) {
-  gles2::GetGLContext()->BindImageTexture(unit, texture, level, layered, layer,
-                                          access, format);
-}
-void GL_APIENTRY GLES2DispatchCompute(GLuint num_groups_x,
-                                      GLuint num_groups_y,
-                                      GLuint num_groups_z) {
-  gles2::GetGLContext()->DispatchCompute(num_groups_x, num_groups_y,
-                                         num_groups_z);
-}
-void GL_APIENTRY GLES2DispatchComputeIndirect(GLintptr offset) {
-  gles2::GetGLContext()->DispatchComputeIndirect(offset);
-}
-void GL_APIENTRY GLES2DrawArraysIndirect(GLenum mode, const void* offset) {
-  gles2::GetGLContext()->DrawArraysIndirect(mode, offset);
-}
-void GL_APIENTRY GLES2DrawElementsIndirect(GLenum mode,
-                                           GLenum type,
-                                           const void* offset) {
-  gles2::GetGLContext()->DrawElementsIndirect(mode, type, offset);
-}
-void GL_APIENTRY GLES2GetProgramInterfaceiv(GLuint program,
-                                            GLenum program_interface,
-                                            GLenum pname,
-                                            GLint* params) {
-  gles2::GetGLContext()->GetProgramInterfaceiv(program, program_interface,
-                                               pname, params);
-}
-GLuint GL_APIENTRY GLES2GetProgramResourceIndex(GLuint program,
-                                                GLenum program_interface,
-                                                const char* name) {
-  return gles2::GetGLContext()->GetProgramResourceIndex(
-      program, program_interface, name);
-}
-void GL_APIENTRY GLES2GetProgramResourceName(GLuint program,
-                                             GLenum program_interface,
-                                             GLuint index,
-                                             GLsizei bufsize,
-                                             GLsizei* length,
-                                             char* name) {
-  gles2::GetGLContext()->GetProgramResourceName(program, program_interface,
-                                                index, bufsize, length, name);
-}
-void GL_APIENTRY GLES2GetProgramResourceiv(GLuint program,
-                                           GLenum program_interface,
-                                           GLuint index,
-                                           GLsizei prop_count,
-                                           const GLenum* props,
-                                           GLsizei bufsize,
-                                           GLsizei* length,
-                                           GLint* params) {
-  gles2::GetGLContext()->GetProgramResourceiv(program, program_interface, index,
-                                              prop_count, props, bufsize,
-                                              length, params);
-}
-GLint GL_APIENTRY GLES2GetProgramResourceLocation(GLuint program,
-                                                  GLenum program_interface,
-                                                  const char* name) {
-  return gles2::GetGLContext()->GetProgramResourceLocation(
-      program, program_interface, name);
-}
-void GL_APIENTRY GLES2MemoryBarrierEXT(GLbitfield barriers) {
-  gles2::GetGLContext()->MemoryBarrierEXT(barriers);
-}
-void GL_APIENTRY GLES2MemoryBarrierByRegion(GLbitfield barriers) {
-  gles2::GetGLContext()->MemoryBarrierByRegion(barriers);
-}
-void GL_APIENTRY GLES2SwapBuffers(GLuint64 swap_id, GLbitfield flags) {
-  gles2::GetGLContext()->SwapBuffers(swap_id, flags);
-}
 GLuint GL_APIENTRY GLES2GetMaxValueInBufferCHROMIUM(GLuint buffer_id,
                                                     GLsizei count,
                                                     GLenum type,
@@ -1411,14 +1330,6 @@ void* GL_APIENTRY GLES2MapTexSubImage2DCHROMIUM(GLenum target,
 }
 void GL_APIENTRY GLES2UnmapTexSubImage2DCHROMIUM(const void* mem) {
   gles2::GetGLContext()->UnmapTexSubImage2DCHROMIUM(mem);
-}
-void GL_APIENTRY GLES2ResizeCHROMIUM(GLuint width,
-                                     GLuint height,
-                                     GLfloat scale_factor,
-                                     GLcolorSpace color_space,
-                                     GLboolean alpha) {
-  gles2::GetGLContext()->ResizeCHROMIUM(width, height, scale_factor,
-                                        color_space, alpha);
 }
 const GLchar* GL_APIENTRY GLES2GetRequestableExtensionsCHROMIUM() {
   return gles2::GetGLContext()->GetRequestableExtensionsCHROMIUM();
@@ -1534,13 +1445,6 @@ GLES2DrawElementsInstancedBaseVertexBaseInstanceANGLE(GLenum mode,
 void GL_APIENTRY GLES2VertexAttribDivisorANGLE(GLuint index, GLuint divisor) {
   gles2::GetGLContext()->VertexAttribDivisorANGLE(index, divisor);
 }
-void GL_APIENTRY GLES2ProduceTextureDirectCHROMIUM(GLuint texture,
-                                                   GLbyte* mailbox) {
-  gles2::GetGLContext()->ProduceTextureDirectCHROMIUM(texture, mailbox);
-}
-GLuint GL_APIENTRY GLES2CreateAndConsumeTextureCHROMIUM(const GLbyte* mailbox) {
-  return gles2::GetGLContext()->CreateAndConsumeTextureCHROMIUM(mailbox);
-}
 void GL_APIENTRY GLES2BindUniformLocationCHROMIUM(GLuint program,
                                                   GLint location,
                                                   const char* name) {
@@ -1563,9 +1467,6 @@ void GL_APIENTRY GLES2LoseContextCHROMIUM(GLenum current, GLenum other) {
 }
 void GL_APIENTRY GLES2DrawBuffersEXT(GLsizei count, const GLenum* bufs) {
   gles2::GetGLContext()->DrawBuffersEXT(count, bufs);
-}
-void GL_APIENTRY GLES2DiscardBackbufferCHROMIUM() {
-  gles2::GetGLContext()->DiscardBackbufferCHROMIUM();
 }
 void GL_APIENTRY GLES2FlushDriverCachesCHROMIUM() {
   gles2::GetGLContext()->FlushDriverCachesCHROMIUM();
@@ -1599,15 +1500,6 @@ void GL_APIENTRY GLES2BindFragDataLocationEXT(GLuint program,
 }
 GLint GL_APIENTRY GLES2GetFragDataIndexEXT(GLuint program, const char* name) {
   return gles2::GetGLContext()->GetFragDataIndexEXT(program, name);
-}
-void GL_APIENTRY GLES2InitializeDiscardableTextureCHROMIUM(GLuint texture_id) {
-  gles2::GetGLContext()->InitializeDiscardableTextureCHROMIUM(texture_id);
-}
-void GL_APIENTRY GLES2UnlockDiscardableTextureCHROMIUM(GLuint texture_id) {
-  gles2::GetGLContext()->UnlockDiscardableTextureCHROMIUM(texture_id);
-}
-bool GL_APIENTRY GLES2LockDiscardableTextureCHROMIUM(GLuint texture_id) {
-  return gles2::GetGLContext()->LockDiscardableTextureCHROMIUM(texture_id);
 }
 void GL_APIENTRY GLES2WindowRectanglesEXT(GLenum mode,
                                           GLsizei count,
@@ -1654,55 +1546,15 @@ void GL_APIENTRY GLES2BeginSharedImageAccessDirectCHROMIUM(GLuint texture,
 void GL_APIENTRY GLES2EndSharedImageAccessDirectCHROMIUM(GLuint texture) {
   gles2::GetGLContext()->EndSharedImageAccessDirectCHROMIUM(texture);
 }
-void GL_APIENTRY
-GLES2ConvertRGBAToYUVAMailboxesINTERNAL(GLenum planes_yuv_color_space,
-                                        GLenum plane_config,
-                                        GLenum subsampling,
-                                        const GLbyte* mailboxes) {
-  gles2::GetGLContext()->ConvertRGBAToYUVAMailboxesINTERNAL(
-      planes_yuv_color_space, plane_config, subsampling, mailboxes);
-}
-void GL_APIENTRY
-GLES2ConvertYUVAMailboxesToRGBINTERNAL(GLint src_x,
-                                       GLint src_y,
-                                       GLsizei width,
-                                       GLsizei height,
-                                       GLenum planes_yuv_color_space,
-                                       GLenum plane_config,
-                                       GLenum subsampling,
-                                       const GLbyte* mailboxes) {
-  gles2::GetGLContext()->ConvertYUVAMailboxesToRGBINTERNAL(
-      src_x, src_y, width, height, planes_yuv_color_space, plane_config,
-      subsampling, mailboxes);
-}
-void GL_APIENTRY
-GLES2ConvertYUVAMailboxesToTextureINTERNAL(GLuint texture,
-                                           GLenum target,
-                                           GLuint internal_format,
-                                           GLenum type,
-                                           GLint src_x,
-                                           GLint src_y,
-                                           GLsizei width,
-                                           GLsizei height,
-                                           GLboolean flip_y,
-                                           GLenum planes_yuv_color_space,
-                                           GLenum plane_config,
-                                           GLenum subsampling,
-                                           const GLbyte* mailboxes) {
-  gles2::GetGLContext()->ConvertYUVAMailboxesToTextureINTERNAL(
-      texture, target, internal_format, type, src_x, src_y, width, height,
-      flip_y, planes_yuv_color_space, plane_config, subsampling, mailboxes);
-}
 void GL_APIENTRY GLES2CopySharedImageINTERNAL(GLint xoffset,
                                               GLint yoffset,
                                               GLint x,
                                               GLint y,
                                               GLsizei width,
                                               GLsizei height,
-                                              GLboolean unpack_flip_y,
                                               const GLbyte* mailboxes) {
-  gles2::GetGLContext()->CopySharedImageINTERNAL(
-      xoffset, yoffset, x, y, width, height, unpack_flip_y, mailboxes);
+  gles2::GetGLContext()->CopySharedImageINTERNAL(xoffset, yoffset, x, y, width,
+                                                 height, mailboxes);
 }
 void GL_APIENTRY
 GLES2CopySharedImageToTextureINTERNAL(GLuint texture,
@@ -1713,13 +1565,13 @@ GLES2CopySharedImageToTextureINTERNAL(GLuint texture,
                                       GLint src_y,
                                       GLsizei width,
                                       GLsizei height,
-                                      GLboolean flip_y,
+                                      GLboolean is_dst_origin_top_left,
                                       const GLbyte* src_mailbox) {
   gles2::GetGLContext()->CopySharedImageToTextureINTERNAL(
       texture, target, internal_format, type, src_x, src_y, width, height,
-      flip_y, src_mailbox);
+      is_dst_origin_top_left, src_mailbox);
 }
-void GL_APIENTRY
+GLboolean GL_APIENTRY
 GLES2ReadbackARGBImagePixelsINTERNAL(const GLbyte* mailbox,
                                      const void* dst_color_space,
                                      GLuint dst_color_space_size,
@@ -1733,7 +1585,7 @@ GLES2ReadbackARGBImagePixelsINTERNAL(const GLbyte* mailbox,
                                      GLint src_y,
                                      GLint plane_index,
                                      void* pixels) {
-  gles2::GetGLContext()->ReadbackARGBImagePixelsINTERNAL(
+  return gles2::GetGLContext()->ReadbackARGBImagePixelsINTERNAL(
       mailbox, dst_color_space, dst_color_space_size, dst_size, dst_width,
       dst_height, dst_color_type, dst_alpha_type, dst_row_bytes, src_x, src_y,
       plane_index, pixels);
@@ -2204,10 +2056,6 @@ extern const NameToFunc g_gles2_function_table[] = {
     {
         "glGetBooleanv",
         reinterpret_cast<GLES2FunctionPointer>(glGetBooleanv),
-    },
-    {
-        "glGetBooleani_v",
-        reinterpret_cast<GLES2FunctionPointer>(glGetBooleani_v),
     },
     {
         "glGetBufferParameteri64v",
@@ -2906,58 +2754,6 @@ extern const NameToFunc g_gles2_function_table[] = {
         reinterpret_cast<GLES2FunctionPointer>(glFramebufferParameteri),
     },
     {
-        "glBindImageTexture",
-        reinterpret_cast<GLES2FunctionPointer>(glBindImageTexture),
-    },
-    {
-        "glDispatchCompute",
-        reinterpret_cast<GLES2FunctionPointer>(glDispatchCompute),
-    },
-    {
-        "glDispatchComputeIndirect",
-        reinterpret_cast<GLES2FunctionPointer>(glDispatchComputeIndirect),
-    },
-    {
-        "glDrawArraysIndirect",
-        reinterpret_cast<GLES2FunctionPointer>(glDrawArraysIndirect),
-    },
-    {
-        "glDrawElementsIndirect",
-        reinterpret_cast<GLES2FunctionPointer>(glDrawElementsIndirect),
-    },
-    {
-        "glGetProgramInterfaceiv",
-        reinterpret_cast<GLES2FunctionPointer>(glGetProgramInterfaceiv),
-    },
-    {
-        "glGetProgramResourceIndex",
-        reinterpret_cast<GLES2FunctionPointer>(glGetProgramResourceIndex),
-    },
-    {
-        "glGetProgramResourceName",
-        reinterpret_cast<GLES2FunctionPointer>(glGetProgramResourceName),
-    },
-    {
-        "glGetProgramResourceiv",
-        reinterpret_cast<GLES2FunctionPointer>(glGetProgramResourceiv),
-    },
-    {
-        "glGetProgramResourceLocation",
-        reinterpret_cast<GLES2FunctionPointer>(glGetProgramResourceLocation),
-    },
-    {
-        "glMemoryBarrierEXT",
-        reinterpret_cast<GLES2FunctionPointer>(glMemoryBarrierEXT),
-    },
-    {
-        "glMemoryBarrierByRegion",
-        reinterpret_cast<GLES2FunctionPointer>(glMemoryBarrierByRegion),
-    },
-    {
-        "glSwapBuffers",
-        reinterpret_cast<GLES2FunctionPointer>(glSwapBuffers),
-    },
-    {
         "glGetMaxValueInBufferCHROMIUM",
         reinterpret_cast<GLES2FunctionPointer>(glGetMaxValueInBufferCHROMIUM),
     },
@@ -3000,10 +2796,6 @@ extern const NameToFunc g_gles2_function_table[] = {
     {
         "glUnmapTexSubImage2DCHROMIUM",
         reinterpret_cast<GLES2FunctionPointer>(glUnmapTexSubImage2DCHROMIUM),
-    },
-    {
-        "glResizeCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glResizeCHROMIUM),
     },
     {
         "glGetRequestableExtensionsCHROMIUM",
@@ -3072,15 +2864,6 @@ extern const NameToFunc g_gles2_function_table[] = {
         reinterpret_cast<GLES2FunctionPointer>(glVertexAttribDivisorANGLE),
     },
     {
-        "glProduceTextureDirectCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glProduceTextureDirectCHROMIUM),
-    },
-    {
-        "glCreateAndConsumeTextureCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glCreateAndConsumeTextureCHROMIUM),
-    },
-    {
         "glBindUniformLocationCHROMIUM",
         reinterpret_cast<GLES2FunctionPointer>(glBindUniformLocationCHROMIUM),
     },
@@ -3103,10 +2886,6 @@ extern const NameToFunc g_gles2_function_table[] = {
     {
         "glDrawBuffersEXT",
         reinterpret_cast<GLES2FunctionPointer>(glDrawBuffersEXT),
-    },
-    {
-        "glDiscardBackbufferCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glDiscardBackbufferCHROMIUM),
     },
     {
         "glFlushDriverCachesCHROMIUM",
@@ -3144,21 +2923,6 @@ extern const NameToFunc g_gles2_function_table[] = {
     {
         "glGetFragDataIndexEXT",
         reinterpret_cast<GLES2FunctionPointer>(glGetFragDataIndexEXT),
-    },
-    {
-        "glInitializeDiscardableTextureCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glInitializeDiscardableTextureCHROMIUM),
-    },
-    {
-        "glUnlockDiscardableTextureCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glUnlockDiscardableTextureCHROMIUM),
-    },
-    {
-        "glLockDiscardableTextureCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glLockDiscardableTextureCHROMIUM),
     },
     {
         "glWindowRectanglesEXT",
@@ -3208,21 +2972,6 @@ extern const NameToFunc g_gles2_function_table[] = {
         "glEndSharedImageAccessDirectCHROMIUM",
         reinterpret_cast<GLES2FunctionPointer>(
             glEndSharedImageAccessDirectCHROMIUM),
-    },
-    {
-        "glConvertRGBAToYUVAMailboxesINTERNAL",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glConvertRGBAToYUVAMailboxesINTERNAL),
-    },
-    {
-        "glConvertYUVAMailboxesToRGBINTERNAL",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glConvertYUVAMailboxesToRGBINTERNAL),
-    },
-    {
-        "glConvertYUVAMailboxesToTextureINTERNAL",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glConvertYUVAMailboxesToTextureINTERNAL),
     },
     {
         "glCopySharedImageINTERNAL",

@@ -32,11 +32,11 @@ class RandomIndexShuffleTest : public ::testing::TestWithParam<uint64_t> {
 
 // Check that we do a correct bijection.
 TEST_P(RandomIndexShuffleTest, Bijection) {
-  const std::array<uint32, 3>& key = {42, 73, 1991};
+  const std::array<uint32_t, 3>& key = {42, 73, 1991};
   const uint64_t max_value = GetMaxValue();
   std::vector<bool> seen(max_value + 1, false);
   for (uint64_t value = 0; value <= max_value; ++value) {
-    const uint64 output_value =
+    const uint64_t output_value =
         index_shuffle(value, key, max_value, /* rounds= */ 4);
     EXPECT_GE(output_value, 0);
     EXPECT_LE(output_value, max_value);
@@ -46,7 +46,7 @@ TEST_P(RandomIndexShuffleTest, Bijection) {
 }
 
 INSTANTIATE_TEST_SUITE_P(MaxValueTests, RandomIndexShuffleTest,
-                         ::testing::Values(285, 17, 23495, 499'000));
+                         ::testing::Values(0, 285, 17, 23495, 499'000));
 
 }  // namespace
 }  // namespace random

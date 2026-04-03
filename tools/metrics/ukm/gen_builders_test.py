@@ -50,6 +50,8 @@ class {name} final : public ::ukm::internal::UkmEntryBuilderBase {{
  public:
   explicit {name}(ukm::SourceId source_id);
   explicit {name}(ukm::SourceIdObj source_id);
+  {name}({name}&&);
+  {name}& operator=({name}&&);
   ~{name}() override;
 
   static const char kEntryName[];
@@ -103,13 +105,13 @@ const uint64_t {eventName}::k{metricName}NameHash;
                   decode_header_output)
     self.assertIn("namespace builders", decode_header_output)
     self.assertIn(
-        """typedef std::map<uint64_t, const char*> MetricDecodeMap;
+        """typedef base::flat_map<uint64_t, const char*> MetricDecodeMap;
 struct EntryDecoder {
   const char* name;
-  const MetricDecodeMap metric_map;
+  MetricDecodeMap metric_map;
 };
-typedef std::map<uint64_t, EntryDecoder> DecodeMap;
-DecodeMap CreateDecodeMap();""", decode_header_output)
+typedef base::flat_map<uint64_t, EntryDecoder> DecodeMap;
+const DecodeMap& GetDecodeMap();""", decode_header_output)
 
     decode_impl_output = DECODE_IMPL_TEMPLATE._StampFileCode(relpath, data)
     self.assertIsNotNone(decode_impl_output)

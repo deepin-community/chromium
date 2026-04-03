@@ -13,8 +13,10 @@
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
-#include "components/policy/android/test_jni_headers/PolicyMapTestSupporter_jni.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/policy/android/test_jni_headers/PolicyMapTestSupporter_jni.h"
 
 namespace policy {
 namespace android {
@@ -81,7 +83,7 @@ TEST_F(PolicyMapAndroidTest, StringPolicy) {
 TEST_F(PolicyMapAndroidTest, DictPolicy) {
   Java_PolicyMapTestSupporter_verifyDictPolicy(env_, j_support_,
                                                policy_name_android_, nullptr);
-  base::Value::Dict value;
+  base::DictValue value;
   value.Set("key", 42);
   SetPolicy(base::Value(std::move(value)));
   Java_PolicyMapTestSupporter_verifyDictPolicy(
@@ -92,7 +94,7 @@ TEST_F(PolicyMapAndroidTest, DictPolicy) {
 TEST_F(PolicyMapAndroidTest, ListPolicy) {
   Java_PolicyMapTestSupporter_verifyListPolicy(env_, j_support_,
                                                policy_name_android_, nullptr);
-  base::Value::List value;
+  base::ListValue value;
   value.Append("value-1");
   value.Append("value-2");
   SetPolicy(base::Value(std::move(value)));
@@ -103,3 +105,5 @@ TEST_F(PolicyMapAndroidTest, ListPolicy) {
 
 }  // namespace android
 }  // namespace policy
+
+DEFINE_JNI(PolicyMapTestSupporter)

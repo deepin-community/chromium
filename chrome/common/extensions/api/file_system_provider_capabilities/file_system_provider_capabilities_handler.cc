@@ -34,15 +34,13 @@ FileSystemProviderCapabilities::FileSystemProviderCapabilities(
       source_(source) {
 }
 
-FileSystemProviderCapabilities::~FileSystemProviderCapabilities() {
-}
+FileSystemProviderCapabilities::~FileSystemProviderCapabilities() = default;
 
-FileSystemProviderCapabilitiesHandler::FileSystemProviderCapabilitiesHandler() {
-}
+FileSystemProviderCapabilitiesHandler::FileSystemProviderCapabilitiesHandler() =
+    default;
 
 FileSystemProviderCapabilitiesHandler::
-    ~FileSystemProviderCapabilitiesHandler() {
-}
+    ~FileSystemProviderCapabilitiesHandler() = default;
 
 // static
 const FileSystemProviderCapabilities* FileSystemProviderCapabilities::Get(
@@ -56,7 +54,7 @@ bool FileSystemProviderCapabilitiesHandler::Parse(Extension* extension,
                                                   std::u16string* error) {
   const bool has_permission = extensions::PermissionsParser::HasAPIPermission(
       extension, mojom::APIPermissionID::kFileSystemProvider);
-  const base::Value::Dict* section = extension->manifest()->FindDictPath(
+  const base::DictValue* section = extension->manifest()->FindDictPath(
       manifest_keys::kFileSystemProviderCapabilities);
 
   if (has_permission && !section) {

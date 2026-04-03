@@ -13,6 +13,7 @@
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "media/audio/aecdump_recording_manager.h"
 #include "media/audio/agc_audio_stream.h"
 #include "media/audio/audio_debug_recording_helper.h"
@@ -78,7 +79,8 @@ class MEDIA_EXPORT CrasInputStream : public AgcAudioStream<AudioInputStream>,
   // registered callback. Called from SamplesReady().
   void ReadAudio(size_t frames, uint8_t* buffer, const timespec* latency_ts);
 
-  // Deals with an error that occured in the stream.  Called from StreamError().
+  // Deals with an error that occurred in the stream.  Called from
+  // StreamError().
   void NotifyStreamError(int err);
 
   // Convert from dB * 100 to a volume ratio.
@@ -137,13 +139,13 @@ class MEDIA_EXPORT CrasInputStream : public AgcAudioStream<AudioInputStream>,
   // want circular references.  Additionally, stream objects live on the
   // audio thread, which is owned by the audio manager and we don't want to
   // addref the manager from that thread.
-  AudioManagerCrasBase* const audio_manager_;
+  raw_ptr<AudioManagerCrasBase> const audio_manager_;
 
   // Callback to pass audio samples too, valid while recording.
-  AudioInputCallback* callback_ = NULL;
+  raw_ptr<AudioInputCallback> callback_ = nullptr;
 
   // The client used to communicate with the audio server.
-  struct libcras_client* client_ = NULL;
+  raw_ptr<struct libcras_client, DanglingUntriaged> client_ = nullptr;
 
   // PCM parameters for the stream.
   const AudioParameters params_;

@@ -9,6 +9,8 @@
  */
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 
 #include "api/array_view.h"
 #include "modules/audio_coding/codecs/cng/webrtc_cng.h"
@@ -19,7 +21,7 @@ namespace webrtc {
 namespace test {
 namespace {
 
-void FuzzOneInputTest(rtc::ArrayView<const uint8_t> data) {
+void FuzzOneInputTest(webrtc::ArrayView<const uint8_t> data) {
   FuzzDataHelper fuzz_data(data);
   ComfortNoiseDecoder cng_decoder;
 
@@ -39,9 +41,13 @@ void FuzzOneInputTest(rtc::ArrayView<const uint8_t> data) {
     const size_t output_size = fuzz_data.SelectOneOf(kOutputSizes);
     const size_t num_generate_calls =
         std::min(fuzz_data.Read<uint8_t>(), static_cast<uint8_t>(17));
-    rtc::BufferT<int16_t> output(output_size);
+    BufferT<int16_t> output = BufferT<int16_t>::CreateWithCapacity(output_size);
     for (size_t i = 0; i < num_generate_calls; ++i) {
-      cng_decoder.Generate(output, new_period);
+      output.SetSize(0);
+      output.AppendData(output_size, [&](ArrayView<int16_t> out) {
+        cng_decoder.Generate(out, new_period);
+        return output_size;
+      });
     }
   }
 }
@@ -53,7 +59,7 @@ void FuzzOneInput(const uint8_t* data, size_t size) {
   if (size > 5000) {
     return;
   }
-  test::FuzzOneInputTest(rtc::ArrayView<const uint8_t>(data, size));
+  test::FuzzOneInputTest(webrtc::ArrayView<const uint8_t>(data, size));
 }
 
 }  // namespace webrtc

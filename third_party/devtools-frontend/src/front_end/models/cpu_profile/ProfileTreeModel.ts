@@ -1,9 +1,9 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type * as Protocol from '../../generated/protocol.js';
 import type * as Platform from '../../core/platform/platform.js';
+import type * as Protocol from '../../generated/protocol.js';
 
 export class ProfileNode {
   callFrame: Protocol.Runtime.CallFrame;
@@ -12,8 +12,8 @@ export class ProfileNode {
   total: number;
   id: number;
   parent: ProfileNode|null;
-  children: ProfileNode[];
-  functionName: string;
+  children: this[];
+  originalFunctionName: string|null = null;
   depth!: number;
   deoptReason!: string|null;
   constructor(callFrame: Protocol.Runtime.CallFrame) {
@@ -22,7 +22,6 @@ export class ProfileNode {
     this.self = 0;
     this.total = 0;
     this.id = 0;
-    this.functionName = callFrame.functionName;
     this.parent = null;
     this.children = [];
   }
@@ -43,11 +42,12 @@ export class ProfileNode {
     return this.callFrame.columnNumber;
   }
 
-  setFunctionName(name: string|null): void {
-    if (name === null) {
-      return;
-    }
-    this.functionName = name;
+  get functionName(): string {
+    return this.originalFunctionName ?? this.callFrame.functionName;
+  }
+
+  setOriginalFunctionName(name: string|null): void {
+    this.originalFunctionName = name;
   }
 }
 
@@ -55,8 +55,6 @@ export class ProfileTreeModel {
   root!: ProfileNode;
   total!: number;
   maxDepth!: number;
-  constructor() {
-  }
 
   initialize(root: ProfileNode): void {
     this.root = root;
@@ -66,8 +64,6 @@ export class ProfileTreeModel {
 
   private assignDepthsAndParents(): void {
     const root = this.root;
-    // TODO(crbug.com/1354548): start depth from 0 once profiler
-    // panel dependencies are gone.
     root.depth = -1;
     root.parent = null;
     this.maxDepth = 0;

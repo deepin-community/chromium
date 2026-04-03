@@ -28,34 +28,39 @@
 #ifndef SRC_TINT_LANG_WGSL_SEM_LOAD_H_
 #define SRC_TINT_LANG_WGSL_SEM_LOAD_H_
 
-#include "src/tint/lang/core/type/reference.h"
 #include "src/tint/lang/wgsl/sem/value_expression.h"
 
 namespace tint::sem {
 
-/// Load is a semantic expression which represents the load of a reference to a non-reference value.
+/// Load is a semantic expression which represents the load of a memory view to a value.
 /// Loads from reference types are implicit in WGSL, so the Load semantic node shares the same AST
 /// node as the inner semantic node.
 class Load final : public Castable<Load, ValueExpression> {
   public:
     /// Constructor
-    /// @param reference the reference expression being loaded
+    /// @param source the source expression being loaded from
     /// @param statement the statement that owns this expression
-    Load(const ValueExpression* reference, const Statement* statement);
+    /// @param stage the earliest evaluation stage for the expression
+    Load(const ValueExpression* source, const Statement* statement, core::EvaluationStage stage);
+
+    /// Constructor
+    /// @param source the source expression being loaded from
+    /// @param type the resolved type of the load
+    /// @param statement the statement that owns this expression
+    /// @param stage the earliest evaluation stage for the expression
+    Load(const ValueExpression* source,
+         const core::type::Type* type,
+         const Statement* statement,
+         core::EvaluationStage stage);
 
     /// Destructor
     ~Load() override;
 
-    /// @return the reference being loaded
-    const ValueExpression* Reference() const { return reference_; }
-
-    /// @returns the type of the loaded reference.
-    const core::type::Reference* ReferenceType() const {
-        return static_cast<const core::type::Reference*>(reference_->Type());
-    }
+    /// @return the source object being loaded
+    const ValueExpression* Source() const { return source_; }
 
   private:
-    ValueExpression const* const reference_;
+    ValueExpression const* const source_;
 };
 
 }  // namespace tint::sem

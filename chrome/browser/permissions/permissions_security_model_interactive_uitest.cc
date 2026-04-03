@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <variant>
+
 #include "base/command_line.h"
 #include "base/path_service.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -9,6 +11,7 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/extensions/extension_action_test_helper.h"
@@ -18,6 +21,7 @@
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/permissions/permission_request_manager_test_api.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/common/pref_names.h"
@@ -25,6 +29,7 @@
 #include "components/permissions/permissions_client.h"
 #include "components/permissions/test/mock_permission_prompt_factory.h"
 #include "components/permissions/test/permission_request_observer.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/disallow_activation_reason.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -58,10 +63,10 @@ namespace {
 // ASSERT_* macros can only be used in functions returning void.
 void AssertResultIsString(const content::EvalJsResult& result) {
   // Verify no error.
-  ASSERT_EQ("", result.error);
+  ASSERT_TRUE(result.is_ok());
   // We could use result.value.is_string(), but this logs the actual type in
   // case of mismatch.
-  ASSERT_EQ(base::Value::Type::STRING, result.value.type()) << result.value;
+  std::ignore = result.ExtractString();
 }
 
 // Creates a blob containing dummy HTML, then returns its URL.
@@ -114,9 +119,9 @@ GURL CreateFilesystemURL(content::RenderFrameHost* rfh) {
 
 GURL CreateFileURL(const base::FilePath::CharType file_name[] =
                        FILE_PATH_LITERAL("title1.html")) {
-  GURL file_url =
-      ui_test_utils::GetTestUrl(base::FilePath(), base::FilePath(file_name));
-  EXPECT_EQ(url::kFileScheme, file_url.scheme());
+  GURL file_url = chrome_test_utils::GetTestUrl(base::FilePath(),
+                                                base::FilePath(file_name));
+  EXPECT_EQ(url::kFileScheme, file_url.GetScheme());
 
   return file_url;
 }
@@ -246,13 +251,50 @@ constexpr char kCheckMicrophone[] = R"(
     })
     )";
 
+constexpr char kCheckClipboardRead[] = R"(
+    new Promise(async resolve => {
+      const PermissionStatus =
+        await navigator.permissions.query({name: 'clipboard-read'});
+      resolve(PermissionStatus.state === 'granted');
+    })
+    )";
+
+constexpr char kRequestClipboardRead[] = R"(
+    new Promise(async resolve => {
+      try {
+        const read_promise = await navigator.clipboard.readText();
+        resolve('granted');
+      } catch(error) {
+        resolve('denied');
+      }
+    })
+    )";
+
+constexpr char kCheckClipboardWrite[] = R"(
+    new Promise(async resolve => {
+      const PermissionStatus =
+        await navigator.permissions.query({name: 'clipboard-write'});
+      resolve(PermissionStatus.state === 'granted');
+    })
+    )";
+
+constexpr char kRequestClipboardWrite[] = R"(
+    new Promise(async resolve => {
+      try {
+        const write_promise = await navigator.clipboard.writeText("texts");
+        resolve('granted');
+      } catch(error) {
+        resolve('denied');
+      }
+    })
+    )";
+
 constexpr char kIframePolicy[] = "geolocation *; camera *";
 
 void VerifyPermissionsAllowed(content::RenderFrameHost* main_rfh,
                               const std::string& request_permission_script,
                               const std::string& check_permission_script) {
-  ASSERT_FALSE(
-      content::EvalJs(main_rfh, check_permission_script).value.GetBool());
+  ASSERT_EQ(false, content::EvalJs(main_rfh, check_permission_script));
   permissions::PermissionRequestManager* manager =
       permissions::PermissionRequestManager::FromWebContents(
           content::WebContents::FromRenderFrameHost(main_rfh));
@@ -274,8 +316,7 @@ void VerifyPermissionsAllowed(content::RenderFrameHost* main_rfh,
   bubble_factory->set_response_type(
       permissions::PermissionRequestManager::AutoResponseType::NONE);
 
-  EXPECT_TRUE(
-      content::EvalJs(main_rfh, check_permission_script).value.GetBool());
+  EXPECT_EQ(true, content::EvalJs(main_rfh, check_permission_script));
 }
 
 // `test_rfh` is either an embedded iframe or an external popup window.
@@ -285,10 +326,8 @@ void VerifyPermission(content::WebContents* opener_or_embedder_contents,
                       const std::string& check_permission_script) {
   content::RenderFrameHost* opener_rfh =
       opener_or_embedder_contents->GetPrimaryMainFrame();
-  ASSERT_FALSE(
-      content::EvalJs(opener_rfh, check_permission_script).value.GetBool());
-  ASSERT_FALSE(
-      content::EvalJs(test_rfh, check_permission_script).value.GetBool());
+  ASSERT_EQ(false, content::EvalJs(opener_rfh, check_permission_script));
+  ASSERT_EQ(false, content::EvalJs(test_rfh, check_permission_script));
 
   permissions::PermissionRequestManager* manager =
       permissions::PermissionRequestManager::FromWebContents(
@@ -311,14 +350,10 @@ void VerifyPermission(content::WebContents* opener_or_embedder_contents,
   bubble_factory->set_response_type(
       permissions::PermissionRequestManager::AutoResponseType::NONE);
 
-  EXPECT_TRUE(
-      content::EvalJs(opener_rfh, check_permission_script).value.GetBool());
+  EXPECT_EQ(true, content::EvalJs(opener_rfh, check_permission_script));
 
   // Verify permissions on the test RFH.
-  {
-    EXPECT_TRUE(
-        content::EvalJs(test_rfh, check_permission_script).value.GetBool());
-  }
+  EXPECT_EQ(true, content::EvalJs(test_rfh, check_permission_script));
 
   // Request permission on the test RFH.
   test_rfh->GetView()->Focus();
@@ -333,13 +368,17 @@ void VerifyPermissionsDeniedForFencedFrame(
     content::WebContents* embedder_contents,
     content::RenderFrameHost* fenced_rfh,
     const std::string& request_permission_script,
-    const std::string& check_permission_script) {
+    const std::string& check_permission_script,
+    bool default_granted) {
+  // If granted by default, permission prompt factory will not receive requests.
+  int request_count = default_granted ? 0 : 1;
+
   content::RenderFrameHost* embedder_main_rfh =
       embedder_contents->GetPrimaryMainFrame();
-  ASSERT_FALSE(content::EvalJs(embedder_main_rfh, check_permission_script)
-                   .value.GetBool());
-  ASSERT_FALSE(
-      content::EvalJs(fenced_rfh, check_permission_script).value.GetBool());
+
+  ASSERT_EQ(content::EvalJs(embedder_main_rfh, check_permission_script),
+            default_granted);
+  ASSERT_EQ(false, content::EvalJs(fenced_rfh, check_permission_script));
 
   permissions::PermissionRequestManager* manager =
       permissions::PermissionRequestManager::FromWebContents(embedder_contents);
@@ -357,18 +396,16 @@ void VerifyPermissionsDeniedForFencedFrame(
   // Request permission on the embedder contents.
   EXPECT_EQ("granted",
             content::EvalJs(embedder_main_rfh, request_permission_script));
-  EXPECT_EQ(1, bubble_factory->TotalRequestCount());
+  EXPECT_EQ(request_count, bubble_factory->TotalRequestCount());
 
   // Disable auto-accept of a permission request.
   bubble_factory->set_response_type(
       permissions::PermissionRequestManager::AutoResponseType::NONE);
 
-  EXPECT_TRUE(content::EvalJs(embedder_main_rfh, check_permission_script)
-                  .value.GetBool());
+  EXPECT_EQ(true, content::EvalJs(embedder_main_rfh, check_permission_script));
 
   // MPArch RFH is not allowed to verify permissions.
-  EXPECT_FALSE(
-      content::EvalJs(fenced_rfh, check_permission_script).value.GetBool());
+  EXPECT_EQ(false, content::EvalJs(fenced_rfh, check_permission_script));
 
   // Enable auto-accept of a permission request.
   bubble_factory->set_response_type(
@@ -380,7 +417,29 @@ void VerifyPermissionsDeniedForFencedFrame(
   EXPECT_EQ("denied", content::EvalJs(fenced_rfh, request_permission_script));
 
   // There should not be the 2nd prompt.
-  EXPECT_EQ(1, bubble_factory->TotalRequestCount());
+  EXPECT_EQ(request_count, bubble_factory->TotalRequestCount());
+}
+
+void VerifyPermissionsDeniedForFencedFrame(
+    content::WebContents* embedder_contents,
+    content::RenderFrameHost* fenced_rfh) {
+  const struct {
+    std::string check_permission;
+    std::string request_permission;
+    bool default_granted = false;
+  } kTests[] = {
+      {kCheckNotifications, kRequestNotifications},
+      {kCheckGeolocation, kRequestGeolocation},
+      {kCheckCamera, kRequestCamera},
+      {kCheckClipboardRead, kRequestClipboardRead},
+      {kCheckClipboardWrite, kRequestClipboardWrite, /*default_granted=*/true},
+  };
+
+  for (const auto& test : kTests) {
+    VerifyPermissionsDeniedForFencedFrame(
+        embedder_contents, fenced_rfh, test.request_permission,
+        test.check_permission, test.default_granted);
+  }
 }
 
 // getUserMedia requires focus. It should be verified only on a popup window.
@@ -389,8 +448,8 @@ void VerifyPopupWindowGetUserMedia(content::WebContents* opener_contents,
   content::RenderFrameHost* opener_rfh = opener_contents->GetPrimaryMainFrame();
   content::RenderFrameHost* popup_rfh = popup_contents->GetPrimaryMainFrame();
 
-  ASSERT_FALSE(content::EvalJs(opener_rfh, kCheckCamera).value.GetBool());
-  ASSERT_FALSE(content::EvalJs(popup_rfh, kCheckCamera).value.GetBool());
+  ASSERT_EQ(false, content::EvalJs(opener_rfh, kCheckCamera));
+  ASSERT_EQ(false, content::EvalJs(popup_rfh, kCheckCamera));
 
   permissions::PermissionRequestManager* manager =
       permissions::PermissionRequestManager::FromWebContents(popup_contents);
@@ -412,8 +471,8 @@ void VerifyPopupWindowGetUserMedia(content::WebContents* opener_contents,
   bubble_factory->set_response_type(
       permissions::PermissionRequestManager::AutoResponseType::NONE);
 
-  EXPECT_TRUE(content::EvalJs(popup_rfh, kCheckCamera).value.GetBool());
-  EXPECT_TRUE(content::EvalJs(opener_rfh, kCheckCamera).value.GetBool());
+  EXPECT_EQ(true, content::EvalJs(popup_rfh, kCheckCamera));
+  EXPECT_EQ(true, content::EvalJs(opener_rfh, kCheckCamera));
 }
 
 void VerifyPermissionsAllowed(content::RenderFrameHost* rfh) {
@@ -429,25 +488,6 @@ void VerifyPermissionsAllowed(content::RenderFrameHost* rfh) {
   for (const auto& test : kTests) {
     VerifyPermissionsAllowed(rfh, test.request_permission,
                              test.check_permission);
-  }
-}
-
-void VerifyPermissionsDeniedForFencedFrame(
-    content::WebContents* embedder_contents,
-    content::RenderFrameHost* fenced_rfh) {
-  const struct {
-    std::string check_permission;
-    std::string request_permission;
-  } kTests[] = {
-      {kCheckNotifications, kRequestNotifications},
-      {kCheckGeolocation, kRequestGeolocation},
-      {kCheckCamera, kRequestCamera},
-  };
-
-  for (const auto& test : kTests) {
-    VerifyPermissionsDeniedForFencedFrame(embedder_contents, fenced_rfh,
-                                          test.request_permission,
-                                          test.check_permission);
   }
 }
 
@@ -498,17 +538,18 @@ void VerifyPermissionsForFile(content::RenderFrameHost* rfh,
   };
 
   for (const auto& test : kTests) {
-    ASSERT_FALSE(content::EvalJs(rfh, test.check_permission).value.GetBool());
+    ASSERT_EQ(false, content::EvalJs(rfh, test.check_permission));
     EXPECT_EQ(expect_granted ? "granted" : "denied",
               content::EvalJs(rfh, test.request_permission));
 
-    ASSERT_FALSE(content::EvalJs(rfh, test.check_permission).value.GetBool());
+    ASSERT_EQ(false, content::EvalJs(rfh, test.check_permission));
   }
 }
 
 // Tests of permissions behavior for an inheritance and embedding of an
 // origin.
-class PermissionsSecurityModelInteractiveUITest : public InProcessBrowserTest {
+class PermissionsSecurityModelInteractiveUITest
+    : public InteractiveBrowserTest {
  public:
   PermissionsSecurityModelInteractiveUITest() {
     geolocation_overrider_ =
@@ -670,7 +711,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
   ASSERT_TRUE(popup_iframe);
 
   // Not allowed to navigate top frame to filesystem URL.
-  EXPECT_EQ("", popup_iframe->GetLastCommittedURL().scheme());
+  EXPECT_EQ("", popup_iframe->GetLastCommittedURL().GetScheme());
 }
 
 IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
@@ -691,7 +732,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
       OpenPopup(browser(), fs_url);
   ASSERT_TRUE(popup_iframe_web_contents);
 
-  EXPECT_EQ("", popup_iframe_web_contents->GetLastCommittedURL().scheme());
+  EXPECT_EQ("", popup_iframe_web_contents->GetLastCommittedURL().GetScheme());
 
   content::RenderFrameHost* popup_rfh =
       ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
@@ -831,7 +872,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
 
   content::EvalJsResult result = content::EvalJs(
       embedder_contents, "history.pushState({}, {}, 'https://chromium.org');");
-  EXPECT_EQ(std::string(), result.error);
+  EXPECT_TRUE(result.is_ok());
   EXPECT_EQ("https://chromium.org/", main_rfh->GetLastCommittedURL().spec());
   EXPECT_TRUE(main_rfh->GetLastCommittedOrigin().GetURL().SchemeIsFile());
 
@@ -876,7 +917,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
 
   content::EvalJsResult result = content::EvalJs(
       embedder_contents, "history.pushState({}, {}, 'about:blank');");
-  EXPECT_EQ(std::string(), result.error);
+  EXPECT_TRUE(result.is_ok());
   EXPECT_EQ("about:blank", main_rfh->GetLastCommittedURL().spec());
   EXPECT_TRUE(main_rfh->GetLastCommittedURL().IsAboutBlank());
 
@@ -904,9 +945,8 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
   EXPECT_EQ(GURL(chrome::kChromeUINewTabPageURL),
             main_rfh->GetLastCommittedOrigin().GetURL());
 
-  EXPECT_FALSE(content::EvalJs(main_rfh, kCheckMicrophone,
-                               content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                   .value.GetBool());
+  EXPECT_EQ(false, content::EvalJs(main_rfh, kCheckMicrophone,
+                                   content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
   permissions::PermissionRequestManager* manager =
       permissions::PermissionRequestManager::FromWebContents(embedder_contents);
@@ -923,9 +963,8 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
   bubble_factory->set_response_type(
       permissions::PermissionRequestManager::AutoResponseType::NONE);
 
-  EXPECT_TRUE(content::EvalJs(main_rfh, kCheckMicrophone,
-                              content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                  .value.GetBool());
+  EXPECT_EQ(true, content::EvalJs(main_rfh, kCheckMicrophone,
+                                  content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 }
 
 IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
@@ -945,9 +984,8 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
   EXPECT_EQ(GURL(chrome::kChromeUINewTabPageURL),
             main_rfh->GetLastCommittedOrigin().GetURL());
 
-  EXPECT_FALSE(content::EvalJs(main_rfh, kCheckMicrophone,
-                               content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                   .value.GetBool());
+  EXPECT_EQ(false, content::EvalJs(main_rfh, kCheckMicrophone,
+                                   content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
   permissions::PermissionRequestManager* permission_request_manager =
       permissions::PermissionRequestManager::FromWebContents(embedder_contents);
@@ -969,9 +1007,8 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
   bubble_factory->set_response_type(
       permissions::PermissionRequestManager::AutoResponseType::NONE);
 
-  EXPECT_TRUE(content::EvalJs(main_rfh, kCheckMicrophone,
-                              content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                  .value.GetBool());
+  EXPECT_EQ(true, content::EvalJs(main_rfh, kCheckMicrophone,
+                                  content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
   content_settings::PageSpecificContentSettings* page_content_settings =
       content_settings::PageSpecificContentSettings::GetForFrame(main_rfh);
@@ -1000,9 +1037,8 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
   EXPECT_EQ(GURL(chrome::kChromeUINewTabPageURL),
             main_rfh->GetLastCommittedOrigin().GetURL());
 
-  EXPECT_FALSE(content::EvalJs(main_rfh, kCheckMicrophone,
-                               content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                   .value.GetBool());
+  EXPECT_EQ(false, content::EvalJs(main_rfh, kCheckMicrophone,
+                                   content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
   auto* manager =
       permissions::PermissionRequestManager::FromWebContents(embedder_contents);
@@ -1020,11 +1056,10 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelInteractiveUITest,
   EXPECT_TRUE(manager->IsRequestInProgress());
   EXPECT_TRUE(observer.request_shown());
 
-  manager->Accept();
+  manager->Accept(/*prompt_options=*/std::monostate());
 
-  EXPECT_TRUE(content::EvalJs(main_rfh, kCheckMicrophone,
-                              content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                  .value.GetBool());
+  EXPECT_EQ(true, content::EvalJs(main_rfh, kCheckMicrophone,
+                                  content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 }
 
 class PermissionsSecurityModelHTTPS
@@ -1154,7 +1189,7 @@ class PermissionsSecurityModelHTTPS
     EXPECT_TRUE(manager->IsRequestInProgress());
     EXPECT_TRUE(observer.request_shown());
 
-    manager->Accept();
+    manager->Accept(/*prompt_options=*/std::monostate());
   }
 
  private:
@@ -1178,23 +1213,23 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelHTTPS,
       main_rfh->GetBrowserContext()->GetPermissionController();
   url::Origin origin = url::Origin::Create(GetMainFrameURL());
 
-  SetPermissionControllerOverrideForDevTools(
-      permission_controller, origin, blink::PermissionType::GEOLOCATION,
-      blink::mojom::PermissionStatus::GRANTED);
+  SetPermissionControllerOverride(permission_controller, origin, origin,
+                                  blink::PermissionType::GEOLOCATION,
+                                  blink::mojom::PermissionStatus::GRANTED);
 
   CheckPermissionState(main_rfh, /*notifications_allowed=*/false,
                        /*geolocation_allowed=*/true, /*camera_allowed=*/false);
 
-  SetPermissionControllerOverrideForDevTools(
-      permission_controller, origin, blink::PermissionType::VIDEO_CAPTURE,
-      blink::mojom::PermissionStatus::GRANTED);
+  SetPermissionControllerOverride(permission_controller, origin, origin,
+                                  blink::PermissionType::VIDEO_CAPTURE,
+                                  blink::mojom::PermissionStatus::GRANTED);
 
   CheckPermissionState(main_rfh, /*notifications_allowed=*/false,
                        /*geolocation_allowed=*/true, /*camera_allowed=*/true);
 
-  SetPermissionControllerOverrideForDevTools(
-      permission_controller, origin, blink::PermissionType::NOTIFICATIONS,
-      blink::mojom::PermissionStatus::GRANTED);
+  SetPermissionControllerOverride(permission_controller, origin, origin,
+                                  blink::PermissionType::NOTIFICATIONS,
+                                  blink::mojom::PermissionStatus::GRANTED);
 
   CheckPermissionState(main_rfh, /*notifications_allowed=*/true,
                        /*geolocation_allowed=*/true, /*camera_allowed=*/true);
@@ -1521,7 +1556,8 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestWithPrerendererTest,
   GURL prerender_url =
       embedded_test_server()->GetURL("/prerenderer_geolocation_test.html");
   prerender_helper().AddPrerender(prerender_url);
-  int host_id = prerender_helper().AddPrerender(prerender_url);
+  content::PrerenderHostId host_id =
+      prerender_helper().AddPrerender(prerender_url);
 
   content::RenderFrameHost* prerender_render_frame_host =
       prerender_helper().GetPrerenderedMainFrameHost(host_id);
@@ -1581,9 +1617,10 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestWithPrerendererTest,
   content::EvalJsResult results =
       content::EvalJs(prerender_render_frame_host, "eventsSeen");
   std::vector<std::string> eventsSeen;
-  base::Value resultsList = results.ExtractList();
-  for (const auto& result : resultsList.GetList())
+  const base::ListValue& results_list = results.ExtractList();
+  for (const auto& result : results_list) {
     eventsSeen.push_back(result.GetString());
+  }
   EXPECT_THAT(eventsSeen, testing::ElementsAreArray(
                               {"accessGeolocation (prerendering: true)",
                                "prerenderingchange (prerendering: false)",
@@ -1661,9 +1698,8 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelHTTPS,
   bubble_factory->set_response_type(
       permissions::PermissionRequestManager::AutoResponseType::ACCEPT_ALL);
 
-  EXPECT_FALSE(content::EvalJs(embedder_contents->GetPrimaryMainFrame(),
-                               kCheckGeolocation)
-                   .value.GetBool());
+  EXPECT_EQ(false, content::EvalJs(embedder_contents->GetPrimaryMainFrame(),
+                                   kCheckGeolocation));
 
   EXPECT_EQ("granted", content::EvalJs(embedder_contents->GetPrimaryMainFrame(),
                                        kRequestGeolocation));
@@ -1690,7 +1726,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsSecurityModelHTTPS,
   EXPECT_EQ(origin_a, rfh_a_2->GetLastCommittedOrigin());
   // Verify that `a.test` has no granted Geolocation permission despite it being
   // requested above.
-  EXPECT_FALSE(content::EvalJs(rfh_a_2, kCheckGeolocation).value.GetBool());
+  EXPECT_EQ(false, content::EvalJs(rfh_a_2, kCheckGeolocation));
 }
 
 class PermissionRequestFromExtension : public extensions::ExtensionApiTest {
@@ -1730,7 +1766,7 @@ class PermissionRequestFromExtension : public extensions::ExtensionApiTest {
   void EnsurePopupActive() {
     auto test_util = ExtensionActionTestHelper::Create(browser());
     EXPECT_TRUE(test_util->HasPopup());
-    EXPECT_TRUE(test_util->WaitForPopup());
+    ASSERT_NO_FATAL_FAILURE(test_util->WaitForPopup());
     EXPECT_TRUE(test_util->HasPopup());
   }
 
@@ -1869,50 +1905,45 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestFromExtension,
 
   // Notifications are enabled by default if the Notifications permission is
   // declared in an extension's manifest.
-  EXPECT_TRUE(content::EvalJs(iframe_with_embedded_extension,
-                              kCheckNotifications,
-                              content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                  .value.GetBool());
+  EXPECT_EQ(true,
+            content::EvalJs(iframe_with_embedded_extension, kCheckNotifications,
+                            content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
-  EXPECT_FALSE(content::EvalJs(iframe_with_embedded_extension,
-                               kCheckGeolocation,
-                               content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                   .value.GetBool());
+  EXPECT_EQ(false,
+            content::EvalJs(iframe_with_embedded_extension, kCheckGeolocation,
+                            content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
   EXPECT_EQ("granted",
             content::EvalJs(iframe_with_embedded_extension, kRequestGeolocation,
                             content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
   // Despite Geolocation being granted above, its state is `prompt`.
-  EXPECT_FALSE(content::EvalJs(iframe_with_embedded_extension,
-                               kCheckGeolocation,
-                               content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                   .value.GetBool());
+  EXPECT_EQ(false,
+            content::EvalJs(iframe_with_embedded_extension, kCheckGeolocation,
+                            content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
   // There was no permission prompt shown.
   EXPECT_EQ(0, bubble_factory->TotalRequestCount());
 
   // Microphone is disabled by default.
-  EXPECT_FALSE(content::EvalJs(iframe_with_embedded_extension, kCheckMicrophone,
-                               content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                   .value.GetBool());
+  EXPECT_EQ(false,
+            content::EvalJs(iframe_with_embedded_extension, kCheckMicrophone,
+                            content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
   EXPECT_EQ("granted",
             content::EvalJs(iframe_with_embedded_extension, kRequestMicrophone,
                             content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
   // Microphone is enabled.
-  EXPECT_TRUE(content::EvalJs(iframe_with_embedded_extension, kCheckMicrophone,
-                              content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                  .value.GetBool());
+  EXPECT_EQ(true,
+            content::EvalJs(iframe_with_embedded_extension, kCheckMicrophone,
+                            content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
   // Camera is disabled by default.
-  EXPECT_FALSE(content::EvalJs(iframe_with_embedded_extension, kCheckCamera,
-                               content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                   .value.GetBool());
+  EXPECT_EQ(false, content::EvalJs(iframe_with_embedded_extension, kCheckCamera,
+                                   content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
   EXPECT_EQ("granted",
             content::EvalJs(iframe_with_embedded_extension, kRequestCamera,
                             content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
   // Camera is enabled.
-  EXPECT_TRUE(content::EvalJs(iframe_with_embedded_extension, kCheckCamera,
-                              content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                  .value.GetBool());
+  EXPECT_EQ(true, content::EvalJs(iframe_with_embedded_extension, kCheckCamera,
+                                  content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
   // Only Camera and Microphone will show a prompt on permission request.
   EXPECT_EQ(2, bubble_factory->TotalRequestCount());
@@ -1966,48 +1997,44 @@ IN_PROC_BROWSER_TEST_F(PermissionRequestFromExtension,
 
   // Notification permission is disabled if 'notification' is not declared in an
   // extension's manifest.
-  EXPECT_FALSE(content::EvalJs(iframe_with_embedded_extension,
-                               kCheckNotifications,
-                               content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                   .value.GetBool());
+  EXPECT_EQ(false,
+            content::EvalJs(iframe_with_embedded_extension, kCheckNotifications,
+                            content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
-  EXPECT_FALSE(content::EvalJs(iframe_with_embedded_extension,
-                               kCheckGeolocation,
-                               content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                   .value.GetBool());
+  EXPECT_EQ(false,
+            content::EvalJs(iframe_with_embedded_extension, kCheckGeolocation,
+                            content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
   EXPECT_EQ("granted",
             content::EvalJs(iframe_with_embedded_extension, kRequestGeolocation,
                             content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
-  EXPECT_TRUE(content::EvalJs(iframe_with_embedded_extension, kCheckGeolocation,
-                              content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                  .value.GetBool());
+  EXPECT_EQ(true,
+            content::EvalJs(iframe_with_embedded_extension, kCheckGeolocation,
+                            content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
   // A permission prompt is shown.
   EXPECT_EQ(1, bubble_factory->TotalRequestCount());
 
   // Microphone is disabled by default.
-  EXPECT_FALSE(content::EvalJs(iframe_with_embedded_extension, kCheckMicrophone,
-                               content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                   .value.GetBool());
+  EXPECT_EQ(false,
+            content::EvalJs(iframe_with_embedded_extension, kCheckMicrophone,
+                            content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
   EXPECT_EQ("granted",
             content::EvalJs(iframe_with_embedded_extension, kRequestMicrophone,
                             content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
   // Microphone is enabled.
-  EXPECT_TRUE(content::EvalJs(iframe_with_embedded_extension, kCheckMicrophone,
-                              content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                  .value.GetBool());
+  EXPECT_EQ(true,
+            content::EvalJs(iframe_with_embedded_extension, kCheckMicrophone,
+                            content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
   // Camera is disabled by default.
-  EXPECT_FALSE(content::EvalJs(iframe_with_embedded_extension, kCheckCamera,
-                               content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                   .value.GetBool());
+  EXPECT_EQ(false, content::EvalJs(iframe_with_embedded_extension, kCheckCamera,
+                                   content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
   EXPECT_EQ("granted",
             content::EvalJs(iframe_with_embedded_extension, kRequestCamera,
                             content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
   // Camera is enabled.
-  EXPECT_TRUE(content::EvalJs(iframe_with_embedded_extension, kCheckCamera,
-                              content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1)
-                  .value.GetBool());
+  EXPECT_EQ(true, content::EvalJs(iframe_with_embedded_extension, kCheckCamera,
+                                  content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1));
 
   // Geolocation, Camera and Microphone will show a prompt on permission
   // request.

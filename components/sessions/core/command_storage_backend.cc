@@ -5,10 +5,14 @@
 #include "components/sessions/core/command_storage_backend.h"
 
 #include <stdint.h>
+
 #include <algorithm>
 #include <limits>
+#include <string_view>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/features.h"
 #include "base/files/file.h"
@@ -16,9 +20,11 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_clock.h"
@@ -128,7 +134,7 @@ class SessionFileReader {
         crypto_key_(crypto_key) {
     if (!crypto_key.empty()) {
       aead_ = std::make_unique<crypto::Aead>(crypto::Aead::AES_256_GCM);
-      aead_->Init(base::make_span(crypto_key_));
+      aead_->Init(base::span(crypto_key_));
     }
     file_ = std::make_unique<base::File>(
         path, base::File::FLAG_OPEN | base::File::FLAG_READ);
@@ -159,22 +165,35 @@ class SessionFileReader {
   // Decrypts a previously encrypted command. Returns the new command on
   // success.
   std::unique_ptr<sessions::SessionCommand> CreateCommandFromEncrypted(
-      const char* data,
-      size_type length);
+      base::span<const uint8_t> data);
 
   // Creates a command from the previously written value.
-  std::unique_ptr<sessions::SessionCommand> CreateCommand(const char* data,
-                                                          size_type length);
+  std::unique_ptr<sessions::SessionCommand> CreateCommand(
+      base::span<const uint8_t> data);
 
   // Shifts the unused portion of buffer_ to the beginning and fills the
   // remaining portion with data from the file. Returns false if the buffer
   // couldn't be filled or there was an error reading the file.
   bool FillBuffer();
 
+  // Returns the read (but not yet processed) data in the buffer.
+  base::span<const uint8_t> GetBufferedData() const {
+    return base::span(buffer_).subspan(buffer_position_, available_count_);
+  }
+
+  // Returns the first `count` bytes of the buffered data and updates the buffer
+  // position and available count accordingly.
+  base::span<const uint8_t> ConsumeBufferedData(size_t count) {
+    const base::span<const uint8_t> data = GetBufferedData().first(count);
+    available_count_ -= data.size();
+    buffer_position_ += data.size();
+    return data;
+  }
+
   bool is_header_valid_ = false;
 
   // As we read from the file, data goes here.
-  std::string buffer_;
+  std::vector<uint8_t> buffer_;
 
   const std::vector<uint8_t> crypto_key_;
 
@@ -234,22 +253,24 @@ bool SessionFileReader::ReadHeader() {
     return false;
   FileHeader header;
   CHECK_EQ(0, bytes_read_);
-  bytes_read_ =
-      file_->ReadAtCurrentPos(reinterpret_cast<char*>(&header), sizeof(header));
-  if (bytes_read_ < 0) {
+  std::optional<size_t> read_count =
+      file_->ReadAtCurrentPos(base::byte_span_from_ref(header));
+  if (!read_count) {
     VLOG(1) << "SessionFileReader::ReadHeader, failed to read header. "
                "Attempted to read "
             << sizeof(header)
             << " bytes into buffer but encountered file read error: "
             << base::File::ErrorToString(base::File::GetLastFileError());
+    return false;
   }
-  if (bytes_read_ != sizeof(header) || header.signature != kFileSignature) {
+  if (*read_count != sizeof(header) || header.signature != kFileSignature) {
     VLOG(1) << "SessionFileReader::ReadHeader, failed to read header. "
                "Attempted to read "
-            << sizeof(header) << " bytes into buffer but got " << bytes_read_
+            << sizeof(header) << " bytes into buffer but got " << *read_count
             << " bytes instead.";
     return false;
   }
+  bytes_read_ += *read_count;
   version_ = header.version;
   const bool encrypt = aead_.get() != nullptr;
   return (encrypt && (version_ == kEncryptedFileVersion ||
@@ -284,10 +305,9 @@ SessionFileReader::ReadResult SessionFileReader::ReadCommand() {
     }
   }
   // Get the size of the command.
-  size_type command_size;
-  memcpy(&command_size, &(buffer_[buffer_position_]), sizeof(command_size));
-  buffer_position_ += sizeof(command_size);
-  available_count_ -= sizeof(command_size);
+  static_assert(std::is_same_v<size_type, uint16_t>);
+  const size_type command_size =
+      base::U16FromNativeEndian(ConsumeBufferedData(2).first<2>());
 
   if (command_size == 0) {
     VLOG(1) << "SessionFileReader::ReadCommand, empty command";
@@ -308,33 +328,28 @@ SessionFileReader::ReadResult SessionFileReader::ReadCommand() {
     }
   }
   if (aead_) {
-    result.command = CreateCommandFromEncrypted(
-        buffer_.c_str() + buffer_position_, command_size);
-  } else {
     result.command =
-        CreateCommand(buffer_.c_str() + buffer_position_, command_size);
+        CreateCommandFromEncrypted(ConsumeBufferedData(command_size));
+  } else {
+    result.command = CreateCommand(ConsumeBufferedData(command_size));
   }
   ++command_counter_;
-  buffer_position_ += command_size;
-  available_count_ -= command_size;
   return result;
 }
 
 std::unique_ptr<sessions::SessionCommand>
-SessionFileReader::CreateCommandFromEncrypted(const char* data,
-                                              size_type length) {
+SessionFileReader::CreateCommandFromEncrypted(base::span<const uint8_t> data) {
   // This means the nonce overflowed and we're reusing a nonce.
   // CommandStorageBackend should never write enough commands to trigger this,
   // so assume we should stop.
   if (command_counter_ < 0)
     return nullptr;
 
-  char nonce[kNonceLength];
-  memset(nonce, 0, kNonceLength);
-  memcpy(nonce, &command_counter_, sizeof(command_counter_));
+  uint8_t nonce[kNonceLength] = {};
+  base::span(nonce).first<sizeof(command_counter_)>().copy_from(
+      base::byte_span_from_ref(command_counter_));
   std::string plain_text;
-  if (!aead_->Open(base::StringPiece(data, length),
-                   base::StringPiece(nonce, kNonceLength), base::StringPiece(),
+  if (!aead_->Open(base::as_string_view(data), base::as_string_view(nonce), {},
                    &plain_text)) {
     DVLOG(1) << "SessionFileReader::ReadCommand, decryption failed";
     return nullptr;
@@ -343,23 +358,22 @@ SessionFileReader::CreateCommandFromEncrypted(const char* data,
     DVLOG(1) << "SessionFileReader::ReadCommand, size too small";
     return nullptr;
   }
-  return CreateCommand(plain_text.c_str(), plain_text.size());
+  return CreateCommand(base::as_byte_span(plain_text));
 }
 
 std::unique_ptr<sessions::SessionCommand> SessionFileReader::CreateCommand(
-    const char* data,
-    size_type length) {
+    base::span<const uint8_t> data) {
   // Callers should have checked the size.
-  DCHECK_GE(length, sizeof(id_type));
+  DCHECK_GE(data.size(), sizeof(id_type));
   const id_type command_id = data[0];
   // NOTE: |length| includes the size of the id, which is not part of the
   // contents of the SessionCommand.
+  const size_t payload_size = data.size() - sizeof(id_type);
   std::unique_ptr<sessions::SessionCommand> command =
-      std::make_unique<sessions::SessionCommand>(command_id,
-                                                 length - sizeof(id_type));
-  if (length > sizeof(id_type)) {
-    memcpy(command->contents(), &(data[sizeof(id_type)]),
-           length - sizeof(id_type));
+      std::make_unique<sessions::SessionCommand>(
+          command_id, static_cast<size_type>(payload_size));
+  if (payload_size > 0) {
+    command->contents().copy_from(data.subspan(sizeof(id_type)));
   }
   return command;
 }
@@ -367,26 +381,30 @@ std::unique_ptr<sessions::SessionCommand> SessionFileReader::CreateCommand(
 bool SessionFileReader::FillBuffer() {
   if (available_count_ > 0 && buffer_position_ > 0) {
     // Shift buffer to beginning.
-    memmove(&(buffer_[0]), &(buffer_[buffer_position_]), available_count_);
+    base::span(buffer_).copy_prefix_from(
+        base::span(buffer_).subspan(buffer_position_, available_count_));
   }
   buffer_position_ = 0;
   DCHECK(buffer_position_ + available_count_ < buffer_.size());
-  const int to_read = static_cast<int>(buffer_.size() - available_count_);
-  const int read_count =
-      file_->ReadAtCurrentPos(&(buffer_[available_count_]), to_read);
-  if (read_count < 0) {
+  base::span<uint8_t> buffer_subspan =
+      base::span(buffer_).subspan(available_count_);
+  const std::optional<size_t> read_count =
+      file_->ReadAtCurrentPos(buffer_subspan);
+  if (!read_count) {
     VLOG(1) << "SessionFileReader::FillBuffer, failed to read header. "
                "Attempted to read "
-            << to_read << " bytes into buffer but encountered file read error: "
+            << buffer_subspan.size()
+            << " bytes into buffer but encountered file read error: "
             << base::File::ErrorToString(base::File::GetLastFileError())
             << "\nRead " << bytes_read_
             << " bytes successfully from file before error.";
     return false;
   }
-  if (read_count == 0)
+  if (read_count == 0) {
     return false;
-  bytes_read_ += read_count;
-  available_count_ += read_count;
+  }
+  bytes_read_ += *read_count;
+  available_count_ += *read_count;
   return true;
 }
 
@@ -518,7 +536,7 @@ void CommandStorageBackend::AppendCommands(
     if (encrypt) {
       aead_ = std::make_unique<crypto::Aead>(crypto::Aead::AES_256_GCM);
       crypto_key_ = crypto_key;
-      aead_->Init(base::make_span(crypto_key_));
+      aead_->Init(base::span(crypto_key_));
     } else {
       aead_.reset();
     }
@@ -759,8 +777,7 @@ std::unique_ptr<base::File> CommandStorageBackend::OpenAndWriteHeader(
   header.signature = kFileSignature;
   header.version =
       IsEncrypted() ? kEncryptedFileVersionWithMarker : kFileVersionWithMarker;
-  if (file->WriteAtCurrentPos(reinterpret_cast<char*>(&header),
-                              sizeof(header)) != sizeof(header)) {
+  if (!file->WriteAtCurrentPosAndCheck(base::byte_span_from_ref(header))) {
     return nullptr;
   }
   return file;
@@ -770,24 +787,20 @@ bool CommandStorageBackend::AppendCommandToFile(
     base::File* file,
     const sessions::SessionCommand& command) {
   const size_type total_size = command.GetSerializedSize();
-  if (file->WriteAtCurrentPos(reinterpret_cast<const char*>(&total_size),
-                              sizeof(total_size)) != sizeof(total_size)) {
+  if (!file->WriteAtCurrentPosAndCheck(base::byte_span_from_ref(total_size))) {
     DVLOG(1) << "error writing";
     return false;
   }
   id_type command_id = command.id();
-  if (file->WriteAtCurrentPos(reinterpret_cast<char*>(&command_id),
-                              sizeof(command_id)) != sizeof(command_id)) {
+  if (!file->WriteAtCurrentPosAndCheck(base::byte_span_from_ref(command_id))) {
     DVLOG(1) << "error writing";
     return false;
   }
-
   const size_type content_size = total_size - sizeof(id_type);
-  if (content_size == 0)
+  if (content_size == 0) {
     return true;
-
-  if (file->WriteAtCurrentPos(reinterpret_cast<const char*>(command.contents()),
-                              content_size) != content_size) {
+  }
+  if (!file->WriteAtCurrentPos(command.contents().first(content_size))) {
     DVLOG(1) << "error writing";
     return false;
   }
@@ -800,12 +813,13 @@ bool CommandStorageBackend::AppendEncryptedCommandToFile(
   // This means the nonce overflowed and we're reusing a nonce. This class
   // should never write enough commands to trigger this, so assume we should
   // stop.
-  if (commands_written_ < 0)
+  if (commands_written_ < 0) {
     return false;
+  }
   DCHECK(IsEncrypted());
-  char nonce[kNonceLength];
-  memset(nonce, 0, kNonceLength);
-  memcpy(nonce, &commands_written_, sizeof(commands_written_));
+  uint8_t nonce[kNonceLength] = {};
+  base::span(nonce).first<sizeof(commands_written_)>().copy_from(
+      base::byte_span_from_ref(commands_written_));
 
   // Encryption adds overhead, resulting in a slight reduction in the available
   // space for each command. Chop any contents beyond the available size.
@@ -813,30 +827,25 @@ bool CommandStorageBackend::AppendEncryptedCommandToFile(
       command.size(),
       static_cast<size_type>(std::numeric_limits<size_type>::max() -
                              sizeof(id_type) - kEncryptionOverheadInBytes));
-  std::vector<char> command_and_id(command_size + sizeof(id_type));
+  std::vector<uint8_t> command_and_id(command_size + sizeof(id_type));
   const id_type command_id = command.id();
-  memcpy(&command_and_id.front(), reinterpret_cast<const char*>(&command_id),
-         sizeof(id_type));
-  memcpy(&(command_and_id.front()) + sizeof(id_type), command.contents(),
-         command_size);
+  auto [id_span, payload_span] =
+      base::span(command_and_id).split_at(sizeof(id_type));
+  id_span.copy_from(base::byte_span_from_ref(command_id));
+  payload_span.copy_from(command.contents().first(command_size));
 
-  std::string cipher_text;
-  aead_->Seal(base::StringPiece(&command_and_id.front(), command_and_id.size()),
-              base::StringPiece(nonce, kNonceLength), base::StringPiece(),
-              &cipher_text);
+  std::vector<uint8_t> cipher_text =
+      aead_->Seal(command_and_id, nonce, base::span<const uint8_t>());
   DCHECK_LE(cipher_text.size(), std::numeric_limits<size_type>::max());
   const size_type command_and_id_size =
       static_cast<size_type>(cipher_text.size());
 
-  int wrote = file->WriteAtCurrentPos(
-      reinterpret_cast<const char*>(&command_and_id_size),
-      sizeof(command_and_id_size));
-  if (wrote != sizeof(command_and_id_size)) {
+  if (!file->WriteAtCurrentPosAndCheck(
+          base::byte_span_from_ref(command_and_id_size))) {
     DVLOG(1) << "error writing";
     return false;
   }
-  wrote = file->WriteAtCurrentPos(cipher_text.c_str(), cipher_text.size());
-  if (wrote != static_cast<int>(cipher_text.size())) {
+  if (!file->WriteAtCurrentPosAndCheck(base::as_byte_span(cipher_text))) {
     DVLOG(1) << "error writing";
     return false;
   }

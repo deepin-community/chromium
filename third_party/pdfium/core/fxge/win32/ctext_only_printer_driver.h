@@ -5,6 +5,7 @@
 #ifndef CORE_FXGE_WIN32_CTEXT_ONLY_PRINTER_DRIVER_H_
 #define CORE_FXGE_WIN32_CTEXT_ONLY_PRINTER_DRIVER_H_
 
+#include <stdint.h>
 #include <windows.h>
 
 #include <memory>
@@ -33,9 +34,8 @@ class CTextOnlyPrinterDriver final : public RenderDeviceDriverIface {
                 const CFX_GraphStateData* pGraphState,
                 uint32_t fill_color,
                 uint32_t stroke_color,
-                const CFX_FillRenderOptions& fill_options,
-                BlendMode blend_type) override;
-  bool GetClipBox(FX_RECT* pRect) override;
+                const CFX_FillRenderOptions& fill_options) override;
+  FX_RECT GetClipBox() const override;
   bool SetDIBits(RetainPtr<const CFX_DIBBase> bitmap,
                  uint32_t color,
                  const FX_RECT& src_rect,
@@ -51,15 +51,14 @@ class CTextOnlyPrinterDriver final : public RenderDeviceDriverIface {
                      const FX_RECT* pClipRect,
                      const FXDIB_ResampleOptions& options,
                      BlendMode blend_type) override;
-  bool StartDIBits(RetainPtr<const CFX_DIBBase> bitmap,
-                   float alpha,
-                   uint32_t color,
-                   const CFX_Matrix& matrix,
-                   const FXDIB_ResampleOptions& options,
-                   std::unique_ptr<CFX_ImageRenderer>* handle,
-                   BlendMode blend_type) override;
+  StartResult StartDIBits(RetainPtr<const CFX_DIBBase> bitmap,
+                          float alpha,
+                          uint32_t color,
+                          const CFX_Matrix& matrix,
+                          const FXDIB_ResampleOptions& options,
+                          BlendMode blend_type) override;
   bool DrawDeviceText(pdfium::span<const TextCharPos> pCharPos,
-                      CFX_Font* pFont,
+                      CFX_Font* font,
                       const CFX_Matrix& mtObject2Device,
                       float font_size,
                       uint32_t color,
@@ -67,14 +66,14 @@ class CTextOnlyPrinterDriver final : public RenderDeviceDriverIface {
   bool MultiplyAlpha(float alpha) override;
   bool MultiplyAlphaMask(RetainPtr<const CFX_DIBitmap> mask) override;
 
-  HDC m_hDC;
-  const int m_Width;
-  const int m_Height;
-  int m_nBitsPerPixel;
-  const int m_HorzSize;
-  const int m_VertSize;
-  float m_OriginY;
-  bool m_SetOrigin;
+  HDC dc_handle_;
+  const int width_;
+  const int height_;
+  int bits_per_pixel_;
+  const int horz_size_;
+  const int vert_size_;
+  float origin_y_;
+  bool set_origin_;
 };
 
 #endif  // CORE_FXGE_WIN32_CTEXT_ONLY_PRINTER_DRIVER_H_

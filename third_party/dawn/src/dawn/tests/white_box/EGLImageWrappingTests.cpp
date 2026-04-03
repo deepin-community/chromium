@@ -25,13 +25,13 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include <EGL/egl.h>
-
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "dawn/common/DynamicLib.h"
+#include "dawn/common/egl_platform.h"
+#include "dawn/native/Instance.h"
 #include "dawn/native/OpenGLBackend.h"
 #include "dawn/native/opengl/DeviceGL.h"
 #include "dawn/tests/DawnTest.h"
@@ -43,7 +43,9 @@ namespace {
 
 class EGLFunctions {
   public:
-    EGLFunctions() {
+    EGLFunctions() = default;
+
+    bool Initialize(const std::vector<std::string>& searchPaths) {
 #if DAWN_PLATFORM_IS(WINDOWS)
         const char* eglLib = "libEGL.dll";
 #elif DAWN_PLATFORM_IS(MACOS)
@@ -51,7 +53,10 @@ class EGLFunctions {
 #else
         const char* eglLib = "libEGL.so";
 #endif
-        EXPECT_TRUE(mlibEGL.Open(eglLib));
+        std::string error;
+        if (!mlibEGL.Open(eglLib, searchPaths, &error)) {
+            return false;
+        }
         CreateImage = reinterpret_cast<PFNEGLCREATEIMAGEPROC>(LoadProc("eglCreateImage"));
         DestroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEPROC>(LoadProc("eglDestroyImage"));
         GetCurrentContext =
@@ -59,6 +64,7 @@ class EGLFunctions {
         GetCurrentDisplay =
             reinterpret_cast<PFNEGLGETCURRENTDISPLAYPROC>(LoadProc("eglGetCurrentDisplay"));
         QueryString = reinterpret_cast<PFNEGLQUERYSTRINGPROC>(LoadProc("eglQueryString"));
+        return true;
     }
 
   private:
@@ -138,9 +144,19 @@ class EGLImageTestBase : public DawnTest {
     }
 
     void SetUp() override {
+        DAWN_TEST_UNSUPPORTED_IF(UsesWire());
         DawnTest::SetUp();
+
+        // Initialize EGL functions with runtime search paths from the instance
+        auto instance = native::FromAPI(GetInstance().Get());
+        const std::vector<std::string>& searchPaths = instance->GetRuntimeSearchPaths();
+        ASSERT_TRUE(egl.Initialize(searchPaths));
+
         // TODO(crbug.com/dawn/2206): remove this check if possible.
         DAWN_TEST_UNSUPPORTED_IF(!HasExtension("KHR_gl_texture_2D_image"));
+        // EGL extension not available
+        DAWN_TEST_UNSUPPORTED_IF(IsCompatibilityMode() &&
+                                 HasToggleEnabled("gl_force_es_31_and_no_extensions"));
     }
 
   public:
@@ -202,7 +218,6 @@ class EGLImageValidationTests : public EGLImageTestBase {
 
 // Test a successful wrapping of an EGLImage in a texture
 TEST_P(EGLImageValidationTests, Success) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
     ScopedEGLImage image = CreateDefaultEGLImage();
     wgpu::Texture texture = WrapEGLImage(&descriptor, image.getImage());
     ASSERT_NE(texture.Get(), nullptr);
@@ -210,7 +225,6 @@ TEST_P(EGLImageValidationTests, Success) {
 
 // Test a successful wrapping of an EGLImage in a texture with DawnTextureInternalUsageDescriptor
 TEST_P(EGLImageValidationTests, SuccessWithInternalUsageDescriptor) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
     wgpu::DawnTextureInternalUsageDescriptor internalDesc = {};
     descriptor.nextInChain = &internalDesc;
     internalDesc.internalUsage = wgpu::TextureUsage::CopySrc;
@@ -223,10 +237,8 @@ TEST_P(EGLImageValidationTests, SuccessWithInternalUsageDescriptor) {
 
 // Test an error occurs if an invalid sType is the nextInChain
 TEST_P(EGLImageValidationTests, InvalidTextureDescriptor) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
-
     wgpu::ChainedStruct chainedDescriptor;
-    chainedDescriptor.sType = wgpu::SType::SurfaceDescriptorFromWindowsSwapChainPanel;
+    chainedDescriptor.sType = wgpu::SType::SurfaceDescriptorFromWindowsUWPSwapChainPanel;
     descriptor.nextInChain = &chainedDescriptor;
 
     ScopedEGLImage image = CreateDefaultEGLImage();
@@ -237,7 +249,6 @@ TEST_P(EGLImageValidationTests, InvalidTextureDescriptor) {
 
 // Test an error occurs if the descriptor dimension isn't 2D
 TEST_P(EGLImageValidationTests, InvalidTextureDimension) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
     descriptor.dimension = wgpu::TextureDimension::e3D;
 
     ScopedEGLImage image = CreateDefaultEGLImage();
@@ -246,19 +257,8 @@ TEST_P(EGLImageValidationTests, InvalidTextureDimension) {
     ASSERT_EQ(texture.Get(), nullptr);
 }
 
-// Test an error occurs if the texture usage is not RenderAttachment
-TEST_P(EGLImageValidationTests, InvalidTextureUsage) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
-    descriptor.usage = wgpu::TextureUsage::StorageBinding;
-
-    ScopedEGLImage image = CreateDefaultEGLImage();
-    ASSERT_DEVICE_ERROR(wgpu::Texture texture = WrapEGLImage(&descriptor, image.getImage()));
-    ASSERT_EQ(texture.Get(), nullptr);
-}
-
 // Test an error occurs if the descriptor mip level count isn't 1
 TEST_P(EGLImageValidationTests, InvalidMipLevelCount) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
     descriptor.mipLevelCount = 2;
 
     ScopedEGLImage image = CreateDefaultEGLImage();
@@ -268,7 +268,6 @@ TEST_P(EGLImageValidationTests, InvalidMipLevelCount) {
 
 // Test an error occurs if the descriptor depth isn't 1
 TEST_P(EGLImageValidationTests, InvalidDepth) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
     descriptor.size.depthOrArrayLayers = 2;
 
     ScopedEGLImage image = CreateDefaultEGLImage();
@@ -278,7 +277,6 @@ TEST_P(EGLImageValidationTests, InvalidDepth) {
 
 // Test an error occurs if the descriptor sample count isn't 1
 TEST_P(EGLImageValidationTests, InvalidSampleCount) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
     descriptor.sampleCount = 4;
 
     ScopedEGLImage image = CreateDefaultEGLImage();
@@ -288,7 +286,6 @@ TEST_P(EGLImageValidationTests, InvalidSampleCount) {
 
 // Test an error occurs if the descriptor width doesn't match the surface's
 TEST_P(EGLImageValidationTests, InvalidWidth) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
     descriptor.size.width = 11;
 
     ScopedEGLImage image = CreateDefaultEGLImage();
@@ -298,7 +295,6 @@ TEST_P(EGLImageValidationTests, InvalidWidth) {
 
 // Test an error occurs if the descriptor height doesn't match the surface's
 TEST_P(EGLImageValidationTests, InvalidHeight) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
     descriptor.size.height = 11;
 
     ScopedEGLImage image = CreateDefaultEGLImage();
@@ -449,7 +445,8 @@ class EGLImageUsageTests : public EGLImageTestBase {
 
 // Test clearing a R8 EGLImage
 TEST_P(EGLImageUsageTests, ClearR8EGLImage) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     ScopedEGLImage eglImage = CreateEGLImage(1, 1, GL_R8, GL_RED, GL_UNSIGNED_BYTE, nullptr);
 
     uint8_t data = 0x01;
@@ -459,7 +456,8 @@ TEST_P(EGLImageUsageTests, ClearR8EGLImage) {
 
 // Test clearing a RG8 EGLImage
 TEST_P(EGLImageUsageTests, ClearRG8EGLImage) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     ScopedEGLImage eglImage = CreateEGLImage(1, 1, GL_RG8, GL_RG, GL_UNSIGNED_BYTE, nullptr);
 
     uint16_t data = 0x0201;
@@ -469,7 +467,8 @@ TEST_P(EGLImageUsageTests, ClearRG8EGLImage) {
 
 // Test clearing an RGBA8 EGLImage
 TEST_P(EGLImageUsageTests, ClearRGBA8EGLImage) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     ScopedEGLImage eglImage = CreateEGLImage(1, 1, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
     uint32_t data = 0x04030201;
@@ -479,7 +478,8 @@ TEST_P(EGLImageUsageTests, ClearRGBA8EGLImage) {
 
 // Test sampling an imported R8 GL texture
 TEST_P(EGLImageUsageTests, SampleR8EGLImage) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     uint8_t data[2] = {0x42, 0x42};
     ScopedEGLImage eglImage = CreateEGLImage(2, 1, GL_R8, GL_RED, GL_UNSIGNED_BYTE, data);
 
@@ -488,7 +488,8 @@ TEST_P(EGLImageUsageTests, SampleR8EGLImage) {
 
 // Test sampling an imported RG8 GL texture
 TEST_P(EGLImageUsageTests, SampleRG8EGLImage) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     uint16_t data[2] = {0x4221, 0x4221};
     ScopedEGLImage eglImage = CreateEGLImage(2, 1, GL_RG8, GL_RG, GL_UNSIGNED_BYTE, data);
 
@@ -497,7 +498,8 @@ TEST_P(EGLImageUsageTests, SampleRG8EGLImage) {
 
 // Test sampling an imported RGBA8 GL texture
 TEST_P(EGLImageUsageTests, SampleRGBA8EGLImage) {
-    DAWN_TEST_UNSUPPORTED_IF(UsesWire());
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     uint32_t data[2] = {0x48844221, 0x48844221};
     ScopedEGLImage eglImage = CreateEGLImage(2, 1, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, data);
 

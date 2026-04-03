@@ -44,7 +44,6 @@ namespace {
   }
 
   NOTREACHED() << priority;
-  return blink::ResourceLoadPriority::kUnresolved;
 }
 
 }  // namespace
@@ -151,11 +150,11 @@ FetchRequestData* FetchRequestData::Create(
           mojo::Remote<network::mojom::blink::ChunkedDataPipeGetter>>(
           fetch_api_request->body.TakeStreamBody());
       body_remote->set_disconnect_with_reason_handler(
-          WTF::BindOnce(SignalError, WrapPersistent(completion_notifier)));
+          BindOnce(SignalError, WrapPersistent(completion_notifier)));
       auto* body_remote_raw = body_remote.get();
       (*body_remote_raw)
-          ->GetSize(WTF::BindOnce(SignalSize, std::move(body_remote),
-                                  WrapPersistent(completion_notifier)));
+          ->GetSize(BindOnce(SignalSize, std::move(body_remote),
+                             WrapPersistent(completion_notifier)));
       (*body_remote_raw)->StartReading(std::move(writable));
     } else {
       request->SetBuffer(BodyStreamBuffer::Create(
@@ -197,11 +196,6 @@ FetchRequestData* FetchRequestData::Create(
     request->SetWindowId(fetch_api_request->fetch_window_id.value());
 
   if (fetch_api_request->trust_token_params) {
-    if (script_state) {
-      // script state might be null for some tests
-      DCHECK(RuntimeEnabledFeatures::PrivateStateTokensEnabled(
-          ExecutionContext::From(script_state)));
-    }
     std::optional<network::mojom::blink::TrustTokenParams> trust_token_params =
         std::move(*(fetch_api_request->trust_token_params->Clone().get()));
     request->SetTrustTokenParams(trust_token_params);
@@ -209,6 +203,8 @@ FetchRequestData* FetchRequestData::Create(
 
   request->SetAttributionReportingEligibility(
       fetch_api_request->attribution_reporting_eligibility);
+  request->SetAttributionReportingSupport(
+      fetch_api_request->attribution_reporting_support);
 
   if (fetch_api_request->service_worker_race_network_request_token) {
     request->SetServiceWorkerRaceNetworkRequestToken(
@@ -248,8 +244,10 @@ FetchRequestData* FetchRequestData::CloneExceptBody() {
   request->trust_token_params_ = trust_token_params_;
   request->attribution_reporting_eligibility_ =
       attribution_reporting_eligibility_;
+  request->attribution_reporting_support_ = attribution_reporting_support_;
   request->service_worker_race_network_request_token_ =
       service_worker_race_network_request_token_;
+  request->retry_options_ = retry_options_;
   return request;
 }
 

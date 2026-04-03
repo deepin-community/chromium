@@ -39,12 +39,15 @@ inline constexpr char kCrostiniContainerFlag[] =
 
 inline constexpr guest_os::VmType kCrostiniDefaultVmType =
     guest_os::VmType::TERMINA;
+inline constexpr guest_os::VmType kBaguetteDefaultVmType =
+    guest_os::VmType::BAGUETTE;
 inline constexpr char kCrostiniDefaultVmName[] = "termina";
 inline constexpr char kCrostiniDefaultContainerName[] = "penguin";
 inline constexpr char kCrostiniDefaultUsername[] = "emperor";
 inline constexpr char kCrostiniDefaultImageServerUrl[] =
     "https://storage.googleapis.com/cros-containers/%d";
 inline constexpr char kCrostiniDlcName[] = "termina-dlc";
+inline constexpr char kToolsDlcName[] = "termina-tools-dlc";
 
 inline constexpr base::FilePath::CharType kHomeDirectory[] =
     FILE_PATH_LITERAL("/home/chronos/user");
@@ -69,9 +72,6 @@ bool IsUninstallable(Profile* profile, const std::string& app_id);
 
 // Returns whether the default Crostini VM is running for the user.
 bool IsCrostiniRunning(Profile* profile);
-
-// Whether the user is able to perform a container upgrade.
-bool ShouldAllowContainerUpgrade(Profile* profile);
 
 // Returns whether default Crostini container should be configured according to
 // the configuration specified by CrostiniAnsiblePlaybook user policy.
@@ -141,6 +141,7 @@ bool IsContainerVersionExpired(Profile* profile,
                                const guest_os::GuestId& container_id);
 
 const guest_os::GuestId& DefaultContainerId();
+const guest_os::GuestId& DefaultBaguetteContainerId();
 
 bool IsCrostiniWindow(const aura::Window* window);
 

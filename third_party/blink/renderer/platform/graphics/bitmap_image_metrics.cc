@@ -4,13 +4,16 @@
 
 #include "third_party/blink/renderer/platform/graphics/bitmap_image_metrics.h"
 
+#include "base/feature_list.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/media_buildflags.h"
 #include "third_party/blink/public/common/buildflags.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/webdx_feature.mojom-blink.h"
 #include "third_party/blink/renderer/platform/graphics/color_space_gamut.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
@@ -38,6 +41,12 @@ BitmapImageMetrics::StringToDecodedImageType(const String& type) {
   if (type == "avif")
     return BitmapImageMetrics::DecodedImageType::kAVIF;
 #endif
+#if BUILDFLAG(ENABLE_JXL_DECODER)
+  if (type == "jxl" &&
+      base::FeatureList::IsEnabled(features::kJXLImageFormat)) {
+    return BitmapImageMetrics::DecodedImageType::kJXL;
+  }
+#endif
   return BitmapImageMetrics::DecodedImageType::kUnknown;
 }
 
@@ -55,7 +64,18 @@ void BitmapImageMetrics::CountDecodedImageType(const String& type,
     } else if (type == "avif") {
       use_counter->CountUse(WebFeature::kAVIFImage);
 #endif
+#if BUILDFLAG(ENABLE_JXL_DECODER)
+    } else if (type == "jxl" &&
+               base::FeatureList::IsEnabled(features::kJXLImageFormat)) {
+      use_counter->CountWebDXFeature(WebDXFeature::kJpegxl);
+#endif
     }
+  }
+}
+
+void BitmapImageMetrics::CountDecodedImageC2PA(UseCounter* use_counter) {
+  if (use_counter) {
+    use_counter->CountUse(WebFeature::kC2PAManifest);
   }
 }
 
@@ -108,7 +128,7 @@ void BitmapImageMetrics::CountDecodedImageDensity(const String& type,
   }
 
   density_histogram->CountMany(
-      base::saturated_cast<base::Histogram::Sample>(density_centi_bpp),
+      base::saturated_cast<base::Histogram::Sample32>(density_centi_bpp),
       image_size_kib);
 }
 

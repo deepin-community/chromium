@@ -4,233 +4,180 @@
 
 #include "components/webapps/services/web_app_origin_association/web_app_origin_association_parser.h"
 
-#include "base/json/json_reader.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+#include "url/origin.h"
+
+using ::testing::_;
+using ::testing::ElementsAre;
+using ::testing::FieldsAre;
+using ::testing::IsEmpty;
 
 namespace webapps {
 
-bool IsAssociationNull(const mojom::WebAppOriginAssociationPtr& association) {
-  return !association;
-}
-
-// A WebAppOriginAssociation is empty if there are no AssociatedWebApps.
-bool IsAssociationEmpty(const mojom::WebAppOriginAssociationPtr& association) {
-  return association->apps.empty();
-}
-
 class WebAppOriginAssociationParserTest : public testing::Test {
  protected:
-  WebAppOriginAssociationParserTest() = default;
+  WebAppOriginAssociationParserTest() {
+    associate_origin_ = url::Origin::Create(GetAssociateOriginUrl());
+  }
   ~WebAppOriginAssociationParserTest() override = default;
 
-  mojom::WebAppOriginAssociationPtr ParseAssociationData(
+  base::expected<ParsedAssociations, std::string> ParseAssociationData(
       const std::string& data) {
-    WebAppOriginAssociationParser parser;
-    mojom::WebAppOriginAssociationPtr association = parser.Parse(data);
-    auto errors = parser.GetErrors();
-    errors_.clear();
-    for (auto& error : errors)
-      errors_.push_back(std::move(error->message));
-    failed_ = parser.failed();
-    return association;
+    return ParseWebAppOriginAssociations(data, GetAssociateOrigin());
   }
 
-  const std::vector<std::string>& errors() const { return errors_; }
-
-  unsigned int GetErrorCount() const { return errors_.size(); }
-
-  bool failed() const { return failed_; }
+  const url::Origin& GetAssociateOrigin() { return associate_origin_; }
+  GURL GetAssociateOriginUrl() { return GURL(associate_origin_str_); }
+  const std::string& GetAssociateOriginString() {
+    return associate_origin_str_;
+  }
 
  private:
-  std::vector<std::string> errors_;
-  bool failed_;
+  const std::string associate_origin_str_ = "https://example.co.uk";
+  url::Origin associate_origin_;
 };
 
-TEST_F(WebAppOriginAssociationParserTest, CrashTest) {
-  // Passing temporary variables should not crash.
-  auto association = ParseAssociationData("{\"web_apps\": []}");
-
-  // Parse() should have been call without crashing and succeeded.
-  ASSERT_FALSE(failed());
-  EXPECT_EQ(0u, GetErrorCount());
-  EXPECT_FALSE(IsAssociationNull(association));
-  EXPECT_TRUE(IsAssociationEmpty(association));
-}
-
 TEST_F(WebAppOriginAssociationParserTest, EmptyStringNull) {
-  auto association = ParseAssociationData("");
+  auto result = ParseAssociationData("");
 
   // This association is not a valid JSON object, it's a parsing error.
-  ASSERT_TRUE(failed());
-  EXPECT_TRUE(IsAssociationNull(association));
-  EXPECT_EQ(1u, GetErrorCount());
-
-  if (base::JSONReader::UsingRust()) {
-    EXPECT_EQ(errors()[0], "EOF while parsing a value at line 1 column 0");
-  } else {
-    EXPECT_EQ(errors()[0], "Line: 1, column: 1, Unexpected token.");
-  }
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(),
+            "line 1, column 0: EOF while parsing a value at line 1 column 0");
 }
 
 TEST_F(WebAppOriginAssociationParserTest, NoContentParses) {
-  auto association = ParseAssociationData("{}");
+  auto result = ParseAssociationData("{}");
 
   // Parsing succeeds for valid JSON.
-  ASSERT_FALSE(failed());
-  // No associated apps.
-  ASSERT_FALSE(IsAssociationNull(association));
-  ASSERT_TRUE(IsAssociationEmpty(association));
-  EXPECT_EQ(1u, GetErrorCount());
-  EXPECT_EQ(
-      "Origin association ignored. Required property 'web_apps' expected.",
-      errors()[0]);
+  ASSERT_TRUE(result.has_value());
+  // But no associated apps.
+  EXPECT_THAT(result->apps, IsEmpty());
+  EXPECT_THAT(result->warnings,
+              ElementsAre(kWebAppOriginAssociationParserFormatError));
 }
 
-TEST_F(WebAppOriginAssociationParserTest, InvalidWebApps) {
-  // Error when "web_apps" is not an array.
-  auto association = ParseAssociationData("{\"web_apps\": \"not-an-array\"}");
+TEST_F(WebAppOriginAssociationParserTest, InvalidScopeType) {
+  auto result = ParseAssociationData("{\"https://example.com/app\": [] }");
 
-  ASSERT_FALSE(failed());
-  EXPECT_EQ(1u, GetErrorCount());
-  EXPECT_EQ("Property 'web_apps' ignored, type array expected.", errors()[0]);
-
+  ASSERT_TRUE(result.has_value());
   // "web_apps" is specified but invalid, check associated apps list is empty.
-  EXPECT_FALSE(IsAssociationNull(association));
-  EXPECT_TRUE(IsAssociationEmpty(association));
+  ASSERT_THAT(result->apps, IsEmpty());
+  EXPECT_THAT(result->warnings, ElementsAre(kInvalidValueType));
 }
 
-TEST_F(WebAppOriginAssociationParserTest, NoWebApps) {
-  auto association = ParseAssociationData("{\"web_apps\": []}");
+TEST_F(WebAppOriginAssociationParserTest, ValidEmptyScope) {
+  auto result = ParseAssociationData("{\"https://example.com/app\": {} }");
 
-  ASSERT_FALSE(failed());
-  EXPECT_EQ(0u, GetErrorCount());
-
-  // "web_apps" specified but is empty, check associated apps list is empty.
-  EXPECT_FALSE(IsAssociationNull(association));
-  EXPECT_TRUE(IsAssociationEmpty(association));
+  EXPECT_TRUE(result.has_value());
+  EXPECT_THAT(result->apps,
+              ElementsAre(FieldsAre(
+                  /*web_app_identity=*/GURL("https://example.com/app"),
+                  /*scope=*/_,
+                  /*allow_migration=*/false)));
 }
 
-TEST_F(WebAppOriginAssociationParserTest, ValidEmptyDetails) {
-  std::string json =
-      "{\"web_apps\": ["
-      "  {"
-      "    \"web_app_identity\": \"https://foo.com/index\""
-      "  }"
-      "]}";
+TEST_F(WebAppOriginAssociationParserTest, AllowMigration) {
+  auto result = ParseAssociationData(
+      R"({"https://example.com/app": {"allow_migration": true} })");
 
-  auto association = ParseAssociationData(json);
-  ASSERT_FALSE(failed());
-  ASSERT_FALSE(IsAssociationNull(association));
-  ASSERT_FALSE(IsAssociationEmpty(association));
-  EXPECT_EQ(0u, GetErrorCount());
+  ASSERT_TRUE(result.has_value());
+  EXPECT_THAT(result->apps,
+              ElementsAre(FieldsAre(
+                  /*web_app_identity=*/GURL("https://example.com/app"),
+                  /*scope=*/_,
+                  /*allow_migration=*/true)));
+}
 
-  ASSERT_EQ(1u, association->apps.size());
+TEST_F(WebAppOriginAssociationParserTest, InvalidScopeUrlWithAllowMigration) {
+  auto result = ParseAssociationData(
+      R"({"https://example.com/app": {"scope": "https://other.com", "allow_migration": true} })");
+
+  ASSERT_TRUE(result.has_value());
+  EXPECT_THAT(result->apps,
+              ElementsAre(FieldsAre(
+                  /*web_app_identity=*/GURL("https://example.com/app"),
+                  /*scope=*/GURL(),
+                  /*allow_migration=*/true)));
+  EXPECT_THAT(result->warnings, ElementsAre(kInvalidScopeUrl));
 }
 
 TEST_F(WebAppOriginAssociationParserTest, MultipleErrorsReporting) {
   std::string json =
-      "{\"web_apps\": ["
-      // 1st app
-      "  {\"no_web_app_identity_field\": 1},"
-      // 2st app
-      "  {\"web_app_identity\": 1},"
-      // 3rd app
-      "  {\"web_app_identity\": \"not-a-valid-url\"}"
-      "]}";
+      R"({
+      "https://foo.com": { "scope": "https://bar.com" },
+      "https://foo.com/index": [],
+      "not-a-valid-url": {}
+      })";
 
-  auto association = ParseAssociationData(json);
-  ASSERT_FALSE(failed());
-  ASSERT_FALSE(IsAssociationNull(association));
-  ASSERT_TRUE(IsAssociationEmpty(association));
-  ASSERT_EQ(3u, GetErrorCount());
-
-  // 1st app
-  EXPECT_EQ(
-      "Associated app ignored. Required property 'web_app_identity' does "
-      "not exist.",
-      errors()[0]);
-  // 2nd app
-  EXPECT_EQ(
-      "Associated app ignored. Required property 'web_app_identity' is not "
-      "a string.",
-      errors()[1]);
-  // 3rd app
-  EXPECT_EQ(
-      "Associated app ignored. Required property 'web_app_identity' is not a "
-      "valid URL.",
-      errors()[2]);
+  auto result = ParseAssociationData(json);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_THAT(result->apps, ElementsAre(FieldsAre(
+                                /*web_app_identity=*/GURL("https://foo.com"),
+                                /*scope=*/GURL(),
+                                /*allow_migration=*/false)));
+  EXPECT_THAT(result->warnings, ElementsAre(kInvalidScopeUrl, kInvalidValueType,
+                                            kInvalidManifestId));
 }
 
-TEST_F(WebAppOriginAssociationParserTest, MoreThanOneValidApp) {
+TEST_F(WebAppOriginAssociationParserTest, MultipleValidApps) {
   std::string json =
-      "{\"web_apps\": ["
-      // 1st app
-      "  {"
-      "    \"web_app_identity\": \"https://foo.com/index\""
-      "  },"
-      // 2nd app
-      "  {"
-      "    \"web_app_identity\": \"https://foo.app/index\""
-      "  },"
-      // 3rd app
-      "  {"
-      "    \"web_app_identity\": \"https://foo.dev\""
-      "  }"
-      "]}";
+      R"({
+       "https://foo.app/index": {},
+       "https://foo.com": { "scope": "qwerty" },
+       "https://foo.com/index": { "scope": "/app" },
+       "https://foo.dev/index": { "scope": "/" },
+       "https://zed.com/index": { "scope": "https://example.co.uk" }
+      })";
 
-  auto association = ParseAssociationData(json);
-  ASSERT_FALSE(failed());
-  ASSERT_FALSE(IsAssociationNull(association));
-  ASSERT_FALSE(IsAssociationEmpty(association));
-  ASSERT_EQ(0u, GetErrorCount());
+  auto result = ParseAssociationData(json);
+  ASSERT_TRUE(result.has_value());
 
-  // 1st app
-  EXPECT_EQ(GURL("https://foo.com/index"),
-            association->apps[0]->web_app_identity);
-  // 2nd app
-  EXPECT_EQ(GURL("https://foo.app/index"),
-            association->apps[1]->web_app_identity);
-  // 3rd app
-  EXPECT_EQ(GURL("https://foo.dev"), association->apps[2]->web_app_identity);
+  EXPECT_THAT(result->warnings, IsEmpty());
+
+  EXPECT_THAT(
+      result->apps,
+      ElementsAre(
+          FieldsAre(/*web_app_identity=*/GURL("https://foo.app/index"),
+                    /*scope=*/GetAssociateOriginUrl(),
+                    /*allow_migration=*/false),
+          FieldsAre(/*web_app_identity=*/GURL("https://foo.com"),
+                    /*scope=*/GURL(GetAssociateOriginString() + "/qwerty"),
+                    /*allow_migration=*/false),
+          FieldsAre(/*web_app_identity=*/GURL("https://foo.com/index"),
+                    /*scope=*/GURL(GetAssociateOriginString() + "/app"),
+                    /*allow_migration=*/false),
+          FieldsAre(/*web_app_identity=*/GURL("https://foo.dev/index"),
+                    /*scope=*/GetAssociateOriginUrl(),
+                    /*allow_migration=*/false),
+          FieldsAre(/*web_app_identity=*/GURL("https://zed.com/index"),
+                    /*scope=*/GetAssociateOriginUrl(),
+                    /*allow_migration=*/false)));
 }
 
 TEST_F(WebAppOriginAssociationParserTest, IgnoreInvalidAndValidateTwosApps) {
   std::string json =
-      "{\"web_apps\": ["
-      // 1st app
-      "  {"
-      "    \"web_app_identity\": \"https://foo.com/index\""
-      "  },"
-      // 2nd app
-      "  {"
-      "    \"web_app_identity\": \"https://foo.app/index\""
-      "  },"
-      // 3rd app
-      "  {"
-      "    \"web_app_identity\": \"not-a-valid-url\""
-      "  }"
-      "]}";
+      R"({
+       "https://foo.com/index": {},
+       "invalid-app-url": {},
+       "https://foo.dev": {}
+      })";
 
-  auto association = ParseAssociationData(json);
-  ASSERT_FALSE(failed());
-  ASSERT_FALSE(IsAssociationNull(association));
-  ASSERT_FALSE(IsAssociationEmpty(association));
-  ASSERT_EQ(1u, GetErrorCount());
+  auto result = ParseAssociationData(json);
+  ASSERT_TRUE(result.has_value());
 
-  ASSERT_EQ(2u, association->apps.size());
+  EXPECT_THAT(result->warnings, ElementsAre(kInvalidManifestId));
 
-  // 1st app
-  EXPECT_EQ(GURL("https://foo.com/index"),
-            association->apps[0]->web_app_identity);
-  // 2nd app
-  EXPECT_EQ(GURL("https://foo.app/index"),
-            association->apps[1]->web_app_identity);
-  // 3rd app
-  EXPECT_EQ(
-      "Associated app ignored. Required property 'web_app_identity' is not a "
-      "valid URL.",
-      errors()[0]);
+  EXPECT_THAT(
+      result->apps,
+      ElementsAre(FieldsAre(/*web_app_identity=*/GURL("https://foo.com/index"),
+                            /*scope=*/GetAssociateOriginUrl(),
+                            /*allow_migration=*/false),
+                  FieldsAre(/*web_app_identity=*/GURL("https://foo.dev"),
+                            /*scope=*/GetAssociateOriginUrl(),
+                            /*allow_migration=*/false)));
 }
 
 }  // namespace webapps

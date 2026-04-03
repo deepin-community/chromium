@@ -5,9 +5,12 @@
 #include "components/feed/core/v2/types.h"
 
 #include <ostream>
+#include <string_view>
 #include <utility>
 
 #include "base/base64.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/json/values_util.h"
 #include "base/pickle.h"
 #include "base/strings/strcat.h"
@@ -100,8 +103,8 @@ std::vector<uint32_t> GetExpandedHashes(
     const std::vector<feedstore::StreamContentHashList>& hashes_list) {
   std::vector<uint32_t> expanded_hashes;
   for (const feedstore::StreamContentHashList& hash_list : hashes_list)
-    for (const auto& hash : hash_list.hashes())
-      expanded_hashes.push_back(hash);
+    expanded_hashes.insert(expanded_hashes.end(), hash_list.hashes().begin(),
+                           hash_list.hashes().end());
   return expanded_hashes;
 }
 
@@ -116,10 +119,13 @@ feedwire::ClientInfo RequestMetadata::ToClientInfo() const {
 }
 
 NetworkResponseInfo::NetworkResponseInfo() = default;
-NetworkResponseInfo::~NetworkResponseInfo() = default;
 NetworkResponseInfo::NetworkResponseInfo(const NetworkResponseInfo&) = default;
+NetworkResponseInfo::NetworkResponseInfo(NetworkResponseInfo&&) = default;
 NetworkResponseInfo& NetworkResponseInfo::operator=(
     const NetworkResponseInfo&) = default;
+NetworkResponseInfo& NetworkResponseInfo::operator=(NetworkResponseInfo&&) =
+    default;
+NetworkResponseInfo::~NetworkResponseInfo() = default;
 
 NetworkResponse::NetworkResponse() = default;
 NetworkResponse::NetworkResponse(const std::string& response_bytes,
@@ -141,7 +147,7 @@ ContentRevision ToContentRevision(const std::string& str) {
 
   uint32_t value;
   if (str[0] == 'c' && str[1] == '/' &&
-      base::StringToUint(base::StringPiece(str).substr(2), &value)) {
+      base::StringToUint(std::string_view(str).substr(2), &value)) {
     return ContentRevision(value);
   }
   return {};
@@ -152,18 +158,20 @@ std::string SerializeDebugStreamData(const DebugStreamData& data) {
   PickleDebugStreamData(data, pickle);
   const uint8_t* pickle_data_ptr = static_cast<const uint8_t*>(pickle.data());
   return base::Base64Encode(
-      base::span<const uint8_t>(pickle_data_ptr, pickle.size()));
+      UNSAFE_TODO(base::span<const uint8_t>(pickle_data_ptr, pickle.size())));
 }
 
 std::optional<DebugStreamData> DeserializeDebugStreamData(
-    base::StringPiece base64_encoded) {
+    std::string_view base64_encoded) {
   std::string binary_data;
   if (!base::Base64Decode(base64_encoded, &binary_data))
     return std::nullopt;
-  base::Pickle pickle(binary_data.data(), binary_data.size());
   DebugStreamData result;
-  if (!UnpickleDebugStreamData(base::PickleIterator(pickle), result))
+  if (!UnpickleDebugStreamData(
+          base::PickleIterator::WithData(base::as_byte_span(binary_data)),
+          result)) {
     return std::nullopt;
+  }
   return result;
 }
 
@@ -172,9 +180,8 @@ DebugStreamData::~DebugStreamData() = default;
 DebugStreamData::DebugStreamData(const DebugStreamData&) = default;
 DebugStreamData& DebugStreamData::operator=(const DebugStreamData&) = default;
 
-base::Value::Dict PersistentMetricsDataToDict(
-    const PersistentMetricsData& data) {
-  base::Value::Dict dict;
+base::DictValue PersistentMetricsDataToDict(const PersistentMetricsData& data) {
+  base::DictValue dict;
   dict.Set("day_start", base::TimeToValue(data.current_day_start));
   dict.Set("time_spent_in_feed",
            base::TimeDeltaToValue(data.accumulated_time_spent_in_feed));
@@ -188,7 +195,7 @@ base::Value::Dict PersistentMetricsDataToDict(
 }
 
 PersistentMetricsData PersistentMetricsDataFromDict(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   PersistentMetricsData result;
   std::optional<base::Time> day_start =
       base::ValueToTime(dict.Find("day_start"));

@@ -3,9 +3,10 @@
 // found in the LICENSE file.
 
 #include "chromeos/ash/components/phonehub/fake_recent_apps_interaction_handler.h"
-#include <utility>
 
-#include "base/containers/contains.h"
+#include <utility>
+#include <vector>
+
 #include "base/time/time.h"
 #include "chromeos/ash/components/phonehub/notification.h"
 
@@ -20,7 +21,7 @@ FakeRecentAppsInteractionHandler::~FakeRecentAppsInteractionHandler() = default;
 void FakeRecentAppsInteractionHandler::NotifyRecentAppClicked(
     const Notification::AppMetadata& app_metadata,
     eche_app::mojom::AppStreamLaunchEntryPoint entrypoint) {
-  if (base::Contains(package_name_to_click_count_, app_metadata.package_name)) {
+  if (package_name_to_click_count_.contains(app_metadata.package_name)) {
     package_name_to_click_count_.at(app_metadata.package_name)++;
     return;
   }
@@ -74,10 +75,12 @@ void FakeRecentAppsInteractionHandler::SetStreamableApps(
 
 void FakeRecentAppsInteractionHandler::RemoveStreamableApp(
     proto::App app_to_remove) {
-  base::EraseIf(recent_apps_metadata_, [&app_to_remove](
-              const std::pair<Notification::AppMetadata, base::Time>& app) {
-    return app.first.package_name == app_to_remove.package_name();
-  });
+  std::erase_if(
+      recent_apps_metadata_,
+      [&app_to_remove](
+          const std::pair<Notification::AppMetadata, base::Time>& app) {
+        return app.first.package_name == app_to_remove.package_name();
+      });
 }
 
 void FakeRecentAppsInteractionHandler::ComputeAndUpdateUiState() {

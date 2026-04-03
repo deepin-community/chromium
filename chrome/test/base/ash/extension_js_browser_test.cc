@@ -5,25 +5,39 @@
 #include "chrome/test/base/ash/extension_js_browser_test.h"
 
 #include <memory>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
+#include "base/command_line.h"
+#include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/run_until.h"
 #include "base/values.h"
+#include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/test/base/ash/javascript_browser_test.h"
+#include "chrome/test/base/test_switches.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/background_script_executor.h"
 #include "extensions/browser/browsertest_util.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_host_test_helper.h"
-#include "chrome/test/base/test_switches.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_registry_observer.h"
+#include "extensions/browser/extension_registry_test_helper.h"
+#include "extensions/browser/process_manager.h"
+#include "extensions/browser/service_worker/service_worker_host.h"
+#include "extensions/browser/service_worker/service_worker_test_utils.h"
+#include "extensions/common/extension.h"
 #include "ui/base/ime/ash/extension_ime_util.h"
 
 namespace {
@@ -58,7 +72,7 @@ void ExtensionJSBrowserTest::SetUpOnMainThread() {
         base::BindRepeating([](content::DevToolsAgentHost* host) {
           const auto& ext_ids = GetExtensionIdsToCollectCoverage();
           for (const auto& ext_id : ext_ids) {
-            if (base::Contains(host->GetURL().path(), ext_id) &&
+            if (host->GetURL().GetPath().contains(ext_id) &&
                 host->GetType() == "background_page") {
               return true;
             }
@@ -73,8 +87,30 @@ void ExtensionJSBrowserTest::SetUpOnMainThread() {
 void ExtensionJSBrowserTest::WaitForExtension(const char* extension_id,
                                               base::OnceClosure load_cb) {
   extension_id_ = extension_id;
+
+  // ExtensionHosts only exist when there is an associated RenderFrame.
+  // Initialize both an ExtensionHostTestHelper and a ServiceWorkerObserver
+  // before running the load callback, to avoid missing the relevant event.
   extensions::ExtensionHostTestHelper host_helper(GetProfile(), extension_id);
+  extensions::ExtensionRegistryTestHelper observer(extension_id, GetProfile());
   std::move(load_cb).Run();
+
+  if (observer.WaitForManifestVersion() == 3) {
+    observer.WaitForServiceWorkerStart();
+    extension_host_browser_context_ = GetProfile();
+
+    // Wait until the extension is registered by the ProcessManager (this
+    // happens asynchronously) - otherwise, we won't be able to run a script
+    // in the service worker context.
+    ASSERT_TRUE(base::test::RunUntil([&]() {
+      std::vector<extensions::WorkerId> worker_ids =
+          extensions::ProcessManager::Get(GetProfile())
+              ->GetServiceWorkersForExtension(extension_id);
+      return !worker_ids.empty();
+    }));
+    return;
+  }
+
   extensions::ExtensionHost* extension_host =
       host_helper.WaitForHostCompletedFirstLoad();
   ASSERT_TRUE(extension_host);
@@ -90,14 +126,17 @@ bool ExtensionJSBrowserTest::RunJavascriptTestF(bool is_async,
   }
   std::vector<std::u16string> scripts;
 
-  base::Value::Dict test_runner_params;
+  base::DictValue test_runner_params;
   if (embedded_test_server()->Started()) {
     test_runner_params.Set("testServerBaseUrl",
                            embedded_test_server()->base_url().spec());
   }
 
   if (!libs_loaded_) {
-    BuildJavascriptLibraries(&scripts);
+    if (!BuildJavascriptLibraries(&scripts)) {
+      ADD_FAILURE() << "Failed to build JavaScript libraries";
+      return false;
+    }
     libs_loaded_ = true;
   }
 
@@ -106,7 +145,7 @@ bool ExtensionJSBrowserTest::RunJavascriptTestF(bool is_async,
 
   scripts.push_back(BuildRunTestJSCall(
       is_async, "RUN_TEST_F",
-      base::Value::List().Append(test_fixture).Append(test_name)));
+      base::ListValue().Append(test_fixture).Append(test_name)));
 
   std::u16string script_16 = base::JoinString(scripts, u"\n");
   std::string script = base::UTF16ToUTF8(script_16);
@@ -124,8 +163,9 @@ bool ExtensionJSBrowserTest::RunJavascriptTestF(bool is_async,
   }
 
   std::string result_str = result.GetString();
-  std::optional<base::Value> value_result = base::JSONReader::Read(result_str);
-  const base::Value::Dict& dict_value = value_result->GetDict();
+  std::optional<base::Value> value_result =
+      base::JSONReader::Read(result_str, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  const base::DictValue& dict_value = value_result->GetDict();
 
   bool test_result = dict_value.FindBool("result").value();
   const std::string* test_result_message = dict_value.FindString("message");

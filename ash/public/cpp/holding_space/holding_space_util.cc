@@ -4,14 +4,17 @@
 
 #include "ash/public/cpp/holding_space/holding_space_util.h"
 
+#include <algorithm>
+
 #include "ash/public/cpp/holding_space/holding_space_client.h"
 #include "ash/public/cpp/holding_space/holding_space_constants.h"
 #include "ash/public/cpp/holding_space/holding_space_controller.h"
-#include "base/containers/contains.h"
+#include "base/containers/to_vector.h"
 #include "base/pickle.h"
 #include "base/strings/string_split.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/clipboard/custom_data_helper.h"
+#include "ui/base/clipboard/file_info.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "url/gurl.h"
 
@@ -30,16 +33,12 @@ std::vector<base::FilePath> ExtractFilePathsFromFilenames(
     return paths;
   }
 
-  std::vector<ui::FileInfo> filenames;
-  if (!data.GetFilenames(&filenames)) {
+  std::optional<std::vector<ui::FileInfo>> filenames = data.GetFilenames();
+  if (!filenames.has_value()) {
     return paths;
   }
 
-  for (const ui::FileInfo& filename : filenames) {
-    paths.emplace_back(filename.path);
-  }
-
-  return paths;
+  return base::ToVector(filenames.value(), &ui::FileInfo::path);
 }
 
 // TODO(http://b/279031685): Ask Files app team to own a util API for this.
@@ -49,13 +48,14 @@ std::vector<base::FilePath> ExtractFilePathsFromFileSystemSources(
     const ui::OSExchangeData& data) {
   std::vector<base::FilePath> paths;
 
-  base::Pickle p;
-  if (!data.GetPickledData(ui::ClipboardFormatType::WebCustomDataType(), &p)) {
+  std::optional<base::Pickle> pickle =
+      data.GetPickledData(ui::ClipboardFormatType::DataTransferCustomType());
+  if (!pickle.has_value()) {
     return paths;
   }
 
   std::optional<std::u16string> maybe_sources =
-      ui::ReadCustomDataForType(p, u"fs/sources");
+      ui::ReadCustomDataForType(pickle.value(), u"fs/sources");
   if (!maybe_sources.has_value()) {
     return paths;
   }
@@ -120,15 +120,9 @@ base::flat_set<HoldingSpaceFile::FileSystemType> GetAllFileSystemTypes() {
 base::flat_set<HoldingSpaceItem::Type> GetAllItemTypes() {
   return base::flat_set<HoldingSpaceItem::Type>({
       HoldingSpaceItem::Type::kArcDownload,
-      HoldingSpaceItem::Type::kCameraAppPhoto,
-      HoldingSpaceItem::Type::kCameraAppScanJpg,
-      HoldingSpaceItem::Type::kCameraAppScanPdf,
-      HoldingSpaceItem::Type::kCameraAppVideoGif,
-      HoldingSpaceItem::Type::kCameraAppVideoMp4,
       HoldingSpaceItem::Type::kDiagnosticsLog,
       HoldingSpaceItem::Type::kDownload,
       HoldingSpaceItem::Type::kDriveSuggestion,
-      HoldingSpaceItem::Type::kLacrosDownload,
       HoldingSpaceItem::Type::kLocalSuggestion,
       HoldingSpaceItem::Type::kNearbyShare,
       HoldingSpaceItem::Type::kPhoneHubCameraRoll,
@@ -146,15 +140,9 @@ gfx::Size GetMaxImageSizeForType(HoldingSpaceItem::Type type) {
   gfx::Size max_size;
   switch (type) {
     case HoldingSpaceItem::Type::kArcDownload:
-    case HoldingSpaceItem::Type::kCameraAppPhoto:
-    case HoldingSpaceItem::Type::kCameraAppScanJpg:
-    case HoldingSpaceItem::Type::kCameraAppScanPdf:
-    case HoldingSpaceItem::Type::kCameraAppVideoGif:
-    case HoldingSpaceItem::Type::kCameraAppVideoMp4:
     case HoldingSpaceItem::Type::kDiagnosticsLog:
     case HoldingSpaceItem::Type::kDownload:
     case HoldingSpaceItem::Type::kDriveSuggestion:
-    case HoldingSpaceItem::Type::kLacrosDownload:
     case HoldingSpaceItem::Type::kLocalSuggestion:
     case HoldingSpaceItem::Type::kNearbyShare:
     case HoldingSpaceItem::Type::kPhoneHubCameraRoll:
@@ -195,17 +183,17 @@ bool IsInProgressCommand(HoldingSpaceCommandId command_id) {
 bool SupportsInProgressCommand(const HoldingSpaceItem* item,
                                HoldingSpaceCommandId command_id) {
   DCHECK(IsInProgressCommand(command_id));
-  return base::Contains(item->in_progress_commands(), command_id,
-                        &HoldingSpaceItem::InProgressCommand::command_id);
+  return std::ranges::contains(
+      item->in_progress_commands(), command_id,
+      &HoldingSpaceItem::InProgressCommand::command_id);
 }
 
 bool ExecuteInProgressCommand(const HoldingSpaceItem* item,
-                              HoldingSpaceCommandId command_id,
-                              holding_space_metrics::EventSource event_source) {
+                              HoldingSpaceCommandId command_id) {
   DCHECK(IsInProgressCommand(command_id));
   for (const auto& in_progress_command : item->in_progress_commands()) {
     if (in_progress_command.command_id == command_id) {
-      in_progress_command.handler.Run(item, command_id, event_source);
+      in_progress_command.handler.Run(item, command_id);
       return true;
     }
   }
@@ -265,24 +253,12 @@ std::string ToString(HoldingSpaceItem::Type type) {
   switch (type) {
     case HoldingSpaceItem::Type::kArcDownload:
       return "ArcDownload";
-    case HoldingSpaceItem::Type::kCameraAppPhoto:
-      return "CameraAppPhoto";
-    case HoldingSpaceItem::Type::kCameraAppScanJpg:
-      return "CameraAppScanJpg";
-    case HoldingSpaceItem::Type::kCameraAppScanPdf:
-      return "CameraAppScanPdf";
-    case HoldingSpaceItem::Type::kCameraAppVideoGif:
-      return "CameraAppVideoGif";
-    case HoldingSpaceItem::Type::kCameraAppVideoMp4:
-      return "CameraAppVideoMp4";
     case HoldingSpaceItem::Type::kDiagnosticsLog:
       return "DiagnosticsLog";
     case HoldingSpaceItem::Type::kDownload:
       return "Download";
     case HoldingSpaceItem::Type::kDriveSuggestion:
       return "DriveSuggestion";
-    case HoldingSpaceItem::Type::kLacrosDownload:
-      return "LacrosDownload";
     case HoldingSpaceItem::Type::kLocalSuggestion:
       return "LocalSuggestion";
     case HoldingSpaceItem::Type::kNearbyShare:

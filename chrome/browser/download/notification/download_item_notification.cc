@@ -9,7 +9,9 @@
 
 #include <memory>
 
+#include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/notification_utils.h"
+#include "base/byte_size.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -20,8 +22,6 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_commands.h"
 #include "chrome/browser/download/download_crx_util.h"
@@ -38,7 +38,6 @@
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
-#include "chrome/browser/web_applications/web_app_id_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
@@ -52,6 +51,7 @@
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/elide_url.h"
+#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
@@ -72,13 +72,10 @@
 #include "ui/message_center/public/cpp/message_center_constants.h"
 #include "ui/message_center/public/cpp/notification.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/constants/ash_features.h"
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/notifier_catalogs.h"
 #include "chrome/browser/apps/app_service/policy_util.h"
 #include "chrome/browser/ash/file_manager/file_tasks.h"
-#elif BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/startup/browser_params_proxy.h"
 #endif
 
 using base::UserMetricsAction;
@@ -195,12 +192,17 @@ void RecordButtonClickAction(DownloadCommands::Command command) {
       base::RecordAction(
           UserMetricsAction("DownloadNotification.Button_Review"));
       break;
-    case DownloadCommands::PLATFORM_OPEN:
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
       base::RecordAction(
-          UserMetricsAction("DownloadNotification.Button_PlatformOpen"));
+          UserMetricsAction("DownloadNotification.Button_OpenWithMediaApp"));
+      return;
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
+      base::RecordAction(
+          UserMetricsAction("DownloadNotification.Button_EditWithMediaApp"));
       return;
     // Not actually displayed in notification, so should never be reached.
     case DownloadCommands::ALWAYS_OPEN_TYPE:
+    case DownloadCommands::PLATFORM_OPEN:
     case DownloadCommands::LEARN_MORE_INTERRUPTED:
     case DownloadCommands::LEARN_MORE_DOWNLOAD_BLOCKED:
     case DownloadCommands::OPEN_SAFE_BROWSING_SETTING:
@@ -209,7 +211,6 @@ void RecordButtonClickAction(DownloadCommands::Command command) {
     case DownloadCommands::CANCEL_DEEP_SCAN:
     case DownloadCommands::RETRY:
       NOTREACHED();
-      break;
   }
 }
 
@@ -229,7 +230,8 @@ DownloadItemNotification::DownloadItemNotification(
   // overridden by UpdateNotificationData() below.
   message_center::RichNotificationData rich_notification_data;
   rich_notification_data.should_make_spoken_feedback_for_popup_updates = false;
-  rich_notification_data.vector_small_image = &kNotificationDownloadIcon;
+  rich_notification_data.vector_small_image =
+      &vector_icons::kNotificationDownloadIcon;
 
   notification_ = std::make_unique<message_center::Notification>(
       message_center::NOTIFICATION_TYPE_PROGRESS, GetNotificationId(),
@@ -239,7 +241,7 @@ DownloadItemNotification::DownloadItemNotification(
       l10n_util::GetStringUTF16(
           IDS_DOWNLOAD_NOTIFICATION_DISPLAY_SOURCE),  // display_source
       GURL(kDownloadNotificationOrigin),              // origin_url
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       message_center::NotifierId(
           message_center::NotifierType::SYSTEM_COMPONENT,
           kDownloadNotificationNotifierId,
@@ -247,10 +249,15 @@ DownloadItemNotification::DownloadItemNotification(
 #else
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
                                  kDownloadNotificationNotifierId),
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
       rich_notification_data,
       base::MakeRefCounted<message_center::ThunkNotificationDelegate>(
           weak_factory_.GetWeakPtr()));
+  if (item_->GetDownloadItem() == nullptr) {
+    // For background fetches, OfflineItem::original_url is its job's
+    // registration origin.
+    notification_->set_origin_url(item_->GetOriginalURL());
+  }
   notification_->set_progress(0);
   notification_->set_fullscreen_visibility(
       message_center::FullscreenVisibility::OVER_USER);
@@ -296,9 +303,12 @@ void DownloadItemNotification::DisablePopup() {
   CloseNotification();
   notification_->set_priority(message_center::LOW_PRIORITY);
   closed_ = false;
-  NotificationDisplayServiceFactory::GetForProfile(profile())->Display(
-      NotificationHandler::Type::TRANSIENT, *notification_,
-      /*metadata=*/nullptr);
+  // If shutting down, the BrowserContext won't be valid.
+  if (profile() && !profile()->ShutdownStarted()) {
+    NotificationDisplayServiceFactory::GetForProfile(profile())->Display(
+        NotificationHandler::Type::TRANSIENT, *notification_,
+        /*metadata=*/nullptr);
+  }
 }
 
 void DownloadItemNotification::Close(bool by_user) {
@@ -333,7 +343,6 @@ void DownloadItemNotification::Click(
         static_cast<size_t>(*button_index) >= button_actions_->size()) {
       // Out of boundary.
       NOTREACHED();
-      return;
     }
 
     DownloadCommands::Command command = button_actions_->at(*button_index);
@@ -484,7 +493,9 @@ void DownloadItemNotification::UpdateNotificationData(bool display,
 
   notification_->set_title(GetTitle());
   notification_->set_message(GetSubStatusString());
-  notification_->set_progress_status(GetStatusString());
+  notification_->set_progress_status((item_->GetDownloadItem() != nullptr)
+                                         ? GetStatusString()
+                                         : std::u16string());
 
   if (item_->IsDangerous()) {
     notification_->set_type(message_center::NOTIFICATION_TYPE_SIMPLE);
@@ -510,7 +521,6 @@ void DownloadItemNotification::UpdateNotificationData(bool display,
       case download::DownloadItem::InsecureDownloadStatus::VALIDATED:
       case download::DownloadItem::InsecureDownloadStatus::SILENT_BLOCK:
         NOTREACHED();
-        break;
     }
   } else {
     switch (item_->GetState()) {
@@ -536,7 +546,6 @@ void DownloadItemNotification::UpdateNotificationData(bool display,
       case download::DownloadItem::CANCELLED:
         // Handled above.
         NOTREACHED();
-        return;
       case download::DownloadItem::INTERRUPTED:
         // Shows a notifiation as progress type once so the visible content will
         // be updated. (same as the case of type = COMPLETE)
@@ -625,7 +634,6 @@ SkColor DownloadItemNotification::GetNotificationIconColor() {
       case download::DownloadItem::InsecureDownloadStatus::VALIDATED:
       case download::DownloadItem::InsecureDownloadStatus::SILENT_BLOCK:
         NOTREACHED();
-        break;
     }
   }
 
@@ -642,7 +650,6 @@ SkColor DownloadItemNotification::GetNotificationIconColor() {
 
     case download::DownloadItem::MAX_DOWNLOAD_STATE:
       NOTREACHED();
-      break;
   }
 
   return gfx::kPlaceholderColor;
@@ -673,7 +680,7 @@ void DownloadItemNotification::OnImageDecoded(const SkBitmap& decoded_bitmap) {
 
 void DownloadItemNotification::OnImageCropped(const SkBitmap& bitmap) {
   gfx::Image image = gfx::Image::CreateFrom1xBitmap(bitmap);
-  notification_->set_image(image);
+  notification_->SetImage(image);
 
 // Provide the file path that backs the image to facilitate notification drag.
 #if BUILDFLAG(IS_CHROMEOS)
@@ -731,6 +738,9 @@ DownloadItemNotification::GetExtraActions() const {
         }
       }
     }
+    if (item_->GetDownloadItem() == nullptr) {
+      actions->push_back(DownloadCommands::CANCEL);
+    }
     return actions;
   }
 
@@ -747,7 +757,6 @@ DownloadItemNotification::GetExtraActions() const {
       case download::DownloadItem::InsecureDownloadStatus::VALIDATED:
       case download::DownloadItem::InsecureDownloadStatus::SILENT_BLOCK:
         NOTREACHED();
-        break;
     }
     actions->push_back(DownloadCommands::LEARN_MORE_INSECURE_DOWNLOAD);
     return actions;
@@ -759,9 +768,9 @@ DownloadItemNotification::GetExtraActions() const {
           download::DOWNLOAD_DANGER_TYPE_ASYNC_SCANNING) {
         if (AllowedToOpenWhileScanning())
           actions->push_back(DownloadCommands::OPEN_WHEN_COMPLETE);
-      } else if (!item_->IsPaused()) {
+      } else if (!item_->IsPaused() && item_->GetUploadedBytes() == 0) {
         actions->push_back(DownloadCommands::PAUSE);
-      } else {
+      } else if (item_->IsPaused() && item_->GetUploadedBytes() == 0) {
         actions->push_back(DownloadCommands::RESUME);
       }
       actions->push_back(DownloadCommands::CANCEL);
@@ -771,58 +780,32 @@ DownloadItemNotification::GetExtraActions() const {
       if (item_->CanResume())
         actions->push_back(DownloadCommands::RESUME);
       break;
-    case download::DownloadItem::COMPLETE:
-      actions->push_back(DownloadCommands::SHOW_IN_FOLDER);
-#if !BUILDFLAG(IS_CHROMEOS_LACROS)
+    case download::DownloadItem::COMPLETE: {
+#if BUILDFLAG(IS_CHROMEOS)
+      std::optional<DownloadCommands::Command> command =
+          item_->MaybeGetMediaAppAction();
+      if (command) {
+        actions->push_back(*command);
+      }
+#endif
+
+      // Do not include the Show in folder action for downloads we can't show in
+      // the folder.
+      if (item_->GetDownloadItem() != nullptr) {
+        actions->push_back(DownloadCommands::SHOW_IN_FOLDER);
+      }
       // We disable this functionality for now as the usage is very low, the
       // feature gets re-written at this time and there is currently no secure
       // way to determine the caller on the Ash side as the dialog is still
       // active when |seat::SetSelection| is reached.
       if (!notification_->image().IsEmpty())
         actions->push_back(DownloadCommands::COPY_TO_CLIPBOARD);
-#endif
-      if (IsGalleryAppPdfEditNotificationEligible())
-        actions->push_back(DownloadCommands::PLATFORM_OPEN);
       break;
+    }
     case download::DownloadItem::MAX_DOWNLOAD_STATE:
       NOTREACHED();
   }
   return actions;
-}
-
-bool DownloadItemNotification::IsGalleryAppPdfEditNotificationEligible() const {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (!ash::features::IsGalleryAppPdfEditNotificationEnabled())
-    return false;
-
-  DownloadCommands download_commands(item_->GetWeakPtr());
-  if (!download_commands.IsDownloadPdf())
-    return false;
-
-  auto* prefs = profile_->GetPrefs();
-  if (auto* policy_default_handler =
-          prefs->GetDict(prefs::kDefaultHandlersForFileExtensions)
-              .FindString(".pdf")) {
-    std::vector<std::string> app_ids =
-        apps_util::GetAppIdsFromPolicyId(profile_, *policy_default_handler);
-    // Sometimes the default handler policy might be misconfigured and not match
-    // any real apps; ignore it in this case.
-    if (!app_ids.empty()) {
-      return base::Contains(app_ids, web_app::kMediaAppId);
-    }
-  }
-
-  auto task_descriptor = file_manager::file_tasks::GetDefaultTaskFromPrefs(
-      *prefs, "application/pdf", ".pdf");
-  if (!task_descriptor) {
-    // GetDefaultTaskFromPrefs returns false if no default app is specified. If
-    // no default app is specified, a pdf will be opened with Gallery app.
-    return true;
-  }
-  return task_descriptor->app_id == web_app::kMediaAppId;
-#else
-  return false;
-#endif
 }
 
 std::u16string DownloadItemNotification::GetTitle() const {
@@ -932,19 +915,20 @@ std::u16string DownloadItemNotification::GetCommandLabel(
     case DownloadCommands::REVIEW:
       id = IDS_REVIEW_DOWNLOAD;
       break;
-    case DownloadCommands::PLATFORM_OPEN:
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-      // If a flag is specified by chrome://flags UI, flags_state.cc escape
-      // params, i.e. a space is converted to a plus. Unescape the string for
-      // the case.
-      return base::UTF8ToUTF16(base::UnescapeURLComponent(
-          ash::features::kGalleryAppPdfEditNotificationText.Get(),
-          base::UnescapeRule::REPLACE_PLUS_WITH_SPACE));
+#if BUILDFLAG(IS_CHROMEOS)
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+      id = IDS_DOWNLOAD_NOTIFICATION_LABEL_OPEN;
+      break;
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
+      id = IDS_DOWNLOAD_NOTIFICATION_LABEL_OPEN_AND_EDIT;
+      break;
 #else
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
       NOTREACHED();
-      return std::u16string();
 #endif
     case DownloadCommands::ALWAYS_OPEN_TYPE:
+    case DownloadCommands::PLATFORM_OPEN:
     case DownloadCommands::LEARN_MORE_INTERRUPTED:
     case DownloadCommands::LEARN_MORE_DOWNLOAD_BLOCKED:
     case DownloadCommands::OPEN_SAFE_BROWSING_SETTING:
@@ -954,7 +938,6 @@ std::u16string DownloadItemNotification::GetCommandLabel(
     case DownloadCommands::RETRY:
       // Only for menu.
       NOTREACHED();
-      return std::u16string();
   }
   CHECK_NE(id, -1);
   return l10n_util::GetStringUTF16(id);
@@ -1016,20 +999,26 @@ std::u16string DownloadItemNotification::GetWarningStatusString() const {
       return l10n_util::GetStringUTF16(
           IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_WARNING);
     }
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
+      return l10n_util::GetStringUTF16(
+          IDS_PROMPT_DOWNLOAD_FORCED_SAVE_TO_CLOUD);
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK: {
       return l10n_util::GetStringUTF16(
           IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_BLOCKED);
     }
-    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_SCANNING: {
       return l10n_util::GetStringFUTF16(IDS_PROMPT_DEEP_SCANNING,
                                         elided_filename);
     }
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
     case download::DOWNLOAD_DANGER_TYPE_ASYNC_LOCAL_PASSWORD_SCANNING: {
-      // TODO(crbug.com/1491184): Implement UX for this danger type.
-      NOTREACHED();
+      // TODO(crbug.com/40074456): Implement UX for this danger type.
+      DUMP_WILL_BE_NOTREACHED();
       break;
+    }
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED: {
+      return l10n_util::GetStringUTF16(IDS_PROMPT_DOWNLOAD_BLOCKED_SCAN_FAILED);
     }
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE:
@@ -1044,7 +1033,6 @@ std::u16string DownloadItemNotification::GetWarningStatusString() const {
     }
   }
   NOTREACHED();
-  return std::u16string();
 }
 
 std::u16string DownloadItemNotification::GetInProgressSubStatusString() const {
@@ -1136,8 +1124,6 @@ std::u16string DownloadItemNotification::GetSubStatusString() const {
     default:
       NOTREACHED();
   }
-
-  return std::u16string();
 }
 
 std::u16string DownloadItemNotification::GetStatusString() const {
@@ -1170,7 +1156,8 @@ std::u16string DownloadItemNotification::GetStatusString() const {
       } else {
         // Otherwise, the download should be completed.
         // "3.4 MB from example.com"
-        std::u16string size = ui::FormatBytes(item_->GetCompletedBytes());
+        std::u16string size = ui::FormatBytes(base::ByteSize(
+            base::checked_cast<uint64_t>(item_->GetCompletedBytes())));
         return l10n_util::GetStringFUTF16(
             IDS_DOWNLOAD_NOTIFICATION_STATUS_COMPLETED, size, host_name);
       }
@@ -1181,9 +1168,11 @@ std::u16string DownloadItemNotification::GetStatusString() const {
 
   // Indication of progress (E.g.:"100/200 MB" or "100 MB"), or just the
   // received bytes if the |show_size_ratio| flag is false.
-  std::u16string size = show_size_ratio
-                            ? item_->GetProgressSizesString()
-                            : ui::FormatBytes(item_->GetCompletedBytes());
+  std::u16string size =
+      show_size_ratio
+          ? item_->GetProgressSizesString()
+          : ui::FormatBytes(base::ByteSize(
+                base::checked_cast<uint64_t>(item_->GetCompletedBytes())));
 
   return l10n_util::GetStringFUTF16(IDS_DOWNLOAD_NOTIFICATION_STATUS_SHORT,
                                     size, host_name);

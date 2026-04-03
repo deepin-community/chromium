@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -23,6 +23,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/lazy_thread_pool_task_runner.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -50,11 +51,11 @@
 #include "ui/gfx/image/image_skia_rep_default.h"
 
 #if BUILDFLAG(IS_WIN)
-#include "ui/gfx/icon_util.h"
+#include "ui/gfx/win/icon_util.h"
 #endif
 
 #if BUILDFLAG(IS_MAC)
-#include "chrome/browser/web_applications/app_shim_registry_mac.h"
+#include "chrome/browser/web_applications/os_integration/mac/app_shim_registry.h"
 #endif
 
 using content::BrowserThread;
@@ -96,24 +97,23 @@ size_t GetNumDesiredIconSizesForShortcut() {
 #endif
 }
 
-void DeleteShortcutInfoOnUIThread(std::unique_ptr<ShortcutInfo> shortcut_info,
-                                  ResultCallback callback,
-                                  Result result) {
-  shortcut_info.reset();
-  if (callback)
-    std::move(callback).Run(result);
-}
-
 void CreatePlatformShortcutsAndPostCallback(
     const base::FilePath& shortcut_data_path,
     const ShortcutLocations& creation_locations,
     ShortcutCreationReason creation_reason,
     CreateShortcutsCallback callback,
-    const ShortcutInfo& shortcut_info) {
-  bool shortcut_created = internals::CreatePlatformShortcuts(
-      shortcut_data_path, creation_locations, creation_reason, shortcut_info);
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), shortcut_created));
+    std::unique_ptr<ShortcutInfo> shortcut_info) {
+  // Ownership of shortcut_info is moved into the callback.
+  const ShortcutInfo& shortcut_info_ref = *shortcut_info.get();
+  internals::CreatePlatformShortcuts(
+      shortcut_data_path, creation_locations, creation_reason,
+      shortcut_info_ref,
+      base::BindPostTask(
+          content::GetUIThreadTaskRunner({}),
+          std::move(callback)
+              // Ensure that `shortcut_info` is deleted on the UI thread.
+              .Then(base::OnceClosure(
+                  base::DoNothingWithBoundArgs(std::move(shortcut_info))))));
 }
 
 void DeletePlatformShortcutsAndPostCallback(
@@ -132,10 +132,29 @@ void DeleteMultiProfileShortcutsForAppAndPostCallback(const std::string& app_id,
       FROM_HERE, base::BindOnce(std::move(callback), Result::kOk));
 }
 
+void UpdatePlatformShortcutsAndPostCallback(
+    const base::FilePath& shortcut_data_dir,
+    const std::u16string& old_app_title,
+    std::optional<ShortcutLocations> locations,
+    ResultCallback callback,
+    std::unique_ptr<ShortcutInfo> shortcut_info) {
+  // Ownership of shortcut_info is moved into the callback.
+  const ShortcutInfo& shortcut_info_ref = *shortcut_info.get();
+  internals::UpdatePlatformShortcuts(
+      std::move(shortcut_data_dir), std::move(old_app_title), locations,
+      base::BindPostTask(
+          content::GetUIThreadTaskRunner({}),
+          std::move(callback)
+              // Ensure that `shortcut_info` is deleted on the UI thread.
+              .Then(base::OnceClosure(
+                  base::DoNothingWithBoundArgs(std::move(shortcut_info))))),
+      shortcut_info_ref);
+}
+
 std::vector<WebAppShortcutsMenuItemInfo::Icon>
 ConvertIconProtoDataToShortcutsMenuIcon(
-    const ::google::protobuf::RepeatedPtrField<proto::ShortcutIconData>&
-        shortcut_icon_data) {
+    const ::google::protobuf::RepeatedPtrField<
+        proto::os_state::ShortcutIconData>& shortcut_icon_data) {
   std::vector<WebAppShortcutsMenuItemInfo::Icon> shortcut_menu_item_icons;
   for (const auto& icon_data : shortcut_icon_data) {
     WebAppShortcutsMenuItemInfo::Icon icon;
@@ -171,12 +190,14 @@ gfx::ImageFamily PackageIconsIntoImageFamily(
 std::unique_ptr<ShortcutInfo> SetFavicon(
     std::unique_ptr<ShortcutInfo> shortcut_info,
     IconPurpose purpose,
+    bool is_diy_app,
     gfx::ImageFamily image_family) {
   if (purpose == IconPurpose::ANY) {
     shortcut_info->favicon = std::move(image_family);
   } else if (purpose == IconPurpose::MASKABLE) {
     shortcut_info->favicon_maskable = std::move(image_family);
   }
+  shortcut_info->is_diy_app = is_diy_app;
   return shortcut_info;
 }
 
@@ -193,13 +214,13 @@ std::unique_ptr<ShortcutInfo> BuildShortcutInfoWithoutFavicon(
     const GURL& start_url,
     const base::FilePath& profile_path,
     const std::string& profile_name,
-    const proto::WebAppOsIntegrationState& state) {
+    const proto::os_state::WebAppOsIntegration& state) {
   auto shortcut_info = std::make_unique<ShortcutInfo>();
 
   shortcut_info->app_id = app_id;
   shortcut_info->url = start_url;
   DCHECK(state.has_shortcut());
-  const proto::ShortcutDescription& shortcut_state = state.shortcut();
+  const proto::os_state::ShortcutDescription& shortcut_state = state.shortcut();
   DCHECK(shortcut_state.has_title());
   shortcut_info->title = base::UTF8ToUTF16(shortcut_state.title());
   DCHECK(shortcut_state.has_description());
@@ -225,7 +246,7 @@ std::unique_ptr<ShortcutInfo> BuildShortcutInfoWithoutFavicon(
     }
   }
 
-// TODO(crbug.com/1416965): Implement tests on Linux for using shortcuts_menu
+// TODO(crbug.com/40257107): Implement tests on Linux for using shortcuts_menu
 // actions.
 #if BUILDFLAG(IS_LINUX)
   const std::vector<WebAppShortcutsMenuItemInfo>& shortcuts_menu_item_infos =
@@ -266,26 +287,28 @@ void PopulateFaviconPurposeForShortcutInfo(
       app->downloaded_icon_sizes(purpose), GetDesiredIconSizesForShortcut());
 
   auto populate_and_return_shortcut_info =
-      base::BindOnce(&SetFavicon, std::move(shortcut_info_to_populate), purpose)
+      base::BindOnce(&SetFavicon, std::move(shortcut_info_to_populate), purpose,
+                     app->is_diy_app())
           .Then(std::move(callback));
 
+  auto icons_packaging_callback =
+      base::BindOnce(&PackageIconsIntoImageFamily,
+                     /*allow_empty=*/purpose != IconPurpose::ANY)
+          .Then(std::move(populate_and_return_shortcut_info));
+
   if (!icon_sizes_in_px.empty()) {
-    icon_manager.ReadIcons(
-        app->app_id(), purpose, icon_sizes_in_px,
-        base::BindOnce(&PackageIconsIntoImageFamily,
-                       /*allow_empty=*/purpose != IconPurpose::ANY)
-            .Then(std::move(populate_and_return_shortcut_info)));
+    icon_manager.ReadTrustedIconsWithFallbackToManifestIcons(
+        app->app_id(), icon_sizes_in_px, purpose,
+        web_app::WebAppIconManager::BitmapsFromIconMetadataExtractor(
+            std::move(icons_packaging_callback)));
     return;
   }
 
   // If there is no single icon at the desired sizes, we will resize what we can
   // get.
   SquareSizePx desired_icon_size = GetDesiredIconSizesForShortcut().back();
-  icon_manager.ReadIconAndResize(
-      app->app_id(), purpose, desired_icon_size,
-      base::BindOnce(&PackageIconsIntoImageFamily,
-                     /*allow_empty=*/purpose != IconPurpose::ANY)
-          .Then(std::move(populate_and_return_shortcut_info)));
+  icon_manager.ReadIconAndResize(app->app_id(), purpose, desired_icon_size,
+                                 std::move(icons_packaging_callback));
 }
 
 void PopulateFaviconForShortcutInfo(
@@ -305,7 +328,7 @@ void PopulateFaviconForShortcutInfo(
 }
 
 std::vector<WebAppShortcutsMenuItemInfo> CreateShortcutsMenuItemInfos(
-    const proto::ShortcutMenus& shortcut_menus) {
+    const proto::os_state::ShortcutMenus& shortcut_menus) {
   std::vector<WebAppShortcutsMenuItemInfo> shortcut_menu_item_infos;
   for (const auto& shortcut_menu_info : shortcut_menus.shortcut_menu_info()) {
     WebAppShortcutsMenuItemInfo item_info;
@@ -326,7 +349,7 @@ ShortcutLocations::ShortcutLocations() = default;
 ShortcutLocations::~ShortcutLocations() = default;
 
 base::Value ShortcutLocations::ToDebugValue() const {
-  base::Value::Dict debug_log;
+  base::DictValue debug_log;
   debug_log.Set("on_desktop", on_desktop);
   debug_log.Set("in_quick_launch_bar", in_quick_launch_bar);
   debug_log.Set("in_startup", in_startup);
@@ -360,20 +383,6 @@ ShortcutLocations MergeLocations(
   return merged_locations;
 }
 
-bool operator==(const ShortcutLocations& location1,
-                const ShortcutLocations& location2) {
-  return (location1.on_desktop == location2.on_desktop) &&
-         (location1.in_quick_launch_bar == location2.in_quick_launch_bar) &&
-         (location1.in_startup == location2.in_startup) &&
-         (location1.applications_menu_location ==
-          location2.applications_menu_location);
-}
-
-bool operator!=(const ShortcutLocations& location1,
-                const ShortcutLocations& location2) {
-  return !(location1 == location2);
-}
-
 std::string GenerateApplicationNameFromInfo(const ShortcutInfo& shortcut_info) {
   if (shortcut_info.app_id.empty()) {
     return GenerateApplicationNameFromURL(shortcut_info.url);
@@ -393,15 +402,15 @@ base::FilePath GetOsIntegrationResourcesDirectoryForApp(
     return app_data_dir.AppendASCII(GenerateApplicationNameFromAppId(app_id));
   }
 
-  std::string host(url.host());
-  std::string scheme(url.has_scheme() ? url.scheme() : "http");
-  std::string port(url.has_port() ? url.port() : "80");
+  std::string host(url.GetHost());
+  std::string scheme(url.has_scheme() ? url.GetScheme() : "http");
+  std::string port(url.has_port() ? url.GetPort() : "80");
   std::string scheme_port(scheme + "_" + port);
 
 #if BUILDFLAG(IS_WIN)
   base::FilePath::StringType host_path(base::UTF8ToWide(host));
   base::FilePath::StringType scheme_port_path(base::UTF8ToWide(scheme_port));
-#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX)
   base::FilePath::StringType host_path(host);
   base::FilePath::StringType scheme_port_path(scheme_port);
 #else
@@ -412,14 +421,14 @@ base::FilePath GetOsIntegrationResourcesDirectoryForApp(
 }
 
 base::span<const int> GetDesiredIconSizesForShortcut() {
-  return base::span<const int>(kDesiredIconSizesForShortcut,
-                               GetNumDesiredIconSizesForShortcut());
+  return UNSAFE_TODO(base::span<const int>(
+      kDesiredIconSizesForShortcut, GetNumDesiredIconSizesForShortcut()));
 }
 
 gfx::ImageSkia CreateDefaultApplicationIcon(int size) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  // TODO(crbug.com/860581): Create web_app_browser_resources.grd with the
+  // TODO(crbug.com/40583793): Create web_app_browser_resources.grd with the
   // default app icon. Remove dependency on extensions_browser_resources.h and
   // use IDR_WEB_APP_DEFAULT_ICON here.
   gfx::Image default_icon =
@@ -439,20 +448,33 @@ gfx::ImageSkia CreateDefaultApplicationIcon(int size) {
 namespace internals {
 
 void PostShortcutIOTask(base::OnceCallback<void(const ShortcutInfo&)> task,
-                        std::unique_ptr<ShortcutInfo> shortcut_info) {
+                        std::unique_ptr<ShortcutInfo> shortcut_info,
+                        const base::Location& location) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   // Ownership of |shortcut_info| moves to the Reply, which is guaranteed to
   // outlive the const reference.
   const ShortcutInfo& shortcut_info_ref = *shortcut_info;
   GetShortcutIOTaskRunner()->PostTaskAndReply(
-      FROM_HERE, base::BindOnce(std::move(task), std::cref(shortcut_info_ref)),
+      location, base::BindOnce(std::move(task), std::cref(shortcut_info_ref)),
       base::BindOnce(
           [](std::unique_ptr<ShortcutInfo> shortcut_info) {
             // This lambda is to own and delete the shortcut info.
             shortcut_info.reset();
           },
           std::move(shortcut_info)));
+}
+
+void PostAsyncShortcutIOTask(
+    base::OnceCallback<void(std::unique_ptr<ShortcutInfo>)> task,
+    std::unique_ptr<ShortcutInfo> shortcut_info,
+    const base::Location& location) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  // Ownership of |shortcut_info| is transferred to the task. The task must
+  // ensure that it is destroyed on the UI thread.
+  GetShortcutIOTaskRunner()->PostTask(
+      location, base::BindOnce(std::move(task), std::move(shortcut_info)));
 }
 
 void ScheduleCreatePlatformShortcuts(
@@ -463,10 +485,11 @@ void ScheduleCreatePlatformShortcuts(
     CreateShortcutsCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  PostShortcutIOTask(base::BindOnce(&CreatePlatformShortcutsAndPostCallback,
-                                    shortcut_data_path, creation_locations,
-                                    reason, std::move(callback)),
-                     std::move(shortcut_info));
+  PostAsyncShortcutIOTask(
+      base::BindOnce(&CreatePlatformShortcutsAndPostCallback,
+                     shortcut_data_path, creation_locations, reason,
+                     std::move(callback)),
+      std::move(shortcut_info));
 }
 
 void ScheduleDeletePlatformShortcuts(
@@ -490,19 +513,19 @@ void ScheduleDeleteMultiProfileShortcutsForApp(const std::string& app_id,
                      std::move(callback)));
 }
 
-void PostShortcutIOTaskAndReplyWithResult(
-    base::OnceCallback<Result(const ShortcutInfo&)> task,
-    std::unique_ptr<ShortcutInfo> shortcut_info,
-    ResultCallback reply) {
+void ScheduleUpdatePlatformShortcuts(
+    const base::FilePath& shortcut_data_dir,
+    const std::u16string& old_app_title,
+    std::optional<ShortcutLocations> locations,
+    base::OnceCallback<void(Result)> on_complete,
+    std::unique_ptr<ShortcutInfo> shortcut_info) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  // Ownership of |shortcut_info| moves to the Reply, which is guaranteed to
-  // outlive the const reference.
-  const ShortcutInfo& shortcut_info_ref = *shortcut_info;
-  GetShortcutIOTaskRunner()->PostTaskAndReplyWithResult(
-      FROM_HERE, base::BindOnce(std::move(task), std::cref(shortcut_info_ref)),
-      base::BindOnce(&DeleteShortcutInfoOnUIThread, std::move(shortcut_info),
-                     std::move(reply)));
+  internals::PostAsyncShortcutIOTask(
+      base::BindOnce(&UpdatePlatformShortcutsAndPostCallback,
+                     std::move(shortcut_data_dir), std::move(old_app_title),
+                     locations, std::move(on_complete)),
+      std::move(shortcut_info));
 }
 
 scoped_refptr<base::SequencedTaskRunner> GetShortcutIOTaskRunner() {

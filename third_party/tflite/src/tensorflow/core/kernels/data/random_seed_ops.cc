@@ -34,7 +34,7 @@ const char kReshuffle[] = "reshuffle";
 
 }  // namespace
 
-string SeedGeneratorManager::DebugString() const { return kSeedGenerator; }
+std::string SeedGeneratorManager::DebugString() const { return kSeedGenerator; }
 
 void FixedSeedGenerator::GenerateSeeds(int64_t* seed1, int64_t* seed2) {
   mutex_lock l(mu_);
@@ -80,7 +80,7 @@ void AnonymousSeedGeneratorHandleOp::Compute(OpKernelContext* ctx) {
 
 std::string AnonymousSeedGeneratorHandleOp::name() { return kSeedGenerator; }
 
-Status AnonymousSeedGeneratorHandleOp::CreateResource(
+absl::Status AnonymousSeedGeneratorHandleOp::CreateResource(
     OpKernelContext* ctx, std::unique_ptr<FunctionLibraryDefinition> flib_def,
     std::unique_ptr<ProcessFunctionLibraryRuntime> pflr,
     FunctionLibraryRuntime* lib, SeedGeneratorManager** manager)

@@ -4,21 +4,30 @@
 
 #include "chrome/browser/ash/login/screens/osauth/local_password_setup_screen.h"
 
+#include <string>
+#include <utility>
+
 #include "ash/constants/ash_features.h"
+#include "base/check.h"
 #include "base/check_op.h"
+#include "base/debug/dump_without_crashing.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/memory/weak_ptr.h"
+#include "base/notreached.h"
 #include "base/values.h"
+#include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_factory.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chrome/browser/ash/login/screens/osauth/base_osauth_setup_screen.h"
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/webui/ash/login/local_password_setup_handler.h"
+#include "chromeos/ash/components/osauth/public/auth_session_storage.h"
 #include "chromeos/ash/components/osauth/public/common_types.h"
 #include "chromeos/ash/services/auth_factor_config/auth_factor_config.h"
 #include "chromeos/ash/services/auth_factor_config/in_process_instances.h"
-#include "chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-forward.h"
 #include "chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-shared.h"
-#include "components/crash/core/app/crashpad.h"
 
 namespace ash {
 namespace {
@@ -30,6 +39,7 @@ constexpr const char kUserActionBack[] = "back";
 
 // static
 std::string LocalPasswordSetupScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::kDone:
       return "Done";
@@ -38,6 +48,7 @@ std::string LocalPasswordSetupScreen::GetResultString(Result result) {
     case Result::kNotApplicable:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 LocalPasswordSetupScreen::LocalPasswordSetupScreen(
@@ -58,17 +69,35 @@ void LocalPasswordSetupScreen::ShowImpl() {
   }
   EstablishKnowledgeFactorGuard(base::BindOnce(
       &LocalPasswordSetupScreen::DoShow, weak_factory_.GetWeakPtr()));
+
+  if (ash::features::IsRecoveryFlowReorderEnabled() &&
+      context()->knowledge_factor_setup.auth_setup_flow ==
+          WizardContext::AuthChangeFlow::kRecovery &&
+      context()->extra_factors_token) {
+    session_refresher_ = AuthSessionStorage::Get()->KeepAlive(
+        context()->extra_factors_token.value());
+  }
+}
+
+void LocalPasswordSetupScreen::HideImpl() {
+  session_refresher_.reset();
 }
 
 void LocalPasswordSetupScreen::DoShow() {
-  bool can_go_back = !context()->knowledge_factor_setup.local_password_forced;
+  // The user can go back in the flow, if:
+  // 1. They were presented the choice between local vs. online password on the
+  //    LocalPasswordSetup screen.
+  // 2. They clicked on 'Choose password instead' during main PIN setup.
+  std::string auth_token = GetToken();
+  bool can_go_back = !context()->knowledge_factor_setup.local_password_forced ||
+                     context()->knowledge_factor_setup.pin_setup_mode ==
+                         WizardContext::PinSetupMode::kUserChosePasswordInstead;
   bool is_recovery_flow = context()->knowledge_factor_setup.auth_setup_flow ==
                           WizardContext::AuthChangeFlow::kRecovery;
-  view_->Show(/*can_go_back=*/can_go_back,
-              /*is_recovery_flow=*/is_recovery_flow);
+  view_->Show(auth_token, can_go_back, is_recovery_flow);
 }
 
-void LocalPasswordSetupScreen::OnUserAction(const base::Value::List& args) {
+void LocalPasswordSetupScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionInputPassword) {
     CHECK_EQ(args.size(), 2u);
@@ -85,7 +114,7 @@ void LocalPasswordSetupScreen::OnUserAction(const base::Value::List& args) {
                            weak_factory_.GetWeakPtr()));
         break;
       case WizardContext::AuthChangeFlow::kRecovery:
-        password_factor_editor.UpdateLocalPassword(
+        password_factor_editor.UpdateOrSetLocalPassword(
             GetToken(), password,
             base::BindOnce(&LocalPasswordSetupScreen::OnUpdateLocalPassword,
                            weak_factory_.GetWeakPtr()));
@@ -108,7 +137,7 @@ void LocalPasswordSetupScreen::OnUpdateLocalPassword(
     LOG(ERROR) << "Failed to update local password, error id= "
                << static_cast<int>(result);
     exit_callback_.Run(Result::kDone);
-    crash_reporter::DumpWithoutCrashing();
+    base::debug::DumpWithoutCrashing();
     return;
   }
   context()->knowledge_factor_setup.modified_factors.Put(
@@ -123,7 +152,7 @@ void LocalPasswordSetupScreen::OnSetLocalPassword(
     LOG(ERROR) << "Failed to set local password, error id= "
                << static_cast<int>(result);
     exit_callback_.Run(Result::kDone);
-    crash_reporter::DumpWithoutCrashing();
+    base::debug::DumpWithoutCrashing();
     return;
   }
   context()->knowledge_factor_setup.modified_factors.Put(

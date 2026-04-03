@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_WEBAPPS_BROWSER_INSTALLABLE_INSTALLABLE_EVALUATOR_H_
 #define COMPONENTS_WEBAPPS_BROWSER_INSTALLABLE_INSTALLABLE_EVALUATOR_H_
 
-#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "components/webapps/browser/installable/installable_logging.h"
 #include "components/webapps/browser/installable/installable_page_data.h"
@@ -19,6 +18,13 @@ namespace webapps {
 // for installing the web app.
 class InstallableEvaluator {
  public:
+  // Gets the installable error on the display fields for the manifest. This is
+  // public so this can be checked in FetchManifestAndInstallCommand after using
+  // the `kValidManifestIgnoreDisplay` criteria.
+  static InstallableStatusCode GetDisplayError(
+      const blink::mojom::Manifest& manifest,
+      InstallableCriteria criteria);
+
   InstallableEvaluator(content::WebContents* web_contents,
                        const InstallablePageData& data,
                        InstallableCriteria criteria);
@@ -49,7 +55,7 @@ class InstallableEvaluator {
 
   // Check if the web site has provided all information required for install,
   // returns nullopt if the check was not run.
-  std::optional<std::vector<InstallableStatusCode>> CheckInstallability() const;
+  std::vector<InstallableStatusCode> CheckInstallability() const;
 
  private:
   friend class InstallableEvaluatorUnitTest;

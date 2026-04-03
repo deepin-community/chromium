@@ -10,6 +10,7 @@
 #include "include/private/base/SkAssert.h"
 #include "include/private/base/SkFloatingPoint.h"
 #include "include/private/base/SkPoint_impl.h"
+#include "include/private/base/SkSpan_impl.h"
 #include "src/base/SkCubics.h"
 #include "src/base/SkQuads.h"
 
@@ -114,25 +115,25 @@ std::array<double, 4> SkBezierCubic::ConvertToPolynomial(const double curve[8], 
 }
 
 namespace {
-struct Point {
-    Point(double x_, double y_) : x{x_}, y{y_} {}
-    Point(SkPoint p) : x{p.fX}, y{p.fY} {}
+struct DPoint {
+    DPoint(double x_, double y_) : x{x_}, y{y_} {}
+    DPoint(SkPoint p) : x{p.fX}, y{p.fY} {}
     double x, y;
 };
 
-Point operator- (Point a) {
+DPoint operator- (DPoint a) {
     return {-a.x, -a.y};
 }
 
-Point operator+ (Point a, Point b) {
+DPoint operator+ (DPoint a, DPoint b) {
     return {a.x + b.x, a.y + b.y};
 }
 
-Point operator- (Point a, Point b) {
+DPoint operator- (DPoint a, DPoint b) {
     return {a.x - b.x, a.y - b.y};
 }
 
-Point operator* (double s, Point a) {
+DPoint operator* (double s, DPoint a) {
     return {s * a.x, s * a.y};
 }
 
@@ -153,15 +154,15 @@ SkSpan<const float>
 SkBezierCubic::IntersectWithHorizontalLine(
         SkSpan<const SkPoint> controlPoints, float yIntercept, float* intersectionStorage) {
     SkASSERT(controlPoints.size() >= 4);
-    const Point P0 = controlPoints[0],
-                P1 = controlPoints[1],
-                P2 = controlPoints[2],
-                P3 = controlPoints[3];
+    const DPoint P0 = controlPoints[0],
+                 P1 = controlPoints[1],
+                 P2 = controlPoints[2],
+                 P3 = controlPoints[3];
 
-    const Point A =   -P0 + 3*P1 - 3*P2 + P3,
-                B =  3*P0 - 6*P1 + 3*P2,
-                C = -3*P0 + 3*P1,
-                D =    P0;
+    const DPoint A =   -P0 + 3*P1 - 3*P2 + P3,
+                 B =  3*P0 - 6*P1 + 3*P2,
+                 C = -3*P0 + 3*P1,
+                 D =    P0;
 
     return Intersect(A.x, B.x, C.x, D.x, A.y, B.y, C.y, D.y, yIntercept, intersectionStorage);
 }
@@ -174,7 +175,7 @@ SkBezierCubic::Intersect(double AX, double BX, double CX, double DX,
     SkSpan<double> ts = SkSpan(roots,
                                SkCubics::RootsReal(AY, BY, CY, DY - toIntersect, roots));
 
-    int intersectionCount = 0;
+    size_t intersectionCount = 0;
     for (double t : ts) {
         const double pinnedT = pinTRange(t);
         if (0 <= pinnedT && pinnedT <= 1) {
@@ -189,17 +190,17 @@ SkSpan<const float>
 SkBezierQuad::IntersectWithHorizontalLine(SkSpan<const SkPoint> controlPoints, float yIntercept,
                                           float intersectionStorage[2]) {
     SkASSERT(controlPoints.size() >= 3);
-    const Point p0 = controlPoints[0],
-                p1 = controlPoints[1],
-                p2 = controlPoints[2];
+    const DPoint p0 = controlPoints[0],
+                 p1 = controlPoints[1],
+                 p2 = controlPoints[2];
 
     // Calculate A, B, C using doubles to reduce round-off error.
-    const Point A = p0 - 2 * p1 + p2,
+    const DPoint A = p0 - 2 * p1 + p2,
     // Remember we are generating the polynomial in the form A*t^2 -2*B*t + C, so the factor
     // of 2 is not needed and the term is negated. This term for a Bézier curve is usually
     // 2(p1-p0).
-                B = p0 - p1,
-                C = p0;
+                 B = p0 - p1,
+                 C = p0;
 
     return Intersect(A.x, B.x, C.x, A.y, B.y, C.y, yIntercept, intersectionStorage);
 }
@@ -209,7 +210,7 @@ SkSpan<const float> SkBezierQuad::Intersect(
         double yIntercept, float intersectionStorage[2]) {
     auto [discriminant, r0, r1] = SkQuads::Roots(AY, BY, CY - yIntercept);
 
-    int intersectionCount = 0;
+    size_t intersectionCount = 0;
     // Round the roots to the nearest float to generate the values t. Valid t's are on the
     // domain [0, 1].
     const double t0 = pinTRange(r0);
@@ -222,6 +223,6 @@ SkSpan<const float> SkBezierQuad::Intersect(
         intersectionStorage[intersectionCount++] = SkQuads::EvalAt(AX, -2 * BX, CX, t1);
     }
 
-    return SkSpan{intersectionStorage, intersectionCount};
+    return {intersectionStorage, intersectionCount};
 }
 

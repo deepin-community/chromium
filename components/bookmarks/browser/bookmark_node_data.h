@@ -92,8 +92,14 @@ struct BookmarkNodeData {
 
 #if !BUILDFLAG(IS_APPLE)
     // For reading/writing this Element.
-    void WriteToPickle(base::Pickle* pickle) const;
-    bool ReadFromPickle(base::PickleIterator* iterator);
+    void WriteToLegacyPickle(base::Pickle* pickle) const;
+    bool ReadFromLegacyPickle(base::PickleIterator* iterator);
+
+    // Serializes this Element to a pickle.
+    base::Pickle ToPickle() const;
+    // Deserializes this Element from an iterator. Returns true if the
+    // operation succeeds.
+    bool FromPickle(base::PickleIterator iterator);
 #endif
 
     // ID of the node.
@@ -124,25 +130,31 @@ struct BookmarkNodeData {
   static bool ClipboardContainsBookmarks();
 
   // Reads bookmarks from the given vector.
+  // Returns true if the operation succeeds, which also implies that this
+  // contains valid data (is non-empty).
   bool ReadFromVector(
       const std::vector<raw_ptr<const BookmarkNode, VectorExperimental>>&
           nodes);
 
   // Creates a single-bookmark DragData from url/title pair.
+  // Returns true if the operation succeeds, which also implies that this
+  // contains valid data (is non-empty).
   bool ReadFromTuple(const GURL& url, const std::u16string& title);
 
   // Writes bookmarks to the specified clipboard.
-  void WriteToClipboard();
+  void WriteToClipboard(bool is_off_the_record);
 
   // Reads bookmarks from the specified clipboard. Prefers data written via
   // WriteToClipboard() but will also attempt to read a plain bookmark.
+  // Returns true if the operation succeeds, which also implies that this
+  // contains valid data (is non-empty).
   bool ReadFromClipboard(ui::ClipboardBuffer buffer);
 
 #if defined(TOOLKIT_VIEWS)
   // Writes elements to data. If there is only one element and it is a URL
   // the URL and title are written to the clipboard in a format other apps can
   // use.
-  // |profile_path| is used to identify which profile the data came from. Use an
+  // `profile_path` is used to identify which profile the data came from. Use an
   // empty path to indicate that the data is not associated with any profile.
   void Write(const base::FilePath& profile_path,
              ui::OSExchangeData* data) const;
@@ -152,12 +164,14 @@ struct BookmarkNodeData {
 #endif
 
 #if !BUILDFLAG(IS_APPLE)
-  // Writes the data for a drag to |pickle|.
+  // Writes the data for a drag to `pickle`.
   void WriteToPickle(const base::FilePath& profile_path,
                      base::Pickle* pickle) const;
 
-  // Reads the data for a drag from a |pickle|.
-  bool ReadFromPickle(base::Pickle* pickle);
+  // Reads the data for a drag from `data_iterator`.
+  // Returns true if the operation succeeds, which also implies that this
+  // contains valid data (is non-empty).
+  bool ReadFromPickle(base::PickleIterator data_iterator);
 #endif
 
   // Returns the nodes represented by this DragData. If this DragData was
@@ -185,7 +199,7 @@ struct BookmarkNodeData {
   // Clears the data.
   void Clear();
 
-  // Sets |profile_path_|. This is useful for the constructors/readers that
+  // Sets `profile_path_`. This is useful for the constructors/readers that
   // don't set it. This should only be called if the profile path is not
   // already set.
   void SetOriginatingProfilePath(const base::FilePath& profile_path);

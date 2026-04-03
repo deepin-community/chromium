@@ -12,9 +12,11 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/enterprise/connectors/analysis/request_handler_base.h"
-#include "chrome/browser/safe_browsing/cloud_content_scanning/binary_upload_service.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/file_opening_job.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_request.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_service.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/common.h"
 #include "components/file_access/scoped_file_access.h"
 
 namespace safe_browsing {
@@ -56,17 +58,14 @@ class FilesRequestHandler : public RequestHandlerBase {
   // A factory function used in tests to create fake FilesRequestHandler
   // instances.
   using Factory = base::RepeatingCallback<std::unique_ptr<FilesRequestHandler>(
-      safe_browsing::BinaryUploadService* upload_service,
+      ContentAnalysisInfo* content_analysis_info,
+      BinaryUploadService* upload_service,
       Profile* profile,
-      const enterprise_connectors::AnalysisSettings& analysis_settings,
       GURL url,
       const std::string& source,
       const std::string& destination,
-      const std::string& user_action_id,
-      const std::string& tab_title,
       const std::string& content_transfer_method,
-      safe_browsing::DeepScanAccessPoint access_point,
-      ContentAnalysisRequest::Reason reason,
+      DeepScanAccessPoint access_point,
       const std::vector<base::FilePath>& paths,
       CompletionCallback callback)>;
 
@@ -76,17 +75,14 @@ class FilesRequestHandler : public RequestHandlerBase {
   // The calling side is responsible that `analysis_settings` is not destroyed
   // before scanning is completed.
   static std::unique_ptr<FilesRequestHandler> Create(
-      safe_browsing::BinaryUploadService* upload_service,
+      ContentAnalysisInfo* content_analysis_info,
+      BinaryUploadService* upload_service,
       Profile* profile,
-      const enterprise_connectors::AnalysisSettings& analysis_settings,
       GURL url,
       const std::string& source,
       const std::string& destination,
-      const std::string& user_action_id,
-      const std::string& tab_title,
       const std::string& content_transfer_method,
-      safe_browsing::DeepScanAccessPoint access_point,
-      ContentAnalysisRequest::Reason reason,
+      DeepScanAccessPoint access_point,
       const std::vector<base::FilePath>& paths,
       CompletionCallback callback);
 
@@ -100,26 +96,22 @@ class FilesRequestHandler : public RequestHandlerBase {
       std::optional<std::u16string> user_justification) override;
 
  protected:
-  FilesRequestHandler(
-      safe_browsing::BinaryUploadService* upload_service,
-      Profile* profile,
-      const enterprise_connectors::AnalysisSettings& analysis_settings,
-      GURL url,
-      const std::string& source,
-      const std::string& destination,
-      const std::string& user_action_id,
-      const std::string& tab_title,
-      const std::string& content_transfer_method,
-      safe_browsing::DeepScanAccessPoint access_point,
-      ContentAnalysisRequest::Reason reason,
-      const std::vector<base::FilePath>& paths,
-      CompletionCallback callback);
+  FilesRequestHandler(ContentAnalysisInfo* content_analysis_info,
+                      BinaryUploadService* upload_service,
+                      Profile* profile,
+                      GURL url,
+                      const std::string& source,
+                      const std::string& destination,
+                      const std::string& content_transfer_method,
+                      DeepScanAccessPoint access_point,
+                      const std::vector<base::FilePath>& paths,
+                      CompletionCallback callback);
 
   bool UploadDataImpl() override;
 
   void FileRequestCallbackForTesting(
       base::FilePath path,
-      safe_browsing::BinaryUploadService::Result result,
+      ScanRequestUploadResult result,
       enterprise_connectors::ContentAnalysisResponse response);
 
  private:
@@ -129,36 +121,33 @@ class FilesRequestHandler : public RequestHandlerBase {
 
   // Called when the file info for `path` has been fetched. Also begins the
   // upload process.
-  void OnGotFileInfo(
-      std::unique_ptr<safe_browsing::BinaryUploadService::Request> request,
-      size_t index,
-      safe_browsing::BinaryUploadService::Result result,
-      safe_browsing::BinaryUploadService::Request::Data data);
+  void OnGotFileInfo(std::unique_ptr<BinaryUploadRequest> request,
+                     size_t index,
+                     ScanRequestUploadResult result,
+                     BinaryUploadRequest::Data data);
 
   // Called when a request is finished early without uploading it.
   // This is, e.g., called for encrypted files and responsible for posting the
   // required data to safe-browsing ui.
-  void FinishRequestEarly(
-      std::unique_ptr<safe_browsing::BinaryUploadService::Request> request,
-      safe_browsing::BinaryUploadService::Result result);
+  void FinishRequestEarly(std::unique_ptr<BinaryUploadRequest> request,
+                          ScanRequestUploadResult result);
 
   // Upload the request for deep scanning using the binary upload service.
   // These methods exist so they can be overridden in tests as needed.
   // The `result` argument exists as an optimization to finish the request early
   // when the result is known in advance to avoid using the upload service.
   virtual void UploadFileForDeepScanning(
-      safe_browsing::BinaryUploadService::Result result,
+      ScanRequestUploadResult result,
       const base::FilePath& path,
-      std::unique_ptr<safe_browsing::BinaryUploadService::Request> request);
+      std::unique_ptr<BinaryUploadRequest> request);
 
   void FileRequestCallback(
       size_t index,
-      safe_browsing::BinaryUploadService::Result result,
+      ScanRequestUploadResult result,
       enterprise_connectors::ContentAnalysisResponse response);
 
-  void FileRequestStartCallback(
-      size_t index,
-      const safe_browsing::BinaryUploadService::Request& request);
+  void FileRequestStartCallback(size_t index,
+                                const BinaryUploadRequest& request);
 
   void MaybeCompleteScanRequest();
 
@@ -188,6 +177,8 @@ class FilesRequestHandler : public RequestHandlerBase {
   // more data should be upload for `this` at that point.
   bool throttled_ = false;
 
+  std::string source_;
+  std::string destination_;
   std::string content_transfer_method_;
 
   CompletionCallback callback_;

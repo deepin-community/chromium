@@ -40,45 +40,24 @@ struct OverloadsResolutionResult {
 
 ElementsKind GetTypedArrayElementsKind(CTypeInfo::Type type);
 
-OverloadsResolutionResult ResolveOverloads(
-    const FastApiCallFunctionVector& candidates, unsigned int arg_count);
-
 bool CanOptimizeFastSignature(const CFunctionInfo* c_signature);
 
-using GetParameter = std::function<Node*(int, OverloadsResolutionResult&,
-                                         GraphAssemblerLabel<0>*)>;
+using GetParameter = std::function<Node*(int, GraphAssemblerLabel<0>*)>;
 using ConvertReturnValue = std::function<Node*(const CFunctionInfo*, Node*)>;
 using InitializeOptions = std::function<void(Node*)>;
 using GenerateSlowApiCall = std::function<Node*()>;
 
-Node* BuildFastApiCall(Isolate* isolate, Graph* graph,
+Node* BuildFastApiCall(Isolate* isolate, TFGraph* graph,
                        GraphAssembler* graph_assembler,
-                       const FastApiCallFunctionVector& c_functions,
-                       const CFunctionInfo* c_signature, Node* data_argument,
+                       FastApiCallFunction c_function, Node* data_argument,
                        const GetParameter& get_parameter,
                        const ConvertReturnValue& convert_return_value,
                        const InitializeOptions& initialize_options,
                        const GenerateSlowApiCall& generate_slow_api_call);
 
-inline Node* AdaptLocalArgument(GraphAssembler* graph_assembler,
-                                Node* argument) {
-#define __ graph_assembler->
-
-#ifdef V8_ENABLE_DIRECT_LOCAL
-  // With direct locals, the argument can be passed directly.
-  return __ BitcastTaggedToWord(argument);
-#else
-  // With indirect locals, the argument has to be stored on the stack and the
-  // slot address is passed.
-  Node* stack_slot = __ StackSlot(sizeof(uintptr_t), alignof(uintptr_t), true);
-  __ Store(StoreRepresentation(MachineType::PointerRepresentation(),
-                               kNoWriteBarrier),
-           stack_slot, 0, __ BitcastTaggedToWord(argument));
-  return stack_slot;
-#endif
-
-#undef __
-}
+FastApiCallFunction GetFastApiCallTarget(
+    JSHeapBroker* broker, FunctionTemplateInfoRef function_template_info,
+    size_t arg_count);
 
 }  // namespace fast_api_call
 }  // namespace compiler

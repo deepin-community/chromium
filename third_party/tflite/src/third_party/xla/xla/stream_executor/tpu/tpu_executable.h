@@ -22,22 +22,22 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/service/executable.h"
-#include "xla/service/hlo_execution_profile.h"
 #include "xla/service/service_executable_run_options.h"
-#include "xla/status.h"
-#include "xla/statusor.h"
-#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/tpu/c_api_decl.h"
 #include "xla/stream_executor/tpu/tpu_executable_interface.h"
 #include "xla/stream_executor/tpu/tpu_executor_c_api.h"
 
-namespace xla {
+namespace xla::legacy {
 
-class TpuExecutable : public xla::TpuExecutableInterface {
+class TpuExecutable : public TpuExecutableInterface {
  public:
   TpuExecutable(SE_Executable* se_executable,
                 std::shared_ptr<HloModule> hlo_module)
@@ -46,26 +46,25 @@ class TpuExecutable : public xla::TpuExecutableInterface {
 
   ~TpuExecutable() override;
 
-  StatusOr<ExecutionOutput> ExecuteAsyncOnStream(
+  absl::StatusOr<ExecutionOutput> ExecuteAsyncOnStream(
       const ServiceExecutableRunOptions* run_options,
-      std::vector<ExecutionInput> arguments,
-      HloExecutionProfile* hlo_execution_profile) override;
+      std::vector<ExecutionInput> arguments) override;
 
   absl::string_view fingerprint() const override;
 
   // The serialization is not guaranteed to be stable over time and has no
   // compatibility guarantees (i.e. this is not a suitable long-term storage
   // format).
-  StatusOr<std::string> Serialize() const;
-  static StatusOr<std::unique_ptr<TpuExecutable>> Deserialize(
+  absl::StatusOr<std::string> Serialize() const;
+  static absl::StatusOr<std::unique_ptr<TpuExecutable>> Deserialize(
       absl::string_view serialized);
 
  private:
-  Status LoadProgramAndEnqueueToStream(
+  absl::Status LoadProgramAndEnqueueToStream(
       const ServiceExecutableRunOptions& run_options,
-      absl::Span<const stream_executor::DeviceMemoryBase> arguments,
-      stream_executor::DeviceMemoryBase result,
-      const std::vector<stream_executor::DeviceMemoryBase>&
+      absl::Span<const stream_executor::DeviceAddressBase> arguments,
+      stream_executor::DeviceAddressBase result,
+      const std::vector<stream_executor::DeviceAddressBase>&
           cross_program_prefetch_addrs,
       const std::vector<uint32_t>& cross_program_prefetch_offsets) override {
     LOG(FATAL) << "LoadProgramAndEnqueueToStream unimplemented";
@@ -74,6 +73,6 @@ class TpuExecutable : public xla::TpuExecutableInterface {
   SE_Executable* se_executable_;
 };
 
-}  // namespace xla
+}  // namespace xla::legacy
 
 #endif  // XLA_STREAM_EXECUTOR_TPU_TPU_EXECUTABLE_H_

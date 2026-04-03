@@ -1,12 +1,16 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
+import './Toolbar.js';
+
+import type * as Buttons from '../components/buttons/buttons.js';
 import * as VisualLogging from '../visual_logging/visual_logging.js';
 
 import * as ARIAUtils from './ARIAUtils.js';
-import reportViewStyles from './reportView.css.legacy.js';
-import {Toolbar} from './Toolbar.js';
+import reportViewStyles from './reportView.css.js';
+import type {Toolbar} from './Toolbar.js';
 import {Tooltip} from './Tooltip.js';
 import {VBox} from './Widget.js';
 
@@ -22,7 +26,7 @@ export class ReportView extends VBox {
   private subtitleElement?: HTMLElement;
   private urlElement?: HTMLElement;
   constructor(title?: string) {
-    super(true);
+    super({useShadowDom: true});
     this.registerRequiredCSS(reportViewStyles);
 
     this.contentBox = this.contentElement.createChild('div', 'report-content-box');
@@ -51,7 +55,7 @@ export class ReportView extends VBox {
   }
 
   setSubtitle(subtitle: string): void {
-    if (this.subtitleElement && this.subtitleElement.textContent === subtitle) {
+    if (this.subtitleElement?.textContent === subtitle) {
       return;
     }
     if (!this.subtitleElement) {
@@ -72,20 +76,18 @@ export class ReportView extends VBox {
   }
 
   createToolbar(): Toolbar {
-    const toolbar = new Toolbar('');
-    this.headerElement.appendChild(toolbar.element);
-    return toolbar;
+    return this.headerElement.createChild('devtools-toolbar');
   }
 
-  appendSection(title: string, className?: string): Section {
-    const section = new Section(title, className);
+  appendSection(title: string, className?: string, jslogContext?: string): Section {
+    const section = new Section(title, className, jslogContext);
     section.show(this.sectionList);
     return section;
   }
 
   sortSections(comparator: (arg0: Section, arg1: Section) => number): void {
     const sections = (this.children().slice() as Section[]);
-    const sorted = sections.every((e, i, a) => !i || comparator(a[i - 1], a[i]) <= 0);
+    const sorted = sections.every((_, i, a) => !i || comparator(a[i - 1], a[i]) <= 0);
     if (sorted) {
       return;
     }
@@ -108,21 +110,25 @@ export class ReportView extends VBox {
 
 export class Section extends VBox {
   private readonly headerElement: HTMLElement;
+  private headerButtons: Buttons.Button.Button[] = [];
   private titleElement: HTMLElement;
   private fieldList: HTMLElement;
-  private readonly fieldMap: Map<string, Element>;
-  constructor(title: string, className?: string) {
+  private readonly fieldMap = new Map<string, Element>();
+  constructor(title: string, className?: string, public jslogContext?: string) {
     super();
     this.element.classList.add('report-section');
     if (className) {
       this.element.classList.add(className);
     }
+    if (jslogContext) {
+      this.element.setAttribute('jslog', `${VisualLogging.section(jslogContext)}`);
+    }
+    this.jslogContext = jslogContext;
     this.headerElement = this.element.createChild('div', 'report-section-header');
     this.titleElement = this.headerElement.createChild('div', 'report-section-title');
     this.setTitle(title);
     ARIAUtils.markAsHeading(this.titleElement, 2);
     this.fieldList = this.element.createChild('div', 'vbox');
-    this.fieldMap = new Map();
   }
 
   title(): string {
@@ -156,10 +162,15 @@ export class Section extends VBox {
     ARIAUtils.setLabel(this.element, groupTitle);
   }
 
-  createToolbar(): Toolbar {
-    const toolbar = new Toolbar('');
-    this.headerElement.appendChild(toolbar.element);
-    return toolbar;
+  appendButtonToHeader(button: Buttons.Button.Button): void {
+    this.headerButtons.push(button);
+    this.headerElement.appendChild(button);
+  }
+
+  setHeaderButtonsState(disabled: boolean): void {
+    this.headerButtons.map(button => {
+      button.disabled = disabled;
+    });
   }
 
   appendField(title: string, textValue?: string): HTMLElement {
@@ -176,7 +187,7 @@ export class Section extends VBox {
     return row.lastElementChild as HTMLElement;
   }
 
-  appendFlexedField(title: string, textValue?: string): Element {
+  appendFlexedField(title: string, textValue?: string): HTMLElement {
     const field = this.appendField(title, textValue);
     field.classList.add('report-field-value-is-flexed');
     return field;
@@ -203,11 +214,11 @@ export class Section extends VBox {
   }
 
   appendRow(): HTMLElement {
-    return this.fieldList.createChild('div', 'report-row') as HTMLElement;
+    return this.fieldList.createChild('div', 'report-row');
   }
 
   appendSelectableRow(): HTMLElement {
-    return this.fieldList.createChild('div', 'report-row report-row-selectable') as HTMLElement;
+    return this.fieldList.createChild('div', 'report-row report-row-selectable');
   }
 
   clearContent(): void {
@@ -218,9 +229,5 @@ export class Section extends VBox {
   markFieldListAsGroup(): void {
     ARIAUtils.markAsGroup(this.fieldList);
     ARIAUtils.setLabel(this.fieldList, this.title());
-  }
-
-  setIconMasked(masked: boolean): void {
-    this.element.classList.toggle('show-mask', masked);
   }
 }

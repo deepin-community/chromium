@@ -7,10 +7,13 @@
 #include <iterator>
 
 #include "base/containers/queue.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "mojo/public/cpp/system/data_pipe_drainer.h"
@@ -156,24 +159,18 @@ class MojoURLLoaderClient::BodyBuffer final
   bool active() const { return writable_watcher_.IsWatching(); }
 
   // mojo::DataPipeDrainer::Client
-  void OnDataAvailable(const void* data, size_t num_bytes) override {
+  void OnDataAvailable(base::span<const uint8_t> data) override {
+    std::string_view chars = base::as_string_view(data);
     DCHECK(draining_);
-    SCOPED_CRASH_KEY_NUMBER("OnDataAvailable", "buffered_body_size",
-                            buffered_body_.size());
-    SCOPED_CRASH_KEY_NUMBER("OnDataAvailable", "data_bytes", num_bytes);
-    SCOPED_CRASH_KEY_STRING256("OnDataAvailable", "last_loaded_url",
-                               owner_->last_loaded_url().GetString().Utf8());
-
     if (owner_->freeze_mode() == LoaderFreezeMode::kBufferIncoming) {
-      owner_->DidBufferLoadWhileInBackForwardCache(num_bytes);
+      owner_->DidBufferLoadWhileInBackForwardCache(chars.size());
       if (!owner_->CanContinueBufferingWhileInBackForwardCache()) {
         owner_->EvictFromBackForwardCache(
             mojom::blink::RendererEvictionReason::kNetworkExceedsBufferLimit);
         return;
       }
     }
-    buffered_body_.emplace(static_cast<const char*>(data),
-                           static_cast<const char*>(data) + num_bytes);
+    buffered_body_.push(std::vector<char>(chars.begin(), chars.end()));
     WriteBufferedBody(MOJO_RESULT_OK);
   }
 
@@ -189,12 +186,12 @@ class MojoURLLoaderClient::BodyBuffer final
     while (!buffered_body_.empty()) {
       // Write the chunk at the front of |buffered_body_|.
       const std::vector<char>& current_chunk = buffered_body_.front();
-      DCHECK_LE(offset_in_current_chunk_, current_chunk.size());
-      uint32_t bytes_sent = base::saturated_cast<uint32_t>(
-          current_chunk.size() - offset_in_current_chunk_);
-      MojoResult result =
-          writable_->WriteData(current_chunk.data() + offset_in_current_chunk_,
-                               &bytes_sent, MOJO_WRITE_DATA_FLAG_NONE);
+      base::span<const uint8_t> bytes =
+          base::as_byte_span(current_chunk).subspan(offset_in_current_chunk_);
+
+      size_t actually_written_bytes = 0;
+      MojoResult result = writable_->WriteData(bytes, MOJO_WRITE_DATA_FLAG_NONE,
+                                               actually_written_bytes);
       switch (result) {
         case MOJO_RESULT_OK:
           break;
@@ -208,11 +205,10 @@ class MojoURLLoaderClient::BodyBuffer final
           return;
         default:
           NOTREACHED();
-          return;
       }
       // We've sent |bytes_sent| bytes, update the current offset in the
       // frontmost chunk.
-      offset_in_current_chunk_ += bytes_sent;
+      offset_in_current_chunk_ += actually_written_bytes;
       DCHECK_LE(offset_in_current_chunk_, current_chunk.size());
       if (offset_in_current_chunk_ == current_chunk.size()) {
         // We've finished writing the chunk at the front of the queue, pop it so
@@ -238,14 +234,14 @@ class MojoURLLoaderClient::BodyBuffer final
     owner_->FlushDeferredMessages();
   }
 
-  const raw_ptr<MojoURLLoaderClient, ExperimentalRenderer> owner_;
+  const raw_ptr<MojoURLLoaderClient> owner_;
   mojo::ScopedDataPipeProducerHandle writable_;
   mojo::SimpleWatcher writable_watcher_;
   std::unique_ptr<mojo::DataPipeDrainer> pipe_drainer_;
   // We save the received response body as a queue of chunks so that we can free
   // memory as soon as we finish sending a chunk completely.
   base::queue<std::vector<char>> buffered_body_;
-  uint32_t offset_in_current_chunk_ = 0;
+  size_t offset_in_current_chunk_ = 0;
   bool draining_ = true;
 };
 
@@ -283,8 +279,8 @@ void MojoURLLoaderClient::Freeze(LoaderFreezeMode mode) {
   }
   if (mode == LoaderFreezeMode::kNone) {
     task_runner_->PostTask(
-        FROM_HERE, WTF::BindOnce(&MojoURLLoaderClient::FlushDeferredMessages,
-                                 weak_factory_.GetWeakPtr()));
+        FROM_HERE, blink::BindOnce(&MojoURLLoaderClient::FlushDeferredMessages,
+                                   weak_factory_.GetWeakPtr()));
   } else if (mode == LoaderFreezeMode::kBufferIncoming &&
              !has_received_complete_ &&
              !back_forward_cache_eviction_timer_.IsRunning()) {
@@ -293,7 +289,7 @@ void MojoURLLoaderClient::Freeze(LoaderFreezeMode mode) {
     back_forward_cache_eviction_timer_.SetTaskRunner(task_runner_);
     back_forward_cache_eviction_timer_.Start(
         FROM_HERE, back_forward_cache_timeout_,
-        WTF::BindOnce(
+        blink::BindOnce(
             &MojoURLLoaderClient::EvictFromBackForwardCacheDueToTimeout,
             weak_factory_.GetWeakPtr()));
   }
@@ -308,6 +304,10 @@ void MojoURLLoaderClient::OnReceiveResponse(
     std::optional<mojo_base::BigBuffer> cached_metadata) {
   TRACE_EVENT1("loading", "MojoURLLoaderClient::OnReceiveResponse", "url",
                last_loaded_url_.GetString().Utf8());
+
+  // OnReceiveResponse() can be called at most once. This check is added to
+  // debug crbug.com/463388771.
+  CHECK(!has_received_response_head_);
 
   has_received_response_head_ = true;
   has_received_response_body_ = !!body;
@@ -395,9 +395,11 @@ void MojoURLLoaderClient::OnReceiveRedirect(
     OnComplete(network::URLLoaderCompletionStatus(net::ERR_ABORTED));
     return;
   }
+
   if (!bypass_redirect_checks_ &&
       !Platform::Current()->IsRedirectSafe(GURL(last_loaded_url_),
-                                           redirect_info.new_url)) {
+                                           redirect_info.new_url,
+                                           redirect_info.original_initiator)) {
     OnComplete(network::URLLoaderCompletionStatus(net::ERR_UNSAFE_REDIRECT));
     return;
   }
@@ -486,7 +488,7 @@ void MojoURLLoaderClient::FlushDeferredMessages() {
   if (freeze_mode_ != LoaderFreezeMode::kNone) {
     return;
   }
-  WebVector<std::unique_ptr<DeferredMessage>> messages;
+  Vector<std::unique_ptr<DeferredMessage>> messages;
   messages.swap(deferred_messages_);
   bool has_completion_message = false;
   base::WeakPtr<MojoURLLoaderClient> weak_this = weak_factory_.GetWeakPtr();

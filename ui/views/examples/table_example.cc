@@ -4,6 +4,7 @@
 
 #include "ui/views/examples/table_example.h"
 
+#include <array>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -97,15 +98,18 @@ void TableExample::CreateExampleView(View* container) {
               .SetProperty(kFlexBehaviorKey, full_flex),
           Builder<FlexLayoutView>()
               .SetOrientation(LayoutOrientation::kHorizontal)
-              .AddChildren(
-                  make_checkbox(u"Fruit column visible", 0, &table_,
-                                &column1_visible_checkbox_, full_flex),
-                  make_checkbox(u"Color column visible", 1, &table_,
-                                &column2_visible_checkbox_, full_flex),
-                  make_checkbox(u"Origin column visible", 2, &table_,
-                                &column3_visible_checkbox_, full_flex),
-                  make_checkbox(u"Price column visible", 3, &table_,
-                                &column4_visible_checkbox_, full_flex)))
+              .AddChildren(make_checkbox(u"Fruit column visible", 0, &table_,
+                                         &column1_visible_checkbox_, full_flex),
+                           make_checkbox(u"Color column visible", 1, &table_,
+                                         &column2_visible_checkbox_, full_flex),
+                           make_checkbox(u"Origin column visible", 2, &table_,
+                                         &column3_visible_checkbox_, full_flex),
+                           make_checkbox(u"Price column visible", 3, &table_,
+                                         &column4_visible_checkbox_, full_flex))
+              .SetProperty(views::kFlexBehaviorKey,
+                           FlexSpecification(MinimumFlexSizeRule::kScaleToZero,
+                                             MaximumFlexSizeRule::kUnbounded)
+                               .WithWeight(1)))
       .BuildChildren();
 }
 
@@ -114,13 +118,13 @@ size_t TableExample::RowCount() {
 }
 
 std::u16string TableExample::GetText(size_t row, int column_id) {
-  const char* const cells[5][4] = {
+  constexpr auto cells = std::to_array<std::array<const char* const, 4>>({
       {"Orange", "Orange", "South America", "$5"},
       {"Apple", "Green", "Canada", "$3"},
       {"Blueberries", "Blue", "Mexico", "$10.30"},
       {"Strawberries", "Red", "California", "$7"},
       {"Cantaloupe", "Orange", "South America", "$5"},
-  };
+  });
   return ASCIIToUTF16(cells[row % 5][column_id]);
 }
 
@@ -131,12 +135,12 @@ ui::ImageModel TableExample::GetIcon(size_t row) {
 }
 
 std::u16string TableExample::GetTooltip(size_t row) {
-  const char* const tooltips[5] = {
-      "Orange - Orange you glad I didn't say banana?",
-      "Apple - An apple a day keeps the doctor away",
-      "Blueberries - Bet you can't eat just one",
-      "Strawberries - Always better when homegrown",
-      "Cantaloupe - So nice when perfectly ripe"};
+  constexpr auto tooltips =
+      std::to_array({"Orange - Orange you glad I didn't say banana?",
+                     "Apple - An apple a day keeps the doctor away",
+                     "Blueberries - Bet you can't eat just one",
+                     "Strawberries - Always better when homegrown",
+                     "Cantaloupe - So nice when perfectly ripe"});
 
   return ASCIIToUTF16(tooltips[row % 5]);
 }
@@ -157,11 +161,11 @@ void TableExample::GetGroupRange(size_t model_index, GroupRange* range) {
 }
 
 void TableExample::OnSelectionChanged() {
-  PrintStatus("Selected: %s", SelectedColumnName().c_str());
+  PrintStatus("Selected: " + SelectedColumnName());
 }
 
 void TableExample::OnDoubleClick() {
-  PrintStatus("Double Click: %s", SelectedColumnName().c_str());
+  PrintStatus("Double Click: " + SelectedColumnName());
 }
 
 void TableExample::OnMiddleClick() {}

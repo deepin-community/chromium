@@ -127,7 +127,6 @@ UserTypeByDeviceTypeMetricsProvider::GetUserSegment(Profile* profile) {
       return UserSegment::kEnterprise;
   }
   NOTREACHED();
-  return UserSegment::kUnmanaged;
 }
 
 // static

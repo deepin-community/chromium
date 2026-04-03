@@ -2,16 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/memory/raw_ptr.h"
-#include "sandbox/win/src/process_mitigations.h"
-
 #include <windows.h>
 
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
+#include "base/strings/strcat.h"
 #include "base/strings/strcat_win.h"
 #include "base/strings/string_number_conversions_win.h"
 #include "base/win/windows_version.h"
@@ -365,7 +365,7 @@ SBOX_TESTS_COMMAND int TestWin81DynamicCode(int argc, wchar_t** argv) {
   // [OPTIONAL] Arg2
   wchar_t* path = nullptr;
   if (argc > 1)
-    path = argv[1];
+    path = UNSAFE_TODO(argv[1]);
 
   return DynamicCodeTest(static_cast<DynCodeAPI>(test), path);
 }
@@ -377,23 +377,25 @@ SBOX_TESTS_COMMAND int TestWin81DynamicCode(int argc, wchar_t** argv) {
 // - [OPTIONAL] If Arg2 is MAPVIEWFILE, Arg3 is a file path to map.
 SBOX_TESTS_COMMAND int TestWin10DynamicCodeWithOptOut(int argc,
                                                       wchar_t** argv) {
-  if (argc < 2 || !argv[0] || !argv[1])
+  if (argc < 2 || !argv[0] || !UNSAFE_TODO(argv[1])) {
     return SBOX_TEST_INVALID_PARAMETER;
+  }
 
   // Arg1
   bool opt_out = false;
-  if (::wcsicmp(argv[0], L"true") == 0)
+  if (UNSAFE_TODO(::wcsicmp(argv[0], L"true")) == 0) {
     opt_out = true;
+  }
 
   // Arg2
-  int test = ::_wtoi(argv[1]);
+  int test = ::_wtoi(UNSAFE_TODO(argv[1]));
   if (test <= 0 || test >= NOTSUPPORTED)
     return SBOX_TEST_INVALID_PARAMETER;
 
   // [OPTIONAL] Arg3
   wchar_t* path = nullptr;
   if (argc > 2)
-    path = argv[2];
+    path = UNSAFE_TODO(argv[2]);
 
   // Spawn new thread and wait for it to finish!
   DynamicCodeOptOutThread opt_out_thread(opt_out, static_cast<DynCodeAPI>(test),
@@ -414,7 +416,7 @@ SBOX_TESTS_COMMAND int TestWin10DynamicCodeWithOptOut(int argc,
 // This test validates that setting the MITIGATION_DYNAMIC_CODE_DISABLE
 // mitigation enables the setting on a process.
 TEST(ProcessMitigationsTest, CheckWin81DynamicCodePolicySuccess) {
-// TODO(crbug.com/805414): Windows ASan hotpatching requires dynamic code.
+// TODO(crbug.com/40559699): Windows ASan hotpatching requires dynamic code.
 #if !defined(ADDRESS_SANITIZER)
   std::wstring test_command = L"CheckPolicy ";
   test_command += std::to_wstring(TESTPOLICY_DYNAMICCODE);
@@ -483,7 +485,7 @@ TEST(ProcessMitigationsTest, CheckWin10DynamicCodeOptOutPolicySuccess) {
   if (base::win::GetVersion() < base::win::Version::WIN10_RS1)
     return;
 
-// TODO(crbug.com/805414): Windows ASan hotpatching requires dynamic code.
+// TODO(crbug.com/40559699): Windows ASan hotpatching requires dynamic code.
 #if !defined(ADDRESS_SANITIZER)
   std::wstring test_command = L"CheckPolicy ";
   test_command += std::to_wstring(TESTPOLICY_DYNAMICCODEOPTOUT);

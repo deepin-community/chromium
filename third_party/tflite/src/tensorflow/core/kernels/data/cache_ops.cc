@@ -14,6 +14,12 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/kernels/data/cache_ops.h"
 
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "tensorflow/core/data/dataset_utils.h"
 #include "tensorflow/core/framework/dataset.h"
 #include "tensorflow/core/framework/partial_tensor_shape.h"
@@ -31,7 +37,7 @@ constexpr char kMemoryCache[] = "MemoryCache";
 
 }  // namespace
 
-string MemoryCacheManager::DebugString() const { return kMemoryCache; }
+std::string MemoryCacheManager::DebugString() const { return kMemoryCache; }
 
 void MemoryCache::Complete(std::vector<std::vector<Tensor>>&& cache) {
   mutex_lock l(mu_);
@@ -74,9 +80,9 @@ AnonymousMemoryCacheHandleOp::AnonymousMemoryCacheHandleOp(
                                               /* ref_counting */ true,
                                               /* return_deleter */ true) {}
 
-string AnonymousMemoryCacheHandleOp::name() { return kMemoryCache; }
+std::string AnonymousMemoryCacheHandleOp::name() { return kMemoryCache; }
 
-Status AnonymousMemoryCacheHandleOp::CreateResource(
+absl::Status AnonymousMemoryCacheHandleOp::CreateResource(
     OpKernelContext* ctx, std::unique_ptr<FunctionLibraryDefinition> flib_def,
     std::unique_ptr<ProcessFunctionLibraryRuntime> pflr,
     FunctionLibraryRuntime* lib, MemoryCacheManager** manager) {
@@ -87,8 +93,8 @@ Status AnonymousMemoryCacheHandleOp::CreateResource(
 void DeleteMemoryCacheOp::Compute(OpKernelContext* ctx) {
   const ResourceHandle& handle = ctx->input(0).flat<ResourceHandle>()(0);
   // The resource might have been already deleted by the dataset.
-  Status s = ctx->resource_manager()->Delete(handle);
-  if (!errors::IsNotFound(s)) {
+  absl::Status s = ctx->resource_manager()->Delete(handle);
+  if (!absl::IsNotFound(s)) {
     OP_REQUIRES_OK(ctx, s);
   }
 }

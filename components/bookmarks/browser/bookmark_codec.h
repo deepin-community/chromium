@@ -7,14 +7,16 @@
 
 #include <stdint.h>
 
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
 
-#include "base/hash/md5.h"
 #include "base/uuid.h"
 #include "base/values.h"
 #include "components/bookmarks/browser/bookmark_node.h"
+#include "crypto/hash.h"
+#include "crypto/obsolete/md5.h"
 
 namespace bookmarks {
 
@@ -35,11 +37,13 @@ class BookmarkCodec {
   ~BookmarkCodec();
 
   // Encodes the bookmark bar and other folders returning the JSON value.
-  base::Value::Dict Encode(
-      const BookmarkNode* bookmark_bar_node,
-      const BookmarkNode* other_folder_node,
-      const BookmarkNode* mobile_folder_node,
-      std::string sync_metadata_str);
+  // Either none or all permanent nodes must be null. The null case it useful to
+  // encode sync metadata only (which is useful in error cases, when a user may
+  // contain too many bookmarks in sync, server-side).
+  base::DictValue Encode(const BookmarkNode* bookmark_bar_node,
+                         const BookmarkNode* other_folder_node,
+                         const BookmarkNode* mobile_folder_node,
+                         std::string sync_metadata_str);
 
   // Decodes the previously encoded value to the specified nodes as well as
   // setting `max_node_id` to the greatest node id. Returns true on success,
@@ -52,7 +56,7 @@ class BookmarkCodec {
   // these ids. If such collisions exist, ids will be reassigned as if the file
   // itself contained id collisions, noticeable via `ids_reassigned()` returning
   // true.
-  bool Decode(const base::Value::Dict& value,
+  bool Decode(const base::DictValue& value,
               std::set<int64_t> already_assigned_ids,
               BookmarkNode* bb_node,
               BookmarkNode* other_folder_node,
@@ -61,19 +65,27 @@ class BookmarkCodec {
               std::string* sync_metadata_str);
 
   // The required-recovery bit represents whether the on-disk state was corrupt
-  // and had to be recovered. Scenarios include ID or UUID collisions and
-  // checksum mismatches.
+  // and had to be recovered. Scenarios include ID or UUID collisions.
   bool required_recovery() const;
 
   // Returns whether the IDs were reassigned during decoding. Always returns
   // false after encoding.
   bool ids_reassigned() const { return ids_reassigned_; }
 
+  // If IDs are reassigned during decoding, it returns the mapping from old
+  // (i.e. on-disk) ID to the newly-assigned ones.
+  std::multimap<int64_t, int64_t> release_reassigned_ids_per_old_id() {
+    return std::move(reassigned_ids_per_old_id_);
+  }
+
   // Test-only APIs.
   const std::string& ComputedChecksumForTest() const {
     return computed_checksum_;
   }
-  const std::string& StoredChecksumForTest() const { return stored_checksum_; }
+
+  const std::string& ComputedSha256ChecksumForTest() const {
+    return computed_sha256_checksum_;
+  }
 
   std::set<int64_t> release_assigned_ids() { return std::move(ids_); }
 
@@ -84,6 +96,7 @@ class BookmarkCodec {
   static const char kMobileBookmarkFolderNameKey[];
   static const char kVersionKey[];
   static const char kChecksumKey[];
+  static const char kChecksumSHA256Key[];
   static const char kIdKey[];
   static const char kTypeKey[];
   static const char kNameKey[];
@@ -104,48 +117,43 @@ class BookmarkCodec {
 
  private:
   // Encodes node and all its children into a Value object and returns it.
-  base::Value::Dict EncodeNode(const BookmarkNode* node);
+  base::DictValue EncodeNode(const BookmarkNode* node);
 
   // Encodes the given meta info into a Value object and returns it.
-  base::Value::Dict EncodeMetaInfo(
+  base::DictValue EncodeMetaInfo(
       const BookmarkNode::MetaInfoMap& meta_info_map);
 
   // Helper to perform decoding.
   bool DecodeHelper(BookmarkNode* bb_node,
                     BookmarkNode* other_folder_node,
                     BookmarkNode* mobile_folder_node,
-                    const base::Value::Dict& value,
+                    const base::DictValue& value,
                     std::string* sync_metadata_str);
 
-  // Decodes the children of the specified node. Returns true on success.
-  bool DecodeChildren(const base::Value::List& child_value_list,
+  // Decodes the children of the specified node.
+  void DecodeChildren(const base::ListValue& child_value_list,
                       BookmarkNode* parent);
 
-  // Reassigns bookmark IDs for all nodes.
-  void ReassignIDs(BookmarkNode* bb_node,
-                   BookmarkNode* other_node,
-                   BookmarkNode* mobile_node);
-
-  // Helper to recursively reassign IDs.
-  void ReassignIDsHelper(BookmarkNode* node);
+  // Reassigns bookmark IDs for those that require doing so (if any).
+  void ReassignIDsIfRequired();
 
   // Decodes the supplied node from the supplied value, which needs to be a
   // dictionary value. Child nodes are created appropriately by way of
   // DecodeChildren. If node is NULL a new node is created and added to parent
   // (parent must then be non-NULL), otherwise node is used.
-  bool DecodeNode(const base::Value::Dict& value,
+  void DecodeNode(const base::DictValue& value,
                   BookmarkNode* parent,
                   BookmarkNode* node);
 
   // Decodes the meta info from the supplied value. meta_info_map must not be
   // nullptr.
-  bool DecodeMetaInfo(const base::Value::Dict& value,
+  bool DecodeMetaInfo(const base::DictValue& value,
                       BookmarkNode::MetaInfoMap* meta_info_map);
 
   // Decodes the meta info from the supplied sub-node dictionary. The values
   // found will be inserted in meta_info_map with the given prefix added to the
   // start of their keys.
-  void DecodeMetaInfoHelper(const base::Value::Dict& dict,
+  void DecodeMetaInfoHelper(const base::DictValue& dict,
                             const std::string& prefix,
                             BookmarkNode::MetaInfoMap* meta_info_map);
 
@@ -172,12 +180,15 @@ class BookmarkCodec {
   // Whether or not IDs were reassigned by the codec.
   bool ids_reassigned_{false};
 
+  // Nodes with an invalid ID, which require reassignment.
+  std::vector<raw_ptr<BookmarkNode>> nodes_requiring_id_reassignment_;
+
+  // Mapping from old ID to new IDs if IDs were reassigned. Note that old IDs
+  // may contain duplicates, and therefore the mapping could be ambiguous.
+  std::multimap<int64_t, int64_t> reassigned_ids_per_old_id_;
+
   // Whether or not UUIDs were reassigned by the codec.
   bool uuids_reassigned_{false};
-
-  // Whether or not IDs are valid. This is initially true, but set to false
-  // if an id is missing or not unique.
-  bool ids_valid_{true};
 
   // Contains the id of each of the nodes found in the file. Used to determine
   // if we have duplicates.
@@ -188,17 +199,17 @@ class BookmarkCodec {
   std::set<base::Uuid> uuids_;
 
   // MD5 context used to compute MD5 hash of all bookmark data.
-  base::MD5Context md5_context_;
+  crypto::obsolete::Md5 md5_hasher_;
 
-  // Checksum computed during last encoding/decoding call.
+  // SHA context used to compute SHA256 hash of all bookmark data.
+  // Intended to replace MD5 hasher (crbug.com/426243026)
+  crypto::hash::Hasher sha256_hasher_{crypto::hash::kSha256};
+
+  // MD5 checksum computed during last encoding call.
   std::string computed_checksum_;
 
-  // The checksum that's stored in the file. After a call to Encode, the
-  // computed and stored checksums are the same since the computed checksum is
-  // stored to the file. After a call to decode, the computed checksum can
-  // differ from the stored checksum if the file contents were changed by the
-  // user.
-  std::string stored_checksum_;
+  // SHA256 checksum computed during last encoding call.
+  std::string computed_sha256_checksum_;
 
   // Maximum ID assigned when decoding data.
   int64_t maximum_id_{0};

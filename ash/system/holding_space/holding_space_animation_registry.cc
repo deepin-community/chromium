@@ -4,6 +4,7 @@
 
 #include "ash/system/holding_space/holding_space_animation_registry.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <set>
@@ -17,11 +18,9 @@
 #include "ash/shell.h"
 #include "ash/system/progress_indicator/progress_icon_animation.h"
 #include "ash/system/progress_indicator/progress_ring_animation.h"
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
-#include "base/ranges/algorithm.h"
 #include "base/task/sequenced_task_runner.h"
 
 namespace ash {
@@ -85,7 +84,7 @@ class HoldingSpaceAnimationRegistry::ProgressIndicatorAnimationDelegate
       const std::vector<const HoldingSpaceItem*>& items) override {
     // The removal of `items` can be safely ignored if none were in progress.
     const bool removed_in_progress_item =
-        base::ranges::any_of(items, [](const HoldingSpaceItem* item) {
+        std::ranges::any_of(items, [](const HoldingSpaceItem* item) {
           return item->IsInitialized() && !item->progress().IsComplete();
         });
     if (removed_in_progress_item)
@@ -177,10 +176,11 @@ class HoldingSpaceAnimationRegistry::ProgressIndicatorAnimationDelegate
     // longer present in the attached `model_`.
     registry_->EraseAllAnimationsForKeyIf([&](AnimationKey key) {
       return key != controller_key &&
-             !base::Contains(model_->items(), key,
-                             [](const std::unique_ptr<HoldingSpaceItem>& item) {
-                               return AsAnimationKey(item.get());
-                             });
+             !std::ranges::contains(
+                 model_->items(), key,
+                 [](const std::unique_ptr<HoldingSpaceItem>& item) {
+                   return AsAnimationKey(item.get());
+                 });
     });
 
     HoldingSpaceProgress last_cumulative_progress = cumulative_progress_;
@@ -288,18 +288,17 @@ class HoldingSpaceAnimationRegistry::ProgressIndicatorAnimationDelegate
         FROM_HERE,
         base::BindOnce(
             [](const base::WeakPtr<ProgressIndicatorAnimationDelegate>& self,
-               AnimationKey key, ProgressRingAnimation* animation) {
+               AnimationKey key,
+               MayBeDangling<ProgressRingAnimation> animation) {
               if (!self) {
                 return;
               }
               auto* registry = self->registry_.get();
-              if (registry->GetProgressRingAnimationForKey(key) == animation)
+              if (registry->GetProgressRingAnimationForKey(key) == animation) {
                 registry->SetProgressRingAnimationForKey(key, nullptr);
+              }
             },
-            weak_factory_.GetWeakPtr(), key,
-            // This is safe. `animation` is owned by the registry and has
-            // at least the same lifetime as the delegate.
-            animation));
+            weak_factory_.GetWeakPtr(), key, base::UnsafeDangling(animation)));
   }
 
   const raw_ptr<ProgressIndicatorAnimationRegistry, LeakedDanglingUntriaged>

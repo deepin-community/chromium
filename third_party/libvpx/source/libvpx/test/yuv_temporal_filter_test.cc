@@ -8,12 +8,13 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include "./vp9_rtcd.h"
 #include "test/acm_random.h"
 #include "test/buffer.h"
 #include "test/register_state_check.h"
+#include "vpx_config.h"
 #include "vpx_ports/vpx_timer.h"
 
 namespace {
@@ -21,7 +22,7 @@ namespace {
 using ::libvpx_test::ACMRandom;
 using ::libvpx_test::Buffer;
 
-typedef void (*YUVTemporalFilterFunc)(
+using YUVTemporalFilterFunc = void (*)(
     const uint8_t *y_src, int y_src_stride, const uint8_t *y_pre,
     int y_pre_stride, const uint8_t *u_src, const uint8_t *v_src,
     int uv_src_stride, const uint8_t *u_pre, const uint8_t *v_pre,

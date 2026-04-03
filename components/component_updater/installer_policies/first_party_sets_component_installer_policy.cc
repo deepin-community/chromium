@@ -5,6 +5,7 @@
 #include "components/component_updater/installer_policies/first_party_sets_component_installer_policy.h"
 
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/files/file.h"
@@ -12,6 +13,7 @@
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/task/thread_pool.h"
@@ -20,11 +22,10 @@
 #include "components/component_updater/component_updater_paths.h"
 #include "net/cookies/cookie_util.h"
 
-using component_updater::ComponentUpdateService;
 
 namespace {
 
-using SetsReadyOnceCallback = component_updater::
+using SetsReadyOnceCallback = ::component_updater::
     FirstPartySetsComponentInstallerPolicy::SetsReadyOnceCallback;
 
 // The SHA256 of the SubjectPublicKeyInfo used to sign the component.
@@ -120,7 +121,7 @@ bool FirstPartySetsComponentInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 FirstPartySetsComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -135,7 +136,7 @@ base::FilePath FirstPartySetsComponentInstallerPolicy::GetInstalledPath(
 void FirstPartySetsComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   if (install_dir.empty() || GetConfigPathInstance().has_value()) {
     return;
   }
@@ -151,7 +152,7 @@ void FirstPartySetsComponentInstallerPolicy::ComponentReady(
 
 // Called during startup and installation before ComponentReady().
 bool FirstPartySetsComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   // No need to actually validate the sets here, since we'll do the validation
   // in the Network Service.
@@ -166,9 +167,8 @@ base::FilePath FirstPartySetsComponentInstallerPolicy::GetRelativeInstallDir()
 // static
 void FirstPartySetsComponentInstallerPolicy::GetPublicKeyHash(
     std::vector<uint8_t>* hash) {
-  hash->assign(kFirstPartySetsPublicKeySHA256,
-               kFirstPartySetsPublicKeySHA256 +
-                   std::size(kFirstPartySetsPublicKeySHA256));
+  hash->assign(std::begin(kFirstPartySetsPublicKeySHA256),
+               std::end(kFirstPartySetsPublicKeySHA256));
 }
 
 void FirstPartySetsComponentInstallerPolicy::GetHash(
@@ -194,7 +194,7 @@ void FirstPartySetsComponentInstallerPolicy::ResetForTesting() {
 void FirstPartySetsComponentInstallerPolicy::WriteComponentForTesting(
     base::Version version,
     const base::FilePath& install_dir,
-    base::StringPiece contents) {
+    std::string_view contents) {
   CHECK(base::WriteFile(GetInstalledPath(install_dir), contents));
 
   GetConfigPathInstance() =

@@ -15,20 +15,16 @@ limitations under the License.
 
 #include "tensorflow/dtensor/cc/slice_util.h"
 
-#include <map>
-#include <memory>
-#include <ostream>
+#include <cstdint>
 #include <string>
 #include <vector>
 
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "tensorflow/core/platform/errors.h"
-#include "tensorflow/core/platform/logging.h"
-#include "tensorflow/core/platform/statusor.h"
+#include <gmock/gmock.h>
+#include "absl/status/status_matchers.h"
+#include "xla/tsl/platform/status_matchers.h"
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/proto/layout.pb.h"
-#include "tsl/platform/status_matchers.h"
 
 namespace tensorflow {
 namespace dtensor {
@@ -36,7 +32,6 @@ namespace slice_util {
 namespace {
 
 using ::testing::SizeIs;
-using ::tsl::testing::IsOk;
 
 TEST(TokenTest, NormalizeDynamic) {
   auto spec = Token(Token::REGULAR, /*begin=*/0, /*end=*/0, /*stride=*/1,
@@ -210,7 +205,7 @@ TEST_F(InferenceTest, FullyReplicatedInputs) {
             /*end_mask=*/false)};
   auto forward = CreateAndRun<ForwardLayoutInference>(
       specs, input_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(forward, IsOk());
+  ASSERT_THAT(forward, absl_testing::IsOk());
   EXPECT_EQ(
       forward->expander_input_layout().sharding_spec_strs(),
       std::vector<std::string>({Layout::kUnshardedDim, Layout::kUnshardedDim}));
@@ -221,7 +216,7 @@ TEST_F(InferenceTest, FullyReplicatedInputs) {
 
   auto backward = CreateAndRun<BackwardLayoutInference>(
       specs, output_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(backward, IsOk());
+  ASSERT_THAT(backward, absl_testing::IsOk());
   EXPECT_EQ(
       backward->expander_value_layout().sharding_spec_strs(),
       std::vector<std::string>({Layout::kUnshardedDim, Layout::kUnshardedDim}));
@@ -261,7 +256,7 @@ TEST_F(InferenceTest, NewAxisMask) {
 
   auto forward = CreateAndRun<ForwardLayoutInference>(
       specs, input_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(forward, IsOk());
+  ASSERT_THAT(forward, absl_testing::IsOk());
   EXPECT_EQ(forward->expander_input_layout().sharding_spec_strs(),
             std::vector<std::string>({"x", "y"}));
   EXPECT_EQ(forward->expander_value_layout(), output_layout);
@@ -273,7 +268,7 @@ TEST_F(InferenceTest, NewAxisMask) {
 
   auto backward = CreateAndRun<BackwardLayoutInference>(
       specs, output_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(backward, IsOk());
+  ASSERT_THAT(backward, absl_testing::IsOk());
   EXPECT_EQ(backward->expander_value_layout().sharding_spec_strs(),
             std::vector<std::string>(
                 {Layout::kUnshardedDim, Layout::kUnshardedDim, "x", "y"}));
@@ -303,7 +298,7 @@ TEST_F(InferenceTest, ShrinkAxisMask) {
 
   auto forward = CreateAndRun<ForwardLayoutInference>(
       specs, input_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(forward, IsOk());
+  ASSERT_THAT(forward, absl_testing::IsOk());
   EXPECT_EQ(
       forward->expander_input_layout().sharding_spec_strs(),
       std::vector<std::string>({Layout::kUnshardedDim, Layout::kUnshardedDim}));
@@ -314,7 +309,7 @@ TEST_F(InferenceTest, ShrinkAxisMask) {
 
   auto backward = CreateAndRun<BackwardLayoutInference>(
       specs, output_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(backward, IsOk());
+  ASSERT_THAT(backward, absl_testing::IsOk());
   EXPECT_EQ(backward->expander_value_layout().sharding_spec_strs(),
             std::vector<std::string>({Layout::kUnshardedDim}));
   EXPECT_THAT(backward->local_tokens(), SizeIs(2));
@@ -347,7 +342,7 @@ TEST_F(InferenceTest, EllipsisMask) {
 
   auto forward = CreateAndRun<ForwardLayoutInference>(
       specs, input_layout, std::vector<int64_t>{2, 4, 6});
-  ASSERT_THAT(forward, IsOk());
+  ASSERT_THAT(forward, absl_testing::IsOk());
   EXPECT_EQ(forward->expander_input_layout().sharding_spec_strs(),
             std::vector<std::string>({"x", "y", Layout::kUnshardedDim}));
   EXPECT_EQ(forward->expander_value_layout(), output_layout);
@@ -359,7 +354,7 @@ TEST_F(InferenceTest, EllipsisMask) {
 
   auto backward = CreateAndRun<BackwardLayoutInference>(
       specs, output_layout, std::vector<int64_t>{2, 4, 6});
-  ASSERT_THAT(backward, IsOk());
+  ASSERT_THAT(backward, absl_testing::IsOk());
   EXPECT_EQ(
       backward->expander_value_layout().sharding_spec_strs(),
       std::vector<std::string>({"x", "y", Layout::kUnshardedDim,
@@ -394,7 +389,7 @@ TEST_F(InferenceTest, EllipsisNewAxisEndMask) {
   };
   auto forward = CreateAndRun<ForwardLayoutInference>(specs, input_layout,
                                                       std::vector<int64_t>{2});
-  ASSERT_THAT(forward, IsOk());
+  ASSERT_THAT(forward, absl_testing::IsOk());
   EXPECT_EQ(forward->expander_input_layout().sharding_spec_strs(),
             std::vector<std::string>({Layout::kUnshardedDim}));
   EXPECT_EQ(forward->expander_value_layout(), output_layout);
@@ -405,7 +400,7 @@ TEST_F(InferenceTest, EllipsisNewAxisEndMask) {
 
   auto backward = CreateAndRun<BackwardLayoutInference>(
       specs, output_layout, std::vector<int64_t>{2});
-  ASSERT_THAT(backward, IsOk());
+  ASSERT_THAT(backward, absl_testing::IsOk());
   EXPECT_EQ(
       backward->expander_value_layout().sharding_spec_strs(),
       std::vector<std::string>({Layout::kUnshardedDim, Layout::kUnshardedDim}));
@@ -430,7 +425,7 @@ TEST_F(InferenceTest, AdditionalAxes) {
 
   auto forward = CreateAndRun<ForwardLayoutInference>(
       specs, input_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(forward, IsOk());
+  ASSERT_THAT(forward, absl_testing::IsOk());
   EXPECT_EQ(forward->expander_input_layout().sharding_spec_strs(),
             std::vector<std::string>({"x", "y"}));
   EXPECT_EQ(forward->expander_value_layout(), output_layout);
@@ -440,7 +435,7 @@ TEST_F(InferenceTest, AdditionalAxes) {
 
   auto backward = CreateAndRun<BackwardLayoutInference>(
       specs, output_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(backward, IsOk());
+  ASSERT_THAT(backward, absl_testing::IsOk());
   EXPECT_EQ(backward->expander_value_layout().sharding_spec_strs(),
             std::vector<std::string>({"x", "y"}));
   EXPECT_EQ(backward->expander_input_layout(), input_layout);
@@ -466,7 +461,7 @@ TEST_F(InferenceTest, ShardingOnNonSlicedDimension) {
 
   auto forward = CreateAndRun<ForwardLayoutInference>(
       specs, input_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(forward, IsOk());
+  ASSERT_THAT(forward, absl_testing::IsOk());
   EXPECT_EQ(forward->expander_value_layout(), output_layout);
   EXPECT_EQ(forward->expander_input_layout().sharding_spec_strs(),
             std::vector<std::string>({"x", Layout::kUnshardedDim}));
@@ -476,7 +471,7 @@ TEST_F(InferenceTest, ShardingOnNonSlicedDimension) {
 
   auto backward = CreateAndRun<BackwardLayoutInference>(
       specs, output_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(backward, IsOk());
+  ASSERT_THAT(backward, absl_testing::IsOk());
   EXPECT_EQ(backward->expander_input_layout(), input_layout);
   EXPECT_EQ(backward->expander_value_layout().sharding_spec_strs(),
             std::vector<std::string>({"x", Layout::kUnshardedDim}));
@@ -501,7 +496,7 @@ TEST_F(InferenceTest, StrideOnShardedDimensionNoRelayout1) {
                                /*end_mask=*/false)};
   auto forward = CreateAndRun<ForwardLayoutInference>(
       specs, input_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(forward, IsOk());
+  ASSERT_THAT(forward, absl_testing::IsOk());
   EXPECT_EQ(forward->expander_input_layout().sharding_spec_strs(),
             std::vector<std::string>({Layout::kUnshardedDim, "x"}));
   EXPECT_EQ(forward->expander_value_layout(), output_layout);
@@ -511,7 +506,7 @@ TEST_F(InferenceTest, StrideOnShardedDimensionNoRelayout1) {
 
   auto backward = CreateAndRun<BackwardLayoutInference>(
       specs, output_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(backward, IsOk());
+  ASSERT_THAT(backward, absl_testing::IsOk());
   EXPECT_EQ(backward->expander_input_layout(), input_layout);
   EXPECT_EQ(backward->expander_value_layout().sharding_spec_strs(),
             std::vector<std::string>({Layout::kUnshardedDim, "x"}));
@@ -537,7 +532,7 @@ TEST_F(InferenceTest, StrideOnShardedDimensionNoRelayout2) {
 
   auto forward = CreateAndRun<ForwardLayoutInference>(
       specs, input_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(forward, IsOk());
+  ASSERT_THAT(forward, absl_testing::IsOk());
   EXPECT_EQ(forward->expander_input_layout().sharding_spec_strs(),
             std::vector<std::string>({Layout::kUnshardedDim, "y"}));
   EXPECT_EQ(forward->expander_value_layout(), output_layout);
@@ -547,7 +542,7 @@ TEST_F(InferenceTest, StrideOnShardedDimensionNoRelayout2) {
 
   auto backward = CreateAndRun<BackwardLayoutInference>(
       specs, output_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(backward, IsOk());
+  ASSERT_THAT(backward, absl_testing::IsOk());
   EXPECT_EQ(backward->expander_input_layout(), input_layout);
   EXPECT_EQ(backward->expander_value_layout().sharding_spec_strs(),
             std::vector<std::string>({Layout::kUnshardedDim, "y"}));
@@ -573,7 +568,7 @@ TEST_F(InferenceTest, StrideOnShardedDimensionNoRelayout3) {
 
   auto forward = CreateAndRun<ForwardLayoutInference>(
       specs, input_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(forward, IsOk());
+  ASSERT_THAT(forward, absl_testing::IsOk());
   EXPECT_EQ(forward->expander_input_layout().sharding_spec_strs(),
             std::vector<std::string>({Layout::kUnshardedDim, "x"}));
   EXPECT_EQ(forward->expander_value_layout(), output_layout);
@@ -583,7 +578,7 @@ TEST_F(InferenceTest, StrideOnShardedDimensionNoRelayout3) {
 
   auto backward = CreateAndRun<BackwardLayoutInference>(
       specs, output_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(backward, IsOk());
+  ASSERT_THAT(backward, absl_testing::IsOk());
   EXPECT_EQ(backward->expander_input_layout(), input_layout);
   EXPECT_EQ(backward->expander_value_layout().sharding_spec_strs(),
             std::vector<std::string>({Layout::kUnshardedDim, "x"}));
@@ -611,7 +606,7 @@ TEST_F(InferenceTest, StrideOnShardedDimensionNeedRelayout) {
 
   auto forward = CreateAndRun<ForwardLayoutInference>(
       specs, input_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(forward, IsOk());
+  ASSERT_THAT(forward, absl_testing::IsOk());
   EXPECT_EQ(
       forward->expander_input_layout().sharding_spec_strs(),
       std::vector<std::string>({Layout::kUnshardedDim, Layout::kUnshardedDim}));
@@ -622,7 +617,7 @@ TEST_F(InferenceTest, StrideOnShardedDimensionNeedRelayout) {
 
   auto backward = CreateAndRun<BackwardLayoutInference>(
       specs, output_layout, std::vector<int64_t>{2, 4});
-  ASSERT_THAT(backward, IsOk());
+  ASSERT_THAT(backward, absl_testing::IsOk());
   // The backward inferred input_layout prefers replicated layouts for this
   // case.
   EXPECT_EQ(

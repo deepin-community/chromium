@@ -30,10 +30,12 @@
 
 #include <set>
 #include <utility>
+#include <vector>
 
 #include "dawn/native/CommandBuffer.h"
 #include "dawn/native/Commands.h"
 #include "dawn/native/Error.h"
+#include "dawn/native/metal/MultiDrawEncoder.h"
 
 #import <Metal/Metal.h>
 
@@ -54,13 +56,13 @@ void RecordCopyBufferToTexture(CommandRecordingContext* commandContext,
                                id<MTLBuffer> mtlBuffer,
                                uint64_t bufferSize,
                                uint64_t offset,
-                               uint32_t bytesPerRow,
-                               uint32_t rowsPerImage,
+                               BlockCount blocksPerRow,
+                               BlockCount rowsPerImage,
                                Texture* texture,
                                uint32_t mipLevel,
-                               const Origin3D& origin,
+                               const BlockOrigin3D& origin,
                                Aspect aspect,
-                               const Extent3D& copySize);
+                               const BlockExtent3D& copySize);
 
 class CommandBuffer final : public CommandBufferBase {
   public:
@@ -76,7 +78,8 @@ class CommandBuffer final : public CommandBufferBase {
     using CommandBufferBase::CommandBufferBase;
 
     MaybeError EncodeComputePass(CommandRecordingContext* commandContext,
-                                 BeginComputePassCmd* computePassCmd);
+                                 BeginComputePassCmd* computePassCmd,
+                                 const ComputePassResourceUsage& resourceUsage);
 
     // Empty occlusion queries aren't filled to zero on Apple GPUs. This set is used to
     // track which results should be explicitly zero'ed as a workaround. Use of empty queries
@@ -85,7 +88,8 @@ class CommandBuffer final : public CommandBufferBase {
     using EmptyOcclusionQueries = std::set<std::pair<QuerySet*, uint32_t>>;
     MaybeError EncodeRenderPass(id<MTLRenderCommandEncoder> encoder,
                                 BeginRenderPassCmd* renderPassCmd,
-                                EmptyOcclusionQueries* emptyOcclusionQueries);
+                                EmptyOcclusionQueries* emptyOcclusionQueries,
+                                const std::vector<MultiDrawExecutionData>& multiDrawExecutions);
 };
 
 }  // namespace dawn::native::metal

@@ -33,45 +33,41 @@
 namespace dawn::wire::client {
 
 ObjectBase::ObjectBase(const ObjectBaseParams& params)
-    : mClient(params.client), mHandle(params.handle), mRefcount(1) {}
-
-ObjectBase::~ObjectBase() {
-    RemoveFromList();
+    : mClient(params.client), mHandle(params.handle) {
+    DAWN_ASSERT(IsRegistered());
 }
 
-const ObjectHandle& ObjectBase::GetWireHandle() const {
+bool ObjectBase::IsRegistered() const {
+    return mClient != nullptr;
+}
+
+const ObjectHandle& ObjectBase::GetWireHandle(const ClientBase* forClient) const {
+    DAWN_ASSERT(IsRegistered());
+    // TODO(crbug.com/440387003): This causes a crash if the client manages to
+    // reuse an object from a different client. This should really be handled
+    // with a proper validation error, but that is much more difficult, and this
+    // should be a rare corner case.
+    DAWN_CHECK(forClient == mClient);
     return mHandle;
 }
 
-ObjectId ObjectBase::GetWireId() const {
-    return mHandle.id;
-}
-
-ObjectGeneration ObjectBase::GetWireGeneration() const {
-    return mHandle.generation;
-}
-
 Client* ObjectBase::GetClient() const {
+    DAWN_ASSERT(IsRegistered());
     return mClient;
 }
 
-void ObjectBase::Reference() {
-    mRefcount++;
+void ObjectBase::DeleteThis() {
+    Unregister();
+    RefCounted::DeleteThis();
 }
 
-void ObjectBase::Release() {
-    DAWN_ASSERT(mRefcount != 0);
-    mRefcount--;
-
-    if (mRefcount == 0) {
-        DestroyObjectCmd cmd;
-        cmd.objectType = GetObjectType();
-        cmd.objectId = GetWireId();
-
-        Client* client = GetClient();
-        client->SerializeCommand(cmd);
-        client->Free(this, GetObjectType());
+void ObjectBase::Unregister() {
+    if (!IsRegistered()) {
+        return;
     }
+
+    mClient->Unregister(this, GetObjectType());
+    mClient = nullptr;
 }
 
 ObjectWithEventsBase::ObjectWithEventsBase(const ObjectBaseParams& params,

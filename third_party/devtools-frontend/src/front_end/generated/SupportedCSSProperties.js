@@ -1,69 +1,16 @@
-// Copyright 2024 The Chromium Authors. All rights reserved.
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+/* eslint-disable @stylistic/quotes, @stylistic/quote-props */
 export const generatedProperties = [
  {
   "longhands": [
-   "animation-delay-start",
-   "animation-delay-end"
+   "max-lines",
+   "block-ellipsis",
+   "continue"
   ],
-  "name": "-alternative-animation-delay"
- },
- {
-  "longhands": [
-   "animation-duration",
-   "animation-timing-function",
-   "animation-delay-start",
-   "animation-delay-end",
-   "animation-iteration-count",
-   "animation-direction",
-   "animation-fill-mode",
-   "animation-play-state",
-   "animation-name",
-   "animation-timeline",
-   "animation-range-start",
-   "animation-range-end"
-  ],
-  "name": "-alternative-animation-with-delay-start-end"
- },
- {
-  "longhands": [
-   "animation-duration",
-   "animation-timing-function",
-   "animation-delay",
-   "animation-iteration-count",
-   "animation-direction",
-   "animation-fill-mode",
-   "animation-play-state",
-   "animation-name",
-   "animation-timeline",
-   "animation-range-start",
-   "animation-range-end"
-  ],
-  "name": "-alternative-animation-with-timeline"
- },
- {
-  "longhands": [
-   "mask-image",
-   "-webkit-mask-position-x",
-   "-webkit-mask-position-y",
-   "mask-size",
-   "mask-repeat",
-   "mask-origin",
-   "mask-clip",
-   "mask-composite",
-   "mask-mode"
-  ],
-  "name": "-alternative-mask"
- },
- {
-  "longhands": [
-   "view-timeline-name",
-   "view-timeline-axis",
-   "view-timeline-inset"
-  ],
-  "name": "-alternative-view-timeline-with-inset"
+  "name": "-alternative-webkit-line-clamp"
  },
  {
   "inherited": true,
@@ -148,35 +95,24 @@ export const generatedProperties = [
   "name": "-webkit-font-smoothing"
  },
  {
-  "inherited": true,
   "keywords": [
    "auto",
    "loose",
    "normal",
    "strict",
-   "after-white-space",
-   "anywhere"
+   "after-white-space"
   ],
   "name": "-webkit-line-break"
  },
  {
+  "keywords": [
+   "none"
+  ],
   "name": "-webkit-line-clamp"
  },
  {
   "inherited": true,
   "name": "-webkit-locale"
- },
- {
-  "longhands": [
-   "-webkit-mask-image",
-   "-webkit-mask-position-x",
-   "-webkit-mask-position-y",
-   "-webkit-mask-size",
-   "-webkit-mask-repeat",
-   "-webkit-mask-origin",
-   "-webkit-mask-clip"
-  ],
-  "name": "-webkit-mask"
  },
  {
   "longhands": [
@@ -204,49 +140,16 @@ export const generatedProperties = [
   "name": "-webkit-mask-box-image-width"
  },
  {
-  "name": "-webkit-mask-clip"
- },
- {
-  "name": "-webkit-mask-composite"
- },
- {
-  "name": "-webkit-mask-image"
- },
- {
-  "name": "-webkit-mask-origin"
- },
- {
-  "longhands": [
-   "-webkit-mask-position-x",
-   "-webkit-mask-position-y"
-  ],
-  "name": "-webkit-mask-position"
- },
- {
   "name": "-webkit-mask-position-x"
  },
  {
   "name": "-webkit-mask-position-y"
  },
  {
-  "name": "-webkit-mask-repeat"
- },
- {
-  "name": "-webkit-mask-size"
- },
- {
   "name": "-webkit-perspective-origin-x"
  },
  {
   "name": "-webkit-perspective-origin-y"
- },
- {
-  "inherited": true,
-  "keywords": [
-   "economy",
-   "exact"
-  ],
-  "name": "-webkit-print-color-adjust"
  },
  {
   "inherited": true,
@@ -258,10 +161,6 @@ export const generatedProperties = [
  },
  {
   "inherited": true,
-  "keywords": [
-   "before",
-   "after"
-  ],
   "name": "-webkit-ruby-position"
  },
  {
@@ -378,19 +277,535 @@ export const generatedProperties = [
   "name": "alignment-baseline"
  },
  {
+  "longhands": [
+   "-webkit-border-horizontal-spacing",
+   "-webkit-border-vertical-spacing",
+   "-webkit-box-align",
+   "-webkit-box-decoration-break",
+   "-webkit-box-direction",
+   "-webkit-box-flex",
+   "-webkit-box-ordinal-group",
+   "-webkit-box-orient",
+   "-webkit-box-pack",
+   "-webkit-box-reflect",
+   "-webkit-font-smoothing",
+   "-webkit-line-break",
+   "-webkit-line-clamp",
+   "-webkit-locale",
+   "-webkit-mask-box-image-outset",
+   "-webkit-mask-box-image-repeat",
+   "-webkit-mask-box-image-slice",
+   "-webkit-mask-box-image-source",
+   "-webkit-mask-box-image-width",
+   "-webkit-mask-position-x",
+   "-webkit-mask-position-y",
+   "-webkit-rtl-ordering",
+   "-webkit-ruby-position",
+   "-webkit-tap-highlight-color",
+   "-webkit-text-combine",
+   "-webkit-text-decorations-in-effect",
+   "-webkit-text-fill-color",
+   "-webkit-text-orientation",
+   "-webkit-text-security",
+   "-webkit-text-stroke-color",
+   "-webkit-text-stroke-width",
+   "-webkit-user-drag",
+   "-webkit-writing-mode",
+   "accent-color",
+   "additive-symbols",
+   "align-content",
+   "align-items",
+   "align-self",
+   "alignment-baseline",
+   "anchor-name",
+   "anchor-scope",
+   "animation-composition",
+   "animation-delay",
+   "animation-direction",
+   "animation-duration",
+   "animation-fill-mode",
+   "animation-iteration-count",
+   "animation-name",
+   "animation-play-state",
+   "animation-range-end",
+   "animation-range-start",
+   "animation-timeline",
+   "animation-timing-function",
+   "animation-trigger",
+   "app-region",
+   "appearance",
+   "ascent-override",
+   "aspect-ratio",
+   "backdrop-filter",
+   "backface-visibility",
+   "background-attachment",
+   "background-blend-mode",
+   "background-clip",
+   "background-color",
+   "background-image",
+   "background-origin",
+   "background-position-x",
+   "background-position-y",
+   "background-repeat",
+   "background-size",
+   "base-palette",
+   "base-url",
+   "baseline-shift",
+   "baseline-source",
+   "block-ellipsis",
+   "block-size",
+   "border-block-end-color",
+   "border-block-end-style",
+   "border-block-end-width",
+   "border-block-start-color",
+   "border-block-start-style",
+   "border-block-start-width",
+   "border-bottom-color",
+   "border-bottom-left-radius",
+   "border-bottom-right-radius",
+   "border-bottom-style",
+   "border-bottom-width",
+   "border-collapse",
+   "border-end-end-radius",
+   "border-end-start-radius",
+   "border-image-outset",
+   "border-image-repeat",
+   "border-image-slice",
+   "border-image-source",
+   "border-image-width",
+   "border-inline-end-color",
+   "border-inline-end-style",
+   "border-inline-end-width",
+   "border-inline-start-color",
+   "border-inline-start-style",
+   "border-inline-start-width",
+   "border-left-color",
+   "border-left-style",
+   "border-left-width",
+   "border-right-color",
+   "border-right-style",
+   "border-right-width",
+   "border-shape",
+   "border-start-end-radius",
+   "border-start-start-radius",
+   "border-top-color",
+   "border-top-left-radius",
+   "border-top-right-radius",
+   "border-top-style",
+   "border-top-width",
+   "bottom",
+   "box-decoration-break",
+   "box-shadow",
+   "box-sizing",
+   "break-after",
+   "break-before",
+   "break-inside",
+   "buffered-rendering",
+   "caption-side",
+   "caret-animation",
+   "caret-color",
+   "caret-shape",
+   "clear",
+   "clip",
+   "clip-path",
+   "clip-rule",
+   "color",
+   "color-interpolation",
+   "color-interpolation-filters",
+   "color-rendering",
+   "color-scheme",
+   "column-count",
+   "column-fill",
+   "column-gap",
+   "column-height",
+   "column-rule-break",
+   "column-rule-color",
+   "column-rule-edge-inset-end",
+   "column-rule-edge-inset-start",
+   "column-rule-interior-inset-end",
+   "column-rule-interior-inset-start",
+   "column-rule-style",
+   "column-rule-visibility-items",
+   "column-rule-width",
+   "column-span",
+   "column-width",
+   "column-wrap",
+   "contain",
+   "contain-intrinsic-block-size",
+   "contain-intrinsic-height",
+   "contain-intrinsic-inline-size",
+   "contain-intrinsic-width",
+   "container-name",
+   "container-type",
+   "content",
+   "content-visibility",
+   "continue",
+   "corner-bottom-left-shape",
+   "corner-bottom-right-shape",
+   "corner-end-end-shape",
+   "corner-end-start-shape",
+   "corner-start-end-shape",
+   "corner-start-start-shape",
+   "corner-top-left-shape",
+   "corner-top-right-shape",
+   "counter-increment",
+   "counter-reset",
+   "counter-set",
+   "cursor",
+   "cx",
+   "cy",
+   "d",
+   "descent-override",
+   "display",
+   "dominant-baseline",
+   "dynamic-range-limit",
+   "empty-cells",
+   "fallback",
+   "field-sizing",
+   "fill",
+   "fill-opacity",
+   "fill-rule",
+   "filter",
+   "flex-basis",
+   "flex-direction",
+   "flex-grow",
+   "flex-shrink",
+   "flex-wrap",
+   "float",
+   "flood-color",
+   "flood-opacity",
+   "flow-tolerance",
+   "font-display",
+   "font-family",
+   "font-feature-settings",
+   "font-kerning",
+   "font-language-override",
+   "font-optical-sizing",
+   "font-palette",
+   "font-size",
+   "font-size-adjust",
+   "font-stretch",
+   "font-style",
+   "font-synthesis-small-caps",
+   "font-synthesis-style",
+   "font-synthesis-weight",
+   "font-variant-alternates",
+   "font-variant-caps",
+   "font-variant-east-asian",
+   "font-variant-emoji",
+   "font-variant-ligatures",
+   "font-variant-numeric",
+   "font-variant-position",
+   "font-variation-settings",
+   "font-weight",
+   "forced-color-adjust",
+   "frame-sizing",
+   "grid-auto-columns",
+   "grid-auto-flow",
+   "grid-auto-rows",
+   "grid-column-end",
+   "grid-column-start",
+   "grid-lanes-direction",
+   "grid-lanes-pack",
+   "grid-row-end",
+   "grid-row-start",
+   "grid-template-areas",
+   "grid-template-columns",
+   "grid-template-rows",
+   "hash",
+   "height",
+   "hostname",
+   "hyphenate-character",
+   "hyphenate-limit-chars",
+   "hyphens",
+   "image-animation",
+   "image-orientation",
+   "image-rendering",
+   "inherits",
+   "initial-letter",
+   "initial-value",
+   "inline-size",
+   "inset-block-end",
+   "inset-block-start",
+   "inset-inline-end",
+   "inset-inline-start",
+   "interactivity",
+   "interest-delay-end",
+   "interest-delay-start",
+   "interpolate-size",
+   "isolation",
+   "justify-content",
+   "justify-items",
+   "justify-self",
+   "left",
+   "letter-spacing",
+   "lighting-color",
+   "line-break",
+   "line-gap-override",
+   "line-height",
+   "list-style-image",
+   "list-style-position",
+   "list-style-type",
+   "margin-block-end",
+   "margin-block-start",
+   "margin-bottom",
+   "margin-inline-end",
+   "margin-inline-start",
+   "margin-left",
+   "margin-right",
+   "margin-top",
+   "margin-trim",
+   "marker-end",
+   "marker-mid",
+   "marker-start",
+   "mask-clip",
+   "mask-composite",
+   "mask-image",
+   "mask-mode",
+   "mask-origin",
+   "mask-repeat",
+   "mask-size",
+   "mask-type",
+   "math-depth",
+   "math-shift",
+   "math-style",
+   "max-block-size",
+   "max-height",
+   "max-inline-size",
+   "max-lines",
+   "max-width",
+   "min-block-size",
+   "min-height",
+   "min-inline-size",
+   "min-width",
+   "mix-blend-mode",
+   "navigation",
+   "negative",
+   "object-fit",
+   "object-position",
+   "object-view-box",
+   "offset-anchor",
+   "offset-distance",
+   "offset-path",
+   "offset-position",
+   "offset-rotate",
+   "opacity",
+   "order",
+   "origin-trial-test-property",
+   "orphans",
+   "outline-color",
+   "outline-offset",
+   "outline-style",
+   "outline-width",
+   "overflow-anchor",
+   "overflow-block",
+   "overflow-clip-margin",
+   "overflow-inline",
+   "overflow-wrap",
+   "overflow-x",
+   "overflow-y",
+   "overlay",
+   "override-colors",
+   "overscroll-behavior-block",
+   "overscroll-behavior-inline",
+   "overscroll-behavior-x",
+   "overscroll-behavior-y",
+   "pad",
+   "padding-block-end",
+   "padding-block-start",
+   "padding-bottom",
+   "padding-inline-end",
+   "padding-inline-start",
+   "padding-left",
+   "padding-right",
+   "padding-top",
+   "page",
+   "page-margin-safety",
+   "page-orientation",
+   "paint-order",
+   "pathname",
+   "pattern",
+   "perspective",
+   "perspective-origin",
+   "pointer-events",
+   "port",
+   "position",
+   "position-anchor",
+   "position-area",
+   "position-try-fallbacks",
+   "position-try-order",
+   "position-visibility",
+   "prefix",
+   "print-color-adjust",
+   "protocol",
+   "quotes",
+   "r",
+   "range",
+   "reading-flow",
+   "reading-order",
+   "resize",
+   "result",
+   "right",
+   "rotate",
+   "row-gap",
+   "row-rule-break",
+   "row-rule-color",
+   "row-rule-edge-inset-end",
+   "row-rule-edge-inset-start",
+   "row-rule-interior-inset-end",
+   "row-rule-interior-inset-start",
+   "row-rule-style",
+   "row-rule-visibility-items",
+   "row-rule-width",
+   "ruby-align",
+   "ruby-overhang",
+   "ruby-position",
+   "rule-overlap",
+   "rx",
+   "ry",
+   "scale",
+   "scroll-behavior",
+   "scroll-initial-target",
+   "scroll-margin-block-end",
+   "scroll-margin-block-start",
+   "scroll-margin-bottom",
+   "scroll-margin-inline-end",
+   "scroll-margin-inline-start",
+   "scroll-margin-left",
+   "scroll-margin-right",
+   "scroll-margin-top",
+   "scroll-marker-group",
+   "scroll-padding-block-end",
+   "scroll-padding-block-start",
+   "scroll-padding-bottom",
+   "scroll-padding-inline-end",
+   "scroll-padding-inline-start",
+   "scroll-padding-left",
+   "scroll-padding-right",
+   "scroll-padding-top",
+   "scroll-snap-align",
+   "scroll-snap-stop",
+   "scroll-snap-type",
+   "scroll-target-group",
+   "scroll-timeline-axis",
+   "scroll-timeline-name",
+   "scrollbar-color",
+   "scrollbar-gutter",
+   "scrollbar-width",
+   "search",
+   "shape-image-threshold",
+   "shape-margin",
+   "shape-outside",
+   "shape-rendering",
+   "size",
+   "size-adjust",
+   "speak",
+   "speak-as",
+   "src",
+   "stop-color",
+   "stop-opacity",
+   "stroke",
+   "stroke-dasharray",
+   "stroke-dashoffset",
+   "stroke-linecap",
+   "stroke-linejoin",
+   "stroke-miterlimit",
+   "stroke-opacity",
+   "stroke-width",
+   "suffix",
+   "symbols",
+   "syntax",
+   "system",
+   "tab-size",
+   "table-layout",
+   "text-align",
+   "text-align-last",
+   "text-anchor",
+   "text-autospace",
+   "text-box-edge",
+   "text-box-trim",
+   "text-combine-upright",
+   "text-decoration-color",
+   "text-decoration-line",
+   "text-decoration-skip-ink",
+   "text-decoration-style",
+   "text-decoration-thickness",
+   "text-emphasis-color",
+   "text-emphasis-position",
+   "text-emphasis-style",
+   "text-fit",
+   "text-indent",
+   "text-justify",
+   "text-orientation",
+   "text-overflow",
+   "text-rendering",
+   "text-shadow",
+   "text-size-adjust",
+   "text-spacing-trim",
+   "text-transform",
+   "text-underline-offset",
+   "text-underline-position",
+   "text-wrap-mode",
+   "text-wrap-style",
+   "timeline-scope",
+   "timeline-trigger-activation-range-end",
+   "timeline-trigger-activation-range-start",
+   "timeline-trigger-active-range-end",
+   "timeline-trigger-active-range-start",
+   "timeline-trigger-name",
+   "timeline-trigger-source",
+   "top",
+   "touch-action",
+   "transform",
+   "transform-box",
+   "transform-origin",
+   "transform-style",
+   "transition-behavior",
+   "transition-delay",
+   "transition-duration",
+   "transition-property",
+   "transition-timing-function",
+   "translate",
+   "trigger-scope",
+   "types",
+   "unicode-range",
+   "user-select",
+   "vector-effect",
+   "vertical-align",
+   "view-timeline-axis",
+   "view-timeline-inset",
+   "view-timeline-name",
+   "view-transition-class",
+   "view-transition-group",
+   "view-transition-name",
+   "view-transition-scope",
+   "visibility",
+   "white-space-collapse",
+   "widows",
+   "width",
+   "will-change",
+   "word-break",
+   "word-spacing",
+   "writing-mode",
+   "x",
+   "y",
+   "z-index",
+   "zoom"
+  ],
   "name": "all"
  },
  {
   "keywords": [
    "none"
   ],
-  "name": "anchor-default"
+  "name": "anchor-name"
  },
  {
   "keywords": [
-   "none"
+   "none",
+   "all"
   ],
-  "name": "anchor-name"
+  "name": "anchor-scope"
  },
  {
   "longhands": [
@@ -401,7 +816,10 @@ export const generatedProperties = [
    "animation-direction",
    "animation-fill-mode",
    "animation-play-state",
-   "animation-name"
+   "animation-name",
+   "animation-timeline",
+   "animation-range-start",
+   "animation-range-end"
   ],
   "name": "animation"
  },
@@ -415,12 +833,6 @@ export const generatedProperties = [
  },
  {
   "name": "animation-delay"
- },
- {
-  "name": "animation-delay-end"
- },
- {
-  "name": "animation-delay-start"
  },
  {
   "keywords": [
@@ -497,6 +909,12 @@ export const generatedProperties = [
    "step-end"
   ],
   "name": "animation-timing-function"
+ },
+ {
+  "keywords": [
+   "none"
+  ],
+  "name": "animation-trigger"
  },
  {
   "keywords": [
@@ -632,6 +1050,9 @@ export const generatedProperties = [
   "name": "base-palette"
  },
  {
+  "name": "base-url"
+ },
+ {
   "keywords": [
    "baseline",
    "sub",
@@ -646,6 +1067,14 @@ export const generatedProperties = [
    "last"
   ],
   "name": "baseline-source"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "auto",
+   "no-ellipsis"
+  ],
+  "name": "block-ellipsis"
  },
  {
   "keywords": [
@@ -994,6 +1423,12 @@ export const generatedProperties = [
   "name": "border-right-width"
  },
  {
+  "keywords": [
+   "none"
+  ],
+  "name": "border-shape"
+ },
+ {
   "inherited": true,
   "longhands": [
    "-webkit-border-horizontal-spacing",
@@ -1079,6 +1514,13 @@ export const generatedProperties = [
  },
  {
   "keywords": [
+   "slice",
+   "clone"
+  ],
+  "name": "box-decoration-break"
+ },
+ {
+  "keywords": [
    "none"
   ],
   "name": "box-shadow"
@@ -1149,9 +1591,27 @@ export const generatedProperties = [
   "inherited": true,
   "keywords": [
    "auto",
+   "manual"
+  ],
+  "name": "caret-animation"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "auto",
    "currentcolor"
   ],
   "name": "caret-color"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "auto",
+   "bar",
+   "block",
+   "underscore"
+  ],
+  "name": "caret-shape"
  },
  {
   "keywords": [
@@ -1249,6 +1709,12 @@ export const generatedProperties = [
   "name": "column-gap"
  },
  {
+  "keywords": [
+   "auto"
+  ],
+  "name": "column-height"
+ },
+ {
   "longhands": [
    "column-rule-width",
    "column-rule-style",
@@ -1257,10 +1723,58 @@ export const generatedProperties = [
   "name": "column-rule"
  },
  {
+  "inherited": false,
+  "keywords": [
+   "none",
+   "normal",
+   "intersection"
+  ],
+  "name": "column-rule-break"
+ },
+ {
   "keywords": [
    "currentcolor"
   ],
   "name": "column-rule-color"
+ },
+ {
+  "longhands": [
+   "column-rule-edge-inset-start",
+   "column-rule-edge-inset-end"
+  ],
+  "name": "column-rule-edge-inset"
+ },
+ {
+  "inherited": false,
+  "name": "column-rule-edge-inset-end"
+ },
+ {
+  "inherited": false,
+  "name": "column-rule-edge-inset-start"
+ },
+ {
+  "longhands": [
+   "column-rule-edge-inset-start",
+   "column-rule-edge-inset-end",
+   "column-rule-interior-inset-start",
+   "column-rule-interior-inset-end"
+  ],
+  "name": "column-rule-inset"
+ },
+ {
+  "longhands": [
+   "column-rule-interior-inset-start",
+   "column-rule-interior-inset-end"
+  ],
+  "name": "column-rule-interior-inset"
+ },
+ {
+  "inherited": false,
+  "name": "column-rule-interior-inset-end"
+ },
+ {
+  "inherited": false,
+  "name": "column-rule-interior-inset-start"
  },
  {
   "keywords": [
@@ -1276,6 +1790,15 @@ export const generatedProperties = [
    "double"
   ],
   "name": "column-rule-style"
+ },
+ {
+  "inherited": false,
+  "keywords": [
+   "all",
+   "around",
+   "between"
+  ],
+  "name": "column-rule-visibility-items"
  },
  {
   "keywords": [
@@ -1299,9 +1822,19 @@ export const generatedProperties = [
   "name": "column-width"
  },
  {
+  "keywords": [
+   "auto",
+   "nowrap",
+   "wrap"
+  ],
+  "name": "column-wrap"
+ },
+ {
   "longhands": [
    "column-width",
-   "column-count"
+   "column-count",
+   "column-height",
+   "column-wrap"
   ],
   "name": "columns"
  },
@@ -1362,7 +1895,8 @@ export const generatedProperties = [
    "normal",
    "inline-size",
    "size",
-   "scroll-state"
+   "scroll-state",
+   "anchored"
   ],
   "name": "container-type"
  },
@@ -1376,6 +1910,151 @@ export const generatedProperties = [
    "hidden"
   ],
   "name": "content-visibility"
+ },
+ {
+  "keywords": [
+   "auto",
+   "collapse",
+   "-webkit-legacy"
+  ],
+  "name": "continue"
+ },
+ {
+  "longhands": [
+   "corner-end-start-shape",
+   "corner-end-end-shape"
+  ],
+  "name": "corner-block-end-shape"
+ },
+ {
+  "longhands": [
+   "corner-start-start-shape",
+   "corner-start-end-shape"
+  ],
+  "name": "corner-block-start-shape"
+ },
+ {
+  "keywords": [
+   "notch",
+   "scoop",
+   "bevel",
+   "round",
+   "squircle",
+   "square"
+  ],
+  "name": "corner-bottom-left-shape"
+ },
+ {
+  "keywords": [
+   "notch",
+   "scoop",
+   "bevel",
+   "round",
+   "squircle",
+   "square"
+  ],
+  "name": "corner-bottom-right-shape"
+ },
+ {
+  "longhands": [
+   "corner-bottom-left-shape",
+   "corner-bottom-right-shape"
+  ],
+  "name": "corner-bottom-shape"
+ },
+ {
+  "name": "corner-end-end-shape"
+ },
+ {
+  "name": "corner-end-start-shape"
+ },
+ {
+  "longhands": [
+   "corner-start-end-shape",
+   "corner-end-end-shape"
+  ],
+  "name": "corner-inline-end-shape"
+ },
+ {
+  "longhands": [
+   "corner-start-start-shape",
+   "corner-end-start-shape"
+  ],
+  "name": "corner-inline-start-shape"
+ },
+ {
+  "longhands": [
+   "corner-top-left-shape",
+   "corner-bottom-left-shape"
+  ],
+  "name": "corner-left-shape"
+ },
+ {
+  "longhands": [
+   "corner-top-right-shape",
+   "corner-bottom-right-shape"
+  ],
+  "name": "corner-right-shape"
+ },
+ {
+  "longhands": [
+   "corner-top-left-shape",
+   "corner-top-right-shape",
+   "corner-bottom-right-shape",
+   "corner-bottom-left-shape"
+  ],
+  "name": "corner-shape"
+ },
+ {
+  "name": "corner-start-end-shape"
+ },
+ {
+  "name": "corner-start-start-shape"
+ },
+ {
+  "keywords": [
+   "notch",
+   "scoop",
+   "bevel",
+   "round",
+   "squircle",
+   "square"
+  ],
+  "name": "corner-top-left-shape"
+ },
+ {
+  "keywords": [
+   "notch",
+   "scoop",
+   "bevel",
+   "round",
+   "squircle",
+   "square"
+  ],
+  "name": "corner-top-right-shape"
+ },
+ {
+  "longhands": [
+   "corner-top-left-shape",
+   "corner-top-right-shape"
+  ],
+  "name": "corner-top-shape"
+ },
+ {
+  "keywords": [
+   "normal"
+  ],
+  "longhands": [
+   "border-top-left-radius",
+   "corner-top-left-shape",
+   "border-top-right-radius",
+   "corner-top-right-shape",
+   "border-bottom-right-radius",
+   "corner-bottom-right-shape",
+   "border-bottom-left-radius",
+   "corner-bottom-left-shape"
+  ],
+  "name": "corners"
  },
  {
   "keywords": [
@@ -1488,7 +2167,9 @@ export const generatedProperties = [
    "flow",
    "math",
    "ruby",
-   "ruby-text"
+   "ruby-text",
+   "grid-lanes",
+   "inline-grid-lanes"
   ],
   "name": "display"
  },
@@ -1514,8 +2195,8 @@ export const generatedProperties = [
   "inherited": true,
   "keywords": [
    "standard",
-   "high",
-   "constrained-high"
+   "no-limit",
+   "constrained"
   ],
   "name": "dynamic-range-limit"
  },
@@ -1603,7 +2284,8 @@ export const generatedProperties = [
   "keywords": [
    "nowrap",
    "wrap",
-   "wrap-reverse"
+   "wrap-reverse",
+   "balance"
   ],
   "name": "flex-wrap"
  },
@@ -1627,6 +2309,13 @@ export const generatedProperties = [
   "name": "flood-opacity"
  },
  {
+  "keywords": [
+   "normal",
+   "infinite"
+  ],
+  "name": "flow-tolerance"
+ },
+ {
   "inherited": true,
   "longhands": [
    "font-style",
@@ -1636,6 +2325,7 @@ export const generatedProperties = [
    "font-variant-east-asian",
    "font-variant-alternates",
    "font-variant-position",
+   "font-variant-emoji",
    "font-weight",
    "font-stretch",
    "font-size",
@@ -1645,7 +2335,8 @@ export const generatedProperties = [
    "font-size-adjust",
    "font-kerning",
    "font-feature-settings",
-   "font-variation-settings"
+   "font-variation-settings",
+   "font-language-override"
   ],
   "name": "font"
  },
@@ -1671,6 +2362,13 @@ export const generatedProperties = [
    "none"
   ],
   "name": "font-kerning"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "normal"
+  ],
+  "name": "font-language-override"
  },
  {
   "inherited": true,
@@ -1714,6 +2412,7 @@ export const generatedProperties = [
    "cap-height",
    "ch-width",
    "ic-width",
+   "ic-height",
    "from-font"
   ],
   "name": "font-size-adjust"
@@ -1783,7 +2482,8 @@ export const generatedProperties = [
    "font-variant-alternates",
    "font-variant-numeric",
    "font-variant-east-asian",
-   "font-variant-position"
+   "font-variant-position",
+   "font-variant-emoji"
   ],
   "name": "font-variant"
  },
@@ -1822,6 +2522,16 @@ export const generatedProperties = [
    "ruby"
   ],
   "name": "font-variant-east-asian"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "normal",
+   "text",
+   "emoji",
+   "unicode"
+  ],
+  "name": "font-variant-emoji"
  },
  {
   "inherited": true,
@@ -1890,6 +2600,16 @@ export const generatedProperties = [
   "name": "forced-color-adjust"
  },
  {
+  "keywords": [
+   "auto",
+   "content-width",
+   "content-height",
+   "content-block-size",
+   "content-inline-size"
+  ],
+  "name": "frame-sizing"
+ },
+ {
   "longhands": [
    "row-gap",
    "column-gap"
@@ -1953,12 +2673,6 @@ export const generatedProperties = [
   "name": "grid-column-end"
  },
  {
-  "longhands": [
-   "column-gap"
-  ],
-  "name": "grid-column-gap"
- },
- {
   "keywords": [
    "auto"
   ],
@@ -1966,10 +2680,29 @@ export const generatedProperties = [
  },
  {
   "longhands": [
-   "row-gap",
-   "column-gap"
+   "grid-template-areas",
+   "grid-template-columns",
+   "grid-template-rows",
+   "grid-lanes-direction"
   ],
-  "name": "grid-gap"
+  "name": "grid-lanes"
+ },
+ {
+  "keywords": [
+   "normal",
+   "row",
+   "column",
+   "fill-reverse",
+   "track-reverse"
+  ],
+  "name": "grid-lanes-direction"
+ },
+ {
+  "keywords": [
+   "normal",
+   "dense"
+  ],
+  "name": "grid-lanes-pack"
  },
  {
   "longhands": [
@@ -1983,12 +2716,6 @@ export const generatedProperties = [
    "auto"
   ],
   "name": "grid-row-end"
- },
- {
-  "longhands": [
-   "row-gap"
-  ],
-  "name": "grid-row-gap"
  },
  {
   "keywords": [
@@ -2023,6 +2750,9 @@ export const generatedProperties = [
   "name": "grid-template-rows"
  },
  {
+  "name": "hash"
+ },
+ {
   "keywords": [
    "auto",
    "fit-content",
@@ -2030,6 +2760,9 @@ export const generatedProperties = [
    "max-content"
   ],
   "name": "height"
+ },
+ {
+  "name": "hostname"
  },
  {
   "inherited": true,
@@ -2050,6 +2783,15 @@ export const generatedProperties = [
    "auto"
   ],
   "name": "hyphens"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "normal",
+   "running",
+   "paused"
+  ],
+  "name": "image-animation"
  },
  {
   "inherited": true,
@@ -2097,26 +2839,6 @@ export const generatedProperties = [
   "name": "inset"
  },
  {
-  "keywords": [
-   "none",
-   "top",
-   "bottom",
-   "center",
-   "left",
-   "right",
-   "x-start",
-   "x-end",
-   "y-start",
-   "y-end",
-   "start",
-   "end",
-   "self-start",
-   "self-end",
-   "all"
-  ],
-  "name": "inset-area"
- },
- {
   "longhands": [
    "inset-block-start",
    "inset-block-end"
@@ -2141,6 +2863,35 @@ export const generatedProperties = [
  },
  {
   "name": "inset-inline-start"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "auto",
+   "inert"
+  ],
+  "name": "interactivity"
+ },
+ {
+  "longhands": [
+   "interest-delay-start",
+   "interest-delay-end"
+  ],
+  "name": "interest-delay"
+ },
+ {
+  "name": "interest-delay-end"
+ },
+ {
+  "name": "interest-delay-start"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "numeric-only",
+   "allow-keywords"
+  ],
+  "name": "interpolate-size"
  },
  {
   "keywords": [
@@ -2184,9 +2935,18 @@ export const generatedProperties = [
    "loose",
    "normal",
    "strict",
-   "anywhere"
+   "anywhere",
+   "after-white-space"
   ],
   "name": "line-break"
+ },
+ {
+  "longhands": [
+   "max-lines",
+   "block-ellipsis",
+   "continue"
+  ],
+  "name": "line-clamp"
  },
  {
   "name": "line-gap-override"
@@ -2307,6 +3067,9 @@ export const generatedProperties = [
   "name": "margin-top"
  },
  {
+  "name": "margin-trim"
+ },
+ {
   "inherited": true,
   "longhands": [
    "marker-start",
@@ -2337,18 +3100,40 @@ export const generatedProperties = [
   "name": "marker-start"
  },
  {
+  "longhands": [
+   "mask-image",
+   "-webkit-mask-position-x",
+   "-webkit-mask-position-y",
+   "mask-size",
+   "mask-repeat",
+   "mask-origin",
+   "mask-clip",
+   "mask-composite",
+   "mask-mode"
+  ],
   "name": "mask"
  },
  {
   "name": "mask-clip"
  },
  {
+  "keywords": [
+   "add",
+   "subtract",
+   "intersect",
+   "exclude"
+  ],
   "name": "mask-composite"
  },
  {
   "name": "mask-image"
  },
  {
+  "keywords": [
+   "alpha",
+   "luminance",
+   "match-source"
+  ],
   "name": "mask-mode"
  },
  {
@@ -2411,6 +3196,12 @@ export const generatedProperties = [
    "none"
   ],
   "name": "max-inline-size"
+ },
+ {
+  "keywords": [
+   "none"
+  ],
+  "name": "max-lines"
  },
  {
   "keywords": [
@@ -2748,6 +3539,14 @@ export const generatedProperties = [
   "name": "page-break-inside"
  },
  {
+  "keywords": [
+   "none",
+   "clamp",
+   "add"
+  ],
+  "name": "page-margin-safety"
+ },
+ {
   "name": "page-orientation"
  },
  {
@@ -2759,6 +3558,12 @@ export const generatedProperties = [
    "markers"
   ],
   "name": "paint-order"
+ },
+ {
+  "name": "pathname"
+ },
+ {
+  "name": "pattern"
  },
  {
   "keywords": [
@@ -2808,10 +3613,7 @@ export const generatedProperties = [
   "name": "pointer-events"
  },
  {
-  "name": "popover-hide-delay"
- },
- {
-  "name": "popover-show-delay"
+  "name": "port"
  },
  {
   "keywords": [
@@ -2825,20 +3627,35 @@ export const generatedProperties = [
  },
  {
   "keywords": [
+   "auto",
    "none"
   ],
-  "name": "position-fallback"
+  "name": "position-anchor"
  },
  {
   "keywords": [
-   "normal"
+   "none",
+   "top",
+   "bottom",
+   "center",
+   "left",
+   "right",
+   "x-start",
+   "x-end",
+   "y-start",
+   "y-end",
+   "start",
+   "end",
+   "self-start",
+   "self-end",
+   "all"
   ],
-  "name": "position-fallback-bounds"
+  "name": "position-area"
  },
  {
   "longhands": [
    "position-try-order",
-   "position-try-options"
+   "position-try-fallbacks"
   ],
   "name": "position-try"
  },
@@ -2847,9 +3664,11 @@ export const generatedProperties = [
    "none",
    "flip-block",
    "flip-inline",
-   "flip-start"
+   "flip-start",
+   "flip-x",
+   "flip-y"
   ],
-  "name": "position-try-options"
+  "name": "position-try-fallbacks"
  },
  {
   "keywords": [
@@ -2862,7 +3681,26 @@ export const generatedProperties = [
   "name": "position-try-order"
  },
  {
+  "keywords": [
+   "always",
+   "anchors-visible",
+   "no-overflow"
+  ],
+  "name": "position-visibility"
+ },
+ {
   "name": "prefix"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "economy",
+   "exact"
+  ],
+  "name": "print-color-adjust"
+ },
+ {
+  "name": "protocol"
  },
  {
   "inherited": true,
@@ -2880,6 +3718,21 @@ export const generatedProperties = [
  },
  {
   "keywords": [
+   "normal",
+   "flex-visual",
+   "flex-flow",
+   "grid-rows",
+   "grid-columns",
+   "grid-order",
+   "source-order"
+  ],
+  "name": "reading-flow"
+ },
+ {
+  "name": "reading-order"
+ },
+ {
+  "keywords": [
    "none",
    "both",
    "horizontal",
@@ -2888,6 +3741,9 @@ export const generatedProperties = [
    "inline"
   ],
   "name": "resize"
+ },
+ {
+  "name": "result"
  },
  {
   "keywords": [
@@ -2905,8 +3761,209 @@ export const generatedProperties = [
   "name": "row-gap"
  },
  {
+  "longhands": [
+   "row-rule-width",
+   "row-rule-style",
+   "row-rule-color"
+  ],
+  "name": "row-rule"
+ },
+ {
+  "inherited": false,
+  "keywords": [
+   "none",
+   "normal",
+   "intersection"
+  ],
+  "name": "row-rule-break"
+ },
+ {
+  "keywords": [
+   "currentcolor"
+  ],
+  "name": "row-rule-color"
+ },
+ {
+  "longhands": [
+   "row-rule-edge-inset-start",
+   "row-rule-edge-inset-end"
+  ],
+  "name": "row-rule-edge-inset"
+ },
+ {
+  "inherited": false,
+  "name": "row-rule-edge-inset-end"
+ },
+ {
+  "inherited": false,
+  "name": "row-rule-edge-inset-start"
+ },
+ {
+  "longhands": [
+   "row-rule-edge-inset-start",
+   "row-rule-edge-inset-end",
+   "row-rule-interior-inset-start",
+   "row-rule-interior-inset-end"
+  ],
+  "name": "row-rule-inset"
+ },
+ {
+  "longhands": [
+   "row-rule-interior-inset-start",
+   "row-rule-interior-inset-end"
+  ],
+  "name": "row-rule-interior-inset"
+ },
+ {
+  "inherited": false,
+  "name": "row-rule-interior-inset-end"
+ },
+ {
+  "inherited": false,
+  "name": "row-rule-interior-inset-start"
+ },
+ {
+  "keywords": [
+   "none",
+   "hidden",
+   "inset",
+   "groove",
+   "outset",
+   "ridge",
+   "dotted",
+   "dashed",
+   "solid",
+   "double"
+  ],
+  "name": "row-rule-style"
+ },
+ {
+  "inherited": false,
+  "keywords": [
+   "all",
+   "around",
+   "between"
+  ],
+  "name": "row-rule-visibility-items"
+ },
+ {
+  "keywords": [
+   "thin",
+   "medium",
+   "thick"
+  ],
+  "name": "row-rule-width"
+ },
+ {
   "inherited": true,
+  "keywords": [
+   "space-around",
+   "start",
+   "center",
+   "space-between"
+  ],
+  "name": "ruby-align"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "auto",
+   "none"
+  ],
+  "name": "ruby-overhang"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "over",
+   "under"
+  ],
   "name": "ruby-position"
+ },
+ {
+  "longhands": [
+   "column-rule-width",
+   "column-rule-style",
+   "column-rule-color",
+   "row-rule-width",
+   "row-rule-style",
+   "row-rule-color"
+  ],
+  "name": "rule"
+ },
+ {
+  "longhands": [
+   "row-rule-break",
+   "column-rule-break"
+  ],
+  "name": "rule-break"
+ },
+ {
+  "longhands": [
+   "column-rule-color",
+   "row-rule-color"
+  ],
+  "name": "rule-color"
+ },
+ {
+  "longhands": [
+   "row-rule-edge-inset-start",
+   "row-rule-edge-inset-end",
+   "column-rule-edge-inset-start",
+   "column-rule-edge-inset-end"
+  ],
+  "name": "rule-edge-inset"
+ },
+ {
+  "longhands": [
+   "row-rule-edge-inset-start",
+   "row-rule-edge-inset-end",
+   "row-rule-interior-inset-start",
+   "row-rule-interior-inset-end",
+   "column-rule-edge-inset-start",
+   "column-rule-edge-inset-end",
+   "column-rule-interior-inset-start",
+   "column-rule-interior-inset-end"
+  ],
+  "name": "rule-inset"
+ },
+ {
+  "longhands": [
+   "row-rule-interior-inset-start",
+   "row-rule-interior-inset-end",
+   "column-rule-interior-inset-start",
+   "column-rule-interior-inset-end"
+  ],
+  "name": "rule-interior-inset"
+ },
+ {
+  "inherited": false,
+  "keywords": [
+   "row-over-column",
+   "column-over-row"
+  ],
+  "name": "rule-overlap"
+ },
+ {
+  "longhands": [
+   "column-rule-style",
+   "row-rule-style"
+  ],
+  "name": "rule-style"
+ },
+ {
+  "longhands": [
+   "column-rule-visibility-items",
+   "row-rule-visibility-items"
+  ],
+  "name": "rule-visibility-items"
+ },
+ {
+  "longhands": [
+   "column-rule-width",
+   "row-rule-width"
+  ],
+  "name": "rule-width"
  },
  {
   "keywords": [
@@ -2929,6 +3986,13 @@ export const generatedProperties = [
    "smooth"
   ],
   "name": "scroll-behavior"
+ },
+ {
+  "keywords": [
+   "none",
+   "nearest"
+  ],
+  "name": "scroll-initial-target"
  },
  {
   "longhands": [
@@ -2976,6 +4040,9 @@ export const generatedProperties = [
  },
  {
   "name": "scroll-margin-top"
+ },
+ {
+  "name": "scroll-marker-group"
  },
  {
   "longhands": [
@@ -3078,78 +4145,11 @@ export const generatedProperties = [
   "name": "scroll-snap-type"
  },
  {
-  "longhands": [
-   "scroll-start-block",
-   "scroll-start-inline"
-  ],
-  "name": "scroll-start"
- },
- {
-  "keywords": [
-   "auto",
-   "start",
-   "end",
-   "center",
-   "top",
-   "bottom",
-   "left",
-   "right"
-  ],
-  "name": "scroll-start-block"
- },
- {
-  "keywords": [
-   "auto",
-   "start",
-   "end",
-   "center",
-   "top",
-   "bottom",
-   "left",
-   "right"
-  ],
-  "name": "scroll-start-inline"
- },
- {
-  "longhands": [
-   "scroll-start-target-block",
-   "scroll-start-target-inline"
-  ],
-  "name": "scroll-start-target"
- },
- {
   "keywords": [
    "none",
    "auto"
   ],
-  "name": "scroll-start-target-block"
- },
- {
-  "keywords": [
-   "none",
-   "auto"
-  ],
-  "name": "scroll-start-target-inline"
- },
- {
-  "keywords": [
-   "none",
-   "auto"
-  ],
-  "name": "scroll-start-target-x"
- },
- {
-  "keywords": [
-   "none",
-   "auto"
-  ],
-  "name": "scroll-start-target-y"
- },
- {
-  "name": "scroll-start-x"
- },
- {
-  "name": "scroll-start-y"
+  "name": "scroll-target-group"
  },
  {
   "longhands": [
@@ -3188,6 +4188,9 @@ export const generatedProperties = [
    "none"
   ],
   "name": "scrollbar-width"
+ },
+ {
+  "name": "search"
  },
  {
   "name": "shape-image-threshold"
@@ -3326,7 +4329,8 @@ export const generatedProperties = [
    "-webkit-right",
    "-webkit-center",
    "start",
-   "end"
+   "end",
+   "match-parent"
   ],
   "name": "text-align"
  },
@@ -3339,7 +4343,8 @@ export const generatedProperties = [
    "left",
    "right",
    "center",
-   "justify"
+   "justify",
+   "match-parent"
   ],
   "name": "text-align-last"
  },
@@ -3355,17 +4360,28 @@ export const generatedProperties = [
  {
   "inherited": true,
   "keywords": [
-   "normal",
-   "no-autospace"
+   "no-autospace",
+   "normal"
   ],
   "name": "text-autospace"
  },
  {
+  "longhands": [
+   "text-box-trim",
+   "text-box-edge"
+  ],
+  "name": "text-box"
+ },
+ {
+  "inherited": true,
+  "name": "text-box-edge"
+ },
+ {
   "keywords": [
    "none",
-   "start",
-   "end",
-   "both"
+   "trim-start",
+   "trim-end",
+   "trim-both"
   ],
   "name": "text-box-trim"
  },
@@ -3454,8 +4470,21 @@ export const generatedProperties = [
   "name": "text-emphasis-style"
  },
  {
+  "name": "text-fit"
+ },
+ {
   "inherited": true,
   "name": "text-indent"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "auto",
+   "none",
+   "inter-word",
+   "inter-character"
+  ],
+  "name": "text-justify"
  },
  {
   "inherited": true,
@@ -3522,6 +4551,7 @@ export const generatedProperties = [
    "capitalize",
    "uppercase",
    "lowercase",
+   "full-width",
    "none",
    "math-auto"
   ],
@@ -3547,16 +4577,79 @@ export const generatedProperties = [
  },
  {
   "inherited": true,
-  "keywords": [
-   "wrap",
-   "nowrap",
-   "balance",
-   "pretty"
+  "longhands": [
+   "text-wrap-mode",
+   "text-wrap-style"
   ],
   "name": "text-wrap"
  },
  {
+  "inherited": true,
+  "keywords": [
+   "wrap",
+   "nowrap"
+  ],
+  "name": "text-wrap-mode"
+ },
+ {
+  "inherited": true,
+  "keywords": [
+   "auto",
+   "balance",
+   "pretty",
+   "stable"
+  ],
+  "name": "text-wrap-style"
+ },
+ {
   "name": "timeline-scope"
+ },
+ {
+  "longhands": [
+   "timeline-trigger-name",
+   "timeline-trigger-source",
+   "timeline-trigger-activation-range-start",
+   "timeline-trigger-activation-range-end",
+   "timeline-trigger-active-range-start",
+   "timeline-trigger-active-range-end"
+  ],
+  "name": "timeline-trigger"
+ },
+ {
+  "longhands": [
+   "timeline-trigger-activation-range-start",
+   "timeline-trigger-activation-range-end"
+  ],
+  "name": "timeline-trigger-activation-range"
+ },
+ {
+  "name": "timeline-trigger-activation-range-end"
+ },
+ {
+  "name": "timeline-trigger-activation-range-start"
+ },
+ {
+  "longhands": [
+   "timeline-trigger-active-range-start",
+   "timeline-trigger-active-range-end"
+  ],
+  "name": "timeline-trigger-active-range"
+ },
+ {
+  "name": "timeline-trigger-active-range-end"
+ },
+ {
+  "name": "timeline-trigger-active-range-start"
+ },
+ {
+  "name": "timeline-trigger-name"
+ },
+ {
+  "keywords": [
+   "none",
+   "auto"
+  ],
+  "name": "timeline-trigger-source"
  },
  {
   "keywords": [
@@ -3616,6 +4709,10 @@ export const generatedProperties = [
   "name": "transition"
  },
  {
+  "keywords": [
+   "normal",
+   "allow-discrete"
+  ],
   "name": "transition-behavior"
  },
  {
@@ -3648,6 +4745,16 @@ export const generatedProperties = [
  },
  {
   "name": "translate"
+ },
+ {
+  "keywords": [
+   "none",
+   "all"
+  ],
+  "name": "trigger-scope"
+ },
+ {
+  "name": "types"
  },
  {
   "keywords": [
@@ -3695,7 +4802,8 @@ export const generatedProperties = [
  {
   "longhands": [
    "view-timeline-name",
-   "view-timeline-axis"
+   "view-timeline-axis",
+   "view-timeline-inset"
   ],
   "name": "view-timeline"
  },
@@ -3716,9 +4824,26 @@ export const generatedProperties = [
  },
  {
   "keywords": [
-   "none"
+   "normal",
+   "contain",
+   "nearest"
+  ],
+  "name": "view-transition-group"
+ },
+ {
+  "keywords": [
+   "none",
+   "auto"
   ],
   "name": "view-transition-name"
+ },
+ {
+  "inherited": false,
+  "keywords": [
+   "none",
+   "auto"
+  ],
+  "name": "view-transition-scope"
  },
  {
   "inherited": true,
@@ -3733,7 +4858,7 @@ export const generatedProperties = [
   "inherited": true,
   "longhands": [
    "white-space-collapse",
-   "text-wrap"
+   "text-wrap-mode"
   ],
   "name": "white-space"
  },
@@ -3789,7 +4914,9 @@ export const generatedProperties = [
   "keywords": [
    "horizontal-tb",
    "vertical-rl",
-   "vertical-lr"
+   "vertical-lr",
+   "sideways-rl",
+   "sideways-lr"
   ],
   "name": "writing-mode"
  },
@@ -3851,26 +4978,18 @@ export const generatedPropertyValues = {
    "loose",
    "normal",
    "strict",
-   "after-white-space",
-   "anywhere"
+   "after-white-space"
   ]
  },
- "-webkit-print-color-adjust": {
+ "-webkit-line-clamp": {
   "values": [
-   "economy",
-   "exact"
+   "none"
   ]
  },
  "-webkit-rtl-ordering": {
   "values": [
    "logical",
    "visual"
-  ]
- },
- "-webkit-ruby-position": {
-  "values": [
-   "before",
-   "after"
   ]
  },
  "-webkit-text-security": {
@@ -3917,14 +5036,15 @@ export const generatedPropertyValues = {
    "hanging"
   ]
  },
- "anchor-default": {
+ "anchor-name": {
   "values": [
    "none"
   ]
  },
- "anchor-name": {
+ "anchor-scope": {
   "values": [
-   "none"
+   "none",
+   "all"
   ]
  },
  "animation-composition": {
@@ -3985,6 +5105,11 @@ export const generatedPropertyValues = {
    "jump-start",
    "step-start",
    "step-end"
+  ]
+ },
+ "animation-trigger": {
+  "values": [
+   "none"
   ]
  },
  "app-region": {
@@ -4082,6 +5207,12 @@ export const generatedPropertyValues = {
    "auto",
    "first",
    "last"
+  ]
+ },
+ "block-ellipsis": {
+  "values": [
+   "auto",
+   "no-ellipsis"
   ]
  },
  "block-size": {
@@ -4191,6 +5322,11 @@ export const generatedPropertyValues = {
    "thick"
   ]
  },
+ "border-shape": {
+  "values": [
+   "none"
+  ]
+ },
  "border-style": {
   "values": [
    "none"
@@ -4225,6 +5361,12 @@ export const generatedPropertyValues = {
  "bottom": {
   "values": [
    "auto"
+  ]
+ },
+ "box-decoration-break": {
+  "values": [
+   "slice",
+   "clone"
   ]
  },
  "box-shadow": {
@@ -4287,10 +5429,24 @@ export const generatedPropertyValues = {
    "bottom"
   ]
  },
+ "caret-animation": {
+  "values": [
+   "auto",
+   "manual"
+  ]
+ },
  "caret-color": {
   "values": [
    "auto",
    "currentcolor"
+  ]
+ },
+ "caret-shape": {
+  "values": [
+   "auto",
+   "bar",
+   "block",
+   "underscore"
   ]
  },
  "clear": {
@@ -4368,6 +5524,18 @@ export const generatedPropertyValues = {
    "normal"
   ]
  },
+ "column-height": {
+  "values": [
+   "auto"
+  ]
+ },
+ "column-rule-break": {
+  "values": [
+   "none",
+   "normal",
+   "intersection"
+  ]
+ },
  "column-rule-color": {
   "values": [
    "currentcolor"
@@ -4387,6 +5555,13 @@ export const generatedPropertyValues = {
    "double"
   ]
  },
+ "column-rule-visibility-items": {
+  "values": [
+   "all",
+   "around",
+   "between"
+  ]
+ },
  "column-rule-width": {
   "values": [
    "thin",
@@ -4403,6 +5578,13 @@ export const generatedPropertyValues = {
  "column-width": {
   "values": [
    "auto"
+  ]
+ },
+ "column-wrap": {
+  "values": [
+   "auto",
+   "nowrap",
+   "wrap"
   ]
  },
  "contain": {
@@ -4438,7 +5620,8 @@ export const generatedPropertyValues = {
    "normal",
    "inline-size",
    "size",
-   "scroll-state"
+   "scroll-state",
+   "anchored"
   ]
  },
  "content-visibility": {
@@ -4446,6 +5629,58 @@ export const generatedPropertyValues = {
    "visible",
    "auto",
    "hidden"
+  ]
+ },
+ "continue": {
+  "values": [
+   "auto",
+   "collapse",
+   "-webkit-legacy"
+  ]
+ },
+ "corner-bottom-left-shape": {
+  "values": [
+   "notch",
+   "scoop",
+   "bevel",
+   "round",
+   "squircle",
+   "square"
+  ]
+ },
+ "corner-bottom-right-shape": {
+  "values": [
+   "notch",
+   "scoop",
+   "bevel",
+   "round",
+   "squircle",
+   "square"
+  ]
+ },
+ "corner-top-left-shape": {
+  "values": [
+   "notch",
+   "scoop",
+   "bevel",
+   "round",
+   "squircle",
+   "square"
+  ]
+ },
+ "corner-top-right-shape": {
+  "values": [
+   "notch",
+   "scoop",
+   "bevel",
+   "round",
+   "squircle",
+   "square"
+  ]
+ },
+ "corners": {
+  "values": [
+   "normal"
   ]
  },
  "counter-increment": {
@@ -4542,7 +5777,9 @@ export const generatedPropertyValues = {
    "flow",
    "math",
    "ruby",
-   "ruby-text"
+   "ruby-text",
+   "grid-lanes",
+   "inline-grid-lanes"
   ]
  },
  "dominant-baseline": {
@@ -4564,8 +5801,8 @@ export const generatedPropertyValues = {
  "dynamic-range-limit": {
   "values": [
    "standard",
-   "high",
-   "constrained-high"
+   "no-limit",
+   "constrained"
   ]
  },
  "empty-cells": {
@@ -4612,7 +5849,8 @@ export const generatedPropertyValues = {
   "values": [
    "nowrap",
    "wrap",
-   "wrap-reverse"
+   "wrap-reverse",
+   "balance"
   ]
  },
  "float": {
@@ -4629,6 +5867,12 @@ export const generatedPropertyValues = {
    "currentcolor"
   ]
  },
+ "flow-tolerance": {
+  "values": [
+   "normal",
+   "infinite"
+  ]
+ },
  "font-feature-settings": {
   "values": [
    "normal"
@@ -4639,6 +5883,11 @@ export const generatedPropertyValues = {
    "auto",
    "normal",
    "none"
+  ]
+ },
+ "font-language-override": {
+  "values": [
+   "normal"
   ]
  },
  "font-optical-sizing": {
@@ -4676,6 +5925,7 @@ export const generatedPropertyValues = {
    "cap-height",
    "ch-width",
    "ic-width",
+   "ic-height",
    "from-font"
   ]
  },
@@ -4747,6 +5997,14 @@ export const generatedPropertyValues = {
    "ruby"
   ]
  },
+ "font-variant-emoji": {
+  "values": [
+   "normal",
+   "text",
+   "emoji",
+   "unicode"
+  ]
+ },
  "font-variant-ligatures": {
   "values": [
    "normal",
@@ -4801,6 +6059,15 @@ export const generatedPropertyValues = {
    "preserve-parent-color"
   ]
  },
+ "frame-sizing": {
+  "values": [
+   "auto",
+   "content-width",
+   "content-height",
+   "content-block-size",
+   "content-inline-size"
+  ]
+ },
  "grid-auto-columns": {
   "values": [
    "auto",
@@ -4829,6 +6096,21 @@ export const generatedPropertyValues = {
  "grid-column-start": {
   "values": [
    "auto"
+  ]
+ },
+ "grid-lanes-direction": {
+  "values": [
+   "normal",
+   "row",
+   "column",
+   "fill-reverse",
+   "track-reverse"
+  ]
+ },
+ "grid-lanes-pack": {
+  "values": [
+   "normal",
+   "dense"
   ]
  },
  "grid-row-end": {
@@ -4876,6 +6158,13 @@ export const generatedPropertyValues = {
    "auto"
   ]
  },
+ "image-animation": {
+  "values": [
+   "normal",
+   "running",
+   "paused"
+  ]
+ },
  "image-rendering": {
   "values": [
    "auto",
@@ -4897,23 +6186,16 @@ export const generatedPropertyValues = {
    "auto"
   ]
  },
- "inset-area": {
+ "interactivity": {
   "values": [
-   "none",
-   "top",
-   "bottom",
-   "center",
-   "left",
-   "right",
-   "x-start",
-   "x-end",
-   "y-start",
-   "y-end",
-   "start",
-   "end",
-   "self-start",
-   "self-end",
-   "all"
+   "auto",
+   "inert"
+  ]
+ },
+ "interpolate-size": {
+  "values": [
+   "numeric-only",
+   "allow-keywords"
   ]
  },
  "isolation": {
@@ -4943,7 +6225,8 @@ export const generatedPropertyValues = {
    "loose",
    "normal",
    "strict",
-   "anywhere"
+   "anywhere",
+   "after-white-space"
   ]
  },
  "line-height": {
@@ -5028,6 +6311,21 @@ export const generatedPropertyValues = {
    "none"
   ]
  },
+ "mask-composite": {
+  "values": [
+   "add",
+   "subtract",
+   "intersect",
+   "exclude"
+  ]
+ },
+ "mask-mode": {
+  "values": [
+   "alpha",
+   "luminance",
+   "match-source"
+  ]
+ },
  "mask-type": {
   "values": [
    "luminance",
@@ -5057,6 +6355,11 @@ export const generatedPropertyValues = {
   ]
  },
  "max-inline-size": {
+  "values": [
+   "none"
+  ]
+ },
+ "max-lines": {
   "values": [
    "none"
   ]
@@ -5221,6 +6524,13 @@ export const generatedPropertyValues = {
    "auto"
   ]
  },
+ "page-margin-safety": {
+  "values": [
+   "none",
+   "clamp",
+   "add"
+  ]
+ },
  "paint-order": {
   "values": [
    "normal",
@@ -5258,22 +6568,39 @@ export const generatedPropertyValues = {
    "sticky"
   ]
  },
- "position-fallback": {
+ "position-anchor": {
   "values": [
+   "auto",
    "none"
   ]
  },
- "position-fallback-bounds": {
+ "position-area": {
   "values": [
-   "normal"
+   "none",
+   "top",
+   "bottom",
+   "center",
+   "left",
+   "right",
+   "x-start",
+   "x-end",
+   "y-start",
+   "y-end",
+   "start",
+   "end",
+   "self-start",
+   "self-end",
+   "all"
   ]
  },
- "position-try-options": {
+ "position-try-fallbacks": {
   "values": [
    "none",
    "flip-block",
    "flip-inline",
-   "flip-start"
+   "flip-start",
+   "flip-x",
+   "flip-y"
   ]
  },
  "position-try-order": {
@@ -5285,10 +6612,34 @@ export const generatedPropertyValues = {
    "most-inline-size"
   ]
  },
+ "position-visibility": {
+  "values": [
+   "always",
+   "anchors-visible",
+   "no-overflow"
+  ]
+ },
+ "print-color-adjust": {
+  "values": [
+   "economy",
+   "exact"
+  ]
+ },
  "quotes": {
   "values": [
    "auto",
    "none"
+  ]
+ },
+ "reading-flow": {
+  "values": [
+   "normal",
+   "flex-visual",
+   "flex-flow",
+   "grid-rows",
+   "grid-columns",
+   "grid-order",
+   "source-order"
   ]
  },
  "resize": {
@@ -5311,6 +6662,72 @@ export const generatedPropertyValues = {
    "normal"
   ]
  },
+ "row-rule-break": {
+  "values": [
+   "none",
+   "normal",
+   "intersection"
+  ]
+ },
+ "row-rule-color": {
+  "values": [
+   "currentcolor"
+  ]
+ },
+ "row-rule-style": {
+  "values": [
+   "none",
+   "hidden",
+   "inset",
+   "groove",
+   "outset",
+   "ridge",
+   "dotted",
+   "dashed",
+   "solid",
+   "double"
+  ]
+ },
+ "row-rule-visibility-items": {
+  "values": [
+   "all",
+   "around",
+   "between"
+  ]
+ },
+ "row-rule-width": {
+  "values": [
+   "thin",
+   "medium",
+   "thick"
+  ]
+ },
+ "ruby-align": {
+  "values": [
+   "space-around",
+   "start",
+   "center",
+   "space-between"
+  ]
+ },
+ "ruby-overhang": {
+  "values": [
+   "auto",
+   "none"
+  ]
+ },
+ "ruby-position": {
+  "values": [
+   "over",
+   "under"
+  ]
+ },
+ "rule-overlap": {
+  "values": [
+   "row-over-column",
+   "column-over-row"
+  ]
+ },
  "rx": {
   "values": [
    "auto"
@@ -5325,6 +6742,12 @@ export const generatedPropertyValues = {
   "values": [
    "auto",
    "smooth"
+  ]
+ },
+ "scroll-initial-target": {
+  "values": [
+   "none",
+   "nearest"
   ]
  },
  "scroll-padding-block-end": {
@@ -5393,49 +6816,7 @@ export const generatedPropertyValues = {
    "proximity"
   ]
  },
- "scroll-start-block": {
-  "values": [
-   "auto",
-   "start",
-   "end",
-   "center",
-   "top",
-   "bottom",
-   "left",
-   "right"
-  ]
- },
- "scroll-start-inline": {
-  "values": [
-   "auto",
-   "start",
-   "end",
-   "center",
-   "top",
-   "bottom",
-   "left",
-   "right"
-  ]
- },
- "scroll-start-target-block": {
-  "values": [
-   "none",
-   "auto"
-  ]
- },
- "scroll-start-target-inline": {
-  "values": [
-   "none",
-   "auto"
-  ]
- },
- "scroll-start-target-x": {
-  "values": [
-   "none",
-   "auto"
-  ]
- },
- "scroll-start-target-y": {
+ "scroll-target-group": {
   "values": [
    "none",
    "auto"
@@ -5528,7 +6909,8 @@ export const generatedPropertyValues = {
    "-webkit-right",
    "-webkit-center",
    "start",
-   "end"
+   "end",
+   "match-parent"
   ]
  },
  "text-align-last": {
@@ -5539,7 +6921,8 @@ export const generatedPropertyValues = {
    "left",
    "right",
    "center",
-   "justify"
+   "justify",
+   "match-parent"
   ]
  },
  "text-anchor": {
@@ -5551,16 +6934,16 @@ export const generatedPropertyValues = {
  },
  "text-autospace": {
   "values": [
-   "normal",
-   "no-autospace"
+   "no-autospace",
+   "normal"
   ]
  },
  "text-box-trim": {
   "values": [
    "none",
-   "start",
-   "end",
-   "both"
+   "trim-start",
+   "trim-end",
+   "trim-both"
   ]
  },
  "text-combine-upright": {
@@ -5611,6 +6994,14 @@ export const generatedPropertyValues = {
    "currentcolor"
   ]
  },
+ "text-justify": {
+  "values": [
+   "auto",
+   "none",
+   "inter-word",
+   "inter-character"
+  ]
+ },
  "text-orientation": {
   "values": [
    "sideways",
@@ -5656,6 +7047,7 @@ export const generatedPropertyValues = {
    "capitalize",
    "uppercase",
    "lowercase",
+   "full-width",
    "none",
    "math-auto"
   ]
@@ -5674,12 +7066,24 @@ export const generatedPropertyValues = {
    "right"
   ]
  },
- "text-wrap": {
+ "text-wrap-mode": {
   "values": [
    "wrap",
-   "nowrap",
+   "nowrap"
+  ]
+ },
+ "text-wrap-style": {
+  "values": [
+   "auto",
    "balance",
-   "pretty"
+   "pretty",
+   "stable"
+  ]
+ },
+ "timeline-trigger-source": {
+  "values": [
+   "none",
+   "auto"
   ]
  },
  "top": {
@@ -5721,6 +7125,12 @@ export const generatedPropertyValues = {
    "preserve-3d"
   ]
  },
+ "transition-behavior": {
+  "values": [
+   "normal",
+   "allow-discrete"
+  ]
+ },
  "transition-property": {
   "values": [
    "none"
@@ -5739,6 +7149,12 @@ export const generatedPropertyValues = {
    "jump-start",
    "step-start",
    "step-end"
+  ]
+ },
+ "trigger-scope": {
+  "values": [
+   "none",
+   "all"
   ]
  },
  "unicode-bidi": {
@@ -5781,9 +7197,23 @@ export const generatedPropertyValues = {
    "none"
   ]
  },
+ "view-transition-group": {
+  "values": [
+   "normal",
+   "contain",
+   "nearest"
+  ]
+ },
  "view-transition-name": {
   "values": [
-   "none"
+   "none",
+   "auto"
+  ]
+ },
+ "view-transition-scope": {
+  "values": [
+   "none",
+   "auto"
   ]
  },
  "visibility": {
@@ -5832,7 +7262,9 @@ export const generatedPropertyValues = {
   "values": [
    "horizontal-tb",
    "vertical-rl",
-   "vertical-lr"
+   "vertical-lr",
+   "sideways-rl",
+   "sideways-lr"
   ]
  },
  "z-index": {
@@ -5889,50 +7321,6 @@ export const generatedAliasesFor = new Map([
  [
   "-webkit-align-self",
   "align-self"
- ],
- [
-  "-webkit-alternative-animation-delay",
-  "-alternative-animation-delay"
- ],
- [
-  "-webkit-alternative-animation-with-delay-start-end",
-  "-alternative-animation-with-delay-start-end"
- ],
- [
-  "-webkit-alternative-animation-with-timeline",
-  "-alternative-animation-with-timeline"
- ],
- [
-  "-webkit-alternative-mask",
-  "-alternative-mask"
- ],
- [
-  "-webkit-alternative-mask-clip",
-  "mask-clip"
- ],
- [
-  "-webkit-alternative-mask-composite",
-  "mask-composite"
- ],
- [
-  "-webkit-alternative-mask-image",
-  "mask-image"
- ],
- [
-  "-webkit-alternative-mask-origin",
-  "mask-origin"
- ],
- [
-  "-webkit-alternative-mask-position",
-  "mask-position"
- ],
- [
-  "-webkit-alternative-mask-repeat",
-  "mask-repeat"
- ],
- [
-  "-webkit-alternative-mask-size",
-  "mask-size"
  ],
  [
   "-webkit-animation",
@@ -6195,6 +7583,38 @@ export const generatedAliasesFor = new Map([
   "margin-inline-start"
  ],
  [
+  "-webkit-mask",
+  "mask"
+ ],
+ [
+  "-webkit-mask-clip",
+  "mask-clip"
+ ],
+ [
+  "-webkit-mask-composite",
+  "mask-composite"
+ ],
+ [
+  "-webkit-mask-image",
+  "mask-image"
+ ],
+ [
+  "-webkit-mask-origin",
+  "mask-origin"
+ ],
+ [
+  "-webkit-mask-position",
+  "mask-position"
+ ],
+ [
+  "-webkit-mask-repeat",
+  "mask-repeat"
+ ],
+ [
+  "-webkit-mask-size",
+  "mask-size"
+ ],
+ [
   "-webkit-max-logical-height",
   "max-block-size"
  ],
@@ -6241,6 +7661,10 @@ export const generatedAliasesFor = new Map([
  [
   "-webkit-perspective-origin",
   "perspective-origin"
+ ],
+ [
+  "-webkit-print-color-adjust",
+  "print-color-adjust"
  ],
  [
   "-webkit-shape-image-threshold",
@@ -6309,6 +7733,18 @@ export const generatedAliasesFor = new Map([
  [
   "-webkit-user-select",
   "user-select"
+ ],
+ [
+  "grid-column-gap",
+  "column-gap"
+ ],
+ [
+  "grid-gap",
+  "gap"
+ ],
+ [
+  "grid-row-gap",
+  "row-gap"
  ],
  [
   "word-wrap",

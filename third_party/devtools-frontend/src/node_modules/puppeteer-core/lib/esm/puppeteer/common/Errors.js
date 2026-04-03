@@ -12,8 +12,8 @@ export class PuppeteerError extends Error {
     /**
      * @internal
      */
-    constructor(message) {
-        super(message);
+    constructor(message, options) {
+        super(message, options);
         this.name = this.constructor.name;
     }
     /**
@@ -34,6 +34,13 @@ export class PuppeteerError extends Error {
  * @public
  */
 export class TimeoutError extends PuppeteerError {
+}
+/**
+ * TouchError is thrown when an attempt is made to move or end a touch that does
+ * not exist.
+ * @public
+ */
+export class TouchError extends PuppeteerError {
 }
 /**
  * ProtocolError is emitted whenever there is an error from the protocol.
@@ -76,5 +83,12 @@ export class UnsupportedOperation extends PuppeteerError {
  * @internal
  */
 export class TargetCloseError extends ProtocolError {
+}
+/**
+ * Thrown if underlying protocol connection has been closed.
+ *
+ * @public
+ */
+export class ConnectionClosedError extends ProtocolError {
 }
 //# sourceMappingURL=Errors.js.map

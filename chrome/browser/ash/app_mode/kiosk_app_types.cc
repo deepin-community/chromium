@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ash/app_mode/kiosk_app_types.h"
 
-#include <algorithm>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -12,26 +11,21 @@
 
 #include "base/check.h"
 #include "components/account_id/account_id.h"
-#include "components/crx_file/id_util.h"
 
 namespace ash {
 
 namespace {
 
-void CheckChromeAppIdIsValid(std::string_view id) {
-  // TODO(b/304937903) upgrade to CHECK.
-  DUMP_WILL_BE_CHECK(crx_file::id_util::IdIsValid(id))
-      << "Invalid Chrome App ID: " << id;
-}
-
 std::string ToString(KioskAppType type) {
   switch (type) {
-    case KioskAppType::kArcApp:
-      return "ArcKiosk";
     case KioskAppType::kChromeApp:
       return "ChromeAppKiosk";
     case KioskAppType::kWebApp:
       return "WebKiosk";
+    case KioskAppType::kIsolatedWebApp:
+      return "IsolatedWebAppKiosk";
+    case KioskAppType::kArcvmApp:
+      return "ArcvmKiosk";
   }
 }
 
@@ -46,17 +40,22 @@ KioskAppId KioskAppId::ForChromeApp(std::string_view chrome_app_id,
 }
 
 // static
-KioskAppId KioskAppId::ForArcApp(const AccountId& account_id) {
-  // TODO(b/304937903) upgrade to CHECK.
-  DUMP_WILL_BE_CHECK(account_id.is_valid());
-  return KioskAppId(KioskAppType::kArcApp, account_id);
-}
-
-// static
 KioskAppId KioskAppId::ForWebApp(const AccountId& account_id) {
   // TODO(b/304937903) upgrade to CHECK.
   DUMP_WILL_BE_CHECK(account_id.is_valid());
   return KioskAppId(KioskAppType::kWebApp, account_id);
+}
+
+// static
+KioskAppId KioskAppId::ForIsolatedWebApp(const AccountId& account_id) {
+  DUMP_WILL_BE_CHECK(account_id.is_valid());
+  return {KioskAppType::kIsolatedWebApp, account_id};
+}
+
+// static
+KioskAppId KioskAppId::ForArcvmApp(const AccountId& account_id) {
+  CHECK(account_id.is_valid());
+  return {KioskAppType::kArcvmApp, account_id};
 }
 
 KioskAppId::KioskAppId() = default;
@@ -65,11 +64,15 @@ KioskAppId::KioskAppId(std::string_view chrome_app_id,
     : type(KioskAppType::kChromeApp),
       app_id(chrome_app_id),
       account_id(account_id) {
-  CheckChromeAppIdIsValid(chrome_app_id);
+  // TODO(b/304937903): Update the caller code to never call us with invalid ChromeApp IDs.
+  // See b/339172292 for a scenario when that currently happens.
 }
 KioskAppId::KioskAppId(KioskAppType type, const AccountId& account_id)
     : type(type), account_id(account_id) {}
 KioskAppId::KioskAppId(const KioskAppId&) = default;
+KioskAppId::KioskAppId(KioskAppId&&) = default;
+KioskAppId& KioskAppId::operator=(const KioskAppId&) = default;
+KioskAppId& KioskAppId::operator=(KioskAppId&&) = default;
 KioskAppId::~KioskAppId() = default;
 
 std::ostream& operator<<(std::ostream& stream, const KioskAppId& id) {
@@ -80,5 +83,33 @@ std::ostream& operator<<(std::ostream& stream, const KioskAppId& id) {
   }
   return stream << "}";
 }
+
+bool operator==(const KioskAppId& first, const KioskAppId& second) {
+  return (first.type == second.type) && (first.app_id == second.app_id) &&
+         (first.account_id == second.account_id);
+}
+
+KioskAppInstallParams::KioskAppInstallParams(std::string id,
+                                             std::string crx_file_location,
+                                             std::string version,
+                                             bool is_store_app)
+    : id(std::move(id)),
+      crx_file_location(std::move(crx_file_location)),
+      version(std::move(version)),
+      is_store_app(is_store_app) {}
+
+KioskAppInstallParams::KioskAppInstallParams(
+    const KioskAppInstallParams& other) = default;
+
+KioskAppInstallParams::KioskAppInstallParams(
+    KioskAppInstallParams&& other) noexcept = default;
+
+KioskAppInstallParams& KioskAppInstallParams::operator=(
+    const KioskAppInstallParams& other) = default;
+
+KioskAppInstallParams& KioskAppInstallParams::operator=(
+    KioskAppInstallParams&& other) noexcept = default;
+
+KioskAppInstallParams::~KioskAppInstallParams() = default;
 
 }  // namespace ash

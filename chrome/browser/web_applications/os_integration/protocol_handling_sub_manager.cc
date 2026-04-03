@@ -9,13 +9,14 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
-#include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_sub_manager.h"
+#include "chrome/browser/web_applications/os_integration/os_integration_test_override.h"
 #include "chrome/browser/web_applications/os_integration/web_app_protocol_handler_registration.h"
+#include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
+#include "chrome/browser/web_applications/proto/web_app_os_integration_state.equal.h"
 #include "chrome/browser/web_applications/proto/web_app_os_integration_state.pb.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
@@ -29,7 +30,7 @@ namespace web_app {
 namespace {
 
 std::vector<apps::ProtocolHandlerInfo> GetApprovedProtocolHandlers(
-    const proto::WebAppOsIntegrationState& state) {
+    const proto::os_state::WebAppOsIntegration& state) {
   std::vector<apps::ProtocolHandlerInfo> protocol_handlers_info;
   for (const auto& proto_data : state.protocols_handled().protocols()) {
     apps::ProtocolHandlerInfo info;
@@ -56,10 +57,11 @@ ProtocolHandlingSubManager::~ProtocolHandlingSubManager() = default;
 
 void ProtocolHandlingSubManager::Configure(
     const webapps::AppId& app_id,
-    proto::WebAppOsIntegrationState& desired_state,
+    proto::os_state::WebAppOsIntegration& desired_state,
     base::OnceClosure configure_done) {
   DCHECK(!desired_state.has_protocols_handled());
-  if (!provider_->registrar_unsafe().IsLocallyInstalled(app_id)) {
+  if (provider_->registrar_unsafe().GetInstallState(app_id) !=
+      proto::INSTALLED_WITH_OS_INTEGRATION) {
     std::move(configure_done).Run();
     return;
   }
@@ -68,12 +70,12 @@ void ProtocolHandlingSubManager::Configure(
   DCHECK(web_app);
 
   for (const auto& protocol_handler : web_app->protocol_handlers()) {
-    if (base::Contains(web_app->disallowed_launch_protocols(),
-                       protocol_handler.protocol)) {
+    if (web_app->disallowed_launch_protocols().contains(
+            protocol_handler.protocol)) {
       continue;
     }
 
-    proto::ProtocolsHandled::Protocol* protocol =
+    proto::os_state::ProtocolsHandled::Protocol* protocol =
         desired_state.mutable_protocols_handled()->add_protocols();
     protocol->set_protocol(protocol_handler.protocol);
     protocol->set_url(protocol_handler.url.spec());
@@ -84,8 +86,8 @@ void ProtocolHandlingSubManager::Configure(
 void ProtocolHandlingSubManager::Execute(
     const webapps::AppId& app_id,
     const std::optional<SynchronizeOsOptions>& synchronize_options,
-    const proto::WebAppOsIntegrationState& desired_state,
-    const proto::WebAppOsIntegrationState& current_state,
+    const proto::os_state::WebAppOsIntegration& desired_state,
+    const proto::os_state::WebAppOsIntegration& current_state,
     base::OnceClosure callback) {
   // No-op if both the desired and current states are empty.
   if (!desired_state.has_protocols_handled() &&
@@ -93,6 +95,8 @@ void ProtocolHandlingSubManager::Execute(
     std::move(callback).Run();
     return;
   }
+
+  CHECK_OS_INTEGRATION_ALLOWED();
 
   // Handle unregistration case.
   if (current_state.has_protocols_handled() &&
@@ -123,11 +127,7 @@ void ProtocolHandlingSubManager::Execute(
   DCHECK(current_state.has_protocols_handled());
 
   // Protocol Handling Diff detection.
-  std::string desired_protocols_handled =
-      desired_state.protocols_handled().SerializeAsString();
-  std::string current_protocols_handled =
-      current_state.protocols_handled().SerializeAsString();
-  if (desired_protocols_handled == current_protocols_handled) {
+  if (desired_state.protocols_handled() == current_state.protocols_handled()) {
     std::move(callback).Run();
     return;
   }

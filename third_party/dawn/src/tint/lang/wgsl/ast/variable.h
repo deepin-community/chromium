@@ -31,12 +31,12 @@
 #include <utility>
 #include <vector>
 
-#include "src/tint/lang/core/access.h"
-#include "src/tint/lang/core/address_space.h"
+#include "src/tint/lang/core/enums.h"
 #include "src/tint/lang/wgsl/ast/attribute.h"
 #include "src/tint/lang/wgsl/ast/binding_attribute.h"
 #include "src/tint/lang/wgsl/ast/expression.h"
 #include "src/tint/lang/wgsl/ast/group_attribute.h"
+#include "src/tint/lang/wgsl/ast/input_attachment_index_attribute.h"
 #include "src/tint/lang/wgsl/ast/node.h"
 #include "src/tint/lang/wgsl/ast/type.h"
 
@@ -57,15 +57,13 @@ namespace tint::ast {
 class Variable : public Castable<Variable, Node> {
   public:
     /// Constructor
-    /// @param pid the identifier of the program that owns this node
     /// @param nid the unique node identifier
     /// @param src the variable source
     /// @param name The struct member name
     /// @param type the declared variable type
     /// @param initializer the initializer expression
     /// @param attributes the variable attributes
-    Variable(GenerationID pid,
-             NodeID nid,
+    Variable(NodeID nid,
              const Source& src,
              const Identifier* name,
              Type type,
@@ -79,6 +77,11 @@ class Variable : public Castable<Variable, Node> {
     bool HasBindingPoint() const {
         return HasAttribute<BindingAttribute>(attributes) &&
                HasAttribute<GroupAttribute>(attributes);
+    }
+
+    /// @returns true if the variable has an input_attachment_index attribute
+    bool HasInputAttachmentIndex() const {
+        return HasAttribute<InputAttachmentIndexAttribute>(attributes);
     }
 
     /// @returns the kind of the variable, which can be used in diagnostics

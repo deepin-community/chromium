@@ -6,10 +6,13 @@
 
 #import <AppKit/AppKit.h>
 
-#include "base/containers/cxx20_erase.h"
+#include <algorithm>
+#include <vector>
+
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/widget/native_widget_mac.h"
 #include "ui/views/widget/widget.h"
 
@@ -22,12 +25,12 @@ WindowsStationarityMonitorMac::WindowsStationarityMonitorMac()
                   &WindowsStationarityMonitorMac::OnNativeWidgetAdded,
                   base::Unretained(this)))) {
   for (NSWindow* window : [NSApp windows]) {
-    auto* widget = Widget::GetWidgetForNativeWindow(window);
+    auto* widget = Widget::GetWidgetForNativeWindow(gfx::NativeWindow(window));
     // Ignore any widgets that have been tracked.
     // For example, if the window is a system created NSToolbarFullScreenWindow
     // GetFromNativeWindow() will later interrogate the original NSWindow,
     // result in a tracked widget.
-    if (!widget || base::Contains(tracked_windows_, widget)) {
+    if (!widget || std::ranges::contains(tracked_windows_, widget)) {
       continue;
     }
 
@@ -52,7 +55,7 @@ WindowsStationarityMonitorMac* WindowsStationarityMonitorMac::GetInstance() {
 
 void WindowsStationarityMonitorMac::OnWidgetDestroying(Widget* widget) {
   widget->RemoveObserver(this);
-  base::Erase(tracked_windows_, widget);
+  std::erase(tracked_windows_, widget);
   NotifyWindowStationaryStateChanged();
 }
 

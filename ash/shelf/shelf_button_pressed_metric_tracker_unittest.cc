@@ -67,7 +67,7 @@ class ShelfButtonPressedMetricTrackerTest : public AshTestBase {
 
  protected:
   // The test target. Not owned.
-  raw_ptr<ShelfButtonPressedMetricTracker, DanglingUntriaged> metric_tracker_;
+  raw_ptr<ShelfButtonPressedMetricTracker> metric_tracker_;
 
   // The TickClock injected in to the test target.
   base::SimpleTestTickClock tick_clock_;
@@ -102,6 +102,7 @@ void ShelfButtonPressedMetricTrackerTest::SetUp() {
 }
 
 void ShelfButtonPressedMetricTrackerTest::TearDown() {
+  metric_tracker_ = nullptr;
   AshTestBase::TearDown();
 }
 
@@ -113,7 +114,7 @@ void ShelfButtonPressedMetricTrackerTest::ButtonPressed(
 
 void ShelfButtonPressedMetricTrackerTest::ButtonPressed(
     ShelfAction performed_action) {
-  const ui::test::TestEvent kDummyEvent(ui::ET_GESTURE_TAP);
+  const ui::test::TestEvent kDummyEvent(ui::EventType::kGestureTap);
   const DummyButton kDummyButton;
   metric_tracker_->ButtonPressed(kDummyEvent, &kDummyButton, performed_action);
 }
@@ -121,7 +122,7 @@ void ShelfButtonPressedMetricTrackerTest::ButtonPressed(
 void ShelfButtonPressedMetricTrackerTest::ButtonPressed(
     const views::Button* sender,
     ShelfAction performed_action) {
-  const ui::test::TestEvent kDummyEvent(ui::ET_GESTURE_TAP);
+  const ui::test::TestEvent kDummyEvent(ui::EventType::kGestureTap);
   metric_tracker_->ButtonPressed(kDummyEvent, sender, performed_action);
 }
 
@@ -131,7 +132,7 @@ void ShelfButtonPressedMetricTrackerTest::ButtonPressed(
 // a button is pressed by a mouse event.
 TEST_F(ShelfButtonPressedMetricTrackerTest,
        Launcher_ButtonPressed_MouseIsRecordedWhenIconActivatedByMouse) {
-  const ui::MouseEvent mouse_event(ui::ET_MOUSE_PRESSED, gfx::Point(),
+  const ui::MouseEvent mouse_event(ui::EventType::kMousePressed, gfx::Point(),
                                    gfx::Point(), base::TimeTicks(), 0, 0);
 
   base::UserActionTester user_action_tester;
@@ -145,7 +146,7 @@ TEST_F(ShelfButtonPressedMetricTrackerTest,
 TEST_F(ShelfButtonPressedMetricTrackerTest,
        Launcher_ButtonPressed_MouseIsRecordedWhenIconActivatedByTouch) {
   const ui::TouchEvent touch_event(
-      ui::ET_GESTURE_TAP, gfx::Point(), base::TimeTicks(),
+      ui::EventType::kGestureTap, gfx::Point(), base::TimeTicks(),
       ui::PointerDetails(ui::EventPointerType::kTouch, 0));
 
   base::UserActionTester user_action_tester;

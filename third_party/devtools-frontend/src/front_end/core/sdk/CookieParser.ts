@@ -1,32 +1,6 @@
-/*
- * Copyright (C) 2010 Google Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// Copyright 2010 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 // Ideally, we would rely on platform support for parsing a cookie, since
 // this would save us from any potential inconsistency. However, exposing
@@ -39,7 +13,7 @@ import {Attribute, Cookie, Type} from './Cookie.js';
 
 export class CookieParser {
   readonly #domain: string|undefined;
-  #cookiesInternal: Cookie[];
+  #cookies: Cookie[];
   #input!: string|undefined;
   #originalInputLength: number;
   #lastCookie?: Cookie|null;
@@ -52,7 +26,7 @@ export class CookieParser {
       this.#domain = domain.toLowerCase().replace(/^\./, '');
     }
 
-    this.#cookiesInternal = [];
+    this.#cookies = [];
 
     this.#originalInputLength = 0;
   }
@@ -68,31 +42,31 @@ export class CookieParser {
 
     switch (header.toLowerCase()) {
       case 'domain':
-        return Attribute.Domain;
+        return Attribute.DOMAIN;
       case 'expires':
-        return Attribute.Expires;
+        return Attribute.EXPIRES;
       case 'max-age':
-        return Attribute.MaxAge;
+        return Attribute.MAX_AGE;
       case 'httponly':
-        return Attribute.HttpOnly;
+        return Attribute.HTTP_ONLY;
       case 'name':
-        return Attribute.Name;
+        return Attribute.NAME;
       case 'path':
-        return Attribute.Path;
+        return Attribute.PATH;
       case 'samesite':
-        return Attribute.SameSite;
+        return Attribute.SAME_SITE;
       case 'secure':
-        return Attribute.Secure;
+        return Attribute.SECURE;
       case 'value':
-        return Attribute.Value;
+        return Attribute.VALUE;
       case 'priority':
-        return Attribute.Priority;
+        return Attribute.PRIORITY;
       case 'sourceport':
-        return Attribute.SourcePort;
+        return Attribute.SOURCE_PORT;
       case 'sourcescheme':
-        return Attribute.SourceScheme;
+        return Attribute.SOURCE_SCHEME;
       case 'partitioned':
-        return Attribute.Partitioned;
+        return Attribute.PARTITIONED;
       default:
         console.error('Failed getting cookie attribute: ' + header);
         return null;
@@ -100,7 +74,7 @@ export class CookieParser {
   }
 
   cookies(): Cookie[] {
-    return this.#cookiesInternal;
+    return this.#cookies;
   }
 
   parseSetCookie(setCookieHeader: string|undefined): Cookie[]|null {
@@ -111,14 +85,14 @@ export class CookieParser {
       if (this.#lastCookie) {
         this.#lastCookie.addAttribute(this.getCookieAttribute(kv.key), kv.value);
       } else {
-        this.addCookie(kv, Type.Response);
+        this.addCookie(kv, Type.RESPONSE);
       }
       if (this.advanceAndCheckCookieDelimiter()) {
         this.flushCookie();
       }
     }
     this.flushCookie();
-    return this.#cookiesInternal;
+    return this.#cookies;
   }
 
   private initialize(headerValue: string|undefined): boolean {
@@ -128,7 +102,7 @@ export class CookieParser {
       return false;
     }
 
-    this.#cookiesInternal = [];
+    this.#cookies = [];
     this.#lastCookie = null;
     this.#lastCookieLine = '';
     this.#originalInputLength = (this.#input as string).length;
@@ -162,8 +136,7 @@ export class CookieParser {
     }
 
     const result = new KeyValue(
-        keyValueMatch[1] && keyValueMatch[1].trim(), keyValueMatch[2] && keyValueMatch[2].trim(),
-        (this.#originalInputLength as number) - this.#input.length);
+        keyValueMatch[1]?.trim(), keyValueMatch[2]?.trim(), (this.#originalInputLength) - this.#input.length);
     this.#lastCookieLine += keyValueMatch[0];
     this.#input = this.#input.slice(keyValueMatch[0].length);
     return result;
@@ -193,10 +166,10 @@ export class CookieParser {
     this.#lastCookie = typeof keyValue.value === 'string' ? new Cookie(keyValue.key, keyValue.value, type) :
                                                             new Cookie('', keyValue.key, type);
     if (this.#domain) {
-      this.#lastCookie.addAttribute(Attribute.Domain, this.#domain);
+      this.#lastCookie.addAttribute(Attribute.DOMAIN, this.#domain);
     }
     this.#lastCookiePosition = keyValue.position;
-    this.#cookiesInternal.push(this.#lastCookie);
+    this.#cookies.push(this.#lastCookie);
   }
 }
 

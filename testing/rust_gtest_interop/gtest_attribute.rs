@@ -87,10 +87,14 @@ impl Parse for CppPrefixArgs {
 /// test will fail when run. If the return type is a `Result`, then an `Err` is
 /// treated as a test failure.
 ///
+/// The `gtest` macro will hide the test function in an ad-hoc `mod`, so the
+/// original function name doesn't matter.  By convention, the function is
+/// just named `fn test`.
+///
 /// # Examples
 /// ```
 /// #[gtest(MathTest, Addition)]
-/// fn my_test() {
+/// fn test() {
 ///   expect_eq!(1 + 1, 2);
 /// }
 /// ```
@@ -105,7 +109,7 @@ impl Parse for CppPrefixArgs {
 /// fail if the test returns an `Err`, and print the resulting error string:
 /// ```
 /// #[gtest(ResultTest, CheckThingWithResult)]
-/// fn my_test() -> std::result::Result<(), String> {
+/// fn test() -> std::result::Result<(), String> {
 ///   call_thing_with_result()?;
 /// }
 /// ```
@@ -120,7 +124,7 @@ pub fn gtest(
         let mut input_fn = parse_macro_input!(input as ItemFn);
 
         if let Some(asyncness) = input_fn.sig.asyncness {
-            // TODO(crbug.com/1288947): We can support async functions once we have
+            // TODO(crbug.com/40211749): We can support async functions once we have
             // block_on() support which will run a RunLoop until the async test
             // completes. The run_test_fn just needs to be generated to `block_on(||
             // #test_fn)` instead of calling `#test_fn` synchronously.
@@ -221,7 +225,7 @@ pub fn gtest(
     // the platform, and it can be passed directly to C++. This differs from
     // byte strings and CStr which work with `u8`.
     //
-    // TODO(crbug.com/1298175): Would it make sense to write a c_str_literal!()
+    // TODO(crbug.com/40215436): Would it make sense to write a c_str_literal!()
     // macro that takes a Rust string literal and produces a null-terminated
     // array of `c_char`? Then you could write `c_str_literal!(file!())` for
     // example, or implement a `file_c_str!()` in this way. Explore using https://crates.io/crates/cstr.
@@ -258,6 +262,20 @@ pub fn gtest(
             "#[gtest(...)] can only be used in targets where the GN \
             variable `is_gtest_unittests` is set to `true`.");
 
+        // TODO(crbug.com/462501862): gtest interop doesn't currently work on
+        // at least some mac ASAN builds. Just disable the tests on those
+        // configurations until we figure out why and how to fix it.
+        #[cfg(all(IS_ASAN, any(target_os = "macos", target_os = "ios")))]
+        const _ : () = {
+            // We need to keep the function's definition so that anything inside
+            // it is marked as used. We put each one in an anonymous namespace
+            // to prevent collisions, since gtest allows functions to have the
+            // same name.
+            #[allow(dead_code)]
+            #input_fn
+        };
+
+        #[cfg(not(all(IS_ASAN, any(target_os = "macos", target_os = "ios"))))]
         mod #test_mod {
             use super::*;
 
@@ -277,14 +295,14 @@ pub fn gtest(
             // The function is extern "C" so `register_test()` can pass this fn as a pointer to C++
             // where it's registered with gtest.
             //
-            // TODO(crbug.com/1296284): Removing #[no_mangle] makes rustc drop the symbol for the
+            // TODO(crbug.com/40214720): Removing #[no_mangle] makes rustc drop the symbol for the
             // test function in the generated rlib which produces linker errors. If we resolve the
             // linked bug and emit real object files from rustc for linking, then all the required
             // symbols are present and `#[no_mangle]` should go away along with the custom-mangling
             // of `run_test_fn`. We can not use `pub` to resolve this unfortunately. When `#[used]`
             // is fixed in https://github.com/rust-lang/rust/issues/47384, this may also be
             // resolved as well.
-            #[no_mangle]
+            #[unsafe(no_mangle)]
             extern "C" fn #run_test_fn(
                 suite: std::pin::Pin<&mut ::rust_gtest_interop::OpaqueTestingTest>
             ) {

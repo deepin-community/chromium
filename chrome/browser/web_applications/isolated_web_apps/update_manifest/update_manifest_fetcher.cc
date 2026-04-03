@@ -4,14 +4,19 @@
 
 #include "chrome/browser/web_applications/isolated_web_apps/update_manifest/update_manifest_fetcher.h"
 
+#include <optional>
+#include <string>
+
 #include "base/functional/callback.h"
 #include "base/json/json_reader.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/types/expected.h"
 #include "chrome/browser/web_applications/isolated_web_apps/update_manifest/update_manifest.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 
 namespace web_app {
@@ -20,7 +25,6 @@ namespace {
 
 // We need to artificially limit the size of the update manifest, because it is
 // loaded into memory.
-// TODO(b/282633201): Document the limit.
 constexpr size_t kMaxUpdateManifestLength = 5 * 1024 * 1024;
 
 }  // namespace
@@ -28,10 +32,12 @@ constexpr size_t kMaxUpdateManifestLength = 5 * 1024 * 1024;
 UpdateManifestFetcher::UpdateManifestFetcher(
     GURL url,
     net::PartialNetworkTrafficAnnotationTag partial_traffic_annotation,
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    bool report_histogram_manifest_result)
     : url_(std::move(url)),
       partial_traffic_annotation_(std::move(partial_traffic_annotation)),
-      url_loader_factory_(std::move(url_loader_factory)) {}
+      url_loader_factory_(std::move(url_loader_factory)),
+      report_histogram_manifest_result_(report_histogram_manifest_result) {}
 
 UpdateManifestFetcher::~UpdateManifestFetcher() = default;
 
@@ -54,7 +60,7 @@ void UpdateManifestFetcher::DownloadUpdateManifest() {
       destination: OTHER
       internal {
         contacts {
-          email: "peletskyi@google.com"
+          owners: "//chrome/browser/web_applications/isolated_web_apps/OWNERS"
         }
       }
       user_data {
@@ -87,9 +93,26 @@ void UpdateManifestFetcher::DownloadUpdateManifest() {
 }
 
 void UpdateManifestFetcher::OnUpdateManifestDownloaded(
-    std::unique_ptr<std::string> update_manifest_content) {
-  // We may extract some information from the loader about
-  // downloading errors in the future.
+    std::optional<std::string> update_manifest_content) {
+  if (report_histogram_manifest_result_) {
+    int error_or_http_response_code_ = 0;
+    if (simple_url_loader_->NetError() != net::OK &&
+        simple_url_loader_->NetError() != net::ERR_HTTP_RESPONSE_CODE_FAILURE) {
+      error_or_http_response_code_ = simple_url_loader_->NetError();
+    } else {
+      // According to the SimpleURLLoader contract,
+      // when net_error is net::OK or net::ERR_HTTP_RESPONSE_CODE_FAILURE.
+      // simple_url_loader_->ResponseInfo->headers should exist.
+      CHECK(simple_url_loader_->ResponseInfo());
+      CHECK(simple_url_loader_->ResponseInfo()->headers);
+      error_or_http_response_code_ =
+          simple_url_loader_->ResponseInfo()->headers->response_code();
+    }
+    base::UmaHistogramSparse(
+        "WebApp.Isolated.UpdateManifest.HttpResponseOrErrorCode",
+        error_or_http_response_code_);
+  }
+
   simple_url_loader_.reset();
 
   if (!update_manifest_content) {
@@ -102,31 +125,13 @@ void UpdateManifestFetcher::OnUpdateManifestDownloaded(
 
 void UpdateManifestFetcher::ParseUpdateManifest(
     const std::string& update_manifest_content) {
-  InitializeJsonParser();
+  base::JSONReader::Result result =
+      base::JSONReader::ReadAndReturnValueWithError(update_manifest_content,
+                                                    base::JSON_PARSE_RFC);
 
-  json_parser_->Parse(
-      update_manifest_content, base::JSON_PARSE_RFC,
-      base::BindOnce(&UpdateManifestFetcher::OnUpdateManifestParsed,
-                     base::Unretained(this)));
-}
-
-void UpdateManifestFetcher::InitializeJsonParser() {
-  CHECK(!json_parser_);
-  data_decoder_.GetService()->BindJsonParser(
-      json_parser_.BindNewPipeAndPassReceiver());
-  json_parser_.set_disconnect_handler(base::BindOnce(
-      &UpdateManifestFetcher::OnUpdateManifestParsed, base::Unretained(this),
-      std::nullopt, "JsonParser terminated unexpectedly"));
-}
-
-void UpdateManifestFetcher::OnUpdateManifestParsed(
-    std::optional<base::Value> result,
-    const std::optional<std::string>& error) {
   if (!result.has_value()) {
-    if (error.has_value()) {
-      LOG(ERROR) << "Unable to parse IWA Update Manifest JSON for URL " << url_
-                 << ". Error: was" << *error;
-    }
+    LOG(ERROR) << "Unable to parse IWA Update Manifest JSON for URL " << url_
+               << ". Error: was" << result.error().message;
     std::move(fetch_callback_).Run(base::unexpected(Error::kInvalidJson));
     return;
   }
@@ -140,11 +145,11 @@ void UpdateManifestFetcher::OnUpdateManifestParsed(
           [](UpdateManifest::JsonFormatError error) -> Error {
             switch (error) {
               case UpdateManifest::JsonFormatError::kRootNotADictionary:
+              case UpdateManifest::JsonFormatError::kChannelsNotADictionary:
+              case UpdateManifest::JsonFormatError::kChannelNotADictionary:
               case UpdateManifest::JsonFormatError::kVersionsNotAnArray:
               case UpdateManifest::JsonFormatError::kVersionEntryNotADictionary:
                 return Error::kInvalidManifest;
-              case UpdateManifest::JsonFormatError::kNoApplicableVersion:
-                return Error::kNoApplicableVersion;
             }
           }));
 }

@@ -14,25 +14,42 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/env.h"
 #include "ui/aura/test/aura_test_base.h"
+#include "ui/aura/test/test_window_builder.h"
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/test/test_windows.h"
 #include "ui/aura/test/window_occlusion_tracker_test_api.h"
 #include "ui/aura/window_observer.h"
+#include "ui/aura/window_occlusion_change_builder.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/layer_animator.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/compositor/test/layer_animator_test_controller.h"
 #include "ui/gfx/interpolated_transform.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace aura {
 
 namespace {
 
 constexpr base::TimeDelta kTransitionDuration = base::Seconds(3);
+
+class FakeWindowOcclusionChangeBuilder : public WindowOcclusionChangeBuilder {
+ public:
+  FakeWindowOcclusionChangeBuilder() = default;
+  FakeWindowOcclusionChangeBuilder(const FakeWindowOcclusionChangeBuilder&) =
+      delete;
+  FakeWindowOcclusionChangeBuilder& operator=(
+      const FakeWindowOcclusionChangeBuilder&) = delete;
+  ~FakeWindowOcclusionChangeBuilder() override = default;
+
+  // WindowOcclusionChangeBuilder:
+  void Add(Window* window,
+           Window::OcclusionState occlusion_state,
+           SkRegion occluded_region) override {}
+};
 
 class MockWindowDelegate : public test::ColorTestWindowDelegate {
  public:
@@ -54,27 +71,48 @@ class MockWindowDelegate : public test::ColorTestWindowDelegate {
     expected_occluded_region_ = occluded_region;
   }
 
-  bool is_expecting_call() const {
-    return expected_occlusion_state_ != Window::OcclusionState::UNKNOWN;
+  // Clip the occluded_region with windows bounds when compare. This is useful
+  // when the occluded region is not a simple rect but complex.
+  void set_expectation_with_clipped_region(
+      Window::OcclusionState occlusion_state,
+      SkRegion occluded_region) {
+    expected_occlusion_state_ = occlusion_state;
+    expected_occluded_region_ = occluded_region;
+    clip_region_to_bounds_ = true;
   }
+
+  bool is_expecting_call() const { return !!expected_occlusion_state_; }
+
+  void reset_expectation() { expected_occlusion_state_.reset(); }
 
   void OnWindowOcclusionChanged(
       Window::OcclusionState old_occlusion_state,
       Window::OcclusionState new_occlusion_state) override {
     SCOPED_TRACE(window_->GetName());
     ASSERT_TRUE(window_);
-    EXPECT_NE(new_occlusion_state, Window::OcclusionState::UNKNOWN);
-    EXPECT_EQ(new_occlusion_state, expected_occlusion_state_);
-    EXPECT_EQ(window_->occluded_region_in_root(), expected_occluded_region_);
-    expected_occlusion_state_ = Window::OcclusionState::UNKNOWN;
+    ASSERT_TRUE(expected_occlusion_state_);
+    EXPECT_EQ(new_occlusion_state, expected_occlusion_state_.value());
+    expected_occlusion_state_.reset();
+
+    if (new_occlusion_state == Window::OcclusionState::VISIBLE) {
+      auto new_region = window_->occluded_region_in_root();
+      if (clip_region_to_bounds_) {
+        gfx::Rect bounds = window_->GetBoundsInRootWindow();
+        new_region.op(SkIRect::MakeXYWH(bounds.x(), bounds.y(), bounds.width(),
+                                        bounds.height()),
+                      SkRegion::kIntersect_Op);
+      }
+      EXPECT_EQ(new_region, expected_occluded_region_);
+    }
     expected_occluded_region_ = SkRegion();
+    clip_region_to_bounds_ = false;
   }
 
  private:
-  Window::OcclusionState expected_occlusion_state_ =
-      Window::OcclusionState::UNKNOWN;
-  SkRegion expected_occluded_region_ = SkRegion();
+  std::optional<Window::OcclusionState> expected_occlusion_state_;
+  SkRegion expected_occluded_region_;
   raw_ptr<Window> window_ = nullptr;
+  bool clip_region_to_bounds_ = false;
 };
 
 class WindowOcclusionTrackerTest : public test::AuraTestBase {
@@ -96,11 +134,13 @@ class WindowOcclusionTrackerTest : public test::AuraTestBase {
   }
 #endif
 
-  Window* CreateTrackedWindow(MockWindowDelegate* delegate,
-                              const gfx::Rect& bounds,
-                              Window* parent = nullptr,
-                              bool transparent = false,
-                              ui::LayerType layer_type = ui::LAYER_TEXTURED) {
+  Window* CreateTrackedWindow(
+      MockWindowDelegate* delegate,
+      const gfx::Rect& bounds,
+      Window* parent = nullptr,
+      bool transparent = false,
+      ui::LayerType layer_type = ui::LAYER_TEXTURED,
+      WindowOcclusionTracker* secondary_occlusion_tracker = nullptr) {
     Window* window = new Window(delegate);
     delegate->set_window(window);
     window->SetType(client::WINDOW_TYPE_NORMAL);
@@ -112,7 +152,11 @@ class WindowOcclusionTrackerTest : public test::AuraTestBase {
     window->Show();
     parent = parent ? parent : root_window();
     parent->AddChild(window);
-    window->TrackOcclusionState();
+    if (secondary_occlusion_tracker) {
+      secondary_occlusion_tracker->Track(window);
+    } else {
+      window->TrackOcclusionState();
+    }
     return window;
   }
 
@@ -120,8 +164,11 @@ class WindowOcclusionTrackerTest : public test::AuraTestBase {
                                 Window* parent = nullptr,
                                 ui::LayerType layer_type = ui::LAYER_TEXTURED) {
     if (layer_type == ui::LAYER_TEXTURED) {
-      return test::CreateTestWindow(SK_ColorWHITE, 1, bounds,
-                                    parent ? parent : root_window());
+      return test::CreateTestWindow({.parent = parent ? parent : root_window(),
+                                     .bounds = bounds,
+                                     .window_id = 1},
+                                    SK_ColorWHITE)
+          .release();
     }
     DCHECK_EQ(ui::LAYER_SOLID_COLOR, layer_type);
     Window* window = new Window(nullptr);
@@ -136,6 +183,18 @@ class WindowOcclusionTrackerTest : public test::AuraTestBase {
 
   WindowOcclusionTracker& GetOcclusionTracker() {
     return *Env::GetInstance()->GetWindowOcclusionTracker();
+  }
+
+  std::unique_ptr<WindowOcclusionTracker> CreateSecondaryOcclusionTracker() {
+    auto occlusion_tracker = std::make_unique<WindowOcclusionTracker>();
+    // Any secondary trackers should not be mutating the `aura::Window`'s
+    // occlusion state. That is the sole responsibility of the primary tracker
+    // in `aura::Env`.
+    occlusion_tracker->set_occlusion_change_builder_factory(base::BindRepeating(
+        []() -> std::unique_ptr<WindowOcclusionChangeBuilder> {
+          return std::make_unique<FakeWindowOcclusionChangeBuilder>();
+        }));
+    return occlusion_tracker;
   }
 
  private:
@@ -225,6 +284,236 @@ TEST_F(WindowOcclusionTrackerTest, HiddenWindowCoversWindow) {
   window_b->Show();
   EXPECT_FALSE(delegate_a->is_expecting_call());
   EXPECT_FALSE(delegate_b->is_expecting_call());
+}
+
+TEST_F(WindowOcclusionTrackerTest, Untrack) {
+  MockWindowDelegate* delegate_a = new MockWindowDelegate();
+  delegate_a->set_expectation(Window::OcclusionState::VISIBLE, SkRegion());
+  auto* window_a = CreateTrackedWindow(delegate_a, gfx::Rect(0, 0, 10, 10));
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+
+  delegate_a->set_expectation(Window::OcclusionState::VISIBLE,
+                              SkRegion(SkIRect::MakeXYWH(0, 0, 5, 5)));
+  MockWindowDelegate* delegate_aa = new MockWindowDelegate();
+  delegate_aa->set_expectation(Window::OcclusionState::VISIBLE, SkRegion());
+  auto* window_aa =
+      CreateTrackedWindow(delegate_aa, gfx::Rect(0, 0, 5, 5), window_a);
+  EXPECT_FALSE(delegate_aa->is_expecting_call());
+
+  delegate_a->set_expectation(Window::OcclusionState::UNKNOWN, SkRegion());
+  window_a->UntrackOcclusionState();
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+
+  MockWindowDelegate* delegate_b = new MockWindowDelegate();
+
+  // Set wrong expectation on window_a. This should not be triggered.
+  delegate_a->set_expectation(Window::OcclusionState::VISIBLE, {});
+  delegate_aa->set_expectation(Window::OcclusionState::OCCLUDED, {});
+  delegate_b->set_expectation(Window::OcclusionState::VISIBLE, {});
+  auto* window_b = CreateTrackedWindow(delegate_b, gfx::Rect(0, 0, 10, 10));
+  EXPECT_TRUE(delegate_a->is_expecting_call());
+  EXPECT_FALSE(delegate_aa->is_expecting_call());
+  EXPECT_EQ(window_aa->GetOcclusionState(), Window::OcclusionState::OCCLUDED);
+  EXPECT_FALSE(delegate_b->is_expecting_call());
+  EXPECT_EQ(window_b->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+
+  delegate_a->set_expectation(Window::OcclusionState::OCCLUDED, {});
+  window_a->TrackOcclusionState();
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::OCCLUDED);
+}
+
+#if BUILDFLAG(IS_CHROMEOS)
+TEST_F(WindowOcclusionTrackerTest, OverrideState) {
+  MockWindowDelegate* delegate_a = new MockWindowDelegate();
+  delegate_a->set_expectation(Window::OcclusionState::VISIBLE);
+  auto* window_a = CreateTrackedWindow(delegate_a, gfx::Rect(0, 0, 10, 10));
+  window_a->SetName("A");
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+
+  // Force hidden.
+  delegate_a->set_expectation(Window::OcclusionState::HIDDEN);
+  window_a->SetOcclusionStateOverride(Window::OcclusionState::HIDDEN);
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::HIDDEN);
+
+  // Reset.
+  delegate_a->set_expectation(Window::OcclusionState::VISIBLE);
+  window_a->SetOcclusionStateOverride(std::nullopt);
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+
+  // Force visible.
+  delegate_a->set_expectation(Window::OcclusionState::VISIBLE);
+  window_a->SetOcclusionStateOverride(Window::OcclusionState::VISIBLE);
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+
+  // Hide a.
+  MockWindowDelegate* delegate_b = new MockWindowDelegate();
+  delegate_b->set_expectation(Window::OcclusionState::VISIBLE);
+  delegate_a->set_expectation(Window::OcclusionState::VISIBLE);
+  CreateTrackedWindow(delegate_b, gfx::Rect(0, 0, 10, 10));
+  // No update to a's occlusion state.
+  EXPECT_TRUE(delegate_a->is_expecting_call());
+  EXPECT_FALSE(delegate_b->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+
+  // Reset.
+  delegate_a->set_expectation(Window::OcclusionState::OCCLUDED);
+  window_a->SetOcclusionStateOverride(std::nullopt);
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::OCCLUDED);
+}
+#endif
+
+TEST_F(WindowOcclusionTrackerTest, LockState) {
+  MockWindowDelegate* delegate_a = new MockWindowDelegate();
+  delegate_a->set_expectation(Window::OcclusionState::VISIBLE);
+  auto* window_a = CreateTrackedWindow(delegate_a, gfx::Rect(0, 0, 10, 10));
+  window_a->SetName("A");
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+
+  MockWindowDelegate* delegate_aa = new MockWindowDelegate();
+  delegate_a->set_expectation(Window::OcclusionState::VISIBLE,
+                              SkRegion(SkIRect::MakeXYWH(0, 0, 5, 5)));
+  delegate_aa->set_expectation(Window::OcclusionState::VISIBLE);
+  auto* window_aa = CreateTrackedWindow(delegate_aa, gfx::Rect(0, 0, 5, 5));
+  window_aa->SetName("AA");
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_FALSE(delegate_aa->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+  EXPECT_EQ(window_aa->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+
+  aura::Window* window_b = nullptr;
+  // Lock state.
+  MockWindowDelegate* delegate_b = new MockWindowDelegate();
+  {
+    WindowOcclusionTracker::ScopedLockState lock(window_a);
+
+    // Occlude a.
+    delegate_b->set_expectation(Window::OcclusionState::VISIBLE);
+    delegate_a->set_expectation(Window::OcclusionState::VISIBLE);
+    delegate_aa->set_expectation(Window::OcclusionState::OCCLUDED);
+    window_b = CreateTrackedWindow(delegate_b, gfx::Rect(0, 0, 10, 10));
+    window_b->SetName("B");
+    EXPECT_TRUE(delegate_a->is_expecting_call());
+    EXPECT_FALSE(delegate_aa->is_expecting_call());
+    EXPECT_FALSE(delegate_b->is_expecting_call());
+    EXPECT_EQ(window_b->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+    EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+    EXPECT_EQ(window_aa->GetOcclusionState(), Window::OcclusionState::OCCLUDED);
+
+    delegate_a->set_expectation(Window::OcclusionState::OCCLUDED);
+    delegate_aa->set_expectation(Window::OcclusionState::VISIBLE);
+  }
+
+  // Reset.
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  // no change on `window_aa`.
+  EXPECT_TRUE(delegate_aa->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::OCCLUDED);
+  EXPECT_EQ(window_aa->GetOcclusionState(), Window::OcclusionState::OCCLUDED);
+
+  CHECK(window_b);
+  delegate_aa->set_expectation(Window::OcclusionState::UNKNOWN);
+
+  {
+    // Lock state again.
+    WindowOcclusionTracker::ScopedLockState lock(window_a);
+
+    delegate_b->set_expectation(Window::OcclusionState::HIDDEN);
+    delegate_a->set_expectation(Window::OcclusionState::OCCLUDED);
+    delegate_aa->set_expectation(Window::OcclusionState::VISIBLE);
+    window_b->Hide();
+    EXPECT_FALSE(delegate_b->is_expecting_call());
+    EXPECT_TRUE(delegate_a->is_expecting_call());
+    EXPECT_FALSE(delegate_aa->is_expecting_call());
+    EXPECT_EQ(window_b->GetOcclusionState(), Window::OcclusionState::HIDDEN);
+    EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::OCCLUDED);
+    EXPECT_EQ(window_aa->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+    delegate_a->set_expectation(Window::OcclusionState::VISIBLE,
+                                SkRegion(SkIRect::MakeXYWH(0, 0, 5, 5)));
+  }
+
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+
+  delegate_b->set_expectation(Window::OcclusionState::VISIBLE);
+  delegate_a->set_expectation(Window::OcclusionState::OCCLUDED);
+  delegate_aa->set_expectation(Window::OcclusionState::OCCLUDED);
+  window_b->Show();
+  EXPECT_FALSE(delegate_b->is_expecting_call());
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_FALSE(delegate_aa->is_expecting_call());
+
+  {
+    // Lock state again.
+    WindowOcclusionTracker::ScopedLockState lock(window_a);
+
+    delegate_a->set_expectation(Window::OcclusionState::OCCLUDED);
+    delegate_aa->set_expectation_with_clipped_region(
+        Window::OcclusionState::VISIBLE, SkRegion());
+    window_b->SetBounds({300, 0, 10, 10});
+
+    EXPECT_TRUE(delegate_a->is_expecting_call());
+    EXPECT_FALSE(delegate_aa->is_expecting_call());
+    EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::OCCLUDED);
+    EXPECT_EQ(window_aa->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+
+    // Release lock on `window_a`.
+    delegate_a->set_expectation_with_clipped_region(
+        Window::OcclusionState::VISIBLE,
+        SkRegion(SkIRect::MakeXYWH(0, 0, 5, 5)));
+  }
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+
+  delegate_b->set_expectation(Window::OcclusionState::VISIBLE);
+  delegate_a->set_expectation(Window::OcclusionState::OCCLUDED);
+  delegate_aa->set_expectation(Window::OcclusionState::OCCLUDED);
+  window_b->SetBounds({0, 0, 10, 10});
+  EXPECT_TRUE(delegate_b->is_expecting_call());
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_FALSE(delegate_aa->is_expecting_call());
+
+  // Reset B's expectation so that it won't fail in dtor.
+  delegate_b->reset_expectation();
+}
+
+TEST_F(WindowOcclusionTrackerTest, LockStateWithScopedPause) {
+  MockWindowDelegate* delegate_a = new MockWindowDelegate();
+  delegate_a->set_expectation(Window::OcclusionState::VISIBLE);
+  auto* window_a = CreateTrackedWindow(delegate_a, gfx::Rect(0, 0, 10, 10));
+  window_a->SetName("A");
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::VISIBLE);
+
+  MockWindowDelegate* delegate_b = new MockWindowDelegate();
+  {
+    WindowOcclusionTracker::ScopedPause pause;
+    {
+      // Lock state.
+      WindowOcclusionTracker::ScopedLockState lock(window_a);
+      // Occlude `window_a`.
+      delegate_b->set_expectation(Window::OcclusionState::VISIBLE);
+      delegate_a->set_expectation(Window::OcclusionState::OCCLUDED);
+      auto* window_b = CreateTrackedWindow(delegate_b, gfx::Rect(0, 0, 10, 10));
+      window_b->SetName("B");
+
+      EXPECT_TRUE(delegate_a->is_expecting_call());
+      EXPECT_TRUE(delegate_b->is_expecting_call());
+    }
+    // Unlock will not trigger the occlusion change while paused.
+    EXPECT_TRUE(delegate_a->is_expecting_call());
+    EXPECT_TRUE(delegate_b->is_expecting_call());
+  }
+
+  EXPECT_FALSE(delegate_a->is_expecting_call());
+  EXPECT_FALSE(delegate_b->is_expecting_call());
+  EXPECT_EQ(window_a->GetOcclusionState(), Window::OcclusionState::OCCLUDED);
 }
 
 class WindowOcclusionTrackerOpacityTest
@@ -610,8 +899,8 @@ TEST_F(WindowOcclusionTrackerTest, BoundsChanged) {
 // should be considered non-occluded and should not occlude other windows. The
 // animated window starts occluded.
 TEST_F(WindowOcclusionTrackerTest, OccludedWindowBoundsAnimated) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -664,8 +953,8 @@ TEST_F(WindowOcclusionTrackerTest, OccludedWindowBoundsAnimated) {
 
 // Same as the previous test, but the animated window starts non-occluded.
 TEST_F(WindowOcclusionTrackerTest, NonOccludedWindowBoundsAnimated) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -804,8 +1093,8 @@ TEST_F(WindowOcclusionTrackerTest, TransformChanged) {
 // should be considered non-occluded and should not occlude other windows. The
 // animated window starts occluded.
 TEST_F(WindowOcclusionTrackerTest, OccludedWindowTransformAnimated) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -864,8 +1153,8 @@ TEST_F(WindowOcclusionTrackerTest, OccludedWindowTransformAnimated) {
 
 // Same as the previous test, but the animated window starts non-occluded.
 TEST_F(WindowOcclusionTrackerTest, NonOccludedWindowTransformAnimated) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -1262,8 +1551,8 @@ TEST_F(WindowOcclusionTrackerTest, Clipping) {
 // and the window should be removed from |animated_windows_| before
 // OnWindowDestroyed() is called).
 TEST_F(WindowOcclusionTrackerTest, DestroyWindowWithPendingAnimation) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -1286,11 +1575,45 @@ TEST_F(WindowOcclusionTrackerTest, DestroyWindowWithPendingAnimation) {
   delete window;
 }
 
+// Verify that `WindowOcclusionTracker` can be destroyed safely with a pending
+// animation. This mostly applies to secondary `WindowOcclusionTracker`s,
+// not the long-lived one in `aura::Env`.
+TEST_F(WindowOcclusionTrackerTest,
+       DestroyOcclusionTrackerWithPendingAnimation) {
+  auto occlusion_tracker = CreateSecondaryOcclusionTracker();
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  ui::LayerAnimatorTestController test_controller(
+      ui::LayerAnimator::CreateImplicitAnimator());
+  ui::ScopedLayerAnimationSettings layer_animation_settings(
+      test_controller.animator());
+  layer_animation_settings.SetTransitionDuration(kTransitionDuration);
+
+  Window* window = CreateTrackedWindow(
+      new MockWindowDelegate, gfx::Rect(0, 0, 10, 10), /*parent=*/nullptr,
+      /*transparent=*/false, ui::LAYER_TEXTURED, occlusion_tracker.get());
+  window->layer()->SetAnimator(test_controller.animator());
+
+  // Start animating the bounds of window.
+  window->SetBounds(gfx::Rect(10, 10, 5, 5));
+  test_controller.Step(kTransitionDuration / 3);
+  ASSERT_TRUE(test_controller.animator()->IsAnimatingProperty(
+      ui::LayerAnimationElement::BOUNDS));
+  // There's no explicit test expectation here other not crashing on shutdown.
+  occlusion_tracker.reset();
+
+  // Start animating the bounds of window again. Ensures more animations can
+  // be started without crashes.
+  test_controller.animator()->AbortAllAnimations();
+  window->SetBounds(gfx::Rect(20, 20, 10, 10));
+  test_controller.Step(kTransitionDuration / 2);
+}
+
 // Verify that an animated window stops being considered as animated when its
 // layer is recreated.
 TEST_F(WindowOcclusionTrackerTest, RecreateLayerOfAnimatedWindow) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -1389,8 +1712,9 @@ class ObserverDestroyingWindowOnAnimationEnded
 
   void OnLayerAnimationEnded(ui::LayerAnimationSequence* sequence) override {
     EXPECT_TRUE(window_);
-    delete window_;
+    aura::Window* ptr = window_.get();
     window_ = nullptr;
+    delete ptr;
   }
 
   void OnLayerAnimationAborted(ui::LayerAnimationSequence* sequence) override {}
@@ -1398,7 +1722,7 @@ class ObserverDestroyingWindowOnAnimationEnded
       ui::LayerAnimationSequence* sequence) override {}
 
  private:
-  raw_ptr<Window, DanglingUntriaged> window_;
+  raw_ptr<Window> window_;
 };
 
 }  // namespace
@@ -1407,8 +1731,8 @@ class ObserverDestroyingWindowOnAnimationEnded
 // window before WindowOcclusionTracker is notified that the animation ended.
 TEST_P(WindowOcclusionTrackerOpacityTest,
        DestroyTrackedWindowFromLayerAnimationObserver) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -1440,8 +1764,8 @@ TEST_P(WindowOcclusionTrackerOpacityTest,
 // window and deleted.
 TEST_P(WindowOcclusionTrackerOpacityTest,
        DeleteNonTrackedAnimatedWindowRemovedFromTrackedRoot) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -1489,8 +1813,8 @@ TEST_P(WindowOcclusionTrackerOpacityTest,
 
 TEST_P(WindowOcclusionTrackerOpacityTest,
        OpacityAnimationShouldNotOccludeWindow) {
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -2460,8 +2784,8 @@ TEST_F(WindowOcclusionTrackerTest,
             occlusion_data.occluded_region);
 
   // Start animating |window_b| to fully occlude |window_a|.
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -2519,8 +2843,8 @@ TEST_P(WindowOcclusionTrackerOpacityTest,
   EXPECT_EQ(SkRegion(), occlusion_data.occluded_region);
 
   // Start animating |window_b| to fully occlude |window_a|.
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -2583,8 +2907,8 @@ TEST_F(WindowOcclusionTrackerTest,
   EXPECT_EQ(SkRegion(), occlusion_data.occluded_region);
 
   // Start animating |window_b| to fully occlude |window_a|.
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -2655,8 +2979,8 @@ TEST_F(WindowOcclusionTrackerTest,
 
   // Set a target transform on |window_b| which should increase the size of
   // its child window, occluding |window_d|.
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -2708,8 +3032,8 @@ TEST_F(WindowOcclusionTrackerTest, ComputeTargetOcclusionForAnimatedWindow) {
   EXPECT_FALSE(delegate_a->is_expecting_call());
 
   // Start animating |window_a| to be fully occluded by |window_b|.
-  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   ui::LayerAnimatorTestController test_controller(
       ui::LayerAnimator::CreateImplicitAnimator());
   ui::ScopedLayerAnimationSettings layer_animation_settings(
@@ -2905,6 +3229,52 @@ TEST_F(WindowOcclusionTrackerTest, ClipToRootWindow) {
   delegate_a->set_expectation(Window::OcclusionState::OCCLUDED, SkRegion());
   CreateUntrackedWindow(root_window()->bounds());
   EXPECT_FALSE(delegate_a->is_expecting_call());
+}
+
+TEST_F(WindowOcclusionTrackerTest, DoNotCountTwice) {
+  auto* window_occlusion_tracker =
+      Env::GetInstance()->GetWindowOcclusionTracker();
+
+  class TestObserver : public WindowObserver {
+   public:
+    explicit TestObserver(aura::Window* window) : window_(window) {
+      window->AddObserver(this);
+    }
+    ~TestObserver() override {
+      if (window_) {
+        window_->RemoveObserver(this);
+      }
+    }
+    // WindowObserver:
+    void OnWindowDestroying(Window* window) override {
+      window_->RemoveObserver(this);
+      window_ = nullptr;
+    }
+    void OnWindowParentChanged(Window* window, Window* parent) override {
+      window_->TrackOcclusionState();
+    }
+    raw_ptr<Window> window_;
+  };
+
+  window_occlusion_tracker->set_num_tracked_windows_count_check_for_test(false);
+  {
+    auto w = test::TestWindowBuilder().SetShow(true).Build();
+    TestObserver obs(w.get());
+    root_window()->AddChild(w.get());
+  }
+  EXPECT_FALSE(window_occlusion_tracker->IsObservingWindowTreeHostsForTest());
+
+  // This test requires DCHECK enabled.
+#if defined(GTEST_HAS_DEATH_TEST) && DCHECK_IS_ON()
+  window_occlusion_tracker->set_num_tracked_windows_count_check_for_test(true);
+  EXPECT_DEATH(
+      {
+        auto w = test::TestWindowBuilder().SetShow(true).Build();
+        TestObserver obs(w.get());
+        root_window()->AddChild(w.get());
+      },
+      "DCHECK failed.*num_tracked_windows.*");
+#endif
 }
 
 // Run tests with LAYER_TEXTURE_LAYER type or LAYER_SOLID_COLOR type.

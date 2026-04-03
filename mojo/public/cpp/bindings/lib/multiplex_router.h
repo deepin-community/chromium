@@ -20,7 +20,6 @@
 #include "base/synchronization/lock.h"
 #include "base/types/pass_key.h"
 #include "mojo/public/cpp/bindings/associated_group_controller.h"
-#include "mojo/public/cpp/bindings/connection_group.h"
 #include "mojo/public/cpp/bindings/connector.h"
 #include "mojo/public/cpp/bindings/interface_id.h"
 #include "mojo/public/cpp/bindings/message_dispatcher.h"
@@ -37,6 +36,7 @@ class SequencedTaskRunner;
 namespace mojo {
 
 class AsyncFlusher;
+class ConnectionGroupRef;
 class PendingFlush;
 
 namespace internal {
@@ -119,7 +119,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
   // Adds this object to a ConnectionGroup identified by |ref|. All receiving
   // pipe endpoints decoded from inbound messages on this MultiplexRouter will
   // be added to the same group.
-  void SetConnectionGroup(ConnectionGroup::Ref ref);
+  void SetConnectionGroup(ConnectionGroupRef ref);
 
   // ---------------------------------------------------------------------------
   // The following public methods are safe to call from any sequence.
@@ -132,6 +132,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
   void CloseEndpointHandle(
       InterfaceId id,
       const std::optional<DisconnectReason>& reason) override;
+  void NotifyLocalEndpointOfPeerClosure(InterfaceId id) override;
   InterfaceEndpointController* AttachEndpointClient(
       const ScopedInterfaceEndpointHandle& handle,
       InterfaceEndpointClient* endpoint_client,
@@ -339,6 +340,10 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
 
   bool posted_to_process_tasks_ = false;
   scoped_refptr<base::SequencedTaskRunner> posted_to_task_runner_;
+
+  // Indicates whether we're currently within ProcessTasks(). Used to avoid
+  // re-entrancy into that method.
+  bool processing_tasks_ = false;
 
   bool encountered_error_ = false;
 

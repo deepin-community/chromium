@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_state_keys_broker.h"
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -32,13 +31,15 @@ ServerBackedStateKeysBroker::ServerBackedStateKeysBroker(
     ash::SessionManagerClient* session_manager_client)
     : session_manager_client_(session_manager_client), requested_(false) {}
 
-ServerBackedStateKeysBroker::~ServerBackedStateKeysBroker() {}
+ServerBackedStateKeysBroker::~ServerBackedStateKeysBroker() = default;
 
 base::CallbackListSubscription
 ServerBackedStateKeysBroker::RegisterUpdateCallback(
     const UpdateCallback& callback) {
-  if (!available())
+  if (!available()) {
+    LOG(WARNING) << "Fetching state keys.";
     FetchStateKeys();
+  }
   return update_callbacks_.Add(callback);
 }
 

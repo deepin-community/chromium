@@ -5,7 +5,7 @@
 #include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
 
 #include "ash/constants/ash_switches.h"
-#include "ash/frame/non_client_frame_view_ash.h"
+#include "ash/frame/frame_view_ash.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/float/float_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
@@ -60,14 +60,15 @@ class FrameCaptionButtonContainerViewTest : public AshTestBase {
       CloseButtonVisible close_button_visible) {
     views::Widget* widget = new views::Widget;
     views::Widget::InitParams params(
+        views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
         views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    auto delegate = std::make_unique<views::WidgetDelegateView>();
+    auto delegate = std::make_unique<views::WidgetDelegateView>(
+        views::WidgetDelegateView::CreatePassKey());
     delegate->SetCanMaximize(maximize_allowed == MAXIMIZE_ALLOWED);
     delegate->SetCanMinimize(minimize_allowed == MINIMIZE_ALLOWED);
     delegate->SetCanResize(true);
     delegate->SetShowCloseButton(close_button_visible == CLOSE_BUTTON_VISIBLE);
     params.delegate = delegate.release();
-    params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
     params.bounds = gfx::Rect(10, 10, 100, 100);
     params.context = GetContext();
     widget->Init(std::move(params));
@@ -313,7 +314,7 @@ TEST_F(FrameCaptionButtonContainerViewTest, TestSizeButtonBehaviorOverride) {
 
   FrameCaptionButtonContainerView container(widget);
   InitContainer(&container);
-  widget->GetContentsView()->AddChildView(&container);
+  widget->GetContentsView()->AddChildViewRaw(&container);
   views::test::RunScheduledLayout(&container);
   FrameCaptionButtonContainerView::TestApi testApi(&container);
 
@@ -372,7 +373,7 @@ TEST_F(FrameCaptionButtonContainerViewTest, ResizeButtonRestoreBehavior) {
 
   FrameCaptionButtonContainerView container(widget);
   InitContainer(&container);
-  widget->GetContentsView()->AddChildView(&container);
+  widget->GetContentsView()->AddChildViewRaw(&container);
   views::test::RunScheduledLayout(&container);
   FrameCaptionButtonContainerView::TestApi testApi(&container);
 
@@ -405,7 +406,7 @@ TEST_F(FrameCaptionButtonContainerViewTest, TabletSizeButtonVisibility) {
   auto* window_state = WindowState::Get(window.get());
   ASSERT_TRUE(window_state->IsMaximized());
 
-  auto* frame = NonClientFrameViewAsh::Get(window.get());
+  auto* frame = FrameViewAsh::Get(window.get());
   DCHECK(frame);
   FrameCaptionButtonContainerView* container =
       frame->GetHeaderView()->caption_button_container();
@@ -426,8 +427,8 @@ TEST_F(FrameCaptionButtonContainerViewTest, FloatButtonVisibility) {
   // allowed.
   auto* widget1 = CreateTestWidget(MAXIMIZE_ALLOWED, MINIMIZE_ALLOWED,
                                    CLOSE_BUTTON_VISIBLE);
-  widget1->GetNativeWindow()->SetProperty(aura::client::kAppType,
-                                          static_cast<int>(AppType::ARC_APP));
+  widget1->GetNativeWindow()->SetProperty(chromeos::kAppTypeKey,
+                                          chromeos::AppType::ARC_APP);
   FrameCaptionButtonContainerView container1(widget1);
   InitContainer(&container1);
   views::test::RunScheduledLayout(&container1);
@@ -443,8 +444,8 @@ TEST_F(FrameCaptionButtonContainerViewTest, FloatButtonVisibility) {
   // maximizing (resizing) is disallowed.
   auto* widget2 = CreateTestWidget(MAXIMIZE_DISALLOWED, MINIMIZE_ALLOWED,
                                    CLOSE_BUTTON_VISIBLE);
-  widget2->GetNativeWindow()->SetProperty(aura::client::kAppType,
-                                          static_cast<int>(AppType::ARC_APP));
+  widget2->GetNativeWindow()->SetProperty(chromeos::kAppTypeKey,
+                                          chromeos::AppType::ARC_APP);
   FrameCaptionButtonContainerView container2(widget2);
   InitContainer(&container2);
   views::test::RunScheduledLayout(&container2);
@@ -461,13 +462,12 @@ TEST_F(FrameCaptionButtonContainerViewTest, TestFloatButtonBehavior) {
   auto* widget = CreateTestWidget(MAXIMIZE_DISALLOWED, MINIMIZE_ALLOWED,
                                   CLOSE_BUTTON_VISIBLE);
   auto* window = widget->GetNativeWindow();
-  window->SetProperty(aura::client::kAppType,
-                      static_cast<int>(AppType::BROWSER));
+  window->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::BROWSER);
   widget->Show();
 
   FrameCaptionButtonContainerView container(widget);
   InitContainer(&container);
-  widget->GetContentsView()->AddChildView(&container);
+  widget->GetContentsView()->AddChildViewRaw(&container);
   views::test::RunScheduledLayout(&container);
   FrameCaptionButtonContainerView::TestApi test_api(&container);
 

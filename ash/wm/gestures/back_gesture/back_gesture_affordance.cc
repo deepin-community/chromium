@@ -207,7 +207,8 @@ bool AboveBottomOfSplitViewDivider(const gfx::Point& location, int origin_y) {
       split_view_controller->GetSnappedWindowBoundsInScreen(
           IsCurrentScreenOrientationPrimary() ? SnapPosition::kSecondary
                                               : SnapPosition::kPrimary,
-          /*window_for_minimum_size=*/nullptr, chromeos::kDefaultSnapRatio);
+          /*window_for_minimum_size=*/nullptr, chromeos::kDefaultSnapRatio,
+          /*account_for_divider_width=*/true);
   return bounds_of_bottom_snapped_window.Contains(location) &&
          origin_y < GetSplitViewDividerBoundsInScreen(location).bottom();
 }
@@ -221,9 +222,8 @@ gfx::Rect GetAffordanceBounds(const gfx::Point& location,
   // X origin of the affordance is always beyond the left of the screen. We'll
   // apply translation to the affordance to put it in the right place during
   // dragging.
-  const gfx::Rect work_area = display::Screen::GetScreen()
-                                  ->GetDisplayNearestPoint(location)
-                                  .work_area();
+  const gfx::Rect work_area =
+      display::Screen::Get()->GetDisplayNearestPoint(location).work_area();
   origin.set_x(work_area.x() - kDistanceBeyondLeftOrSplitvieDivider);
 
   int origin_y =
@@ -248,9 +248,8 @@ gfx::Point ToMirrorLocationIfRTL(const gfx::Point& location,
   if (!base::i18n::IsRTL())
     return location;
 
-  const gfx::Rect work_area = display::Screen::GetScreen()
-                                  ->GetDisplayNearestPoint(location)
-                                  .work_area();
+  const gfx::Rect work_area =
+      display::Screen::Get()->GetDisplayNearestPoint(location).work_area();
   if (!dragged_from_splitview_divider) {
     return gfx::Point(work_area.right() + work_area.x() - location.x(),
                       location.y());
@@ -306,7 +305,7 @@ void BackGestureAffordance::Abort() {
 }
 
 void BackGestureAffordance::Complete() {
-  DCHECK_EQ(State::DRAGGING, state_);
+  CHECK_EQ(State::DRAGGING, state_);
   state_ = State::COMPLETING;
 
   animation_ = std::make_unique<gfx::LinearAnimation>(
@@ -322,10 +321,10 @@ bool BackGestureAffordance::IsActivated() const {
 void BackGestureAffordance::CreateAffordanceWidget(const gfx::Point& location) {
   affordance_widget_ = std::make_unique<views::Widget>();
   views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.accept_events = true;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.name = "BackGestureAffordance";
   params.activatable = views::Widget::InitParams::Activatable::kNo;
   params.parent = window_util::GetRootWindowAt(location)->GetChildById(
@@ -347,9 +346,8 @@ void BackGestureAffordance::CreateAffordanceWidget(const gfx::Point& location) {
     gfx::Rect clip_bounds;
     const gfx::Rect divider_bounds =
         GetSplitViewDividerBoundsInScreen(location);
-    const gfx::Rect work_area = display::Screen::GetScreen()
-                                    ->GetDisplayNearestPoint(location)
-                                    .work_area();
+    const gfx::Rect work_area =
+        display::Screen::Get()->GetDisplayNearestPoint(location).work_area();
     if (base::i18n::IsRTL()) {
       clip_bounds = gfx::Rect(divider_bounds.x() - kDistanceForMaxRadius -
                                   kMaxBurstRippleRadius - widget_bounds.x(),
@@ -399,7 +397,7 @@ void BackGestureAffordance::UpdateTransform() {
   // drag from split view divider bar or rtl language) so that affordance can
   // remain under or above the finger.
   const gfx::Rect work_area =
-      display::Screen::GetScreen()
+      display::Screen::Get()
           ->GetDisplayNearestWindow(affordance_widget_->GetNativeWindow())
           .work_area();
   if (dragged_from_splitview_divider_) {
@@ -473,7 +471,6 @@ void BackGestureAffordance::AnimationProgressed(
   switch (state_) {
     case State::DRAGGING:
       NOTREACHED();
-      break;
     case State::ABORTING:
       SetAbortProgress(animation->GetCurrentValue());
       break;

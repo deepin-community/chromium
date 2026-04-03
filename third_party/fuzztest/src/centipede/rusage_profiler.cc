@@ -24,23 +24,21 @@
 #include <ostream>
 #include <string>
 #include <string_view>
-#include <thread>  // NOLINT
 #include <utility>
 
 #include "absl/base/attributes.h"
 #include "absl/base/const_init.h"
 #include "absl/base/nullability.h"
-#include "absl/log/check.h"
-#include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
-#include "absl/synchronization/notification.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
+#include "./centipede/periodic_action.h"
 #include "./centipede/rusage_stats.h"
+#include "./common/logging.h"
 
-namespace centipede::perf {
+namespace fuzztest::internal {
 
 //------------------------------------------------------------------------------
 //                          RUsageProfiler::Snapshot
@@ -103,7 +101,7 @@ std::string RUsageProfiler::Snapshot::ShortMetricsStr() const {
 
 const RUsageProfiler::Snapshot& RUsageProfiler::Snapshot::Log() const {
   if (id >= 0) {
-    LOG(INFO).AtLocation(location.file, location.line)
+    FUZZTEST_LOG(INFO).AtLocation(location.file, location.line)
         << "PROFILER [P." << profiler_id << (profiler_desc.empty() ? "" : " ")
         << profiler_desc << "] SNAPSHOT [S." << id << (title.empty() ? "" : " ")
         << title << "]:\n"
@@ -116,57 +114,6 @@ std::ostream& operator<<(std::ostream& os, const RUsageProfiler::Snapshot& ss) {
   return os << ss.title << ": " << ss.ShortWhereStr() << " @ "
             << ss.ShortWhenStr() << ": " << ss.ShortMetricsStr();
 }
-
-//------------------------------------------------------------------------------
-//                            TimelapseThread
-//
-// Starts a new thread that periodically takes a profiling snapshot using the
-// passed parent profiler. The thread is auto-started at construction and
-// terminated at destruction.
-//------------------------------------------------------------------------------
-
-class RUsageProfiler::TimelapseThread {
- public:
-  TimelapseThread(              //
-      RUsageProfiler* parent,   //
-      SourceLocation loc,       //
-      absl::Duration interval,  //
-      bool also_log,            //
-      std::string title)
-      : parent_{parent},
-        loc_{loc},
-        interval_{interval},
-        also_log_{also_log},
-        title_{std::move(title)},
-        stop_loop_{},
-        loop_thread_{[this]() { RunLoop(); }} {}
-
-  ~TimelapseThread() { StopLoop(); }
-
- private:
-  void RunLoop() {
-    while (!stop_loop_.HasBeenNotified()) {
-      const auto& s = parent_->TakeSnapshot(loc_, title_);
-      if (also_log_) s.Log();
-      absl::SleepFor(interval_);
-    }
-  }
-
-  void StopLoop() {
-    stop_loop_.Notify();
-    loop_thread_.join();
-  }
-
-  RUsageProfiler* parent_;
-  const SourceLocation loc_;
-  const absl::Duration interval_;
-  const bool also_log_;
-  const std::string title_;
-
-  // NOTE: The order is important.
-  absl::Notification stop_loop_;
-  std::thread loop_thread_;
-};
 
 namespace {
 
@@ -181,7 +128,7 @@ class ProfileReportGenerator {
  public:
   ProfileReportGenerator(                                     //
       const std::deque<RUsageProfiler::Snapshot>& snapshots,  //
-      absl::Nonnull<RUsageProfiler::ReportSink*> report_sink)
+      RUsageProfiler::ReportSink* absl_nonnull report_sink)
       : snapshots_{snapshots}, report_sink_{report_sink} {
     for (const auto& snapshot : snapshots_) {
       timing_low_ = RUsageTiming::LowWater(  //
@@ -266,7 +213,7 @@ class ProfileReportGenerator {
         low_water >= kZero ? 0 :
         std::floor(std::abs(low_water / notch_size));
     // clang-format on
-    CHECK_GE(kBarNotches, notch_zero);
+    FUZZTEST_CHECK_GE(kBarNotches, notch_zero);
     // Print a zero mark only if a delta metric goes negative.
     std::string zero_mark = low_water < kZero ? "|" : "";
 
@@ -283,7 +230,7 @@ class ProfileReportGenerator {
           notch_size == kZero
               ? kBarNotches : std::floor((current - low_water) / notch_size);
       // clang-format on
-      CHECK_GE(kBarNotches, notches);
+      FUZZTEST_CHECK_GE(kBarNotches, notches);
 
       if (!is_delta) {
         // Non-delta metrics can't go negative, so the bar always looks like
@@ -403,7 +350,7 @@ RUsageProfiler::~RUsageProfiler() {
   if (metrics_ == kMetricsOff) return;
 
   // In case the caller hasn't done this.
-  if (timelapse_thread_) {
+  if (timelapse_recorder_) {
     StopTimelapse();
   }
   if (raii_actions_ & kDtorSnapshot) {
@@ -425,7 +372,7 @@ const RUsageProfiler::Snapshot& RUsageProfiler::TakeSnapshot(  //
     return kEmpty;
   }
 
-  absl::WriterMutexLock lock{&mutex_};
+  absl::WriterMutexLock lock{mutex_};
 
   RUsageTiming snap_timing = RUsageTiming::Zero();
   RUsageTiming delta_timing = RUsageTiming::Zero();
@@ -454,18 +401,16 @@ const RUsageProfiler::Snapshot& RUsageProfiler::TakeSnapshot(  //
     }
   }
 
-  Snapshot snapshot{
-      .id = static_cast<int64_t>(snapshots_.size()),
-      .title = std::move(title),
-      .location = loc,
-      .time = absl::Now(),
-      .profiler_id = id_,
-      .profiler_desc = description_,
-      .timing = snap_timing,
-      .delta_timing = delta_timing,
-      .memory = snap_memory,
-      .delta_memory = delta_memory,
-  };
+  Snapshot snapshot{/*id=*/static_cast<int64_t>(snapshots_.size()),
+                    /*title=*/std::move(title),
+                    /*location=*/loc,
+                    /*time=*/absl::Now(),
+                    /*profiler_id=*/id_,
+                    /*profiler_desc=*/description_,
+                    /*timing=*/snap_timing,
+                    /*delta_timing=*/delta_timing,
+                    /*memory=*/snap_memory,
+                    /*delta_memory=*/delta_memory};
 
   return snapshots_.emplace_back(std::move(snapshot));
 }
@@ -475,46 +420,51 @@ void RUsageProfiler::StartTimelapse(  //
     absl::Duration interval,          //
     bool also_log,                    //
     std::string title) {
-  absl::WriterMutexLock lock{&mutex_};
-  CHECK(!timelapse_thread_) << "StopTimelapse() wasn't called";
-  timelapse_thread_ = std::make_unique<TimelapseThread>(
-      this, loc, interval, also_log, std::move(title));
+  absl::WriterMutexLock lock{mutex_};
+  FUZZTEST_CHECK(!timelapse_recorder_) << "StopTimelapse() wasn't called";
+  timelapse_recorder_ = std::make_unique<PeriodicAction>(
+      [this, loc = std::move(loc), title = std::move(title), also_log]() {
+        const auto& s = TakeSnapshot(loc, title);
+        if (also_log) s.Log();
+      },
+      PeriodicAction::ZeroDelayConstInterval(interval));
 }
 
 void RUsageProfiler::StopTimelapse() {
-  absl::WriterMutexLock lock{&mutex_};
-  CHECK(timelapse_thread_) << "StartTimelapse() wasn't called";
-  timelapse_thread_.reset();  // ~TimelapseThread() runs
+  absl::WriterMutexLock lock{mutex_};
+  FUZZTEST_CHECK(timelapse_recorder_) << "StartTimelapse() wasn't called";
+  timelapse_recorder_.reset();
 }
 
 void RUsageProfiler::PrintReport(  //
     SourceLocation loc, const std::string& title) {
   if (metrics_ == kMetricsOff) return;
 
-  // Logs streamed-in text to LOG(INFO), while dropping the usual log prefix
-  // (date/time/thread/source). LOG()'s limit on the size of a single message
-  // applies to one streamed text fragment only (if needed, this can be reduced
-  // even further to a single line of text in a fragment): this is the main
-  // purpose of this class, as profiling reports can get very long. especially
-  // with automatic timelapse snapshotting.
+  // Logs streamed-in text to FUZZTEST_LOG(INFO), while dropping the usual log
+  // prefix (date/time/thread/source). FUZZTEST_LOG()'s limit on the size of a
+  // single message applies to one streamed text fragment only (if needed, this
+  // can be reduced even further to a single line of text in a fragment): this
+  // is the main purpose of this class, as profiling reports can get very long.
+  // especially with automatic timelapse snapshotting.
   class ReportLogger final : public ReportSink {
    public:
     ReportLogger(SourceLocation loc) : loc_{loc} {}
 
     ~ReportLogger() override {
       if (!buffer_.empty()) {
-        LOG(INFO).AtLocation(loc_.file, loc_.line).NoPrefix() << buffer_;
+        FUZZTEST_LOG(INFO).AtLocation(loc_.file, loc_.line).NoPrefix()
+            << buffer_;
       }
     }
 
     ReportLogger& operator<<(std::string_view fragment) override {
       const auto last_newline = fragment.rfind('\n');
       if (last_newline == std::string_view::npos) {
-        // Accumulate no-'\n' fragments: LOG() always wraps around.
+        // Accumulate no-'\n' fragments: FUZZTEST_LOG() always wraps around.
         buffer_ += fragment;
       } else {
         // Now we can log, but save the last bit of text
-        LOG(INFO).AtLocation(loc_.file, loc_.line).NoPrefix()
+        FUZZTEST_LOG(INFO).AtLocation(loc_.file, loc_.line).NoPrefix()
             << buffer_ << fragment.substr(0, last_newline);
         buffer_ = fragment.substr(last_newline + 1);
       }
@@ -526,17 +476,17 @@ void RUsageProfiler::PrintReport(  //
     std::string buffer_;
   };
 
-  LOG(INFO).AtLocation(loc.file, loc.line) << title << "\n";
+  FUZZTEST_LOG(INFO).AtLocation(loc.file, loc.line) << title << "\n";
   ReportLogger report_logger{loc};
   GenerateReport(&report_logger);
 }
 
 void RUsageProfiler::GenerateReport(
-    absl::Nonnull<ReportSink*> report_sink) const {
-  absl::ReaderMutexLock lock{&mutex_};
+    ReportSink* absl_nonnull report_sink) const {
+  absl::ReaderMutexLock lock{mutex_};
   // Prevent interleaved reports from multiple concurrent RUsageProfilers.
   ABSL_CONST_INIT static absl::Mutex report_generation_mutex_{absl::kConstInit};
-  absl::WriterMutexLock logging_lock{&report_generation_mutex_};
+  absl::WriterMutexLock logging_lock{report_generation_mutex_};
 
   ProfileReportGenerator gen{snapshots_, report_sink};
 
@@ -597,4 +547,4 @@ void RUsageProfiler::GenerateReport(
   }
 }
 
-}  // namespace centipede::perf
+}  // namespace fuzztest::internal

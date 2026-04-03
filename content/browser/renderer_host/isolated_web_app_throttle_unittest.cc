@@ -23,9 +23,10 @@
 #include "content/test/navigation_simulator_impl.h"
 #include "content/test/test_render_frame_host.h"
 #include "net/base/net_errors.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/permissions_policy/permissions_policy_declaration.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
+#include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
 #include "ui/base/page_transition_types.h"
 #include "url/origin.h"
 
@@ -46,13 +47,13 @@ class IsolatedWebAppContentBrowserClient : public ContentBrowserClient {
  public:
   bool ShouldUrlUseApplicationIsolationLevel(BrowserContext* browser_context,
                                              const GURL& url) override {
-    return url.host() == GURL(kAppUrl).host();
+    return url.GetHost() == GURL(kAppUrl).GetHost();
   }
 
   bool HandleExternalProtocol(
       const GURL& url,
       base::RepeatingCallback<WebContents*()> web_contents_getter,
-      int frame_tree_node_id,
+      FrameTreeNodeId frame_tree_node_id,
       NavigationUIData* navigation_data,
       bool is_primary_main_frame,
       bool is_in_fenced_frame_tree,
@@ -61,6 +62,7 @@ class IsolatedWebAppContentBrowserClient : public ContentBrowserClient {
       bool has_user_gesture,
       const std::optional<url::Origin>& initiating_origin,
       RenderFrameHost* initiator_document,
+      const net::IsolationInfo& isolation_info,
       mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory)
       override {
     external_protocol_call_count_++;
@@ -96,15 +98,14 @@ class IsolatedWebAppContentBrowserClient : public ContentBrowserClient {
 
   bool AreIsolatedWebAppsEnabled(BrowserContext*) override { return true; }
 
-  std::optional<blink::ParsedPermissionsPolicy>
+  std::optional<std::vector<blink::mojom::IsolatedAppPermissionPolicyEntryPtr>>
   GetPermissionsPolicyForIsolatedWebApp(
       content::BrowserContext* browser_context,
-      const url::Origin& app_origin) override {
-    return {{blink::ParsedPermissionsPolicyDeclaration(
-        blink::mojom::PermissionsPolicyFeature::kCrossOriginIsolated,
-        /*allowed_origins=*/{},
-        /*self_if_matches=*/std::nullopt,
-        /*matches_all_origins=*/true, /*matches_opaque_src=*/false)}};
+      const url::Origin& iwa_origin) override {
+    std::vector<blink::mojom::IsolatedAppPermissionPolicyEntryPtr> policies;
+    policies.push_back(blink::mojom::IsolatedAppPermissionPolicyEntry::New(
+        "cross-origin-isolated", std::vector<std::string>{"*"}));
+    return policies;
   }
 
  private:
@@ -161,7 +162,7 @@ class IsolatedWebAppThrottleTest : public RenderViewHostTestHarness {
   }
 
   std::unique_ptr<NavigationSimulator> StartRendererInitiatedNavigation(
-      int frame_tree_node_id,
+      FrameTreeNodeId frame_tree_node_id,
       const char* url) {
     RenderFrameHost* rfh = FrameTreeNode::GloballyFindByID(frame_tree_node_id)
                                ->current_frame_host();
@@ -172,14 +173,15 @@ class IsolatedWebAppThrottleTest : public RenderViewHostTestHarness {
   }
 
   void CommitRendererInitiatedNavigation(
-      int frame_tree_node_id,
+      FrameTreeNodeId frame_tree_node_id,
       const char* url,
       scoped_refptr<net::HttpResponseHeaders> response_headers = nullptr) {
     CommitNavigation(StartRendererInitiatedNavigation(frame_tree_node_id, url),
                      frame_tree_node_id, url, response_headers);
   }
 
-  int CreateIframe(int parent_frame_tree_node_id, const std::string& name) {
+  FrameTreeNodeId CreateIframe(FrameTreeNodeId parent_frame_tree_node_id,
+                               const std::string& name) {
     TestRenderFrameHost* parent_rfh = static_cast<TestRenderFrameHost*>(
         FrameTreeNode::GloballyFindByID(parent_frame_tree_node_id)
             ->current_frame_host());
@@ -187,13 +189,14 @@ class IsolatedWebAppThrottleTest : public RenderViewHostTestHarness {
     return child_rfh->GetFrameTreeNodeId();
   }
 
-  WebExposedIsolationLevel GetWebExposedIsolationLevel(int frame_tree_node_id) {
+  WebExposedIsolationLevel GetWebExposedIsolationLevel(
+      FrameTreeNodeId frame_tree_node_id) {
     return FrameTreeNode::GloballyFindByID(frame_tree_node_id)
         ->current_frame_host()
         ->GetWebExposedIsolationLevel();
   }
 
-  int main_frame_id() { return main_rfh()->GetFrameTreeNodeId(); }
+  FrameTreeNodeId main_frame_id() { return main_rfh()->GetFrameTreeNodeId(); }
 
   scoped_refptr<net::HttpResponseHeaders> coop_coep_headers() {
     return coop_coep_headers_;
@@ -218,15 +221,24 @@ class IsolatedWebAppThrottleTest : public RenderViewHostTestHarness {
  private:
   void CommitNavigation(
       std::unique_ptr<NavigationSimulator> simulator,
-      int frame_tree_node_id,
+      FrameTreeNodeId frame_tree_node_id,
       const char* url,
       scoped_refptr<net::HttpResponseHeaders> response_headers) {
     // Verify that the Start call was successful.
     auto start_result = simulator->GetLastThrottleCheckResult();
     CHECK_EQ(NavigationThrottle::PROCEED, start_result.action());
 
-    if (response_headers)
+    if (response_headers) {
       simulator->SetResponseHeaders(response_headers);
+      // Simulate policies merging result.
+      simulator->SetPermissionsPolicyHeader(
+          {network::ParsedPermissionsPolicyDeclaration(
+              network::mojom::PermissionsPolicyFeature::kCrossOriginIsolated,
+              /*allowed_origins=*/{},
+              /*self_if_matches=*/std::nullopt,
+              /*matches_all_origins=*/true,
+              /*matches_opaque_src=*/false)});
+    }
     simulator->Commit();
 
     RenderFrameHost* rfh = FrameTreeNode::GloballyFindByID(frame_tree_node_id)
@@ -283,11 +295,7 @@ TEST_F(IsolatedWebAppThrottleTest, CancelCrossOriginNavigation) {
 
   auto start_result = simulator->GetLastThrottleCheckResult();
   EXPECT_EQ(NavigationThrottle::CANCEL, start_result.action());
-#if BUILDFLAG(IS_CHROMEOS)
   EXPECT_EQ(1u, GetBrowserClient().GetOpenUrlCallCount());
-#else
-  EXPECT_EQ(1u, GetBrowserClient().GetExternalProtocolCallCount());
-#endif
   EXPECT_TRUE(ui::PageTransitionTypeIncludingQualifiersIs(
       GetBrowserClient().GetLastPageTransition(),
       ui::PageTransition::PAGE_TRANSITION_LINK));
@@ -295,11 +303,7 @@ TEST_F(IsolatedWebAppThrottleTest, CancelCrossOriginNavigation) {
   simulator = StartRendererInitiatedNavigation(main_frame_id(), kNonAppUrl2);
   start_result = simulator->GetLastThrottleCheckResult();
   EXPECT_EQ(NavigationThrottle::CANCEL, start_result.action());
-#if BUILDFLAG(IS_CHROMEOS)
   EXPECT_EQ(2u, GetBrowserClient().GetOpenUrlCallCount());
-#else
-  EXPECT_EQ(2u, GetBrowserClient().GetExternalProtocolCallCount());
-#endif
   EXPECT_TRUE(ui::PageTransitionTypeIncludingQualifiersIs(
       GetBrowserClient().GetLastPageTransition(),
       ui::PageTransition::PAGE_TRANSITION_LINK));
@@ -319,23 +323,19 @@ TEST_F(IsolatedWebAppThrottleTest, BlockRedirectOutOfIsolatedWebApp) {
 
   auto redirect_result = simulator->GetLastThrottleCheckResult();
   EXPECT_EQ(NavigationThrottle::CANCEL, redirect_result.action());
-#if BUILDFLAG(IS_CHROMEOS)
   EXPECT_EQ(1u, GetBrowserClient().GetOpenUrlCallCount());
-#else
-  EXPECT_EQ(1u, GetBrowserClient().GetExternalProtocolCallCount());
-#endif
   EXPECT_TRUE(ui::PageTransitionTypeIncludingQualifiersIs(
       GetBrowserClient().GetLastPageTransition(),
-      ui::PageTransition::PAGE_TRANSITION_SERVER_REDIRECT));
+      ui::PageTransition::PAGE_TRANSITION_LINK));
 }
 
 TEST_F(IsolatedWebAppThrottleTest, AllowIframeNavigationOutOfApp) {
-  CommitBrowserInitiatedNavigation(kAppUrl);
+  CommitBrowserInitiatedNavigation(kAppUrl, coop_coep_headers());
   EXPECT_EQ(kIsolatedApplication, GetWebExposedIsolationLevel(main_frame_id()));
-  int iframe_id = CreateIframe(main_frame_id(), "test_frame");
+  FrameTreeNodeId iframe_id = CreateIframe(main_frame_id(), "test_frame");
 
   // Navigate the iframe to an app page.
-  CommitRendererInitiatedNavigation(iframe_id, kAppUrl);
+  CommitRendererInitiatedNavigation(iframe_id, kAppUrl, corp_coep_headers());
 
   // Navigate the iframe to a non-app page.
   CommitRendererInitiatedNavigation(iframe_id, kNonAppUrl, corp_coep_headers());
@@ -345,7 +345,7 @@ TEST_F(IsolatedWebAppThrottleTest,
        BlockIframeRendererInitiatedNavigationIntoIsolatedWebApp) {
   CommitBrowserInitiatedNavigation(kAppUrl, coop_coep_headers());
   EXPECT_EQ(kIsolatedApplication, GetWebExposedIsolationLevel(main_frame_id()));
-  int iframe_id = CreateIframe(main_frame_id(), "test_frame");
+  FrameTreeNodeId iframe_id = CreateIframe(main_frame_id(), "test_frame");
 
   // Navigate the iframe to a non-app page.
   CommitRendererInitiatedNavigation(iframe_id, kNonAppUrl, corp_coep_headers());
@@ -359,12 +359,12 @@ TEST_F(IsolatedWebAppThrottleTest,
 
 TEST_F(IsolatedWebAppThrottleTest,
        AllowIframeBrowserInitiatedNavigationIntoIsolatedWebApp) {
-  CommitBrowserInitiatedNavigation(kAppUrl);
+  CommitBrowserInitiatedNavigation(kAppUrl, coop_coep_headers());
   EXPECT_EQ(kIsolatedApplication, GetWebExposedIsolationLevel(main_frame_id()));
-  int iframe_id = CreateIframe(main_frame_id(), "test_frame");
+  FrameTreeNodeId iframe_id = CreateIframe(main_frame_id(), "test_frame");
 
   // Navigate the iframe to an app page.
-  CommitRendererInitiatedNavigation(iframe_id, kAppUrl);
+  CommitRendererInitiatedNavigation(iframe_id, kAppUrl, corp_coep_headers());
 
   // Navigate the iframe to a non-app page.
   CommitRendererInitiatedNavigation(iframe_id, kNonAppUrl, corp_coep_headers());
@@ -380,6 +380,15 @@ TEST_F(IsolatedWebAppThrottleTest,
   // incorrectly choose the main frame as the one being navigated.
   simulator = NavigationSimulatorImpl::CreateFromPendingInFrame(
       FrameTreeNode::GloballyFindByID(iframe_id));
+  simulator->SetResponseHeaders(corp_coep_headers());
+  // Simulate policies merging result.
+  simulator->SetPermissionsPolicyHeader(
+      {network::ParsedPermissionsPolicyDeclaration(
+          network::mojom::PermissionsPolicyFeature::kCrossOriginIsolated,
+          /*allowed_origins=*/{},
+          /*self_if_matches=*/std::nullopt,
+          /*matches_all_origins=*/true,
+          /*matches_opaque_src=*/false)});
   simulator->Commit();
 
   auto commit_result = simulator->GetLastThrottleCheckResult();
@@ -390,7 +399,7 @@ TEST_F(IsolatedWebAppThrottleTest,
        BlockIframeRedirectOutThenIntoIsolatedWebApp) {
   CommitBrowserInitiatedNavigation(kAppUrl, coop_coep_headers());
   EXPECT_EQ(kIsolatedApplication, GetWebExposedIsolationLevel(main_frame_id()));
-  int iframe_id = CreateIframe(main_frame_id(), "test_frame");
+  FrameTreeNodeId iframe_id = CreateIframe(main_frame_id(), "test_frame");
 
   auto simulator = StartRendererInitiatedNavigation(iframe_id, kAppUrl);
 
@@ -398,6 +407,7 @@ TEST_F(IsolatedWebAppThrottleTest,
   EXPECT_EQ(NavigationThrottle::PROCEED, start_result.action());
 
   // Redirect to a non-app page.
+  simulator->SetRedirectHeaders(corp_coep_headers());
   simulator->Redirect(GURL(kNonAppUrl));
 
   auto redirect_result1 = simulator->GetLastThrottleCheckResult();
@@ -417,12 +427,14 @@ TEST_F(IsolatedWebAppThrottleTest, BlockIsolatedIframeInNonIsolatedIframe) {
   EXPECT_EQ(kIsolatedApplication, GetWebExposedIsolationLevel(main_frame_id()));
 
   // Create a non-app iframe.
-  int child_iframe_id = CreateIframe(main_frame_id(), "test_frame1");
+  FrameTreeNodeId child_iframe_id =
+      CreateIframe(main_frame_id(), "test_frame1");
   CommitRendererInitiatedNavigation(child_iframe_id, kNonAppUrl,
                                     corp_coep_headers());
 
   // Try to create an app iframe within the non-app iframe.
-  int grandchild_iframe_id = CreateIframe(child_iframe_id, "test_frame2");
+  FrameTreeNodeId grandchild_iframe_id =
+      CreateIframe(child_iframe_id, "test_frame2");
   auto simulator =
       StartRendererInitiatedNavigation(grandchild_iframe_id, kAppUrl);
 
@@ -447,6 +459,14 @@ TEST_F(IsolatedWebAppThrottleTest, AllowHistoryNavigationFromErrorPage) {
       -1, web_contents(), false /* is_renderer_initiated */);
   simulator->Start();
   simulator->SetResponseHeaders(coop_coep_headers());
+  // Simulate policies merging result.
+  simulator->SetPermissionsPolicyHeader(
+      {network::ParsedPermissionsPolicyDeclaration(
+          network::mojom::PermissionsPolicyFeature::kCrossOriginIsolated,
+          /*allowed_origins=*/{},
+          /*self_if_matches=*/std::nullopt,
+          /*matches_all_origins=*/true,
+          /*matches_opaque_src=*/false)});
   simulator->Commit();
 
   auto* app_rfh = simulator->GetFinalRenderFrameHost();

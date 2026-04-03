@@ -20,9 +20,11 @@ typedef HeapHashMap<WeakMember<const Scrollbar>, MacScrollbarImplV2*>
     ScrollbarToAnimatorV2Map;
 
 ScrollbarToAnimatorV2Map& GetScrollbarToAnimatorV2Map() {
-  DEFINE_STATIC_LOCAL(Persistent<ScrollbarToAnimatorV2Map>, map,
-                      (MakeGarbageCollected<ScrollbarToAnimatorV2Map>()));
-  return *map;
+  using ScrollbarToAnimatorV2MapHolder =
+      DisallowNewWrapper<ScrollbarToAnimatorV2Map>;
+  DEFINE_STATIC_LOCAL(Persistent<ScrollbarToAnimatorV2MapHolder>, holder,
+                      (MakeGarbageCollected<ScrollbarToAnimatorV2MapHolder>()));
+  return holder->Value();
 }
 
 blink::ScrollbarThemeMac* MacOverlayScrollbarTheme(
@@ -89,9 +91,26 @@ void MacScrollbarImplV2::MouseDidExit() {
     overlay_animator_->MouseDidExit();
 }
 
-void MacScrollbarImplV2::DidScroll() {
-  if (overlay_animator_)
+bool MacScrollbarImplV2::DidScroll() {
+  if (overlay_animator_) {
     overlay_animator_->DidScroll();
+    return true;
+  }
+  return false;
+}
+
+bool MacScrollbarImplV2::FadeInScrollbarIfExists() {
+  if (overlay_animator_) {
+    overlay_animator_->FadeInScrollbar();
+    return true;
+  }
+  return false;
+}
+
+void MacScrollbarImplV2::FadeOutScrollbarIfNeeded() {
+  if (overlay_animator_) {
+    overlay_animator_->FadeOutScrollbarIfNeeded();
+  }
 }
 
 float MacScrollbarImplV2::GetKnobAlpha() {
@@ -121,9 +140,7 @@ int MacScrollbarImplV2::GetTrackBoxWidth() {
 }
 
 bool MacScrollbarImplV2::IsMouseInScrollbarFrameRect() const {
-  if (auto* area = scrollbar_->GetScrollableArea())
-    return scrollbar_->FrameRect().Contains(area->LastKnownMousePosition());
-  return false;
+  return scrollbar_->LastKnownMousePositionInFrameRect();
 }
 void MacScrollbarImplV2::SetHidden(bool hidden) {
   scrollbar_->SetScrollbarsHiddenFromExternalAnimator(hidden);
@@ -187,6 +204,29 @@ void MacScrollbarAnimatorV2::DidChangeUserVisibleScrollOffset(
     horizontal_scrollbar_->DidScroll();
   if (vertical_scrollbar_ && new_offset.y() != 0)
     vertical_scrollbar_->DidScroll();
+}
+
+bool MacScrollbarAnimatorV2::FadeInScrollbarIfExists(bool horizontal,
+                                                     bool vertical) {
+  bool did_fade_in_and_begin_deferring_fade_out = false;
+  if (horizontal && horizontal_scrollbar_) {
+    did_fade_in_and_begin_deferring_fade_out |=
+        horizontal_scrollbar_->FadeInScrollbarIfExists();
+  }
+  if (vertical && vertical_scrollbar_) {
+    did_fade_in_and_begin_deferring_fade_out |=
+        vertical_scrollbar_->FadeInScrollbarIfExists();
+  }
+  return did_fade_in_and_begin_deferring_fade_out;
+}
+
+void MacScrollbarAnimatorV2::FadeOutScrollbarIfNeeded() {
+  if (horizontal_scrollbar_) {
+    horizontal_scrollbar_->FadeOutScrollbarIfNeeded();
+  }
+  if (vertical_scrollbar_) {
+    vertical_scrollbar_->FadeOutScrollbarIfNeeded();
+  }
 }
 
 void MacScrollbarAnimatorV2::Dispose() {

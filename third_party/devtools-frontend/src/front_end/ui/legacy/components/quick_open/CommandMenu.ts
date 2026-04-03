@@ -1,12 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import '../../../kit/kit.js';
+import '../../../components/highlighting/highlighting.js';
 
 import * as Common from '../../../../core/common/common.js';
 import * as Host from '../../../../core/host/host.js';
 import * as i18n from '../../../../core/i18n/i18n.js';
 import * as Platform from '../../../../core/platform/platform.js';
 import * as Diff from '../../../../third_party/diff/diff.js';
+import {html, nothing, type TemplateResult} from '../../../lit/lit.js';
 import * as UI from '../../legacy.js';
 
 import {FilteredListWidget, Provider, registerProvider} from './FilteredListWidget.js';
@@ -16,7 +20,7 @@ const UIStrings = {
   /**
    * @description Message to display if a setting change requires a reload of DevTools
    */
-  oneOrMoreSettingsHaveChanged: 'One or more settings have changed which requires a reload to take effect.',
+  settingsChangedReloadDevTools: 'Settings changed. To apply, reload DevTools.',
   /**
    * @description Text in Command Menu of the Command Menu
    */
@@ -30,19 +34,23 @@ const UIStrings = {
    */
   command: 'Command',
   /**
+   * @description Text for help title of run command menu
+   */
+  runCommand: 'Run command',
+  /**
    * @description Hint text to indicate that a selected command is deprecated
    */
   deprecated: '— deprecated',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('ui/legacy/components/quick_open/CommandMenu.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
 let commandMenuInstance: CommandMenu;
 
 export class CommandMenu {
-  private readonly commandsInternal: Command[];
+  readonly #commands: Command[];
   private constructor() {
-    this.commandsInternal = [];
+    this.#commands = [];
     this.loadCommands();
   }
 
@@ -62,11 +70,13 @@ export class CommandMenu {
       keys,
       title,
       shortcut,
+      jslogContext,
       executeHandler,
       availableHandler,
       userActionCode,
       deprecationWarning,
       isPanelOrDrawer,
+      featurePromotionId,
     } = options;
 
     let handler = executeHandler;
@@ -75,9 +85,12 @@ export class CommandMenu {
       handler = () => {
         Host.userMetrics.actionTaken(actionCode);
         executeHandler();
+        // not here
       };
     }
-    return new Command(category, title, keys, shortcut, handler, availableHandler, deprecationWarning, isPanelOrDrawer);
+    return new Command(
+        category, title, keys, shortcut, jslogContext, handler, availableHandler, deprecationWarning, isPanelOrDrawer,
+        featurePromotionId);
   }
 
   static createSettingCommand<V>(setting: Common.Settings.Setting<V>, title: Common.UIString.LocalizedString, value: V):
@@ -94,6 +107,7 @@ export class CommandMenu {
       keys: tags,
       title,
       shortcut: '',
+      jslogContext: Platform.StringUtilities.toKebabCase(`${setting.name}-${value}`),
       executeHandler: () => {
         if (setting.deprecation?.disabled &&
             (!setting.deprecation?.experiment || setting.deprecation.experiment.isEnabled())) {
@@ -108,11 +122,10 @@ export class CommandMenu {
 
         if (reloadRequired) {
           UI.InspectorView.InspectorView.instance().displayReloadRequiredWarning(
-              i18nString(UIStrings.oneOrMoreSettingsHaveChanged));
+              i18nString(UIStrings.settingsChangedReloadDevTools));
         }
       },
       availableHandler,
-      userActionCode: undefined,
       deprecationWarning: setting.deprecation?.warning,
     });
 
@@ -140,6 +153,7 @@ export class CommandMenu {
       keys: action.tags() || '',
       title: action.title(),
       shortcut,
+      jslogContext: action.id(),
       executeHandler: action.execute.bind(action),
       userActionCode,
       availableHandler: undefined,
@@ -148,7 +162,7 @@ export class CommandMenu {
   }
 
   static createRevealViewCommand(options: RevealViewCommandOptions): Command {
-    const {title, tags, category, userActionCode, id} = options;
+    const {title, tags, category, userActionCode, id, featurePromotionId} = options;
     if (!category) {
       throw new Error(`Creating '${title}' reveal view command failed. Reveal view has no category.`);
     }
@@ -161,7 +175,10 @@ export class CommandMenu {
 
     const executeHandler = (): Promise<void> => {
       if (id === 'issues-pane') {
-        Host.userMetrics.issuesPanelOpenedFrom(Host.UserMetrics.IssueOpener.CommandMenu);
+        Host.userMetrics.issuesPanelOpenedFrom(Host.UserMetrics.IssueOpener.COMMAND_MENU);
+      }
+      if (featurePromotionId) {
+        UI.UIUtils.PromotionManager.instance().recordFeatureInteraction(featurePromotionId);
       }
       return UI.ViewManager.ViewManager.instance().showView(id, /* userGesture */ true);
     };
@@ -171,10 +188,12 @@ export class CommandMenu {
       keys: tags,
       title,
       shortcut: '',
+      jslogContext: id,
       executeHandler,
       userActionCode,
       availableHandler: undefined,
       isPanelOrDrawer: panelOrDrawer,
+      featurePromotionId,
     });
   }
 
@@ -185,7 +204,7 @@ export class CommandMenu {
         locations.set(name, category);
       }
     }
-    const views = UI.ViewManager.getRegisteredViewExtensions();
+    const views = UI.ViewManager.ViewManager.instance().getRegisteredViewExtensions();
     for (const view of views) {
       const viewLocation = view.location();
       const category = viewLocation && locations.get(viewLocation);
@@ -197,13 +216,13 @@ export class CommandMenu {
         title: view.commandPrompt(),
         tags: view.tags() || '',
         category,
-        userActionCode: undefined,
         id: view.viewId(),
+        featurePromotionId: view.featurePromotionId(),
       };
-      this.commandsInternal.push(CommandMenu.createRevealViewCommand(options));
+      this.#commands.push(CommandMenu.createRevealViewCommand(options));
     }
     // Populate allowlisted settings.
-    const settingsRegistrations = Common.Settings.getRegisteredSettings();
+    const settingsRegistrations = Common.Settings.Settings.instance().getRegisteredSettings();
     for (const settingRegistration of settingsRegistrations) {
       const options = settingRegistration.options;
       if (!options || !settingRegistration.category) {
@@ -211,13 +230,13 @@ export class CommandMenu {
       }
       for (const pair of options) {
         const setting = Common.Settings.Settings.instance().moduleSetting(settingRegistration.settingName);
-        this.commandsInternal.push(CommandMenu.createSettingCommand(setting, pair.title(), pair.value));
+        this.#commands.push(CommandMenu.createSettingCommand(setting, pair.title(), pair.value));
       }
     }
   }
 
   commands(): Command[] {
-    return this.commandsInternal;
+    return this.#commands;
   }
 }
 export interface ActionCommandOptions {
@@ -231,6 +250,7 @@ export interface RevealViewCommandOptions {
   tags: string;
   category: UI.ViewManager.ViewLocationCategory;
   userActionCode?: number;
+  featurePromotionId?: string;
 }
 
 export interface CreateCommandOptions {
@@ -238,11 +258,13 @@ export interface CreateCommandOptions {
   keys: string;
   title: Common.UIString.LocalizedString;
   shortcut: string;
+  jslogContext: string;
   executeHandler: () => void;
   availableHandler?: () => boolean;
   userActionCode?: number;
   deprecationWarning?: Platform.UIString.LocalizedString;
   isPanelOrDrawer?: PanelOrDrawer;
+  featurePromotionId?: string;
 }
 
 export const enum PanelOrDrawer {
@@ -254,7 +276,7 @@ export class CommandMenuProvider extends Provider {
   private commands: Command[];
 
   constructor(commandsForTest: Command[] = []) {
-    super();
+    super('command');
     this.commands = commandsForTest;
   }
 
@@ -268,9 +290,7 @@ export class CommandMenuProvider extends Provider {
       if (!category) {
         continue;
       }
-
-      const options: ActionCommandOptions = {action, userActionCode: undefined};
-      this.commands.push(CommandMenu.createActionCommand(options));
+      this.commands.push(CommandMenu.createActionCommand({action}));
     }
 
     for (const command of allCommands) {
@@ -306,6 +326,12 @@ export class CommandMenuProvider extends Provider {
   override itemScoreAt(itemIndex: number, query: string): number {
     const command = this.commands[itemIndex];
     let score = Diff.Diff.DiffWrapper.characterScore(query.toLowerCase(), command.title.toLowerCase());
+    // Increase score of promoted items so that these appear on top of the list
+    const promotionId = command.featurePromotionId;
+    if (promotionId && UI.UIUtils.PromotionManager.instance().canShowPromotion(promotionId)) {
+      score = Number.MAX_VALUE;
+      return score;
+    }
 
     // Score panel/drawer reveals above regular actions.
     if (command.isPanelOrDrawer === PanelOrDrawer.PANEL) {
@@ -317,31 +343,30 @@ export class CommandMenuProvider extends Provider {
     return score;
   }
 
-  override renderItem(itemIndex: number, query: string, titleElement: Element, subtitleElement: Element): void {
+  override renderItem(itemIndex: number, query: string): TemplateResult {
     const command = this.commands[itemIndex];
-
-    titleElement.removeChildren();
-    UI.UIUtils.createTextChild(titleElement, command.title);
-    FilteredListWidget.highlightRanges(titleElement, query, true);
-
-    subtitleElement.textContent = command.shortcut;
-
+    const badge = command.featurePromotionId ? UI.UIUtils.maybeCreateNewBadge(command.featurePromotionId) : undefined;
     const deprecationWarning = command.deprecationWarning;
-    if (deprecationWarning) {
-      const deprecatedTagElement = (titleElement.parentElement?.createChild('span', 'deprecated-tag') as HTMLElement);
-      if (deprecatedTagElement) {
-        deprecatedTagElement.textContent = i18nString(UIStrings.deprecated);
-        deprecatedTagElement.title = deprecationWarning;
-      }
-    }
-    const tagElement = (titleElement.parentElement?.parentElement?.createChild('span', 'tag') as HTMLElement);
-    if (!tagElement) {
-      return;
-    }
-    const index = Platform.StringUtilities.hashCode(command.category) % MaterialPaletteColors.length;
-    tagElement.style.backgroundColor = MaterialPaletteColors[index];
-    tagElement.style.color = '#fff';
-    tagElement.textContent = command.category;
+    // clang-format off
+    return html`
+      <devtools-icon name=${categoryIcons[command.category]}></devtools-icon>
+      <div>
+        <devtools-highlight type="markup" ranges=${FilteredListWidget.getHighlightRanges(command.title, query, true)}>
+          ${command.title}
+        </devtools-highlight>
+        ${badge ?? nothing}
+        <div>${command.shortcut}</div>
+        ${deprecationWarning ? html`
+          <span class="deprecated-tag" title=${deprecationWarning}>
+            ${i18nString(UIStrings.deprecated)}
+          </span>` : nothing}
+      </div>
+      <span class="tag">${command.category}</span>`;
+    // clang-format on
+  }
+
+  override jslogContextAt(itemIndex: number): string {
+    return this.commands[itemIndex].jslogContext;
   }
 
   override selectItem(itemIndex: number|null, _promptValue: string): void {
@@ -357,49 +382,57 @@ export class CommandMenuProvider extends Provider {
   }
 }
 
-export const MaterialPaletteColors = [
-  '#F44336',
-  '#E91E63',
-  '#9C27B0',
-  '#673AB7',
-  '#3F51B5',
-  '#03A9F4',
-  '#00BCD4',
-  '#009688',
-  '#4CAF50',
-  '#8BC34A',
-  '#CDDC39',
-  '#FFC107',
-  '#FF9800',
-  '#FF5722',
-  '#795548',
-  '#9E9E9E',
-  '#607D8B',
-];
+const categoryIcons: Record<string, string> = {
+  Appearance: 'palette',
+  Console: 'terminal',
+  Debugger: 'bug',
+  Drawer: 'keyboard-full',
+  Elements: 'code',
+  Global: 'global',
+  Grid: 'grid-on',
+  Help: 'help',
+  Mobile: 'devices',
+  Navigation: 'refresh',
+  Network: 'arrow-up-down',
+  Panel: 'frame',
+  Performance: 'performance',
+  Persistence: 'override',
+  Recorder: 'record-start',
+  Rendering: 'tonality',
+  Resources: 'bin',
+  Screenshot: 'photo-camera',
+  Settings: 'gear',
+  Sources: 'label',
+};
 
 export class Command {
   readonly category: Common.UIString.LocalizedString;
   readonly title: Common.UIString.LocalizedString;
   readonly key: string;
   readonly shortcut: string;
+  readonly jslogContext: string;
   readonly deprecationWarning?: Platform.UIString.LocalizedString;
   readonly isPanelOrDrawer?: PanelOrDrawer;
+  readonly featurePromotionId?: string;
 
   readonly #executeHandler: () => unknown;
   readonly #availableHandler?: () => boolean;
 
   constructor(
       category: Common.UIString.LocalizedString, title: Common.UIString.LocalizedString, key: string, shortcut: string,
-      executeHandler: () => unknown, availableHandler?: () => boolean,
-      deprecationWarning?: Platform.UIString.LocalizedString, isPanelOrDrawer?: PanelOrDrawer) {
+      jslogContext: string, executeHandler: () => unknown, availableHandler?: () => boolean,
+      deprecationWarning?: Platform.UIString.LocalizedString, isPanelOrDrawer?: PanelOrDrawer,
+      featurePromotionId?: string) {
     this.category = category;
     this.title = title;
     this.key = category + '\0' + title + '\0' + key;
     this.shortcut = shortcut;
+    this.jslogContext = jslogContext;
     this.#executeHandler = executeHandler;
     this.#availableHandler = availableHandler;
     this.deprecationWarning = deprecationWarning;
     this.isPanelOrDrawer = isPanelOrDrawer;
+    this.featurePromotionId = featurePromotionId;
   }
 
   available(): boolean {
@@ -422,8 +455,8 @@ export class ShowActionDelegate implements UI.ActionRegistration.ActionDelegate 
 registerProvider({
   prefix: '>',
   iconName: 'chevron-right',
-  iconWidth: '20px',
   provider: () => Promise.resolve(new CommandMenuProvider()),
+  helpTitle: () => i18nString(UIStrings.runCommand),
   titlePrefix: () => i18nString(UIStrings.run),
   titleSuggestion: () => i18nString(UIStrings.command),
 });

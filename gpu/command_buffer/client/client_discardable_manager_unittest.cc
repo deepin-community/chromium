@@ -4,7 +4,7 @@
 
 #include "gpu/command_buffer/client/client_discardable_manager.h"
 
-#include "gpu/command_buffer/client/client_discardable_texture_manager.h"
+#include "base/notreached.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace gpu {
@@ -14,22 +14,16 @@ class FakeCommandBuffer : public CommandBuffer {
   FakeCommandBuffer() = default;
   ~FakeCommandBuffer() override { EXPECT_TRUE(active_ids_.empty()); }
   // Overridden from CommandBuffer:
-  State GetLastState() override {
-    NOTREACHED();
-    return State();
-  }
+  State GetLastState() override { NOTREACHED(); }
   void Flush(int32_t put_offset) override { NOTREACHED(); }
   void OrderingBarrier(int32_t put_offset) override { NOTREACHED(); }
   State WaitForTokenInRange(int32_t start, int32_t end) override {
     NOTREACHED();
-
-    return State();
   }
   State WaitForGetOffsetInRange(uint32_t set_get_buffer_count,
                                 int32_t start,
                                 int32_t end) override {
     NOTREACHED();
-    return State();
   }
   void SetGetBuffer(int32_t transfer_buffer_id) override { NOTREACHED(); }
   scoped_refptr<gpu::Buffer> CreateTransferBuffer(
@@ -224,25 +218,6 @@ TEST(ClientDiscardableManagerTest, FreeDeleted) {
     manager.FreeHandle(handle_ids[i]);
   }
   manager.CheckPendingForTesting(&command_buffer);
-}
-
-TEST(ClientDiscardableTextureManagerTest, BasicUsage) {
-  FakeCommandBuffer command_buffer;
-  ClientDiscardableTextureManager manager;
-  {
-    ClientDiscardableHandle handle =
-        manager.InitializeTexture(&command_buffer, 1);
-    EXPECT_TRUE(handle.IsLockedForTesting());
-    EXPECT_EQ(handle.shm_id(), 1);
-    EXPECT_FALSE(DeleteClientHandleForTesting(handle));
-    UnlockClientHandleForTesting(handle);
-    manager.LockTexture(1);
-    EXPECT_FALSE(DeleteClientHandleForTesting(handle));
-    UnlockAndDeleteClientHandleForTesting(handle);
-  }
-  manager.FreeTexture(1);
-  manager.DiscardableManagerForTesting()->CheckPendingForTesting(
-      &command_buffer);
 }
 
 }  // namespace gpu

@@ -32,7 +32,7 @@ namespace policies {
 //   memory available quickly for foreground processes and improves global
 //   browser performance.
 class WorkingSetTrimmerPolicy : public GraphOwned,
-                                public ProcessNode::ObserverDefaultImpl,
+                                public ProcessNodeObserver,
                                 public NodeDataDescriberDefaultImpl {
  public:
   WorkingSetTrimmerPolicy();
@@ -80,7 +80,7 @@ class WorkingSetTrimmerPolicy : public GraphOwned,
   void SetLastTrimTime(const ProcessNode* process_node, base::TimeTicks time);
 
   // NodeDataDescriber implementation:
-  base::Value::Dict DescribeProcessNodeData(
+  base::DictValue DescribeProcessNodeData(
       const ProcessNode* node) const override;
 };
 

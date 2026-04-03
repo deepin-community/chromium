@@ -14,7 +14,16 @@ import "services/video_capture/public/mojom/virtual_device.mojom";
 // to virtual devices that are used to simulate video capture devices, eg. for
 // tests.
 interface VideoSourceProvider {
-  GetSourceInfos() => (array<media.mojom.VideoCaptureDeviceInfo> source_infos);
+  // Results of GetSourceInfos calls.
+  enum GetSourceInfosResult {
+    kSuccess,
+    kErrorDroppedRequest
+  };
+
+  // Get a list of available video sources. source_infos is empty whenever
+  // result is not kSuccess.
+  GetSourceInfos() => (GetSourceInfosResult result,
+                       array<media.mojom.VideoCaptureDeviceInfo> source_infos);
 
   // This essentially constrains things down to a particular source. This is
   // useful for subsequently passing the resulting |stream| to clients that
@@ -38,7 +47,7 @@ interface VideoSourceProvider {
       pending_receiver<SharedMemoryVirtualDevice> virtual_device_receiver);
 
   // Similar to AddSharedMemoryVirtualDevice() but for virtual (non-physical)
-  // devices that are fed with textures (via MailboxHolders) allocated by the
+  // devices that are fed with textures (via SharedImages) allocated by the
   // caller instead of shared memory buffers provided by the service on demand.
   AddTextureVirtualDevice(
       media.mojom.VideoCaptureDeviceInfo device_info,

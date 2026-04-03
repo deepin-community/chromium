@@ -10,15 +10,17 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
-#include "base/files/file_util.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "base/task/sequenced_task_runner.h"
-#include "chromeos/ash/components/standalone_browser/standalone_browser_features.h"
 #include "chromeos/ash/services/ime/constants.h"
 #include "chromeos/ash/services/ime/decoder/decoder_engine.h"
 #include "chromeos/ash/services/ime/decoder/system_engine.h"
+#include "chromeos/ash/services/ime/ime_shared_library_wrapper.h"
+#include "chromeos/ash/services/ime/input_method_user_data_service_impl.h"
+#include "chromeos/ash/services/ime/user_data_c_api_impl.h"
 #include "mojo/public/c/system/thunks.h"
 
 namespace ash {
@@ -74,6 +76,22 @@ void ImeService::BindInputEngineManager(
 void ImeService::ResetAllBackendConnections() {
   proto_mode_shared_lib_engine_.reset();
   mojo_mode_shared_lib_engine_.reset();
+}
+
+void ImeService::BindInputMethodUserDataService(
+    mojo::PendingReceiver<mojom::InputMethodUserDataService> receiver) {
+  if (input_method_user_data_api_ == nullptr) {
+    std::optional<ImeSharedLibraryWrapper::EntryPoints> entry_points =
+        ime_shared_library_->MaybeLoadThenReturnEntryPoints();
+    if (!entry_points.has_value()) {
+      LOG(ERROR) << "shared library entry_points not loaded";
+      return;
+    }
+    input_method_user_data_api_ =
+        std::make_unique<InputMethodUserDataServiceImpl>(
+            std::make_unique<UserDataCApiImpl>(this, *entry_points));
+  }
+  input_method_user_data_api_->AddReceiver(std::move(receiver));
 }
 
 void ImeService::ConnectToImeEngine(
@@ -140,37 +158,33 @@ void ImeService::RunInMainSequence(ImeSequencedTask task, int task_id) {
 
 bool ImeService::IsFeatureEnabled(const char* feature_name) {
   static const base::Feature* kConsideredFeatures[] = {
-      &features::kAssistEmojiEnhanced,
       &features::kAssistMultiWord,
       &features::kAutocorrectParamsTuning,
-      &features::kFirstPartyVietnameseInput,
-      &ash::standalone_browser::features::kLacrosOnly,
-      &features::kSystemJapanesePhysicalTyping,
-      &features::kImeDownloaderUpdate,
-      &features::kImeKoreanOnlyModeSwitchOnRightAlt,
-      &features::kImeUsEnglishModelUpdate,
-      &features::kImeFstDecoderParamsUpdate,
+      &features::kImeDownloaderExperiment,
       &features::kAutocorrectByDefault,
-      &features::kAutocorrectUseReplaceSurroundingText,
-      &features::kInputMethodKoreanRightAltKeyDownFix,
-      &features::kImeKoreanModeSwitchDebug,
+      &features::kImeSwitchCheckConnectionStatus};
+
+  static constexpr std::string_view kEnabledFeatures[] = {
+      "InputMethodKoreanRightAltKeyDownFix",
+      "FirstPartyVietnameseInput",
+      "ImeKoreanOnlyModeSwitchOnRightAlt",
+      "ImeFstDecoderParamsUpdate",
+      "ImeDownloaderUpdate",
+      "ImeUsEnglishModelUpdate",
   };
 
   // Use consistent feature flag names as in CrOS base::Feature::name and always
   // wire 1:1 to CrOS feature flags without extra logic.
   for (const base::Feature* feature : kConsideredFeatures) {
-    if (strcmp(feature_name, feature->name) == 0) {
+    if (UNSAFE_TODO(strcmp(feature_name, feature->name)) == 0) {
       return base::FeatureList::IsEnabled(*feature);
     }
   }
 
-  // For backwards-compatibility, check for the "LacrosSupport" flag, which was
-  // replaced by LacrosOnly.
-  // TODO(b/290714161): Remove this once the shared library no longer uses
-  // LacrosSupport.
-  if (strcmp(feature_name, "LacrosSupport") == 0) {
-    return base::FeatureList::IsEnabled(
-        ash::standalone_browser::features::kLacrosOnly);
+  for (const std::string_view name : kEnabledFeatures) {
+    if (name == feature_name) {
+      return true;
+    }
   }
 
   return false;
@@ -181,13 +195,14 @@ const char* ImeService::GetFieldTrialParamValueByFeature(
     const char* param_name) {
   char* c_string_value;
 
-  if (strcmp(feature_name, features::kAutocorrectParamsTuning.name) == 0) {
+  if (UNSAFE_TODO(
+          strcmp(feature_name, features::kAutocorrectParamsTuning.name)) == 0) {
     std::string string_value =
         field_trial_params_retriever_->GetFieldTrialParamValueByFeature(
             features::kAutocorrectParamsTuning, param_name);
     c_string_value =
         new char[string_value.length() + 1];  // extra slot for NULL '\0' char
-    strcpy(c_string_value, string_value.c_str());
+    UNSAFE_TODO(strcpy(c_string_value, string_value.c_str()));
   } else {
     c_string_value = new char[1];
     c_string_value[0] = '\0';
@@ -229,8 +244,12 @@ void ImeService::SimpleDownloadFinishedV2(SimpleDownloadCallbackV2 callback,
   }
 }
 
-const MojoSystemThunks* ImeService::GetMojoSystemThunks() {
-  return MojoEmbedderGetSystemThunks32();
+const void* ImeService::Unused4() {
+  return nullptr;
+}
+
+const MojoSystemThunks2* ImeService::GetMojoSystemThunks2() {
+  return MojoEmbedderGetSystemThunks2();
 }
 
 void ImeService::Unused1() {

@@ -31,6 +31,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"dawn.googlesource.com/dawn/tools/src/auth"
@@ -45,9 +46,10 @@ func init() {
 
 type cmd struct {
 	flags struct {
-		output string
-		source common.ResultSource
-		auth   authcli.Flags
+		output                   string
+		unsuppressedFailuresOnly bool
+		source                   common.ResultSource
+		auth                     authcli.Flags
 	}
 }
 
@@ -61,8 +63,9 @@ func (cmd) Desc() string {
 
 func (c *cmd) RegisterFlags(ctx context.Context, cfg common.Config) ([]string, error) {
 	flag.StringVar(&c.flags.output, "o", "results.txt", "output file. '-' writes to stdout")
+	flag.BoolVar(&c.flags.unsuppressedFailuresOnly, "unsuppressed-failures-only", false, "only pull results for unsuppressed failures")
 	c.flags.source.RegisterFlags(cfg)
-	c.flags.auth.Register(flag.CommandLine, auth.DefaultAuthOptions())
+	c.flags.auth.Register(flag.CommandLine, auth.DefaultAuthOptions(cfg.OsWrapper))
 	return nil, nil
 }
 
@@ -74,19 +77,25 @@ func (c *cmd) Run(ctx context.Context, cfg common.Config) error {
 	}
 
 	// Obtain the results
-	results, err := c.flags.source.GetResults(ctx, cfg, auth)
+	var results result.ResultsByExecutionMode
+	if c.flags.unsuppressedFailuresOnly {
+		results, err = c.flags.source.GetUnsuppressedFailingResults(ctx, cfg, auth)
+	} else {
+		results, err = c.flags.source.GetResults(ctx, cfg, auth)
+	}
 	if err != nil {
 		return err
 	}
 
 	// Open output file
-	output := os.Stdout
+	var output io.Writer = os.Stdout
 	if c.flags.output != "-" {
-		output, err = os.Create(c.flags.output)
+		f, err := cfg.OsWrapper.Create(c.flags.output)
 		if err != nil {
 			return fmt.Errorf("failed to open output file '%v': %w", c.flags.output, err)
 		}
-		defer output.Close()
+		defer f.Close()
+		output = f
 	}
 
 	return result.Write(output, results)

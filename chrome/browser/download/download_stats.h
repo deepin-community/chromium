@@ -6,12 +6,12 @@
 #define CHROME_BROWSER_DOWNLOAD_DOWNLOAD_STATS_H_
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/download/download_commands.h"
 #include "chrome/browser/download/download_prompt_status.h"
-#include "chrome/browser/profiles/profile.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "components/download/public/common/download_path_reservation_tracker.h"
+
+class Profile;
 
 // Used for counting UMA stats. Similar to content's
 // download_stats::DownloadInitiattionSources but from the chrome layer.
@@ -56,6 +56,9 @@ enum ChromeDownloadOpenMethod {
 
   // The download was opened using a rename handler.
   DOWNLOAD_OPEN_METHOD_RENAME_HANDLER,
+
+  // The download was opened with the Media App on ChromeOS.
+  DOWNLOAD_OPEN_METHOD_MEDIA_APP,
 
   DOWNLOAD_OPEN_METHOD_LAST_ENTRY
 };
@@ -153,8 +156,8 @@ void RecordDownloadStartPerProfileType(Profile* profile);
 void RecordDownloadPromptStatus(DownloadPromptStatus status);
 #endif  // BUILDFLAG(IS_ANDROID)
 
-enum class DownloadShelfContextMenuAction {
-  // Drop down button for download shelf context menu is visible
+enum class DownloadUiContextMenuAction {
+  // Drop down button for download UI context menu is visible
   kDropDownShown = 0,
   // Drop down button was pressed
   kDropDownPressed = 1,
@@ -196,7 +199,7 @@ enum class DownloadShelfContextMenuAction {
   kMaxValue = kNotReached
 };
 
-DownloadShelfContextMenuAction DownloadCommandToShelfAction(
+DownloadUiContextMenuAction DownloadCommandToContextMenuAction(
     DownloadCommands::Command download_command,
     bool clicked);
 

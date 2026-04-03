@@ -18,9 +18,9 @@ limitations under the License.
 // flow/frames or side effecting ops yet.
 
 #include <iterator>
-#include <optional>
-#include <tuple>
+#include <memory>
 
+#include "absl/log/check.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
@@ -32,6 +32,7 @@ limitations under the License.
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_executor.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
 #include "tensorflow/core/platform/logging.h"
@@ -90,11 +91,11 @@ class CoarseningAnalysis {
       llvm::filter_iterator<SmallVector<MergedIsland>::const_iterator,
                             function_ref<bool(const MergedIsland&)>>>
   GetMergableIslands() const {
-    function_ref<bool(const MergedIsland&)> filter_fn =
-        [](const MergedIsland& merged_island) {
-          return merged_island.islands.size() > 1;
-        };
-    return llvm::make_filter_range(merged_islands_, filter_fn);
+    return llvm::make_filter_range(
+        merged_islands_, function_ref<bool(const MergedIsland&)>(
+                             [](const MergedIsland& merged_island) {
+                               return merged_island.islands.size() > 1;
+                             }));
   }
 
  private:
@@ -353,8 +354,8 @@ IslandOp CreateNewIsland(const MergedIsland& merged_island,
       ControlType::get(merged_island.insert_point->getContext()));
 
   OpBuilder builder(merged_island.insert_point);
-  auto new_island = builder.create<IslandOp>(
-      merged_island.insert_point->getLoc(), result_types, operands);
+  auto new_island = IslandOp::create(
+      builder, merged_island.insert_point->getLoc(), result_types, operands);
   new_island.getBody().push_back(new Block);
   return new_island;
 }
@@ -376,7 +377,7 @@ YieldOp CreateNewIslandYieldOp(IslandOp new_island,
 
   // Create YieldOp for the new island.
   OpBuilder builder(&new_island.GetBody(), new_island.GetBody().end());
-  return builder.create<YieldOp>(new_island.getLoc(), yield_operands);
+  return YieldOp::create(builder, new_island.getLoc(), yield_operands);
 }
 
 // Moves inner ops (excluding last op/YieldOp) from islands being merged into
@@ -443,20 +444,21 @@ void InsertDummyIslandForFetch(FetchOp fetch) {
   control_fetches.reserve(data_fetches.capacity());
 
   for (auto value : fetch.getFetches()) {
-    if (value.getType().isa<ControlType>()) {
+    if (mlir::isa<ControlType>(value.getType())) {
       control_fetches.push_back(value);
     } else {
       data_fetches.push_back(value);
       data_types.push_back(value.getType());
     }
   }
-  auto island = OpBuilder(fetch).create<IslandOp>(
-      fetch.getLoc(), data_types,
-      /*control=*/ControlType::get(fetch.getContext()),
-      /*controlInputs=*/control_fetches);
+  OpBuilder builder(fetch);
+  auto island =
+      IslandOp::create(builder, fetch.getLoc(), data_types,
+                       /*control=*/ControlType::get(fetch.getContext()),
+                       /*controlInputs=*/control_fetches);
   island.getBody().push_back(new Block);
-  OpBuilder::atBlockEnd(&island.GetBody())
-      .create<YieldOp>(fetch.getLoc(), data_fetches);
+  builder.setInsertionPointToEnd(&island.GetBody());
+  YieldOp::create(builder, fetch.getLoc(), data_fetches);
   const int fetch_control_idx = data_fetches.size();
   for (int i = 0, e = fetch.getNumOperands(); i < e; i++) {
     // The fetch could have multiple control operands (all at the end of its

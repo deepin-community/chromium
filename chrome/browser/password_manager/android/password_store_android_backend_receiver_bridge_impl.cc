@@ -5,18 +5,21 @@
 #include "chrome/browser/password_manager/android/password_store_android_backend_receiver_bridge_impl.h"
 
 #include <jni.h>
+
 #include <cstdint>
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
-#include "chrome/browser/password_manager/android/jni_headers/PasswordStoreAndroidBackendReceiverBridgeImpl_jni.h"
 #include "chrome/browser/password_manager/android/protos/list_affiliated_passwords_result.pb.h"
 #include "chrome/browser/password_manager/android/protos/list_passwords_result.pb.h"
 #include "chrome/browser/password_manager/android/protos/password_with_local_data.pb.h"
 #include "chrome/browser/password_manager/android/unified_password_manager_proto_utils.h"
 #include "components/password_manager/core/browser/password_form.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/password_manager/android/jni_headers/PasswordStoreAndroidBackendReceiverBridgeImpl_jni.h"
 
 namespace password_manager {
 
@@ -76,8 +79,8 @@ void PasswordStoreAndroidBackendReceiverBridgeImpl::SetConsumer(
 
 void PasswordStoreAndroidBackendReceiverBridgeImpl::OnCompleteWithLogins(
     JNIEnv* env,
-    jint job_id,
-    const base::android::JavaParamRef<jbyteArray>& passwords) {
+    int32_t job_id,
+    const base::android::JavaRef<jbyteArray>& passwords) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_checker_);
   DCHECK(consumer_);
   consumer_->OnCompleteWithLogins(
@@ -87,8 +90,8 @@ void PasswordStoreAndroidBackendReceiverBridgeImpl::OnCompleteWithLogins(
 
 void PasswordStoreAndroidBackendReceiverBridgeImpl::OnCompleteWithBrandedLogins(
     JNIEnv* env,
-    jint job_id,
-    const base::android::JavaParamRef<jbyteArray>& passwords) {
+    int32_t job_id,
+    const base::android::JavaRef<jbyteArray>& passwords) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_checker_);
   DCHECK(consumer_);
   consumer_->OnCompleteWithLogins(
@@ -99,8 +102,8 @@ void PasswordStoreAndroidBackendReceiverBridgeImpl::OnCompleteWithBrandedLogins(
 void PasswordStoreAndroidBackendReceiverBridgeImpl::
     OnCompleteWithAffiliatedLogins(
         JNIEnv* env,
-        jint job_id,
-        const base::android::JavaParamRef<jbyteArray>& passwords) {
+        int32_t job_id,
+        const base::android::JavaRef<jbyteArray>& passwords) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_checker_);
   CHECK(consumer_);
   consumer_->OnCompleteWithLogins(
@@ -110,11 +113,11 @@ void PasswordStoreAndroidBackendReceiverBridgeImpl::
 
 void PasswordStoreAndroidBackendReceiverBridgeImpl::OnError(
     JNIEnv* env,
-    jint job_id,
-    jint error_type,
-    jint api_error_code,
-    jboolean has_connection_result,
-    jint connection_result_code) {
+    int32_t job_id,
+    int32_t error_type,
+    int32_t api_error_code,
+    bool has_connection_result,
+    int32_t connection_result_code) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_checker_);
   DCHECK(consumer_);
   // Posting the tasks to the same sequence prevents that synchronous responses
@@ -138,7 +141,7 @@ void PasswordStoreAndroidBackendReceiverBridgeImpl::OnError(
 
 void PasswordStoreAndroidBackendReceiverBridgeImpl::OnLoginChanged(
     JNIEnv* env,
-    jint job_id) {
+    int32_t job_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_checker_);
   DCHECK(consumer_);
   // Notifying that a login changed without providing a changelist prompts the
@@ -147,3 +150,5 @@ void PasswordStoreAndroidBackendReceiverBridgeImpl::OnLoginChanged(
 }
 
 }  // namespace password_manager
+
+DEFINE_JNI(PasswordStoreAndroidBackendReceiverBridgeImpl)

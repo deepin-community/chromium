@@ -140,6 +140,9 @@ class DrawIndexedTest : public DawnTest {
 
 // The most basic DrawIndexed triangle draw.
 TEST_P(DrawIndexedTest, Uint32) {
+    // TODO(crbug.com/468047553): Fails on Win11/NVIDIA GTX 1660.
+    DAWN_SUPPRESS_TEST_IF(IsWindows11() && IsNvidia() && IsD3D12() && IsBackendValidationEnabled());
+
     utils::RGBA8 filled(0, 255, 0, 255);
     utils::RGBA8 notFilled(0, 0, 0, 0);
 
@@ -163,6 +166,23 @@ TEST_P(DrawIndexedTest, BaseVertex) {
     Test(3, 1, 0, 4, 0, 0, notFilled, filled);
     // Test a draw with only the last 3 indices of the second quad (bottom left triangle)
     Test(3, 1, 3, 4, 0, 0, filled, notFilled);
+}
+
+// Test the parameter 'baseVertex' of DrawIndexed() works.
+TEST_P(DrawIndexedTest, NegativeBaseVertex) {
+    DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("disable_base_vertex"));
+
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
+
+    // TODO(crbug.com/343178421): ANGLE/SwiftShader and ANGLE/D3D11 fail with negative baseVertex.
+    DAWN_SUPPRESS_TEST_IF(IsANGLESwiftShader());
+
+    // Also failing on Qualcomm and ARM GLES.
+    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && (IsQualcomm() || IsARM()));
+
+    utils::RGBA8 filled(0, 255, 0, 255);
+    utils::RGBA8 notFilled(0, 0, 0, 0);
 
     // Test negative baseVertex
     // Test a draw with only the first 3 indices of the first quad (bottom left triangle)
@@ -177,7 +197,8 @@ DAWN_INSTANTIATE_TEST(DrawIndexedTest,
                       MetalBackend(),
                       OpenGLBackend(),
                       OpenGLESBackend(),
-                      VulkanBackend());
+                      VulkanBackend(),
+                      WebGPUBackend());
 
 }  // anonymous namespace
 }  // namespace dawn

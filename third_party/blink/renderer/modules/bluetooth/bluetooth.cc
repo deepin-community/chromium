@@ -7,14 +7,13 @@
 #include <utility>
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
 #include "third_party/blink/public/mojom/bluetooth/web_bluetooth.mojom-blink.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
@@ -92,7 +91,7 @@ bool IsRequestDenied(LocalDOMWindow* window, ExceptionState& exception_state) {
 // Bluetooth API methods.
 bool IsFeatureEnabled(LocalDOMWindow* window) {
   return window->IsFeatureEnabled(
-      mojom::blink::PermissionsPolicyFeature::kBluetooth,
+      network::mojom::PermissionsPolicyFeature::kBluetooth,
       ReportOptions::kReportOnFailure);
 }
 
@@ -100,8 +99,8 @@ bool IsFeatureEnabled(LocalDOMWindow* window) {
 // TODO(https://crbug.com/570344): Remove this method when all platforms are
 // supported.
 void AddUnsupportedPlatformConsoleMessage(ExecutionContext* context) {
-#if !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_ANDROID) && \
-    !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC) && \
+    !BUILDFLAG(IS_WIN)
   context->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
       mojom::blink::ConsoleMessageSource::kJavaScript,
       mojom::blink::ConsoleMessageLevel::kInfo,
@@ -169,29 +168,25 @@ void CanonicalizeFilter(
     }
     canonicalized_filter->manufacturer_data.emplace();
     for (const auto& manufacturer_data : filter->manufacturerData()) {
-      DOMArrayPiece mask_buffer = manufacturer_data->hasMask()
-                                      ? DOMArrayPiece(manufacturer_data->mask())
-                                      : DOMArrayPiece();
-      DOMArrayPiece data_prefix_buffer =
-          manufacturer_data->hasDataPrefix()
-              ? DOMArrayPiece(manufacturer_data->dataPrefix())
-              : DOMArrayPiece();
+      std::optional<base::span<const uint8_t>> data_prefix_buffer;
+      if (manufacturer_data->hasDataPrefix()) {
+        data_prefix_buffer =
+            DOMArrayPiece(manufacturer_data->dataPrefix()).ByteSpan();
+      }
 
+      std::optional<base::span<const uint8_t>> mask_buffer;
       if (manufacturer_data->hasMask()) {
-        if (mask_buffer.IsDetached()) {
-          exception_state.ThrowDOMException(
-              DOMExceptionCode::kInvalidStateError,
-              "'mask' value buffer has been detached.");
-          return;
-        }
+        mask_buffer = DOMArrayPiece(manufacturer_data->mask()).ByteSpan();
+      }
 
-        if (!manufacturer_data->hasDataPrefix()) {
+      if (mask_buffer.has_value()) {
+        if (!data_prefix_buffer.has_value()) {
           exception_state.ThrowTypeError(
               "'dataPrefix' must be non-empty when 'mask' is present.");
           return;
         }
 
-        if (data_prefix_buffer.ByteLength() != mask_buffer.ByteLength()) {
+        if (data_prefix_buffer->size() != mask_buffer->size()) {
           exception_state.ThrowTypeError(
               "'mask' size must be equal to 'dataPrefix' size.");
           return;
@@ -199,25 +194,18 @@ void CanonicalizeFilter(
       }
 
       Vector<mojom::blink::WebBluetoothDataFilterPtr> data_filters_vector;
-      if (manufacturer_data->hasDataPrefix()) {
-        if (data_prefix_buffer.IsDetached()) {
-          exception_state.ThrowDOMException(
-              DOMExceptionCode::kInvalidStateError,
-              "'dataPrefix' value buffer has been detached.");
-          return;
-        }
-
-        if (data_prefix_buffer.ByteLength() == 0) {
+      if (data_prefix_buffer.has_value()) {
+        if (data_prefix_buffer->size() == 0) {
           exception_state.ThrowTypeError(
               "'dataPrefix', if present, must be non-empty.");
           return;
         }
 
         // Iterate by index here since we're iterating through two arrays.
-        for (wtf_size_t i = 0; i < data_prefix_buffer.ByteLength(); ++i) {
-          uint8_t data = data_prefix_buffer.Bytes()[i];
-          uint8_t mask =
-              manufacturer_data->hasMask() ? mask_buffer.Bytes()[i] : 0xff;
+        for (size_t i = 0; i < data_prefix_buffer->size(); ++i) {
+          const uint8_t data = (*data_prefix_buffer)[i];
+          const uint8_t mask =
+              mask_buffer.has_value() ? (*mask_buffer)[i] : 0xff;
           data_filters_vector.push_back(
               mojom::blink::WebBluetoothDataFilter::New(data, mask));
         }
@@ -323,42 +311,38 @@ void ConvertRequestDeviceOptions(
 
 }  // namespace
 
-ScriptPromise Bluetooth::getAvailability(ScriptState* script_state,
-                                         ExceptionState& exception_state) {
+ScriptPromise<IDLBoolean> Bluetooth::getAvailability(
+    ScriptState* script_state,
+    ExceptionState& exception_state) {
   LocalDOMWindow* window = GetSupplementable()->DomWindow();
 
   if (IsRequestDenied(window, exception_state)) {
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   // If Bluetooth is disallowed by Permissions Policy, getAvailability should
   // return false.
   if (!IsFeatureEnabled(window)) {
-    return ScriptPromise::Cast(
-        script_state, v8::Boolean::New(script_state->GetIsolate(), false));
+    return ToResolvedPromise<IDLBoolean>(script_state, false);
   }
 
   CHECK(window->IsSecureContext());
   EnsureServiceConnection(window);
 
   // Subsequent steps are handled in the browser process.
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(
       script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto promise = resolver->Promise();
   service_->GetAvailability(
-      WTF::BindOnce([](ScriptPromiseResolver* resolver,
-                       bool result) { resolver->Resolve(result); },
-                    WrapPersistent(resolver)));
+      BindOnce([](ScriptPromiseResolver<IDLBoolean>* resolver,
+                  bool result) { resolver->Resolve(result); },
+               WrapPersistent(resolver)));
   return promise;
 }
 
 void Bluetooth::GetDevicesCallback(
-    ScriptPromiseResolverTyped<IDLSequence<BluetoothDevice>>* resolver,
+    ScriptPromiseResolver<IDLSequence<BluetoothDevice>>* resolver,
     Vector<mojom::blink::WebBluetoothDevicePtr> devices) {
-  if (!resolver->GetExecutionContext() ||
-      resolver->GetExecutionContext()->IsContextDestroyed()) {
-    return;
-  }
 
   HeapVector<Member<BluetoothDevice>> bluetooth_devices;
   for (auto& device : devices) {
@@ -370,7 +354,7 @@ void Bluetooth::GetDevicesCallback(
 }
 
 void Bluetooth::RequestDeviceCallback(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<BluetoothDevice>* resolver,
     mojom::blink::WebBluetoothResult result,
     mojom::blink::WebBluetoothDevicePtr device) {
   if (!resolver->GetExecutionContext() ||
@@ -387,48 +371,55 @@ void Bluetooth::RequestDeviceCallback(
   }
 }
 
-ScriptPromiseTyped<IDLSequence<BluetoothDevice>> Bluetooth::getDevices(
+ScriptPromise<IDLSequence<BluetoothDevice>> Bluetooth::getDevices(
     ScriptState* script_state,
     ExceptionState& exception_state) {
   LocalDOMWindow* window = GetSupplementable()->DomWindow();
 
   if (IsRequestDenied(window, exception_state)) {
-    return ScriptPromiseTyped<IDLSequence<BluetoothDevice>>();
+    return ScriptPromise<IDLSequence<BluetoothDevice>>();
   }
 
   if (!IsFeatureEnabled(window)) {
     exception_state.ThrowSecurityError(kPermissionsPolicyBlocked);
-    return ScriptPromiseTyped<IDLSequence<BluetoothDevice>>();
+    return ScriptPromise<IDLSequence<BluetoothDevice>>();
+  }
+
+  LocalFrame* frame = window->GetFrame();
+  if (frame && frame->IsAdScriptInStack()) {
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kAdScriptInStackOnBluetooth);
   }
 
   AddUnsupportedPlatformConsoleMessage(window);
   CHECK(window->IsSecureContext());
 
   EnsureServiceConnection(window);
-  auto* resolver = MakeGarbageCollected<
-      ScriptPromiseResolverTyped<IDLSequence<BluetoothDevice>>>(
-      script_state, exception_state.GetContext());
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLSequence<BluetoothDevice>>>(
+          script_state, exception_state.GetContext());
   auto promise = resolver->Promise();
 
-  service_->GetDevices(WTF::BindOnce(&Bluetooth::GetDevicesCallback,
-                                     WrapPersistent(this),
-                                     WrapPersistent(resolver)));
+  service_->GetDevices(BindOnce(&Bluetooth::GetDevicesCallback,
+                                WrapPersistent(this),
+                                WrapPersistent(resolver)));
   return promise;
 }
 
 // https://webbluetoothcg.github.io/web-bluetooth/#dom-bluetooth-requestdevice
-ScriptPromise Bluetooth::requestDevice(ScriptState* script_state,
-                                       const RequestDeviceOptions* options,
-                                       ExceptionState& exception_state) {
+ScriptPromise<BluetoothDevice> Bluetooth::requestDevice(
+    ScriptState* script_state,
+    const RequestDeviceOptions* options,
+    ExceptionState& exception_state) {
   LocalDOMWindow* window = GetSupplementable()->DomWindow();
 
   if (IsRequestDenied(window, exception_state)) {
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   if (!IsFeatureEnabled(window)) {
     exception_state.ThrowSecurityError(kPermissionsPolicyBlocked);
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   AddUnsupportedPlatformConsoleMessage(window);
@@ -440,7 +431,12 @@ ScriptPromise Bluetooth::requestDevice(ScriptState* script_state,
   DCHECK(frame);
   if (!LocalFrame::HasTransientUserActivation(frame)) {
     exception_state.ThrowSecurityError(kHandleGestureForPermissionRequest);
-    return ScriptPromise();
+    return EmptyPromise();
+  }
+
+  if (frame->IsAdScriptInStack()) {
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kAdScriptInStackOnBluetooth);
   }
 
   EnsureServiceConnection(window);
@@ -452,17 +448,17 @@ ScriptPromise Bluetooth::requestDevice(ScriptState* script_state,
                               exception_state);
 
   if (exception_state.HadException())
-    return ScriptPromise();
+    return EmptyPromise();
 
   // Subsequent steps are handled in the browser process.
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<BluetoothDevice>>(
       script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto promise = resolver->Promise();
 
   service_->RequestDevice(
       std::move(device_options),
-      WTF::BindOnce(&Bluetooth::RequestDeviceCallback, WrapPersistent(this),
-                    WrapPersistent(resolver)));
+      BindOnce(&Bluetooth::RequestDeviceCallback, WrapPersistent(this),
+               WrapPersistent(resolver)));
   return promise;
 }
 
@@ -502,7 +498,7 @@ static void ConvertRequestLEScanOptions(
 }
 
 void Bluetooth::RequestScanningCallback(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<BluetoothLEScan>* resolver,
     mojo::ReceiverId id,
     mojom::blink::WebBluetoothRequestLEScanOptionsPtr options,
     mojom::blink::WebBluetoothResult result) {
@@ -522,18 +518,19 @@ void Bluetooth::RequestScanningCallback(
 }
 
 // https://webbluetoothcg.github.io/web-bluetooth/scanning.html#dom-bluetooth-requestlescan
-ScriptPromise Bluetooth::requestLEScan(ScriptState* script_state,
-                                       const BluetoothLEScanOptions* options,
-                                       ExceptionState& exception_state) {
+ScriptPromise<BluetoothLEScan> Bluetooth::requestLEScan(
+    ScriptState* script_state,
+    const BluetoothLEScanOptions* options,
+    ExceptionState& exception_state) {
   LocalDOMWindow* window = GetSupplementable()->DomWindow();
 
   if (IsRequestDenied(window, exception_state)) {
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   if (!IsFeatureEnabled(window)) {
     exception_state.ThrowSecurityError(kPermissionsPolicyBlocked);
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   // Remind developers when they are using Web Bluetooth on unsupported
@@ -555,7 +552,7 @@ ScriptPromise Bluetooth::requestLEScan(ScriptState* script_state,
   DCHECK(frame);
   if (!LocalFrame::HasTransientUserActivation(frame)) {
     exception_state.ThrowSecurityError(kHandleGestureForPermissionRequest);
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   EnsureServiceConnection(window);
@@ -564,12 +561,12 @@ ScriptPromise Bluetooth::requestLEScan(ScriptState* script_state,
   ConvertRequestLEScanOptions(options, scan_options, exception_state);
 
   if (exception_state.HadException())
-    return ScriptPromise();
+    return EmptyPromise();
 
   // Subsequent steps are handled in the browser process.
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<BluetoothLEScan>>(
       script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto promise = resolver->Promise();
 
   mojo::PendingAssociatedRemote<mojom::blink::WebBluetoothAdvertisementClient>
       client;
@@ -581,9 +578,8 @@ ScriptPromise Bluetooth::requestLEScan(ScriptState* script_state,
   auto scan_options_copy = scan_options->Clone();
   service_->RequestScanningStart(
       std::move(client), std::move(scan_options),
-      WTF::BindOnce(&Bluetooth::RequestScanningCallback, WrapPersistent(this),
-                    WrapPersistent(resolver), id,
-                    std::move(scan_options_copy)));
+      BindOnce(&Bluetooth::RequestScanningCallback, WrapPersistent(this),
+               WrapPersistent(resolver), id, std::move(scan_options_copy)));
 
   return promise;
 }
@@ -610,7 +606,7 @@ bool Bluetooth::IsScanActive(mojo::ReceiverId id) const {
   return client_receivers_.HasReceiver(id);
 }
 
-const WTF::AtomicString& Bluetooth::InterfaceName() const {
+const AtomicString& Bluetooth::InterfaceName() const {
   return event_type_names::kAdvertisementreceived;
 }
 

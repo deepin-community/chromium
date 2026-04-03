@@ -46,6 +46,10 @@ class COMPONENT_EXPORT(UPSTART_CLIENT) FakeUpstartClient
   void StartJob(const std::string& job,
                 const std::vector<std::string>& upstart_env,
                 chromeos::VoidDBusMethodCallback callback) override;
+  void StartJobWithTimeout(const std::string& job,
+                           const std::vector<std::string>& upstart_env,
+                           chromeos::VoidDBusMethodCallback callback,
+                           int timeout_ms) override;
   void StartJobWithErrorDetails(
       const std::string& job,
       const std::vector<std::string>& upstart_env,
@@ -59,8 +63,6 @@ class COMPONENT_EXPORT(UPSTART_CLIENT) FakeUpstartClient
       chromeos::VoidDBusMethodCallback callback) override;
   void StopMediaAnalytics() override;
   void StopMediaAnalytics(chromeos::VoidDBusMethodCallback callback) override;
-  void StartWilcoDtcService(chromeos::VoidDBusMethodCallback callback) override;
-  void StopWilcoDtcService(chromeos::VoidDBusMethodCallback callback) override;
 
   void set_start_job_cb(const StartJobCallback& cb) { start_job_cb_ = cb; }
   void set_stop_job_cb(const StopJobCallback& cb) { stop_job_cb_ = cb; }

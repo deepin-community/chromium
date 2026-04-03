@@ -6,12 +6,13 @@
 #define GPU_COMMAND_BUFFER_COMMON_CAPABILITIES_H_
 
 #include <stdint.h>
+
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
-#include "gpu/gpu_export.h"
-#include "ui/gfx/buffer_types.h"
+#include "base/containers/flat_set.h"
+#include "components/viz/common/resources/shared_image_format.h"
+#include "gpu/command_buffer/common/gpu_command_buffer_common_export.h"
 #include "ui/gfx/surface_origin.h"
 
 // From gl2.h. We want to avoid including gl headers because client-side and
@@ -28,39 +29,33 @@
 namespace gpu {
 
 // NOTE: When adding members to this struct, also add corresponding
-// entries in gpu/ipc/common/gpu_command_buffer_traits_multi.h.
-
-struct GPU_EXPORT Capabilities {
+// entries in gpu/ipc/common/capabilities.mojom.
+struct GPU_COMMAND_BUFFER_COMMON_EXPORT Capabilities {
   Capabilities();
   Capabilities(const Capabilities& other);
   ~Capabilities();
 
   // Note this may be smaller than GL_MAX_TEXTURE_SIZE for a GLES context.
   int max_texture_size = 0;
-  int max_copy_texture_chromium_size = 0;
   bool egl_image_external = false;
   bool egl_image_external_essl3 = false;
   bool texture_format_bgra8888 = false;
   bool texture_format_etc1_npot = false;
+  bool disable_mac_swangle_rgbx = false;
   bool sync_query = false;
   bool texture_rg = false;
   bool texture_norm16 = false;
   bool texture_half_float_linear = false;
   bool image_ycbcr_420v = false;
-  bool image_ycbcr_420v_disabled_for_video_frames = false;
   bool image_ar30 = false;
   bool image_ab30 = false;
   bool image_ycbcr_p010 = false;
   bool render_buffer_format_bgra8888 = false;
   bool msaa_is_slow = false;
-  bool disable_one_component_textures = false;
-  bool gpu_rasterization = false;
   bool avoid_stencil_buffers = false;
-  bool angle_rgbx_internal_format = false;
 
   bool disable_2d_canvas_copy_on_write = false;
 
-  bool supports_yuv_to_rgb_conversion = false;
   bool supports_rgb_to_yuv_conversion = false;
   bool supports_yuv_readback = false;
 
@@ -68,31 +63,19 @@ struct GPU_EXPORT Capabilities {
 
   bool mesa_framebuffer_flip_y = false;
 
-  // Clients should use SharedImageInterface instead.
-  bool disable_legacy_mailbox = false;
-
-  int major_version = 2;
-  int minor_version = 0;
-
-  // Used by OOP raster.
+  // Used by GPU raster.
   bool context_supports_distance_field_text = true;
 
   bool using_vulkan_context = false;
 
-  GpuMemoryBufferFormatSet gpu_memory_buffer_formats = {
-      gfx::BufferFormat::BGR_565,   gfx::BufferFormat::RGBA_4444,
-      gfx::BufferFormat::RGBA_8888, gfx::BufferFormat::RGBX_8888,
-      gfx::BufferFormat::YVU_420,
-  };
-  // TODO(crbug.com/41494843): Remove this field once all clients go through
-  // ClientSharedImage to obtain the texture target to use.
-  std::vector<gfx::BufferUsageAndFormat> texture_target_exception_list;
-
+  base::flat_set<viz::SharedImageFormat> mappable_formats;
   base::flat_map<uint32_t, std::vector<uint64_t>> drm_formats_and_modifiers;
   uint64_t drm_device_id = 0;
 };
 
-struct GPU_EXPORT GLCapabilities {
+// NOTE: When adding members to this struct, also add corresponding
+// entries in gpu/ipc/common/capabilities.mojom.
+struct GPU_COMMAND_BUFFER_COMMON_EXPORT GLCapabilities {
   GLCapabilities();
   GLCapabilities(const GLCapabilities& other);
   ~GLCapabilities();
@@ -104,7 +87,7 @@ struct GPU_EXPORT GLCapabilities {
     int precision;
   };
 
-  struct GPU_EXPORT PerStagePrecisions {
+  struct GPU_COMMAND_BUFFER_COMMON_EXPORT PerStagePrecisions {
     PerStagePrecisions();
     ShaderPrecision low_int;
     ShaderPrecision medium_int;
@@ -136,6 +119,9 @@ struct GPU_EXPORT GLCapabilities {
   PerStagePrecisions vertex_shader_precisions;
   PerStagePrecisions fragment_shader_precisions;
 
+  int major_version = 2;
+  int minor_version = 0;
+
   int max_combined_texture_image_units = 0;
   int max_cube_map_texture_size = 0;
   int max_fragment_uniform_vectors = 0;
@@ -150,7 +136,6 @@ struct GPU_EXPORT GLCapabilities {
   int max_viewport_height = 0;
   int num_compressed_texture_formats = 0;
   int num_shader_binary_formats = 0;
-  int bind_generates_resource_chromium = 0;
 
   int max_3d_texture_size = 0;
   int max_array_texture_layers = 0;
@@ -174,9 +159,6 @@ struct GPU_EXPORT GLCapabilities {
   int max_transform_feedback_separate_components = 0;
   int64_t max_uniform_block_size = 0;
   int max_uniform_buffer_bindings = 0;
-  int max_atomic_counter_buffer_bindings = 0;
-  int max_shader_storage_buffer_bindings = 0;
-  int shader_storage_buffer_offset_alignment = 1;
   int max_varying_components = 0;
   int max_vertex_output_components = 0;
   int max_vertex_uniform_blocks = 0;
@@ -185,9 +167,12 @@ struct GPU_EXPORT GLCapabilities {
   int num_program_binary_formats = 0;
   int uniform_buffer_offset_alignment = 1;
 
-  bool occlusion_query = false;
   bool occlusion_query_boolean = false;
   bool timer_queries = false;
+
+  // Note this may be smaller than GL_MAX_TEXTURE_SIZE for a GLES context.
+  int max_texture_size = 0;
+  bool sync_query = false;
 };
 
 }  // namespace gpu

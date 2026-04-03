@@ -23,6 +23,7 @@
 
 #include "libavutil/avstring.h"
 #include "libavutil/internal.h"
+#include "libavutil/mem.h"
 #include "libavutil/parseutils.h"
 #include "avformat.h"
 #include "internal.h"
@@ -92,6 +93,7 @@ static const AVOption options[] = {
 
 static const AVClass ftp_context_class = {
     .class_name     = "ftp",
+    .item_name      = av_default_item_name,
     .option         = options,
     .version        = LIBAVUTIL_VERSION_INT,
 };
@@ -803,7 +805,7 @@ static int64_t ftp_seek(URLContext *h, int64_t pos, int whence)
         return AVERROR(EIO);
 
     if (new_pos < 0) {
-        av_log(h, AV_LOG_ERROR, "Seeking to nagative position.\n");
+        av_log(h, AV_LOG_ERROR, "Seeking to negative position.\n");
         return AVERROR(EINVAL);
     }
 

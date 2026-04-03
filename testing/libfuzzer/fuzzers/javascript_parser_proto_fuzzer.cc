@@ -15,9 +15,6 @@
 #include "v8/include/libplatform/libplatform.h"
 #include "v8/include/v8.h"
 
-// Silence logging from the protobuf library.
-protobuf_mutator::protobuf::LogSilencer log_silencer;
-
 // Encapsulates process-wide v8 state, initialized once per fuzzing session.
 class Environment {
  public:
@@ -94,8 +91,8 @@ DEFINE_BINARY_PROTO_FUZZER(
                                   v8::NewStringType::kNormal)
               .ToLocalChecked();
 
-      v8::ScriptOrigin origin(isolate, name, 0, 0, false, -1,
-                              v8::Local<v8::Value>(), false, false, true);
+      v8::ScriptOrigin origin(name, 0, 0, false, -1, v8::Local<v8::Value>(),
+                              false, false, true);
       v8::ScriptCompiler::Source source(source_v8_string, origin);
       v8::MaybeLocal<v8::Module> module =
           v8::ScriptCompiler::CompileModule(isolate, &source);
@@ -108,7 +105,7 @@ DEFINE_BINARY_PROTO_FUZZER(
       script.IsEmpty();
     }
 
-    // TODO(crbug.com/775796): run the code once we find a way to avoid endless
-    // loops.
+    // TODO(crbug.com/40545334): run the code once we find a way to avoid
+    // endless loops.
   }
 }

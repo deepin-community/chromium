@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/containers/span.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
@@ -43,6 +44,7 @@
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/platform/scheduler/public/main_thread_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
 #if BUILDFLAG(ENABLE_UNHANDLED_TAP)
@@ -70,7 +72,7 @@ class TextFragmentAnchorTestController : public TextFragmentAnchorTestBase {
     // When the beforematch event is not scheduled, a DCHECK will fail on
     // BeginFrame() because no event was scheduled, so we schedule an empty task
     // here.
-    GetDocument().EnqueueAnimationFrameTask(WTF::BindOnce([]() {}));
+    GetDocument().EnqueueAnimationFrameTask(BindOnce([]() {}));
     Compositor().BeginFrame();
   }
 
@@ -116,11 +118,12 @@ class TextFragmentAnchorTestController : public TextFragmentAnchorTestBase {
   }
 
   void LoadAhem() {
-    scoped_refptr<SharedBuffer> shared_buffer =
+    std::optional<Vector<char>> data =
         test::ReadFromFile(test::CoreTestDataPath("Ahem.ttf"));
+    ASSERT_TRUE(data);
     auto* buffer =
         MakeGarbageCollected<V8UnionArrayBufferOrArrayBufferViewOrString>(
-            DOMArrayBuffer::Create(shared_buffer));
+            DOMArrayBuffer::Create(base::as_byte_span(*data)));
     FontFace* ahem = FontFace::Create(GetDocument().GetFrame()->DomWindow(),
                                       AtomicString("Ahem"), buffer,
                                       FontFaceDescriptors::Create());
@@ -168,18 +171,11 @@ class TextFragmentAnchorTestController : public TextFragmentAnchorTestBase {
   }
 };
 
-// TODO(crbug.com/1315595): Only have one constructor that initializes the
-// MOCK_TIME for blink::test::TaskEnvironment once migration to
-// blink_unittests_v2 completes.
 class TextFragmentAnchorTest : public TextFragmentAnchorTestController {
  public:
-#if defined(HAS_BLINK_TASK_ENVIRONMENT)
   TextFragmentAnchorTest()
       : TextFragmentAnchorTestController(
             base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
-#else
-  TextFragmentAnchorTest() = default;
-#endif
 };
 
 // Basic test case, ensure we scroll the matching text into view.
@@ -953,8 +949,7 @@ INSTANTIATE_TEST_SUITE_P(
                     mojom::blink::ScrollType::kProgrammatic,
                     mojom::blink::ScrollType::kClamping,
                     mojom::blink::ScrollType::kCompositor,
-                    mojom::blink::ScrollType::kAnchoring,
-                    mojom::blink::ScrollType::kSequenced));
+                    mojom::blink::ScrollType::kAnchoring));
 
 // Test that a user scroll cancels the scroll into view.
 TEST_P(TextFragmentAnchorScrollTest, ScrollCancelled) {
@@ -982,9 +977,13 @@ TEST_P(TextFragmentAnchorScrollTest, ScrollCancelled) {
 
   GetDocument().View()->UpdateAllLifecyclePhasesForTest();
   mojom::blink::ScrollType scroll_type = GetParam();
-
-  GetDocument().View()->LayoutViewport()->ScrollBy(ScrollOffset(0, 100),
-                                                   scroll_type);
+  cc::ScrollSourceType source_type =
+      (scroll_type == mojom::blink::ScrollType::kAnchoring ||
+       scroll_type == mojom::blink::ScrollType::kClamping)
+          ? cc::ScrollSourceType::kStationaryScroll
+          : cc::ScrollSourceType::kRelativeScroll;
+  GetDocument().View()->LayoutViewport()->SetScrollOffset(
+      ScrollOffset(0, 100), scroll_type, source_type);
   // Set the target text to visible and change its position to cause a layout
   // and invoke the fragment anchor in the next begin frame.
   css_request.Complete("p { visibility: visible; top: 1001px; }");
@@ -1049,7 +1048,13 @@ TEST_P(TextFragmentAnchorScrollTest, DontDismissTextHighlightOnUserScroll) {
   ASSERT_EQ(2u, GetDocument().Markers().Markers().size());
 
   mojom::blink::ScrollType scroll_type = GetParam();
-  LayoutViewport()->ScrollBy(ScrollOffset(0, -10), scroll_type);
+  cc::ScrollSourceType source_type =
+      (scroll_type == mojom::blink::ScrollType::kAnchoring ||
+       scroll_type == mojom::blink::ScrollType::kClamping)
+          ? cc::ScrollSourceType::kStationaryScroll
+          : cc::ScrollSourceType::kRelativeScroll;
+  LayoutViewport()->SetScrollOffset(ScrollOffset(0, -10), scroll_type,
+                                    source_type);
 
   Compositor().BeginFrame();
 
@@ -2365,8 +2370,8 @@ TEST_F(TextFragmentAnchorTest,
   MockUnhandledTapNotifierImpl mock_notifier;
   GetDocument().GetFrame()->GetBrowserInterfaceBroker().SetBinderForTesting(
       mojom::blink::UnhandledTapNotifier::Name_,
-      WTF::BindRepeating(&MockUnhandledTapNotifierImpl::Bind,
-                         WTF::Unretained(&mock_notifier)));
+      BindRepeating(&MockUnhandledTapNotifierImpl::Bind,
+                    Unretained(&mock_notifier)));
 
   Range* range = Range::Create(GetDocument());
   range->setStart(GetDocument().getElementById(AtomicString("first")), 0,

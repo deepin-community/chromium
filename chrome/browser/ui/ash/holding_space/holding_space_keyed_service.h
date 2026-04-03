@@ -14,18 +14,15 @@
 #include "ash/public/cpp/holding_space/holding_space_metrics.h"
 #include "ash/public/cpp/holding_space/holding_space_model.h"
 #include "ash/public/cpp/holding_space/holding_space_progress.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/profiles/profile_manager_observer.h"
+#include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/ui/ash/holding_space/holding_space_client_impl.h"
-#include "chrome/browser/ui/ash/thumbnail_loader.h"
-#include "chromeos/crosapi/mojom/holding_space_service.mojom.h"
+#include "chrome/browser/ui/ash/thumbnail_loader/thumbnail_loader.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "components/account_id/account_id.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/receiver_set.h"
 #include "url/gurl.h"
 
 class GURL;
@@ -46,13 +43,13 @@ namespace ash {
 
 class HoldingSpaceDownloadsDelegate;
 class HoldingSpaceKeyedServiceDelegate;
+class HoldingSpaceSuggestionsDelegate;
 
 // Browser context keyed service that:
 // *   Manages the temporary holding space per-profile data model.
 // *   Serves as an entry point to add holding space items from Chrome.
-class HoldingSpaceKeyedService : public crosapi::mojom::HoldingSpaceService,
-                                 public KeyedService,
-                                 public ProfileManagerObserver,
+class HoldingSpaceKeyedService : public KeyedService,
+                                 public ProfileObserver,
                                  public chromeos::PowerManagerClient::Observer {
  public:
   HoldingSpaceKeyedService(Profile* profile, const AccountId& account_id);
@@ -64,29 +61,20 @@ class HoldingSpaceKeyedService : public crosapi::mojom::HoldingSpaceService,
   // Registers profile preferences for holding space.
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
-  // Binds the holding space service to the specified pending `receiver`.
-  void BindReceiver(
-      mojo::PendingReceiver<crosapi::mojom::HoldingSpaceService> receiver);
-
-  // crosapi::mojom::HoldingSpaceKeyedService:
-  // NOTE: No-op if the service has not been initialized.
-  // TODO(http://b/274477308): Remove one-off API.
-  void AddPrintedPdf(const base::FilePath& printed_pdf_path,
-                     bool from_incognito_profile) override;
+  // ProfileObserver override
+  void OnProfileInitializationComplete(Profile* profile) override;
 
   // Adds multiple pinned file items identified by the provided file system
   // URLs. NOTE: No-op if the service has not been initialized.
   void AddPinnedFiles(
-      const std::vector<storage::FileSystemURL>& file_system_urls,
-      holding_space_metrics::EventSource event_source);
+      const std::vector<storage::FileSystemURL>& file_system_urls);
 
   // Removes multiple pinned file items identified by the provided file system
   // URLs. NOTE: No-ops if:
   // 1. The specified files are not present in the holding space; OR
   // 2. The service has not been initialized.
   void RemovePinnedFiles(
-      const std::vector<storage::FileSystemURL>& file_system_urls,
-      holding_space_metrics::EventSource event_source);
+      const std::vector<storage::FileSystemURL>& file_system_urls);
 
   // Returns whether the holding space contains a pinned file identified by a
   // file system URL.
@@ -95,6 +83,15 @@ class HoldingSpaceKeyedService : public crosapi::mojom::HoldingSpaceService,
   // Returns the list of pinned files in the holding space. It returns the files
   // files system URLs as GURLs.
   std::vector<GURL> GetPinnedFiles() const;
+
+  // Refreshes suggestions. Note that this intentionally does *not* invalidate
+  // the file suggest service's item suggest cache which is too expensive for
+  // holding space to invalidate.
+  void RefreshSuggestions();
+
+  // Removes suggestions associated with the specified `absolute_file_paths`.
+  void RemoveSuggestions(
+      const std::vector<base::FilePath>& absolute_file_paths);
 
   // Replaces the existing suggestions with `suggestions`. The order among
   // `suggestions` is respected, which means that if a suggestion A is in front
@@ -125,6 +122,9 @@ class HoldingSpaceKeyedService : public crosapi::mojom::HoldingSpaceService,
       const HoldingSpaceProgress& progress = HoldingSpaceProgress(),
       HoldingSpaceImage::PlaceholderImageSkiaResolver
           placeholder_image_skia_resolver = base::NullCallback());
+
+  // Returns whether a holding space item exists for the specified `id`.
+  bool ContainsItem(const std::string& id) const;
 
   // Returns an object which, upon its destruction, performs an atomic update to
   // the holding space item associated with the specified `id`. Returns
@@ -160,9 +160,6 @@ class HoldingSpaceKeyedService : public crosapi::mojom::HoldingSpaceService,
  private:
   // KeyedService:
   void Shutdown() override;
-
-  // ProfileManagerObserver:
-  void OnProfileAdded(Profile* profile) override;
 
   // PowerManagerClient::Observer
   void SuspendImminent(power_manager::SuspendImminent::Reason reason) override;
@@ -230,12 +227,10 @@ class HoldingSpaceKeyedService : public crosapi::mojom::HoldingSpaceService,
   // The delegate, owned by `delegates_`, responsible for downloads.
   raw_ptr<HoldingSpaceDownloadsDelegate> downloads_delegate_ = nullptr;
 
-  // This class supports any number of connections. This allows the client to
-  // have multiple, potentially thread-affine, remotes.
-  mojo::ReceiverSet<crosapi::mojom::HoldingSpaceService> receivers_;
+  // The delegate, owned by `delegates_`, responsible for suggestions.
+  raw_ptr<HoldingSpaceSuggestionsDelegate> suggestions_delegate_ = nullptr;
 
-  base::ScopedObservation<ProfileManager, ProfileManagerObserver>
-      profile_manager_observer_{this};
+  base::ScopedObservation<Profile, ProfileObserver> profile_observer_{this};
 
   base::WeakPtrFactory<HoldingSpaceKeyedService> weak_factory_{this};
 };

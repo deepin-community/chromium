@@ -37,8 +37,7 @@ QuicChromiumPacketReader::QuicChromiumPacketReader(
       yield_after_duration_(yield_after_duration),
       yield_after_(quic::QuicTime::Infinite()),
       read_buffer_(base::MakeRefCounted<IOBufferWithSize>(kReadBufferSize)),
-      net_log_(net_log),
-      report_ecn_(base::FeatureList::IsEnabled(net::features::kReceiveEcn)) {}
+      net_log_(net_log) {}
 
 QuicChromiumPacketReader::~QuicChromiumPacketReader() = default;
 
@@ -108,11 +107,8 @@ bool QuicChromiumPacketReader::ProcessReadResult(int result) {
     return visitor_->OnReadError(result, socket_.get());
   }
 
-  quic::QuicEcnCodepoint ecn = quic::ECN_NOT_ECT;
-  if (report_ecn_) {
-    DscpAndEcn tos = socket_->GetLastTos();
-    ecn = static_cast<quic::QuicEcnCodepoint>(tos.ecn);
-  }
+  DscpAndEcn tos = socket_->GetLastTos();
+  quic::QuicEcnCodepoint ecn = static_cast<quic::QuicEcnCodepoint>(tos.ecn);
   quic::QuicReceivedPacket packet(read_buffer_->data(), result, clock_->Now(),
                                   /*owns_buffer=*/false, /*ttl=*/0,
                                   /*ttl_valid=*/true,

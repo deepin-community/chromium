@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_ANDROID_WEBAPK_WEBAPK_INSTALLER_H_
 
 #include <jni.h>
+
 #include <map>
 #include <memory>
 #include <optional>
@@ -18,7 +19,7 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/android/webapk/webapk_install_service.h"
 #include "components/webapps/browser/android/shortcut_info.h"
-#include "components/webapps/browser/android/webapk/webapk_icon_hasher.h"
+#include "components/webapps/browser/android/webapk/webapk_icons_hasher.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "url/gurl.h"
@@ -74,6 +75,7 @@ class WebApkInstaller {
   static void InstallAsync(content::BrowserContext* context,
                            content::WebContents* web_contents,
                            const webapps::ShortcutInfo& shortcut_info,
+                           const SkBitmap& primary_icon,
                            webapps::WebappInstallSource install_source,
                            FinishCallback finish_callback);
 
@@ -91,6 +93,7 @@ class WebApkInstaller {
       WebApkInstaller* installer,
       content::WebContents* web_contents,
       const webapps::ShortcutInfo& shortcut_info,
+      const SkBitmap& primary_icon,
       webapps::WebappInstallSource install_source,
       FinishCallback callback);
 
@@ -104,13 +107,13 @@ class WebApkInstaller {
   void SetTimeoutMs(int timeout_ms);
 
   // Called once the installation is complete or failed.
-  void OnInstallFinished(JNIEnv* env, jint result);
+  void OnInstallFinished(JNIEnv* env, int32_t result);
 
   // Checks if there is enough space to install a WebAPK.
   // If yes, continue the WebAPK installation process. If there is not enough
   // space to install (even after clearing Chrome's cache), fails the
   // installation process immediately.
-  void OnGotSpaceStatus(JNIEnv* env, jint status);
+  void OnGotSpaceStatus(JNIEnv* env, int32_t status);
 
   // Builds the WebAPK proto for an update or an install request and stores it
   // to |update_request_path|. Runs |callback| with a boolean indicating
@@ -119,12 +122,11 @@ class WebApkInstaller {
       const base::FilePath& update_request_path,
       const webapps::ShortcutInfo& shortcut_info,
       const GURL& app_key,
-      const std::string& primary_icon_data,
-      const std::string& splash_icon_data,
+      std::unique_ptr<webapps::WebappIcon> primary_icon,
+      std::unique_ptr<webapps::WebappIcon> splash_icon,
       const std::string& package_name,
       const std::string& version,
-      std::map<std::string, webapps::WebApkIconHasher::Icon>
-          icon_url_to_murmur2_hash,
+      std::map<GURL, std::unique_ptr<webapps::WebappIcon>> icons,
       bool is_manifest_stale,
       bool is_app_identity_update_supported,
       std::vector<webapps::WebApkUpdateReason> update_reasons,
@@ -159,6 +161,7 @@ class WebApkInstaller {
   // install completed or failed.
   void InstallAsync(content::WebContents* web_contents,
                     const webapps::ShortcutInfo& shortcut_info,
+                    const SkBitmap& primary_icon,
                     webapps::WebappInstallSource install_source,
                     FinishCallback finish_callback);
 
@@ -178,12 +181,11 @@ class WebApkInstaller {
   // Called with the contents of the update request file.
   void OnReadUpdateRequest(std::unique_ptr<std::string> update_request);
 
-  void OnURLLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnURLLoaderComplete(std::optional<std::string> response_body);
 
   // Called with the computed Murmur2 hash for the icons.
   void OnGotIconMurmur2Hashes(
-      std::optional<std::map<std::string, webapps::WebApkIconHasher::Icon>>
-          hashes);
+      std::map<GURL, std::unique_ptr<webapps::WebappIcon>> icons);
 
   // Called with the serialized proto for the WebAPK install.
   void OnInstallProtoBuilt(std::unique_ptr<std::string> serialized_proto);
@@ -214,11 +216,17 @@ class WebApkInstaller {
   // Callback to call once WebApkInstaller succeeds or fails.
   FinishCallback finish_callback_;
 
+  // Helper for downloading WebAPK icons and compute Murmur2 hash of the
+  // downloaded images.
+  std::unique_ptr<webapps::WebApkIconsHasher> icon_hasher_;
+
   // Data for installs.
 
   // Only available if the install was scheduled directly in chrome and not in
   // the WebApkInstallCoordinatorService.
   std::unique_ptr<webapps::ShortcutInfo> install_shortcut_info_;
+
+  SkBitmap install_primary_icon_;
 
   std::u16string short_name_;
 

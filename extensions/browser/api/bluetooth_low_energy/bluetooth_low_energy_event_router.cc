@@ -12,6 +12,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -237,13 +238,27 @@ DeviceConnectErrorCodeToStatus(BluetoothDevice::ConnectErrorCode error_code) {
     case BluetoothDevice::ERROR_INVALID_ARGS:
       return extensions::BluetoothLowEnergyEventRouter::
           kStatusErrorInvalidArguments;
+    case BluetoothDevice::ERROR_NON_AUTH_TIMEOUT:
+      return extensions::BluetoothLowEnergyEventRouter::kStatusErrorTimeout;
+    case device::BluetoothDevice::ConnectErrorCode::ERROR_NO_MEMORY:
+      return extensions::BluetoothLowEnergyEventRouter::kStatusErrorNoMemory;
+    case device::BluetoothDevice::ConnectErrorCode::ERROR_JNI_ENVIRONMENT:
+      return extensions::BluetoothLowEnergyEventRouter::
+          kStatusErrorJniEnvironment;
+    case device::BluetoothDevice::ConnectErrorCode::ERROR_JNI_THREAD_ATTACH:
+      return extensions::BluetoothLowEnergyEventRouter::
+          kStatusErrorJniThreadAttach;
+    case device::BluetoothDevice::ConnectErrorCode::ERROR_WAKELOCK:
+      return extensions::BluetoothLowEnergyEventRouter::kStatusErrorWakelock;
+    case device::BluetoothDevice::ConnectErrorCode::ERROR_UNEXPECTED_STATE:
+      return extensions::BluetoothLowEnergyEventRouter::
+          kStatusErrorUnexpectedState;
+    case device::BluetoothDevice::ConnectErrorCode::ERROR_SOCKET:
+      return extensions::BluetoothLowEnergyEventRouter::kStatusErrorSocket;
     case BluetoothDevice::NUM_CONNECT_ERROR_CODES:
       NOTREACHED();
-      return extensions::BluetoothLowEnergyEventRouter::
-          kStatusErrorInvalidArguments;
   }
   NOTREACHED();
-  return extensions::BluetoothLowEnergyEventRouter::kStatusErrorFailed;
 }
 
 }  // namespace
@@ -341,7 +356,7 @@ void BluetoothLowEnergyEventRouter::Connect(bool persistent,
     return;
   }
 
-  const ExtensionId extension_id = extension->id();
+  const ExtensionId& extension_id = extension->id();
   const std::string connect_id = extension_id + device_address;
 
   if (connecting_devices_.count(connect_id) != 0) {
@@ -388,7 +403,7 @@ void BluetoothLowEnergyEventRouter::Disconnect(
     return;
   }
 
-  const ExtensionId extension_id = extension->id();
+  const ExtensionId& extension_id = extension->id();
 
   BluetoothLowEnergyConnection* conn =
       FindConnection(extension_id, device_address);
@@ -699,7 +714,7 @@ void BluetoothLowEnergyEventRouter::StartCharacteristicNotifications(
     return;
   }
 
-  const ExtensionId extension_id = extension->id();
+  const ExtensionId& extension_id = extension->id();
   const std::string session_id = extension_id + instance_id;
 
   if (pending_session_calls_.count(session_id) != 0) {
@@ -759,7 +774,7 @@ void BluetoothLowEnergyEventRouter::StopCharacteristicNotifications(
     return;
   }
 
-  const ExtensionId extension_id = extension->id();
+  const ExtensionId& extension_id = extension->id();
 
   BluetoothLowEnergyNotifySession* session =
       FindNotifySession(extension_id, instance_id);
@@ -1043,7 +1058,7 @@ void BluetoothLowEnergyEventRouter::GattCharacteristicValueChanged(
   // lists of enums correctly.
   apibtle::Characteristic api_characteristic =
       PopulateCharacteristic(characteristic);
-  base::Value::List args;
+  base::ListValue args;
   args.Append(apibtle::CharacteristicToValue(api_characteristic));
 
   DispatchEventToExtensionsWithPermission(
@@ -1073,7 +1088,7 @@ void BluetoothLowEnergyEventRouter::GattDescriptorValueChanged(
   // apibtle::OnDescriptorValueChanged::Create, as it doesn't convert
   // lists of enums correctly.
   apibtle::Descriptor api_descriptor = PopulateDescriptor(descriptor);
-  base::Value::List args;
+  base::ListValue args;
   args.Append(apibtle::DescriptorToValue(api_descriptor));
 
   DispatchEventToExtensionsWithPermission(
@@ -1097,7 +1112,8 @@ void BluetoothLowEnergyEventRouter::OnCharacteristicReadRequest(
   }
 
   const ExtensionId& extension_id = service_id_to_extension_id_.at(service_id);
-  // TODO(crbug.com/730593): Delete NullCallback when write callbacks combined.
+  // TODO(crbug.com/40524549): Delete NullCallback when write callbacks
+  // combined.
   apibtle::Request request = PopulateDevice(device);
   request.request_id = StoreSentRequest(
       extension_id, std::make_unique<AttributeValueRequest>(
@@ -1147,7 +1163,7 @@ void BluetoothLowEnergyEventRouter::OnCharacteristicPrepareWriteRequest(
     bool has_subsequent_request,
     base::OnceClosure callback,
     Delegate::ErrorCallback error_callback) {
-  // TODO(crbug/856869): Support reliable write.
+  // TODO(crbug.com/40582544): Support reliable write.
   OnCharacteristicWriteRequest(device, characteristic, value, offset,
                                std::move(callback), std::move(error_callback));
 }
@@ -1168,7 +1184,8 @@ void BluetoothLowEnergyEventRouter::OnDescriptorReadRequest(
 
   const ExtensionId& extension_id = service_id_to_extension_id_.at(service_id);
 
-  // TODO(crbug.com/730593): Delete NullCallback when write callbacks combined.
+  // TODO(crbug.com/40524549): Delete NullCallback when write callbacks
+  // combined.
   apibtle::Request request = PopulateDevice(device);
   request.request_id = StoreSentRequest(
       extension_id, std::make_unique<AttributeValueRequest>(
@@ -1453,7 +1470,7 @@ void BluetoothLowEnergyEventRouter::DispatchEventToExtensionsWithPermission(
     const std::string& event_name,
     const device::BluetoothUUID& uuid,
     const std::string& characteristic_id,
-    base::Value::List args) {
+    base::ListValue args) {
   // Obtain the listeners of |event_name|. The list can contain multiple
   // entries for the same extension, so we keep track of the extensions that we
   // already sent the event to, since we want the send an event to an extension
@@ -1503,7 +1520,7 @@ void BluetoothLowEnergyEventRouter::DispatchEventToExtension(
     const ExtensionId& extension_id,
     events::HistogramValue histogram_value,
     const std::string& event_name,
-    base::Value::List args) {
+    base::ListValue args) {
   // For all API methods, the "low_energy" permission check is handled by
   // BluetoothLowEnergyExtensionFunction but for events we have to do the
   // check here.

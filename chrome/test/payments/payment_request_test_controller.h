@@ -48,6 +48,7 @@ class PaymentRequestTestObserver {
   virtual void OnConnectionTerminated() {}
   virtual void OnAbortCalled() {}
   virtual void OnCompleteCalled() {}
+  virtual void OnInternalError() {}
   virtual void OnUIDisplayed() {}
 
  protected:
@@ -144,6 +145,7 @@ class PaymentRequestTestController {
   void OnConnectionTerminated();
   void OnAbortCalled();
   void OnCompleteCalled();
+  void OnInternalError();
   void OnUIDisplayed();
 
   raw_ptr<PaymentRequestTestObserver> observer_ = nullptr;
@@ -169,6 +171,8 @@ class PaymentRequestTestController {
 
   base::WeakPtr<ContentPaymentRequestDelegate> delegate_;
 #endif
+
+  base::WeakPtrFactory<PaymentRequestTestController> weak_ptr_factory_{this};
 };
 
 }  // namespace payments

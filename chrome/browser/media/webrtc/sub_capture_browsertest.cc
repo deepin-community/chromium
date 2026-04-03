@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
+
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,7 +18,6 @@
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
@@ -35,9 +37,6 @@
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "third_party/blink/public/common/features.h"
 #include "ui/gl/gl_switches.h"
-
-// TODO(crbug.com/1215089): Enable this test suite on Lacros.
-#if !BUILDFLAG(IS_CHROMEOS_LACROS)
 
 namespace {
 
@@ -99,7 +98,7 @@ const char* ToString(Frame frame) {
     case Frame::kEmbeddedFrame:
       return "embedded";
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 const char* ToString(Track track) {
@@ -111,7 +110,7 @@ const char* ToString(Track track) {
     case Track::kSecond:
       return "second";
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 const char* ToString(SubCaptureTargetType type) {
@@ -121,7 +120,7 @@ const char* ToString(SubCaptureTargetType type) {
     case SubCaptureTargetType::kRestrictionTarget:
       return "restriction-target";
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 // Conveniently pack together all relevant information about a tab and
@@ -300,11 +299,12 @@ class SubCaptureBrowserTestBase : public WebRtcTestBase {
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitch(
         switches::kEnableExperimentalWebPlatformFeatures);
-    // TODO(https://crbug.com/1424557): Remove this after fixing feature
+    // MSan and GL do not get along so avoid using the GPU with MSan.
+    // TODO(crbug.com/40260482): Remove this after fixing feature
     // detection in 0c tab capture path as it'll no longer be needed.
-    if constexpr (!BUILDFLAG(IS_CHROMEOS)) {
-      command_line->AppendSwitch(switches::kUseGpuInTests);
-    }
+#if !BUILDFLAG(IS_CHROMEOS) && !defined(MEMORY_SANITIZER)
+    command_line->AppendSwitch(switches::kUseGpuInTests);
+#endif
     command_line_ = command_line;
   }
 
@@ -381,7 +381,7 @@ class SubCaptureBrowserTestBase : public WebRtcTestBase {
   raw_ptr<base::CommandLine> command_line_ = nullptr;
 
   // Holds the tabs manipulated by this test.
-  TabInfo tabs_[kTabCount];
+  std::array<TabInfo, kTabCount> tabs_;
 
   // Each page is served from a distinct origin, thereby proving that
   // cropping/restricting works irrespective of whether iframes are
@@ -599,7 +599,13 @@ IN_PROC_BROWSER_TEST_P(SubCaptureBrowserTest,
       tab.ApplySubCaptureTarget(target, type_, Frame::kTopLevelDocument));
 }
 
-IN_PROC_BROWSER_TEST_P(SubCaptureBrowserTest, MaxIdsInTopLevelDocument) {
+// TODO(crbug.com/431852186): Re-enable after flakes are resolved.
+#if BUILDFLAG(IS_LINUX)
+#define MAYBE_MaxIdsInTopLevelDocument DISABLED_MaxIdsInTopLevelDocument
+#else
+#define MAYBE_MaxIdsInTopLevelDocument MaxIdsInTopLevelDocument
+#endif
+IN_PROC_BROWSER_TEST_P(SubCaptureBrowserTest, MAYBE_MaxIdsInTopLevelDocument) {
   SetUpTest(Frame::kNone, /*self_capture=*/false);
   TabInfo& tab = tabs_[kMainTab];
 
@@ -620,7 +626,13 @@ IN_PROC_BROWSER_TEST_P(SubCaptureBrowserTest, MaxIdsInTopLevelDocument) {
             base::StringPrintf("top-level-produce-%s-error", ToString(type_)));
 }
 
-IN_PROC_BROWSER_TEST_P(SubCaptureBrowserTest, MaxIdsInEmbeddedFrame) {
+// TODO(crbug.com/431852186): Re-enable after flakes are resolved.
+#if BUILDFLAG(IS_LINUX)
+#define MAYBE_MaxIdsInEmbeddedFrame DISABLED_MaxIdsInEmbeddedFrame
+#else
+#define MAYBE_MaxIdsInEmbeddedFrame MaxIdsInEmbeddedFrame
+#endif
+IN_PROC_BROWSER_TEST_P(SubCaptureBrowserTest, MAYBE_MaxIdsInEmbeddedFrame) {
   SetUpTest(Frame::kNone, /*self_capture=*/false);
   TabInfo& tab = tabs_[kMainTab];
 
@@ -641,7 +653,15 @@ IN_PROC_BROWSER_TEST_P(SubCaptureBrowserTest, MaxIdsInEmbeddedFrame) {
       base::StringPrintf("embedded-produce-%s-error", ToString(type_)));
 }
 
-IN_PROC_BROWSER_TEST_P(SubCaptureBrowserTest, MaxIdsSharedBetweenFramesInTab) {
+// TODO(crbug.com/431852186): Re-enable after flakes are resolved.
+#if BUILDFLAG(IS_LINUX)
+#define MAYBE_MaxIdsSharedBetweenFramesInTab \
+  DISABLED_MaxIdsSharedBetweenFramesInTab
+#else
+#define MAYBE_MaxIdsSharedBetweenFramesInTab MaxIdsSharedBetweenFramesInTab
+#endif
+IN_PROC_BROWSER_TEST_P(SubCaptureBrowserTest,
+                       MAYBE_MaxIdsSharedBetweenFramesInTab) {
   SetUpTest(Frame::kNone, /*self_capture=*/false);
   TabInfo& tab = tabs_[kMainTab];
 
@@ -834,9 +854,9 @@ IN_PROC_BROWSER_TEST_P(SubCaptureClonesBrowserTest,
 
 // Original track becomes unblocked for sub-capture after clone is GCed 1/3.
 //
-// TODO(crbug.com/1353349)  Re-enable for macOS and ChromeOS after flakes are
+// TODO(crbug.com/40858400)  Re-enable for macOS and ChromeOS after flakes are
 // resolved.
-// TODO(crbug.com/1459313): Also flakes on linux-bfcache-rel, so turning the
+// TODO(crbug.com/40919381): Also flakes on linux-bfcache-rel, so turning the
 // test off entirely.
 IN_PROC_BROWSER_TEST_P(
     SubCaptureClonesBrowserTest,
@@ -854,7 +874,7 @@ IN_PROC_BROWSER_TEST_P(
 
 // Original track becomes unblocked for sub-capture after clone is GCed 2/3.
 //
-// TODO(crbug.com/1353349) Re-enable after flakes are resolved.
+// TODO(crbug.com/40858400) Re-enable after flakes are resolved.
 IN_PROC_BROWSER_TEST_P(
     SubCaptureClonesBrowserTest,
     DISABLED_CanReapplySubCaptureOnOriginalTrackAfterCloneIsGarbageCollected) {
@@ -873,7 +893,7 @@ IN_PROC_BROWSER_TEST_P(
 
 // Original track becomes unblocked for sub-capture clone is GCed 3/3.
 //
-// TODO(crbug.com/1356788): Re-enable this test.
+// TODO(crbug.com/40860614): Re-enable this test.
 IN_PROC_BROWSER_TEST_P(
     SubCaptureClonesBrowserTest,
     DISABLED_CanUndoSubCaptureOnOriginalTrackAfterCloneIsGarbageCollected) {
@@ -894,7 +914,7 @@ IN_PROC_BROWSER_TEST_P(
 //
 // The following test is disabled because of a loosely-related issue,
 // where an original track is kept alive if a clone exists, but not vice versa.
-// TODO(crbug.com/1333594): Uncomment after fixing the aforementioned issue.
+// TODO(crbug.com/40845775): Uncomment after fixing the aforementioned issue.
 IN_PROC_BROWSER_TEST_P(
     SubCaptureClonesBrowserTest,
     DISABLED_CanApplySubCaptureOnCloneAfterOriginalTrackIsGarbageCollected) {
@@ -913,7 +933,7 @@ IN_PROC_BROWSER_TEST_P(
 //
 // The following test is disabled because of a loosely-related issue,
 // where an original track is kept alive if a clone exists, but not vice versa.
-// TODO(crbug.com/1333594): Uncomment after fixing the aforementioned issue.
+// TODO(crbug.com/40845775): Uncomment after fixing the aforementioned issue.
 IN_PROC_BROWSER_TEST_P(
     SubCaptureClonesBrowserTest,
     DISABLED_CanReapplySubCaptureOnCloneAfterOriginalTrackIsGarbageCollected) {
@@ -934,7 +954,7 @@ IN_PROC_BROWSER_TEST_P(
 //
 // The following test is disabled because of a loosely-related issue,
 // where an original track is kept alive if a clone exists, but not vice versa.
-// TODO(crbug.com/1333594): Uncomment after fixing the aforementioned issue.
+// TODO(crbug.com/40845775): Uncomment after fixing the aforementioned issue.
 IN_PROC_BROWSER_TEST_P(
     SubCaptureClonesBrowserTest,
     DISABLED_CanUndoSubCaptureOnCloneAfterOriginalTrackIsGarbageCollected) {
@@ -1062,21 +1082,47 @@ IN_PROC_BROWSER_TEST_P(
                                      Track::kSecond));
 }
 
-// Suite of tests ensuring that only self-capture sessions may be the target of
-// sub-capture, and that the app may only apply sub-capture using targets in its
-// own tab. (However, any target in the current tab is permitted.)
-class SubCaptureSelfCaptureOnlyBrowserTest
+// Tests that sub-capture is:
+// - Always allowed for self-capture (given evergreen conditions still apply,
+//   such as that the target belongs to the captured tab).
+// - Allowed for Region Capture if the relevant feature flag is enabled.
+class SubCaptureSelfAndCrossCaptureBrowserTest
     : public SubCaptureBrowserTestBase,
       public WithParamInterface<
-          std::tuple<SubCaptureTargetType, Frame, bool, Tab, Frame>> {
+          std::tuple<SubCaptureTargetType, Frame, bool, bool, Tab, Frame>> {
  public:
-  SubCaptureSelfCaptureOnlyBrowserTest()
+  SubCaptureSelfAndCrossCaptureBrowserTest()
       : type_(std::get<0>(GetParam())),
         capturing_entity_(std::get<1>(GetParam())),
         self_capture_(std::get<2>(GetParam())),
-        target_element_tab_(std::get<3>(GetParam())),
-        target_frame_(std::get<4>(GetParam())) {}
-  ~SubCaptureSelfCaptureOnlyBrowserTest() override = default;
+        cross_tab_region_capture_allowed_(std::get<3>(GetParam())),
+        target_element_tab_(std::get<4>(GetParam())),
+        target_frame_(std::get<5>(GetParam())) {
+    scoped_feature_list_.InitWithFeatureStates(
+        {{features::kRegionCaptureOfOtherTabs,
+          cross_tab_region_capture_allowed_}});
+  }
+
+  ~SubCaptureSelfAndCrossCaptureBrowserTest() override = default;
+
+  bool CaptureTypeAllowed() const {
+    const base::Feature* feature = nullptr;
+    switch (type_) {
+      case SubCaptureTargetType::kCropTarget:
+        feature = &features::kRegionCaptureOfOtherTabs;
+        break;
+      case SubCaptureTargetType::kRestrictionTarget:
+        feature = &features::kElementCaptureOfOtherTabs;
+        break;
+    }
+    CHECK(feature);
+    return self_capture_ || base::FeatureList::IsEnabled(*feature);
+  }
+
+  bool TargetBelongsToCapturedTab() const {
+    return target_element_tab_ ==
+           (self_capture_ ? Tab::kMainTab : Tab::kOtherTab);
+  }
 
  protected:
   // Whether Region Capture or Element Capture is tested.
@@ -1090,16 +1136,22 @@ class SubCaptureSelfCaptureOnlyBrowserTest
   // Whether capturing self, or capturing the other tab.
   const bool self_capture_;
 
+  // Associated with `kRegionCaptureOfOtherTabs`, which controls whether
+  // sub-capture is only permitted to self-capture, or generally.
+  const bool cross_tab_region_capture_allowed_;
+
   // Determines the the element on whose sub-capture-target we'll call cropTo()
   // or restrictTo():
   // * |target_element_tab_| - whether it's in kMainTab or in kOtherTab.
   // * |target_frame_| - whether it's in the top-level or an embedded frame.
   const Tab target_element_tab_;
   const Frame target_frame_;  // Top-level or embedded frame.
+
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-std::string SubCaptureSelfCaptureOnlyBrowserTestParamsToString(
-    const TestParamInfo<SubCaptureSelfCaptureOnlyBrowserTest::ParamType>&
+std::string SubCaptureSelfAndCrossCaptureBrowserTestParamsToString(
+    const TestParamInfo<SubCaptureSelfAndCrossCaptureBrowserTest::ParamType>&
         info) {
   return base::StrCat(
       {std::get<0>(info.param) == SubCaptureTargetType::kCropTarget
@@ -1108,24 +1160,28 @@ std::string SubCaptureSelfCaptureOnlyBrowserTestParamsToString(
        std::get<1>(info.param) == Frame::kTopLevelDocument ? "TopLevel"
                                                            : "EmbeddedFrame",
        std::get<2>(info.param) ? "SelfCapturing" : "CapturingOtherTab",
-       "AndApplyingToElementIn",
-       std::get<3>(info.param) == kMainTab ? "OwnTabs" : "OtherTabs",
-       std::get<4>(info.param) == Frame::kTopLevelDocument ? "TopLevel"
+       std::get<3>(info.param) ? "CrossTabRegionCaptureAllowed"
+                               : "CrossTabRegionCaptureDisallowed"
+                                 "AndApplyingToElementIn",
+       std::get<4>(info.param) == kMainTab ? "OwnTabs" : "OtherTabs",
+       std::get<5>(info.param) == Frame::kTopLevelDocument ? "TopLevel"
                                                            : "EmbeddedFrame"});
 }
 
 INSTANTIATE_TEST_SUITE_P(
     ,
-    SubCaptureSelfCaptureOnlyBrowserTest,
+    SubCaptureSelfAndCrossCaptureBrowserTest,
     Combine(Values(SubCaptureTargetType::kCropTarget,
                    SubCaptureTargetType::kRestrictionTarget),
             Values(Frame::kTopLevelDocument, Frame::kEmbeddedFrame),
             Bool(),
+            Bool(),
             Values(kMainTab, kOtherTab),
             Values(Frame::kTopLevelDocument, Frame::kEmbeddedFrame)),
-    SubCaptureSelfCaptureOnlyBrowserTestParamsToString);
+    SubCaptureSelfAndCrossCaptureBrowserTestParamsToString);
 
-IN_PROC_BROWSER_TEST_P(SubCaptureSelfCaptureOnlyBrowserTest, ApplySubCapture) {
+IN_PROC_BROWSER_TEST_P(SubCaptureSelfAndCrossCaptureBrowserTest,
+                       ApplySubCapture) {
   SetUpTest(capturing_entity_, self_capture_);
 
   // Prevent test false-positive - ensure that both tabs participating in the
@@ -1152,12 +1208,57 @@ IN_PROC_BROWSER_TEST_P(SubCaptureSelfCaptureOnlyBrowserTest, ApplySubCapture) {
                                                              target_frame_);
   ASSERT_THAT(target, IsExpectedTarget("4"));
 
-  // Apply sub-capture only permitted if both conditions hold.
   const bool expect_permitted =
-      (self_capture_ && target_element_tab_ == kMainTab);
-
+      CaptureTypeAllowed() && TargetBelongsToCapturedTab();
   EXPECT_EQ(expect_permitted, tabs_[kMainTab].ApplySubCaptureTarget(
                                   target, type_, capturing_entity_));
 }
 
-#endif  //  !BUILDFLAG(IS_CHROMEOS_LACROS)
+class SubCaptureUnapplyBrowserTest
+    : public SubCaptureBrowserTestBase,
+      public WithParamInterface<std::tuple<bool, bool, SubCaptureTargetType>> {
+ public:
+  SubCaptureUnapplyBrowserTest()
+      : self_capture_(std::get<0>(GetParam())),
+        cross_tab_sub_capture_allowed_(std::get<1>(GetParam())),
+        type_(std::get<2>(GetParam())) {
+    scoped_feature_list_.InitWithFeatureStates(
+        {{features::kRegionCaptureOfOtherTabs, cross_tab_sub_capture_allowed_},
+         {features::kElementCaptureOfOtherTabs,
+          cross_tab_sub_capture_allowed_}});
+  }
+  ~SubCaptureUnapplyBrowserTest() override = default;
+
+ protected:
+  const bool self_capture_;
+  const bool cross_tab_sub_capture_allowed_;
+  const SubCaptureTargetType type_;
+};
+
+std::string SubCaptureUnapplyBrowserTestParamsToString(
+    const TestParamInfo<SubCaptureUnapplyBrowserTest::ParamType>& info) {
+  const bool self_capture = std::get<0>(info.param);
+  const bool cross_tab_sub_capture_allowed = std::get<1>(info.param);
+  const SubCaptureTargetType type = std::get<2>(info.param);
+  return base::StrCat(
+      {"Capturing", self_capture ? "Self" : "Other", "CrossTabSubCapture",
+       cross_tab_sub_capture_allowed ? "Allowed" : "Disallowed",
+       type == SubCaptureTargetType::kCropTarget ? "Region" : "Element",
+       "Capture"});
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    SubCaptureUnapplyBrowserTest,
+    Combine(Bool(),
+            Bool(),
+            Values(SubCaptureTargetType::kCropTarget,
+                   SubCaptureTargetType::kRestrictionTarget)),
+    SubCaptureUnapplyBrowserTestParamsToString);
+
+IN_PROC_BROWSER_TEST_P(SubCaptureUnapplyBrowserTest, ApplyToElement) {
+  const Frame relevant_frame = Frame::kTopLevelDocument;
+  SetUpTest(relevant_frame, self_capture_);
+  TabInfo& tab = tabs_[kMainTab];
+  EXPECT_TRUE(tab.ApplySubCaptureTarget("undefined", type_, relevant_frame));
+}

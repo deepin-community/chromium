@@ -16,9 +16,11 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
-#include "components/feature_engagement/internal/jni_headers/TrackerImpl_jni.h"
 #include "components/feature_engagement/public/feature_list.h"
 #include "components/feature_engagement/public/tracker.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/feature_engagement/internal/jni_headers/TrackerImpl_jni.h"
 
 namespace feature_engagement {
 
@@ -70,8 +72,7 @@ TrackerImplAndroid::TrackerImplAndroid(Tracker* tracker, FeatureVector features)
   JNIEnv* env = base::android::AttachCurrentThread();
 
   java_obj_.Reset(
-      env,
-      Java_TrackerImpl_create(env, reinterpret_cast<intptr_t>(this)).obj());
+      env, Java_TrackerImpl_create(env, reinterpret_cast<intptr_t>(this)));
 }
 
 TrackerImplAndroid::~TrackerImplAndroid() {
@@ -85,16 +86,14 @@ base::android::ScopedJavaLocalRef<jobject> TrackerImplAndroid::GetJavaObject() {
 
 void TrackerImplAndroid::NotifyEvent(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jstring>& jevent) {
+    const base::android::JavaRef<jstring>& jevent) {
   std::string event = base::android::ConvertJavaStringToUTF8(env, jevent);
   tracker_->NotifyEvent(event);
 }
 
-bool TrackerImplAndroid::ShouldTriggerHelpUI(
+bool TrackerImplAndroid::ShouldTriggerHelpUi(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jstring>& jfeature) {
+    const base::android::JavaRef<jstring>& jfeature) {
   std::string feature = base::android::ConvertJavaStringToUTF8(env, jfeature);
   DCHECK(features_.find(feature) != features_.end());
 
@@ -102,10 +101,9 @@ bool TrackerImplAndroid::ShouldTriggerHelpUI(
 }
 
 base::android::ScopedJavaLocalRef<jobject>
-TrackerImplAndroid::ShouldTriggerHelpUIWithSnooze(
+TrackerImplAndroid::ShouldTriggerHelpUiWithSnooze(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jstring>& jfeature) {
+    const base::android::JavaRef<jstring>& jfeature) {
   std::string feature = base::android::ConvertJavaStringToUTF8(env, jfeature);
   DCHECK(features_.find(feature) != features_.end());
 
@@ -115,10 +113,9 @@ TrackerImplAndroid::ShouldTriggerHelpUIWithSnooze(
       env, triggerDetails.ShouldShowIph(), triggerDetails.ShouldShowSnooze());
 }
 
-bool TrackerImplAndroid::WouldTriggerHelpUI(
+bool TrackerImplAndroid::WouldTriggerHelpUi(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jstring>& jfeature) {
+    const base::android::JavaRef<jstring>& jfeature) {
   std::string feature = base::android::ConvertJavaStringToUTF8(env, jfeature);
   DCHECK(features_.find(feature) != features_.end());
 
@@ -127,19 +124,17 @@ bool TrackerImplAndroid::WouldTriggerHelpUI(
 
 bool TrackerImplAndroid::HasEverTriggered(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jstring>& jfeature,
-    const jboolean j_from_window) {
+    const base::android::JavaRef<jstring>& jfeature,
+    const bool j_from_window) {
   std::string feature = base::android::ConvertJavaStringToUTF8(env, jfeature);
   DCHECK(features_.find(feature) != features_.end());
 
   return tracker_->HasEverTriggered(*features_[feature], j_from_window);
 }
 
-jint TrackerImplAndroid::GetTriggerState(
+int32_t TrackerImplAndroid::GetTriggerState(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jstring>& jfeature) {
+    const base::android::JavaRef<jstring>& jfeature) {
   std::string feature = base::android::ConvertJavaStringToUTF8(env, jfeature);
   DCHECK(features_.find(feature) != features_.end());
 
@@ -148,8 +143,7 @@ jint TrackerImplAndroid::GetTriggerState(
 
 void TrackerImplAndroid::Dismissed(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jstring>& jfeature) {
+    const base::android::JavaRef<jstring>& jfeature) {
   std::string feature = base::android::ConvertJavaStringToUTF8(env, jfeature);
   DCHECK(features_.find(feature) != features_.end());
 
@@ -158,9 +152,8 @@ void TrackerImplAndroid::Dismissed(
 
 void TrackerImplAndroid::DismissedWithSnooze(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jstring>& jfeature,
-    const jint snooze_action) {
+    const base::android::JavaRef<jstring>& jfeature,
+    const int32_t snooze_action) {
   std::string feature = base::android::ConvertJavaStringToUTF8(env, jfeature);
   DCHECK(features_.find(feature) != features_.end());
 
@@ -170,9 +163,7 @@ void TrackerImplAndroid::DismissedWithSnooze(
 }
 
 base::android::ScopedJavaLocalRef<jobject>
-TrackerImplAndroid::AcquireDisplayLock(
-    JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj) {
+TrackerImplAndroid::AcquireDisplayLock(JNIEnv* env) {
   std::unique_ptr<DisplayLockHandle> lock_handle =
       tracker_->AcquireDisplayLock();
   if (!lock_handle)
@@ -188,8 +179,7 @@ TrackerImplAndroid::AcquireDisplayLock(
 
 void TrackerImplAndroid::SetPriorityNotification(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jstring>& jfeature) {
+    const base::android::JavaRef<jstring>& jfeature) {
   std::string feature = base::android::ConvertJavaStringToUTF8(env, jfeature);
   DCHECK(features_.find(feature) != features_.end());
 
@@ -197,9 +187,7 @@ void TrackerImplAndroid::SetPriorityNotification(
 }
 
 base::android::ScopedJavaLocalRef<jstring>
-TrackerImplAndroid::GetPendingPriorityNotification(
-    JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj) {
+TrackerImplAndroid::GetPendingPriorityNotification(JNIEnv* env) {
   auto notification = tracker_->GetPendingPriorityNotification();
   std::string pending_notification_string =
       notification.value_or(std::string());
@@ -208,42 +196,30 @@ TrackerImplAndroid::GetPendingPriorityNotification(
 }
 
 void TrackerImplAndroid::RegisterPriorityNotificationHandler(
-    JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jstring>& jfeature,
-    const base::android::JavaRef<jobject>& jrunnable) {
-  std::string feature = base::android::ConvertJavaStringToUTF8(env, jfeature);
+    const std::string& feature,
+    base::OnceClosure&& runnable) {
   DCHECK(features_.find(feature) != features_.end());
 
-  return tracker_->RegisterPriorityNotificationHandler(
-      *features_[feature],
-      base::BindOnce(&base::android::RunRunnableAndroid,
-                     base::android::ScopedJavaGlobalRef<jobject>(jrunnable)));
+  return tracker_->RegisterPriorityNotificationHandler(*features_[feature],
+                                                       std::move(runnable));
 }
 
 void TrackerImplAndroid::UnregisterPriorityNotificationHandler(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jstring>& jfeature) {
+    const base::android::JavaRef<jstring>& jfeature) {
   std::string feature = base::android::ConvertJavaStringToUTF8(env, jfeature);
   DCHECK(features_.find(feature) != features_.end());
 
   return tracker_->UnregisterPriorityNotificationHandler(*features_[feature]);
 }
 
-bool TrackerImplAndroid::IsInitialized(
-    JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj) {
+bool TrackerImplAndroid::IsInitialized(JNIEnv* env) {
   return tracker_->IsInitialized();
 }
 
 void TrackerImplAndroid::AddOnInitializedCallback(
-    JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    const base::android::JavaParamRef<jobject>& j_callback_obj) {
-  tracker_->AddOnInitializedCallback(base::BindOnce(
-      &base::android::RunBooleanCallbackAndroid,
-      base::android::ScopedJavaGlobalRef<jobject>(j_callback_obj)));
+    base::OnceCallback<void(bool)> callback) {
+  tracker_->AddOnInitializedCallback(std::move(callback));
 }
 
 DisplayLockHandleAndroid::DisplayLockHandleAndroid(
@@ -252,8 +228,7 @@ DisplayLockHandleAndroid::DisplayLockHandleAndroid(
   java_obj_.Reset(
       base::android::AttachCurrentThread(),
       Java_DisplayLockHandleAndroid_create(base::android::AttachCurrentThread(),
-                                           reinterpret_cast<intptr_t>(this))
-          .obj());
+                                           reinterpret_cast<intptr_t>(this)));
 }
 
 DisplayLockHandleAndroid::~DisplayLockHandleAndroid() {
@@ -271,3 +246,5 @@ void DisplayLockHandleAndroid::Release(JNIEnv* env) {
 }
 
 }  // namespace feature_engagement
+
+DEFINE_JNI(TrackerImpl)

@@ -6,10 +6,10 @@
 #define STORAGE_BROWSER_BLOB_WRITE_BLOB_TO_FILE_H_
 
 #include <optional>
+
 #include "base/files/file_path.h"
 #include "base/time/time.h"
 #include "components/services/storage/public/mojom/blob_storage_context.mojom.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "storage/browser/blob/blob_data_handle.h"
 #include "storage/browser/blob/blob_entry.h"
 

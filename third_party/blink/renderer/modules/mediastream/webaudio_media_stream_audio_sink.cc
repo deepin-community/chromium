@@ -8,9 +8,12 @@
 #include <string>
 
 #include "base/logging.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/trace_event/trace_event.h"
+#include "media/base/audio_bus.h"
 #include "media/base/audio_fifo.h"
 #include "media/base/audio_parameters.h"
+#include "media/base/audio_timestamp_helper.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/renderer/platform/media/web_audio_source_provider_client.h"
 
@@ -24,17 +27,17 @@ const int WebAudioMediaStreamAudioSink::kWebAudioRenderBufferSize = 128;
 WebAudioMediaStreamAudioSink::WebAudioMediaStreamAudioSink(
     MediaStreamComponent* component,
     int context_sample_rate,
-    uint32_t context_buffer_size)
+    base::TimeDelta platform_buffer_duration)
     : is_enabled_(false),
       component_(component),
       track_stopped_(false),
-      sink_context_buffer_size_(context_buffer_size),
+      platform_buffer_duration_(platform_buffer_duration),
       sink_params_(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
                    media::ChannelLayoutConfig::Stereo(),
                    context_sample_rate,
                    kWebAudioRenderBufferSize) {
   CHECK(sink_params_.IsValid());
-  CHECK(sink_context_buffer_size_);
+  CHECK_GT(platform_buffer_duration_, base::TimeDelta());
 
   // Connect the source provider to the track as a sink.
   WebMediaStreamAudioSink::AddToAudioTrack(
@@ -42,8 +45,13 @@ WebAudioMediaStreamAudioSink::WebAudioMediaStreamAudioSink(
 }
 
 WebAudioMediaStreamAudioSink::~WebAudioMediaStreamAudioSink() {
-  if (audio_converter_.get())
-    audio_converter_->RemoveInput(this);
+  // Use the lock to protect access to audio_converter_.
+  {
+    base::AutoLock auto_lock(lock_);
+    if (audio_converter_.get()) {
+      audio_converter_->RemoveInput(this);
+    }
+  }
 
   // If the track is still active, it is necessary to notify the track before
   // the source provider goes away.
@@ -73,16 +81,14 @@ void WebAudioMediaStreamAudioSink::OnSetFormat(
   // same size. `audio_converter_` resamples from source_params_.sample_rate()
   // to sink_params_.sample_rate() and rebuffers into kWebAudioRenderBufferSize
   // chunks. However `audio_converter_->Convert()` are not spaced evenly: they
-  // will come in batches as the audio context is filling up the output buffer
-  // of `sink_context_buffer_size_' while rendering the media stream via
-  // AudioContext.
+  // will come in batches as the audio destination is filling up the output
+  // buffer of `platform_buffer_duration_' while rendering the media stream via
+  // an output device.
 
-  // To ensure ChunkSize() is correct: see AudioConverter documentation.
   audio_converter_->PrimeWithSilence();
-  const int chunk_size = audio_converter_->ChunkSize();
-  CHECK_GT(chunk_size, 0);
   const int max_batch_read_count =
-      ceil(static_cast<double>(sink_context_buffer_size_) / chunk_size);
+      ceil(platform_buffer_duration_.InMicrosecondsF() /
+           source_params_.GetBufferDuration().InMicrosecondsF());
 
   // Due to resampling/rebuffering, audio consumption irregularities, and
   // possible misalignments of audio production/consumption callbacks, we should
@@ -93,13 +99,13 @@ void WebAudioMediaStreamAudioSink::OnSetFormat(
                                      source_params_.frames_per_buffer());
 
   DVLOG(1) << "FIFO size: " << fifo_->max_frames()
-           << " source buffer size: " << source_params_.frames_per_buffer()
-           << " sink context buffer size: " << sink_context_buffer_size_
-           << " chunk size " << chunk_size
+           << " source buffer duration ms: "
+           << source_params_.GetBufferDuration().InMillisecondsF()
+           << " platform buffer duration ms: "
+           << platform_buffer_duration_.InMillisecondsF()
            << " max batch read count: " << max_batch_read_count
-           << " FIFO duration: "
-           << fifo_->max_frames() * 1000 / source_params_.sample_rate()
-           << " ms ";
+           << " FIFO duration ms: "
+           << fifo_->max_frames() * 1000 / source_params_.sample_rate();
 }
 
 void WebAudioMediaStreamAudioSink::OnReadyStateChanged(
@@ -113,7 +119,6 @@ void WebAudioMediaStreamAudioSink::OnData(
     const media::AudioBus& audio_bus,
     base::TimeTicks estimated_capture_time) {
   NON_REENTRANT_SCOPE(capture_reentrancy_checker_);
-  DCHECK(!estimated_capture_time.is_null());
   TRACE_EVENT2(TRACE_DISABLED_BY_DEFAULT("mediastream"),
                "WebAudioMediaStreamAudioSink::OnData", "this",
                static_cast<void*>(this), "frames", audio_bus.frames());
@@ -145,8 +150,8 @@ void WebAudioMediaStreamAudioSink::OnData(
       fifo_stats_->overruns++;
     }
 
-    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("mediastream"),
-                 "WebAudioMediaStreamAudioSink::OnData FIFO full");
+    TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("mediastream"),
+                        "WebAudioMediaStreamAudioSink::OnData FIFO full");
   }
 }
 
@@ -156,7 +161,7 @@ void WebAudioMediaStreamAudioSink::SetClient(
 }
 
 void WebAudioMediaStreamAudioSink::ProvideInput(
-    const WebVector<float*>& audio_data,
+    const std::vector<float*>& audio_data,
     int number_of_frames) {
   NON_REENTRANT_SCOPE(provide_input_reentrancy_checker_);
   DCHECK_EQ(number_of_frames, kWebAudioRenderBufferSize);
@@ -172,15 +177,21 @@ void WebAudioMediaStreamAudioSink::ProvideInput(
   }
 
   output_wrapper_->set_frames(number_of_frames);
-  for (size_t i = 0; i < audio_data.size(); ++i)
-    output_wrapper_->SetChannelData(static_cast<int>(i), audio_data[i]);
+  for (size_t i = 0; i < audio_data.size(); ++i) {
+    // TODO(crbug.com/375449662): Spanify `audio_data` parameter.
+    output_wrapper_->SetChannelData(
+        static_cast<int>(i),
+        UNSAFE_TODO(base::span(audio_data[i],
+                               base::checked_cast<size_t>(number_of_frames))));
+  }
 
   base::AutoLock auto_lock(lock_);
-  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("mediastream"),
-               "WebAudioMediaStreamAudioSink::ProvideInput under lock");
-
   if (!audio_converter_)
     return;
+
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("mediastream"),
+              "WebAudioMediaStreamAudioSink::ProvideInput under lock",
+              "delay (frames)", fifo_->frames());
 
   is_enabled_ = true;
   audio_converter_->Convert(output_wrapper_.get());
@@ -204,12 +215,16 @@ double WebAudioMediaStreamAudioSink::ProvideInput(
     media::AudioBus* audio_bus,
     uint32_t frames_delayed,
     const media::AudioGlitchInfo& glitch_info) NO_THREAD_SAFETY_ANALYSIS {
-  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("mediastream"),
-               "WebAudioMediaStreamAudioSink::ProvideInput 2");
-
   lock_.AssertAcquired();
   CHECK(fifo_);
-  if (fifo_->frames() >= audio_bus->frames()) {
+  TRACE_EVENT(
+      TRACE_DISABLED_BY_DEFAULT("mediastream"),
+      "WebAudioMediaStreamAudioSink::ProvideInput 2", "delay (frames)",
+      frames_delayed, "layover_delay (ms)",
+      media::AudioTimestampHelper::FramesToTime(
+          frames_delayed + fifo_->frames(), source_params_.sample_rate())
+          .InMillisecondsF());
+  if (fifo_->frames() >= static_cast<size_t>(audio_bus->frames())) {
     fifo_->Consume(audio_bus, 0, audio_bus->frames());
     TRACE_COUNTER_ID1(TRACE_DISABLED_BY_DEFAULT("mediastream"),
                       "WebAudioMediaStreamAudioSink fifo space", this,
@@ -221,9 +236,10 @@ double WebAudioMediaStreamAudioSink::ProvideInput(
     if (fifo_stats_) {
       fifo_stats_->underruns++;
     }
-    TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("mediastream"),
-                 "WebAudioMediaStreamAudioSink::ProvideInput underrun",
-                 "frames missing", audio_bus->frames() - fifo_->frames());
+    TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("mediastream"),
+                        "WebAudioMediaStreamAudioSink::ProvideInput underrun",
+                        "frames missing",
+                        audio_bus->frames() - fifo_->frames());
   }
 
   return 1.0;

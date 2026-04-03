@@ -46,15 +46,10 @@ class InfoBarAndroid : public InfoBar {
   const base::android::JavaRef<jobject>& GetJavaInfoBar();
   bool HasSetJavaInfoBar() const;
 
-  int GetInfoBarIdentifier(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& obj);
-  virtual void OnLinkClicked(JNIEnv* env,
-                             const base::android::JavaParamRef<jobject>& obj) {}
-  void OnButtonClicked(JNIEnv* env,
-                       const base::android::JavaParamRef<jobject>& obj,
-                       jint action);
-  void OnCloseButtonClicked(JNIEnv* env,
-                            const base::android::JavaParamRef<jobject>& obj);
+  int GetInfoBarIdentifier(JNIEnv* env);
+  virtual void OnLinkClicked(JNIEnv* env) {}
+  void OnButtonClicked(JNIEnv* env, int32_t action);
+  void OnCloseButtonClicked(JNIEnv* env);
 
   void CloseJavaInfoBar();
 

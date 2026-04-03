@@ -8,11 +8,11 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <optional>
 
 #include "base/auto_reset.h"
 #include "base/check.h"
 #include "base/notreached.h"
-#include "cc/base/features.h"
 #include "cc/input/snap_selection_strategy.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
@@ -224,8 +224,18 @@ SnapPositionData SnapContainerData::FindSnapPosition(
                           (axis == SnapAxis::kX || axis == SnapAxis::kBoth);
   bool should_snap_on_y = strategy.ShouldSnapOnY() &&
                           (axis == SnapAxis::kY || axis == SnapAxis::kBoth);
-  if (!should_snap_on_x && !should_snap_on_y)
+  if (!should_snap_on_x && !should_snap_on_y) {
+    // We may arrive here because the strategy wants to snap in an axis in
+    // which we do not snap, and doesn't want to snap in an axis in which we do
+    // snap. Ensure that we retain the id of the target in any axis where we are
+    // snapped.
+    if (axis == SnapAxis::kY) {
+      result.target_element_ids.y = target_snap_area_element_ids_.y;
+    } else {
+      result.target_element_ids.x = target_snap_area_element_ids_.x;
+    }
     return result;
+  }
 
   bool should_prioritize_x_target =
       strategy.ShouldPrioritizeSnapTargets() &&
@@ -278,22 +288,11 @@ SnapPositionData SnapContainerData::FindSnapPosition(
     return result;
   }
 
-  // If snapping in one axis pushes off-screen the other snap area, this snap
-  // position is invalid. https://drafts.csswg.org/css-scroll-snap-1/#snap-scope
-  // In this case, first check if we need to prioritize the snap area from
-  // one axis over the other and select that axis, or if we don't prioritize an
-  // axis over the other, we choose the axis whose snap area is closer.
-  // Then find a new snap area on the other axis that is mutually visible with
-  // the selected axis' snap area.
   if (selected_x.has_value() && selected_y.has_value() &&
       !IsMutualVisible(selected_x.value(), selected_y.value())) {
-    bool keep_candidate_on_x = should_prioritize_x_target;
-    if (should_prioritize_x_target == should_prioritize_y_target) {
-      keep_candidate_on_x =
-          std::abs(selected_x.value().snap_offset() - base_position.x()) <=
-          std::abs(selected_y.value().snap_offset() - base_position.y());
-    }
-    if (keep_candidate_on_x) {
+    SnapAxis axis_to_follow = SelectAxisToFollowForMutualVisibility(
+        strategy, selected_x.value(), selected_y.value());
+    if (axis_to_follow == SnapAxis::kX) {
       selected_y =
           FindClosestValidArea(SearchAxis::kY, strategy, selected_x.value());
     } else {
@@ -302,8 +301,33 @@ SnapPositionData SnapContainerData::FindSnapPosition(
     }
   }
 
+  // For each axis, the alternative makes a better selection if it is also
+  // aligned in the cross axis.
+  if (selected_y && selected_y->alternative()) {
+    SelectAlternativeIdForSearchResult(*selected_y, selected_x,
+                                       strategy.current_position().x(),
+                                       max_position_.x());
+  }
+  if (selected_x && selected_x->alternative()) {
+    SelectAlternativeIdForSearchResult(*selected_x, selected_y,
+                                       strategy.current_position().y(),
+                                       max_position_.y());
+  }
+
   result.type = SnapPositionData::Type::kAligned;
   result.position = strategy.current_position();
+  // Make sure that |result| retains what we are currently snapped to in each
+  // axis in case this search had no result for one axis. This ensures we don't
+  // incorrectly trigger a snap event. Don't retain ids of areas that may no
+  // longer exist.
+  for (const auto& area : snap_area_list_) {
+    if (area.element_id == target_snap_area_element_ids_.x) {
+      result.target_element_ids.x = target_snap_area_element_ids_.x;
+    }
+    if (area.element_id == target_snap_area_element_ids_.y) {
+      result.target_element_ids.y = target_snap_area_element_ids_.y;
+    }
+  }
 
   if (selected_x) {
     result.position.set_x(selected_x->snap_offset());
@@ -377,21 +401,6 @@ bool SnapContainerData::FindSnapPositionForMutualSnap(
   return found;
 }
 
-std::set<ElementId> SnapContainerData::FindSnappedTargetsAtScrollOffset(
-    const SnapContainerData* container_data,
-    const gfx::PointF& scroll_offset) {
-  std::set<ElementId> snapped_target_ids;
-  if (container_data) {
-    for (size_t i = 0; i < container_data->size(); i++) {
-      const auto& area = container_data->at(i);
-      if (container_data->IsSnappedToArea(area, scroll_offset)) {
-        snapped_target_ids.insert(area.element_id);
-      }
-    }
-  }
-  return snapped_target_ids;
-}
-
 std::optional<SnapSearchResult>
 SnapContainerData::GetTargetSnapAreaSearchResult(
     const SnapSelectionStrategy& strategy,
@@ -405,9 +414,7 @@ SnapContainerData::GetTargetSnapAreaSearchResult(
   for (const SnapAreaData& area : snap_area_list_) {
     if (area.element_id == target_id && strategy.IsValidSnapArea(axis, area)) {
       auto aligned_result = GetSnapSearchResult(axis, area);
-      if (base::FeatureList::IsEnabled(
-              features::kScrollSnapPreferCloserCovering) &&
-          CanCoverSnapportOnAxis(axis, snapport(), area.rect)) {
+      if (CanCoverSnapportOnAxis(axis, snapport(), area.rect)) {
         // This code path handles snapping after layout changes. If the
         // target snap area is larger than the snapport, we need to consider
         // snap areas nested within it, which may themselves be large snap areas
@@ -523,9 +530,14 @@ std::optional<SnapSearchResult> SnapContainerData::FindClosestValidAreaInternal(
   float base_position =
       horiz ? strategy.base_position().x() : strategy.base_position().y();
 
+  // True if we have found a "preferred" candidate.
+  bool preferred_candidate = false;
   float smallest_distance = horiz ? proximity_range_.x() : proximity_range_.y();
+  float proximity_distance =
+      horiz ? proximity_range_.x() : proximity_range_.y();
 
-  auto evaluate = [&](const SnapSearchResult& candidate) {
+  auto evaluate = [&](const SnapSearchResult& candidate,
+                      const SnapAreaData& area) {
     if (!IsMutualVisible(candidate, cross_axis_snap_result)) {
       return;
     }
@@ -533,15 +545,40 @@ std::optional<SnapSearchResult> SnapContainerData::FindClosestValidAreaInternal(
       return;
     }
     float distance = std::abs(candidate.snap_offset() - base_position);
-    if (distance > smallest_distance) {
+    if (distance > proximity_distance) {
+      return;
+    }
+
+    bool is_preferred_candidate =
+        strategy.IsPreferredSnapPosition(axis, candidate.snap_offset());
+    // If we have a preferred candidate, skip those which are not preferred.
+    if (preferred_candidate && !is_preferred_candidate) {
+      return;
+    }
+    // If this snap area is further away from the best candidate, and
+    // we either already have a preferred candidate or this candidate is not
+    // preferred, then skip it.
+    if (distance > smallest_distance &&
+        (preferred_candidate || !is_preferred_candidate)) {
       return;
     }
     // Aligned snap areas that have focus should be given preference when
     // selecting snap targets.
-    if (distance < smallest_distance || candidate.has_focus_within()) {
+    if (distance < smallest_distance ||
+        (is_preferred_candidate &&
+         (!preferred_candidate || candidate.has_focus_within()))) {
       smallest_distance = distance;
       closest = candidate;
+      preferred_candidate = is_preferred_candidate;
     } else if (closest && !closest->has_focus_within()) {
+      if (closest->element_id() == targeted_area_id_) {
+        return;
+      }
+      if (candidate.element_id() == targeted_area_id_) {
+        closest = candidate;
+        preferred_candidate = is_preferred_candidate;
+        return;
+      }
       const auto candidate_rect = candidate.rect();
       const auto closest_rect = closest->rect();
       // Prefer snapping to innermost elements when nesting snap areas.
@@ -553,6 +590,18 @@ std::optional<SnapSearchResult> SnapContainerData::FindClosestValidAreaInternal(
           closest_rect != candidate_rect) {
         smallest_distance = distance;
         closest = candidate;
+        preferred_candidate = is_preferred_candidate;
+      } else if ((scroll_snap_type_.axis == SnapAxis::kBoth) &&
+                 (area.scroll_snap_align.alignment_block !=
+                  SnapAlignment::kNone) &&
+                 (area.scroll_snap_align.alignment_inline !=
+                  SnapAlignment::kNone) &&
+                 is_preferred_candidate == preferred_candidate) {
+        // This candidate is equally aligned with the current closest. Since it
+        // can be snapped to in both axes, designate it a potential alternative
+        // if we don't already have a potential alternative or it is a better
+        // alternative than the current one.
+        UpdateSearchAlternative(*closest, candidate, area, strategy);
       }
     }
   };
@@ -571,11 +620,9 @@ std::optional<SnapSearchResult> SnapContainerData::FindClosestValidAreaInternal(
     }
 
     SnapSearchResult candidate = GetSnapSearchResult(axis, area);
-    evaluate(candidate);
+    evaluate(candidate, area);
     if (should_consider_covering &&
-        (base::FeatureList::IsEnabled(features::kScrollSnapPreferCloserCovering)
-             ? CanCoverSnapportOnAxis(axis, snapport(), area.rect)
-             : IsSnapportCoveredOnAxis(axis, intended_position, area.rect))) {
+        CanCoverSnapportOnAxis(axis, snapport(), area.rect)) {
       if (std::optional<SnapSearchResult> covering =
               FindCoveringCandidate(area, axis, candidate, intended_position)) {
         covering->set_has_focus_within(area.has_focus_within);
@@ -588,7 +635,7 @@ std::optional<SnapSearchResult> SnapContainerData::FindClosestValidAreaInternal(
           // distance with other aligned snap positions - unlike a covering
           // candidate at the intended position which may be given a higher
           // priority in ScrollSnapStrategy::PickBestResult.
-          evaluate(*covering);
+          evaluate(*covering, area);
         }
       }
     }
@@ -679,66 +726,63 @@ std::optional<SnapSearchResult> SnapContainerData::FindCoveringCandidate(
   gfx::RangeF middle_dodging_range = area_range;
   gfx::RangeF forward_dodging_range = area_range;
 
-  if (base::FeatureList::IsEnabled(
-          features::kScrollSnapCoveringAvoidNestedSnapAreas)) {
-    for (const SnapAreaData& intruder : snap_area_list_) {
-      gfx::RangeF intruder_range =
-          horiz ? gfx::RangeF(intruder.rect.x(), intruder.rect.right())
-                : gfx::RangeF(intruder.rect.y(), intruder.rect.bottom());
+  for (const SnapAreaData& intruder : snap_area_list_) {
+    gfx::RangeF intruder_range =
+        horiz ? gfx::RangeF(intruder.rect.x(), intruder.rect.right())
+              : gfx::RangeF(intruder.rect.y(), intruder.rect.bottom());
 
-      if (intruder_range.start() > area_range.end() ||
-          intruder_range.end() < area_range.start()) {
-        // Does not intrude.
-        continue;
-      }
-      if (intruder_range.start() <= area_range.start() &&
-          intruder_range.end() >= area_range.end()) {
-        // Superset of `area` also not treated as an intruder.
-        continue;
-      }
+    if (intruder_range.start() > area_range.end() ||
+        intruder_range.end() < area_range.start()) {
+      // Does not intrude.
+      continue;
+    }
+    if (intruder_range.start() <= area_range.start() &&
+        intruder_range.end() >= area_range.end()) {
+      // Superset of `area` also not treated as an intruder.
+      continue;
+    }
 
-      // Try three ways of dodging the intruders.
-      // In full generality this requires an interval tree. But we can simplify
-      // somewhat because we only care about a dodging range that is potentially
-      // closer than an aligned snap position, which each intruder also
-      // produces. For example, given:
-      //      |---A---|     |---preferred snapport---|
-      //             |---B---|
-      // We do not care about the dodging range before the start of A.
+    // Try three ways of dodging the intruders.
+    // In full generality this requires an interval tree. But we can simplify
+    // somewhat because we only care about a dodging range that is potentially
+    // closer than an aligned snap position, which each intruder also
+    // produces. For example, given:
+    //      |---A---|     |---preferred snapport---|
+    //             |---B---|
+    // We do not care about the dodging range before the start of A.
 
-      // backward_dodging_range finds a dodging range that is above any intruder
-      // that intersects the snapport.
-      if (intruder_range.end() < preferred_snapport.start()) {
-        backward_dodging_range.set_start(
-            std::max(backward_dodging_range.start(), intruder_range.end()));
-      } else {
-        backward_dodging_range.set_end(
-            std::min(backward_dodging_range.end(), intruder_range.start()));
-      }
+    // backward_dodging_range finds a dodging range that is above any intruder
+    // that intersects the snapport.
+    if (intruder_range.end() < preferred_snapport.start()) {
+      backward_dodging_range.set_start(
+          std::max(backward_dodging_range.start(), intruder_range.end()));
+    } else {
+      backward_dodging_range.set_end(
+          std::min(backward_dodging_range.end(), intruder_range.start()));
+    }
 
-      // forward_dodging_range finds a dodging range that is below any intruder
-      // that intersects the snapport.
-      if (intruder_range.start() > preferred_snapport.end()) {
-        forward_dodging_range.set_end(
-            std::min(forward_dodging_range.end(), intruder_range.start()));
-      } else {
-        forward_dodging_range.set_start(
-            std::max(forward_dodging_range.start(), intruder_range.end()));
-      }
+    // forward_dodging_range finds a dodging range that is below any intruder
+    // that intersects the snapport.
+    if (intruder_range.start() > preferred_snapport.end()) {
+      forward_dodging_range.set_end(
+          std::min(forward_dodging_range.end(), intruder_range.start()));
+    } else {
+      forward_dodging_range.set_start(
+          std::max(forward_dodging_range.start(), intruder_range.end()));
+    }
 
-      // middle_dodging_range finds a dodging range inside the snapport, if
-      // there are intruders from above and below.
-      if (intruder_range.Contains(preferred_snapport) ||
-          preferred_snapport.Contains(intruder_range)) {
-        middle_dodging_range = gfx::RangeF();
-      } else if (intruder_range.start() <= preferred_snapport.start()) {
-        middle_dodging_range.set_start(
-            std::max(middle_dodging_range.start(), intruder_range.end()));
-      } else {
-        DCHECK(intruder_range.end() >= preferred_snapport.end());
-        middle_dodging_range.set_end(
-            std::min(middle_dodging_range.end(), intruder_range.start()));
-      }
+    // middle_dodging_range finds a dodging range inside the snapport, if there
+    // are intruders from above and below.
+    if (intruder_range.Contains(preferred_snapport) ||
+        preferred_snapport.Contains(intruder_range)) {
+      middle_dodging_range = gfx::RangeF();
+    } else if (intruder_range.start() <= preferred_snapport.start()) {
+      middle_dodging_range.set_start(
+          std::max(middle_dodging_range.start(), intruder_range.end()));
+    } else {
+      DCHECK(intruder_range.end() >= preferred_snapport.end());
+      middle_dodging_range.set_end(
+          std::min(middle_dodging_range.end(), intruder_range.start()));
     }
   }
 
@@ -807,7 +851,7 @@ bool SnapContainerData::IsSnapportCoveredOnAxis(
   }
 }
 
-// TODO(crbug.com/1501103): Use tolerance value less than 1.
+// TODO(crbug.com/40941354): Use tolerance value less than 1.
 // It is currently set to 1 because of differences in the way Blink and cc
 // currently handle fractional offsets when snapping.
 constexpr float kSnappedToTolerance = 1.0;
@@ -864,11 +908,122 @@ gfx::RectF SnapContainerData::snapport() const {
   return adjusted;
 }
 
-SnappedTargetData::SnappedTargetData() = default;
-SnappedTargetData::SnappedTargetData(const SnappedTargetData& other) = default;
-SnappedTargetData::SnappedTargetData(const std::set<ElementId>& ids)
-    : snapped_target_ids_(std::move(ids)) {}
-SnappedTargetData::~SnappedTargetData() = default;
+void SnapContainerData::UpdateSearchAlternative(
+    SnapSearchResult& current_result,
+    const SnapSearchResult& candidate_result,
+    const SnapAreaData& candidate_area,
+    const SnapSelectionStrategy& strategy) const {
+  bool horiz = current_result.axis() == SearchAxis::kX;
+  const auto candidate_cross_axis_aligned_result = GetSnapSearchResult(
+      horiz ? SearchAxis::kY : SearchAxis::kX, candidate_area);
+  const auto candidate_rect = candidate_result.rect();
+  const auto current_result_rect = current_result.rect();
+  DCHECK(candidate_rect && current_result_rect);
+  if (!candidate_rect || !current_result_rect ||
+      candidate_rect->Contains(*current_result_rect)) {
+    return;
+  }
+  if (auto alt = current_result.alternative()) {
+    float cross_axis_base_position =
+        horiz ? strategy.base_position().y() : strategy.base_position().x();
+    float candidate_cross_axis_distance =
+        std::abs(cross_axis_base_position -
+                 candidate_cross_axis_aligned_result.snap_offset());
+    float alt_cross_axis_distance =
+        std::abs(cross_axis_base_position - alt->cross_axis_snap_offset);
+    if (candidate_cross_axis_distance > alt_cross_axis_distance) {
+      return;
+    }
+    const auto alt_rect = alt->area_rect;
+    // This candidate beats our current alternative if it is closer to the
+    // base position in the cross axis than our current alternative,
+    // or if it is tied with the current alternative and is nested within
+    // the current alternative (inner targets are preferred to outer targets).
+    if (candidate_cross_axis_distance < alt_cross_axis_distance ||
+        (alt_rect != *candidate_rect && alt_rect.Contains(*candidate_rect))) {
+      current_result.set_alternative(
+          candidate_area.element_id, *candidate_rect,
+          candidate_cross_axis_aligned_result.snap_offset());
+    }
+  } else {
+    // We did not have an alternative before now, make the current
+    // candidate our alternative.
+    current_result.set_alternative(
+        candidate_area.element_id, *candidate_rect,
+        candidate_cross_axis_aligned_result.snap_offset());
+  }
+}
+
+void SnapContainerData::SelectAlternativeIdForSearchResult(
+    SnapSearchResult& selection,
+    const std::optional<SnapSearchResult>& cross_selection,
+    float cross_current_position,
+    float cross_max_position) const {
+  const auto within_snapped_tolerance = [](float v1, float v2) {
+    return std::abs(v1 - v2) <= kSnappedToTolerance;
+  };
+  if (cross_selection) {
+    if (within_snapped_tolerance(
+            cross_selection->snap_offset(),
+            selection.alternative()->cross_axis_snap_offset)) {
+      selection.set_element_id(selection.alternative()->element_id);
+    }
+  } else {
+    if (within_snapped_tolerance(
+            std::clamp(cross_current_position, 0.0f, cross_max_position),
+            selection.alternative()->cross_axis_snap_offset)) {
+      selection.set_element_id(selection.alternative()->element_id);
+    }
+  }
+}
+
+SnapAxis SnapContainerData::SelectAxisToFollowForMutualVisibility(
+    const SnapSelectionStrategy& strategy,
+    const SnapSearchResult& selected_x,
+    const SnapSearchResult& selected_y) const {
+  // If snapping in one axis pushes off-screen the other snap area, this snap
+  // position is invalid. https://drafts.csswg.org/css-scroll-snap-1/#snap-scope
+  // In this case, first check if we need to prioritize snapping to the most
+  // recent snap targets in each axis and prioritize one axis over the other
+  // according to the following order:
+  //  1. an axis with the focused area.
+  //  2. an axis with the targeted [1] area.
+  //  3. the block axis.
+  //  (See step 8 at
+  //   https://github.com/w3c/csswg-drafts/issues/9622#issue-2006578282)
+  // [1]https://drafts.csswg.org/selectors/#the-target-pseudo
+  // If we don't prioritize snapping to the most recent snap targets, we choose
+  // the axis whose snap area is closer. Then find a new snap area on the other
+  // axis that is mutually visible with the selected axis' snap area.
+  if (strategy.ShouldPrioritizeSnapTargets()) {
+    // If we we're previously snapped in one axis but not the other, follow the
+    // axis we we're previously snapped in.
+    if (target_snap_area_element_ids_.x == ElementId()) {
+      return SnapAxis::kY;
+    } else if (target_snap_area_element_ids_.y == ElementId()) {
+      return SnapAxis::kX;
+    }
+
+    // Focused, then targeted snap areas should be followed.
+    if (selected_x.has_focus_within()) {
+      return SnapAxis::kX;
+    } else if (selected_y.has_focus_within()) {
+      return SnapAxis::kY;
+    } else if (selected_x.element_id() == targeted_area_id_) {
+      return SnapAxis::kX;
+    } else if (selected_y.element_id() == targeted_area_id_) {
+      return SnapAxis::kY;
+    }
+
+    // Follow the block axis target.
+    return has_horizontal_writing_mode_ ? SnapAxis::kY : SnapAxis::kX;
+  }
+  return (
+      std::abs(selected_x.snap_offset() - strategy.base_position().x()) <=
+              std::abs(selected_y.snap_offset() - strategy.base_position().y())
+          ? SnapAxis::kX
+          : SnapAxis::kY);
+}
 
 std::ostream& operator<<(std::ostream& ostream, const SnapAreaData& area_data) {
   return ostream << area_data.rect.ToString();

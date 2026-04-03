@@ -29,7 +29,7 @@ NetworkThrottlingObserver::NetworkThrottlingObserver(PrefService* local_state)
                              throttle_callback);
 }
 
-NetworkThrottlingObserver::~NetworkThrottlingObserver() {}
+NetworkThrottlingObserver::~NetworkThrottlingObserver() = default;
 
 void NetworkThrottlingObserver::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(prefs::kNetworkThrottlingEnabled);
@@ -39,7 +39,7 @@ void NetworkThrottlingObserver::OnPreferenceChanged(
     const std::string& pref_name) {
   DCHECK(pref_name == prefs::kNetworkThrottlingEnabled);
 
-  const base::Value::Dict& throttling_policy =
+  const base::DictValue& throttling_policy =
       local_state_->GetDict(prefs::kNetworkThrottlingEnabled);
 
   // Default is to disable throttling if the policy is not found.

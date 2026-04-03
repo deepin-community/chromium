@@ -67,9 +67,8 @@ TEST_F(SharedModuleManifestTest, ExportAllowlistAll) {
 
 TEST_F(SharedModuleManifestTest, ExportAllowlistEmpty) {
   scoped_refptr<Extension> extension =
-      LoadAndExpectWarnings("shared_module_export_allowlist_empty.json",
-                            {"Unrecognized manifest key 'export'.",
-                             manifest_errors::kInvalidExportAllowlistEmpty});
+      LoadAndExpectWarning("shared_module_export_allowlist_empty.json",
+                           manifest_errors::kInvalidExportAllowlistEmpty);
 
   EXPECT_TRUE(
       SharedModuleInfo::IsExportAllowedByAllowlist(extension.get(), kImportId1))
@@ -83,7 +82,7 @@ TEST_F(SharedModuleManifestTest, ExportAllowlistEmpty) {
 }
 
 TEST_F(SharedModuleManifestTest, ExportParseErrors) {
-  Testcase testcases[] = {
+  const Testcase testcases[] = {
       Testcase("shared_module_export_and_import.json",
                "Simultaneous 'import' and 'export' are not allowed."),
       Testcase("shared_module_export_not_dict.json",
@@ -98,7 +97,7 @@ TEST_F(SharedModuleManifestTest, ExportParseErrors) {
                "Error at key 'export.allowlist'. Type is invalid. Expected "
                "list, found string."),
   };
-  RunTestcases(testcases, std::size(testcases), EXPECT_TYPE_ERROR);
+  RunTestcases(testcases, ExpectType::kError);
 }
 
 TEST_F(SharedModuleManifestTest, SharedModuleStaticFunctions) {
@@ -138,9 +137,8 @@ TEST_F(SharedModuleManifestTest, Import) {
 
 TEST_F(SharedModuleManifestTest, ImportRepeats) {
   scoped_refptr<Extension> extension =
-      LoadAndExpectWarnings("shared_module_import_repeats.json",
-                            {"Unrecognized manifest key 'import'.",
-                             manifest_errors::kInvalidImportRepeatedImport});
+      LoadAndExpectWarning("shared_module_import_repeats.json",
+                           manifest_errors::kInvalidImportRepeatedImport);
 
   EXPECT_FALSE(SharedModuleInfo::IsSharedModule(extension.get()))
       << extension.get()->name();
@@ -168,7 +166,7 @@ TEST_F(SharedModuleManifestTest, ImportRepeats) {
 }
 
 TEST_F(SharedModuleManifestTest, ImportParseErrors) {
-  Testcase testcases[] = {
+  const Testcase testcases[] = {
       Testcase("shared_module_import_not_list.json",
                "Error at key 'import'. Type is invalid. Expected list, found "
                "dictionary."),
@@ -177,7 +175,7 @@ TEST_F(SharedModuleManifestTest, ImportParseErrors) {
       Testcase("shared_module_import_invalid_version.json",
                "Invalid value for 'import[0].minimum_version'."),
   };
-  RunTestcases(testcases, std::size(testcases), EXPECT_TYPE_ERROR);
+  RunTestcases(testcases, ExpectType::kError);
 }
 
 }  // namespace extensions

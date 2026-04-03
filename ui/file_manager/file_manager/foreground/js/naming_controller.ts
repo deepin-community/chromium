@@ -18,7 +18,7 @@ import {renameEntry, validateEntryName, validateFileName} from './file_rename.js
 import type {FileSelectionHandler} from './file_selection.js';
 import type {WithContextMenu} from './ui/context_menu_handler.js';
 import type {ConfirmDialog} from './ui/dialogs.js';
-import {FilesAlertDialog} from './ui/files_alert_dialog.js';
+import type {FilesAlertDialog} from './ui/files_alert_dialog.js';
 import {type ListContainer, ListType} from './ui/list_container.js';
 import type {ListItem} from './ui/list_item.js';
 import type {ListSelectionModel} from './ui/list_selection_model.js';
@@ -153,8 +153,7 @@ export class NamingController {
     if (!item) {
       return;
     }
-    const label =
-        item.querySelector<HTMLDivElement>('.filename-label') as HTMLElement;
+    const label = item.querySelector<HTMLElement>('.filename-label')!;
     const input = this.listContainer_.renameInput;
     const dataModel = this.listContainer_.currentList.dataModel!;
     const currentEntry =
@@ -238,6 +237,9 @@ export class NamingController {
       case 'Enter':
         this.commitRename_();
         event.preventDefault();
+        break;
+
+      default:
         break;
     }
   }

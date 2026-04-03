@@ -83,7 +83,8 @@ ExtensionFunction::ResponseAction TestOpenFileUrlFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(file_url.is_valid());
   EXTENSION_FUNCTION_VALIDATE(file_url.SchemeIsFile());
 
-  ExtensionsAPIClient::Get()->OpenFileUrl(file_url, browser_context());
+  ExtensionsAPIClient::Get()->OpenFileUrlForTesting(file_url,
+                                                    browser_context());
   return RespondNow(NoArguments());
 }
 
@@ -139,7 +140,7 @@ ExtensionFunction::ResponseAction TestSendScriptResultFunction::Run() {
 }
 
 // static
-void TestGetConfigFunction::set_test_config_state(base::Value::Dict* value) {
+void TestGetConfigFunction::set_test_config_state(base::DictValue* value) {
   TestConfigState* test_config_state = TestConfigState::GetInstance();
   test_config_state->set_config_state(value);
 }

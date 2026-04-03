@@ -6,9 +6,8 @@
 
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/permissions/permission_actions_history.h"
-#include "components/privacy_sandbox/tracking_protection_settings.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
-#include "content/public/browser/web_contents.h"
+#include "content/public/browser/render_frame_host.h"
 
 namespace permissions {
 namespace {
@@ -26,7 +25,7 @@ scoped_refptr<HostContentSettingsMap> CreateSettingsMap(
 TestPermissionsClient::TestPermissionsClient()
     : settings_map_(CreateSettingsMap(&prefs_)),
       autoblocker_(settings_map_.get()),
-      permission_actions_history_(&prefs_) {
+      permission_actions_history_(&prefs_, settings_map_.get()) {
   PermissionActionsHistory::RegisterProfilePrefs(prefs_.registry());
 }
 
@@ -41,12 +40,6 @@ HostContentSettingsMap* TestPermissionsClient::GetSettingsMap(
 
 scoped_refptr<content_settings::CookieSettings>
 TestPermissionsClient::GetCookieSettings(
-    content::BrowserContext* browser_context) {
-  return nullptr;
-}
-
-privacy_sandbox::TrackingProtectionSettings*
-TestPermissionsClient::GetTrackingProtectionSettings(
     content::BrowserContext* browser_context) {
   return nullptr;
 }
@@ -83,12 +76,11 @@ ObjectPermissionContextBase* TestPermissionsClient::GetChooserContext(
 void TestPermissionsClient::GetUkmSourceId(
     ContentSettingsType permission_type,
     content::BrowserContext* browser_context,
-    content::WebContents* web_contents,
+    content::RenderFrameHost* render_frame_host,
     const GURL& requesting_origin,
     GetUkmSourceIdCallback callback) {
-  if (web_contents) {
-    ukm::SourceId source_id =
-        web_contents->GetPrimaryMainFrame()->GetPageUkmSourceId();
+  if (render_frame_host) {
+    ukm::SourceId source_id = render_frame_host->GetPageUkmSourceId();
     std::move(callback).Run(source_id);
   } else {
     std::move(callback).Run(std::nullopt);
@@ -113,5 +105,12 @@ void TestPermissionsClient::SetCanRequestDevicePermission(
     bool can_request_device_permission) {
   can_request_device_permission_ = can_request_device_permission;
 }
+
+#if BUILDFLAG(IS_ANDROID)
+// Gets the name of the embedder.
+const std::u16string TestPermissionsClient::GetClientApplicationName() const {
+  return u"Chrome";
+}
+#endif
 
 }  // namespace permissions

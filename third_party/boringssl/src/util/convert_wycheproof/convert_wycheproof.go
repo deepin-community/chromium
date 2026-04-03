@@ -1,16 +1,16 @@
-// Copyright (c) 2018, Google Inc.
+// Copyright 2018 The BoringSSL Authors
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
-// SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
-// OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
-// CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // convert_wycheproof converts Wycheproof test vectors into a format more easily
 // consumed by BoringSSL.
@@ -26,11 +26,10 @@ import (
 )
 
 type wycheproofTest struct {
-	Algorithm        string            `json:"algorithm"`
-	GeneratorVersion string            `json:"generatorVersion"`
-	NumberOfTests    int               `json:"numberOfTests"`
-	Notes            map[string]string `json:"notes"`
-	Header           []string          `json:"header"`
+	Algorithm        string   `json:"algorithm"`
+	GeneratorVersion string   `json:"generatorVersion"`
+	NumberOfTests    int      `json:"numberOfTests"`
+	Header           []string `json:"header"`
 	// encoding/json does not support collecting unused keys, so we leave
 	// everything past this point as generic.
 	TestGroups []map[string]any `json:"testGroups"`
@@ -146,7 +145,7 @@ func convertWycheproof(f io.Writer, jsonPath string) error {
 			// Wycheproof files include keys in multiple formats. Skip PEM and
 			// JWK formats. We process DER more easily. PEM has newlines and
 			// JWK is a JSON object.
-			if k == "type" || k == "tests" || strings.HasSuffix(k, "Pem") || strings.HasSuffix(k, "Jwk") || k == "jwk" {
+			if k == "type" || k == "tests" || k == "source" || strings.HasSuffix(k, "Pem") || strings.HasSuffix(k, "Jwk") || k == "jwk" {
 				continue
 			}
 			if err := printAttribute(f, k, group[k], true); err != nil {
@@ -160,7 +159,7 @@ func convertWycheproof(f io.Writer, jsonPath string) error {
 			if _, err := fmt.Fprintf(f, "# tcId = %d\n", int(test["tcId"].(float64))); err != nil {
 				return err
 			}
-			if comment, ok := test["comment"]; ok && len(comment.(string)) != 0 {
+			if comment, ok := test["comment"]; ok && comment.(string) != "" {
 				if err := printComment(f, comment.(string)); err != nil {
 					return err
 				}
@@ -196,23 +195,39 @@ func convertWycheproof(f io.Writer, jsonPath string) error {
 var defaultInputs = []string{
 	"aes_cbc_pkcs5_test.json",
 	"aes_cmac_test.json",
+	"aes_eax_test.json",
 	"aes_gcm_siv_test.json",
 	"aes_gcm_test.json",
 	"chacha20_poly1305_test.json",
-	"dsa_test.json",
+	"dsa_2048_224_sha224_test.json",
+	"dsa_2048_224_sha256_test.json",
+	"dsa_2048_256_sha256_test.json",
+	"dsa_3072_256_sha256_test.json",
+	"dsa_2048_224_sha224_p1363_test.json",
+	"dsa_2048_224_sha256_p1363_test.json",
+	"dsa_2048_256_sha256_p1363_test.json",
+	"dsa_3072_256_sha256_p1363_test.json",
 	"ecdh_secp224r1_test.json",
 	"ecdh_secp256r1_test.json",
 	"ecdh_secp384r1_test.json",
 	"ecdh_secp521r1_test.json",
+	"ecdsa_secp224r1_sha224_p1363_test.json",
 	"ecdsa_secp224r1_sha224_test.json",
+	"ecdsa_secp224r1_sha256_p1363_test.json",
 	"ecdsa_secp224r1_sha256_test.json",
+	"ecdsa_secp224r1_sha512_p1363_test.json",
 	"ecdsa_secp224r1_sha512_test.json",
+	"ecdsa_secp256r1_sha256_p1363_test.json",
 	"ecdsa_secp256r1_sha256_test.json",
+	"ecdsa_secp256r1_sha512_p1363_test.json",
 	"ecdsa_secp256r1_sha512_test.json",
+	"ecdsa_secp384r1_sha384_p1363_test.json",
 	"ecdsa_secp384r1_sha384_test.json",
+	"ecdsa_secp384r1_sha512_p1363_test.json",
 	"ecdsa_secp384r1_sha512_test.json",
+	"ecdsa_secp521r1_sha512_p1363_test.json",
 	"ecdsa_secp521r1_sha512_test.json",
-	"eddsa_test.json",
+	"ed25519_test.json",
 	"hkdf_sha1_test.json",
 	"hkdf_sha256_test.json",
 	"hkdf_sha384_test.json",
@@ -222,8 +237,8 @@ var defaultInputs = []string{
 	"hmac_sha256_test.json",
 	"hmac_sha384_test.json",
 	"hmac_sha512_test.json",
-	"kw_test.json",
-	"kwp_test.json",
+	"aes_wrap_test.json",
+	"aes_kwp_test.json",
 	"primality_test.json",
 	"rsa_oaep_2048_sha1_mgf1sha1_test.json",
 	"rsa_oaep_2048_sha224_mgf1sha1_test.json",
@@ -253,7 +268,11 @@ var defaultInputs = []string{
 	"rsa_pss_4096_sha256_mgf1_32_test.json",
 	"rsa_pss_4096_sha512_mgf1_32_test.json",
 	"rsa_pss_misc_test.json",
-	"rsa_sig_gen_misc_test.json",
+	"rsa_pkcs1_1024_sig_gen_test.json",
+	"rsa_pkcs1_1536_sig_gen_test.json",
+	"rsa_pkcs1_2048_sig_gen_test.json",
+	"rsa_pkcs1_3072_sig_gen_test.json",
+	"rsa_pkcs1_4096_sig_gen_test.json",
 	"rsa_signature_2048_sha224_test.json",
 	"rsa_signature_2048_sha256_test.json",
 	"rsa_signature_2048_sha384_test.json",
@@ -261,11 +280,26 @@ var defaultInputs = []string{
 	"rsa_signature_3072_sha256_test.json",
 	"rsa_signature_3072_sha384_test.json",
 	"rsa_signature_3072_sha512_test.json",
+	"rsa_signature_4096_sha256_test.json",
 	"rsa_signature_4096_sha384_test.json",
 	"rsa_signature_4096_sha512_test.json",
-	"rsa_signature_test.json",
+	"rsa_signature_8192_sha256_test.json",
+	"rsa_signature_8192_sha384_test.json",
+	"rsa_signature_8192_sha512_test.json",
 	"x25519_test.json",
 	"xchacha20_poly1305_test.json",
+	"mldsa_44_sign_noseed_test.json",
+	"mldsa_44_sign_seed_test.json",
+	"mldsa_44_verify_test.json",
+	"mldsa_65_sign_noseed_test.json",
+	"mldsa_65_sign_seed_test.json",
+	"mldsa_65_verify_test.json",
+	"mldsa_87_sign_noseed_test.json",
+	"mldsa_87_sign_seed_test.json",
+	"mldsa_87_verify_test.json",
+	// TODO(crbug.com/42290453): Enable ML-KEM-768 and ML-KEM-1024 tests
+	// "mlkem_768_test.json",
+	// "mlkem_1024_test.json",
 }
 
 func main() {

@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <stdint.h>
 
+#include "base/compiler_specific.h"
 #include "services/device/geolocation/wifi_data_provider_common.h"
 #include "services/device/public/mojom/geolocation_internals.mojom.h"
 
@@ -30,13 +31,13 @@ int GetDataFromBssIdList(const NDIS_802_11_BSSID_LIST& bss_id_list,
   const uint8_t* iterator =
       reinterpret_cast<const uint8_t*>(&bss_id_list.Bssid[0]);
   const uint8_t* end_of_buffer =
-      reinterpret_cast<const uint8_t*>(&bss_id_list) + list_size;
+      UNSAFE_TODO(reinterpret_cast<const uint8_t*>(&bss_id_list) + list_size);
   for (int i = 0; i < static_cast<int>(bss_id_list.NumberOfItems); ++i) {
     const NDIS_WLAN_BSSID* bss_id =
         reinterpret_cast<const NDIS_WLAN_BSSID*>(iterator);
     // Check that the length of this BSS ID is reasonable.
     if (bss_id->Length < sizeof(NDIS_WLAN_BSSID) ||
-        iterator + bss_id->Length > end_of_buffer) {
+        UNSAFE_TODO(iterator + bss_id->Length > end_of_buffer)) {
       break;
     }
     mojom::AccessPointData access_point_data;
@@ -45,7 +46,7 @@ int GetDataFromBssIdList(const NDIS_802_11_BSSID_LIST& bss_id_list,
       ++found;
     }
     // Move to the next BSS ID.
-    iterator += bss_id->Length;
+    UNSAFE_TODO(iterator += bss_id->Length);
   }
   return found;
 }

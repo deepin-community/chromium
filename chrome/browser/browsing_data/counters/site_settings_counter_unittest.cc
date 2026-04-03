@@ -22,6 +22,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
 #include "components/browsing_data/core/pref_names.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/custom_handlers/protocol_handler.h"
 #include "components/custom_handlers/protocol_handler_registry.h"
 #include "components/custom_handlers/test_protocol_handler_registry_delegate.h"
@@ -203,6 +204,18 @@ TEST_F(SiteSettingsCounterTest, CountWebUsbSettings) {
   EXPECT_EQ(1, GetResult());
 }
 
+// Tests that the counter counts approximate Geolocation settings
+TEST_F(SiteSettingsCounterTest, CountGeolocationSettings) {
+  map()->SetPermissionSettingDefaultScope(
+      GURL("http://www.google.com"), GURL("http://www.google.com"),
+      ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+      GeolocationSetting{PermissionOption::kAllowed,
+                         PermissionOption::kDenied});
+
+  counter()->Restart();
+  EXPECT_EQ(1, GetResult());
+}
+
 // Tests that the counter counts settings with the same pattern only
 // once.
 TEST_F(SiteSettingsCounterTest, OnlyCountPatternOnce) {
@@ -309,7 +322,7 @@ TEST_F(SiteSettingsCounterTest, TranslatedSitesCounting) {
 }
 
 TEST_F(SiteSettingsCounterTest, DiscardingExceptionsCounting) {
-  base::Value::Dict exclusion_map;
+  base::DictValue exclusion_map;
   exclusion_map.Set("a.com", base::TimeToValue(base::Time::Now()));
   exclusion_map.Set("a.com", base::TimeToValue(base::Time::Now()));
   exclusion_map.Set("b.com",

@@ -10,7 +10,7 @@
 
 #include <memory>
 
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include "test/codec_factory.h"
 #include "test/encode_test_driver.h"
@@ -66,8 +66,12 @@ class VpxEncoderParmsGetToDecoder
 
   void SetUp() override {
     InitializeConfig();
+#if CONFIG_REALTIME_ONLY
+    SetMode(::libvpx_test::kRealTime);
+#else
     SetMode(::libvpx_test::kTwoPassGood);
     cfg_.g_lag_in_frames = 25;
+#endif
     cfg_.g_error_resilient = encode_parms.error_resilient;
     dec_cfg_.threads = 4;
     test_video_ = GET_PARAM(2);

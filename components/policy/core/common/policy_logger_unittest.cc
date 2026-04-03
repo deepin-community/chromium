@@ -36,9 +36,8 @@ class PolicyLoggerTest : public PlatformTest {
   // Clears the logs list and resets the deletion flag before the test and its
   // tasks are deleted. This is important to prevent tests from affecting each
   // other's results.
-  void TearDown() override {
-    policy::PolicyLogger::GetInstance()->ResetLoggerAfterTest();
-    PlatformTest::TearDown();
+  void SetUp() override {
+    policy::PolicyLogger::GetInstance()->ResetLoggerForTesting();
   }
 
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -109,7 +108,7 @@ TEST_F(PolicyLoggerTest, MaxSizeExceededDeletesOldestLog) {
   AddLogs("Last log added and size is exceeded.", policy_logger);
 
   size_t current_size = policy_logger->GetPolicyLogsSizeForTesting();
-  base::Value::List current_logs = policy_logger->GetAsList();
+  base::ListValue current_logs = policy_logger->GetAsList();
 
   EXPECT_EQ(current_size, policy::PolicyLogger::kMaxLogsSize);
 

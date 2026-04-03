@@ -25,6 +25,10 @@ class ThemeServiceFactory : public ProfileKeyedServiceFactory {
   // still needs a ThemeService to hand back the default theme images.
   static ThemeService* GetForProfile(Profile* profile);
 
+  // Same as GetForProfile(), but returns nullptr if the service does not
+  // already exist.
+  static ThemeService* GetForProfileIfExists(Profile* profile);
+
   // Returns the Extension that implements the theme associated with
   // |profile|. Returns NULL if the theme is no longer installed, if there is
   // no installed theme, or the theme was cleared.
@@ -42,10 +46,8 @@ class ThemeServiceFactory : public ProfileKeyedServiceFactory {
   ~ThemeServiceFactory() override;
 
   // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* profile) const override;
-  void RegisterProfilePrefs(
-      user_prefs::PrefRegistrySyncable* registry) override;
   bool ServiceIsCreatedWithBrowserContext() const override;
   void BrowserContextDestroyed(
       content::BrowserContext* browser_context) override;

@@ -22,19 +22,21 @@ limitations under the License.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "llvm/ADT/STLExtras.h"
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/OwningOpRef.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/quantization/common/test_base.h"
+#include "tensorflow/compiler/mlir/quantization/tensorflow/exported_model.pb.h"
+#include "xla/tsl/platform/statusor.h"
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/graph/graph.h"
+#include "tensorflow/core/protobuf/meta_graph.pb.h"
 #include "tensorflow/core/protobuf/saver.pb.h"
 #include "tsl/platform/protobuf.h"  // IWYU pragma: keep
-#include "tsl/platform/status_matchers.h"
-#include "tsl/platform/statusor.h"
 
 namespace mlir::quant::stablehlo {
 namespace {
@@ -49,18 +51,16 @@ using ::testing::IsEmpty;
 using ::testing::SizeIs;
 using ::testing::StrEq;
 using ::tsl::protobuf::TextFormat;
-using ::tsl::testing::IsOk;
-using ::tsl::testing::StatusIs;
 
 TEST(CreateExportedModelTest, CreateExportedModelBasicFieldsSet) {
   GraphDef graph_def{};
   ASSERT_TRUE(
       TextFormat::ParseFromString(R"pb(node { name: "foo" })pb", &graph_def));
 
-  const ExportedModel exported_model =
-      CreateExportedModel(std::move(graph_def), "init_node_name",
-                          "checkpoint_dir", /*saver_def=*/std::nullopt,
-                          /*function_aliases=*/{}, /*asset_file_defs=*/{});
+  const ExportedModel exported_model = CreateExportedModelFromGraphDef(
+      std::move(graph_def), "init_node_name", "checkpoint_dir",
+      /*saver_def=*/std::nullopt,
+      /*function_aliases=*/{}, /*asset_file_defs=*/{});
   ASSERT_THAT(exported_model.graph_def().node(), SizeIs(1));
   EXPECT_THAT(exported_model.graph_def().node()[0].name(), StrEq("foo"));
 
@@ -72,7 +72,7 @@ TEST(CreateExportedModelTest, CreateExportedModelBasicFieldsSet) {
 }
 
 TEST(CreateExportedModelTest, CreateExportedModelWithAddedFunctionAliases) {
-  const ExportedModel exported_model = CreateExportedModel(
+  const ExportedModel exported_model = CreateExportedModelFromGraphDef(
       GraphDef(), /*init_node_name=*/"", /*checkpoint_dir=*/"",
       /*saver_def=*/std::nullopt,
       /*function_aliases=*/{{"func1", "alias1"}, {"func2", "alias2"}},
@@ -93,7 +93,7 @@ TEST(CreateExportedModelTest, CreateExportedModelWithAddedAssetFileDefs) {
   ASSERT_TRUE(
       TextFormat::ParseFromString(R"pb(filename: "fname2")pb", &asset2));
 
-  const ExportedModel exported_model = CreateExportedModel(
+  const ExportedModel exported_model = CreateExportedModelFromGraphDef(
       GraphDef(), /*init_node_name=*/"", /*checkpoint_dir=*/"",
       /*saver_def=*/std::nullopt, /*function_aliases=*/{},
       /*asset_file_defs=*/{asset1, asset2});
@@ -107,7 +107,7 @@ TEST(CreateExportedModelTest, CreateExportedModelWithAddedSaverDef) {
   ASSERT_TRUE(TextFormat::ParseFromString(
       R"pb(filename_tensor_name: "my_file")pb", &saver_def));
 
-  const ExportedModel exported_model = CreateExportedModel(
+  const ExportedModel exported_model = CreateExportedModelFromGraphDef(
       GraphDef(), /*init_node_name=*/"", /*checkpoint_dir=*/"", saver_def,
       /*function_aliases=*/{}, /*asset_file_defs=*/{});
   EXPECT_THAT(exported_model.saver_def().filename_tensor_name(), "my_file");
@@ -165,7 +165,7 @@ TEST(CreateSaverDefTest, ReturnsErrorStatusIfSaverDefNodesPartiallyExist) {
       CreateSaverDef(control_ret_node_names, graph_def);
   EXPECT_THAT(
       saver_def,
-      StatusIs(
+      absl_testing::StatusIs(
           absl::StatusCode::kInternal,
           HasSubstr(
               "should be either all empty strings or all non-empty strings")));
@@ -173,7 +173,8 @@ TEST(CreateSaverDefTest, ReturnsErrorStatusIfSaverDefNodesPartiallyExist) {
 
 // Testing ConvertMlirModuleToExportedModel requires parsing MLIR string to
 // ModuleOp.
-class ConvertMlirModuleToExportedModelTest : public QuantizationTestBase {};
+using ConvertMlirModuleToExportedModelTest =
+    ::mlir::quant::QuantizationTestBase;
 
 TEST_F(ConvertMlirModuleToExportedModelTest, SimpleGraphDefSet) {
   // Define a module a no-op main function.
@@ -194,7 +195,7 @@ TEST_F(ConvertMlirModuleToExportedModelTest, SimpleGraphDefSet) {
                                        /*function_aliases=*/{},
                                        /*asset_file_defs=*/{});
 
-  ASSERT_THAT(exported_model, IsOk());
+  ASSERT_THAT(exported_model, absl_testing::IsOk());
   // There are 2 nodes in the graph, one for arg and another for retval.
   ASSERT_THAT(exported_model->graph_def().node(), SizeIs(2));
 
@@ -245,7 +246,7 @@ TEST_F(ConvertMlirModuleToExportedModelTest, CheckpointDirSet) {
                                        /*function_aliases=*/{},
                                        /*asset_file_defs=*/{});
 
-  ASSERT_THAT(exported_model, IsOk());
+  ASSERT_THAT(exported_model, absl_testing::IsOk());
   EXPECT_THAT(exported_model->checkpoint_dir(), StrEq("my_checkpoint_dir"));
 }
 
@@ -286,7 +287,7 @@ TEST_F(ConvertMlirModuleToExportedModelTest, FunctionAliasesSet) {
           {{"alias_1", "function_1"}, {"alias_2", "function_2"}},
           /*asset_file_defs=*/{});
 
-  ASSERT_THAT(exported_model, IsOk());
+  ASSERT_THAT(exported_model, absl_testing::IsOk());
   ASSERT_THAT(exported_model->function_aliases(), SizeIs(2));
   EXPECT_THAT(exported_model->function_aliases().at("alias_1"),
               StrEq("function_1"));
@@ -320,7 +321,7 @@ TEST_F(ConvertMlirModuleToExportedModelTest, AssetFileDefSet) {
                                        /*function_aliases=*/{},
                                        /*asset_file_defs=*/asset_file_defs);
 
-  ASSERT_THAT(exported_model, IsOk());
+  ASSERT_THAT(exported_model, absl_testing::IsOk());
   ASSERT_THAT(exported_model->asset_file_defs(), SizeIs(1));
   EXPECT_THAT(exported_model->asset_file_defs()[0].filename(),
               StrEq("vocab_file.txt"));
@@ -356,7 +357,7 @@ TEST_F(ConvertMlirModuleToExportedModelTest,
                                        /*function_aliases=*/{},
                                        /*asset_file_defs=*/{});
 
-  ASSERT_THAT(exported_model, IsOk());
+  ASSERT_THAT(exported_model, absl_testing::IsOk());
   EXPECT_THAT(exported_model->init_node_name(),
               StrEq("init_op_init_all_tables"));
 
@@ -404,7 +405,7 @@ TEST_F(ConvertMlirModuleToExportedModelTest, InitNodeNotSetIfLocNameMismatch) {
                                        /*function_aliases=*/{},
                                        /*asset_file_defs=*/{});
 
-  ASSERT_THAT(exported_model, IsOk());
+  ASSERT_THAT(exported_model, absl_testing::IsOk());
   EXPECT_THAT(exported_model->init_node_name(), IsEmpty());
 }
 
@@ -428,8 +429,9 @@ TEST_F(ConvertMlirModuleToExportedModelTest,
                                        /*function_aliases=*/{},
                                        /*asset_file_defs=*/{});
   EXPECT_THAT(exported_model,
-              StatusIs(absl::StatusCode::kFailedPrecondition,
-                       HasSubstr("entry function `main` must be present")));
+              absl_testing::StatusIs(
+                  absl::StatusCode::kFailedPrecondition,
+                  HasSubstr("entry function `main` must be present")));
 }
 
 }  // namespace

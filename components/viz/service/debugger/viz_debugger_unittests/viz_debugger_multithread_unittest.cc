@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/platform_thread.h"
 #include "components/viz/service/debugger/viz_debugger.h"
@@ -74,7 +75,8 @@ class ReaderTestThread : public base::PlatformThread::Delegate {
     // NOTE: Thread ID's are not unique on Fuchsia. Also, thread ID's on
     // Fuchsia are very large and thread_id_ may not hold the true thread ID
     // value. Regardless, the unit tests will run successfully.
-    thread_id_ = base::PlatformThread::CurrentId();
+    thread_id_ = static_cast<uint32_t>(
+        base::PlatformThread::CurrentId().truncate_to_int32_for_display_only());
     for (int i = 0;
          static_cast<uint32_t>(i) < thread_test_config_.dbg_commands[0].size();
          ++i) {
@@ -180,10 +182,11 @@ TEST_F(VizDebuggerMultithreadTest, kReadersTest) {
 
   // Initialize each thread and start thread
   for (uint32_t i = 0; i < kNumReaderThreads; ++i) {
-    threads[i].Init(test_config, 1, 0);
+    UNSAFE_TODO(threads[i]).Init(test_config, 1, 0);
   }
   for (uint32_t i = 0; i < kNumReaderThreads; ++i) {
-    ASSERT_TRUE(base::PlatformThread::Create(0, &threads[i], &handles[i]));
+    UNSAFE_TODO(
+        ASSERT_TRUE(base::PlatformThread::Create(0, &threads[i], &handles[i])));
   }
 
   // Collect all threads
@@ -319,11 +322,11 @@ TEST_F(VizDebuggerMultithreadTest, kReadersOneWriterCommandsSequenceTest) {
   // Initialize and start each thread. Each thread will start making VizDebugger
   // debug calls simultaneously upon starting.
   for (uint32_t i = 0; i < kNumReaderThreads; ++i) {
-    reader_threads[i].Init(test_config, 1, kReaderSpinAmount);
+    UNSAFE_TODO(reader_threads[i]).Init(test_config, 1, kReaderSpinAmount);
   }
   for (uint32_t i = 0; i < kNumReaderThreads; ++i) {
-    ASSERT_TRUE(base::PlatformThread::Create(0, &reader_threads[i],
-                                             &reader_thread_handles[i]));
+    UNSAFE_TODO(ASSERT_TRUE(base::PlatformThread::Create(
+        0, &reader_threads[i], &reader_thread_handles[i])));
   }
   writer_thread.Init(this, kNumWriterTries, kWriterSpinAmount);
   ASSERT_TRUE(

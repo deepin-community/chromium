@@ -19,17 +19,18 @@
 #include "perfetto/base/logging.h"
 #include "perfetto/ext/base/file_utils.h"
 #include "perfetto/ext/base/scoped_file.h"
-#include "src/protozero/proto_ring_buffer.h"
+#include "perfetto/ext/protozero/proto_ring_buffer.h"
 #include "src/traceconv/trace.descriptor.h"
 #include "src/traceconv/utils.h"
+#include "src/traceconv/winscope.descriptor.h"
 
 #include "protos/perfetto/trace/trace.pbzero.h"
 #include "protos/perfetto/trace/trace_packet.pbzero.h"
 
-#include "src/trace_processor/forwarding_trace_parser.h"
 #include "src/trace_processor/util/descriptors.h"
 #include "src/trace_processor/util/gzip_utils.h"
 #include "src/trace_processor/util/protozero_to_text.h"
+#include "src/trace_processor/util/trace_type.h"
 
 namespace perfetto {
 namespace trace_to_text {
@@ -53,6 +54,8 @@ class OnlineTraceToText {
   OnlineTraceToText(std::ostream* output) : output_(output) {
     pool_.AddFromFileDescriptorSet(kTraceDescriptor.data(),
                                    kTraceDescriptor.size());
+    pool_.AddFromFileDescriptorSet(kWinscopeDescriptor.data(),
+                                   kWinscopeDescriptor.size());
   }
   OnlineTraceToText(const OnlineTraceToText&) = delete;
   OnlineTraceToText& operator=(const OnlineTraceToText&) = delete;
@@ -197,7 +200,8 @@ bool TraceToText(std::istream* input, std::ostream* output) {
         return false;
     } while (input_reader.Read(buffer.get(), &buffer_len, kMaxMsgSize));
     return input_reader.ok();
-  } else if (type == TraceType::kProtoTraceType) {
+  } else if (type == TraceType::kProtoTraceType ||
+             type == trace_processor::kSymbolsTraceType) {
     do {
       online_trace_to_text.Feed(buffer.get(), buffer_len);
       if (!online_trace_to_text.ok())
@@ -205,7 +209,7 @@ bool TraceToText(std::istream* input, std::ostream* output) {
     } while (input_reader.Read(buffer.get(), &buffer_len, kMaxMsgSize));
     return input_reader.ok();
   } else {
-    PERFETTO_ELOG("Unrecognised file.");
+    PERFETTO_ELOG("Unrecognised file (type: %d).", type);
     return false;
   }
 }

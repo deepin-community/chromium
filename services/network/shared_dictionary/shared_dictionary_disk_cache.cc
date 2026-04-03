@@ -6,6 +6,7 @@
 
 #include <limits>
 
+#include "base/functional/callback_helpers.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_id_helper.h"
 
@@ -79,9 +80,10 @@ disk_cache::BackendResult SharedDictionaryDiskCache::CreateCacheBackend(
       net::APP_CACHE, net::CACHE_BACKEND_SIMPLE, file_operations_factory.get(),
       cache_directory_path, /*max_bytes=*/std::numeric_limits<int64_t>::max(),
       disk_cache::ResetHandling::kResetOnError,
-      /*net_log=*/nullptr, std::move(callback)
+      /*net_log=*/nullptr, /*cache_encryption_delegate=*/nullptr,
+      std::move(callback)
 #if BUILDFLAG(IS_ANDROID)
-                               ,
+          ,
       std::move(app_status_listener_getter)
 #endif  // BUILDFLAG(IS_ANDROID));
   );
@@ -94,7 +96,6 @@ disk_cache::EntryResult SharedDictionaryDiskCache::OpenOrCreateEntry(
   switch (state_) {
     case State::kBeforeInitialize:
       NOTREACHED();
-      return disk_cache::EntryResult::MakeError(net::ERR_FAILED);
     case State::kInitializing:
       // It is safe to use Unretained() below because
       // `pending_disk_cache_tasks_` is owned by `this` and the passed task
@@ -121,7 +122,6 @@ int SharedDictionaryDiskCache::DoomEntry(const std::string& key,
   switch (state_) {
     case State::kBeforeInitialize:
       NOTREACHED();
-      return net::ERR_FAILED;
     case State::kInitializing:
       // It is safe to use Unretained() below because
       // `pending_disk_cache_tasks_` is owned by `this` and the passed task
@@ -145,7 +145,6 @@ int SharedDictionaryDiskCache::ClearAll(net::CompletionOnceCallback callback) {
   switch (state_) {
     case State::kBeforeInitialize:
       NOTREACHED();
-      return net::ERR_FAILED;
     case State::kInitializing:
       // It is safe to use Unretained() below because
       // `pending_disk_cache_tasks_` is owned by `this` and the passed task
@@ -171,7 +170,6 @@ void SharedDictionaryDiskCache::CreateIterator(
   switch (state_) {
     case State::kBeforeInitialize:
       NOTREACHED();
-      return;
     case State::kInitializing:
       // It is safe to use Unretained() below because
       // `pending_disk_cache_tasks_` is owned by `this` and the passed task

@@ -49,6 +49,8 @@
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/weborigin/referrer.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 
@@ -183,7 +185,8 @@ HTMLTableRowElement* HTMLTableElement::insertRow(
   if (index < -1) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        "The index provided (" + String::Number(index) + ") is less than -1.");
+        StrCat({"The index provided (", String::Number(index),
+                ") is less than -1."}));
     return nullptr;
   }
 
@@ -198,9 +201,9 @@ HTMLTableRowElement* HTMLTableElement::insertRow(
         if (i != index) {
           exception_state.ThrowDOMException(
               DOMExceptionCode::kIndexSizeError,
-              "The index provided (" + String::Number(index) +
-                  ") is greater than the number of rows in the table (" +
-                  String::Number(i) + ").");
+              StrCat({"The index provided (", String::Number(index),
+                      ") is greater than the number of rows in the table (",
+                      String::Number(i), ")."}));
           return nullptr;
         }
         break;
@@ -233,7 +236,8 @@ void HTMLTableElement::deleteRow(int index, ExceptionState& exception_state) {
   if (index < -1) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        "The index provided (" + String::Number(index) + ") is less than -1.");
+        StrCat({"The index provided (", String::Number(index),
+                ") is less than -1."}));
     return;
   }
 
@@ -253,9 +257,9 @@ void HTMLTableElement::deleteRow(int index, ExceptionState& exception_state) {
   if (!row) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        "The index provided (" + String::Number(index) +
-            ") is greater than the number of rows in the table (" +
-            String::Number(i) + ").");
+        StrCat({"The index provided (", String::Number(index),
+                ") is greater than the number of rows in the table (",
+                String::Number(i), ")."}));
     return;
   }
   row->remove(exception_state);
@@ -307,7 +311,7 @@ static bool GetBordersFromFrameAttributeValue(const AtomicString& value,
 void HTMLTableElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
+    HeapVector<CSSPropertyValue, 8>& style) {
   if (name == html_names::kWidthAttr) {
     AddHTMLLengthToStyle(style, CSSPropertyID::kWidth, value,
                          kAllowPercentageValues, kDontAllowZeroValues);
@@ -328,8 +332,12 @@ void HTMLTableElement::CollectStyleForPresentationAttribute(
         style, CSSPropertyID::kBorderRightWidth, width,
         CSSPrimitiveValue::UnitType::kPixels);
   } else if (name == html_names::kBordercolorAttr) {
-    if (!value.empty())
-      AddHTMLColorToStyle(style, CSSPropertyID::kBorderColor, value);
+    if (!value.empty()) {
+      AddHTMLColorToStyle(style, CSSPropertyID::kBorderLeftColor, value);
+      AddHTMLColorToStyle(style, CSSPropertyID::kBorderRightColor, value);
+      AddHTMLColorToStyle(style, CSSPropertyID::kBorderBottomColor, value);
+      AddHTMLColorToStyle(style, CSSPropertyID::kBorderTopColor, value);
+    }
   } else if (name == html_names::kBgcolorAttr) {
     AddHTMLColorToStyle(style, CSSPropertyID::kBackgroundColor, value);
   } else if (name == html_names::kBackgroundAttr) {
@@ -447,7 +455,7 @@ void HTMLTableElement::ParseAttribute(
     if (!params.new_value.empty()) {
       padding_ =
           std::max(0, std::min((int32_t)std::numeric_limits<uint16_t>::max(),
-                               params.new_value.ToInt()));
+                               StringToInt(params.new_value).value_or(0)));
     } else {
       padding_ = 1;
     }
@@ -478,7 +486,9 @@ HTMLTableElement::AdditionalPresentationAttributeStyle() {
   if (frame_attr_)
     return nullptr;
 
-  if (!border_attr_ && !border_color_attr_) {
+  if (!border_attr_ &&
+      (!border_color_attr_ ||
+       RuntimeEnabledFeatures::TableBorderColorNoImplicitBorderEnabled())) {
     // Setting the border to 'hidden' allows it to win over any border
     // set on the table's cells during border-conflict resolution.
     if (rules_attr_ != kUnsetRules) {
@@ -518,7 +528,6 @@ HTMLTableElement::CellBorders HTMLTableElement::GetCellBorders() const {
       return kInsetBorders;
   }
   NOTREACHED();
-  return kNoBorders;
 }
 
 CSSPropertyValueSet* HTMLTableElement::CreateSharedCellStyle() {

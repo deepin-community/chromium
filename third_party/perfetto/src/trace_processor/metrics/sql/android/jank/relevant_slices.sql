@@ -13,6 +13,11 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+INCLUDE PERFETTO MODULE android.cujs.base;
+INCLUDE PERFETTO MODULE android.surfaceflinger;
+
+SELECT RUN_METRIC('android/jank/relevant_threads.sql');
+
 CREATE OR REPLACE PERFETTO FUNCTION vsync_from_name(slice_name STRING)
 RETURNS STRING AS
 SELECT CAST(STR_SPLIT($slice_name, " ", 1) AS INTEGER);
@@ -67,6 +72,7 @@ WHERE
 -- Ignore child slice e.g. "Choreographer#doFrame - resynced to 1234 in 20.0ms"
   AND slice.name not GLOB '*resynced*'
   AND slice.dur > 0
+  AND vsync > 0
   AND (vsync >= begin_vsync OR begin_vsync is NULL)
   AND (vsync <= end_vsync OR end_vsync is NULL)
   -- In some malformed traces we see nested doFrame slices.
@@ -91,7 +97,7 @@ SELECT
   slice.*,
   slice.ts + slice.dur AS ts_end,
   vsync_from_name(slice.name) AS vsync
-FROM android_jank_cuj_do_frame_slice do_frame
+FROM _android_jank_cuj_do_frames do_frame
 JOIN android_jank_cuj_render_thread render_thread USING (cuj_id)
 JOIN slice
   ON slice.track_id = render_thread.track_id
@@ -164,32 +170,6 @@ WHERE
   slice.name GLOB 'waiting for GPU completion *'
   AND slice.dur > 0;
 
--- Match the frame timeline on the app side with the frame timeline on the SF side.
--- This way we get the vsyncs IDs of SF frames within the CUJ.
--- Note that there might be multiple SF vsync IDs that match a single App vsync ID, e.g.
--- if one App layer produced a frame later and it was picked up by the next SF frame.
-DROP TABLE IF EXISTS android_jank_cuj_app_to_sf_match;
-CREATE PERFETTO TABLE android_jank_cuj_app_to_sf_match AS
-SELECT
-  cuj_id,
-  do_frame.upid AS app_upid,
-  do_frame.vsync AS app_vsync,
-  sf_process.upid AS sf_upid,
-  CAST(sf_timeline.name AS INTEGER) AS sf_vsync
-FROM android_jank_cuj_do_frame_slice do_frame
-JOIN actual_frame_timeline_slice app_timeline
-  ON do_frame.upid = app_timeline.upid
-    AND do_frame.vsync = CAST(app_timeline.name AS INTEGER)
-JOIN directly_connected_flow(app_timeline.id) flow
-  ON flow.slice_out = app_timeline.id
-JOIN actual_frame_timeline_slice sf_timeline
-  ON flow.slice_in = sf_timeline.id
-JOIN android_jank_cuj_sf_process sf_process
-  ON sf_timeline.upid = sf_process.upid
--- In cases where there are multiple layers drawn we would have separate frame timeline
--- slice for each of the layers. GROUP BY to deduplicate these rows.
-GROUP BY cuj_id, app_upid, app_vsync, sf_upid, sf_vsync;
-
 CREATE OR REPLACE PERFETTO FUNCTION find_android_jank_cuj_sf_main_thread_slice(
   slice_name_glob STRING)
 RETURNS TABLE(
@@ -198,7 +178,7 @@ RETURNS TABLE(
 AS
 WITH sf_vsync AS (
   SELECT DISTINCT cuj_id, sf_vsync AS vsync
-  FROM android_jank_cuj_app_to_sf_match)
+  FROM _android_jank_cuj_app_sf_frame_timeline_match)
 SELECT
   cuj_id,
   utid,
@@ -209,7 +189,7 @@ SELECT
   slice.dur,
   slice.ts + slice.dur AS ts_end
 FROM slice
-JOIN android_jank_cuj_sf_main_thread main_thread USING (track_id)
+JOIN _android_sf_main_thread main_thread USING (track_id)
 JOIN sf_vsync
   ON vsync_from_name(slice.name) = sf_vsync.vsync
 WHERE slice.name GLOB $slice_name_glob AND slice.dur > 0

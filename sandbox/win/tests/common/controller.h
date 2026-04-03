@@ -6,13 +6,14 @@
 #define SANDBOX_WIN_TESTS_COMMON_CONTROLLER_H_
 
 #include <windows.h>
+
 #include <string>
 
 #include "base/dcheck_is_on.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
-#include "base/win/scoped_handle.h"
-#include "sandbox/win/src/sandbox.h"
+#include "sandbox/win/src/sandbox_policy.h"
+#include "sandbox/win/src/win_utils.h"
 
 namespace sandbox {
 

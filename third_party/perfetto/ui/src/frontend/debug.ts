@@ -14,33 +14,25 @@
 
 import {produce} from 'immer';
 import m from 'mithril';
-
-import {Actions} from '../common/actions';
-import {pluginManager} from '../common/plugins';
-import {getSchema} from '../common/schema';
 import {raf} from '../core/raf_scheduler';
-
-import {globals} from './globals';
-
+import {App} from '../public/app';
+import {AppImpl} from '../core/app_impl';
+import z from 'zod';
 
 declare global {
   interface Window {
     m: typeof m;
-    getSchema: typeof getSchema;
-    globals: typeof globals;
-    Actions: typeof Actions;
+    app: App;
     produce: typeof produce;
-    pluginManager: typeof pluginManager
     raf: typeof raf;
+    z: typeof z;
   }
 }
 
 export function registerDebugGlobals() {
-  window.getSchema = getSchema;
   window.m = m;
-  window.globals = globals;
-  window.Actions = Actions;
+  window.app = AppImpl.instance;
   window.produce = produce;
-  window.pluginManager = pluginManager;
   window.raf = raf;
+  window.z = z;
 }

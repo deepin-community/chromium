@@ -148,7 +148,6 @@ Referrer SecurityPolicy::GenerateReferrer(
       break;
     case network::mojom::ReferrerPolicy::kDefault:
       NOTREACHED();
-      break;
   }
 
   return Referrer(ShouldHideReferrer(url, referrer_url) ? Referrer::NoReferrer()
@@ -217,7 +216,7 @@ void SecurityPolicy::ClearOriginAccessList() {
 }
 
 bool SecurityPolicy::ReferrerPolicyFromString(
-    const String& policy,
+    const StringView& policy,
     ReferrerPolicyLegacyKeywordsSupport legacy_keywords_support,
     network::mojom::ReferrerPolicy* result) {
   DCHECK(!policy.IsNull());
@@ -292,13 +291,12 @@ String SecurityPolicy::ReferrerPolicyAsString(
       return "strict-origin-when-cross-origin";
   }
   NOTREACHED();
-  return String();
 }
 
 namespace {
 
 template <typename CharType>
-inline bool IsASCIIAlphaOrHyphen(CharType c) {
+inline bool IsAsciiAlphaOrHyphen(CharType c) {
   return IsASCIIAlpha(c) || c == '-';
 }
 
@@ -311,23 +309,19 @@ bool SecurityPolicy::ReferrerPolicyFromHeaderValue(
   network::mojom::ReferrerPolicy referrer_policy =
       network::mojom::ReferrerPolicy::kDefault;
 
-  Vector<String> tokens;
-  header_value.Split(',', true, tokens);
+  Vector<StringView> tokens = StringView(header_value).Split(',');
   for (const auto& token : tokens) {
     network::mojom::ReferrerPolicy current_result;
     auto stripped_token = token.StripWhiteSpace();
-    if (SecurityPolicy::ReferrerPolicyFromString(token.StripWhiteSpace(),
-                                                 legacy_keywords_support,
-                                                 &current_result)) {
+    if (SecurityPolicy::ReferrerPolicyFromString(
+            stripped_token, legacy_keywords_support, &current_result)) {
       referrer_policy = current_result;
     } else {
-      Vector<UChar> characters;
-      stripped_token.AppendTo(characters);
-      const UChar* position = characters.data();
-      UChar* end = characters.data() + characters.size();
-      SkipWhile<UChar, IsASCIIAlphaOrHyphen>(position, end);
-      if (position != end)
-        return false;
+      for (StringView::size_type i = 0; i < stripped_token.length(); ++i) {
+        if (!IsAsciiAlphaOrHyphen(stripped_token[i])) {
+          return false;
+        }
+      }
     }
   }
 
@@ -336,47 +330,6 @@ bool SecurityPolicy::ReferrerPolicyFromHeaderValue(
 
   *result = referrer_policy;
   return true;
-}
-
-#if BUILDFLAG(IS_FUCHSIA)
-namespace {
-std::vector<url::Origin> GetSharedArrayBufferOrigins() {
-  std::string switch_value =
-      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-          switches::kSharedArrayBufferAllowedOrigins);
-  std::vector<std::string> list =
-      SplitString(switch_value, ",", base::WhitespaceHandling::TRIM_WHITESPACE,
-                  base::SplitResult::SPLIT_WANT_NONEMPTY);
-  std::vector<url::Origin> result;
-  for (auto& origin : list) {
-    GURL url(origin);
-    if (!url.is_valid() || url.scheme() != url::kHttpsScheme) {
-      LOG(FATAL) << "Invalid --" << switches::kSharedArrayBufferAllowedOrigins
-                 << " specified: " << switch_value;
-    }
-    result.push_back(url::Origin::Create(url));
-  }
-  return result;
-}
-}  // namespace
-#endif  // BUILDFLAG(IS_FUCHSIA)
-
-// static
-bool SecurityPolicy::IsSharedArrayBufferAlwaysAllowedForOrigin(
-    const SecurityOrigin* security_origin) {
-#if BUILDFLAG(IS_FUCHSIA)
-  static base::NoDestructor<std::vector<url::Origin>> allowed_origins(
-      GetSharedArrayBufferOrigins());
-  url::Origin origin = security_origin->ToUrlOrigin();
-  for (const url::Origin& allowed_origin : *allowed_origins) {
-    if (origin.scheme() == allowed_origin.scheme() &&
-        origin.DomainIs(allowed_origin.host()) &&
-        origin.port() == allowed_origin.port()) {
-      return true;
-    }
-  }
-#endif
-  return false;
 }
 
 }  // namespace blink

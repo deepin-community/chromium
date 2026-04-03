@@ -39,7 +39,7 @@
 #include "chrome/browser/ash/file_system_provider/provided_file_system_info.h"
 #include "chrome/browser/ash/file_system_provider/request_dispatcher_impl.h"
 #include "chrome/browser/ash/file_system_provider/request_manager.h"
-#include "chrome/browser/chromeos/extensions/file_system_provider/service_worker_lifetime_manager.h"
+#include "chrome/browser/ash/file_system_provider/service_worker_lifetime_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/file_system_provider.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -63,13 +63,12 @@ constexpr base::TimeDelta kDefaultOperationTimeout = base::Seconds(10);
 // Operation timeout for the ODFS extension.
 constexpr base::TimeDelta kODFSOperationTimeout = base::Seconds(30);
 
-extensions::file_system_provider::ServiceWorkerLifetimeManager*
-GetServiceWorkerLifetimeManager(Profile* profile) {
+ServiceWorkerLifetimeManager* GetServiceWorkerLifetimeManager(
+    Profile* profile) {
   if (!chromeos::features::IsUploadOfficeToCloudEnabled()) {
     return nullptr;
   }
-  return extensions::file_system_provider::ServiceWorkerLifetimeManager::Get(
-      profile);
+  return ServiceWorkerLifetimeManager::Get(profile);
 }
 
 class ScopedUserInteractionImpl : public ScopedUserInteraction {
@@ -188,8 +187,6 @@ ProvidedFileSystem::ProvidedFileSystem(
   DCHECK_EQ(ProviderId::EXTENSION, file_system_info.provider_id().GetType());
   request_dispatcher_ = std::make_unique<RequestDispatcherImpl>(
       file_system_info_.provider_id().GetExtensionId(), event_router_,
-      base::BindRepeating(&ProvidedFileSystem::OnLacrosOperationForwarded,
-                          weak_ptr_factory_.GetWeakPtr()),
       GetServiceWorkerLifetimeManager(profile_));
   const ProviderId& provider_id = file_system_info_.provider_id();
   if (chromeos::features::IsUploadOfficeToCloudEnabled() &&
@@ -211,8 +208,6 @@ void ProvidedFileSystem::SetEventRouterForTesting(
   event_router_ = event_router;
   request_dispatcher_ = std::make_unique<RequestDispatcherImpl>(
       file_system_info_.provider_id().GetExtensionId(), event_router_,
-      base::BindRepeating(&ProvidedFileSystem::OnLacrosOperationForwarded,
-                          weak_ptr_factory_.GetWeakPtr()),
       GetServiceWorkerLifetimeManager(profile_));
 }
 
@@ -314,7 +309,7 @@ AbortCallback ProvidedFileSystem::ReadDirectory(
   if (!request_id) {
     callback.Run(base::File::FILE_ERROR_SECURITY,
                  storage::AsyncFileUtil::EntryList(),
-                 false /* has_more */);
+                 /*has_more=*/false);
     return AbortCallback();
   }
 
@@ -335,9 +330,8 @@ AbortCallback ProvidedFileSystem::ReadFile(int file_handle,
                                              file_system_info_, file_handle,
                                              buffer, offset, length, callback));
   if (!request_id) {
-    callback.Run(0 /* chunk_length */,
-                 false /* has_more */,
-                 base::File::FILE_ERROR_SECURITY);
+    callback.Run(/*chunk_length=*/0,
+                 /*has_more=*/false, base::File::FILE_ERROR_SECURITY);
     return AbortCallback();
   }
 
@@ -361,7 +355,8 @@ AbortCallback ProvidedFileSystem::OpenFile(const base::FilePath& file_path,
                          std::move(split_callback.first))));
   if (!request_id) {
     std::move(split_callback.second)
-        .Run(0 /* file_handle */, base::File::FILE_ERROR_SECURITY);
+        .Run(/*file_handle=*/0, base::File::FILE_ERROR_SECURITY,
+             /*cloud_file_info=*/nullptr);
     return AbortCallback();
   }
 
@@ -733,7 +728,7 @@ AbortCallback ProvidedFileSystem::RemoveWatcherInQueue(
   if (it == watchers_.end() ||
       it->second.subscribers.find(origin) == it->second.subscribers.end()) {
     OnRemoveWatcherInQueueCompleted(token, origin, key, std::move(callback),
-                                    false /* extension_response */,
+                                    /*extension_response=*/false,
                                     base::File::FILE_ERROR_NOT_FOUND);
     return AbortCallback();
   }
@@ -742,7 +737,7 @@ AbortCallback ProvidedFileSystem::RemoveWatcherInQueue(
   // return a success.
   if (it->second.subscribers.size() > 1) {
     OnRemoveWatcherInQueueCompleted(token, origin, key, std::move(callback),
-                                    false /* extension_response */,
+                                    /*extension_response=*/false,
                                     base::File::FILE_OK);
     return AbortCallback();
   }
@@ -754,7 +749,7 @@ AbortCallback ProvidedFileSystem::RemoveWatcherInQueue(
           request_dispatcher_.get(), file_system_info_, entry_path, recursive,
           base::BindOnce(&ProvidedFileSystem::OnRemoveWatcherInQueueCompleted,
                          weak_ptr_factory_.GetWeakPtr(), token, origin, key,
-                         std::move(callback), true /* extension_response */)));
+                         std::move(callback), /*extension_response=*/true)));
 
   return AbortCallback();
 }
@@ -872,12 +867,13 @@ void ProvidedFileSystem::OnRemoveWatcherInQueueCompleted(
 
   it->second.subscribers.erase(origin);
 
-  for (auto& observer : observers_)
-    observer.OnWatcherListChanged(file_system_info_, watchers_);
-
   // If there are no more subscribers, then remove the watcher.
   if (it->second.subscribers.empty())
     watchers_.erase(it);
+
+  for (auto& observer : observers_) {
+    observer.OnWatcherListChanged(file_system_info_, watchers_);
+  }
 
   std::move(callback).Run(base::File::FILE_OK);
   watcher_queue_.Complete(token);
@@ -921,18 +917,21 @@ void ProvidedFileSystem::OnNotifyInQueueCompleted(
   watcher_queue_.Complete(args->token);
 }
 
-void ProvidedFileSystem::OnOpenFileCompleted(const base::FilePath& file_path,
-                                             OpenFileMode mode,
-                                             OpenFileCallback callback,
-                                             int file_handle,
-                                             base::File::Error result) {
+void ProvidedFileSystem::OnOpenFileCompleted(
+    const base::FilePath& file_path,
+    OpenFileMode mode,
+    OpenFileCallback callback,
+    int file_handle,
+    base::File::Error result,
+    std::unique_ptr<EntryMetadata> metadata) {
   if (result != base::File::FILE_OK) {
-    std::move(callback).Run(file_handle, result);
+    std::move(callback).Run(file_handle, result, std::move(metadata));
     return;
   }
 
   opened_files_[file_handle] = OpenedFile(file_path, mode);
-  std::move(callback).Run(file_handle, base::File::FILE_OK);
+  std::move(callback).Run(file_handle, base::File::FILE_OK,
+                          std::move(metadata));
 }
 
 void ProvidedFileSystem::OnCloseFileCompleted(
@@ -943,11 +942,6 @@ void ProvidedFileSystem::OnCloseFileCompleted(
   // list of opened files.
   opened_files_.erase(file_handle);
   std::move(callback).Run(result);
-}
-
-void ProvidedFileSystem::OnLacrosOperationForwarded(int request_id,
-                                                    base::File::Error error) {
-  request_manager_->RejectRequest(request_id, RequestValue(), error);
 }
 
 void ProvidedFileSystem::ConstructRequestManager() {

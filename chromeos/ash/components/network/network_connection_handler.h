@@ -98,6 +98,10 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConnectionHandler {
   // Trying to configure a network that is blocked by policy.
   static const char kErrorBlockedByPolicy[];
 
+  // Trying to connect to a network while enterprise policy mandates that a scan
+  // must finish first for policy enforcement purposes.
+  static const char kErrorWaitingForScan[];
+
   // The HexSSID is missing.
   static const char kErrorHexSsidRequired[];
 
@@ -213,6 +217,9 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConnectionHandler {
       NetworkConfigurationHandler* network_configuration_handler,
       ManagedNetworkConfigurationHandler* managed_network_configuration_handler,
       CellularConnectionHandler* cellular_connection_handler) = 0;
+
+  // Called when AutoConnectHandler initiates an auto connection.
+  virtual void OnAutoConnectedInitiated(int auto_connect_reasons) = 0;
 
   // Construct and initialize an instance for testing.
   static std::unique_ptr<NetworkConnectionHandler> InitializeForTesting(

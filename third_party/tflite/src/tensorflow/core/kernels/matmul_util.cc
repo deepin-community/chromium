@@ -1,8 +1,11 @@
 /* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
+
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
+
     http://www.apache.org/licenses/LICENSE-2.0
+
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,6 +22,7 @@ limitations under the License.
 #include <utility>
 
 #include "xla/status_macros.h"
+#include "xla/xla_data.pb.h"
 #include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/platform/tensor_float_32_utils.h"
 #include "tensorflow/core/util/env_var.h"
@@ -32,8 +36,7 @@ int64_t GetWorkspaceLimit(int64_t default_value_in_bytes) {
   if (workspace_limit_in_mb_str != nullptr &&
       strcmp(workspace_limit_in_mb_str, "") != 0) {
     int64_t scratch_limit_in_mb = -1;
-    if (strings::safe_strto64(workspace_limit_in_mb_str,
-                              &scratch_limit_in_mb)) {
+    if (absl::SimpleAtoi(workspace_limit_in_mb_str, &scratch_limit_in_mb)) {
       return scratch_limit_in_mb * (1 << 20);
     } else {
       LOG(WARNING) << "Invalid value for TF_CUBLAS_WORKSPACE_LIMIT_IN_MB: "
@@ -59,20 +62,21 @@ namespace {
 struct BlasLtMatmulPlanMap {
   absl::Mutex mu;
 
-  template <class... Args>
-  auto emplace(Args&&... args) {
-    absl::MutexLock lock(&mu);
-    return map_.emplace(std::forward<Args>(args)...);
+  template <class K, class... Args>
+  auto try_emplace(K&& k, Args&&... args) {
+    absl::MutexLock lock(mu);
+    return map_.try_emplace(std::forward<K>(k), std::forward<Args>(args)...);
   }
 
  private:
-  absl::flat_hash_map<BlasLtMatmulPlanParams, PlanAndAlgorithms> map_
-      ABSL_GUARDED_BY(mu);
+  absl::flat_hash_map<BlasLtMatmulPlanParams,
+                      std::unique_ptr<PlanAndAlgorithms>>
+      map_ ABSL_GUARDED_BY(mu);
 };
 
 int MatmulMaxAutotuneAlgorithmCount() {
   int64_t value;
-  Status status =
+  absl::Status status =
       ReadInt64FromEnvVar("TF_MATMUL_AUTOTUNE_MAX_ALGORITHMS", 10, &value);
   if (!status.ok()) {
     LOG(ERROR) << status.message();
@@ -85,7 +89,7 @@ int MatmulMaxAutotuneAlgorithmCount() {
   return value;
 }
 
-StatusOr<se::blas::ComputationType> GetBlasComputationType(
+absl::StatusOr<stream_executor::blas::ComputationType> GetBlasComputationType(
     se::blas::DataType dtype) {
   using se::blas::ComputationType;
   static bool use_f32_for_f16_computation = MatmulDoFP32ComputationFP16Input();
@@ -109,9 +113,11 @@ StatusOr<se::blas::ComputationType> GetBlasComputationType(
 
 }  // namespace
 
-StatusOr<const PlanAndAlgorithms*> GetPlanAndAlgorithms(
-    se::Stream* stream, const BlasLtMatmulPlanParams& params,
-    absl::Mutex** ppmu, std::optional<int> max_algorithm_count) {
+/* static */ absl::StatusOr<const PlanAndAlgorithms*>
+PlanAndAlgorithms::GetOrCreate(se::Stream* stream,
+                               const BlasLtMatmulPlanParams& params,
+                               absl::Mutex** ppmu,
+                               std::optional<int> max_algorithm_count) {
   static const int64_t max_scratch_size =
       GetWorkspaceLimit(1LL << 32);  // 4GB by default
   static const int64_t max_autotune_algorithm_count =
@@ -121,14 +127,13 @@ StatusOr<const PlanAndAlgorithms*> GetPlanAndAlgorithms(
 
   static BlasLtMatmulPlanMap plan_map;
 
-  auto [ptr, inserted] = plan_map.emplace(params, PlanAndAlgorithms{});
+  auto [ptr, inserted] =
+      plan_map.try_emplace(params, std::make_unique<PlanAndAlgorithms>());
   if (inserted) {
     TF_ASSIGN_OR_RETURN(auto xlatype,
                         se::gpu::AsXlaPrimitiveType(params.dtype));
     TF_ASSIGN_OR_RETURN(auto computation_type,
                         GetBlasComputationType(params.dtype));
-
-    auto scale_type = se::gpu::GetScaleType(params.dtype, computation_type);
 
     // row-major output is now handled automatically by blas-lt API
     constexpr auto kRowMajor = se::gpu::MatrixLayout::Order::kRowMajor;
@@ -165,6 +170,7 @@ StatusOr<const PlanAndAlgorithms*> GetPlanAndAlgorithms(
         .alpha = xla::complex128{1.0, 0.0},
         .beta = 0.0,
         .compute_precision = se::blas::kDefaultComputePrecision,
+        .precision_algorithm = xla::PrecisionConfig::ALG_UNSET,
         .algorithm = {},
         .grad_x = false,
         .grad_y = false,
@@ -176,12 +182,35 @@ StatusOr<const PlanAndAlgorithms*> GetPlanAndAlgorithms(
 
     TF_ASSIGN_OR_RETURN(
         auto algorithms,
-        plan->GetAlgorithms(*max_algorithm_count, max_scratch_size));
+        plan->GetAlgorithms(stream, *max_algorithm_count, max_scratch_size));
 
-    ptr->second = {std::move(plan), std::move(algorithms), scale_type};
+    *ptr->second = {std::move(plan), std::move(algorithms)};
   }
   *ppmu = &plan_map.mu;
-  return &ptr->second;
+  return ptr->second.get();
+}
+
+absl::Status PlanAndAlgorithms::ExecuteOnStream(
+    se::Stream* stream, const stream_executor::DeviceAddressBase& a,
+    const stream_executor::DeviceAddressBase& b,
+    stream_executor::DeviceAddressBase& c, size_t algorithm_idx,
+    se::ScratchAllocator& scratch_allocator,
+    const stream_executor::DeviceAddressBase& bias,
+    se::blas::ProfileResult* profile_result) const {
+  if (!plan || algorithm_idx >= algorithms.size()) {
+    return errors::Internal("MatmulPlan or algorithms are not initialized!");
+  }
+  TF_RETURN_IF_ERROR(plan->SetAlgorithm(algorithms[algorithm_idx]));
+  return plan->ExecuteOnStream(
+      stream, a, b, c, c,
+      bias,                                  // bias_buffer
+      stream_executor::DeviceAddressBase{},  // aux_buffer
+      stream_executor::DeviceAddressBase{},  // a_scale_buffer
+      stream_executor::DeviceAddressBase{},  // b_scale_buffer
+      stream_executor::DeviceAddressBase{},  // c_scale_buffer
+      stream_executor::DeviceAddressBase{},  // d_scale_buffer
+      stream_executor::DeviceAddressBase{},  // d_amax_buffer
+      scratch_allocator, profile_result);
 }
 
 }  // namespace tensorflow

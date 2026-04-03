@@ -37,7 +37,7 @@ void BackupCallback(const base::FilePath& path) {
   base::CopyFile(path, backup_path);
 }
 
-base::Value::Dict EncodeModelToDict(
+base::DictValue EncodeModelToDict(
     const BookmarkModel* model,
     BookmarkStorage::PermanentNodeSelection permanent_node_selection) {
   BookmarkCodec codec;
@@ -47,22 +47,24 @@ base::Value::Dict EncodeModelToDict(
           model->bookmark_bar_node(), model->other_node(), model->mobile_node(),
           model->client()->EncodeLocalOrSyncableBookmarkSyncMetadata());
     case BookmarkStorage::kSelectAccountNodes:
-      if (!model->account_bookmark_bar_node()) {
+      // Either all permanent folders or none should exist.
+      if (model->account_bookmark_bar_node()) {
+        CHECK(model->account_other_node());
+        CHECK(model->account_mobile_node());
+      } else {
+        // Encode the model even for the null-permanent-folder case in case
+        // there is sync metadata to persist (e.g. the notion of a user having
+        // too many bookmarks server-side).
         CHECK(!model->account_other_node());
         CHECK(!model->account_mobile_node());
-        return base::Value::Dict();
       }
-
-      CHECK(model->account_other_node());
-      CHECK(model->account_mobile_node());
-
       return codec.Encode(model->account_bookmark_bar_node(),
                           model->account_other_node(),
                           model->account_mobile_node(),
                           model->client()->EncodeAccountBookmarkSyncMetadata());
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 bool ShouldSaveBackupFile(
@@ -74,7 +76,7 @@ bool ShouldSaveBackupFile(
       return false;
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 }  // namespace
@@ -119,11 +121,10 @@ void BookmarkStorage::ScheduleSave() {
 
 base::ImportantFileWriter::BackgroundDataProducerCallback
 BookmarkStorage::GetSerializedDataProducerForBackgroundSequence() {
-  base::Value::Dict value =
-      EncodeModelToDict(model_, permanent_node_selection_);
+  base::DictValue value = EncodeModelToDict(model_, permanent_node_selection_);
 
   return base::BindOnce(
-      [](base::Value::Dict value) -> std::optional<std::string> {
+      [](base::DictValue value) -> std::optional<std::string> {
         // This runs on the background sequence.
         std::string output;
         if (!base::JSONWriter::WriteWithOptions(

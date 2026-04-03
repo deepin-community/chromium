@@ -43,7 +43,8 @@ namespace subgraph {
 
 namespace {
 
-typedef std::unordered_map<StringPiece, Node*, StringPieceHasher> NameIndex;
+typedef std::unordered_map<absl::string_view, Node*, StringPieceHasher>
+    NameIndex;
 
 // Rewrite graph by replacing the output tensors specified in
 // "fed_outputs" with special feed nodes for each specified output
@@ -54,13 +55,13 @@ typedef std::unordered_map<StringPiece, Node*, StringPieceHasher> NameIndex;
 // Return true on success.  On error, return false and sets *error to
 // an appropriate error message (and *g is left in an indeterminate
 // state).
-Status FeedInputs(
+absl::Status FeedInputs(
     Graph* g, const std::vector<std::unique_ptr<PruneRewrite>>& feed_rewrites,
     NameIndex* name_index, DataTypeVector* out_feed_types) {
   out_feed_types->clear();
   out_feed_types->reserve(feed_rewrites.size());
   for (size_t i = 0; i < feed_rewrites.size(); ++i) {
-    const string& t = feed_rewrites[i]->endpoint_name();
+    const std::string& t = feed_rewrites[i]->endpoint_name();
     TensorId id(ParseTensorName(t));
 
     auto iter = name_index->find(id.first);
@@ -116,17 +117,17 @@ Status FeedInputs(
     }
     out_feed_types->push_back(BaseType(n->output_type(id.second)));
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status FetchOutputs(
+absl::Status FetchOutputs(
     Graph* g, const std::vector<std::unique_ptr<PruneRewrite>>& fetch_rewrites,
     NameIndex* name_index, std::vector<Node*>* out_fetch_nodes,
     DataTypeVector* out_fetch_types) {
   out_fetch_nodes->clear();
   out_fetch_nodes->reserve(fetch_rewrites.size());
   for (size_t i = 0; i < fetch_rewrites.size(); ++i) {
-    const string& t = fetch_rewrites[i]->endpoint_name();
+    const std::string& t = fetch_rewrites[i]->endpoint_name();
 
     // Parse t into node_name and output_index.
     TensorId id(ParseTensorName(t));
@@ -170,10 +171,10 @@ Status FetchOutputs(
     out_fetch_types->push_back(BaseType(n->output_type(id.second)));
   }
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-bool AddNodeToTargets(const string& node_or_tensor_name,
+bool AddNodeToTargets(const std::string& node_or_tensor_name,
                       const NameIndex& name_index,
                       std::unordered_set<const Node*>* targets) {
   TensorId id = ParseTensorName(node_or_tensor_name);
@@ -187,19 +188,20 @@ bool AddNodeToTargets(const string& node_or_tensor_name,
   return true;
 }
 
-Status PruneForTargets(Graph* g, const NameIndex& name_index,
-                       const std::vector<Node*>& fetch_nodes,
-                       const gtl::ArraySlice<string>& target_nodes) {
-  string not_found;
+absl::Status PruneForTargets(
+    Graph* g, const NameIndex& name_index,
+    const std::vector<Node*>& fetch_nodes,
+    const absl::Span<const std::string>& target_nodes) {
+  std::string not_found;
   std::unordered_set<const Node*> targets;
   for (Node* n : fetch_nodes) {
     if (!AddNodeToTargets(n->name(), name_index, &targets)) {
-      strings::StrAppend(&not_found, n->name(), " ");
+      absl::StrAppend(&not_found, n->name(), " ");
     }
   }
-  for (const string& s : target_nodes) {
+  for (const std::string& s : target_nodes) {
     if (!AddNodeToTargets(s, name_index, &targets)) {
-      strings::StrAppend(&not_found, s, " ");
+      absl::StrAppend(&not_found, s, " ");
     }
   }
   if (!not_found.empty()) {
@@ -211,13 +213,13 @@ Status PruneForTargets(Graph* g, const NameIndex& name_index,
   // Reconnect nodes with no outgoing edges to the sink node
   FixupSourceAndSinkEdges(g);
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace
 
-Status ArgFeedRewrite::AddNode(Graph* g, NodeBuilder::NodeOut feed_tensor,
-                               Node** out_node) {
+absl::Status ArgFeedRewrite::AddNode(Graph* g, NodeBuilder::NodeOut feed_tensor,
+                                     Node** out_node) {
   // NOTE(mrry): We must include the index as part of the node
   // name, because _Arg is a "stateful" kernel and therefore
   // its name must uniquely identify a kernel instance across all
@@ -230,14 +232,15 @@ Status ArgFeedRewrite::AddNode(Graph* g, NodeBuilder::NodeOut feed_tensor,
           .Attr("index", arg_index_)
           .Finalize(g, out_node, /*consume=*/true));
   (*out_node)->set_assigned_device_name(device_info().name());
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status RecvFeedRewrite::AddNode(Graph* g, NodeBuilder::NodeOut feed_tensor,
-                                Node** out_node) {
+absl::Status RecvFeedRewrite::AddNode(Graph* g,
+                                      NodeBuilder::NodeOut feed_tensor,
+                                      Node** out_node) {
   TF_RETURN_IF_ERROR(
-      NodeBuilder(strings::StrCat("_recv_", feed_tensor.node->name(), "_",
-                                  feed_tensor.index),
+      NodeBuilder(absl::StrCat("_recv_", feed_tensor.node->name(), "_",
+                               feed_tensor.index),
                   "_Recv")
           .Attr("tensor_type",
                 BaseType(feed_tensor.node->output_type(feed_tensor.index)))
@@ -250,11 +253,12 @@ Status RecvFeedRewrite::AddNode(Graph* g, NodeBuilder::NodeOut feed_tensor,
           .Finalize(g, out_node, /*consume=*/true));
 
   (*out_node)->set_assigned_device_name(device_info().name());
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status RetvalFetchRewrite::AddNode(Graph* g, NodeBuilder::NodeOut fetch_tensor,
-                                   Node** out_node) {
+absl::Status RetvalFetchRewrite::AddNode(Graph* g,
+                                         NodeBuilder::NodeOut fetch_tensor,
+                                         Node** out_node) {
   // NOTE(mrry): We must include the index as part of the node
   // name, because _Retval is a "stateful" kernel and therefore
   // its name must uniquely identify a kernel instance across all
@@ -269,14 +273,15 @@ Status RetvalFetchRewrite::AddNode(Graph* g, NodeBuilder::NodeOut fetch_tensor,
           .Attr("index", retval_index_)
           .Finalize(g, out_node, /*consume=*/true));
   (*out_node)->set_assigned_device_name(device_info().name());
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status SendFetchRewrite::AddNode(Graph* g, NodeBuilder::NodeOut fetch_tensor,
-                                 Node** out_node) {
+absl::Status SendFetchRewrite::AddNode(Graph* g,
+                                       NodeBuilder::NodeOut fetch_tensor,
+                                       Node** out_node) {
   TF_RETURN_IF_ERROR(
-      NodeBuilder(strings::StrCat("_send_", fetch_tensor.node->name(), "_",
-                                  fetch_tensor.index),
+      NodeBuilder(absl::StrCat("_send_", fetch_tensor.node->name(), "_",
+                               fetch_tensor.index),
                   "_Send")
           .Input(fetch_tensor.node, fetch_tensor.index)
           .Attr("tensor_name", endpoint_name())
@@ -287,13 +292,13 @@ Status SendFetchRewrite::AddNode(Graph* g, NodeBuilder::NodeOut fetch_tensor,
           .Attr("client_terminated", true)
           .Finalize(g, out_node, /*consume=*/true));
   (*out_node)->set_assigned_device_name(device_info().name());
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status RewriteGraphForExecution(
-    Graph* g, const gtl::ArraySlice<string>& fed_outputs,
-    const gtl::ArraySlice<string>& fetch_outputs,
-    const gtl::ArraySlice<string>& target_node_names,
+absl::Status RewriteGraphForExecution(
+    Graph* g, const absl::Span<const std::string>& fed_outputs,
+    const absl::Span<const std::string>& fetch_outputs,
+    const absl::Span<const std::string>& target_node_names,
     const DeviceAttributes& device_info, bool use_function_convention,
     RewriteGraphMetadata* out_metadata) {
   std::vector<std::unique_ptr<PruneRewrite>> feed_rewrites;
@@ -301,10 +306,10 @@ Status RewriteGraphForExecution(
   if (use_function_convention) {
     for (size_t i = 0; i < fed_outputs.size(); ++i) {
       feed_rewrites.emplace_back(new ArgFeedRewrite(
-          &fed_outputs[i], &device_info, static_cast<int32>(i)));
+          &fed_outputs[i], &device_info, static_cast<int32_t>(i)));
     }
   } else {
-    for (const string& fed_output : fed_outputs) {
+    for (const std::string& fed_output : fed_outputs) {
       feed_rewrites.emplace_back(
           new RecvFeedRewrite(&fed_output, &device_info));
     }
@@ -315,10 +320,10 @@ Status RewriteGraphForExecution(
   if (use_function_convention) {
     for (size_t i = 0; i < fetch_outputs.size(); ++i) {
       fetch_rewrites.emplace_back(new RetvalFetchRewrite(
-          &fetch_outputs[i], &device_info, static_cast<int32>(i)));
+          &fetch_outputs[i], &device_info, static_cast<int32_t>(i)));
     }
   } else {
-    for (const string& fetch_output : fetch_outputs) {
+    for (const std::string& fetch_output : fetch_outputs) {
       fetch_rewrites.emplace_back(
           new SendFetchRewrite(&fetch_output, &device_info));
     }
@@ -330,22 +335,22 @@ Status RewriteGraphForExecution(
 
 namespace {
 template <typename StringContainer>
-std::vector<string> ConvertToVector(StringContainer field) {
-  return std::vector<string>(field.begin(), field.end());
+std::vector<std::string> ConvertToVector(StringContainer field) {
+  return std::vector<std::string>(field.begin(), field.end());
 }
 }  // namespace
 
-Status RewriteGraphForExecution(
+absl::Status RewriteGraphForExecution(
     Graph* g, const std::vector<std::unique_ptr<PruneRewrite>>& feed_rewrites,
     const std::vector<std::unique_ptr<PruneRewrite>>& fetch_rewrites,
-    const gtl::ArraySlice<string>& target_node_names,
+    const absl::Span<const std::string>& target_node_names,
     RewriteGraphMetadata* out_metadata) {
   if (fetch_rewrites.empty() && target_node_names.empty()) {
     return errors::InvalidArgument(
         "Must specify at least one target to fetch or execute.");
   }
 
-  std::unordered_set<string> endpoints;
+  std::unordered_set<std::string> endpoints;
   for (const auto& feed_rewrite : feed_rewrites) {
     auto result = endpoints.insert(feed_rewrite->endpoint_name());
     if (!result.second) {
@@ -392,7 +397,7 @@ Status RewriteGraphForExecution(
         PruneForTargets(g, name_index, fetch_nodes, target_node_names));
   }
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace subgraph

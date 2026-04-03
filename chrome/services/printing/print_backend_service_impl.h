@@ -17,7 +17,6 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/services/printing/public/mojom/print_backend_service.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -27,7 +26,7 @@
 #include "printing/print_settings.h"
 #include "printing/printed_document.h"
 #include "printing/printing_context.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/types/expected.h"
@@ -35,6 +34,10 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_LINUX)
+#include "printing/printing_context_linux.h"
+#endif
 
 #if !BUILDFLAG(ENABLE_OOP_PRINTING)
 #error "Out-of-process printing must be enabled."
@@ -157,7 +160,7 @@ class PrintBackendServiceImpl : public mojom::PrintBackendService {
   void GetDefaultPrinterName(
       mojom::PrintBackendService::GetDefaultPrinterNameCallback callback)
       override;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   void GetPrinterSemanticCapsAndDefaults(
       const std::string& printer_name,
       mojom::PrintBackendService::GetPrinterSemanticCapsAndDefaultsCallback
@@ -192,7 +195,7 @@ class PrintBackendServiceImpl : public mojom::PrintBackendService {
 #endif
   void UpdatePrintSettings(
       uint32_t context_id,
-      base::Value::Dict job_settings,
+      base::DictValue job_settings,
       mojom::PrintBackendService::UpdatePrintSettingsCallback callback)
       override;
   void StartPrinting(
@@ -266,6 +269,11 @@ class PrintBackendServiceImpl : public mojom::PrintBackendService {
   std::unique_ptr<crash_keys::ScopedPrinterInfo> crash_keys_;
 
   scoped_refptr<PrintBackend> print_backend_;
+
+#if BUILDFLAG(IS_LINUX)
+  std::unique_ptr<PrintingContextLinux::PrintDialogFactory>
+      print_dialog_factory_;
+#endif
 
   // Map from a context ID to a printing device context.  Accessed only from
   // the main thread.

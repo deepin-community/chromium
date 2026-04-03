@@ -27,16 +27,15 @@ import page_sets
 from benchmarks import press
 
 
-class _JetStream2Base(press._PressBenchmark):  # pylint: disable=protected-access
+class _JetStream2Base(press._PressBenchmark):  # pylint:disable=protected-access
   """JetStream2, a combination of JavaScript and Web Assembly benchmarks.
 
-  Run all the JetStream 2 benchmarks by default.
+  Run all the JetStream 2.x benchmarks by default.
   """
   @classmethod
   def AddBenchmarkCommandLineArgs(cls, parser):
-    parser.add_option('--test-list',
-                      type="string",
-                      help="Only run specific tests, separated by commas.")
+    parser.add_argument('--test-list',
+                        help='Only run specific tests, separated by commas.')
 
 
 @benchmark.Info(
@@ -70,9 +69,24 @@ class JetStream21(_JetStream2Base):
 @benchmark.Info(
     emails=['vahl@chromium.org', 'cbruni@chromium.org'],
     component='Blink>JavaScript',
+    documentation_url='https://browserbench.org/JetStream2.2/in-depth.html')
+class JetStream22(_JetStream2Base):
+  """JetStream 2.2"""
+
+  @classmethod
+  def Name(cls):
+    return 'UNSCHEDULED_jetstream22'
+
+  def CreateStorySet(self, options):
+    return page_sets.JetStream22StorySet(options.test_list)
+
+
+@benchmark.Info(
+    emails=['vahl@chromium.org', 'cbruni@chromium.org'],
+    component='Blink>JavaScript',
     documentation_url='https://browserbench.org/JetStream2.0/in-depth.html')
 class JetStream2(_JetStream2Base):
-  """Latest JetStream2 """
+  """Latest JetStream 2.x """
   @classmethod
   def Name(cls):
     return 'jetstream2'
@@ -82,17 +96,19 @@ class JetStream2(_JetStream2Base):
 
 
 @benchmark.Info(
-    emails=['omerkatz@chromium.org'],
-    component='Blink>JavaScript>GarbageCollection',
+    emails=['vahl@chromium.org', 'cbruni@chromium.org'],
+    component='Blink>JavaScript',
     documentation_url='https://browserbench.org/JetStream2.0/in-depth.html')
-class JetStream2NoMinorMS(JetStream2):
-  """Latest JetStream2 without the MinorMS flag.
-
-  Shows the performance with Scavenger young generation GC in V8.
+class JetStream2NoFieldTrial(JetStream2):
+  """Latest JetStream 2.x without field-trials
   """
+
+  SCHEDULED = False
+
   @classmethod
   def Name(cls):
-    return 'jetstream2-nominorms'
+    return 'jetstream2-no-field-trials'
 
   def SetExtraBrowserOptions(self, options):
-    options.AppendExtraBrowserArgs('--js-flags=--no-minor-ms')
+    options.AppendExtraBrowserArgs('--disable-field-trial-config')
+    options.RemoveExtraBrowserArg('--enable-field-trial-config')

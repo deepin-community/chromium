@@ -34,7 +34,7 @@ class SocketAddressPosix {
   IPAddress::Version version() const { return endpoint_.address.version(); }
   IPEndpoint endpoint() const { return endpoint_; }
 
-  // Recomputes |endpoint_| if |internal_address_| is written to directly, e.g.
+  // Recomputes `endpoint_` if `internal_address_` is written to directly, e.g.
   // by a system call.
   void RecomputeEndpoint();
 
@@ -54,6 +54,12 @@ class SocketAddressPosix {
   SocketAddressIn internal_address_;
   IPEndpoint endpoint_;
 };
+
+IPAddress GetIPAddressFromSockAddr(const struct sockaddr_in& sa);
+IPAddress GetIPAddressFromSockAddr(const struct sockaddr_in6& sa);
+
+struct sockaddr_in ToSockAddrIn(const IPEndpoint& endpoint);
+struct sockaddr_in6 ToSockAddrIn6(const IPEndpoint& endpoint);
 
 }  // namespace openscreen
 

@@ -14,26 +14,39 @@ limitations under the License.
 ==============================================================================*/
 // This transformation pass applies quantization propagation on TF dialect.
 
-#include <algorithm>
+#include <cstdint>
 #include <memory>
-#include <string>
 #include <utility>
-#include <vector>
 
+#include "absl/container/flat_hash_set.h"
+#include "llvm/Support/CommandLine.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/Dialect/Quant/QuantOps.h"  // from @llvm-project
-#include "mlir/Dialect/Quant/QuantTypes.h"  // from @llvm-project
+#include "mlir/Dialect/Quant/IR/Quant.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
+#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
+#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
+#include "mlir/IR/MLIRContext.h"  // from @llvm-project
+#include "mlir/IR/Matchers.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/PatternMatch.h"  // from @llvm-project
+#include "mlir/IR/SymbolTable.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/IR/ValueRange.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Rewrite/FrozenRewritePatternSet.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/Support/TypeID.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
-#include "tensorflow/compiler/mlir/lite/quantization/ir/QuantOps.h"
-#include "tensorflow/compiler/mlir/lite/quantization/quantization_config.h"
-#include "tensorflow/compiler/mlir/lite/quantization/quantization_utils.h"
-#include "tensorflow/compiler/mlir/quantization/common/attrs_and_constraints.h"
+#include "tensorflow/compiler/mlir/quantization/common/ir/QuantOps.h"
+#include "tensorflow/compiler/mlir/quantization/common/quantization_lib/quantization_utils.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/ops/tf_op_quant_spec.h"
+#include "tensorflow/compiler/mlir/quantization/tensorflow/passes/passes.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_dialect.h"
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 
 //===----------------------------------------------------------------------===//
 // The preprocess-op Pass.
@@ -47,14 +60,15 @@ using QuantMethod =
     ::tensorflow::quantization::QuantizationMethod::PresetMethod;
 using QuantizationUnit = std::pair<Operation*, int>;
 using QuantizationUnits = llvm::SetVector<QuantizationUnit>;
+using ::tensorflow::quantization::OpSet;
 
 // Preprocesses ops to allow multi-axis quantization, prior to quantization
 // passes. Currently, per-channel quantization only supports 1D results.
 class PreprocessOpPass
     : public PassWrapper<PreprocessOpPass, OperationPass<ModuleOp>> {
   void getDependentDialects(DialectRegistry& registry) const override {
-    registry.insert<TF::TensorFlowDialect, QuantizationDialect,
-                    quantfork::QuantizationForkDialect>();
+    registry.insert<TF::TensorFlowDialect, QuantDialect,
+                    mlir::quant::ir::TFQuantDialect>();
   }
 
  public:
@@ -160,11 +174,11 @@ class PreprocessConstantOp : public OpRewritePattern<TF::PartitionedCallOp> {
     auto new_shape_const_attr =
         DenseElementsAttr::get(shape_spec_type, new_shape.getShape());
     rewriter.setInsertionPointAfter(weight_op);
-    auto new_shape_const = rewriter.create<arith::ConstantOp>(
-        weight_op->getLoc(), shape_spec_type, new_shape_const_attr);
-    auto reshape_op = rewriter.create<TF::ReshapeOp>(
-        weight_op->getLoc(), new_shape, weight_op->getResult(0),
-        new_shape_const);
+    auto new_shape_const = arith::ConstantOp::create(
+        rewriter, weight_op->getLoc(), shape_spec_type, new_shape_const_attr);
+    auto reshape_op =
+        TF::ReshapeOp::create(rewriter, weight_op->getLoc(), new_shape,
+                              weight_op->getResult(0), new_shape_const);
     op->setOperand(weight_operand_idx, reshape_op);
 
     // Create a new function with preprocessed types.
@@ -191,7 +205,7 @@ class PreprocessConstantOp : public OpRewritePattern<TF::PartitionedCallOp> {
 
   LogicalResult matchAndRewrite(TF::PartitionedCallOp op,
                                 PatternRewriter& rewriter) const override {
-    const auto f_attr = op.getFAttr().dyn_cast<FlatSymbolRefAttr>();
+    const auto f_attr = mlir::dyn_cast<FlatSymbolRefAttr>(op.getFAttr());
     // Non-quantizable op
     if (!op->hasAttr(kQuantTraitAttrName)) return failure();
     StringRef function_name = f_attr.getValue();
@@ -238,7 +252,7 @@ void PreprocessOpPass::runOnOperation() {
   FrozenRewritePatternSet frozen_patterns(std::move(patterns));
 
   for (auto func : module_op.getOps<func::FuncOp>()) {
-    if (failed(applyPatternsAndFoldGreedily(func, frozen_patterns))) {
+    if (failed(applyPatternsGreedily(func, frozen_patterns))) {
       func.emitError() << "quant-preprocess-op failed.";
       signalPassFailure();
     }

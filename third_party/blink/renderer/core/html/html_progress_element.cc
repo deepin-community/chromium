@@ -20,7 +20,6 @@
 
 #include "third_party/blink/renderer/core/html/html_progress_element.h"
 
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
@@ -30,6 +29,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -47,6 +47,9 @@ HTMLProgressElement::~HTMLProgressElement() = default;
 
 LayoutObject* HTMLProgressElement::CreateLayoutObject(
     const ComputedStyle& style) {
+  if (style.IsVerticalWritingMode()) {
+    UseCounter::Count(GetDocument(), WebFeature::kVerticalFormControls);
+  }
   if (!style.HasEffectiveAppearance()) {
     UseCounter::Count(GetDocument(),
                       WebFeature::kProgressElementWithNoneAppearance);
@@ -64,9 +67,7 @@ LayoutProgress* HTMLProgressElement::GetLayoutProgress() const {
 void HTMLProgressElement::DidRecalcStyle(const StyleRecalcChange change) {
   HTMLElement::DidRecalcStyle(change);
   const ComputedStyle* style = GetComputedStyle();
-  if (RuntimeEnabledFeatures::
-          FormControlsVerticalWritingModeDirectionSupportEnabled() &&
-      style) {
+  if (style) {
     bool is_horizontal = style->IsHorizontalWritingMode();
     bool is_ltr = style->IsLeftToRightDirection();
     if (is_horizontal && is_ltr) {
@@ -125,8 +126,9 @@ double HTMLProgressElement::max() const {
 }
 
 void HTMLProgressElement::setMax(double max) {
-  // FIXME: The specification says we should ignore the input value if it is
-  // inferior or equal to 0.
+  if (RuntimeEnabledFeatures::ProgressMaxIsPositiveEnabled() && max <= 0) {
+    return;
+  }
   SetFloatingPointAttribute(html_names::kMaxAttr, max > 0 ? max : 1);
 }
 

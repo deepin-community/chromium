@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 // The dependencies of this API should be kept minimal and independent of
@@ -105,6 +106,8 @@ struct QUICHE_EXPORT SessionStats {
   absl::Duration smoothed_rtt;
   absl::Duration rtt_variation;
 
+  uint64_t application_bytes_acknowledged = 0;
+
   uint64_t estimated_send_rate_bps;  // In bits per second.
 
   DatagramStats datagram_stats;
@@ -154,6 +157,10 @@ class QUICHE_EXPORT Stream : public quiche::ReadStream,
   // primarily used in the JavaScript API when the stream object has been
   // garbage collected.
   virtual void MaybeResetDueToStreamObjectGone() = 0;
+
+  // Sets the send group and the send order of the stream as defined in
+  // https://w3c.github.io/webtransport/#dictdef-webtransportsendstreamoptions
+  virtual void SetPriority(const StreamPriority& priority) = 0;
 
   virtual StreamVisitor* visitor() = 0;
   virtual void SetVisitor(std::unique_ptr<StreamVisitor> visitor) = 0;
@@ -256,6 +263,10 @@ class QUICHE_EXPORT Session {
   // capsule), or the underlying connection (HTTP GOAWAY) is being drained by
   // the peer.
   virtual void SetOnDraining(quiche::SingleUseCallback<void()> callback) = 0;
+
+  // Returns the negotiated subprotocol, or std::nullopt, if none was
+  // negotiated.
+  virtual std::optional<std::string> GetNegotiatedSubprotocol() const = 0;
 };
 
 }  // namespace webtransport

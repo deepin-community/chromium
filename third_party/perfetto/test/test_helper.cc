@@ -20,10 +20,10 @@
 #include "perfetto/base/compiler.h"
 #include "perfetto/ext/base/string_utils.h"
 #include "perfetto/ext/tracing/core/trace_packet.h"
-#include "perfetto/tracing/core/tracing_service_state.h"
 #include "perfetto/tracing/default_socket.h"
 
-#include "protos/perfetto/trace/trace_packet.pbzero.h"
+#include "protos/perfetto/common/tracing_service_state.gen.h"
+#include "protos/perfetto/trace/trace_packet.gen.h"
 
 namespace perfetto {
 
@@ -69,13 +69,16 @@ TestHelper::TestHelper(base::TestTaskRunner* task_runner, Mode mode)
 
 TestHelper::TestHelper(base::TestTaskRunner* task_runner,
                        Mode mode,
-                       const char* producer_socket)
+                       const char* producer_socket,
+                       bool enable_relay_endpoint)
     : instance_num_(next_instance_num_++),
       task_runner_(task_runner),
       mode_(mode),
       producer_socket_(producer_socket),
       consumer_socket_(ConsumerSocketForMode(mode)),
-      service_thread_(producer_socket_, consumer_socket_) {
+      service_thread_(producer_socket_,
+                      consumer_socket_,
+                      enable_relay_endpoint) {
   auto producer_sockets = TokenizeProducerSockets(producer_socket_);
   static constexpr const char* kDefaultFakeProducerName =
       "android.perfetto.FakeProducer";
@@ -116,7 +119,8 @@ void TestHelper::ReadTraceData(std::vector<TracePacket> packets) {
     if (packet.has_clock_snapshot() || packet.has_trace_uuid() ||
         packet.has_trace_config() || packet.has_trace_stats() ||
         !packet.synchronization_marker().empty() || packet.has_system_info() ||
-        packet.has_service_event()) {
+        packet.has_service_event() || packet.has_remote_clock_sync() ||
+        packet.has_trace_provenance()) {
       continue;
     }
     PERFETTO_CHECK(packet.has_trusted_uid());

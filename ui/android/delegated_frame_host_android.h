@@ -14,22 +14,32 @@
 #include "cc/layers/deadline_policy.h"
 #include "components/viz/client/frame_evictor.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
-#include "components/viz/common/frame_sinks/copy_output_request.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "components/viz/common/frame_timing_details_map.h"
+#include "components/viz/common/resources/release_callback.h"
 #include "components/viz/common/resources/returned_resource.h"
 #include "components/viz/common/surfaces/surface_id.h"
 #include "components/viz/common/surfaces/surface_info.h"
 #include "components/viz/host/host_frame_sink_client.h"
 #include "third_party/blink/public/common/page/content_to_visible_time_reporter.h"
 #include "third_party/blink/public/mojom/widget/record_content_to_visible_time_request.mojom.h"
+#include "ui/android/browser_controls_offset_tag_definitions.h"
 #include "ui/android/ui_android_export.h"
+#include "ui/android/window_android_compositor.h"
 
 namespace cc::slim {
 class SurfaceLayer;
 }
 
+namespace gpu {
+class ClientSharedImage;
+}
+
 namespace viz {
+class CopyOutputRequest;
 class HostFrameSinkManager;
+class RasterContextProvider;
+struct CopyOutputBitmapWithMetadata;
 }  // namespace viz
 
 namespace ui {
@@ -40,9 +50,9 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
     : public viz::HostFrameSinkClient,
       public viz::FrameEvictorClient {
  public:
-  class Client {
+  class Client : public WindowAndroidCompositor::FrameSubmissionObserver {
    public:
-    virtual ~Client() {}
+    ~Client() override {}
     virtual void OnFrameTokenChanged(uint32_t frame_token,
                                      base::TimeTicks activation_time) = 0;
     virtual void WasEvicted() = 0;
@@ -111,9 +121,27 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
   void CopyFromCompositingSurface(
       const gfx::Rect& src_subrect,
       const gfx::Size& output_size,
-      base::OnceCallback<void(const SkBitmap&)> callback,
-      bool capture_exact_surface_id);
+      base::TimeDelta timeout,
+      base::OnceCallback<
+          void(const base::expected<viz::CopyOutputBitmapWithMetadata,
+                                    viz::CopyOutputResult::Error>&)> callback,
+      bool capture_exact_surface_id,
+      base::TimeDelta ipc_delay);
   bool CanCopyFromCompositingSurface() const;
+
+  // Should only be called when the host has a content layer. Use this for one-
+  // off screen capture, not for video. Always provides ResultFormat::RGBA,
+  // ResultDestination::kSharedImage CopyOutputResults. It creates the
+  // SharedImage for the result and passes ownership to the `callback`.
+  // `capture_exact_surface_id` indicates if the `CopyOutputRequest` will be
+  // issued against a specific surface or not.
+  void CopySharedImageFromCompositingSurface(
+      scoped_refptr<viz::RasterContextProvider> context_provider,
+      const gfx::Rect& src_subrect,
+      const gfx::Size& output_size,
+      base::OnceCallback<void(scoped_refptr<gpu::ClientSharedImage>,
+                              viz::ReleaseCallback release_callback)> callback,
+      bool capture_exact_surface_id);
 
   void CompositorFrameSinkChanged();
 
@@ -166,7 +194,8 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
   // Called when the page has just entered BFCache.
   void DidEnterBackForwardCache();
 
-  void SetTopControlsVisibleHeight(float height);
+  // Called when the page was activated from BFCache.
+  void ActivatedOrEvictedFromBackForwardCache();
 
   viz::SurfaceId GetFallbackSurfaceIdForTesting() const;
 
@@ -178,13 +207,20 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
 
   viz::SurfaceId GetFirstSurfaceIdAfterNavigationForTesting() const;
 
+  viz::SurfaceId GetBFCacheFallbackSurfaceIdForTesting() const;
+
   void SetIsFrameSinkIdOwner(bool is_owner);
+
+  void RegisterOffsetTags(
+      const BrowserControlsOffsetTagDefinitions& tag_definitions);
+  void UnregisterOffsetTags(const cc::BrowserControlsOffsetTags& tags);
 
  private:
   // FrameEvictorClient implementation.
   void EvictDelegatedFrame(
       const std::vector<viz::SurfaceId>& surface_ids) override;
-  std::vector<viz::SurfaceId> CollectSurfaceIdsForEviction() const override;
+  viz::FrameEvictorClient::EvictIds CollectSurfaceIdsForEviction()
+      const override;
   viz::SurfaceId GetCurrentSurfaceId() const override;
   viz::SurfaceId GetPreNavigationSurfaceId() const override;
 
@@ -206,6 +242,9 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
       blink::mojom::RecordContentToVisibleTimeRequestPtr
           content_to_visible_time_request);
 
+  void UpdateCaptureKeepAlive();
+  void ReleaseCaptureKeepAlive();
+
   const viz::FrameSinkId frame_sink_id_;
 
   raw_ptr<ViewAndroid> view_;
@@ -213,8 +252,6 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
   const raw_ptr<viz::HostFrameSinkManager> host_frame_sink_manager_;
   raw_ptr<WindowAndroidCompositor> registered_parent_compositor_ = nullptr;
   raw_ptr<Client> client_;
-
-  float top_controls_visible_height_ = 0.f;
 
   scoped_refptr<cc::slim::SurfaceLayer> content_layer_;
 
@@ -236,7 +273,7 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
   // The LocalSurfaceId of the currently embedded surface. If surface sync is
   // on, this surface is not necessarily active.
   //
-  // TODO(https://crbug.com/1459238): this value is a copy of what the browser
+  // TODO(crbug.com/40274223): this value is a copy of what the browser
   // wants to embed. The source of truth is stored else where. We should
   // consider de-dup this ID.
   viz::LocalSurfaceId local_surface_id_;
@@ -252,6 +289,13 @@ class UI_ANDROID_EXPORT DelegatedFrameHostAndroid
   blink::ContentToVisibleTimeReporter content_to_visible_time_recorder_;
 
   std::unique_ptr<viz::FrameEvictor> frame_evictor_;
+
+  // If the tab is backgrounded (not visible in the UI), then make sure that the
+  // surface is kept alive. This is required for e.g. capture of surfaces during
+  // tab sharing to work. We do this for tabs visible in the UI as well, which
+  // is redundant, but shouldn't hurt anything.
+  ui::WindowAndroidCompositor::ScopedKeepSurfaceAliveCallback
+      capture_keep_alive_callback_;
 
   // Speculative RenderWidgetHostViews can start with a FrameSinkId owned by the
   // currently committed RenderWidgetHostView. Ownership is transferred when the

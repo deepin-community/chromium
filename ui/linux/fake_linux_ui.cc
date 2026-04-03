@@ -4,8 +4,8 @@
 
 #include "ui/linux/fake_linux_ui.h"
 
-#include "base/time/time.h"
 #include "ui/base/ime/linux/linux_input_method_context.h"
+#include "ui/base/ime/text_edit_commands.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/font_render_params.h"
 #include "ui/gfx/geometry/size.h"
@@ -73,10 +73,6 @@ void FakeLinuxUi::GetInactiveSelectionFgColor(SkColor* color) const {
   *color = gfx::kPlaceholderColor;
 }
 
-base::TimeDelta FakeLinuxUi::GetCursorBlinkInterval() const {
-  return base::TimeDelta();
-}
-
 gfx::Image FakeLinuxUi::GetIconForContentType(const std::string& content_type,
                                               int size,
                                               float scale) const {
@@ -88,11 +84,25 @@ LinuxUi::WindowFrameAction FakeLinuxUi::GetWindowFrameAction(
   return WindowFrameAction::kNone;
 }
 
+bool FakeLinuxUi::PrimaryPasteEnabled() const {
+  return true;
+}
+
+int FakeLinuxUi::GetWindowDragThresholdPx() const {
+  return kDefaultWindowDragThreshold;
+}
+
+std::vector<std::string> FakeLinuxUi::GetCmdLineFlagsForCopy() const {
+  return {};
+}
+
 bool FakeLinuxUi::PreferDarkTheme() const {
   return false;
 }
 
 void FakeLinuxUi::SetDarkTheme(bool dark) {}
+
+void FakeLinuxUi::SetAccentColor(std::optional<SkColor> accent_color) {}
 
 bool FakeLinuxUi::AnimationsEnabled() const {
   return true;
@@ -109,7 +119,8 @@ std::unique_ptr<ui::NavButtonProvider> FakeLinuxUi::CreateNavButtonProvider() {
 }
 
 ui::WindowFrameProvider* FakeLinuxUi::GetWindowFrameProvider(bool solid_frame,
-                                                             bool tiled) {
+                                                             bool tiled,
+                                                             bool maximized) {
   return nullptr;
 }
 
@@ -129,16 +140,15 @@ ui::NativeTheme* FakeLinuxUi::GetNativeTheme() const {
   return nullptr;
 }
 
-bool FakeLinuxUi::GetTextEditCommandsForEvent(
+ui::TextEditCommand FakeLinuxUi::GetTextEditCommandForEvent(
     const ui::Event& event,
-    int text_falgs,
-    std::vector<ui::TextEditCommandAuraLinux>* commands) {
-  return false;
+    int text_falgs) {
+  return ui::TextEditCommand::INVALID_COMMAND;
 }
 
 #if BUILDFLAG(ENABLE_PRINTING)
-printing::PrintDialogLinuxInterface* FakeLinuxUi::CreatePrintDialog(
-    printing::PrintingContextLinux* context) {
+std::unique_ptr<printing::PrintDialogLinuxInterface>
+FakeLinuxUi::CreatePrintDialog(printing::PrintingContextLinux* context) {
   return nullptr;
 }
 

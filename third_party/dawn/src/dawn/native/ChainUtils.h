@@ -99,7 +99,7 @@ class UnpackedPtr {
 
     UnpackedPtr() : mStruct(nullptr) {}
 
-    operator bool() const { return mStruct != nullptr; }
+    explicit operator bool() const { return mStruct != nullptr; }
     PtrType operator->() const { return mStruct; }
     PtrType operator*() const { return mStruct; }
 
@@ -110,6 +110,8 @@ class UnpackedPtr {
 
     template <typename In>
     auto Get() const;
+    template <typename In>
+    bool Has() const;
 
     // Validation functions. See implementations of these below for usage, details, and examples.
     template <typename... Branches>
@@ -247,6 +249,12 @@ auto UnpackedPtr<T>::Get() const {
 }
 
 template <typename T>
+template <typename In>
+bool UnpackedPtr<T>::Has() const {
+    return std::get<typename detail::PtrTypeFor<UnpackedPtr<T>, In>::Type>(mUnpacked) != nullptr;
+}
+
+template <typename T>
 bool UnpackedPtr<T>::Empty() const {
     return mBitset.none();
 }
@@ -308,7 +316,7 @@ template <typename... Branches>
 ResultOrError<wgpu::SType> UnpackedPtr<T>::ValidateBranches() const {
     using Validator = detail::BranchesValidator<UnpackedPtr<T>, Branches...>;
 
-    wgpu::SType match = wgpu::SType::Invalid;
+    wgpu::SType match = wgpu::SType(0u);
     if (Validator::Validate(*this, mBitset, match)) {
         return match;
     }

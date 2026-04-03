@@ -16,10 +16,12 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "device/fido/cable/cable_discovery_data.h"
+#include "device/fido/cable/pairing.h"
 #include "device/fido/cable/v2_constants.h"
-#include "device/fido/fido_constants.h"
 #include "device/fido/fido_device_discovery.h"
+#include "device/fido/network_context_factory.h"
+#include "device/fido/public/cable_discovery_data.h"
+#include "device/fido/public/fido_constants.h"
 #include "services/network/public/mojom/network_context.mojom-forward.h"
 
 namespace device::cablev2 {
@@ -36,7 +38,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) Discovery : public FidoDeviceDiscovery {
 
   Discovery(
       FidoRequestType request_type,
-      network::mojom::NetworkContext* network_context,
+      NetworkContextFactory network_context_factory,
       std::optional<base::span<const uint8_t, kQRKeySize>> qr_generator_key,
       std::unique_ptr<AdvertEventStream> advert_stream,
       // contact_device_stream contains a series of pairings indicating that the
@@ -54,7 +56,8 @@ class COMPONENT_EXPORT(DEVICE_FIDO) Discovery : public FidoDeviceDiscovery {
       std::optional<base::RepeatingCallback<void(std::unique_ptr<Pairing>)>>
           invalidated_pairing_callback,
       // event_callback receives updates on cablev2 events.
-      std::optional<base::RepeatingCallback<void(Event)>> event_callback);
+      std::optional<base::RepeatingCallback<void(Event)>> event_callback,
+      bool must_support_ctap);
   ~Discovery() override;
   Discovery(const Discovery&) = delete;
   Discovery& operator=(const Discovery&) = delete;
@@ -80,7 +83,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) Discovery : public FidoDeviceDiscovery {
       const std::vector<CableDiscoveryData>& extension_contents);
 
   const FidoRequestType request_type_;
-  const raw_ptr<network::mojom::NetworkContext> network_context_;
+  NetworkContextFactory network_context_factory_;
   const std::optional<UnpairedKeys> qr_keys_;
   const std::vector<UnpairedKeys> extension_keys_;
   std::unique_ptr<AdvertEventStream> advert_stream_;
@@ -90,6 +93,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) Discovery : public FidoDeviceDiscovery {
   const std::optional<base::RepeatingCallback<void(std::unique_ptr<Pairing>)>>
       invalidated_pairing_callback_;
   const std::optional<base::RepeatingCallback<void(Event)>> event_callback_;
+  const bool must_support_ctap_;
   std::vector<std::unique_ptr<FidoTunnelDevice>> tunnels_pending_advert_;
   base::flat_set<std::array<uint8_t, kAdvertSize>> observed_adverts_;
   bool started_ = false;

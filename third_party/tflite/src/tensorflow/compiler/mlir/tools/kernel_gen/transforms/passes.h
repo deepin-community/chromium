@@ -38,6 +38,10 @@ limitations under the License.
 #define GEN_PASS_DECL_PROPAGATESHAPEKNOWLEDGETOKERNELS
 #define GEN_PASS_DECL_FUSEINNERPARALLELLOOPSPASS
 #define GEN_PASS_DECL_COPYCLEANUPPASS
+#define GEN_PASS_DECL_SHAPESIMPLIFICATIONPASS
+#define GEN_PASS_DECL_MERGEASSUMINGOPSPASS
+#define GEN_PASS_DECL_BROADCASTPROPAGATIONPASS
+#define GEN_PASS_DECL_LEGALIZETENSORRESHAPEPASS
 
 namespace mlir {
 namespace kernel_gen {
@@ -66,8 +70,8 @@ std::unique_ptr<OperationPass<func::FuncOp>> CreateBufferReusePass();
 // framework.
 std::unique_ptr<OperationPass<func::FuncOp>> CreateFuncToJITInvocationPass(
     llvm::ArrayRef<int64_t> tile_sizes = {},
-    llvm::ArrayRef<int64_t> unroll_factors = {}, int64_t max_supported_rank = 5,
-    bool enable_ftz = false, bool index_64bit = false, bool cpu_codegen = false,
+    llvm::ArrayRef<int64_t> unroll_factors = {}, bool enable_ftz = false,
+    bool index_64bit = false, bool cpu_codegen = false,
     bool jit_i64_indexed_for_large_tensors = false);
 
 // Pass for applying LLVM legalization patterns.

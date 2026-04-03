@@ -4,7 +4,8 @@
 
 #include "chromeos/ash/services/bluetooth_config/device_pairing_handler_impl.h"
 
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
@@ -143,7 +144,7 @@ class DevicePairingHandlerImplTest : public testing::Test {
 
     device::BluetoothDevice* device = mock_device.get();
     ON_CALL(*mock_device, Connect(testing::_, testing::_))
-        .WillByDefault(testing::Invoke(
+        .WillByDefault(
             [this, auth_type, device, passkey](
                 device::BluetoothDevice::PairingDelegate* pairing_delegate,
                 device::BluetoothDevice::ConnectCallback callback) {
@@ -174,32 +175,30 @@ class DevicePairingHandlerImplTest : public testing::Test {
                   pairing_delegate->AuthorizePairing(device);
                   break;
               }
-            }));
+            });
 
-    ON_CALL(*mock_device, CancelPairing())
-        .WillByDefault(testing::Invoke([this]() {
-          num_cancel_pairing_calls_++;
-          std::move(connect_callback_)
-              .Run(device::BluetoothDevice::ConnectErrorCode::
-                       ERROR_AUTH_CANCELED);
-        }));
+    ON_CALL(*mock_device, CancelPairing()).WillByDefault([this]() {
+      num_cancel_pairing_calls_++;
+      std::move(connect_callback_)
+          .Run(device::BluetoothDevice::ConnectErrorCode::ERROR_AUTH_CANCELED);
+    });
 
-    ON_CALL(*mock_device, ConfirmPairing())
-        .WillByDefault(
-            testing::Invoke([this]() { num_confirm_pairing_calls_++; }));
+    ON_CALL(*mock_device, ConfirmPairing()).WillByDefault([this]() {
+      num_confirm_pairing_calls_++;
+    });
 
     ON_CALL(*mock_device, SetPinCode(testing::_))
-        .WillByDefault(testing::Invoke([this](const std::string& pincode) {
+        .WillByDefault([this](const std::string& pincode) {
           received_pin_code_ = pincode;
-        }));
+        });
 
     ON_CALL(*mock_device, SetPasskey(testing::_))
-        .WillByDefault(testing::Invoke(
-            [this](const uint32_t passkey) { received_passkey_ = passkey; }));
+        .WillByDefault(
+            [this](const uint32_t passkey) { received_passkey_ = passkey; });
 
-    ON_CALL(*mock_device, GetType()).WillByDefault(testing::Invoke([]() {
+    ON_CALL(*mock_device, GetType()).WillByDefault([]() {
       return device::BluetoothTransport::BLUETOOTH_TRANSPORT_CLASSIC;
-    }));
+    });
 
     mock_devices_.push_back(std::move(mock_device));
   }
@@ -300,7 +299,7 @@ class DevicePairingHandlerImplTest : public testing::Test {
 
   std::vector<NiceMockDevice>::iterator FindDevice(
       const std::string& device_id) {
-    return base::ranges::find(
+    return std::ranges::find(
         mock_devices_, device_id,
         &testing::NiceMock<device::MockBluetoothDevice>::GetIdentifier);
   }
@@ -415,8 +414,9 @@ TEST_F(DevicePairingHandlerImplTest, DisableBluetoothBeforePairing) {
   CheckPairingHistograms(device::BluetoothTransportType::kInvalid,
                          /*type_count=*/1, /*failure_count=*/1,
                          /*success_count=*/0);
-  CheckPairingFailureHistogram(device::ConnectionFailureReason::kFailed,
-                               /*failure_count=*/1, /*filtered_count=*/1);
+  CheckPairingFailureHistogram(
+      device::ConnectionFailureReason::kBluetoothDisabled,
+      /*failure_count=*/1, /*filtered_count=*/1);
   CheckDurationHistogramMetrics(base::Milliseconds(0), /*success_count=*/0,
                                 /*failure_count=*/1,
                                 /*transport_name=*/"Invalid");
@@ -567,11 +567,11 @@ TEST_F(DevicePairingHandlerImplTest,
   // CancelPairing() won't be called since the device won't be found. We should
   // still return with a pairing result.
   EXPECT_EQ(num_cancel_pairing_calls(), 0u);
-  EXPECT_EQ(pairing_result(), mojom::PairingResult::kAuthFailed);
+  EXPECT_EQ(pairing_result(), mojom::PairingResult::kNonAuthFailure);
   CheckPairingHistograms(device::BluetoothTransportType::kInvalid,
                          /*type_count=*/1, /*failure_count=*/1,
                          /*success_count=*/0);
-  CheckPairingFailureHistogram(device::ConnectionFailureReason::kAuthFailed,
+  CheckPairingFailureHistogram(device::ConnectionFailureReason::kNotFound,
                                /*failure_count=*/1, /*filtered_count=*/1);
   CheckDurationHistogramMetrics(kTestDuration, /*success_count=*/0,
                                 /*failure_count=*/1,
@@ -737,7 +737,7 @@ TEST_F(DevicePairingHandlerImplTest, PairAuthRequestPinCodeRemoveDevice) {
   CheckPairingHistograms(device::BluetoothTransportType::kInvalid,
                          /*type_count=*/1, /*failure_count=*/1,
                          /*success_count=*/0);
-  CheckPairingFailureHistogram(device::ConnectionFailureReason::kFailed,
+  CheckPairingFailureHistogram(device::ConnectionFailureReason::kNotFound,
                                /*failure_count=*/1, /*filtered_count=*/1);
   CheckDurationHistogramMetrics(kTestDuration, /*success_count=*/0,
                                 /*failure_count=*/1,
@@ -787,7 +787,7 @@ TEST_F(DevicePairingHandlerImplTest, PairAuthRequestPasskeyRemoveDevice) {
   CheckPairingHistograms(device::BluetoothTransportType::kInvalid,
                          /*type_count=*/1, /*failure_count=*/1,
                          /*success_count=*/0);
-  CheckPairingFailureHistogram(device::ConnectionFailureReason::kFailed,
+  CheckPairingFailureHistogram(device::ConnectionFailureReason::kNotFound,
                                /*failure_count=*/1, /*filtered_count=*/1);
   CheckDurationHistogramMetrics(kTestDuration, /*success_count=*/0,
                                 /*failure_count=*/1,
@@ -1048,7 +1048,7 @@ TEST_F(DevicePairingHandlerImplTest, PairAuthConfirmPasskeyRemoveDevice) {
   CheckPairingHistograms(device::BluetoothTransportType::kInvalid,
                          /*type_count=*/1, /*failure_count=*/1,
                          /*success_count=*/0);
-  CheckPairingFailureHistogram(device::ConnectionFailureReason::kFailed,
+  CheckPairingFailureHistogram(device::ConnectionFailureReason::kNotFound,
                                /*failure_count=*/1, /*filtered_count=*/1);
   CheckDurationHistogramMetrics(kTestDuration, /*success_count=*/0,
                                 /*failure_count=*/1,

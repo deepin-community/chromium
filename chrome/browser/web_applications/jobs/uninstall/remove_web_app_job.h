@@ -13,6 +13,7 @@
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/common/web_app_id.h"
+#include "components/webapps/isolated_web_apps/types/storage_location.h"
 
 class Profile;
 
@@ -29,7 +30,7 @@ class RemoveWebAppJob : public UninstallJob {
   // external management and will be treated as a user uninstall.
   RemoveWebAppJob(webapps::WebappUninstallSource uninstall_source,
                   Profile& profile,
-                  base::Value::Dict& debug_value,
+                  base::DictValue& debug_value,
                   webapps::AppId app_id);
   ~RemoveWebAppJob() override;
 
@@ -38,7 +39,7 @@ class RemoveWebAppJob : public UninstallJob {
   webapps::WebappUninstallSource uninstall_source() const override;
 
  private:
-  void OnOsHooksUninstalled(OsHooksErrors errors);
+  void SynchronizeAndUninstallOsHooks();
   void OnIconDataDeleted(bool success);
   void OnTranslationDataDeleted(bool success);
   void OnWebAppProfileDeleted(Profile* profile);
@@ -51,7 +52,7 @@ class RemoveWebAppJob : public UninstallJob {
   const webapps::WebappUninstallSource uninstall_source_;
   // `this` must be owned by `profile_`.
   const raw_ref<Profile> profile_;
-  const raw_ref<base::Value::Dict> debug_value_;
+  const raw_ref<base::DictValue> debug_value_;
   const webapps::AppId app_id_;
 
   // `this` must be started and run within the scope of a WebAppCommand's
@@ -67,7 +68,7 @@ class RemoveWebAppJob : public UninstallJob {
   bool errors_ = false;
   bool has_isolated_storage_ = false;
   std::optional<webapps::UninstallResultCode> primary_removal_result_;
-  std::optional<IsolatedWebAppLocation> location_;
+  std::optional<IsolatedWebAppStorageLocation> location_;
 
   std::vector<webapps::AppId> sub_apps_pending_removal_;
   std::unique_ptr<RemoveInstallSourceJob> sub_job_;

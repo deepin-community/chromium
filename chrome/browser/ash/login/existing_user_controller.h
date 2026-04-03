@@ -18,11 +18,11 @@
 #include "base/scoped_observation.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/app_mode/kiosk_chrome_app_manager.h"
-#include "chrome/browser/ash/http_auth_dialog.h"
 #include "chrome/browser/ash/login/saml/password_sync_token_checkers_collection.h"
 #include "chrome/browser/ash/login/screens/encryption_migration_mode.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/signin_specifics.h"
+#include "chromeos/ash/components/http_auth_dialog/http_auth_dialog.h"
 #include "chromeos/ash/components/login/auth/login_performer.h"
 #include "chromeos/ash/components/login/auth/public/auth_failure.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
@@ -42,6 +42,7 @@ namespace ash {
 class CrosSettings;
 class KioskAppId;
 class OAuth2TokenInitializer;
+class DemoLoginController;
 enum class SigninError;
 
 namespace login {
@@ -85,14 +86,6 @@ class ExistingUserController : public HttpAuthDialog::Observer,
   // Cancels current password changed flow.
   void CancelPasswordChangedFlow();
 
-  // Decrypt cryptohome using user provided `old_password` and migrate to new
-  // password.
-  void MigrateUserData(const std::string& old_password);
-
-  // Ignore password change, remove existing cryptohome and force full sync of
-  // user data.
-  void ResyncUserData();
-
   // Resumes login process once local authentication is completed.
   void ResumeAfterLocalAuthentication(std::unique_ptr<UserContext>);
   // Invoked if login process was cancelled at local authentication.
@@ -104,7 +97,6 @@ class ExistingUserController : public HttpAuthDialog::Observer,
   // This is virtual for mocking in the unit tests.
   virtual void Login(const UserContext& user_context,
                      const SigninSpecifics& specifics);
-  void OnStartKioskEnableScreen();
 
   // ui::UserActivityObserver:
   void OnUserActivity(const ui::Event* event) override;
@@ -155,6 +147,18 @@ class ExistingUserController : public HttpAuthDialog::Observer,
   // Calls login() on previously-used `login_performer_`.
   void LoginAuthenticated(std::unique_ptr<UserContext> user_context);
 
+  // Retrieve public session auto-login policy and update the
+  // timer.
+  void ConfigureAutoLogin();
+
+  void FinalizeAuthAndStartSession(const UserContext& user_context,
+                                   bool has_auth_cookies);
+  void FinalizeAuthAndStartSession(const UserContext& user_context);
+
+  bool MaybeShowPasswordSelectionScreen(const UserContext& user_context);
+
+  DemoLoginController* GetDemoLoginControllerForTest();
+
  private:
   friend class ExistingUserControllerTest;
   friend class ExistingUserControllerAutoLoginTest;
@@ -169,9 +173,6 @@ class ExistingUserController : public HttpAuthDialog::Observer,
   void LoginAsGuest();
   void LoginAsPublicSession(const UserContext& user_context);
   void LoginAsKioskApp(KioskAppId kiosk_app_id);
-  // Retrieve public session auto-login policy and update the
-  // timer.
-  void ConfigureAutoLogin();
 
   // Trigger public session auto-login.
   void OnPublicSessionAutoLoginTimerFire();
@@ -193,13 +194,6 @@ class ExistingUserController : public HttpAuthDialog::Observer,
   void OnOnlinePasswordUnusableImpl(std::unique_ptr<UserContext>,
                                     bool online_password_mismatch);
 
-  // Handles the continuation of successful login after an attempt has been made
-  // to divert to a hibernate resume flow. The execution of this method means
-  // that the diversion to a resume flow did not occur, indicating either no
-  // hibernation image was present, the resume was cancelled/aborted, or
-  // hibernate is simply not supported.
-  void ContinueAuthSuccessAfterResumeAttempt(const UserContext& user_context);
-
   // UserSessionManagerDelegate implementation:
   void OnProfilePrepared(Profile* profile, bool browser_launched) override;
   base::WeakPtr<UserSessionManagerDelegate> AsWeakPtr() override;
@@ -212,16 +206,12 @@ class ExistingUserController : public HttpAuthDialog::Observer,
   // not localized.
   void ShowError(SigninError error, const std::string& details);
 
-  // Handles result of consumer kiosk configurability check and starts
-  // enable kiosk screen if applicable.
-  void OnConsumerKioskAutoLaunchCheckCompleted(
-      KioskChromeAppManager::ConsumerKioskAutoLaunchStatus status);
+  // Shows an error message because the OOBE is not marked as completed.
+  // This occurs if StartupUtils::IsOobeCompleted() returns false unexpectedly.
+  void ShowOobeNotCompletedError();
 
   // Shows privacy notification in case of auto lunch managed guest session.
   void ShowAutoLaunchManagedGuestSessionNotification();
-
-  // Shows kiosk feature enable screen.
-  void ShowKioskEnableScreen();
 
   // Shows "filesystem encryption migration" screen.
   void ShowEncryptionMigrationScreen(std::unique_ptr<UserContext> user_context,
@@ -262,9 +252,8 @@ class ExistingUserController : public HttpAuthDialog::Observer,
   // Callback invoked when the keyboard layouts available for a public session
   // have been retrieved. Selects the first layout from the list and continues
   // login.
-  void SetPublicSessionKeyboardLayoutAndLogin(
-      const UserContext& user_context,
-      base::Value::List keyboard_layouts);
+  void SetPublicSessionKeyboardLayoutAndLogin(const UserContext& user_context,
+                                              base::ListValue keyboard_layouts);
 
   // Starts the actual login process for a public session. Invoked when all
   // preconditions have been verified.
@@ -340,14 +329,19 @@ class ExistingUserController : public HttpAuthDialog::Observer,
   // URL to append to start Guest mode with.
   GURL guest_mode_url_;
 
-  // Once Lacros is shipped, this will no longer be necessary.
-  std::unique_ptr<HttpAuthDialog::ScopedEnabler> enable_ash_httpauth_;
+  std::unique_ptr<HttpAuthDialog::ScopedEnabler> enable_system_httpauth_;
 
   // The displayed email for the next login attempt set by `SetDisplayEmail`.
   std::string display_email_;
 
   // Whether login attempt is running.
   bool is_login_in_progress_ = false;
+
+  // Whether the user has empty password.
+  std::optional<bool> user_has_empty_password_;
+
+  // Whether the user uses challenge-response keys (e.g. a smartcard).
+  std::optional<bool> user_has_challenge_response_keys_;
 
   // Whether user signin is completed.
   bool is_signin_completed_ = false;
@@ -360,6 +354,9 @@ class ExistingUserController : public HttpAuthDialog::Observer,
   // Initialized with `kExternal` as more restricted mode.
   LoginPerformer::AuthorizationMode auth_mode_ =
       LoginPerformer::AuthorizationMode::kExternal;
+
+  // Whether the user has auth cookies.
+  std::optional<bool> has_auth_cookies_;
 
   // Timer when the signin screen was first displayed. Used to measure the time
   // from showing the screen until a successful login is performed.
@@ -385,6 +382,9 @@ class ExistingUserController : public HttpAuthDialog::Observer,
 
   // The source of PIN salts. Used to retrieve PIN during TransformPinKey.
   std::unique_ptr<quick_unlock::PinSaltStorage> pin_salt_storage_;
+
+  // Manage auto login for demo mode.
+  std::unique_ptr<ash::DemoLoginController> demo_login_controller_;
 
   base::ScopedObservation<user_manager::UserManager,
                           user_manager::UserManager::Observer>

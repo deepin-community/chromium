@@ -8,29 +8,56 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include <stdio.h>
-
 #include <algorithm>
+#include <cstdint>
+#include <cstdio>
 #include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
 
+#include "absl/container/inlined_vector.h"
+#include "absl/memory/memory.h"
 #include "api/environment/environment_factory.h"
+#include "api/field_trials.h"
+#include "api/make_ref_counted.h"
+#include "api/scoped_refptr.h"
 #include "api/test/create_frame_generator.h"
 #include "api/test/frame_generator_interface.h"
 #include "api/test/mock_video_decoder.h"
 #include "api/test/mock_video_encoder.h"
+#include "api/units/time_delta.h"
+#include "api/units/timestamp.h"
+#include "api/video/encoded_image.h"
+#include "api/video/i420_buffer.h"
+#include "api/video/render_resolution.h"
+#include "api/video/video_bitrate_allocation.h"
+#include "api/video/video_codec_constants.h"
+#include "api/video/video_codec_type.h"
+#include "api/video/video_frame.h"
+#include "api/video/video_frame_buffer.h"
+#include "api/video/video_frame_type.h"
+#include "api/video_codecs/video_codec.h"
+#include "api/video_codecs/video_decoder.h"
 #include "api/video_codecs/video_encoder.h"
-#include "api/video_codecs/vp8_temporal_layers.h"
 #include "common_video/libyuv/include/webrtc_libyuv.h"
-#include "common_video/test/utilities.h"
 #include "modules/video_coding/codecs/interface/mock_libvpx_interface.h"
 #include "modules/video_coding/codecs/test/video_codec_unittest.h"
 #include "modules/video_coding/codecs/vp8/include/vp8.h"
 #include "modules/video_coding/codecs/vp8/libvpx_vp8_encoder.h"
+#include "modules/video_coding/include/video_error_codes.h"
 #include "modules/video_coding/utility/vp8_header_parser.h"
 #include "rtc_base/time_utils.h"
-#include "test/field_trial.h"
+#include "test/create_test_field_trials.h"
+#include "test/gmock.h"
+#include "test/gtest.h"
 #include "test/mappable_native_buffer.h"
 #include "test/video_codec_settings.h"
+#include "third_party/libvpx/source/libvpx/vpx/vpx_codec.h"
+#include "third_party/libvpx/source/libvpx/vpx/vpx_encoder.h"
+#include "third_party/libvpx/source/libvpx/vpx/vpx_image.h"
 
 namespace webrtc {
 
@@ -39,12 +66,12 @@ using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::ElementsAreArray;
 using ::testing::Field;
-using ::testing::Invoke;
 using ::testing::NiceMock;
 using ::testing::Return;
-using EncoderInfo = webrtc::VideoEncoder::EncoderInfo;
-using FramerateFractions =
-    absl::InlinedVector<uint8_t, webrtc::kMaxTemporalStreams>;
+using ::testing::Values;
+using ::testing::WithParamInterface;
+using EncoderInfo = VideoEncoder::EncoderInfo;
+using FramerateFractions = absl::InlinedVector<uint8_t, kMaxTemporalStreams>;
 
 namespace {
 constexpr uint32_t kLegacyScreenshareTl0BitrateKbps = 200;
@@ -67,15 +94,15 @@ const VideoEncoder::Settings kSettings(kCapabilities,
 class TestVp8Impl : public VideoCodecUnitTest {
  protected:
   std::unique_ptr<VideoEncoder> CreateEncoder() override {
-    return VP8Encoder::Create();
+    return CreateVp8Encoder(env_);
   }
 
   std::unique_ptr<VideoDecoder> CreateDecoder() override {
-    return CreateVp8Decoder(CreateEnvironment());
+    return CreateVp8Decoder(env_);
   }
 
   void ModifyCodecSettings(VideoCodec* codec_settings) override {
-    webrtc::test::CodecSettings(kVideoCodecVP8, codec_settings);
+    test::CodecSettings(kVideoCodecVP8, codec_settings);
     codec_settings->width = kWidth;
     codec_settings->height = kHeight;
     codec_settings->SetVideoEncoderComplexity(
@@ -122,8 +149,7 @@ TEST_F(TestVp8Impl, ErrorResilienceDisabledForNoTemporalLayers) {
   codec_settings_.simulcastStream[0].numberOfTemporalLayers = 1;
 
   auto* const vpx = new NiceMock<MockLibvpxInterface>();
-  LibvpxVp8Encoder encoder((std::unique_ptr<LibvpxInterface>(vpx)),
-                           VP8Encoder::Settings());
+  LibvpxVp8Encoder encoder(CreateEnvironment(), {}, absl::WrapUnique(vpx));
   EXPECT_CALL(*vpx,
               codec_enc_init(
                   _, _, Field(&vpx_codec_enc_cfg_t::g_error_resilient, 0), _));
@@ -136,8 +162,7 @@ TEST_F(TestVp8Impl, DefaultErrorResilienceEnabledForTemporalLayers) {
   codec_settings_.VP8()->numberOfTemporalLayers = 2;
 
   auto* const vpx = new NiceMock<MockLibvpxInterface>();
-  LibvpxVp8Encoder encoder((std::unique_ptr<LibvpxInterface>(vpx)),
-                           VP8Encoder::Settings());
+  LibvpxVp8Encoder encoder(CreateEnvironment(), {}, absl::WrapUnique(vpx));
   EXPECT_CALL(*vpx,
               codec_enc_init(_, _,
                              Field(&vpx_codec_enc_cfg_t::g_error_resilient,
@@ -149,14 +174,14 @@ TEST_F(TestVp8Impl, DefaultErrorResilienceEnabledForTemporalLayers) {
 
 TEST_F(TestVp8Impl,
        PartitionErrorResilienceEnabledForTemporalLayersWithFieldTrial) {
-  test::ScopedFieldTrials field_trials(
-      "WebRTC-VP8-ForcePartitionResilience/Enabled/");
+  FieldTrials field_trials =
+      CreateTestFieldTrials("WebRTC-VP8-ForcePartitionResilience/Enabled/");
   codec_settings_.simulcastStream[0].numberOfTemporalLayers = 2;
   codec_settings_.VP8()->numberOfTemporalLayers = 2;
 
   auto* const vpx = new NiceMock<MockLibvpxInterface>();
-  LibvpxVp8Encoder encoder((std::unique_ptr<LibvpxInterface>(vpx)),
-                           VP8Encoder::Settings());
+  LibvpxVp8Encoder encoder(CreateEnvironment(&field_trials), {},
+                           absl::WrapUnique(vpx));
   EXPECT_CALL(*vpx,
               codec_enc_init(_, _,
                              Field(&vpx_codec_enc_cfg_t::g_error_resilient,
@@ -169,8 +194,7 @@ TEST_F(TestVp8Impl,
 TEST_F(TestVp8Impl, SetRates) {
   codec_settings_.SetFrameDropEnabled(true);
   auto* const vpx = new NiceMock<MockLibvpxInterface>();
-  LibvpxVp8Encoder encoder((std::unique_ptr<LibvpxInterface>(vpx)),
-                           VP8Encoder::Settings());
+  LibvpxVp8Encoder encoder(CreateEnvironment(), {}, absl::WrapUnique(vpx));
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
             encoder.InitEncode(&codec_settings_,
                                VideoEncoder::Settings(kCapabilities, 1, 1000)));
@@ -207,6 +231,55 @@ TEST_F(TestVp8Impl, EncodeFrameAndRelease) {
             encoder_->Encode(NextInputFrame(), nullptr));
 }
 
+TEST_F(TestVp8Impl, RejectsI420FramesWithUnequalChromaStrides) {
+  EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
+            encoder_->InitEncode(&codec_settings_, kSettings));
+
+  auto buffer = I420Buffer::Create(
+      /*width=*/kWidth,
+      /*height=*/kHeight,
+      /*stride_y=*/kWidth,
+      /*stride_u=*/(kWidth + 1) / 2,
+      /*stride_v=*/(kWidth + 1) / 2 + 1);
+
+  VideoFrame frame = VideoFrame::Builder()
+                         .set_video_frame_buffer(buffer)
+                         .set_rtp_timestamp(0)
+                         .build();
+
+  EXPECT_EQ(WEBRTC_VIDEO_CODEC_ERROR, encoder_->Encode(frame, nullptr));
+}
+
+TEST_F(TestVp8Impl, RejectsNativeFramesWithUnequalChromaStrides) {
+  EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
+            encoder_->InitEncode(&codec_settings_, kSettings));
+
+  class FakeNativeBuffer : public VideoFrameBuffer {
+   public:
+    FakeNativeBuffer(int width, int height) : width_(width), height_(height) {}
+    Type type() const override { return Type::kNative; }
+    int width() const override { return width_; }
+    int height() const override { return height_; }
+    scoped_refptr<I420BufferInterface> ToI420() override {
+      return I420Buffer::Create(width_, height_, width_, (width_ + 1) / 2,
+                                (width_ + 1) / 2 + 1);
+    }
+
+   private:
+    int width_;
+    int height_;
+  };
+
+  auto buffer = make_ref_counted<FakeNativeBuffer>(kWidth, kHeight);
+
+  VideoFrame frame = VideoFrame::Builder()
+                         .set_video_frame_buffer(buffer)
+                         .set_rtp_timestamp(0)
+                         .build();
+
+  EXPECT_EQ(WEBRTC_VIDEO_CODEC_ERROR, encoder_->Encode(frame, nullptr));
+}
+
 TEST_F(TestVp8Impl, EncodeNv12FrameSimulcast) {
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK, encoder_->Release());
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
@@ -216,7 +289,7 @@ TEST_F(TestVp8Impl, EncodeNv12FrameSimulcast) {
   CodecSpecificInfo codec_specific_info;
   input_frame_generator_ = test::CreateSquareFrameGenerator(
       kWidth, kHeight, test::FrameGeneratorInterface::OutputType::kNV12,
-      absl::nullopt);
+      std::nullopt);
   EncodeAndWaitForFrame(NextInputFrame(), &encoded_frame, &codec_specific_info);
 
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK, encoder_->Release());
@@ -233,11 +306,11 @@ TEST_F(TestVp8Impl, EncodeI420FrameAfterNv12Frame) {
   CodecSpecificInfo codec_specific_info;
   input_frame_generator_ = test::CreateSquareFrameGenerator(
       kWidth, kHeight, test::FrameGeneratorInterface::OutputType::kNV12,
-      absl::nullopt);
+      std::nullopt);
   EncodeAndWaitForFrame(NextInputFrame(), &encoded_frame, &codec_specific_info);
   input_frame_generator_ = test::CreateSquareFrameGenerator(
       kWidth, kHeight, test::FrameGeneratorInterface::OutputType::kI420,
-      absl::nullopt);
+      std::nullopt);
   EncodeAndWaitForFrame(NextInputFrame(), &encoded_frame, &codec_specific_info);
 
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK, encoder_->Release());
@@ -251,12 +324,11 @@ TEST_F(TestVp8Impl, Configure) {
 }
 
 TEST_F(TestVp8Impl, OnEncodedImageReportsInfo) {
-  constexpr Timestamp kCaptureTimeIdentifier = Timestamp::Micros(1000);
+  constexpr Timestamp kPresentationTimestamp = Timestamp::Micros(1000);
   VideoFrame input_frame = NextInputFrame();
-  input_frame.set_timestamp(kInitialTimestampRtp);
-  input_frame.set_timestamp_us(kInitialTimestampMs *
-                               rtc::kNumMicrosecsPerMillisec);
-  input_frame.set_capture_time_identifier(kCaptureTimeIdentifier);
+  input_frame.set_rtp_timestamp(kInitialTimestampRtp);
+  input_frame.set_timestamp_us(kInitialTimestampMs * kNumMicrosecsPerMillisec);
+  input_frame.set_presentation_timestamp(kPresentationTimestamp);
   EncodedImage encoded_frame;
   CodecSpecificInfo codec_specific_info;
   EncodeAndWaitForFrame(input_frame, &encoded_frame, &codec_specific_info);
@@ -264,9 +336,9 @@ TEST_F(TestVp8Impl, OnEncodedImageReportsInfo) {
   EXPECT_EQ(kInitialTimestampRtp, encoded_frame.RtpTimestamp());
   EXPECT_EQ(kWidth, static_cast<int>(encoded_frame._encodedWidth));
   EXPECT_EQ(kHeight, static_cast<int>(encoded_frame._encodedHeight));
-  ASSERT_TRUE(encoded_frame.CaptureTimeIdentifier().has_value());
-  EXPECT_EQ(kCaptureTimeIdentifier.us(),
-            encoded_frame.CaptureTimeIdentifier()->us());
+  ASSERT_TRUE(encoded_frame.PresentationTimestamp().has_value());
+  EXPECT_EQ(kPresentationTimestamp.us(),
+            encoded_frame.PresentationTimestamp()->us());
 }
 
 TEST_F(TestVp8Impl,
@@ -287,10 +359,10 @@ TEST_F(TestVp8Impl, DecodedQpEqualsEncodedQp) {
   EncodeAndWaitForFrame(input_frame, &encoded_frame, &codec_specific_info);
 
   // First frame should be a key frame.
-  encoded_frame._frameType = VideoFrameType::kVideoFrameKey;
+  encoded_frame.set_frame_type(VideoFrameType::kVideoFrameKey);
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK, decoder_->Decode(encoded_frame, -1));
   std::unique_ptr<VideoFrame> decoded_frame;
-  absl::optional<uint8_t> decoded_qp;
+  std::optional<uint8_t> decoded_qp;
   ASSERT_TRUE(WaitForDecodedFrame(&decoded_frame, &decoded_qp));
   ASSERT_TRUE(decoded_frame);
   ASSERT_TRUE(decoded_qp);
@@ -493,25 +565,24 @@ TEST_F(TestVp8Impl, ChecksSimulcastSettings) {
 #endif
 TEST_F(TestVp8Impl, MAYBE_AlignedStrideEncodeDecode) {
   VideoFrame input_frame = NextInputFrame();
-  input_frame.set_timestamp(kInitialTimestampRtp);
-  input_frame.set_timestamp_us(kInitialTimestampMs *
-                               rtc::kNumMicrosecsPerMillisec);
+  input_frame.set_rtp_timestamp(kInitialTimestampRtp);
+  input_frame.set_timestamp_us(kInitialTimestampMs * kNumMicrosecsPerMillisec);
   EncodedImage encoded_frame;
   CodecSpecificInfo codec_specific_info;
   EncodeAndWaitForFrame(input_frame, &encoded_frame, &codec_specific_info);
 
   // First frame should be a key frame.
-  encoded_frame._frameType = VideoFrameType::kVideoFrameKey;
+  encoded_frame.set_frame_type(VideoFrameType::kVideoFrameKey);
   encoded_frame.ntp_time_ms_ = kTestNtpTimeMs;
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK, decoder_->Decode(encoded_frame, -1));
 
   std::unique_ptr<VideoFrame> decoded_frame;
-  absl::optional<uint8_t> decoded_qp;
+  std::optional<uint8_t> decoded_qp;
   ASSERT_TRUE(WaitForDecodedFrame(&decoded_frame, &decoded_qp));
   ASSERT_TRUE(decoded_frame);
   // Compute PSNR on all planes (faster than SSIM).
   EXPECT_GT(I420PSNR(&input_frame, decoded_frame.get()), 36);
-  EXPECT_EQ(kInitialTimestampRtp, decoded_frame->timestamp());
+  EXPECT_EQ(kInitialTimestampRtp, decoded_frame->rtp_timestamp());
 }
 
 TEST_F(TestVp8Impl, EncoderWith2TemporalLayers) {
@@ -576,7 +647,7 @@ TEST_F(TestVp8Impl, DontDropKeyframes) {
   input_frame_generator_ = test::CreateSquareFrameGenerator(
       codec_settings_.width, codec_settings_.height,
       test::FrameGeneratorInterface::OutputType::kI420,
-      /* num_squares = */ absl::optional<int>(300));
+      /* num_squares = */ std::optional<int>(300));
 
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
             encoder_->InitEncode(&codec_settings_, kSettings));
@@ -598,8 +669,7 @@ TEST_F(TestVp8Impl, DontDropKeyframes) {
 
 TEST_F(TestVp8Impl, KeepsTimestampOnReencode) {
   auto* const vpx = new NiceMock<MockLibvpxInterface>();
-  LibvpxVp8Encoder encoder((std::unique_ptr<LibvpxInterface>(vpx)),
-                           VP8Encoder::Settings());
+  LibvpxVp8Encoder encoder(CreateEnvironment(), {}, absl::WrapUnique(vpx));
 
   // Settings needed to trigger ScreenshareLayers usage, which is required for
   // overshoot-drop-reencode logic.
@@ -609,15 +679,15 @@ TEST_F(TestVp8Impl, KeepsTimestampOnReencode) {
   codec_settings_.legacy_conference_mode = true;
 
   EXPECT_CALL(*vpx, img_wrap(_, _, _, _, _, _))
-      .WillOnce(Invoke([](vpx_image_t* img, vpx_img_fmt_t fmt, unsigned int d_w,
-                          unsigned int d_h, unsigned int stride_align,
-                          unsigned char* img_data) {
+      .WillOnce([](vpx_image_t* img, vpx_img_fmt_t fmt, unsigned int d_w,
+                   unsigned int d_h, unsigned int /* stride_align */,
+                   unsigned char* img_data) {
         img->fmt = fmt;
         img->d_w = d_w;
         img->d_h = d_h;
         img->img_data = img_data;
         return img;
-      }));
+      });
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
             encoder.InitEncode(&codec_settings_,
                                VideoEncoder::Settings(kCapabilities, 1, 1000)));
@@ -636,10 +706,22 @@ TEST_F(TestVp8Impl, KeepsTimestampOnReencode) {
   encoder.Encode(NextInputFrame(), &delta_frame);
 }
 
+TEST_F(TestVp8Impl, PopulatesFilterSettings) {
+  EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK, encoder_->Release());
+  EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
+            encoder_->InitEncode(&codec_settings_, kSettings));
+
+  EncodedImage encoded_frame;
+  CodecSpecificInfo codec_specific_info;
+  EncodeAndWaitForFrame(NextInputFrame(), &encoded_frame, &codec_specific_info);
+
+  ASSERT_TRUE(encoded_frame.corruption_detection_filter_settings().has_value());
+  EXPECT_GT(encoded_frame.corruption_detection_filter_settings()->std_dev, 0.0);
+}
+
 TEST(LibvpxVp8EncoderTest, GetEncoderInfoReturnsStaticInformation) {
   auto* const vpx = new NiceMock<MockLibvpxInterface>();
-  LibvpxVp8Encoder encoder((std::unique_ptr<LibvpxInterface>(vpx)),
-                           VP8Encoder::Settings());
+  LibvpxVp8Encoder encoder(CreateEnvironment(), {}, absl::WrapUnique(vpx));
 
   const auto info = encoder.GetEncoderInfo();
 
@@ -654,13 +736,13 @@ TEST(LibvpxVp8EncoderTest, GetEncoderInfoReturnsStaticInformation) {
 }
 
 TEST(LibvpxVp8EncoderTest, RequestedResolutionAlignmentFromFieldTrial) {
-  test::ScopedFieldTrials field_trials(
+  FieldTrials field_trials = CreateTestFieldTrials(
       "WebRTC-VP8-GetEncoderInfoOverride/"
       "requested_resolution_alignment:10/");
 
   auto* const vpx = new NiceMock<MockLibvpxInterface>();
-  LibvpxVp8Encoder encoder((std::unique_ptr<LibvpxInterface>(vpx)),
-                           VP8Encoder::Settings());
+  LibvpxVp8Encoder encoder(CreateEnvironment(&field_trials), {},
+                           absl::WrapUnique(vpx));
 
   EXPECT_EQ(encoder.GetEncoderInfo().requested_resolution_alignment, 10u);
   EXPECT_FALSE(
@@ -669,7 +751,7 @@ TEST(LibvpxVp8EncoderTest, RequestedResolutionAlignmentFromFieldTrial) {
 }
 
 TEST(LibvpxVp8EncoderTest, ResolutionBitrateLimitsFromFieldTrial) {
-  test::ScopedFieldTrials field_trials(
+  FieldTrials field_trials = CreateTestFieldTrials(
       "WebRTC-VP8-GetEncoderInfoOverride/"
       "frame_size_pixels:123|456|789,"
       "min_start_bitrate_bps:11000|22000|33000,"
@@ -677,12 +759,12 @@ TEST(LibvpxVp8EncoderTest, ResolutionBitrateLimitsFromFieldTrial) {
       "max_bitrate_bps:77000|88000|99000/");
 
   auto* const vpx = new NiceMock<MockLibvpxInterface>();
-  LibvpxVp8Encoder encoder((std::unique_ptr<LibvpxInterface>(vpx)),
-                           VP8Encoder::Settings());
+  LibvpxVp8Encoder encoder(CreateEnvironment(&field_trials), {},
+                           absl::WrapUnique(vpx));
 
   EXPECT_THAT(
       encoder.GetEncoderInfo().resolution_bitrate_limits,
-      ::testing::ElementsAre(
+      ElementsAre(
           VideoEncoder::ResolutionBitrateLimits{123, 11000, 44000, 77000},
           VideoEncoder::ResolutionBitrateLimits{456, 22000, 55000, 88000},
           VideoEncoder::ResolutionBitrateLimits{789, 33000, 66000, 99000}));
@@ -691,8 +773,7 @@ TEST(LibvpxVp8EncoderTest, ResolutionBitrateLimitsFromFieldTrial) {
 TEST(LibvpxVp8EncoderTest,
      GetEncoderInfoReturnsEmptyResolutionBitrateLimitsByDefault) {
   auto* const vpx = new NiceMock<MockLibvpxInterface>();
-  LibvpxVp8Encoder encoder((std::unique_ptr<LibvpxInterface>(vpx)),
-                           VP8Encoder::Settings());
+  LibvpxVp8Encoder encoder(CreateEnvironment(), {}, absl::WrapUnique(vpx));
 
   const auto info = encoder.GetEncoderInfo();
 
@@ -707,12 +788,12 @@ TEST(LibvpxVp8EncoderTest,
                                              /*min_bitrate_bps=*/100,
                                              /*max_bitrate_bps=*/1000),
        VideoEncoder::ResolutionBitrateLimits(320 * 180, 100, 30, 500)};
-  VP8Encoder::Settings settings;
+  Vp8EncoderSettings settings;
   settings.resolution_bitrate_limits = resolution_bitrate_limits;
 
   auto* const vpx = new NiceMock<MockLibvpxInterface>();
-  LibvpxVp8Encoder encoder((std::unique_ptr<LibvpxInterface>(vpx)),
-                           std::move(settings));
+  LibvpxVp8Encoder encoder(CreateEnvironment(), std::move(settings),
+                           absl::WrapUnique(vpx));
 
   const auto info = encoder.GetEncoderInfo();
 
@@ -724,7 +805,7 @@ TEST_F(TestVp8Impl, GetEncoderInfoFpsAllocationNoLayers) {
       FramerateFractions(1, EncoderInfo::kMaxFramerateFraction)};
 
   EXPECT_THAT(encoder_->GetEncoderInfo().fps_allocation,
-              ::testing::ElementsAreArray(expected_fps_allocation));
+              ElementsAreArray(expected_fps_allocation));
 }
 
 TEST_F(TestVp8Impl, GetEncoderInfoFpsAllocationTwoTemporalLayers) {
@@ -742,7 +823,7 @@ TEST_F(TestVp8Impl, GetEncoderInfoFpsAllocationTwoTemporalLayers) {
   expected_fps_allocation[0].push_back(EncoderInfo::kMaxFramerateFraction);
 
   EXPECT_THAT(encoder_->GetEncoderInfo().fps_allocation,
-              ::testing::ElementsAreArray(expected_fps_allocation));
+              ElementsAreArray(expected_fps_allocation));
 }
 
 TEST_F(TestVp8Impl, GetEncoderInfoFpsAllocationThreeTemporalLayers) {
@@ -761,7 +842,7 @@ TEST_F(TestVp8Impl, GetEncoderInfoFpsAllocationThreeTemporalLayers) {
   expected_fps_allocation[0].push_back(EncoderInfo::kMaxFramerateFraction);
 
   EXPECT_THAT(encoder_->GetEncoderInfo().fps_allocation,
-              ::testing::ElementsAreArray(expected_fps_allocation));
+              ElementsAreArray(expected_fps_allocation));
 }
 
 TEST_F(TestVp8Impl, GetEncoderInfoFpsAllocationScreenshareLayers) {
@@ -782,7 +863,7 @@ TEST_F(TestVp8Impl, GetEncoderInfoFpsAllocationScreenshareLayers) {
   // Expect empty vector, since this mode doesn't have a fixed framerate.
   FramerateFractions expected_fps_allocation[kMaxSpatialLayers];
   EXPECT_THAT(encoder_->GetEncoderInfo().fps_allocation,
-              ::testing::ElementsAreArray(expected_fps_allocation));
+              ElementsAreArray(expected_fps_allocation));
 }
 
 TEST_F(TestVp8Impl, GetEncoderInfoFpsAllocationSimulcastVideo) {
@@ -814,7 +895,7 @@ TEST_F(TestVp8Impl, GetEncoderInfoFpsAllocationSimulcastVideo) {
   expected_fps_allocation[1] = expected_fps_allocation[0];
   expected_fps_allocation[2] = expected_fps_allocation[0];
   EXPECT_THAT(encoder_->GetEncoderInfo().fps_allocation,
-              ::testing::ElementsAreArray(expected_fps_allocation));
+              ElementsAreArray(expected_fps_allocation));
 
   // Release encoder and re-init without temporal layers.
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK, encoder_->Release());
@@ -823,7 +904,7 @@ TEST_F(TestVp8Impl, GetEncoderInfoFpsAllocationSimulcastVideo) {
   FramerateFractions default_fps_fraction[kMaxSpatialLayers];
   default_fps_fraction[0].push_back(EncoderInfo::kMaxFramerateFraction);
   EXPECT_THAT(encoder_->GetEncoderInfo().fps_allocation,
-              ::testing::ElementsAreArray(default_fps_fraction));
+              ElementsAreArray(default_fps_fraction));
 
   for (int i = 0; i < codec_settings_.numberOfSimulcastStreams; ++i) {
     codec_settings_.simulcastStream[i].numberOfTemporalLayers = 1;
@@ -836,19 +917,16 @@ TEST_F(TestVp8Impl, GetEncoderInfoFpsAllocationSimulcastVideo) {
     expected_fps_allocation[i].push_back(EncoderInfo::kMaxFramerateFraction);
   }
   EXPECT_THAT(encoder_->GetEncoderInfo().fps_allocation,
-              ::testing::ElementsAreArray(expected_fps_allocation));
+              ElementsAreArray(expected_fps_allocation));
 }
 
 class TestVp8ImplWithMaxFrameDropTrial
     : public TestVp8Impl,
-      public ::testing::WithParamInterface<
-          std::tuple<std::string, TimeDelta, TimeDelta>> {
+      public WithParamInterface<std::tuple<std::string, TimeDelta, TimeDelta>> {
  public:
-  TestVp8ImplWithMaxFrameDropTrial()
-      : TestVp8Impl(), trials_(std::get<0>(GetParam())) {}
-
- protected:
-  test::ScopedFieldTrials trials_;
+  TestVp8ImplWithMaxFrameDropTrial() {
+    field_trials_.Merge(FieldTrials(std::get<0>(GetParam())));
+  }
 };
 
 TEST_P(TestVp8ImplWithMaxFrameDropTrial, EnforcesMaxFrameDropInterval) {
@@ -910,8 +988,9 @@ TEST_P(TestVp8ImplWithMaxFrameDropTrial, EnforcesMaxFrameDropInterval) {
     void ClearCallbackDeltas() { callback_deltas_.clear(); }
 
    protected:
-    Result OnEncodedImage(const EncodedImage& encoded_image,
-                          const CodecSpecificInfo* codec_specific_info) {
+    Result OnEncodedImage(
+        const EncodedImage& encoded_image,
+        const CodecSpecificInfo* /* codec_specific_info */) override {
       Timestamp timestamp =
           Timestamp::Millis(encoded_image.RtpTimestamp() / 90);
       if (last_callback_.IsFinite()) {
@@ -965,7 +1044,7 @@ TEST_P(TestVp8ImplWithMaxFrameDropTrial, EnforcesMaxFrameDropInterval) {
 INSTANTIATE_TEST_SUITE_P(
     All,
     TestVp8ImplWithMaxFrameDropTrial,
-    ::testing::Values(
+    Values(
         // Tuple of {
         //  trial string,
         //  configured max frame interval,
@@ -981,7 +1060,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 class TestVp8ImplForPixelFormat
     : public TestVp8Impl,
-      public ::testing::WithParamInterface<VideoFrameBuffer::Type> {
+      public WithParamInterface<VideoFrameBuffer::Type> {
  public:
   TestVp8ImplForPixelFormat() : TestVp8Impl(), mappable_type_(GetParam()) {}
 
@@ -1033,9 +1112,9 @@ TEST_P(TestVp8ImplForPixelFormat, EncodeNativeFrameSimulcast) {
   EncodeAndWaitForFrame(input_frame, &encoded_frame, &codec_specific_info);
 
   // After encoding, we expect one mapping per simulcast layer.
-  rtc::scoped_refptr<test::MappableNativeBuffer> mappable_buffer =
+  scoped_refptr<test::MappableNativeBuffer> mappable_buffer =
       test::GetMappableNativeBufferFromVideoFrame(input_frame);
-  std::vector<rtc::scoped_refptr<VideoFrameBuffer>> mapped_buffers =
+  std::vector<scoped_refptr<VideoFrameBuffer>> mapped_buffers =
       mappable_buffer->GetMappedFramedBuffers();
   ASSERT_EQ(mapped_buffers.size(), 3u);
   EXPECT_EQ(mapped_buffers[0]->type(), mappable_type_);
@@ -1054,7 +1133,7 @@ TEST_P(TestVp8ImplForPixelFormat, EncodeNativeFrameSimulcast) {
 
 INSTANTIATE_TEST_SUITE_P(All,
                          TestVp8ImplForPixelFormat,
-                         ::testing::Values(VideoFrameBuffer::Type::kI420,
-                                           VideoFrameBuffer::Type::kNV12));
+                         Values(VideoFrameBuffer::Type::kI420,
+                                VideoFrameBuffer::Type::kNV12));
 
 }  // namespace webrtc

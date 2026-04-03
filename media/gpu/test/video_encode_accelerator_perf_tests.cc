@@ -10,13 +10,16 @@
 #include <optional>
 #include <vector>
 
+#include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/test/allow_check_is_test_for_testing.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "media/base/bitstream_buffer.h"
 #include "media/base/media_switches.h"
 #include "media/base/media_util.h"
@@ -49,6 +52,7 @@ constexpr const char* usage_msg =
            [--bitrate_mode=(cbr|vbr)] [--reverse] [--bitrate=<bitrate>]
            [-v=<level>] [--vmodule=<config>] [--output_folder]
            [--output_bitstream]
+           [--enable-features=<features>] [--disable-features=<features>]
            [--gtest_help] [--help]
            [<video path>] [<video metadata path>]
 )";
@@ -95,6 +99,12 @@ The following arguments are supported:
   --output_bitstream    save the output bitstream in either H264 AnnexB
                         format (for H264) or IVF format (for vp8 and
                         vp9) to <output_folder>/<testname>.
+  --enable-features     Comma-separated feature names to be enabled. These
+                        features will be enabled for the entire test run.
+                        Applies to Windows only.
+  --disable-features    Comma-separated feature names to be disabled. These
+                        features will be disabled for the entire test run.
+                        Applies to Windows only.
 
   --gtest_help          display the gtest help and exit.
   --help                display this help and exit.
@@ -270,7 +280,7 @@ void PerformanceMetrics::WriteToFile() const {
   output_folder_path = base::MakeAbsoluteFilePath(output_folder_path);
 
   // Write performance metrics to json.
-  base::Value::Dict metrics;
+  base::DictValue metrics;
   metrics.Set("BitstreamsEncoded",
               base::checked_cast<int>(bitstreams_encoded_));
   metrics.Set("TotalDurationMs", total_duration_.InMillisecondsF());
@@ -292,14 +302,14 @@ void PerformanceMetrics::WriteToFile() const {
               bitstream_encode_stats_.percentile_75_ms_);
 
   // Write bitstream delivery times to json.
-  base::Value::List delivery_times;
+  base::ListValue delivery_times;
   for (double bitstream_delivery_time : bitstream_delivery_times_) {
     delivery_times.Append(bitstream_delivery_time);
   }
   metrics.Set("BitstreamDeliveryTimes", std::move(delivery_times));
 
   // Write bitstream encodes times to json.
-  base::Value::List encode_times;
+  base::ListValue encode_times;
   for (double bitstream_encode_time : bitstream_encode_times_) {
     encode_times.Append(bitstream_encode_time);
   }
@@ -316,9 +326,8 @@ void PerformanceMetrics::WriteToFile() const {
   base::File metrics_output_file(
       base::FilePath(metrics_file_path),
       base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
-  int bytes_written = metrics_output_file.WriteAtCurrentPos(
-      metrics_str.data(), metrics_str.length());
-  ASSERT_EQ(bytes_written, static_cast<int>(metrics_str.length()));
+  ASSERT_TRUE(metrics_output_file.WriteAtCurrentPosAndCheck(
+      base::as_byte_span(metrics_str)));
   VLOG(0) << "Wrote performance metrics to: " << metrics_file_path;
 }
 
@@ -550,7 +559,7 @@ void BitstreamQualityMetrics::WriteToFile(
     base::CreateDirectory(output_folder_path);
   output_folder_path = base::MakeAbsoluteFilePath(output_folder_path);
   // Write quality metrics to json.
-  base::Value::Dict metrics;
+  base::DictValue metrics;
   if (!svc_text.empty())
     metrics.Set("SVC", svc_text);
   metrics.Set("Bitrate", base::checked_cast<int>(actual_bitrate));
@@ -561,32 +570,32 @@ void BitstreamQualityMetrics::WriteToFile(
   metrics.Set("BottomRowPSNRAverage", bottom_row_psnr_stats.avg);
   metrics.Set("LogLikelihoodRatioAverage", log_likelihood_stats.avg);
   // Write ssim values bitstream delivery times to json.
-  base::Value::List ssim_values;
+  base::ListValue ssim_values;
   for (double value : ssim_stats.values_in_order)
     ssim_values.Append(value);
   metrics.Set("SSIMValues", std::move(ssim_values));
 
   // Write psnr values to json.
-  base::Value::List psnr_values;
+  base::ListValue psnr_values;
   for (double value : psnr_stats.values_in_order)
     psnr_values.Append(value);
   metrics.Set("PSNRValues", std::move(psnr_values));
 
   // Write bottom row psnr values to json.
-  base::Value::List bottom_row_psnr_values;
+  base::ListValue bottom_row_psnr_values;
   for (double value : bottom_row_psnr_stats.values_in_order)
     bottom_row_psnr_values.Append(value);
   metrics.Set("BottomRowPSNRValues", std::move(bottom_row_psnr_values));
 
   // Write log likelihood ratio values to json.
-  base::Value::List log_likelihood_values;
+  base::ListValue log_likelihood_values;
   for (double value : log_likelihood_stats.values_in_order) {
     log_likelihood_values.Append(value);
   }
   metrics.Set("LogLikelihoodRatioValues", std::move(log_likelihood_values));
 
   // Write QP values to json.
-  base::Value::List qp_values;
+  base::ListValue qp_values;
   for (double value : qp_stats.values_in_order) {
     qp_values.Append(value);
   }
@@ -596,18 +605,20 @@ void BitstreamQualityMetrics::WriteToFile(
   std::string metrics_str;
   ASSERT_TRUE(base::JSONWriter::WriteWithOptions(
       metrics, base::JSONWriter::OPTIONS_PRETTY_PRINT, &metrics_str));
-  base::FilePath metrics_file_path = output_folder_path.Append(
-      g_env->GetTestOutputFilePath()
-          .AddExtension(svc_text.empty() ? "" : "." + svc_text)
-          .AddExtension(FILE_PATH_LITERAL(".json")));
+  constexpr const base::FilePath::CharType* kMetrixFileSuffix =
+      FILE_PATH_LITERAL(".json");
+  const std::string svc_text_ext = svc_text.empty() ? "" : "." + svc_text;
+  base::FilePath metrics_file_path =
+      output_folder_path.Append(g_env->GetTestOutputFilePath()
+                                    .AddExtensionASCII(svc_text_ext)
+                                    .AddExtension(kMetrixFileSuffix));
   // Make sure that the directory into which json is saved is created.
   LOG_ASSERT(base::CreateDirectory(metrics_file_path.DirName()));
   base::File metrics_output_file(
       base::FilePath(metrics_file_path),
       base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
-  int bytes_written = metrics_output_file.WriteAtCurrentPos(
-      metrics_str.data(), metrics_str.length());
-  ASSERT_EQ(bytes_written, static_cast<int>(metrics_str.length()));
+  ASSERT_TRUE(metrics_output_file.WriteAtCurrentPosAndCheck(
+      base::as_byte_span(metrics_str)));
   VLOG(0) << "Wrote performance metrics to: " << metrics_file_path;
 }
 
@@ -625,7 +636,12 @@ class VideoEncoderTest : public ::testing::Test {
       std::optional<uint32_t> encode_rate = std::nullopt,
       bool measure_quality = false,
       size_t num_encode_frames = kNumEncodeFramesForSpeedPerformance) {
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
     RawVideo* video = g_env->GenerateNV12Video();
+#else
+    // TODO(b/211783271): Add support for I420 SHM input.
+    RawVideo* video = g_env->Video();
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
     VideoCodecProfile profile = g_env->Profile();
     const media::VideoBitrateAllocation& bitrate = g_env->BitrateAllocation();
     const std::vector<VideoEncodeAccelerator::Config::SpatialLayer>&
@@ -647,8 +663,15 @@ class VideoEncoderTest : public ::testing::Test {
     VideoEncoderClientConfig config(
         video, profile, spatial_layers, g_env->InterLayerPredMode(),
         g_env->ContentType(), bitrate, g_env->Reverse());
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
     config.input_storage_type =
         VideoEncodeAccelerator::Config::StorageType::kGpuMemoryBuffer;
+#else
+    // TODO(https://crbugs.com/350994517, b/211783271): Enable GMB for
+    // Windows/Linux.
+    config.input_storage_type =
+        VideoEncodeAccelerator::Config::StorageType::kShmem;
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
     config.num_frames_to_encode = num_encode_frames;
     if (encode_rate) {
       config.encode_interval = base::Seconds(1u) / encode_rate.value();
@@ -786,7 +809,9 @@ class VideoEncoderTest : public ::testing::Test {
         }
       }
     }
-    LOG_ASSERT(!base::Contains(bitstream_processors, nullptr));
+    LOG_ASSERT(
+        !std::ranges::contains(bitstream_processors, nullptr,
+                               &std::unique_ptr<BitstreamProcessor>::get));
     return bitstream_processors;
   }
 
@@ -978,7 +1003,11 @@ int main(int argc, char** argv) {
   bool output_bitstream = false;
   std::optional<uint32_t> encode_bitrate;
   std::vector<base::test::FeatureRef> disabled_features;
+  std::vector<base::test::FeatureRef> enabled_features;
+
   std::string svc_mode = "L1T1";
+  std::string enable_feature_str = "";
+  std::string disable_feature_str = "";
 
   // Parse command line arguments.
   base::FilePath::StringType output_folder = media::test::kDefaultOutputFolder;
@@ -1002,22 +1031,24 @@ int main(int argc, char** argv) {
     } else if (it->first == "output_bitstream") {
       output_bitstream = true;
     } else if (it->first == "codec") {
-      codec = it->second;
+      codec = cmd_line->GetSwitchValueASCII("codec");
     } else if (it->first == "svc_mode") {
-      svc_mode = it->second;
+      svc_mode = cmd_line->GetSwitchValueASCII("svc_mode");
     } else if (it->first == "content_type") {
-      if (it->second == "display") {
+      auto content_type_str = cmd_line->GetSwitchValueASCII("content_type");
+      if (content_type_str == "display") {
         content_type =
             media::VideoEncodeAccelerator::Config::ContentType::kDisplay;
-      } else if (it->second != "camera") {
+      } else if (content_type_str != "camera") {
         std::cout << "unknown content type \"" << it->second
                   << "\", possible values are \"camera|display\"\n";
         return EXIT_FAILURE;
       }
     } else if (it->first == "bitrate_mode") {
-      if (it->second == "vbr") {
+      auto brc_mode_str = cmd_line->GetSwitchValueASCII("bitrate_mode");
+      if (brc_mode_str == "vbr") {
         bitrate_mode = media::Bitrate::Mode::kVariable;
-      } else if (it->second != "cbr") {
+      } else if (brc_mode_str != "cbr") {
         std::cout << "unknown bitrate mode \"" << it->second
                   << "\", possible values are \"cbr|vbr\"\n";
         return EXIT_FAILURE;
@@ -1038,6 +1069,12 @@ int main(int argc, char** argv) {
     } else if (it->first == "quality") {
       test_type = media::test::VideoEncoderTestEnvironment::TestType::
           kQualityPerformance;
+    } else if (it->first == switches::kEnableFeatures) {
+      enable_feature_str =
+          cmd_line->GetSwitchValueASCII(switches::kEnableFeatures);
+    } else if (it->first == switches::kDisableFeatures) {
+      disable_feature_str =
+          cmd_line->GetSwitchValueASCII(switches::kDisableFeatures);
     } else {
       std::cout << "unknown option: --" << it->first << "\n"
                 << media::test::usage_msg;
@@ -1045,6 +1082,15 @@ int main(int argc, char** argv) {
     }
   }
 
+#if BUILDFLAG(IS_WIN)
+  std::unique_ptr<base::test::ScopedFeatureList> feature_list =
+      std::make_unique<base::test::ScopedFeatureList>();
+  feature_list->InitFromCommandLine(enable_feature_str, disable_feature_str);
+#endif  // BUILDFLAG(IS_WIN)
+
+#if defined(ARCH_CPU_X86_FAMILY) && BUILDFLAG(IS_CHROMEOS)
+  enabled_features.push_back(media::kVaapiH264SWBitrateController);
+#endif  // defined(ARCH_CPU_X86_FAMILY) && BUILDFLAG(IS_CHROMEOS)
   disabled_features.push_back(media::kGlobalVaapiLock);
 
   if (test_type ==
@@ -1062,13 +1108,14 @@ int main(int argc, char** argv) {
           test_type, video_path, video_metadata_path,
           base::FilePath(output_folder), codec, svc_mode, content_type,
           output_bitstream, encode_bitrate, bitrate_mode, reverse,
-          media::test::FrameOutputConfig(),
-          /*enabled_features=*/{}, disabled_features);
+          media::test::FrameOutputConfig(), enabled_features,
+          disabled_features);
   if (!test_environment)
     return EXIT_FAILURE;
 
   media::test::g_env = static_cast<media::test::VideoEncoderTestEnvironment*>(
       testing::AddGlobalTestEnvironment(test_environment));
+  base::test::AllowCheckIsTestForTesting();
 
   return RUN_ALL_TESTS();
 }

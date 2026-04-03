@@ -14,14 +14,22 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/lite/toco/tflite/import.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 
-#include "flatbuffers/flexbuffers.h"
-#include "tensorflow/lite/core/model.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/strings/string_view.h"
+#include "flatbuffers/verifier.h"  // from @flatbuffers
+#include "tensorflow/compiler/mlir/lite/schema/schema_utils.h"
 #include "tensorflow/lite/core/tools/verifier.h"
 #include "tensorflow/lite/schema/schema_generated.h"
-#include "tensorflow/lite/schema/schema_utils.h"
+#include "tensorflow/lite/stderr_reporter.h"
+#include "tensorflow/lite/toco/model.h"
+#include "tensorflow/lite/toco/model_flags.pb.h"
 #include "tensorflow/lite/toco/tflite/operator.h"
 #include "tensorflow/lite/toco/tflite/types.h"
 #include "tensorflow/lite/toco/tooling_util.h"
@@ -203,7 +211,7 @@ bool Verify(const void* buf, size_t len) {
 }  // namespace
 
 std::unique_ptr<Model> Import(const ModelFlags& model_flags,
-                              const std::string& input_file_contents) {
+                              absl::string_view input_file_contents) {
   ::tflite::AlwaysTrueResolver r;
   if (!::tflite::Verify(input_file_contents.data(), input_file_contents.size(),
                         r, ::tflite::DefaultErrorReporter())) {

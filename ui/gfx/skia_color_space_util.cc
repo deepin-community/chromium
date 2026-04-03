@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 
 namespace gfx {
 
@@ -92,16 +94,21 @@ skcms_Matrix3x3 COLOR_SPACE_EXPORT SkcmsMatrix3x3FromSkM44(const SkM44& in) {
 }
 
 SkM44 COLOR_SPACE_EXPORT SkM44FromSkcmsMatrix3x3(const skcms_Matrix3x3& in) {
-  return SkM44FromRowMajor3x3(&in.vals[0][0]);
+  constexpr size_t kNumElements = 9u;
+  static_assert(sizeof(in.vals) == sizeof(float) * kNumElements);
+  // SAFETY: skcms_Matrix3x3 is a 3x3 matrix, and we've verified it has 9
+  // elements as expected.
+  return SkM44FromRowMajor3x3(UNSAFE_BUFFERS(
+      base::span<const float, kNumElements>(&in.vals[0][0], kNumElements)));
 }
 
-SkM44 SkM44FromRowMajor3x3(const float* data) {
-  DCHECK(data);
+SkM44 SkM44FromRowMajor3x3(base::span<const float, 9u> scale_3x3) {
   // clang-format off
-  return SkM44(data[0], data[1], data[2], 0,
-               data[3], data[4], data[5], 0,
-               data[6], data[7], data[8], 0,
-               0, 0, 0, 1);
+  return SkM44(
+      scale_3x3[0], scale_3x3[1], scale_3x3[2], 0,
+      scale_3x3[3], scale_3x3[4], scale_3x3[5], 0,
+      scale_3x3[6], scale_3x3[7], scale_3x3[8], 0,
+      0, 0, 0, 1);
   // clang-format on
 }
 

@@ -1,6 +1,16 @@
 // Copyright 2015 The Chromium Authors
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "parse_certificate.h"
 
@@ -18,7 +28,7 @@
 #include "parser.h"
 #include "string_util.h"
 
-namespace bssl {
+BSSL_NAMESPACE_BEGIN
 
 namespace {
 
@@ -491,12 +501,11 @@ bool ParseTbsCertificate(der::Input tbs_tlv,
   }
 
   //        validity             Validity,
-  der::Input validity_tlv;
-  if (!tbs_parser.ReadRawTLV(&validity_tlv)) {
+  if (!tbs_parser.ReadRawTLV(&out->validity_tlv)) {
     errors->AddError(kFailedReadingValidity);
     return false;
   }
-  if (!ParseValidity(validity_tlv, &out->validity_not_before,
+  if (!ParseValidity(out->validity_tlv, &out->validity_not_before,
                      &out->validity_not_after)) {
     errors->AddError(kFailedParsingValidity);
     return false;
@@ -513,6 +522,8 @@ bool ParseTbsCertificate(der::Input tbs_tlv,
     errors->AddError(kFailedReadingSpki);
     return false;
   }
+
+  out->bytes_after_spki = tbs_parser.RemainingBytes();
 
   //        issuerUniqueID  [1]  IMPLICIT UniqueIdentifier OPTIONAL,
   //                             -- If present, version MUST be v2 or v3
@@ -1013,4 +1024,4 @@ bool ParseSubjectKeyIdentifier(der::Input extension_value,
   return true;
 }
 
-}  // namespace bssl
+BSSL_NAMESPACE_END

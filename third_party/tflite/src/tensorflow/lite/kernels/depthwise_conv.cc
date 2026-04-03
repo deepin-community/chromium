@@ -30,6 +30,7 @@ limitations under the License.
 #include "tensorflow/lite/kernels/internal/optimized/depthwiseconv_multithread.h"
 #include "tensorflow/lite/kernels/internal/optimized/integer_ops/depthwise_conv_hybrid.h"
 #include "tensorflow/lite/kernels/internal/optimized/neon_check.h"
+#include "tensorflow/lite/kernels/internal/portable_tensor_utils.h"
 #include "tensorflow/lite/kernels/internal/quantization_util.h"
 #include "tensorflow/lite/kernels/internal/reference/depthwiseconv_float.h"
 #include "tensorflow/lite/kernels/internal/reference/depthwiseconv_uint8.h"
@@ -119,6 +120,12 @@ TfLiteStatus Prepare(TfLiteContext* context, TfLiteNode* node) {
   TF_LITE_ENSURE_EQ(context, NumDimensions(filter), 4);
   TF_LITE_ENSURE(context, params->dilation_height_factor > 0);
   TF_LITE_ENSURE(context, params->dilation_width_factor > 0);
+
+  // Validate the stride values
+  TF_LITE_ENSURE(context, params->stride_width <= 0xFFFF);
+  TF_LITE_ENSURE(context, params->stride_width > 0);
+  TF_LITE_ENSURE(context, params->stride_height <= 0xFFFF);
+  TF_LITE_ENSURE(context, params->stride_height > 0);
 
   const TfLiteType data_type = input->type;
 
@@ -410,9 +417,9 @@ TfLiteStatus EvalQuantizedPerChannel(TfLiteContext* context, TfLiteNode* node,
   auto unpacked_filter_data = std::make_unique<int8_t[]>(bytes_unpacked);
 
   if (filter->type == kTfLiteInt4) {
-    tflite::tensor_utils::UnpackDenseInt4IntoInt8(
+    tflite::tensor_utils::UnpackPackedIntToInt8(
         GetTensorData<int8_t>(filter), GetTensorShape(filter).FlatSize(),
-        unpacked_filter_data.get());
+        /*bit_width=*/4, unpacked_filter_data.get());
     filter_data = unpacked_filter_data.get();
   } else {
     filter_data = GetTensorData<int8>(filter);

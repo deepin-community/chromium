@@ -25,7 +25,10 @@ limitations under the License.
 // does not exist any operation placed on host_B that conumes any result of any
 // operation placed on host_A.
 
+#include <algorithm>
+#include <memory>
 #include <optional>
+#include <string>
 
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/Pass.h"
@@ -33,6 +36,7 @@ limitations under the License.
 #include "llvm/ADT/StringRef.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/IRMapping.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/core/util/device_name_utils.h"
@@ -124,7 +128,7 @@ std::optional<llvm::StringMap<FunctionMetadata>> GetFunctionMetadatas(
 
       // If the value is defined as an argument of the func_op, adds it to
       // the argument list of the function that uses this op.
-      if (BlockArgument block_arg = value.dyn_cast<BlockArgument>()) {
+      if (BlockArgument block_arg = mlir::dyn_cast<BlockArgument>(value)) {
         if (StringAttr attr = func_op.getArgAttrOfType<StringAttr>(
                 block_arg.getArgNumber(), kTFDeviceAttr)) {
           value_device = attr.getValue().str();
@@ -243,7 +247,7 @@ void CreateFunctions(ModuleOp module_op,
     for (Value result : metadata.results) {
       results_after_mapping.push_back(mapping.lookupOrDefault(result));
     }
-    builder.create<func::ReturnOp>(loc, results_after_mapping);
+    func::ReturnOp::create(builder, loc, results_after_mapping);
     symbol_table.insert(func_op, metadata.insertion_point++);
     // Record the actual name. The symbol table might rename the FuncOp if there
     // is name collision.
@@ -277,10 +281,9 @@ void CreateRemoteRunCalls(MLIRContext *context,
       inputs_after_mapping.push_back(mapping.lookupOrDefault(input));
     }
 
-    tf_device::RemoteRunOp remote_run_op =
-        builder.create<tf_device::RemoteRunOp>(loc, result_types, host,
-                                               metadata.partition_name,
-                                               inputs_after_mapping);
+    tf_device::RemoteRunOp remote_run_op = tf_device::RemoteRunOp::create(
+        builder, loc, result_types, host, metadata.partition_name,
+        inputs_after_mapping);
     // Clones the tf_device.remote_run operation to replace its callee args with
     // the results of the other tf_device.remote_run operations using the
     // `mapping` as appropriate.

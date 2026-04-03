@@ -4,6 +4,8 @@
 
 #include "chrome/browser/extensions/api/omnibox/suggestion_parser.h"
 
+#include <string_view>
+
 #include "base/functional/callback.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -31,7 +33,7 @@ std::string CheckedGetElementTag(const base::Value& node) {
 
 // Recursively walks an XML node, generating `result` as it goes along.
 void WalkNode(const base::Value& node, DescriptionAndStyles* result) {
-  const base::Value::List* children = data_decoder::GetXmlElementChildren(node);
+  const base::ListValue* children = data_decoder::GetXmlElementChildren(node);
   if (!children)
     return;
 
@@ -106,7 +108,7 @@ bool PopulateEntriesFromNode(const base::Value& root_node,
   if (CheckedGetElementTag(root_node) != "fragment")
     return false;
 
-  const base::Value::List* children =
+  const base::ListValue* children =
       data_decoder::GetXmlElementChildren(root_node);
   if (!children)
     return false;
@@ -179,7 +181,7 @@ void ConstructResultFromValue(
 // A helper method for ParseDescriptionsAndStyles(). `contains_multiple_entries`
 // indicates whether `xml_input` contains a single suggestion or multiple
 // suggestions that have been wrapped in individual XML elements.
-void ParseDescriptionAndStylesImpl(base::StringPiece xml_input,
+void ParseDescriptionAndStylesImpl(std::string_view xml_input,
                                    bool contains_multiple_entries,
                                    DescriptionAndStylesCallback callback) {
   std::string wrapped_xml =
@@ -206,14 +208,14 @@ DescriptionAndStylesResult& DescriptionAndStylesResult::operator=(
     DescriptionAndStylesResult&&) = default;
 DescriptionAndStylesResult::~DescriptionAndStylesResult() = default;
 
-void ParseDescriptionAndStyles(base::StringPiece str,
+void ParseDescriptionAndStyles(std::string_view str,
                                DescriptionAndStylesCallback callback) {
   constexpr bool kContainsMultipleEntries = false;
   ParseDescriptionAndStylesImpl(str, kContainsMultipleEntries,
                                 std::move(callback));
 }
 
-void ParseDescriptionsAndStyles(const std::vector<base::StringPiece>& strs,
+void ParseDescriptionsAndStyles(const std::vector<std::string_view>& strs,
                                 DescriptionAndStylesCallback callback) {
   // When passed multiple suggestions, we synthesize them into a single XML
   // document. This allows us to parse all of them with a single call to the

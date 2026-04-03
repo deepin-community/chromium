@@ -57,7 +57,7 @@ EIGEN_STRONG_INLINE void trsmKernelL<Scalar, Index, Mode, Conjugate, TriStorageO
     Index rs = size - k - 1;  // remaining size
     Index s = TriStorageOrder == RowMajor ? (IsLower ? 0 : i + 1) : IsLower ? i + 1 : i - rs;
 
-    Scalar a = (Mode & UnitDiag) ? Scalar(1) : Scalar(1) / conj(tri(i, i));
+    Scalar a = (Mode & UnitDiag) ? Scalar(1) : Scalar(Scalar(1) / conj(tri(i, i)));
     for (Index j = 0; j < otherSize; ++j) {
       if (TriStorageOrder == RowMajor) {
         Scalar b(0);
@@ -141,7 +141,8 @@ EIGEN_DONT_INLINE void triangular_solve_matrix<Scalar, Index, OnTheLeft, Mode, C
   std::ptrdiff_t l1, l2, l3;
   manage_caching_sizes(GetAction, &l1, &l2, &l3);
 
-#if defined(EIGEN_VECTORIZE_AVX512) && EIGEN_USE_AVX512_TRSM_L_KERNELS && EIGEN_ENABLE_AVX512_NOCOPY_TRSM_L_CUTOFFS
+#if defined(EIGEN_VECTORIZE_AVX512) && defined(EIGEN_USE_AVX512_TRSM_L_KERNELS) && EIGEN_USE_AVX512_TRSM_L_KERNELS && \
+    EIGEN_ENABLE_AVX512_NOCOPY_TRSM_L_CUTOFFS
   EIGEN_IF_CONSTEXPR(
       (OtherInnerStride == 1 && (std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value))) {
     // Very rough cutoffs to determine when to call trsm w/o packing
@@ -209,7 +210,7 @@ EIGEN_DONT_INLINE void triangular_solve_matrix<Scalar, Index, OnTheLeft, Mode, C
         // tr solve
         {
           Index i = IsLower ? k2 + k1 : k2 - k1;
-#if defined(EIGEN_VECTORIZE_AVX512) && EIGEN_USE_AVX512_TRSM_L_KERNELS
+#if defined(EIGEN_VECTORIZE_AVX512) && defined(EIGEN_USE_AVX512_TRSM_L_KERNELS) && EIGEN_USE_AVX512_TRSM_L_KERNELS
           EIGEN_IF_CONSTEXPR(
               (OtherInnerStride == 1 && (std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value))) {
             i = IsLower ? k2 + k1 : k2 - k1 - actualPanelWidth;
@@ -273,7 +274,8 @@ EIGEN_DONT_INLINE void triangular_solve_matrix<Scalar, Index, OnTheRight, Mode, 
                                                                       level3_blocking<Scalar, Scalar>& blocking) {
   Index rows = otherSize;
 
-#if defined(EIGEN_VECTORIZE_AVX512) && EIGEN_USE_AVX512_TRSM_R_KERNELS && EIGEN_ENABLE_AVX512_NOCOPY_TRSM_R_CUTOFFS
+#if defined(EIGEN_VECTORIZE_AVX512) && defined(EIGEN_USE_AVX512_TRSM_R_KERNELS) && EIGEN_USE_AVX512_TRSM_R_KERNELS && \
+    EIGEN_ENABLE_AVX512_NOCOPY_TRSM_R_CUTOFFS
   EIGEN_IF_CONSTEXPR(
       (OtherInnerStride == 1 && (std::is_same<Scalar, float>::value || std::is_same<Scalar, double>::value))) {
     // TODO: Investigate better heuristics for cutoffs.

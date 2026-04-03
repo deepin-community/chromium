@@ -23,6 +23,7 @@ constexpr const char kUserActionSelect[] = "choobeSelect";
 
 // static
 std::string ChoobeScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::SELECTED:
       return "Selected";
@@ -31,6 +32,7 @@ std::string ChoobeScreen::GetResultString(Result result) {
     case Result::NOT_APPLICABLE:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 ChoobeScreen::ChoobeScreen(base::WeakPtr<ChoobeScreenView> view,
@@ -84,7 +86,7 @@ void ChoobeScreen::SkipScreen() {
   exit_callback_.Run(Result::SKIPPED);
 }
 
-void ChoobeScreen::OnSelect(base::Value::List screens) {
+void ChoobeScreen::OnSelect(base::ListValue screens) {
   WizardController::default_controller()
       ->choobe_flow_controller()
       ->OnScreensSelected(*ProfileManager::GetActiveUserProfile()->GetPrefs(),
@@ -109,7 +111,7 @@ void ChoobeScreen::ShowImpl() {
 
 void ChoobeScreen::HideImpl() {}
 
-void ChoobeScreen::OnUserAction(const base::Value::List& args) {
+void ChoobeScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionSkip) {
     SkipScreen();

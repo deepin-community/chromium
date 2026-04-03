@@ -19,9 +19,9 @@
 #include "test/md5_helper.h"
 #include "test/util.h"
 #include "test/webm_video_source.h"
+#include "vpx/vpx_codec.h"
 #include "vpx_ports/vpx_timer.h"
 #include "./ivfenc.h"
-#include "./vpx_version.h"
 
 using std::make_tuple;
 
@@ -36,7 +36,7 @@ const char kNewEncodeOutputFile[] = "new_encode.ivf";
 /*
  DecodePerfTest takes a tuple of filename + number of threads to decode with
  */
-typedef std::tuple<const char *, unsigned> DecodePerfParam;
+using DecodePerfParam = std::tuple<const char *, unsigned int>;
 
 const DecodePerfParam kVP9DecodePerfVectors[] = {
   make_tuple("vp90-2-bbb_426x240_tile_1x1_180kbps.webm", 1),
@@ -98,7 +98,7 @@ TEST_P(DecodePerfTest, PerfTest) {
 
   printf("{\n");
   printf("\t\"type\" : \"decode_perf_test\",\n");
-  printf("\t\"version\" : \"%s\",\n", VERSION_STRING_NOSP);
+  printf("\t\"version\" : \"%s\",\n", vpx_codec_version_str());
   printf("\t\"videoName\" : \"%s\",\n", video_name);
   printf("\t\"threadCount\" : %u,\n", threads);
   printf("\t\"decodeTimeSecs\" : %f,\n", elapsed_secs);
@@ -249,7 +249,7 @@ TEST_P(VP9NewEncodeDecodePerfTest, PerfTest) {
 
   printf("{\n");
   printf("\t\"type\" : \"decode_perf_test\",\n");
-  printf("\t\"version\" : \"%s\",\n", VERSION_STRING_NOSP);
+  printf("\t\"version\" : \"%s\",\n", vpx_codec_version_str());
   printf("\t\"videoName\" : \"%s\",\n", kNewEncodeOutputFile);
   printf("\t\"threadCount\" : %u,\n", threads);
   printf("\t\"decodeTimeSecs\" : %f,\n", elapsed_secs);

@@ -15,7 +15,9 @@
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notimplemented.h"
 #include "base/rand_util.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
@@ -29,6 +31,7 @@
 #include "net/base/url_util.h"
 #include "net/log/net_log.h"
 #include "net/reporting/reporting_service.h"
+#include "net/reporting/reporting_target_type.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -64,7 +67,12 @@ const struct {
     {ERR_NAME_RESOLUTION_FAILED, kDnsPhase, "dns.failed"},
     {ERR_DNS_TIMED_OUT, kDnsPhase, "dns.timed_out"},
     {ERR_DNS_MALFORMED_RESPONSE, kDnsPhase, "dns.protocol"},
-    {ERR_DNS_SERVER_FAILED, kDnsPhase, "dns.server"},
+    // The following were all historically mapped to "dns.server".
+    {ERR_DNS_FORMAT_ERROR, kDnsPhase, "dns.server"},
+    {ERR_DNS_SERVER_FAILURE, kDnsPhase, "dns.server"},
+    {ERR_DNS_NOT_IMPLEMENTED, kDnsPhase, "dns.server"},
+    {ERR_DNS_REFUSED, kDnsPhase, "dns.server"},
+    {ERR_DNS_OTHER_FAILURE, kDnsPhase, "dns.server"},
 
     {ERR_TIMED_OUT, kConnectionPhase, "tcp.timed_out"},
     {ERR_CONNECTION_TIMED_OUT, kConnectionPhase, "tcp.timed_out"},
@@ -247,14 +255,14 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
   }
 
   base::Value StatusAsValue() const override {
-    base::Value::Dict dict;
-    base::Value::List policy_list;
+    base::DictValue dict;
+    base::ListValue policy_list;
     // We wanted sorted (or at least reproducible) output; luckily, policies_ is
     // a std::map, and therefore already sorted.
     for (const auto& key_and_policy : policies_) {
       const NelPolicyKey& key = key_and_policy.first;
       const NelPolicy& policy = key_and_policy.second;
-      base::Value::Dict policy_dict;
+      base::DictValue policy_dict;
       policy_dict.Set("NetworkAnonymizationKey",
                       key.network_anonymization_key.ToDebugString());
       policy_dict.Set("origin", key.origin.Serialize());
@@ -284,6 +292,11 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
 
   ReportingService* GetReportingServiceForTesting() override {
     return reporting_service_;
+  }
+
+  void LoadPoliciesForTesting(std::vector<NelPolicy> policies) override {
+    started_loading_policies_ = true;
+    OnPoliciesLoaded(policies);
   }
 
  private:
@@ -351,6 +364,13 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
 
     if (!initialized_) {
       task_backlog_.push_back(std::move(task));
+      // TODO(crbug.com/450428442): Remove this UMA after we investigate OOM.
+      // Sample with a 0.001 probability to reduce metrics overhead.
+      if (sampler_.ShouldSample(0.001)) {
+        base::UmaHistogramCounts1000(
+            "Net.NetworkErrorLoggingService.TaskBacklogSize",
+            task_backlog_.size());
+      }
       return;
     }
 
@@ -493,7 +513,7 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
         details.user_agent, policy->report_to, kReportType,
         CreateReportBody(phase_string, type_string, sampling_fraction.value(),
                          details),
-        details.reporting_upload_depth);
+        details.reporting_upload_depth, ReportingTargetType::kDeveloper);
   }
 
   void DoQueueSignedExchangeReport(SignedExchangeReportDetails details,
@@ -542,7 +562,7 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
         details.outer_url, std::nullopt, details.network_anonymization_key,
         details.user_agent, policy->report_to, kReportType,
         CreateSignedExchangeReportBody(details, sampling_fraction.value()),
-        0 /* depth */);
+        0 /* depth */, ReportingTargetType::kDeveloper);
     RecordSignedExchangeRequestOutcome(RequestOutcome::kQueued);
   }
 
@@ -566,7 +586,7 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
     DCHECK(initialized_);
     if (PoliciesArePersisted()) {
       // TODO(chlily): Add a DeleteAllNelPolicies command to PersistentNelStore.
-      for (auto origin_and_policy : policies_) {
+      for (const auto& origin_and_policy : policies_) {
         store_->DeleteNelPolicy(origin_and_policy.second);
       }
       store_->Flush();
@@ -592,7 +612,7 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
     if (!value)
       return false;
 
-    base::Value::Dict* dict = value->GetIfDict();
+    base::DictValue* dict = value->GetIfDict();
     if (!dict)
       return false;
 
@@ -686,7 +706,7 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
       store_->AddNelPolicy(policy);
 
     auto iter_and_result = policies_.emplace(policy.key, std::move(policy));
-    // TODO(crbug.com/1326282): Change this to a DCHECK when we're sure the bug
+    // TODO(crbug.com/40225752): Change this to a DCHECK when we're sure the bug
     // is fixed.
     CHECK(iter_and_result.second);
 
@@ -712,7 +732,7 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
   // Removes the policy pointed to by |policy_it|. Invalidates |policy_it|.
   // Returns the iterator to the next element.
   PolicyMap::iterator RemovePolicy(PolicyMap::iterator policy_it) {
-    DCHECK(policy_it != policies_.end());
+    CHECK(policy_it != policies_.end());
     NelPolicy* policy = &policy_it->second;
     MaybeRemoveWildcardPolicy(policy);
 
@@ -733,7 +753,7 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
 
     auto wildcard_it =
         wildcard_policies_.find(WildcardNelPolicyKey(origin_key));
-    DCHECK(wildcard_it != wildcard_policies_.end());
+    CHECK(wildcard_it != wildcard_policies_.end());
 
     size_t erased = wildcard_it->second.erase(policy);
     DCHECK_EQ(1u, erased);
@@ -766,16 +786,16 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
 
     // This should only be called if we have hit the max policy limit, so there
     // should be at least one policy.
-    DCHECK(stalest_it != policies_.end());
+    CHECK(stalest_it != policies_.end());
 
     RemovePolicy(stalest_it);
   }
 
-  static base::Value::Dict CreateReportBody(const std::string& phase,
-                                            const std::string& type,
-                                            double sampling_fraction,
-                                            const RequestDetails& details) {
-    base::Value::Dict body;
+  static base::DictValue CreateReportBody(const std::string& phase,
+                                          const std::string& type,
+                                          double sampling_fraction,
+                                          const RequestDetails& details) {
+    base::DictValue body;
 
     body.Set(kReferrerKey, details.referrer.spec());
     body.Set(kSamplingFractionKey, sampling_fraction);
@@ -791,10 +811,10 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
     return body;
   }
 
-  static base::Value::Dict CreateSignedExchangeReportBody(
+  static base::DictValue CreateSignedExchangeReportBody(
       const SignedExchangeReportDetails& details,
       double sampling_fraction) {
-    base::Value::Dict body;
+    base::DictValue body;
     body.Set(kPhaseKey, kSignedExchangePhaseValue);
     body.Set(kTypeKey, details.type);
     body.Set(kSamplingFractionKey, sampling_fraction);
@@ -806,12 +826,12 @@ class NetworkErrorLoggingServiceImpl : public NetworkErrorLoggingService {
     body.Set(kElapsedTimeKey,
              static_cast<int>(details.elapsed_time.InMilliseconds()));
 
-    base::Value::Dict sxg_body;
+    base::DictValue sxg_body;
     sxg_body.Set(kOuterUrlKey, details.outer_url.spec());
     if (details.inner_url.is_valid())
       sxg_body.Set(kInnerUrlKey, details.inner_url.spec());
 
-    base::Value::List cert_url_list;
+    base::ListValue cert_url_list;
     if (details.cert_url.is_valid())
       cert_url_list.Append(details.cert_url.spec());
     sxg_body.Set(kCertUrlKey, std::move(cert_url_list));
@@ -893,23 +913,6 @@ NetworkErrorLoggingService::NelPolicyKey::NelPolicyKey(
 NetworkErrorLoggingService::NelPolicyKey::NelPolicyKey(
     const NelPolicyKey& other) = default;
 
-bool NetworkErrorLoggingService::NelPolicyKey::operator<(
-    const NelPolicyKey& other) const {
-  return std::tie(network_anonymization_key, origin) <
-         std::tie(other.network_anonymization_key, other.origin);
-}
-
-bool NetworkErrorLoggingService::NelPolicyKey::operator==(
-    const NelPolicyKey& other) const {
-  return std::tie(network_anonymization_key, origin) ==
-         std::tie(other.network_anonymization_key, other.origin);
-}
-
-bool NetworkErrorLoggingService::NelPolicyKey::operator!=(
-    const NelPolicyKey& other) const {
-  return !(*this == other);
-}
-
 NetworkErrorLoggingService::NelPolicyKey::~NelPolicyKey() = default;
 
 NetworkErrorLoggingService::WildcardNelPolicyKey::WildcardNelPolicyKey() =
@@ -949,6 +952,17 @@ NetworkErrorLoggingService::RequestDetails::RequestDetails() = default;
 NetworkErrorLoggingService::RequestDetails::RequestDetails(
     const RequestDetails& other) = default;
 
+NetworkErrorLoggingService::RequestDetails::RequestDetails(
+    RequestDetails&& other) = default;
+
+NetworkErrorLoggingService::RequestDetails&
+NetworkErrorLoggingService::RequestDetails::operator=(
+    const RequestDetails& other) = default;
+
+NetworkErrorLoggingService::RequestDetails&
+NetworkErrorLoggingService::RequestDetails::operator=(RequestDetails&& other) =
+    default;
+
 NetworkErrorLoggingService::RequestDetails::~RequestDetails() = default;
 
 NetworkErrorLoggingService::SignedExchangeReportDetails::
@@ -957,6 +971,17 @@ NetworkErrorLoggingService::SignedExchangeReportDetails::
 NetworkErrorLoggingService::SignedExchangeReportDetails::
     SignedExchangeReportDetails(const SignedExchangeReportDetails& other) =
         default;
+
+NetworkErrorLoggingService::SignedExchangeReportDetails::
+    SignedExchangeReportDetails(SignedExchangeReportDetails&& other) = default;
+
+NetworkErrorLoggingService::SignedExchangeReportDetails&
+NetworkErrorLoggingService::SignedExchangeReportDetails::operator=(
+    const SignedExchangeReportDetails& other) = default;
+
+NetworkErrorLoggingService::SignedExchangeReportDetails&
+NetworkErrorLoggingService::SignedExchangeReportDetails::operator=(
+    SignedExchangeReportDetails&& other) = default;
 
 NetworkErrorLoggingService::SignedExchangeReportDetails::
     ~SignedExchangeReportDetails() = default;
@@ -1040,6 +1065,12 @@ NetworkErrorLoggingService::GetPersistentNelStoreForTesting() {
 ReportingService* NetworkErrorLoggingService::GetReportingServiceForTesting() {
   NOTIMPLEMENTED();
   return nullptr;
+}
+
+void NetworkErrorLoggingService::LoadPoliciesForTesting(
+    std::vector<NetworkErrorLoggingService::NelPolicy> policies) {
+  NOTIMPLEMENTED();
+  return;
 }
 
 NetworkErrorLoggingService::NetworkErrorLoggingService()

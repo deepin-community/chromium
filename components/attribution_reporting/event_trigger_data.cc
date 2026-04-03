@@ -11,6 +11,7 @@
 #include "base/types/expected.h"
 #include "base/types/expected_macros.h"
 #include "base/values.h"
+#include "components/attribution_reporting/constants.h"
 #include "components/attribution_reporting/filters.h"
 #include "components/attribution_reporting/parsing_utils.h"
 #include "components/attribution_reporting/trigger_registration_error.mojom.h"
@@ -21,22 +22,18 @@ namespace {
 
 using ::attribution_reporting::mojom::TriggerRegistrationError;
 
-constexpr char kTriggerData[] = "trigger_data";
-
 }  // namespace
 
 // static
 base::expected<EventTriggerData, TriggerRegistrationError>
 EventTriggerData::FromJSON(base::Value& value) {
-  base::Value::Dict* dict = value.GetIfDict();
+  base::DictValue* dict = value.GetIfDict();
   if (!dict) {
     return base::unexpected(
         TriggerRegistrationError::kEventTriggerDataWrongType);
   }
 
   EventTriggerData out;
-
-  ASSIGN_OR_RETURN(out.filters, FilterPair::FromJSON(*dict));
 
   ASSIGN_OR_RETURN(
       out.data,
@@ -53,6 +50,8 @@ EventTriggerData::FromJSON(base::Value& value) {
     return TriggerRegistrationError::kEventDedupKeyValueInvalid;
   });
 
+  ASSIGN_OR_RETURN(out.filters, FilterPair::FromJSON(*dict));
+
   return out;
 }
 
@@ -67,8 +66,8 @@ EventTriggerData::EventTriggerData(uint64_t data,
       dedup_key(dedup_key),
       filters(std::move(filters)) {}
 
-base::Value::Dict EventTriggerData::ToJson() const {
-  base::Value::Dict dict;
+base::DictValue EventTriggerData::ToJson() const {
+  base::DictValue dict;
 
   filters.SerializeIfNotEmpty(dict);
 

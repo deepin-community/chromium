@@ -5,11 +5,13 @@
 #include "chrome/browser/devtools/device/devtools_device_discovery.h"
 
 #include <map>
+#include <string_view>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/user_metrics.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
@@ -93,7 +95,7 @@ void ProtocolCommand::OnSocketClosed() {
   delete this;
 }
 
-ProtocolCommand::~ProtocolCommand() {}
+ProtocolCommand::~ProtocolCommand() = default;
 
 // AgentHostDelegate ----------------------------------------------------------
 
@@ -126,15 +128,14 @@ class WebSocketProxy : public AndroidDeviceManager::AndroidWebSocket::Delegate {
   }
 
   void OnFrameRead(const std::string& message) override {
-    proxy_->DispatchOnClientHost(base::as_bytes(base::make_span(message)));
+    proxy_->DispatchOnClientHost(base::as_byte_span(message));
   }
 
   void OnSocketClosed() override {
-    constexpr char kMsg[] =
+    constexpr std::string_view kMsg =
         "{\"method\":\"Inspector.detached\",\"params\":"
         "{\"reason\":\"Connection lost.\"}}";
-    proxy_->DispatchOnClientHost(
-        base::as_bytes(base::make_span(kMsg, strlen(kMsg))));
+    proxy_->DispatchOnClientHost(base::as_byte_span(kMsg));
     web_socket_.reset();
     socket_opened_ = false;
     proxy_->ConnectionClosed();  // Deletes |this|.
@@ -144,7 +145,7 @@ class WebSocketProxy : public AndroidDeviceManager::AndroidWebSocket::Delegate {
   bool socket_opened_;
   std::vector<std::string> pending_messages_;
   std::unique_ptr<AndroidDeviceManager::AndroidWebSocket> web_socket_;
-  content::DevToolsExternalAgentProxy* proxy_;
+  raw_ptr<content::DevToolsExternalAgentProxy> proxy_;
 };
 
 class AgentHostDelegate : public content::DevToolsExternalAgentProxyDelegate {
@@ -156,7 +157,7 @@ class AgentHostDelegate : public content::DevToolsExternalAgentProxyDelegate {
       const std::string& local_id,
       const std::string& target_path,
       const std::string& type,
-      const base::Value::Dict* value);
+      const base::DictValue* value);
 
   AgentHostDelegate(const AgentHostDelegate&) = delete;
   AgentHostDelegate& operator=(const AgentHostDelegate&) = delete;
@@ -170,7 +171,7 @@ class AgentHostDelegate : public content::DevToolsExternalAgentProxyDelegate {
                     const std::string& local_id,
                     const std::string& target_path,
                     const std::string& type,
-                    const base::Value::Dict* value);
+                    const base::DictValue* value);
   // DevToolsExternalAgentProxyDelegate overrides.
   void Attach(content::DevToolsExternalAgentProxy* proxy) override;
   void Detach(content::DevToolsExternalAgentProxy* proxy) override;
@@ -198,13 +199,13 @@ class AgentHostDelegate : public content::DevToolsExternalAgentProxyDelegate {
   std::string description_;
   GURL url_;
   GURL favicon_url_;
-  content::DevToolsAgentHost* agent_host_;
+  raw_ptr<content::DevToolsAgentHost> agent_host_;
   std::map<content::DevToolsExternalAgentProxy*,
            std::unique_ptr<WebSocketProxy>>
       proxies_;
 };
 
-static std::string GetStringProperty(const base::Value::Dict& value,
+static std::string GetStringProperty(const base::DictValue& value,
                                      const std::string& name) {
   const std::string* result = value.FindString(name);
   return result ? *result : std::string();
@@ -212,12 +213,12 @@ static std::string GetStringProperty(const base::Value::Dict& value,
 
 static std::string BuildUniqueTargetId(const std::string& serial,
                                        const std::string& browser_id,
-                                       const base::Value::Dict& value) {
+                                       const base::DictValue& value) {
   return base::StringPrintf("%s:%s:%s", serial.c_str(), browser_id.c_str(),
                             GetStringProperty(value, "id").c_str());
 }
 
-static std::string GetFrontendURLFromValue(const base::Value::Dict& value,
+static std::string GetFrontendURLFromValue(const base::DictValue& value,
                                            const std::string& browser_version) {
   std::string frontend_url = GetStringProperty(value, "devtoolsFrontendUrl");
   size_t ws_param = frontend_url.find("?ws");
@@ -233,7 +234,7 @@ static std::string GetFrontendURLFromValue(const base::Value::Dict& value,
   return frontend_url;
 }
 
-static std::string GetTargetPath(const base::Value::Dict& value) {
+static std::string GetTargetPath(const base::DictValue& value) {
   std::string target_path = GetStringProperty(value, "webSocketDebuggerUrl");
 
   if (base::StartsWith(target_path, "ws://", base::CompareCase::SENSITIVE)) {
@@ -257,7 +258,7 @@ AgentHostDelegate::GetOrCreateAgentHost(
     const std::string& local_id,
     const std::string& target_path,
     const std::string& type,
-    const base::Value::Dict* value) {
+    const base::DictValue* value) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   scoped_refptr<DevToolsAgentHost> result =
       DevToolsAgentHost::GetForId(local_id);
@@ -280,7 +281,7 @@ AgentHostDelegate::AgentHostDelegate(
     const std::string& local_id,
     const std::string& target_path,
     const std::string& type,
-    const base::Value::Dict* value)
+    const base::DictValue* value)
     : device_(device),
       browser_id_(browser_id),
       local_id_(local_id),
@@ -439,8 +440,22 @@ void DevToolsDeviceDiscovery::DiscoveryRequest::ReceivedDevices(
     const AndroidDeviceManager::Devices& devices) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   for (const auto& device : devices) {
-    device->QueryDeviceInfo(
-        base::BindOnce(&DiscoveryRequest::ReceivedDeviceInfo, this, device));
+    switch (device->connected_state()) {
+      case AndroidDeviceManager::DeviceInfo::kLocked:
+        // We don't expect this state to be reported by AdbDeviceProvider.
+        DCHECK(false);
+        ABSL_FALLTHROUGH_INTENDED;
+      case AndroidDeviceManager::DeviceInfo::kUnauthorized:
+      case AndroidDeviceManager::DeviceInfo::kOffline:
+        DiscoveryRequest::ReceivedDeviceInfo(
+            device, AndroidDeviceManager::DeviceInfo());
+        break;
+      case AndroidDeviceManager::DeviceInfo::kConnected:
+      case AndroidDeviceManager::DeviceInfo::kUnknown:
+        device->QueryDeviceInfo(base::BindOnce(
+            &DiscoveryRequest::ReceivedDeviceInfo, this, device));
+        break;
+    }
   }
 }
 
@@ -448,14 +463,25 @@ void DevToolsDeviceDiscovery::DiscoveryRequest::ReceivedDeviceInfo(
     scoped_refptr<AndroidDeviceManager::Device> device,
     const AndroidDeviceManager::DeviceInfo& device_info) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  AndroidDeviceManager::DeviceInfo device_info_copy = device_info;
+  if (device_info.connected_state ==
+      AndroidDeviceManager::DeviceInfo::kUnknown) {
+    // If the initial query said it was connected but querying the device for
+    // more information failed, it is offline. Otherwise, replace the connection
+    // state with info from the devices query.
+    device_info_copy.connected_state =
+        device->connected_state() ==
+                AndroidDeviceManager::DeviceInfo::kConnected
+            ? AndroidDeviceManager::DeviceInfo::kOffline
+            : device->connected_state();
+  }
   scoped_refptr<RemoteDevice> remote_device =
-      new RemoteDevice(device->serial(), device_info);
-  complete_devices_.push_back(std::make_pair(device, remote_device));
-  for (auto it = remote_device->browsers().begin();
-       it != remote_device->browsers().end(); ++it) {
+      new RemoteDevice(device->serial(), device_info_copy);
+  complete_devices_.emplace_back(device, remote_device);
+  for (auto & it : remote_device->browsers()) {
     device->SendJsonRequest(
-        (*it)->socket(), kVersionRequest,
-        base::BindOnce(&DiscoveryRequest::ReceivedVersion, this, device, *it));
+        it->socket(), kVersionRequest,
+        base::BindOnce(&DiscoveryRequest::ReceivedVersion, this, device, it));
   }
 }
 
@@ -464,14 +490,14 @@ void DevToolsDeviceDiscovery::DiscoveryRequest::ParseBrowserInfo(
     const std::string& version_response,
     bool& is_chrome) {
   // Parse version, append to package name if available,
-  std::optional<base::Value::Dict> value_dict =
-      base::JSONReader::ReadDict(version_response);
+  std::optional<base::DictValue> value_dict = base::JSONReader::ReadDict(
+      version_response, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!value_dict) {
     return;
   }
   const std::string* browser_name = value_dict->FindString("Browser");
   if (browser_name) {
-    std::vector<base::StringPiece> parts = base::SplitStringPiece(
+    std::vector<std::string_view> parts = base::SplitStringPiece(
         *browser_name, "/", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
     if (parts.size() == 2) {
       browser->version_ = parts[1];
@@ -503,8 +529,7 @@ void DevToolsDeviceDiscovery::DiscoveryRequest::ReceivedVersion(
   if (result >= 0) {
     ParseBrowserInfo(browser, response, is_chrome);
   }
-  if (base::FeatureList::IsEnabled(::features::kDevToolsTabTarget) &&
-      is_chrome) {
+  if (is_chrome) {
     url += "?for_tab";
   }
   device->SendJsonRequest(
@@ -521,7 +546,8 @@ void DevToolsDeviceDiscovery::DiscoveryRequest::ReceivedPages(
   if (result < 0) {
     return;
   }
-  std::optional<base::Value> value = base::JSONReader::Read(response);
+  std::optional<base::Value> value =
+      base::JSONReader::Read(response, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!value) {
     return;
   }
@@ -544,13 +570,13 @@ DevToolsDeviceDiscovery::RemotePage::RemotePage(
     scoped_refptr<AndroidDeviceManager::Device> device,
     const std::string& browser_id,
     const std::string& browser_version,
-    base::Value::Dict dict)
+    base::DictValue dict)
     : device_(device),
       browser_id_(browser_id),
       browser_version_(browser_version),
       dict_(std::move(dict)) {}
 
-DevToolsDeviceDiscovery::RemotePage::~RemotePage() {}
+DevToolsDeviceDiscovery::RemotePage::~RemotePage() = default;
 
 scoped_refptr<content::DevToolsAgentHost>
 DevToolsDeviceDiscovery::RemotePage::CreateTarget() {
@@ -561,7 +587,7 @@ DevToolsDeviceDiscovery::RemotePage::CreateTarget() {
 
   std::string port_num = browser_id_;
   if (type == "node") {
-    port_num = GURL(GetStringProperty(dict_, "webSocketDebuggerUrl")).port();
+    port_num = GURL(GetStringProperty(dict_, "webSocketDebuggerUrl")).GetPort();
   }
 
   agent_host_ = AgentHostDelegate::GetOrCreateAgentHost(
@@ -591,7 +617,7 @@ std::string DevToolsDeviceDiscovery::RemoteBrowser::GetId() {
 DevToolsDeviceDiscovery::RemoteBrowser::ParsedVersion
 DevToolsDeviceDiscovery::RemoteBrowser::GetParsedVersion() {
   ParsedVersion result;
-  for (const base::StringPiece& part : base::SplitStringPiece(
+  for (std::string_view part : base::SplitStringPiece(
            version_, ".", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
     int value = 0;
     base::StringToInt(part, &value);
@@ -600,7 +626,7 @@ DevToolsDeviceDiscovery::RemoteBrowser::GetParsedVersion() {
   return result;
 }
 
-DevToolsDeviceDiscovery::RemoteBrowser::~RemoteBrowser() {}
+DevToolsDeviceDiscovery::RemoteBrowser::~RemoteBrowser() = default;
 
 // DevToolsDeviceDiscovery::RemoteDevice --------------------------------------
 
@@ -609,7 +635,14 @@ DevToolsDeviceDiscovery::RemoteDevice::RemoteDevice(
     const AndroidDeviceManager::DeviceInfo& device_info)
     : serial_(serial),
       model_(device_info.model),
-      connected_(device_info.connected),
+      connected_(device_info.connected_state ==
+                 AndroidDeviceManager::DeviceInfo::kConnected),
+      unauthorized_(device_info.connected_state ==
+                        AndroidDeviceManager::DeviceInfo::kUnauthorized ||
+                    device_info.connected_state ==
+                        AndroidDeviceManager::DeviceInfo::kUnknown),
+      locked_(device_info.connected_state ==
+            AndroidDeviceManager::DeviceInfo::kLocked),
       screen_size_(device_info.screen_size) {
   for (auto it = device_info.browser_info.begin();
        it != device_info.browser_info.end(); ++it) {
@@ -617,7 +650,7 @@ DevToolsDeviceDiscovery::RemoteDevice::RemoteDevice(
   }
 }
 
-DevToolsDeviceDiscovery::RemoteDevice::~RemoteDevice() {}
+DevToolsDeviceDiscovery::RemoteDevice::~RemoteDevice() = default;
 
 // DevToolsDeviceDiscovery ----------------------------------------------------
 

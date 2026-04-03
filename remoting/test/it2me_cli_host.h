@@ -44,14 +44,15 @@ class It2MeCliHost final : public extensions::NativeMessageHost::Client {
   void CloseChannel(const std::string& error_message) override;
 
   // Sends message to host in separate task.
-  void SendMessageToHost(const std::string& type, base::Value::Dict params);
+  void SendMessageToHost(const std::string& type, base::DictValue params);
   // Actually sends message to host.
   void DoSendMessage(const std::string& json);
   void OnProtocolBroken(const std::string& message);
 
   void StartCRDHostAndGetCode(OAuthTokenGetter::Status status,
                               const std::string& user_email,
-                              const std::string& access_token);
+                              const std::string& access_token,
+                              const std::string& scopes);
 
   // Shuts down host in a separate task.
   void ShutdownHost();
@@ -63,10 +64,10 @@ class It2MeCliHost final : public extensions::NativeMessageHost::Client {
   void OnDisconnectResponse();
 
   void OnStateError(const std::string& error_state,
-                    const base::Value::Dict& message);
-  void OnStateRemoteConnected(const base::Value::Dict& message);
+                    const base::DictValue& message);
+  void OnStateRemoteConnected(const base::DictValue& message);
   void OnStateRemoteDisconnected();
-  void OnStateReceivedAccessCode(const base::Value::Dict& message);
+  void OnStateReceivedAccessCode(const base::DictValue& message);
 
   std::unique_ptr<test::TestTokenStorage> storage_;
   std::unique_ptr<test::TestOAuthTokenGetter> token_getter_;
@@ -74,7 +75,7 @@ class It2MeCliHost final : public extensions::NativeMessageHost::Client {
   std::unique_ptr<extensions::NativeMessageHost> host_;
 
   // Filled structure with parameters for "connect" message.
-  base::Value::Dict connect_params_;
+  base::DictValue connect_params_;
 
   // Determines actions when receiving messages from CRD host,
   // if command is still running (no error / access code), then

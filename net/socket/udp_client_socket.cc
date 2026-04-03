@@ -8,27 +8,28 @@
 #include "build/build_config.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_change_notifier.h"
+#include "net/base/port_util.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
 namespace net {
 
 namespace {
 
-base::Value::Dict CreateNetLogUDPConnectParams(const IPEndPoint& address,
-                                               int net_error) {
+base::DictValue CreateNetLogUDPConnectParams(const IPEndPoint& address,
+                                             int net_error) {
   DCHECK_NE(ERR_IO_PENDING, net_error);
-  auto params = base::Value::Dict().Set("address", address.ToString());
+  auto params = base::DictValue().Set("address", address.ToString());
   if (net_error < 0) {
     params.Set("net_error", net_error);
   }
   return params;
 }
 
-base::Value::Dict CreateNetLogUDPBindToNetworkParams(
+base::DictValue CreateNetLogUDPBindToNetworkParams(
     handles::NetworkHandle network,
     int net_error) {
   DCHECK_NE(ERR_IO_PENDING, net_error);
-  auto params = base::Value::Dict().Set("network", static_cast<int>(network));
+  auto params = base::DictValue().Set("network", static_cast<int>(network));
   if (net_error < 0) {
     params.Set("net_error", net_error);
   }
@@ -65,6 +66,9 @@ UDPClientSocket::~UDPClientSocket() {
 
 int UDPClientSocket::Connect(const IPEndPoint& address) {
   CHECK(!connect_called_);
+  if (!IsPortAllowedForIpEndpoint(address)) {
+    return ERR_UNSAFE_PORT;
+  }
   if (connect_using_network_ != handles::kInvalidNetworkHandle)
     return ConnectUsingNetwork(connect_using_network_, address);
 
@@ -254,6 +258,19 @@ void UDPClientSocket::EnableRecvOptimization() {
 void UDPClientSocket::SetIOSNetworkServiceType(int ios_network_service_type) {
 #if BUILDFLAG(IS_POSIX)
   socket_.SetIOSNetworkServiceType(ios_network_service_type);
+#endif
+}
+
+void UDPClientSocket::RegisterQuicConnectionClosePayload(
+    base::span<uint8_t> payload) {
+#if BUILDFLAG(IS_POSIX)
+  socket_.RegisterQuicConnectionClosePayload(payload);
+#endif
+}
+
+void UDPClientSocket::UnregisterQuicConnectionClosePayload() {
+#if BUILDFLAG(IS_POSIX)
+  socket_.UnregisterQuicConnectionClosePayload();
 #endif
 }
 

@@ -8,6 +8,7 @@
 
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "media/base/media_switches.h"
@@ -19,7 +20,7 @@ namespace media {
 // only in one spot.
 const char MediaLog::kEventKey[] = "event";
 
-MediaLog::MediaLog() : MediaLog(new ParentLogRecord(this)) {}
+MediaLog::MediaLog() : MediaLog(base::MakeRefCounted<ParentLogRecord>(this)) {}
 
 MediaLog::MediaLog(scoped_refptr<ParentLogRecord> parent_log_record)
     : parent_log_record_(std::move(parent_log_record)) {}
@@ -50,11 +51,7 @@ std::string MediaLog::GetErrorMessageLocked() {
 void MediaLog::Stop() {}
 
 bool MediaLog::ShouldLogToDebugConsole() const {
-#if DCHECK_IS_ON()
   return true;
-#else
-  return false;
-#endif
 }
 
 void MediaLog::AddMessage(MediaLogMessageLevel level, std::string message) {
@@ -101,7 +98,7 @@ std::unique_ptr<MediaLogRecord> MediaLog::CreateRecord(
   auto record = std::make_unique<MediaLogRecord>();
   // Record IDs are populated by event handlers before they are sent to various
   // log viewers, such as the media-internals page, or devtools.
-  record->id = 0;
+  record->id = MediaPlayerLoggingID(0);
   record->type = type;
   record->time = base::TimeTicks::Now();
   return record;
@@ -122,20 +119,35 @@ MediaLog::ParentLogRecord::~ParentLogRecord() = default;
 LogHelper::LogHelper(MediaLogMessageLevel level,
                      MediaLog* media_log,
                      const char* file,
-                     int line)
-    : file_(file), line_(line), level_(level), media_log_(media_log) {
+                     int line,
+                     std::optional<logging::SystemErrorCode> code)
+    : file_(file),
+      line_(line),
+      level_(level),
+      media_log_(media_log),
+      code_(code) {
   DCHECK(media_log_);
 }
 
 LogHelper::LogHelper(MediaLogMessageLevel level,
                      const std::unique_ptr<MediaLog>& media_log,
                      const char* file,
-                     int line)
-    : LogHelper(level, media_log.get(), file, line) {}
+                     int line,
+                     std::optional<logging::SystemErrorCode> code)
+    : LogHelper(level, media_log.get(), file, line, code) {}
 
 LogHelper::~LogHelper() {
-  const auto log = stream_.str();
+  if (code_) {
+    stream_ << ": ";
+    auto err_string = logging::SystemErrorCodeToString(*code_);
+    if (!base::IsStringUTF8AllowingNoncharacters(err_string)) {
+      stream_ << *code_;
+    } else {
+      stream_ << err_string;
+    }
+  }
 
+  const auto log = stream_.str();
   if (media_log_->ShouldLogToDebugConsole()) {
     switch (level_) {
       case MediaLogMessageLevel::kERROR:

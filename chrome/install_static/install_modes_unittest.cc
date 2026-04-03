@@ -8,6 +8,7 @@
 
 #include <cguid.h>
 
+#include "base/compiler_specific.h"
 #include "base/strings/string_util.h"
 #include "chrome/install_static/buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -31,7 +32,7 @@ namespace {
 MATCHER(ContainsIllegalProgIdChar, "") {
   const wchar_t* scan = arg;
   wchar_t c;
-  while ((c = *scan++) != 0) {
+  while ((c = *UNSAFE_TODO(scan++)) != 0) {
     if (!base::IsAsciiAlphaNumeric(c) && c != L'.') {
       return true;
     }
@@ -42,8 +43,8 @@ MATCHER(ContainsIllegalProgIdChar, "") {
 }  // namespace
 
 TEST(InstallModes, VerifyModes) {
-  ASSERT_THAT(NUM_INSTALL_MODES, Gt(0));
-  for (int i = 0; i < NUM_INSTALL_MODES; ++i) {
+  ASSERT_THAT(kInstallModes.size(), Gt(0));
+  for (size_t i = 0; i < kInstallModes.size(); ++i) {
     const InstallConstants& mode = kInstallModes[i];
 
     // The modes must be listed in order.
@@ -114,6 +115,15 @@ TEST(InstallModes, VerifyModes) {
 
     // Every mode must have an elevator IID.
     ASSERT_THAT(mode.elevator_iid, Ne(CLSID_NULL));
+
+    // Assert that html_doc_icon_resource_index is set.
+    ASSERT_THAT(mode.html_doc_icon_resource_index, Ne(0));
+
+    // Assert that pdf_doc_icon_resource_index is set.
+    ASSERT_THAT(mode.pdf_doc_icon_resource_index, Ne(0));
+
+    // Every mode must specify a direct launch URL scheme; empty string is okay.
+    ASSERT_THAT(mode.direct_launch_url_scheme, Ne(nullptr));
 
     // UNSUPPORTED and USE_GOOGLE_UPDATE_INTEGRATION are mutually exclusive.
 #if !BUILDFLAG(USE_GOOGLE_UPDATE_INTEGRATION)

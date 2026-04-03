@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 // storeimage_paletted.cpp: Encodes GL_PALETTE_* textures.
 
 #include <unordered_map>
@@ -124,7 +128,7 @@ void StoreRGBA8ToPalettedImpl(size_t width,
     // We might not fill-out the entire palette.
     memset(palette, 0xab, paletteBytes);
 
-    uint8_t *texels = output + paletteBytes;  // + TODO(http://anglebug.com/7688): mip levels
+    uint8_t *texels = output + paletteBytes;  // + TODO(http://anglebug.com/42266155): mip levels
 
     for (size_t z = 0; z < depth; z++)
     {

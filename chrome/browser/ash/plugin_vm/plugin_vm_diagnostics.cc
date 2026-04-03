@@ -8,6 +8,7 @@
 #include <string_view>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
@@ -42,7 +43,7 @@ std::string CapitalizedBoardName() {
 
   CHECK_GE(uppercase.size(), 1u);
   std::string_view uppercase_first_char(uppercase.c_str(), 1);
-  std::string_view uppercase_remaining(uppercase.c_str() + 1,
+  std::string_view uppercase_remaining(UNSAFE_TODO(uppercase.c_str() + 1),
                                        uppercase.length() - 1);
 
   return base::StrCat(
@@ -126,7 +127,7 @@ class PluginVmDiagnostics : public base::RefCounted<PluginVmDiagnostics> {
       switch (is_allowed_diagnostics.policy_configured) {
         case PolicyConfigured::kOk: {
           // Additional check for image policy. See b/185281662#comment2.
-          const base::Value::Dict& image_policy =
+          const base::DictValue& image_policy =
               active_profile_->GetPrefs()->GetDict(prefs::kPluginVmImage);
           const base::Value* url =
               image_policy.Find(prefs::kPluginVmImageUrlKeyName);

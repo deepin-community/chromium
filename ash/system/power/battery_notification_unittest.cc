@@ -16,6 +16,7 @@
 #include "ash/system/toast/toast_manager_impl.h"
 #include "ash/system/toast/toast_overlay.h"
 #include "ash/test/ash_test_base.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power_manager/power_supply_properties.pb.h"
@@ -63,7 +64,7 @@ class BatteryNotificationTest : public AshTestBase {
   }
 
   void TearDown() override {
-    OverrideIsBatterySaverAllowedForTesting(absl::nullopt);
+    OverrideIsBatterySaverAllowedForTesting(std::nullopt);
     battery_notification_.reset();
     AshTestBase::TearDown();
     chromeos::PowerManagerClient::Shutdown();

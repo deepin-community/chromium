@@ -4,12 +4,14 @@
 
 #include "gpu/command_buffer/client/dawn_client_serializer.h"
 
+#include "base/compiler_specific.h"
 #include "base/numerics/checked_math.h"
 #include "base/trace_event/trace_event.h"
 #include "gpu/command_buffer/client/dawn_client_memory_transfer_service.h"
 #include "gpu/command_buffer/client/shared_memory_limits.h"
 #include "gpu/command_buffer/client/webgpu_cmd_helper.h"
 #include "gpu/command_buffer/client/webgpu_implementation.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace gpu {
 namespace webgpu {
@@ -52,11 +54,11 @@ void* DawnClientSerializer::GetCmdSpace(size_t size) {
   const bool overflows_remaining_space =
       size > static_cast<size_t>(buffer_.size() - put_offset_);
 
-  if (LIKELY(buffer_.valid() && !overflows_remaining_space)) {
+  if (buffer_.valid() && !overflows_remaining_space) [[likely]] {
     // If the buffer is valid and has sufficient space, return the
     // pointer and increment the offset.
     uint8_t* ptr = static_cast<uint8_t*>(buffer_.address());
-    ptr += put_offset_;
+    UNSAFE_TODO(ptr += put_offset_);
 
     put_offset_ += static_cast<uint32_t>(size);
     return ptr;
@@ -98,9 +100,8 @@ void DawnClientSerializer::Commit() {
     uint64_t trace_id;
     if (is_tracing) {
       trace_id = base::RandUint64();
-      TRACE_EVENT_WITH_FLOW0(TRACE_DISABLED_BY_DEFAULT("gpu.dawn"),
-                             "DawnCommands", trace_id,
-                             TRACE_EVENT_FLAG_FLOW_OUT);
+      TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("gpu.dawn"), "DawnCommands",
+                  perfetto::Flow::Global(trace_id));
     } else {
       trace_id = 0;
     }
@@ -128,7 +129,7 @@ void DawnClientSerializer::Disconnect() {
     auto transfer_buffer = std::move(transfer_buffer_);
     // Wait for commands to finish before we free shared memory that
     // the GPU process is using.
-    // TODO(crbug.com/1231599): This Finish may not be necessary if the
+    // TODO(crbug.com/40779774): This Finish may not be necessary if the
     // shared memory is not immediately freed. Investigate this and
     // consider optimization.
     helper_->Finish();

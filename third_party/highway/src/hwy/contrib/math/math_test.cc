@@ -13,21 +13,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef __STDC_FORMAT_MACROS
-#define __STDC_FORMAT_MACROS  // before inttypes.h
-#endif
-#include <inttypes.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include <cfloat>  // FLT_MAX
 #include <cmath>   // std::abs
-#include <type_traits>
+
+#include "hwy/base.h"
 
 // clang-format off
 #undef HWY_TARGET_INCLUDE
 #define HWY_TARGET_INCLUDE "hwy/contrib/math/math_test.cc"
 #include "hwy/foreach_target.h"  // IWYU pragma: keep
-
+#include "hwy/highway.h"
 #include "hwy/contrib/math/math-inl.h"
 #include "hwy/tests/test_util-inl.h"
 // clang-format on
@@ -35,32 +33,65 @@
 HWY_BEFORE_NAMESPACE();
 namespace hwy {
 namespace HWY_NAMESPACE {
+namespace {
 
-template <class Out, class In>
-inline Out BitCast(const In& in) {
-  static_assert(sizeof(Out) == sizeof(In), "");
-  Out out;
-  CopyBytes<sizeof(out)>(&in, &out);
-  return out;
-}
+// We have had test failures caused by excess precision due to keeping
+// intermediate results in 80-bit x87 registers. One such failure mode is that
+// Log1p computes a 1.0 which is not exactly equal to 1.0f, causing is_pole to
+// incorrectly evaluate to false.
+#undef HWY_MATH_TEST_EXCESS_PRECISION
+#if HWY_ARCH_X86_32 && HWY_COMPILER_GCC_ACTUAL && \
+    (HWY_TARGET == HWY_SCALAR || HWY_TARGET == HWY_EMU128)
+
+// GCC 13+: because CMAKE_CXX_EXTENSIONS is OFF, we build with -std= and hence
+// also -fexcess-precision=standard, so there is no problem. See #1708 and
+// https://gcc.gnu.org/bugzilla/show_bug.cgi?id=323.
+#if HWY_COMPILER_GCC_ACTUAL >= 1300
+#define HWY_MATH_TEST_EXCESS_PRECISION 0
+
+#else                  // HWY_COMPILER_GCC_ACTUAL < 1300
+
+// The build system must enable SSE2, e.g. via HWY_CMAKE_SSE2 - see
+// https://stackoverflow.com/questions/20869904/c-handling-of-excess-precision .
+#if defined(__SSE2__)  // correct flag given, no problem
+#define HWY_MATH_TEST_EXCESS_PRECISION 0
+#else
+#define HWY_MATH_TEST_EXCESS_PRECISION 1
+#pragma message( \
+    "Skipping scalar math_test on 32-bit x86 GCC <13 without HWY_CMAKE_SSE2")
+#endif  // defined(__SSE2__)
+
+#endif  // HWY_COMPILER_GCC_ACTUAL
+#else   // not (x86-32, GCC, scalar target): running math_test normally
+#define HWY_MATH_TEST_EXCESS_PRECISION 0
+#endif  // HWY_ARCH_X86_32 etc
 
 template <class T, class D>
-HWY_NOINLINE void TestMath(const std::string name, T (*fx1)(T),
+HWY_NOINLINE void TestMath(const char* name, T (*fx1)(T),
                            Vec<D> (*fxN)(D, VecArg<Vec<D>>), D d, T min, T max,
                            uint64_t max_error_ulp) {
+  if (HWY_MATH_TEST_EXCESS_PRECISION) {
+    static bool once = true;
+    if (once) {
+      once = false;
+      HWY_WARN("Skipping math_test due to GCC issue with excess precision.\n");
+    }
+    return;
+  }
+
   using UintT = MakeUnsigned<T>;
 
-  const UintT min_bits = BitCast<UintT>(min);
-  const UintT max_bits = BitCast<UintT>(max);
+  const UintT min_bits = BitCastScalar<UintT>(min);
+  const UintT max_bits = BitCastScalar<UintT>(max);
 
   // If min is negative and max is positive, the range needs to be broken into
   // two pieces, [+0, max] and [-0, min], otherwise [min, max].
   int range_count = 1;
   UintT ranges[2][2] = {{min_bits, max_bits}, {0, 0}};
   if ((min < 0.0) && (max > 0.0)) {
-    ranges[0][0] = BitCast<UintT>(static_cast<T>(+0.0));
+    ranges[0][0] = BitCastScalar<UintT>(ConvertScalarTo<T>(+0.0));
     ranges[0][1] = max_bits;
-    ranges[1][0] = BitCast<UintT>(static_cast<T>(-0.0));
+    ranges[1][0] = BitCastScalar<UintT>(ConvertScalarTo<T>(-0.0));
     ranges[1][1] = min_bits;
     range_count = 2;
   }
@@ -75,7 +106,8 @@ HWY_NOINLINE void TestMath(const std::string name, T (*fx1)(T),
     for (UintT value_bits = start; value_bits <= stop; value_bits += step) {
       // For reasons unknown, the HWY_MAX is necessary on RVV, otherwise
       // value_bits can be less than start, and thus possibly NaN.
-      const T value = BitCast<T>(HWY_MIN(HWY_MAX(start, value_bits), stop));
+      const T value =
+          BitCastScalar<T>(HWY_MIN(HWY_MAX(start, value_bits), stop));
       const T actual = GetLane(fxN(d, Set(d, value)));
       const T expected = fx1(value);
 
@@ -89,22 +121,21 @@ HWY_NOINLINE void TestMath(const std::string name, T (*fx1)(T),
       const auto ulp = hwy::detail::ComputeUlpDelta(actual, expected);
       max_ulp = HWY_MAX(max_ulp, ulp);
       if (ulp > max_error_ulp) {
-        fprintf(stderr,
-                "%s: %s(%f) expected %f actual %f ulp %" PRIu64 " max ulp %u\n",
-                hwy::TypeName(T(), Lanes(d)).c_str(), name.c_str(), value,
-                expected, actual, static_cast<uint64_t>(ulp),
+        fprintf(stderr, "%s: %s(%f) expected %E actual %E ulp %g max ulp %u\n",
+                hwy::TypeName(T(), Lanes(d)).c_str(), name, value, expected,
+                actual, static_cast<double>(ulp),
                 static_cast<uint32_t>(max_error_ulp));
       }
     }
   }
-  fprintf(stderr, "%s: %s max_ulp %" PRIu64 "\n",
-          hwy::TypeName(T(), Lanes(d)).c_str(), name.c_str(), max_ulp);
+  fprintf(stderr, "%s: %s max_ulp %g\n", hwy::TypeName(T(), Lanes(d)).c_str(),
+          name, static_cast<double>(max_ulp));
   HWY_ASSERT(max_ulp <= max_error_ulp);
 }
 
-#define DEFINE_MATH_TEST_FUNC(NAME)                 \
-  HWY_NOINLINE void TestAll##NAME() {               \
-    ForFloatTypes(ForPartialVectors<Test##NAME>()); \
+#define DEFINE_MATH_TEST_FUNC(NAME)                     \
+  HWY_NOINLINE void TestAll##NAME() {                   \
+    ForFloat3264Types(ForPartialVectors<Test##NAME>()); \
   }
 
 #undef DEFINE_MATH_TEST
@@ -125,53 +156,13 @@ HWY_NOINLINE void TestMath(const std::string name, T (*fx1)(T),
   };                                                                      \
   DEFINE_MATH_TEST_FUNC(NAME)
 
-// Floating point values closest to but less than 1.0
-const float kNearOneF = BitCast<float>(0x3F7FFFFF);
-const double kNearOneD = BitCast<double>(0x3FEFFFFFFFFFFFFFULL);
-
-// The discrepancy is unacceptably large for MSYS2 (less accurate libm?), so
-// only increase the error tolerance there.
-constexpr uint64_t Cos64ULP() {
-#if defined(__MINGW32__)
-  return 23;
-#else
-  return 3;
-#endif
-}
-
-constexpr uint64_t ACosh32ULP() {
-#if defined(__MINGW32__)
-  return 8;
-#else
-  return 3;
-#endif
-}
-
 // clang-format off
-DEFINE_MATH_TEST(Acos,
-  std::acos,  CallAcos,  -1.0f,      +1.0f,       3,  // NEON is 3 instead of 2
-  std::acos,  CallAcos,  -1.0,       +1.0,        2)
-DEFINE_MATH_TEST(Acosh,
-  std::acosh, CallAcosh, +1.0f,      +FLT_MAX,    ACosh32ULP(),
-  std::acosh, CallAcosh, +1.0,       +DBL_MAX,    3)
-DEFINE_MATH_TEST(Asin,
-  std::asin,  CallAsin,  -1.0f,      +1.0f,       4,  // ARMv7 is 4 instead of 2
-  std::asin,  CallAsin,  -1.0,       +1.0,        2)
-DEFINE_MATH_TEST(Asinh,
-  std::asinh, CallAsinh, -FLT_MAX,   +FLT_MAX,    3,
-  std::asinh, CallAsinh, -DBL_MAX,   +DBL_MAX,    3)
-DEFINE_MATH_TEST(Atan,
-  std::atan,  CallAtan,  -FLT_MAX,   +FLT_MAX,    3,
-  std::atan,  CallAtan,  -DBL_MAX,   +DBL_MAX,    3)
-DEFINE_MATH_TEST(Atanh,
-  std::atanh, CallAtanh, -kNearOneF, +kNearOneF,  4,  // NEON is 4 instead of 3
-  std::atanh, CallAtanh, -kNearOneD, +kNearOneD,  3)
-DEFINE_MATH_TEST(Cos,
-  std::cos,   CallCos,   -39000.0f,  +39000.0f,   3,
-  std::cos,   CallCos,   -39000.0,   +39000.0,    Cos64ULP())
 DEFINE_MATH_TEST(Exp,
   std::exp,   CallExp,   -FLT_MAX,   +104.0f,     1,
   std::exp,   CallExp,   -DBL_MAX,   +104.0,      1)
+DEFINE_MATH_TEST(Exp2,
+  std::exp2,  CallExp2,  -FLT_MAX,   +128.0f,     2,
+  std::exp2,  CallExp2,  -DBL_MAX,   +128.0,      2)
 DEFINE_MATH_TEST(Expm1,
   std::expm1, CallExpm1, -FLT_MAX,   +104.0f,     4,
   std::expm1, CallExpm1, -DBL_MAX,   +104.0,      4)
@@ -187,42 +178,27 @@ DEFINE_MATH_TEST(Log1p,
 DEFINE_MATH_TEST(Log2,
   std::log2,  CallLog2,  +FLT_MIN,   +FLT_MAX,    2,
   std::log2,  CallLog2,  +DBL_MIN,   +DBL_MAX,    2)
-DEFINE_MATH_TEST(Sin,
-  std::sin,   CallSin,   -39000.0f,  +39000.0f,   3,
-  std::sin,   CallSin,   -39000.0,   +39000.0,    4)  // MSYS is 4 instead of 3
-DEFINE_MATH_TEST(Sinh,
-  std::sinh,  CallSinh,  -80.0f,     +80.0f,      4,
-  std::sinh,  CallSinh,  -709.0,     +709.0,      4)
-DEFINE_MATH_TEST(Tanh,
-  std::tanh,  CallTanh,  -FLT_MAX,   +FLT_MAX,    4,
-  std::tanh,  CallTanh,  -DBL_MAX,   +DBL_MAX,    4)
 // clang-format on
 
+}  // namespace
 // NOLINTNEXTLINE(google-readability-namespace-comments)
 }  // namespace HWY_NAMESPACE
 }  // namespace hwy
 HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
-
 namespace hwy {
+namespace {
 HWY_BEFORE_TEST(HwyMathTest);
-HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllAcos);
-HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllAcosh);
-HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllAsin);
-HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllAsinh);
-HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllAtan);
-HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllAtanh);
-HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllCos);
 HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllExp);
+HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllExp2);
 HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllExpm1);
 HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllLog);
 HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllLog10);
 HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllLog1p);
 HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllLog2);
-HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllSin);
-HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllSinh);
-HWY_EXPORT_AND_TEST_P(HwyMathTest, TestAllTanh);
+HWY_AFTER_TEST();
+}  // namespace
 }  // namespace hwy
-
-#endif
+HWY_TEST_MAIN();
+#endif  // HWY_ONCE

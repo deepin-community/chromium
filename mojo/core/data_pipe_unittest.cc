@@ -2,12 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "mojo/public/c/system/data_pipe.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/numerics/safe_conversions.h"
@@ -18,7 +23,6 @@
 #include "build/build_config.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/test/mojo_test_base.h"
-#include "mojo/public/c/system/data_pipe.h"
 #include "mojo/public/c/system/functions.h"
 #include "mojo/public/c/system/message_pipe.h"
 #include "mojo/public/cpp/system/data_pipe.h"
@@ -81,10 +85,12 @@ class DataPipeTest : public test::MojoTestBase {
   DataPipeTest& operator=(const DataPipeTest&) = delete;
 
   ~DataPipeTest() override {
-    if (producer_ != MOJO_HANDLE_INVALID)
+    if (producer_ != MOJO_HANDLE_INVALID) {
       CHECK_EQ(MOJO_RESULT_OK, MojoClose(producer_));
-    if (consumer_ != MOJO_HANDLE_INVALID)
+    }
+    if (consumer_ != MOJO_HANDLE_INVALID) {
       CHECK_EQ(MOJO_RESULT_OK, MojoClose(consumer_));
+    }
   }
 
   MojoResult ReadEmptyMessageWithHandles(MojoHandle pipe,
@@ -97,8 +103,9 @@ class DataPipeTest : public test::MojoTestBase {
     if (rv == MOJO_RESULT_OK) {
       CHECK_EQ(0u, bytes.size());
       CHECK_EQ(num_handles, handles.size());
-      for (size_t i = 0; i < num_handles; ++i)
-        out_handles[i] = handles[i].release().value();
+      for (size_t i = 0; i < num_handles; ++i) {
+        UNSAFE_TODO(out_handles[i]) = handles[i].release().value();
+      }
     }
     return rv;
   }
@@ -122,10 +129,12 @@ class DataPipeTest : public test::MojoTestBase {
                       bool all_or_none = false,
                       bool peek = false) {
     MojoReadDataFlags flags = MOJO_READ_DATA_FLAG_NONE;
-    if (all_or_none)
+    if (all_or_none) {
       flags |= MOJO_READ_DATA_FLAG_ALL_OR_NONE;
-    if (peek)
+    }
+    if (peek) {
       flags |= MOJO_READ_DATA_FLAG_PEEK;
+    }
 
     MojoReadDataOptions options;
     options.struct_size = sizeof(options);
@@ -142,8 +151,9 @@ class DataPipeTest : public test::MojoTestBase {
 
   MojoResult DiscardData(uint32_t* num_bytes, bool all_or_none = false) {
     MojoReadDataFlags flags = MOJO_READ_DATA_FLAG_DISCARD;
-    if (all_or_none)
+    if (all_or_none) {
       flags |= MOJO_READ_DATA_FLAG_ALL_OR_NONE;
+    }
     MojoReadDataOptions options;
     options.struct_size = sizeof(options);
     options.flags = flags;
@@ -219,7 +229,7 @@ TEST_F(DataPipeTest, Basic) {
 
 // Tests creation of data pipes with various (valid) options.
 TEST_F(DataPipeTest, CreateAndMaybeTransfer) {
-  MojoCreateDataPipeOptions test_options[] = {
+  auto test_options = std::to_array<MojoCreateDataPipeOptions>({
       // Default options.
       {},
       // Trivial element size, non-default capacity.
@@ -237,7 +247,8 @@ TEST_F(DataPipeTest, CreateAndMaybeTransfer) {
        MOJO_CREATE_DATA_PIPE_FLAG_NONE,  // |flags|.
        100,                              // |element_num_bytes|.
        0}                                // |capacity_num_bytes|.
-  };
+      ,
+  });
   for (size_t i = 0; i < std::size(test_options); i++) {
     MojoHandle producer_handle, consumer_handle;
     MojoCreateDataPipeOptions* options = i ? &test_options[i] : nullptr;
@@ -711,7 +722,7 @@ TEST_F(DataPipeTest, ConsumerWaitingTwoPhase) {
   EXPECT_GE(num_bytes, static_cast<uint32_t>(3u * sizeof(elements[0])));
   elements = static_cast<int32_t*>(buffer);
   elements[0] = 123;
-  elements[1] = 456;
+  UNSAFE_TODO(elements[1]) = 456;
   ASSERT_EQ(MOJO_RESULT_OK, EndWriteData(2u * sizeof(elements[0])));
 
   // Wait for readability.
@@ -869,8 +880,9 @@ TEST_F(DataPipeTest, BasicTwoPhaseWaiting) {
 }
 
 void Seq(int32_t start, size_t count, int32_t* out) {
-  for (size_t i = 0; i < count; i++)
-    out[i] = start + static_cast<int32_t>(i);
+  for (size_t i = 0; i < count; i++) {
+    UNSAFE_TODO(out[i]) = start + static_cast<int32_t>(i);
+  }
 }
 
 TEST_F(DataPipeTest, AllOrNone) {
@@ -927,11 +939,11 @@ TEST_F(DataPipeTest, AllOrNone) {
 
   // Try reading too much.
   num_bytes = 11u * sizeof(int32_t);
-  memset(buffer, 0xab, sizeof(buffer));
+  UNSAFE_TODO(memset(buffer, 0xab, sizeof(buffer)));
   ASSERT_EQ(MOJO_RESULT_OUT_OF_RANGE, ReadData(buffer, &num_bytes, true));
   int32_t expected_buffer[100];
-  memset(expected_buffer, 0xab, sizeof(expected_buffer));
-  ASSERT_EQ(0, memcmp(buffer, expected_buffer, sizeof(buffer)));
+  UNSAFE_TODO(memset(expected_buffer, 0xab, sizeof(expected_buffer)));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(buffer, expected_buffer, sizeof(buffer))));
 
   // Try discarding too much.
   num_bytes = 11u * sizeof(int32_t);
@@ -954,8 +966,9 @@ TEST_F(DataPipeTest, AllOrNone) {
   for (size_t i = 0; i < kMaxPoll; i++) {
     num_bytes = 0u;
     ASSERT_EQ(MOJO_RESULT_OK, QueryData(&num_bytes));
-    if (num_bytes >= 10u * sizeof(int32_t))
+    if (num_bytes >= 10u * sizeof(int32_t)) {
       break;
+    }
 
     base::PlatformThread::Sleep(EpsilonDeadline());
   }
@@ -963,19 +976,19 @@ TEST_F(DataPipeTest, AllOrNone) {
 
   // Read half.
   num_bytes = 5u * sizeof(int32_t);
-  memset(buffer, 0xab, sizeof(buffer));
+  UNSAFE_TODO(memset(buffer, 0xab, sizeof(buffer)));
   ASSERT_EQ(MOJO_RESULT_OK, ReadData(buffer, &num_bytes, true));
   ASSERT_EQ(5u * sizeof(int32_t), num_bytes);
-  memset(expected_buffer, 0xab, sizeof(expected_buffer));
+  UNSAFE_TODO(memset(expected_buffer, 0xab, sizeof(expected_buffer)));
   Seq(100, 5, expected_buffer);
-  ASSERT_EQ(0, memcmp(buffer, expected_buffer, sizeof(buffer)));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(buffer, expected_buffer, sizeof(buffer))));
 
   // Try reading too much again.
   num_bytes = 6u * sizeof(int32_t);
-  memset(buffer, 0xab, sizeof(buffer));
+  UNSAFE_TODO(memset(buffer, 0xab, sizeof(buffer)));
   ASSERT_EQ(MOJO_RESULT_OUT_OF_RANGE, ReadData(buffer, &num_bytes, true));
-  memset(expected_buffer, 0xab, sizeof(expected_buffer));
-  ASSERT_EQ(0, memcmp(buffer, expected_buffer, sizeof(buffer)));
+  UNSAFE_TODO(memset(expected_buffer, 0xab, sizeof(expected_buffer)));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(buffer, expected_buffer, sizeof(buffer))));
 
   // Try discarding too much again.
   num_bytes = 6u * sizeof(int32_t);
@@ -1005,11 +1018,11 @@ TEST_F(DataPipeTest, AllOrNone) {
 
   // Try reading too much; "failed precondition" since the producer is closed.
   num_bytes = 4u * sizeof(int32_t);
-  memset(buffer, 0xab, sizeof(buffer));
+  UNSAFE_TODO(memset(buffer, 0xab, sizeof(buffer)));
   ASSERT_EQ(MOJO_RESULT_FAILED_PRECONDITION,
             ReadData(buffer, &num_bytes, true));
-  memset(expected_buffer, 0xab, sizeof(expected_buffer));
-  ASSERT_EQ(0, memcmp(buffer, expected_buffer, sizeof(buffer)));
+  UNSAFE_TODO(memset(expected_buffer, 0xab, sizeof(expected_buffer)));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(buffer, expected_buffer, sizeof(buffer))));
 
   // Try discarding too much; "failed precondition" again.
   num_bytes = 4u * sizeof(int32_t);
@@ -1017,12 +1030,12 @@ TEST_F(DataPipeTest, AllOrNone) {
 
   // Read a little.
   num_bytes = 2u * sizeof(int32_t);
-  memset(buffer, 0xab, sizeof(buffer));
+  UNSAFE_TODO(memset(buffer, 0xab, sizeof(buffer)));
   ASSERT_EQ(MOJO_RESULT_OK, ReadData(buffer, &num_bytes, true));
   ASSERT_EQ(2u * sizeof(int32_t), num_bytes);
-  memset(expected_buffer, 0xab, sizeof(expected_buffer));
+  UNSAFE_TODO(memset(expected_buffer, 0xab, sizeof(expected_buffer)));
   Seq(400, 2, expected_buffer);
-  ASSERT_EQ(0, memcmp(buffer, expected_buffer, sizeof(buffer)));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(buffer, expected_buffer, sizeof(buffer))));
 
   // Discard the remaining element.
   num_bytes = 1u * sizeof(int32_t);
@@ -1046,9 +1059,10 @@ TEST_F(DataPipeTest, WrapAround) {
                  << "is backed by a circular ring buffer.";
   }
 
-  unsigned char test_data[1000];
-  for (size_t i = 0; i < std::size(test_data); i++)
+  std::array<unsigned char, 1000> test_data;
+  for (size_t i = 0; i < std::size(test_data); i++) {
     test_data[i] = static_cast<unsigned char>(i);
+  }
 
   const MojoCreateDataPipeOptions options = {
       kSizeOfOptions,                   // |struct_size|.
@@ -1075,11 +1089,11 @@ TEST_F(DataPipeTest, WrapAround) {
             hss.satisfiable_signals);
 
   // Read 10 bytes.
-  unsigned char read_buffer[1000] = {0};
+  unsigned char read_buffer[1000] = {};
   num_bytes = 10u;
   ASSERT_EQ(MOJO_RESULT_OK, ReadData(read_buffer, &num_bytes, true));
   ASSERT_EQ(10u, num_bytes);
-  ASSERT_EQ(0, memcmp(read_buffer, &test_data[0], 10u));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(read_buffer, &test_data[0], 10u)));
 
   // Check that a two-phase write can now only write (at most) 80 bytes. (This
   // checks an implementation detail; this behavior is not guaranteed.)
@@ -1125,10 +1139,10 @@ TEST_F(DataPipeTest, WrapAround) {
   // Read as much as possible. We should read 100 bytes.
   num_bytes =
       static_cast<uint32_t>(std::size(read_buffer) * sizeof(read_buffer[0]));
-  memset(read_buffer, 0, num_bytes);
+  UNSAFE_TODO(memset(read_buffer, 0, num_bytes));
   ASSERT_EQ(MOJO_RESULT_OK, ReadData(read_buffer, &num_bytes));
   ASSERT_EQ(100u, num_bytes);
-  ASSERT_EQ(0, memcmp(read_buffer, &test_data[10], 100u));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(read_buffer, &test_data[10], 100u)));
 }
 
 // Tests the behavior of writing (simple and two-phase), closing the producer,
@@ -1166,8 +1180,9 @@ TEST_F(DataPipeTest, WriteCloseProducerRead) {
   for (size_t i = 0; i < kMaxPoll; i++) {
     num_bytes = 0u;
     ASSERT_EQ(MOJO_RESULT_OK, QueryData(&num_bytes));
-    if (num_bytes >= 2u * kTestDataSize)
+    if (num_bytes >= 2u * kTestDataSize) {
       break;
+    }
 
     base::PlatformThread::Sleep(EpsilonDeadline());
   }
@@ -1184,7 +1199,7 @@ TEST_F(DataPipeTest, WriteCloseProducerRead) {
   CloseProducer();
 
   // The consumer can finish its two-phase read.
-  ASSERT_EQ(0, memcmp(read_buffer_ptr, kTestData, kTestDataSize));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(read_buffer_ptr, kTestData, kTestDataSize)));
   ASSERT_EQ(MOJO_RESULT_OK, EndReadData(kTestDataSize));
 
   // And start another.
@@ -1253,7 +1268,7 @@ TEST_F(DataPipeTest, TwoPhaseWriteReadCloseConsumer) {
 
   // Actually write some data. (Note: Premature freeing of the buffer would
   // probably only be detected under ASAN or similar.)
-  memcpy(write_buffer_ptr, kTestData, kTestDataSize);
+  UNSAFE_TODO(memcpy(write_buffer_ptr, kTestData, kTestDataSize));
   // Note: Even though the consumer has been closed, ending the two-phase
   // write will report success.
   ASSERT_EQ(MOJO_RESULT_OK, EndWriteData(kTestDataSize));
@@ -1330,14 +1345,14 @@ TEST_F(DataPipeTest, WriteCloseProducerReadNoData) {
   num_bytes = static_cast<uint32_t>(sizeof(buffer));
   ASSERT_EQ(MOJO_RESULT_OK, ReadData(buffer, &num_bytes, false, true));
   ASSERT_EQ(kTestDataSize, num_bytes);
-  ASSERT_EQ(0, memcmp(buffer, kTestData, kTestDataSize));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(buffer, kTestData, kTestDataSize)));
 
   // Read that data.
-  memset(buffer, 0, 1000);
+  UNSAFE_TODO(memset(buffer, 0, 1000));
   num_bytes = static_cast<uint32_t>(sizeof(buffer));
   ASSERT_EQ(MOJO_RESULT_OK, ReadData(buffer, &num_bytes));
   ASSERT_EQ(kTestDataSize, num_bytes);
-  ASSERT_EQ(0, memcmp(buffer, kTestData, kTestDataSize));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(buffer, kTestData, kTestDataSize)));
 
   // A second read should fail.
   num_bytes = static_cast<uint32_t>(sizeof(buffer));
@@ -1411,7 +1426,7 @@ TEST_F(DataPipeTest, TwoPhaseReadMemoryStable) {
             hss.satisfiable_signals);
 
   // Read the two phase memory to check it's still valid.
-  ASSERT_EQ(0, memcmp(read_buffer_ptr, kTestData, kTestDataSize));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(read_buffer_ptr, kTestData, kTestDataSize)));
   EndReadData(read_buffer_size);
 }
 
@@ -1573,7 +1588,7 @@ TEST_F(DataPipeTest, SendProducer) {
   const void* read_buffer = nullptr;
   num_bytes = 0u;
   ASSERT_EQ(MOJO_RESULT_OK, BeginReadData(&read_buffer, &num_bytes));
-  ASSERT_EQ(0, memcmp(read_buffer, kTestData, kTestDataSize));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(read_buffer, kTestData, kTestDataSize)));
   EndReadData(num_bytes);
 
   // Now send the producer over a MP so that it's serialized.
@@ -1609,7 +1624,7 @@ TEST_F(DataPipeTest, SendProducer) {
   // Check the second write.
   num_bytes = 0u;
   ASSERT_EQ(MOJO_RESULT_OK, BeginReadData(&read_buffer, &num_bytes));
-  ASSERT_EQ(0, memcmp(read_buffer, kExtraData, kExtraDataSize));
+  UNSAFE_TODO(ASSERT_EQ(0, memcmp(read_buffer, kExtraData, kExtraDataSize)));
   EndReadData(num_bytes);
 
   ASSERT_EQ(MOJO_RESULT_OK, MojoClose(pipe0));
@@ -1686,9 +1701,11 @@ bool WriteAllData(MojoHandle producer,
         MojoWriteData(producer, elements, &write_bytes, nullptr);
     if (result == MOJO_RESULT_OK) {
       num_bytes -= write_bytes;
-      elements = static_cast<const uint8_t*>(elements) + write_bytes;
-      if (num_bytes == 0)
+      elements =
+          UNSAFE_TODO(static_cast<const uint8_t*>(elements) + write_bytes);
+      if (num_bytes == 0) {
         return true;
+      }
     } else {
       EXPECT_EQ(MOJO_RESULT_SHOULD_WAIT, result);
     }
@@ -1716,7 +1733,7 @@ bool ReadAllData(MojoHandle consumer,
     MojoResult result = MojoReadData(consumer, nullptr, elements, &read_bytes);
     if (result == MOJO_RESULT_OK) {
       num_bytes -= read_bytes;
-      elements = static_cast<uint8_t*>(elements) + read_bytes;
+      elements = UNSAFE_TODO(static_cast<uint8_t*>(elements) + read_bytes);
       if (num_bytes == 0) {
         if (expect_empty) {
           // Expect no more data.
@@ -1785,7 +1802,7 @@ TEST_F(DataPipeTest, NoSpuriousEvents) {
 }
 
 DEFINE_TEST_CLIENT_TEST_WITH_PIPE(NoSpuriousEventsHost, DataPipeTest, parent) {
-  const char kData[1024] = {'x'};
+  const std::vector<uint8_t> kData(512, 'x');
 
   MojoHandle client;
   EXPECT_EQ("x", ReadMessageWithHandles(parent, &client, 1));
@@ -1800,8 +1817,9 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(NoSpuriousEventsHost, DataPipeTest, parent) {
 
     for (size_t i = 0; i < 9; ++i) {
       WaitForSignals(producer.get().value(), MOJO_HANDLE_SIGNAL_WRITABLE);
-      uint32_t size = 512;
-      producer->WriteData(kData, &size, MOJO_WRITE_DATA_FLAG_NONE);
+      size_t bytes_written = 0;
+      producer->WriteData(base::as_byte_span(kData), MOJO_WRITE_DATA_FLAG_NONE,
+                          bytes_written);
     }
   }
 
@@ -1837,10 +1855,9 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(NoSpuriousEventsClient,
                           }
 
                           // Drain everything.
-                          const void* buffer;
-                          uint32_t num_bytes;
-                          consumer->BeginReadData(&buffer, &num_bytes, 0);
-                          consumer->EndReadData(num_bytes);
+                          base::span<const uint8_t> buffer;
+                          consumer->BeginReadData(0, buffer);
+                          consumer->EndReadData(buffer.size());
                           watcher.ArmOrNotify();
                         } else {
                           CHECK(state.never_readable());
@@ -1888,8 +1905,9 @@ TEST_F(DataPipeTest, Multiprocess) {
     int seq = 0;
     for (int i = 0; i < kMultiprocessMaxIter; ++i) {
       for (uint32_t size = 1; size <= kMultiprocessCapacity; size++) {
-        for (unsigned int j = 0; j < size; ++j)
-          buffer[j] = seq + j;
+        for (unsigned int j = 0; j < size; ++j) {
+          UNSAFE_TODO(buffer[j]) = seq + j;
+        }
         EXPECT_TRUE(WriteAllData(producer_, buffer, size));
         seq += size;
       }
@@ -1915,7 +1933,8 @@ TEST_F(DataPipeTest, Multiprocess) {
     // other end sending it.
     for (int i = 0; i < 2; ++i) {
       EXPECT_TRUE(ReadAllData(consumer_, buffer, kTestDataSize, i == 1));
-      EXPECT_EQ(0, memcmp(buffer, kMultiprocessTestData, kTestDataSize));
+      UNSAFE_TODO(
+          EXPECT_EQ(0, memcmp(buffer, kMultiprocessTestData, kTestDataSize)));
     }
 
     WriteMessage(server_mp, "quit");
@@ -1939,17 +1958,19 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessClient, DataPipeTest, client_mp) {
   // Read the initial string that was sent.
   int32_t buffer[100];
   EXPECT_TRUE(ReadAllData(consumer, buffer, kTestDataSize, false));
-  EXPECT_EQ(0, memcmp(buffer, kMultiprocessTestData, kTestDataSize));
+  UNSAFE_TODO(
+      EXPECT_EQ(0, memcmp(buffer, kMultiprocessTestData, kTestDataSize)));
 
   // Receive the main data and check it is correct.
   int seq = 0;
-  uint8_t expected_buffer[100];
+  std::array<uint8_t, 100> expected_buffer;
   for (int i = 0; i < kMultiprocessMaxIter; ++i) {
     for (uint32_t size = 1; size <= kMultiprocessCapacity; ++size) {
-      for (unsigned int j = 0; j < size; ++j)
+      for (unsigned int j = 0; j < size; ++j) {
         expected_buffer[j] = seq + j;
+      }
       EXPECT_TRUE(ReadAllData(consumer, buffer, size, false));
-      EXPECT_EQ(0, memcmp(buffer, expected_buffer, size));
+      UNSAFE_TODO(EXPECT_EQ(0, memcmp(buffer, expected_buffer.data(), size)));
 
       seq += size;
     }
@@ -2095,8 +2116,9 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(DataPipeStatusChangeInTransitClient,
 
   MojoHandle handles[6];
   EXPECT_EQ("o_O", ReadMessageWithHandles(parent, handles, 6));
-  MojoHandle* producers = &handles[0];
-  MojoHandle* consumers = &handles[3];
+  base::span<MojoHandle> producers = handles;
+  base::span<MojoHandle> consumers =
+      base::span<MojoHandle>(handles).subspan(3u);
 
   // Wait on producer 0
   EXPECT_EQ(MOJO_RESULT_OK,
@@ -2115,8 +2137,9 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(DataPipeStatusChangeInTransitClient,
     auto callback = base::BindRepeating(
         [](base::RunLoop* loop, int* count, MojoResult result) {
           EXPECT_EQ(MOJO_RESULT_OK, result);
-          if (++*count == 2)
+          if (++*count == 2) {
             loop->Quit();
+          }
         },
         &run_loop, &count);
     SimpleWatcher producer_watcher(
@@ -2149,16 +2172,18 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(DataPipeStatusChangeInTransitClient,
   } while (result == MOJO_RESULT_SHOULD_WAIT);
   EXPECT_EQ(MOJO_RESULT_FAILED_PRECONDITION, result);
 
-  for (size_t i = 0; i < 6; ++i)
-    CloseHandle(handles[i]);
+  for (size_t i = 0; i < 6; ++i) {
+    CloseHandle(UNSAFE_TODO(handles[i]));
+  }
   EXPECT_EQ(MOJO_RESULT_OK, MojoClose(parent));
 }
 
 TEST_F(DataPipeTest, StatusChangeInTransit) {
-  MojoHandle producers[6];
-  MojoHandle consumers[6];
-  for (size_t i = 0; i < 6; ++i)
+  std::array<MojoHandle, 6> producers;
+  std::array<MojoHandle, 6> consumers;
+  for (size_t i = 0; i < 6; ++i) {
     CreateDataPipe(&producers[i], &consumers[i], 1);
+  }
 
   RunTestClient("DataPipeStatusChangeInTransitClient", [&](MojoHandle child) {
     MojoHandle handles[] = {producers[0], producers[1], producers[2],
@@ -2168,10 +2193,12 @@ TEST_F(DataPipeTest, StatusChangeInTransit) {
     // peers' closure.
     WriteMessageWithHandles(child, "o_O", handles, 6);
 
-    for (size_t i = 0; i < 3; ++i)
+    for (size_t i = 0; i < 3; ++i) {
       CloseHandle(consumers[i]);
-    for (size_t i = 3; i < 6; ++i)
+    }
+    for (size_t i = 3; i < 6; ++i) {
       CloseHandle(producers[i]);
+    }
   });
 }
 
@@ -2250,7 +2277,7 @@ class TestDataProducer {
     CHECK_EQ(rv, MOJO_RESULT_OK);
 
     num_bytes = std::min(num_bytes, bytes_remaining_);
-    memset(data, 42, num_bytes);
+    UNSAFE_TODO(memset(data, 42, num_bytes));
     CHECK_EQ(MOJO_RESULT_OK,
              MojoEndWriteData(producer_->value(), num_bytes, nullptr));
     bytes_remaining_ -= num_bytes;
@@ -2325,7 +2352,7 @@ class TestDataDrain {
           // testing every byte.
           const uint8_t* bytes = static_cast<const uint8_t*>(data);
           EXPECT_EQ(42u, bytes[0]);
-          EXPECT_EQ(42u, bytes[num_bytes - 1]);
+          UNSAFE_TODO(EXPECT_EQ(42u, bytes[num_bytes - 1]));
 
           result = MojoEndReadData(consumer_->value(), num_bytes_read, nullptr);
         }
@@ -2375,7 +2402,10 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(StressTestRacyTrapsClient, DataPipeTest, h) {
   EXPECT_EQ(MOJO_RESULT_OK, MojoClose(h));
 }
 
-TEST_F(DataPipeTest, StressTestRacyTraps) {
+// Temporarily disabled during experimentation with suppression of this fix for
+// metrics collection only. Re-enable once the experiment is done.
+// See https://crbug.com/41494387.
+TEST_F(DataPipeTest, DISABLED_StressTestRacyTraps) {
   // Regression test for https://crbug.com/1468933. This bug was caused by a
   // race between trap arming and internal data pipe flushes which could result
   // in a data pipe trap appearing to be armed (and thus never re-arming) while

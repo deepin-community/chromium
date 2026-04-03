@@ -1,44 +1,17 @@
-/*
- * Copyright (C) 2012 Google Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// Copyright 2012 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 import type * as Common from '../../core/common/common.js';
+import type * as Platform from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
+import * as Protocol from '../../generated/protocol.js';
 import * as TextUtils from '../text_utils/text_utils.js';
 import * as Workspace from '../workspace/workspace.js';
-import * as Protocol from '../../generated/protocol.js';
-import type * as Platform from '../../core/platform/platform.js';
 
-import {DebuggerWorkspaceBinding} from './DebuggerWorkspaceBinding.js';
-
-import {LiveLocationPool, LiveLocationWithPool, type LiveLocation} from './LiveLocation.js';
 import {CSSWorkspaceBinding} from './CSSWorkspaceBinding.js';
+import {DebuggerWorkspaceBinding} from './DebuggerWorkspaceBinding.js';
+import {type LiveLocation, LiveLocationPool, LiveLocationWithPool} from './LiveLocation.js';
 
 export interface MessageSource {
   url?: Platform.DevToolsPath.UrlString;
@@ -107,8 +80,8 @@ export class PresentationConsoleMessageManager {
       return;
     }
     const level = consoleMessage.level === Protocol.Log.LogEntryLevel.Error ?
-        Workspace.UISourceCode.Message.Level.Error :
-        Workspace.UISourceCode.Message.Level.Warning;
+        Workspace.UISourceCode.Message.Level.ERROR :
+        Workspace.UISourceCode.Message.Level.WARNING;
     this.#sourceFrameMessageManager.addMessage(
         new Workspace.UISourceCode.Message(level, consoleMessage.messageText), consoleMessage, runtimeModel.target());
   }
@@ -117,10 +90,10 @@ export class PresentationConsoleMessageManager {
 export class PresentationSourceFrameMessageHelper {
   #debuggerModel?: SDK.DebuggerModel.DebuggerModel;
   #cssModel?: SDK.CSSModel.CSSModel;
-  #presentationMessages: Map<Platform.DevToolsPath.UrlString, Array<{
-                               source: MessageSource,
-                               presentation: PresentationSourceFrameMessage,
-                             }>> = new Map();
+  #presentationMessages = new Map<Platform.DevToolsPath.UrlString, Array<{
+                                    source: MessageSource,
+                                    presentation: PresentationSourceFrameMessage,
+                                  }>>();
   readonly #locationPool: LiveLocationPool;
 
   constructor() {
@@ -196,7 +169,7 @@ export class PresentationSourceFrameMessageHelper {
     if (source.scriptId) {
       return this.#debuggerModel.createRawLocationByScriptId(source.scriptId, source.line, source.column);
     }
-    const callFrame = source.stackTrace && source.stackTrace.callFrames ? source.stackTrace.callFrames[0] : null;
+    const callFrame = source.stackTrace?.callFrames ? source.stackTrace.callFrames[0] : null;
     if (callFrame) {
       return this.#debuggerModel.createRawLocationByScriptId(
           callFrame.scriptId, callFrame.lineNumber, callFrame.columnNumber);
@@ -211,7 +184,7 @@ export class PresentationSourceFrameMessageHelper {
     const script = event.data;
     const messages = this.#presentationMessages.get(script.sourceURL);
 
-    const promises: Promise<void>[] = [];
+    const promises: Array<Promise<void>> = [];
     for (const {presentation, source} of messages ?? []) {
       const rawLocation = this.#rawLocation(source);
       if (rawLocation && script.scriptId === rawLocation.scriptId) {
@@ -229,7 +202,7 @@ export class PresentationSourceFrameMessageHelper {
     const uiSourceCode = event.data;
     const messages = this.#presentationMessages.get(uiSourceCode.url());
 
-    const promises: Promise<void>[] = [];
+    const promises: Array<Promise<void>> = [];
     for (const {presentation, source} of messages ?? []) {
       promises.push(presentation.updateLocationSource(
           new Workspace.UISourceCode.UILocation(uiSourceCode, source.line, source.column)));
@@ -245,7 +218,7 @@ export class PresentationSourceFrameMessageHelper {
     const header = event.data;
     const messages = this.#presentationMessages.get(header.sourceURL);
 
-    const promises: Promise<void>[] = [];
+    const promises: Array<Promise<void>> = [];
     for (const {source, presentation} of messages ?? []) {
       if (header.containsLocation(source.line, source.column)) {
         promises.push(
@@ -279,10 +252,6 @@ class FrozenLiveLocation extends LiveLocationWithPool {
       locationPool: LiveLocationPool) {
     super(updateDelegate, locationPool);
     this.#uiLocation = uiLocation;
-  }
-
-  override async isIgnoreListed(): Promise<boolean> {
-    return false;
   }
 
   override async uiLocation(): Promise<Workspace.UISourceCode.UILocation|null> {

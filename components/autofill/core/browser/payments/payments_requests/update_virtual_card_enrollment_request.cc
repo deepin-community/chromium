@@ -17,12 +17,16 @@ namespace payments {
 namespace {
 const char kEnrollRequestPath[] = "payments/apis/virtualcardservice/enroll";
 const char kUnenrollRequestPath[] = "payments/apis/virtualcardservice/unenroll";
+
+// The timeout for VCN enrollment request is 6.5 seconds (selected after
+// experimentation).
+constexpr int kVcnEnrollRequestTimeoutMilliseconds = 6500;
 }  // namespace
 
 UpdateVirtualCardEnrollmentRequest::UpdateVirtualCardEnrollmentRequest(
-    const PaymentsNetworkInterface::UpdateVirtualCardEnrollmentRequestDetails&
-        request_details,
-    base::OnceCallback<void(AutofillClient::PaymentsRpcResult)> callback)
+    const UpdateVirtualCardEnrollmentRequestDetails& request_details,
+    base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult)>
+        callback)
     : request_details_(request_details), callback_(std::move(callback)) {}
 
 UpdateVirtualCardEnrollmentRequest::~UpdateVirtualCardEnrollmentRequest() =
@@ -40,7 +44,7 @@ std::string UpdateVirtualCardEnrollmentRequest::GetRequestContentType() {
 }
 
 std::string UpdateVirtualCardEnrollmentRequest::GetRequestContent() {
-  base::Value::Dict request_dict;
+  base::DictValue request_dict;
 
   switch (request_details_.virtual_card_enrollment_request_type) {
     case VirtualCardEnrollmentRequestType::kEnroll:
@@ -51,17 +55,15 @@ std::string UpdateVirtualCardEnrollmentRequest::GetRequestContent() {
       break;
     case VirtualCardEnrollmentRequestType::kNone:
       NOTREACHED();
-      break;
   }
 
-  std::string request_content;
-  base::JSONWriter::Write(request_dict, &request_content);
-  VLOG(3) << "UpdateVirtualCardEnrollmentRequest Body: " << request_content;
+  std::string request_content = base::WriteJson(request_dict).value_or("");
+  DVLOG(3) << "UpdateVirtualCardEnrollmentRequest Body: " << request_content;
   return request_content;
 }
 
 void UpdateVirtualCardEnrollmentRequest::ParseResponse(
-    const base::Value::Dict& response) {
+    const base::DictValue& response) {
   // Only enroll requests have a response to parse, unenroll request responses
   // are empty except for possible errors which are parsed in
   // PaymentsNetworkInterface.
@@ -90,17 +92,34 @@ bool UpdateVirtualCardEnrollmentRequest::IsResponseComplete() {
       return true;
     case VirtualCardEnrollmentRequestType::kNone:
       NOTREACHED();
-      return false;
   }
 }
 
 void UpdateVirtualCardEnrollmentRequest::RespondToDelegate(
-    AutofillClient::PaymentsRpcResult result) {
+    PaymentsAutofillClient::PaymentsRpcResult result) {
   std::move(callback_).Run(result);
 }
 
+std::string UpdateVirtualCardEnrollmentRequest::GetHistogramName() const {
+  switch (request_details_.virtual_card_enrollment_request_type) {
+    case VirtualCardEnrollmentRequestType::kEnroll:
+      return "UpdateVirtualCardEnrollment_Enroll";
+    default:
+      NOTREACHED();
+  }
+}
+
+std::optional<base::TimeDelta> UpdateVirtualCardEnrollmentRequest::GetTimeout()
+    const {
+  if (request_details_.virtual_card_enrollment_request_type !=
+      VirtualCardEnrollmentRequestType::kEnroll) {
+    return std::nullopt;
+  }
+  return base::Milliseconds(kVcnEnrollRequestTimeoutMilliseconds);
+}
+
 void UpdateVirtualCardEnrollmentRequest::BuildEnrollRequestDictionary(
-    base::Value::Dict* request_dict) {
+    base::DictValue* request_dict) {
   DCHECK(request_details_.virtual_card_enrollment_request_type ==
          VirtualCardEnrollmentRequestType::kEnroll);
 
@@ -110,7 +129,7 @@ void UpdateVirtualCardEnrollmentRequest::BuildEnrollRequestDictionary(
          request_details_.instrument_id.has_value());
 
   // Builds the context and channel_type for this enroll request.
-  base::Value::Dict context;
+  base::DictValue context;
   switch (request_details_.virtual_card_enrollment_source) {
     case VirtualCardEnrollmentSource::kUpstream:
       context.Set("billable_service",
@@ -128,7 +147,6 @@ void UpdateVirtualCardEnrollmentRequest::BuildEnrollRequestDictionary(
       break;
     case VirtualCardEnrollmentSource::kNone:
       NOTREACHED();
-      break;
   }
   if (request_details_.billing_customer_number != 0) {
     context.Set("customer_context",
@@ -158,7 +176,7 @@ void UpdateVirtualCardEnrollmentRequest::BuildEnrollRequestDictionary(
 }
 
 void UpdateVirtualCardEnrollmentRequest::BuildUnenrollRequestDictionary(
-    base::Value::Dict* request_dict) {
+    base::DictValue* request_dict) {
   DCHECK(request_details_.virtual_card_enrollment_request_type ==
          VirtualCardEnrollmentRequestType::kUnenroll);
 
@@ -169,7 +187,7 @@ void UpdateVirtualCardEnrollmentRequest::BuildUnenrollRequestDictionary(
 
   // Builds the context for this unenroll request with the billable service
   // number and the billing customer number if present.
-  base::Value::Dict context;
+  base::DictValue context;
   if (request_details_.billing_customer_number != 0) {
     context.Set("customer_context",
                 BuildCustomerContextDictionary(

@@ -70,16 +70,9 @@ LayoutTextFragment* LayoutTextFragment::CreateAnonymous(Document& doc,
   return fragment;
 }
 
-LayoutTextFragment* LayoutTextFragment::CreateAnonymous(PseudoElement& pseudo,
-                                                        const String& text,
-                                                        unsigned start,
-                                                        unsigned length) {
-  return CreateAnonymous(pseudo.GetDocument(), text, start, length);
-}
-
-LayoutTextFragment* LayoutTextFragment::CreateAnonymous(PseudoElement& pseudo,
+LayoutTextFragment* LayoutTextFragment::CreateAnonymous(Document& doc,
                                                         const String& text) {
-  return CreateAnonymous(pseudo, text, 0, text ? text.length() : 0);
+  return CreateAnonymous(doc, text, 0, text ? text.length() : 0);
 }
 
 void LayoutTextFragment::Trace(Visitor* visitor) const {
@@ -123,7 +116,7 @@ void LayoutTextFragment::TextDidChange() {
   fragment_length_ = TransformedTextLength();
 
   // If we're the remaining text from a first letter then we have to tell the
-  // first letter pseudo element to reattach itself so it can re-calculate the
+  // first letter pseudo-element to reattach itself so it can re-calculate the
   // correct first-letter settings.
   if (IsRemainingTextLayoutObject()) {
     DCHECK(GetFirstLetterPseudoElement());
@@ -178,9 +171,9 @@ Text* LayoutTextFragment::AssociatedTextNode() const {
   NOT_DESTROYED();
   Node* node = GetFirstLetterPseudoElement();
   if (is_remaining_text_layout_object_ || !node) {
-    // If we don't have a node, then we aren't part of a first-letter pseudo
+    // If we don't have a node, then we aren't part of a first-letter pseudo-
     // element, so use the actual node. Likewise, if we have a node, but
-    // we're the remainingTextLayoutObject for a pseudo element use the real
+    // we're the remainingTextLayoutObject for a pseudo-element use the real
     // text node.
     node = GetNode();
   }
@@ -233,8 +226,16 @@ void LayoutTextFragment::UpdateHitTestResult(
   result.SetInnerNode(GetFirstLetterPseudoElement());
 }
 
-DOMNodeId LayoutTextFragment::OwnerNodeId() const {
+DOMNodeId LayoutTextFragment::OwnerNodeId(bool) const {
   NOT_DESTROYED();
+
+  // Anonymous list marker text content belongs to the marker pseudo-element.
+  if (!GetNode() && Parent() && Parent()->IsListMarker()) {
+    if (Node* marker_node = Parent()->GetNode()) {
+      return marker_node->GetDomNodeId();
+    }
+  }
+
   Node* node = AssociatedTextNode();
   return node ? node->GetDomNodeId() : kInvalidDOMNodeId;
 }
@@ -290,7 +291,7 @@ String LayoutTextFragment::PlainText() const {
   const OffsetMapping* first_letter_mapping = first_letter->GetOffsetMapping();
   if (first_letter_mapping && remaining_text_mapping &&
       first_letter_mapping != remaining_text_mapping)
-    return first_letter_mapping->GetText() + LayoutText::PlainText();
+    return StrCat({first_letter_mapping->GetText(), LayoutText::PlainText()});
   return LayoutText::PlainText();
 }
 

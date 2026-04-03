@@ -10,9 +10,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/ash/services/secure_channel/client_connection_parameters.h"
-#include "chromeos/ash/services/secure_channel/public/mojom/nearby_connector.mojom-shared.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/nearby_connector.mojom.h"
-#include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom-shared.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -73,7 +71,7 @@ class FakeClientConnectionParameters : public ClientConnectionParameters {
 
   void UpdateBleDiscoveryState(
       mojom::DiscoveryResult discovery_result,
-      absl::optional<mojom::DiscoveryErrorCode> potential_error_code) override;
+      std::optional<mojom::DiscoveryErrorCode> potential_error_code) override;
   void UpdateNearbyConnectionState(
       mojom::NearbyConnectionStep nearby_connection_step,
       mojom::NearbyConnectionStepResult result) override;
@@ -96,7 +94,7 @@ class FakeClientConnectionParameters : public ClientConnectionParameters {
   std::optional<mojom::ConnectionAttemptFailureReason> failure_reason_;
 
   mojom::DiscoveryResult ble_discovery_result_;
-  absl::optional<mojom::DiscoveryErrorCode> potential_ble_discovery_error_code_;
+  std::optional<mojom::DiscoveryErrorCode> potential_ble_discovery_error_code_;
   mojom::NearbyConnectionStep nearby_connection_step_;
   mojom::NearbyConnectionStepResult nearby_connection_step_result_;
   mojom::SecureChannelState secure_channel_state_;

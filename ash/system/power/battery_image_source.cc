@@ -11,6 +11,7 @@
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/style/ash_color_provider.h"
 #include "ash/system/power/power_status.h"
+#include "third_party/skia/include/core/SkPath.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -56,11 +57,10 @@ void BatteryImageSource::Draw(gfx::Canvas* canvas) {
   const float kAssumedCanvasSize = 20;
   const float const_scale = dsf * size().height() / kAssumedCanvasSize;
 
-  SkPath path;
-
   gfx::RectF fill_rect = kDefaultFillRect;
   fill_rect.Scale(const_scale);
-  path.addRect(gfx::RectToSkRect(gfx::ToEnclosingRect(fill_rect)));
+  const SkPath path =
+      SkPath::Rect(gfx::RectToSkRect(gfx::ToEnclosingRect(fill_rect)));
   cc::PaintFlags flags;
 
   SkRect icon_bounds = path.getBounds();

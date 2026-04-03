@@ -4,8 +4,8 @@
 
 #include "content/browser/webid/test/webid_test_content_browser_client.h"
 
-#include "content/browser/webid/digital_credentials/digital_identity_provider.h"
 #include "content/browser/webid/test/mock_modal_dialog_view_delegate.h"
+#include "content/public/browser/digital_identity_provider.h"
 
 namespace content {
 
@@ -37,7 +37,7 @@ void WebIdTestContentBrowserClient::SetDigitalIdentityProvider(
 
 void WebIdTestContentBrowserClient::SetIdentityRegistry(
     WebContents* web_contents,
-    base::WeakPtr<FederatedIdentityModalDialogViewDelegate> delegate,
+    base::WeakPtr<IdentityRegistryDelegate> delegate,
     const GURL& config_url) {
   IdentityRegistry::CreateForWebContents(web_contents, delegate, config_url);
 }

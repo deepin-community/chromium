@@ -5,14 +5,16 @@
 #ifndef MEDIA_GPU_CHROMEOS_FRAME_RESOURCE_H_
 #define MEDIA_GPU_CHROMEOS_FRAME_RESOURCE_H_
 
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_frame_layout.h"
 #include "media/base/video_frame_metadata.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/gpu_memory_buffer.h"
+#include "ui/gfx/gpu_memory_buffer_handle.h"
 #include "ui/gfx/linux/native_pixmap_dmabuf.h"
 
 namespace media {
@@ -20,19 +22,29 @@ namespace media {
 // Forward declare for use in AsVideoFrameResource.
 class VideoFrameResource;
 
+// Forward declare for use in AsNativePixmapFrameResource
+class NativePixmapFrameResource;
+
 // Base class for holding an object like a VideoFrame. It provides accessors for
 // the metadata or data. This can be implemented using different backing types
 // e.g. VideoFrame or NativePixmap.
 class FrameResource : public base::RefCountedThreadSafe<FrameResource> {
  public:
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
   FrameResource();
   // FrameResource is not moveable or copyable.
   FrameResource(const FrameResource&) = delete;
   FrameResource& operator=(const FrameResource&) = delete;
 
   // Allows safe downcasting to an VideoFrameResource, which has a VideoFrame
-  // accessor that is needed by encoders.
+  // accessor that is needed by encoders. The returned pointer is only valid as
+  // long as |this| is alive.
   virtual VideoFrameResource* AsVideoFrameResource();
+
+  // Allows safe downcasting to a NativePixmapFrameResource. The returned
+  // pointer is only valid as long as |this| is alive.
+  virtual const NativePixmapFrameResource* AsNativePixmapFrameResource() const;
 
   // Unique identifier for this video frame generated at construction time. The
   // first ID is 1. The identifier is unique within a process % overflows (which
@@ -74,26 +86,19 @@ class FrameResource : public base::RefCountedThreadSafe<FrameResource> {
   // such use cases, use dup() to obtain your own copy of the FDs.
   virtual int GetDmabufFd(size_t i) const = 0;
 
-  // Creates a NativePixmap that duplicates the DmaBuf FDs of |this|. Ownership
-  // of the constructed NativePixmap is returned to the caller. The returned
-  // pixmap is only a DmaBuf container and should not be used for compositing or
-  // scanout.
-  virtual scoped_refptr<gfx::NativePixmapDmaBuf> CreateNativePixmapDmaBuf()
+  // Creates or gets a NativePixmap. If the FrameResource is backed by a
+  // NativePixmap, then there is no duplication of file descriptors. The
+  // returned pixmap is only a DmaBuf container and should not be used for
+  // compositing or scanout.
+  virtual scoped_refptr<const gfx::NativePixmapDmaBuf> GetNativePixmapDmaBuf()
       const = 0;
 
   // Create a shared GPU memory handle to |this|'s data.
   virtual gfx::GpuMemoryBufferHandle CreateGpuMemoryBufferHandle() const = 0;
 
-  // Returns true if |this| is backed by a GpuMemoryBuffer.
-  bool HasGpuMemoryBuffer() const { return !!GetGpuMemoryBuffer(); }
+  virtual bool HasMappableSharedImage() const = 0;
 
-  // Gets the GpuMemoryBuffer backing |this|.
-  virtual gfx::GpuMemoryBuffer* GetGpuMemoryBuffer() const = 0;
-
-  // Returns an identifier based on the frame data's underlying storage. This
-  // returns consistent results even if the frame gets wrapped. Returns an
-  // invalid GenericSharedMemoryId if an identifier cannot be determined.
-  virtual gfx::GenericSharedMemoryId GetSharedMemoryId() const = 0;
+  virtual scoped_refptr<gpu::ClientSharedImage> GetSharedImage() const = 0;
 
   virtual const VideoFrameLayout& layout() const = 0;
 
@@ -124,17 +129,16 @@ class FrameResource : public base::RefCountedThreadSafe<FrameResource> {
   // anamorphic frames, or to "soft-apply" any custom scaling.
   virtual const gfx::Size& natural_size() const = 0;
 
-  // Provides the sampler conversion information for the frame.
-  virtual const std::optional<gpu::VulkanYCbCrInfo>& ycbcr_info() const = 0;
-  virtual void set_ycbcr_info(
-      const std::optional<gpu::VulkanYCbCrInfo>& ycbcr_info) = 0;
-
   // Returns a dictionary of optional metadata. This contains information
   // associated with the frame that downstream clients might use for frame-level
   // logging, quality/performance optimizations, signaling, etc.
   virtual const VideoFrameMetadata& metadata() const = 0;
   virtual VideoFrameMetadata& metadata() = 0;
   virtual void set_metadata(const VideoFrameMetadata& metadata) = 0;
+
+  // An UnguessableToken that identifies unique frames regardless of wrapping.
+  // The returned UnguessableToken is guaranteed to be non-empty.
+  virtual const base::UnguessableToken& tracking_token() const = 0;
 
   virtual base::TimeDelta timestamp() const = 0;
   virtual void set_timestamp(base::TimeDelta timestamp) = 0;
@@ -143,9 +147,8 @@ class FrameResource : public base::RefCountedThreadSafe<FrameResource> {
   virtual gfx::ColorSpace ColorSpace() const = 0;
   virtual void set_color_space(const gfx::ColorSpace& color_space) = 0;
 
-  virtual const std::optional<gfx::HDRMetadata>& hdr_metadata() const = 0;
-  virtual void set_hdr_metadata(
-      const std::optional<gfx::HDRMetadata>& hdr_metadata) = 0;
+  virtual const gfx::HDRMetadata& hdr_metadata() const = 0;
+  virtual void set_hdr_metadata(const gfx::HDRMetadata& hdr_metadata) = 0;
 
   // Adds a callback to be run when the FrameResource is about to be destroyed.
   // The callback may be run from ANY THREAD, and so it is up to the client to
@@ -169,9 +172,12 @@ class FrameResource : public base::RefCountedThreadSafe<FrameResource> {
   // Returns a human-readable string describing |this|.
   virtual std::string AsHumanReadableString() const = 0;
 
+  // Gets the GpuMemoryBufferHandle backing |this|.
+  virtual gfx::GpuMemoryBufferHandle GetGpuMemoryBufferHandleForTesting()
+      const = 0;
+
  protected:
   friend class base::RefCountedThreadSafe<FrameResource>;
-
   virtual ~FrameResource() = default;
 
  private:

@@ -6,6 +6,10 @@
 
 // Renderer9.cpp: Implements a back-end specific class for the D3D9 renderer.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/d3d/d3d9/Renderer9.h"
 
 #include <EGL/eglext.h>
@@ -26,7 +30,6 @@
 #include "libANGLE/features.h"
 #include "libANGLE/formatutils.h"
 #include "libANGLE/renderer/d3d/CompilerD3D.h"
-#include "libANGLE/renderer/d3d/DeviceD3D.h"
 #include "libANGLE/renderer/d3d/DisplayD3D.h"
 #include "libANGLE/renderer/d3d/FramebufferD3D.h"
 #include "libANGLE/renderer/d3d/IndexDataManager.h"
@@ -39,6 +42,7 @@
 #include "libANGLE/renderer/d3d/d3d9/Blit9.h"
 #include "libANGLE/renderer/d3d/d3d9/Buffer9.h"
 #include "libANGLE/renderer/d3d/d3d9/Context9.h"
+#include "libANGLE/renderer/d3d/d3d9/Device9.h"
 #include "libANGLE/renderer/d3d/d3d9/Fence9.h"
 #include "libANGLE/renderer/d3d/d3d9/Framebuffer9.h"
 #include "libANGLE/renderer/d3d/d3d9/Image9.h"
@@ -207,7 +211,7 @@ egl::Error Renderer9::initialize()
 
     if (mD3d9Module == nullptr)
     {
-        return egl::EglNotInitialized(D3D9_INIT_MISSING_DEP) << "No D3D9 module found.";
+        return egl::Error(EGL_NOT_INITIALIZED, D3D9_INIT_MISSING_DEP, "No D3D9 module found.");
     }
 
     typedef HRESULT(WINAPI * Direct3DCreate9ExFunc)(UINT, IDirect3D9Ex **);
@@ -234,7 +238,8 @@ egl::Error Renderer9::initialize()
 
     if (!mD3d9)
     {
-        return egl::EglNotInitialized(D3D9_INIT_MISSING_DEP) << "Could not create D3D9 device.";
+        return egl::Error(EGL_NOT_INITIALIZED, D3D9_INIT_MISSING_DEP,
+                          "Could not create D3D9 device.");
     }
 
     if (mDisplay->getNativeDisplayId() != nullptr)
@@ -263,8 +268,9 @@ egl::Error Renderer9::initialize()
                                       // D3DERR_INVALIDDEVICE, or another error we can't recover
                                       // from
             {
-                return egl::EglNotInitialized(D3D9_INIT_OTHER_ERROR)
-                       << "Failed to get device caps, " << gl::FmtHR(result);
+                std::ostringstream err;
+                err << "Failed to get device caps, " << gl::FmtHR(result);
+                return egl::Error(EGL_NOT_INITIALIZED, D3D9_INIT_OTHER_ERROR, err.str());
             }
         }
     }
@@ -277,8 +283,9 @@ egl::Error Renderer9::initialize()
 
     if (mDeviceCaps.PixelShaderVersion < D3DPS_VERSION(minShaderModel, 0))
     {
-        return egl::EglNotInitialized(D3D9_INIT_UNSUPPORTED_VERSION)
-               << "Renderer does not support PS " << minShaderModel << ".0, aborting!";
+        std::ostringstream err;
+        err << "Renderer does not support PS " << minShaderModel << ".0, aborting!";
+        return egl::Error(EGL_NOT_INITIALIZED, D3D9_INIT_UNSUPPORTED_VERSION, err.str());
     }
 
     // When DirectX9 is running with an older DirectX8 driver, a StretchRect from a regular texture
@@ -286,8 +293,8 @@ egl::Error Renderer9::initialize()
     // Texture2D::ensureRenderTarget.
     if ((mDeviceCaps.DevCaps2 & D3DDEVCAPS2_CAN_STRETCHRECT_FROM_TEXTURES) == 0)
     {
-        return egl::EglNotInitialized(D3D9_INIT_UNSUPPORTED_STRETCHRECT)
-               << "Renderer does not support StretctRect from textures.";
+        return egl::Error(EGL_NOT_INITIALIZED, D3D9_INIT_UNSUPPORTED_STRETCHRECT,
+                          "Renderer does not support StretctRect from textures.");
     }
 
     {
@@ -323,8 +330,9 @@ egl::Error Renderer9::initialize()
     }
     if (result == D3DERR_OUTOFVIDEOMEMORY || result == E_OUTOFMEMORY || result == D3DERR_DEVICELOST)
     {
-        return egl::EglBadAlloc(D3D9_INIT_OUT_OF_MEMORY)
-               << "CreateDevice failed: device lost or out of memory (" << gl::FmtHR(result) << ")";
+        std::ostringstream err;
+        err << "CreateDevice failed: device lost or out of memory (" << gl::FmtHR(result) << ")";
+        return egl::Error(EGL_BAD_ALLOC, D3D9_INIT_OUT_OF_MEMORY, err.str());
     }
 
     if (FAILED(result))
@@ -338,9 +346,10 @@ egl::Error Renderer9::initialize()
         {
             ASSERT(result == D3DERR_OUTOFVIDEOMEMORY || result == E_OUTOFMEMORY ||
                    result == D3DERR_NOTAVAILABLE || result == D3DERR_DEVICELOST);
-            return egl::EglBadAlloc(D3D9_INIT_OUT_OF_MEMORY)
-                   << "CreateDevice2 failed: device lost, not available, or of out of memory ("
-                   << gl::FmtHR(result) << ")";
+            std::ostringstream err;
+            err << "CreateDevice2 failed: device lost, not available, or of out of memory ("
+                << gl::FmtHR(result) << ")";
+            return egl::Error(EGL_BAD_ALLOC, D3D9_INIT_OUT_OF_MEMORY, err.str());
         }
     }
 
@@ -741,7 +750,7 @@ egl::Error Renderer9::getD3DTextureInfo(const egl::Config *configuration,
     IDirect3DTexture9 *texture = nullptr;
     if (FAILED(d3dTexture->QueryInterface(&texture)))
     {
-        return egl::EglBadParameter() << "Client buffer is not a IDirect3DTexture9";
+        return egl::Error(EGL_BAD_PARAMETER, "Client buffer is not a IDirect3DTexture9");
     }
 
     IDirect3DDevice9 *textureDevice = nullptr;
@@ -749,7 +758,7 @@ egl::Error Renderer9::getD3DTextureInfo(const egl::Config *configuration,
     if (textureDevice != mDevice)
     {
         SafeRelease(texture);
-        return egl::EglBadParameter() << "Texture's device does not match.";
+        return egl::Error(EGL_BAD_PARAMETER, "Texture's device does not match.");
     }
     SafeRelease(textureDevice);
 
@@ -770,7 +779,8 @@ egl::Error Renderer9::getD3DTextureInfo(const egl::Config *configuration,
     GLsizei sampleCount = d3d9_gl::GetSamplesCount(desc.MultiSampleType);
     if ((configuration && configuration->samples > 1) || sampleCount != 0)
     {
-        return egl::EglBadParameter() << "Multisampling not supported for client buffer texture";
+        return egl::Error(EGL_BAD_PARAMETER,
+                          "Multisampling not supported for client buffer texture");
     }
     if (samples)
     {
@@ -787,8 +797,9 @@ egl::Error Renderer9::getD3DTextureInfo(const egl::Config *configuration,
             break;
 
         default:
-            return egl::EglBadParameter()
-                   << "Unknown client buffer texture format: " << desc.Format;
+            std::ostringstream err;
+            err << "Unknown client buffer texture format: " << desc.Format;
+            return egl::Error(EGL_BAD_PARAMETER, err.str());
     }
 
     const auto &d3dFormatInfo = d3d9::GetD3DFormatInfo(desc.Format);
@@ -819,7 +830,7 @@ egl::Error Renderer9::validateShareHandle(const egl::Config *config,
 {
     if (shareHandle == nullptr)
     {
-        return egl::EglBadParameter() << "NULL share handle.";
+        return egl::Error(EGL_BAD_PARAMETER, "NULL share handle.");
     }
 
     EGLint width  = attribs.getAsInt(EGL_WIDTH, 0);
@@ -835,7 +846,9 @@ egl::Error Renderer9::validateShareHandle(const egl::Config *config,
                                                         &texture, &shareHandle);
     if (FAILED(result))
     {
-        return egl::EglBadParameter() << "Failed to open share handle, " << gl::FmtHR(result);
+        std::ostringstream err;
+        err << "Failed to open share handle, " << gl::FmtHR(result);
+        return egl::Error(EGL_BAD_PARAMETER, err.str());
     }
 
     DWORD levelCount = texture->GetLevelCount();
@@ -848,7 +861,7 @@ egl::Error Renderer9::validateShareHandle(const egl::Config *config,
         desc.Height != static_cast<UINT>(height) ||
         desc.Format != backBufferd3dFormatInfo.texFormat)
     {
-        return egl::EglBadParameter() << "Invalid texture parameters in share handle texture.";
+        return egl::Error(EGL_BAD_PARAMETER, "Invalid texture parameters in share handle texture.");
     }
 
     return egl::NoError();
@@ -1156,6 +1169,8 @@ angle::Result Renderer9::updateState(const gl::Context *context, gl::PrimitiveMo
     if (firstColorAttachment)
     {
         ASSERT(firstColorAttachment->isAttached());
+        // GL_OVR_multiview_multisampled_render_to_texture is not supported on D3D backend
+        ASSERT(!(firstColorAttachment->isRenderToTexture() && firstColorAttachment->isMultiview()));
         RenderTarget9 *renderTarget = nullptr;
         ANGLE_TRY(firstColorAttachment->getRenderTarget(context, firstColorAttachment->getSamples(),
                                                         &renderTarget));
@@ -1195,6 +1210,8 @@ angle::Result Renderer9::setBlendDepthRasterStates(const gl::Context *context,
     if (firstColorAttachment)
     {
         ASSERT(firstColorAttachment->isAttached());
+        // GL_OVR_multiview_multisampled_render_to_texture is not supported on D3D backend
+        ASSERT(!(firstColorAttachment->isRenderToTexture() && firstColorAttachment->isMultiview()));
         RenderTarget9 *renderTarget = nullptr;
         ANGLE_TRY(firstColorAttachment->getRenderTarget(context, firstColorAttachment->getSamples(),
                                                         &renderTarget));
@@ -1487,16 +1504,17 @@ angle::Result Renderer9::drawElementsImpl(const gl::Context *context,
     ANGLE_TRY(applyIndexBuffer(context, indices, count, mode, type, &indexInfo));
 
     gl::IndexRange indexRange;
-    ANGLE_TRY(context->getState().getVertexArray()->getIndexRange(context, type, count, indices,
-                                                                  &indexRange));
+    ANGLE_TRY(context->getState().getVertexArray()->getIndexRange(
+        context, type, count, indices, context->getState().isPrimitiveRestartEnabled(),
+        &indexRange));
 
     size_t vertexCount = indexRange.vertexCount();
-    ANGLE_TRY(applyVertexBuffer(context, mode, static_cast<GLsizei>(indexRange.start),
+    ANGLE_TRY(applyVertexBuffer(context, mode, static_cast<GLsizei>(indexRange.start()),
                                 static_cast<GLsizei>(vertexCount), instances, &indexInfo));
 
     startScene();
 
-    int minIndex = static_cast<int>(indexRange.start);
+    int minIndex = static_cast<int>(indexRange.start());
 
     gl::VertexArray *vao           = context->getState().getVertexArray();
     gl::Buffer *elementArrayBuffer = vao->getElementArrayBuffer();
@@ -2595,7 +2613,7 @@ angle::Result Renderer9::createRenderTarget(const gl::Context *context,
     const d3d9::TextureFormat &d3d9FormatInfo = d3d9::GetTextureFormatInfo(format);
 
     const gl::TextureCaps &textureCaps = getNativeTextureCaps().get(format);
-    GLuint supportedSamples            = textureCaps.getNearestSamples(samples);
+    GLuint supportedSamples            = textureCaps.sampleCounts.getNearestSamples(samples);
 
     IDirect3DTexture9 *texture      = nullptr;
     IDirect3DSurface9 *renderTarget = nullptr;
@@ -2734,8 +2752,7 @@ angle::Result Renderer9::compileToExecutable(d3d::Context *context,
     }
 
     profileStream << "_" << ((getMajorShaderModel() >= 3) ? 3 : 2);
-    profileStream << "_"
-                  << "0";
+    profileStream << "_" << "0";
 
     std::string profile = profileStream.str();
 
@@ -3058,7 +3075,7 @@ angle::Result Renderer9::getVertexSpaceRequired(const gl::Context *context,
                                                 const gl::VertexBinding &binding,
                                                 size_t count,
                                                 GLsizei instances,
-                                                GLuint baseInstance,
+                                                uint64_t baseInstance,
                                                 unsigned int *bytesRequiredOut) const
 {
     if (!attrib.enabled)
@@ -3104,8 +3121,8 @@ void Renderer9::generateCaps(gl::Caps *outCaps,
 
 void Renderer9::initializeFeatures(angle::FeaturesD3D *features) const
 {
-    ApplyFeatureOverrides(features, mDisplay->getState());
-    if (!mDisplay->getState().featuresAllDisabled)
+    ApplyFeatureOverrides(features, mDisplay->getState().featureOverrides);
+    if (!mDisplay->getState().featureOverrides.allDisabled)
     {
         d3d9::InitializeFeatures(features, mAdapterIdentifier.VendorId);
     }
@@ -3113,8 +3130,8 @@ void Renderer9::initializeFeatures(angle::FeaturesD3D *features) const
 
 void Renderer9::initializeFrontendFeatures(angle::FrontendFeatures *features) const
 {
-    ApplyFeatureOverrides(features, mDisplay->getState());
-    if (!mDisplay->getState().featuresAllDisabled)
+    ApplyFeatureOverrides(features, mDisplay->getState().featureOverrides);
+    if (!mDisplay->getState().featureOverrides.allDisabled)
     {
         d3d9::InitializeFrontendFeatures(features, mAdapterIdentifier.VendorId);
     }
@@ -3122,7 +3139,7 @@ void Renderer9::initializeFrontendFeatures(angle::FrontendFeatures *features) co
 
 DeviceImpl *Renderer9::createEGLDevice()
 {
-    return new DeviceD3D(EGL_D3D9_DEVICE_ANGLE, mDevice);
+    return new Device9(mDevice);
 }
 
 Renderer9::CurSamplerState::CurSamplerState()

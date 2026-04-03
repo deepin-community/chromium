@@ -44,9 +44,9 @@ namespace {
 using TextureFormat = wgpu::TextureFormat;
 DAWN_TEST_PARAM_STRUCT(DepthStencilCopyTestParams, TextureFormat);
 
-constexpr std::array<wgpu::TextureFormat, 3> kValidDepthCopyTextureFormats = {
-    wgpu::TextureFormat::Depth16Unorm,
-    wgpu::TextureFormat::Depth32Float,
+constexpr std::array<wgpu::TextureFormat, 5> kValidDepthCopyTextureFormats = {
+    wgpu::TextureFormat::Depth16Unorm,         wgpu::TextureFormat::Depth24Plus,
+    wgpu::TextureFormat::Depth24PlusStencil8,  wgpu::TextureFormat::Depth32Float,
     wgpu::TextureFormat::Depth32FloatStencil8,
 };
 
@@ -57,11 +57,7 @@ constexpr std::array<wgpu::TextureFormat, 1> kValidDepthCopyFromBufferFormats = 
 uint32_t GetBytesPerPixel(wgpu::TextureFormat format, wgpu::TextureAspect aspect) {
     uint32_t bytesPerPixel = 0;
     switch (format) {
-        case wgpu::TextureFormat::Depth24PlusStencil8: {
-            DAWN_ASSERT(aspect == wgpu::TextureAspect::StencilOnly);
-            bytesPerPixel = 1;
-            break;
-        }
+        case wgpu::TextureFormat::Depth24PlusStencil8:
         case wgpu::TextureFormat::Depth32FloatStencil8: {
             switch (aspect) {
                 case wgpu::TextureAspect::DepthOnly:
@@ -106,28 +102,13 @@ static_assert(kClearStencil != kGarbageStencil);
 
 class DepthStencilCopyTests : public DawnTestWithParams<DepthStencilCopyTestParams> {
   protected:
-    void MapAsyncAndWait(const wgpu::Buffer& buffer,
-                         wgpu::MapMode mode,
-                         size_t offset,
-                         size_t size) {
-        bool done = false;
-        buffer.MapAsync(
-            mode, offset, size,
-            [](WGPUBufferMapAsyncStatus status, void* userdata) {
-                ASSERT_EQ(WGPUBufferMapAsyncStatus_Success, status);
-                *static_cast<bool*>(userdata) = true;
-            },
-            &done);
-
-        while (!done) {
-            WaitABit();
-        }
-    }
-
     void SetUp() override {
         DawnTestWithParams<DepthStencilCopyTestParams>::SetUp();
 
         DAWN_TEST_UNSUPPORTED_IF(!mIsFormatSupported);
+
+        // TODO(crbug.com/473870505): [Capture] support depth/stencil and multi-planar textures.
+        DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
 
         // Draw a square in the bottom left quarter of the screen.
         mVertexModule = utils::CreateShaderModule(device, R"(
@@ -164,6 +145,21 @@ class DepthStencilCopyTests : public DawnTestWithParams<DepthStencilCopyTestPara
             case wgpu::TextureFormat::Depth32Float:
             case wgpu::TextureFormat::Depth32FloatStencil8:
                 return true;
+            default:
+                return false;
+        }
+    }
+
+    // Can you use this the format as the source to T2T or T2B.
+    bool IsValidDepthCopySourceTextureFormat() {
+        switch (GetParam().mTextureFormat) {
+            case wgpu::TextureFormat::Depth16Unorm:
+            case wgpu::TextureFormat::Depth32Float:
+            case wgpu::TextureFormat::Depth32FloatStencil8:
+                return true;
+            case wgpu::TextureFormat::Depth24Plus:
+            case wgpu::TextureFormat::Depth24PlusStencil8:
+                return HasToggleEnabled("use_blit_for_depth24plus_texture_to_buffer_copy");
             default:
                 return false;
         }
@@ -228,7 +224,7 @@ class DepthStencilCopyTests : public DawnTestWithParams<DepthStencilCopyTestPara
                 @fragment fn main() {}
             )");
         } else {
-            depthStencil->depthWriteEnabled = true;
+            depthStencil->depthWriteEnabled = wgpu::OptionalBool::True;
             renderPipelineDesc.cFragment.module = utils::CreateShaderModule(device, std::string(R"(
                 @fragment fn main() -> @builtin(frag_depth) f32 {
                     return )" + std::to_string(regionDepth) + R"(;
@@ -289,10 +285,10 @@ class DepthStencilCopyTests : public DawnTestWithParams<DepthStencilCopyTestPara
         // Perform a T2T copy of all aspects
         {
             wgpu::CommandEncoder commandEncoder = device.CreateCommandEncoder();
-            wgpu::ImageCopyTexture srcView =
-                utils::CreateImageCopyTexture(src, mipLevel, {0, 0, 0});
-            wgpu::ImageCopyTexture dstView =
-                utils::CreateImageCopyTexture(dst, mipLevel, {0, 0, 0});
+            wgpu::TexelCopyTextureInfo srcView =
+                utils::CreateTexelCopyTextureInfo(src, mipLevel, {0, 0, 0});
+            wgpu::TexelCopyTextureInfo dstView =
+                utils::CreateTexelCopyTextureInfo(dst, mipLevel, {0, 0, 0});
             wgpu::Extent3D copySize = {width >> mipLevel, height >> mipLevel, 1};
             commandEncoder.CopyTextureToTexture(&srcView, &dstView, &copySize);
 
@@ -330,6 +326,11 @@ class DepthStencilCopyTests : public DawnTestWithParams<DepthStencilCopyTestPara
 
 // Test copying both aspects in a T2T copy, then copying only stencil.
 TEST_P(DepthStencilCopyTests, T2TBothAspectsThenCopyStencil) {
+    // TODO(crbug.com/344949343): Test fails on Intel D3D11 with packed depth24_unorm_stencil8.
+    DAWN_SUPPRESS_TEST_IF(IsIntel() && IsD3D11() &&
+                          GetParam().mTextureFormat == wgpu::TextureFormat::Depth24PlusStencil8 &&
+                          HasToggleEnabled("use_packed_depth24_unorm_stencil8_format"));
+
     constexpr uint32_t kWidth = 4;
     constexpr uint32_t kHeight = 4;
 
@@ -351,6 +352,11 @@ TEST_P(DepthStencilCopyTests, T2TBothAspectsThenCopyStencil) {
 // Test that part of a non-renderable stencil aspect can be copied. Notably,
 // this test has different behavior on some platforms than T2TBothAspectsThenCopyStencil.
 TEST_P(DepthStencilCopyTests, T2TBothAspectsThenCopyNonRenderableStencil) {
+    // Test fails on D3D11 with Intel when using packed depth24_unorm_stencil8 format.
+    DAWN_SUPPRESS_TEST_IF(IsIntel() && IsD3D11() &&
+                          GetParam().mTextureFormat == wgpu::TextureFormat::Depth24PlusStencil8 &&
+                          HasToggleEnabled("use_packed_depth24_unorm_stencil8_format"));
+
     constexpr uint32_t kWidth = 4;
     constexpr uint32_t kHeight = 4;
 
@@ -371,6 +377,11 @@ TEST_P(DepthStencilCopyTests, T2TBothAspectsThenCopyNonRenderableStencil) {
 // Test that part of a non-renderable, non-zero mip stencil aspect can be copied. Notably,
 // this test has different behavior on some platforms than T2TBothAspectsThenCopyStencil.
 TEST_P(DepthStencilCopyTests, T2TBothAspectsThenCopyNonRenderableNonZeroMipStencil) {
+    // Test fails on D3D11 with Intel when using packed depth24_unorm_stencil8 format.
+    DAWN_SUPPRESS_TEST_IF(IsIntel() && IsD3D11() &&
+                          GetParam().mTextureFormat == wgpu::TextureFormat::Depth24PlusStencil8 &&
+                          HasToggleEnabled("use_packed_depth24_unorm_stencil8_format"));
+
     wgpu::Texture texture = CreateInitializeDepthStencilTextureAndCopyT2T(
         0.1f, 0.3f, 1u, 3u, 9, 9, wgpu::TextureUsage::CopySrc, 1);
 
@@ -519,6 +530,8 @@ class DepthCopyTests : public DepthStencilCopyTests {
         bool checkBufferContent,
         // Test cube binding view dimension for compatibility mode
         wgpu::TextureViewDimension bindingViewDimension = wgpu::TextureViewDimension::Undefined) {
+        DAWN_TEST_UNSUPPORTED_IF(!IsValidDepthCopySourceTextureFormat());
+
         uint32_t mipLevelCount = testLevel + 1;
         wgpu::Texture texture =
             CreateTexture(textureWidth, textureHeight,
@@ -542,11 +555,11 @@ class DepthCopyTests : public DepthStencilCopyTests {
         uint32_t bytesPerImage = bytesPerRow * copyHeight;
 
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-        wgpu::ImageCopyTexture imageCopyTexture =
-            utils::CreateImageCopyTexture(texture, testLevel, {0, 0, 0}, aspect);
-        wgpu::ImageCopyBuffer imageCopyBuffer = utils::CreateImageCopyBuffer(
+        wgpu::TexelCopyTextureInfo texelCopyTextureInfo =
+            utils::CreateTexelCopyTextureInfo(texture, testLevel, {0, 0, 0}, aspect);
+        wgpu::TexelCopyBufferInfo texelCopyBufferInfo = utils::CreateTexelCopyBufferInfo(
             destinationBuffer, bufferCopyOffset, bytesPerRow, copyHeight);
-        encoder.CopyTextureToBuffer(&imageCopyTexture, &imageCopyBuffer, &copySize);
+        encoder.CopyTextureToBuffer(&texelCopyTextureInfo, &texelCopyBufferInfo, &copySize);
         wgpu::CommandBuffer commandBuffer = encoder.Finish();
         queue.Submit(1, &commandBuffer);
 
@@ -572,6 +585,10 @@ class DepthCopyTests : public DepthStencilCopyTests {
                     }
                 }
             } else {
+                float tolerance = (format == wgpu::TextureFormat::Depth24Plus ||
+                                   format == wgpu::TextureFormat::Depth24PlusStencil8)
+                                      ? 3e-8f
+                                      : 0.0f;
                 std::vector<float> expectedData(copyWidth * copyHeight, kClearDepth);
                 for (uint32_t y = copyHeight / 2; y < copyHeight; y++) {
                     auto rowStart = expectedData.data() + y * copyWidth;
@@ -581,10 +598,10 @@ class DepthCopyTests : public DepthStencilCopyTests {
                 for (uint32_t z = 0; z < textureArrayLayerCount; ++z) {
                     uint32_t bufferOffsetPerArrayLayer = bytesPerImage * z;
                     for (uint32_t y = 0; y < copyHeight; ++y) {
-                        EXPECT_BUFFER_FLOAT_RANGE_EQ(
+                        EXPECT_BUFFER_FLOAT_RANGE_TOLERANCE_EQ(
                             expectedData.data() + copyWidth * y, destinationBuffer,
                             bufferCopyOffset + bufferOffsetPerArrayLayer + y * bytesPerRow,
-                            copyWidth);
+                            copyWidth, tolerance);
                     }
                 }
             }
@@ -651,6 +668,14 @@ TEST_P(DepthCopyTests, FromDepthAspectToBufferAtNonZeroOffset) {
 
 // Test copying the non-zero mip, depth-only aspect into a buffer.
 TEST_P(DepthCopyTests, FromNonZeroMipDepthAspect) {
+    // TODO(42242119): fail on Qualcomm Adreno X1.
+    DAWN_SUPPRESS_TEST_IF(IsD3D11() && IsQualcomm());
+
+    // TODO(477654109): This test fails for this one format on MacOS AMD 550X and 560X
+    // though not on AMD Radeon Pro 5300M.
+    DAWN_SUPPRESS_TEST_IF(IsMacOS() && IsAMD() &&
+                          GetParam().mTextureFormat == wgpu::TextureFormat::Depth24PlusStencil8);
+
     constexpr uint32_t kBufferCopyOffset = 0;
     constexpr uint32_t kWidth = 9;
     constexpr uint32_t kHeight = 9;
@@ -665,6 +690,9 @@ TEST_P(DepthCopyTests, FromNonZeroMipDepthAspect) {
 // inevitably written. So we need to make sure the original content of the buffer that's outside of
 // the copy extent is still correctly preserved.
 TEST_P(DepthCopyTests, PreserveBufferContent) {
+    // TODO(crbug.com/461837996): Flaky on Snapdragon X Elite.
+    DAWN_SUPPRESS_TEST_IF(IsWindows() && IsQualcomm());
+
     constexpr uint32_t kBufferCopyOffsets[] = {0u, 4u, 512u};
     constexpr uint32_t kTestTextureSizes[][2] = {
         {1, 1},
@@ -830,9 +858,6 @@ TEST_P(DepthCopyTests_Compat, FromDepthAspectToBufferAtNonZeroOffset) {
 
 // Test copying the non-zero mip, depth-only aspect into a buffer.
 TEST_P(DepthCopyTests_Compat, FromNonZeroMipDepthAspect) {
-    // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 4 OpenGLES
-    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsQualcomm());
-
     constexpr uint32_t kBufferCopyOffset = 0;
     constexpr uint32_t kWidth = 9;
     constexpr uint32_t kHeight = 9;
@@ -865,9 +890,9 @@ class DepthCopyFromBufferTests : public DepthStencilCopyTests {
         wgpu::Buffer srcBuffer = device.CreateBuffer(&descriptor);
 
         constexpr uint32_t kBytesPerRow = kTextureBytesPerRowAlignment;
-        wgpu::ImageCopyBuffer imageCopyBuffer =
-            utils::CreateImageCopyBuffer(srcBuffer, bufferCopyOffset, kBytesPerRow, kHeight);
-        wgpu::ImageCopyTexture imageCopyTexture = utils::CreateImageCopyTexture(
+        wgpu::TexelCopyBufferInfo texelCopyBufferInfo =
+            utils::CreateTexelCopyBufferInfo(srcBuffer, bufferCopyOffset, kBytesPerRow, kHeight);
+        wgpu::TexelCopyTextureInfo texelCopyTextureInfo = utils::CreateTexelCopyTextureInfo(
             destTexture, 0, {0, 0, 0}, wgpu::TextureAspect::DepthOnly);
         wgpu::Extent3D extent = {kWidth, kHeight, 1};
 
@@ -883,7 +908,7 @@ class DepthCopyFromBufferTests : public DepthStencilCopyTests {
             srcBuffer.Unmap();
 
             wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-            encoder.CopyBufferToTexture(&imageCopyBuffer, &imageCopyTexture, &extent);
+            encoder.CopyBufferToTexture(&texelCopyBufferInfo, &texelCopyTextureInfo, &extent);
             wgpu::CommandBuffer commands = encoder.Finish();
             queue.Submit(1, &commands);
 
@@ -900,7 +925,7 @@ class DepthCopyFromBufferTests : public DepthStencilCopyTests {
             srcBuffer.Unmap();
 
             wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-            encoder.CopyBufferToTexture(&imageCopyBuffer, &imageCopyTexture, &extent);
+            encoder.CopyBufferToTexture(&texelCopyBufferInfo, &texelCopyTextureInfo, &extent);
             wgpu::CommandBuffer commands = encoder.Finish();
             queue.Submit(1, &commands);
 
@@ -992,11 +1017,11 @@ class StencilCopyTests : public DepthStencilCopyTests {
         uint32_t bytesPerImage = bytesPerRow * copyHeight;
 
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-        wgpu::ImageCopyTexture imageCopyTexture =
-            utils::CreateImageCopyTexture(depthStencilTexture, testLevel, {0, 0, 0}, aspect);
-        wgpu::ImageCopyBuffer imageCopyBuffer = utils::CreateImageCopyBuffer(
+        wgpu::TexelCopyTextureInfo texelCopyTextureInfo =
+            utils::CreateTexelCopyTextureInfo(depthStencilTexture, testLevel, {0, 0, 0}, aspect);
+        wgpu::TexelCopyBufferInfo texelCopyBufferInfo = utils::CreateTexelCopyBufferInfo(
             destinationBuffer, bufferCopyOffset, bytesPerRow, copyHeight);
-        encoder.CopyTextureToBuffer(&imageCopyTexture, &imageCopyBuffer, &copySize);
+        encoder.CopyTextureToBuffer(&texelCopyTextureInfo, &texelCopyBufferInfo, &copySize);
         wgpu::CommandBuffer commandBuffer = encoder.Finish();
         queue.Submit(1, &commandBuffer);
 
@@ -1020,14 +1045,6 @@ class StencilCopyTests : public DepthStencilCopyTests {
     }
 
     void DoCopyToStencilTest(uint32_t bufferCopyOffset) {
-        // TODO(crbug.com/dawn/2202): Failing on native GLES drivers due to lack of
-        // glDrawArraysInstancedBaseInstance.
-        DAWN_TEST_UNSUPPORTED_IF(IsOpenGLES() && !IsANGLE());
-
-        // TODO(crbug.com/dawn/2202): Failing on ANGLE/SwiftShader due to undiagnosed ANGLE bug.
-        // Passes on ANGLE/D3D11.
-        DAWN_TEST_UNSUPPORTED_IF(IsANGLESwiftShader());
-
         // Create a stencil texture
         constexpr uint32_t kWidth = 4;
         constexpr uint32_t kHeight = 4;
@@ -1086,12 +1103,13 @@ class StencilCopyTests : public DepthStencilCopyTests {
             srcBuffer.Unmap();
 
             wgpu::CommandEncoder commandEncoder = device.CreateCommandEncoder();
-            wgpu::ImageCopyBuffer imageCopyBuffer =
-                utils::CreateImageCopyBuffer(srcBuffer, bufferCopyOffset, kBytesPerRow, kHeight);
-            wgpu::ImageCopyTexture imageCopyTexture = utils::CreateImageCopyTexture(
+            wgpu::TexelCopyBufferInfo texelCopyBufferInfo = utils::CreateTexelCopyBufferInfo(
+                srcBuffer, bufferCopyOffset, kBytesPerRow, kHeight);
+            wgpu::TexelCopyTextureInfo texelCopyTextureInfo = utils::CreateTexelCopyTextureInfo(
                 depthStencilTexture, 0, {0, 0, 0}, wgpu::TextureAspect::StencilOnly);
             wgpu::Extent3D copySize = {kWidth, kHeight, 1};
-            commandEncoder.CopyBufferToTexture(&imageCopyBuffer, &imageCopyTexture, &copySize);
+            commandEncoder.CopyBufferToTexture(&texelCopyBufferInfo, &texelCopyTextureInfo,
+                                               &copySize);
             wgpu::CommandBuffer commandBuffer = commandEncoder.Finish();
             queue.Submit(1, &commandBuffer);
         }
@@ -1112,7 +1130,7 @@ class StencilCopyTests : public DepthStencilCopyTests {
                 renderPipelineDesc.EnableDepthStencil(GetParam().mTextureFormat);
             depthStencil->stencilFront.passOp = wgpu::StencilOperation::DecrementClamp;
             if (!hasDepth) {
-                depthStencil->depthWriteEnabled = false;
+                depthStencil->depthWriteEnabled = wgpu::OptionalBool::False;
                 depthStencil->depthCompare = wgpu::CompareFunction::Always;
             }
 
@@ -1154,6 +1172,11 @@ class StencilCopyTests : public DepthStencilCopyTests {
 
 // Test copying the stencil-only aspect into a buffer.
 TEST_P(StencilCopyTests, FromStencilAspect) {
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
+    // TODO(42242119): hang/crash on Qualcomm Adreno X1.
+    DAWN_SUPPRESS_TEST_IF(IsD3D11() && IsQualcomm());
+
     constexpr uint32_t kTestLevel = 0;
     constexpr uint32_t kBufferCopyOffset = 0;
     constexpr uint32_t kTestTextureSizes[][2] = {
@@ -1178,6 +1201,11 @@ TEST_P(StencilCopyTests, FromStencilAspect) {
 
 // Test copying the stencil-only aspect into a buffer at a non-zero offset
 TEST_P(StencilCopyTests, FromStencilAspectAtNonZeroOffset) {
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
+    // TODO(42242119): hang/crash on Qualcomm Adreno X1.
+    DAWN_SUPPRESS_TEST_IF(IsD3D11() && IsQualcomm());
+
     constexpr uint32_t kTestLevel = 0;
     constexpr std::array<uint32_t, 2> kBufferCopyOffsets = {4u, 512u};
     constexpr uint32_t kTestTextureSizes[][2] = {
@@ -1204,8 +1232,10 @@ TEST_P(StencilCopyTests, FromStencilAspectAtNonZeroOffset) {
 
 // Test copying the non-zero mip, stencil-only aspect into a buffer.
 TEST_P(StencilCopyTests, FromNonZeroMipStencilAspect) {
-    // TODO(crbug.com/dawn/2273): Failing on ANGLE/D3D11 for unknown reasons.
-    DAWN_SUPPRESS_TEST_IF(IsANGLED3D11());
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
+    // TODO(42242119): hang/crash on Qualcomm Adreno X1.
+    DAWN_SUPPRESS_TEST_IF(IsD3D11() && IsQualcomm());
 
     constexpr uint32_t kWidth = 9;
     constexpr uint32_t kHeight = 9;
@@ -1221,6 +1251,9 @@ TEST_P(StencilCopyTests, FromNonZeroMipStencilAspect) {
 // inevitably written. So we need to make sure the original content of the buffer that's outside of
 // the copy extent is still correctly preserved.
 TEST_P(StencilCopyTests, PreserveBufferContent) {
+    // TODO(crbug.com/461837996): Flaky on Snapdragon X Elite.
+    DAWN_SUPPRESS_TEST_IF(IsWindows() && IsQualcomm());
+
     constexpr uint32_t kBufferCopyOffsets[] = {0u, 4u, 512u};
     constexpr uint32_t kTestTextureSizes[][2] = {
         {1, 1},
@@ -1330,12 +1363,16 @@ TEST_P(StencilCopyTests, BufferCopySizeEdgeCase) {
 
 // Test copying to the stencil-aspect of a texture
 TEST_P(StencilCopyTests, ToStencilAspect) {
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     constexpr uint32_t kBufferCopyOffset = 0;
     DoCopyToStencilTest(kBufferCopyOffset);
 }
 
 // Test copying to the stencil-aspect of a texture at non-zero offset
 TEST_P(StencilCopyTests, ToStencilAspectAtNonZeroOffset) {
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     constexpr std::array<uint32_t, 2> kBufferCopyOffsets = {8, 512};
     for (uint32_t offset : kBufferCopyOffsets) {
         DoCopyToStencilTest(offset);
@@ -1347,7 +1384,6 @@ TEST_P(StencilCopyTests, ToStencilAspectAtNonZeroOffset) {
 TEST_P(StencilCopyTests, CopyNonzeroMipThenReadWithStencilTest) {
     // Copies to a single aspect are unsupported on OpenGL.
     DAWN_TEST_UNSUPPORTED_IF(IsOpenGL());
-    DAWN_TEST_UNSUPPORTED_IF(IsOpenGLES());
 
     // Create a stencil texture
     constexpr uint32_t kWidth = 4;
@@ -1367,15 +1403,15 @@ TEST_P(StencilCopyTests, CopyNonzeroMipThenReadWithStencilTest) {
 
     // Upload the stencil data.
     {
-        wgpu::TextureDataLayout dataLayout = {};
+        wgpu::TexelCopyBufferLayout dataLayout = {};
         dataLayout.bytesPerRow = kWidth >> kMipLevel;
 
-        wgpu::ImageCopyTexture imageCopyTexture = utils::CreateImageCopyTexture(
+        wgpu::TexelCopyTextureInfo texelCopyTextureInfo = utils::CreateTexelCopyTextureInfo(
             depthStencilTexture, 1, {0, 0, 0}, wgpu::TextureAspect::StencilOnly);
         wgpu::Extent3D copySize = {kWidth >> kMipLevel, kHeight >> kMipLevel, 1};
 
-        queue.WriteTexture(&imageCopyTexture, stencilData.data(), stencilData.size(), &dataLayout,
-                           &copySize);
+        queue.WriteTexture(&texelCopyTextureInfo, stencilData.data(), stencilData.size(),
+                           &dataLayout, &copySize);
     }
 
     // Check the stencil contents.
@@ -1394,6 +1430,8 @@ class StencilCopyTests_Compat : public StencilCopyTests {
 };
 
 TEST_P(StencilCopyTests_Compat, FromStencilAspect) {
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     constexpr uint32_t kTestLevel = 0;
     constexpr uint32_t kBufferCopyOffset = 0;
     constexpr uint32_t kTestTextureSizes[][2] = {
@@ -1413,6 +1451,8 @@ TEST_P(StencilCopyTests_Compat, FromStencilAspect) {
 
 // Test copying the stencil-only aspect into a buffer at a non-zero offset
 TEST_P(StencilCopyTests_Compat, FromStencilAspectAtNonZeroOffset) {
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     constexpr uint32_t kTestLevel = 0;
     constexpr std::array<uint32_t, 2> kBufferCopyOffsets = {4u, 512u};
     constexpr uint32_t kTestTextureSizes[][2] = {
@@ -1433,8 +1473,8 @@ TEST_P(StencilCopyTests_Compat, FromStencilAspectAtNonZeroOffset) {
 
 // Test copying the non-zero mip, stencil-only aspect into a buffer.
 TEST_P(StencilCopyTests_Compat, FromNonZeroMipStencilAspect) {
-    // TODO(crbug.com/dawn/2273): Failing on ANGLE/D3D11 for unknown reasons.
-    DAWN_SUPPRESS_TEST_IF(IsANGLED3D11());
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     constexpr uint32_t kWidth = 9;
     constexpr uint32_t kHeight = 9;
     constexpr uint32_t kBufferCopyOffset = 0;
@@ -1496,10 +1536,10 @@ TEST_P(DepthStencilCopyTests_RegressionDawn1083, Run) {
                     // Perform a T2T copy
                     {
                         wgpu::CommandEncoder commandEncoder = device.CreateCommandEncoder();
-                        wgpu::ImageCopyTexture srcView =
-                            utils::CreateImageCopyTexture(src, mipLevel, {0, 0, srcArrayLayer});
-                        wgpu::ImageCopyTexture dstView =
-                            utils::CreateImageCopyTexture(dst, mipLevel, {0, 0, dstArrayLayer});
+                        wgpu::TexelCopyTextureInfo srcView =
+                            utils::CreateTexelCopyTextureInfo(src, mipLevel, {0, 0, srcArrayLayer});
+                        wgpu::TexelCopyTextureInfo dstView =
+                            utils::CreateTexelCopyTextureInfo(dst, mipLevel, {0, 0, dstArrayLayer});
                         wgpu::Extent3D copySize = {mipWidth, mipHeight, layerCount};
                         commandEncoder.CopyTextureToTexture(&srcView, &dstView, &copySize);
 
@@ -1541,8 +1581,7 @@ TEST_P(DepthStencilCopyTests_RegressionDawn1083, Run) {
                         ExpectAttachmentDepthTestData(dst, GetParam().mTextureFormat, mipWidth,
                                                       mipHeight, dstArrayLayer + z, mipLevel,
                                                       GetExpectedDepthData(mipLevel))
-                            << "depth aspect"
-                            << "\nmipLevelCount: " << mipLevelCount
+                            << "depth aspect" << "\nmipLevelCount: " << mipLevelCount
                             << "\narrayLayerCount: " << arrayLayerCount
                             << "\nmipLevel: " << mipLevel
                             << "\nsrcArrayLayer: " << srcArrayLayer + z
@@ -1553,8 +1592,7 @@ TEST_P(DepthStencilCopyTests_RegressionDawn1083, Run) {
                             ExpectAttachmentStencilTestData(dst, GetParam().mTextureFormat,
                                                             mipWidth, mipHeight, dstArrayLayer + z,
                                                             mipLevel, stencilValue)
-                                << "stencil aspect"
-                                << "\nmipLevelCount: " << mipLevelCount
+                                << "stencil aspect" << "\nmipLevelCount: " << mipLevelCount
                                 << "\narrayLayerCount: " << arrayLayerCount
                                 << "\nmipLevel: " << mipLevel
                                 << "\nsrcArrayLayer: " << srcArrayLayer + z
@@ -1569,7 +1607,8 @@ TEST_P(DepthStencilCopyTests_RegressionDawn1083, Run) {
 
 DAWN_INSTANTIATE_TEST_P(
     DepthStencilCopyTests,
-    {D3D11Backend(), D3D12Backend(),
+    {D3D11Backend(), D3D11Backend({"use_packed_depth24_unorm_stencil8_format"}), D3D12Backend(),
+     D3D12Backend({"use_packed_depth24_unorm_stencil8_format"}),
      D3D12Backend({"use_blit_for_depth_texture_to_texture_copy_to_nonzero_subresource"}),
      MetalBackend(),
      MetalBackend({"use_blit_for_depth_texture_to_texture_copy_to_nonzero_subresource"}),
@@ -1577,17 +1616,27 @@ DAWN_INSTANTIATE_TEST_P(
                    "use_blit_for_buffer_to_stencil_texture_copy"}),
      OpenGLBackend(), OpenGLESBackend(),
      // Test with the vulkan_use_s8 toggle forced on and off.
-     VulkanBackend({"vulkan_use_s8"}, {}), VulkanBackend({}, {"vulkan_use_s8"})},
+     VulkanBackend({"vulkan_use_s8"}, {}), VulkanBackend({}, {"vulkan_use_s8"}), WebGPUBackend()},
     std::vector<wgpu::TextureFormat>(utils::kDepthAndStencilFormats.begin(),
                                      utils::kDepthAndStencilFormats.end()));
 
-DAWN_INSTANTIATE_TEST_P(DepthCopyTests,
-                        {D3D11Backend(), D3D12Backend(),
-                         D3D12Backend({"d3d12_use_temp_buffer_in_depth_stencil_texture_and_buffer_"
-                                       "copy_with_non_zero_buffer_offset"}),
-                         MetalBackend(), OpenGLBackend(), OpenGLESBackend(), VulkanBackend()},
-                        std::vector<wgpu::TextureFormat>(kValidDepthCopyTextureFormats.begin(),
-                                                         kValidDepthCopyTextureFormats.end()));
+DAWN_INSTANTIATE_TEST_P(
+    DepthCopyTests,
+    {D3D11Backend(), D3D11Backend({"use_blit_for_depth24plus_texture_to_buffer_copy"}),
+     D3D12Backend(),
+     D3D12Backend({"d3d12_use_temp_buffer_in_depth_stencil_texture_and_buffer_"
+                   "copy_with_non_zero_buffer_offset"}),
+     D3D12Backend({"use_blit_for_depth24plus_texture_to_buffer_copy"}), MetalBackend(),
+     MetalBackend({"use_blit_for_depth24plus_texture_to_buffer_copy"}), OpenGLBackend(),
+     OpenGLBackend({"use_blit_for_depth24plus_texture_to_buffer_copy"}),
+
+     OpenGLESBackend(), OpenGLESBackend({"use_blit_for_depth24plus_texture_to_buffer_copy"}),
+
+     VulkanBackend(), VulkanBackend({"use_blit_for_depth24plus_texture_to_buffer_copy"}),
+     WebGPUBackend()},
+    std::vector<wgpu::TextureFormat>(kValidDepthCopyTextureFormats.begin(),
+                                     kValidDepthCopyTextureFormats.end()));
+
 DAWN_INSTANTIATE_TEST_P(DepthCopyTests_Compat,
                         {OpenGLBackend(), OpenGLESBackend()},
                         std::vector<wgpu::TextureFormat>(kValidDepthCopyFromBufferFormats.begin(),
@@ -1599,26 +1648,28 @@ DAWN_INSTANTIATE_TEST_P(DepthCopyFromBufferTests,
                                        "copy_with_non_zero_buffer_offset"}),
                          MetalBackend(),
                          MetalBackend({"use_blit_for_buffer_to_depth_texture_copy"}),
-                         OpenGLBackend(), OpenGLESBackend(), VulkanBackend()},
+                         OpenGLBackend(), OpenGLESBackend(), VulkanBackend(), WebGPUBackend()},
                         std::vector<wgpu::TextureFormat>(kValidDepthCopyFromBufferFormats.begin(),
                                                          kValidDepthCopyFromBufferFormats.end()));
 
 DAWN_INSTANTIATE_TEST_P(
     StencilCopyTests,
-    {D3D11Backend(), D3D12Backend(),
+    {D3D11Backend(), D3D11Backend({"use_packed_depth24_unorm_stencil8_format"}), D3D12Backend(),
+     D3D12Backend({"use_packed_depth24_unorm_stencil8_format"}),
      D3D12Backend({"d3d12_use_temp_buffer_in_depth_stencil_texture_and_buffer_"
                    "copy_with_non_zero_buffer_offset"}),
      MetalBackend(), MetalBackend({"metal_use_combined_depth_stencil_format_for_stencil8"}),
      MetalBackend(
          {"metal_use_both_depth_and_stencil_attachments_for_combined_depth_stencil_formats"}),
      MetalBackend({"use_blit_for_buffer_to_stencil_texture_copy"}), OpenGLBackend(),
-     OpenGLESBackend(),
+     OpenGLESBackend(), OpenGLESBackend({"gl_force_es_31_and_no_extensions"}),
      // Test with the vulkan_use_s8 toggle forced on and off.
-     VulkanBackend({"vulkan_use_s8"}, {}), VulkanBackend({}, {"vulkan_use_s8"})},
+     VulkanBackend({"vulkan_use_s8"}, {}), VulkanBackend({}, {"vulkan_use_s8"}), WebGPUBackend()},
     std::vector<wgpu::TextureFormat>(utils::kStencilFormats.begin(), utils::kStencilFormats.end()));
 
 DAWN_INSTANTIATE_TEST_P(StencilCopyTests_Compat,
-                        {OpenGLBackend(), OpenGLESBackend()},
+                        {OpenGLBackend(), OpenGLESBackend(),
+                         OpenGLESBackend({"gl_force_es_31_and_no_extensions"})},
                         std::vector<wgpu::TextureFormat>(utils::kStencilFormats.begin(),
                                                          utils::kStencilFormats.end()));
 
@@ -1628,7 +1679,7 @@ DAWN_INSTANTIATE_TEST_P(
      D3D12Backend({"use_blit_for_depth_texture_to_texture_copy_to_nonzero_subresource"}),
      MetalBackend(),
      MetalBackend({"use_blit_for_depth_texture_to_texture_copy_to_nonzero_subresource"}),
-     OpenGLBackend(), OpenGLESBackend(), VulkanBackend()},
+     OpenGLBackend(), OpenGLESBackend(), VulkanBackend(), WebGPUBackend()},
     std::vector<wgpu::TextureFormat>{wgpu::TextureFormat::Depth16Unorm,
                                      wgpu::TextureFormat::Depth32FloatStencil8,
                                      wgpu::TextureFormat::Depth24Plus});

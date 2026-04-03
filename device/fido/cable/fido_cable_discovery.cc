@@ -4,32 +4,36 @@
 
 #include "device/fido/cable/fido_cable_discovery.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
 #include "base/barrier_closure.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
-#include "base/ranges/algorithm.h"
+#include "base/notimplemented.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/device_event_log/device_event_log.h"
+#include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/bluetooth_advertisement.h"
 #include "device/bluetooth/bluetooth_discovery_session.h"
 #include "device/bluetooth/public/cpp/bluetooth_uuid.h"
+#include "device/fido/cable/fido_ble_connection.h"
 #include "device/fido/cable/fido_ble_uuids.h"
 #include "device/fido/cable/fido_cable_device.h"
 #include "device/fido/cable/fido_cable_handshake_handler.h"
 #include "device/fido/cable/fido_tunnel_device.h"
-#include "device/fido/features.h"
 #include "device/fido/fido_parsing_utils.h"
+#include "device/fido/public/features.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "device/fido/mac/util.h"
@@ -103,7 +107,7 @@ std::unique_ptr<BluetoothAdvertisement::Data> ConstructAdvertisementData(
   // bit of the flag byte.
   service_data_value[0] = kCableFlags;
   service_data_value[1] = 1 /* version */;
-  base::ranges::copy(client_eid, service_data_value.begin() + 2);
+  std::ranges::copy(client_eid, service_data_value.begin() + 2);
   service_data.emplace(kGoogleCableUUID128, std::move(service_data_value));
   advertisement_data->set_service_data(std::move(service_data));
 #endif
@@ -126,7 +130,7 @@ FidoCableDiscovery::FidoCableDiscovery(
       discovery_data_(std::move(discovery_data)) {
 // Windows currently does not support multiple EIDs, thus we ignore any extra
 // discovery data.
-// TODO(https://crbug.com/837088): Add support for multiple EIDs on Windows.
+// TODO(crbug.com/40573698): Add support for multiple EIDs on Windows.
 #if BUILDFLAG(IS_WIN)
   if (discovery_data_.size() > 1u) {
     FIDO_LOG(ERROR) << "discovery_data_.size()=" << discovery_data_.size()
@@ -183,8 +187,7 @@ FidoCableDiscovery::CreateV1HandshakeHandler(
 
     case CableDiscoveryData::Version::V2:
     case CableDiscoveryData::Version::INVALID:
-      CHECK(false);
-      return nullptr;
+      NOTREACHED();
   }
 }
 
@@ -203,10 +206,10 @@ const BluetoothUUID& FidoCableDiscovery::FIDOCableUUID() {
 bool FidoCableDiscovery::IsCableDevice(const BluetoothDevice* device) {
   const auto& uuid1 = GoogleCableUUID();
   const auto& uuid2 = FIDOCableUUID();
-  return base::Contains(device->GetServiceData(), uuid1) ||
-         base::Contains(device->GetUUIDs(), uuid1) ||
-         base::Contains(device->GetServiceData(), uuid2) ||
-         base::Contains(device->GetUUIDs(), uuid2);
+  return device->GetServiceData().contains(uuid1) ||
+         device->GetUUIDs().contains(uuid1) ||
+         device->GetServiceData().contains(uuid2) ||
+         device->GetUUIDs().contains(uuid2);
 }
 
 void FidoCableDiscovery::OnGetAdapter(scoped_refptr<BluetoothAdapter> adapter) {
@@ -219,24 +222,16 @@ void FidoCableDiscovery::OnGetAdapter(scoped_refptr<BluetoothAdapter> adapter) {
   DCHECK(!adapter_);
   adapter_ = std::move(adapter);
   DCHECK(adapter_);
-  FIDO_LOG(DEBUG) << "BLE adapter address " << adapter_->GetAddress();
 
   adapter_->AddObserver(this);
-  if (adapter_->IsPowered()) {
-    OnSetPowered();
-  }
-
+  BluetoothAdapter::PermissionStatus bluetooth_permission =
+      BluetoothAdapter::PermissionStatus::kAllowed;
 #if BUILDFLAG(IS_MAC)
-  // TODO(crbug.com/1314404): turn this into a user-visible UI if we believe
-  // that it's a good signal.
   switch (fido::mac::ProcessIsSigned()) {
     case fido::mac::CodeSigningState::kSigned:
+      bluetooth_permission = adapter_->GetOsPermissionStatus();
       FIDO_LOG(DEBUG) << "Bluetooth authorized: "
-                      << static_cast<int>(adapter_->GetOsPermissionStatus());
-      if (adapter_->GetOsPermissionStatus() ==
-          BluetoothAdapter::PermissionStatus::kDenied) {
-        observer()->BleDenied();
-      }
+                      << static_cast<int>(bluetooth_permission);
       break;
     case fido::mac::CodeSigningState::kNotSigned:
       FIDO_LOG(DEBUG)
@@ -244,6 +239,13 @@ void FidoCableDiscovery::OnGetAdapter(scoped_refptr<BluetoothAdapter> adapter) {
       break;
   }
 #endif
+
+  if (bluetooth_permission == BluetoothAdapter::PermissionStatus::kAllowed) {
+    FIDO_LOG(DEBUG) << "BLE adapter address " << adapter_->GetAddress();
+    if (adapter_->IsPowered()) {
+      OnSetPowered();
+    }
+  }
 
   // FidoCableDiscovery blocks its transport availability callback on the
   // DiscoveryStarted() calls of all instantiated discoveries. Hence, this call
@@ -287,7 +289,7 @@ void FidoCableDiscovery::DeviceRemoved(BluetoothAdapter* adapter,
   if (IsCableDevice(device) &&
       // It only matters if V1 devices are "removed" because V2 devices do not
       // transport data over BLE.
-      base::Contains(active_devices_, device_address)) {
+      active_devices_.contains(device_address)) {
     FIDO_LOG(DEBUG) << "caBLE device removed: " << device_address;
     RemoveDevice(FidoCableDevice::GetIdForAddress(device_address));
   }
@@ -308,8 +310,8 @@ void FidoCableDiscovery::AdapterPoweredChanged(BluetoothAdapter* adapter,
   // the adapter, such that one of the WinRT API calls inside
   // BluetoothAdapter::StartDiscoverySessionWithFilter() can fail with "Device
   // not ready for use". So wait for things to actually be ready.
-  // TODO(crbug/1046140): Remove this delay once the Bluetooth layer handles
-  // the spurious failure.
+  // TODO(crbug.com/40670639): Remove this delay once the Bluetooth layer
+  // handles the spurious failure.
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&FidoCableDiscovery::StartCableDiscovery,
@@ -499,7 +501,7 @@ void FidoCableDiscovery::OnAdvertisementRegistered(
 void FidoCableDiscovery::CableDeviceFound(BluetoothAdapter* adapter,
                                           BluetoothDevice* device) {
   const std::string device_address = device->GetAddress();
-  if (base::Contains(active_devices_, device_address)) {
+  if (active_devices_.contains(device_address)) {
     return;
   }
 
@@ -508,7 +510,7 @@ void FidoCableDiscovery::CableDeviceFound(BluetoothAdapter* adapter,
     return;
   }
 
-  if (base::Contains(active_authenticator_eids_, v1_match->second)) {
+  if (active_authenticator_eids_.contains(v1_match->second)) {
     return;
   }
   active_authenticator_eids_.insert(v1_match->second);
@@ -638,7 +640,8 @@ FidoCableDiscovery::GetCableDiscoveryData(const BluetoothDevice* device) {
   std::array<uint8_t, 16 + 4> v2_advert;
   if (advert_callback_ && service_data &&
       service_data->size() == v2_advert.size()) {
-    memcpy(v2_advert.data(), service_data->data(), v2_advert.size());
+    UNSAFE_TODO(
+        memcpy(v2_advert.data(), service_data->data(), v2_advert.size()));
     advert_callback_.Run(v2_advert);
   }
 
@@ -682,8 +685,8 @@ std::vector<CableEidArray> FidoCableDiscovery::GetUUIDs(
     std::vector<uint8_t> uuid_binary = uuid.GetBytes();
     CableEidArray authenticator_eid;
     DCHECK_EQ(authenticator_eid.size(), uuid_binary.size());
-    memcpy(authenticator_eid.data(), uuid_binary.data(),
-           std::min(uuid_binary.size(), authenticator_eid.size()));
+    UNSAFE_TODO(memcpy(authenticator_eid.data(), uuid_binary.data(),
+                       std::min(uuid_binary.size(), authenticator_eid.size())));
 
     ret.emplace_back(std::move(authenticator_eid));
   }
@@ -739,15 +742,17 @@ std::string FidoCableDiscovery::ResultDebugString(
   if (!result) {
     // Try to identify some common UUIDs that are random and thus otherwise look
     // like potential EIDs.
-    if (memcmp(eid.data(), kAppleContinuity, eid.size()) == 0) {
+    if (UNSAFE_TODO(memcmp(eid.data(), kAppleContinuity, eid.size())) == 0) {
       ret += " (Apple Continuity service)";
-    } else if (memcmp(eid.data(), kAppleUnknown, eid.size()) == 0) {
+    } else if (UNSAFE_TODO(memcmp(eid.data(), kAppleUnknown, eid.size())) ==
+               0) {
       ret += " (Apple service)";
-    } else if (memcmp(eid.data(), kAppleMedia, eid.size()) == 0) {
+    } else if (UNSAFE_TODO(memcmp(eid.data(), kAppleMedia, eid.size())) == 0) {
       ret += " (Apple Media service)";
-    } else if (memcmp(eid.data(), kAppleNotificationCenter, eid.size()) == 0) {
+    } else if (UNSAFE_TODO(memcmp(eid.data(), kAppleNotificationCenter,
+                                  eid.size())) == 0) {
       ret += " (Apple Notification service)";
-    } else if (memcmp(eid.data(), kCable, eid.size()) == 0) {
+    } else if (UNSAFE_TODO(memcmp(eid.data(), kCable, eid.size())) == 0) {
       ret += " (caBLE indicator)";
     }
     return ret;

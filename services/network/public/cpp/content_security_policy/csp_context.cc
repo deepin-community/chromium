@@ -4,7 +4,9 @@
 
 #include "services/network/public/cpp/content_security_policy/csp_context.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
+#include "base/notreached.h"
 #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
 #include "url/url_util.h"
 
@@ -25,7 +27,6 @@ bool ShouldCheckPolicy(const mojom::ContentSecurityPolicyPtr& policy,
       return true;
   }
   NOTREACHED();
-  return true;
 }
 
 }  // namespace
@@ -39,18 +40,15 @@ CSPCheckResult CSPContext::IsAllowedByCsp(
     const GURL& url,
     const GURL& url_before_redirects,
     bool has_followed_redirect,
-    bool is_response_check,
     const mojom::SourceLocationPtr& source_location,
     CheckCSPDisposition check_csp_disposition,
-    bool is_form_submission,
     bool is_opaque_fenced_frame) {
   CSPCheckResult result = CSPCheckResult::Allowed();
   for (const auto& policy : policies) {
     if (ShouldCheckPolicy(policy, check_csp_disposition)) {
       result &= CheckContentSecurityPolicy(
           policy, directive_name, url, url_before_redirects,
-          has_followed_redirect, is_response_check, this, source_location,
-          is_form_submission, is_opaque_fenced_frame);
+          has_followed_redirect, this, source_location, is_opaque_fenced_frame);
     }
   }
 
@@ -69,7 +67,7 @@ bool CSPContext::SchemeShouldBypassCSP(std::string_view scheme) {
   // TODO(arthursonzogni): url::GetBypassingCSPScheme() is used instead of the
   // blink::SchemeRegistry. It contains 1) but not 2).
   const auto& bypassing_schemes = url::GetCSPBypassingSchemes();
-  return base::Contains(bypassing_schemes, scheme);
+  return std::ranges::contains(bypassing_schemes, scheme);
 }
 
 void CSPContext::SanitizeDataForUseInCspViolation(

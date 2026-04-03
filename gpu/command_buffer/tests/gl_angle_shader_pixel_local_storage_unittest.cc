@@ -8,11 +8,13 @@
 #include <GLES3/gl3.h>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/service/service_utils.h"
 #include "gpu/command_buffer/tests/gl_manager.h"
 #include "gpu/command_buffer/tests/gl_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gl/gl_implementation.h"
 
 namespace gpu {
 class ANGLEShaderPixelLocalStorageTest : public testing::Test {
@@ -24,7 +26,7 @@ class ANGLEShaderPixelLocalStorageTest : public testing::Test {
 #if BUILDFLAG(IS_ANDROID)
     auto* command_line = base::CommandLine::ForCurrentProcess();
     if (gles2::UsePassthroughCommandDecoder(command_line)) {
-      // TODO(crbug.com/1472517): fix the test for passthrough.
+      // TODO(crbug.com/40278644): fix the test for passthrough.
       GTEST_SKIP();
     }
 #endif
@@ -55,9 +57,6 @@ TEST_F(ANGLEShaderPixelLocalStorageTest, GetIntegerv) {
   }
 
   EXPECT_GT(gl_get_integer(GL_MAX_PIXEL_LOCAL_STORAGE_PLANES_ANGLE), 4);
-  EXPECT_GT(gl_get_integer(
-                GL_MAX_COLOR_ATTACHMENTS_WITH_ACTIVE_PIXEL_LOCAL_STORAGE_ANGLE),
-            0);
   EXPECT_GT(
       gl_get_integer(
           GL_MAX_COMBINED_DRAW_BUFFERS_AND_PIXEL_LOCAL_STORAGE_PLANES_ANGLE),
@@ -107,6 +106,7 @@ TEST_F(ANGLEShaderPixelLocalStorageTest, GetIntegerv) {
 // Verifies that glGetFramebufferPixelLocalStorageParameter{f,i}vANGLE is
 // marshalled properly over the command buffer. Thorough testing of these
 // commands is done in angle_end2end_tests.
+
 TEST_F(ANGLEShaderPixelLocalStorageTest,
        GetFramebufferPixelLocalStorageParameter) {
   if (!gl_.IsInitialized() ||
@@ -145,7 +145,7 @@ TEST_F(ANGLEShaderPixelLocalStorageTest,
 
     EXPECT_PLS_CLEAR_VALUE_FLOAT(plane, ({0, 0, 0, 0}));
     EXPECT_PLS_CLEAR_VALUE_INT(plane, ({0, 0, 0, 0}));
-    EXPECT_PLS_CLEAR_VALUE_UNSIGNED_INT(plane, ({0, 0, 0, 0}));
+    UNSAFE_TODO(EXPECT_PLS_CLEAR_VALUE_UNSIGNED_INT(plane, ({0, 0, 0, 0})));
 
     glFramebufferPixelLocalClearValuefvANGLE(
         plane, std::array{0.f, -1.f, .5f, 999.f}.data());
@@ -157,7 +157,8 @@ TEST_F(ANGLEShaderPixelLocalStorageTest,
 
     EXPECT_PLS_CLEAR_VALUE_FLOAT(plane, ({0, -1, .5f, 999}));
     EXPECT_PLS_CLEAR_VALUE_INT(plane, ({0, -100, 99999, -99999}));
-    EXPECT_PLS_CLEAR_VALUE_UNSIGNED_INT(plane, ({0, 100, 99999, 9999999}));
+    UNSAFE_TODO(
+        EXPECT_PLS_CLEAR_VALUE_UNSIGNED_INT(plane, ({0, 100, 99999, 9999999})));
   }
 
   EXPECT_GL_ERROR(GL_NO_ERROR);
@@ -170,6 +171,13 @@ TEST_F(ANGLEShaderPixelLocalStorageTest, LoadStoreTokens) {
       !GLTestHelper::HasExtension("GL_ANGLE_shader_pixel_local_storage")) {
     return;
   }
+
+// Test skipped on Intel-based Macs when running Metal. crbug.com/326278125
+#if BUILDFLAG(IS_MAC) && defined(ARCH_CPU_X86_64)
+  if (gl::GetANGLEImplementation() == gl::ANGLEImplementation::kMetal) {
+    return;
+  }
+#endif
 
   GLuint texs[4];
   glGenTextures(4, texs);
@@ -212,6 +220,13 @@ TEST_F(ANGLEShaderPixelLocalStorageTest, DrawAPI) {
       !GLTestHelper::HasExtension("GL_ANGLE_shader_pixel_local_storage")) {
     return;
   }
+
+// Test skipped on Intel-based Macs when running Metal. crbug.com/326278125
+#if BUILDFLAG(IS_MAC) && defined(ARCH_CPU_X86_64)
+  if (gl::GetANGLEImplementation() == gl::ANGLEImplementation::kMetal) {
+    return;
+  }
+#endif
 
   GLuint tex;
   glGenTextures(1, &tex);

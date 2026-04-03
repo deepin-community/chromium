@@ -10,11 +10,10 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "chrome/browser/ash/login/demo_mode/demo_session.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -22,13 +21,6 @@
 namespace ash {
 namespace enterprise_user_session_metrics {
 namespace {
-
-// Returns true if the device is enterprise managed, false otherwise.
-bool IsDeviceEnterpriseManaged() {
-  return g_browser_process->platform_part()
-      ->browser_policy_connector_ash()
-      ->IsDeviceEnterpriseManaged();
-}
 
 // Returns the duration in minutes, capped at `max_duration` and rounded down to
 // the nearest `bucket_size` minutes.
@@ -46,32 +38,9 @@ void RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterInt64Pref(prefs::kLastSessionLength, 0);
 }
 
-void RecordSignInEvent(SignInEventType sign_in_event_type) {
-  DCHECK(IsDeviceEnterpriseManaged());
-
-  UMA_HISTOGRAM_ENUMERATION(
-      "Enterprise.UserSession.Logins", static_cast<int>(sign_in_event_type),
-      static_cast<int>(SignInEventType::SIGN_IN_EVENT_COUNT));
-}
-
-void RecordSignInEvent(const UserContext& user_context, bool is_auto_login) {
-  DCHECK(IsDeviceEnterpriseManaged());
-
-  const user_manager::UserType session_type = user_context.GetUserType();
-  if (session_type == user_manager::UserType::kRegular) {
-    RecordSignInEvent(SignInEventType::REGULAR_USER);
-  } else if (session_type == user_manager::UserType::kPublicAccount) {
-    RecordSignInEvent(is_auto_login ? SignInEventType::AUTOMATIC_PUBLIC_SESSION
-                                    : SignInEventType::MANUAL_PUBLIC_SESSION);
-  }
-
-  // Kiosk sign-ins are handled separately in AppLaunchController and other
-  // session types are ignored for now.
-}
-
 void StoreSessionLength(user_manager::UserType session_type,
                         const base::TimeDelta& session_length) {
-  DCHECK(IsDeviceEnterpriseManaged());
+  DCHECK(ash::InstallAttributes::Get()->IsEnterpriseManaged());
 
   if (session_type != user_manager::UserType::kRegular &&
       session_type != user_manager::UserType::kPublicAccount) {
@@ -88,7 +57,7 @@ void StoreSessionLength(user_manager::UserType session_type,
 }
 
 void RecordStoredSessionLength() {
-  DCHECK(IsDeviceEnterpriseManaged());
+  DCHECK(ash::InstallAttributes::Get()->IsEnterpriseManaged());
 
   PrefService* local_state = g_browser_process->local_state();
   if (!local_state->HasPrefPath(prefs::kLastSessionType) ||
@@ -117,7 +86,6 @@ void RecordStoredSessionLength() {
     // NOTREACHED() since session length for other session types should not
     // be recorded.
     NOTREACHED();
-    return;
   }
 
   // Report session duration for the first 24 hours, split into 144 buckets
@@ -126,7 +94,7 @@ void RecordStoredSessionLength() {
   base::UmaHistogramSparse(
       metric_name, GetMinutesToReport(session_length, 10, base::Hours(24)));
 
-  if (DemoSession::IsDeviceInDemoMode()) {
+  if (ash::demo_mode::IsDeviceInDemoMode()) {
     // Demo mode sessions will have shorter durations. Report session length
     // rounded down to the nearest minute, up to two hours.
     base::UmaHistogramSparse(

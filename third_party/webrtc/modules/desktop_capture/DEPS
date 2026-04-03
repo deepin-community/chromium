@@ -1,4 +1,5 @@
 include_rules = [
+  "+media/base",
   "+system_wrappers",
   "+third_party/libyuv",
 ]
@@ -14,6 +15,10 @@ specific_include_rules = {
     "+sdk/objc",
   ],
   "screen_capturer_mac\.mm": [
+    "+sdk/objc",
+  ],
+  "screen_capturer_sck\.mm": [
+    "+absl/strings/str_format.h",
     "+sdk/objc",
   ],
 }

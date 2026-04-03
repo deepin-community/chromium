@@ -12,9 +12,16 @@
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/version.h"
-#include "chrome/updater/test_scope.h"
-#include "chrome/updater/util/unit_test_util.h"
+#include "chrome/updater/branded_constants.h"
+#include "chrome/updater/configurator.h"
+#include "chrome/updater/constants.h"
+#include "chrome/updater/external_constants.h"
+#include "chrome/updater/prefs.h"
+#include "chrome/updater/test/test_scope.h"
+#include "chrome/updater/test/unit_test_util.h"
+#include "chrome/updater/updater_version.h"
 #include "chrome/updater/util/util.h"
+#include "components/update_client/utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -23,37 +30,80 @@
 
 namespace updater {
 
-class CleanupTaskTest : public testing::Test {};
+class CleanupTaskTest : public testing::Test {
+ protected:
+  void TearDown() override {
+    base::DeletePathRecursively(
+        *GetInstallDirectory(GetUpdaterScopeForTesting()));
+  }
+};
 
 TEST_F(CleanupTaskTest, RunCleanupObsoleteFiles) {
   base::test::TaskEnvironment task_environment;
-// TODO(crbug.com/1428653): Fix this test to work for system scope.
 #if BUILDFLAG(IS_POSIX)
-  if (GetTestScope() == UpdaterScope::kSystem) {
+  if (IsSystemInstall(GetUpdaterScopeForTesting())) {
     GTEST_SKIP();
   }
-#endif  // BUILDFLAG(IS_MAC)
+#endif  // BUILDFLAG(IS_POSIX)
 
 #if BUILDFLAG(IS_WIN)
   // Set up a mock `GoogleUpdate.exe`, and the following mock directories:
   // `Download`, `Install`, and a versioned `1.2.3.4` directory.
   const std::optional<base::FilePath> google_update_exe =
-      GetGoogleUpdateExePath(GetTestScope());
+      GetGoogleUpdateExePath(GetUpdaterScopeForTesting());
   ASSERT_TRUE(google_update_exe.has_value());
   test::SetupMockUpdater(google_update_exe.value());
 #endif  // BUILDFLAG(IS_WIN)
 
-  std::optional<base::FilePath> folder_path =
-      GetVersionedInstallDirectory(GetTestScope(), base::Version("100"));
+  base::FilePath chrome_url_fetcher_dir;
+  base::FilePath chrome_unpacker_dir;
+  base::FilePath chrome_bits_dir;
+  base::FilePath random_temp_dir;
+
+  // Set up mock update_client temp directories.
+  ASSERT_TRUE(base::CreateNewTempDirectory(
+      update_client::UTF8ToStringType(
+          base::StrCat({kProdId, "_chrome_url_fetcher_BazBar"})),
+      &chrome_url_fetcher_dir));
+  ASSERT_TRUE(base::CreateNewTempDirectory(
+      update_client::UTF8ToStringType(
+          base::StrCat({kProdId, "_chrome_Unpacker_BeginUnzippingBazBar"})),
+      &chrome_unpacker_dir));
+  ASSERT_TRUE(base::CreateNewTempDirectory(
+      update_client::UTF8ToStringType(
+          base::StrCat({kProdId, "_chrome_BITS_BazBar"})),
+      &chrome_bits_dir));
+  ASSERT_TRUE(base::CreateNewTempDirectory(
+      update_client::UTF8ToStringType(base::StrCat({kProdId, "_random_temp"})),
+      &random_temp_dir));
+
+  std::optional<base::FilePath> folder_path = GetVersionedInstallDirectory(
+      GetUpdaterScopeForTesting(), base::Version("100"));
   ASSERT_TRUE(folder_path);
   ASSERT_TRUE(base::CreateDirectory(*folder_path));
+  std::optional<base::FilePath> folder_path_current =
+      GetVersionedInstallDirectory(GetUpdaterScopeForTesting(),
+                                   base::Version(kUpdaterVersion));
+  ASSERT_TRUE(folder_path_current);
+  ASSERT_TRUE(base::CreateDirectory(*folder_path_current));
 
-  auto cleanup_task = base::MakeRefCounted<CleanupTask>(GetTestScope());
+  const UpdaterScope scope = GetUpdaterScopeForTesting();
+  auto cleanup_task = base::MakeRefCounted<CleanupTask>(
+      scope, base::MakeRefCounted<Configurator>(
+                 CreateGlobalPrefs(scope), CreateExternalConstants(), scope));
   base::RunLoop run_loop;
   cleanup_task->Run(run_loop.QuitClosure());
   run_loop.Run();
 
   ASSERT_FALSE(base::PathExists(*folder_path));
+  ASSERT_TRUE(base::PathExists(*folder_path_current));
+
+  // Expect all the mock update_client temp directories to be cleaned up.
+  EXPECT_FALSE(base::PathExists(chrome_url_fetcher_dir));
+  EXPECT_FALSE(base::PathExists(chrome_unpacker_dir));
+  EXPECT_FALSE(base::PathExists(chrome_bits_dir));
+  EXPECT_TRUE(base::PathExists(random_temp_dir));
+  EXPECT_TRUE(base::DeletePathRecursively(random_temp_dir));
 
 #if BUILDFLAG(IS_WIN)
   // Expect only a single file `GoogleUpdate.exe` and nothing else under

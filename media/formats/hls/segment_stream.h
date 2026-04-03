@@ -8,14 +8,16 @@
 #include <tuple>
 
 #include "base/containers/queue.h"
+#include "base/sequence_checker.h"
 #include "media/formats/hls/media_playlist.h"
 #include "media/formats/hls/media_segment.h"
 
 namespace media::hls {
 
-// Represents a segment, its start time, and its end time.
-using SegmentInfo =
-    std::tuple<scoped_refptr<MediaSegment>, base::TimeDelta, base::TimeDelta>;
+// Represents a segment, its start time, end time, and whether the init segment
+// should be included.
+using SegmentInfo = std::
+    tuple<scoped_refptr<MediaSegment>, base::TimeDelta, base::TimeDelta, bool>;
 
 // A segment stream represents the queue of segments which should be downloaded
 // in order. It supports configurable seeking as well as checks for size and
@@ -66,13 +68,39 @@ class MEDIA_EXPORT SegmentStream {
   void ResetExpectingFutureManifest(base::TimeDelta new_start_time);
 
  private:
+  class SegmentIndex {
+   public:
+    explicit SegmentIndex(const MediaSegment& segment);
+    SegmentIndex(types::DecimalInteger discontinuity,
+                 types::DecimalInteger media);
+
+    bool operator<(const SegmentIndex& other) const;
+    bool operator<=(const SegmentIndex& other) const;
+    bool operator==(const SegmentIndex& other) const;
+    bool operator>(const SegmentIndex& other) const;
+
+    SegmentIndex Next() const;
+
+    SegmentIndex MaxOf(const MediaSegment& other) const;
+
+    types::DecimalInteger media_sequence_;
+    types::DecimalInteger discontinuity_sequence_;
+  };
+
+  // For live streams, start 3 segments from the end per RFC 8216
+  // Section 6.3.3, which recommends starting at least 3 target durations from
+  // the live edge to prevent playback stalls. Since segment duration ≈ target
+  // duration, queuing the last 3 segments achieves RFC compliance.
+  void SkipEarlySegmentsForLiveStream();
+
   const bool seekable_;
   base::TimeDelta next_segment_start_;
 
   base::queue<scoped_refptr<MediaSegment>> segments_;
   scoped_refptr<MediaPlaylist> active_playlist_;
 
-  types::DecimalInteger highest_sequence_number_ = 0lu;
+  SegmentIndex highest_segment_index_ = {0, 0};
+  std::optional<GURL> previous_segment_init_segment_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

@@ -19,6 +19,7 @@ limitations under the License.
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
@@ -30,14 +31,14 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "absl/time/time.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/protobuf/status.pb.h"
 #include "tensorflow/core/data/service/dispatcher.pb.h"
 #include "tensorflow/core/data/service/snapshot/prefetched_split_provider.h"
 #include "tensorflow/core/framework/dataset.h"
 #include "tensorflow/core/protobuf/snapshot.pb.h"
-#include "tsl/platform/env.h"
 #include "tsl/platform/mutex.h"
 #include "tsl/platform/thread_annotations.h"
-#include "tsl/protobuf/status.pb.h"
 
 namespace tensorflow {
 namespace data {
@@ -329,7 +330,7 @@ class SnapshotManager {
   absl::StatusOr<std::vector<Source>> CreateSources(
       const DatasetDef& dataset_def) const;
   // Returns the total number of splits.
-  absl::StatusOr<int64> GetSplitsCardinality();
+  absl::StatusOr<int64_t> GetSplitsCardinality();
   // Resets a source when it runs out of splits, to support repetitions.
   absl::Status ResetSource(Source& source, int64_t source_index);
   int64_t num_sources() const TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {

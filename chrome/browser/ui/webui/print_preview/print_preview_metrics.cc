@@ -6,15 +6,12 @@
 
 #include <optional>
 
-#include "base/containers/flat_set.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "printing/mojom/print.mojom.h"
 #include "printing/print_job_constants.h"
 #include "printing/print_settings.h"
@@ -39,8 +36,8 @@ void ReportPrintDocumentTypeHistograms(PrintDocumentTypeBuckets doctype) {
   base::UmaHistogramEnumeration("PrintPreview.PrintDocumentType", doctype);
 }
 
-void ReportPrintSettingsStats(const base::Value::Dict& print_settings,
-                              const base::Value::Dict& preview_settings,
+void ReportPrintSettingsStats(const base::DictValue& print_settings,
+                              const base::DictValue& preview_settings,
                               bool is_pdf) {
   ReportPrintSettingHistogram(PrintSettingsBuckets::kTotal);
 
@@ -53,13 +50,13 @@ void ReportPrintSettingsStats(const base::Value::Dict& print_settings,
   // print ticket. Similarly, settings applied at the printer should be pulled
   // from the print ticket, as they may have dummy values in the preview
   // request.
-  const base::Value::List* page_range_array =
+  const base::ListValue* page_range_array =
       preview_settings.FindList(kSettingPageRange);
   if (page_range_array && !page_range_array->empty()) {
     ReportPrintSettingHistogram(PrintSettingsBuckets::kPageRange);
   }
 
-  const base::Value::Dict* media_size_value =
+  const base::DictValue* media_size_value =
       preview_settings.FindDict(kSettingMediaSize);
   if (media_size_value && !media_size_value->empty()) {
     if (media_size_value->FindBool(kSettingMediaSizeIsDefault)
@@ -78,14 +75,17 @@ void ReportPrintSettingsStats(const base::Value::Dict& print_settings,
                                     : PrintSettingsBuckets::kPortrait);
   }
 
-  if (print_settings.FindInt(kSettingCopies).value_or(1) > 1)
+  if (print_settings.FindInt(kSettingCopies).value_or(1) > 1) {
     ReportPrintSettingHistogram(PrintSettingsBuckets::kCopies);
+  }
 
-  if (preview_settings.FindInt(kSettingPagesPerSheet).value_or(1) != 1)
+  if (preview_settings.FindInt(kSettingPagesPerSheet).value_or(1) != 1) {
     ReportPrintSettingHistogram(PrintSettingsBuckets::kPagesPerSheet);
+  }
 
-  if (print_settings.FindBool(kSettingCollate).value_or(false))
+  if (print_settings.FindBool(kSettingCollate).value_or(false)) {
     ReportPrintSettingHistogram(PrintSettingsBuckets::kCollate);
+  }
 
   std::optional<int> duplex_mode_opt =
       print_settings.FindInt(kSettingDuplexMode);
@@ -107,24 +107,15 @@ void ReportPrintSettingsStats(const base::Value::Dict& print_settings,
                                       ? PrintSettingsBuckets::kColor
                                       : PrintSettingsBuckets::kBlackAndWhite);
     }
-
-    // Record whether the printing backend does not understand the printer's
-    // color capabilities. Do this only once per device.
-    static base::NoDestructor<base::flat_set<std::string>> seen_devices;
-    auto result =
-        seen_devices->insert(*print_settings.FindString(kSettingDeviceName));
-    bool is_new_device = result.second;
-    if (is_new_device) {
-      base::UmaHistogramBoolean("Printing.CUPS.UnknownPpdColorModel",
-                                unknown_color_model);
-    }
   }
 
-  if (preview_settings.FindInt(kSettingMarginsType).value_or(0) != 0)
+  if (preview_settings.FindInt(kSettingMarginsType).value_or(0) != 0) {
     ReportPrintSettingHistogram(PrintSettingsBuckets::kNonDefaultMargins);
+  }
 
-  if (preview_settings.FindBool(kSettingHeaderFooterEnabled).value_or(false))
+  if (preview_settings.FindBool(kSettingHeaderFooterEnabled).value_or(false)) {
     ReportPrintSettingHistogram(PrintSettingsBuckets::kHeadersAndFooters);
+  }
 
   if (preview_settings.FindBool(kSettingShouldPrintBackgrounds)
           .value_or(false)) {
@@ -136,8 +127,9 @@ void ReportPrintSettingsStats(const base::Value::Dict& print_settings,
     ReportPrintSettingHistogram(PrintSettingsBuckets::kSelectionOnly);
   }
 
-  if (preview_settings.FindBool(kSettingRasterizePdf).value_or(false))
+  if (preview_settings.FindBool(kSettingRasterizePdf).value_or(false)) {
     ReportPrintSettingHistogram(PrintSettingsBuckets::kPrintAsImage);
+  }
 
   ScalingType scaling_type =
       static_cast<ScalingType>(preview_settings.FindInt(kSettingScalingType)
@@ -147,10 +139,13 @@ void ReportPrintSettingsStats(const base::Value::Dict& print_settings,
   }
 
   if (is_pdf) {
-    if (scaling_type == ScalingType::FIT_TO_PAGE)
+    if (scaling_type == ScalingType::FIT_TO_PAGE) {
       ReportPrintSettingHistogram(PrintSettingsBuckets::kFitToPage);
-    else if (scaling_type == ScalingType::FIT_TO_PAPER)
+    } else if (scaling_type == ScalingType::FIT_TO_PAPER) {
       ReportPrintSettingHistogram(PrintSettingsBuckets::kFitToPaper);
+    } else if (scaling_type == ScalingType::ACTUAL_SIZE) {
+      ReportPrintSettingHistogram(PrintSettingsBuckets::kActualSize);
+    }
   }
 
   int dpi_horizontal =
@@ -169,10 +164,11 @@ void ReportPrintSettingsStats(const base::Value::Dict& print_settings,
     }
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (print_settings.FindString(kSettingPinValue))
+#if BUILDFLAG(IS_CHROMEOS)
+  if (print_settings.FindString(kSettingPinValue)) {
     ReportPrintSettingHistogram(PrintSettingsBuckets::kPin);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 void ReportUserActionHistogram(UserActionBuckets event) {
@@ -182,7 +178,7 @@ void ReportUserActionHistogram(UserActionBuckets event) {
 
 void RecordGetPrintersTimeHistogram(mojom::PrinterType printer_type,
                                     const base::TimeTicks& start_time) {
-  std::string printer_type_metric;
+  std::string_view printer_type_metric;
   switch (printer_type) {
     case mojom::PrinterType::kExtension:
       printer_type_metric = "Extension";
@@ -193,10 +189,8 @@ void RecordGetPrintersTimeHistogram(mojom::PrinterType printer_type,
     case mojom::PrinterType::kLocal:
       printer_type_metric = "Local";
       break;
-    case mojom::PrinterType::kPrivetDeprecated:
-    case mojom::PrinterType::kCloudDeprecated:
-      NOTREACHED_NORETURN();
   }
+  CHECK(!printer_type_metric.empty());
   base::UmaHistogramCustomTimes(
       base::StrCat({"PrintPreview.GetPrintersTime.", printer_type_metric}),
       /*sample=*/base::TimeTicks::Now() - start_time,

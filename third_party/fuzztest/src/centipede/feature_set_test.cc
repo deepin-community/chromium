@@ -16,33 +16,32 @@
 
 #include <bitset>
 #include <cstddef>
-#include <cstdint>
 
 #include "gtest/gtest.h"
 #include "./centipede/feature.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 namespace {
 
 TEST(FeatureSet, ComputeWeight) {
   FeatureSet feature_set(10, {});
 
-  auto W = [&](const FeatureVec &features) -> uint64_t {
-    return feature_set.ComputeWeight(features);
+  auto W = [&](const FeatureVec& features) {
+    return feature_set.ComputeRarityWeight(features);
   };
 
-  feature_set.IncrementFrequencies({1, 2, 3});
+  feature_set.MergeFeatures({1, 2, 3});
   EXPECT_EQ(W({1}), W({2}));
   EXPECT_EQ(W({1}), W({3}));
   EXPECT_DEATH(W({4}), "");
 
-  feature_set.IncrementFrequencies({1, 2});
+  feature_set.MergeFeatures({1, 2});
   EXPECT_GT(W({3}), W({2}));
   EXPECT_GT(W({3}), W({1}));
   EXPECT_GT(W({3, 1}), W({2, 1}));
   EXPECT_GT(W({3, 2}), W({2}));
 
-  feature_set.IncrementFrequencies({1});
+  feature_set.MergeFeatures({1});
   EXPECT_GT(W({3}), W({2}));
   EXPECT_GT(W({2}), W({1}));
   EXPECT_GT(W({3, 2}), W({3, 1}));
@@ -55,13 +54,13 @@ TEST(FeatureSet, ComputeWeightWithDifferentDomains) {
   auto f1 = feature_domains::k8bitCounters.begin();
   auto f2 = feature_domains::kCMP.begin();
   auto f3 = feature_domains::kBoundedPath.begin();
-  feature_set.IncrementFrequencies(
-      {/* one feature from domain #1 */ f1,
-       /* two features from domain #2 */ f2, f2 + 1,
-       /* three features from domain #3 */ f3, f3 + 1, f3 + 2});
+  feature_set.MergeFeatures({/* one feature from domain #1 */ f1,
+                             /* two features from domain #2 */ f2, f2 + 1,
+                             /* three features from domain #3 */ f3, f3 + 1,
+                             f3 + 2});
 
-  auto weight = [&](const FeatureVec &features) -> uint64_t {
-    return feature_set.ComputeWeight(features);
+  auto weight = [&](const FeatureVec& features) {
+    return feature_set.ComputeRarityWeight(features);
   };
 
   // Test that features from a less frequent domain have more weight.
@@ -69,29 +68,29 @@ TEST(FeatureSet, ComputeWeightWithDifferentDomains) {
   EXPECT_GT(weight({f2}), weight({f3}));
 }
 
-TEST(FeatureSet, HasUnseenFeatures_IncrementFrequencies) {
+TEST(FeatureSet, HasUnseenFeatures_MergeFeatures) {
   size_t frequency_threshold = 2;
   FeatureSet feature_set(frequency_threshold, {});
   FeatureVec features = {10};
   EXPECT_TRUE(feature_set.HasUnseenFeatures(features));
 
-  feature_set.IncrementFrequencies(features);
+  feature_set.MergeFeatures(features);
   EXPECT_FALSE(feature_set.HasUnseenFeatures(features));
 
   features = {10, 20};
   EXPECT_TRUE(feature_set.HasUnseenFeatures(features));
-  feature_set.IncrementFrequencies(features);
+  feature_set.MergeFeatures(features);
   EXPECT_FALSE(feature_set.HasUnseenFeatures(features));
 
   features = {50};
   EXPECT_TRUE(feature_set.HasUnseenFeatures(features));
-  feature_set.IncrementFrequencies(features);
+  feature_set.MergeFeatures(features);
 
   features = {10, 20};
   EXPECT_FALSE(feature_set.HasUnseenFeatures(features));
 }
 
-TEST(FeatureSet, PruneFeaturesAndCountUnseen_IncrementFrequencies) {
+TEST(FeatureSet, PruneFeaturesAndCountUnseen_MergeFeatures) {
   size_t frequency_threshold = 3;
   FeatureSet feature_set(frequency_threshold, {});
   FeatureVec features;
@@ -99,9 +98,9 @@ TEST(FeatureSet, PruneFeaturesAndCountUnseen_IncrementFrequencies) {
   auto PruneAndCountUnseen = [&]() -> size_t {
     return feature_set.PruneFeaturesAndCountUnseen(features);
   };
-  // Shorthand for IncrementFrequencies.
-  auto Increment = [&](const FeatureVec &features) {
-    feature_set.IncrementFrequencies(features);
+  // Shorthand for MergeFeatures.
+  auto Merge = [&](const FeatureVec& features) {
+    feature_set.MergeFeatures(features);
   };
 
   // PruneAndCountUnseen on the empty set.
@@ -112,28 +111,28 @@ TEST(FeatureSet, PruneFeaturesAndCountUnseen_IncrementFrequencies) {
 
   // Add {10} for the first time.
   features = {10, 20};
-  Increment({10});
+  Merge({10});
   EXPECT_EQ(PruneAndCountUnseen(), 1);
   EXPECT_EQ(feature_set.size(), 1);
   EXPECT_EQ(features, FeatureVec({10, 20}));
 
   // Add {10} for the second time.
   features = {10, 20};
-  Increment({10});
+  Merge({10});
   EXPECT_EQ(PruneAndCountUnseen(), 1);
   EXPECT_EQ(feature_set.size(), 1);
   EXPECT_EQ(features, FeatureVec({10, 20}));
 
   // Add {10} for the third time. {10} becomes "frequent", prune removes it.
   features = {10, 20};
-  Increment({10});
+  Merge({10});
   EXPECT_EQ(PruneAndCountUnseen(), 1);
   EXPECT_EQ(feature_set.size(), 1);
   EXPECT_EQ(features, FeatureVec({20}));
 
   // Add {30} for the first time. {10, 20} still gets pruned to {20}.
   features = {10, 20};
-  Increment({30});
+  Merge({30});
   EXPECT_EQ(PruneAndCountUnseen(), 1);
   EXPECT_EQ(feature_set.size(), 2);
   EXPECT_EQ(features, FeatureVec({20}));
@@ -146,23 +145,23 @@ TEST(FeatureSet, PruneFeaturesAndCountUnseen_IncrementFrequencies) {
 
   // {10, 20, 30} => {20}; 1 unseen.
   features = {10, 20, 30};
-  Increment({30});
-  Increment({30});
+  Merge({30});
+  Merge({30});
   EXPECT_EQ(PruneAndCountUnseen(), 1);
   EXPECT_EQ(feature_set.size(), 2);
   EXPECT_EQ(features, FeatureVec({20}));
 
   // {10, 20, 30} => {20}; 0 unseen.
   features = {10, 20, 30};
-  Increment({20});
-  Increment({20});
+  Merge({20});
+  Merge({20});
   EXPECT_EQ(PruneAndCountUnseen(), 0);
   EXPECT_EQ(feature_set.size(), 3);
   EXPECT_EQ(features, FeatureVec({20}));
 
   // {10, 20, 30} => {}; 0 unseen.
   features = {10, 20, 30};
-  Increment({20});
+  Merge({20});
   EXPECT_EQ(PruneAndCountUnseen(), 0);
   EXPECT_EQ(feature_set.size(), 3);
   EXPECT_EQ(features, FeatureVec({}));
@@ -200,5 +199,66 @@ TEST(FeatureSet, PruneDiscardedDomains) {
   }
 }
 
+TEST(FeatureSet, ReplacesLowerComparisonScoresWithHigherScores) {
+  feature_t cmp_lowest_score =
+      feature_domains::kCMPScoreDomains.front().begin();
+  feature_t cmp_highest_score =
+      feature_domains::kCMPScoreDomains.front().begin() +
+      feature_domains::kCMPScoreBitmask;
+  FeatureVec fv_lowest_score = {cmp_lowest_score};
+  FeatureVec fv_highest_score = {cmp_highest_score};
+
+  FeatureSet fs(/*frequency_threshold=*/123, /*should_discard_domain=*/false);
+  EXPECT_EQ(fs.size(), 0);
+  EXPECT_TRUE(fs.HasUnseenFeatures(fv_lowest_score));
+  EXPECT_TRUE(fs.HasUnseenFeatures(fv_highest_score));
+  EXPECT_EQ(fs.PruneFeaturesAndCountUnseen(fv_lowest_score), 1);
+  EXPECT_EQ(fv_lowest_score.size(), 1);
+  EXPECT_EQ(fs.PruneFeaturesAndCountUnseen(fv_highest_score), 1);
+  EXPECT_EQ(fv_highest_score.size(), 1);
+
+  fs.MergeFeatures(fv_lowest_score);
+  EXPECT_EQ(fs.size(), 1);
+  EXPECT_FALSE(fs.HasUnseenFeatures(fv_lowest_score));
+  EXPECT_TRUE(fs.HasUnseenFeatures(fv_highest_score));
+  EXPECT_EQ(fs.Frequency(cmp_lowest_score), 1);
+  EXPECT_EQ(fs.Frequency(cmp_highest_score), 0);
+  EXPECT_EQ(fs.PruneFeaturesAndCountUnseen(fv_lowest_score), 0);
+  EXPECT_EQ(fv_lowest_score.size(), 1);
+  EXPECT_EQ(fs.PruneFeaturesAndCountUnseen(fv_highest_score), 1);
+  EXPECT_EQ(fv_highest_score.size(), 1);
+
+  fs.MergeFeatures(fv_highest_score);
+  EXPECT_EQ(fs.size(), 1);
+  EXPECT_FALSE(fs.HasUnseenFeatures(fv_lowest_score));
+  EXPECT_FALSE(fs.HasUnseenFeatures(fv_highest_score));
+  EXPECT_EQ(fs.Frequency(cmp_lowest_score), 0);
+  EXPECT_EQ(fs.Frequency(cmp_highest_score), 1);
+  EXPECT_EQ(fs.PruneFeaturesAndCountUnseen(fv_lowest_score), 0);
+  EXPECT_EQ(fv_lowest_score.size(), 0);
+  EXPECT_EQ(fs.PruneFeaturesAndCountUnseen(fv_highest_score), 0);
+  EXPECT_EQ(fv_highest_score.size(), 1);
+}
+
+TEST(FeatureSet, MergingLowerComparisonScoresDoesNotIncreaseFrequencies) {
+  feature_t cmp_lowest_score =
+      feature_domains::kCMPScoreDomains.front().begin();
+  feature_t cmp_highest_score =
+      feature_domains::kCMPScoreDomains.front().begin() +
+      feature_domains::kCMPScoreBitmask;
+
+  FeatureSet fs(/*frequency_threshold=*/123, /*should_discard_domain=*/false);
+  EXPECT_EQ(fs.Frequency(cmp_lowest_score), 0);
+  EXPECT_EQ(fs.Frequency(cmp_highest_score), 0);
+
+  fs.MergeFeatures({cmp_highest_score});
+  EXPECT_EQ(fs.Frequency(cmp_lowest_score), 0);
+  EXPECT_EQ(fs.Frequency(cmp_highest_score), 1);
+
+  fs.MergeFeatures({cmp_lowest_score});
+  EXPECT_EQ(fs.Frequency(cmp_lowest_score), 0);
+  EXPECT_EQ(fs.Frequency(cmp_highest_score), 1);
+}
+
 }  // namespace
-}  // namespace centipede
+}  // namespace fuzztest::internal

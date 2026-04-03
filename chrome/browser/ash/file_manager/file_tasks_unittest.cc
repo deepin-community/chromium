@@ -11,13 +11,18 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/web_app_id_constants.h"
 #include "base/command_line.h"
+#include "base/containers/to_vector.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/strings/escape.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
@@ -29,12 +34,13 @@
 #include "chrome/browser/ash/crostini/crostini_test_helper.h"
 #include "chrome/browser/ash/crostini/fake_crostini_features.h"
 #include "chrome/browser/ash/drive/file_system_util.h"
-#include "chrome/browser/ash/file_manager/app_id.h"
 #include "chrome/browser/ash/file_manager/app_service_file_tasks.h"
 #include "chrome/browser/ash/file_manager/file_manager_test_util.h"
+#include "chrome/browser/ash/file_manager/office_file_tasks.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/file_manager/virtual_file_tasks.h"
 #include "chrome/browser/ash/file_manager/virtual_tasks/fake_virtual_task.h"
+#include "chrome/browser/ash/file_manager/virtual_tasks/id_constants.h"
 #include "chrome/browser/ash/guest_os/guest_os_mime_types_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_mime_types_service_factory.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
@@ -44,11 +50,12 @@
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
-#include "chrome/browser/web_applications/web_app_id_constants.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
+#include "chromeos/ash/components/file_manager/app_id.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/services/app_service/public/cpp/app_types.h"
@@ -56,6 +63,7 @@
 #include "components/services/app_service/public/cpp/file_handler.h"
 #include "components/services/app_service/public/cpp/file_handler_info.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "content/public/common/content_features.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/entry_info.h"
 #include "extensions/browser/extension_prefs.h"
@@ -140,9 +148,9 @@ TEST(FileManagerFileTasksTest, BaseContainsFindsTaskDescriptors) {
   tasks.insert(task_2);
   tasks.insert(task_3);
 
-  ASSERT_TRUE(base::Contains(tasks, task_1));
-  ASSERT_TRUE(base::Contains(tasks, task_2));
-  ASSERT_TRUE(base::Contains(tasks, task_3));
+  ASSERT_TRUE(tasks.contains(task_1));
+  ASSERT_TRUE(tasks.contains(task_2));
+  ASSERT_TRUE(tasks.contains(task_3));
 }
 
 TEST(FileManagerFileTasksTest, EqualTaskDescriptors) {
@@ -264,7 +272,7 @@ class FileManagerFileTaskPolicyDefaultHandlersTest
  protected:
   void UpdateDefaultHandlersPrefs(
       const std::vector<std::pair<std::string, std::string>>& handlers = {}) {
-    base::Value::Dict pref_dict;
+    base::DictValue pref_dict;
     for (const auto& [file_extension, policy_id] : handlers) {
       pref_dict.Set(file_extension, policy_id);
     }
@@ -278,9 +286,9 @@ class FileManagerFileTaskPolicyDefaultHandlersTest
   void CheckCorrectPolicyAssignment(std::string_view default_app_id) {
     ASSERT_EQ(resulting_tasks()->policy_default_handler_status,
               PolicyDefaultHandlerStatus::kDefaultHandlerAssignedByPolicy);
-    ASSERT_EQ(base::ranges::count_if(resulting_tasks()->tasks, &IsDefaultTask),
+    ASSERT_EQ(std::ranges::count_if(resulting_tasks()->tasks, &IsDefaultTask),
               1);
-    ASSERT_EQ(base::ranges::find_if(resulting_tasks()->tasks, &IsDefaultTask)
+    ASSERT_EQ(std::ranges::find_if(resulting_tasks()->tasks, &IsDefaultTask)
                   ->task_descriptor.app_id,
               default_app_id);
   }
@@ -289,10 +297,10 @@ class FileManagerFileTaskPolicyDefaultHandlersTest
       std::string_view virtual_task_id) {
     ASSERT_EQ(resulting_tasks()->policy_default_handler_status,
               PolicyDefaultHandlerStatus::kDefaultHandlerAssignedByPolicy);
-    ASSERT_EQ(base::ranges::count_if(resulting_tasks()->tasks, &IsDefaultTask),
+    ASSERT_EQ(std::ranges::count_if(resulting_tasks()->tasks, &IsDefaultTask),
               1);
     const auto& task =
-        base::ranges::find_if(resulting_tasks()->tasks, &IsDefaultTask)
+        std::ranges::find_if(resulting_tasks()->tasks, &IsDefaultTask)
             ->task_descriptor;
     ASSERT_TRUE(IsVirtualTask(task));
     ASSERT_THAT(task.action_id, testing::EndsWith(virtual_task_id));
@@ -301,13 +309,13 @@ class FileManagerFileTaskPolicyDefaultHandlersTest
   void CheckConflictingPolicyAssignment() {
     ASSERT_EQ(resulting_tasks()->policy_default_handler_status,
               PolicyDefaultHandlerStatus::kIncorrectAssignment);
-    ASSERT_EQ(base::ranges::count_if(resulting_tasks()->tasks, &IsDefaultTask),
+    ASSERT_EQ(std::ranges::count_if(resulting_tasks()->tasks, &IsDefaultTask),
               0);
   }
 
   void CheckNoPolicyAssignment() {
     ASSERT_FALSE(resulting_tasks()->policy_default_handler_status);
-    ASSERT_EQ(base::ranges::count_if(resulting_tasks()->tasks, &IsDefaultTask),
+    ASSERT_EQ(std::ranges::count_if(resulting_tasks()->tasks, &IsDefaultTask),
               0);
   }
 
@@ -316,18 +324,18 @@ class FileManagerFileTaskPolicyDefaultHandlersTest
   static constexpr char kChromeAppId[] = "chrome-app-id";
   static constexpr char kArcAppId[] = "arc-app-id";
   static constexpr char kNonExistentAppId[] = "null";
+  static constexpr char kIsolatedAppId[] = "ghgjflengkicinnmfeejkpjmcohegmid";
+  static constexpr char kIsolatedPolicyId[] =
+      "w2gqjem6b4m7vhiqpjr3btcpp7dxfyjt6h4uuyuxklcsmygtgncaaaac";
 
   static constexpr char kWebAppUrl[] = "https://web.app";
   static constexpr char kArcAppPackageName[] = "com.package.name";
 
-  // Should be a valid identifier in kVirtualTasksMapping from
-  // chrome/browser/apps/app_service/policy_util.cc.
-  static constexpr char kVirtualTaskActionId[] = "install-isolated-web-app";
-
   static constexpr AppIdPolicyIdPair kAppIdPolicyIdMapping[] = {
       {kWebAppId, kWebAppUrl},
       {kArcAppId, kArcAppPackageName},
-      {kChromeAppId, kChromeAppId}};
+      {kChromeAppId, kChromeAppId},
+      {kIsolatedAppId, kIsolatedPolicyId}};
 
  private:
   void CreateAppsAndTasks() {
@@ -349,6 +357,9 @@ class FileManagerFileTaskPolicyDefaultHandlersTest
     AddFakeAppToAppService(kArcAppId, /*package_name=*/kArcAppPackageName,
                            /*policy_ids=*/{kArcAppPackageName},
                            apps::AppType::kArc);
+    AddFakeAppToAppService(kIsolatedAppId, /*package_name=*/{},
+                           /*policy_ids=*/{kIsolatedPolicyId},
+                           apps::AppType::kWeb);
   }
 
   static bool IsDefaultTask(const FullTaskDescriptor& ftd) {
@@ -397,61 +408,91 @@ TEST_F(FileManagerFileTaskPolicyDefaultHandlersTest,
   CheckConflictingPolicyAssignment();
 }
 
-// Check that legacy arc app format is parsed correctly.
-TEST_F(FileManagerFileTaskPolicyDefaultHandlersTest, LegacyArcAppFormat) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(ash::features::kArcFileTasksUseAppService);
+class FileManagerFileTaskVirtualTaskPolicyDefaultHandlersTest
+    : public FileManagerFileTaskPolicyDefaultHandlersTest,
+      public testing::WithParamInterface<
+          std::tuple<std::string, std::string, std::string>> {
+ public:
+  FileManagerFileTaskVirtualTaskPolicyDefaultHandlersTest() {
+    // These feature flags are required to make different virtual tasks
+    // discoverable.
+    features_.InitWithFeatures({features::kIsolatedWebAppUnmanagedInstall,
+                                chromeos::features::kUploadOfficeToCloud},
+                               {});
+  }
 
-  resulting_tasks()->tasks.emplace_back(
-      TaskDescriptor{"com.legacy.package/intentName", TASK_TYPE_ARC_APP,
-                     "view"},
-      /*task_title=*/"Task", GURL(), false, false, false);
-  entries().emplace_back(base::FilePath::FromUTF8Unsafe("foo.txt"),
-                         "text/plain", false);
-
-  UpdateDefaultHandlersPrefs({{".txt", "com.legacy.package"}});
-  ASSERT_TRUE(ChooseAndSetDefaultTaskFromPolicyPrefs(profile(), entries(),
-                                                     resulting_tasks()));
-  CheckCorrectPolicyAssignment("com.legacy.package/intentName");
-}
+ private:
+  base::test::ScopedFeatureList features_;
+};
 
 // Check that virtual tasks are handled by the policy.
-TEST_F(FileManagerFileTaskPolicyDefaultHandlersTest, VirtualTask) {
-  auto virtual_task =
-      std::make_unique<FakeVirtualTask>(ToSwaActionId(kVirtualTaskActionId));
-  GetTestVirtualTasks().push_back(virtual_task.get());
+TEST_P(FileManagerFileTaskVirtualTaskPolicyDefaultHandlersTest, VirtualTask) {
+  auto [policy_id, action_id, file_extension] = GetParam();
+  if (action_id == kActionIdInstallIsolatedWebApp) {
+    profile()->GetPrefs()->SetBoolean(ash::prefs::kIsolatedWebAppsEnabled,
+                                      true);
+  }
+  const std::string file_name = base::StrCat({"foo", file_extension});
 
-  constexpr char kFileName[] = "foo.txt";
+  entries().emplace_back(base::FilePath::FromUTF8Unsafe(file_name),
+                         /*mime_type=*/"", /*is_directory=*/false);
 
-  FindVirtualTasks(
-      profile(),
-      {{base::FilePath::FromUTF8Unsafe(kFileName), "text/plain",
-        /*is_directory=*/false}},
+  ASSERT_EQ(entries().size(), 1U);
+  MatchVirtualTasks(
+      profile(), entries(),
       /*file_urls=*/
       {GURL(base::StrCat(
-          {"filesystem:chrome://file-manager/external/", kFileName}))},
+          {"filesystem:chrome://file-manager/external/", file_name}))},
       /*dlp_source_urls=*/{}, &resulting_tasks()->tasks);
 
   UpdateDefaultHandlersPrefs(
-      {{".txt",
-        base::StrCat({apps_util::kVirtualTaskPrefix, kVirtualTaskActionId})}});
-  entries().emplace_back(base::FilePath::FromUTF8Unsafe(kFileName),
-                         "text/plain", false);
+      {{file_extension,
+        base::StrCat({apps_util::kVirtualTaskPrefix, policy_id})}});
   ASSERT_TRUE(ChooseAndSetDefaultTaskFromPolicyPrefs(profile(), entries(),
                                                      resulting_tasks()));
-  CheckCorrectPolicyAssignmentForVirtualTask(kVirtualTaskActionId);
+  CheckCorrectPolicyAssignmentForVirtualTask(action_id);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    /**/,
+    FileManagerFileTaskVirtualTaskPolicyDefaultHandlersTest,
+    testing::Values(
+        std::make_tuple("install-isolated-web-app",
+                        kActionIdInstallIsolatedWebApp,
+                        ".swbn"),
+        std::make_tuple("microsoft-office", kActionIdOpenInOffice, ".docx"),
+        std::make_tuple("google-docs", kActionIdWebDriveOfficeWord, ".docx"),
+        std::make_tuple("google-spreadsheets",
+                        kActionIdWebDriveOfficeExcel,
+                        ".xlsx"),
+        std::make_tuple("google-slides",
+                        kActionIdWebDriveOfficePowerPoint,
+                        ".pptx")),
+    [](const auto& info) {
+      const auto& policy_id = std::get<0>(info.param);
+      // GoogleTest doesn't allow dashes in test names; the code below
+      // changes `xxx-yyy-zzz` policy ids to `XxxYyyZzz` test names.
+      return base::JoinString(
+          base::ToVector(
+              base::SplitString(policy_id, "-",
+                                base::WhitespaceHandling::TRIM_WHITESPACE,
+                                base::SplitResult::SPLIT_WANT_NONEMPTY),
+              [](const std::string& piece) {
+                return base::ToUpperASCII(piece[0]) + piece.substr(1);
+              }),
+          "");
+    });
 
 // Check that incorrectly assigned virtual tasks are ignored.
 TEST_F(FileManagerFileTaskPolicyDefaultHandlersTest,
        VirtualTaskIncorrectAssignment) {
-  auto virtual_task =
-      std::make_unique<FakeVirtualTask>(ToSwaActionId(kVirtualTaskActionId));
+  auto virtual_task = std::make_unique<FakeVirtualTask>(
+      ToSwaActionId(kActionIdInstallIsolatedWebApp));
   GetTestVirtualTasks().push_back(virtual_task.get());
 
   constexpr char kFileName[] = "foo.txt";
 
-  FindVirtualTasks(
+  MatchVirtualTasks(
       profile(),
       {{base::FilePath::FromUTF8Unsafe(kFileName), "text/plain",
         /*is_directory=*/false}},
@@ -520,20 +561,20 @@ class FileManagerFileTaskPreferencesTest
  public:
   // Updates the default task preferences per the given dictionary values.
   // Used for testing ChooseAndSetDefaultTask.
-  void UpdateDefaultTaskPreferences(const base::Value::Dict& mime_types,
-                                    const base::Value::Dict& suffixes) {
+  void UpdateDefaultTaskPreferences(const base::DictValue& mime_types,
+                                    const base::DictValue& suffixes) {
     profile()->GetTestingPrefService()->SetDict(prefs::kDefaultTasksByMimeType,
                                                 mime_types.Clone());
     profile()->GetTestingPrefService()->SetDict(prefs::kDefaultTasksBySuffix,
                                                 suffixes.Clone());
   }  // namespace file_manager::file_tasks
 
-  const base::Value::Dict& tasks_by_mime_type() {
+  const base::DictValue& tasks_by_mime_type() {
     return profile()->GetTestingPrefService()->GetDict(
         prefs::kDefaultTasksByMimeType);
   }
 
-  const base::Value::Dict& tasks_by_suffix() {
+  const base::DictValue& tasks_by_suffix() {
     return profile()->GetTestingPrefService()->GetDict(
         prefs::kDefaultTasksBySuffix);
   }
@@ -577,8 +618,8 @@ TEST_F(FileManagerFileTaskPreferencesTest,
   EXPECT_FALSE(tasks[1].is_default);
 
   // Set Text.app as default for "text/plain" in the preferences.
-  base::Value::Dict empty;
-  base::Value::Dict mime_types;
+  base::DictValue empty;
+  base::DictValue mime_types;
   mime_types.Set("text/plain", base::Value(TaskDescriptorToId(text_app_task)));
   UpdateDefaultTaskPreferences(mime_types, empty);
 
@@ -597,7 +638,7 @@ TEST_F(FileManagerFileTaskPreferencesTest,
   EXPECT_FALSE(tasks[1].is_default);
 
   // Set Nice.app as default for ".txt" in the preferences.
-  base::Value::Dict suffixes;
+  base::DictValue suffixes;
   suffixes.Set(".txt", base::Value(TaskDescriptorToId(nice_app_task)));
   UpdateDefaultTaskPreferences(empty, suffixes);
 
@@ -736,7 +777,7 @@ TEST_F(FileManagerFileTaskPreferencesTest,
                                 "action-id");
   UpdateDefaultTask(profile(), other_app_task, {".txt"}, {"text/plain"});
   // Even if it's the Media App.
-  TaskDescriptor media_app_task(web_app::kMediaAppId, TASK_TYPE_FILE_HANDLER,
+  TaskDescriptor media_app_task(ash::kMediaAppId, TASK_TYPE_FILE_HANDLER,
                                 "action-id");
   UpdateDefaultTask(profile(), media_app_task, {"tiff"}, {"image/tiff"});
 
@@ -764,9 +805,6 @@ TEST_F(FileManagerFileTaskPreferencesTest,
 
 TEST_F(FileManagerFileTaskPreferencesTest,
        ChooseAndSetDefault_MatchesWithAlternateAppServiceTaskDescriptorForm) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      ash::features::kArcFileTasksUseAppService};
-
   std::string package = "com.example.gallery";
   std::string activity = "com.example.gallery.OpenActivity";
   std::string app_id = "zabcdefg";
@@ -778,7 +816,7 @@ TEST_F(FileManagerFileTaskPreferencesTest,
   // Set the default app preference.
   std::string files_app_id = package + "/" + activity;
   TaskDescriptor file_task(files_app_id, task_type, "view");
-  base::Value::Dict mime_types;
+  base::DictValue mime_types;
   mime_types.Set("image/png", base::Value(TaskDescriptorToId(file_task)));
   UpdateDefaultTaskPreferences(mime_types, {});
 
@@ -809,9 +847,6 @@ TEST_F(FileManagerFileTaskPreferencesTest,
 
 TEST_F(FileManagerFileTaskPreferencesTest,
        UpdateDefaultTask_ConvertsArcAppServiceTaskDescriptorToStandardTaskId) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      ash::features::kArcFileTasksUseAppService};
-
   std::string package = "com.example.gallery";
   std::string activity = "com.example.gallery.OpenActivity";
   std::string app_id = "zabcdefg";

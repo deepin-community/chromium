@@ -6,7 +6,6 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "chrome/browser/feed/android/jni_headers/FeedSurfaceScopeDependencyProviderImpl_jni.h"
 #include "chrome/browser/feed/android/jni_translation.h"
 #include "chrome/browser/feed/feed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -15,6 +14,9 @@
 #include "components/feed/core/v2/public/feed_service.h"
 #include "components/variations/variations_ids_provider.h"
 #include "url/android/gurl_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/feed/android/jni_headers/FeedSurfaceScopeDependencyProviderImpl_jni.h"
 
 namespace feed::android {
 
@@ -49,24 +51,23 @@ void OnFetchResourceFinished(JNIEnv* env,
 
 static void JNI_FeedSurfaceScopeDependencyProviderImpl_FetchResource(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& j_url,
-    const base::android::JavaParamRef<jstring>& j_method,
-    const base::android::JavaParamRef<jobjectArray>& j_header_name_and_values,
-    const base::android::JavaParamRef<jbyteArray>& j_post_data,
-    const base::android::JavaParamRef<jobject>& callback_obj) {
+    const base::android::JavaRef<jobject>& j_url,
+    const base::android::JavaRef<jstring>& j_method,
+    const base::android::JavaRef<jobjectArray>& j_header_name_and_values,
+    const base::android::JavaRef<jbyteArray>& j_post_data,
+    const base::android::JavaRef<jobject>& callback_obj) {
   FeedApi* feed_stream_api = GetFeedApi();
   if (!feed_stream_api) {
     return;
   }
-  std::unique_ptr<GURL> url = url::GURLAndroid::ToNativeGURL(env, j_url);
+  GURL url = url::GURLAndroid::ToNativeGURL(env, j_url);
   std::vector<std::string> header_name_and_values;
   base::android::AppendJavaStringArrayToStringVector(
       env, j_header_name_and_values, &header_name_and_values);
   std::string post_data;
   base::android::JavaByteArrayToString(env, j_post_data, &post_data);
   feed_stream_api->FetchResource(
-      url ? *url : GURL(),
-      base::android::ConvertJavaStringToUTF8(env, j_method),
+      url, base::android::ConvertJavaStringToUTF8(env, j_method),
       header_name_and_values, post_data,
       base::BindOnce(
           &OnFetchResourceFinished, env,
@@ -74,3 +75,5 @@ static void JNI_FeedSurfaceScopeDependencyProviderImpl_FetchResource(
 }
 
 }  // namespace feed::android
+
+DEFINE_JNI(FeedSurfaceScopeDependencyProviderImpl)

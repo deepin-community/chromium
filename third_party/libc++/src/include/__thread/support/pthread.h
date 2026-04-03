@@ -10,11 +10,9 @@
 #ifndef _LIBCPP___THREAD_SUPPORT_PTHREAD_H
 #define _LIBCPP___THREAD_SUPPORT_PTHREAD_H
 
-#include <__availability>
 #include <__chrono/convert_to_timespec.h>
 #include <__chrono/duration.h>
 #include <__config>
-#include <__fwd/hash.h>
 #include <ctime>
 #include <errno.h>
 #include <pthread.h>
@@ -30,7 +28,10 @@
 // so libc++'s <math.h> usually absorbs atomic_wide_counter.h into the
 // module with <math.h> and makes atomic_wide_counter.h invisible.
 // Include <math.h> here to work around that.
-#include <math.h>
+// This checks wheter a Clang module is built
+#if __building_module(std)
+#  include <math.h>
+#endif
 
 #ifndef _LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER
 #  pragma GCC system_header
@@ -38,7 +39,7 @@
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
-using __libcpp_timespec_t = ::timespec;
+using __libcpp_timespec_t _LIBCPP_NODEBUG = ::timespec;
 
 //
 // Mutex
@@ -71,17 +72,17 @@ inline _LIBCPP_HIDE_FROM_ABI int __libcpp_recursive_mutex_init(__libcpp_recursiv
   return 0;
 }
 
-inline _LIBCPP_HIDE_FROM_ABI _LIBCPP_NO_THREAD_SAFETY_ANALYSIS int
+_LIBCPP_NO_THREAD_SAFETY_ANALYSIS inline _LIBCPP_HIDE_FROM_ABI int
 __libcpp_recursive_mutex_lock(__libcpp_recursive_mutex_t* __m) {
   return pthread_mutex_lock(__m);
 }
 
-inline _LIBCPP_HIDE_FROM_ABI _LIBCPP_NO_THREAD_SAFETY_ANALYSIS bool
+_LIBCPP_NO_THREAD_SAFETY_ANALYSIS inline _LIBCPP_HIDE_FROM_ABI bool
 __libcpp_recursive_mutex_trylock(__libcpp_recursive_mutex_t* __m) {
   return pthread_mutex_trylock(__m) == 0;
 }
 
-inline _LIBCPP_HIDE_FROM_ABI _LIBCPP_NO_THREAD_SAFETY_ANALYSIS int
+_LIBCPP_NO_THREAD_SAFETY_ANALYSIS inline _LIBCPP_HIDE_FROM_ABI int
 __libcpp_recursive_mutex_unlock(__libcpp_recursive_mutex_t* __m) {
   return pthread_mutex_unlock(__m);
 }
@@ -90,15 +91,15 @@ inline _LIBCPP_HIDE_FROM_ABI int __libcpp_recursive_mutex_destroy(__libcpp_recur
   return pthread_mutex_destroy(__m);
 }
 
-inline _LIBCPP_HIDE_FROM_ABI _LIBCPP_NO_THREAD_SAFETY_ANALYSIS int __libcpp_mutex_lock(__libcpp_mutex_t* __m) {
+_LIBCPP_NO_THREAD_SAFETY_ANALYSIS inline _LIBCPP_HIDE_FROM_ABI int __libcpp_mutex_lock(__libcpp_mutex_t* __m) {
   return pthread_mutex_lock(__m);
 }
 
-inline _LIBCPP_HIDE_FROM_ABI _LIBCPP_NO_THREAD_SAFETY_ANALYSIS bool __libcpp_mutex_trylock(__libcpp_mutex_t* __m) {
+_LIBCPP_NO_THREAD_SAFETY_ANALYSIS inline _LIBCPP_HIDE_FROM_ABI bool __libcpp_mutex_trylock(__libcpp_mutex_t* __m) {
   return pthread_mutex_trylock(__m) == 0;
 }
 
-inline _LIBCPP_HIDE_FROM_ABI _LIBCPP_NO_THREAD_SAFETY_ANALYSIS int __libcpp_mutex_unlock(__libcpp_mutex_t* __m) {
+_LIBCPP_NO_THREAD_SAFETY_ANALYSIS inline _LIBCPP_HIDE_FROM_ABI int __libcpp_mutex_unlock(__libcpp_mutex_t* __m) {
   return pthread_mutex_unlock(__m);
 }
 
@@ -116,12 +117,12 @@ inline _LIBCPP_HIDE_FROM_ABI int __libcpp_condvar_broadcast(__libcpp_condvar_t* 
   return pthread_cond_broadcast(__cv);
 }
 
-inline _LIBCPP_HIDE_FROM_ABI _LIBCPP_NO_THREAD_SAFETY_ANALYSIS int
+_LIBCPP_NO_THREAD_SAFETY_ANALYSIS inline _LIBCPP_HIDE_FROM_ABI int
 __libcpp_condvar_wait(__libcpp_condvar_t* __cv, __libcpp_mutex_t* __m) {
   return pthread_cond_wait(__cv, __m);
 }
 
-inline _LIBCPP_HIDE_FROM_ABI _LIBCPP_NO_THREAD_SAFETY_ANALYSIS int
+_LIBCPP_NO_THREAD_SAFETY_ANALYSIS inline _LIBCPP_HIDE_FROM_ABI int
 __libcpp_condvar_timedwait(__libcpp_condvar_t* __cv, __libcpp_mutex_t* __m, __libcpp_timespec_t* __ts) {
   return pthread_cond_timedwait(__cv, __m, __ts);
 }

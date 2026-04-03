@@ -11,7 +11,9 @@
 #include "base/test/test_future.h"
 #include "base/values.h"
 #include "build/branding_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/enterprise/connectors/device_trust/common/metrics_utils.h"
+#include "chrome/browser/enterprise/connectors/device_trust/device_trust_features.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_service_factory.h"
 #include "chrome/browser/enterprise/connectors/device_trust/navigation_throttle.h"
@@ -26,18 +28,18 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/mock_navigation_handle.h"
+#include "content/public/test/mock_navigation_throttle_registry.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/enterprise/connectors/device_trust/device_trust_features.h"
 #include "chrome/browser/enterprise/connectors/device_trust/test/device_trust_test_environment_win.h"
-#include "chrome/browser/enterprise/connectors/test/test_constants.h"
+#include "chrome/browser/enterprise/test/test_constants.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "components/enterprise/browser/controller/chrome_browser_cloud_management_controller.h"
 #endif  // #if BUILDFLAG(IS_WIN)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
 #include "chrome/browser/ash/attestation/mock_tpm_challenge_key.h"
 #include "chrome/browser/ash/attestation/tpm_challenge_key.h"
@@ -50,6 +52,7 @@
 #include "components/device_signals/core/browser/pref_names.h"
 #include "components/device_signals/core/common/signals_features.h"
 #include "components/enterprise/browser/device_trust/device_trust_key_manager.h"
+#include "components/prefs/pref_service.h"
 #include "ui/base/interaction/element_identifier.h"
 #endif
 
@@ -80,7 +83,7 @@ constexpr int kSuccessCode = 200;
 constexpr int kHardFailureCode = 400;
 #endif  // BUILDFLAG(IS_WIN)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 DeviceTrustConnectorState CreateManagedDeviceState() {
   DeviceTrustConnectorState state;
 
@@ -91,7 +94,7 @@ DeviceTrustConnectorState CreateManagedDeviceState() {
 
   return state;
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 DeviceTrustConnectorState CreateUnmanagedState() {
   return DeviceTrustConnectorState();
@@ -99,7 +102,7 @@ DeviceTrustConnectorState CreateUnmanagedState() {
 
 }  // namespace
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 class DeviceTrustAshBrowserTest : public test::DeviceTrustBrowserTestBase {
  protected:
   explicit DeviceTrustAshBrowserTest(
@@ -136,8 +139,10 @@ class DeviceTrustDesktopBrowserTest : public test::DeviceTrustBrowserTestBase {
     test::DeviceTrustBrowserTestBase::SetUpInProcessBrowserTestFixture();
 #if BUILDFLAG(IS_WIN)
     device_trust_test_environment_win_.emplace();
-    device_trust_test_environment_win_->SetExpectedDMToken(kBrowserDmToken);
-    device_trust_test_environment_win_->SetExpectedClientID(kBrowserClientId);
+    device_trust_test_environment_win_->SetExpectedDMToken(
+        enterprise::test::kBrowserDmToken);
+    device_trust_test_environment_win_->SetExpectedClientID(
+        enterprise::test::kBrowserClientId);
 
     // This will set up a key before DeviceTrustKeyManager initializes.
     // DTKM should just try to load this key instead of creating one itself.
@@ -168,7 +173,7 @@ class DeviceTrustDesktopBrowserTest : public test::DeviceTrustBrowserTestBase {
 };
 
 using DeviceTrustBrowserTest = DeviceTrustDesktopBrowserTest;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // Tests that the whole attestation flow occurs when navigating to an
 // allowed domain.
@@ -211,10 +216,14 @@ IN_PROC_BROWSER_TEST_F(DeviceTrustBrowserTest,
   auto* incognito_browser = CreateIncognitoBrowser(browser()->profile());
   content::MockNavigationHandle mock_nav_handle(
       web_contents(incognito_browser));
+  content::MockNavigationThrottleRegistry registry(
+      &mock_nav_handle,
+      content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
 
   // Try to create the device trust navigation throttle.
-  EXPECT_FALSE(enterprise_connectors::DeviceTrustNavigationThrottle::
-                   MaybeCreateThrottleFor(&mock_nav_handle));
+  enterprise_connectors::DeviceTrustNavigationThrottle::
+                   MaybeCreateAndAdd(registry);
+  EXPECT_EQ(registry.throttles().size(), 0u);
 }
 
 class DeviceTrustDelayedManagementBrowserTest
@@ -226,9 +235,10 @@ class DeviceTrustDelayedManagementBrowserTest
     scoped_feature_list_.InitWithFeatures(
         /*enabled_features=*/
         {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-          ash::features::kUnmanagedDeviceDeviceTrustConnectorEnabled
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+            kDTCKeyUploadedBySharedAPIEnabled,
+#if BUILDFLAG(IS_CHROMEOS)
+            ash::features::kUnmanagedDeviceDeviceTrustConnectorEnabled
+#endif  // BUILDFLAG(IS_CHROMEOS)
         },
         /*disabled_features=*/{});
   }
@@ -272,12 +282,12 @@ INSTANTIATE_TEST_SUITE_P(UnmanagedState,
                          DeviceTrustDelayedManagementBrowserTest,
                          testing::Values(CreateUnmanagedState()));
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 INSTANTIATE_TEST_SUITE_P(ManagedState,
                          DeviceTrustDelayedManagementBrowserTest,
                          testing::Values(CreateManagedDeviceState()));
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // Tests that signal values respect the expected format and is filled-out as
 // expect per platform.
@@ -286,16 +296,17 @@ IN_PROC_BROWSER_TEST_F(DeviceTrustBrowserTest, SignalsContract) {
       DeviceTrustServiceFactory::GetForProfile(browser()->profile());
   ASSERT_TRUE(device_trust_service);
 
-  base::test::TestFuture<base::Value::Dict> future;
+  base::test::TestFuture<base::DictValue> future;
   device_trust_service->GetSignals(future.GetCallback());
 
   // This error most likely indicates that one of the signals decorators did
   // not invoke its done_closure in time.
   ASSERT_TRUE(future.Wait()) << "Timed out while collecting signals.";
 
-  const base::Value::Dict& signals_dict = future.Get();
+  const base::DictValue& signals_dict = future.Get();
 
-  const auto signals_contract_map = device_signals::test::GetSignalsContract();
+  const auto signals_contract_map =
+      device_signals::test::GetSignalsContract(IsDTCAntivirusSignalEnabled());
   ASSERT_FALSE(signals_contract_map.empty());
   for (const auto& signals_contract_entry : signals_contract_map) {
     // First is the signal name.
@@ -322,27 +333,23 @@ class DeviceTrustCreateKeyBrowserTest : public DeviceTrustDesktopBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(DeviceTrustCreateKeyBrowserTest,
                        AttestationFullFlowKeyCreation) {
-  std::vector<uint8_t> wrapped_key =
-      device_trust_test_environment_win_->GetWrappedKey();
   TriggerUrlNavigation();
   VerifyAttestationFlowSuccessful();
   // Make sure DeviceTrustKeyManager successfully created a key in storage
   // via no-nonce key rotation.
   VerifyKeyRotationSuccess(/*with_nonce=*/false);
 
-  // Make sure key in storage remains unchanged.
-  EXPECT_EQ(device_trust_test_environment_win_->GetWrappedKey(), wrapped_key);
+  EXPECT_FALSE(device_trust_test_environment_win_->GetWrappedKey().empty());
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceTrustCreateKeyBrowserTest,
                        AttestationFullFlowKeyCreationV1) {
-  std::vector<uint8_t> wrapped_key =
-      device_trust_test_environment_win_->GetWrappedKey();
   SetChallengeValue(kChallengeV1);
   TriggerUrlNavigation();
   VerifyAttestationFlowFailure(test::kFailedToParseChallengeJsonResponse);
   VerifyKeyRotationSuccess(/*with_nonce=*/false);
-  EXPECT_EQ(device_trust_test_environment_win_->GetWrappedKey(), wrapped_key);
+
+  EXPECT_FALSE(device_trust_test_environment_win_->GetWrappedKey().empty());
 }
 
 // To test "create key" flows where the initial upload fails, the response code
@@ -387,7 +394,12 @@ IN_PROC_BROWSER_TEST_F(DeviceTrustCreateKeyUploadFailedBrowserTest,
 class DeviceTrustKeyRotationBrowserTest : public DeviceTrustDesktopBrowserTest {
  protected:
   DeviceTrustKeyRotationBrowserTest() {
-    scoped_feature_list_.InitWithFeatureState(kDTCKeyRotationEnabled, true);
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/
+        {
+            kDTCKeyUploadedBySharedAPIEnabled,
+        },
+        /*disabled_features=*/{kDTCKeyRotationEnabled});
   }
 };
 
@@ -448,7 +460,7 @@ IN_PROC_BROWSER_TEST_F(DeviceTrustKeyRotationBrowserTest,
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 class DeviceTrustBrowserTestWithConsent
-    : public InteractiveBrowserTestT<DeviceTrustBrowserTest>,
+    : public InteractiveBrowserTestMixin<DeviceTrustBrowserTest>,
       public testing::WithParamInterface<
           /* Six boolean variables that define the general consent:
           - if the managed profile and device are affiliated
@@ -460,7 +472,7 @@ class DeviceTrustBrowserTestWithConsent
           testing::tuple<bool, bool, bool, bool, bool, bool>> {
  protected:
   DeviceTrustBrowserTestWithConsent()
-      : InteractiveBrowserTestT(DeviceTrustConnectorState({
+      : InteractiveBrowserTestMixin(DeviceTrustConnectorState({
             .affiliated = testing::get<0>(GetParam()),
             .cloud_user_management_level = DeviceTrustManagementLevel({
                 .is_managed = testing::get<1>(GetParam()),
@@ -471,12 +483,17 @@ class DeviceTrustBrowserTestWithConsent
                 .is_inline_policy_enabled = testing::get<4>(GetParam()),
             }),
         })) {
-    scoped_feature_list_.InitWithFeatureState(
-        enterprise_signals::features::kDeviceSignalsConsentDialog, true);
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/
+        {
+            enterprise_signals::features::kDeviceSignalsConsentDialog,
+            kDTCKeyUploadedBySharedAPIEnabled,
+        },
+        /*disabled_features=*/{});
   }
 
   void SetUpOnMainThread() override {
-    InteractiveBrowserTestT::SetUpOnMainThread();
+    InteractiveBrowserTestMixin::SetUpOnMainThread();
 
     browser()->profile()->GetPrefs()->SetBoolean(
         device_signals::prefs::kUnmanagedDeviceSignalsConsentFlowEnabled,
@@ -505,9 +522,8 @@ class DeviceTrustBrowserTestWithConsent
 
     RunTestSequence(
         InAnyContext(WaitForShow(kDeviceSignalsConsentOkButtonElementId)),
-        InSameContext(
-            Steps(PressButton(kDeviceSignalsConsentOkButtonElementId),
-                  WaitForHide(kDeviceSignalsConsentOkButtonElementId))));
+        InSameContext(PressButton(kDeviceSignalsConsentOkButtonElementId),
+                      WaitForHide(kDeviceSignalsConsentOkButtonElementId)));
 
     WaitForNavigation();
   }
@@ -519,7 +535,7 @@ class DeviceTrustBrowserTestWithConsent
   bool is_device_inline_flow_enabled() { return testing::get<4>(GetParam()); }
   bool is_consent_policy_enabled() { return testing::get<5>(GetParam()); }
 
-  bool ShouldTriggerConsent() {
+  virtual bool ShouldTriggerConsent() {
     if ((is_device_managed() && is_affiliated()) || !is_profile_managed()) {
       return false;
     }
@@ -630,6 +646,86 @@ INSTANTIATE_TEST_SUITE_P(
                      /*is_device_inline_flow_enabled=*/testing::Values(false),
                      /*is_consent_policy_enabled=*/testing::Values(false)));
 
+class DeviceTrustBrowserTestWithPermanentConsent
+    : public DeviceTrustBrowserTestWithConsent {
+ protected:
+  DeviceTrustBrowserTestWithPermanentConsent() = default;
+
+  void SetUpOnMainThread() override {
+    DeviceTrustBrowserTestWithConsent::SetUpOnMainThread();
+    device_trust_mixin_->SetPermanentConsentGiven(true);
+  }
+};
+
+IN_PROC_BROWSER_TEST_P(DeviceTrustBrowserTestWithPermanentConsent,
+                       ConsentDialogWithPolicyAndAttestation) {
+  NavigateWithUserGesture();
+
+  DTAttestationResult success_result =
+      is_device_inline_flow_enabled()
+          ? DTAttestationResult::kSuccess
+          : DTAttestationResult::kSuccessNoSignature;
+
+  std::optional<enterprise_connectors::DTAttestationPolicyLevel> policy_level =
+      GetExpectedAttestationPolicyLevel();
+
+  RunTestSequence(EnsureNotPresent(kDeviceSignalsConsentOkButtonElementId));
+  WaitForNavigation();
+
+  policy_level ? VerifyAttestationFlowSuccessful(success_result, policy_level)
+               : VerifyNoInlineFlowOccurred();
+
+  // Test case where the user becomes managed with DTC enabled.
+  if (!is_profile_managed() && !is_device_managed()) {
+    device_trust_mixin_->ManageCloudUser();
+    device_trust_mixin_->EnableUserInlinePolicy();
+
+    NavigateWithUserGesture();
+    WaitForNavigation();
+    VerifyAttestationFlowSuccessful(success_result, policy_level);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ManagedUserAndUnmanagedDevice,
+    DeviceTrustBrowserTestWithPermanentConsent,
+    testing::Combine(/*is_affiliated=*/testing::Values(true),
+                     /*is_profile_managed=*/testing::Values(true),
+                     /*is_user_inline_flow_enabled=*/testing::Bool(),
+                     /*is_device_managed=*/testing::Values(false),
+                     /*is_device_inline_flow_enabled=*/testing::Values(false),
+                     /*is_consent_policy_enabled=*/testing::Bool()));
+
+INSTANTIATE_TEST_SUITE_P(
+    ManagedUserAndManagedDevice,
+    DeviceTrustBrowserTestWithPermanentConsent,
+    testing::Combine(/*is_affiliated=*/testing::Bool(),
+                     /*is_profile_managed=*/testing::Values(true),
+                     /*is_user_inline_flow_enabled=*/testing::Bool(),
+                     /*is_device_managed=*/testing::Values(true),
+                     /*is_device_inline_flow_enabled=*/testing::Bool(),
+                     /*is_consent_policy_enabled=*/testing::Bool()));
+
+INSTANTIATE_TEST_SUITE_P(
+    UnmanagedUserAndManagedDevice,
+    DeviceTrustBrowserTestWithPermanentConsent,
+    testing::Combine(/*is_affiliated=*/testing::Values(true),
+                     /*is_profile_managed=*/testing::Values(false),
+                     /*is_user_inline_flow_enabled=*/testing::Values(false),
+                     /*is_device_managed=*/testing::Values(true),
+                     /*is_device_inline_flow_enabled=*/testing::Bool(),
+                     /*is_consent_policy_enabled=*/testing::Values(false)));
+
+INSTANTIATE_TEST_SUITE_P(
+    UnmanagedUserAndUnmanagedDevice,
+    DeviceTrustBrowserTestWithPermanentConsent,
+    testing::Combine(/*is_affiliated=*/testing::Values(true),
+                     /*is_profile_managed=*/testing::Values(false),
+                     /*is_user_inline_flow_enabled=*/testing::Values(false),
+                     /*is_device_managed=*/testing::Values(false),
+                     /*is_device_inline_flow_enabled=*/testing::Values(false),
+                     /*is_consent_policy_enabled=*/testing::Values(false)));
+
 class DeviceTrustPolicyLevelBrowserTest
     : public DeviceTrustBrowserTest,
       public testing::WithParamInterface<
@@ -706,7 +802,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
 class DeviceTrustBrowserTestForUnmanagedDevices
     : public DeviceTrustBrowserTest,
@@ -798,17 +894,18 @@ IN_PROC_BROWSER_TEST_F(DeviceTrustBrowserTestSignalsContractForUnmanagedDevices,
       DeviceTrustServiceFactory::GetForProfile(browser()->profile());
   ASSERT_TRUE(device_trust_service);
 
-  base::test::TestFuture<base::Value::Dict> future;
+  base::test::TestFuture<base::DictValue> future;
   device_trust_service->GetSignals(future.GetCallback());
 
   // This error most likely indicates that one of the signals decorators did
   // not invoke its done_closure in time.
   ASSERT_TRUE(future.Wait()) << "Timed out while collecting signals.";
 
-  const base::Value::Dict& signals_dict = future.Get();
+  const base::DictValue& signals_dict = future.Get();
 
   const auto signals_contract_map =
-      device_signals::test::GetSignalsContractForUnmanagedDevices();
+      device_signals::test::GetSignalsContractForUnmanagedDevices(
+          IsDTCAntivirusSignalEnabled());
   ASSERT_FALSE(signals_contract_map.empty());
   for (const auto& signals_contract_entry : signals_contract_map) {
     // First is the signal name.
@@ -819,6 +916,6 @@ IN_PROC_BROWSER_TEST_F(DeviceTrustBrowserTestSignalsContractForUnmanagedDevices,
   }
 }
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace enterprise_connectors::test

@@ -15,7 +15,17 @@
  */
 
 #include "perfetto/tracing/data_source.h"
+
+#include <atomic>
+#include <cstdint>
+
 #include "perfetto/base/logging.h"
+#include "perfetto/ext/base/flags.h"
+#include "perfetto/tracing/core/forward_decls.h"
+#include "perfetto/tracing/internal/data_source_internal.h"
+#include "perfetto/tracing/internal/data_source_type.h"
+#include "perfetto/tracing/internal/tracing_muxer.h"
+
 #include "protos/perfetto/config/data_source_config.gen.h"
 
 namespace perfetto {
@@ -74,8 +84,9 @@ void DataSourceType::PopulateTlsInst(
           std::memory_order_relaxed);
   tls_inst->data_source_instance_id = instance_state->data_source_instance_id;
   tls_inst->is_intercepted = instance_state->interceptor_id != 0;
-  tls_inst->trace_writer = tracing_impl->CreateTraceWriter(
-      &state_, instance_index, instance_state, buffer_exhausted_policy_);
+  tls_inst->trace_writer =
+      tracing_impl->CreateTraceWriter(&state_, instance_index, instance_state,
+                                      instance_state->buffer_exhausted_policy);
   if (create_incremental_state_fn_) {
     PERFETTO_DCHECK(!tls_inst->incremental_state);
     CreateIncrementalState(tls_inst, instance_index);
@@ -87,6 +98,29 @@ void DataSourceType::PopulateTlsInst(
   // Even in the case of out-of-IDs, SharedMemoryArbiterImpl returns a
   // NullTraceWriter. The returned pointer should never be null.
   PERFETTO_DCHECK(tls_inst->trace_writer);
+}
+
+void DataSourceType::ClearIncrementalState(
+    internal::DataSourceInstanceThreadLocalState* tls_inst,
+    uint32_t instance_index,
+    uint32_t actual_generation) {
+  if constexpr (
+      PERFETTO_FLAGS_TRACK_EVENT_INCREMENTAL_STATE_CLEAR_NOT_DESTROY) {
+    // Try to clear the existing state if we have a clear function and the
+    // state exists. This allows reusing allocated memory instead of
+    // destroying and recreating the state object.
+    void* incremental_state = tls_inst->incremental_state.get();
+    if (clear_incremental_state_fn_ && incremental_state &&
+        clear_incremental_state_fn_(incremental_state, user_arg_)) {
+      tls_inst->incremental_state_generation = actual_generation;
+    } else {
+      tls_inst->incremental_state.reset();
+      CreateIncrementalState(tls_inst, instance_index);
+    }
+  } else {
+    tls_inst->incremental_state.reset();
+    CreateIncrementalState(tls_inst, instance_index);
+  }
 }
 
 }  // namespace internal

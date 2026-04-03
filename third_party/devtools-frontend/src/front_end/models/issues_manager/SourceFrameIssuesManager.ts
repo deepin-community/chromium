@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@ import {
   trustedTypesSinkViolationCode,
 } from './ContentSecurityPolicyIssue.js';
 import {type Issue, type IssueKind, toZeroBasedLocation} from './Issue.js';
-import {type IssueAddedEvent, type IssuesManager} from './IssuesManager.js';
+import type {IssueAddedEvent, IssuesManager} from './IssuesManager.js';
 import {Events} from './IssuesManagerEvents.js';
 import {getIssueTitleFromMarkdownDescription} from './MarkdownIssueDescription.js';
 import {PropertyRuleIssue} from './PropertyRuleIssue.js';
@@ -21,8 +21,8 @@ import {lateImportStylesheetLoadingCode, type StylesheetLoadingIssue} from './St
 export class SourceFrameIssuesManager {
   #sourceFrameMessageManager = new Bindings.PresentationConsoleMessageHelper.PresentationSourceFrameMessageManager();
   constructor(private readonly issuesManager: IssuesManager) {
-    this.issuesManager.addEventListener(Events.IssueAdded, this.#onIssueAdded, this);
-    this.issuesManager.addEventListener(Events.FullUpdateRequired, this.#onFullUpdateRequired, this);
+    this.issuesManager.addEventListener(Events.ISSUE_ADDED, this.#onIssueAdded, this);
+    this.issuesManager.addEventListener(Events.FULL_UPDATE_REQUIRED, this.#onFullUpdateRequired, this);
   }
 
   #onIssueAdded(event: Common.EventTarget.EventTargetEvent<IssueAddedEvent>): void {
@@ -89,7 +89,7 @@ export class SourceFrameIssuesManager {
 export class IssueMessage extends Workspace.UISourceCode.Message {
   #kind: IssueKind;
   constructor(title: string, kind: IssueKind, clickHandler: () => void) {
-    super(Workspace.UISourceCode.Message.Level.Issue, title, clickHandler);
+    super(Workspace.UISourceCode.Message.Level.ISSUE, title, clickHandler);
     this.#kind = kind;
   }
 

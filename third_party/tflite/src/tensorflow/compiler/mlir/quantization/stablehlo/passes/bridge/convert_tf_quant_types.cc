@@ -60,7 +60,7 @@ auto *mlir_tf_quant_op_count = ::tensorflow::monitoring::Counter<1>::New(
     "Counts the number of ops that has qint types" /*metric description*/,
     "op_name" /*metric label*/);
 
-// Returns wether a type is illegal. Here we consider TF qint types illegal.
+// Returns whether a type is illegal. Here we consider TF qint types illegal.
 // See pass description in passes.td for more info about how illegal types are
 // treated in this pass.
 bool IsIllegalType(Type type) {
@@ -71,7 +71,7 @@ bool IsIllegalType(Type type) {
 // If input is not TF qint types, returns the original type.
 Type ToLegalType(Type type) {
   if (IsTFQintType(type)) return GetIntTypeFromTFQint(type);
-  if (auto shaped = type.dyn_cast<ShapedType>()) {
+  if (auto shaped = mlir::dyn_cast<ShapedType>(type)) {
     Type elem = shaped.getElementType();
     if (IsTFQintType(elem)) return shaped.clone(ToLegalType(elem));
   }
@@ -202,10 +202,13 @@ class TFQuantTypePattern : public ConversionPattern {
     OperationState state(op->getLoc(), op->getName().getStringRef(), operands,
                          new_results, op->getAttrs(), op->getSuccessors());
     for (Region &region : op->getRegions()) {
-      Region &new_region = *state.addRegion();
-      rewriter.inlineRegionBefore(region, new_region, new_region.begin());
-      if (failed(rewriter.convertRegionTypes(&new_region, *getTypeConverter())))
+      auto new_region = std::make_unique<Region>(op);
+      rewriter.inlineRegionBefore(region, *new_region, new_region->begin());
+      if (failed(rewriter.convertRegionTypes(new_region.get(),
+                                             *getTypeConverter()))) {
         return failure();
+      }
+      state.addRegion(std::move(new_region));
     }
     rewriter.replaceOp(op, rewriter.create(state)->getResults());
 
@@ -238,8 +241,8 @@ class TFUniformQuantizedOpsPattern : public ConversionPattern {
       Type orig_op_type = op->getOperandTypes()[i];
       if (IsIllegalType(orig_op_type) &&
           !IsQintValueDefinedByIntToQintCast(op->getOperand(i))) {
-        new_operands.push_back(rewriter.create<TF::CastOp>(
-            op->getLoc(), orig_op_type, operands[i]));
+        new_operands.push_back(TF::CastOp::create(rewriter, op->getLoc(),
+                                                  orig_op_type, operands[i]));
       } else {
         new_operands.push_back(operands[i]);
       }
@@ -258,8 +261,8 @@ class TFUniformQuantizedOpsPattern : public ConversionPattern {
       Value &result = new_results[i];
       if (IsIllegalType(result.getType()) &&
           !IsQintValueQintToIntCast(op->getResult(i))) {
-        result = rewriter.create<TF::CastOp>(
-            op->getLoc(), ToLegalType(result.getType()), result);
+        result = TF::CastOp::create(rewriter, op->getLoc(),
+                                    ToLegalType(result.getType()), result);
       }
       // If the result is already consumed by qint->int CastOp, manually replace
       // its use by the new UQ op. This is because such CastOp is already legal,
@@ -289,7 +292,7 @@ class TFConstOpQuantToIntPattern : public OpConversionPattern<TF::ConstOp> {
     }
     auto dense_attr_or = GetDenseAttrFromTensorProtoAttr(
         tensor_proto_attr.getValue(),
-        ToLegalType(op.getOutput().getType()).dyn_cast<TensorType>());
+        mlir::dyn_cast<TensorType>(ToLegalType(op.getOutput().getType())));
     if (failed(dense_attr_or)) {
       op->emitError("failed to get DenseElementAttr.");
       return failure();

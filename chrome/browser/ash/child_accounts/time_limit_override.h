@@ -33,13 +33,13 @@ class TimeLimitOverride {
   // Factory method. Creates TimeLimitOverride from a |dict|. Returns nullopt if
   // |dict| could not be parsed.
   static std::optional<TimeLimitOverride> FromDictionary(
-      const base::Value::Dict* dict);
+      const base::DictValue* dict);
 
   // Factory method. Creates TimeLimitOverride from the most recent override in
   // the list of overrides passed in |list|. Returns nullopt if |list| could not
   // be parsed.
   static std::optional<TimeLimitOverride> MostRecentFromList(
-      const base::Value::List* list);
+      const base::ListValue* list);
 
   TimeLimitOverride(Action action,
                     base::Time created_at,
@@ -51,10 +51,9 @@ class TimeLimitOverride {
   ~TimeLimitOverride();
   TimeLimitOverride(TimeLimitOverride&&);
   TimeLimitOverride& operator=(TimeLimitOverride&&);
-  bool operator==(const TimeLimitOverride&) const;
-  bool operator!=(const TimeLimitOverride& rhs) const {
-    return !(*this == rhs);
-  }
+
+  friend bool operator==(const TimeLimitOverride&,
+                         const TimeLimitOverride&) = default;
 
   // Returns override duration if specified.
   Action action() const { return action_; }
@@ -69,7 +68,7 @@ class TimeLimitOverride {
   bool IsLock() const;
 
   // Serializes TimeLimitOverride to a dictionary.
-  base::Value::Dict ToDictionary() const;
+  base::DictValue ToDictionary() const;
 
  private:
   Action action_;

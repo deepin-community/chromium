@@ -27,13 +27,13 @@
 
 #include "src/tint/lang/wgsl/ast/return_statement.h"
 
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/wgsl/ast/helper_test.h"
 
 namespace tint::ast {
 namespace {
 
 using ReturnStatementTest = TestHelper;
+using ReturnStatementDeathTest = ReturnStatementTest;
 
 TEST_F(ReturnStatementTest, Creation) {
     auto* expr = Expr("expr");
@@ -63,16 +63,6 @@ TEST_F(ReturnStatementTest, WithValue) {
     auto* expr = Expr("expr");
     auto* r = create<ReturnStatement>(expr);
     EXPECT_NE(r->value, nullptr);
-}
-
-TEST_F(ReturnStatementTest, Assert_DifferentGenerationID_Expr) {
-    EXPECT_FATAL_FAILURE(
-        {
-            ProgramBuilder b1;
-            ProgramBuilder b2;
-            b1.create<ReturnStatement>(b2.Expr(true));
-        },
-        "internal compiler error");
 }
 
 }  // namespace

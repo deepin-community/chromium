@@ -16,7 +16,6 @@
 #include "third_party/blink/renderer/core/layout/custom/layout_worklet_global_scope_proxy.h"
 #include "third_party/blink/renderer/core/layout/geometry/logical_size.h"
 #include "third_party/blink/renderer/core/layout/length_utils.h"
-#include "third_party/blink/renderer/core/layout/out_of_flow_layout_part.h"
 #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
 
 namespace blink {
@@ -53,7 +52,7 @@ MinMaxSizesResult CustomLayoutAlgorithm::ComputeMinMaxSizes(
   LogicalSize border_box_size{
       container_builder_.InlineSize(),
       ComputeBlockSizeForFragment(
-          GetConstraintSpace(), Style(), BorderPadding(),
+          GetConstraintSpace(), Node(), BorderPadding(),
           CalculateDefaultBlockSize(GetConstraintSpace(), Node(),
                                     GetBreakToken(), BorderScrollbarPadding()),
           container_builder_.InlineSize())};
@@ -107,7 +106,7 @@ const LayoutResult* CustomLayoutAlgorithm::Layout() {
   LogicalSize border_box_size{
       container_builder_.InlineSize(),
       ComputeBlockSizeForFragment(
-          GetConstraintSpace(), Style(), BorderPadding(),
+          GetConstraintSpace(), Node(), BorderPadding(),
           CalculateDefaultBlockSize(GetConstraintSpace(), Node(),
                                     GetBreakToken(), BorderScrollbarPadding()),
           container_builder_.InlineSize())};
@@ -122,7 +121,7 @@ const LayoutResult* CustomLayoutAlgorithm::Layout() {
       fragment_result_options->childFragments();
 
   LayoutInputNode child = Node().FirstChild();
-  for (auto fragment : child_fragments) {
+  for (const auto& fragment : child_fragments) {
     if (!fragment->IsValid()) {
       // TODO(ikilpatrick): Report this error to the developer.
       return FallbackLayout();
@@ -167,7 +166,7 @@ const LayoutResult* CustomLayoutAlgorithm::Layout() {
       BorderScrollbarPadding().BlockSum(),
       LayoutUnit::FromDoubleRound(fragment_result_options->autoBlockSize()));
   LayoutUnit block_size = ComputeBlockSizeForFragment(
-      GetConstraintSpace(), Style(), BorderPadding(), auto_block_size,
+      GetConstraintSpace(), Node(), BorderPadding(), auto_block_size,
       container_builder_.InitialBorderBoxSize().inline_size);
 
   // TODO(ikilpatrick): Allow setting both the first/last baseline instead of a
@@ -182,7 +181,7 @@ const LayoutResult* CustomLayoutAlgorithm::Layout() {
   container_builder_.SetIntrinsicBlockSize(auto_block_size);
   container_builder_.SetFragmentsTotalBlockSize(block_size);
 
-  OutOfFlowLayoutPart(Node(), GetConstraintSpace(), &container_builder_).Run();
+  container_builder_.HandleOofsAndSpecialDescendants();
 
   return container_builder_.ToBoxFragment();
 }
@@ -196,7 +195,8 @@ void CustomLayoutAlgorithm::AddAnyOutOfFlowPositionedChildren(
   DCHECK(child);
   while (*child && child->IsOutOfFlowPositioned()) {
     container_builder_.AddOutOfFlowChildCandidate(
-        To<BlockNode>(*child), BorderScrollbarPadding().StartOffset());
+        To<BlockNode>(*child),
+        LogicalStaticPosition(BorderScrollbarPadding().StartOffset()));
     *child = child->NextSibling();
   }
 }

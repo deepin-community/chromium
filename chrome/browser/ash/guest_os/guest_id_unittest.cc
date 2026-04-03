@@ -34,7 +34,7 @@ TEST_F(GuestIdTest, GuestIdEquality) {
 
 TEST_F(GuestIdTest, GuestIdFromDictValue) {
   {
-    auto dict = base::Value::Dict()
+    auto dict = base::DictValue()
                     .Set(prefs::kVmNameKey, "foo")
                     .Set(prefs::kContainerNameKey, "bar");
     EXPECT_TRUE(GuestId(base::Value(std::move(dict))) ==
@@ -42,7 +42,7 @@ TEST_F(GuestIdTest, GuestIdFromDictValue) {
   }
 
   {
-    auto dict = base::Value::Dict()
+    auto dict = base::DictValue()
                     .Set(prefs::kVmTypeKey, 0)
                     .Set(prefs::kVmNameKey, "foo")
                     .Set(prefs::kContainerNameKey, "bar");
@@ -51,7 +51,7 @@ TEST_F(GuestIdTest, GuestIdFromDictValue) {
   }
 
   {
-    auto dict = base::Value::Dict()
+    auto dict = base::DictValue()
                     .Set(prefs::kVmTypeKey, 1)
                     .Set(prefs::kVmNameKey, "foo")
                     .Set(prefs::kContainerNameKey, "bar");
@@ -70,7 +70,8 @@ TEST_F(GuestIdTest, GetContainers) {
     {"vm_name": "vm1", "container_name": "c1"},
     {"vm_name": "vm2", "container_name": "c2"},
     {"vm_name": "vm3"}
-  ])");
+  ])",
+                                     base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(pref.has_value());
   profile_.GetPrefs()->Set(prefs::kGuestOsContainers, std::move(*pref));
   std::vector<GuestId> expected = {GuestId(VmType::TERMINA, "vm1", "c1"),

@@ -30,8 +30,9 @@
 
 #include <string>
 
+#include "absl/container/inlined_vector.h"
 #include "dawn/common/NSRef.h"
-#include "dawn/common/StackContainer.h"
+#include "dawn/native/PassResourceUsage.h"
 #include "dawn/native/dawn_platform.h"
 #include "dawn/native/metal/DeviceMTL.h"
 #include "dawn/native/metal/ShaderModuleMTL.h"
@@ -50,14 +51,14 @@ namespace dawn::native::metal {
 
 MTLPixelFormat MetalPixelFormat(const DeviceBase* device, wgpu::TextureFormat format);
 
-NSRef<NSString> MakeDebugName(DeviceBase* device, const char* prefix, std::string label = "");
+NSRef<NSString> MakeDebugName(DeviceBase* device, const char* prefix, std::string_view label = "");
 
 // Templating for setting the label on MTL objects because not all MTL objects are of the same base
 // class. For example MTLBuffer and MTLTexture inherit MTLResource, but MTLFunction does not. Note
 // that we allow a nullable Metal object because APISetLabel does not currently do any checks on
 // backend resources.
 template <typename T>
-void SetDebugName(DeviceBase* device, T* mtlObj, const char* prefix, std::string label = "") {
+void SetDebugName(DeviceBase* device, T* mtlObj, const char* prefix, std::string_view label = "") {
     if (!device->IsToggleEnabled(Toggle::UseUserDefinedLabelsInBackend)) {
         return;
     }
@@ -71,6 +72,16 @@ void SetDebugName(DeviceBase* device, T* mtlObj, const char* prefix, std::string
 Aspect GetDepthStencilAspects(MTLPixelFormat format);
 MTLCompareFunction ToMetalCompareFunction(wgpu::CompareFunction compareFunction);
 
+// Helpers to convert from typed Origin/Extent to the Metal equivalent. Metal always counts in
+// texels so there are no overloads with BlockExtent/Origin3D on purpose.
+MTLSize ToMTLSize(const TexelExtent3D& extent);
+MTLOrigin ToMTLOrigin(const TexelOrigin3D& origin);
+
+// For different reasons a WebGPU copy may need to be split into multiple copies for Metal. This
+// structure and its associated function `ComputeTextureBufferCopySplit` have the necessary logic
+// for the splits.
+// They also convert from Dawn's types (with blocks origin/extent and blocks per row/image) to the
+// types that Metal expect (TexelExtent/Origin3D as that's what matches MTLSize/Origin's semantics)
 struct TextureBufferCopySplit {
     // Avoid allocations except in the worse case. Most cases require at most 3 regions.
     static constexpr uint32_t kNumCommonTextureBufferCopyRegions = 3;
@@ -79,8 +90,8 @@ struct TextureBufferCopySplit {
         CopyInfo(NSUInteger bufferOffset,
                  NSUInteger bytesPerRow,
                  NSUInteger bytesPerImage,
-                 Origin3D textureOrigin,
-                 Extent3D copyExtent)
+                 TexelOrigin3D textureOrigin,
+                 TexelExtent3D copyExtent)
             : bufferOffset(bufferOffset),
               bytesPerRow(bytesPerRow),
               bytesPerImage(bytesPerImage),
@@ -90,25 +101,24 @@ struct TextureBufferCopySplit {
         NSUInteger bufferOffset;
         NSUInteger bytesPerRow;
         NSUInteger bytesPerImage;
-        Origin3D textureOrigin;
-        Extent3D copyExtent;
+        TexelOrigin3D textureOrigin;
+        TexelExtent3D copyExtent;
     };
 
-    StackVector<CopyInfo, kNumCommonTextureBufferCopyRegions> copies;
+    absl::InlinedVector<CopyInfo, kNumCommonTextureBufferCopyRegions> copies;
 
-    auto begin() const { return copies->begin(); }
-    auto end() const { return copies->end(); }
-    void push_back(const CopyInfo& copyInfo) { copies->push_back(copyInfo); }
+    auto begin() const { return copies.begin(); }
+    auto end() const { return copies.end(); }
+    void push_back(const CopyInfo& copyInfo) { copies.push_back(copyInfo); }
 };
-
 TextureBufferCopySplit ComputeTextureBufferCopySplit(const Texture* texture,
                                                      uint32_t mipLevel,
-                                                     Origin3D origin,
-                                                     Extent3D copyExtent,
+                                                     BlockOrigin3D origin,
+                                                     BlockExtent3D copyExtent,
                                                      uint64_t bufferSize,
                                                      uint64_t bufferOffset,
-                                                     uint32_t bytesPerRow,
-                                                     uint32_t rowsPerImage,
+                                                     BlockCount blocksPerRow,
+                                                     BlockCount rowsPerImage,
                                                      Aspect aspect);
 
 MaybeError EnsureDestinationTextureInitialized(CommandRecordingContext* commandContext,
@@ -124,19 +134,21 @@ using EncodeInsideRenderPass =
     std::function<MaybeError(id<MTLRenderCommandEncoder>, BeginRenderPassCmd* renderPassCmd)>;
 MaybeError EncodeMetalRenderPass(Device* device,
                                  CommandRecordingContext* commandContext,
+                                 const RenderPassResourceUsage* resourceUsage,
                                  MTLRenderPassDescriptor* mtlRenderPass,
                                  uint32_t width,
                                  uint32_t height,
                                  EncodeInsideRenderPass encodeInside,
                                  BeginRenderPassCmd* renderPassCmd = nullptr);
 
-MTLStorageMode IOSurfaceStorageMode();
+void MetalComputePassMakeResourcesResident(DeviceBase* device,
+                                           id<MTLComputeCommandEncoder> encoder,
+                                           const SyncScopeResourceUsage& resourceUsage);
 
 id<MTLTexture> CreateTextureMtlForPlane(MTLTextureUsage mtlUsage,
                                         const Format& format,
                                         size_t plane,
                                         Device* device,
-                                        uint32_t sampleCount,
                                         IOSurfaceRef ioSurface);
 
 MaybeError EncodeEmptyMetalRenderPass(Device* device,
@@ -144,10 +156,10 @@ MaybeError EncodeEmptyMetalRenderPass(Device* device,
                                       MTLRenderPassDescriptor* mtlRenderPass,
                                       Extent3D size);
 
-bool SupportCounterSamplingAtCommandBoundary(id<MTLDevice> device)
-    API_AVAILABLE(macos(11.0), ios(14.0));
-bool SupportCounterSamplingAtStageBoundary(id<MTLDevice> device)
-    API_AVAILABLE(macos(11.0), ios(14.0));
+bool SupportCounterSamplingAtCommandBoundary(id<MTLDevice> device);
+bool SupportCounterSamplingAtStageBoundary(id<MTLDevice> device);
+
+bool SupportTextureComponentSwizzle(id<MTLDevice> device);
 
 }  // namespace dawn::native::metal
 

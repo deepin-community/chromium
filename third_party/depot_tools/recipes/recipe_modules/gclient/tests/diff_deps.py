@@ -3,9 +3,8 @@
 # found in the LICENSE file.
 
 from recipe_engine.post_process import (DropExpectation, StatusSuccess,
-                                        SummaryMarkdown)
+                                        SummaryMarkdownRE)
 
-PYTHON_VERSION_COMPATIBILITY = 'PY3'
 
 DEPS = [
   'recipe_engine/assertions',
@@ -19,7 +18,7 @@ DEPS = [
 ]
 
 def RunSteps(api):
-  src_cfg = api.gclient.make_config(CACHE_DIR=api.path['cache'].join('git'))
+  src_cfg = api.gclient.make_config(CACHE_DIR=api.path.cache_dir / 'git')
 
   soln = src_cfg.solutions.add()
   soln.name = 'src'
@@ -33,7 +32,7 @@ def RunSteps(api):
   })
 
   api.gclient.c = src_cfg
-  affected_files = api.gclient.diff_deps(api.path['cache'])
+  affected_files = api.gclient.diff_deps(api.path.cache_dir)
 
   api.assertions.assertEqual(
       affected_files,
@@ -69,9 +68,8 @@ def GenTests(api):
       ),
       api.expect_exception('DepsDiffException'),
       api.post_process(
-          SummaryMarkdown,
-          "Uncaught Exception: DepsDiffException('Unexpected result: autoroll "
-          "diff found 0 files changed')"),
+          SummaryMarkdownRE,
+          "Unexpected result: autoroll diff found 0 files changed"),
       api.post_process(DropExpectation),
       status="INFRA_FAILURE")
 
@@ -85,9 +83,8 @@ def GenTests(api):
       ),
       api.expect_exception('DepsDiffException'),
       api.post_process(
-          SummaryMarkdown,
-          "Uncaught Exception: DepsDiffException('Couldn't checkout previous "
-          "ref: fatal: bad object abcdef1234567890')"),
+          SummaryMarkdownRE,
+          "Couldn't checkout previous ref: fatal: bad object abcdef1234567890"),
       api.post_process(DropExpectation),
       status="INFRA_FAILURE")
 

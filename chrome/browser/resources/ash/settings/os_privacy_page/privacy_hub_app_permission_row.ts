@@ -9,19 +9,19 @@
  * controls page.
  */
 
-import {AppType, Permission, PermissionType, TriState} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
-import {PermissionTypeIndex} from 'chrome://resources/cr_components/app_management/permission_constants.js';
-import {createBoolPermissionValue, createTriStatePermissionValue, isBoolValue, isPermissionEnabled, isTriStateValue} from 'chrome://resources/cr_components/app_management/permission_util.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
+import type {Permission} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
+import {AppType, PermissionType, TriState} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
+import type {PermissionTypeIndex} from 'chrome://resources/cr_components/app_management/permission_constants.js';
+import {createBoolPermissionValue, createTriStatePermissionValue, isBoolValue, isPermissionEnabled, isTriStateValue} from 'chrome://resources/cr_components/app_management/permission_util.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {castExists} from '../assert_extras.js';
-import {App, AppPermissionsHandlerInterface} from '../mojom-webui/app_permission_handler.mojom-webui.js';
+import type {App, AppPermissionsHandlerInterface} from '../mojom-webui/app_permission_handler.mojom-webui.js';
 
 import {getAppPermissionProvider} from './mojo_interface_provider.js';
 import {getTemplate} from './privacy_hub_app_permission_row.html.js';
-import {NUMBER_OF_POSSIBLE_USER_ACTIONS, PrivacyHubSensorSubpageUserAction} from './privacy_hub_metrics_util.js';
 
 function getPermissionValueAsTriState(permission: Permission): TriState {
   if (isTriStateValue(permission.value)) {
@@ -159,12 +159,9 @@ export class SettingsPrivacyHubAppPermissionRow extends
       case TriState.kAsk:
         this.permissionText_ = this.i18n('privacyHubPermissionAskText');
         break;
+      default:
+        break;
     }
-  }
-
-  private getUserActionHistogramName(): string {
-    return `ChromeOS.PrivacyHub.${
-        this.permissionType.substring(1)}Subpage.UserAction`;
   }
 
   private togglePermissionState_(): void {
@@ -180,11 +177,6 @@ export class SettingsPrivacyHubAppPermissionRow extends
     }
 
     this.mojoInterfaceProvider_.setPermission(this.app.id, permission);
-
-    chrome.metricsPrivate.recordEnumerationValue(
-        this.getUserActionHistogramName(),
-        PrivacyHubSensorSubpageUserAction.APP_PERMISSION_CHANGED,
-        NUMBER_OF_POSSIBLE_USER_ACTIONS);
   }
 
   private onPermissionRowClick_(): void {
@@ -194,11 +186,6 @@ export class SettingsPrivacyHubAppPermissionRow extends
 
     if (this.shouldRedirectToAndroidSettings_) {
       this.mojoInterfaceProvider_.openNativeSettings(this.app.id);
-
-      chrome.metricsPrivate.recordEnumerationValue(
-          this.getUserActionHistogramName(),
-          PrivacyHubSensorSubpageUserAction.ANDROID_SETTINGS_LINK_CLICKED,
-          Object.keys(PrivacyHubSensorSubpageUserAction).length);
       return;
     }
 

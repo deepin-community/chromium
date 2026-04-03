@@ -31,6 +31,9 @@ NotificationPermissionsReviewServiceFactory::
           "NotificationPermissionsReviewService",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
               .Build()) {
   DependsOn(HostContentSettingsMapFactory::GetInstance());
   DependsOn(site_engagement::SiteEngagementServiceFactory::GetInstance());
@@ -52,5 +55,10 @@ std::unique_ptr<KeyedService> NotificationPermissionsReviewServiceFactory::
 
 bool NotificationPermissionsReviewServiceFactory::
     ServiceIsCreatedWithBrowserContext() const {
-  return base::FeatureList::IsEnabled(features::kSafetyHub);
+  return true;
+}
+
+bool NotificationPermissionsReviewServiceFactory::ServiceIsNULLWhileTesting()
+    const {
+  return true;
 }

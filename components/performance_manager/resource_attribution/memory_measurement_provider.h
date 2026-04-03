@@ -5,12 +5,14 @@
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_RESOURCE_ATTRIBUTION_MEMORY_MEASUREMENT_PROVIDER_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_RESOURCE_ATTRIBUTION_MEMORY_MEASUREMENT_PROVIDER_H_
 
-#include <map>
 #include <memory>
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/values.h"
+#include "components/performance_manager/public/graph/node_data_describer.h"
 #include "components/performance_manager/public/resource_attribution/memory_measurement_delegate.h"
 #include "components/performance_manager/public/resource_attribution/query_results.h"
 #include "components/performance_manager/public/resource_attribution/resource_contexts.h"
@@ -18,10 +20,11 @@
 
 namespace resource_attribution {
 
-class MemoryMeasurementProvider {
+class MemoryMeasurementProvider
+    : public performance_manager::NodeDataDescriberDefaultImpl {
  public:
   explicit MemoryMeasurementProvider(Graph* graph);
-  ~MemoryMeasurementProvider();
+  ~MemoryMeasurementProvider() override;
 
   MemoryMeasurementProvider(const MemoryMeasurementProvider& other) = delete;
   MemoryMeasurementProvider& operator=(const MemoryMeasurementProvider&) =
@@ -40,10 +43,21 @@ class MemoryMeasurementProvider {
   // with the results.
   void RequestMemorySummary(ResultCallback callback);
 
+  // NodeDataDescriber:
+  base::DictValue DescribeFrameNodeData(const FrameNode* node) const override;
+  base::DictValue DescribePageNodeData(const PageNode* node) const override;
+  base::DictValue DescribeProcessNodeData(
+      const ProcessNode* node) const override;
+  base::DictValue DescribeWorkerNodeData(const WorkerNode* node) const override;
+
  private:
-  static void OnMemorySummary(
+  void OnMemorySummary(
       ResultCallback callback,
       MemoryMeasurementDelegate::MemorySummaryMap process_summaries);
+
+  // Returns description of the most recent measurement of `context` for
+  // NodeDataDescriber, or an empty dict if there is none.
+  base::DictValue DescribeContextData(const ResourceContext& context) const;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
@@ -52,6 +66,13 @@ class MemoryMeasurementProvider {
       GUARDED_BY_CONTEXT(sequence_checker_);
 
   raw_ptr<Graph> graph_ GUARDED_BY_CONTEXT(sequence_checker_) = nullptr;
+
+  // The last measurement, cached for the node data describers.
+  // TODO(crbug.com/325328567): Use a central cache for all Resource Attribution
+  // measurements.
+  QueryResultMap cached_results_ GUARDED_BY_CONTEXT(sequence_checker_);
+
+  base::WeakPtrFactory<MemoryMeasurementProvider> weak_factory_{this};
 };
 
 }  // namespace resource_attribution

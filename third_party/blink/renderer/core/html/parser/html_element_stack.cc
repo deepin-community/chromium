@@ -29,7 +29,11 @@
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
+#include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/html/html_head_element.h"
+#include "third_party/blink/renderer/core/html/html_html_element.h"
+#include "third_party/blink/renderer/core/html/html_template_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/mathml_names.h"
 #include "third_party/blink/renderer/core/svg_names.h"
@@ -41,25 +45,16 @@ using HTMLTag = html_names::HTMLTag;
 
 namespace {
 
-// The following macro is used in switch statements for common types. It is
-// defined so that it looks like a normal case statement, e.g.:
-//   case FOO_CASES:
-
-// Disable formatting as it mangles the formatting.
-// clang-format off
-
-#define SCOPE_MARKER_CASES \
-  HTMLTag::kApplet: \
-  case HTMLTag::kCaption: \
-  case HTMLTag::kHTML: \
-  case HTMLTag::kMarquee: \
-  case HTMLTag::kObject: \
-  case HTMLTag::kTable: \
-  case HTMLTag::kTd: \
-  case HTMLTag::kTemplate: \
-  case HTMLTag::kTh
-
-// clang-format on
+inline bool IsScopeMarkerTag(const HTMLTag& tag) {
+  if (tag == HTMLTag::kCaption || tag == HTMLTag::kApplet ||
+      tag == HTMLTag::kHTML || tag == HTMLTag::kMarquee ||
+      tag == HTMLTag::kObject || tag == HTMLTag::kTable ||
+      tag == HTMLTag::kTd || tag == HTMLTag::kTemplate || tag == HTMLTag::kTh ||
+      tag == HTMLTag::kSelect) {
+    return true;
+  }
+  return false;
+}
 
 inline bool IsRootNode(HTMLStackItem* item) {
   return item->IsDocumentFragmentNode() ||
@@ -81,26 +76,18 @@ inline bool IsScopeMarkerNonHTML(HTMLStackItem* item) {
 
 inline bool IsScopeMarker(HTMLStackItem* item) {
   if (item->IsHTMLNamespace()) {
-    switch (item->GetHTMLTag()) {
-      case SCOPE_MARKER_CASES:
-        return true;
-      default:
-        return item->IsDocumentFragmentNode();
-    }
+    return IsScopeMarkerTag(item->GetHTMLTag()) ||
+           item->IsDocumentFragmentNode();
   }
   return IsScopeMarkerNonHTML(item);
 }
 
 inline bool IsListItemScopeMarker(HTMLStackItem* item) {
   if (item->IsHTMLNamespace()) {
-    switch (item->GetHTMLTag()) {
-      case SCOPE_MARKER_CASES:
-      case HTMLTag::kOl:
-      case HTMLTag::kUl:
-        return true;
-      default:
-        return item->IsDocumentFragmentNode();
-    }
+    return IsScopeMarkerTag(item->GetHTMLTag()) ||
+           item->IsDocumentFragmentNode() ||
+           item->GetHTMLTag() == HTMLTag::kOl ||
+           item->GetHTMLTag() == HTMLTag::kUl;
   }
   return IsScopeMarkerNonHTML(item);
 }
@@ -157,20 +144,11 @@ inline bool IsForeignContentScopeMarker(HTMLStackItem* item) {
 
 inline bool IsButtonScopeMarker(HTMLStackItem* item) {
   if (item->IsHTMLNamespace()) {
-    switch (item->GetHTMLTag()) {
-      case SCOPE_MARKER_CASES:
-      case HTMLTag::kButton:
-        return true;
-      default:
-        return item->IsDocumentFragmentNode();
-    }
+    return IsScopeMarkerTag(item->GetHTMLTag()) ||
+           item->IsDocumentFragmentNode() ||
+           item->GetHTMLTag() == HTMLTag::kButton;
   }
   return IsScopeMarkerNonHTML(item);
-}
-
-inline bool IsSelectScopeMarker(HTMLStackItem* item) {
-  return !item->HasTagName(html_names::kOptgroupTag) &&
-         !item->HasTagName(html_names::kOptionTag);
 }
 
 }  // namespace
@@ -451,7 +429,6 @@ bool InScopeCommon(HTMLStackItem* top, html_names::HTMLTag tag) {
       return false;
   }
   NOTREACHED();  // <html> is always on the stack and is a scope marker.
-  return false;
 }
 
 bool HTMLElementStack::HasNumberedHeaderElementInScope() const {
@@ -462,7 +439,6 @@ bool HTMLElementStack::HasNumberedHeaderElementInScope() const {
       return false;
   }
   NOTREACHED();  // <html> is always on the stack and is a scope marker.
-  return false;
 }
 
 bool HTMLElementStack::InScope(Element* target_element) const {
@@ -473,7 +449,6 @@ bool HTMLElementStack::InScope(Element* target_element) const {
       return false;
   }
   NOTREACHED();  // <html> is always on the stack and is a scope marker.
-  return false;
 }
 
 bool HTMLElementStack::InScope(html_names::HTMLTag tag) const {
@@ -490,10 +465,6 @@ bool HTMLElementStack::InTableScope(html_names::HTMLTag tag) const {
 
 bool HTMLElementStack::InButtonScope(html_names::HTMLTag tag) const {
   return InScopeCommon<IsButtonScopeMarker>(top_.Get(), tag);
-}
-
-bool HTMLElementStack::InSelectScope(html_names::HTMLTag tag) const {
-  return InScopeCommon<IsSelectScopeMarker>(top_.Get(), tag);
 }
 
 bool HTMLElementStack::HasTemplateInHTMLScope() const {
@@ -591,7 +562,6 @@ HTMLStackItem* HTMLElementStack::FurthestBlockForFormattingElement(
     }
   }
   NOTREACHED();
-  return nullptr;
 }
 
 void HTMLElementStack::Replace(HTMLStackItem* old_item,

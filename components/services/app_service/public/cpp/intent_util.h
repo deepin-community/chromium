@@ -33,8 +33,8 @@ extern const char kIntentActionPotentialFileHandler[];
 // will open the link, and that we should not prompt the user about it.
 extern const char kUseBrowserForLink[];
 
-// Activity name for GuestOS intent filters. TODO(crbug/1349974): Remove when
-// default file handling preferences for Files App are migrated.
+// Activity name for GuestOS intent filters. TODO(crbug.com/40233967): Remove
+// when default file handling preferences for Files App are migrated.
 extern const char kGuestOsActivityName[];
 
 struct SharedText {
@@ -110,7 +110,7 @@ bool IsGenericFileHandler(const apps::IntentPtr& intent,
 // https://android.googlesource.com/platform/frameworks/base.git/+/e93165456c3c28278f275566bd90bfbcf1a0e5f7/core/java/android/os/PatternMatcher.java#186
 bool MatchGlob(std::string_view value, std::string_view pattern);
 
-// TODO(crbug.com/1092784): Handle file path with extension with mime type.
+// TODO(crbug.com/40134747): Handle file path with extension with mime type.
 // Unlike Android mime type matching logic, if the intent mime type has *, it
 // can only match with *, not anything. The reason for this is the way we find
 // the common mime type for multiple files. It uses * to represent more than one
@@ -139,7 +139,7 @@ base::Value ConvertIntentToValue(const apps::IntentPtr& intent);
 
 // Converts base::Value to Intent. Returns nullptr for invalid base::Values.
 apps::IntentPtr ConvertValueToIntent(base::Value&& value);
-apps::IntentPtr ConvertDictToIntent(const base::Value::Dict& dict);
+apps::IntentPtr ConvertDictToIntent(const base::DictValue& dict);
 
 // Calculates the least general mime type that matches all of the given ones.
 // E.g., for ["image/jpeg", "image/png"] it will be "image/*". ["text/html",

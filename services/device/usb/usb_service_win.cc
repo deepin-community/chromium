@@ -4,20 +4,19 @@
 
 #include "services/device/usb/usb_service_win.h"
 
-// windows.h must be included first.
 #include <windows.h>
 
 #include <string_view>
 
 #define INITGUID
 
-#include <devpkey.h>
 #include <objbase.h>
+
+#include <devpkey.h>
 #include <setupapi.h>
 #include <stdint.h>
 #include <usbiodef.h>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/free_deleter.h"
@@ -701,7 +700,7 @@ void UsbServiceWin::CreateDeviceObject(
     uint32_t port_number,
     UsbDeviceWin::DriverType driver_type,
     const std::wstring& driver_name) {
-  if (base::Contains(devices_by_path_, device_path)) {
+  if (devices_by_path_.contains(device_path)) {
     USB_LOG(ERROR) << "Got duplicate add event for path: " << device_path;
     return;
   }
@@ -756,7 +755,7 @@ void UsbServiceWin::DeviceReady(scoped_refptr<UsbDeviceWin> device,
   if (it == devices_by_path_.end()) {
     success = false;
   } else if (success) {
-    DCHECK(!base::Contains(devices(), device->guid()));
+    DCHECK(!devices().contains(device->guid()));
     devices()[device->guid()] = device;
 
     USB_LOG(USER) << "USB device added: path=" << device->device_path()

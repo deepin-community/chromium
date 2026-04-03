@@ -19,7 +19,6 @@
 #include "platform/test/fake_udp_socket.h"
 
 using testing::_;
-using testing::Invoke;
 using testing::Return;
 using testing::StrictMock;
 
@@ -27,7 +26,7 @@ namespace openscreen::discovery {
 
 class MockMdnsSender : public MdnsSender {
  public:
-  explicit MockMdnsSender(UdpSocket* socket) : MdnsSender(socket) {}
+  explicit MockMdnsSender(UdpSocket& socket) : MdnsSender(socket) {}
   MOCK_METHOD1(SendMulticast, Error(const MdnsMessage& message));
   MOCK_METHOD2(SendMessage,
                Error(const MdnsMessage& message, const IPEndpoint& endpoint));
@@ -43,8 +42,8 @@ class MdnsProbeTests : public testing::Test {
  public:
   MdnsProbeTests()
       : clock_(Clock::now()),
-        task_runner_(&clock_),
-        sender_(&socket_),
+        task_runner_(clock_),
+        sender_(socket_),
         receiver_(config_) {
     EXPECT_EQ(task_runner_.delayed_task_count(), 0);
     probe_ = CreateProbe();
@@ -53,9 +52,9 @@ class MdnsProbeTests : public testing::Test {
 
  protected:
   std::unique_ptr<MdnsProbeImpl> CreateProbe() {
-    return std::make_unique<MdnsProbeImpl>(&sender_, &receiver_, &random_,
+    return std::make_unique<MdnsProbeImpl>(sender_, receiver_, random_,
                                            task_runner_, FakeClock::now,
-                                           &observer_, name_, address_v4_);
+                                           observer_, name_, address_v4_);
   }
 
   MdnsMessage CreateMessage(const DomainName& domain) {
@@ -90,25 +89,13 @@ class MdnsProbeTests : public testing::Test {
   const IPEndpoint endpoint_v4_{address_v4_, 80};
 };
 
-// TODO(issuetracker.google.com/issues/243611087): Occasionally flaky in bots.
-TEST_F(MdnsProbeTests, DISABLED_TestNoCancelationFlow) {
-  EXPECT_CALL(sender_, SendMulticast(_));
-  clock_.Advance(kDelayBetweenProbeQueries);
-  EXPECT_EQ(task_runner_.delayed_task_count(), 1);
-  testing::Mock::VerifyAndClearExpectations(&sender_);
-
-  EXPECT_CALL(sender_, SendMulticast(_));
-  clock_.Advance(kDelayBetweenProbeQueries);
-  EXPECT_EQ(task_runner_.delayed_task_count(), 1);
-  testing::Mock::VerifyAndClearExpectations(&sender_);
-
-  EXPECT_CALL(sender_, SendMulticast(_));
-  clock_.Advance(kDelayBetweenProbeQueries);
-  EXPECT_EQ(task_runner_.delayed_task_count(), 1);
-  testing::Mock::VerifyAndClearExpectations(&sender_);
-
+TEST_F(MdnsProbeTests, TestNoCancelationFlow) {
+  // 3 probes should be sent.
+  EXPECT_CALL(sender_, SendMulticast(_)).Times(3);
   EXPECT_CALL(observer_, OnProbeSuccess(probe_.get())).Times(1);
-  clock_.Advance(kDelayBetweenProbeQueries);
+
+  // Advance enough time for all probes to finish (initial delay + 3 intervals).
+  clock_.Advance(std::chrono::seconds(1));
   EXPECT_EQ(task_runner_.delayed_task_count(), 0);
 }
 
@@ -117,14 +104,16 @@ TEST_F(MdnsProbeTests, CancelationWhenMatchingMessageReceived) {
   OnMessageReceived(CreateMessage(name_));
 }
 
-// TODO(issuetracker.google.com/issues/243611087): Occasionally flaky in bots.
-TEST_F(MdnsProbeTests, DISABLED_TestNoCancelationOnUnrelatedMessages) {
+TEST_F(MdnsProbeTests, TestNoCancelationOnUnrelatedMessages) {
   OnMessageReceived(CreateMessage(name2_));
 
-  EXPECT_CALL(sender_, SendMulticast(_));
-  clock_.Advance(kDelayBetweenProbeQueries);
-  EXPECT_EQ(task_runner_.delayed_task_count(), 1);
-  testing::Mock::VerifyAndClearExpectations(&sender_);
+  // 3 probes should be sent.
+  EXPECT_CALL(sender_, SendMulticast(_)).Times(3);
+  EXPECT_CALL(observer_, OnProbeSuccess(probe_.get())).Times(1);
+
+  // Advance enough time for all probes to finish (initial delay + 3 intervals).
+  clock_.Advance(std::chrono::seconds(1));
+  EXPECT_EQ(task_runner_.delayed_task_count(), 0);
 }
 
 }  // namespace openscreen::discovery

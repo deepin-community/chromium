@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
 #include "cc/paint/element_id.h"
 #include "third_party/blink/public/common/input/web_gesture_device.h"
@@ -121,8 +122,6 @@ class BLINK_COMMON_EXPORT WebGestureEvent : public WebInputEvent {
     struct {
       float delta_x;
       float delta_y;
-      float velocity_x;
-      float velocity_y;
       InertialPhaseState inertial_phase;
       // Default initialized to kScrollByPrecisePixel.
       ui::ScrollGranularity delta_units;
@@ -207,11 +206,21 @@ class BLINK_COMMON_EXPORT WebGestureEvent : public WebInputEvent {
       int modifiers,
       base::TimeTicks time_stamp,
       mojom::GestureDevice device = mojom::GestureDevice::kUninitialized)
-      : WebInputEvent(type, modifiers, time_stamp), source_device_(device) {
-    memset(&data, 0, sizeof(data));
+      : WebInputEvent(type,
+                      Type::kGestureTypeFirst,
+                      Type::kGestureTypeLast,
+                      modifiers,
+                      time_stamp),
+        source_device_(device) {
+    UNSAFE_TODO(memset(&data, 0, sizeof(data)));
   }
 
-  WebGestureEvent() { memset(&data, 0, sizeof(data)); }
+  WebGestureEvent()
+      : WebInputEvent(Type::kUndefined,
+                      Type::kGestureTypeFirst,
+                      Type::kGestureTypeLast) {
+    UNSAFE_TODO(memset(&data, 0, sizeof(data)));
+  }
 
   const gfx::PointF& PositionInWidget() const { return position_in_widget_; }
   const gfx::PointF& PositionInScreen() const { return position_in_screen_; }
@@ -241,9 +250,6 @@ class BLINK_COMMON_EXPORT WebGestureEvent : public WebInputEvent {
   gfx::PointF PositionInRootFrame() const;
   InertialPhaseState InertialPhase() const;
   bool Synthetic() const;
-
-  float VelocityX() const;
-  float VelocityY() const;
 
   gfx::SizeF TapAreaInRootFrame() const;
   int TapCount() const;
@@ -279,7 +285,6 @@ class BLINK_COMMON_EXPORT WebGestureEvent : public WebInputEvent {
         return false;
       default:
         NOTREACHED();
-        return false;
     }
   }
 
@@ -317,7 +322,6 @@ class BLINK_COMMON_EXPORT WebGestureEvent : public WebInputEvent {
         return data.tap.needs_wheel_event;
       default:
         NOTREACHED();
-        return false;
     }
   }
 

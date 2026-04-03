@@ -6,20 +6,22 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase_vector.h"
+#include "base/debug/alias.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/hash/md5.h"
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -43,6 +45,7 @@
 #include "components/search_engines/search_terms_data.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
+#include "crypto/obsolete/md5.h"
 #include "url/gurl.h"
 
 namespace history {
@@ -61,8 +64,8 @@ void RunOrPostGetMostVisitedURLsCallback(
 // Checks if the titles stored in `old_list` and `new_list` have changes.
 bool DoTitlesDiffer(const MostVisitedURLList& old_list,
                     const MostVisitedURLList& new_list) {
-  return !base::ranges::equal(old_list, new_list, std::equal_to<>(),
-                              &MostVisitedURL::title, &MostVisitedURL::title);
+  return !std::ranges::equal(old_list, new_list, std::equal_to<>(),
+                             &MostVisitedURL::title, &MostVisitedURL::title);
 }
 
 // Transforms |number| in the range given by |max| and |min| to a number in the
@@ -97,7 +100,25 @@ constexpr base::TimeDelta kDelayForUpdates = base::Minutes(60);
 // TODO(sky): rename actual value to 'most_visited_blocked_urls.'
 const char kBlockedUrlsPrefsKey[] = "ntp.most_visited_blacklist";
 
+void LogMostVisitedScores(const MostVisitedURLList& sites) {
+  // This needs to be kept in sync with the variants list in histograms.xml.
+  constexpr int kMaxTileIndexCount = 10;
+  int size = std::min(static_cast<int>(sites.size()), kMaxTileIndexCount);
+
+  for (int tile_index = 0; tile_index < size; ++tile_index) {
+    const auto& site = sites[tile_index];
+    std::string name = "NewTabPage.MostVisited.DeciScore." +
+                       base::NumberToString(tile_index) + ".Local";
+    base::UmaHistogramCounts1M(name,
+                               base::saturated_cast<int>(site.score * 10));
+  }
+}
+
 }  // namespace
+
+std::string Md5AsHexForTopSites(std::string_view url_spec) {
+  return base::HexEncodeLower(crypto::obsolete::Md5::Hash(url_spec));
+}
 
 // Stores the most visited sites and the most repeated queries returned from
 // the history service. Used to synchronize parallel requests to the history
@@ -209,9 +230,14 @@ bool TopSitesImpl::IsBlocked(const GURL& url) {
 
 void TopSitesImpl::ClearBlockedUrls() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  pref_service_->SetDict(kBlockedUrlsPrefsKey, base::Value::Dict());
+  pref_service_->SetDict(kBlockedUrlsPrefsKey, base::DictValue());
   ResetThreadSafeCache();
   NotifyTopSitesChanged(TopSitesObserver::ChangeReason::BLOCKED_URLS);
+}
+
+int TopSitesImpl::NumBlockedSites() const {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  return pref_service_->GetDict(kBlockedUrlsPrefsKey).size();
 }
 
 bool TopSitesImpl::IsFull() {
@@ -268,7 +294,9 @@ void TopSitesImpl::StartQueryForMostVisited() {
       num_results_to_request_from_history(),
       base::BindOnce(&TopSitesImpl::OnGotMostVisitedURLsFromHistory,
                      base::Unretained(this), request),
-      &cancelable_task_tracker_);
+      &cancelable_task_tracker_,
+      /*recency_factor_name=*/std::nullopt,
+      /*recency_window_days=*/std::nullopt);
 
   // Request the most repeated queries if the corresponding feature is enabled
   // and the default search provider is available.
@@ -335,8 +363,8 @@ bool TopSitesImpl::AddPrepopulatedPages(MostVisitedURLList* urls) const {
   for (const auto& prepopulated_page : prepopulated_pages_) {
     if (urls->size() >= kTopSitesNumber)
       break;
-    if (!base::Contains(*urls, prepopulated_page.most_visited.url,
-                        &MostVisitedURL::url)) {
+    if (!std::ranges::contains(*urls, prepopulated_page.most_visited.url,
+                               &MostVisitedURL::url)) {
       urls->push_back(prepopulated_page.most_visited);
       added = true;
     }
@@ -359,9 +387,21 @@ MostVisitedURLList TopSitesImpl::ApplyBlockedUrls(
 
 // static
 std::string TopSitesImpl::GetURLHash(const GURL& url) {
+  DCHECK(url.is_valid())
+      << "TopSites error: Attempting to hash invalid URL. Spec: "
+      << url.possibly_invalid_spec();
+
+  if (!url.is_valid()) {
+    std::string invalid_spec = url.possibly_invalid_spec();
+    base::debug::Alias(&invalid_spec);
+    base::debug::DumpWithoutCrashing();
+
+    return std::string();
+  }
+
   // We don't use canonical URLs here to be able to block only one of the two
   // 'duplicate' sites, e.g. 'gmail.com' and 'mail.google.com'.
-  return base::MD5String(url.spec());
+  return Md5AsHexForTopSites(url.spec());
 }
 
 void TopSitesImpl::SetTopSites(MostVisitedURLList top_sites,
@@ -398,7 +438,7 @@ void TopSitesImpl::SetTopSites(MostVisitedURLList top_sites,
 int TopSitesImpl::num_results_to_request_from_history() const {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  return kTopSitesNumber + pref_service_->GetDict(kBlockedUrlsPrefsKey).size();
+  return kTopSitesNumber + NumBlockedSites();
 }
 
 void TopSitesImpl::MoveStateToLoaded() {
@@ -462,6 +502,8 @@ void TopSitesImpl::OnGotMostVisitedURLsFromHistory(
     MostVisitedURLList sites) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
+  LogMostVisitedScores(sites);
+
   request->sites = std::move(sites);
   if (request->request_is_complete()) {
     SetTopSitesFromHistory(request);
@@ -509,7 +551,7 @@ void TopSitesImpl::SetTopSitesFromHistory(
   // Generate the final list of the most visited sites arranged in descending
   // order of their scores. Exclude any site that is the search results page.
   MostVisitedURLList most_visited_sites = std::move(*request->sites);
-  base::EraseIf(most_visited_sites, [&](const auto& site) {
+  std::erase_if(most_visited_sites, [&](const auto& site) {
     return (template_url_service_ &&
             template_url_service_->IsSearchResultsPageFromDefaultSearchProvider(
                 site.url)) ||
@@ -566,8 +608,8 @@ void TopSitesImpl::SetTopSitesFromHistory(
   SetTopSites(std::move(merged_list), CALL_LOCATION_FROM_OTHER_PLACES);
 }
 
-void TopSitesImpl::OnURLsDeleted(HistoryService* history_service,
-                                 const DeletionInfo& deletion_info) {
+void TopSitesImpl::OnHistoryDeletions(HistoryService* history_service,
+                                      const DeletionInfo& deletion_info) {
   if (!loaded_)
     return;
 

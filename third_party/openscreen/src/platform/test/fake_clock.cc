@@ -29,7 +29,7 @@ FakeClock::FakeClock(Clock::time_point start_time)
 FakeClock::~FakeClock() {
   OSP_CHECK_EQ(std::this_thread::get_id(), control_thread_id_);
   OSP_CHECK(task_runners_.empty());
-  // Set |now_| to kInvalid to flag that this FakeClock has been destroyed.
+  // Set `now_` to kInvalid to flag that this FakeClock has been destroyed.
   now_.store(kInvalid, std::memory_order_release);
 }
 
@@ -60,7 +60,7 @@ void FakeClock::Advance(Clock::duration delta) {
       break;  // No tasks are scheduled for the remaining time range.
     }
 
-    OSP_DCHECK_GT(step_to, now());
+    OSP_CHECK_GT(step_to, now());
     now_.store(step_to, std::memory_order_release);
   }
 

@@ -14,25 +14,28 @@
  * limitations under the License.
  */
 
-#include <memory>
+#include <cinttypes>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
 
-#include "perfetto/ext/base/hash.h"
+#include "perfetto/ext/base/murmur_hash.h"
 #include "perfetto/ext/base/string_utils.h"
-
+#include "perfetto/protozero/field.h"
 #include "src/trace_processor/importers/common/args_tracker.h"
 #include "src/trace_processor/importers/common/flow_tracker.h"
 #include "src/trace_processor/importers/common/process_tracker.h"
 #include "src/trace_processor/importers/common/slice_tracker.h"
 #include "src/trace_processor/importers/common/track_tracker.h"
 #include "src/trace_processor/importers/ftrace/v4l2_tracker.h"
+#include "src/trace_processor/storage/trace_storage.h"
+#include "src/trace_processor/types/variadic.h"
 
 #include "protos/perfetto/trace/ftrace/ftrace_event.pbzero.h"
 #include "protos/perfetto/trace/ftrace/v4l2.pbzero.h"
 
-#include "v4l2_tracker.h"
-
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
 namespace {
 using protos::pbzero::FtraceEvent;
@@ -60,7 +63,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
                                  const ConstBytes& bytes) {
   switch (fld_id) {
     case FtraceEvent::kV4l2QbufFieldNumber: {
-      V4l2QbufFtraceEvent::Decoder pb_evt(bytes.data, bytes.size);
+      V4l2QbufFtraceEvent::Decoder pb_evt(bytes);
       BufferEvent evt;
       evt.device_minor = pb_evt.minor();
       evt.index = pb_evt.index();
@@ -82,7 +85,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       evt.timecode_userbits3 = pb_evt.timecode_userbits3();
 
       base::StackString<64> buf_name(
-          "VIDIOC_QBUF minor=%" PRIu32 " seq=%" PRIu32 " type=%" PRIu32
+          "VIDIOC_QBUF minor=%" PRId32 " seq=%" PRIu32 " type=%" PRIu32
           " index=%" PRIu32,
           evt.device_minor, evt.sequence, *evt.type, *evt.index);
 
@@ -91,8 +94,8 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       std::optional<SliceId> slice_id =
           AddSlice(buf_name_id, timestamp, pid, evt);
 
-      uint64_t hash = base::Hasher::Combine(evt.device_minor, evt.sequence,
-                                            *evt.type, *evt.index);
+      uint64_t hash = base::MurmurHashCombine(evt.device_minor, evt.sequence,
+                                              *evt.type, *evt.index);
 
       QueuedBuffer queued_buffer;
       queued_buffer.queue_slice_id = slice_id;
@@ -101,7 +104,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       break;
     }
     case FtraceEvent::kV4l2DqbufFieldNumber: {
-      V4l2DqbufFtraceEvent::Decoder pb_evt(bytes.data, bytes.size);
+      V4l2DqbufFtraceEvent::Decoder pb_evt(bytes);
       BufferEvent evt;
       evt.device_minor = pb_evt.minor();
       evt.index = pb_evt.index();
@@ -123,7 +126,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       evt.timecode_userbits3 = pb_evt.timecode_userbits3();
 
       base::StackString<64> buf_name(
-          "VIDIOC_DQBUF minor=%" PRIu32 " seq=%" PRIu32 " type=%" PRIu32
+          "VIDIOC_DQBUF minor=%" PRId32 " seq=%" PRIu32 " type=%" PRIu32
           " index=%" PRIu32,
           evt.device_minor, evt.sequence, *evt.type, *evt.index);
 
@@ -132,8 +135,8 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       std::optional<SliceId> slice_id =
           AddSlice(buf_name_id, timestamp, pid, evt);
 
-      uint64_t hash = base::Hasher::Combine(evt.device_minor, evt.sequence,
-                                            *evt.type, *evt.index);
+      uint64_t hash = base::MurmurHashCombine(evt.device_minor, evt.sequence,
+                                              *evt.type, *evt.index);
 
       const QueuedBuffer* queued_buffer = queued_buffers_.Find(hash);
       if (queued_buffer) {
@@ -147,7 +150,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       break;
     }
     case FtraceEvent::kVb2V4l2BufQueueFieldNumber: {
-      Vb2V4l2BufQueueFtraceEvent::Decoder pb_evt(bytes.data, bytes.size);
+      Vb2V4l2BufQueueFtraceEvent::Decoder pb_evt(bytes);
       BufferEvent evt;
       evt.device_minor = pb_evt.minor();
       evt.index = std::nullopt;
@@ -168,7 +171,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       evt.timecode_userbits2 = pb_evt.timecode_userbits2();
       evt.timecode_userbits3 = pb_evt.timecode_userbits3();
 
-      base::StackString<64> buf_name("vb2_v4l2_buf_queue minor=%" PRIu32
+      base::StackString<64> buf_name("vb2_v4l2_buf_queue minor=%" PRId32
                                      " seq=%" PRIu32 " type=0 index=0",
                                      evt.device_minor, evt.sequence);
 
@@ -178,7 +181,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       break;
     }
     case FtraceEvent::kVb2V4l2BufDoneFieldNumber: {
-      Vb2V4l2BufDoneFtraceEvent::Decoder pb_evt(bytes.data, bytes.size);
+      Vb2V4l2BufDoneFtraceEvent::Decoder pb_evt(bytes);
       BufferEvent evt;
       evt.device_minor = pb_evt.minor();
       evt.index = std::nullopt;
@@ -199,7 +202,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       evt.timecode_userbits2 = pb_evt.timecode_userbits2();
       evt.timecode_userbits3 = pb_evt.timecode_userbits3();
 
-      base::StackString<64> buf_name("vb2_v4l2_buf_done minor=%" PRIu32
+      base::StackString<64> buf_name("vb2_v4l2_buf_done minor=%" PRId32
                                      " seq=%" PRIu32 " type=0 index=0",
                                      evt.device_minor, evt.sequence);
 
@@ -209,7 +212,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       break;
     }
     case FtraceEvent::kVb2V4l2QbufFieldNumber: {
-      Vb2V4l2QbufFtraceEvent::Decoder pb_evt(bytes.data, bytes.size);
+      Vb2V4l2QbufFtraceEvent::Decoder pb_evt(bytes);
       BufferEvent evt;
       evt.device_minor = pb_evt.minor();
       evt.index = std::nullopt;
@@ -230,7 +233,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       evt.timecode_userbits2 = pb_evt.timecode_userbits2();
       evt.timecode_userbits3 = pb_evt.timecode_userbits3();
 
-      base::StackString<64> buf_name("vb2_v4l2_qbuf minor=%" PRIu32
+      base::StackString<64> buf_name("vb2_v4l2_qbuf minor=%" PRId32
                                      " seq=%" PRIu32 " type=0 index=0",
                                      evt.device_minor, evt.sequence);
 
@@ -240,7 +243,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       break;
     }
     case FtraceEvent::kVb2V4l2DqbufFieldNumber: {
-      Vb2V4l2DqbufFtraceEvent::Decoder pb_evt(bytes.data, bytes.size);
+      Vb2V4l2DqbufFtraceEvent::Decoder pb_evt(bytes);
       BufferEvent evt;
       evt.device_minor = pb_evt.minor();
       evt.index = std::nullopt;
@@ -261,7 +264,7 @@ void V4l2Tracker::ParseV4l2Event(uint64_t fld_id,
       evt.timecode_userbits2 = pb_evt.timecode_userbits2();
       evt.timecode_userbits3 = pb_evt.timecode_userbits3();
 
-      base::StackString<64> buf_name("vb2_v4l2_qbuf minor=%" PRIu32
+      base::StackString<64> buf_name("vb2_v4l2_qbuf minor=%" PRId32
                                      " seq=%" PRIu32 " type=0 index=0",
                                      evt.device_minor, evt.sequence);
 
@@ -549,5 +552,4 @@ StringId V4l2Tracker::InternTcFlags(uint32_t flags) {
       base::Join(present_flags, "|").c_str());
 }
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

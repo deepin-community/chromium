@@ -5,18 +5,21 @@
 #include "components/services/font/fontconfig_matching.h"
 
 #include <fontconfig/fontconfig.h>
+
+#include <array>
+#include <memory>
+
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_util.h"
-
-#include <memory>
 
 namespace font_service {
 
 std::optional<FontConfigLocalMatching::FontConfigMatchResult>
 FontConfigLocalMatching::FindFontByPostscriptNameOrFullFontName(
     const std::string& font_name) {
-  // TODO(crbug.com/876652): This FontConfig-backed implementation will
+  // TODO(crbug.com/40590471): This FontConfig-backed implementation will
   // match PostScript and full font name in any language, and we're okay
   // with that for now since it is what FireFox does.
   std::optional<FontConfigLocalMatching::FontConfigMatchResult>
@@ -44,7 +47,7 @@ FontConfigLocalMatching::FindFontBySpecifiedName(
   const FcChar8* fc_font_name =
       reinterpret_cast<const FcChar8*>(font_name.c_str());
 
-  // TODO(crbug.com/876652): We do not restrict the language that we match
+  // TODO(crbug.com/40590471): We do not restrict the language that we match
   // FC_POSTSCRIPT_NAME or FC_FULLNAME against. Pending spec clarification, see
   // bug.
   FcPatternAddString(pattern.get(), fontconfig_parameter_name, fc_font_name);
@@ -78,15 +81,10 @@ FontConfigLocalMatching::FindFontBySpecifiedName(
   // very good way of detecting this so we'll filter based on the
   // filename.
   bool is_sfnt = false;
-  static const char kSFNTExtensions[][5] = {".ttf", ".otc", ".TTF", ".ttc",
-                                            ".otf", ".OTF", ""};
-  for (size_t j = 0;; j++) {
-    if (kSFNTExtensions[j][0] == 0) {
-      // None of the extensions matched.
-      break;
-    }
-    if (base::EndsWith(filename, kSFNTExtensions[j],
-                       base::CompareCase::SENSITIVE)) {
+  static constexpr std::array<std::string_view, 6> kSFNTExtensions = {
+      ".ttf", ".otc", ".TTF", ".ttc", ".otf", ".OTF"};
+  for (const auto& extension : kSFNTExtensions) {
+    if (base::EndsWith(filename, extension, base::CompareCase::SENSITIVE)) {
       is_sfnt = true;
       break;
     }

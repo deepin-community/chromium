@@ -5,6 +5,7 @@
 #include "components/policy/core/common/policy_loader_win.h"
 
 #include <windows.h>
+
 #include <stddef.h>
 #include <stdint.h>
 #include <userenv.h>
@@ -19,11 +20,11 @@
 #include "base/json/json_writer.h"
 #include "base/path_service.h"
 #include "base/process/process_handle.h"
+#include "base/scoped_environment_variable_override.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/sys_byteorder.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "base/win/registry.h"
@@ -111,7 +112,7 @@ bool InstallValue(const base::Value& value,
     case base::Value::Type::LIST: {
       if (!value.is_list())
         return false;
-      const base::Value::List& list = value.GetList();
+      const base::ListValue& list = value.GetList();
       for (size_t i = 0; i < list.size(); ++i) {
         if (!InstallValue(list[i], hive, path + kPathSep + name,
                           base::NumberToWString(i + 1))) {
@@ -125,7 +126,6 @@ bool InstallValue(const base::Value& value,
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 // This class provides sandboxing and mocking for the parts of the Windows
@@ -185,10 +185,10 @@ class RegistryTestHarness : public PolicyProviderTestHarness {
   void InstallBooleanPolicy(const std::string& policy_name,
                             bool policy_value) override;
   void InstallStringListPolicy(const std::string& policy_name,
-                               const base::Value::List& policy_value) override;
+                               const base::ListValue& policy_value) override;
   void InstallDictionaryPolicy(const std::string& policy_name,
-                               const base::Value::Dict& policy_value) override;
-  void Install3rdPartyPolicy(const base::Value::Dict& policies) override;
+                               const base::DictValue& policy_value) override;
+  void Install3rdPartyPolicy(const base::DictValue& policies) override;
 
   // Creates a harness instance that will install policy in HKCU or HKLM,
   // respectively.
@@ -201,7 +201,7 @@ class RegistryTestHarness : public PolicyProviderTestHarness {
   ScopedGroupPolicyRegistrySandbox registry_sandbox_;
 };
 
-ScopedGroupPolicyRegistrySandbox::ScopedGroupPolicyRegistrySandbox() {}
+ScopedGroupPolicyRegistrySandbox::ScopedGroupPolicyRegistrySandbox() = default;
 
 ScopedGroupPolicyRegistrySandbox::~ScopedGroupPolicyRegistrySandbox() {
   RemoveOverrides();
@@ -266,7 +266,7 @@ RegistryTestHarness::RegistryTestHarness(HKEY hive, PolicyScope scope)
       hive_(hive) {
 }
 
-RegistryTestHarness::~RegistryTestHarness() {}
+RegistryTestHarness::~RegistryTestHarness() = default;
 
 void RegistryTestHarness::SetUp() {
   // SetUp is called at gtest SetUp time, and gtest documentation guarantees
@@ -316,7 +316,7 @@ void RegistryTestHarness::InstallBooleanPolicy(
 
 void RegistryTestHarness::InstallStringListPolicy(
     const std::string& policy_name,
-    const base::Value::List& policy_value) {
+    const base::ListValue& policy_value) {
   RegKey key(
       hive_,
       (std::wstring(kTestPolicyKey) + L"\\" + base::UTF8ToWide(policy_name))
@@ -336,9 +336,8 @@ void RegistryTestHarness::InstallStringListPolicy(
 
 void RegistryTestHarness::InstallDictionaryPolicy(
     const std::string& policy_name,
-    const base::Value::Dict& policy_value) {
-  std::string json;
-  base::JSONWriter::Write(policy_value, &json);
+    const base::DictValue& policy_value) {
+  std::string json = base::WriteJson(policy_value).value_or("");
   RegKey key(hive_, kTestPolicyKey, KEY_ALL_ACCESS);
   ASSERT_TRUE(key.Valid());
   key.WriteValue(base::UTF8ToWide(policy_name).c_str(),
@@ -346,7 +345,7 @@ void RegistryTestHarness::InstallDictionaryPolicy(
 }
 
 void RegistryTestHarness::Install3rdPartyPolicy(
-    const base::Value::Dict& policies) {
+    const base::DictValue& policies) {
   // The first level entries are domains, and the second level entries map
   // components to their policy.
   const std::wstring kPathPrefix =
@@ -397,7 +396,7 @@ class PolicyLoaderWinTest : public PolicyTestBase {
   static const wchar_t kTestPolicyKey[];
 
   PolicyLoaderWinTest() : scoped_domain_(false) {}
-  ~PolicyLoaderWinTest() override {}
+  ~PolicyLoaderWinTest() override = default;
 
   void SetUp() override {
     PolicyTestBase::SetUp();
@@ -475,7 +474,7 @@ TEST_F(PolicyLoaderWinTest, Merge3rdPartyPolicies) {
   const char kMachineMandatory[] = "machine-mandatory";
   const char kMachineRecommended[] = "machine-recommended";
 
-  base::Value::Dict policy;
+  base::DictValue policy;
   policy.Set("a", kMachineMandatory);
   EXPECT_TRUE(InstallValue(base::Value(policy.Clone()), HKEY_LOCAL_MACHINE,
                            kPathSuffix, kMandatory));
@@ -580,23 +579,21 @@ TEST_F(PolicyLoaderWinTest, LoadStringEncodedValues) {
         }
       })"));
 
-  base::Value::Dict policy;
+  base::DictValue policy;
   policy.Set("bool", true);
   policy.Set("int", -123);
   policy.Set("double", 456.78e9);
-  base::Value::List list;
+  base::ListValue list;
   list.Append(policy.Clone());
   list.Append(policy.Clone());
   policy.Set("list", list.Clone());
   // Encode |policy| before adding the "dict" entry.
-  std::string encoded_dict;
-  base::JSONWriter::Write(policy, &encoded_dict);
+  std::string encoded_dict = base::WriteJson(policy).value_or("");
   ASSERT_FALSE(encoded_dict.empty());
   policy.Set("dict", policy.Clone());
-  std::string encoded_list;
-  base::JSONWriter::Write(list, &encoded_list);
+  std::string encoded_list = base::WriteJson(list).value_or("");
   ASSERT_FALSE(encoded_list.empty());
-  base::Value::Dict encoded_policy;
+  base::DictValue encoded_policy;
   encoded_policy.Set("bool", "1");
   encoded_policy.Set("int", "-123");
   encoded_policy.Set("double", "456.78e9");
@@ -627,7 +624,7 @@ TEST_F(PolicyLoaderWinTest, LoadIntegerEncodedValues) {
       "  }"
       "}"));
 
-  base::Value::Dict encoded_policy;
+  base::DictValue encoded_policy;
   encoded_policy.Set("bool", 1);
   encoded_policy.Set("int", 123);
   encoded_policy.Set("double", 456);
@@ -637,7 +634,7 @@ TEST_F(PolicyLoaderWinTest, LoadIntegerEncodedValues) {
   EXPECT_TRUE(InstallValue(base::Value(encoded_policy.Clone()),
                            HKEY_CURRENT_USER, kPathSuffix, kMandatory));
 
-  base::Value::Dict policy;
+  base::DictValue policy;
   policy.Set("bool", true);
   policy.Set("int", 123);
   policy.Set("double", 456.0);
@@ -669,7 +666,7 @@ TEST_F(PolicyLoaderWinTest, DefaultPropertySchemaType) {
       "}"));
 
   // Write some test values.
-  base::Value::Dict policy;
+  base::DictValue policy;
   // These special values have a specific schema for them.
   policy.Set("special-int1", 123);
   policy.Set("special-int2", "-456");
@@ -677,7 +674,7 @@ TEST_F(PolicyLoaderWinTest, DefaultPropertySchemaType) {
   policy.Set("double1", 789.0);
   policy.Set("double2", "123.456e7");
   policy.Set("invalid", "omg");
-  base::Value::Dict all_policies;
+  base::DictValue all_policies;
   all_policies.Set("policy", policy.Clone());
 
   const std::wstring kPathSuffix =
@@ -685,12 +682,12 @@ TEST_F(PolicyLoaderWinTest, DefaultPropertySchemaType) {
   EXPECT_TRUE(InstallValue(base::Value(all_policies.Clone()), HKEY_CURRENT_USER,
                            kPathSuffix, kMandatory));
 
-  base::Value::Dict expected_policy;
+  base::DictValue expected_policy;
   expected_policy.Set("special-int1", 123);
   expected_policy.Set("special-int2", -456);
   expected_policy.Set("double1", 789.0);
   expected_policy.Set("double2", 123.456e7);
-  base::Value::Dict expected_policies;
+  base::DictValue expected_policies;
   expected_policies.Set("policy", expected_policy.Clone());
   PolicyBundle expected;
   expected.Get(ns).LoadFrom(expected_policies.Clone(), POLICY_LEVEL_MANDATORY,
@@ -717,12 +714,12 @@ TEST_F(PolicyLoaderWinTest, AlternativePropertySchemaType) {
   ASSERT_TRUE(RegisterSchema(ns_b, kTestSchema));
 
   PolicyBundle expected;
-  base::Value::Dict expected_a;
+  base::DictValue expected_a;
   expected_a.Set("policy 1", 3);
   expected_a.Set("policy 2", 3);
   expected.Get(ns_a).LoadFrom(expected_a.Clone(), POLICY_LEVEL_MANDATORY,
                               POLICY_SCOPE_MACHINE, POLICY_SOURCE_PLATFORM);
-  base::Value::Dict expected_b;
+  base::DictValue expected_b;
   expected_b.Set("policy 1", 2);
   expected.Get(ns_b).LoadFrom(expected_b.Clone(), POLICY_LEVEL_MANDATORY,
                               POLICY_SCOPE_MACHINE, POLICY_SOURCE_PLATFORM);
@@ -766,6 +763,49 @@ TEST_F(PolicyLoaderWinTest, LoadPrecedencePolicies) {
   expected.Get(chrome_ns).Set(
       key::kCloudUserPolicyOverridesCloudMachinePolicy, POLICY_LEVEL_MANDATORY,
       POLICY_SCOPE_MACHINE, POLICY_SOURCE_PLATFORM, base::Value(true), nullptr);
+
+  EXPECT_TRUE(Matches(expected));
+}
+
+TEST_F(PolicyLoaderWinTest, LoadExpandSzPolicies) {
+  constexpr char kTestEnvVar[] = "TEST_ENV_VAR";
+  constexpr char kTestEnvVarValue[] = "TEST_VALUE";
+  base::ScopedEnvironmentVariableOverride scoped_env(kTestEnvVar,
+                                                     kTestEnvVarValue);
+
+  RegKey hklm_key(HKEY_LOCAL_MACHINE, kTestPolicyKey, KEY_ALL_ACCESS);
+  ASSERT_TRUE(hklm_key.Valid());
+  auto reg_value = base::UTF8ToWide(std::string("%") + kTestEnvVar + "%");
+  hklm_key.WriteValue(
+      base::UTF8ToWide(test_keys::kKeyString).c_str(), reg_value.c_str(),
+      static_cast<DWORD>(sizeof(reg_value[0]) * (reg_value.size() + 1)),
+      REG_EXPAND_SZ);
+
+  PolicyBundle expected;
+  expected.Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
+      .Set(test_keys::kKeyString, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+           POLICY_SOURCE_PLATFORM, base::Value(kTestEnvVarValue), nullptr);
+
+  EXPECT_TRUE(Matches(expected));
+}
+
+// Make sure environment variables aren't expanded for REG_SZ.
+TEST_F(PolicyLoaderWinTest, LoadSzPoliciesWithEnvVar) {
+  constexpr char kTestEnvVar[] = "TEST_ENV_VAR";
+  constexpr char kTestEnvVarValue[] = "TEST_VALUE";
+  base::ScopedEnvironmentVariableOverride scoped_env(kTestEnvVar,
+                                                     kTestEnvVarValue);
+
+  RegKey hklm_key(HKEY_LOCAL_MACHINE, kTestPolicyKey, KEY_ALL_ACCESS);
+  ASSERT_TRUE(hklm_key.Valid());
+  auto reg_value = std::string("%") + kTestEnvVar + "%";
+  hklm_key.WriteValue(base::UTF8ToWide(test_keys::kKeyString).c_str(),
+                      base::UTF8ToWide(reg_value).c_str());
+
+  PolicyBundle expected;
+  expected.Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
+      .Set(test_keys::kKeyString, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+           POLICY_SOURCE_PLATFORM, base::Value(reg_value), nullptr);
 
   EXPECT_TRUE(Matches(expected));
 }

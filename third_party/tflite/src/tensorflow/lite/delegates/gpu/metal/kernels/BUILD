@@ -1,13 +1,14 @@
 load("@build_bazel_rules_apple//apple:ios.bzl", "ios_unit_test")
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+load(
+    "//tensorflow/core/platform:build_config_root.bzl",
+    "tf_gpu_tests_tags",
+)
 load(
     "//tensorflow/lite:special_rules.bzl",
     "tflite_ios_lab_runner",
     "tflite_ios_per_kernel_test",
     "tflite_portable_test_suite",
-)
-load(
-    "//tensorflow/core/platform:build_config_root.bzl",
-    "tf_gpu_tests_tags",
 )
 
 package(

@@ -12,7 +12,6 @@
 #include <memory>
 #include <optional>
 #include <set>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -21,12 +20,15 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "components/viz/common/quads/compositor_frame.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "components/viz/common/surfaces/surface_info.h"
+#include "components/viz/common/view_transition_element_resource_id.h"
+#include "components/viz/service/frame_sinks/frame_sink_observer.h"
 #include "components/viz/service/surfaces/frame_index_constants.h"
 #include "components/viz/service/surfaces/pending_copy_output_request.h"
 #include "components/viz/service/surfaces/surface_client.h"
@@ -55,7 +57,7 @@ class SurfaceManager;
 // in SurfaceInfo: device scale factor and size. A Surface can hold up few
 // CompositorFrames at a given time:
 //
-//   Uncommitted frames: It's frame that has been received, but hasn't been
+//   Uncommitted frames: Frame that has been received, but hasn't been
 //                       processed yet. There can be up to
 //                       `max_uncommitted_frames_` in this state. If
 //                       `max_uncommitted_frames_` is zero all frames are
@@ -86,13 +88,13 @@ class SurfaceManager;
 // dependencies. The activated CompositorFrame can specify fallback behavior in
 // the event of missing dependencies at display time.
 //
-// On WebView display compositor runs asynchronously in regards of BeginFrames
-// and CompositorFrame submissions, to avoid frame drops due to racyness
-// uncommitted queue mechanism is used. When clients submits frame it goes to
-// the queue and when the display compositor draws frames are committed from
+// On WebView display compositor runs asynchronously in regards of BeginFrame
+// and CompositorFrame submissions. To avoid frame drops due to racyness,
+// uncommitted queue mechanism is used. When client submits frame it goes to
+// the queue, and when the display compositor draws, frames are committed from
 // the queue to the pending or active frame.
 
-class VIZ_SERVICE_EXPORT Surface final {
+class VIZ_SERVICE_EXPORT Surface final : public FrameSinkObserver {
  public:
   class PresentationHelper {
    public:
@@ -113,23 +115,43 @@ class VIZ_SERVICE_EXPORT Surface final {
     const uint32_t frame_token_;
   };
 
-  using PresentedCallback =
-      base::OnceCallback<void(const gfx::PresentationFeedback&)>;
   enum QueueFrameResult { REJECTED, ACCEPTED_ACTIVE, ACCEPTED_PENDING };
+
+  enum class PendingFrameDataChangeReason {
+    kNotSet,
+    kCommitFrameReset,
+    kCommitFrameDependencies,
+    kActivatePendingFrameReset,
+    kSurfaceDestruction,
+  };
+
+  enum class FrameActivationReason {
+    kNotSet,
+    kDependencyResolved,
+    kDeadline,
+    kCommitWithNoDependencies,
+  };
 
   using CommitPredicate =
       base::FunctionRef<bool(const SurfaceId&, const BeginFrameId&)>;
 
+  // `pending_copy_surface_id`, when valid, becomes an
+  // `active_referenced_surfaces_` of `this`.
   Surface(const SurfaceInfo& surface_info,
           SurfaceManager* surface_manager,
           SurfaceAllocationGroup* allocation_group,
           base::WeakPtr<SurfaceClient> surface_client,
+          const SurfaceId& pending_copy_surface_id,
           size_t max_uncommitted_frames);
 
   Surface(const Surface&) = delete;
   Surface& operator=(const Surface&) = delete;
 
-  ~Surface();
+  ~Surface() override;
+
+  // FrameSinkObserver implementation
+  void OnViewTransitionSaved(
+      const blink::ViewTransitionToken& transition_token) override;
 
   void SetDependencyDeadline(
       std::unique_ptr<SurfaceDependencyDeadline> deadline);
@@ -149,17 +171,13 @@ class VIZ_SERVICE_EXPORT Surface final {
 
   bool has_deadline() const { return deadline_ && deadline_->has_deadline(); }
 
-  std::optional<base::TimeTicks> deadline_for_testing() const {
-    return deadline_->deadline_for_testing();
-  }
-
   void SetPreviousFrameSurface(Surface* surface);
 
   // Returns false if |frame| is invalid. |frame_rejected_callback| will be
   // called once if the frame will not be displayed.
   QueueFrameResult QueueFrame(
       CompositorFrame frame,
-      uint64_t frame_index,
+      uint32_t frame_index,
       base::ScopedClosureRunner frame_rejected_callback);
 
   // Commits frame(s) in this Surface and its dependencies. For each affected
@@ -167,10 +185,6 @@ class VIZ_SERVICE_EXPORT Surface final {
   // surface from the oldest to the newest and will abort at first case of
   // returning false.
   void CommitFramesRecursively(const CommitPredicate& predicate);
-
-  // Notifies the Surface that a blocking SurfaceId now has an active
-  // frame.
-  void NotifySurfaceIdAvailable(const SurfaceId& surface_id);
 
   // Called if a deadline has been hit and this surface is not yet active but
   // it's marked as respecting deadlines.
@@ -180,7 +194,7 @@ class VIZ_SERVICE_EXPORT Surface final {
   // |PendingCopyOutputRequest::subtree_capture_id| if such a render pass
   // exists, otherwise the request will be ignored.
   void RequestCopyOfOutput(
-      PendingCopyOutputRequest pending_copy_output_request);
+      std::unique_ptr<PendingCopyOutputRequest> pending_copy_output_request);
 
   using CopyRequestsMap =
       std::multimap<CompositorRenderPassId, std::unique_ptr<CopyOutputRequest>>;
@@ -200,27 +214,23 @@ class VIZ_SERVICE_EXPORT Surface final {
   // Returns the most recent frame or frame metadata that is eligible to be
   // rendered. You must check whether HasActiveFrame() returns true before
   // calling these methods.
-  // Note that we prefer to call GetActiveFrameMetadata if the only thing that
-  // is required from the frame is the metadata.
+  // Note that we prefer to call GetActiveFrameMetadata or
+  // GetFrameIntervalInputs if the only thing that is required from the frame.
   const CompositorFrame& GetActiveFrame() const;
   const CompositorFrameMetadata& GetActiveFrameMetadata() const;
+  const FrameIntervalInputs& GetFrameIntervalInputs() const;
 
   // ViewTransition needs to interpolate a new CompositorFrame from the active
   // one of this Surface. The interpolated new frame replaces the currently
   // active one via this API.
   void SetActiveFrameForViewTransition(CompositorFrame frame);
 
-  // Returns true if the active frame has damage due to a surface animation.
-  // This means that the damage should be respected even if the active frame
-  // index has not changed.
-  bool HasSurfaceAnimationDamage() const;
-
   // Returns the currently pending frame. You must check where HasPendingFrame()
   // returns true before calling this method.
   const CompositorFrame& GetPendingFrame();
 
   // Returns a number that increments by 1 every time a new frame is enqueued.
-  uint64_t GetActiveFrameIndex() const {
+  uint32_t GetActiveFrameIndex() const {
     return active_frame_data_ ? active_frame_data_->frame_index
                               : kInvalidFrameIndex;
   }
@@ -243,7 +253,7 @@ class VIZ_SERVICE_EXPORT Surface final {
   // capture. We don't want to constantly switch between overlay and non-overlay
   // during video playback.
   bool IsVideoCaptureOnFromClient();
-  base::flat_set<base::PlatformThreadId> GetThreadIds();
+  std::vector<Thread> GetThreads();
 
   const base::flat_set<SurfaceId>& active_referenced_surfaces() const {
     return active_referenced_surfaces_;
@@ -262,10 +272,6 @@ class VIZ_SERVICE_EXPORT Surface final {
   }
   bool HasUnackedActiveFrame() const {
     return HasActiveFrame() && !active_frame_data_->frame_acked;
-  }
-
-  bool seen_first_surface_embedding() const {
-    return seen_first_surface_embedding_;
   }
 
   SurfaceAllocationGroup* allocation_group() const { return allocation_group_; }
@@ -300,8 +306,6 @@ class VIZ_SERVICE_EXPORT Surface final {
 
   void ActivateIfDeadlinePassed();
 
-  std::unique_ptr<gfx::DelegatedInkMetadata> TakeDelegatedInkMetadata();
-
   base::WeakPtr<Surface> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
   // Always placed the given |copy_request| on the root render pass.
@@ -316,30 +320,34 @@ class VIZ_SERVICE_EXPORT Surface final {
       CompositorRenderPassId render_pass_id);
 
   // Returns frame id of the oldest uncommitted frame if any,
-  std::optional<uint64_t> GetFirstUncommitedFrameIndex();
+  std::optional<uint32_t> GetFirstUncommitedFrameIndex();
 
   // Returns frame index of the oldest uncommitted frame that is newer than
   // provided `frame_index`.
-  std::optional<uint64_t> GetUncommitedFrameIndexNewerThan(
-      uint64_t frame_index);
+  std::optional<uint32_t> GetUncommitedFrameIndexNewerThan(
+      uint32_t frame_index);
+
+  // Called when `pending_copy_surface_id_` no longer needs to be referenced
+  // from `this`. `activation_dependencies_` will also recomputed.
+  void ResetPendingCopySurfaceId();
+
+  const SurfaceId& pending_copy_surface_id_for_testing() const {
+    return pending_copy_surface_id_;
+  }
+
+  void ClearNonRootCopyRequests();
 
  private:
   struct FrameData {
-    FrameData(CompositorFrame&& frame, uint64_t frame_index);
+    FrameData(CompositorFrame&& frame, uint32_t frame_index);
     FrameData(FrameData&& other);
     ~FrameData();
     FrameData& operator=(FrameData&& other);
 
-    // Delegated ink metadata should only be used for a single frame, so it
-    // should be taken from the FrameData to use.
-    std::unique_ptr<gfx::DelegatedInkMetadata> TakeDelegatedInkMetadata() {
-      return std::move(frame.metadata.delegated_ink_metadata);
-    }
-
     void SendAckIfNeeded(SurfaceClient* client);
 
     CompositorFrame frame;
-    uint64_t frame_index;
+    uint32_t frame_index;
     // Whether the frame has been displayed or not.
     bool frame_drawn = false;
     bool frame_acked = false;
@@ -384,7 +392,7 @@ class VIZ_SERVICE_EXPORT Surface final {
   void UpdateActivationDependencies(const CompositorFrame& current_frame);
 
   void UnrefFrameResourcesAndRunCallbacks(std::optional<FrameData> frame_data);
-  void ClearCopyRequests();
+  void ClearCopyRequests(bool keep_root = false);
 
   void TakePendingLatencyInfo(std::vector<ui::LatencyInfo>* latency_info);
   static void TakeLatencyInfoFromFrame(
@@ -410,32 +418,50 @@ class VIZ_SERVICE_EXPORT Surface final {
   // avoid recompution.
   base::flat_set<SurfaceId> active_referenced_surfaces_;
 
-  // Keeps track of the referenced surface for each SurfaceRange. i.e the i-th
-  // element is the referenced SurfaceId in the i-th SurfaceRange. If a
-  // SurfaceRange doesn't contain any active surfaces then the corresponding
-  // entry in this vector is an unvalid SurfaceId.
-  std::vector<SurfaceId> last_surface_id_for_range_;
-
   // Allocation groups that this surface references by its active frame.
-  base::flat_set<SurfaceAllocationGroup*> referenced_allocation_groups_;
+  base::flat_set<raw_ptr<SurfaceAllocationGroup, CtnExperimental>>
+      referenced_allocation_groups_;
 
   // The set of the SurfaceIds that are blocking the pending frame from being
   // activated.
   base::flat_set<SurfaceId> activation_dependencies_;
 
+  // The set of ViewTransitionTokens that are blocking the pending frame from
+  // being activated.
+  base::flat_set<blink::ViewTransitionToken> view_transition_dependencies_;
+
+  // Observes FrameSinkManager over SurfaceManager in order to manage view
+  // transition dependencies.
+  base::ScopedObservation<SurfaceManager, FrameSinkObserver>
+      frame_sink_manager_observation_{this};
+
   // The SurfaceAllocationGroups corresponding to the surfaces in
   // |activation_dependencies_|. When an activation dependency is
   // resolved, the corresponding SurfaceAllocationGroup will call back into this
   // surface to let us know.
-  base::flat_set<SurfaceAllocationGroup*> blocking_allocation_groups_;
+  base::flat_set<raw_ptr<SurfaceAllocationGroup, CtnExperimental>>
+      blocking_allocation_groups_;
 
   bool is_fallback_ = false;
 
   bool is_latency_info_taken_ = false;
 
+  // Indicates there is a pending `CopyOutputRequest` against
+  // `pending_copy_surface_id_`. When valid, it keeps `pending_copy_surface_id_`
+  // reachable from `this`, and keeps `pending_copy_surface_id_` alive during
+  // the aggregation.
+  SurfaceId pending_copy_surface_id_;
+
   const raw_ptr<SurfaceAllocationGroup> allocation_group_;
 
   const size_t max_uncommitted_frames_;
+
+  uint32_t last_sent_frame_token_ = 0;
+
+  PendingFrameDataChangeReason pending_frame_data_change_reason_ =
+      PendingFrameDataChangeReason::kNotSet;
+  FrameActivationReason frame_activation_reason_ =
+      FrameActivationReason::kNotSet;
 
   base::WeakPtrFactory<Surface> weak_factory_{this};
 };

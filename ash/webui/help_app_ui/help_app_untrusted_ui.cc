@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ash/webui/help_app_ui/help_app_untrusted_ui.h"
 
 #include "ash/webui/grit/ash_help_app_resources.h"
@@ -15,7 +16,6 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
-#include "ui/webui/color_change_listener/color_change_handler.h"
 
 namespace ash {
 
@@ -35,8 +35,7 @@ void CreateAndAddHelpAppUntrustedDataSource(
   source->DisableTrustedTypesCSP();
 
   // Add all resources from chromeos_help_app_bundle.pak.
-  source->AddResourcePaths(base::make_span(
-      kChromeosHelpAppBundleResources, kChromeosHelpAppBundleResourcesSize));
+  source->AddResourcePaths(kChromeosHelpAppBundleResources);
 
   MaybeConfigureTestableDataSource(source, "help_app/untrusted");
 
@@ -68,12 +67,6 @@ HelpAppUntrustedUI::HelpAppUntrustedUI(
 }
 
 HelpAppUntrustedUI::~HelpAppUntrustedUI() = default;
-
-void HelpAppUntrustedUI::BindInterface(
-    mojo::PendingReceiver<color_change_listener::mojom::PageHandler> receiver) {
-  color_provider_handler_ = std::make_unique<ui::ColorChangeHandler>(
-      web_ui()->GetWebContents(), std::move(receiver));
-}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(HelpAppUntrustedUI)
 }  // namespace ash

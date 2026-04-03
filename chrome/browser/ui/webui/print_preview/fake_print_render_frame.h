@@ -32,11 +32,11 @@ class FakePrintRenderFrame : public mojom::PrintRenderFrame {
   void SetPrintPreviewUI(
       mojo::PendingAssociatedRemote<mojom::PrintPreviewUI> preview) override;
   void InitiatePrintPreview(
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       mojo::PendingAssociatedRemote<mojom::PrintRenderer> print_renderer,
 #endif
       bool has_selection) override;
-  void PrintPreview(base::Value::Dict settings) override;
+  void PrintPreview(base::DictValue settings) override;
   void OnPrintPreviewDialogClosed() override;
   void PrintFrameContent(mojom::PrintFrameContentParamsPtr params,
                          PrintFrameContentCallback callback) override;

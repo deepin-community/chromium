@@ -75,9 +75,9 @@ void DisconnectWindowMac::Start(
   DCHECK(window_controller_ == nil);
 
   // Create the window.
-  base::OnceClosure disconnect_callback =
-      base::BindOnce(&ClientSessionControl::DisconnectSession,
-                     client_session_control, protocol::OK);
+  base::OnceClosure disconnect_callback = base::BindOnce(
+      &ClientSessionControl::DisconnectSession, client_session_control,
+      ErrorCode::OK, "Disconnect button was clicked.", FROM_HERE);
   std::string client_jid = client_session_control->client_jid();
   std::string username = client_jid.substr(0, client_jid.find('/'));
 
@@ -152,7 +152,7 @@ std::unique_ptr<HostWindow> HostWindow::CreateDisconnectWindow() {
   self.disconnectButton =
       [[NSButton alloc] initWithFrame:NSMakeRect(271, 9, 182, 22)];
   self.disconnectButton.buttonType = NSButtonTypeMomentaryPushIn;
-  self.disconnectButton.bezelStyle = NSBezelStyleRegularSquare;
+  self.disconnectButton.bezelStyle = NSBezelStyleFlexiblePush;
   self.disconnectButton.font = [NSFont systemFontOfSize:11];
   self.disconnectButton.action = @selector(stopSharing:);
   self.disconnectButton.target = self;

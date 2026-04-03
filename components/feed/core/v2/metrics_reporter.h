@@ -8,6 +8,7 @@
 #include <climits>
 #include <map>
 #include <optional>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
@@ -45,8 +46,7 @@ class MetricsReporter {
     // subscribed.
     virtual void SubscribedWebFeedCount(
         base::OnceCallback<void(int)> callback) = 0;
-    virtual void RegisterFeedUserSettingsFieldTrial(
-        base::StringPiece group) = 0;
+    virtual void RegisterFeedUserSettingsFieldTrial(std::string_view group) = 0;
     virtual ContentOrder GetContentOrder(
         const StreamType& stream_type) const = 0;
   };
@@ -78,6 +78,7 @@ class MetricsReporter {
   void PageLoaded();
   void OtherUserAction(const StreamType& stream_type,
                        FeedUserActionType action_type);
+  void OtherUserAction(FeedUserActionType action_type);
   // Report a period of time during which at least one content slice was visible
   // enough or covering enough of the viewport.
   void ReportStableContentSliceVisibilityTimeForGoodVisits(
@@ -222,7 +223,6 @@ class MetricsReporter {
   raw_ptr<Delegate, DanglingUntriaged> delegate_ = nullptr;
 
   StreamStats for_you_stats_;
-  StreamStats supervised_feed_stats_;
   StreamStats web_feed_stats_;
   StreamStats combined_stats_;
 

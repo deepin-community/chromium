@@ -127,11 +127,11 @@ class NetworkInfoBubbleTest : public AshTestBase {
   }
 
   void AddDefaultNetworkWithIPAddresses() {
-    base::Value::Dict ipv4;
+    base::DictValue ipv4;
     ipv4.Set(shill::kAddressProperty, kIpv4Address);
     ipv4.Set(shill::kMethodProperty, shill::kTypeIPv4);
 
-    base::Value::Dict ipv6;
+    base::DictValue ipv6;
     ipv6.Set(shill::kAddressProperty, kIpv6Address);
     ipv6.Set(shill::kMethodProperty, shill::kTypeIPv6);
 
@@ -140,7 +140,7 @@ class NetworkInfoBubbleTest : public AshTestBase {
     network_config_helper_.network_state_helper().ip_config_test()->AddIPConfig(
         kIPv6ConfigPath, std::move(ipv6));
 
-    base::Value::List ip_configs;
+    base::ListValue ip_configs;
     ip_configs.Append(kIPv4ConfigPath);
     ip_configs.Append(kIPv6ConfigPath);
 
@@ -169,8 +169,9 @@ class NetworkInfoBubbleTest : public AshTestBase {
   void SimulateMouseExit() {
     ASSERT_TRUE(network_info_bubble_);
     static_cast<views::View*>(network_info_bubble_)
-        ->OnMouseExited(ui::MouseEvent(ui::ET_MOUSE_EXITED, gfx::PointF(),
-                                       gfx::PointF(), base::TimeTicks(), 0, 0));
+        ->OnMouseExited(ui::MouseEvent(ui::EventType::kMouseExited,
+                                       gfx::PointF(), gfx::PointF(),
+                                       base::TimeTicks(), 0, 0));
     network_info_bubble_ = nullptr;
     base::RunLoop().RunUntilIdle();
   }

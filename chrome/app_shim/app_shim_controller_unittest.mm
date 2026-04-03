@@ -11,6 +11,7 @@
 #include "base/metrics/field_trial_params.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
@@ -19,6 +20,7 @@
 #include "base/threading/thread.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/mac/app_mode_common.h"
+#include "components/variations/variations_crash_keys.h"
 #include "components/variations/variations_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -162,6 +164,7 @@ TEST_F(AppShimControllerTest, FinalizeFeatureState) {
   command_line.AppendSwitchASCII(switches::kEnableFeatures,
                                  kFeatureOffByDefaultName);
   AppShimController::PreInitFeatureState(command_line);
+  variations::InitCrashKeys();
 
   base::FeatureList::GetInstance()->AddEarlyAllowedFeatureForTesting(
       kFeatureOffByDefaultName);
@@ -221,6 +224,7 @@ TEST_F(AppShimControllerTest, FinalizeFeatureStateWithFieldTrials) {
       base::StringPrintf("%s.%s:%s/42", kTrialName, kTrialGroup1Name,
                          kParam2Name));
   AppShimController::PreInitFeatureState(command_line);
+  variations::InitCrashKeys();
 
   base::FeatureList::GetInstance()->AddEarlyAllowedFeatureForTesting(
       kFeatureOffByDefaultName);

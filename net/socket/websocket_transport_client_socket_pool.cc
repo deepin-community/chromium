@@ -11,6 +11,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
@@ -23,21 +24,23 @@
 #include "net/socket/client_socket_handle.h"
 #include "net/socket/connect_job.h"
 #include "net/socket/connect_job_factory.h"
+#include "net/socket/stream_socket_handle.h"
 #include "net/socket/websocket_endpoint_lock_manager.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
 namespace net {
 
 WebSocketTransportClientSocketPool::WebSocketTransportClientSocketPool(
-    int max_sockets,
-    int max_sockets_per_group,
+    size_t socket_soft_cap,
+    SocketPoolAdditionalCapacity additional_capacity,
     const ProxyChain& proxy_chain,
     const CommonConnectJobParams* common_connect_job_params)
-    : ClientSocketPool(/*is_for_websockets=*/true,
+    : ClientSocketPool(socket_soft_cap,
+                       additional_capacity,
+                       proxy_chain,
+                       /*is_for_websockets=*/true,
                        common_connect_job_params,
-                       std::make_unique<ConnectJobFactory>()),
-      proxy_chain_(proxy_chain),
-      max_sockets_(max_sockets) {
+                       std::make_unique<ConnectJobFactory>()) {
   DCHECK(common_connect_job_params->websocket_endpoint_lock_manager);
 }
 
@@ -45,14 +48,14 @@ WebSocketTransportClientSocketPool::~WebSocketTransportClientSocketPool() {
   // Clean up any pending connect jobs.
   FlushWithError(ERR_ABORTED, "");
   CHECK(pending_connects_.empty());
-  CHECK_EQ(0, handed_out_socket_count_);
+  CHECK_EQ(0u, handed_out_socket_count_);
   CHECK(stalled_request_queue_.empty());
   CHECK(stalled_request_map_.empty());
 }
 
 // static
 void WebSocketTransportClientSocketPool::UnlockEndpoint(
-    ClientSocketHandle* handle,
+    StreamSocketHandle* handle,
     WebSocketEndpointLockManager* websocket_endpoint_lock_manager) {
   DCHECK(handle->is_initialized());
   DCHECK(handle->socket());
@@ -79,8 +82,9 @@ int WebSocketTransportClientSocketPool::RequestSocket(
 
   NetLogTcpClientSocketPoolRequestedSocket(request_net_log, group_id);
   request_net_log.BeginEvent(NetLogEventType::SOCKET_POOL);
+  UpdateStateBeforeAllocation();
 
-  if (ReachedMaxSocketsLimit() &&
+  if (State() == SocketPoolState::kCapped &&
       respect_limits == ClientSocketPool::RespectLimits::ENABLED) {
     request_net_log.AddEvent(NetLogEventType::SOCKET_POOL_STALLED_MAX_SOCKETS);
     stalled_request_queue_.emplace_back(group_id, params, proxy_annotation_tag,
@@ -104,8 +108,8 @@ int WebSocketTransportClientSocketPool::RequestSocket(
                                            request_net_log);
 
   std::unique_ptr<ConnectJob> connect_job =
-      CreateConnectJob(group_id, params, proxy_chain_, proxy_annotation_tag,
-                       priority, SocketTag(), connect_job_delegate.get());
+      CreateConnectJob(group_id, params, proxy_annotation_tag, priority,
+                       SocketTag(), connect_job_delegate.get());
 
   int result = connect_job_delegate->Connect(std::move(connect_job));
 
@@ -130,7 +134,7 @@ int WebSocketTransportClientSocketPool::RequestSockets(
     const GroupId& group_id,
     scoped_refptr<SocketParams> params,
     const std::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
-    int num_sockets,
+    size_t num_sockets,
     CompletionOnceCallback callback,
     const NetLogWithSource& net_log) {
   NOTIMPLEMENTED();
@@ -161,8 +165,9 @@ void WebSocketTransportClientSocketPool::CancelRequest(
     ReleaseSocket(handle->group_id(), std::move(socket),
                   handle->group_generation());
   if (DeleteJob(handle)) {
-    CHECK(!base::Contains(pending_callbacks_,
-                          reinterpret_cast<ClientSocketHandleID>(handle)));
+    UpdateStateAfterRelease();
+    CHECK(!pending_callbacks_.contains(
+        reinterpret_cast<ClientSocketHandleID>(handle)));
   } else {
     pending_callbacks_.erase(reinterpret_cast<ClientSocketHandleID>(handle));
   }
@@ -174,8 +179,9 @@ void WebSocketTransportClientSocketPool::ReleaseSocket(
     const GroupId& group_id,
     std::unique_ptr<StreamSocket> socket,
     int64_t generation) {
-  CHECK_GT(handed_out_socket_count_, 0);
+  CHECK_GT(handed_out_socket_count_, 0u);
   --handed_out_socket_count_;
+  UpdateStateAfterRelease();
 
   ActivateStalledRequest();
 }
@@ -207,6 +213,7 @@ void WebSocketTransportClientSocketPool::FlushWithError(
   stalled_request_map_.clear();
   stalled_request_queue_.clear();
   flushing_ = false;
+  ResetState();
 }
 
 void WebSocketTransportClientSocketPool::CloseIdleSockets(
@@ -220,7 +227,7 @@ void WebSocketTransportClientSocketPool::CloseIdleSocketsInGroup(
   // We have no idle sockets.
 }
 
-int WebSocketTransportClientSocketPool::IdleSocketCount() const {
+size_t WebSocketTransportClientSocketPool::IdleSocketCount() const {
   return 0;
 }
 
@@ -242,15 +249,17 @@ LoadState WebSocketTransportClientSocketPool::GetLoadState(
 base::Value WebSocketTransportClientSocketPool::GetInfoAsValue(
     const std::string& name,
     const std::string& type) const {
-  auto dict = base::Value::Dict()
-                  .Set("name", name)
-                  .Set("type", type)
-                  .Set("handed_out_socket_count", handed_out_socket_count_)
-                  .Set("connecting_socket_count",
-                       static_cast<int>(pending_connects_.size()))
-                  .Set("idle_socket_count", 0)
-                  .Set("max_socket_count", max_sockets_)
-                  .Set("max_sockets_per_group", max_sockets_);
+  auto dict =
+      base::DictValue()
+          .Set("name", name)
+          .Set("type", type)
+          .Set("handed_out_socket_count",
+               static_cast<int>(handed_out_socket_count_))
+          .Set("connecting_socket_count",
+               static_cast<int>(pending_connects_.size()))
+          .Set("idle_socket_count", 0)
+          .Set("socket_soft_cap", static_cast<int>(SocketSoftCap()))
+          .Set("additional_capacity", std::string(AdditionalCapacity()));
   return base::Value(std::move(dict));
 }
 
@@ -258,7 +267,10 @@ bool WebSocketTransportClientSocketPool::HasActiveSocket(
     const GroupId& group_id) const {
   // This method is not supported for WebSocket.
   NOTREACHED();
-  return false;
+}
+
+size_t WebSocketTransportClientSocketPool::SocketsInUse() const {
+  return pending_connects_.size() + handed_out_socket_count_;
 }
 
 bool WebSocketTransportClientSocketPool::IsStalled() const {
@@ -339,8 +351,10 @@ void WebSocketTransportClientSocketPool::OnConnectJobComplete(
 
   connect_job_delegate = nullptr;
 
-  if (!handed_out_socket)
+  if (!handed_out_socket) {
+    UpdateStateAfterRelease();
     ActivateStalledRequest();
+  }
 
   InvokeUserCallbackLater(handle, std::move(callback), result);
 }
@@ -370,19 +384,13 @@ void WebSocketTransportClientSocketPool::InvokeUserCallback(
   }
 }
 
-bool WebSocketTransportClientSocketPool::ReachedMaxSocketsLimit() const {
-  return handed_out_socket_count_ >= max_sockets_ ||
-         base::checked_cast<int>(pending_connects_.size()) >=
-             max_sockets_ - handed_out_socket_count_;
-}
-
 void WebSocketTransportClientSocketPool::HandOutSocket(
     std::unique_ptr<StreamSocket> socket,
     const LoadTimingInfo::ConnectTiming& connect_timing,
     ClientSocketHandle* handle,
     const NetLogWithSource& net_log) {
   DCHECK(socket);
-  DCHECK_EQ(ClientSocketHandle::UNUSED, handle->reuse_type());
+  DCHECK_EQ(StreamSocketHandle::SocketReuseType::kUnused, handle->reuse_type());
   DCHECK_EQ(0, handle->idle_time().InMicroseconds());
 
   handle->SetSocket(std::move(socket));
@@ -429,7 +437,8 @@ void WebSocketTransportClientSocketPool::ActivateStalledRequest() {
   // Usually we will only be able to activate one stalled request at a time,
   // however if all the connects fail synchronously for some reason, we may be
   // able to clear the whole queue at once.
-  while (!stalled_request_queue_.empty() && !ReachedMaxSocketsLimit()) {
+  while (!stalled_request_queue_.empty() &&
+         State() == SocketPoolState::kUncapped) {
     StalledRequest request = std::move(stalled_request_queue_.front());
     stalled_request_queue_.pop_front();
     stalled_request_map_.erase(request.handle);

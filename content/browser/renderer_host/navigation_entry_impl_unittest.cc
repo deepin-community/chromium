@@ -33,7 +33,7 @@ blink::PageState CreateTestPageState() {
   blink::ExplodedPageState exploded_state;
   std::string encoded_data;
   blink::EncodePageState(exploded_state, &encoded_data);
-  return blink::PageState::CreateFromEncodedData(encoded_data);
+  return blink::PageState::CreateFromEncodedData(std::move(encoded_data));
 }
 
 }  // namespace
@@ -253,10 +253,10 @@ TEST_F(NavigationEntryTest, NavigationEntryAccessors) {
   // Post data
   EXPECT_FALSE(entry1_->GetPostData());
   EXPECT_FALSE(entry2_->GetPostData());
-  const int length = 11;
-  const char* raw_data = "post\n\n\0data";
+  const char raw_data[] = "post\n\n\0data";
   scoped_refptr<network::ResourceRequestBody> post_data =
-      network::ResourceRequestBody::CreateFromBytes(raw_data, length);
+      network::ResourceRequestBody::CreateFromCopyOfBytes(
+          base::byte_span_from_cstring(raw_data));
   entry2_->SetPostData(post_data);
   EXPECT_EQ(post_data, entry2_->GetPostData());
 

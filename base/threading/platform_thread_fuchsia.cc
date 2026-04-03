@@ -4,15 +4,15 @@
 
 #include "base/threading/platform_thread.h"
 
+#include <fidl/fuchsia.media/cpp/fidl.h>
+#include <lib/fdio/directory.h>
+#include <lib/sys/cpp/component_context.h>
 #include <pthread.h>
 #include <sched.h>
 #include <zircon/syscalls.h>
 
 #include <mutex>
-
-#include <fidl/fuchsia.media/cpp/fidl.h>
-#include <lib/fdio/directory.h>
-#include <lib/sys/cpp/component_context.h>
+#include <string_view>
 
 #include "base/fuchsia/fuchsia_component_connect.h"
 #include "base/fuchsia/fuchsia_logging.h"
@@ -39,9 +39,9 @@ fidl::SyncClient<fuchsia_media::ProfileProvider> ConnectProfileProvider() {
 // Sets the current thread to the given scheduling role, optionally including
 // hints about the workload period and max CPU runtime (capacity * period) in
 // that period.
-// TODO(crbug.com/1365682): Migrate to the new fuchsia.scheduler.ProfileProvider
-// API when available.
-void SetThreadRole(StringPiece role_name,
+// TODO(crbug.com/42050523): Migrate to the new
+// fuchsia.scheduler.ProfileProvider API when available.
+void SetThreadRole(std::string_view role_name,
                    TimeDelta period = {},
                    float capacity = 0.0f) {
   DCHECK_GE(capacity, 0.0);
@@ -94,8 +94,8 @@ void PlatformThread::SetName(const std::string& name) {
 
 // static
 bool PlatformThread::CanChangeThreadType(ThreadType from, ThreadType to) {
-  return from == to || to == ThreadType::kDisplayCritical ||
-         to == ThreadType::kRealtimeAudio;
+  return from == to || to == ThreadType::kPresentation ||
+         to == ThreadType::kAudioProcessing || to == ThreadType::kRealtimeAudio;
 }
 
 namespace internal {
@@ -116,16 +116,8 @@ void SetCurrentThreadTypeImpl(ThreadType thread_type,
       SetThreadRole("chromium.base.threading.utility");
       break;
 
-    case ThreadType::kResourceEfficient:
-      SetThreadRole("chromium.base.threading.resource-efficient");
-      break;
-
-    case ThreadType::kCompositing:
-      SetThreadRole("chromium.base.threading.compositing",
-                    kDisplaySchedulingPeriod, kDisplaySchedulingCapacity);
-      break;
-
-    case ThreadType::kDisplayCritical:
+    case ThreadType::kPresentation:
+    case ThreadType::kAudioProcessing:
       SetThreadRole("chromium.base.threading.display", kDisplaySchedulingPeriod,
                     kDisplaySchedulingCapacity);
       break;
@@ -137,25 +129,28 @@ void SetCurrentThreadTypeImpl(ThreadType thread_type,
   }
 }
 
+PlatformPriorityOverride SetThreadTypeOverride(
+    PlatformThreadHandle thread_handle,
+    ThreadType thread_type) {
+  return false;
+}
+
+void RemoveThreadTypeOverride(
+    PlatformThreadHandle thread_handle,
+    const PlatformPriorityOverride& priority_override_handle,
+    ThreadType initial_thread_type) {}
+
 }  // namespace internal
 
 // static
-ThreadPriorityForTest PlatformThread::GetCurrentThreadPriorityForTest() {
+ThreadType PlatformThread::GetCurrentEffectiveThreadTypeForTest() {
   // Fuchsia doesn't provide a way to get the current thread's priority.
   // Use ThreadType stored in TLS as a proxy.
   const ThreadType thread_type = PlatformThread::GetCurrentThreadType();
-  switch (thread_type) {
-    case ThreadType::kBackground:
-    case ThreadType::kUtility:
-    case ThreadType::kResourceEfficient:
-    case ThreadType::kDefault:
-    case ThreadType::kCompositing:
-      return ThreadPriorityForTest::kNormal;
-    case ThreadType::kDisplayCritical:
-      return ThreadPriorityForTest::kDisplay;
-    case ThreadType::kRealtimeAudio:
-      return ThreadPriorityForTest::kRealtimeAudio;
+  if (thread_type == ThreadType::kAudioProcessing) {
+    return ThreadType::kPresentation;
   }
+  return thread_type;
 }
 
 }  // namespace base

@@ -82,12 +82,19 @@ class TracingSession {
       disabled_categories_.push_back(std::move(category));
       return *this;
     }
+    Builder& set_clear_period_ms(uint32_t clear_period_ms) {
+      clear_period_ms_ = clear_period_ms;
+      return *this;
+    }
+    std::vector<uint8_t> BuildProtoConfig();
+
     TracingSession Build();
 
    private:
     std::string data_source_name_;
     std::vector<std::string> enabled_categories_;
     std::vector<std::string> disabled_categories_;
+    uint32_t clear_period_ms_ = 0;
   };
 
   static TracingSession Adopt(struct PerfettoTracingSessionImpl*);
@@ -99,7 +106,11 @@ class TracingSession {
   struct PerfettoTracingSessionImpl* session() const { return session_; }
 
   bool FlushBlocking(uint32_t timeout_ms);
+  // Waits for the tracing session to be stopped.
   void WaitForStopped();
+  // Asks the tracing session to stop. Doesn't wait for it to be stopped.
+  void StopAsync();
+  // Equivalent to StopAsync() + WaitForStopped().
   void StopBlocking();
   std::vector<uint8_t> ReadBlocking();
 

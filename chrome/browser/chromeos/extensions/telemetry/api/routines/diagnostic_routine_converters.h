@@ -32,6 +32,16 @@ api::os_diagnostics::RoutineRunningInfo UncheckedConvertPtr(
     base::Uuid uuid,
     uint32_t percentage);
 
+api::os_diagnostics::NetworkBandwidthRoutineRunningInfo UncheckedConvertPtr(
+    crosapi::mojom::TelemetryDiagnosticNetworkBandwidthRoutineRunningInfoPtr
+        input);
+
+api::os_diagnostics::RoutineInquiryUnion UncheckedConvertPtr(
+    crosapi::mojom::TelemetryDiagnosticRoutineInquiryPtr input);
+
+api::os_diagnostics::RoutineInteractionUnion UncheckedConvertPtr(
+    crosapi::mojom::TelemetryDiagnosticRoutineInteractionPtr input);
+
 api::os_diagnostics::RoutineWaitingInfo UncheckedConvertPtr(
     crosapi::mojom::TelemetryDiagnosticRoutineStateWaitingPtr input,
     base::Uuid uuid,
@@ -40,18 +50,43 @@ api::os_diagnostics::RoutineWaitingInfo UncheckedConvertPtr(
 api::os_diagnostics::MemtesterResult UncheckedConvertPtr(
     crosapi::mojom::TelemetryDiagnosticMemtesterResultPtr input);
 
-api::os_diagnostics::MemoryRoutineFinishedInfo UncheckedConvertPtr(
+// For legacy finished events.
+// TODO(b/331540565): Remove this function after the legacy event is removed.
+api::os_diagnostics::LegacyMemoryRoutineFinishedInfo UncheckedConvertPtr(
     crosapi::mojom::TelemetryDiagnosticMemoryRoutineDetailPtr input,
     base::Uuid uuid,
     bool has_passed);
 
-api::os_diagnostics::VolumeButtonRoutineFinishedInfo UncheckedConvertPtr(
+// For legacy finished events.
+// TODO(b/331540565): Remove this function after the legacy event is removed.
+api::os_diagnostics::LegacyVolumeButtonRoutineFinishedInfo UncheckedConvertPtr(
     crosapi::mojom::TelemetryDiagnosticVolumeButtonRoutineDetailPtr input,
     base::Uuid uuid,
     bool has_passed);
 
-api::os_diagnostics::FanRoutineFinishedInfo UncheckedConvertPtr(
+// For legacy finished events.
+// TODO(b/331540565): Remove this function after the legacy event is removed.
+api::os_diagnostics::LegacyFanRoutineFinishedInfo UncheckedConvertPtr(
     crosapi::mojom::TelemetryDiagnosticFanRoutineDetailPtr input,
+    base::Uuid uuid,
+    bool has_passed);
+
+api::os_diagnostics::MemoryRoutineFinishedDetail UncheckedConvertPtr(
+    crosapi::mojom::TelemetryDiagnosticMemoryRoutineDetailPtr input);
+
+api::os_diagnostics::FanRoutineFinishedDetail UncheckedConvertPtr(
+    crosapi::mojom::TelemetryDiagnosticFanRoutineDetailPtr input);
+
+api::os_diagnostics::NetworkBandwidthRoutineFinishedDetail UncheckedConvertPtr(
+    crosapi::mojom::TelemetryDiagnosticNetworkBandwidthRoutineDetailPtr input);
+
+api::os_diagnostics::CameraFrameAnalysisRoutineFinishedDetail
+UncheckedConvertPtr(
+    crosapi::mojom::TelemetryDiagnosticCameraFrameAnalysisRoutineDetailPtr
+        input);
+
+api::os_diagnostics::RoutineFinishedInfo UncheckedConvertPtr(
+    crosapi::mojom::TelemetryDiagnosticRoutineStateFinishedPtr input,
     base::Uuid uuid,
     bool has_passed);
 
@@ -69,10 +104,20 @@ api::os_diagnostics::MemtesterTestItemEnum Convert(
 api::os_diagnostics::HardwarePresenceStatus Convert(
     crosapi::mojom::TelemetryDiagnosticHardwarePresenceStatus input);
 
+api::os_diagnostics::NetworkBandwidthRoutineRunningType Convert(
+    crosapi::mojom::TelemetryDiagnosticNetworkBandwidthRoutineRunningInfo::Type
+        input);
+
+api::os_diagnostics::CameraFrameAnalysisIssue Convert(
+    crosapi::mojom::TelemetryDiagnosticCameraFrameAnalysisRoutineDetail::Issue
+        input);
+
+api::os_diagnostics::CameraSubtestResult Convert(
+    crosapi::mojom::TelemetryDiagnosticCameraSubtestResult input);
+
 template <class InputT,
-          class OutputT = decltype(Convert(std::declval<InputT>())),
-          class = std::enable_if_t<std::is_enum_v<InputT> ||
-                                   std::is_integral_v<InputT>>>
+          class OutputT = decltype(Convert(std::declval<InputT>()))>
+  requires(std::is_enum_v<InputT> || std::is_integral_v<InputT>)
 std::vector<OutputT> ConvertVector(std::vector<InputT> input) {
   std::vector<OutputT> output;
   for (auto elem : input) {
@@ -85,8 +130,8 @@ template <class InputT,
           class... Types,
           class OutputT = decltype(unchecked::UncheckedConvertPtr(
               std::declval<InputT>(),
-              std::declval<Types>()...)),
-          class = std::enable_if_t<std::is_default_constructible_v<OutputT>>>
+              std::declval<Types>()...))>
+  requires(std::is_default_constructible_v<OutputT>)
 OutputT ConvertPtr(InputT input, Types... args) {
   return (input) ? unchecked::UncheckedConvertPtr(std::move(input), args...)
                  : OutputT();

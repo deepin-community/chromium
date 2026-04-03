@@ -9,22 +9,23 @@
 #include "ash/constants/ash_pref_names.h"
 #include "base/values.h"
 #include "chrome/browser/ash/input_method/input_method_settings.h"
+#include "chrome/browser/ash/input_method/input_method_settings_consts.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/scoped_user_pref_update.h"
 
 namespace ash {
 namespace input_method {
 
-bool IsPredictiveWritingPrefEnabled(PrefService* pref_service,
+bool IsPredictiveWritingPrefEnabled(const PrefService& pref_service,
                                     const std::string& engine_id) {
-  if (!IsPhysicalKeyboardPredictiveWritingAllowed(*pref_service)) {
+  if (!IsPhysicalKeyboardPredictiveWritingAllowed(pref_service)) {
     return false;
   }
-  const base::Value::Dict& input_method_settings =
-      pref_service->GetDict(::prefs::kLanguageInputMethodSpecificSettings);
+  const base::DictValue& input_method_settings =
+      pref_service.GetDict(::prefs::kLanguageInputMethodSpecificSettings);
   std::optional<bool> predictive_writing_setting =
       input_method_settings.FindBoolByDottedPath(
-          engine_id + ".physicalKeyboardEnablePredictiveWriting");
+          base::StrCat({engine_id, ".", kPkEnablePredictiveWritingPrefName}));
   // If no preference has been set yet by the user then we can assume the
   // default preference as enabled.
   return predictive_writing_setting.value_or(true);

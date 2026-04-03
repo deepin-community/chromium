@@ -45,7 +45,7 @@ PowerButtonScreenshotController::~PowerButtonScreenshotController() {
 bool PowerButtonScreenshotController::OnPowerButtonEvent(
     bool down,
     const base::TimeTicks& timestamp) {
-  if (!display::Screen::GetScreen()->InTabletMode()) {
+  if (!display::Screen::Get()->InTabletMode()) {
     return false;
   }
 
@@ -67,7 +67,7 @@ bool PowerButtonScreenshotController::OnPowerButtonEvent(
 }
 
 void PowerButtonScreenshotController::OnKeyEvent(ui::KeyEvent* event) {
-  if (!display::Screen::GetScreen()->InTabletMode()) {
+  if (!display::Screen::Get()->InTabletMode()) {
     return;
   }
 
@@ -88,7 +88,7 @@ void PowerButtonScreenshotController::OnKeyEvent(ui::KeyEvent* event) {
   }
 
   const bool is_volume_down = key_code == ui::VKEY_VOLUME_DOWN;
-  if (event->type() == ui::ET_KEY_PRESSED) {
+  if (event->type() == ui::EventType::kKeyPressed) {
     if (!did_consume_volume_keys) {
       if (is_volume_down) {
         volume_down_key_pressed_ = true;

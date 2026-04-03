@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/containers/cxx20_erase.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
 #include "net/nqe/network_quality_estimator_params.h"
@@ -46,7 +45,8 @@ ObservationBuffer::ObservationBuffer(const ObservationBuffer& other)
 
 ObservationBuffer::~ObservationBuffer() = default;
 
-void ObservationBuffer::AddObservation(const Observation& observation) {
+std::optional<Observation> ObservationBuffer::AddObservation(
+    const Observation& observation) {
   DCHECK_LE(observations_.size(), params_->observation_buffer_size());
 
   // Observations must be in the non-decreasing order of the timestamps.
@@ -57,12 +57,16 @@ void ObservationBuffer::AddObservation(const Observation& observation) {
          (observation.signal_strength() >= 0 &&
           observation.signal_strength() <= 4));
 
+  std::optional<Observation> evicted_observation;
   // Evict the oldest element if the buffer is already full.
-  if (observations_.size() == params_->observation_buffer_size())
+  if (observations_.size() == params_->observation_buffer_size()) {
+    evicted_observation = observations_.front();
     observations_.pop_front();
+  }
 
   observations_.push_back(observation);
   DCHECK_LE(observations_.size(), params_->observation_buffer_size());
+  return evicted_observation;
 }
 
 std::optional<int32_t> ObservationBuffer::GetPercentile(
@@ -108,7 +112,7 @@ std::optional<int32_t> ObservationBuffer::GetPercentile(
 }
 
 void ObservationBuffer::RemoveObservationsWithSource(
-    bool deleted_observation_sources[NETWORK_QUALITY_OBSERVATION_SOURCE_MAX]) {
+    const DeletedObservationSources& deleted_observation_sources) {
   base::EraseIf(observations_,
                 [deleted_observation_sources](const Observation& observation) {
                   return deleted_observation_sources[static_cast<size_t>(

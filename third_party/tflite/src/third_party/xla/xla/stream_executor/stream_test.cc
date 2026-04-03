@@ -13,49 +13,65 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include "xla/stream_executor/stream.h"
+
+#include <cstdint>
+#include <memory>
+
+#include <gtest/gtest.h>
+#include "absl/log/check.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/platform_manager.h"
 #include "xla/stream_executor/stream_executor.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 
 namespace stream_executor {
 namespace {
 
+struct TestResource : public Stream::Resource {
+  TestResource() = default;
+  explicit TestResource(int32_t value) : value(value) {}
+  int32_t value = 0;
+};
+
 class StreamTest : public ::testing::Test {
  protected:
-  std::unique_ptr<StreamExecutor> NewStreamExecutor() {
-    Platform* platform = MultiPlatformManager::PlatformWithName("Host").value();
-    StreamExecutorConfig config(/*ordinal=*/0);
-    return platform->GetUncachedExecutor(config).value();
+  StreamExecutor* NewStreamExecutor() {
+    Platform* platform = PlatformManager::PlatformWithName("Host").value();
+    return platform->ExecutorForDevice(/*ordinal=*/0).value();
   }
 };
 
-TEST_F(StreamTest, NoInitNotOk) {
-  std::unique_ptr<StreamExecutor> executor = NewStreamExecutor();
-  Stream stream(executor.get());
-  EXPECT_FALSE(stream.ok());
+TEST_F(StreamTest, InitOk) {
+  StreamExecutor* executor = NewStreamExecutor();
+  TF_ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream());
 }
 
-TEST_F(StreamTest, InitOk) {
-  std::unique_ptr<StreamExecutor> executor = NewStreamExecutor();
-  Stream stream(executor.get());
-  stream.Init();
-  EXPECT_TRUE(stream.ok());
+TEST_F(StreamTest, InitWithIntPriorityOk) {
+  StreamExecutor* executor = NewStreamExecutor();
+  TF_ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream(1));
+}
+
+TEST_F(StreamTest, InitWithStreamPriorityOk) {
+  StreamExecutor* executor = NewStreamExecutor();
+  TF_ASSERT_OK_AND_ASSIGN(auto stream,
+                          executor->CreateStream(StreamPriority::Highest));
 }
 
 TEST_F(StreamTest, OneSubStream) {
-  std::unique_ptr<StreamExecutor> executor = NewStreamExecutor();
-  Stream stream(executor.get());
-  stream.Init();
-  EXPECT_TRUE(stream.ok());
+  StreamExecutor* executor = NewStreamExecutor();
+  TF_ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream());
 
   // Get and return a sub-stream. Sub-streams are always initialized.
-  Stream* sub_stream1 = stream.GetOrCreateSubStream();
+  TF_ASSERT_OK_AND_ASSIGN(Stream * sub_stream1, stream->GetOrCreateSubStream());
   EXPECT_TRUE(sub_stream1->ok());
-  stream.ReturnSubStream(sub_stream1);
+  stream->ReturnSubStream(sub_stream1);
 
   // Get and return another sub-stream.
-  Stream* sub_stream2 = stream.GetOrCreateSubStream();
+  TF_ASSERT_OK_AND_ASSIGN(Stream * sub_stream2, stream->GetOrCreateSubStream());
   EXPECT_TRUE(sub_stream2->ok());
-  stream.ReturnSubStream(sub_stream1);
+  stream->ReturnSubStream(sub_stream1);
 
   // The underlying sub-streams should be the same, since sub_stream1
   // was returned before we tried to get sub_stream2.
@@ -63,15 +79,13 @@ TEST_F(StreamTest, OneSubStream) {
 }
 
 TEST_F(StreamTest, TwoSubStreams) {
-  std::unique_ptr<StreamExecutor> executor = NewStreamExecutor();
-  Stream stream(executor.get());
-  stream.Init();
-  EXPECT_TRUE(stream.ok());
+  StreamExecutor* executor = NewStreamExecutor();
+  TF_ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream());
 
   // Get two sub-streams.
-  Stream* sub_stream1 = stream.GetOrCreateSubStream();
+  TF_ASSERT_OK_AND_ASSIGN(Stream * sub_stream1, stream->GetOrCreateSubStream());
   EXPECT_TRUE(sub_stream1->ok());
-  Stream* sub_stream2 = stream.GetOrCreateSubStream();
+  TF_ASSERT_OK_AND_ASSIGN(Stream * sub_stream2, stream->GetOrCreateSubStream());
   EXPECT_TRUE(sub_stream2->ok());
 
   // The underlying sub-streams should be different, since neither
@@ -79,18 +93,32 @@ TEST_F(StreamTest, TwoSubStreams) {
   EXPECT_NE(sub_stream1, sub_stream2);
 
   // Return sub_stream1 and get sub_stream3, which should be the same.
-  stream.ReturnSubStream(sub_stream1);
-  Stream* sub_stream3 = stream.GetOrCreateSubStream();
+  stream->ReturnSubStream(sub_stream1);
+  TF_ASSERT_OK_AND_ASSIGN(Stream * sub_stream3, stream->GetOrCreateSubStream());
   EXPECT_TRUE(sub_stream3->ok());
   EXPECT_EQ(sub_stream1, sub_stream3);
   EXPECT_NE(sub_stream2, sub_stream3);
 
   // Return sub_stream2 and get sub_stream4, which should be the same.
-  stream.ReturnSubStream(sub_stream2);
-  Stream* sub_stream4 = stream.GetOrCreateSubStream();
+  stream->ReturnSubStream(sub_stream2);
+  TF_ASSERT_OK_AND_ASSIGN(Stream * sub_stream4, stream->GetOrCreateSubStream());
   EXPECT_TRUE(sub_stream4->ok());
   EXPECT_EQ(sub_stream2, sub_stream4);
   EXPECT_NE(sub_stream3, sub_stream4);
+}
+
+TEST_F(StreamTest, GetOrCreateResource) {
+  StreamExecutor* executor = NewStreamExecutor();
+  TF_ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream());
+
+  EXPECT_EQ(stream->GetOrNullResource<TestResource>(), nullptr);
+
+  TestResource* resource = stream->GetOrCreateResource<TestResource>(
+      [] { return std::make_unique<TestResource>(42); });
+  EXPECT_NE(resource, nullptr);
+  EXPECT_EQ(resource->value, 42);
+
+  EXPECT_EQ(stream->GetOrNullResource<TestResource>(), resource);
 }
 
 }  // namespace

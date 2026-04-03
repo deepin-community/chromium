@@ -1,13 +1,12 @@
 /*
- * Copyright (c) 2022, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2024, Alliance for Open Media. All rights reserved.
  *
- * This source code is subject to the terms of the BSD 3-Clause Clear License
- * and the Alliance for Open Media Patent License 1.0. If the BSD 3-Clause Clear
- * License was not distributed with this source code in the LICENSE file, you
- * can obtain it at aomedia.org/license/software-license/bsd-3-c-c/.  If the
- * Alliance for Open Media Patent License 1.0 was not distributed with this
- * source code in the PATENTS file, you can obtain it at
- * aomedia.org/license/patent-license/.
+ * This source code is subject to the terms of the BSD 2 Clause License and
+ * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
+ * was not distributed with this source code in the LICENSE file, you can
+ * obtain it at www.aomedia.org/license/software. If the Alliance for Open
+ * Media Patent License 1.0 was not distributed with this source code in the
+ * PATENTS file, you can obtain it at www.aomedia.org/license/patent.
  */
 
 #include <assert.h>
@@ -31,7 +30,7 @@
 // This is chosen because it takes less work than fully separating the kernels,
 // but it is separated enough that we can pick out each coefficient pair in the
 // main compute_flow_at_point function
-static INLINE __m128i compute_cubic_kernels(double u, double v) {
+static inline __m128i compute_cubic_kernels(double u, double v) {
   const __m128d x = _mm_set_pd(v, u);
 
   const __m128d x2 = _mm_mul_pd(x, x);
@@ -82,7 +81,7 @@ static INLINE __m128i compute_cubic_kernels(double u, double v) {
 //
 // TODO(rachelbarker): Test speed/quality impact of using bilinear interpolation
 // instad of bicubic interpolation
-static INLINE void compute_flow_vector(const uint8_t *src, const uint8_t *ref,
+static inline void compute_flow_vector(const uint8_t *src, const uint8_t *ref,
                                        int width, int height, int stride, int x,
                                        int y, double u, double v,
                                        const int16_t *dx, const int16_t *dy,
@@ -146,7 +145,7 @@ static INLINE void compute_flow_vector(const uint8_t *src, const uint8_t *ref,
     // for a total of 11 pixels. Here we load 16 pixels, but only use
     // the first 11.
     __m256i row =
-        _mm256_loadu2_m128i((__m128i *)(ref_row + stride), (__m128i *)ref_row);
+        yy_loadu2_128((__m128i *)(ref_row + stride), (__m128i *)ref_row);
 
     // Expand pixels to int16s
     // We must use unpacks here, as we have one row in each 128-bit lane
@@ -268,14 +267,14 @@ static INLINE void compute_flow_vector(const uint8_t *src, const uint8_t *ref,
 
 // Compute the x and y gradients of the source patch in a single pass,
 // and store into dx and dy respectively.
-static INLINE void sobel_filter(const uint8_t *src, int src_stride, int16_t *dx,
+static inline void sobel_filter(const uint8_t *src, int src_stride, int16_t *dx,
                                 int16_t *dy) {
   const __m256i zero = _mm256_setzero_si256();
 
   // Loop setup: Load the first two rows (of 10 input rows) and apply
   // the horizontal parts of the two filters
-  __m256i row_m1_0 = _mm256_loadu2_m128i((__m128i *)(src - 1),
-                                         (__m128i *)(src - src_stride - 1));
+  __m256i row_m1_0 =
+      yy_loadu2_128((__m128i *)(src - 1), (__m128i *)(src - src_stride - 1));
   __m256i row_m1_0_a = _mm256_unpacklo_epi8(row_m1_0, zero);
   __m256i row_m1_0_b =
       _mm256_unpacklo_epi8(_mm256_srli_si256(row_m1_0, 1), zero);
@@ -294,8 +293,8 @@ static INLINE void sobel_filter(const uint8_t *src, int src_stride, int16_t *dx,
   for (int i = 0; i < DISFLOW_PATCH_SIZE; i += 2) {
     // Load rows (i+1, i+2) and apply both horizontal filters
     const __m256i row_p1_p2 =
-        _mm256_loadu2_m128i((__m128i *)(src + (i + 2) * src_stride - 1),
-                            (__m128i *)(src + (i + 1) * src_stride - 1));
+        yy_loadu2_128((__m128i *)(src + (i + 2) * src_stride - 1),
+                      (__m128i *)(src + (i + 1) * src_stride - 1));
     const __m256i row_p1_p2_a = _mm256_unpacklo_epi8(row_p1_p2, zero);
     const __m256i row_p1_p2_b =
         _mm256_unpacklo_epi8(_mm256_srli_si256(row_p1_p2, 1), zero);
@@ -329,7 +328,7 @@ static INLINE void sobel_filter(const uint8_t *src, int src_stride, int16_t *dx,
   }
 }
 
-static INLINE void compute_flow_matrix(const int16_t *dx, int dx_stride,
+static inline void compute_flow_matrix(const int16_t *dx, int dx_stride,
                                        const int16_t *dy, int dy_stride,
                                        double *M) {
   __m256i acc[4] = { 0 };
@@ -372,7 +371,7 @@ static INLINE void compute_flow_matrix(const int16_t *dx, int dx_stride,
 // The regularization term `+ k * I` further ensures that det M >= k^2.
 // As mentioned in compute_flow_matrix(), here we use k = 1, so det M >= 1.
 // So we don't have to worry about non-invertible matrices here.
-static INLINE void invert_2x2(const double *M, double *M_inv) {
+static inline void invert_2x2(const double *M, double *M_inv) {
   double det = (M[0] * M[3]) - (M[1] * M[2]);
   assert(det >= 1);
   const double det_inv = 1 / det;

@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/base64.h"
@@ -16,11 +17,13 @@
 #include "base/functional/callback_helpers.h"
 #include "base/json/string_escape.h"
 #include "base/memory/ref_counted.h"
+#include "base/notimplemented.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/media/router/mojo/media_router_mojo_metrics.h"
 #include "chrome/browser/media/router/test/media_router_mojo_test.h"
 #include "chrome/browser/media/router/test/provider_test_helpers.h"
@@ -34,7 +37,6 @@
 #include "components/media_router/common/media_route.h"
 #include "components/media_router/common/media_source.h"
 #include "components/media_router/common/test/test_helper.h"
-#include "components/version_info/version_info.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -45,7 +47,6 @@ using blink::mojom::PresentationConnectionCloseReason;
 using blink::mojom::PresentationConnectionState;
 using media_router::mojom::RouteMessagePtr;
 using testing::_;
-using testing::AtMost;
 using testing::Eq;
 using testing::Invoke;
 using testing::InvokeWithoutArgs;
@@ -53,15 +54,12 @@ using testing::IsEmpty;
 using testing::Mock;
 using testing::NiceMock;
 using testing::Not;
-using testing::Pointee;
 using testing::Return;
-using testing::ReturnRef;
 using testing::SaveArg;
 using testing::Sequence;
 using testing::SizeIs;
 using testing::StrictMock;
 using testing::UnorderedElementsAre;
-using testing::Unused;
 using testing::WithArg;
 
 namespace media_router {
@@ -118,7 +116,7 @@ std::string RouteMessageToString(const RouteMessagePtr& message) {
     result = "text=";
     base::EscapeJSONString(message->message.value(), true, &result);
   } else {
-    const base::StringPiece src(
+    const std::string_view src(
         reinterpret_cast<const char*>(message->data.value().data()),
         message->data.value().size());
     result = "binary=" + base::Base64Encode(src);
@@ -145,9 +143,9 @@ class StubMediaRouterDesktop : public MediaRouterDesktop {
   ~StubMediaRouterDesktop() override = default;
 
   // media_router::MediaRouter: implementation
-  base::Value::Dict GetState() const override {
+  base::DictValue GetState() const override {
     NOTIMPLEMENTED();
-    return base::Value::Dict();
+    return base::DictValue();
   }
 
   void GetProviderState(
@@ -222,6 +220,12 @@ class MediaRouterDesktopTest : public MediaRouterMojoTest {
     }
   }
 
+  void OnUserGesture() { router()->OnUserGesture(); }
+
+  void SetMockSinkServiceForTest(MockDualMediaSinkService* sink_service) {
+    router()->media_sink_service_ = sink_service;
+  }
+
  private:
   void ExpectBucketCount(const std::string& histogram_name,
                          mojom::RouteRequestResultCode result_code,
@@ -242,10 +246,11 @@ TEST_F(MediaRouterDesktopTest, CreateRoute) {
 // Tests that MediaRouter is aware when a route is created, even if
 // MediaRouteProvider doesn't call OnRoutesUpdated().
 TEST_F(MediaRouterDesktopTest, RouteRecognizedAfterCreation) {
-  MockMediaRoutesObserver routes_observer(router());
+  MockMediaRoutesObserver routes_observer1(router());
+  MockMediaRoutesObserver routes_observer2(router());
 
-  EXPECT_CALL(routes_observer, OnRoutesUpdated(SizeIs(0)));
-  EXPECT_CALL(routes_observer, OnRoutesUpdated(SizeIs(1)));
+  EXPECT_CALL(routes_observer2, OnRoutesUpdated(SizeIs(0)));
+  EXPECT_CALL(routes_observer2, OnRoutesUpdated(SizeIs(1)));
 
   // TestCreateRoute() does not explicitly call OnRoutesUpdated() on the router.
   TestCreateRoute();
@@ -258,11 +263,11 @@ TEST_F(MediaRouterDesktopTest, CreateRouteFails) {
               CreateRouteInternal(kSource, kSinkId, _,
                                   url::Origin::Create(GURL(kOrigin)),
                                   kInvalidFrameNodeId, _, _))
-      .WillOnce(WithArg<6>(
-          Invoke([](mojom::MediaRouteProvider::CreateRouteCallback& cb) {
+      .WillOnce(
+          WithArg<6>([](mojom::MediaRouteProvider::CreateRouteCallback& cb) {
             std::move(cb).Run(std::nullopt, nullptr, std::string(kError),
                               mojom::RouteRequestResultCode::TIMED_OUT);
-          })));
+          }));
 
   RouteResponseCallbackHandler handler;
   base::RunLoop run_loop;
@@ -313,11 +318,11 @@ TEST_F(MediaRouterDesktopTest, JoinRouteTimedOutFails) {
               JoinRouteInternal(
                   kSource, kPresentationId, url::Origin::Create(GURL(kOrigin)),
                   kInvalidFrameNodeId, base::Milliseconds(kTimeoutMillis), _))
-      .WillOnce(WithArg<5>(
-          Invoke([](mojom::MediaRouteProvider::JoinRouteCallback& cb) {
+      .WillOnce(
+          WithArg<5>([](mojom::MediaRouteProvider::JoinRouteCallback& cb) {
             std::move(cb).Run(std::nullopt, nullptr, std::string(kError),
                               mojom::RouteRequestResultCode::TIMED_OUT);
-          })));
+          }));
 
   RouteResponseCallbackHandler handler;
   base::RunLoop run_loop;
@@ -347,12 +352,11 @@ TEST_F(MediaRouterDesktopTest, TerminateRoute) {
 TEST_F(MediaRouterDesktopTest, TerminateRouteFails) {
   ProvideTestRoute(mojom::MediaRouteProviderId::CAST, kRouteId);
   EXPECT_CALL(mock_cast_provider_, TerminateRouteInternal(kRouteId, _))
-      .WillOnce(
-          Invoke([](const std::string& route_id,
-                    mojom::MediaRouteProvider::TerminateRouteCallback& cb) {
-            std::move(cb).Run(std::string("timed out"),
-                              mojom::RouteRequestResultCode::TIMED_OUT);
-          }));
+      .WillOnce([](const std::string& route_id,
+                   mojom::MediaRouteProvider::TerminateRouteCallback& cb) {
+        std::move(cb).Run(std::string("timed out"),
+                          mojom::RouteRequestResultCode::TIMED_OUT);
+      });
   router()->TerminateRoute(kRouteId);
   base::RunLoop().RunUntilIdle();
   ExpectCastResultBucketCount("TerminateRoute",
@@ -370,8 +374,8 @@ TEST_F(MediaRouterDesktopTest, HandleIssue) {
 
   IssueInfo issue_info = CreateIssueInfo("title 1");
 
-  Issue issue_from_observer1((IssueInfo()));
-  Issue issue_from_observer2((IssueInfo()));
+  Issue issue_from_observer1(Issue::CreateIssueWithIssueInfo(IssueInfo()));
+  Issue issue_from_observer2(Issue::CreateIssueWithIssueInfo(IssueInfo()));
   EXPECT_CALL(issue_observer1, OnIssue(_))
       .WillOnce(SaveArg<0>(&issue_from_observer1));
   EXPECT_CALL(issue_observer2, OnIssue(_))
@@ -383,6 +387,25 @@ TEST_F(MediaRouterDesktopTest, HandleIssue) {
   ASSERT_EQ(issue_from_observer1.id(), issue_from_observer2.id());
   EXPECT_EQ(issue_info, issue_from_observer1.info());
   EXPECT_EQ(issue_info, issue_from_observer2.info());
+}
+
+TEST_F(MediaRouterDesktopTest, HandlePermissionIssue) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      media_router::kShowCastPermissionRejectedError);
+
+  MockIssuesObserver issue_observer(router()->GetIssueManager());
+  issue_observer.Init();
+  base::RunLoop run_loop;
+
+  EXPECT_CALL(issue_observer, OnIssue(_))
+      .WillOnce([&run_loop](const Issue& received_issue) {
+        EXPECT_TRUE(received_issue.is_permission_rejected_issue());
+        run_loop.QuitClosure().Run();
+      });
+
+  router()->OnLocalDiscoveryPermissionRejected();
+  run_loop.Run();
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -918,12 +941,16 @@ TEST_F(MediaRouterDesktopTest, TestRecordPresentationRequestUrlBySink) {
   using PresentationUrlBySink = MediaRouterDesktop::PresentationUrlBySink;
 
   MediaSource cast_source("cast:ABCD1234");
+  MediaSource remote_playback_source(
+      "remote-playback:media-session?&video_codec=vp8&audio_codec=aac");
   MediaSource dial_source(
       GURL(base::StrCat({kCastDialPresentationUrlScheme, ":YouTube"})));
   MediaSource presentation_url(GURL("https://www.example.com"));
 
   base::HistogramTester tester;
   RecordPresentationRequestUrlBySink(cast_source,
+                                     mojom::MediaRouteProviderId::CAST, 6);
+  RecordPresentationRequestUrlBySink(remote_playback_source,
                                      mojom::MediaRouteProviderId::CAST, 5);
   RecordPresentationRequestUrlBySink(dial_source,
                                      mojom::MediaRouteProviderId::DIAL, 4);
@@ -937,18 +964,19 @@ TEST_F(MediaRouterDesktopTest, TestRecordPresentationRequestUrlBySink) {
                                      mojom::MediaRouteProviderId::DIAL, 1);
 
   EXPECT_THAT(
-      tester.GetAllSamples("MediaRouter.PresentationRequest.UrlBySink"),
+      tester.GetAllSamples("MediaRouter.PresentationRequest.UrlBySink2"),
       testing::UnorderedElementsAre(
           Bucket(static_cast<int>(PresentationUrlBySink::kUnknown), 1),
           Bucket(
-              static_cast<int>(PresentationUrlBySink::kNormalUrlToChromecast),
-              3),
-          Bucket(
               static_cast<int>(PresentationUrlBySink::kNormalUrlToWiredDisplay),
               2),
+          Bucket(
+              static_cast<int>(PresentationUrlBySink::kNormalUrlToChromecast),
+              3),
+          Bucket(static_cast<int>(PresentationUrlBySink::kDialUrlToDial), 4),
+          Bucket(static_cast<int>(PresentationUrlBySink::kRemotePlayback), 5),
           Bucket(static_cast<int>(PresentationUrlBySink::kCastUrlToChromecast),
-                 5),
-          Bucket(static_cast<int>(PresentationUrlBySink::kDialUrlToDial), 4)));
+                 6)));
 }
 
 TEST_F(MediaRouterDesktopTest, TestGetCurrentRoutes) {
@@ -959,14 +987,13 @@ TEST_F(MediaRouterDesktopTest, TestGetCurrentRoutes) {
   std::vector<MediaRoute> routes = {route1, route2};
 
   EXPECT_TRUE(router()->GetCurrentRoutes().empty());
-  router()->internal_routes_observer_->OnRoutesUpdated(routes);
+  router()->current_routes_ = routes;
   std::vector<MediaRoute> current_routes = router()->GetCurrentRoutes();
   ASSERT_EQ(current_routes.size(), 2u);
   EXPECT_EQ(current_routes[0], route1);
   EXPECT_EQ(current_routes[1], route2);
 
-  router()->internal_routes_observer_->OnRoutesUpdated(
-      std::vector<MediaRoute>());
+  router()->current_routes_ = std::vector<MediaRoute>();
   EXPECT_TRUE(router()->GetCurrentRoutes().empty());
 }
 
@@ -1000,6 +1027,32 @@ TEST_F(MediaRouterDesktopTest, GetMirroringMediaControllerHost) {
 
   // Expect that no host for kRouteId2 exists, as it is not a local source.
   EXPECT_EQ(nullptr, router()->GetMirroringMediaControllerHost(kRouteId2));
+}
+
+TEST_F(MediaRouterDesktopTest, OnUserGesture) {
+  auto media_sink_service = std::make_unique<MockDualMediaSinkService>();
+  SetMockSinkServiceForTest(media_sink_service.get());
+
+  // If Cast and DIAL discovery hasn't started yet, user gesture will start
+  // discovery.
+  EXPECT_CALL(*media_sink_service, StartDiscovery);
+  EXPECT_CALL(*media_sink_service, DiscoverSinksNow).Times(0);
+  OnUserGesture();
+
+  // If Cast and DIAL discovery has started, user gesture will not lead to
+  // starting discovery again. Instead, the sink service will request to start a
+  // new discovery cycle.
+  ON_CALL(*media_sink_service, MdnsDiscoveryStarted)
+      .WillByDefault(Return(true));
+  ON_CALL(*media_sink_service, DialDiscoveryStarted)
+      .WillByDefault(Return(true));
+
+  EXPECT_CALL(*media_sink_service, StartDiscovery).Times(0);
+  EXPECT_CALL(*media_sink_service, DiscoverSinksNow);
+  OnUserGesture();
+
+  // Clean up
+  SetMockSinkServiceForTest(nullptr);
 }
 
 }  // namespace media_router

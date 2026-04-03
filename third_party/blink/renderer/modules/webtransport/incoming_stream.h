@@ -41,9 +41,13 @@ class MODULES_EXPORT IncomingStream final
     kClosed,
   };
 
-  IncomingStream(ScriptState*,
-                 base::OnceCallback<void(std::optional<uint8_t>)> on_abort,
-                 mojo::ScopedDataPipeConsumerHandle);
+  // |on_abort| is called when the stream is aborted. The first parameter is
+  // the stop_sending code (if any), and the second indicates whether
+  // OnIncomingStreamClosed() was called before the stream was aborted.
+  IncomingStream(
+      ScriptState*,
+      base::OnceCallback<void(std::optional<uint8_t>, bool)> on_abort,
+      mojo::ScopedDataPipeConsumerHandle);
   ~IncomingStream();
 
   // Init() or InitWithExistingReadableStream() must be called before the stream
@@ -97,9 +101,8 @@ class MODULES_EXPORT IncomingStream final
   // Responds current BYOB request or copies a sequence of bytes into an
   // ArrayBuffer and enqueues it if there is no BYOB request. Returns the size
   // of bytes responded or copied.
-  uint32_t RespondBYOBRequestOrEnqueueBytes(const void* source,
-                                            uint32_t byte_length,
-                                            ExceptionState&);
+  size_t RespondBYOBRequestOrEnqueueBytes(base::span<const uint8_t> source,
+                                          ExceptionState&);
 
   // Closes |readable_|, and resets |data_pipe_|.
   void CloseAbortAndReset(ExceptionState&);
@@ -120,7 +123,7 @@ class MODULES_EXPORT IncomingStream final
 
   const Member<ScriptState> script_state_;
 
-  base::OnceCallback<void(std::optional<uint8_t>)> on_abort_;
+  base::OnceCallback<void(std::optional<uint8_t>, bool)> on_abort_;
 
   mojo::ScopedDataPipeConsumerHandle data_pipe_;
 

@@ -6,9 +6,10 @@
 #define COMPONENTS_PERFORMANCE_MANAGER_PUBLIC_RESOURCE_ATTRIBUTION_CPU_MEASUREMENT_DELEGATE_H_
 
 #include <memory>
-#include <optional>
 
+#include "base/process/process_metrics.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 
 namespace performance_manager {
 class Graph;
@@ -25,6 +26,10 @@ class CPUMeasurementDelegate {
  public:
   class Factory;
 
+  // Export ProcessCPUUsageError so callers don't need to include
+  // "base/process/process_metrics.h" for the definition.
+  using ProcessCPUUsageError = base::ProcessCPUUsageError;
+
   // The given `factory` will be used to create a CPUMeasurementDelegate for
   // each ProcessNode in `graph` to be measured. The factory object must outlive
   // the graph. Usually it's owned by the test harness. nullptr will cause the
@@ -38,10 +43,9 @@ class CPUMeasurementDelegate {
   CPUMeasurementDelegate() = default;
   virtual ~CPUMeasurementDelegate() = default;
 
-  // Requests CPU usage for the process. Returns nullopt on error. This is
-  // [[nodiscard]] to match the semantics of
+  // Requests CPU usage for the process. Should match the semantics of
   // ProcessMetrics::GetCumulativeCPUUsage().
-  [[nodiscard]] virtual std::optional<base::TimeDelta>
+  virtual base::expected<base::TimeDelta, ProcessCPUUsageError>
   GetCumulativeCPUUsage() = 0;
 };
 
@@ -51,8 +55,8 @@ class CPUMeasurementDelegate::Factory {
 
   // Returns true iff a CPUMeasurementDelegate should be created for
   // `process_node`. The production factory returns true to measure
-  // renderer processes with a valid (running) base::Process and a
-  // base::ProcessId assigned.
+  // renderer processes for which ProcessNodeHasRunningProcess() returns true,
+  // except on Android which can only measure the current process.
   virtual bool ShouldMeasureProcess(
       const performance_manager::ProcessNode* process_node) = 0;
 
@@ -60,6 +64,11 @@ class CPUMeasurementDelegate::Factory {
   // called if ShouldMeasureProcess(process_node) returns true.
   virtual std::unique_ptr<CPUMeasurementDelegate> CreateDelegateForProcess(
       const performance_manager::ProcessNode* process_node) = 0;
+
+  // Returns true if `process_node` has a valid (running) base::Process and a
+  // base::ProcessId assigned.
+  static bool ProcessNodeHasRunningProcess(
+      const performance_manager::ProcessNode* process_node);
 };
 
 }  // namespace resource_attribution

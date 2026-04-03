@@ -15,6 +15,7 @@
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/trace_event/trace_event.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "ui/events/event.h"
 #include "ui/events/pointer_details.h"
 #include "ui/events/types/event_type.h"
@@ -35,16 +36,14 @@ const int kWheelDelta = 120;
 
 void IssueTouchTraceEvent(const fuchsia_ui_pointer::TouchEvent& event) {
   DCHECK(event.trace_flow_id()) << "API guarantee";
-  TRACE_EVENT_WITH_FLOW0("input", "dispatch_event_to_client",
-                         event.trace_flow_id().value(),
-                         TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("input", "dispatch_event_to_client",
+              perfetto::Flow::Global(event.trace_flow_id().value()));
 }
 
 void IssueMouseTraceEvent(const fuchsia_ui_pointer::MouseEvent& event) {
   DCHECK(event.trace_flow_id()) << "API guarantee";
-  TRACE_EVENT_WITH_FLOW0("input", "dispatch_event_to_client",
-                         event.trace_flow_id().value(),
-                         TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("input", "dispatch_event_to_client",
+              perfetto::Flow::Global(event.trace_flow_id().value()));
 }
 
 bool HasValidTouchSample(const fuchsia_ui_pointer::TouchEvent& event) {
@@ -122,17 +121,17 @@ EventType GetEventTypeFromTouchEventPhase(
     fuchsia_ui_pointer::EventPhase phase) {
   switch (phase) {
     case fuchsia_ui_pointer::EventPhase::kAdd:
-      return ET_TOUCH_PRESSED;
+      return EventType::kTouchPressed;
     case fuchsia_ui_pointer::EventPhase::kChange:
-      return ET_TOUCH_MOVED;
+      return EventType::kTouchMoved;
     case fuchsia_ui_pointer::EventPhase::kRemove:
-      return ET_TOUCH_RELEASED;
+      return EventType::kTouchReleased;
     case fuchsia_ui_pointer::EventPhase::kCancel:
-      return ET_TOUCH_CANCELLED;
+      return EventType::kTouchCancelled;
   }
 }
 
-// TODO(crbug.com/1271730): Check if chrome gestures require strict boundaries.
+// TODO(crbug.com/40805737): Check if chrome gestures require strict boundaries.
 std::array<float, 2> ClampToViewSpace(
     const float x,
     const float y,
@@ -149,8 +148,8 @@ std::array<float, 2> ClampToViewSpace(
   // inclusive, but max is exclusive - so we subtract epsilon.
   const float max_x_inclusive = std::nextafter(max_x, min_x);
   const float max_y_inclusive = std::nextafter(max_y, min_y);
-  const float clamped_x = base::ranges::clamp(x, min_x, max_x_inclusive);
-  const float clamped_y = base::ranges::clamp(y, min_y, max_y_inclusive);
+  const float clamped_x = std::ranges::clamp(x, min_x, max_x_inclusive);
+  const float clamped_y = std::ranges::clamp(y, min_y, max_y_inclusive);
   return {clamped_x, clamped_y};
 }
 
@@ -170,7 +169,7 @@ TouchEvent CreateTouchEventDraft(
   auto timestamp = base::TimeTicks::FromZxTime(event.timestamp().value());
   auto event_type = GetEventTypeFromTouchEventPhase(sample->phase().value());
 
-  // TODO(crbug.com/1276571): Consider packing device_id field into PointerId.
+  // TODO(crbug.com/40808970): Consider packing device_id field into PointerId.
   DCHECK_LE(interaction->pointer_id(), 31U);
   PointerDetails pointer_details(EventPointerType::kTouch,
                                  interaction->pointer_id());
@@ -226,7 +225,7 @@ std::unique_ptr<MouseEvent> CreateMouseEventDraft(
                                 view_parameters.viewport_to_view_transform());
 
   // Ensure gesture recognition: DOWN starts in the logical view space.
-  if (event_type == ET_MOUSE_PRESSED) {
+  if (event_type == EventType::kMousePressed) {
     logical = ClampToViewSpace(logical[0], logical[1], view_parameters);
   }
 
@@ -234,7 +233,7 @@ std::unique_ptr<MouseEvent> CreateMouseEventDraft(
   auto root_location = gfx::PointF(sample->position_in_viewport().value()[0],
                                    sample->position_in_viewport().value()[1]);
 
-  if (event_type == ET_MOUSEWHEEL) {
+  if (event_type == EventType::kMousewheel) {
     // TODO(fxbug.dev/92938): Maybe also support ctrl+wheel event here.
 
     const int tick_x_120ths = sample->scroll_h().value_or(0) * kWheelDelta;
@@ -257,7 +256,7 @@ std::unique_ptr<MouseEvent> CreateMouseEventDraft(
       // finger_count is 2. Maybe need to use different number when we support
       // precision wheel mouse.
       return std::make_unique<ScrollEvent>(
-          ui::ET_SCROLL, location, root_location, timestamp,
+          ui::EventType::kScroll, location, root_location, timestamp,
           pressed_buttons_flags, offset_x, offset_y, offset_x, offset_y,
           /*finger_count=*/2);
     }
@@ -351,8 +350,9 @@ void PointerEventsHandler::OnTouchSourceWatchResult(
 
       DCHECK(touch_view_parameters_.has_value()) << "API guarantee";
       auto draft = CreateTouchEventDraft(event, touch_view_parameters_.value());
-      if (touch_buffer_.count(interaction) > 0) {
-        touch_buffer_[interaction].emplace_back(std::move(draft));
+      if (auto it = touch_buffer_.find(interaction);
+          it != touch_buffer_.end()) {
+        it->second.emplace_back(std::move(draft));
       } else {
         event_callback_.Run(&draft);
       }
@@ -365,10 +365,12 @@ void PointerEventsHandler::OnTouchSourceWatchResult(
       const auto& result = event.interaction_result();
       const auto& interaction = result->interaction();
       if (result->status() ==
-              fuchsia_ui_pointer::TouchInteractionStatus::kGranted &&
-          touch_buffer_.count(interaction) > 0) {
-        for (auto& touch : touch_buffer_[interaction]) {
-          event_callback_.Run(&touch);
+          fuchsia_ui_pointer::TouchInteractionStatus::kGranted) {
+        if (auto it = touch_buffer_.find(interaction);
+            it != touch_buffer_.end()) {
+          for (auto& touch : it->second) {
+            event_callback_.Run(&touch);
+          }
         }
       }
       touch_buffer_.erase(interaction);  // Result seen, delete the buffer.
@@ -442,13 +444,13 @@ void PointerEventsHandler::OnMouseSourceWatchResult(
             // ones.
             continue;
           } else if (!prev_down && curr_down) {
-            auto event_type = ET_MOUSE_PRESSED;
+            auto event_type = EventType::kMousePressed;
             auto draft = CreateMouseEventDraft(
                 event, event_type, button, changed_buttons,
                 mouse_view_parameters_.value(), mouse_device_info_[id]);
             event_callback_.Run(draft.get());
           } else if (prev_down && !curr_down) {
-            auto event_type = ET_MOUSE_RELEASED;
+            auto event_type = EventType::kMouseReleased;
             auto draft = CreateMouseEventDraft(
                 event, event_type, button, changed_buttons,
                 mouse_view_parameters_.value(), mouse_device_info_[id]);
@@ -460,14 +462,14 @@ void PointerEventsHandler::OnMouseSourceWatchResult(
       if (is_wheel_event) {
         // Handle the mouse scroll.
         auto draft = CreateMouseEventDraft(
-            event, ET_MOUSEWHEEL, pressed_buttons, changed_buttons,
+            event, EventType::kMousewheel, pressed_buttons, changed_buttons,
             mouse_view_parameters_.value(), mouse_device_info_[id]);
         event_callback_.Run(draft.get());
       }
 
       if (is_move_or_drag_event) {
-        auto event_type =
-            (pressed_buttons == 0) ? ET_MOUSE_MOVED : ET_MOUSE_DRAGGED;
+        auto event_type = (pressed_buttons == 0) ? EventType::kMouseMoved
+                                                 : EventType::kMouseDragged;
         auto draft = CreateMouseEventDraft(
             event, event_type, pressed_buttons, changed_buttons,
             mouse_view_parameters_.value(), mouse_device_info_[id]);

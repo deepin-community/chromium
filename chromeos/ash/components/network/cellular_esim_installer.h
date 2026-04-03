@@ -76,7 +76,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) CellularESimInstaller {
       const std::string& activation_code,
       const std::string& confirmation_code,
       const dbus::ObjectPath& euicc_path,
-      base::Value::Dict new_shill_properties,
+      base::DictValue new_shill_properties,
       InstallProfileFromActivationCodeCallback callback,
       bool is_initial_install,
       cellular_setup::mojom::ProfileInstallMethod install_method);
@@ -84,15 +84,13 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) CellularESimInstaller {
   // Attempts to create a Shill service configuration with given
   // |new_shill_properties| for eSIM with |profile_path| and |euicc_path|.
   // |callback| is called with the newly configure service path.
-  void ConfigureESimService(const base::Value::Dict& new_shill_properties,
+  void ConfigureESimService(const base::DictValue& new_shill_properties,
                             const dbus::ObjectPath& euicc_path,
                             const dbus::ObjectPath& profile_path,
                             ConfigureESimServiceCallback callback);
 
  private:
   friend class CellularESimInstallerTest;
-  friend class CellularESimInstallerLegacyTest;
-  friend class CellularPolicyHandlerLegacyTest;
   friend class CellularPolicyHandlerTest;
   FRIEND_TEST_ALL_PREFIXES(CellularESimInstallerTest,
                            InstallProfileInvalidActivationCode);
@@ -105,18 +103,6 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) CellularESimInstaller {
                            InstallProfileViaQrCodeSuccess);
   FRIEND_TEST_ALL_PREFIXES(CellularESimInstallerTest,
                            InstallProfileAlreadyConnected);
-  FRIEND_TEST_ALL_PREFIXES(CellularESimInstallerLegacyTest,
-                           InstallProfileInvalidActivationCode);
-  FRIEND_TEST_ALL_PREFIXES(CellularESimInstallerLegacyTest,
-                           InstallProfileConnectFailure);
-  FRIEND_TEST_ALL_PREFIXES(CellularESimInstallerLegacyTest,
-                           InstallProfileSuccess);
-  FRIEND_TEST_ALL_PREFIXES(CellularESimInstallerLegacyTest,
-                           InstallProfileAutoConnect);
-  FRIEND_TEST_ALL_PREFIXES(CellularESimInstallerLegacyTest,
-                           InstallProfileViaQrCodeSuccess);
-  FRIEND_TEST_ALL_PREFIXES(CellularESimInstallerLegacyTest,
-                           InstallProfileAlreadyConnected);
 
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
@@ -126,19 +112,6 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) CellularESimInstaller {
     kHermesInstallFailed = 2,
     kMaxValue = kHermesInstallFailed
   };
-
-  // TODO(b/281904820): Remove once SM-DS Support has fully launched and we have
-  // enough data to confirm that the new metrics are correct.
-  // Record the result of an attempt to install an eSIM profile either via a
-  // QR code or policy configuration. It also records to
-  // ESim.Policy.ESimInstall.Initial.OperationResult
-  // or ESim.Policy.ESimInstall.Retry.OperationResult histogram to indicate
-  // whether the policy eSIM profile installation is an initial attempt or not.
-  static void RecordInstallESimProfileResultLegacy(
-      InstallESimProfileResult result,
-      bool is_managed,
-      bool is_initial_install,
-      bool is_install_via_qr_code);
 
   // Record the result of an attempt to install an eSIM profile. This function
   // will emit to histograms that capture the method used and whether this is
@@ -154,7 +127,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) CellularESimInstaller {
       const std::string& activation_code,
       const std::string& confirmation_code,
       const dbus::ObjectPath& euicc_path,
-      base::Value::Dict new_shill_properties,
+      base::DictValue new_shill_properties,
       bool is_initial_install,
       cellular_setup::mojom::ProfileInstallMethod install_method,
       InstallProfileFromActivationCodeCallback callback,
@@ -163,7 +136,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) CellularESimInstaller {
       InstallProfileFromActivationCodeCallback callback,
       std::unique_ptr<CellularInhibitor::InhibitLock> inhibit_lock,
       const dbus::ObjectPath& euicc_path,
-      const base::Value::Dict& new_shill_properties,
+      const base::DictValue& new_shill_properties,
       bool is_initial_install,
       cellular_setup::mojom::ProfileInstallMethod install_method,
       const base::Time installation_start_time,

@@ -23,22 +23,18 @@ source_set("table_functions") {
     "ancestor.h",
     "connected_flow.cc",
     "connected_flow.h",
+    "dataframe_query_plan_decoder.cc",
+    "dataframe_query_plan_decoder.h",
     "descendant.cc",
     "descendant.h",
-    "dfs.cc",
-    "dfs.h",
-    "dominator_tree.cc",
-    "dominator_tree.h",
+    "dfs_weight_bounded.cc",
+    "dfs_weight_bounded.h",
     "experimental_annotated_stack.cc",
     "experimental_annotated_stack.h",
-    "experimental_counter_dur.cc",
-    "experimental_counter_dur.h",
     "experimental_flamegraph.cc",
     "experimental_flamegraph.h",
     "experimental_flat_slice.cc",
     "experimental_flat_slice.h",
-    "experimental_sched_upid.cc",
-    "experimental_sched_upid.h",
     "experimental_slice_layout.cc",
     "experimental_slice_layout.h",
     "flamegraph_construction_algorithms.cc",
@@ -46,6 +42,14 @@ source_set("table_functions") {
     "table_info.cc",
     "table_info.h",
   ]
+  if (enable_perfetto_winscope) {
+    sources += [
+      "winscope_proto_to_args_with_defaults.cc",
+      "winscope_proto_to_args_with_defaults.h",
+      "winscope_surfaceflinger_hierarchy_paths.cc",
+      "winscope_surfaceflinger_hierarchy_paths.h",
+    ]
+  }
   deps = [
     ":tables",
     "../../../../../gn:default_deps",
@@ -55,18 +59,25 @@ source_set("table_functions") {
     "../../../../base",
     "../../../../protozero",
     "../../../containers",
-    "../../../db",
-    "../../../db/column",
+    "../../../core/dataframe",
+    "../../../core/dataframe",
     "../../../importers/proto:full",
     "../../../importers/proto:minimal",
     "../../../sqlite",
-    "../../../sqlite:query_constraints",
     "../../../storage",
     "../../../tables",
     "../../../types",
-    "../../../util",
+    "../../../util:descriptors",
+    "../../../util:proto_to_args_parser",
     "../../engine",
   ]
+  if (enable_perfetto_winscope) {
+    deps += [
+      "../../../../../protos/perfetto/trace/android:winscope_regular_zero",
+      "../../../importers/proto/winscope:full",
+      "../../../util:winscope_proto_mapping",
+    ]
+  }
   public_deps = [ ":interface" ]
 }
 
@@ -79,8 +90,7 @@ source_set("interface") {
     "../../../../../gn:default_deps",
     "../../../../../include/perfetto/trace_processor:basic_types",
     "../../../../base",
-    "../../../db",
-    "../../../sqlite:query_constraints",
+    "../../../core/dataframe",
   ]
 }
 
@@ -95,7 +105,6 @@ source_set("unittests") {
     "ancestor_unittest.cc",
     "connected_flow_unittest.cc",
     "descendant_unittest.cc",
-    "experimental_counter_dur_unittest.cc",
     "experimental_flat_slice_unittest.cc",
     "experimental_slice_layout_unittest.cc",
   ]
@@ -107,8 +116,7 @@ source_set("unittests") {
     "../../../../../gn:sqlite",
     "../../../../base:test_support",
     "../../../containers",
-    "../../../db",
-    "../../../db/column",
+    "../../../core/dataframe",
     "../../../importers/common",
     "../../../perfetto_sql/engine",
     "../../../sqlite",

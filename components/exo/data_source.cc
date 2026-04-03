@@ -6,7 +6,9 @@
 
 #include <limits>
 #include <optional>
+#include <string_view>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -19,6 +21,7 @@
 #include "components/exo/data_source_delegate.h"
 #include "components/exo/data_source_observer.h"
 #include "components/exo/mime_utils.h"
+#include "components/exo/security_delegate.h"
 #include "net/base/mime_util.h"
 #include "third_party/blink/public/common/mime_util/mime_util.h"
 #include "third_party/icu/source/common/unicode/ucnv.h"
@@ -34,7 +37,6 @@ constexpr char kTextHTML[] = "text/html";
 constexpr char kTextUriList[] = "text/uri-list";
 constexpr char kApplicationOctetStream[] = "application/octet-stream";
 constexpr char kWebCustomData[] = "chromium/x-web-custom-data";
-constexpr char kDataTransferEndpoint[] = "chromium/x-data-transfer-endpoint";
 
 constexpr char kUtfPrefix[] = "UTF";
 constexpr char kEncoding16[] = "16";
@@ -57,7 +59,7 @@ std::optional<std::vector<uint8_t>> ReadDataOnWorkerThread(base::ScopedFD fd) {
     uint8_t chunk[kChunkSize];
     ssize_t bytes_read = HANDLE_EINTR(read(fd.get(), chunk, kChunkSize));
     if (bytes_read > 0) {
-      bytes.insert(bytes.end(), chunk, chunk + bytes_read);
+      bytes.insert(bytes.end(), chunk, UNSAFE_TODO(chunk + bytes_read));
       continue;
     }
     if (!bytes_read)
@@ -109,8 +111,8 @@ int GetImageTypeRank(const std::string& mime_type) {
 std::u16string CodepageToUTF16(const std::vector<uint8_t>& data,
                                const std::string& charset_input) {
   std::u16string output;
-  base::StringPiece piece(reinterpret_cast<const char*>(data.data()),
-                          data.size());
+  std::string_view piece(reinterpret_cast<const char*>(data.data()),
+                         data.size());
   const char* charset = charset_input.c_str();
 
   // Despite claims in the documentation to the contrary, the ICU UTF-16
@@ -119,13 +121,15 @@ std::u16string CodepageToUTF16(const std::vector<uint8_t>& data,
   if (!ucnv_compareNames(charset, kUTF16Unspecified) &&
       data.size() >= kByteOrderMarkSize) {
     if (static_cast<uint8_t>(piece.data()[0]) == kByteOrderMark[0] &&
-        static_cast<uint8_t>(piece.data()[1]) == kByteOrderMark[1]) {
+        static_cast<uint8_t>(UNSAFE_TODO(piece.data()[1])) ==
+            kByteOrderMark[1]) {
       // BOM is in big endian format. Consume the BOM so it doesn't get
       // interpreted as a character.
       piece.remove_prefix(2);
       charset = kUTF16BigEndian;
     } else if (static_cast<uint8_t>(piece.data()[0]) == kByteOrderMark[1] &&
-               static_cast<uint8_t>(piece.data()[1]) == kByteOrderMark[0]) {
+               static_cast<uint8_t>(UNSAFE_TODO(piece.data()[1])) ==
+                   kByteOrderMark[0]) {
       // BOM is in little endian format. Consume the BOM so it doesn't get
       // interpreted as a character.
       piece.remove_prefix(2);
@@ -214,6 +218,12 @@ void DataSource::DndFinished() {
   delegate_->OnDndFinished();
 }
 
+std::vector<ui::FileInfo> DataSource::GetFilenames(
+    ui::EndpointType source,
+    const std::vector<uint8_t>& data) const {
+  return delegate_->GetSecurityDelegate()->GetFilenames(source, data);
+}
+
 void DataSource::ReadDataForTesting(const std::string& mime_type,
                                     ReadDataCallback callback,
                                     base::RepeatingClosure failure_callback) {
@@ -237,7 +247,7 @@ void DataSource::ReadData(const std::string& mime_type,
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
-       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
+       base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
       base::BindOnce(&ReadDataOnWorkerThread, std::move(read_fd)),
       base::BindOnce(
           &DataSource::OnDataRead, read_data_weak_ptr_factory_.GetWeakPtr(),
@@ -255,16 +265,6 @@ void DataSource::OnDataRead(base::WeakPtr<DataSource> data_source_ptr,
     return;
   }
   std::move(callback).Run(mime_type, *data);
-}
-
-void DataSource::ReadDataTransferEndpoint(
-    ReadTextDataCallback dte_reader,
-    base::RepeatingClosure failure_callback) {
-  ReadData(kDataTransferEndpoint,
-           base::BindOnce(&DataSource::OnTextRead,
-                          read_data_weak_ptr_factory_.GetWeakPtr(),
-                          std::move(dte_reader)),
-           failure_callback);
 }
 
 void DataSource::GetDataForPreferredMimeTypes(

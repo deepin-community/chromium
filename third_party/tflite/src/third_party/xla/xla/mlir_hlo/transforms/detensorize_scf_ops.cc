@@ -22,6 +22,7 @@ limitations under the License.
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "transforms/passes.h"
 
@@ -33,7 +34,7 @@ namespace mlir {
 namespace {
 
 bool isUnitTensor(Value value) {
-  if (auto tensorTy = value.getType().dyn_cast<RankedTensorType>()) {
+  if (auto tensorTy = mlir::dyn_cast<RankedTensorType>(value.getType())) {
     return tensorTy.getRank() == 0;
   }
   return false;
@@ -61,7 +62,7 @@ struct RegionOpPattern : public OpRewritePattern<T> {
     ImplicitLocOpBuilder b(op.getLoc(), rewriter);
     b.setInsertionPoint(result);
     for (auto [index, operand] : unitTensors(result->getOperands())) {
-      result->setOperand(index, b.create<tensor::ExtractOp>(operand));
+      result->setOperand(index, tensor::ExtractOp::create(b, operand));
     }
 
     // Fix any block arguments in the op. We're detensorizing all arguments that
@@ -74,9 +75,9 @@ struct RegionOpPattern : public OpRewritePattern<T> {
           b.setInsertionPointToStart(&block);
           // Change the argument type to a scalar, but repack it into a tensor.
           arg.setType(
-              arg.getType().template cast<RankedTensorType>().getElementType());
-          auto converted = b.create<tensor::FromElementsOp>(
-              RankedTensorType::get({}, arg.getType()), arg);
+              mlir::cast<RankedTensorType>(arg.getType()).getElementType());
+          auto converted = tensor::FromElementsOp::create(
+              b, RankedTensorType::get({}, arg.getType()), arg);
           arg.replaceAllUsesExcept(converted, converted.getOperation());
         }
 
@@ -85,7 +86,7 @@ struct RegionOpPattern : public OpRewritePattern<T> {
              unitTensors(block.getTerminator()->getOperands())) {
           b.setInsertionPoint(block.getTerminator());
           block.getTerminator()->setOperand(
-              index, b.create<tensor::ExtractOp>(operand));
+              index, tensor::ExtractOp::create(b, operand));
         }
       }
     }
@@ -94,11 +95,11 @@ struct RegionOpPattern : public OpRewritePattern<T> {
     llvm::SmallVector<Value> results = result->getResults();
     for (auto [index, opResult] : unitTensors(results)) {
       // Fix the result type in the SCF op (it's actually a scalar now).
-      auto oldType = opResult.getType().template cast<RankedTensorType>();
+      auto oldType = mlir::cast<RankedTensorType>(opResult.getType());
       opResult.setType(oldType.getElementType());
 
       // Convert the scalar back to a tensor in the output.
-      results[index] = b.create<tensor::FromElementsOp>(oldType, opResult);
+      results[index] = tensor::FromElementsOp::create(b, oldType, opResult);
     }
     rewriter.replaceOp(op.getOperation(), results);
     return success();
@@ -119,7 +120,7 @@ struct DetensorizeScfOpsPass
     patterns.add<RegionOpPattern<scf::WhileOp>, RegionOpPattern<scf::ForOp>,
                  RegionOpPattern<scf::IfOp>>(&getContext());
 
-    if (failed(applyPatternsAndFoldGreedily(f, std::move(patterns)))) {
+    if (failed(applyPatternsGreedily(f, std::move(patterns)))) {
       signalPassFailure();
     }
   }

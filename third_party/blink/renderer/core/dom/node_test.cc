@@ -12,15 +12,14 @@
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/processing_instruction.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/slot_assignment_engine.h"
+#include "third_party/blink/renderer/core/dom/slot_assignment_recalc_forbidden_scope.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -266,8 +265,8 @@ TEST_F(NodeTest, AttachContext_PreviousInFlow_Slotted) {
   ShadowRoot& shadow_root =
       GetDocument()
           .getElementById(AtomicString("host"))
-          ->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML(
+          ->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(
       "<div id=root style='display:contents'><span></span><slot></slot></div>");
   UpdateAllLifecyclePhasesForTest();
 
@@ -320,7 +319,7 @@ TEST_F(NodeTest, MutationOutsideFlatTreeStyleDirty) {
   SetBodyContent("<div id=host><span id=nonslotted></span></div>");
   GetDocument()
       .getElementById(AtomicString("host"))
-      ->AttachShadowRootForTesting(ShadowRootType::kOpen);
+      ->AttachShadowRootForTesting(ShadowRootMode::kOpen);
   UpdateAllLifecyclePhasesForTest();
 
   EXPECT_FALSE(GetDocument().NeedsLayoutTreeUpdate());
@@ -334,8 +333,9 @@ TEST_F(NodeTest, SkipStyleDirtyHostChild) {
   SetBodyContent("<div id=host><span></span></div>");
   Element* host = GetDocument().getElementById(AtomicString("host"));
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML("<div style='display:none'><slot></slot></div>");
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(
+      "<div style='display:none'><slot></slot></div>");
   UpdateAllLifecyclePhasesForTest();
   EXPECT_FALSE(GetDocument().NeedsLayoutTreeUpdate());
 
@@ -374,8 +374,8 @@ TEST_F(NodeTest, SkipForceReattachDisplayNone) {
   SetBodyContent("<div id=host><span style='display:none'></span></div>");
   Element* host = GetDocument().getElementById(AtomicString("host"));
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML("<slot name='target'></slot>");
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes("<slot name='target'></slot>");
   UpdateAllLifecyclePhasesForTest();
 
   Element* span = To<Element>(host->firstChild());
@@ -393,8 +393,8 @@ TEST_F(NodeTest, UpdateChildDirtyAncestorsOnSlotAssignment) {
   SetBodyContent("<div id=host><span></span></div>");
   Element* host = GetDocument().getElementById(AtomicString("host"));
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML(
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(
       "<div><slot></slot></div><div id='child-dirty'><slot "
       "name='target'></slot></div>");
   UpdateAllLifecyclePhasesForTest();
@@ -419,8 +419,8 @@ TEST_F(NodeTest, UpdateChildDirtySlotAfterRemoval) {
   )HTML");
   Element* host = GetDocument().getElementById(AtomicString("host"));
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML("<slot></slot>");
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes("<slot></slot>");
   UpdateAllLifecyclePhasesForTest();
 
   auto* span = To<Element>(host->firstChild());
@@ -451,8 +451,8 @@ TEST_F(NodeTest, UpdateChildDirtyAfterSlotRemoval) {
   )HTML");
   Element* host = GetDocument().getElementById(AtomicString("host"));
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML("<div><slot></slot></div>");
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes("<div><slot></slot></div>");
   UpdateAllLifecyclePhasesForTest();
 
   auto* span = To<Element>(host->firstChild());
@@ -487,8 +487,9 @@ TEST_F(NodeTest, UpdateChildDirtyAfterSlottingDirtyNode) {
   auto* span = To<Element>(host->firstChild());
 
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML("<div><slot name=x></slot></div>");
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(
+      "<div><slot name=x></slot></div>");
   UpdateAllLifecyclePhasesForTest();
 
   // Make sure the span is style dirty.
@@ -510,7 +511,7 @@ TEST_F(NodeTest, UpdateChildDirtyAfterSlottingDirtyNode) {
 }
 
 TEST_F(NodeTest, ReassignStyleDirtyElementIntoSlotOutsideFlatTree) {
-  GetDocument().body()->setHTMLUnsafe(R"HTML(
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
     <div>
       <template shadowrootmode="open">
         <div>
@@ -551,7 +552,7 @@ TEST_F(NodeTest, ReassignStyleDirtyElementIntoSlotOutsideFlatTree) {
 }
 
 TEST_F(NodeTest, FlatTreeParentForChildDirty) {
-  GetDocument().body()->setHTMLUnsafe(R"HTML(
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
     <div id="host">
       <template shadowrootmode="open">
         <slot id="slot1">
@@ -587,5 +588,26 @@ TEST_F(NodeTest, FlatTreeParentForChildDirty) {
   EXPECT_EQ(fallback1->FlatTreeParentForChildDirty(), nullptr);
   EXPECT_EQ(fallback2->FlatTreeParentForChildDirty(), slot2);
 }
+
+#if DCHECK_IS_ON()
+TEST_F(NodeTest, ToStringDisallowedAssignmentRecalc) {
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
+    <div id=host>
+      <template shadowrootmode=open>
+        <div contenteditable>
+          <slot name=slot></slot>
+        </div>
+      </template>
+      <div id=element>element</div>
+    </div>
+  )HTML");
+
+  Element* element = GetDocument().getElementById(AtomicString("element"));
+  element->setAttribute(html_names::kSlotAttr, AtomicString("slot"));
+
+  SlotAssignmentRecalcForbiddenScope forbidden_scope(GetDocument());
+  element->ToString();
+}
+#endif
 
 }  // namespace blink

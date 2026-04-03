@@ -13,12 +13,16 @@
 #include "base/apple/foundation_util.h"
 #include "base/apple/scoped_cftyperef.h"
 #include "base/logging.h"
+#include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
+#include "ui/accessibility/platform/ax_platform_node.h"
+#include "ui/accessibility/platform/ax_platform_tree_manager.h"
 #include "ui/accessibility/platform/ax_private_webkit_constants_mac.h"
 #include "ui/accessibility/platform/inspect/ax_inspect_utils_mac.h"
 #include "ui/accessibility/platform/inspect/ax_tree_formatter_mac.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace ui {
 
@@ -32,9 +36,11 @@ static void EventReceivedThunk(AXObserverRef observer_ref,
   this_ptr->EventReceived(element, notification, user_info);
 }
 
-AXEventRecorderMac::AXEventRecorderMac(base::ProcessId pid,
-                                       const AXTreeSelector& selector)
-    : observer_run_loop_source_(nullptr) {
+AXEventRecorderMac::AXEventRecorderMac(
+    base::WeakPtr<AXPlatformTreeManager> manager,
+    base::ProcessId pid,
+    const AXTreeSelector& selector)
+    : manager_(manager), observer_run_loop_source_(nullptr) {
   base::apple::ScopedCFTypeRef<AXUIElementRef> node;
   if (pid) {
     node.reset(AXUIElementCreateApplication(pid));
@@ -131,12 +137,36 @@ void AXEventRecorderMac::EventReceived(AXUIElementRef element,
                                        CFDictionaryRef user_info) {
   std::string notification_str = base::SysCFStringRefToUTF8(notification);
 
-  auto formatter = ui::AXTreeFormatterMac();
+  if (notification_str == "AXApplicationDeactivated") {
+    // The application deactivated event is used as an end-of-test signal
+    // because it never occurs in tests.
+    has_seen_end_of_test_sentinel_ = true;
+    if (end_of_test_loop_runner_) {
+      end_of_test_loop_runner_->Quit();
+    }
+    return;
+  }
+
+  AXPlatformNode* ax_platform_node = GetAXPlatformNode(element, manager_);
+
+  bool is_web_content = ax_platform_node && ax_platform_node->IsWebContent();
+  if (only_web_events_ && !is_web_content) {
+    return;
+  }
+
+  // Log the AXNodeData for incoming events, for easier debugging.
+  if (ax_platform_node) {
+    DVLOG(1) << "Receiving event: " << notification_str
+             << " with AXNodeData: " << ax_platform_node->ToString();
+  }
+
+  auto formatter = AXTreeFormatterMac();
   formatter.SetPropertyFilters(property_filters_,
                                AXTreeFormatter::kFiltersDefaultSet);
 
+  gfx::NativeViewAccessible element_accessible((__bridge id)element);
   std::string element_str =
-      formatter.FormatTree(formatter.BuildNode((__bridge id)element));
+      formatter.FormatTree(formatter.BuildNode(element_accessible));
 
   // Element dumps contain a new line character at the end, remove it.
   if (!element_str.empty() && element_str.back() == '\n') {
@@ -187,6 +217,19 @@ std::string AXEventRecorderMac::SerializeTextSelectionChangedProperties(
   std::sort(serialized_info.begin(), serialized_info.end());
 
   return base::JoinString(serialized_info, " ");
+}
+
+void AXEventRecorderMac::WaitForDoneRecording() {
+  if (!manager_) {
+    return;
+  }
+  manager_->FireSentinelEventForTesting();  // IN-TEST
+  if (has_seen_end_of_test_sentinel_) {
+    return;
+  }
+
+  end_of_test_loop_runner_ = std::make_unique<base::RunLoop>();
+  end_of_test_loop_runner_->Run();
 }
 
 }  // namespace ui

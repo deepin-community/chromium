@@ -5,12 +5,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_FORMS_LAYOUT_TEXT_CONTROL_MULTI_LINE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_FORMS_LAYOUT_TEXT_CONTROL_MULTI_LINE_H_
 
-#include "third_party/blink/renderer/core/layout/layout_ng_block_flow.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 
 namespace blink {
 
 // LayoutTextControlMultiLine is a LayoutObject for <textarea>.
-class LayoutTextControlMultiLine final : public LayoutNGBlockFlow {
+class LayoutTextControlMultiLine final : public LayoutBlockFlow {
  public:
   explicit LayoutTextControlMultiLine(Element* element);
 
@@ -32,7 +32,9 @@ class LayoutTextControlMultiLine final : public LayoutNGBlockFlow {
     return true;
   }
 
-  void StyleDidChange(StyleDifference, const ComputedStyle* old_style) override;
+  void StyleDidChange(StyleDifference,
+                      const ComputedStyle* old_style,
+                      const StyleChangeContext&) override;
 
   bool NodeAtPoint(HitTestResult& result,
                    const HitTestLocation& hit_test_location,

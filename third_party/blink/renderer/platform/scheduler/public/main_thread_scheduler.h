@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/functional/callback_forward.h"
+#include "base/functional/function_ref.h"
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/common/input/web_input_event_attribution.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
@@ -25,6 +25,14 @@ class TaskEnvironment;
 }  // namespace test
 
 class RAILModeObserver;
+
+class ExecuteAfterCurrentTaskRestricted {
+ private:
+  // Permitted users of `ThreadScheduler::ExecuteAfterCurrentTaskForTesting()`.
+  friend class DOMScheduler;
+
+  ExecuteAfterCurrentTaskRestricted() = default;
+};
 
 // This class is used to submit tasks and pass other information from Blink to
 // the platform's main thread scheduler.
@@ -67,9 +75,9 @@ class PLATFORM_EXPORT MainThreadScheduler : public ThreadScheduler {
 
   virtual void RemoveRAILModeObserver(RAILModeObserver const* observer) = 0;
 
-  // Calls the callback for each unique isolate that bound to the main thread.
+  // Calls `function` for each unique isolate that bound to the main thread.
   virtual void ForEachMainThreadIsolate(
-      base::RepeatingCallback<void(v8::Isolate* isolate)> callback) = 0;
+      base::FunctionRef<void(v8::Isolate* isolate)>) = 0;
 
   // Returns a list of all unique attributions that are marked for event
   // dispatch. If |include_continuous| is true, include event types from
@@ -81,12 +89,20 @@ class PLATFORM_EXPORT MainThreadScheduler : public ThreadScheduler {
 
   // Test helpers
 
+  // Runs `on_completion_task` after the current task has finished.
+  virtual void ExecuteAfterCurrentTaskForTesting(
+      base::OnceClosure on_completion_task,
+      ExecuteAfterCurrentTaskRestricted) = 0;
+
   // Starts an idle period, allowing pending idle tasks to run. Idle tasks can
   // only run within an idle period, which is determined based on compositor
   // signals. This method enables idle tasks to run in tests outside of a
   // detected idle period. The idle period ends once all idle tasks scheduled
   // before this method was called have run.
   virtual void StartIdlePeriodForTesting() = 0;
+
+  // See WebThreadScheduler::SetRendererBackgrounded().
+  virtual void SetRendererBackgroundedForTesting(bool backgrounded) = 0;
 
  private:
   // For `ToWebMainThreadScheduler`.

@@ -5,14 +5,10 @@
 #include "chrome/credential_provider/gaiacp/mdm_utils.h"
 
 #include <windows.h>
-#include <winternl.h>
-#include <lm.h>  // Needed for PNTSTATUS
 
-#define _NTDEF_  // Prevent redefition errors, must come after <winternl.h>
-#include <MDMRegistration.h>  // For RegisterDeviceWithManagement()
-#include <ntsecapi.h>         // For LsaQueryInformationPolicy()
-
+#include <MDMRegistration.h>
 #include <atlconv.h>
+#include <lm.h>
 
 #include "base/base64.h"
 #include "base/files/file_path.h"
@@ -20,6 +16,7 @@
 #include "base/scoped_native_library.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/win/ntsecapi_shim.h"
 #include "base/win/win_util.h"
 #include "base/win/wmi.h"
 #include "build/branding_buildflags.h"
@@ -139,7 +136,7 @@ bool IsEnrolledWithGoogleMdm(const std::wstring& mdm_url) {
   return is_enrolled;
 }
 
-HRESULT ExtractRegistrationData(const base::Value::Dict& registration_data,
+HRESULT ExtractRegistrationData(const base::DictValue& registration_data,
                                 std::wstring* out_email,
                                 std::wstring* out_id_token,
                                 std::wstring* out_access_token,
@@ -201,9 +198,8 @@ HRESULT ExtractRegistrationData(const base::Value::Dict& registration_data,
   return S_OK;
 }
 
-HRESULT RegisterWithGoogleDeviceManagement(
-    const std::wstring& mdm_url,
-    const base::Value::Dict& properties) {
+HRESULT RegisterWithGoogleDeviceManagement(const std::wstring& mdm_url,
+                                           const base::DictValue& properties) {
   // Make sure all the needed data is present in the dictionary.
   std::wstring email;
   std::wstring id_token;
@@ -259,7 +255,7 @@ HRESULT RegisterWithGoogleDeviceManagement(
 
   // Build the json data needed by the server.
   auto registration_data =
-      base::Value::Dict()
+      base::DictValue()
           .Set("id_token", base::WideToUTF8(id_token))
           .Set("access_token", base::WideToUTF8(access_token))
           .Set("sid", base::WideToUTF8(sid))
@@ -452,7 +448,7 @@ bool IsOnlineLoginEnforced(const std::wstring& sid) {
   return is_online_login_enforced_for_user;
 }
 
-HRESULT EnrollToGoogleMdmIfNeeded(const base::Value::Dict& properties) {
+HRESULT EnrollToGoogleMdmIfNeeded(const base::DictValue& properties) {
   LOGFN(VERBOSE);
 
   if (UserPoliciesManager::Get()->CloudPoliciesEnabled()) {
@@ -466,7 +462,7 @@ HRESULT EnrollToGoogleMdmIfNeeded(const base::Value::Dict& properties) {
   if (mdm_url.empty())
     return S_OK;
 
-  // TODO(crbug.com/935577): Check if machine is already enrolled because
+  // TODO(crbug.com/41443432): Check if machine is already enrolled because
   // attempting to enroll when already enrolled causes a crash.
   if (IsEnrolledWithGoogleMdm(mdm_url)) {
     LOGFN(VERBOSE) << "Already enrolled to Google MDM";

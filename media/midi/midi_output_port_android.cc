@@ -5,13 +5,17 @@
 #include "media/midi/midi_output_port_android.h"
 
 #include "base/android/jni_array.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "media/midi/midi_jni_headers/MidiOutputPortAndroid_jni.h"
 
 using base::android::ScopedJavaLocalRef;
 
 namespace midi {
 
-MidiOutputPortAndroid::MidiOutputPortAndroid(JNIEnv* env, jobject raw)
+MidiOutputPortAndroid::MidiOutputPortAndroid(
+    JNIEnv* env,
+    const base::android::JavaRef<jobject>& raw)
     : raw_port_(env, raw) {}
 MidiOutputPortAndroid::~MidiOutputPortAndroid() {
   Close();
@@ -40,3 +44,5 @@ void MidiOutputPortAndroid::Send(const std::vector<uint8_t>& data) {
 }
 
 }  // namespace midi
+
+DEFINE_JNI(MidiOutputPortAndroid)

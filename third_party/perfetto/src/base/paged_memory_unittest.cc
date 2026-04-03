@@ -171,6 +171,9 @@ TEST(PagedMemoryTest, AccessUncommittedMemoryTriggersASAN) {
 }
 #endif  // ADDRESS_SANITIZER
 
+#if !defined(ADDRESS_SANITIZER) && !defined(LEAK_SANITIZER) && \
+    !defined(THREAD_SANITIZER) && !defined(MEMORY_SANITIZER)
+// This test seems to hang on some sanitizers.
 TEST(PagedMemoryTest, GuardRegions) {
   const size_t kSize = GetSysPageSize();
   PagedMemory mem = PagedMemory::Allocate(kSize);
@@ -179,6 +182,7 @@ TEST(PagedMemoryTest, GuardRegions) {
   EXPECT_DEATH_IF_SUPPORTED({ raw[-1] = 'x'; }, ".*");
   EXPECT_DEATH_IF_SUPPORTED({ raw[kSize] = 'x'; }, ".*");
 }
+#endif
 
 // Disable this on:
 // MacOS: because it doesn't seem to have an equivalent rlimit to bound mmap().
@@ -196,9 +200,7 @@ TEST(PagedMemoryTest, GuardRegions) {
 #endif
 TEST(PagedMemoryTest, Unchecked) {
   const size_t kMemLimit = 256 * 1024 * 1024l;
-  struct rlimit limit {
-    kMemLimit, kMemLimit
-  };
+  struct rlimit limit{kMemLimit, kMemLimit};
   // ASSERT_EXIT here is to spawn the test in a sub-process and avoid
   // propagating the setrlimit() to other test units in case of failure.
   ASSERT_EXIT(

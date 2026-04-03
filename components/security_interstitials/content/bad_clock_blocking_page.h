@@ -8,7 +8,6 @@
 #include <memory>
 #include <string>
 
-#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "components/security_interstitials/content/ssl_blocking_page_base.h"
 #include "components/ssl_errors/error_classification.h"
@@ -58,7 +57,7 @@ class BadClockBlockingPage : public SSLBlockingPageBase {
  protected:
   // SecurityInterstitialPage implementation:
   void CommandReceived(const std::string& command) override;
-  void PopulateInterstitialStrings(base::Value::Dict& load_time_data) override;
+  void PopulateInterstitialStrings(base::DictValue& load_time_data) override;
 
  private:
   const net::SSLInfo ssl_info_;

@@ -6,29 +6,29 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
+#include "base/strings/string_number_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace autofill::payments {
-
 namespace {
 
 constexpr char kAppLocale[] = "dummy_locale";
-constexpr int kBillableServiceNumber = 12345678;
+constexpr char kCountryCode[] = "FR";
 constexpr int64_t kBillingCustomerNumber = 111222333;
-
-}  // namespace
+constexpr char16_t kCapitalizedIbanRegex[] =
+    u"^[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}[A-Z0-9]{0,18}$";
 
 class GetIbanUploadDetailsRequestTest : public testing::Test {
  public:
   void SetUp() override {
     request_ = std::make_unique<GetIbanUploadDetailsRequest>(
         /*full_sync_enabled=*/true, kAppLocale, kBillingCustomerNumber,
-        kBillableServiceNumber, base::DoNothing());
+        kCountryCode, base::DoNothing());
   }
 
   GetIbanUploadDetailsRequest* GetRequest() { return request_.get(); }
 
-  void ParseResponse(const base::Value::Dict& response) {
+  void ParseResponse(const base::DictValue& response) {
     request_->ParseResponse(response);
   }
 
@@ -37,7 +37,7 @@ class GetIbanUploadDetailsRequestTest : public testing::Test {
   std::u16string context_token() const {
     return request_->context_token_for_testing();
   }
-  base::Value::Dict* legal_message() const {
+  base::DictValue* legal_message() const {
     return request_->legal_message_for_testing();
   }
 
@@ -48,7 +48,8 @@ class GetIbanUploadDetailsRequestTest : public testing::Test {
 TEST_F(GetIbanUploadDetailsRequestTest,
        GetRequestContent_ContainsExpectedData) {
   EXPECT_EQ(GetRequest()->GetRequestUrlPath(),
-            "payments/apis/chromepaymentsservice/getdetailsforiban");
+            "payments/apis/chromepaymentsservice/"
+            "getdetailsforcreatepaymentinstrument");
   EXPECT_FALSE(GetRequest()->GetRequestContent().empty());
   EXPECT_NE(GetRequest()->GetRequestContent().find("language_code"),
             std::string::npos);
@@ -56,8 +57,8 @@ TEST_F(GetIbanUploadDetailsRequestTest,
             std::string::npos);
   EXPECT_NE(GetRequest()->GetRequestContent().find("billable_service"),
             std::string::npos);
-  EXPECT_NE(GetRequest()->GetRequestContent().find(
-                base::NumberToString(kBillableServiceNumber)),
+  EXPECT_NE(GetRequest()->GetRequestContent().find(base::NumberToString(
+                kUploadPaymentMethodBillableServiceNumber)),
             std::string::npos);
   EXPECT_NE(GetRequest()->GetRequestContent().find("customer_context"),
             std::string::npos);
@@ -68,14 +69,18 @@ TEST_F(GetIbanUploadDetailsRequestTest,
             std::string::npos);
   EXPECT_NE(GetRequest()->GetRequestContent().find("chrome_user_context"),
             std::string::npos);
+  EXPECT_NE(GetRequest()->GetRequestContent().find("iban_region_code"),
+            std::string::npos);
 }
 
 TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_ResponseIsComplete) {
-  base::Value::Dict response =
-      base::Value::Dict()
+  base::DictValue response =
+      base::DictValue()
+          .Set("iban_details",
+               base::DictValue().Set("validation_regex", kCapitalizedIbanRegex))
           .Set("context_token", base::Value(u"some token"))
           .Set("legal_message",
-               base::Value::Dict().Set("terms_of_service", "Terms of Service"));
+               base::DictValue().Set("terms_of_service", "Terms of Service"));
 
   ParseResponse(response);
 
@@ -85,9 +90,12 @@ TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_ResponseIsComplete) {
 }
 
 TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_MissingContextToken) {
-  base::Value::Dict response = base::Value::Dict().Set(
-      "legal_message",
-      base::Value::Dict().Set("terms_of_service", "Terms of Service"));
+  base::DictValue response =
+      base::DictValue()
+          .Set("iban_details",
+               base::DictValue().Set("validation_regex", kCapitalizedIbanRegex))
+          .Set("legal_message",
+               base::DictValue().Set("terms_of_service", "Terms of Service"));
 
   ParseResponse(response);
 
@@ -95,12 +103,28 @@ TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_MissingContextToken) {
 }
 
 TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_MissingLegalMessage) {
-  base::Value::Dict response =
-      base::Value::Dict().Set("context_token", base::Value(u"some token"));
+  base::DictValue response =
+      base::DictValue()
+          .Set("iban_details",
+               base::DictValue().Set("validation_regex", kCapitalizedIbanRegex))
+          .Set("context_token", base::Value(u"some token"));
 
   ParseResponse(response);
 
   EXPECT_FALSE(IsResponseComplete());
 }
 
+TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_MissingValidationRegex) {
+  base::DictValue response =
+      base::DictValue()
+          .Set("context_token", base::Value(u"some token"))
+          .Set("legal_message",
+               base::DictValue().Set("terms_of_service", "Terms of Service"));
+
+  ParseResponse(response);
+
+  EXPECT_FALSE(IsResponseComplete());
+}
+
+}  // namespace
 }  // namespace autofill::payments

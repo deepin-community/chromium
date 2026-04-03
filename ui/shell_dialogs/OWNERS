@@ -1,4 +1,5 @@
-per-file *lacros*=file://chromeos/LACROS_OWNERS
+# If you're doing structural changes get a review from one of the OWNERS.
+per-file BUILD.gn=*
 
 per-file *linux*=thomasanderson@chromium.org
 

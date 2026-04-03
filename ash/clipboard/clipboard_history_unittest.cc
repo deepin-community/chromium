@@ -22,7 +22,7 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
-#include "chromeos/crosapi/mojom/clipboard_history.mojom.h"
+#include "chromeos/ui/clipboard_history/clipboard_history_types.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
@@ -53,6 +53,13 @@ class ClipboardHistoryTest : public AshTestBase {
         Shell::Get()->clipboard_history_controller()->history());
     event_generator_ = std::make_unique<ui::test::EventGenerator>(
         ash::Shell::GetPrimaryRootWindow());
+  }
+
+  // AshTestBase:
+  void TearDown() override {
+    event_generator_.reset();
+    clipboard_history_ = nullptr;
+    AshTestBase::TearDown();
   }
 
   const std::list<ClipboardHistoryItem>& GetClipboardHistoryItems() {
@@ -136,7 +143,7 @@ class ClipboardHistoryTest : public AshTestBase {
     {
       ui::ScopedClipboardWriter scw(ui::ClipboardBuffer::kCopyPaste);
       scw.WritePickledData(input_data_pickle,
-                           ui::ClipboardFormatType::WebCustomDataType());
+                           ui::ClipboardFormatType::DataTransferCustomType());
     }
     base::RunLoop().RunUntilIdle();
 
@@ -148,8 +155,8 @@ class ClipboardHistoryTest : public AshTestBase {
     }
 
     std::optional<std::unordered_map<std::u16string, std::u16string>>
-        actual_data = ui::ReadCustomDataIntoMap(base::as_bytes(
-            base::span(items.front().data().GetWebCustomData())));
+        actual_data = ui::ReadCustomDataIntoMap(base::as_byte_span(
+            items.front().data().GetDataTransferCustomData()));
 
     EXPECT_EQ(expected_data, actual_data);
   }
@@ -159,7 +166,7 @@ class ClipboardHistoryTest : public AshTestBase {
  private:
   std::unique_ptr<ui::test::EventGenerator> event_generator_;
   // Owned by ClipboardHistoryControllerImpl.
-  raw_ptr<ClipboardHistory, DanglingUntriaged> clipboard_history_ = nullptr;
+  raw_ptr<ClipboardHistory> clipboard_history_ = nullptr;
 };
 
 // Tests that with nothing copied, nothing is shown.
@@ -207,7 +214,7 @@ TEST_F(ClipboardHistoryTest, HistoryIsReverseChronological) {
                                             u"test4"};
   std::vector<std::u16string> expected_strings = input_strings;
   // Reverse the vector, history should match this ordering.
-  std::reverse(std::begin(expected_strings), std::end(expected_strings));
+  std::ranges::reverse(expected_strings);
   WriteAndEnsureTextHistory(input_strings, expected_strings);
 }
 
@@ -295,7 +302,7 @@ TEST_F(ClipboardHistoryTest, HistoryLimit) {
   // The result should be a reversal of the last five elements.
   std::vector<std::u16string> expected_strings{input_strings.begin() + 1,
                                                input_strings.end()};
-  std::reverse(expected_strings.begin(), expected_strings.end());
+  std::ranges::reverse(expected_strings);
   WriteAndEnsureTextHistory(input_strings, expected_strings);
 }
 
@@ -537,11 +544,11 @@ TEST_F(ClipboardHistoryTest, DisplayFormatForPlainHTML) {
   ui::ClipboardData data;
   data.set_markup_data("plain html with no img or table tags");
   EXPECT_EQ(ClipboardHistoryItem(data).display_format(),
-            crosapi::mojom::ClipboardHistoryDisplayFormat::kText);
+            chromeos::clipboard_history::DisplayFormat::kText);
 
   data.set_markup_data("<img> </img>");
   EXPECT_EQ(ClipboardHistoryItem(data).display_format(),
-            crosapi::mojom::ClipboardHistoryDisplayFormat::kHtml);
+            chromeos::clipboard_history::DisplayFormat::kHtml);
 }
 
 // Tests that exactly one Ash.ClipboardHistory.ControlToVDelayV2 histogram entry

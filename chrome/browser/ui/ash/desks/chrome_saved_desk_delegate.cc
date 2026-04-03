@@ -5,22 +5,20 @@
 #include "chrome/browser/ui/ash/desks/chrome_saved_desk_delegate.h"
 
 #include "ash/constants/notifier_catalogs.h"
+#include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/desk_template.h"
 #include "ash/public/cpp/system/toast_data.h"
 #include "ash/public/cpp/system/toast_manager.h"
+#include "ash/public/cpp/window_properties.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/i18n/number_formatting.h"
 #include "base/trace_event/trace_event.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/icon_standardizer.h"
-#include "chrome/browser/ash/crosapi/browser_manager.h"
-#include "chrome/browser/ash/crosapi/browser_util.h"
-#include "chrome/browser/ash/crosapi/crosapi_ash.h"
-#include "chrome/browser/ash/crosapi/crosapi_manager.h"
-#include "chrome/browser/ash/crosapi/desk_template_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -46,6 +44,7 @@
 #include "components/services/app_service/public/cpp/intent.h"
 #include "components/services/app_service/public/cpp/types_util.h"
 #include "components/user_manager/user_manager.h"
+#include "extensions/browser/extension_registry.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -137,8 +136,7 @@ std::vector<std::u16string> GetUnavailableAppNames(
 
     // If the app ID is a browser then we need to iterate through its windows
     // to catch uninstalled PWAs.
-    if (app_id == app_constants::kChromeAppId ||
-        app_id == app_constants::kLacrosAppId) {
+    if (app_id == app_constants::kChromeAppId) {
       GetUnavailableBrowserAppNames(*app_service_proxy, launch_list, app_names);
     }
 
@@ -187,8 +185,6 @@ void ShowUnavailableAppToast(
 
 // Creates a standard icon image via `result`, and then calls `callback` with
 // the standardized image.
-// TODO(crbug.com/1318250): Remove this once non-lacros browser is not
-// supported.
 void ImageResultToImageSkia(
     base::OnceCallback<void(const gfx::ImageSkia&)> callback,
     const favicon_base::FaviconRawBitmapResult& result) {
@@ -198,9 +194,8 @@ void ImageResultToImageSkia(
     return;
   }
 
-  auto image = gfx::Image::CreateFrom1xPNGBytes(result.bitmap_data->front(),
-                                                result.bitmap_data->size())
-                   .AsImageSkia();
+  auto image =
+      gfx::Image::CreateFrom1xPNGBytes(result.bitmap_data).AsImageSkia();
   image.EnsureRepsForSupportedScales();
   std::move(callback).Run(apps::CreateStandardIconImage(image));
 }
@@ -272,15 +267,8 @@ void ChromeSavedDeskDelegate::GetAppLaunchDataForSavedDesk(
           ->AppRegistryCache();
   const auto app_type = app_registry_cache.GetAppType(app_id);
 
-  // Get the window id needed to fetch app launch info. For chrome apps in
-  // lacros, the window id needs to be fetched from the `LacrosSaveHandler`. See
-  // https://crbug.com/1335491 for more details.
-  const int32_t window_id =
-      app_type == apps::AppType::kStandaloneBrowserChromeApp
-          ? full_restore::FullRestoreSaveHandler::GetInstance()
-                ->GetLacrosChromeAppWindowId(window)
-          : window->GetProperty(app_restore::kWindowIdKey);
-
+  // Get the window id needed to fetch app launch info.
+  const int32_t window_id = window->GetProperty(app_restore::kWindowIdKey);
   auto app_launch_info =
       std::make_unique<app_restore::AppLaunchInfo>(app_id, window_id);
 
@@ -307,9 +295,7 @@ void ChromeSavedDeskDelegate::GetAppLaunchDataForSavedDesk(
   }
 
   if (app_id != app_constants::kChromeAppId &&
-      app_id != app_constants::kLacrosAppId &&
       (app_type == apps::AppType::kChromeApp ||
-       app_type == apps::AppType::kStandaloneBrowserChromeApp ||
        app_type == apps::AppType::kWeb)) {
     // If these values are not present, we will not be able to restore the
     // application. See http://crbug.com/1232520 for more information.
@@ -340,15 +326,6 @@ void ChromeSavedDeskDelegate::GetAppLaunchDataForSavedDesk(
               tab_strip_model->group_model());
     }
     std::move(callback).Run(std::move(app_launch_info));
-    return;
-  }
-
-  if (app_id == app_constants::kLacrosAppId) {
-    const std::string* lacros_window_id =
-        window->GetProperty(app_restore::kLacrosWindowId);
-    DCHECK(lacros_window_id);
-    GetLacrosChromeInfo(std::move(callback), *lacros_window_id,
-                        std::move(app_launch_info));
     return;
   }
 
@@ -399,19 +376,9 @@ ChromeSavedDeskDelegate::MaybeRetrieveIconForSpecialIdentifier(
 
 void ChromeSavedDeskDelegate::GetFaviconForUrl(
     const std::string& page_url,
-    uint64_t lacros_profile_id,
     base::OnceCallback<void(const gfx::ImageSkia&)> callback,
     base::CancelableTaskTracker* tracker) const {
   TRACE_EVENT0("ui", "ChromeSavedDeskDelegate::GetFaviconForUrl");
-  // Get the icons from lacros favicon service.
-  if (crosapi::browser_util::IsLacrosEnabled()) {
-    crosapi::CrosapiManager::Get()
-        ->crosapi_ash()
-        ->desk_template_ash()
-        ->GetFaviconImage(GURL(page_url), lacros_profile_id,
-                          std::move(callback));
-    return;
-  }
 
   favicon::FaviconService* favicon_service =
       FaviconServiceFactory::GetForProfile(
@@ -471,6 +438,12 @@ bool ChromeSavedDeskDelegate::IsWindowSupportedForSavedDesk(
     return false;
   }
 
+  const auto* app_id = window->GetProperty(ash::kAppIDKey);
+  // Feedback app is not saved, see http://b/301479278.
+  if (app_id && *app_id == ash::kOsFeedbackAppId) {
+    return false;
+  }
+
   if (!ash::DeskTemplate::IsAppTypeSupported(window)) {
     return false;
   }
@@ -483,61 +456,17 @@ std::string ChromeSavedDeskDelegate::GetAppShortName(
     const std::string& app_id) {
   TRACE_EVENT0("ui", "ChromeSavedDeskDelegate::GetAppShortName");
   std::string name;
-  auto* app_service_proxy = apps::AppServiceProxyFactory::GetForProfile(
-      ProfileManager::GetActiveUserProfile());
-  DCHECK(app_service_proxy);
+  auto* profile = ProfileManager::GetActiveUserProfile();
+  auto* app_service_proxy =
+      apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(profile)
+          ? apps::AppServiceProxyFactory::GetForProfile(profile)
+          : nullptr;
+  if (!app_service_proxy) {
+    return name;
+  }
 
   app_service_proxy->AppRegistryCache().ForOneApp(
       app_id,
       [&name](const apps::AppUpdate& update) { name = update.ShortName(); });
   return name;
-}
-
-void ChromeSavedDeskDelegate::OnLacrosChromeInfoReturned(
-    GetAppLaunchDataCallback callback,
-    std::unique_ptr<app_restore::AppLaunchInfo> app_launch_info,
-    crosapi::mojom::DeskTemplateStatePtr state) {
-  TRACE_EVENT0("ui", "ChromeSavedDeskDelegate::OnLacrosChromeInfoReturned");
-  if (state.is_null()) {
-    std::move(callback).Run({});
-    return;
-  }
-
-  app_launch_info->browser_extra_info.urls = state->urls;
-  app_launch_info->browser_extra_info.active_tab_index = state->active_index;
-  app_launch_info->browser_extra_info.first_non_pinned_tab_index =
-      state->first_non_pinned_index;
-  if (state->browser_app_name.has_value()) {
-    app_launch_info->browser_extra_info.app_type_browser = true;
-    app_launch_info->browser_extra_info.app_name =
-        state->browser_app_name.value();
-  }
-  app_launch_info->browser_extra_info.tab_group_infos =
-      state->groups.value_or(std::vector<tab_groups::TabGroupInfo>());
-  if (state->lacros_profile_id != 0) {
-    app_launch_info->browser_extra_info.lacros_profile_id =
-        state->lacros_profile_id;
-  }
-
-  std::move(callback).Run(std::move(app_launch_info));
-}
-
-void ChromeSavedDeskDelegate::GetLacrosChromeInfo(
-    GetAppLaunchDataCallback callback,
-    const std::string& window_unique_id,
-    std::unique_ptr<app_restore::AppLaunchInfo> app_launch_info) const {
-  TRACE_EVENT0("ui", "ChromeSavedDeskDelegate::GetLacrosChromeInfo");
-  crosapi::BrowserManager* browser_manager = crosapi::BrowserManager::Get();
-  if (!browser_manager || !browser_manager->IsRunning()) {
-    LOG(WARNING)
-        << "The browser manager is not running.  Cannot request browser state.";
-    std::move(callback).Run({});
-    return;
-  }
-
-  browser_manager->GetBrowserInformation(
-      window_unique_id,
-      base::BindOnce(&ChromeSavedDeskDelegate::OnLacrosChromeInfoReturned,
-                     weak_factory_.GetWeakPtr(), std::move(callback),
-                     std::move(app_launch_info)));
 }

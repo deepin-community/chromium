@@ -23,7 +23,8 @@
 #include <stdlib.h>
 
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
-#include <Windows.h>
+#include <windows.h>
+
 #include <synchapi.h>
 #else
 #include <unistd.h>
@@ -52,12 +53,15 @@ void UnixTaskRunner::WakeUp() {
 
 void UnixTaskRunner::Run() {
   PERFETTO_DCHECK_THREAD(thread_checker_);
-  created_thread_id_ = GetThreadId();
-  quit_ = false;
+  created_thread_id_.store(GetThreadId(), std::memory_order_relaxed);
+  {
+    std::lock_guard<base::MaybeRtMutex> lock(lock_);
+    quit_ = false;
+  }
   for (;;) {
     int poll_timeout_ms;
     {
-      std::lock_guard<std::mutex> lock(lock_);
+      std::lock_guard<base::MaybeRtMutex> lock(lock_);
       if (quit_)
         return;
       poll_timeout_ms = GetDelayMsToNextTaskLocked();
@@ -93,19 +97,24 @@ void UnixTaskRunner::Run() {
 }
 
 void UnixTaskRunner::Quit() {
-  std::lock_guard<std::mutex> lock(lock_);
+  std::lock_guard<base::MaybeRtMutex> lock(lock_);
   quit_ = true;
   WakeUp();
 }
 
 bool UnixTaskRunner::QuitCalled() {
-  std::lock_guard<std::mutex> lock(lock_);
+  std::lock_guard<base::MaybeRtMutex> lock(lock_);
   return quit_;
 }
 
 bool UnixTaskRunner::IsIdleForTesting() {
-  std::lock_guard<std::mutex> lock(lock_);
+  std::lock_guard<base::MaybeRtMutex> lock(lock_);
   return immediate_tasks_.empty();
+}
+
+void UnixTaskRunner::AdvanceTimeForTesting(uint32_t ms) {
+  std::lock_guard<base::MaybeRtMutex> lock(lock_);
+  advanced_time_for_testing_ += TimeMillis(ms);
 }
 
 void UnixTaskRunner::UpdateWatchTasksLocked() {
@@ -135,14 +144,14 @@ void UnixTaskRunner::RunImmediateAndDelayedTask() {
   std::function<void()> delayed_task;
   TimeMillis now = GetWallTimeMs();
   {
-    std::lock_guard<std::mutex> lock(lock_);
+    std::lock_guard<base::MaybeRtMutex> lock(lock_);
     if (!immediate_tasks_.empty()) {
       immediate_task = std::move(immediate_tasks_.front());
       immediate_tasks_.pop_front();
     }
     if (!delayed_tasks_.empty()) {
       auto it = delayed_tasks_.begin();
-      if (now >= it->first) {
+      if (now + advanced_time_for_testing_ >= it->first) {
         delayed_task = std::move(it->second);
         delayed_tasks_.erase(it);
       }
@@ -209,7 +218,7 @@ void UnixTaskRunner::PostFileDescriptorWatches(uint64_t windows_wait_result) {
 void UnixTaskRunner::RunFileDescriptorWatch(PlatformHandle fd) {
   std::function<void()> task;
   {
-    std::lock_guard<std::mutex> lock(lock_);
+    std::lock_guard<base::MaybeRtMutex> lock(lock_);
     auto it = watch_tasks_.find(fd);
     if (it == watch_tasks_.end())
       return;
@@ -242,7 +251,8 @@ int UnixTaskRunner::GetDelayMsToNextTaskLocked() const {
   if (!immediate_tasks_.empty())
     return 0;
   if (!delayed_tasks_.empty()) {
-    TimeMillis diff = delayed_tasks_.begin()->first - GetWallTimeMs();
+    TimeMillis diff = delayed_tasks_.begin()->first - GetWallTimeMs() -
+                      advanced_time_for_testing_;
     return std::max(0, static_cast<int>(diff.count()));
   }
   return -1;
@@ -251,7 +261,7 @@ int UnixTaskRunner::GetDelayMsToNextTaskLocked() const {
 void UnixTaskRunner::PostTask(std::function<void()> task) {
   bool was_empty;
   {
-    std::lock_guard<std::mutex> lock(lock_);
+    std::lock_guard<base::MaybeRtMutex> lock(lock_);
     was_empty = immediate_tasks_.empty();
     immediate_tasks_.push_back(std::move(task));
   }
@@ -263,8 +273,9 @@ void UnixTaskRunner::PostDelayedTask(std::function<void()> task,
                                      uint32_t delay_ms) {
   TimeMillis runtime = GetWallTimeMs() + TimeMillis(delay_ms);
   {
-    std::lock_guard<std::mutex> lock(lock_);
-    delayed_tasks_.insert(std::make_pair(runtime, std::move(task)));
+    std::lock_guard<base::MaybeRtMutex> lock(lock_);
+    delayed_tasks_.insert(
+        std::make_pair(runtime + advanced_time_for_testing_, std::move(task)));
   }
   WakeUp();
 }
@@ -273,7 +284,7 @@ void UnixTaskRunner::AddFileDescriptorWatch(PlatformHandle fd,
                                             std::function<void()> task) {
   PERFETTO_DCHECK(PlatformHandleChecker::IsValid(fd));
   {
-    std::lock_guard<std::mutex> lock(lock_);
+    std::lock_guard<base::MaybeRtMutex> lock(lock_);
     PERFETTO_DCHECK(!watch_tasks_.count(fd));
     WatchTask& watch_task = watch_tasks_[fd];
     watch_task.callback = std::move(task);
@@ -290,7 +301,7 @@ void UnixTaskRunner::AddFileDescriptorWatch(PlatformHandle fd,
 void UnixTaskRunner::RemoveFileDescriptorWatch(PlatformHandle fd) {
   PERFETTO_DCHECK(PlatformHandleChecker::IsValid(fd));
   {
-    std::lock_guard<std::mutex> lock(lock_);
+    std::lock_guard<base::MaybeRtMutex> lock(lock_);
     PERFETTO_DCHECK(watch_tasks_.count(fd));
     watch_tasks_.erase(fd);
     watch_tasks_changed_ = true;
@@ -299,7 +310,7 @@ void UnixTaskRunner::RemoveFileDescriptorWatch(PlatformHandle fd) {
 }
 
 bool UnixTaskRunner::RunsTasksOnCurrentThread() const {
-  return GetThreadId() == created_thread_id_;
+  return GetThreadId() == created_thread_id_.load(std::memory_order_relaxed);
 }
 
 }  // namespace base

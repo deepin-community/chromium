@@ -6,7 +6,7 @@
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "chrome/browser/infobars/infobar_observer.h"
+#include "chrome/browser/infobars/test_support/infobar_observer.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_navigator.h"
@@ -59,7 +59,7 @@ class WebGLInfoBarTest : public InProcessBrowserTest {
   base::FilePath gpu_test_dir_;
 };
 
-// This test is flaky. http://crbug.com/324555
+// This test is flaky. http://crbug.com/40343251
 IN_PROC_BROWSER_TEST_F(WebGLInfoBarTest, DISABLED_ContextLossRaisesInfoBar) {
 #undef MAYBE_ContextLossRaisesInfoBard
   if (gpu::GPUTestBotConfig::CurrentConfigMatches("XP"))

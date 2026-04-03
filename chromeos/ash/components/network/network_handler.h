@@ -8,7 +8,7 @@
 #include <memory>
 
 #include "base/component_export.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/task/single_thread_task_runner.h"
 
 class PrefService;
@@ -32,6 +32,7 @@ class EphemeralNetworkConfigurationHandler;
 class EphemeralNetworkPoliciesEnablementHandler;
 class ESimPolicyLoginMetricsLogger;
 class GeolocationHandler;
+class GeolocationHandlerImpl;
 class HiddenNetworkHandler;
 class HotspotAllowedFlagHandler;
 class HotspotCapabilitiesProvider;
@@ -50,6 +51,7 @@ class NetworkConfigurationHandler;
 class NetworkConnectionHandler;
 class NetworkDeviceHandler;
 class NetworkDeviceHandlerImpl;
+class NetworkLoginScreenProtocolHandlerObserver;
 class NetworkMetadataStore;
 class NetworkProfileHandler;
 class NetworkStateHandler;
@@ -69,6 +71,9 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkHandler {
  public:
   // Sets the global instance. Must be called before any calls to Get().
   static void Initialize();
+
+  // Sets the global fake instance.
+  static void InitializeFake();
 
   // Destroys the global instance.
   static void Shutdown();
@@ -145,7 +150,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkHandler {
  private:
   friend class ConnectionInfoMetricsLoggerTest;
 
-  NetworkHandler();
+  NetworkHandler(std::unique_ptr<NetworkStateHandler> handler);
   virtual ~NetworkHandler();
 
   void Init();
@@ -206,13 +211,16 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkHandler {
   std::unique_ptr<NetworkSmsHandler> network_sms_handler_;
   std::unique_ptr<Network3gppHandler> network_3gpp_handler_;
   std::unique_ptr<TextMessageProvider> text_message_provider_;
-  std::unique_ptr<GeolocationHandler> geolocation_handler_;
+  std::unique_ptr<GeolocationHandlerImpl> geolocation_handler_;
   std::unique_ptr<UIProxyConfigService> ui_proxy_config_service_;
   std::unique_ptr<NetworkMetadataStore> network_metadata_store_;
   std::unique_ptr<EphemeralNetworkPoliciesEnablementHandler>
       ephemeral_network_policies_enablement_handler_;
   std::unique_ptr<EphemeralNetworkConfigurationHandler>
       ephemeral_network_configuration_handler_;
+
+  std::unique_ptr<NetworkLoginScreenProtocolHandlerObserver>
+      network_login_screen_protocol_handler_observer_;
 
   // True when the device is managed by policy.
   bool is_enterprise_managed_ = false;

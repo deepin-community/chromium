@@ -15,15 +15,19 @@
 #include "base/memory/raw_ptr.h"
 #include "device/vr/openxr/exit_xr_present_reason.h"
 #include "device/vr/openxr/openxr_anchor_manager.h"
+#include "device/vr/openxr/openxr_depth_sensor.h"
 #include "device/vr/openxr/openxr_graphics_binding.h"
+#include "device/vr/openxr/openxr_light_estimator.h"
 #include "device/vr/openxr/openxr_platform.h"
 #include "device/vr/openxr/openxr_scene_understanding_manager.h"
 #include "device/vr/openxr/openxr_stage_bounds_provider.h"
 #include "device/vr/openxr/openxr_unbounded_space_provider.h"
 #include "device/vr/openxr/openxr_view_configuration.h"
+#include "device/vr/openxr/openxr_visibility_mask_handler.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
 #include "device/vr/public/mojom/xr_session.mojom.h"
 #include "device/vr/vr_export.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/openxr/src/include/openxr/openxr.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -46,13 +50,22 @@ class OpenXRInputHelper;
 class VRTestHook;
 class ServiceTestHook;
 
-using SessionStartedCallback = base::OnceCallback<void(XrResult result)>;
+using SessionStartedCallback =
+    base::OnceCallback<void(mojom::XRRuntimeSessionOptionsPtr options,
+                            XrResult result)>;
 using SessionEndedCallback = base::RepeatingCallback<void(ExitXrPresentReason)>;
 using VisibilityChangedCallback =
     base::RepeatingCallback<void(mojom::XRVisibilityState)>;
 
+// An XrPosef with the space it is relative to.
+struct XrLocation {
+  XrPosef pose;
+  XrSpace space;
+};
+
 class OpenXrApiWrapper {
  public:
+  using XrFutureReadyCallback = base::OnceCallback<void(XrFutureEXT)>;
   OpenXrApiWrapper();
 
   OpenXrApiWrapper(const OpenXrApiWrapper&) = delete;
@@ -73,41 +86,55 @@ class OpenXrApiWrapper {
 
   static VRTestHook* GetTestHook();
 
+  static bool NeedsSeparateActivity();
+
   bool UpdateAndGetSessionEnded();
 
   // The supplied graphics_binding is guaranteed by the caller to exist until
   // this object is destroyed.
-  XrResult InitSession(
-      const std::unordered_set<mojom::XRSessionFeature>& enabled_features,
-      const OpenXrExtensionHelper& extension_helper,
-      SessionStartedCallback on_session_started_callback,
-      SessionEndedCallback on_session_ended_callback,
-      VisibilityChangedCallback visibility_changed_callback);
+  XrResult InitSession(mojom::XRRuntimeSessionOptionsPtr options,
+                       const OpenXrExtensionHelper& extension_helper,
+                       SessionStartedCallback on_session_started_callback,
+                       SessionEndedCallback on_session_ended_callback,
+                       VisibilityChangedCallback visibility_changed_callback);
 
-  XrSpace GetReferenceSpace(device::mojom::XRReferenceSpaceType type) const;
+  XrSpace GetReferenceSpace(mojom::XRReferenceSpaceType type) const;
+  std::optional<XrLocation> GetXrLocationFromNativeOriginInformation(
+      const mojom::XRNativeOriginInformation& native_origin,
+      const gfx::Transform& native_origin_from_object);
+
+  XrInstance instance() const { return instance_; }
+  XrSession session() const { return session_; }
+  XrSystemId system() const { return system_; }
 
   XrResult BeginFrame();
   XrResult EndFrame();
   bool HasPendingFrame() const;
   bool HasFrameState() const;
+  bool IsFeatureEnabled(device::mojom::XRSessionFeature feature) const;
 
+  const std::unordered_set<mojom::XRSessionFeature>& GetEnabledFeatures() const;
   std::vector<mojom::XRViewPtr> GetViews() const;
   mojom::VRPosePtr GetViewerPose() const;
   std::vector<mojom::XRInputSourceStatePtr> GetInputState();
+  void OnHideInputSources();
 
   std::vector<mojom::XRViewPtr> GetDefaultViews() const;
+  float RecommendedViewportScale() const;
   XrTime GetPredictedDisplayTime() const;
   bool GetStageParameters(std::vector<gfx::Point3F>& stage_bounds,
                           gfx::Transform& local_from_stage);
-  bool StageParametersEnabled() const;
+  std::optional<gfx::Transform> GetLocalFromFloor();
 
   device::mojom::XREnvironmentBlendMode PickEnvironmentBlendModeForSession(
       device::mojom::XRSessionMode session_mode);
 
-  OpenXrAnchorManager* GetOrCreateAnchorManager(
-      const OpenXrExtensionHelper& extension_helper);
-  OpenXRSceneUnderstandingManager* GetOrCreateSceneUnderstandingManager(
-      const OpenXrExtensionHelper& extension_helper);
+  // Various manager getters if they exist.
+  OpenXrPlaneManager* GetPlaneManager();
+  OpenXrAnchorManager* GetAnchorManager();
+  OpenXrHitTestManager* GetHitTestManager();
+  OpenXrLightEstimator* GetLightEstimator();
+  OpenXrDepthSensor* GetDepthSensor();
 
   void OnContextProviderCreated(
       scoped_refptr<viz::ContextProvider> context_provider);
@@ -115,12 +142,25 @@ class OpenXrApiWrapper {
 
   bool CanEnableAntiAliasing() const;
 
+  // Polls the given future until it is ready. Once ready, the provided
+  // callback will be invoked with the future. If polling fails, the callback
+  // will be invoked with XR_NULL_FUTURE_EXT.
+  void PollFuture(XrFutureEXT future,
+                  base::OnceCallback<void(XrFutureEXT)> on_ready_callback);
+
+  uint32_t GetRecommendedSwapchainSampleCount() const;
+
+  uint16_t GetMaxRenderLayers() const;
+
   static void DEVICE_VR_EXPORT SetTestHook(VRTestHook* hook);
 
  private:
   void Reset();
   bool Initialize(XrInstance instance, OpenXrGraphicsBinding* graphics_binding);
   void Uninitialize();
+  XrResult ShutdownSession();
+  XrResult EnableSupportedFeatures(
+      const OpenXrExtensionHelper& extension_helper);
 
   XrResult InitializeSystem();
   XrResult InitializeViewConfig(XrViewConfigurationType type,
@@ -130,6 +170,7 @@ class OpenXrApiWrapper {
       std::vector<XrViewConfigurationView>& view_properties) const;
   XrResult InitializeEnvironmentBlendMode(XrSystemId system);
   XrResult ProcessEvents();
+  void ProcessPendingFutures();
   void EnsureEventPolling();
 
   XrResult CreateSession();
@@ -143,17 +184,21 @@ class OpenXrApiWrapper {
       const std::vector<XrSecondaryViewConfigurationStateMSFT>& states);
   XrResult UpdateViewConfigurations();
   XrResult LocateViews(XrReferenceSpaceType space_type,
-                       OpenXrViewConfiguration& view_config) const;
+                       OpenXrViewConfiguration& view_config);
 
   bool HasInstance() const;
   bool HasSystem() const;
   bool HasBlendMode() const;
   bool HasSession() const;
-  bool HasColorSwapChain() const;
   bool HasSpace(XrReferenceSpaceType type) const;
 
-  uint32_t GetRecommendedSwapchainSampleCount() const;
-  XrResult UpdateStageBounds();
+  void UpdateStageBounds();
+  std::optional<gfx::Transform> GetLocalFromStage();
+  std::optional<gfx::Transform> GetBaseSpaceFromSpace(
+      mojom::XRReferenceSpaceType base_space,
+      mojom::XRReferenceSpaceType space);
+  XrResult CreateEmulatedLocalFloorSpace(XrSpace* space);
+  XrResult UpdateLocalFloorSpace();
 
   device::mojom::XREnvironmentBlendMode GetMojoBlendMode(
       XrEnvironmentBlendMode xr_blend_mode);
@@ -165,7 +210,6 @@ class OpenXrApiWrapper {
 
   bool ShouldCreateSharedImages() const;
   void CreateSharedMailboxes();
-  void ReleaseColorSwapchainImages();
 
   void SetXrSessionState(XrSessionState new_state);
 
@@ -177,6 +221,7 @@ class OpenXrApiWrapper {
   SessionStartedCallback on_session_started_callback_;
   SessionEndedCallback on_session_ended_callback_;
   VisibilityChangedCallback visibility_changed_callback_;
+  mojom::XRRuntimeSessionOptionsPtr session_options_;
 
   // Testing objects
   static VRTestHook* test_hook_;
@@ -197,18 +242,23 @@ class OpenXrApiWrapper {
 
   // These objects are initialized when a session begins and stay constant
   // throughout the lifetime of the session.
-  XrSession session_;
-  XrSpace local_space_;
-  XrSpace stage_space_;
-  XrSpace view_space_;
-  XrSpace unbounded_space_;
-  bool stage_parameters_enabled_;
+  XrSession session_ = XR_NULL_HANDLE;
+  XrSpace local_space_ = XR_NULL_HANDLE;
+  XrSpace local_floor_space_ = XR_NULL_HANDLE;
+  XrSpace stage_space_ = XR_NULL_HANDLE;
+  XrSpace view_space_ = XR_NULL_HANDLE;
+  XrSpace unbounded_space_ = XR_NULL_HANDLE;
+  bool emulated_local_floor_ = false;
+  bool try_recreate_local_floor_ = false;
   std::unordered_set<mojom::XRSessionFeature> enabled_features_;
   raw_ptr<OpenXrGraphicsBinding> graphics_binding_ = nullptr;
 
-  // The swapchain is initializd when a session begins and is re-created when
-  // the state of a secondary view configuration changes.
-  XrSwapchain color_swapchain_;
+  bool received_initial_valid_primary_views_ = false;
+  uint64_t frames_before_initial_valid_primary_views_ = 0;
+
+  // The number will be updated from XrSystemGraphicsProperties
+  // when session is initialized.
+  uint32_t max_layer_count_ = 0;
 
   // The rest of these objects store information about the current frame and are
   // updated each frame.
@@ -218,14 +268,20 @@ class OpenXrApiWrapper {
   std::unordered_map<XrViewConfigurationType, OpenXrViewConfiguration>
       secondary_view_configs_;
 
-  std::unique_ptr<OpenXrAnchorManager> anchor_manager_;
+  absl::flat_hash_map<XrFutureEXT, XrFutureReadyCallback> pending_futures_;
+
+  std::unique_ptr<OpenXrDepthSensor> depth_sensor_;
+  std::unique_ptr<OpenXrLightEstimator> light_estimator_;
   std::unique_ptr<OpenXrStageBoundsProvider> bounds_provider_;
   std::unique_ptr<OpenXRSceneUnderstandingManager> scene_understanding_manager_;
   std::unique_ptr<OpenXrUnboundedSpaceProvider> unbounded_space_provider_;
+  std::unique_ptr<OpenXrVisibilityMaskHandler> visibility_mask_handler_;
 
   // The context provider is owned by the OpenXrRenderLoop, and may change when
   // there is a context lost.
   scoped_refptr<viz::ContextProvider> context_provider_;
+
+  raw_ptr<const OpenXrExtensionHelper> extension_helper_ = nullptr;
 
   base::WeakPtrFactory<OpenXrApiWrapper> weak_ptr_factory_{this};
 };

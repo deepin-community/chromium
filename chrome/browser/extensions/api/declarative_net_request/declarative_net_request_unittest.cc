@@ -31,16 +31,14 @@
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/declarative_net_request/dnr_test_base.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
-#include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/load_error_reporter.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/api/declarative_net_request/composite_matcher.h"
 #include "extensions/browser/api/declarative_net_request/constants.h"
 #include "extensions/browser/api/declarative_net_request/declarative_net_request_api.h"
-#include "extensions/browser/api/declarative_net_request/declarative_net_request_prefs_helper.h"
 #include "extensions/browser/api/declarative_net_request/file_backed_ruleset_source.h"
 #include "extensions/browser/api/declarative_net_request/parse_info.h"
+#include "extensions/browser/api/declarative_net_request/prefs_helper.h"
 #include "extensions/browser/api/declarative_net_request/rule_counts.h"
 #include "extensions/browser/api/declarative_net_request/rules_monitor_service.h"
 #include "extensions/browser/api/declarative_net_request/ruleset_manager.h"
@@ -50,6 +48,8 @@
 #include "extensions/browser/api_test_utils.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/extension_registrar.h"
+#include "extensions/browser/load_error_reporter.h"
 #include "extensions/browser/test_extension_registry_observer.h"
 #include "extensions/common/api/declarative_net_request/constants.h"
 #include "extensions/common/api/declarative_net_request/test_utils.h"
@@ -61,6 +61,8 @@
 #include "extensions/common/url_pattern.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 namespace declarative_net_request {
@@ -87,8 +89,8 @@ using ::testing::UnorderedElementsAre;
 using ::testing::UnorderedElementsAreArray;
 
 template <class T>
-base::Value::List VectorToList(const std::vector<T>& values) {
-  base::Value::List lv;
+base::ListValue VectorToList(const std::vector<T>& values) {
+  base::ListValue lv;
   for (const auto& value : values) {
     lv.Append(value);
   }
@@ -113,7 +115,7 @@ InstallWarning GetLargeRegexWarning(
 
 // Returns the vector of install warnings, filtering out the one associated with
 // a deprecated manifest version.
-// TODO(https://crbug.com/1269161): Remove this method when the associated tests
+// TODO(crbug.com/40804030): Remove this method when the associated tests
 // are updated to MV3.
 std::vector<InstallWarning> GetFilteredInstallWarnings(
     const Extension& extension) {
@@ -158,6 +160,13 @@ class DeclarativeNetRequestUnittest : public DNRTestBase {
     // Sanity check that the extension can index and enable up to
     // |rule_limit_override_| + |global_limit_override_| rules.
     ASSERT_EQ(300, GetMaximumRulesPerRuleset());
+  }
+
+  void TearDown() override {
+    extension_prefs_ = nullptr;
+    extension_.reset();
+    loader_.reset();
+    DNRTestBase::TearDown();
   }
 
  protected:
@@ -276,8 +285,8 @@ class DeclarativeNetRequestUnittest : public DNRTestBase {
                               const std::vector<TestRule>& rules_to_add,
                               RulesetScope scope,
                               const std::string* expected_error = nullptr) {
-    base::Value::List ids_to_remove_value = VectorToList(rule_ids_to_remove);
-    base::Value::List rules_to_add_value = ToListValue(rules_to_add);
+    base::ListValue ids_to_remove_value = VectorToList(rule_ids_to_remove);
+    base::ListValue rules_to_add_value = ToListValue(rules_to_add);
 
     constexpr const char kParams[] = R"(
       [{
@@ -335,7 +344,7 @@ class DeclarativeNetRequestUnittest : public DNRTestBase {
           "ruleIds": $1
         }]
       )";
-      base::Value::List rule_ids_value = VectorToList(rule_ids.value());
+      base::ListValue rule_ids_value = VectorToList(rule_ids.value());
 
       json_args = content::JsReplace(kParams, std::move(rule_ids_value));
     }
@@ -366,8 +375,8 @@ class DeclarativeNetRequestUnittest : public DNRTestBase {
       const std::vector<std::string>& ruleset_ids_to_remove,
       const std::vector<std::string>& ruleset_ids_to_add,
       std::optional<std::string> expected_error) {
-    base::Value::List ids_to_remove_value = ToListValue(ruleset_ids_to_remove);
-    base::Value::List ids_to_add_value = ToListValue(ruleset_ids_to_add);
+    base::ListValue ids_to_remove_value = ToListValue(ruleset_ids_to_remove);
+    base::ListValue ids_to_add_value = ToListValue(ruleset_ids_to_add);
 
     constexpr const char kParams[] = R"(
       [{
@@ -421,8 +430,8 @@ class DeclarativeNetRequestUnittest : public DNRTestBase {
                                     const std::vector<int>& rule_ids_to_disable,
                                     const std::vector<int>& rule_ids_to_enable,
                                     std::optional<std::string> expected_error) {
-    base::Value::List ids_to_disable = VectorToList(rule_ids_to_disable);
-    base::Value::List ids_to_enable = VectorToList(rule_ids_to_enable);
+    base::ListValue ids_to_disable = VectorToList(rule_ids_to_disable);
+    base::ListValue ids_to_enable = VectorToList(rule_ids_to_enable);
 
     constexpr const char kParams[] = R"([{ "rulesetId": $1,
                                            "disableRuleIds": $2,
@@ -456,7 +465,7 @@ class DeclarativeNetRequestUnittest : public DNRTestBase {
   bool RulesetExists(const std::string& ruleset_id_string) {
     const DNRManifestData::ManifestIDToRulesetMap& public_id_map =
         DNRManifestData::GetManifestIDToRulesetMap(*extension());
-    return base::Contains(public_id_map, ruleset_id_string);
+    return public_id_map.contains(ruleset_id_string);
   }
 
   void VerifyGetDisabledRuleIdsFunction(
@@ -504,7 +513,7 @@ class DeclarativeNetRequestUnittest : public DNRTestBase {
   }
 
   size_t GetDisabledStaticRuleCount() const {
-    const DeclarativeNetRequestPrefsHelper helper(*extension_prefs_);
+    const PrefsHelper helper(*extension_prefs_);
     return helper.GetDisabledStaticRuleCount(extension()->id());
   }
 
@@ -529,12 +538,12 @@ class DeclarativeNetRequestUnittest : public DNRTestBase {
 
   void CheckExtensionAllocationInPrefs(
       const ExtensionId& extension_id,
-      std::optional<size_t> expected_rules_count) {
-    size_t actual_rules_count = 0;
+      std::optional<int> expected_rules_count) {
+    int actual_rules_count = 0;
 
+    const PrefsHelper helper(*extension_prefs_);
     bool has_allocated_rules_count =
-        extension_prefs_->GetDNRAllocatedGlobalRuleCount(extension_id,
-                                                         &actual_rules_count);
+        helper.GetAllocatedGlobalRuleCount(extension_id, actual_rules_count);
 
     EXPECT_EQ(expected_rules_count.has_value(), has_allocated_rules_count);
     if (expected_rules_count.has_value())
@@ -558,7 +567,7 @@ class DeclarativeNetRequestUnittest : public DNRTestBase {
               static_cast<size_t>(result->GetInt()));
   }
 
-  const ExtensionPrefs* extension_prefs() { return extension_prefs_; }
+  ExtensionPrefs* extension_prefs() { return extension_prefs_; }
 
   ChromeTestExtensionLoader* extension_loader() { return loader_.get(); }
 
@@ -784,6 +793,15 @@ TEST_P(SingleRulesetTest, EmptyRequestDomainsList) {
                             *rule.id);
 }
 
+// Ensure that rules with an empty "top_domains" condition fail parsing.
+TEST_P(SingleRulesetTest, EmptyTopDomainsList) {
+  TestRule rule = CreateGenericRule();
+  rule.condition->top_domains = std::vector<std::string>();
+  AddRule(rule);
+  LoadAndExpectParseFailure(ParseResult::ERROR_EMPTY_TOP_DOMAINS_LIST,
+                            *rule.id);
+}
+
 // Ensure that rules with a "domains" condition that contains non-ascii
 // characters fail parsing.
 TEST_P(SingleRulesetTest, NonAsciiDomainsList) {
@@ -845,6 +863,26 @@ TEST_P(SingleRulesetTest, NonAsciiExcludedRequestDomainsList) {
       ParseResult::ERROR_NON_ASCII_EXCLUDED_REQUEST_DOMAIN, *rule.id);
 }
 
+// Ensure that rules with a "top_domains" condition that contains non-ascii
+// characters fail parsing.
+TEST_P(SingleRulesetTest, NonAsciiTopDomainsList) {
+  TestRule rule = CreateGenericRule();
+  rule.condition->top_domains = std::vector<std::string>({"😎.example"});
+  AddRule(rule);
+  LoadAndExpectParseFailure(ParseResult::ERROR_NON_ASCII_TOP_DOMAIN, *rule.id);
+}
+
+// Ensure that rules with a "excluded_top_domains" condition that contains
+// non-ascii characters fail parsing.
+TEST_P(SingleRulesetTest, NonAsciiExcludedTopDomainsList) {
+  TestRule rule = CreateGenericRule();
+  rule.condition->excluded_top_domains =
+      std::vector<std::string>({"😎.example"});
+  AddRule(rule);
+  LoadAndExpectParseFailure(ParseResult::ERROR_NON_ASCII_EXCLUDED_TOP_DOMAIN,
+                            *rule.id);
+}
+
 TEST_P(SingleRulesetTest, EmptyResourceTypeList) {
   TestRule rule = CreateGenericRule();
   rule.condition->resource_types = std::vector<std::string>();
@@ -871,7 +909,7 @@ TEST_P(SingleRulesetTest, InvalidRedirectURL) {
 }
 
 TEST_P(SingleRulesetTest, ListNotPassed) {
-  SetRules(base::Value(base::Value::Dict()));
+  SetRules(base::Value(base::DictValue()));
   LoadAndExpectError(kErrorListNotPassed);
 }
 
@@ -905,8 +943,8 @@ TEST_P(SingleRulesetTest, TooManyParseFailures) {
   extension_loader()->set_ignore_manifest_warnings(true);
   LoadAndExpectSuccess(kNumValidRules);
 
-  // TODO(crbug.com/879355): CrxInstaller reloads the extension after moving it,
-  // which causes it to lose the install warning. This should be fixed.
+  // TODO(crbug.com/40591637): CrxInstaller reloads the extension after moving
+  // it, which causes it to lose the install warning. This should be fixed.
   if (GetParam() != ExtensionLoadType::PACKED) {
     std::vector<InstallWarning> expected_warnings =
         GetFilteredInstallWarnings(*extension());
@@ -927,7 +965,7 @@ TEST_P(SingleRulesetTest, TooManyParseFailures) {
 
     warning.message = ErrorUtils::FormatErrorMessage(
         GetErrorWithFilename(kTooManyParseFailuresWarning),
-        std::to_string(kMaxUnparsedRulesWarnings));
+        base::NumberToString(kMaxUnparsedRulesWarnings));
     EXPECT_EQ(warning, expected_warnings[kMaxUnparsedRulesWarnings]);
   }
 }
@@ -964,8 +1002,8 @@ TEST_P(SingleRulesetTest, InvalidJSONRules_StrongTypes) {
   extension_loader()->set_ignore_manifest_warnings(true);
   LoadAndExpectSuccess(2u);
 
-  // TODO(crbug.com/879355): CrxInstaller reloads the extension after moving it,
-  // which causes it to lose the install warning. This should be fixed.
+  // TODO(crbug.com/40591637): CrxInstaller reloads the extension after moving
+  // it, which causes it to lose the install warning. This should be fixed.
   if (GetParam() != ExtensionLoadType::PACKED) {
     std::vector<InstallWarning> install_warnings =
         GetFilteredInstallWarnings(*extension());
@@ -1009,10 +1047,12 @@ TEST_P(SingleRulesetTest, InvalidJSONRules_Parsed) {
         "priority": 1,
         "condition" : {"urlFilter" : "google"},
         "action" : {"type" : "block" }
-      }
+      },
+      []
     ]
   )";
-  SetRules(*base::JSONReader::Read(kRules));
+  SetRules(
+      *base::JSONReader::Read(kRules, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   extension_loader()->set_ignore_manifest_warnings(true);
 
@@ -1022,12 +1062,12 @@ TEST_P(SingleRulesetTest, InvalidJSONRules_Parsed) {
   size_t expected_rule_count = 2;
   LoadAndExpectSuccess(expected_rule_count);
 
-  // TODO(crbug.com/879355): CrxInstaller reloads the extension after moving it,
-  // which causes it to lose the install warning. This should be fixed.
+  // TODO(crbug.com/40591637): CrxInstaller reloads the extension after moving
+  // it, which causes it to lose the install warning. This should be fixed.
   if (GetParam() != ExtensionLoadType::PACKED) {
     std::vector<InstallWarning> install_warnings =
         GetFilteredInstallWarnings(*extension());
-    ASSERT_EQ(2u, install_warnings.size());
+    ASSERT_EQ(3u, install_warnings.size());
     std::vector<InstallWarning> expected_warnings;
 
     expected_warnings.emplace_back(
@@ -1040,6 +1080,12 @@ TEST_P(SingleRulesetTest, InvalidJSONRules_Parsed) {
         ErrorUtils::FormatErrorMessage(
             GetErrorWithFilename(kRuleNotParsedWarning), "index 4",
             "'id': expected id, got string"),
+        dnr_api::ManifestKeys::kDeclarativeNetRequest,
+        dnr_api::DNRInfo::kRuleResources);
+    expected_warnings.emplace_back(
+        ErrorUtils::FormatErrorMessage(
+            GetErrorWithFilename(kRuleNotParsedWarning), "index 5",
+            "expected dictionary, got list"),
         dnr_api::ManifestKeys::kDeclarativeNetRequest,
         dnr_api::DNRInfo::kRuleResources);
     EXPECT_EQ(expected_warnings, install_warnings);
@@ -1078,8 +1124,8 @@ TEST_P(SingleRulesetTest, LargeRegexIgnored) {
   tester.ExpectTotalCount(kRegexRuleSizeHistogram,
                           kNumSmallRegex + kNumLargeRegex);
 
-  // TODO(crbug.com/879355): CrxInstaller reloads the extension after moving it,
-  // which causes it to lose the install warning. This should be fixed.
+  // TODO(crbug.com/40591637): CrxInstaller reloads the extension after moving
+  // it, which causes it to lose the install warning. This should be fixed.
   if (GetParam() != ExtensionLoadType::PACKED) {
     InstallWarning warning_1 = GetLargeRegexWarning(kMinValidID + 5);
     InstallWarning warning_2 = GetLargeRegexWarning(kMinValidID + 6);
@@ -1115,7 +1161,7 @@ TEST_P(SingleRulesetTest, RegexRuleCountExceeded) {
   int rule_id = kMinValidID;
   for (int i = 1; i <= GetRegexRuleLimit() + 5; ++i, ++rule_id) {
     regex_rule.id = rule_id;
-    regex_rule.condition->regex_filter = std::to_string(i);
+    regex_rule.condition->regex_filter = base::NumberToString(i);
     AddRule(regex_rule);
   }
 
@@ -1123,14 +1169,14 @@ TEST_P(SingleRulesetTest, RegexRuleCountExceeded) {
   TestRule rule = CreateGenericRule();
   for (int i = 1; i <= kCountNonRegexRules; i++, ++rule_id) {
     rule.id = rule_id;
-    rule.condition->url_filter = std::to_string(i);
+    rule.condition->url_filter = base::NumberToString(i);
     AddRule(rule);
   }
 
   extension_loader()->set_ignore_manifest_warnings(true);
   LoadAndExpectSuccess(GetRegexRuleLimit() + kCountNonRegexRules);
-  // TODO(crbug.com/879355): CrxInstaller reloads the extension after moving it,
-  // which causes it to lose the install warning. This should be fixed.
+  // TODO(crbug.com/40591637): CrxInstaller reloads the extension after moving
+  // it, which causes it to lose the install warning. This should be fixed.
   if (GetParam() != ExtensionLoadType::PACKED) {
     std::vector<InstallWarning> install_warnings =
         GetFilteredInstallWarnings(*extension());
@@ -1186,8 +1232,8 @@ TEST_P(SingleRulesetTest, DynamicRulesetRace) {
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
 
   const ExtensionId extension_id = extension()->id();
-  service()->DisableExtension(extension_id,
-                              disable_reason::DISABLE_USER_ACTION);
+  registrar()->DisableExtension(extension_id,
+                                {disable_reason::DISABLE_USER_ACTION});
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
 
   // Simulate indexed ruleset format version change. This will cause a re-index
@@ -1199,7 +1245,7 @@ TEST_P(SingleRulesetTest, DynamicRulesetRace) {
 
   TestExtensionRegistryObserver registry_observer(registry());
 
-  service()->EnableExtension(extension_id);
+  registrar()->EnableExtension(extension_id);
   scoped_refptr<const Extension> extension =
       registry_observer.WaitForExtensionLoaded();
   ASSERT_TRUE(extension);
@@ -1232,8 +1278,8 @@ TEST_P(SingleRulesetTest, UpdateEnabledRulesetsRace) {
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
 
   const ExtensionId extension_id = extension()->id();
-  service()->DisableExtension(extension_id,
-                              disable_reason::DISABLE_USER_ACTION);
+  registrar()->DisableExtension(extension_id,
+                                {disable_reason::DISABLE_USER_ACTION});
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
 
   // Simulate indexed ruleset format version change. This will cause a re-index
@@ -1244,7 +1290,7 @@ TEST_P(SingleRulesetTest, UpdateEnabledRulesetsRace) {
       CreateScopedIncrementRulesetVersionForTesting();
 
   TestExtensionRegistryObserver registry_observer(registry());
-  service()->EnableExtension(extension_id);
+  registrar()->EnableExtension(extension_id);
   scoped_refptr<const Extension> extension =
       registry_observer.WaitForExtensionLoaded();
   ASSERT_TRUE(extension);
@@ -1287,8 +1333,8 @@ TEST_P(SingleRulesetTest, SessionRules) {
   ASSERT_NO_FATAL_FAILURE(RunUpdateRulesFunction(
       *extension(), {}, {rule_1, rule_2}, RulesetScope::kSession));
   RunGetRulesFunction(*extension(), RulesetScope::kSession, &result);
-  base::Value::Dict rule_1_value = rule_1.ToValue();
-  base::Value::Dict rule_2_value = rule_2.ToValue();
+  base::DictValue rule_1_value = rule_1.ToValue();
+  base::DictValue rule_2_value = rule_2.ToValue();
   EXPECT_THAT(result.GetList(), ::testing::UnorderedElementsAre(
                                     ::testing::Eq(std::cref(rule_1_value)),
                                     ::testing::Eq(std::cref(rule_2_value))));
@@ -1373,7 +1419,7 @@ TEST_P(SingleRulesetTest, RuleCountLimitMatched) {
   TestRule rule = CreateGenericRule();
   for (int i = 0; i < GetMaximumRulesPerRuleset(); ++i) {
     rule.id = kMinValidID + i;
-    rule.condition->url_filter = std::to_string(i);
+    rule.condition->url_filter = base::NumberToString(i);
     AddRule(rule);
   }
 
@@ -1390,17 +1436,19 @@ TEST_P(SingleRulesetTest, RuleCountLimitMatched) {
   ASSERT_EQ(1u, static_sources.size());
   EXPECT_TRUE(base::PathExists(static_sources[0].indexed_path()));
 
+  const PrefsHelper helper(*extension_prefs());
   // The ruleset's ID should not be marked as ignored in prefs.
-  EXPECT_FALSE(extension_prefs()->ShouldIgnoreDNRRuleset(
-      extension()->id(), static_sources[0].id()));
+  EXPECT_FALSE(
+      helper.ShouldIgnoreRuleset(extension()->id(), static_sources[0].id()));
 }
 
-// Ensure that an extension's allocation will be kept when it is disabled.
-TEST_P(SingleRulesetTest, AllocationKeptWhenDisabled) {
+// Ensure that an extension's allocation will be kept or released when it is
+// disabled based on the reason.
+TEST_P(SingleRulesetTest, AllocationWhenDisabled) {
   TestRule rule = CreateGenericRule();
   for (int i = 0; i < GetMaximumRulesPerRuleset(); ++i) {
     rule.id = kMinValidID + i;
-    rule.condition->url_filter = std::to_string(i);
+    rule.condition->url_filter = base::NumberToString(i);
     AddRule(rule);
   }
 
@@ -1419,8 +1467,8 @@ TEST_P(SingleRulesetTest, AllocationKeptWhenDisabled) {
   // prefs.
   CheckExtensionAllocationInPrefs(extension()->id(), 200);
 
-  service()->DisableExtension(extension()->id(),
-                              disable_reason::DISABLE_USER_ACTION);
+  registrar()->DisableExtension(extension()->id(),
+                                {disable_reason::DISABLE_GREYLIST});
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
 
   // The extension's last known extra rule count should be persisted after it is
@@ -1430,11 +1478,19 @@ TEST_P(SingleRulesetTest, AllocationKeptWhenDisabled) {
 
   // Now re-enable the extension. The extension should load all of its rules
   // without any problems.
-  service()->EnableExtension(extension()->id());
+  registrar()->EnableExtension(extension()->id());
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
 
   EXPECT_EQ(200u, global_rules_tracker.GetAllocatedGlobalRuleCountForTesting());
   CheckExtensionAllocationInPrefs(extension()->id(), 200);
+
+  // Disable the extension via user action. This should release its allocation.
+  registrar()->DisableExtension(extension()->id(),
+                                {disable_reason::DISABLE_USER_ACTION});
+  ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
+
+  EXPECT_EQ(0u, global_rules_tracker.GetAllocatedGlobalRuleCountForTesting());
+  CheckExtensionAllocationInPrefs(extension()->id(), std::nullopt);
 }
 
 // Ensure that we get an install warning on exceeding the rule count limit and
@@ -1443,7 +1499,7 @@ TEST_P(SingleRulesetTest, RuleCountLimitExceeded) {
   TestRule rule = CreateGenericRule();
   for (int i = 1; i <= GetMaximumRulesPerRuleset() + 1; ++i) {
     rule.id = kMinValidID + i;
-    rule.condition->url_filter = std::to_string(i);
+    rule.condition->url_filter = base::NumberToString(i);
     AddRule(rule);
   }
 
@@ -1460,25 +1516,27 @@ TEST_P(SingleRulesetTest, RuleCountLimitExceeded) {
   ASSERT_EQ(1u, static_sources.size());
   EXPECT_FALSE(base::PathExists(static_sources[0].indexed_path()));
 
-  // TODO(crbug.com/879355): CrxInstaller reloads the extension after moving it,
-  // which causes it to lose the install warning. This should be fixed.
+  // TODO(crbug.com/40591637): CrxInstaller reloads the extension after moving
+  // it, which causes it to lose the install warning. This should be fixed.
   if (GetParam() != ExtensionLoadType::PACKED) {
     std::vector<InstallWarning> install_warnings =
         GetFilteredInstallWarnings(*extension());
     ASSERT_EQ(1u, install_warnings.size());
-    InstallWarning expected_warning =
-        InstallWarning(GetErrorWithFilename(ErrorUtils::FormatErrorMessage(
-                           kIndexingRuleLimitExceeded,
-                           std::to_string(static_sources[0].id().value()))),
-                       dnr_api::ManifestKeys::kDeclarativeNetRequest,
-                       dnr_api::DNRInfo::kRuleResources);
+    InstallWarning expected_warning = InstallWarning(
+        GetErrorWithFilename(ErrorUtils::FormatErrorMessage(
+            kIndexingRuleLimitExceeded,
+            base::NumberToString(static_sources[0].id().value()))),
+        dnr_api::ManifestKeys::kDeclarativeNetRequest,
+        dnr_api::DNRInfo::kRuleResources);
 
     EXPECT_EQ(expected_warning, install_warnings[0]);
   }
 
+  const PrefsHelper helper(*extension_prefs());
+
   // The ruleset's ID should be persisted in the ignored rulesets pref.
-  EXPECT_TRUE(extension_prefs()->ShouldIgnoreDNRRuleset(
-      extension()->id(), static_sources[0].id()));
+  EXPECT_TRUE(
+      helper.ShouldIgnoreRuleset(extension()->id(), static_sources[0].id()));
 
   // Since the ruleset was not indexed, no rules should contribute to the extra
   // static rule count.
@@ -1609,8 +1667,8 @@ class SingleRulesetWithoutSafeRulesTest : public SingleRulesetTest {
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-// TODO(crbug.com/1485747): This is just a sanity check that rule counts work as
-// intended when the safe rules feature flag is turned off. Remove this test
+// TODO(crbug.com/40282671): This is just a sanity check that rule counts work
+// as intended when the safe rules feature flag is turned off. Remove this test
 // once feature is enabled and the feature flag is removed.
 TEST_P(SingleRulesetWithoutSafeRulesTest, DynamicAndSessionRuleLimits) {
   // With `kDeclarativeNetRequestSafeRuleLimits` disabled, the dynamic/session
@@ -1830,7 +1888,8 @@ TEST_P(MultipleRulesetsTest, Success) {
   size_t kRulesPerRuleset = 10;
 
   for (size_t i = 0; i < kNumRulesets; ++i) {
-    AddRuleset(CreateRuleset(std::to_string(i), kRulesPerRuleset, 0, true));
+    AddRuleset(
+        CreateRuleset(base::NumberToString(i), kRulesPerRuleset, 0, true));
   }
 
   LoadAndExpectSuccess();
@@ -1847,7 +1906,7 @@ TEST_P(MultipleRulesetsTest, EmptyRulesets) {
   size_t kNumRulesets = 7;
 
   for (size_t i = 0; i < kNumRulesets; ++i)
-    AddRuleset(CreateRuleset(std::to_string(i), 0, 0, true));
+    AddRuleset(CreateRuleset(base::NumberToString(i), 0, 0, true));
 
   LoadAndExpectSuccess();
 }
@@ -1862,7 +1921,7 @@ TEST_P(MultipleRulesetsTest, ListNotPassed) {
     AddRuleset(
         TestRulesetInfo(kId2, "path2", base::Value(base::Value::Type::DICT)));
 
-    AddRuleset(TestRulesetInfo(kId3, "path3", base::Value::List()));
+    AddRuleset(TestRulesetInfo(kId3, "path3", base::ListValue()));
 
     LoadAndExpectError(kErrorListNotPassed, "path2" /* filename */);
 }
@@ -1912,8 +1971,8 @@ TEST_P(MultipleRulesetsTest, InstallWarnings) {
   extension_loader()->set_ignore_manifest_warnings(true);
   LoadAndExpectSuccess(expected_rule_count, enabled_rule_count);
 
-  // TODO(crbug.com/879355): CrxInstaller reloads the extension after moving it,
-  // which causes it to lose the install warning. This should be fixed.
+  // TODO(crbug.com/40591637): CrxInstaller reloads the extension after moving
+  // it, which causes it to lose the install warning. This should be fixed.
   if (GetParam() != ExtensionLoadType::PACKED) {
     std::vector<InstallWarning> warnings =
         GetFilteredInstallWarnings(*extension());
@@ -2207,11 +2266,11 @@ TEST_P(MultipleRulesetsTest, UpdateAndGetEnabledRulesets_Success) {
 
   // Ensure the set of enabled rulesets persists across extension reloads.
   const ExtensionId extension_id = extension()->id();
-  service()->DisableExtension(extension_id,
-                              disable_reason::DISABLE_USER_ACTION);
+  registrar()->DisableExtension(extension_id,
+                                {disable_reason::DISABLE_USER_ACTION});
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
 
-  service()->EnableExtension(extension_id);
+  registrar()->EnableExtension(extension_id);
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
   const Extension* extension =
       registry()->enabled_extensions().GetByID(extension_id);
@@ -2257,7 +2316,7 @@ TEST_P(MultipleRulesetsTest, StaticRuleCountExceeded) {
     std::string expected_warning = GetErrorWithFilename(
         ErrorUtils::FormatErrorMessage(
             kIndexingRuleLimitExceeded,
-            std::to_string(static_sources[0].id().value())),
+            base::NumberToString(static_sources[0].id().value())),
         kId1);
 
     EXPECT_THAT(GetFilteredInstallWarnings(*extension()),
@@ -2272,13 +2331,15 @@ TEST_P(MultipleRulesetsTest, StaticRuleCountExceeded) {
   // The second ruleset was indexed and it should be persisted.
   EXPECT_TRUE(base::PathExists(static_sources[1].indexed_path()));
 
+  const PrefsHelper helper(*extension_prefs());
+
   // The first ruleset's ID should be persisted in the ignored rulesets pref.
-  EXPECT_TRUE(extension_prefs()->ShouldIgnoreDNRRuleset(
-      extension()->id(), static_sources[0].id()));
+  EXPECT_TRUE(
+      helper.ShouldIgnoreRuleset(extension()->id(), static_sources[0].id()));
 
   // The second ruleset's ID should not be marked as ignored in prefs.
-  EXPECT_FALSE(extension_prefs()->ShouldIgnoreDNRRuleset(
-      extension()->id(), static_sources[1].id()));
+  EXPECT_FALSE(
+      helper.ShouldIgnoreRuleset(extension()->id(), static_sources[1].id()));
 }
 
 // Ensure that a ruleset which causes the extension to go over the global rule
@@ -2428,13 +2489,13 @@ TEST_P(MultipleRulesetsTest, MultipleExtensionsRuleLimitExceeded) {
   // Since the ID of the second extension is known only after it was installed,
   // disable then enable the extension so the ID can be used for the
   // WarningServiceObserver.
-  service()->DisableExtension(second_extension_id,
-                              disable_reason::DISABLE_USER_ACTION);
+  registrar()->DisableExtension(second_extension_id,
+                                {disable_reason::DISABLE_USER_ACTION});
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
 
   WarningService* warning_service = WarningService::Get(browser_context());
   WarningServiceObserver warning_observer(warning_service, second_extension_id);
-  service()->EnableExtension(second_extension_id);
+  registrar()->EnableExtension(second_extension_id);
 
   // Wait until we surface a warning.
   warning_observer.WaitForWarning();
@@ -2445,17 +2506,17 @@ TEST_P(MultipleRulesetsTest, MultipleExtensionsRuleLimitExceeded) {
       warning_service->GetWarningTypesAffectingExtension(second_extension_id),
       ::testing::ElementsAre(Warning::kEnabledRuleCountExceeded));
 
-  service()->UninstallExtension(first_extension_id,
-                                UNINSTALL_REASON_FOR_TESTING, nullptr);
+  registrar()->UninstallExtension(first_extension_id,
+                                  UNINSTALL_REASON_FOR_TESTING, nullptr);
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
 
-  service()->DisableExtension(second_extension_id,
-                              disable_reason::DISABLE_USER_ACTION);
+  registrar()->DisableExtension(second_extension_id,
+                                {disable_reason::DISABLE_USER_ACTION});
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
   CheckExtensionAllocationInPrefs(first_extension_id, std::nullopt);
   CheckExtensionAllocationInPrefs(second_extension_id, std::nullopt);
 
-  service()->EnableExtension(second_extension_id);
+  registrar()->EnableExtension(second_extension_id);
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
 
   // Once the first extension is uninstalled, both |kId2| and |kId3| should be
@@ -2581,12 +2642,12 @@ TEST_P(MultipleRulesetsTest,
   // Ensure the set of enabled rulesets persists across extension reloads.
   // Regression test for crbug.com/1346185.
   const ExtensionId extension_id = extension()->id();
-  service()->DisableExtension(extension_id,
-                              disable_reason::DISABLE_USER_ACTION);
+  registrar()->DisableExtension(extension_id,
+                                {disable_reason::DISABLE_USER_ACTION});
 
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
 
-  service()->EnableExtension(extension_id);
+  registrar()->EnableExtension(extension_id);
 
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
 
@@ -2922,11 +2983,11 @@ TEST_P(MultipleRulesetsTest,
 
   // Check disabled rules after disabling and enabling extension.
   auto extension_id = extension()->id();
-  service()->DisableExtension(extension_id,
-                              disable_reason::DISABLE_USER_ACTION);
+  registrar()->DisableExtension(extension_id,
+                                {disable_reason::DISABLE_USER_ACTION});
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
   TestExtensionRegistryObserver registry_observer(registry());
-  service()->EnableExtension(extension_id);
+  registrar()->EnableExtension(extension_id);
   scoped_refptr<const Extension> extension =
       registry_observer.WaitForExtensionLoaded();
   ASSERT_TRUE(extension);
@@ -2969,9 +3030,9 @@ TEST_P(MultipleRulesetsTest, ReclaimAllocationOnUnload) {
 
   auto disable_extension_and_check_allocation =
       [this, &ext_1_allocation, &global_rules_tracker, &ruleset_waiter,
-       &first_extension_id](int disable_reasons,
+       &first_extension_id](const DisableReasonSet& disable_reasons,
                             bool expect_allocation_released) {
-        service()->DisableExtension(first_extension_id, disable_reasons);
+        registrar()->DisableExtension(first_extension_id, disable_reasons);
         ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
 
         size_t expected_tracker_allocation =
@@ -2985,7 +3046,7 @@ TEST_P(MultipleRulesetsTest, ReclaimAllocationOnUnload) {
         CheckExtensionAllocationInPrefs(first_extension_id,
                                         expected_pref_allocation);
 
-        service()->EnableExtension(first_extension_id);
+        registrar()->EnableExtension(first_extension_id);
         ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
 
         EXPECT_EQ(ext_1_allocation,
@@ -2995,25 +3056,25 @@ TEST_P(MultipleRulesetsTest, ReclaimAllocationOnUnload) {
 
   // Test some DisableReasons that shouldn't cause the allocation to be
   // released.
-  disable_extension_and_check_allocation(disable_reason::DISABLE_USER_ACTION,
-                                         false);
-
   disable_extension_and_check_allocation(
-      disable_reason::DISABLE_PERMISSIONS_INCREASE |
-          disable_reason::DISABLE_GREYLIST,
+      {disable_reason::DISABLE_PERMISSIONS_INCREASE,
+       disable_reason::DISABLE_GREYLIST},
       false);
 
   // Test the DisableReasons that should cause the allocation to be released.
-  disable_extension_and_check_allocation(
-      disable_reason::DISABLE_BLOCKED_BY_POLICY, true);
+  disable_extension_and_check_allocation({disable_reason::DISABLE_USER_ACTION},
+                                         true);
 
   disable_extension_and_check_allocation(
-      disable_reason::DISABLE_BLOCKED_BY_POLICY |
-          disable_reason::DISABLE_USER_ACTION,
+      {disable_reason::DISABLE_BLOCKED_BY_POLICY}, true);
+
+  disable_extension_and_check_allocation(
+      {disable_reason::DISABLE_BLOCKED_BY_POLICY,
+       disable_reason::DISABLE_GREYLIST},
       true);
 
   // We should reclaim the extension's allocation if it is blocklisted.
-  service()->BlocklistExtensionForTest(first_extension_id);
+  registrar()->BlocklistExtensionForTest(first_extension_id);
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
   EXPECT_EQ(0u, global_rules_tracker.GetAllocatedGlobalRuleCountForTesting());
   CheckExtensionAllocationInPrefs(first_extension_id, std::nullopt);
@@ -3033,7 +3094,7 @@ TEST_P(MultipleRulesetsTest, ReclaimAllocationOnUnload) {
   ExtensionId second_extension_id = extension()->id();
 
   // The extension should have its allocation kept when it is terminated.
-  service()->TerminateExtension(second_extension_id);
+  registrar()->TerminateExtension(second_extension_id);
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
   EXPECT_EQ(ext_2_allocation,
             global_rules_tracker.GetAllocatedGlobalRuleCountForTesting());
@@ -3072,7 +3133,7 @@ TEST_P(MultipleRulesetsTest_Unpacked, UpdateAllocationOnReload) {
   // Reload the extension. For unpacked extensions this is functionally
   // equivalent to uninstalling the extension then installing it again based on
   // the contents of the extension's directory.
-  service()->ReloadExtension(extension_id);
+  registrar()->ReloadExtension(extension_id);
   ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
 
   // File changes to the extension's ruleset should take effect after it is

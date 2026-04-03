@@ -46,9 +46,10 @@ const char* VariantBinaryOpToString(VariantBinaryOp op) {
   }
 }
 
-std::unordered_set<string>* UnaryVariantOpRegistry::PersistentStringStorage() {
-  static std::unordered_set<string>* string_storage =
-      new std::unordered_set<string>();
+std::unordered_set<std::string>*
+UnaryVariantOpRegistry::PersistentStringStorage() {
+  static std::unordered_set<std::string>* string_storage =
+      new std::unordered_set<std::string>();
   return string_storage;
 }
 
@@ -63,20 +64,20 @@ UnaryVariantOpRegistry* UnaryVariantOpRegistryGlobal() {
 }
 
 UnaryVariantOpRegistry::VariantDecodeFn* UnaryVariantOpRegistry::GetDecodeFn(
-    StringPiece type_name) {
+    absl::string_view type_name) {
   auto found = decode_fns.find(type_name);
   if (found == decode_fns.end()) return nullptr;
   return &found->second;
 }
 
 void UnaryVariantOpRegistry::RegisterDecodeFn(
-    const string& type_name, const VariantDecodeFn& decode_fn) {
+    const std::string& type_name, const VariantDecodeFn& decode_fn) {
   CHECK(!type_name.empty()) << "Need a valid name for UnaryVariantDecode";
   VariantDecodeFn* existing = GetDecodeFn(type_name);
   CHECK_EQ(existing, nullptr)
       << "Unary VariantDecodeFn for type_name: " << type_name
       << " already registered";
-  decode_fns.insert(std::pair<StringPiece, VariantDecodeFn>(
+  decode_fns.insert(std::pair<absl::string_view, VariantDecodeFn>(
       GetPersistentStringPiece(type_name), decode_fn));
 }
 
@@ -98,7 +99,7 @@ bool DecodeUnaryVariant(Variant* variant) {
   if (decode_fn == nullptr) {
     return false;
   }
-  const string type_name = variant->TypeName();
+  const std::string type_name = variant->TypeName();
   bool decoded = (*decode_fn)(variant);
   if (!decoded) return false;
   if (variant->TypeName() != type_name) {
@@ -125,7 +126,7 @@ REGISTER_VARIANT_DECODE_TYPE(double);
 
 #undef REGISTER_VARIANT_DECODE_TYPE
 
-Status VariantDeviceCopy(
+absl::Status VariantDeviceCopy(
     const VariantDeviceCopyDirection direction, const Variant& from,
     Variant* to,
     const UnaryVariantOpRegistry::AsyncTensorDeviceCopyFn& copy_fn) {
@@ -143,13 +144,13 @@ Status VariantDeviceCopy(
 
 namespace {
 template <typename T>
-Status DeviceCopyPrimitiveType(
+absl::Status DeviceCopyPrimitiveType(
     const T& in, T* out,
     const UnaryVariantOpRegistry::AsyncTensorDeviceCopyFn& copier) {
   // Dummy copy, we don't actually bother copying to the device and back for
   // testing.
   *out = in;
-  return OkStatus();
+  return absl::OkStatus();
 }
 }  // namespace
 
@@ -174,10 +175,10 @@ REGISTER_VARIANT_DEVICE_COPY_TYPE(bool);
 
 namespace {
 template <typename T>
-Status ZerosLikeVariantPrimitiveType(OpKernelContext* ctx, const T& t,
-                                     T* t_out) {
+absl::Status ZerosLikeVariantPrimitiveType(OpKernelContext* ctx, const T& t,
+                                           T* t_out) {
   *t_out = T(0);
-  return OkStatus();
+  return absl::OkStatus();
 }
 }  // namespace
 
@@ -196,10 +197,10 @@ REGISTER_VARIANT_ZEROS_LIKE_TYPE(bool);
 
 namespace {
 template <typename T>
-Status AddVariantPrimitiveType(OpKernelContext* ctx, const T& a, const T& b,
-                               T* out) {
+absl::Status AddVariantPrimitiveType(OpKernelContext* ctx, const T& a,
+                                     const T& b, T* out) {
   *out = a + b;
-  return OkStatus();
+  return absl::OkStatus();
 }
 }  // namespace
 

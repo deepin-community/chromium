@@ -25,6 +25,8 @@
 
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
+#include <optional>
+
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/location.h"
@@ -36,8 +38,8 @@
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/renderer/platform/heap/heap_test_utilities.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
-#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 namespace test {
@@ -63,14 +65,14 @@ base::FilePath WebTestsFilePath() {
 void RunPendingTasks() {
   base::RunLoop loop;
   scheduler::GetSingleThreadTaskRunnerForTesting()->PostTask(
-      FROM_HERE, WTF::BindOnce(loop.QuitWhenIdleClosure()));
+      FROM_HERE, blink::BindOnce(loop.QuitWhenIdleClosure()));
   loop.Run();
 }
 
 void RunDelayedTasks(base::TimeDelta delay) {
   base::RunLoop loop;
   scheduler::GetSingleThreadTaskRunnerForTesting()->PostDelayedTask(
-      FROM_HERE, WTF::BindOnce(loop.QuitWhenIdleClosure()), delay);
+      FROM_HERE, blink::BindOnce(loop.QuitWhenIdleClosure()), delay);
   loop.Run();
 }
 
@@ -79,39 +81,39 @@ void YieldCurrentThread() {
 }
 
 String BlinkRootDir() {
-  return FilePathToWebString(BlinkRootFilePath());
+  return FilePathToString(BlinkRootFilePath());
 }
 
 String BlinkWebTestsDir() {
-  return FilePathToWebString(WebTestsFilePath());
+  return FilePathToString(WebTestsFilePath());
 }
 
 String ExecutableDir() {
   base::FilePath path;
   base::PathService::Get(base::DIR_EXE, &path);
-  return FilePathToWebString(base::MakeAbsoluteFilePath(path));
+  return FilePathToString(base::MakeAbsoluteFilePath(path));
 }
 
 String CoreTestDataPath(const String& relative_path) {
-  return FilePathToWebString(
+  return FilePathToString(
       BlinkRootFilePath()
           .Append(FILE_PATH_LITERAL("renderer/core/testing/data"))
-          .Append(WebStringToFilePath(relative_path)));
+          .Append(StringToFilePath(relative_path)));
 }
 
 String PlatformTestDataPath(const String& relative_path) {
-  return FilePathToWebString(
+  return FilePathToString(
       BlinkRootFilePath()
           .Append(FILE_PATH_LITERAL("renderer/platform/testing/data"))
-          .Append(WebStringToFilePath(relative_path)));
+          .Append(StringToFilePath(relative_path)));
 }
 
 String AccessibilityTestDataPath(const String& relative_path) {
-  return FilePathToWebString(
+  return FilePathToString(
       BlinkRootFilePath()
           .Append(
               FILE_PATH_LITERAL("renderer/modules/accessibility/testing/data"))
-          .Append(WebStringToFilePath(relative_path)));
+          .Append(StringToFilePath(relative_path)));
 }
 
 base::FilePath HyphenationDictionaryDir() {
@@ -120,33 +122,32 @@ base::FilePath HyphenationDictionaryDir() {
   return exe_dir.AppendASCII("gen/hyphen-data");
 }
 
-scoped_refptr<SharedBuffer> ReadFromFile(const String& path) {
-  base::FilePath file_path = blink::WebStringToFilePath(path);
+std::optional<Vector<char>> ReadFromFile(const String& path) {
+  base::FilePath file_path = blink::StringToFilePath(path);
   std::string buffer;
   if (!base::ReadFileToString(file_path, &buffer)) {
-    return nullptr;
+    return std::nullopt;
   }
-  return SharedBuffer::Create(buffer.data(), buffer.size());
+  return Vector<char>(buffer);
 }
 
 String BlinkWebTestsFontsTestDataPath(const String& relative_path) {
-  return FilePathToWebString(
-      WebTestsFilePath()
-          .Append(FILE_PATH_LITERAL("external/wpt/fonts"))
-          .Append(WebStringToFilePath(relative_path)));
+  return FilePathToString(WebTestsFilePath()
+                              .Append(FILE_PATH_LITERAL("external/wpt/fonts"))
+                              .Append(StringToFilePath(relative_path)));
 }
 
 String BlinkWebTestsImagesTestDataPath(const String& relative_path) {
-  return FilePathToWebString(WebTestsFilePath()
-                                 .Append(FILE_PATH_LITERAL("images/resources"))
-                                 .Append(WebStringToFilePath(relative_path)));
+  return FilePathToString(WebTestsFilePath()
+                              .Append(FILE_PATH_LITERAL("images/resources"))
+                              .Append(StringToFilePath(relative_path)));
 }
 
 String StylePerfTestDataPath(const String& relative_path) {
-  return FilePathToWebString(
+  return FilePathToString(
       BlinkRootFilePath()
           .Append(FILE_PATH_LITERAL("renderer/core/css/perftest_data"))
-          .Append(WebStringToFilePath(relative_path)));
+          .Append(StringToFilePath(relative_path)));
 }
 
 LineReader::LineReader(const String& text) : text_(text), index_(0) {}

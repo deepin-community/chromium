@@ -8,6 +8,7 @@
 #include <memory>
 #include <ratio>
 #include <string>
+#include <string_view>
 
 #include "base/compiler_specific.h"
 #include "base/feature_list.h"
@@ -39,10 +40,10 @@
 
 namespace feed {
 namespace {
-StreamKind kStreamKinds[] = {StreamKind::kForYou, StreamKind::kSupervisedUser,
-                             StreamKind::kFollowing,
+StreamKind kStreamKinds[] = {StreamKind::kForYou, StreamKind::kFollowing,
                              StreamKind::kSingleWebFeed};
-// TODO(crbug.com/1369777) Add kSingleWebFeed streams to metrics reporting below
+// TODO(crbug.com/40869325) Add kSingleWebFeed streams to metrics reporting
+// below
 using feed::FeedEngagementType;
 using feed::FeedUserActionType;
 const int kMaxSuggestionsTotal = 50;
@@ -77,10 +78,8 @@ constexpr base::TimeDelta kMinStableContentSliceVisibilityTime =
 constexpr base::TimeDelta kMaxStableContentSliceVisibilityTime =
     base::Seconds(30);
 
-base::StringPiece HistogramReplacement(const StreamType& stream_type) {
+std::string_view HistogramReplacement(const StreamType& stream_type) {
   switch (stream_type.GetKind()) {
-    case StreamKind::kSupervisedUser:
-      return "Feed.SupervisedFeed.";
     case StreamKind::kForYou:
       return "Feed.";
     case StreamKind::kFollowing:
@@ -122,11 +121,6 @@ void ReportContentSuggestionsOpened(const StreamType& stream_type,
           "ContentSuggestions.Feed.SingleWebFeed.Opened", index_in_stream,
           kMaxSuggestionsTotal);
       break;
-    case StreamKind::kSupervisedUser:
-      base::UmaHistogramExactLinear(
-          "ContentSuggestions.Feed.SupervisedFeed.Opened", index_in_stream,
-          kMaxSuggestionsTotal);
-      break;
     case StreamKind::kUnknown:
       DCHECK(false) << "unknown feed kind";
       break;
@@ -153,11 +147,10 @@ std::string LoadLatencyStepName(LoadLatencyTimes::StepKind kind) {
   }
 }
 
-base::StringPiece ContentOrderToString(ContentOrder content_order) {
+std::string_view ContentOrderToString(ContentOrder content_order) {
   switch (content_order) {
     case ContentOrder::kUnspecified:
       NOTREACHED();
-      [[fallthrough]];
     case ContentOrder::kGrouped:
       return "Grouped";
     case ContentOrder::kReverseChron:
@@ -178,7 +171,7 @@ FeedSortType GetSortTypeFromContentOrder(ContentOrder content_order) {
 
 void ReportLoadLatencies(std::unique_ptr<LoadLatencyTimes> latencies) {
   for (const LoadLatencyTimes::Step& step : latencies->steps()) {
-    // TODO(crbug/1152592): Add a WebFeed-specific histogram for this.
+    // TODO(crbug.com/40158714): Add a WebFeed-specific histogram for this.
     base::UmaHistogramCustomTimes("ContentSuggestions.Feed.LoadStepLatency." +
                                       LoadLatencyStepName(step.kind),
                                   step.latency, base::Milliseconds(50),
@@ -215,7 +208,7 @@ void ReportContentLifetimeInvalidAge(
       /*buckets=*/50);
 }
 
-base::StringPiece NetworkRequestTypeUmaName(NetworkRequestType type) {
+std::string_view NetworkRequestTypeUmaName(NetworkRequestType type) {
   switch (type) {
     case NetworkRequestType::kFeedQuery:
       return "FeedQuery";
@@ -243,13 +236,11 @@ base::StringPiece NetworkRequestTypeUmaName(NetworkRequestType type) {
       return "QueryNextPage";
     case NetworkRequestType::kQueryWebFeed:
       return "QueryWebFeed";
-    case NetworkRequestType::kSupervisedFeed:
-      return "SupervisedFeed";
   }
 }
 
 std::string InfoCardActionUmaName(const StreamType& stream_type,
-                                  base::StringPiece action_name) {
+                                  std::string_view action_name) {
   return base::StrCat({"ContentSuggestions.", HistogramReplacement(stream_type),
                        "InfoCard.", action_name});
 }
@@ -544,11 +535,6 @@ void MetricsReporter::ContentSliceViewed(const StreamType& stream_type,
           "ContentSuggestions.Feed.SingleWebFeed.Shown", index_in_stream,
           kMaxSuggestionsTotal);
       break;
-    case StreamKind::kSupervisedUser:
-      base::UmaHistogramExactLinear(
-          "ContentSuggestions.Feed.SupervisedFeed.Shown", index_in_stream,
-          kMaxSuggestionsTotal);
-      break;
     case StreamKind::kUnknown:
       DCHECK(false) << "unknown feed kind";
       break;
@@ -657,14 +643,14 @@ void MetricsReporter::OtherUserAction(const StreamType& stream_type,
       RecordInteraction(stream_type);
       break;
     case FeedUserActionType::kTappedHideStory:
-      // TODO(crbug.com/1111101): This action is not visible to client code, so
+      // TODO(crbug.com/40708979): This action is not visible to client code, so
       // not yet used.
       base::RecordAction(base::UserMetricsAction(
           "ContentSuggestions.Feed.CardAction.HideStory"));
       RecordInteraction(stream_type);
       break;
     case FeedUserActionType::kTappedNotInterestedIn:
-      // TODO(crbug.com/1111101): This action is not visible to client code, so
+      // TODO(crbug.com/40708979): This action is not visible to client code, so
       // not yet used.
       base::RecordAction(base::UserMetricsAction(
           "ContentSuggestions.Feed.CardAction.NotInterestedIn"));
@@ -719,6 +705,11 @@ void MetricsReporter::OtherUserAction(const StreamType& stream_type,
           "ContentSuggestions.Feed.CardAction.ManageHidden"));
       RecordInteraction(stream_type);
       break;
+    case FeedUserActionType::kTappedManageFollowing:
+      base::RecordAction(base::UserMetricsAction(
+          "ContentSuggestions.Feed.CardAction.ManageFollowing"));
+      RecordInteraction(stream_type);
+      break;
     case FeedUserActionType::kAddedToReadLater:
     case FeedUserActionType::kTappedFollowButton:
     case FeedUserActionType::kEphemeralChange:
@@ -735,7 +726,6 @@ void MetricsReporter::OtherUserAction(const StreamType& stream_type,
     case FeedUserActionType::kClosedNativeContextMenu:
     case FeedUserActionType::kOpenedNativePulldownMenu:
     case FeedUserActionType::kClosedNativePulldownMenu:
-    case FeedUserActionType::kTappedManageFollowing:
     case FeedUserActionType::kTappedFollowOnManagementSurface:
     case FeedUserActionType::kTappedUnfollowOnManagementSurface:
     case FeedUserActionType::kTappedFollowOnFollowAccelerator:
@@ -746,29 +736,49 @@ void MetricsReporter::OtherUserAction(const StreamType& stream_type,
     case FeedUserActionType::kTappedDismissPostFollowActiveHelp:
     case FeedUserActionType::kTappedDiscoverFeedPreview:
     case FeedUserActionType::kOpenedAutoplaySettings:
-    case FeedUserActionType::kDiscoverFeedSelected:
-    case FeedUserActionType::kFollowingFeedSelected:
     case FeedUserActionType::kTappedUnfollowButton:
-    case FeedUserActionType::kShowFollowSucceedSnackbar:
-    case FeedUserActionType::kShowFollowFailedSnackbar:
-    case FeedUserActionType::kShowUnfollowSucceedSnackbar:
-    case FeedUserActionType::kShowUnfollowFailedSnackbar:
     case FeedUserActionType::kTappedGoToFeedOnSnackbar:
-    case FeedUserActionType::kFirstFollowSheetShown:
-    case FeedUserActionType::kFirstFollowSheetTappedGoToFeed:
-    case FeedUserActionType::kFirstFollowSheetTappedGotIt:
-    case FeedUserActionType::kFollowRecommendationIPHShown:
     case FeedUserActionType::kFollowingFeedSelectedGroupByPublisher:
     case FeedUserActionType::kFollowingFeedSelectedSortByLatest:
     case FeedUserActionType::kTappedFollowOnRecommendationFollowAccelerator:
     case FeedUserActionType::kTappedGotItFeedPostFollowActiveHelp:
     case FeedUserActionType::kTappedRefreshFollowingFeedOnSnackbar:
-    case FeedUserActionType::kTappedFeedSignInPromoUIContinue:
-    case FeedUserActionType::kTappedFeedSignInPromoUICancel:
     case FeedUserActionType::kNonSwipeManualRefresh:
       // Nothing additional for these actions. Note that some of these are iOS
       // only.
 
+      break;
+  }
+}
+
+void MetricsReporter::OtherUserAction(FeedUserActionType action_type) {
+  if (IsGoodExplicitInteraction(action_type)) {
+    good_visit_state_.OnGoodExplicitInteraction();
+  }
+
+  ReportUserActionHistogram(action_type);
+  switch (action_type) {
+    case FeedUserActionType::kTappedManageInterests:
+      base::RecordAction(base::UserMetricsAction(
+          "ContentSuggestions.Feed.CardAction.ManageInterests"));
+      break;
+    case FeedUserActionType::kTappedManageActivity:
+      base::RecordAction(base::UserMetricsAction(
+          "ContentSuggestions.Feed.CardAction.ManageActivity"));
+      break;
+    case FeedUserActionType::kTappedManageHidden:
+      base::RecordAction(base::UserMetricsAction(
+          "ContentSuggestions.Feed.CardAction.ManageHidden"));
+      break;
+    case FeedUserActionType::kTappedManageFollowing:
+      base::RecordAction(base::UserMetricsAction(
+          "ContentSuggestions.Feed.CardAction.ManageFollowing"));
+      break;
+    case FeedUserActionType::kTappedLearnMore:
+      base::RecordAction(base::UserMetricsAction(
+          "ContentSuggestions.Feed.CardAction.LearnMore"));
+      break;
+    default:
       break;
   }
 }
@@ -903,7 +913,7 @@ void MetricsReporter::NetworkRequestComplete(
         << " response_size=" << response_info.encoded_size_bytes
         << " duration=" << response_info.fetch_duration;
 
-  base::StringPiece request_name = NetworkRequestTypeUmaName(type);
+  std::string_view request_name = NetworkRequestTypeUmaName(type);
   base::UmaHistogramSparse(
       base::StrCat(
           {"ContentSuggestions.Feed.Network.ResponseStatus.", request_name}),
@@ -1144,8 +1154,6 @@ MetricsReporter::StreamStats& MetricsReporter::ForStream(
   switch (stream_type.GetKind()) {
     case StreamKind::kForYou:
       return for_you_stats_;
-    case StreamKind::kSupervisedUser:
-      return supervised_feed_stats_;
     case StreamKind::kFollowing:
     case StreamKind::kSingleWebFeed:
       return web_feed_stats_;

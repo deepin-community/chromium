@@ -2,9 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ash/printing/cups_print_job_manager.h"
-
 #include <cups/cups.h>
+
 #include <optional>
 #include <set>
 #include <string>
@@ -24,6 +23,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/printing/cups_print_job.h"
+#include "chrome/browser/ash/printing/cups_print_job_manager.h"
 #include "chrome/browser/ash/printing/cups_print_job_manager_utils.h"
 #include "chrome/browser/ash/printing/cups_printers_manager.h"
 #include "chrome/browser/ash/printing/cups_printers_manager_factory.h"
@@ -35,9 +35,7 @@
 #include "chrome/browser/printing/print_job_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/scalable_iph/scalable_iph_factory.h"
 #include "chrome/grit/generated_resources.h"
-#include "chromeos/ash/components/scalable_iph/scalable_iph.h"
 #include "chromeos/printing/printing_constants.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -136,12 +134,10 @@ class CupsPrintJobManagerImpl : public CupsPrintJobManager {
 
   bool SuspendPrintJob(CupsPrintJob* job) override {
     NOTREACHED() << "Pause printer is not implemented";
-    return false;
   }
 
   bool ResumePrintJob(CupsPrintJob* job) override {
     NOTREACHED() << "Resume printer is not implemented";
-    return false;
   }
 
   void OnDocDone(::printing::PrintJob* job,
@@ -204,14 +200,6 @@ class CupsPrintJobManagerImpl : public CupsPrintJobManager {
           << "Printer was removed while job was in progress.  It cannot "
              "be tracked";
       return false;
-    }
-
-    // Record print job with scalable IPH framework.
-    scalable_iph::ScalableIph* scalable_iph =
-        ScalableIphFactory::GetForBrowserContext(profile);
-    if (scalable_iph) {
-      scalable_iph->RecordEvent(
-          scalable_iph::ScalableIph::Event::kPrintJobCreated);
     }
 
     // Create a new print job.
@@ -535,13 +523,14 @@ class CupsPrintJobManagerImpl : public CupsPrintJobManager {
 
   base::RepeatingTimer timer_;
   std::unique_ptr<CupsWrapper> cups_wrapper_;
-  ::printing::PrintJobManager::DocDoneCallbackList::Subscription subscription_;
+  base::CallbackListSubscription subscription_;
   base::WeakPtrFactory<CupsPrintJobManagerImpl> weak_ptr_factory_;
 };
 
 // static
-CupsPrintJobManager* CupsPrintJobManager::CreateInstance(Profile* profile) {
-  return new CupsPrintJobManagerImpl(profile);
+std::unique_ptr<CupsPrintJobManager> CupsPrintJobManager::CreateInstance(
+    Profile* profile) {
+  return std::make_unique<CupsPrintJobManagerImpl>(profile);
 }
 
 }  // namespace ash

@@ -13,7 +13,7 @@
 
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/account_id/account_id.h"
 #include "components/file_access/scoped_file_access_delegate.h"
 #include "storage/browser/file_system/file_system_backend.h"
@@ -35,15 +35,14 @@ namespace ash {
 class FileSystemBackendDelegate;
 class FileAccessPermissions;
 
-constexpr char kSystemMountNameArchive[] = "archive";
-constexpr char kSystemMountNameRemovable[] = "removable";
+inline constexpr char kSystemMountNameArchive[] = "archive";
+inline constexpr char kSystemMountNameRemovable[] = "removable";
 
 // Backend Function called.  Used to control access.
 enum class BackendFunction {
   kCreateFileSystemOperation,
   kCreateFileStreamReader,
   kCreateFileStreamWriter,
-  kGetRedirectURLForContents,
 };
 
 // FileSystemBackend is a Chrome OS specific implementation of
@@ -128,11 +127,6 @@ class FileSystemBackend : public storage::FileSystemBackend {
   // path is not exposed by this provider.
   bool GetVirtualPath(const base::FilePath& file_system_path,
                       base::FilePath* virtual_path) const;
-
-  // Gets a redirect URL for contents. e.g. Google Drive URL for hosted
-  // documents. Returns empty URL if the entry does not have the redirect URL.
-  void GetRedirectURLForContents(const storage::FileSystemURL& url,
-                                 storage::URLCallback callback) const;
 
   // Creates an internal File System URL for performing internal operations such
   // as confirming if a file or a directory exist before granting the final

@@ -5,7 +5,6 @@
 #include "ash/webui/projector_app/projector_xhr_sender.h"
 
 #include "ash/constants/ash_features.h"
-#include "ash/webui/projector_app/public/mojom/projector_types.mojom-forward.h"
 #include "ash/webui/projector_app/public/mojom/projector_types.mojom-shared.h"
 #include "ash/webui/projector_app/test/mock_app_client.h"
 #include "base/functional/callback.h"
@@ -30,6 +29,9 @@ constexpr char kTestDriveRequestUrl[] =
     "https://www.googleapis.com/drive/v3/files/fileID";
 constexpr char kTestTranslationRequestUrl[] =
     "https://translation.googleapis.com/language/translate/v2";
+constexpr char kTestDVSRequestUrl[] =
+    "https://workspacevideo-pa.googleapis.com/v1/drive/media/my-real-video-id/"
+    "playback";
 
 GURL GetUrlWithApiKey(const GURL& url) {
   return net::AppendQueryParameter(url, "key", google_apis::GetAPIKey());
@@ -302,6 +304,28 @@ TEST_F(ProjectorXhrSenderTest, SuccessWithSecondaryEmail) {
 
   mock_app_client().GrantOAuthTokenFor(
       kTestUserSecondaryEmail,
+      /* expiry_time = */ base::Time::Now() + kExpiryTimeFromNow);
+  VerifySendRequestFuture(future, test_response_body,
+                          projector::mojom::XhrResponseCode::kSuccess);
+}
+
+TEST_F(ProjectorXhrSenderTest, UseDVSEndpoint) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kProjectorUseDVSPlaybackEndpoint);
+
+  SendRequestFuture future;
+
+  const std::string& test_response_body = "{}";
+  sender()->Send(GURL(kTestDVSRequestUrl), projector::mojom::RequestType::kGet,
+                 /*request_body=*/"",
+                 /*use_credentials=*/false,
+                 /*use_api_key=*/false, future.GetCallback());
+
+  mock_app_client().test_url_loader_factory().AddResponse(kTestDVSRequestUrl,
+                                                          test_response_body);
+
+  mock_app_client().GrantOAuthTokenFor(
+      kTestUserEmail,
       /* expiry_time = */ base::Time::Now() + kExpiryTimeFromNow);
   VerifySendRequestFuture(future, test_response_body,
                           projector::mojom::XhrResponseCode::kSuccess);

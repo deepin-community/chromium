@@ -19,13 +19,14 @@
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/apps/platform_apps/app_load_service.h"
 #include "chrome/browser/background/background_contents_service_factory.h"
 #include "chrome/browser/background/background_contents_service_observer.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/notifications/notification_common.h"
 #include "chrome/browser/notifications/notification_display_service.h"
+#include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
@@ -39,17 +40,17 @@
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_host.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/image_loader.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_icon_set.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/extension_set.h"
+#include "extensions/common/icons/extension_icon_set.h"
 #include "extensions/common/manifest_handlers/background_info.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "extensions/grit/extensions_browser_resources.h"
-#include "ipc/ipc_message.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
@@ -58,9 +59,9 @@
 #include "ui/message_center/public/cpp/notification_types.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/notifier_catalogs.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 using content::SiteInstance;
 using content::WebContents;
@@ -78,7 +79,7 @@ void CloseBalloon(const std::string& extension_id, Profile* profile) {
   if (g_disable_close_balloon_for_testing)
     return;
 
-  NotificationDisplayService::GetForProfile(profile)->Close(
+  NotificationDisplayServiceFactory::GetForProfile(profile)->Close(
       NotificationHandler::Type::TRANSIENT,
       kCrashedNotificationPrefix + extension_id);
 }
@@ -105,14 +106,14 @@ class CrashNotificationDelegate : public message_center::NotificationDelegate {
   }
 
  private:
-  ~CrashNotificationDelegate() override {}
+  ~CrashNotificationDelegate() override = default;
 
   // Static to prevent accidental use of members as *this might get destroyed.
   static void HandleClick(bool is_hosted_app,
                           bool is_platform_app,
                           std::string extension_id,
                           Profile* profile) {
-    // http://crbug.com/247790 involves a crash notification balloon being
+    // http://crbug.com/41016660 involves a crash notification balloon being
     // clicked while the extension isn't in the TERMINATED state. In that case,
     // any of the "reload" methods called below can unload the extension, which
     // indirectly destroys the CrashNotificationDelegate, invalidating all its
@@ -129,9 +130,8 @@ class CrashNotificationDelegate : public message_center::NotificationDelegate {
     } else if (is_platform_app) {
       apps::AppLoadService::Get(profile)->RestartApplication(extension_id);
     } else {
-      extensions::ExtensionSystem::Get(profile)
-          ->extension_service()
-          ->ReloadExtension(extension_id);
+      extensions::ExtensionRegistrar::Get(profile)->ReloadExtension(
+          extension_id);
     }
 
     CloseBalloon(extension_id, profile);
@@ -153,12 +153,9 @@ void ReloadExtension(const std::string& extension_id, Profile* profile) {
     return;
   }
 
-  extensions::ExtensionSystem* extension_system =
-      extensions::ExtensionSystem::Get(profile);
-  extensions::ExtensionRegistry* extension_registry =
-      extensions::ExtensionRegistry::Get(profile);
-  if (!extension_system || !extension_system->extension_service() ||
-      !extension_registry) {
+  auto* extension_registrar = extensions::ExtensionRegistrar::Get(profile);
+  auto* extension_registry = extensions::ExtensionRegistry::Get(profile);
+  if (!extension_registrar || !extension_registry) {
     return;
   }
 
@@ -167,19 +164,19 @@ void ReloadExtension(const std::string& extension_id, Profile* profile) {
     // been restarted successfully by someone else (the user).
     return;
   }
-  extension_system->extension_service()->ReloadExtension(extension_id);
+  extension_registrar->ReloadExtension(extension_id);
 }
 
 }  // namespace
 
 // Keys for the information we store about individual BackgroundContents in
-// prefs. There is one top-level base::Value::Dict (stored at
+// prefs. There is one top-level base::DictValue (stored at
 // prefs::kRegisteredBackgroundContents). Information about each
-// BackgroundContents is stored under that top-level base::Value::Dict, keyed
+// BackgroundContents is stored under that top-level base::DictValue, keyed
 // by the parent application ID for easy lookup.
 //
 // kRegisteredBackgroundContents:
-//    base::Value::Dict {
+//    base::DictValue {
 //       <appid_1>: { "url": <url1>, "name": <frame_name> },
 //       <appid_2>: { "url": <url2>, "name": <frame_name> },
 //         ... etc ...
@@ -361,7 +358,6 @@ void BackgroundContentsService::OnExtensionUnloaded(
     }
   }
   NOTREACHED() << "Undefined UnloadedExtensionReason.";
-  return ShutdownAssociatedBackgroundContents(extension->id());
 }
 
 void BackgroundContentsService::OnExtensionUninstalled(
@@ -422,7 +418,7 @@ void BackgroundContentsService::RestartForceInstalledExtensionOnCrash(
 void BackgroundContentsService::LoadBackgroundContentsFromPrefs() {
   if (!prefs_)
     return;
-  const base::Value::Dict& contents =
+  const base::DictValue& contents =
       prefs_->GetDict(prefs::kRegisteredBackgroundContents);
   extensions::ExtensionRegistry* extension_registry =
       extensions::ExtensionRegistry::Get(profile_);
@@ -485,19 +481,19 @@ void BackgroundContentsService::LoadBackgroundContentsForExtension(
   // Now look in the prefs.
   if (!prefs_)
     return;
-  const base::Value::Dict& contents =
+  const base::DictValue& contents =
       prefs_->GetDict(prefs::kRegisteredBackgroundContents);
   LoadBackgroundContentsFromDictionary(extension_id, contents);
 }
 
 void BackgroundContentsService::LoadBackgroundContentsFromDictionary(
     const std::string& extension_id,
-    const base::Value::Dict& contents) {
+    const base::DictValue& contents) {
   extensions::ExtensionService* extensions_service =
       extensions::ExtensionSystem::Get(profile_)->extension_service();
   DCHECK(extensions_service);
 
-  const base::Value::Dict* dict = contents.FindDict(extension_id);
+  const base::DictValue* dict = contents.FindDict(extension_id);
   if (!dict)
     return;
 
@@ -580,17 +576,15 @@ void BackgroundContentsService::RegisterBackgroundContents(
 
   // We store the first URL we receive for a given application. If there's
   // already an entry for this application, no need to do anything.
-  // TODO(atwilson): Verify that this is the desired behavior based on developer
-  // feedback (http://crbug.com/47118).
   ScopedDictPrefUpdate update(prefs_, prefs::kRegisteredBackgroundContents);
-  base::Value::Dict& pref = update.Get();
+  base::DictValue& pref = update.Get();
   const std::string& appid = GetParentApplicationId(background_contents);
   if (pref.FindDict(appid)) {
     return;
   }
 
   // No entry for this application yet, so add one.
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kUrlKey, background_contents->GetURL().spec());
   dict.Set(kFrameNameKey, contents_map_[appid].frame_name);
   pref.Set(appid, std::move(dict));
@@ -600,7 +594,7 @@ bool BackgroundContentsService::HasRegisteredBackgroundContents(
     const std::string& app_id) {
   if (!prefs_)
     return false;
-  const base::Value::Dict& contents =
+  const base::DictValue& contents =
       prefs_->GetDict(prefs::kRegisteredBackgroundContents);
   return contents.Find(app_id);
 }
@@ -745,7 +739,7 @@ void BackgroundContentsService::NotificationImageReady(
     scoped_refptr<message_center::NotificationDelegate> delegate,
     const gfx::Image& icon) {
   NotificationDisplayService* notification_service =
-      NotificationDisplayService::GetForProfile(profile_);
+      NotificationDisplayServiceFactory::GetForProfile(profile_);
   CHECK(notification_service);
 
   if (g_browser_process->IsShuttingDown()) {
@@ -766,14 +760,14 @@ void BackgroundContentsService::NotificationImageReady(
       message_center::NOTIFICATION_TYPE_SIMPLE, id, std::u16string(), message,
       ui::ImageModel::FromImage(notification_icon), std::u16string(),
       GURL("chrome://extension-crash"),
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       message_center::NotifierId(
           message_center::NotifierType::SYSTEM_COMPONENT, kNotifierId,
           ash::NotificationCatalogName::kBackgroundCrash),
 #else
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
                                  kNotifierId),
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
       {}, delegate);
   notification_service->Display(NotificationHandler::Type::TRANSIENT,
                                 notification,
@@ -790,7 +784,7 @@ void BackgroundContentsService::ShowBalloon(const Extension* extension) {
   extension_misc::ExtensionIcons size(extension_misc::EXTENSION_ICON_LARGE);
   extensions::ExtensionResource resource =
       extensions::IconsInfo::GetIconResource(extension, size,
-                                             ExtensionIconSet::MATCH_SMALLER);
+                                             ExtensionIconSet::Match::kSmaller);
   // We can't just load the image in the Observe method below because, despite
   // what this method is called, it may call the callback synchronously.
   // However, it's possible that the extension went away during the interim,

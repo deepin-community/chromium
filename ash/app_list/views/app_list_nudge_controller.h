@@ -30,6 +30,8 @@ class ASH_EXPORT AppListNudgeController {
     kPrivacyNotice,
     // A nudge in app list that guide users to reorder apps using context menu.
     kReorderNudge,
+    // A nudge in app list that notifies user that they are in a tutorial view.
+    kTutorialNudge,
   };
 
   AppListNudgeController();
@@ -39,11 +41,6 @@ class ASH_EXPORT AppListNudgeController {
 
   // Registers profile prefs.
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
-
-  // Clears nudges profile perfs. Used when a new user session is added in the
-  // app list controller. This feature can be toggled in chrome:://flags with
-  // launcher-nudge-session-reset flag.
-  static void ResetPrefsForNewUserSession(PrefService* prefs);
 
   // Gets the number of times that the nudge with type `type` has been shown.
   static int GetShownCount(PrefService* prefs, NudgeType type);

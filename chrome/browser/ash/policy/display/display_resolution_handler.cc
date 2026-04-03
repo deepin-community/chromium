@@ -10,7 +10,7 @@
 
 #include "base/functional/bind.h"
 #include "base/values.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 
@@ -26,13 +26,8 @@ struct DisplayResolutionHandler::InternalDisplaySettings {
   explicit InternalDisplaySettings(int scale_percentage)
       : scale_percentage(scale_percentage) {}
 
-  bool operator==(const InternalDisplaySettings& rhs) const {
-    return scale_percentage == rhs.scale_percentage;
-  }
-
-  bool operator!=(const InternalDisplaySettings& rhs) const {
-    return !(*this == rhs);
-  }
+  friend bool operator==(const InternalDisplaySettings&,
+                         const InternalDisplaySettings&) = default;
 
   // Create display config for the internal display using policy settings from
   // |internal_display_settings_|.
@@ -46,7 +41,7 @@ struct DisplayResolutionHandler::InternalDisplaySettings {
   // Get settings for the internal display from
   // |ash::kDeviceDisplayResolution| setting value.
   static std::unique_ptr<InternalDisplaySettings> FromPolicySetting(
-      const base::Value::Dict* pref) {
+      const base::DictValue* pref) {
     const std::optional<int> scale_value =
         pref->FindInt(ash::kDeviceDisplayResolutionKeyInternalScale);
     return scale_value ? std::make_unique<InternalDisplaySettings>(*scale_value)
@@ -110,7 +105,7 @@ struct DisplayResolutionHandler::ExternalDisplaySettings {
   // Get settings for the external displays from
   // |ash::kDeviceDisplayResolution| setting value;
   static std::unique_ptr<ExternalDisplaySettings> FromPolicySetting(
-      const base::Value::Dict* pref) {
+      const base::DictValue* pref) {
     auto result = std::make_unique<ExternalDisplaySettings>();
 
     // Scale can be used for both native and non-native modes
@@ -151,7 +146,7 @@ const char* DisplayResolutionHandler::SettingName() {
 // |internal_display_settings_|. Also updates |policy_enabled_| flag.
 void DisplayResolutionHandler::OnSettingUpdate() {
   policy_enabled_ = false;
-  const base::Value::Dict* resolution_pref = nullptr;
+  const base::DictValue* resolution_pref = nullptr;
   ash::CrosSettings::Get()->GetDictionary(ash::kDeviceDisplayResolution,
                                           &resolution_pref);
   if (!resolution_pref)

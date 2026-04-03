@@ -18,8 +18,11 @@
 #include "chrome/browser/extensions/activity_log/activity_action_constants.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace constants = activity_log_constants;
 
@@ -27,7 +30,7 @@ namespace extensions {
 
 ActivityLogPolicy::ActivityLogPolicy(Profile* profile) {}
 
-ActivityLogPolicy::~ActivityLogPolicy() {}
+ActivityLogPolicy::~ActivityLogPolicy() = default;
 
 void ActivityLogPolicy::SetClockForTesting(base::Clock* clock) {
   testing_clock_ = clock;
@@ -106,7 +109,7 @@ void ActivityLogPolicy::Util::StripPrivacySensitiveFields(
   // Clear WebRequest details; only keep a record of which types of
   // modifications were performed.
   if (action->action_type() == Action::ACTION_WEB_REQUEST) {
-    if (base::Value::Dict* details =
+    if (base::DictValue* details =
             action->mutable_other().FindDict(constants::kActionWebRequest)) {
       for (auto detail : *details) {
         details->SetByDottedPath(detail.first, true);

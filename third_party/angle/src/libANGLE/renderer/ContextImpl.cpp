@@ -25,12 +25,31 @@ void ContextImpl::invalidateTexture(gl::TextureType target)
     UNREACHABLE();
 }
 
+angle::Result ContextImpl::startTiling(const gl::Context *context,
+                                       const gl::Rectangle &area,
+                                       GLbitfield preserveMask)
+{
+    UNREACHABLE();
+    return angle::Result::Stop;
+}
+
+angle::Result ContextImpl::endTiling(const gl::Context *context, GLbitfield preserveMask)
+{
+    UNREACHABLE();
+    return angle::Result::Stop;
+}
+
 angle::Result ContextImpl::onUnMakeCurrent(const gl::Context *context)
 {
     return angle::Result::Continue;
 }
 
 angle::Result ContextImpl::handleNoopDrawEvent()
+{
+    return angle::Result::Continue;
+}
+
+angle::Result ContextImpl::handleNoopMultiDrawEvent()
 {
     return angle::Result::Continue;
 }
@@ -84,30 +103,22 @@ angle::Result ContextImpl::releaseTextures(const gl::Context *context,
     return angle::Result::Stop;
 }
 
+const angle::PerfMonitorCounterGroupsInfo &ContextImpl::getPerfMonitorCountersInfo() const
+{
+    static angle::base::NoDestructor<angle::PerfMonitorCounterGroupsInfo> sCountersInfo;
+    return *sCountersInfo;
+}
+
 const angle::PerfMonitorCounterGroups &ContextImpl::getPerfMonitorCounters()
 {
     static angle::base::NoDestructor<angle::PerfMonitorCounterGroups> sCounters;
     return *sCounters;
 }
 
-angle::Result ContextImpl::drawPixelLocalStorageEXTEnable(gl::Context *,
-                                                          GLsizei n,
-                                                          const gl::PixelLocalStoragePlane[],
-                                                          const GLenum loadops[])
+const angle::ShadingRateMap &ContextImpl::getSupportedFragmentShadingRateEXTSampleCounts() const
 {
-    ASSERT(getNativePixelLocalStorageOptions().type ==
-           ShPixelLocalStorageType::PixelLocalStorageEXT);
     UNREACHABLE();
-    return angle::Result::Stop;
-}
-
-angle::Result ContextImpl::drawPixelLocalStorageEXTDisable(gl::Context *,
-                                                           const gl::PixelLocalStoragePlane[],
-                                                           const GLenum storeops[])
-{
-    ASSERT(getNativePixelLocalStorageOptions().type ==
-           ShPixelLocalStorageType::PixelLocalStorageEXT);
-    UNREACHABLE();
-    return angle::Result::Stop;
+    static angle::ShadingRateMap empty;
+    return empty;
 }
 }  // namespace rx

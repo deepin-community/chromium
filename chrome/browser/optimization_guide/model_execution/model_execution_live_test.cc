@@ -15,7 +15,7 @@
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace optimization_guide {
 
@@ -42,8 +42,8 @@ class ModelExecutionLiveTest : public signin::test::LiveTest {
         {});
     LiveTest::SetUp();
     // Always disable animation for stability.
-    ui::ScopedAnimationDurationScaleMode disable_animation(
-        ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+    gfx::ScopedAnimationDurationScaleMode disable_animation(
+        gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   }
 
   OptimizationGuideKeyedService* GetOptGuideKeyedService() {
@@ -51,8 +51,7 @@ class ModelExecutionLiveTest : public signin::test::LiveTest {
         browser()->profile());
   }
 
-  bool IsSettingVisible(
-      optimization_guide::proto::ModelExecutionFeature feature) {
+  bool IsSettingVisible(optimization_guide::UserVisibleFeatureKey feature) {
     return GetOptGuideKeyedService()->IsSettingVisible(feature);
   }
 
@@ -83,7 +82,7 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionLiveTest, PRE_SimpleSyncFlow) {
 
   EXPECT_TRUE(sync_service()->IsSyncFeatureEnabled());
   EXPECT_TRUE(IsSettingVisible(
-      proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION));
+      UserVisibleFeatureKey::kTabOrganization));
   histogram_tester_.ExpectBucketCount(
       "OptimizationGuide.ModelExecution.SettingsVisibilityResult."
       "TabOrganization",
@@ -98,7 +97,7 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionLiveTest, SimpleSyncFlow) {
 
   EXPECT_TRUE(sync_service()->IsSyncFeatureEnabled());
   EXPECT_TRUE(IsSettingVisible(
-      proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION));
+      UserVisibleFeatureKey::kTabOrganization));
   histogram_tester_.ExpectBucketCount(
       "OptimizationGuide.ModelExecution.SettingsVisibilityResult."
       "TabOrganization",
@@ -115,7 +114,7 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionLiveTest,
 
   EXPECT_TRUE(sync_service()->IsSyncFeatureEnabled());
   EXPECT_FALSE(IsSettingVisible(
-      proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION));
+      UserVisibleFeatureKey::kTabOrganization));
   histogram_tester_.ExpectBucketCount(
       "OptimizationGuide.ModelExecution.SettingsVisibilityResult."
       "TabOrganization",
@@ -131,7 +130,7 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionLiveTest,
 
   EXPECT_TRUE(sync_service()->IsSyncFeatureEnabled());
   EXPECT_FALSE(IsSettingVisible(
-      proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION));
+      UserVisibleFeatureKey::kTabOrganization));
   histogram_tester_.ExpectBucketCount(
       "OptimizationGuide.ModelExecution.SettingsVisibilityResult."
       "TabOrganization",

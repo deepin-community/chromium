@@ -2,11 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "mojo/public/cpp/system/data_pipe_producer.h"
+
 #include <algorithm>
 #include <limits>
 #include <memory>
 #include <string>
 
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
@@ -14,11 +17,11 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
 #include "mojo/public/cpp/system/data_pipe.h"
-#include "mojo/public/cpp/system/data_pipe_producer.h"
 #include "mojo/public/cpp/system/file_data_source.h"
 #include "mojo/public/cpp/system/filtered_data_source.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
@@ -57,24 +60,26 @@ class DataPipeReader {
  private:
   void OnDataAvailable(MojoResult result, const HandleSignalsState& state) {
     if (result == MOJO_RESULT_OK) {
-      uint32_t size = static_cast<uint32_t>(read_size_);
-      std::vector<char> buffer(size, 0);
+      size_t size = read_size_;
+      std::string buffer(size, '\0');
       MojoResult read_result;
       do {
-        read_result = consumer_handle_->ReadData(buffer.data(), &size,
-                                                 MOJO_READ_DATA_FLAG_NONE);
+        read_result = consumer_handle_->ReadData(
+            MOJO_READ_DATA_FLAG_NONE, base::as_writable_byte_span(buffer),
+            size);
         if (read_result == MOJO_RESULT_OK) {
-          std::copy(buffer.begin(), buffer.begin() + size,
-                    std::back_inserter(data_));
+          data_.append(base::as_string_view(base::span(buffer).first(size)));
         }
       } while (read_result == MOJO_RESULT_OK);
 
-      if (read_result == MOJO_RESULT_SHOULD_WAIT)
+      if (read_result == MOJO_RESULT_SHOULD_WAIT) {
         return;
+      }
     }
 
-    if (result != MOJO_RESULT_CANCELLED)
+    if (result != MOJO_RESULT_CANCELLED) {
       watcher_.Cancel();
+    }
 
     std::move(on_read_done_).Run();
   }
@@ -101,9 +106,7 @@ class DataPipeProducerTest : public testing::Test {
         base::StringPrintf("tmp%d", tmp_file_id_++));
     base::File temp_file(temp_file_path,
                          base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-    int bytes_written = temp_file.WriteAtCurrentPos(
-        contents.data(), static_cast<int>(contents.size()));
-    CHECK_EQ(static_cast<int>(contents.size()), bytes_written);
+    CHECK(temp_file.WriteAtCurrentPosAndCheck(base::as_byte_span(contents)));
     return temp_file_path;
   }
 
@@ -161,10 +164,11 @@ class TestObserver : public FilteredDataSource::Filter {
   void OnRead(base::span<char> buffer,
               FilteredDataSource::ReadResult* result) override {
     base::AutoLock auto_lock(lock_);
-    if (result->result == MOJO_RESULT_OK)
+    if (result->result == MOJO_RESULT_OK) {
       observer_data_->bytes_read += result->bytes_read;
-    else
+    } else {
       observer_data_->num_read_errors++;
+    }
   }
 
   void OnDone() override {
@@ -182,8 +186,9 @@ TEST_F(DataPipeProducerTest, WriteFromFile) {
   const std::string kTestStringFragment = "Hello, world!";
   constexpr size_t kNumRepetitions = 1000;
   std::string test_string;
-  for (size_t i = 0; i < kNumRepetitions; ++i)
+  for (size_t i = 0; i < kNumRepetitions; ++i) {
     test_string += kTestStringFragment;
+  }
 
   base::FilePath path = CreateTempFileWithContents(test_string);
 
@@ -356,5 +361,6 @@ TEST_F(DataPipeProducerTest, WriteLengthGreaterThanFile) {
   EXPECT_EQ(test_string.size(), observer_data.bytes_read);
   EXPECT_EQ(1, observer_data.done_called);
 }
+
 }  // namespace
 }  // namespace mojo

@@ -10,6 +10,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_path_override.h"
@@ -18,14 +19,15 @@
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
+#include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "components/policy/proto/device_management_backend.pb.h"
+#include "components/prefs/testing_pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -57,8 +59,7 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
 
  protected:
   DeviceSettingsProviderTest()
-      : local_state_(TestingBrowserProcess::GetGlobal()),
-        user_data_dir_override_(chrome::DIR_USER_DATA) {}
+      : user_data_dir_override_(chrome::DIR_USER_DATA) {}
 
   void SetUp() override {
     DeviceSettingsTestBase::SetUp();
@@ -72,7 +73,8 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
     provider_ = std::make_unique<DeviceSettingsProvider>(
         base::BindRepeating(&DeviceSettingsProviderTest::SettingChanged,
                             base::Unretained(this)),
-        device_settings_service_.get(), local_state_.Get());
+        device_settings_service_.get(),
+        TestingBrowserProcess::GetGlobal()->local_state());
     Mock::VerifyAndClearExpectations(this);
   }
 
@@ -152,18 +154,18 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
     BuildAndInstallDevicePolicy();
   }
 
-  enum MetricsOption { DISABLE_METRICS, ENABLE_METRICS, REMOVE_METRICS_POLICY };
+  enum MetricsOption { kDisableMetrics, kEnableMetrics, kRemoveMetricsPolicy };
 
   // Helper routine to enable/disable metrics report upload settings in policy.
   void SetMetricsReportingSettings(MetricsOption option) {
-    if (option == REMOVE_METRICS_POLICY) {
+    if (option == kRemoveMetricsPolicy) {
       // Remove policy altogether
       device_policy_->payload().clear_metrics_enabled();
     } else {
       // Enable or disable policy
       em::MetricsEnabledProto* proto =
           device_policy_->payload().mutable_metrics_enabled();
-      proto->set_metrics_enabled(option == ENABLE_METRICS);
+      proto->set_metrics_enabled(option == kEnableMetrics);
     }
     BuildAndInstallDevicePolicy();
   }
@@ -239,7 +241,7 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
   }
 
   void VerifyPolicyList(const char* policy_key,
-                        const base::Value::List& expected_value) {
+                        const base::ListValue& expected_value) {
     const base::Value* value = provider_->Get(policy_key);
     // This prevents tests from crashing if provider returns nullptr.
     ASSERT_TRUE(value);
@@ -324,14 +326,6 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
     Mock::VerifyAndClearExpectations(this);
   }
 
-  // Helper routine that sets the device DeviceWilcoDtcAllowed policy.
-  void SetDeviceWilcoDtcAllowedSetting(bool device_wilco_dtc_allowed) {
-    em::DeviceWilcoDtcAllowedProto* proto =
-        device_policy_->payload().mutable_device_wilco_dtc_allowed();
-    proto->set_device_wilco_dtc_allowed(device_wilco_dtc_allowed);
-    BuildAndInstallDevicePolicy();
-  }
-
   void SetDeviceDockMacAddressSourceSetting(
       em::DeviceDockMacAddressSourceProto::Source
           device_dock_mac_address_source) {
@@ -406,7 +400,7 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
 
   void VerifyDevicePrinterList(const char* policy_key,
                                std::vector<std::string>& values) {
-    base::Value::List list;
+    base::ListValue list;
     for (auto const& value : values) {
       list.Append(value);
     }
@@ -451,8 +445,6 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
   }
 
   base::test::ScopedFeatureList feature_list_;
-
-  ScopedTestingLocalState local_state_;
 
   std::unique_ptr<DeviceSettingsProvider> provider_;
 
@@ -526,7 +518,7 @@ TEST_F(DeviceSettingsProviderTest, InitializationTestUnowned) {
 TEST_F(DeviceSettingsProviderTestEnterprise, NoPolicyDefaultsOn) {
   // Missing policy should default to reporting enabled for enterprise-enrolled
   // devices, see crbug/456186.
-  SetMetricsReportingSettings(REMOVE_METRICS_POLICY);
+  SetMetricsReportingSettings(kRemoveMetricsPolicy);
   const base::Value* saved_value = provider_->Get(kStatsReportingPref);
   ASSERT_TRUE(saved_value);
   ASSERT_TRUE(saved_value->is_bool());
@@ -536,7 +528,7 @@ TEST_F(DeviceSettingsProviderTestEnterprise, NoPolicyDefaultsOn) {
 TEST_F(DeviceSettingsProviderTest, NoPolicyDefaultsOff) {
   // Missing policy should default to reporting enabled for non-enterprise-
   // enrolled devices, see crbug/456186.
-  SetMetricsReportingSettings(REMOVE_METRICS_POLICY);
+  SetMetricsReportingSettings(kRemoveMetricsPolicy);
   const base::Value* saved_value = provider_->Get(kStatsReportingPref);
   ASSERT_TRUE(saved_value);
   ASSERT_TRUE(saved_value->is_bool());
@@ -544,7 +536,7 @@ TEST_F(DeviceSettingsProviderTest, NoPolicyDefaultsOff) {
 }
 
 TEST_F(DeviceSettingsProviderTest, SetPrefFailed) {
-  SetMetricsReportingSettings(DISABLE_METRICS);
+  SetMetricsReportingSettings(kDisableMetrics);
 
   // If we are not the owner no sets should work.
   base::Value value(true);
@@ -566,7 +558,7 @@ TEST_F(DeviceSettingsProviderTest, SetPrefFailed) {
 
 TEST_F(DeviceSettingsProviderTest, SetPrefSucceed) {
   owner_key_util_->ImportPrivateKeyAndSetPublicKey(
-      device_policy_->GetSigningKey());
+      *device_policy_->GetSigningKey());
   InitOwner(AccountId::FromUserEmail(device_policy_->policy_data().username()),
             true);
   FlushDeviceSettings();
@@ -596,7 +588,7 @@ TEST_F(DeviceSettingsProviderTest, SetPrefSucceed) {
 
 TEST_F(DeviceSettingsProviderTest, SetPrefTwice) {
   owner_key_util_->ImportPrivateKeyAndSetPublicKey(
-      device_policy_->GetSigningKey());
+      *device_policy_->GetSigningKey());
   InitOwner(AccountId::FromUserEmail(device_policy_->policy_data().username()),
             true);
   FlushDeviceSettings();
@@ -634,7 +626,7 @@ TEST_F(DeviceSettingsProviderTest, PolicyRetrievalFailedBadSignature) {
             provider_->PrepareTrustedValues(&closure));
   EXPECT_TRUE(closure);  // Ownership of |closure| was not taken.
   histogram_tester.ExpectUniqueSample(
-      "Enterprise.DeviceSettings.UpdatedStatus",
+      "Enterprise.DeviceSettings.UpdatedStatus2",
       DeviceSettingsService::STORE_VALIDATION_ERROR, /*amount=*/1);
   histogram_tester.ExpectTotalCount(
       "Enterprise.DeviceSettings.MissingPolicyMitigated", 0);
@@ -653,9 +645,10 @@ TEST_F(DeviceSettingsProviderTest, PolicyRetrievalNoPolicy) {
   EXPECT_EQ(CrosSettingsProvider::PERMANENTLY_UNTRUSTED,
             provider_->PrepareTrustedValues(&closure));
   EXPECT_TRUE(closure);  // Ownership of |closure| was not taken.
-  histogram_tester.ExpectUniqueSample("Enterprise.DeviceSettings.UpdatedStatus",
-                                      DeviceSettingsService::STORE_NO_POLICY,
-                                      /*amount=*/1);
+  histogram_tester.ExpectUniqueSample(
+      "Enterprise.DeviceSettings.UpdatedStatus2",
+      DeviceSettingsService::STORE_NO_POLICY,
+      /*amount=*/1);
   histogram_tester.ExpectTotalCount(
       "Enterprise.DeviceSettings.MissingPolicyMitigated", 0);
 }
@@ -676,9 +669,10 @@ TEST_F(DeviceSettingsProviderTest, PolicyRetrievalNoPolicyMitigated) {
   EXPECT_EQ(CrosSettingsProvider::TRUSTED,
             provider_->PrepareTrustedValues(&closure));
   EXPECT_TRUE(closure);  // Ownership of |closure| was not taken.
-  histogram_tester.ExpectUniqueSample("Enterprise.DeviceSettings.UpdatedStatus",
-                                      DeviceSettingsService::STORE_NO_POLICY,
-                                      /*amount=*/1);
+  histogram_tester.ExpectUniqueSample(
+      "Enterprise.DeviceSettings.UpdatedStatus2",
+      DeviceSettingsService::STORE_NO_POLICY,
+      /*amount=*/1);
   histogram_tester.ExpectTotalCount(
       "Enterprise.DeviceSettings.MissingPolicyMitigated", 1);
 }
@@ -702,9 +696,10 @@ TEST_F(DeviceSettingsProviderTest, PolicyFailedPermanentlyNotification) {
   EXPECT_EQ(CrosSettingsProvider::PERMANENTLY_UNTRUSTED,
             provider_->PrepareTrustedValues(&closure));
   EXPECT_TRUE(closure);  // Ownership of |closure| was not taken.
-  histogram_tester.ExpectUniqueSample("Enterprise.DeviceSettings.UpdatedStatus",
-                                      DeviceSettingsService::STORE_NO_POLICY,
-                                      /*amount=*/1);
+  histogram_tester.ExpectUniqueSample(
+      "Enterprise.DeviceSettings.UpdatedStatus2",
+      DeviceSettingsService::STORE_NO_POLICY,
+      /*amount=*/1);
   histogram_tester.ExpectTotalCount(
       "Enterprise.DeviceSettings.MissingPolicyMitigated", 0);
 }
@@ -721,9 +716,10 @@ TEST_F(DeviceSettingsProviderTest, PolicyLoadNotification) {
 
   ReloadDeviceSettings();
   Mock::VerifyAndClearExpectations(this);
-  histogram_tester.ExpectUniqueSample("Enterprise.DeviceSettings.UpdatedStatus",
-                                      DeviceSettingsService::STORE_SUCCESS,
-                                      /*amount=*/1);
+  histogram_tester.ExpectUniqueSample(
+      "Enterprise.DeviceSettings.UpdatedStatus2",
+      DeviceSettingsService::STORE_SUCCESS,
+      /*amount=*/1);
   histogram_tester.ExpectTotalCount(
       "Enterprise.DeviceSettings.MissingPolicyMitigated", 0);
 }
@@ -736,12 +732,13 @@ TEST_F(DeviceSettingsProviderTest, LegacyDeviceLocalAccounts) {
   BuildAndInstallDevicePolicy();
 
   // On load, the deprecated spec should have been converted to the new format.
-  base::Value::List expected_accounts;
-  base::Value::Dict entry_dict;
+  base::ListValue expected_accounts;
+  base::DictValue entry_dict;
   entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyId,
                  policy::PolicyBuilder::kFakeUsername);
-  entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyType,
-                 policy::DeviceLocalAccount::TYPE_PUBLIC_SESSION);
+  entry_dict.Set(
+      kAccountsPrefDeviceLocalAccountsKeyType,
+      static_cast<int>(policy::DeviceLocalAccountType::kPublicSession));
   expected_accounts.Append(std::move(entry_dict));
   const base::Value* actual_accounts =
       provider_->Get(kAccountsPrefDeviceLocalAccounts);
@@ -757,12 +754,12 @@ TEST_F(DeviceSettingsProviderTest,
 
   BuildAndInstallDevicePolicy();
 
-  base::Value::List expected_accounts = base::Value::List().Append(
-      base::Value::Dict()
+  base::ListValue expected_accounts = base::ListValue().Append(
+      base::DictValue()
           .Set(kAccountsPrefDeviceLocalAccountsKeyId,
                kDeviceLocalAccountKioskAccountId)
           .Set(kAccountsPrefDeviceLocalAccountsKeyType,
-               static_cast<int>(policy::DeviceLocalAccount::TYPE_KIOSK_APP))
+               static_cast<int>(policy::DeviceLocalAccountType::kKioskApp))
           .Set(kAccountsPrefDeviceLocalAccountsKeyEphemeralMode,
                static_cast<int>(
                    policy::DeviceLocalAccount::EphemeralMode::kUnset)));
@@ -783,12 +780,12 @@ TEST_F(DeviceSettingsProviderTest, DeviceLocalAccountsWithEphemeralModeField) {
 
   BuildAndInstallDevicePolicy();
 
-  base::Value::List expected_accounts = base::Value::List().Append(
-      base::Value::Dict()
+  base::ListValue expected_accounts = base::ListValue().Append(
+      base::DictValue()
           .Set(kAccountsPrefDeviceLocalAccountsKeyId,
                kDeviceLocalAccountKioskAccountId)
           .Set(kAccountsPrefDeviceLocalAccountsKeyType,
-               static_cast<int>(policy::DeviceLocalAccount::TYPE_WEB_KIOSK_APP))
+               static_cast<int>(policy::DeviceLocalAccountType::kWebKioskApp))
           .Set(kAccountsPrefDeviceLocalAccountsKeyEphemeralMode,
                static_cast<int>(
                    policy::DeviceLocalAccount::EphemeralMode::kEnable)));
@@ -845,7 +842,7 @@ TEST_F(DeviceSettingsProviderTest,
 
   BuildAndInstallDevicePolicy();
 
-  base::Value::List signal_strength_telemetry_list;
+  base::ListValue signal_strength_telemetry_list;
   signal_strength_telemetry_list.Append("https_latency");
   signal_strength_telemetry_list.Append("network_telemetry");
   base::Value signal_strength_telemetry_list_value =
@@ -896,7 +893,7 @@ TEST_F(DeviceSettingsProviderTest, EmptyAllowedConnectionTypesForUpdate) {
       {em::AutoUpdateSettingsProto::CONNECTION_TYPE_ETHERNET};
   // Check some meaningful value. Policy should be set.
   SetAutoUpdateConnectionTypes(single_value);
-  base::Value::List allowed_connections;
+  base::ListValue allowed_connections;
   allowed_connections.Append(0);
   VerifyPolicyList(kAllowedConnectionTypesForUpdate, allowed_connections);
 }
@@ -953,8 +950,8 @@ TEST_F(DeviceSettingsProviderTest, DeviceAutoUpdateTimeRestrictionsExtra) {
       "[{\"start\": {\"day_of_week\": \"Monday\", \"hours\": 10, \"minutes\": "
       "50}, \"end\": {\"day_of_week\": \"Wednesday\", \"hours\": 1, "
       "\"minutes\": 20, \"extra\": 50}}]";
-  base::Value::List test_list;
-  base::Value::Dict interval;
+  base::ListValue test_list;
+  base::DictValue interval;
   interval.SetByDottedPath("start.day_of_week", "Monday");
   interval.SetByDottedPath("start.hours", 10);
   interval.SetByDottedPath("start.minutes", 50);
@@ -972,7 +969,7 @@ TEST_F(DeviceSettingsProviderTest, DeviceScheduledUpdateCheckTests) {
       "{\"update_check_time\": {\"hour\": 23, \"minute\": 35}, "
       "\"frequency\": \"DAILY\", \"day_of_week\": \"MONDAY\",  "
       "\"day_of_month\": 15}";
-  base::Value::Dict expected_dict;
+  base::DictValue expected_dict;
   expected_dict.SetByDottedPath("update_check_time.hour", 23);
   expected_dict.SetByDottedPath("update_check_time.minute", 35);
   expected_dict.Set("frequency", "DAILY");
@@ -1019,17 +1016,6 @@ TEST_F(DeviceSettingsProviderTest, DeviceRebootAfterUserSignout) {
     base::Value expected_value(PolicyProto::VM_STARTED_OR_ARC_SESSION);
     VerifyPolicyValue(kDeviceRebootOnUserSignout, &expected_value);
   }
-}
-
-TEST_F(DeviceSettingsProviderTest, DeviceWilcoDtcAllowedSetting) {
-  // Policy should not be set by default
-  VerifyPolicyValue(kDeviceWilcoDtcAllowed, nullptr);
-
-  SetDeviceWilcoDtcAllowedSetting(true);
-  EXPECT_EQ(base::Value(true), *provider_->Get(kDeviceWilcoDtcAllowed));
-
-  SetDeviceWilcoDtcAllowedSetting(false);
-  EXPECT_EQ(base::Value(false), *provider_->Get(kDeviceWilcoDtcAllowed));
 }
 
 TEST_F(DeviceSettingsProviderTest, DeviceDockMacAddressSourceSetting) {
@@ -1181,28 +1167,8 @@ TEST_F(DeviceSettingsProviderTestEnterprise,
   VerifyDeviceShowLowDiskSpaceNotification(false);
 }
 
-// Tests DeviceFamilyLinkAccountsAllowed policy with the feature disabled.
-// The policy should have no effect.
-TEST_F(DeviceSettingsProviderTest, DeviceFamilyLinkAccountsAllowedDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(
-      features::kFamilyLinkOnSchoolDevice);
-
-  base::Value default_value(false);
-  VerifyPolicyValue(kAccountsPrefFamilyLinkAccountsAllowed, &default_value);
-
-  // Family Link allowed with allowlist set, but the feature is disabled.
-  SetDeviceFamilyLinkAccountsAllowed(true);
-  AddUserToAllowlist("*@managedchrome.com");
-  EXPECT_EQ(base::Value(false),
-            *provider_->Get(kAccountsPrefFamilyLinkAccountsAllowed));
-}
-
-// Tests DeviceFamilyLinkAccountsAllowed policy with the feature enabled.
-TEST_F(DeviceSettingsProviderTest, DeviceFamilyLinkAccountsAllowedEnabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kFamilyLinkOnSchoolDevice);
-
+// Tests DeviceFamilyLinkAccountsAllowed policy.
+TEST_F(DeviceSettingsProviderTest, DeviceFamilyLinkAccountsAllowed) {
   base::Value default_value(false);
   VerifyPolicyValue(kAccountsPrefFamilyLinkAccountsAllowed, &default_value);
 
@@ -1228,7 +1194,7 @@ TEST_F(DeviceSettingsProviderTest, FeatureFlags) {
   device_policy_->payload().mutable_feature_flags()->add_feature_flags("foo");
   BuildAndInstallDevicePolicy();
 
-  base::Value::List expected_feature_flags;
+  base::ListValue expected_feature_flags;
   expected_feature_flags.Append("foo");
   EXPECT_EQ(expected_feature_flags, provider_->Get(kFeatureFlags)->GetList());
 }
@@ -1238,10 +1204,20 @@ TEST_F(DeviceSettingsProviderTest, DeviceAllowedBluetoothServices) {
       device_policy_->payload().mutable_device_allowed_bluetooth_services();
   proto->add_allowlist("0x1124");
   BuildAndInstallDevicePolicy();
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append("0x1124");
   EXPECT_EQ(allowlist,
             provider_->Get(kDeviceAllowedBluetoothServices)->GetList());
+}
+
+TEST_F(DeviceSettingsProviderTest, DeviceBluetoothJustWorksPairingEnabled) {
+  em::BooleanPolicyProto* proto =
+      device_policy_->payload()
+          .mutable_devicebluetoothjustworkspairingenabled();
+  proto->set_value(true);
+  BuildAndInstallDevicePolicy();
+  EXPECT_EQ(base::Value(true),
+            *provider_->Get(kDeviceBluetoothJustWorksPairingEnabled));
 }
 
 // Check valid JSON for DeviceScheduledReboot.
@@ -1250,7 +1226,7 @@ TEST_F(DeviceSettingsProviderTest, DeviceScheduledReboot) {
       "{\"reboot_time\": {\"hour\": 22, \"minute\": 30}, "
       "\"frequency\": \"MONTHLY\", \"day_of_week\": \"MONDAY\", "
       "\"day_of_month\": 15}";
-  base::Value::Dict expected_dict;
+  base::DictValue expected_dict;
   expected_dict.SetByDottedPath("reboot_time.hour", 22);
   expected_dict.SetByDottedPath("reboot_time.minute", 30);
   expected_dict.Set("frequency", "MONTHLY");
@@ -1386,6 +1362,28 @@ TEST_F(DeviceSettingsProviderTest, DeviceHindiInscriptLayoutEnabled) {
             *provider_->Get(kDeviceHindiInscriptLayoutEnabled));
 }
 
+TEST_F(DeviceSettingsProviderTest, DeviceUserInitiatedFirmwareUpdatesEnabled) {
+  em::BooleanPolicyProto* proto =
+      device_policy_->payload()
+          .mutable_deviceuserinitiatedfirmwareupdatesenabled();
+  proto->set_value(true);
+  BuildAndInstallDevicePolicy();
+  EXPECT_EQ(base::Value(true),
+            *provider_->Get(kDeviceUserInitiatedFirmwareUpdatesEnabled));
+}
+
+TEST_F(DeviceSettingsProviderTest,
+       DeviceUserInitiatedFlexSystemFirmwareUpdatesEnabled) {
+  em::BooleanPolicyProto* proto =
+      device_policy_->payload()
+          .mutable_deviceuserinitiatedflexsystemfirmwareupdatesenabled();
+  proto->set_value(true);
+  BuildAndInstallDevicePolicy();
+  EXPECT_EQ(
+      base::Value(true),
+      *provider_->Get(kDeviceUserInitiatedFlexSystemFirmwareUpdatesEnabled));
+}
+
 TEST_F(DeviceSettingsProviderTest, DeviceDlcPredownloadListUnset) {
   // Device setting must be unset if the policy is not set.
   VerifyPolicyValue(kDeviceDlcPredownloadList, nullptr);
@@ -1407,7 +1405,7 @@ TEST_F(DeviceSettingsProviderTest, DeviceDlcPredownloadListNonempty) {
   BuildAndInstallDevicePolicy();
 
   VerifyPolicyList(kDeviceDlcPredownloadList,
-                   base::Value::List().Append("sane-backends-extras-dlc"));
+                   base::ListValue().Append("sane-backends-pfu"));
 }
 
 TEST_F(DeviceSettingsProviderTest, DeviceDlcPredownloadListInvalidDlc) {
@@ -1424,7 +1422,7 @@ TEST_F(DeviceSettingsProviderTest, DeviceDlcPredownloadListInvalidDlc) {
 
   // Device setting must contain only the valid DLCs that can be pre downloaded.
   VerifyPolicyList(kDeviceDlcPredownloadList,
-                   base::Value::List().Append("sane-backends-extras-dlc"));
+                   base::ListValue().Append("sane-backends-pfu"));
 }
 
 TEST_F(DeviceSettingsProviderTest, DeviceDlcPredownloadListDuplicateDlc) {
@@ -1441,7 +1439,41 @@ TEST_F(DeviceSettingsProviderTest, DeviceDlcPredownloadListDuplicateDlc) {
 
   // Device setting must not contain any duplicate values.
   VerifyPolicyList(kDeviceDlcPredownloadList,
-                   base::Value::List().Append("sane-backends-extras-dlc"));
+                   base::ListValue().Append("sane-backends-pfu"));
+}
+
+TEST_F(DeviceSettingsProviderTest, DeviceExtendedAutoUpdateEnabledValueSet) {
+  device_policy_->payload()
+      .mutable_deviceextendedautoupdateenabled()
+      ->set_value(true);
+  BuildAndInstallDevicePolicy();
+
+  const base::Value* actual_value =
+      provider_->Get(kDeviceExtendedAutoUpdateEnabled);
+
+  EXPECT_TRUE(actual_value->GetBool());
+}
+
+TEST_F(DeviceSettingsProviderTest, DeviceExtendedAutoUpdateEnabledValueUnset) {
+  device_policy_->payload().clear_deviceextendedautoupdateenabled();
+  BuildAndInstallDevicePolicy();
+
+  const base::Value* actual_value =
+      provider_->Get(kDeviceExtendedAutoUpdateEnabled);
+
+  EXPECT_FALSE(actual_value);
+}
+
+TEST_F(DeviceSettingsProviderTest, DeviceExtensionsSystemLogEnabled) {
+  device_policy_->payload()
+      .mutable_deviceextensionssystemlogenabled()
+      ->set_value(true);
+  BuildAndInstallDevicePolicy();
+
+  const base::Value* actual_value =
+      provider_->Get(kDeviceExtensionsSystemLogEnabled);
+
+  EXPECT_TRUE(actual_value->GetBool());
 }
 
 }  // namespace ash

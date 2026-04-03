@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,16 +26,16 @@ export function maybeRemoveLateInitializationRunnable(runnableId: string): boole
   return registeredLateInitializationRunnables.delete(runnableId);
 }
 
-export function lateInitializationRunnables(): Array<LateInitializationLoader> {
+export function lateInitializationRunnables(): LateInitializationLoader[] {
   return [...registeredLateInitializationRunnables.values()];
 }
 
-const registeredEarlyInitializationRunnables: (() => Runnable)[] = [];
+const registeredEarlyInitializationRunnables: Array<() => Runnable> = [];
 
 export function registerEarlyInitializationRunnable(runnable: () => Runnable): void {
   registeredEarlyInitializationRunnables.push(runnable);
 }
 
-export function earlyInitializationRunnables(): (() => Runnable)[] {
+export function earlyInitializationRunnables(): Array<() => Runnable> {
   return registeredEarlyInitializationRunnables;
 }

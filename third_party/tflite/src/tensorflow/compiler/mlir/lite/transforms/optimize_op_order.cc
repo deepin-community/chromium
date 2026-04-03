@@ -15,14 +15,16 @@ limitations under the License.
 
 #include <utility>
 
+#include "llvm/Support/Casting.h"
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/TypeUtilities.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"
-#include "tensorflow/compiler/mlir/lite/quantization/quantization_traits.h"
+#include "tensorflow/compiler/mlir/lite/quantization/common/quantization_lib/quantization_traits.h"
 #include "tensorflow/compiler/mlir/lite/transforms/passes.h"
 
 namespace mlir {
@@ -59,16 +61,16 @@ struct PushDownDequantize : public OpRewritePattern<DequantizeOp> {
 
     // If the op is the pass-through op with (3x) smaller output, the dequantize
     // op can be pushed down to the single result of this op.
-    if (!llvm::dyn_cast<mlir::SameScalesOpInterface>(passthrough_op) ||
+    if (!llvm::dyn_cast<mlir::TFL::SameScalesOpInterface>(passthrough_op) ||
         passthrough_op->getNumResults() != 1) {
       return failure();
     }
     // Only push down the dequantize op when the output is smaller, so that it
     // can have smaller memory usage.
     auto input_type =
-        dequantize_op.getOutput().getType().dyn_cast<RankedTensorType>();
-    auto output_type =
-        passthrough_op->getResult(0).getType().dyn_cast<RankedTensorType>();
+        mlir::dyn_cast<RankedTensorType>(dequantize_op.getOutput().getType());
+    auto output_type = mlir::dyn_cast<RankedTensorType>(
+        passthrough_op->getResult(0).getType());
     if (!input_type || !output_type ||
         get_num_elements(input_type) <= get_num_elements(output_type)) {
       return failure();
@@ -85,7 +87,7 @@ struct PushDownDequantize : public OpRewritePattern<DequantizeOp> {
 
     // Set the input type of the passthrough op and pull it up.
     Type new_output_type;
-    if (input_element_type.isa<quant::QuantizedType>()) {
+    if (mlir::isa<quant::QuantizedType>(input_element_type)) {
       new_output_type = QuantizedType::getQuantizedElementType(
                             dequantize_op.getInput().getType())
                             .castFromExpressedType(output_type);
@@ -116,7 +118,7 @@ void OptimizeOpOrderPass::runOnOperation() {
   auto func = getOperation();
   auto* ctx = func.getContext();
   patterns.add<PushDownDequantize>(ctx);
-  if (failed(applyPatternsAndFoldGreedily(func, std::move(patterns)))) {
+  if (failed(applyPatternsGreedily(func, std::move(patterns)))) {
     signalPassFailure();
   }
 }

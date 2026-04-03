@@ -48,7 +48,7 @@ mojom::NoVarySearchWithParseErrorPtr ParseNoVarySearch(
                          case Input::kExceptWithoutTrueParams:
                            return Output::kExceptWithoutTrueParams;
                        }
-                       NOTREACHED_NORETURN();
+                       NOTREACHED();
                      };
                      return mojom::NoVarySearchWithParseError::NewParseError(
                          map_error(error));
@@ -58,15 +58,13 @@ mojom::NoVarySearchWithParseErrorPtr ParseNoVarySearch(
   no_vary_search->vary_on_key_order = no_vary_search_data.vary_on_key_order();
   if (no_vary_search_data.vary_by_default()) {
     no_vary_search->search_variance =
-        mojom::SearchParamsVariance::NewNoVaryParams(std::vector<std::string>(
-            no_vary_search_data.no_vary_params().begin(),
-            no_vary_search_data.no_vary_params().end()));
+        mojom::SearchParamsVariance::NewNoVaryParams(
+            no_vary_search_data.GetAffectedParams());
     return mojom::NoVarySearchWithParseError::NewNoVarySearch(
         std::move(no_vary_search));
   }
   no_vary_search->search_variance = mojom::SearchParamsVariance::NewVaryParams(
-      std::vector<std::string>(no_vary_search_data.vary_params().begin(),
-                               no_vary_search_data.vary_params().end()));
+      no_vary_search_data.GetAffectedParams());
   return mojom::NoVarySearchWithParseError::NewNoVarySearch(
       std::move(no_vary_search));
 }

@@ -14,6 +14,7 @@ sys.path.insert(0, ROOT_DIR)
 
 import metrics
 import metrics_utils
+import utils
 
 # TODO: Should fix these warnings.
 # pylint: disable=line-too-long
@@ -30,7 +31,7 @@ class TimeMock(object):
 
 class MetricsCollectorTest(unittest.TestCase):
     def setUp(self):
-        self.config_file = os.path.join(ROOT_DIR, 'metrics.cfg')
+        self.config_file = utils.depot_tools_config_path('metrics.cfg')
         self.collector = metrics.MetricsCollector()
 
         # Keep track of the URL requests, file reads/writes and subprocess
@@ -64,6 +65,9 @@ class MetricsCollectorTest(unittest.TestCase):
         mock.patch('metrics.detect_host_arch.HostArch', lambda: 'x86').start()
         mock.patch('metrics_utils.get_repo_timestamp', lambda _: 1234).start()
         mock.patch('metrics_utils.get_git_version', lambda: '2.18.1').start()
+
+        mock.patch('newauth.Enabled', lambda: False).start()
+        mock.patch('newauth.ExplicitlyDisabled', lambda: False).start()
 
         self.maxDiff = None
         self.default_metrics = {

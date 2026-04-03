@@ -40,7 +40,7 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillDeviceClient
       ShillPropertyChangedObserver* observer) override;
   void GetProperties(
       const dbus::ObjectPath& device_path,
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) override;
+      chromeos::DBusMethodCallback<base::DictValue> callback) override;
   void SetProperty(const dbus::ObjectPath& device_path,
                    const std::string& name,
                    const base::Value& value,
@@ -85,7 +85,8 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillDeviceClient
   // ShillDeviceClient::TestInterface overrides.
   void AddDevice(const std::string& device_path,
                  const std::string& type,
-                 const std::string& name) override;
+                 const std::string& name,
+                 const std::string& address) override;
   void RemoveDevice(const std::string& device_path) override;
   void ClearDevices() override;
   base::Value* GetDeviceProperty(const std::string& device_path,
@@ -126,7 +127,7 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillDeviceClient
   bool SimTryPuk(const std::string& device_path, const std::string& pin);
   void PassStubDeviceProperties(
       const dbus::ObjectPath& device_path,
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) const;
+      chromeos::DBusMethodCallback<base::DictValue> callback) const;
 
   // Posts a task to run a void callback with status code |result|.
   void PostVoidCallback(chromeos::VoidDBusMethodCallback callback, bool result);
@@ -147,7 +148,7 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillDeviceClient
   void SetScanning(const dbus::ObjectPath& device_path, bool is_scanning);
 
   // Dictionary of <device_name, Dictionary>.
-  base::Value::Dict stub_devices_;
+  base::DictValue stub_devices_;
 
   // Observer list for each device.
   std::map<dbus::ObjectPath, std::unique_ptr<PropertyObserverList>>

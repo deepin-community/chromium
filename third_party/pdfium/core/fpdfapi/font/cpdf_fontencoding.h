@@ -7,6 +7,8 @@
 #ifndef CORE_FPDFAPI_FONT_CPDF_FONTENCODING_H_
 #define CORE_FPDFAPI_FONT_CPDF_FONTENCODING_H_
 
+#include <array>
+
 #include "core/fxcrt/bytestring.h"
 #include "core/fxcrt/retain_ptr.h"
 #include "core/fxcrt/span.h"
@@ -47,18 +49,18 @@ class CPDF_FontEncoding {
   bool IsIdentical(const CPDF_FontEncoding* pAnother) const;
 
   wchar_t UnicodeFromCharCode(uint8_t charcode) const {
-    return m_Unicodes[charcode];
+    return unicodes_[charcode];
   }
   int CharCodeFromUnicode(wchar_t unicode) const;
 
   void SetUnicode(uint8_t charcode, wchar_t unicode) {
-    m_Unicodes[charcode] = unicode;
+    unicodes_[charcode] = unicode;
   }
 
   RetainPtr<CPDF_Object> Realize(WeakPtr<ByteStringPool> pPool) const;
 
  private:
-  wchar_t m_Unicodes[kEncodingTableSize] = {};
+  std::array<wchar_t, kEncodingTableSize> unicodes_ = {};
 };
 
 #endif  // CORE_FPDFAPI_FONT_CPDF_FONTENCODING_H_

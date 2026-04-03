@@ -5,15 +5,22 @@
 //
 // TestSuite:
 //   Basic implementation of a test harness in ANGLE.
+//
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "TestSuite.h"
 
 #include "common/debug.h"
+#include "common/hash_containers.h"
 #include "common/platform.h"
 #include "common/string_utils.h"
 #include "common/system_utils.h"
 #include "util/Timer.h"
 
+#include <signal.h>
 #include <stdlib.h>
 #include <time.h>
 
@@ -71,6 +78,47 @@ constexpr int kDefaultBatchSize      = 256;
 constexpr double kIdleMessageTimeout = 15.0;
 constexpr int kDefaultMaxProcesses   = 16;
 constexpr int kDefaultMaxFailures    = 100;
+
+#if defined(ANGLE_PLATFORM_ANDROID)
+struct sigaction g_originalSigaction[NSIG];
+TestSuite *g_ThisTestSuite = nullptr;
+
+// This function runs in a compromised context. It should not allocate memory.
+void SignalHandler(int sig, siginfo_t *info, void *reserved)
+{
+    const char crashedMarker[] = "[ CRASHED      ]\n";
+
+    // Output the crash marker.
+    std::cerr << crashedMarker << std::endl;
+    if (g_ThisTestSuite != nullptr)
+    {
+        g_ThisTestSuite->onCrashOrTimeout(TestResultType::Crash);
+    }
+    else
+    {
+        std::cerr << "SignalHandler: TestSuite not initialized!" << std::endl;
+    }
+
+    g_originalSigaction[sig].sa_sigaction(sig, info, reserved);
+}
+
+void InstallExceptionHandlers()
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+
+    sa.sa_sigaction = SignalHandler;
+    sa.sa_flags     = SA_SIGINFO;
+
+    // The list of signals which are considered to be crashes.
+    const int exceptionSignals[] = {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS, -1};
+
+    for (unsigned int i = 0; exceptionSignals[i] != -1; ++i)
+    {
+        sigaction(exceptionSignals[i], &sa, &g_originalSigaction[exceptionSignals[i]]);
+    }
+}
+#endif  // ANGLE_PLATFORM_ANDROID
 
 const char *ResultTypeToString(TestResultType type)
 {
@@ -321,7 +369,12 @@ void UpdateCurrentTestResult(const testing::TestResult &resultIn, TestResults *r
     }
     else
     {
-        resultOut.type = TestResultType::Pass;
+        // With --gtest_repeat the same test is seen multiple times, so resultOut.type may have been
+        // previously set to e.g. ::Fail. Only set to ::Pass if there was no other result yet.
+        if (resultOut.type == TestResultType::NoResult)
+        {
+            resultOut.type = TestResultType::Pass;
+        }
     }
 
     resultOut.elapsedTimeSeconds.back() = resultsOut->currentTestTimer.getElapsedWallClockTime();
@@ -719,19 +772,28 @@ std::string GetConfigNameFromTestIdentifier(const TestIdentifier &id)
 
 TestQueue BatchTests(const std::vector<TestIdentifier> &tests, int batchSize)
 {
-    // First sort tests by configuration.
-    angle::HashMap<std::string, std::vector<TestIdentifier>> testsSortedByConfig;
+    // First group tests by configuration.
+    angle::HashMap<std::string, std::vector<TestIdentifier>> testsGroupedByConfig;
     for (const TestIdentifier &id : tests)
     {
         std::string config = GetConfigNameFromTestIdentifier(id);
-        testsSortedByConfig[config].push_back(id);
+        testsGroupedByConfig[config].push_back(id);
     }
+
+    // Sort configs for consistent ordering.
+    std::vector<std::string> configs;
+    configs.reserve(testsGroupedByConfig.size());
+    for (const auto &configAndIds : testsGroupedByConfig)
+    {
+        configs.push_back(configAndIds.first);
+    }
+    std::sort(configs.begin(), configs.end());
 
     // Then group into batches by 'batchSize'.
     TestQueue testQueue;
-    for (const auto &configAndIds : testsSortedByConfig)
+    for (const auto &config : configs)
     {
-        const std::vector<TestIdentifier> &configTests = configAndIds.second;
+        const std::vector<TestIdentifier> &configTests = testsGroupedByConfig[config];
 
         // Count the number of batches needed for this config.
         int batchesForConfig = static_cast<int>(configTests.size() + batchSize - 1) / batchSize;
@@ -768,7 +830,7 @@ void ListTests(const std::map<TestIdentifier, TestResult> &resultsMap)
 
 // Prints the names of the tests matching the user-specified filter flag.
 // This matches the output from googletest/src/gtest.cc but is much much faster for large filters.
-// See http://anglebug.com/5164
+// See http://anglebug.com/42263725
 void GTestListTests(const std::map<TestIdentifier, TestResult> &resultsMap)
 {
     std::map<std::string, std::vector<std::string>> suites;
@@ -1035,7 +1097,7 @@ TestSuite::TestSuite(int *argc, char **argv, std::function<void()> registerTests
 #if defined(ANGLE_PLATFORM_FUCHSIA)
     if (mBotMode)
     {
-        printf("Note: Bot mode is not available on Fuchsia. See http://anglebug.com/7312\n");
+        printf("Note: Bot mode is not available on Fuchsia. See http://anglebug.com/42265786\n");
         mBotMode = false;
     }
 #endif
@@ -1112,6 +1174,10 @@ TestSuite::TestSuite(int *argc, char **argv, std::function<void()> registerTests
         else if (conditions[GPUTestConfig::kConditionApple])
         {
             SetEnvironmentVar(kPreferredDeviceEnvVar, "apple");
+        }
+        else if (conditions[GPUTestConfig::kConditionQualcomm])
+        {
+            SetEnvironmentVar(kPreferredDeviceEnvVar, "qualcomm");
         }
     }
 
@@ -1418,6 +1484,11 @@ bool TestSuite::launchChildTestProcess(uint32_t batchId,
 
     // Launch child process and wait for completion.
     processInfo.process = LaunchProcess(args, ProcessOutputCapture::StdoutAndStderrInterleaved);
+    if (!processInfo.process)
+    {
+        std::cerr << "Error creating child process.\n";
+        return false;
+    }
 
     if (!processInfo.process->started())
     {
@@ -1559,6 +1630,9 @@ bool TestSuite::finishProcess(ProcessInfo *processInfo)
         {
             printf(" (TIMEOUT in %0.1lf s)\n", result.elapsedTimeSeconds.back());
             mFailureCount++;
+
+            const std::string &batchStdout = processInfo->process->getStdout();
+            PrintTestOutputSnippet(id, result, batchStdout);
         }
         else
         {
@@ -1641,6 +1715,11 @@ int TestSuite::run()
 
         return EXIT_SUCCESS;
     }
+
+#if defined(ANGLE_PLATFORM_ANDROID)
+    g_ThisTestSuite = this;
+    InstallExceptionHandlers();
+#endif  // ANGLE_PLATFORM_ANDROID
 
     if (mGTestListTests)
     {
@@ -1753,7 +1832,7 @@ int TestSuite::run()
 
         if (progress)
         {
-            messageTimer.start();
+            messageTimer.restart();
         }
         else if (messageTimer.getElapsedWallClockTime() > kIdleMessageTimeout)
         {
@@ -1761,7 +1840,7 @@ int TestSuite::run()
             double processTime             = processInfo.process->getElapsedTimeSeconds();
             printf("Running %d tests in %d processes, longest for %d seconds.\n", totalTestCount,
                    static_cast<int>(mCurrentProcesses.size()), static_cast<int>(processTime));
-            messageTimer.start();
+            messageTimer.restart();
         }
 
         // Early exit if we passed the maximum failure threshold. Still wait for current tests.

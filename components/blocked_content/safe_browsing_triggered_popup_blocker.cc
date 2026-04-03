@@ -14,7 +14,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/core/browser/db/util.h"
 #include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
-#include "components/subresource_filter/content/browser/subresource_filter_safe_browsing_activation_throttle.h"
+#include "components/subresource_filter/content/browser/safe_browsing_page_activation_throttle.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/browser_context.h"
@@ -38,9 +38,7 @@ void LogAction(SafeBrowsingTriggeredPopupBlocker::Action action) {
 
 using safe_browsing::SubresourceFilterLevel;
 
-BASE_FEATURE(kAbusiveExperienceEnforce,
-             "AbusiveExperienceEnforce",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kAbusiveExperienceEnforce, base::FEATURE_ENABLED_BY_DEFAULT);
 
 SafeBrowsingTriggeredPopupBlocker::PageData::PageData(content::Page& page)
     : PageUserData(page) {}
@@ -171,7 +169,7 @@ void SafeBrowsingTriggeredPopupBlocker::OnSafeBrowsingChecksComplete(
     const subresource_filter::SubresourceFilterSafeBrowsingClient::CheckResult&
         result) {
   DCHECK(navigation_handle->IsInMainFrame());
-  // TODO(crbug.com/1263541): Replace it with DCHECK.
+  // TODO(crbug.com/40202987): Replace it with DCHECK.
   if (navigation_handle->GetNavigatingFrameType() ==
       content::FrameType::kFencedFrameRoot) {
     return;

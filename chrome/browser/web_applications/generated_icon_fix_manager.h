@@ -7,6 +7,7 @@
 
 #include <optional>
 
+#include "base/auto_reset.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -14,7 +15,7 @@
 #include "base/time/time.h"
 #include "base/types/pass_key.h"
 #include "base/values.h"
-#include "chrome/browser/web_applications/commands/generated_icon_fix_command.h"
+#include "chrome/browser/web_applications/scheduler/generated_icon_fix_result.h"
 #include "components/webapps/common/web_app_id.h"
 
 namespace web_app {
@@ -39,7 +40,11 @@ enum class GeneratedIconFixScheduleDecision {
 
 class GeneratedIconFixManager {
  public:
-  static void DisableAutoRetryForTesting();
+  // Disable the logic that schedules generated icon fixes. Only intended for
+  // use in tests that need to check the app state before these operations are
+  // done.
+  static base::AutoReset<bool> DisableGeneratedIconFixesForTesting();
+  static base::AutoReset<bool> DisableAutoRetryForTesting();
 
   GeneratedIconFixManager();
   ~GeneratedIconFixManager();
@@ -47,8 +52,8 @@ class GeneratedIconFixManager {
   void SetProvider(base::PassKey<WebAppProvider>, WebAppProvider& provider);
   void Start();
 
-  // TODO(crbug.com/1216965): Schedule fixes ten minutes after sync install.
-  // TODO(crbug.com/1216965): Schedule fixes on network reconnection.
+  // TODO(crbug.com/40185008): Schedule fixes ten minutes after sync install.
+  // TODO(crbug.com/40185008): Schedule fixes on network reconnection.
 
   void InvalidateWeakPtrsForTesting();
 
@@ -68,18 +73,17 @@ class GeneratedIconFixManager {
   }
 
  private:
-  void ScheduleFixes(AllAppsLock& all_apps_lock,
-                     base::Value::Dict& debug_value);
+  void ScheduleFixes(AllAppsLock& all_apps_lock, base::DictValue& debug_value);
 
   // Returns whether a fix was newly scheduled for `app_id`.
   bool MaybeScheduleFix(const webapps::AppId& app_id,
                         WithAppResources& resources,
-                        base::Value::Dict& debug_value);
+                        base::DictValue& debug_value);
   // Separate method that simply calls the above one, required due to
   // templating.
   void MaybeScheduleFixAppLock(const webapps::AppId& app_id,
                                AppLock& app_lock,
-                               base::Value::Dict& debug_value);
+                               base::DictValue& debug_value);
 
   GeneratedIconFixScheduleDecision MakeScheduleDecision(const WebApp* app);
   void StartFix(const webapps::AppId& app_id);

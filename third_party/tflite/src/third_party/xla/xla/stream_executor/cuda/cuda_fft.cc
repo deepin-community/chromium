@@ -19,26 +19,34 @@ limitations under the License.
 #include <complex>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <type_traits>
+#include <utility>
 
+#include "absl/base/casts.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "third_party/gpus/cuda/include/cuda.h"
-#include "xla/stream_executor/cuda/cuda_activation.h"
+#include "third_party/gpus/cuda/include/cufft.h"
+#include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/cuda/cuda_helpers.h"
 #include "xla/stream_executor/cuda/cuda_platform_id.h"
-#include "xla/stream_executor/cuda/cuda_stream.h"
-#include "xla/stream_executor/device_memory.h"
-#include "xla/stream_executor/gpu/gpu_executor.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/fft.h"
+#include "xla/stream_executor/gpu/gpu_helpers.h"
 #include "xla/stream_executor/platform/initialize.h"
-#include "xla/stream_executor/platform/port.h"
 #include "xla/stream_executor/plugin_registry.h"
+#include "xla/stream_executor/scratch_allocator.h"
 #include "xla/stream_executor/stream.h"
-#include "xla/stream_executor/stream_executor_internal.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace stream_executor {
 namespace gpu {
+
+using cuda::CUDAComplex;
 
 namespace {
 
@@ -65,9 +73,11 @@ cufftType CUDAFftType(fft::Type type) {
 }
 
 // Associates the given stream with the given cuFFT plan.
-bool SetStream(GpuExecutor *parent, cufftHandle plan, Stream *stream) {
-  cuda::ScopedActivateExecutorContext sac(parent);
-  auto ret = cufftSetStream(plan, AsGpuStreamValue(stream));
+bool SetStream(StreamExecutor *parent, cufftHandle plan, Stream *stream) {
+  std::unique_ptr<ActivateContext> activation = parent->Activate();
+  auto ret = cufftSetStream(
+      plan,
+      absl::bit_cast<CUstream>((stream->platform_specific_handle().stream)));
   if (ret != CUFFT_SUCCESS) {
     LOG(ERROR) << "Failed to run cuFFT routine cufftSetStream: " << ret;
     return false;
@@ -93,16 +103,16 @@ absl::StatusOr<std::array<int32_t, 3>> Downsize64bArray(
 }  // namespace
 
 absl::Status CUDAFftPlan::Initialize(
-    GpuExecutor *parent, Stream *stream, int rank, uint64_t *elem_count,
-    uint64_t *input_embed, uint64 input_stride, uint64 input_distance,
-    uint64_t *output_embed, uint64 output_stride, uint64 output_distance,
+    StreamExecutor *parent, Stream *stream, int rank, uint64_t *elem_count,
+    uint64_t *input_embed, uint64_t input_stride, uint64_t input_distance,
+    uint64_t *output_embed, uint64_t output_stride, uint64_t output_distance,
     fft::Type type, int batch_count, ScratchAllocator *scratch_allocator) {
   if (IsInitialized()) {
     return absl::InternalError("cuFFT is already initialized.");
   }
   is_initialized_ = true;
   scratch_allocator_ = scratch_allocator;
-  cuda::ScopedActivateExecutorContext sac(parent);
+  std::unique_ptr<ActivateContext> activation = parent->Activate();
   // NOLINTBEGIN
   std::array<long long, 3> elem_count_ = {0};
   std::array<long long, 3> input_embed_ = {0};
@@ -252,17 +262,6 @@ absl::Status CUDAFftPlan::Initialize(
   return absl::OkStatus();
 }
 
-absl::Status CUDAFftPlan::Initialize(GpuExecutor *parent, Stream *stream,
-                                     int rank, uint64_t *elem_count,
-                                     fft::Type type,
-                                     ScratchAllocator *scratch_allocator) {
-  return Initialize(parent_, stream, rank, elem_count,
-                    /*input_embed=*/nullptr, /*input_stride=*/0,
-                    /*input_distance=*/0,
-                    /*output_embed=*/nullptr, /*output_stride=*/0,
-                    /*output_distance=*/0, type, 1, scratch_allocator);
-}
-
 absl::Status CUDAFftPlan::UpdateScratchAllocator(
     Stream *stream, ScratchAllocator *scratch_allocator) {
   scratch_allocator_ = scratch_allocator;
@@ -275,7 +274,7 @@ absl::Status CUDAFftPlan::UpdateScratchAllocator(
     }
   }
   // Connect work area with allocated space.
-  cuda::ScopedActivateExecutorContext sac(parent_);
+  std::unique_ptr<ActivateContext> activation = parent_->Activate();
   cufftResult_t ret = cufftSetWorkArea(plan_, scratch_.opaque());
   if (ret != CUFFT_SUCCESS) {
     LOG(ERROR) << "Failed to set work area for cuFFT plan: " << ret;
@@ -285,7 +284,7 @@ absl::Status CUDAFftPlan::UpdateScratchAllocator(
 }
 
 CUDAFftPlan::~CUDAFftPlan() {
-  cuda::ScopedActivateExecutorContext sac(parent_);
+  std::unique_ptr<ActivateContext> activation = parent_->Activate();
   cufftDestroy(plan_);
 }
 
@@ -311,9 +310,9 @@ int CUDAFftPlan::GetFftDirection() const {
 }
 
 std::unique_ptr<fft::Plan> CUDAFft::CreateBatchedPlanWithScratchAllocator(
-    Stream *stream, int rank, uint64_t *elem_count, uint64 *input_embed,
-    uint64_t input_stride, uint64 input_distance, uint64 *output_embed,
-    uint64_t output_stride, uint64 output_distance, fft::Type type,
+    Stream *stream, int rank, uint64_t *elem_count, uint64_t *input_embed,
+    uint64_t input_stride, uint64_t input_distance, uint64_t *output_embed,
+    uint64_t output_stride, uint64_t output_distance, fft::Type type,
     bool in_place_fft, int batch_count, ScratchAllocator *scratch_allocator) {
   std::unique_ptr<CUDAFftPlan> fft_plan_ptr{new CUDAFftPlan()};
   absl::Status status = fft_plan_ptr->Initialize(
@@ -350,12 +349,12 @@ void CUDAFft::UpdatePlanWithScratchAllocator(
 }
 
 template <typename FuncT, typename InputT, typename OutputT>
-bool CUDAFft::DoFftInternal(Stream *stream, fft::Plan *plan, FuncT cufftExec,
-                            const DeviceMemory<InputT> &input,
-                            DeviceMemory<OutputT> *output) {
+bool CUDAFft::DoFftInternal(Stream* stream, fft::Plan* plan, FuncT cufftExec,
+                            const DeviceAddress<InputT>& input,
+                            DeviceAddress<OutputT>* output) {
   CUDAFftPlan *cuda_fft_plan = dynamic_cast<CUDAFftPlan *>(plan);
 
-  DeviceMemory<InputT> input_maybe_copy = input;
+  DeviceAddress<InputT> input_maybe_copy = input;
 
   if (cuda_fft_plan == nullptr) {
     LOG(ERROR) << "The passed-in plan is not a CUDAFftPlan object.";
@@ -380,8 +379,8 @@ bool CUDAFft::DoFftInternal(Stream *stream, fft::Plan *plan, FuncT cufftExec,
     if (allocator) {
       auto allocated = allocator->AllocateBytes(input.size());
       if (allocated.ok()) {
-        if (stream->ThenMemcpy(&allocated.value(), input, input.size()).ok()) {
-          input_maybe_copy = DeviceMemory<InputT>(allocated.value());
+        if (stream->Memcpy(&allocated.value(), input, input.size()).ok()) {
+          input_maybe_copy = DeviceAddress<InputT>(allocated.value());
         }
       }
       // Keep going even the workaround fails, since we don't have a good
@@ -391,11 +390,11 @@ bool CUDAFft::DoFftInternal(Stream *stream, fft::Plan *plan, FuncT cufftExec,
   }
 #endif
 
-  cuda::ScopedActivateExecutorContext sac(parent_);
+  std::unique_ptr<ActivateContext> activation = parent_->Activate();
   auto ret =
       cufftExec(cuda_fft_plan->GetPlan(),
-                GpuComplex(const_cast<InputT *>(GpuMemory(input_maybe_copy))),
-                GpuComplex(GpuMemoryMutable(output)));
+                CUDAComplex(const_cast<InputT *>(GpuMemory(input_maybe_copy))),
+                CUDAComplex(GpuMemoryMutable(output)));
 
   if (ret != CUFFT_SUCCESS) {
     LOG(ERROR) << "Failed to run cuFFT routine: " << ret;
@@ -406,10 +405,10 @@ bool CUDAFft::DoFftInternal(Stream *stream, fft::Plan *plan, FuncT cufftExec,
 }
 
 template <typename FuncT, typename InputT, typename OutputT>
-bool CUDAFft::DoFftWithDirectionInternal(Stream *stream, fft::Plan *plan,
+bool CUDAFft::DoFftWithDirectionInternal(Stream* stream, fft::Plan* plan,
                                          FuncT cufftExec,
-                                         const DeviceMemory<InputT> &input,
-                                         DeviceMemory<OutputT> *output) {
+                                         const DeviceAddress<InputT>& input,
+                                         DeviceAddress<OutputT>* output) {
   CUDAFftPlan *cuda_fft_plan = dynamic_cast<CUDAFftPlan *>(plan);
   if (cuda_fft_plan == nullptr) {
     LOG(ERROR) << "The passed-in plan is not a CUDAFftPlan object.";
@@ -420,10 +419,10 @@ bool CUDAFft::DoFftWithDirectionInternal(Stream *stream, fft::Plan *plan,
     return false;
   }
 
-  cuda::ScopedActivateExecutorContext sac(parent_);
+  std::unique_ptr<ActivateContext> activation = parent_->Activate();
   auto ret = cufftExec(cuda_fft_plan->GetPlan(),
-                       GpuComplex(const_cast<InputT *>(GpuMemory(input))),
-                       GpuComplex(GpuMemoryMutable(output)),
+                       CUDAComplex(const_cast<InputT *>(GpuMemory(input))),
+                       CUDAComplex(GpuMemoryMutable(output)),
                        cuda_fft_plan->GetFftDirection());
 
   if (ret != CUFFT_SUCCESS) {
@@ -436,20 +435,20 @@ bool CUDAFft::DoFftWithDirectionInternal(Stream *stream, fft::Plan *plan,
 
 #define STREAM_EXECUTOR_CUDA_DEFINE_FFT(__type, __fft_type1, __fft_type2,      \
                                         __fft_type3)                           \
-  bool CUDAFft::DoFft(Stream *stream, fft::Plan *plan,                         \
-                      const DeviceMemory<std::complex<__type>> &input,         \
-                      DeviceMemory<std::complex<__type>> *output) {            \
+  bool CUDAFft::DoFft(Stream* stream, fft::Plan* plan,                         \
+                      const DeviceAddress<std::complex<__type>>& input,        \
+                      DeviceAddress<std::complex<__type>>* output) {           \
     return DoFftWithDirectionInternal(stream, plan, cufftExec##__fft_type1,    \
                                       input, output);                          \
   }                                                                            \
-  bool CUDAFft::DoFft(Stream *stream, fft::Plan *plan,                         \
-                      const DeviceMemory<__type> &input,                       \
-                      DeviceMemory<std::complex<__type>> *output) {            \
+  bool CUDAFft::DoFft(Stream* stream, fft::Plan* plan,                         \
+                      const DeviceAddress<__type>& input,                      \
+                      DeviceAddress<std::complex<__type>>* output) {           \
     return DoFftInternal(stream, plan, cufftExec##__fft_type2, input, output); \
   }                                                                            \
-  bool CUDAFft::DoFft(Stream *stream, fft::Plan *plan,                         \
-                      const DeviceMemory<std::complex<__type>> &input,         \
-                      DeviceMemory<__type> *output) {                          \
+  bool CUDAFft::DoFft(Stream* stream, fft::Plan* plan,                         \
+                      const DeviceAddress<std::complex<__type>>& input,        \
+                      DeviceAddress<__type>* output) {                         \
     return DoFftInternal(stream, plan, cufftExec##__fft_type3, input, output); \
   }
 
@@ -464,23 +463,16 @@ void initialize_cufft() {
   absl::Status status =
       PluginRegistry::Instance()->RegisterFactory<PluginRegistry::FftFactory>(
           cuda::kCudaPlatformId, "cuFFT",
-          [](internal::StreamExecutorInterface *parent) -> fft::FftSupport * {
-            gpu::GpuExecutor *cuda_executor =
-                dynamic_cast<gpu::GpuExecutor *>(parent);
-            if (cuda_executor == nullptr) {
-              LOG(ERROR) << "Attempting to initialize an instance of the cuFFT "
-                         << "support library with a non-CUDA StreamExecutor";
-              return nullptr;
-            }
-
-            return new gpu::CUDAFft(cuda_executor);
+          [](StreamExecutor *parent) -> fft::FftSupport * {
+            return new gpu::CUDAFft(parent);
           });
   if (!status.ok()) {
-    LOG(ERROR) << "Unable to register cuFFT factory: " << status.message();
+    LOG(INFO) << "Unable to register cuFFT factory: " << status.message();
   }
 }
 
 }  // namespace stream_executor
 
-REGISTER_MODULE_INITIALIZER(register_cufft,
-                            { stream_executor::initialize_cufft(); });
+STREAM_EXECUTOR_REGISTER_MODULE_INITIALIZER(register_cufft, {
+  stream_executor::initialize_cufft();
+});

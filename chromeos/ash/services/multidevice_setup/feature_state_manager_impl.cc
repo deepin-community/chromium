@@ -8,11 +8,11 @@
 #include <optional>
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -197,7 +197,8 @@ std::unique_ptr<FeatureStateManager> FeatureStateManagerImpl::Factory::Create(
     HostStatusProvider* host_status_provider,
     device_sync::DeviceSyncClient* device_sync_client,
     AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-    const base::flat_map<mojom::Feature, GlobalStateFeatureManager*>&
+    const base::flat_map<mojom::Feature,
+                         raw_ptr<GlobalStateFeatureManager, CtnExperimental>>&
         global_state_feature_managers,
     bool is_secondary_user) {
   if (test_factory_) {
@@ -226,7 +227,8 @@ FeatureStateManagerImpl::FeatureStateManagerImpl(
     HostStatusProvider* host_status_provider,
     device_sync::DeviceSyncClient* device_sync_client,
     AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-    const base::flat_map<mojom::Feature, GlobalStateFeatureManager*>&
+    const base::flat_map<mojom::Feature,
+                         raw_ptr<GlobalStateFeatureManager, CtnExperimental>>&
         global_state_feature_managers,
     bool is_secondary_user)
     : pref_service_(pref_service),
@@ -390,7 +392,7 @@ mojom::FeatureState FeatureStateManagerImpl::ComputeFeatureState(
 bool FeatureStateManagerImpl::IsAllowedByPolicy(mojom::Feature feature) {
   // If no policy preference exists for this feature, the feature is implicitly
   // allowed.
-  if (!base::Contains(feature_to_allowed_pref_name_map_, feature)) {
+  if (!feature_to_allowed_pref_name_map_.contains(feature)) {
     return true;
   }
 
@@ -398,7 +400,7 @@ bool FeatureStateManagerImpl::IsAllowedByPolicy(mojom::Feature feature) {
 }
 
 bool FeatureStateManagerImpl::IsSupportedByChromebook(mojom::Feature feature) {
-  if (!base::FeatureList::IsEnabled(features::kAllowCrossDeviceFeatureSuite)) {
+  if (!features::IsCrossDeviceFeatureSuiteAllowed()) {
     return false;
   }
 
@@ -448,7 +450,6 @@ bool FeatureStateManagerImpl::IsSupportedByChromebook(mojom::Feature feature) {
   }
 
   NOTREACHED();
-  return false;
 }
 
 bool FeatureStateManagerImpl::HasSufficientSecurity(
@@ -548,7 +549,6 @@ bool FeatureStateManagerImpl::HasBeenActivatedByPhone(
   }
 
   NOTREACHED();
-  return false;
 }
 
 mojom::FeatureState FeatureStateManagerImpl::GetEnabledOrDisabledState(
@@ -559,10 +559,9 @@ mojom::FeatureState FeatureStateManagerImpl::GetEnabledOrDisabledState(
                 : mojom::FeatureState::kDisabledByUser);
   }
 
-  if (!base::Contains(feature_to_enabled_pref_name_map_, feature)) {
-    PA_LOG(ERROR) << "FeatureStateManagerImpl::GetEnabledOrDisabledState(): "
-                  << "Feature not present in \"enabled pref\" map: " << feature;
-    NOTREACHED();
+  if (!feature_to_enabled_pref_name_map_.contains(feature)) {
+    NOTREACHED() << "FeatureStateManagerImpl::GetEnabledOrDisabledState(): "
+                 << "Feature not present in \"enabled pref\" map: " << feature;
   }
 
   return pref_service_->GetBoolean(feature_to_enabled_pref_name_map_[feature])

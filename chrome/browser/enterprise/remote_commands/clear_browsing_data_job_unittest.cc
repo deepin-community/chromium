@@ -9,12 +9,9 @@
 #include "base/test/bind.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/nacl_host/nacl_browser_delegate_impl.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
-#include "components/nacl/browser/nacl_browser.h"
-#include "components/nacl/common/buildflags.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -39,7 +36,7 @@ enterprise_management::RemoteCommand CreateCommandProto(
       enterprise_management::RemoteCommand_Type_BROWSER_CLEAR_BROWSING_DATA);
   command_proto.set_command_id(kUniqueID);
 
-  base::Value::Dict root;
+  base::DictValue root;
   root.Set(kProfilePathField, profile_path);
   root.Set(kClearCacheField, clear_cache);
   root.Set(kClearCookiesField, clear_cookies);
@@ -88,22 +85,11 @@ class ClearBrowsingDataJobTest : public ::testing::Test {
     profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
     EXPECT_TRUE(profile_manager_->SetUp());
-
-#if BUILDFLAG(ENABLE_NACL)
-    // Clearing Cache will clear PNACL cache, which needs this delegate set.
-    nacl::NaClBrowser::SetDelegate(
-        std::make_unique<NaClBrowserDelegateImpl>(profile_manager()));
-#endif
   }
 
   void TearDown() override {
     profile_manager_.reset();
     task_environment_.reset();
-
-#if BUILDFLAG(ENABLE_NACL)
-    // Clearing Cache will clear PNACL cache, which needs this delegate set.
-    nacl::NaClBrowser::ClearAndDeleteDelegate();
-#endif
 
     ::testing::Test::TearDown();
   }
@@ -139,7 +125,7 @@ TEST_F(ClearBrowsingDataJobTest, CanParseWithMissingDataTypes) {
       enterprise_management::RemoteCommand_Type_BROWSER_CLEAR_BROWSING_DATA);
   command_proto.set_command_id(kUniqueID);
 
-  base::Value::Dict root;
+  base::DictValue root;
   root.Set(kProfilePathField, kTestProfilePath);
 
   std::string payload;
@@ -171,7 +157,7 @@ TEST_F(ClearBrowsingDataJobTest, DontInitWhenMissingProfilePath) {
       enterprise_management::RemoteCommand_Type_BROWSER_CLEAR_BROWSING_DATA);
   command_proto.set_command_id(kUniqueID);
 
-  base::Value::Dict root;
+  base::DictValue root;
   root.Set(kClearCacheField, true);
   root.Set(kClearCookiesField, true);
 

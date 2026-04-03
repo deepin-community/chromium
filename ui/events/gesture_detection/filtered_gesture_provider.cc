@@ -7,6 +7,7 @@
 #include "base/auto_reset.h"
 #include "base/check.h"
 #include "base/notreached.h"
+#include "ui/events/gesture_detection/gesture_detector.h"
 #include "ui/events/velocity_tracker/motion_event.h"
 
 namespace ui {
@@ -99,10 +100,24 @@ const ui::MotionEvent* FilteredGestureProvider::GetCurrentDownEvent() const {
   return gesture_provider_->current_down_event();
 }
 
+const ui::MotionEvent* FilteredGestureProvider::GetLastEventWithoutHistory()
+    const {
+  return gesture_provider_->last_event_without_history();
+}
+
+void FilteredGestureProvider::OnUnconfirmedTapConvertedToTap() {
+  gesture_provider_->OnUnconfirmedTapConvertedToTap();
+}
+
+GestureDetector* FilteredGestureProvider::GetGestureDetectorForTesting() {
+  return gesture_provider_->GetGestureDetectorForTesting();  // IN-TEST
+}
+
 void FilteredGestureProvider::OnGestureEvent(const GestureEventData& event) {
   if (handling_event_) {
-    if (event.details.type() == ui::ET_GESTURE_SCROLL_BEGIN)
+    if (event.details.type() == ui::EventType::kGestureScrollBegin) {
       any_touch_moved_beyond_slop_region_ = true;
+    }
 
     pending_gesture_packet_.Push(event);
     return;

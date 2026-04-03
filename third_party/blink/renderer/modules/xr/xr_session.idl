@@ -53,6 +53,8 @@ enum XRReflectionFormat {
   [SameObject] readonly attribute XRDOMOverlayState domOverlayState;
   readonly attribute XRReflectionFormat preferredReflectionFormat;
   [RuntimeEnabled=WebXREnabledFeatures] readonly attribute FrozenArray<DOMString> enabledFeatures;
+  [RuntimeEnabled=WebXRSpecParity] readonly attribute boolean isSystemKeyboardSupported;
+  [RuntimeEnabled=WebXRLayers] readonly attribute unsigned short maxRenderLayers;
 
   attribute EventHandler onend;
   attribute EventHandler onselect;
@@ -63,16 +65,17 @@ enum XRReflectionFormat {
   attribute EventHandler onsqueeze;
   attribute EventHandler onsqueezestart;
   attribute EventHandler onsqueezeend;
+  [RuntimeEnabled=WebXRVisibilityMask] attribute EventHandler onvisibilitymaskchange;
   [RuntimeEnabled=WebXRFrameRate] attribute EventHandler onframeratechange;
 
   [RaisesException] void updateRenderState(optional XRRenderStateInit init = {});
-  [RuntimeEnabled=WebXRFrameRate, RaisesException] Promise<void> updateTargetFrameRate(float rate);
+  [RuntimeEnabled=WebXRFrameRate, RaisesException] Promise<undefined> updateTargetFrameRate(float rate);
   [CallWith=ScriptState, RaisesException] Promise<XRReferenceSpace> requestReferenceSpace(XRReferenceSpaceType type);
 
   long requestAnimationFrame(XRFrameRequestCallback callback);
   void cancelAnimationFrame(long handle);
 
-  [CallWith=ScriptState, Measure, RaisesException] Promise<void> end();
+  [CallWith=ScriptState, Measure, RaisesException] Promise<undefined> end();
 
   // https://github.com/immersive-web/hit-test/blob/master/hit-testing-explainer.md
   [CallWith=ScriptState, MeasureAs=XRSessionRequestHitTestSource, RaisesException]
@@ -87,7 +90,19 @@ enum XRReflectionFormat {
   Promise<FrozenArray<XRImageTrackingScore>> getTrackedImageScores();
 
   [RaisesException]
+  undefined pauseDepthSensing();
+  [RaisesException]
+  undefined resumeDepthSensing();
+
+  [RuntimeEnabled=WebXRPlaneDetection, CallWith=ScriptState, RaisesException]
+  Promise<undefined> initiateRoomCapture();
+
+  [RaisesException]
   readonly attribute XRDepthUsage? depthUsage;
   [RaisesException]
   readonly attribute XRDepthDataFormat? depthDataFormat;
+  [RaisesException]
+  readonly attribute XRDepthType? depthType;
+  [RaisesException]
+  readonly attribute boolean? depthActive;
 };

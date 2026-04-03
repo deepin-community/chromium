@@ -1,29 +1,43 @@
 // Copyright 2016 The Chromium Authors
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "path_builder.h"
 
 #include <cassert>
+#include <cstddef>
 #include <memory>
 #include <set>
 #include <unordered_set>
 
 #include <openssl/base.h>
-#include <openssl/sha.h>
+#include <openssl/pki/verify_error.h>
+#include <openssl/sha2.h>
+#include <openssl/span.h>
 
 #include "cert_issuer_source.h"
 #include "certificate_policies.h"
 #include "common_cert_errors.h"
 #include "parse_certificate.h"
 #include "parse_name.h"  // For CertDebugString.
+#include "parsed_certificate.h"
 #include "parser.h"
 #include "string_util.h"
 #include "trust_store.h"
 #include "verify_certificate_chain.h"
 #include "verify_name_match.h"
 
-namespace bssl {
+BSSL_NAMESPACE_BEGIN
 
 namespace {
 
@@ -63,7 +77,7 @@ std::string PathDebugString(const ParsedCertificateList &certs) {
 // may be null to indicate an "empty" entry.
 struct IssuerEntry {
   std::shared_ptr<const ParsedCertificate> cert;
-  CertificateTrust trust;
+  TrustAnchor trust;
   int trust_and_key_id_match_ordering;
 };
 
@@ -81,7 +95,7 @@ enum KeyIdentifierMatch {
 // Returns an integer that represents the relative ordering of |issuer| for
 // prioritizing certificates in path building based on |issuer|'s
 // subjectKeyIdentifier and |target|'s authorityKeyIdentifier. Lower return
-// values indicate higer priority.
+// values indicate higher priority.
 KeyIdentifierMatch CalculateKeyIdentifierMatch(
     const ParsedCertificate *target, const ParsedCertificate *issuer) {
   if (!target->authority_key_identifier()) {
@@ -106,7 +120,7 @@ KeyIdentifierMatch CalculateKeyIdentifierMatch(
 
 // Returns an integer that represents the relative ordering of |issuer| based
 // on |issuer_trust| and authorityKeyIdentifier matching for prioritizing
-// certificates in path building. Lower return values indicate higer priority.
+// certificates in path building. Lower return values indicate higher priority.
 int TrustAndKeyIdentifierMatchToOrder(const ParsedCertificate *target,
                                       const ParsedCertificate *issuer,
                                       const CertificateTrust &issuer_trust) {
@@ -193,6 +207,7 @@ class CertIssuersIter {
 
  private:
   void AddIssuers(ParsedCertificateList issuers);
+  void MaybeAddMTCIssuer();
   void DoAsyncIssuerQuery();
 
   // Returns true if |issuers_| contains unconsumed certificates.
@@ -254,6 +269,7 @@ void CertIssuersIter::GetNextIssuer(IssuerEntry *out) {
       cert_issuer_source->SyncGetIssuersOf(cert(), &new_issuers);
       AddIssuers(std::move(new_issuers));
     }
+    MaybeAddMTCIssuer();
   }
 
   // If there aren't any issuers, block until async results are ready.
@@ -304,13 +320,31 @@ void CertIssuersIter::AddIssuers(ParsedCertificateList new_issuers) {
     // Look up the trust for this issuer.
     IssuerEntry entry;
     entry.cert = std::move(issuer);
-    entry.trust = trust_store_->GetTrust(entry.cert.get());
+    entry.trust = TrustAnchor(trust_store_->GetTrust(entry.cert.get()));
     entry.trust_and_key_id_match_ordering = TrustAndKeyIdentifierMatchToOrder(
-        cert(), entry.cert.get(), entry.trust);
+        cert(), entry.cert.get(), entry.trust.CertTrust());
 
     issuers_.push_back(std::move(entry));
     issuers_needs_sort_ = true;
   }
+}
+
+void CertIssuersIter::MaybeAddMTCIssuer() {
+  std::shared_ptr<const MTCAnchor> mtc_trust_anchor =
+      trust_store_->GetTrustedMTCIssuerOf(cert_.get());
+  if (!mtc_trust_anchor) {
+    return;
+  }
+  std::shared_ptr<const ParsedCertificate> trust_anchor_cert =
+      mtc_trust_anchor->AsCert();
+  // Add one issuer for the mtc_trust_anchor.
+  present_issuers_.insert(BytesAsStringView(trust_anchor_cert->der_cert()));
+  IssuerEntry entry;
+  entry.cert = std::move(trust_anchor_cert);
+  entry.trust = TrustAnchor(mtc_trust_anchor->CertTrust(), mtc_trust_anchor);
+  entry.trust_and_key_id_match_ordering = 0; /* kTrustedAndKeyIdMatch */
+  issuers_.push_back(std::move(entry));
+  issuers_needs_sort_ = true;
 }
 
 void CertIssuersIter::DoAsyncIssuerQuery() {
@@ -482,8 +516,7 @@ class CertPathIter {
   // false. If deadline or iteration limit is exceeded, sets |out_certs| to the
   // current path being explored and returns false.
   bool GetNextPath(ParsedCertificateList *out_certs,
-                   CertificateTrust *out_last_cert_trust,
-                   CertPathErrors *out_errors,
+                   TrustAnchor *out_last_cert_trust, CertPathErrors *out_errors,
                    CertPathBuilderDelegate *delegate, uint32_t *iteration_count,
                    const uint32_t max_iteration_count,
                    const uint32_t max_path_building_depth);
@@ -507,7 +540,8 @@ CertPathIter::CertPathIter(std::shared_ptr<const ParsedCertificate> cert,
     : trust_store_(trust_store) {
   // Initialize |next_issuer_| to the target certificate.
   next_issuer_.cert = std::move(cert);
-  next_issuer_.trust = trust_store_->GetTrust(next_issuer_.cert.get());
+  next_issuer_.trust =
+      TrustAnchor(trust_store_->GetTrust(next_issuer_.cert.get()));
 }
 
 void CertPathIter::AddCertIssuerSource(CertIssuerSource *cert_issuer_source) {
@@ -515,14 +549,14 @@ void CertPathIter::AddCertIssuerSource(CertIssuerSource *cert_issuer_source) {
 }
 
 bool CertPathIter::GetNextPath(ParsedCertificateList *out_certs,
-                               CertificateTrust *out_last_cert_trust,
+                               TrustAnchor *out_last_cert_trust,
                                CertPathErrors *out_errors,
                                CertPathBuilderDelegate *delegate,
                                uint32_t *iteration_count,
                                const uint32_t max_iteration_count,
                                const uint32_t max_path_building_depth) {
   out_certs->clear();
-  *out_last_cert_trust = CertificateTrust::ForUnspecified();
+  *out_last_cert_trust = TrustAnchor();
 
   while (true) {
     if (delegate->IsDeadlineExpired()) {
@@ -602,7 +636,7 @@ bool CertPathIter::GetNextPath(ParsedCertificateList *out_certs,
     // Overrides for cert with trust appearing in the wrong place for the type
     // of trust (trusted leaf in non-leaf position, or trust anchor in leaf
     // position.)
-    switch (next_issuer_.trust.type) {
+    switch (next_issuer_.trust.CertTrust().type) {
       case CertificateTrustType::TRUSTED_ANCHOR:
         // If the leaf cert is trusted only as an anchor, treat it as having
         // unspecified trust. This may allow a successful path to be built to a
@@ -612,7 +646,8 @@ bool CertPathIter::GetNextPath(ParsedCertificateList *out_certs,
             delegate->DebugLog(
                 "Leaf is a trust anchor, considering as UNSPECIFIED");
           }
-          next_issuer_.trust = CertificateTrust::ForUnspecified();
+          next_issuer_.trust.OverrideCertTrust(
+              CertificateTrust::ForUnspecified());
         }
         break;
       case CertificateTrustType::TRUSTED_LEAF:
@@ -624,7 +659,8 @@ bool CertPathIter::GetNextPath(ParsedCertificateList *out_certs,
             delegate->DebugLog(
                 "Issuer is a trust leaf, considering as UNSPECIFIED");
           }
-          next_issuer_.trust = CertificateTrust::ForUnspecified();
+          next_issuer_.trust.OverrideCertTrust(
+              CertificateTrust::ForUnspecified());
         }
         break;
       case CertificateTrustType::DISTRUSTED:
@@ -636,10 +672,11 @@ bool CertPathIter::GetNextPath(ParsedCertificateList *out_certs,
 
     // Overrides for trusted leaf cert with require_leaf_selfsigned. If the leaf
     // isn't actually self-signed, treat it as unspecified.
-    switch (next_issuer_.trust.type) {
+    switch (next_issuer_.trust.CertTrust().type) {
       case CertificateTrustType::TRUSTED_LEAF:
       case CertificateTrustType::TRUSTED_ANCHOR_OR_LEAF:
-        if (cur_path_.Empty() && next_issuer_.trust.require_leaf_selfsigned &&
+        if (cur_path_.Empty() &&
+            next_issuer_.trust.CertTrust().require_leaf_selfsigned &&
             !VerifyCertificateIsSelfSigned(*next_issuer_.cert,
                                            delegate->GetVerifyCache(),
                                            /*errors=*/nullptr)) {
@@ -648,7 +685,8 @@ bool CertPathIter::GetNextPath(ParsedCertificateList *out_certs,
                 "Leaf is trusted with require_leaf_selfsigned but is "
                 "not self-signed, considering as UNSPECIFIED");
           }
-          next_issuer_.trust = CertificateTrust::ForUnspecified();
+          next_issuer_.trust.OverrideCertTrust(
+              CertificateTrust::ForUnspecified());
         }
         break;
       case CertificateTrustType::TRUSTED_ANCHOR:
@@ -658,7 +696,7 @@ bool CertPathIter::GetNextPath(ParsedCertificateList *out_certs,
         break;
     }
 
-    switch (next_issuer_.trust.type) {
+    switch (next_issuer_.trust.CertTrust().type) {
       // If the trust for this issuer is "known" (either because it is
       // distrusted, or because it is trusted) then stop building and return the
       // path.
@@ -710,6 +748,121 @@ bool CertPathBuilderResultPath::IsValid() const {
   return GetTrustedCert() && !errors.ContainsHighSeverityErrors();
 }
 
+VerifyError CertPathBuilderResultPath::GetVerifyError() const {
+  // Diagnostic string is always "everything" about the path.
+  std::string diagnostic = errors.ToDebugString(certs);
+  if (!errors.ContainsHighSeverityErrors()) {
+    // TODO(bbe3): Having to check this after seems awkward: crbug.com/boringssl/713
+    if (GetTrustedCert()) {
+      return VerifyError(VerifyError::StatusCode::PATH_VERIFIED, 0,
+                         std::move(diagnostic));
+    } else {
+      return VerifyError(VerifyError::StatusCode::VERIFICATION_FAILURE, -1,
+                         std::move(diagnostic));
+    }
+  }
+
+  // Check for the presence of things that amount to Internal errors in the
+  // verification code. We deliberately prioritize this to not hide it in
+  // multiple error cases.
+  if (errors.ContainsError(cert_errors::kInternalError) ||
+      errors.ContainsError(cert_errors::kChainIsEmpty)) {
+    return VerifyError(VerifyError::StatusCode::VERIFICATION_FAILURE, -1,
+                       std::move(diagnostic));
+  }
+
+  // Similarly, for the deadline and limit cases, there will often be other
+  // errors that we probably do not care about, since path building was
+  // aborted. Surface these errors instead of having them hidden in the multiple
+  // error case.
+  //
+  // Normally callers should check for these in the path builder result before
+  // calling this on a single path, but this is here in case they do not and
+  // these errors are actually present on this path.
+  if (errors.ContainsError(cert_errors::kDeadlineExceeded)) {
+    return VerifyError(VerifyError::StatusCode::PATH_DEADLINE_EXCEEDED, -1,
+                       std::move(diagnostic));
+  }
+  if (errors.ContainsError(cert_errors::kIterationLimitExceeded)) {
+    return VerifyError(VerifyError::StatusCode::PATH_ITERATION_COUNT_EXCEEDED,
+                       -1, std::move(diagnostic));
+  }
+  if (errors.ContainsError(cert_errors::kDepthLimitExceeded)) {
+    return VerifyError(VerifyError::StatusCode::PATH_DEPTH_LIMIT_REACHED, -1,
+                       std::move(diagnostic));
+  }
+
+  // If the chain has multiple high severity errors, indicate that.
+  ptrdiff_t depth = -1;
+  std::optional<CertErrorId> single_error =
+      errors.FindSingleHighSeverityError(depth);
+  if (!single_error.has_value()) {
+    return VerifyError(VerifyError::StatusCode::PATH_MULTIPLE_ERRORS, -1,
+                       std::move(diagnostic));
+  }
+
+  // Otherwise it has a single error, map it appropriately at the
+  // depth it first occurs.
+  if (single_error.value() == cert_errors::kValidityFailedNotAfter) {
+    return VerifyError(VerifyError::StatusCode::CERTIFICATE_EXPIRED, depth,
+                       std::move(diagnostic));
+  }
+  if (single_error.value() == cert_errors::kValidityFailedNotBefore) {
+    return VerifyError(VerifyError::StatusCode::CERTIFICATE_NOT_YET_VALID,
+                       depth, std::move(diagnostic));
+  }
+  if (single_error.value() == cert_errors::kDistrustedByTrustStore ||
+      single_error.value() == cert_errors::kCertIsNotTrustAnchor ||
+      single_error.value() == cert_errors::kMaxPathLengthViolated ||
+      single_error.value() == cert_errors::kSubjectDoesNotMatchIssuer ||
+      single_error.value() == cert_errors::kNoIssuersFound) {
+    return VerifyError(VerifyError::StatusCode::PATH_NOT_FOUND, depth,
+                       std::move(diagnostic));
+  }
+  if (single_error.value() == cert_errors::kVerifySignedDataFailed) {
+    return VerifyError(VerifyError::StatusCode::CERTIFICATE_INVALID_SIGNATURE,
+                       depth, std::move(diagnostic));
+  }
+  if (single_error.value() == cert_errors::kUnacceptableSignatureAlgorithm) {
+    return VerifyError(
+        VerifyError::StatusCode::CERTIFICATE_UNSUPPORTED_SIGNATURE_ALGORITHM,
+        depth, std::move(diagnostic));
+  }
+  if (single_error.value() == cert_errors::kUnacceptablePublicKey) {
+    return VerifyError(VerifyError::StatusCode::CERTIFICATE_UNSUPPORTED_KEY,
+                       depth, std::move(diagnostic));
+  }
+  if (single_error.value() == cert_errors::kEkuLacksServerAuth ||
+      single_error.value() == cert_errors::kEkuLacksServerAuthButHasAnyEKU ||
+      single_error.value() == cert_errors::kEkuLacksClientAuth ||
+      single_error.value() == cert_errors::kEkuLacksClientAuthButHasAnyEKU ||
+      single_error.value() == cert_errors::kEkuLacksClientAuthOrServerAuth) {
+    return VerifyError(VerifyError::StatusCode::CERTIFICATE_NO_MATCHING_EKU,
+                       depth, std::move(diagnostic));
+  }
+  if (single_error.value() == cert_errors::kCertificateRevoked) {
+    return VerifyError(VerifyError::StatusCode::CERTIFICATE_REVOKED, depth,
+                       std::move(diagnostic));
+  }
+  if (single_error.value() == cert_errors::kNoRevocationMechanism) {
+    return VerifyError(
+        VerifyError::StatusCode::CERTIFICATE_NO_REVOCATION_MECHANISM, depth,
+        std::move(diagnostic));
+  }
+  if (single_error.value() == cert_errors::kUnableToCheckRevocation) {
+    return VerifyError(
+        VerifyError::StatusCode::CERTIFICATE_UNABLE_TO_CHECK_REVOCATION, depth,
+        std::move(diagnostic));
+  }
+  // All other High severity errors map to CERTIFICATE_INVALID if associated
+  // to a certificate, or VERIFICATION_FAILURE if not associated to a
+  // certificate.
+  return VerifyError((depth < 0) ? VerifyError::StatusCode::VERIFICATION_FAILURE
+                                 : VerifyError::StatusCode::CERTIFICATE_INVALID,
+                     depth, std::move(diagnostic));
+}
+
+
 CertPathBuilder::Result::Result() = default;
 CertPathBuilder::Result::Result(Result &&) = default;
 CertPathBuilder::Result::~Result() = default;
@@ -728,6 +881,39 @@ bool CertPathBuilder::Result::AnyPathContainsError(CertErrorId error_id) const {
   }
 
   return false;
+}
+
+const VerifyError CertPathBuilder::Result::GetBestPathVerifyError() const {
+  if (HasValidPath()) {
+    return GetBestValidPath()->GetVerifyError();
+  }
+  // We can only return one error. Returning the errors corresponding to the
+  // limits if they they appear on any path will make this error prominent even
+  // if there are other paths with different or multiple errors.
+  if (exceeded_iteration_limit) {
+    return VerifyError(
+        VerifyError::StatusCode::PATH_ITERATION_COUNT_EXCEEDED, -1,
+        "Iteration count exceeded, could not find a trusted path.");
+  }
+  if (exceeded_deadline) {
+    return VerifyError(VerifyError::StatusCode::PATH_DEADLINE_EXCEEDED, -1,
+                       "Deadline exceeded. Could not find a trusted path.");
+  }
+  if (AnyPathContainsError(cert_errors::kDepthLimitExceeded)) {
+    return VerifyError(VerifyError::StatusCode::PATH_DEPTH_LIMIT_REACHED, -1,
+                       "Depth limit reached. Could not find a trusted path.");
+  }
+
+  // If there are no paths to report an error on, this probably indicates
+  // something is wrong with this path builder result.
+  if (paths.empty()) {
+    return VerifyError(VerifyError::StatusCode::VERIFICATION_FAILURE, -1,
+                       "No paths in path builder result.");
+  }
+
+  // If there are paths, report the VerifyError from the best path.
+  CertPathBuilderResultPath *path = paths[best_result_index].get();
+  return path->GetVerifyError();
 }
 
 const CertPathBuilderResultPath *CertPathBuilder::Result::GetBestValidPath()
@@ -805,9 +991,10 @@ CertPathBuilder::Result CertPathBuilder::Run() {
         std::make_unique<CertPathBuilderResultPath>();
 
     if (!cert_path_iter_->GetNextPath(
-            &result_path->certs, &result_path->last_cert_trust,
+            &result_path->certs, &result_path->trust_anchor,
             &result_path->errors, delegate_, &iteration_count,
             max_iteration_count_, max_path_building_depth_)) {
+      result_path->last_cert_trust = result_path->trust_anchor.CertTrust();
       // There are no more paths to check or limits were exceeded.
       if (result_path->errors.ContainsError(
               cert_errors::kIterationLimitExceeded)) {
@@ -835,6 +1022,7 @@ CertPathBuilder::Result CertPathBuilder::Run() {
       out_result_.iteration_count = iteration_count;
       return std::move(out_result_);
     }
+    result_path->last_cert_trust = result_path->trust_anchor.CertTrust();
 
     if (result_path->last_cert_trust.HasUnspecifiedTrust()) {
       // Partial path, don't attempt to verify. Just double check that it is
@@ -846,7 +1034,7 @@ CertPathBuilder::Result CertPathBuilder::Run() {
     } else {
       // Verify the entire certificate chain.
       VerifyCertificateChain(
-          result_path->certs, result_path->last_cert_trust, delegate_, time_,
+          result_path->certs, result_path->trust_anchor, delegate_, time_,
           key_purpose_, initial_explicit_policy_, user_initial_policy_set_,
           initial_policy_mapping_inhibit_, initial_any_policy_inhibit_,
           &result_path->user_constrained_policy_set, &result_path->errors);
@@ -895,4 +1083,4 @@ void CertPathBuilder::AddResultPath(
   out_result_.paths.push_back(std::move(result_path));
 }
 
-}  // namespace bssl
+BSSL_NAMESPACE_END

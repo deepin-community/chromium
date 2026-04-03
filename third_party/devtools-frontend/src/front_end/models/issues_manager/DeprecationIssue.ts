@@ -1,15 +1,14 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as i18n from '../../core/i18n/i18n.js';
 import type * as SDK from '../../core/sdk/sdk.js';
-import * as Protocol from '../../generated/protocol.js';
 import * as Deprecation from '../../generated/Deprecation.js';
+import * as Protocol from '../../generated/protocol.js';
 
 import {Issue, IssueCategory, IssueKind} from './Issue.js';
-
-import {resolveLazyDescription, type MarkdownIssueDescription} from './MarkdownIssueDescription.js';
+import {type MarkdownIssueDescription, resolveLazyDescription} from './MarkdownIssueDescription.js';
 
 const UIStrings = {
   /**
@@ -25,44 +24,37 @@ const UIStrings = {
    * @description Title of issue raised when a deprecated feature is used
    */
   title: 'Deprecated feature used',
-};
+} as const;
 
 const str_ = i18n.i18n.registerUIStrings('models/issues_manager/DeprecationIssue.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
 
-// eslint-disable-next-line rulesdir/l10n_filename_matches
+// eslint-disable-next-line @devtools/l10n-filename-matches
 const strDeprecation = i18n.i18n.registerUIStrings('generated/Deprecation.ts', Deprecation.UIStrings);
 const i18nLazyDeprecationString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, strDeprecation);
 
-export class DeprecationIssue extends Issue {
-  #issueDetails: Protocol.Audits.DeprecationIssueDetails;
-
-  constructor(issueDetails: Protocol.Audits.DeprecationIssueDetails, issuesModel: SDK.IssuesModel.IssuesModel) {
+export class DeprecationIssue extends Issue<Protocol.Audits.DeprecationIssueDetails> {
+  constructor(issueDetails: Protocol.Audits.DeprecationIssueDetails, issuesModel: SDK.IssuesModel.IssuesModel|null) {
     const issueCode = [
       Protocol.Audits.InspectorIssueCode.DeprecationIssue,
       issueDetails.type,
     ].join('::');
-    super({code: issueCode, umaCode: 'DeprecationIssue'}, issuesModel);
-    this.#issueDetails = issueDetails;
+    super({code: issueCode, umaCode: 'DeprecationIssue'}, issueDetails, issuesModel);
   }
 
   getCategory(): IssueCategory {
-    return IssueCategory.Other;
-  }
-
-  details(): Protocol.Audits.DeprecationIssueDetails {
-    return this.#issueDetails;
+    return IssueCategory.OTHER;
   }
 
   getDescription(): MarkdownIssueDescription {
     let messageFunction = (): string => '';
-    const maybeEnglishMessage = (Deprecation.UIStrings as Record<string, string>)[this.#issueDetails.type];
+    const maybeEnglishMessage = (Deprecation.UIStrings as Record<string, string>)[this.details().type];
     if (maybeEnglishMessage) {
       messageFunction = i18nLazyDeprecationString(maybeEnglishMessage);
     }
 
     const links = [];
-    const deprecationMeta = Deprecation.DEPRECATIONS_METADATA[this.#issueDetails.type];
+    const deprecationMeta = Deprecation.DEPRECATIONS_METADATA[this.details().type];
     const feature = deprecationMeta?.chromeStatusFeature ?? 0;
     if (feature !== 0) {
       links.push({
@@ -88,22 +80,23 @@ export class DeprecationIssue extends Issue {
   }
 
   override sources(): Iterable<Protocol.Audits.SourceCodeLocation> {
-    if (this.#issueDetails.sourceCodeLocation) {
-      return [this.#issueDetails.sourceCodeLocation];
+    if (this.details().sourceCodeLocation) {
+      return [this.details().sourceCodeLocation];
     }
     return [];
   }
 
   primaryKey(): string {
-    return JSON.stringify(this.#issueDetails);
+    return JSON.stringify(this.details());
   }
 
   getKind(): IssueKind {
-    return IssueKind.BreakingChange;
+    return IssueKind.BREAKING_CHANGE;
   }
 
-  static fromInspectorIssue(issuesModel: SDK.IssuesModel.IssuesModel, inspectorIssue: Protocol.Audits.InspectorIssue):
-      DeprecationIssue[] {
+  static fromInspectorIssue(
+      issuesModel: SDK.IssuesModel.IssuesModel|null,
+      inspectorIssue: Protocol.Audits.InspectorIssue): DeprecationIssue[] {
     const details = inspectorIssue.details.deprecationIssueDetails;
     if (!details) {
       console.warn('Deprecation issue without details received.');

@@ -16,26 +16,31 @@
 
 #include "src/trace_processor/perfetto_sql/engine/perfetto_sql_engine.h"
 
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "src/trace_processor/containers/string_pool.h"
+#include "src/trace_processor/sqlite/bindings/sqlite_result.h"
 #include "src/trace_processor/sqlite/sql_source.h"
-#include "src/trace_processor/tables/slice_tables_py.h"
+#include "src/trace_processor/util/sql_modules.h"
 #include "test/gtest_and_gmock.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 namespace {
 
 class PerfettoSqlEngineTest : public ::testing::Test {
  protected:
   StringPool pool_;
-  PerfettoSqlEngine engine_{&pool_};
+  PerfettoSqlEngine engine_{&pool_, true};
 };
 
-sql_modules::RegisteredModule CreateTestModule(
-    std::vector<std::pair<std::string, std::string>> files) {
-  sql_modules::RegisteredModule result;
-  for (auto& file : files) {
-    result.include_key_to_file[file.first] =
-        sql_modules::RegisteredModule::ModuleFile{file.second, false};
+sql_modules::RegisteredPackage CreateTestPackage(
+    const std::vector<std::pair<std::string, std::string>>& files) {
+  sql_modules::RegisteredPackage result;
+  for (const auto& file : files) {
+    result.modules[file.first] =
+        sql_modules::RegisteredPackage::ModuleFile{file.second, false};
   }
   return result;
 }
@@ -54,7 +59,7 @@ TEST_F(PerfettoSqlEngineTest, Function_Create) {
 
   res = engine_.Execute(
       SqlSource::FromExecuteQuery("creatE PeRfEttO FUNCTION foo(x INT, y LONG) "
-                                  "RETURNS INT AS select :x + :y"));
+                                  "RETURNS INT AS select $x + $y"));
   ASSERT_TRUE(res.ok()) << res.status().c_message();
 }
 
@@ -137,7 +142,24 @@ TEST_F(PerfettoSqlEngineTest, Table_Schema) {
   ASSERT_TRUE(res.ok()) << res.status().c_message();
 }
 
-TEST_F(PerfettoSqlEngineTest, Table_IncorrectSchema) {
+TEST_F(PerfettoSqlEngineTest, Table_Schema_EmptyTable) {
+  // This test checks that the type checks correctly work on empty tables (and
+  // that columns with no data do not default to "int").
+  auto res = engine_.Execute(
+      SqlSource::FromExecuteQuery("CREATE PERFETTO TABLE foo(bar STRING) AS "
+                                  "SELECT 'bar' as bar WHERE bar = 'foo'"));
+  ASSERT_TRUE(res.ok()) << res.status().c_message();
+}
+
+TEST_F(PerfettoSqlEngineTest, Table_Schema_NullColumn) {
+  // This test checks that the type checks correctly work on columns without
+  // data (and that columns with no non-NULL data do not default to "int").
+  auto res = engine_.Execute(SqlSource::FromExecuteQuery(
+      "CREATE PERFETTO TABLE foo(bar STRING) AS SELECT NULL as bar"));
+  ASSERT_TRUE(res.ok()) << res.status().c_message();
+}
+
+TEST_F(PerfettoSqlEngineTest, Table_IncorrectSchema_MissingColumn) {
   auto res = engine_.Execute(SqlSource::FromExecuteQuery(
       "CREATE PERFETTO TABLE foo(x INT) AS SELECT 1 as y"));
   ASSERT_FALSE(res.ok());
@@ -145,7 +167,17 @@ TEST_F(PerfettoSqlEngineTest, Table_IncorrectSchema) {
       res.status().c_message(),
       testing::EndsWith("CREATE PERFETTO TABLE: the following columns are "
                         "declared in the schema, but do not exist: x; and the "
-                        "folowing columns exist, but are not declared: y"));
+                        "following columns exist, but are not declared: y"));
+}
+
+TEST_F(PerfettoSqlEngineTest, Table_IncorrectSchema_IncorrectType) {
+  auto res = engine_.Execute(SqlSource::FromExecuteQuery(
+      "CREATE PERFETTO TABLE foo(x INT) AS SELECT '1' as x"));
+  ASSERT_FALSE(res.ok());
+  EXPECT_THAT(
+      res.status().c_message(),
+      testing::EndsWith("CREATE PERFETTO TABLE(foo): column 'x' declared as "
+                        "LONG in the schema, but STRING found"));
 }
 
 TEST_F(PerfettoSqlEngineTest, Table_Drop) {
@@ -205,7 +237,7 @@ TEST_F(PerfettoSqlEngineTest, View_IncorrectSchema) {
       res.status().c_message(),
       testing::EndsWith("CREATE PERFETTO VIEW: the following columns are "
                         "declared in the schema, but do not exist: x; and the "
-                        "folowing columns exist, but are not declared: y"));
+                        "following columns exist, but are not declared: y"));
 }
 
 TEST_F(PerfettoSqlEngineTest, View_Duplicates) {
@@ -256,68 +288,106 @@ TEST_F(PerfettoSqlEngineTest, Macro_Duplicates) {
 }
 
 TEST_F(PerfettoSqlEngineTest, Include_All) {
-  engine_.RegisterModule(
-      "foo", CreateTestModule(
+  engine_.RegisterPackage(
+      "foo", CreateTestPackage(
                  {{"foo.foo", "CREATE PERFETTO TABLE foo AS SELECT 42 AS x"}}));
-  engine_.RegisterModule(
+  engine_.RegisterPackage(
       "bar",
-      CreateTestModule(
+      CreateTestPackage(
           {{"bar.bar", "CREATE PERFETTO TABLE bar AS SELECT 42 AS x "}}));
 
   auto res_create =
       engine_.Execute(SqlSource::FromExecuteQuery("INCLUDE PERFETTO MODULE *"));
   ASSERT_TRUE(res_create.ok()) << res_create.status().c_message();
-  ASSERT_TRUE(
-      engine_.FindModule("foo")->include_key_to_file["foo.foo"].included);
-  ASSERT_TRUE(
-      engine_.FindModule("bar")->include_key_to_file["bar.bar"].included);
+  ASSERT_TRUE(engine_.FindPackage("foo")->modules["foo.foo"].included);
+  ASSERT_TRUE(engine_.FindPackage("bar")->modules["bar.bar"].included);
 }
 
 TEST_F(PerfettoSqlEngineTest, Include_Module) {
-  engine_.RegisterModule(
-      "foo", CreateTestModule({
+  engine_.RegisterPackage(
+      "foo", CreateTestPackage({
                  {"foo.foo1", "CREATE PERFETTO TABLE foo1 AS SELECT 42 AS x"},
                  {"foo.foo2", "CREATE PERFETTO TABLE foo2 AS SELECT 42 AS x"},
              }));
-  engine_.RegisterModule(
+  engine_.RegisterPackage(
       "bar",
-      CreateTestModule(
+      CreateTestPackage(
           {{"bar.bar", "CREATE PERFETTO TABLE bar AS SELECT 42 AS x "}}));
 
   auto res_create = engine_.Execute(
       SqlSource::FromExecuteQuery("INCLUDE PERFETTO MODULE foo.*"));
   ASSERT_TRUE(res_create.ok()) << res_create.status().c_message();
-  ASSERT_TRUE(
-      engine_.FindModule("foo")->include_key_to_file["foo.foo1"].included);
-  ASSERT_TRUE(
-      engine_.FindModule("foo")->include_key_to_file["foo.foo2"].included);
-  ASSERT_FALSE(
-      engine_.FindModule("bar")->include_key_to_file["bar.bar"].included);
+  ASSERT_TRUE(engine_.FindPackage("foo")->modules["foo.foo1"].included);
+  ASSERT_TRUE(engine_.FindPackage("foo")->modules["foo.foo2"].included);
+  ASSERT_FALSE(engine_.FindPackage("bar")->modules["bar.bar"].included);
 }
 
-TEST_F(PerfettoSqlEngineTest, MismatchedRange) {
-  tables::SliceTable parent(&pool_);
-  tables::ExpectedFrameTimelineSliceTable child(&pool_, &parent);
-
-  engine_.RegisterStaticTable(parent, "parent",
-                              tables::SliceTable::ComputeStaticSchema());
-  engine_.RegisterStaticTable(
-      child, "child",
-      tables::ExpectedFrameTimelineSliceTable::ComputeStaticSchema());
-
-  for (uint32_t i = 0; i < 5; i++) {
-    child.Insert({});
-  }
-
-  for (uint32_t i = 0; i < 10; i++) {
-    parent.Insert({});
-  }
-
+TEST_F(PerfettoSqlEngineTest, DelegatingFunction_Error_TargetNotFound) {
+  // Test error when target function doesn't exist in registry
   auto res = engine_.Execute(
-      SqlSource::FromExecuteQuery("SELECT * FROM child WHERE ts > 3"));
-  ASSERT_TRUE(res.ok()) << res.status().c_message();
+      SqlSource::FromExecuteQuery("CREATE PERFETTO FUNCTION my_alias() RETURNS "
+                                  "INT DELEGATES TO nonexistent_func"));
+  ASSERT_FALSE(res.ok());
+  EXPECT_THAT(res.status().c_message(),
+              testing::HasSubstr(
+                  "Target function 'nonexistent_func' not found in registry"));
+}
+
+TEST_F(PerfettoSqlEngineTest, DelegatingFunction_Error_ReplaceRequired) {
+  // First, we need to register a target function for aliasing
+  // Since we can't easily access the intrinsic registry in tests,
+  // let's test the replace logic with a regular function first
+  auto res1 = engine_.Execute(SqlSource::FromExecuteQuery(
+      "CREATE PERFETTO FUNCTION test_func() RETURNS INT AS SELECT 42"));
+  ASSERT_TRUE(res1.ok()) << res1.status().c_message();
+
+  // Try to create same function without replace - should fail
+  auto res2 = engine_.Execute(SqlSource::FromExecuteQuery(
+      "CREATE PERFETTO FUNCTION test_func() RETURNS INT AS SELECT 43"));
+  ASSERT_FALSE(res2.ok());
+  EXPECT_THAT(res2.status().c_message(),
+              testing::HasSubstr("function already exists"));
+
+  // Try with OR REPLACE - should succeed
+  auto res3 = engine_.Execute(
+      SqlSource::FromExecuteQuery("CREATE OR REPLACE PERFETTO FUNCTION "
+                                  "test_func() RETURNS INT AS SELECT 44"));
+  ASSERT_TRUE(res3.ok()) << res3.status().c_message();
+}
+
+TEST(SqlModulesTest, IsPackagePrefixOf) {
+  // Exact match
+  EXPECT_TRUE(sql_modules::IsPackagePrefixOf("foo", "foo"));
+  EXPECT_TRUE(sql_modules::IsPackagePrefixOf("foo.bar", "foo.bar"));
+
+  // Proper prefix (followed by dot)
+  EXPECT_TRUE(sql_modules::IsPackagePrefixOf("foo", "foo.bar"));
+  EXPECT_TRUE(sql_modules::IsPackagePrefixOf("foo.bar", "foo.bar.baz"));
+
+  // Not a prefix (no dot separator)
+  EXPECT_FALSE(sql_modules::IsPackagePrefixOf("foo", "foobar"));
+  EXPECT_FALSE(sql_modules::IsPackagePrefixOf("foo.bar", "foo.barbaz"));
+
+  // Prefix longer than string
+  EXPECT_FALSE(sql_modules::IsPackagePrefixOf("foo.bar", "foo"));
+  EXPECT_FALSE(sql_modules::IsPackagePrefixOf("foo.bar.baz", "foo.bar"));
+}
+
+TEST_F(PerfettoSqlEngineTest, FindPackageForModule_MultiLevel) {
+  // Register a multi-level package
+  engine_.RegisterPackage(
+      "foo.bar",
+      CreateTestPackage(
+          {{"foo.bar.baz", "CREATE PERFETTO TABLE t AS SELECT 1 AS x"}}));
+
+  // FindPackageForModule should find it
+  EXPECT_NE(engine_.FindPackageForModule("foo.bar.baz"), nullptr);
+  EXPECT_NE(engine_.FindPackageForModule("foo.bar.baz.qux"), nullptr);
+
+  // But not for unrelated modules
+  EXPECT_EQ(engine_.FindPackageForModule("foo.other"), nullptr);
+  EXPECT_EQ(engine_.FindPackageForModule("other.bar"), nullptr);
 }
 
 }  // namespace
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

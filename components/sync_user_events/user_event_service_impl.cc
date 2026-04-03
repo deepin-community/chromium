@@ -41,19 +41,22 @@ NavigationPresence GetNavigationPresence(
       break;
   }
   NOTREACHED();
-  return kEitherOkay;
 }
 
 bool NavigationPresenceValid(UserEventSpecifics::EventCase event_case,
                              bool has_navigation_id) {
-  NavigationPresence presence = GetNavigationPresence(event_case);
+  const NavigationPresence presence = GetNavigationPresence(event_case);
   return presence == kEitherOkay ||
          (presence == kMustHave && has_navigation_id) ||
          (presence == kCannotHave && !has_navigation_id);
 }
 
 // An equivalent to UserEventSpecifics::EventCase (from the proto) that's
-// appropriate for recording in UMA. Do not remove entries etc.
+// appropriate for recording in UMA. These values are persisted to logs. Entries
+// should not be renumbered and numeric values should never be reused. Keep in
+// sync with SyncUserEventType in
+// tools/metrics/histograms/metadata/sync/enums.xml.
+// LINT.IfChange(SyncUserEventType)
 enum class EventTypeForUMA {
   kUnknown = 0,
   kTestEvent = 1,
@@ -62,6 +65,7 @@ enum class EventTypeForUMA {
   kFlocIdComputedEvent = 4,
   kMaxValue = kFlocIdComputedEvent
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncUserEventType)
 
 EventTypeForUMA GetEventTypeForUMA(UserEventSpecifics::EventCase event_case) {
   switch (event_case) {
@@ -81,7 +85,6 @@ EventTypeForUMA GetEventTypeForUMA(UserEventSpecifics::EventCase event_case) {
       break;
   }
   NOTREACHED();
-  return EventTypeForUMA::kUnknown;
 }
 
 }  // namespace
@@ -111,18 +114,13 @@ void UserEventServiceImpl::RecordUserEvent(
   bridge_->RecordUserEvent(std::move(specifics));
 }
 
-void UserEventServiceImpl::RecordUserEvent(
-    const UserEventSpecifics& specifics) {
-  RecordUserEvent(std::make_unique<UserEventSpecifics>(specifics));
-}
-
-base::WeakPtr<syncer::ModelTypeControllerDelegate>
+base::WeakPtr<syncer::DataTypeControllerDelegate>
 UserEventServiceImpl::GetControllerDelegate() {
   return bridge_->change_processor()->GetControllerDelegate();
 }
 
 bool UserEventServiceImpl::ShouldRecordEvent(
-    const UserEventSpecifics& specifics) {
+    const UserEventSpecifics& specifics) const {
   if (specifics.event_case() == UserEventSpecifics::EVENT_NOT_SET) {
     return false;
   }

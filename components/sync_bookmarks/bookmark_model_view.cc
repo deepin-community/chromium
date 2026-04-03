@@ -9,6 +9,12 @@
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/bookmarks/common/bookmark_metrics.h"
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#include "base/metrics/histogram_base.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/time/time.h"
+#include "components/sync_bookmarks/initial_account_bookmark_deduplicator.h"
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 namespace sync_bookmarks {
 
@@ -83,8 +89,10 @@ void BookmarkModelView::EndExtensiveChanges() {
   bookmark_model_->EndExtensiveChanges();
 }
 
-void BookmarkModelView::Remove(const bookmarks::BookmarkNode* node) {
-  bookmark_model_->Remove(node, bookmarks::metrics::BookmarkEditSource::kOther);
+void BookmarkModelView::Remove(const bookmarks::BookmarkNode* node,
+                               const base::Location& location) {
+  bookmark_model_->Remove(node, bookmarks::metrics::BookmarkEditSource::kOther,
+                          location);
 }
 
 void BookmarkModelView::Move(const bookmarks::BookmarkNode* node,
@@ -182,10 +190,25 @@ void BookmarkModelViewUsingLocalOrSyncableNodes::EnsurePermanentNodesExist() {
 }
 
 void BookmarkModelViewUsingLocalOrSyncableNodes::RemoveAllSyncableNodes() {
-  // Relevant on iOS only, to delete all account bookmarks in a dedicated
-  // BookmarkModel instance.
-  underlying_model()->RemoveAllUserBookmarks();
+  underlying_model()->BeginExtensiveChanges();
+
+  for (const auto& permanent_node : root_node()->children()) {
+    if (!IsNodeSyncable(permanent_node.get())) {
+      continue;
+    }
+
+    while (!permanent_node->children().empty()) {
+      underlying_model()->RemoveLastChild(
+          permanent_node.get(), bookmarks::metrics::BookmarkEditSource::kOther,
+          FROM_HERE);
+    }
+  }
+
+  underlying_model()->EndExtensiveChanges();
 }
+
+void BookmarkModelViewUsingLocalOrSyncableNodes::
+    MaybeRemoveUnderlyingModelDuplicatesUponInitialSync() {}
 
 const bookmarks::BookmarkNode*
 BookmarkModelViewUsingLocalOrSyncableNodes::GetNodeByUuid(
@@ -226,6 +249,30 @@ void BookmarkModelViewUsingAccountNodes::EnsurePermanentNodesExist() {
 
 void BookmarkModelViewUsingAccountNodes::RemoveAllSyncableNodes() {
   underlying_model()->RemoveAccountPermanentFolders();
+}
+
+void BookmarkModelViewUsingAccountNodes::
+    MaybeRemoveUnderlyingModelDuplicatesUponInitialSync() {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  BeginExtensiveChanges();
+
+  const base::Time deduplication_start_time = base::Time::Now();
+
+  InitialAccountBookmarkDeduplicator initial_account_bookmark_deduplicator(
+      underlying_model());
+  initial_account_bookmark_deduplicator.Deduplicate();
+
+  const base::TimeDelta deduplication_duration =
+      base::Time::Now() - deduplication_start_time;
+
+  base::UmaHistogramCustomTimes("Sync.BookmarksSignInDeduplicationTime",
+                                deduplication_duration,
+                                /*min=*/base::Milliseconds(1),
+                                /*max=*/base::Seconds(60),
+                                /*buckets=*/50);
+
+  EndExtensiveChanges();
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 }
 
 const bookmarks::BookmarkNode*

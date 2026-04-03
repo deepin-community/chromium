@@ -8,7 +8,6 @@
 #include "ash/app_list/model/app_list_item_observer.h"
 #include "ash/public/cpp/app_list/app_list_config_provider.h"
 #include "ash/public/cpp/shelf_types.h"
-#include "base/containers/contains.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/widget/widget.h"
 
@@ -72,7 +71,7 @@ void AppListItem::SetDefaultIconAndColor(const gfx::ImageSkia& icon,
   // icon.
   for (auto config_type :
        AppListConfigProvider::Get().GetAvailableConfigTypes()) {
-    if (!base::Contains(per_config_icons_, config_type)) {
+    if (!per_config_icons_.contains(config_type)) {
       for (auto& observer : observers_)
         observer.ItemIconChanged(config_type);
     }
@@ -187,6 +186,13 @@ void AppListItem::SetAccessibleName(const std::string& accessible_name) {
   metadata_->accessible_name = accessible_name;
   for (auto& observer : observers_)
     observer.ItemNameChanged();
+}
+
+void AppListItem::SetAppCollectionId(AppCollection collection_id) {
+  metadata_->collection_id = collection_id;
+  for (auto& observer : observers_) {
+    observer.ItemAppCollectionIdChanged();
+  }
 }
 
 void AppListItem::UpdateNotificationBadge(bool has_badge) {

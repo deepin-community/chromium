@@ -5,22 +5,21 @@
 #ifndef UI_GL_DCOMP_PRESENTER_H_
 #define UI_GL_DCOMP_PRESENTER_H_
 
+#include <windows.h>
+
 #include <d3d11.h>
 #include <dcomp.h>
-#include <windows.h>
 #include <wrl/client.h>
 
 #include "base/containers/circular_deque.h"
-#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/synchronization/lock.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "ui/gfx/frame_data.h"
 #include "ui/gfx/geometry/transform.h"
+#include "ui/gfx/overlay_layer_id.h"
 #include "ui/gl/child_window_win.h"
 #include "ui/gl/gl_export.h"
-#include "ui/gl/gl_surface_egl.h"
 #include "ui/gl/presenter.h"
 #include "ui/gl/vsync_thread_win.h"
 
@@ -49,37 +48,29 @@ class GL_EXPORT DCompPresenter : public Presenter,
     bool disable_vp_auto_hdr = false;
     bool disable_vp_scaling = false;
     bool disable_vp_super_resolution = false;
+    bool disable_dc_letterbox_video_optimization = false;
     bool force_dcomp_triple_buffer_video_swap_chain = false;
-    size_t max_pending_frames = 2;
-    bool use_angle_texture_offset = false;
     bool no_downscaled_overlay_promotion = false;
   };
 
-  DCompPresenter(GLDisplayEGL* display,
-                 const Settings& settings);
+  explicit DCompPresenter(const Settings& settings);
 
   DCompPresenter(const DCompPresenter&) = delete;
   DCompPresenter& operator=(const DCompPresenter&) = delete;
 
-  bool Initialize();
-  void Destroy();
   gfx::VSyncProvider* GetVSyncProvider();
-  bool SupportsProtectedVideo() const;
 
   // Presenter implementation.
   bool Resize(const gfx::Size& size,
               float scale_factor,
               const gfx::ColorSpace& color_space,
               bool has_alpha) override;
-  bool SetDrawRectangle(const gfx::Rect& rect) override;
   bool SupportsViewporter() const override;
-  // This schedules an overlay plane to be displayed on the next SwapBuffers
-  // or PostSubBuffer call. Overlay planes must be scheduled before every swap
-  // to remain in the layer tree. This surface's backbuffer doesn't have to be
-  // scheduled with ScheduleDCLayer, as it's automatically placed in the layer
-  // tree at z-order 0.
-  bool ScheduleDCLayer(std::unique_ptr<DCLayerOverlayParams> params) override;
-  void SetFrameRate(float frame_rate) override;
+  // This schedules overlay planes to be displayed on the next `Present` call.
+  // An overlay plane must be scheduled before every `Present` to remain in the
+  // layer tree. The primary plane should be included in `overlays`.
+  void ScheduleDCLayers(std::vector<DCLayerOverlayParams> overlays) override;
+  bool DestroyDCLayerTree() override;
 
   void Present(SwapCompletionCallback completion_callback,
                PresentationCallback presentation_callback,
@@ -95,17 +86,17 @@ class GL_EXPORT DCompPresenter : public Presenter,
       mojo::PendingReceiver<gfx::mojom::DelegatedInkPointRenderer>
           pending_receiver) override;
 
-  HWND window() const { return child_window_.window(); }
+  HWND GetWindow() const override;
 
   scoped_refptr<base::TaskRunner> GetWindowTaskRunnerForTesting();
 
   Microsoft::WRL::ComPtr<IDXGISwapChain1> GetLayerSwapChainForTesting(
-      size_t index) const;
+      const gfx::OverlayLayerId& layer_id) const;
 
-  void GetSwapChainVisualInfoForTesting(size_t index,
-                                        gfx::Transform* transform,
-                                        gfx::Point* offset,
-                                        gfx::Rect* clip_rect) const;
+  void GetSwapChainVisualInfoForTesting(const gfx::OverlayLayerId& layer_id,
+                                        gfx::Transform* out_transform,
+                                        gfx::Point* out_offset,
+                                        gfx::Rect* out_clip_rect) const;
 
   DCLayerTree* GetLayerTreeForTesting() { return layer_tree_.get(); }
 
@@ -114,20 +105,16 @@ class GL_EXPORT DCompPresenter : public Presenter,
 
  private:
   struct PendingFrame {
-    PendingFrame(Microsoft::WRL::ComPtr<ID3D11Query> query,
-                 PresentationCallback callback);
+    PendingFrame(PresentationCallback callback);
     PendingFrame(PendingFrame&& other);
     ~PendingFrame();
     PendingFrame& operator=(PendingFrame&& other);
-
-    // Event query issued after frame is presented.
-    Microsoft::WRL::ComPtr<ID3D11Query> query;
 
     // Presentation callback enqueued in SwapBuffers().
     PresentationCallback callback;
   };
 
-  void EnqueuePendingFrame(PresentationCallback callback, bool create_query);
+  void EnqueuePendingFrame(PresentationCallback callback);
   void CheckPendingFrames();
 
   void StartOrStopVSyncThread();
@@ -144,17 +131,16 @@ class GL_EXPORT DCompPresenter : public Presenter,
 
   // Queue of pending presentation callbacks.
   base::circular_deque<PendingFrame> pending_frames_;
-  const size_t max_pending_frames_;
+
+  std::vector<DCLayerOverlayParams> pending_overlays_;
 
   base::TimeTicks last_vsync_time_;
   base::TimeDelta last_vsync_interval_;
 
   std::unique_ptr<DCLayerTree> layer_tree_;
 
-  // Set in |SetDrawRectangle| and cleared in |SwapBuffers|. Used to determine
-  // if a D3D query should be created for this frame, due to a non-empty draw
-  // rectangle.
-  bool create_query_this_frame_ = false;
+  // Set in the ctor. Indicates whether vsync is enabled for the process.
+  bool use_gpu_vsync_ = false;
 
   base::WeakPtrFactory<DCompPresenter> weak_factory_{this};
 };

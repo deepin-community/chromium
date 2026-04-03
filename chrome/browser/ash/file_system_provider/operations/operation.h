@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/files/file.h"
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system_info.h"
 #include "chrome/browser/ash/file_system_provider/request_manager.h"
@@ -50,7 +51,7 @@ class Operation : public RequestManager::HandlerInterface {
   bool SendEvent(int request_id,
                  extensions::events::HistogramValue histogram_value,
                  const std::string& event_name,
-                 base::Value::List event_args);
+                 base::ListValue event_args);
 
   ProvidedFileSystemInfo file_system_info_;
 

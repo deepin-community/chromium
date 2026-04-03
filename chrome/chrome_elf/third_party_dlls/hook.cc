@@ -4,20 +4,19 @@
 
 #include "chrome/chrome_elf/third_party_dlls/hook.h"
 
-#include <atomic>
-#include <limits>
-#include <string>
-
 #include <windows.h>
+#include <winternl.h>
 
 #include <assert.h>
 #include <ntstatus.h>
 #include <psapi.h>
-#include <winternl.h>
+
+#include <atomic>
+#include <limits>
+#include <string>
 
 #include "base/compiler_specific.h"
 #include "chrome/chrome_elf/crash/crash_helper.h"
-#include "chrome/chrome_elf/hook_util/hook_util.h"
 #include "chrome/chrome_elf/pe_image_safe/pe_image_safe.h"
 #include "chrome/chrome_elf/sha1/sha1.h"
 #include "chrome/chrome_elf/third_party_dlls/hardcoded_blocklist.h"
@@ -26,6 +25,7 @@
 #include "chrome/chrome_elf/third_party_dlls/packed_list_file.h"
 #include "chrome/chrome_elf/third_party_dlls/packed_list_format.h"
 #include "chrome/chrome_elf/third_party_dlls/public_api.h"
+#include "sandbox/policy/win/hook_util/hook_util.h"
 #include "sandbox/win/src/service_resolver.h"
 
 // http://blogs.msdn.com/oldnewthing/archive/2004/10/25/247180.aspx
@@ -405,9 +405,8 @@ ThirdPartyStatus ApplyHook() {
   // Setup() applies the system-service patch, and stores a copy of the original
   // system service coded in |g_thunk_storage|.
   NTSTATUS ntstatus = thunk.Setup(
-      ::GetModuleHandle(kNtdllName), reinterpret_cast<void*>(&__ImageBase),
-      "NtMapViewOfSection", nullptr, entry_point, g_thunk_storage,
-      sizeof(g_thunk_storage), nullptr);
+      ::GetModuleHandle(kNtdllName), "NtMapViewOfSection", entry_point,
+      g_thunk_storage, sizeof(g_thunk_storage), nullptr);
 
   if (!NT_SUCCESS(ntstatus)) {
     // Remember the status code.

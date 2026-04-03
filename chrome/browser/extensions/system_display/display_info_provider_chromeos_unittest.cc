@@ -85,7 +85,7 @@ class DisplayInfoProviderChromeosTest : public ChromeAshTestBase {
     // Wait for TabletModeController to take its initial state from the power
     // manager.
     base::RunLoop().RunUntilIdle();
-    EXPECT_FALSE(display::Screen::GetScreen()->InTabletMode());
+    EXPECT_FALSE(display::Screen::Get()->InTabletMode());
   }
 
   void TearDown() override {
@@ -807,9 +807,10 @@ TEST_F(DisplayInfoProviderChromeosTest, UnifiedModeLayout) {
 
   EXPECT_TRUE(SetDisplayLayout(layout));
   EXPECT_EQ(gfx::Size(650, 743),
-            display::Screen::GetScreen()->GetPrimaryDisplay().size());
-  EXPECT_EQ(displays[2].id,
-            std::to_string(ash::Shell::Get()
+            display::Screen::Get()->GetPrimaryDisplay().size());
+  EXPECT_EQ(
+      displays[2].id,
+      base::NumberToString(ash::Shell::Get()
                                ->display_configuration_controller()
                                ->GetPrimaryMirroringDisplayForUnifiedDesktop()
                                .id()));
@@ -843,8 +844,7 @@ TEST_F(DisplayInfoProviderChromeosTest, SetUnified) {
   // called first.
   info.is_unified = true;
   EXPECT_FALSE(CallSetDisplayUnitInfo(
-      base::NumberToString(
-          display::Screen::GetScreen()->GetPrimaryDisplay().id()),
+      base::NumberToString(display::Screen::Get()->GetPrimaryDisplay().id()),
       info));
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(GetDisplayManager()->IsInUnifiedMode());
@@ -860,8 +860,7 @@ TEST_F(DisplayInfoProviderChromeosTest, SetUnified) {
   // enabled.
   info.is_unified = false;
   EXPECT_TRUE(CallSetDisplayUnitInfo(
-      base::NumberToString(
-          display::Screen::GetScreen()->GetPrimaryDisplay().id()),
+      base::NumberToString(display::Screen::Get()->GetPrimaryDisplay().id()),
       info));
   EXPECT_FALSE(GetDisplayManager()->IsInUnifiedMode());
 
@@ -869,8 +868,7 @@ TEST_F(DisplayInfoProviderChromeosTest, SetUnified) {
   // EnableUnifiedDesktop.
   info.is_unified = true;
   EXPECT_TRUE(CallSetDisplayUnitInfo(
-      base::NumberToString(
-          display::Screen::GetScreen()->GetPrimaryDisplay().id()),
+      base::NumberToString(display::Screen::Get()->GetPrimaryDisplay().id()),
       info));
   EXPECT_TRUE(GetDisplayManager()->IsInUnifiedMode());
 
@@ -1200,8 +1198,7 @@ TEST_F(DisplayInfoProviderChromeosTest, SetBoundsOriginOnPrimary) {
   EXPECT_EQ("1200,0 300x500", secondary.bounds().ToString());
   // The operation failed because the primary property would be set before
   // setting bounds. The primary display shouldn't have been changed, though.
-  EXPECT_NE(display::Screen::GetScreen()->GetPrimaryDisplay().id(),
-            secondary.id());
+  EXPECT_NE(display::Screen::Get()->GetPrimaryDisplay().id(), secondary.id());
 }
 
 TEST_F(DisplayInfoProviderChromeosTest, SetBoundsOriginWithMirroring) {
@@ -1210,8 +1207,7 @@ TEST_F(DisplayInfoProviderChromeosTest, SetBoundsOriginWithMirroring) {
   const display::Display& secondary =
       display::test::DisplayManagerTestApi(display_manager())
           .GetSecondaryDisplay();
-  const display::Display& primary =
-      display::Screen::GetScreen()->GetPrimaryDisplay();
+  const display::Display& primary = display::Screen::Get()->GetPrimaryDisplay();
 
   api::system_display::DisplayProperties info;
   info.bounds_origin_x = 300;
@@ -1251,8 +1247,7 @@ TEST_F(DisplayInfoProviderChromeosTest, SetRotation) {
 
   EXPECT_EQ("0,0 300x500", secondary.bounds().ToString());
   EXPECT_EQ(display::Display::ROTATE_180, secondary.rotation());
-  EXPECT_EQ(display::Screen::GetScreen()->GetPrimaryDisplay().id(),
-            secondary.id());
+  EXPECT_EQ(display::Screen::Get()->GetPrimaryDisplay().id(), secondary.id());
 
   info.rotation = 0;
   EXPECT_TRUE(
@@ -1260,8 +1255,7 @@ TEST_F(DisplayInfoProviderChromeosTest, SetRotation) {
 
   EXPECT_EQ("0,0 300x500", secondary.bounds().ToString());
   EXPECT_EQ(display::Display::ROTATE_0, secondary.rotation());
-  EXPECT_EQ(display::Screen::GetScreen()->GetPrimaryDisplay().id(),
-            secondary.id());
+  EXPECT_EQ(display::Screen::Get()->GetPrimaryDisplay().id(), secondary.id());
 }
 
 // Tests that rotation changes made before entering tablet mode are restored

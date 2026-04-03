@@ -5,14 +5,13 @@
 #include "mojo/core/request_context.h"
 
 #include "base/check.h"
-#include "third_party/abseil-cpp/absl/base/attributes.h"
 
 namespace mojo {
 namespace core {
 
 namespace {
 
-ABSL_CONST_INIT thread_local RequestContext* current_context = nullptr;
+constinit thread_local RequestContext* current_context = nullptr;
 
 }  // namespace
 
@@ -35,8 +34,9 @@ RequestContext::~RequestContext() {
     current_context = nullptr;
 
     MojoTrapEventFlags flags = MOJO_TRAP_EVENT_FLAG_NONE;
-    if (source_ == Source::LOCAL_API_CALL)
+    if (source_ == Source::LOCAL_API_CALL) {
       flags |= MOJO_TRAP_EVENT_FLAG_WITHIN_API_CALL;
+    }
 
     // We send all cancellation notifications first. This is necessary because
     // it's possible that cancelled watches have other pending notifications

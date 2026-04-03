@@ -41,12 +41,14 @@ class NearbySchedulerBaseForTest : public NearbySchedulerBase {
       const std::string& pref_name,
       PrefService* pref_service,
       OnRequestCallback callback,
+      Feature logging_feature,
       const base::Clock* clock)
       : NearbySchedulerBase(retry_failures,
                             require_connectivity,
                             pref_name,
                             pref_service,
                             std::move(callback),
+                            logging_feature,
                             clock),
         time_until_recurring_request_(time_until_recurring_request) {}
 
@@ -88,7 +90,7 @@ class NearbySchedulerBaseTest : public ::testing::Test {
         kTestPrefName, &pref_service_,
         base::BindRepeating(&NearbySchedulerBaseTest::OnRequestCallback,
                             base::Unretained(this)),
-        task_environment_.GetMockClock());
+        Feature::NS, task_environment_.GetMockClock());
   }
 
   void DestroyScheduler() { scheduler_.reset(); }
@@ -135,8 +137,8 @@ class NearbySchedulerBaseTest : public ::testing::Test {
 
   void SetNetworkConnection(bool online) {
     network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-        online ? network::mojom::ConnectionType::CONNECTION_WIFI
-               : network::mojom::ConnectionType::CONNECTION_NONE);
+        online ? net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI
+               : net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE);
   }
 
   size_t on_request_call_count() const { return on_request_call_count_; }

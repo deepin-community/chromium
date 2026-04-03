@@ -9,6 +9,7 @@
 #include "base/base64.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
+#include "build/buildflag.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_refresh_scheduler.h"
@@ -17,6 +18,7 @@
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
+#include "extensions/buildflags/buildflags.h"
 #include "services/network/test/test_network_connection_tracker.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -41,7 +43,7 @@ class CloudPolicyCoreTest : public testing::Test,
  protected:
   CloudPolicyCoreTest() {
     core_ = std::make_unique<CloudPolicyCore>(
-        dm_protocol::kChromeUserPolicyType, std::string(), &store_,
+        dm_protocol::GetChromeUserPolicyType(), std::string(), &store_,
         base::SingleThreadTaskRunner::GetCurrentDefault(),
         network::TestNetworkConnectionTracker::CreateGetter());
     prefs_.registry()->RegisterIntegerPref(
@@ -88,7 +90,7 @@ class CloudPolicyCoreTest : public testing::Test,
   base::test::SingleThreadTaskEnvironment task_environment_;
 
   TestingPrefServiceSimple prefs_;
-  MockCloudPolicyStore store_;
+  MockCloudPolicyStore store_{dm_protocol::GetChromeUserPolicyType()};
   std::unique_ptr<CloudPolicyCore> core_;
 
   int core_connected_callback_count_ = 0;
@@ -216,11 +218,17 @@ TEST_F(CloudPolicyCoreTest, RefreshSoon) {
   testing::Mock::VerifyAndClearExpectations(client);
 }
 
+// Based64 string is used on desktop when reading policy cache from Google
+// Update.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+
 TEST_F(CloudPolicyCoreTest, DmProtocolBase64Constants) {
   std::string encoded =
       base::Base64Encode(dm_protocol::kChromeMachineLevelUserCloudPolicyType);
   EXPECT_EQ(encoded, dm_protocol::kChromeMachineLevelUserCloudPolicyTypeBase64);
 }
+
+#endif
 
 TEST_F(CloudPolicyCoreTest, DestroyWithoutConnecting) {
   core_.reset();

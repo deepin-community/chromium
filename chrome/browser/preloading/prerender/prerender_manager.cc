@@ -5,23 +5,33 @@
 #include "chrome/browser/preloading/prerender/prerender_manager.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/time/time.h"
+#include "base/system/sys_info.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_features.h"
-#include "chrome/browser/page_load_metrics/observers/bookmark_navigation_handle_user_data.h"
+#include "chrome/browser/headless/headless_mode_util.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/field_trial_settings.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_service.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_service_factory.h"
 #include "chrome/browser/preloading/prerender/prerender_utils.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "components/omnibox/browser/autocomplete_match.h"
+#include "components/page_load_metrics/browser/navigation_handle_user_data.h"
+#include "components/page_load_metrics/google/browser/prerender_prewarm_navigation_data.h"
+#include "components/search_engines/template_url_service.h"
+#include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/devtools_agent_host.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/preload_pipeline_info.h"
 #include "content/public/browser/preloading.h"
 #include "content/public/browser/preloading_data.h"
 #include "content/public/browser/prerender_handle.h"
@@ -29,8 +39,19 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
+#include "content/public/common/content_features.h"
 #include "net/base/url_util.h"
 #include "url/gurl.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/components/kiosk/kiosk_utils.h"
+#endif
 
 namespace internal {
 const char kHistogramPrerenderPredictionStatusDefaultSearchEngine[] =
@@ -42,6 +63,9 @@ const char kHistogramPrerenderPredictionStatusDirectUrlInput[] =
 namespace {
 
 using content::PreloadingTriggeringOutcome;
+
+const char kHistogramPrerenderPrewarmDecision[] =
+    "Prerender.Experimental.PrewarmDecision";
 
 void MarkPreloadingAttemptAsDuplicate(
     content::PreloadingAttempt* preloading_attempt) {
@@ -58,16 +82,7 @@ content::PreloadingFailureReason ToPreloadingFailureReason(
                            kPreloadingFailureReasonContentEnd));
 }
 
-void AttachBookmarkBarNavigationHandleUserData(
-    content::NavigationHandle& navigation_handle) {
-  BookmarkNavigationHandleUserData::CreateForNavigationHandle(
-      navigation_handle,
-      BookmarkNavigationHandleUserData::InitiatorLocation::kBookmarkBar);
-}
-
 }  // namespace
-
-PrerenderManager::~PrerenderManager() = default;
 
 class PrerenderManager::SearchPrerenderTask {
  public:
@@ -75,7 +90,6 @@ class PrerenderManager::SearchPrerenderTask {
       const GURL& canonical_search_url,
       std::unique_ptr<content::PrerenderHandle> search_prerender_handle)
       : search_prerender_handle_(std::move(search_prerender_handle)),
-        task_started_timestamp_(base::TimeTicks::Now()),
         prerendered_canonical_search_url_(canonical_search_url) {}
 
   ~SearchPrerenderTask() {
@@ -137,49 +151,18 @@ class PrerenderManager::SearchPrerenderTask {
         prerendered_canonical_search_url_, web_contents.GetLastCommittedURL());
   }
 
-  void RecordTimestampOnDidStartNavigation(
-      base::TimeTicks start_navigation_timestamp) {
-    latest_start_navigation_event_timestamp_ = start_navigation_timestamp;
-  }
-
-  void RecordLifeTimeMetric() {
-    // Record the lifetime of this prerender.
-    // @ PrerenderHintReceived    @ Activation/NavigationStarted
-    // |<---------delta---------->|
-    // where:
-    // task_started_timestamp_ = Timestamp@PrerenderHintReceived
-    // latest_start_navigation_event_timestamp_ =
-    //   Timestamp@Activation/NavigationStarted
-    base::TimeDelta delta =
-        latest_start_navigation_event_timestamp_ - task_started_timestamp_;
-    // The upper-bound of this histogram is decided by the default duration of
-    // the search prefetch setting. See `prefetch_caching_limit_ms`.
-    base::UmaHistogramCustomTimes(
-        "Prerender.Experimental.Search."
-        "FirstCorrectPrerenderHintReceivedToRealSearchNavigationStartedDuratio"
-        "n",
-        delta, base::Milliseconds(1), base::Seconds(60), /*buckets=*/50);
-  }
-
   void set_prediction_status(PrerenderPredictionStatus prediction_status) {
     // If the final status was set, do nothing because the status has been
     // finalized.
-    if (prediction_status_ != PrerenderPredictionStatus::kUnused)
+    if (prediction_status_ != PrerenderPredictionStatus::kUnused) {
       return;
+    }
     CHECK_NE(prediction_status, PrerenderPredictionStatus::kUnused);
     prediction_status_ = prediction_status;
   }
 
  private:
   std::unique_ptr<content::PrerenderHandle> search_prerender_handle_;
-
-  // Recorded on OnDidStartNavigation and used on PrimaryPageChanged. Only the
-  // latest recorded TimeTicks is meaningful. See the comment in
-  // PrerenderManager::DidStartNavigation for more information.
-  base::TimeTicks latest_start_navigation_event_timestamp_;
-
-  // Recorded upon starting the task.
-  const base::TimeTicks task_started_timestamp_;
 
   // A task is associated with a prediction, this tracks the correctness of the
   // prediction.
@@ -190,32 +173,7 @@ class PrerenderManager::SearchPrerenderTask {
   const GURL prerendered_canonical_search_url_;
 };
 
-void PrerenderManager::DidStartNavigation(
-    content::NavigationHandle* navigation_handle) {
-  // Only watching the changes to primary main frame.
-  if (!navigation_handle->IsInPrimaryMainFrame() ||
-      navigation_handle->IsSameDocument())
-    return;
-
-  // Ideally it should record the lifetime metric directly here if the search
-  // terms match. However, the DidStartNavigation method can be called in other
-  // cases(for example, the primary page has an ongoing navigation), and we only
-  // care about the latest DidStartNavigation event right before
-  // PrimaryPageChanged, and record metric if the search terms match(Note: we do
-  // not only record the metric on the successful prerender activation, but also
-  // on the failed cases, as long as the predictions are correct, since this
-  // metric is used to understand the search prerender prediction rather than
-  // the prerender operation). Besides this, it would waste the resources if we
-  // parsed the URL for many times. i.e., in this method and in
-  // PrimaryPageChanged. So it only records the timestamp, and
-  // PrimaryPageChanged will record the metric later if needed.
-  // TODO(https://crbug.com/1278634): Record the metrics at the moment
-  // when a suggestion is selected.
-  if (search_prerender_task_) {
-    search_prerender_task_->RecordTimestampOnDidStartNavigation(
-        navigation_handle->NavigationStart());
-  }
-}
+PrerenderManager::~PrerenderManager() = default;
 
 void PrerenderManager::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
@@ -230,128 +188,6 @@ void PrerenderManager::DidFinishNavigation(
   // it needs the navigation_handle to figure out whether the PrimaryPageChanged
   // event is caused by prerender activation.
   ResetPrerenderHandlesOnPrimaryPageChanged(navigation_handle);
-}
-
-base::WeakPtr<content::PrerenderHandle>
-PrerenderManager::StartPrerenderBookmark(const GURL& prerendering_url) {
-  // Helpers to create content::PreloadingAttempt.
-  auto* preloading_data =
-      content::PreloadingData::GetOrCreateForWebContents(web_contents());
-  content::PreloadingURLMatchCallback same_url_matcher =
-      content::PreloadingData::GetSameURLMatcher(prerendering_url);
-
-  // Create new PreloadingAttempt and pass all the values corresponding to
-  // this prerendering attempt for Prerender.
-  content::PreloadingAttempt* preloading_attempt =
-      preloading_data->AddPreloadingAttempt(
-          chrome_preloading_predictor::kMouseHoverOrMouseDownOnBookmarkBar,
-          content::PreloadingType::kPrerender, std::move(same_url_matcher),
-          web_contents()->GetPrimaryMainFrame()->GetPageUkmSourceId());
-
-  // BookmarkBar only allow https protocol.
-  if (!prerendering_url.SchemeIs("https")) {
-    preloading_attempt->SetEligibility(
-        content::PreloadingEligibility::kHttpsOnly);
-    return nullptr;
-  }
-
-  if (bookmark_prerender_handle_) {
-    if (bookmark_prerender_handle_->GetInitialPrerenderingUrl() ==
-        prerendering_url) {
-      // In case a prerender is already present for the URL, prerendering is
-      // eligible but mark triggering outcome as a duplicate.
-      preloading_attempt->SetEligibility(
-          content::PreloadingEligibility::kEligible);
-
-      MarkPreloadingAttemptAsDuplicate(preloading_attempt);
-      return bookmark_prerender_handle_->GetWeakPtr();
-    }
-    bookmark_prerender_handle_.reset();
-  }
-
-  base::RepeatingCallback<void(content::NavigationHandle&)>
-      prerender_navigation_handle_callback =
-          base::BindRepeating(&AttachBookmarkBarNavigationHandleUserData);
-
-  bookmark_prerender_handle_ = web_contents()->StartPrerendering(
-      prerendering_url, content::PreloadingTriggerType::kEmbedder,
-      prerender_utils::kBookmarkBarMetricSuffix,
-      ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK),
-      content::PreloadingHoldbackStatus::kUnspecified, preloading_attempt,
-      /*url_match_predicate=*/std::nullopt,
-      std::move(prerender_navigation_handle_callback));
-
-  return bookmark_prerender_handle_ ? bookmark_prerender_handle_->GetWeakPtr()
-                                    : nullptr;
-}
-
-base::WeakPtr<content::PrerenderHandle>
-PrerenderManager::StartPrerenderNewTabPage(
-    const GURL& prerendering_url,
-    content::PreloadingPredictor predictor) {
-  // Helpers to create content::PreloadingAttempt.
-  auto* preloading_data =
-      content::PreloadingData::GetOrCreateForWebContents(web_contents());
-  content::PreloadingURLMatchCallback same_url_matcher =
-      content::PreloadingData::GetSameURLMatcher(prerendering_url);
-
-  content::PreloadingAttempt* preloading_attempt =
-      preloading_data->AddPreloadingAttempt(
-          predictor, content::PreloadingType::kPrerender,
-          std::move(same_url_matcher),
-          web_contents()->GetPrimaryMainFrame()->GetPageUkmSourceId());
-
-  // New Tab Page only allow https protocol.
-  if (!prerendering_url.SchemeIs("https")) {
-    preloading_attempt->SetEligibility(
-        content::PreloadingEligibility::kHttpsOnly);
-    return nullptr;
-  }
-
-  if (new_tab_page_prerender_handle_) {
-    if (new_tab_page_prerender_handle_->GetInitialPrerenderingUrl() ==
-        prerendering_url) {
-      // In case a prerender is already present for the URL, prerendering is
-      // eligible but mark triggering outcome as a duplicate.
-      preloading_attempt->SetEligibility(
-          content::PreloadingEligibility::kEligible);
-
-      MarkPreloadingAttemptAsDuplicate(preloading_attempt);
-      return new_tab_page_prerender_handle_->GetWeakPtr();
-    }
-    new_tab_page_prerender_handle_.reset();
-  }
-
-  new_tab_page_prerender_handle_ = web_contents()->StartPrerendering(
-      prerendering_url, content::PreloadingTriggerType::kEmbedder,
-      prerender_utils::kNewTabPageMetricSuffix,
-      ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK),
-      content::PreloadingHoldbackStatus::kUnspecified, preloading_attempt);
-
-  return new_tab_page_prerender_handle_
-             ? new_tab_page_prerender_handle_->GetWeakPtr()
-             : nullptr;
-}
-
-void PrerenderManager::StopPrerenderNewTabPage(
-    base::WeakPtr<content::PrerenderHandle> prerender_handle) {
-  if (!prerender_handle) {
-    return;
-  }
-  CHECK(new_tab_page_prerender_handle_);
-  CHECK_EQ(prerender_handle.get(),
-           new_tab_page_prerender_handle_->GetWeakPtr().get());
-  new_tab_page_prerender_handle_.reset();
-}
-
-void PrerenderManager::StopPrerenderBookmark(
-    base::WeakPtr<content::PrerenderHandle> prerender_handle) {
-  if (!prerender_handle) {
-    return;
-  }
-  CHECK_EQ(prerender_handle.get(),
-           bookmark_prerender_handle_->GetWeakPtr().get());
-  bookmark_prerender_handle_.reset();
 }
 
 base::WeakPtr<content::PrerenderHandle>
@@ -382,9 +218,19 @@ PrerenderManager::StartPrerenderDirectUrlInput(
   direct_url_input_prerender_handle_ = web_contents()->StartPrerendering(
       prerendering_url, content::PreloadingTriggerType::kEmbedder,
       prerender_utils::kDirectUrlInputMetricSuffix,
+      /*additional_headers=*/net::HttpRequestHeaders(),
+      /*no_vary_search_hint=*/std::nullopt,
       ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
                                 ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-      content::PreloadingHoldbackStatus::kUnspecified, &preloading_attempt);
+      /*should_warm_up_compositor=*/true,
+      /*should_prepare_paint_tree=*/false,
+      content::PreloadingHoldbackStatus::kUnspecified,
+      content::PreloadPipelineInfo::Create(
+          /*planned_max_preloading_type=*/content::PreloadingType::kPrerender),
+      &preloading_attempt,
+      /*url_match_predicate=*/{},
+      /*prerender_navigation_handle_callback=*/{},
+      /*allow_reuse=*/false);
 
   if (direct_url_input_prerender_handle_) {
     return direct_url_input_prerender_handle_->GetWeakPtr();
@@ -392,43 +238,122 @@ PrerenderManager::StartPrerenderDirectUrlInput(
   return nullptr;
 }
 
+bool PrerenderManager::MaybeStartPrewarmSearchResult() {
+  // TODO(https://crbug.com/423465927): Revalidate the handle when the prewarm
+  // is reused for prerendering.
+  GURL prewarm_url;
+  PrewarmDecision decision = ShouldPrewarm(prewarm_url);
+  base::UmaHistogramEnumeration(kHistogramPrerenderPrewarmDecision, decision);
+  if (decision != PrewarmDecision::kReady) {
+    return false;
+  }
+
+  auto* preloading_data =
+      content::PreloadingData::GetOrCreateForWebContents(web_contents());
+  content::PreloadingAttempt* preloading_attempt =
+      preloading_data->AddPreloadingAttempt(
+          chrome_preloading_predictor::kPrewarmDefaultSearchEngine,
+          content::PreloadingType::kPrerender,
+          content::PreloadingData::GetSameURLMatcher(prewarm_url),
+          web_contents()->GetPrimaryMainFrame()->GetPageUkmSourceId());
+
+  search_prewarm_handle_ = web_contents()->StartPrerendering(
+      prewarm_url, content::PreloadingTriggerType::kEmbedder,
+      prerender_utils::kPrewarmDefaultSearchEngineMetricSuffix,
+      /*additional_headers=*/net::HttpRequestHeaders(),
+      /*no_vary_search_hint=*/std::nullopt,
+      ui::PageTransitionFromInt(ui::PAGE_TRANSITION_GENERATED |
+                                ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
+      /*should_warm_up_compositor=*/true,
+      /*should_prepare_paint_tree=*/true,
+      content::PreloadingHoldbackStatus::kUnspecified,
+      content::PreloadPipelineInfo::Create(
+          /*planned_max_preloading_type=*/content::PreloadingType::kPrerender),
+      preloading_attempt,
+      // Prewarm page won't be activated, so we don't need to match the
+      // prerendering url with the navigation url.
+      // TODO(https://crbug.com/406378765): Revisit when we support process
+      // reuse.
+      /*url_match_predicate=*/
+      base::BindRepeating(
+          [](const GURL& url, const std::optional<content::UrlMatchType>&) {
+            return false;
+          }),
+      base::BindRepeating(
+          &PrerenderManager::OnSearchPrewarmPrerenderNavigationHandle,
+          GetWeakPtr()),
+      /*allow_reuse=*/true);
+
+  return search_prewarm_handle_ != nullptr;
+}
+
+void PrerenderManager::StopPrewarmSearchResultForTesting() {
+  search_prewarm_handle_.reset();
+}
+
+void PrerenderManager::SetPrewarmUrlForTesting(const GURL& url) {
+  prewarm_url_for_testing_ = url;
+}
+
 void PrerenderManager::StartPrerenderSearchResult(
     const GURL& canonical_search_url,
     const GURL& prerendering_url,
     base::WeakPtr<content::PreloadingAttempt> preloading_attempt) {
-  // If the caller does not want to prerender a new result, this does not need
-  // to do anything.
-  if (!ResetSearchPrerenderTaskIfNecessary(canonical_search_url,
-                                           preloading_attempt)) {
+  // Do not re-prerender the same search result.
+  if (search_prerender_task_ &&
+      search_prerender_task_->prerendered_canonical_search_url() ==
+          canonical_search_url) {
+    // In case a prerender is already present for the URL, prerendering is
+    // eligible but mark triggering outcome as a duplicate.
+    if (preloading_attempt) {
+      preloading_attempt->SetEligibility(
+          content::PreloadingEligibility::kEligible);
+      MarkPreloadingAttemptAsDuplicate(preloading_attempt.get());
+    }
     return;
   }
+  // Keep a reference to the previous search prerenderer task so that the
+  // PrerenderHost is not destructed and can be reused.
+  std::unique_ptr<SearchPrerenderTask> previous_search_prerender_task =
+      std::move(search_prerender_task_);
 
   // web_contents() owns the instance that stores this callback, so it is safe
   // to call std::ref.
-  base::RepeatingCallback<bool(const GURL&)> url_match_predicate =
-      base::BindRepeating(&IsSearchDestinationMatch, canonical_search_url,
-                          web_contents()->GetBrowserContext());
+  base::RepeatingCallback<bool(const GURL&,
+                               const std::optional<content::UrlMatchType>&)>
+      url_match_predicate = base::BindRepeating(
+          &IsSearchDestinationMatchWithWebUrlMatchResult, canonical_search_url,
+          web_contents()->GetBrowserContext());
 
   content::PreloadingHoldbackStatus holdback_status_override =
       content::PreloadingHoldbackStatus::kUnspecified;
-  if (base::FeatureList::IsEnabled(features::kPrerenderDSEHoldback)) {
-    holdback_status_override = content::PreloadingHoldbackStatus::kHoldback;
-  }
 
   std::unique_ptr<content::PrerenderHandle> prerender_handle =
       web_contents()->StartPrerendering(
           prerendering_url, content::PreloadingTriggerType::kEmbedder,
           prerender_utils::kDefaultSearchEngineMetricSuffix,
+          /*additional_headers=*/net::HttpRequestHeaders(),
+          /*no_vary_search_hint=*/std::nullopt,
           ui::PageTransitionFromInt(ui::PAGE_TRANSITION_GENERATED |
                                     ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-          holdback_status_override, preloading_attempt.get(),
-          std::move(url_match_predicate));
+          /*should_warm_up_compositor=*/true,
+          /*should_prepare_paint_tree=*/true, holdback_status_override,
+          content::PreloadPipelineInfo::Create(
+              /*planned_max_preloading_type=*/content::PreloadingType::
+                  kPrerender),
+          preloading_attempt.get(), std::move(url_match_predicate),
+          /*prerender_navigation_handle_callback=*/{},
+          features::kPrerender2ReuseSearchResultHost.Get());
 
   if (prerender_handle) {
     CHECK(!search_prerender_task_)
         << "SearchPrerenderTask should be reset before setting a new one.";
     search_prerender_task_ = std::make_unique<SearchPrerenderTask>(
         canonical_search_url, std::move(prerender_handle));
+  }
+  if (previous_search_prerender_task) {
+    previous_search_prerender_task->set_prediction_status(
+        PrerenderPredictionStatus::kCancelled);
   }
 }
 
@@ -437,7 +362,7 @@ void PrerenderManager::StopPrerenderSearchResult(
   if (search_prerender_task_ &&
       search_prerender_task_->prerendered_canonical_search_url() ==
           canonical_search_url) {
-    // TODO(https://crbug.com/1295170): Now there is no kUnused record: all the
+    // TODO(crbug.com/40214220): Now there is no kUnused record: all the
     // unused tasks are canceled before navigation happens. Consider recording
     // the result upon opening the URL rather than waiting for the navigation
     // finishes.
@@ -484,7 +409,7 @@ void PrerenderManager::ResetPrerenderHandlesOnPrimaryPageChanged(
   }
 
   if (search_prerender_task_) {
-    // TODO(https://crbug.com/1278634): Move all operations below into a
+    // TODO(crbug.com/40208255): Move all operations below into a
     // dedicated method of SearchPrerenderTask.
 
     bool is_search_destination_match = IsSearchDestinationMatch(
@@ -492,12 +417,8 @@ void PrerenderManager::ResetPrerenderHandlesOnPrimaryPageChanged(
         web_contents()->GetBrowserContext(), opened_url);
 
     if (is_search_destination_match) {
-      // We may want to record this metric on AutocompleteMatch selected relying
-      // on GetMatchSelectionTimestamp. But this is for rough estimation so it
-      // may not need the precise data.
       search_prerender_task_->set_prediction_status(
           PrerenderPredictionStatus::kHitFinished);
-      search_prerender_task_->RecordLifeTimeMetric();
     }
 
     if (is_search_destination_match &&
@@ -507,35 +428,91 @@ void PrerenderManager::ResetPrerenderHandlesOnPrimaryPageChanged(
 
     search_prerender_task_.reset();
   }
-
-  bookmark_prerender_handle_.reset();
 }
 
-bool PrerenderManager::ResetSearchPrerenderTaskIfNecessary(
-    const GURL& canonical_search_url,
-    base::WeakPtr<content::PreloadingAttempt> preloading_attempt) {
-  if (!search_prerender_task_)
-    return true;
-
-  // Do not re-prerender the same search result.
-  // TODO(https://crbug.com/1278634): re-prerender the search result if the
-  // prerendered content has been removed.
-  if (search_prerender_task_->prerendered_canonical_search_url() ==
-      canonical_search_url) {
-    // In case a prerender is already present for the URL, prerendering is
-    // eligible but mark triggering outcome as a duplicate.
-    if (preloading_attempt) {
-      preloading_attempt->SetEligibility(
-          content::PreloadingEligibility::kEligible);
-
-      MarkPreloadingAttemptAsDuplicate(preloading_attempt.get());
-    }
-    return false;
+PrerenderManager::PrewarmDecision PrerenderManager::ShouldPrewarm(
+    GURL& prewarm_url) {
+  if (search_prewarm_handle_ || HasSearchResultPagePrerendered()) {
+    return PrewarmDecision::kAlreadyExists;
   }
-  search_prerender_task_->set_prediction_status(
-      PrerenderPredictionStatus::kCancelled);
-  search_prerender_task_.reset();
-  return true;
+  if (!base::FeatureList::IsEnabled(features::kPrewarm)) {
+    return PrewarmDecision::kDisabled;
+  }
+  if (static_cast<uint64_t>(features::kMinMemoryThresholdMb.Get()) >
+      base::SysInfo::AmountOfTotalPhysicalMemory().InMiB()) {
+    return PrewarmDecision::kLowMemory;
+  }
+  if (headless::IsHeadlessMode()) {
+    return PrewarmDecision::kInHeadlessMode;
+  }
+  if (content::DevToolsAgentHost::IsDebuggerAttached(web_contents()) &&
+      !features::kForceEnableWithDevTools.Get()) {
+    // TODO(https://crbug.com/431928370): Allows this once the prewarm support
+    // is implemented in the CDP.
+    return PrewarmDecision::kDebuggerAttached;
+  }
+  prewarm_url =
+      prewarm_url_for_testing_.value_or(GURL(features::kPrewarmUrl.Get()));
+  if (!prewarm_url.is_valid()) {
+    // A valid URL would not be provided if the feature is enabled from
+    // chrome://flags, or arbitrary command line options.
+    return PrewarmDecision::kInvalidUrl;
+  }
+  if (!prewarm_url_for_testing_.has_value() &&
+      features::kPrewarmZeroSuggestTrigger.Get()) {
+    // Check if the prewarm URL is aligned with the default search provider.
+    // This check should be done only when the feature is correctly configured
+    // for the production.
+    // TODO(https://crbug.com/434823934): Once we ensure the feature is
+    // promising, integrate it with the template service for other search
+    // providers.
+    auto* template_url_service = TemplateURLServiceFactory::GetForProfile(
+        Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
+    if (!template_url_service) {
+      return PrewarmDecision::kNoTemplateUrlService;
+    }
+    if (!template_url_service->GetDefaultSearchProviderOrigin()
+             .IsSameOriginWith(prewarm_url)) {
+      return PrewarmDecision::kNotSameOriginWithDSE;
+    }
+  }
+  if (web_contents()->GetPictureInPictureOptions().has_value()) {
+    // Disables the feature in the Picture-in-Picture window as it disallows
+    // any navigation. See,
+    // https://wicg.github.io/document-picture-in-picture/#close-on-navigate.
+    return PrewarmDecision::kInPictureInPicture;
+  }
+
+#if !BUILDFLAG(IS_ANDROID)
+  if (auto* tab = tabs::TabInterface::MaybeGetFromContents(web_contents())) {
+    if (web_app::AppBrowserController::IsIsolatedWebApp(
+            tab->GetBrowserWindowInterface())) {
+      // Disable the feature in the Isolated Web App window as it disallows
+      // cross-origin navigation.
+      return PrewarmDecision::kInIsolatedWebApp;
+    }
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_CHROMEOS)
+  if (chromeos::IsKioskSession()) {
+    return PrewarmDecision::kInKioskSession;
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+  return PrewarmDecision::kReady;
+}
+
+void PrerenderManager::OnSearchPrewarmPrerenderNavigationHandle(
+    content::NavigationHandle& navigation_handle) {
+  // Set the PrerenderPrewarmNavigationData for the navigation. This is used to
+  // determine if a navigation is a DSE prewarm navigation, and if the
+  // navigation happened after a DSE prewarm. Note that `prerender_host_reused`
+  // is set to false here because this is a new navigation and we are not
+  // certain if this is a prerender navigation or not yet.
+  page_load_metrics::PrerenderPrewarmNavigationData::GetOrCreate(
+      &navigation_handle,
+      /*prewarm_committed=*/true);
 }
 
 PrerenderManager::PrerenderManager(content::WebContents* web_contents)

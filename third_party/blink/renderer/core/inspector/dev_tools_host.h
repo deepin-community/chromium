@@ -30,6 +30,8 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_DEV_TOOLS_HOST_H_
 
 #include "base/values.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_accelerator.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_show_context_menu_item.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
@@ -42,7 +44,6 @@ class Document;
 class FrontendMenuProvider;
 class InspectorFrontendClient;
 class LocalFrame;
-class ShowContextMenuItem;
 
 class CORE_EXPORT DevToolsHost final : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
@@ -66,7 +67,7 @@ class CORE_EXPORT DevToolsHost final : public ScriptWrappable {
                               float y,
                               const HeapVector<Member<ShowContextMenuItem>>&,
                               Document* = nullptr);
-  void sendMessageToEmbedder(base::Value::Dict message);
+  void sendMessageToEmbedder(base::DictValue message);
   void sendMessageToEmbedder(const String& message);
 
   bool isHostedMode();

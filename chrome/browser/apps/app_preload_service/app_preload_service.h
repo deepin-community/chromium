@@ -6,16 +6,17 @@
 #define CHROME_BROWSER_APPS_APP_PRELOAD_SERVICE_APP_PRELOAD_SERVICE_H_
 
 #include <memory>
+#include <vector>
 
 #include "base/auto_reset.h"
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
-#include "chrome/browser/apps/app_preload_service/app_preload_server_connector.h"
+#include "chrome/browser/apps/app_preload_service/preload_app_definition.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/services/app_service/public/cpp/package_id.h"
 
 class Profile;
 
@@ -29,10 +30,7 @@ class PrefRegistrySyncable;
 
 namespace apps {
 
-class DeviceInfoManager;
 class PreloadAppDefinition;
-
-struct DeviceInfo;
 
 // Debugging feature to always run the App Preload Service on startup, even if
 // the Profile would not normally be eligible.
@@ -41,6 +39,18 @@ BASE_DECLARE_FEATURE(kAppPreloadServiceForceRun);
 // Debugging/testing feature to install test apps returned by the server, which
 // are normally silently ignored.
 BASE_DECLARE_FEATURE(kAppPreloadServiceEnableTestApps);
+
+// Feature to allow installing arc apps returned by the server.
+BASE_DECLARE_FEATURE(kAppPreloadServiceEnableArcApps);
+
+// Feature to allow apps to be pinned to the shelf.
+BASE_DECLARE_FEATURE(kAppPreloadServiceEnableShelfPin);
+
+// Feature to allow ordering of apps in launcher.
+BASE_DECLARE_FEATURE(kAppPreloadServiceEnableLauncherOrder);
+
+// Feature to allow App Preload Service to run for all user types.
+BASE_DECLARE_FEATURE(kAppPreloadServiceAllUserTypes);
 
 class AppPreloadService : public KeyedService {
  public:
@@ -53,6 +63,22 @@ class AppPreloadService : public KeyedService {
 
   // Registers prefs used for state management of the App Preload Service.
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+
+  using GetPinAppsCallback =
+      base::OnceCallback<void(const std::vector<PackageId>& pin_apps,
+                              const std::vector<PackageId>& pin_order)>;
+
+  // Returns list of apps to pin and desired pin order.  Callback is invoked
+  // immediately if data is ready, or when data is received. `pin_apps` is the
+  // list of apps to be installed by AppPreloadService and requested to be
+  // pinned.  `pin_order` is the desired pin order, it should include apps from
+  // `pin_apps` and other default-installed apps such as chrome to show were the
+  // new apps are to be pinned.
+  void GetPinApps(GetPinAppsCallback callback);
+
+  // Returns the launcher ordering.  Callback is invoked immediately if data is
+  // ready, or when data is received.
+  void GetLauncherOrdering(base::OnceCallback<void(const LauncherOrdering&)>);
 
   using PreloadStatusCallback = base::OnceCallback<void(bool)>;
 
@@ -75,12 +101,13 @@ class AppPreloadService : public KeyedService {
   // service, processes the list and installs the app list. This call should
   // only be used the first time a profile is created on the device as this call
   // installs a set of default and OEM apps.
-  void StartAppInstallationForFirstLogin(base::TimeTicks start_time,
-                                         DeviceInfo device_info);
+  void StartAppInstallationForFirstLogin(base::TimeTicks start_time);
   // Processes the list of apps retrieved by the server connector.
   void OnGetAppsForFirstLoginCompleted(
       base::TimeTicks start_time,
-      std::optional<std::vector<PreloadAppDefinition>> apps);
+      std::optional<std::vector<PreloadAppDefinition>> apps,
+      LauncherOrdering launcher_ordering,
+      ShelfPinOrdering shelf_pin_ordering);
   void OnAppInstallationsCompleted(base::TimeTicks start_time,
                                    const std::vector<bool>& results);
   // Called when the installation flow started by
@@ -90,11 +117,17 @@ class AppPreloadService : public KeyedService {
 
   bool ShouldInstallApp(const PreloadAppDefinition& app);
 
-  const base::Value::Dict& GetStateManager() const;
+  const base::DictValue& GetStateManager() const;
 
   raw_ptr<Profile> profile_;
-  std::unique_ptr<AppPreloadServerConnector> server_connector_;
-  std::unique_ptr<DeviceInfoManager> device_info_manager_;
+  // Set true when response is received, or if APS is complete and not running.
+  bool data_ready_ = false;
+  std::vector<PackageId> pin_apps_;
+  std::vector<PackageId> pin_order_;
+  std::vector<GetPinAppsCallback> get_pin_apps_callbacks_;
+  LauncherOrdering launcher_ordering_;
+  std::vector<base::OnceCallback<void(const LauncherOrdering&)>>
+      get_launcher_ordering_callbacks_;
 
   // For testing
   PreloadStatusCallback installation_complete_callback_;

@@ -4,6 +4,8 @@
 
 #include "chrome/renderer/extensions/api/extension_hooks_delegate.h"
 
+#include <string_view>
+
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
@@ -28,13 +30,13 @@ namespace extensions {
 class ExtensionHooksDelegateTest
     : public NativeExtensionBindingsSystemUnittest {
  public:
-  ExtensionHooksDelegateTest() {}
+  ExtensionHooksDelegateTest() = default;
 
   ExtensionHooksDelegateTest(const ExtensionHooksDelegateTest&) = delete;
   ExtensionHooksDelegateTest& operator=(const ExtensionHooksDelegateTest&) =
       delete;
 
-  ~ExtensionHooksDelegateTest() override {}
+  ~ExtensionHooksDelegateTest() override = default;
 
   // NativeExtensionBindingsSystemUnittest:
   void SetUp() override {
@@ -63,6 +65,7 @@ class ExtensionHooksDelegateTest
     bindings_system()->UpdateBindingsForContext(script_context_);
   }
   void TearDown() override {
+    messaging_service_->InvalidatePorts(script_context_);
     script_context_ = nullptr;
     extension_ = nullptr;
     messaging_service_.reset();
@@ -71,7 +74,9 @@ class ExtensionHooksDelegateTest
   bool UseStrictIPCMessageSender() override { return true; }
 
   virtual scoped_refptr<const Extension> BuildExtension() {
-    return ExtensionBuilder("foo").Build();
+    // TODO(https://crbug.com/40804030): Update this to use MV3.
+    // Some extension module methods only exist in MV2.
+    return ExtensionBuilder("foo").SetManifestVersion(2).Build();
   }
 
   NativeRendererMessagingService* messaging_service() {
@@ -83,7 +88,7 @@ class ExtensionHooksDelegateTest
  private:
   std::unique_ptr<NativeRendererMessagingService> messaging_service_;
 
-  raw_ptr<ScriptContext, ExperimentalRenderer> script_context_ = nullptr;
+  raw_ptr<ScriptContext> script_context_ = nullptr;
   scoped_refptr<const Extension> extension_;
 };
 
@@ -100,13 +105,16 @@ TEST_F(ExtensionHooksDelegateTest, MessagingSanityChecks) {
   tester.TestConnect("", "", self_target);
 
   constexpr char kStandardMessage[] = R"({"data":"hello"})";
+  // We expect the port to remain OPEN for all these cases, as even when a
+  // callback isn't supplied we return a promise which may be fulfilled with a
+  // response if any of the associated event listeners choose to reply.
   tester.TestSendMessage("{data: 'hello'}", kStandardMessage, self_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendMessage("{data: 'hello'}, function() {}", kStandardMessage,
                          self_target, SendMessageTester::OPEN);
 
   tester.TestSendRequest("{data: 'hello'}", kStandardMessage, self_target,
-                         SendMessageTester::CLOSED);
+                         SendMessageTester::OPEN);
   tester.TestSendRequest("{data: 'hello'}, function() {}", kStandardMessage,
                          self_target, SendMessageTester::OPEN);
 
@@ -121,6 +129,7 @@ TEST_F(ExtensionHooksDelegateTest, SendRequestDisabled) {
   // extension with an event page).
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("foo")
+          .SetManifestVersion(2)
           .SetBackgroundContext(ExtensionBuilder::BackgroundContext::EVENT_PAGE)
           .SetLocation(mojom::ManifestLocation::kUnpacked)
           .Build();
@@ -282,26 +291,27 @@ TEST_F(ExtensionHooksDelegateTest, GetURL) {
           GURL(extension()->url().spec() + "https://www.google.com"));
 }
 
-class ExtensionHooksDelegateMV3Test : public ExtensionHooksDelegateTest {
+class ExtensionHooksDelegateModernTest : public ExtensionHooksDelegateTest {
  public:
-  ExtensionHooksDelegateMV3Test() = default;
-  ~ExtensionHooksDelegateMV3Test() override = default;
+  ExtensionHooksDelegateModernTest() = default;
+  ~ExtensionHooksDelegateModernTest() override = default;
 
   scoped_refptr<const Extension> BuildExtension() override {
-    return ExtensionBuilder("foo").SetManifestVersion(3).Build();
+    return ExtensionBuilder("foo").Build();
   }
 };
 
-TEST_F(ExtensionHooksDelegateMV3Test, AliasesArentAvailableInMV3) {
+TEST_F(ExtensionHooksDelegateModernTest, AliasesArentAvailable) {
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
 
-  auto script_to_value = [context](base::StringPiece source) {
+  auto script_to_value = [context](std::string_view source) {
     return V8ToString(V8ValueFromScriptSource(context, source), context);
   };
 
   EXPECT_EQ("undefined", script_to_value("chrome.extension.connect"));
   EXPECT_EQ("undefined", script_to_value("chrome.extension.connectNative"));
+  EXPECT_EQ("undefined", script_to_value("chrome.extension.getURL"));
   EXPECT_EQ("undefined", script_to_value("chrome.extension.onConnect"));
   EXPECT_EQ("undefined", script_to_value("chrome.extension.onConnectExternal"));
   EXPECT_EQ("undefined", script_to_value("chrome.extension.onMessage"));

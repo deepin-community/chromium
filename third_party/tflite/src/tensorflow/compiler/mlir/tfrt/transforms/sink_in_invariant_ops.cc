@@ -13,17 +13,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <algorithm>
-#include <cstdint>
 #include <memory>
-#include <string>
 #include <utility>
-#include <vector>
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
@@ -31,16 +25,16 @@ limitations under the License.
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
-#include "mlir/IR/Location.h"  // from @llvm-project
-#include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/SymbolTable.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/IR/Visitors.h"  // from @llvm-project
-#include "mlir/Interfaces/CallInterfaces.h"  // from @llvm-project
+#include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Support/TypeID.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
 
 namespace tensorflow {
 namespace {
@@ -55,15 +49,28 @@ bool IsSinkCandidate(mlir::Operation *op) {
 // Check if the op is allowed to be sinked. We are being conservative here to
 // whilelist very limited set of ops here.
 struct AllowSinkHelper {
-  explicit AllowSinkHelper(mlir::Operation *op, int arg_index) {
+  explicit AllowSinkHelper(mlir::Operation* sinked_op, mlir::Operation* user,
+                           int arg_index) {
     if (llvm::isa<mlir::TF::BatchFunctionOp,
-                  mlir::TF::StatefulPartitionedCallOp>(op)) {
+                  mlir::TF::StatefulPartitionedCallOp>(user)) {
       allow_sink_to = true;
       callee_arg_index = arg_index;
       return;
     }
 
-    if (llvm::isa<mlir::TF::IfOp>(op) && arg_index > 0) {
+    // We tend to limit this support on WhileOp to only VarHandleOp to satisfy
+    // IFRT lowering requirements.
+    // Sinking other invariants like ConstOp is error-prone because it requires
+    // non-trivial effort to avoid sinking Consts when they are used by cond
+    // function and we don't need such support.
+    if (llvm::isa<mlir::TF::VarHandleOp>(sinked_op) &&
+        llvm::isa<mlir::TF::WhileOp>(user)) {
+      allow_sink_to = true;
+      callee_arg_index = arg_index;
+      return;
+    }
+
+    if (llvm::isa<mlir::TF::IfOp>(user) && arg_index > 0) {
       allow_sink_to = true;
       callee_arg_index = arg_index - 1;
       return;
@@ -82,7 +89,7 @@ llvm::SmallVector<mlir::Value> FindValueInCallees(
   llvm::SmallDenseSet<llvm::StringRef> callees;
   for (const auto &named_attr : caller->getAttrs()) {
     if (auto symbol_attr =
-            named_attr.getValue().dyn_cast<mlir::FlatSymbolRefAttr>()) {
+            mlir::dyn_cast<mlir::FlatSymbolRefAttr>(named_attr.getValue())) {
       auto symbol = symbol_attr.getValue();
 
       auto callee = symbol_table.lookup<mlir::func::FuncOp>(symbol);
@@ -113,7 +120,8 @@ void FindSinkTarget(
   for (mlir::OpOperand &use : value.getUses()) {
     auto *user = use.getOwner();
 
-    AllowSinkHelper helper(user, use.getOperandNumber());
+    AllowSinkHelper helper(original.getDefiningOp(), user,
+                           use.getOperandNumber());
 
     if (helper.allow_sink_to) {
       auto values = FindValueInCallees(symbol_table, symbol_users, user,
@@ -122,6 +130,14 @@ void FindSinkTarget(
         FindSinkTarget(symbol_table, symbol_users, original, value, targets);
       }
     } else if (value != original) {
+      // If the sinked op is directly used by ReturnOp, we don't sink it.
+      // One example is for tf.WhileOp, the input and output of the cond
+      // function and the body function must be the same. If the cond function
+      // has an input of type tf.VarHandleOp and it just return the VarHandleOp,
+      // we don't need to sink it.
+      if (llvm::isa<mlir::func::ReturnOp>(user)) {
+        continue;
+      }
       targets[&use].insert(original);
     }
   }

@@ -10,6 +10,7 @@
 
 #include "ash/ash_export.h"
 #include "ash/public/cpp/keyboard/keyboard_controller_observer.h"
+#include "ash/public/cpp/system/toast_data.h"
 #include "ash/shelf/shelf_observer.h"
 #include "ash/system/unified/unified_system_tray.h"
 #include "base/functional/callback.h"
@@ -30,14 +31,14 @@ class Rect;
 }
 
 namespace views {
-class LabelButton;
+class Button;
 class Widget;
 }
 
 namespace ash {
 
+class SystemToastView;
 class ToastManagerImplTest;
-class SystemToastStyle;
 
 class ASH_EXPORT ToastOverlay : public ui::ImplicitAnimationObserver,
                                 public KeyboardControllerObserver,
@@ -57,21 +58,12 @@ class ASH_EXPORT ToastOverlay : public ui::ImplicitAnimationObserver,
   // Offset of the overlay from the edge of the work area.
   static constexpr int kOffset = 8;
 
-  // Creates the Toast overlay UI. `text` is the message to be shown, and
-  // `dismiss_text` is the dismiss button's text. The dismiss button will only
-  // be displayed if `dismiss_text` is not empty. `dismiss_callback` will be
-  // called when the dismiss button is pressed. An icon will show on the left
-  // side if `leading_icon` is not empty.
+  // Creates the Toast overlay UI.
   // To test different Toast UI variations, enable debug shortcuts by building
   // with flag `--ash-debug-shortcuts` and use command "Shift + Ctrl + Alt + O".
   ToastOverlay(Delegate* delegate,
-               const std::u16string& text,
-               const std::u16string& dismiss_text,
-               const gfx::VectorIcon& leading_icon,
-               base::TimeDelta duration,
-               bool persist_on_hover,
-               aura::Window* root_window,
-               base::RepeatingClosure dismiss_callback);
+               const ToastData& toast_data,
+               aura::Window* root_window);
 
   ToastOverlay(const ToastOverlay&) = delete;
   ToastOverlay& operator=(const ToastOverlay&) = delete;
@@ -84,26 +76,25 @@ class ASH_EXPORT ToastOverlay : public ui::ImplicitAnimationObserver,
   // Update the position and size of toast.
   void UpdateOverlayBounds();
 
-  const std::u16string GetText();
+  const std::u16string GetText() const;
 
-  // Returns true if the toast has a button and it can be highlighted for
-  // accessibility, false otherwise.
-  bool MaybeToggleA11yHighlightOnDismissButton();
+  // Requests focus on the toast's button if there is one. Return true if it was
+  // successful.
+  bool RequestFocusOnActiveToastButton();
 
-  // Activates the dismiss button in `overlay_view_` if it is highlighted.
-  // Returns false if `is_dismiss_button_highlighted_` is false.
-  bool MaybeActivateHighlightedDismissButton();
+  // Returns if the button is focused in the toast. If the toast does not have a
+  // button, it returns false.
+  bool IsButtonFocused() const;
 
   // UnifiedSystemTray::Observer:
   void OnSliderBubbleHeightChanged() override;
 
-  // Returns if the dismiss button is highlighted in the toast. If the toast
-  // does not have a dismiss button, it returns false.
-  bool IsDismissButtonHighlighted() const;
+  views::Widget* widget_for_testing();
+
+  views::Button* button_for_testing();
 
  private:
   friend class ToastManagerImplTest;
-  friend class DesksTestApi;
 
   class ToastDisplayObserver;
   class ToastHoverObserver;
@@ -134,17 +125,13 @@ class ASH_EXPORT ToastOverlay : public ui::ImplicitAnimationObserver,
   void OnHotseatStateChanged(HotseatState old_state,
                              HotseatState new_state) override;
 
-  views::Widget* widget_for_testing();
-  views::LabelButton* dismiss_button_for_testing();
-
   const raw_ptr<Delegate> delegate_;
   const std::u16string text_;
-  const std::u16string dismiss_text_;
   std::unique_ptr<views::Widget> overlay_widget_;
-  std::unique_ptr<SystemToastStyle> overlay_view_;
+  std::unique_ptr<SystemToastView> overlay_view_;
   std::unique_ptr<ToastDisplayObserver> display_observer_;
   raw_ptr<aura::Window> root_window_;
-  base::RepeatingClosure dismiss_callback_;
+  base::RepeatingClosure button_callback_;
 
   // Used to pause and resume the `ToastManagerImpl`'s
   // `current_toast_expiration_timer_` if we are allowing for the toast to

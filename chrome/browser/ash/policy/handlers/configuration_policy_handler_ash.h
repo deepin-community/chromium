@@ -106,7 +106,7 @@ class PinnedLauncherAppsPolicyHandler : public ListPolicyHandler {
 
   // Converts the list of strings |filtered_list| to a list of dictionaries and
   // sets the pref.
-  void ApplyList(base::Value::List filtered_list, PrefValueMap* prefs) override;
+  void ApplyList(base::ListValue filtered_list, PrefValueMap* prefs) override;
 };
 
 // Maps the DefaultHandlersForFileExtensions policy to the corresponding pref.
@@ -251,6 +251,24 @@ class ArcServicePolicyHandler : public IntRangePolicyHandlerBase {
 
  private:
   const std::string pref_;
+};
+
+// Instantiated for the `ArcGoogleLocationServicesEnabled` policy. This
+// overrides the old handling of the `ArcGoogleLocationServicesEnabled` policy
+// when the Privacy Hub location is rolled out.
+class ArcLocationServicePolicyHandler : public ArcServicePolicyHandler {
+ public:
+  explicit ArcLocationServicePolicyHandler(const char* policy,
+                                           const char* pref);
+
+  ArcLocationServicePolicyHandler(const ArcLocationServicePolicyHandler&) =
+      delete;
+  ArcLocationServicePolicyHandler& operator=(
+      const ArcLocationServicePolicyHandler&) = delete;
+
+  // IntRangePolicyHandlerBase:
+  void ApplyPolicySettings(const PolicyMap& policies,
+                           PrefValueMap* prefs) override;
 };
 
 }  // namespace policy

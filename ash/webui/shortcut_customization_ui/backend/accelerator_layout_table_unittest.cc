@@ -9,9 +9,7 @@
 #include "ash/public/cpp/accelerator_actions.h"
 #include "ash/public/cpp/accelerators.h"
 #include "ash/public/mojom/accelerator_info.mojom-shared.h"
-#include "base/containers/contains.h"
-#include "base/hash/md5.h"
-#include "base/hash/md5_boringssl.h"
+#include "ash/test/ash_test_util.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -22,9 +20,10 @@ namespace ash {
 namespace {
 
 // The total number of Ash accelerators.
-constexpr int kAshAcceleratorsTotalNum = 152;
+constexpr int kAshAcceleratorsTotalNum = 160;
 // The hash of Ash accelerators.
-constexpr char kAshAcceleratorsHash[] = "d86efe92af0f98f458b6c7eedd050123";
+constexpr char kAshAcceleratorsHash[] =
+    "7c9f5d090e6be1c01bcfca53b67a79956737dbba149b4e683b44c6ace07e509d";
 
 std::string ToActionName(ash::AcceleratorAction action) {
   return base::StrCat(
@@ -59,19 +58,6 @@ struct AshAcceleratorDataCmp {
   }
 };
 
-std::string HashAshAcceleratorData(
-    const std::vector<ash::AcceleratorData>& accelerators) {
-  base::MD5Context context;
-  base::MD5Init(&context);
-  for (const auto& accelerator : accelerators) {
-    base::MD5Update(&context, AshAcceleratorDataToString(accelerator));
-  }
-
-  base::MD5Digest digest;
-  base::MD5Final(&digest, &context);
-  return MD5DigestToBase16(digest);
-}
-
 class AcceleratorLayoutMetadataTest : public testing::Test {
  public:
   AcceleratorLayoutMetadataTest() = default;
@@ -98,11 +84,11 @@ class AcceleratorLayoutMetadataTest : public testing::Test {
 
  protected:
   bool ShouldNotHaveLayouts(ash::AcceleratorAction action) {
-    return base::Contains(kAshAcceleratorsWithoutLayout, action);
+    return kAshAcceleratorsWithoutLayout.contains(action);
   }
 
   bool HasLayouts(ash::AcceleratorAction action) {
-    return base::Contains(ash_accelerator_with_layouts_, action);
+    return ash_accelerator_with_layouts_.contains(action);
   }
 
   // Ash accelerator with layouts.
@@ -115,8 +101,7 @@ class AcceleratorLayoutMetadataTest : public testing::Test {
 // exception list kAshAcceleratorsWithoutLayout.
 TEST_F(AcceleratorLayoutMetadataTest,
        AshAcceleratorsNotInAllowedListShouldHaveLayouts) {
-  for (size_t i = 0; i < ash::kAcceleratorDataLength; ++i) {
-    const ash::AcceleratorData& accel_data = ash::kAcceleratorData[i];
+  for (const ash::AcceleratorData& accel_data : ash::kAcceleratorData) {
     if (ShouldNotHaveLayouts(accel_data.action)) {
       EXPECT_FALSE(HasLayouts(accel_data.action))
           << ToActionName(accel_data.action)
@@ -146,22 +131,18 @@ TEST_F(AcceleratorLayoutMetadataTest,
 //    output.
 TEST_F(AcceleratorLayoutMetadataTest, ModifyAcceleratorShouldUpdateLayout) {
   std::vector<ash::AcceleratorData> ash_accelerators;
-  for (size_t i = 0; i < ash::kAcceleratorDataLength; ++i) {
-    ash_accelerators.emplace_back(ash::kAcceleratorData[i]);
+  for (const ash::AcceleratorData& data : ash::kAcceleratorData) {
+    ash_accelerators.emplace_back(data);
   }
-  for (size_t i = 0; i < ash::kDisableWithNewMappingAcceleratorDataLength;
-       ++i) {
-    ash_accelerators.emplace_back(
-        ash::kDisableWithNewMappingAcceleratorData[i]);
+  for (const ash::AcceleratorData& data :
+       ash::kDisableWithNewMappingAcceleratorData) {
+    ash_accelerators.emplace_back(data);
   }
 
   if (::features::IsImprovedKeyboardShortcutsEnabled()) {
-    for (size_t i = 0;
-         i <
-         ash::kEnabledWithImprovedDesksKeyboardShortcutsAcceleratorDataLength;
-         ++i) {
-      ash_accelerators.emplace_back(
-          ash::kEnabledWithImprovedDesksKeyboardShortcutsAcceleratorData[i]);
+    for (const AcceleratorData& data :
+         ash::kEnabledWithImprovedDesksKeyboardShortcutsAcceleratorData) {
+      ash_accelerators.emplace_back(data);
     }
   }
 
@@ -179,7 +160,7 @@ TEST_F(AcceleratorLayoutMetadataTest, ModifyAcceleratorShouldUpdateLayout) {
   std::stable_sort(ash_accelerators.begin(), ash_accelerators.end(),
                    AshAcceleratorDataCmp());
   const std::string ash_accelerators_hash =
-      HashAshAcceleratorData(ash_accelerators);
+      ash::StableHashOfCollection(ash_accelerators, AshAcceleratorDataToString);
   EXPECT_EQ(ash_accelerators_hash, kAshAcceleratorsHash)
       << kCommonMessage << "kAshAcceleratorsHash=\"" << ash_accelerators_hash
       << "\"\n";

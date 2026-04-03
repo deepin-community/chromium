@@ -52,8 +52,6 @@ def FuncToJITInvocationPass : Pass<"func-to-jit-invocation", "mlir::func::FuncOp
                  "llvm::cl::ZeroOrMore">,
       ListOption<"unroll_factors_", "unroll-factors", "int64_t",
                  "Unrolling in each tile dimension", "llvm::cl::ZeroOrMore">,
-      Option<"max_supported_rank_", "max-supported-rank", "int64_t",
-             /*default=*/"", "Max rank that this kernel supports">,
       Option<"enable_ftz_", "enable-ftz", "bool", /*default=*/"",
              "Enable the denormal flush to zero mode when generating code">,
       Option<"index_64bit_", "index_64bit", "bool", /*default=*/"",
@@ -138,5 +136,29 @@ def CopyCleanupPass : Pass<"copy-cleanup", "mlir::func::FuncOp"> {
     copy.
   }];
 }
+
+def ShapeSimplificationPass
+    : Pass<"shape-simplification", "mlir::func::FuncOp"> {
+  let summary = "Simplify shape ops";
+}
+
+def MergeAssumingOpsPass : Pass<"mhlo-merge-assuming-ops", "func::FuncOp"> {
+  let summary = "Prepare moving dynamic broadcasts up over element-wise "
+    "operations and broadcast the operands rather than the result. This will "
+    "eventually allow for larger fusions.";
+}
+
+def BroadcastPropagationPass : Pass<"mhlo-broadcast-propagation", "func::FuncOp"> {
+  let summary = "Move dynamic broadcasts up over element-wise operations and "
+    "broadcast the operands rather than the result. This will eventually allow "
+    "for larger fusions.";
+}
+
+def LegalizeTensorReshapePass
+    : Pass<"legalize-tensor-reshape", "mlir::func::FuncOp"> {
+  let summary = "Legalize tensor.reshape to mhlo.dynamic_reshape";
+}
+
+
 
 #endif // TF_KERNEL_GEN_PASSES

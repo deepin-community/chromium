@@ -5,7 +5,6 @@
 #ifndef REMOTING_SIGNALING_FAKE_SIGNAL_STRATEGY_H_
 #define REMOTING_SIGNALING_FAKE_SIGNAL_STRATEGY_H_
 
-#include <queue>
 #include <string>
 
 #include "base/memory/weak_ptr.h"
@@ -80,7 +79,7 @@ class FakeSignalStrategy : public SignalStrategy {
   void RemoveListener(Listener* listener) override;
   bool SendStanza(std::unique_ptr<jingle_xmpp::XmlElement> stanza) override;
   bool SendMessage(const SignalingAddress& destination_address,
-                   const ftl::ChromotingMessage& message) override;
+                   SignalingMessage&& message) override;
   std::string GetNextId() override;
   bool IsSignInError() const override;
 

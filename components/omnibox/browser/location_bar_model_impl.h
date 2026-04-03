@@ -36,18 +36,20 @@ class LocationBarModelImpl : public LocationBarModel {
   std::u16string GetFormattedFullURL() const override;
   std::u16string GetURLForDisplay() const override;
   GURL GetURL() const override;
+  bool IsContextualTasksPage() const override;
+  GURL GetContextualTasksInnerFrameURL() const override;
   security_state::SecurityLevel GetSecurityLevel() const override;
   net::CertStatus GetCertStatus() const override;
   metrics::OmniboxEventProto::PageClassification GetPageClassification(
-      OmniboxFocusSource focus_source,
-      bool is_prefetch = false) override;
+      bool is_prefetch = false) const override;
+  metrics::OmniboxEventProto::PageClassification
+  GetOmniboxComposeboxPageClassification() const override;
   const gfx::VectorIcon& GetVectorIcon() const override;
   std::u16string GetSecureDisplayText() const override;
   std::u16string GetSecureAccessibilityText() const override;
   bool ShouldDisplayURL() const override;
   bool IsOfflinePage() const override;
   bool ShouldPreventElision() const override;
-  bool ShouldUseUpdatedConnectionSecurityIndicators() const override;
 
  private:
   std::u16string GetFormattedURL(

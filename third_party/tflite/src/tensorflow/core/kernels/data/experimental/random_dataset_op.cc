@@ -14,6 +14,9 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/kernels/data/experimental/random_dataset_op.h"
 
+#include <cstdint>
+#include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -70,28 +73,29 @@ class RandomDatasetOp::Dataset : public DatasetBase {
   ~Dataset() override {
     manager_->Unref();
     if (owns_resource_) {
-      Status s = resource_mgr_->Delete<SeedGeneratorManager>(
+      absl::Status s = resource_mgr_->Delete<SeedGeneratorManager>(
           resource_handle_.container(), resource_handle_.name());
       if (!s.ok()) {
-        LOG(WARNING) << "Failed to delete RNG resource: " << s.ToString();
+        LOG(WARNING) << "Failed to delete RNG resource: " << s;
       }
     }
   }
 
-  Status MakeSplitProviders(std::vector<std::unique_ptr<SplitProvider>>*
-                                split_providers) const override {
+  absl::Status MakeSplitProviders(std::vector<std::unique_ptr<SplitProvider>>*
+                                      split_providers) const override {
     // We use kint64 to generate an effectively infinite number of "splits".
     // These splits aren't actually used during iteration.
     // TODO(aaudibert): Avoid sending dummy splits over RPC when using tf.data
     // service with RandomDataset.
-    split_providers->push_back(std::make_unique<IndexSplitProvider>(kint64max));
+    split_providers->push_back(std::make_unique<IndexSplitProvider>(
+        std::numeric_limits<int64_t>::max()));
     return absl::OkStatus();
   }
 
   std::unique_ptr<IteratorBase> MakeIteratorInternal(
-      const string& prefix) const override {
+      const std::string& prefix) const override {
     return std::make_unique<Iterator>(
-        Iterator::Params{this, strings::StrCat(prefix, "::Random")},
+        Iterator::Params{this, absl::StrCat(prefix, "::Random")},
         manager_->get().get());
   }
 
@@ -106,7 +110,7 @@ class RandomDatasetOp::Dataset : public DatasetBase {
     return *shapes;
   }
 
-  string DebugString() const override {
+  std::string DebugString() const override {
     name_utils::DatasetDebugStringParams params;
     params.op_version = op_version_;
     params.set_args(seeds_.input_seed(), seeds_.input_seed2());
@@ -118,16 +122,17 @@ class RandomDatasetOp::Dataset : public DatasetBase {
     return kInfiniteCardinality;
   }
 
-  Status InputDatasets(std::vector<const DatasetBase*>* inputs) const override {
+  absl::Status InputDatasets(
+      std::vector<const DatasetBase*>* inputs) const override {
     return absl::OkStatus();
   }
 
-  Status CheckExternalState() const override { return absl::OkStatus(); }
+  absl::Status CheckExternalState() const override { return absl::OkStatus(); }
 
  protected:
-  Status AsGraphDefInternal(SerializationContext* ctx,
-                            DatasetGraphDefBuilder* b,
-                            Node** output) const override {
+  absl::Status AsGraphDefInternal(SerializationContext* ctx,
+                                  DatasetGraphDefBuilder* b,
+                                  Node** output) const override {
     Node* seed_node = nullptr;
     Node* seed2_node = nullptr;
     TF_RETURN_IF_ERROR(b->AddScalar(seeds_.input_seed(), &seed_node));
@@ -159,16 +164,16 @@ class RandomDatasetOp::Dataset : public DatasetBase {
 
     bool SymbolicCheckpointCompatible() const override { return true; }
 
-    Status Initialize(IteratorContext* ctx) override {
+    absl::Status Initialize(IteratorContext* ctx) override {
       mutex_lock l(mu_);
       seed_generator_->GenerateSeeds(&seed_, &seed2_);
       ResetRngs();
       return absl::OkStatus();
     }
 
-    Status GetNextInternal(IteratorContext* ctx,
-                           std::vector<Tensor>* out_tensors,
-                           bool* end_of_sequence) override {
+    absl::Status GetNextInternal(IteratorContext* ctx,
+                                 std::vector<Tensor>* out_tensors,
+                                 bool* end_of_sequence) override {
       out_tensors->reserve(1);
       mutex_lock l(mu_);
       out_tensors->emplace_back(ctx->allocator({}), DT_INT64, TensorShape({}));
@@ -182,8 +187,8 @@ class RandomDatasetOp::Dataset : public DatasetBase {
       return model::MakeSourceNode(std::move(args));
     }
 
-    Status SaveInternal(SerializationContext* ctx,
-                        IteratorStateWriter* writer) override {
+    absl::Status SaveInternal(SerializationContext* ctx,
+                              IteratorStateWriter* writer) override {
       mutex_lock l(mu_);
       // Save state needed to restore the random number generators.
       TF_RETURN_IF_ERROR(
@@ -196,8 +201,8 @@ class RandomDatasetOp::Dataset : public DatasetBase {
       return absl::OkStatus();
     }
 
-    Status RestoreInternal(IteratorContext* ctx,
-                           IteratorStateReader* reader) override {
+    absl::Status RestoreInternal(IteratorContext* ctx,
+                                 IteratorStateReader* reader) override {
       mutex_lock l(mu_);
       // Restore the random number generators.
       int64_t num_random_samples;
@@ -270,7 +275,7 @@ void RandomDatasetOp::MakeDataset(OpKernelContext* ctx, DatasetBase** output) {
   OP_REQUIRES_OK(ctx, ParseScalarArgument<int64_t>(ctx, "seed2", &seed2));
   RandomSeeds seeds(seed, seed2);
   static std::atomic<int64_t> resource_id_counter(0);
-  const string& container = ctx->resource_manager()->default_container();
+  const std::string& container = ctx->resource_manager()->default_container();
   auto name = strings::StrCat(ctx->op_kernel().name(), "/", kSeedGenerator, "_",
                               resource_id_counter.fetch_add(1));
   SeedGeneratorManager* manager = nullptr;
@@ -278,10 +283,10 @@ void RandomDatasetOp::MakeDataset(OpKernelContext* ctx, DatasetBase** output) {
   bool owns_resource = true;
   if (op_version_ == 2) {
     OP_REQUIRES_OK(ctx, HandleFromInput(ctx, 2, &handle));
-    Status s = ctx->resource_manager()->Lookup<SeedGeneratorManager>(
+    absl::Status s = ctx->resource_manager()->Lookup<SeedGeneratorManager>(
         handle.container(), handle.name(), &manager);
     owns_resource = false;
-    if (errors::IsNotFound(s)) {
+    if (absl::IsNotFound(s)) {
       owns_resource = true;
     } else {
       OP_REQUIRES_OK(ctx, s);

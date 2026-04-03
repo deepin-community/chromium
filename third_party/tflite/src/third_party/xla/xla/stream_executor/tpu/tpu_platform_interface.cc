@@ -15,12 +15,14 @@ limitations under the License.
 
 #include "xla/stream_executor/tpu/tpu_platform_interface.h"
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/synchronization/mutex.h"
-#include "xla/stream_executor/multi_platform_manager.h"
 #include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/platform_manager.h"
+#include "xla/tsl/protobuf/error_codes.pb.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/logging.h"  // IWYU pragma: keep
-#include "tsl/protobuf/error_codes.pb.h"
 
 namespace tensorflow {
 namespace tpu {
@@ -32,8 +34,8 @@ TpuPlatformInterface* GetRegisteredPlatformStatic(bool initialize_platform,
   DCHECK_GT(tries_left, 0);
   // Prefer TpuPlatform if it's registered.
   auto status_or_tpu_platform =
-      stream_executor::MultiPlatformManager::PlatformWithName(
-          "TPU", initialize_platform);
+      stream_executor::PlatformManager::PlatformWithName("TPU",
+                                                         initialize_platform);
   if (status_or_tpu_platform.ok()) {
     return static_cast<TpuPlatformInterface*>(status_or_tpu_platform.value());
   }
@@ -42,10 +44,11 @@ TpuPlatformInterface* GetRegisteredPlatformStatic(bool initialize_platform,
                  << status_or_tpu_platform.status();
     return nullptr;
   }
+  LOG(INFO) << "Platform manager status: " << status_or_tpu_platform.status();
 
   // Use any other registered TPU platform.
   auto status_or_other_tpu_platforms =
-      stream_executor::MultiPlatformManager::PlatformsWithFilter(
+      stream_executor::PlatformManager::PlatformsWithFilter(
           [](const stream_executor::Platform* platform) {
             return dynamic_cast<const TpuPlatformInterface*>(platform) !=
                    nullptr;
@@ -72,12 +75,14 @@ TpuPlatformInterface* GetRegisteredPlatformStatic(bool initialize_platform,
 
   --tries_left;
   if (tries_left <= 0) {
-    LOG(INFO) << "No TPU platform found.";
+    LOG(INFO) << "No TPU platform found. Platform manager status: "
+              << status_or_other_tpu_platforms.status();
     return nullptr;
   }
   LOG(INFO)
       << "No TPU platform registered. Waiting 1 second and trying again... ("
-      << tries_left << " tries left)";
+      << tries_left << " tries left) Platform manager status: "
+      << status_or_other_tpu_platforms.status();
   tsl::Env::Default()->SleepForMicroseconds(1000000);  // 1 second
   return GetRegisteredPlatformStatic(initialize_platform, tries_left);
 }
@@ -87,12 +92,12 @@ TpuPlatformInterface* GetRegisteredPlatformStatic(bool initialize_platform,
 /* static */
 TpuPlatformInterface* TpuPlatformInterface::GetRegisteredPlatform(
     bool initialize_platform, int num_tries) {
-  static auto* mu = new absl::Mutex;
+  static auto* const mu = new absl::Mutex;
   static bool requested_initialize_platform = initialize_platform;
   static TpuPlatformInterface* tpu_registered_platform =
       GetRegisteredPlatformStatic(initialize_platform, num_tries);
 
-  absl::MutexLock lock(mu);
+  absl::MutexLock lock(*mu);
   if (!requested_initialize_platform && initialize_platform) {
     // If the first time this function is called, we did not request
     // initializing the platform, but the next caller wants the platform

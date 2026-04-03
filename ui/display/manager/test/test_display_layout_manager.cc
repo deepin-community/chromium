@@ -32,18 +32,15 @@ MultipleDisplayState TestDisplayLayoutManager::GetDisplayState() const {
 
 chromeos::DisplayPowerState TestDisplayLayoutManager::GetPowerState() const {
   NOTREACHED();
-  return chromeos::DISPLAY_POWER_ALL_ON;
 }
 
 bool TestDisplayLayoutManager::GetDisplayLayout(
     const std::vector<raw_ptr<DisplaySnapshot, VectorExperimental>>& displays,
     MultipleDisplayState new_display_state,
     chromeos::DisplayPowerState new_power_state,
-    RefreshRateThrottleState new_throttle_state,
-    bool new_vrr_state,
+    const base::flat_set<int64_t>& new_vrr_enabled_state,
     std::vector<DisplayConfigureRequest>* requests) const {
   NOTREACHED();
-  return false;
 }
 
 std::vector<raw_ptr<DisplaySnapshot, VectorExperimental>>

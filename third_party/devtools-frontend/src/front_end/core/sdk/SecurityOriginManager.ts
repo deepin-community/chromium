@@ -1,38 +1,30 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {Capability, type Target} from './Target.js';
 import {SDKModel} from './SDKModel.js';
+import {Capability} from './Target.js';
 
 export class SecurityOriginManager extends SDKModel<EventTypes> {
-  #mainSecurityOriginInternal: string;
-  #unreachableMainSecurityOriginInternal: string|null;
-  #securityOriginsInternal: Set<string>;
-  constructor(target: Target) {
-    super(target);
-
-    // if a URL is unreachable, the browser will jump to an error page at
-    // 'chrome-error://chromewebdata/', and |this.#mainSecurityOriginInternal| stores
-    // its origin. In this situation, the original unreachable URL's security
-    // origin will be stored in |this.#unreachableMainSecurityOriginInternal|.
-    this.#mainSecurityOriginInternal = '';
-    this.#unreachableMainSecurityOriginInternal = '';
-
-    this.#securityOriginsInternal = new Set();
-  }
+  // if a URL is unreachable, the browser will jump to an error page at
+  // 'chrome-error://chromewebdata/', and |this.#mainSecurityOriginInternal| stores
+  // its origin. In this situation, the original unreachable URL's security
+  // origin will be stored in |this.#unreachableMainSecurityOriginInternal|.
+  #mainSecurityOrigin = '';
+  #unreachableMainSecurityOrigin: string|null = '';
+  #securityOrigins = new Set<string>();
 
   updateSecurityOrigins(securityOrigins: Set<string>): void {
-    const oldOrigins = this.#securityOriginsInternal;
-    this.#securityOriginsInternal = securityOrigins;
+    const oldOrigins = this.#securityOrigins;
+    this.#securityOrigins = securityOrigins;
 
     for (const origin of oldOrigins) {
-      if (!this.#securityOriginsInternal.has(origin)) {
+      if (!this.#securityOrigins.has(origin)) {
         this.dispatchEventToListeners(Events.SecurityOriginRemoved, origin);
       }
     }
 
-    for (const origin of this.#securityOriginsInternal) {
+    for (const origin of this.#securityOrigins) {
       if (!oldOrigins.has(origin)) {
         this.dispatchEventToListeners(Events.SecurityOriginAdded, origin);
       }
@@ -40,31 +32,33 @@ export class SecurityOriginManager extends SDKModel<EventTypes> {
   }
 
   securityOrigins(): string[] {
-    return [...this.#securityOriginsInternal];
+    return [...this.#securityOrigins];
   }
 
   mainSecurityOrigin(): string {
-    return this.#mainSecurityOriginInternal;
+    return this.#mainSecurityOrigin;
   }
 
   unreachableMainSecurityOrigin(): string|null {
-    return this.#unreachableMainSecurityOriginInternal;
+    return this.#unreachableMainSecurityOrigin;
   }
 
   setMainSecurityOrigin(securityOrigin: string, unreachableSecurityOrigin: string): void {
-    this.#mainSecurityOriginInternal = securityOrigin;
-    this.#unreachableMainSecurityOriginInternal = unreachableSecurityOrigin || null;
+    this.#mainSecurityOrigin = securityOrigin;
+    this.#unreachableMainSecurityOrigin = unreachableSecurityOrigin || null;
     this.dispatchEventToListeners(Events.MainSecurityOriginChanged, {
-      mainSecurityOrigin: this.#mainSecurityOriginInternal,
-      unreachableMainSecurityOrigin: this.#unreachableMainSecurityOriginInternal,
+      mainSecurityOrigin: this.#mainSecurityOrigin,
+      unreachableMainSecurityOrigin: this.#unreachableMainSecurityOrigin,
     });
   }
 }
 
 export enum Events {
+  /* eslint-disable @typescript-eslint/naming-convention -- Used by web_tests. */
   SecurityOriginAdded = 'SecurityOriginAdded',
   SecurityOriginRemoved = 'SecurityOriginRemoved',
   MainSecurityOriginChanged = 'MainSecurityOriginChanged',
+  /* eslint-enable @typescript-eslint/naming-convention */
 }
 
 export interface MainSecurityOriginChangedEvent {
@@ -72,11 +66,11 @@ export interface MainSecurityOriginChangedEvent {
   unreachableMainSecurityOrigin: string|null;
 }
 
-export type EventTypes = {
-  [Events.SecurityOriginAdded]: string,
-  [Events.SecurityOriginRemoved]: string,
-  [Events.MainSecurityOriginChanged]: MainSecurityOriginChangedEvent,
-};
+export interface EventTypes {
+  [Events.SecurityOriginAdded]: string;
+  [Events.SecurityOriginRemoved]: string;
+  [Events.MainSecurityOriginChanged]: MainSecurityOriginChangedEvent;
+}
 
 // TODO(jarhar): this is the one of the two usages of Capability.None. Do something about it!
-SDKModel.register(SecurityOriginManager, {capabilities: Capability.None, autostart: false});
+SDKModel.register(SecurityOriginManager, {capabilities: Capability.NONE, autostart: false});

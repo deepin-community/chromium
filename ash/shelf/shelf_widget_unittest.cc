@@ -42,15 +42,14 @@
 #include "base/run_loop.h"
 #include "base/test/icu_test_util.h"
 #include "base/test/scoped_feature_list.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "components/session_manager/session_manager_types.h"
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/base/models/image_model.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/display/display.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_types.h"
@@ -74,7 +73,7 @@ void TestLauncherAlignment(aura::Window* root,
                            ShelfAlignment alignment,
                            const gfx::Rect& expected) {
   Shelf::ForWindow(root)->SetAlignment(alignment);
-  EXPECT_EQ(expected.ToString(), display::Screen::GetScreen()
+  EXPECT_EQ(expected.ToString(), display::Screen::Get()
                                      ->GetDisplayNearestWindow(root)
                                      .work_area()
                                      .ToString());
@@ -160,30 +159,18 @@ TEST_F(ShelfWidgetTest, TestAlignmentForMultipleDisplays) {
   }
 }
 
-class ShelfWidgetDarkLightModeTest : public ShelfWidgetTest,
-                                     public testing::WithParamInterface<bool> {
+class ShelfWidgetDarkLightModeTest : public ShelfWidgetTest {
  public:
   void SetUp() override {
-    scoped_features_.InitWithFeatureState(chromeos::features::kJelly,
-                                          GetParam());
     ShelfWidgetTest::SetUp();
 
     // Enable tablet mode transition screenshots to simulate production behavior
     // where shelf layers get recreated during the tablet mode transition.
     TabletModeController::SetUseScreenshotForTest(true);
   }
-
- private:
-  base::test::ScopedFeatureList scoped_features_;
 };
 
-INSTANTIATE_TEST_SUITE_P(
-    // Empty to simplify gtest output
-    ,
-    ShelfWidgetDarkLightModeTest,
-    testing::Bool());
-
-TEST_P(ShelfWidgetDarkLightModeTest, TabletModeTransition) {
+TEST_F(ShelfWidgetDarkLightModeTest, TabletModeTransition) {
   ShelfWidget* const shelf_widget = GetShelfWidget();
 
   TabletMode::Waiter enter_waiter(/*enable=*/true);
@@ -192,29 +179,18 @@ TEST_P(ShelfWidgetDarkLightModeTest, TabletModeTransition) {
   shelf_widget->background_animator_for_testing()
       ->CompleteAnimationForTesting();
 
-  if (GetParam()) {
-    EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
-                  cros_tokens::kCrosSysSystemBaseElevated),
-              shelf_widget->GetShelfBackgroundColor());
-  } else {
-    EXPECT_EQ(
-        shelf_widget->GetColorProvider()->GetColor(kColorAshShieldAndBase60),
-        shelf_widget->GetShelfBackgroundColor());
-  }
+  EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
+                cros_tokens::kCrosSysSystemBaseElevated),
+            shelf_widget->GetShelfBackgroundColor());
+
   EXPECT_EQ(0.0, shelf_widget->GetOpaqueBackground()->background_blur());
 
   auto* dark_light_mode_controller = ash::DarkLightModeControllerImpl::Get();
   dark_light_mode_controller->ToggleColorMode();
 
-  if (GetParam()) {
-    EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
-                  cros_tokens::kCrosSysSystemBaseElevated),
-              shelf_widget->GetShelfBackgroundColor());
-  } else {
-    EXPECT_EQ(
-        shelf_widget->GetColorProvider()->GetColor(kColorAshShieldAndBase60),
-        shelf_widget->GetShelfBackgroundColor());
-  }
+  EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
+                cros_tokens::kCrosSysSystemBaseElevated),
+            shelf_widget->GetShelfBackgroundColor());
   EXPECT_EQ(0.0f, shelf_widget->GetOpaqueBackground()->background_blur());
 
   TabletMode::Waiter leave_waiter(/*enable=*/false);
@@ -223,32 +199,20 @@ TEST_P(ShelfWidgetDarkLightModeTest, TabletModeTransition) {
   shelf_widget->background_animator_for_testing()
       ->CompleteAnimationForTesting();
 
-  if (GetParam()) {
-    EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
-                  cros_tokens::kCrosSysSystemBaseElevated),
-              shelf_widget->GetShelfBackgroundColor());
-  } else {
-    EXPECT_EQ(
-        shelf_widget->GetColorProvider()->GetColor(kColorAshShieldAndBase80),
-        shelf_widget->GetShelfBackgroundColor());
-  }
+  EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
+                cros_tokens::kCrosSysSystemBaseElevated),
+            shelf_widget->GetShelfBackgroundColor());
   EXPECT_GT(shelf_widget->GetOpaqueBackground()->background_blur(), 0.0f);
 
   dark_light_mode_controller->ToggleColorMode();
 
-  if (GetParam()) {
-    EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
-                  cros_tokens::kCrosSysSystemBaseElevated),
-              shelf_widget->GetShelfBackgroundColor());
-  } else {
-    EXPECT_EQ(
-        shelf_widget->GetColorProvider()->GetColor(kColorAshShieldAndBase80),
-        shelf_widget->GetShelfBackgroundColor());
-  }
+  EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
+                cros_tokens::kCrosSysSystemBaseElevated),
+            shelf_widget->GetShelfBackgroundColor());
   EXPECT_GT(shelf_widget->GetOpaqueBackground()->background_blur(), 0.0f);
 }
 
-TEST_P(ShelfWidgetDarkLightModeTest, TabletModeTransitionWithWindowOpen) {
+TEST_F(ShelfWidgetDarkLightModeTest, TabletModeTransitionWithWindowOpen) {
   ShelfWidget* const shelf_widget = GetShelfWidget();
   auto window = AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 800, 800));
 
@@ -258,29 +222,17 @@ TEST_P(ShelfWidgetDarkLightModeTest, TabletModeTransitionWithWindowOpen) {
   shelf_widget->background_animator_for_testing()
       ->CompleteAnimationForTesting();
 
-  if (GetParam()) {
-    EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
-                  cros_tokens::kCrosSysSystemBase),
-              shelf_widget->GetShelfBackgroundColor());
-  } else {
-    EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
-                  kColorAshShieldAndBaseOpaque),
-              shelf_widget->GetShelfBackgroundColor());
-  }
+  EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
+                cros_tokens::kCrosSysSystemBase),
+            shelf_widget->GetShelfBackgroundColor());
   EXPECT_EQ(0.0f, shelf_widget->GetOpaqueBackground()->background_blur());
 
   auto* dark_light_mode_controller = ash::DarkLightModeControllerImpl::Get();
   dark_light_mode_controller->ToggleColorMode();
 
-  if (GetParam()) {
-    EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
-                  cros_tokens::kCrosSysSystemBase),
-              shelf_widget->GetShelfBackgroundColor());
-  } else {
-    EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
-                  kColorAshShieldAndBaseOpaque),
-              shelf_widget->GetShelfBackgroundColor());
-  }
+  EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
+                cros_tokens::kCrosSysSystemBase),
+            shelf_widget->GetShelfBackgroundColor());
   EXPECT_EQ(0.0f, shelf_widget->GetOpaqueBackground()->background_blur());
 
   TabletMode::Waiter leave_waiter(/*enable=*/false);
@@ -289,28 +241,16 @@ TEST_P(ShelfWidgetDarkLightModeTest, TabletModeTransitionWithWindowOpen) {
   shelf_widget->background_animator_for_testing()
       ->CompleteAnimationForTesting();
 
-  if (GetParam()) {
-    EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
-                  cros_tokens::kCrosSysSystemBaseElevated),
-              shelf_widget->GetShelfBackgroundColor());
-  } else {
-    EXPECT_EQ(
-        shelf_widget->GetColorProvider()->GetColor(kColorAshShieldAndBase80),
-        shelf_widget->GetShelfBackgroundColor());
-  }
+  EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
+                cros_tokens::kCrosSysSystemBaseElevated),
+            shelf_widget->GetShelfBackgroundColor());
   EXPECT_GT(shelf_widget->GetOpaqueBackground()->background_blur(), 0.0f);
 
   dark_light_mode_controller->ToggleColorMode();
 
-  if (GetParam()) {
-    EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
-                  cros_tokens::kCrosSysSystemBaseElevated),
-              shelf_widget->GetShelfBackgroundColor());
-  } else {
-    EXPECT_EQ(
-        shelf_widget->GetColorProvider()->GetColor(kColorAshShieldAndBase80),
-        shelf_widget->GetShelfBackgroundColor());
-  }
+  EXPECT_EQ(shelf_widget->GetColorProvider()->GetColor(
+                cros_tokens::kCrosSysSystemBaseElevated),
+            shelf_widget->GetShelfBackgroundColor());
   EXPECT_GT(shelf_widget->GetOpaqueBackground()->background_blur(), 0.0f);
 }
 
@@ -430,7 +370,9 @@ TEST_F(ShelfWidgetTest, CheckVerticalShelfCornersInOverviewMode) {
 // Verifies when the shell is deleted with a full screen window we don't crash.
 TEST_F(ShelfWidgetTest, DontReferenceShelfAfterDeletion) {
   views::Widget* widget = new views::Widget;
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.bounds = gfx::Rect(0, 0, 200, 200);
   params.context = GetContext();
   // Widget is now owned by the parent window.
@@ -459,7 +401,7 @@ TEST_F(ShelfWidgetTest, ShelfInitiallySizedAfterLogin) {
   ASSERT_TRUE(shelf_widget2);
 
   // Simulate login.
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
 
   const int total_width1 =
       screen_util::GetDisplayBoundsWithShelf(shelf_widget1->GetNativeWindow())
@@ -510,7 +452,9 @@ TEST_F(ShelfWidgetTest, HiddenShelfHitTestTouch) {
 
   // Create a widget to make sure that the shelf does auto-hide.
   views::Widget* widget = new views::Widget;
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.bounds = gfx::Rect(0, 0, 200, 200);
   params.context = GetContext();
   // Widget is now owned by the parent window.
@@ -524,7 +468,7 @@ TEST_F(ShelfWidgetTest, HiddenShelfHitTestTouch) {
   // should not find the shelf as the target.
   {
     gfx::Point event_location(20, shelf_bounds.y() - 1);
-    ui::TouchEvent touch(ui::ET_TOUCH_PRESSED, event_location,
+    ui::TouchEvent touch(ui::EventType::kTouchPressed, event_location,
                          ui::EventTimeForNow(),
                          ui::PointerDetails(ui::EventPointerType::kTouch, 0));
     EXPECT_NE(shelf_widget->GetNativeWindow(),
@@ -542,7 +486,7 @@ TEST_F(ShelfWidgetTest, HiddenShelfHitTestTouch) {
   // shelf as the target.
   {
     gfx::Point event_location(20, shelf_bounds.y() - 1);
-    ui::TouchEvent touch(ui::ET_TOUCH_PRESSED, event_location,
+    ui::TouchEvent touch(ui::EventType::kTouchPressed, event_location,
                          ui::EventTimeForNow(),
                          ui::PointerDetails(ui::EventPointerType::kTouch, 0));
     EXPECT_EQ(shelf_widget->GetNativeWindow(),
@@ -572,7 +516,9 @@ TEST_F(ShelfWidgetTest, ShelfEdgeOverlappingWindowHitTestMouse) {
                          shelf_bounds.y() - kWindowHeight + kOverlapSize,
                          kWindowWidth, kWindowHeight);
   views::Widget* widget = new views::Widget;
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.bounds = bounds;
   params.context = GetContext();
   // Widget is now owned by the parent window.
@@ -591,8 +537,9 @@ TEST_F(ShelfWidgetTest, ShelfEdgeOverlappingWindowHitTestMouse) {
     // window-targeter should find |widget| as the target (instead of the
     // shelf).
     gfx::Point event_location(widget_bounds.x() + 5, shelf_bounds.y() + 1);
-    ui::MouseEvent mouse(ui::ET_MOUSE_MOVED, event_location, event_location,
-                         ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
+    ui::MouseEvent mouse(ui::EventType::kMouseMoved, event_location,
+                         event_location, ui::EventTimeForNow(), ui::EF_NONE,
+                         ui::EF_NONE);
     ui::EventTarget* target = targeter->FindTargetForEvent(root, &mouse);
     EXPECT_EQ(widget->GetNativeWindow(), target);
   }
@@ -606,8 +553,9 @@ TEST_F(ShelfWidgetTest, ShelfEdgeOverlappingWindowHitTestMouse) {
     // window-targeter should find |widget| as the target (instead of the
     // shelf).
     gfx::Point event_location(shelf_bounds.right() - 1, widget_bounds.y() + 5);
-    ui::MouseEvent mouse(ui::ET_MOUSE_MOVED, event_location, event_location,
-                         ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
+    ui::MouseEvent mouse(ui::EventType::kMouseMoved, event_location,
+                         event_location, ui::EventTimeForNow(), ui::EF_NONE,
+                         ui::EF_NONE);
     ui::EventTarget* target = targeter->FindTargetForEvent(root, &mouse);
     EXPECT_EQ(widget->GetNativeWindow(), target);
   }
@@ -630,8 +578,9 @@ TEST_F(ShelfWidgetTest, ShelfEdgeOverlappingWindowHitTestMouse) {
     // Create a mouse-event targeting the top of the shelf widget. This time,
     // window-target should find the shelf as the target.
     gfx::Point event_location(widget_bounds.x() + 5, shelf_bounds.y() + 1);
-    ui::MouseEvent mouse(ui::ET_MOUSE_MOVED, event_location, event_location,
-                         ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
+    ui::MouseEvent mouse(ui::EventType::kMouseMoved, event_location,
+                         event_location, ui::EventTimeForNow(), ui::EF_NONE,
+                         ui::EF_NONE);
     ui::EventTarget* target = targeter->FindTargetForEvent(root, &mouse);
     EXPECT_EQ(shelf_widget->GetNativeWindow(), target);
   }
@@ -666,8 +615,8 @@ class TransitionAnimationWaiter
 
 // Tests the drag handle bounds and visibility when the in-app shelf is shown.
 TEST_F(ShelfWidgetTest, OpaqueBackgroundAndDragHandleTransition) {
-  ui::ScopedAnimationDurationScaleMode non_zero_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   ash::TabletModeControllerTestApi().EnterTabletMode();
   UpdateDisplay("800x700");
@@ -713,8 +662,8 @@ TEST_F(ShelfWidgetTest, NoAnimatingBackgroundDuringTabletModeStartToInApp) {
                    ->GetAnimatingBackground()
                    ->GetAnimator()
                    ->is_animating());
-  ui::ScopedAnimationDurationScaleMode non_zero_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   ash::TabletModeControllerTestApi().EnterTabletMode();
 
   EXPECT_TRUE(GetShelfWidget()->GetDragHandle()->GetVisible());
@@ -743,8 +692,8 @@ TEST_F(ShelfWidgetTest, NoAnimatingBackgroundDuringTabletModeEndFromInApp) {
                    ->GetAnimator()
                    ->is_animating());
 
-  ui::ScopedAnimationDurationScaleMode non_zero_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   ash::TabletModeControllerTestApi().LeaveTabletMode();
 
   EXPECT_TRUE(GetShelfWidget()->GetOpaqueBackground()->visible());
@@ -769,8 +718,8 @@ TEST_F(ShelfWidgetTest, NoAnimatingBackgroundDuringTabletModeStartToHome) {
                    ->GetAnimator()
                    ->is_animating());
 
-  ui::ScopedAnimationDurationScaleMode non_zero_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   ash::TabletModeControllerTestApi().EnterTabletMode();
 
   EXPECT_FALSE(GetShelfWidget()->GetDragHandle()->GetVisible());
@@ -796,8 +745,8 @@ TEST_F(ShelfWidgetTest, NoAnimatingBackgroundDuringTabletModeEndFromHome) {
                    ->GetAnimator()
                    ->is_animating());
 
-  ui::ScopedAnimationDurationScaleMode non_zero_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   ash::TabletModeControllerTestApi().LeaveTabletMode();
 
   EXPECT_TRUE(GetShelfWidget()->GetOpaqueBackground()->visible());
@@ -833,8 +782,8 @@ TEST_F(ShelfWidgetTest, NoAnimatingBackgroundOnLockScreen) {
   ASSERT_FALSE(GetShelfWidget()->GetOpaqueBackground()->visible());
   ASSERT_FALSE(GetShelfWidget()->GetAnimatingBackground()->visible());
 
-  ui::ScopedAnimationDurationScaleMode non_zero_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Hide the test window, and verify that does not start shelf animation.
   window->Hide();
@@ -870,16 +819,17 @@ TEST_F(ShelfWidgetTest, NoAnimationAfterDragPastIdealBounds) {
   ASSERT_EQ(SHELF_AUTO_HIDE_SHOWN, shelf->GetAutoHideState());
 
   // Create a widget to make sure that the shelf does auto-hide.
-  auto widget = CreateTestWidget();
+  auto widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   ASSERT_EQ(SHELF_AUTO_HIDE, shelf->GetVisibilityState());
   ASSERT_EQ(SHELF_AUTO_HIDE_HIDDEN, shelf->GetAutoHideState());
 
   // Enable animations, and swipe up across the whole screen to bring up the
   // shelf.
-  ui::ScopedAnimationDurationScaleMode non_zero_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   gfx::Rect display_bounds =
-      display::Screen::GetScreen()->GetPrimaryDisplay().bounds();
+      display::Screen::Get()->GetPrimaryDisplay().bounds();
   const gfx::Point start(display_bounds.bottom_center());
   const gfx::Point end(display_bounds.top_center());
   const base::TimeDelta kTimeDelta = base::Milliseconds(100);
@@ -902,8 +852,8 @@ TEST_F(ShelfWidgetTest, ScreenLockStopsHotseatTransitionAnimation) {
   ASSERT_FALSE(GetShelfWidget()->GetDragHandle()->GetVisible());
   ASSERT_FALSE(GetShelfWidget()->GetOpaqueBackground()->visible());
 
-  ui::ScopedAnimationDurationScaleMode non_zero_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Create a window to transition to the in-app shelf.
   auto window = AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 800, 800));
@@ -949,8 +899,8 @@ TEST_F(ShelfWidgetTest,
   ASSERT_FALSE(GetShelfWidget()->GetDragHandle()->GetVisible());
   ASSERT_FALSE(GetShelfWidget()->GetOpaqueBackground()->visible());
 
-  ui::ScopedAnimationDurationScaleMode non_zero_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Create a window to transition to the in-app shelf.
   auto window = AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 800, 800));
@@ -1002,9 +952,9 @@ TEST_F(ShelfWidgetTest,
   ASSERT_FALSE(GetShelfWidget()->GetAnimatingBackground()->visible());
 }
 
-class ShelfWidgetAfterLoginTest : public AshTestBase {
+class ShelfWidgetAfterLoginTest : public NoSessionAshTestBase {
  public:
-  ShelfWidgetAfterLoginTest() { set_start_session(false); }
+  ShelfWidgetAfterLoginTest() = default;
 
   ShelfWidgetAfterLoginTest(const ShelfWidgetAfterLoginTest&) = delete;
   ShelfWidgetAfterLoginTest& operator=(const ShelfWidgetAfterLoginTest&) =
@@ -1017,7 +967,7 @@ class ShelfWidgetAfterLoginTest : public AshTestBase {
                  ShelfVisibilityState expected_shelf_visibility_state,
                  ShelfAutoHideState expected_shelf_auto_hide_state) {
     // Simulate login.
-    CreateUserSessions(1);
+    SimulateUserLogin(kRegularUserLoginInfo);
 
     // Simulate shelf settings being applied from profile prefs.
     Shelf* shelf = GetPrimaryShelf();
@@ -1051,7 +1001,7 @@ TEST_F(ShelfWidgetAfterLoginTest, InitialValues) {
   EXPECT_EQ(SHELF_AUTO_HIDE_HIDDEN, shelf->GetAutoHideState());
 
   // Simulate login.
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
 
   // Ensure settings are correct after login.
   EXPECT_EQ(SHELF_VISIBLE, shelf->GetVisibilityState());
@@ -1085,9 +1035,9 @@ TEST_F(ShelfWidgetAfterLoginTest, CreateLockedShelf) {
             SHELF_VISIBLE, SHELF_AUTO_HIDE_HIDDEN);
 }
 
-class ShelfWidgetViewsVisibilityTest : public AshTestBase {
+class ShelfWidgetViewsVisibilityTest : public NoSessionAshTestBase {
  public:
-  ShelfWidgetViewsVisibilityTest() { set_start_session(false); }
+  ShelfWidgetViewsVisibilityTest() = default;
 
   ShelfWidgetViewsVisibilityTest(const ShelfWidgetViewsVisibilityTest&) =
       delete;
@@ -1101,6 +1051,12 @@ class ShelfWidgetViewsVisibilityTest : public AshTestBase {
     kShelf,       // ShelfView visible.
     kLoginShelf,  // LoginShelfView visible.
   };
+
+  void TearDown() override {
+    secondary_shelf_widget_ = nullptr;
+    primary_shelf_widget_ = nullptr;
+    NoSessionAshTestBase::TearDown();
+  }
 
   void InitShelfVariables() {
     // Create setup with 2 displays primary and secondary.
@@ -1137,8 +1093,8 @@ class ShelfWidgetViewsVisibilityTest : public AshTestBase {
   }
 
  private:
-  raw_ptr<ShelfWidget, DanglingUntriaged> primary_shelf_widget_ = nullptr;
-  raw_ptr<ShelfWidget, DanglingUntriaged> secondary_shelf_widget_ = nullptr;
+  raw_ptr<ShelfWidget> primary_shelf_widget_ = nullptr;
+  raw_ptr<ShelfWidget> secondary_shelf_widget_ = nullptr;
 };
 
 TEST_F(ShelfWidgetViewsVisibilityTest, LoginViewsLockViews) {
@@ -1148,7 +1104,7 @@ TEST_F(ShelfWidgetViewsVisibilityTest, LoginViewsLockViews) {
   ExpectVisible(SessionState::OOBE, kLoginShelf, kNone);
   ExpectVisible(SessionState::LOGIN_PRIMARY, kLoginShelf, kNone);
 
-  SimulateUserLogin("user1@test.com");
+  SimulateUserLogin({"user1@test.com"});
 
   ExpectVisible(SessionState::LOGGED_IN_NOT_ACTIVE, kLoginShelf, kNone);
   ExpectVisible(SessionState::ACTIVE, kShelf, kShelf);
@@ -1181,7 +1137,7 @@ class ShelfWidgetVirtualKeyboardTest : public AshTestBase {
 
 TEST_F(ShelfWidgetVirtualKeyboardTest, ClickingHidesVirtualKeyboard) {
   keyboard_ui_controller()->ShowKeyboard(false /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   ui::test::EventGenerator* generator = GetEventGenerator();
   generator->set_current_screen_location(
@@ -1189,12 +1145,12 @@ TEST_F(ShelfWidgetVirtualKeyboardTest, ClickingHidesVirtualKeyboard) {
   generator->ClickLeftButton();
 
   // Times out if test fails.
-  ASSERT_TRUE(keyboard::WaitUntilHidden());
+  ASSERT_TRUE(keyboard::test::WaitUntilHidden());
 }
 
 TEST_F(ShelfWidgetVirtualKeyboardTest, TappingHidesVirtualKeyboard) {
   keyboard_ui_controller()->ShowKeyboard(false /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   ui::test::EventGenerator* generator = GetEventGenerator();
   generator->set_current_screen_location(
@@ -1202,22 +1158,22 @@ TEST_F(ShelfWidgetVirtualKeyboardTest, TappingHidesVirtualKeyboard) {
   generator->PressTouch();
 
   // Times out if test fails.
-  ASSERT_TRUE(keyboard::WaitUntilHidden());
+  ASSERT_TRUE(keyboard::test::WaitUntilHidden());
 }
 
 TEST_F(ShelfWidgetVirtualKeyboardTest, DoesNotHideLockedVirtualKeyboard) {
   keyboard_ui_controller()->ShowKeyboard(true /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   ui::test::EventGenerator* generator = GetEventGenerator();
   generator->set_current_screen_location(
       GetShelfWidget()->GetWindowBoundsInScreen().CenterPoint());
 
   generator->ClickLeftButton();
-  EXPECT_FALSE(keyboard::IsKeyboardHiding());
+  EXPECT_FALSE(keyboard::test::IsKeyboardHiding());
 
   generator->PressTouch();
-  EXPECT_FALSE(keyboard::IsKeyboardHiding());
+  EXPECT_FALSE(keyboard::test::IsKeyboardHiding());
 }
 
 }  // namespace

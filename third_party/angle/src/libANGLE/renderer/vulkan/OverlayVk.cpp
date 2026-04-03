@@ -7,6 +7,10 @@
 //    Implements the OverlayVk class.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/vulkan/OverlayVk.h"
 
 #include "common/system_utils.h"
@@ -23,8 +27,8 @@ OverlayVk::~OverlayVk() = default;
 
 void OverlayVk::onDestroy(const gl::Context *context)
 {
-    RendererVk *renderer = vk::GetImpl(context)->getRenderer();
-    VkDevice device      = renderer->getDevice();
+    vk::Renderer *renderer = vk::GetImpl(context)->getRenderer();
+    VkDevice device        = renderer->getDevice();
 
     mFontImage.destroy(renderer);
     mFontImageView.destroy(device);
@@ -32,7 +36,7 @@ void OverlayVk::onDestroy(const gl::Context *context)
 
 angle::Result OverlayVk::createFont(ContextVk *contextVk)
 {
-    RendererVk *renderer = contextVk->getRenderer();
+    vk::Renderer *renderer = contextVk->getRenderer();
 
     // Create a buffer to stage font data upload.
     VkBufferCreateInfo bufferCreateInfo = {};
@@ -59,30 +63,31 @@ angle::Result OverlayVk::createFont(ContextVk *contextVk)
     constexpr bool kNoRobustInit = false;
 
     // Create the font image.
-    ANGLE_TRY(mFontImage.init(
-        contextVk, gl::TextureType::_2D,
-        VkExtent3D{gl::overlay::kFontGlyphWidth, gl::overlay::kFontGlyphHeight, 1},
-        renderer->getFormat(angle::FormatID::R8_UNORM), 1,
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, gl::LevelIndex(0),
-        gl::overlay::kFontMipCount, gl::overlay::kFontCharacters, kNoRobustInit, false));
+    ANGLE_TRY(
+        mFontImage.init(contextVk, gl::TextureType::_2D,
+                        VkExtent3D{gl::overlay::kFontGlyphWidth, gl::overlay::kFontGlyphHeight, 1},
+                        renderer->getFormat(angle::FormatID::R8_UNORM), 1,
+                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                        gl::LevelIndex(0), gl::overlay::kFontMipCount, gl::overlay::kFontCharacters,
+                        kNoRobustInit, false, vk::TileMemory::Prohibited));
 
-    ANGLE_TRY(contextVk->initImageAllocation(&mFontImage, false, renderer->getMemoryProperties(),
+    ANGLE_TRY(contextVk->initImageAllocation(&mFontImage, false,
                                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                                              vk::MemoryAllocationType::FontImage));
 
-    ANGLE_TRY(mFontImage.initImageView(
+    ANGLE_TRY(mFontImage.initLayerImageView(
         contextVk, gl::TextureType::_2DArray, VK_IMAGE_ASPECT_COLOR_BIT, gl::SwizzleState(),
-        &mFontImageView, vk::LevelIndex(0), gl::overlay::kFontMipCount,
-        vk::ImageHelper::kDefaultImageViewUsageFlags));
+        &mFontImageView, vk::LevelIndex(0), gl::overlay::kFontMipCount, 0,
+        mFontImage.getLayerCount()));
 
     // Copy font data from staging buffer.
-    vk::CommandBufferAccess access;
-    access.onBufferTransferRead(&fontDataBuffer.get());
-    access.onImageTransferWrite(gl::LevelIndex(0), gl::overlay::kFontMipCount, 0,
-                                gl::overlay::kFontCharacters, VK_IMAGE_ASPECT_COLOR_BIT,
-                                &mFontImage);
+    vk::CommandResources resources;
+    resources.onBufferTransferRead(&fontDataBuffer.get());
+    resources.onImageTransferWrite(gl::LevelIndex(0), gl::overlay::kFontMipCount, 0,
+                                   gl::overlay::kFontCharacters, VK_IMAGE_ASPECT_COLOR_BIT,
+                                   &mFontImage);
     vk::OutsideRenderPassCommandBuffer *fontDataUpload;
-    ANGLE_TRY(contextVk->getOutsideRenderPassCommandBuffer(access, &fontDataUpload));
+    ANGLE_TRY(contextVk->getOutsideRenderPassCommandBuffer(resources, &fontDataUpload));
 
     VkBufferImageCopy copy           = {};
     copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -100,7 +105,7 @@ angle::Result OverlayVk::createFont(ContextVk *contextVk)
 
         fontDataUpload->copyBufferToImage(fontDataBuffer.get().getBuffer().getHandle(),
                                           mFontImage.getImage(),
-                                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                                          mFontImage.getCurrentLayout(renderer), 1, &copy);
     }
 
     return angle::Result::Continue;
@@ -122,7 +127,7 @@ angle::Result OverlayVk::onPresent(ContextVk *contextVk,
         ANGLE_TRY(createFont(contextVk));
     }
 
-    RendererVk *renderer = contextVk->getRenderer();
+    vk::Renderer *renderer = contextVk->getRenderer();
 
     vk::RendererScoped<vk::BufferHelper> textDataBuffer(renderer);
     vk::RendererScoped<vk::BufferHelper> graphDataBuffer(renderer);

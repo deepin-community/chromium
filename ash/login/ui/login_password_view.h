@@ -6,6 +6,7 @@
 #define ASH_LOGIN_UI_LOGIN_PASSWORD_VIEW_H_
 
 #include <string>
+#include <string_view>
 
 #include "ash/ash_export.h"
 #include "ash/ime/ime_controller_impl.h"
@@ -56,7 +57,7 @@ class LoginArrowNavigationDelegate;
 //  ------------------
 class ASH_EXPORT LoginPasswordView : public views::View,
                                      public views::TextfieldController,
-                                     public ImeControllerImpl::Observer,
+                                     public ImeController::Observer,
                                      public ui::ImplicitAnimationObserver {
   METADATA_HEADER(LoginPasswordView, views::View)
 
@@ -73,16 +74,12 @@ class ASH_EXPORT LoginPasswordView : public views::View,
     views::View* submit_button() const;
     views::ToggleImageButton* display_password_button() const;
 
-    bool is_capslock_highlight_for_testing() {
-      return view_->is_capslock_higlight_;
-    }
-
    private:
     raw_ptr<LoginPasswordView> view_;
   };
 
   using OnPasswordSubmit =
-      base::RepeatingCallback<void(const std::u16string& password)>;
+      base::RepeatingCallback<void(std::u16string_view password)>;
   using OnPasswordTextChanged = base::RepeatingCallback<void(bool is_empty)>;
 
   // Must call |Init| after construction.
@@ -99,9 +96,6 @@ class ASH_EXPORT LoginPasswordView : public views::View,
   // changes.
   void Init(const OnPasswordSubmit& on_submit,
             const OnPasswordTextChanged& on_password_text_changed);
-
-  // Whether or not the password field is enabled when there is no text.
-  void SetEnabledOnEmptyPassword(bool enabled);
 
   // Enable or disable focus on the child elements (i.e.: password field and
   // submit button, or display password button if it is shown).
@@ -129,7 +123,8 @@ class ASH_EXPORT LoginPasswordView : public views::View,
   bool IsReadOnly() const;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void RequestFocus() override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
 
@@ -148,7 +143,7 @@ class ASH_EXPORT LoginPasswordView : public views::View,
   bool HandleKeyEvent(views::Textfield* sender,
                       const ui::KeyEvent& key_event) override;
 
-  // ImeControllerImpl::Observer:
+  // ImeController::Observer:
   void OnCapsLockChanged(bool enabled) override;
   void OnKeyboardLayoutNameChanged(const std::string&) override {}
 
@@ -163,6 +158,8 @@ class ASH_EXPORT LoginPasswordView : public views::View,
 
   // Sets the delegate of the arrow keys navigation.
   void SetLoginArrowNavigationDelegate(LoginArrowNavigationDelegate* delegate);
+
+  void SetAccessibleNameOnTextfield(const std::u16string& new_name);
 
   base::WeakPtr<LoginPasswordView> AsWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();
@@ -185,13 +182,8 @@ class ASH_EXPORT LoginPasswordView : public views::View,
   // button when it is visible.
   void UpdateUiState();
 
-  void OnAccessibleNameChanged(const std::u16string& new_name) override;
-
   OnPasswordSubmit on_submit_;
   OnPasswordTextChanged on_password_text_changed_;
-
-  // Is the password field enabled when there is no text?
-  bool enabled_on_empty_password_ = false;
 
   // Arrow keystrokes delegate.
   raw_ptr<LoginArrowNavigationDelegate, DanglingUntriaged>
@@ -211,8 +203,6 @@ class ASH_EXPORT LoginPasswordView : public views::View,
   raw_ptr<ArrowButtonView> submit_button_ = nullptr;
   raw_ptr<DisplayPasswordButton> display_password_button_ = nullptr;
   raw_ptr<views::ImageView> capslock_icon_ = nullptr;
-
-  bool is_capslock_higlight_ = false;
 
   base::WeakPtrFactory<LoginPasswordView> weak_ptr_factory_{this};
 };

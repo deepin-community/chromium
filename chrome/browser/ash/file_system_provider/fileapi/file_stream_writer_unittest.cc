@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
@@ -91,8 +92,8 @@ class FileSystemProviderFileStreamWriter : public testing::Test {
     const std::string mount_point_name =
         file_system_info.mount_path().BaseName().AsUTF8Unsafe();
 
-    file_url_ = CreateFileSystemURL(mount_point_name,
-                                    base::FilePath(kFakeFilePath + 1));
+    file_url_ = CreateFileSystemURL(
+        mount_point_name, base::FilePath(UNSAFE_TODO(kFakeFilePath + 1)));
     ASSERT_TRUE(file_url_.is_valid());
     wrong_file_url_ = CreateFileSystemURL(
         mount_point_name, base::FilePath(FILE_PATH_LITERAL("im-not-here.txt")));

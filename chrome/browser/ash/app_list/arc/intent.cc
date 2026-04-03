@@ -4,10 +4,11 @@
 
 #include "chrome/browser/ash/app_list/arc/intent.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <string_view>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -105,7 +106,7 @@ void Intent::AddExtraParam(const std::string& extra_param) {
 }
 
 bool Intent::HasExtraParam(const std::string& extra_param) const {
-  return base::Contains(extra_params_, extra_param);
+  return std::ranges::contains(extra_params_, extra_param);
 }
 
 bool Intent::GetExtraParamValue(const std::string& extra_param_key,
@@ -130,7 +131,7 @@ std::string GetLaunchIntent(const std::string& package_name,
   // Remove the |package_name| prefix, if activity starts with it.
   const char* activity_compact_name =
       activity.find(package_name.c_str()) == 0
-          ? activity.c_str() + package_name.length()
+          ? UNSAFE_TODO(activity.c_str() + package_name.length())
           : activity.c_str();
 
   // Construct a string in format:

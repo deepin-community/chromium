@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "components/exo/wayland/clients/blur.h"
 
 #include <algorithm>
@@ -13,7 +14,7 @@
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkSurface.h"
 #include "third_party/skia/include/effects/SkImageFilters.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
 #include "third_party/skia/include/gpu/ganesh/SkImageGanesh.h"
 #include "ui/gl/gl_bindings.h"
 
@@ -215,7 +216,7 @@ void Blur::Run(double sigma_x,
 
       // Restore blur surfaces for next frame.
       std::swap(content_surfaces, blur_surfaces);
-      std::reverse(blur_surfaces.begin(), blur_surfaces.end());
+      std::ranges::reverse(blur_surfaces);
     } else {  // !blur_filter
       SkCanvas* canvas = buffer->sk_surface->getCanvas();
       DrawContents(grid_image_.get(), cell_size, elapsed_time, canvas);

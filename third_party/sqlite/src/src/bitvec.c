@@ -67,7 +67,7 @@
 ** no fewer collisions than the no-op *1. */
 #define BITVEC_HASH(X)   (((X)*1)%BITVEC_NINT)
 
-#define BITVEC_NPTR      (BITVEC_USIZE/sizeof(Bitvec *))
+#define BITVEC_NPTR      ((u32)(BITVEC_USIZE/sizeof(Bitvec *)))
 
 
 /*
@@ -216,7 +216,9 @@ bitvec_set_rehash:
     }else{
       memcpy(aiValues, p->u.aHash, sizeof(p->u.aHash));
       memset(p->u.apSub, 0, sizeof(p->u.apSub));
-      p->iDivisor = (p->iSize + BITVEC_NPTR - 1)/BITVEC_NPTR;
+      p->iDivisor = p->iSize/BITVEC_NPTR;
+      if( (p->iSize%BITVEC_NPTR)!=0 ) p->iDivisor++;
+      if( p->iDivisor<BITVEC_NBIT ) p->iDivisor = BITVEC_NBIT;
       rc = sqlite3BitvecSet(p, i);
       for(j=0; j<BITVEC_NINT; j++){
         if( aiValues[j] ) rc |= sqlite3BitvecSet(p, aiValues[j]);
@@ -250,7 +252,7 @@ void sqlite3BitvecClear(Bitvec *p, u32 i, void *pBuf){
     }
   }
   if( p->iSize<=BITVEC_NBIT ){
-    p->u.aBitmap[i/BITVEC_SZELEM] &= ~(1 << (i&(BITVEC_SZELEM-1)));
+    p->u.aBitmap[i/BITVEC_SZELEM] &= ~(BITVEC_TELEM)(1<<(i&(BITVEC_SZELEM-1)));
   }else{
     unsigned int j;
     u32 *aiValues = pBuf;
@@ -301,7 +303,7 @@ u32 sqlite3BitvecSize(Bitvec *p){
 ** individual bits within V.
 */
 #define SETBIT(V,I)      V[I>>3] |= (1<<(I&7))
-#define CLEARBIT(V,I)    V[I>>3] &= ~(1<<(I&7))
+#define CLEARBIT(V,I)    V[I>>3] &= ~(BITVEC_TELEM)(1<<(I&7))
 #define TESTBIT(V,I)     (V[I>>3]&(1<<(I&7)))!=0
 
 /*
@@ -344,7 +346,7 @@ int sqlite3BitvecBuiltinTest(int sz, int *aOp){
   /* Allocate the Bitvec to be tested and a linear array of
   ** bits to act as the reference */
   pBitvec = sqlite3BitvecCreate( sz );
-  pV = sqlite3MallocZero( (sz+7)/8 + 1 );
+  pV = sqlite3MallocZero( (7+(i64)sz)/8 + 1 );
   pTmpSpace = sqlite3_malloc64(BITVEC_SZ);
   if( pBitvec==0 || pV==0 || pTmpSpace==0  ) goto bitvec_end;
 

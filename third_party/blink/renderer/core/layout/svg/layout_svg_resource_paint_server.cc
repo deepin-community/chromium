@@ -8,10 +8,12 @@ namespace blink {
 
 void LayoutSVGResourcePaintServer::StyleDidChange(
     StyleDifference diff,
-    const ComputedStyle* old_style) {
+    const ComputedStyle* old_style,
+    const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGResourceContainer::StyleDidChange(diff, old_style);
-  if (diff.TransformChanged()) {
+  LayoutSVGResourceContainer::StyleDidChange(diff, old_style,
+                                             style_change_context);
+  if (diff.transform_changed) {
     RemoveAllClientsFromCache();
   }
 }

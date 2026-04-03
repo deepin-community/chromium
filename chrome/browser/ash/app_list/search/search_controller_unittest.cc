@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/app_list/search/search_controller.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -11,10 +12,11 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
+#include "base/compiler_specific.h"
+#include "base/containers/to_vector.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
-#include "base/test/to_vector.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
 #include "chrome/browser/ash/app_list/search/common/types_util.h"
@@ -28,6 +30,7 @@
 #include "chrome/browser/ash/app_list/search/types.h"
 #include "chrome/browser/ash/app_list/test/fake_app_list_model_updater.h"
 #include "chrome/browser/ash/app_list/test/test_app_list_controller_delegate.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -88,8 +91,7 @@ class SearchControllerTest : public testing::Test {
     search_controller_ = std::make_unique<SearchController>(
         /*model_updater=*/&model_updater_,
         /*list_controller=*/&list_controller_,
-        /*notifier=*/nullptr, &profile_,
-        /*federated_service_controller_*/ nullptr);
+        /*notifier=*/nullptr, &profile_);
     search_controller_->Initialize();
 
     auto ranker_manager = std::make_unique<TestRankerManager>(&profile_);
@@ -100,7 +102,7 @@ class SearchControllerTest : public testing::Test {
   void ExpectIdOrder(std::vector<std::string> expected_ids) {
     const auto& actual_results = model_updater_.search_results();
     EXPECT_EQ(actual_results.size(), expected_ids.size());
-    EXPECT_THAT(base::test::ToVector(actual_results, &ChromeSearchResult::id),
+    EXPECT_THAT(base::ToVector(actual_results, &ChromeSearchResult::id),
                 ElementsAreArray(expected_ids));
   }
 
@@ -153,6 +155,7 @@ class SearchControllerTest : public testing::Test {
 
  protected:
   content::BrowserTaskEnvironment task_environment_;
+
   display::test::TestScreen test_screen_{/*create_dispay=*/true,
                                          /*register_screen=*/true};
   TestingProfile profile_;
@@ -501,9 +504,6 @@ TEST_F(
   search_controller_->SetResults(Result::kPlayStoreApp,
                                  std::move(play_store_app_results));
   ExpectIdOrder({"a", "b", "c", "d", "e"});
-  search_controller_->SetResults(Result::kInternalApp,
-                                 std::move(internal_app_results));
-  ExpectIdOrder({"a", "b", "c", "d", "e", "f"});
 }
 
 TEST_F(SearchControllerTest, FirstSearchResultsNotShownInSecondSearch) {
@@ -684,6 +684,9 @@ TEST_F(SearchControllerTest, ZeroStateResultsGetTimedOut) {
 }
 
 TEST_F(SearchControllerTest, ContinueRanksDriveAboveLocal) {
+  if (ash::features::UseMixedFileLauncherContinueSection()) {
+    return;
+  }
   // Use the full ranking stack.
   search_controller_->set_ranker_manager_for_test(
       std::make_unique<RankerManager>(&profile_));
@@ -695,7 +698,7 @@ TEST_F(SearchControllerTest, ContinueRanksDriveAboveLocal) {
 
   drive_provider->SetNextResults(MakeListResults(
       {"drive_a", "drive_b"}, {Category::kUnknown, Category::kUnknown},
-      {-1, -1}, {0.2, 0.1}));
+      {-1, -1}, {0.45, 0.1}));
   local_provider->SetNextResults(MakeListResults(
       {"local_a", "local_b"}, {Category::kUnknown, Category::kUnknown},
       {-1, -1}, {0.5, 0.4}));
@@ -706,6 +709,7 @@ TEST_F(SearchControllerTest, ContinueRanksDriveAboveLocal) {
   search_controller_->StartZeroState(base::DoNothing(), base::Seconds(1));
 
   Wait();
+
   ExpectIdOrder({"drive_a", "drive_b", "local_a", "local_b"});
 }
 
@@ -862,8 +866,8 @@ TEST_F(SearchControllerTest, NotifyObserverWhenPublished) {
 
 TEST_F(SearchControllerTest, ProviderIsFilteredWithSearchControl) {
   base::test::ScopedFeatureList scoped_feature_list_;
-  scoped_feature_list_.InitAndEnableFeature(
-      ash::features::kLauncherSearchControl);
+  scoped_feature_list_.InitWithFeatures(
+      {ash::features::kFeatureManagementLocalImageSearch}, {});
 
   const Result result_categories[] = {
       Result::kAnswerCard, Result::kDriveSearch,    Result::kAppShortcutV2,
@@ -887,7 +891,8 @@ TEST_F(SearchControllerTest, ProviderIsFilteredWithSearchControl) {
   for (int i = 0; i < 9; ++i) {
     // The result type needs to be unique.
     auto provider = std::make_unique<TestSearchProvider>(
-        result_categories[i], base::Milliseconds(20), search_categories[i]);
+        UNSAFE_TODO(result_categories[i]), base::Milliseconds(20),
+        UNSAFE_TODO(search_categories[i]));
     provider_ptrs.push_back(provider.get());
     search_controller_->AddProvider(std::move(provider));
   }

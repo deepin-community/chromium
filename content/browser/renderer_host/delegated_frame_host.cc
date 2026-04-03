@@ -9,7 +9,8 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/debug/crash_logging.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
@@ -17,21 +18,21 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "cc/base/switches.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "components/viz/common/quads/compositor_frame.h"
 #include "components/viz/common/resources/release_callback.h"
 #include "components/viz/common/resources/shared_image_format.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "content/browser/compositor/surface_utils.h"
 #include "content/browser/gpu/compositor_util.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/common/content_switches.h"
 #include "third_party/blink/public/mojom/widget/record_content_to_visible_time_request.mojom.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/dip_util.h"
 
 namespace content {
@@ -55,7 +56,7 @@ DelegatedFrameHost::DelegatedFrameHost(const viz::FrameSinkId& frame_sink_id,
       should_register_frame_sink_id_(should_register_frame_sink_id),
       host_frame_sink_manager_(GetHostFrameSinkManager()),
       frame_evictor_(std::make_unique<viz::FrameEvictor>(this)) {
-  DCHECK(host_frame_sink_manager_);
+  CHECK(host_frame_sink_manager_);
   frame_evictor_->SetVisible(client_->DelegatedFrameHostIsVisible());
 
   stale_content_layer_ =
@@ -65,11 +66,11 @@ DelegatedFrameHost::DelegatedFrameHost(const viz::FrameSinkId& frame_sink_id,
 }
 
 DelegatedFrameHost::~DelegatedFrameHost() {
-  DCHECK(!compositor_);
+  CHECK(!compositor_);
 
-  DCHECK(host_frame_sink_manager_);
+  CHECK(host_frame_sink_manager_);
   if (owns_frame_sink_id_) {
-    host_frame_sink_manager_->InvalidateFrameSinkId(frame_sink_id_, this);
+    host_frame_sink_manager_->InvalidateFrameSinkId(frame_sink_id_, this, {});
   }
 }
 
@@ -111,7 +112,7 @@ void DelegatedFrameHost::WasShown(
 
 void DelegatedFrameHost::RequestSuccessfulPresentationTimeForNextFrame(
     blink::mojom::RecordContentToVisibleTimeRequestPtr visible_time_request) {
-  DCHECK(visible_time_request);
+  CHECK(visible_time_request);
   if (!compositor_)
     return;
   // Tab was shown while widget was already painting, eg. due to being
@@ -144,37 +145,64 @@ void DelegatedFrameHost::WasHidden(HiddenCause cause) {
 void DelegatedFrameHost::CopyFromCompositingSurface(
     const gfx::Rect& src_subrect,
     const gfx::Size& output_size,
-    base::OnceCallback<void(const SkBitmap&)> callback) {
+    base::TimeDelta timeout,
+    base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback) {
+  const viz::SurfaceId surface_id(frame_sink_id_, local_surface_id_);
+
+  ui::Compositor::ScopedKeepSurfaceAliveCallback keep_surface_alive;
+
+  if (compositor_ && CanCopyFromCompositingSurface()) {
+    keep_surface_alive =
+        compositor_->TakeScopedKeepSurfaceAliveCallback(surface_id);
+  }
+
   CopyFromCompositingSurfaceInternal(
-      src_subrect, output_size, viz::CopyOutputRequest::ResultFormat::RGBA,
-      viz::CopyOutputRequest::ResultDestination::kSystemMemory,
+      src_subrect, output_size, surface_id,
+      viz::CopyOutputRequest::ResultFormat::RGBA,
+      viz::CopyOutputRequest::ResultDestination::kSystemMemory, timeout,
       base::BindOnce(
-          [](base::OnceCallback<void(const SkBitmap&)> callback,
+          [](base::OnceCallback<void(const content::CopyFromSurfaceResult&)>
+                 callback,
+             ui::Compositor::ScopedKeepSurfaceAliveCallback keep_alive,
              std::unique_ptr<viz::CopyOutputResult> result) {
-            auto scoped_bitmap = result->ScopedAccessSkBitmap();
-            std::move(callback).Run(scoped_bitmap.GetOutScopedBitmap());
+            if (keep_alive) {
+              std::move(keep_alive).RunAndReset();
+            }
+            std::move(callback).Run(
+                ToCopyFromSurfaceResult(result->ScopedAccessSkBitmap()
+                                            .GetOutScopedBitmapAndMetadata()));
           },
-          std::move(callback)));
+          std::move(callback), std::move(keep_surface_alive)));
 }
 
 void DelegatedFrameHost::CopyFromCompositingSurfaceAsTexture(
     const gfx::Rect& src_subrect,
     const gfx::Size& output_size,
     viz::CopyOutputRequest::CopyOutputRequestCallback callback) {
+  const viz::SurfaceId surface_id(frame_sink_id_, local_surface_id_);
   CopyFromCompositingSurfaceInternal(
-      src_subrect, output_size, viz::CopyOutputRequest::ResultFormat::RGBA,
-      viz::CopyOutputRequest::ResultDestination::kNativeTextures,
-      std::move(callback));
+      src_subrect, output_size, surface_id,
+      viz::CopyOutputRequest::ResultFormat::RGBA,
+      viz::CopyOutputRequest::ResultDestination::kSharedImage,
+      base::TimeDelta(), std::move(callback));
 }
 
 void DelegatedFrameHost::CopyFromCompositingSurfaceInternal(
     const gfx::Rect& src_subrect,
     const gfx::Size& output_size,
+    const viz::SurfaceId& surface_id,
     viz::CopyOutputRequest::ResultFormat format,
     viz::CopyOutputRequest::ResultDestination destination,
+    base::TimeDelta timeout,
     viz::CopyOutputRequest::CopyOutputRequestCallback callback) {
   auto request = std::make_unique<viz::CopyOutputRequest>(format, destination,
                                                           std::move(callback));
+  // Run result callback on the current thread in case `callback` needs to run
+  // on the current thread. See http://crbug.com/1431363. When we bound a
+  // `ui::Compositor::ScopedKeepSurfaceAliveCallback` it must also be ran on the
+  // current thread.
+  request->set_result_task_runner(
+      base::SingleThreadTaskRunner::GetCurrentDefault());
 
   // It is possible for us to not have a valid surface to copy from. Such as
   // if a navigation fails to complete. In such a case do not attempt to request
@@ -206,15 +234,10 @@ void DelegatedFrameHost::CopyFromCompositingSurfaceInternal(
         gfx::Vector2d(area.width(), area.height()),
         gfx::Vector2d(output_size.width(), output_size.height()));
   }
-
-  // Run result callback on the current thread in case `callback` needs to run
-  // on the current thread. See http://crbug.com/1431363.
-  request->set_result_task_runner(
-      base::SingleThreadTaskRunner::GetCurrentDefault());
-
-  DCHECK(host_frame_sink_manager_);
+  CHECK(host_frame_sink_manager_);
   host_frame_sink_manager_->RequestCopyOfOutput(
-      viz::SurfaceId(frame_sink_id_, local_surface_id_), std::move(request));
+      surface_id, std::move(request), /*capture_exact_surface_id=*/false,
+      timeout);
 }
 
 void DelegatedFrameHost::SetFrameEvictionStateAndNotifyObservers(
@@ -318,7 +341,7 @@ void DelegatedFrameHost::EmbedSurface(
 
   if (!primary_surface_id ||
       primary_surface_id->local_surface_id() != local_surface_id_) {
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
     // On Windows and Linux, we would like to produce new content as soon as
     // possible or the OS will create an additional black gutter. Until we can
     // block resize on surface synchronization on these platforms, we will not
@@ -439,8 +462,8 @@ void DelegatedFrameHost::EvictDelegatedFrame(
   frame_evictor_->OnSurfaceDiscarded();
 }
 
-std::vector<viz::SurfaceId> DelegatedFrameHost::CollectSurfaceIdsForEviction()
-    const {
+viz::FrameEvictorClient::EvictIds
+DelegatedFrameHost::CollectSurfaceIdsForEviction() const {
   return client_->CollectSurfaceIdsForEviction();
 }
 
@@ -459,39 +482,37 @@ void DelegatedFrameHost::DidCopyStaleContent(
   if (frame_evictor_->visible() || result->IsEmpty())
     return;
 
-  DCHECK_EQ(result->format(), viz::CopyOutputResult::Format::RGBA);
-  DCHECK_EQ(result->destination(),
-            viz::CopyOutputResult::Destination::kNativeTextures);
+  CHECK_EQ(result->format(), viz::CopyOutputResult::Format::RGBA);
+  CHECK_EQ(result->destination(),
+           viz::CopyOutputResult::Destination::kSharedImage);
 
 // TODO(crbug.com/1227661): Revert https://crrev.com/c/3222541 to re-enable this
-// DCHECK on CrOS.
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-  DCHECK_NE(frame_eviction_state_, FrameEvictionState::kNotStarted);
+// CHECK on CrOS.
+#if !BUILDFLAG(IS_CHROMEOS)
+  CHECK_NE(frame_eviction_state_, FrameEvictionState::kNotStarted);
 #endif
   SetFrameEvictionStateAndNotifyObservers(FrameEvictionState::kNotStarted);
   ContinueDelegatedFrameEviction(
       frame_evictor_->CollectSurfaceIdsForEviction());
 
-  auto transfer_resource = viz::TransferableResource::MakeGpu(
-      result->GetTextureResult()->mailbox_holders[0].mailbox, GL_TEXTURE_2D,
-      result->GetTextureResult()->mailbox_holders[0].sync_token, result->size(),
-      viz::SinglePlaneFormat::kRGBA_8888, false /* is_overlay_candidate */,
-      viz::TransferableResource::ResourceSource::kStaleContent);
-  viz::CopyOutputResult::ReleaseCallbacks release_callbacks =
-      result->TakeTextureOwnership();
-  DCHECK_EQ(1u, release_callbacks.size());
+  auto transfer_resource = viz::TransferableResource::Make(
+      result->GetSharedImage(),
+      viz::TransferableResource::ResourceSource::kStaleContent,
+      gpu::SyncToken(), /*override=*/{.color_space = gfx::ColorSpace()});
+  viz::ReleaseCallback release_callback = result->TakeSharedImageOwnership();
+  CHECK(release_callback);
 
   if (stale_content_layer_->parent() != client_->DelegatedFrameHostGetLayer())
     client_->DelegatedFrameHostGetLayer()->Add(stale_content_layer_.get());
 
-// TODO(crbug.com/1281251): This DCHECK occasionally gets hit on Chrome OS.
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-  DCHECK(!stale_content_layer_->has_external_content());
+// TODO(crbug.com/40812011): This DCHECK occasionally gets hit on Chrome OS.
+#if !BUILDFLAG(IS_CHROMEOS)
+  CHECK(!stale_content_layer_->has_external_content());
 #endif
   stale_content_layer_->SetVisible(true);
   stale_content_layer_->SetBounds(gfx::Rect(surface_dip_size_));
   stale_content_layer_->SetTransferableResource(
-      transfer_resource, std::move(release_callbacks[0]), surface_dip_size_);
+      transfer_resource, std::move(release_callback), surface_dip_size_);
 }
 
 void DelegatedFrameHost::ContinueDelegatedFrameEviction(
@@ -508,10 +529,15 @@ void DelegatedFrameHost::ContinueDelegatedFrameEviction(
 
   // Ensure the list is not empty, otherwise we are silently disconnecting our
   // FrameTree. This prevents the eviction of viz::Surfaces, leading to GPU
-  // memory staying allocated.
-  DCHECK(!surface_ids.empty());
+  // memory staying allocated. We do allow the surface ids to be empty if we
+  // don't have a local surface id, since that means we don't have memory
+  // allocated in viz.
+  //
+  // TODO(b/337467299): determine why we are evicting without finding valid
+  // surfaces.
+  DCHECK(!local_surface_id_.is_valid() || !surface_ids.empty());
   if (!surface_ids.empty()) {
-    DCHECK(host_frame_sink_manager_);
+    CHECK(host_frame_sink_manager_);
     host_frame_sink_manager_->EvictSurfaces(surface_ids);
   }
   client_->InvalidateLocalSurfaceIdOnEviction();
@@ -521,16 +547,20 @@ void DelegatedFrameHost::ContinueDelegatedFrameEviction(
 // DelegatedFrameHost, ui::CompositorObserver implementation:
 
 void DelegatedFrameHost::OnCompositingShuttingDown(ui::Compositor* compositor) {
-  DCHECK_EQ(compositor, compositor_);
+  CHECK_EQ(compositor, compositor_);
   DetachFromCompositor();
-  DCHECK(!compositor_);
+  CHECK(!compositor_);
 }
+
+void DelegatedFrameHost::OnFirstSurfaceActivation(
+    ui::Compositor* compositor,
+    const viz::SurfaceInfo& surface_info) {}
 
 ////////////////////////////////////////////////////////////////////////////////
 // DelegatedFrameHost, private:
 
 void DelegatedFrameHost::AttachToCompositor(ui::Compositor* compositor) {
-  DCHECK(!compositor_);
+  CHECK(!compositor_);
   if (!compositor)
     return;
   compositor_ = compositor;
@@ -566,6 +596,24 @@ void DelegatedFrameHost::DidNavigateMainFramePreCommit() {
   pre_navigation_local_surface_id_ = local_surface_id_;
   first_local_surface_id_after_navigation_ = viz::LocalSurfaceId();
   local_surface_id_ = viz::LocalSurfaceId();
+
+  // The page is either activated or evicted from BFCache without notifying the
+  // DelegatedFrameHost. In either cases, `bfcache_fallback_` must be
+  // invalidated.
+  //
+  // TODO(https://crbug.com/356337182): Remove the DumpWithoutCrashing when the
+  // bug is fixed.
+  if (bfcache_fallback_.is_valid()) {
+    SCOPED_CRASH_KEY_STRING64("crbug-356337182", "bfc_fallback_crashed",
+                              bfcache_fallback_.ToString().c_str());
+    SCOPED_CRASH_KEY_STRING64(
+        "crbug-356337182", "pre_nav_lsid_crashed",
+        pre_navigation_local_surface_id_.ToString().c_str());
+    SCOPED_CRASH_KEY_STRING64("crbug-356337182", "current_lsid_crashed",
+                              local_surface_id_.ToString().c_str());
+    base::debug::DumpWithoutCrashing();
+    bfcache_fallback_ = viz::LocalSurfaceId();
+  }
 }
 
 void DelegatedFrameHost::DidEnterBackForwardCache() {
@@ -587,6 +635,10 @@ void DelegatedFrameHost::DidEnterBackForwardCache() {
     bfcache_fallback_ = pre_navigation_local_surface_id_;
     pre_navigation_local_surface_id_ = viz::LocalSurfaceId();
   }
+}
+
+void DelegatedFrameHost::ActivatedOrEvictedFromBackForwardCache() {
+  bfcache_fallback_ = viz::LocalSurfaceId();
 }
 
 void DelegatedFrameHost::WindowTitleChanged(const std::string& title) {
@@ -651,6 +703,11 @@ viz::SurfaceId DelegatedFrameHost::GetFirstSurfaceIdAfterNavigationForTesting()
                         first_local_surface_id_after_navigation_);
 }
 
+viz::SurfaceId DelegatedFrameHost::GetBFCacheFallbackSurfaceIdForTesting()
+    const {
+  return viz::SurfaceId(frame_sink_id_, bfcache_fallback_);
+}
+
 void DelegatedFrameHost::SetIsFrameSinkIdOwner(bool is_owner) {
   if (is_owner == owns_frame_sink_id_) {
     return;
@@ -663,28 +720,6 @@ void DelegatedFrameHost::SetIsFrameSinkIdOwner(bool is_owner) {
     host_frame_sink_manager_->SetFrameSinkDebugLabel(frame_sink_id_,
                                                      "DelegatedFrameHost");
   }
-}
-
-// static
-bool DelegatedFrameHost::ShouldIncludeUiCompositorForEviction() {
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS_LACROS)
-  if (!base::FeatureList::IsEnabled(
-          features::kApplyNativeOcclusionToCompositor)) {
-    return false;
-  }
-
-  const std::string type =
-      features::kApplyNativeOcclusionToCompositorType.Get();
-  return type == features::kApplyNativeOcclusionToCompositorTypeRelease ||
-         type ==
-             features::kApplyNativeOcclusionToCompositorTypeThrottleAndRelease;
-#else
-  // ChromeOS does not have native occlusion, and the UI compositor corresponds
-  // to the entire display, so we don't evict it. Linux does not have native
-  // occlusion support, so we don't know when we can evict it, as it may e.g.
-  // be shown in a preview while minimized.
-  return false;
-#endif
 }
 
 }  // namespace content

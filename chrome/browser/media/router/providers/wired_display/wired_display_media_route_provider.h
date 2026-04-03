@@ -80,7 +80,6 @@ class WiredDisplayMediaRouteProvider : public mojom::MediaRouteProvider,
   void StopObservingMediaSinks(const std::string& media_source) override;
   void StartObservingMediaRoutes() override;
   void DetachRoute(const std::string& route_id) override;
-  void EnableMdnsDiscovery() override;
   void DiscoverSinksNow() override;
   void BindMediaController(
       const std::string& route_id,
@@ -91,7 +90,7 @@ class WiredDisplayMediaRouteProvider : public mojom::MediaRouteProvider,
 
   // display::DisplayObserver:
   void OnDisplayAdded(const display::Display& new_display) override;
-  void OnDisplayRemoved(const display::Display& old_display) override;
+  void OnDisplaysRemoved(const display::Displays& removed_displays) override;
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override;
 

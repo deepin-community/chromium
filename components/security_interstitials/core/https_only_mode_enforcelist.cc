@@ -4,7 +4,6 @@
 
 #include "components/security_interstitials/core/https_only_mode_enforcelist.h"
 
-#include "base/containers/contains.h"
 #include "base/json/values_util.h"
 #include "base/time/clock.h"
 #include "base/values.h"
@@ -55,7 +54,7 @@ void HttpsOnlyModeEnforcelist::EnforceForHost(const std::string& host,
   // We want to count how many HTTPS-enforced hosts accumulate over time, so
   // use a dictionary here.
   GURL url = GetSecureGURLForHost(host);
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kEnabledKey, true);
   dict.Set(kAdditionTimestamp, base::TimeToValue(clock_->Now()));
 
@@ -84,7 +83,7 @@ void HttpsOnlyModeEnforcelist::UnenforceForHost(const std::string& host,
       url, url, ContentSettingsType::HTTPS_ENFORCED, nullptr);
   DCHECK(value.is_dict());
 
-  base::Value::Dict& dict = value.GetDict();
+  base::DictValue& dict = value.GetDict();
   dict.Set(kEnabledKey, false);
 
   // Record the duration HTTPS was enforced on this host.
@@ -108,15 +107,15 @@ bool HttpsOnlyModeEnforcelist::IsEnforcedForUrl(
     const GURL& url,
     bool is_nondefault_storage) const {
   // HTTPS-First Mode is never auto-enabled for URLs with non-default ports.
-  if (!url.port().empty()) {
+  if (!url.GetPort().empty()) {
     return false;
   }
   if (is_nondefault_storage) {
-    return base::Contains(
-        enforce_https_hosts_for_non_default_storage_partitions_, url.host());
+    return enforce_https_hosts_for_non_default_storage_partitions_.contains(
+        url.GetHost());
   }
 
-  GURL secure_url = GetSecureGURLForHost(url.host());
+  GURL secure_url = GetSecureGURLForHost(url.GetHost());
   const base::Value value = host_content_settings_map_->GetWebsiteSetting(
       secure_url, secure_url, ContentSettingsType::HTTPS_ENFORCED, nullptr);
   if (!value.is_dict()) {
@@ -141,7 +140,8 @@ std::set<GURL> HttpsOnlyModeEnforcelist::GetHosts(
        host_content_settings_map_->GetSettingsForOneType(
            ContentSettingsType::HTTPS_ENFORCED)) {
     GURL url(rule.primary_pattern.ToString());
-    if (!url.is_empty()) {
+    if (!url.is_empty() && rule.setting_value.is_dict() &&
+        rule.setting_value.GetDict().FindBool(kEnabledKey).value_or(false)) {
       urls.insert(url);
     }
   }
@@ -184,7 +184,7 @@ void HttpsOnlyModeEnforcelist::RecordMetrics(bool is_nondefault_storage) {
       host_content_settings_map_->GetSettingsForOneType(
           ContentSettingsType::HTTPS_ENFORCED);
   size_t accumulated_host_count = output.size();
-  size_t current_host_count = base::ranges::count_if(
+  size_t current_host_count = std::ranges::count_if(
       output, [](const ContentSettingPatternSource setting) {
         if (!setting.setting_value.is_dict()) {
           return false;

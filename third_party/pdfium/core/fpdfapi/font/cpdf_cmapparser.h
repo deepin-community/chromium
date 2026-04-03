@@ -7,6 +7,7 @@
 #ifndef CORE_FPDFAPI_FONT_CPDF_CMAPPARSER_H_
 #define CORE_FPDFAPI_FONT_CPDF_CMAPPARSER_H_
 
+#include <array>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -25,8 +26,8 @@ class CPDF_CMapParser {
   static CIDSet CharsetFromOrdering(ByteStringView ordering);
 
  private:
-  friend class cpdf_cmapparser_GetCode_Test;
-  friend class cpdf_cmapparser_GetCodeRange_Test;
+  friend class CPDFCMapParserTest_GetCode_Test;
+  friend class CPDFCMapParserTest_GetCodeRange_Test;
 
   enum Status {
     kStart,
@@ -47,14 +48,14 @@ class CPDF_CMapParser {
       ByteStringView first,
       ByteStringView second);
 
-  Status m_Status = kStart;
-  int m_CodeSeq = 0;
-  UnownedPtr<CPDF_CMap> const m_pCMap;
-  std::vector<CPDF_CMap::CodeRange> m_Ranges;
-  std::vector<CPDF_CMap::CodeRange> m_PendingRanges;
-  std::vector<CPDF_CMap::CIDRange> m_AdditionalCharcodeToCIDMappings;
-  ByteString m_LastWord;
-  uint32_t m_CodePoints[4] = {};
+  Status status_ = kStart;
+  int code_seq_ = 0;
+  UnownedPtr<CPDF_CMap> const cmap_;
+  std::vector<CPDF_CMap::CodeRange> ranges_;
+  std::vector<CPDF_CMap::CodeRange> pending_ranges_;
+  std::vector<CPDF_CMap::CIDRange> additional_charcode_to_cidmappings_;
+  ByteString last_word_;
+  std::array<uint32_t, 4> code_points_ = {};
 };
 
 #endif  // CORE_FPDFAPI_FONT_CPDF_CMAPPARSER_H_

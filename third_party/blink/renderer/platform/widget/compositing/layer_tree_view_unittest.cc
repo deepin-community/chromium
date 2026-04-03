@@ -26,7 +26,6 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
-#include "third_party/blink/public/platform/scheduler/test/web_fake_thread_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/dummy_schedulers.h"
 #include "third_party/blink/renderer/platform/scheduler/public/page_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/widget_scheduler.h"
@@ -60,7 +59,7 @@ class FakeLayerTreeViewDelegate : public StubLayerTreeViewDelegate {
       return;
     }
 
-    auto context_provider = viz::TestContextProvider::Create();
+    auto context_provider = viz::TestContextProvider::CreateGLES();
     if (num_failures_since_last_success_ < num_failures_before_success_) {
       context_provider->UnboundTestContextGL()->LoseContextCHROMIUM(
           GL_GUILTY_CONTEXT_RESET_ARB, GL_INNOCENT_CONTEXT_RESET_ARB);
@@ -128,7 +127,8 @@ class LayerTreeViewWithFrameSinkTracking : public LayerTreeView {
  public:
   LayerTreeViewWithFrameSinkTracking(FakeLayerTreeViewDelegate* delegate,
                                      PageScheduler& scheduler)
-      : LayerTreeView(delegate, scheduler.CreateWidgetScheduler()),
+      : LayerTreeView(delegate,
+                      scheduler.CreateWidgetScheduler(/*delegate=*/nullptr)),
         delegate_(delegate) {}
   LayerTreeViewWithFrameSinkTracking(
       const LayerTreeViewWithFrameSinkTracking&) = delete;
@@ -199,8 +199,8 @@ class LayerTreeViewWithFrameSinkTracking : public LayerTreeView {
   void EndTest() { run_loop_->Quit(); }
 
  private:
-  raw_ptr<FakeLayerTreeViewDelegate, ExperimentalRenderer> delegate_;
-  raw_ptr<base::RunLoop, ExperimentalRenderer> run_loop_ = nullptr;
+  raw_ptr<FakeLayerTreeViewDelegate> delegate_;
+  raw_ptr<base::RunLoop> run_loop_ = nullptr;
   int expected_successes_ = 0;
   int expected_requests_ = 0;
   FailureMode failure_mode_ = kNoFailure;
@@ -300,7 +300,8 @@ class VisibilityTestLayerTreeView : public LayerTreeView {
  public:
   VisibilityTestLayerTreeView(StubLayerTreeViewDelegate* delegate,
                               PageScheduler& scheduler)
-      : LayerTreeView(delegate, scheduler.CreateWidgetScheduler()) {}
+      : LayerTreeView(delegate,
+                      scheduler.CreateWidgetScheduler(/*delegate=*/nullptr)) {}
 
   void RequestNewLayerTreeFrameSink() override {
     LayerTreeView::RequestNewLayerTreeFrameSink();
@@ -314,7 +315,7 @@ class VisibilityTestLayerTreeView : public LayerTreeView {
 
  private:
   int num_requests_sent_ = 0;
-  raw_ptr<base::RunLoop, ExperimentalRenderer> run_loop_;
+  raw_ptr<base::RunLoop> run_loop_;
 };
 
 TEST(LayerTreeViewTest, VisibilityTest) {
@@ -373,8 +374,9 @@ TEST(LayerTreeViewTest, RunPresentationCallbackOnSuccess) {
   std::unique_ptr<PageScheduler> dummy_page_scheduler =
       scheduler::CreateDummyPageScheduler();
   StubLayerTreeViewDelegate layer_tree_view_delegate;
-  LayerTreeView layer_tree_view(&layer_tree_view_delegate,
-                                dummy_page_scheduler->CreateWidgetScheduler());
+  LayerTreeView layer_tree_view(
+      &layer_tree_view_delegate,
+      dummy_page_scheduler->CreateWidgetScheduler(/*delegate=*/nullptr));
 
   layer_tree_view.Initialize(
       cc::LayerTreeSettings(),
@@ -384,9 +386,11 @@ TEST(LayerTreeViewTest, RunPresentationCallbackOnSuccess) {
   // Register a callback for frame 1.
   base::TimeTicks callback_timestamp;
   layer_tree_view.AddPresentationCallback(
-      1, base::BindLambdaForTesting([&](base::TimeTicks timestamp) {
-        callback_timestamp = timestamp;
-      }));
+      1, base::BindLambdaForTesting(
+             [&](const viz::FrameTimingDetails& frame_timing_details) {
+               callback_timestamp =
+                   frame_timing_details.presentation_feedback.timestamp;
+             }));
 
   // Respond with a failed presentation feedback for frame 1 and verify that the
   // callback is not called
@@ -394,7 +398,9 @@ TEST(LayerTreeViewTest, RunPresentationCallbackOnSuccess) {
       base::TimeTicks::Now() + base::Microseconds(2);
   gfx::PresentationFeedback fail_feedback(fail_timestamp, base::TimeDelta(),
                                           gfx::PresentationFeedback::kFailure);
-  layer_tree_view.DidPresentCompositorFrame(1, fail_feedback);
+  viz::FrameTimingDetails frame_timing_details;
+  frame_timing_details.presentation_feedback = fail_feedback;
+  layer_tree_view.DidPresentCompositorFrame(1, frame_timing_details);
   EXPECT_TRUE(callback_timestamp.is_null());
 
   // Respond with a successful presentation feedback for frame 2 and verify that
@@ -403,7 +409,9 @@ TEST(LayerTreeViewTest, RunPresentationCallbackOnSuccess) {
   base::TimeTicks success_timestamp = fail_timestamp + base::Microseconds(3);
   gfx::PresentationFeedback success_feedback(success_timestamp,
                                              base::TimeDelta(), 0);
-  layer_tree_view.DidPresentCompositorFrame(2, success_feedback);
+  viz::FrameTimingDetails frame_timing_details2;
+  frame_timing_details2.presentation_feedback = success_feedback;
+  layer_tree_view.DidPresentCompositorFrame(2, frame_timing_details2);
   EXPECT_FALSE(callback_timestamp.is_null());
   EXPECT_NE(callback_timestamp, fail_timestamp);
   EXPECT_EQ(callback_timestamp, success_timestamp);
@@ -414,7 +422,8 @@ class LayerTreeViewDelegateChangeTest : public testing::Test {
   LayerTreeViewDelegateChangeTest()
       : dummy_page_scheduler_(scheduler::CreateDummyPageScheduler()),
         layer_tree_view_(&old_layer_tree_view_delegate_,
-                         dummy_page_scheduler_->CreateWidgetScheduler()) {
+                         dummy_page_scheduler_->CreateWidgetScheduler(
+                             /*delegate=*/nullptr)) {
     cc::LayerTreeSettings settings;
     settings.single_thread_proxy_scheduler = false;
     layer_tree_view_.Initialize(
@@ -429,8 +438,9 @@ class LayerTreeViewDelegateChangeTest : public testing::Test {
       const LayerTreeViewDelegateChangeTest&) = delete;
 
   void SwapDelegate() {
-    layer_tree_view_.ReattachTo(&new_layer_tree_view_delegate_,
-                                dummy_page_scheduler_->CreateWidgetScheduler());
+    layer_tree_view_.ClearPreviousDelegateAndReattachIfNeeded(
+        &new_layer_tree_view_delegate_,
+        dummy_page_scheduler_->CreateWidgetScheduler(/*delegate=*/nullptr));
   }
 
  protected:
@@ -442,7 +452,7 @@ class LayerTreeViewDelegateChangeTest : public testing::Test {
       did_request_frame_sink_ = true;
 
       if (service_frame_sink_request_) {
-        auto context_provider = viz::TestContextProvider::Create();
+        auto context_provider = viz::TestContextProvider::CreateGLES();
         std::move(callback).Run(
             cc::FakeLayerTreeFrameSink::Create3d(std::move(context_provider)),
             nullptr);

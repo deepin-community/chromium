@@ -15,52 +15,40 @@ limitations under the License.
 
 #include "tensorflow/compiler/jit/compilability_check_util.h"
 
-#include <algorithm>
-#include <atomic>
-#include <deque>
+#include <cstddef>
 #include <iterator>
-#include <limits>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "absl/algorithm/container.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "tensorflow/compiler/jit/defs.h"
-#include "tensorflow/compiler/jit/device_util.h"
-#include "tensorflow/compiler/jit/flags.h"
-#include "tensorflow/compiler/jit/resource_operation_safety_analysis.h"
 #include "tensorflow/compiler/jit/xla_activity.pb.h"
 #include "tensorflow/compiler/jit/xla_activity_listener.h"
 #include "tensorflow/compiler/jit/xla_cluster_util.h"
 #include "tensorflow/compiler/tf2xla/const_analysis.h"
-#include "tensorflow/compiler/tf2xla/resource_operation_table.h"
-#include "tensorflow/compiler/tf2xla/tf2xla_util.h"
+#include "tensorflow/compiler/tf2xla/tf2xla_defs.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/service/graphcycles/graphcycles.h"
-#include "xla/statusor.h"
-#include "xla/union_find.h"
-#include "xla/util.h"
-#include "tensorflow/core/common_runtime/function.h"
-#include "tensorflow/core/common_runtime/graph_constructor.h"
+#include "xla/tsl/platform/errors.h"
+#include "tensorflow/core/common_runtime/function_body.h"
+#include "tensorflow/core/common_runtime/function_utils.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
-#include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/graph_def_util.h"
 #include "tensorflow/core/framework/memory_types.h"
 #include "tensorflow/core/framework/node_def.pb.h"
+#include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/types.h"
-#include "tensorflow/core/graph/algorithm.h"
-#include "tensorflow/core/graph/control_flow.h"
+#include "tensorflow/core/graph/graph.h"
 #include "tensorflow/core/lib/gtl/cleanup.h"
-#include "tensorflow/core/lib/strings/stringprintf.h"
-#include "tensorflow/core/public/version.h"
-#include "tensorflow/core/util/dump_graph.h"
 
 namespace tensorflow {
 
@@ -80,16 +68,17 @@ bool IsInOutsideCompilationCluster(const Node& n) {
   return n.attrs().Find(kXlaOutsideCompilationAttr) != nullptr;
 }
 
-Status MakeCallNodeFromAttribute(const Node& node, const std::string& attr_name,
-                                 NodeDef* node_def) {
+absl::Status MakeCallNodeFromAttribute(const Node& node,
+                                       const std::string& attr_name,
+                                       NodeDef* node_def) {
   const NameAttrList* name_attr;
   TF_RETURN_IF_ERROR(GetNodeAttr(node.attrs(), attr_name, &name_attr));
   node_def->set_op(name_attr->name());
   *(node_def->mutable_attr()) = name_attr->attr();
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-StatusOr<std::vector<NodeDef>> MakeCallNodesFromAttribute(
+absl::StatusOr<std::vector<NodeDef>> MakeCallNodesFromAttribute(
     const Node& node, absl::string_view attr_name,
     absl::string_view call_name) {
   std::vector<NameAttrList> attr_lists;
@@ -171,7 +160,7 @@ RecursiveCompilabilityChecker::FindUncompilableNodes(
 }
 
 bool RecursiveCompilabilityChecker::HasXLAKernel(
-    const Node& node, string* uncompilable_reason) const {
+    const Node& node, std::string* uncompilable_reason) const {
   // There is a SymbolicGradient kernel on the XLA_JIT device, but the gradient
   // is really a kind of function call and will be handled by
   // IsCompilableCall().
@@ -200,7 +189,8 @@ bool RecursiveCompilabilityChecker::HasXLAKernel(
     return false;
   }
 
-  Status s = FindKernelDef(jit_device_type_, node.def(), nullptr, nullptr);
+  absl::Status s =
+      FindKernelDef(jit_device_type_, node.def(), nullptr, nullptr);
   if (!s.ok()) {
     *uncompilable_reason = s.message();
     return false;
@@ -235,7 +225,7 @@ bool RecursiveCompilabilityChecker::IsCompilableCase(
     NameAttrList* encapsulating_function,
     RecursiveCompilabilityChecker::UncompilableNodesMap* uncompilable_nodes)
     const {
-  StatusOr<std::vector<NodeDef>> calls =
+  absl::StatusOr<std::vector<NodeDef>> calls =
       MakeCallNodesFromAttribute(case_node, "branches", "branch");
   if (!calls.ok()) {
     VLOG(2) << "Rejecting node " << case_node.name() << ": "
@@ -322,7 +312,7 @@ bool RecursiveCompilabilityChecker::IsCompilableCall(
   }
 
   FunctionLibraryRuntime::Handle handle;
-  Status s;
+  absl::Status s;
   NameAttrList function;
   s = NameAndAttrsFromFunctionCall(call_def, &function);
   if (s.ok()) {
@@ -339,8 +329,8 @@ bool RecursiveCompilabilityChecker::IsCompilableCall(
     return false;
   }
 
-  auto release_handle_on_return = gtl::MakeCleanup(
-      [&] { TF_CHECK_OK(lib_runtime->ReleaseHandle(handle)); });
+  auto release_handle_on_return =
+      gtl::MakeCleanup([&] { CHECK_OK(lib_runtime->ReleaseHandle(handle)); });
   const FunctionBody* fbody = lib_runtime->GetFunctionBody(handle);
   bool is_compilable = true;
   for (const Node* node : fbody->graph->op_nodes()) {
@@ -368,11 +358,16 @@ bool RecursiveCompilabilityChecker::OpIsSlow(const Node& node) const {
   // https://github.com/tensorflow/tensorflow/pull/31012:
   //    ResizeNearestNeighbor, ResizeBilinear, and ResizeBilinearGrad sometimes
   //    create convolutions too large for CuDNN to handle.
+  // NonMaxSuppressionV3/V4 in XLA runs significantly slower than TF kernel in
+  // object detection models, specially when there are a lot of proposed
+  // bounding boxes.
   return node.type_string() == "SelfAdjointEigV2" ||
          node.type_string() == "Svd" || node.type_string() == "Qr" ||
          node.type_string() == "MatrixInverse" ||
          node.type_string() == "MatrixSolve" ||
-         node.type_string() == "ResizeBilinearGrad";
+         node.type_string() == "ResizeBilinearGrad" ||
+         node.type_string() == "NonMaxSuppressionV3" ||
+         node.type_string() == "NonMaxSuppressionV4";
 }
 
 bool RecursiveCompilabilityChecker::IsCompilableNode(
@@ -417,7 +412,7 @@ bool RecursiveCompilabilityChecker::IsCompilableNode(
     return false;
   }
 
-  string uncompilable_reason;
+  std::string uncompilable_reason;
   if (IsFunctionCall(*lib_runtime->GetFunctionLibraryDefinition(), node)) {
     if (!IsCompilableCall(node.def(), lib_runtime, stack_trace,
                           encapsulating_function, uncompilable_nodes)) {
@@ -628,11 +623,10 @@ bool CanCreateXlaKernel(const NodeDef& node_def) {
   return HasBoolAttr(node_def, kXlaMustCompileAttr);
 }
 
-Status GetBodyAndConstantsAndResources(FunctionLibraryRuntime* flr,
-                                       const NameAttrList& function,
-                                       const FunctionBody** fbody,
-                                       std::vector<int>* constant_arg_indices,
-                                       std::vector<int>* resource_arg_indices) {
+absl::Status GetBodyAndConstantsAndResources(
+    FunctionLibraryRuntime* flr, const NameAttrList& function,
+    const FunctionBody** fbody, std::vector<int>* constant_arg_indices,
+    std::vector<int>* resource_arg_indices) {
   FunctionLibraryRuntime::Handle handle;
   TF_RETURN_IF_ERROR(
       flr->Instantiate(function.name(), AttrSlice(&function.attr()), &handle));
@@ -660,7 +654,7 @@ Status GetBodyAndConstantsAndResources(FunctionLibraryRuntime* flr,
     }
   }
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 tensorflow::MemoryTypeVector GetInputMemoryTypes(
@@ -734,7 +728,7 @@ static auto const ops_triggering_xla_compilation =
                                          "XlaVariadicSort",
                                          "XlaWhile"};
 
-static bool NodeCanTriggerXlaCompilation(const NodeDef& node) {
+bool NodeCanTriggerXlaCompilation(const NodeDef& node) {
   return node.attr().find(kXlaClusterIdAttr) != node.attr().end() ||
          HasBoolAttr(node, kXlaMustCompileAttr) ||
          HasBoolAttr(node, kXlaCompileAttr) ||

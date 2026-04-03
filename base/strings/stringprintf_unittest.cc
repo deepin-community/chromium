@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <stddef.h>
 
+#include "base/compiler_specific.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -23,7 +24,7 @@ static void StringAppendVTestHelper(std::basic_string<CharT>* out,
                                     ...) {
   va_list ap;
   va_start(ap, format);
-  StringAppendV(out, format, ap);
+  UNSAFE_TODO(StringAppendV(out, format, ap));
   va_end(ap);
 }
 
@@ -69,7 +70,7 @@ TEST(StringPrintfTest, StringPrintfBounds) {
   std::fill_n(src16, kSrcLen, 'A');
 
   for (int i = 1; i < 3; i++) {
-    src[kSrcLen - i] = 0;
+    UNSAFE_TODO(src[kSrcLen - i]) = 0;
     std::string out;
     EXPECT_EQ(src, StringPrintf("%s", src));
   }
@@ -78,8 +79,9 @@ TEST(StringPrintfTest, StringPrintfBounds) {
 // Test very large sprintfs that will cause the buffer to grow.
 TEST(StringPrintfTest, Grow) {
   char src[1026];
-  for (auto& i : src)
+  for (auto& i : src) {
     i = 'A';
+  }
   src[1025] = 0;
 
   const char fmt[] = "%sB%sB%sB%sB%sB%sB%s";
@@ -87,9 +89,9 @@ TEST(StringPrintfTest, Grow) {
   const int kRefSize = 320000;
   char* ref = new char[kRefSize];
 #if BUILDFLAG(IS_WIN)
-  sprintf_s(ref, kRefSize, fmt, src, src, src, src, src, src, src);
+  UNSAFE_TODO(sprintf_s(ref, kRefSize, fmt, src, src, src, src, src, src, src));
 #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
-  snprintf(ref, kRefSize, fmt, src, src, src, src, src, src, src);
+  UNSAFE_TODO(snprintf(ref, kRefSize, fmt, src, src, src, src, src, src, src));
 #endif
 
   EXPECT_EQ(ref, StringPrintf(fmt, src, src, src, src, src, src, src));
@@ -111,8 +113,9 @@ TEST(StringPrintfTest, GrowBoundary) {
   // And need extra one for NULL-terminator.
   const int kBufLen = kStringUtilBufLen + 1 + 1;
   char src[kBufLen];
-  for (int i = 0; i < kBufLen - 1; ++i)
-    src[i] = 'a';
+  for (int i = 0; i < kBufLen - 1; ++i) {
+    UNSAFE_TODO(src[i]) = 'a';
+  }
   src[kBufLen - 1] = 0;
 
   EXPECT_EQ(src, StringPrintf("%s", src));

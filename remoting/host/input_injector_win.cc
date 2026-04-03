@@ -4,15 +4,16 @@
 
 #include "remoting/host/input_injector.h"
 
-#include <stdint.h>
 #include <windows.h>
 
+#include <stdint.h>
+
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <optional>
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -42,8 +43,7 @@ void SendKeyboardInput(uint32_t flags,
                        uint16_t scancode,
                        uint16_t virtual_key) {
   // Populate a Windows INPUT structure for the event.
-  INPUT input;
-  memset(&input, 0, sizeof(input));
+  INPUT input = {};
   input.type = INPUT_KEYBOARD;
   input.ki.time = 0;
   input.ki.dwFlags = flags;

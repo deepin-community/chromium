@@ -4,29 +4,35 @@
 
 #include "chrome/updater/win/app_command_runner.h"
 
-#include <shellapi.h>
-#include <shlobj.h>
 #include <windows.h>
 
+#include <shellapi.h>
+#include <shlobj.h>
+
+#include <algorithm>
 #include <array>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/test/gmock_expected_support.h"
+#include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
+#include "base/threading/platform_thread.h"
+#include "base/time/time.h"
 #include "base/win/scoped_localalloc.h"
 #include "build/branding_buildflags.h"
-#include "chrome/updater/test_scope.h"
+#include "chrome/updater/test/test_scope.h"
+#include "chrome/updater/test/unit_test_util_win.h"
 #include "chrome/updater/updater_branding.h"
-#include "chrome/updater/util/unit_test_util_win.h"
 #include "chrome/updater/util/win_util.h"
 #include "chrome/updater/win/win_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -53,38 +59,41 @@ std::wstring GetCommandLine(int key, const std::wstring& exe_name) {
 
 class AppCommandRunnerTestBase : public ::testing::Test {
  protected:
-  AppCommandRunnerTestBase() = default;
-  ~AppCommandRunnerTestBase() override = default;
-
   void SetUp() override {
-    SetupCmdExe(GetTestScope(), cmd_exe_command_line_, temp_programfiles_dir_);
+    test::SetupCmdExe(GetUpdaterScopeForTesting(), cmd_exe_command_line_,
+                      temp_programfiles_dir_);
   }
 
-  void TearDown() override { DeleteAppClientKey(GetTestScope(), kAppId1); }
+  void TearDown() override {
+    test::DeleteAppClientKey(GetUpdaterScopeForTesting(), kAppId1);
+  }
 
-  HResultOr<AppCommandRunner> CreateAppCommandRunner(
+  HResultOr<scoped_refptr<AppCommandRunner>> CreateAppCommandRunner(
       const std::wstring& app_id,
       const std::wstring& command_id,
       const std::wstring& command_line_format) {
-    CreateAppCommandRegistry(GetTestScope(), app_id, command_id,
-                             command_line_format);
-    return AppCommandRunner::LoadAppCommand(GetTestScope(), app_id, command_id);
+    test::CreateAppCommandRegistry(GetUpdaterScopeForTesting(), app_id,
+                                   command_id, command_line_format);
+    return AppCommandRunner::LoadAppCommand(GetUpdaterScopeForTesting(), app_id,
+                                            command_id);
   }
 
-  HResultOr<AppCommandRunner> CreateProcessLauncherRunner(
+  HResultOr<scoped_refptr<AppCommandRunner>> CreateProcessLauncherRunner(
       const std::wstring& app_id,
       const std::wstring& name,
       const std::wstring& pv,
       const std::wstring& command_id,
       const std::wstring& command_line_format) {
-    EXPECT_TRUE(IsSystemInstall(GetTestScope()));
-    CreateLaunchCmdElevatedRegistry(app_id, name, pv, command_id,
-                                    command_line_format);
-    return AppCommandRunner::LoadAppCommand(GetTestScope(), app_id, command_id);
+    EXPECT_TRUE(IsSystemInstall(GetUpdaterScopeForTesting()));
+    test::CreateLaunchCmdElevatedRegistry(app_id, name, pv, command_id,
+                                          command_line_format);
+    return AppCommandRunner::LoadAppCommand(GetUpdaterScopeForTesting(), app_id,
+                                            command_id);
   }
 
   base::CommandLine cmd_exe_command_line_{base::CommandLine::NO_PROGRAM};
   base::ScopedTempDir temp_programfiles_dir_;
+  base::test::TaskEnvironment environment_;
 };
 
 class AppCommandRunnerTest : public AppCommandRunnerTestBase {};
@@ -140,7 +149,8 @@ TEST_P(AppCommandFormatComponentsProgramFilesPathsTest, TestCases) {
   const std::wstring process_command_line =
       GetCommandLine(GetParam(), L"process.exe");
   ASSERT_EQ(AppCommandRunner::GetAppCommandFormatComponents(
-                GetTestScope(), process_command_line, executable, parameters),
+                GetUpdaterScopeForTesting(), process_command_line, executable,
+                parameters),
             S_OK);
   EXPECT_EQ(executable,
             base::CommandLine::FromString(process_command_line).GetProgram());
@@ -307,7 +317,7 @@ TEST_P(AppCommandFormatComponentsAndCommandLineTest, TestCases) {
   std::vector<std::wstring> parameters;
 
   ASSERT_EQ(AppCommandRunner::GetAppCommandFormatComponents(
-                GetTestScope(),
+                GetUpdaterScopeForTesting(),
                 base::StrCat({process_command_line, L" ",
                               base::JoinString(GetParam().input, L" ")}),
                 executable, parameters),
@@ -342,7 +352,11 @@ TEST_P(AppCommandFormatComponentsAndCommandLineTest, TestCases) {
                          << "' which unexpectedly did not parse to a single "
                          << "argument.";
 
-  EXPECT_EQ(argv_handle.get()[1], GetParam().substitutions[0])
+  // SAFETY: the unsafe buffer is present because ::CommandLineToArgvW call. The
+  // code is safe because `num_args` is checked as a size_t value.
+  UNSAFE_BUFFERS(const base::span<wchar_t*> safe_argv_handle{
+      argv_handle.get(), base::checked_cast<size_t>(num_args)});
+  EXPECT_EQ(safe_argv_handle[1], GetParam().substitutions[0])
       << "substitution '" << GetParam().substitutions[0]
       << "' gave command line '" << cmd << "' which did not parse back to the "
       << "original substitution";
@@ -354,39 +368,19 @@ struct AppCommandTestCase {
   const int expected_exit_code;
 };
 
-class AppCommandExecuteTest
-    : public ::testing::WithParamInterface<AppCommandTestCase>,
-      public AppCommandRunnerTestBase {};
-
-INSTANTIATE_TEST_SUITE_P(AppCommandExecuteTestCases,
-                         AppCommandExecuteTest,
-                         ::testing::ValuesIn(std::vector<AppCommandTestCase>{
-                             {{L"/c", L"exit 7"}, {}, 7},
-                             {{L"/c", L"exit %1"}, {L"5420"}, 5420},
-                         }));
-
-TEST_P(AppCommandExecuteTest, TestCases) {
-  base::Process process;
-  ASSERT_HRESULT_SUCCEEDED(AppCommandRunner::ExecuteAppCommand(
-      cmd_exe_command_line_.GetProgram(), GetParam().input,
-      GetParam().substitutions, process));
-
-  int exit_code = 0;
-  EXPECT_TRUE(process.WaitForExitWithTimeout(TestTimeouts::action_max_timeout(),
-                                             &exit_code));
-  EXPECT_EQ(exit_code, GetParam().expected_exit_code);
-}
-
 TEST_F(AppCommandRunnerTest, NoApp) {
-  HResultOr<AppCommandRunner> app_command_runner =
-      AppCommandRunner::LoadAppCommand(GetTestScope(), kAppId1, kCmdId1);
+  HResultOr<scoped_refptr<AppCommandRunner>> app_command_runner =
+      AppCommandRunner::LoadAppCommand(GetUpdaterScopeForTesting(), kAppId1,
+                                       kCmdId1);
   EXPECT_FALSE(app_command_runner.has_value());
 }
 
 TEST_F(AppCommandRunnerTest, NoCmd) {
-  CreateAppCommandRegistry(GetTestScope(), kAppId1, kCmdId1, kCmdLineValid);
-  HResultOr<AppCommandRunner> app_command_runner =
-      AppCommandRunner::LoadAppCommand(GetTestScope(), kAppId1, kCmdId2);
+  test::CreateAppCommandRegistry(GetUpdaterScopeForTesting(), kAppId1, kCmdId1,
+                                 kCmdLineValid);
+  HResultOr<scoped_refptr<AppCommandRunner>> app_command_runner =
+      AppCommandRunner::LoadAppCommand(GetUpdaterScopeForTesting(), kAppId1,
+                                       kCmdId2);
   EXPECT_FALSE(app_command_runner.has_value());
 }
 
@@ -402,10 +396,11 @@ INSTANTIATE_TEST_SUITE_P(RunAppCommandFormatTestCases,
                          }));
 
 TEST_P(RunAppCommandFormatTest, TestCases) {
-  AppCommandRunner app_command_runner;
+  scoped_refptr<AppCommandRunner> app_command_runner =
+      base::MakeRefCounted<AppCommandRunner>(kAppId1);
 
   base::Process process;
-  ASSERT_EQ(app_command_runner.Run(GetParam().substitutions, process),
+  ASSERT_EQ(app_command_runner->Run(GetParam().substitutions, process),
             E_UNEXPECTED);
 
   ASSERT_OK_AND_ASSIGN(
@@ -415,7 +410,7 @@ TEST_P(RunAppCommandFormatTest, TestCases) {
           base::StrCat({cmd_exe_command_line_.GetCommandLineString(), L" ",
                         base::JoinString(GetParam().input, L" ")})));
   ASSERT_HRESULT_SUCCEEDED(
-      app_command_runner.Run(GetParam().substitutions, process));
+      app_command_runner->Run(GetParam().substitutions, process));
 
   int exit_code = 0;
   EXPECT_TRUE(process.WaitForExitWithTimeout(TestTimeouts::action_max_timeout(),
@@ -425,7 +420,7 @@ TEST_P(RunAppCommandFormatTest, TestCases) {
 
 TEST_F(AppCommandRunnerTest, CheckChromeBrandedName) {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  EXPECT_STREQ("Google Chrome", BROWSER_PRODUCT_NAME_STRING);
+  EXPECT_EQ("Google Chrome", BROWSER_PRODUCT_NAME_STRING);
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 }
 
@@ -487,24 +482,23 @@ INSTANTIATE_TEST_SUITE_P(
     }));
 
 TEST_P(RunProcessLauncherFormatTest, TestCases) {
-  if (!IsSystemInstall(GetTestScope())) {
+  if (!IsSystemInstall(GetUpdaterScopeForTesting())) {
     return;
   }
 
-  HResultOr<AppCommandRunner> app_command_runner;
   base::Process process;
-  ASSERT_EQ(app_command_runner->Run({}, process), E_UNEXPECTED);
-
-  app_command_runner = CreateProcessLauncherRunner(
-      kAppId1, GetParam().app_name, GetParam().app_version, GetParam().cmd_id,
-      base::StrCat({cmd_exe_command_line_.GetCommandLineString(), L" ",
-                    base::JoinString(GetParam().input, L" ")}));
+  HResultOr<scoped_refptr<AppCommandRunner>> app_command_runner =
+      CreateProcessLauncherRunner(
+          kAppId1, GetParam().app_name, GetParam().app_version,
+          GetParam().cmd_id,
+          base::StrCat({cmd_exe_command_line_.GetCommandLineString(), L" ",
+                        base::JoinString(GetParam().input, L" ")}));
   ASSERT_EQ(app_command_runner.error_or(S_OK), GetParam().expected_hr);
   if (FAILED(GetParam().expected_hr)) {
     return;
   }
 
-  ASSERT_HRESULT_SUCCEEDED(app_command_runner->Run({}, process));
+  ASSERT_HRESULT_SUCCEEDED(app_command_runner.value()->Run({}, process));
 
   int exit_code = 0;
   EXPECT_TRUE(process.WaitForExitWithTimeout(TestTimeouts::action_max_timeout(),
@@ -541,23 +535,24 @@ INSTANTIATE_TEST_SUITE_P(
     }));
 
 TEST_P(RunBothFormatsTest, TestCases) {
-  if (!IsSystemInstall(GetTestScope())) {
+  if (!IsSystemInstall(GetUpdaterScopeForTesting())) {
     GTEST_SKIP();
   }
 
-  AppCommandRunner app_command_runner;
+  scoped_refptr<AppCommandRunner> app_command_runner =
+      base::MakeRefCounted<AppCommandRunner>(kAppId1);
   base::Process process;
-  ASSERT_EQ(app_command_runner.Run({}, process), E_UNEXPECTED);
+  ASSERT_EQ(app_command_runner->Run({}, process), E_UNEXPECTED);
 
   if (GetParam().cmd_id_appcommand) {
-    CreateAppCommandRegistry(
-        GetTestScope(), kAppId1, GetParam().cmd_id_appcommand,
+    test::CreateAppCommandRegistry(
+        GetUpdaterScopeForTesting(), kAppId1, GetParam().cmd_id_appcommand,
         base::StrCat({cmd_exe_command_line_.GetCommandLineString(), L" ",
                       base::JoinString(GetParam().input_appcommand, L" ")}));
   }
 
   if (GetParam().cmd_id_processlauncher) {
-    CreateLaunchCmdElevatedRegistry(
+    test::CreateLaunchCmdElevatedRegistry(
         kAppId1, L"" BROWSER_PRODUCT_NAME_STRING, L"1.0.0.0",
         GetParam().cmd_id_processlauncher,
         base::StrCat(
@@ -565,18 +560,19 @@ TEST_P(RunBothFormatsTest, TestCases) {
              base::JoinString(GetParam().input_processlauncher, L" ")}));
   }
 
-  ASSERT_OK_AND_ASSIGN(app_command_runner, AppCommandRunner::LoadAppCommand(
-                                               GetTestScope(), kAppId1,
-                                               GetParam().cmd_id_to_execute));
+  ASSERT_OK_AND_ASSIGN(
+      app_command_runner,
+      AppCommandRunner::LoadAppCommand(GetUpdaterScopeForTesting(), kAppId1,
+                                       GetParam().cmd_id_to_execute));
 
-  ASSERT_HRESULT_SUCCEEDED(app_command_runner.Run({}, process));
+  ASSERT_HRESULT_SUCCEEDED(app_command_runner->Run({}, process));
 
   int exit_code = 0;
   EXPECT_TRUE(process.WaitForExitWithTimeout(TestTimeouts::action_max_timeout(),
                                              &exit_code));
   EXPECT_EQ(exit_code, GetParam().expected_exit_code);
 
-  DeleteAppClientKey(GetTestScope(), kAppId1);
+  test::DeleteAppClientKey(GetUpdaterScopeForTesting(), kAppId1);
 }
 
 struct EachAppCommand {
@@ -607,24 +603,57 @@ INSTANTIATE_TEST_SUITE_P(
         }}));
 
 TEST_P(LoadAutoRunOnOsUpgradeAppCommandsTest, TestCases) {
-  base::ranges::for_each(GetParam(), [&](const auto& app_command) {
-    CreateAppCommandOSUpgradeRegistry(
-        GetTestScope(), kAppId1, app_command.command_id,
+  std::ranges::for_each(GetParam(), [&](const auto& app_command) {
+    test::CreateAppCommandOSUpgradeRegistry(
+        GetUpdaterScopeForTesting(), kAppId1, app_command.command_id,
         base::StrCat({cmd_exe_command_line_.GetCommandLineString(), L" ",
                       base::JoinString(app_command.input, L" ")}));
   });
 
-  const std::vector<AppCommandRunner> app_command_runners =
-      AppCommandRunner::LoadAutoRunOnOsUpgradeAppCommands(GetTestScope(),
-                                                          kAppId1);
+  const std::vector<scoped_refptr<AppCommandRunner>> app_command_runners =
+      AppCommandRunner::LoadAutoRunOnOsUpgradeAppCommands(
+          GetUpdaterScopeForTesting(), kAppId1);
 
   ASSERT_EQ(std::size(app_command_runners), std::size(GetParam()));
-  base::ranges::for_each(
+  std::ranges::for_each(
       app_command_runners, [&](const auto& app_command_runner) {
         base::Process process;
-        EXPECT_HRESULT_SUCCEEDED(app_command_runner.Run({}, process));
+        EXPECT_HRESULT_SUCCEEDED(app_command_runner->Run({}, process));
         EXPECT_TRUE(process.WaitForExit(/*exit_code=*/nullptr));
       });
+}
+
+struct AppCommandOutputTestCase {
+  const std::vector<std::wstring> input;
+  const std::string expected_output;
+};
+
+class AppCommandOutputTest
+    : public ::testing::WithParamInterface<AppCommandOutputTestCase>,
+      public AppCommandRunnerTestBase {};
+
+INSTANTIATE_TEST_SUITE_P(
+    AppCommandOutputTestCases,
+    AppCommandOutputTest,
+    ::testing::ValuesIn(std::vector<AppCommandOutputTestCase>{
+        {{L"/c", L"\"echo hello\""}, "hello\r\n"},
+        {{L"/c", L"exit"}, ""},
+    }));
+
+TEST_P(AppCommandOutputTest, TestCases) {
+  base::Process process;
+  ASSERT_OK_AND_ASSIGN(
+      scoped_refptr<AppCommandRunner> app_command_runner,
+      CreateAppCommandRunner(
+          kAppId1, kCmdId1,
+          base::StrCat({cmd_exe_command_line_.GetCommandLineString(), L" ",
+                        base::JoinString(GetParam().input, L" ")})));
+  ASSERT_HRESULT_SUCCEEDED(app_command_runner->Run({}, process));
+
+  EXPECT_TRUE(
+      app_command_runner->TimedWait(TestTimeouts::action_max_timeout()));
+  EXPECT_FALSE(process.IsRunning());
+  EXPECT_EQ(app_command_runner->output(), GetParam().expected_output);
 }
 
 }  // namespace updater

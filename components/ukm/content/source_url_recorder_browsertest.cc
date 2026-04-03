@@ -21,7 +21,6 @@
 #include "content/shell/browser/shell_download_manager_delegate.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
-#include "third_party/blink/public/common/features.h"
 
 class SourceUrlRecorderWebContentsObserverBrowserTest
     : public content::ContentBrowserTest {
@@ -36,7 +35,7 @@ class SourceUrlRecorderWebContentsObserverBrowserTest
     scoped_feature_list_.InitWithFeatures({ukm::kUkmFeature}, {});
   }
 
-  ~SourceUrlRecorderWebContentsObserverBrowserTest() override {}
+  ~SourceUrlRecorderWebContentsObserverBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
     content::ContentBrowserTest::SetUpOnMainThread();
@@ -134,7 +133,7 @@ IN_PROC_BROWSER_TEST_F(SourceUrlRecorderWebContentsObserverBrowserTest,
   content::TestNavigationObserver nav_observer(new_url);
   nav_observer.StartWatchingNewWebContents();
   EXPECT_TRUE(content::ExecJs(
-      shell(), content::JsReplace("window.open($1)", new_url.path())));
+      shell(), content::JsReplace("window.open($1)", new_url.GetPath())));
   nav_observer.Wait();
   content::Shell* new_window = shell_observer.GetShell();
   content::WebContents* new_contents = new_window->web_contents();
@@ -263,7 +262,7 @@ IN_PROC_BROWSER_TEST_F(SourceUrlRecorderWebContentsObserverPrerenderBrowserTest,
   EXPECT_EQ(1u, source2->urls().size());
   EXPECT_EQ(prerender_url, source2->url());
   GURL expected_ukm_url;
-  // TODO(crbug.com/1245014): The URL is not assigned yet for prerendering
+  // TODO(crbug.com/40195952): The URL is not assigned yet for prerendering
   // UKM source ids, so expect it to not be set.
   // expected_ukm_url = prerender_url;
   EXPECT_EQ(expected_ukm_url, GetAssociatedURLForWebContentsDocument());

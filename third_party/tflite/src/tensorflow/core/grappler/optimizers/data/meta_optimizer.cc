@@ -35,7 +35,7 @@ namespace grappler {
 namespace {
 
 using ConfigMap =
-    std::map<string, tensorflow::RewriterConfig_CustomGraphOptimizer>;
+    std::map<std::string, tensorflow::RewriterConfig_CustomGraphOptimizer>;
 
 // tf.data optimizations, in the order we want to perform them.
 // clang-format off
@@ -66,7 +66,7 @@ constexpr std::array<const char*, 22> kTFDataOptimizations = {
 
 // Parses a list of string optimizer configurations into a map from
 // optimizer name -> rewriter config for that optimizer.
-Status ToConfigMap(
+absl::Status ToConfigMap(
     const tensorflow::RewriterConfig_CustomGraphOptimizer* config,
     ConfigMap* result) {
   auto found = gtl::FindOrNull(config->parameter_map(), "optimizer_configs");
@@ -76,7 +76,7 @@ Status ToConfigMap(
   for (const auto& option_string : options) {
     // The option string has the format
     // <optimizer_name>:<config_key>:<config_value>
-    std::vector<string> split = absl::StrSplit(option_string, ':');
+    std::vector<std::string> split = absl::StrSplit(option_string, ':');
     if (split.size() != 3) {
       return errors::Internal(
           "Wrong format for optimizer options. Expect <optimizer name>:<config "
@@ -84,9 +84,9 @@ Status ToConfigMap(
           option_string);
     }
 
-    const string& optimizer_name = split[0];
-    const string& config_key = split[1];
-    const string& config_value = split[2];
+    const std::string& optimizer_name = split[0];
+    const std::string& config_key = split[1];
+    const std::string& config_value = split[2];
 
     auto optimizer_config = gtl::FindOrNull(*result, optimizer_name);
     if (!optimizer_config) {
@@ -103,8 +103,9 @@ Status ToConfigMap(
 
 }  // namespace
 
-Status TFDataMetaOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
-                                     GraphDef* output) {
+absl::Status TFDataMetaOptimizer::Optimize(Cluster* cluster,
+                                           const GrapplerItem& item,
+                                           GraphDef* output) {
   // Stores the optimized item so far.
   GrapplerItem optimized_item = item;
 
@@ -113,7 +114,8 @@ Status TFDataMetaOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
     tensorflow::metrics::ScopedCounter<2> timings(
         tensorflow::metrics::GetGraphOptimizationCounter(),
         {"TFData", optimization});
-    Status status = ApplyOptimization(optimization, cluster, &optimized_item);
+    absl::Status status =
+        ApplyOptimization(optimization, cluster, &optimized_item);
     timings.ReportAndStop();
     if (!status.ok()) return status;
   }
@@ -166,9 +168,9 @@ Status TFDataMetaOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
   return absl::OkStatus();
 }
 
-Status TFDataMetaOptimizer::ApplyOptimization(const string& name,
-                                              Cluster* cluster,
-                                              GrapplerItem* item) const {
+absl::Status TFDataMetaOptimizer::ApplyOptimization(const std::string& name,
+                                                    Cluster* cluster,
+                                                    GrapplerItem* item) const {
   GRAPPLER_RETURN_IF_DEADLINE_EXCEEDED();
 
   const auto* optimizer = gtl::FindOrNull(enabled_optimizers_, name);
@@ -178,7 +180,7 @@ Status TFDataMetaOptimizer::ApplyOptimization(const string& name,
 
   GraphDef result;
   (*optimizer)->set_deadline_usec(this->deadline_usec());
-  Status status = (*optimizer)->Optimize(cluster, *item, &result);
+  absl::Status status = (*optimizer)->Optimize(cluster, *item, &result);
   if (status.ok()) {
     // The optimizer succeeded and wrote the optimized graph to result.
     item->graph.Swap(&result);
@@ -192,7 +194,7 @@ Status TFDataMetaOptimizer::ApplyOptimization(const string& name,
   return status;
 }
 
-Status TFDataMetaOptimizer::Init(
+absl::Status TFDataMetaOptimizer::Init(
     const tensorflow::RewriterConfig_CustomGraphOptimizer* config) {
   if (!config) return absl::OkStatus();
 

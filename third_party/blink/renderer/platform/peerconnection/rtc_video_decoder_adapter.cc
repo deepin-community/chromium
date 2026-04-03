@@ -8,8 +8,8 @@
 #include <atomic>
 #include <functional>
 #include <utility>
+#include <variant>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -18,23 +18,21 @@
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/synchronization/waitable_event.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
-#include "base/trace_event/base_tracing.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "media/base/media_log.h"
 #include "media/base/media_switches.h"
 #include "media/base/media_util.h"
 #include "media/base/overlay_info.h"
 #include "media/base/platform_features.h"
+#include "media/base/supported_types.h"
 #include "media/base/video_decoder.h"
 #include "media/base/video_types.h"
 #include "media/video/gpu_video_accelerator_factories.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_video_decoder_fallback_recorder.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
@@ -47,20 +45,11 @@
 #include "third_party/webrtc/api/video/video_frame.h"
 #include "third_party/webrtc/api/video_codecs/vp9_profile.h"
 #include "third_party/webrtc/modules/video_coding/codecs/h264/include/h264.h"
+#include "third_party/webrtc/modules/video_coding/include/video_error_codes.h"
 #include "third_party/webrtc/rtc_base/ref_count.h"
 #include "third_party/webrtc/rtc_base/ref_counted_object.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/size.h"
-
-namespace WTF {
-
-template <>
-struct CrossThreadCopier<media::VideoDecoderConfig>
-    : public CrossThreadCopierPassThrough<media::VideoDecoderConfig> {
-  STATIC_ONLY(CrossThreadCopier);
-};
-
-}  // namespace WTF
 
 namespace blink {
 
@@ -87,8 +76,7 @@ void FinishWait(base::WaitableEvent* waiter, bool* result_out, bool result) {
   waiter->Signal();
 }
 
-void OnRequestOverlayInfo(bool decoder_requires_restart_for_overlay,
-                          media::ProvideOverlayInfoCB overlay_info_cb) {
+void OnRequestOverlayInfo(media::ProvideOverlayInfoCB overlay_info_cb) {
   // Android overlays are not supported.
   if (overlay_info_cb)
     std::move(overlay_info_cb).Run(media::OverlayInfo());
@@ -105,7 +93,14 @@ void RecordReinitializationLatency(base::TimeDelta latency) {
 }
 
 bool HasSoftwareFallback(media::VideoCodec video_codec) {
-#if BUILDFLAG(IS_ANDROID) && !BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+  if (video_codec == media::VideoCodec::kHEVC) {
+    return false;
+  }
+// TODO(crbug.com/355256378): OpenH264 for encoding and FFmpeg for H264 decoding
+// should be detangled such that software decoding can be enabled without
+// software encoding.
+#if BUILDFLAG(IS_ANDROID) && \
+    (!BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS) || !BUILDFLAG(ENABLE_OPENH264))
   return video_codec != media::VideoCodec::kH264;
 #else
   return true;
@@ -116,14 +111,26 @@ struct EncodedImageExternalMemory
     : public media::DecoderBuffer::ExternalMemory {
  public:
   explicit EncodedImageExternalMemory(
-      rtc::scoped_refptr<webrtc::EncodedImageBufferInterface> buffer_interface)
-      : ExternalMemory(base::make_span(buffer_interface->data(),
-                                       buffer_interface->size())),
-        buffer_interface_(std::move(buffer_interface)) {}
-  ~EncodedImageExternalMemory() override = default;
+      webrtc::scoped_refptr<webrtc::EncodedImageBufferInterface>
+          buffer_interface)
+      : buffer_interface_(std::move(buffer_interface)) {
+    DCHECK(buffer_interface_);
+  }
+
+  const base::span<const uint8_t> Span() const override {
+    // This cast forces span's implicit constructor to treat the provided type
+    // as reference-to-const instead of reference-to-non-const, which is
+    // necessary for `std::contiguous_range<>` to be true, since this type
+    // exposes both const and non-const `data()` methods and only the former
+    // will match the span element type.
+    // TODO(bugs.webrtc.org/9378): When the non-const `data()` method is
+    // eliminated, this cast can be removed.
+    return static_cast<const webrtc::EncodedImageBufferInterface&>(
+        *buffer_interface_);
+  }
 
  private:
-  rtc::scoped_refptr<webrtc::EncodedImageBufferInterface> buffer_interface_;
+  webrtc::scoped_refptr<webrtc::EncodedImageBufferInterface> buffer_interface_;
 };
 
 scoped_refptr<media::DecoderBuffer> ConvertToDecoderBuffer(
@@ -168,7 +175,7 @@ std::optional<RTCVideoDecoderFallbackReason> NeedSoftwareFallback(
   // Fall back to software decoding if there's no support for VP9 spatial
   // layers. See https://crbug.com/webrtc/9304.
   const bool is_spatial_layer_buffer =
-      buffer.has_side_data() && !buffer.side_data()->spatial_layers.empty();
+      buffer.side_data() && !buffer.side_data()->spatial_layers.empty();
   if (codec == media::VideoCodec::kVP9 && is_spatial_layer_buffer &&
       !media::IsVp9kSVCHWDecodingEnabled()) {
     return RTCVideoDecoderFallbackReason::kSpatialLayers;
@@ -188,9 +195,11 @@ std::optional<RTCVideoDecoderFallbackReason> NeedSoftwareFallback(
 class RTCVideoDecoderAdapter::Impl {
  public:
   Impl(media::GpuVideoAcceleratorFactories* const gpu_factories,
-       WTF::CrossThreadRepeatingFunction<void(Status)> change_status_callback,
+       CrossThreadRepeatingFunction<void(Status)> change_status_callback,
        base::WeakPtr<Impl>& weak_this_for_client)
       : gpu_factories_(gpu_factories),
+        frame_adapter_shared_resources_(
+            WebRtcVideoFrameAdapter::SharedResources::Create(gpu_factories_)),
         change_status_callback_(std::move(change_status_callback)) {
     // This is called on webrtc decoder sequence.
     DETACH_FROM_SEQUENCE(media_sequence_checker_);
@@ -211,11 +220,13 @@ class RTCVideoDecoderAdapter::Impl {
   void Decode(scoped_refptr<media::DecoderBuffer> buffer,
               base::WaitableEvent* waiter,
               std::optional<RTCVideoDecoderAdapter::DecodeResult>* result);
-  absl::variant<DecodeResult, RTCVideoDecoderFallbackReason> EnqueueBuffer(
+  std::variant<DecodeResult, RTCVideoDecoderFallbackReason> EnqueueBuffer(
       scoped_refptr<media::DecoderBuffer> buffer);
-  void Flush(WTF::CrossThreadOnceClosure flush_success_cb,
-             WTF::CrossThreadOnceClosure flush_fail_cb);
+  void Flush(CrossThreadOnceClosure flush_success_cb,
+             CrossThreadOnceClosure flush_fail_cb);
   void RegisterDecodeCompleteCallback(webrtc::DecodedImageCallback* callback);
+
+  bool IsDecoderConfigSupported(const media::VideoDecoderConfig& config) const;
 
  private:
   std::optional<RTCVideoDecoderFallbackReason> NeedSoftwareFallback(
@@ -225,8 +236,9 @@ class RTCVideoDecoderAdapter::Impl {
   void OnDecodeDone(media::DecoderStatus status);
   void OnOutput(scoped_refptr<media::VideoFrame> frame);
 
-  const raw_ptr<media::GpuVideoAcceleratorFactories, ExperimentalRenderer>
-      gpu_factories_;
+  const raw_ptr<media::GpuVideoAcceleratorFactories> gpu_factories_;
+  const scoped_refptr<WebRtcVideoFrameAdapter::SharedResources>
+      frame_adapter_shared_resources_;
 
   // Set on Initialize().
   std::unique_ptr<media::MediaLog> media_log_;
@@ -235,16 +247,15 @@ class RTCVideoDecoderAdapter::Impl {
 
   int32_t outstanding_decode_requests_ = 0;
   std::optional<base::TimeTicks> start_time_;
-  raw_ptr<webrtc::DecodedImageCallback, ExperimentalRenderer>
-      decode_complete_callback_ = nullptr;
+  raw_ptr<webrtc::DecodedImageCallback> decode_complete_callback_ = nullptr;
   int32_t consecutive_error_count_ = 0;
   // Requests that have not been submitted to the decoder yet.
-  WTF::Deque<scoped_refptr<media::DecoderBuffer>> pending_buffers_;
+  Deque<scoped_refptr<media::DecoderBuffer>> pending_buffers_;
   // Record of timestamps that have been sent to be decoded. Removing a
   // timestamp will cause the frame to be dropped when it is output.
-  WTF::Deque<base::TimeDelta> decode_timestamps_;
+  Deque<base::TimeDelta> decode_timestamps_;
   bool require_key_frame_ = true;
-  WTF::CrossThreadRepeatingFunction<void(Status)> change_status_callback_;
+  CrossThreadRepeatingFunction<void(Status)> change_status_callback_;
 
   SEQUENCE_CHECKER(media_sequence_checker_);
 
@@ -268,7 +279,7 @@ void RTCVideoDecoderAdapter::Impl::Initialize(
     media_log_ = std::make_unique<media::NullMediaLog>();
     start_time_ = start_time;
     video_decoder_ = gpu_factories_->CreateVideoDecoder(
-        media_log_.get(), WTF::BindRepeating(&OnRequestOverlayInfo));
+        media_log_.get(), blink::BindRepeating(&OnRequestOverlayInfo));
 
     if (!video_decoder_) {
       std::move(init_cb).Run(false);
@@ -307,7 +318,7 @@ void RTCVideoDecoderAdapter::Impl::Decode(
 
   auto enque_result = EnqueueBuffer(std::move(buffer));
   if (const auto* fallback_reason =
-          absl::get_if<RTCVideoDecoderFallbackReason>(&enque_result)) {
+          std::get_if<RTCVideoDecoderFallbackReason>(&enque_result)) {
     RecordRTCVideoDecoderFallbackReason(video_codec_, *fallback_reason);
     if (waiter) {
       *result = std::nullopt;
@@ -319,7 +330,7 @@ void RTCVideoDecoderAdapter::Impl::Decode(
   }
 
   const auto* decode_result =
-      absl::get_if<RTCVideoDecoderAdapter::DecodeResult>(&enque_result);
+      std::get_if<RTCVideoDecoderAdapter::DecodeResult>(&enque_result);
   switch (*decode_result) {
     case DecodeResult::kOk:
       DecodePendingBuffers();
@@ -338,8 +349,8 @@ void RTCVideoDecoderAdapter::Impl::Decode(
   }
 }
 
-absl::variant<RTCVideoDecoderAdapter::DecodeResult,
-              RTCVideoDecoderFallbackReason>
+std::variant<RTCVideoDecoderAdapter::DecodeResult,
+             RTCVideoDecoderFallbackReason>
 RTCVideoDecoderAdapter::Impl::EnqueueBuffer(
     scoped_refptr<media::DecoderBuffer> buffer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
@@ -396,14 +407,14 @@ void RTCVideoDecoderAdapter::Impl::DecodePendingBuffers() {
     outstanding_decode_requests_++;
     video_decoder_->Decode(
         std::move(buffer),
-        WTF::BindRepeating(&RTCVideoDecoderAdapter::Impl::OnDecodeDone,
-                           weak_decoder_this_));
+        blink::BindRepeating(&RTCVideoDecoderAdapter::Impl::OnDecodeDone,
+                             weak_decoder_this_));
   }
 }
 
 void RTCVideoDecoderAdapter::Impl::Flush(
-    WTF::CrossThreadOnceClosure flush_success_cb,
-    WTF::CrossThreadOnceClosure flush_fail_cb) {
+    CrossThreadOnceClosure flush_success_cb,
+    CrossThreadOnceClosure flush_fail_cb) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
 
   // Remove any pending tasks.
@@ -412,10 +423,9 @@ void RTCVideoDecoderAdapter::Impl::Flush(
   // Send EOS frame for flush.
   video_decoder_->Decode(
       media::DecoderBuffer::CreateEOSBuffer(),
-      WTF::BindOnce(
-          [](WTF::CrossThreadOnceClosure flush_success,
-             WTF::CrossThreadOnceClosure flush_fail,
-             media::DecoderStatus status) {
+      BindOnce(
+          [](CrossThreadOnceClosure flush_success,
+             CrossThreadOnceClosure flush_fail, media::DecoderStatus status) {
             if (status.is_ok())
               std::move(flush_success).Run();
             else
@@ -433,9 +443,17 @@ void RTCVideoDecoderAdapter::Impl::RegisterDecodeCompleteCallback(
   decode_complete_callback_ = callback;
 }
 
+bool RTCVideoDecoderAdapter::Impl::IsDecoderConfigSupported(
+    const media::VideoDecoderConfig& config) const {
+  // This function is invoked by any thread. |gpu_factories_|'s lifetime is
+  // guaranteed by RTCVideoDecoder's client and the thread safety of
+  // IsDecoderConfigSupported() is guaranteed by the GpuVideoAcceleratorFactories.
+  return gpu_factories_->IsDecoderConfigSupported(config) !=
+         media::GpuVideoAcceleratorFactories::Supported::kFalse;
+}
+
 void RTCVideoDecoderAdapter::Impl::OnDecodeDone(media::DecoderStatus status) {
-  DVLOG(3) << __func__ << "(" << status.group() << ":"
-           << static_cast<int>(status.code()) << ")";
+  status.DebugLog(3);
   DCHECK_CALLED_ON_VALID_SEQUENCE(media_sequence_checker_);
 
   outstanding_decode_requests_--;
@@ -463,10 +481,11 @@ void RTCVideoDecoderAdapter::Impl::OnOutput(
   const base::TimeDelta timestamp = frame->timestamp();
   webrtc::VideoFrame rtc_frame =
       webrtc::VideoFrame::Builder()
-          .set_video_frame_buffer(rtc::scoped_refptr<WebRtcVideoFrameAdapter>(
-              new rtc::RefCountedObject<WebRtcVideoFrameAdapter>(
-                  std::move(frame))))
-          .set_timestamp_rtp(static_cast<uint32_t>(timestamp.InMicroseconds()))
+          .set_video_frame_buffer(
+              webrtc::scoped_refptr<WebRtcVideoFrameAdapter>(
+                  new webrtc::RefCountedObject<WebRtcVideoFrameAdapter>(
+                      std::move(frame), frame_adapter_shared_resources_)))
+          .set_rtp_timestamp(static_cast<uint32_t>(timestamp.InMicroseconds()))
           .set_timestamp_us(0)
           .set_rotation(webrtc::kVideoRotation_0)
           .build();
@@ -479,7 +498,7 @@ void RTCVideoDecoderAdapter::Impl::OnOutput(
     start_time_.reset();
   }
 
-  if (!base::Contains(decode_timestamps_, timestamp)) {
+  if (!std::ranges::contains(decode_timestamps_, timestamp)) {
     DVLOG(2) << "Discarding frame with timestamp " << timestamp;
     return;
   }
@@ -515,9 +534,9 @@ std::unique_ptr<RTCVideoDecoderAdapter> RTCVideoDecoderAdapter::Create(
       media::kNoTransformation, kDefaultSize, gfx::Rect(kDefaultSize),
       kDefaultSize, media::EmptyExtraData(),
       media::EncryptionScheme::kUnencrypted);
-  config.set_is_rtc(true);
 
-  if (!resolution_monitor) {
+  // HEVC does not have SW fallback, so resolution monitor is not needed.
+  if (!resolution_monitor && HasSoftwareFallback(config.codec())) {
     resolution_monitor = ResolutionMonitor::Create(config.codec());
     if (!resolution_monitor) {
       DLOG(ERROR) << "Failed to create ResolutionMonitor for codec: "
@@ -554,8 +573,10 @@ RTCVideoDecoderAdapter::RTCVideoDecoderAdapter(
       resolution_monitor_(std::move(resolution_monitor)) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(decoding_sequence_checker_);
   DVLOG(1) << __func__;
-  CHECK(resolution_monitor_);
-  CHECK_EQ(resolution_monitor_->codec(), config_.codec());
+  if (HasSoftwareFallback(config.codec())) {
+    CHECK(resolution_monitor_);
+    CHECK_EQ(resolution_monitor_->codec(), config_.codec());
+  }
 
   decoder_info_.implementation_name = "ExternalDecoder (Unknown)";
   decoder_info_.is_hardware_accelerated = true;
@@ -588,18 +609,20 @@ bool RTCVideoDecoderAdapter::InitializeSync(
     const media::VideoDecoderConfig& config) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(decoding_sequence_checker_);
   TRACE_EVENT0("webrtc", "RTCVideoDecoderAdapter::InitializeSync");
-  DVLOG(3) << __func__;
   // This function is called on a decoder thread.
   DCHECK(!media_task_runner_->RunsTasksInCurrentSequence());
   auto start_time = base::TimeTicks::Now();
 
   base::ScopedAllowBaseSyncPrimitivesOutsideBlockingScope allow_wait;
-  bool result = false;
-  base::WaitableEvent waiter(base::WaitableEvent::ResetPolicy::MANUAL,
-                             base::WaitableEvent::InitialState::NOT_SIGNALED);
-  auto init_cb =
-      CrossThreadBindOnce(&FinishWait, CrossThreadUnretained(&waiter),
-                          CrossThreadUnretained(&result));
+  async_init_result_ = false;
+  async_init_waiter_ = std::make_unique<base::WaitableEvent>(
+      base::WaitableEvent::ResetPolicy::MANUAL,
+      base::WaitableEvent::InitialState::NOT_SIGNALED);
+
+  auto init_cb = CrossThreadBindOnce(
+      &FinishWait, CrossThreadUnretained(async_init_waiter_.get()),
+      CrossThreadUnretained(&async_init_result_));
+
   if (PostCrossThreadTask(
           *media_task_runner_.get(), FROM_HERE,
           CrossThreadBindOnce(&RTCVideoDecoderAdapter::Impl::Initialize,
@@ -607,7 +630,7 @@ bool RTCVideoDecoderAdapter::InitializeSync(
                               start_time,
                               CrossThreadUnretained(&decoder_type_)))) {
     // TODO(crbug.com/1076817) Remove if a root cause is found.
-    if (!waiter.TimedWait(base::Seconds(10))) {
+    if (!async_init_waiter_->TimedWait(base::Seconds(10))) {
       RecordInitializationLatency(base::TimeTicks::Now() - start_time);
       return false;
     }
@@ -616,8 +639,9 @@ bool RTCVideoDecoderAdapter::InitializeSync(
   }
 
   decoder_info_.implementation_name =
-      "ExternalDecoder (" + media::GetDecoderName(decoder_type_) + ")";
-  return result;
+      "ExternalDecoder (" + std::string(media::GetDecoderName(decoder_type_)) +
+      ")";
+  return async_init_result_;
 }
 
 bool RTCVideoDecoderAdapter::Configure(const Settings& settings) {
@@ -629,8 +653,10 @@ bool RTCVideoDecoderAdapter::Configure(const Settings& settings) {
 
   if (WebRtcToMediaVideoCodec(settings.codec_type()) != config_.codec())
     return false;
-  CHECK_EQ(resolution_monitor_->codec(),
-           WebRtcToMediaVideoCodec(settings.codec_type()));
+  if (HasSoftwareFallback(config_.codec())) {
+    CHECK_EQ(resolution_monitor_->codec(),
+             WebRtcToMediaVideoCodec(settings.codec_type()));
+  }
 
   const bool init_success = status_ != Status::kError;
   base::UmaHistogramBoolean("Media.RTCVideoDecoderInitDecodeSuccess",
@@ -749,6 +775,17 @@ bool RTCVideoDecoderAdapter::CheckResolutionAndNumInstances(
         config_.codec(),
         RTCVideoDecoderFallbackReason::kParseErrorOnResolutionCheck);
     return false;
+  }
+
+  if (config_.coded_size() != *resolution) {
+    config_.set_coded_size(*resolution);
+    if (!impl_->IsDecoderConfigSupported(config_)) {
+      DVLOG(1) << "Unsupported resolution";
+      RecordRTCVideoDecoderFallbackReason(
+          config_.codec(),
+          RTCVideoDecoderFallbackReason::kUnsupportedResolution);
+      return false;
+    }
   }
 
   if (resolution->GetArea() >= kMinResolution.GetArea()) {
@@ -871,11 +908,11 @@ bool RTCVideoDecoderAdapter::ReinitializeSync(
   auto init_cb =
       CrossThreadBindOnce(&FinishWait, CrossThreadUnretained(&waiter),
                           CrossThreadUnretained(&result));
-  WTF::CrossThreadOnceClosure flush_success_cb = CrossThreadBindOnce(
+  CrossThreadOnceClosure flush_success_cb = CrossThreadBindOnce(
       &RTCVideoDecoderAdapter::Impl::Initialize, weak_impl_, config,
       std::move(init_cb),
       /*start_time=*/base::TimeTicks(), CrossThreadUnretained(&decoder_type_));
-  WTF::CrossThreadOnceClosure flush_fail_cb =
+  CrossThreadOnceClosure flush_fail_cb =
       CrossThreadBindOnce(&FinishWait, CrossThreadUnretained(&waiter),
                           CrossThreadUnretained(&result), false);
   if (PostCrossThreadTask(

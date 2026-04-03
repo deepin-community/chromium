@@ -25,7 +25,6 @@
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "base/version.h"
-#include "chrome/browser/apps/app_provisioning_service/app_provisioning_data_manager.h"
 #include "chrome/common/chrome_features.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/component_updater/component_installer.h"
@@ -45,42 +44,13 @@ constexpr uint8_t kAppProvisioningPublicKeySHA256[32] = {
     0xc5, 0x4c, 0xf5, 0xb9, 0x77, 0x25, 0x74, 0xce, 0xa1, 0xb3};
 
 constexpr char kAppProvisioningManifestName[] = "App Provisioning";
-
-std::optional<apps::ComponentFileContents> LoadAppMetadataFromDisk(
-    const base::FilePath& app_with_locale_pb_path) {
-  if (app_with_locale_pb_path.empty()) {
-    return std::nullopt;
-  }
-
-  VLOG(1) << "Reading Download App Metadata from file: "
-          << app_with_locale_pb_path.value();
-  std::string app_with_locale_binary_pb;
-  if (!base::ReadFileToString(app_with_locale_pb_path,
-                              &app_with_locale_binary_pb)) {
-    VLOG(1) << "Failed reading from " << app_with_locale_pb_path.value();
-    return std::nullopt;
-  }
-
-  return apps::ComponentFileContents{app_with_locale_binary_pb};
-}
-
-void UpdateAppMetadataOnUI(
-    const base::FilePath& install_dir,
-    const std::optional<apps::ComponentFileContents>& component_files) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (component_files.has_value()) {
-    apps::AppProvisioningDataManager::Get()->PopulateFromDynamicUpdate(
-        component_files.value(), install_dir);
-  }
-}
-
 }  // namespace
 
 namespace component_updater {
 
 // Called during startup and installation before ComponentReady().
 bool AppProvisioningComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   // No need to actually validate the proto here, since we'll do the checking
   // in `PopulateFromDynamicUpdate()`.
@@ -99,7 +69,7 @@ bool AppProvisioningComponentInstallerPolicy::RequiresNetworkEncryption()
 
 update_client::CrxInstaller::Result
 AppProvisioningComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -109,14 +79,9 @@ void AppProvisioningComponentInstallerPolicy::OnCustomUninstall() {}
 void AppProvisioningComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   VLOG(1) << "Component ready, version " << version.GetString() << " in "
           << install_dir.value();
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-      base::BindOnce(&LoadAppMetadataFromDisk,
-                     GetAppWithLocaleInstalledPath(install_dir)),
-      base::BindOnce(&UpdateAppMetadataOnUI, install_dir));
 }
 
 base::FilePath AppProvisioningComponentInstallerPolicy::GetRelativeInstallDir()

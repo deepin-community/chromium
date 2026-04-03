@@ -6,13 +6,13 @@
 
 #include <cstddef>
 #include <memory>
+#include <vector>
 
-#include "base/containers/cxx20_erase.h"
 #include "chrome/browser/chromeos/policy/dlp/dialogs/dlp_warn_dialog.h"
 #include "chrome/browser/chromeos/policy/dlp/dialogs/policy_dialog_base.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/widget/widget.h"
 
 namespace policy {
@@ -93,7 +93,7 @@ void DlpWarnNotifier::ShowWidget(views::Widget* widget) {
 
 void DlpWarnNotifier::RemoveWidget(views::Widget* widget) {
   widget->RemoveObserver(this);
-  base::EraseIf(widgets_, [=](views::Widget* widget_ptr) -> bool {
+  std::erase_if(widgets_, [=](views::Widget* widget_ptr) -> bool {
     return widget_ptr == widget;
   });
 }

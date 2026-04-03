@@ -5,15 +5,21 @@
 #include "chrome/browser/hid/hid_connection_tracker.h"
 
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/hid/hid_common.h"
 #include "chrome/browser/hid/hid_system_tray_icon.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/constants.h"
 
 HidConnectionTracker::HidConnectionTracker(Profile* profile)
     : DeviceConnectionTracker(profile) {
-  whitelisted_origins_.push_back(url::Origin::Create(
-      GURL("chrome-extension://ckcendljdlmgnhghiaomidhiiclmapok")));
-  whitelisted_origins_.push_back(url::Origin::Create(
-      GURL("chrome-extension://lfboplenmmjcmpbkeemecobbadnmpfhi")));
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  for (const auto& extension_id : kPrivilegedFidoExtensionIds) {
+    whitelisted_origins_.push_back(url::Origin::Create(
+        GURL(extensions::kExtensionScheme + std::string("://") +
+             std::string(extension_id))));
+  }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 }
 
 HidConnectionTracker::~HidConnectionTracker() = default;
@@ -26,4 +32,9 @@ void HidConnectionTracker::ShowContentSettingsExceptions() {
 DeviceSystemTrayIcon* HidConnectionTracker::GetSystemTrayIcon() {
   return static_cast<DeviceSystemTrayIcon*>(
       g_browser_process->hid_system_tray_icon());
+}
+
+void HidConnectionTracker::Shutdown() {
+  CleanUp();
+  DeviceConnectionTracker::Shutdown();
 }

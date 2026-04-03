@@ -70,7 +70,7 @@ TEST(ExecuteTest, SimpleFunction) {
       false, &device_mgr, false, nullptr, nullptr);
 
   const Tensor kTwo = test::AsScalar<int64_t>(2);
-  const string function_name = "XTimesTwo";
+  const std::string function_name = "XTimesTwo";
   const FunctionDef x_times_two = FunctionDefHelper::Define(
       // Name
       function_name,
@@ -125,7 +125,7 @@ TEST(ExecuteTest, SimpleFunctionInt32BadFullType) {
       /*run_eager_op_as_function=*/true);
 
   const Tensor kTwo = test::AsScalar<int32_t>(2);
-  const string function_name = "XTimesTwo";
+  const std::string function_name = "XTimesTwo";
   const FunctionDef x_times_two = FunctionDefHelper::Define(
       // Name
       function_name,
@@ -168,8 +168,8 @@ TEST(ExecuteTest, SimpleFunctionInt32BadFullType) {
 
   std::vector<TensorHandle*> retvals(1);
   int num_retvals = retvals.size();
-  Status status = EagerExecute(op.get(), retvals.data(), &num_retvals);
-  ASSERT_TRUE(errors::IsInvalidArgument(status)) << "Actual status: " << status;
+  absl::Status status = EagerExecute(op.get(), retvals.data(), &num_retvals);
+  ASSERT_TRUE(absl::IsInvalidArgument(status)) << "Actual status: " << status;
   EXPECT_TRUE(
       absl::StrContains(status.message(), "TFT_TENSOR has 0 args instead of 1"))
       << "Actual: " << status.message();
@@ -188,7 +188,7 @@ TEST(ExecuteTest, CompiledFunction) {
       false, &device_mgr, false, nullptr, nullptr);
 
   const Tensor kTwo = test::AsScalar<int64_t>(2);
-  const string function_name = "XTimesTwo";
+  const std::string function_name = "XTimesTwo";
   const FunctionDef x_times_two = FunctionDefHelper::Define(
       // Name
       function_name,
@@ -245,7 +245,7 @@ TEST(ExecuteTest, NestedCompiledFunction) {
       false, &device_mgr, false, nullptr, nullptr);
 
   const Tensor kTwo = test::AsScalar<int64_t>(2);
-  const string function_name = "XTimesTwo";
+  const std::string function_name = "XTimesTwo";
   const FunctionDef x_times_two = FunctionDefHelper::Define(
       // Name
       function_name,
@@ -266,7 +266,7 @@ TEST(ExecuteTest, NestedCompiledFunction) {
       });
   TF_ASSERT_OK(ctx->AddFunctionDef(x_times_two));
 
-  const string call_function_name = "FunctionCall";
+  const std::string call_function_name = "FunctionCall";
   const FunctionDef function_call = FunctionDefHelper::Define(
       // Name
       call_function_name,
@@ -325,7 +325,7 @@ TEST(ExecuteTest, MultipleNestedCompiledFunction) {
       false, &device_mgr, false, nullptr, nullptr);
 
   const Tensor kTwo = test::AsScalar<int64_t>(2);
-  const string function_name = "XTimesTwo";
+  const std::string function_name = "XTimesTwo";
   const FunctionDef x_times_two = FunctionDefHelper::Define(
       // Name
       function_name,
@@ -346,8 +346,8 @@ TEST(ExecuteTest, MultipleNestedCompiledFunction) {
       });
   TF_ASSERT_OK(ctx->AddFunctionDef(x_times_two));
 
-  const string call_function_name = "FunctionCall";
-  const FunctionDef function_call = FunctionDefHelper::Define(
+  const std::string call_function_name = "FunctionCall";
+  FunctionDef function_call = FunctionDefHelper::Define(
       // Name
       call_function_name,
       // Args
@@ -362,15 +362,24 @@ TEST(ExecuteTest, MultipleNestedCompiledFunction) {
            "StatefulPartitionedCall",
            {"x"},
            {{"_XlaMustCompile", true},
-            {"device", "/job:localhost/replica:0/task:0/device:CPU:0"},
+            {"_device", "/job:localhost/replica:0/task:0/device:CPU:0"},
             {"Tin", DataTypeSlice({DT_INT64})},
             {"Tout", DataTypeSlice({DT_INT64})},
             {"f", tensorflow::FunctionDefHelper::FunctionRef(
                       "XTimesTwo", {{"T", DT_INT64}})}}},
       });
+
+  // Set user requested device for the StatefulPartitionedCall node, as
+  // FunctionDefHelper::Define cannot do that.
+  for (auto& node_def : *function_call.mutable_node_def()) {
+    if (node_def.op() == "StatefulPartitionedCall") {
+      node_def.set_device("/job:localhost/replica:0/task:0/device:CPU:0");
+    }
+  }
+
   TF_ASSERT_OK(ctx->AddFunctionDef(function_call));
 
-  const string call_function_name2 = "FunctionCall2";
+  const std::string call_function_name2 = "FunctionCall2";
   const FunctionDef function_call2 = FunctionDefHelper::Define(
       // Name
       call_function_name2,

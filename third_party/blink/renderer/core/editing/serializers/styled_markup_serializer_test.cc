@@ -30,6 +30,12 @@ class StyledMarkupSerializerTest : public EditingTestBase {
         .Build();
   }
 
+  CreateMarkupOptions ShouldSkipUnselectableContentOptions() const {
+    return CreateMarkupOptions::Builder()
+        .SetShouldSkipUnselectableContent(true)
+        .Build();
+  }
+
   template <typename Strategy>
   std::string Serialize(
       const CreateMarkupOptions& options = CreateMarkupOptions());
@@ -327,6 +333,171 @@ TEST_F(StyledMarkupSerializerTest, DisplayContentsStyle) {
   SetBodyContent(body_content);
   EXPECT_EQ(expected_result, Serialize<EditingStrategy>());
   EXPECT_EQ(expected_result, Serialize<EditingInFlatTreeStrategy>());
+}
+
+TEST_F(StyledMarkupSerializerTest, SkipUnselectableContent) {
+  const char* body_content =
+      "<span style=\"user-select: all;\">SELECTABLE_1<span "
+      "style=\"user-select: none;\">NON_SELECTABLE_1<span style=\"user-select: "
+      "all;\">SELECTABLE_2</span></span></span>";
+  const char* expected_result =
+      "<span style=\"user-select: all;\">SELECTABLE_1<span "
+      "style=\"user-select: none;\"><span style=\"user-select: "
+      "all;\">SELECTABLE_2</span></span></span>";
+  SetBodyContent(body_content);
+  EXPECT_EQ(expected_result,
+            Serialize<EditingStrategy>(ShouldSkipUnselectableContentOptions()));
+  EXPECT_EQ(expected_result, Serialize<EditingInFlatTreeStrategy>(
+                                 ShouldSkipUnselectableContentOptions()));
+}
+
+TEST_F(StyledMarkupSerializerTest, SkipUnselectableContentInShadowDOM) {
+  const char* body_content =
+      "<span style=\"user-select: all;\">SELECTABLE_1<span "
+      "style=\"user-select: none;\">NON_SELECTABLE_1<span style=\"user-select: "
+      "all;\">SELECTABLE_2</span></span><span style=\"user-select: "
+      "none;\">NON_SELECTABLE_2<span "
+      "id=\"shadow-root\"></span></span>SELECTABLE_3</span>";
+  const char* shadow_content =
+      "NON_SELECTABLE_INSIDE_SHADOW<span style=\"user-select: "
+      "all;\">SELECTABLE_INSIDE_SHADOW</span>";
+  const char* expected_result =
+      "<span style=\"user-select: all;\">SELECTABLE_1<span "
+      "style=\"user-select: none;\"><span style=\"user-select: "
+      "all;\">SELECTABLE_2</span></span>SELECTABLE_3</span>";
+  const char* flat_tree_expected_result =
+      "<span style=\"user-select: all;\">SELECTABLE_1<span "
+      "style=\"user-select: none;\"><span style=\"user-select: "
+      "all;\">SELECTABLE_2</span></span><span style=\"user-select: "
+      "none;\"><span id=\"shadow-root\"><span style=\"user-select: "
+      "all;\">SELECTABLE_INSIDE_SHADOW</span></span></span>SELECTABLE_3</span>";
+  SetBodyContent(body_content);
+  SetShadowContent(shadow_content, "shadow-root");
+
+  EXPECT_EQ(expected_result,
+            Serialize<EditingStrategy>(ShouldSkipUnselectableContentOptions()));
+  EXPECT_EQ(flat_tree_expected_result,
+            Serialize<EditingInFlatTreeStrategy>(
+                ShouldSkipUnselectableContentOptions()));
+}
+
+// Test for MathML <mtr> tag duplication bug(crbug.com/439305134) fix.
+// This test creates a selection range from the first text node to mimic
+// the real copy behavior where selection starts deep in the DOM tree.
+TEST_F(StyledMarkupSerializerTest, MathMLTableRowNotDuplicated) {
+  const char* body_content =
+      "<math><semantics>"
+      "<mtable>"
+      "<mtr><mtd id='first'>Cell 1</mtd><mtd>Cell 2</mtd></mtr>"
+      "<mtr><mtd>Cell 3</mtd><mtd id='last'>Cell 4</mtd></mtr>"
+      "</mtable>"
+      "</semantics></math>";
+
+  SetBodyContent(body_content);
+
+  Element* first_mtd = GetDocument().getElementById(AtomicString("first"));
+  Element* last_mtd = GetDocument().getElementById(AtomicString("last"));
+  ASSERT_TRUE(first_mtd);
+  ASSERT_TRUE(last_mtd);
+
+  Node* first_text = first_mtd->firstChild();
+  ASSERT_TRUE(first_text);
+
+  // Create range: start from first text node, end at the beginning of last mtd.
+  // This mimics the real copy scenario where end position is
+  // mtd@offsetInAnchor[0]. After traversal, last_closed will be an mtd element,
+  // and the ancestor wrapping loop will encounter mtr.
+  Position start_pos(first_text, 0);
+  Position end_pos(last_mtd, 0);
+
+  std::string serialized =
+      SerializePart<EditingStrategy>(start_pos, end_pos,
+                                     CreateMarkupOptions::Builder()
+                                         .SetShouldAnnotateForInterchange(true)
+                                         .Build());
+
+  size_t pos = 0;
+  int mtr_count = 0;
+  while ((pos = serialized.find("<mtr>", pos)) != std::string::npos) {
+    mtr_count++;
+    pos += 5;
+  }
+
+  // There are 2 <mtr> rows. Expect exactly 2 "<mtr>" tags.
+  EXPECT_EQ(2, mtr_count) << "Expected 2 <mtr> tags, found " << mtr_count
+                          << ". Full output: " << serialized;
+
+  // Verify no duplicate pattern exists
+  EXPECT_EQ(std::string::npos, serialized.find("<mtr><mtr>"))
+      << "Found duplicate <mtr><mtr> pattern. Full output: " << serialized;
+}
+
+TEST_F(StyledMarkupSerializerTest,
+       MathMLPartialSelectionShouldHaveBalancedTags) {
+  const char* body_content =
+      "<math><mrow>"
+      "  <mfrac>"
+      "    <mrow>"
+      "      <msqrt>"
+      "        <mrow>"
+      "          <mo id='start'>±</mo>"
+      "          <msqrt>"
+      "            <mrow>"
+      "              <msup><mi>b</mi><mn>2</mn></msup>"
+      "              <mo>-</mo>"
+      "              <mi id='after'>x</mi>"
+      "            </mrow>"
+      "          </msqrt>"
+      "        </mrow>"
+      "      </msqrt>"
+      "    </mrow>"
+      "  </mfrac>"
+      "</mrow></math>";
+
+  SetBodyContent(body_content);
+
+  Element* start_mo = GetDocument().getElementById(AtomicString("start"));
+  Element* after_mi = GetDocument().getElementById(AtomicString("after"));
+  ASSERT_TRUE(start_mo);
+  ASSERT_TRUE(after_mi);
+
+  Node* start_text = start_mo->firstChild();
+  ASSERT_TRUE(start_text);
+
+  // Select from the ± operator up to (but not into) the following <mi>.
+  Position start_pos(start_text, 0);
+  Position end_pos(after_mi, 0);
+
+  std::string serialized =
+      SerializePart<EditingStrategy>(start_pos, end_pos,
+                                     CreateMarkupOptions::Builder()
+                                         .SetShouldAnnotateForInterchange(true)
+                                         .Build());
+
+  auto count_occurrences = [](const std::string& str,
+                              const std::string& substr) -> int {
+    int count = 0;
+    size_t pos = 0;
+    while ((pos = str.find(substr, pos)) != std::string::npos) {
+      count++;
+      pos += substr.length();
+    }
+    return count;
+  };
+
+  int open_msqrt = count_occurrences(serialized, "<msqrt");
+  int close_msqrt = count_occurrences(serialized, "</msqrt>");
+  int open_mrow = count_occurrences(serialized, "<mrow");
+  int close_mrow = count_occurrences(serialized, "</mrow>");
+
+  // Expected to be balanced after the fix; currently fails (unbalanced).
+  EXPECT_EQ(open_msqrt, close_msqrt)
+      << "Unbalanced <msqrt> tags. Opens: " << open_msqrt
+      << ", Closes: " << close_msqrt << "\nFull output: " << serialized;
+
+  EXPECT_EQ(open_mrow, close_mrow)
+      << "Unbalanced <mrow> tags. Opens: " << open_mrow
+      << ", Closes: " << close_mrow << "\nFull output: " << serialized;
 }
 
 }  // namespace blink

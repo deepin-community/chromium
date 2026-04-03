@@ -5,9 +5,9 @@
 #ifndef PDF_PARSED_PARAMS_H_
 #define PDF_PARSED_PARAMS_H_
 
+#include <optional>
 #include <string>
 
-#include <optional>
 #include "pdf/pdfium/pdfium_form_filler.h"
 #include "third_party/skia/include/core/SkColor.h"
 
@@ -21,8 +21,8 @@ struct ParsedParams {
   ParsedParams();
   ParsedParams(const ParsedParams& other);
   ParsedParams& operator=(const ParsedParams& other);
-  ParsedParams(ParsedParams&& other);
-  ParsedParams& operator=(ParsedParams&& other);
+  ParsedParams(ParsedParams&& other) noexcept;
+  ParsedParams& operator=(ParsedParams&& other) noexcept;
   ~ParsedParams();
 
   // The plugin source URL. Must not be empty.
@@ -40,12 +40,11 @@ struct ParsedParams {
   // The background color for the PDF viewer.
   SkColor background_color = SK_ColorTRANSPARENT;
 
-  // Whether to execute JavaScript and maybe XFA.
+  // Whether to execute JavaScript and maybe XFA. Will be overridden in
+  // ParseWebPluginParams() if JavaScript is blocked, or if XFA forms are
+  // enabled.
   PDFiumFormFiller::ScriptOption script_option =
-      PDFiumFormFiller::DefaultScriptOption();
-
-  // Whether the PDF was edited previously in annotation mode.
-  bool has_edits = false;
+      PDFiumFormFiller::ScriptOption::kJavaScript;
 
   // Whether the PDF viewer uses Skia renderer. When set to false, the PDF
   // viewer uses AGG renderer.

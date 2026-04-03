@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "ash/ambient/util/ambient_util.h"
+#include "ash/ambient/util/time_of_day_utils.h"
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/ambient/ambient_prefs.h"
 #include "ash/webui/personalization_app/mojom/personalization_app.mojom-shared.h"
@@ -34,7 +35,7 @@ bool EnumInRange(T val) {
 
 // static
 std::optional<AmbientUiSettings> AmbientUiSettings::CreateFromDict(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   std::optional<int> theme_as_int =
       dict.FindInt(ambient::prefs::kAmbientUiSettingsFieldTheme);
   if (!theme_as_int) {
@@ -57,7 +58,7 @@ std::optional<AmbientUiSettings> AmbientUiSettings::CreateFromDict(
 // static
 AmbientUiSettings AmbientUiSettings::ReadFromPrefService(
     PrefService& pref_service) {
-  const base::Value::Dict& settings_dict =
+  const base::DictValue& settings_dict =
       pref_service.GetDict(ambient::prefs::kAmbientUiSettings);
   std::optional<AmbientUiSettings> settings_loaded =
       CreateFromDict(settings_dict);
@@ -70,7 +71,7 @@ AmbientUiSettings AmbientUiSettings::ReadFromPrefService(
           << "Loaded invalid AmbientUiSettings from pref. Using default.";
       pref_service.ClearPref(ambient::prefs::kAmbientUiSettings);
     } else if (features::IsTimeOfDayScreenSaverEnabled()) {
-      return AmbientUiSettings(AmbientTheme::kVideo, kDefaultAmbientVideo);
+      return AmbientUiSettings(AmbientTheme::kVideo, GetDefaultAmbientVideo());
     }
     return AmbientUiSettings();
   }
@@ -100,7 +101,7 @@ bool AmbientUiSettings::operator!=(const AmbientUiSettings& other) const {
 }
 
 void AmbientUiSettings::WriteToPrefService(PrefService& pref_service) const {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(ambient::prefs::kAmbientUiSettingsFieldTheme,
            static_cast<int>(theme_));
   if (video_) {

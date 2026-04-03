@@ -1,4 +1,4 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,4 +25,4 @@ export type ScrollStep = PuppeteerReplay.Schema.ScrollStep;
 export type AssertionStep = PuppeteerReplay.Schema.AssertionStep;
 export type ClickAttributes = PuppeteerReplay.Schema.ClickAttributes;
 export type Key = PuppeteerReplay.Schema.Key;
-export {AssertedEventType, StepType, SelectorType} from '../../../third_party/puppeteer-replay/puppeteer-replay.js';
+export {AssertedEventType, SelectorType, StepType} from '../../../third_party/puppeteer-replay/puppeteer-replay.js';

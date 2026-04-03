@@ -21,11 +21,15 @@ limitations under the License.
 
 #include "absl/algorithm/container.h"
 #include "absl/memory/memory.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "tensorflow/core/common_runtime/arg_ret_placement.h"
 #include "tensorflow/core/common_runtime/device.h"
 #include "tensorflow/core/common_runtime/executor.h"
 #include "tensorflow/core/common_runtime/executor_factory.h"
+#include "tensorflow/core/common_runtime/function_body.h"
 #include "tensorflow/core/common_runtime/function_def_utils.h"
 #include "tensorflow/core/common_runtime/gradients.h"
 #include "tensorflow/core/common_runtime/graph_constructor.h"
@@ -36,6 +40,7 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/process_function_library_runtime.h"
 #include "tensorflow/core/common_runtime/rendezvous_mgr.h"
 #include "tensorflow/core/common_runtime/single_threaded_executor.h"
+#include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/collective.h"
 #include "tensorflow/core/framework/function.h"
 #include "tensorflow/core/framework/function_handle_cache.h"
@@ -52,12 +57,13 @@ limitations under the License.
 #include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/lib/gtl/map_util.h"
 #include "tensorflow/core/platform/macros.h"
+#include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/refcount.h"
 #include "tensorflow/core/platform/str_util.h"
 #include "tensorflow/core/profiler/lib/connected_traceme.h"
 #include "tensorflow/core/profiler/lib/traceme.h"
 #include "tensorflow/core/protobuf/config.pb.h"
-#include "tsl/platform/statusor.h"
+#include "tsl/platform/random.h"
 
 // See core/kernels/function_ops.cc for related kernels.
 
@@ -82,11 +88,11 @@ struct Endpoint {
   int index;
 
   // Returns the string name represents this endpoint.
-  string name() const {
+  std::string name() const {
     if (index == 0) {
       return node->name();
     } else {
-      return strings::StrCat(node->name(), ":", index);
+      return absl::StrCat(node->name(), ":", index);
     }
   }
 
@@ -94,7 +100,7 @@ struct Endpoint {
 };
 
 struct EndpointHash {
-  uint64 operator()(const Endpoint& x) const {
+  uint64_t operator()(const Endpoint& x) const {
     return Hash64(reinterpret_cast<const char*>(&x.node), sizeof(Node*),
                   x.index);
   }
@@ -116,7 +122,7 @@ static Node* AddArg(Graph* g, DataType dtype, int index) {
   ndef.set_op(kArgOp);
   AddNodeAttr("T", dtype, &ndef);
   AddNodeAttr("index", index, &ndef);
-  Status s;
+  absl::Status s;
   Node* ret = g->AddNode(ndef, &s);
   TF_CHECK_OK(s);
   return ret;
@@ -131,7 +137,7 @@ static Node* AddRet(Graph* g, Endpoint input, int index) {
   ndef.add_input(input.name());
   AddNodeAttr("T", input.dtype(), &ndef);
   AddNodeAttr("index", index, &ndef);
-  Status s;
+  absl::Status s;
   Node* ret = g->AddNode(ndef, &s);
   TF_CHECK_OK(s);
   g->AddEdge(input.node, input.index, ret, 0);
@@ -160,32 +166,33 @@ class FunctionLibraryRuntimeOverlay : public FunctionLibraryRuntime {
       : base_flr_(base_flr), lib_def_(std::move(lib_def)) {}
   ~FunctionLibraryRuntimeOverlay() override;
 
-  Status Instantiate(const string& function_name, AttrSlice attrs,
-                     const InstantiateOptions& options,
-                     Handle* handle) override;
+  absl::Status Instantiate(const std::string& function_name, AttrSlice attrs,
+                           const InstantiateOptions& options,
+                           Handle* handle) override;
 
-  Status ReleaseHandle(Handle handle) override;
+  absl::Status ReleaseHandle(Handle handle) override;
 
   const FunctionBody* GetFunctionBody(Handle h) override;
 
-  Status GetRetTypes(Handle h, DataTypeVector* ret_types) override;
+  absl::Status GetRetTypes(Handle h, DataTypeVector* ret_types) override;
 
-  void Run(const Options& opts, Handle handle, gtl::ArraySlice<Tensor> args,
+  void Run(const Options& opts, Handle handle, absl::Span<const Tensor> args,
            std::vector<Tensor>* rets, DoneCallback done) override;
 
   void Run(const Options& opts, Handle handle, CallFrameInterface* call_frame,
            DoneCallback done) override;
 
-  Status RunSync(Options opts, Handle handle, gtl::ArraySlice<Tensor> args,
-                 std::vector<Tensor>* rets) override;
+  absl::Status RunSync(Options opts, Handle handle,
+                       absl::Span<const Tensor> args,
+                       std::vector<Tensor>* rets) override;
 
-  Status RunSync(Options opts, Handle handle,
-                 CallFrameInterface* frame) override;
+  absl::Status RunSync(Options opts, Handle handle,
+                       CallFrameInterface* frame) override;
 
-  Status CreateKernel(const std::shared_ptr<const NodeProperties>& props,
-                      OpKernel** kernel) override;
+  absl::Status CreateKernel(const std::shared_ptr<const NodeProperties>& props,
+                            OpKernel** kernel) override;
 
-  bool IsStateful(const string& function_name) const override;
+  bool IsStateful(const std::string& function_name) const override;
 
   const FunctionLibraryDefinition* GetFunctionLibraryDefinition()
       const override;
@@ -197,13 +204,13 @@ class FunctionLibraryRuntimeOverlay : public FunctionLibraryRuntime {
   std::function<void(std::function<void()>)>* runner() override;
   const DeviceMgr* device_mgr() const override;
 
-  string DebugString(Handle handle) override;
+  std::string DebugString(Handle handle) override;
   int graph_def_version() const override;
 
-  Status Clone(std::unique_ptr<FunctionLibraryDefinition>* out_lib_def,
-               std::unique_ptr<ProcessFunctionLibraryRuntime>* out_pflr,
-               FunctionLibraryRuntime** out_flr,
-               bool skip_flib_def = false) override;
+  absl::Status Clone(std::unique_ptr<FunctionLibraryDefinition>* out_lib_def,
+                     std::unique_ptr<ProcessFunctionLibraryRuntime>* out_pflr,
+                     FunctionLibraryRuntime** out_flr,
+                     bool skip_flib_def = false) override;
 
  private:
   FunctionLibraryRuntime* base_flr_;          // not owned
@@ -212,8 +219,8 @@ class FunctionLibraryRuntimeOverlay : public FunctionLibraryRuntime {
 
 FunctionLibraryRuntimeOverlay::~FunctionLibraryRuntimeOverlay() = default;
 
-Status FunctionLibraryRuntimeOverlay::Instantiate(
-    const string& function_name, AttrSlice attrs,
+absl::Status FunctionLibraryRuntimeOverlay::Instantiate(
+    const std::string& function_name, AttrSlice attrs,
     const InstantiateOptions& options, Handle* handle) {
   // We automatically set the `lib_def` option for all instantiations, if the
   // caller doesn't set this option explicitly.
@@ -226,7 +233,7 @@ Status FunctionLibraryRuntimeOverlay::Instantiate(
   }
 }
 
-Status FunctionLibraryRuntimeOverlay::ReleaseHandle(Handle handle) {
+absl::Status FunctionLibraryRuntimeOverlay::ReleaseHandle(Handle handle) {
   return base_flr_->ReleaseHandle(handle);
 }
 
@@ -234,13 +241,13 @@ const FunctionBody* FunctionLibraryRuntimeOverlay::GetFunctionBody(Handle h) {
   return base_flr_->GetFunctionBody(h);
 }
 
-Status FunctionLibraryRuntimeOverlay::GetRetTypes(Handle h,
-                                                  DataTypeVector* ret_types) {
+absl::Status FunctionLibraryRuntimeOverlay::GetRetTypes(
+    Handle h, DataTypeVector* ret_types) {
   return base_flr_->GetRetTypes(h, ret_types);
 }
 
 void FunctionLibraryRuntimeOverlay::Run(const Options& opts, Handle handle,
-                                        gtl::ArraySlice<Tensor> args,
+                                        absl::Span<const Tensor> args,
                                         std::vector<Tensor>* rets,
                                         DoneCallback done) {
   base_flr_->Run(opts, handle, args, rets, std::move(done));
@@ -252,18 +259,18 @@ void FunctionLibraryRuntimeOverlay::Run(const Options& opts, Handle handle,
   base_flr_->Run(opts, handle, call_frame, std::move(done));
 }
 
-Status FunctionLibraryRuntimeOverlay::RunSync(Options opts, Handle handle,
-                                              gtl::ArraySlice<Tensor> args,
-                                              std::vector<Tensor>* rets) {
+absl::Status FunctionLibraryRuntimeOverlay::RunSync(
+    Options opts, Handle handle, absl::Span<const Tensor> args,
+    std::vector<Tensor>* rets) {
   return base_flr_->RunSync(std::move(opts), handle, args, rets);
 }
 
-Status FunctionLibraryRuntimeOverlay::RunSync(Options opts, Handle handle,
-                                              CallFrameInterface* call_frame) {
+absl::Status FunctionLibraryRuntimeOverlay::RunSync(
+    Options opts, Handle handle, CallFrameInterface* call_frame) {
   return base_flr_->RunSync(std::move(opts), handle, call_frame);
 }
 
-Status FunctionLibraryRuntimeOverlay::CreateKernel(
+absl::Status FunctionLibraryRuntimeOverlay::CreateKernel(
     const std::shared_ptr<const NodeProperties>&, OpKernel**) {
   // We don't have access to base_lib_def_ in base function library runtime (aka
   // FunctionLibraryRuntimeImpl), so to make sure we do not create a kernel with
@@ -277,10 +284,10 @@ Status FunctionLibraryRuntimeOverlay::CreateKernel(
 }
 
 bool FunctionLibraryRuntimeOverlay::IsStateful(
-    const string& function_name) const {
+    const std::string& function_name) const {
   // Important: we do not forward lookup to the base FLR.
   const OpDef* op_def;
-  const Status s = lib_def_.LookUpOpDef(function_name, &op_def);
+  const absl::Status s = lib_def_.LookUpOpDef(function_name, &op_def);
   return s.ok() && op_def->is_stateful();
 }
 
@@ -310,7 +317,7 @@ FunctionLibraryRuntimeOverlay::GetFunctionLibraryDefinition() const {
   return &lib_def_;
 }
 
-string FunctionLibraryRuntimeOverlay::DebugString(Handle handle) {
+std::string FunctionLibraryRuntimeOverlay::DebugString(Handle handle) {
   return base_flr_->DebugString(handle);
 }
 
@@ -318,7 +325,7 @@ int FunctionLibraryRuntimeOverlay::graph_def_version() const {
   return base_flr_->graph_def_version();
 }
 
-Status FunctionLibraryRuntimeOverlay::Clone(
+absl::Status FunctionLibraryRuntimeOverlay::Clone(
     std::unique_ptr<FunctionLibraryDefinition>* out_lib_def,
     std::unique_ptr<ProcessFunctionLibraryRuntime>* out_pflr,
     FunctionLibraryRuntime** out_flr, bool skip_flib_def) {
@@ -341,30 +348,38 @@ class FunctionLibraryRuntimeImpl : public FunctionLibraryRuntime {
 
   ~FunctionLibraryRuntimeImpl() override;
 
-  Status Instantiate(const string& function_name, AttrSlice attrs,
-                     const InstantiateOptions& options,
-                     Handle* handle) override;
+  absl::Status Instantiate(const std::string& function_name, AttrSlice attrs,
+                           const InstantiateOptions& options,
+                           Handle* handle) override;
 
-  Status ReleaseHandle(Handle handle) override;
+  // Finalizes the function library runtime by finalizing the function body of
+  // the instantiated functions.
+  absl::Status Finalize() override;
+
+  absl::Status ReleaseHandle(Handle handle) override;
 
   const FunctionBody* GetFunctionBody(Handle handle) override;
 
-  Status GetRetTypes(Handle handle, DataTypeVector* ret_types) override;
+  absl::Status GetRetTypes(Handle handle, DataTypeVector* ret_types) override;
 
-  Status CreateKernel(const std::shared_ptr<const NodeProperties>& props,
-                      OpKernel** kernel) override;
+  absl::Status CreateKernel(const std::shared_ptr<const NodeProperties>& props,
+                            OpKernel** kernel) override;
 
-  void Run(const Options& opts, Handle handle, gtl::ArraySlice<Tensor> args,
+  void Run(const Options& opts, Handle handle, absl::Span<const Tensor> args,
            std::vector<Tensor>* rets, DoneCallback done) override;
   void Run(const Options& opts, Handle handle, CallFrameInterface* frame,
            DoneCallback done) override;
-  Status RunSync(Options opts, Handle handle, gtl::ArraySlice<Tensor> args,
-                 std::vector<Tensor>* rets) override;
-  Status RunSync(Options opts, Handle handle,
-                 CallFrameInterface* call_frame) override;
+  absl::Status RunSync(Options opts, Handle handle,
+                       absl::Span<const Tensor> args,
+                       std::vector<Tensor>* rets) override;
+  absl::Status RunSync(Options opts, Handle handle,
+                       CallFrameInterface* call_frame) override;
 
-  bool IsStateful(const string& function) const override;
+  bool IsStateful(const std::string& function) const override;
 
+  // TODO: b/396484774 - Consider handling the case where the FLR is already
+  // finalized instead of always returning the pointer to the unowned library
+  // definition that could have been freed.
   const FunctionLibraryDefinition* GetFunctionLibraryDefinition()
       const override {
     return base_lib_def_;
@@ -382,12 +397,12 @@ class FunctionLibraryRuntimeImpl : public FunctionLibraryRuntime {
   const ConfigProto* const config_proto() override { return config_; }
   int graph_def_version() const override { return graph_def_version_; }
 
-  string DebugString(Handle h) override;
+  std::string DebugString(Handle h) override;
 
-  Status Clone(std::unique_ptr<FunctionLibraryDefinition>* out_lib_def,
-               std::unique_ptr<ProcessFunctionLibraryRuntime>* out_pflr,
-               FunctionLibraryRuntime** out_flr,
-               bool skip_flib_def = false) override;
+  absl::Status Clone(std::unique_ptr<FunctionLibraryDefinition>* out_lib_def,
+                     std::unique_ptr<ProcessFunctionLibraryRuntime>* out_pflr,
+                     FunctionLibraryRuntime** out_flr,
+                     bool skip_flib_def = false) override;
 
  private:
   typedef FunctionLibraryRuntimeImpl ME;
@@ -401,35 +416,43 @@ class FunctionLibraryRuntimeImpl : public FunctionLibraryRuntime {
   GraphOptimizer optimizer_;
   const SessionMetadata* const session_metadata_;
   Executor::Args::Runner default_runner_;
-  const string device_name_;
+  const std::string device_name_;
 
-  std::function<Status(const string&, const OpDef**)> get_func_sig_;
-  std::function<Status(const std::shared_ptr<const NodeProperties>&,
-                       OpKernel**)>
+  std::function<absl::Status(const std::string&, const OpDef**)> get_func_sig_;
+  std::function<absl::Status(const std::shared_ptr<const NodeProperties>&,
+                             OpKernel**)>
       create_kernel_;
 
   mutable mutex mu_;
 
   int next_handle_ TF_GUARDED_BY(mu_);
 
+  bool finalized_ TF_GUARDED_BY(mu_) = false;
+
   // The instantiated and transformed function is encoded as a Graph
   // object, and an executor is created for the graph.
   struct Item {
-    uint64 instantiation_counter = 0;
+    uint64_t instantiation_counter = 0;
     std::unique_ptr<const Graph> graph = nullptr;
     const FunctionLibraryDefinition* lib_def = nullptr;  // Not owned.
     FunctionBody* func_graph = nullptr;
     Executor* exec = nullptr;
     core::RefCountPtr<FunctionLibraryRuntimeOverlay> overlay_flr = nullptr;
-    string executor_type;
+    std::string executor_type;
     bool allow_small_function_optimizations = false;
     bool allow_control_flow_sync_execution = false;
+    bool function_runs_at_most_once = false;
 
     ~Item() {
       delete this->func_graph;
       delete this->exec;
     }
   };
+
+  DoneCallback DeleteExecutorStateAsync(const Item* item, DoneCallback done,
+                                        Handle handle);
+  absl::Status DeleteExecutorStateSync(const Item* item, Handle handle);
+
   std::unique_ptr<absl::flat_hash_map<Handle, std::unique_ptr<Item>>> items_
       TF_GUARDED_BY(mu_);
   std::unique_ptr<FunctionHandleCache> function_handle_cache_;
@@ -439,26 +462,26 @@ class FunctionLibraryRuntimeImpl : public FunctionLibraryRuntime {
   // to use for kernel creation and execution. In particular, this method can
   // accept a FunctionLibraryRuntimeOverlay that overlays a different
   // FunctionLibraryDefinition.
-  Status CreateKernel(const std::shared_ptr<const NodeProperties>& props,
-                      FunctionLibraryRuntime* flr, OpKernel** kernel);
-  Status FunctionDefToBody(core::RefCountPtr<FunctionRecord>&& record,
-                           AttrSlice attrs,
-                           const FunctionLibraryDefinition* lib_def,
-                           std::unique_ptr<FunctionBody>* fbody);
-  Status CreateItem(Item** item);
-  Status GetOrCreateItem(LocalHandle local_handle, Item** item);
-  Status InstantiateSymbolicGradient(const NameAttrList& func,
-                                     const FunctionLibraryDefinition* lib_def,
-                                     std::unique_ptr<FunctionBody>* g_body);
+  absl::Status CreateKernel(const std::shared_ptr<const NodeProperties>& props,
+                            FunctionLibraryRuntime* flr, OpKernel** kernel);
+  absl::Status FunctionDefToBody(core::RefCountPtr<FunctionRecord>&& record,
+                                 AttrSlice attrs,
+                                 const FunctionLibraryDefinition* lib_def,
+                                 std::unique_ptr<FunctionBody>* fbody);
+  absl::Status CreateItem(Item** item);
+  absl::Status GetOrCreateItem(LocalHandle local_handle, Item** item);
+  absl::Status InstantiateSymbolicGradient(
+      const NameAttrList& func, const FunctionLibraryDefinition* lib_def,
+      std::unique_ptr<FunctionBody>* g_body);
   bool IsLocalTarget(const InstantiateOptions& options) const;
   AttrValueMap FixAttrs(const AttrSlice& attrs);
   void RunRemote(const Options& opts, Handle handle,
-                 gtl::ArraySlice<Tensor> args, std::vector<Tensor>* rets,
+                 absl::Span<const Tensor> args, std::vector<Tensor>* rets,
                  Item* item, DoneCallback done);
 
   // TODO(fishx): Avoid using std::unique_ptr for PrivateIntraProcessRendezvous,
   // since it will allocate the object on heap.
-  Status PrepareRunSync(
+  absl::Status PrepareRunSync(
       Handle handle, Options* run_opts, Item** out_item,
       std::unique_ptr<PrivateIntraProcessRendezvous>* out_rendezvous);
 
@@ -494,7 +517,7 @@ FunctionLibraryRuntimeImpl::FunctionLibraryRuntimeImpl(
              absl::flat_hash_map<Handle, std::unique_ptr<Item>>>()),
       function_handle_cache_(std::make_unique<FunctionHandleCache>(this)),
       parent_(parent) {
-  get_func_sig_ = [this](const string& op, const OpDef** sig) {
+  get_func_sig_ = [this](const std::string& op, const OpDef** sig) {
     return base_lib_def_->LookUpOpDef(op, sig);
   };
   create_kernel_ = [this](const std::shared_ptr<const NodeProperties>& props,
@@ -558,7 +581,7 @@ class CallOp : public AsyncOpKernel {
     }
     std::vector<Tensor>* rets = new std::vector<Tensor>;
     lib->Run(opts, handle_, args, rets,
-             [ctx, done, rets](const Status& status) {
+             [ctx, done, rets](const absl::Status& status) {
                if (!status.ok()) {
                  ctx->SetStatus(status);
                } else {
@@ -594,8 +617,8 @@ const FunctionBody* FunctionLibraryRuntimeImpl::GetFunctionBody(Handle h) {
   return iter->second->func_graph;
 }
 
-Status FunctionLibraryRuntimeImpl::GetRetTypes(Handle h,
-                                               DataTypeVector* ret_types) {
+absl::Status FunctionLibraryRuntimeImpl::GetRetTypes(
+    Handle h, DataTypeVector* ret_types) {
   if (parent_->IsMultiDevice(h)) {
     return parent_->GetRetTypes(h, ret_types);
   }
@@ -608,16 +631,16 @@ Status FunctionLibraryRuntimeImpl::GetRetTypes(Handle h,
   return absl::OkStatus();
 }
 
-Status FunctionLibraryRuntimeImpl::CreateKernel(
+absl::Status FunctionLibraryRuntimeImpl::CreateKernel(
     const std::shared_ptr<const NodeProperties>& props, OpKernel** kernel) {
   return CreateKernel(props, this, kernel);
 }
 
-Status FunctionLibraryRuntimeImpl::CreateKernel(
+absl::Status FunctionLibraryRuntimeImpl::CreateKernel(
     const std::shared_ptr<const NodeProperties>& props,
     FunctionLibraryRuntime* flr, OpKernel** kernel) {
   // If a custom kernel creator is given, try that.
-  Status s;
+  absl::Status s;
   const CustomKernelCreator* custom_kernel_creator =
       GetDefaultCustomKernelCreator();
   if (custom_kernel_creator &&
@@ -683,7 +706,7 @@ Status FunctionLibraryRuntimeImpl::CreateKernel(
   return s;
 }
 
-Status FunctionLibraryRuntimeImpl::FunctionDefToBody(
+absl::Status FunctionLibraryRuntimeImpl::FunctionDefToBody(
     core::RefCountPtr<FunctionRecord>&& record, AttrSlice attrs,
     const FunctionLibraryDefinition* lib_def,
     std::unique_ptr<FunctionBody>* fbody) {
@@ -691,7 +714,7 @@ Status FunctionLibraryRuntimeImpl::FunctionDefToBody(
     return FunctionDefToBodyHelper(std::move(record), attrs, lib_def,
                                    get_func_sig_, fbody);
   } else {
-    auto get_func_sig = [lib_def](const string& op, const OpDef** sig) {
+    auto get_func_sig = [lib_def](const std::string& op, const OpDef** sig) {
       return lib_def->LookUpOpDef(op, sig);
     };
     return FunctionDefToBodyHelper(std::move(record), attrs, lib_def,
@@ -699,7 +722,7 @@ Status FunctionLibraryRuntimeImpl::FunctionDefToBody(
   }
 }
 
-Status FunctionLibraryRuntimeImpl::InstantiateSymbolicGradient(
+absl::Status FunctionLibraryRuntimeImpl::InstantiateSymbolicGradient(
     const NameAttrList& func, const FunctionLibraryDefinition* lib_def,
     std::unique_ptr<FunctionBody>* g_body) {
   const FunctionDef* fdef = lib_def->Find(func.name());
@@ -755,8 +778,8 @@ bool FunctionLibraryRuntimeImpl::IsLocalTarget(
   return true;
 }
 
-Status FunctionLibraryRuntimeImpl::Instantiate(
-    const string& function_name, AttrSlice attrs,
+absl::Status FunctionLibraryRuntimeImpl::Instantiate(
+    const std::string& function_name, AttrSlice attrs,
     const InstantiateOptions& options, Handle* handle) {
   if (!IsLocalTarget(options)) {
     return parent_->Instantiate(function_name, attrs, options, handle);
@@ -773,10 +796,16 @@ Status FunctionLibraryRuntimeImpl::Instantiate(
   // in the canonical key.
   InstantiateOptions options_copy(options);
   options_copy.target = device_name_;
-  const string key = Canonicalize(function_name, attrs, options_copy);
+  const std::string key = Canonicalize(function_name, attrs, options_copy);
 
   {
     mutex_lock l(mu_);
+    if (finalized_) {
+      return absl::FailedPreconditionError(
+          "FunctionLibraryRuntimeImpl is finalized and cannot instantiate a "
+          "new function handle.");
+    }
+
     *handle = parent_->GetHandle(key);
     if (*handle != kInvalidHandle) {
       FunctionLibraryRuntime::LocalHandle handle_on_device =
@@ -808,7 +837,7 @@ Status FunctionLibraryRuntimeImpl::Instantiate(
     if (func.name() == kGradientOp) {
       return errors::InvalidArgument("Can't take gradient of SymbolicGradient");
     }
-    const string grad = lib_def->FindGradient(func.name());
+    const std::string grad = lib_def->FindGradient(func.name());
     if (!grad.empty()) {
       return Instantiate(grad, AttrSlice(&func.attr()), options, handle);
     }
@@ -842,6 +871,7 @@ Status FunctionLibraryRuntimeImpl::Instantiate(
           options.allow_small_function_optimizations;
       item->allow_control_flow_sync_execution =
           options.allow_control_flow_sync_execution;
+      item->function_runs_at_most_once = options.function_runs_at_most_once;
       if (options.lib_def) {
         TF_ASSIGN_OR_RETURN(
             FunctionLibraryDefinition reachable_lib_def,
@@ -862,13 +892,24 @@ Status FunctionLibraryRuntimeImpl::Instantiate(
   return absl::OkStatus();
 }
 
-Status FunctionLibraryRuntimeImpl::ReleaseHandle(Handle handle) {
+absl::Status FunctionLibraryRuntimeImpl::Finalize() {
+  mutex_lock l(mu_);
+  if (finalized_) return absl::OkStatus();
+  for (auto& [_, item] : *items_) {
+    TF_RETURN_IF_ERROR(item->func_graph->Finalize());
+    item->graph.reset();
+  }
+  finalized_ = true;
+  return absl::OkStatus();
+}
+
+absl::Status FunctionLibraryRuntimeImpl::ReleaseHandle(Handle handle) {
   LocalHandle h = parent_->GetHandleOnDevice(device_name_, handle);
   if (h == kInvalidLocalHandle) {
     return parent_->ReleaseHandle(handle);
   }
   std::unique_ptr<Item> item_to_delete;
-  Status parent_status;
+  absl::Status parent_status;
   {
     mutex_lock l(mu_);
     // Return directly if all items has already been released.
@@ -897,54 +938,10 @@ Status FunctionLibraryRuntimeImpl::ReleaseHandle(Handle handle) {
   return parent_status;
 }
 
-namespace {
-
-// Removes all stateless nodes that do not contribute to a return
-// value from the function body. Unlike `RemoveDeadNodes()`, which is
-// triggered by `OptimizerOptions.do_function_inlining`, this pass
-// ignores the SINK node, from which (by definition) all nodes are
-// reverse reachable, and preserves all nodes that are reachable from
-// control output nodes.
-//
-// TODO(ezhulenev, skyewm): Function body should not have special treatment of
-// stateful ops, graph should encode nodes that must execute with `control_ret`
-// and `control_output`.
-void PruneFunctionBody(const FunctionDef& fdef, Graph* g) {
-  VLOG(2) << "Pruning function body: function_name=" << fdef.signature().name();
-
-  // `control_ret` nodes must be always executed.
-  std::unordered_set<StringPiece, StringPieceHasher> control_ret_nodes;
-  for (const auto& control_ret : fdef.control_ret()) {
-    control_ret_nodes.insert(control_ret.second);
-  }
-
-  std::unordered_set<const Node*> nodes;
-  for (auto n : g->nodes()) {
-    // NOTE(mrry): "_Retval" nodes are stateful, and so will be added
-    // to the seed set of `nodes`. "_Arg" nodes are also stateful, but we
-    // specifically exclude them as seeds, to avoid unconditionally executing
-    // unused argument nodes (e.g. in a function like `lambda x, y: y`).
-    // TODO(mrry): Investigate whether the `n->IsControlFlow()` test is
-    // still needed. It would be preferable to prune entire loops and/or
-    // conditionals if they are not used in the graph.
-    if (n->IsControlFlow() ||
-        (n->op_def().is_stateful() && n->type_string() != kArgOp) ||
-        (control_ret_nodes.find(n->name()) != control_ret_nodes.end())) {
-      nodes.insert(n);
-    }
-  }
-  bool changed = PruneForReverseReachability(g, std::move(nodes));
-  if (changed) {
-    FixupSourceAndSinkEdges(g);
-  }
-}
-
-}  // namespace
-
-Status FunctionLibraryRuntimeImpl::CreateItem(Item** item) {
+absl::Status FunctionLibraryRuntimeImpl::CreateItem(Item** item) {
   const FunctionBody* fbody;
   FunctionLibraryRuntime* flr;
-  string executor_type;
+  std::string executor_type;
   {
     tf_shared_lock l(mu_);
     fbody = (*item)->func_graph;
@@ -983,6 +980,7 @@ Status FunctionLibraryRuntimeImpl::CreateItem(Item** item) {
     DeleteNonCachedKernel(kernel);
   };
   params.session_metadata = session_metadata_;
+
   std::unique_ptr<Executor> exec;
 
   // When the instantiation options request small function optimizations, all
@@ -1008,8 +1006,8 @@ Status FunctionLibraryRuntimeImpl::CreateItem(Item** item) {
   return absl::OkStatus();
 }
 
-Status FunctionLibraryRuntimeImpl::GetOrCreateItem(LocalHandle local_handle,
-                                                   Item** item) {
+absl::Status FunctionLibraryRuntimeImpl::GetOrCreateItem(
+    LocalHandle local_handle, Item** item) {
   {
     tf_shared_lock l(mu_);
     auto iter = items_->find(local_handle);
@@ -1032,10 +1030,11 @@ void FunctionLibraryRuntimeImpl::ExecutorArgsFromOptions(
     Executor::Args* exec_args) {
   // Inherit the step_id from the caller.
   exec_args->step_id = run_opts.step_id;
-  exec_args->function_trace_id = random::New64();
+  exec_args->function_trace_id = tsl::random::ThreadLocalNew64();
   exec_args->rendezvous = run_opts.rendezvous;
   exec_args->stats_collector = run_opts.stats_collector;
   exec_args->cancellation_manager = run_opts.cancellation_manager;
+  exec_args->session_config = config_;
   exec_args->step_container = run_opts.step_container;
   if (run_opts.runner) {
     exec_args->runner = *run_opts.runner;
@@ -1050,15 +1049,82 @@ void FunctionLibraryRuntimeImpl::ExecutorArgsFromOptions(
   exec_args->stack_trace = run_opts.stack_trace;
 }
 
+FunctionLibraryRuntimeImpl::DoneCallback
+FunctionLibraryRuntimeImpl::DeleteExecutorStateAsync(const Item* item,
+                                                     DoneCallback done,
+                                                     Handle handle) {
+  CHECK(item->function_runs_at_most_once);  // Crash OK
+  done = [this, handle, original_done_cb = std::move(done)](
+             const absl::Status& status) mutable {
+    TF_CHECK_OK(ReleaseHandle(handle));
+    original_done_cb(status);
+  };
+  return done;
+}
+
+absl::Status FunctionLibraryRuntimeImpl::DeleteExecutorStateSync(
+    const Item* item, Handle handle) {
+  CHECK(item->function_runs_at_most_once);  // Crash OK
+  return ReleaseHandle(handle);
+}
+
+namespace {
+
+// Get the alloc attrs for the args obtained from either the nodes or the
+// function body via output parameter.
+absl::Status GetAllocAttrsForArgs(
+    const FunctionBody* fbody,
+    std::vector<AllocatorAttributes>& args_alloc_attrs) {
+  args_alloc_attrs.clear();
+  args_alloc_attrs.reserve(fbody->arg_nodes.size());
+
+  // Get the alloc attrs for the args from the nodes, if not available in the
+  // function body.
+  if (fbody->arg_types.size() != fbody->args_alloc_attrs.size()) {
+    return full_type::SetAllocAttrsForArgs(fbody->arg_nodes, fbody->arg_types,
+                                           args_alloc_attrs);
+  }
+
+  // Otherwise, use the alloc attrs from the function body.
+  for (const AllocatorAttributes& alloc_attr : fbody->args_alloc_attrs) {
+    args_alloc_attrs.push_back(alloc_attr);
+  }
+  return absl::OkStatus();
+}
+
+// Get the alloc attrs for the return values obtained from either the nodes or
+// the function body via output parameter.
+absl::Status GetAllocAttrsForRets(
+    const FunctionBody* fbody,
+    std::vector<AllocatorAttributes>& rets_alloc_attrs) {
+  rets_alloc_attrs.clear();
+  rets_alloc_attrs.reserve(fbody->ret_nodes.size());
+
+  // Get the alloc attrs for the rets from the nodes, if not available in the
+  // function body.
+  if (fbody->ret_types.size() != fbody->rets_alloc_attrs.size()) {
+    return full_type::SetAllocAttrsForRets(fbody->ret_nodes, fbody->ret_types,
+                                           rets_alloc_attrs);
+  }
+
+  // Otherwise, use the alloc attrs from the function body.
+  for (const AllocatorAttributes& alloc_attr : fbody->rets_alloc_attrs) {
+    rets_alloc_attrs.push_back(alloc_attr);
+  }
+  return absl::OkStatus();
+}
+
+}  // namespace
+
 void FunctionLibraryRuntimeImpl::RunRemote(const Options& opts, Handle handle,
-                                           gtl::ArraySlice<Tensor> args,
+                                           absl::Span<const Tensor> args,
                                            std::vector<Tensor>* rets,
                                            Item* item, DoneCallback done) {
-  string target_device = parent_->GetDeviceName(handle);
-  string source_device = opts.source_device;
+  std::string target_device = parent_->GetDeviceName(handle);
+  std::string source_device = opts.source_device;
   RendezvousInterface* rendezvous = opts.rendezvous;
   DeviceContext* device_context;
-  Status s = parent_->GetDeviceContext(target_device, &device_context);
+  absl::Status s = parent_->GetDeviceContext(target_device, &device_context);
   if (!s.ok()) {
     done(s);
     return;
@@ -1078,14 +1144,12 @@ void FunctionLibraryRuntimeImpl::RunRemote(const Options& opts, Handle handle,
   ExecutorArgsFromOptions(opts, frame, exec_args);
 
   std::vector<AllocatorAttributes> args_alloc_attrs, rets_alloc_attrs;
-  s = full_type::SetAllocAttrsForArgs(fbody->arg_nodes, fbody->arg_types,
-                                      args_alloc_attrs);
+  s = GetAllocAttrsForArgs(fbody, args_alloc_attrs);
   if (!s.ok()) {
     done(s);
     return;
   }
-  s = full_type::SetAllocAttrsForRets(fbody->ret_nodes, fbody->ret_types,
-                                      rets_alloc_attrs);
+  s = GetAllocAttrsForRets(fbody, rets_alloc_attrs);
   if (!s.ok()) {
     done(s);
     return;
@@ -1098,13 +1162,16 @@ void FunctionLibraryRuntimeImpl::RunRemote(const Options& opts, Handle handle,
   // computation is done and stored in *rets, we send the return values back
   // to the source_device (caller) so that the ProcFLR can receive them later.
   std::vector<Tensor>* remote_args = new std::vector<Tensor>;
+  if (item->function_runs_at_most_once) {
+    done = DeleteExecutorStateAsync(item, std::move(done), handle);
+  }
   ProcessFunctionLibraryRuntime::ReceiveTensorsAsync(
       source_device, target_device, "arg_", src_incarnation, args.size(),
       device_context, args_alloc_attrs, rendezvous, remote_args,
       [frame, remote_args, item, source_device, target_device,
        target_incarnation, rendezvous, device_context, rets, done, exec_args,
-       rets_alloc_attrs, allow_dead_tensors](const Status& status) {
-        Status s = status;
+       rets_alloc_attrs, allow_dead_tensors](const absl::Status& status) {
+        absl::Status s = status;
         if (s.ok()) {
           s = frame->SetArgs(*remote_args);
         }
@@ -1119,8 +1186,8 @@ void FunctionLibraryRuntimeImpl::RunRemote(const Options& opts, Handle handle,
             *exec_args,
             [frame, rets, done, source_device, target_device,
              target_incarnation, rendezvous, device_context, remote_args,
-             rets_alloc_attrs, allow_dead_tensors](const Status& status) {
-              Status s = status;
+             rets_alloc_attrs, allow_dead_tensors](const absl::Status& status) {
+              absl::Status s = status;
               if (s.ok()) {
                 s = frame->ConsumeRetvals(rets, allow_dead_tensors);
               }
@@ -1141,7 +1208,7 @@ void FunctionLibraryRuntimeImpl::RunRemote(const Options& opts, Handle handle,
 }
 
 void FunctionLibraryRuntimeImpl::Run(const Options& opts, Handle handle,
-                                     gtl::ArraySlice<Tensor> args,
+                                     absl::Span<const Tensor> args,
                                      std::vector<Tensor>* rets,
                                      DoneCallback done) {
   if (opts.cancellation_manager && opts.cancellation_manager->IsCancelled()) {
@@ -1153,7 +1220,8 @@ void FunctionLibraryRuntimeImpl::Run(const Options& opts, Handle handle,
     auto* rendezvous = new RefCountedIntraProcessRendezvous(device_mgr_);
     run_opts.rendezvous = rendezvous;
     run_opts.create_rendezvous = false;
-    done = [done = std::move(done), rendezvous](const Status& status) mutable {
+    done = [done = std::move(done),
+            rendezvous](const absl::Status& status) mutable {
       rendezvous->Unref();
       done(status);
     };
@@ -1171,7 +1239,7 @@ void FunctionLibraryRuntimeImpl::Run(const Options& opts, Handle handle,
   DCHECK(run_opts.runner != nullptr);
 
   Item* item = nullptr;
-  Status s = GetOrCreateItem(local_handle, &item);
+  absl::Status s = GetOrCreateItem(local_handle, &item);
   if (!s.ok()) {
     done(s);
     return;
@@ -1196,22 +1264,25 @@ void FunctionLibraryRuntimeImpl::Run(const Options& opts, Handle handle,
   Executor::Args exec_args;
   ExecutorArgsFromOptions(run_opts, frame, &exec_args);
 
-  profiler::TraceMeProducer activity(
+  tsl::profiler::TraceMeProducer activity(
       // To TraceMeConsumers in ExecutorState::Process/Finish.
       [&run_opts] {
-        return profiler::TraceMeEncode("FunctionRun",
-                                       {{"id", run_opts.step_id}, {"_r", 1}});
+        return tsl::profiler::TraceMeEncode(
+            "FunctionRun", {{"id", run_opts.step_id}, {"_r", 1}});
       },
-      profiler::ContextType::kTfExecutor, *exec_args.function_trace_id,
-      profiler::TraceMeLevel::kInfo);
+      tsl::profiler::ContextType::kTfExecutor, *exec_args.function_trace_id,
+      tsl::profiler::TraceMeLevel::kInfo);
 
   bool allow_dead_tensors = run_opts.allow_dead_tensors;
+  if (item->function_runs_at_most_once) {
+    done = DeleteExecutorStateAsync(item, std::move(done), handle);
+  }
   item->exec->RunAsync(
       // Executor args
       exec_args,
       // Done callback.
-      [frame, rets, done, allow_dead_tensors](const Status& status) {
-        Status s = status;
+      [frame, rets, done, allow_dead_tensors](const absl::Status& status) {
+        absl::Status s = status;
         if (s.ok()) {
           s = frame->ConsumeRetvals(rets, allow_dead_tensors);
         }
@@ -1233,7 +1304,8 @@ void FunctionLibraryRuntimeImpl::Run(const Options& opts, Handle handle,
     auto* rendezvous = new RefCountedIntraProcessRendezvous(device_mgr_);
     run_opts.rendezvous = rendezvous;
     run_opts.create_rendezvous = false;
-    done = [done = std::move(done), rendezvous](const Status& status) mutable {
+    done = [done = std::move(done),
+            rendezvous](const absl::Status& status) mutable {
       rendezvous->Unref();
       done(status);
     };
@@ -1256,7 +1328,7 @@ void FunctionLibraryRuntimeImpl::Run(const Options& opts, Handle handle,
   }
 
   Item* item = nullptr;
-  Status s = GetOrCreateItem(local_handle, &item);
+  absl::Status s = GetOrCreateItem(local_handle, &item);
   if (!s.ok()) {
     done(s);
     return;
@@ -1268,19 +1340,22 @@ void FunctionLibraryRuntimeImpl::Run(const Options& opts, Handle handle,
 
   Executor::Args exec_args;
   ExecutorArgsFromOptions(run_opts, frame, &exec_args);
-  profiler::TraceMeProducer activity(
+  tsl::profiler::TraceMeProducer activity(
       // To TraceMeConsumers in ExecutorState::Process/Finish.
       [&opts] {
-        return profiler::TraceMeEncode("FunctionRun",
-                                       {{"id", opts.step_id}, {"_r", 1}});
+        return tsl::profiler::TraceMeEncode("FunctionRun",
+                                            {{"id", opts.step_id}, {"_r", 1}});
       },
-      profiler::ContextType::kTfExecutor, *exec_args.function_trace_id,
-      profiler::TraceMeLevel::kInfo);
+      tsl::profiler::ContextType::kTfExecutor, *exec_args.function_trace_id,
+      tsl::profiler::TraceMeLevel::kInfo);
 
+  if (item->function_runs_at_most_once) {
+    done = DeleteExecutorStateAsync(item, std::move(done), handle);
+  }
   item->exec->RunAsync(exec_args, std::move(done));
 }
 
-Status FunctionLibraryRuntimeImpl::PrepareRunSync(
+absl::Status FunctionLibraryRuntimeImpl::PrepareRunSync(
     Handle handle, Options* run_opts, Item** out_item,
     std::unique_ptr<PrivateIntraProcessRendezvous>* out_rendezvous) {
   if (run_opts->cancellation_manager &&
@@ -1320,9 +1395,9 @@ Status FunctionLibraryRuntimeImpl::PrepareRunSync(
   return absl::OkStatus();
 }
 
-Status FunctionLibraryRuntimeImpl::RunSync(Options opts, Handle handle,
-                                           gtl::ArraySlice<Tensor> args,
-                                           std::vector<Tensor>* rets) {
+absl::Status FunctionLibraryRuntimeImpl::RunSync(Options opts, Handle handle,
+                                                 absl::Span<const Tensor> args,
+                                                 std::vector<Tensor>* rets) {
   Item* item = nullptr;
   std::unique_ptr<PrivateIntraProcessRendezvous> rendezvous;
   TF_RETURN_IF_ERROR(PrepareRunSync(handle, &opts, &item, &rendezvous));
@@ -1337,11 +1412,14 @@ Status FunctionLibraryRuntimeImpl::RunSync(Options opts, Handle handle,
   ExecutorArgsFromOptions(opts, &frame, &exec_args);
 
   TF_RETURN_IF_ERROR(item->exec->Run(exec_args));
+  if (item->function_runs_at_most_once) {
+    TF_RETURN_IF_ERROR(DeleteExecutorStateSync(item, handle));
+  }
   return frame.ConsumeRetvals(rets, opts.allow_dead_tensors);
 }
 
-Status FunctionLibraryRuntimeImpl::RunSync(Options opts, Handle handle,
-                                           CallFrameInterface* call_frame) {
+absl::Status FunctionLibraryRuntimeImpl::RunSync(
+    Options opts, Handle handle, CallFrameInterface* call_frame) {
   Item* item = nullptr;
   std::unique_ptr<PrivateIntraProcessRendezvous> rendezvous;
   TF_RETURN_IF_ERROR(PrepareRunSync(handle, &opts, &item, &rendezvous));
@@ -1351,19 +1429,23 @@ Status FunctionLibraryRuntimeImpl::RunSync(Options opts, Handle handle,
 
   Executor::Args exec_args;
   ExecutorArgsFromOptions(opts, call_frame, &exec_args);
-  return item->exec->Run(exec_args);
+  TF_RETURN_IF_ERROR(item->exec->Run(exec_args));
+  if (item->function_runs_at_most_once) {
+    TF_RETURN_IF_ERROR(DeleteExecutorStateSync(item, handle));
+  }
+  return absl::OkStatus();
 }
 
-bool FunctionLibraryRuntimeImpl::IsStateful(const string& func) const {
+bool FunctionLibraryRuntimeImpl::IsStateful(const std::string& func) const {
   const OpDef* op_def;
-  const Status s = base_lib_def_->LookUpOpDef(func, &op_def);
+  const absl::Status s = base_lib_def_->LookUpOpDef(func, &op_def);
   return s.ok() && op_def->is_stateful();
 }
 
-string FunctionLibraryRuntimeImpl::DebugString(Handle handle) {
+std::string FunctionLibraryRuntimeImpl::DebugString(Handle handle) {
   Item* item = nullptr;
   LocalHandle local_handle = parent_->GetHandleOnDevice(device_name_, handle);
-  Status s = GetOrCreateItem(local_handle, &item);
+  absl::Status s = GetOrCreateItem(local_handle, &item);
   if (s.ok()) {
     if (item->graph) {
       return tensorflow::DebugString(item->graph.get());
@@ -1375,7 +1457,7 @@ string FunctionLibraryRuntimeImpl::DebugString(Handle handle) {
   }
 }
 
-Status FunctionLibraryRuntimeImpl::Clone(
+absl::Status FunctionLibraryRuntimeImpl::Clone(
     std::unique_ptr<FunctionLibraryDefinition>* out_lib_def,
     std::unique_ptr<ProcessFunctionLibraryRuntime>* out_pflr,
     FunctionLibraryRuntime** out_flr, bool skip_flib_def) {

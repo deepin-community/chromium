@@ -7,7 +7,6 @@
 #include <memory>
 #include <optional>
 
-#include "ash/components/arc/arc_features.h"
 #include "base/check.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
@@ -26,6 +25,7 @@
 #include "chrome/browser/ash/app_list/arc/arc_package_install_priority_handler.h"
 #include "chrome/browser/image_fetcher/image_decoder_impl.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
 #include "components/image_fetcher/core/image_fetcher_impl.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_types.h"
@@ -77,13 +77,13 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
     }
   )");
 
-apps::PromiseAppType GetPromiseAppType(apps::AppType promise_app_type,
+apps::PromiseAppType GetPromiseAppType(apps::PackageType promise_app_type,
                                        apps::AppType installed_app_type) {
-  if (promise_app_type == apps::AppType::kArc &&
+  if (promise_app_type == apps::PackageType::kArc &&
       installed_app_type == apps::AppType::kArc) {
     return apps::PromiseAppType::kArc;
   }
-  if (promise_app_type == apps::AppType::kArc &&
+  if (promise_app_type == apps::PackageType::kArc &&
       installed_app_type == apps::AppType::kWeb) {
     return apps::PromiseAppType::kTwa;
   }
@@ -183,7 +183,7 @@ void PromiseAppService::OnAppUpdate(const apps::AppUpdate& update) {
   // Record metrics for app type, noting that the app type may differ between
   // the promise app and the installed app.
   RecordPromiseAppType(
-      GetPromiseAppType(package_id->app_type(), update.AppType()));
+      GetPromiseAppType(package_id->package_type(), update.AppType()));
 
   // Delete the promise app.
   PromiseAppPtr promise_app = std::make_unique<PromiseApp>(package_id.value());
@@ -214,7 +214,7 @@ void PromiseAppService::UpdateInstallPriority(const std::string& id) {
 
   // Currently, updating install priority is only supported for ARC promise
   // apps.
-  if (promise_app->package_id.app_type() != AppType::kArc) {
+  if (promise_app->package_id.package_type() != PackageType::kArc) {
     return;
   }
 
@@ -333,7 +333,8 @@ bool PromiseAppService::IsRegisteredInAppRegistryCache(
       [&package_id, &is_registered](const AppUpdate& update) {
         // TODO(b/297296711): Update check for TWAs, which can have differing
         // package IDs.
-        if (update.AppType() != package_id.app_type()) {
+        if (ConvertPackageTypeToAppType(package_id.package_type()) !=
+            update.AppType()) {
           return;
         }
         if (update.PublisherId() != package_id.identifier()) {
@@ -359,7 +360,7 @@ void PromiseAppService::SetPromiseAppReadyToShow(const PackageId& package_id) {
 
 void PromiseAppService::OnApkWebAppInstallationFinished(
     const std::string& package_name) {
-  PackageId package_id(AppType::kArc, package_name);
+  PackageId package_id(PackageType::kArc, package_name);
 
   // Successful APK web app installations are already handled during a call to
   // observers via AppRegistryCache::OnAppUpdate which happens before this

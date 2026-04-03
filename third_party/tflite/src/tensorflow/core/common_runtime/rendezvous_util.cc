@@ -19,10 +19,11 @@ limitations under the License.
 
 namespace tensorflow {
 
-Status SendTensorsToRendezvous(
+absl::Status SendTensorsToRendezvous(
     RendezvousInterface* rendezvous, DeviceContext* device_context,
     const std::vector<AllocatorAttributes>& alloc_attrs,
-    const std::vector<string>& keys, gtl::ArraySlice<Tensor> tensors_to_send) {
+    const std::vector<std::string>& keys,
+    absl::Span<const Tensor> tensors_to_send) {
   if (keys.size() != tensors_to_send.size()) {
     return errors::InvalidArgument(
         "keys and tensors_to_send are not the same size. keys.size() = ",
@@ -56,7 +57,7 @@ Status SendTensorsToRendezvous(
 void RecvOutputsFromRendezvousAsync(
     RendezvousInterface* rendezvous, DeviceContext* device_context,
     const std::vector<AllocatorAttributes>& alloc_attrs,
-    const std::vector<string>& keys, std::vector<Tensor>* received_tensors,
+    const std::vector<std::string>& keys, std::vector<Tensor>* received_tensors,
     StatusCallback done) {
   if (keys.empty()) {
     done(absl::OkStatus());
@@ -69,12 +70,12 @@ void RecvOutputsFromRendezvousAsync(
   }
 
   received_tensors->reserve(keys.size());
-  std::vector<
-      std::tuple<string, Tensor*, Rendezvous::ParsedKey, AllocatorAttributes>>
+  std::vector<std::tuple<std::string, Tensor*, Rendezvous::ParsedKey,
+                         AllocatorAttributes>>
       arguments;
   for (int i = 0; i < keys.size(); ++i) {
     Rendezvous::ParsedKey parsed;
-    Status s = Rendezvous::ParseKey(keys[i], &parsed);
+    absl::Status s = Rendezvous::ParseKey(keys[i], &parsed);
     received_tensors->push_back(Tensor());
     if (!s.ok()) {
       done(s);
@@ -90,7 +91,7 @@ void RecvOutputsFromRendezvousAsync(
 
   auto status_cb = new ReffedStatusCallback(std::move(done));
   for (auto& p : arguments) {
-    const string& key = std::get<0>(p);
+    const std::string& key = std::get<0>(p);
     Tensor* val = std::get<1>(p);
     Rendezvous::ParsedKey parsed = std::get<2>(p);
     Rendezvous::Args rendez_args;
@@ -99,11 +100,11 @@ void RecvOutputsFromRendezvousAsync(
     status_cb->Ref();
     rendezvous->RecvAsync(
         parsed, rendez_args,
-        [val, key, status_cb](const Status& s,
+        [val, key, status_cb](const absl::Status& s,
                               const Rendezvous::Args& send_args,
                               const Rendezvous::Args& recv_args,
                               const Tensor& v, const bool is_dead) {
-          Status status = s;
+          absl::Status status = s;
           if (status.ok()) {
             *val = v;
             if (is_dead) {
@@ -118,13 +119,13 @@ void RecvOutputsFromRendezvousAsync(
   status_cb->Unref();
 }
 
-Status RecvOutputsFromRendezvous(RendezvousInterface* rendezvous,
-                                 NamedTensors* out,
-                                 const Rendezvous::Args& args) {
+absl::Status RecvOutputsFromRendezvous(RendezvousInterface* rendezvous,
+                                       NamedTensors* out,
+                                       const Rendezvous::Args& args) {
   // Receives values requested by the caller.
   Rendezvous::ParsedKey parsed;
   for (auto& p : *out) {
-    const string& key = p.first;
+    const std::string& key = p.first;
     Tensor* val = &p.second;
     bool is_dead = false;
     TF_RETURN_IF_ERROR(Rendezvous::ParseKey(key, &parsed));

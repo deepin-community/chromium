@@ -1,3 +1,4 @@
+// clang-format off
 // Auto-generated file. Do not edit!
 //   Template: src/qs8-igemm/MRx8c8-avxvnni.c.in
 //   Generator: tools/xngen
@@ -8,14 +9,17 @@
 // LICENSE file in the root directory of this source tree.
 
 #include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include <immintrin.h>
 
-#include <xnnpack/gemm.h>
-#include <xnnpack/intrinsics-polyfill.h>
-#include <xnnpack/math.h>
-#include <xnnpack/unaligned.h>
-#include <xnnpack/prefetch.h>
+#include "src/xnnpack/common.h"
+#include "src/xnnpack/intrinsics-polyfill.h"
+#include "src/xnnpack/math.h"
+#include "src/xnnpack/microparams.h"
+#include "src/xnnpack/prefetch.h"
+#include "src/xnnpack/unaligned.h"
 
 
 void xnn_qs8_qc8w_igemm_minmax_fp32_ukernel_4x8c8__avxvnni_prfm(
@@ -30,7 +34,7 @@ void xnn_qs8_qc8w_igemm_minmax_fp32_ukernel_4x8c8__avxvnni_prfm(
     size_t cn_stride,
     size_t a_offset,
     const int8_t* zero,
-    const union xnn_qs8_qc8w_conv_minmax_params params[restrict XNN_MIN_ELEMENTS(1)]) XNN_OOB_READS
+    const union xnn_qs8_qc8w_conv_minmax_params* restrict params) XNN_OOB_READS
 {
   assert(mr != 0);
   assert(mr <= 4);
@@ -56,10 +60,14 @@ void xnn_qs8_qc8w_igemm_minmax_fp32_ukernel_4x8c8__avxvnni_prfm(
     c3 = c2;
   }
 
-  const __m256i vsign_mask = _mm256_set1_epi8(params->fp32_avxvnni.sign_mask);  // 0x80
-  const __m256 voutput_max_less_zero_point = _mm256_set1_ps(params->fp32_avxvnni.output_max_less_zero_point);
-  const __m256i voutput_zero_point = _mm256_set1_epi32(params->fp32_avxvnni.output_zero_point);
-  const __m128i voutput_min = _mm_load_si128((const __m128i*) params->fp32_avxvnni.output_min);
+  const __m256i vsign_mask = _mm256_set1_epi8(0x80);
+  XNN_FORCE_REALIZATION(vsign_mask);
+  const __m256 voutput_max_less_zero_point = _mm256_set1_ps((int32_t) params->fp32_scalar.output_max - (int32_t) params->fp32_scalar.output_zero_point);
+  const __m256i voutput_zero_point = _mm256_set1_epi32(params->fp32_scalar.output_zero_point);
+  const __m128i voutput_min = _mm_set1_epi8(params->fp32_scalar.output_min);
+  // XNN_FORCE_REALIZATION(voutput_max_less_zero_point);
+  // XNN_FORCE_REALIZATION(voutput_zero_point);
+  // XNN_FORCE_REALIZATION(voutput_min);
   do {
     __m256i vacc0x0123 = _mm256_cvtepu32_epi64(_mm_load_si128((const __m128i*) w));
     __m256i vacc0x4567 = _mm256_cvtepu32_epi64(_mm_load_si128((const __m128i*) ((const int32_t*) w + 4)));

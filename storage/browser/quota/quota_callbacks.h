@@ -9,12 +9,11 @@
 #include <stdint.h>
 
 #include <map>
+#include <optional>
 #include <set>
 #include <utility>
 #include <vector>
 
-#include <optional>
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "components/services/storage/public/cpp/buckets/bucket_locator.h"
 #include "third_party/blink/public/mojom/quota/quota_types.mojom-forward.h"

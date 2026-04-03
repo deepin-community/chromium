@@ -4,8 +4,11 @@
 
 #include "components/autofill/core/browser/metrics/ukm_metrics_test_utils.h"
 
-#include "base/metrics/metrics_hashes.h"
+#include "base/check_deref.h"
+#include "base/containers/to_vector.h"
+#include "components/autofill/core/browser/metrics/prediction_quality_metrics.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_decode.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -13,17 +16,17 @@ namespace autofill::autofill_metrics {
 
 namespace {
 
+using ::testing::ElementsAreArray;
+using ::testing::Matcher;
+using ::testing::ResultOf;
+using ::testing::UnorderedElementsAreArray;
 using UkmCardUploadDecisionType = ukm::builders::Autofill_CardUploadDecision;
-using UkmDeveloperEngagementType = ukm::builders::Autofill_DeveloperEngagement;
 using UkmInteractedWithFormType = ukm::builders::Autofill_InteractedWithForm;
 using UkmSuggestionsShownType = ukm::builders::Autofill_SuggestionsShown;
 using UkmSuggestionFilledType = ukm::builders::Autofill_SuggestionFilled;
-using UkmTextFieldDidChangeType = ukm::builders::Autofill_TextFieldDidChange;
+using UkmTextFieldValueChangedType = ukm::builders::Autofill_TextFieldDidChange;
 using UkmLogHiddenRepresentationalFieldSkipDecisionType =
     ukm::builders::Autofill_HiddenRepresentationalFieldSkipDecision;
-using UkmLogRepeatedServerTypePredictionRationalized =
-    ukm::builders::Autofill_RepeatedServerTypePredictionRationalized;
-using UkmFormSubmittedType = ukm::builders::Autofill_FormSubmitted;
 using UkmFieldTypeValidationType = ukm::builders::Autofill_FieldTypeValidation;
 using UkmFieldFillStatusType = ukm::builders::Autofill_FieldFillStatus;
 using UkmFormEventType = ukm::builders::Autofill_FormEvent;
@@ -31,6 +34,49 @@ using UkmEditedAutofilledFieldAtSubmission =
     ukm::builders::Autofill_EditedAutofilledFieldAtSubmission;
 using UkmAutofillKeyMetricsType = ukm::builders::Autofill_KeyMetrics;
 using UkmFieldInfoType = ukm::builders::Autofill2_FieldInfo;
+
+// Clears any time duration metrics metrics whose value is non-negative.
+std::vector<UkmMetricNameAndValue> ResetMillisecondsSinceParse(
+    std::vector<UkmMetricNameAndValue> metrics) {
+  for (UkmMetricNameAndValue& metric : metrics) {
+    if (metric.metric_name == "MillisecondsSinceFormParsed" &&
+        metric.value > 0) {
+      metric.value = 0;
+    }
+  }
+  return metrics;
+}
+
+// Turns an event and metric hash into a human-readable name.
+// The name is only the metric's name. It does not include the event's name.
+std::string_view GetMetricName(uint64_t event_hash, uint64_t metric_hash) {
+  const ukm::builders::DecodeMap& decode_map = ukm::builders::GetDecodeMap();
+  auto outer_it = decode_map.find(event_hash);
+  if (outer_it == decode_map.end()) {
+    LOG(ERROR) << "Unknown event hash " << event_hash;
+    return "<Unknown event hash>";
+  }
+  auto inner_it = outer_it->second.metric_map.find(metric_hash);
+  if (inner_it == outer_it->second.metric_map.end()) {
+    LOG(ERROR) << "Unknown metric hash " << metric_hash << " for metric "
+               << outer_it->second.name;
+    return "<Unknown metric hash>";
+  }
+  return inner_it->second;
+}
+
+std::vector<UkmMetricNameAndValue> UkmEntryToUkmMetricNameAndValues(
+    const ukm::mojom::UkmEntry* ukm_entry) {
+  return ResetMillisecondsSinceParse(base::ToVector(
+      ukm_entry->metrics, [&](const std::pair<uint64_t, int64_t>& p) {
+        const uint64_t metric_hash = p.first;
+        const int64_t value = p.second;
+        return UkmMetricNameAndValue(
+            GetMetricName(ukm_entry->event_hash, metric_hash), value);
+      }));
+}
+
+}  // namespace
 
 FormSignature Collapse(FormSignature sig) {
   return FormSignature(sig.value() % 1021);
@@ -40,146 +86,35 @@ FieldSignature Collapse(FieldSignature sig) {
   return FieldSignature(sig.value() % 1021);
 }
 
-MATCHER(CompareMetricsIgnoringMillisecondsSinceFormParsed, "") {
-  const auto& lhs = ::testing::get<0>(arg);
-  const std::pair<std::string, int64_t>& rhs = ::testing::get<1>(arg);
-  return lhs.first == base::HashMetricName(rhs.first) &&
-         (lhs.second == rhs.second ||
-          (lhs.second > 0 &&
-           rhs.first ==
-               UkmSuggestionFilledType::kMillisecondsSinceFormParsedName));
+void PrintTo(const UkmMetricNameAndValue& metric, std::ostream* os) {
+  *os << "{\"" << metric.metric_name << "\", " << metric.value << "}";
 }
 
-}  // namespace
-
-void VerifyUkm(
-    const ukm::TestUkmRecorder* ukm_recorder,
-    const FormData& form,
-    const char* event_name,
-    const std::vector<std::vector<ExpectedUkmMetricsPair>>& expected_metrics) {
-  auto entries = ukm_recorder->GetEntriesByName(event_name);
-
-  EXPECT_LE(entries.size(), expected_metrics.size());
-  for (size_t i = 0; i < expected_metrics.size() && i < entries.size(); i++) {
-    ukm_recorder->ExpectEntrySourceHasUrl(entries[i],
-                                          form.main_frame_origin.GetURL());
-    EXPECT_THAT(entries[i]->metrics,
-                testing::UnorderedPointwise(
-                    CompareMetricsIgnoringMillisecondsSinceFormParsed(),
-                    expected_metrics[i]));
-  }
+std::vector<std::vector<UkmMetricNameAndValue>> GetUkmEvents(
+    const ukm::TestUkmRecorder& ukm_recorder,
+    std::string_view event_name) {
+  return base::ToVector(ukm_recorder.GetEntriesByName(event_name),
+                        UkmEntryToUkmMetricNameAndValues);
 }
 
-void VerifyDeveloperEngagementUkm(
-    const ukm::TestUkmRecorder* ukm_recorder,
-    const FormData& form,
-    const bool is_for_credit_card,
-    const DenseSet<FormType>& form_types,
-    const std::vector<int64_t>& expected_metric_values) {
-  int expected_metric_value = 0;
-  for (const auto it : expected_metric_values) {
-    expected_metric_value |= 1 << it;
-  }
-
-  auto entries =
-      ukm_recorder->GetEntriesByName(UkmDeveloperEngagementType::kEntryName);
-  EXPECT_EQ(1u, entries.size());
-  for (const ukm::mojom::UkmEntry* const entry : entries) {
-    ukm_recorder->ExpectEntrySourceHasUrl(
-        entry, GURL(form.main_frame_origin.GetURL()));
-    EXPECT_EQ(4u, entry->metrics.size());
-    ukm_recorder->ExpectEntryMetric(
-        entry, UkmDeveloperEngagementType::kDeveloperEngagementName,
-        expected_metric_value);
-    ukm_recorder->ExpectEntryMetric(
-        entry, UkmDeveloperEngagementType::kIsForCreditCardName,
-        is_for_credit_card);
-    ukm_recorder->ExpectEntryMetric(
-        entry, UkmDeveloperEngagementType::kFormTypesName,
-        AutofillMetrics::FormTypesToBitVector(form_types));
-    ukm_recorder->ExpectEntryMetric(
-        entry, UkmDeveloperEngagementType::kFormSignatureName,
-        Collapse(CalculateFormSignature(form)).value());
-  }
+Matcher<const std::vector<std::vector<UkmMetricNameAndValue>>&> UkmEventsAre(
+    std::vector<std::vector<UkmMetricNameAndValue>> expected_events) {
+  return ElementsAreArray(base::ToVector(
+      expected_events,
+      [](std::vector<UkmMetricNameAndValue>& expected_metrics) {
+        return UnorderedElementsAreArray(
+            ResetMillisecondsSinceParse(std::move(expected_metrics)));
+      }));
 }
 
-void VerifySubmitFormUkm(const ukm::TestUkmRecorder* ukm_recorder,
-                         const FormData& form,
-                         AutofillMetrics::AutofillFormSubmittedState state,
-                         bool is_for_credit_card,
-                         bool has_upi_vpa_field,
-                         const DenseSet<FormType>& form_types,
-                         const FormInteractionCounts& form_interaction_counts) {
-  VerifyUkm(ukm_recorder, form, UkmFormSubmittedType::kEntryName,
-            {{{UkmFormSubmittedType::kAutofillFormSubmittedStateName, state},
-              {UkmSuggestionFilledType::kMillisecondsSinceFormParsedName, 0},
-              {UkmFormSubmittedType::kIsForCreditCardName, is_for_credit_card},
-              {UkmFormSubmittedType::kHasUpiVpaFieldName, has_upi_vpa_field},
-              {UkmFormSubmittedType::kFormTypesName,
-               AutofillMetrics::FormTypesToBitVector(form_types)},
-              {UkmFormSubmittedType::kFormSignatureName,
-               Collapse(CalculateFormSignature(form)).value()},
-              {UkmFormSubmittedType::kFormElementUserModificationsName,
-               form_interaction_counts.form_element_user_modifications},
-              {UkmFormSubmittedType::kAutofillFillsName,
-               form_interaction_counts.autofill_fills}}});
-}
-
-void AppendFieldFillStatusUkm(
-    const FormData& form,
-    std::vector<std::vector<ExpectedUkmMetricsPair>>* expected_metrics) {
-  FormSignature form_signature = Collapse(CalculateFormSignature(form));
-  int64_t metric_type = static_cast<int64_t>(AutofillMetrics::TYPE_SUBMISSION);
-  for (const FormFieldData& field : form.fields) {
-    FieldSignature field_signature =
-        Collapse(CalculateFieldSignatureForField(field));
-    expected_metrics->push_back(
-        {{UkmSuggestionFilledType::kMillisecondsSinceFormParsedName, 0},
-         {UkmFieldFillStatusType::kFormSignatureName, form_signature.value()},
-         {UkmFieldFillStatusType::kFieldSignatureName, field_signature.value()},
-         {UkmFieldFillStatusType::kValidationEventName, metric_type},
-         {UkmTextFieldDidChangeType::kIsAutofilledName,
-          field.is_autofilled ? 1 : 0},
-         {UkmFieldFillStatusType::kWasPreviouslyAutofilledName, 0}});
-  }
-}
-
-void AppendFieldTypeUkm(
-    const FormData& form,
-    const std::vector<FieldType>& heuristic_types,
-    const std::vector<FieldType>& server_types,
-    const std::vector<FieldType>& actual_types,
-    std::vector<std::vector<ExpectedUkmMetricsPair>>* expected_metrics) {
-  ASSERT_EQ(heuristic_types.size(), form.fields.size());
-  ASSERT_EQ(server_types.size(), form.fields.size());
-  ASSERT_EQ(actual_types.size(), form.fields.size());
-  FormSignature form_signature = Collapse(CalculateFormSignature(form));
-  int64_t metric_type = static_cast<int64_t>(AutofillMetrics::TYPE_SUBMISSION);
-  std::vector<int64_t> prediction_sources{
-      AutofillMetrics::PREDICTION_SOURCE_HEURISTIC,
-      AutofillMetrics::PREDICTION_SOURCE_SERVER,
-      AutofillMetrics::PREDICTION_SOURCE_OVERALL};
-  for (size_t i = 0; i < form.fields.size(); ++i) {
-    const FormFieldData& field = form.fields[i];
-    FieldSignature field_signature =
-        Collapse(CalculateFieldSignatureForField(field));
-    for (int64_t source : prediction_sources) {
-      int64_t predicted_type = static_cast<int64_t>(
-          (source == AutofillMetrics::PREDICTION_SOURCE_SERVER
-               ? server_types
-               : heuristic_types)[i]);
-      int64_t actual_type = static_cast<int64_t>(actual_types[i]);
-      expected_metrics->push_back(
-          {{UkmSuggestionFilledType::kMillisecondsSinceFormParsedName, 0},
-           {UkmFieldFillStatusType::kFormSignatureName, form_signature.value()},
-           {UkmFieldFillStatusType::kFieldSignatureName,
-            field_signature.value()},
-           {UkmFieldFillStatusType::kValidationEventName, metric_type},
-           {UkmFieldTypeValidationType::kPredictionSourceName, source},
-           {UkmFieldTypeValidationType::kPredictedTypeName, predicted_type},
-           {UkmFieldTypeValidationType::kActualTypeName, actual_type}});
-    }
-  }
+std::vector<GURL> GetEventUrls(const ukm::TestUkmRecorder& ukm_recorder,
+                               std::string_view event_name) {
+  return base::ToVector(
+      ukm_recorder.GetEntriesByName(event_name), [&](const auto& ukm_entry) {
+        const ukm::UkmSource& ukm_source = CHECK_DEREF(
+            ukm_recorder.GetSourceForSourceId(ukm_entry->source_id));
+        return ukm_source.url();
+      });
 }
 
 }  // namespace autofill::autofill_metrics

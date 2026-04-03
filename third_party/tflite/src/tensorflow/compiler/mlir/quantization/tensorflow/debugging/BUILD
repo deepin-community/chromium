@@ -1,3 +1,4 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//tensorflow:tensorflow.bzl", "tf_cc_test")
 load(
     "//tensorflow:tensorflow.default.bzl",
@@ -28,12 +29,12 @@ cc_library(
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
-        "@local_tsl//tsl/platform:env",
-        "@local_tsl//tsl/platform:errors",
-        "@local_tsl//tsl/platform:path",
-        "@local_tsl//tsl/platform:status",
-        "@local_tsl//tsl/platform:statusor",
-        "@local_tsl//tsl/platform:stringpiece",
+        "@tsl//tsl/platform:path",
+        "@tsl//tsl/platform:stringpiece",
+        "@xla//xla/tsl/platform:env",
+        "@xla//xla/tsl/platform:errors",
+        "@xla//xla/tsl/platform:status",
+        "@xla//xla/tsl/platform:statusor",
     ],
 )
 
@@ -44,6 +45,8 @@ tf_cc_test(
     deps = [
         ":mlir_dump",
         "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
@@ -51,12 +54,12 @@ tf_cc_test(
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",
         "@llvm-project//mlir:Transforms",
-        "@local_tsl//tsl/lib/core:status_test_util",
-        "@local_tsl//tsl/platform:env",
-        "@local_tsl//tsl/platform:path",
-        "@local_tsl//tsl/platform:test",
-        "@local_tsl//tsl/platform:test_main",
         "@stablehlo//:stablehlo_ops",
+        "@tsl//tsl/platform:path",
+        "@xla//xla/tsl/lib/core:status_test_util",
+        "@xla//xla/tsl/platform:env",
+        "@xla//xla/tsl/platform:test",
+        "@xla//xla/tsl/platform:test_main",
     ],
 )
 
@@ -67,13 +70,13 @@ tf_kernel_library(
     deps = [
         "//tensorflow/compiler/mlir/quantization/tensorflow:quantization_options_proto_cc",
         "//tensorflow/core:framework",
-        "//tensorflow/core:portable_gif_internal",
+        "//tensorflow/core:lib",
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/platform:path",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
-        "@local_tsl//tsl/platform:env",
-        "@local_tsl//tsl/platform:errors",
+        "@xla//xla/tsl/platform:env",
+        "@xla//xla/tsl/platform:errors",
     ],
 )

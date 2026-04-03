@@ -19,24 +19,28 @@
 // IMPORTANT: This binary asserts that there are at least enough sites in the
 // input file to generate 500 skeletons and 500 keywords.
 
+#include <algorithm>
 #include <iostream>
-#include <set>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/path_service.h"
-#include "base/ranges/algorithm.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "components/url_formatter/spoof_checks/common_words/common_words_util.h"
 #include "components/url_formatter/spoof_checks/top_domains/top_domain_util.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/icu/source/common/unicode/unistr.h"
 #include "third_party/icu/source/common/unicode/utypes.h"
 #include "third_party/icu/source/i18n/unicode/uspoof.h"
@@ -74,7 +78,7 @@ std::string GetSkeleton(const std::string& domain,
 }
 
 bool ContainsOnlyDigits(const std::string& text) {
-  return base::ranges::all_of(text.begin(), text.end(), ::isdigit);
+  return std::ranges::all_of(text.begin(), text.end(), ::isdigit);
 }
 
 }  // namespace
@@ -92,6 +96,7 @@ int main(int argc, char* argv[]) {
 #if BUILDFLAG(IS_WIN)
   std::vector<std::string> args;
   base::CommandLine::StringVector wide_args = command_line.GetArgs();
+  args.reserve(wide_args.size());
   for (const auto& arg : wide_args) {
     args.push_back(base::WideToUTF8(arg));
   }
@@ -103,8 +108,8 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  base::FilePath input_path =
-      base::MakeAbsoluteFilePath(base::FilePath::FromUTF8Unsafe(argv[1]));
+  base::FilePath input_path = base::MakeAbsoluteFilePath(
+      base::FilePath::FromUTF8Unsafe(UNSAFE_TODO(argv[1])));
   if (!base::PathExists(input_path)) {
     LOG(ERROR) << "Input path doesn't exist: " << input_path;
     return 1;
@@ -116,7 +121,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  std::string namespace_str = argv[2];
+  std::string namespace_str = UNSAFE_TODO(argv[2]);
 
   std::vector<std::string> lines = base::SplitString(
       input_text, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
@@ -131,8 +136,8 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  std::set<std::string> skeletons;
-  std::set<std::string> keywords;
+  absl::flat_hash_set<std::string> skeletons;
+  absl::flat_hash_set<std::string> keywords;
 
   for (std::string line : lines) {
     if (skeletons.size() >= kMaxDomains && keywords.size() >= kMaxKeywords) {
@@ -150,10 +155,7 @@ int main(int argc, char* argv[]) {
 
     if (skeletons.size() < kMaxDomains &&
         url_formatter::top_domains::IsEditDistanceCandidate(line)) {
-      const std::string skeleton = GetSkeleton(line, spoof_checker.get());
-      if (skeletons.find(skeleton) == skeletons.end()) {
-        skeletons.insert(skeleton);
-      }
+      skeletons.insert(GetSkeleton(line, spoof_checker.get()));
     }
 
     if (keywords.size() < kMaxKeywords) {
@@ -164,7 +166,7 @@ int main(int argc, char* argv[]) {
           keyword.length() >= kMinKeywordLength &&
           !ContainsOnlyDigits(keyword) &&
           !url_formatter::common_words::IsCommonWord(keyword)) {
-        keywords.insert(keyword);
+        keywords.insert(std::move(keyword));
       }
     }
   }
@@ -172,7 +174,9 @@ int main(int argc, char* argv[]) {
   CHECK_LE(skeletons.size(), kMaxDomains);
   CHECK_LE(keywords.size(), kMaxKeywords);
 
-  std::vector<std::string> sorted_skeletons(skeletons.begin(), skeletons.end());
+  std::vector<std::string> sorted_skeletons(
+      std::make_move_iterator(skeletons.begin()),
+      std::make_move_iterator(skeletons.end()));
   std::sort(sorted_skeletons.begin(), sorted_skeletons.end());
 
   std::ostringstream output_stream;
@@ -185,8 +189,7 @@ const char* const kTopBucketEditDistanceSkeletons[] = {
 )";
 
   for (const std::string& skeleton : sorted_skeletons) {
-    output_stream << ("\"" + skeleton + "\"");
-    output_stream << ",\n";
+    output_stream << base::StrCat({"\"", skeleton, "\"", ",\n"});
   }
   output_stream << R"(};
   constexpr size_t kNumTopBucketEditDistanceSkeletons = )"
@@ -197,7 +200,8 @@ const char* const kTopBucketEditDistanceSkeletons[] = {
 
   std::string output = output_stream.str();
 
-  base::FilePath output_path = base::FilePath::FromUTF8Unsafe(argv[3]);
+  base::FilePath output_path =
+      base::FilePath::FromUTF8Unsafe(UNSAFE_TODO(argv[3]));
   if (!base::WriteFile(output_path, output)) {
     LOG(ERROR) << "Failed to write output: " << output_path;
     return 1;

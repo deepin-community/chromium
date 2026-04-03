@@ -96,7 +96,6 @@
 #define glGetAttachedShaders GLES2_GET_FUN(GetAttachedShaders)
 #define glGetAttribLocation GLES2_GET_FUN(GetAttribLocation)
 #define glGetBooleanv GLES2_GET_FUN(GetBooleanv)
-#define glGetBooleani_v GLES2_GET_FUN(GetBooleani_v)
 #define glGetBufferParameteri64v GLES2_GET_FUN(GetBufferParameteri64v)
 #define glGetBufferParameteriv GLES2_GET_FUN(GetBufferParameteriv)
 #define glGetError GLES2_GET_FUN(GetError)
@@ -279,19 +278,6 @@
 #define glIsVertexArrayOES GLES2_GET_FUN(IsVertexArrayOES)
 #define glBindVertexArrayOES GLES2_GET_FUN(BindVertexArrayOES)
 #define glFramebufferParameteri GLES2_GET_FUN(FramebufferParameteri)
-#define glBindImageTexture GLES2_GET_FUN(BindImageTexture)
-#define glDispatchCompute GLES2_GET_FUN(DispatchCompute)
-#define glDispatchComputeIndirect GLES2_GET_FUN(DispatchComputeIndirect)
-#define glDrawArraysIndirect GLES2_GET_FUN(DrawArraysIndirect)
-#define glDrawElementsIndirect GLES2_GET_FUN(DrawElementsIndirect)
-#define glGetProgramInterfaceiv GLES2_GET_FUN(GetProgramInterfaceiv)
-#define glGetProgramResourceIndex GLES2_GET_FUN(GetProgramResourceIndex)
-#define glGetProgramResourceName GLES2_GET_FUN(GetProgramResourceName)
-#define glGetProgramResourceiv GLES2_GET_FUN(GetProgramResourceiv)
-#define glGetProgramResourceLocation GLES2_GET_FUN(GetProgramResourceLocation)
-#define glMemoryBarrierEXT GLES2_GET_FUN(MemoryBarrierEXT)
-#define glMemoryBarrierByRegion GLES2_GET_FUN(MemoryBarrierByRegion)
-#define glSwapBuffers GLES2_GET_FUN(SwapBuffers)
 #define glGetMaxValueInBufferCHROMIUM GLES2_GET_FUN(GetMaxValueInBufferCHROMIUM)
 #define glEnableFeatureCHROMIUM GLES2_GET_FUN(EnableFeatureCHROMIUM)
 #define glMapBufferCHROMIUM GLES2_GET_FUN(MapBufferCHROMIUM)
@@ -303,7 +289,6 @@
 #define glFlushMappedBufferRange GLES2_GET_FUN(FlushMappedBufferRange)
 #define glMapTexSubImage2DCHROMIUM GLES2_GET_FUN(MapTexSubImage2DCHROMIUM)
 #define glUnmapTexSubImage2DCHROMIUM GLES2_GET_FUN(UnmapTexSubImage2DCHROMIUM)
-#define glResizeCHROMIUM GLES2_GET_FUN(ResizeCHROMIUM)
 #define glGetRequestableExtensionsCHROMIUM \
   GLES2_GET_FUN(GetRequestableExtensionsCHROMIUM)
 #define glRequestExtensionCHROMIUM GLES2_GET_FUN(RequestExtensionCHROMIUM)
@@ -325,17 +310,12 @@
 #define glDrawElementsInstancedBaseVertexBaseInstanceANGLE \
   GLES2_GET_FUN(DrawElementsInstancedBaseVertexBaseInstanceANGLE)
 #define glVertexAttribDivisorANGLE GLES2_GET_FUN(VertexAttribDivisorANGLE)
-#define glProduceTextureDirectCHROMIUM \
-  GLES2_GET_FUN(ProduceTextureDirectCHROMIUM)
-#define glCreateAndConsumeTextureCHROMIUM \
-  GLES2_GET_FUN(CreateAndConsumeTextureCHROMIUM)
 #define glBindUniformLocationCHROMIUM GLES2_GET_FUN(BindUniformLocationCHROMIUM)
 #define glTraceBeginCHROMIUM GLES2_GET_FUN(TraceBeginCHROMIUM)
 #define glTraceEndCHROMIUM GLES2_GET_FUN(TraceEndCHROMIUM)
 #define glDiscardFramebufferEXT GLES2_GET_FUN(DiscardFramebufferEXT)
 #define glLoseContextCHROMIUM GLES2_GET_FUN(LoseContextCHROMIUM)
 #define glDrawBuffersEXT GLES2_GET_FUN(DrawBuffersEXT)
-#define glDiscardBackbufferCHROMIUM GLES2_GET_FUN(DiscardBackbufferCHROMIUM)
 #define glFlushDriverCachesCHROMIUM GLES2_GET_FUN(FlushDriverCachesCHROMIUM)
 #define glGetLastFlushIdCHROMIUM GLES2_GET_FUN(GetLastFlushIdCHROMIUM)
 #define glSetActiveURLCHROMIUM GLES2_GET_FUN(SetActiveURLCHROMIUM)
@@ -347,12 +327,6 @@
   GLES2_GET_FUN(BindFragDataLocationIndexedEXT)
 #define glBindFragDataLocationEXT GLES2_GET_FUN(BindFragDataLocationEXT)
 #define glGetFragDataIndexEXT GLES2_GET_FUN(GetFragDataIndexEXT)
-#define glInitializeDiscardableTextureCHROMIUM \
-  GLES2_GET_FUN(InitializeDiscardableTextureCHROMIUM)
-#define glUnlockDiscardableTextureCHROMIUM \
-  GLES2_GET_FUN(UnlockDiscardableTextureCHROMIUM)
-#define glLockDiscardableTextureCHROMIUM \
-  GLES2_GET_FUN(LockDiscardableTextureCHROMIUM)
 #define glWindowRectanglesEXT GLES2_GET_FUN(WindowRectanglesEXT)
 #define glCreateGpuFenceCHROMIUM GLES2_GET_FUN(CreateGpuFenceCHROMIUM)
 #define glCreateClientGpuFenceCHROMIUM \
@@ -370,12 +344,6 @@
   GLES2_GET_FUN(BeginSharedImageAccessDirectCHROMIUM)
 #define glEndSharedImageAccessDirectCHROMIUM \
   GLES2_GET_FUN(EndSharedImageAccessDirectCHROMIUM)
-#define glConvertRGBAToYUVAMailboxesINTERNAL \
-  GLES2_GET_FUN(ConvertRGBAToYUVAMailboxesINTERNAL)
-#define glConvertYUVAMailboxesToRGBINTERNAL \
-  GLES2_GET_FUN(ConvertYUVAMailboxesToRGBINTERNAL)
-#define glConvertYUVAMailboxesToTextureINTERNAL \
-  GLES2_GET_FUN(ConvertYUVAMailboxesToTextureINTERNAL)
 #define glCopySharedImageINTERNAL GLES2_GET_FUN(CopySharedImageINTERNAL)
 #define glCopySharedImageToTextureINTERNAL \
   GLES2_GET_FUN(CopySharedImageToTextureINTERNAL)

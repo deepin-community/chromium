@@ -45,7 +45,6 @@ ProxyResolvingClientSocketFactory::ProxyResolvingClientSocketFactory(
   if (reference_params) {
     // TODO(mmenke):  Just copying specific parameters seems highly regression
     // prone.  Should have a better way to do this.
-    session_params.host_mapping_rules = reference_params->host_mapping_rules;
     session_params.ignore_certificate_errors =
         reference_params->ignore_certificate_errors;
     session_params.testing_fixed_http_port =
@@ -55,7 +54,7 @@ ProxyResolvingClientSocketFactory::ProxyResolvingClientSocketFactory(
 
     // Disable H2 negotiation via ALPN.
     //
-    // TODO(https://crbug.com/1505550): Should this be allowed for proxies, but
+    // TODO(crbug.com/40946183): Should this be allowed for proxies, but
     // not for direct connections?
     session_params.enable_http2 = false;
 

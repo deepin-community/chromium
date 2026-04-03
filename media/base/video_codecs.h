@@ -13,22 +13,25 @@
 
 namespace media {
 
+// Video codecs.
+//
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(VideoCodec)
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.media
 enum class VideoCodec {
-  // These values are histogrammed over time; do not change their ordinal
-  // values.  When deleting a codec replace it with a dummy value; when adding a
-  // codec, do so at the bottom (and update kMaxValue).
   kUnknown = 0,
-  kH264,
-  kVC1,
-  kMPEG2,
-  kMPEG4,
-  kTheora,
-  kVP8,
-  kVP9,
-  kHEVC,
-  kDolbyVision,
-  kAV1,
+  kH264 = 1,
+  kVC1 = 2,
+  kMPEG2 = 3,
+  kMPEG4 = 4,
+  kTheora = 5,
+  kVP8 = 6,
+  kVP9 = 7,
+  kHEVC = 8,
+  kDolbyVision = 9,
+  kAV1 = 10,
   // DO NOT ADD RANDOM VIDEO CODECS!
   //
   // The only acceptable time to add a new codec is if there is production code
@@ -36,13 +39,15 @@ enum class VideoCodec {
 
   kMaxValue = kAV1,  // Must equal the last "real" codec above.
 };
+// LINT.ThenChange(//tools/metrics/histograms/enums.xml:VideoCodec)
 
-// Video codec profiles. Keep in sync with mojo::VideoCodecProfile (see
-// media/mojo/mojom/media_types.mojom), gpu::VideoCodecProfile (see
-// gpu/config/gpu_info.h), and PP_VideoDecoder_Profile (translation is performed
-// in content/renderer/pepper/ppb_video_decoder_impl.cc).
-// NOTE: These values are histogrammed over time in UMA so the values must never
-// ever change (add new values to tools/metrics/histograms/histograms.xml)
+// Video codec profiles. Mirrored by gpu::VideoCodecProfile (see
+// gpu/config/gpu_info.h).
+//
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(VideoCodecProfile)
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.media
 enum VideoCodecProfile {
   // Keep the values in this enum unique, as they imply format (h.264 vs. VP8,
@@ -101,25 +106,11 @@ enum VideoCodecProfile {
   HEVCPROFILE_SCALABLE_REXT = 35,
   HEVCPROFILE_HIGH_THROUGHPUT_SCREEN_EXTENDED = 36,
   HEVCPROFILE_EXT_MAX = HEVCPROFILE_HIGH_THROUGHPUT_SCREEN_EXTENDED,
-  VVCPROFILE_MIN = 37,
-  VVCPROFILE_MAIN10 = VVCPROFILE_MIN,
-  VVCPROFILE_MAIN12 = 38,
-  VVCPROFILE_MAIN12_INTRA = 39,
-  VVCPROIFLE_MULTILAYER_MAIN10 = 40,
-  VVCPROFILE_MAIN10_444 = 41,
-  VVCPROFILE_MAIN12_444 = 42,
-  VVCPROFILE_MAIN16_444 = 43,
-  VVCPROFILE_MAIN12_444_INTRA = 44,
-  VVCPROFILE_MAIN16_444_INTRA = 45,
-  VVCPROFILE_MULTILAYER_MAIN10_444 = 46,
-  VVCPROFILE_MAIN10_STILL_PICTURE = 47,
-  VVCPROFILE_MAIN12_STILL_PICTURE = 48,
-  VVCPROFILE_MAIN10_444_STILL_PICTURE = 49,
-  VVCPROFILE_MAIN12_444_STILL_PICTURE = 50,
-  VVCPROFILE_MAIN16_444_STILL_PICTURE = 51,
-  VVCPROFILE_MAX = VVCPROFILE_MAIN16_444_STILL_PICTURE,
-  VIDEO_CODEC_PROFILE_MAX = VVCPROFILE_MAIN16_444_STILL_PICTURE,
+  VIDEO_CODEC_PROFILE_MAX = HEVCPROFILE_HIGH_THROUGHPUT_SCREEN_EXTENDED,
 };
+// clang-format off
+// LINT.ThenChange(//gpu/config/gpu_info.h:VideoCodecProfile, //tools/metrics/histograms/enums.xml:VideoCodecProfile)
+// clang-format on
 
 using VideoCodecLevel = uint32_t;
 constexpr VideoCodecLevel kNoVideoCodecLevel = 0;

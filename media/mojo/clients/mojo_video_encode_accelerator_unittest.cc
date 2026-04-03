@@ -27,7 +27,6 @@
 
 using ::testing::_;
 using ::testing::InSequence;
-using ::testing::Invoke;
 
 namespace media {
 
@@ -70,8 +69,11 @@ class MockMojoVideoEncodeAccelerator : public mojom::VideoEncodeAccelerator {
       DoInitialize(config.input_format, config.input_visible_size,
                    config.output_profile, config.bitrate, config.content_type,
                    &client_);
+      std::move(success_callback).Run({media::EncoderStatus::Codes::kOk});
+    } else {
+      std::move(success_callback)
+          .Run({media::EncoderStatus::Codes::kEncoderInitializationError});
     }
-    std::move(success_callback).Run(initialization_success_);
   }
   MOCK_METHOD6(
       DoInitialize,
@@ -213,6 +215,9 @@ class MojoVideoEncodeAcceleratorTest : public ::testing::Test {
   void Initialize(MockVideoEncodeAcceleratorClient* mock_vea_client) {
     constexpr VideoCodecProfile kOutputProfile = VIDEO_CODEC_PROFILE_UNKNOWN;
     constexpr Bitrate kInitialBitrate = Bitrate::ConstantBitrate(100000u);
+    constexpr uint32_t kFramerate = 30;
+    constexpr VideoEncodeAccelerator::Config::StorageType kStorageType =
+        VideoEncodeAccelerator::Config::StorageType::kShmem;
     constexpr VideoEncodeAccelerator::Config::ContentType kContentType =
         VideoEncodeAccelerator::Config::ContentType::kDisplay;
 
@@ -225,12 +230,14 @@ class MojoVideoEncodeAcceleratorTest : public ::testing::Test {
             _, kInputVisibleSize,
             VideoFrame::AllocationSize(PIXEL_FORMAT_I420, kInputVisibleSize)));
 
-    VideoEncodeAccelerator::Config config(PIXEL_FORMAT_I420, kInputVisibleSize,
-                                          kOutputProfile, kInitialBitrate);
-    config.content_type = kContentType;
+    VideoEncodeAccelerator::Config config(
+        PIXEL_FORMAT_I420, kInputVisibleSize, kOutputProfile, kInitialBitrate,
+        kFramerate, kStorageType, kContentType);
 
-    EXPECT_TRUE(mojo_vea()->Initialize(
-        config, mock_vea_client, std::make_unique<media::NullMediaLog>()));
+    EXPECT_TRUE(mojo_vea()
+                    ->Initialize(config, mock_vea_client,
+                                 std::make_unique<media::NullMediaLog>())
+                    .is_ok());
     base::RunLoop().RunUntilIdle();
   }
 
@@ -278,19 +285,19 @@ TEST_F(MojoVideoEncodeAcceleratorTest, EncodeOneFrame) {
     ASSERT_TRUE(shmem.IsValid());
     const scoped_refptr<VideoFrame> video_frame = VideoFrame::WrapExternalData(
         PIXEL_FORMAT_I420, kInputVisibleSize, gfx::Rect(kInputVisibleSize),
-        kInputVisibleSize, static_cast<uint8_t*>(shmem.mapping.memory()),
-        shmem.mapping.size(), base::TimeDelta());
+        kInputVisibleSize, shmem.mapping.GetMemoryAsSpan<uint8_t>(),
+        base::TimeDelta());
     video_frame->BackWithSharedMemory(&shmem.region);
     const bool is_keyframe = true;
 
     // The remote end of the mojo Pipe doesn't receive |video_frame| itself.
     EXPECT_CALL(*mock_mojo_vea(), DoEncode(_, is_keyframe));
     EXPECT_CALL(*mock_vea_client, BitstreamBufferReady(kBitstreamBufferId, _))
-        .WillOnce(Invoke([is_keyframe, &video_frame](
-                             int32_t, const BitstreamBufferMetadata& metadata) {
+        .WillOnce([is_keyframe, &video_frame](
+                      int32_t, const BitstreamBufferMetadata& metadata) {
           EXPECT_EQ(is_keyframe, metadata.key_frame);
           EXPECT_EQ(metadata.timestamp, video_frame->timestamp());
-        }));
+        });
 
     mojo_vea()->Encode(video_frame, is_keyframe);
     base::RunLoop().RunUntilIdle();
@@ -406,14 +413,21 @@ TEST_F(MojoVideoEncodeAcceleratorTest, InitializeFailure) {
       std::make_unique<MockVideoEncodeAcceleratorClient>();
 
   constexpr Bitrate kInitialBitrate = Bitrate::ConstantBitrate(100000u);
+  constexpr uint32_t kFramerate = 30;
+  constexpr VideoEncodeAccelerator::Config::StorageType kStorageType =
+      VideoEncodeAccelerator::Config::StorageType::kShmem;
+  constexpr VideoEncodeAccelerator::Config::ContentType kContentType =
+      VideoEncodeAccelerator::Config::ContentType::kDisplay;
 
   mock_mojo_vea()->set_initialization_success(false);
 
   const VideoEncodeAccelerator::Config config(
       PIXEL_FORMAT_I420, kInputVisibleSize, VIDEO_CODEC_PROFILE_UNKNOWN,
-      kInitialBitrate);
-  EXPECT_FALSE(mojo_vea()->Initialize(config, mock_vea_client.get(),
-                                      std::make_unique<media::NullMediaLog>()));
+      kInitialBitrate, kFramerate, kStorageType, kContentType);
+  EXPECT_FALSE(mojo_vea()
+                   ->Initialize(config, mock_vea_client.get(),
+                                std::make_unique<media::NullMediaLog>())
+                   .is_ok());
   base::RunLoop().RunUntilIdle();
 }
 
@@ -423,12 +437,19 @@ TEST_F(MojoVideoEncodeAcceleratorTest, MojoDisconnectBeforeInitialize) {
       std::make_unique<MockVideoEncodeAcceleratorClient>();
 
   constexpr Bitrate kInitialBitrate = Bitrate::ConstantBitrate(100000u);
+  constexpr uint32_t kFramerate = 30;
+  constexpr VideoEncodeAccelerator::Config::StorageType kStorageType =
+      VideoEncodeAccelerator::Config::StorageType::kShmem;
+  constexpr VideoEncodeAccelerator::Config::ContentType kContentType =
+      VideoEncodeAccelerator::Config::ContentType::kDisplay;
   const VideoEncodeAccelerator::Config config(
       PIXEL_FORMAT_I420, kInputVisibleSize, VIDEO_CODEC_PROFILE_UNKNOWN,
-      kInitialBitrate);
+      kInitialBitrate, kFramerate, kStorageType, kContentType);
   mojo_vea_receiver_->Close();
-  EXPECT_FALSE(mojo_vea()->Initialize(config, mock_vea_client.get(),
-                                      std::make_unique<media::NullMediaLog>()));
+  EXPECT_FALSE(mojo_vea()
+                   ->Initialize(config, mock_vea_client.get(),
+                                std::make_unique<media::NullMediaLog>())
+                   .is_ok());
   base::RunLoop().RunUntilIdle();
 }
 
@@ -438,11 +459,18 @@ TEST_F(MojoVideoEncodeAcceleratorTest, MojoDisconnectAfterInitialize) {
       std::make_unique<MockVideoEncodeAcceleratorClient>();
 
   constexpr Bitrate kInitialBitrate = Bitrate::ConstantBitrate(100000u);
+  constexpr uint32_t kFramerate = 30;
+  constexpr VideoEncodeAccelerator::Config::StorageType kStorageType =
+      VideoEncodeAccelerator::Config::StorageType::kShmem;
+  constexpr VideoEncodeAccelerator::Config::ContentType kContentType =
+      VideoEncodeAccelerator::Config::ContentType::kDisplay;
   const VideoEncodeAccelerator::Config config(
       PIXEL_FORMAT_I420, kInputVisibleSize, VIDEO_CODEC_PROFILE_UNKNOWN,
-      kInitialBitrate);
-  EXPECT_TRUE(mojo_vea()->Initialize(config, mock_vea_client.get(),
-                                     std::make_unique<media::NullMediaLog>()));
+      kInitialBitrate, kFramerate, kStorageType, kContentType);
+  EXPECT_TRUE(mojo_vea()
+                  ->Initialize(config, mock_vea_client.get(),
+                               std::make_unique<media::NullMediaLog>())
+                  .is_ok());
   mojo_vea_receiver_->Close();
   EXPECT_CALL(*mock_vea_client,
               NotifyErrorStatus(ExpectEncoderStatusCode(

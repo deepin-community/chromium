@@ -15,9 +15,26 @@ limitations under the License.
 
 #include "tensorflow/compiler/tf2xla/layout_util.h"
 
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "tensorflow/compiler/tf2xla/shape_util.h"
 #include "tensorflow/compiler/tf2xla/type_util.h"
+#include "tensorflow/compiler/tf2xla/xla_argument.h"
+#include "tensorflow/compiler/tf2xla/xla_helpers.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/ir/hlo_sharding.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/xla_data.pb.h"
+#include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/core/status.h"
+#include "tsl/platform/errors.h"
+#include "tsl/platform/statusor.h"
 
 namespace tensorflow {
 
@@ -34,7 +51,7 @@ XlaShapeLayoutHelpers::LayoutPreferenceFn UseNoPreferenceLayoutFn() {
 }
 
 // Rewrites the layout of xla_shape if there is tiled sharding.
-Status RewriteLayoutWithShardedShape(
+absl::Status RewriteLayoutWithShardedShape(
     const std::optional<xla::HloSharding>& sharding, bool use_fast_memory,
     XlaShapeLayoutHelpers::ShapeDeterminationFns shape_determination_fns,
     xla::Shape* xla_shape) {
@@ -50,17 +67,7 @@ Status RewriteLayoutWithShardedShape(
     // TODO(endlessroad): for variable input & update, we might have
     // different layouts which will prevent input output aliasing and
     // increase memory usage. Investigate such cases.
-    int64_t device = sharding->tile_assignment().first();
-    std::vector<int64_t> offset =
-        sharding->TileOffsetForDevice(*xla_shape, device);
-    std::vector<int64_t> limit =
-        sharding->TileLimitForDevice(*xla_shape, device);
-    std::vector<int64_t> dimensions(xla_shape->rank());
-    for (int64_t i = 0; i < xla_shape->rank(); ++i) {
-      dimensions[i] = limit[i] - offset[i];
-    }
-    xla::Shape per_device_xla_shape =
-        xla::ShapeUtil::MakeShape(xla_shape->element_type(), dimensions);
+    xla::Shape per_device_xla_shape = sharding->TileShape(*xla_shape);
     TensorShape per_device_tensor_shape;
     TF_RETURN_IF_ERROR(
         XLAShapeToTensorShape(per_device_xla_shape, &per_device_tensor_shape));
@@ -79,13 +86,13 @@ Status RewriteLayoutWithShardedShape(
 
 // There is a shape_representation_fn or sharding for an output, this function
 // uses a reshape to fix the layout.
-StatusOr<xla::XlaOp> ReshapeWithCorrectRepresentationAndSharding(
+absl::StatusOr<xla::XlaOp> ReshapeWithCorrectRepresentationAndSharding(
     xla::XlaBuilder* builder, xla::XlaOp original, xla::Shape original_shape,
     XlaShapeLayoutHelpers::ShapeDeterminationFns shape_determination_fns,
     std::optional<xla::OpSharding> sharding, bool fast_mem) {
   if (original_shape.IsTuple()) {
     std::vector<xla::XlaOp> elements;
-    for (int i = 0; i < original_shape.tuple_shapes_size(); ++i) {
+    for (int i = 0; i < original_shape.tuple_shapes().size(); ++i) {
       auto subsharding = sharding ? sharding->tuple_shardings(i) : sharding;
       TF_ASSIGN_OR_RETURN(auto element,
                           ReshapeWithCorrectRepresentationAndSharding(
@@ -114,7 +121,7 @@ StatusOr<xla::XlaOp> ReshapeWithCorrectRepresentationAndSharding(
         hlo_sharding, fast_mem, shape_determination_fns, &to_shape));
   }
   if (xla::ShapeUtil::Compatible(original_shape, to_shape)) {
-    for (int64_t i = 0; i < original_shape.rank(); ++i) {
+    for (int64_t i = 0; i < original_shape.dimensions().size(); ++i) {
       to_shape.set_dynamic_dimension(i, original_shape.is_dynamic_dimension(i));
     }
   }

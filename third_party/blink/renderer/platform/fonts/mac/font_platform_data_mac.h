@@ -31,6 +31,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_MAC_FONT_PLATFORM_DATA_MAC_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_MAC_FONT_PLATFORM_DATA_MAC_H_
 
+#include <CoreText/CoreText.h>
+
 #include "third_party/blink/renderer/platform/fonts/font_optical_sizing.h"
 #include "third_party/blink/renderer/platform/fonts/resolved_font_features.h"
 #include "third_party/blink/renderer/platform/fonts/text_rendering_mode.h"
@@ -42,7 +44,7 @@ typedef uint32_t SkFourByteTag;
 
 namespace blink {
 
-enum class FontOrientation;
+enum class FontOrientation : uint8_t;
 class FontPlatformData;
 class FontVariationSettings;
 
@@ -58,7 +60,7 @@ bool PLATFORM_EXPORT VariableAxisChangeEffective(SkTypeface* typeface,
 // optical sizing and tracking, needed in particular for the San Francisco
 // system font.
 const FontPlatformData* FontPlatformDataFromCTFont(
-    base::apple::ScopedCFTypeRef<CTFontRef>,
+    CTFontRef,
     float size,
     float specified_size,
     bool synthetic_bold,
@@ -67,7 +69,7 @@ const FontPlatformData* FontPlatformDataFromCTFont(
     ResolvedFontFeatures resolved_font_features,
     FontOrientation,
     OpticalSizing,
-    FontVariationSettings*);
+    const FontVariationSettings*);
 
 }  // namespace blink
 

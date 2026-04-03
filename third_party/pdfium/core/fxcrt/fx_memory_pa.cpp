@@ -6,11 +6,12 @@
 
 #include "core/fxcrt/fx_memory.h"
 
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/fx_safe_types.h"
-#include "partition_alloc/partition_alloc.h"
-#include "third_party/base/no_destructor.h"
 
-#if !defined(PDF_USE_PARTITION_ALLOC)
+#if defined(PDF_USE_PARTITION_ALLOC)
+#include "partition_alloc/partition_alloc.h"
+#else
 #error "File compiled under wrong build option."
 #endif
 
@@ -18,24 +19,19 @@ namespace {
 
 constexpr partition_alloc::PartitionOptions kOptions = {};
 
-#ifndef V8_ENABLE_SANDBOX
-partition_alloc::PartitionAllocator& GetArrayBufferPartitionAllocator() {
-  static pdfium::base::NoDestructor<partition_alloc::PartitionAllocator>
-      s_array_buffer_allocator(kOptions);
-  return *s_array_buffer_allocator;
-}
-#endif  //  V8_ENABLE_SANDBOX
+struct Allocators {
+  partition_alloc::PartitionAllocator general_allocator{kOptions};
+  partition_alloc::PartitionAllocator string_allocator{kOptions};
+};
+
+Allocators* g_allocators = nullptr;
 
 partition_alloc::PartitionAllocator& GetGeneralPartitionAllocator() {
-  static pdfium::base::NoDestructor<partition_alloc::PartitionAllocator>
-      s_general_allocator(kOptions);
-  return *s_general_allocator;
+  return g_allocators->general_allocator;
 }
 
 partition_alloc::PartitionAllocator& GetStringPartitionAllocator() {
-  static pdfium::base::NoDestructor<partition_alloc::PartitionAllocator>
-      s_string_allocator(kOptions);
-  return *s_string_allocator;
+  return g_allocators->string_allocator;
 }
 
 }  // namespace
@@ -45,8 +41,9 @@ namespace pdfium::internal {
 void* Alloc(size_t num_members, size_t member_size) {
   FX_SAFE_SIZE_T total = member_size;
   total *= num_members;
-  if (!total.IsValid())
+  if (!total.IsValid()) {
     return nullptr;
+  }
 
   return GetGeneralPartitionAllocator()
       .root()
@@ -57,8 +54,9 @@ void* Alloc(size_t num_members, size_t member_size) {
 void* Calloc(size_t num_members, size_t member_size) {
   FX_SAFE_SIZE_T total = member_size;
   total *= num_members;
-  if (!total.IsValid())
+  if (!total.IsValid()) {
     return nullptr;
+  }
 
   return GetGeneralPartitionAllocator()
       .root()
@@ -70,8 +68,9 @@ void* Calloc(size_t num_members, size_t member_size) {
 void* Realloc(void* ptr, size_t num_members, size_t member_size) {
   FX_SAFE_SIZE_T size = num_members;
   size *= member_size;
-  if (!size.IsValid())
+  if (!size.IsValid()) {
     return nullptr;
+  }
 
   return GetGeneralPartitionAllocator()
       .root()
@@ -96,8 +95,9 @@ void Dealloc(void* ptr) {
 void* StringAlloc(size_t num_members, size_t member_size) {
   FX_SAFE_SIZE_T total = member_size;
   total *= num_members;
-  if (!total.IsValid())
+  if (!total.IsValid()) {
     return nullptr;
+  }
 
   return GetStringPartitionAllocator()
       .root()
@@ -122,34 +122,12 @@ void StringDealloc(void* ptr) {
 }  // namespace pdfium::internal
 
 void FX_InitializeMemoryAllocators() {
-  static bool s_partition_allocators_initialized = false;
-  if (!s_partition_allocators_initialized) {
-    partition_alloc::PartitionAllocGlobalInit(FX_OutOfMemoryTerminate);
-    // These calls force the allocators to be created and initialized (via magic
-    // of static local variables).
-#ifndef V8_ENABLE_SANDBOX
-    GetArrayBufferPartitionAllocator();
-#endif  // V8_ENABLE_SANDBOX
-    GetGeneralPartitionAllocator();
-    GetStringPartitionAllocator();
-    s_partition_allocators_initialized = true;
+  if (!g_allocators) {
+    g_allocators = new Allocators();
   }
 }
 
-#ifndef V8_ENABLE_SANDBOX
-void* FX_ArrayBufferAllocate(size_t length) {
-  return GetArrayBufferPartitionAllocator()
-      .root()
-      ->AllocInline<partition_alloc::AllocFlags::kZeroFill>(length,
-                                                            "FXArrayBuffer");
+void FX_DestroyMemoryAllocators() {
+  delete g_allocators;
+  g_allocators = nullptr;
 }
-
-void* FX_ArrayBufferAllocateUninitialized(size_t length) {
-  return GetArrayBufferPartitionAllocator().root()->Alloc(length,
-                                                          "FXArrayBuffer");
-}
-
-void FX_ArrayBufferFree(void* data) {
-  GetArrayBufferPartitionAllocator().root()->Free(data);
-}
-#endif  // V8_ENABLE_SANDBOX

@@ -6,14 +6,17 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
+#include <string>
 
 #include "base/i18n/time_formatting.h"
 #include "base/rand_util.h"
-#include "base/ranges/algorithm.h"
+#include "base/strings/string_number_conversions.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_log_util.h"
 #include "net/http/http_request_headers.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/http/http_util.h"
 #include "net/log/net_log_capture_mode.h"
@@ -56,6 +59,9 @@ class StatefulObliviousHttpClient {
     auto key_configs =
         quiche::ObliviousHttpKeyConfigs::ParseConcatenatedKeys(key_config_str);
     if (!key_configs.ok()) {
+      return std::nullopt;
+    }
+    if (key_configs->NumKeys() == 0) {
       return std::nullopt;
     }
     quiche::ObliviousHttpHeaderKeyConfig key_config =
@@ -108,13 +114,14 @@ std::string CreateAndSerializeBhttpMessage(
     const std::string& method,
     mojom::ObliviousHttpRequestBodyPtr request_body,
     net::HttpRequestHeaders::HeaderVector headers) {
-  std::string host_port = request_url.host();
+  std::string host_port = request_url.GetHost();
   if (request_url.has_port()) {
-    host_port += ":" + request_url.port();
+    host_port += ":" + request_url.GetPort();
   }
 
-  quiche::BinaryHttpRequest bhttp_request(
-      {method, request_url.scheme(), host_port, request_url.PathForRequest()});
+  quiche::BinaryHttpRequest bhttp_request({method, request_url.GetScheme(),
+                                           host_port,
+                                           request_url.PathForRequest()});
   bhttp_request.AddHeaderField({net::HttpRequestHeaders::kHost, host_port});
   // Date should be provided by the client to allow for server anti-replay
   // protections (according to the OHTTP spec).
@@ -267,7 +274,7 @@ void ObliviousHttpRequestHandler::OnDoneConstructingTrustTokenHelper(
   }
 
   auto state_iter = client_state_.find(id);
-  DCHECK(state_iter != client_state_.end());
+  CHECK(state_iter != client_state_.end());
 
   RequestState* state = state_iter->second.get();
   state->trust_token_helper = status_or_helper.TakeOrCrash();
@@ -295,7 +302,7 @@ void ObliviousHttpRequestHandler::ContinueHandlingRequest(
     std::optional<net::HttpRequestHeaders> headers,
     mojo::RemoteSetElementId id) {
   auto state_iter = client_state_.find(id);
-  DCHECK(state_iter != client_state_.end());
+  CHECK(state_iter != client_state_.end());
   RequestState* state = state_iter->second.get();
 
   std::string bhttp_payload = CreateAndSerializeBhttpMessage(
@@ -306,7 +313,7 @@ void ObliviousHttpRequestHandler::ContinueHandlingRequest(
   state->net_log.AddEvent(
       net::NetLogEventType::OBLIVIOUS_HTTP_REQUEST_DATA,
       [&](net::NetLogCaptureMode capture_mode) {
-        base::Value::Dict dict;
+        base::DictValue dict;
         dict.Set("byte_count", static_cast<int>(bhttp_payload.size()));
         if (net::NetLogCaptureIncludesSocketBytes(capture_mode)) {
           dict.Set("bytes", net::NetLogBinaryValue(bhttp_payload.data(),
@@ -395,10 +402,10 @@ void ObliviousHttpRequestHandler::RespondWithError(
   mojom::ObliviousHttpClient* client = clients_.Get(id);
   auto state_iter = client_state_.find(id);
   DCHECK(client);
-  DCHECK(state_iter != client_state_.end());
+  CHECK(state_iter != client_state_.end());
   RequestState* state = state_iter->second.get();
   state->net_log.EndEvent(net::NetLogEventType::OBLIVIOUS_HTTP_REQUEST, [&] {
-    base::Value::Dict params;
+    base::DictValue params;
     params.Set("net_error", error_code);
     if (outer_response_error_code) {
       params.Set("outer_response_error_code",
@@ -426,9 +433,9 @@ void ObliviousHttpRequestHandler::RespondWithError(
 
 void ObliviousHttpRequestHandler::OnRequestComplete(
     mojo::RemoteSetElementId id,
-    std::unique_ptr<std::string> response) {
+    std::optional<std::string> response) {
   auto state_iter = client_state_.find(id);
-  DCHECK(state_iter != client_state_.end());
+  CHECK(state_iter != client_state_.end());
 
   RequestState* state = state_iter->second.get();
   if (!response) {
@@ -444,7 +451,7 @@ void ObliviousHttpRequestHandler::OnRequestComplete(
   }
 
   auto maybe_payload =
-      state->ohttp_client->DecryptResponse(std::move(*response));
+      state->ohttp_client->DecryptResponse(std::move(response).value());
   if (!maybe_payload) {
     RespondWithError(id, net::ERR_INVALID_RESPONSE,
                      /*outer_response_error_code=*/std::nullopt);
@@ -454,7 +461,7 @@ void ObliviousHttpRequestHandler::OnRequestComplete(
   state->net_log.AddEvent(
       net::NetLogEventType::OBLIVIOUS_HTTP_RESPONSE_DATA,
       [&](net::NetLogCaptureMode capture_mode) {
-        base::Value::Dict dict;
+        base::DictValue dict;
         dict.Set("byte_count", static_cast<int>(maybe_payload->size()));
         if (net::NetLogCaptureIncludesSocketBytes(capture_mode)) {
           dict.Set("bytes", net::NetLogBinaryValue(maybe_payload->data(),
@@ -517,13 +524,13 @@ void ObliviousHttpRequestHandler::NotifyComplete(
   mojom::ObliviousHttpClient* client = clients_.Get(id);
   auto state_iter = client_state_.find(id);
   DCHECK(client);
-  DCHECK(state_iter != client_state_.end());
+  CHECK(state_iter != client_state_.end());
   RequestState* state = state_iter->second.get();
   net::NetLogResponseHeaders(
       state->net_log, net::NetLogEventType::OBLIVIOUS_HTTP_RESPONSE_HEADERS,
       headers.get());
   state->net_log.EndEvent(net::NetLogEventType::OBLIVIOUS_HTTP_REQUEST, [&] {
-    base::Value::Dict params;
+    base::DictValue params;
     params.Set("net_error", net::OK);
     params.Set("inner_response_code", inner_response_code);
     return params;
@@ -558,7 +565,7 @@ ObliviousHttpRequestHandler::GetURLLoaderFactory() {
 
   network::mojom::URLLoaderFactoryParamsPtr params =
       network::mojom::URLLoaderFactoryParams::New();
-  params->process_id = network::mojom::kBrowserProcessId;
+  params->process_id = OriginatingProcess::browser();
   params->is_orb_enabled = false;
   params->is_trusted = true;
   params->automatically_assign_isolation_info = true;

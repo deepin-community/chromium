@@ -22,16 +22,16 @@ limitations under the License.
 #include "tensorflow/compiler/tf2xla/shape_util.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/xla_builder.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
+#include "xla/tsl/platform/statusor.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/op_requires.h"
 #include "tensorflow/core/platform/statusor.h"
 #include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/tpu/tpu_defs.h"
-#include "tsl/platform/statusor.h"
 
 namespace tensorflow {
 
@@ -43,21 +43,21 @@ class TpuCustomResizeOp : public XlaOpKernel {
                    ctx->GetAttr("half_pixel_centers", &half_pixel_centers_));
   }
 
-  StatusOr<xla::Shape> GetOutputShape(XlaOpKernelContext* ctx) const {
+  absl::StatusOr<xla::Shape> GetOutputShape(XlaOpKernelContext* ctx) const {
     std::vector<int64_t> out_size;
     auto status = ctx->ConstantInputAsIntVector(1, &out_size);
     CHECK_EQ(out_size.size(), 2) << status;
     TF_ASSIGN_OR_RETURN(xla::Shape input_shape, ctx->InputXlaShape(0));
     xla::Shape output_shape =
         TensorShapeToXLAShape(ctx->output_xla_type(0), ctx->InputShape(0));
-    output_shape.mutable_dimensions()[1] = out_size[0];
-    output_shape.mutable_dimensions()[2] = out_size[1];
+    output_shape.set_dimensions(1, out_size[0]);
+    output_shape.set_dimensions(2, out_size[1]);
     output_shape.set_dynamic_dimension(0, input_shape.is_dynamic_dimension(0));
     output_shape.set_dynamic_dimension(3, input_shape.is_dynamic_dimension(3));
     return output_shape;
   }
 
-  string OpaqueField() const {
+  std::string OpaqueField() const {
     return absl::StrCat("\"", align_corners_, half_pixel_centers_, "\"");
   }
 
@@ -75,7 +75,7 @@ class TpuCustomResizeOp : public XlaOpKernel {
     if (input_shape.dimensions(1) / output_shape.dimensions(1) > 3 &&
         input_shape.dimensions(2) / output_shape.dimensions(2) > 3) {
       auto intermediate_shape = output_shape;
-      intermediate_shape.mutable_dimensions()[1] = input_shape.dimensions(1);
+      intermediate_shape.set_dimensions(1, input_shape.dimensions(1));
       input = xla::CustomCall(ctx->builder(), target, {ctx->Input(0)},
                               intermediate_shape, OpaqueField());
     }

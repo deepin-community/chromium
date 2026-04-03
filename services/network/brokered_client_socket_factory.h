@@ -13,6 +13,7 @@
 #include "net/socket/socket_performance_watcher.h"
 #include "net/socket/transport_client_socket.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/socket_broker_client.h"
 #include "services/network/public/mojom/socket_broker.mojom.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -24,6 +25,7 @@ namespace net {
 class AddressList;
 class DatagramClientSocket;
 class HostPortPair;
+class IPAddress;
 class NetLog;
 struct NetLogSource;
 class SSLClientContext;
@@ -74,12 +76,23 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) BrokeredClientSocketFactory
       net::AddressFamily address_family,
       mojom::SocketBroker::CreateUdpSocketCallback callback);
 
-  // Whether or not a socket for `addresses` should be brokered or not. Virtual
-  // for testing.
-  virtual bool ShouldBroker(const net::AddressList& addresses) const;
+  // Returns whether or not `address` should be brokered.
+  bool ShouldBroker(const net::IPAddress& address) const;
+
+  // Whether or not any socket in `addresses` should be brokered or not.
+  // Convenience wrapper for calling above overload on all elements of
+  // `addresses`.
+  bool ShouldBroker(const net::AddressList& addresses) const;
+
+#if BUILDFLAG(IS_WIN)
+  void SetBrokerHelperDelegateForTesting(
+      std::unique_ptr<BrokerHelperWin::Delegate> delegate) {
+    broker_helper_.SetDelegateForTesting(std::move(delegate));
+  }
+#endif
 
  private:
-  mojo::Remote<mojom::SocketBroker> socket_broker_;
+  SocketBrokerClient socket_broker_client_;
 #if BUILDFLAG(IS_WIN)
   BrokerHelperWin broker_helper_;
 #endif

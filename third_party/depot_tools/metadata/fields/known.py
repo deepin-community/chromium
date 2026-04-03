@@ -5,7 +5,7 @@
 
 import os
 import sys
-from typing import Union
+from typing import Optional
 
 _THIS_DIR = os.path.abspath(os.path.dirname(__file__))
 # The repo's root directory.
@@ -18,17 +18,18 @@ import metadata.fields.custom.cpe_prefix
 import metadata.fields.custom.date
 import metadata.fields.custom.license
 import metadata.fields.custom.license_file
+import metadata.fields.custom.local_modifications
+import metadata.fields.custom.mitigated
+import metadata.fields.custom.update_mechanism
 import metadata.fields.custom.url
 import metadata.fields.custom.version
+import metadata.fields.custom.revision
 import metadata.fields.field_types as field_types
 
 # Freeform text fields.
-NAME = field_types.FreeformTextField("Name")
-SHORT_NAME = field_types.FreeformTextField("Short Name")
-REVISION = field_types.FreeformTextField("Revision")
-DESCRIPTION = field_types.FreeformTextField("Description", one_liner=False)
-LOCAL_MODIFICATIONS = field_types.FreeformTextField("Local Modifications",
-                                                    one_liner=False)
+NAME = field_types.SingleLineTextField("Name")
+SHORT_NAME = field_types.SingleLineTextField("Short Name")
+DESCRIPTION = field_types.FreeformTextField("Description", structured=False)
 
 # Yes/no fields.
 SECURITY_CRITICAL = field_types.YesNoField("Security Critical")
@@ -44,6 +45,12 @@ LICENSE = metadata.fields.custom.license.LicenseField()
 LICENSE_FILE = metadata.fields.custom.license_file.LicenseFileField()
 URL = metadata.fields.custom.url.URLField()
 VERSION = metadata.fields.custom.version.VersionField()
+REVISION = metadata.fields.custom.revision.RevisionField()
+LOCAL_MODIFICATIONS = metadata.fields.custom.local_modifications.LocalModificationsField(
+)
+MITIGATED = metadata.fields.custom.mitigated.MitigatedField()
+UPDATE_MECHANISM = metadata.fields.custom.update_mechanism.UpdateMechanismField(
+)
 
 ALL_FIELDS = (
     NAME,
@@ -59,12 +66,14 @@ ALL_FIELDS = (
     SHIPPED_IN_CHROMIUM,
     LICENSE_ANDROID_COMPATIBLE,
     CPE_PREFIX,
+    MITIGATED,
     DESCRIPTION,
     LOCAL_MODIFICATIONS,
+    UPDATE_MECHANISM,
 )
 ALL_FIELD_NAMES = {field.get_name() for field in ALL_FIELDS}
 _FIELD_MAPPING = {field.get_name().lower(): field for field in ALL_FIELDS}
 
 
-def get_field(label: str) -> Union[field_types.MetadataField, None]:
+def get_field(label: str) -> Optional[field_types.MetadataField]:
     return _FIELD_MAPPING.get(label.lower())

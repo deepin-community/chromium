@@ -7,7 +7,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
@@ -17,8 +16,8 @@
 #include "components/payments/content/mock_android_app_communication.h"
 #include "components/payments/content/mock_payment_app_factory_delegate.h"
 #include "components/payments/content/payment_app_factory.h"
-#include "components/payments/content/payment_manifest_web_data_service.h"
 #include "components/payments/content/payment_request_spec.h"
+#include "components/payments/content/web_payments_web_data_service.h"
 #include "components/payments/core/android_app_description.h"
 #include "components/webauthn/core/browser/internal_authenticator.h"
 #include "content/public/browser/web_contents.h"
@@ -197,7 +196,7 @@ TEST_F(AndroidPaymentAppFactoryIntegrationTest, NoErrorsWhenNoApps) {
 // The |arg| is of type std::unique_ptr<PaymentApp>.
 MATCHER_P3(PaymentAppMatches, type, package, method, "") {
   return arg->type() == type && arg->GetId() == package &&
-         base::Contains(arg->GetAppMethodNames(), method);
+         arg->GetAppMethodNames().contains(method);
 }
 
 // The payment app factory should return the TWA payment app when running in TWA

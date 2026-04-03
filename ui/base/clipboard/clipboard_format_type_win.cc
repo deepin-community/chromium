@@ -63,14 +63,11 @@ std::string ClipboardFormatType::Serialize() const {
 
 // static
 ClipboardFormatType ClipboardFormatType::Deserialize(
-    const std::string& serialization) {
+    std::string_view serialization) {
   int clipboard_format = -1;
   // |serialization| is expected to be a string representing the Windows
   // data_.cfFormat (format number) returned by GetType.
-  if (!base::StringToInt(serialization, &clipboard_format)) {
-    NOTREACHED();
-    return ClipboardFormatType();
-  }
+  CHECK(base::StringToInt(serialization, &clipboard_format));
   return ClipboardFormatType(clipboard_format);
 }
 
@@ -81,10 +78,10 @@ std::string ClipboardFormatType::WebCustomFormatName(int index) {
 
 // static
 ClipboardFormatType ClipboardFormatType::CustomPlatformType(
-    const std::string& format_string) {
+    std::string_view format_string) {
+  CHECK(base::IsStringASCII(format_string));
   // Once these formats are registered, `RegisterClipboardFormat` just returns
   // the `cfFormat` associated with it and doesn't register a new format.
-  DCHECK(base::IsStringASCII(format_string));
   return ClipboardFormatType(
       RegisterClipboardFormatChecked(base::ASCIIToWide(format_string).c_str()));
 }
@@ -110,18 +107,9 @@ bool ClipboardFormatType::operator==(const ClipboardFormatType& other) const {
 
 // Predefined ClipboardFormatTypes.
 
-// static
-ClipboardFormatType ClipboardFormatType::GetType(
-    const std::string& format_string) {
-  return ClipboardFormatType(
-      RegisterClipboardFormatChecked(base::ASCIIToWide(format_string).c_str()));
-}
-
 // The following formats can be referenced by clipboard_util::GetPlainText.
 // Clipboard formats are initialized in a thread-safe manner, using static
 // initialization. COM requires this thread-safe initialization.
-// TODO(dcheng): We probably need to make static initialization of "known"
-// ClipboardFormatTypes thread-safe on all platforms.
 
 // static
 const ClipboardFormatType& ClipboardFormatType::FilenamesType() {
@@ -187,6 +175,13 @@ const ClipboardFormatType& ClipboardFormatType::UrlAType() {
 }
 
 // static
+const ClipboardFormatType& ClipboardFormatType::BookmarkListType() {
+  static base::NoDestructor<ClipboardFormatType> format(
+      RegisterClipboardFormatChecked(L"Bookmark List"));
+  return *format;
+}
+
+// static
 const ClipboardFormatType& ClipboardFormatType::PlainTextAType() {
   static base::NoDestructor<ClipboardFormatType> format(CF_TEXT);
   return *format;
@@ -203,7 +198,7 @@ const ClipboardFormatType& ClipboardFormatType::FilenameAType() {
 // static
 const ClipboardFormatType& ClipboardFormatType::TextHtmlType() {
   static base::NoDestructor<ClipboardFormatType> format(
-      RegisterClipboardFormatChecked(L"text/html"));
+      RegisterClipboardFormatChecked(CFSTR_MIME_HTML));
   return *format;
 }
 
@@ -236,7 +231,7 @@ const ClipboardFormatType& ClipboardFormatType::FileContentZeroType() {
   // used with CFSTR_FILECONTENTS (but used in Chromium--see
   // OSExchangeDataProviderWin::SetFileContents). Use FileContentAtIndexType
   // if TYMED_ISTREAM and TYMED_ISTORAGE are needed.
-  // TODO(https://crbug.com/950756): Should TYMED_ISTREAM / TYMED_ISTORAGE be
+  // TODO(crbug.com/41451800): Should TYMED_ISTREAM / TYMED_ISTORAGE be
   // used instead of TYMED_HGLOBAL in
   // OSExchangeDataProviderWin::SetFileContents.
   // The 0 constructor argument is used with CFSTR_FILECONTENTS to specify file
@@ -294,10 +289,31 @@ const ClipboardFormatType& ClipboardFormatType::WebKitSmartPasteType() {
 }
 
 // static
-const ClipboardFormatType& ClipboardFormatType::WebCustomDataType() {
+const ClipboardFormatType& ClipboardFormatType::DataTransferCustomType() {
   // TODO(http://crbug.com/106449): Standardize this name.
   static base::NoDestructor<ClipboardFormatType> format(
       RegisterClipboardFormatChecked(L"Chromium Web Custom MIME Data Format"));
+  return *format;
+}
+
+// static
+const ClipboardFormatType& ClipboardFormatType::InternalSourceUrlType() {
+  static base::NoDestructor<ClipboardFormatType> format(
+      RegisterClipboardFormatChecked(L"Chromium internal source URL"));
+  return *format;
+}
+
+// static
+const ClipboardFormatType& ClipboardFormatType::ClipboardHistoryType() {
+  static base::NoDestructor<ClipboardFormatType> format(
+      RegisterClipboardFormatChecked(L"CanIncludeInClipboardHistory"));
+  return *format;
+}
+
+// static
+const ClipboardFormatType& ClipboardFormatType::UploadCloudClipboardType() {
+  static base::NoDestructor<ClipboardFormatType> format(
+      RegisterClipboardFormatChecked(L"CanUploadToCloudClipboard"));
   return *format;
 }
 

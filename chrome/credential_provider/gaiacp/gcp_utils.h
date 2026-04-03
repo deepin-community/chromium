@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/files/file.h"
 #include "base/files/file_path.h"
@@ -50,19 +51,19 @@ inline constexpr int kWindowsPasswordBufferLength = 32;
 
 // Maximum domain length is 256 characters including null.
 // https://support.microsoft.com/en-ca/help/909264/naming-conventions-in-active-directory-for-computers-domains-sites-and
-constexpr int kWindowsDomainBufferLength = 256;
+inline constexpr int kWindowsDomainBufferLength = 256;
 
 // According to:
 // https://stackoverflow.com/questions/1140528/what-is-the-maximum-length-of-a-sid-in-sddl-format
-constexpr int kWindowsSidBufferLength = 184;
+inline constexpr int kWindowsSidBufferLength = 184;
 
 // Max number of attempts to find a new username when a user already exists
 // with the same username.
-constexpr int kMaxUsernameAttempts = 10;
+inline constexpr int kMaxUsernameAttempts = 10;
 
 // First index to append to a username when another user with the same name
 // already exists.
-constexpr int kInitialDuplicateUsernameIndex = 2;
+inline constexpr int kInitialDuplicateUsernameIndex = 2;
 
 // Default extension used as a fallback if the picture_url returned from gaia
 // does not have a file extension.
@@ -280,10 +281,10 @@ std::wstring GetStringResource(UINT base_message_id,
 // Gets the language selected by the base::win::i18n::LanguageSelector.
 std::wstring GetSelectedLanguage();
 
-// Securely clear a base::Value::Dict that may have a password field.
-void SecurelyClearDictionaryValue(base::optional_ref<base::Value::Dict> dict);
+// Securely clear a base::DictValue that may have a password field.
+void SecurelyClearDictionaryValue(base::optional_ref<base::DictValue> dict);
 void SecurelyClearDictionaryValueWithKey(
-    base::optional_ref<base::Value::Dict> dict,
+    base::optional_ref<base::DictValue> dict,
     const std::string& password_key);
 
 // Securely clear std::wstring and std::string.
@@ -293,9 +294,9 @@ void SecurelyClearString(std::string& str);
 // Securely clear a given |buffer| with size |length|.
 void SecurelyClearBuffer(void* buffer, size_t length);
 
-// Helpers to get strings from base::Value::Dict.
-std::wstring GetDictString(const base::Value::Dict& dict, const char* name);
-std::string GetDictStringUTF8(const base::Value::Dict& dict, const char* name);
+// Helpers to get strings from base::DictValue.
+std::wstring GetDictString(const base::DictValue& dict, const char* name);
+std::string GetDictStringUTF8(const base::DictValue& dict, const char* name);
 
 // Perform a recursive search on a nested dictionary object. Note that the
 // names provided in the input should be in order. Below is an example : Lets
@@ -304,7 +305,7 @@ std::string GetDictStringUTF8(const base::Value::Dict& dict, const char* name);
 // by providing the |path| as {"key1", "key2", "key3"}.
 std::string SearchForKeyInStringDictUTF8(
     const std::string& json_string,
-    const std::initializer_list<base::StringPiece>& path);
+    const std::initializer_list<std::string_view>& path);
 
 // Perform a recursive search on a nested dictionary object. Note that the
 // names provided in the input should be in order. Below is an example : Lets
@@ -316,7 +317,7 @@ std::string SearchForKeyInStringDictUTF8(
 HRESULT SearchForListInStringDictUTF8(
     const std::string& list_key,
     const std::string& json_string,
-    const std::initializer_list<base::StringPiece>& path,
+    const std::initializer_list<std::string_view>& path,
     std::vector<std::string>* output);
 
 // Returns the major build version of Windows by reading the registry.
@@ -367,7 +368,7 @@ void InitWindowsStringWithString(const WindowsStringCharT* string,
 // Extracts the provided keys from the given dictionary. Returns true if all
 // keys are found. If any of the key isn't found, returns false.
 bool ExtractKeysFromDict(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     const std::vector<std::pair<std::string, std::string*>>& needed_outputs);
 
 // Gets the bios serial number of the windows device.

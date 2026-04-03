@@ -4,17 +4,17 @@
 
 import {getFileTasks} from '../../common/js/api.js';
 import {getNativeEntry} from '../../common/js/entry_utils.js';
-import {annotateTasks, getDefaultTask, INSTALL_LINUX_PACKAGE_TASK_DESCRIPTOR} from '../../common/js/file_tasks.js';
-import {FakeEntry, FilesAppDirEntry, FilesAppEntry} from '../../common/js/files_app_entry_types.js';
-import {descriptorEqual} from '../../common/js/util.js';
+import {annotateTasks, getDefaultTask} from '../../common/js/file_tasks.js';
+import type {FilesAppDirEntry, FilesAppEntry} from '../../common/js/files_app_entry_types.js';
+import {debug} from '../../common/js/util.js';
 import {RootType} from '../../common/js/volume_manager_types.js';
-import {DEFAULT_CROSTINI_VM} from '../../foreground/js/constants.js';
 import {PathComponent} from '../../foreground/js/path_component.js';
 import type {ActionsProducerGen} from '../../lib/actions_producer.js';
-import {Slice} from '../../lib/base_store.js';
+import {isInvalidationError, Slice} from '../../lib/base_store.js';
 import {keyedKeepFirst} from '../../lib/concurrency_models.js';
+import {combine1Selector} from '../../lib/selector.js';
 import {type CurrentDirectory, DialogType, type DirectoryContent, type FileData, type FileKey, type FileTask, type FileTasks, PropStatus, type Selection, type State} from '../../state/state.js';
-import {getStore} from '../store.js';
+import {getFileData, getStore} from '../store.js';
 
 import {cacheEntries} from './all_entries.js';
 
@@ -110,6 +110,7 @@ function changeDirectoryReducer(currentState: State, payload: {
   if (!content || currentState.currentDirectory?.key !== key) {
     content = {
       keys: [],
+      status: PropStatus.SUCCESS,
     };
     hasDlpDisabledFiles = false;
   }
@@ -131,7 +132,7 @@ function changeDirectoryReducer(currentState: State, payload: {
   if (fileData) {
     const {volumeManager} = window.fileManager;
     if (!volumeManager) {
-      console.debug(`VolumeManager not available yet.`);
+      debug(`VolumeManager not available yet.`);
       currentDirectory = currentState.currentDirectory || currentDirectory;
     } else {
       const components = PathComponent.computeComponentsFromEntry(
@@ -171,7 +172,7 @@ function updateSelectionReducer(currentState: State, payload: {
   if (!currentState.currentDirectory) {
     if (!updatingToEmpty) {
       console.warn('Missing `currentDirectory`');
-      console.debug('Dropping action:', payload);
+      debug('Dropping action:', payload);
     }
     return currentState;
   }
@@ -179,7 +180,7 @@ function updateSelectionReducer(currentState: State, payload: {
   if (!currentState.currentDirectory.content) {
     if (!updatingToEmpty) {
       console.warn('Missing `currentDirectory.content`');
-      console.debug('Dropping action:', payload);
+      debug('Dropping action:', payload);
     }
     return currentState;
   }
@@ -192,7 +193,7 @@ function updateSelectionReducer(currentState: State, payload: {
     console.warn(
         'Got selected keys that are not in current directory, ' +
         'continuing anyway');
-    console.debug(`Missing keys: ${missingKeys.join('\n')} \nexisting keys:\n ${
+    debug(`Missing keys: ${missingKeys.join('\n')} \nexisting keys:\n ${
         (currentState.currentDirectory?.content?.keys ?? []).join('\n')}`);
   }
 
@@ -279,10 +280,12 @@ export const updateDirectoryContent =
     slice.addReducer('update-content', updateDirectoryContentReducer);
 
 function updateDirectoryContentReducer(currentState: State, payload: {
-  entries: Array<Entry|FilesAppEntry>,
+  entries?: Array<Entry|FilesAppEntry>, status: PropStatus,
 }): State {
   // Cache entries, so the reducers can use any entry from `allEntries`.
-  cacheEntries(currentState, payload.entries);
+  if (payload.entries) {
+    cacheEntries(currentState, payload.entries);
+  }
 
   if (!currentState.currentDirectory) {
     console.warn('Missing `currentDirectory`');
@@ -291,10 +294,12 @@ function updateDirectoryContentReducer(currentState: State, payload: {
 
   const initialContent: DirectoryContent =
       currentState.currentDirectory?.content ?? {keys: []};
-  const keys = payload.entries.map(e => e.toURL());
+  const status = payload.status;
+  const keys = (payload.entries ?? []).map(e => e.toURL());
   const content: DirectoryContent = {
     ...initialContent,
     keys,
+    status,
   };
 
   let currentDirectory: CurrentDirectory = {
@@ -314,28 +319,6 @@ function updateDirectoryContentReducer(currentState: State, payload: {
     ...newState,
     currentDirectory,
   };
-}
-
-/**
- * Linux package installation is currently only supported for a single file
- * which is inside the Linux container, or in a shareable volume.
- * TODO(timloh): Instead of filtering these out, we probably should show a
- * dialog with an error message, similar to when attempting to run Crostini
- * tasks with non-Crostini entries.
- */
-function allowCrostiniTask(filesData: FileData[]) {
-  if (filesData.length !== 1) {
-    return false;
-  }
-  const fileData = filesData[0]!;
-  const rootType = (fileData.entry as FakeEntry).rootType;
-  if (rootType !== RootType.CROSTINI) {
-    return false;
-  }
-  const crostini = window.fileManager.crostini;
-  return crostini.canSharePath(
-      DEFAULT_CROSTINI_VM, (fileData.entry as Entry),
-      /*persiste=*/ false);
 }
 
 const emptyAction = (status: PropStatus) => updateFileTasks({
@@ -367,7 +350,7 @@ export async function*
   yield;
   try {
     const resultingTasks = await getFileTasks(
-        filesData.map(fd => fd.entry),
+        filesData.map(fd => fd.entry!),
         filesData.map(fd => fd.metadata.sourceUrl || ''));
     if (!resultingTasks || !resultingTasks.tasks) {
       return;
@@ -376,11 +359,6 @@ export async function*
     if (filesData.length === 0 || resultingTasks.tasks.length === 0) {
       yield emptyAction(PropStatus.SUCCESS);
       return;
-    }
-    if (!allowCrostiniTask(filesData)) {
-      resultingTasks.tasks = resultingTasks.tasks.filter(
-          (task: chrome.fileManagerPrivate.FileTask) => !descriptorEqual(
-              task.descriptor, INSTALL_LINUX_PACKAGE_TASK_DESCRIPTOR));
     }
     const tasks = annotateTasks(resultingTasks.tasks, filesData);
     resultingTasks.tasks = tasks;
@@ -403,8 +381,44 @@ export async function*
 
 /** Generates key based on each FileKey (entry.toURL()). */
 function getSelectionKey(filesData: FileData[]): string {
-  return filesData.map(f => f?.entry.toURL()).join('|');
+  return filesData.map(f => f.key).join('|');
 }
 
 export const fetchFileTasks =
     keyedKeepFirst(fetchFileTasksInternal, getSelectionKey);
+
+
+export const directoryContentSelector = combine1Selector(
+    (currentDir?: CurrentDirectory) => currentDir?.content, slice.selector);
+
+// TODO(lucmult): Add concurrency model, the latest should prevail.
+export async function*
+    fetchDirectoryContents(fileKey: FileKey): ActionsProducerGen {
+  // Mark as started.
+  yield updateDirectoryContent({status: PropStatus.STARTED});
+
+  try {
+    const store = getStore();
+    const state = store.getState();
+    const fileData = getFileData(state, fileKey);
+    if (!fileData) {
+      throw new Error(`FileData not found for key ${fileKey}`);
+    }
+
+    // TODO(lucmult): Add this to concurrency model.
+    if (store.getState().currentDirectory?.key !== fileKey) {
+      // User navigated to another directory.
+      return;
+    }
+
+    // NOTE: Only implemented for Materialized view for now.
+    throw new Error(`Fetch not supported for entry type: ${fileData.type}`);
+  } catch (error: any) {
+    if (isInvalidationError(error)) {
+      // Not an actual error, just stopping the actions producer.
+      throw error;
+    }
+    console.warn(error);
+    yield updateDirectoryContent({status: PropStatus.ERROR});
+  }
+}

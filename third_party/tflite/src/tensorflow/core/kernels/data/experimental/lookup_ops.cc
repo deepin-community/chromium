@@ -13,12 +13,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #include "tensorflow/core/data/root_dataset.h"
 #include "tensorflow/core/framework/dataset.h"
 #include "tensorflow/core/framework/function_handle_cache.h"
@@ -53,7 +56,7 @@ class DatasetIterator
 
   ~DatasetIterator() override {}
 
-  Status Init(OpKernelContext* ctx) {
+  absl::Status Init(OpKernelContext* ctx) {
     data::IteratorContext::Params params(ctx);
     function_handle_cache_ = std::make_unique<FunctionHandleCache>(params.flr);
     params.function_handle_cache = function_handle_cache_.get();
@@ -88,7 +91,7 @@ class DatasetIterator
 
   const Tensor& values() const override { return tensors_[1]; }
 
-  Status status() const override { return status_; }
+  absl::Status status() const override { return status_; }
 
   int64_t total_size() const override {
     int64_t size = dataset_->Cardinality();
@@ -106,7 +109,7 @@ class DatasetIterator
   std::unique_ptr<CancellationManager> cancellation_manager_;
   std::unique_ptr<data::IteratorBase> iterator_;
   std::vector<Tensor> tensors_;
-  Status status_;
+  absl::Status status_;
 };
 
 std::unique_ptr<InitializerSerializer> MakeDatasetInitializerSerializer(
@@ -146,33 +149,47 @@ void InitializeTableFromDataset(OpKernelContext* ctx,
   auto cleanup = gtl::MakeCleanup([done = std::move(done)]() { done(); });
   // Assert that the dataset types match up to that expected in the table.
   const auto& dataset_types = dataset->output_dtypes();
-  OP_REQUIRES(
+  OP_REQUIRES_ASYNC(
       ctx, dataset_types.size() == 2,
-      errors::InvalidArgument("Dataset should have two output types only"));
-  OP_REQUIRES(ctx, dataset_types[0] == table->key_dtype(),
-              errors::InvalidArgument(
-                  "Key dtype expected: ", table->key_dtype(),
-                  " but obtained: ", dataset_types[0], " from the dataset"));
-  OP_REQUIRES(ctx, dataset_types[1] == table->value_dtype(),
-              errors::InvalidArgument(
-                  "Value dtype expected: ", table->value_dtype(),
-                  " but obtained: ", dataset_types[1], " from the dataset"));
+      absl::InvalidArgumentError("Dataset should have two output types only"),
+      done);
+  OP_REQUIRES_ASYNC(
+      ctx, dataset_types[0] == table->key_dtype(),
+      absl::InvalidArgumentError(absl::StrCat(
+          "Key dtype expected: ", DataTypeString(table->key_dtype()),
+          " but obtained: ", DataTypeString(dataset_types[0]),
+          " from the dataset")),
+      done);
+  OP_REQUIRES_ASYNC(
+      ctx, dataset_types[1] == table->value_dtype(),
+      absl::InvalidArgumentError(absl::StrCat(
+          "Value dtype expected: ", DataTypeString(table->value_dtype()),
+          " but obtained: ", DataTypeString(dataset_types[1]),
+          " from the dataset")),
+      done);
   // Assert that the dataset output shapes are scalars.
   const auto& dataset_shapes = dataset->output_shapes();
-  OP_REQUIRES(
+  OP_REQUIRES_ASYNC(
       ctx, dataset_shapes.size() == 2,
-      errors::InvalidArgument("Dataset should have two output shapes only"));
-  OP_REQUIRES(ctx, dataset_shapes[0].IsCompatibleWith(PartialTensorShape({})),
-              errors::InvalidArgument("Expected scalar for key. Obtained: ",
-                                      dataset_shapes[0].DebugString()));
-  OP_REQUIRES(ctx, dataset_shapes[1].IsCompatibleWith(PartialTensorShape({})),
-              errors::InvalidArgument("Expected scalar for key. Obtained: ",
-                                      dataset_shapes[1].DebugString()));
+      absl::InvalidArgumentError("Dataset should have two output shapes only"),
+      done);
+  OP_REQUIRES_ASYNC(ctx,
+                    dataset_shapes[0].IsCompatibleWith(PartialTensorShape({})),
+                    absl::InvalidArgumentError(
+                        absl::StrCat("Expected scalar for key. Obtained: ",
+                                     dataset_shapes[0].DebugString())),
+                    done);
+  OP_REQUIRES_ASYNC(ctx,
+                    dataset_shapes[1].IsCompatibleWith(PartialTensorShape({})),
+                    absl::InvalidArgumentError(
+                        absl::StrCat("Expected scalar for key. Obtained: ",
+                                     dataset_shapes[1].DebugString())),
+                    done);
   DatasetIterator iter(dataset);
-  OP_REQUIRES_OK(ctx, iter.Init(ctx));
-  Status s =
+  OP_REQUIRES_OK_ASYNC(ctx, iter.Init(ctx), done);
+  absl::Status s =
       table->Initialize(iter, MakeDatasetInitializerSerializer(ctx, dataset));
-  if (errors::IsFailedPrecondition(s) && table->is_initialized()) {
+  if (absl::IsFailedPrecondition(s) && table->is_initialized()) {
     LOG(INFO) << "Table already initialized from dataset.";
     return;
   }

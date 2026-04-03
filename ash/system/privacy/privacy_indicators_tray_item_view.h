@@ -12,7 +12,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/compositor/throughput_tracker.h"
+#include "ui/compositor/compositor_metrics_tracker.h"
 
 namespace gfx {
 class LinearAnimation;
@@ -57,7 +57,8 @@ class ASH_EXPORT PrivacyIndicatorsTrayItemView : public TrayItemView,
   // This enum covers all the possible variations for the privacy indicators
   // view type that we are interested in recording metrics, specifying whether
   // camera/mic access and screen sharing icons are showing. Note to keep in
-  // sync with enum PrivacyIndicatorsType in tools/metrics/histograms/enums.xml.
+  // sync with enum `PrivacyIndicatorsType` in
+  // tools/metrics/histograms/metadata/ash/enums.xml.
   enum class Type {
     kCamera = 1 << 1,
     kMicrophone = 1 << 2,
@@ -96,9 +97,6 @@ class ASH_EXPORT PrivacyIndicatorsTrayItemView : public TrayItemView,
   // Update the view according to the shelf alignment.
   void UpdateAlignmentForShelf(Shelf* shelf);
 
-  // TrayItemView:
-  std::u16string GetTooltipText(const gfx::Point& point) const override;
-
   // Update the view's visibility based on camera/mic access and screen sharing
   // state.
   void UpdateVisibility();
@@ -106,13 +104,12 @@ class ASH_EXPORT PrivacyIndicatorsTrayItemView : public TrayItemView,
  private:
   friend class PrivacyIndicatorsTrayItemViewPixelTest;
   friend class PrivacyIndicatorsTrayItemViewTest;
-  friend class CaptureModePrivacyIndicatorsTest;
 
   // TrayItemView:
   void PerformVisibilityAnimation(bool visible) override;
   void HandleLocaleChange() override;
-  gfx::Size CalculatePreferredSize() const override;
-  void OnThemeChanged() override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   views::View* GetTooltipHandlerForPoint(const gfx::Point& point) override;
   void AnimationProgressed(const gfx::Animation* animation) override;
@@ -126,9 +123,6 @@ class ASH_EXPORT PrivacyIndicatorsTrayItemView : public TrayItemView,
 
   // SessionObserver:
   void OnSessionStateChanged(session_manager::SessionState state) override;
-
-  // Update the icons for the children views.
-  void UpdateIcons();
 
   // Update the bounds insets based on shelf alignment.
   void UpdateBoundsInset();
@@ -149,6 +143,8 @@ class ASH_EXPORT PrivacyIndicatorsTrayItemView : public TrayItemView,
 
   // Record repeated shows metric when the timer is stop.
   void RecordRepeatedShows();
+
+  void UpdateTooltipText();
 
   raw_ptr<views::BoxLayout> layout_manager_ = nullptr;
 
@@ -175,10 +171,6 @@ class ASH_EXPORT PrivacyIndicatorsTrayItemView : public TrayItemView,
 
   // Used to record metrics of the number of shows per session.
   int count_visible_per_session_ = 0;
-
-  // Used to record metrics of repeated shows per 100 ms.
-  int count_repeated_shows_ = 0;
-  base::DelayTimer repeated_shows_timer_;
 
   // Keeps track of the last time the indicator starts showing. Used to record
   // visibility duration metrics.

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PARTITION_ALLOC_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PARTITION_ALLOC_H_
+#ifndef PARTITION_ALLOC_PARTITION_ALLOC_H_
+#define PARTITION_ALLOC_PARTITION_ALLOC_H_
 
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/component_export.h"
@@ -21,12 +21,12 @@
 // arithmetic operations on it aren't uncommon, and for that reason it isn't
 // MTE-tagged either. "Object" is the allocated memory that the app is given via
 // interfaces like Alloc(), Free(), etc. An object is fully contained within a
-// slot, and may be surrounded by internal PartitionAlloc structures or empty
+// slot, and may be followed by internal PartitionAlloc structures or empty
 // space. Is is generally represented as a pointer to its beginning (most
 // commonly void*), and is MTE-tagged so it's safe to access.
 //
 // The best way to transition between these to worlds is via
-// PartitionRoot::ObjectToSlotStart() and ::SlotStartToObject(). These take care
+// SlotStart::Checked() and SlotStart::ToObject(). These take care
 // of shifting between slot/object start, MTE-tagging/untagging and the cast for
 // you. There are cases where these functions are insufficient. Internal
 // PartitionAlloc structures, like free-list pointers, BRP ref-count, cookie,
@@ -66,4 +66,4 @@ struct PA_COMPONENT_EXPORT(PARTITION_ALLOC) PartitionAllocator {
 
 }  // namespace partition_alloc
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PARTITION_ALLOC_H_
+#endif  // PARTITION_ALLOC_PARTITION_ALLOC_H_

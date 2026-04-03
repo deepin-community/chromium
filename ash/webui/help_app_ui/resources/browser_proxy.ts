@@ -1,16 +1,17 @@
 // Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-import {stringToMojoString16} from './mojo_type_util.js';
-import {String16} from 'chrome://resources/mojo/mojo/public/mojom/base/string16.mojom-webui.js';
-import {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
+
+import {MessagePipe} from '//system_apps/message_pipe.js';
+import type {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
 
 import {PageHandlerFactory, PageHandlerRemote} from './help_app_ui.mojom-webui.js';
 import {Index} from './index.mojom-webui.js';
-import {MessagePipe} from '//system_apps/message_pipe.js';
 import {Message} from './message_types.js';
-import {SearchConcept, SearchHandler} from './search.mojom-webui.js';
-import {Content, ResponseStatus, Result} from './types.mojom-webui.js';
+import type {SearchConcept} from './search.mojom-webui.js';
+import {SearchHandler} from './search.mojom-webui.js';
+import type {Content, Result} from './types.mojom-webui.js';
+import {ResponseStatus} from './types.mojom-webui.js';
 
 const helpApp = {
   handler: new PageHandlerRemote(),
@@ -38,28 +39,16 @@ const guestFrame = document.createElement('iframe');
 guestFrame.src = `${GUEST_ORIGIN}${location.pathname}${location.search}`;
 document.body.appendChild(guestFrame);
 
-// Cached result whether Local Search Service is enabled.
-const isLssEnabled =
-    helpApp.handler.isLssEnabled().then(result => result.enabled);
-
-// Cached result of whether Launcher Search is enabled.
-const isLauncherSearchEnabled =
-    helpApp.handler.isLauncherSearchEnabled().then(result => result.enabled);
-
 /** Converts a string or object to url. */
 function toUrl(url: string|object): Url {
   // TODO(b/279132899): Figure out why `url` is an empty object when it should
   // have been an empty string.
   if (url === '' || typeof (url) !== 'string') {
-    return {url: ''};
+    return '';
   }
-  return {url};
+  return url;
 }
 
-/** Converts string to String16. */
-function toTruncatedString16(s: string): String16 {
-  return stringToMojoString16(truncate(s));
-}
 const TITLE_ID = 'title';
 const BODY_ID = 'body';
 const CATEGORY_ID = 'main-category';
@@ -81,6 +70,10 @@ guestMessagePipe.registerHandler(Message.OPEN_FEEDBACK_DIALOG, () => {
   return helpApp.handler.openFeedbackDialog();
 });
 
+guestMessagePipe.registerHandler(
+    Message.SHOW_ON_DEVICE_APP_CONTROLS,
+    () => void helpApp.handler.showOnDeviceAppControls());
+
 guestMessagePipe.registerHandler(Message.SHOW_PARENTAL_CONTROLS, () => void
   helpApp.handler.showParentalControls());
 
@@ -90,19 +83,16 @@ guestMessagePipe.registerHandler(
 
 guestMessagePipe.registerHandler(
     Message.ADD_OR_UPDATE_SEARCH_INDEX, async (data: SearchableItem[]) => {
-      if (!(await isLssEnabled)) {
-        return;
-      }
       const dataToSend = data.map(searchableItem => {
         const contents: Content[] = [
           {
             id: TITLE_ID,
-            content: toTruncatedString16(searchableItem.title),
+            content: truncate(searchableItem.title),
             weight: 1.0,
           },
           {
             id: CATEGORY_ID,
-            content: toTruncatedString16(searchableItem.mainCategoryName),
+            content: truncate(searchableItem.mainCategoryName),
             weight: 0.1,
           },
         ];
@@ -111,7 +101,7 @@ guestMessagePipe.registerHandler(
             const subcategoryName = searchableItem.subcategoryNames[i]!;
             contents.push({
               id: SUBCATEGORY_ID + i,
-              content: toTruncatedString16(subcategoryName),
+              content: truncate(subcategoryName),
               weight: 0.1,
             });
           }
@@ -121,17 +111,18 @@ guestMessagePipe.registerHandler(
         if (subheadings) {
           for (let i = 0; i < subheadings.length; ++i) {
             const subheading = subheadings[i];
-            if (!subheading) continue;
+            if (!subheading)
+              continue;
             contents.push({
               id: SUBHEADING_ID + i,
-              content: toTruncatedString16(subheading),
+              content: truncate(subheading),
               weight: 0.4,
             });
           }
         } else if (searchableItem.body) {
           contents.push({
             id: BODY_ID,
-            content: toTruncatedString16(searchableItem.body),
+            content: truncate(searchableItem.body),
             weight: 0.2,
           });
         }
@@ -145,20 +136,14 @@ guestMessagePipe.registerHandler(
     });
 
 guestMessagePipe.registerHandler(Message.CLEAR_SEARCH_INDEX, async () => {
-  if (!(await isLssEnabled)) {
-    return;
-  }
   return indexRemote.clearIndex();
 });
 
 guestMessagePipe.registerHandler(
-  Message.FIND_IN_SEARCH_INDEX,
-  async (dataFromApp: {query: string, maxResults: number}) => {
-      if (!(await isLssEnabled)) {
-        return {results: null};
-      }
+    Message.FIND_IN_SEARCH_INDEX,
+    async (dataFromApp: {query: string, maxResults: number}) => {
       const response = await indexRemote.find(
-          toTruncatedString16(dataFromApp.query), dataFromApp.maxResults || 50);
+          truncate(dataFromApp.query), dataFromApp.maxResults || 50);
 
       if (response.status !== ResponseStatus.kSuccess || !response.results) {
         return {results: null};
@@ -221,7 +206,7 @@ guestMessagePipe.registerHandler(
         };
       });
       return {results};
-  },
+    },
 );
 
 guestMessagePipe.registerHandler(Message.CLOSE_BACKGROUND_PAGE, async () => {
@@ -236,22 +221,18 @@ guestMessagePipe.registerHandler(Message.CLOSE_BACKGROUND_PAGE, async () => {
 guestMessagePipe.registerHandler(
   Message.UPDATE_LAUNCHER_SEARCH_INDEX,
   async (message: LauncherSearchableItem[]) => {
-      if (!(await isLauncherSearchEnabled)) {
-        return;
-      }
-
-      const dataToSend: SearchConcept[] = message.map(
-          searchableItem => ({
-            id: truncate(searchableItem.id),
-            title: toTruncatedString16(searchableItem.title),
-            mainCategory: toTruncatedString16(searchableItem.mainCategoryName),
-            tags: searchableItem.tags.map(tag => toTruncatedString16(tag))
-                      .filter(tag => tag.data.length > 0),
-            tagLocale: searchableItem.tagLocale || '',
-            urlPathWithParameters:
-                truncate(searchableItem.urlPathWithParameters),
-            locale: truncate(searchableItem.locale),
-          }));
+      const dataToSend: SearchConcept[] =
+          message.map(searchableItem => ({
+                        id: truncate(searchableItem.id),
+                        title: truncate(searchableItem.title),
+                        mainCategory: truncate(searchableItem.mainCategoryName),
+                        tags: searchableItem.tags.map(tag => truncate(tag))
+                                  .filter(tag => tag.length > 0),
+                        tagLocale: searchableItem.tagLocale || '',
+                        urlPathWithParameters:
+                            truncate(searchableItem.urlPathWithParameters),
+                        locale: truncate(searchableItem.locale),
+                      }));
       // Filter out invalid items. No field can be empty except locale.
       const dataFiltered = dataToSend.filter(item => {
         const valid = item.id && item.title && item.mainCategory &&
@@ -273,10 +254,6 @@ guestMessagePipe.registerHandler(Message.LAUNCH_MICROSOFT_365_SETUP, () => void
   helpApp.handler.launchMicrosoft365Setup());
 
 guestMessagePipe.registerHandler(
-    Message.MAYBE_SHOW_DISCOVER_NOTIFICATION, () => void
-      helpApp.handler.maybeShowDiscoverNotification());
-
-guestMessagePipe.registerHandler(
     Message.MAYBE_SHOW_RELEASE_NOTES_NOTIFICATION, () => void
       helpApp.handler.maybeShowReleaseNotesNotification());
 
@@ -285,11 +262,28 @@ guestMessagePipe.registerHandler(Message.GET_DEVICE_INFO, async () => {
 });
 
 guestMessagePipe.registerHandler(
+    Message.OPEN_SETTINGS,
+    (path: number) => void helpApp.handler.openSettings(path));
+
+guestMessagePipe.registerHandler(
   Message.OPEN_URL_IN_BROWSER_AND_TRIGGER_INSTALL_DIALOG,
   (url: string | object) => {
     helpApp.handler.openUrlInBrowserAndTriggerInstallDialog(toUrl(url));
   },
 );
+
+guestMessagePipe.registerHandler(
+    Message.SET_HAS_COMPLETED_NEW_DEVICE_CHECKLIST,
+    () => void helpApp.handler.setHasCompletedNewDeviceChecklist());
+
+guestMessagePipe.registerHandler(
+    Message.SET_HAS_VISITED_HOW_TO_PAGE,
+    () => void helpApp.handler.setHasVisitedHowToPage());
+
+guestMessagePipe.registerHandler(
+    Message.OPEN_APP_MALL_PATH, ({path}: {path: string}) => {
+      window.open(`chrome://mall/${path}`);
+    });
 
 /** Compare two positions by their start index. Use for sorting. */
 function compareByStart(a: Position, b: Position): number {

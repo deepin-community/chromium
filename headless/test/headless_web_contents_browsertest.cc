@@ -2,35 +2,41 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "headless/public/headless_web_contents.h"
+
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "base/base64.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
+#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "cc/base/switches.h"
 #include "cc/test/pixel_test_utils.h"
 #include "components/devtools/simple_devtools_protocol_client/simple_devtools_protocol_client.h"
+#include "components/optimization_guide/core/optimization_guide_features.h"
+#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
 #include "components/viz/common/switches.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
 #include "headless/public/headless_browser.h"
-#include "headless/public/headless_web_contents.h"
 #include "headless/test/headless_browser_test.h"
 #include "headless/test/headless_browser_test_utils.h"
 #include "headless/test/headless_devtooled_browsertest.h"
-#include "headless/test/test_network_interceptor.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/switches.h"
@@ -67,49 +73,6 @@ IN_PROC_BROWSER_TEST_F(HeadlessWebContentsTest, Navigation) {
 
   EXPECT_THAT(browser_context->GetAllWebContents(),
               UnorderedElementsAre(web_contents));
-}
-
-IN_PROC_BROWSER_TEST_F(HeadlessWebContentsTest, WindowOpen) {
-  EXPECT_TRUE(embedded_test_server()->Start());
-
-  HeadlessBrowserContext* browser_context =
-      browser()->CreateBrowserContextBuilder().Build();
-
-  HeadlessWebContents* web_contents =
-      browser_context->CreateWebContentsBuilder()
-          .SetInitialURL(embedded_test_server()->GetURL("/window_open.html"))
-          .Build();
-  EXPECT_TRUE(WaitForLoad(web_contents));
-
-  EXPECT_EQ(2u, browser_context->GetAllWebContents().size());
-
-  HeadlessWebContentsImpl* child = nullptr;
-  HeadlessWebContentsImpl* parent = nullptr;
-  for (HeadlessWebContents* c : browser_context->GetAllWebContents()) {
-    HeadlessWebContentsImpl* impl = HeadlessWebContentsImpl::From(c);
-    if (impl->window_id() == 1)
-      parent = impl;
-    else if (impl->window_id() == 2)
-      child = impl;
-  }
-
-  EXPECT_NE(nullptr, parent);
-  EXPECT_NE(nullptr, child);
-  EXPECT_NE(parent, child);
-
-  // Mac doesn't have WindowTreeHosts.
-  if (parent && child && parent->window_tree_host())
-    EXPECT_NE(parent->window_tree_host(), child->window_tree_host());
-
-  gfx::Rect expected_bounds(0, 0, 200, 100);
-#if !BUILDFLAG(IS_MAC)
-  EXPECT_EQ(expected_bounds, child->web_contents()->GetViewBounds());
-  EXPECT_EQ(expected_bounds, child->web_contents()->GetContainerBounds());
-#else   // !BUILDFLAG(IS_MAC)
-  // Mac does not support GetViewBounds() and view positions are random.
-  EXPECT_EQ(expected_bounds.size(),
-            child->web_contents()->GetContainerBounds().size());
-#endif  // !BUILDFLAG(IS_MAC)
 }
 
 IN_PROC_BROWSER_TEST_F(HeadlessWebContentsTest,
@@ -157,14 +120,6 @@ IN_PROC_BROWSER_TEST_F(HeadlessWebContentsTest, HandleSSLError) {
   EXPECT_FALSE(WaitForLoad(web_contents));
 }
 
-namespace {
-bool DecodePNG(const std::string& png_data, SkBitmap* bitmap) {
-  return gfx::PNGCodec::Decode(
-      reinterpret_cast<const unsigned char*>(png_data.data()), png_data.size(),
-      bitmap);
-}
-}  // namespace
-
 // Parameter specifies whether --disable-gpu should be used.
 class HeadlessWebContentsScreenshotTest
     : public HeadlessDevTooledBrowserTest,
@@ -188,23 +143,23 @@ class HeadlessWebContentsScreenshotTest
                        base::Unretained(this)));
   }
 
-  void OnPageSetupCompleted(base::Value::Dict) {
+  void OnPageSetupCompleted(base::DictValue) {
     devtools_client_.SendCommand(
         "Page.captureScreenshot",
         base::BindOnce(&HeadlessWebContentsScreenshotTest::OnScreenshotCaptured,
                        base::Unretained(this)));
   }
 
-  void OnScreenshotCaptured(base::Value::Dict result) {
+  void OnScreenshotCaptured(base::DictValue result) {
     std::string png_data_base64 = DictString(result, "result.data");
     ASSERT_FALSE(png_data_base64.empty());
 
-    std::string png_data;
-    ASSERT_TRUE(base::Base64Decode(png_data_base64, &png_data));
-    EXPECT_GT(png_data.size(), 0U);
+    std::optional<std::vector<uint8_t>> png_data =
+        base::Base64Decode(png_data_base64);
+    EXPECT_GT(png_data.value().size(), 0U);
 
-    SkBitmap result_bitmap;
-    EXPECT_TRUE(DecodePNG(png_data, &result_bitmap));
+    SkBitmap result_bitmap = gfx::PNGCodec::Decode(png_data.value());
+    EXPECT_FALSE(result_bitmap.isNull());
 
     EXPECT_EQ(800, result_bitmap.width());
     EXPECT_EQ(600, result_bitmap.height());
@@ -228,7 +183,7 @@ class HeadlessWebContentsScreenshotWindowPositionTest
     : public HeadlessWebContentsScreenshotTest {
  public:
   void RunDevTooledTest() override {
-    base::Value::Dict params;
+    base::DictValue params;
     params.Set("windowId",
                HeadlessWebContentsImpl::From(web_contents_)->window_id());
     params.SetByDottedPath("bounds.left", 600);
@@ -243,22 +198,16 @@ class HeadlessWebContentsScreenshotWindowPositionTest
             base::Unretained(this)));
   }
 
-  void OnWindowBoundsSet(base::Value::Dict result) {
+  void OnWindowBoundsSet(base::DictValue result) {
     EXPECT_NE(result.FindDict("result"), nullptr);
     HeadlessWebContentsScreenshotTest::RunDevTooledTest();
   }
 };
 
-#if BUILDFLAG(IS_MAC) && defined(ADDRESS_SANITIZER)
-// TODO(crbug.com/1086872): Disabled due to flakiness on Mac ASAN.
-DISABLED_HEADLESS_DEVTOOLED_TEST_P(
-    HeadlessWebContentsScreenshotWindowPositionTest);
-#else
 HEADLESS_DEVTOOLED_TEST_P(HeadlessWebContentsScreenshotWindowPositionTest);
-#endif
 
 // Instantiate test case for both software and gpu compositing modes.
-INSTANTIATE_TEST_SUITE_P(HeadlessWebContentsScreenshotWindowPositionTests,
+INSTANTIATE_TEST_SUITE_P(/* no prefix */,
                          HeadlessWebContentsScreenshotWindowPositionTest,
                          ::testing::Bool());
 
@@ -284,8 +233,8 @@ class HeadlessWebContentsRequestStorageQuotaTest
                          .spec()));
   }
 
-  void OnConsoleAPICalled(const base::Value::Dict& params) {
-    const base::Value::List* args = params.FindListByDottedPath("params.args");
+  void OnConsoleAPICalled(const base::DictValue& params) {
+    const base::ListValue* args = params.FindListByDottedPath("params.args");
     ASSERT_NE(args, nullptr);
     ASSERT_GT(args->size(), 0ul);
 
@@ -360,15 +309,15 @@ class HeadlessWebContentsBeginFrameControlTest : public HeadlessBrowserTest {
  protected:
   virtual std::string GetTestHtmlFile() = 0;
   virtual void StartFrames() {}
-  virtual void OnFrameFinished(base::Value::Dict result) {}
+  virtual void OnFrameFinished(base::DictValue result) {}
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     HeadlessBrowserTest::SetUpCommandLine(command_line);
     // See bit.ly/headless-rendering for why we use these flags.
     command_line->AppendSwitch(::switches::kRunAllCompositorStagesBeforeDraw);
     command_line->AppendSwitch(::switches::kDisableNewContentRenderingTimeout);
-    command_line->AppendSwitch(cc::switches::kDisableCheckerImaging);
-    command_line->AppendSwitch(cc::switches::kDisableThreadedAnimation);
+    command_line->AppendSwitch(switches::kDisableCheckerImaging);
+    command_line->AppendSwitch(switches::kDisableThreadedAnimation);
   }
 
   void RunTest() {
@@ -379,7 +328,7 @@ class HeadlessWebContentsBeginFrameControlTest : public HeadlessBrowserTest {
 
     EXPECT_TRUE(embedded_test_server()->Start());
 
-    base::Value::Dict params;
+    base::DictValue params;
     params.Set("url", "about:blank");
     params.Set("width", 200);
     params.Set("height", 200);
@@ -395,17 +344,14 @@ class HeadlessWebContentsBeginFrameControlTest : public HeadlessBrowserTest {
     browser_devtools_client.DetachClient();
   }
 
-  void OnTargetCreated(base::Value::Dict result) {
+  void OnTargetCreated(base::DictValue result) {
     const std::string targetId = DictString(result, "result.targetId");
     ASSERT_FALSE(targetId.empty());
 
     web_contents_ = HeadlessWebContentsImpl::From(
-        browser()->GetWebContentsForDevToolsAgentHostId(targetId));
+        content::DevToolsAgentHost::GetForId(targetId)->GetWebContents());
 
     devtools_client_.AttachToWebContents(web_contents_->web_contents());
-    devtools_client_.AddEventHandler("Page.loadEventFired",
-                                     on_load_event_fired_handler_);
-
     devtools_client_.SendCommand(
         "Page.enable",
         base::BindOnce(
@@ -413,13 +359,15 @@ class HeadlessWebContentsBeginFrameControlTest : public HeadlessBrowserTest {
             base::Unretained(this)));
   }
 
-  void OnPageDomainEnabled(base::Value::Dict) {
+  void OnPageDomainEnabled(base::DictValue) {
+    devtools_client_.AddEventHandler("Page.loadEventFired",
+                                     on_load_event_fired_handler_);
     devtools_client_.SendCommand(
         "Page.navigate",
         Param("url", embedded_test_server()->GetURL(GetTestHtmlFile()).spec()));
   }
 
-  void OnLoadEventFired(const base::Value::Dict& params) {
+  void OnLoadEventFired(const base::DictValue& params) {
     TRACE_EVENT0("headless",
                  "HeadlessWebContentsBeginFrameControlTest::OnLoadEventFired");
 
@@ -433,9 +381,9 @@ class HeadlessWebContentsBeginFrameControlTest : public HeadlessBrowserTest {
   void BeginFrame(bool screenshot) {
     num_begin_frames_++;
 
-    base::Value::Dict params;
+    base::DictValue params;
     if (screenshot)
-      params.Set("screenshot", base::Value::Dict());
+      params.Set("screenshot", base::DictValue());
 
     devtools_client_.SendCommand(
         "HeadlessExperimental.beginFrame", std::move(params),
@@ -443,7 +391,7 @@ class HeadlessWebContentsBeginFrameControlTest : public HeadlessBrowserTest {
                        base::Unretained(this)));
   }
 
-  void FrameFinished(base::Value::Dict result) {
+  void FrameFinished(base::DictValue result) {
     TRACE_EVENT2(
         "headless", "HeadlessWebContentsBeginFrameControlTest::FrameFinished",
         "has_damage", DictBool(result, "result.hasDamage"),
@@ -486,33 +434,46 @@ class HeadlessWebContentsBeginFrameControlBasicTest
 
   void StartFrames() override { BeginFrame(true); }
 
-  void OnFrameFinished(base::Value::Dict result) override {
+  void OnFrameFinished(base::DictValue result) override {
+    // TODO(crbug.com/385523803): The screenshot capturing logic is currently
+    // flaky for a first screenshot after a navigation, see bug for detaiils.
+    // This works around the flake by retrying the command in case the first
+    // one returns without screenshot.
     if (num_begin_frames_ == 1) {
+      CHECK_EQ(num_retries_, 0);
+      if (!result.FindStringByDottedPath("result.screenshotData")) {
+        num_retries_ += 1;
+        BeginFrame(true);
+        return;
+      }
+    }
+    int frame_number = num_begin_frames_ - num_retries_;
+    if (frame_number == 1) {
       // First BeginFrame should have caused damage and have a screenshot.
       EXPECT_TRUE(DictBool(result, "result.hasDamage"));
 
       std::string png_data_base64 = DictString(result, "result.screenshotData");
       ASSERT_FALSE(png_data_base64.empty());
 
-      std::string png_data;
-      ASSERT_TRUE(base::Base64Decode(png_data_base64, &png_data));
-      EXPECT_GT(png_data.size(), 0U);
+      std::optional<std::vector<uint8_t>> png_data =
+          base::Base64Decode(png_data_base64);
+      EXPECT_GT(png_data.value().size(), 0U);
 
-      SkBitmap result_bitmap;
-      EXPECT_TRUE(DecodePNG(png_data, &result_bitmap));
+      SkBitmap result_bitmap = gfx::PNGCodec::Decode(png_data.value());
+      EXPECT_FALSE(result_bitmap.isNull());
       EXPECT_EQ(200, result_bitmap.width());
       EXPECT_EQ(200, result_bitmap.height());
       SkColor expected_color = SkColorSetRGB(0x00, 0x00, 0xff);
       SkColor actual_color = result_bitmap.getColor(100, 100);
       EXPECT_EQ(expected_color, actual_color);
     } else {
-      DCHECK_EQ(2, num_begin_frames_);
+      DCHECK_EQ(2, frame_number);
       // Can't guarantee that the second BeginFrame didn't have damage, but it
       // should not have a screenshot.
       EXPECT_FALSE(result.FindStringByDottedPath("result.screenshotData"));
     }
 
-    if (num_begin_frames_ < 2) {
+    if (frame_number < 2) {
       // Don't capture a screenshot in the second BeginFrame.
       BeginFrame(false);
     } else {
@@ -521,6 +482,8 @@ class HeadlessWebContentsBeginFrameControlBasicTest
       PostFinishAsynchronousTest();
     }
   }
+
+  int num_retries_ = 0;
 };
 
 HEADLESS_DEVTOOLED_TEST_F(HeadlessWebContentsBeginFrameControlBasicTest);
@@ -542,7 +505,7 @@ class HeadlessWebContentsBeginFrameControlViewportTest
   }
 
   void SetUpViewport() {
-    base::Value::Dict params;
+    base::DictValue params;
     params.Set("width", 0);
     params.Set("height", 0);
     params.Set("deviceScaleFactor", 0);
@@ -560,13 +523,13 @@ class HeadlessWebContentsBeginFrameControlViewportTest
                        base::Unretained(this)));
   }
 
-  void OnSetDeviceMetricsOverrideDone(base::Value::Dict result) {
+  void OnSetDeviceMetricsOverrideDone(base::DictValue result) {
     EXPECT_THAT(result, DictHasKey("result"));
     // Take a screenshot in the second BeginFrame.
     BeginFrame(true);
   }
 
-  void OnFrameFinished(base::Value::Dict result) override {
+  void OnFrameFinished(base::DictValue result) override {
     if (num_begin_frames_ == 1) {
       SetUpViewport();
       return;
@@ -580,12 +543,12 @@ class HeadlessWebContentsBeginFrameControlViewportTest
     std::string png_data_base64 = DictString(result, "result.screenshotData");
     ASSERT_FALSE(png_data_base64.empty());
 
-    std::string png_data;
-    ASSERT_TRUE(base::Base64Decode(png_data_base64, &png_data));
-    ASSERT_GT(png_data.size(), 0ul);
+    std::optional<std::vector<uint8_t>> png_data =
+        base::Base64Decode(png_data_base64);
+    ASSERT_GT(png_data.value().size(), 0ul);
 
-    SkBitmap result_bitmap;
-    EXPECT_TRUE(DecodePNG(png_data, &result_bitmap));
+    SkBitmap result_bitmap = gfx::PNGCodec::Decode(png_data.value());
+    EXPECT_FALSE(result_bitmap.isNull());
 
     // Expect a 300x300 bitmap that is all blue.
     SkBitmap expected_bitmap;
@@ -603,7 +566,7 @@ class HeadlessWebContentsBeginFrameControlViewportTest
   }
 };
 
-// TODO(crbug.com/1459385): Turning this off since it's flaking regularly.
+// TODO(crbug.com/40274291): Turning this off since it's flaking regularly.
 DISABLED_HEADLESS_DEVTOOLED_TEST_F(
     HeadlessWebContentsBeginFrameControlViewportTest);
 
@@ -618,21 +581,25 @@ class CookiesEnabled : public HeadlessDevTooledBrowserTest {
         "Page.loadEventFired",
         base::BindRepeating(&CookiesEnabled::OnLoadEventFired,
                             base::Unretained(this)));
-    devtools_client_.SendCommand("Page.enable");
+    devtools_client_.SendCommand(
+        "Page.enable", base::BindOnce(&CookiesEnabled::OnPageDomainEnabled,
+                                      base::Unretained(this)));
+  }
 
+  void OnPageDomainEnabled(base::DictValue) {
     devtools_client_.SendCommand(
         "Page.navigate",
         Param("url", embedded_test_server()->GetURL("/cookie.html").spec()));
   }
 
-  void OnLoadEventFired(const base::Value::Dict& params) {
+  void OnLoadEventFired(const base::DictValue& params) {
     devtools_client_.SendCommand(
         "Runtime.evaluate", Param("expression", "window.test_result"),
         base::BindOnce(&CookiesEnabled::OnEvaluateResult,
                        base::Unretained(this)));
   }
 
-  void OnEvaluateResult(base::Value::Dict result) {
+  void OnEvaluateResult(base::DictValue result) {
     EXPECT_EQ(DictString(result, "result.result.value"), "0");
 
     FinishAsynchronousTest();
@@ -640,94 +607,6 @@ class CookiesEnabled : public HeadlessDevTooledBrowserTest {
 };
 
 HEADLESS_DEVTOOLED_TEST_F(CookiesEnabled);
-
-namespace {
-const char* kPageWhichOpensAWindow = R"(
-<html>
-<body>
-<script>
-const win = window.open('/page2.html');
-if (!win)
-  console.error('ready');
-win.addEventListener('load', () => console.log('ready'));
-</script>
-</body>
-</html>
-)";
-
-const char* kPage2 = R"(
-<html>
-<body>
-Page 2.
-</body>
-</html>
-)";
-}  // namespace
-
-class WebContentsOpenTest : public HeadlessDevTooledBrowserTest {
- public:
-  void PreRunAsynchronousTest() override {
-    interceptor_ = std::make_unique<TestNetworkInterceptor>();
-  }
-
-  void PostRunAsynchronousTest() override { interceptor_.reset(); }
-
-  void RunDevTooledTest() override {
-    DCHECK(interceptor_);
-
-    interceptor_->InsertResponse("http://foo.com/index.html",
-                                 {kPageWhichOpensAWindow, "text/html"});
-    interceptor_->InsertResponse("http://foo.com/page2.html",
-                                 {kPage2, "text/html"});
-
-    devtools_client_.AddEventHandler(
-        "Runtime.consoleAPICalled",
-        base::BindRepeating(&WebContentsOpenTest::OnConsoleAPICalled,
-                            base::Unretained(this)));
-    SendCommandSync(devtools_client_, "Runtime.enable");
-
-    devtools_client_.SendCommand("Page.navigate",
-                                 Param("url", "http://foo.com/index.html"));
-  }
-
-  virtual void OnConsoleAPICalled(const base::Value::Dict& params) {}
-
- protected:
-  std::unique_ptr<TestNetworkInterceptor> interceptor_;
-};
-
-class DontBlockWebContentsOpenTest : public WebContentsOpenTest {
- public:
-  void CustomizeHeadlessBrowserContext(
-      HeadlessBrowserContext::Builder& builder) override {
-    builder.SetBlockNewWebContents(false);
-  }
-
-  void OnConsoleAPICalled(const base::Value::Dict& params) override {
-    EXPECT_THAT(
-        interceptor_->urls_requested(),
-        ElementsAre("http://foo.com/index.html", "http://foo.com/page2.html"));
-    FinishAsynchronousTest();
-  }
-};
-
-HEADLESS_DEVTOOLED_TEST_F(DontBlockWebContentsOpenTest);
-
-class BlockWebContentsOpenTest : public WebContentsOpenTest {
- public:
-  void CustomizeHeadlessBrowserContext(
-      HeadlessBrowserContext::Builder& builder) override {
-    builder.SetBlockNewWebContents(true);
-  }
-
-  void OnConsoleAPICalled(const base::Value::Dict& params) override {
-    EXPECT_THAT(interceptor_->urls_requested(),
-                ElementsAre("http://foo.com/index.html"));
-    FinishAsynchronousTest();
-  }
-};
-
-HEADLESS_DEVTOOLED_TEST_F(BlockWebContentsOpenTest);
 
 // Regression test for crbug.com/1385982.
 class BlockDevToolsEmbedding : public HeadlessDevTooledBrowserTest {
@@ -751,20 +630,27 @@ class BlockDevToolsEmbedding : public HeadlessDevTooledBrowserTest {
     devtools_client_.SendCommand("Page.navigate", Param("url", url.str()));
   }
 
-  void OnLoadEventFired(const base::Value::Dict& params) {
+  void OnLoadEventFired(const base::DictValue& params) {
     devtools_client_.SendCommand(
         "Page.getFrameTree",
         base::BindOnce(&BlockDevToolsEmbedding::OnFrameTreeResult,
                        base::Unretained(this)));
   }
 
-  void OnFrameTreeResult(base::Value::Dict result) {
+  void OnFrameTreeResult(base::DictValue result) {
     // Make sure the iframe did not load successfully.
-    auto& child_frames =
-        *result.FindListByDottedPath("result.frameTree.childFrames");
+    const auto& child_frames = CHECK_DEREF(
+        result.FindListByDottedPath("result.frameTree.childFrames"));
     EXPECT_EQ(DictString(child_frames[0].GetDict(), "frame.url"),
               "chrome-error://chromewebdata/");
     FinishAsynchronousTest();
+  }
+
+  bool ShouldEnableSitePerProcess() override {
+    // Headless browser tests by default run with OOPIF enabled. This results in
+    // the child frame to appear in a separate target. For simplicity we disable
+    // OOPIF for this test and expect child frame in the same target.
+    return false;
   }
 
  private:
@@ -772,5 +658,67 @@ class BlockDevToolsEmbedding : public HeadlessDevTooledBrowserTest {
 };
 
 HEADLESS_DEVTOOLED_TEST_F(BlockDevToolsEmbedding);
+
+class HeadlessWebContentsAIPageContentTest : public HeadlessWebContentsTest {
+ public:
+  HeadlessWebContentsAIPageContentTest() {
+    feature_list_.InitAndEnableFeature(
+        optimization_guide::features::
+            kAnnotatedPageContentWithActionableElements);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(HeadlessWebContentsAIPageContentTest, GetAIPageContent) {
+  EXPECT_TRUE(embedded_test_server()->Start());
+  HeadlessBrowserContext* browser_context =
+      browser()->CreateBrowserContextBuilder().Build();
+  HeadlessWebContents* web_contents =
+      browser_context->CreateWebContentsBuilder()
+          .SetInitialURL(embedded_test_server()->GetURL("/hello.html"))
+          .Build();
+  EXPECT_TRUE(WaitForLoad(web_contents));
+
+  content::WebContents* content_web_contents =
+      HeadlessWebContentsImpl::From(web_contents)->web_contents();
+  content::WebContentsDelegate* delegate = content_web_contents->GetDelegate();
+  ASSERT_TRUE(delegate);
+
+  base::RunLoop run_loop;
+  delegate->GetAIPageContent(
+      content_web_contents, true,
+      base::BindOnce(
+          [](base::RunLoop* run_loop, const std::string& result) {
+            LOG(INFO) << "GetAIPageContent result size: " << result.size();
+            optimization_guide::proto::AnnotatedPageContent proto;
+            if (proto.ParseFromString(result)) {
+              bool has_text = false;
+              std::vector<const optimization_guide::proto::ContentNode*> nodes;
+              nodes.push_back(&proto.root_node());
+              while (!nodes.empty()) {
+                const auto* node = nodes.back();
+                nodes.pop_back();
+                if (!node->content_attributes()
+                         .text_data()
+                         .text_content()
+                         .empty()) {
+                  has_text = true;
+                  break;
+                }
+                for (const auto& child : node->children_nodes()) {
+                  nodes.push_back(&child);
+                }
+              }
+              EXPECT_TRUE(has_text);
+            } else {
+              ADD_FAILURE() << "Failed to parse AnnotatedPageContent";
+            }
+            run_loop->Quit();
+          },
+          &run_loop));
+  run_loop.Run();
+}
 
 }  // namespace headless

@@ -11,10 +11,8 @@
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder.mojom.h"
-#include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom-forward.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 
 namespace ash::quick_start {
@@ -42,13 +40,13 @@ class QuickStartDecoder : public mojom::QuickStartDecoder {
   base::expected<mojom::QuickStartMessagePtr, mojom::QuickStartDecoderError>
   DoDecodeQuickStartMessage(const std::vector<uint8_t>& data);
   base::expected<mojom::QuickStartMessagePtr, mojom::QuickStartDecoderError>
-  DecodeSecondDeviceAuthPayload(const base::Value::Dict& payload);
+  DecodeSecondDeviceAuthPayload(const base::DictValue& payload);
   base::expected<mojom::QuickStartMessagePtr, mojom::QuickStartDecoderError>
-  DecodeBootstrapConfigurations(const base::Value::Dict& payload);
+  DecodeBootstrapConfigurations(const base::DictValue& payload);
   base::expected<mojom::QuickStartMessagePtr, mojom::QuickStartDecoderError>
-  DecodeQuickStartPayload(const base::Value::Dict& payload);
+  DecodeQuickStartPayload(const base::DictValue& payload);
   base::expected<mojom::QuickStartMessagePtr, mojom::QuickStartDecoderError>
-  DecodeWifiCredentials(const base::Value::Dict& wifi_network_information);
+  DecodeWifiCredentials(const base::DictValue& wifi_network_information);
 
   mojo::Receiver<mojom::QuickStartDecoder> receiver_;
 };

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
+#include "third_party/blink/renderer/core/svg/svg_graphics_element.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 
@@ -57,7 +59,7 @@ TEST_F(LayoutSVGForeignObjectTest, DivInForeignObject) {
   EXPECT_EQ(svg, HitTest(450, 350));
 
   // Rect based hit testing
-  auto results = RectBasedHitTest(PhysicalRect(0, 0, 300, 300));
+  auto& results = RectBasedHitTest(PhysicalRect(0, 0, 300, 300));
   int count = 0;
   EXPECT_EQ(3u, results.size());
   for (auto result : results) {
@@ -127,7 +129,7 @@ TEST_F(LayoutSVGForeignObjectTest, IframeInForeignObject) {
   EXPECT_EQ(svg, HitTest(450, 400));
 
   // Rect based hit testing
-  auto results = RectBasedHitTest(PhysicalRect(0, 0, 300, 300));
+  auto& results = RectBasedHitTest(PhysicalRect(0, 0, 300, 300));
   int count = 0;
   EXPECT_EQ(7u, results.size());
   for (auto result : results) {
@@ -194,7 +196,7 @@ TEST_F(LayoutSVGForeignObjectTest, HitTestZoomedForeignObject) {
   EXPECT_EQ(svg, HitTest(290, 286 + 256));
 
   // Rect based hit testing
-  auto results = RectBasedHitTest(PhysicalRect(0, 0, 300, 300));
+  auto& results = RectBasedHitTest(PhysicalRect(0, 0, 300, 300));
   int count = 0;
   EXPECT_EQ(3u, results.size());
   for (auto result : results) {
@@ -379,7 +381,7 @@ TEST_F(LayoutSVGForeignObjectTest, HitTestUnderScrollingAncestor) {
 }
 
 TEST_F(LayoutSVGForeignObjectTest, BBoxPropagationZoomed) {
-  GetFrame().SetPageZoomFactor(2);
+  GetFrame().SetLayoutZoomFactor(2);
   SetBodyInnerHTML(R"HTML(
     <svg>
       <g>
@@ -479,7 +481,7 @@ TEST_F(LayoutSVGForeignObjectTest, ZoomChangesInvalidatePaintProperties) {
 }
 
 TEST_F(LayoutSVGForeignObjectTest, DisplayLocked) {
-  GetDocument().body()->setInnerHTML(R"HTML(<style>
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(<style>
 foreignObject {
   content-visibility: auto;
 }
@@ -512,6 +514,86 @@ TEST_F(LayoutSVGForeignObjectTest, LocalToAncestorPoint) {
   LayoutBox* foreign = GetLayoutBoxByElementId("foreign");
   EXPECT_NE(target->LocalToAbsolutePoint(PhysicalOffset()),
             target->LocalToAncestorPoint(PhysicalOffset(), foreign));
+}
+
+TEST_F(LayoutSVGForeignObjectTest, GetBBoxUseCounterForZeroHeight) {
+  EXPECT_FALSE(GetDocument().IsUseCounted(
+      WebFeature::kGetBBoxForElementWithZeroWidthOrHeight));
+
+  SetBodyInnerHTML(R"HTML(
+    <svg>
+      <foreignObject id="foreign" width="100" height="0">
+        <body xmlns="http://www.w3.org/1999/xhtml"> </body>
+      </foreignObject>
+    </svg>
+  )HTML");
+
+  UpdateAllLifecyclePhasesForTest();
+
+  To<SVGGraphicsElement>(GetElementById("foreign"))->GetBBox();
+
+  EXPECT_TRUE(GetDocument().IsUseCounted(
+      WebFeature::kGetBBoxForElementWithZeroWidthOrHeight));
+}
+
+TEST_F(LayoutSVGForeignObjectTest, GetBBoxUseCounterForZeroWidth) {
+  EXPECT_FALSE(GetDocument().IsUseCounted(
+      WebFeature::kGetBBoxForElementWithZeroWidthOrHeight));
+
+  SetBodyInnerHTML(R"HTML(
+    <svg>
+      <foreignObject id="foreign" width="0" height="100">
+        <body xmlns="http://www.w3.org/1999/xhtml"> </body>
+      </foreignObject>
+    </svg>
+  )HTML");
+
+  UpdateAllLifecyclePhasesForTest();
+
+  To<SVGGraphicsElement>(GetElementById("foreign"))->GetBBox();
+
+  EXPECT_TRUE(GetDocument().IsUseCounted(
+      WebFeature::kGetBBoxForElementWithZeroWidthOrHeight));
+}
+
+TEST_F(LayoutSVGForeignObjectTest, GetBBoxUseCounterForZeroWidthAndHeight) {
+  EXPECT_FALSE(GetDocument().IsUseCounted(
+      WebFeature::kGetBBoxForElementWithZeroWidthOrHeight));
+
+  SetBodyInnerHTML(R"HTML(
+    <svg>
+      <foreignObject id="foreign">
+        <body xmlns="http://www.w3.org/1999/xhtml"> </body>
+      </foreignObject>
+    </svg>
+  )HTML");
+
+  UpdateAllLifecyclePhasesForTest();
+
+  To<SVGGraphicsElement>(GetElementById("foreign"))->GetBBox();
+
+  EXPECT_FALSE(GetDocument().IsUseCounted(
+      WebFeature::kGetBBoxForElementWithZeroWidthOrHeight));
+}
+
+TEST_F(LayoutSVGForeignObjectTest, GetBBoxUseCounterForNonZeroWidthAndHeight) {
+  EXPECT_FALSE(GetDocument().IsUseCounted(
+      WebFeature::kGetBBoxForElementWithZeroWidthOrHeight));
+
+  SetBodyInnerHTML(R"HTML(
+    <svg>
+      <foreignObject id="foreign" width="100" height="100">
+        <body xmlns="http://www.w3.org/1999/xhtml"> </body>
+      </foreignObject>
+    </svg>
+  )HTML");
+
+  UpdateAllLifecyclePhasesForTest();
+
+  To<SVGGraphicsElement>(GetElementById("foreign"))->GetBBox();
+
+  EXPECT_FALSE(GetDocument().IsUseCounted(
+      WebFeature::kGetBBoxForElementWithZeroWidthOrHeight));
 }
 
 }  // namespace blink

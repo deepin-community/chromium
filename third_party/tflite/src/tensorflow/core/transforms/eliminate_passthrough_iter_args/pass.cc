@@ -15,18 +15,21 @@ limitations under the License.
 
 #include "tensorflow/core/transforms/eliminate_passthrough_iter_args/pass.h"
 
+#include <cassert>
+#include <cstddef>
 #include <memory>
 #include <utility>
 
+#include "llvm/ADT/ADL.h"
 #include "llvm/ADT/BitVector.h"
-#include "llvm/ADT/EpochTracker.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
-#include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
-#include "mlir/Support/LogicalResult.h"  // from @llvm-project
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
+#include "mlir/IR/ValueRange.h"  // from @llvm-project
+#include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/core/ir/ops.h"
 #include "tensorflow/core/ir/utility.h"
 #include "tensorflow/core/transforms/utils/utils.h"
@@ -130,8 +133,8 @@ struct EliminateForPassthroughIterArgs
   static ForRegionOp RebuildOp(const llvm::BitVector &indices, ForRegionOp op,
                                IRRewriter &rewriter) {
     rewriter.setInsertionPoint(op);
-    auto new_op = rewriter.create<ForRegionOp>(
-        op.getLoc(), FilterByIndex(op.getOuts().getTypes(), indices),
+    auto new_op = ForRegionOp::create(
+        rewriter, op.getLoc(), FilterByIndex(op.getOuts().getTypes(), indices),
         op.getCtl().getType(), op.getStart(), op.getLimit(), op.getDelta(),
         FilterByIndex(op.getInit(), indices), op.getCtls(),
         op.getBodyAttrsAttr(), op.getRegionAttrsAttr());
@@ -160,8 +163,8 @@ struct EliminateWhileLikePassthroughIterArgs
                                      WhileLikeRegionOp op,
                                      IRRewriter &rewriter) {
     rewriter.setInsertionPoint(op);
-    auto new_op = rewriter.create<WhileLikeRegionOp>(
-        op.getLoc(), FilterByIndex(op.getOuts().getTypes(), indices),
+    auto new_op = WhileLikeRegionOp::create(
+        rewriter, op.getLoc(), FilterByIndex(op.getOuts().getTypes(), indices),
         op.getCtl().getType(), FilterByIndex(op.getInit(), indices),
         op.getCtls(), op.getParallelIterationsAttr(), op.getCondAttrsAttr(),
         op.getBodyAttrsAttr(), op.getCondRegionAttrsAttr(),

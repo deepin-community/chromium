@@ -45,7 +45,10 @@ static void fill_slice_short(DXVA_Slice_VPx_Short *slice, unsigned position, uns
     slice->wBadSliceChopping     = 0;
 }
 
-static int d3d12va_vp9_start_frame(AVCodecContext *avctx, av_unused const uint8_t *buffer, av_unused uint32_t size)
+static int d3d12va_vp9_start_frame(AVCodecContext *avctx,
+                                   av_unused const AVBufferRef *buffer_ref,
+                                   av_unused const uint8_t *buffer,
+                                   av_unused uint32_t size)
 {
     const VP9SharedContext  *h       = avctx->priv_data;
     D3D12VADecodeContext     *ctx     = D3D12VA_DECODE_CONTEXT(avctx);
@@ -85,14 +88,10 @@ static int d3d12va_vp9_decode_slice(AVCodecContext *avctx, const uint8_t *buffer
 
 static int update_input_arguments(AVCodecContext *avctx, D3D12_VIDEO_DECODE_INPUT_STREAM_ARGUMENTS *input_args, ID3D12Resource *buffer)
 {
-    D3D12VADecodeContext   *ctx          = D3D12VA_DECODE_CONTEXT(avctx);
-    AVHWFramesContext      *frames_ctx   = D3D12VA_FRAMES_CONTEXT(avctx);
-    AVD3D12VAFramesContext *frames_hwctx = frames_ctx->hwctx;
-
     const VP9SharedContext  *h       = avctx->priv_data;
     VP9DecodePictureContext *ctx_pic = h->frames[CUR_FRAME].hwaccel_picture_private;
 
-    uint8_t *mapped_data;
+    void *mapped_data;
     D3D12_VIDEO_DECODE_FRAME_ARGUMENT *args;
 
     if (FAILED(ID3D12Resource_Map(buffer, 0, NULL, &mapped_data))) {
@@ -130,19 +129,19 @@ static int d3d12va_vp9_end_frame(AVCodecContext *avctx)
                &ctx_pic->pp, sizeof(ctx_pic->pp), NULL, 0, update_input_arguments);
 }
 
-static int d3d12va_vp9_decode_init(AVCodecContext *avctx)
+static av_cold int d3d12va_vp9_decode_init(AVCodecContext *avctx)
 {
     D3D12VADecodeContext *ctx = D3D12VA_DECODE_CONTEXT(avctx);
     DXVA_PicParams_VP9 pp;
 
     switch (avctx->profile) {
-    case FF_PROFILE_VP9_2:
-    case FF_PROFILE_VP9_3:
+    case AV_PROFILE_VP9_2:
+    case AV_PROFILE_VP9_3:
         ctx->cfg.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_VP9_10BIT_PROFILE2;
         break;
 
-    case FF_PROFILE_VP9_0:
-    case FF_PROFILE_VP9_1:
+    case AV_PROFILE_VP9_0:
+    case AV_PROFILE_VP9_1:
     default:
         ctx->cfg.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_VP9;
         break;

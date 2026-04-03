@@ -11,7 +11,9 @@ option optimize_for = LITE_RUNTIME;
 // provides additional functionalities and abstracts the details of the wire
 // format. Access control for clients is defined in platform2/patchpanel/dbus.
 package patchpanel;
-option go_package = "chromiumos/system_api/patchpanel_proto";
+option go_package = "go.chromium.org/chromiumos/system_api/patchpanel_proto";
+
+import "traffic_annotation.proto";
 
 // Notification that the ARC++ container is starting up.
 // This is informational. The ARC boot and setup sequences do not require
@@ -49,11 +51,10 @@ message ArcVmStartupRequest {
 
 // Represents an IPv4 subnet given a base address and prefix length.
 message IPv4Subnet {
+  reserved 1;
+
   // The base address of the subnet, represented as 4 bytes in network order.
   bytes addr = 3;
-
-  // Deprecated, use addr instead. The base address in network order.
-  uint32 base_addr = 1 [deprecated = true];
 
   // The prefix length of the subnet.
   uint32 prefix_len = 2;
@@ -69,15 +70,20 @@ message IPAddrCIDR {
 }
 
 // Represents a virtual network device created and managed by patchpanel and
-// used for one of the hosted guest platforms.
+// used for one of the hosted network elements.
 message NetworkDevice {
-  // Identifies the guest for which the virtual device is used.
+  // Identifies the hosted network element for which the virtual device is used.
+  // Connected namespace is added as guest type to allow dns-proxy running on
+  // the root namespace to listen on the changes (b/363147822). The naming
+  // "guest" is used here because the field was originally only contained ARC
+  // and the VMs.
   enum GuestType {
     UNKNOWN = 0;
     ARC = 1;
     ARCVM = 2;
     TERMINA_VM = 3;
     PARALLELS_VM = 4;
+    CONNECTED_NS = 5;
   };
 
   // Identifies the technology of the underlying physical device of the virtual
@@ -725,6 +731,8 @@ enum DownstreamNetworkResult {
   INVALID_REQUEST = 7;
 }
 
+// Describes a network created by Patchpanel for a CreateTetheredNetwork or
+// CreateLocalOnlyNetwork request.
 message DownstreamNetwork {
   // Name of the network interface on which the downstream L3 network was
   // created.
@@ -739,6 +747,10 @@ message DownstreamNetwork {
   // network and the next hop address for remote clients connected to the
   // network. Empty if the upstream network does not have IPv4 connectivity.
   bytes ipv4_gateway_addr = 3;
+
+  // The unique network id assigned by patchpanel to the downstream network.
+  // TODO(b/322083502): Add a link/description to explain network_id.
+  int32 network_id = 4;
 }
 
 // Request to create a L3 logical network on a network interface and share
@@ -810,6 +822,10 @@ message TetheredNetworkRequest {
 message TetheredNetworkResponse {
   // Status of the request.
   DownstreamNetworkResult response_code = 1;
+
+  // Describes the network created by patchpanel for the CreateTetheredNetwork
+  // request.
+  DownstreamNetwork downstream_network = 2;
 }
 
 // Request to create an isolated L3 logical network on a network interface like
@@ -841,6 +857,10 @@ message LocalOnlyNetworkRequest {
 message LocalOnlyNetworkResponse {
   // Status of the request.
   DownstreamNetworkResult response_code = 1;
+
+  // Describes the network created by patchpanel for the CreateTetheredNetwork
+  // request.
+  DownstreamNetwork downstream_network = 2;
 }
 
 // GetDownstreamNetworkInfo request object to obtain the IP configuration of a
@@ -912,6 +932,9 @@ message ConfigureNetworkRequest {
 
   // The priority of the Network, calculated by shill Manager.
   NetworkPriority priority = 6;
+
+  // The session_id attached to this request. Only for logging purposes.
+  int32 session_id = 7;
 }
 
 // ConfigureNetwork response object.
@@ -947,6 +970,7 @@ message NetworkConfig {
 
   repeated IPAddrCIDR ipv6_addresses = 4;
   optional bytes ipv6_gateway = 5;
+  repeated IPAddrCIDR ipv6_delegated_prefixes = 15;
 
   bool ipv4_default_route = 6;
   bool ipv6_blackhole_route = 7;
@@ -954,6 +978,7 @@ message NetworkConfig {
   repeated IPAddrCIDR excluded_route_prefixes = 8;
   repeated IPAddrCIDR included_route_prefixes = 9;
   repeated Route rfc3442_routes = 10;
+  optional IPAddrCIDR pref64 = 16;
 
   repeated bytes dns_servers = 11;
   repeated string dns_search_domains = 12;
@@ -1114,6 +1139,9 @@ message TagSocketRequest {
   }
 
   VpnRoutingPolicy vpn_policy = 2;
+
+  // Semantic description of the traffic that will go through the socket.
+  optional traffic_annotation.TrafficAnnotation traffic_annotation = 3;
 }
 
 // Response to a TagSocketRequest. Note that on failure, patchpanel may leave

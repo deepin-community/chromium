@@ -5,19 +5,27 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_STYLE_INTRINSIC_LENGTH_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_STYLE_INTRINSIC_LENGTH_H_
 
+#include "base/types/strong_alias.h"
 #include "third_party/blink/renderer/platform/geometry/length.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
+// Style data for `contain-intrinsic-size`:
+//   `[ auto | from-element ]? [ none | <length [0,∞]> ]`.
+// https://drafts.csswg.org/css-sizing-4/#intrinsic-size-override
 class StyleIntrinsicLength {
   DISALLOW_NEW();
 
  public:
-  // Style data for contain-intrinsic-size:
-  //  none | <length> | auto && <length> | auto && none.
-  StyleIntrinsicLength(bool has_auto, const std::optional<Length>& length)
-      : has_auto_(has_auto), length_(length) {}
+  struct Options {
+    bool has_auto = false;
+  };
+
+  // Create data for `auto? [ none | <length [0,∞]> ]`.
+  explicit StyleIntrinsicLength(const std::optional<Length>& length,
+                                Options options = {.has_auto = false})
+      : has_auto_(options.has_auto), length_(length) {}
 
   StyleIntrinsicLength() = default;
 
@@ -34,8 +42,6 @@ class StyleIntrinsicLength {
   bool operator==(const StyleIntrinsicLength& o) const {
     return has_auto_ == o.has_auto_ && length_ == o.length_;
   }
-
-  bool operator!=(const StyleIntrinsicLength& o) const { return !(*this == o); }
 
  private:
   bool has_auto_ = false;

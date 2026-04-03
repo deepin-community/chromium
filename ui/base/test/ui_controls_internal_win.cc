@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ui/base/test/ui_controls_internal_win.h"
 
 #include <windows.h>
@@ -522,7 +527,7 @@ bool SendKeyPressReleaseImpl(HWND window,
 
 bool SendMouseMoveImpl(int screen_x, int screen_y, base::OnceClosure task) {
   gfx::Point screen_point =
-      display::win::ScreenWin::DIPToScreenPoint({screen_x, screen_y});
+      display::win::GetScreenWin()->DIPToScreenPoint({screen_x, screen_y});
 
   // Check if the mouse is already there.
   POINT current_pos;
@@ -535,7 +540,7 @@ bool SendMouseMoveImpl(int screen_x, int screen_y, base::OnceClosure task) {
   }
 
   if (!ui::SendMouseEvent(screen_point,
-                          MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE)) {
+                          MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK)) {
     return false;
   }
 
@@ -574,7 +579,6 @@ bool SendMouseEventsImpl(MouseButton type,
 
     default:
       NOTREACHED();
-      return false;
   }
 
   std::vector<INPUT> input;

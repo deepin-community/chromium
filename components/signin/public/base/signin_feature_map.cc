@@ -9,29 +9,53 @@
 #include "base/feature_list.h"
 #include "base/features.h"
 #include "base/no_destructor.h"
-#include "components/signin/public/android/jni_headers/SigninFeatureMap_jni.h"
 #include "components/signin/public/base/signin_switches.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/signin/public/android/jni_headers/SigninFeatureMap_jni.h"
 
 namespace signin {
 
 namespace {
 // Array of features exposed through the Java SigninFeatures API.
 const base::Feature* const kFeaturesExposedToJava[] = {
-    &switches::kSeedAccountsRevamp, &switches::kEnterprisePolicyOnSignin,
-    &switches::kRestoreSignedInAccountAndSettingsFromBackup,
-    &switches::kMinorModeRestrictionsForHistorySyncOptIn};
+    &switches::kCctSignInPrompt,
+    &switches::kEnableActivitylessSigninAllEntryPoint,
+    &switches::kEnableAddSessionRedirect,
+    &switches::kEnableSeamlessSignin,
+    &switches::kForceStartupSigninPromo,
+    &switches::kForceHistoryOptInScreen,
+    &switches::kSkipCheckForAccountManagementOnSignin,
+    &switches::kSyncEnableBookmarksInTransportMode,
+    &switches::kMigrateAccountManagerDelegate,
+    &switches::kFullscreenSignInPromoUseDate,
+    &switches::kSmartEmailLineBreaking,
+    &switches::kSupportWebSigninAddSession,
+    &switches::kSkipRefreshTokenCheckInIdentityManager,
+    &switches::kFRESignInAlternativeSecondaryButtonText,
+    &switches::kChromeAndroidIdentitySurveyFirstRun,
+    &switches::kChromeAndroidIdentitySurveyWeb,
+    &switches::kChromeAndroidIdentitySurveyNtpSigninButton,
+    &switches::kChromeAndroidIdentitySurveyNtpAccountAvatarTap,
+    &switches::kChromeAndroidIdentitySurveyNtpPromo,
+    &switches::kChromeAndroidIdentitySurveyBookmarkPromo,
+    &switches::kSigninLevelUpButton,
+    &switches::kSigninManagerSeedingFix,
+};
 
 // static
 base::android::FeatureMap* GetFeatureMap() {
-  static base::NoDestructor<base::android::FeatureMap> kFeatureMap(std::vector(
-      std::begin(kFeaturesExposedToJava), std::end(kFeaturesExposedToJava)));
+  static base::NoDestructor<base::android::FeatureMap> kFeatureMap(
+      kFeaturesExposedToJava);
   return kFeatureMap.get();
 }
 
 }  // namespace
 
-static jlong JNI_SigninFeatureMap_GetNativeMap(JNIEnv* env) {
-  return reinterpret_cast<jlong>(GetFeatureMap());
+static int64_t JNI_SigninFeatureMap_GetNativeMap(JNIEnv* env) {
+  return reinterpret_cast<int64_t>(GetFeatureMap());
 }
 
 }  // namespace signin
+
+DEFINE_JNI(SigninFeatureMap)

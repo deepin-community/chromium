@@ -13,11 +13,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <algorithm>
+#include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
-#include "absl/types/optional.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
 #include "tensorflow/compiler/tf2xla/kernels/gather_op_helpers.h"
 #include "tensorflow/compiler/tf2xla/mlir_xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/shape_util.h"
@@ -26,20 +28,22 @@ limitations under the License.
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/lib/slicing.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/lib/slicing.h"
+#include "xla/hlo/builder/xla_builder.h"
 #include "xla/status_macros.h"
+#include "xla/xla_data.pb.h"
 #include "tensorflow/core/framework/kernel_def_builder.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/core/errors.h"
 
 namespace tensorflow {
 
-Status XlaGather(const xla::XlaOp& input, const TensorShape& input_shape,
-                 const xla::XlaOp& indices, const TensorShape& indices_shape,
-                 int64_t axis, bool indices_are_nd, DataType dtype,
-                 DataType index_type, xla::XlaBuilder* builder,
-                 xla::XlaOp* gather_output) {
+absl::Status XlaGather(const xla::XlaOp& input, const TensorShape& input_shape,
+                       const xla::XlaOp& indices,
+                       const TensorShape& indices_shape, int64_t axis,
+                       bool indices_are_nd, DataType dtype, DataType index_type,
+                       xla::XlaBuilder* builder, xla::XlaOp* gather_output) {
   // There is no deep reason why we need this precondition, but this is the only
   // combination that is used and tested today.
   CHECK(!indices_are_nd || axis == 0);
@@ -91,9 +95,14 @@ Status XlaGather(const xla::XlaOp& input, const TensorShape& input_shape,
 
   for (int64_t i = 0; i < num_index_dims; ++i) {
     if (input_shape.dim_size(axis + i) == 0) {
-      return errors::InvalidArgument("Gather dimension ", axis + i,
-                                     " is of size zero in tensor with shape ",
-                                     input_shape.DebugString());
+      // Gather dimension of size zero in tensor results in constant 0.
+      // This is done to match the legacy behavior of the MLIR legalization and
+      // avoid breaking existing models.
+      auto slice_sizes = input_shape.dim_sizes();
+      slice_sizes.erase(slice_sizes.begin() + axis);
+      *gather_output =
+          xla::Broadcast(XlaHelpers::Zero(builder, dtype), slice_sizes);
+      return absl::OkStatus();
     }
   }
 
@@ -155,10 +164,11 @@ Status XlaGather(const xla::XlaOp& input, const TensorShape& input_shape,
   return absl::OkStatus();
 }
 
-Status XlaGatherWithBatchDimsOpImpl(XlaOpKernelContext* context,
-                                    const xla::XlaOp input,
-                                    const TensorShape& input_shape,
-                                    int batch_dims, xla::XlaOp* gather_output) {
+absl::Status XlaGatherWithBatchDimsOpImpl(XlaOpKernelContext* context,
+                                          const xla::XlaOp input,
+                                          const TensorShape& input_shape,
+                                          int batch_dims,
+                                          xla::XlaOp* gather_output) {
   auto indices = context->Input(1);
   auto indices_shape = context->InputShape(1);
 
@@ -266,7 +276,7 @@ class GatherOp : public XlaOpKernel {
 
   // The number of batch dimensions, as passed in the batch_dims attribute.
   // It must be less than or equal to rank(indices).
-  int32 batch_dims_ = 0;
+  int32_t batch_dims_ = 0;
 };
 
 REGISTER_XLA_OP(Name("Gather"), MlirXlaOpKernel);
@@ -274,7 +284,12 @@ REGISTER_XLA_OP(Name("GatherV2").CompileTimeConstantInput("axis"), GatherOp);
 
 class GatherNdOp : public XlaOpKernel {
  public:
-  explicit GatherNdOp(OpKernelConstruction* context) : XlaOpKernel(context) {}
+  explicit GatherNdOp(OpKernelConstruction* context) : XlaOpKernel(context) {
+    if (context->HasAttr("bad_indices_policy")) {
+      OP_REQUIRES_OK(context, context->GetAttr("bad_indices_policy",
+                                               &bad_indices_policy_));
+    }
+  }
 
   void Compile(XlaOpKernelContext* context) override {
     DataType params_type = context->input_type(0);
@@ -303,8 +318,60 @@ class GatherNdOp : public XlaOpKernel {
                                       indices_shape, /*axis=*/0,
                                       /*indices_are_nd=*/true, params_type,
                                       indices_type, builder, &gather));
+    // By default, XLA clips OOB indices, while "IGNORE" policy demands to fill
+    // 0s to the output. The following code implements the "IGNORE" policy by
+    // masking the gather result with the valid indices mask.
+    if (bad_indices_policy_ == "IGNORE") {
+      xla::XlaOp valid_mask;
+      for (int i = 0; i < num_index_dims; ++i) {
+        xla::XlaOp i_limit = XlaHelpers::IntegerLiteral(
+            builder, indices_type, params_shape.dim_size(i));
+        xla::XlaOp i_zero = XlaHelpers::Zero(builder, indices_type);
+        xla::XlaOp indices_i =
+            xla::SliceInDim(indices, i, i + 1, 1, indices_shape.dims() - 1);
+
+        xla::XlaOp indices_i_good =
+            xla::And(xla::Ge(indices_i, i_zero), xla::Lt(indices_i, i_limit));
+        if (i == 0) {
+          valid_mask = indices_i_good;
+        } else {
+          valid_mask = xla::And(valid_mask, indices_i_good);
+        }
+      }
+      auto gather_shape_status = builder->GetShape(gather);
+      OP_REQUIRES_OK(context, gather_shape_status.status());
+      auto gather_shape = gather_shape_status.value();
+
+      // The last dim of indices tensor is the index vector dimension, which is
+      // omitted from the gather tensor.
+      auto valid_mask_dims = indices_shape.dim_sizes();
+      valid_mask_dims.pop_back();
+      valid_mask = xla::Reshape(valid_mask, valid_mask_dims);
+      if (indices_shape.dims() != gather_shape.dimensions().size()) {
+        OP_REQUIRES(
+            context,
+            gather_shape.dimensions().size() == indices_shape.dims() - 1,
+            errors::InvalidArgument(
+                "Indices rank must be equal to output rank (with channel "
+                "dimension) or 1 less (w/o channel dimension)"));
+      } else {
+        std::vector<int64_t> broadcast_dims(valid_mask_dims.size(), 1);
+        for (int i = 0; i < broadcast_dims.size(); ++i) {
+          broadcast_dims[i] = i;
+        }
+        valid_mask = xla::BroadcastInDim(valid_mask, gather_shape.dimensions(),
+                                         broadcast_dims);
+      }
+
+      gather =
+          xla::Select(valid_mask, gather,
+                      xla::Broadcast(XlaHelpers::Zero(builder, params_type),
+                                     gather_shape.dimensions()));
+    }
     context->SetOutput(0, gather);
   }
+
+  std::string bad_indices_policy_;
 };
 
 REGISTER_XLA_OP(Name("GatherNd"), GatherNdOp);

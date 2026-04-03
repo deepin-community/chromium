@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/app_list/app_list_controller_impl.h"
 #include "ash/app_list/app_list_model_provider.h"
 #include "ash/app_list/views/app_list_item_view.h"
 #include "ash/app_list/views/apps_grid_view.h"
@@ -14,12 +15,15 @@
 #include "ash/public/cpp/test/shell_test_api.h"
 #include "ash/shell.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/strings/safe_sprintf.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "build/build_config.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/app_list/app_list_client_impl.h"
@@ -28,18 +32,19 @@
 #include "chrome/browser/ash/app_list/test/chrome_app_list_test_support.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
-#include "chrome/browser/ash/login/ui/user_adding_screen.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/ash/login/user_adding_screen.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/services/app_service/public/cpp/icon_loader.h"
 #include "content/public/test/browser_test.h"
+#include "skia/ext/codec_utils.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkData.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
-#include "third_party/skia/include/encode/SkPngEncoder.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/test/layer_animation_stopped_waiter.h"
 #include "ui/compositor/test/test_utils.h"
@@ -124,7 +129,9 @@ class FakeIconLoader : public apps::IconLoader {
 
 class AppListSortBrowserTest : public extensions::ExtensionBrowserTest {
  public:
-  AppListSortBrowserTest() = default;
+  AppListSortBrowserTest() {
+    ash::AppListControllerImpl::SetSunfishNudgeDisabledForTest(true);
+  }
   AppListSortBrowserTest(const AppListSortBrowserTest&) = delete;
   AppListSortBrowserTest& operator=(const AppListSortBrowserTest&) = delete;
   ~AppListSortBrowserTest() override = default;
@@ -982,7 +989,7 @@ IN_PROC_BROWSER_TEST_F(AppListSortBrowserTest,
 
 // Verify that switching to clamshell mode when the fade out animation in tablet
 // mode is running works as expected.
-// TODO(crbug.com/1302924): Flaky.
+// TODO(crbug.com/40217187): Flaky.
 IN_PROC_BROWSER_TEST_F(
     AppListSortBrowserTest,
     DISABLED_TransitionToClamshellModeDuringFadeOutAnimation) {
@@ -1456,8 +1463,10 @@ class AppListSortColorOrderBrowserTest : public AppListSortBrowserTest {
         icon_size / 2, icon_color, icon);
     const sk_sp<SkImage> image = SkImages::RasterFromBitmap(*icon.bitmap());
     const sk_sp<SkData> png_data =
-        SkPngEncoder::Encode(nullptr, image.get(), {});
-    icon_file.Write(0, (const char*)png_data->data(), png_data->size());
+        skia::EncodePngAsSkData(nullptr, image.get());
+    // SAFETY: png_data->bytes() points to a buffer of size png_data->size().
+    icon_file.Write(0, base::as_bytes(UNSAFE_BUFFERS(
+                           base::span(png_data->bytes(), png_data->size()))));
     icon_file.Close();
 
     // Prepare the app manifest file.
@@ -1472,9 +1481,10 @@ class AppListSortColorOrderBrowserTest : public AppListSortBrowserTest {
     base::strings::SafeSPrintf(json_buffer, icon_json, icon_size,
                                icon_file_name);
     char manifest_buffer[300];
-    int count = base::strings::SafeSPrintf(manifest_buffer, kManifestData,
-                                           app_name.c_str(), json_buffer);
-    EXPECT_EQ(count, manifest_file.Write(0, manifest_buffer, count));
+    size_t count = base::strings::SafeSPrintf(manifest_buffer, kManifestData,
+                                              app_name.c_str(), json_buffer);
+    EXPECT_TRUE(manifest_file.WriteAndCheck(
+        0, base::as_byte_span(manifest_buffer).first(count)));
     manifest_file.Close();
 
     return extension_path;
@@ -1556,7 +1566,15 @@ IN_PROC_BROWSER_TEST_P(AppListSortLoginTest,
 
 // Verifies that the app list sort discovery duration after the education nudge
 // shows is recorded as expected.
-IN_PROC_BROWSER_TEST_P(AppListSortLoginTest, VerifySortAfterNudgeShowMetric) {
+// TODO(crbug.com/328928228): Re-enable this test
+#if BUILDFLAG(IS_CHROMEOS) && defined(MEMORY_SANITIZER)
+#define MAYBE_VerifySortAfterNudgeShowMetric \
+  DISABLED_VerifySortAfterNudgeShowMetric
+#else
+#define MAYBE_VerifySortAfterNudgeShowMetric VerifySortAfterNudgeShowMetric
+#endif
+IN_PROC_BROWSER_TEST_P(AppListSortLoginTest,
+                       MAYBE_VerifySortAfterNudgeShowMetric) {
   LoginUser(account_id1_);
 
   ash::AcceleratorController::Get()->PerformActionIfEnabled(
@@ -1612,7 +1630,7 @@ class AppListSortLoginTalbetTest : public ash::LoginManagerTest {
   ash::LoginManagerMixin login_mixin_{&mixin_host_};
 };
 
-// TODO(https://crbug.com/1411204): Flaky test.
+// TODO(crbug.com/40890115): Flaky test.
 IN_PROC_BROWSER_TEST_F(AppListSortLoginTalbetTest,
                        DISABLED_PRE_SwitchUnderTemporarySort) {
   LoginUser(account_id1_);
@@ -1637,7 +1655,7 @@ IN_PROC_BROWSER_TEST_F(AppListSortLoginTalbetTest,
 // Verifies that the active account switch works as expected when the app list
 // is under temporary sort.
 //
-// TODO(https://crbug.com/1411204): Flaky test.
+// TODO(crbug.com/40890115): Flaky test.
 IN_PROC_BROWSER_TEST_F(AppListSortLoginTalbetTest,
                        DISABLED_SwitchUnderTemporarySort) {
   LoginUser(account_id1_);

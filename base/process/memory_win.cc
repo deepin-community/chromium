@@ -4,11 +4,11 @@
 
 #include "base/process/memory.h"
 
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_buildflags.h"
+#include "partition_alloc/buildflags.h"
 
-#if BUILDFLAG(USE_ALLOCATOR_SHIM)
-#include "base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim.h"
-#endif  // BUILDFLAG(USE_ALLOCATOR_SHIM)
+#if PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
+#include "partition_alloc/shim/allocator_shim.h"
+#endif  // PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
 
 #include <windows.h>  // Must be in front of other Windows header files.
 
@@ -24,10 +24,10 @@ namespace {
 // Return a non-0 value to retry the allocation.
 int ReleaseReservationOrTerminate(size_t size) {
   constexpr int kRetryAllocation = 1;
-  if (internal::ReleaseAddressSpaceReservation())
+  if (internal::ReleaseAddressSpaceReservation()) {
     return kRetryAllocation;
+  }
   TerminateBecauseOutOfMemory(size);
-  return 0;
 }
 
 }  // namespace
@@ -43,24 +43,53 @@ void EnableTerminationOnOutOfMemory() {
   _set_new_mode(kCallNewHandlerOnAllocationFailure);
 }
 
+bool UncheckedCalloc(size_t num_items, size_t size, void** result) {
+#if PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
+  *result = allocator_shim::UncheckedCalloc(num_items, size);
+#else
+  *result = calloc(num_items, size);
+#endif  // PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
+  return *result != nullptr;
+}
+
 bool UncheckedMalloc(size_t size, void** result) {
-#if BUILDFLAG(USE_ALLOCATOR_SHIM)
+#if PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
   *result = allocator_shim::UncheckedAlloc(size);
 #else
   // malloc_unchecked is required to implement UncheckedMalloc properly.
   // It's provided by allocator_shim_win.cc but since that's not always present,
   // In the case, use regular malloc instead.
   *result = malloc(size);
-#endif  // BUILDFLAG(USE_ALLOCATOR_SHIM)
+#endif  // PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
   return *result != NULL;
 }
 
 void UncheckedFree(void* ptr) {
-#if BUILDFLAG(USE_ALLOCATOR_SHIM)
+#if PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
   allocator_shim::UncheckedFree(ptr);
 #else
   free(ptr);
-#endif  // BUILDFLAG(USE_ALLOCATOR_SHIM)
+#endif  // PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
+}
+
+bool UncheckedAlignedAlloc(size_t size, size_t alignment, void** result) {
+#if PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
+  // Reach PartitionAlloc's allocator_shim::internal::AlignedAllocUnchecked by
+  // way of the shims when available.
+  *result = allocator_shim::UncheckedAlignedAlloc(size, alignment);
+#else
+  // Fall-back to the UCRT's _aligned_malloc otherwise.
+  *result = _aligned_malloc(size, alignment);
+#endif  // PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
+  return *result != NULL;
+}
+
+void UncheckedAlignedFree(void* ptr) {
+#if PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
+  allocator_shim::UncheckedAlignedFree(ptr);
+#else
+  _aligned_free(ptr);
+#endif  // PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
 }
 
 }  // namespace base

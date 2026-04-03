@@ -17,6 +17,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <string>
@@ -33,7 +34,6 @@ namespace fuzztest::internal {
 namespace {
 
 struct OutputVisitor {
-  size_t index;
   int indent;
   std::string& out;
 
@@ -61,13 +61,12 @@ struct OutputVisitor {
 
   void operator()(const std::vector<IRObject>& value) const {
     for (const auto& sub : value) {
-      const bool sub_is_scalar =
-          !std::holds_alternative<std::vector<IRObject>>(sub.value);
+      const bool has_subs = sub.HasSubs();
       absl::StrAppendFormat(&out, "%*ssub {%s", indent, "",
-                            sub_is_scalar ? " " : "\n");
-      std::visit(OutputVisitor{sub.value.index(), indent + 2, out}, sub.value);
-      absl::StrAppendFormat(&out, "%*s}\n", sub_is_scalar ? 0 : indent,
-                            sub_is_scalar ? " " : "");
+                            has_subs ? "\n" : " ");
+      sub.visit(OutputVisitor{indent + 2, out});
+      absl::StrAppendFormat(&out, "%*s}\n", has_subs ? indent : 0,
+                            has_subs ? "" : " ");
     }
   }
 };
@@ -130,7 +129,10 @@ bool ReadScalar(std::string& out, absl::string_view value) {
   return true;
 }
 
-bool ParseImpl(IRObject& obj, absl::string_view& str) {
+constexpr int kMaxParseRecursionDepth = 128;
+
+bool ParseImpl(IRObject& obj, absl::string_view& str, int recursion_depth) {
+  if (recursion_depth > kMaxParseRecursionDepth) return false;
   absl::string_view key = ReadToken(str);
   if (key.empty() || key == "}") {
     // The object is empty. Put the token back and return.
@@ -139,10 +141,10 @@ bool ParseImpl(IRObject& obj, absl::string_view& str) {
   }
 
   if (key == "sub") {
-    auto& v = obj.value.emplace<std::vector<IRObject>>();
+    auto& v = obj.MutableSubs();
     do {
       if (ReadToken(str) != "{") return false;
-      if (!ParseImpl(v.emplace_back(), str)) return false;
+      if (!ParseImpl(v.emplace_back(), str, recursion_depth + 1)) return false;
       if (ReadToken(str) != "}") return false;
       key = ReadToken(str);
     } while (key == "sub");
@@ -153,13 +155,12 @@ bool ParseImpl(IRObject& obj, absl::string_view& str) {
   } else {
     if (ReadToken(str) != ":") return false;
     auto value = ReadToken(str);
-    auto& v = obj.value;
     if (key == "i") {
-      return ReadScalar(v.emplace<uint64_t>(), value);
+      return ReadScalar(obj.MutableScalar<uint64_t>(), value);
     } else if (key == "d") {
-      return ReadScalar(v.emplace<double>(), value);
+      return ReadScalar(obj.MutableScalar<double>(), value);
     } else if (key == "s") {
-      return ReadScalar(v.emplace<std::string>(), value);
+      return ReadScalar(obj.MutableScalar<std::string>(), value);
     } else {
       // Unrecognized key
       return false;
@@ -167,19 +168,176 @@ bool ParseImpl(IRObject& obj, absl::string_view& str) {
   }
 }
 
+// NOTE: Binary format assumes the same endianness between producers and
+// consumers - we assume little-endianness for now.
+
+enum class BinaryFormatHeader : char {
+  kEmpty = 0,
+  kUInt64,
+  kDouble,
+  kString,
+  kObject,
+};
+
+struct BinaryOutputVisitor {
+  char* buf;
+  size_t& offset;
+
+  void operator()(std::monostate) const {
+    if (buf) {
+      buf[offset] = static_cast<char>(BinaryFormatHeader::kEmpty);
+    }
+    offset += 1;
+  }
+
+  void operator()(uint64_t value) const {
+    if (buf) {
+      buf[offset] = static_cast<char>(BinaryFormatHeader::kUInt64);
+      std::memcpy(buf + offset + 1, &value, sizeof(value));
+    }
+    offset += 1 + sizeof(value);
+  }
+
+  void operator()(double value) const {
+    if (buf) {
+      buf[offset] = static_cast<char>(BinaryFormatHeader::kDouble);
+      std::memcpy(buf + offset + 1, &value, sizeof(value));
+    }
+    offset += 1 + sizeof(value);
+  }
+
+  void operator()(const std::string& value) const {
+    const uint64_t size = value.size();
+    if (buf) {
+      buf[offset] = static_cast<char>(BinaryFormatHeader::kString);
+      std::memcpy(buf + offset + 1, &size, sizeof(size));
+      std::memcpy(buf + offset + 1 + sizeof(size), value.data(), size);
+    }
+    offset += 1 + sizeof(size) + size;
+  }
+
+  void operator()(const std::vector<IRObject>& value) const {
+    const uint64_t size = value.size();
+    if (buf) {
+      buf[offset] = static_cast<char>(BinaryFormatHeader::kObject);
+      std::memcpy(buf + offset + 1, &size, sizeof(size));
+    }
+    offset += 1 + sizeof(size);
+    for (const auto& sub : value) {
+      sub.visit(BinaryOutputVisitor{buf, offset});
+    }
+  }
+};
+
+constexpr absl::string_view kBinaryHeader = "FUZZTESTv1b";
+
+struct BinaryParseBuf {
+  const char* str;
+  size_t size;
+
+  inline bool empty() const { return size == 0; }
+  inline void Advance(size_t s) {
+    if (s > size) s = size;
+    str += s;
+    size -= s;
+  }
+};
+
+bool BinaryParse(IRObject& obj, BinaryParseBuf& buf, int recursion_depth) {
+  if (recursion_depth > kMaxParseRecursionDepth) return false;
+  if (buf.empty()) return false;
+  const auto h = static_cast<BinaryFormatHeader>(buf.str[0]);
+  buf.Advance(1);
+  switch (h) {
+    case BinaryFormatHeader::kEmpty: {
+      return true;
+    }
+    case BinaryFormatHeader::kUInt64: {
+      if (buf.size < sizeof(uint64_t)) return false;
+      auto& t = obj.MutableScalar<uint64_t>();
+      std::memcpy(&t, buf.str, sizeof(uint64_t));
+      buf.Advance(sizeof(uint64_t));
+      return true;
+    }
+    case BinaryFormatHeader::kDouble: {
+      if (buf.size < sizeof(double)) return false;
+      auto& t = obj.MutableScalar<double>();
+      std::memcpy(&t, buf.str, sizeof(t));
+      buf.Advance(sizeof(double));
+      return true;
+    }
+    case BinaryFormatHeader::kString: {
+      if (buf.size < sizeof(uint64_t)) return false;
+      uint64_t str_size;
+      std::memcpy(&str_size, buf.str, sizeof(str_size));
+      buf.Advance(sizeof(uint64_t));
+      if (buf.size < str_size) return false;
+      obj.MutableScalar<std::string>() = {buf.str,
+                                          static_cast<size_t>(str_size)};
+      buf.Advance(str_size);
+      return true;
+    }
+    case BinaryFormatHeader::kObject: {
+      if (buf.size < sizeof(uint64_t)) return false;
+      uint64_t vec_size;
+      std::memcpy(&vec_size, buf.str, sizeof(vec_size));
+      buf.Advance(sizeof(vec_size));
+      // This could happen for malformed inputs.
+      if (vec_size > buf.size) return false;
+      auto& v = obj.MutableSubs();
+      v.reserve(vec_size);
+      for (uint64_t i = 0; i < vec_size; ++i) {
+        if (!BinaryParse(v.emplace_back(), buf, recursion_depth + 1))
+          return false;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsInBinaryFormat(absl::string_view str) {
+  // Not using absl::string_view or std::memcmp because they could be
+  // instrumented and using them could pollute coverage.
+  return str.size() >= kBinaryHeader.size() &&
+         __builtin_memcmp(str.data(), kBinaryHeader.data(),
+                          kBinaryHeader.size()) == 0;
+}
+
 }  // namespace
 
-std::string IRObject::ToString() const {
+std::string SerializeIRObject(const IRObject& obj, bool binary_format) {
+  if (binary_format) {
+    size_t offset = kBinaryHeader.size();
+    // Determine the output size before writing to the output to avoid
+    // reallocation.
+    obj.visit(BinaryOutputVisitor{/*buf=*/nullptr, offset});
+    std::string out;
+    out.resize(offset);
+    std::memcpy(out.data(), kBinaryHeader.data(), kBinaryHeader.size());
+    offset = kBinaryHeader.size();
+    obj.visit(BinaryOutputVisitor{out.data(), offset});
+    return out;
+  }
   std::string out = absl::StrCat(kHeader, "\n");
-  std::visit(OutputVisitor{value.index(), 0, out}, value);
+  obj.visit(OutputVisitor{0, out});
   return out;
 }
 
 // TODO(lszekeres): Return StatusOr<IRObject>.
-std::optional<IRObject> IRObject::FromString(absl::string_view str) {
+std::optional<IRObject> ParseIRObject(absl::string_view str) {
   IRObject object;
-  if (ReadToken(str) != kHeader) return std::nullopt;
-  if (!ParseImpl(object, str) || !ReadToken(str).empty()) return std::nullopt;
+  if (IsInBinaryFormat(str)) {
+    BinaryParseBuf buf = {str.data(), str.size()};
+    buf.Advance(kBinaryHeader.size());
+    if (!BinaryParse(object, buf, /*recursion_depth=*/0) || !buf.empty())
+      return std::nullopt;
+  } else {
+    if (ReadToken(str) != kHeader) return std::nullopt;
+    if (!ParseImpl(object, str, /*recursion_depth=*/0) ||
+        !ReadToken(str).empty())
+      return std::nullopt;
+  }
   return object;
 }
 

@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "ash/public/cpp/app_list/vector_icons/vector_icons.h"
 #include "ash/public/cpp/style/color_provider.h"
@@ -17,7 +18,6 @@
 #include "chrome/browser/ash/release_notes/release_notes_storage.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/web_applications/web_app_id_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "components/prefs/pref_service.h"
@@ -25,6 +25,7 @@
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "url/gurl.h"
@@ -32,24 +33,7 @@
 namespace app_list {
 namespace {
 
-constexpr char kHelpAppDiscoverResult[] = "help-app://discover";
 constexpr char kHelpAppUpdatesResult[] = "help-app://updates";
-
-// Decrements the times left to show the Discover Tab suggestion chip in
-// PrefService.
-void DecreaseTimesLeftToShowDiscoverTabSuggestionChip(Profile* profile) {
-  const int times_left_to_show = profile->GetPrefs()->GetInteger(
-      prefs::kDiscoverTabSuggestionChipTimesLeftToShow);
-  profile->GetPrefs()->SetInteger(
-      prefs::kDiscoverTabSuggestionChipTimesLeftToShow, times_left_to_show - 1);
-}
-
-// Sets the times left to show the Discover Tab suggestion chip to 0 in
-// PrefService.
-void StopShowingDiscoverTabSuggestionChip(Profile* profile) {
-  profile->GetPrefs()->SetInteger(
-      prefs::kDiscoverTabSuggestionChipTimesLeftToShow, 0);
-}
 
 }  // namespace
 
@@ -69,9 +53,7 @@ HelpAppZeroStateResult::HelpAppZeroStateResult(Profile* profile,
   SetResultType(ResultType::kZeroStateHelpApp);
   SetDisplayType(display_type);
   // Some chips have different metrics types.
-  if (id == kHelpAppDiscoverResult) {
-    SetMetricsType(ash::HELP_APP_DISCOVER);
-  } else if (id == kHelpAppUpdatesResult) {
+  if (id == kHelpAppUpdatesResult) {
     SetMetricsType(ash::HELP_APP_UPDATES);
   } else {
     SetMetricsType(ash::HELP_APP_DEFAULT);
@@ -83,19 +65,7 @@ HelpAppZeroStateResult::~HelpAppZeroStateResult() = default;
 
 void HelpAppZeroStateResult::Open(int event_flags) {
   // Note: event_flags is ignored, LaunchSWA doesn't need it.
-  if (id() == kHelpAppDiscoverResult) {
-    StopShowingDiscoverTabSuggestionChip(profile_);
-
-    // Launch discover tab suggestion chip.
-    ash::SystemAppLaunchParams params;
-    params.url = GURL("chrome://help-app/discover");
-    params.launch_source = apps::LaunchSource::kFromAppListRecommendation;
-    ash::LaunchSystemWebAppAsync(
-        profile_, ash::SystemWebAppType::HELP, params,
-        std::make_unique<apps::WindowInfo>(display::kDefaultDisplayId));
-    // NOTE: Launching the result may dismiss the app list, which may delete
-    // this result.
-  } else if (id() == kHelpAppUpdatesResult) {
+  if (id() == kHelpAppUpdatesResult) {
     // Launch release notes suggestion chip.
     base::RecordAction(
         base::UserMetricsAction("ReleaseNotes.SuggestionChipLaunched"));
@@ -140,8 +110,7 @@ void HelpAppZeroStateProvider::StartZeroState() {
     // NOTE: Color provider may not be set in unit tests.
     SkColor icon_color =
         color_provider
-            ? color_provider->GetContentLayerColor(
-                  ash::ColorProvider::ContentLayerType::kButtonIconColorPrimary)
+            ? color_provider->GetColor(cros_tokens::kColorPrimaryInverted)
             : gfx::kGoogleGrey900;
     gfx::ImageSkia icon = gfx::CreateVectorIcon(
         ash::kReleaseNotesChipIcon, app_list::kSystemIconDimension, icon_color);
@@ -160,7 +129,7 @@ ash::AppListSearchResultType HelpAppZeroStateProvider::ResultType() const {
 }
 
 void HelpAppZeroStateProvider::OnAppUpdate(const apps::AppUpdate& update) {
-  if (update.AppId() == web_app::kHelpAppId && update.ReadinessChanged() &&
+  if (update.AppId() == ash::kHelpAppId && update.ReadinessChanged() &&
       update.Readiness() == apps::Readiness::kReady) {
     LoadIcon();
   }
@@ -180,9 +149,7 @@ void HelpAppZeroStateProvider::OnImpression(
   }
 
   for (const auto& result : results) {
-    if (result.id == kHelpAppDiscoverResult) {
-      DecreaseTimesLeftToShowDiscoverTabSuggestionChip(profile_);
-    } else if (result.id == kHelpAppUpdatesResult) {
+    if (result.id == kHelpAppUpdatesResult) {
       ash::ReleaseNotesStorage(profile_)
           .DecreaseTimesLeftToShowSuggestionChip();
     }
@@ -198,7 +165,7 @@ void HelpAppZeroStateProvider::OnLoadIcon(apps::IconValuePtr icon_value) {
 void HelpAppZeroStateProvider::LoadIcon() {
   auto* proxy = apps::AppServiceProxyFactory::GetForProfile(profile_);
   proxy->LoadIcon(
-      web_app::kHelpAppId, apps::IconType::kStandard,
+      ash::kHelpAppId, apps::IconType::kStandard,
       ash::SharedAppListConfig::instance().suggestion_chip_icon_dimension(),
       /*allow_placeholder_icon=*/false,
       base::BindOnce(&HelpAppZeroStateProvider::OnLoadIcon,

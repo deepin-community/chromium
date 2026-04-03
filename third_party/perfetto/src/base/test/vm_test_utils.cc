@@ -27,7 +27,8 @@
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
 #include <vector>
 
-#include <Windows.h>
+#include <windows.h>
+
 #include <Psapi.h>
 #else  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
 #include <sys/mman.h>
@@ -96,7 +97,8 @@ bool IsMapped(void* start, size_t size) {
   ignore_result(page_size);
   return true;
 #else
-#if PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) || \
+    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD)
   using PageState = char;
   static constexpr PageState kIncoreMask = MINCORE_INCORE;
 #else

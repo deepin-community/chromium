@@ -13,6 +13,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 // See ../ops/image_ops.cc for details.
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+
+#include "absl/log/log.h"
 #define EIGEN_USE_THREADS
 
 #include "tensorflow/core/framework/op_kernel.h"
@@ -58,7 +63,6 @@ class DrawBoundingBoxesOp : public OpKernel {
   void Compute(OpKernelContext* context) override {
     const Tensor& images = context->input(0);
     const Tensor& boxes = context->input(1);
-    const int64_t depth = images.dim_size(3);
 
     OP_REQUIRES(context, images.dims() == 4,
                 errors::InvalidArgument("The rank of the images should be 4"));
@@ -68,6 +72,7 @@ class DrawBoundingBoxesOp : public OpKernel {
     OP_REQUIRES(context, images.dim_size(0) == boxes.dim_size(0),
                 errors::InvalidArgument("The batch sizes should be the same"));
 
+    const int64_t depth = images.dim_size(3);
     OP_REQUIRES(
         context, depth == 4 || depth == 1 || depth == 3,
         errors::InvalidArgument("Channel depth should be either 1 (GRY), "

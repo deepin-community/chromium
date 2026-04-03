@@ -4,8 +4,8 @@
 
 #include "chrome/browser/ash/extensions/extensions_permissions_tracker.h"
 
-#include "base/containers/contains.h"
-#include "chrome/browser/browser_process.h"
+#include "base/check_deref.h"
+#include "base/containers/fixed_flat_set.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -22,7 +22,8 @@ namespace {
 
 // Apps/extensions explicitly allowlisted for skipping warnings for MGS (Managed
 // guest sessions) users.
-const char* const kManagedGuestSessionAllowlist[] = {
+constexpr auto kManagedGuestSessionAllowlist = base::MakeFixedFlatSet<
+    std::string_view>({
     // Managed guest sessions in general:
     "cbkkbcmdlboombapidmoeolnmdacpkch",  // Chrome RDP
     "inomeogfingihgjfjlpeplalcfajhgai",  // Chrome Remote Desktop
@@ -35,7 +36,7 @@ const char* const kManagedGuestSessionAllowlist[] = {
     "cjanmonomjogheabiocdamfpknlpdehm",  // HP printer driver
     "ioofdkhojeeimmagbjbknkejkgbphdfl",  // RICOH Print for Chrome
     "pmnllmkmjilbojkpgplbdmckghmaocjh",  // Scan app by François Beaufort
-    "haeblkpifdemlfnkogkipmghfcbonief",  // Charismathics Smart Card Middleware
+    "haeblkpifdemlfnkogkipmghfcbonief",  // DriveLock Smart Card Middleware
     "mpnkhdpphjiihmlmkcamhpogecnnfffa",  // Service NSW Kiosk Utility
     "npilppbicblkkgjfnbmibmhhgjhobpll",  // QwickACCESS
     // TODO(isandrk): Only on the allowlist for the purpose of getting the soft
@@ -166,18 +167,20 @@ const char* const kManagedGuestSessionAllowlist[] = {
     "fhndealchbngfhdoncgcokameljahhog",  // Certificate Enrollment for Chrome OS
     "npeicpdbkakmehahjeeohfdhnlpdklia",  // WebRTC Network Limiter
     "hdkoikmfpncabbdniojdddokkomafcci",  // SSRS Reporting Fix for Chrome
-};
+});
 
 }  // namespace
 
 bool IsAllowlistedForManagedGuestSession(const std::string& extension_id) {
-  return base::Contains(kManagedGuestSessionAllowlist, extension_id);
+  return kManagedGuestSessionAllowlist.contains(extension_id);
 }
 
 ExtensionsPermissionsTracker::ExtensionsPermissionsTracker(
+    PrefService* local_state,
     ExtensionRegistry* registry,
     content::BrowserContext* browser_context)
-    : registry_(registry),
+    : local_state_(CHECK_DEREF(local_state)),
+      registry_(registry),
       pref_service_(Profile::FromBrowserContext(browser_context)->GetPrefs()) {
   observation_.Observe(registry_.get());
   pref_change_registrar_.Init(pref_service_);
@@ -195,7 +198,7 @@ ExtensionsPermissionsTracker::ExtensionsPermissionsTracker(
 ExtensionsPermissionsTracker::~ExtensionsPermissionsTracker() = default;
 
 void ExtensionsPermissionsTracker::OnForcedExtensionsPrefChanged() {
-  // TODO(crbug.com/1015378): handle pref_names::kExtensionManagement with
+  // TODO(crbug.com/40103683): handle pref_names::kExtensionManagement with
   // installation_mode: forced.
   const base::Value& value =
       pref_service_->GetValue(pref_names::kInstallForceList);
@@ -264,14 +267,14 @@ void ExtensionsPermissionsTracker::OnExtensionLoaded(
 }
 
 void ExtensionsPermissionsTracker::UpdateLocalState() {
-  bool any_unsafe = base::ranges::any_of(
+  bool any_unsafe = std::ranges::any_of(
       extension_safety_ratings_,
       [](const auto& key_value) { return !key_value.second; });
 
   DCHECK(pending_forced_extensions_.empty() || any_unsafe);
 
-  g_browser_process->local_state()->SetBoolean(
-      prefs::kManagedSessionUseFullLoginWarning, any_unsafe);
+  local_state_->SetBoolean(prefs::kManagedSessionUseFullLoginWarning,
+                           any_unsafe);
 }
 
 // static

@@ -8,6 +8,7 @@
 #include <optional>
 #include <utility>
 
+#include "base/containers/span_reader.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/numerics/checked_math.h"
@@ -51,8 +52,8 @@ enum StreamType {
   //  kStreamTypeEAC3WithSampleAES = 0xc2,
 };
 
-constexpr int64_t kSampleAESPrivateDataIndicatorAVC = 0x7a617663;
-constexpr int64_t kSampleAESPrivateDataIndicatorAAC = 0x61616364;
+constexpr uint32_t kSampleAESPrivateDataIndicatorAVC = 0x7a617663;
+constexpr uint32_t kSampleAESPrivateDataIndicatorAAC = 0x61616364;
 // TODO(dougsteed). Consider adding support for the following:
 // const int64_t kSampleAESPrivateDataIndicatorAC3 = 0x61633364;
 // const int64_t kSampleAESPrivateDataIndicatorEAC3 = 0x65633364;
@@ -138,13 +139,13 @@ class PidState {
  private:
   void ResetState();
 
-  int pid_;
+  uint32_t pid_;
   PidType pid_type_;
   std::unique_ptr<TsSection> section_parser_;
 
-  bool enable_;
+  bool enable_ = false;
 
-  int continuity_counter_;
+  std::optional<uint32_t> continuity_counter_;
 };
 
 PidState::PidState(int pid,
@@ -152,9 +153,7 @@ PidState::PidState(int pid,
                    std::unique_ptr<TsSection> section_parser)
     : pid_(pid),
       pid_type_(pid_type),
-      section_parser_(std::move(section_parser)),
-      enable_(false),
-      continuity_counter_(-1) {
+      section_parser_(std::move(section_parser)) {
   DCHECK(section_parser_);
 }
 
@@ -166,17 +165,16 @@ bool PidState::PushTsPacket(const TsPacket& ts_packet) {
   if (!enable_)
     return true;
 
-  int expected_continuity_counter = (continuity_counter_ + 1) % 16;
-  if (continuity_counter_ >= 0 &&
-      ts_packet.continuity_counter() != expected_continuity_counter) {
-    DVLOG(1) << "TS discontinuity detected for pid: " << pid_;
-    return false;
+  if (continuity_counter_) {
+    uint32_t expected_continuity_counter = (*continuity_counter_ + 1) % 16;
+    if (ts_packet.continuity_counter() != expected_continuity_counter) {
+      DVLOG(1) << "TS discontinuity detected for pid: " << pid_;
+      return false;
+    }
   }
 
-  bool status = section_parser_->Parse(
-      ts_packet.payload_unit_start_indicator(),
-      ts_packet.payload(),
-      ts_packet.payload_size());
+  bool status = section_parser_->Parse(ts_packet.payload_unit_start_indicator(),
+                                       ts_packet.payload());
 
   // At the minimum, when parsing failed, auto reset the section parser.
   // Components that use the StreamParser can take further action if needed.
@@ -211,7 +209,7 @@ bool PidState::IsEnabled() const {
 
 void PidState::ResetState() {
   section_parser_->Reset();
-  continuity_counter_ = -1;
+  continuity_counter_ = std::nullopt;
 }
 
 Mp2tStreamParser::BufferQueueWithConfig::BufferQueueWithConfig(
@@ -320,22 +318,22 @@ bool Mp2tStreamParser::GetGenerateTimestampsFlag() const {
   return false;
 }
 
-bool Mp2tStreamParser::AppendToParseBuffer(const uint8_t* buf, size_t size) {
-  DVLOG(1) << __func__ << " size=" << size;
+bool Mp2tStreamParser::AppendToParseBuffer(base::span<const uint8_t> buf) {
+  DVLOG(1) << __func__ << " size=" << buf.size();
 
   // Ensure that we are not still in the middle of iterating Parse calls for
   // previously appended data. May consider changing this to a DCHECK once
   // stabilized, though since impact of proceeding when this condition fails
   // could lead to memory corruption, preferring CHECK.
-  CHECK_EQ(uninspected_pending_bytes_, 0);
+  CHECK_EQ(uninspected_pending_bytes_, 0u);
 
   // Add the data to the parser state.
-  uninspected_pending_bytes_ = base::checked_cast<int>(size);
-  if (!ts_byte_queue_.Push(buf, uninspected_pending_bytes_)) {
-    DVLOG(2) << "AppendToParseBuffer(): Failed to push buf of size " << size;
+  if (!ts_byte_queue_.Push(buf)) {
+    DVLOG(2) << "AppendToParseBuffer(): Failed to push buf of size "
+             << buf.size();
     return false;
   }
-
+  uninspected_pending_bytes_ = base::checked_cast<int>(buf.size());
   return true;
 }
 
@@ -344,55 +342,44 @@ StreamParser::ParseStatus Mp2tStreamParser::Parse(
   DVLOG(1) << __func__;
   DCHECK_GE(max_pending_bytes_to_inspect, 0);
 
-  const uint8_t* ts_buffer = nullptr;
-  int queue_size = 0;
-  ts_byte_queue_.Peek(&ts_buffer, &queue_size);
+  auto queue_data = ts_byte_queue_.Data();
+  size_t queue_size = queue_data.size();
+  CHECK_GE(queue_size, uninspected_pending_bytes_);
 
   // First, determine the amount of bytes not yet popped, though already
   // inspected by previous call(s) to Parse().
-  int ts_buffer_size = queue_size - uninspected_pending_bytes_;
-  DCHECK_GE(ts_buffer_size, 0);
+  size_t ts_buffer_size = queue_size - uninspected_pending_bytes_;
 
   // Next, allow up to `max_pending_bytes_to_inspect` more of `queue_` contents
   // beyond those previously inspected to be involved in this Parse() call.
   int inspection_increment =
-      std::min(max_pending_bytes_to_inspect, uninspected_pending_bytes_);
+      std::min(base::checked_cast<size_t>(max_pending_bytes_to_inspect),
+               uninspected_pending_bytes_);
   ts_buffer_size += inspection_increment;
 
   // If successfully parsed, remember that we will have inspected this
   // incremental part of `ts_byte_queue_` contents. Note that parse failures are
   // fatal.
   uninspected_pending_bytes_ -= inspection_increment;
-  DCHECK_GE(uninspected_pending_bytes_, 0);
+  DCHECK_GE(uninspected_pending_bytes_, 0u);
 
-  int bytes_to_pop = 0;
-
-  while (true) {
-    if (ts_buffer_size < TsPacket::kPacketSize) {
-      break;
-    }
-
+  base::SpanReader reader(queue_data.first(ts_buffer_size));
+  while (reader.remaining() >= TsPacket::kPacketSize) {
     // Synchronization.
-    int skipped_bytes = TsPacket::Sync(ts_buffer, ts_buffer_size);
+    size_t skipped_bytes = TsPacket::Sync(reader.remaining_span());
     if (skipped_bytes > 0) {
       DVLOG(1) << "Packet not aligned on a TS syncword:"
                << " skipped_bytes=" << skipped_bytes;
-      CHECK_GE(ts_buffer_size, skipped_bytes);
-      ts_buffer_size -= skipped_bytes;
-      ts_buffer += skipped_bytes;
-      bytes_to_pop += skipped_bytes;
+      reader.Skip(skipped_bytes);
       continue;
     }
 
     // Parse the TS header, skipping 1 byte if the header is invalid.
-    std::unique_ptr<TsPacket> ts_packet(
-        TsPacket::Parse(ts_buffer, ts_buffer_size));
+    std::unique_ptr<TsPacket> ts_packet =
+        TsPacket::Parse(reader.remaining_span());
     if (!ts_packet) {
       DVLOG(1) << "Error: invalid TS packet";
-      CHECK_GE(ts_buffer_size, 1);
-      ts_buffer_size--;
-      ts_buffer++;
-      bytes_to_pop++;
+      reader.Skip(1u);
       continue;
     }
     DVLOG(LOG_LEVEL_TS)
@@ -431,9 +418,7 @@ StreamParser::ParseStatus Mp2tStreamParser::Parse(
     }
 
     // Go to the next packet.
-    ts_buffer_size -= TsPacket::kPacketSize;
-    ts_buffer += TsPacket::kPacketSize;
-    bytes_to_pop += TsPacket::kPacketSize;
+    reader.Skip(TsPacket::kPacketSize);
   }
 
   if (!FinishInitializationIfNeeded()) {
@@ -449,7 +434,7 @@ StreamParser::ParseStatus Mp2tStreamParser::Parse(
     return ParseStatus::kFailed;
   }
 
-  ts_byte_queue_.Pop(bytes_to_pop);
+  ts_byte_queue_.Pop(reader.num_read());
   if (uninspected_pending_bytes_ > 0) {
     return ParseStatus::kSuccessHasMoreData;
   }
@@ -576,7 +561,7 @@ void Mp2tStreamParser::RegisterPes(int pes_pid,
 
   // Ignore stream types not specified in the creation of the SourceBuffer.
   // See https://crbug.com/1169393.
-  // TODO(https://crbug.com/535738): Remove this hack when MSE stream/mime type
+  // TODO(crbug.com/41204005): Remove this hack when MSE stream/mime type
   // checks have been relaxed.
   if (allowed_stream_types_.has_value() &&
       !allowed_stream_types_->contains(stream_type)) {
@@ -771,12 +756,12 @@ std::unique_ptr<MediaTracks> GenerateMediaTrackInfo(
   // TODO(servolk): Implement proper sourcing of media track info as described
   // in crbug.com/590085
   if (audio_config.IsValidConfig()) {
-    media_tracks->AddAudioTrack(audio_config, kMp2tAudioTrackId,
+    media_tracks->AddAudioTrack(audio_config, true, kMp2tAudioTrackId,
                                 MediaTrack::Kind("main"), MediaTrack::Label(""),
                                 MediaTrack::Language(""));
   }
   if (video_config.IsValidConfig()) {
-    media_tracks->AddVideoTrack(video_config, kMp2tVideoTrackId,
+    media_tracks->AddVideoTrack(video_config, true, kMp2tVideoTrackId,
                                 MediaTrack::Kind("main"), MediaTrack::Label(""),
                                 MediaTrack::Language(""));
   }
@@ -829,15 +814,10 @@ void Mp2tStreamParser::OnEmitAudioBuffer(
   DCHECK_EQ(pes_pid, selected_audio_pid_);
 
   DVLOG(LOG_LEVEL_ES)
-      << "OnEmitAudioBuffer: "
-      << " size="
-      << stream_parser_buffer->data_size()
-      << " dts="
-      << stream_parser_buffer->GetDecodeTimestamp().InMilliseconds()
-      << " pts="
-      << stream_parser_buffer->timestamp().InMilliseconds()
-      << " dur="
-      << stream_parser_buffer->duration().InMilliseconds();
+      << "OnEmitAudioBuffer: " << " size=" << stream_parser_buffer->size()
+      << " dts=" << stream_parser_buffer->GetDecodeTimestamp().InMilliseconds()
+      << " pts=" << stream_parser_buffer->timestamp().InMilliseconds()
+      << " dur=" << stream_parser_buffer->duration().InMilliseconds();
 
   // Ignore the incoming buffer if it is not associated with any config.
   if (buffer_queue_chain_.empty()) {
@@ -854,22 +834,15 @@ void Mp2tStreamParser::OnEmitVideoBuffer(
   DCHECK_EQ(pes_pid, selected_video_pid_);
 
   DVLOG(LOG_LEVEL_ES)
-      << "OnEmitVideoBuffer"
-      << " size="
-      << stream_parser_buffer->data_size()
-      << " dts="
-      << stream_parser_buffer->GetDecodeTimestamp().InMilliseconds()
-      << " pts="
-      << stream_parser_buffer->timestamp().InMilliseconds()
-      << " dur="
-      << stream_parser_buffer->duration().InMilliseconds()
-      << " is_key_frame="
-      << stream_parser_buffer->is_key_frame();
+      << "OnEmitVideoBuffer" << " size=" << stream_parser_buffer->size()
+      << " dts=" << stream_parser_buffer->GetDecodeTimestamp().InMilliseconds()
+      << " pts=" << stream_parser_buffer->timestamp().InMilliseconds()
+      << " dur=" << stream_parser_buffer->duration().InMilliseconds()
+      << " is_key_frame=" << stream_parser_buffer->is_key_frame();
 
   // Ignore the incoming buffer if it is not associated with any config.
   if (buffer_queue_chain_.empty()) {
     NOTREACHED() << "Cannot provide buffers before configs";
-    return;
   }
 
   buffer_queue_chain_.back().video_queue.push_back(stream_parser_buffer);

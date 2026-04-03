@@ -9,6 +9,7 @@
 #include <tuple>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
@@ -67,7 +68,7 @@ const char* const kUnprivilegedConfigKeys[] = {kHostIdConfigPath,
                                                kDeprecatedXmppLoginConfigPath};
 
 // Reads and parses the configuration file up to |kMaxConfigFileSize| in size.
-bool ReadConfig(const base::FilePath& filename, base::Value::Dict& config_out) {
+bool ReadConfig(const base::FilePath& filename, base::DictValue& config_out) {
   // ReadConfig is called in cases where no config file is expected to be
   // present so check to see if a file exists before attempting to read and
   // parse it.
@@ -83,7 +84,7 @@ bool ReadConfig(const base::FilePath& filename, base::Value::Dict& config_out) {
     return false;
   }
 
-  std::optional<base::Value::Dict> config = HostConfigFromJson(file_content);
+  std::optional<base::DictValue> config = HostConfigFromJson(file_content);
   if (!config.has_value()) {
     LOG(ERROR) << "Config file: '" << filename.value() << "' is empty.";
     return false;
@@ -120,7 +121,7 @@ bool WriteConfigFileToTemp(const base::FilePath& filename,
       tempname.value().c_str(), GENERIC_WRITE, 0, &security_attributes,
       CREATE_ALWAYS, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
 
-  if (!file.IsValid()) {
+  if (!file.is_valid()) {
     PLOG(ERROR) << "Failed to create '" << filename.value() << "'";
     return false;
   }
@@ -151,7 +152,7 @@ bool MoveConfigFileFromTemp(const base::FilePath& filename) {
 }
 
 // Writes the configuration file up to |kMaxConfigFileSize| in size.
-bool WriteConfig(const base::Value::Dict& config) {
+bool WriteConfig(const base::DictValue& config) {
   std::string config_json = HostConfigToJson(config);
   if (config_json.length() > kMaxConfigFileSize) {
     LOG(ERROR) << "Config is larger than the max size: " << kMaxConfigFileSize;
@@ -191,7 +192,7 @@ bool WriteConfig(const base::Value::Dict& config) {
   }
 
   // Extract the unprivileged fields from the configuration.
-  base::Value::Dict unprivileged_config;
+  base::DictValue unprivileged_config;
   for (const char* key : kUnprivilegedConfigKeys) {
     if (const std::string* value = config.FindString(key)) {
       unprivileged_config.Set(key, *value);
@@ -232,7 +233,6 @@ DaemonController::State ConvertToDaemonState(DWORD service_state) {
 
     default:
       NOTREACHED();
-      return DaemonController::STATE_UNKNOWN;
   }
 }
 
@@ -241,14 +241,14 @@ ScopedScHandle OpenService(DWORD access) {
   ScopedScHandle scmanager(
       ::OpenSCManagerW(nullptr, SERVICES_ACTIVE_DATABASE,
                        SC_MANAGER_CONNECT | SC_MANAGER_ENUMERATE_SERVICE));
-  if (!scmanager.IsValid()) {
+  if (!scmanager.is_valid()) {
     PLOG(ERROR) << "Failed to connect to the service control manager";
     return ScopedScHandle();
   }
 
   ScopedScHandle service(
       ::OpenServiceW(scmanager.Get(), kWindowsServiceName, access));
-  if (!service.IsValid()) {
+  if (!service.is_valid()) {
     PLOG(ERROR) << "Failed to open to the '" << kWindowsServiceName
                 << "' service";
   }
@@ -267,7 +267,7 @@ bool StartDaemon() {
   DWORD access = SERVICE_CHANGE_CONFIG | SERVICE_QUERY_STATUS | SERVICE_START |
                  SERVICE_STOP;
   ScopedScHandle service = OpenService(access);
-  if (!service.IsValid()) {
+  if (!service.is_valid()) {
     return false;
   }
 
@@ -299,7 +299,7 @@ bool StopDaemon() {
   DWORD access = SERVICE_CHANGE_CONFIG | SERVICE_QUERY_STATUS | SERVICE_START |
                  SERVICE_STOP;
   ScopedScHandle service = OpenService(access);
-  if (!service.IsValid()) {
+  if (!service.is_valid()) {
     return false;
   }
 
@@ -337,7 +337,7 @@ DaemonController::State DaemonControllerDelegateWin::GetState() {
   // TODO(alexeypa): Make the thread alertable, so we can switch to APC
   // notifications rather than polling.
   ScopedScHandle service = OpenService(SERVICE_QUERY_STATUS);
-  if (!service.IsValid()) {
+  if (!service.is_valid()) {
     return DaemonController::STATE_UNKNOWN;
   }
 
@@ -351,11 +351,11 @@ DaemonController::State DaemonControllerDelegateWin::GetState() {
   return ConvertToDaemonState(status.dwCurrentState);
 }
 
-std::optional<base::Value::Dict> DaemonControllerDelegateWin::GetConfig() {
+std::optional<base::DictValue> DaemonControllerDelegateWin::GetConfig() {
   base::FilePath config_dir = remoting::GetConfigDir();
 
   // Read the unprivileged part of host configuration.
-  base::Value::Dict config;
+  base::DictValue config;
   if (!ReadConfig(config_dir.Append(kUnprivilegedConfigFileName), config)) {
     return std::nullopt;
   }
@@ -364,20 +364,19 @@ std::optional<base::Value::Dict> DaemonControllerDelegateWin::GetConfig() {
 }
 
 void DaemonControllerDelegateWin::UpdateConfig(
-    base::Value::Dict updated_config,
+    base::DictValue updated_config,
     DaemonController::CompletionCallback done) {
   // Check for bad keys.
-  for (size_t i = 0; i < std::size(kReadonlyKeys); ++i) {
-    if (updated_config.Find(kReadonlyKeys[i])) {
-      LOG(ERROR) << "Cannot update config: '" << kReadonlyKeys[i]
-                 << "' is read only.";
+  for (const char* key : kReadonlyKeys) {
+    if (updated_config.Find(key)) {
+      LOG(ERROR) << "Cannot update config: '" << key << "' is read only.";
       InvokeCompletionCallback(std::move(done), false);
       return;
     }
   }
   // Get the old config.
   base::FilePath config_dir = remoting::GetConfigDir();
-  base::Value::Dict config;
+  base::DictValue config;
   if (!ReadConfig(config_dir.Append(kConfigFileName), config)) {
     InvokeCompletionCallback(std::move(done), false);
     return;
@@ -426,7 +425,7 @@ void DaemonControllerDelegateWin::CheckPermission(
 }
 
 void DaemonControllerDelegateWin::SetConfigAndStart(
-    base::Value::Dict config,
+    base::DictValue config,
     bool consent,
     DaemonController::CompletionCallback done) {
   // Record the user's consent.

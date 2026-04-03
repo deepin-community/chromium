@@ -11,6 +11,11 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_observer.h"
+#include "chrome/browser/picture_in_picture/scoped_picture_in_picture_occlusion_observation.h"
 #include "chrome/browser/ui/views/payments/view_stack.h"
 #include "components/payments/content/initialization_task.h"
 #include "components/payments/content/payment_request_dialog.h"
@@ -18,6 +23,7 @@
 #include "components/payments/content/payment_request_state.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/throbber.h"
+#include "ui/views/widget/widget_observer.h"
 #include "ui/views/window/dialog_delegate.h"
 
 namespace autofill {
@@ -48,10 +54,25 @@ enum class BackNavigationType {
 class PaymentRequestDialogView : public views::DialogDelegateView,
                                  public PaymentRequestDialog,
                                  public PaymentRequestSpec::Observer,
-                                 public InitializationTask::Observer {
+                                 public InitializationTask::Observer,
+                                 public PictureInPictureOcclusionObserver,
+                                 public views::WidgetObserver {
   METADATA_HEADER(PaymentRequestDialogView, views::DialogDelegateView)
 
  public:
+  // The reason why the browser window size check failed.
+  enum class WindowSizeCheckRejectionReason {
+    // The check failed during the initial ShowDialog() call.
+    kRejectedAtShow = 0,
+    // The check failed when transitioning to a Payment Handler (which may
+    // require more space).
+    kRejectedAtPaymentHandlerTransition = 1,
+    // The check failed because the browser window was resized to be too small
+    // while the dialog was already open.
+    kRejectedAtResize = 2,
+    kMaxValue = kRejectedAtResize,
+  };
+
   class ObserverForTest {
    public:
     virtual void OnDialogOpened() = 0;
@@ -130,6 +151,11 @@ class PaymentRequestDialogView : public views::DialogDelegateView,
   // InitializationTask::Observer:
   void OnInitialized(InitializationTask* initialization_task) override;
 
+  // views::WidgetObserver:
+  void OnWidgetDestroying(views::Widget* widget) override;
+  void OnWidgetBoundsChanged(views::Widget* widget,
+                             const gfx::Rect& new_bounds) override;
+
   void Pay();
   void GoBack();
   void GoBackToPaymentSheet(bool animate = true);
@@ -197,11 +223,17 @@ class PaymentRequestDialogView : public views::DialogDelegateView,
   void SetupSpinnerOverlay();
   void OnDialogClosed();
   void ResizeDialogWindow();
+  void CheckIfDialogFitsInBrowserWindow();
+  bool DialogFitsInBrowserWindow() const;
 
   // views::View
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& /*available_size*/) const override;
   void ViewHierarchyChanged(
       const views::ViewHierarchyChangedDetails& details) override;
+
+  // PictureInPictureOcclusionObserver
+  void OnOcclusionStateChanged(bool occluded) override;
 
   // The PaymentRequest object that initiated this dialog.
   base::WeakPtr<PaymentRequest> request_;
@@ -229,6 +261,20 @@ class PaymentRequestDialogView : public views::DialogDelegateView,
   // Calculated based on the browser content size at the time of opening payment
   // handler window.
   int payment_handler_window_height_ = 0;
+
+  // We track the size of the containing browser window in order to detect cases
+  // where it becomes too small to contain the Payment Request/Handler dialog.
+  base::ScopedObservation<views::Widget, views::WidgetObserver>
+      browser_widget_observation_{this};
+
+  // State used to throttle checks for the browser window being too small, to
+  // avoid re-computing Payment Request/Handler dialog size constantly while the
+  // browser is being resized.
+  base::TimeTicks last_check_for_too_small_window_time_;
+  base::OneShotTimer check_for_too_small_window_timer_;
+  gfx::Size last_observed_browser_window_size_;
+
+  ScopedPictureInPictureOcclusionObservation occlusion_observation_{this};
 
   base::WeakPtrFactory<PaymentRequestDialogView> weak_ptr_factory_{this};
 };

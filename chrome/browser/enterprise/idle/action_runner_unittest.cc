@@ -15,7 +15,9 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/enterprise/idle/idle_pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/browsing_data_filter_builder.h"
 #include "content/public/browser/browsing_data_remover.h"
+#include "content/public/browser/storage_partition_config.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -71,15 +73,9 @@ class MockAction : public Action {
   }
 };
 
-// testing::InvokeArgument<N> does not work with base::OnceCallback, so we
-// define our own gMock action to run the 2nd argument.
-ACTION_P(RunContinuation, success) {
-  std::move(const_cast<Action::Continuation&>(arg1)).Run(success);
-}
-
 }  // namespace
 
-// TODO(crbug.com/1316551): Enable this when Android supports >1 Action.
+// TODO(crbug.com/40222234): Enable this when Android supports >1 Action.
 #if !BUILDFLAG(IS_ANDROID)
 // Tests that actions are run in sequence, in order of priority.
 TEST(IdleActionRunnerTest, RunsActionsInSequence) {
@@ -88,7 +84,7 @@ TEST(IdleActionRunnerTest, RunsActionsInSequence) {
   FakeActionFactory action_factory;
   ActionRunner runner(&profile, &action_factory);
 
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kCloseBrowsers));
   actions.Append(static_cast<int>(ActionType::kShowProfilePicker));
   profile.GetPrefs()->SetList(prefs::kIdleTimeoutActions, std::move(actions));
@@ -99,9 +95,9 @@ TEST(IdleActionRunnerTest, RunsActionsInSequence) {
       std::make_unique<MockAction>(ActionType::kShowProfilePicker);
   testing::InSequence in_sequence;
   EXPECT_CALL(*close_browsers, Run(&profile, _))
-      .WillOnce(RunContinuation(true));
+      .WillOnce(base::test::RunOnceCallback<1>(true));
   EXPECT_CALL(*show_profile_picker, Run(&profile, _))
-      .WillOnce(RunContinuation(true));
+      .WillOnce(base::test::RunOnceCallback<1>(true));
 
   action_factory.Associate(ActionType::kCloseBrowsers,
                            std::move(close_browsers));
@@ -118,7 +114,7 @@ TEST(IdleActionRunnerTest, PrefOrderDoesNotMatter) {
   FakeActionFactory action_factory;
   ActionRunner runner(&profile, &action_factory);
 
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kCloseBrowsers));
   actions.Append(static_cast<int>(ActionType::kShowProfilePicker));
   profile.GetPrefs()->SetList(prefs::kIdleTimeoutActions, std::move(actions));
@@ -129,9 +125,9 @@ TEST(IdleActionRunnerTest, PrefOrderDoesNotMatter) {
       std::make_unique<MockAction>(ActionType::kShowProfilePicker);
   testing::InSequence in_sequence;
   EXPECT_CALL(*close_browsers, Run(&profile, _))
-      .WillOnce(RunContinuation(true));
+      .WillOnce(base::test::RunOnceCallback<1>(true));
   EXPECT_CALL(*show_profile_picker, Run(&profile, _))
-      .WillOnce(RunContinuation(true));
+      .WillOnce(base::test::RunOnceCallback<1>(true));
 
   action_factory.Associate(ActionType::kCloseBrowsers,
                            std::move(close_browsers));
@@ -149,7 +145,7 @@ TEST(IdleActionRunnerTest, OtherActionsDontRunOnFailure) {
   FakeActionFactory action_factory;
   ActionRunner runner(&profile, &action_factory);
 
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kCloseBrowsers));
   actions.Append(static_cast<int>(ActionType::kShowProfilePicker));
   profile.GetPrefs()->SetList(prefs::kIdleTimeoutActions, std::move(actions));
@@ -162,7 +158,7 @@ TEST(IdleActionRunnerTest, OtherActionsDontRunOnFailure) {
   // "show_profile_picker" shouldn't run, because "close_browsers" fails.
   testing::InSequence in_sequence;
   EXPECT_CALL(*close_browsers, Run(&profile, _))
-      .WillOnce(RunContinuation(false));
+      .WillOnce(base::test::RunOnceCallback<1>(false));
   EXPECT_CALL(*show_profile_picker, Run(_, _)).Times(0);
 
   action_factory.Associate(ActionType::kCloseBrowsers,
@@ -196,7 +192,7 @@ TEST(IdleActionRunnerTest, DoNothingWithEmptyPref) {
   runner.Run();
 }
 
-// TODO(crbug.com/1316551): Enable this when Android supports >1 Action.
+// TODO(crbug.com/40222234): Enable this when Android supports >1 Action.
 #if !BUILDFLAG(IS_ANDROID)
 // Tests that ActionRunner only runs the actions configured via the
 // "IdleTimeoutActions" pref.
@@ -206,7 +202,7 @@ TEST(IdleActionRunnerTest, JustCloseBrowsers) {
   FakeActionFactory action_factory;
   ActionRunner runner(&profile, &action_factory);
 
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kCloseBrowsers));
   profile.GetPrefs()->SetList(prefs::kIdleTimeoutActions, std::move(actions));
 
@@ -216,7 +212,7 @@ TEST(IdleActionRunnerTest, JustCloseBrowsers) {
       std::make_unique<MockAction>(ActionType::kShowProfilePicker);
 
   EXPECT_CALL(*close_browsers, Run(&profile, _))
-      .WillOnce(RunContinuation(true));
+      .WillOnce(base::test::RunOnceCallback<1>(true));
   EXPECT_CALL(*show_profile_picker, Run(_, _)).Times(0);
 
   action_factory.Associate(ActionType::kCloseBrowsers,
@@ -234,7 +230,7 @@ TEST(IdleActionRunnerTest, JustShowProfilePicker) {
   FakeActionFactory action_factory;
   ActionRunner runner(&profile, &action_factory);
 
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kShowProfilePicker));
   profile.GetPrefs()->SetList(prefs::kIdleTimeoutActions, std::move(actions));
 
@@ -245,7 +241,7 @@ TEST(IdleActionRunnerTest, JustShowProfilePicker) {
 
   EXPECT_CALL(*close_browsers, Run(_, _)).Times(0);
   EXPECT_CALL(*show_profile_picker, Run(&profile, _))
-      .WillOnce(RunContinuation(true));
+      .WillOnce(base::test::RunOnceCallback<1>(true));
 
   action_factory.Associate(ActionType::kCloseBrowsers,
                            std::move(close_browsers));
@@ -270,7 +266,6 @@ class FakeBrowsingDataRemover : public BrowsingDataRemover {
       const url::Origin& origin,
       storage::SpecialStoragePolicy* special_storage_policy) override {
     NOTREACHED();
-    return true;
   }
   void Remove(const base::Time& delete_begin,
               const base::Time& delete_end,
@@ -321,10 +316,7 @@ class FakeBrowsingDataRemover : public BrowsingDataRemover {
           void(base::OnceClosure continue_to_completion)>& callback) override {
     NOTREACHED();
   }
-  const base::Time& GetLastUsedBeginTimeForTesting() override {
-    NOTREACHED();
-    return begin_time_;
-  }
+  const base::Time& GetLastUsedBeginTimeForTesting() override { NOTREACHED(); }
   uint64_t GetLastUsedRemovalMaskForTesting() override { return remove_mask_; }
   uint64_t GetLastUsedOriginTypeMaskForTesting() override {
     return origin_type_mask_;
@@ -369,7 +361,7 @@ class IdleActionRunnerClearDataTest : public ChromeViewsTestBase {
 TEST_F(IdleActionRunnerClearDataTest, ClearBrowsingHistory) {
   std::unique_ptr<base::HistogramTester> histogram_tester =
       std::make_unique<base::HistogramTester>();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kClearBrowsingHistory));
   profile()->GetPrefs()->SetList(prefs::kIdleTimeoutActions,
                                  std::move(actions));
@@ -387,7 +379,7 @@ TEST_F(IdleActionRunnerClearDataTest, ClearBrowsingHistory) {
 TEST_F(IdleActionRunnerClearDataTest, ClearDownloadHistory) {
   std::unique_ptr<base::HistogramTester> histogram_tester =
       std::make_unique<base::HistogramTester>();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kClearDownloadHistory));
   profile()->GetPrefs()->SetList(prefs::kIdleTimeoutActions,
                                  std::move(actions));
@@ -406,7 +398,7 @@ TEST_F(IdleActionRunnerClearDataTest, ClearDownloadHistory) {
 TEST_F(IdleActionRunnerClearDataTest, ClearCookies) {
   std::unique_ptr<base::HistogramTester> histogram_tester =
       std::make_unique<base::HistogramTester>();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kClearCookiesAndOtherSiteData));
   profile()->GetPrefs()->SetList(prefs::kIdleTimeoutActions,
                                  std::move(actions));
@@ -427,7 +419,7 @@ TEST_F(IdleActionRunnerClearDataTest, ClearCookies) {
 TEST_F(IdleActionRunnerClearDataTest, ClearCache) {
   std::unique_ptr<base::HistogramTester> histogram_tester =
       std::make_unique<base::HistogramTester>();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kClearCachedImagesAndFiles));
   profile()->GetPrefs()->SetList(prefs::kIdleTimeoutActions,
                                  std::move(actions));
@@ -446,7 +438,7 @@ TEST_F(IdleActionRunnerClearDataTest, ClearCache) {
 TEST_F(IdleActionRunnerClearDataTest, ClearPasswordSignin) {
   std::unique_ptr<base::HistogramTester> histogram_tester =
       std::make_unique<base::HistogramTester>();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kClearPasswordSignin));
   profile()->GetPrefs()->SetList(prefs::kIdleTimeoutActions,
                                  std::move(actions));
@@ -465,7 +457,7 @@ TEST_F(IdleActionRunnerClearDataTest, ClearPasswordSignin) {
 TEST_F(IdleActionRunnerClearDataTest, ClearAutofill) {
   std::unique_ptr<base::HistogramTester> histogram_tester =
       std::make_unique<base::HistogramTester>();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kClearAutofill));
   profile()->GetPrefs()->SetList(prefs::kIdleTimeoutActions,
                                  std::move(actions));
@@ -484,7 +476,7 @@ TEST_F(IdleActionRunnerClearDataTest, ClearAutofill) {
 TEST_F(IdleActionRunnerClearDataTest, ClearSiteSettings) {
   std::unique_ptr<base::HistogramTester> histogram_tester =
       std::make_unique<base::HistogramTester>();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kClearSiteSettings));
   profile()->GetPrefs()->SetList(prefs::kIdleTimeoutActions,
                                  std::move(actions));
@@ -503,7 +495,7 @@ TEST_F(IdleActionRunnerClearDataTest, ClearSiteSettings) {
 TEST_F(IdleActionRunnerClearDataTest, ClearHostedAppData) {
   std::unique_ptr<base::HistogramTester> histogram_tester =
       std::make_unique<base::HistogramTester>();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kClearHostedAppData));
   profile()->GetPrefs()->SetList(prefs::kIdleTimeoutActions,
                                  std::move(actions));
@@ -524,7 +516,7 @@ TEST_F(IdleActionRunnerClearDataTest, ClearHostedAppData) {
 TEST_F(IdleActionRunnerClearDataTest, MultipleTypes) {
   std::unique_ptr<base::HistogramTester> histogram_tester =
       std::make_unique<base::HistogramTester>();
-  base::Value::List actions;
+  base::ListValue actions;
   actions.Append(static_cast<int>(ActionType::kClearBrowsingHistory));
   actions.Append(static_cast<int>(ActionType::kClearDownloadHistory));
   actions.Append(static_cast<int>(ActionType::kClearAutofill));

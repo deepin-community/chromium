@@ -8,12 +8,12 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/check_op.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "net/base/network_anonymization_key.h"
@@ -28,13 +28,13 @@ namespace net {
 
 namespace {
 
-constexpr base::StringPiece kNakKey = "network_anonymization_key";
-constexpr base::StringPiece kSourceKey = "source";
-constexpr base::StringPiece kSecureKey = "secure";
-constexpr base::StringPiece kResultKey = "result";
-constexpr base::StringPiece kStalenessGenerationKey = "staleness_generation";
-constexpr base::StringPiece kMaxEntriesKey = "max_entries";
-constexpr base::StringPiece kEntriesKey = "entries";
+constexpr std::string_view kNakKey = "network_anonymization_key";
+constexpr std::string_view kSourceKey = "source";
+constexpr std::string_view kSecureKey = "secure";
+constexpr std::string_view kResultKey = "result";
+constexpr std::string_view kStalenessGenerationKey = "staleness_generation";
+constexpr std::string_view kMaxEntriesKey = "max_entries";
+constexpr std::string_view kEntriesKey = "entries";
 
 }  // namespace
 
@@ -62,7 +62,7 @@ HostResolverCache::HostResolverCache(HostResolverCache&&) = default;
 HostResolverCache& HostResolverCache::operator=(HostResolverCache&&) = default;
 
 const HostResolverInternalResult* HostResolverCache::Lookup(
-    base::StringPiece domain_name,
+    std::string_view domain_name,
     const NetworkAnonymizationKey& network_anonymization_key,
     DnsQueryType query_type,
     HostResolverSource source,
@@ -96,7 +96,7 @@ const HostResolverInternalResult* HostResolverCache::Lookup(
 
 std::optional<HostResolverCache::StaleLookupResult>
 HostResolverCache::LookupStale(
-    base::StringPiece domain_name,
+    std::string_view domain_name,
     const NetworkAnonymizationKey& network_anonymization_key,
     DnsQueryType query_type,
     HostResolverSource source,
@@ -179,7 +179,7 @@ base::Value HostResolverCache::Serialize() const {
 }
 
 bool HostResolverCache::RestoreFromValue(const base::Value& value) {
-  const base::Value::List* list = value.GetIfList();
+  const base::ListValue* list = value.GetIfList();
   if (!list) {
     return false;
   }
@@ -191,7 +191,7 @@ bool HostResolverCache::RestoreFromValue(const base::Value& value) {
       return true;
     }
 
-    const base::Value::Dict* dict = list_value.GetIfDict();
+    const base::DictValue* dict = list_value.GetIfDict();
     if (!dict) {
       return false;
     }
@@ -236,7 +236,7 @@ bool HostResolverCache::RestoreFromValue(const base::Value& value) {
 }
 
 base::Value HostResolverCache::SerializeForLogging() const {
-  base::Value::Dict dict;
+  base::DictValue dict;
 
   dict.Set(kMaxEntriesKey, base::checked_cast<int>(max_entries_));
   dict.Set(kStalenessGenerationKey, staleness_generation_);
@@ -287,7 +287,7 @@ base::TimeDelta HostResolverCache::Entry::TimeUntilExpiration(
 
 std::vector<HostResolverCache::EntryMap::const_iterator>
 HostResolverCache::LookupInternal(
-    base::StringPiece domain_name,
+    std::string_view domain_name,
     const NetworkAnonymizationKey& network_anonymization_key,
     DnsQueryType query_type,
     HostResolverSource source,
@@ -302,14 +302,13 @@ HostResolverCache::LookupInternal(
   url::StdStringCanonOutput output(&canonicalized);
   url::CanonHostInfo host_info;
 
-  url::CanonicalizeHostVerbose(domain_name.data(),
-                               url::Component(0, domain_name.size()), &output,
-                               &host_info);
+  url::CanonicalizeHostVerbose(
+      domain_name, url::Component(0, domain_name.size()), &output, &host_info);
 
   // For performance, when canonicalization can't canonicalize, minimize string
-  // copies and just reuse the input StringPiece. This optimization prevents
-  // easily reusing a MaybeCanoncalize util with similar code.
-  base::StringPiece lookup_name = domain_name;
+  // copies and just reuse the input std::string_view. This optimization
+  // prevents easily reusing a MaybeCanoncalize util with similar code.
+  std::string_view lookup_name = domain_name;
   if (host_info.family == url::CanonHostInfo::Family::NEUTRAL) {
     output.Complete();
     lookup_name = canonicalized;
@@ -418,10 +417,10 @@ void HostResolverCache::EvictEntries() {
 base::Value HostResolverCache::SerializeEntries(
     bool serialize_staleness_generation,
     bool require_persistable_anonymization_key) const {
-  base::Value::List list;
+  base::ListValue list;
 
   for (const auto& [key, entry] : entries_) {
-    base::Value::Dict dict;
+    base::DictValue dict;
 
     if (serialize_staleness_generation) {
       dict.Set(kStalenessGenerationKey, entry.staleness_generation);

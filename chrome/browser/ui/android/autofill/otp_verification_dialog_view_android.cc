@@ -7,12 +7,14 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/android/autofill/internal/jni_headers/OtpVerificationDialogBridge_jni.h"
-#include "chrome/browser/ui/autofill/payments/view_factory.h"
+#include "chrome/browser/ui/autofill/payments/payments_view_factory.h"
 #include "components/autofill/core/browser/ui/payments/card_unmask_otp_input_dialog_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/ui/android/autofill/internal/jni_headers/OtpVerificationDialogBridge_jni.h"
 
 using base::android::ConvertJavaStringToUTF16;
 using base::android::ConvertUTF16ToJavaString;
@@ -84,9 +86,8 @@ void OtpVerificationDialogViewAndroid::OnDialogDismissed(JNIEnv* env) {
   delete this;
 }
 
-void OtpVerificationDialogViewAndroid::OnConfirm(
-    JNIEnv* env,
-    const JavaParamRef<jstring>& otp) {
+void OtpVerificationDialogViewAndroid::OnConfirm(JNIEnv* env,
+                                                 const JavaRef<jstring>& otp) {
   if (controller_) {
     controller_->OnOkButtonClicked(ConvertJavaStringToUTF16(env, otp));
   }
@@ -140,3 +141,5 @@ base::WeakPtr<CardUnmaskOtpInputDialogView> CreateAndShowOtpInputDialog(
 }
 
 }  // namespace autofill
+
+DEFINE_JNI(OtpVerificationDialogBridge)

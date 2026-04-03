@@ -7,10 +7,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/big_endian.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/sys_byteorder.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/fileapi/blob.h"
@@ -50,16 +48,16 @@ FontMetadata* FontMetadata::Create(const FontEnumerationEntry& entry) {
   return MakeGarbageCollected<FontMetadata>(entry);
 }
 
-ScriptPromise FontMetadata::blob(ScriptState* script_state) {
-  ScriptPromiseResolver* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+ScriptPromise<Blob> FontMetadata::blob(ScriptState* script_state) {
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<Blob>>(script_state);
+  auto promise = resolver->Promise();
 
   ExecutionContext::From(script_state)
       ->GetTaskRunner(TaskType::kFontLoading)
       ->PostTask(FROM_HERE,
-                 WTF::BindOnce(&FontMetadata::BlobImpl,
-                               WrapPersistent(resolver), postscriptName_));
+                 BindOnce(&FontMetadata::BlobImpl, WrapPersistent(resolver),
+                          postscriptName_));
 
   return promise;
 }
@@ -69,7 +67,7 @@ void FontMetadata::Trace(blink::Visitor* visitor) const {
 }
 
 // static
-void FontMetadata::BlobImpl(ScriptPromiseResolver* resolver,
+void FontMetadata::BlobImpl(ScriptPromiseResolver<Blob>* resolver,
                             const String& postscriptName) {
   if (!resolver->GetScriptState()->ContextIsValid())
     return;

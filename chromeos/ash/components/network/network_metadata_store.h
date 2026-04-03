@@ -71,10 +71,9 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkMetadataStore
   // NetworkConfigurationObserver::
   void OnConfigurationCreated(const std::string& service_path,
                               const std::string& guid) override;
-  void OnConfigurationModified(
-      const std::string& service_path,
-      const std::string& guid,
-      const base::Value::Dict* set_properties) override;
+  void OnConfigurationModified(const std::string& service_path,
+                               const std::string& guid,
+                               const base::DictValue* set_properties) override;
   void OnConfigurationRemoved(const std::string& service_path,
                               const std::string& guid) override;
 
@@ -114,37 +113,27 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkMetadataStore
 
   // Stores a list of user-entered APN entries for a cellular network. Takes
   // ownership of |list|.
-  void SetCustomApnList(const std::string& network_guid,
-                        base::Value::List list);
+  void SetCustomApnList(const std::string& network_guid, base::ListValue list);
 
   // Returns custom apn list for cellular network with given guid. Returns
   // nullptr if no pref exists for |network_guid|.
-  virtual const base::Value::List* GetCustomApnList(
+  virtual const base::ListValue* GetCustomApnList(
       const std::string& network_guid);
 
   // Returns the pre APN revamp custom apns for a cellular network with given
   // guid. Returns nullptr if no pref exists for |network_guid|. Can only be
   // called if the APN Revamp flag is enabled.
-  virtual const base::Value::List* GetPreRevampCustomApnList(
+  virtual const base::ListValue* GetPreRevampCustomApnList(
       const std::string& network_guid);
 
   // When the active user is the device owner and its the first login, this
   // marks networks that were added in OOBE to the user's list.
   void OwnSharedNetworksOnFirstUserLogin();
 
-  // Sets whether traffic counters should be automatically reset.
-  void SetEnableTrafficCountersAutoReset(const std::string& network_guid,
-                                         bool enable);
-
   // Sets the day of the month on which traffic counters are automatically
   // reset.
   void SetDayOfTrafficCountersAutoReset(const std::string& network_guid,
                                         const std::optional<int>& day);
-
-  // Returns whether traffic counters should be automatically reset. Returns
-  // nullptr if no pref exists for |network_guid|.
-  const base::Value* GetEnableTrafficCountersAutoReset(
-      const std::string& network_guid);
 
   // Returns the day of the month on which traffic counters are automatically
   // reset. Returns nullptr if no pref exists for |network_guid|.
@@ -194,8 +183,8 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkMetadataStore
                base::Value value);
   const base::Value* GetPref(const std::string& network_guid,
                              const std::string& key);
-  const base::Value::List* GetListPref(const std::string& network_guid,
-                                       const std::string& key);
+  const base::ListValue* GetListPref(const std::string& network_guid,
+                                     const std::string& key);
   void UpdateExternalModifications(const std::string& network_guid,
                                    const std::string& field);
   void LogHiddenNetworkAge();

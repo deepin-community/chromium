@@ -15,7 +15,7 @@
 #include "ui/base/models/menu_model_delegate.h"
 #include "ui/base/models/menu_separator_types.h"
 #include "ui/color/color_id.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace gfx {
 class FontList;
@@ -27,9 +27,15 @@ class Accelerator;
 class ButtonMenuItemModel;
 class ImageModel;
 
+// The new badge type that can be displayed next to a menu item to promote a
+// feature.
+enum class NewBadgeType {
+  kNew,
+  kPreview,
+};
+
 // An interface implemented by an object that provides the content of a menu.
-class COMPONENT_EXPORT(UI_BASE) MenuModel
-    : public base::SupportsWeakPtr<MenuModel> {
+class COMPONENT_EXPORT(UI_BASE) MenuModel {
  public:
   // The type of item.
   enum ItemType {
@@ -53,6 +59,9 @@ class COMPONENT_EXPORT(UI_BASE) MenuModel
   MenuModel();
 
   virtual ~MenuModel();
+
+  // This must be implemented by the most concrete class.
+  virtual base::WeakPtr<MenuModel> AsWeakPtr() = 0;
 
   // Returns the number of items in the menu.
   virtual size_t GetItemCount() const = 0;
@@ -103,6 +112,10 @@ class COMPONENT_EXPORT(UI_BASE) MenuModel
   virtual bool GetAcceleratorAt(size_t index,
                                 ui::Accelerator* accelerator) const = 0;
 
+  // Returns whether an accelerator should be shown next to menu item
+  // disregarding of the platform.
+  virtual bool GetForceShowAcceleratorForItemAt(size_t index) const;
+
   // Returns the checked state of the item at the specified index.
   virtual bool IsItemCheckedAt(size_t index) const = 0;
 
@@ -131,6 +144,11 @@ class COMPONENT_EXPORT(UI_BASE) MenuModel
   // to show off to users (items marked as new will receive a "New" badge when
   // the appropriate flag is enabled).
   virtual bool IsNewFeatureAt(size_t index) const;
+
+  // Returns the badge type the menu item at `index` should should show when the
+  // appropriate flag is enabled. Returns std::nullopt if the menu item
+  // shouldn't show a badge.
+  virtual std::optional<NewBadgeType> GetNewBadgeTypeAt(size_t index) const;
 
   // Returns an application-window-unique identifier that can be used to track
   // the menu item irrespective of menu-specific command IDs.

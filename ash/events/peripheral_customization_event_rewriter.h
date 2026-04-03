@@ -6,12 +6,12 @@
 #define ASH_EVENTS_PERIPHERAL_CUSTOMIZATION_EVENT_REWRITER_H_
 
 #include "ash/ash_export.h"
-#include "ash/public/mojom/input_device_settings.mojom-forward.h"
 #include "ash/public/mojom/input_device_settings.mojom.h"
 #include "ash/system/input_device_settings/input_device_settings_metrics_manager.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "ui/events/event.h"
@@ -33,12 +33,6 @@ class ASH_EXPORT PeripheralCustomizationEventRewriter
 
   enum class DeviceType { kMouse, kGraphicsTablet };
 
-  enum class PeripheralCustomizationMetricsType {
-    kMouse,
-    kGraphicsTablet,
-    kGraphicsTabletPen
-  };
-
   struct DeviceIdButton {
     int device_id;
     mojom::ButtonPtr button;
@@ -54,10 +48,13 @@ class ASH_EXPORT PeripheralCustomizationEventRewriter
 
   struct RemappingActionResult {
     raw_ref<mojom::RemappingAction> remapping_action;
-    PeripheralCustomizationMetricsType peripheral_kind;
+    InputDeviceSettingsMetricsManager::PeripheralCustomizationMetricsType
+        peripheral_kind;
 
-    RemappingActionResult(mojom::RemappingAction& remapping_action,
-                          PeripheralCustomizationMetricsType peripheral_kind);
+    RemappingActionResult(
+        mojom::RemappingAction& remapping_action,
+        InputDeviceSettingsMetricsManager::PeripheralCustomizationMetricsType
+            peripheral_kind);
     RemappingActionResult(RemappingActionResult&& result);
     ~RemappingActionResult();
   };

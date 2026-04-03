@@ -10,9 +10,13 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
+#include <algorithm>
 #include <memory>
+#include <string_view>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value.h"
@@ -29,7 +33,7 @@ bool DrmCreateDumbBuffer(int fd,
                          uint32_t* handle,
                          uint32_t* stride) {
   struct drm_mode_create_dumb request;
-  memset(&request, 0, sizeof(request));
+  std::ranges::fill(base::byte_span_from_ref(request), 0);
   request.width = info.width();
   request.height = info.height();
   request.bpp = info.bytesPerPixel() << 3;
@@ -52,17 +56,29 @@ bool DrmCreateDumbBuffer(int fd,
 
 bool DrmDestroyDumbBuffer(int fd, uint32_t handle) {
   struct drm_mode_destroy_dumb destroy_request;
-  memset(&destroy_request, 0, sizeof(destroy_request));
+  std::ranges::fill(base::byte_span_from_ref(destroy_request), 0);
   destroy_request.handle = handle;
   return !drmIoctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_request);
 }
 
 bool CanQueryForResources(int fd) {
-  drm_mode_card_res resources;
-  memset(&resources, 0, sizeof(resources));
+  struct drm_mode_card_res resources;
+  std::ranges::fill(base::byte_span_from_ref(resources), 0);
   // If there is no error getting DRM resources then assume this is a
   // modesetting device.
   return !drmIoctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &resources);
+}
+
+bool IsModeset(uint32_t flags) {
+  return flags & DRM_MODE_ATOMIC_ALLOW_MODESET;
+}
+
+bool IsBlocking(uint32_t flags) {
+  return !(flags & DRM_MODE_ATOMIC_NONBLOCK);
+}
+
+bool IsTestOnly(uint32_t flags) {
+  return flags & DRM_MODE_ATOMIC_TEST_ONLY;
 }
 
 }  // namespace
@@ -188,13 +204,21 @@ bool DrmWrapper::SetCursor(uint32_t crtc_id,
 bool DrmWrapper::SetMaster() {
   TRACE_EVENT1("drm", "DrmWrapper::SetMaster", "path", device_path_.value());
   DCHECK(drm_fd_.is_valid());
-  return (drmSetMaster(drm_fd_.get()) == 0);
+  has_master_ = (drmSetMaster(drm_fd_.get()) == 0);
+  return has_master_;
 }
 
 bool DrmWrapper::DropMaster() {
   TRACE_EVENT1("drm", "DrmWrapper::DropMaster", "path", device_path_.value());
   DCHECK(drm_fd_.is_valid());
-  return (drmDropMaster(drm_fd_.get()) == 0);
+  const bool drop_master_result = (drmDropMaster(drm_fd_.get()) == 0);
+  // Chrome no longer has DRM master if drop master call succeeded.
+  has_master_ = !drop_master_result;
+  return drop_master_result;
+}
+
+bool DrmWrapper::has_master() const {
+  return has_master_;
 }
 
 /**************
@@ -218,7 +242,7 @@ bool DrmWrapper::DestroyDumbBuffer(uint32_t handle) {
 
 bool DrmWrapper::MapDumbBuffer(uint32_t handle, size_t size, void** pixels) {
   struct drm_mode_map_dumb map_request;
-  memset(&map_request, 0, sizeof(map_request));
+  std::ranges::fill(base::byte_span_from_ref(map_request), 0);
   map_request.handle = handle;
   if (drmIoctl(drm_fd_.get(), DRM_IOCTL_MODE_MAP_DUMB, &map_request)) {
     PLOG(ERROR) << "Cannot prepare dumb buffer for mapping";
@@ -241,7 +265,7 @@ bool DrmWrapper::UnmapDumbBuffer(void* pixels, size_t size) {
 
 bool DrmWrapper::CloseBufferHandle(uint32_t handle) {
   struct drm_gem_close close_request;
-  memset(&close_request, 0, sizeof(close_request));
+  std::ranges::fill(base::byte_span_from_ref(close_request), 0);
   close_request.handle = handle;
   return !drmIoctl(drm_fd_.get(), DRM_IOCTL_GEM_CLOSE, &close_request);
 }
@@ -363,12 +387,13 @@ ScopedDrmPropertyPtr DrmWrapper::GetProperty(drmModeConnector* connector,
                connector->connector_id, "name", name);
   for (int i = 0; i < connector->count_props; ++i) {
     ScopedDrmPropertyPtr property(
-        drmModeGetProperty(drm_fd_.get(), connector->props[i]));
+        drmModeGetProperty(drm_fd_.get(), UNSAFE_TODO(connector->props[i])));
     if (!property) {
       continue;
     }
 
-    if (strcmp(property->name, name) == 0) {
+    std::string_view property_name(property->name);
+    if (property_name == name) {
       return property;
     }
   }
@@ -442,15 +467,15 @@ ScopedDrmPropertyBlobPtr DrmWrapper::GetPropertyBlob(
                connector->connector_id, "name", name);
   for (int i = 0; i < connector->count_props; ++i) {
     ScopedDrmPropertyPtr property(
-        drmModeGetProperty(drm_fd_.get(), connector->props[i]));
+        drmModeGetProperty(drm_fd_.get(), UNSAFE_TODO(connector->props[i])));
     if (!property) {
       continue;
     }
 
-    if (strcmp(property->name, name) == 0 &&
-        (property->flags & DRM_MODE_PROP_BLOB)) {
-      return ScopedDrmPropertyBlobPtr(
-          drmModeGetPropertyBlob(drm_fd_.get(), connector->prop_values[i]));
+    std::string_view property_name(property->name);
+    if ((property_name == name) && (property->flags & DRM_MODE_PROP_BLOB)) {
+      return ScopedDrmPropertyBlobPtr(drmModeGetPropertyBlob(
+          drm_fd_.get(), UNSAFE_TODO(connector->prop_values[i])));
     }
   }
 
@@ -500,6 +525,9 @@ bool DrmWrapper::CommitProperties(drmModeAtomicReq* properties,
                                   uint32_t flags,
                                   uint64_t page_flip_id) {
   DCHECK(drm_fd_.is_valid());
+  TRACE_EVENT("drm", "DrmWrapper::CommitProperties", "test", IsTestOnly(flags),
+              "modeset", IsModeset(flags), "blocking", IsBlocking(flags),
+              "flags", flags, "page_flip_id", page_flip_id);
   int result = drmModeAtomicCommit(drm_fd_.get(), properties, flags,
                                    reinterpret_cast<void*>(page_flip_id));
 
@@ -517,6 +545,10 @@ bool DrmWrapper::CommitProperties(drmModeAtomicReq* properties,
     // crashing. We still do want the underlying driver bugs fixed, but this
     // provide a better user experience.
     flags &= ~DRM_MODE_ATOMIC_NONBLOCK;
+    TRACE_EVENT("drm", "DrmWrapper::CommitProperties(retry)", "test",
+                IsTestOnly(flags), "modeset", IsModeset(flags), "blocking",
+                IsBlocking(flags), "flags", flags, "page_flip_id",
+                page_flip_id);
     result = drmModeAtomicCommit(drm_fd_.get(), properties, flags,
                                  reinterpret_cast<void*>(page_flip_id));
   }

@@ -36,14 +36,14 @@ TEST(ResourceLoadObserverForFrameTest, MemoryCacheCertificateError) {
       *MakeGarbageCollected<TestResourceFetcherProperties>());
 
   testing::StrictMock<MockContentSecurityNotifier> mock_notifier;
-  base::ScopedClosureRunner clear_binder(WTF::BindOnce(
+  base::ScopedClosureRunner clear_binder(BindOnce(
       [](LocalFrame* frame) {
-        frame->Client()->GetBrowserInterfaceBroker().SetBinderForTesting(
+        frame->GetBrowserInterfaceBroker().SetBinderForTesting(
             mojom::blink::ContentSecurityNotifier::Name_, {});
       },
       WrapWeakPersistent(&frame)));
 
-  frame.Client()->GetBrowserInterfaceBroker().SetBinderForTesting(
+  frame.GetBrowserInterfaceBroker().SetBinderForTesting(
       mojom::blink::ContentSecurityNotifier::Name_,
       base::BindLambdaForTesting([&](mojo::ScopedMessagePipeHandle handle) {
         mock_notifier.Bind(

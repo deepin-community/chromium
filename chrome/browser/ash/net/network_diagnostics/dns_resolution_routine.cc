@@ -4,11 +4,11 @@
 
 #include "chrome/browser/ash/net/network_diagnostics/dns_resolution_routine.h"
 
+#include <algorithm>
 #include <iterator>
 #include <optional>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/values.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -85,10 +85,11 @@ void DnsResolutionRoutine::CreateHostResolver() {
 void DnsResolutionRoutine::AttemptResolution() {
   CHECK(host_resolver_);
 
+  // Resolver host parameter source must be unset or set to ANY in order for DNS
+  // queries with BuiltInDnsClientEnabled policy disabled to work (b/353448388).
   network::mojom::ResolveHostParametersPtr parameters =
       network::mojom::ResolveHostParameters::New();
   parameters->dns_query_type = net::DnsQueryType::A;
-  parameters->source = net::HostResolverSource::DNS;
   parameters->cache_usage =
       network::mojom::ResolveHostParameters::CacheUsage::DISALLOWED;
 
@@ -108,16 +109,15 @@ void DnsResolutionRoutine::AttemptResolution() {
 void DnsResolutionRoutine::OnComplete(
     int result,
     const net::ResolveErrorInfo& resolve_error_info,
-    const std::optional<net::AddressList>& resolved_addresses,
-    const std::optional<net::HostResolverEndpointResults>&
-        endpoint_results_with_metadata) {
+    const net::AddressList& resolved_addresses,
+    const net::HostResolverEndpointResults& alternative_endpoints) {
   if (result == net::OK) {
-    CHECK(resolved_addresses);
+    CHECK(!resolved_addresses.empty());
     resolved_address_received_ = true;
     AnalyzeResultsAndExecuteCallback();
     return;
   }
-  if (base::Contains(kRetryResponseCodes, result) && num_retries_ > 0) {
+  if (std::ranges::contains(kRetryResponseCodes, result) && num_retries_ > 0) {
     num_retries_--;
     AttemptResolution();
   } else {

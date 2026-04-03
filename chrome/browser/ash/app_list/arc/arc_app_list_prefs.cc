@@ -9,22 +9,11 @@
 #include <string>
 #include <utility>
 
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/compat_mode/arc_resize_lock_manager.h"
-#include "ash/components/arc/mojom/compatibility_mode.mojom.h"
-#include "ash/components/arc/net/arc_net_host_impl.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/session/connection_holder.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "ash/metrics/login_unlock_throughput_recorder.h"
 #include "ash/shell.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -33,6 +22,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -47,25 +37,40 @@
 #include "chrome/browser/ash/app_list/arc/arc_pai_starter.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/policy/arc_policy_util.h"
+#include "chrome/browser/ash/arc/session/arc_initial_optin_metrics_recorder.h"
+#include "chrome/browser/ash/arc/session/arc_initial_optin_metrics_recorder_factory.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
-#include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
-#include "chrome/browser/image_decoder/image_decoder.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/compat_mode/arc_resize_lock_manager.h"
+#include "chromeos/ash/experiences/arc/mojom/compatibility_mode.mojom.h"
+#include "chromeos/ash/experiences/arc/net/arc_net_host_impl.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/session/connection_holder.h"
+#include "chromeos/components/kiosk/kiosk_utils.h"
 #include "components/crx_file/id_util.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "skia/ext/image_operations.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/icu/source/common/unicode/localebuilder.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_scale_factor.h"
 #include "ui/gfx/codec/png_codec.h"
+
+using arc::mojom::AppCategory;
 
 namespace {
 
@@ -142,6 +147,13 @@ constexpr base::TimeDelta kDetectDefaultAppAvailabilityTimeout =
 constexpr const char kAppCountUmaPrefix[] = "Arc.AppCount.";
 // Do not increase. See base/metrics/histogram_functions.h.
 constexpr int kAppCountUmaExclusiveMax = 101;
+// A smaller bucket size for apps with a lower count.
+constexpr int kAppCountUmaExclusiveMaxLower = 20;
+
+// Constants for "Arc.Data.AppCategory.{Target}.DataSize" UMA metric.
+constexpr int kUmaDataSizeNumBuckets = 50;
+constexpr int kUmaDataSizeInMBMin = 1;
+constexpr int kUmaDataSizeInMBMax = 1000000;  // 1 TB.
 
 // Accessor for deferred set notifications enabled requests in prefs.
 class NotificationsEnabledDeferred {
@@ -155,7 +167,7 @@ class NotificationsEnabledDeferred {
   }
 
   bool Get(const std::string& app_id) {
-    const base::Value::Dict& dict =
+    const base::DictValue& dict =
         prefs_->GetDict(arc::prefs::kArcSetNotificationsEnabledDeferred);
     return dict.FindBool(app_id).value_or(false);
   }
@@ -234,7 +246,7 @@ void DeleteAppFolderFromFileThread(const base::FilePath& path) {
   DCHECK(deleted);
 }
 
-// TODO(crbug.com/672829): Due to shutdown procedure dependency,
+// TODO(crbug.com/40497410): Due to shutdown procedure dependency,
 // ArcAppListPrefs may try to touch ArcSessionManager related stuff.
 // Specifically, this returns false on shutdown phase.
 // Remove this check after the shutdown behavior is fixed.
@@ -251,7 +263,7 @@ bool IsArcAndroidEnabledForProfile(const Profile* profile) {
          arc::IsArcPlayStoreEnabledForProfile(profile);
 }
 
-bool GetInt64FromPref(const base::Value::Dict* dict,
+bool GetInt64FromPref(const base::DictValue* dict,
                       const std::string& key,
                       int64_t* value) {
   DCHECK(dict);
@@ -273,7 +285,7 @@ bool GetInt64FromPref(const base::Value::Dict* dict,
 
 // Converts |rect| to base::Value, e.g. { 0, 100, 200, 300 }.
 base::Value RectToValueDict(const gfx::Rect& rect) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("x", rect.x());
   dict.Set("y", rect.y());
   dict.Set("width", rect.width());
@@ -300,7 +312,7 @@ std::optional<gfx::Rect> RectFromDictValue(const base::Value* rect_dict) {
 
 base::Value WindowLayoutToDict(
     const ArcAppListPrefs::WindowLayout& window_layout) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kWindowSizeType, static_cast<int32_t>(window_layout.type));
   dict.Set(kWindowResizability, window_layout.resizable);
   if (window_layout.bounds.has_value())
@@ -310,7 +322,7 @@ base::Value WindowLayoutToDict(
 }
 
 ArcAppListPrefs::WindowLayout WindowLayoutFromDict(
-    const base::Value::Dict* dict) {
+    const base::DictValue* dict) {
   if (!dict)
     return ArcAppListPrefs::WindowLayout();
 
@@ -391,12 +403,6 @@ void MaybeRemoveDeprecatedPackagePrefs(arc::ArcAppScopedPrefUpdate&& update) {
   update.Get().Remove(kDeprecatePackagePrefsSystem);
 }
 
-ash::LoginUnlockThroughputRecorder* GetLoginRecorder() {
-  return ash::Shell::HasInstance()
-             ? ash::Shell::Get()->login_unlock_throughput_recorder()
-             : nullptr;
-}
-
 // Validate |locale_tag| based on IETF BCP 47 language tag.
 bool IsLocaleTagValid(const std::string& locale_tag) {
   UErrorCode error = U_ZERO_ERROR;
@@ -409,14 +415,14 @@ bool IsLocaleTagValid(const std::string& locale_tag) {
 // page. Hence, there might be synchronization issue between ARC and ChromeOS
 // and we should eventually re-sync them.
 bool IsSelectedLocaleResyncRequired(
-    const base::Value::Dict& saved_package_dict,
+    const base::DictValue& saved_package_dict,
     const arc::mojom::PackageLocaleInfo& arc_locale_info,
     const UpdatePackagePrefsReason& update_reason) {
   // Only checks for ARC-boot package refresh.
   if (update_reason != UpdatePackagePrefsReason::kOnPackageListRefreshed) {
     return false;
   }
-  const base::Value::Dict* locale_info_dict =
+  const base::DictValue* locale_info_dict =
       saved_package_dict.FindDict(kLocaleInfo);
   if (!locale_info_dict) {
     return false;
@@ -435,9 +441,10 @@ void OnArcAppListRefreshed(Profile* profile) {
   if (!arc::IsArcPlayStoreEnabledForProfile(profile))
     return;
 
-  ash::LoginUnlockThroughputRecorder* throughput_recorder = GetLoginRecorder();
-  if (!throughput_recorder || !throughput_recorder->NeedReportArcAppListReady())
+  if (!arc::ArcInitialOptInMetricsRecorderFactory::GetForBrowserContext(profile)
+           ->NeedReportArcAppListReady()) {
     return;
+  }
 
   DCHECK_EQ(ProfileManager::GetPrimaryUserProfile(), profile);
   auto* prefs = ArcAppListPrefs::Get(profile);
@@ -460,23 +467,36 @@ void OnArcAppListRefreshed(Profile* profile) {
       ++error;
     }
   }
-  if (ready + error >= launchable)
-    throughput_recorder->OnArcAppListReady();
+  if (ready + error >= launchable) {
+    arc::ArcInitialOptInMetricsRecorderFactory::GetForBrowserContext(profile)
+        ->OnArcAppListReady();
+  }
 }
+
+void RecordAppCategoryDataSizeUma(const std::string& category,
+                                  uint64_t data_size_in_bytes) {
+  const std::string metrics =
+      base::StringPrintf("Arc.Data.AppCategory.%s.DataSize", category);
+  base::UmaHistogramCustomCounts(metrics, data_size_in_bytes / 1000000,
+                                 kUmaDataSizeInMBMin, kUmaDataSizeInMBMax,
+                                 kUmaDataSizeNumBuckets);
+}
+
 }  // namespace
 
 // static
-ArcAppListPrefs* ArcAppListPrefs::Create(Profile* profile) {
-  return new ArcAppListPrefs(profile, nullptr);
+std::unique_ptr<ArcAppListPrefs> ArcAppListPrefs::Create(Profile* profile) {
+  return std::make_unique<ArcAppListPrefs>(profile, nullptr);
 }
 
 // static
-ArcAppListPrefs* ArcAppListPrefs::Create(
+std::unique_ptr<ArcAppListPrefs> ArcAppListPrefs::Create(
     Profile* profile,
     arc::ConnectionHolder<arc::mojom::AppInstance, arc::mojom::AppHost>*
         app_connection_holder_for_testing) {
   DCHECK(app_connection_holder_for_testing);
-  return new ArcAppListPrefs(profile, app_connection_holder_for_testing);
+  return std::make_unique<ArcAppListPrefs>(profile,
+                                           app_connection_holder_for_testing);
 }
 
 // static
@@ -518,7 +538,7 @@ void ArcAppListPrefs::UprevCurrentIconsVersionForTesting() {
 
 std::string ArcAppListPrefs::GetAppIdByPackageName(
     const std::string& package_name) const {
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
 
   for (const auto it : apps) {
     const base::Value& value = it.second;
@@ -578,12 +598,10 @@ ArcAppListPrefs::ArcAppListPrefs(
   if (resize_lock_manager)
     resize_lock_manager->SetPrefDelegate(this);
 
-  if (ash::features::IsPasspointARCSupportEnabled()) {
-    arc::ArcNetHostImpl* net_host =
-        arc::ArcNetHostImpl::GetForBrowserContext(profile_);
-    if (net_host) {
-      net_host->SetArcAppMetadataProvider(this);
-    }
+  arc::ArcNetHostImpl* net_host =
+      arc::ArcNetHostImpl::GetForBrowserContext(profile_);
+  if (net_host) {
+    net_host->SetArcAppMetadataProvider(this);
   }
 
   if (base::FeatureList::IsEnabled(arc::kSyncInstallPriority)) {
@@ -595,13 +613,6 @@ ArcAppListPrefs::ArcAppListPrefs(
 ArcAppListPrefs::~ArcAppListPrefs() {
   for (auto& observer : observer_list_)
     observer.OnArcAppListPrefsDestroyed();
-
-  arc::ArcSessionManager* arc_session_manager = arc::ArcSessionManager::Get();
-  if (!arc_session_manager)
-    return;
-  DCHECK(arc::ArcServiceManager::Get());
-  arc_session_manager->RemoveObserver(this);
-  app_connection_holder()->RemoveObserver(this);
 }
 
 void ArcAppListPrefs::StartPrefs() {
@@ -865,9 +876,9 @@ std::unique_ptr<ArcAppListPrefs::PackageInfo> ArcAppListPrefs::GetPackage(
   if (!IsArcAlive() || !IsArcAndroidEnabledForProfile(profile_))
     return nullptr;
 
-  const base::Value::Dict& packages = prefs_->GetDict(arc::prefs::kArcPackages);
+  const base::DictValue& packages = prefs_->GetDict(arc::prefs::kArcPackages);
 
-  const base::Value::Dict* package = packages.FindDict(package_name);
+  const base::DictValue* package = packages.FindDict(package_name);
   if (!package)
     return nullptr;
 
@@ -883,7 +894,7 @@ std::unique_ptr<ArcAppListPrefs::PackageInfo> ArcAppListPrefs::GetPackage(
   GetInt64FromPref(package, kLastBackupTime, &last_backup_time);
   const base::Value* permission_val = package->Find(kPermissionStates);
   if (permission_val) {
-    const base::Value::Dict* permission_dict = permission_val->GetIfDict();
+    const base::DictValue* permission_dict = permission_val->GetIfDict();
     DCHECK(permission_dict);
 
     for (const auto iter : *permission_dict) {
@@ -893,7 +904,7 @@ std::unique_ptr<ArcAppListPrefs::PackageInfo> ArcAppListPrefs::GetPackage(
 
       const base::Value& permission_state = iter.second;
 
-      const base::Value::Dict* permission_state_dict =
+      const base::DictValue* permission_state_dict =
           permission_state.GetIfDict();
       if (permission_state_dict) {
         bool granted = permission_state_dict->FindBool(kPermissionStateGranted)
@@ -924,7 +935,7 @@ std::unique_ptr<ArcAppListPrefs::PackageInfo> ArcAppListPrefs::GetPackage(
 
   arc::mojom::WebAppInfoPtr web_app_info;
   if (const base::Value* web_app_info_value = package->Find(kWebAppInfo)) {
-    const base::Value::Dict& web_app_info_dict = web_app_info_value->GetDict();
+    const base::DictValue& web_app_info_dict = web_app_info_value->GetDict();
     web_app_info = arc::mojom::WebAppInfo::New();
     web_app_info->title = *web_app_info_dict.FindString(kTitle);
     web_app_info->start_url = *web_app_info_dict.FindString(kStartUrl);
@@ -940,8 +951,8 @@ std::unique_ptr<ArcAppListPrefs::PackageInfo> ArcAppListPrefs::GetPackage(
   }
   arc::mojom::PackageLocaleInfoPtr locale_info;
   if (const base::Value* locale_info_value = package->Find(kLocaleInfo)) {
-    const base::Value::Dict& locale_info_dict = locale_info_value->GetDict();
-    if (const base::Value::List* supported_locales =
+    const base::DictValue& locale_info_dict = locale_info_value->GetDict();
+    if (const base::ListValue* supported_locales =
             locale_info_dict.FindList(kSupportedLocales)) {
       locale_info = arc::mojom::PackageLocaleInfo::New();
 
@@ -993,7 +1004,7 @@ std::vector<std::string> ArcAppListPrefs::GetAppIds() const {
 
 std::vector<std::string> ArcAppListPrefs::GetAppIdsNoArcEnabledCheck() const {
   std::vector<std::string> ids;
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
 
   // crx_file::id_util is de-facto utility for id generation.
   for (const auto app : apps) {
@@ -1019,8 +1030,8 @@ std::unique_ptr<ArcAppListPrefs::AppInfo> ArcAppListPrefs::GetApp(
 
 std::unique_ptr<ArcAppListPrefs::AppInfo> ArcAppListPrefs::GetAppFromPrefs(
     const std::string& app_id) const {
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
-  const base::Value::Dict* app_dict = apps.FindDict(app_id);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue* app_dict = apps.FindDict(app_id);
   if (!app_dict)
     return nullptr;
 
@@ -1109,7 +1120,7 @@ bool ArcAppListPrefs::IsRegistered(const std::string& app_id) const {
       !default_apps_->HasApp(app_id))
     return false;
 
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
   return apps.FindDict(app_id);
 }
 
@@ -1155,7 +1166,6 @@ void ArcAppListPrefs::SetLaunchRequestTimeForTesting(const std::string& app_id,
 void ArcAppListPrefs::SetLastLaunchTime(const std::string& app_id) {
   if (!IsRegistered(app_id)) {
     NOTREACHED();
-    return;
   }
 
   launch_request_times_[app_id] = base::Time::Now();
@@ -1169,7 +1179,7 @@ void ArcAppListPrefs::SetLastLaunchTimeInternal(const std::string& app_id) {
 
   const base::Time time = base::Time::Now();
   arc::ArcAppScopedPrefUpdate update(prefs_, app_id, arc::prefs::kArcApps);
-  base::Value::Dict& app_dict = update.Get();
+  base::DictValue& app_dict = update.Get();
   const std::string string_value = base::NumberToString(time.ToInternalValue());
   app_dict.Set(kLastLaunchTime, string_value);
 
@@ -1182,8 +1192,8 @@ void ArcAppListPrefs::SetLastLaunchTimeInternal(const std::string& app_id) {
     const user_manager::UserManager* user_manager =
         user_manager::UserManager::Get();
     if (arc::ArcSessionManager::Get()->skipped_terms_of_service_negotiation() &&
-        !user_manager->IsLoggedInAsKioskApp() &&
-        !user_manager->IsLoggedInAsArcKioskApp() &&
+        !chromeos::IsChromeAppKioskSession() &&
+        !user_manager->IsLoggedInAsKioskArcvmApp() &&
         !ash::UserSessionManager::GetInstance()->ui_shown_time().is_null()) {
       UMA_HISTOGRAM_CUSTOM_TIMES(
           "Arc.FirstAppLaunchRequest.TimeDelta",
@@ -1193,8 +1203,17 @@ void ArcAppListPrefs::SetLastLaunchTimeInternal(const std::string& app_id) {
   }
 }
 
+void ArcAppListPrefs::SetLastLaunchTimeForTesting(const std::string& app_id,
+                                                  base::Time timestamp) {
+  arc::ArcAppScopedPrefUpdate update(prefs_, app_id, arc::prefs::kArcApps);
+  base::DictValue& app_dict = update.Get();
+  const std::string string_value =
+      base::NumberToString(timestamp.ToInternalValue());
+  app_dict.Set(kLastLaunchTime, string_value);
+}
+
 void ArcAppListPrefs::DisableAllApps() {
-  std::unordered_set<std::string> old_ready_apps;
+  absl::flat_hash_set<std::string> old_ready_apps;
   old_ready_apps.swap(ready_apps_);
   for (auto& app_id : old_ready_apps)
     NotifyAppStatesChanged(app_id);
@@ -1210,7 +1229,6 @@ void ArcAppListPrefs::NotifyRegisteredApps() {
     std::unique_ptr<AppInfo> app_info = GetApp(app_id);
     if (!app_info) {
       NOTREACHED();
-      continue;
     }
 
     // Default apps are reported earlier.
@@ -1323,6 +1341,8 @@ void ArcAppListPrefs::RecordAppIdsUma() {
   // "Installed" apps are the ones that the user has manually installed. This
   // includes apps installed by Chrome's app sync feature. 0 for opt-out users.
   size_t num_installed_apps = 0;
+  // Number of apps that is a vpn_provider.
+  size_t num_vpn_apps = 0;
 
   const std::vector<std::string> app_ids = GetAppIds();
   for (const auto& app_id : app_ids) {
@@ -1345,6 +1365,10 @@ void ArcAppListPrefs::RecordAppIdsUma() {
     } else {
       ++num_installed_apps;
     }
+    auto package = GetPackage(app_info->package_name);
+    if (package && package->vpn_provider) {
+      ++num_vpn_apps;
+    }
   }
 
   const bool has_installed_apps = num_installed_apps;
@@ -1361,9 +1385,45 @@ void ArcAppListPrefs::RecordAppIdsUma() {
   base::UmaHistogramExactLinear(
       base::StrCat({kAppCountUmaPrefix, "InstalledApp"}), num_installed_apps,
       kAppCountUmaExclusiveMax);
+  base::UmaHistogramExactLinear(base::StrCat({kAppCountUmaPrefix, "VpnApp"}),
+                                num_vpn_apps, kAppCountUmaExclusiveMaxLower);
   base::UmaHistogramBoolean(
       base::StrCat({kAppCountUmaPrefix, "HasInstalledOrUnknownApp"}),
       has_installed_apps);
+}
+
+void ArcAppListPrefs::RecordAppCategoryDataSizeListUma(
+    std::vector<arc::mojom::AppInfoPtr> apps) {
+  if (app_category_data_size_uma_recorded_) {
+    // "Arc.Data.AppCategory.{Target}.DataSize" should be recorded only once
+    // per session.
+    return;
+  }
+
+  // Calculate combined data bytes for each app category.
+  std::map<arc::mojom::AppCategory, uint64_t> data_bytes_map;
+  for (const auto& app : apps) {
+    if (app->app_storage.is_null()) {
+      continue;
+    }
+    data_bytes_map[app->app_category] += app->app_storage->data_size_in_bytes;
+  }
+
+  VLOG(1) << "Recording Arc.Data.AppCategory.{Target}.DataSize UMA";
+  RecordAppCategoryDataSizeUma("Game", data_bytes_map[AppCategory::kGame]);
+  RecordAppCategoryDataSizeUma("Audio", data_bytes_map[AppCategory::kAudio]);
+  RecordAppCategoryDataSizeUma("Video", data_bytes_map[AppCategory::kVideo]);
+  RecordAppCategoryDataSizeUma("Image", data_bytes_map[AppCategory::kImage]);
+  RecordAppCategoryDataSizeUma("Social", data_bytes_map[AppCategory::kSocial]);
+  RecordAppCategoryDataSizeUma("Productivity",
+                               data_bytes_map[AppCategory::kProductivity]);
+  const uint64_t data_bytes_for_other_category =
+      data_bytes_map[AppCategory::kUndefined] +
+      data_bytes_map[AppCategory::kNews] + data_bytes_map[AppCategory::kMaps] +
+      data_bytes_map[AppCategory::kAccessibility];
+  RecordAppCategoryDataSizeUma("Other", data_bytes_for_other_category);
+
+  app_category_data_size_uma_recorded_ = true;
 }
 
 void ArcAppListPrefs::OnPolicySent(const std::string& policy) {
@@ -1402,7 +1462,7 @@ void ArcAppListPrefs::SetAppLocale(const std::string& package_name,
                                    const std::string& selected_locale) {
   arc::ArcAppScopedPrefUpdate update(prefs_, package_name,
                                      arc::prefs::kArcPackages);
-  base::Value::Dict& package_dict = update.Get();
+  base::DictValue& package_dict = update.Get();
   package_dict.EnsureDict(kLocaleInfo)->Set(kSelectedLocale, selected_locale);
 
   const std::string& app_id = GetAppIdByPackageName(package_name);
@@ -1438,7 +1498,7 @@ void ArcAppListPrefs::SetResizeLockState(const std::string& app_id,
   instance->SetResizeLockState(app_info->package_name, state);
 
   arc::ArcAppScopedPrefUpdate update(prefs_, app_id, arc::prefs::kArcApps);
-  base::Value::Dict& app_dict = update.Get();
+  base::DictValue& app_dict = update.Get();
   app_dict.Set(kResizeLockState, static_cast<int32_t>(state));
 
   // If the app is not "ready", we shouldn't fire the AppStatesChanged
@@ -1469,7 +1529,7 @@ void ArcAppListPrefs::SetResizeLockNeedsConfirmation(const std::string& app_id,
   }
 
   arc::ArcAppScopedPrefUpdate update(prefs_, app_id, arc::prefs::kArcApps);
-  base::Value::Dict& app_dict = update.Get();
+  base::DictValue& app_dict = update.Get();
   app_dict.Set(kResizeLockNeedsConfirmation, is_needed);
 }
 
@@ -1493,6 +1553,10 @@ std::string ArcAppListPrefs::GetAppPackageName(const std::string& app_id) {
 }
 
 void ArcAppListPrefs::Shutdown() {
+  if (app_connection_holder()) {
+    app_connection_holder()->RemoveObserver(this);
+  }
+
   arc::ArcPolicyBridge* policy_bridge =
       arc::ArcPolicyBridge::GetForBrowserContext(profile_);
   if (policy_bridge)
@@ -1501,6 +1565,11 @@ void ArcAppListPrefs::Shutdown() {
   // TODO(lgcheng) remove the check once the feature is enabled.
   if (install_priority_handler_) {
     install_priority_handler_->Shutdown();
+  }
+
+  arc::ArcSessionManager* arc_session_manager = arc::ArcSessionManager::Get();
+  if (arc_session_manager) {
+    arc_session_manager->RemoveObserver(this);
   }
 }
 
@@ -1662,13 +1731,18 @@ void ArcAppListPrefs::AddAppAndShortcut(
 
   // Do not add Play Store in certain conditions.
   if (app_id == arc::kPlayStoreAppId) {
+    // Users can only use admin-approved and installed apps on the
+    // reven board, not from the Play Store.
+    if (ash::switches::IsRevenBranding()) {
+      return;
+    }
+
     // TODO(khmel): Use show_in_launcher flag to hide the Play Store app.
     // Display Play Store if we are in Demo Mode.
     // TODO(b/154290639): Remove check for |IsDemoModeOfflineEnrolled| when
     //                    fixed in Play Store.
     if (arc::IsRobotOrOfflineDemoAccountMode() &&
-        !(ash::DemoSession::IsDeviceInDemoMode() &&
-          ash::features::ShouldShowPlayStoreInDemoMode())) {
+        !ash::demo_mode::IsDeviceInDemoMode()) {
       return;
     }
   }
@@ -1699,7 +1773,7 @@ void ArcAppListPrefs::AddAppAndShortcut(
       GetResizeLockNeedsConfirmation(app_id);
 
   arc::ArcAppScopedPrefUpdate update(prefs_, app_id, arc::prefs::kArcApps);
-  base::Value::Dict& app_dict = update.Get();
+  base::DictValue& app_dict = update.Get();
   app_dict.Set(kName, updated_name);
   app_dict.Set(kPackageName, package_name);
   app_dict.Set(kActivity, activity);
@@ -1867,7 +1941,7 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
 
   arc::ArcAppScopedPrefUpdate update(prefs_, package_name,
                                      arc::prefs::kArcPackages);
-  base::Value::Dict& package_dict = update.Get();
+  base::DictValue& package_dict = update.Get();
   const std::string id_str =
       base::NumberToString(package.last_backup_android_id);
   const std::string time_str = base::NumberToString(package.last_backup_time);
@@ -1886,11 +1960,11 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
   else
     package_dict.Set(kVersionName, std::string());
 
-  base::Value::Dict permissions_dict;
+  base::DictValue permissions_dict;
   if (package.permission_states.has_value()) {
     for (const auto& [permission_type, permission_state] :
          package.permission_states.value()) {
-      base::Value::Dict permission_state_dict;
+      base::DictValue permission_state_dict;
       permission_state_dict.Set(kPermissionStateGranted,
                                 permission_state->granted);
       permission_state_dict.Set(kPermissionStateManaged,
@@ -1915,7 +1989,7 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
 
   if (package.web_app_info) {
     const arc::mojom::WebAppInfo& web_app_info = *package.web_app_info;
-    base::Value::Dict web_app_info_dict;
+    base::DictValue web_app_info_dict;
     web_app_info_dict.Set(kTitle, web_app_info.title);
     web_app_info_dict.Set(kStartUrl, web_app_info.start_url);
     web_app_info_dict.Set(kScopeUrl, web_app_info.scope_url);
@@ -1936,7 +2010,7 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
                                        update_reason)) {
       // Rejects ARC prefs and sends the correct locale back to Android to
       // ensure eventual correctness.
-      const base::Value::Dict* locale_info_dict =
+      const base::DictValue* locale_info_dict =
           package_dict.EnsureDict(kLocaleInfo);
       const std::string* saved_selected_locale =
           locale_info_dict->FindString(kSelectedLocale);
@@ -1951,7 +2025,7 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
       }
     } else {
       // Accepts ARC prefs and save to dict.
-      base::Value::List supported_locales;
+      base::ListValue supported_locales;
       const arc::mojom::PackageLocaleInfo& package_locale_info =
           *package.locale_info;
       for (const std::string& supported_locale :
@@ -1963,7 +2037,7 @@ void ArcAppListPrefs::AddOrUpdatePackagePrefs(
       const auto& selected_locale = package_locale_info.selected_locale;
       package_dict.Set(
           kLocaleInfo,
-          base::Value::Dict()
+          base::DictValue()
               .Set(kSupportedLocales, std::move(supported_locales))
               .Set(kSelectedLocale,
                    IsLocaleTagValid(selected_locale) ? selected_locale : ""));
@@ -2051,6 +2125,9 @@ void ArcAppListPrefs::OnAppListRefreshed(
       MaybeSetDefaultAppLoadingTimeout();
     }
   }
+
+  RecordAppCategoryDataSizeListUma(std::move(apps));
+
   OnArcAppListRefreshed(profile_);
 }
 
@@ -2154,7 +2231,7 @@ void ArcAppListPrefs::OnPackageAppListRefreshed(
     return;
   }
 
-  std::unordered_set<std::string> apps_to_remove =
+  absl::flat_hash_set<std::string> apps_to_remove =
       GetAppsAndShortcutsForPackage(package_name,
                                     true, /* include_only_launchable_apps */
                                     false /* include_shortcuts */);
@@ -2168,7 +2245,7 @@ void ArcAppListPrefs::OnPackageAppListRefreshed(
 
   arc::ArcAppScopedPrefUpdate update(prefs_, package_name,
                                      arc::prefs::kArcPackages);
-  base::Value::Dict& package_dict = update.Get();
+  base::DictValue& package_dict = update.Get();
   if (!apps_to_remove.empty()) {
     auto* shelf_controller = ChromeShelfController::instance();
     if (shelf_controller) {
@@ -2202,7 +2279,7 @@ void ArcAppListPrefs::OnInstallShortcut(arc::mojom::ShortcutInfoPtr shortcut) {
 void ArcAppListPrefs::OnUninstallShortcut(const std::string& package_name,
                                           const std::string& intent_uri) {
   std::vector<std::string> shortcuts_to_remove;
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
   for (const auto app : apps) {
     if (!app.second.is_dict()) {
       VLOG(2) << "Failed to extract information for " << app.first << ".";
@@ -2231,26 +2308,25 @@ void ArcAppListPrefs::OnUninstallShortcut(const std::string& package_name,
     RemoveApp(shortcut_id);
 }
 
-std::unordered_set<std::string> ArcAppListPrefs::GetAppsForPackage(
+absl::flat_hash_set<std::string> ArcAppListPrefs::GetAppsForPackage(
     const std::string& package_name) const {
   return GetAppsAndShortcutsForPackage(package_name,
                                        false, /* include_only_launchable_apps */
                                        false /* include_shortcuts */);
 }
 
-std::unordered_set<std::string> ArcAppListPrefs::GetAppsAndShortcutsForPackage(
+absl::flat_hash_set<std::string> ArcAppListPrefs::GetAppsAndShortcutsForPackage(
     const std::string& package_name,
     bool include_only_launchable_apps,
     bool include_shortcuts) const {
-  std::unordered_set<std::string> app_set;
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  absl::flat_hash_set<std::string> app_set;
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
   for (const auto app : apps) {
     if (!crx_file::id_util::IdIsValid(app.first))
       continue;
 
     if (!app.second.is_dict()) {
       NOTREACHED();
-      continue;
     }
 
     const std::string* app_package =
@@ -2282,7 +2358,7 @@ std::unordered_set<std::string> ArcAppListPrefs::GetAppsAndShortcutsForPackage(
 
 void ArcAppListPrefs::HandlePackageRemoved(const std::string& package_name) {
   DCHECK(IsArcAndroidEnabledForProfile(profile_));
-  const std::unordered_set<std::string> apps_to_remove =
+  const absl::flat_hash_set<std::string> apps_to_remove =
       GetAppsAndShortcutsForPackage(package_name,
                                     false /* include_only_launchable_apps */,
                                     true /* include_shortcuts */);
@@ -2374,11 +2450,10 @@ void ArcAppListPrefs::OnTaskSetActive(int32_t task_id) {
 void ArcAppListPrefs::OnNotificationsEnabledChanged(
     const std::string& package_name,
     bool enabled) {
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
   for (const auto app : apps) {
     if (!app.second.is_dict()) {
       NOTREACHED();
-      continue;
     }
     const std::string* app_package_name =
         app.second.GetDict().FindString(kPackageName);
@@ -2390,23 +2465,11 @@ void ArcAppListPrefs::OnNotificationsEnabledChanged(
       continue;
     }
     arc::ArcAppScopedPrefUpdate update(prefs_, app.first, arc::prefs::kArcApps);
-    base::Value::Dict& updating_app_dict = update.Get();
+    base::DictValue& updating_app_dict = update.Get();
     updating_app_dict.Set(kNotificationsEnabled, enabled);
   }
   for (auto& observer : observer_list_)
     observer.OnNotificationsEnabledChanged(package_name, enabled);
-}
-
-bool ArcAppListPrefs::IsUnknownPackage(const std::string& package_name) const {
-  if (GetPackage(package_name))
-    return false;
-  if (sync_service_ && sync_service_->IsPackageSyncing(package_name))
-    return false;
-  if (default_apps_->HasPackage(package_name))
-    return false;
-  if (apps_installations_.count(package_name))
-    return false;
-  return true;
 }
 
 bool ArcAppListPrefs::IsDefaultPackage(const std::string& package_name) const {
@@ -2453,7 +2516,7 @@ void ArcAppListPrefs::OnPackageListRefreshed(
   for (const auto& package : packages) {
     AddOrUpdatePackagePrefs(*package,
                             UpdatePackagePrefsReason::kOnPackageListRefreshed);
-    if (!base::Contains(old_packages, package->package_name)) {
+    if (!old_packages.contains(package->package_name)) {
       for (auto& observer : observer_list_)
         observer.OnPackageInstalled(*package);
     } else {
@@ -2464,7 +2527,7 @@ void ArcAppListPrefs::OnPackageListRefreshed(
   }
 
   for (const auto& package_name : old_packages) {
-    if (!base::Contains(current_packages, package_name)) {
+    if (!current_packages.contains(package_name)) {
       RemovePackageFromPrefs(package_name);
       for (auto& observer : observer_list_)
         observer.OnPackageRemoved(package_name, false);
@@ -2491,12 +2554,11 @@ std::vector<std::string> ArcAppListPrefs::GetPackagesFromPrefs(
     return packages;
   }
 
-  const base::Value::Dict& package_prefs =
+  const base::DictValue& package_prefs =
       prefs_->GetDict(arc::prefs::kArcPackages);
   for (const auto package : package_prefs) {
     if (!package.second.is_dict()) {
       NOTREACHED();
-      continue;
     }
 
     const bool uninstalled =
@@ -2511,9 +2573,9 @@ std::vector<std::string> ArcAppListPrefs::GetPackagesFromPrefs(
 }
 
 base::Time ArcAppListPrefs::GetInstallTime(const std::string& app_id) const {
-  const base::Value::Dict& apps = prefs_->GetDict(arc::prefs::kArcApps);
+  const base::DictValue& apps = prefs_->GetDict(arc::prefs::kArcApps);
 
-  const base::Value::Dict* app = apps.FindDict(app_id);
+  const base::DictValue* app = apps.FindDict(app_id);
   if (!app)
     return base::Time();
 

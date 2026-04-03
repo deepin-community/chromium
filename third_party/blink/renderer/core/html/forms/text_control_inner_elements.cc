@@ -27,19 +27,17 @@
 #include "third_party/blink/renderer/core/html/forms/text_control_inner_elements.h"
 
 #include "third_party/blink/public/common/input/web_pointer_properties.h"
-#include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/core/css/resolver/style_adjuster.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_token_list.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/forms/layout_text_control_inner_editor.h"
-#include "third_party/blink/renderer/platform/text/platform_locale.h"
 
 namespace blink {
 
@@ -152,9 +150,15 @@ const ComputedStyle* TextControlInnerEditorElement::CustomStyleForLayoutObject(
           ? EUserModify::kReadOnly
           : EUserModify::kReadWritePlaintextOnly);
   style_builder.SetDisplay(EDisplay::kBlock);
-  style_builder.SetHasLineIfEmpty(true);
   if (!start_style.ApplyControlFixedSize(host)) {
-    Length caret_width(GetDocument().View()->CaretWidth(), Length::kFixed);
+    const Font* font = start_style.GetFont();
+    const SimpleFontData* font_data = font->PrimaryFont();
+    LayoutUnit default_width = GetDocument().View()->BarCaretWidth();
+    CaretShape caret_shape = GetCaretShapeFromComputedStyle(start_style);
+    if (caret_shape != CaretShape::kBar && font_data) [[unlikely]] {
+      default_width = LayoutUnit(font_data->AvgCharWidth());
+    }
+    Length caret_width(default_width, Length::kFixed);
     if (IsHorizontalWritingMode(style_builder.GetWritingMode())) {
       style_builder.SetMinWidth(caret_width);
     } else {
@@ -164,7 +168,8 @@ const ComputedStyle* TextControlInnerEditorElement::CustomStyleForLayoutObject(
   style_builder.SetShouldIgnoreOverflowPropertyForInlineBlockBaseline();
 
   if (!IsA<HTMLTextAreaElement>(host)) {
-    style_builder.SetScrollbarColor(std::nullopt);
+    style_builder.SetHasLineIfEmpty(true);
+    style_builder.SetScrollbarColor(nullptr);
     style_builder.SetWhiteSpace(EWhiteSpace::kPre);
     style_builder.SetOverflowWrap(EOverflowWrap::kNormal);
     style_builder.SetTextOverflow(ToTextControl(host)->ValueForTextOverflow());
@@ -184,9 +189,9 @@ const ComputedStyle* TextControlInnerEditorElement::CustomStyleForLayoutObject(
     // in which we don't want to remove line-height with percent or calculated
     // length.
     // TODO(tkent): This should be done during layout.
-    if (logical_height.IsPercentOrCalc() ||
+    if (logical_height.HasPercent() ||
         (logical_height.IsFixed() &&
-         logical_height.GetFloatValue() > computed_line_height)) {
+         logical_height.Pixels() > computed_line_height)) {
       style_builder.SetLineHeight(
           ComputedStyleInitialValues::InitialLineHeight());
     }
@@ -197,9 +202,7 @@ const ComputedStyle* TextControlInnerEditorElement::CustomStyleForLayoutObject(
     style_builder.SetOverflowX(EOverflow::kScroll);
     // overflow-y:visible doesn't work because overflow-x:scroll makes a layer.
     style_builder.SetOverflowY(EOverflow::kScroll);
-    style_builder.SetPseudoElementStyles(
-        1 << (kPseudoIdScrollbar - kFirstPublicPseudoId));
-
+    style_builder.SetScrollbarWidth(EScrollbarWidth::kNone);
     style_builder.SetDisplay(EDisplay::kFlowRoot);
   }
 
@@ -209,18 +212,7 @@ const ComputedStyle* TextControlInnerEditorElement::CustomStyleForLayoutObject(
   if (!is_visible_)
     style_builder.SetOpacity(0);
 
-  const ComputedStyle* style = style_builder.TakeStyle();
-
-  if (style->HasPseudoElementStyle(kPseudoIdScrollbar)) {
-    ComputedStyleBuilder no_scrollbar_style_builder =
-        GetDocument().GetStyleResolver().CreateComputedStyleBuilder();
-    no_scrollbar_style_builder.SetStyleType(kPseudoIdScrollbar);
-    no_scrollbar_style_builder.SetDisplay(EDisplay::kNone);
-    style->AddCachedPseudoElementStyle(no_scrollbar_style_builder.TakeStyle(),
-                                       kPseudoIdScrollbar, g_null_atom);
-  }
-
-  return style;
+  return style_builder.TakeStyle();
 }
 
 // ----------------------------
@@ -302,14 +294,4 @@ bool PasswordRevealButtonElement::WillRespondToMouseClickEvents() {
   return HTMLDivElement::WillRespondToMouseClickEvents();
 }
 
-// ----------------------------
-
-PasswordStrongLabelElement::PasswordStrongLabelElement(Document& document)
-    : HTMLDivElement(document) {
-  SetShadowPseudoId(AtomicString("-internal-strong"));
-  setAttribute(html_names::kIdAttr,
-               shadow_element_names::kIdPasswordStrongLabel);
-  setTextContent(
-      Locale::DefaultLocale().QueryString(IDS_STRONG_PASSWORD_LABEL));
-}
 }  // namespace blink

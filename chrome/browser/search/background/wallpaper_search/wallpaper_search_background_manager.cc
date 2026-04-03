@@ -34,10 +34,6 @@ const char kWallpaperSearchHistoryMood[] = "mood";
 const char kWallpaperSearchHistoryStyle[] = "style";
 const char kWallpaperSearchHistorySubject[] = "subject";
 
-void WriteFileToPath(const std::string& data, const base::FilePath& path) {
-  base::WriteFile(path, base::as_bytes(base::make_span(data)));
-}
-
 void DeleteWallpaperSearchImage(const std::string& id,
                                 const base::FilePath& profile_path) {
   base::FilePath path = profile_path.AppendASCII(
@@ -50,7 +46,7 @@ void DeleteWallpaperSearchImage(const std::string& id,
 std::optional<HistoryEntry> GetHistoryEntryFromPrefValue(
     const base::Value& pref_value) {
   if (pref_value.is_dict()) {
-    const base::Value::Dict& pref_dict = pref_value.GetDict();
+    const base::DictValue& pref_dict = pref_value.GetDict();
     const std::string* id_string =
         pref_dict.FindString(kWallpaperSearchHistoryId);
     if (id_string) {
@@ -79,8 +75,8 @@ std::optional<HistoryEntry> GetHistoryEntryFromPrefValue(
   return std::nullopt;
 }
 
-base::Value::Dict GetHistoryEntryDict(const HistoryEntry& history_entry) {
-  base::Value::Dict history_entry_dict = base::Value::Dict().Set(
+base::DictValue GetHistoryEntryDict(const HistoryEntry& history_entry) {
+  base::DictValue history_entry_dict = base::DictValue().Set(
       kWallpaperSearchHistoryId, history_entry.id.ToString());
   if (history_entry.subject) {
     history_entry_dict.Set(kWallpaperSearchHistorySubject,
@@ -101,7 +97,7 @@ base::Value::Dict GetHistoryEntryDict(const HistoryEntry& history_entry) {
 void WallpaperSearchBackgroundManager::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
   registry->RegisterListPref(prefs::kNtpWallpaperSearchHistory,
-                             base::Value::List());
+                             base::ListValue());
 }
 
 // static
@@ -208,10 +204,9 @@ void WallpaperSearchBackgroundManager::SelectLocalBackgroundImage(
     return;
   }
 
-  std::vector<unsigned char> encoded;
-  const bool success = gfx::PNGCodec::EncodeBGRASkBitmap(
-      bitmap, /*discard_transparency=*/false, &encoded);
-  if (success) {
+  std::optional<std::vector<uint8_t>> encoded =
+      gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, /*discard_transparency=*/false);
+  if (encoded) {
     // Do not update theme image unless it is different from the current.
     // Otherwise, we end up deleting the image file as part of the cleanup
     // of the last theme.
@@ -223,10 +218,15 @@ void WallpaperSearchBackgroundManager::SelectLocalBackgroundImage(
       base::ThreadPool::PostTaskAndReply(
           FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
           base::BindOnce(
-              &WriteFileToPath, std::string(encoded.begin(), encoded.end()),
+              // Resolve ambiguous base::WriteFile call with inline lambda.
+              [](const base::FilePath& filename,
+                 base::span<const uint8_t> data) {
+                base::WriteFile(filename, data);
+              },
               profile_->GetPath().AppendASCII(
                   id.ToString() +
-                  chrome::kChromeUIUntrustedNewTabPageBackgroundFilename)),
+                  chrome::kChromeUIUntrustedNewTabPageBackgroundFilename),
+              encoded.value()),
           base::BindOnce(&WallpaperSearchBackgroundManager::
                              SetBackgroundToLocalResourceWithId,
                          weak_ptr_factory_.GetWeakPtr(), id, std::move(timer),
@@ -247,10 +247,10 @@ WallpaperSearchBackgroundManager::SaveCurrentBackgroundToHistory(
       current_theme->local_background_id.has_value() &&
       current_theme->local_background_id->ToString() ==
           history_entry.id.ToString()) {
-    const base::Value::List& current_history =
+    const base::ListValue& current_history =
         pref_service_->GetList(prefs::kNtpWallpaperSearchHistory);
-    base::Value::List new_history =
-        base::Value::List().Append(GetHistoryEntryDict(history_entry));
+    base::ListValue new_history =
+        base::ListValue().Append(GetHistoryEntryDict(history_entry));
     // Add each value in |current_history| to |new_history| until
     // |new_history| reaches the max size of 6. Do not append the
     // value if it is the same as the id of |current_theme|.

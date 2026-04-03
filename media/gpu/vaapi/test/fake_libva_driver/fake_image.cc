@@ -4,6 +4,7 @@
 
 #include "media/gpu/vaapi/test/fake_libva_driver/fake_image.h"
 
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/numerics/checked_math.h"
 #include "media/gpu/vaapi/test/fake_libva_driver/fake_buffer.h"
@@ -52,7 +53,7 @@ std::unique_ptr<FakeImage> FakeImage::Create(IdType id,
       uv_offset.ValueOrDie<unsigned int>());
   data_size += uv_size.ValueOrDie<unsigned int>();
 
-  memset(va_image, 0, sizeof(VAImage));
+  UNSAFE_TODO(memset(va_image, 0, sizeof(VAImage)));
   va_image->image_id = id;
   va_image->format = format;
 

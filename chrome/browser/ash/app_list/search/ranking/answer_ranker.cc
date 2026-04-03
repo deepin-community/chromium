@@ -20,7 +20,6 @@ int GetPriority(ProviderType type) {
       return 3;
     case ProviderType::kKeyboardShortcut:
       return 2;
-      // TODO(b/263994165): Check if this is the correct priority.
     case ProviderType::kSystemInfo:
       return 1;
     default:
@@ -93,7 +92,7 @@ AnswerRanker::AnswerRanker() = default;
 AnswerRanker::~AnswerRanker() = default;
 
 void AnswerRanker::Start(const std::u16string& query,
-                         CategoriesList& categories) {
+                         const CategoriesList& categories) {
   burn_in_elapsed_ = false;
   chosen_answer_ = nullptr;
   omnibox_candidates_.clear();

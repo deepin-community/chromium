@@ -14,6 +14,7 @@
 #include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
 #include "chromeos/ash/components/dbus/cryptohome/rpc.pb.h"
 #include "chromeos/ash/components/login/auth/mount_performer.h"
+#include "components/user_manager/user_directory_integrity_manager.h"
 
 class AccountId;
 class PrefService;
@@ -48,12 +49,13 @@ class COMPONENT_EXPORT(ASH_LOGIN_INTEGRITY) MisconfiguredUserCleaner {
   // Must be called on the UI thread. Schedules misconfigured user cleanup if
   // any did not successfully go through the user creation process during the
   // previous boot. Misconfigured users will not be shown in the login UI, as we
-  // filter them as part of `UserManagerBase::EnsureUsersLoaded`.
+  // filter them as part of `UserManagerImpl::EnsureUsersLoaded`.
   void ScheduleCleanup();
 
  private:
   void DoCleanup(user_manager::UserDirectoryIntegrityManager&,
-                 const AccountId&);
+                 const AccountId&,
+                 user_manager::UserDirectoryIntegrityManager::CleanupStrategy);
 
   void OnStartDeviceWipe(bool result);
 

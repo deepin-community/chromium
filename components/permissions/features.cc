@@ -3,74 +3,50 @@
 // found in the LICENSE file.
 
 #include "components/permissions/features.h"
+
 #include "base/feature_list.h"
 #include "base/time/time.h"
 
 namespace permissions {
 namespace features {
 
+#if BUILDFLAG(IS_ANDROID)
+// Enables or disables usage of Window Management Web API.
+BASE_FEATURE(kAndroidWindowManagementWebApi, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Shows or hides the cancel button in the ItemChooserDialog.
+BASE_FEATURE(kAndroidItemChooserCancelButton, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID)
+
 // Enables or disables whether pages with pending permission requests will
 // go into back/forward cache.
 BASE_FEATURE(kBackForwardCacheUnblockPermissionRequest,
-             "BackForwardCacheUnblockPermissionRequest",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Enables or disables whether permission prompts are automatically blocked
-// after the user has explicitly dismissed them too many times.
-BASE_FEATURE(kBlockPromptsIfDismissedOften,
-             "BlockPromptsIfDismissedOften",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kKeyboardLockPrompt, base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Enables or disables whether permission prompts are automatically blocked
-// after the user has ignored them too many times.
-BASE_FEATURE(kBlockPromptsIfIgnoredOften,
-             "BlockPromptsIfIgnoredOften",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Once the user has auto re-authenticated, automatically block subsequent auto
-// re-authn prompts within the next 10 minutes.
-BASE_FEATURE(kBlockRepeatedAutoReauthnPrompts,
-             "BlockRepeatedAutoReauthnPrompts",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Once the user declines a notification permission prompt in a WebContents,
-// automatically dismiss subsequent prompts in the same WebContents, from any
-// origin, until the next user-initiated navigation.
-BASE_FEATURE(kBlockRepeatedNotificationPermissionPrompts,
-             "BlockRepeatedNotificationPermissionPrompts",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kOneTimePermission,
-             "OneTimePermission",
+// Enables different positioning of the permission dialog, so that it's placed
+// near the permission element, if possible.
+// This feature should be enabled with blink::features::kPermissionElement.
+BASE_FEATURE(kPermissionElementPromptPositioning,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Enables a faster permission request finalization if it is displayed as a
-// quiet chip.
-BASE_FEATURE(kFailFastQuietChip,
-             "FailFastQuietChip",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+// Enables heuristic auto-grant for permissions.
+BASE_FEATURE(kPermissionHeuristicAutoGrant, base::FEATURE_DISABLED_BY_DEFAULT);
 
-// When enabled, use the value of the `service_url` FeatureParam as the url
-// for the Web Permission Predictions Service.
-BASE_FEATURE(kPermissionPredictionServiceUseUrlOverride,
-             "kPermissionPredictionServiceUseUrlOverride",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kPermissionPredictionsV2, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPermissionsAIv3, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPermissionsAIv4, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPermissionsAIP92, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPermissionOnDeviceNotificationPredictions,
-             "PermissionOnDeviceNotificationPredictions",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPermissionOnDeviceGeolocationPredictions,
-             "PermissionOnDeviceGeolocationPredictions",
              base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kPermissionDedicatedCpssSetting,
-             "PermissionDedicatedCpssSettings",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kPermissionPredictionsV2,
-             "PermissionPredictionsV2",
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Controls whether to trigger showing a HaTS survey, with the given
 // `probability` and `trigger_id`. The `probability` parameter is defined and
@@ -84,16 +60,17 @@ BASE_FEATURE(kPermissionPredictionsV2,
 // configuring `PermissionAction` does not make sense in that case, since the
 // user has not yet taken an action. Therefore, that parameter is ignored in
 // that case.
-BASE_FEATURE(kPermissionsPromptSurvey,
-             "PermissionsPromptSurvey",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kPermissionsPromptSurvey, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// When enabled, use the value of the `allowlist_urls` FeatureParam as the
+// list of origins which would be allowed to access browser permission and
+// device attribute API for a web kiosk session.
+BASE_FEATURE(kAllowMultipleOriginsForWebKioskPermissions,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_ANDROID)
 
-// When enabled, blocks notifications permission prompt when Chrome doesn't
-// have app level Notification permission.
-BASE_FEATURE(kBlockNotificationPromptsIfDisabledOnAppLevel,
-             "BlockNotificationPromptsIfDisabledOnAppLevel",
+BASE_FEATURE(kPermissionDedicatedCpssSettingAndroid,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 #else
@@ -102,72 +79,68 @@ BASE_FEATURE(kBlockNotificationPromptsIfDisabledOnAppLevel,
 // date set. The timestamp will be later used to auto-revoke the permission,
 // if eligible.
 BASE_FEATURE(kRecordChooserPermissionLastVisitedTimestamps,
-             "RecordChooserPermissionLastVisitedTimestamps",
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Kill switch for the mitigation for https://crbug.com/1462709
-BASE_FEATURE(kMitigateUnpartitionedWebviewPermissions,
-             "MitigateUnpartitionedWebviewPermissions",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 #endif  // BUILDFLAG(IS_ANDROID)
 
-// When enabled, permission grants for Storage Access API will be enabled.
-// This includes enabling prompts, a new settings page and page info and
-// omnibox integration.
-BASE_FEATURE(kPermissionStorageAccessAPI,
-             "PermissionStorageAccessAPI",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// When enabled "window-placement" may be used as an alias for
-// "window-management". Additionally, reverse mappings (i.e. enum to string)
-// will default to the legacy strings ("window-placement").
-BASE_FEATURE(kWindowPlacementPermissionAlias,
-             "WindowPlacementPermissionAlias",
+// When enabled, site settings pages use radio button groups other than toggles.
+// In the meanwhile, CPSS if exist will be a separate radio button group.
+BASE_FEATURE(kPermissionSiteSettingsRadioButton,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // When enabled, blocks condition to exclude auto granted permissions for
 // storage access exceptions. This will allow RWS permission grants to be
 // visible in the Embedded content settings page.
 BASE_FEATURE(kShowRelatedWebsiteSetsPermissionGrants,
-             "ShowRelatedWebsiteSetsPermissionGrants",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // When enabled, Quiet prompts triggered by CPSS will have "Get Notifications?"
 // as the the chip text instead of the usual "Notifications Blocked".
-BASE_FEATURE(kCpssQuietChipTextUpdate,
-             "CpssQuietChipTextUpdate",
+BASE_FEATURE(kCpssQuietChipTextUpdate, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kCpssUseTfliteSignatureRunner, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kGlicActorPermissionsAutoReject, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSafetyHubUnusedPermissionRevocationForAllSurfaces,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_ANDROID)
+// When enabled, Chrome returns "DENIED" (instead of "ASK") as permission state
+// for notifications if Chrome does not have and cannot acquire app-level
+// permissions on Android.
+BASE_FEATURE(kReturnDeniedForNotificationsWhenNoAppLevelSettings,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif
+
+// Only applicable if kApproximateGeolocationPermission is enabled. When
+// enabled, will use the returned accuracy from CPSS to select the initial value
+// of the geolocation accuracy (precise/approximate) for geolocation permission
+// prompts.
+BASE_FEATURE(kPermissionPredictionsGeolocationAccuracy,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// When enabled, notification and geolocation permission requests that
+// are not accompanied by a user gesture will be shown as quiet prompts.
+BASE_FEATURE(kPermissionsGestureGatedPrompts,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace features
+
 namespace feature_params {
 
-const base::FeatureParam<bool> kUseStrongerPromptLanguage{
-    &features::kOneTimePermission, "use_stronger_prompt_language", false};
+const base::FeatureParam<PermissionElementPromptPosition>::Option
+    kPromptPositioningOptions[] = {
+        {PermissionElementPromptPosition::kWindowMiddle, "window_middle"},
+        {PermissionElementPromptPosition::kNearElement, "near_element"},
+        {PermissionElementPromptPosition::kLegacyPrompt, "legacy_prompt"}};
 
-const base::FeatureParam<base::TimeDelta> kOneTimePermissionTimeout{
-    &features::kOneTimePermission, "one_time_permission_timeout",
-    base::Minutes(5)};
-
-const base::FeatureParam<base::TimeDelta> kOneTimePermissionLongTimeout{
-    &features::kOneTimePermission, "one_time_permission_long_timeout",
-    base::Hours(16)};
-
-const base::FeatureParam<std::string> kPermissionPredictionServiceUrlOverride{
-    &permissions::features::kPermissionPredictionServiceUseUrlOverride,
-    "service_url", ""};
-
-const base::FeatureParam<double>
-    kPermissionOnDeviceGeolocationPredictionsHoldbackChance(
-        &features::kPermissionOnDeviceGeolocationPredictions,
-        "holdback_chance",
-        0.3);
-
-const base::FeatureParam<double>
-    kPermissionOnDeviceNotificationPredictionsHoldbackChance(
-        &features::kPermissionOnDeviceNotificationPredictions,
-        "holdback_chance",
-        0.2);
+const base::FeatureParam<PermissionElementPromptPosition>
+    kPermissionElementPromptPositioningParam = {
+        &features::kPermissionElementPromptPositioning,
+        "PermissionElementPromptPositioningParam",
+        PermissionElementPromptPosition::kWindowMiddle,
+        &kPromptPositioningOptions};
 
 const base::FeatureParam<double> kPermissionPredictionsV2HoldbackChance(
     &features::kPermissionPredictionsV2,
@@ -303,6 +276,48 @@ const base::FeatureParam<std::string>
     kPermissionPromptSurveyOneTimePromptsDecidedBucket{
         &permissions::features::kPermissionsPromptSurvey,
         "one_time_prompts_decided_bucket", ""};
+
+// This parameter specifies which prompt position should have been used for a
+// HaTS survery to be allowed to trigger. It only applies to permission element
+// prompts (PEPC). Valid values are the values in the
+// |kPromptPositioningOptions| array. Multiple values can be configured by
+// providing a comma separated list and an empty value means no filtering (all
+// allowed).
+const base::FeatureParam<std::string>
+    kPermissionPromptSurveyPepcPromptPositionFilter{
+        &permissions::features::kPermissionsPromptSurvey,
+        "pepc_prompt_position_filter", ""};
+
+// This parameter specifies what the initial permission status was before a
+// permission prompt was displayed. It's only relevant to permission element
+// prompts (PEPC), since other prompts will always report "ask". Valid values
+// are the values returned by |content_settings::ContentSettingToString| util
+// function. Multiple values can be configured by providing a comma separated
+// list and an empty value means no filtering (all allowed).
+const base::FeatureParam<std::string>
+    kPermissionPromptSurveyInitialPermissionStatusFilter{
+        &permissions::features::kPermissionsPromptSurvey,
+        "initial_permission_status_filter", ""};
+
+// Comma separated url patterns which should be allowed for accessing web kiosk
+// browser permissions and device attributes API. If left empty no URL patterns
+// will be allowed.
+const base::FeatureParam<std::string> kWebKioskBrowserPermissionsAllowlist{
+    &permissions::features::kAllowMultipleOriginsForWebKioskPermissions,
+    "allowlist_urls", ""};
+
+const base::FeatureParam<bool> kPermissionsGestureGatedPromptsMuteNotifications{
+    &permissions::features::kPermissionsGestureGatedPrompts,
+    "mute_notifications", false};
+
+const base::FeatureParam<bool> kPermissionsGestureGatedPromptsMuteGeolocation{
+    &permissions::features::kPermissionsGestureGatedPrompts, "mute_geolocation",
+    false};
+
+#if !BUILDFLAG(IS_ANDROID)
+const base::FeatureParam<bool> kKeyboardLockPromptUIStyle{
+    &permissions::features::kKeyboardLockPrompt, "use_pepc_ui", true};
+#endif
 
 }  // namespace feature_params
 }  // namespace permissions

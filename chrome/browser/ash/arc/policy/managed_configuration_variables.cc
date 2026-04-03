@@ -9,9 +9,9 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -20,8 +20,6 @@
 #include "chrome/browser/ash/policy/core/device_attributes.h"
 #include "chrome/browser/ash/policy/core/device_attributes_impl.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
@@ -172,8 +170,7 @@ std::vector<std::string_view> SplitByColon(std::string_view input) {
 // replaced with the output of |replacement_getter.Run(capture)|.
 std::string SearchAndReplace(
     const re2::RE2& regex,
-    base::RepeatingCallback<std::string(const std::string_view&)>
-        replacement_getter,
+    base::RepeatingCallback<std::string(std::string_view)> replacement_getter,
     std::string_view search_input) {
   std::vector<std::string> output;
   std::string_view capture;
@@ -184,7 +181,7 @@ std::string SearchAndReplace(
     // Output the prefix skipped by PartialMatch until |capture| is found.
     DCHECK(capture.begin() >= search_input.begin());
     size_t prefix_size = capture.begin() - search_input.begin();
-    output.emplace_back(search_input.begin(), prefix_size);
+    output.emplace_back(search_input.data(), prefix_size);
     // Output the replacement for |capture|.
     output.emplace_back(replacement_getter.Run(capture));
 
@@ -192,7 +189,8 @@ std::string SearchAndReplace(
     DCHECK(search_input.length() >= prefix_size + capture.length());
     size_t remaining_size =
         search_input.length() - (prefix_size + capture.length());
-    search_input = std::string_view(capture.end(), remaining_size);
+    search_input = std::string_view(
+        UNSAFE_TODO(capture.data() + capture.size()), remaining_size);
   }
   // Output the remaining |search_input|.
   output.emplace_back(search_input);
@@ -230,7 +228,7 @@ void ReplaceVariables(const VariableResolver& resolver,
 
   // Callback to compute values of variable chains matched with |regex|.
   auto chain_resolver = base::BindRepeating(
-      [](const VariableResolver& resolver, const std::string_view& variable) {
+      [](const VariableResolver& resolver, std::string_view variable) {
         // Remove the "${" prefix and the "}" suffix from |variable|.
         DCHECK(variable.starts_with("${") && variable.ends_with("}"));
         const std::string_view chain = variable.substr(2, variable.size() - 3);
@@ -252,14 +250,14 @@ void ReplaceVariables(const VariableResolver& resolver,
                       base::Value& configuration);
 
 void ReplaceVariables(const VariableResolver& resolver,
-                      base::Value::Dict& configuration) {
+                      base::DictValue& configuration) {
   for (auto entry : configuration) {
     ReplaceVariables(resolver, entry.second);
   }
 }
 
 void ReplaceVariables(const VariableResolver& resolver,
-                      base::Value::List& configuration) {
+                      base::ListValue& configuration) {
   for (auto& entry : configuration) {
     ReplaceVariables(resolver, entry);
   }
@@ -288,7 +286,7 @@ const char kDeviceAnnotatedLocation[] = "DEVICE_ANNOTATED_LOCATION";
 
 void RecursivelyReplaceManagedConfigurationVariables(
     const Profile* profile,
-    base::Value::Dict& managedConfiguration) {
+    base::DictValue& managedConfiguration) {
   policy::DeviceAttributesImpl device_attributes;
   RecursivelyReplaceManagedConfigurationVariables(profile, &device_attributes,
                                                   managedConfiguration);
@@ -297,7 +295,7 @@ void RecursivelyReplaceManagedConfigurationVariables(
 void RecursivelyReplaceManagedConfigurationVariables(
     const Profile* profile,
     policy::DeviceAttributes* device_attributes,
-    base::Value::Dict& managedConfiguration) {
+    base::DictValue& managedConfiguration) {
   const VariableResolver resolver =
       BuildVariableResolver(profile, device_attributes);
   ReplaceVariables(resolver, managedConfiguration);

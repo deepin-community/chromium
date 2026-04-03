@@ -10,7 +10,7 @@
  * regenerate.
  */
 
-import {ChromeEvent} from './chrome_event.js';
+import type {ChromeEvent} from './chrome_event.js';
 
 declare global {
   export namespace chrome {
@@ -89,6 +89,7 @@ declare global {
         NEED_PASSWORD = 'need_password',
         CANCELLED = 'cancelled',
         BUSY = 'busy',
+        CORRUPTED = 'corrupted',
       }
 
       export enum FormatFileSystemType {
@@ -361,6 +362,19 @@ declare global {
         CANNOT_ENABLE_DOCS_OFFLINE = 'cannot_enable_docs_offline',
       }
 
+      export enum DefaultLocation {
+        MY_FILES = 'my_files',
+        GOOGLE_DRIVE = 'google_drive',
+        ONEDRIVE = 'onedrive',
+      }
+
+      export enum MigrationDestination {
+        NOT_SPECIFIED = 'not_specified',
+        GOOGLE_DRIVE = 'google_drive',
+        ONEDRIVE = 'onedrive',
+        DELETE = 'delete',
+      }
+
       export interface FileTaskDescriptor {
         appId: string;
         taskType: string;
@@ -547,6 +561,9 @@ declare global {
         driveFsBulkPinningAvailable: boolean;
         driveFsBulkPinningEnabled: boolean;
         localUserFilesAllowed: boolean;
+        defaultLocation: DefaultLocation;
+        skyVaultMigrationDestination: MigrationDestination;
+        skyVaultMigrationStartTime?: string;
       }
 
       export interface PreferencesChange {
@@ -780,6 +797,15 @@ declare global {
         emptiedQueue: boolean;
       }
 
+      export interface MaterializedView {
+        viewId: number;
+        name: string;
+      }
+
+      export interface EntryData {
+        entryUrl: string;
+      }
+
       export function cancelDialog(): void;
 
       export function executeTask(
@@ -899,11 +925,6 @@ declare global {
           searchParams: SearchMetadataParams,
           callback: (results: DriveMetadataSearchResult[]) => void): void;
 
-      export function searchFilesByHashes(
-          volumeId: string, hashList: string[], callback: (paths: {
-                                                  [key: string]: any,
-                                                }) => void): void;
-
       export function searchFiles(
           searchParams: SearchMetadataParams,
           callback: (entries: Entry[]) => void): void;
@@ -926,9 +947,6 @@ declare global {
       export function openInspector(type: InspectionType): void;
 
       export function openSettingsSubpage(subPage: string): void;
-
-      export function computeChecksum(
-          entry: Entry, callback: (checksum: string) => void): void;
 
       export function getProviders(callback: (extensions: Provider[]) => void):
           void;
@@ -971,14 +989,6 @@ declare global {
           observeFirstForSession: boolean, vmName: string,
           callback: (response: CrostiniSharedPathResponse) => void): void;
 
-      export function getLinuxPackageInfo(
-          entry: Entry,
-          callback: (linux_package_info: LinuxPackageInfo) => void): void;
-
-      export function installLinuxPackage(
-          entry: Entry,
-          callback: (status: InstallLinuxPackageStatus) => void): void;
-
       export function importCrostiniImage(entry: Entry): void;
 
       export function getAndroidPickerApps(
@@ -987,12 +997,12 @@ declare global {
       export function selectAndroidPickerApp(
           androidApp: AndroidApp, callback: () => void): void;
 
-      export function sharesheetHasTargets(
-          entries: Entry[], callback: (result: boolean) => void): void;
+      export function sharesheetHasTargets(fileUrls: string[]):
+          Promise<boolean>;
 
       export function invokeSharesheet(
-          entries: Entry[], launchSource: SharesheetLaunchSource,
-          dlpSourceUrls: string[], callback: () => void): void;
+          fileUrls: string[], launchSource: SharesheetLaunchSource,
+          dlpSourceUrls: string[]): Promise<void>;
 
       export function toggleAddedToHoldingSpace(
           entries: Entry[], added: boolean, callback?: () => void): void;
@@ -1004,8 +1014,6 @@ declare global {
           void;
 
       export function notifyDriveDialogResult(result: DriveDialogResult): void;
-
-      export function openURL(url: string): void;
 
       export function openWindow(
           params: OpenWindowParams, callback: (result: boolean) => void): void;
@@ -1044,6 +1052,11 @@ declare global {
           callback: (progress: BulkPinProgress) => void): void;
 
       export function calculateBulkPinRequiredSpace(callback: () => void): void;
+
+      export function getMaterializedViews(): Promise<MaterializedView[]>;
+
+      export function readMaterializedView(viewId: number):
+          Promise<EntryData[]>;
 
       export const onMountCompleted:
           ChromeEvent<(event: MountCompletedEvent) => void>;

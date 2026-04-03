@@ -23,36 +23,36 @@
 #include "ash/public/cpp/wallpaper/wallpaper_controller.h"
 #include "ash/public/cpp/wallpaper/wallpaper_info.h"
 #include "ash/public/cpp/wallpaper/wallpaper_types.h"
-#include "ash/public/cpp/window_backdrop.h"
+#include "ash/wallpaper/sea_pen_wallpaper_manager.h"
 #include "ash/wallpaper/wallpaper_constants.h"
 #include "ash/wallpaper/wallpaper_utils/sea_pen_metadata_utils.h"
 #include "ash/wallpaper/wallpaper_utils/wallpaper_online_variant_utils.h"
 #include "ash/wallpaper/wallpaper_utils/wallpaper_resizer.h"
+#include "ash/webui/common/mojom/sea_pen.mojom.h"
 #include "ash/webui/personalization_app/mojom/personalization_app.mojom.h"
 #include "ash/webui/personalization_app/mojom/personalization_app_mojom_traits.h"
 #include "ash/webui/personalization_app/proto/backdrop_wallpaper.pb.h"
+#include "base/containers/span.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
-#include "base/json/json_reader.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_view_util.h"
 #include "base/unguessable_token.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_manager.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_manager_factory.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_utils.h"
 #include "chrome/browser/ash/wallpaper/wallpaper_enumerator.h"
+#include "chrome/browser/ash/wallpaper_handlers/google_photos_wallpaper_handlers.h"
 #include "chrome/browser/ash/wallpaper_handlers/wallpaper_fetcher_delegate.h"
 #include "chrome/browser/ash/wallpaper_handlers/wallpaper_handlers.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/ash/thumbnail_loader.h"
-#include "chrome/browser/ui/ash/wallpaper_controller_client_impl.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/contents_web_view.h"
+#include "chrome/browser/ui/ash/thumbnail_loader/thumbnail_loader.h"
+#include "chrome/browser/ui/ash/wallpaper/wallpaper_controller_client_impl.h"
 #include "chrome/browser/ui/webui/sanitized_image_source.h"
-#include "chromeos/ui/base/window_properties.h"
-#include "content/public/browser/render_widget_host_view.h"
+#include "chromeos/strings/grit/chromeos_strings.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -63,6 +63,7 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/window.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/codec/jpeg_codec.h"
@@ -72,6 +73,7 @@
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/image/image_util.h"
 #include "url/gurl.h"
+#include "url/mojom/url.mojom-forward.h"
 
 namespace ash::personalization_app {
 
@@ -81,8 +83,7 @@ using ash::WallpaperController;
 using ash::personalization_app::GetAccountId;
 using ash::personalization_app::GetUser;
 
-constexpr int kLocalImageThumbnailSizeDip = 256;
-constexpr int kCurrentWallpaperThumbnailSizeDip = 1024;
+constexpr int kLocalImageThumbnailSizeDip = 384;
 
 // Return the online wallpaper key. Use |info.unit_id| if available so we might
 // be able to fallback to the cached attribution.
@@ -92,13 +93,30 @@ const std::string GetOnlineWallpaperKey(ash::WallpaperInfo info) {
 }
 
 GURL GetBitmapJpegDataUrl(const SkBitmap& bitmap) {
-  std::vector<unsigned char> output;
-  if (!gfx::JPEGCodec::Encode(bitmap, /*quality=*/90, &output)) {
+  std::optional<std::vector<uint8_t>> output =
+      gfx::JPEGCodec::Encode(bitmap, /*quality=*/100);
+  if (!output) {
     LOG(ERROR) << "Unable to encode bitmap";
     return GURL();
   }
-  return GetJpegDataUrl(
-      {reinterpret_cast<char*>(output.data()), output.size()});
+  GURL data_url = GetJpegDataUrl(base::as_string_view(output.value()));
+  // @see `url.mojom` warning about dropping urls that are too long.
+  DCHECK_LT(data_url.spec().size(), url::mojom::kMaxURLChars);
+  return data_url;
+}
+
+std::optional<GURL> GetActionUrlIfValid(const backdrop::Image& image) {
+  if (!image.has_action_url()) {
+    return std::nullopt;
+  }
+
+  const GURL action_url(image.action_url());
+  if (!action_url.is_valid()) {
+    LOG(WARNING) << "Invalid action_url ignored";
+    return std::nullopt;
+  }
+
+  return action_url;
 }
 
 }  // namespace
@@ -126,6 +144,7 @@ PersonalizationAppWallpaperProviderImpl::
             ->MaybeStartHatsTimer(
                 ::ash::personalization_app::HatsSurveyType::kWallpaper);
   }
+  CancelPreviewWallpaper();
 }
 
 void PersonalizationAppWallpaperProviderImpl::BindInterface(
@@ -145,42 +164,12 @@ bool PersonalizationAppWallpaperProviderImpl::IsEligibleForGooglePhotos() {
 }
 
 void PersonalizationAppWallpaperProviderImpl::MakeTransparent() {
-  auto* web_contents = web_ui_->GetWebContents();
-
-  // Disable the window backdrop that creates an opaque layer in tablet mode.
-  auto* window_backdrop =
-      ash::WindowBackdrop::Get(web_contents->GetTopLevelNativeWindow());
-  window_backdrop->SetBackdropMode(
-      ash::WindowBackdrop::BackdropMode::kDisabled);
-
-  // Set transparency on the top level native window and tell the WM not to
-  // change it when window state changes.
-  aura::Window* top_level_window = web_contents->GetTopLevelNativeWindow();
-  top_level_window->SetProperty(::chromeos::kWindowManagerManagesOpacityKey,
-                                false);
-  top_level_window->SetTransparent(true);
-
-  // Set the background color to transparent.
-  web_contents->GetRenderWidgetHostView()->SetBackgroundColor(
-      SK_ColorTRANSPARENT);
-
-  // Turn off the web contents background.
-  static_cast<ContentsWebView*>(BrowserView::GetBrowserViewForNativeWindow(
-                                    web_contents->GetTopLevelNativeWindow())
-                                    ->contents_web_view())
-      ->SetBackgroundVisible(false);
+  WallpaperControllerClientImpl::Get()->MakeTransparent(
+      web_ui_->GetWebContents());
 }
 
 void PersonalizationAppWallpaperProviderImpl::MakeOpaque() {
-  auto* web_contents = web_ui_->GetWebContents();
-
-  // Reversing `contents_web_view` is sufficient to make the view opaque,
-  // as `window_backdrop`, `top_level_window` and `web_contents` are not
-  // highly impactful to the animated theme change effect.
-  static_cast<ContentsWebView*>(BrowserView::GetBrowserViewForNativeWindow(
-                                    web_contents->GetTopLevelNativeWindow())
-                                    ->contents_web_view())
-      ->SetBackgroundVisible(true);
+  WallpaperControllerClientImpl::Get()->MakeOpaque(web_ui_->GetWebContents());
 }
 
 void PersonalizationAppWallpaperProviderImpl::FetchCollections(
@@ -303,7 +292,7 @@ void PersonalizationAppWallpaperProviderImpl::GetDefaultImageThumbnail(
 
 void PersonalizationAppWallpaperProviderImpl::GetLocalImages(
     GetLocalImagesCallback callback) {
-  // TODO(b/190062481) also load images from android files.
+  // We do not load image from android files.
   ash::EnumerateLocalWallpaperFiles(
       profile_,
       base::BindOnce(&PersonalizationAppWallpaperProviderImpl::OnGetLocalImages,
@@ -347,11 +336,21 @@ void PersonalizationAppWallpaperProviderImpl::SetWallpaperObserver(
 }
 
 void PersonalizationAppWallpaperProviderImpl::OnWallpaperResized() {
+  auto* wallpaper_controller = WallpaperController::Get();
+  DCHECK(wallpaper_controller);
+
+  const AccountId account_id = GetAccountId(profile_);
+
+  if (wallpaper_controller->CurrentAccountId() != account_id) {
+    DVLOG(1) << "Skip " << __func__ << " for different AccountId";
+    return;
+  }
+
   wallpaper_attribution_info_fetcher_.reset();
   attribution_weak_ptr_factory_.InvalidateWeakPtrs();
 
   std::optional<ash::WallpaperInfo> info =
-      WallpaperController::Get()->GetActiveUserWallpaperInfo();
+      wallpaper_controller->GetWallpaperInfoForAccountId(account_id);
   if (!info) {
     DVLOG(1) << "No wallpaper info for active user. This should only happen in "
                 "tests.";
@@ -389,7 +388,8 @@ void PersonalizationAppWallpaperProviderImpl::OnWallpaperResized() {
           ash::personalization_app::mojom::CurrentWallpaper::New(
               info->layout, info->type, key,
               /*description_title=*/std::string(),
-              /*description_content=*/std::string()));
+              /*description_content=*/std::string(),
+              /*action_url=*/std::nullopt));
 
       // Do not show file extension in user-visible selected details text.
       std::vector<std::string> attribution = {
@@ -419,21 +419,30 @@ void PersonalizationAppWallpaperProviderImpl::OnWallpaperResized() {
           ash::personalization_app::mojom::CurrentWallpaper::New(
               info->layout, info->type, key,
               /*description_title=*/std::string(),
-              /*description_content=*/std::string()));
+              /*description_content=*/std::string(),
+              /*action_url=*/std::nullopt));
       NotifyAttributionChanged(
           ash::personalization_app::mojom::CurrentAttribution::New(
               std::vector<std::string>(), key));
       return;
     }
     case ash::WallpaperType::kSeaPen: {
-      // TODO(b/307757290) send a unique key and set description content.
-      const std::string key = info->user_file_path;
+      const base::FilePath path(info->location);
+      const std::optional<uint32_t> id = GetIdFromFileName(path);
+      if (!id.has_value()) {
+        NotifyWallpaperChanged(nullptr);
+        NotifyAttributionChanged(nullptr);
+        return;
+      }
+      // TODO(b/307757290) set description content.
       NotifyWallpaperChanged(
           ash::personalization_app::mojom::CurrentWallpaper::New(
-              info->layout, info->type, key,
+              info->layout, info->type,
+              /*key=*/base::NumberToString(id.value()),
               /*description_title=*/std::string(),
-              /*description_content=*/std::string()));
-      FindSeaPenWallpaperAttribution(base::FilePath(info->user_file_path));
+              /*description_content=*/std::string(),
+              /*action_url=*/std::nullopt));
+      FindSeaPenWallpaperAttribution(id.value());
       return;
     }
     case ash::WallpaperType::kCount:
@@ -448,7 +457,8 @@ void PersonalizationAppWallpaperProviderImpl::OnWallpaperResized() {
   NotifyWallpaperChanged(ash::personalization_app::mojom::CurrentWallpaper::New(
       info->layout, ash::WallpaperType::kOneShot, key,
       /*description_title=*/std::string(),
-      /*description_content=*/std::string()));
+      /*description_content=*/std::string(),
+      /*action_url=*/std::nullopt));
   NotifyAttributionChanged(
       ash::personalization_app::mojom::CurrentAttribution::New(
           std::vector<std::string>(), key));
@@ -508,7 +518,7 @@ void PersonalizationAppWallpaperProviderImpl::SelectWallpaper(
   client->RecordWallpaperSourceUMA(ash::WallpaperType::kOnline);
 
   if (IsTimeOfDayWallpaper(collection_id) &&
-      features::IsTimeOfDayWallpaperForcedAutoScheduleEnabled()) {
+      features::IsTimeOfDayWallpaperEnabled()) {
     // Records the display count of the time of day wallpaper dialog when the
     // user selects one to determine whether to show it the next time.
     contextual_tooltip::HandleGesturePerformed(
@@ -647,7 +657,8 @@ void PersonalizationAppWallpaperProviderImpl::SelectGooglePhotosAlbum(
     // image.
     const auto& it = album_id_dedup_key_map_.find(album_id);
     std::optional<ash::WallpaperInfo> info =
-        wallpaper_controller->GetActiveUserWallpaperInfo();
+        wallpaper_controller->GetWallpaperInfoForAccountId(
+            GetAccountId(profile_));
     if (info.has_value() && info->dedup_key.has_value()) {
       force_refresh =
           it == album_id_dedup_key_map_.end() ||
@@ -703,11 +714,13 @@ void PersonalizationAppWallpaperProviderImpl::SetDailyRefreshCollectionId(
     wallpaper_receiver_.ReportBadMessage("Unsupported wallpaper collection");
     return;
   }
-  wallpaper_controller->SetDailyRefreshCollectionId(GetAccountId(profile_),
-                                                    collection_id);
+
+  const AccountId account_id = GetAccountId(profile_);
+
+  wallpaper_controller->SetDailyRefreshCollectionId(account_id, collection_id);
 
   std::optional<ash::WallpaperInfo> info =
-      wallpaper_controller->GetActiveUserWallpaperInfo();
+      wallpaper_controller->GetWallpaperInfoForAccountId(account_id);
   DCHECK(info);
 
   if (collection_id.empty()) {
@@ -758,7 +771,8 @@ void PersonalizationAppWallpaperProviderImpl::UpdateDailyRefreshWallpaper(
 
   auto* wallpaper_controller = WallpaperController::Get();
   std::optional<ash::WallpaperInfo> info =
-      wallpaper_controller->GetActiveUserWallpaperInfo();
+      wallpaper_controller->GetWallpaperInfoForAccountId(
+          GetAccountId(profile_));
   DCHECK(info);
   DCHECK(info->type == WallpaperType::kDaily ||
          info->type == WallpaperType::kDailyGooglePhotos);
@@ -772,7 +786,7 @@ void PersonalizationAppWallpaperProviderImpl::UpdateDailyRefreshWallpaper(
 
 void PersonalizationAppWallpaperProviderImpl::IsInTabletMode(
     IsInTabletModeCallback callback) {
-  std::move(callback).Run(display::Screen::GetScreen()->InTabletMode());
+  std::move(callback).Run(display::Screen::Get()->InTabletMode());
 }
 
 void PersonalizationAppWallpaperProviderImpl::ConfirmPreviewWallpaper() {
@@ -780,20 +794,18 @@ void PersonalizationAppWallpaperProviderImpl::ConfirmPreviewWallpaper() {
   // splitscreen, this prevents `WallpaperController::OnOverviewModeWillStart`
   // from triggering first, which leads to preview wallpaper getting canceled
   // before it gets confirmed (b/289133203).
-  WallpaperController::Get()->ConfirmPreviewWallpaper();
-  SetMinimizedWindowStateForPreview(/*preview_mode=*/false);
+  WallpaperControllerClientImpl::Get()->ConfirmPreviewWallpaper(profile_);
 }
 
 void PersonalizationAppWallpaperProviderImpl::CancelPreviewWallpaper() {
-  WallpaperController::Get()->CancelPreviewWallpaper();
-  SetMinimizedWindowStateForPreview(/*preview_mode=*/false);
+  WallpaperControllerClientImpl::Get()->CancelPreviewWallpaper(profile_);
 }
 
 void PersonalizationAppWallpaperProviderImpl::
     ShouldShowTimeOfDayWallpaperDialog(
         ShouldShowTimeOfDayWallpaperDialogCallback callback) {
   std::move(callback).Run(
-      features::IsTimeOfDayWallpaperForcedAutoScheduleEnabled() &&
+      features::IsTimeOfDayWallpaperEnabled() &&
       contextual_tooltip::ShouldShowNudge(
           profile_->GetPrefs(),
           contextual_tooltip::TooltipType::kTimeOfDayWallpaperDialog,
@@ -868,11 +880,11 @@ void PersonalizationAppWallpaperProviderImpl::OnFetchCollectionImages(
   std::optional<std::vector<backdrop::Image>> result;
   if (success && !images.empty()) {
     // Do first pass to clear all unit_id associated with the images.
-    base::ranges::for_each(images, [&](auto& proto_image) {
+    std::ranges::for_each(images, [&](auto& proto_image) {
       image_unit_id_map_.erase(proto_image.unit_id());
     });
     // Do second pass to repopulate the map with fresh data.
-    base::ranges::for_each(images, [&](auto& proto_image) {
+    std::ranges::for_each(images, [&](auto& proto_image) {
       if (proto_image.has_asset_id() && proto_image.has_unit_id() &&
           proto_image.has_image_url()) {
         image_unit_id_map_[proto_image.unit_id()].push_back(
@@ -932,10 +944,9 @@ void PersonalizationAppWallpaperProviderImpl::OnGetDefaultImage(
     std::move(callback).Run(GURL());
     return;
   }
-  std::move(callback).Run(GURL(
-      webui::GetBitmapDataUrl(*WallpaperResizer::GetResizedImage(
-                                   image, kCurrentWallpaperThumbnailSizeDip)
-                                   .bitmap())));
+  gfx::ImageSkia resized =
+      WallpaperResizer::GetResizedImage(image, kLocalImageThumbnailSizeDip);
+  std::move(callback).Run(GetBitmapJpegDataUrl(*resized.bitmap()));
 }
 
 void PersonalizationAppWallpaperProviderImpl::OnGetLocalImages(
@@ -999,7 +1010,8 @@ void PersonalizationAppWallpaperProviderImpl::FindAttribution(
         ash::personalization_app::mojom::CurrentWallpaper::New(
             info.layout, info.type, key,
             /*description_title=*/std::string(),
-            /*description_content=*/std::string()));
+            /*description_content=*/std::string(),
+            /*action_url=*/std::nullopt));
     NotifyAttributionChanged(
         ash::personalization_app::mojom::CurrentAttribution::New(
             std::vector<std::string>(), key));
@@ -1051,7 +1063,8 @@ void PersonalizationAppWallpaperProviderImpl::FindImageMetadataInCollection(
             info.layout, info.type,
             /*key=*/base::NumberToString(backend_image->unit_id()),
             backend_image->description_title(),
-            backend_image->description_content()));
+            backend_image->description_content(),
+            /*action_url=*/GetActionUrlIfValid(*backend_image)));
     std::vector<std::string> attributions;
     for (const auto& attr : backend_image->attribution()) {
       attributions.push_back(attr.text());
@@ -1071,7 +1084,8 @@ void PersonalizationAppWallpaperProviderImpl::FindImageMetadataInCollection(
         ash::personalization_app::mojom::CurrentWallpaper::New(
             info.layout, info.type, key,
             /*description_title=*/std::string(),
-            /*description_content=*/std::string()));
+            /*description_content=*/std::string(),
+            /*action_url=*/std::nullopt));
     NotifyAttributionChanged(
         ash::personalization_app::mojom::CurrentAttribution::New(
             std::vector<std::string>(), key));
@@ -1091,47 +1105,40 @@ void PersonalizationAppWallpaperProviderImpl::FindImageMetadataInCollection(
 }
 
 void PersonalizationAppWallpaperProviderImpl::FindSeaPenWallpaperAttribution(
-    const base::FilePath& user_file_path) {
-  auto* wallpaper_controller = WallpaperController::Get();
-  DCHECK(wallpaper_controller);
+    const uint32_t id) {
+  auto* sea_pen_wallpaper_manager = SeaPenWallpaperManager::GetInstance();
+  DCHECK(sea_pen_wallpaper_manager);
 
-  wallpaper_controller->GetSeaPenMetadata(
-      GetAccountId(profile_), user_file_path,
+  sea_pen_wallpaper_manager->GetImageAndMetadata(
+      GetAccountId(profile_), id,
       base::BindOnce(&PersonalizationAppWallpaperProviderImpl::
                          SendSeaPenWallpaperAttribution,
-                     weak_ptr_factory_.GetWeakPtr(), user_file_path));
+                     weak_ptr_factory_.GetWeakPtr(), id));
 }
 
 void PersonalizationAppWallpaperProviderImpl::SendSeaPenWallpaperAttribution(
-    const base::FilePath& user_file_path,
-    std::optional<base::Value::Dict> sea_pen_metadata) {
-  if (!sea_pen_metadata.has_value()) {
-    DVLOG(1) << __func__ << " the extracted metadata is not in JSON format";
+    const uint32_t id,
+    const gfx::ImageSkia& image,
+    mojom::RecentSeaPenImageInfoPtr sea_pen_metadata) {
+  if (sea_pen_metadata.is_null()) {
+    LOG(WARNING) << __func__ << " unable to get metadata";
     NotifyAttributionChanged(
         ash::personalization_app::mojom::CurrentAttribution::New(
-            std::vector<std::string>(), user_file_path.value()));
-    return;
-  }
-
-  auto sea_pen_image_info =
-      ash::SeaPenQueryDictToRecentImageInfo(std::move(*sea_pen_metadata));
-  if (!sea_pen_image_info) {
-    NotifyAttributionChanged(
-        ash::personalization_app::mojom::CurrentAttribution::New(
-            std::vector<std::string>(), user_file_path.value()));
+            std::vector<std::string>(), base::NumberToString(id)));
     return;
   }
 
   std::vector<std::string> attribution;
-  attribution.push_back(sea_pen_image_info->user_visible_query->text);
-  std::string template_title =
-      sea_pen_image_info->user_visible_query->template_title;
-  if (!template_title.empty()) {
-    attribution.push_back(template_title);
+  const std::string query_str = GetQueryString(sea_pen_metadata);
+  if (!query_str.empty()) {
+    attribution.push_back(std::move(query_str));
   }
+  attribution.push_back(
+      l10n_util::GetStringUTF8(IDS_SEA_PEN_POWERED_BY_GOOGLE_AI));
+
   NotifyAttributionChanged(
       ash::personalization_app::mojom::CurrentAttribution::New(
-          attribution, user_file_path.value()));
+          attribution, base::NumberToString(id)));
 }
 
 void PersonalizationAppWallpaperProviderImpl::SendGooglePhotosAttribution(
@@ -1160,7 +1167,8 @@ void PersonalizationAppWallpaperProviderImpl::SendGooglePhotosAttribution(
       info.layout, info.type,
       /*key=*/info.dedup_key.value_or(info.location),
       /*description_title=*/std::string(),
-      /*description_content=*/std::string()));
+      /*description_content=*/std::string(),
+      /*action_url=*/std::nullopt));
   std::vector<std::string> attribution;
   if (!photo.is_null()) {
     attribution.push_back(photo->name);

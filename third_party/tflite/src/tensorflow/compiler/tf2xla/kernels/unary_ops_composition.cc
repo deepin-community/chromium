@@ -18,25 +18,25 @@ limitations under the License.
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
 #include "absl/strings/string_view.h"
-#include "tensorflow/compiler/tf2xla/kernels/cwise_ops.h"
 #include "tensorflow/compiler/tf2xla/kernels/elu_op.h"
 #include "tensorflow/compiler/tf2xla/kernels/relu_op.h"
-#include "tensorflow/compiler/tf2xla/type_util.h"
-#include "tensorflow/compiler/tf2xla/xla_helpers.h"
+#include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/client_library.h"
-#include "xla/client/lib/arithmetic.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/math.h"
-#include "xla/client/xla_builder.h"
-#include "tensorflow/core/framework/kernel_def_builder.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/math.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/op_requires.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
 namespace {
 
 using XlaUnaryOpGenerator = std::function<xla::XlaOp(xla::XlaOp)>;
-using XlaOpGeneratorMap = absl::flat_hash_map<string, XlaUnaryOpGenerator>;
+using XlaOpGeneratorMap = absl::flat_hash_map<std::string, XlaUnaryOpGenerator>;
 
 void PopulateXlaOpGeneratorMap(XlaOpGeneratorMap* op_generator_map) {
   auto add_xla_op_generator = [&](std::string name,
@@ -44,7 +44,9 @@ void PopulateXlaOpGeneratorMap(XlaOpGeneratorMap* op_generator_map) {
     CHECK(op_generator_map->insert({name, xla_op_generator}).second);
   };
 
-#define ADD_XLA_OP_GENERATOR(Name) add_xla_op_generator(#Name, xla::Name);
+#define ADD_XLA_OP_GENERATOR(Name) \
+  add_xla_op_generator(#Name,      \
+                       [](xla::XlaOp operand) { return xla::Name(operand); });
 
   ADD_XLA_OP_GENERATOR(Abs);
   ADD_XLA_OP_GENERATOR(Acos);
@@ -68,7 +70,8 @@ void PopulateXlaOpGeneratorMap(XlaOpGeneratorMap* op_generator_map) {
   add_xla_op_generator("Rint", xla::RoundToEven);
   ADD_XLA_OP_GENERATOR(Round);
   ADD_XLA_OP_GENERATOR(Rsqrt);
-  add_xla_op_generator("Sigmoid", xla::Logistic);
+  add_xla_op_generator("Sigmoid",
+                       [](xla::XlaOp x) { return xla::Logistic(x); });
   ADD_XLA_OP_GENERATOR(Sin);
   ADD_XLA_OP_GENERATOR(Sinh);
   ADD_XLA_OP_GENERATOR(Sqrt);
@@ -117,7 +120,7 @@ class UnaryOpsCompositionOp : public XlaOpKernel {
   }
 
  private:
-  std::vector<string> op_names_;
+  std::vector<std::string> op_names_;
 };
 
 REGISTER_XLA_OP(Name("_UnaryOpsComposition"), UnaryOpsCompositionOp);

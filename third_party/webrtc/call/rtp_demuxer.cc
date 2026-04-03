@@ -10,11 +10,19 @@
 
 #include "call/rtp_demuxer.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <string>
+#include <utility>
+
 #include "absl/strings/string_view.h"
 #include "call/rtp_packet_sink_interface.h"
+#include "modules/rtp_rtcp/include/rtp_rtcp_defines.h"
 #include "modules/rtp_rtcp/source/rtp_header_extensions.h"
 #include "modules/rtp_rtcp/source/rtp_packet_received.h"
 #include "rtc_base/checks.h"
+#include "rtc_base/containers/flat_set.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/strings/string_builder.h"
 
@@ -40,31 +48,25 @@ size_t RemoveFromMapByValue(Map* map, const Value& value) {
   return EraseIf(*map, [&](const auto& elem) { return elem.second == value; });
 }
 
-// Temp fix: MID in SDP is allowed to be slightly longer than what's allowed
-// in the RTP demuxer. Truncate if needed; this won't match, but it only
-// makes sense in places that wouldn't use this for matching anyway.
-// TODO(bugs.webrtc.org/12517): remove when length 16 is policed by parser.
-std::string CheckMidLength(absl::string_view mid) {
-  std::string new_mid(mid);
-  if (new_mid.length() > BaseRtpStringExtension::kMaxValueSizeBytes) {
-    RTC_LOG(LS_WARNING) << "`mid` attribute too long. Truncating.";
-    new_mid.resize(BaseRtpStringExtension::kMaxValueSizeBytes);
-  }
-  return new_mid;
-}
-
 }  // namespace
 
 RtpDemuxerCriteria::RtpDemuxerCriteria(
     absl::string_view mid,
     absl::string_view rsid /*= absl::string_view()*/)
-    : mid_(CheckMidLength(mid)), rsid_(rsid) {}
+    : mid_(mid), rsid_(rsid) {
+  RTC_DCHECK(mid.length() <= BaseRtpStringExtension::kMaxValueSizeBytes);
+}
 
 RtpDemuxerCriteria::RtpDemuxerCriteria() = default;
+
+RtpDemuxerCriteria::RtpDemuxerCriteria(bool match_any)
+    : match_any_(match_any) {}
+
 RtpDemuxerCriteria::~RtpDemuxerCriteria() = default;
 
 bool RtpDemuxerCriteria::operator==(const RtpDemuxerCriteria& other) const {
-  return mid_ == other.mid_ && rsid_ == other.rsid_ && ssrcs_ == other.ssrcs_ &&
+  return match_any_ == other.match_any_ && mid_ == other.mid_ &&
+         rsid_ == other.rsid_ && ssrcs_ == other.ssrcs_ &&
          payload_types_ == other.payload_types_;
 }
 
@@ -73,7 +75,10 @@ bool RtpDemuxerCriteria::operator!=(const RtpDemuxerCriteria& other) const {
 }
 
 std::string RtpDemuxerCriteria::ToString() const {
-  rtc::StringBuilder sb;
+  if (match_any_) {
+    return "{any}";
+  }
+  StringBuilder sb;
   sb << "{mid: " << (mid_.empty() ? "<empty>" : mid_)
      << ", rsid: " << (rsid_.empty() ? "<empty>" : rsid_) << ", ssrcs: [";
 
@@ -93,7 +98,7 @@ std::string RtpDemuxerCriteria::ToString() const {
 
 // static
 std::string RtpDemuxer::DescribePacket(const RtpPacketReceived& packet) {
-  rtc::StringBuilder sb;
+  StringBuilder sb;
   sb << "PT=" << packet.PayloadType() << " SSRC=" << packet.Ssrc();
   std::string mid;
   if (packet.GetExtension<RtpMid>(&mid)) {
@@ -122,8 +127,9 @@ RtpDemuxer::~RtpDemuxer() {
 
 bool RtpDemuxer::AddSink(const RtpDemuxerCriteria& criteria,
                          RtpPacketSinkInterface* sink) {
-  RTC_DCHECK(!criteria.payload_types().empty() || !criteria.ssrcs().empty() ||
-             !criteria.mid().empty() || !criteria.rsid().empty());
+  RTC_DCHECK(criteria.match_any() || !criteria.payload_types().empty() ||
+             !criteria.ssrcs().empty() || !criteria.mid().empty() ||
+             !criteria.rsid().empty());
   RTC_DCHECK(criteria.mid().empty() || IsLegalMidName(criteria.mid()));
   RTC_DCHECK(criteria.rsid().empty() || IsLegalRsidName(criteria.rsid()));
   RTC_DCHECK(sink);
@@ -135,6 +141,10 @@ bool RtpDemuxer::AddSink(const RtpDemuxerCriteria& criteria,
     RTC_LOG(LS_ERROR) << "Unable to add sink=" << sink
                       << " due to conflicting criteria " << criteria.ToString();
     return false;
+  }
+
+  if (criteria.match_any()) {
+    match_any_sink_ = sink;
   }
 
   if (!criteria.mid().empty()) {
@@ -168,6 +178,20 @@ bool RtpDemuxer::AddSink(const RtpDemuxerCriteria& criteria,
 
 bool RtpDemuxer::CriteriaWouldConflict(
     const RtpDemuxerCriteria& criteria) const {
+  if (match_any_sink_) {
+    // If we already have a sink matching all packets, any new criteria would
+    // conflict.
+    return true;
+  }
+
+  if (criteria.match_any()) {
+    // A match_all criteria conflicts if and only if we have another sink
+    // already registered.
+    return (!sink_by_mid_.empty() || !sink_by_ssrc_.empty() ||
+            !sinks_by_pt_.empty() || !sink_by_mid_and_rsid_.empty() ||
+            !sink_by_rsid_.empty());
+  }
+
   if (!criteria.mid().empty()) {
     if (criteria.rsid().empty()) {
       // If the MID is in the known_mids_ set, then there is already a sink
@@ -279,8 +303,12 @@ bool RtpDemuxer::OnRtpPacket(const RtpPacketReceived& packet) {
 
 RtpPacketSinkInterface* RtpDemuxer::ResolveSink(
     const RtpPacketReceived& packet) {
+  if (match_any_sink_) {
+    return match_any_sink_;
+  }
+
   // See the BUNDLE spec for high level reference to this algorithm:
-  // https://tools.ietf.org/html/draft-ietf-mmusic-sdp-bundle-negotiation-38#section-10.2
+  // https://www.rfc-editor.org/rfc/rfc8843.html#name-associating-rtp-rtcp-stream
 
   // RSID and RRID are routed to the same sinks. If an RSID is specified on a
   // repair packet, it should be ignored and the RRID should be used.

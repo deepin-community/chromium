@@ -19,23 +19,24 @@ limitations under the License.
 #include <utility>
 
 #include "absl/memory/memory.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/mutex.h"
-#include "tsl/platform/platform.h"
-#include "tsl/platform/status.h"
-#include "tsl/platform/types.h"
+#include "absl/status/status.h"
+#include "absl/synchronization/mutex.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/logging.h"
+#include "xla/tsl/profiler/utils/xplane_builder.h"
+#include "xla/tsl/profiler/utils/xplane_schema.h"
+#include "xla/tsl/profiler/utils/xplane_utils.h"
 #include "tsl/profiler/protobuf/profiler_options.pb.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 
 #if !defined(IS_MOBILE_PLATFORM)
+#include "xla/tsl/profiler/convert/post_process_single_host_xplane.h"
+#include "xla/tsl/profiler/utils/time_utils.h"
 #include "tsl/platform/host_info.h"
-#include "tsl/profiler/convert/post_process_single_host_xplane.h"
 #include "tsl/profiler/lib/profiler_collection.h"
 #include "tsl/profiler/lib/profiler_factory.h"
 #include "tsl/profiler/lib/profiler_interface.h"
 #include "tsl/profiler/lib/profiler_lock.h"
-#include "tsl/profiler/utils/time_utils.h"
 #endif
 
 namespace tsl {
@@ -43,12 +44,22 @@ namespace {
 
 using tensorflow::ProfileOptions;
 using tensorflow::profiler::XSpace;
+using ::tsl::profiler::XPlaneBuilder;
 
 ProfileOptions GetOptions(const ProfileOptions& opts) {
   if (opts.version()) return opts;
   ProfileOptions options = ProfilerSession::DefaultOptions();
   options.set_include_dataset_ops(opts.include_dataset_ops());
   return options;
+}
+
+void SetProfileOptionsIntoSpace(const ProfileOptions& options, XSpace* space) {
+  XPlaneBuilder xplane(profiler::FindOrAddMutablePlaneWithName(
+      space, tsl::profiler::kTaskEnvPlaneName));
+  xplane.AddStatValue(
+      *xplane.GetOrCreateStatMetadata(tsl::profiler::GetTaskEnvStatTypeStr(
+          tsl::profiler::kEnvProfileOptions)),
+      options);
 }
 
 };  // namespace
@@ -58,34 +69,36 @@ ProfileOptions GetOptions(const ProfileOptions& opts) {
   return absl::WrapUnique(new ProfilerSession(options));
 }
 
-Status ProfilerSession::Status() {
-  mutex_lock l(mutex_);
+absl::Status ProfilerSession::Status() {
+  absl::MutexLock l(mutex_);
   return status_;
 }
 
 #if !defined(IS_MOBILE_PLATFORM)
-Status ProfilerSession::CollectDataInternal(XSpace* space) {
-  mutex_lock l(mutex_);
+absl::Status ProfilerSession::CollectDataInternal(XSpace* space) {
+  absl::MutexLock l(mutex_);
   TF_RETURN_IF_ERROR(status_);
   LOG(INFO) << "Profiler session collecting data.";
   if (profilers_ != nullptr) {
     profilers_->Stop().IgnoreError();
+    stop_time_ns_ = profiler::GetCurrentTimeNanos();
     profilers_->CollectData(space).IgnoreError();
     profilers_.reset();  // data has been collected.
   }
   // Allow another session to start.
   profiler_lock_.ReleaseIfActive();
-  return OkStatus();
+  return absl::OkStatus();
 }
 #endif
 
-Status ProfilerSession::CollectData(XSpace* space) {
+absl::Status ProfilerSession::CollectData(XSpace* space) {
 #if !defined(IS_MOBILE_PLATFORM)
   space->add_hostnames(port::Hostname());
   TF_RETURN_IF_ERROR(CollectDataInternal(space));
-  profiler::PostProcessSingleHostXSpace(space, start_time_ns_);
+  profiler::PostProcessSingleHostXSpace(space, start_time_ns_, stop_time_ns_);
 #endif
-  return OkStatus();
+  SetProfileOptionsIntoSpace(options_, space);
+  return absl::OkStatus();
 }
 
 ProfilerSession::ProfilerSession(const ProfileOptions& options)
@@ -122,7 +135,13 @@ ProfilerSession::ProfilerSession(const ProfileOptions& options)
   DCHECK(profiler_lock_.Active());
   profilers_ = std::make_unique<tsl::profiler::ProfilerCollection>(
       profiler::CreateProfilers(options_));
-  profilers_->Start().IgnoreError();
+
+  absl::Status status = profilers_->Start();
+  if (options_.raise_error_on_start_failure()) {
+    status_ = status;
+  } else {
+    status.IgnoreError();
+  }
 #endif
 }
 

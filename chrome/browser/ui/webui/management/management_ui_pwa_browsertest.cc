@@ -2,14 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/features.h"
 #include "base/json/json_reader.h"
 #include "base/value_iterators.h"
-#include "chrome/browser/apps/app_service/app_icon/app_icon_source.h"
+#include "chrome/browser/apps/app_service/app_icon_source.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profile_resetter/resettable_settings_snapshot.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/web_applications/web_app_controller_browsertest.h"
+#include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/ui/webui/management/management_ui.h"
 #include "chrome/browser/ui/webui/management/management_ui_handler.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_constants.h"
@@ -17,6 +18,7 @@
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -30,18 +32,21 @@
 namespace {
 constexpr char kTestApp[] = "https://test.test/";
 
-class ManagementUIPWATest : public web_app::WebAppControllerBrowserTest {
+class ManagementUIPWATest : public web_app::WebAppBrowserTestBase {
  public:
-  ManagementUIPWATest() { BuildAndInitFeatureList(); }
-
- protected:
-  void BuildAndInitFeatureList() {
+  ManagementUIPWATest() {
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kDesktopPWAsEnforceWebAppSettingsPolicy,
-                              features::kDesktopPWAsRunOnOsLogin},
-        /*disabled_features=*/{});
+        {// This has the side effect of delaying the first refresh after
+         // starting the test, since it's posted with a BEST_EFFORT task.
+         // Because it's user-visible, chrome://management should show installed
+         // apps immediately despite this delay.
+         // TODO(crbug.com/449979128): Remove this once we're sure there are no
+         // BEST_EFFORT tasks in the setup path.
+         base::features::kScopedBestEffortExecutionFenceForTaskQueue},
+        {});
   }
 
+ private:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
@@ -49,8 +54,8 @@ IN_PROC_BROWSER_TEST_F(ManagementUIPWATest, RunOnOsLoginApplicationsReported) {
   // Set up policy values and install PWAs
   profile()->GetPrefs()->SetList(
       prefs::kWebAppSettings,
-      base::Value::List().Append(
-          base::Value::Dict()
+      base::ListValue().Append(
+          base::DictValue()
               .Set(web_app::kManifestId, kTestApp)
               .Set(web_app::kRunOnOsLogin, web_app::kRunWindowed)));
 
@@ -71,7 +76,8 @@ IN_PROC_BROWSER_TEST_F(ManagementUIPWATest, RunOnOsLoginApplicationsReported) {
   std::string actual_json =
       content::EvalJs(contents, javascript).ExtractString();
 
-  std::optional<base::Value> actual_value = base::JSONReader::Read(actual_json);
+  std::optional<base::Value> actual_value =
+      base::JSONReader::Read(actual_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   ASSERT_TRUE(actual_value.has_value());
 
@@ -79,13 +85,13 @@ IN_PROC_BROWSER_TEST_F(ManagementUIPWATest, RunOnOsLoginApplicationsReported) {
                                    ->registrar_unsafe()
                                    .GetAppShortName(app_id);
 
-  base::Value::List expected_value;
-  base::Value::Dict app_info;
+  base::ListValue expected_value;
+  base::DictValue app_info;
   app_info.Set("name", app_name);
   GURL icon = apps::AppIconSource::GetIconURL(
       app_id, extension_misc::EXTENSION_ICON_SMALLISH);
   app_info.Set("icon", icon.spec());
-  base::Value::List permission_messages;
+  base::ListValue permission_messages;
   permission_messages.Append(
       l10n_util::GetStringUTF16(IDS_MANAGEMENT_APPLICATIONS_RUN_ON_OS_LOGIN));
   app_info.Set("permissions", std::move(permission_messages));
@@ -93,7 +99,7 @@ IN_PROC_BROWSER_TEST_F(ManagementUIPWATest, RunOnOsLoginApplicationsReported) {
 
   EXPECT_EQ(actual_value.value(), expected_value);
 
-  base::Value::List& values = actual_value->GetList();
+  base::ListValue& values = actual_value->GetList();
   base::Value& actual_app = values[0];
 
   ASSERT_EQ(*actual_app.GetDict().FindString("name"), app_name);

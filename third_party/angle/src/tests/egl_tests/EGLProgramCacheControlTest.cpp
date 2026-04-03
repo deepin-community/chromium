@@ -6,6 +6,10 @@
 // EGLProgramCacheControlTest:
 //   Unit tests for the EGL_ANGLE_program_cache_control extension.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "common/angleutils.h"
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
@@ -178,6 +182,8 @@ TEST_P(EGLProgramCacheControlTest, NegativeAPI)
 // Tests a basic use case.
 TEST_P(EGLProgramCacheControlTest, SaveAndReload)
 {
+    ANGLE_SKIP_TEST_IF(getEGLWindow()->isFeatureEnabled(Feature::DisableProgramCaching));
+
     ANGLE_SKIP_TEST_IF(!extensionAvailable() || !programBinaryAvailable());
 
     constexpr char kVS[] = "attribute vec4 position; void main() { gl_Position = position; }";

@@ -26,6 +26,7 @@
 #include "components/safe_browsing/core/browser/verdict_cache_manager.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/utils.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/url_util.h"
 
@@ -37,7 +38,7 @@ using PasswordReuseEvent = LoginReputationClientRequest::PasswordReuseEvent;
 
 namespace {
 
-// Keys for storing password protection verdict into a base::Value::Dict.
+// Keys for storing password protection verdict into a base::DictValue.
 const int kRequestTimeoutMs = 10000;
 const char kPasswordProtectionRequestUrl[] =
     "https://sb-ssl.google.com/safebrowsing/clientreport/login";
@@ -56,7 +57,6 @@ bool IsSecuritySensitiveVerdict(
       return true;
   }
   NOTREACHED() << "Unexpected verdict_type: " << verdict_type;
-  return false;
 }
 
 // Log security sensitive event if required.
@@ -163,9 +163,7 @@ void PasswordProtectionServiceBase::RequestFinished(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(request);
 
-#if !BUILDFLAG(IS_ANDROID)
   bool warning_shown = false;
-#endif
   if (response) {
     ReusedPasswordAccountType password_type =
         GetPasswordProtectionReusedPasswordAccountType(request->password_type(),
@@ -183,9 +181,16 @@ void PasswordProtectionServiceBase::RequestFinished(
       ShowModalWarning(request, response->verdict_type(),
                        response->verdict_token(), password_type);
       request->set_is_modal_warning_showing(true);
-#if !BUILDFLAG(IS_ANDROID)
       warning_shown = true;
-#endif
+    }
+
+    if (request->trigger_type() ==
+            LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED &&
+        request->HasOtpPhishingVerdictCallback()) {
+      request->TakeOtpPhishingVerdictCallback().Run(
+          response->verdict_type() == LoginReputationClientResponse::PHISHING ||
+          response->verdict_type() ==
+              LoginReputationClientResponse::LOW_REPUTATION);
     }
   }
 
@@ -201,12 +206,10 @@ void PasswordProtectionServiceBase::RequestFinished(
     // If verdict declares a security sensitive event, log accordingly.
     MaybeRecordSecuritySensitiveEvent(metrics_collector_, verdict);
 
-// Disabled on Android, because enterprise reporting extension is not supported.
-#if !BUILDFLAG(IS_ANDROID)
     MaybeReportPasswordReuseDetected(
-        request, request->username(), request->password_type(),
+        request->main_frame_url(), request->username(),
+        request->password_type(),
         verdict == LoginReputationClientResponse::PHISHING, warning_shown);
-#endif
 
     // Persist a bit in CompromisedCredentials table when saved password is
     // reused on a phishing or low reputation site.
@@ -268,7 +271,7 @@ int PasswordProtectionServiceBase::GetRequestTimeoutInMS() {
   return kRequestTimeoutMs;
 }
 
-void PasswordProtectionServiceBase::OnURLsDeleted(
+void PasswordProtectionServiceBase::OnHistoryDeletions(
     history::HistoryService* history_service,
     const history::DeletionInfo& deletion_info) {
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -310,7 +313,6 @@ PasswordProtectionServiceBase::GetPasswordProtectionReusedPasswordType(
       break;
   }
   NOTREACHED();
-  return PasswordReuseEvent::REUSED_PASSWORD_TYPE_UNKNOWN;
 }
 
 ReusedPasswordAccountType
@@ -336,20 +338,21 @@ PasswordProtectionServiceBase::GetPasswordProtectionReusedPasswordAccountType(
         return reused_password_account_type;
       }
       reused_password_account_type.set_account_type(
-          IsAccountGmail(username) ? ReusedPasswordAccountType::GMAIL
-                                   : ReusedPasswordAccountType::GSUITE);
+          IsAccountConsumer(username) ? ReusedPasswordAccountType::GMAIL
+                                      : ReusedPasswordAccountType::GSUITE);
       return reused_password_account_type;
     }
     case PasswordType::OTHER_GAIA_PASSWORD: {
       AccountInfo account_info = GetAccountInfoForUsername(username);
-      if (account_info.account_id.empty()) {
+      if (account_info.account_id.empty() ||
+          !account_info.GetHostedDomain().has_value()) {
         reused_password_account_type.set_account_type(
             ReusedPasswordAccountType::UNKNOWN);
         return reused_password_account_type;
       }
       reused_password_account_type.set_account_type(
-          IsAccountGmail(username) ? ReusedPasswordAccountType::GMAIL
-                                   : ReusedPasswordAccountType::GSUITE);
+          IsAccountConsumer(username) ? ReusedPasswordAccountType::GMAIL
+                                      : ReusedPasswordAccountType::GSUITE);
       return reused_password_account_type;
     }
     case PasswordType::PASSWORD_TYPE_UNKNOWN:
@@ -359,7 +362,6 @@ PasswordProtectionServiceBase::GetPasswordProtectionReusedPasswordAccountType(
       return reused_password_account_type;
   }
   NOTREACHED();
-  return reused_password_account_type;
 }
 
 // static
@@ -398,7 +400,6 @@ bool PasswordProtectionServiceBase::IsSupportedPasswordTypeForPinging(
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 bool PasswordProtectionServiceBase::IsSupportedPasswordTypeForModalWarning(

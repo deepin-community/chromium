@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/traced_value.h"
@@ -72,7 +71,17 @@ class CC_BASE_EXPORT ScopedLayerTask {
 
 class CC_BASE_EXPORT ScopedImageTask {
  public:
-  enum class ImageType { kAvif, kBmp, kGif, kIco, kJpeg, kPng, kWebP, kOther };
+  enum class ImageType {
+    kAvif,
+    kBmp,
+    kGif,
+    kIco,
+    kJpeg,
+    kJxl,
+    kPng,
+    kWebP,
+    kOther
+  };
 
   explicit ScopedImageTask(ImageType image_type)
       : image_type_(image_type), start_time_(base::TimeTicks::Now()) {}

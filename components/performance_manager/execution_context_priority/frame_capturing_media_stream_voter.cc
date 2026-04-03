@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "components/performance_manager/public/execution_context/execution_context.h"
+#include "components/performance_manager/public/graph/graph.h"
 
 namespace performance_manager::execution_context_priority {
 
@@ -20,9 +21,9 @@ const execution_context::ExecutionContext* GetExecutionContext(
 // Returns a vote with the appropriate priority depending on if the frame is
 // capturing media.
 Vote GetVote(bool is_capturing_media_stream) {
-  base::TaskPriority priority = is_capturing_media_stream
-                                    ? base::TaskPriority::USER_BLOCKING
-                                    : base::TaskPriority::LOWEST;
+  base::Process::Priority priority =
+      is_capturing_media_stream ? base::Process::Priority::kUserBlocking
+                                : base::Process::Priority::kMinValue;
   return Vote(priority,
               FrameCapturingMediaStreamVoter::kFrameCapturingMediaStreamReason);
 }
@@ -37,18 +38,31 @@ FrameCapturingMediaStreamVoter::FrameCapturingMediaStreamVoter() = default;
 
 FrameCapturingMediaStreamVoter::~FrameCapturingMediaStreamVoter() = default;
 
-void FrameCapturingMediaStreamVoter::SetVotingChannel(
+void FrameCapturingMediaStreamVoter::InitializeOnGraph(
+    Graph* graph,
     VotingChannel voting_channel) {
   voting_channel_ = std::move(voting_channel);
+
+  graph->AddFrameNodeObserver(this);
 }
 
-void FrameCapturingMediaStreamVoter::OnFrameNodeInitializing(
-    const FrameNode* frame_node) {
+void FrameCapturingMediaStreamVoter::TearDownOnGraph(Graph* graph) {
+  graph->RemoveFrameNodeObserver(this);
+
+  voting_channel_.Reset();
+}
+
+void FrameCapturingMediaStreamVoter::OnBeforeFrameNodeAdded(
+    const FrameNode* frame_node,
+    const FrameNode* pending_parent_frame_node,
+    const PageNode* pending_page_node,
+    const ProcessNode* pending_process_node,
+    const FrameNode* pending_parent_or_outer_document_or_embedder) {
   const Vote vote = GetVote(frame_node->IsCapturingMediaStream());
   voting_channel_.SubmitVote(GetExecutionContext(frame_node), vote);
 }
 
-void FrameCapturingMediaStreamVoter::OnFrameNodeTearingDown(
+void FrameCapturingMediaStreamVoter::OnBeforeFrameNodeRemoved(
     const FrameNode* frame_node) {
   voting_channel_.InvalidateVote(GetExecutionContext(frame_node));
 }

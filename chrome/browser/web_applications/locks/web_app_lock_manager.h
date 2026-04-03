@@ -13,7 +13,8 @@
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/pass_key.h"
-#include "components/services/storage/indexed_db/locks/partitioned_lock_manager.h"
+#include "chrome/browser/web_applications/locks/partitioned_lock_holder.h"
+#include "chrome/browser/web_applications/locks/partitioned_lock_manager.h"
 #include "components/webapps/common/web_app_id.h"
 
 namespace base {
@@ -22,14 +23,16 @@ class Value;
 
 namespace web_app {
 
+class AllAppsLock;
+class AllAppsLockDescription;
 class AppLock;
 class AppLockDescription;
 class LockDescription;
-class WebAppCommandManager;
 class NoopLock;
 class SharedWebContentsLock;
 class SharedWebContentsWithAppLock;
 class SharedWebContentsWithAppLockDescription;
+class WebAppCommandManager;
 class WebAppProvider;
 
 // Locks allow types of exclusive access to resources in the WebAppProvider
@@ -87,46 +90,83 @@ class WebAppLockManager {
   // is using the shared web contents.
   bool IsSharedWebContentsLockFree();
 
-  // Acquires the lock for the given `lock_description`, calling
-  // `on_lock_acquired` when complete with the given lock. The lock
-  // is considered released when the `lock` given to the callback is destroyed.
+  // Acquires the lock for the given `lock_description` and `lock`. The `lock`
+  // must be owned by the caller, and when the lock is destroyed the request
+  // and/or internal locks are released. `on_lock_acquired` is called when the
+  // lock is granted. Any access of the `lock` before `on_lock_acquired` is
+  // called will CHECK-fail.
+  //
+  // Note: This should NOT be called by anything other than
+  // internal::CommandWithLock. Please use the command system to get a lock.
   template <class LockType>
-  void AcquireLock(
-      const LockDescription& lock_description,
-      base::OnceCallback<void(std::unique_ptr<LockType> lock)> on_lock_acquired,
-      const base::Location& location);
+  void AcquireLock(const LockType::LockDescription& lock_description,
+                   LockType& lock,
+                   base::OnceClosure on_lock_acquired,
+                   const base::Location& location);
 
   // Upgrades the given lock to a new one, and will call `on_lock_acquired` on
   // when the new lock has been acquired.
+  // Note: Other operations may be run in between requesting and granting
+  // this lock if the lock is already held or has a queue.
   std::unique_ptr<SharedWebContentsWithAppLockDescription>
-  UpgradeAndAcquireLock(
-      std::unique_ptr<SharedWebContentsLock> lock,
+  UpgradeAndAcquireLock(std::unique_ptr<SharedWebContentsLock> old_lock,
+                        SharedWebContentsWithAppLock& new_lock,
+                        const base::flat_set<webapps::AppId>& app_ids,
+                        base::OnceClosure on_lock_acquired,
+                        const base::Location& location = FROM_HERE);
+
+  // Upgrades the given lock to a new one, and will call `on_lock_acquired` on
+  // when the new lock has been acquired.
+  // Note: Other operations may be run in between requesting and granting
+  // this lock if the lock is already held or has a queue.
+  std::unique_ptr<AppLockDescription> UpgradeAndAcquireLock(
+      std::unique_ptr<NoopLock> old_lock,
+      AppLock& new_lock,
       const base::flat_set<webapps::AppId>& app_ids,
-      base::OnceCallback<void(std::unique_ptr<SharedWebContentsWithAppLock>)>
-          on_lock_acquired,
+      base::OnceClosure on_lock_acquired,
       const base::Location& location = FROM_HERE);
 
   // Upgrades the given lock to a new one, and will call `on_lock_acquired` on
   // when the new lock has been acquired.
-  std::unique_ptr<AppLockDescription> UpgradeAndAcquireLock(
-      std::unique_ptr<NoopLock> lock,
-      const base::flat_set<webapps::AppId>& app_ids,
-      base::OnceCallback<void(std::unique_ptr<AppLock>)> on_lock_acquired,
+  // Note: Other operations may be run in between requesting and granting
+  // this lock if the lock is already held or has a queue.
+  std::unique_ptr<AllAppsLockDescription> UpgradeAndAcquireLock(
+      std::unique_ptr<SharedWebContentsWithAppLock> old_lock,
+      AllAppsLock& new_lock,
+      base::OnceClosure on_lock_acquired,
       const base::Location& location = FROM_HERE);
 
   base::Value ToDebugValue() const;
 
   WebAppProvider& provider() const { return *provider_; }
 
+  base::WeakPtr<WebAppLockManager> GetWeakPtr();
+
  private:
+  // Invokes `GrantLockWithCallback` on the lock after `lock_manager_` has
+  // granted the underlying locks.
+  //
+  // Note: The `lock` parameter is guaranteed to be valid because the lock's
+  // holder keeps it alive. If the holder is destroyed, this callback won't be
+  // invoked.
+  //
+  // Callback behavior:
+  // - For locks without web contents: `on_lock_acquired` is always called once
+  //   the lock is granted.
+  // - For locks with web contents: `on_lock_acquired` won't be called if
+  //   profile shutdown has started.
+  template <class LockType>
+  void GrantLockWithCallback(base::WeakPtr<LockType> lock,
+                             base::OnceClosure on_lock_acquired);
+
   // Acquires the lock for the given `lock`, calling `on_lock_acquired` when
   // complete.
-  void AcquireLock(base::WeakPtr<content::PartitionedLockHolder> holder,
-                   const LockDescription& lock,
-                   base::OnceClosure on_lock_acquired,
-                   const base::Location& location);
+  void AcquireLockImpl(PartitionedLockHolder& holder,
+                       const LockDescription& lock,
+                       base::OnceClosure on_lock_acquired,
+                       const base::Location& location);
 
-  content::PartitionedLockManager lock_manager_;
+  PartitionedLockManager lock_manager_;
   raw_ptr<WebAppProvider> provider_ = nullptr;
   base::WeakPtrFactory<WebAppLockManager> weak_factory_{this};
 };

@@ -12,12 +12,11 @@
 #include "base/values.h"
 #include "chrome/browser/ash/login/configuration_keys.h"
 #include "chrome/browser/ash/login/demo_mode/demo_setup_controller.h"
+#include "chrome/browser/ash/login/fjord_oobe/fjord_oobe_util.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_requisition_manager.h"
-#include "chrome/browser/ui/ash/ash_util.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
-#include "chrome/common/channel_info.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/login/localized_values_builder.h"
@@ -42,7 +41,6 @@ void CoreOobeHandler::DeclareLocalizedValues(
   builder->Add("title", IDS_SHORT_PRODUCT_NAME);
   builder->Add("productName", IDS_SHORT_PRODUCT_NAME);
   builder->Add("learnMore", IDS_LEARN_MORE);
-
 
   // Strings for Asset Identifier shown in version string.
   builder->Add("assetIdLabel", IDS_OOBE_ASSET_ID_LABEL);
@@ -79,10 +77,11 @@ void CoreOobeHandler::DeclareJSCallbacks() {
   AddCallback("enableShelfButtons", &CoreOobeHandler::HandleEnableShelfButtons);
 }
 
-void CoreOobeHandler::GetAdditionalParameters(base::Value::Dict* dict) {
-  dict->Set("isInTabletMode", display::Screen::GetScreen()->InTabletMode());
+void CoreOobeHandler::GetAdditionalParameters(base::DictValue* dict) {
   dict->Set("isDemoModeEnabled", DemoSetupController::IsDemoModeAllowed());
-  if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
+  if (fjord_util::ShouldShowFjordOobe()) {
+    dict->Set("deviceFlowType", "fjord");
+  } else if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
     // The value is used to show a different UI for this type of the devices.
     dict->Set("deviceFlowType", "meet");
   }
@@ -92,16 +91,15 @@ ui::EventSink* CoreOobeHandler::GetEventSink() {
   return Shell::GetPrimaryRootWindow()->GetHost()->GetEventSink();
 }
 
-void CoreOobeHandler::ShowScreenWithData(
-    const OobeScreenId& screen,
-    std::optional<base::Value::Dict> data) {
+void CoreOobeHandler::ShowScreenWithData(const OobeScreenId& screen,
+                                         std::optional<base::DictValue> data) {
   const bool is_safe_priority_call =
       ui_init_state_ == UiState::kPriorityScreensLoaded &&
       PriorityScreenChecker::IsPriorityScreen(screen);
 
   CHECK(ui_init_state_ == UiState::kFullyInitialized || is_safe_priority_call);
 
-  base::Value::Dict screen_params;
+  base::DictValue screen_params;
   screen_params.Set("id", screen.name);
   if (data.has_value()) {
     screen_params.Set("data", std::move(data.value()));
@@ -112,7 +110,7 @@ void CoreOobeHandler::ShowScreenWithData(
 
 void CoreOobeHandler::UpdateOobeConfiguration() {
   CHECK(ui_init_state_ == UiState::kFullyInitialized);
-  base::Value::Dict configuration = configuration::FilterConfiguration(
+  base::DictValue configuration = configuration::FilterConfiguration(
       OobeConfiguration::Get()->configuration(),
       configuration::ConfigurationHandlerSide::HANDLER_JS);
   CallJS("cr.ui.Oobe.updateOobeConfiguration", std::move(configuration));
@@ -120,7 +118,7 @@ void CoreOobeHandler::UpdateOobeConfiguration() {
 
 void CoreOobeHandler::ReloadContent() {
   CHECK(ui_init_state_ == UiState::kFullyInitialized);
-  base::Value::Dict localized_strings = GetOobeUI()->GetLocalizedStrings();
+  base::DictValue localized_strings = GetOobeUI()->GetLocalizedStrings();
   CallJS("cr.ui.Oobe.reloadContent", std::move(localized_strings));
 }
 
@@ -169,6 +167,10 @@ void CoreOobeHandler::SetOsVersionLabelText(const std::string& label_text) {
 void CoreOobeHandler::SetBluetoothDeviceInfo(
     const std::string& bluetooth_name) {
   CallJS("cr.ui.Oobe.setBluetoothDeviceInfo", bluetooth_name);
+}
+
+base::WeakPtr<CoreOobeView> CoreOobeHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 void CoreOobeHandler::HandleInitializeCoreHandler() {
@@ -224,7 +226,7 @@ void CoreOobeHandler::HandleUpdateOobeUIState(int state) {
 }
 
 void CoreOobeHandler::HandleRaiseTabKeyEvent(bool reverse) {
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_TAB, ui::EF_NONE);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_TAB, ui::EF_NONE);
   if (reverse) {
     event.SetFlags(ui::EF_SHIFT_DOWN);
   }

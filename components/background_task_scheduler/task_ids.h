@@ -13,7 +13,8 @@ namespace background_task {
 // When adding your job id to the list below, update:
 // 1. BackgroundTaskSchedulerExternalUma for metrics, specifically:
 // toUmaEnumValueFromTaskId() and getHistogramPatternForTaskId().
-// 2. Enum BackgroundTaskId in tools/metrics/histograms/enums.xml.
+// 2. Enum BackgroundTaskId in
+// tools/metrics/histograms/metadata/android/enums.xml.
 // 3. Variant TaskType in
 // tools/metrics/histograms/metadata/android/histograms.xml.
 // 4. ChromeBackgroundTaskFactory#createBackgroundTaskFromTaskId in java.
@@ -43,6 +44,10 @@ enum class TaskIds {
   // team_email: platform-capabilities@chromium.org
   // owner: peter@chromium.org
   NOTIFICATION_SERVICE_JOB_ID = 21,
+  // component: UI>Notifications
+  // team_email: platform-capabilities@chromium.org
+  // owner: engedy@chromium.org
+  NOTIFICATION_SERVICE_PRE_UNSUBSCRIBE_JOB_ID = 221,
   // component: Mobile>WebView
   // team_email: android-webview-dev@chromium.org
   // owner: boliu@chromium.org
@@ -135,6 +140,26 @@ enum class TaskIds {
   // team_email: privacy-sandbox-dev@chromium.org
   // owner: csharrison@chromium.org
   ATTRIBUTION_PROVIDER_FLUSH_JOB_ID = 111,
+  // component: UI>Settings>Privacy
+  // team_email: chrome-privacy-controls@google.com
+  // owner: zalmashni@google.com, rubindl@chromium.org
+  SAFETY_HUB_JOB_ID = 112,
+  // component: UI>Browser>Mobile>Start
+  // team_email: clank-start@google.com
+  // owner:hanxi@chromium.org
+  AUXILIARY_SEARCH_DONATE_JOB_ID = 113,
+  // component: Enterprise
+  // team_email: cbe-device-trust-eng@google.com
+  // owner:xzonghan@chromium.org
+  CHROME_SIGNALS_REPORTING_JOB_ID = 114,
+  // component: Internals>Metrics
+  // team_email: chrome-metrics-team@google.com
+  // owner: asvitkine@google.com, rkaplow@google.com, lucnguyen@google.com
+  UMA_UPLOAD_JOB_ID = 115,
+  UKM_UPLOAD_JOB_ID = 116,
+  DWA_UPLOAD_JOB_ID = 117,
+  PUMA_UPLOAD_JOB_ID = 118,
+  STRUCTURED_METRICS_UPLOAD_JOB_ID = 119,
 };
 
 }  // namespace background_task

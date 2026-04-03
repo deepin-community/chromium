@@ -20,26 +20,29 @@
 
 #include "third_party/blink/renderer/core/svg/svg_fe_composite_element.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_number.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_string.h"
 #include "third_party/blink/renderer/core/svg/svg_enumeration_map.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
 template <>
 const SVGEnumerationMap& GetEnumerationMap<CompositeOperationType>() {
-  static const SVGEnumerationMap::Entry enum_items[] = {
-      {FECOMPOSITE_OPERATOR_OVER, "over"},
-      {FECOMPOSITE_OPERATOR_IN, "in"},
-      {FECOMPOSITE_OPERATOR_OUT, "out"},
-      {FECOMPOSITE_OPERATOR_ATOP, "atop"},
-      {FECOMPOSITE_OPERATOR_XOR, "xor"},
-      {FECOMPOSITE_OPERATOR_ARITHMETIC, "arithmetic"},
-      {FECOMPOSITE_OPERATOR_LIGHTER, "lighter"},
-  };
+  static constexpr auto enum_items = std::to_array<const char* const>({
+      "over",
+      "in",
+      "out",
+      "atop",
+      "xor",
+      "arithmetic",
+      "lighter",
+  });
   static const SVGEnumerationMap entries(enum_items,
                                          FECOMPOSITE_OPERATOR_ARITHMETIC);
   return entries;
@@ -104,13 +107,11 @@ void SVGFECompositeElement::SvgAttributeChanged(
   if (attr_name == svg_names::kOperatorAttr ||
       attr_name == svg_names::kK1Attr || attr_name == svg_names::kK2Attr ||
       attr_name == svg_names::kK3Attr || attr_name == svg_names::kK4Attr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     PrimitiveAttributeChanged(attr_name);
     return;
   }
 
   if (attr_name == svg_names::kInAttr || attr_name == svg_names::kIn2Attr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
@@ -120,6 +121,7 @@ void SVGFECompositeElement::SvgAttributeChanged(
 
 FilterEffect* SVGFECompositeElement::Build(SVGFilterBuilder* filter_builder,
                                            Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFECompositeElement);
   FilterEffect* input1 = filter_builder->GetEffectById(
       AtomicString(in1_->CurrentValue()->Value()));
   FilterEffect* input2 = filter_builder->GetEffectById(

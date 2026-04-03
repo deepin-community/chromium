@@ -14,9 +14,9 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/test/test_timeouts.h"
 #include "base/time/time.h"
-#include "chrome/updater/test_scope.h"
-#include "chrome/updater/util/unit_test_util.h"
-#include "chrome/updater/util/unit_test_util_win.h"
+#include "chrome/updater/test/test_scope.h"
+#include "chrome/updater/test/unit_test_util.h"
+#include "chrome/updater/test/unit_test_util_win.h"
 #include "chrome/updater/util/win_util.h"
 #include "chrome/updater/win/test/test_executables.h"
 #include "chrome/updater/win/test/test_strings.h"
@@ -109,10 +109,10 @@ TEST_F(ProgressWndTest, ClickedButton) {
     EXPECT_CALL(*mock_progress_wnd_events_,
                 DoRestartBrowser(
                     false, std::vector<GURL>{GURL("http://some-test-url")}))
-        .Times(1)
+
         .WillOnce(::testing::Return(true));
-    EXPECT_CALL(*mock_progress_wnd_events_, DoExit()).Times(1);
-    EXPECT_CALL(*mock_progress_wnd_events_, DoClose()).Times(1);
+    EXPECT_CALL(*mock_progress_wnd_events_, DoExit());
+    EXPECT_CALL(*mock_progress_wnd_events_, DoClose());
     button_tester(CompletionCodes::COMPLETION_CODE_RESTART_BROWSER,
                   IDC_BUTTON1);
   }
@@ -122,10 +122,10 @@ TEST_F(ProgressWndTest, ClickedButton) {
     EXPECT_CALL(
         *mock_progress_wnd_events_,
         DoRestartBrowser(true, std::vector<GURL>{GURL("http://some-test-url")}))
-        .Times(1)
+
         .WillOnce(::testing::Return(true));
-    EXPECT_CALL(*mock_progress_wnd_events_, DoExit()).Times(1);
-    EXPECT_CALL(*mock_progress_wnd_events_, DoClose()).Times(1);
+    EXPECT_CALL(*mock_progress_wnd_events_, DoExit());
+    EXPECT_CALL(*mock_progress_wnd_events_, DoClose());
     button_tester(CompletionCodes::COMPLETION_CODE_RESTART_ALL_BROWSERS,
                   IDC_BUTTON1);
   }
@@ -133,10 +133,10 @@ TEST_F(ProgressWndTest, ClickedButton) {
     mock_progress_wnd_events_ = std::make_unique<MockProgressWndEvents>();
     ::testing::InSequence seq;
     EXPECT_CALL(*mock_progress_wnd_events_, DoReboot())
-        .Times(1)
+
         .WillOnce(::testing::Return(true));
-    EXPECT_CALL(*mock_progress_wnd_events_, DoExit()).Times(1);
-    EXPECT_CALL(*mock_progress_wnd_events_, DoClose()).Times(1);
+    EXPECT_CALL(*mock_progress_wnd_events_, DoExit());
+    EXPECT_CALL(*mock_progress_wnd_events_, DoClose());
     button_tester(CompletionCodes::COMPLETION_CODE_REBOOT, IDC_BUTTON1);
   }
 
@@ -150,8 +150,8 @@ TEST_F(ProgressWndTest, ClickedButton) {
                 DoRestartBrowser(::testing::_, ::testing::_))
         .Times(0);
     EXPECT_CALL(*mock_progress_wnd_events_, DoReboot()).Times(0);
-    EXPECT_CALL(*mock_progress_wnd_events_, DoExit()).Times(1);
-    EXPECT_CALL(*mock_progress_wnd_events_, DoClose()).Times(1);
+    EXPECT_CALL(*mock_progress_wnd_events_, DoExit());
+    EXPECT_CALL(*mock_progress_wnd_events_, DoClose());
     button_tester(completion_code, IDC_BUTTON2);
   }
 
@@ -162,8 +162,8 @@ TEST_F(ProgressWndTest, ClickedButton) {
     EXPECT_CALL(*mock_progress_wnd_events_,
                 DoRestartBrowser(::testing::_, ::testing::_))
         .Times(0);
-    EXPECT_CALL(*mock_progress_wnd_events_, DoExit()).Times(1);
-    EXPECT_CALL(*mock_progress_wnd_events_, DoClose()).Times(1);
+    EXPECT_CALL(*mock_progress_wnd_events_, DoExit());
+    EXPECT_CALL(*mock_progress_wnd_events_, DoClose());
     button_tester(completion_code, IDC_CLOSE);
   }
 }
@@ -176,7 +176,7 @@ TEST_F(ProgressWndTest, OnInstallStopped) {
         MakeProgressWindow(&ui_message_loop);
     BOOL handled = false;
     if (id == IDCANCEL) {
-      EXPECT_CALL(*mock_progress_wnd_events_, DoCancel()).Times(1);
+      EXPECT_CALL(*mock_progress_wnd_events_, DoCancel());
     }
     progress_wnd->OnInstallStopped(WM_INSTALL_STOPPED, id, 0, handled);
     if (id == IDCANCEL) {
@@ -362,13 +362,13 @@ TEST_F(ProgressWndTest, LaunchCmdLine) {
   // also confirm that the test process is launched at medium integrity, by
   // creating an event with a security descriptor that allows the medium
   // integrity process to signal it.
-  test::EventHolder event_holder(IsElevatedWithUACOn()
-                                     ? CreateEveryoneWaitableEventForTest()
-                                     : test::CreateWaitableEventForTest());
+  test::EventHolder event_holder(
+      IsElevatedWithUACOn() ? test::CreateEveryoneWaitableEventForTest()
+                            : test::CreateWaitableEventForTest());
   ASSERT_NE(event_holder.event.handle(), nullptr);
 
-  base::CommandLine test_process_cmd_line =
-      GetTestProcessCommandLine(GetTestScope(), test::GetTestName());
+  base::CommandLine test_process_cmd_line = GetTestProcessCommandLine(
+      GetUpdaterScopeForTesting(), test::GetTestName());
   test_process_cmd_line.AppendSwitchNative(
       IsElevatedWithUACOn() ? kTestEventToSignalIfMediumIntegrity
                             : kTestEventToSignal,

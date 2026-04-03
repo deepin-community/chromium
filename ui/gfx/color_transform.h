@@ -9,7 +9,6 @@
 #include <optional>
 #include <string>
 
-#include "base/feature_list.h"
 #include "third_party/skia/include/core/SkData.h"
 #include "third_party/skia/include/effects/SkRuntimeEffect.h"
 #include "ui/gfx/color_space.h"
@@ -18,9 +17,6 @@
 #include "ui/gfx/hdr_metadata.h"
 
 namespace gfx {
-
-COLOR_SPACE_EXPORT BASE_DECLARE_FEATURE(kHlgPqUnifiedTonemap);
-COLOR_SPACE_EXPORT BASE_DECLARE_FEATURE(kHlgPqSdrRelative);
 
 class COLOR_SPACE_EXPORT ColorTransform {
  public:
@@ -33,21 +29,22 @@ class COLOR_SPACE_EXPORT ColorTransform {
     // Used to adjust the transfer and range adjust matrices.
     uint32_t src_bit_depth = kDefaultBitDepth;
     uint32_t dst_bit_depth = kDefaultBitDepth;
-
-    // If set to true, then map PQ and HLG inputs such that their maximum
-    // luminance will be `dst_max_luminance_relative`.
-    bool tone_map_pq_and_hlg_to_dst = false;
   };
 
   // Parameters that may be specified when the transform is applied. Changing
   // these parameters will change the uniforms for a single SkShader.
-  struct RuntimeOptions {
+  struct COLOR_SPACE_EXPORT RuntimeOptions {
+    RuntimeOptions();
+    RuntimeOptions(const RuntimeOptions&) = delete;
+    RuntimeOptions& operator=(const RuntimeOptions&) = delete;
+    ~RuntimeOptions();
+
     // Offset and multiplier used when sampling textures;
     float offset = 0.f;
     float multiplier = 1.f;
 
     // Used for tone mapping PQ sources.
-    std::optional<gfx::HDRMetadata> src_hdr_metadata;
+    gfx::HDRMetadata src_hdr_metadata;
 
     // Used for interpreting color spaces whose definition depends on an SDR
     // white point and for tone mapping.
@@ -76,13 +73,6 @@ class COLOR_SPACE_EXPORT ColorTransform {
   virtual void Transform(TriStim* colors,
                          size_t num,
                          const RuntimeOptions& options) const = 0;
-
-  // Return an SkRuntimeEffect to perform this transform.
-  virtual sk_sp<SkRuntimeEffect> GetSkRuntimeEffect() const = 0;
-
-  // Return the uniforms used by the above SkRuntimeEffect.
-  virtual sk_sp<SkData> GetSkShaderUniforms(
-      const RuntimeOptions& options) const = 0;
 
   // Returns true if this transform is the identity.
   virtual bool IsIdentity() const = 0;

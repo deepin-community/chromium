@@ -10,6 +10,7 @@
 #include "base/test/values_test_util.h"
 #include "base/values.h"
 #include "components/feedback/feedback_common.h"
+#include "components/feedback/feedback_constants.h"
 #include "extensions/browser/api/feedback_private/feedback_private_api_unittest_base_chromeos.h"
 #include "extensions/browser/api/feedback_private/feedback_service.h"
 #include "extensions/browser/api/feedback_private/log_source_access_manager.h"
@@ -33,7 +34,7 @@ using testing::SaveArg;
 // list.
 template <typename T>
 std::string ParamsToJSON(const T& params) {
-  base::Value::List params_value;
+  base::ListValue params_value;
   params_value.Append(base::Value(params.ToValue()));
   std::string params_json_string;
   EXPECT_TRUE(base::JSONWriter::Write(params_value, &params_json_string));
@@ -88,8 +89,9 @@ class FeedbackPrivateApiUnittest : public FeedbackPrivateApiUnittestBase {
 
     std::optional<base::Value> result_value =
         RunFunctionAndReturnValue(function.get(), ParamsToJSON(params));
-    if (!result_value)
+    if (!result_value) {
       return testing::AssertionFailure() << "No result";
+    }
 
     auto result = ReadLogSourceResult::FromValue(*result_value);
     if (!result) {
@@ -419,7 +421,6 @@ TEST_F(FeedbackPrivateApiUnittest, SendFeedbackWithSysInfo) {
       "data": {},
       "name": "C:\\fakepath\\chrome_40px.svg"
     },
-    "assistantDebugInfoAllowed": true,
     "attachedFileBlobUuid": "2e3996de-db9e-4c3d-b62c-80d19b6418b9",
     "autofillMetadata": "",
     "categoryTag": "test-tag",
@@ -427,7 +428,6 @@ TEST_F(FeedbackPrivateApiUnittest, SendFeedbackWithSysInfo) {
     "descriptionPlaceholder": "",
     "email": "tester@test.com",
     "flow": "regular",
-    "fromAssistant": true,
     "fromAutofill": false,
     "includeBluetoothLogs": true,
     "pageUrl": "https://test.com",
@@ -468,8 +468,6 @@ TEST_F(FeedbackPrivateApiUnittest, SendFeedbackWithSysInfo) {
             feedback_data->screenshot_uuid());
   EXPECT_EQ("https://test.com", feedback_data->page_url());
 
-  EXPECT_TRUE(feedback_data->from_assistant());
-  EXPECT_TRUE(feedback_data->assistant_debug_info_allowed());
   EXPECT_TRUE(feedback_data->sys_info());
   EXPECT_TRUE(feedback_data->sys_info()->count("mem_usage_with_title"));
 }
@@ -481,14 +479,12 @@ TEST_F(FeedbackPrivateApiUnittest, SendFeedbackWithoutSysInfo) {
       "data": {},
       "name":""
     },
-    "assistantDebugInfoAllowed": false,
     "autofillMetadata": "",
     "categoryTag": "",
     "description": "test-desc",
     "descriptionPlaceholder": "",
     "email": "",
     "flow": "regular",
-    "fromAssistant": false,
     "fromAutofill": false,
     "includeBluetoothLogs": false,
     "pageUrl": "",
@@ -523,8 +519,6 @@ TEST_F(FeedbackPrivateApiUnittest, SendFeedbackWithoutSysInfo) {
   EXPECT_EQ("", feedback_data->screenshot_uuid());
   EXPECT_EQ("", feedback_data->page_url());
 
-  EXPECT_FALSE(feedback_data->from_assistant());
-  EXPECT_FALSE(feedback_data->assistant_debug_info_allowed());
   EXPECT_TRUE(feedback_data->sys_info());
   EXPECT_FALSE(feedback_data->sys_info()->count("mem_usage_with_title"));
 }
@@ -585,8 +579,6 @@ TEST_F(FeedbackPrivateApiUnittest, SendFeedbackV2WithOptionsTrue) {
             feedback_data->screenshot_uuid());
   EXPECT_EQ("https://test.com", feedback_data->page_url());
 
-  EXPECT_TRUE(feedback_data->from_assistant());
-  EXPECT_TRUE(feedback_data->assistant_debug_info_allowed());
   EXPECT_TRUE(feedback_data->sys_info());
   EXPECT_TRUE(feedback_data->sys_info()->size() == 0);
 }
@@ -642,8 +634,6 @@ TEST_F(FeedbackPrivateApiUnittest, SendFeedbackV2WithOptionsFalse) {
   EXPECT_EQ("", feedback_data->screenshot_uuid());
   EXPECT_EQ("", feedback_data->page_url());
 
-  EXPECT_FALSE(feedback_data->from_assistant());
-  EXPECT_FALSE(feedback_data->assistant_debug_info_allowed());
   EXPECT_TRUE(feedback_data->sys_info());
   EXPECT_TRUE(feedback_data->sys_info()->size() == 0);
 }
@@ -703,8 +693,6 @@ TEST_F(FeedbackPrivateApiUnittest, SendFeedbackWithAutofillInfo) {
   EXPECT_EQ("https://test.com", feedback_data->page_url());
   EXPECT_EQ("test-metadata", feedback_data->autofill_metadata());
 
-  EXPECT_FALSE(feedback_data->from_assistant());
-  EXPECT_TRUE(feedback_data->assistant_debug_info_allowed());
   EXPECT_TRUE(feedback_data->sys_info());
 }
 
@@ -747,15 +735,14 @@ TEST_F(FeedbackPrivateApiUnittest, SendFeedbackInfoAiFlow) {
       /*flow=*/api::feedback_private::FeedbackFlow::kAi,
       /*from_assistant=*/false, /*include_bluetooth_logs=*/false,
       /*show_questionnaire=*/false, /*from_chrome_labs_or_kaleidoscope=*/false,
-      /*from_autofill=*/false, /*autofill_metadata=*/base::Value::Dict(),
-      /*ai_metadata=*/base::Value::Dict());
+      /*from_autofill=*/false, /*autofill_metadata=*/base::DictValue(),
+      /*ai_metadata=*/base::DictValue());
 
   EXPECT_EQ(FeedbackCommon::GetChromeBrowserProductId(),
             feedback_info->product_id);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  auto chromeos_ai_metadata = base::Value::Dict();
-  chromeos_ai_metadata.Set("from_chromeos", "true");
+  auto chromeos_ai_metadata = base::DictValue();
+  chromeos_ai_metadata.Set(feedback::kSeaPenMetadataKey, "true");
   feedback_info = api->CreateFeedbackInfo(
       /*description_template=*/unused, /*description_placeholder_text=*/unused,
       /*category_tag=*/unused, /*extra_diagnostics=*/unused,
@@ -763,11 +750,10 @@ TEST_F(FeedbackPrivateApiUnittest, SendFeedbackInfoAiFlow) {
       /*flow=*/api::feedback_private::FeedbackFlow::kAi,
       /*from_assistant=*/false, /*include_bluetooth_logs=*/false,
       /*show_questionnaire=*/false, /*from_chrome_labs_or_kaleidoscope=*/false,
-      /*from_autofill=*/false, /*autofill_metadata=*/base::Value::Dict(),
+      /*from_autofill=*/false, /*autofill_metadata=*/base::DictValue(),
       chromeos_ai_metadata);
 
   EXPECT_EQ(FeedbackCommon::GetChromeOSProductId(), feedback_info->product_id);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
 }  // namespace extensions

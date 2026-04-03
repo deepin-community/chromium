@@ -16,16 +16,21 @@ limitations under the License.
 #ifndef XLA_SERVICE_MULTI_OUTPUT_FUSION_H_
 #define XLA_SERVICE_MULTI_OUTPUT_FUSION_H_
 
+#include <cstdint>
+#include <memory>
 #include <optional>
 #include <queue>
+#include <utility>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "xla/hlo/analysis/alias_info.h"
+#include "xla/hlo/analysis/hlo_reachability.h"
+#include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/hlo/ir/hlo_reachability.h"
-#include "xla/service/hlo_pass_interface.h"
-#include "xla/statusor.h"
+#include "xla/hlo/pass/hlo_pass_interface.h"
 
 namespace xla {
 
@@ -49,16 +54,10 @@ namespace xla {
 //  instruction fusion.
 class MultiOutputFusion : public HloModulePass {
  public:
-  MultiOutputFusion() = default;
+  explicit MultiOutputFusion(const AliasInfo* alias_info)
+      : alias_info_(alias_info) {}
 
   absl::string_view name() const override { return "multi_output_fusion"; }
-
-  // Run multi-output fusion on the given module. Returns whether the module
-  // was changed.
-  using HloPassInterface::Run;
-  StatusOr<bool> Run(
-      HloModule* module,
-      const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 
  protected:
   // Main entry for the optimization. Returns true if the optimization happens.
@@ -84,6 +83,13 @@ class MultiOutputFusion : public HloModulePass {
   virtual bool LegalToFuse(HloInstruction* instr1, HloInstruction* instr2);
 
   // Test if it's legal to fuse instr1 and instr2 into one fusion instruction
+  // using preliminary constraints such as whether two instructions are dead or
+  // reachable from each other or are not fusible kinds of instructions such as
+  // GTEs.
+  bool LegalToFusePreliminaryConstraints(HloInstruction* instr1,
+                                         HloInstruction* instr2);
+
+  // Test if it's legal to fuse instr1 and instr2 into one fusion instruction
   // using main constraints.
   bool LegalToFuseMainConstraints(HloInstruction* instr1,
                                   HloInstruction* instr2);
@@ -100,6 +106,22 @@ class MultiOutputFusion : public HloModulePass {
 
   // Returns the computation for the pass.
   HloComputation* computation() const { return computation_; }
+
+  // An internal data structure for each instruction in current computation.
+  struct FusionCandidate {
+    HloInstruction* hlo;
+    std::list<std::pair<HloInstruction*, int64_t>> fusibles;
+    explicit FusionCandidate(HloInstruction* hlo) : hlo(hlo) {}
+  };
+
+  const std::vector<FusionCandidate>& current_computation_candidates() const {
+    return candidates_;
+  }
+
+  void AddFusibleCandidate(HloInstruction* instr);
+
+  void AddToWorkList(HloInstruction* instr1, HloInstruction* instr2,
+                     int64_t profit);
 
   // Update the reachability map after fusing instr1 and instr2.
   void UpdateReachability(
@@ -128,15 +150,23 @@ class MultiOutputFusion : public HloModulePass {
   // reachability, worklist, and fusion candidates.
   HloInstruction* CreateFusion(HloInstruction* base, HloInstruction* to_fuse);
 
- private:
-  // An internal data structure for each instruction in current computation.
-  // When an instruction is removed, member 'hlo' is set to nullptr.
-  struct FusionCandidate {
-    HloInstruction* hlo;
-    std::list<std::pair<HloInstruction*, int64_t>> fusibles;
-    explicit FusionCandidate(HloInstruction* hlo) : hlo(hlo) {}
-  };
+  bool is_connected(HloInstruction* instr1, HloInstruction* instr2) {
+    return reachability_->IsConnected(instr1, instr2);
+  }
 
+  // Creates an initial worklist of fusible instruction pairs for the current
+  // computation.
+  virtual void CreateFusionWorkListForCurrentComputation();
+
+  // Run multi-output fusion on the given module. Returns whether the module
+  // was changed.
+  absl::StatusOr<bool> RunImpl(
+      HloModule* module,
+      const absl::flat_hash_set<absl::string_view>& execution_threads) override;
+
+  const AliasInfo* alias_info_;
+
+ private:
   // The pair of candidates to be fused and the profit score.
   struct ToBeFused {
     HloInstruction* instr1;
@@ -188,18 +218,15 @@ class MultiOutputFusion : public HloModulePass {
   }
 
   bool is_fused(HloInstruction* instr) {
-    return candidates_[get_candidate_id(instr)].hlo == nullptr;
+    return fused_instructions_.contains(instr);
   }
 
   void set_is_fused(HloInstruction* instr) {
-    candidates_[get_candidate_id(instr)].hlo = nullptr;
-  }
-
-  bool is_connected(HloInstruction* instr1, HloInstruction* instr2) {
-    return reachability_->IsConnected(instr1, instr2);
+    fused_instructions_.insert(instr);
   }
 
   std::vector<FusionCandidate> candidates_;
+  absl::flat_hash_set<const HloInstruction*> fused_instructions_;
   WorkList worklist_;
 
   // A map that maps an instruction to the index_.
@@ -214,7 +241,7 @@ class MultiOutputFusion : public HloModulePass {
       all_fusion_candidates_;
 
   // Computation for the pass.
-  HloComputation* computation_;
+  HloComputation* computation_ = nullptr;
 };
 
 }  // namespace xla

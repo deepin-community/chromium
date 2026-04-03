@@ -9,15 +9,17 @@
 #include "third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.h"
 #include "third_party/blink/renderer/core/layout/fragmentation_utils.h"
 #include "third_party/blink/renderer/core/layout/geometry/fragment_geometry.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
+#include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_block.h"
 #include "third_party/blink/renderer/core/layout/layout_result.h"
 #include "third_party/blink/renderer/core/layout/layout_utils.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
-
 namespace blink {
 
 bool LayoutBox::HasHitTestableOverflow() const {
+  NOT_DESTROYED();
   // See MayIntersect() for the reason of using HasVisualOverflow here.
   if (!HasVisualOverflow()) {
     return false;
@@ -36,12 +38,12 @@ bool LayoutBox::MayIntersect(const HitTestResult& result,
   NOT_DESTROYED();
   // Check if we need to do anything at all.
   // The root scroller always fills the whole view.
-  if (UNLIKELY(IsEffectiveRootScroller())) {
+  if (IsEffectiveRootScroller()) [[unlikely]] {
     return true;
   }
 
   PhysicalRect overflow_box;
-  if (UNLIKELY(result.GetHitTestRequest().IsHitTestVisualOverflow())) {
+  if (result.GetHitTestRequest().IsHitTestVisualOverflow()) [[unlikely]] {
     overflow_box = VisualOverflowRectIncludingFilters();
   } else if (HasHitTestableOverflow()) {
     // PhysicalVisualOverflowRect is an approximation of
@@ -152,6 +154,11 @@ const LayoutResult* LayoutBox::CachedLayoutResult(
       return nullptr;
     }
 
+    // If we've shifted our children we can't rely on their position.
+    if (physical_fragment.HasMovedChildren()) {
+      return nullptr;
+    }
+
     cache_status = LayoutCacheStatus::kCanReuseLines;
   }
 
@@ -204,6 +211,16 @@ const LayoutResult* LayoutBox::CachedLayoutResult(
     // either.
     if (!use_layout_cache_slot && !GetCachedLayoutResult(break_token))
       return nullptr;
+  }
+
+  // Break appeal may have been reduced because the fragment crosses the
+  // fragmentation line, to send a strong signal to break before it instead. If
+  // we actually ended up breaking before it, this break appeal may no longer be
+  // valid, since there could be more room in the next fragmentainer. Miss the
+  // cache.
+  if (break_token && break_token->IsBreakBefore() &&
+      cached_layout_result->GetBreakAppeal() < kBreakAppealPerfect) {
+    return nullptr;
   }
 
   LayoutUnit bfc_line_offset = new_space.GetBfcOffset().line_offset;
@@ -271,7 +288,7 @@ const LayoutResult* LayoutBox::CachedLayoutResult(
         return nullptr;
     }
 
-    if (UNLIKELY(new_space.HasBlockFragmentation())) {
+    if (new_space.HasBlockFragmentation()) [[unlikely]] {
       DCHECK(old_space.HasBlockFragmentation());
 
       // Sometimes we perform simplified layout on a block-flow which is just
@@ -288,8 +305,9 @@ const LayoutResult* LayoutBox::CachedLayoutResult(
       // containers and lay out the OOFs inside. If we do that after having hit
       // the cache (and thus kept the fragment with the OOF), we'd end up with
       // extraneous OOF fragments.
-      if (UNLIKELY(physical_fragment.HasNestedMulticolsWithOOFs()))
+      if (physical_fragment.HasNestedMulticolsWithOOFs()) [[unlikely]] {
         return nullptr;
+      }
 
       // Any fragmented out-of-flow positioned items will be placed once we
       // reach the fragmentation context root rather than the containing block,
@@ -299,20 +317,6 @@ const LayoutResult* LayoutBox::CachedLayoutResult(
         return nullptr;
 
       if (column_spanner_path || cached_layout_result->GetColumnSpannerPath()) {
-        return nullptr;
-      }
-
-      // Break appeal may have been reduced because the fragment crosses the
-      // fragmentation line, to send a strong signal to break before it
-      // instead. If we actually ended up breaking before it, this break appeal
-      // may no longer be valid, since there could be more room in the next
-      // fragmentainer. Miss the cache.
-      //
-      // TODO(mstensho): Maybe this shouldn't be necessary. Look into how
-      // FinishFragmentation() clamps break appeal down to
-      // kBreakAppealLastResort. Maybe there are better ways.
-      if (break_token && break_token->IsBreakBefore() &&
-          cached_layout_result->GetBreakAppeal() < kBreakAppealPerfect) {
         return nullptr;
       }
 
@@ -513,7 +517,7 @@ const LayoutResult* LayoutBox::CachedLayoutResult(
     // We haven't actually performed simplified layout. Skip the checks for no
     // fragmentation, since it's okay to be fragmented in this case.
     cloned_cached_layout_result->CheckSameForSimplifiedLayout(
-        *cached_layout_result, /* check_same_block_size */ true,
+        *cached_layout_result,
         /* check_no_fragmentation*/ false);
 #endif
   }
@@ -521,7 +525,7 @@ const LayoutResult* LayoutBox::CachedLayoutResult(
   // Optimization: TableConstraintSpaceData can be large, and it is shared
   // between all the rows in a table. Make constraint space table data for
   // reused row fragment be identical to the one used by other row fragments.
-  if (IsTableRow() && IsLayoutNGObject()) {
+  if (IsTableRow()) {
     const_cast<ConstraintSpace&>(
         cached_layout_result->GetConstraintSpaceForCaching())
         .ReplaceTableRowData(*new_space.TableData(), new_space.TableRowIndex());

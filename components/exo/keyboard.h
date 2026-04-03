@@ -9,7 +9,6 @@
 
 #include "ash/ime/ime_controller_impl.h"
 #include "ash/public/cpp/keyboard/keyboard_controller_observer.h"
-#include "ash/public/mojom/input_device_settings.mojom.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
@@ -39,7 +38,7 @@ class Keyboard : public ui::EventHandler,
                  public SurfaceObserver,
                  public SeatObserver,
                  public ash::KeyboardControllerObserver,
-                 public ash::ImeControllerImpl::Observer {
+                 public ash::ImeController::Observer {
  public:
   Keyboard(std::unique_ptr<KeyboardDelegate> delegate, Seat* seat);
   Keyboard(const Keyboard&) = delete;
@@ -80,7 +79,7 @@ class Keyboard : public ui::EventHandler,
   void OnKeyRepeatSettingsChanged(
       const ash::KeyRepeatSettings& settings) override;
 
-  // Overridden from ash::ImeControllerImpl::Observer:
+  // Overridden from ash::ImeController::Observer:
   void OnCapsLockChanged(bool enabled) override;
   void OnKeyboardLayoutNameChanged(const std::string& layout_name) override;
 

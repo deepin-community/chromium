@@ -6,6 +6,10 @@
 
 // TextureParameterTest.cpp: Tests GLES1-specific usage of glTexParameter.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
 
@@ -161,6 +165,17 @@ TEST_P(TextureParameterTest, SetFixedPoint)
     glGetTexParameterxv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, params.data());
     EXPECT_GL_NO_ERROR();
     EXPECT_EQ(GL_LINEAR, params[0]);
+
+    if (IsGLExtensionEnabled("GL_OES_texture_mirrored_repeat"))
+    {
+        glTexParameterx(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+        EXPECT_GL_NO_ERROR();
+    }
+    else
+    {
+        glTexParameterx(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+        EXPECT_GL_ERROR(GL_INVALID_ENUM);
+    }
 }
 
 ANGLE_INSTANTIATE_TEST_ES1(TextureParameterTest);

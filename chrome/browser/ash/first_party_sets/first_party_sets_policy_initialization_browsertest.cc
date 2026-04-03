@@ -58,7 +58,7 @@ class FirstPartySetsPolicyInitializationTest : public LoginManagerTest {
   // FirstPartySetsOverrides policies with `true` and `overrides` respectively.
   //
   // If `overrides` is nullopt, this disables the FirstPartySetsEnabled policy.
-  void SetFirstPartySetsPolicies(std::optional<base::Value::Dict> overrides) {
+  void SetFirstPartySetsPolicies(std::optional<base::DictValue> overrides) {
     policy_.Set(
         policy::key::kFirstPartySetsEnabled, policy::POLICY_LEVEL_MANDATORY,
         policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_ENTERPRISE_DEFAULT,
@@ -85,8 +85,9 @@ class FirstPartySetsPolicyInitializationTest : public LoginManagerTest {
 // Verifies that policy defaults are used when not specified.
 IN_PROC_BROWSER_TEST_F(FirstPartySetsPolicyInitializationTest, PolicyDefaults) {
   base::RunLoop loop;
-  BrowserContextKeyedServiceFactory::TestingFactory factory =
-      base::BindLambdaForTesting([&](content::BrowserContext* context) {
+  ::first_party_sets::FirstPartySetsPolicyServiceFactory::GlobalTestingFactory
+      factory = base::BindLambdaForTesting([&](content::BrowserContext*
+                                                   context) {
         Profile* profile = Profile::FromBrowserContext(context);
         EXPECT_TRUE(profile->GetPrefs()
                         ->FindPreference(
@@ -113,8 +114,9 @@ IN_PROC_BROWSER_TEST_F(FirstPartySetsPolicyInitializationTest, PolicyDefaults) {
 IN_PROC_BROWSER_TEST_F(FirstPartySetsPolicyInitializationTest,
                        EnabledPolicySetAndUsed) {
   base::RunLoop loop;
-  BrowserContextKeyedServiceFactory::TestingFactory factory =
-      base::BindLambdaForTesting([&](content::BrowserContext* context) {
+  ::first_party_sets::FirstPartySetsPolicyServiceFactory::GlobalTestingFactory
+      factory = base::BindLambdaForTesting([&](content::BrowserContext*
+                                                   context) {
         Profile* profile = Profile::FromBrowserContext(context);
         // Only the FirstPartySetsEnabled pref was set.
         EXPECT_FALSE(profile->GetPrefs()
@@ -148,15 +150,18 @@ IN_PROC_BROWSER_TEST_F(FirstPartySetsPolicyInitializationTest,
 IN_PROC_BROWSER_TEST_F(FirstPartySetsPolicyInitializationTest,
                        BothPoliciesSetAndUsed) {
   base::RunLoop loop;
-  base::Value expected_overrides = base::JSONReader::Read(R"(
+  base::Value expected_overrides =
+      base::JSONReader::Read(R"(
              {
                 "replacements": [],
                 "additions": []
               }
-            )")
-                                       .value();
-  BrowserContextKeyedServiceFactory::TestingFactory factory =
-      base::BindLambdaForTesting([&](content::BrowserContext* context) {
+            )",
+                             base::JSON_PARSE_CHROMIUM_EXTENSIONS)
+          .value();
+  ::first_party_sets::FirstPartySetsPolicyServiceFactory::GlobalTestingFactory
+      factory = base::BindLambdaForTesting([&](content::BrowserContext*
+                                                   context) {
         Profile* profile = Profile::FromBrowserContext(context);
         // Both prefs were set.
         EXPECT_FALSE(profile->GetPrefs()

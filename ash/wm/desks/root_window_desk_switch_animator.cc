@@ -92,7 +92,7 @@ void TakeScreenshot(
   const gfx::Rect request_bounds(screenshot_layer->size());
   auto screenshot_request = std::make_unique<viz::CopyOutputRequest>(
       viz::CopyOutputRequest::ResultFormat::RGBA,
-      viz::CopyOutputRequest::ResultDestination::kNativeTextures,
+      viz::CopyOutputRequest::ResultDestination::kSharedImage,
       std::move(on_screenshot_taken));
   screenshot_request->set_area(request_bounds);
   screenshot_request->set_result_task_runner(
@@ -432,7 +432,7 @@ int RootWindowDeskSwitchAnimator::GetIndexOfMostVisibleDeskScreenshot() const {
     }
   }
 
-  // TODO(crbug.com/1134390): Convert back to DCHECK when the issue is fixed.
+  // TODO(crbug.com/40151430): Convert back to DCHECK when the issue is fixed.
   CHECK_GE(index, 0);
   CHECK_LT(index, static_cast<int>(DesksController::Get()->desks().size()));
   return index;
@@ -706,8 +706,6 @@ void RootWindowDeskSwitchAnimator::OnScreenshotLayerCreated() {
 }
 
 int RootWindowDeskSwitchAnimator::GetXPositionOfScreenshot(int index) {
-  // TODO(crbug.com/1223866): Investigate if we can prevent this higher in the
-  // call stack.
   if (index < 0 || index >= static_cast<int>(screenshot_layers_.size()))
     return 0;
   ui::Layer* layer = screenshot_layers_[index];

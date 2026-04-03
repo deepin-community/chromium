@@ -7,10 +7,10 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <string_view>
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/dcheck_is_on.h"
 #include "base/feature_list.h"
@@ -23,13 +23,13 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/synchronization/lock.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/values_test_util.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -117,7 +117,7 @@ constexpr unsigned expected_pre_merge_third_party_client_hints_number = 16u;
 
 constexpr char kDefaultFeatures[] =
     "CriticalClientHint,AcceptCHFrame,"
-    "ClientHintsFormFactor,ClientHintsPrefersReducedTransparency,"
+    "ClientHintsFormFactors,ClientHintsPrefersReducedTransparency,"
     "UseNewAlpsCodepointHttp2";
 
 // All of the status codes from HttpResponseHeaders::IsRedirectResponseCode.
@@ -131,8 +131,8 @@ const net::HttpStatusCode kRedirectStatusCodes[] = {
 // requests to https://{foo|bar}.com/non-existing-{image.jpg|iframe.html}.
 class ThirdPartyURLLoaderInterceptor {
  public:
-  explicit ThirdPartyURLLoaderInterceptor(const std::set<GURL> intercepted_urls)
-      : intercepted_urls_(intercepted_urls),
+  explicit ThirdPartyURLLoaderInterceptor(std::set<GURL> intercepted_urls)
+      : intercepted_urls_(std::move(intercepted_urls)),
         interceptor_(base::BindRepeating(
             &ThirdPartyURLLoaderInterceptor::InterceptURLRequest,
             base::Unretained(this))) {}
@@ -244,9 +244,7 @@ bool IsSimilarToIntABNF(const std::string& header_value) {
   return true;
 }
 
-// User agent minor version matches "0.X.0" which depends on reduced UA
-// through kReduceUserAgentMinorVersion experiment, currently the reduced minor
-// version is "0.0.0".
+// Checks that the user agent minor version matches "0.0.0"
 void CheckUserAgentMinorVersion(const std::string& user_agent_value,
                                 const bool expected_ua_reduced) {
   // A regular expression that matches Chrome/{major_version}.{minor_version}
@@ -255,19 +253,13 @@ void CheckUserAgentMinorVersion(const std::string& user_agent_value,
       "Chrome/[0-9]+\\.([0-9]+\\.[0-9]+\\.[0-9]+)";
   // The minor version in the reduced UA string is always "0.0.0".
   static constexpr char kReducedMinorVersion[] = "0.0.0";
-  // The minor version in the ReduceUserAgentMinorVersion experiment is always
-  // "0.X.0", where X is the frozen build version.
-  const std::string kReduceUserAgentMinorVersion =
-      "0." +
-      std::string(blink::features::kUserAgentFrozenBuildVersion.Get().data()) +
-      ".0";
 
   std::string minor_version;
   EXPECT_TRUE(re2::RE2::PartialMatch(user_agent_value, kChromeVersionRegex,
                                      &minor_version));
 
   if (expected_ua_reduced) {
-    EXPECT_EQ(minor_version, kReduceUserAgentMinorVersion);
+    EXPECT_EQ(minor_version, kReducedMinorVersion);
   } else {
     EXPECT_NE(minor_version, kReducedMinorVersion);
   }
@@ -362,8 +354,8 @@ class AlternatingCriticalCHRequestHandler {
 void ExpectUKMSeen(const ukm::TestAutoSetUkmRecorder& ukm_recorder,
                    const std::vector<network::mojom::WebClientHintsType>& hints,
                    size_t loads,
-                   const base::StringPiece metric_name,
-                   const base::StringPiece type_name) {
+                   std::string_view metric_name,
+                   std::string_view type_name) {
   auto ukm_entries = ukm_recorder.GetEntriesByName(metric_name);
   // We expect the same series of `hints` to appear `loads` times.
   ASSERT_EQ(ukm_entries.size(), hints.size() * loads);
@@ -432,7 +424,7 @@ const std::vector<network::mojom::WebClientHintsType> kStandardHTTPHeaderHints(
      network::mojom::WebClientHintsType::kViewportHeight,
      network::mojom::WebClientHintsType::kUAFullVersionList,
      network::mojom::WebClientHintsType::kUAWoW64,
-     network::mojom::WebClientHintsType::kUAFormFactor,
+     network::mojom::WebClientHintsType::kUAFormFactors,
      network::mojom::WebClientHintsType::kPrefersReducedTransparency});
 
 const std::vector<network::mojom::WebClientHintsType>
@@ -453,7 +445,7 @@ const std::vector<network::mojom::WebClientHintsType>
          network::mojom::WebClientHintsType::kUABitness,
          network::mojom::WebClientHintsType::kUAFullVersionList,
          network::mojom::WebClientHintsType::kUAWoW64,
-         network::mojom::WebClientHintsType::kUAFormFactor});
+         network::mojom::WebClientHintsType::kUAFormFactors});
 
 const std::vector<network::mojom::WebClientHintsType>
     kStandardDelegateCHMetaHints(
@@ -473,7 +465,7 @@ const std::vector<network::mojom::WebClientHintsType>
          network::mojom::WebClientHintsType::kViewportWidth,
          network::mojom::WebClientHintsType::kUAFullVersionList,
          network::mojom::WebClientHintsType::kUAWoW64,
-         network::mojom::WebClientHintsType::kUAFormFactor});
+         network::mojom::WebClientHintsType::kUAFormFactors});
 
 const std::vector<network::mojom::WebClientHintsType>
     kExtendedAcceptCHMetaHints(
@@ -497,7 +489,7 @@ const std::vector<network::mojom::WebClientHintsType>
          network::mojom::WebClientHintsType::kViewportHeight,
          network::mojom::WebClientHintsType::kUAFullVersionList,
          network::mojom::WebClientHintsType::kUAWoW64,
-         network::mojom::WebClientHintsType::kUAFormFactor,
+         network::mojom::WebClientHintsType::kUAFormFactors,
          network::mojom::WebClientHintsType::kPrefersReducedTransparency});
 
 const std::vector<network::mojom::WebClientHintsType>
@@ -522,7 +514,7 @@ const std::vector<network::mojom::WebClientHintsType>
          network::mojom::WebClientHintsType::kUAFullVersionList,
          network::mojom::WebClientHintsType::kUAWoW64,
          network::mojom::WebClientHintsType::kPrefersReducedMotion,
-         network::mojom::WebClientHintsType::kUAFormFactor,
+         network::mojom::WebClientHintsType::kUAFormFactors,
          network::mojom::WebClientHintsType::kPrefersReducedTransparency});
 }  // namespace
 
@@ -653,18 +645,19 @@ class ClientHintsBrowserTest : public policy::PolicyTest {
   ClientHintsBrowserTest(const ClientHintsBrowserTest&) = delete;
   ClientHintsBrowserTest& operator=(const ClientHintsBrowserTest&) = delete;
 
-  ~ClientHintsBrowserTest() override {}
+  ~ClientHintsBrowserTest() override = default;
 
-  virtual std::unique_ptr<base::FeatureList> EnabledFeatures() {
+  virtual void SetUpScopedFeatureList(
+      base::test::ScopedFeatureList& scoped_feature_list) {
     std::unique_ptr<base::FeatureList> feature_list(new base::FeatureList);
-    // Force-enable the ClientHintsFormFactor feature, so that the header is
+    // Force-enable the ClientHintsFormFactors feature, so that the header is
     // represented in the various header counts.
     feature_list->InitFromCommandLine(kDefaultFeatures, "");
-    return feature_list;
+    scoped_feature_list.InitWithFeatureList(std::move(feature_list));
   }
 
   void SetUp() override {
-    scoped_feature_list_.InitWithFeatureList(EnabledFeatures());
+    SetUpScopedFeatureList(scoped_feature_list_);
     InProcessBrowserTest::SetUp();
   }
 
@@ -921,8 +914,8 @@ class ClientHintsBrowserTest : public policy::PolicyTest {
     return main_frame_ua_mobile_observed_;
   }
 
-  const std::string& main_frame_ua_form_factor_observed() const {
-    return main_frame_ua_form_factor_observed_;
+  const std::string& main_frame_ua_form_factors_observed() const {
+    return main_frame_ua_form_factors_observed_;
   }
 
   const std::string& main_frame_ua_platform_observed() const {
@@ -1044,8 +1037,8 @@ class ClientHintsBrowserTest : public policy::PolicyTest {
           UpdateHeaderObservation(request, "sec-ch-ua-full-version-list");
       main_frame_ua_mobile_observed_ =
           UpdateHeaderObservation(request, "sec-ch-ua-mobile");
-      main_frame_ua_form_factor_observed_ =
-          UpdateHeaderObservation(request, "sec-ch-ua-form-factor");
+      main_frame_ua_form_factors_observed_ =
+          UpdateHeaderObservation(request, "sec-ch-ua-form-factors");
       main_frame_ua_platform_observed_ =
           UpdateHeaderObservation(request, "sec-ch-ua-platform");
       main_frame_save_data_observed_ =
@@ -1165,7 +1158,7 @@ class ClientHintsBrowserTest : public policy::PolicyTest {
         EXPECT_EQ(980, value);
 #endif
 #if BUILDFLAG(IS_ANDROID)
-        // TODO(tbansal): https://crbug.com/825892: Viewport width on main
+        // TODO(tbansal): https://crbug.com/41378979: Viewport width on main
         // frame requests may be incorrect when the Chrome window is not
         // maximized.
         if (main_frame_viewport_width_observed_deprecated_ > 0) {
@@ -1183,7 +1176,7 @@ class ClientHintsBrowserTest : public policy::PolicyTest {
         EXPECT_EQ(980, value);
 #endif
 #if BUILDFLAG(IS_ANDROID)
-        // TODO(tbansal): https://crbug.com/825892: Viewport width on main
+        // TODO(tbansal): https://crbug.com/41378979: Viewport width on main
         // frame requests may be incorrect when the Chrome window is not
         // maximized.
         if (main_frame_viewport_width_observed_ > 0) {
@@ -1203,7 +1196,7 @@ class ClientHintsBrowserTest : public policy::PolicyTest {
 
     for (const auto& elem : network::GetClientHintToNameMap()) {
       const auto& header = elem.second;
-      if (base::Contains(request.headers, header)) {
+      if (request.headers.contains(header)) {
         base::AutoLock lock(count_headers_lock_);
         // The user agent hint is special:
         if (header == "sec-ch-ua") {
@@ -1239,31 +1232,7 @@ class ClientHintsBrowserTest : public policy::PolicyTest {
         continue;
       }
 
-      // Skip over the `Sec-CH-UA-Reduced` client hint because it is only added
-      // in the presence of a valid "UserAgentReduction" Origin Trial token.
-      // `Sec-CH-UA-Reduced` is tested via UaReducedOriginTrialBrowserTest
-      // below.
-      if (header == "sec-ch-ua-reduced") {
-        continue;
-      }
-
-      // TODO(crbug.com/1286857): Skip over the `Sec-CH-UA-Full` client hint
-      // because it is only added in the presence of a valid
-      // "UserAgentDeprecation" Origin Trial token. Need to add `Sec-CH-UA-Full`
-      // corresponding tests.
-      if (header == "sec-ch-ua-full") {
-        continue;
-      }
-
-      // Skip over `Sec-CH-Prefers-Reduced-Transparency` when its feature is
-      // disabled
-      if (header == "sec-ch-prefers-reduced-transparency" &&
-          !base::FeatureList::IsEnabled(
-              blink::features::kClientHintsPrefersReducedTransparency)) {
-        continue;
-      }
-
-      EXPECT_EQ(expect_client_hints, base::Contains(request.headers, header));
+      EXPECT_EQ(expect_client_hints, request.headers.contains(header));
     }
   }
 
@@ -1294,10 +1263,10 @@ class ClientHintsBrowserTest : public policy::PolicyTest {
 
     EXPECT_FALSE(request.headers.find("ect")->second.empty());
 
-    // TODO(tbansal): https://crbug.com/819244: When network servicification is
-    // enabled, the renderer processes do not receive notifications on
-    // change in the network quality. Hence, the network quality client hints
-    // are not set to the correct value on subresources.
+    // TODO(tbansal): https://crbug.com/40565882: When network servicification
+    // is enabled, the renderer processes do not receive notifications on change
+    // in the network quality. Hence, the network quality client hints are not
+    // set to the correct value on subresources.
     bool is_main_frame_navigation =
         request.GetURL().spec().find(".html") != std::string::npos;
     if (is_main_frame_navigation) {
@@ -1369,7 +1338,7 @@ class ClientHintsBrowserTest : public policy::PolicyTest {
   std::string main_frame_ua_full_version_observed_;
   std::string main_frame_ua_full_version_list_observed_;
   std::string main_frame_ua_mobile_observed_;
-  std::string main_frame_ua_form_factor_observed_;
+  std::string main_frame_ua_form_factors_observed_;
   std::string main_frame_ua_platform_observed_;
   std::string main_frame_save_data_observed_;
 
@@ -1849,9 +1818,10 @@ IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTest, RestartBrowser) {
             expected_full_version_list);
 
   // Restart the browser, create a new browser to mock the restart process.
-  Browser* new_browser = CreateBrowser(browser()->profile());
+  BrowserWindowInterface* const new_browser =
+      CreateBrowser(browser()->profile());
   CloseBrowserSynchronously(browser());
-  SelectFirstBrowser();
+  SetBrowser(new_browser);
   ASSERT_EQ(browser(), new_browser);
 
   // First request with new browser should expect the high-entropy client hints
@@ -1874,7 +1844,7 @@ IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTest, UAHintsTabletMode) {
   EXPECT_EQ(main_frame_ua_observed(), expected_ua);
   EXPECT_EQ(main_frame_ua_full_version_observed(), "");
   EXPECT_EQ(main_frame_ua_mobile_observed(), "?0");
-  EXPECT_EQ(main_frame_ua_form_factor_observed(), "");
+  EXPECT_EQ(main_frame_ua_form_factors_observed(), "");
   EXPECT_EQ(main_frame_ua_platform_observed(), "\"" + ua.platform + "\"");
   EXPECT_EQ(main_frame_save_data_observed(), "");
 
@@ -1889,7 +1859,7 @@ IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTest, UAHintsTabletMode) {
   EXPECT_EQ(main_frame_ua_full_version_list_observed(),
             expected_full_version_list);
   EXPECT_EQ(main_frame_ua_mobile_observed(), "?1");
-  EXPECT_EQ(main_frame_ua_form_factor_observed(), "\"Tablet\"");
+  EXPECT_EQ(main_frame_ua_form_factors_observed(), "\"Tablet\"");
   EXPECT_EQ(main_frame_ua_platform_observed(), "\"Android\"");
   EXPECT_EQ(main_frame_save_data_observed(), "");
 }
@@ -2206,11 +2176,20 @@ IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTest, Default) {
                                     update_event_count);
 
   // One fetch when initially add the client hints head, one fetch for look up
-  // commit client hints when navigation commits.
-  histogram_tester.ExpectTotalCount("ClientHints.FetchLatency_Total", 2);
-  histogram_tester.ExpectTotalCount("ClientHints.FetchLatency_PrefRead", 2);
+  // commit client hints when navigation commits. When
+  // kOffloadAcceptCHFrameCheck is enabled, an additional fetch is performed
+  // from the URLLoader during resource request creation.
+  const int expected_fetch_count =
+      base::FeatureList::IsEnabled(
+          network::features::kOffloadAcceptCHFrameCheck)
+          ? 3
+          : 2;
+  histogram_tester.ExpectTotalCount("ClientHints.FetchLatency_Total",
+                                    expected_fetch_count);
+  histogram_tester.ExpectTotalCount("ClientHints.FetchLatency_PrefRead",
+                                    expected_fetch_count);
   histogram_tester.ExpectTotalCount("ClientHints.FetchLatency_PrerenderHost",
-                                    2);
+                                    expected_fetch_count);
   histogram_tester.ExpectTotalCount("ClientHints.FetchLatency_OriginTrialCheck",
                                     0);
 
@@ -2319,7 +2298,7 @@ IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTest,
                        DisregardPersistenceRequestIframe_CrossOrigin) {
   const GURL gurl = accept_ch_with_iframe_url();
 
-  intercept_iframe_resource_ = gurl.path();
+  intercept_iframe_resource_ = gurl.GetPath();
 
   base::HistogramTester histogram_tester;
   ContentSettingsForOneType host_settings =
@@ -2357,7 +2336,7 @@ IN_PROC_BROWSER_TEST_P(ClientHintsBrowserTestForMetaTagTypes,
       intercept_to_meta_delegate_iframe_ = true;
       break;
   }
-  intercept_iframe_resource_ = gurl.path();
+  intercept_iframe_resource_ = gurl.GetPath();
 
   base::HistogramTester histogram_tester;
   ContentSettingsForOneType host_settings =
@@ -2971,9 +2950,9 @@ IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTest,
       HostContentSettingsMapFactory::GetForProfile(browser()->profile());
 
   // Add setting for the host.
-  base::Value::List client_hints_list;
+  base::ListValue client_hints_list;
   client_hints_list.Append(42 /* client hint value */);
-  base::Value::Dict client_hints_dictionary;
+  base::DictValue client_hints_dictionary;
   client_hints_dictionary.Set(client_hints::kClientHintsSettingKey,
                               base::Value(std::move(client_hints_list)));
   host_content_settings_map->SetWebsiteSettingDefaultScope(
@@ -3319,7 +3298,8 @@ class ClientHintsWebHoldbackBrowserTest : public ClientHintsBrowserTest {
     return web_effective_connection_type_override_;
   }
 
-  std::unique_ptr<base::FeatureList> EnabledFeatures() override {
+  void SetUpScopedFeatureList(
+      base::test::ScopedFeatureList& scoped_feature_list) override {
     base::FieldTrialParamAssociator::GetInstance()->ClearAllParamsForTesting();
     const std::string kTrialName = "TrialFoo";
     const std::string kGroupName = "GroupFoo";  // Value not used
@@ -3338,13 +3318,13 @@ class ClientHintsWebHoldbackBrowserTest : public ClientHintsBrowserTest {
 
     std::unique_ptr<base::FeatureList> feature_list(new base::FeatureList);
     feature_list->InitFromCommandLine(
-        "ClientHintsFormFactor,"
+        "ClientHintsFormFactors,"
         "ClientHintsPrefersReducedTransparency",
         "");
     feature_list->RegisterFieldTrialOverride(
         features::kNetworkQualityEstimatorWebHoldback.name,
         base::FeatureList::OVERRIDE_ENABLE_FEATURE, trial.get());
-    return feature_list;
+    scoped_feature_list.InitWithFeatureList(std::move(feature_list));
   }
 
  private:
@@ -3444,10 +3424,10 @@ class CriticalClientHintsBrowserTest : public InProcessBrowserTest {
     std::unique_ptr<base::FeatureList> feature_list =
         std::make_unique<base::FeatureList>();
     // Don't include ClientHintsDPR in the enabled features; we will verify that
-    // sec-ch-dpr is not included.
+    // dpr is not included.
     feature_list->InitFromCommandLine(
         "CriticalClientHint,AcceptCHFrame",
-        "ClientHintsDPR,UseNewAlpsCodepointHttp2");
+        "ClientHintsDPR_DEPRECATED,UseNewAlpsCodepointHttp2");
     scoped_feature_list_.InitWithFeatureList(std::move(feature_list));
 
     InProcessBrowserTest::SetUp();
@@ -3463,8 +3443,8 @@ class CriticalClientHintsBrowserTest : public InProcessBrowserTest {
     return https_server_.GetURL("/critical_ch_ua_full_version.html");
   }
 
-  GURL critical_ch_dpr_url() const {
-    return https_server_.GetURL("/critical_ch_dpr.html");
+  GURL critical_ch_dpr_deprecated_url() const {
+    return https_server_.GetURL("/critical_ch_dpr_deprecated.html");
   }
 
   GURL critical_ch_viewport_url() const {
@@ -3499,9 +3479,9 @@ class CriticalClientHintsBrowserTest : public InProcessBrowserTest {
     return ch_ua_full_version_list_;
   }
 
-  const std::optional<std::string>& observed_ch_dpr() {
-    base::AutoLock lock(ch_dpr_lock_);
-    return ch_dpr_;
+  const std::optional<std::string>& observed_ch_dpr_deprecated() {
+    base::AutoLock lock(ch_dpr_deprecated_lock_);
+    return ch_dpr_deprecated_;
   }
 
   const std::vector<std::string>& observed_ch_viewport_heights() {
@@ -3528,8 +3508,8 @@ class CriticalClientHintsBrowserTest : public InProcessBrowserTest {
         request.headers.end()) {
       SetChUaFullVersionList(request.headers.at("sec-ch-ua-full-version-list"));
     }
-    if (request.headers.find("sec-ch-dpr") != request.headers.end()) {
-      SetChDpr(request.headers.at("sec-ch-dpr"));
+    if (request.headers.find("dpr") != request.headers.end()) {
+      SetChDprDeprecated(request.headers.at("dpr"));
     }
     if (request.headers.find("sec-ch-viewport-height") !=
         request.headers.end()) {
@@ -3592,9 +3572,9 @@ class CriticalClientHintsBrowserTest : public InProcessBrowserTest {
     ch_ua_full_version_list_ = ch_ua_full_version_list;
   }
 
-  void SetChDpr(const std::string& ch_dpr) {
-    base::AutoLock lock(ch_dpr_lock_);
-    ch_dpr_ = ch_dpr;
+  void SetChDprDeprecated(const std::string& ch_dpr_deprecated) {
+    base::AutoLock lock(ch_dpr_deprecated_lock_);
+    ch_dpr_deprecated_ = ch_dpr_deprecated;
   }
 
   void AppendChViewportHeight(const std::string& ch_viewport_heights) {
@@ -3621,8 +3601,9 @@ class CriticalClientHintsBrowserTest : public InProcessBrowserTest {
   base::Lock ch_ua_full_version_list_lock_;
   std::optional<std::string> ch_ua_full_version_list_
       GUARDED_BY(ch_ua_full_version_list_lock_);
-  base::Lock ch_dpr_lock_;
-  std::optional<std::string> ch_dpr_ GUARDED_BY(ch_dpr_lock_);
+  base::Lock ch_dpr_deprecated_lock_;
+  std::optional<std::string> ch_dpr_deprecated_
+      GUARDED_BY(ch_dpr_deprecated_lock_);
   base::Lock ch_viewport_heights_lock_;
   std::vector<std::string> ch_viewport_heights_
       GUARDED_BY(ch_viewport_heights_lock_);
@@ -3646,7 +3627,6 @@ IN_PROC_BROWSER_TEST_F(CriticalClientHintsBrowserTest,
   const std::string expected_ch_ua_full_version = "\"" + ua.full_version + "\"";
   EXPECT_THAT(observed_ch_ua_full_version(),
               Optional(Eq(expected_ch_ua_full_version)));
-  EXPECT_EQ(observed_ch_dpr(), std::nullopt);
   EXPECT_EQ(observed_ch_ua_full_version_list(), std::nullopt);
   // One navigation occurred but it was restarted.
   ExpectAcceptCHHeaderUKMSeen(
@@ -3671,10 +3651,9 @@ IN_PROC_BROWSER_TEST_F(CriticalClientHintsBrowserTest,
       ua.SerializeBrandFullVersionList();
   EXPECT_THAT(observed_ch_ua_full_version_list(),
               Optional(Eq(expected_ch_ua_full_version_list)));
-  // The request should not have been resent, so ch-ua-full-version and dpr
+  // The request should not have been resent, so ch-ua-full-version
   // should also not be present.
   EXPECT_EQ(observed_ch_ua_full_version(), std::nullopt);
-  EXPECT_EQ(observed_ch_dpr(), std::nullopt);
   // One navigation occurred but it was restarted.
   ExpectAcceptCHHeaderUKMSeen(
       *ukm_recorder_,
@@ -3693,22 +3672,23 @@ IN_PROC_BROWSER_TEST_F(
     CriticalClientHintsBrowserTest,
     CriticalClientHintFilteredOutOfAcceptChNotInRequestHeader) {
   // On the first navigation request, the client hints in the Critical-CH
-  // should be set on the request header, but in this case, the kClientHintsDPR
-  // is not enabled, so the critical client hint won't be set in the request
-  // header.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), critical_ch_dpr_url()));
-  EXPECT_EQ(observed_ch_dpr(), std::nullopt);
+  // should be set on the request header, but in this case, the
+  // kClientHintsDPR_DEPRECATED is not enabled, so the critical client hint
+  // won't be set in the request header.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
+                                           critical_ch_dpr_deprecated_url()));
+  EXPECT_EQ(observed_ch_dpr_deprecated(), std::nullopt);
   // The request should not have been resent, so ch-ua-full-version should also
   // not be present.
   EXPECT_EQ(observed_ch_ua_full_version(), std::nullopt);
   ExpectAcceptCHHeaderUKMSeen(
       *ukm_recorder_,
-      {network::mojom::WebClientHintsType::kDpr,
+      {network::mojom::WebClientHintsType::kDpr_DEPRECATED,
        network::mojom::WebClientHintsType::kUAFullVersion},
       /*loads=*/1);
-  ExpectCriticalCHHeaderUKMSeen(*ukm_recorder_,
-                                {network::mojom::WebClientHintsType::kDpr},
-                                /*loads=*/1);
+  ExpectCriticalCHHeaderUKMSeen(
+      *ukm_recorder_, {network::mojom::WebClientHintsType::kDpr_DEPRECATED},
+      /*loads=*/1);
 }
 
 // Some bots disable DCHECK, but GetRenderWidgetHostViewFromFrameTreeNode
@@ -3751,14 +3731,14 @@ IN_PROC_BROWSER_TEST_F(CriticalClientHintsBrowserTest,
       ->GetClientHintsControllerDelegate()
       ->ForceEmptyViewportSizeForTesting(true);
   // Add setting for the host.
-  base::Value::List client_hints_list;
+  base::ListValue client_hints_list;
   client_hints_list.Append(
       static_cast<int>(network::mojom::WebClientHintsType::kViewportHeight));
   client_hints_list.Append(
       static_cast<int>(network::mojom::WebClientHintsType::kViewportWidth));
   client_hints_list.Append(static_cast<int>(
       network::mojom::WebClientHintsType::kViewportWidth_DEPRECATED));
-  base::Value::Dict client_hints_dictionary;
+  base::DictValue client_hints_dictionary;
   client_hints_dictionary.Set(client_hints::kClientHintsSettingKey,
                               base::Value(std::move(client_hints_list)));
   HostContentSettingsMap* host_content_settings_map =
@@ -4063,16 +4043,15 @@ class ClientHintsBrowserTestWithEmulatedMedia
   ~ClientHintsBrowserTestWithEmulatedMedia() override = default;
 
   void MonitorResourceRequest(const net::test_server::HttpRequest& request) {
-    if (base::Contains(request.headers, "sec-ch-prefers-color-scheme")) {
+    if (request.headers.contains("sec-ch-prefers-color-scheme")) {
       prefers_color_scheme_observed_ =
           request.headers.at("sec-ch-prefers-color-scheme");
     }
-    if (base::Contains(request.headers, "sec-ch-prefers-reduced-motion")) {
+    if (request.headers.contains("sec-ch-prefers-reduced-motion")) {
       prefers_reduced_motion_observed_ =
           request.headers.at("sec-ch-prefers-reduced-motion");
     }
-    if (base::Contains(request.headers,
-                       "sec-ch-prefers-reduced-transparency")) {
+    if (request.headers.contains("sec-ch-prefers-reduced-transparency")) {
       prefers_reduced_transparency_observed_ =
           request.headers.at("sec-ch-prefers-reduced-transparency");
     }
@@ -4092,10 +4071,10 @@ class ClientHintsBrowserTestWithEmulatedMedia
     return prefers_reduced_transparency_observed_;
   }
 
-  void EmulateMedia(base::StringPiece string) {
+  void EmulateMedia(std::string_view string) {
     base::Value features = base::test::ParseJson(string);
     DCHECK(features.is_list());
-    base::Value::Dict params;
+    base::DictValue params;
     params.Set("features", std::move(features));
     SendCommandSync("Emulation.setEmulatedMedia", std::move(params));
   }
@@ -4184,6 +4163,146 @@ IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTestWithEmulatedMedia,
   EXPECT_EQ(prefers_color_scheme_observed(), "dark");
   EXPECT_EQ(prefers_reduced_motion_observed(), "no-preference");
   EXPECT_EQ(prefers_reduced_transparency_observed(), "no-preference");
+}
+
+class ClientHintsUserAgentOverrideDevTools : public DevToolsProtocolTestBase {
+ public:
+  ClientHintsUserAgentOverrideDevTools()
+      : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
+    https_server_.ServeFilesFromSourceDirectory(
+        "chrome/test/data/client_hints");
+    https_server_.RegisterRequestMonitor(base::BindRepeating(
+        &ClientHintsUserAgentOverrideDevTools::MonitorResourceRequest,
+        base::Unretained(this)));
+    EXPECT_TRUE(https_server_.Start());
+
+    test_url_ = https_server_.GetURL("/accept_ch.html");
+  }
+
+  ClientHintsUserAgentOverrideDevTools(
+      const ClientHintsUserAgentOverrideDevTools&) = delete;
+  ClientHintsUserAgentOverrideDevTools& operator=(
+      const ClientHintsUserAgentOverrideDevTools&) = delete;
+
+  ~ClientHintsUserAgentOverrideDevTools() override = default;
+
+  void MonitorResourceRequest(const net::test_server::HttpRequest& request) {
+    last_request_headers_.clear();
+
+    if (request.headers.count("User-Agent")) {
+      last_request_headers_["User-Agent"] = request.headers.at("User-Agent");
+    }
+    for (const auto& header : request.headers) {
+      if (base::StartsWith(header.first, "sec-ch-ua",
+                           base::CompareCase::INSENSITIVE_ASCII)) {
+        last_request_headers_[header.first] = header.second;
+      }
+    }
+  }
+
+  const GURL& test_url() const { return test_url_; }
+
+ protected:
+  net::EmbeddedTestServer https_server_;
+  GURL test_url_;
+  std::map<std::string, std::string> last_request_headers_;
+};
+
+IN_PROC_BROWSER_TEST_F(ClientHintsUserAgentOverrideDevTools,
+                       UserAgentAndUserAgentClientHints) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
+
+  Attach();
+
+  base::DictValue params;
+  params.Set("userAgent", "MyTestAgent/2.0");
+
+  base::DictValue metadata;
+  base::ListValue brands;
+  base::DictValue brand1;
+  brand1.Set("brand", "My Fake Browser");
+  brand1.Set("version", "101");
+  brands.Append(std::move(brand1));
+  base::DictValue brand2;
+  brand2.Set("brand", "Chromium");
+  brand2.Set("version", "101");
+  brands.Append(std::move(brand2));
+  metadata.Set("brands", std::move(brands));
+
+  base::ListValue full_version_list;
+  base::DictValue fv_brand1;
+  fv_brand1.Set("brand", "My Fake Browser");
+  fv_brand1.Set("version", "101.0.1234.0");
+  full_version_list.Append(std::move(fv_brand1));
+  base::DictValue fv_brand2;
+  fv_brand2.Set("brand", "Chromium");
+  fv_brand2.Set("version", "101.0.5555.0");
+  full_version_list.Append(std::move(fv_brand2));
+  metadata.Set("fullVersionList", std::move(full_version_list));
+
+  metadata.Set("fullVersion", "101.0.1234.0");
+  metadata.Set("platform", "TestPlatform");
+  metadata.Set("platformVersion", "1.2.3");
+  metadata.Set("architecture", "x64");
+  metadata.Set("model", "TestModel-ABC");
+  metadata.Set("mobile", false);
+  metadata.Set("bitness", "64");
+  metadata.Set("wow64", false);
+
+  base::ListValue form_factors;
+  form_factors.Append(blink::kDesktopFormFactor);
+  form_factors.Append(blink::kEInkFormFactor);
+
+  metadata.Set("formFactors", std::move(form_factors));
+  params.Set("userAgentMetadata", std::move(metadata));
+
+  SendCommandSync("Emulation.setUserAgentOverride", std::move(params));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
+
+  // Verify all captured headers.
+  EXPECT_EQ(last_request_headers_["User-Agent"], "MyTestAgent/2.0");
+  EXPECT_EQ(last_request_headers_["sec-ch-ua"],
+            R"("My Fake Browser";v="101", "Chromium";v="101")");
+  EXPECT_EQ(last_request_headers_["sec-ch-ua-arch"], R"("x64")");
+  EXPECT_EQ(last_request_headers_["sec-ch-ua-platform"], R"("TestPlatform")");
+  EXPECT_EQ(last_request_headers_["sec-ch-ua-model"], R"("TestModel-ABC")");
+  EXPECT_EQ(last_request_headers_["sec-ch-ua-mobile"], "?0");
+  EXPECT_EQ(last_request_headers_["sec-ch-ua-full-version"],
+            R"("101.0.1234.0")");
+  EXPECT_EQ(last_request_headers_["sec-ch-ua-platform-version"], R"("1.2.3")");
+  EXPECT_EQ(last_request_headers_["sec-ch-ua-bitness"], R"("64")");
+  EXPECT_EQ(
+      last_request_headers_["sec-ch-ua-full-version-list"],
+      R"("My Fake Browser";v="101.0.1234.0", "Chromium";v="101.0.5555.0")");
+  EXPECT_EQ(last_request_headers_["sec-ch-ua-wow64"], "?0");
+  EXPECT_EQ(last_request_headers_["sec-ch-ua-form-factors"],
+            R"("Desktop", "EInk")");
+}
+
+IN_PROC_BROWSER_TEST_F(ClientHintsUserAgentOverrideDevTools,
+                       InvalidFormfactor) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
+
+  Attach();
+
+  base::DictValue params;
+  base::DictValue metadata;
+  base::ListValue form_factors;
+  form_factors.Append("InvalidFormfactor");
+
+  metadata.Set("formFactors", std::move(form_factors));
+  params.Set("userAgentMetadata", std::move(metadata));
+
+  SendCommandSync("Emulation.setUserAgentOverride", std::move(params));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
+
+  // The test expects the default "Desktop" or "Mobile" form factor, as the
+  // invalid override was rejected.
+  EXPECT_EQ(last_request_headers_["sec-ch-ua-form-factors"],
+            base::CommandLine::ForCurrentProcess()->HasSwitch(
+                embedder_support::kUseMobileUserAgent)
+                ? R"("Mobile")"
+                : R"("Desktop")");
 }
 
 // Base class for the User-Agent reduction browser tests.  Common functionality
@@ -4288,10 +4407,9 @@ class SameOriginUaReductionBrowserTest : public UaReductionBrowserTest {
   }
 
   const std::optional<std::string>& GetLastUserAgentHeaderValue() override {
-    std::string user_agent;
-    CHECK(url_loader_interceptor_->GetLastRequestHeaders().GetHeader(
-        "user-agent", &user_agent));
-    last_user_agent_ = user_agent;
+    last_user_agent_ = url_loader_interceptor_->GetLastRequestHeaders()
+                           .GetHeader("user-agent")
+                           .value();
     return last_user_agent_;
   }
 
@@ -4354,9 +4472,9 @@ class SameOriginUaReductionBrowserTest : public UaReductionBrowserTest {
       return false;
 
     std::string path = "chrome/test/data/client_hints";
-    path.append(static_cast<std::string>(params->url_request.url.path_piece()));
+    path.append(static_cast<std::string>(params->url_request.url.path()));
 
-    if (params->url_request.url.path() == "/basic.html") {
+    if (params->url_request.url.GetPath() == "/basic.html") {
       URLLoaderInterceptor::WriteResponse(path, params->client.get());
       return true;
     }
@@ -4413,7 +4531,7 @@ IN_PROC_BROWSER_TEST_F(SameOriginUaReductionBrowserTest,
   CheckSecClientHintUaCount();
 
   // Make sure the last intercepted URL was the request for the embedded iframe.
-  EXPECT_EQ(last_request_url().path(), "/simple.html");
+  EXPECT_EQ(last_request_url().GetPath(), "/simple.html");
 }
 
 IN_PROC_BROWSER_TEST_F(SameOriginUaReductionBrowserTest, SubresourceRequest) {
@@ -4426,7 +4544,7 @@ IN_PROC_BROWSER_TEST_F(SameOriginUaReductionBrowserTest, SubresourceRequest) {
 
   // Make sure the last intercepted URL was the subresource request for the
   // embedded stylesheet.
-  EXPECT_EQ(last_request_url().path(), "/style.css");
+  EXPECT_EQ(last_request_url().GetPath(), "/style.css");
 }
 
 IN_PROC_BROWSER_TEST_F(SameOriginUaReductionBrowserTest, UserAgentOverride) {
@@ -4548,9 +4666,9 @@ class ThirdPartyUaReductionBrowserTest : public UaReductionBrowserTest {
         GURL(kFirstPartyOriginUrl)) {
       return false;
     }
-    if (params->url_request.url.path() !=
+    if (params->url_request.url.GetPath() !=
             base::StrCat({"/accept_ch_ua_cross_origin_iframe_request.html"}) &&
-        params->url_request.url.path() !=
+        params->url_request.url.GetPath() !=
             base::StrCat(
                 {"/accept_ch_ua_cross_origin_subresource_request.html"})) {
       return false;
@@ -4560,12 +4678,12 @@ class ThirdPartyUaReductionBrowserTest : public UaReductionBrowserTest {
     std::string headers =
         "HTTP/1.1 200 OK\nContent-Type: text/html; charset=utf-8\n";
     std::string body = "<html><head>";
-    if (params->url_request.url.path() ==
+    if (params->url_request.url.GetPath() ==
         base::StrCat({"/accept_ch_ua_cross_origin_subresource_request.html"})) {
       base::StrAppend(&body, {BuildSubresourceHTML()});
     }
     base::StrAppend(&body, {"</head><body>"});
-    if (params->url_request.url.path() ==
+    if (params->url_request.url.GetPath() ==
         base::StrCat({"/accept_ch_ua_cross_origin_iframe_request.html"})) {
       base::StrAppend(&body, {BuildIframeHTML()});
     }
@@ -4629,7 +4747,7 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyUaReductionBrowserTest,
 
   // Make sure the last intercepted URL was the request for the embedded
   // iframe.
-  EXPECT_EQ(GetLastRequestedURL()->path(), "/simple.html");
+  EXPECT_EQ(GetLastRequestedURL()->GetPath(), "/simple.html");
 }
 
 // Tests that headers are not sent to a third-party iframe after script is
@@ -4654,7 +4772,7 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyUaReductionBrowserTest, ScriptDisabled) {
 
   // Make sure the last intercepted URL was the request for the embedded
   // iframe.
-  EXPECT_EQ(GetLastRequestedURL()->path(), "/simple.html");
+  EXPECT_EQ(GetLastRequestedURL()->GetPath(), "/simple.html");
 }
 
 IN_PROC_BROWSER_TEST_F(ThirdPartyUaReductionBrowserTest,
@@ -4667,7 +4785,7 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyUaReductionBrowserTest,
 
   // Make sure the last intercepted URL was the request for the embedded
   // iframe.
-  EXPECT_EQ(GetLastRequestedURL()->path(), "/style.css");
+  EXPECT_EQ(GetLastRequestedURL()->GetPath(), "/style.css");
 }
 
 IN_PROC_BROWSER_TEST_F(ThirdPartyUaReductionBrowserTest,
@@ -4682,7 +4800,7 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyUaReductionBrowserTest,
 
   // Make sure the last intercepted URL was the request for the embedded
   // iframe.
-  EXPECT_EQ(GetLastRequestedURL()->path(), "/simple.html");
+  EXPECT_EQ(GetLastRequestedURL()->GetPath(), "/simple.html");
 }
 
 IN_PROC_BROWSER_TEST_F(ThirdPartyUaReductionBrowserTest,
@@ -4697,11 +4815,11 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyUaReductionBrowserTest,
 
   // Make sure the last intercepted URL was the request for the embedded
   // iframe.
-  EXPECT_EQ(GetLastRequestedURL()->path(), "/style.css");
+  EXPECT_EQ(GetLastRequestedURL()->GetPath(), "/style.css");
 }
 
 // CrOS multi-profiles implementation is too different for these tests.
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 
 void ClientHintsBrowserTest::TestSwitchWithNewProfile(
     const std::string& switch_value,
@@ -4746,7 +4864,7 @@ IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTest, SwitchAppliesStorageOneOrigin) {
       "\"https://b.test\":\"Not Valid\"}",
       1);
 }
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 class ClientHintsCommandLineSwitchBrowserTest : public ClientHintsBrowserTest {
  public:
@@ -4807,102 +4925,9 @@ IN_PROC_BROWSER_TEST_F(ClientHintsCommandLineSwitchBrowserTest,
       ui_test_utils::NavigateToURL(otr_browser, without_accept_ch_url()));
 }
 
-// Validate that the updated GREASE algorithm is used by default. The continued
-// support of the old algorithm (which used only semicolon and space) is tested
-// separately below. That functionality will be maintained for a period of time
-// until we are confident in more permutations generated by the updated
-// algorithm.
+// Validate that the updated GREASE algorithm is used by default.
 IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTest, UpdatedGREASEByDefault) {
   const GURL gurl = accept_ch_url();
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), gurl));
-  std::string ua_ch_result = main_frame_ua_observed();
-
-  ASSERT_TRUE(SawUpdatedGrease(ua_ch_result) && !SawOldGrease(ua_ch_result));
-}
-
-class GreaseFeatureParamOptOutTest : public ClientHintsBrowserTest {
-  // Test that feature param opt outs are able to trigger the old algorithm,
-  // which we will maintain until additional confidence in the permutations of
-  // the new algorithm is attained.
-  std::unique_ptr<base::FeatureList> EnabledFeatures() override {
-    std::unique_ptr<base::FeatureList> feature_list(new base::FeatureList);
-    feature_list->InitFromCommandLine("GreaseUACH:updated_algorithm/false", "");
-    return feature_list;
-  }
-};
-
-// Checks that the updated GREASE algorithm is not used when explicitly
-// disabled.
-IN_PROC_BROWSER_TEST_F(GreaseFeatureParamOptOutTest,
-                       UpdatedGreaseFeatureParamOptOutTest) {
-  const GURL gurl = accept_ch_url();
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), gurl));
-  std::string ua_ch_result = main_frame_ua_observed();
-
-  ASSERT_TRUE(SawOldGrease(ua_ch_result));
-}
-
-class XRClientHintsTest : public ClientHintsBrowserTest {
-  // Enables ClientHintsXRFormFactor feature in addition to the default ones.
-  std::unique_ptr<base::FeatureList> EnabledFeatures() override {
-    std::unique_ptr<base::FeatureList> feature_list(new base::FeatureList);
-    feature_list->InitFromCommandLine(
-        base::StrCat({kDefaultFeatures, ",ClientHintsXRFormFactor"}), "");
-    return feature_list;
-  }
-};
-
-// Tests that form_factor client hints include "XR" when ClientHintsXRFormFactor
-// is enabled.
-IN_PROC_BROWSER_TEST_F(XRClientHintsTest, UAHintsXRMode) {
-  const GURL gurl = accept_ch_url();
-
-  // First request: no high-entropy hints send in the request header because we
-  // don't know server preferences.
-  SetClientHintExpectationsOnMainFrame(false);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), gurl));
-  EXPECT_TRUE(main_frame_ua_form_factor_observed().empty());
-
-  // Send request: we should expect the high-entropy client hints send in the
-  // request header.
-  SetClientHintExpectationsOnMainFrame(true);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), gurl));
-
-  auto form_factors =
-      base::SplitString(main_frame_ua_form_factor_observed(), ",",
-                        base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-  EXPECT_TRUE(base::Contains(form_factors, "\"XR\""))
-      << main_frame_ua_form_factor_observed();
-}
-
-class GreaseEnterprisePolicyTest : public ClientHintsBrowserTest {
-  void SetUpInProcessBrowserTestFixture() override {
-    policy::PolicyTest::SetUpInProcessBrowserTestFixture();
-    policy::PolicyMap policies;
-    SetPolicy(&policies, policy::key::kUserAgentClientHintsGREASEUpdateEnabled,
-              std::optional<base::Value>(false));
-    provider_.UpdateChromePolicy(policies);
-  }
-};
-
-// Makes sure that the enterprise policy is able to prevent updated GREASE.
-IN_PROC_BROWSER_TEST_F(GreaseEnterprisePolicyTest, GreaseEnterprisePolicyTest) {
-  const GURL gurl = accept_ch_url();
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), gurl));
-  std::string ua_ch_result = main_frame_ua_observed();
-
-  ASSERT_TRUE(SawOldGrease(ua_ch_result));
-}
-IN_PROC_BROWSER_TEST_F(GreaseEnterprisePolicyTest,
-                       GreaseEnterprisePolicyDynamicRefreshTest) {
-  const GURL gurl = accept_ch_url();
-  // Reset the policy that was already set to false in the setup, then see if
-  // the change is reflected in the sec-ch-ua header without requiring a
-  // browser restart.
-  policy::PolicyMap policies;
-  SetPolicy(&policies, policy::key::kUserAgentClientHintsGREASEUpdateEnabled,
-            std::optional<base::Value>(true));
-  provider_.UpdateChromePolicy(policies);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), gurl));
   std::string ua_ch_result = main_frame_ua_observed();
 
@@ -4958,7 +4983,7 @@ class RedirectUaReductionBrowserTest : public InProcessBrowserTest {
 
     std::string resource_path = "chrome/test/data/client_hints";
     resource_path.append(
-        static_cast<std::string>(params->url_request.url.path_piece()));
+        static_cast<std::string>(params->url_request.url.path()));
     URLLoaderInterceptor::WriteResponse(resource_path, params->client.get());
     return true;
   }
@@ -5001,38 +5026,14 @@ IN_PROC_BROWSER_TEST_F(RedirectUaReductionBrowserTest, NormalRedirectRequest) {
           blink::features::kReduceUserAgentMinorVersion));
 }
 
-class PrefersReducedTransparencyExplicitlyDisabledBrowserTest
-    : public ClientHintsBrowserTestWithEmulatedMedia {
- public:
-  PrefersReducedTransparencyExplicitlyDisabledBrowserTest()
-      : ClientHintsBrowserTestWithEmulatedMedia(
-            "",
-            "ClientHintsPrefersReducedTransparency") {}
-};
-
-IN_PROC_BROWSER_TEST_F(PrefersReducedTransparencyExplicitlyDisabledBrowserTest,
-                       PrefersReducedTransparencyDisabled) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
-  EXPECT_EQ(prefers_reduced_transparency_observed(), "");
-  Attach();
-
-  EmulateMedia(
-      R"([{"name": "prefers-reduced-transparency", "value": "reduce"}])");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
-  EXPECT_EQ(prefers_reduced_transparency_observed(), "");
-
-  EmulateMedia(R"([{"name": "prefers-reduced-transparency", "value": ""}])");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
-  EXPECT_EQ(prefers_reduced_transparency_observed(), "");
-}
-
 class QUICClientHintsTest : public ClientHintsBrowserTest {
   // Enables quic feature to make sure no crash happen.
-  std::unique_ptr<base::FeatureList> EnabledFeatures() override {
+  void SetUpScopedFeatureList(
+      base::test::ScopedFeatureList& scoped_feature_list) override {
     std::unique_ptr<base::FeatureList> feature_list(new base::FeatureList);
     feature_list->InitFromCommandLine(
         base::StrCat({kDefaultFeatures, ",UseNewAlpsCodepointQUIC"}), "");
-    return feature_list;
+    scoped_feature_list.InitWithFeatureList(std::move(feature_list));
   }
 
   void SetUpCommandLine(base::CommandLine* cmd) override {
@@ -5049,4 +5050,75 @@ IN_PROC_BROWSER_TEST_F(QUICClientHintsTest, BasicQUICAlps) {
   histogram_tester.ExpectBucketCount(
       "ClientHints.AcceptCHFrame",
       content::AcceptCHFrameRestart::kNavigationRestarted, 1);
+}
+
+class ClientHintsBrowserTestForBlockAcceptClientHintsExperiment
+    : public ClientHintsBrowserTest,
+      public testing::WithParamInterface<bool> {
+ private:
+  void SetUpScopedFeatureList(
+      base::test::ScopedFeatureList& scoped_feature_list) override {
+    // Setup kBlockAcceptClientHints experiment, based on the test parameter.
+    if (GetParam()) {
+      scoped_feature_list.InitAndEnableFeatureWithParameters(
+          network::features::kBlockAcceptClientHints,
+          {{network::features::kBlockAcceptClientHintsBlockedSite.name,
+            url::Origin::Create(accept_ch_url()).Serialize()}});
+    }
+  }
+};
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    ClientHintsBrowserTestForBlockAcceptClientHintsExperiment,
+    testing::Bool());
+
+IN_PROC_BROWSER_TEST_P(
+    ClientHintsBrowserTestForBlockAcceptClientHintsExperiment,
+    Block) {
+  base::HistogramTester histogram_tester;
+  ContentSettingsForOneType host_settings =
+      HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+          ->GetSettingsForOneType(ContentSettingsType::CLIENT_HINTS);
+  EXPECT_EQ(0u, host_settings.size());
+
+  // Fetching `gurl` should persist the request for client hints iff using
+  // headers without the experiment targeting the URL.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), accept_ch_url()));
+
+  const size_t expected_count = GetParam() ? 0 : 1;
+  histogram_tester.ExpectUniqueSample("ClientHints.UpdateEventCount", 1,
+                                      expected_count);
+
+  content::FetchHistogramsFromChildProcesses();
+  metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+  base::RunLoop().RunUntilIdle();
+
+  histogram_tester.ExpectUniqueSample(
+      "ClientHints.UpdateSize", expected_client_hints_number, expected_count);
+
+  // Clients hints preferences for one origin should be persisted iff the url is
+  // not targeted as the blocked site.
+  host_settings =
+      HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+          ->GetSettingsForOneType(ContentSettingsType::CLIENT_HINTS);
+  EXPECT_EQ(expected_count, host_settings.size());
+
+  // Expects extra sec-ch headers attached iff the url is not targeted as the
+  // blocked site.
+  SetClientHintExpectationsOnMainFrame(expected_count);
+  SetClientHintExpectationsOnSubresources(expected_count);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), without_accept_ch_url()));
+
+  // The user agent hint is attached to all three requests regardless of the
+  // blocked site setting.
+  EXPECT_EQ(3u, count_user_agent_hint_headers_seen());
+  EXPECT_EQ(3u, count_ua_mobile_client_hints_headers_seen());
+  EXPECT_EQ(3u, count_ua_platform_client_hints_headers_seen());
+  EXPECT_EQ(0u, count_save_data_client_hints_headers_seen());
+
+  // Expected number of specified extra hints attached to the image request, and
+  // the same number to the main frame request. The expectation must be 0 iff
+  // the url is targeted as the blocked site.
+  EXPECT_EQ(expected_client_hints_number * 2 * expected_count,
+            count_client_hints_headers_seen());
 }

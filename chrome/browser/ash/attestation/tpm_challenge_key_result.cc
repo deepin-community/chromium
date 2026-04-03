@@ -158,7 +158,6 @@ const char* TpmChallengeKeyResult::GetErrorMessage() const {
     case TpmChallengeKeyResultCode::kSuccess:
       // Not an error message.
       NOTREACHED();
-      return "";
   }
   NOTREACHED() << static_cast<int>(result_code);
 }
@@ -167,21 +166,9 @@ bool TpmChallengeKeyResult::IsSuccess() const {
   return result_code == TpmChallengeKeyResultCode::kSuccess;
 }
 
-bool TpmChallengeKeyResult::operator==(
-    const TpmChallengeKeyResult& other) const {
-  return ((result_code == other.result_code) &&
-          (public_key == other.public_key) &&
-          (challenge_response == other.challenge_response));
-}
-
-bool TpmChallengeKeyResult::operator!=(
-    const TpmChallengeKeyResult& other) const {
-  return !(*this == other);
-}
-
 std::ostream& operator<<(std::ostream& os,
                          const TpmChallengeKeyResult& result) {
-  base::Value::Dict value;
+  base::DictValue value;
 
   value.Set("result_code", static_cast<int>(result.result_code));
   if (!result.IsSuccess()) {

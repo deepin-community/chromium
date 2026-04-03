@@ -1,11 +1,11 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as CodeMirror from '../../../third_party/codemirror.next/codemirror.next.js';
 
-import {type AutocompleteHistory} from './AutocompleteHistory.js';
-import {type TextEditor} from './TextEditor.js';
+import type {AutocompleteHistory} from './AutocompleteHistory.js';
+import type {TextEditor} from './TextEditor.js';
 
 export const enum Direction {
   FORWARD = 1,
@@ -48,7 +48,7 @@ export class TextEditorHistory {
 
     const text = editor.state.doc.toString();
     const history = this.#history;
-    const newText = isBackward ? history.previous(text) : history.next();
+    const newText = isBackward ? history.previous(text) : history.next(text);
     if (newText === undefined) {
       return false;
     }

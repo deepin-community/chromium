@@ -14,25 +14,25 @@
 #include "base/containers/circular_deque.h"
 #include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/thread_annotations.h"
-#include "media/base/video_frame.h"
+#include "base/unguessable_token.h"
 #include "media/base/video_types.h"
 #include "media/gpu/chromeos/dmabuf_video_frame_pool.h"
+#include "media/gpu/chromeos/platform_video_frame_utils.h"
 #include "media/gpu/media_gpu_export.h"
-#include "ui/gfx/gpu_memory_buffer.h"
 
 namespace media {
 
-// Simple VideoFrame pool used to avoid unnecessarily allocating and destroying
-// VideoFrame objects. The pool manages the memory for the VideoFrame
-// returned by GetFrame(). When one of these VideoFrames is destroyed,
-// the memory is returned to the pool for use by a subsequent GetFrame()
-// call. The memory in the pool is retained for the life of the
-// PlatformVideoFramePool object. Before calling GetFrame(), the client should
-// call NegotiateFrameFormat(). If the parameters passed to
+// Simple frame pool used to avoid unnecessarily allocating and destroying frame
+// objects. The pool manages the memory for the frame returned by GetFrame().
+// When one of these frames is destroyed, the memory is returned to the pool for
+// use by a subsequent GetFrame() call. The memory in the pool is retained for
+// the life of the PlatformVideoFramePool object. Before calling GetFrame(), the
+// client should call NegotiateFrameFormat(). If the parameters passed to
 // NegotiateFrameFormat() are changed, then the memory used by frames with the
 // old parameter values will be purged from the pool.
 class MEDIA_GPU_EXPORT PlatformVideoFramePool : public DmabufVideoFramePool {
@@ -51,17 +51,17 @@ class MEDIA_GPU_EXPORT PlatformVideoFramePool : public DmabufVideoFramePool {
                                             size_t max_num_frames,
                                             bool use_protected,
                                             bool use_linear_buffers) override;
-  scoped_refptr<VideoFrame> GetFrame() override;
+  scoped_refptr<FrameResource> GetFrame() override;
   VideoFrame::StorageType GetFrameStorageType() const override;
   bool IsExhausted() override;
   void NotifyWhenFrameAvailable(base::OnceClosure cb) override;
   void ReleaseAllFrames() override;
   std::optional<GpuBufferLayout> GetGpuBufferLayout() override;
 
-  // Returns the original frame from a frame's shared memory ID. We need this
+  // Returns the original frame from a frame's tracking_token. We need this
   // method to determine whether the frame returned by GetFrame() is the same
   // one after recycling, and bind destruction callback at original frames.
-  VideoFrame* GetOriginalFrame(gfx::GenericSharedMemoryId frame_id);
+  FrameResource* GetOriginalFrame(const base::UnguessableToken& tracking_token);
 
   // Returns the number of frames in the pool for testing purposes.
   size_t GetPoolSizeForTesting();
@@ -83,14 +83,14 @@ class MEDIA_GPU_EXPORT PlatformVideoFramePool : public DmabufVideoFramePool {
   static void OnFrameReleasedThunk(
       std::optional<base::WeakPtr<PlatformVideoFramePool>> pool,
       scoped_refptr<base::SequencedTaskRunner> task_runner,
-      scoped_refptr<VideoFrame> origin_frame);
+      scoped_refptr<FrameResource> origin_frame);
   // Called when a wrapped frame gets destroyed.
   // When returning a frame to the pool, the pool might have already been
   // destroyed. In this case, the WeakPtr of the pool will have been invalidated
   // at |parent_task_runner_|, and OnFrameReleased() will not get executed.
-  void OnFrameReleased(scoped_refptr<VideoFrame> origin_frame);
+  void OnFrameReleased(scoped_refptr<FrameResource> origin_frame);
 
-  void InsertFreeFrame_Locked(scoped_refptr<VideoFrame> frame)
+  void InsertFreeFrame_Locked(scoped_refptr<FrameResource> frame)
       EXCLUSIVE_LOCKS_REQUIRED(lock_);
   size_t GetTotalNumFrames_Locked() const EXCLUSIVE_LOCKS_REQUIRED(lock_);
   bool IsSameFormat_Locked(VideoPixelFormat format,
@@ -107,6 +107,10 @@ class MEDIA_GPU_EXPORT PlatformVideoFramePool : public DmabufVideoFramePool {
   // The function used to allocate new frames.
   CreateFrameCB create_frame_cb_ GUARDED_BY(lock_);
 
+  // Used to guarantee that frames are produced with unique tracking tokens.
+  media::UniqueTrackingTokenHelper frame_tracking_token_helper_
+      GUARDED_BY(lock_);
+
   // The storage type that |create_frame_cb_| produces.
   VideoFrame::StorageType frame_storage_type_ GUARDED_BY(lock_);
 
@@ -119,11 +123,11 @@ class MEDIA_GPU_EXPORT PlatformVideoFramePool : public DmabufVideoFramePool {
 
   // The pool of free frames. The layout of all the frames in |free_frames_|
   // should be the same as |format_| and |coded_size_|.
-  base::circular_deque<scoped_refptr<VideoFrame>> free_frames_
+  base::circular_deque<scoped_refptr<FrameResource>> free_frames_
       GUARDED_BY(lock_);
-  // Mapping from the frame's shared memory ID to the original frame.
-  std::map<gfx::GenericSharedMemoryId, VideoFrame*> frames_in_use_
-      GUARDED_BY(lock_);
+  // Mapping from the frame's tracking token to the original frame.
+  std::map<base::UnguessableToken, raw_ptr<FrameResource, CtnExperimental>>
+      frames_in_use_ GUARDED_BY(lock_);
 
   // The maximum number of frames created by the pool.
   size_t max_num_frames_ GUARDED_BY(lock_) = 0;
@@ -132,14 +136,15 @@ class MEDIA_GPU_EXPORT PlatformVideoFramePool : public DmabufVideoFramePool {
   bool use_protected_ GUARDED_BY(lock_) = false;
 
   // True if we need to allocate GPU buffers in a way that is accessible from
-  // the CPU with a linear layout. Can only be set once per instance.
+  // the CPU with a linear layout. Can not be changed during Initialize() unless
+  // |use_protected| also changes.
   std::optional<bool> use_linear_buffers_ GUARDED_BY(lock_);
 
   // Callback which is called when the pool is not exhausted.
   base::OnceClosure frame_available_cb_ GUARDED_BY(lock_);
 
   // The weak pointer of this, bound at |parent_task_runner_|.
-  // Used at the VideoFrame destruction callback.
+  // Used at the FrameResource destruction callback.
   base::WeakPtr<PlatformVideoFramePool> weak_this_;
   base::WeakPtrFactory<PlatformVideoFramePool> weak_this_factory_{this};
 };

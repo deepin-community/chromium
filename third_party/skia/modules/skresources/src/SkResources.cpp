@@ -128,9 +128,9 @@ MultiFrameImageAsset::MultiFrameImageAsset(std::unique_ptr<SkAnimCodecPlayer> pl
     SkASSERT(fPlayer);
 }
 
-bool MultiFrameImageAsset::isMultiFrame() {
-    return fPlayer->duration() > 0;
-}
+bool MultiFrameImageAsset::isMultiFrame() { return fPlayer->duration() > 0; }
+
+float MultiFrameImageAsset::duration() const { return fPlayer->duration(); }
 
 sk_sp<SkImage> MultiFrameImageAsset::generateFrame(float t) {
     auto decode = [](sk_sp<SkImage> image) {
@@ -154,7 +154,7 @@ sk_sp<SkImage> MultiFrameImageAsset::generateFrame(float t) {
             }
         } else {
             // When the image size is OK, just force-decode.
-            image = image->makeRasterImage();
+            image = image->makeRasterImage(nullptr);
         }
 
         return image;

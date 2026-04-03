@@ -24,7 +24,6 @@ GlobalMediaControlsCastMode GetGlobalMediaControlsCastMode(
     default:
       NOTREACHED();
   }
-  return GlobalMediaControlsCastMode::kPresentation;
 }
 
 }  // namespace

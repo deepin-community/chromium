@@ -6,10 +6,12 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+#include <array>
 #include <memory>
 #include <utility>
+#include <vector>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
@@ -26,7 +28,6 @@
 #include "components/spellcheck/renderer/spellcheck_language.h"
 #include "components/spellcheck/renderer/spellcheck_provider_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_text_checking_completion.h"
 #include "third_party/blink/public/web/web_text_checking_result.h"
 
@@ -88,7 +89,7 @@ class SpellCheckTest : public testing::Test {
 #endif
   }
 
-  ~SpellCheckTest() override {}
+  ~SpellCheckTest() override = default;
 
   SpellCheck* spell_check() { return spell_check_.get(); }
 
@@ -113,7 +114,7 @@ class SpellCheckTest : public testing::Test {
  protected:
   void TestSpellCheckParagraph(const std::u16string& input,
                                const std::vector<SpellCheckResult>& expected) {
-    blink::WebVector<blink::WebTextCheckingResult> results;
+    std::vector<blink::WebTextCheckingResult> results;
     spell_check()->SpellCheckParagraph(input, provider_.GetSpellCheckHost(),
                                        &results);
 
@@ -138,7 +139,7 @@ class SpellCheckTest : public testing::Test {
 
 struct MockTextCheckingResult {
   size_t completion_count_ = 0;
-  blink::WebVector<blink::WebTextCheckingResult> last_results_;
+  std::vector<blink::WebTextCheckingResult> last_results_;
 };
 
 // A fake completion object for verification.
@@ -148,14 +149,14 @@ class MockTextCheckingCompletion : public blink::WebTextCheckingCompletion {
       : result_(result) {}
 
   void DidFinishCheckingText(
-      const blink::WebVector<blink::WebTextCheckingResult>& results) override {
+      const std::vector<blink::WebTextCheckingResult>& results) override {
     result_->completion_count_++;
     result_->last_results_ = results;
   }
 
   void DidCancelCheckingText() override { result_->completion_count_++; }
 
-  raw_ptr<MockTextCheckingResult, ExperimentalRenderer> result_;
+  raw_ptr<MockTextCheckingResult> result_;
 };
 
 // Operates unit tests for the content::SpellCheck::SpellCheckWord() function
@@ -189,7 +190,7 @@ class MockTextCheckingCompletion : public blink::WebTextCheckingCompletion {
 // grammatically incorrect string.
 // TODO(groby): Please feel free to add more tests.
 TEST_F(SpellCheckTest, SpellCheckStrings_EN_US) {
-  static const struct {
+  struct TestCases {
     // A string to be tested.
     const wchar_t* input;
     // An expected result for this test case.
@@ -199,7 +200,8 @@ TEST_F(SpellCheckTest, SpellCheckStrings_EN_US) {
     // The position and the length of the first invalid word.
     size_t misspelling_start;
     size_t misspelling_length;
-  } kTestCases[] = {
+  };
+  static const auto kTestCases = std::to_array<TestCases>({
       // Empty strings.
       {L"", true},
       {L" ", true},
@@ -546,7 +548,7 @@ TEST_F(SpellCheckTest, SpellCheckStrings_EN_US) {
       {L"2012", true},
       {L"100,000,000", true},
       {L"3.141592653", true},
-  };
+  });
   for (size_t i = 0; i < std::size(kTestCases); ++i) {
     size_t misspelling_start;
     size_t misspelling_length;
@@ -603,7 +605,7 @@ TEST_F(SpellCheckTest, SpellCheckSuggestions_EN_US) {
     EXPECT_EQ(test_case.expected_result, result);
 
     // Check if the suggested words occur.
-    bool suggested_word_is_present = base::Contains(
+    bool suggested_word_is_present = std::ranges::contains(
         suggestions, base::WideToUTF16(test_case.suggested_word));
     EXPECT_TRUE(suggested_word_is_present);
   }
@@ -612,10 +614,11 @@ TEST_F(SpellCheckTest, SpellCheckSuggestions_EN_US) {
 // This test verifies our spellchecker can split a text into words and check
 // the spelling of each word in the text.
 TEST_F(SpellCheckTest, SpellCheckText) {
-  static const struct {
+  struct TestCases {
     const char* language;
     const wchar_t* input;
-  } kTestCases[] = {
+  };
+  static const auto kTestCases = std::to_array<TestCases>({
       {// Afrikaans
        "af-ZA",
        L"Google se missie is om die w\x00EAreld se inligting te organiseer en "
@@ -945,7 +948,7 @@ TEST_F(SpellCheckTest, SpellCheckText) {
        L"\x0443\x043c\x0443\x043c "
        L"\x0433\x0430\x0440\x0434\x043e\x043d\x0438\x0434\x0430\x043d\x0438 "
        L"\x043e\x043d\x04b3\x043e \x0430\x0441\x0442."},
-  };
+  });
 
   for (size_t i = 0; i < std::size(kTestCases); ++i) {
     ReinitializeSpellCheck(kTestCases[i].language);
@@ -970,36 +973,42 @@ TEST_F(SpellCheckTest, SpellCheckText) {
 // Verify that our SpellCheck::SpellCheckWord() returns false when it checks
 // misspelled words.
 TEST_F(SpellCheckTest, MisspelledWords) {
-  static const struct {
+  struct TestCases {
     const char* language;
     const wchar_t* input;
-  } kTestCases[] = {
-    {
-      // A misspelled word for English
-      "en-US",
-      L"aaaaaaaaaa",
-    }, {
-      // A misspelled word for Greek.
-      "el-GR",
-      L"\x03B1\x03B1\x03B1\x03B1\x03B1\x03B1\x03B1\x03B1\x03B1\x03B1",
-    }, {
-      // A misspelled word for Persian.
-      "fa",
-      L"\x06cc\x06a9\x06cc\x0634\x0627\x0646",
-    }, {
-      // A misspelled word for Hebrew
-      "he-IL",
-      L"\x05D0\x05D0\x05D0\x05D0\x05D0\x05D0\x05D0\x05D0\x05D0\x05D0",
-    }, {
-      // Hindi
-      "hi-IN",
-      L"\x0905\x0905\x0905\x0905\x0905\x0905\x0905\x0905\x0905\x0905",
-    }, {
-      // A misspelled word for Russian
-      "ru-RU",
-      L"\x0430\x0430\x0430\x0430\x0430\x0430\x0430\x0430\x0430\x0430",
-    },
   };
+  static const auto kTestCases = std::to_array<TestCases>({
+      {
+          // A misspelled word for English
+          "en-US",
+          L"aaaaaaaaaa",
+      },
+      {
+          // A misspelled word for Greek.
+          "el-GR",
+          L"\x03B1\x03B1\x03B1\x03B1\x03B1\x03B1\x03B1\x03B1\x03B1\x03B1",
+      },
+      {
+          // A misspelled word for Persian.
+          "fa",
+          L"\x06cc\x06a9\x06cc\x0634\x0627\x0646",
+      },
+      {
+          // A misspelled word for Hebrew
+          "he-IL",
+          L"\x05D0\x05D0\x05D0\x05D0\x05D0\x05D0\x05D0\x05D0\x05D0\x05D0",
+      },
+      {
+          // Hindi
+          "hi-IN",
+          L"\x0905\x0905\x0905\x0905\x0905\x0905\x0905\x0905\x0905\x0905",
+      },
+      {
+          // A misspelled word for Russian
+          "ru-RU",
+          L"\x0430\x0430\x0430\x0430\x0430\x0430\x0430\x0430\x0430\x0430",
+      },
+  });
 
   for (size_t i = 0; i < std::size(kTestCases); ++i) {
     ReinitializeSpellCheck(kTestCases[i].language);
@@ -1038,8 +1047,7 @@ TEST_F(SpellCheckTest, SpellCheckParagraphNoMisspellings) {
 TEST_F(SpellCheckTest, SpellCheckParagraphSingleMisspellings) {
   const std::u16string text = u"zz";
   std::vector<SpellCheckResult> expected;
-  expected.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 0, 2));
+  expected.emplace_back(spellcheck::Decoration::SPELLING, 0, 2);
 
   TestSpellCheckParagraph(text, expected);
 }
@@ -1048,10 +1056,8 @@ TEST_F(SpellCheckTest, SpellCheckParagraphSingleMisspellings) {
 TEST_F(SpellCheckTest, SpellCheckParagraphMultipleMisspellings) {
   const std::u16string text = u"zz, zz";
   std::vector<SpellCheckResult> expected;
-  expected.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 0, 2));
-  expected.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 4, 2));
+  expected.emplace_back(spellcheck::Decoration::SPELLING, 0, 2);
+  expected.emplace_back(spellcheck::Decoration::SPELLING, 4, 2);
 
   TestSpellCheckParagraph(text, expected);
 }
@@ -1082,18 +1088,12 @@ TEST_F(SpellCheckTest, SpellCheckParagraphLongSentenceMultipleMisspellings) {
       u"blessings of liberty to ourselves and our posterity, do ordain and "
       u"establish this Constitution for hte United States of America.";
 
-  expected.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 3, 3));
-  expected.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 17, 3));
-  expected.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 135, 3));
-  expected.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 163, 3));
-  expected.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 195, 3));
-  expected.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 298, 3));
+  expected.emplace_back(spellcheck::Decoration::SPELLING, 3, 3);
+  expected.emplace_back(spellcheck::Decoration::SPELLING, 17, 3);
+  expected.emplace_back(spellcheck::Decoration::SPELLING, 135, 3);
+  expected.emplace_back(spellcheck::Decoration::SPELLING, 163, 3);
+  expected.emplace_back(spellcheck::Decoration::SPELLING, 195, 3);
+  expected.emplace_back(spellcheck::Decoration::SPELLING, 298, 3);
 
   TestSpellCheckParagraph(text, expected);
 }
@@ -1168,9 +1168,10 @@ TEST_F(SpellCheckTest, RequestSpellCheckWithMisspellings) {
 // A test case that multiple requests comes at once. Make sure all
 // requests are processed.
 TEST_F(SpellCheckTest, RequestSpellCheckWithMultipleRequests) {
-  MockTextCheckingResult completion[3];
+  std::array<MockTextCheckingResult, 3> completion;
 
-  const std::u16string text[3] = {u"what, zz", u"apple, zz", u"orange, zz"};
+  const std::array<std::u16string, 3> text = {u"what, zz", u"apple, zz",
+                                              u"orange, zz"};
 
   for (int i = 0; i < 3; ++i)
     spell_check()->RequestTextChecking(
@@ -1209,8 +1210,9 @@ TEST_F(SpellCheckTest, RequestSpellCheckWithoutInitialization) {
 TEST_F(SpellCheckTest, RequestSpellCheckMultipleTimesWithoutInitialization) {
   UninitializeSpellCheck();
 
-  MockTextCheckingResult completion[3];
-  const std::u16string text[3] = {u"what, zz", u"apple, zz", u"orange, zz"};
+  std::array<MockTextCheckingResult, 3> completion;
+  const std::array<std::u16string, 3> text = {u"what, zz", u"apple, zz",
+                                              u"orange, zz"};
 
   // Calls RequestTextchecking a few times.
   for (int i = 0; i < 3; ++i)
@@ -1238,14 +1240,48 @@ TEST_F(SpellCheckTest, RequestSpellCheckMultipleTimesWithoutInitialization) {
 
 #endif
 
+// Verify that should_hide_suggesiton_window attribute is passed along.
+TEST_F(SpellCheckTest, CreateTextCheckingResultPassesHideSuggestionWindowTrue) {
+  std::u16string text = u"zz";
+  std::vector<SpellCheckResult> spellcheck_results;
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 0, 2,
+                                  std::u16string(),
+                                  /* should_hide_suggestion_menu= */ true);
+
+  std::vector<blink::WebTextCheckingResult> textcheck_results;
+  spell_check()->CreateTextCheckingResults(
+      SpellCheck::USE_HUNSPELL_FOR_GRAMMAR, provider_.GetSpellCheckHost(), 0,
+      text, spellcheck_results, &textcheck_results);
+
+  ASSERT_EQ(textcheck_results.size(), 1u);
+  EXPECT_EQ(textcheck_results[0].should_hide_suggestion_menu, true);
+}
+
+TEST_F(SpellCheckTest,
+       CreateTextCheckingResultPassesHideSuggestionWindowFalse) {
+  std::u16string text = u"zz";
+  std::vector<SpellCheckResult> spellcheck_results;
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 0, 2,
+                                  std::u16string(),
+                                  /* should_hide_suggestion_menu= */ false);
+
+  std::vector<blink::WebTextCheckingResult> textcheck_results;
+  spell_check()->CreateTextCheckingResults(
+      SpellCheck::USE_HUNSPELL_FOR_GRAMMAR, provider_.GetSpellCheckHost(), 0,
+      text, spellcheck_results, &textcheck_results);
+
+  ASSERT_EQ(textcheck_results.size(), 1u);
+  EXPECT_EQ(textcheck_results[0].should_hide_suggestion_menu, false);
+}
+
 // Verify that the SpellCheck class keeps the spelling marker added to a
 // misspelled word "zz".
 TEST_F(SpellCheckTest, CreateTextCheckingResultsKeepsMarkers) {
   std::u16string text = u"zz";
   std::vector<SpellCheckResult> spellcheck_results;
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 0, 2, std::u16string()));
-  blink::WebVector<blink::WebTextCheckingResult> textcheck_results;
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 0, 2,
+                                  std::u16string());
+  std::vector<blink::WebTextCheckingResult> textcheck_results;
   spell_check()->CreateTextCheckingResults(
       SpellCheck::USE_HUNSPELL_FOR_GRAMMAR, provider_.GetSpellCheckHost(), 0,
       text, spellcheck_results, &textcheck_results);
@@ -1261,9 +1297,9 @@ TEST_F(SpellCheckTest, CreateTextCheckingResultsKeepsMarkers) {
 TEST_F(SpellCheckTest, CreateTextCheckingResultsAddsGrammarMarkers) {
   std::u16string text = u"I have bean to USA.";
   std::vector<SpellCheckResult> spellcheck_results;
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 7, 4, std::u16string()));
-  blink::WebVector<blink::WebTextCheckingResult> textcheck_results;
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 7, 4,
+                                  std::u16string());
+  std::vector<blink::WebTextCheckingResult> textcheck_results;
   spell_check()->CreateTextCheckingResults(
       SpellCheck::USE_HUNSPELL_FOR_GRAMMAR, provider_.GetSpellCheckHost(), 0,
       text, spellcheck_results, &textcheck_results);
@@ -1281,63 +1317,63 @@ TEST_F(SpellCheckTest, CreateTextCheckingResultsKeepsTypographicalApostrophe) {
   std::vector<SpellCheckResult> spellcheck_results;
 
   // All typewriter apostrophe results.
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 0, 5, u"I've"));
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 6, 6, u"haven't"));
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 13, 10, u"in'n'out's"));
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 0, 5,
+                                  u"I've");
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 6, 6,
+                                  u"haven't");
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 13, 10,
+                                  u"in'n'out's");
 
   // Replacements that differ only by apostrophe type should be ignored.
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 24, 4, u"I've"));
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 29, 4, u"I've"));
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 24, 4,
+                                  u"I've");
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 29, 4,
+                                  u"I've");
 
   // All typographical apostrophe results.
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 0, 5, u"I’ve"));
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 6, 6, u"haven’t"));
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 13, 10, u"in’n’out’s"));
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 0, 5,
+                                  u"I’ve");
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 6, 6,
+                                  u"haven’t");
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 13, 10,
+                                  u"in’n’out’s");
 
   // Replacements that differ only by apostrophe type should be ignored.
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 24, 4, u"I’ve"));
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 29, 4, u"I’ve"));
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 24, 4,
+                                  u"I’ve");
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 29, 4,
+                                  u"I’ve");
 
   // If we have no suggested replacements, we should keep this misspelling.
-  spellcheck_results.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 0, 5, std::vector<std::u16string>()));
+  spellcheck_results.emplace_back(spellcheck::Decoration::SPELLING, 0, 5,
+                                  std::vector<std::u16string>());
 
   // If we have multiple replacements that all differ only by apostrophe type,
   // we should ignore this misspelling.
-  spellcheck_results.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 0, 11,
-      std::vector<std::u16string>({u"Ik've havn'", u"Ik’ve havn’"})));
+  spellcheck_results.emplace_back(
+      spellcheck::Decoration::SPELLING, 0, 11,
+      std::vector<std::u16string>({u"Ik've havn'", u"Ik’ve havn’"}));
 
   // If we have multiple replacements where some only differ by apostrophe type
   // and some don't, we should keep this misspelling, but remove the
   // replacements that only differ by apostrophe type.
-  spellcheck_results.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 0, 5,
-      std::vector<std::u16string>({u"I've", u"Ive", u"Ik’ve"})));
+  spellcheck_results.emplace_back(
+      spellcheck::Decoration::SPELLING, 0, 5,
+      std::vector<std::u16string>({u"I've", u"Ive", u"Ik’ve"}));
 
   // Similar to the previous case except with the apostrophe changing from
   // typographical to straight instead of the other direction
-  spellcheck_results.push_back(SpellCheckResult(
-      SpellCheckResult::SPELLING, 6, 6,
-      std::vector<std::u16string>({u"havn't", u"havnt", u"haven't"})));
+  spellcheck_results.emplace_back(
+      spellcheck::Decoration::SPELLING, 6, 6,
+      std::vector<std::u16string>({u"havn't", u"havnt", u"haven't"}));
 
   // If we have multiple replacements, none of which differ only by apostrophe
   // type, we should keep this misspelling.
-  spellcheck_results.push_back(
-      SpellCheckResult(SpellCheckResult::SPELLING, 6, 6,
-                       std::vector<std::u16string>({u"have", u"haven't"})));
+  spellcheck_results.emplace_back(
+      spellcheck::Decoration::SPELLING, 6, 6,
+      std::vector<std::u16string>({u"have", u"haven't"}));
 
-  blink::WebVector<blink::WebTextCheckingResult> textcheck_results;
+  std::vector<blink::WebTextCheckingResult> textcheck_results;
   spell_check()->CreateTextCheckingResults(
       SpellCheck::USE_HUNSPELL_FOR_GRAMMAR, provider_.GetSpellCheckHost(), 0,
       text, spellcheck_results, &textcheck_results);
@@ -1370,33 +1406,36 @@ TEST_F(SpellCheckTest, CreateTextCheckingResultsKeepsTypographicalApostrophe) {
 
 // Checks some words that should be present in all English dictionaries.
 TEST_F(SpellCheckTest, EnglishWords) {
-  static const struct {
+  struct TestCases {
     const char* input;
     bool should_pass;
-  } kTestCases[] = {
-    // Issue 146093: "Chromebook" and "Chromebox" not included in spell-checking
-    // dictionary.
-    {"Chromebook", true},
-    {"Chromebooks", true},
-    {"Chromebox", true},
-    {"Chromeboxes", true},
-    {"Chromeblade", true},
-    {"Chromeblades", true},
-    {"Chromebase", true},
-    {"Chromebases", true},
-    // Issue 94708: Spell-checker incorrectly reports whisky as misspelled.
-    {"whisky", true},
-    {"whiskey", true},
-    {"whiskies", true},
-    // Issue 98678: "Recency" should be included in client-side dictionary.
-    {"recency", true},
-    {"recencies", false},
-    // Issue 140486
-    {"movie", true},
-    {"movies", true},
   };
+  static const auto kTestCases = std::to_array<TestCases>({
+      // Issue 146093: "Chromebook" and "Chromebox" not included in
+      // spell-checking
+      // dictionary.
+      {"Chromebook", true},
+      {"Chromebooks", true},
+      {"Chromebox", true},
+      {"Chromeboxes", true},
+      {"Chromeblade", true},
+      {"Chromeblades", true},
+      {"Chromebase", true},
+      {"Chromebases", true},
+      // Issue 94708: Spell-checker incorrectly reports whisky as misspelled.
+      {"whisky", true},
+      {"whiskey", true},
+      {"whiskies", true},
+      // Issue 98678: "Recency" should be included in client-side dictionary.
+      {"recency", true},
+      {"recencies", false},
+      // Issue 140486
+      {"movie", true},
+      {"movies", true},
+  });
 
-  static const char* const kLocales[] = { "en-GB", "en-US", "en-CA", "en-AU" };
+  static const auto kLocales =
+      std::to_array<const char*>({"en-GB", "en-US", "en-CA", "en-AU"});
 
   for (size_t j = 0; j < std::size(kLocales); ++j) {
     ReinitializeSpellCheck(kLocales[j]);

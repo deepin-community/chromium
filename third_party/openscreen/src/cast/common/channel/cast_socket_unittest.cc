@@ -12,12 +12,11 @@
 
 namespace openscreen::cast {
 
-using ::cast::channel::CastMessage;
+using proto::CastMessage;
 
 namespace {
 
 using ::testing::_;
-using ::testing::Invoke;
 using ::testing::Return;
 
 class CastSocketTest : public ::testing::Test {
@@ -48,42 +47,36 @@ class CastSocketTest : public ::testing::Test {
 }  // namespace
 
 TEST_F(CastSocketTest, SendMessage) {
-  EXPECT_CALL(connection(), Send(_, _))
-      .WillOnce(Invoke([this](const void* data, size_t len) {
-        EXPECT_EQ(
-            frame_serial_,
-            std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(data),
-                                 reinterpret_cast<const uint8_t*>(data) + len));
-        return true;
-      }));
+  EXPECT_CALL(connection(), Send(_)).WillOnce([this](ByteView data) {
+    EXPECT_EQ(frame_serial_, std::vector<uint8_t>(data.begin(), data.end()));
+    return true;
+  });
   ASSERT_TRUE(socket().Send(message_).ok());
 }
 
 TEST_F(CastSocketTest, SendMessageEventuallyBlocks) {
-  EXPECT_CALL(connection(), Send(_, _))
+  EXPECT_CALL(connection(), Send(_))
       .Times(3)
-      .WillRepeatedly(Invoke([this](const void* data, size_t len) {
-        EXPECT_EQ(
-            frame_serial_,
-            std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(data),
-                                 reinterpret_cast<const uint8_t*>(data) + len));
+      .WillRepeatedly([this](ByteView data) {
+        EXPECT_EQ(frame_serial_,
+                  std::vector<uint8_t>(data.begin(), data.end()));
         return true;
-      }))
+      })
       .RetiresOnSaturation();
   ASSERT_TRUE(socket().Send(message_).ok());
   ASSERT_TRUE(socket().Send(message_).ok());
   ASSERT_TRUE(socket().Send(message_).ok());
 
-  EXPECT_CALL(connection(), Send(_, _)).WillOnce(Return(false));
+  EXPECT_CALL(connection(), Send(_)).WillOnce(Return(false));
   ASSERT_EQ(socket().Send(message_).code(), Error::Code::kAgain);
 }
 
 TEST_F(CastSocketTest, ReadCompleteMessage) {
   const uint8_t* data = frame_serial_.data();
   EXPECT_CALL(mock_client(), OnMessage(_, _))
-      .WillOnce(Invoke([this](CastSocket* socket, CastMessage message) {
+      .WillOnce([this](CastSocket* socket, CastMessage message) {
         EXPECT_EQ(message_.SerializeAsString(), message.SerializeAsString());
-      }));
+      });
   connection().OnRead(std::vector<uint8_t>(data, data + frame_serial_.size()));
 }
 
@@ -93,9 +86,9 @@ TEST_F(CastSocketTest, ReadChunkedMessage) {
   connection().OnRead(std::vector<uint8_t>(data, data + 10));
 
   EXPECT_CALL(mock_client(), OnMessage(_, _))
-      .WillOnce(Invoke([this](CastSocket* socket, CastMessage message) {
+      .WillOnce([this](CastSocket* socket, CastMessage message) {
         EXPECT_EQ(message_.SerializeAsString(), message.SerializeAsString());
-      }));
+      });
   connection().OnRead(
       std::vector<uint8_t>(data + 10, data + frame_serial_.size()));
 
@@ -106,16 +99,16 @@ TEST_F(CastSocketTest, ReadChunkedMessage) {
                         frame_serial_.end());
   data = double_message.data();
   EXPECT_CALL(mock_client(), OnMessage(_, _))
-      .WillOnce(Invoke([this](CastSocket* socket, CastMessage message) {
+      .WillOnce([this](CastSocket* socket, CastMessage message) {
         EXPECT_EQ(message_.SerializeAsString(), message.SerializeAsString());
-      }));
+      });
   connection().OnRead(
       std::vector<uint8_t>(data, data + frame_serial_.size() + 10));
 
   EXPECT_CALL(mock_client(), OnMessage(_, _))
-      .WillOnce(Invoke([this](CastSocket* socket, CastMessage message) {
+      .WillOnce([this](CastSocket* socket, CastMessage message) {
         EXPECT_EQ(message_.SerializeAsString(), message.SerializeAsString());
-      }));
+      });
   connection().OnRead(std::vector<uint8_t>(data + frame_serial_.size() + 10,
                                            data + double_message.size()));
 }
@@ -141,9 +134,9 @@ TEST_F(CastSocketTest, ReadMultipleMessagesPerBlock) {
   send_data.insert(send_data.end(), frame_serial_.begin(), frame_serial_.end());
   send_data.insert(send_data.end(), frame_serial2.begin(), frame_serial2.end());
   EXPECT_CALL(mock_client(), OnMessage(_, _))
-      .WillOnce(Invoke([this](CastSocket* socket, CastMessage message) {
+      .WillOnce([this](CastSocket* socket, CastMessage message) {
         EXPECT_EQ(message_.SerializeAsString(), message.SerializeAsString());
-      }))
+      })
       .WillOnce([message2](CastSocket* socket, CastMessage message) {
         EXPECT_EQ(message2.SerializeAsString(), message.SerializeAsString());
       });

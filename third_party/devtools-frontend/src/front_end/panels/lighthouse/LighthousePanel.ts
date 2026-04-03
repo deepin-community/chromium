@@ -1,6 +1,9 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
+
+import '../../ui/legacy/legacy.js';
 
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
@@ -16,7 +19,7 @@ import {
 } from './LighthouseController.js';
 import lighthousePanelStyles from './lighthousePanel.css.js';
 import {ProtocolService} from './LighthouseProtocolService.js';
-import {type ReportJSON, type RunnerResultArtifacts} from './LighthouseReporterTypes.js';
+import type {ReportJSON, RunnerResultArtifacts} from './LighthouseReporterTypes.js';
 import {LighthouseReportRenderer} from './LighthouseReportRenderer.js';
 import {Item, ReportSelector} from './LighthouseReportSelector.js';
 import {StartView} from './LighthouseStartView.js';
@@ -25,34 +28,34 @@ import {TimespanView} from './LighthouseTimespanView.js';
 
 const UIStrings = {
   /**
-   *@description Text that appears when user drag and drop something (for example, a file) in Lighthouse Panel
+   * @description Text that appears when user drag and drop something (for example, a file) in Lighthouse Panel
    */
   dropLighthouseJsonHere: 'Drop `Lighthouse` JSON here',
   /**
-   *@description Tooltip text that appears when hovering over the largeicon add button in the Lighthouse Panel
+   * @description Tooltip text that appears when hovering over the largeicon add button in the Lighthouse Panel
    */
   performAnAudit: 'Perform an audit…',
   /**
-   *@description Text to clear everything
+   * @description Text to clear everything
    */
   clearAll: 'Clear all',
   /**
-   *@description Tooltip text that appears when hovering over the largeicon settings gear in show settings pane setting in start view of the audits panel
+   * @description Tooltip text that appears when hovering over the largeicon settings gear in show settings pane setting in start view of the audits panel
    */
   lighthouseSettings: '`Lighthouse` settings',
   /**
-   *@description Status header in the Lighthouse panel
+   * @description Status header in the Lighthouse panel
    */
   printing: 'Printing',
   /**
-   *@description Status text in the Lighthouse panel
+   * @description Status text in the Lighthouse panel
    */
   thePrintPopupWindowIsOpenPlease: 'The print popup window is open. Please close it to continue.',
   /**
-   *@description Text in Lighthouse Panel
+   * @description Text in Lighthouse Panel
    */
   cancelling: 'Cancelling',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/lighthouse/LighthousePanel.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
@@ -80,6 +83,7 @@ export class LighthousePanel extends UI.Panel.Panel {
       controller: LighthouseController,
   ) {
     super('lighthouse');
+    this.registerRequiredCSS(lighthousePanelStyles);
 
     this.controller = controller;
     this.startView = new StartView(this.controller, this);
@@ -100,6 +104,7 @@ export class LighthousePanel extends UI.Panel.Panel {
 
     this.renderToolbar();
     this.auditResultsElement = this.contentElement.createChild('div', 'lighthouse-results-container');
+    this.auditResultsElement.addEventListener('keydown', this.onKeyDown.bind(this));
     this.renderStartView();
 
     this.controller.recomputePageAuditability();
@@ -206,12 +211,14 @@ export class LighthousePanel extends UI.Panel.Panel {
   private renderToolbar(): void {
     const lighthouseToolbarContainer = this.element.createChild('div', 'lighthouse-toolbar-container');
     lighthouseToolbarContainer.setAttribute('jslog', `${VisualLogging.toolbar()}`);
+    lighthouseToolbarContainer.role = 'toolbar';
 
-    const toolbar = new UI.Toolbar.Toolbar('', lighthouseToolbarContainer);
+    const toolbar = lighthouseToolbarContainer.createChild('devtools-toolbar');
+    toolbar.role = 'presentation';
 
     this.newButton = new UI.Toolbar.ToolbarButton(i18nString(UIStrings.performAnAudit), 'plus');
     toolbar.appendToolbarItem(this.newButton);
-    this.newButton.addEventListener(UI.Toolbar.ToolbarButton.Events.Click, this.renderStartView.bind(this));
+    this.newButton.addEventListener(UI.Toolbar.ToolbarButton.Events.CLICK, this.renderStartView.bind(this));
 
     toolbar.appendSeparator();
 
@@ -220,16 +227,17 @@ export class LighthousePanel extends UI.Panel.Panel {
 
     this.clearButton = new UI.Toolbar.ToolbarButton(i18nString(UIStrings.clearAll), 'clear');
     toolbar.appendToolbarItem(this.clearButton);
-    this.clearButton.addEventListener(UI.Toolbar.ToolbarButton.Events.Click, this.clearAll.bind(this));
+    this.clearButton.addEventListener(UI.Toolbar.ToolbarButton.Events.CLICK, this.clearAll.bind(this));
 
     this.settingsPane = new UI.Widget.HBox();
     this.settingsPane.show(this.contentElement);
     this.settingsPane.element.classList.add('lighthouse-settings-pane');
-    this.settingsPane.element.appendChild(this.startView.settingsToolbar().element);
+    this.settingsPane.element.appendChild(this.startView.settingsToolbar());
     this.showSettingsPaneSetting = Common.Settings.Settings.instance().createSetting(
-        'lighthouse-show-settings-toolbar', false, Common.Settings.SettingStorageType.Synced);
+        'lighthouse-show-settings-toolbar', false, Common.Settings.SettingStorageType.SYNCED);
 
-    this.rightToolbar = new UI.Toolbar.Toolbar('', lighthouseToolbarContainer);
+    this.rightToolbar = lighthouseToolbarContainer.createChild('devtools-toolbar');
+    this.rightToolbar.role = 'presentation';
     this.rightToolbar.appendSeparator();
     this.rightToolbar.appendToolbarItem(new UI.Toolbar.ToolbarSettingToggle(
         this.showSettingsPaneSetting, 'gear', i18nString(UIStrings.lighthouseSettings), 'gear-filled'));
@@ -244,7 +252,7 @@ export class LighthousePanel extends UI.Panel.Panel {
   }
 
   private toggleSettingsDisplay(show: boolean): void {
-    this.rightToolbar.element.classList.toggle('hidden', !show);
+    this.rightToolbar.classList.toggle('hidden', !show);
     this.settingsPane.element.classList.toggle('hidden', !show);
     this.updateSettingsPaneVisibility();
   }
@@ -321,7 +329,7 @@ export class LighthousePanel extends UI.Panel.Panel {
     this.reportSelector.prepend(optionElement);
     this.refreshToolbarUI();
     this.renderReport(lighthouseResult);
-    this.newButton.element.focus();
+    (this.auditResultsElement.querySelector('.lh-topbar__url') as HTMLElement | null)?.focus();
   }
 
   private handleDrop(dataTransfer: DataTransfer): void {
@@ -359,8 +367,12 @@ export class LighthousePanel extends UI.Panel.Panel {
     return els;
   }
 
-  override wasShown(): void {
-    super.wasShown();
-    this.registerCSSFiles([lighthousePanelStyles]);
+  private onKeyDown(event: KeyboardEvent): void {
+    // The LHR's tool button is a toggle. When the user hits escape, the default behavior
+    // is to close the tool drawer. We want to prevent this behavior and instead let the
+    // LHR's tool button handle the event and close the tool's dropdown.
+    if (event.key === 'Escape' && this.auditResultsElement.querySelector('.lh-tools__button.lh-active')) {
+      event.handled = true;
+    }
   }
 }

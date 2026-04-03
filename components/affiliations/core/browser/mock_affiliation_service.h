@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_AFFILIATIONS_CORE_BROWSER_MOCK_AFFILIATION_SERVICE_H_
 #define COMPONENTS_AFFILIATIONS_CORE_BROWSER_MOCK_AFFILIATION_SERVICE_H_
 
+#include "base/memory/weak_ptr.h"
 #include "components/affiliations/core/browser/affiliation_service.h"
 #include "components/affiliations/core/browser/affiliation_utils.h"
 #include "services/network/test/test_network_connection_tracker.h"
@@ -26,15 +27,13 @@ class MockAffiliationService : public AffiliationService {
   ~MockAffiliationService() override;
 
   MOCK_METHOD(void,
-              PrefetchChangePasswordURLs,
-              (const std::vector<GURL>&, base::OnceClosure),
+              PrefetchChangePasswordURL,
+              (const GURL&, base::OnceClosure),
               (override));
-  MOCK_METHOD(void, Clear, (), (override));
   MOCK_METHOD(GURL, GetChangePasswordURL, (const GURL&), (override, const));
   MOCK_METHOD(void,
               GetAffiliationsAndBranding,
               (const FacetURI&,
-               AffiliationService::StrategyOnCacheMiss,
                AffiliationService::ResultCallback),
               (override));
   MOCK_METHOD(void, Prefetch, (const FacetURI&, const base::Time&), (override));
@@ -43,7 +42,6 @@ class MockAffiliationService : public AffiliationService {
               (const FacetURI&, const base::Time&),
               (override));
   MOCK_METHOD(void, KeepPrefetchForFacets, (std::vector<FacetURI>), (override));
-  MOCK_METHOD(void, TrimCacheForFacetURI, (const FacetURI&), (override));
   MOCK_METHOD(void, TrimUnusedCache, (std::vector<FacetURI>), (override));
   MOCK_METHOD(void,
               GetGroupingInfo,
@@ -52,11 +50,20 @@ class MockAffiliationService : public AffiliationService {
   MOCK_METHOD(void,
               GetPSLExtensions,
               (base::OnceCallback<void(std::vector<std::string>)>),
-              (override, const));
+              (override));
   MOCK_METHOD(void,
               UpdateAffiliationsAndBranding,
               (const std::vector<FacetURI>&, base::OnceClosure),
               (override));
+  MOCK_METHOD(void,
+              RegisterSource,
+              (std::unique_ptr<AffiliationSource>),
+              (override));
+
+  base::WeakPtr<AffiliationService> AsWeakPtr() override;
+
+ private:
+  base::WeakPtrFactory<MockAffiliationService> weak_ptr_factory_{this};
 };
 
 }  // namespace affiliations

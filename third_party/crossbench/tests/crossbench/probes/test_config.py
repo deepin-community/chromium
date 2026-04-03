@@ -1,12 +1,15 @@
 # Copyright 2022 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import annotations
 
 import argparse
+import enum
 import unittest
+from typing import ClassVar
 
-from crossbench import compat
 from crossbench.probes.probe import Probe, ProbeConfigParser
+from crossbench.str_enum_with_help import StrEnumWithHelp
 from tests import test_helper
 
 
@@ -14,6 +17,7 @@ class MockProbe(Probe):
   """
   Probe DOC Text
   """
+  NAME: ClassVar[str] = "mock-probe"
 
 
 class CustomArgType:
@@ -63,9 +67,9 @@ class ProbeConfigTestCase(unittest.TestCase):
 
   def test_config_defaults_list(self):
     parser = ProbeConfigParser(MockProbe)
-    with self.assertRaises(AssertionError):
+    with self.assertRaisesRegex(ValueError, "True"):
       parser.add_argument("bool", type=bool, is_list=True, default=True)
-    with self.assertRaises(AssertionError):
+    with self.assertRaisesRegex(ValueError, "string"):
       parser.add_argument("str", type=str, is_list=True, default="str")
     with self.assertRaises(ValueError):
       parser.add_argument("bool", type=bool, is_list=True, default=(1, 1))
@@ -108,14 +112,14 @@ class ProbeConfigTestCase(unittest.TestCase):
     parser = ProbeConfigParser(MockProbe)
     parser.add_argument("bool_argument_name", type=bool, default=False)
 
-    config_data = {}
+    config_data: dict = {}
     kwargs = parser.kwargs_from_config(config_data)
     self.assertDictEqual(config_data, {})
     self.assertDictEqual(kwargs, {"bool_argument_name": False})
 
     config_data = {"bool_argument_name": True}
     kwargs = parser.kwargs_from_config(config_data)
-    self.assertDictEqual(config_data, {})
+    self.assertDictEqual(config_data, {"bool_argument_name": True})
     self.assertDictEqual(kwargs, {"bool_argument_name": True})
 
   def test_bool(self):
@@ -123,7 +127,7 @@ class ProbeConfigTestCase(unittest.TestCase):
     parser.add_argument("bool_argument_name", type=bool)
     config_data = {"bool_argument_name": True}
     kwargs = parser.kwargs_from_config(config_data)
-    self.assertDictEqual(config_data, {})
+    self.assertDictEqual(config_data, {"bool_argument_name": True})
     self.assertDictEqual(kwargs, {"bool_argument_name": True})
 
   def test_int_list_invalid(self):
@@ -140,19 +144,19 @@ class ProbeConfigTestCase(unittest.TestCase):
     parser = ProbeConfigParser(MockProbe)
     parser.add_argument("int_list", type=int, is_list=True, default=[111, 222])
     kwargs = parser.kwargs_from_config({})
-    self.assertDictEqual(kwargs, {"int_list": [111, 222]})
+    self.assertDictEqual(kwargs, {"int_list": (111, 222)})
 
     config_data = {"int_list": [0, 1]}
     kwargs = parser.kwargs_from_config(config_data)
-    self.assertDictEqual(config_data, {})
-    self.assertDictEqual(kwargs, {"int_list": [0, 1]})
+    self.assertDictEqual(config_data, {"int_list": [0, 1]})
+    self.assertDictEqual(kwargs, {"int_list": (0, 1)})
 
   def test_custom_type(self):
     parser = ProbeConfigParser(MockProbe)
     parser.add_argument("custom", type=custom_arg_type)
     config_data = {"custom": [1, 2, "stuff"]}
     kwargs = parser.kwargs_from_config(config_data)
-    self.assertDictEqual(config_data, {})
+    self.assertDictEqual(config_data, {"custom": [1, 2, "stuff"]})
     result = kwargs["custom"]
     self.assertIsInstance(result, CustomArgType)
     self.assertListEqual(result.value, [1, 2, "stuff"])
@@ -183,7 +187,7 @@ class ProbeConfigTestCase(unittest.TestCase):
 
   def test_enum_type(self):
 
-    class MyEnum(compat.StrEnum):
+    class MyEnum(enum.StrEnum):
       ONE = "one"
       TWO = "two"
 
@@ -214,7 +218,7 @@ class ProbeConfigTestCase(unittest.TestCase):
 
   def test_enum_with_help(self):
 
-    class MyEnum(compat.StrEnumWithHelp):
+    class MyEnum(StrEnumWithHelp):
       ONE = ("oneX", "the one help")
       TWO = ("twoX", "the two help")
 

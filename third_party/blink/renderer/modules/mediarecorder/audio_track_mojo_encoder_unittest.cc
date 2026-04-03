@@ -6,11 +6,14 @@
 
 #include <memory>
 
+#include "base/containers/heap_array.h"
 #include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "media/base/audio_bus.h"
 #include "media/base/audio_encoder.h"
+#include "media/base/audio_timestamp_helper.h"
 #include "media/base/encoder_status.h"
 #include "media/base/test_helpers.h"
 #include "media/mojo/buildflags.h"
@@ -25,6 +28,8 @@
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
 #include "third_party/blink/renderer/modules/mediarecorder/audio_track_recorder.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
+
+using ::testing::ElementsAre;
 
 namespace blink {
 
@@ -41,6 +46,12 @@ class TestAudioEncoder final : public media::mojom::AudioEncoder {
     std::move(init_cb_).Run(media::EncoderStatus::Codes::kOk);
   }
 
+  void FinishInitializationWithFailed() {
+    CHECK(init_cb_);
+    std::move(init_cb_).Run(
+        media::EncoderStatus::Codes::kEncoderInitializeTwice);
+  }
+
   // media::mojom::AudioEncoder:
   void Initialize(
       mojo::PendingAssociatedRemote<media::mojom::AudioEncoderClient> client,
@@ -49,23 +60,33 @@ class TestAudioEncoder final : public media::mojom::AudioEncoder {
     client_.Bind(std::move(client));
     init_cb_ = std::move(callback);
   }
-  void Encode(media::mojom::AudioBufferPtr /*buffer*/,
+  void Encode(media::mojom::AudioBufferPtr buffer,
               EncodeCallback callback) override {
     constexpr size_t kDataSize = 38;
-    auto data = std::make_unique<uint8_t[]>(kDataSize);
+    auto data = base::HeapArray<uint8_t>::Uninit(kDataSize);
     const std::vector<uint8_t> description;
+
+    auto capture_timestamp = base::TimeTicks() + buffer->timestamp;
+    if (!timestamp_helper_) {
+      timestamp_helper_ =
+          std::make_unique<media::AudioTimestampHelper>(buffer->sample_rate);
+      timestamp_helper_->SetBaseTimestamp(capture_timestamp -
+                                          base::TimeTicks());
+    }
     client_->OnEncodedBufferReady(
-        media::EncodedAudioBuffer(media::TestAudioParameters::Normal(),
-                                  std::move(data), kDataSize,
-                                  base::TimeTicks::Now()),
+        media::EncodedAudioBuffer(
+            media::TestAudioParameters::Normal(), std::move(data),
+            base::TimeTicks() + timestamp_helper_->GetTimestamp()),
         description);
     std::move(callback).Run(media::EncoderStatus::Codes::kOk);
+    timestamp_helper_->AddFrames(buffer->frame_count);
   }
   void Flush(FlushCallback /*callback*/) override {}
 
  private:
   mojo::AssociatedRemote<media::mojom::AudioEncoderClient> client_;
   InitializeCallback init_cb_;
+  std::unique_ptr<media::AudioTimestampHelper> timestamp_helper_;
 };
 
 class TestInterfaceFactory final : public media::mojom::InterfaceFactory {
@@ -86,10 +107,17 @@ class TestInterfaceFactory final : public media::mojom::InterfaceFactory {
   }
   void CreateVideoDecoder(
       mojo::PendingReceiver<media::mojom::VideoDecoder> receiver,
-      mojo::PendingRemote<media::stable::mojom::StableVideoDecoder>
-          dst_video_decoder) override {
+      mojo::PendingRemote<media::mojom::VideoDecoder> dst_video_decoder)
+      override {
     NOTREACHED();
   }
+#if BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
+  void CreateVideoDecoderWithTracker(
+      mojo::PendingReceiver<media::mojom::VideoDecoder> receiver,
+      mojo::PendingRemote<media::mojom::VideoDecoderTracker> tracker) override {
+    NOTREACHED();
+  }
+#endif  // BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
   void CreateAudioDecoder(
       mojo::PendingReceiver<media::mojom::AudioDecoder> receiver) override {
     NOTREACHED();
@@ -107,14 +135,6 @@ class TestInterfaceFactory final : public media::mojom::InterfaceFactory {
   }
 #endif
 #if BUILDFLAG(IS_ANDROID)
-  void CreateMediaPlayerRenderer(
-      mojo::PendingRemote<media::mojom::MediaPlayerRendererClientExtension>
-          client_extension_remote,
-      mojo::PendingReceiver<media::mojom::Renderer> receiver,
-      mojo::PendingReceiver<media::mojom::MediaPlayerRendererExtension>
-          renderer_extension_receiver) override {
-    NOTREACHED();
-  }
   void CreateFlingingRenderer(
       const std::string& presentation_id,
       mojo::PendingRemote<media::mojom::FlingingRendererClientExtension>
@@ -132,10 +152,7 @@ class TestInterfaceFactory final : public media::mojom::InterfaceFactory {
       mojo::PendingRemote<media::mojom::MediaLog> media_log_remote,
       mojo::PendingReceiver<media::mojom::Renderer> receiver,
       mojo::PendingReceiver<media::mojom::MediaFoundationRendererExtension>
-          renderer_extension_receiver,
-      mojo::PendingRemote<
-          ::media::mojom::MediaFoundationRendererClientExtension>
-          client_extension_remote) override {
+          renderer_extension_receiver) override {
     NOTREACHED();
   }
 #endif  // BUILDFLAG(IS_WIN)
@@ -154,8 +171,8 @@ class AudioTrackMojoEncoderTest : public testing::Test {
   AudioTrackMojoEncoderTest() {
     CHECK(Platform::Current()->GetBrowserInterfaceBroker()->SetBinderForTesting(
         media::mojom::InterfaceFactory::Name_,
-        WTF::BindRepeating(&TestInterfaceFactory::BindRequest,
-                           base::Unretained(&interface_factory_))));
+        BindRepeating(&TestInterfaceFactory::BindRequest,
+                      Unretained(&interface_factory_))));
 
     audio_track_encoder_.OnSetFormat(media::TestAudioParameters::Normal());
     // Progress until TestAudioEncoder receives the Initialize() call.
@@ -172,21 +189,36 @@ class AudioTrackMojoEncoderTest : public testing::Test {
   }
   AudioTrackMojoEncoder& audio_track_encoder() { return audio_track_encoder_; }
   int output_count() const { return output_count_; }
+  const std::vector<base::TimeTicks>& capture_times() const {
+    return capture_times_;
+  }
+  media::EncoderStatus::Codes error_code() const { return error_code_; }
 
  private:
   test::TaskEnvironment task_environment_;
   TestInterfaceFactory interface_factory_;
   int output_count_ = 0;
+  media::EncoderStatus::Codes error_code_ = media::EncoderStatus::Codes::kOk;
+  std::vector<base::TimeTicks> capture_times_;
   AudioTrackMojoEncoder audio_track_encoder_{
-      scheduler::GetSequencedTaskRunnerForTesting(),
-      AudioTrackRecorder::CodecId::kAac,
+      scheduler::GetSequencedTaskRunnerForTesting(), media::AudioCodec::kAAC,
       /*on_encoded_audio_cb=*/
-      base::BindLambdaForTesting(
+      CrossThreadBindRepeating(base::BindLambdaForTesting(
           [this](const media::AudioParameters& /*params*/,
-                 std::string /*encoded_data*/,
+                 scoped_refptr<media::DecoderBuffer> /*encoded_data*/,
                  std::optional<
                      media::AudioEncoder::CodecDescription> /*codec_desc*/,
-                 base::TimeTicks /*capture_time*/) { ++output_count_; })};
+                 base::TimeTicks capture_time) {
+            ++output_count_;
+            capture_times_.push_back(capture_time);
+          })),
+      /*on_encoded_audio_error_cb=*/
+      CrossThreadBindOnce(
+          base::BindLambdaForTesting([this](media::EncoderStatus status) {
+            ASSERT_EQ(error_code_, media::EncoderStatus::Codes::kOk);
+            ASSERT_FALSE(status.is_ok());
+            error_code_ = status.code();
+          }))};
 };
 
 TEST_F(AudioTrackMojoEncoderTest, InputArrivingAfterInitialization) {
@@ -254,6 +286,67 @@ TEST_F(AudioTrackMojoEncoderTest, PausedWhileUninitialized) {
 
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(output_count(), 2);
+}
+
+TEST_F(AudioTrackMojoEncoderTest, TimeInPauseIsRespected) {
+  audio_encoder().FinishInitialization();
+  auto params = media::TestAudioParameters::Normal();
+  media::AudioTimestampHelper helper(params.sample_rate());
+  size_t input_frames = params.frames_per_buffer() / params.channels();
+  helper.SetBaseTimestamp(base::Seconds(1));
+  auto timestamp_frame_0 = base::TimeTicks() + helper.GetTimestamp();
+  audio_track_encoder().EncodeAudio(GenerateInput(), timestamp_frame_0);
+  helper.AddFrames(input_frames);
+
+  // Ensure encoder has seen all data as set_paused acts directly on
+  // audio_track_encoder and EncodeAudio posts tasks.
+  base::RunLoop().RunUntilIdle();
+  audio_track_encoder().set_paused(true);
+
+  // Frames while paused should not be forwarded.
+  audio_track_encoder().EncodeAudio(GenerateInput(),
+                                    base::TimeTicks() + helper.GetTimestamp());
+  helper.AddFrames(input_frames);
+  audio_track_encoder().EncodeAudio(GenerateInput(),
+                                    base::TimeTicks() + helper.GetTimestamp());
+  helper.AddFrames(input_frames);
+
+  // Ensure encoder has seen all data as set_paused acts directly on
+  // audio_track_encoder and EncodeAudio posts tasks.
+  base::RunLoop().RunUntilIdle();
+  audio_track_encoder().set_paused(false);
+  auto timestamp_frame_1 = base::TimeTicks() + helper.GetTimestamp();
+  audio_track_encoder().EncodeAudio(GenerateInput(), timestamp_frame_1);
+  helper.AddFrames(input_frames);
+  auto timestamp_frame_2 = base::TimeTicks() + helper.GetTimestamp();
+  audio_track_encoder().EncodeAudio(GenerateInput(), timestamp_frame_2);
+  helper.AddFrames(input_frames);
+
+  base::RunLoop().RunUntilIdle();
+  ASSERT_THAT(capture_times(), ElementsAre(timestamp_frame_0, timestamp_frame_1,
+                                           timestamp_frame_2));
+}
+
+TEST_F(AudioTrackMojoEncoderTest, OnSetFormatError) {
+  audio_encoder().FinishInitialization();
+  media::AudioParameters invalid_params = media::TestAudioParameters::Normal();
+  invalid_params.set_sample_rate(0);
+  audio_track_encoder().OnSetFormat(invalid_params);
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(error_code(),
+            media::EncoderStatus::Codes::kEncoderUnsupportedConfig);
+}
+
+TEST_F(AudioTrackMojoEncoderTest, EncoderInitializationError) {
+  audio_encoder().FinishInitializationWithFailed();
+  base::RunLoop().RunUntilIdle();
+
+  audio_track_encoder().EncodeAudio(GenerateInput(), base::TimeTicks::Now());
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(output_count(), 0);
+  EXPECT_EQ(error_code(), media::EncoderStatus::Codes::kEncoderInitializeTwice);
 }
 
 }  // namespace blink

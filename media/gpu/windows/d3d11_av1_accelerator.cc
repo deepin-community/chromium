@@ -5,14 +5,17 @@
 #include "media/gpu/windows/d3d11_av1_accelerator.h"
 
 #include <numeric>
+#include <tuple>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "media/gpu/av1_picture.h"
 #include "media/gpu/codec_picture.h"
 #include "media/gpu/windows/d3d11_picture_buffer.h"
+#include "third_party/libgav1/src/src/utils/common.h"
 
 namespace media {
 
@@ -51,8 +54,13 @@ class D3D11AV1Picture : public AV1Picture {
 };
 
 D3D11AV1Accelerator::D3D11AV1Accelerator(D3D11VideoDecoderClient* client,
-                                         MediaLog* media_log)
-    : D3DAccelerator(client, media_log) {}
+                                         MediaLog* media_log,
+                                         bool disable_invalid_ref)
+    : media_log_(media_log->Clone()),
+      client_(client),
+      disable_invalid_ref_(disable_invalid_ref) {
+  DCHECK(client_);
+}
 
 D3D11AV1Accelerator::~D3D11AV1Accelerator() {}
 
@@ -69,55 +77,55 @@ bool D3D11AV1Accelerator::SubmitDecoderBuffer(
     const libgav1::Vector<libgav1::TileBuffer>& tile_buffers) {
   // Buffer #1 - AV1 specific picture parameters.
   auto params_buffer =
-      video_decoder_wrapper_->GetPictureParametersBuffer(sizeof(pic_params));
+      client_->GetWrapper()->GetPictureParametersBuffer(sizeof(pic_params));
   if (params_buffer.size() < sizeof(pic_params)) {
-    RecordFailure("Insufficient picture parameter buffer size",
-                  D3D11Status::Codes::kGetPicParamBufferFailed);
+    MEDIA_LOG(ERROR, media_log_)
+        << "Insufficient picture parameter buffer size";
     return false;
   }
 
-  memcpy(params_buffer.data(), &pic_params, sizeof(pic_params));
+  params_buffer.data().copy_prefix_from(base::byte_span_from_ref(pic_params));
 
   // Buffer #2 - Slice control data.
   const auto tile_size = sizeof(DXVA_Tile_AV1) * tile_buffers.size();
-  auto tile_buffer = video_decoder_wrapper_->GetSliceControlBuffer(tile_size);
+  auto tile_buffer = client_->GetWrapper()->GetSliceControlBuffer(tile_size);
   if (tile_buffer.size() < tile_size) {
-    RecordFailure("Insufficient slice control buffer size",
-                  D3D11Status::Codes::kGetSliceControlBufferFailed);
+    MEDIA_LOG(ERROR, media_log_) << "Insufficient slice control buffer size";
     return false;
   }
 
-  auto* tiles = reinterpret_cast<DXVA_Tile_AV1*>(tile_buffer.data());
+  auto* tiles = reinterpret_cast<DXVA_Tile_AV1*>(tile_buffer.data().data());
 
   // Buffer #3 - Tile buffer bitstream data.
   const size_t bitstream_size = std::accumulate(
       tile_buffers.begin(), tile_buffers.end(), 0,
       [](size_t acc, const auto& buffer) { return acc + buffer.size; });
   auto& bitstream_buffer =
-      video_decoder_wrapper_->GetBitstreamBuffer(bitstream_size);
+      client_->GetWrapper()->GetBitstreamBuffer(bitstream_size);
   if (bitstream_buffer.size() < bitstream_size) {
-    RecordFailure("Insufficient bitstream buffer size",
-                  D3D11Status::Codes::kGetBitstreamBufferFailed);
+    MEDIA_LOG(ERROR, media_log_) << "Insufficient bitstream buffer size";
     return false;
   }
 
   size_t tile_offset = 0;
   for (size_t i = 0; i < tile_buffers.size(); ++i) {
     const auto& tile = tile_buffers[i];
-    tiles[i].DataOffset = tile_offset;
-    tiles[i].DataSize = tile.size;
-    tiles[i].row = i / pic_params.tiles.cols;
-    tiles[i].column = i % pic_params.tiles.cols;
-    tiles[i].anchor_frame = 0xFF;
+    UNSAFE_TODO(tiles[i]).DataOffset = tile_offset;
+    UNSAFE_TODO(tiles[i]).DataSize = tile.size;
+    UNSAFE_TODO(tiles[i]).row = i / pic_params.tiles.cols;
+    UNSAFE_TODO(tiles[i]).column = i % pic_params.tiles.cols;
+    UNSAFE_TODO(tiles[i]).anchor_frame = 0xFF;
 
-    CHECK_EQ(bitstream_buffer.Write({tile.data, tile.size}), tile.size);
+    CHECK_EQ(
+        bitstream_buffer.Write(UNSAFE_TODO(base::span(tile.data, tile.size))),
+        tile.size);
     tile_offset += tile.size;
   }
 
   // Commit the buffers we prepared above. Bitstream buffer will be committed
   // by SubmitSlice() so we don't explicitly commit here.
   return params_buffer.Commit() && tile_buffer.Commit() &&
-         video_decoder_wrapper_->SubmitSlice();
+         client_->GetWrapper()->SubmitSlice();
 }
 
 DecodeStatus D3D11AV1Accelerator::SubmitDecode(
@@ -127,20 +135,25 @@ DecodeStatus D3D11AV1Accelerator::SubmitDecode(
     const libgav1::Vector<libgav1::TileBuffer>& tile_buffers,
     base::span<const uint8_t> data) {
   const D3D11AV1Picture* pic_ptr = static_cast<const D3D11AV1Picture*>(&pic);
-  if (!video_decoder_wrapper_->WaitForFrameBegins(pic_ptr->picture_buffer())) {
+  if (!client_->GetWrapper()->WaitForFrameBegins(pic_ptr->picture_buffer())) {
     return DecodeStatus::kFail;
   }
 
   DXVA_PicParams_AV1 pic_params = {0};
-  FillPicParams(pic_ptr->picture_buffer()->picture_index(),
-                pic_ptr->apply_grain(), pic.frame_header, seq_header,
-                ref_frames, &pic_params);
-
-  if (!SubmitDecoderBuffer(pic_params, tile_buffers))
+  if (!FillPicParams(pic_ptr->picture_buffer()->picture_index(),
+                     pic_ptr->apply_grain(), pic.frame_header, seq_header,
+                     ref_frames, &pic_params)) {
+    MEDIA_LOG(ERROR, media_log_) << "Failed to fill picture parameters";
     return DecodeStatus::kFail;
+  }
 
-  return video_decoder_wrapper_->SubmitDecode() ? DecodeStatus::kOk
-                                                : DecodeStatus::kFail;
+  if (!SubmitDecoderBuffer(pic_params, tile_buffers)) {
+    // Errors are logged during SubmitDecoderBuffer.
+    return DecodeStatus::kFail;
+  }
+
+  return client_->GetWrapper()->SubmitDecode() ? DecodeStatus::kOk
+                                               : DecodeStatus::kFail;
 }
 
 bool D3D11AV1Accelerator::OutputPicture(const AV1Picture& pic) {
@@ -148,7 +161,7 @@ bool D3D11AV1Accelerator::OutputPicture(const AV1Picture& pic) {
   return client_->OutputResult(pic_ptr, pic_ptr->picture_buffer());
 }
 
-void D3D11AV1Accelerator::FillPicParams(
+bool D3D11AV1Accelerator::FillPicParams(
     size_t picture_index,
     bool apply_grain,
     const libgav1::ObuFrameHeader& frame_header,
@@ -183,8 +196,8 @@ void D3D11AV1Accelerator::FillPicParams(
         tile_info.tile_columns_log2;
     const int last_width_idx = tile_info.tile_columns - 1;
     for (int i = 0; i < last_width_idx; ++i)
-      pp->tiles.widths[i] = tile_width_sb;
-    pp->tiles.widths[last_width_idx] =
+      UNSAFE_TODO(pp->tiles.widths[i]) = tile_width_sb;
+    UNSAFE_TODO(pp->tiles.widths[last_width_idx]) =
         tile_info.sb_columns - last_width_idx * tile_width_sb;
 
     const auto tile_height_sb =
@@ -192,17 +205,17 @@ void D3D11AV1Accelerator::FillPicParams(
         tile_info.tile_rows_log2;
     const int last_height_idx = tile_info.tile_rows - 1;
     for (int i = 0; i < last_height_idx; ++i)
-      pp->tiles.heights[i] = tile_height_sb;
-    pp->tiles.heights[last_height_idx] =
+      UNSAFE_TODO(pp->tiles.heights[i]) = tile_height_sb;
+    UNSAFE_TODO(pp->tiles.heights[last_height_idx]) =
         tile_info.sb_rows - last_height_idx * tile_height_sb;
   } else {
     for (int i = 0; i < pp->tiles.cols; ++i) {
-      pp->tiles.widths[i] =
-          frame_header.tile_info.tile_column_width_in_superblocks[i];
+      UNSAFE_TODO(pp->tiles.widths[i]) = UNSAFE_TODO(
+          frame_header.tile_info.tile_column_width_in_superblocks[i]);
     }
     for (int i = 0; i < pp->tiles.rows; ++i) {
-      pp->tiles.heights[i] =
-          frame_header.tile_info.tile_row_height_in_superblocks[i];
+      UNSAFE_TODO(pp->tiles.heights[i]) =
+          UNSAFE_TODO(frame_header.tile_info.tile_row_height_in_superblocks[i]);
     }
   }
 
@@ -262,37 +275,83 @@ void D3D11AV1Accelerator::FillPicParams(
   pp->order_hint = frame_header.order_hint;
   pp->order_hint_bits = seq_header.order_hint_bits;
 
+  auto set_frame_ref_params = [&](size_t i, size_t ref_idx, int32_t width,
+                                  int32_t height,
+                                  const libgav1::GlobalMotion& gm) {
+    UNSAFE_TODO(pp->frame_refs[i]).Index = ref_idx;
+    UNSAFE_TODO(pp->frame_refs[i]).width = width;
+    UNSAFE_TODO(pp->frame_refs[i]).height = height;
+    for (size_t j = 0; j < 6; ++j) {
+      UNSAFE_TODO(pp->frame_refs[i].wmmat[j]) = UNSAFE_TODO(gm.params[j]);
+    }
+    UNSAFE_TODO(pp->frame_refs[i]).wmtype = gm.type;
+    UNSAFE_TODO(pp->frame_refs[i]).wminvalid =
+        gm.type == libgav1::kGlobalMotionTransformationTypeIdentity;
+  };
+
+  auto first_valid_ref =
+      std::make_tuple(0xFF, 0, 0, 0);  // {ref_idx, ref_type, width, height}
+  D3D11AV1Picture* first_valid_rp = nullptr;
+  const bool is_intra_frame = libgav1::IsIntraFrame(frame_header.frame_type);
+
+  // Find the first ref_frame_idx[i] that points to a valid AV1 picture in DPB.
+  if (!is_intra_frame && disable_invalid_ref_) {
+    for (size_t j = 0; j < libgav1::kNumReferenceFrameTypes - 1; ++j) {
+      const auto ref_idx = UNSAFE_TODO(frame_header.reference_frame_index[j]);
+      first_valid_rp = static_cast<D3D11AV1Picture*>(ref_frames[ref_idx].get());
+      if (first_valid_rp) {
+        first_valid_ref =
+            std::make_tuple(ref_idx, j, first_valid_rp->frame_header.width,
+                            first_valid_rp->frame_header.height);
+        break;
+      }
+    }
+  }
+
   for (size_t i = 0; i < libgav1::kNumReferenceFrameTypes - 1; ++i) {
-    if (libgav1::IsIntraFrame(frame_header.frame_type)) {
-      pp->frame_refs[i].Index = 0xFF;
+    if (is_intra_frame) {
+      UNSAFE_TODO(pp->frame_refs[i]).Index = 0xFF;
       continue;
     }
 
-    const auto ref_idx = frame_header.reference_frame_index[i];
+    const auto ref_idx = UNSAFE_TODO(frame_header.reference_frame_index[i]);
     const auto* rp =
         static_cast<const D3D11AV1Picture*>(ref_frames[ref_idx].get());
+
     if (!rp) {
-      pp->frame_refs[i].Index = 0xFF;
-      continue;
+      // Some Intel drivers crash on Index value 0xFF for non-intra frames,
+      // though AV1 DXVA spec section 3.2 mandates 0xFF for invalid reference.
+      // For these drivers, replace 0xFF with the first valid `ref_idx` that
+      // maps to a valid reference picture in `ref_frames`, according to the
+      // implementation of those drivers.
+      if (disable_invalid_ref_) {
+        if (std::get<0>(first_valid_ref) == 0xFF) {
+          MEDIA_LOG(ERROR, media_log_) << "Current frame is not intra, but no "
+                                          "valid reference frame found";
+          return false;
+        }
+        DCHECK(first_valid_rp);
+        const auto& gm =
+            first_valid_rp->frame_header
+                .global_motion[libgav1::kReferenceFrameLast +
+                               /*ref_type=*/std::get<1>(first_valid_ref)];
+        set_frame_ref_params(i, /*ref_idx=*/std::get<0>(first_valid_ref),
+                             /*width=*/std::get<2>(first_valid_ref),
+                             /*height=*/std::get<3>(first_valid_ref), gm);
+      } else {
+        UNSAFE_TODO(pp->frame_refs[i]).Index = 0xFF;
+      }
+    } else {
+      const auto& gm =
+          frame_header.global_motion[libgav1::kReferenceFrameLast + i];
+      set_frame_ref_params(i, ref_idx, rp->frame_header.width,
+                           rp->frame_header.height, gm);
     }
-
-    pp->frame_refs[i].width = rp->frame_header.width;
-    pp->frame_refs[i].height = rp->frame_header.height;
-
-    const auto& gm =
-        frame_header.global_motion[libgav1::kReferenceFrameLast + i];
-    for (size_t j = 0; j < 6; ++j)
-      pp->frame_refs[i].wmmat[j] = gm.params[j];
-    pp->frame_refs[i].wminvalid =
-        gm.type == libgav1::kGlobalMotionTransformationTypeIdentity;
-
-    pp->frame_refs[i].wmtype = gm.type;
-    pp->frame_refs[i].Index = ref_idx;
   }
 
   for (size_t i = 0; i < libgav1::kNumReferenceFrameTypes; ++i) {
     const auto* rp = static_cast<const D3D11AV1Picture*>(ref_frames[i].get());
-    pp->RefFrameMapTextureIndex[i] =
+    UNSAFE_TODO(pp->RefFrameMapTextureIndex[i]) =
         rp ? rp->picture_buffer()->picture_index() : 0xFF;
   }
 
@@ -308,7 +367,8 @@ void D3D11AV1Accelerator::FillPicParams(
   pp->loop_filter.delta_lf_present = frame_header.delta_lf.present;
 
   for (size_t i = 0; i < libgav1::kNumReferenceFrameTypes; ++i)
-    pp->loop_filter.ref_deltas[i] = frame_header.loop_filter.ref_deltas[i];
+    UNSAFE_TODO(pp->loop_filter.ref_deltas[i]) =
+        frame_header.loop_filter.ref_deltas[i];
   pp->loop_filter.mode_deltas[0] = frame_header.loop_filter.mode_deltas[0];
   pp->loop_filter.mode_deltas[1] = frame_header.loop_filter.mode_deltas[1];
   pp->loop_filter.delta_lf_res = frame_header.delta_lf.scale;
@@ -321,10 +381,12 @@ void D3D11AV1Accelerator::FillPicParams(
         2,  // libgav1::kLoopRestorationTypeSgrProj
     };
 
-    pp->loop_filter.frame_restoration_type[i] =
-        kD3D11LoopRestorationMapping[frame_header.loop_restoration.type[i]];
-    pp->loop_filter.log2_restoration_unit_size[i] =
-        frame_header.loop_restoration.unit_size_log2[i];
+    UNSAFE_TODO({
+      pp->loop_filter.frame_restoration_type[i] =
+          kD3D11LoopRestorationMapping[frame_header.loop_restoration.type[i]];
+      pp->loop_filter.log2_restoration_unit_size[i] =
+          frame_header.loop_restoration.unit_size_log2[i];
+    })
   }
 
   pp->quantization.delta_q_present = frame_header.delta_q.present;
@@ -355,16 +417,18 @@ void D3D11AV1Accelerator::FillPicParams(
     // despite it being a two-bit entry with range 0-3, so check for this, and
     // subtract.
     // See https://aomediacodec.github.io/av1-spec/#cdef-params-syntax
-    uint8_t y_str = frame_header.cdef.y_secondary_strength[i] >> coeff_shift;
-    uint8_t uv_str = frame_header.cdef.uv_secondary_strength[i] >> coeff_shift;
+    uint8_t y_str =
+        UNSAFE_TODO(frame_header.cdef.y_secondary_strength[i]) >> coeff_shift;
+    uint8_t uv_str =
+        UNSAFE_TODO(frame_header.cdef.uv_secondary_strength[i]) >> coeff_shift;
     y_str = y_str == 4 ? 3 : y_str;
     uv_str = uv_str == 4 ? 3 : uv_str;
-    pp->cdef.y_strengths[i].primary =
-        frame_header.cdef.y_primary_strength[i] >> coeff_shift;
-    pp->cdef.y_strengths[i].secondary = y_str;
-    pp->cdef.uv_strengths[i].primary =
-        frame_header.cdef.uv_primary_strength[i] >> coeff_shift;
-    pp->cdef.uv_strengths[i].secondary = uv_str;
+    UNSAFE_TODO(pp->cdef.y_strengths[i]).primary =
+        UNSAFE_TODO(frame_header.cdef.y_primary_strength[i]) >> coeff_shift;
+    UNSAFE_TODO(pp->cdef.y_strengths[i]).secondary = y_str;
+    UNSAFE_TODO(pp->cdef.uv_strengths[i]).primary =
+        UNSAFE_TODO(frame_header.cdef.uv_primary_strength[i]) >> coeff_shift;
+    UNSAFE_TODO(pp->cdef.uv_strengths[i]).secondary = uv_str;
   }
 
   pp->interp_filter = frame_header.interpolation_filter;
@@ -375,10 +439,10 @@ void D3D11AV1Accelerator::FillPicParams(
   pp->segmentation.temporal_update = frame_header.segmentation.temporal_update;
   for (size_t i = 0; i < libgav1::kMaxSegments; ++i) {
     for (size_t j = 0; j < libgav1::kSegmentFeatureMax; ++j) {
-      pp->segmentation.feature_mask[i].mask |=
-          frame_header.segmentation.feature_enabled[i][j] << j;
-      pp->segmentation.feature_data[i][j] =
-          frame_header.segmentation.feature_data[i][j];
+      UNSAFE_TODO(pp->segmentation.feature_mask[i]).mask |=
+          UNSAFE_TODO(frame_header.segmentation.feature_enabled[i][j]) << j;
+      UNSAFE_TODO(pp->segmentation.feature_data[i][j]) =
+          UNSAFE_TODO(frame_header.segmentation.feature_data[i][j]);
     }
   }
 
@@ -397,27 +461,29 @@ void D3D11AV1Accelerator::FillPicParams(
         libgav1::kMatrixCoefficientsIdentity;
     pp->film_grain.grain_seed = fg.grain_seed;
     pp->film_grain.num_y_points = fg.num_y_points;
-    for (uint8_t i = 0; i < fg.num_y_points; ++i) {
-      pp->film_grain.scaling_points_y[i][0] = fg.point_y_value[i];
-      pp->film_grain.scaling_points_y[i][1] = fg.point_y_scaling[i];
-    }
-    pp->film_grain.num_cb_points = fg.num_u_points;
-    for (uint8_t i = 0; i < fg.num_u_points; ++i) {
-      pp->film_grain.scaling_points_cb[i][0] = fg.point_u_value[i];
-      pp->film_grain.scaling_points_cb[i][1] = fg.point_u_scaling[i];
-    }
-    pp->film_grain.num_cr_points = fg.num_v_points;
-    for (uint8_t i = 0; i < fg.num_v_points; ++i) {
-      pp->film_grain.scaling_points_cr[i][0] = fg.point_v_value[i];
-      pp->film_grain.scaling_points_cr[i][1] = fg.point_v_scaling[i];
-    }
-    for (size_t i = 0; i < std::size(fg.auto_regression_coeff_y); ++i) {
-      pp->film_grain.ar_coeffs_y[i] = fg.auto_regression_coeff_y[i] + 128;
-    }
-    for (size_t i = 0; i < std::size(fg.auto_regression_coeff_u); ++i) {
-      pp->film_grain.ar_coeffs_cb[i] = fg.auto_regression_coeff_u[i] + 128;
-      pp->film_grain.ar_coeffs_cr[i] = fg.auto_regression_coeff_v[i] + 128;
-    }
+    UNSAFE_TODO({
+      for (uint8_t i = 0; i < fg.num_y_points; ++i) {
+        pp->film_grain.scaling_points_y[i][0] = fg.point_y_value[i];
+        pp->film_grain.scaling_points_y[i][1] = fg.point_y_scaling[i];
+      }
+      pp->film_grain.num_cb_points = fg.num_u_points;
+      for (uint8_t i = 0; i < fg.num_u_points; ++i) {
+        pp->film_grain.scaling_points_cb[i][0] = fg.point_u_value[i];
+        pp->film_grain.scaling_points_cb[i][1] = fg.point_u_scaling[i];
+      }
+      pp->film_grain.num_cr_points = fg.num_v_points;
+      for (uint8_t i = 0; i < fg.num_v_points; ++i) {
+        pp->film_grain.scaling_points_cr[i][0] = fg.point_v_value[i];
+        pp->film_grain.scaling_points_cr[i][1] = fg.point_v_scaling[i];
+      }
+      for (size_t i = 0; i < std::size(fg.auto_regression_coeff_y); ++i) {
+        pp->film_grain.ar_coeffs_y[i] = fg.auto_regression_coeff_y[i] + 128;
+      }
+      for (size_t i = 0; i < std::size(fg.auto_regression_coeff_u); ++i) {
+        pp->film_grain.ar_coeffs_cb[i] = fg.auto_regression_coeff_u[i] + 128;
+        pp->film_grain.ar_coeffs_cr[i] = fg.auto_regression_coeff_v[i] + 128;
+      }
+    })
     // libgav1 will provide the multipliers by subtracting 128 and the offsets
     // by subtracting 256. Restore values as DXVA spec requires values without
     // subtraction.
@@ -435,6 +501,8 @@ void D3D11AV1Accelerator::FillPicParams(
 
   // StatusReportFeedbackNumber "should not be equal to 0"... but it crashes :|
   // pp->StatusReportFeedbackNumber = ++status_feedback_;
+
+  return true;
 }
 
 }  // namespace media

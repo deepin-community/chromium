@@ -9,6 +9,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -19,7 +20,7 @@
 #include "chromeos/ash/components/dbus/attestation/attestation_client.h"
 #include "chromeos/ash/components/dbus/attestation/interface.pb.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
-#include "chromeos/dbus/common/dbus_method_call_status.h"
+#include "chromeos/dbus/common/dbus_callback.h"
 #include "components/account_id/account_id.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_manager.h"
@@ -187,7 +188,7 @@ void EnrollmentIdUploadManager::OnUploadComplete(
     const std::string& enrollment_id,
     policy::CloudPolicyClient::Result result) {
   const std::string printable_enrollment_id =
-      base::ToLowerASCII(base::HexEncode(enrollment_id));
+      base::HexEncodeLower(enrollment_id);
 
   if (!result.IsSuccess()) {
     LOG(ERROR) << "Failed to upload Enrollment Identifier \""

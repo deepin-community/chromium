@@ -4,11 +4,11 @@
 
 #include "media/audio/win/audio_manager_win.h"
 
-#include <windows.h>
-
-#include <objbase.h>  // This has to be before initguid.h
+#include <objbase.h>
 
 #include <initguid.h>
+#include <windows.h>
+
 #include <mmsystem.h>
 #include <setupapi.h>
 #include <stddef.h>
@@ -116,9 +116,9 @@ AudioManagerWin::~AudioManagerWin() = default;
 
 void AudioManagerWin::ShutdownOnAudioThread() {
   // Prevent pending callbacks from `output_device_listener_` from being run.
-  // TODO(crbug.com/1458623): Remove this call when kAudioServiceOutOfProcess is
-  // removed on Windows; `weak_factory_on_audio_thread_` will be guaranteed to
-  // be destroyed/invalidated on the right thread then.
+  // TODO(crbug.com/40066532): Remove this call when kAudioServiceOutOfProcess
+  // is removed on Windows; `weak_factory_on_audio_thread_` will be guaranteed
+  // to be destroyed/invalidated on the right thread then.
   weak_factory_on_audio_thread_.InvalidateWeakPtrs();
 
   AudioManagerBase::ShutdownOnAudioThread();
@@ -192,8 +192,8 @@ void AudioManagerWin::GetAudioOutputDeviceNames(
 AudioParameters AudioManagerWin::GetInputStreamParameters(
     const std::string& device_id) {
   AudioParameters parameters;
-  HRESULT hr =
-      CoreAudioUtil::GetPreferredAudioParameters(device_id, false, &parameters);
+  HRESULT hr = CoreAudioUtil::GetPreferredAudioParameters(
+      device_id, /*is_output_device=*/false, &parameters);
 
   if (FAILED(hr) || !parameters.IsValid()) {
     LOG(WARNING) << "Unable to get preferred audio params for " << device_id
@@ -220,7 +220,7 @@ std::string AudioManagerWin::GetAssociatedOutputDeviceID(
   return CoreAudioUtil::GetMatchingOutputDeviceID(input_device_id);
 }
 
-const char* AudioManagerWin::GetName() {
+const std::string_view AudioManagerWin::GetName() {
   return "Windows";
 }
 
@@ -238,6 +238,7 @@ AudioOutputStream* AudioManagerWin::MakeLinearOutputStream(
                                          WAVE_MAPPER);
 }
 
+#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
 AudioOutputStream* AudioManagerWin::MakeBitstreamOutputStream(
     const AudioParameters& params,
     const std::string& device_id,
@@ -248,6 +249,7 @@ AudioOutputStream* AudioManagerWin::MakeBitstreamOutputStream(
   return nullptr;
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
 }
+#endif
 
 // Factory for the implementations of AudioOutputStream for
 // AUDIO_PCM_LOW_LATENCY mode. Two implementations should suffice most
@@ -258,13 +260,7 @@ AudioOutputStream* AudioManagerWin::MakeLowLatencyOutputStream(
     const AudioParameters& params,
     const std::string& device_id,
     const LogCallback& log_callback) {
-#if BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
-  DCHECK(params.format() == AudioParameters::AUDIO_BITSTREAM_DTS ||
-         params.format() == AudioParameters::AUDIO_PCM_LOW_LATENCY)
-      << params.format();
-#else
   DCHECK_EQ(params.format(), AudioParameters::AUDIO_PCM_LOW_LATENCY);
-#endif
 
   if (params.channels() > kWinMaxChannels)
     return nullptr;
@@ -334,6 +330,8 @@ AudioParameters AudioManagerWin::GetPreferredOutputStreamParameters(
   int effects = AudioParameters::NO_EFFECTS;
   int min_buffer_size = 0;
   int max_buffer_size = 0;
+  int default_buffer_size = 0;
+  bool attempt_audio_offload = CoreAudioUtil::IsAudioOffloadSupported(nullptr);
 
   if (cmd_line->HasSwitch(switches::kEnableExclusiveAudio)) {
     // TODO(rtoy): tune these values for best possible WebAudio
@@ -347,10 +345,11 @@ AudioParameters AudioManagerWin::GetPreferredOutputStreamParameters(
       channel_layout_config = input_params.channel_layout_config();
   } else {
     AudioParameters params;
+
     HRESULT hr = CoreAudioUtil::GetPreferredAudioParameters(
         output_device_id.empty() ? GetDefaultOutputDeviceID()
                                  : output_device_id,
-        true, &params);
+        true, &params, attempt_audio_offload);
     if (FAILED(hr)) {
       // This can happen when CoreAudio isn't supported or available
       // (e.g. certain installations of Windows Server 2008 R2).
@@ -374,6 +373,7 @@ AudioParameters AudioManagerWin::GetPreferredOutputStreamParameters(
             AudioParameters::HardwareCapabilities());
     min_buffer_size = hardware_capabilities.min_frames_per_buffer;
     max_buffer_size = hardware_capabilities.max_frames_per_buffer;
+    default_buffer_size = hardware_capabilities.default_frames_per_buffer;
   }
 
   if (input_params.IsValid()) {
@@ -420,8 +420,9 @@ AudioParameters AudioManagerWin::GetPreferredOutputStreamParameters(
   if (user_buffer_size)
     buffer_size = user_buffer_size;
 
-  AudioParameters::HardwareCapabilities hardware_capabilities(min_buffer_size,
-                                                              max_buffer_size);
+  AudioParameters::HardwareCapabilities hardware_capabilities(
+      min_buffer_size, max_buffer_size, default_buffer_size,
+      attempt_audio_offload);
 #if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
   hardware_capabilities.bitstream_formats = 0;
   hardware_capabilities.require_encapsulation = false;

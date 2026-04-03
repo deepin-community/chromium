@@ -8,7 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include "./vpx_config.h"
 #include "./vpx_scale_rtcd.h"
@@ -30,9 +30,9 @@ const int kNumSizesToTest = 8;
 #endif
 const int kSizesToTest[] = { 1, 15, 33, 145, 512, 1025, 3840, 16383 };
 
-typedef void (*ExtendFrameBorderFunc)(YV12_BUFFER_CONFIG *ybf);
-typedef void (*CopyFrameFunc)(const YV12_BUFFER_CONFIG *src_ybf,
-                              YV12_BUFFER_CONFIG *dst_ybf);
+using ExtendFrameBorderFunc = void (*)(YV12_BUFFER_CONFIG *ybf);
+using CopyFrameFunc = void (*)(const YV12_BUFFER_CONFIG *src_ybf,
+                               YV12_BUFFER_CONFIG *dst_ybf);
 
 class ExtendBorderTest
     : public VpxScaleBase,

@@ -18,12 +18,9 @@
 namespace prefs {
 
 #if !defined(ANDROID)
-const std::string GetLiveCaptionLanguageCode(PrefService* profile_prefs) {
-  if (base::FeatureList::IsEnabled(media::kLiveCaptionMultiLanguage))
-    return profile_prefs->GetString(prefs::kLiveCaptionLanguageCode);
 
-  // Default to en-US if the kLiveCaptionMultiLanguage feature isn't enabled.
-  return speech::kUsEnglishLocale;
+const std::string GetLiveCaptionLanguageCode(PrefService* profile_prefs) {
+  return profile_prefs->GetString(prefs::kLiveCaptionLanguageCode);
 }
 
 bool IsLanguageCodeForLiveCaption(speech::LanguageCode language_code,

@@ -16,6 +16,7 @@
 #include <string>
 
 #include "base/apple/foundation_util.h"
+#include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
@@ -172,14 +173,14 @@ bool XboxDataFetcher::TryOpenDevice(io_service_t service) {
 
   auto* controller = pending->controller.get();
   XboxControllerMac::OpenDeviceResult result = controller->OpenDevice(service);
-  if (result == XboxControllerMac::OpenDeviceResult::OPEN_SUCCEEDED) {
+  if (result == XboxControllerMac::OpenDeviceResult::kOpenSucceeded) {
     AddController(pending->controller.release());
     return true;
   }
 
   if (did_register_interest &&
       result ==
-          XboxControllerMac::OpenDeviceResult::OPEN_FAILED_EXCLUSIVE_ACCESS) {
+          XboxControllerMac::OpenDeviceResult::kOpenFailedExclusiveAccess) {
     pending_controllers_.insert(std::move(pending));
   }
   return false;
@@ -189,7 +190,7 @@ bool XboxDataFetcher::RegisterForNotifications() {
   if (listening_)
     return true;
   if (port_ == nullptr)
-    port_.reset(IONotificationPortCreate(kIOMasterPortDefault));
+    port_.reset(IONotificationPortCreate(kIOMainPortDefault));
   if (!port_.is_valid())
     return false;
   source_ = IONotificationPortGetRunLoopSource(port_.get());
@@ -257,7 +258,7 @@ bool XboxDataFetcher::RegisterForInterestNotifications(
     io_service_t service,
     PendingController* pending) {
   if (port_ == nullptr)
-    port_.reset(IONotificationPortCreate(kIOMasterPortDefault));
+    port_.reset(IONotificationPortCreate(kIOMainPortDefault));
   if (!port_.is_valid())
     return false;
 
@@ -355,8 +356,8 @@ void XboxDataFetcher::XboxControllerGotData(
   Gamepad& pad = state->data;
 
   for (size_t i = 0; i < 6; i++) {
-    pad.buttons[i].pressed = data.buttons[i];
-    pad.buttons[i].value = data.buttons[i] ? 1.0f : 0.0f;
+    pad.buttons[i].pressed = UNSAFE_TODO(data.buttons[i]);
+    pad.buttons[i].value = UNSAFE_TODO(data.buttons[i]) ? 1.0f : 0.0f;
   }
   pad.buttons[6].pressed =
       data.triggers[0] > GamepadButton::kDefaultButtonPressedThreshold;
@@ -365,8 +366,8 @@ void XboxDataFetcher::XboxControllerGotData(
       data.triggers[1] > GamepadButton::kDefaultButtonPressedThreshold;
   pad.buttons[7].value = data.triggers[1];
   for (size_t i = 8; i < 16; i++) {
-    pad.buttons[i].pressed = data.buttons[i - 2];
-    pad.buttons[i].value = data.buttons[i - 2] ? 1.0f : 0.0f;
+    pad.buttons[i].pressed = UNSAFE_TODO(data.buttons[i - 2]);
+    pad.buttons[i].value = UNSAFE_TODO(data.buttons[i - 2]) ? 1.0f : 0.0f;
   }
   if (controller->xinput_type() == kXInputTypeXbox360) {
     // Map the Xbox button on Xbox 360 to buttons[16].
@@ -380,7 +381,7 @@ void XboxDataFetcher::XboxControllerGotData(
     pad.buttons_length = 18;
   }
   for (size_t i = 0; i < std::size(data.axes); i++) {
-    pad.axes[i] = data.axes[i];
+    pad.axes[i] = UNSAFE_TODO(data.axes[i]);
   }
 
   pad.timestamp = CurrentTimeInMicroseconds();

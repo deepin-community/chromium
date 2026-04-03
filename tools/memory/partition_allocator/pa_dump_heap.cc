@@ -13,15 +13,10 @@
 #include <optional>
 #include <string>
 
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_buildflags.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_config.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_page.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_ref_count.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_root.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/thread_cache.h"
 #include "base/bits.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
@@ -30,12 +25,18 @@
 #include "base/strings/stringprintf.h"
 #include "base/thread_annotations.h"
 #include "base/values.h"
+#include "partition_alloc/bucket_lookup.h"
+#include "partition_alloc/buildflags.h"
+#include "partition_alloc/in_slot_metadata.h"
+#include "partition_alloc/partition_alloc_config.h"
+#include "partition_alloc/partition_page.h"
+#include "partition_alloc/partition_root.h"
+#include "partition_alloc/thread_cache.h"
 #include "third_party/snappy/src/snappy.h"
 #include "tools/memory/partition_allocator/inspect_utils.h"
 
 namespace partition_alloc::tools {
 
-using partition_alloc::internal::kInvalidBucketSize;
 using partition_alloc::internal::kSuperPageSize;
 using partition_alloc::internal::PartitionPageMetadata;
 using partition_alloc::internal::PartitionPageSize;
@@ -126,7 +127,7 @@ class HeapDumper {
     // There is no list of super page, only a list of extents. Walk the extent
     // list to get all superpages.
     uintptr_t extent_address =
-        reinterpret_cast<uintptr_t>(root_.get()->first_extent);
+        reinterpret_cast<uintptr_t>(root_.get()->first_extent_);
     while (extent_address) {
       auto extent =
           RawBuffer<PartitionSuperPageExtentEntry>::ReadFromProcessMemory(
@@ -159,9 +160,9 @@ class HeapDumper {
     return true;
   }
 
-  base::Value::List Dump() const {
+  base::ListValue Dump() const {
     auto partition_page_to_value = [](uintptr_t offset, const char* data) {
-      base::Value::Dict ret;
+      base::DictValue ret;
       std::string value;
       if (offset == 0) {
         value = "metadata";
@@ -173,8 +174,14 @@ class HeapDumper {
       ret.Set("type", value);
 
       if (value != "metadata" && value != "guard") {
+        // TODO(crbug.com/40238514): provide `offsets_to_metadata_`
+        // and `pool` information for pa_dump_heap.
+        // Currently there is no way to provide `metadata_offset_` for
+        // pa_dump_heap. So pa_dump_heap cannot find any metadata, i.e.
+        // PartitionPageMetadata, SlotSpanMetadata, and so on.
+        constexpr std::ptrdiff_t metadata_offset = 0;
         const auto* page_metadata = PartitionPageMetadata::FromAddr(
-            reinterpret_cast<uintptr_t>(data + offset));
+            reinterpret_cast<uintptr_t>(data + offset), metadata_offset);
         ret.Set("page_index_in_span", page_metadata->slot_span_metadata_offset);
         if (page_metadata->slot_span_metadata_offset == 0 &&
             page_metadata->slot_span_metadata.bucket) {
@@ -211,17 +218,17 @@ class HeapDumper {
       return ret;
     };
     auto super_page_to_value = [&](uintptr_t address, const char* data) {
-      base::Value::Dict ret;
+      base::DictValue ret;
       ret.Set("address", base::StringPrintf("0x%lx", address));
 
-      base::Value::List partition_pages;
+      base::ListValue partition_pages;
       for (uintptr_t offset = 0; offset < kSuperPageSize;
            offset += PartitionPageSize()) {
         partition_pages.Append(partition_page_to_value(offset, data));
       }
       ret.Set("partition_pages", std::move(partition_pages));
 
-      base::Value::List page_sizes;
+      base::ListValue page_sizes;
       // Looking at how well the heap would compress.
       const size_t page_size = base::GetPageSize();
       for (uintptr_t page_address = address;
@@ -262,7 +269,7 @@ class HeapDumper {
                                page_size, &compressed);
         }
 
-        base::Value::Dict page_size_dict;
+        base::DictValue page_size_dict;
         page_size_dict.Set("uncompressed", static_cast<int>(uncompressed_size));
         page_size_dict.Set("compressed", static_cast<int>(compressed_size));
         page_sizes.Append(std::move(page_size_dict));
@@ -272,7 +279,7 @@ class HeapDumper {
       return ret;
     };
 
-    base::Value::List super_pages_value;
+    base::ListValue super_pages_value;
     for (const auto& address_data : super_pages_) {
       super_pages_value.Append(
           super_page_to_value(address_data.first, address_data.second));
@@ -281,15 +288,15 @@ class HeapDumper {
     return super_pages_value;
   }
 
-#if PA_CONFIG(REF_COUNT_STORE_REQUESTED_SIZE)
-  base::Value::List DumpAllocatedSizes() {
+#if PA_CONFIG(IN_SLOT_METADATA_STORE_REQUESTED_SIZE)
+  base::ListValue DumpAllocatedSizes() {
     // Note: Here and below, it is safe to follow pointers into the super page,
-    // or to the root or buckets, since they share the same address in the this
+    // or to the root or buckets_, since they share the same address in the this
     // process as in the Chromium process.
 
     // Since there is no tracking of full slot spans, the way to enumerate all
     // allocated memory is to walk the heap itself.
-    base::Value::List ret;
+    base::ListValue ret;
 
     for (const auto& address_data : super_pages_) {
       const char* data = address_data.second;
@@ -313,7 +320,7 @@ class HeapDumper {
           continue;
         }
 
-        base::Value::Dict slot_span_value;
+        base::DictValue slot_span_value;
         slot_span_value.Set("start_address",
                             base::StringPrintf("0x%lx", slot_span_start));
         slot_span_value.Set("slot_size",
@@ -332,7 +339,7 @@ class HeapDumper {
           head = head->GetNext(0);
         }
 
-        base::Value::List allocated_sizes_value;
+        base::ListValue allocated_sizes_value;
         for (size_t slot_index = 0; slot_index < free_slots.size();
              slot_index++) {
           // Skip unprovisioned slots, which are always at the end of the slot
@@ -344,8 +351,9 @@ class HeapDumper {
           }
           uintptr_t slot_start =
               slot_span_start + slot_index * metadata.bucket->slot_size;
-          auto* ref_count = PartitionRoot::RefCountPointerFromSlotStartAndSize(
-              slot_start, metadata.bucket->slot_size);
+          auto* ref_count =
+              PartitionRoot::InSlotMetadataPointerFromSlotStartAndSize(
+                  slot_start, metadata.bucket->slot_size);
           uint32_t requested_size = ref_count->requested_size();
 
           // Address space dumping is not synchronized with allocation, meaning
@@ -366,15 +374,12 @@ class HeapDumper {
 
     return ret;
   }
-#endif  // PA_CONFIG(REF_COUNT_STORE_REQUESTED_SIZE)
+#endif  // PA_CONFIG(IN_SLOT_METADATA_STORE_REQUESTED_SIZE)
 
-  base::Value::List DumpBuckets() {
-    base::Value::List ret;
-    for (const auto& bucket : root_.get()->buckets) {
-      if (bucket.slot_size == kInvalidBucketSize)
-        continue;
-
-      base::Value::Dict bucket_value;
+  base::ListValue DumpBuckets() {
+    base::ListValue ret;
+    for (const auto& bucket : root_.get()->buckets_) {
+      base::DictValue bucket_value;
       bucket_value.Set("slot_size", static_cast<int>(bucket.slot_size));
       ret.Append(std::move(bucket_value));
     }
@@ -448,26 +453,25 @@ int main(int argc, char** argv) {
     }
   }
 
-  base::Value::Dict overall_dump;
+  base::DictValue overall_dump;
   overall_dump.Set("superpages", dumper.Dump());
 
-#if PA_CONFIG(REF_COUNT_STORE_REQUESTED_SIZE)
+#if PA_CONFIG(IN_SLOT_METADATA_STORE_REQUESTED_SIZE)
   overall_dump.Set("allocated_sizes", dumper.DumpAllocatedSizes());
-#endif  // PA_CONFIG(REF_COUNT_STORE_REQUESTED_SIZE)
+#endif  // PA_CONFIG(IN_SLOT_METADATA_STORE_REQUESTED_SIZE)
 
   overall_dump.Set("buckets", dumper.DumpBuckets());
 
   std::string json_string;
   bool ok = base::JSONWriter::WriteWithOptions(
-      overall_dump, base::JSONWriter::Options::OPTIONS_PRETTY_PRINT,
-      &json_string);
+      overall_dump, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json_string);
 
   if (ok) {
     base::FilePath json_filename = command_line->GetSwitchValuePath("json");
     auto f = base::File(json_filename, base::File::Flags::FLAG_CREATE_ALWAYS |
                                            base::File::Flags::FLAG_WRITE);
     if (f.IsValid()) {
-      f.WriteAtCurrentPos(json_string.c_str(), json_string.size());
+      f.WriteAtCurrentPos(base::as_byte_span(json_string));
       LOG(WARNING) << "\n\nDumped JSON to " << json_filename;
       return 0;
     }

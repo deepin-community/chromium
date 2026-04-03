@@ -62,6 +62,7 @@ CLEANUP_OLD_DIRS = [
     'buildtools/emsdk',  # Moved to buildtools/{mac,linux64}/emsdk
     'buildtools/test_data',  # Moved to test/data by r.android.com/1539381 .
     'buildtools/d8',  # Removed by r.android.com/1424334 .
+    'buildtools/sqlglot',
 
     # Build tools moved to third_party/ by r.android.com/2327602 .
     'buildtools/mac/clang-format',
@@ -110,34 +111,34 @@ BUILD_DEPS_TOOLCHAIN_HOST = [
     # https://chromium.googlesource.com/chromium/src/buildtools/+/refs/heads/master/mac/clang-format.arm64.sha1
     Dependency(
         'third_party/clang-format/clang-format',
-        'https://storage.googleapis.com/chromium-clang-format/5553d7a3d912b7d49381ad68c9a56740601a57a0',
-        'e077990b2ea6807f6abc71b4cf1e487719d7e40574baddd2b51187fdcc8db803',
+        'https://storage.googleapis.com/chromium-clang-format/8503422f469ae56cc74f0ea2c03f2d872f4a2303',
+        'dabf93691361e8bd1d07466d67584072ece5c24e2b812c16458b8ff801c33e29',
         'darwin', 'arm64'),
     # From
     # https://chromium.googlesource.com/chromium/src/buildtools/+/refs/heads/master/mac/clang-format.x64.sha1
     Dependency(
         'third_party/clang-format/clang-format',
-        'https://storage.googleapis.com/chromium-clang-format/87d69aeff220c916b85b5d6d162fa5668aa9d64f',
-        '71179a8788a009cfd589636d50f0eb9f95f58b0cfda4351430bed7c0a48c080b',
+        'https://storage.googleapis.com/chromium-clang-format/7d46d237f9664f41ef46b10c1392dcb559250f25',
+        '0c3c13febeb0495ef0086509c24605ecae9e3d968ff9669d12514b8a55c7824e',
         'darwin', 'x64'),
     # From https://chromium.googlesource.com/chromium/src/buildtools/+/refs/heads/master/linux64/clang-format.sha1
     Dependency(
         'third_party/clang-format/clang-format',
-        'https://storage.googleapis.com/chromium-clang-format/1facab3101fc6da6b9467543f27f0622b966bc19',
-        '5e459118d8ac825452e9e1f2717e4de5a36399dc6cc6aec7ec483ad27a0c927e',
+        'https://storage.googleapis.com/chromium-clang-format/79a7b4e5336339c17b828de10d80611ff0f85961',
+        '889266a51681d55bd4b9e02c9a104fa6ee22ecdfa7e8253532e5ea47e2e4cb4a',
         'linux', 'x64'),
     # From https://chromium.googlesource.com/chromium/src/buildtools/+/refs/heads/master/win/clang-format.exe.sha1
     Dependency(
         'third_party/clang-format/clang-format.exe',
-        'https://storage.googleapis.com/chromium-clang-format/2e569921b9884daf157021d6ae9e21991cd6cf81',
-        '2227376ada89ea832995b832222b722a27c4d5d8d59e9c4d7842877f99a1e30d',
+        'https://storage.googleapis.com/chromium-clang-format/565cab9c66d61360c27c7d4df5defe1a78ab56d3',
+        '5557943a174e3b67cdc389c10b0ceea2195f318c5c665dd77a427ed01a094557',
         'windows', 'x64'),
 
     # Keep the SHA1 in sync with |clang_format_rev| in chromium //buildtools/DEPS.
     Dependency(
         'buildtools/clang_format/script',
         'https://chromium.googlesource.com/external/github.com/llvm/llvm-project/clang/tools/clang-format.git',
-        'f97059df7f8b205064625cdb5f97b56668a125ef', 'all', 'all'),
+        '37f6e68a107df43b7d7e044fd36a13cbae3413f2', 'all', 'all'),
 
     # Ninja
     Dependency(
@@ -165,13 +166,13 @@ BUILD_DEPS_TOOLCHAIN_HOST = [
     # tools/clang/scripts/update.py.
     Dependency(
         'buildtools/linux64/clang.tgz',
-        'https://commondatastorage.googleapis.com/chromium-browser-clang/Linux_x64/clang-llvmorg-18-init-17730-gf670112a-5.tgz',
-        'ce6201b728ea485d4b116aa3b5e8ae3b34ee2775f25924c5714fdbe42fb2b787',
+        'https://commondatastorage.googleapis.com/chromium-browser-clang/Linux_x64/clang-llvmorg-19-init-2941-ga0b3dbaf-22.tgz',
+        '6741cc1083f935795330b6e04617ac891a7b5d2b5647b664c5b0fccc354adb43',
         'linux', 'x64'),
     Dependency(
         'buildtools/win/clang.tgz',
-        'https://commondatastorage.googleapis.com/chromium-browser-clang/Win/clang-llvmorg-18-init-17730-gf670112a-5.tgz',
-        '972011cc8a5bc5d5fbe08773089058a264ee0e19af019df28f0972ee9bd0493f',
+        'https://commondatastorage.googleapis.com/chromium-browser-clang/Win/clang-llvmorg-19-init-2941-ga0b3dbaf-22.tgz',
+        'f627080ed53d4c156f089323e04fa3690c8bb459110b62cd1952b0e1f0755987',
         'windows', 'x64'),
 ]
 
@@ -182,11 +183,20 @@ BUILD_DEPS_HOST = [
         'https://android.googlesource.com/platform/external/googletest.git',
         '609281088cfefc76f9d0ce82e1ff6c30cc3591e5', 'all', 'all'),
 
-    # Keep in sync with Chromium's //third_party/protobuf.
+    # Keep in sync with gRPC's third_party/protobuf.
     Dependency(
         'buildtools/protobuf',
         'https://chromium.googlesource.com/external/github.com/protocolbuffers/protobuf.git',
-        'fe271ab76f2ad2b2b28c10443865d2af21e27e0e',  # refs/tags/v3.20.3
+        '74211c0dfc2777318ab53c2cd2c317a2ef9012de',  # refs/tags/v31.1
+        'all',
+        'all'),
+
+    # Required by protobuf v22+ and gRPC. It's not allowed in our repo beyond
+    # the usage by those deps.
+    Dependency(
+        'buildtools/abseil-cpp',
+        'https://chromium.googlesource.com/external/github.com/abseil/abseil-cpp.git',
+        '76bb24329e8bf5f39704eb10d21b9a80befa7c81',  # 20250512.1
         'all',
         'all'),
 
@@ -195,15 +205,15 @@ BUILD_DEPS_HOST = [
     Dependency(
         'buildtools/libcxx',
         'https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx.git',
-        'f8571eaba606bde2eb8cd34b30104ca33e7c207e', 'all', 'all'),
+        '852bc6746f45add53fec19f3a29280e69e358d44', 'all', 'all'),
     Dependency(
         'buildtools/libcxxabi',
         'https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxxabi.git',
-        '8dd405113a4f3694e910b79785dd7fb7535a888a', 'all', 'all'),
+        'a37a3aa431f132b02a58656f13984d51098330a2', 'all', 'all'),
     Dependency(
         'buildtools/libunwind',
         'https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libunwind.git',
-        'aabcd8753678f1536e15eb6385a948470debdae4', 'all', 'all'),
+        '419b03c0b8f20d6da9ddcb0d661a94a97cdd7dad', 'all', 'all'),
 
     # Keep in sync with chromium DEPS.
     Dependency(
@@ -232,13 +242,13 @@ BUILD_DEPS_HOST = [
     # If updating the version, also update bazel/deps.bzl.
     Dependency(
         'buildtools/sqlite.zip',
-        'https://storage.googleapis.com/perfetto/sqlite-amalgamation-3390200.zip',
-        '87775784f8b22d0d0f1d7811870d39feaa7896319c7c20b849a4181c5a50609b',
+        'https://storage.googleapis.com/perfetto/sqlite-amalgamation-3500300.zip',
+        '9ad6d16cbc1df7cd55c8b55127c82a9bca5e9f287818de6dc87e04e73599d754',
         'all', 'all'),
     Dependency(
         'buildtools/sqlite_src',
         'https://chromium.googlesource.com/external/github.com/sqlite/sqlite.git',
-        '202b2a7b54ea2dd13a8a5adfd75523abe4dcf17f',  # refs/tags/version-3.39.2.
+        'a4643b451a2941f5e6965ab095d3057bc7cb2222',  # refs/tags/version-3.50.3.
         'all',
         'all'),
 
@@ -252,6 +262,15 @@ BUILD_DEPS_HOST = [
         'all',
         'all'),
 
+    # Libexpat for Instruments XML import.
+    # If updating the version, also update bazel/deps.bzl.
+    Dependency(
+        'buildtools/expat/src',
+        'https://chromium.googlesource.com/external/github.com/libexpat/libexpat.git',
+        'fa75b96546c069d17b8f80d91e0f4ef0cde3790d',  # refs/tags/upstream/R_2_6_2.
+        'all',
+        'all'),
+
     # Archive with only the demangling sources from llvm-project.
     # See tools/repackage_llvm_demangler.sh on how to update this.
     # File suffix is the git reference to the commit at which we rearchived the
@@ -259,8 +278,8 @@ BUILD_DEPS_HOST = [
     # If updating the version, also update bazel/deps.bzl.
     Dependency(
         'buildtools/llvm-project.tgz',
-        'https://storage.googleapis.com/perfetto/llvm-project-3b4c59c156919902c785ce3cbae0eee2ee53064d.tgz',
-        'f4a52e7f36edd7cacc844d5ae0e5f60b6f57c5afc40683e99f295886c9ce8ff4',
+        'https://storage.googleapis.com/perfetto/llvm-project-617a15a9eac96088ae5e9134248d8236e34b91b1.tgz',
+        '7e2541446a27f2a09a84520da7bc93cd71749ba0f17318f2d5291fbf45b97956',
         'all', 'all'),
 
     # These dependencies are for libunwindstack, which is used by src/profiling.
@@ -294,9 +313,10 @@ BUILD_DEPS_HOST = [
     # Zlib used both in the tracing binaries, as well as the trace processor and
     # assorted tools.
     # If updating the version, also update bazel/deps.bzl.
-    Dependency('buildtools/zlib',
-               'https://android.googlesource.com/platform/external/zlib.git',
-               '6d3f6aa0f87c9791ca7724c279ef61384f331dfd', 'all', 'all'),
+    Dependency(
+        'buildtools/zlib',
+        'https://chromium.googlesource.com/chromium/src/third_party/zlib.git',
+        '6f9b4e61924021237d474569027cfb8ac7933ee6', 'all', 'all'),
 
     # Linenoise, used only by trace_processor in standalone builds.
     # If updating the version, also update bazel/deps.bzl.
@@ -310,35 +330,75 @@ BUILD_DEPS_HOST = [
         'https://storage.googleapis.com/perfetto/bloaty-1.1-b3b829de35babc2fe831b9488ad2e50bca939412-mac.zip',
         '2d301bd72a20e3f42888c9274ceb4dca76c103608053572322412c2c65ab8cb8',
         'darwin', 'all'),
+    Dependency(
+        'buildtools/open_csd',
+        'https://android.googlesource.com/platform/external/OpenCSD.git',
+        '0ce01e934f95efb6a216a6efa35af1245151c779', 'all', 'all'),
+]
+
+# Dependencies required to build code on the host using Bazel build system.
+# Only macOS and Linux.
+BUILD_DEPS_BAZEL = [
+    Dependency(
+        'buildtools/mac/bazel',
+        'https://github.com/bazelbuild/bazel/releases/download/8.5.0/bazel-8.5.0-darwin-x86_64',
+        '84e1b822b6d076151a9a5b7a962e8230f565a17207196056bfe35303077b8147',
+        'darwin', 'x64'),
+    Dependency(
+        'buildtools/mac/bazel',
+        'https://github.com/bazelbuild/bazel/releases/download/8.5.0/bazel-8.5.0-darwin-arm64',
+        'a89f446641ab1cce603691cb7030865d1fb014e260ee5710615516e3cacd2414',
+        'darwin', 'arm64'),
+    Dependency(
+        'buildtools/linux64/bazel',
+        'https://github.com/bazelbuild/bazel/releases/download/8.5.0/bazel-8.5.0-linux-x86_64',
+        '18255229d933b8da10151bdef223a302744296b09af8af1988c93faa1ea3c71f',
+        'linux', 'x64'),
+    Dependency(
+        'buildtools/linux64/bazel',
+        'https://github.com/bazelbuild/bazel/releases/download/8.5.0/bazel-8.5.0-linux-arm64',
+        '0c455abf42814ac53539ddd8147249a11b9e05c7dc83dbd6c8dfac1aec243d85',
+        'linux', 'arm64'),
 ]
 
 # Dependencies required to build Android code.
 # URLs and SHA1s taken from:
 # - https://dl.google.com/android/repository/repository-11.xml
 # - https://dl.google.com/android/repository/sys-img/android/sys-img.xml
+# - https://dl.google.com/android/repository/repository2-2.xml
 BUILD_DEPS_ANDROID = [
     # Android NDK
     Dependency(
         'buildtools/ndk.zip',
-        'https://dl.google.com/android/repository/android-ndk-r21e-darwin-x86_64.zip',
-        '437278103a3db12632c05b1be5c41bbb8522791a67e415cc54411a65366f499d',
+        'https://dl.google.com/android/repository/android-ndk-r26c-darwin.zip',
+        '312756dfcbdbf389d35d651e17ca98683bd36cb83cc7bf7ad51cac5c06bd064b',
         'darwin', 'all'),
     Dependency(
         'buildtools/ndk.zip',
-        'https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip',
-        'ad7ce5467e18d40050dc51b8e7affc3e635c85bd8c59be62de32352328ed467e',
+        'https://dl.google.com/android/repository/android-ndk-r26c-linux.zip',
+        '6d6e659834d28bb24ba7ae66148ad05115ebbad7dabed1af9b3265674774fcf6',
         'linux', 'x64'),
+    # Android Java SDK.
+    Dependency(
+        'buildtools/android_sdk/platforms/android-35.zip',
+        'https://dl.google.com/android/repository/platform-35_r02.zip',
+        '0988cacad01b38a18a47bac14a0695f246bc76c1b06c0eeb8eb0dc825ab0c8e0',
+        'all', 'all'),
+    # Android build tools.
+    Dependency(
+        'buildtools/android_sdk/build-tools/35.0.1.zip',
+        'https://dl.google.com/android/repository/build-tools_r35.0.1_linux.zip',
+        '5993499f3229a021b89f87088c57242aeefaa62316bf3d69da7de40bfd5350f1',
+        'linux', 'all'),
+    Dependency(
+        'buildtools/android_sdk/build-tools/35.0.1.zip',
+        'https://dl.google.com/android/repository/build-tools_r35.0.1_macosx.zip',
+        'c01e4b763da96ae5ef67e8bdf2abc94fb6cb3e73a42209581feb6a7019a51b9c',
+        'darwin', 'all'),
 ]
 
 # Dependencies required to run Android tests.
 TEST_DEPS_ANDROID = [
-    # Android emulator images.
-    Dependency(
-        'buildtools/aosp-arm.zip',
-        'https://storage.googleapis.com/perfetto/aosp-02022018-arm.zip',
-        'f5c7a3a22ad7aa0bd14ba467e8697e1e917d306699bd25622aa4419a413b9b67',
-        'all', 'all'),
-
     # platform-tools.zip contains adb binaries.
     Dependency(
         'buildtools/android_sdk/platform-tools.zip',
@@ -350,7 +410,16 @@ TEST_DEPS_ANDROID = [
         'https://dl.google.com/android/repository/platform-tools_r26.0.0-linux.zip',
         '90208207521d85abf0d46e3374aa4e04b7aff74e4f355c792ac334de7a77e50b',
         'linux', 'x64'),
+]
 
+# Emulators required to run Android tests.
+EMULATOR_DEPS_ANDROID = [
+    # Android emulator images.
+    Dependency(
+        'buildtools/aosp-arm.zip',
+        'https://storage.googleapis.com/perfetto/aosp-02022018-arm.zip',
+        'f5c7a3a22ad7aa0bd14ba467e8697e1e917d306699bd25622aa4419a413b9b67',
+        'all', 'all'),
     # Android emulator binaries.
     Dependency(
         'buildtools/emulator',
@@ -361,33 +430,38 @@ TEST_DEPS_ANDROID = [
 # This variable is updated by tools/roll-catapult-trace-viewer.
 CATAPULT_SHA256 = 'b30108e05268ce6c65bb4126b65f6bfac165d17f5c1fd285046e7e6fd76c209f'
 
-TYPEFACES_SHA256 = '1065172aaf0e9c22bc4f206ed9fdf5f1b4355d233fb21f9f26a89cd66c941940'
+TYPEFACES_SHA256 = 'a26274ca7c3d97a37c29de0ffa5c41a8d6431fc8e07ecdd5856dde143999dcd3'
 
 UI_DEPS = [
     Dependency(
         'buildtools/mac/nodejs.tgz',
-        'https://storage.googleapis.com/chromium-nodejs/16.13.0/31859fc1fa0994a95f44f09c367d6ff63607cfde',
-        'd9cf1f36b16e08ce52cfbdef427c6596eed2bd2f3608a79112d25b4ec8f75753',
+        'https://storage.googleapis.com/chromium-nodejs/20.11.0/5b5681e12a21cda986410f69e03e6220a21dd4d2',
+        'cecb99fbb369a9090dddc27e228b66335cd72555b44fa8839ef78e56c51682c5',
         'darwin', 'arm64'),
     Dependency(
         'buildtools/mac/nodejs.tgz',
-        'https://storage.googleapis.com/chromium-nodejs/16.13.0/16dfd094763b71988933a31735f9dea966f9abd6',
-        '065ced7e93f0e26276cb74d9688706674323865c4a8fc89e4adfa6868d4ebb4d',
+        'https://storage.googleapis.com/chromium-nodejs/20.11.0/e3c0fd53caae857309815f3f8de7c2dce49d7bca',
+        '20affacca2480c368b75a1d91ec1a2720604b325207ef0cf39cfef3c235dad19',
         'darwin', 'x64'),
     Dependency(
         'buildtools/linux64/nodejs.tgz',
-        'https://storage.googleapis.com/chromium-nodejs/16.13.0/ab9544e24e752d3d17f335fb7b2055062e582d11',
-        '3b5ca150a55f3aadfa18f3a10a4495aaf9653614ba3e460647170fef5287ec4f',
+        'https://storage.googleapis.com/chromium-nodejs/20.11.0/f9a337cfa0e2b92d3e5c671c26b454bd8e99769e',
+        '0ba9cc91698c1f833a1fdc1fe0cb392d825ad484c71b0d84388ac80bfd3d6079',
         'linux', 'x64'),
     Dependency(
         'buildtools/mac/emsdk.tgz',
-        'https://storage.googleapis.com/perfetto/emscripten-2.0.12-mac.tgz',
-        'aa125f8c8ff8a386d43e18c8ea0c98c875cc19160a899403e8967a5478f96f31',
-        'darwin', 'all'),
+        'https://storage.googleapis.com/perfetto/emscripten-4.0.8-mac.tgz',
+        '2682c43580ae2265b4c7f3c7963629f7f501eb24a8ffa01be0059f9f5b3b8cd0',
+        'darwin', 'arm64'),
+    Dependency(
+        'buildtools/mac/emsdk.tgz',
+        'https://storage.googleapis.com/perfetto/emscripten-4.0.8-mac-x64.tgz',
+        'e1b2e6d4797338ed884f9d8a8419f93fc42cfcdea5e8a8b29fe13c6fd3fe7f7a',
+        'darwin', 'x64'),
     Dependency(
         'buildtools/linux64/emsdk.tgz',
-        'https://storage.googleapis.com/perfetto/emscripten-2.0.12-linux.tgz',
-        'bfff9fb0326363c12e19b542f27a5f12cedbfc310f30621dc497c9af51d2d2e3',
+        'https://storage.googleapis.com/perfetto/emscripten-4.0.8-linux.tgz',
+        '2fd3e39b5e233bad39799c31029b6d6d5295135cb00c1bb2fd9a4b2c4b7c264b',
         'linux', 'x64'),
     Dependency(
         'buildtools/catapult_trace_viewer.tgz',
@@ -397,7 +471,6 @@ UI_DEPS = [
         'buildtools/typefaces.tgz',
         'https://storage.googleapis.com/perfetto/typefaces-%s.tar.gz' %
         TYPEFACES_SHA256, TYPEFACES_SHA256, 'all', 'all'),
-
     Dependency(
         'third_party/pnpm/pnpm',
         'https://storage.googleapis.com/perfetto/pnpm-linux-arm64-8.6.3',
@@ -421,11 +494,23 @@ UI_DEPS = [
 ]
 
 # Dependencies to build gRPC.
-GRPC_DEPS = [
+BIGTRACE_DEPS = [
     Dependency(
         'buildtools/grpc/src',
         'https://chromium.googlesource.com/external/github.com/grpc/grpc.git',
-        '6943c1841f57cac4666b165aea4f618fe73b3ff1', 'all', 'all', True),
+        'f5ffb68d8a2fd603dff16287e90a4ac571e1fec6', 'all', 'all',
+        True),  # v1.76.0
+    Dependency('buildtools/cpp-httplib',
+               'https://github.com/yhirose/cpp-httplib.git',
+               '6c3e8482f7b4e3b307bb42afbb85fd8771da86b8', 'all', 'all', True)
+]
+
+# Dependencies to build Rust SDK.
+BUILD_DEPS_RUST = [
+    Dependency(
+        'buildtools/rustup/rustup-init.sh', 'https://sh.rustup.rs',
+        '17247e4bcacf6027ec2e11c79a72c494c9af69ac8d1abcc1b271fa4375a106c2',
+        'all', 'all'),
 ]
 
 # Sysroots required to cross-compile Linux targets (linux-arm{,64}).
@@ -444,14 +529,26 @@ BUILD_DEPS_LINUX_CROSS_SYSROOTS = [
 ]
 
 ALL_DEPS = (
-    BUILD_DEPS_HOST + BUILD_DEPS_ANDROID + BUILD_DEPS_LINUX_CROSS_SYSROOTS +
-    TEST_DEPS_ANDROID + UI_DEPS)
+    BUILD_DEPS_HOST + BUILD_DEPS_BAZEL + BUILD_DEPS_ANDROID +
+    BUILD_DEPS_LINUX_CROSS_SYSROOTS + TEST_DEPS_ANDROID +
+    EMULATOR_DEPS_ANDROID + UI_DEPS + BUILD_DEPS_RUST)
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UI_DIR = os.path.join(ROOT_DIR, 'ui')
 TOOLS_DIR = os.path.join(ROOT_DIR, 'tools')
 NODE_MODULES_STATUS_FILE = os.path.join(UI_DIR, 'node_modules', '.last_install')
+PYTHON_VENV_DIR = os.path.join(ROOT_DIR, '.venv')
+PYTHON_VENV_BIN_DIR = os.path.join(
+    PYTHON_VENV_DIR, 'bin') if sys.platform != 'win32' else os.path.join(
+        PYTHON_VENV_DIR, 'Scripts')
+PYTHON_STATUS_FILE = os.path.join(PYTHON_VENV_DIR, '.last_install')
+PYTHON_REQUIREMENTS = os.path.join(ROOT_DIR, 'python', 'requirements.txt')
 TEST_DATA_SCRIPT = os.path.join(TOOLS_DIR, 'test_data')
+RUST_TOOLCHAIN = os.environ.get("RUST_TOOLCHAIN", "nightly-2025-01-03")
+RUSTUP_HOME = os.path.join(ROOT_DIR, 'buildtools/rustup')
+RUSTUP_INIT_FILE = os.path.join(RUSTUP_HOME, 'rustup-init.sh')
+CARGO_HOME = os.path.join(ROOT_DIR, '.cargo')
+RUSTUP_FILE = os.path.join(CARGO_HOME, 'bin/rustup')
 
 
 def CheckCallRetry(*args, **kwargs):
@@ -509,14 +606,31 @@ def HashLocalFile(path):
 
 
 def ExtractZipfilePreservePermissions(zf, info, path):
-  zf.extract(info.filename, path=path)
   target_path = os.path.join(path, info.filename)
+  mode = info.external_attr >> 16
+  S_IFLNK = 0o120000  # symbolic link
+  if (mode & S_IFLNK) == S_IFLNK:
+    dst = zf.read(info).decode()
+    os.symlink(dst, target_path)
+    return
+  zf.extract(info.filename, path=path)
   min_acls = 0o755 if info.filename.endswith('/') else 0o644
-  os.chmod(target_path, (info.external_attr >> 16) | min_acls)
+  os.chmod(target_path, mode | min_acls)
 
 
 def IsGitRepoCheckoutOutAtRevision(path, revision):
-  return ReadFile(os.path.join(path, '.git', 'HEAD')) == revision
+  # Use git rev-parse instead of reading .git/HEAD directly.
+  # Newer git versions (2.45+) use the reftable backend where HEAD doesn't
+  # contain the raw SHA in detached HEAD state.
+  if not os.path.isdir(os.path.join(path, '.git')):
+    return False
+  try:
+    actual = subprocess.check_output(
+        ['git', 'rev-parse', 'HEAD'], cwd=path,
+        stderr=subprocess.DEVNULL).decode().strip()
+    return actual == revision
+  except subprocess.CalledProcessError:
+    return False
 
 
 def RmtreeIfExists(path):
@@ -568,13 +682,54 @@ def CheckoutGitRepo(path, git_url, revision, check_only):
   return True
 
 
+def ApplyProtobufPatches(protobuf_path):
+  """Apply patches to protobuf for Windows clang-cl compatibility.
+
+  Windows clang-cl builds fail because MSVC's STL std::atomic doesn't support
+  constexpr construction, but protobuf uses [[clang::require_constant_initialization]].
+  See https://github.com/protocolbuffers/protobuf/issues/10159
+
+  TODO(lalitm): Remove this patch when protobuf is upgraded to a version that
+  fixes the upstream issue.
+  """
+  port_def_path = os.path.join(protobuf_path,
+                               'src/google/protobuf/port_def.inc')
+  if not os.path.exists(port_def_path):
+    return
+
+  with open(port_def_path, 'r') as f:
+    content = f.read()
+
+  # Check if already patched
+  if 'defined(_MSC_VER) && defined(__clang__)' in content:
+    return
+
+  # Find the line to patch: "#if defined(_MSC_VER) && !defined(__clang__)"
+  old_line = '#if defined(_MSC_VER) && !defined(__clang__)'
+  new_block = '''// Windows clang-cl: MSVC STL's std::atomic doesn't support constexpr
+// construction, which breaks [[clang::require_constant_initialization]].
+// See https://github.com/protocolbuffers/protobuf/issues/10159
+#if defined(_MSC_VER) && defined(__clang__)
+#  define PROTOBUF_CONSTINIT
+#  define PROTOBUF_CONSTEXPR constexpr
+#elif defined(_MSC_VER) && !defined(__clang__)'''
+
+  if old_line in content:
+    content = content.replace(old_line, new_block, 1)
+    with open(port_def_path, 'w') as f:
+      f.write(content)
+    logging.info('Applied Windows clang-cl patch to protobuf port_def.inc')
+
+
 def InstallNodeModules(force_clean=False):
   if force_clean:
     node_modules = os.path.join(UI_DIR, 'node_modules')
     logging.info('Clearing %s', node_modules)
     subprocess.check_call(['git', 'clean', '-qxffd', node_modules],
                           cwd=ROOT_DIR)
-  logging.info("Running `pnpm install --shamefully-hoist --frozen-lockfile` in {0}".format(UI_DIR))
+  logging.info(
+      "Running `pnpm install --shamefully-hoist --frozen-lockfile` in {0}"
+      .format(UI_DIR))
 
   # Some node modules have postinstall scripts (already bad) but worse
   # sometimes they are in the form: "postinstall: 'node ./scripts/foo'"
@@ -584,12 +739,11 @@ def InstallNodeModules(force_clean=False):
   env['PATH'] = TOOLS_DIR + ':' + env['PATH']
 
   subprocess.check_call([
-    os.path.join(TOOLS_DIR, 'pnpm'),
-    'install',
-    '--shamefully-hoist',
-    '--frozen-lockfile'],
-    cwd=UI_DIR,
-    env=env)
+      os.path.join(TOOLS_DIR, 'pnpm'), 'install', '--shamefully-hoist',
+      '--frozen-lockfile'
+  ],
+                        cwd=UI_DIR,
+                        env=env)
   # pbjs has the bad habit of installing extra packages on its first
   # run. Run it here, so we avoid fetches while building.
   pbjs = ['node_modules/.bin/pbjs', '/dev/null', '-o', '/dev/null']
@@ -610,6 +764,105 @@ def CheckNodeModules():
     actual = f.read()
   expected = HashLocalFile(os.path.join(UI_DIR, 'pnpm-lock.yaml'))
   return expected == actual
+
+
+def InstallRustToolchain(force_clean=False):
+  if force_clean:
+    logging.info('Clearing %s', RUSTUP_HOME)
+    subprocess.check_call(
+        ['git', 'clean', '-qxffd', RUSTUP_HOME, '--exclude=rustup-init.sh'],
+        cwd=ROOT_DIR)
+    logging.info('Clearing %s', CARGO_HOME)
+    subprocess.check_call(['git', 'clean', '-qxffd', CARGO_HOME], cwd=ROOT_DIR)
+
+  cmd = [
+      'sh', RUSTUP_INIT_FILE, '-y', f'--default-toolchain={RUST_TOOLCHAIN}',
+      '--no-modify-path', '--profile=minimal', '--component=rustfmt,clippy'
+  ]
+  env = os.environ.copy()
+  env['RUSTUP_HOME'] = RUSTUP_HOME
+  env['CARGO_HOME'] = CARGO_HOME
+  logging.info(f'Installing rust toolchain using `{" ".join(cmd)}`')
+  subprocess.check_call(cmd, cwd=ROOT_DIR, env=env)
+
+
+def CheckRustToolchain():
+  """Returns True if the toolchain is up-to-date.
+
+  Checks if Rust toolchains are up to date using `rustup check`
+  and returns True if up to date, False otherwise.
+  """
+  if not os.path.exists(RUSTUP_FILE):
+    return False
+
+  # Run rustup check and capture its output and exit code.
+  env = os.environ.copy()
+  env['RUSTUP_HOME'] = RUSTUP_HOME
+  env['CARGO_HOME'] = CARGO_HOME
+  result = subprocess.run([RUSTUP_FILE, "check"],
+                          capture_output=True,
+                          text=True,
+                          check=False)
+  if result.returncode == 0:
+    if "update available" not in result.stdout.lower(
+    ) and "update available" not in result.stderr.lower():
+      return True
+  logging.info("rustup check stdout:")
+  logging.info(result.stdout)
+  logging.info("rustup check stderr:")
+  logging.info(result.stderr)
+  logging.info(f"rustup check exit code: {result.returncode}")
+  return False
+
+
+def CheckPythonVenv():
+  """Returns True if the python venv is up-to-date."""
+  if not os.path.exists(PYTHON_STATUS_FILE):
+    return False
+  with open(PYTHON_STATUS_FILE, 'r') as f:
+    actual = f.read()
+  expected = HashLocalFile(PYTHON_REQUIREMENTS)
+  if expected != actual:
+    return False
+  # The venv can be invalidated if the version of python in the system is
+  # upgraded. Detect that by trying to find its own pip.
+  venv_python_exe = 'python3' if sys.platform != 'win32' else 'python'
+  venv_python = os.path.join(PYTHON_VENV_BIN_DIR, venv_python_exe)
+  cmd = [venv_python, '-c', 'import pip']
+  if subprocess.call(cmd, stderr=subprocess.DEVNULL) != 0:
+    logging.warning('The python venv is stale due an upgrade of the system ' +
+                    'python package and needs regeneration')
+    return False
+  return True
+
+
+def InstallPythonVenv():
+  venv_pip = os.path.join(PYTHON_VENV_BIN_DIR, 'pip3')
+  # Do not use sys.executable since that binary might live in the venv dir
+  # we're about to remove right below.
+  python_interpreter = 'python3' if sys.platform != 'win32' else 'python3.exe'
+
+  shutil.rmtree(PYTHON_VENV_DIR, ignore_errors=True)
+  cmd = [python_interpreter, '-m', 'venv', PYTHON_VENV_DIR]
+  logging.info(f'Installing python venv {" ".join(cmd)}')
+  subprocess.check_call(cmd)
+  cmd = [venv_pip, 'install', '-r', PYTHON_REQUIREMENTS]
+  logging.info(f'Updating python packages {" ".join(cmd)}')
+  if subprocess.call(cmd) != 0:
+    if shutil.which("gpkg"):
+      # Give actionable instructions to Googlers on how to go/corp-airlock.
+      print(
+          '''\033[33m
++---------------------------------------------------------+
+| venv installation failed, likely due to go/corp-airlock |
+| Run `gcert && gpkg setup` and try again                 |
++---------------------------------------------------------+
+\033[0m''',
+          file=sys.stderr)
+    sys.exit(1)
+
+  with open(PYTHON_STATUS_FILE, 'w') as f:
+    f.write(HashLocalFile(PYTHON_REQUIREMENTS))
 
 
 def CheckHashes():
@@ -646,6 +899,10 @@ def CheckDepotToolsIsRecent():
 def Main():
   parser = argparse.ArgumentParser()
   parser.add_argument(
+      '--bazel',
+      action='store_true',
+      help='Bazel build tool executable to build the project using Bazel')
+  parser.add_argument(
       '--android',
       action='store_true',
       help='NDK and emulator images target_os="android"')
@@ -665,6 +922,10 @@ def Main():
   parser.add_argument(
       '--no-toolchain', help='Do not download toolchain', action='store_true')
   parser.add_argument(
+      '--no-dev-tools',
+      help='Some tools are required exclusively when changing the source code (they are not required when just building it, e.g. in CI). Do not install those tools',
+      action='store_true')
+  parser.add_argument(
       '--build-os',
       default=system().lower(),
       choices=['windows', 'darwin', 'linux'],
@@ -674,6 +935,8 @@ def Main():
       default=GetArch(),
       choices=['arm64', 'x64'],
       help='Override the autodetected build CPU architecture')
+  parser.add_argument(
+      '--rust', action='store_true', help='Rust toolchain to build Rust SDK')
   args = parser.parse_args()
   if args.verify:
     CheckHashes()
@@ -690,16 +953,26 @@ def Main():
   deps = BUILD_DEPS_HOST
   if not args.no_toolchain:
     deps += BUILD_DEPS_TOOLCHAIN_HOST
+  if args.bazel:
+    # We build Android Java SDK using Bazel, so we need Android build and test
+    # deps to do build ":all" targets and run tests.
+    # We don't run Bazel Android tests on the prebuilt emulator, so we don't
+    # need emulator deps.
+    deps += BUILD_DEPS_BAZEL + BUILD_DEPS_ANDROID + TEST_DEPS_ANDROID
   if args.android:
-    deps += BUILD_DEPS_ANDROID + TEST_DEPS_ANDROID
+    deps += BUILD_DEPS_ANDROID + TEST_DEPS_ANDROID + EMULATOR_DEPS_ANDROID
   if args.linux_arm:
     deps += BUILD_DEPS_LINUX_CROSS_SYSROOTS
   if args.ui:
     deps += UI_DEPS
+  # TODO(b/360084012) Change the arg name to bigtrace
   if args.grpc:
-    deps += GRPC_DEPS
+    deps += BIGTRACE_DEPS
+  if args.rust:
+    deps += BUILD_DEPS_RUST
   deps_updated = False
   nodejs_updated = False
+  rustup_updated = False
 
   for old_dir in CLEANUP_OLD_DIRS:
     RmtreeIfExists(os.path.join(ROOT_DIR, old_dir))
@@ -716,10 +989,16 @@ def Main():
     if dep.source_url.endswith('.git'):
       deps_updated |= CheckoutGitRepo(local_path, dep.source_url, dep.checksum,
                                       args.check_only)
+      # Apply patches for specific dependencies
+      if 'protobuf' in dep.target_folder and not args.check_only:
+        ApplyProtobufPatches(local_path)
       continue
-    is_compressed = any([local_path.endswith(ext) for ext in ['.zip', '.tgz', '.tbz2']])
-    compressed_target_dir = os.path.splitext(local_path)[0] if is_compressed else None
-    compressed_dir_stamp = os.path.join(compressed_target_dir, '.stamp') if is_compressed else None
+    is_compressed = any(
+        [local_path.endswith(ext) for ext in ['.zip', '.tgz', '.tbz2']])
+    compressed_target_dir = os.path.splitext(
+        local_path)[0] if is_compressed else None
+    compressed_dir_stamp = os.path.join(compressed_target_dir,
+                                        '.stamp') if is_compressed else None
 
     if ((not is_compressed and HashLocalFile(local_path) == dep.checksum) or
         (is_compressed and ReadFile(compressed_dir_stamp) == dep.checksum)):
@@ -742,18 +1021,23 @@ def Main():
       shutil.move(download_path, local_path)
       if 'nodejs' in dep.target_folder:
         nodejs_updated = True
+      if 'rustup' in dep.target_folder:
+        rustup_updated = True
 
     assert (HashLocalFile(local_path) == dep.checksum)
 
     if is_compressed:
-      logging.info('Extracting %s into %s' % (local_path, compressed_target_dir))
-      assert (os.path.commonprefix((ROOT_DIR, compressed_target_dir)) == ROOT_DIR)
+      logging.info('Extracting %s into %s' %
+                   (local_path, compressed_target_dir))
+      assert (os.path.commonprefix(
+          (ROOT_DIR, compressed_target_dir)) == ROOT_DIR)
       RmtreeIfExists(compressed_target_dir)
 
       # Decompress the archive.
       if local_path.endswith('.tgz'):
         MkdirRecursive(compressed_target_dir)
-        subprocess.check_call(['tar', '-oxf', local_path], cwd=compressed_target_dir)
+        subprocess.check_call(['tar', '-oxf', local_path],
+                              cwd=compressed_target_dir)
       elif local_path.endswith('.zip'):
         with zipfile.ZipFile(local_path, 'r') as zf:
           for info in zf.infolist():
@@ -764,7 +1048,8 @@ def Main():
           with bz2.open(local_path, 'r') as bf:
             f.write(bf.read())
         MkdirRecursive(compressed_target_dir)
-        subprocess.check_call(['tar', '-oxf', tar_path], cwd=compressed_target_dir)
+        subprocess.check_call(['tar', '-oxf', tar_path],
+                              cwd=compressed_target_dir)
 
       # If the zip contains one root folder, rebase one level up moving all
       # its sub files and folders inside |target_dir|.
@@ -787,6 +1072,31 @@ def Main():
       deps_updated |= not CheckNodeModules()
     else:
       InstallNodeModules(force_clean=nodejs_updated)
+
+  if not args.no_dev_tools:
+    # Check the python venv
+    venv_needs_update = not CheckPythonVenv()
+    if args.check_only:
+      deps_updated |= venv_needs_update
+    elif venv_needs_update:
+      InstallPythonVenv()
+
+  if args.rust:
+    if args.check_only:
+      deps_updated |= not CheckRustToolchain()
+    else:
+      InstallRustToolchain(force_clean=rustup_updated)
+
+  # Install the pre-push hook if the .git/hooks directory exists and it's a
+  # non check-only invocation. Not on windows (symlinks are not supported
+  # there).
+  if sys.platform != 'win32':
+    git_hook_dir = os.path.join(ROOT_DIR, '.git', 'hooks')
+    if not args.check_only and os.path.exists(git_hook_dir):
+      git_hook_path = os.path.join(git_hook_dir, 'pre-push')
+      if not os.path.exists(git_hook_path):
+        tools_hook_path = os.path.join(ROOT_DIR, 'tools', 'run_presubmit')
+        os.symlink(tools_hook_path, git_hook_path)
 
   cur_python_interpreter = sys.executable
   test_data_synced = 0 == subprocess.call([

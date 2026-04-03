@@ -17,17 +17,34 @@ limitations under the License.
 
 #include "tensorflow/core/tpu/graph_rewrite/distributed_tpu_rewrite_helpers.h"
 
+#include <algorithm>
+#include <functional>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
+#include "xla/status_macros.h"
+#include "xla/tsl/platform/errors.h"
 #include "tensorflow/core/common_runtime/device_set.h"
-#include "tensorflow/core/tpu/tpu_defs.h"
+#include "tensorflow/core/framework/device.h"
+#include "tensorflow/core/framework/node_def.pb.h"
+#include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/graph/graph.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/status.h"
+#include "tensorflow/core/platform/strcat.h"
+#include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/util/device_name_utils.h"
 
 namespace tensorflow {
 
 // LINT.IfChange
-Status DistributedTPURewriteHelpers::GetSystemDevice(
-    const string& system_spec_string, const DeviceSet& device_set,
+absl::Status DistributedTPURewriteHelpers::GetSystemDevice(
+    const std::string& system_spec_string, const DeviceSet& device_set,
     DeviceNameUtils::ParsedName* system_spec, Device** system_device) {
   if (!DeviceNameUtils::ParseFullName(system_spec_string, system_spec)) {
     system_spec->Clear();
@@ -55,7 +72,7 @@ Status DistributedTPURewriteHelpers::GetSystemDevice(
                                    system_spec_string, "'");
   } else if (system_devices.size() > 1) {
     // Validate that all system devices are part of the same job.
-    std::unordered_set<string> job_names;
+    std::unordered_set<std::string> job_names;
     for (auto device : system_devices) {
       const auto& parsed_name = device->parsed_name();
       TF_RET_CHECK(parsed_name.has_job);
@@ -65,7 +82,7 @@ Status DistributedTPURewriteHelpers::GetSystemDevice(
       return errors::InvalidArgument(
           "System devices cannot be part "
           "of multiple different jobs.  Found: ",
-          str_util::Join(job_names, ","));
+          absl::StrJoin(job_names, ","));
     }
 
     // Identify the lexicographically first device from the list of
@@ -88,12 +105,12 @@ Status DistributedTPURewriteHelpers::GetSystemDevice(
                                    (*system_device)->name(),
                                    " as a device spec.");
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 // LINT.ThenChange(//tensorflow/compiler/mlir/tensorflow/utils/tpu_rewrite_device_util.cc)
 
 // LINT.IfChange
-Status DistributedTPURewriteHelpers::GetHostSystemDevices(
+absl::Status DistributedTPURewriteHelpers::GetHostSystemDevices(
     const DeviceNameUtils::ParsedName& system_spec, const DeviceSet& device_set,
     std::vector<Device*>* host_system_devices) {
   DeviceNameUtils::ParsedName host_spec;
@@ -109,7 +126,7 @@ Status DistributedTPURewriteHelpers::GetHostSystemDevices(
     // job, so take all hosts in the system. There will be a runtime
     // error if some of those hosts don't contain TPU devices.
     CHECK(DeviceNameUtils::ParseFullName(
-        strings::StrCat("/device:", DEVICE_TPU_SYSTEM, ":0"), &host_spec));
+        absl::StrCat("/device:", DEVICE_TPU_SYSTEM, ":0"), &host_spec));
   }
   device_set.FindMatchingDevices(host_spec, host_system_devices);
 
@@ -119,7 +136,7 @@ Status DistributedTPURewriteHelpers::GetHostSystemDevices(
 
   // Check that all the devices belong to the same job.
   TF_RET_CHECK((*host_system_devices)[0]->parsed_name().has_job);
-  const string& job_name = (*host_system_devices)[0]->parsed_name().job;
+  const std::string& job_name = (*host_system_devices)[0]->parsed_name().job;
   int replica = (*host_system_devices)[0]->parsed_name().replica;
   for (const auto host_device : *host_system_devices) {
     const auto& parsed_name = host_device->parsed_name();
@@ -142,12 +159,12 @@ Status DistributedTPURewriteHelpers::GetHostSystemDevices(
               auto j_name = j->parsed_name();
               return i_name.task < j_name.task;
             });
-  return OkStatus();
+  return absl::OkStatus();
 }
 // LINT.ThenChange(//tensorflow/compiler/mlir/tensorflow/utils/tpu_rewrite_device_util.cc)
 
 // LINT.IfChange
-Status DistributedTPURewriteHelpers::GetTPUDevices(
+absl::Status DistributedTPURewriteHelpers::GetTPUDevices(
     const DeviceNameUtils::ParsedName& system_spec, const DeviceSet& device_set,
     int* num_tpus_per_host, std::vector<std::vector<Device*>>* tpu_devices) {
   // GetHostSystemDevices returns the CPU device on each host that is
@@ -193,19 +210,19 @@ Status DistributedTPURewriteHelpers::GetTPUDevices(
     }
     tpu_devices->push_back(std::move(host_tpu_devices));
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 // LINT.ThenChange(//tensorflow/compiler/mlir/tensorflow/utils/tpu_rewrite_device_util.cc)
 
-Status DistributedTPURewriteHelpers::ForConfigurationNodeMatchingType(
-    const string& node_type, Graph* graph, const DeviceSet& device_set,
+absl::Status DistributedTPURewriteHelpers::ForConfigurationNodeMatchingType(
+    const std::string& node_type, Graph* graph, const DeviceSet& device_set,
     const std::function<
-        Status(const NodeDef& configuration_node_def,
-               const string& configuration_device_name,
-               const std::vector<Device*>& host_devices,
-               const std::vector<Node*>& input_dependencies,
-               const std::vector<OutputDependency>& output_dependencies,
-               Graph* graph)>& action) {
+        absl::Status(const NodeDef& configuration_node_def,
+                     const std::string& configuration_device_name,
+                     const std::vector<Device*>& host_devices,
+                     const std::vector<Node*>& input_dependencies,
+                     const std::vector<OutputDependency>& output_dependencies,
+                     Graph* graph)>& action) {
   // Find all the matching nodes before mutating the graph.
   std::vector<Node*> nodes;
   for (Node* node : graph->nodes()) {
@@ -215,12 +232,12 @@ Status DistributedTPURewriteHelpers::ForConfigurationNodeMatchingType(
   }
 
   for (Node* node : nodes) {
-    string spec_string = node->requested_device();
+    std::string spec_string = node->requested_device();
     DeviceNameUtils::ParsedName spec;
     Device* device;
     TF_RETURN_IF_ERROR(
         GetSystemDevice(spec_string, device_set, &spec, &device));
-    const string& device_name = device->name();
+    const std::string& device_name = device->name();
 
     std::vector<Device*> host_devices;
     TF_RETURN_IF_ERROR(GetHostSystemDevices(spec, device_set, &host_devices));
@@ -249,7 +266,7 @@ Status DistributedTPURewriteHelpers::ForConfigurationNodeMatchingType(
                               input_dependencies, output_dependencies, graph));
   }
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace tensorflow

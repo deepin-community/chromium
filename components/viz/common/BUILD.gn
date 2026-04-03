@@ -7,42 +7,10 @@ import("//components/viz/common/debugger/viz_debugger.gni")
 import("//components/viz/viz.gni")
 import("//gpu/vulkan/features.gni")
 import("//skia/features.gni")
+import("//testing/libfuzzer/fuzzer_test.gni")
 import("//testing/test.gni")
 
 import("//third_party/inspector_protocol/inspector_protocol.gni")
-
-viz_component("shared_image_format") {
-  output_name = "viz_shared_image_format"
-
-  defines = [ "IS_VIZ_SHARED_IMAGE_FORMAT_IMPL" ]
-
-  sources = [
-    "resources/resource_sizes.h",
-    "resources/shared_image_format.cc",
-    "resources/shared_image_format.h",
-    "resources/shared_image_format_utils.cc",
-    "resources/shared_image_format_utils.h",
-  ]
-  configs = [ "//third_party/khronos:khronos_headers" ]
-  public_deps = [
-    "//base",
-    "//mojo/public/cpp/bindings",
-    "//services/viz/public/mojom:singleplanar_format",
-  ]
-  deps = [
-    "//base",
-    "//build:chromeos_buildflags",
-    "//cc/base",
-    "//gpu/vulkan:buildflags",
-    "//skia",
-    "//third_party/dawn/include/dawn:cpp_headers",
-    "//ui/gfx:buffer_types",
-    "//ui/gfx/geometry",
-  ]
-  if (enable_vulkan) {
-    deps += [ "//third_party/vulkan-deps/vulkan-headers/src:vulkan_headers" ]
-  }
-}
 
 always_enable_blending_for_primary = is_castos || is_cast_android
 assert(enable_cast_overlay_strategy || !always_enable_blending_for_primary)
@@ -54,36 +22,6 @@ buildflag_header("buildflags") {
     "ENABLE_CAST_OVERLAY_STRATEGY=$enable_cast_overlay_strategy",
     "ALWAYS_ENABLE_BLENDING_FOR_PRIMARY=$always_enable_blending_for_primary",
   ]
-}
-
-if (skia_use_metal) {
-  viz_component("metal_context_provider") {
-    output_name = "viz_metal_context_provider"
-
-    defines = [ "VIZ_METAL_CONTEXT_PROVIDER_IMPLEMENTATION" ]
-
-    sources = [
-      "gpu/metal_context_provider.h",
-      "gpu/metal_context_provider.mm",
-      "viz_metal_context_provider_export.h",
-    ]
-
-    public_deps = [ "//skia" ]
-
-    deps = [
-      "//base",
-      "//components/crash/core/common:crash_key",
-      "//components/metal_util",
-      "//gpu/config",
-      "//ui/gfx",
-      "//ui/gl",
-    ]
-
-    frameworks = [
-      "Metal.framework",
-      "Foundation.framework",
-    ]
-  }
 }
 
 if (enable_vulkan) {
@@ -112,7 +50,6 @@ if (enable_vulkan) {
       "//base",
       "//gpu/vulkan",
       "//gpu/vulkan:buildflags",
-      "//gpu/vulkan/init:skia",
       "//ui/gfx",
     ]
   }
@@ -124,9 +61,10 @@ viz_component("common") {
   defines = [ "VIZ_COMMON_IMPLEMENTATION" ]
 
   sources = [
+    "color_space_utils.cc",
+    "color_space_utils.h",
     "constants.cc",
     "constants.h",
-    "delegated_ink_prediction_configuration.h",
     "display/overlay_strategy.cc",
     "display/overlay_strategy.h",
     "display/renderer_settings.cc",
@@ -148,6 +86,7 @@ viz_component("common") {
     "frame_sinks/copy_output_util.h",
     "frame_sinks/delay_based_time_source.cc",
     "frame_sinks/delay_based_time_source.h",
+    "frame_timing_details.cc",
     "frame_timing_details.h",
     "frame_timing_details_map.h",
     "gpu/context_cache_controller.cc",
@@ -160,8 +99,13 @@ viz_component("common") {
     "gpu/raster_context_provider.cc",
     "gpu/raster_context_provider.h",
     "hit_test/aggregated_hit_test_region.h",
+    "hit_test/hit_test_data_provider.h",
+    "hit_test/hit_test_query.cc",
+    "hit_test/hit_test_query.h",
     "hit_test/hit_test_region_list.cc",
     "hit_test/hit_test_region_list.h",
+    "hit_test/hit_test_region_observer.h",
+    "input/viz_touch_state.h",
     "performance_hint_utils.cc",
     "performance_hint_utils.h",
     "quads/aggregated_render_pass.cc",
@@ -186,8 +130,12 @@ viz_component("common") {
     "quads/draw_quad.h",
     "quads/frame_deadline.cc",
     "quads/frame_deadline.h",
+    "quads/frame_interval_inputs.cc",
+    "quads/frame_interval_inputs.h",
     "quads/largest_draw_quad.cc",
     "quads/largest_draw_quad.h",
+    "quads/offset_tag.cc",
+    "quads/offset_tag.h",
     "quads/picture_draw_quad.cc",
     "quads/picture_draw_quad.h",
     "quads/quad_list.cc",
@@ -211,20 +159,21 @@ viz_component("common") {
     "quads/texture_draw_quad.h",
     "quads/tile_draw_quad.cc",
     "quads/tile_draw_quad.h",
+    "quads/trees_in_viz_timing.h",
     "quads/video_hole_draw_quad.cc",
     "quads/video_hole_draw_quad.h",
-    "quads/yuv_video_draw_quad.cc",
-    "quads/yuv_video_draw_quad.h",
-    "resources/bitmap_allocation.cc",
-    "resources/bitmap_allocation.h",
+    "resources/peak_gpu_memory_callback.cc",
+    "resources/peak_gpu_memory_callback.h",
+    "resources/peak_gpu_memory_tracker.h",
+    "resources/peak_gpu_memory_tracker_util.cc",
+    "resources/peak_gpu_memory_tracker_util.h",
     "resources/platform_color.h",
     "resources/release_callback.h",
+    "resources/resource_id.cc",
     "resources/resource_id.h",
     "resources/return_callback.h",
     "resources/returned_resource.cc",
     "resources/returned_resource.h",
-    "resources/shared_bitmap.cc",
-    "resources/shared_bitmap.h",
     "resources/transferable_resource.cc",
     "resources/transferable_resource.h",
     "skia_helper.cc",
@@ -271,7 +220,6 @@ viz_component("common") {
 
   deps = [
     "//base",
-    "//build:chromeos_buildflags",
 
     # TODO(staraz): cc/base was added because SharedQuadState includes
     # cc::MathUtil. Remove it once cc/base/math_util* are moved to viz.
@@ -282,13 +230,15 @@ viz_component("common") {
     "//gpu/command_buffer/client:raster",
     "//gpu/command_buffer/client:raster_interface",
     "//gpu/config",
-    "//gpu/ipc/common:common",
+    "//gpu/ipc/common",
     "//gpu/vulkan:buildflags",
     "//media:media_buildflags",
     "//mojo/public/cpp/base",
     "//mojo/public/cpp/system",
-    "//services/tracing/public/cpp:cpp",
+    "//services/tracing/public/cpp",
+    "//third_party/blink/public/common/tokens:tokens_headers",
     "//third_party/libyuv",
+    "//ui/base",
     "//ui/display/types",
     "//ui/gfx",
     "//ui/gfx:color_space",
@@ -302,13 +252,18 @@ viz_component("common") {
     sources += [
       "display/use_layered_window.cc",
       "display/use_layered_window.h",
-      "overlay_state/win/overlay_state_aggregator.cc",
-      "overlay_state/win/overlay_state_aggregator.h",
-      "overlay_state/win/overlay_state_service.cc",
-      "overlay_state/win/overlay_state_service.h",
     ]
 
     deps += [ "//ui/base" ]
+  }
+
+  if (is_ios) {
+    sources += [
+      "frame_sinks/external_begin_frame_source_ios.h",
+      "frame_sinks/external_begin_frame_source_ios.mm",
+    ]
+
+    frameworks = [ "CoreGraphics.framework" ]
   }
 
   if (is_android) {
@@ -317,7 +272,7 @@ viz_component("common") {
 
   public_deps = [
     ":buildflags",
-    ":shared_image_format",
+    "//components/viz/common/resources:shared_image_format",
     "//gpu/command_buffer/client",
     "//gpu/command_buffer/common",
     "//mojo/public/cpp/bindings",
@@ -326,9 +281,6 @@ viz_component("common") {
 
   if (enable_vulkan) {
     public_deps += [ ":vulkan_context_provider" ]
-  }
-  if (skia_use_metal) {
-    public_deps += [ ":metal_context_provider" ]
   }
 }
 
@@ -341,12 +293,14 @@ viz_source_set("unit_tests") {
     "frame_sinks/copy_output_util_unittest.cc",
     "frame_sinks/delay_based_time_source_unittest.cc",
     "gpu/context_cache_controller_unittest.cc",
+    "hit_test/hit_test_query_unittest.cc",
     "quads/compositor_frame_metadata_unittest.cc",
     "quads/compositor_frame_transition_directive_unittest.cc",
     "quads/compositor_render_pass_unittest.cc",
     "quads/draw_quad_unittest.cc",
+    "quads/offset_tag_unittest.cc",
     "quads/render_pass_io_unittest.cc",
-    "resources/resource_sizes_unittest.cc",
+    "resources/peak_gpu_memory_tracker_util_unittest.cc",
     "resources/shared_image_format_unittest.cc",
     "resources/shared_image_format_utils_unittest.cc",
     "surfaces/child_local_surface_id_allocator_unittest.cc",
@@ -354,7 +308,6 @@ viz_source_set("unit_tests") {
     "surfaces/parent_local_surface_id_allocator_unittest.cc",
     "surfaces/scoped_surface_id_allocator_unittest.cc",
     "surfaces/surface_range_unittest.cc",
-    "yuv_readback_unittest.cc",
   ]
 
   if (enable_vulkan) {
@@ -379,14 +332,6 @@ viz_source_set("unit_tests") {
     "//ui/gfx/geometry",
     "//ui/latency",
   ]
-
-  if (is_win) {
-    sources += [ "overlay_state/win/overlay_state_service_unittest.cc" ]
-    deps += [
-      "//components/viz/test:test_suite",
-      "//media/mojo/mojom",
-    ]
-  }
 }
 
 viz_source_set("perf_tests") {
@@ -400,5 +345,18 @@ viz_source_set("perf_tests") {
     "//skia",
     "//testing/gtest",
     "//testing/perf",
+  ]
+}
+
+fuzzer_test("hit_test_query_fuzzer") {
+  sources = [ "hit_test/hit_test_query_fuzzer.cc" ]
+
+  libfuzzer_options = [ "max_len=4096" ]
+
+  deps = [
+    ":common",
+    "//base/test:test_support",
+    "//components/viz/test:test_support",
+    "//ui/gfx:test_support",
   ]
 }

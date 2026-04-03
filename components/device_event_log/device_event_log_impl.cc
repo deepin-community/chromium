@@ -2,11 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "components/device_event_log/device_event_log_impl.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <list>
 #include <set>
+#include <string_view>
 
 #include "base/containers/adapters.h"
 #include "base/functional/bind.h"
@@ -16,7 +20,6 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/process/process_handle.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_tokenizer.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -29,8 +32,12 @@ namespace device_event_log {
 
 namespace {
 
-const char* const kLogLevelName[] = {"Error", "User", "Event", "Debug"};
+// LINT.IfChange
+const auto kLogLevelName =
+    std::to_array<const char*>({"Error", "User", "Event", "Debug"});
+// LINT.ThenChange(/chrome/browser/resources/device_log/browser_proxy.ts)
 
+// LINT.IfChange
 const char kLogTypeNetworkDesc[] = "Network";
 const char kLogTypePowerDesc[] = "Power";
 const char kLogTypeLoginDesc[] = "Login";
@@ -46,6 +53,7 @@ const char kLogTypeGeolocationDesc[] = "Geolocation";
 const char kLogTypeExtensionsDesc[] = "Extensions";
 const char kLogTypeDisplayDesc[] = "Display";
 const char kLogTypeFirmwareDesc[] = "Firmware";
+// LINT.ThenChange(/chrome/browser/resources/device_log/app.ts)
 
 enum class ShowTime {
   kNone,
@@ -89,10 +97,9 @@ std::string GetLogTypeString(LogType type) {
       break;
   }
   NOTREACHED();
-  return "Unknown";
 }
 
-LogType GetLogTypeFromString(base::StringPiece desc) {
+LogType GetLogTypeFromString(std::string_view desc) {
   std::string desc_lc = base::ToLowerASCII(desc);
   for (int i = 0; i < LOG_TYPE_UNKNOWN; ++i) {
     auto type = static_cast<LogType>(i);
@@ -101,7 +108,6 @@ LogType GetLogTypeFromString(base::StringPiece desc) {
       return type;
   }
   NOTREACHED() << "Unrecogized LogType: " << desc;
-  return LOG_TYPE_UNKNOWN;
 }
 
 std::string DateAndTimeWithMicroseconds(const base::Time& time) {
@@ -139,7 +145,8 @@ std::string LogEntryToString(const DeviceEventLogImpl::LogEntry& log_entry,
   if (show_type)
     line += GetLogTypeString(log_entry.log_type) + ": ";
   if (show_level) {
-    const char* kLevelDesc[] = {"ERROR", "USER", "EVENT", "DEBUG"};
+    auto kLevelDesc =
+        std::to_array<const char*>({"ERROR", "USER", "EVENT", "DEBUG"});
     line += std::string(kLevelDesc[log_entry.log_level]);
 #if BUILDFLAG(IS_POSIX)
     if (show_time == ShowTime::kUnix) {
@@ -159,9 +166,9 @@ std::string LogEntryToString(const DeviceEventLogImpl::LogEntry& log_entry,
   return line;
 }
 
-base::Value::Dict LogEntryToDictionary(
+base::DictValue LogEntryToDictionary(
     const DeviceEventLogImpl::LogEntry& log_entry) {
-  base::Value::Dict entry_dict;
+  base::DictValue entry_dict;
   entry_dict.Set("timestamp", DateAndTimeWithMicroseconds(log_entry.time));
   entry_dict.Set("timestampshort", TimeWithSeconds(log_entry.time));
   entry_dict.Set("level", kLogLevelName[log_entry.log_level]);
@@ -229,7 +236,7 @@ void GetFormat(const std::string& format_string,
   *show_level = false;
   *format_json = false;
   while (tokens.GetNext()) {
-    base::StringPiece tok = tokens.token_piece();
+    std::string_view tok = tokens.token_piece();
     if (tok == "time") {
       *show_time = ShowTime::kTimeWithMs;
     } else if (tok == "unixtime") {
@@ -255,7 +262,7 @@ void GetLogTypes(const std::string& types,
                  std::set<LogType>* exclude_types) {
   base::StringTokenizer tokens(types, ",");
   while (tokens.GetNext()) {
-    base::StringPiece tok = tokens.token_piece();
+    std::string_view tok = tokens.token_piece();
     if (base::StartsWith(tok, "non-")) {
       LogType type = GetLogTypeFromString(tok.substr(4));
       if (type != LOG_TYPE_UNKNOWN)
@@ -295,7 +302,7 @@ DeviceEventLogImpl::DeviceEventLogImpl(
   DCHECK(task_runner_);
 }
 
-DeviceEventLogImpl::~DeviceEventLogImpl() {}
+DeviceEventLogImpl::~DeviceEventLogImpl() = default;
 
 void DeviceEventLogImpl::AddEntry(const char* file,
                                   int file_line,
@@ -368,19 +375,25 @@ std::string DeviceEventLogImpl::GetAsString(StringOrder order,
                                             LogLevel max_level,
                                             size_t max_events) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  if (entries_.empty())
-    return "No Log Entries.";
 
   ShowTime show_time;
   bool show_file, show_type, show_level, format_json;
   GetFormat(format, &show_time, &show_file, &show_type, &show_level,
             &format_json);
 
+  if (entries_.empty()) {
+    if (format_json) {
+      return "[]";
+    } else {
+      return "No Log Entries.";
+    }
+  }
+
   std::set<LogType> include_types, exclude_types;
   GetLogTypes(types, &include_types, &exclude_types);
 
   std::string result;
-  base::Value::List log_entries;
+  base::ListValue log_entries;
   if (order == OLDEST_FIRST) {
     size_t offset = 0;
     if (max_events > 0 && max_events < entries_.size()) {
@@ -448,9 +461,8 @@ void DeviceEventLogImpl::ClearAll() {
 }
 
 void DeviceEventLogImpl::Clear(const base::Time& begin, const base::Time& end) {
-  entries_.erase(
-      base::ranges::lower_bound(entries_, begin, {}, &LogEntry::time),
-      base::ranges::upper_bound(entries_, end, {}, &LogEntry::time));
+  entries_.erase(std::ranges::lower_bound(entries_, begin, {}, &LogEntry::time),
+                 std::ranges::upper_bound(entries_, end, {}, &LogEntry::time));
 }
 
 int DeviceEventLogImpl::GetCountByLevelForTesting(LogLevel level) {

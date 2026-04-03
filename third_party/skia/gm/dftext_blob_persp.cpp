@@ -23,10 +23,13 @@
 #include "include/core/SkTextBlob.h"
 #include "include/core/SkTypes.h"
 #include "include/gpu/GpuTypes.h"
-#include "include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "include/private/base/SkTArray.h"
 #include "tools/ToolUtils.h"
 #include "tools/fonts/FontToolUtils.h"
+
+#if defined(SK_GANESH)
+#include "include/gpu/ganesh/SkSurfaceGanesh.h"
+#endif
 
 #include <initializer_list>
 
@@ -62,7 +65,6 @@ protected:
 
     void onDraw(SkCanvas* inputCanvas) override {
         // set up offscreen rendering with distance field text
-        auto ctx = inputCanvas->recordingContext();
         SkISize size = this->getISize();
         if (!inputCanvas->getBaseLayerSize().isEmpty()) {
             size = inputCanvas->getBaseLayerSize();
@@ -73,7 +75,11 @@ protected:
         inputCanvas->getProps(&inputProps);
         SkSurfaceProps props(SkSurfaceProps::kUseDeviceIndependentFonts_Flag | inputProps.flags(),
                              inputProps.pixelGeometry());
-        auto surface = SkSurfaces::RenderTarget(ctx, skgpu::Budgeted::kNo, info, 0, &props);
+        sk_sp<SkSurface> surface = nullptr;
+#if defined(SK_GANESH)
+        surface = SkSurfaces::RenderTarget(
+                inputCanvas->recordingContext(), skgpu::Budgeted::kNo, info, 0, &props);
+#endif
         SkCanvas* canvas = surface ? surface->getCanvas() : inputCanvas;
         // init our new canvas with the old canvas's matrix
         canvas->setMatrix(inputCanvas->getLocalToDeviceAs3x3());
@@ -83,7 +89,7 @@ protected:
             for (auto pm : {PerspMode::kNone, PerspMode::kX, PerspMode::kY, PerspMode::kXY}) {
                 for (auto& blob : fBlobs) {
                     for (bool clip : {false, true}) {
-                        canvas->save();
+                        SkAutoCanvasRestore acr(canvas, true);
                         SkScalar w = blob->bounds().width();
                         SkScalar h = blob->bounds().height();
                         if (clip) {
@@ -94,7 +100,6 @@ protected:
                         this->drawBlob(canvas, blob.get(), SK_ColorBLACK, x, y + h, pm, twm);
                         x += w + 20.f;
                         maxH = std::max(h, maxH);
-                        canvas->restore();
                     }
                 }
                 x = 0;

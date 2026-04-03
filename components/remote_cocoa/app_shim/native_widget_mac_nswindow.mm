@@ -4,6 +4,8 @@
 
 #import "components/remote_cocoa/app_shim/native_widget_mac_nswindow.h"
 
+#include <memory>
+
 #include "base/apple/foundation_util.h"
 #include "base/auto_reset.h"
 #include "base/check.h"
@@ -11,15 +13,19 @@
 #include "base/feature_list.h"
 #include "base/mac/mac_util.h"
 #include "base/memory/raw_ptr_exclusion.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/trace_event/trace_event.h"
+#include "components/crash/core/common/crash_key.h"
 #import "components/remote_cocoa/app_shim/features.h"
 #import "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_host_helper.h"
 #import "components/remote_cocoa/app_shim/views_nswindow_delegate.h"
 #import "components/remote_cocoa/app_shim/window_touch_bar_delegate.h"
 #include "components/remote_cocoa/common/native_widget_ns_window_host.mojom.h"
+#include "ui/accessibility/platform/ax_platform_node.h"
 #import "ui/base/cocoa/user_interface_item_command_handler.h"
 #import "ui/base/cocoa/window_size_constants.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace {
 
@@ -103,6 +109,12 @@ void OrderChildWindow(NSWindow* child_window,
 
 }  // namespace
 
+@interface NSNextStepFrame (Private)
+- (instancetype)initWithFrame:(NSRect)frame
+                    styleMask:(NSUInteger)styleMask
+                        owner:(id)owner;
+@end
+
 @interface NSWindow (Private)
 + (Class)frameViewClassForStyleMask:(NSWindowStyleMask)windowStyle;
 - (BOOL)hasKeyAppearance;
@@ -110,6 +122,17 @@ void OrderChildWindow(NSWindow* child_window,
 - (BOOL)_isConsideredOpenForPersistentState;
 - (void)_zoomToScreenEdge:(NSUInteger)edge;
 - (void)_removeFromGroups:(NSWindow*)window;
+- (BOOL)_isNonactivatingPanel;
+@end
+
+struct NSEdgeAndCornerThicknesses {
+  double top, topLeft, left, bottomLeft, bottom, bottomRight, right, topRight;
+};
+
+@interface NSWindow (NSWindowResizing)
++ (void)_getExteriorResizeEdgeThicknesses:
+            (NSEdgeAndCornerThicknesses*)outThicknesses
+                             forStyleMask:(NSWindowStyleMask)styleMask;
 @end
 
 // Private API as of at least macOS 13.
@@ -160,6 +183,7 @@ void OrderChildWindow(NSWindow* child_window,
 @end
 
 @implementation NativeWidgetMacNSWindowBorderlessFrame
+
 - (void)mouseDown:(NSEvent*)event {
   [self cr_mouseDownOnFrameView:event];
   [super mouseDown:event];
@@ -174,22 +198,24 @@ void OrderChildWindow(NSWindow* child_window,
   CommandDispatcher* __strong _commandDispatcher;
   id<UserInterfaceItemCommandHandler> __strong _commandHandler;
   id<WindowTouchBarDelegate> __weak _touchBarDelegate;
+  NSData* __strong _lastSavedRestorableState;
   uint64_t _bridgedNativeWidgetId;
   // This field is not a raw_ptr<> because it requires @property rewrite.
   RAW_PTR_EXCLUSION remote_cocoa::NativeWidgetNSWindowBridge* _bridge;
   BOOL _willUpdateRestorableState;
+  BOOL _willSaveRestorableStateAfterDelay;
   BOOL _isEnforcingNeverMadeVisible;
-  BOOL _preventKeyWindow;
+  BOOL _activationIndependence;
   BOOL _isTooltip;
-  BOOL _isHeadless;
   BOOL _isShufflingForOrdering;
   BOOL _miniaturizationInProgress;
+  std::unique_ptr<NativeWidgetMacNSWindowHeadlessInfo> _headless_info;
 }
 @synthesize bridgedNativeWidgetId = _bridgedNativeWidgetId;
 @synthesize bridge = _bridge;
 @synthesize isTooltip = _isTooltip;
-@synthesize isHeadless = _isHeadless;
 @synthesize isShufflingForOrdering = _isShufflingForOrdering;
+@synthesize preventKeyWindow = _preventKeyWindow;
 @synthesize childWindowAddedHandler = _childWindowAddedHandler;
 @synthesize childWindowRemovedHandler = _childWindowRemovedHandler;
 @synthesize commandDispatchParentOverride = _commandDispatchParentOverride;
@@ -207,6 +233,33 @@ void OrderChildWindow(NSWindow* child_window,
     self.releasedWhenClosed = NO;
   }
   return self;
+}
+
+- (BOOL)isHeadless {
+  return _headless_info != nullptr;
+}
+
+- (void)setIsHeadless:(BOOL)isHeadless {
+  // NativeWidgetMacNSWindowHeadlessInfo constructor overrides certain NSWindow
+  // methods in order to implement headless mode behavior. This affects all
+  // NativeWidgetMacNSWindow instances, however, the overrides will fallback to
+  // the original implementations if there is no headless info associated with
+  // the window.
+  if (isHeadless) {
+    _headless_info = std::make_unique<NativeWidgetMacNSWindowHeadlessInfo>();
+  } else {
+    _headless_info.reset();
+  }
+}
+
+- (NativeWidgetMacNSWindowHeadlessInfo*)headlessInfo {
+  return _headless_info.get();
+}
+
+- (BOOL)invokeOriginalIsVisibleForTesting {
+  // In headless mode this is overridden and returns actual platform window
+  // visibility state which is expected to aways be hidden.
+  return [self isVisible];
 }
 
 // This is called by the "Move Window to {Left/Right} Side of Screen"
@@ -248,6 +301,12 @@ void OrderChildWindow(NSWindow* child_window,
 - (void)removeChildWindow:(NSWindow*)childWin {
   if (self != childWin.parentWindow) {
     return;
+  }
+  // Handle ordering groups for AppKit native windows. For instance, the
+  // `TUINSWindow` is added and removed by AppKit when caps lock is active.
+  // See https://crbug.com/369970893 for more details.
+  if (![childWin isKindOfClass:[NativeWidgetMacNSWindow class]]) {
+    [self maybeRemoveTreeFromOrderingGroups];
   }
   [super removeChildWindow:childWin];
   if (self.childWindowRemovedHandler) {
@@ -319,15 +378,6 @@ void OrderChildWindow(NSWindow* child_window,
   [self orderWindow:NSWindowAbove relativeTo:0];
 }
 
-- (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen*)screen {
-  // Headless windows should not be constrained within the physical screen.
-  if (_isHeadless) {
-    return frameRect;
-  }
-
-  return [super constrainFrameRect:frameRect toScreen:screen];
-}
-
 // Private methods.
 
 - (ViewsNSWindowDelegate*)viewsNSWindowDelegate {
@@ -347,7 +397,7 @@ void OrderChildWindow(NSWindow* child_window,
   // We should like to DCHECK that the object returned implements the
   // NSAccessibility protocol, but the NSAccessibilityRemoteUIElement interface
   // does not conform.
-  // TODO(https://crbug.com/944698): Create a sub-class that does.
+  // TODO(crbug.com/41448396): Create a sub-class that does.
   return obj;
 }
 
@@ -368,6 +418,19 @@ void OrderChildWindow(NSWindow* child_window,
   return [super frameViewClassForStyleMask:windowStyle];
 }
 
+- (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen*)screen {
+  if (self.isHeadless || self.parentWindow) {
+    // AppKit's default implementation moves child windows down to avoid
+    // the menu bar. We don't want that behavior, because widgets like the
+    // Omnibox may have a big shadow that could cause invisible menu bar
+    // collision in fullscreen/maximized state. We override it here to
+    // return the original frameRect before the adjustment.
+    return frameRect;
+  }
+
+  return [super constrainFrameRect:frameRect toScreen:screen];
+}
+
 - (BOOL)_isTitleHidden {
   bool shouldShowWindowTitle = YES;
   if (_bridge)
@@ -380,6 +443,39 @@ void OrderChildWindow(NSWindow* child_window,
 // subclasses are known to override it and return NO.
 - (BOOL)_usesCustomDrawing {
   return NO;
+}
+
+// This override, if it returns YES, allows the window to take input events
+// without activating the owning app. This is functionally equivalent to having
+// the window style NSWindowStyleMaskNonactivatingPanel set; see the
+// documentation for that constant for more details.
+//
+// The NSWindowStyleMaskNonactivatingPanel constant is only valid for NSPanels,
+// not NSWindows, so the window style cannot be directly set. In addition, even
+// if it were valid to set that style for windows, setting the window style
+// recalculates and re-caches a bunch of stuff, so a surgical override is the
+// cleanest approach.
+- (BOOL)_isNonactivatingPanel {
+  if (_activationIndependence) {
+    return YES;
+  }
+  return [super _isNonactivatingPanel];
+}
+
++ (void)_getExteriorResizeEdgeThicknesses:
+            (NSEdgeAndCornerThicknesses*)outThicknesses
+                             forStyleMask:(NSWindowStyleMask)styleMask {
+  // Ensure non-titled resizable windows have a reasonable exterior resize area.
+  // By default, they might have none, making resizing difficult.
+  // Override to titled window's resize edge thickness (4px on macOS 15).
+  if (styleMask & NSWindowStyleMaskResizable) {
+    return [super
+        _getExteriorResizeEdgeThicknesses:outThicknesses
+                             forStyleMask:styleMask | NSWindowStyleMaskTitled];
+  }
+
+  return [super _getExteriorResizeEdgeThicknesses:outThicknesses
+                                     forStyleMask:styleMask];
 }
 
 // Ignore [super canBecome{Key,Main}Window]. The default is NO for windows with
@@ -497,6 +593,15 @@ void OrderChildWindow(NSWindow* child_window,
   [[self viewsNSWindowDelegate] onWindowOrderChanged:nil];
 }
 
+- (void)setActivationIndependence:(BOOL)independence {
+  self.canHide = !independence;
+  _activationIndependence = independence;
+}
+
+- (bool)activationIndependence {
+  return _activationIndependence;
+}
+
 // Override window order functions to intercept other visibility changes. This
 // is needed in addition to the -[NSWindow display] override because Cocoa
 // hardly ever calls display, and reports -[NSWindow isVisible] incorrectly
@@ -609,26 +714,69 @@ void OrderChildWindow(NSWindow* child_window,
 }
 
 - (void)saveRestorableState {
-  if (!_bridge)
+  if (!_bridge || ![self _isConsideredOpenForPersistentState]) {
     return;
-  if (![self _isConsideredOpenForPersistentState])
-    return;
+  }
 
-  // On macOS 12+, create restorable state archives with secure encoding. See
-  // the article at
+  // Certain conditions, such as in the Speedometer 3 benchmark, can trigger a
+  // rapid succession of calls to saveRestorableState. If there's no pending
+  // save of restorable state, save the state now. This ensures that the first
+  // new state change gets saved immediately. Then, set up to save again 500ms
+  // after the last request. This will coalesce a storm of restorable state
+  // saves into the first and last requests. This might ultimately result in a
+  // single save operation if the first and last states are identical.
+  //
+  // We take pains to save the first and last requests to ensure we get the
+  // expected state save on browser close. For example, if a browser window
+  // miniaturizes and then the browser quits within our 500ms delay, the
+  // miniaturized state may not get saved. Even if the call to
+  // -reallySaveRestorableState occurs in time, we might still be in trouble
+  // because the save has to cross the remote cocoa boundary (and so is
+  // dependent on a couple more turns of the run loop to get the save to take).
+  if (!_willSaveRestorableStateAfterDelay) {
+    [self reallySaveRestorableState];
+    _willSaveRestorableStateAfterDelay = YES;
+  }
+
+  [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                           selector:@selector
+                                           (reallySaveRestorableState)
+                                             object:nil];
+  [self performSelector:@selector(reallySaveRestorableState)
+             withObject:nil
+             afterDelay:0.5];
+}
+
+- (void)reallySaveRestorableState {
+  _willSaveRestorableStateAfterDelay = NO;
+
+  if (!_bridge) {
+    return;
+  }
+
+  _willUpdateRestorableState = NO;
+
+  // Create restorable state archives with secure encoding. See the article at
   // https://sector7.computest.nl/post/2022-08-process-injection-breaking-all-macos-security-layers-with-a-single-vulnerability/
   // for more details.
-  NSKeyedArchiver* encoder = [[NSKeyedArchiver alloc]
-      initRequiringSecureCoding:base::mac::MacOSMajorVersion() >= 12];
+  NSKeyedArchiver* encoder =
+      [[NSKeyedArchiver alloc] initRequiringSecureCoding:YES];
   encoder.delegate = self;
   [self encodeRestorableStateWithCoder:encoder];
   [encoder finishEncoding];
-  NSData* restorableStateData = encoder.encodedData;
+  NSData* restorableState = encoder.encodedData;
 
-  auto* bytes = static_cast<uint8_t const*>(restorableStateData.bytes);
-  _bridge->host()->OnWindowStateRestorationDataChanged(
-      std::vector<uint8_t>(bytes, bytes + restorableStateData.length));
-  _willUpdateRestorableState = NO;
+  // Don't bother saving restorable state if it didn't actually change since
+  // the last save. This avoids an extra IPC when nothing has changed.
+  if ([restorableState isEqual:_lastSavedRestorableState]) {
+    return;
+  }
+  _lastSavedRestorableState = restorableState;
+
+  auto data_span = base::apple::NSDataToSpan(restorableState);
+  std::vector<uint8_t> data(data_span.size());
+  base::span<uint8_t>(data).copy_from(data_span);
+  _bridge->host()->OnWindowStateRestorationDataChanged(std::move(data));
 }
 
 // AppKit calls -invalidateRestorableState when a property of the window which
@@ -653,7 +801,7 @@ void OrderChildWindow(NSWindow* child_window,
 // the window's styleMask. Views assumes that Widgets can always be minimized,
 // regardless of their window style, so override that behavior here.
 - (BOOL)_canMiniaturize {
-  return YES;
+  return ![self immersiveFullscreen];
 }
 
 - (BOOL)respondsToSelector:(SEL)aSelector {
@@ -708,7 +856,29 @@ void OrderChildWindow(NSWindow* child_window,
                                             forHandler:_commandHandler];
 }
 
+// Override performClose: to forward to the parent window when this window
+// doesn't have NSWindowStyleMaskClosable. This ensures that when a bubble
+// (child window) is focused in a PWA and the user presses Cmd+W, the action
+// closes the parent window.
+- (void)performClose:(id)sender {
+  if (!(self.styleMask & NSWindowStyleMaskClosable) && self.parentWindow) {
+    [self.parentWindow performClose:sender];
+    return;
+  }
+  [super performClose:sender];
+}
+
 // NSWindow overrides (NSAccessibility informal protocol implementation).
+
+- (NSString*)accessibilityDocument {
+  if (id<NSAccessibility> root = [self rootAccessibilityObject]) {
+    if (auto* cocoaNode = ui::AXPlatformNode::FromNativeViewAccessible(
+            gfx::NativeViewAccessible(root))) {
+      return [NSString stringWithUTF8String:cocoaNode->GetRootURL().c_str()];
+    }
+  }
+  return nil;
+}
 
 - (id)accessibilityFocusedUIElement {
   if (![self delegate])
@@ -843,5 +1013,15 @@ void OrderChildWindow(NSWindow* child_window,
 - (NSWindow*)preferredSheetParent {
   return [self immersiveFullscreen] ? [self rootWindow] : self;
 }
+
+#ifndef NDEBUG
+- (NSString*)debugDescription {
+  if (!self.title.length) {
+    return [super debugDescription];
+  }
+  return [NSString
+      stringWithFormat:@"%@ - %@", [super debugDescription], self.title];
+}
+#endif  // NDEBUG
 
 @end

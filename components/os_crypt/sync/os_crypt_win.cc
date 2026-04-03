@@ -2,20 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/os_crypt/sync/os_crypt.h"
+
 #include <windows.h>
 
 #include "base/base64.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/wincrypt_shim.h"
-#include "components/os_crypt/sync/os_crypt.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
@@ -58,7 +62,11 @@ bool EncryptStringWithDPAPI(const std::string& plaintext,
     result = ::CryptProtectData(
         /*pDataIn=*/&input,
         /*szDataDescr=*/
-        base::SysUTF8ToWide(version_info::GetProductName()).c_str(),
+        base::SysUTF8ToWide(
+            base::StrCat(
+                {version_info::GetProductName(),
+                 version_info::IsOfficialBuild() ? "" : " (Developer Build)"}))
+            .c_str(),
         /*pOptionalEntropy=*/nullptr,
         /*pvReserved=*/nullptr,
         /*pPromptStruct=*/nullptr, /*dwFlags=*/CRYPTPROTECT_AUDIT,
@@ -280,7 +288,6 @@ OSCrypt::InitResult OSCryptImpl::InitWithExistingKey(PrefService* local_state) {
 
   if (!base::StartsWith(encrypted_key_with_header, kDPAPIKeyPrefix,
                         base::CompareCase::SENSITIVE)) {
-    DUMP_WILL_BE_NOTREACHED_NORETURN() << "Invalid key format.";
     return OSCrypt::kInvalidKeyFormat;
   }
 
@@ -332,6 +339,9 @@ std::string OSCryptImpl::GetRawEncryptionKey() {
 }
 
 bool OSCryptImpl::IsEncryptionAvailable() {
+  if (use_mock_key_) {
+    return !GetRawEncryptionKey().empty();
+  }
   return !encryption_key_.empty();
 }
 

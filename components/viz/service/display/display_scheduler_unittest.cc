@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/null_task_runner.h"
@@ -23,9 +22,9 @@
 #include "components/viz/common/surfaces/surface_info.h"
 #include "components/viz/service/display/display.h"
 #include "components/viz/service/display/display_resource_provider_software.h"
-#include "components/viz/service/display_embedder/server_shared_bitmap_manager.h"
 #include "components/viz/test/begin_frame_args_test.h"
 #include "components/viz/test/fake_external_begin_frame_source.h"
+#include "gpu/command_buffer/service/scheduler.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_manager.h"
 #include "gpu/command_buffer/service/sync_point_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -63,7 +62,7 @@ class TestDisplayDamageTracker : public DisplayDamageTracker {
 
   // DisplayDamageTracker overrides
   bool SurfaceHasUnackedFrame(const SurfaceId& surface_id) const override {
-    return base::Contains(undrawn_surfaces_, surface_id);
+    return undrawn_surfaces_.contains(surface_id);
   }
 
   void UpdateRootFrameMissing() override {
@@ -82,10 +81,11 @@ class FakeDisplaySchedulerClient : public DisplaySchedulerClient {
         draw_and_swap_count_(0),
         next_draw_and_swap_fails_(false) {}
 
-  ~FakeDisplaySchedulerClient() override {}
+  ~FakeDisplaySchedulerClient() override = default;
 
   bool DrawAndSwap(const DrawAndSwapParams& params) override {
     draw_and_swap_count_++;
+    last_params_ = params;
 
     bool success = !next_draw_and_swap_fails_;
     next_draw_and_swap_fails_ = false;
@@ -99,29 +99,19 @@ class FakeDisplaySchedulerClient : public DisplaySchedulerClient {
     last_begin_frame_ack_ = ack;
   }
 
-  base::TimeDelta GetEstimatedDisplayDrawTime(
-      const base::TimeDelta interval,
-      double percentile) const override {
-    return estimated_display_draw_time_;
-  }
-
   int draw_and_swap_count() const { return draw_and_swap_count_; }
 
   void SetNextDrawAndSwapFails() { next_draw_and_swap_fails_ = true; }
 
   const BeginFrameAck& last_begin_frame_ack() { return last_begin_frame_ack_; }
-
-  void set_estimated_display_draw_time(
-      base::TimeDelta estimated_display_draw_time) {
-    estimated_display_draw_time_ = estimated_display_draw_time;
-  }
+  const DrawAndSwapParams& last_params() const { return last_params_; }
 
  protected:
   raw_ptr<TestDisplayDamageTracker> damage_tracker_ = nullptr;
   int draw_and_swap_count_;
   bool next_draw_and_swap_fails_;
   BeginFrameAck last_begin_frame_ack_;
-  base::TimeDelta estimated_display_draw_time_;
+  DrawAndSwapParams last_params_;
 };
 
 class TestDisplayScheduler : public DisplayScheduler {
@@ -182,7 +172,8 @@ class TestDisplayScheduler : public DisplayScheduler {
   int scheduler_begin_frame_deadline_count_;
 };
 
-class DisplaySchedulerTest : public testing::Test {
+class DisplaySchedulerTest : public testing::Test,
+                             public ::testing::WithParamInterface<bool> {
  public:
   explicit DisplaySchedulerTest(bool wait_for_all_surfaces_before_draw = false)
       : wait_for_all_surfaces_before_draw_(wait_for_all_surfaces_before_draw),
@@ -191,14 +182,19 @@ class DisplaySchedulerTest : public testing::Test {
         surface_manager_(nullptr,
                          /*activation_deadline_in_frames=*/4u,
                          /*max_uncommitted_frames=*/0),
-        resource_provider_(&shared_bitmap_manager_,
-                           &shared_image_manager_,
-                           &sync_point_manager_),
-        aggregator_(&surface_manager_, &resource_provider_, false, false),
+        resource_provider_(&shared_image_manager_, &gpu_scheduler_),
+        aggregator_(&surface_manager_, &resource_provider_, false),
         damage_tracker_(
             std::make_unique<TestDisplayDamageTracker>(&surface_manager_,
                                                        &aggregator_)),
         client_(damage_tracker_.get()) {
+    if (GetParam()) {
+      scoped_feature_list_.InitAndEnableFeature(
+          ::features::kDisplaySchedulerAsClient);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          ::features::kDisplaySchedulerAsClient);
+    }
     now_src_.Advance(base::Microseconds(10000));
   }
 
@@ -229,6 +225,9 @@ class DisplaySchedulerTest : public testing::Test {
                                            AckForCurrentBeginFrame(), true);
   }
 
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+
  protected:
   base::SimpleTestTickClock& now_src() { return now_src_; }
   FakeDisplaySchedulerClient& client() { return client_; }
@@ -245,9 +244,9 @@ class DisplaySchedulerTest : public testing::Test {
   base::SimpleTestTickClock now_src_;
   scoped_refptr<base::NullTaskRunner> task_runner_;
   SurfaceManager surface_manager_;
-  ServerSharedBitmapManager shared_bitmap_manager_;
   gpu::SharedImageManager shared_image_manager_;
   gpu::SyncPointManager sync_point_manager_;
+  gpu::Scheduler gpu_scheduler_{&sync_point_manager_};
   DisplayResourceProviderSoftware resource_provider_;
   SurfaceAggregator aggregator_;
   std::unique_ptr<TestDisplayDamageTracker> damage_tracker_;
@@ -263,7 +262,7 @@ void DisplaySchedulerTest::SetUp() {
   scheduler_->SetClient(&client_);
 }
 
-TEST_F(DisplaySchedulerTest, ResizeHasLateDeadlineUntilNewRootSurface) {
+TEST_P(DisplaySchedulerTest, ResizeHasLateDeadlineUntilNewRootSurface) {
   SurfaceId root_surface_id1(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -306,7 +305,7 @@ TEST_F(DisplaySchedulerTest, ResizeHasLateDeadlineUntilNewRootSurface) {
   scheduler_->BeginFrameDeadlineForTest();
 }
 
-TEST_F(DisplaySchedulerTest, ResizeHasLateDeadlineUntilDamagedSurface) {
+TEST_P(DisplaySchedulerTest, ResizeHasLateDeadlineUntilDamagedSurface) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -345,7 +344,7 @@ TEST_F(DisplaySchedulerTest, ResizeHasLateDeadlineUntilDamagedSurface) {
   scheduler_->BeginFrameDeadlineForTest();
 }
 
-TEST_F(DisplaySchedulerTest, SurfaceDamaged) {
+TEST_P(DisplaySchedulerTest, SurfaceDamaged) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -449,7 +448,7 @@ class DisplaySchedulerWaitForAllSurfacesTest : public DisplaySchedulerTest {
       : DisplaySchedulerTest(true /* wait_for_all_surfaces_before_draw */) {}
 };
 
-TEST_F(DisplaySchedulerWaitForAllSurfacesTest, WaitForAllSurfacesBeforeDraw) {
+TEST_P(DisplaySchedulerWaitForAllSurfacesTest, WaitForAllSurfacesBeforeDraw) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -532,7 +531,74 @@ TEST_F(DisplaySchedulerWaitForAllSurfacesTest, WaitForAllSurfacesBeforeDraw) {
   scheduler_->BeginFrameDeadlineForTest();
 }
 
-TEST_F(DisplaySchedulerTest, OutputSurfaceLost) {
+TEST_P(DisplaySchedulerTest, SelectFutureFrameDeadline) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kSelectFutureFrameDeadline);
+
+  scheduler_->SetTickClockForTesting(&now_src());
+
+  SurfaceId root_surface_id(
+      kArbitraryFrameSinkId,
+      LocalSurfaceId(1, base::UnguessableToken::Create()));
+  scheduler_->SetVisible(true);
+  SetNewRootSurface(root_surface_id);
+
+  // 1. Preferred deadline in the past.
+  now_src().Advance(base::Milliseconds(10));
+  last_begin_frame_args_ = fake_begin_frame_source_.CreateBeginFrameArgs(
+      BEGINFRAME_FROM_HERE, &now_src());
+  BeginFrameArgs args = last_begin_frame_args_;
+  // frame_time = 20ms.
+
+  // Create possible deadlines.
+  args.possible_deadlines = PossibleDeadlines(0);  // Preferred is 0.
+  // Deadline 0 is in the past relative to "now".
+  base::TimeDelta latch_delta0 = base::Milliseconds(5);
+  base::TimeDelta latch_delta1 = base::Milliseconds(50);
+  args.possible_deadlines->deadlines.emplace_back(100, latch_delta0,
+                                                  base::Milliseconds(15));
+  args.possible_deadlines->deadlines.emplace_back(101, latch_delta1,
+                                                  base::Milliseconds(60));
+
+  // Advance time so that now > frame_time + latch_delta0.
+  now_src().Advance(latch_delta0 + base::Milliseconds(1));
+  // now = 20 + 5 + 1 = 26ms.
+
+  scheduler_->OnBeginFrameForScheduling(args);
+
+  SurfaceDamaged(root_surface_id);
+  scheduler_->BeginFrameDeadlineForTest();
+
+  // Should have picked vsync_id 101 because 100 was in the past.
+  EXPECT_EQ(101, client().last_params().choreographer_vsync_id);
+  // last_targeted_latch_time_ = 20 + 50 = 70ms.
+
+  // 2. Preferred deadline before last_targeted_latch_time_.
+  now_src().Advance(base::Milliseconds(10));
+  // now = 36ms.
+  last_begin_frame_args_ = fake_begin_frame_source_.CreateBeginFrameArgs(
+      BEGINFRAME_FROM_HERE, &now_src());
+  args = last_begin_frame_args_;
+  // frame_time = 46ms.
+  args.possible_deadlines = PossibleDeadlines(0);
+  // Deadline 200 latch time: 46 + 10 = 56ms (< 70ms).
+  // Deadline 201 latch time: 46 + 40 = 86ms (> 70ms).
+  args.possible_deadlines->deadlines.emplace_back(200, base::Milliseconds(10),
+                                                  base::Milliseconds(15));
+  args.possible_deadlines->deadlines.emplace_back(201, base::Milliseconds(40),
+                                                  base::Milliseconds(45));
+
+  scheduler_->OnBeginFrameForScheduling(args);
+  SurfaceDamaged(root_surface_id);
+  scheduler_->BeginFrameDeadlineForTest();
+
+  // Should have picked vsync_id 201 because 200's latch time (56ms)
+  // is less than last_targeted_latch_time_ (70ms).
+  EXPECT_EQ(201, client().last_params().choreographer_vsync_id);
+}
+
+TEST_P(DisplaySchedulerTest, OutputSurfaceLost) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -566,7 +632,7 @@ TEST_F(DisplaySchedulerTest, OutputSurfaceLost) {
   EXPECT_EQ(1, client_.draw_and_swap_count());
 }
 
-TEST_F(DisplaySchedulerTest, VisibleWithoutDamageNoTicks) {
+TEST_P(DisplaySchedulerTest, VisibleWithoutDamageNoTicks) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -582,7 +648,7 @@ TEST_F(DisplaySchedulerTest, VisibleWithoutDamageNoTicks) {
   EXPECT_EQ(1u, fake_begin_frame_source_.num_observers());
 }
 
-TEST_F(DisplaySchedulerTest, VisibleWithDamageTicks) {
+TEST_P(DisplaySchedulerTest, VisibleWithDamageTicks) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -599,7 +665,7 @@ TEST_F(DisplaySchedulerTest, VisibleWithDamageTicks) {
   EXPECT_EQ(1u, fake_begin_frame_source_.num_observers());
 }
 
-TEST_F(DisplaySchedulerTest, Visibility) {
+TEST_P(DisplaySchedulerTest, Visibility) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -652,7 +718,7 @@ TEST_F(DisplaySchedulerTest, Visibility) {
   EXPECT_EQ(1u, fake_begin_frame_source_.num_observers());
 }
 
-TEST_F(DisplaySchedulerTest, ResizeCausesSwap) {
+TEST_P(DisplaySchedulerTest, ResizeCausesSwap) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -678,7 +744,7 @@ TEST_F(DisplaySchedulerTest, ResizeCausesSwap) {
   EXPECT_EQ(2, client_.draw_and_swap_count());
 }
 
-TEST_F(DisplaySchedulerTest, RootFrameMissing) {
+TEST_P(DisplaySchedulerTest, RootFrameMissing) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -731,7 +797,7 @@ TEST_F(DisplaySchedulerTest, RootFrameMissing) {
   EXPECT_EQ(2, client_.draw_and_swap_count());
 }
 
-TEST_F(DisplaySchedulerTest, DidSwapBuffers) {
+TEST_P(DisplaySchedulerTest, DidSwapBuffers) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -793,7 +859,7 @@ TEST_F(DisplaySchedulerTest, DidSwapBuffers) {
 
 // This test verfies that we try to reschedule the deadline
 // after any event that may change what deadline we want.
-TEST_F(DisplaySchedulerTest, ScheduleBeginFrameDeadline) {
+TEST_P(DisplaySchedulerTest, ScheduleBeginFrameDeadline) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -849,7 +915,7 @@ TEST_F(DisplaySchedulerTest, ScheduleBeginFrameDeadline) {
   EXPECT_EQ(++count, scheduler_->scheduler_begin_frame_deadline_count());
 }
 
-TEST_F(DisplaySchedulerTest, SetNeedsOneBeginFrame) {
+TEST_P(DisplaySchedulerTest, SetNeedsOneBeginFrame) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -869,7 +935,7 @@ TEST_F(DisplaySchedulerTest, SetNeedsOneBeginFrame) {
 
   // SetNeedsOneBeginFrame should make DisplayScheduler active for just a single
   // BeginFrame.
-  scheduler_->SetNeedsOneBeginFrame(false);
+  scheduler_->SetNeedsOneBeginFrame(BeginFrameArgs(), false);
   EXPECT_TRUE(scheduler_->inside_begin_frame_deadline_interval());
   scheduler_->BeginFrameDeadlineForTest();
   EXPECT_EQ(BeginFrameAck(last_begin_frame_args_, false),
@@ -880,7 +946,7 @@ TEST_F(DisplaySchedulerTest, SetNeedsOneBeginFrame) {
   EXPECT_FALSE(scheduler_->inside_begin_frame_deadline_interval());
 }
 
-TEST_F(DisplaySchedulerTest, GpuBusyNotifications) {
+TEST_P(DisplaySchedulerTest, GpuBusyNotifications) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -911,7 +977,7 @@ TEST_F(DisplaySchedulerTest, GpuBusyNotifications) {
   EXPECT_FALSE(fake_begin_frame_source_.RequestCallbackOnGpuAvailable());
 }
 
-TEST_F(DisplaySchedulerTest, OnBeginFrameDeadlineNoClient) {
+TEST_P(DisplaySchedulerTest, OnBeginFrameDeadlineNoClient) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -930,7 +996,7 @@ TEST_F(DisplaySchedulerTest, OnBeginFrameDeadlineNoClient) {
 
 // Tests that when there is no dynamic scheduler adjustment, that the deadline
 // is not shifted.
-TEST_F(DisplaySchedulerTest, DefaultBeginFrameArgsDeadline) {
+TEST_P(DisplaySchedulerTest, DefaultBeginFrameArgsDeadline) {
   const base::TimeTicks frame_time = base::TimeTicks() + k1Usec;
   const base::TimeTicks next_frame_time = frame_time + kVSyncInterval;
   BeginFrameArgs args =
@@ -939,57 +1005,7 @@ TEST_F(DisplaySchedulerTest, DefaultBeginFrameArgsDeadline) {
   EXPECT_EQ(args.deadline, next_frame_time);
 }
 
-// Tests the DisplayScheduler when we enable dynamic adjustments of begin
-// frames.
-class DynamicDisplaySchedulerTest : public DisplaySchedulerTest {
- public:
-  DynamicDisplaySchedulerTest();
-  ~DynamicDisplaySchedulerTest() override = default;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-DynamicDisplaySchedulerTest::DynamicDisplaySchedulerTest() {
-  scoped_feature_list_.InitAndEnableFeatureWithParameters(
-      features::kDynamicSchedulerForClients, {{"percentile", "90"}});
-  client_.set_estimated_display_draw_time(base::Milliseconds(2));
-}
-
-// Tests that when we are dynamically adjusting begin frames, that the deadline
-// is shifted.
-TEST_F(DynamicDisplaySchedulerTest, DynamicBeginFrameArgsDeadline) {
-  const base::TimeTicks frame_time = base::TimeTicks() + k1Usec;
-  const base::TimeTicks next_frame_time = frame_time + kVSyncInterval;
-  BeginFrameArgs args =
-      fake_begin_frame_source_.CreateBeginFrameArgsWithGenerator(
-          frame_time, next_frame_time, kVSyncInterval);
-  EXPECT_LT(args.deadline, next_frame_time);
-  EXPECT_GT(args.deadline, args.frame_time);
-  // We expect that the deadlines will be offset by the `client_` estimate of
-  // draw time.
-  EXPECT_EQ(args.deadline,
-            next_frame_time -
-                client_.GetEstimatedDisplayDrawTime(kVSyncInterval, 0.0));
-}
-
-// Tests the DisplayScheduler when we enable drawing immediately when
-// interactive.
-class ImmediateInteractiveDrawTest : public DisplaySchedulerTest {
- public:
-  ImmediateInteractiveDrawTest();
-  ~ImmediateInteractiveDrawTest() override = default;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-ImmediateInteractiveDrawTest::ImmediateInteractiveDrawTest() {
-  scoped_feature_list_.InitAndEnableFeature(
-      features::kDrawImmediatelyWhenInteractive);
-}
-
-TEST_F(ImmediateInteractiveDrawTest, DoNotWaitWhenInteracting) {
+TEST_P(DisplaySchedulerTest, DoNotWaitWhenInteracting) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -1019,7 +1035,7 @@ TEST_F(ImmediateInteractiveDrawTest, DoNotWaitWhenInteracting) {
             scheduler_->DesiredBeginFrameDeadlineTimeForTest());
 }
 
-TEST_F(ImmediateInteractiveDrawTest, WaitWhenNotInteracting) {
+TEST_P(DisplaySchedulerTest, WaitWhenNotInteracting) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -1049,7 +1065,7 @@ TEST_F(ImmediateInteractiveDrawTest, WaitWhenNotInteracting) {
             scheduler_->DesiredBeginFrameDeadlineTimeForTest());
 }
 
-TEST_F(ImmediateInteractiveDrawTest, ResetScrollingBitAfterDrawAndSwap) {
+TEST_P(DisplaySchedulerTest, ResetScrollingBitAfterDrawAndSwap) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -1091,7 +1107,7 @@ TEST_F(ImmediateInteractiveDrawTest, ResetScrollingBitAfterDrawAndSwap) {
             scheduler_->DesiredBeginFrameDeadlineTimeForTest());
 }
 
-TEST_F(ImmediateInteractiveDrawTest, ResetScrollingBitOnFrameFinished) {
+TEST_P(DisplaySchedulerTest, ResetScrollingBitOnFrameFinished) {
   SurfaceId root_surface_id(
       kArbitraryFrameSinkId,
       LocalSurfaceId(1, base::UnguessableToken::Create()));
@@ -1133,5 +1149,22 @@ TEST_F(ImmediateInteractiveDrawTest, ResetScrollingBitOnFrameFinished) {
             scheduler_->DesiredBeginFrameDeadlineTimeForTest());
 }
 
+INSTANTIATE_TEST_SUITE_P(,
+                         DisplaySchedulerTest,
+                         ::testing::Bool(),
+                         [](auto& info) {
+                           return info.param
+                                      ? "DisplaySchedulerAsClient_Enabled"
+                                      : "DisplaySchedulerAsClient_Disabled";
+                         });
+
+INSTANTIATE_TEST_SUITE_P(,
+                         DisplaySchedulerWaitForAllSurfacesTest,
+                         ::testing::Bool(),
+                         [](auto& info) {
+                           return info.param
+                                      ? "DisplaySchedulerAsClient_Enabled"
+                                      : "DisplaySchedulerAsClient_Disabled";
+                         });
 }  // namespace
 }  // namespace viz

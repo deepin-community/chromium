@@ -19,12 +19,14 @@ limitations under the License.
 #include <string>
 #include <utility>
 
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/LogicalResult.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
@@ -35,6 +37,7 @@ limitations under the License.
 #include "mlir/IR/SymbolTable.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_saved_model.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
@@ -70,7 +73,7 @@ class AssetSinkingPass : public impl::AssetSinkingPassBase<AssetSinkingPass> {
     SymbolTable symbol_table(module);
     for (auto initializer : init_op.getInitializers()) {
       auto func = symbol_table.lookup<func::FuncOp>(
-          initializer.cast<FlatSymbolRefAttr>().getValue());
+          mlir::cast<FlatSymbolRefAttr>(initializer).getValue());
       RewriteFunction(symbol_table, func);
     }
 
@@ -112,9 +115,9 @@ class AssetSinkingPass : public impl::AssetSinkingPassBase<AssetSinkingPass> {
 
         RankedTensorType type = RankedTensorType::get(
             {}, TF::StringType::get(builder.getContext()));
-        auto const_op = builder.create<TF::ConstOp>(
-            builder.getUnknownLoc(),
-            DenseStringElementsAttr::get(type, {filename}));
+        auto const_op =
+            TF::ConstOp::create(builder, builder.getUnknownLoc(),
+                                DenseStringElementsAttr::get(type, {filename}));
 
         it = const_ops.insert({asset.getSymName(), const_op}).first;
       }
@@ -124,7 +127,7 @@ class AssetSinkingPass : public impl::AssetSinkingPassBase<AssetSinkingPass> {
     }
 
     // Erase function arguments with bounded input.
-    func.eraseArguments(arg_indexes_to_remove);
+    CHECK(llvm::succeeded(func.eraseArguments(arg_indexes_to_remove)));
   }
 };
 
@@ -150,12 +153,12 @@ absl::Status AddSessionInitializerAndInlineCheckpoint(
   StringAttr func_name = main_func.getSymNameAttr();
   llvm::SmallVector<mlir::Attribute, 2> func_names = {
       mlir::SymbolRefAttr::get(builder.getContext(), func_name)};
-  builder.create<tf_saved_model::SessionInitializerOp>(
-      module->getLoc(), builder.getArrayAttr(func_names));
+  tf_saved_model::SessionInitializerOp::create(
+      builder, module->getLoc(), builder.getArrayAttr(func_names));
   // Create AssetOp; this holds the checkpoint_path.
   // TODO(b/318761632): Cleanup usage of string literals, instead use constants.
-  auto asset_op = builder.create<tf_saved_model::AssetOp>(
-      module->getLoc(),
+  auto asset_op = tf_saved_model::AssetOp::create(
+      builder, module->getLoc(),
       /*sym_name=*/
       builder.getStringAttr("__tf_saved_model_variables"),  // Val unimportant.
       /*filename=*/

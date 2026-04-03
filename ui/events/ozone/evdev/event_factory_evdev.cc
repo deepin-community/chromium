@@ -284,18 +284,13 @@ void EventFactoryEvdev::DispatchMouseMoveEvent(
   gfx::PointF location = params.location;
   PointerDetails details = params.pointer_details;
 
-  MouseEvent event(ui::ET_MOUSE_MOVED, gfx::Point(), gfx::Point(),
+  MouseEvent event(ui::EventType::kMouseMoved, gfx::Point(), gfx::Point(),
                    params.timestamp,
                    modifiers_.GetModifierFlags() | params.flags,
                    /* changed_button_flags */ 0, details);
   event.set_location_f(location);
   event.set_root_location_f(location);
   event.set_source_device_id(params.device_id);
-  if (params.ordinal_delta.has_value() &&
-      base::FeatureList::IsEnabled(kEnableOrdinalMotion)) {
-    ui::MouseEvent::DispatcherApi(&event).set_movement(
-        params.ordinal_delta.value());
-  }
   DispatchUiEvent(&event);
 }
 
@@ -349,7 +344,8 @@ void EventFactoryEvdev::DispatchMouseButtonEvent(
   if (down == was_down)
     return;
 
-  MouseEvent event(params.down ? ui::ET_MOUSE_PRESSED : ui::ET_MOUSE_RELEASED,
+  MouseEvent event(params.down ? ui::EventType::kMousePressed
+                               : ui::EventType::kMouseReleased,
                    gfx::Point(), gfx::Point(), params.timestamp,
                    modifiers_.GetModifierFlags() | flag | params.flags,
                    /* changed_button_flags */ flag, details);
@@ -382,8 +378,9 @@ void EventFactoryEvdev::DispatchPinchEvent(const PinchEventParams& params) {
                params.device_id);
   GestureEventDetails details(params.type);
   details.set_device_type(GestureDeviceType::DEVICE_TOUCHPAD);
-  if (params.type == ET_GESTURE_PINCH_UPDATE)
+  if (params.type == EventType::kGesturePinchUpdate) {
     details.set_scale(params.scale);
+  }
   GestureEvent event(params.location.x(), params.location.y(), 0,
                      params.timestamp, details);
   event.set_source_device_id(params.device_id);
@@ -421,7 +418,8 @@ void EventFactoryEvdev::DispatchTouchEvent(const TouchEventParams& params) {
   touch_event.set_source_device_id(params.device_id);
   DispatchUiEvent(&touch_event);
 
-  if (params.type == ET_TOUCH_RELEASED || params.type == ET_TOUCH_CANCELLED) {
+  if (params.type == EventType::kTouchReleased ||
+      params.type == EventType::kTouchCancelled) {
     touch_id_generator_.ReleaseNumber(input_id);
   }
 }
@@ -575,6 +573,17 @@ void EventFactoryEvdev::WarpCursorTo(gfx::AcceleratedWidget widget,
               -1 /* device_id */, EF_NONE, cursor_->GetLocation(),
               nullptr /* ordinal_delta */,
               PointerDetails(EventPointerType::kMouse), EventTimeForNow())));
+}
+
+void EventFactoryEvdev::SynthesizeMouseMove(const gfx::PointF& location) {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&EventFactoryEvdev::DispatchMouseMoveEvent,
+                                weak_ptr_factory_.GetWeakPtr(),
+                                MouseMoveEventParams(
+                                    -1 /* device_id */, EF_IS_SYNTHESIZED,
+                                    location, nullptr /* ordinal_delta */,
+                                    PointerDetails(EventPointerType::kMouse),
+                                    EventTimeForNow())));
 }
 
 int EventFactoryEvdev::NextDeviceId() {

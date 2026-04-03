@@ -55,7 +55,7 @@ static void TFDForwardKernel(tfrt::RemainingArguments arguments,
   }
   std::string op_name_str = op_name.str();
   tfrt::OpAttrs opattrs;
-  Status s = FillOpAttrs(attributes, &opattrs);
+  absl::Status s = FillOpAttrs(attributes, &opattrs);
   if (!s.ok()) {
     frame->ReportError("TFDForwardKernel: Error while parsing attributes: ",
                        s.message());
@@ -77,7 +77,7 @@ static void TFDConstantTensor(tfrt::Argument<int32_t> value,
   // it causes a missing typeinfo error when using -fno-rtti. Investigate
   // if we can make it work with no-rtti.
   Tensor out(DT_INT32, TensorShape({}));
-  out.flat<int32>()(0) = value.get();
+  out.flat<int32_t>()(0) = value.get();
   tensor.Emplace(out);
 }
 

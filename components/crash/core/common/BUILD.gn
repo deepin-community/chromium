@@ -4,7 +4,6 @@
 
 import("//build/buildflag_header.gni")
 import("//build/config/cronet/config.gni")
-import("//build/config/features.gni")
 import("//components/gwp_asan/buildflags/buildflags.gni")
 
 declare_args() {
@@ -167,6 +166,7 @@ source_set("unit_tests") {
   deps = [
     ":common",
     "//base",
+    "//testing/gmock",
     "//testing/gtest",
   ]
 
@@ -183,7 +183,7 @@ source_set("unit_tests") {
     sources += [ "crash_key_breakpad_unittest.cc" ]
   }
 
-  # TODO(crbug.com/1186718): Enable when crash keys are supported on Fuchsia.
+  # TODO(crbug.com/40172607): Enable when crash keys are supported on Fuchsia.
   if (is_fuchsia) {
     sources -= [
       "crash_key_unittest.cc",

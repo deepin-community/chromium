@@ -46,12 +46,12 @@ using AFloatM = mat3x2<AFloat>;
 using AFloatA = array<AFloat, 3>;
 using AIntV = vec3<AInt>;
 using AIntA = array<AInt, 3>;
-using f32V = vec3<f32>;
-using f16V = vec3<f16>;
-using i32V = vec3<i32>;
-using u32V = vec3<u32>;
-using f32M = mat3x2<f32>;
-using f16M = mat3x2<f16>;
+using f32V = vec3f;
+using f16V = vec3h;
+using i32V = vec3i;
+using u32V = vec3u;
+using f32M = mat3x2f;
+using f16M = mat3x2h;
 using f32A = array<f32, 3>;
 using f16A = array<f16, 3>;
 using i32A = array<i32, 3>;
@@ -114,19 +114,19 @@ class MaterializeTest : public resolver::ResolverTestWithParam<CASE> {
                 for (uint32_t i = 0; i < v->Width(); i++) {
                     auto* el = value->Index(i);
                     ASSERT_NE(el, nullptr);
-                    EXPECT_TYPE(el->Type(), v->type());
+                    EXPECT_TYPE(el->Type(), v->Type());
                     EXPECT_EQ(el->ValueAs<T>(), expected_value);
                 }
             },
             [&](const core::type::Matrix* m) {
-                for (uint32_t c = 0; c < m->columns(); c++) {
+                for (uint32_t c = 0; c < m->Columns(); c++) {
                     auto* column = value->Index(c);
                     ASSERT_NE(column, nullptr);
                     EXPECT_TYPE(column->Type(), m->ColumnType());
-                    for (uint32_t r = 0; r < m->rows(); r++) {
+                    for (uint32_t r = 0; r < m->Rows(); r++) {
                         auto* el = column->Index(r);
                         ASSERT_NE(el, nullptr);
-                        EXPECT_TYPE(el->Type(), m->type());
+                        EXPECT_TYPE(el->Type(), m->Type());
                         EXPECT_EQ(el->ValueAs<T>(), expected_value);
                     }
                 }
@@ -366,7 +366,7 @@ TEST_P(MaterializeAbstractNumericToConcreteType, Test) {
             Func("F", tint::Empty, target_ty(), Vector{Return(abstract_expr)});
             break;
         case Method::kArray:
-            WrapInFunction(Call(ty.array(target_ty(), 1_i), abstract_expr));
+            WrapInFunction(Call(ty.array(target_ty(), Expr(1_i)), abstract_expr));
             break;
         case Method::kStruct:
             Structure("S", Vector{Member("v", target_ty())});
@@ -440,16 +440,16 @@ TEST_P(MaterializeAbstractNumericToConcreteType, Test) {
             std::string expect;
             switch (method) {
                 case Method::kBuiltinArg:
-                    expect = "error: no matching call to min(" + data.target_type_name + ", " +
-                             data.abstract_type_name + ")";
+                    expect = "error: no matching call to 'min(" + data.target_type_name + ", " +
+                             data.abstract_type_name + ")'";
                     break;
                 case Method::kBinaryOp:
-                    expect = "error: no matching overload for operator + (" +
-                             data.target_type_name + ", " + data.abstract_type_name + ")";
+                    expect = "error: no matching overload for 'operator + (" +
+                             data.target_type_name + ", " + data.abstract_type_name + ")'";
                     break;
                 case Method::kCompoundAssign:
-                    expect = "error: no matching overload for operator += (" +
-                             data.target_type_name + ", " + data.abstract_type_name + ")";
+                    expect = "error: no matching overload for 'operator += (" +
+                             data.target_type_name + ", " + data.abstract_type_name + ")'";
                     break;
                 default:
                     expect = "error: cannot convert value of type '" + data.abstract_type_name +
@@ -1246,7 +1246,7 @@ using MaterializeAbstractNumericToUnrelatedType = resolver::ResolverTest;
 
 TEST_F(MaterializeAbstractNumericToUnrelatedType, AIntToStructVarInit) {
     Structure("S", Vector{Member("a", ty.i32())});
-    WrapInFunction(Decl(Var("v", ty("S"), Expr(Source{{12, 34}}, 1_a))));
+    WrapInFunction(Decl(Var("v", ty.AsType("S"), Expr(Source{{12, 34}}, 1_a))));
     EXPECT_FALSE(r()->Resolve());
     EXPECT_THAT(
         r()->error(),
@@ -1255,7 +1255,7 @@ TEST_F(MaterializeAbstractNumericToUnrelatedType, AIntToStructVarInit) {
 
 TEST_F(MaterializeAbstractNumericToUnrelatedType, AIntToStructLetInit) {
     Structure("S", Vector{Member("a", ty.i32())});
-    WrapInFunction(Decl(Let("v", ty("S"), Expr(Source{{12, 34}}, 1_a))));
+    WrapInFunction(Decl(Let("v", ty.AsType("S"), Expr(Source{{12, 34}}, 1_a))));
     EXPECT_FALSE(r()->Resolve());
     EXPECT_THAT(
         r()->error(),
@@ -1302,7 +1302,7 @@ TEST_F(MaterializeAbstractStructure, Modf_Vector_DefaultType) {
     ASSERT_TRUE(concrete_str->Members()[0]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::F32>());
     ASSERT_TRUE(materialize->Expr()->Type()->Is<core::type::Struct>());
     auto* abstract_str = materialize->Expr()->Type()->As<core::type::Struct>();
@@ -1310,7 +1310,7 @@ TEST_F(MaterializeAbstractStructure, Modf_Vector_DefaultType) {
     ASSERT_TRUE(abstract_str->Members()[0]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::AbstractFloat>());
 }
 
@@ -1349,7 +1349,7 @@ TEST_F(MaterializeAbstractStructure, Modf_Vector_ExplicitType) {
     ASSERT_TRUE(concrete_str->Members()[0]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::F16>());
     ASSERT_TRUE(materialize->Expr()->Type()->Is<core::type::Struct>());
     auto* abstract_str = materialize->Expr()->Type()->As<core::type::Struct>();
@@ -1357,7 +1357,7 @@ TEST_F(MaterializeAbstractStructure, Modf_Vector_ExplicitType) {
     ASSERT_TRUE(abstract_str->Members()[0]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::AbstractFloat>());
 }
 
@@ -1394,12 +1394,12 @@ TEST_F(MaterializeAbstractStructure, Frexp_Vector_DefaultType) {
     ASSERT_TRUE(concrete_str->Members()[0]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::F32>());
     ASSERT_TRUE(concrete_str->Members()[1]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::I32>());
     ASSERT_TRUE(materialize->Expr()->Type()->Is<core::type::Struct>());
     auto* abstract_str = materialize->Expr()->Type()->As<core::type::Struct>();
@@ -1407,12 +1407,12 @@ TEST_F(MaterializeAbstractStructure, Frexp_Vector_DefaultType) {
     ASSERT_TRUE(abstract_str->Members()[0]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::AbstractFloat>());
     ASSERT_TRUE(abstract_str->Members()[1]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::AbstractInt>());
 }
 
@@ -1454,12 +1454,12 @@ TEST_F(MaterializeAbstractStructure, Frexp_Vector_ExplicitType) {
     ASSERT_TRUE(concrete_str->Members()[0]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::F16>());
     ASSERT_TRUE(concrete_str->Members()[1]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::I32>());
     ASSERT_TRUE(materialize->Expr()->Type()->Is<core::type::Struct>());
     auto* abstract_str = materialize->Expr()->Type()->As<core::type::Struct>();
@@ -1467,12 +1467,12 @@ TEST_F(MaterializeAbstractStructure, Frexp_Vector_ExplicitType) {
     ASSERT_TRUE(abstract_str->Members()[0]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::AbstractFloat>());
     ASSERT_TRUE(abstract_str->Members()[1]
                     ->Type()
                     ->As<core::type::Vector>()
-                    ->type()
+                    ->Type()
                     ->Is<core::type::AbstractInt>());
 }
 

@@ -5,13 +5,16 @@
 #include "cc/trees/layer_tree_frame_sink.h"
 
 #include <stdint.h>
+
 #include <utility>
 
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
+#include "cc/trees/layer_context.h"
 #include "cc/trees/layer_tree_frame_sink_client.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/gpu/context_lost_observer.h"
@@ -19,8 +22,7 @@
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/client/context_support.h"
 #include "gpu/command_buffer/client/raster_interface.h"
-#include "gpu/ipc/client/client_shared_image_interface.h"
-#include "gpu/ipc/client/gpu_channel_host.h"
+#include "gpu/command_buffer/client/shared_image_interface.h"
 
 namespace cc {
 
@@ -45,28 +47,26 @@ class LayerTreeFrameSink::ContextLostForwarder
   base::WeakPtr<LayerTreeFrameSink> frame_sink_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 };
+
+LayerTreeFrameSink::LayerTreeFrameSink()
+    : LayerTreeFrameSink(nullptr, nullptr, nullptr, nullptr) {}
+
 LayerTreeFrameSink::LayerTreeFrameSink(
     scoped_refptr<viz::RasterContextProvider> context_provider,
-    scoped_refptr<RasterContextProviderWrapper> worker_context_provider_wrapper,
+    scoped_refptr<viz::RasterContextProvider> worker_context_provider,
     scoped_refptr<base::SingleThreadTaskRunner> compositor_task_runner,
-    gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager,
-    scoped_refptr<gpu::ClientSharedImageInterface> shared_image_interface)
+    scoped_refptr<gpu::SharedImageInterface> shared_image_interface)
     : context_provider_(std::move(context_provider)),
-      worker_context_provider_wrapper_(
-          std::move(worker_context_provider_wrapper)),
+      worker_context_provider_(std::move(worker_context_provider)),
       compositor_task_runner_(std::move(compositor_task_runner)),
-      gpu_memory_buffer_manager_(gpu_memory_buffer_manager),
       shared_image_interface_(std::move(shared_image_interface)) {
   DETACH_FROM_THREAD(thread_checker_);
-
-  if (!base::FeatureList::IsEnabled(features::kSharedBitmapToSharedImage)) {
-    shared_image_interface_.reset();
-  }
 }
 
 LayerTreeFrameSink::~LayerTreeFrameSink() {
-  if (client_)
+  if (client_) {
     DetachFromClient();
+  }
 }
 
 base::WeakPtr<LayerTreeFrameSink> LayerTreeFrameSink::GetWeakPtr() {
@@ -112,11 +112,17 @@ bool LayerTreeFrameSink::BindToClient(LayerTreeFrameSinkClient* client) {
         worker_context_lost_forwarder_.get());
   }
 
-  // Add GpuChannelLost observer
+  // Add GpuChannelLost observer when in software rendering mode.
   if (shared_image_interface_ &&
       (!context_provider_ && !worker_context_provider())) {
-    client_task_runner_ = base::SingleThreadTaskRunner::GetCurrentDefault();
-    shared_image_interface_->gpu_channel()->AddObserver(this);
+    task_gpu_channel_lost_on_client_thread_ =
+        base::BindPostTaskToCurrentDefault(base::BindOnce(
+            &LayerTreeFrameSink::GpuChannelLostOnClientThread, GetWeakPtr()));
+    if (!shared_image_interface_->AddGpuChannelLostObserver(this)) {
+      task_gpu_channel_lost_on_client_thread_.Reset();
+      shared_image_interface_ = nullptr;
+      return false;
+    }
   }
 
   client_ = client;
@@ -146,49 +152,52 @@ void LayerTreeFrameSink::DetachFromClient() {
         worker_context_lost_forwarder_.get());
     worker_context_lost_forwarder_ = nullptr;
   }
-  if (client_task_runner_ && shared_image_interface_) {
-    shared_image_interface_->gpu_channel()->RemoveObserver(this);
+  if (shared_image_interface_) {
+    if (task_gpu_channel_lost_on_client_thread_) {
+      shared_image_interface_->RemoveGpuChannelLostObserver(this);
+    }
     shared_image_interface_.reset();
-    client_task_runner_.reset();
   }
+}
+
+std::unique_ptr<LayerContext> LayerTreeFrameSink::CreateLayerContext(
+    LayerTreeHostImpl& host_impl) {
+  return nullptr;
 }
 
 void LayerTreeFrameSink::OnContextLost() {
   DCHECK(client_);
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   TRACE_EVENT0("cc", "LayerTreeFrameSink::OnContextLost");
-  shared_image_interface_.reset();
   client_->DidLoseLayerTreeFrameSink();
 }
 
 void LayerTreeFrameSink::OnGpuChannelLost() {
   // OnGpuChannelLost() is called on the IOThread. so it has to be forwareded
-  // to the same thread where BindToClient is called, either the BrowserMain
-  // thread or the compositor thread.
-  DCHECK(client_task_runner_);
-  if (base::SingleThreadTaskRunner::GetCurrentDefault() !=
-      client_task_runner_) {
-    client_task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&LayerTreeFrameSink::OnGpuChannelLost, GetWeakPtr()));
-    return;
+  // to LayerTreeFrameSink::OnGpuChannelLostClientThread(), which is on the same
+  // thread where BindToClient is called, either the BrowserMain thread or the
+  // compositor thread.
+  if (task_gpu_channel_lost_on_client_thread_) {
+    std::move(task_gpu_channel_lost_on_client_thread_).Run();
   }
-
+}
+void LayerTreeFrameSink::GpuChannelLostOnClientThread() {
   // No need to RemoveObserver(). The Observable removes all observers
   // after completing GpuChannelLost notification.
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   shared_image_interface_.reset();
-  client_task_runner_.reset();
 
   DCHECK(client_);
   client_->DidLoseLayerTreeFrameSink();
 }
 
-scoped_refptr<gpu::ClientSharedImageInterface>
+scoped_refptr<gpu::SharedImageInterface>
 LayerTreeFrameSink::shared_image_interface() const {
-  return base::FeatureList::IsEnabled(features::kSharedBitmapToSharedImage)
-             ? shared_image_interface_
-             : nullptr;
+  if (context_provider_) {
+    return context_provider_->SharedImageInterface();
+  }
+
+  return shared_image_interface_;
 }
 
 }  // namespace cc

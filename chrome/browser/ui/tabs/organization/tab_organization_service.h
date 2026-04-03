@@ -9,12 +9,13 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
+#include "chrome/browser/ui/tabs/organization/metrics.h"
 #include "chrome/browser/ui/tabs/organization/tab_organization_observer.h"
 #include "chrome/browser/ui/tabs/organization/tab_organization_session.h"
 #include "chrome/browser/ui/tabs/organization/trigger_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
-#include "components/flags_ui/pref_service_flags_storage.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/webui/flags/pref_service_flags_storage.h"
 
 class Browser;
 class TabOrganizationSession;
@@ -22,13 +23,15 @@ class TabSensitivityCache;
 
 namespace content {
 class BrowserContext;
-class WebContents;
+}
+
+namespace tabs {
+class TabInterface;
 }
 
 // Provides an interface for getting Organizations for tabs.
-class TabOrganizationService
-    : public KeyedService,
-      public TabStripModelObserver {
+class TabOrganizationService : public KeyedService,
+                               public TabStripModelObserver {
  public:
   using BrowserSessionMap =
       std::unordered_map<const Browser*,
@@ -60,18 +63,18 @@ class TabOrganizationService
   // existing session, they should first call GetSessionForBrowser to confirm.
   TabOrganizationSession* CreateSessionForBrowser(
       const Browser* browser,
-      const content::WebContents* base_session_webcontents = nullptr);
+      const tabs::TabInterface* base_session_tab = nullptr);
 
   // If the session exists, destroys the session, calls CreateSessionForBrowser.
   TabOrganizationSession* ResetSessionForBrowser(
       const Browser* browser,
-      const content::WebContents* base_session_webcontents = nullptr);
+      const tabs::TabInterface* base_session_tab = nullptr);
 
   // Convenience method that resets the session, starts a request if not in the
   // first run experience, and opens the Organization UI.
   void RestartSessionAndShowUI(
       const Browser* browser,
-      const content::WebContents* base_session_webcontents = nullptr);
+      const tabs::TabInterface* base_session_tab = nullptr);
 
   // Allows for other User actions to open up the Organization UI.
   void OnUserInvokedFeature(const Browser* browser);
@@ -113,12 +116,22 @@ class TabOrganizationService
       const TabStripModelChange& change,
       const TabStripSelectionChange& selection) override;
 
+  void OnTabGroupChanged(const TabGroupChange& change) override;
+
+  void TabGroupedStateChanged(TabStripModel* tab_strip_model,
+                              std::optional<tab_groups::TabGroupId> old_group,
+                              std::optional<tab_groups::TabGroupId> new_group,
+                              tabs::TabInterface* tab,
+                              int index) override;
+
   // Returns true if the profile that owns this service should be able to create
   // requests to the TabOrganizationRequest object, otherwise returns false.
   bool CanStartRequest() const;
 
  private:
   void RemoveBrowserFromSessionMap(const Browser* browser);
+  const Browser* GetBrowserForTabStripModel(
+      const TabStripModel* tab_strip_model);
 
   // mapping of browser to session.
   BrowserSessionMap browser_session_map_;

@@ -8,14 +8,15 @@
 #include <stddef.h>
 
 #include <memory>
+#include <vector>
 
+#include "base/gtest_prod_util.h"
 #include "base/synchronization/lock.h"
 #include "base/time/time.h"
 #include "media/base/audio_converter.h"
 #include "media/base/reentrancy_checker.h"
 #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_audio_sink.h"
 #include "third_party/blink/public/platform/web_audio_source_provider.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
 
@@ -49,7 +50,7 @@ class MODULES_EXPORT WebAudioMediaStreamAudioSink
 
   WebAudioMediaStreamAudioSink(MediaStreamComponent* component,
                                int context_sample_rate,
-                               uint32_t context_buffer_size);
+                               base::TimeDelta platform_buffer_duration);
 
   WebAudioMediaStreamAudioSink(const WebAudioMediaStreamAudioSink&) = delete;
   WebAudioMediaStreamAudioSink& operator=(const WebAudioMediaStreamAudioSink&) =
@@ -65,7 +66,7 @@ class MODULES_EXPORT WebAudioMediaStreamAudioSink
 
   // WebAudioSourceProvider implementation.
   void SetClient(WebAudioSourceProviderClient* client) override;
-  void ProvideInput(const WebVector<float*>& audio_data,
+  void ProvideInput(const std::vector<float*>& audio_data,
                     int number_of_frames) override;
 
  private:
@@ -94,7 +95,7 @@ class MODULES_EXPORT WebAudioMediaStreamAudioSink
   // Protects the above variables.
   base::Lock lock_;
 
-  // No lock protection needed since only accessed in WebVector version of
+  // No lock protection needed since only accessed in std::vector version of
   // ProvideInput().
   std::unique_ptr<media::AudioBus> output_wrapper_;
 
@@ -108,10 +109,11 @@ class MODULES_EXPORT WebAudioMediaStreamAudioSink
   // and OnReadyStateChanged().
   bool track_stopped_;
 
-  // Buffer size of the audio context the sink delivers audio to. Affects how
-  // many public ProvideInput() calls can be received in one batch, and thus
-  // needs to be taken into account when configuring `fifo_`.
-  const uint32_t sink_context_buffer_size_;
+  // Buffer duration of the output backing up the audio context the sink
+  // delivers audio to. Affects how many public ProvideInput() calls can be
+  // received in one batch, and thus needs to be taken into account when
+  // configuring `fifo_`.
+  const base::TimeDelta platform_buffer_duration_;
 
   // Parameters at which audio is delivered to the WebAudio graph, i.e. of the
   // public ProvideInput() call.

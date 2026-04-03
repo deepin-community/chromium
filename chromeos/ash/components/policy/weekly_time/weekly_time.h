@@ -73,26 +73,20 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_POLICY) WeeklyTime {
   // nullopt).
   WeeklyTime ConvertToTimezone(int timezone_offset) const;
 
-  // Creates a new WeeklyTime that has |timezone_offset_| set to
-  // |timezone_offset|. This function is to be used to set the timezone of
-  // timezone agnostic WeeklyTime objects, i.e. objects where |timezone_offset_|
-  // == nullopt.
-  WeeklyTime ConvertToCustomTimezone(int timezone_offset) const;
-
   // Return WeeklyTime structure from WeeklyTimeProto. Return nullptr if
   // WeeklyTime structure isn't correct.
   static std::unique_ptr<WeeklyTime> ExtractFromProto(
       const enterprise_management::WeeklyTimeProto& container,
       std::optional<int> timezone_offset);
 
-  // Return WeeklyTime structure from Value::Dict in format:
+  // Return WeeklyTime structure from base::DictValue in format:
   // { "day_of_week" : int # value is from 1 to 7 (1 = Monday, 2 = Tuesday,
   // etc.)
   //   "time" : int # in milliseconds from the beginning of the day.
   // }.
   // Return nullptr if WeeklyTime structure isn't correct.
   static std::unique_ptr<WeeklyTime> ExtractFromDict(
-      const base::Value::Dict& dict,
+      const base::DictValue& dict,
       std::optional<int> timezone_offset);
 
   // Return the |time| in GMT in WeeklyTime structure.

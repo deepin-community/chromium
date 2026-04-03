@@ -65,28 +65,22 @@ class CookiePolicyBrowserTest : public InProcessBrowserTest {
   CookiePolicyBrowserTest(const CookiePolicyBrowserTest&) = delete;
   CookiePolicyBrowserTest& operator=(const CookiePolicyBrowserTest&) = delete;
 
-  void SetBlockThirdPartyCookies(bool value) {
+  void SetBlockThirdPartyCookies() {
     browser()->profile()->GetPrefs()->SetInteger(
         prefs::kCookieControlsMode,
         static_cast<int>(
-            value ? content_settings::CookieControlsMode::kBlockThirdParty
-                  : content_settings::CookieControlsMode::kOff));
+            content_settings::CookieControlsMode::kBlockThirdParty));
   }
 
  protected:
   CookiePolicyBrowserTest()
       : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}
 
-  virtual std::vector<base::test::FeatureRef> EnabledFeatures() {
-    return {blink::features::kWebSQLAccess};
-  }
+  virtual std::vector<base::test::FeatureRef> EnabledFeatures() { return {}; }
 
   virtual std::vector<base::test::FeatureRef> DisabledFeatures() { return {}; }
 
   void SetUp() override {
-    // WebSQL is disabled by default as of M119 (crbug/695592).
-    // Enable feature in tests during deprecation trial and enterprise
-    // policy support.
     feature_list_.InitWithFeatures(EnabledFeatures(), DisabledFeatures());
     InProcessBrowserTest::SetUp();
   }
@@ -136,7 +130,7 @@ class CookiePolicyBrowserTest : public InProcessBrowserTest {
                       const std::string& cookie) {
     content::EvalJsResult result =
         EvalJs(frame, base::StrCat({"document.cookie = '", cookie, "'"}));
-    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_TRUE(result.is_ok()) << result;
   }
 
   std::string GetCookieViaJS(content::RenderFrameHost* frame) {
@@ -173,19 +167,11 @@ class CookiePolicyBrowserTest : public InProcessBrowserTest {
   base::test::ScopedFeatureList feature_list_;
 };
 
-// For test cases that only cover pre-3PCD logic.
-class CookiePolicyPre3pcdBrowserTest : public CookiePolicyBrowserTest {
- protected:
-  std::vector<base::test::FeatureRef> DisabledFeatures() override {
-    return {content_settings::features::kTrackingProtection3pcd};
-  }
-};
-
 // Visits a page that sets a first-party cookie.
-IN_PROC_BROWSER_TEST_F(CookiePolicyPre3pcdBrowserTest, AllowFirstPartyCookies) {
-  SetBlockThirdPartyCookies(false);
-
+IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest, AllowFirstPartyCookies) {
   GURL url(https_server_.GetURL(kHostA, "/set-cookie?cookie1"));
+  cookie_settings()->SetCookieSetting(url,
+                                      ContentSetting::CONTENT_SETTING_ALLOW);
 
   ASSERT_EQ("", content::GetCookies(browser()->profile(), url));
 
@@ -198,7 +184,7 @@ IN_PROC_BROWSER_TEST_F(CookiePolicyPre3pcdBrowserTest, AllowFirstPartyCookies) {
 // a first-party cookie.
 IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest,
                        AllowFirstPartyCookiesRedirect) {
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   GURL redirected_url(https_server_.GetURL(kHostB, "/set-cookie?cookie2"));
 
@@ -219,11 +205,11 @@ IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest,
 }
 
 // Third-Party Frame Tests
-IN_PROC_BROWSER_TEST_F(CookiePolicyPre3pcdBrowserTest,
+IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest,
                        ThirdPartyCookiesIFrameAllowSetting) {
-  SetBlockThirdPartyCookies(false);
-
   NavigateToPageWithFrame(kHostA);
+  cookie_settings()->SetCookieSetting(GetURL(kHostB),
+                                      ContentSetting::CONTENT_SETTING_ALLOW);
 
   EXPECT_EQ(content::GetCookies(browser()->profile(), GetURL(kHostB)), "");
 
@@ -260,7 +246,7 @@ IN_PROC_BROWSER_TEST_F(CookiePolicyPre3pcdBrowserTest,
 // whatever.
 IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest,
                        ThirdPartyCookiesIFrameBlockSetting) {
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   NavigateToPageWithFrame(kHostA);
 
@@ -286,13 +272,14 @@ IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest,
   EXPECT_EQ(content::GetCookies(browser()->profile(), GetURL(kHostB)), "");
 }
 
-IN_PROC_BROWSER_TEST_F(CookiePolicyPre3pcdBrowserTest,
+IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest,
                        ThirdPartyCookiesIFrameAllowReading) {
-  SetBlockThirdPartyCookies(false);
-
+  cookie_settings()->SetCookieSetting(GetURL(kHostB),
+                                      ContentSetting::CONTENT_SETTING_ALLOW);
   // Set a cookie on `b.test`.
-  content::SetCookie(browser()->profile(), https_server_.GetURL(kHostB, "/"),
-                     "thirdparty=1;SameSite=None;Secure");
+  ASSERT_TRUE(content::SetCookie(browser()->profile(),
+                                 https_server_.GetURL(kHostB, "/"),
+                                 "thirdparty=1;SameSite=None;Secure"));
   EXPECT_EQ(content::GetCookies(browser()->profile(), GetURL(kHostB)),
             "thirdparty=1");
 
@@ -324,11 +311,12 @@ IN_PROC_BROWSER_TEST_F(CookiePolicyPre3pcdBrowserTest,
 // whatever.
 IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest,
                        ThirdPartyCookiesIFrameBlockReading) {
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   // Set a cookie on `b.test`.
-  content::SetCookie(browser()->profile(), https_server_.GetURL(kHostB, "/"),
-                     "thirdparty=1;SameSite=None;Secure");
+  ASSERT_TRUE(content::SetCookie(browser()->profile(),
+                                 https_server_.GetURL(kHostB, "/"),
+                                 "thirdparty=1;SameSite=None;Secure"));
   EXPECT_EQ(content::GetCookies(browser()->profile(), GetURL(kHostB)),
             "thirdparty=1");
 
@@ -356,17 +344,19 @@ IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest,
                        ThirdPartyCookiesIFrameExceptions) {
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   // Set a cookie on `b.test`.
-  content::SetCookie(browser()->profile(), https_server_.GetURL(kHostB, "/"),
-                     "thirdparty=1;SameSite=None;Secure");
+  ASSERT_TRUE(content::SetCookie(browser()->profile(),
+                                 https_server_.GetURL(kHostB, "/"),
+                                 "thirdparty=1;SameSite=None;Secure"));
   EXPECT_EQ(content::GetCookies(browser()->profile(), GetURL(kHostB)),
             "thirdparty=1");
 
   // Set a cookie on d.test.
-  content::SetCookie(browser()->profile(), https_server_.GetURL(kHostD, "/"),
-                     "thirdparty=other;SameSite=None;Secure");
+  ASSERT_TRUE(content::SetCookie(browser()->profile(),
+                                 https_server_.GetURL(kHostD, "/"),
+                                 "thirdparty=other;SameSite=None;Secure"));
   EXPECT_EQ(content::GetCookies(browser()->profile(), GetURL(kHostD)),
             "thirdparty=other");
 
@@ -411,11 +401,12 @@ IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest,
                        ThirdPartyCookiesIFrameThirdPartyExceptions) {
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   // Set a cookie on `b.test`.
-  content::SetCookie(browser()->profile(), https_server_.GetURL(kHostB, "/"),
-                     "thirdparty=1;SameSite=None;Secure");
+  ASSERT_TRUE(content::SetCookie(browser()->profile(),
+                                 https_server_.GetURL(kHostB, "/"),
+                                 "thirdparty=1;SameSite=None;Secure"));
   EXPECT_EQ(content::GetCookies(browser()->profile(), GetURL(kHostB)),
             "thirdparty=1");
 
@@ -484,7 +475,7 @@ IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest, MultiTabTest) {
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
   storage::test::ExpectCrossTabInfoForFrame(GetFrame(), true);
 
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
@@ -536,7 +527,7 @@ IN_PROC_BROWSER_TEST_F(CookiePolicyBrowserTest, MultiTabNestedTest) {
   NavigateNestedFrameTo(kHostA, "/browsing_data/site_data.html");
   storage::test::ExpectCrossTabInfoForFrame(GetNestedFrame(), true);
 
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/iframe.html");
@@ -588,8 +579,7 @@ class CookiePolicyStorageBrowserTest
     switch (ContextType()) {
       case ContextType::kFrame:
         storage::test::ExpectStorageForFrame(frame, expected_storage);
-        EXPECT_EQ(expected_cookie && !Is3pcd(),
-                  content::EvalJs(frame, "hasCookie()"));
+        EXPECT_EQ(expected_cookie, content::EvalJs(frame, "hasCookie()"));
         return;
       case ContextType::kWorker:
         storage::test::ExpectStorageForWorker(frame, expected_storage);
@@ -600,7 +590,7 @@ class CookiePolicyStorageBrowserTest
   void SetStorage(content::RenderFrameHost* frame) {
     switch (ContextType()) {
       case ContextType::kFrame:
-        storage::test::SetStorageForFrame(frame, /*include_cookies=*/!Is3pcd());
+        storage::test::SetStorageForFrame(frame, /*include_cookies=*/true);
         return;
       case ContextType::kWorker:
         storage::test::SetStorageForWorker(frame);
@@ -608,16 +598,17 @@ class CookiePolicyStorageBrowserTest
     }
   }
 
-  bool Is3pcd() {
-    return base::FeatureList::IsEnabled(
-        content_settings::features::kTrackingProtection3pcd);
-  }
-
   ContextType ContextType() const { return GetParam(); }
 };
 
+// TODO(crbug.com/372780565): Test failing on Windows-asan
+#if BUILDFLAG(IS_WIN) && defined(ADDRESS_SANITIZER)
+#define MAYBE_ThirdPartyIFrameStorage DISABLED_ThirdPartyIFrameStorage
+#else
+#define MAYBE_ThirdPartyIFrameStorage ThirdPartyIFrameStorage
+#endif
 IN_PROC_BROWSER_TEST_P(CookiePolicyStorageBrowserTest,
-                       ThirdPartyIFrameStorage) {
+                       MAYBE_ThirdPartyIFrameStorage) {
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
 
@@ -627,7 +618,7 @@ IN_PROC_BROWSER_TEST_P(CookiePolicyStorageBrowserTest,
   ExpectStorage(GetFrame(), /*expected_storage=*/true,
                 /*expected_cookie=*/true);
 
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
@@ -665,7 +656,8 @@ IN_PROC_BROWSER_TEST_P(CookiePolicyStorageBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_P(CookiePolicyStorageBrowserTest,
-                       NestedThirdPartyIFrameStorage) {
+                       // TODO(crbug.com/390648566): Re-enable this test
+                       DISABLED_NestedThirdPartyIFrameStorage) {
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/iframe.html");
   NavigateNestedFrameTo(kHostC, "/browsing_data/site_data.html");
@@ -676,7 +668,7 @@ IN_PROC_BROWSER_TEST_P(CookiePolicyStorageBrowserTest,
   ExpectStorage(GetNestedFrame(), /*expected_storage=*/true,
                 /*expected_cookie=*/true);
 
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/iframe.html");
@@ -752,8 +744,7 @@ class ThirdPartyPartitionedStorageAccessibilityTest
     if (StoragePartitioningEnabled()) {
       return {};
     }
-    return {net::features::kThirdPartyStoragePartitioning,
-            content_settings::features::kTrackingProtection3pcd};
+    return {net::features::kThirdPartyStoragePartitioning};
   }
 
   ContextType ContextType() const { return std::get<0>(GetParam()); }
@@ -770,7 +761,7 @@ IN_PROC_BROWSER_TEST_P(ThirdPartyPartitionedStorageAccessibilityTest, Basic) {
   SetStorage(GetFrame());
   ExpectStorage(GetFrame(), true);
 
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
 
@@ -795,7 +786,7 @@ IN_PROC_BROWSER_TEST_P(ThirdPartyPartitionedStorageAccessibilityTest,
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
   ExpectStorage(GetFrame(), false);
 
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
@@ -826,7 +817,7 @@ IN_PROC_BROWSER_TEST_P(
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
   storage::test::ExpectCrossTabInfoForFrame(GetFrame(), true);
 
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
 
@@ -834,9 +825,15 @@ IN_PROC_BROWSER_TEST_P(
                                             StoragePartitioningEnabled());
 }
 
+// TODO(crbug.com/394386466): Test failing on Windows-asan
+#if BUILDFLAG(IS_WIN) && defined(ADDRESS_SANITIZER)
+#define MAYBE_UserSetting DISABLED_UserSetting
+#else
+#define MAYBE_UserSetting UserSetting
+#endif
 IN_PROC_BROWSER_TEST_P(
     ThirdPartyPartitionedStorageAccessibilitySharedWorkerTest,
-    UserSetting) {
+    MAYBE_UserSetting) {
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
 
@@ -856,7 +853,7 @@ IN_PROC_BROWSER_TEST_P(
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
   storage::test::ExpectCrossTabInfoForFrame(GetFrame(), false);
 
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
@@ -867,8 +864,7 @@ class ThirdPartyPartitionedStorageAccessibilityCanBeDisabledTest
     : public ThirdPartyPartitionedStorageAccessibilityTest {
  protected:
   std::vector<base::test::FeatureRef> DisabledFeatures() override {
-    return {net::features::kThirdPartyPartitionedStorageAllowedByDefault,
-            content_settings::features::kTrackingProtection3pcd};
+    return {net::features::kThirdPartyPartitionedStorageAllowedByDefault};
   }
 };
 
@@ -883,7 +879,7 @@ IN_PROC_BROWSER_TEST_P(
   SetStorage(GetFrame());
   ExpectStorage(GetFrame(), true);
 
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/browsing_data/site_data.html");
 
@@ -893,13 +889,6 @@ IN_PROC_BROWSER_TEST_P(
 
 IN_PROC_BROWSER_TEST_P(CookiePolicyStorageBrowserTest,
                        NestedFirstPartyIFrameStorage) {
-// TODO(http://crbug.com/1317431): WebSQL does not work on Fuchsia.
-#if BUILDFLAG(IS_FUCHSIA)
-  if (ContextType() == ContextType::kFrame) {
-    return;
-  }
-#endif
-
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/iframe.html");
   NavigateNestedFrameTo(kHostA, "/browsing_data/site_data.html");
@@ -910,7 +899,7 @@ IN_PROC_BROWSER_TEST_P(CookiePolicyStorageBrowserTest,
   ExpectStorage(GetNestedFrame(), /*expected_storage=*/true,
                 /*expected_cookie=*/true);
 
-  SetBlockThirdPartyCookies(true);
+  SetBlockThirdPartyCookies();
 
   NavigateToPageWithFrame(kHostA);
   NavigateFrameTo(kHostB, "/iframe.html");
@@ -999,8 +988,7 @@ class ThirdPartyCookiePhaseoutPolicyStorageBrowserTest
   net::EmbeddedTestServer* https_server() { return &https_server_; }
 
   std::vector<base::test::FeatureRef> EnabledFeatures() override {
-    return {blink::features::kWebSQLAccess,
-            net::features::kForceThirdPartyCookieBlocking,
+    return {net::features::kForceThirdPartyCookieBlocking,
             net::features::kThirdPartyStoragePartitioning};
   }
 };
@@ -1021,8 +1009,9 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyCookiePhaseoutPolicyStorageBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ThirdPartyCookiePhaseoutPolicyStorageBrowserTest,
                        SandboxedTopLevelFrame) {
-  content::SetCookie(browser()->profile(), https_server_.GetURL(kHostB, "/"),
-                     "thirdparty=1;SameSite=None;Secure");
+  ASSERT_TRUE(content::SetCookie(browser()->profile(),
+                                 https_server_.GetURL(kHostB, "/"),
+                                 "thirdparty=1;SameSite=None;Secure"));
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(),

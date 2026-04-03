@@ -15,7 +15,6 @@
 #include "base/time/time.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "net/cookies/canonical_cookie.h"
-#include "third_party/blink/public/mojom/quota/quota_types.mojom-forward.h"
 #include "url/origin.h"
 
 class Profile;
@@ -51,6 +50,9 @@ class SiteDataCountingHelper {
       const scoped_refptr<storage::SpecialStoragePolicy>&
           special_storage_policy,
       const std::vector<content::StorageUsageInfo>& infos);
+  void GetCdmStorageCallback(
+      const std::vector<std::pair<blink::StorageKey, uint64_t>>&
+          usage_per_storage_keys);
   void GetQuotaBucketsCallback(const std::set<storage::BucketLocator>& buckets);
   void GetSharedDictionaryOriginsCallback(
       const std::vector<url::Origin>& origins);

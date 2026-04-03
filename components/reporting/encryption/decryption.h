@@ -6,14 +6,16 @@
 #define COMPONENTS_REPORTING_ENCRYPTION_DECRYPTION_H_
 
 #include <string>
+#include <string_view>
 
 #include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/string_piece.h"
+#include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/threading/thread.h"
+#include "base/time/time.h"
 #include "components/reporting/encryption/encryption.h"
 #include "components/reporting/util/status.h"
 #include "components/reporting/util/statusor.h"

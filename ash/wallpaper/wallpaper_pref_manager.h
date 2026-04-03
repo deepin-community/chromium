@@ -21,6 +21,7 @@
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "base/timer/wall_clock_timer.h"
+#include "base/values.h"
 #include "components/account_id/account_id.h"
 
 class PrefService;
@@ -58,21 +59,14 @@ class WallpaperProfileHelper {
 // Manages wallpaper preferences and tracks the currently configured wallpaper.
 class ASH_EXPORT WallpaperPrefManager : public SessionObserver {
  public:
-  // Names of nodes with wallpaper info in |kUserWallpaperInfo| dictionary.
-  static const char kNewWallpaperAssetIdNodeName[];
-  static const char kNewWallpaperCollectionIdNodeName[];
-  static const char kNewWallpaperDateNodeName[];
-  static const char kNewWallpaperDedupKeyNodeName[];
-  static const char kNewWallpaperLayoutNodeName[];
-  static const char kNewWallpaperLocationNodeName[];
-  static const char kNewWallpaperUserFilePathNodeName[];
-  static const char kNewWallpaperTypeNodeName[];
-  static const char kNewWallpaperUnitIdNodeName[];
-  static const char kNewWallpaperVariantListNodeName[];
+  class Observer : public base::CheckedObserver {
+   public:
+    ~Observer() override = default;
 
-  // Names of nodes for the online wallpaper variant dictionary.
-  static const char kOnlineWallpaperTypeNodeName[];
-  static const char kOnlineWallpaperUrlNodeName[];
+    // Called when kDeviceWallpaperImageFilePath in local_state is updated.
+    virtual void OnDeviceWallpaperImageFilePathUpdated(
+        const base::FilePath& path) {}
+  };
 
   // Determines whether the wallpaper info is syncable and should be stored in
   // synced prefs.
@@ -99,6 +93,9 @@ class ASH_EXPORT WallpaperPrefManager : public SessionObserver {
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
   virtual void SetClient(WallpaperControllerClient* client) = 0;
+
+  virtual void AddObserver(Observer* observer) = 0;
+  virtual void RemoveObserver(Observer* observer) = 0;
 
   // Retrieve the wallpaper preference value for |account_id| and use it to
   // populate |info|. Returns true if |info| was populated successfully.
@@ -141,7 +138,7 @@ class ASH_EXPORT WallpaperPrefManager : public SessionObserver {
 
   // Returns the cached KMeans color value for the wallpaper at `location`.
   virtual std::optional<SkColor> GetCachedKMeanColor(
-      const std::string_view location) const = 0;
+      std::string_view location) const = 0;
 
   virtual void RemoveKMeanColor(const AccountId& account_id) = 0;
 
@@ -150,7 +147,7 @@ class ASH_EXPORT WallpaperPrefManager : public SessionObserver {
                                 SkColor celebi_color) = 0;
   // Returns the cached celebi color for the wallpaper at `location`.
   virtual std::optional<SkColor> GetCelebiColor(
-      const std::string_view location) const = 0;
+      std::string_view location) const = 0;
   virtual void RemoveCelebiColor(const AccountId& account_id) = 0;
 
   virtual bool SetDailyGooglePhotosWallpaperIdCache(
@@ -180,10 +177,13 @@ class ASH_EXPORT WallpaperPrefManager : public SessionObserver {
   virtual base::TimeDelta GetTimeToNextDailyRefreshUpdate(
       const AccountId& account_id) const = 0;
 
+  // Returns the kDeviceWallpaperImageFilePath.
+  virtual base::FilePath GetDeviceWallpaperImageFilePath() const = 0;
+
  protected:
   WallpaperPrefManager() = default;
 };
 
 }  // namespace ash
 
-#endif  //  ASH_WALLPAPER_WALLPAPER_PREF_MANAGER_H_
+#endif  // ASH_WALLPAPER_WALLPAPER_PREF_MANAGER_H_

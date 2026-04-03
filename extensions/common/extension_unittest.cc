@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "base/command_line.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "extensions/common/error_utils.h"
@@ -29,13 +30,13 @@ std::string GetVersionTooHighWarning(int max_version, int supplied_version) {
 }
 
 testing::AssertionResult RunManifestVersionSuccess(
-    base::Value::Dict manifest,
+    base::DictValue manifest,
     Manifest::Type expected_type,
     int expected_manifest_version,
     std::string_view expected_warning = "",
     Extension::InitFromValueFlags custom_flag = Extension::NO_FLAGS,
     ManifestLocation manifest_location = ManifestLocation::kInternal) {
-  std::string error;
+  std::u16string error;
   scoped_refptr<const Extension> extension = Extension::Create(
       base::FilePath(), manifest_location, manifest, custom_flag, &error);
   if (!extension) {
@@ -71,9 +72,9 @@ testing::AssertionResult RunManifestVersionSuccess(
 }
 
 testing::AssertionResult RunManifestVersionFailure(
-    base::Value::Dict manifest,
+    base::DictValue manifest,
     Extension::InitFromValueFlags custom_flag = Extension::NO_FLAGS) {
-  std::string error;
+  std::u16string error;
   scoped_refptr<const Extension> extension =
       Extension::Create(base::FilePath(), ManifestLocation::kInternal, manifest,
                         custom_flag, &error);
@@ -84,11 +85,11 @@ testing::AssertionResult RunManifestVersionFailure(
 }
 
 testing::AssertionResult RunCreationWithFlags(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     mojom::ManifestLocation location,
     Manifest::Type expected_type,
     Extension::InitFromValueFlags custom_flag = Extension::NO_FLAGS) {
-  std::string error;
+  std::u16string error;
   scoped_refptr<const Extension> extension = Extension::Create(
       base::FilePath(), location, manifest, custom_flag, &error);
   if (!extension) {
@@ -110,7 +111,7 @@ testing::AssertionResult RunCreationWithFlags(
 
 TEST(ExtensionTest, ExtensionManifestVersions) {
   auto get_manifest = [](std::optional<int> manifest_version) {
-    auto manifest = base::Value::Dict()
+    auto manifest = base::DictValue()
                         .Set("name", "My Extension")
                         .Set("version", "0.1")
                         .Set("description", "An awesome extension");
@@ -119,7 +120,7 @@ TEST(ExtensionTest, ExtensionManifestVersions) {
     return manifest;
   };
 
-  const Manifest::Type kType = Manifest::TYPE_EXTENSION;
+  const Manifest::Type kType = Manifest::Type::kExtension;
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(2), kType, 2));
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(3), kType, 3));
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(4), kType, 4,
@@ -153,20 +154,20 @@ TEST(ExtensionTest, ExtensionManifestVersions) {
 
 TEST(ExtensionTest, PlatformAppManifestVersions) {
   auto get_manifest = [](std::optional<int> manifest_version) {
-    base::Value::Dict background;
-    background.Set("scripts", base::Value::List().Append("background.js"));
-    auto manifest = base::Value::Dict()
+    base::DictValue background;
+    background.Set("scripts", base::ListValue().Append("background.js"));
+    auto manifest = base::DictValue()
                         .Set("name", "My Platform App")
                         .Set("version", "0.1")
                         .Set("description", "A platform app")
-                        .Set("app", base::Value::Dict().Set(
+                        .Set("app", base::DictValue().Set(
                                         "background", std::move(background)));
     if (manifest_version)
       manifest.Set("manifest_version", *manifest_version);
     return manifest;
   };
 
-  const Manifest::Type kType = Manifest::TYPE_PLATFORM_APP;
+  const Manifest::Type kType = Manifest::Type::kPlatformApp;
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(2), kType, 2));
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(3), kType, 3));
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(4), kType, 4,
@@ -194,9 +195,9 @@ TEST(ExtensionTest, PlatformAppManifestVersions) {
 
 TEST(ExtensionTest, HostedAppManifestVersions) {
   auto get_manifest = [](std::optional<int> manifest_version) {
-    base::Value::Dict app;
-    app.Set("urls", base::Value::List().Append("http://example.com"));
-    auto manifest = base::Value::Dict()
+    base::DictValue app;
+    app.Set("urls", base::ListValue().Append("http://example.com"));
+    auto manifest = base::DictValue()
                         .Set("name", "My Hosted App")
                         .Set("version", "0.1")
                         .Set("description", "A hosted app")
@@ -206,7 +207,7 @@ TEST(ExtensionTest, HostedAppManifestVersions) {
     return manifest;
   };
 
-  const Manifest::Type kType = Manifest::TYPE_HOSTED_APP;
+  const Manifest::Type kType = Manifest::Type::kHostedApp;
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(2), kType, 2));
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(3), kType, 3));
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(4), kType, 4,
@@ -224,7 +225,7 @@ TEST(ExtensionTest, HostedAppManifestVersions) {
 
 TEST(ExtensionTest, UserScriptManifestVersions) {
   auto get_manifest = [](std::optional<int> manifest_version) {
-    auto manifest = base::Value::Dict()
+    auto manifest = base::DictValue()
                         .Set("name", "My Extension")
                         .Set("version", "0.1")
                         .Set("description", "An awesome extension")
@@ -234,7 +235,7 @@ TEST(ExtensionTest, UserScriptManifestVersions) {
     return manifest;
   };
 
-  const Manifest::Type kType = Manifest::TYPE_USER_SCRIPT;
+  const Manifest::Type kType = Manifest::Type::kUserScript;
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(2), kType, 2));
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(3), kType, 3));
   EXPECT_TRUE(RunManifestVersionSuccess(get_manifest(4), kType, 4,
@@ -251,17 +252,17 @@ TEST(ExtensionTest, UserScriptManifestVersions) {
 }
 
 TEST(ExtensionTest, LoginScreenFlag) {
-  auto manifest = base::Value::Dict()
+  auto manifest = base::DictValue()
                       .Set("name", "My Extension")
                       .Set("version", "0.1")
                       .Set("description", "An awesome extension")
                       .Set("manifest_version", 2);
 
   EXPECT_TRUE(RunCreationWithFlags(manifest, ManifestLocation::kExternalPolicy,
-                                   Manifest::TYPE_EXTENSION,
+                                   Manifest::Type::kExtension,
                                    Extension::NO_FLAGS));
   EXPECT_TRUE(RunCreationWithFlags(manifest, ManifestLocation::kExternalPolicy,
-                                   Manifest::TYPE_LOGIN_SCREEN_EXTENSION,
+                                   Manifest::Type::kLoginScreenExtension,
                                    Extension::FOR_LOGIN_SCREEN));
 }
 

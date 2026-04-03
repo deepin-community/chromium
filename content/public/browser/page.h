@@ -15,6 +15,10 @@
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/scoped_java_ref.h"
+#endif
+
 namespace content {
 
 // Page represents a collection of documents with the same main document.
@@ -70,19 +74,23 @@ class CONTENT_EXPORT Page : public base::SupportsUserData {
   // frame document's manifest. The url will be empty if the document specifies
   // no manifest, and the manifest will be empty if any other failures occurred.
   using GetManifestCallback =
-      base::OnceCallback<void(const GURL&, blink::mojom::ManifestPtr)>;
+      base::OnceCallback<void(blink::mojom::ManifestRequestResult,
+                              const GURL&,
+                              blink::mojom::ManifestPtr)>;
 
   // Requests the manifest URL and the Manifest of the main frame's document.
   // |callback| may be called after the WebContents has been destroyed.
   // This must be invoked on the UI thread, |callback| will be invoked on the UI
   // thread.
+  // TODO(https://crbug.com/452053908): Replace usage with PageManifestManager
+  // with PrimaryPageChanged, and eventually remove this GetManifest and
+  // WebContentsObserver::DidUpdateWebManifestURL.
   virtual void GetManifest(GetManifestCallback callback) = 0;
 
   // Returns true iff this Page is primary for the associated `WebContents`
   // (i.e. web_contents->GetPrimaryPage() == this_page). Non-primary pages
-  // include pages in bfcache, portal, prerendering, fenced frames, pending
-  // commit and pending deletion pages. See WebContents::GetPrimaryPage for more
-  // details.
+  // include pages in bfcache, prerendering, fenced frames, pending commit and
+  // pending deletion pages. See WebContents::GetPrimaryPage for more details.
   virtual bool IsPrimary() const = 0;
 
   // Returns the main RenderFrameHost associated with this Page.
@@ -100,13 +108,10 @@ class CONTENT_EXPORT Page : public base::SupportsUserData {
   // Returns the MIME type bound to the Page contents after a navigation.
   virtual const std::string& GetContentsMimeType() const = 0;
 
-  // Test version of `PageImpl::SetResizable` to allow tests outside of
-  // //content to simulate the value normally set by the
-  // window.setResizable(bool) API.
-  virtual void SetResizableForTesting(std::optional<bool> resizable) = 0;
-  // Returns the value set by `window.setResizable(bool)` API or `std::nullopt`
-  // if unset which can override `BrowserView::CanResize`.
-  virtual std::optional<bool> GetResizable() = 0;
+#if BUILDFLAG(IS_ANDROID)
+  // Returns a reference to Page Java counterpart.
+  virtual const base::android::JavaRef<jobject>& GetJavaPage() = 0;
+#endif
 
  private:
   // This method is needed to ensure that PageImpl can both implement a Page's

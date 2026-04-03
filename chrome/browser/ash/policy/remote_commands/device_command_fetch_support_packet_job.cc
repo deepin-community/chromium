@@ -17,7 +17,6 @@
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
@@ -36,9 +35,6 @@
 #include "chrome/browser/ash/policy/core/device_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/policy/remote_commands/crd/crd_remote_command_utils.h"
 #include "chrome/browser/ash/policy/uploading/system_log_uploader.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/policy/messaging_layer/proto/synced/log_upload_event.pb.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -47,6 +43,7 @@
 #include "chrome/browser/support_tool/support_tool_util.h"
 #include "chrome/browser/ui/webui/support_tool/support_tool_ui_utils.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
 #include "components/feedback/redaction_tool/pii_types.h"
@@ -76,7 +73,6 @@ constexpr char kIssueCaseIdKey[] = "issueCaseId";
 constexpr char kIssueDescriptionKey[] = "issueDescription";
 constexpr char kRequestedDataCollectorsKey[] = "requestedDataCollectors";
 constexpr char kRequestedPiiTypesKey[] = "requestedPiiTypes";
-constexpr char kRequesterId[] = "requesterMetadata";
 
 // JSON keys and values used for creating the upload metadata to File Storage
 // Server (go/crosman_fss_action#scotty-upload-agent).
@@ -91,7 +87,7 @@ constexpr char kResultKey[] = "result";
 constexpr char kNotesKey[] = "notes";
 
 std::set<support_tool::DataCollectorType> GetDataCollectorTypes(
-    const base::Value::List& requested_data_collectors) {
+    const base::ListValue& requested_data_collectors) {
   std::set<support_tool::DataCollectorType> data_collectors;
   for (const auto& data_collector_value : requested_data_collectors) {
     if (!support_tool::DataCollectorType_IsValid(
@@ -140,7 +136,7 @@ redaction::PIIType GetPiiTypeFromProtoEnum(support_tool::PiiType pii_type) {
 }
 
 std::set<redaction::PIIType> GetPiiTypes(
-    const base::Value::List& requested_pii_types) {
+    const base::ListValue& requested_pii_types) {
   std::set<redaction::PIIType> pii_types;
   for (const auto& pii_type_value : requested_pii_types) {
     if (!support_tool::PiiType_IsValid(pii_type_value.GetInt())) {
@@ -152,15 +148,6 @@ std::set<redaction::PIIType> GetPiiTypes(
   return pii_types;
 }
 
-std::string ErrorsToString(const std::set<SupportToolError>& errors) {
-  std::vector<std::string_view> error_messages;
-  error_messages.reserve(errors.size());
-  for (const auto& error : errors) {
-    error_messages.push_back(error.error_message);
-  }
-  return base::JoinString(error_messages, ", ");
-}
-
 // Returns the upload_parameters string for LogUploadEvent. This will be used as
 // request metadata for the log upload request to the File Storage Server.
 // Contains File-Type, Command-ID and Filename fields.
@@ -170,30 +157,27 @@ std::string GetUploadParameters(
     const base::FilePath& filename,
     policy::RemoteCommandJob::UniqueIDType command_id) {
   auto upload_parameters_dict =
-      base::Value::Dict()
+      base::DictValue()
           .Set(kFilenameKey, filename.BaseName().value())
           .Set(kCommandIdKey, base::NumberToString(command_id))
           .Set(kFileTypeKey, kSupportFileType);
-  std::string json;
-  base::JSONWriter::Write(upload_parameters_dict, &json);
+  std::string json = base::WriteJson(upload_parameters_dict).value_or("");
   return base::StringPrintf("%s\n%s", json.c_str(), kContentTypeJson);
 }
 
 std::string GetCommandResultPayload(
     FetchSupportPacketResultCode result_code,
     const std::set<FetchSupportPacketResultNote>& notes) {
-  base::Value::Dict json;
+  base::DictValue json;
   json.Set(kResultKey, static_cast<int>(result_code));
   if (!notes.empty()) {
-    base::Value::List notes_list;
+    base::ListValue notes_list;
     for (const auto& note : notes) {
       notes_list.Append(static_cast<int>(note));
     }
     json.Set(kNotesKey, std::move(notes_list));
   }
-  std::string result_payload;
-  base::JSONWriter::Write(json, &result_payload);
-  return result_payload;
+  return base::WriteJson(json).value_or("");
 }
 
 }  // namespace
@@ -252,14 +236,14 @@ bool DeviceCommandFetchSupportPacketJob::ParseCommandPayload(
 bool DeviceCommandFetchSupportPacketJob::ParseCommandPayloadImpl(
     const std::string& command_payload) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::optional<base::Value> value = base::JSONReader::Read(command_payload);
-  if (!value.has_value() || !value->is_dict()) {
+  std::optional<base::DictValue> value = base::JSONReader::ReadDict(
+      command_payload, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!value) {
     return false;
   }
 
-  const base::Value::Dict& dict = value->GetDict();
-  const base::Value::Dict* details_dict =
-      dict.FindDict(kSupportPacketDetailsKey);
+  const base::DictValue* details_dict =
+      value->FindDict(kSupportPacketDetailsKey);
   if (!details_dict) {
     return false;
   }
@@ -272,7 +256,7 @@ bool DeviceCommandFetchSupportPacketJob::ParseCommandPayloadImpl(
   support_packet_details_.issue_description =
       description ? *description : std::string();
 
-  const base::Value::List* requested_data_collectors =
+  const base::ListValue* requested_data_collectors =
       details_dict->FindList(kRequestedDataCollectorsKey);
   if (!requested_data_collectors) {
     return false;
@@ -284,17 +268,12 @@ bool DeviceCommandFetchSupportPacketJob::ParseCommandPayloadImpl(
     return false;
   }
 
-  const base::Value::List* requested_pii_types =
+  const base::ListValue* requested_pii_types =
       details_dict->FindList(kRequestedPiiTypesKey);
   if (requested_pii_types) {
     support_packet_details_.requested_pii_types =
         GetPiiTypes(*requested_pii_types);
   }
-
-  const std::string* requester_metadata =
-      details_dict->FindString(kRequesterId);
-  support_packet_details_.requester_metadata =
-      requester_metadata ? *requester_metadata : std::string();
 
   return true;
 }
@@ -365,13 +344,13 @@ void DeviceCommandFetchSupportPacketJob::StartJobExecution() {
                                    .GetSigninBrowserContext())
                          : ProfileManager::GetActiveUserProfile();
   // Initialize SupportToolHandler with the requested details.
-  support_tool_handler_ =
-      GetSupportToolHandler(support_packet_details_.issue_case_id,
-                            // Leave the email address empty since data
-                            // collection is triggered by the admin remotely.
-                            /*email_address=*/std::string(),
-                            support_packet_details_.issue_description, profile,
-                            support_packet_details_.requested_data_collectors);
+  support_tool_handler_ = GetSupportToolHandler(
+      support_packet_details_.issue_case_id,
+      // Leave the email address empty since data
+      // collection is triggered by the admin remotely.
+      /*email_address=*/std::string(),
+      support_packet_details_.issue_description, std::nullopt, profile,
+      support_packet_details_.requested_data_collectors);
 
   // Start data collection.
   support_tool_handler_->CollectSupportData(
@@ -388,7 +367,7 @@ void DeviceCommandFetchSupportPacketJob::OnDataCollected(
   if (!errors.empty()) {
     SYSLOG(ERROR) << "Got errors when collecting data for FETCH_SUPPORT_PACKET "
                      "device command: "
-                  << ErrorsToString(errors);
+                  << SupportToolErrorsToString(errors);
   }
 
   base::FilePath target_file = GetFilepathToExport(
@@ -413,8 +392,8 @@ void DeviceCommandFetchSupportPacketJob::OnDataExported(
     std::set<SupportToolError> errors) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const auto export_error =
-      base::ranges::find(errors, SupportToolErrorCode::kDataExportError,
-                         &SupportToolError::error_code);
+      std::ranges::find(errors, SupportToolErrorCode::kDataExportError,
+                        &SupportToolError::error_code);
 
   if (export_error != errors.end()) {
     base::UmaHistogramEnumeration(kFetchSupportPacketFailureHistogramName,
@@ -458,10 +437,13 @@ void DeviceCommandFetchSupportPacketJob::EnqueueEvent() {
       exported_path_.value());
   log_upload_event->mutable_upload_settings()->set_upload_parameters(
       GetUploadParameters(exported_path_, unique_id()));
-  log_upload_event->set_command_id(unique_id());
-  log_upload_event->set_command_result_payload(GetCommandResultPayload(
+
+  auto* command_details = log_upload_event->mutable_remote_command_details();
+  command_details->set_command_id(unique_id());
+  command_details->set_command_result_payload(GetCommandResultPayload(
       FetchSupportPacketResultCode::FETCH_SUPPORT_PACKET_RESULT_SUCCESS,
       notes_));
+
   report_queue_->Enqueue(
       std::move(log_upload_event), reporting::Priority::SLOW_BATCH,
       base::BindOnce(&DeviceCommandFetchSupportPacketJob::OnEventEnqueued,

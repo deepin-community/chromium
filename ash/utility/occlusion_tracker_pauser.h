@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "ash/ash_export.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -37,6 +38,7 @@ class ASH_EXPORT OcclusionTrackerPauser : public ui::CompositorObserver {
   void OnFirstAnimationStarted(ui::Compositor* compositor) override;
   void OnFirstNonAnimatedFrameStarted(ui::Compositor* compositor) override;
   void OnCompositingShuttingDown(ui::Compositor* compositor) override;
+  void OnDidBeginMainFrame(ui::Compositor* compositor) override;
 
  private:
   void Pause(ui::Compositor* compositor);
@@ -49,7 +51,8 @@ class ASH_EXPORT OcclusionTrackerPauser : public ui::CompositorObserver {
 
   // Keeps track of compositors that are animating. We can unpause when this is
   // empty.
-  base::flat_set<ui::Compositor*> animating_compositors_;
+  base::flat_set<raw_ptr<ui::Compositor, CtnExperimental>>
+      animating_compositors_;
 
   std::unique_ptr<aura::WindowOcclusionTracker::ScopedPause> scoped_pause_;
 };

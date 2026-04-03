@@ -10,12 +10,17 @@
 #include <utility>
 
 #include "base/base64.h"
+#include "base/compiler_specific.h"
+#include "base/no_destructor.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
+#include "skia/ext/codec_utils.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkStream.h"
 #include "third_party/skia/include/core/SkSwizzle.h"
-#include "third_party/skia/include/encode/SkPngEncoder.h"
 
 #if VIZ_DEBUGGER_IS_ON()
 
@@ -35,8 +40,25 @@ VizDebugger::BufferInfo::~BufferInfo() = default;
 VizDebugger::BufferInfo::BufferInfo(const BufferInfo& a) = default;
 
 VizDebugger* VizDebugger::GetInstance() {
-  static VizDebugger g_debugger;
-  return &g_debugger;
+  static base::NoDestructor<VizDebugger> g_debugger;
+  return g_debugger.get();
+}
+
+SkColor VizDebugger::HexStringToSkColor(std::string_view hex_string) {
+  uint32_t red, green, blue;
+
+  if (hex_string.size() == 7 && hex_string[0] == '#' &&
+      base::HexStringToUInt(hex_string.substr(1, 2), &red) &&
+      base::HexStringToUInt(hex_string.substr(3, 2), &green) &&
+      base::HexStringToUInt(hex_string.substr(5, 2), &blue)) {
+    return SkColorSetRGB(red, green, blue);
+  }
+  return SK_ColorTRANSPARENT;
+}
+
+std::string VizDebugger::SkColorToHexString(SkColor color) {
+  return absl::StrFormat("#%02x%02x%02x", SkColorGetR(color),
+                         SkColorGetG(color), SkColorGetB(color));
 }
 
 VizDebugger::FilterBlock::FilterBlock(const std::string file_str,
@@ -54,16 +76,18 @@ VizDebugger::FilterBlock::~FilterBlock() = default;
 
 VizDebugger::FilterBlock::FilterBlock(const FilterBlock& other) = default;
 
-base::Value::Dict VizDebugger::CallSubmitCommon::GetDictionaryValue() const {
-  return base::Value::Dict()
+base::DictValue VizDebugger::CallSubmitCommon::GetDictionaryValue() const {
+  return base::DictValue()
       .Set("drawindex", draw_index)
       .Set("source_index", source_index)
-      .Set("thread_id", thread_id)
-      .Set("option",
-           base::Value::Dict()
-               .Set("color", base::StringPrintf("#%02x%02x%02x", option.color_r,
-                                                option.color_g, option.color_b))
-               .Set("alpha", option.color_a));
+      // Since this is only for debugging, it's ok for thread ids to be
+      // truncated.
+      .Set("thread_id", static_cast<int32_t>(thread_id))
+      .Set("option", base::DictValue()
+                         .Set("color", SkColorToHexString(SkColorSetRGB(
+                                           option.color_r, option.color_g,
+                                           option.color_b)))
+                         .Set("alpha", option.color_a));
 }
 
 VizDebugger::StaticSource::StaticSource(const char* anno_name,
@@ -99,7 +123,7 @@ base::Value VizDebugger::FrameAsJson(const uint64_t counter,
   submission_count_ = 0;
 
   auto global_dict =
-      base::Value::Dict()
+      base::DictValue()
           .Set("version", kVizDebuggerVersion)
           .Set("frame", base::NumberToString(counter))
           .Set("windowx", window_pix.width())
@@ -107,11 +131,11 @@ base::Value VizDebugger::FrameAsJson(const uint64_t counter,
           .Set("time", base::NumberToString(
                            time_ticks.since_origin().InMicroseconds()));
 
-  base::Value::List new_sources;
+  base::ListValue new_sources;
   for (size_t i = last_sent_source_count_; i < sources_.size(); i++) {
     const StaticSource* each = sources_[i];
 
-    new_sources.Append(base::Value::Dict()
+    new_sources.Append(base::DictValue()
                            .Set("file", each->file)
                            .Set("line", each->line)
                            .Set("func", each->func)
@@ -132,27 +156,27 @@ base::Value VizDebugger::FrameAsJson(const uint64_t counter,
   size_t const max_logs_index = std::min(static_cast<int>(logs_tail_idx_),
                                          static_cast<int>(logs_.size()));
 
-  base::Value::List draw_calls;
+  base::ListValue draw_calls;
 
   // Hash set to keep track of threads that have been registered already.
-  base::flat_set<int> registered_threads;
+  base::flat_set<base::PlatformThreadId::UnderlyingType> registered_threads;
   for (size_t i = 0; i < max_rect_calls_index; ++i) {
-    base::Value::Dict dict = draw_rect_calls_[i].GetDictionaryValue();
-    dict.Set("size", base::Value::List()
+    base::DictValue dict = draw_rect_calls_[i].GetDictionaryValue();
+    dict.Set("size", base::ListValue()
                          .Append(draw_rect_calls_[i].obj_size.width())
                          .Append(draw_rect_calls_[i].obj_size.height()));
     dict.Set("pos",
-             base::Value::List()
+             base::ListValue()
                  .Append(static_cast<double>(draw_rect_calls_[i].pos.x()))
                  .Append(static_cast<double>(draw_rect_calls_[i].pos.y())));
     if (draw_rect_calls_[i].uv != DBG_DEFAULT_UV) {
       dict.Set(
           "uv_size",
-          base::Value::List()
+          base::ListValue()
               .Append(static_cast<double>(draw_rect_calls_[i].uv.width()))
               .Append(static_cast<double>(draw_rect_calls_[i].uv.height())));
       dict.Set("uv_pos",
-               base::Value::List()
+               base::ListValue()
                    .Append(static_cast<double>(draw_rect_calls_[i].uv.x()))
                    .Append(static_cast<double>(draw_rect_calls_[i].uv.y())));
     }
@@ -160,35 +184,31 @@ base::Value VizDebugger::FrameAsJson(const uint64_t counter,
     if (!draw_rect_calls_[i].text.empty()) {
       dict.Set("text", std::move(draw_rect_calls_[i].text));
     }
-    registered_threads.insert(draw_rect_calls_[i].thread_id);
+    registered_threads.insert(
+        base::saturated_cast<base::PlatformThreadId::UnderlyingType>(
+            draw_rect_calls_[i].thread_id));
     draw_calls.Append(std::move(dict));
   }
 
   global_dict.Set("drawcalls", std::move(draw_calls));
 
-  base::Value::Dict buff_map;
+  base::DictValue buff_map;
 
   for (auto&& each : buffers_) {
-    SkDynamicMemoryWStream stream;
-    bool result = SkPngEncoder::Encode(
-        &stream, each.buffer_info.bitmap.pixmap(), SkPngEncoder::Options());
-    if (!result) {
+    std::string uri =
+        skia::EncodePngAsDataUri(each.buffer_info.bitmap.pixmap());
+    if (uri.empty()) {
       DLOG(ERROR) << "encode failed";
       continue;
     }
-    sk_sp<SkData> data = stream.detachAsData();
-    std::string uri =
-        "data:image/png;base64," +
-        base::Base64Encode(base::span<const uint8_t>(
-            static_cast<const uint8_t*>(data->data()), data->size()));
     buff_map.Set(base::NumberToString(each.id), std::move(uri));
   }
 
   global_dict.Set("buff_map", std::move(buff_map));
 
-  base::Value::List logs;
+  base::ListValue logs;
   for (size_t i = 0; i < max_logs_index; ++i) {
-    base::Value::Dict dict = logs_[i].GetDictionaryValue();
+    base::DictValue dict = logs_[i].GetDictionaryValue();
     dict.Set("value", std::move(logs_[i].value));
     logs.Append(std::move(dict));
     registered_threads.insert(logs_[i].thread_id);
@@ -196,12 +216,13 @@ base::Value VizDebugger::FrameAsJson(const uint64_t counter,
   global_dict.Set("logs", std::move(logs));
 
   // Gather thread name:id for all active threads this frame.
-  base::Value::List new_threads;
+  base::ListValue new_threads;
   for (auto&& thread_id : registered_threads) {
     std::string cur_thread_name =
-        base::ThreadIdNameManager::GetInstance()->GetName(thread_id);
-    new_threads.Append(base::Value::Dict()
-                           .Set("thread_id", thread_id)
+        base::ThreadIdNameManager::GetInstance()->GetName(
+            base::PlatformThreadId(thread_id));
+    new_threads.Append(base::DictValue()
+                           .Set("thread_id", static_cast<int32_t>(thread_id))
                            .Set("thread_name", cur_thread_name));
     registered_threads.insert(thread_id);
   }
@@ -254,7 +275,8 @@ void VizDebugger::ApplyFilters(VizDebugger::StaticSource* src) {
     if (filter_match.empty() || source_str == nullptr) {
       return true;
     }
-    return std::strstr(source_str, filter_match.c_str()) != nullptr;
+    return UNSAFE_TODO(std::strstr(source_str, filter_match.c_str())) !=
+           nullptr;
   };
 
   for (const auto& filter_block : cached_filters_) {
@@ -309,7 +331,8 @@ void VizDebugger::DrawInternal(const gfx::SizeF& obj_size,
     insertion_index = draw_calls_tail_idx_++;
     // If the insertion index is within bounds, insert call into buffer.
     if (static_cast<size_t>(insertion_index) < draw_rect_calls_.size()) {
-      int cur_thread_id = base::PlatformThread::CurrentId();
+      int64_t cur_thread_id =
+          static_cast<int64_t>(base::PlatformThread::CurrentId());
       draw_rect_calls_[insertion_index] = DrawCall{submission_count_++,
                                                    dcs->reg_index,
                                                    cur_thread_id,
@@ -349,10 +372,10 @@ void VizDebugger::AddFrame() {
   read_write_lock_.WriteUnLock();
 }
 
-void VizDebugger::FilterDebugStream(base::Value::Dict json) {
+void VizDebugger::FilterDebugStream(base::DictValue json) {
   read_write_lock_.WriteLock();
   DCHECK(gpu_thread_task_runner_->RunsTasksInCurrentSequence());
-  const base::Value::List* filters = json.FindList("filters");
+  const base::ListValue* filters = json.FindList("filters");
 
   if (!filters) {
     LOG(ERROR) << "Missing filter list in json: " << json;
@@ -406,7 +429,7 @@ void VizDebugger::StartDebugStream(
   apply_new_filters_next_frame_ = true;
 
   debug_output_->LogFrame(
-      base::Value(base::Value::Dict().Set("connection", "ok")));
+      base::Value(base::DictValue().Set("connection", "ok")));
   enabled_.store(true);
   read_write_lock_.WriteUnLock();
 }
@@ -432,7 +455,8 @@ void VizDebugger::AddLogMessage(std::string log,
     insertion_index = logs_tail_idx_++;
     // If the insertion index is within bounds, insert call into buffer.
     if (static_cast<size_t>(insertion_index) < logs_.size()) {
-      int cur_thread_id = base::PlatformThread::CurrentId();
+      int64_t cur_thread_id =
+          static_cast<int64_t>(base::PlatformThread::CurrentId());
       logs_[insertion_index] = LogCall{submission_count_++, dcs->reg_index,
                                        cur_thread_id, option, std::move(log)};
       // Return when call insertion is successful.

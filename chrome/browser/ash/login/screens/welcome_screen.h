@@ -14,7 +14,6 @@
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chrome/browser/ash/login/screens/chromevox_hint/chromevox_hint_detector.h"
 #include "chrome/browser/ash/login/wizard_context.h"
@@ -24,6 +23,7 @@ namespace ash {
 
 class InputEventsBlocker;
 class WelcomeView;
+struct AccessibilityStatusEventDetails;
 
 namespace locale_util {
 struct LanguageSwitchResult;
@@ -109,7 +109,7 @@ class WelcomeScreen : public BaseScreen,
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
-  const base::Value::Dict& GetConfigurationForTesting() const {
+  const base::DictValue& GetConfigurationForTesting() const {
     return context()->configuration;
   }
 
@@ -124,7 +124,7 @@ class WelcomeScreen : public BaseScreen,
   // BaseScreen:
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& action_id) override;
+  void OnUserAction(const base::ListValue& action_id) override;
   bool HandleAccelerator(LoginAcceleratorAction action) override;
 
   void CancelChromeVoxHintIdleDetection();
@@ -162,7 +162,7 @@ class WelcomeScreen : public BaseScreen,
           language_switch_result);
 
   // Callback for ResolveUILanguageList() (from l10n_util).
-  void OnLanguageListResolved(base::Value::List new_language_list,
+  void OnLanguageListResolved(base::ListValue new_language_list,
                               const std::string& new_language_list_locale,
                               const std::string& new_selected_language);
 
@@ -194,6 +194,10 @@ class WelcomeScreen : public BaseScreen,
 
   // The exact language code selected by user in the menu.
   std::string selected_language_code_;
+
+  // Whether the QuickStart entry point visibility has already been determined.
+  // This flag prevents duplicate histogram entries.
+  bool has_emitted_quick_start_visible = false;
 
   base::ObserverList<Observer>::Unchecked observers_;
 

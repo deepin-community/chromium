@@ -1,16 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-const fs = require('fs');
-const http = require('http');
-const https = require('https');
-const path = require('path');
-const parseURL = require('url').parse;
-const shell = require('child_process').execSync;
-const Stream = require('stream').Transform;
+import {execSync as shell} from 'node:child_process';
+import fs from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
+import path from 'node:path';
+import {Transform as Stream} from 'node:stream';
+import {parse as parseURL} from 'node:url';
 
-function fetch(url) {
+export function fetch(url) {
   return new Promise(fetchPromise);
 
   function fetchPromise(resolve, reject) {
@@ -39,36 +39,38 @@ function fetch(url) {
   }
 }
 
-function atob(str) {
+export function atob(str) {
   return new Buffer(str, 'base64').toString('binary');
 }
 
-function isFile(path) {
+export function isFile(path) {
   try {
     return fs.statSync(path).isFile();
-  } catch (error) {
+  } catch {
     return false;
   }
 }
 
-function isDir(path) {
+export function isDir(path) {
   try {
     return fs.statSync(path).isDirectory();
-  } catch (error) {
+  } catch {
     return false;
   }
 }
 
-function copy(src, dest) {
+export function copy(src, dest) {
   try {
     const targetFilePath = path.resolve(dest, path.basename(src));
     fs.writeFileSync(targetFilePath, fs.readFileSync(src));
   } catch (error) {
-    throw new Error(`Received an error: [${error}] while trying to copy: ${src} -> ${dest}`);
+    throw new Error(
+        `Received an error: [${error}] while trying to copy: ${src} -> ${dest}`,
+    );
   }
 }
 
-function copyRecursive(src, dest) {
+export function copyRecursive(src, dest) {
   try {
     if (isFile(src)) {
       copy(src, dest);
@@ -85,17 +87,22 @@ function copyRecursive(src, dest) {
         if (isDir(childPath)) {
           copyRecursive(childPath, targetDirPath);
         } else {
-          const targetFilePath = path.resolve(targetDirPath, path.basename(childPath));
+          const targetFilePath = path.resolve(
+              targetDirPath,
+              path.basename(childPath),
+          );
           fs.writeFileSync(targetFilePath, fs.readFileSync(childPath));
         }
       }
     }
   } catch (error) {
-    throw new Error(`Received an error: [${error}] while trying to copy: ${src} -> ${dest}`);
+    throw new Error(
+        `Received an error: [${error}] while trying to copy: ${src} -> ${dest}`,
+    );
   }
 }
 
-function removeRecursive(filePath) {
+export function removeRecursive(filePath) {
   try {
     if (fs.existsSync(filePath)) {
       if (isFile(filePath)) {
@@ -114,19 +121,21 @@ function removeRecursive(filePath) {
       fs.rmdirSync(filePath);
     }
   } catch (error) {
-    throw new Error(`Received an error: [${error}] while trying to remove: ${filePath}`);
+    throw new Error(
+        `Received an error: [${error}] while trying to remove: ${filePath}`,
+    );
   }
 }
 
-function includes(sequence, target) {
+export function includes(sequence, target) {
   return sequence.indexOf(target) > -1;
 }
 
-function shellOutput(command) {
+export function shellOutput(command) {
   return shell(command).toString().trim();
 }
 
-function parseArgs(args) {
+export function parseArgs(args) {
   const argObject = {};
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -136,16 +145,3 @@ function parseArgs(args) {
   }
   return argObject;
 }
-
-module.exports = {
-  fetch,
-  atob,
-  isFile,
-  isDir,
-  copy,
-  copyRecursive,
-  removeRecursive,
-  includes,
-  shellOutput,
-  parseArgs,
-};

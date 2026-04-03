@@ -1,21 +1,24 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import '../../../ui/kit/kit.js';
+
 import * as i18n from '../../../core/i18n/i18n.js';
 import * as Buttons from '../../../ui/components/buttons/buttons.js';
-import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
-import * as IconButton from '../../../ui/components/icon_button/icon_button.js';
-import * as LitHtml from '../../../ui/lit-html/lit-html.js';
+import * as UI from '../../../ui/legacy/legacy.js';
+import * as Lit from '../../../ui/lit/lit.js';
 import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 import * as Models from '../models/models.js';
 import * as Actions from '../recorder-actions/recorder-actions.js';
 
 import recordingListViewStyles from './recordingListView.css.js';
 
+const {html} = Lit;
+
 const UIStrings = {
   /**
-   *@description The title of the page that contains a list of saved recordings that the user has..
+   * @description The title of the page that contains a list of saved recordings that the user has..
    */
   savedRecordings: 'Saved recordings',
   /**
@@ -34,7 +37,7 @@ const UIStrings = {
    * @description The title of the row corresponding to a recording. By clicking on the row, the user open the recording for editing.
    */
   openRecording: 'Open recording',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings(
     'panels/recorder/components/RecordingListView.ts',
     UIStrings,
@@ -55,28 +58,28 @@ declare global {
 export class CreateRecordingEvent extends Event {
   static readonly eventName = 'createrecording';
   constructor() {
-    super(CreateRecordingEvent.eventName);
+    super(CreateRecordingEvent.eventName, {composed: true, bubbles: true});
   }
 }
 
 export class DeleteRecordingEvent extends Event {
   static readonly eventName = 'deleterecording';
   constructor(public storageName: string) {
-    super(DeleteRecordingEvent.eventName);
+    super(DeleteRecordingEvent.eventName, {composed: true, bubbles: true});
   }
 }
 
 export class OpenRecordingEvent extends Event {
   static readonly eventName = 'openrecording';
   constructor(public storageName: string) {
-    super(OpenRecordingEvent.eventName);
+    super(OpenRecordingEvent.eventName, {composed: true, bubbles: true});
   }
 }
 
 export class PlayRecordingEvent extends Event {
   static readonly eventName = 'playrecording';
   constructor(public storageName: string) {
-    super(PlayRecordingEvent.eventName);
+    super(PlayRecordingEvent.eventName, {composed: true, bubbles: true});
   }
 }
 
@@ -85,50 +88,146 @@ interface Recording {
   name: string;
 }
 
-export class RecordingListView extends HTMLElement {
-  static readonly litTagName = LitHtml.literal`devtools-recording-list-view`;
-  readonly #shadow = this.attachShadow({mode: 'open'});
-  readonly #props: {recordings: Recording[], replayAllowed: boolean} = {
-    recordings: [],
-    replayAllowed: true,
-  };
+interface ViewInput {
+  recordings: readonly Recording[];
+  replayAllowed: boolean;
+  onCreateClick: () => void;
+  onDeleteClick: (storageName: string, event: Event) => void;
+  onOpenClick: (storageName: string, event: Event) => void;
+  onPlayRecordingClick: (storageName: string, event: Event) => void;
+  onKeyDown: (storageName: string, event: Event) => void;
+}
 
-  constructor() {
-    super();
+export type ViewOutput = object;
+
+export const DEFAULT_VIEW = (input: ViewInput, _output: ViewOutput, target: HTMLElement): void => {
+  const {
+    recordings,
+    replayAllowed,
+    onCreateClick,
+    onDeleteClick,
+    onOpenClick,
+    onPlayRecordingClick,
+    onKeyDown,
+  } = input;
+  // clang-format off
+  Lit.render(
+    html`
+      <style>${recordingListViewStyles}</style>
+      <div class="wrapper">
+        <div class="header">
+          <h1>${i18nString(UIStrings.savedRecordings)}</h1>
+          <devtools-button
+            .variant=${Buttons.Button.Variant.PRIMARY}
+            @click=${onCreateClick}
+            title=${Models.Tooltip.getTooltipForActions(
+              i18nString(UIStrings.createRecording),
+              Actions.RecorderActions.CREATE_RECORDING,
+            )}
+            .jslogContext=${'create-recording'}
+          >
+            ${i18nString(UIStrings.createRecording)}
+          </devtools-button>
+        </div>
+        <div class="table">
+          ${recordings.map(recording => {
+            return html`
+                <div
+                  role="button"
+                  tabindex="0"
+                  aria-label=${i18nString(UIStrings.openRecording)}
+                  class="row"
+                  @keydown=${(event: Event) => onKeyDown(recording.storageName, event)}
+                  @click=${(event: Event) => onOpenClick(recording.storageName, event)}
+                  jslog=${VisualLogging.item()
+                    .track({ click: true })
+                    .context('recording')}>
+                  <div class="icon">
+                    <devtools-icon name="flow">
+                    </devtools-icon>
+                  </div>
+                  <div class="title">${recording.name}</div>
+                  <div class="actions">
+                    ${
+                      replayAllowed
+                        ? html`
+                              <devtools-button
+                                title=${i18nString(UIStrings.playRecording)}
+                                .data=${
+                                  {
+                                    variant: Buttons.Button.Variant.ICON,
+                                    iconName: 'play',
+                                     jslogContext: 'play-recording',
+                                  } as Buttons.Button.ButtonData
+                                }
+                                @click=${(event: Event) => onPlayRecordingClick(recording.storageName, event)}
+                                @keydown=${(event: Event) => event.stopPropagation()}
+                              ></devtools-button>
+                              <div class="divider"></div>`
+                        : ''
+                    }
+                    <devtools-button
+                      class="delete-recording-button"
+                      title=${i18nString(UIStrings.deleteRecording)}
+                      .data=${
+                        {
+                          variant: Buttons.Button.Variant.ICON,
+                          iconName: 'bin',
+                          jslogContext: 'delete-recording',
+                        } as Buttons.Button.ButtonData
+                      }
+                      @click=${(event: Event) => onDeleteClick(recording.storageName, event)}
+                      @keydown=${(event: Event) => event.stopPropagation()}
+                    ></devtools-button>
+                  </div>
+                </div>
+              `;
+          })}
+        </div>
+      </div>
+    `,
+    target,
+  );
+  // clang-format on
+};
+
+export class RecordingListView extends UI.Widget.Widget {
+  #recordings: readonly Recording[] = [];
+  #replayAllowed = true;
+  #view: typeof DEFAULT_VIEW;
+
+  constructor(element?: HTMLElement, view?: typeof DEFAULT_VIEW) {
+    super(element, {useShadowDom: true});
+    this.#view = view || DEFAULT_VIEW;
   }
 
-  connectedCallback(): void {
-    this.#shadow.adoptedStyleSheets = [recordingListViewStyles];
-    void ComponentHelpers.ScheduledRender.scheduleRender(this, this.#render);
-  }
-
-  set recordings(recordings: Recording[]) {
-    this.#props.recordings = recordings;
-    void ComponentHelpers.ScheduledRender.scheduleRender(this, this.#render);
+  set recordings(recordings: readonly Recording[]) {
+    this.#recordings = recordings;
+    this.performUpdate();
   }
 
   set replayAllowed(value: boolean) {
-    this.#props.replayAllowed = value;
-    void ComponentHelpers.ScheduledRender.scheduleRender(this, this.#render);
+    this.#replayAllowed = value;
+    this.performUpdate();
   }
 
   #onCreateClick(): void {
-    this.dispatchEvent(new CreateRecordingEvent());
+    this.contentElement.dispatchEvent(new CreateRecordingEvent());
   }
 
   #onDeleteClick(storageName: string, event: Event): void {
     event.stopPropagation();
-    this.dispatchEvent(new DeleteRecordingEvent(storageName));
+    this.contentElement.dispatchEvent(new DeleteRecordingEvent(storageName));
   }
 
   #onOpenClick(storageName: string, event: Event): void {
     event.stopPropagation();
-    this.dispatchEvent(new OpenRecordingEvent(storageName));
+    this.contentElement.dispatchEvent(new OpenRecordingEvent(storageName));
   }
 
   #onPlayRecordingClick(storageName: string, event: Event): void {
     event.stopPropagation();
-    this.dispatchEvent(new PlayRecordingEvent(storageName));
+    this.contentElement.dispatchEvent(new PlayRecordingEvent(storageName));
   }
 
   #onKeyDown(storageName: string, event: Event): void {
@@ -138,106 +237,22 @@ export class RecordingListView extends HTMLElement {
     this.#onOpenClick(storageName, event);
   }
 
-  #stopPropagation(event: Event): void {
-    event.stopPropagation();
+  override performUpdate(): void {
+    this.#view(
+        {
+          recordings: this.#recordings,
+          replayAllowed: this.#replayAllowed,
+          onCreateClick: this.#onCreateClick.bind(this),
+          onDeleteClick: this.#onDeleteClick.bind(this),
+          onOpenClick: this.#onOpenClick.bind(this),
+          onPlayRecordingClick: this.#onPlayRecordingClick.bind(this),
+          onKeyDown: this.#onKeyDown.bind(this),
+        },
+        {}, this.contentElement);
   }
 
-  #render = (): void => {
-    // clang-format off
-    LitHtml.render(
-      LitHtml.html`
-        <div class="wrapper">
-          <div class="header">
-            <h1>${i18nString(UIStrings.savedRecordings)}</h1>
-            <${Buttons.Button.Button.litTagName}
-              .variant=${Buttons.Button.Variant.PRIMARY}
-              @click=${this.#onCreateClick}
-              title=${Models.Tooltip.getTooltipForActions(
-                i18nString(UIStrings.createRecording),
-                Actions.RecorderActions.CreateRecording,
-              )}
-              .jslogContext=${'create-recording'}
-            >
-              ${i18nString(UIStrings.createRecording)}
-            </${Buttons.Button.Button.litTagName}>
-          </div>
-          <div class="table">
-            ${this.#props.recordings.map(recording => {
-              return LitHtml.html`
-                  <div
-                    role="button"
-                    tabindex="0"
-                    aria-label=${i18nString(UIStrings.openRecording)}
-                    class="row"
-                    @keydown=${this.#onKeyDown.bind(
-                      this,
-                      recording.storageName,
-                    )}
-                    @click=${this.#onOpenClick.bind(
-                      this,
-                      recording.storageName,
-                    )}
-                    jslog=${VisualLogging.item()
-                      .track({ click: true })
-                      .context('recording')}>
-                    <div class="icon">
-                      <${IconButton.Icon.Icon.litTagName} name="flow">
-                      </${IconButton.Icon.Icon.litTagName}>
-                    </div>
-                    <div class="title">${recording.name}</div>
-                    <div class="actions">
-                      ${
-                        this.#props.replayAllowed
-                          ? LitHtml.html`
-                              <${Buttons.Button.Button.litTagName}
-                                title=${i18nString(UIStrings.playRecording)}
-                                .data=${
-                                  {
-                                    variant: Buttons.Button.Variant.ROUND,
-                                    iconName: 'play',
-                                     jslogContext: 'play-recording',
-                                  } as Buttons.Button.ButtonData
-                                }
-                                @click=${this.#onPlayRecordingClick.bind(
-                                  this,
-                                  recording.storageName,
-                                )}
-                                @keydown=${this.#stopPropagation}
-                              ></${Buttons.Button.Button.litTagName}>
-                              <div class="divider"></div>`
-                          : ''
-                      }
-                      <${Buttons.Button.Button.litTagName}
-                        class="delete-recording-button"
-                        title=${i18nString(UIStrings.deleteRecording)}
-                        .data=${
-                          {
-                            variant: Buttons.Button.Variant.ROUND,
-                            iconName: 'bin',
-                            jslogContext: 'delete-recording',
-                          } as Buttons.Button.ButtonData
-                        }
-                        @click=${this.#onDeleteClick.bind(
-                          this,
-                          recording.storageName,
-                        )}
-                        @keydown=${this.#stopPropagation}
-                      ></${Buttons.Button.Button.litTagName}>
-                    </div>
-                  </div>
-                `;
-            })}
-          </div>
-        </div>
-      `,
-      this.#shadow,
-      { host: this },
-    );
-    // clang-format on
-  };
+  override wasShown(): void {
+    super.wasShown();
+    this.performUpdate();
+  }
 }
-
-ComponentHelpers.CustomElements.defineComponent(
-    'devtools-recording-list-view',
-    RecordingListView,
-);

@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/sensor_info/sensor_provider.h"
+
+#include <array>
 #include <memory>
 #include <optional>
 #include <set>
@@ -9,9 +12,9 @@
 #include <vector>
 
 #include "ash/accelerometer/accelerometer_constants.h"
-#include "ash/sensor_info/sensor_provider.h"
 #include "ash/sensor_info/sensor_types.h"
 #include "ash/test/ash_test_helper.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -35,7 +38,7 @@ constexpr int kFakeBaseAccelerometerId = 2;
 constexpr int kFakeBaseGyroscopeId = 3;
 constexpr int kFakeLidAngleId = 4;
 
-constexpr int64_t kFakeSampleData[] = {1, 2, 3};
+constexpr std::array<int64_t, 3> kFakeSampleData = {1, 2, 3};
 
 class FakeObserver : public SensorObserver {
  public:
@@ -86,13 +89,13 @@ class SensorProviderTest : public testing::Test {
                  std::optional<std::string> location) {
     std::vector<chromeos::sensors::FakeSensorDevice::ChannelData> channels_data;
     int size = 0;
-    if (base::Contains(types, DeviceType::ANGL)) {
+    if (types.contains(DeviceType::ANGL)) {
       channels_data.resize(1);
       channels_data[0].id = "angl";
       channels_data[0].sample_data = 1;
       channels_data[0].attrs["raw"] = "1";
     }
-    if (base::Contains(types, DeviceType::ACCEL)) {
+    if (types.contains(DeviceType::ACCEL)) {
       size += kNumberOfAxes;
       channels_data.resize(size);
       for (uint32_t i = 0; i < kNumberOfAxes; ++i) {
@@ -101,7 +104,7 @@ class SensorProviderTest : public testing::Test {
             kFakeSampleData[i];
       }
     }
-    if (base::Contains(types, DeviceType::ANGLVEL)) {
+    if (types.contains(DeviceType::ANGLVEL)) {
       size += kNumberOfAxes;
       channels_data.resize(size);
       for (uint32_t i = 0; i < kNumberOfAxes; ++i) {
@@ -138,7 +141,9 @@ class SensorProviderTest : public testing::Test {
 
   FakeObserver observer_;
   std::unique_ptr<chromeos::sensors::FakeSensorHalServer> sensor_hal_server_;
-  std::map<int32_t, chromeos::sensors::FakeSensorDevice*> sensor_devices_;
+  std::map<int32_t,
+           raw_ptr<chromeos::sensors::FakeSensorDevice, CtnExperimental>>
+      sensor_devices_;
   std::unique_ptr<SensorProvider> provider_;
 };
 
@@ -191,7 +196,7 @@ TEST_F(SensorProviderTest, GetSamplesOfLidAccel) {
   std::vector<bool> expected{false, false, true, false, false};
   EXPECT_EQ(provider_->GetStateForTesting(), expected);
   EXPECT_TRUE(sensor_hal_server_->GetSensorService()->HasReceivers());
-  EXPECT_TRUE(base::Contains(sensor_devices_, kFakeLidAccelerometerId));
+  EXPECT_TRUE(sensor_devices_.contains(kFakeLidAccelerometerId));
   EXPECT_TRUE(sensor_devices_[kFakeLidAccelerometerId]->HasReceivers());
   EXPECT_TRUE(observer_.update_.has(SensorType::kAccelerometerLid));
 }

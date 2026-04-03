@@ -62,7 +62,7 @@ IN_PROC_BROWSER_TEST_F(EyeDropperViewAuraInteractiveTest, MoveMouseAndTouch) {
       ShowEyeDropper(web_contents->GetPrimaryMainFrame(), &listener);
   ASSERT_TRUE(eye_dropper);
   auto* view = static_cast<eye_dropper::EyeDropperView*>(eye_dropper.get());
-  EXPECT_EQ(display::Screen::GetScreen()->GetCursorScreenPoint(),
+  EXPECT_EQ(display::Screen::Get()->GetCursorScreenPoint(),
             view->GetWidget()->GetWindowBoundsInScreen().CenterPoint());
 
   // EyeDropper should move as cursor moves.
@@ -74,12 +74,12 @@ IN_PROC_BROWSER_TEST_F(EyeDropperViewAuraInteractiveTest, MoveMouseAndTouch) {
   // EyeDropper should move on touch events.
   constexpr gfx::Point kTouchStart(100, 100);
   const ui::PointerDetails kDetails(ui::EventPointerType::kTouch, 1);
-  ui::TouchEvent press(ui::ET_TOUCH_PRESSED, kTouchStart,
+  ui::TouchEvent press(ui::EventType::kTouchPressed, kTouchStart,
                        base::TimeTicks::Now(), kDetails);
   view->GetEventHandlerForTesting()->OnTouchEvent(&press);
   constexpr gfx::Point kTouchEnd(110, 110);
-  ui::TouchEvent move(ui::ET_TOUCH_MOVED, kTouchEnd, base::TimeTicks::Now(),
-                      kDetails);
+  ui::TouchEvent move(ui::EventType::kTouchMoved, kTouchEnd,
+                      base::TimeTicks::Now(), kDetails);
   view->GetEventHandlerForTesting()->OnTouchEvent(&move);
 
   gfx::Vector2d kTouchMoved(kTouchEnd - kTouchStart);

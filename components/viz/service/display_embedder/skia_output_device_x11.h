@@ -10,7 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/types/pass_key.h"
 #include "components/viz/service/display_embedder/skia_output_device_offscreen.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/xproto.h"
 
@@ -37,11 +37,7 @@ class SkiaOutputDeviceX11 final : public SkiaOutputDeviceOffscreen {
       gpu::MemoryTracker* memory_tracker,
       DidSwapBufferCompleteCallback did_swap_buffer_complete_callback);
 
-  bool Reshape(const SkImageInfo& image_info,
-               const gfx::ColorSpace& color_space,
-               int sample_count,
-               float device_scale_factor,
-               gfx::OverlayTransform transform) override;
+  bool Reshape(const ReshapeParams& params) override;
   void Present(const std::optional<gfx::Rect>& update_rect,
                BufferPresentedCallback feedback,
                OutputSurfaceFrame frame) override;

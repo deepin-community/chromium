@@ -31,6 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EXPORTED_WEB_DEV_TOOLS_AGENT_IMPL_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EXPORTED_WEB_DEV_TOOLS_AGENT_IMPL_H_
 
+#include "base/functional/callback_helpers.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
@@ -63,11 +64,10 @@ class CORE_EXPORT WebDevToolsAgentImpl final
       private Thread::TaskObserver {
  public:
   static WebDevToolsAgentImpl* CreateForFrame(WebLocalFrameImpl*);
-  static WebDevToolsAgentImpl* CreateForWorker(WebLocalFrameImpl*);
 
-  WebDevToolsAgentImpl(WebLocalFrameImpl*, bool include_view_agents);
+  WebDevToolsAgentImpl(WebLocalFrameImpl*);
   ~WebDevToolsAgentImpl() override;
-  virtual void Trace(Visitor*) const;
+  void Trace(Visitor*) const override;
   DevToolsAgent* GetDevToolsAgent() const { return agent_.Get(); }
 
   void WillBeDestroyed();
@@ -96,6 +96,9 @@ class CORE_EXPORT WebDevToolsAgentImpl final
 
   void WaitForDebuggerWhenShown();
   void ActivatePausedDebuggerWindow();
+
+  // Activate the paused debugger window if possible.
+  static void ActivatePausedDebuggerWindow(WebLocalFrameImpl* local_root);
 
  private:
   friend class ClientMessageLoopAdapter;
@@ -131,7 +134,7 @@ class CORE_EXPORT WebDevToolsAgentImpl final
   Member<InspectedFrames> inspected_frames_;
   Member<InspectorResourceContainer> resource_container_;
   Member<Node> node_to_inspect_;
-  bool include_view_agents_;
+  std::optional<base::ScopedClosureRunner> client_navigation_throttler_;
   bool wait_for_debugger_when_shown_ = false;
   bool is_paused_for_new_window_shown_ = false;
 };

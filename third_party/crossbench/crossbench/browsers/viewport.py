@@ -4,13 +4,13 @@
 
 from __future__ import annotations
 
+import enum
 from argparse import ArgumentTypeError
-from typing import Any, Tuple
-
-from crossbench import compat
+from typing import Any, ClassVar
 
 
-class ViewportMode(compat.StrEnum):
+@enum.unique
+class ViewportMode(enum.StrEnum):
   SIZE = "size"
   MAXIMIZED = "maximized"
   FULLSCREEN = "fullscreen"
@@ -18,10 +18,10 @@ class ViewportMode(compat.StrEnum):
 
 
 class Viewport:
-  DEFAULT: Viewport
-  MAXIMIZED: Viewport
-  FULLSCREEN: Viewport
-  HEADLESS: Viewport
+  DEFAULT: ClassVar[Viewport]
+  MAXIMIZED: ClassVar[Viewport]
+  FULLSCREEN: ClassVar[Viewport]
+  HEADLESS: ClassVar[Viewport]
 
   @classmethod
   def parse_sized(cls, value: Any) -> Viewport:
@@ -64,7 +64,7 @@ class Viewport:
                height: int = 1000,
                x: int = 10,
                y: int = 50,
-               mode: ViewportMode = ViewportMode.SIZE):
+               mode: ViewportMode = ViewportMode.SIZE) -> None:
     self._width = width
     self._height = height
     self._x = x
@@ -117,12 +117,12 @@ class Viewport:
     return self._mode == ViewportMode.SIZE
 
   @property
-  def position(self) -> Tuple[int, int]:
+  def position(self) -> tuple[int, int]:
     assert self.has_size, f"Viewport has no explicit size: {self._mode}"
     return (self._x, self._y)
 
   @property
-  def size(self) -> Tuple[int, int]:
+  def size(self) -> tuple[int, int]:
     assert self.has_size, f"Viewport has no explicit size: {self._mode}"
     return (self._width, self._height)
 
@@ -151,7 +151,7 @@ class Viewport:
     return self._mode
 
   @property
-  def key(self) -> Tuple[Tuple, ...]:
+  def key(self) -> tuple[tuple, ...]:
     return (
         ("mode", str(self.mode)),
         ("x", self._x),
@@ -165,7 +165,10 @@ class Viewport:
       return f"Viewport({self.width}x{self.height},{self.x}x{self.y})"
     return f"Viewport({self.mode})"
 
-  def __eq__(self, other) -> bool:
+  def __hash__(self) -> int:
+    return hash(self.key)
+
+  def __eq__(self, other: object) -> bool:
     if not isinstance(other, Viewport):
       return False
     if self is other:

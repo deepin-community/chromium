@@ -28,7 +28,8 @@ namespace grappler {
 namespace {}  // namespace
 
 template <typename GraphViewT>
-inline Status FrameView::InferFromGraphViewT(const GraphViewT& graph_view) {
+inline absl::Status FrameView::InferFromGraphViewT(
+    const GraphViewT& graph_view) {
   if (is_inferred_) {
     return errors::Internal("FrameView was already inferred from the graph");
   }
@@ -48,12 +49,13 @@ inline Status FrameView::InferFromGraphViewT(const GraphViewT& graph_view) {
 
   // We assign unique int id to each frame, and use this map to track what
   // frames we've already seen in the graph.
-  absl::flat_hash_map<string, int> frame_name_to_id;
+  absl::flat_hash_map<std::string, int> frame_name_to_id;
 
-  auto process_fanout = [this, graph](
-                            absl::flat_hash_map<string, int>* frame_name_to_id,
-                            std::deque<int>* ready_node_indices,
-                            const NodeDef* ready_node, int fanout_node_index) {
+  auto process_fanout = [this, graph](absl::flat_hash_map<std::string, int>*
+                                          frame_name_to_id,
+                                      std::deque<int>* ready_node_indices,
+                                      const NodeDef* ready_node,
+                                      int fanout_node_index) {
     const NodeDef* fanout_node = &graph->node(fanout_node_index);
     if (!node_to_frames_.contains(fanout_node)) {
       // If we have never seen this node before, we add all frames from the
@@ -74,7 +76,7 @@ inline Status FrameView::InferFromGraphViewT(const GraphViewT& graph_view) {
               SummarizeNodeDef(*fanout_node));
         }
 
-        const string& frame_name = frame_name_attr->s();
+        const std::string& frame_name = frame_name_attr->s();
         int frame_id;
 
         if (frame_name_to_id->contains(frame_name)) {
@@ -141,17 +143,17 @@ inline Status FrameView::InferFromGraphViewT(const GraphViewT& graph_view) {
   return absl::OkStatus();
 }
 
-Status FrameView::InferFromGraphView(const utils::GraphView& graph_view) {
+absl::Status FrameView::InferFromGraphView(const utils::GraphView& graph_view) {
   return InferFromGraphViewT(graph_view);
 }
 
-Status FrameView::InferFromGraphView(
+absl::Status FrameView::InferFromGraphView(
     const utils::MutableGraphView& graph_view) {
   return InferFromGraphViewT(graph_view);
 }
 
-Status FrameView::InferFromGraph(const GraphDef& graph) {
-  Status status;
+absl::Status FrameView::InferFromGraph(const GraphDef& graph) {
+  absl::Status status;
   utils::GraphView graph_view(&graph, &status);
   TF_RETURN_IF_ERROR(status);
   return InferFromGraphViewT(graph_view);

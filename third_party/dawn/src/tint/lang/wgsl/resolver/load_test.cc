@@ -52,8 +52,8 @@ TEST_F(ResolverLoadTest, VarInitializer) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::I32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::I32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::I32>());
 }
 
 TEST_F(ResolverLoadTest, LetInitializer) {
@@ -67,8 +67,8 @@ TEST_F(ResolverLoadTest, LetInitializer) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::I32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::I32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::I32>());
 }
 
 TEST_F(ResolverLoadTest, Assignment) {
@@ -84,8 +84,8 @@ TEST_F(ResolverLoadTest, Assignment) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::I32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::I32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::I32>());
 }
 
 TEST_F(ResolverLoadTest, CompoundAssignment) {
@@ -101,8 +101,8 @@ TEST_F(ResolverLoadTest, CompoundAssignment) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::I32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::I32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::I32>());
 }
 
 TEST_F(ResolverLoadTest, UnaryOp) {
@@ -116,8 +116,8 @@ TEST_F(ResolverLoadTest, UnaryOp) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::I32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::I32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::I32>());
 }
 
 TEST_F(ResolverLoadTest, UnaryOp_NoLoad) {
@@ -145,8 +145,23 @@ TEST_F(ResolverLoadTest, BinaryOp) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::I32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::I32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::I32>());
+}
+
+TEST_F(ResolverLoadTest, BinaryOp_Swizzle) {
+    // var ref = vec4(1);
+    // var v = ref.xy * 1i;
+    auto* swizzle = MemberAccessor("ref", "xy");
+    WrapInFunction(Var("ref", Call<vec4<i32>>(1_i)),  //
+                   Var("v", Mul(swizzle, 1_i)));
+
+    ASSERT_TRUE(r()->Resolve()) << r()->error();
+    auto* load = Sem().Get<sem::Load>(swizzle);
+    ASSERT_NE(load, nullptr);
+    EXPECT_TRUE(load->Type()->Is<core::type::Vector>());
+    EXPECT_TRUE(load->Type()->DeepestElement()->Is<core::type::I32>());
+    EXPECT_EQ(load->Type()->As<core::type::Vector>()->Width(), 2u);
 }
 
 TEST_F(ResolverLoadTest, Index) {
@@ -160,8 +175,8 @@ TEST_F(ResolverLoadTest, Index) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::I32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::I32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::I32>());
 }
 
 TEST_F(ResolverLoadTest, MultiComponentSwizzle) {
@@ -173,10 +188,21 @@ TEST_F(ResolverLoadTest, MultiComponentSwizzle) {
 
     ASSERT_TRUE(r()->Resolve()) << r()->error();
     auto* load = Sem().Get<sem::Load>(ident);
-    ASSERT_NE(load, nullptr);
-    EXPECT_TRUE(load->Type()->Is<core::type::Vector>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::Vector>());
+    ASSERT_EQ(load, nullptr);  // Load added in IR lowering
+}
+
+TEST_F(ResolverLoadTest, MultiComponentSwizzle_FromPointer) {
+    // var ref = vec4(1);
+    // let ptr = &ref;
+    // var v = ptr.xyz;
+    auto* ident = Expr("ptr");
+    WrapInFunction(Var("ref", Call<vec4<i32>>(1_i)),  //
+                   Let("ptr", AddressOf("ref")),      //
+                   Var("v", MemberAccessor(ident, "xyz")));
+
+    ASSERT_TRUE(r()->Resolve()) << r()->error();
+    auto* load = Sem().Get<sem::Load>(ident);
+    ASSERT_EQ(load, nullptr);  // Load added in IR lowering
 }
 
 TEST_F(ResolverLoadTest, Bitcast) {
@@ -190,8 +216,8 @@ TEST_F(ResolverLoadTest, Bitcast) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::F32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::F32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::F32>());
 }
 
 TEST_F(ResolverLoadTest, BuiltinArg) {
@@ -205,8 +231,8 @@ TEST_F(ResolverLoadTest, BuiltinArg) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::F32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::F32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::F32>());
 }
 
 TEST_F(ResolverLoadTest, FunctionArg) {
@@ -222,8 +248,8 @@ TEST_F(ResolverLoadTest, FunctionArg) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::F32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::F32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::F32>());
 }
 
 TEST_F(ResolverLoadTest, FunctionArg_Handles) {
@@ -255,15 +281,15 @@ TEST_F(ResolverLoadTest, FunctionArg_Handles) {
         auto* load = Sem().Get<sem::Load>(t_ident);
         ASSERT_NE(load, nullptr);
         EXPECT_TRUE(load->Type()->Is<core::type::SampledTexture>());
-        EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-        EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::SampledTexture>());
+        EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+        EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::SampledTexture>());
     }
     {
         auto* load = Sem().Get<sem::Load>(s_ident);
         ASSERT_NE(load, nullptr);
         EXPECT_TRUE(load->Type()->Is<core::type::Sampler>());
-        EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-        EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::Sampler>());
+        EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+        EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::Sampler>());
     }
 }
 
@@ -281,8 +307,8 @@ TEST_F(ResolverLoadTest, FunctionReturn) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::F32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::F32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::F32>());
 }
 
 TEST_F(ResolverLoadTest, IfCond) {
@@ -296,8 +322,8 @@ TEST_F(ResolverLoadTest, IfCond) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::Bool>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::Bool>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::Bool>());
 }
 
 TEST_F(ResolverLoadTest, Switch) {
@@ -313,8 +339,8 @@ TEST_F(ResolverLoadTest, Switch) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::I32>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::I32>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::I32>());
 }
 
 TEST_F(ResolverLoadTest, BreakIfCond) {
@@ -332,8 +358,8 @@ TEST_F(ResolverLoadTest, BreakIfCond) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::Bool>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::Bool>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::Bool>());
 }
 
 TEST_F(ResolverLoadTest, ForCond) {
@@ -347,8 +373,8 @@ TEST_F(ResolverLoadTest, ForCond) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::Bool>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::Bool>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::Bool>());
 }
 
 TEST_F(ResolverLoadTest, WhileCond) {
@@ -362,8 +388,8 @@ TEST_F(ResolverLoadTest, WhileCond) {
     auto* load = Sem().Get<sem::Load>(ident);
     ASSERT_NE(load, nullptr);
     EXPECT_TRUE(load->Type()->Is<core::type::Bool>());
-    EXPECT_TRUE(load->Reference()->Type()->Is<core::type::Reference>());
-    EXPECT_TRUE(load->Reference()->Type()->UnwrapRef()->Is<core::type::Bool>());
+    EXPECT_TRUE(load->Source()->Type()->Is<core::type::Reference>());
+    EXPECT_TRUE(load->Source()->Type()->UnwrapRef()->Is<core::type::Bool>());
 }
 
 TEST_F(ResolverLoadTest, AddressOf) {

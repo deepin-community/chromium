@@ -100,11 +100,8 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/trace_event/base_tracing.h"
-
-namespace base {
-class Value;
-}
+#include "base/trace_event/trace_event.h"
+#include "base/values.h"
 
 namespace trace_analyzer {
 class QueryNode;
@@ -115,16 +112,13 @@ class QueryNode;
 struct TraceEvent {
   // ProcessThreadID contains a Process ID and Thread ID.
   struct ProcessThreadID {
-    ProcessThreadID() : process_id(0), thread_id(0) {}
+    ProcessThreadID() = default;
     ProcessThreadID(int process_id, int thread_id)
         : process_id(process_id), thread_id(thread_id) {}
-    bool operator< (const ProcessThreadID& rhs) const {
-      if (process_id != rhs.process_id)
-        return process_id < rhs.process_id;
-      return thread_id < rhs.thread_id;
-    }
-    int process_id;
-    int thread_id;
+    auto operator<=>(const ProcessThreadID&) const = default;
+    bool operator==(const ProcessThreadID&) const = default;
+    int process_id = 0;
+    int thread_id = 0;
   };
 
   TraceEvent();
@@ -132,10 +126,6 @@ struct TraceEvent {
   ~TraceEvent();
 
   [[nodiscard]] bool SetFromJSON(const base::Value* event_value);
-
-  bool operator< (const TraceEvent& rhs) const {
-    return timestamp < rhs.timestamp;
-  }
 
   TraceEvent& operator=(TraceEvent&& rhs);
 
@@ -151,7 +141,7 @@ struct TraceEvent {
   // Return the argument value if it exists and it is a number.
   bool GetArgAsNumber(const std::string& arg_name, double* arg) const;
   // Return the argument value if it exists and is a dictionary.
-  bool GetArgAsDict(const std::string& arg_name, base::Value::Dict* arg) const;
+  bool GetArgAsDict(const std::string& arg_name, base::DictValue* arg) const;
 
   // Check if argument exists and is string.
   bool HasStringArg(const std::string& arg_name) const;
@@ -167,7 +157,7 @@ struct TraceEvent {
   double GetKnownArgAsDouble(const std::string& arg_name) const;
   int GetKnownArgAsInt(const std::string& arg_name) const;
   bool GetKnownArgAsBool(const std::string& arg_name) const;
-  base::Value::Dict GetKnownArgAsDict(const std::string& arg_name) const;
+  base::DictValue GetKnownArgAsDict(const std::string& arg_name) const;
 
   // Process ID and Thread ID.
   ProcessThreadID thread;
@@ -193,7 +183,7 @@ struct TraceEvent {
   // bool becomes 1.0 (true) or 0.0 (false).
   std::map<std::string, double> arg_numbers;
   std::map<std::string, std::string> arg_strings;
-  std::map<std::string, base::Value::Dict> arg_dicts;
+  std::map<std::string, base::DictValue> arg_dicts;
 
   // The other event associated with this event (or NULL).
   raw_ptr<const TraceEvent> other_event = nullptr;
@@ -458,8 +448,8 @@ class Query {
 
   // Find ASYNC_BEGIN events that have a corresponding ASYNC_END event.
   static Query MatchAsyncBeginWithNext() {
-    return (Query(EVENT_PHASE) ==
-            Query::Phase(TRACE_EVENT_PHASE_ASYNC_BEGIN)) &&
+    return (Query::EventPhaseIs(TRACE_EVENT_PHASE_ASYNC_BEGIN) ||
+            Query::EventPhaseIs(TRACE_EVENT_PHASE_NESTABLE_ASYNC_BEGIN)) &&
            Query(EVENT_HAS_OTHER);
   }
 
@@ -491,9 +481,9 @@ class Query {
   // Boolean operators:
   Query operator==(const Query& rhs) const;
   Query operator!=(const Query& rhs) const;
-  Query operator< (const Query& rhs) const;
+  Query operator<(const Query& rhs) const;
   Query operator<=(const Query& rhs) const;
-  Query operator> (const Query& rhs) const;
+  Query operator>(const Query& rhs) const;
   Query operator>=(const Query& rhs) const;
   Query operator&&(const Query& rhs) const;
   Query operator||(const Query& rhs) const;
@@ -625,8 +615,7 @@ class Query {
   bool GetAsString(const TraceEvent& event, std::string* str) const;
 
   // Evaluate this Query as an arithmetic operator on left_ and right_.
-  bool EvaluateArithmeticOperator(const TraceEvent& event,
-                                  double* num) const;
+  bool EvaluateArithmeticOperator(const TraceEvent& event, double* num) const;
 
   // For QUERY_EVENT_MEMBER Query: attempt to get the double value of the Query.
   bool GetMemberValueAsDouble(const TraceEvent& event, double* num) const;

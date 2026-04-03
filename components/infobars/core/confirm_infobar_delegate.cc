@@ -4,9 +4,12 @@
 
 #include "components/infobars/core/confirm_infobar_delegate.h"
 
+#include <optional>
+
 #include "build/build_config.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_types.h"
 #include "ui/strings/grit/ui_strings.h"
 
 ConfirmInfoBarDelegate::~ConfirmInfoBarDelegate() = default;
@@ -19,13 +22,15 @@ bool ConfirmInfoBarDelegate::EqualsDelegate(
          (confirm_delegate->GetMessageText() == GetMessageText());
 }
 
-ConfirmInfoBarDelegate* ConfirmInfoBarDelegate::AsConfirmInfoBarDelegate() {
-  return this;
+void ConfirmInfoBarDelegate::InfoBarDismissed() {
+  for (auto& observer : observers_) {
+    observer.OnDismiss();
+  }
 }
 
-infobars::InfoBarDelegate::InfoBarAutomationType
-ConfirmInfoBarDelegate::GetInfoBarAutomationType() const {
-  return CONFIRM_INFOBAR;
+const ConfirmInfoBarDelegate* ConfirmInfoBarDelegate::AsConfirmInfoBarDelegate()
+    const {
+  return this;
 }
 
 std::u16string ConfirmInfoBarDelegate::GetTitleText() const {
@@ -61,6 +66,19 @@ std::u16string ConfirmInfoBarDelegate::GetButtonTooltip(
   return std::u16string();
 }
 
+std::optional<ui::ButtonStyle> ConfirmInfoBarDelegate::GetButtonStyle(
+    InfoBarButton button) const {
+  return std::nullopt;
+}
+
+bool ConfirmInfoBarDelegate::ShouldShowLinkBeforeButton() const {
+  return false;
+}
+
+int ConfirmInfoBarDelegate::GetLinkSpacingWhenPositionedBeforeButton() const {
+  return 0;
+}
+
 #if BUILDFLAG(IS_IOS)
 bool ConfirmInfoBarDelegate::UseIconBackgroundTint() const {
   return true;
@@ -68,6 +86,9 @@ bool ConfirmInfoBarDelegate::UseIconBackgroundTint() const {
 #endif
 
 bool ConfirmInfoBarDelegate::Accept() {
+  for (auto& observer : observers_) {
+    observer.OnAccept();
+  }
   return true;
 }
 
@@ -75,9 +96,12 @@ bool ConfirmInfoBarDelegate::Cancel() {
   return true;
 }
 
-bool ConfirmInfoBarDelegate::ExtraButtonPressed() {
-  NOTREACHED() << "Method must be overridden.";
-  return true;
+void ConfirmInfoBarDelegate::AddObserver(Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void ConfirmInfoBarDelegate::RemoveObserver(const Observer* observer) {
+  observers_.RemoveObserver(observer);
 }
 
 ConfirmInfoBarDelegate::ConfirmInfoBarDelegate() = default;

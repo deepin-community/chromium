@@ -3,10 +3,8 @@ include_rules = [
   # library.
   "-mojo",
   "+mojo/buildflags.h",
+  "+mojo/core/embedder/features.h",
   "+mojo/public/c/system",
   "+mojo/public/cpp/platform",
   "+net/base",
-
-  # For some syscalls when building in NaCl toolchains.
-  "+native_client/src/public",
 ]

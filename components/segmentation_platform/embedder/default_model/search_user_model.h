@@ -5,8 +5,6 @@
 #ifndef COMPONENTS_SEGMENTATION_PLATFORM_EMBEDDER_DEFAULT_MODEL_SEARCH_USER_MODEL_H_
 #define COMPONENTS_SEGMENTATION_PLATFORM_EMBEDDER_DEFAULT_MODEL_SEARCH_USER_MODEL_H_
 
-#include <optional>
-
 #include "components/segmentation_platform/public/model_provider.h"
 
 namespace segmentation_platform {
@@ -17,6 +15,8 @@ struct Config;
 // metadata for the search user optimization target.
 class SearchUserModel : public DefaultModelProvider {
  public:
+  enum Feature { kFeatureOmniboxSuggestionUsed, kFeatureCount };
+
   SearchUserModel();
   ~SearchUserModel() override = default;
 

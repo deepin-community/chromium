@@ -4,6 +4,8 @@
 
 #include "components/metrics/structured/lib/key_util.h"
 
+#include <utility>
+
 #include "base/check_op.h"
 #include "base/unguessable_token.h"
 
@@ -23,8 +25,8 @@ std::string GenerateNewKey() {
 }
 
 base::Value CreateValueFromKeyProto(const KeyProto& proto) {
-  base::Value::Dict key =
-      base::Value::Dict()
+  base::DictValue key =
+      base::DictValue()
           .Set(kKeyString, proto.key())
           // last_rotation and rotation_period are represented as int64's but
           // should never exceed int.
@@ -35,8 +37,7 @@ base::Value CreateValueFromKeyProto(const KeyProto& proto) {
   return base::Value(std::move(key));
 }
 
-std::optional<KeyProto> CreateKeyProtoFromValue(
-    const base::Value::Dict& value) {
+std::optional<KeyProto> CreateKeyProtoFromValue(const base::DictValue& value) {
   const std::string* key = value.FindString(kKeyString);
   if (!key) {
     return std::nullopt;

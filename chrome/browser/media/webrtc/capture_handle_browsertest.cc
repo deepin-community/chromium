@@ -11,10 +11,12 @@
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
+#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
@@ -114,7 +116,7 @@ struct TabInfo {
                   web_contents->GetPrimaryMainFrame(),
                   base::StringPrintf(
                       "callSetCaptureHandleConfig(%s, \"%s\", %s);",
-                      expose_origin ? "true" : "false", handle.c_str(),
+                      base::ToString(expose_origin), handle.c_str(),
                       StringifyPermittedOrigins(permitted_origins).c_str())),
               "capture-handle-set");
 
@@ -204,11 +206,17 @@ class CaptureHandleBrowserTest : public WebRtcTestBase {
         switches::kEnableExperimentalWebPlatformFeatures);
     command_line->AppendSwitchASCII(
         switches::kAutoSelectTabCaptureSourceByTitle, kCapturedTabTitle);
-    // TODO(https://crbug.com/1424557): Remove this after fixing feature
+#if defined(MEMORY_SANITIZER) && !BUILDFLAG(IS_CHROMEOS)
+    // Force software rendering to avoid GPU process crashes on slow MSan bots.
+    // ChromeOS is excluded as it requires GPU acceleration even under MSan.
+    command_line->AppendSwitch(switches::kDisableGpu);
+#else
+    // TODO(crbug.com/40260482): Remove the CrOS exception after fixing feature
     // detection in 0c tab capture path as it'll no longer be needed.
-    if constexpr (!BUILDFLAG(IS_CHROMEOS)) {
-      command_line->AppendSwitch(switches::kUseGpuInTests);
-    }
+#if !BUILDFLAG(IS_CHROMEOS)
+    command_line->AppendSwitch(switches::kUseGpuInTests);
+#endif
+#endif
   }
 
   void TearDownOnMainThread() override {
@@ -359,7 +367,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleBrowserTest,
   EXPECT_EQ(capturing_tab.ReadCaptureHandle(), "null");
 }
 
-// TODO(crbug.com/1217873): Test disabled on Mac due to multiple failing bots.
+// TODO(crbug.com/40185394): Test disabled on Mac due to multiple failing bots.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_HandleNotExposedIfTopLevelAllowlistedButCallingFrameNotAllowlisted \
   DISABLED_HandleNotExposedIfTopLevelAllowlistedButCallingFrameNotAllowlisted
@@ -398,9 +406,9 @@ IN_PROC_BROWSER_TEST_F(
                                       {top_level_capturer_origin.Serialize()});
 }
 
-// TODO(crbug.com/1217873): Test disabled on Mac due to multiple failing bots.
+// TODO(crbug.com/40185394): Test disabled on Mac due to multiple failing bots.
 // TODO(crbug.com/1287616, crbug.com/1362946): Flaky on Chrome OS and Windows.
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
 #define MAYBE_HandleExposedIfCallingFrameAllowlistedEvenIfTopLevelNotAllowlisted \
   DISABLED_HandleExposedIfCallingFrameAllowlistedEvenIfTopLevelNotAllowlisted
 #else
@@ -533,9 +541,17 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(capturing_tab.ReadCaptureHandle(), captured_tab.capture_handle);
 }
 
+// TODO(crbug.com/462962569): Flaky on linux msan.
+#if BUILDFLAG(IS_LINUX) && defined(MEMORY_SANITIZER)
+#define MAYBE_PermittedOriginsChangeThatRemovesCapturerCausesEventAndEmptyConfig \
+  DISABLED_PermittedOriginsChangeThatRemovesCapturerCausesEventAndEmptyConfig
+#else
+#define MAYBE_PermittedOriginsChangeThatRemovesCapturerCausesEventAndEmptyConfig \
+  PermittedOriginsChangeThatRemovesCapturerCausesEventAndEmptyConfig
+#endif
 IN_PROC_BROWSER_TEST_F(
     CaptureHandleBrowserTest,
-    PermittedOriginsChangeThatRemovesCapturerCausesEventAndEmptyConfig) {
+    MAYBE_PermittedOriginsChangeThatRemovesCapturerCausesEventAndEmptyConfig) {
   TabInfo captured_tab =
       SetUpCapturedPage(/*expose_origin=*/true, "handle", {"*"});
 
@@ -685,7 +701,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleBrowserTest,
   EXPECT_EQ(tab.ReadCaptureHandle(), "null");
 }
 
-// TODO(crbug/1219998): Disabled because of flakiness.
+// TODO(crbug.com/40772597): Disabled because of flakiness.
 #if BUILDFLAG(IS_WIN)
 #define MAYBE_RegularTabCannotReadIncognitoTabCaptureHandle \
   DISABLED_RegularTabCannotReadIncognitoTabCaptureHandle
@@ -710,7 +726,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleBrowserTest,
   EXPECT_EQ(capturing_tab.ReadCaptureHandle(), "null");
 }
 
-// TODO(crbug/1248619): Disabled because of flakiness.
+// TODO(crbug.com/40790671): Disabled because of flakiness.
 IN_PROC_BROWSER_TEST_F(CaptureHandleBrowserTest,
                        DISABLED_IncognitoTabCannotReadRegularTabCaptureHandle) {
   TabInfo captured_tab =
@@ -745,7 +761,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleBrowserTest,
   EXPECT_EQ(capturing_tab.ReadCaptureHandle(), "null");
 }
 
-// TODO(crbug/1219998): Disabled because of flakiness.
+// TODO(crbug.com/40772597): Disabled because of flakiness.
 #if BUILDFLAG(IS_WIN)
 #define MAYBE_IncognitoTabCanReadIncognitoTabCaptureHandleIfSelfCapture \
   DISABLED_IncognitoTabCanReadIncognitoTabCaptureHandleIfSelfCapture

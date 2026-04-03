@@ -103,6 +103,7 @@ static const AVOption options[] = {
 
 static const AVClass cljr_class = {
     .class_name = "cljr encoder",
+    .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
@@ -115,7 +116,7 @@ const FFCodec ff_cljr_encoder = {
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
     .priv_data_size = sizeof(CLJRContext),
     FF_CODEC_ENCODE_CB(encode_frame),
-    .p.pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUV411P,
-                                                   AV_PIX_FMT_NONE },
+    CODEC_PIXFMTS(AV_PIX_FMT_YUV411P),
+    .color_ranges   = AVCOL_RANGE_MPEG,
     .p.priv_class   = &cljr_class,
 };

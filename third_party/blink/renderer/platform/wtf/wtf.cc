@@ -30,11 +30,8 @@
 
 #include "third_party/blink/renderer/platform/wtf/wtf.h"
 
-#include "base/third_party/double_conversion/double-conversion/double-conversion.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/base/attributes.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
-#include "third_party/blink/renderer/platform/wtf/date_math.h"
 #include "third_party/blink/renderer/platform/wtf/dtoa.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/stack_util.h"
@@ -44,14 +41,14 @@
 #include "third_party/blink/renderer/platform/wtf/thread_specific.h"
 #include "third_party/blink/renderer/platform/wtf/threading.h"
 
-namespace WTF {
+namespace blink {
 
 namespace {
 
 bool g_initialized = false;
 
 #if defined(COMPONENT_BUILD) && BUILDFLAG(IS_WIN)
-ABSL_CONST_INIT thread_local bool g_is_main_thread = false;
+constinit thread_local bool g_is_main_thread = false;
 #endif
 
 }  // namespace
@@ -68,10 +65,10 @@ bool IsMainThread() {
   return g_is_main_thread;
 }
 #else
-ABSL_CONST_INIT thread_local bool g_is_main_thread = false;
+constinit thread_local bool g_is_main_thread = false;
 #endif
 
-void Initialize() {
+void InitializeWtf() {
   // WTF, and Blink in general, cannot handle being re-initialized.
   // Make that explicit here.
   CHECK(!g_initialized);
@@ -83,14 +80,11 @@ void Initialize() {
 
   Threading::Initialize();
 
-  // Force initialization of static DoubleToStringConverter converter variable
-  // inside EcmaScriptConverter function while we are in single thread mode.
-  double_conversion::DoubleToStringConverter::EcmaScriptConverter();
-  internal::GetDoubleConverter();
+  internal::InitializeDoubleConverter();
 
   internal::InitializeMainThreadStackEstimate();
   AtomicString::Init();
-  StringStatics::Init();
+  InitStringStatics();
 }
 
-}  // namespace WTF
+}  // namespace blink

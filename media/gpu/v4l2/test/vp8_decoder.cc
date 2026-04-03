@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/gpu/v4l2/test/vp8_decoder.h"
 
 #include <linux/v4l2-controls.h>
@@ -10,9 +15,9 @@
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "media/base/video_types.h"
-#include "media/filters/ivf_parser.h"
 #include "media/gpu/macros.h"
 #include "media/gpu/v4l2/test/v4l2_ioctl_shim.h"
+#include "media/parsers/ivf_parser.h"
 #include "media/parsers/vp8_parser.h"
 
 namespace {
@@ -507,7 +512,8 @@ VideoDecoder::Result Vp8Decoder::DecodeNextFrame(const int frame_number,
                                                  std::vector<uint8_t>& y_plane,
                                                  std::vector<uint8_t>& u_plane,
                                                  std::vector<uint8_t>& v_plane,
-                                                 gfx::Size& size) {
+                                                 gfx::Size& size,
+                                                 BitDepth& bit_depth) {
   Vp8FrameHeader frame_hdr{};
 
   Vp8Decoder::ParseResult parser_res = ReadNextFrame(frame_hdr);
@@ -575,13 +581,16 @@ VideoDecoder::Result Vp8Decoder::DecodeNextFrame(const int frame_number,
     CreateCAPTUREQueue(kNumberOfBuffersInCaptureQueue);
   }
 
+  v4l2_ioctl_->WaitForRequestCompletion(OUTPUT_queue_);
+
   v4l2_ioctl_->DQBuf(CAPTURE_queue_, &buffer_id);
   CAPTURE_queue_->DequeueBufferId(buffer_id);
 
   scoped_refptr<MmappedBuffer> buffer = CAPTURE_queue_->GetBuffer(buffer_id);
-  ConvertToYUV(y_plane, u_plane, v_plane, OUTPUT_queue_->resolution(),
-               buffer->mmapped_planes(), CAPTURE_queue_->resolution(),
-               CAPTURE_queue_->fourcc());
+  bit_depth =
+      ConvertToYUV(y_plane, u_plane, v_plane, OUTPUT_queue_->resolution(),
+                   buffer->mmapped_planes(), CAPTURE_queue_->resolution(),
+                   CAPTURE_queue_->fourcc());
 
   const std::set<int> reusable_buffer_slots = RefreshReferenceSlots(
       frame_hdr, CAPTURE_queue_->GetBuffer(buffer_id).get(),

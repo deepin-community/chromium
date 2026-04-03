@@ -11,6 +11,8 @@
 
 #include <utility>
 
+#include "base/compiler_specific.h"
+
 namespace base {
 namespace win {
 
@@ -37,7 +39,7 @@ class ScopedHGlobal {
   Ptr release() { return std::exchange(data_, nullptr); }
 
   Ptr begin() { return data(); }
-  Ptr end() { return data() + size(); }
+  Ptr end() { return UNSAFE_TODO(data() + size()); }
 
  private:
   HGLOBAL glob_;

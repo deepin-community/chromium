@@ -24,24 +24,35 @@ import './cellular_networks_list.js';
 import './network_always_on_vpn.js';
 import './internet_subpage_menu.js';
 
-import {CrPolicyNetworkBehaviorMojo, CrPolicyNetworkBehaviorMojoInterface} from 'chrome://resources/ash/common/network/cr_policy_network_behavior_mojo.js';
+import type {PrefsMixinInterface} from '/shared/settings/prefs/prefs_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
+import type {I18nMixinInterface} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
+import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
+import type {CrPolicyNetworkBehaviorMojoInterface} from 'chrome://resources/ash/common/network/cr_policy_network_behavior_mojo.js';
+import {CrPolicyNetworkBehaviorMojo} from 'chrome://resources/ash/common/network/cr_policy_network_behavior_mojo.js';
 import {MojoInterfaceProviderImpl} from 'chrome://resources/ash/common/network/mojo_interface_provider.js';
-import {NetworkListenerBehavior, NetworkListenerBehaviorInterface} from 'chrome://resources/ash/common/network/network_listener_behavior.js';
+import type {NetworkListenerBehaviorInterface} from 'chrome://resources/ash/common/network/network_listener_behavior.js';
+import {NetworkListenerBehavior} from 'chrome://resources/ash/common/network/network_listener_behavior.js';
 import {OncMojo} from 'chrome://resources/ash/common/network/onc_mojo.js';
-import {I18nMixin, I18nMixinInterface} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {AlwaysOnVpnMode, AlwaysOnVpnProperties, CrosNetworkConfigInterface, FilterType, GlobalPolicy, NO_LIMIT, VpnProvider, VpnType} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
+import type {AlwaysOnVpnMode, AlwaysOnVpnProperties, CrosNetworkConfigInterface, GlobalPolicy, VpnProvider} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
+import {FilterType, NO_LIMIT, VpnType} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
 import {ConnectionStateType, DeviceStateType, NetworkType} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/network_types.mojom-webui.js';
-import {afterNextRender, DomRepeatEvent, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {DomRepeatEvent} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {afterNextRender, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {castExists} from '../assert_extras.js';
-import {DeepLinkingMixin, DeepLinkingMixinInterface} from '../common/deep_linking_mixin.js';
-import {RouteOriginMixin, RouteOriginMixinInterface} from '../common/route_origin_mixin.js';
+import type {DeepLinkingMixinInterface} from '../common/deep_linking_mixin.js';
+import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
+import type {RouteOriginMixinInterface} from '../common/route_origin_mixin.js';
+import {RouteOriginMixin} from '../common/route_origin_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import {Route, Router, routes} from '../router.js';
+import type {Route} from '../router.js';
+import {Router, routes} from '../router.js';
 
-import {InternetPageBrowserProxy, InternetPageBrowserProxyImpl} from './internet_page_browser_proxy.js';
+import type {InternetPageBrowserProxy} from './internet_page_browser_proxy.js';
+import {InternetPageBrowserProxyImpl} from './internet_page_browser_proxy.js';
 import {getTemplate} from './internet_subpage.html.js';
 
 const SettingsInternetSubpageElementBase =
@@ -50,9 +61,11 @@ const SettingsInternetSubpageElementBase =
           NetworkListenerBehavior,
           CrPolicyNetworkBehaviorMojo,
         ],
-        DeepLinkingMixin(RouteOriginMixin(I18nMixin(PolymerElement)))) as {
+        DeepLinkingMixin(
+            PrefsMixin(RouteOriginMixin(I18nMixin(PolymerElement))))) as {
       new (): PolymerElement & I18nMixinInterface & RouteOriginMixinInterface &
-          DeepLinkingMixinInterface & NetworkListenerBehaviorInterface &
+          PrefsMixinInterface & DeepLinkingMixinInterface &
+          NetworkListenerBehaviorInterface &
           CrPolicyNetworkBehaviorMojoInterface,
     };
 
@@ -94,6 +107,11 @@ export class SettingsInternetSubpageElement extends
        */
       vpnProviders: Array,
 
+      isBuiltInVpnManagementBlocked: {
+        type: Boolean,
+        value: false,
+      },
+
       showSpinner: {
         type: Boolean,
         notify: true,
@@ -128,20 +146,15 @@ export class SettingsInternetSubpageElement extends
         },
       },
 
-      /**
-       * Return true if instant hotspot rebrand feature flag is enabled.
-       */
-      isInstantHotspotRebrandEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.valueExists('isInstantHotspotRebrandEnabled') &&
-              loadTimeData.getBoolean('isInstantHotspotRebrandEnabled');
-        },
-      },
-
       isShowingVpn_: {
         type: Boolean,
         computed: 'computeIsShowingVpn_(deviceState)',
+        reflectToAttribute: true,
+      },
+
+      isShowingTether_: {
+        type: Boolean,
+        computed: 'computeIsShowingTether_(deviceState)',
         reflectToAttribute: true,
       },
 
@@ -210,20 +223,6 @@ export class SettingsInternetSubpageElement extends
         type: Number,
         value: null,
       },
-
-      /**
-       * Used by DeepLinkingMixin to focus this page's deep links.
-       */
-      supportedSettingIds: {
-        type: Object,
-        value: () => new Set<Setting>([
-          Setting.kWifiOnOff,
-          Setting.kWifiAddNetwork,
-          Setting.kMobileOnOff,
-          Setting.kInstantTetheringOnOff,
-          Setting.kAddESimNetwork,
-        ]),
-      },
     };
   }
 
@@ -237,17 +236,28 @@ export class SettingsInternetSubpageElement extends
   defaultNetwork: OncMojo.NetworkStateProperties|null|undefined;
   deviceState: OncMojo.DeviceStateProperties|undefined;
   globalPolicy: GlobalPolicy|undefined;
+  isBuiltInVpnManagementBlocked: boolean;
   isCellularSetupActive: boolean;
   isConnectedToNonCellularNetwork: boolean;
   showSpinner: boolean;
   tetherDeviceState: OncMojo.DeviceStateProperties|undefined;
   vpnProviders: VpnProvider[];
+
+  // DeepLinkingMixin override
+  override supportedSettingIds = new Set<Setting>([
+    Setting.kWifiOnOff,
+    Setting.kWifiAddNetwork,
+    Setting.kMobileOnOff,
+    Setting.kInstantTetheringOnOff,
+    Setting.kAddESimNetwork,
+  ]);
+
   private alwaysOnVpnMode_: AlwaysOnVpnMode|undefined;
   private alwaysOnVpnService_: string|undefined;
   private browserProxy_: InternetPageBrowserProxy;
   private hasCompletedScanSinceLastEnabled_: boolean;
-  private isInstantHotspotRebrandEnabled_: boolean;
   private isManaged_: boolean;
+  private isShowingTether_: boolean;
   private isShowingVpn_: boolean;
   private networkConfig_: CrosNetworkConfigInterface;
   private networkStateList_: OncMojo.NetworkStateProperties[];
@@ -443,13 +453,9 @@ export class SettingsInternetSubpageElement extends
 
     // Scans should be kicked off from the Mobile data subpage, as long as it
     // includes Tether networks.
-    if (this.deviceState.type === NetworkType.kTether ||
+    return this.deviceState.type === NetworkType.kTether ||
         (this.deviceState.type === NetworkType.kCellular &&
-         this.tetherDeviceState)) {
-      return true;
-    }
-
-    return false;
+         !!this.tetherDeviceState);
   }
 
   private startScanning_(): void {
@@ -508,8 +514,7 @@ export class SettingsInternetSubpageElement extends
     }
 
     // For the Cellular/Mobile subpage, also request Tether networks.
-    if (!this.isInstantHotspotRebrandEnabled_ &&
-        this.deviceState.type === NetworkType.kCellular &&
+    if (this.deviceState.type === NetworkType.kCellular &&
         this.tetherDeviceState) {
       const filter = {
         filter: FilterType.kVisible,
@@ -546,6 +551,8 @@ export class SettingsInternetSubpageElement extends
             const providerId = state.typeState.vpn.providerId;
             thirdPartyVpns[providerId] = thirdPartyVpns[providerId] || [];
             thirdPartyVpns[providerId].push(state);
+            break;
+          default:
             break;
         }
       });
@@ -604,6 +611,10 @@ export class SettingsInternetSubpageElement extends
    */
   private deviceIsEnabled_(deviceState: OncMojo.DeviceStateProperties|
                            undefined): boolean {
+    if (OncMojo.deviceIsFlashing(deviceState)) {
+      return false;
+    }
+
     return !!deviceState &&
         (deviceState.type === NetworkType.kVPN ||
          deviceState.deviceState === DeviceStateType.kEnabled);
@@ -618,9 +629,7 @@ export class SettingsInternetSubpageElement extends
   private enableToggleIsVisible_(deviceState: OncMojo.DeviceStateProperties|
                                  undefined): boolean {
     return !!deviceState && deviceState.type !== NetworkType.kEthernet &&
-        deviceState.type !== NetworkType.kVPN &&
-        (!this.isInstantHotspotRebrandEnabled_ ||
-         deviceState.type !== NetworkType.kTether);
+        deviceState.type !== NetworkType.kVPN;
   }
 
   private enableToggleIsEnabled_(deviceState: OncMojo.DeviceStateProperties|
@@ -632,6 +641,9 @@ export class SettingsInternetSubpageElement extends
       return false;
     }
     if (OncMojo.deviceStateIsIntermediate(deviceState.deviceState)) {
+      return false;
+    }
+    if (OncMojo.deviceIsFlashing(deviceState)) {
       return false;
     }
     return !this.isDeviceInhibited_();
@@ -656,6 +668,8 @@ export class SettingsInternetSubpageElement extends
         return this.i18n('internetToggleMobileA11yLabel');
       case NetworkType.kWiFi:
         return this.i18n('internetToggleWiFiA11yLabel');
+      default:
+        break;
     }
     assertNotReached();
   }
@@ -883,9 +897,8 @@ export class SettingsInternetSubpageElement extends
       deviceState: OncMojo.DeviceStateProperties,
       _tetherDeviceState: OncMojo.DeviceStateProperties|undefined): string {
     const type = deviceState.type;
-    if (type === NetworkType.kTether ||
-        (!this.isInstantHotspotRebrandEnabled_ &&
-         type === NetworkType.kCellular && this.tetherDeviceState)) {
+    if (type === NetworkType.kCellular && this.tetherDeviceState ||
+        type === NetworkType.kTether) {
       return this.i18nAdvanced('internetNoNetworksMobileData').toString();
     }
 
@@ -934,6 +947,13 @@ export class SettingsInternetSubpageElement extends
     }
     return this.matchesType_(
         OncMojo.getNetworkTypeString(NetworkType.kVPN), this.deviceState);
+  }
+
+  private computeIsShowingTether_(): boolean {
+    return !!this.deviceState &&
+        this.matchesType_(
+            OncMojo.getNetworkTypeString(NetworkType.kTether),
+            this.deviceState);
   }
 
   /**

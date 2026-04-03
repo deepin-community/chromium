@@ -20,16 +20,17 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_join.h"
+#include "google/protobuf/descriptor.h"
 #include "xla/parse_flags_from_env.h"
 #include "xla/service/compilation_environments.h"
-#include "xla/status.h"
-#include "xla/statusor.h"
+#include "xla/tsl/util/command_line_flags.h"
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "tsl/platform/protobuf.h"
 #include "tsl/platform/statusor.h"
-#include "tsl/util/command_line_flags.h"
 
 namespace xla {
 
@@ -49,7 +50,7 @@ void InitializeFlagsForGpuCompEnv(std::vector<tsl::Flag>* flag_list,
       gpu_comp_env->dummy_flag(), "Dummy flag to demonstrate the flow"));
 }
 
-StatusOr<GpuCompilationEnvironment> CreateGpuCompEnvFromFlagStrings(
+absl::StatusOr<GpuCompilationEnvironment> CreateGpuCompEnvFromFlagStrings(
     std::vector<std::string>& flags, bool strict) {
   GpuCompilationEnvironment gpu_comp_env;
   std::vector<tsl::Flag> flag_objects;
@@ -62,14 +63,11 @@ StatusOr<GpuCompilationEnvironment> CreateGpuCompEnvFromFlagStrings(
   return gpu_comp_env;
 }
 
-StatusOr<GpuCompilationEnvironment> CreateGpuCompEnvFromEnvVar() {
+absl::StatusOr<GpuCompilationEnvironment> CreateGpuCompEnvFromEnvVar() {
   GpuCompilationEnvironment env;
   std::vector<tsl::Flag> flag_objects;
   InitializeFlagsForGpuCompEnv(&flag_objects, &env);
-  bool result = ParseFlagsFromEnvAndIgnoreUnknown("XLA_FLAGS", flag_objects);
-  if (!result) {
-    return InvalidArgument("Could not parse XLA_FLAGS.");
-  }
+  ParseFlagsFromEnvAndIgnoreUnknown("XLA_FLAGS", flag_objects);
   return env;
 }
 
@@ -79,7 +77,8 @@ GpuCompilationEnvironment CreateGpuCompEnvWithDefaultValues() {
   return env;
 }
 
-Status InitializeMissingFieldsFromXLAFlags(GpuCompilationEnvironment& env) {
+absl::Status InitializeMissingFieldsFromXLAFlags(
+    GpuCompilationEnvironment& env) {
   TF_ASSIGN_OR_RETURN(GpuCompilationEnvironment from_env,
                       CreateGpuCompEnvFromEnvVar());
 
@@ -108,7 +107,7 @@ Status InitializeMissingFieldsFromXLAFlags(GpuCompilationEnvironment& env) {
   if (!missing_fields.empty()) {
     reflection->SwapFields(&env, &default_env, missing_fields);
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 namespace {
@@ -119,7 +118,7 @@ namespace {
 //
 // The implementation returns Empty env if one doesn't exist already.
 // NOLINTNEXTLINE
-StatusOr<std::unique_ptr<tsl::protobuf::Message>>
+absl::StatusOr<std::unique_ptr<tsl::protobuf::Message>>
 ProcessNewGpuCompilationEnvironment(
     std::unique_ptr<tsl::protobuf::Message> env) {  // NOLINT
   if (!env) {
@@ -133,9 +132,11 @@ ProcessNewGpuCompilationEnvironment(
 }  // namespace xla
 
 static bool InitModule() {
-  xla::CompilationEnvironments::RegisterProcessNewEnvFn(
-      xla::GpuCompilationEnvironment::descriptor(),
-      xla::ProcessNewGpuCompilationEnvironment);
+  // TODO(b/284274097): Enable the registration once GPU compilation environment
+  // is well supported.
+  // xla::CompilationEnvironments::RegisterProcessNewEnvFn(
+  //     xla::GpuCompilationEnvironment::descriptor(),
+  //     xla::ProcessNewGpuCompilationEnvironment);
   return true;
 }
 static bool module_initialized = InitModule();

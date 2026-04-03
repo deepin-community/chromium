@@ -38,32 +38,22 @@ class TestConstrainedWebDialogDelegate : public ConstrainedWebDialogDelegate {
 
   std::unique_ptr<content::WebContents> ReleaseWebContents() override {
     NOTREACHED();
-    return nullptr;
   }
 
-  content::WebContents* GetWebContents() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  content::WebContents* GetWebContents() override { NOTREACHED(); }
 
-  gfx::NativeWindow GetNativeDialog() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  gfx::NativeWindow GetNativeDialog() override { NOTREACHED(); }
 
   gfx::Size GetConstrainedWebDialogMinimumSize() const override {
     NOTREACHED();
-    return gfx::Size();
   }
 
   gfx::Size GetConstrainedWebDialogMaximumSize() const override {
     NOTREACHED();
-    return gfx::Size();
   }
 
   gfx::Size GetConstrainedWebDialogPreferredSize() const override {
     NOTREACHED();
-    return gfx::Size();
   }
 
  private:
@@ -119,7 +109,7 @@ TEST_F(ConstrainedWebDialogUITest, DialogCloseWithEmptyArgs) {
         ASSERT_EQ(json_retval, "");
         run_loop.Quit();
       }));
-  base::Value::List args;
+  base::ListValue args;
   web_ui()->HandleReceivedMessage("dialogClose", args);
   run_loop.Run();
 }
@@ -133,7 +123,7 @@ TEST_F(ConstrainedWebDialogUITest, DialogCloseWithJsonInArgs) {
         json_retval = cb_json_retval;
         run_loop.Quit();
       }));
-  base::Value::List args;
+  base::ListValue args;
   args.Append(kJsonRetval);
   web_ui()->HandleReceivedMessage("dialogClose", args);
   run_loop.Run();

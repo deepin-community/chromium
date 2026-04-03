@@ -9,7 +9,7 @@
 #include "base/strings/stringprintf.h"
 #include "content/browser/child_process_launcher.h"
 #include "content/public/browser/child_process_launcher_utils.h"
-#include "content/public/common/sandboxed_process_launcher_delegate.h"
+#include "content/public/browser/sandboxed_process_launcher_delegate.h"
 #include "printing/buildflags/buildflags.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
 
@@ -59,7 +59,7 @@ void ChildProcessLauncherHelper::SetProcessPriorityOnLauncherThread(
     base::Process process,
     base::Process::Priority priority) {
   DCHECK(CurrentlyOnProcessLauncherTaskRunner());
-  // TODO(https://crbug.com/926583): Fuchsia does not currently support this.
+  // TODO(crbug.com/40611633): Fuchsia does not currently support this.
 }
 
 ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(

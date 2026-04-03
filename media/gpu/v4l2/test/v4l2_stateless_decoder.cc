@@ -10,11 +10,12 @@
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
-#include "base/hash/md5.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "crypto/obsolete/md5.h"
 #include "media/gpu/v4l2/test/video_decoder.h"
 #include "media/gpu/v4l2/test/vp8_decoder.h"
 #include "media/gpu/v4l2/test/vp9_decoder.h"
@@ -89,9 +90,8 @@ constexpr char kHelpMsg[] =
 // This functionality is needed for tast tests.
 void ComputeAndPrintMD5hash(const std::vector<uint8_t>& yuv_plane,
                             const base::FilePath md5_log_location) {
-  base::MD5Digest md5_digest;
-  base::MD5Sum(yuv_plane, &md5_digest);
-  std::string md5_digest_b16 = MD5DigestToBase16(md5_digest);
+  std::string md5_digest_b16 =
+      base::HexEncodeLower(crypto::obsolete::Md5::HashForTesting(yuv_plane));
 
   if (!md5_log_location.empty()) {
     if (!PathExists(md5_log_location))
@@ -205,8 +205,9 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> u_plane;
     std::vector<uint8_t> v_plane;
     gfx::Size size;
+    VideoDecoder::BitDepth bit_depth;
     const VideoDecoder::Result res =
-        dec->DecodeNextFrame(i, y_plane, u_plane, v_plane, size);
+        dec->DecodeNextFrame(i, y_plane, u_plane, v_plane, size, bit_depth);
     if (res == VideoDecoder::kEOStream) {
       VLOG(1) << "End of stream.";
       break;
@@ -219,8 +220,8 @@ int main(int argc, char** argv) {
       continue;
 
     std::vector<uint8_t> yuv_plane(y_plane);
-    yuv_plane.insert(yuv_plane.end(), u_plane.begin(), u_plane.end());
-    yuv_plane.insert(yuv_plane.end(), v_plane.begin(), v_plane.end());
+    yuv_plane.append_range(u_plane);
+    yuv_plane.append_range(v_plane);
 
     if (cmd->HasSwitch("md5"))
       ComputeAndPrintMD5hash(yuv_plane, md5_log_location);
@@ -234,13 +235,11 @@ int main(int argc, char** argv) {
         filename, base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
 
     if (output_format == "yuv") {
-      output_file.Write(0, reinterpret_cast<const char*>(yuv_plane.data()),
-                        yuv_plane.size());
+      output_file.Write(0, yuv_plane);
     } else {
       std::vector<uint8_t> image_buffer = dec->ConvertYUVToPNG(
-          y_plane.data(), u_plane.data(), v_plane.data(), size);
-      output_file.Write(0, reinterpret_cast<char*>(image_buffer.data()),
-                        image_buffer.size());
+          y_plane.data(), u_plane.data(), v_plane.data(), size, bit_depth);
+      output_file.Write(0, image_buffer);
     }
   }
 

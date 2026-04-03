@@ -39,11 +39,12 @@ const std::set<redaction::PIIType> kExpectedPIITypes = {
     redaction::PIIType::kEmail, redaction::PIIType::kURL,
     redaction::PIIType::kGaiaID};
 
-void ReadExportedFile(base::Value::Dict* signin, base::FilePath file_path) {
+void ReadExportedFile(base::DictValue* signin, base::FilePath file_path) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   std::string file_contents;
   ASSERT_TRUE(base::ReadFileToString(file_path, &file_contents));
-  std::optional<base::Value> dict_value = base::JSONReader::Read(file_contents);
+  std::optional<base::Value> dict_value = base::JSONReader::Read(
+      file_contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(dict_value);
   *signin = std::move(dict_value->GetDict());
 }
@@ -88,13 +89,8 @@ class SigninDataCollectorBrowserTestAsh
 
  protected:
   ash::LoggedInUserMixin logged_in_user_mixin_{
-      &mixin_host_,
-      ash::LoggedInUserMixin::LogInType::kRegular,
-      embedded_test_server(),
-      this,
-      true,
-      AccountId::FromUserEmailGaiaId(policy::PolicyBuilder::kFakeUsername,
-                                     "0123456789")};
+      &mixin_host_, /*test_base=*/this, embedded_test_server(),
+      ash::LoggedInUserMixin::LogInType::kManaged};
 
   base::ScopedTempDir temp_dir_;
   scoped_refptr<base::SequencedTaskRunner> task_runner_for_redaction_tool_;
@@ -140,7 +136,47 @@ IN_PROC_BROWSER_TEST_F(SigninDataCollectorBrowserTestAsh, CollectSigninStatus) {
   EXPECT_EQ(error, std::nullopt);
 
   // Review the file contents.
-  base::Value::Dict json_result;
+  base::DictValue json_result;
   ASSERT_NO_FATAL_FAILURE(ReadExportedFile(&json_result, output_file));
   EXPECT_FALSE(json_result.empty());
+}
+
+IN_PROC_BROWSER_TEST_F(SigninDataCollectorBrowserTestAsh, FailInIncognitoMode) {
+  // Create incognito browser for testing.
+  Browser* incognito_browser = Browser::Create(Browser::CreateParams(
+      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
+      true));
+
+  // `SigninDataCollector` for testing.
+  SigninDataCollector data_collector(incognito_browser->profile());
+
+  // Attempt to collect sign-in data and verify that an error is returned.
+  base::test::TestFuture<std::optional<SupportToolError>>
+      test_future_collect_data;
+  data_collector.CollectDataAndDetectPII(test_future_collect_data.GetCallback(),
+                                         task_runner_for_redaction_tool_,
+                                         redaction_tool_container_);
+  std::optional<SupportToolError> error = test_future_collect_data.Get();
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(
+      error->error_message,
+      "SigninDataCollector can't work without profile or in incognito mode.");
+  EXPECT_EQ(error->error_code, SupportToolErrorCode::kDataCollectorError);
+
+  // Attempt to export the collected data and verify that error is returned.
+  base::FilePath output_path = temp_dir_.GetPath();
+  auto output_file = output_path.Append(FILE_PATH_LITERAL("signin.json"));
+
+  base::test::TestFuture<std::optional<SupportToolError>>
+      test_future_export_data;
+  data_collector.ExportCollectedDataWithPII(
+      /*pii_types_to_keep=*/{}, output_path,
+      /*task_runner_for_redaction_tool=*/task_runner_for_redaction_tool_,
+      /*redaction_tool_container=*/redaction_tool_container_,
+      test_future_export_data.GetCallback());
+  error = test_future_export_data.Get();
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->error_message,
+            "SigninDataCollector: Status is empty. Can't export empty status.");
+  EXPECT_EQ(error->error_code, SupportToolErrorCode::kDataCollectorError);
 }

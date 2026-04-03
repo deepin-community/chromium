@@ -28,46 +28,76 @@
 #ifndef SRC_DAWN_NATIVE_D3D11_SHARED_TEXTURE_MEMORY_D3D11_H_
 #define SRC_DAWN_NATIVE_D3D11_SHARED_TEXTURE_MEMORY_D3D11_H_
 
+#include <optional>
+
 #include "dawn/native/Error.h"
 #include "dawn/native/d3d/SharedTextureMemoryD3D.h"
 #include "dawn/native/d3d/d3d_platform.h"
 
-namespace dawn::native::d3d11 {
+namespace dawn::native {
+namespace d3d {
+class KeyedMutex;
+}  // namespace d3d
 
+namespace d3d11 {
 class Device;
 struct SharedTextureMemoryD3D11Texture2DDescriptor;
+
+class SharedTextureMemoryContentsD3D11 final : public SharedTextureMemoryContents {
+  public:
+    using SharedTextureMemoryContents::SharedTextureMemoryContents;
+
+    bool RequiresFenceSignal() const { return mRequiresFenceSignal; }
+
+  private:
+    friend class SharedTextureMemory;
+
+    // Flag indicates whether we need to signal a fence after accessing this texture or not.
+    // This flag will be updated in BeginAccess() & reset in EndAccess().
+    bool mRequiresFenceSignal = false;
+};
 
 class SharedTextureMemory final : public d3d::SharedTextureMemory {
   public:
     static ResultOrError<Ref<SharedTextureMemory>> Create(
         Device* device,
-        const char* label,
+        StringView label,
         const SharedTextureMemoryDXGISharedHandleDescriptor* descriptor);
 
     static ResultOrError<Ref<SharedTextureMemory>> Create(
         Device* device,
-        const char* label,
+        StringView label,
         const SharedTextureMemoryD3D11Texture2DDescriptor* descriptor);
 
     ID3D11Resource* GetD3DResource() const;
 
-    IDXGIKeyedMutex* GetKeyedMutex() const;
+    d3d::KeyedMutex* GetKeyedMutex() const;
 
   private:
     SharedTextureMemory(Device* device,
-                        const char* label,
+                        StringView label,
                         SharedTextureMemoryProperties properties,
                         ComPtr<ID3D11Resource> resource);
 
-    void DestroyImpl() override;
+    void DestroyImpl(DestroyReason reason) override;
 
     ResultOrError<Ref<TextureBase>> CreateTextureImpl(
         const UnpackedPtr<TextureDescriptor>& descriptor) override;
 
+    Ref<SharedResourceMemoryContents> CreateContents() override;
+
+    MaybeError BeginAccessImpl(TextureBase* texture,
+                               const UnpackedPtr<BeginAccessDescriptor>& descriptor) override;
+    ResultOrError<FenceAndSignalValue> EndAccessImpl(
+        TextureBase* texture,
+        ExecutionSerial lastUsageSerial,
+        UnpackedPtr<EndAccessState>& descriptor) override;
+
     ComPtr<ID3D11Resource> mResource;
-    ComPtr<IDXGIKeyedMutex> mKeyedMutex;
+    Ref<d3d::KeyedMutex> mKeyedMutex;
 };
 
-}  // namespace dawn::native::d3d11
+}  // namespace d3d11
+}  // namespace dawn::native
 
 #endif  // SRC_DAWN_NATIVE_D3D11_SHARED_TEXTURE_MEMORY_D3D11_H_

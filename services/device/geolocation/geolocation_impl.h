@@ -9,6 +9,8 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/device/geolocation/geolocation_provider_impl.h"
 #include "services/device/public/mojom/geolocation.mojom.h"
+#include "services/device/public/mojom/geolocation_client_id.mojom.h"
+#include "services/device/public/mojom/geolocation_context.mojom.h"
 #include "url/gurl.h"
 
 namespace device {
@@ -22,7 +24,9 @@ class GeolocationImpl : public mojom::Geolocation {
   // |context| must outlive this object.
   GeolocationImpl(mojo::PendingReceiver<mojom::Geolocation> receiver,
                   const GURL& requesting_url,
-                  GeolocationContext* context);
+                  mojom::GeolocationClientId client_id,
+                  GeolocationContext* context,
+                  bool has_precise_permission);
 
   GeolocationImpl(const GeolocationImpl&) = delete;
   GeolocationImpl& operator=(const GeolocationImpl&) = delete;
@@ -40,15 +44,14 @@ class GeolocationImpl : public mojom::Geolocation {
   void SetOverride(const mojom::GeopositionResult& result);
   void ClearOverride();
 
-  // Invokes any pending position callback with a permission denied error.
-  // Called by GeolocationContext when permission is lost.
-  void OnPermissionRevoked();
+  // Called by GeolocationContext when the permission has changed.
+  void OnPermissionUpdated(mojom::GeolocationPermissionLevel permission_level);
 
   const GURL& url() { return url_; }
 
  private:
   // mojom::Geolocation:
-  void SetHighAccuracy(bool high_accuracy) override;
+  void SetHighAccuracyHint(bool high_accuracy) override;
   void QueryNextPosition(QueryNextPositionCallback callback) override;
 
   void OnConnectionError();
@@ -61,6 +64,8 @@ class GeolocationImpl : public mojom::Geolocation {
 
   // The requesting URL.
   const GURL url_;
+
+  const mojom::GeolocationClientId client_id_;
 
   // Owns this object.
   raw_ptr<GeolocationContext> context_;
@@ -77,9 +82,19 @@ class GeolocationImpl : public mojom::Geolocation {
 
   mojom::GeopositionResultPtr current_result_;
 
-  // Whether this instance is currently observing location updates with high
-  // accuracy.
-  bool high_accuracy_;
+  // True if the client has requested high accuracy. The actual accuracy used
+  // is determined by `effective_high_accuracy_`, which also considers
+  // permission levels.
+  bool high_accuracy_hint_;
+
+  // Caches the last effective high accuracy value sent to the provider. A new
+  // subscription is initiated only if this value changes. `std::optional`
+  // ensures a subscription is always created on the very first update request.
+  std::optional<bool> effective_high_accuracy_;
+
+  // True if requesting precise geolocation accuracy is permitted by the current
+  // permission level.
+  bool has_precise_permission_;
 };
 
 }  // namespace device

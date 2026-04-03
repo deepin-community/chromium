@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/win/async_operation.h"
 #include "base/win/winrt_storage_util.h"
 #include "device/bluetooth/public/cpp/bluetooth_uuid.h"
@@ -42,6 +43,10 @@ FakeGattDescriptorWinrt::FakeGattDescriptorWinrt(
 
 FakeGattDescriptorWinrt::~FakeGattDescriptorWinrt() = default;
 
+void FakeGattDescriptorWinrt::ClearBluetoothTestWinrt() {
+  bluetooth_test_winrt_ = nullptr;
+}
+
 HRESULT FakeGattDescriptorWinrt::get_ProtectionLevel(
     GattProtectionLevel* value) {
   return E_NOTIMPL;
@@ -70,6 +75,9 @@ HRESULT FakeGattDescriptorWinrt::ReadValueAsync(
 HRESULT FakeGattDescriptorWinrt::ReadValueWithCacheModeAsync(
     BluetoothCacheMode cache_mode,
     IAsyncOperation<GattReadResult*>** value) {
+  if (!bluetooth_test_winrt_) {
+    return E_UNEXPECTED;
+  }
   if (cache_mode != BluetoothCacheMode_Uncached)
     return E_NOTIMPL;
 
@@ -90,11 +98,13 @@ HRESULT FakeGattDescriptorWinrt::WriteValueAsync(
 HRESULT FakeGattDescriptorWinrt::WriteValueWithResultAsync(
     IBuffer* value,
     IAsyncOperation<GattWriteResult*>** operation) {
-  uint8_t* data;
-  uint32_t size;
-  base::win::GetPointerToBufferData(value, &data, &size);
+  if (!bluetooth_test_winrt_) {
+    return E_UNEXPECTED;
+  }
+  base::span<uint8_t> buffer_span;
+  base::win::GetPointerToBufferData(value, buffer_span);
   bluetooth_test_winrt_->OnFakeBluetoothDescriptorWriteValue(
-      std::vector<uint8_t>(data, data + size));
+      std::vector<uint8_t>(buffer_span.begin(), buffer_span.end()));
   auto async_op = Make<base::win::AsyncOperation<GattWriteResult*>>();
   DCHECK(!write_value_callback_);
   write_value_callback_ = async_op->callback();

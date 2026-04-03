@@ -9,7 +9,6 @@
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/functional/bind.h"
-#include "components/favicon/android/jni_headers/LargeIconBridge_jni.h"
 #include "components/favicon/content/large_icon_service_getter.h"
 #include "components/favicon/core/large_icon_service.h"
 #include "components/favicon_base/fallback_icon_style.h"
@@ -23,8 +22,10 @@
 #include "url/android/gurl_android.h"
 #include "url/gurl.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/favicon/android/jni_headers/LargeIconBridge_jni.h"
+
 using base::android::AttachCurrentThread;
-using base::android::JavaParamRef;
 using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
@@ -36,12 +37,12 @@ namespace {
 void OnLargeIconAvailable(const JavaRef<jobject>& j_callback,
                           const favicon_base::LargeIconResult& result) {
   // Convert the result to a Java Bitmap.
-  SkBitmap bitmap;
   ScopedJavaLocalRef<jobject> j_bitmap;
   if (result.bitmap.is_valid()) {
-    if (gfx::PNGCodec::Decode(result.bitmap.bitmap_data->front(),
-                              result.bitmap.bitmap_data->size(), &bitmap))
+    SkBitmap bitmap = gfx::PNGCodec::Decode(*result.bitmap.bitmap_data);
+    if (!bitmap.isNull()) {
       j_bitmap = gfx::ConvertToJavaBitmap(bitmap);
+    }
   }
 
   favicon_base::FallbackIconStyle fallback;
@@ -57,7 +58,7 @@ void OnLargeIconAvailable(const JavaRef<jobject>& j_callback,
 
 }  // namespace
 
-static jlong JNI_LargeIconBridge_Init(JNIEnv* env) {
+static int64_t JNI_LargeIconBridge_Init(JNIEnv* env) {
   return reinterpret_cast<intptr_t>(new LargeIconBridge());
 }
 
@@ -68,13 +69,13 @@ void LargeIconBridge::Destroy(JNIEnv* env) {
   delete this;
 }
 
-jboolean LargeIconBridge::GetLargeIconForURL(
+bool LargeIconBridge::GetLargeIconForURL(
     JNIEnv* env,
-    const JavaParamRef<jobject>& j_browser_context,
-    const JavaParamRef<jobject>& j_page_url,
-    jint min_source_size_px,
-    jint desired_source_size_px,
-    const JavaParamRef<jobject>& j_callback) {
+    const JavaRef<jobject>& j_browser_context,
+    const JavaRef<jobject>& j_page_url,
+    int32_t min_source_size_px,
+    int32_t desired_source_size_px,
+    const JavaRef<jobject>& j_callback) {
   content::BrowserContext* browser_context =
       content::BrowserContextFromJavaHandle(j_browser_context);
   if (!browser_context)
@@ -88,12 +89,12 @@ jboolean LargeIconBridge::GetLargeIconForURL(
   favicon_base::LargeIconCallback callback_runner = base::BindOnce(
       &OnLargeIconAvailable, ScopedJavaGlobalRef<jobject>(env, j_callback));
 
-  std::unique_ptr<GURL> url = url::GURLAndroid::ToNativeGURL(env, j_page_url);
+  GURL url = url::GURLAndroid::ToNativeGURL(env, j_page_url);
 
   // Use desired_size = 0 for getting the icon from the cache (so that
   // the icon is not poorly rescaled by LargeIconService).
   large_icon_service->GetLargeIconRawBitmapOrFallbackStyleForPageUrl(
-      *url, min_source_size_px, desired_source_size_px,
+      url, min_source_size_px, desired_source_size_px,
       std::move(callback_runner), &cancelable_task_tracker_);
 
   return true;
@@ -102,12 +103,11 @@ jboolean LargeIconBridge::GetLargeIconForURL(
 void LargeIconBridge::
     GetLargeIconOrFallbackStyleFromGoogleServerSkippingLocalCache(
         JNIEnv* env,
-        const base::android::JavaParamRef<jobject>& j_browser_context,
-        const base::android::JavaParamRef<jobject>& j_page_url,
-        jboolean may_page_url_be_private,
-        jboolean should_trim_page_url_path,
-        jint j_network_annotation_hash_code,
-        const base::android::JavaParamRef<jobject>& j_callback) {
+        const base::android::JavaRef<jobject>& j_browser_context,
+        const base::android::JavaRef<jobject>& j_page_url,
+        bool should_trim_page_url_path,
+        int32_t j_network_annotation_hash_code,
+        const base::android::JavaRef<jobject>& j_callback) {
   content::BrowserContext* browser_context =
       content::BrowserContextFromJavaHandle(j_browser_context);
   if (!browser_context) {
@@ -119,16 +119,14 @@ void LargeIconBridge::
     return;
   }
 
-  std::unique_ptr<GURL> page_url =
-      url::GURLAndroid::ToNativeGURL(env, j_page_url);
-  CHECK(page_url);
+  GURL page_url = url::GURLAndroid::ToNativeGURL(env, j_page_url);
   favicon_base::GoogleFaviconServerCallback callback =
       base::BindOnce(&LargeIconBridge::OnGoogleFaviconServerResponse,
                      weak_factory_.GetWeakPtr(),
                      ScopedJavaGlobalRef<jobject>(env, j_callback));
   large_icon_service
       ->GetLargeIconOrFallbackStyleFromGoogleServerSkippingLocalCache(
-          *page_url, may_page_url_be_private, should_trim_page_url_path,
+          page_url, should_trim_page_url_path,
           net::NetworkTrafficAnnotationTag::FromJavaAnnotation(
               j_network_annotation_hash_code),
           std::move(callback));
@@ -136,8 +134,8 @@ void LargeIconBridge::
 
 void LargeIconBridge::TouchIconFromGoogleServer(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& j_browser_context,
-    const base::android::JavaParamRef<jobject>& j_icon_url) {
+    const base::android::JavaRef<jobject>& j_browser_context,
+    const base::android::JavaRef<jobject>& j_icon_url) {
   content::BrowserContext* browser_context =
       content::BrowserContextFromJavaHandle(j_browser_context);
   if (!browser_context) {
@@ -149,10 +147,8 @@ void LargeIconBridge::TouchIconFromGoogleServer(
     return;
   }
 
-  std::unique_ptr<GURL> icon_url =
-      url::GURLAndroid::ToNativeGURL(env, j_icon_url);
-  CHECK(icon_url);
-  large_icon_service->TouchIconFromGoogleServer(*icon_url);
+  GURL icon_url = url::GURLAndroid::ToNativeGURL(env, j_icon_url);
+  large_icon_service->TouchIconFromGoogleServer(icon_url);
 }
 
 void LargeIconBridge::OnGoogleFaviconServerResponse(
@@ -164,3 +160,5 @@ void LargeIconBridge::OnGoogleFaviconServerResponse(
 }
 
 }  // namespace favicon
+
+DEFINE_JNI(LargeIconBridge)

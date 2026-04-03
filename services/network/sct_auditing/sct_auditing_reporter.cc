@@ -4,8 +4,10 @@
 
 #include "services/network/sct_auditing/sct_auditing_reporter.h"
 
+#include <optional>
+#include <string>
+
 #include "base/base64.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/json/json_reader.h"
@@ -20,6 +22,7 @@
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/base/request_priority.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/network_context.h"
@@ -146,7 +149,7 @@ constexpr int kMaxRetries = 15;
 // static
 std::optional<SCTAuditingReporter::SCTHashdanceMetadata>
 SCTAuditingReporter::SCTHashdanceMetadata::FromValue(const base::Value& value) {
-  const base::Value::Dict* dict = value.GetIfDict();
+  const base::DictValue* dict = value.GetIfDict();
   if (!dict) {
     return std::nullopt;
   }
@@ -188,12 +191,10 @@ SCTAuditingReporter::SCTHashdanceMetadata::operator=(SCTHashdanceMetadata&&) =
 
 base::Value SCTAuditingReporter::SCTHashdanceMetadata::ToValue() const {
   auto dict =
-      base::Value::Dict()
-          .Set(kLeafHashKey,
-               base::Base64Encode(base::as_bytes(base::make_span(leaf_hash))))
+      base::DictValue()
+          .Set(kLeafHashKey, base::Base64Encode(base::as_byte_span(leaf_hash)))
           .Set(kIssuedKey, base::TimeToValue(issued))
-          .Set(kLogIdKey,
-               base::Base64Encode(base::as_bytes(base::make_span(log_id))))
+          .Set(kLogIdKey, base::Base64Encode(base::as_byte_span(log_id)))
           .Set(kLogMMDKey, base::TimeDeltaToValue(log_mmd))
           .Set(kCertificateExpiry, base::TimeToValue(certificate_expiry));
   return base::Value(std::move(dict));
@@ -313,7 +314,7 @@ void SCTAuditingReporter::ScheduleRequestWithBackoff(base::OnceClosure request,
     delay = std::max(backoff_entry_->GetTimeUntilRelease(), delay);
   }
   if (delay.is_positive()) {
-    // TODO(crbug.com/1199827): Investigate if explicit task traits should be
+    // TODO(crbug.com/40761454): Investigate if explicit task traits should be
     // used for these tasks (e.g., BEST_EFFORT and SKIP_ON_SHUTDOWN).
     base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE, std::move(request), delay);
@@ -334,7 +335,7 @@ void SCTAuditingReporter::SendLookupQuery() {
       configuration_->hashdance_lookup_uri.spec(),
       {
           base::NumberToString(kHashdanceHashPrefixLength),
-          base::HexEncode(base::as_bytes(base::make_span(hash_prefix))),
+          base::HexEncode(base::as_byte_span(hash_prefix)),
       },
       /*offsets=*/nullptr));
   report_request->method = "GET";
@@ -359,7 +360,7 @@ void SCTAuditingReporter::SendLookupQuery() {
 }
 
 void SCTAuditingReporter::OnSendLookupQueryComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   int response_code = 0;
   if (url_loader_->ResponseInfo() && url_loader_->ResponseInfo()->headers) {
     response_code = url_loader_->ResponseInfo()->headers->response_code();
@@ -372,15 +373,15 @@ void SCTAuditingReporter::OnSendLookupQueryComplete(
     return;
   }
 
-  std::optional<base::Value> result = base::JSONReader::Read(*response_body);
-  if (!result || !result->is_dict()) {
+  std::optional<base::DictValue> result = base::JSONReader::ReadDict(
+      *response_body, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!result) {
     RecordLookupQueryResult(LookupQueryResult::kInvalidJson);
     MaybeRetryRequest();
     return;
   }
 
-  const base::Value::Dict& result_dict = result->GetDict();
-  const std::string* status = result_dict.FindString(kLookupStatusKey);
+  const std::string* status = result->FindString(kLookupStatusKey);
   if (!status) {
     RecordLookupQueryResult(LookupQueryResult::kInvalidJson);
     MaybeRetryRequest();
@@ -393,7 +394,7 @@ void SCTAuditingReporter::OnSendLookupQueryComplete(
   }
 
   const std::string* server_timestamp_string =
-      result_dict.FindString(kLookupTimestampKey);
+      result->FindString(kLookupTimestampKey);
   if (!server_timestamp_string) {
     RecordLookupQueryResult(LookupQueryResult::kInvalidJson);
     MaybeRetryRequest();
@@ -416,16 +417,16 @@ void SCTAuditingReporter::OnSendLookupQueryComplete(
   }
 
   // Find the corresponding log entry.
-  const base::Value::List* logs = result_dict.FindList(kLookupLogStatusKey);
+  const base::ListValue* logs = result->FindList(kLookupLogStatusKey);
   if (!logs) {
     RecordLookupQueryResult(LookupQueryResult::kInvalidJson);
     MaybeRetryRequest();
     return;
   }
 
-  const base::Value::Dict* found_log = nullptr;
+  const base::DictValue* found_log = nullptr;
   for (const auto& log : *logs) {
-    const base::Value::Dict* log_dict = log.GetIfDict();
+    const base::DictValue* log_dict = log.GetIfDict();
     if (!log_dict) {
       RecordLookupQueryResult(LookupQueryResult::kInvalidJson);
       MaybeRetryRequest();
@@ -474,8 +475,7 @@ void SCTAuditingReporter::OnSendLookupQueryComplete(
     return;
   }
 
-  const base::Value::List* suffix_value =
-      result_dict.FindList(kLookupHashSuffixKey);
+  const base::ListValue* suffix_value = result->FindList(kLookupHashSuffixKey);
   if (!suffix_value) {
     RecordLookupQueryResult(LookupQueryResult::kInvalidJson);
     MaybeRetryRequest();
@@ -486,12 +486,10 @@ void SCTAuditingReporter::OnSendLookupQueryComplete(
   // comparison without having to convert every value in the |suffix_value|.
   std::string hash_suffix = TruncateSuffix(sct_hashdance_metadata_->leaf_hash,
                                            kHashdanceHashPrefixLength);
-  hash_suffix =
-      base::Base64Encode(base::as_bytes(base::make_span(hash_suffix)));
-  base::Value hash_suffix_value(std::move(hash_suffix));
+  hash_suffix = base::Base64Encode(base::as_byte_span(hash_suffix));
   // TODO(nsatragno): it would be neat if the backend returned a sorted list and
   // we could binary search it instead.
-  if (base::Contains(*suffix_value, hash_suffix_value)) {
+  if (suffix_value->contains(hash_suffix)) {
     // Found the SCT in the suffix list, all done.
     RecordLookupQueryResult(LookupQueryResult::kSCTSuffixFound);
     std::move(done_callback_).Run(reporter_key_);
@@ -531,7 +529,7 @@ void SCTAuditingReporter::SendReport() {
   url_loader_->SetRetryOptions(0, SimpleURLLoader::RETRY_NEVER);
 
   // Serialize the report and attach it to the loader.
-  // TODO(crbug.com/1199566): Should we store the serialized report instead, so
+  // TODO(crbug.com/40761306): Should we store the serialized report instead, so
   // we don't serialize on every retry?
   std::string report_data;
   bool ok = report_->SerializeToString(&report_data);

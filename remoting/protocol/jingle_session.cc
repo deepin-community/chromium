@@ -6,24 +6,32 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <limits>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "remoting/base/constants.h"
+#include "remoting/base/source_location.h"
 #include "remoting/protocol/authenticator.h"
 #include "remoting/protocol/content_description.h"
+#include "remoting/protocol/errors.h"
 #include "remoting/protocol/jingle_messages.h"
 #include "remoting/protocol/jingle_session_manager.h"
 #include "remoting/protocol/session_config.h"
+#include "remoting/protocol/session_observer.h"
 #include "remoting/protocol/session_plugin.h"
 #include "remoting/protocol/transport.h"
 #include "remoting/signaling/iq_sender.h"
@@ -66,23 +74,31 @@ ErrorCode AuthRejectionReasonToErrorCode(
     Authenticator::RejectionReason reason) {
   switch (reason) {
     case Authenticator::RejectionReason::INVALID_CREDENTIALS:
-      return AUTHENTICATION_FAILED;
-    case Authenticator::RejectionReason::PROTOCOL_ERROR:
-      return INCOMPATIBLE_PROTOCOL;
+      return ErrorCode::AUTHENTICATION_FAILED;
     case Authenticator::RejectionReason::INVALID_ACCOUNT_ID:
-      return INVALID_ACCOUNT;
+      return ErrorCode::INVALID_ACCOUNT;
     case Authenticator::RejectionReason::TOO_MANY_CONNECTIONS:
-      return SESSION_REJECTED;
+      return ErrorCode::SESSION_REJECTED;
     case Authenticator::RejectionReason::REJECTED_BY_USER:
-      return SESSION_REJECTED;
+      return ErrorCode::SESSION_REJECTED;
     case Authenticator::RejectionReason::AUTHZ_POLICY_CHECK_FAILED:
-    // TODO: b/323068262 - Add error code for REAUTHZ_POLICY_CHECK_FAILED.
+      return ErrorCode::AUTHZ_POLICY_CHECK_FAILED;
     case Authenticator::RejectionReason::REAUTHZ_POLICY_CHECK_FAILED:
-      return AUTHZ_POLICY_CHECK_FAILED;
+      return ErrorCode::REAUTHZ_POLICY_CHECK_FAILED;
     case Authenticator::RejectionReason::LOCATION_AUTHZ_POLICY_CHECK_FAILED:
-      return LOCATION_AUTHZ_POLICY_CHECK_FAILED;
+      return ErrorCode::LOCATION_AUTHZ_POLICY_CHECK_FAILED;
     case Authenticator::RejectionReason::UNAUTHORIZED_ACCOUNT:
-      return UNAUTHORIZED_ACCOUNT;
+      return ErrorCode::UNAUTHORIZED_ACCOUNT;
+    case Authenticator::RejectionReason::NO_COMMON_AUTH_METHOD:
+      return ErrorCode::NO_COMMON_AUTH_METHOD;
+    case Authenticator::RejectionReason::INVALID_STATE:
+      return ErrorCode::INVALID_STATE;
+    case Authenticator::RejectionReason::INVALID_ARGUMENT:
+      return ErrorCode::INVALID_ARGUMENT;
+    case Authenticator::RejectionReason::UNEXPECTED_ERROR:
+      return ErrorCode::UNEXPECTED_AUTHENTICATOR_ERROR;
+    case Authenticator::RejectionReason::NETWORK_FAILURE:
+      return ErrorCode::NETWORK_FAILURE;
   }
 }
 
@@ -130,7 +146,7 @@ class JingleSession::OrderedMessageQueue {
       const std::string& id,
       PendingMessage&& pending_message);
 
-  // Sets the initial ID of the session initiate message.
+  // Sets the initial ID of the session initiate mefssage.
   void SetInitialId(const std::string& id);
 
  private:
@@ -200,7 +216,7 @@ JingleSession::JingleSession(JingleSessionManager* session_manager)
     : session_manager_(session_manager),
       event_handler_(nullptr),
       state_(INITIALIZING),
-      error_(OK),
+      error_(ErrorCode::OK),
       message_queue_(new OrderedMessageQueue) {}
 
 JingleSession::~JingleSession() {
@@ -214,7 +230,7 @@ void JingleSession::SetEventHandler(Session::EventHandler* event_handler) {
   event_handler_ = event_handler;
 }
 
-ErrorCode JingleSession::error() {
+ErrorCode JingleSession::error() const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   return error_;
 }
@@ -271,9 +287,12 @@ void JingleSession::InitializeIncomingConnection(
       SessionConfig::SelectCommon(initiate_message.description->config(),
                                   session_manager_->protocol_config_.get());
   if (!config_) {
-    LOG(WARNING) << "Rejecting connection from " << peer_address_.id()
-                 << " because no compatible configuration has been found.";
-    Close(INCOMPATIBLE_PROTOCOL);
+    Close(ErrorCode::INCOMPATIBLE_PROTOCOL,
+          base::StringPrintf("Rejecting connection from %s because no "
+                             "compatible configuration has "
+                             "been found.",
+                             peer_address_.id()),
+          FROM_HERE);
     return;
   }
 }
@@ -288,7 +307,8 @@ void JingleSession::AcceptIncomingConnection(
       initiate_message.description->authenticator_message();
 
   if (!first_auth_message) {
-    Close(INCOMPATIBLE_PROTOCOL);
+    Close(ErrorCode::INVALID_ARGUMENT,
+          "Cannot find the first authentication message.", FROM_HERE);
     return;
   }
 
@@ -303,13 +323,16 @@ void JingleSession::AcceptIncomingConnection(
 void JingleSession::ContinueAcceptIncomingConnection() {
   DCHECK_NE(authenticator_->state(), Authenticator::PROCESSING_MESSAGE);
   if (authenticator_->state() == Authenticator::REJECTED) {
-    Close(AuthRejectionReasonToErrorCode(authenticator_->rejection_reason()));
+    Authenticator::RejectionDetails details =
+        authenticator_->rejection_details();
+    Close(AuthRejectionReasonToErrorCode(authenticator_->rejection_reason()),
+          details.message, details.location);
     return;
   }
 
   // Send the session-accept message.
-  std::unique_ptr<JingleMessage> message(new JingleMessage(
-      peer_address_, JingleMessage::SESSION_ACCEPT, session_id_));
+  auto message = std::make_unique<JingleMessage>(peer_address_, SessionAccept(),
+                                                 session_id_);
 
   std::unique_ptr<jingle_xmpp::XmlElement> auth_message;
   if (authenticator_->state() == Authenticator::MESSAGE_READY) {
@@ -343,6 +366,11 @@ const SessionConfig& JingleSession::config() {
   return *config_;
 }
 
+const Authenticator& JingleSession::authenticator() const {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  return *authenticator_;
+}
+
 void JingleSession::SetTransport(Transport* transport) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(!transport_);
@@ -355,9 +383,9 @@ void JingleSession::SendTransportInfo(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK_EQ(state_, AUTHENTICATED);
 
-  std::unique_ptr<JingleMessage> message(new JingleMessage(
-      peer_address_, JingleMessage::TRANSPORT_INFO, session_id_));
-  message->transport_info = std::move(transport_info);
+  auto message = std::make_unique<JingleMessage>(
+      peer_address_, JingleTransportInfo(), session_id_);
+  message->transport_info_legacy = std::move(transport_info);
   AddPluginAttachments(message.get());
 
   std::unique_ptr<jingle_xmpp::XmlElement> stanza = message->ToXml();
@@ -374,48 +402,68 @@ void JingleSession::SendTransportInfo(
   }
 }
 
-void JingleSession::Close(protocol::ErrorCode error) {
+void JingleSession::Close(protocol::ErrorCode error,
+                          std::string_view error_details,
+                          const SourceLocation& error_location) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   if (is_session_active()) {
     // Send session-terminate message with the appropriate error code.
-    JingleMessage::Reason reason;
+    SessionTerminate::Reason reason;
     switch (error) {
-      case OK:
-        reason = JingleMessage::SUCCESS;
+      case ErrorCode::OK:
+        reason = SessionTerminate::Reason::kSuccess;
         break;
-      case SESSION_REJECTED:
-      case AUTHENTICATION_FAILED:
-      case INVALID_ACCOUNT:
-        reason = JingleMessage::DECLINE;
+      case ErrorCode::SESSION_REJECTED:
+      case ErrorCode::AUTHENTICATION_FAILED:
+      case ErrorCode::INVALID_ACCOUNT:
+        reason = SessionTerminate::Reason::kDecline;
         break;
-      case INCOMPATIBLE_PROTOCOL:
-        reason = JingleMessage::INCOMPATIBLE_PARAMETERS;
+      case ErrorCode::INCOMPATIBLE_PROTOCOL:
+        reason = SessionTerminate::Reason::kIncompatibleParameters;
         break;
-      case HOST_OVERLOAD:
-        reason = JingleMessage::CANCEL;
+      case ErrorCode::HOST_OVERLOAD:
+        reason = SessionTerminate::Reason::kCancel;
         break;
-      case MAX_SESSION_LENGTH:
-        reason = JingleMessage::EXPIRED;
+      case ErrorCode::MAX_SESSION_LENGTH:
+        reason = SessionTerminate::Reason::kExpired;
         break;
-      case HOST_CONFIGURATION_ERROR:
-        reason = JingleMessage::FAILED_APPLICATION;
+      case ErrorCode::HOST_CONFIGURATION_ERROR:
+        reason = SessionTerminate::Reason::kFailedApplication;
         break;
       default:
-        reason = JingleMessage::GENERAL_ERROR;
+        reason = SessionTerminate::Reason::kGeneralError;
     }
 
-    std::unique_ptr<JingleMessage> message(new JingleMessage(
-        peer_address_, JingleMessage::SESSION_TERMINATE, session_id_));
+    auto message = std::make_unique<JingleMessage>(
+        peer_address_, SessionTerminate(), session_id_);
     message->reason = reason;
     message->error_code = error;
+    if (!error_details.empty()) {
+      message->error_details = error_details;
+    }
+    if (!error_location.is_null()) {
+      message->error_location = error_location.ToString();
+    }
+    if (error != ErrorCode::OK) {
+      std::string additional_logs;
+      if (!error_details.empty()) {
+        additional_logs += ": ";
+        additional_logs += error_details;
+      }
+      if (!message->error_location.empty()) {
+        additional_logs += " (" + message->error_location + ")";
+      }
+      LOG(WARNING) << "Session closed with error " << static_cast<int>(error)
+                   << additional_logs;
+    }
     SendMessage(std::move(message));
   }
 
   error_ = error;
 
   if (state_ != FAILED && state_ != CLOSED) {
-    if (error != OK) {
+    if (error != ErrorCode::OK) {
       SetState(FAILED);
     } else {
       SetState(CLOSED);
@@ -431,7 +479,7 @@ void JingleSession::AddPlugin(SessionPlugin* plugin) {
 void JingleSession::SendMessage(std::unique_ptr<JingleMessage> message) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-  if (message->action != JingleMessage::SESSION_TERMINATE) {
+  if (message->action() != JingleMessage::ActionType::kSessionTerminate) {
     // When the host accepts session-initiate message from a client JID it
     // doesn't recognize it sends session-terminate without session-accept.
     // Attaching plugin information to this session-terminate message may lead
@@ -446,11 +494,11 @@ void JingleSession::SendMessage(std::unique_ptr<JingleMessage> message) {
   auto request = session_manager_->iq_sender()->SendIq(
       std::move(stanza),
       base::BindOnce(&JingleSession::OnMessageResponse, base::Unretained(this),
-                     message->action));
+                     message->action()));
 
   int timeout = kDefaultMessageTimeout;
-  if (message->action == JingleMessage::SESSION_INITIATE ||
-      message->action == JingleMessage::SESSION_ACCEPT) {
+  if (message->action() == JingleMessage::ActionType::kSessionInitiate ||
+      message->action() == JingleMessage::ActionType::kSessionAccept) {
     timeout = kSessionInitiateAndAcceptTimeout;
   }
   if (request) {
@@ -458,7 +506,7 @@ void JingleSession::SendMessage(std::unique_ptr<JingleMessage> message) {
     pending_requests_.push_back(std::move(request));
   } else {
     LOG(ERROR) << "Failed to send a "
-               << JingleMessage::GetActionName(message->action) << " message";
+               << JingleMessage::GetActionName(message->action()) << " message";
   }
 }
 
@@ -468,8 +516,8 @@ void JingleSession::OnMessageResponse(JingleMessage::ActionType request_type,
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   // Delete the request from the list of pending requests.
-  pending_requests_.erase(base::ranges::find(pending_requests_, request,
-                                             &std::unique_ptr<IqRequest>::get));
+  pending_requests_.erase(std::ranges::find(pending_requests_, request,
+                                            &std::unique_ptr<IqRequest>::get));
 
   // Ignore all responses after session was closed.
   if (state_ == CLOSED || state_ == FAILED) {
@@ -480,20 +528,21 @@ void JingleSession::OnMessageResponse(JingleMessage::ActionType request_type,
 
   // |response| will be nullptr if the request timed out.
   if (!response) {
-    LOG(ERROR) << type_str << " request timed out.";
-    Close(SIGNALING_TIMEOUT);
+    Close(ErrorCode::SIGNALING_TIMEOUT,
+          base::StringPrintf("%s request timed out.", type_str), FROM_HERE);
     return;
   } else {
     const std::string& type =
         response->Attr(jingle_xmpp::QName(std::string(), "type"));
     if (type != "result") {
-      LOG(ERROR) << "Received error in response to " << type_str
-                 << " message: \"" << response->Str()
-                 << "\". Terminating the session.";
-
       // TODO(sergeyu): There may be different reasons for error
       // here. Parse the response stanza to find failure reason.
-      Close(PEER_IS_OFFLINE);
+      Close(ErrorCode::PEER_IS_OFFLINE,
+            base::StringPrintf(
+                "Received error in response to %s message: \"%s\". "
+                "Terminating the session.",
+                type_str, response->Str()),
+            FROM_HERE);
     }
   }
 }
@@ -506,8 +555,8 @@ void JingleSession::OnTransportInfoResponse(
 
   // Consider transport-info requests sent before this one lost and delete
   // all IqRequest objects in front of |request|.
-  auto request_it = base::ranges::find(transport_info_requests_, request,
-                                       &std::unique_ptr<IqRequest>::get);
+  auto request_it = std::ranges::find(transport_info_requests_, request,
+                                      &std::unique_ptr<IqRequest>::get);
   DCHECK(request_it != transport_info_requests_.end());
   transport_info_requests_.erase(transport_info_requests_.begin(),
                                  request_it + 1);
@@ -521,9 +570,12 @@ void JingleSession::OnTransportInfoResponse(
   const std::string& type =
       response->Attr(jingle_xmpp::QName(std::string(), "type"));
   if (type != "result") {
-    LOG(ERROR) << "Received error in response to transport-info message: \""
-               << response->Str() << "\". Terminating the session.";
-    Close(PEER_IS_OFFLINE);
+    Close(ErrorCode::PEER_IS_OFFLINE,
+          base::StringPrintf(
+              "Received error in response to transport-info message: \"%s\". "
+              "Terminating the session.",
+              response->Str()),
+          FROM_HERE);
   }
 }
 
@@ -554,20 +606,22 @@ void JingleSession::ProcessIncomingMessage(
     return;
   }
 
-  switch (message->action) {
-    case JingleMessage::SESSION_ACCEPT:
+  // TODO: joedow - Use std::visit(absl::Overload(...), message->payload()) here
+  // once the JingleMessage payload is being populated for incoming messages.
+  switch (message->action()) {
+    case JingleMessage::ActionType::kSessionAccept:
       OnAccept(std::move(message), std::move(reply_callback));
       break;
 
-    case JingleMessage::SESSION_INFO:
+    case JingleMessage::ActionType::kSessionInfo:
       OnSessionInfo(std::move(message), std::move(reply_callback));
       break;
 
-    case JingleMessage::TRANSPORT_INFO:
+    case JingleMessage::ActionType::kTransportInfo:
       OnTransportInfo(std::move(message), std::move(reply_callback));
       break;
 
-    case JingleMessage::SESSION_TERMINATE:
+    case JingleMessage::ActionType::kSessionTerminate:
       OnTerminate(std::move(message), std::move(reply_callback));
       break;
 
@@ -588,13 +642,17 @@ void JingleSession::OnAccept(std::unique_ptr<JingleMessage> message,
   const jingle_xmpp::XmlElement* auth_message =
       message->description->authenticator_message();
   if (!auth_message) {
-    DLOG(WARNING) << "Received session-accept without authentication message ";
-    Close(INCOMPATIBLE_PROTOCOL);
+    Close(ErrorCode::INVALID_ARGUMENT,
+          "Received session-accept without authentication message", FROM_HERE);
     return;
   }
 
-  if (!InitializeConfigFromDescription(message->description.get())) {
-    Close(INCOMPATIBLE_PROTOCOL);
+  ErrorCode error_code;
+  std::string error_details;
+  base::Location error_location;
+  if (!InitializeConfigFromDescription(message->description.get(), error_code,
+                                       error_details, error_location)) {
+    Close(error_code, error_details, error_location);
     return;
   }
 
@@ -608,32 +666,33 @@ void JingleSession::OnAccept(std::unique_ptr<JingleMessage> message,
 
 void JingleSession::OnSessionInfo(std::unique_ptr<JingleMessage> message,
                                   ReplyCallback reply_callback) {
-  if (!message->info.get() ||
-      !Authenticator::IsAuthenticatorMessage(message->info.get())) {
+  if (!message->info_legacy.get() ||
+      !Authenticator::IsAuthenticatorMessage(message->info_legacy.get())) {
     std::move(reply_callback).Run(JingleMessageReply::UNSUPPORTED_INFO);
     return;
   }
 
   if ((state_ != ACCEPTED && state_ != AUTHENTICATING) ||
       authenticator_->state() != Authenticator::WAITING_MESSAGE) {
-    LOG(WARNING) << "Received unexpected authenticator message "
-                 << message->info->Str();
     std::move(reply_callback).Run(JingleMessageReply::UNEXPECTED_REQUEST);
-    Close(INCOMPATIBLE_PROTOCOL);
+    Close(ErrorCode::INVALID_ARGUMENT,
+          base::StringPrintf("Received unexpected authenticator message %s",
+                             message->info_legacy->Str()),
+          FROM_HERE);
     return;
   }
 
   std::move(reply_callback).Run(JingleMessageReply::NONE);
 
   authenticator_->ProcessMessage(
-      message->info.get(),
+      message->info_legacy.get(),
       base::BindOnce(&JingleSession::ProcessAuthenticationStep,
                      base::Unretained(this)));
 }
 
 void JingleSession::OnTransportInfo(std::unique_ptr<JingleMessage> message,
                                     ReplyCallback reply_callback) {
-  if (!message->transport_info) {
+  if (!message->transport_info_legacy) {
     std::move(reply_callback).Run(JingleMessageReply::BAD_REQUEST);
     return;
   }
@@ -643,7 +702,8 @@ void JingleSession::OnTransportInfo(std::unique_ptr<JingleMessage> message,
         PendingMessage{std::move(message), std::move(reply_callback)});
   } else if (state_ == AUTHENTICATED) {
     std::move(reply_callback)
-        .Run(transport_->ProcessTransportInfo(message->transport_info.get())
+        .Run(transport_->ProcessTransportInfo(
+                 message->transport_info_legacy.get())
                  ? JingleMessageReply::NONE
                  : JingleMessageReply::BAD_REQUEST);
   } else {
@@ -663,47 +723,47 @@ void JingleSession::OnTerminate(std::unique_ptr<JingleMessage> message,
   std::move(reply_callback).Run(JingleMessageReply::NONE);
 
   error_ = message->error_code;
-  if (error_ == UNKNOWN_ERROR) {
+  if (error_ == ErrorCode::UNKNOWN_ERROR) {
     // get error code from message.reason for compatibility with older versions
     // that do not add <error-code>.
     switch (message->reason) {
-      case JingleMessage::SUCCESS:
+      case SessionTerminate::Reason::kSuccess:
         if (state_ == CONNECTING) {
-          error_ = SESSION_REJECTED;
+          error_ = ErrorCode::SESSION_REJECTED;
         } else {
-          error_ = OK;
+          error_ = ErrorCode::OK;
         }
         break;
-      case JingleMessage::DECLINE:
-        error_ = AUTHENTICATION_FAILED;
+      case SessionTerminate::Reason::kDecline:
+        error_ = ErrorCode::AUTHENTICATION_FAILED;
         break;
-      case JingleMessage::CANCEL:
-        error_ = HOST_OVERLOAD;
+      case SessionTerminate::Reason::kCancel:
+        error_ = ErrorCode::HOST_OVERLOAD;
         break;
-      case JingleMessage::EXPIRED:
-        error_ = MAX_SESSION_LENGTH;
+      case SessionTerminate::Reason::kExpired:
+        error_ = ErrorCode::MAX_SESSION_LENGTH;
         break;
-      case JingleMessage::INCOMPATIBLE_PARAMETERS:
-        error_ = INCOMPATIBLE_PROTOCOL;
+      case SessionTerminate::Reason::kIncompatibleParameters:
+        error_ = ErrorCode::INCOMPATIBLE_PROTOCOL;
         break;
-      case JingleMessage::FAILED_APPLICATION:
-        error_ = HOST_CONFIGURATION_ERROR;
+      case SessionTerminate::Reason::kFailedApplication:
+        error_ = ErrorCode::HOST_CONFIGURATION_ERROR;
         break;
-      case JingleMessage::GENERAL_ERROR:
-        error_ = CHANNEL_CONNECTION_ERROR;
+      case SessionTerminate::Reason::kGeneralError:
+        error_ = ErrorCode::CHANNEL_CONNECTION_ERROR;
         break;
       default:
-        error_ = UNKNOWN_ERROR;
+        error_ = ErrorCode::UNKNOWN_ERROR;
     }
-  } else if (error_ == SESSION_REJECTED) {
+  } else if (error_ == ErrorCode::SESSION_REJECTED) {
     // For backward compatibility, we still use AUTHENTICATION_FAILED for
     // SESSION_REJECTED error.
     // TODO(zijiehe): Handle SESSION_REJECTED error in WebApp. Tracked by
     // http://crbug.com/618036.
-    error_ = AUTHENTICATION_FAILED;
+    error_ = ErrorCode::AUTHENTICATION_FAILED;
   }
 
-  if (error_ != OK) {
+  if (error_ != ErrorCode::OK) {
     SetState(FAILED);
   } else {
     SetState(CLOSED);
@@ -712,7 +772,10 @@ void JingleSession::OnTerminate(std::unique_ptr<JingleMessage> message,
 
 void JingleSession::OnAuthenticatorStateChangeAfterAccepted() {
   if (authenticator_->state() == Authenticator::REJECTED) {
-    Close(AuthRejectionReasonToErrorCode(authenticator_->rejection_reason()));
+    Authenticator::RejectionDetails details =
+        authenticator_->rejection_details();
+    Close(AuthRejectionReasonToErrorCode(authenticator_->rejection_reason()),
+          details.message, details.location);
   } else {
     NOTREACHED() << "Unexpected authenticator state: "
                  << authenticator_->state();
@@ -720,15 +783,26 @@ void JingleSession::OnAuthenticatorStateChangeAfterAccepted() {
 }
 
 bool JingleSession::InitializeConfigFromDescription(
-    const ContentDescription* description) {
+    const ContentDescription* description,
+    ErrorCode& error_code,
+    std::string& error_details,
+    base::Location& error_location) {
   DCHECK(description);
   config_ = SessionConfig::GetFinalConfig(description->config());
   if (!config_) {
-    LOG(ERROR) << "session-accept does not specify configuration";
+    error_code = ErrorCode::INVALID_ARGUMENT;
+    error_details =
+        "Received session-accept message does not specify the session "
+        "configuration.";
+    error_location = FROM_HERE;
     return false;
   }
   if (!session_manager_->protocol_config_->IsSupported(*config_)) {
-    LOG(ERROR) << "session-accept specifies an invalid configuration";
+    error_code = ErrorCode::INCOMPATIBLE_PROTOCOL;
+    error_details =
+        "Received session-accept message specifies an invalid session "
+        "configuration.";
+    error_location = FROM_HERE;
     return false;
   }
 
@@ -747,10 +821,10 @@ void JingleSession::ProcessAuthenticationStep() {
   }
 
   if (authenticator_->state() == Authenticator::MESSAGE_READY) {
-    std::unique_ptr<JingleMessage> message(new JingleMessage(
-        peer_address_, JingleMessage::SESSION_INFO, session_id_));
-    message->info = authenticator_->GetNextMessage();
-    DCHECK(message->info.get());
+    auto message = std::make_unique<JingleMessage>(peer_address_, SessionInfo(),
+                                                   session_id_);
+    message->info_legacy = authenticator_->GetNextMessage();
+    DCHECK(message->info_legacy.get());
     SendMessage(std::move(message));
   }
   DCHECK_NE(authenticator_->state(), Authenticator::MESSAGE_READY);
@@ -766,7 +840,10 @@ void JingleSession::ProcessAuthenticationStep() {
   if (authenticator_->state() == Authenticator::ACCEPTED) {
     OnAuthenticated();
   } else if (authenticator_->state() == Authenticator::REJECTED) {
-    Close(AuthRejectionReasonToErrorCode(authenticator_->rejection_reason()));
+    Authenticator::RejectionDetails details =
+        authenticator_->rejection_details();
+    Close(AuthRejectionReasonToErrorCode(authenticator_->rejection_reason()),
+          details.message, details.location);
   }
 }
 
@@ -781,7 +858,7 @@ void JingleSession::OnAuthenticated() {
   for (auto& message : messages_to_process) {
     std::move(message.reply_callback)
         .Run(transport_->ProcessTransportInfo(
-                 message.message->transport_info.get())
+                 message.message->transport_info_legacy.get())
                  ? JingleMessageReply::NONE
                  : JingleMessageReply::BAD_REQUEST);
     if (!self) {
@@ -800,6 +877,11 @@ void JingleSession::SetState(State new_state) {
     DCHECK_NE(state_, FAILED);
 
     state_ = new_state;
+    // Observers must be called before the event handler, since the event
+    // handler may destroy the session.
+    for (SessionObserver& observer : session_manager_->observers_) {
+      observer.OnSessionStateChange(*this, new_state);
+    }
     if (event_handler_) {
       event_handler_->OnSessionStateChange(new_state);
     }
@@ -812,11 +894,11 @@ bool JingleSession::is_session_active() {
 }
 
 void JingleSession::ProcessIncomingPluginMessage(const JingleMessage& message) {
-  if (!message.attachments) {
+  if (!message.attachments_legacy) {
     return;
   }
   for (remoting::protocol::SessionPlugin* plugin : plugins_) {
-    plugin->OnIncomingMessage(*(message.attachments));
+    plugin->OnIncomingMessage(*(message.attachments_legacy));
   }
 }
 
@@ -834,8 +916,8 @@ void JingleSession::SendSessionInitiateMessage() {
   if (state_ != CONNECTING) {
     return;
   }
-  std::unique_ptr<JingleMessage> message(new JingleMessage(
-      peer_address_, JingleMessage::SESSION_INITIATE, session_id_));
+  auto message = std::make_unique<JingleMessage>(
+      peer_address_, SessionInitiate(), session_id_);
   message->initiator =
       session_manager_->signal_strategy_->GetLocalAddress().id();
   message->description = std::make_unique<ContentDescription>(

@@ -4,7 +4,7 @@
 #include <Eigen/Core>
 
 // Allow gpu** macros for generic tests.
-#include <unsupported/Eigen/CXX11/src/Tensor/TensorGpuHipCudaDefines.h>
+#include <Eigen/src/Core/util/GpuHipCudaDefines.inc>
 
 // std::tuple cannot be used on device, and there is a bug in cuda < 9.2 that
 // doesn't allow std::tuple to compile for host code either. In these cases,
@@ -389,9 +389,7 @@ void print_gpu_device_info() {
   std::cout << "  warpSize:                    " << deviceProp.warpSize << std::endl;
   std::cout << "  regsPerBlock:                " << deviceProp.regsPerBlock << std::endl;
   std::cout << "  concurrentKernels:           " << deviceProp.concurrentKernels << std::endl;
-  std::cout << "  clockRate:                   " << deviceProp.clockRate << std::endl;
-  std::cout << "  canMapHostMemory:            " << deviceProp.canMapHostMemory << std::endl;
-  std::cout << "  computeMode:                 " << deviceProp.computeMode << std::endl;
+  std::cout << "  canMapHostMemory:            " << deviceProp.canMapHostMemory << "\n";
 }
 
 #endif  // EIGEN_GPUCC

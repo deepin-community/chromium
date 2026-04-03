@@ -12,17 +12,24 @@ import '../os_settings_page/os_settings_animated_pages.js';
 import '../os_settings_page/os_settings_subpage.js';
 import '../os_settings_page/settings_card.js';
 import '../settings_shared.css.js';
+import '../controls/settings_toggle_button.js';
 
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {isRevampWayfindingEnabled} from '../common/load_time_booleans.js';
+import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
+import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Section} from '../mojom-webui/routes.mojom-webui.js';
+import type {Route} from '../router.js';
+import {routes} from '../router.js';
 
-import {PersonalizationHubBrowserProxy, PersonalizationHubBrowserProxyImpl} from './personalization_hub_browser_proxy.js';
+import type {PersonalizationHubBrowserProxy} from './personalization_hub_browser_proxy.js';
+import {PersonalizationHubBrowserProxyImpl} from './personalization_hub_browser_proxy.js';
 import {getTemplate} from './personalization_page.html.js';
 
-const SettingsPersonalizationPageElementBase = I18nMixin(PolymerElement);
+const SettingsPersonalizationPageElementBase =
+    DeepLinkingMixin(RouteObserverMixin(PrefsMixin(I18nMixin(PolymerElement))));
 
 export class SettingsPersonalizationPageElement extends
     SettingsPersonalizationPageElementBase {
@@ -41,17 +48,9 @@ export class SettingsPersonalizationPageElement extends
         value: Section.kPersonalization,
         readOnly: true,
       },
-
-      isRevampWayfindingEnabled_: {
-        type: Boolean,
-        value() {
-          return isRevampWayfindingEnabled();
-        },
-      },
     };
   }
 
-  private isRevampWayfindingEnabled_: boolean;
   private personalizationHubBrowserProxy_: PersonalizationHubBrowserProxy;
   private section_: Section;
 
@@ -62,14 +61,20 @@ export class SettingsPersonalizationPageElement extends
         PersonalizationHubBrowserProxyImpl.getInstance();
   }
 
-  private getPersonalizationRowIcon_(): string {
-    return this.isRevampWayfindingEnabled_ ?
-        'os-settings:personalization-revamp' :
-        '';
-  }
-
   private openPersonalizationHub_(): void {
     this.personalizationHubBrowserProxy_.openPersonalizationHub();
+  }
+
+  /**
+   * Overridden from DeepLinkingMixin.
+   */
+  override currentRouteChanged(route: Route): void {
+    // Does not apply to the personalization page.
+    if (route !== routes.PERSONALIZATION) {
+      return;
+    }
+
+    this.attemptDeepLink();
   }
 }
 

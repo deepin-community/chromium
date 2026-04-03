@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@ import type * as SDK from '../../core/sdk/sdk.js';
 import * as Protocol from '../../generated/protocol.js';
 
 import {Issue, IssueCategory, IssueKind} from './Issue.js';
-
 import {
   resolveLazyDescription,
   type LazyMarkdownIssueDescription,
@@ -16,14 +15,14 @@ import {
 
 const UIStrings = {
   /**
-   *@description Link text for a link to external documentation
+   * @description Link text for a link to external documentation
    */
   coopAndCoep: 'COOP and COEP',
   /**
-   *@description Title for an external link to more information in the issues view
+   * @description Title for an external link to more information in the issues view
    */
   samesiteAndSameorigin: 'Same-Site and Same-Origin',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('models/issues_manager/CrossOriginEmbedderPolicyIssue.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
 
@@ -43,28 +42,26 @@ export function isCrossOriginEmbedderPolicyIssue(reason: Protocol.Audits.Blocked
   return false;
 }
 
-export class CrossOriginEmbedderPolicyIssue extends Issue {
-  #issueDetails: Protocol.Audits.BlockedByResponseIssueDetails;
-
-  constructor(issueDetails: Protocol.Audits.BlockedByResponseIssueDetails, issuesModel: SDK.IssuesModel.IssuesModel) {
-    super(`CrossOriginEmbedderPolicyIssue::${issueDetails.reason}`, issuesModel);
-    this.#issueDetails = issueDetails;
+export class CrossOriginEmbedderPolicyIssue extends Issue<Protocol.Audits.BlockedByResponseIssueDetails> {
+  constructor(
+      issueDetails: Protocol.Audits.BlockedByResponseIssueDetails, issuesModel: SDK.IssuesModel.IssuesModel|null) {
+    super(`CrossOriginEmbedderPolicyIssue::${issueDetails.reason}`, issueDetails, issuesModel);
   }
 
   primaryKey(): string {
-    return `${this.code()}-(${this.#issueDetails.request.requestId})`;
+    return `${this.code()}-(${this.details().request.requestId})`;
   }
 
   override getBlockedByResponseDetails(): Iterable<Protocol.Audits.BlockedByResponseIssueDetails> {
-    return [this.#issueDetails];
+    return [this.details()];
   }
 
   override requests(): Iterable<Protocol.Audits.AffectedRequest> {
-    return [this.#issueDetails.request];
+    return [this.details().request];
   }
 
   getCategory(): IssueCategory {
-    return IssueCategory.CrossOriginEmbedderPolicy;
+    return IssueCategory.CROSS_ORIGIN_EMBEDDER_POLICY;
   }
 
   getDescription(): MarkdownIssueDescription|null {
@@ -76,11 +73,11 @@ export class CrossOriginEmbedderPolicyIssue extends Issue {
   }
 
   getKind(): IssueKind {
-    return IssueKind.PageError;
+    return IssueKind.PAGE_ERROR;
   }
 }
 
-const issueDescriptions: Map<string, LazyMarkdownIssueDescription> = new Map([
+const issueDescriptions = new Map<string, LazyMarkdownIssueDescription>([
   [
     'CrossOriginEmbedderPolicyIssue::CorpNotSameOriginAfterDefaultedToSameOriginByCoep',
     {

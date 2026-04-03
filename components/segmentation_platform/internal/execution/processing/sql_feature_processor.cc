@@ -92,8 +92,10 @@ void SqlFeatureProcessor::OnCustomInputProcessed(
   }
 
   if (total_bind_values != result.size()) {
-    feature_processor_state->SetError(
-        stats::FeatureProcessingError::kSqlBindValuesError);
+    if (feature_processor_state) {
+      feature_processor_state->SetError(
+          stats::FeatureProcessingError::kSqlBindValuesError);
+    }
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback_), std::move(result_)));
     return;
@@ -114,8 +116,10 @@ void SqlFeatureProcessor::OnCustomInputProcessed(
       // Validate the result tensor.
       if (result.count(std::make_pair(sql_feature_index, bind_value_index)) !=
           1) {
-        feature_processor_state->SetError(
-            stats::FeatureProcessingError::kResultTensorError);
+        if (feature_processor_state) {
+          feature_processor_state->SetError(
+              stats::FeatureProcessingError::kResultTensorError);
+        }
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE,
             base::BindOnce(std::move(callback_), std::move(result_)));
@@ -132,7 +136,7 @@ void SqlFeatureProcessor::OnCustomInputProcessed(
   }
 
   // Send the queries to the ukm database to process.
-  ukm_database_->RunReadonlyQueries(
+  ukm_database_->RunReadOnlyQueries(
       std::move(processed_queries_),
       base::BindOnce(&SqlFeatureProcessor::OnQueriesRun,
                      weak_ptr_factory_.GetWeakPtr(), feature_processor_state));
@@ -142,7 +146,7 @@ void SqlFeatureProcessor::OnQueriesRun(
     base::WeakPtr<FeatureProcessorState> feature_processor_state,
     bool success,
     IndexedTensors result) {
-  if (!success) {
+  if (!success && feature_processor_state) {
     feature_processor_state->SetError(
         stats::FeatureProcessingError::kSqlQueryRunError);
   }

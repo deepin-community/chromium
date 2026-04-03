@@ -33,9 +33,41 @@ PLATFORM_MAPPING = {
     'linux': 'linux',  # Python 3.3+.
     'linux2': 'linux',  # Python < 3.3 uses "linux2" / "linux3".
     'win32': 'win',
-    'aix6': 'aix',
-    'aix7': 'aix',
+    'aix': 'aix',  # Python 3.8+
+    'zos': 'zos',
 }
+
+# (b/328065301): Remove when all GCS hooks are migrated to first class deps
+MIGRATION_TOGGLE_FILE_SUFFIX = '_is_first_class_gcs'
+
+
+def construct_migration_file_name(gcs_object_name):
+    # Remove any forward slashes
+    gcs_file_name = gcs_object_name.replace('/', '_')
+    # Remove any dots
+    gcs_file_name = gcs_file_name.replace('.', '_')
+
+    return f'.{gcs_file_name}{MIGRATION_TOGGLE_FILE_SUFFIX}'
+
+
+def set_executable_bit(output_filename, file_url, gsutil):
+    # Set executable bit.
+    code, err = 0, ''
+    if sys.platform == 'cygwin':
+        # Under cygwin, mark all files as executable. The executable flag in
+        # Google Storage will not be set when uploading from Windows, so if
+        # this script is running under cygwin and we're downloading an
+        # executable, it will be unrunnable from inside cygwin without this.
+        st = os.stat(output_filename)
+        os.chmod(output_filename, st.st_mode | stat.S_IEXEC)
+    elif sys.platform != 'win32':
+        # On non-Windows platforms, key off of the custom header
+        # "x-goog-meta-executable".
+        code, out, err = gsutil.check_call('stat', file_url)
+        if re.search(r'executable:\s*1', out):
+            st = os.stat(output_filename)
+            os.chmod(output_filename, st.st_mode | stat.S_IEXEC)
+    return code, err
 
 
 class InvalidFileError(IOError):
@@ -110,7 +142,8 @@ class Gsutil(object):
         if status_code_match:
             return (int(status_code_match.group(1)), out, err)
         if ('ServiceException: 401 Anonymous' in err):
-            return (401, out, err)
+            return (401, out, err + '\nTry running "gsutil.py config" to log '
+                    ' into Google Cloud Storage.')
         if ('You are attempting to access protected data with '
                 'no configured credentials.' in err):
             return (403, out, err)
@@ -224,7 +257,14 @@ def _validate_tar_file(tar, prefix):
     def _validate(tarinfo):
         """Returns false if the tarinfo is something we explicitly forbid."""
         if tarinfo.issym() or tarinfo.islnk():
-            return False
+            # For links, check if the destination is valid.
+            if os.path.isabs(tarinfo.linkname):
+                return False
+            link_target = os.path.normpath(
+                os.path.join(os.path.dirname(tarinfo.name), tarinfo.linkname))
+            if not link_target.startswith(prefix):
+                return False
+
         if ('../' in tarinfo.name or '..\\' in tarinfo.name
                 or not tarinfo.name.startswith(prefix)):
             return False
@@ -247,6 +287,12 @@ def _downloader_worker_thread(thread_num,
         input_sha1_sum, output_filename = q.get()
         if input_sha1_sum is None:
             return
+        working_dir = os.path.dirname(output_filename)
+        if not working_dir:
+            raise Exception(
+                'Unable to construct a working_dir from the output_filename.')
+        migration_file_name = os.path.join(
+            working_dir, construct_migration_file_name(input_sha1_sum))
         extract_dir = None
         if extract:
             if not output_filename.endswith('.tar.gz'):
@@ -276,6 +322,14 @@ def _downloader_worker_thread(thread_num,
                               're-downloading...' %
                               (thread_num, output_filename))
                     skip = False
+            # (b/328065301): Remove when all GCS hooks are migrated to first
+            # class deps
+            # If the directory was created by a first class GCS
+            # dep, remove the migration file and re-download using the
+            # latest hook.
+            is_first_class_gcs = os.path.exists(migration_file_name)
+            if is_first_class_gcs:
+                skip = False
             if skip:
                 continue
 
@@ -363,24 +417,12 @@ def _downloader_worker_thread(thread_num,
                 with open(extract_dir + '.tmp', 'a'):
                     tar.extractall(path=dirname)
                 os.remove(extract_dir + '.tmp')
-        # Set executable bit.
-        if sys.platform == 'cygwin':
-            # Under cygwin, mark all files as executable. The executable flag in
-            # Google Storage will not be set when uploading from Windows, so if
-            # this script is running under cygwin and we're downloading an
-            # executable, it will be unrunnable from inside cygwin without this.
-            st = os.stat(output_filename)
-            os.chmod(output_filename, st.st_mode | stat.S_IEXEC)
-        elif sys.platform != 'win32':
-            # On non-Windows platforms, key off of the custom header
-            # "x-goog-meta-executable".
-            code, out, err = gsutil.check_call('stat', file_url)
-            if code != 0:
-                out_q.put('%d> %s' % (thread_num, err))
-                ret_codes.put((code, err))
-            elif re.search(r'executable:\s*1', out):
-                st = os.stat(output_filename)
-                os.chmod(output_filename, st.st_mode | stat.S_IEXEC)
+        if os.path.exists(migration_file_name):
+            os.remove(migration_file_name)
+        code, err = set_executable_bit(output_filename, file_url, gsutil)
+        if code != 0:
+            out_q.put('%d> %s' % (thread_num, err))
+            ret_codes.put((code, err))
 
 
 class PrinterThread(threading.Thread):
@@ -440,7 +482,30 @@ def download_from_google_storage(input_filename, base_url, gsutil, num_threads,
 
     # Sequentially check for the most common case and see if we can bail out
     # early before making any slow calls to gsutil.
-    if not force and all(
+    if directory:
+        working_dir = input_filename
+    elif os.path.dirname(output):
+        working_dir = os.path.dirname(output)
+
+    if not working_dir:
+        raise Exception(
+            'Unable to construct a working_dir from the inputted directory'
+            ' or sha1 file name.')
+
+    # (b/328065301): Remove when all GCS hooks are migrated to first class deps
+    # If the directory was created by a first class GCS
+    # dep, remove the migration file and re-download using the
+    # latest hook.
+    is_first_class_gcs = False
+    # Check all paths to see if they have an equivalent is_first_class_gcs file
+    # If directory is False, there will be only one item in input_data
+    for sha1, _ in input_data:
+        migration_file_name = os.path.join(working_dir,
+                                           construct_migration_file_name(sha1))
+        if os.path.exists(migration_file_name):
+            is_first_class_gcs = True
+
+    if not force and not is_first_class_gcs and all(
             _data_exists(sha1, path, extract) for sha1, path in input_data):
         return 0
 
@@ -560,8 +625,7 @@ def main(args):
     parser.add_option('-n',
                       '--no_auth',
                       action='store_true',
-                      help='Skip auth checking.  Use if it\'s known that the '
-                      'target bucket is a public bucket.')
+                      help='DEPRECATED: This flag has no effect.')
     parser.add_option('-p',
                       '--platform',
                       help='A regular expression that is compared against '
@@ -606,26 +670,15 @@ def main(args):
                       options.platform)
             return 0
 
-    # Set the boto file to /dev/null if we don't need auth.
     if options.no_auth:
-        if (set(
-            ('http_proxy', 'https_proxy')).intersection(env.lower()
-                                                        for env in os.environ)
-                and 'NO_AUTH_BOTO_CONFIG' not in os.environ):
-            print(
-                'NOTICE: You have PROXY values set in your environment, but '
-                'gsutil in depot_tools does not (yet) obey them.',
-                file=sys.stderr)
-            print(
-                'Also, --no_auth prevents the normal BOTO_CONFIG environment '
-                'variable from being used.',
-                file=sys.stderr)
-            print(
-                'To use a proxy in this situation, please supply those '
-                'settings in a .boto file pointed to by the '
-                'NO_AUTH_BOTO_CONFIG environment variable.',
-                file=sys.stderr)
-        options.boto = os.environ.get('NO_AUTH_BOTO_CONFIG', os.devnull)
+        print('--no_auth is deprecated, this flag has no effect.')
+
+    if 'NO_AUTH_BOTO_CONFIG' in os.environ:
+        print(
+            'The NO_AUTH_BOTO_CONFIG environment variable is deprecated and ',
+            'has no effect. gsutil.py will always use any [GSUtil] or [Boto] ',
+            'settings in the .boto configuration file, regardless of ',
+            'whether you\'re logged in with luci-auth.')
 
     # Make sure gsutil exists where we expect it to.
     if os.path.exists(GSUTIL_DEFAULT_PATH):

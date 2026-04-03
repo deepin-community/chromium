@@ -15,13 +15,13 @@
 #include "base/base_paths.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/debug/debugger.h"
 #include "base/environment.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/callback_helpers.h"
+#include "base/hash/hash.h"
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -73,6 +73,7 @@
 #undef GetCommandLine
 #elif BUILDFLAG(IS_MAC)
 #include "base/apple/scoped_nsautorelease_pool.h"
+#include "base/mac/mac_util.h"
 #include "sandbox/mac/seatbelt_exec.h"
 #endif
 
@@ -232,7 +233,7 @@ base::CommandLine WrapperTestLauncherDelegate::GetCommandLine(
   new_cmd_line.AppendSwitchPath(switches::kTestLauncherOutput, *output_file);
 
   // Selecting sample tests to enable switches::kEnableTracing.
-  if (base::Contains(switches, switches::kEnableTracingFraction)) {
+  if (switches.contains(switches::kEnableTracingFraction)) {
     double enable_tracing_fraction = 0;
     if (!base::StringToDouble(switches[switches::kEnableTracingFraction],
                               &enable_tracing_fraction) ||
@@ -306,6 +307,15 @@ void AppendCommandLineSwitches() {
   // Always disable the unsandbox GPU process for DX12 Info collection to avoid
   // interference. This GPU process is launched 120 seconds after chrome starts.
   command_line->AppendSwitch(switches::kDisableGpuProcessForDX12InfoCollection);
+
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/439820682): Remove this when the issue is fixed.
+  // This is a temporary workaround for an issue where GPU video decoding
+  // is slow on Mac VMs, causing test flakiness.
+  if (base::mac::IsVirtualMachine()) {
+    command_line->AppendSwitch(switches::kDisableAcceleratedVideoDecode);
+  }
+#endif
 }
 
 }  // namespace
@@ -362,12 +372,6 @@ int LaunchTestsInternal(TestLauncherDelegate* launcher_delegate,
   params.argv = const_cast<const char**>(argv);
 #endif  // BUILDFLAG(IS_WIN)
 
-  // Disable system tracing for browser tests by default. This prevents breakage
-  // of tests that spin the run loop until idle on platforms with system tracing
-  // (e.g. Chrome OS). Browser tests exercising this feature re-enable it with a
-  // custom system tracing service.
-  tracing::PerfettoTracedProcess::SetSystemProducerEnabledForTesting(false);
-
 #if !BUILDFLAG(IS_ANDROID)
   // This needs to be before trying to run tests as otherwise utility processes
   // end up being launched as a test, which leads to rerunning the test.
@@ -393,19 +397,29 @@ int LaunchTestsInternal(TestLauncherDelegate* launcher_delegate,
       command_line->HasSwitch(base::kGTestHelpFlag)) {
     g_params = &params;
 #if !BUILDFLAG(IS_ANDROID)
-    // The call to RunTestSuite() below bypasses TestLauncher, which creates
-    // a temporary directory that is used as the user-data-dir. Create a
-    // temporary directory now so that the test doesn't use the users home
-    // directory as it's data dir.
     base::ScopedTempDir tmp_dir;
     const std::string user_data_dir_switch =
         launcher_delegate->GetUserDataDirectoryCommandLineSwitch();
-    if (!user_data_dir_switch.empty() &&
-        !command_line->HasSwitch(user_data_dir_switch)) {
-      CHECK(tmp_dir.CreateUniqueTempDir());
-      command_line->AppendSwitchPath(user_data_dir_switch, tmp_dir.GetPath());
+
+    if (!user_data_dir_switch.empty()) {
+#if GTEST_HAS_DEATH_TEST
+      // Ensure death test child processes don't reuse the user data dir of
+      // their parent process.
+      if (command_line->HasSwitch("gtest_internal_run_death_test")) {
+        command_line->RemoveSwitch(user_data_dir_switch);
+      }
+#endif  // GTEST_HAS_DEATH_TEST
+
+      // The call to RunTestSuite() below bypasses TestLauncher, which creates
+      // a temporary directory that is used as the user-data-dir. Create a
+      // temporary directory now so that the test doesn't use the users home
+      // directory as it's data dir.
+      if (!command_line->HasSwitch(user_data_dir_switch)) {
+        CHECK(tmp_dir.CreateUniqueTempDir());
+        command_line->AppendSwitchPath(user_data_dir_switch, tmp_dir.GetPath());
+      }
     }
-#endif
+#endif  // !BUILDFLAG(IS_ANDROID)
     return launcher_delegate->RunTestSuite(argc, argv);
   }
 

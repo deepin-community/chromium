@@ -7,6 +7,8 @@
 
 #include "base/logging.h"
 #include "device/vr/public/mojom/pose.h"
+#include "device/vr/public/mojom/vr_service.mojom-forward.h"
+#include "device/vr/public/mojom/xr_session.mojom-forward.h"
 #include "third_party/openxr/src/include/openxr/openxr.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/geometry/transform_util.h"
@@ -57,8 +59,15 @@ namespace device {
 XrPosef PoseIdentity();
 gfx::Transform XrPoseToGfxTransform(const XrPosef& pose);
 device::Pose XrPoseToDevicePose(const XrPosef& pose);
+device::Pose ZNormalXrPoseToYNormalDevicePose(const XrPosef& pose);
+gfx::Point3F ZNormalPositionToYNormalPosition(const gfx::Point3F& point);
 XrPosef GfxTransformToXrPose(const gfx::Transform& transform);
+XrQuaternionf GfxQuaternionToXrQuaternion(const gfx::Quaternion& quaternion);
+mojom::VRFieldOfViewPtr XrFovToMojomFov(const XrFovf& xr_fov);
 bool IsPoseValid(XrSpaceLocationFlags locationFlags);
+
+bool IsFeatureSupportedForMode(device::mojom::XRSessionFeature feature,
+                               device::mojom::XRSessionMode mode);
 
 }  // namespace device
 

@@ -303,6 +303,7 @@ void ConvGeneric::GenerateCode(const GpuInfo& gpu_info) {
   }
   if (gpu_info.IsMali()) {
     compiler_options_.push_back(CompilerOptions::kClFastRelaxedMath);
+    compiler_options_.push_back(CompilerOptions::kClRegisterAllocation64);
   }
   if (conv_params_.IsPrivateMemBroadcast() &&
       (gpu_info.IsCL20OrHigher() || gpu_info.opencl_info.IsCLVK())) {
@@ -488,7 +489,7 @@ std::string ConvGeneric::GenerateConv(const GpuInfo& gpu_info,
          std::to_string(work_group_size_.y) + ", " +
          std::to_string(work_group_size_.z) + ")))\n";
   }
-  if (use_simd_broadcast && gpu_info.IsIntel() && gpu_info.IsApiOpenCl() &&
+  if (use_simd_broadcast && gpu_info.IsApiOpenCl() &&
       gpu_info.SupportsExtension("cl_intel_required_subgroup_size")) {
     c += "__attribute__((intel_reqd_sub_group_size(" +
          std::to_string(simd_size) + ")))\n";
@@ -1293,7 +1294,7 @@ ConvGeneric::ConvParams GetConvParamsForA7A8(const AppleInfo& apple_info,
   options.push_back(CreateWorkGroupSizeOption(
       {8, 4, 1}, WorkGroupSizeOption::ThreadMapping::kDefault, 1.0f, dst_shape,
       params.block_size));
-  if (!apple_info.IsA7GenerationGpu()) {
+  if (!apple_info.IsFamilyApple1()) {
     options.push_back(CreateWorkGroupSizeOption(
         {4, 4, 1}, WorkGroupSizeOption::ThreadMapping::kDefault, 1.01f,
         dst_shape, params.block_size));
@@ -1304,7 +1305,7 @@ ConvGeneric::ConvParams GetConvParamsForA7A8(const AppleInfo& apple_info,
   options.push_back(CreateWorkGroupSizeOption(
       {32, 1, 1}, WorkGroupSizeOption::ThreadMapping::kLinearSpatial, 1.0f,
       dst_shape, params.block_size));
-  if (!apple_info.IsA7GenerationGpu()) {
+  if (!apple_info.IsFamilyApple1()) {
     options.push_back(CreateWorkGroupSizeOption(
         {16, 1, 1}, WorkGroupSizeOption::ThreadMapping::kLinearSpatial, 1.01f,
         dst_shape, params.block_size));
@@ -1791,16 +1792,20 @@ ConvGeneric::ConvParams ConvGeneric::GuessBestParams(
         const int kSubGroupSize = 16;
         const bool supports_subgroup_size_control =
             gpu_info.SupportsExtension("cl_intel_required_subgroup_size");
+        int min_subgroup_size;
+        auto min_subgroup_size_status =
+            gpu_info.GetMinSubGroupSize(min_subgroup_size);
         if (supports_subgroup_size_control &&
             gpu_info.SupportsSubGroupWithSize(kSubGroupSize)) {
           conv_params.weights_upload_type =
               WeightsUploadType::PRIVATE_MEM_SIMD_BROADCAST;
           conv_params.simd_size = kSubGroupSize;
-        } else if (gpu_info.opencl_info.IsCLVK()) {
-          // It will work because of specific driver using subgroup size 16
+        } else if (supports_subgroup_size_control &&
+                   min_subgroup_size_status.ok()) {
           conv_params.weights_upload_type =
               WeightsUploadType::PRIVATE_MEM_SIMD_BROADCAST;
-          conv_params.simd_size = 16;
+          conv_params.simd_size = min_subgroup_size;
+          work_group_size_ = int3(min_subgroup_size, 1, 1);
         } else {
           // no support of subgroup size control
           // only smallest subgroup size (8) can be used safely, otherwise

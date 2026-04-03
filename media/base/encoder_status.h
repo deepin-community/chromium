@@ -50,13 +50,40 @@ struct EncoderStatusTraits {
     kInvalidInputFrame = 16,
     // The given output buffer or its id  is invalid.
     kInvalidOutputBuffer = 17,
-    kMaxValue = kInvalidOutputBuffer,
+    // Failure in converting H264/HEVC AnnexB to H264/HEVC bitstream.
+    kBitstreamConversionError = 18,
+    // Failure in allocating a buffer.
+    kOutOfMemoryError = 19,
+    // No hardware encoder is available.
+    kEncoderAccelerationSupportMissing = 20,
+    // The system ran out of platform encoders.
+    kOutOfPlatformEncoders = 21,
+    // The client provided a non-existing reference buffer.
+    kBadReferenceBuffer = 22,
+    // Provided GPU command buffer is null
+    kGPUCommandBufferNotAvailable = 23,
+    // Failed to get the EGL display.
+    kMissingGLDisplay = 24,
+    // Failed to initialize the GL surface.
+    kGLSurfaceInitializationFailed = 25,
+    // Failed to create the GL context.
+    kGLContextCreationFailed = 26,
+    // Failed to make the GL context current.
+    kGLMakeCurrentFailed = 27,
+    // Required GL features or extensions are missing.
+    kUnsupportedGLFeature = 28,
+    // A GL error occurred during initialization.
+    kGLInitializationError = 29,
+
+    kMaxValue = kGLInitializationError,
   };
   static constexpr StatusGroupType Group() { return "EncoderStatus"; }
 };
 
 using EncoderStatus = TypedStatus<EncoderStatusTraits>;
 
+MEDIA_EXPORT const char* EncoderStatusCodeToString(
+    const EncoderStatus& error_status);
 }  // namespace media
 
 #endif  // MEDIA_BASE_ENCODER_STATUS_H_

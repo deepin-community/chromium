@@ -7,26 +7,16 @@
 #include <string>
 #include <utility>
 
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/metrics/arc_metrics_constants.h"
-#include "ash/components/arc/metrics/arc_metrics_service.h"
-#include "ash/components/arc/metrics/stability_metrics_manager.h"
-#include "ash/components/arc/session/arc_data_remover.h"
-#include "ash/components/arc/session/arc_dlc_installer.h"
-#include "ash/components/arc/session/arc_instance_mode.h"
-#include "ash/components/arc/session/arc_management_transition.h"
-#include "ash/components/arc/session/arc_session.h"
-#include "ash/components/arc/session/arc_session_runner.h"
-#include "ash/components/arc/session/serial_number_util.h"
 #include "ash/constants/ash_switches.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/run_loop.h"
 #include "base/strings/string_split.h"
 #include "base/task/task_runner.h"
 #include "base/task/task_traits.h"
@@ -51,19 +41,37 @@
 #include "chrome/browser/ash/arc/policy/arc_policy_util.h"
 #include "chrome/browser/ash/arc/session/arc_provisioning_result.h"
 #include "chrome/browser/ash/guest_os/public/guest_os_service.h"
+#include "chrome/browser/ash/guest_os/public/guest_os_service_factory.h"
 #include "chrome/browser/ash/login/demo_mode/demo_components.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/webui/ash/diagnostics_dialog.h"
+#include "chrome/browser/ui/webui/ash/diagnostics_dialog/diagnostics_dialog.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
+#include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
-#include "chromeos/ash/components/system/statistics_provider.h"
+#include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "chromeos/ash/components/memory/swap_configuration.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/dlc_installer/arc_dlc_installer.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_service.h"
+#include "chromeos/ash/experiences/arc/metrics/stability_metrics_manager.h"
+#include "chromeos/ash/experiences/arc/session/arc_data_remover.h"
+#include "chromeos/ash/experiences/arc/session/arc_instance_mode.h"
+#include "chromeos/ash/experiences/arc/session/arc_management_transition.h"
+#include "chromeos/ash/experiences/arc/session/arc_session.h"
+#include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
+#include "chromeos/ash/experiences/arc/session/serial_number_util.h"
 #include "components/account_id/account_id.h"
 #include "components/exo/wm_helper.h"
 #include "components/prefs/pref_service.h"
@@ -72,6 +80,7 @@
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_features.h"
+#include "content/public/common/content_switches.h"
 #include "ui/display/types/display_constants.h"
 
 // Enable VLOG level 1.
@@ -96,17 +105,10 @@ constexpr const char kArcPrepareHostGeneratedDirJobName[] =
 // Maximum amount of time we'll wait for ARC to finish booting up. Once this
 // timeout expires, keep ARC running in case the user wants to file feedback,
 // but present the UI to try again.
-base::TimeDelta GetArcSignInTimeout() {
-  constexpr base::TimeDelta kArcSignInTimeout = base::Minutes(5);
-  constexpr base::TimeDelta kArcVmSignInTimeoutForVM = base::Minutes(20);
-
-  if (ash::system::StatisticsProvider::GetInstance()->IsRunningOnVm() &&
-      arc::IsArcVmEnabled()) {
-    return kArcVmSignInTimeoutForVM;
-  } else {
-    return kArcSignInTimeout;
-  }
-}
+constexpr base::TimeDelta kArcSignInTimeout = base::Minutes(5);
+// Given that Reven boards need to download the ARC image from a DLC server
+// over the internet, we increase the timeout limit.
+constexpr base::TimeDelta kRevenArcSignInTimeout = base::Minutes(15);
 
 // Updates UMA with user cancel only if error is not currently shown.
 void MaybeUpdateOptInCancelUMA(const ArcSupportHost* support_host) {
@@ -123,8 +125,6 @@ void MaybeUpdateOptInCancelUMA(const ArcSupportHost* support_host) {
 // Launch Play Store app, except for the following cases:
 // * When Opt-in verification is disabled (for tests);
 // * In case ARC is enabled from OOBE.
-// * In ARC Kiosk mode, because the only one UI in kiosk mode must be the
-//   kiosk app and device is not needed for opt-in;
 // * In Public Session mode, because Play Store will be hidden from users
 //   and only apps configured by policy should be installed.
 // * When ARC is managed, and user does not go through OOBE opt-in,
@@ -164,11 +164,10 @@ bool ShouldLaunchPlayStoreApp(Profile* profile,
 // Defines the conditions that require UI to present eventual error conditions
 // to the end user.
 //
-// Don't show UI for ARC Kiosk because the only one UI in kiosk mode must
-// be the kiosk app. In case of error the UI will be useless as well, because
-// in typical use case there will be no one nearby the kiosk device, who can
+// Don't show UI for MGS sessions in demo mode because the only one UI must be
+// the demo app. In case of error the UI will be useless as well, because
+// in typical use case there will be no one nearby the demo device, who can
 // do some action to solve the problem be means of UI.
-// Same considerations apply for MGS sessions in Demo Mode.
 // All other managed sessions will be attended by a user and require an error
 // UI.
 bool ShouldUseErrorDialog() {
@@ -180,11 +179,7 @@ bool ShouldUseErrorDialog() {
     return false;
   }
 
-  if (IsArcKioskMode()) {
-    return false;
-  }
-
-  if (ash::DemoSession::IsDeviceInDemoMode()) {
+  if (ash::demo_mode::IsDeviceInDemoMode()) {
     return false;
   }
 
@@ -387,14 +382,6 @@ ArcSessionManager::ExpansionResult ReadSaltInternal() {
   return ArcSessionManager::ExpansionResult{std::move(*salt), true};
 }
 
-// Checks whether ARC DLCs needs to be installed/uninstalled. Currently,
-// "houdini-rvc-dlc" is the only enabled DLC, so we only need to check
-// for the presence of kEnableHoudiniDlc flag in the command line.
-bool IsDlcRequired() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      ash::switches::kEnableHoudiniDlc);
-}
-
 // Inform ArcMetricsServices about the starting time of ARC provisioning.
 void ReportProvisioningStartTime(const base::TimeTicks& start_time,
                                  Profile* profile) {
@@ -415,6 +402,53 @@ bool ArcVmDataMigrationIsInProgress(PrefService* prefs) {
   }
   return GetArcVmDataMigrationStatus(prefs) ==
          ArcVmDataMigrationStatus::kStarted;
+}
+
+// The result status of deferring ARC activation until user session start up
+// task completion, used for UMA.
+enum class DeferArcActivationResult {
+  // Decided to defer, and the prediction succeeded, i.e. no activation
+  // happens during user session start up.
+  kDeferSucceeded = 0,
+
+  // Decided to defer, but the prediction failed, i.e. an activation happens
+  // during user session start up.
+  kDeferFailed = 1,
+
+  // Decided not to defer, and the prediction succeeded, i.e. an activation
+  // happens during user session start up.
+  kNotDeferSucceeded = 2,
+
+  // Decided not to defer, and the prediction failed, i.e. no activation
+  // happens during user session start up.
+  kNotDeferFailed = 3,
+
+  kMaxValue = kNotDeferFailed,
+};
+
+enum class DeferArcActivationCategory {
+  // ARC activation is deferred until the user session start up task completion.
+  kDeferred = 0,
+
+  // ARC activation is not deferred, because the user is suspected to activate
+  // ARC very soon.
+  kNotDeferred = 1,
+
+  // ARC is already activated, or the user session start up tasks are already
+  // completed. Thus, it was out of scope to decide deferring.
+  kNotTarget = 2,
+
+  kMaxValue = kNotTarget,
+};
+
+// Using 1ms as minimum for common practice.
+// The delay will be up to 20 seconds, because of the timer in the tracker.
+// Using 25 secs just in case for additional buffer. The number of buckets are
+// linearly extrapolated from the common one.
+void UmaHistogramDeferActivationTimes(const std::string& name,
+                                      base::TimeDelta elapsed) {
+  base::UmaHistogramCustomTimes(name, elapsed, base::Milliseconds(1),
+                                base::Seconds(25), 125);
 }
 
 }  // namespace
@@ -478,15 +512,20 @@ class ArcSessionManager::ScopedOptInFlowTracker {
 };
 
 ArcSessionManager::ArcSessionManager(
+    PrefService* local_state,
+    const ApplicationLocaleStorage* application_locale_storage,
     std::unique_ptr<ArcSessionRunner> arc_session_runner,
     std::unique_ptr<AdbSideloadingAvailabilityDelegateImpl>
-        adb_sideloading_availability_delegate)
-    : arc_session_runner_(std::move(arc_session_runner)),
+        adb_sideloading_availability_delegate,
+    ArcDlcInstaller* arc_dlc_installer)
+    : local_state_(CHECK_DEREF(local_state)),
+      application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      arc_session_runner_(std::move(arc_session_runner)),
       adb_sideloading_availability_delegate_(
           std::move(adb_sideloading_availability_delegate)),
       android_management_checker_factory_(
           ArcRequirementChecker::GetDefaultAndroidManagementCheckerFactory()),
-      attempt_user_exit_callback_(base::BindRepeating(chrome::AttemptUserExit)),
+      arc_dlc_installer_(arc_dlc_installer),
       attempt_restart_callback_(base::BindRepeating(chrome::AttemptRestart)) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(!g_arc_session_manager);
@@ -499,12 +538,10 @@ ArcSessionManager::ArcSessionManager(
   }
   ResetStabilityMetrics();
   ash::ConciergeClient::Get()->AddVmObserver(this);
-  arc_dlc_installer_ = std::make_unique<ArcDlcInstaller>();
 }
 
 ArcSessionManager::~ArcSessionManager() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  arc_dlc_installer_.reset();
 
   ash::ConciergeClient::Get()->RemoveVmObserver(this);
 
@@ -512,6 +549,7 @@ ArcSessionManager::~ArcSessionManager() {
     ash::SessionManagerClient::Get()->RemoveObserver(this);
   }
 
+  internal_state_ = InternalState::kDestroying;
   Shutdown();
   DCHECK(arc_session_runner_);
   arc_session_runner_->RemoveObserver(this);
@@ -565,10 +603,6 @@ void ArcSessionManager::OnSessionStopped(ArcStopReason reason,
   }
 
   MaybeStartArcDataRemoval();
-
-  if (!enable_requested_ && IsDlcRequired()) {
-    arc_dlc_installer_->RequestDisable();
-  }
 }
 
 void ArcSessionManager::OnSessionRestarting() {
@@ -621,13 +655,6 @@ void ArcSessionManager::OnProvisioningFinished(
     if (IsRobotOrOfflineDemoAccountMode()) {
       VLOG(1) << "Robot account auth code fetching error";
     }
-    if (IsArcKioskMode()) {
-      VLOG(1) << "Exiting kiosk session due to provisioning failure";
-      // Log out the user. All the cleanup will be done in Shutdown() method.
-      // The callback is not called because auth code is empty.
-      attempt_user_exit_callback_.Run();
-      return;
-    }
 
     // For backwards compatibility, use NETWORK_ERROR for
     // CHROME_SERVER_COMMUNICATION_ERROR case.
@@ -641,12 +668,15 @@ void ArcSessionManager::OnProvisioningFinished(
     UpdateProvisioningStatusUMA(GetProvisioningStatus(result), profile_);
 
     if (result.gms_sign_in_error()) {
-      UpdateGMSSignInErrorUMA(result.gms_sign_in_error().value(), profile_);
+      UpdateProvisioningSigninResultUMA(
+          GetSigninErrorResult(result.gms_sign_in_error().value()), profile_);
     } else if (result.gms_check_in_error()) {
-      UpdateGMSCheckInErrorUMA(result.gms_check_in_error().value(), profile_);
+      UpdateProvisioningCheckinResultUMA(
+          GetCheckinErrorResult(result.gms_check_in_error().value()), profile_);
     } else if (result.cloud_provision_flow_error()) {
-      UpdateCloudProvisionFlowErrorUMA(
-          result.cloud_provision_flow_error().value(), profile_);
+      UpdateProvisioningDpcResultUMA(
+          GetDpcErrorResult(result.cloud_provision_flow_error().value()),
+          profile_);
     }
 
     if (!provisioning_successful) {
@@ -666,8 +696,18 @@ void ArcSessionManager::OnProvisioningFinished(
       scoped_opt_in_tracker_.reset();
     }
 
-    prefs->SetBoolean(prefs::kArcIsManaged,
-                      policy_util::IsAccountManaged(profile_));
+    bool managed = policy_util::IsAccountManaged(profile_);
+    if (managed) {
+      UpdateProvisioningDpcResultUMA(ArcProvisioningDpcResult::kSuccess,
+                                     profile_);
+    } else {
+      UpdateProvisioningSigninResultUMA(ArcProvisioningSigninResult::kSuccess,
+                                        profile_);
+    }
+    UpdateProvisioningCheckinResultUMA(ArcProvisioningCheckinResult::kSuccess,
+                                       profile_);
+
+    prefs->SetBoolean(prefs::kArcIsManaged, managed);
 
     if (prefs->HasPrefPath(prefs::kArcSignedIn) &&
         prefs->GetBoolean(prefs::kArcSignedIn)) {
@@ -735,6 +775,14 @@ bool ArcSessionManager::IsAllowed() const {
 }
 
 void ArcSessionManager::SetProfile(Profile* profile) {
+  if (internal_state_ != InternalState::kNotInitialized &&
+      !base::CommandLine::ForCurrentProcess()->HasSwitch(
+          ::switches::kTestType)) {
+    // This should not be called twice, except in tests.
+    base::debug::DumpWithoutCrashing();
+  }
+  internal_state_ = InternalState::kRunning;
+
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(!profile_);
   DCHECK(IsArcAllowedForProfile(profile));
@@ -744,6 +792,7 @@ void ArcSessionManager::SetProfile(Profile* profile) {
   // RequestEnable() requires |profile_| set, therefore shouldn't have been
   // called at this point.
   SetArcEnabledStateMetric(false);
+  session_manager_observation_.Observe(session_manager::SessionManager::Get());
 }
 
 void ArcSessionManager::SetUserInfo() {
@@ -764,6 +813,14 @@ void ArcSessionManager::TrimVmMemory(TrimVmMemoryCallback callback,
   arc_session_runner_->TrimVmMemory(std::move(callback), page_limit);
 }
 
+std::string ArcSessionManager::GetSerialNumberForKeyMint() {
+  DCHECK(arc::IsArcVmEnabled());
+  if (!arc_salt_on_disk_.has_value()) {
+    arc_salt_on_disk_ = ReadSaltOnDisk(base::FilePath(kArcSaltPath));
+  }
+  return GetSerialNumber();
+}
+
 std::string ArcSessionManager::GetSerialNumber() const {
   DCHECK(profile_);
   DCHECK(arc_salt_on_disk_);
@@ -777,8 +834,8 @@ std::string ArcSessionManager::GetSerialNumber() const {
   if (arc::IsArcVmEnabled()) {
     const std::string chromeos_user =
         cryptohome::CreateAccountIdentifierFromAccountId(account).account_id();
-    serialno = GetOrCreateSerialNumber(g_browser_process->local_state(),
-                                       chromeos_user, *arc_salt_on_disk_);
+    serialno = GetOrCreateSerialNumber(&local_state_.get(), chromeos_user,
+                                       *arc_salt_on_disk_);
   }
   return serialno;
 }
@@ -804,7 +861,8 @@ void ArcSessionManager::Initialize() {
   // TODO(hidehiko): Revisit to think about lazy initialization.
   if (ShouldUseErrorDialog()) {
     DCHECK(!support_host_);
-    support_host_ = std::make_unique<ArcSupportHost>(profile_);
+    support_host_ = std::make_unique<ArcSupportHost>(
+        &local_state_.get(), &application_locale_storage_.get(), profile_);
     support_host_->SetErrorDelegate(this);
   }
   auto* prefs = profile_->GetPrefs();
@@ -837,6 +895,8 @@ void ArcSessionManager::Initialize() {
                     "has reached the maximum number of retries";
   }
 
+  observer_list_.Notify(&ArcSessionManagerObserver::OnInitialized);
+
   // Chrome may be shut down before completing ARC data removal.
   // For such a case, start removing the data now, if necessary.
   MaybeStartArcDataRemoval();
@@ -844,8 +904,41 @@ void ArcSessionManager::Initialize() {
 
 void ArcSessionManager::Shutdown() {
   VLOG(1) << "Shutting down session manager";
+
+  // We expect this is called twice, once from ArcServiceLauncher
+  // then the internal state is switched to kRunning -> kShutdown,
+  // followed by the one from dtor, then the state is kDestroying.
+  // All cases should happen after stopping RunLoop.
+  bool expected = true;
+  if (base::RunLoop::IsRunningOnCurrentThread()) {
+    LOG(ERROR) << "Shutdown is called while message loop is running";
+    expected = false;
+  }
+  switch (internal_state_) {
+    case InternalState::kNotInitialized:
+    case InternalState::kRunning:
+      // If the device is shutdown on login screen, ArcSessionManager state is
+      // kNotInitialized. Otherwise, i.e., if it's shut down from a user session
+      // the internal state should be kRunning.
+      internal_state_ = InternalState::kShutdown;
+      break;
+    case InternalState::kShutdown:
+      LOG(ERROR) << "Unexpected state: kShutdown";
+      expected = false;
+      break;
+    case InternalState::kDestroying:
+      // Do nothing.
+      break;
+  }
+  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+          ::switches::kTestType) &&
+      !expected) {
+    base::debug::DumpWithoutCrashing();
+  }
+
   enable_requested_ = false;
   ResetArcState();
+  session_manager_observation_.Reset();
   arc_session_runner_->OnShutdown();
   data_remover_.reset();
   if (support_host_) {
@@ -861,6 +954,9 @@ void ArcSessionManager::Shutdown() {
   if (scoped_opt_in_tracker_) {
     scoped_opt_in_tracker_->TrackShutdown();
     scoped_opt_in_tracker_.reset();
+  }
+  for (auto& observer : observer_list_) {
+    observer.OnShutdown();
   }
 }
 
@@ -949,7 +1045,6 @@ void ArcSessionManager::CancelAuthCode() {
 
   if (state_ == State::NOT_INITIALIZED) {
     NOTREACHED();
-    return;
   }
 
   // If ARC failed to boot normally, stop ARC. Otherwise, ARC is booting
@@ -975,13 +1070,10 @@ void ArcSessionManager::RequestEnable() {
     return;
   }
   enable_requested_ = true;
+  ash::ConfigureSwap(true);
   SetArcEnabledStateMetric(true);
 
   VLOG(1) << "ARC opt-in. Starting ARC session.";
-
-  if (IsDlcRequired()) {
-    arc_dlc_installer_->RequestEnable();
-  }
 
   // |skipped_terms_of_service_negotiation_| is reset only in case terms are shown.
   // In all other cases it is conidered as skipped.
@@ -989,8 +1081,77 @@ void ArcSessionManager::RequestEnable() {
   RequestEnableImpl();
 }
 
-void ArcSessionManager::AllowActivation() {
+void ArcSessionManager::OnUserSessionStartUpTaskCompleted() {
+  MaybeRecordFirstActivationDuringUserSessionStartUp(false);
+
+  // Allow activation only when it already turns out ARC-On-Demand does not
+  // delay the activation.
+  if (is_activation_delayed_.has_value() && !is_activation_delayed_.value()) {
+    AllowActivation(AllowActivationReason::kUserSessionStartUpTaskCompleted);
+  }
+}
+
+void ArcSessionManager::AllowActivation(AllowActivationReason reason) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  if (user_session_start_up_task_timer_.has_value() &&
+      reason != AllowActivationReason::kImmediateActivation) {
+    base::TimeDelta elapsed =
+        user_session_start_up_task_timer_->timer.Elapsed();
+    if (user_session_start_up_task_timer_->deferred) {
+      if (reason == AllowActivationReason::kUserSessionStartUpTaskCompleted) {
+        base::UmaHistogramEnumeration(
+            "Arc.DeferActivation.Result",
+            DeferArcActivationResult::kDeferSucceeded);
+        UmaHistogramDeferActivationTimes(
+            "Arc.DeferActivation.Deferred.Success.ElapsedTime", elapsed);
+      } else {
+        base::UmaHistogramEnumeration("Arc.DeferActivation.Result",
+                                      DeferArcActivationResult::kDeferFailed);
+        base::UmaHistogramEnumeration(
+            "Arc.DeferActivation.Deferred.Failure.Reason", reason);
+        UmaHistogramDeferActivationTimes(
+            "Arc.DeferActivation.Deferred.Failure.ElapsedTime", elapsed);
+      }
+    } else {
+      if (reason == AllowActivationReason::kUserSessionStartUpTaskCompleted) {
+        base::UmaHistogramEnumeration(
+            "Arc.DeferActivation.Result",
+            DeferArcActivationResult::kNotDeferFailed);
+        UmaHistogramDeferActivationTimes(
+            "Arc.DeferActivation.NotDeferred.Failure.ElapsedTime", elapsed);
+      } else {
+        base::UmaHistogramEnumeration(
+            "Arc.DeferActivation.Result",
+            DeferArcActivationResult::kNotDeferSucceeded);
+        base::UmaHistogramEnumeration(
+            "Arc.DeferActivation.NotDeferred.Success.Reason", reason);
+        UmaHistogramDeferActivationTimes(
+            "Arc.DeferActivation.NotDeferred.Success.ElapsedTime", elapsed);
+      }
+    }
+    user_session_start_up_task_timer_.reset();
+  }
+
+  // Record the first activation is happening during the user session start up
+  // to be referred whether or not to defer ARC for user session start up in
+  // following user sessions.
+  // ImmediateAction is ignored here. That happens when ARC gets READY and
+  // it is decided not to defer ARC, and it should not be considered on deciding
+  // whether or not to defer ARC in the following user sessions. Instead,
+  // a following activation is recorded, e.g. user's explicit action to launch
+  // an ARC app.
+  // TODO(hidehiko): Consider excluding non user initiated actions, such as
+  // forced by policy.
+  if (reason != AllowActivationReason::kImmediateActivation) {
+    MaybeRecordFirstActivationDuringUserSessionStartUp(
+        reason != AllowActivationReason::kUserSessionStartUpTaskCompleted);
+  }
+
+  // First time that ARCVM is allowed in this user session.
+  if (!activation_is_allowed_) {
+    VLOG(1) << "ARCVM activation is allowed: " << static_cast<int>(reason);
+  }
 
   activation_is_allowed_ = true;
   if (state_ == State::READY) {
@@ -1012,13 +1173,13 @@ void ArcSessionManager::OnVmStarted(
       // called (due to concierge crash etc.). Unregister the old instance
       // before registering a new one to prevent multiple registration like
       // b/279378611.
-      guest_os::GuestOsService::GetForProfile(profile())
+      guest_os::GuestOsServiceFactory::GetForProfile(profile())
           ->MountProviderRegistry()
           ->Unregister(*arcvm_mount_provider_id_);
     }
     arcvm_mount_provider_id_ =
         std::optional<guest_os::GuestOsMountProviderRegistry::Id>(
-            guest_os::GuestOsService::GetForProfile(profile())
+            guest_os::GuestOsServiceFactory::GetForProfile(profile())
                 ->MountProviderRegistry()
                 ->Register(std::make_unique<ArcMountProvider>(
                     profile(), vm_signal.vm_info().cid())));
@@ -1030,7 +1191,7 @@ void ArcSessionManager::OnVmStopped(
   // When ARCVM stops, unregister GuestOsMountProvider for Play files.
   if (vm_signal.name() == kArcVmName) {
     if (arcvm_mount_provider_id_.has_value()) {
-      guest_os::GuestOsService::GetForProfile(profile())
+      guest_os::GuestOsServiceFactory::GetForProfile(profile())
           ->MountProviderRegistry()
           ->Unregister(*arcvm_mount_provider_id_);
       arcvm_mount_provider_id_.reset();
@@ -1133,7 +1294,7 @@ void ArcSessionManager::RequestEnableImpl() {
   }
 
   if (should_start_arc_without_user_interaction) {
-    AllowActivation();
+    AllowActivation(AllowActivationReason::kAlwaysStartIsEnabled);
   }
 
   if (skip_terms_of_service_negotiation) {
@@ -1162,21 +1323,60 @@ void ArcSessionManager::OnActivationNecessityChecked(bool result) {
   base::UmaHistogramBoolean("Arc.ArcOnDemand.ActivationIsDelayed", !result);
 
   activation_necessity_checker_.reset();
-  if (result) {
-    AllowActivation();
-  } else {
-    activation_is_delayed = true;
+
+  is_activation_delayed_ = !result;
+  if (!result) {
     VLOG(1) << "Activation is not allowed yet. Not starting ARC for now.";
-    for (auto& observer : observer_list_) {
-      observer.OnArcStartDelayed();
+    observer_list_.Notify(&ArcSessionManagerObserver::OnArcStartDelayed);
+    return;
+  }
+
+  // Check whether ARC is expected to be used soon.
+  if (base::FeatureList::IsEnabled(
+          kDeferArcActivationUntilUserSessionStartUpTaskCompletion)) {
+    if (activation_is_allowed_ ||
+        session_manager::SessionManager::Get()
+            ->IsUserSessionStartUpTaskCompleted() ||
+        GetManagementTransition(profile_) !=
+            ArcManagementTransition::NO_TRANSITION) {
+      // If the activation is already allowed, it is out of the targets to
+      // defer. Or, if session start up task is already completed, it does not
+      // need to wait activating ARC.
+      // If this is running in the process of management transition, e.g. family
+      // member to child account, we start ARC now, because it is happening as a
+      // part of OOBE flow, and ARC is expected to run on background to complete
+      // the transition.
+      base::UmaHistogramEnumeration("Arc.DeferActivation.Category",
+                                    DeferArcActivationCategory::kNotTarget);
+    } else {
+      const bool should_defer =
+          ShouldDeferArcActivationUntilUserSessionStartUpTaskCompletion(
+              profile_->GetPrefs());
+      user_session_start_up_task_timer_.emplace(
+          UserSessionStartUpTaskTimer{base::ElapsedTimer(), should_defer});
+      base::UmaHistogramEnumeration(
+          "Arc.DeferActivation.Category",
+          should_defer ? DeferArcActivationCategory::kDeferred
+                       : DeferArcActivationCategory::kNotDeferred);
+      if (should_defer) {
+        // Wait for the user session start up task completion to prioritize
+        // resources for them.
+        VLOG(1) << "ARC activation is deferred until user sesssion start up "
+                << "tasks are completed";
+        return;
+      }
     }
   }
+
+  // In AllowActivation, actual ARC instance is going to be launched,
+  // so call it here even if `activation_is_allowed_` checked above is
+  // true, intentionally.
+  AllowActivation(AllowActivationReason::kImmediateActivation);
 }
 
 void ArcSessionManager::RequestDisable(bool remove_arc_data) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(profile_);
-
   if (!enable_requested_) {
     VLOG(1) << "ARC is already disabled. "
             << "Killing an instance for login screen (if any).";
@@ -1201,6 +1401,8 @@ void ArcSessionManager::RequestDisable(bool remove_arc_data) {
   if (remove_arc_data) {
     RequestArcDataRemoval();
   }
+
+  ash::ConfigureSwap(false);
 }
 
 void ArcSessionManager::RequestDisable() {
@@ -1212,6 +1414,12 @@ void ArcSessionManager::RequestDisableWithArcDataRemoval() {
 }
 
 void ArcSessionManager::RequestArcDataRemoval() {
+  if (internal_state_ != InternalState::kRunning &&
+      !base::CommandLine::ForCurrentProcess()->HasSwitch(
+          ::switches::kTestType)) {
+    base::debug::DumpWithoutCrashing();
+  }
+
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(profile_);
   DCHECK(data_remover_);
@@ -1251,8 +1459,8 @@ void ArcSessionManager::MaybeStartTermsOfServiceNegotiation() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(profile_);
   DCHECK(!requirement_checker_);
-  // In Kiosk and Public Session mode, Terms of Service negotiation should be
-  // skipped. See also RequestEnableImpl().
+  // In Public Session mode, Terms of Service negotiation should be skipped.
+  // See also RequestEnableImpl().
   DCHECK(!IsRobotOrOfflineDemoAccountMode());
   // If opt-in verification is disabled, Terms of Service negotiation should
   // be skipped, too. See also RequestEnableImpl().
@@ -1377,8 +1585,8 @@ void ArcSessionManager::StartBackgroundRequirementChecks() {
   DCHECK_EQ(state_, State::ACTIVE);
   DCHECK(!requirement_checker_);
 
-  // We skip Android management check for Kiosk and Public Session mode, because
-  // they don't use real google accounts.
+  // We skip Android management check for Public Session mode, because they
+  // don't use real google accounts.
   if (IsArcOptInVerificationDisabled() || IsRobotOrOfflineDemoAccountMode()) {
     return;
   }
@@ -1442,7 +1650,8 @@ void ArcSessionManager::StartArc() {
     VLOG(1) << "Locale and preferred languages are fixed to " << locale << ","
             << preferred_languages << ".";
   } else {
-    GetLocaleAndPreferredLanguages(profile_, &locale, &preferred_languages);
+    GetLocaleAndPreferredLanguages(application_locale_storage_.get(), profile_,
+                                   &locale, &preferred_languages);
   }
 
   DCHECK(arc_session_runner_);
@@ -1637,13 +1846,61 @@ void ArcSessionManager::MaybeStartTimer() {
     return;
   }
 
-  VLOG(1) << "Setup provisioning timer";
+  if (!arc::IsArcVmDlcRequired()) {
+    VLOG(1) << "Setup provisioning timer (DLC gating disabled)";
+    StartProvisioningTimerWithTimeout(kArcSignInTimeout);
+    return;
+  }
+
+  VLOG(1) << "Checking ARCVM DLC state to determine provisioning timeout.";
+  arc_dlc_installer_->CheckInstallationState(
+      base::BindOnce(&ArcSessionManager::OnDlcCheckDoneForTimer,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void ArcSessionManager::OnDlcCheckDoneForTimer(
+    ArcDlcInstaller::DlcState state) {
+  base::TimeDelta timeout;
+  switch (state) {
+    case ArcDlcInstaller::DlcState::kNotInstalled:
+      VLOG(1) << "android-vm-dlc not installed yet; using extended timeout.";
+      timeout = kRevenArcSignInTimeout;
+      break;
+    case ArcDlcInstaller::DlcState::kInstalled:
+      VLOG(1) << "android-vm-dlc installed; using normal timeout.";
+      timeout = kArcSignInTimeout;
+      break;
+    case ArcDlcInstaller::DlcState::kNotRequired:
+      VLOG(1) << "android-vm-dlc not required; using normal timeout.";
+      timeout = kArcSignInTimeout;
+      break;
+    case ArcDlcInstaller::DlcState::kError:
+      // If getting the DLC state fails, fall back to the default timeout
+      // instead of aborting, as the provisioning should continue without
+      // consideration of ArcDLC.
+      // TODO(b:450965036): Implement a dedicated error handling mechanism for
+      // ArcDlc error.
+      LOG(WARNING)
+          << "Failed to get DLC state; falling back to default timeout.";
+      timeout = kArcSignInTimeout;
+      break;
+  }
+  StartProvisioningTimerWithTimeout(timeout);
+}
+
+void ArcSessionManager::StartProvisioningTimerWithTimeout(
+    base::TimeDelta timeout) {
+  VLOG(1) << "Setup provisioning timer, timeout=" << timeout.InSeconds() << "s";
   sign_in_start_time_ = base::TimeTicks::Now();
   ReportProvisioningStartTime(sign_in_start_time_, profile_);
   arc_sign_in_timer_.Start(
-      FROM_HERE, GetArcSignInTimeout(),
+      FROM_HERE, timeout,
       base::BindOnce(&ArcSessionManager::OnArcSignInTimeout,
                      weak_ptr_factory_.GetWeakPtr()));
+
+  if (provisioning_timer_started_callback_for_testing_) {
+    std::move(provisioning_timer_started_callback_for_testing_).Run();
+  }
 }
 
 void ArcSessionManager::StartMiniArc() {
@@ -1656,12 +1913,6 @@ void ArcSessionManager::StartMiniArc() {
 
 void ArcSessionManager::OnWindowClosed() {
   CancelAuthCode();
-
-  // If network-related error occurred, collect UMA stats on user action.
-  if (support_host_ && support_host_->GetShouldShowRunNetworkTests()) {
-    UpdateOptInNetworkErrorActionUMA(
-        arc::OptInNetworkErrorActionType::WINDOW_CLOSED);
-  }
 }
 
 void ArcSessionManager::OnRetryClicked() {
@@ -1700,29 +1951,14 @@ void ArcSessionManager::OnRetryClicked() {
     // TODO(hidehiko): consider removing this case after fixing the bug.
     MaybeStartTermsOfServiceNegotiation();
   }
-
-  // If network-related error occurred, collect UMA stats on user action.
-  if (support_host_ && support_host_->GetShouldShowRunNetworkTests()) {
-    UpdateOptInNetworkErrorActionUMA(arc::OptInNetworkErrorActionType::RETRY);
-  }
 }
 
 void ArcSessionManager::OnErrorPageShown(bool network_tests_shown) {
-  if (network_tests_shown) {
-    UpdateOptInNetworkErrorActionUMA(
-        arc::OptInNetworkErrorActionType::ERROR_SHOWN);
-  }
 }
 
 void ArcSessionManager::OnSendFeedbackClicked() {
   DCHECK(support_host_);
-  chrome::OpenFeedbackDialog(nullptr, chrome::kFeedbackSourceArcApp);
-
-  // If network-related error occurred, collect UMA stats on user action.
-  if (support_host_->GetShouldShowRunNetworkTests()) {
-    UpdateOptInNetworkErrorActionUMA(
-        arc::OptInNetworkErrorActionType::SEND_FEEDBACK);
-  }
+  chrome::OpenFeedbackDialog(nullptr, feedback::kFeedbackSourceArcApp);
 }
 
 void ArcSessionManager::OnRunNetworkTestsClicked() {
@@ -1730,10 +1966,6 @@ void ArcSessionManager::OnRunNetworkTestsClicked() {
   ash::DiagnosticsDialog::ShowDialog(
       ash::DiagnosticsDialog::DiagnosticsPage::kConnectivity,
       support_host_->GetNativeWindow());
-
-  // Network-related error occurred so collect UMA stats on user action.
-  UpdateOptInNetworkErrorActionUMA(
-      arc::OptInNetworkErrorActionType::CHECK_NETWORK);
 }
 
 void ArcSessionManager::SetArcSessionRunnerForTesting(
@@ -1747,12 +1979,6 @@ void ArcSessionManager::SetArcSessionRunnerForTesting(
 
 ArcSessionRunner* ArcSessionManager::GetArcSessionRunnerForTesting() {
   return arc_session_runner_.get();
-}
-
-void ArcSessionManager::SetAttemptUserExitCallbackForTesting(
-    const base::RepeatingClosure& callback) {
-  DCHECK(!callback.is_null());
-  attempt_user_exit_callback_ = callback;
 }
 
 void ArcSessionManager::SetAttemptRestartCallbackForTesting(
@@ -1795,7 +2021,7 @@ void ArcSessionManager::EmitLoginPromptVisibleCalled() {
     // stop request may be issued after mini-VM is started. This is a complete
     // waste of resources and may also cause page caches evictions making Chrome
     // UI less responsive.
-    // (*) This includes non-ARC Kiosk mode. See b/197510998 for more info.
+    // (*) This includes Kiosk mode. See b/197510998 for more info.
     VLOG(1) << "Starting ARCVM on login screen is not supported.";
     return;
   }
@@ -1816,6 +2042,7 @@ void ArcSessionManager::ExpandPropertyFilesAndReadSalt() {
               UpstartOperation::JOB_STOP_AND_START,
               {std::string("IS_ARCVM=") + (is_arcvm ? "1" : "0")}},
   };
+
   ConfigureUpstartJobs(std::move(jobs),
                        base::BindOnce(&ArcSessionManager::OnExpandPropertyFiles,
                                       weak_ptr_factory_.GetWeakPtr()));
@@ -1876,6 +2103,29 @@ void ArcSessionManager::StopMiniArcIfNecessary() {
   arc_session_runner_->RequestStop();
 }
 
+void ArcSessionManager::MaybeRecordFirstActivationDuringUserSessionStartUp(
+    bool value) {
+  if (is_first_activation_during_user_session_start_up_recorded_) {
+    return;
+  }
+  is_first_activation_during_user_session_start_up_recorded_ = true;
+
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          ash::switches::kLoginUser)) {
+    // On browser restart, we don't record the user session start up,
+    // because the start up process is different.
+    // Theoretically, this is not a pure user login start up, so out of
+    // the scope.
+    // Practically, start up tasks are considered to be completed
+    // quickly as a workaround of the current architecture (b/328339021),
+    // so the recording is not reliable.
+    return;
+  }
+
+  CHECK(profile_);
+  RecordFirstActivationDuringUserSessionStartUp(profile_->GetPrefs(), value);
+}
+
 std::ostream& operator<<(std::ostream& os,
                          const ArcSessionManager::State& state) {
 #define MAP_STATE(name)                \
@@ -1895,10 +2145,7 @@ std::ostream& operator<<(std::ostream& os,
 
 #undef MAP_STATE
 
-  // Some compilers report an error even if all values of an enum-class are
-  // covered exhaustively in a switch statement.
   NOTREACHED() << "Invalid value " << static_cast<int>(state);
-  return os;
 }
 
 }  // namespace arc

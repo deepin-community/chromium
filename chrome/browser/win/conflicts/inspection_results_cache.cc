@@ -4,18 +4,25 @@
 
 #include "chrome/browser/win/conflicts/inspection_results_cache.h"
 
+#include <algorithm>
+#include <array>
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
-#include "base/hash/md5.h"
 #include "base/pickle.h"
-#include "base/ranges/algorithm.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
+#include "crypto/obsolete/md5.h"
+
+std::array<uint8_t, crypto::obsolete::Md5::kSize>
+base::Md5ForWinInspectionResultsCache(base::span<const uint8_t> payload) {
+  return crypto::obsolete::Md5::Hash(payload);
+}
 
 namespace {
 
@@ -119,23 +126,24 @@ base::Pickle SerializeInspectionResultsCache(
   }
 
   // Append the md5 digest of the data to detect serializations errors.
-  base::MD5Digest md5_digest;
-  base::MD5Sum(pickle.payload_bytes(), &md5_digest);
-  pickle.WriteBytes(&md5_digest, sizeof(md5_digest));
-
+  std::array<uint8_t, crypto::obsolete::Md5::kSize> md5_digest =
+      Md5ForWinInspectionResultsCache(pickle.payload_bytes());
+  pickle.WriteBytes(&md5_digest, crypto::obsolete::Md5::kSize);
   return pickle;
 }
 
-// Deserializes an InspectionResultsCache from |pickle|. This function ensures
-// that both the version and the checksum of the data are valid. Returns a
-// ReadCacheResult value indicating what failed if unsuccessful.
+// Deserializes an InspectionResultsCache from |pickle_iterator|. This function
+// ensures that both the version and the checksum of the data are valid. Returns
+// a ReadCacheResult value indicating what failed if unsuccessful.
 ReadCacheResult DeserializeInspectionResultsCache(
     uint32_t min_time_stamp,
-    const base::Pickle& pickle,
+    base::PickleIterator pickle_iterator,
     InspectionResultsCache* result) {
   DCHECK(result);
 
-  base::PickleIterator pickle_iterator(pickle);
+  // Make a copy of the iterator before iterating to be able to consume the full
+  // payload later when computing the MD5 hash.
+  base::PickleIterator pickle_iterator_copy = pickle_iterator;
 
   // Check the version number.
   int version = 0;
@@ -159,19 +167,24 @@ ReadCacheResult DeserializeInspectionResultsCache(
   }
 
   // Now check the md5 checksum.
-  const base::MD5Digest* read_md5_digest = nullptr;
+  const std::array<uint8_t, crypto::obsolete::Md5::kSize>* read_md5_digest =
+      nullptr;
   if (!pickle_iterator.ReadBytes(
           reinterpret_cast<const char**>(&read_md5_digest),
-          sizeof(*read_md5_digest))) {
+          crypto::obsolete::Md5::kSize)) {
     return ReadCacheResult::kFailDeserializeMD5;
   }
 
   // Check if the md5 checksum matches.
-  base::MD5Digest md5_digest;
-  base::span<const uint8_t> payload = pickle.payload_bytes();
-  base::MD5Sum(payload.first(payload.size() - sizeof(md5_digest)), &md5_digest);
-  if (!base::ranges::equal(read_md5_digest->a, md5_digest.a))
+  std::optional<base::span<const uint8_t>> payload =
+      pickle_iterator_copy.ReadBytes(pickle_iterator_copy.RemainingBytes());
+  CHECK(payload.has_value());
+  if (!std::ranges::equal(
+          *read_md5_digest,
+          Md5ForWinInspectionResultsCache(payload->first(
+              payload->size() - crypto::obsolete::Md5::kSize)))) {
     return ReadCacheResult::kFailInvalidMD5;
+  }
 
   return ReadCacheResult::kSuccess;
 }
@@ -213,10 +226,11 @@ ReadCacheResult ReadInspectionResultsCache(
   if (!ReadFileToString(file_path, &contents))
     return ReadCacheResult::kFailReadFile;
 
-  base::Pickle pickle(contents.data(), contents.length());
   InspectionResultsCache temporary_result;
   ReadCacheResult read_result = DeserializeInspectionResultsCache(
-      min_time_stamp, pickle, &temporary_result);
+      min_time_stamp,
+      base::PickleIterator::WithData(base::as_byte_span(contents)),
+      &temporary_result);
 
   // Only update the output cache when successful.
   if (read_result == ReadCacheResult::kSuccess)
@@ -231,8 +245,8 @@ bool WriteInspectionResultsCache(
   base::Pickle pickle =
       SerializeInspectionResultsCache(inspection_results_cache);
 
-  // TODO(1022041): Investigate if using WriteFileAtomically() in a
+  // TODO(crbug.com/40106434): Investigate if using WriteFileAtomically() in a
   // CONTINUE_ON_SHUTDOWN sequence can cause too many corrupted caches.
   return base::ImportantFileWriter::WriteFileAtomically(
-      file_path, base::StringPiece(pickle.data_as_char(), pickle.size()));
+      file_path, std::string_view(pickle.data_as_char(), pickle.size()));
 }

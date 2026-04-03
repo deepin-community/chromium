@@ -92,7 +92,8 @@ void DatasetToGraphOp::Compute(OpKernelContext* ctx) {
   params.external_state_policy = external_state_policy_;
 
   GraphDef graph_def;
-  Status s = AsGraphDef(dataset, SerializationContext(params), &graph_def);
+  absl::Status s =
+      AsGraphDef(dataset, SerializationContext(params), &graph_def);
   if (!s.ok()) {
     ctx->CtxFailure(errors::FailedPrecondition(
         "Failed to serialize the input pipeline graph: ", s.message()));
@@ -119,7 +120,7 @@ void DatasetToGraphOp::Compute(OpKernelContext* ctx) {
 DatasetCardinalityOp::DatasetCardinalityOp(OpKernelConstruction* ctx)
     : OpKernel(ctx), cardinality_options_(new CardinalityOptions) {
   if (ctx->HasAttr(kCardinalityOptions)) {
-    string options_serialized;
+    std::string options_serialized;
     OP_REQUIRES_OK(ctx, ctx->GetAttr(kCardinalityOptions, &options_serialized));
     if (!options_serialized.empty())
       cardinality_options_->ParseFromString(options_serialized);
@@ -140,7 +141,7 @@ void DatasetFromGraphOp::Compute(OpKernelContext* ctx) {
   GraphDef graph_def;
   OP_REQUIRES(ctx, graph_def.ParseFromString(graph_def_string),
               errors::InvalidArgument("Could not parse GraphDef"));
-  string output_node;
+  std::string output_node;
   for (const auto& node : graph_def.node()) {
     if (node.op() == FunctionLibraryDefinition::kRetOp) {
       output_node = node.input(0);
@@ -178,7 +179,8 @@ void DatasetFingerprintOp::Compute(OpKernelContext* ctx) {
 
   SerializationContext::Params params(ctx);
   GraphDef graph_def;
-  Status s = AsGraphDef(dataset, SerializationContext(params), &graph_def);
+  absl::Status s =
+      AsGraphDef(dataset, SerializationContext(params), &graph_def);
 
   if (!s.ok()) {
     ctx->CtxFailure(absl::FailedPreconditionError(absl::StrFormat(

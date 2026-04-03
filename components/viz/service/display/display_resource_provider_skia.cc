@@ -4,11 +4,11 @@
 
 #include "components/viz/service/display/display_resource_provider_skia.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "build/build_config.h"
 #include "components/viz/service/display/resource_fence.h"
@@ -37,15 +37,15 @@ DisplayResourceProviderSkia::~DisplayResourceProviderSkia() {
   Destroy();
 }
 
-std::vector<ReturnedResource>
+std::vector<ReturnedResourceViz>
 DisplayResourceProviderSkia::DeleteAndReturnUnusedResourcesToChildImpl(
     Child& child_info,
     DeleteStyle style,
     const std::vector<ResourceId>& unused) {
-  std::vector<ReturnedResource> to_return;
+  std::vector<ReturnedResourceViz> to_return;
   std::vector<std::unique_ptr<ExternalUseClient::ImageContext>>
       image_contexts_to_return;
-  std::vector<ReturnedResource*> external_used_resources;
+  std::vector<ReturnedResourceViz*> external_used_resources;
 
   // Reserve enough space to avoid re-allocating, so we can keep item pointers
   // for later using.
@@ -127,6 +127,7 @@ DisplayResourceProviderSkia::LockSetForExternalUse::LockSetForExternalUse(
     ExternalUseClient* client)
     : resource_provider_(resource_provider) {
   DCHECK(!resource_provider_->external_use_client_);
+  DCHECK(client);
   resource_provider_->external_use_client_ = client;
 }
 
@@ -140,29 +141,22 @@ DisplayResourceProviderSkia::LockSetForExternalUse::LockResource(
     bool maybe_concurrent_reads,
     bool raw_draw_is_possible) {
   auto it = resource_provider_->resources_.find(id);
-  DCHECK(it != resource_provider_->resources_.end());
+  CHECK(it != resource_provider_->resources_.end());
 
   ChildResource& resource = it->second;
   DCHECK(resource.is_gpu_resource_type());
 
   if (!resource.locked_for_external_use) {
-    DCHECK(!base::Contains(resources_, std::make_pair(id, &resource)));
+    DCHECK(!std::ranges::contains(resources_, std::make_pair(id, &resource)));
     resources_.emplace_back(id, &resource);
 
     if (!resource.image_context) {
-      // SkColorSpace covers only RGB portion of the gfx::ColorSpace, YUV
-      // portion is handled via SkYuvColorSpace at places where we create YUV
-      // images.
-      sk_sp<SkColorSpace> image_color_space =
-          resource.transferable.color_space.GetAsFullRangeRGB()
-              .ToSkColorSpace();
-
+      uint32_t client_id =
+          resource_provider_->GetSurfaceId(id).frame_sink_id().client_id();
       resource.image_context =
           resource_provider_->external_use_client_->CreateImageContext(
-              resource.transferable.mailbox_holder, resource.transferable.size,
-              resource.transferable.format, maybe_concurrent_reads,
-              resource.transferable.ycbcr_info, std::move(image_color_space),
-              raw_draw_is_possible);
+              resource.transferable, maybe_concurrent_reads,
+              raw_draw_is_possible, client_id);
     }
     resource.locked_for_external_use = true;
 
@@ -184,7 +178,7 @@ DisplayResourceProviderSkia::LockSetForExternalUse::LockResource(
     }
   }
 
-  DCHECK(base::Contains(resources_, std::make_pair(id, &resource)));
+  DCHECK(std::ranges::contains(resources_, std::make_pair(id, &resource)));
   return resource.image_context.get();
 }
 

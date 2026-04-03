@@ -9,12 +9,15 @@
 
 #include <set>
 #include <string>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
+#include "build/build_config.h"
 #include "components/metrics/metrics_log_store.h"
 #include "components/metrics/metrics_log_uploader.h"
 #include "components/metrics/metrics_service_client.h"
 #include "components/metrics/test/test_metrics_log_uploader.h"
+#include "components/regional_capabilities/regional_capabilities_country_id.h"
 
 namespace variations {
 class SyntheticTrialRegistry;
@@ -49,15 +52,20 @@ class TestMetricsServiceClient : public MetricsServiceClient {
   std::unique_ptr<MetricsLogUploader> CreateUploader(
       const GURL& server_url,
       const GURL& insecure_server_url,
-      base::StringPiece mime_type,
+      std::string_view mime_type,
       MetricsLogUploader::MetricServiceType service_type,
       const MetricsLogUploader::UploadCallback& on_upload_complete) override;
+#if BUILDFLAG(IS_ANDROID)
+  bool IsJobSchedulerSupported() const override;
+#endif  // BUILDFLAG(IS_ANDROID)
   base::TimeDelta GetStandardUploadInterval() override;
   bool IsReportingPolicyManaged() override;
   EnableMetricsDefault GetMetricsReportingDefaultState() override;
   std::string GetAppPackageNameIfLoggable() override;
   bool ShouldResetClientIdsOnClonedInstall() override;
   MetricsLogStore::StorageLimits GetStorageLimits() const override;
+  std::optional<regional_capabilities::CountryIdHolder>
+  GetProfileCountryIdForPrivateMetricsReporting() override;
 
   // Adds/removes |user_id| from the set of user ids that have metrics consent
   // as true.
@@ -90,9 +98,17 @@ class TestMetricsServiceClient : public MetricsServiceClient {
   void set_min_ongoing_log_queue_size_bytes(size_t bytes) {
     storage_limits_.ongoing_log_queue_limits.min_queue_size_bytes = bytes;
   }
+
+  void set_max_initial_log_size_bytes(size_t bytes) {
+    storage_limits_.initial_log_queue_limits.max_log_size_bytes = bytes;
+  }
   void set_synthetic_trial_registry(
       variations::SyntheticTrialRegistry* registry) {
     synthetic_trial_registry_ = registry;
+  }
+  void set_country_id_holder(
+      const regional_capabilities::CountryIdHolder& country_id_holder) {
+    country_id_holder_ = country_id_holder;
   }
 
  private:
@@ -106,6 +122,8 @@ class TestMetricsServiceClient : public MetricsServiceClient {
   MetricsLogStore::StorageLimits storage_limits_ =
       MetricsServiceClient::GetStorageLimits();
   std::set<uint64_t> allowed_user_ids_;
+  std::optional<regional_capabilities::CountryIdHolder> country_id_holder_ =
+      MetricsServiceClient::GetProfileCountryIdForPrivateMetricsReporting();
 
   raw_ptr<variations::SyntheticTrialRegistry> synthetic_trial_registry_ =
       nullptr;

@@ -4,9 +4,12 @@
 
 #include "content/browser/accessibility/browser_accessibility_state_impl_android.h"
 
+#include <algorithm>
 #include <memory>
+#include <string>
 
-#include "base/containers/contains.h"
+#include "base/containers/fixed_flat_map.h"
+#include "base/debug/crash_logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -18,15 +21,23 @@ namespace content {
 
 namespace {
 
+// LINT.IfChange(kAssistiveTechMap)
+
 // These are hashes of different accessibility services which are generally used
 // as part of an assistive technology.
-const uint32_t kAssistiveTechPackageHashes[] = {
-    0x349d4b1a,  // Android Accessibility Suite
-    0xa5a469fc,  // Sound Amplifier
-    0xb13e6179,  // Action Blocks Accessibility
-    0xb38ef877,  // Voice Access
-    0xbc2897b4,  // BrailleBack
-};
+//
+// The string values in this map are used to form the names of histograms
+// (e.g., "Accessibility.Android.AccessibilitySuite"). If you change these
+// values, ensure the corresponding histogram definitions are also updated.
+constexpr auto kAssistiveTechMap =
+    base::MakeFixedFlatMap<uint32_t, std::string_view>(
+        {{0x349d4b1a, "AccessibilitySuite"},
+         {0xa5a469fc, "SoundAmplifier"},
+         {0xb13e6179, "ActionBlocks"},
+         {0xb38ef877, "VoiceAccess"},
+         {0xbc2897b4, "BrailleBack"}});
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/histograms.xml:AssistiveTechPackage)
 
 // These are hashes of different "accessibility" services that enable
 // accessibility but are only using it in the context of password management.
@@ -44,6 +55,8 @@ const uint32_t kPasswordPackageHashes[] = {
 // below. For example, UMA_EVENT_ANNOUNCEMENT corresponds to
 // ACCESSIBILITYEVENT_TYPE_ANNOUNCEMENT via the macro
 // EVENT_TYPE_HISTOGRAM(event_type_mask, ANNOUNCEMENT).
+//
+// LINT.IfChange
 enum {
   UMA_CAPABILITY_CAN_CONTROL_MAGNIFICATION = 0,
   UMA_CAPABILITY_CAN_PERFORM_GESTURES = 1,
@@ -117,6 +130,7 @@ enum {
   // increase, but none of the other enum values may change.
   UMA_ACCESSIBILITYSERVICEINFO_MAX
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/accessibility/enums.xml:AccessibilityAndroidServiceInfoEnum)
 
 // These are constants from
 // android.view.accessibility.AccessibilityEvent in Java.
@@ -250,12 +264,11 @@ enum {
 }  // namespace
 
 BrowserAccessibilityStateImplAndroid::BrowserAccessibilityStateImplAndroid() {
-  ui::AccessibilityState::RegisterAccessibilityStateDelegate(this);
+  accessibility_state_observation_.Observe(ui::AccessibilityState::Get());
 }
 
-BrowserAccessibilityStateImplAndroid::~BrowserAccessibilityStateImplAndroid() {
-  ui::AccessibilityState::UnregisterAccessibilityStateDelegate(this);
-}
+BrowserAccessibilityStateImplAndroid::~BrowserAccessibilityStateImplAndroid() =
+    default;
 
 void BrowserAccessibilityStateImplAndroid::
     RecordAccessibilityServiceInfoHistograms() {
@@ -282,9 +295,9 @@ void BrowserAccessibilityStateImplAndroid::
     std::string service_package = service_id.erase(service_id.find("/"));
     uint32_t service_hash = base::PersistentHash(service_package);
 
-    if (base::Contains(kAssistiveTechPackageHashes, service_hash)) {
+    if (RecordAssistiveTechHistogram(service_hash)) {
       has_assistive_tech = true;
-    } else if (base::Contains(kPasswordPackageHashes, service_hash)) {
+    } else if (std::ranges::contains(kPasswordPackageHashes, service_hash)) {
       has_password_manager = true;
     } else {
       has_unknown = true;
@@ -401,56 +414,38 @@ void BrowserAccessibilityStateImplAndroid::OnAnimatorDurationScaleChanged() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   gfx::Animation::UpdatePrefersReducedMotion();
-  for (content::WebContentsImpl* wc :
-       content::WebContentsImpl::GetAllWebContents()) {
-    wc->OnWebPreferencesChanged();
+  NotifyWebContentsPreferencesChanged();
+}
+
+void BrowserAccessibilityStateImplAndroid::RefreshAssistiveTech() {
+  bool is_active = GetAccessibilityMode().has_mode(ui::AXMode::kScreenReader);
+  static auto* ax_talkback_crash_key = base::debug::AllocateCrashKeyString(
+      "ax_talkback", base::debug::CrashKeySize::Size32);
+
+  if (is_active) {
+    base::debug::SetCrashKeyString(ax_talkback_crash_key, "true");
+  } else {
+    base::debug::ClearCrashKeyString(ax_talkback_crash_key);
   }
+
+  UMA_HISTOGRAM_BOOLEAN("Accessibility.Android.TalkBack", is_active);
+
+  OnAssistiveTechFound(is_active ? ui::AssistiveTech::kTalkback
+                                 : ui::AssistiveTech::kNone);
 }
 
-void BrowserAccessibilityStateImplAndroid::OnDisplayInversionEnabledChanged(
-    bool enabled) {
-  // We need to call into GetInstanceForWeb on the UI thread,
-  // so ensure that we setup the notification on the correct thread.
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  ui::NativeTheme* native_theme = ui::NativeTheme::GetInstanceForWeb();
-  native_theme->set_inverted_colors(enabled);
-  native_theme->NotifyOnNativeThemeUpdated();
-}
+bool RecordAssistiveTechHistogram(uint32_t service_hash) {
+  const auto it = kAssistiveTechMap.find(service_hash);
 
-void BrowserAccessibilityStateImplAndroid::OnContrastLevelChanged(
-    bool highContrastEnabled) {
-  // We need to call into GetInstanceForWeb on the UI thread,
-  // so ensure that we setup the notification on the correct thread.
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  ui::NativeTheme* native_theme = ui::NativeTheme::GetInstanceForWeb();
-  native_theme->SetPreferredContrast(
-      highContrastEnabled ? ui::NativeTheme::PreferredContrast::kMore
-                          : ui::NativeTheme::PreferredContrast::kNoPreference);
-  native_theme->set_prefers_reduced_transparency(highContrastEnabled);
-  native_theme->NotifyOnNativeThemeUpdated();
-}
+  if (it != kAssistiveTechMap.end()) {
+    const std::string histogram_full_name =
+        "Accessibility.Android." + std::string(it->second);
 
-void BrowserAccessibilityStateImplAndroid::UpdateHistogramsOnOtherThread() {
-  BrowserAccessibilityStateImpl::UpdateHistogramsOnOtherThread();
+    base::UmaHistogramBoolean(histogram_full_name, true);
+    return true;
+  }
 
-  // NOTE: this method is run from another thread to reduce jank, since
-  // there's no guarantee these system calls will return quickly. Be careful
-  // not to add any code that isn't safe to run from a non-main thread!
-  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::UI));
-
-  // Screen reader metric.
-  ui::AXMode mode =
-      BrowserAccessibilityStateImpl::GetInstance()->GetAccessibilityMode();
-  UMA_HISTOGRAM_BOOLEAN("Accessibility.Android.ScreenReader",
-                        mode.has_mode(ui::AXMode::kScreenReader));
-}
-
-void BrowserAccessibilityStateImplAndroid::UpdateUniqueUserHistograms() {
-  BrowserAccessibilityStateImpl::UpdateUniqueUserHistograms();
-
-  ui::AXMode mode = GetAccessibilityMode();
-  UMA_HISTOGRAM_BOOLEAN("Accessibility.Android.ScreenReader.EveryReport",
-                        mode.has_mode(ui::AXMode::kScreenReader));
+  return false;
 }
 
 // static

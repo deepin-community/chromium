@@ -9,7 +9,6 @@
 #include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -18,7 +17,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 
 namespace policy {
 
@@ -55,24 +54,24 @@ DeviceDlcPredownloadListPolicyHandler::
     ~DeviceDlcPredownloadListPolicyHandler() = default;
 
 // static
-base::Value::List
+base::ListValue
 DeviceDlcPredownloadListPolicyHandler::DecodeDeviceDlcPredownloadListPolicy(
     const google::protobuf::RepeatedPtrField<std::string>& raw_policy_value,
     std::string& out_warning) {
   std::vector<std::string> unknown_dlcs;
   constexpr auto policy_value_to_dlc_id =
       base::MakeFixedFlatMap<std::string_view, std::string_view>(
-          {{"scanner_drivers", "sane-backends-extras-dlc"}});
+          {{"scanner_drivers", "sane-backends-pfu"}});
 
-  base::Value::List dlcs_to_predownload =
-      base::Value::List::with_capacity(raw_policy_value.size());
+  base::ListValue dlcs_to_predownload =
+      base::ListValue::with_capacity(raw_policy_value.size());
   for (const auto& dlc_to_predownload : raw_policy_value) {
     if (!policy_value_to_dlc_id.contains(dlc_to_predownload)) {
       unknown_dlcs.push_back(dlc_to_predownload);
       continue;
     }
     std::string_view dlc_id = policy_value_to_dlc_id.at(dlc_to_predownload);
-    if (!base::Contains(dlcs_to_predownload, dlc_id)) {
+    if (!dlcs_to_predownload.contains(dlc_id)) {
       // Silently ignore duplicate values.
       dlcs_to_predownload.Append(dlc_id);
     }
@@ -107,7 +106,7 @@ DeviceDlcPredownloadListPolicyHandler::DeviceDlcPredownloadListPolicyHandler()
 }
 
 void DeviceDlcPredownloadListPolicyHandler::TriggerPredownloadDlcs() {
-  const base::Value::List* dlcs_to_predownload = nullptr;
+  const base::ListValue* dlcs_to_predownload = nullptr;
   cros_settings_->GetList(ash::kDeviceDlcPredownloadList, &dlcs_to_predownload);
 
   if (!dlcs_to_predownload) {

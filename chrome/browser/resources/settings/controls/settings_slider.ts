@@ -10,12 +10,14 @@
  */
 import '//resources/cr_elements/cr_shared_vars.css.js';
 import '//resources/cr_elements/cr_slider/cr_slider.js';
+import '/shared/settings/controls/cr_policy_pref_indicator.js';
 
 import type {CrSliderElement, SliderTick} from '//resources/cr_elements/cr_slider/cr_slider.js';
 import {assert} from '//resources/js/assert.js';
-import {loadTimeData} from '//resources/js/load_time_data.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {CrPolicyPrefMixin} from '/shared/settings/controls/cr_policy_pref_mixin.js';
+
+import {loadTimeData} from '../i18n_setup.js';
 
 import {getTemplate} from './settings_slider.html.js';
 
@@ -96,21 +98,21 @@ export class SettingsSliderElement extends SettingsSliderElementBase {
     ];
   }
 
-  pref: chrome.settingsPrivate.PrefObject<number>;
-  ticks: SliderTick[]|number[];
-  scale: number;
-  min: number;
-  max: number;
-  labelAria: string;
-  labelMin: string;
-  labelMax: string;
-  disabled: boolean;
-  showMarkers: boolean;
-  private disableSlider_: boolean;
-  updateValueInstantly: boolean;
-  private loaded_: boolean;
+  declare pref: chrome.settingsPrivate.PrefObject<number>;
+  declare ticks: SliderTick[]|number[];
+  declare scale: number;
+  declare min: number;
+  declare max: number;
+  declare labelAria: string;
+  declare labelMin: string;
+  declare labelMax: string;
+  declare disabled: boolean;
+  declare showMarkers: boolean;
+  declare private disableSlider_: boolean;
+  declare updateValueInstantly: boolean;
+  declare private loaded_: boolean;
 
-  override ariaDisabled: string;
+  declare ariaDisabled: string;
 
   override connectedCallback() {
     super.connectedCallback();

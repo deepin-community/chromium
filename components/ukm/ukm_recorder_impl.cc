@@ -8,9 +8,9 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "base/component_export.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
@@ -38,6 +38,7 @@
 #include "third_party/metrics_proto/ukm/entry.pb.h"
 #include "third_party/metrics_proto/ukm/report.pb.h"
 #include "third_party/metrics_proto/ukm/source.pb.h"
+#include "third_party/metrics_proto/ukm/web_features.pb.h"
 #include "ukm_consent_state.h"
 #include "ukm_recorder_impl.h"
 #include "url/gurl.h"
@@ -50,6 +51,8 @@ BASE_FEATURE(kUkmSamplingRateFeature,
 
 namespace {
 
+// Allowlisted source ids are sent. Non-allowlisted source ids are sent if the
+// url matches that of an allow-listed source.
 bool IsAllowlistedSourceId(SourceId source_id) {
   SourceIdType type = GetSourceIdType(source_id);
   switch (type) {
@@ -62,13 +65,14 @@ bool IsAllowlistedSourceId(SourceId source_id) {
     case ukm::SourceIdObj::Type::REDIRECT_ID:
     case ukm::SourceIdObj::Type::WEB_IDENTITY_ID:
     case ukm::SourceIdObj::Type::CHROMEOS_WEBSITE_ID:
-    case ukm::SourceIdObj::Type::EXTENSION_ID: {
+    case ukm::SourceIdObj::Type::NOTIFICATION_ID:
+    case ukm::SourceIdObj::Type::EXTENSION_ID:
+    case ukm::SourceIdObj::Type::CDM_ID: {
       return true;
     }
     case ukm::SourceIdObj::Type::DEFAULT:
     case ukm::SourceIdObj::Type::DEPRECATED_DESKTOP_WEB_APP_ID:
     case ukm::SourceIdObj::Type::WORKER_ID:
-    case ukm::SourceIdObj::Type::NOTIFICATION_ID:
       return false;
   }
 }
@@ -106,6 +110,18 @@ void StoreEntryProto(const mojom::UkmEntry& in, Entry* out) {
   }
 }
 
+void StoreWebDXFeaturesProto(SourceId source_id,
+                             const BitSet& in,
+                             HighLevelWebFeatures* out) {
+  out->set_source_id(source_id);
+  out->set_bit_vector(in.Serialize());
+
+  // The encoding version should be changed if the underlying enum is changed
+  // (e.g. renumbered).
+  constexpr uint32_t kWebDXFeaturesEncodingVersion = 0;
+  out->set_encoding_version(kWebDXFeaturesEncodingVersion);
+}
+
 GURL SanitizeURL(const GURL& url) {
   GURL::Replacements remove_params;
   remove_params.ClearUsername();
@@ -136,28 +152,39 @@ void AppendAllowlistedUrls(
   }
 }
 
-// Returns true if the event corresponding to |event_hash| has a comprehensive
-// decode map that includes all valid metrics.
-bool HasComprehensiveDecodeMap(int64_t event_hash) {
-  // All events other than "Identifiability" conforms to its decode map.
-  // TODO(asanka): It is technically an abstraction violation for
-  // //components/ukm to know this fact.
-  return event_hash != builders::Identifiability::kEntryNameHash;
-}
-
 bool HasUnknownMetrics(const builders::DecodeMap& decode_map,
                        const mojom::UkmEntry& entry) {
   const auto it = decode_map.find(entry.event_hash);
-  if (it == decode_map.end())
+  if (it == decode_map.end()) {
+    DVLOG(DebuggingLogLevel::Medium)
+        << "Event hash not in the decode map:"
+        << " [event_hash=" << entry.event_hash
+        << " decode_map.size()=" << decode_map.size() << "]";
     return true;
-  if (!HasComprehensiveDecodeMap(entry.event_hash))
-    return false;
+  }
   const auto& metric_map = it->second.metric_map;
   for (const auto& metric : entry.metrics) {
-    if (metric_map.count(metric.first) == 0)
+    if (metric_map.count(metric.first) == 0) {
+      DVLOG(DebuggingLogLevel::Medium)
+          << "Metric hash not in the decode map:"
+          << " [event_hash=" << entry.event_hash
+          << " metric_hash=" << metric.first
+          << " decode_map.size()=" << decode_map.size() << "]";
       return true;
+    }
   }
   return false;
+}
+
+std::string WebDXFeaturesToStringForDebug(const std::set<int32_t>& features) {
+  std::string features_string;
+  for (const auto& feature : features) {
+    if (!features_string.empty()) {
+      features_string += ",";
+    }
+    features_string += base::NumberToString(feature);
+  }
+  return features_string;
 }
 
 }  // namespace
@@ -204,10 +231,19 @@ void UkmRecorderImpl::DisableRecording() {
   OnRecorderParametersChanged();
 }
 
+const builders::DecodeMap& UkmRecorderImpl::GetDecodeMap() const {
+  return builders::GetDecodeMap();
+}
+
 void UkmRecorderImpl::SetSamplingForTesting(int rate) {
   sampling_forced_for_testing_ = true;
   default_sampling_rate_ = rate;
   event_sampling_rates_.clear();
+}
+
+void UkmRecorderImpl::SetWebDXFeaturesSamplingForTesting(int rate) {
+  sampling_forced_for_testing_ = true;
+  webdx_features_sampling_ = rate;
 }
 
 bool UkmRecorderImpl::ShouldDropEntryForTesting(mojom::UkmEntry* entry) {
@@ -243,7 +279,7 @@ void UkmRecorderImpl::PurgeRecordingsWithUrlScheme(
     }
   }
 
-  PurgeSourcesAndEventsBySourceIds(relevant_source_ids);
+  PurgeDataBySourceIds(relevant_source_ids);
   recording_is_continuous_ = false;
 
   NotifyAllObservers(&UkmRecorderObserver::OnPurgeRecordingsWithUrlScheme,
@@ -263,7 +299,7 @@ void UkmRecorderImpl::PurgeRecordingsWithSourceIdType(
     }
   }
 
-  PurgeSourcesAndEventsBySourceIds(relevant_source_ids);
+  PurgeDataBySourceIds(relevant_source_ids);
   recording_is_continuous_ = false;
 }
 
@@ -278,20 +314,24 @@ void UkmRecorderImpl::PurgeRecordingsWithMsbbSources() {
     }
   }
 
-  PurgeSourcesAndEventsBySourceIds(relevant_source_ids);
+  PurgeDataBySourceIds(relevant_source_ids);
   recording_is_continuous_ = false;
 }
 
-void UkmRecorderImpl::PurgeSourcesAndEventsBySourceIds(
+void UkmRecorderImpl::PurgeDataBySourceIds(
     const std::unordered_set<SourceId>& source_ids) {
   for (const auto source_id : source_ids) {
     recordings_.sources.erase(source_id);
   }
 
   std::vector<mojom::UkmEntryPtr>& events = recordings_.entries;
-
-  base::EraseIf(events, [&](const auto& event) {
+  std::erase_if(events, [&](const auto& event) {
     return source_ids.count(event->source_id);
+  });
+
+  std::map<SourceId, BitSet>& webdx_features = recordings_.webdx_features;
+  std::erase_if(webdx_features, [&](const auto& features) {
+    return source_ids.count(features.first);
   });
 }
 
@@ -308,24 +348,17 @@ void UkmRecorderImpl::SetIsWebstoreExtensionCallback(
   is_webstore_extension_callback_ = callback;
 }
 
-void UkmRecorderImpl::SetEntryFilter(
-    std::unique_ptr<UkmEntryFilter> entry_filter) {
-  DCHECK(!entry_filter_ || !entry_filter);
-  entry_filter_ = std::move(entry_filter);
-}
-
 void UkmRecorderImpl::AddUkmRecorderObserver(
     const base::flat_set<uint64_t>& event_hashes,
     UkmRecorderObserver* observer) {
   DCHECK(observer);
   {
     base::AutoLock auto_lock(lock_);
-    if (!observers_.contains(event_hashes)) {
-      observers_.insert(
-          {event_hashes, base::MakeRefCounted<UkmRecorderObserverList>()});
+    auto [it, inserted] = observers_.try_emplace(event_hashes, nullptr);
+    if (inserted) {
+      it->second = base::MakeRefCounted<UkmRecorderObserverList>();
     }
-
-    observers_[event_hashes]->AddObserver(observer);
+    it->second->AddObserver(observer);
   }
   // Update the UkmRecorderParameters to capture a UKM event which is being
   // observed by any UkmRecorderObserver in |observers_|.
@@ -351,6 +384,14 @@ void UkmRecorderImpl::OnUkmAllowedStateChanged(UkmConsentState state) {
   NotifyAllObservers(&UkmRecorderObserver::OnUkmAllowedStateChanged, state);
 }
 
+void UkmRecorderImpl::StoreWebDXFeaturesDownsamplingParameter(Report* report) {
+  Report::DownsamplingRate* rate = report->add_downsampling_rates();
+  // TODO(crbug.com/381251064): Consider populating all the other applied
+  // downsampling rates too.
+  rate->set_event_hash(base::HashMetricName(kWebFeatureSamplingKeyword));
+  rate->set_standard_rate(webdx_features_sampling_);
+}
+
 void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
   DVLOG(DebuggingLogLevel::Rare) << "StoreRecordingsInReport starts";
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -361,6 +402,12 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
     Entry* proto_entry = report->add_entries();
     StoreEntryProto(*entry, proto_entry);
     source_ids_seen.insert(entry->source_id);
+  }
+
+  for (const auto& [source_id, features_set] : recordings_.webdx_features) {
+    HighLevelWebFeatures* features = report->add_web_features();
+    StoreWebDXFeaturesProto(source_id, features_set, features);
+    source_ids_seen.insert(source_id);
   }
 
   // Number of sources excluded from this report because no entries referred to
@@ -393,7 +440,7 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
         continue;
       }
       // Omit entryless sources from the report.
-      if (!base::Contains(source_ids_seen, kv.first)) {
+      if (!source_ids_seen.contains(kv.first)) {
         continue;
       }
 
@@ -431,6 +478,8 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
                             num_serialized_sources);
   UMA_HISTOGRAM_COUNTS_100000("UKM.Entries.SerializedCount2",
                               num_serialized_entries);
+  UMA_HISTOGRAM_COUNTS_1000("UKM.WebDXFeatureSets.SerializedCount",
+                            recordings_.webdx_features.size());
   UMA_HISTOGRAM_COUNTS_1000("UKM.Sources.UnsentSourcesCount",
                             num_sources_unsent);
   UMA_HISTOGRAM_COUNTS_1000("UKM.Sources.UnmatchedSourcesCount",
@@ -483,6 +532,7 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
 
   recordings_.source_counts.Reset();
   recordings_.entries.clear();
+  recordings_.webdx_features.clear();
   recordings_.event_aggregations.clear();
 
   report->set_is_continuous(recording_is_continuous_);
@@ -512,19 +562,19 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
   // having any events in this reporting cycle.
   int num_sources_entryless = 0;
   for (const auto& kv : recordings_.sources) {
-    if (!base::Contains(source_ids_seen, kv.first)) {
+    if (!source_ids_seen.contains(kv.first)) {
       num_sources_entryless++;
     }
   }
   source_counts_proto->set_entryless_sources(num_sources_entryless);
 
-  // Notify observers that a report was generated.
-  if (entry_filter_) {
-    entry_filter_->OnStoreRecordingsInReport();
-  }
   DVLOG(DebuggingLogLevel::Rare)
       << "StoreRecordingsInReport done [num_serialized_entries="
       << num_serialized_entries << "]";
+
+  StoreWebDXFeaturesDownsamplingParameter(report);
+  DVLOG(DebuggingLogLevel::Rare) << "# of downsampling parameters stored: "
+                                 << report->downsampling_rates().size();
 }
 
 int UkmRecorderImpl::PruneData(std::set<SourceId>& source_ids_seen) {
@@ -534,7 +584,7 @@ int UkmRecorderImpl::PruneData(std::set<SourceId>& source_ids_seen) {
   // existing sources that were seen in this report.
   auto it = source_ids_seen.begin();
   while (it != source_ids_seen.end()) {
-    if (!base::Contains(recordings_.sources, *it)) {
+    if (!recordings_.sources.contains(*it)) {
       it = source_ids_seen.erase(it);
     } else {
       it++;
@@ -573,34 +623,7 @@ bool UkmRecorderImpl::ShouldDropEntry(mojom::UkmEntry* entry) {
     return true;
   }
 
-  if (!ApplyEntryFilter(entry)) {
-    RecordDroppedEntry(entry->event_hash,
-                       DroppedDataReason::REJECTED_BY_FILTER);
-    return true;
-  }
-
   return false;
-}
-
-bool UkmRecorderImpl::ApplyEntryFilter(mojom::UkmEntry* entry) {
-  base::flat_set<uint64_t> dropped_metric_hashes;
-
-  if (!entry_filter_)
-    return true;
-
-  bool keep_entry = entry_filter_->FilterEntry(entry, &dropped_metric_hashes);
-
-  for (auto metric : dropped_metric_hashes) {
-    recordings_.event_aggregations[entry->event_hash]
-        .metrics[metric]
-        .dropped_due_to_filter++;
-  }
-
-  if (!keep_entry) {
-    recordings_.event_aggregations[entry->event_hash].dropped_due_to_filter++;
-    return false;
-  }
-  return true;
 }
 
 int UkmRecorderImpl::PruneOldSources(size_t max_kept_sources,
@@ -667,7 +690,7 @@ void UkmRecorderImpl::UpdateSourceURL(SourceId source_id,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(GetSourceIdType(source_id) != SourceIdType::NO_URL_ID);
 
-  if (base::Contains(recordings_.sources, source_id))
+  if (recordings_.sources.contains(source_id))
     return;
 
   const GURL sanitized_url = SanitizeURL(unsanitized_url);
@@ -705,7 +728,7 @@ void UkmRecorderImpl::RecordNavigation(
     SourceId source_id,
     const UkmSource::NavigationData& unsanitized_navigation_data) {
   DCHECK(GetSourceIdType(source_id) == SourceIdType::NAVIGATION_ID);
-  DCHECK(!base::Contains(recordings_.sources, source_id));
+  DCHECK(!recordings_.sources.contains(source_id));
   // TODO(csharrison): Consider changing this behavior so the Source isn't even
   // recorded at all if the final URL in |unsanitized_navigation_data| should
   // not be recorded.
@@ -755,6 +778,7 @@ UkmConsentType UkmRecorderImpl::GetConsentType(SourceIdType type) {
     case SourceIdType::CHROMEOS_WEBSITE_ID:
     case SourceIdType::EXTENSION_ID:
     case SourceIdType::NOTIFICATION_ID:
+    case SourceIdType::CDM_ID:
       return UkmConsentType::MSBB;
   }
   return UkmConsentType::MSBB;
@@ -807,7 +831,8 @@ void UkmRecorderImpl::MaybeMarkForDeletion(SourceId source_id) {
     case ukm::SourceIdObj::Type::WEB_IDENTITY_ID:
     case ukm::SourceIdObj::Type::CHROMEOS_WEBSITE_ID:
     case ukm::SourceIdObj::Type::EXTENSION_ID:
-    case ukm::SourceIdObj::Type::NOTIFICATION_ID: {
+    case ukm::SourceIdObj::Type::NOTIFICATION_ID:
+    case ukm::SourceIdObj::Type::CDM_ID: {
       // Don't keep sources of these types after current report because their
       // entries are logged only at source creation time.
       MarkSourceForDeletion(source_id);
@@ -847,8 +872,7 @@ bool UkmRecorderImpl::ShouldDropExtensionUrl(
   // If the extension is not a webstore extension, drop the record with
   // `EXTENSION_NOT_SYNCED`.
   if (!is_webstore_extension_callback_ ||
-      !is_webstore_extension_callback_.Run(
-          sanitized_extension_url.host_piece())) {
+      !is_webstore_extension_callback_.Run(sanitized_extension_url.host())) {
     RecordDroppedSource(has_recorded_reason,
                         DroppedDataReason::EXTENSION_NOT_SYNCED);
     return true;
@@ -907,7 +931,7 @@ bool UkmRecorderImpl::ShouldRecordUrl(SourceId source_id,
   // Ideally, this check should be covered by the above block for
   // `EXTENSION_ID` type. For backward compatibility we still keep it here so
   // the UKMs recorded without `EXTENSION_ID` type are also properly checked.
-  // TODO(https://crbug.com/1393445): clean up all the UKM metrics with
+  // TODO(crbug.com/40248219): clean up all the UKM metrics with
   // extension URL to use the dedicated source ID type, and remove this check.
   if (sanitized_url.SchemeIs(kExtensionScheme)) {
     if (ShouldDropExtensionUrl(sanitized_url, has_recorded_reason)) {
@@ -944,7 +968,12 @@ void UkmRecorderImpl::RecordSource(std::unique_ptr<UkmSource> source) {
 
 void UkmRecorderImpl::AddEntry(mojom::UkmEntryPtr entry) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!HasUnknownMetrics(decode_map_, *entry));
+
+  // This should not happen in practice, but possible if an event name
+  // coming from Android implementation in UkmRecorder.java is misspelled.
+  if (HasUnknownMetrics(GetDecodeMap(), *entry)) {
+    return;
+  }
 
   NotifyObserversWithNewEntry(*entry);
 
@@ -1005,10 +1034,67 @@ void UkmRecorderImpl::AddEntry(mojom::UkmEntryPtr entry) {
   DVLOG(DebuggingLogLevel::Medium)
       << "AddEntry recorded: [source_id=" << entry->source_id
       << " event_hash=" << entry->event_hash
-      << " event_name=" << decode_map_.find(entry->event_hash)->second.name
+      << " event_name=" << GetDecodeMap().find(entry->event_hash)->second.name
       << "]";
 
   recordings_.entries.push_back(std::move(entry));
+}
+
+void UkmRecorderImpl::RecordWebDXFeatures(SourceId source_id,
+                                          const std::set<int32_t>& features,
+                                          size_t max_feature_value) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Sanity check that we don't have an unreasonably large max feature
+  // value. This isn't expected to grow much past 2000 for a long time.
+  DCHECK_LT(max_feature_value, 3000u);
+
+  if (!recording_enabled()) {
+    RecordDroppedWebDXFeaturesSet(DroppedDataReason::RECORDING_DISABLED);
+    return;
+  }
+
+  const auto required_consent = GetConsentType(GetSourceIdType(source_id));
+  if (!recording_enabled(required_consent)) {
+    if (required_consent == UkmConsentType::MSBB) {
+      RecordDroppedWebDXFeaturesSet(DroppedDataReason::MSBB_CONSENT_DISABLED);
+    } else if (required_consent == UkmConsentType::APPS) {
+      RecordDroppedWebDXFeaturesSet(DroppedDataReason::APPS_CONSENT_DISABLED);
+    }
+    return;
+  }
+
+  if (!IsSamplingConfigured()) {
+    RecordDroppedWebDXFeaturesSet(DroppedDataReason::SAMPLING_UNCONFIGURED);
+    return;
+  }
+
+  if (default_sampling_rate_ < 0) {
+    LoadExperimentSamplingInfo();
+  }
+
+  // Note: the `event_id` passed is 0. The actual number doesn't really matter,
+  // what matters is that we either record all features or no features at all
+  // for a given source.
+  if (!IsSampledIn(source_id, /*event_id=*/0, webdx_features_sampling_)) {
+    RecordDroppedWebDXFeaturesSet(DroppedDataReason::SAMPLED_OUT);
+    return;
+  }
+
+  // Create a bitset for `source_id` if there is not already one. The size of
+  // the bitset is max_feature_value + 1 since 0 is included.
+  auto result = recordings_.webdx_features.try_emplace(
+      source_id,
+      /*set_size=*/max_feature_value + 1);
+  BitSet& features_set = result.first->second;
+  CHECK_EQ(features_set.set_size(), max_feature_value + 1);
+
+  for (const auto& feature : features) {
+    features_set.Add(feature);
+  }
+
+  DVLOG(DebuggingLogLevel::Medium)
+      << "RecordWebDXFeatures: [source_id=" << source_id << " features={"
+      << WebDXFeaturesToStringForDebug(features) << "}]";
 }
 
 void UkmRecorderImpl::LoadExperimentSamplingInfo() {
@@ -1052,6 +1138,17 @@ void UkmRecorderImpl::LoadExperimentSamplingParams(
       if (base::StringToInt(event_param, &sampling_rate) &&
           sampling_rate >= 0) {
         default_sampling_rate_ = sampling_rate;
+      }
+      continue;
+    }
+
+    // Special string value used in the experiment configs for webdx features
+    // sampling.
+    if (event_name == kWebFeatureSamplingKeyword) {
+      // Sampling rates must be non-negative integers.
+      if (base::StringToInt(event_param, &sampling_rate) &&
+          sampling_rate >= 0) {
+        webdx_features_sampling_ = sampling_rate;
       }
       continue;
     }
@@ -1114,17 +1211,10 @@ bool UkmRecorderImpl::IsSampledIn(int64_t source_id,
   // behavior. CRC32 is fast and statistically random enough for these
   // purposes.
   uint32_t sampled_num = sampling_seed_;
-  sampled_num =
-      base::Crc32(sampled_num, base::as_bytes(base::make_span(&source_id, 1u)));
-  sampled_num =
-      base::Crc32(sampled_num, base::as_bytes(base::make_span(&event_id, 1u)));
+  sampled_num = base::Crc32(sampled_num, base::byte_span_from_ref(source_id));
+  sampled_num = base::Crc32(sampled_num, base::byte_span_from_ref(event_id));
 
   return sampled_num % sampling_rate == 0;
-}
-
-void UkmRecorderImpl::InitDecodeMap() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  decode_map_ = builders::CreateDecodeMap();
 }
 
 void UkmRecorderImpl::NotifyObserversWithNewEntry(

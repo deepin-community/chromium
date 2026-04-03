@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,10 @@
 // are typed as string, and hence provide for weaker type-checking.
 
 export enum FrontendMessageType {
+  /* eslint-disable @typescript-eslint/naming-convention -- Used by web_tests. */
   Result = 'result',
   Command = 'command',
   System = 'system',
   QueryObjectResult = 'queryObjectResult',
-}
-
-export enum FrontendMessageSource {
-  CSS = 'css',
-  ConsoleAPI = 'console-api',
+  /* eslint-enable @typescript-eslint/naming-convention */
 }

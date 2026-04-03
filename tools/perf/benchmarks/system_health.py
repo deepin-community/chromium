@@ -17,10 +17,8 @@ import page_sets
 
 
 SYSTEM_HEALTH_BENCHMARK_UMA = [
-    'EventLatency.FirstGestureScrollUpdate.Touchscreen.TotalLatency',
-    'EventLatency.FirstGestureScrollUpdate.Wheel.TotalLatency',
-    'EventLatency.GestureScrollUpdate.Touchscreen.TotalLatency',
-    'EventLatency.GestureScrollUpdate.Wheel.TotalLatency',
+    'EventLatency.FirstGestureScrollUpdate.TotalLatency2',
+    'EventLatency.GestureScrollUpdate.TotalLatency2',
     'Graphics.Smoothness.PercentDroppedFrames3.AllSequences',
     'Memory.GPU.PeakMemoryUsage2.Scroll',
     'Memory.GPU.PeakMemoryUsage2.PageLoad',
@@ -43,9 +41,10 @@ class _CommonSystemHealthBenchmark(perf_benchmark.PerfBenchmark):
 
   @classmethod
   def AddBenchmarkCommandLineArgs(cls, parser):
-    parser.add_option('--allow-software-compositing', action='store_true',
-                      help='If set, allows the benchmark to run with software '
-                           'compositing.')
+    parser.add_argument(
+        '--allow-software-compositing',
+        action='store_true',
+        help='If set, allows the benchmark to run with software compositing.')
 
   @classmethod
   def ProcessCommandLineArgs(cls, parser, args):
@@ -53,7 +52,7 @@ class _CommonSystemHealthBenchmark(perf_benchmark.PerfBenchmark):
 
   def CreateCoreTimelineBasedMeasurementOptions(self):
     cat_filter = chrome_trace_category_filter.ChromeTraceCategoryFilter(
-        filter_string='rail,toplevel,uma')
+        filter_string='rail,toplevel,uma,disabled-by-default-histogram_samples')
     cat_filter.AddIncludedCategory('accessibility')
     # Needed for the metric reported by page.
     cat_filter.AddIncludedCategory('blink.user_timing')
@@ -79,6 +78,7 @@ class _CommonSystemHealthBenchmark(perf_benchmark.PerfBenchmark):
         # Unless --experimentatil-tbmv3-metric flag is used, the following tbmv3
         # metrics do nothing.
         'tbmv3:accessibility_metric',
+        'tbmv3:uma_metrics',
         'tbmv3:cpu_time_metric',
     ])
     loading_metrics_category.AugmentOptionsForLoadingMetrics(options)
@@ -252,7 +252,7 @@ class WebviewStartupSystemHealthBenchmark(perf_benchmark.PerfBenchmark):
     options = timeline_based_measurement.Options()
     options.SetTimelineBasedMetrics(['webviewStartupMetric'])
     options.config.enable_atrace_trace = True
-    # TODO(crbug.com/1028882): Recording a Chrome trace at the same time as
+    # TODO(crbug.com/40109346): Recording a Chrome trace at the same time as
     # atrace causes events to stack incorrectly. Fix this by recording a
     # system+Chrome trace via system perfetto on the device instead.
     options.config.enable_chrome_trace = False

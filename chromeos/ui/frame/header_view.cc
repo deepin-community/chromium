@@ -14,6 +14,7 @@
 #include "chromeos/ui/frame/caption_buttons/caption_button_model.h"
 #include "chromeos/ui/frame/caption_buttons/frame_back_button.h"
 #include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
+#include "chromeos/ui/frame/caption_buttons/frame_center_button.h"
 #include "chromeos/ui/frame/default_frame_header.h"
 #include "chromeos/ui/frame/frame_utils.h"
 #include "ui/aura/client/aura_constants.h"
@@ -23,7 +24,7 @@
 #include "ui/display/tablet_state.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/widget/widget.h"
-#include "ui/views/window/non_client_view.h"
+#include "ui/views/window/frame_view.h"
 
 namespace chromeos {
 
@@ -69,7 +70,7 @@ BEGIN_METADATA(HeaderView, HeaderContentView)
 END_METADATA
 
 HeaderView::HeaderView(views::Widget* target_widget,
-                       views::NonClientFrameView* frame_view)
+                       views::FrameView* frame_view)
     : target_widget_(target_widget) {
   header_content_view_ =
       AddChildView(std::make_unique<HeaderContentView>(this));
@@ -91,12 +92,10 @@ void HeaderView::Init() {
 
   aura::Window* window = target_widget_->GetNativeWindow();
   window_observation_.Observe(window);
-  display::Screen::GetScreen()->AddObserver(this);
+  display_observer_.emplace(this);
 }
 
-HeaderView::~HeaderView() {
-  display::Screen::GetScreen()->RemoveObserver(this);
-}
+HeaderView::~HeaderView() = default;
 
 void HeaderView::SchedulePaintForTitle() {
   frame_header_->SchedulePaintForTitle();
@@ -139,9 +138,9 @@ void HeaderView::SetAvatarIcon(const gfx::ImageSkia& avatar) {
     DCHECK_EQ(avatar.width(), avatar.height());
     if (!avatar_icon_) {
       avatar_icon_ = new views::ImageView();
-      AddChildView(avatar_icon_.get());
+      AddChildViewRaw(avatar_icon_.get());
     }
-    avatar_icon_->SetImage(avatar);
+    avatar_icon_->SetImage(ui::ImageModel::FromImageSkia(avatar));
   }
   frame_header_->SetLeftHeaderView(avatar_icon_);
   DeprecatedLayoutImmediately();
@@ -224,14 +223,21 @@ void HeaderView::OnWindowPropertyChanged(aura::Window* window,
 void HeaderView::OnWindowDestroying(aura::Window* window) {
   DCHECK(window_observation_.IsObservingSource(window));
   window_observation_.Reset();
+  display_observer_.reset();
+
   // A HeaderView may outlive the target widget.
   target_widget_ = nullptr;
 }
 
 void HeaderView::OnDisplayMetricsChanged(const display::Display& display,
                                          uint32_t changed_metrics) {
+  // When the display is rotated, the frame header may have invalid snap icons.
+  // For example, rotating from landscape display to portrait display layout
+  // should update snap icons from left/right arrows to upward/downward arrows
+  // for top and bottom snaps.
   if ((changed_metrics & display::DisplayObserver::DISPLAY_METRIC_ROTATION) &&
       frame_header_) {
+    CHECK(target_widget_);
     frame_header_->LayoutHeader();
   }
 }
@@ -353,7 +359,7 @@ void HeaderView::UpdateBackButton() {
   if (has_back_button) {
     if (!back_button) {
       back_button = new chromeos::FrameBackButton();
-      AddChildView(back_button);
+      AddChildViewRaw(back_button);
       frame_header_->SetBackButton(back_button);
     }
     back_button->SetEnabled(caption_button_container_->model()->IsEnabled(
@@ -372,7 +378,7 @@ void HeaderView::UpdateCenterButton() {
     return;
   if (is_center_button_visible) {
     if (!center_button->parent())
-      AddChildView(center_button);
+      AddChildViewRaw(center_button);
     center_button->SetVisible(true);
   } else {
     center_button->SetVisible(false);

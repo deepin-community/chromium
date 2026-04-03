@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/xr/xr_plane.h"
 
 #include "third_party/blink/renderer/bindings/core/v8/frozen_array.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_xr_plane_orientation.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/modules/xr/vr_service_type_converters.h"
 #include "third_party/blink/renderer/modules/xr/xr_object_space.h"
@@ -13,7 +14,31 @@
 
 namespace blink {
 
-XRPlane::XRPlane(uint64_t id,
+namespace {
+
+String SemanticLabelToString(
+    const std::optional<device::mojom::blink::XRSemanticLabel>& label) {
+  if (!label) {
+    return String();
+  }
+
+  switch (*label) {
+    case device::mojom::blink::XRSemanticLabel::kOther:
+      return "other";
+    case device::mojom::blink::XRSemanticLabel::kFloor:
+      return "floor";
+    case device::mojom::blink::XRSemanticLabel::kWall:
+      return "wall";
+    case device::mojom::blink::XRSemanticLabel::kCeiling:
+      return "ceiling";
+    case device::mojom::blink::XRSemanticLabel::kTable:
+      return "table";
+  }
+}
+
+}  // namespace
+
+XRPlane::XRPlane(device::PlaneId id,
                  XRSession* session,
                  const device::mojom::blink::XRPlaneData& plane_data,
                  double timestamp)
@@ -24,25 +49,28 @@ XRPlane::XRPlane(uint64_t id,
               mojo::ConvertTo<HeapVector<Member<DOMPointReadOnly>>>(
                   plane_data.polygon),
               plane_data.mojo_from_plane,
+              SemanticLabelToString(plane_data.semantic_label),
               timestamp) {}
 
-XRPlane::XRPlane(uint64_t id,
+XRPlane::XRPlane(device::PlaneId id,
                  XRSession* session,
                  const std::optional<Orientation>& orientation,
                  HeapVector<Member<DOMPointReadOnly>> polygon,
                  const std::optional<device::Pose>& mojo_from_plane,
+                 const String& semantic_label,
                  double timestamp)
     : id_(id),
       polygon_(MakeGarbageCollected<FrozenArray<DOMPointReadOnly>>(
           std::move(polygon))),
       orientation_(orientation),
       mojo_from_plane_(mojo_from_plane),
+      semantic_label_(semantic_label),
       session_(session),
       last_changed_time_(timestamp) {
   DVLOG(3) << __func__;
 }
 
-uint64_t XRPlane::id() const {
+device::PlaneId XRPlane::id() const {
   return id_;
 }
 
@@ -68,16 +96,20 @@ device::mojom::blink::XRNativeOriginInformationPtr XRPlane::NativeOrigin()
       this->id());
 }
 
-String XRPlane::orientation() const {
+std::optional<V8XRPlaneOrientation> XRPlane::orientation() const {
   if (orientation_) {
     switch (*orientation_) {
       case Orientation::kHorizontal:
-        return "Horizontal";
+        return V8XRPlaneOrientation(V8XRPlaneOrientation::Enum::kHorizontal);
       case Orientation::kVertical:
-        return "Vertical";
+        return V8XRPlaneOrientation(V8XRPlaneOrientation::Enum::kVertical);
     }
   }
-  return "";
+  return std::nullopt;
+}
+
+String XRPlane::semanticLabel() const {
+  return semantic_label_;
 }
 
 double XRPlane::lastChangedTime() const {
@@ -98,6 +130,8 @@ void XRPlane::Update(const device::mojom::blink::XRPlaneData& plane_data,
       plane_data.orientation);
 
   mojo_from_plane_ = plane_data.mojo_from_plane;
+
+  semantic_label_ = SemanticLabelToString(plane_data.semantic_label);
 
   polygon_ = MakeGarbageCollected<FrozenArray<DOMPointReadOnly>>(
       mojo::ConvertTo<HeapVector<Member<DOMPointReadOnly>>>(

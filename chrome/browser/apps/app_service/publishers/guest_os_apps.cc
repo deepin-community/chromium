@@ -4,11 +4,12 @@
 
 #include "chrome/browser/apps/app_service/publishers/guest_os_apps.h"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
 #include "base/check_is_test.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_base.h"
 #include "chrome/browser/apps/app_service/intent_util.h"
@@ -16,6 +17,8 @@
 #include "chrome/browser/ash/crostini/crostini_features.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "components/services/app_service/public/cpp/intent_util.h"
@@ -97,7 +100,7 @@ void GuestOSApps::LaunchAppWithParams(AppLaunchParams&& params,
   } else {
     Launch(params.app_id, event_flags, params.launch_source,
            std::make_unique<WindowInfo>(params.display_id));
-    // TODO(crbug.com/1244506): Add launch return value.
+    // TODO(crbug.com/40787924): Add launch return value.
     std::move(callback).Run(LaunchResult());
   }
 }
@@ -166,9 +169,6 @@ AppPtr GuestOSApps::CreateApp(
 
   if (generate_new_icon_key) {
     IconEffects icon_effects = IconEffects::kCrOsStandardIcon;
-    if (crostini::CrostiniFeatures::Get()->IsMultiContainerAllowed(profile_)) {
-      icon_effects |= IconEffects::kGuestOsBadge;
-    }
     app->icon_key = IconKey(icon_effects);
   }
 
@@ -231,8 +231,8 @@ apps::IntentFilters CreateIntentFilterForAppService(
   // https://specifications.freedesktop.org/shared-mime-info-spec/shared-mime-info-spec-latest.html.
   // In this case, remove all mime types that begin with "text/" and replace
   // them with a single "text/*" mime type.
-  if (base::Contains(mime_types, "text/plain")) {
-    base::EraseIf(mime_types, [](const std::string& s) {
+  if (std::ranges::contains(mime_types, "text/plain")) {
+    std::erase_if(mime_types, [](const std::string& s) {
       return base::StartsWith(s, "text/");
     });
     mime_types.push_back("text/*");
@@ -241,8 +241,8 @@ apps::IntentFilters CreateIntentFilterForAppService(
   apps::IntentFilters intent_filters;
   intent_filters.push_back(apps_util::CreateFileFilter(
       {apps_util::kIntentActionView}, mime_types, extension_types,
-      // TODO(crbug/1349974): Remove activity_name when default file handling
-      // preferences for Files App are migrated.
+      // TODO(crbug.com/40233967): Remove activity_name when default file
+      // handling preferences for Files App are migrated.
       /*activity_name=*/apps_util::kGuestOsActivityName));
 
   return intent_filters;

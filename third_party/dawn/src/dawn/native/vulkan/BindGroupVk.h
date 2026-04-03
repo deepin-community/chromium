@@ -28,10 +28,11 @@
 #ifndef SRC_DAWN_NATIVE_VULKAN_BINDGROUPVK_H_
 #define SRC_DAWN_NATIVE_VULKAN_BINDGROUPVK_H_
 
-#include "dawn/native/BindGroup.h"
+#include <vector>
 
 #include "dawn/common/PlacementAllocated.h"
 #include "dawn/common/vulkan_platform.h"
+#include "dawn/native/BindGroup.h"
 #include "dawn/native/vulkan/DescriptorSetAllocation.h"
 
 namespace dawn::native::vulkan {
@@ -41,10 +42,10 @@ class Device;
 class BindGroup final : public BindGroupBase, public PlacementAllocated {
   public:
     static ResultOrError<Ref<BindGroup>> Create(Device* device,
-                                                const BindGroupDescriptor* descriptor);
+                                                const UnpackedPtr<BindGroupDescriptor>& descriptor);
 
     BindGroup(Device* device,
-              const BindGroupDescriptor* descriptor,
+              const UnpackedPtr<BindGroupDescriptor>& descriptor,
               DescriptorSetAllocation descriptorSetAllocation);
 
     VkDescriptorSet GetHandle() const;
@@ -52,7 +53,9 @@ class BindGroup final : public BindGroupBase, public PlacementAllocated {
   private:
     ~BindGroup() override;
 
-    void DestroyImpl() override;
+    MaybeError InitializeImpl() override;
+    void DestroyImpl(DestroyReason reason) override;
+    void DeleteThis() override;
 
     // Dawn API
     void SetLabelImpl() override;

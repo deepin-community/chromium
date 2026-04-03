@@ -4,10 +4,11 @@
 """Generic presubmit checks that can be reused by other presubmit checks."""
 
 import datetime
+import functools
 import io as _io
 import os as _os
 import time
-import zoneinfo
+import re
 
 import metadata.discover
 import metadata.validate
@@ -69,6 +70,15 @@ OFF_UNLESS_MANUALLY_ENABLED_LINT_FILTERS = [
 ]
 
 _CORP_LINK_KEYWORD = '.corp.google'
+
+# Git Tree Mode for a "gitlink" (submodule).
+# See https://git-scm.com/docs/git-ls-tree#_output_format
+_GIT_MODE_SUBMODULE = b'160000'
+
+# Windows command line character limit. See
+# https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/command-line-string-limitation
+_WIN_COMMAND_LINE_CHAR_LIMIT = 8191
+
 
 ### Description checks
 
@@ -310,7 +320,7 @@ def CheckChangeLintsClean(input_api,
 
     # Use VS error format on Windows to make it easier to step through the
     # results.
-    if input_api.platform == 'win32':
+    if input_api.is_windows:
         cpplint._SetOutputFormat('vs7')
 
     if source_file_filter == None:
@@ -553,16 +563,14 @@ def CheckChangeHasNoTabs(input_api, output_api, source_file_filter=None):
 
 
 def CheckChangeTodoHasOwner(input_api, output_api, source_file_filter=None):
-    """Checks that the user didn't add `TODO(name)` or `TODO: name -` without
-    an owner.
-    """
+    """Checks that TODO comments have the issue number."""
     legacyTODO = '\\s*\\(.+\\)\\s*:'
     modernTODO = ':\\s*[^\\s]+\\s*\\-'
     unowned_todo = input_api.re.compile('TODO(?!(%s|%s))' %
                                         (legacyTODO, modernTODO))
     errors = _FindNewViolationsOfRule(lambda _, x: not unowned_todo.search(x),
                                       input_api, source_file_filter)
-    errors = ['Found TODO with no owner in ' + x for x in errors]
+    errors = ['Found TODO with no issue number in ' + x for x in errors]
     if errors:
         return [output_api.PresubmitPromptWarning('\n'.join(errors))]
     return []
@@ -597,28 +605,38 @@ def CheckLongLines(input_api, output_api, maxlen, source_file_filter=None):
         '': maxlen,
     }
 
+    # To avoid triggering on the magic string, break it up.
+    LINT_THEN_CHANGE_EXCEPTION = ('LI'
+                                  'NT.ThenChange(')
+
     # Language specific exceptions to max line length.
     # '.h' is considered an obj-c file extension, since OBJC_EXCEPTIONS are a
     # superset of CPP_EXCEPTIONS.
     CPP_FILE_EXTS = ('c', 'cc')
-    CPP_EXCEPTIONS = ('#define', '#endif', '#if', '#include', '#pragma')
+    CPP_EXCEPTIONS = ('#define', '#endif', '#if', '#include', '#pragma',
+                      '// ' + LINT_THEN_CHANGE_EXCEPTION)
     HTML_FILE_EXTS = ('html', )
-    HTML_EXCEPTIONS = (
-        '<g ',
-        '<link ',
-        '<path ',
-    )
+    HTML_EXCEPTIONS = ('<g ', '<link ', '<path ',
+                       '<!-- ' + LINT_THEN_CHANGE_EXCEPTION)
     JAVA_FILE_EXTS = ('java', )
-    JAVA_EXCEPTIONS = ('import ', 'package ')
+    JAVA_EXCEPTIONS = ('import ', 'package ',
+                       '// ' + LINT_THEN_CHANGE_EXCEPTION)
     JS_FILE_EXTS = ('js', )
-    JS_EXCEPTIONS = ("GEN('#include", 'import ')
+    JS_EXCEPTIONS = ("GEN('#include", 'import ',
+                     '// ' + LINT_THEN_CHANGE_EXCEPTION)
     TS_FILE_EXTS = ('ts', )
-    TS_EXCEPTIONS = ('import ')
+    TS_EXCEPTIONS = ('import ', 'export {', 'export type {'
+                     '// ' + LINT_THEN_CHANGE_EXCEPTION)
     OBJC_FILE_EXTS = ('h', 'm', 'mm')
     OBJC_EXCEPTIONS = ('#define', '#endif', '#if', '#import', '#include',
-                       '#pragma')
+                       '#pragma', '// ' + LINT_THEN_CHANGE_EXCEPTION)
     PY_FILE_EXTS = ('py', )
-    PY_EXCEPTIONS = ('import', 'from')
+    PY_EXCEPTIONS = ('import', 'from', '# ' + LINT_THEN_CHANGE_EXCEPTION)
+
+    # Uncap star files. For more info, see:
+    # https://bazel.build/build/style-guide#differences-python-style-guide
+    STAR_FILE_EXTS = ('star', )
+    STAR_EXCEPTIONS = ('', )
 
     LANGUAGE_EXCEPTIONS = [
         (CPP_FILE_EXTS, CPP_EXCEPTIONS),
@@ -628,6 +646,7 @@ def CheckLongLines(input_api, output_api, maxlen, source_file_filter=None):
         (TS_FILE_EXTS, TS_EXCEPTIONS),
         (OBJC_FILE_EXTS, OBJC_EXCEPTIONS),
         (PY_FILE_EXTS, PY_EXCEPTIONS),
+        (STAR_FILE_EXTS, STAR_EXCEPTIONS),
     ]
 
     def no_long_lines(file_extension, line):
@@ -736,6 +755,8 @@ def CheckLongLines(input_api, output_api, maxlen, source_file_filter=None):
     return []
 
 
+_BYPASS_CHECK_LICENSE_FOOTER = 'Bypass-Check-License'
+
 def CheckLicense(input_api,
                  output_api,
                  license_re_param=None,
@@ -743,6 +764,20 @@ def CheckLicense(input_api,
                  source_file_filter=None,
                  accept_empty_files=True):
     """Verifies the license header."""
+    # The CL is ignoring the license check
+    reasons = input_api.change.GitFootersFromDescription().get(
+        _BYPASS_CHECK_LICENSE_FOOTER, [])
+
+    if len(reasons):
+        if ''.join(reasons).strip() == '':
+            return [
+                output_api.PresubmitError(
+                    '{key} is specified without the reason. Please provide the reason '
+                    'in "{key}: <reason>"'.format(
+                        key=_BYPASS_CHECK_LICENSE_FOOTER))
+            ]
+        input_api.logging.info('License check is being ignored')
+        return []
 
     # Early-out if the license_re is guaranteed to match everything.
     if license_re_param and license_re_param == '.*':
@@ -771,22 +806,25 @@ def CheckLicense(input_api,
         # The (c) is deprecated, but tolerate it until it's removed from all
         # files. "All rights reserved" is also deprecated, but tolerate it until
         # it's removed from all files.
-        license_re = (r'.*? Copyright (\(c\) )?%(year)s The %(project)s Authors'
-                      r'(\. All rights reserved\.)?\n'
-                      r'.*? %(key_line)s\n'
-                      r'.*? found in the LICENSE file\.(?: \*/)?\n') % {
-                          'year': years_re,
-                          'project': project_name,
-                          'key_line': key_line,
-                      }
+        license_re = (
+            r'(?:.+ )?Copyright (\(c\) )?%(year)s The %(project)s Authors'
+            r'(\. All rights reserved\.)?\n'
+            r'(?:.+ )?%(key_line)s\n'
+            r'(?:.+ )?found in the LICENSE file\.(?: \*/)?\n') % {
+                'year': years_re,
+                'project': project_name,
+                'key_line': key_line,
+            }
+
         # On new files don't tolerate any digression from the ideal.
-        new_license_re = (r'.*? Copyright %(year)s The %(project)s Authors\n'
-                          r'.*? %(key_line)s\n'
-                          r'.*? found in the LICENSE file\.(?: \*/)?\n') % {
-                              'year': years_re,
-                              'project': project_name,
-                              'key_line': key_line,
-                          }
+        new_license_re = (
+            r'(?:.+ )?Copyright %(year)s The %(project)s Authors\n'
+            r'(?:.+ )?%(key_line)s\n'
+            r'(?:.+ )?found in the LICENSE file\.(?: \*/)?\n') % {
+                'year': years_re,
+                'project': project_name,
+                'key_line': key_line,
+            }
 
     license_re = input_api.re.compile(license_re, input_api.re.MULTILINE)
     new_license_re = input_api.re.compile(new_license_re,
@@ -815,16 +853,39 @@ def CheckLicense(input_api,
                     current_year):
                 # If we're using the built-in license_re on a new file then make
                 # sure the year is correct.
+                # skip the new year check in January to give some slag
+                # where submitting year N-1 is allowed.
+                if issue := input_api.change.issue:
+                    info = input_api.gerrit.GetChangeInfo(issue)
+                    created_time = datetime.datetime.fromisoformat(info["created"] + 'Z')
+                    cl_creation_year = int(created_time.strftime('%Y'))
+                    last_year = int(input_api.time.strftime('%Y')) - 1
+                    current_month = int(input_api.time.strftime('%m'))
+                    if (current_month == 1
+                        and match.groups()[0] == str(last_year)
+                        and cl_creation_year == last_year):
+                        continue
+
                 wrong_year_new_files.append(f.LocalPath())
         elif not license_re.search(contents):
             bad_files.append(f.LocalPath())
     results = []
+
+    # Fail on CQ when checking diffs.
+    # Warn locally or when checking the whole tree (due to legacy headers).
+    if input_api.is_committing and not input_api.no_diffs:
+        report_type = output_api.PresubmitError
+    else:
+        report_type = output_api.PresubmitPromptWarning
+
     if bad_new_files:
-        # We can't distinguish between Google and thirty-party files, so this has to be a
-        # warning rather than an error.
         if license_re_param:
-            warning_message = ('License on new files must match:\n\n%s\n' %
-                               license_re_param)
+            error_message = (
+                'License on new files must match:\n\n{lp}\n\n'
+                'To bypass this check, add {k}: <reason> in the description.\n'
+                'If this check fails for non-exceptional cases, consider '
+                'tuning the PRESUBMIT.py instead.').format(
+                    lp=license_re_param, k=_BYPASS_CHECK_LICENSE_FOOTER)
         else:
             # Verbatim text that can be copy-pasted into new files (possibly
             # adjusting the leading comment delimiter).
@@ -836,31 +897,29 @@ def CheckLicense(input_api,
                     'project': project_name,
                     'key_line': key_line,
                 }
-            warning_message = (
+            error_message = (
                 'License on new files must be:\n\n%s\n' % new_license_text +
                 '(adjusting the comment delimiter accordingly).\n\n' +
                 'If this is a moved file, then update the license but do not ' +
                 'update the year.\n\n' +
-                'If this is a third-party file then ignore this warning.\n\n')
-        warning_message += 'Found a bad license header in these new or moved files:'
-        results.append(
-            output_api.PresubmitPromptWarning(warning_message,
-                                              items=bad_new_files))
+                'If this is a third-party file, then add a footer ' +
+                'with "{key}: <reason>" to skip this check.'.format(
+                    key=_BYPASS_CHECK_LICENSE_FOOTER))
+        error_message += 'Found a bad license header in these new or moved files:'
+        results.append(report_type(error_message, items=bad_new_files))
     if wrong_year_new_files:
-        # We can't distinguish between new and moved files, so this has to be a
-        # warning rather than an error.
         results.append(
-            output_api.PresubmitPromptWarning(
+            report_type(
                 'License doesn\'t list the current year. If this is a new file, '
-                'use the current year. If this is a moved file then ignore this '
-                'warning.',
+                'use the current year. If this is a moved file, then add '
+                'a footer with "{key}: <reason>" to skip this check.'.format(
+                    key=_BYPASS_CHECK_LICENSE_FOOTER),
                 items=wrong_year_new_files))
     if bad_files:
         results.append(
-            output_api.PresubmitPromptWarning(
-                'License must match:\n%s\n' % license_re.pattern +
-                'Found a bad license header in these files:',
-                items=bad_files))
+            report_type('License must match:\n%s\n' % license_re.pattern +
+                        'Found a bad license header in these files:',
+                        items=bad_files))
     return results
 
 
@@ -890,6 +949,7 @@ def CheckChromiumDependencyMetadata(input_api, output_api, file_filter=None):
             filepath=f.AbsoluteLocalPath(),
             repo_root_dir=repo_root_dir,
             reader=input_api.ReadFile,
+            is_open_source_project=True,
         )
 
         for warning in warnings:
@@ -906,14 +966,33 @@ def CheckChromiumDependencyMetadata(input_api, output_api, file_filter=None):
 
 _IGNORE_FREEZE_FOOTER = 'Ignore-Freeze'
 
-_FREEZE_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
-_FREEZE_START = datetime.datetime(2023, 12, 15, 0, 0, tzinfo=_FREEZE_TZ)
-_FREEZE_END = datetime.datetime(2024, 1, 2, 0, 0, tzinfo=_FREEZE_TZ)
+_FREEZE_TZ = datetime.timezone(-datetime.timedelta(hours=8), 'PST')
+
+# (freeze start, freeze end, freeze details)
+_CHROMIUM_FREEZES = [
+    (
+        datetime.datetime(2025, 11, 21, 17, 1, tzinfo=_FREEZE_TZ),
+        datetime.datetime(2025, 11, 30, 17, 0, tzinfo=_FREEZE_TZ),
+        'Holiday freeze',
+    ),
+    (
+        datetime.datetime(2025, 12, 19, 17, 1, tzinfo=_FREEZE_TZ),
+        datetime.datetime(2026, 1, 4, 17, 0, tzinfo=_FREEZE_TZ),
+        'Holiday freeze',
+    ),
+]
 
 def CheckInfraFreeze(input_api,
                      output_api,
                      files_to_include=None,
                      files_to_exclude=None):
+    return CheckChromiumInfraFreeze(input_api, output_api, files_to_include,
+                                    files_to_exclude)
+
+def CheckChromiumInfraFreeze(input_api,
+                             output_api,
+                             files_to_include=None,
+                             files_to_exclude=None):
     """Prevent modifications during infra code freeze.
 
     Args:
@@ -935,7 +1014,10 @@ def CheckInfraFreeze(input_api,
     """
     # Not in the freeze time range
     now = datetime.datetime.now(_FREEZE_TZ)
-    if now < _FREEZE_START or now >= _FREEZE_END:
+    for start, end, details in _CHROMIUM_FREEZES:
+        if start <= now < end:
+            break
+    else:
         input_api.logging.info('No freeze is in effect')
         return []
 
@@ -957,7 +1039,7 @@ def CheckInfraFreeze(input_api,
         for af in input_api.AffectedFiles(file_filter=file_filter)
     ]
 
-    # The Cl does not touch ny files covered by the freeze
+    # The Cl does not touch any files covered by the freeze
     if not files:
         input_api.logging.info('No affected files are covered by freeze')
         return []
@@ -969,9 +1051,13 @@ def CheckInfraFreeze(input_api,
     else:
         report_type = output_api.PresubmitError
     return [
-        report_type('There is a prod infra freeze in effect from {} until {},'
-                    'the following files cannot be modified:\n  {}'.format(
-                        _FREEZE_START, _FREEZE_END, '\n  '.join(files)))
+        report_type(
+            'There is a prod infra freeze in effect from {} until {}:\n'
+            '\t{}\n\n'
+            'The following files cannot be modified:\n  {}.\n\n'
+            'Add "{}: <reason>" to the end of your commit message to override.'.
+            format(start, end, details, '\n  '.join(files),
+                   _IGNORE_FREEZE_FOOTER))
     ]
 
 
@@ -1261,7 +1347,7 @@ def _FetchAllFiles(input_api, files_to_check, files_to_skip):
     # can break another unmodified file.
     # Use code similar to InputApi.FilterSourceFile()
     def Find(filepath, filters):
-        if input_api.platform == 'win32':
+        if input_api.is_windows:
             filepath = filepath.replace('\\', '/')
 
         for item in filters:
@@ -1305,7 +1391,7 @@ def GetPylint(input_api,
     files_to_skip = tuple(files_to_skip or input_api.DEFAULT_FILES_TO_SKIP)
     extra_paths_list = extra_paths_list or []
 
-    assert version in ('2.6', '2.7', '2.17'), \
+    assert version in ('2.6', '2.7', '2.17', '3.2'), \
         'Unsupported pylint version: %s' % version
 
     if input_api.is_committing or input_api.no_diffs:
@@ -1367,10 +1453,10 @@ def GetPylint(input_api,
         # the command-line, so we pass arguments via a pipe.
         tool = input_api.os_path.join(_HERE, 'pylint-' + version)
         kwargs = {'env': env}
-        if input_api.platform == 'win32':
+        if input_api.is_windows:
             # On Windows, scripts on the current directory take precedence over
-            # PATH. When `pylint.bat` calls `vpython`, it will execute the
-            # `vpython` of the depot_tools under test instead of the one in the
+            # PATH. When `pylint.bat` calls `vpython3`, it will execute the
+            # `vpython3` of the depot_tools under test instead of the one in the
             # bot. As a workaround, we run the tests from the parent directory
             # instead.
             cwd = input_api.change.RepositoryRoot()
@@ -1450,7 +1536,8 @@ def CheckDirMetadataFormat(input_api, output_api, dirmd_bin=None):
     name = 'Validate metadata in OWNERS and DIR_METADATA files'
 
     if dirmd_bin is None:
-        dirmd_bin = 'dirmd.bat' if input_api.is_windows else 'dirmd'
+        dirmd_bin = input_api.os_path.join(
+            _HERE, 'dirmd.bat' if input_api.is_windows else 'dirmd')
 
     # When running git cl presubmit --all this presubmit may be asked to check
     # ~7,500 files, leading to a command line that is about 500,000 characters.
@@ -1548,9 +1635,15 @@ def CheckOwnersFormat(input_api, output_api):
     if input_api.gerrit and input_api.gerrit.IsCodeOwnersEnabledOnRepo():
         return []
 
+    host = "none"
+    project = "none"
+    if input_api.gerrit:
+        host = input_api.gerrit.host
+        project = input_api.gerrit.project
     return [
         output_api.PresubmitError(
-            'code-owners is not enabled. Ask your host enable it on your gerrit '
+            f'code-owners is not enabled on {host}/{project}. '
+            'Ask your host enable it on your gerrit '
             'host. Read more about code-owners at '
             'https://chromium-review.googlesource.com/'
             'plugins/code-owners/Documentation/index.html.')
@@ -1568,9 +1661,15 @@ def CheckOwners(input_api, output_api, source_file_filter=None, allow_tbr=True):
     if input_api.gerrit and input_api.gerrit.IsCodeOwnersEnabledOnRepo():
         return []
 
+    host = "none"
+    project = "none"
+    if input_api.gerrit:
+        host = input_api.gerrit.host
+        project = input_api.gerrit.project
     return [
         output_api.PresubmitError(
-            'code-owners is not enabled. Ask your host enable it on your gerrit '
+            f'code-owners is not enabled on {host}/{project}. '
+            'Ask your host enable it on your gerrit '
             'host. Read more about code-owners at '
             'https://chromium-review.googlesource.com/'
             'plugins/code-owners/Documentation/index.html.')
@@ -1734,10 +1833,6 @@ def PanProjectChecks(input_api,
             # the tree. Skipping these saves a bit of time and avoids having
             # redundant output. This was initially designed for use by
             # third_party/blink/PRESUBMIT.py.
-            snapshot("checking was uploaded")
-            results.extend(
-                input_api.canned_checks.CheckChangeWasUploaded(
-                    input_api, output_api))
             snapshot("checking description")
             results.extend(
                 input_api.canned_checks.CheckChangeHasDescription(
@@ -1754,10 +1849,16 @@ def PanProjectChecks(input_api,
                 input_api, output_api))
 
     if global_checks:
+        results.extend(
+            input_api.canned_checks.CheckNoNewGitFilesAddedInDependencies(
+                input_api, output_api))
         if input_api.change.scm == 'git':
             snapshot("checking for commit objects in tree")
             results.extend(
                 input_api.canned_checks.CheckForCommitObjects(
+                    input_api, output_api))
+            results.extend(
+                input_api.canned_checks.CheckForRecursedeps(
                     input_api, output_api))
 
     snapshot("done")
@@ -1773,6 +1874,10 @@ def CheckPatchFormatted(input_api,
                         result_factory=None):
     result_factory = result_factory or output_api.PresubmitPromptWarning
     import git_cl
+    affected_files = input_api.AffectedFiles(include_deletes=False)
+    with input_api.CreateTemporaryFile() as diff_file:
+        for f in affected_files:
+            diff_file.write(f.GenerateScmDiff().encode('utf-8'))
 
     display_args = []
     if not check_clang_format:
@@ -1792,8 +1897,13 @@ def CheckPatchFormatted(input_api,
 
     cmd = [
         '-C',
-        input_api.change.RepositoryRoot(), 'cl', 'format', '--dry-run',
-        '--presubmit'
+        input_api.change.RepositoryRoot(),
+        'cl',
+        'format',
+        '--dry-run',
+        '--presubmit',
+        '--input_diff_file',
+        diff_file.name,
     ] + display_args
 
     # Make sure the passed --upstream branch is applied to a dry run.
@@ -1804,13 +1914,7 @@ def CheckPatchFormatted(input_api,
         input_api.PresubmitLocalPath(), input_api.change.RepositoryRoot())
     if presubmit_subdir.startswith('..') or presubmit_subdir == '.':
         presubmit_subdir = ''
-    # If the PRESUBMIT.py is in a parent repository, then format the entire
-    # subrepository. Otherwise, format only the code in the directory that
-    # contains the PRESUBMIT.py.
-    if presubmit_subdir:
-        cmd.append(input_api.PresubmitLocalPath())
-
-    code, _ = git_cl.RunGitWithCode(cmd, suppress_stderr=bypass_warnings)
+    code, output = git_cl.RunGitWithCode(cmd, suppress_stderr=bypass_warnings)
     # bypass_warnings? Only fail with code 2.
     # As this is just a warning, ignore all other errors if the user
     # happens to have a broken clang-format, doesn't use git, etc etc.
@@ -1820,11 +1924,17 @@ def CheckPatchFormatted(input_api,
         else:
             short_path = input_api.basename(input_api.change.RepositoryRoot())
         display_args.append(presubmit_subdir)
-        return [
-            result_factory('The %s directory requires source formatting. '
-                           'Please run: git cl format %s' %
-                           (short_path, ' '.join(display_args)))
-        ]
+        msg = f'The {short_path} directory requires source formatting.\n'
+        if output:
+            msg += output + '\n'
+        msg += (
+            'The following command may be able to fix some errors, while '
+            'others may need to be fixed manually:\n'
+            f'  git cl format {" ".join(display_args)}\n'
+            'Alternatively, if you are in Cider G, please use the "Format '
+            'Modified Lines in All Files (git cl format)" functionality in the '
+            'command palette.')
+        return [result_factory(msg)]
     return []
 
 
@@ -1836,7 +1946,10 @@ def CheckGNFormatted(input_api, output_api):
         ).endswith('.gni') or x.LocalPath().endswith('.typemap'))
     warnings = []
     for f in affected_files:
-        cmd = ['gn', 'format', '--dry-run', f.AbsoluteLocalPath()]
+        cmd = [
+            input_api.os_path.join(_HERE, 'gn.py'), 'format', '--dry-run',
+            f.AbsoluteLocalPath()
+        ]
         rc = gn.main(cmd)
         if rc == 2:
             warnings.append(
@@ -1945,15 +2058,21 @@ def CheckForCommitObjects(input_api, output_api):
     Returns:
         A presubmit error if a commit object is not expected.
     """
+    if input_api.change.scm != 'git':
+        return [
+            output_api.PresubmitNotifyResult(
+                'Non-git workspace detected, skipping CheckForCommitObjects.')
+        ]
+
     # Get DEPS file.
-    deps_file = input_api.os_path.join(input_api.PresubmitLocalPath(), 'DEPS')
-    if not input_api.os_path.isfile(deps_file):
-        # No DEPS file, carry on!
+    try:
+        deps_content = input_api.subprocess.check_output(
+            ['git', 'show', 'HEAD:DEPS'], cwd=input_api.PresubmitLocalPath())
+        deps = _ParseDeps(deps_content)
+    except Exception:
+        # No DEPS file, so skip this check.
         return []
 
-    with open(deps_file) as f:
-        deps_content = f.read()
-    deps = _ParseDeps(deps_content)
     # set default
     if 'deps' not in deps:
         deps['deps'] = {}
@@ -1977,21 +2096,61 @@ def CheckForCommitObjects(input_api, output_api):
         spaceparts = tabparts[0].split(' ', 2)
         return (spaceparts[0], spaceparts[1], spaceparts[2], tabparts[1])
 
-    full_tree = input_api.subprocess.check_output(
-        ['git', 'ls-tree', '-r', '--full-tree', '-z', 'HEAD'],
-        cwd=input_api.PresubmitLocalPath())
+    # If the number of affected files is small, we can avoid scanning the entire
+    # tree.
+    affected_files = list(input_api.AffectedFiles())
+
+    # We must scan the full tree if DEPS is modified to ensure that any change
+    # in DEPS is reflected in the gitlinks.
+    deps_modified = any(f.LocalPath() == 'DEPS' for f in affected_files)
+
+    cmd = ['git', 'ls-tree', '-z', '--full-tree', 'HEAD']
+    if len(affected_files) < 1000 and not deps_modified:
+        # We need to pass the paths relative to the repository root.
+        repo_root = input_api.change.RepositoryRoot()
+        files_to_check = [
+            input_api.os_path.relpath(f.AbsoluteLocalPath(), repo_root)
+            for f in affected_files
+        ]
+        # On Windows, the command line is limited to 8191 characters.
+        cmd_len = len(' '.join(cmd + ['--'] + files_to_check))
+        if (input_api.is_windows and cmd_len > _WIN_COMMAND_LINE_CHAR_LIMIT):
+            cmd.extend(['-r'])
+        else:
+            cmd.extend(['--'] + files_to_check)
+    else:
+        cmd.extend(['-r'])
+
+    tree_data = input_api.subprocess.check_output(
+        cmd, cwd=input_api.PresubmitLocalPath())
+
+    if _GIT_MODE_SUBMODULE not in tree_data:
+        return []
 
     # commit_tree_entries holds all commit entries (ie gitlink, submodule
     # record).
     commit_tree_entries = []
-    for entry in full_tree.strip().split(b'\00'):
-        if not entry.startswith(b'160000'):
-            # Remove entries that we don't care about. 160000 indicates a
-            # gitlink.
-            continue
-        tree_entry = parse_tree_entry(entry.decode('utf-8'))
-        if tree_entry[1] == 'commit':
-            commit_tree_entries.append(tree_entry)
+    pos = 0
+    while True:
+        pos = tree_data.find(_GIT_MODE_SUBMODULE, pos)
+        if pos == -1:
+            break
+
+        # Check if this occurrence is at the start of an entry.
+        # It must be at the start of the string or preceded by a null terminator.
+        if pos == 0 or tree_data[pos - 1] == 0:
+            # Find the end of this entry.
+            end = tree_data.find(b'\0', pos)
+            entry = tree_data[pos:end]
+
+            tree_entry = parse_tree_entry(entry.decode('utf-8'))
+            if tree_entry[1] == 'commit':
+                commit_tree_entries.append(tree_entry)
+
+            pos = end + 1
+        else:
+            # If not at start of entry, advance to look for next occurrence.
+            pos += 1
 
     # No gitlinks found, return early.
     if len(commit_tree_entries) == 0:
@@ -2018,8 +2177,17 @@ def CheckForCommitObjects(input_api, output_api):
 
     gitmodules_file = input_api.os_path.join(input_api.PresubmitLocalPath(),
                                              '.gitmodules')
-    with open(gitmodules_file) as f:
-        gitmodules_content = f.read()
+    import configparser
+    config = configparser.ConfigParser()
+    config.read(gitmodules_file)
+    gitmodule_paths = set([])
+    for name, section in config.items():
+        if not name.startswith('submodule '):
+            continue
+        if 'path' not in section:
+            continue
+        gitmodule_paths.add(section['path'])
+
 
     mismatch_entries = []
     deps_msg = ""
@@ -2029,15 +2197,16 @@ def CheckForCommitObjects(input_api, output_api):
 
         url = dep if isinstance(dep, str) else dep['url']
         commit_hash = url.split('@')[-1]
-        # Two exceptions were in made in two projects prior to this check
-        # enforcement. We need to address those exceptions, but in the meantime
-        # we can't fail this global presubmit check
-        # https://chromium.googlesource.com/infra/infra/+/refs/heads/main/DEPS#45
-        if dep_path == 'recipes-py' and commit_hash == 'refs/heads/main':
-            continue
 
+        # One exception is made prior to this check enforcement.
+        #
+        # We need to address this exception, but in the meantime we can't fail
+        # this global presubmit check.
+        #
         # https://chromium.googlesource.com/angle/angle/+/refs/heads/main/DEPS#412
-        if dep_path == 'third_party/dummy_chromium':
+        # https://dawn.googlesource.com/dawn/+/refs/heads/main/DEPS#606
+        if dep_path in ('third_party/dummy_chromium',
+                        'third_party/placeholder_chromium'):
             continue
 
         if commit_hash in git_submodules:
@@ -2051,7 +2220,9 @@ def CheckForCommitObjects(input_api, output_api):
                         'Make sure DEPS paths match those in .gitmodules \n'
                         f'and a gitlink exists at {dep_path}.')
                 ]
-            if f'path = {submodule_path}' not in gitmodules_content:
+            try:
+                gitmodule_paths.remove(submodule_path)
+            except KeyError:
                 return [
                     output_api.PresubmitError(
                         f'No submodule with path {submodule_path} in '
@@ -2080,9 +2251,198 @@ def CheckForCommitObjects(input_api, output_api):
                 'The following entries diverged: ' + deps_msg)
         ]
 
+    if len(gitmodule_paths) > 0:
+        return [
+            output_api.PresubmitError(
+                '.gitmodules file contains submodules that no longer exist\n'
+                'in DEPS or Git (gitlink).\n'
+                'Remove the following entries from .gitmodules:\n'
+                '\n\t' + '\n\t'.join(gitmodule_paths) +
+                '\n\nor run the following command:\n'
+                '    gclient gitmodules\n')
+        ]
+
+
     return []
 
 
+def CheckForRecursedeps(input_api, output_api):
+    """Checks that DEPS entries in recursedeps exist in deps."""
+    # Run only if DEPS has been modified.
+    if all(f.LocalPath() != 'DEPS' for f in input_api.AffectedFiles()):
+        return []
+    # Get DEPS file.
+    deps_file = input_api.os_path.join(input_api.change.RepositoryRoot(),
+                                       'DEPS')
+    if not input_api.os_path.isfile(deps_file):
+        # No DEPS file, carry on!
+        return []
+
+    with open(deps_file) as f:
+        deps_content = f.read()
+    deps = _ParseDeps(deps_content)
+
+    if 'recursedeps' not in deps:
+        # No recursedeps entry, carry on!
+        return []
+
+    existing_deps: set[str] = set()
+    # If git_dependencies is SYNC or SUBMODULES, prefer the submodule data.
+    if deps.get('git_dependencies', 'DEPS') == 'DEPS':
+        existing_deps = set(deps.get('deps', {}))
+    else:
+        existing_deps = input_api.change.AllLocalSubmodules()
+        # existing_deps is 'local paths' i.e. repo-relative. However, if deps is
+        # NOT use_relative_paths, then we need to adjust these to be
+        # client-root-relative.
+        #
+        # Sadly, as of 25Q1, the default is still False.
+        if not deps.get('use_relative_paths', False):
+            # Find the relative path between the gclient root and the repo root.
+            gclient_relpath: str = input_api.os_path.relpath(
+                input_api.change.RepositoryRoot(),
+                start=input_api.gclient_paths.FindGclientRoot(
+                    input_api.change.RepositoryRoot()))
+
+            # relpath will use native os.path.sep, so split and clean it.
+            #
+            # NOTE: relpath can make ./path/to/something, so trim off the '.'
+            gclient_relpath_toks = tuple(
+                gclient_relpath.split(input_api.os_path.sep))
+            if gclient_relpath_toks[0] == '.':
+                gclient_relpath_toks = gclient_relpath_toks[1:]
+
+            # All submodules are relative to the repo root, so join
+            #
+            #   gclient-to-repo ++ repo-to-submodule
+            #
+            # To get path strings which should appear in recursedeps.
+            #
+            # We must join with '/', not os_path.sep, because the paths in
+            # DEPS.recursedeps always use forward slashes.
+            existing_deps = set(
+                '/'.join(gclient_relpath_toks +
+                         (p.replace(input_api.os_path.sep, '/'), ))
+                for p in existing_deps)
+
+    errors = []
+    for check_dep in deps['recursedeps']:
+        if check_dep not in existing_deps:
+            errors.append(
+                output_api.PresubmitError(
+                    f'Found recuredep entry {check_dep} but it is not found '
+                    'in\n deps itself. Remove it from recurcedeps or add '
+                    'deps entry.'))
+
+    return errors
+
+
+def _readDeps(input_api):
+    """Read DEPS file from the checkout disk. Extracted for testability."""
+    deps_file = input_api.os_path.join(input_api.PresubmitLocalPath(), 'DEPS')
+    with open(deps_file) as f:
+        return f.read()
+
+
+def CheckNoNewGitFilesAddedInDependencies(input_api, output_api):
+    """Check if there are Git files in any DEPS dependencies. Error is returned
+    if there are."""
+    try:
+        deps = _ParseDeps(_readDeps(input_api))
+    except FileNotFoundError:
+        # If there's no DEPS file, there is nothing to check.
+        return []
+
+    dependency_paths = set()
+    for path, dep in deps.get('deps', {}).items():
+        if 'condition' in dep and 'non_git_source' in dep['condition']:
+            # TODO(crbug.com/40738689): Remove src/ prefix
+            dependency_paths.add(path[4:])  # 4 == len('src/')
+
+    errors = []
+    for file in input_api.AffectedFiles(include_deletes=False):
+        path = file.LocalPath()
+        # We are checking path, and all paths below up to root. E.g. if path is
+        # a/b/c, we start with path == "a/b/c", followed by "a/b" and "a".
+        while path:
+            if path in dependency_paths:
+                errors.append(
+                    output_api.PresubmitError(
+                        'You cannot place files tracked by Git inside a '
+                        'first-party DEPS dependency (deps).\n'
+                        f'Dependency: {path}\n'
+                        f'File: {file.LocalPath()}'))
+            path = _os.path.dirname(path)
+
+    return errors
+
+
+def CheckNewDEPSHooksHasRequiredReviewers(input_api, output_api):
+    """Ensures proper review of CLs adding new DEPS hooks.
+
+    This check verifies that any CL adding a new DEPS hook is reviewed and
+    approved by the required reviewer(s). If the required reviewers haven't
+    been added, an error will be raised.
+
+    Required Reviewers are computed from the OWNERS file. It looks for DEPS
+    owners annotated `For new DEPS hook`. Example:
+    `per-file DEPS=foo@chromium.org # For new DEPS hook`
+
+    This check is skipped if:
+    * The Gerrit CL hasn't been uploaded yet.
+    * The CL doesn't involve adding new hooks to the DEPS file.
+    * No required reviewers are found in the OWNERS file.
+    """
+    if not input_api.change.issue:
+        return []  # Gerrit CL not yet uploaded.
+    deps_affected_files = [
+        f for f in input_api.AffectedFiles() if f.LocalPath() == 'DEPS'
+    ]
+    if not deps_affected_files:
+        return []  # Not a DEPS change.
+    dep_file = deps_affected_files[0]
+
+    def _get_hooks_names(dep_contents):
+        deps = _ParseDeps('\n'.join(dep_contents))
+        hooks = deps.get('hooks', [])
+        return set(hook.get('name') for hook in hooks)
+
+    old_hooks = _get_hooks_names(dep_file.OldContents())
+    new_hooks = _get_hooks_names(dep_file.NewContents())
+    if new_hooks.issubset(old_hooks):
+        return []  # No new hooks added.
+
+    required_reviewer_re = input_api.re.compile(
+        r"^per-file\s+DEPS\s*=\s*({email_re}(\s*,\s*{email_re})*)\s*# For new DEPS hook$"
+        .format(email_re=r'[^ @]+@[^ #]+'))
+    required_reviewers = []
+    for line in input_api.ReadFile(
+            input_api.os_path.join(input_api.change.RepositoryRoot(),
+                                   'OWNERS')).splitlines():
+        if (m := required_reviewer_re.match(line)):
+            required_reviewers.extend(r.strip() for r in m.group(1).split(','))
+
+    if not required_reviewers:
+        return []
+    submitting = input_api.is_committing and not input_api.dry_run
+    reviewers = input_api.gerrit.GetChangeReviewers(input_api.change.issue,
+                                                    approving_only=submitting)
+    if set(r for r in reviewers if r in required_reviewers):
+        return []  # passing the check
+    added_hooks = new_hooks - old_hooks
+    msg = (f'New DEPS {"hook" if len(added_hooks) == 1 else "hooks"} '
+           f'({", ".join(sorted(new_hooks-old_hooks))}) '
+           f'{"is" if len(added_hooks) == 1 else "are"} found. ')
+    if submitting:
+        msg += 'The CL must be approved by one of the following reviewers:'
+    else:
+        msg += 'Please request review from one of the following reviewers:'
+    for r in required_reviewers:
+        msg += f'\n * {r}'
+    return [output_api.PresubmitError(msg)]
+
+
+@functools.lru_cache(maxsize=None)
 def _ParseDeps(contents):
     """Simple helper for parsing DEPS files."""
 
@@ -2117,8 +2477,8 @@ def CheckVPythonSpec(input_api, output_api, file_filter=None):
         output_api: Bag of output related interfaces.
         file_filter: Custom function that takes a path (relative to client root) and
             returns boolean, which is used to filter files for which to apply the
-            verification to. Defaults to any path ending with .vpython, which captures
-            both global .vpython and <script>.vpython files.
+            verification to. Defaults to any path ending with .vpython(3), which captures
+            both global .vpython(3) and <script>.vpython(3) files.
 
     Returns:
         A list of input_api.Command objects containing verification commands.
@@ -2159,8 +2519,11 @@ def CheckChangedLUCIConfigs(input_api, output_api):
     LUCI_CONFIG_HOST_NAME = 'config.luci.app'
 
     cl = git_cl.Changelist()
-    if input_api.change.issue and input_api.gerrit:
-        remote_branch = input_api.gerrit.GetDestRef(input_api.change.issue)
+    if input_api.gerrit:
+        if input_api.change.issue:
+            remote_branch = input_api.gerrit.GetDestRef(input_api.change.issue)
+        else:
+            remote_branch = input_api.gerrit.branch
     else:
         remote, remote_branch = cl.GetRemoteBranch()
         if remote_branch.startswith('refs/remotes/%s/' % remote):
@@ -2170,7 +2533,14 @@ def CheckChangedLUCIConfigs(input_api, output_api):
             remote_branch = remote_branch.replace('refs/remotes/branch-heads/',
                                                   'refs/branch-heads/', 1)
 
-    remote_host_url = cl.GetRemoteUrl()
+    if input_api.gerrit:
+        host = input_api.gerrit.host
+        project = input_api.gerrit.project
+        gerrit_url = f'https://{host}/{project}'
+        remote_host_url = gerrit_url.replace('-review.googlesource',
+                                             '.googlesource')
+    else:
+        remote_host_url = cl.GetRemoteUrl()
     if not remote_host_url:
         return [
             output_api.PresubmitError(
@@ -2399,12 +2769,16 @@ def CheckJsonParses(input_api, output_api, file_filter=None):
         with _io.open(f.AbsoluteLocalPath(), encoding='utf-8') as j:
             try:
                 json.load(j)
-            except ValueError:
+            except json.JSONDecodeError:
                 # Just a warning for now, in case people are using JSON5
                 # somewhere.
                 warnings.append(
                     output_api.PresubmitPromptWarning(
-                        '%s does not appear to be valid JSON.' % f.LocalPath()))
+                        f"{f.LocalPath()} doesn't appear to be valid JSON.",
+                        locations=[
+                            output_api.PresubmitResultLocation(
+                                file_path=f.LocalPath()),
+                        ]))
     return warnings
 
 
@@ -2502,7 +2876,7 @@ def CheckInclusiveLanguage(input_api,
         local_dir = input_api.os_path.dirname(affected_file.LocalPath())
 
         # Excluded paths use forward slashes.
-        if input_api.platform == 'win32':
+        if input_api.is_windows:
             local_dir = local_dir.replace('\\', '/')
 
         return local_dir in excluded_paths
@@ -2525,9 +2899,19 @@ def CheckInclusiveLanguage(input_api,
     f = input_api.ReadFile(dirs_file_path)
 
     for line in f.splitlines():
-        path = line.split()[0]
-        if len(path) > 0:
-            excluded_paths.append(path)
+        words = line.split()
+        # if a line starts with #, followed by a whitespace or line-end,
+        # it's a comment line.
+        if len(words) == 0 or words[0] == '#' or words[0] == '':
+            continue
+
+        # The first word in each line is a path.
+        # Some exempt_dirs.txt files may have additional words in each line
+        # (e.g., "third_party 1 2")
+        #
+        ## The additional words are present in legacy files for historical
+        # reasons only. DO NOT parse or require these additional words.
+        excluded_paths.append(words[0])
 
     excluded_paths = set(excluded_paths)
     for f in input_api.AffectedFiles():
@@ -2571,3 +2955,82 @@ def CheckUpdateOwnersFileReferences(input_api, output_api):
             'OWNERS files being moved/removed, please update any file:// ' +
             'references to them in other OWNERS files', files)
     ]
+
+
+def CheckValidHostsInDEPSOnUpload(input_api, output_api):
+    """Checks that DEPS file deps are from allowed_hosts."""
+    # Run only if DEPS file has been modified to annoy fewer bystanders.
+    if all(f.LocalPath() != 'DEPS' for f in input_api.AffectedFiles()):
+        return []
+    # Outsource work to gclient verify
+    try:
+        gclient_path = input_api.os_path.join(_HERE, 'gclient.py')
+        input_api.subprocess.check_output(
+            [input_api.python3_executable, gclient_path, 'verify'],
+            stderr=input_api.subprocess.STDOUT)
+        return []
+    except input_api.subprocess.CalledProcessError as error:
+        return [
+            output_api.PresubmitError(
+                'DEPS file must have only git dependencies.',
+                long_text=error.output)
+        ]
+
+
+def CheckAyeAye(input_api, output_api):
+    """
+    Runs AyeAye analyzers.
+    """
+
+    def strip_ansi_codes(text):
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        return ansi_escape.sub('', text)
+
+    def strip_severity_prefix(text):
+        for prefix in ["ERROR:", "WARNING:", "INFO:"]:
+            if text.startswith(prefix):
+                return text[len(prefix):].strip()
+        return text
+
+    alint_path = '/google/bin/releases/alint/alint'
+    command = [alint_path, '--', '-t=9s']
+    if not _os.path.exists(alint_path):
+        return []
+
+    # Determine the git repository root
+    repo_root = input_api.change.RepositoryRoot()
+    if not repo_root:
+        return [
+            output_api.PresubmitError("Could not determine repository root.")
+        ]
+
+    try:
+        process = input_api.subprocess.Popen(command,
+                                             stdout=input_api.subprocess.PIPE,
+                                             stderr=input_api.subprocess.STDOUT,
+                                             cwd=repo_root)
+        stdout, _ = process.communicate()
+        output_str = stdout.decode('utf-8', 'ignore')
+
+        if not output_str.strip():
+            return []
+
+        results = []
+        for line in output_str.splitlines():
+            clean_line = strip_ansi_codes(line).strip()
+            if not clean_line:
+                continue
+            if clean_line.startswith("ERROR:"):
+                results.append(
+                    output_api.PresubmitError(
+                        strip_severity_prefix(clean_line)))
+            elif clean_line.startswith("WARNING:"):
+                results.append(
+                    output_api.PresubmitPromptWarning(
+                        strip_severity_prefix(clean_line)))
+        return results
+    except Exception as e:
+        return [
+            output_api.PresubmitError(
+                f"Unexpected error in CheckAyeAye: {type(e).__name__} - {e}")
+        ]

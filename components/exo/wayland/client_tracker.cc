@@ -4,6 +4,8 @@
 
 #include "components/exo/wayland/client_tracker.h"
 
+#include "base/compiler_specific.h"
+
 namespace exo::wayland {
 
 ClientTracker::ClientTracker(wl_display* wl_display)
@@ -40,8 +42,8 @@ ClientTracker::ClientListener::ClientListener(ClientTracker* tracker,
 
 // static.
 void ClientTracker::OnClientCreated(struct wl_listener* listener, void* data) {
-  ClientListener* client_created_listener = wl_container_of(
-      listener, /*sample=*/client_created_listener, /*member=*/listener);
+  ClientListener* client_created_listener = UNSAFE_TODO(wl_container_of(
+      listener, /*sample=*/client_created_listener, /*member=*/listener));
   wl_client* client = static_cast<wl_client*>(data);
   ClientTracker* tracker = client_created_listener->tracker;
   tracker->HandleClientCreated(client);
@@ -50,8 +52,8 @@ void ClientTracker::OnClientCreated(struct wl_listener* listener, void* data) {
 // static.
 void ClientTracker::OnClientDestroyed(struct wl_listener* listener,
                                       void* data) {
-  ClientListener* client_destroyed_listener = wl_container_of(
-      listener, /*sample=*/client_destroyed_listener, /*member=*/listener);
+  ClientListener* client_destroyed_listener = UNSAFE_TODO(wl_container_of(
+      listener, /*sample=*/client_destroyed_listener, /*member=*/listener));
   wl_client* client = static_cast<wl_client*>(data);
   ClientTracker* tracker = client_destroyed_listener->tracker;
   tracker->HandleClientDestroyed(client);

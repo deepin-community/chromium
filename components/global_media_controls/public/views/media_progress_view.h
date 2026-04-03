@@ -6,6 +6,7 @@
 #define COMPONENTS_GLOBAL_MEDIA_CONTROLS_PUBLIC_VIEWS_MEDIA_PROGRESS_VIEW_H_
 
 #include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/color/color_id.h"
@@ -19,20 +20,51 @@ struct MediaPosition;
 
 namespace global_media_controls {
 
+enum class DragState {
+  kDragStarted = 0,
+  kDragEnded = 1,
+};
+
+enum class PlaybackStateChangeForDragging {
+  kPauseForDraggingStarted = 0,
+  kResumeForDraggingEnded = 1,
+};
+
 class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaProgressView
     : public views::BoxLayoutView,
       public gfx::AnimationDelegate {
   METADATA_HEADER(MediaProgressView, views::BoxLayoutView)
 
  public:
+  // |MediaProgressView| draws a straight or squiggly progress line with the
+  // given color IDs and runs the given callbacks when certain conditions are
+  // met.
+  //
+  // |drag_state_change_callback|: Runs when the user starts or ends dragging
+  // the progress view.
+  //
+  // |playback_state_change_for_dragging_callback|: Runs when the user starts or
+  // ends dragging the progress view, and the media is playing before dragging
+  // starts so its playback state needs to change.
+  //
+  // |seek_callback|: Runs when the progress view wants the media to seek to a
+  // new position since the user interacts with the progress view.
+  //
+  // |on_update_progress_callback|: Runs when the progress view wants to inform
+  // the current progress position since it can change after time.
   explicit MediaProgressView(
+      bool use_squiggly_line,
       ui::ColorId playing_foreground_color_id,
       ui::ColorId playing_background_color_id,
       ui::ColorId paused_foreground_color_id,
       ui::ColorId paused_background_color_id,
       ui::ColorId focus_ring_color_id,
-      base::RepeatingCallback<void(bool)> dragging_callback,
-      base::RepeatingCallback<void(double)> seek_callback);
+      base::RepeatingCallback<void(DragState)> drag_state_change_callback,
+      base::RepeatingCallback<void(PlaybackStateChangeForDragging)>
+          playback_state_change_for_dragging_callback,
+      base::RepeatingCallback<void(double)> seek_callback,
+      base::RepeatingCallback<void(base::TimeDelta)>
+          on_update_progress_callback);
   MediaProgressView(const MediaProgressView&) = delete;
   MediaProgressView& operator=(const MediaProgressView&) = delete;
   ~MediaProgressView() override;
@@ -41,14 +73,17 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaProgressView
   void AnimationProgressed(const gfx::Animation* animation) override;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   bool HandleAccessibleAction(const ui::AXActionData& action_data) override;
   void VisibilityChanged(View* starting_from, bool is_visible) override;
   void AddedToWidget() override;
   void OnPaint(gfx::Canvas* canvas) override;
   void OnFocus() override;
   void OnBlur() override;
+  void OnMouseEntered(const ui::MouseEvent& event) override;
+  void OnMouseExited(const ui::MouseEvent& event) override;
+  ui::Cursor GetCursor(const ui::MouseEvent& event) override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   bool OnMouseDragged(const ui::MouseEvent& event) override;
   void OnMouseReleased(const ui::MouseEvent& event) override;
@@ -58,19 +93,42 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaProgressView
   // Updates the progress in UI given the new media position.
   void UpdateProgress(const media_session::MediaPosition& media_position);
 
+  // Returns the update interval based on the current progress line type
+  // (squiggly vs. straight).
+  base::TimeDelta GetUpdateInterval() const;
+
   // Helper functions for testing:
   double current_value_for_testing() const;
+  int phase_offset_for_testing() const;
+  double progress_amp_fraction_for_testing() const;
+  int straight_progress_stroke_width_for_testing() const;
   bool is_paused_for_testing() const;
   bool is_live_for_testing() const;
+  bool use_paused_colors_for_testing() const;
+  void set_update_progress_timer_for_testing(
+      std::unique_ptr<base::OneShotTimer> test_timer);
+  void set_switch_progress_colors_delay_timer_for_testing(
+      std::unique_ptr<base::OneShotTimer> test_timer);
+  void set_progress_drag_started_delay_timer_for_testing(
+      std::unique_ptr<base::OneShotTimer> test_timer);
+  gfx::SlideAnimation& slide_animation_for_testing();
+  gfx::SlideAnimation& thickness_animation_for_testing();
 
  private:
   // Fires an accessibility event if the progress has changed.
   void MaybeNotifyAccessibilityValueChanged();
 
   // Handles the event when user drags the progress line using a mouse or
-  // gesture on a tablet.
-  void OnProgressDragStarted();
+  // gesture on a tablet. If the user only intends to click, these functions are
+  // still called but the work will be skipped.
+  void OnProgressDragStarted(double location);
+  void DelayedProgressDragStarted(double location);
   void OnProgressDragEnded();
+  void PauseForDragging();
+
+  // Updates the colors of the progress view based on whether the media is
+  // paused.
+  void UpdateProgressColors(bool is_paused);
 
   // Handles the event when user seeks to a new location on the progress view.
   void HandleSeeking(double location);
@@ -82,13 +140,18 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaProgressView
   bool IsValidSeekPosition(int x, int y);
 
   // Init parameters.
+  bool use_squiggly_line_;
   ui::ColorId playing_foreground_color_id_;
   ui::ColorId playing_background_color_id_;
   ui::ColorId paused_foreground_color_id_;
   ui::ColorId paused_background_color_id_;
   ui::ColorId focus_ring_color_id_;
-  const base::RepeatingCallback<void(bool)> dragging_callback_;
+  const base::RepeatingCallback<void(DragState)> drag_state_change_callback_;
+  const base::RepeatingCallback<void(PlaybackStateChangeForDragging)>
+      playback_state_change_for_dragging_callback_;
   const base::RepeatingCallback<void(double)> seek_callback_;
+  const base::RepeatingCallback<void(base::TimeDelta)>
+      on_update_progress_callback_;
 
   // Current progress value in the range from 0.0 to 1.0.
   double current_value_ = 0.0;
@@ -101,8 +164,8 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaProgressView
   // between squiggly and straight lines, in the range from 0.0 to 1.0.
   double progress_amp_fraction_ = 0;
 
-  // The percentage progress value last announced for accessibility.
-  int last_announced_percentage_ = -1;
+  // The media position last announced for accessibility.
+  base::TimeDelta last_announced_position_;
 
   // The progress phase offset changing as time passes for the progress wave to
   // move.
@@ -112,8 +175,22 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaProgressView
   // lines.
   gfx::SlideAnimation slide_animation_;
 
+  // Animation for progress line to transition between thicker and less thick
+  // states.
+  gfx::SlideAnimation thickness_animation_;
+
   // Timer to continuously update the progress value if the media is playing.
-  base::OneShotTimer update_progress_timer_;
+  std::unique_ptr<base::OneShotTimer> update_progress_timer_ =
+      std::make_unique<base::OneShotTimer>();
+
+  // Timer to delay switching the colors for the progress view.
+  std::unique_ptr<base::OneShotTimer> switch_progress_colors_delay_timer_ =
+      std::make_unique<base::OneShotTimer>();
+
+  // Timer to delay considering the user is dragging the progress view rather
+  // than clicking.
+  std::unique_ptr<base::OneShotTimer> progress_drag_started_delay_timer_ =
+      std::make_unique<base::OneShotTimer>();
 
   // True if the media is paused.
   bool is_paused_ = true;
@@ -124,6 +201,16 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaProgressView
   // Whether the media is currently paused due to the user dragging the progress
   // line.
   bool paused_for_dragging_ = false;
+
+  // True if the user is currently dragging the progress line.
+  bool is_dragging_ = false;
+
+  // Whether we should use the paused colors for the progress view.
+  bool use_paused_colors_ = true;
+
+  // Stroke width for the straight progress line that changes depending on
+  // whether the user is dragging the progress line.
+  int straight_progress_stroke_width_ = 0;
 };
 
 }  // namespace global_media_controls

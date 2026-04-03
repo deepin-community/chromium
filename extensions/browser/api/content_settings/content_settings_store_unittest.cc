@@ -8,20 +8,26 @@
 
 #include <memory>
 
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/content_settings_rule.h"
+#include "components/content_settings/core/browser/content_settings_uma_util.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
 #include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/test/content_settings_test_utils.h"
 #include "components/permissions/features.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/types.h"
 #include "extensions/common/extension_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using extensions::api::types::ChromeSettingScope;
 using ::testing::Mock;
@@ -67,20 +73,8 @@ ContentSetting GetContentSettingFromStore(
   auto rule =
       store->GetRule(primary_url, secondary_url, content_type, incognito);
 
-  std::unique_ptr<content_settings::RuleIterator> rule_iterator(
-      store->GetRuleIterator(content_type, incognito));
-  const base::Value setting =
-      content_settings::TestUtils::GetContentSettingValueAndPatterns(
-          rule_iterator.get(), primary_url, secondary_url, nullptr, nullptr);
-
-  // Compare iterator lookup with direct lookup.
-  if (rule) {
-    EXPECT_EQ(setting, rule->value);
-  } else {
-    EXPECT_TRUE(setting.is_none());
-  }
-
-  return content_settings::ValueToContentSetting(setting);
+  return rule ? content_settings::ValueToContentSetting(rule->value)
+              : CONTENT_SETTING_DEFAULT;
 }
 
 std::vector<std::unique_ptr<content_settings::Rule>>
@@ -262,10 +256,10 @@ TEST_F(ContentSettingsStoreTest, SetFromList) {
   EXPECT_CALL(observer, OnContentSettingChanged(ext_id, false));
 
   // Build a preference list in JSON format.
-  base::Value::List pref_list;
+  base::ListValue pref_list;
   // {"primaryPattern": pattern, "secondaryPattern": pattern, "type": "cookies",
   //  "setting": "allow"}
-  base::Value::Dict dict_value;
+  base::DictValue dict_value;
   dict_value.Set(ContentSettingsStore::kPrimaryPatternKey, pattern.ToString());
   dict_value.Set(ContentSettingsStore::kSecondaryPatternKey,
                  pattern.ToString());
@@ -275,7 +269,7 @@ TEST_F(ContentSettingsStoreTest, SetFromList) {
   // Test content settings types that have been removed. Should be ignored.
   // {"primaryPattern": pattern, "secondaryPattern": pattern,
   //  "type": "fullscreen", "setting": "allow"}
-  dict_value = base::Value::Dict();
+  dict_value = base::DictValue();
   dict_value.Set(ContentSettingsStore::kPrimaryPatternKey, pattern.ToString());
   dict_value.Set(ContentSettingsStore::kSecondaryPatternKey,
                  pattern.ToString());
@@ -284,7 +278,7 @@ TEST_F(ContentSettingsStoreTest, SetFromList) {
   pref_list.Append(std::move(dict_value));
   // {"primaryPattern": pattern, "secondaryPattern": pattern,
   //  "type": "mouselock", "setting": "allow"}
-  dict_value = base::Value::Dict();
+  dict_value = base::DictValue();
   dict_value.Set(ContentSettingsStore::kPrimaryPatternKey, pattern.ToString());
   dict_value.Set(ContentSettingsStore::kSecondaryPatternKey,
                  pattern.ToString());
@@ -325,8 +319,8 @@ TEST_F(ContentSettingsStoreTest, RemoveEmbedded) {
   EXPECT_CALL(observer, OnContentSettingChanged(ext_id, false)).Times(1);
 
   // Build a preference list in JSON format.
-  base::Value::List pref_list;
-  base::Value::Dict dict_value;
+  base::ListValue pref_list;
+  base::DictValue dict_value;
   dict_value.Set(ContentSettingsStore::kPrimaryPatternKey,
                  primary_pattern.ToString());
   dict_value.Set(ContentSettingsStore::kSecondaryPatternKey,
@@ -335,7 +329,7 @@ TEST_F(ContentSettingsStoreTest, RemoveEmbedded) {
   dict_value.Set(ContentSettingsStore::kContentSettingKey, "allow");
   pref_list.Append(std::move(dict_value));
 
-  dict_value = base::Value::Dict();
+  dict_value = base::DictValue();
   dict_value.Set(ContentSettingsStore::kPrimaryPatternKey,
                  primary_pattern.ToString());
   dict_value.Set(ContentSettingsStore::kSecondaryPatternKey,
@@ -360,13 +354,45 @@ TEST_F(ContentSettingsStoreTest, RemoveEmbedded) {
   store()->RemoveObserver(&observer);
 }
 
+TEST_F(ContentSettingsStoreTest, ChromeExtensionOriginMetrics) {
+  base::HistogramTester histogram_tester;
+  content_settings::ContentSettingsRegistry::GetInstance();
+  std::string extension_id(32, 'a');
+  ContentSettingsPattern chrome_extension_pattern =
+      ContentSettingsPattern::FromString("*://" + extension_id + "/*");
+  ContentSettingsPattern https_pattern =
+      ContentSettingsPattern::FromString("https://example.test/");
+
+  RegisterExtension(extension_id);
+  store()->SetExtensionContentSetting(
+      extension_id, chrome_extension_pattern, https_pattern,
+      ContentSettingsType::COOKIES, CONTENT_SETTING_ALLOW,
+      ChromeSettingScope::kRegular);
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.ContentSettings.PrimaryPatternMatchesExtensionOrigin",
+      content_settings_uma_util::ContentSettingTypeToHistogramValue(
+          ContentSettingsType::COOKIES),
+      1);
+
+  RegisterExtension(extension_id);
+  store()->SetExtensionContentSetting(
+      extension_id, https_pattern, chrome_extension_pattern,
+      ContentSettingsType::IMAGES, CONTENT_SETTING_ALLOW,
+      ChromeSettingScope::kRegular);
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.ContentSettings.SecondaryPatternMatchesExtensionOrigin",
+      content_settings_uma_util::ContentSettingTypeToHistogramValue(
+          ContentSettingsType::IMAGES),
+      1);
+}
+
 TEST_F(ContentSettingsStoreTest, SetExtensionContentSettingFromList) {
   content_settings::ContentSettingsRegistry::GetInstance();
 
   std::string extension = "extension_id";
   RegisterExtension(extension);
 
-  base::Value::Dict valid_setting;
+  base::DictValue valid_setting;
   valid_setting.Set(ContentSettingsStore::kPrimaryPatternKey,
                     "http://example1.com");
   valid_setting.Set(ContentSettingsStore::kSecondaryPatternKey, "*");
@@ -375,7 +401,7 @@ TEST_F(ContentSettingsStoreTest, SetExtensionContentSettingFromList) {
   valid_setting.Set(ContentSettingsStore::kContentSettingKey, "allow");
 
   // Missing secondary key.
-  base::Value::Dict invalid_setting1;
+  base::DictValue invalid_setting1;
   invalid_setting1.Set(ContentSettingsStore::kPrimaryPatternKey,
                        "http://example2.com");
   invalid_setting1.Set(ContentSettingsStore::kContentSettingsTypeKey,
@@ -383,7 +409,7 @@ TEST_F(ContentSettingsStoreTest, SetExtensionContentSettingFromList) {
   invalid_setting1.Set(ContentSettingsStore::kContentSettingKey, "allow");
 
   // Invalid secondary pattern.
-  base::Value::Dict invalid_setting2;
+  base::DictValue invalid_setting2;
   invalid_setting2.Set(ContentSettingsStore::kPrimaryPatternKey,
                        "http://example3.com");
   invalid_setting2.Set(ContentSettingsStore::kSecondaryPatternKey, "[*.].");
@@ -392,7 +418,7 @@ TEST_F(ContentSettingsStoreTest, SetExtensionContentSettingFromList) {
   invalid_setting2.Set(ContentSettingsStore::kContentSettingKey, "allow");
 
   // Invalid setting.
-  base::Value::Dict invalid_setting3;
+  base::DictValue invalid_setting3;
   invalid_setting3.Set(ContentSettingsStore::kPrimaryPatternKey,
                        "http://example4.com");
   invalid_setting3.Set(ContentSettingsStore::kSecondaryPatternKey, "*");
@@ -400,7 +426,7 @@ TEST_F(ContentSettingsStoreTest, SetExtensionContentSettingFromList) {
                        "javascript");
   invalid_setting3.Set(ContentSettingsStore::kContentSettingKey, "notasetting");
 
-  base::Value::List list;
+  base::ListValue list;
   list.Append(valid_setting.Clone());
   list.Append(invalid_setting1.Clone());
   list.Append(invalid_setting2.Clone());
@@ -408,7 +434,7 @@ TEST_F(ContentSettingsStoreTest, SetExtensionContentSettingFromList) {
   store()->SetExtensionContentSettingFromList(extension, list,
                                               ChromeSettingScope::kRegular);
 
-  base::Value::List expected;
+  base::ListValue expected;
   expected.Append(valid_setting.Clone());
   EXPECT_EQ(expected, store()->GetSettingsForExtension(
                           extension, ChromeSettingScope::kRegular));

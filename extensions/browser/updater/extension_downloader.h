@@ -12,6 +12,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
@@ -234,7 +235,7 @@ class ExtensionDownloader {
                       const bool is_force_installed);
     ~FetchDataGroupKey();
 
-    bool operator<(const FetchDataGroupKey& other) const;
+    auto operator<=>(const FetchDataGroupKey& rhs) const = default;
 
     int request_id{0};
     GURL update_url;
@@ -291,7 +292,7 @@ class ExtensionDownloader {
 
   // Handles the result of a manifest fetch.
   void OnManifestLoadComplete(std::unique_ptr<network::SimpleURLLoader> loader,
-                              std::unique_ptr<std::string> response_body);
+                              std::optional<std::string> response_body);
 
   // Once a manifest is parsed, this starts fetches of any relevant crx files.
   // If |results| is null, it means something went wrong when parsing it.
@@ -417,6 +418,7 @@ class ExtensionDownloader {
   UpdateAvailability GetUpdateAvailability(
       const ExtensionId& extension_id,
       const std::vector<const UpdateManifestResult*>& possible_candidates,
+      bool is_corrupt_reinstall,
       UpdateManifestResult** update_result_out) const;
 
   // The delegate that receives the crx files downloaded by the

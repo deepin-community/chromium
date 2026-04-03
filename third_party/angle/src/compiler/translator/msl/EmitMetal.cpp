@@ -4,18 +4,23 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <cctype>
 #include <map>
 
 #include "common/system_utils.h"
 #include "compiler/translator/BaseTypes.h"
 #include "compiler/translator/ImmutableStringBuilder.h"
+#include "compiler/translator/Name.h"
+#include "compiler/translator/OutputTree.h"
 #include "compiler/translator/SymbolTable.h"
 #include "compiler/translator/msl/AstHelpers.h"
 #include "compiler/translator/msl/DebugSink.h"
 #include "compiler/translator/msl/EmitMetal.h"
 #include "compiler/translator/msl/Layout.h"
-#include "compiler/translator/msl/Name.h"
 #include "compiler/translator/msl/ProgramPrelude.h"
 #include "compiler/translator/msl/RewritePipelines.h"
 #include "compiler/translator/msl/TranslatorMSL.h"
@@ -522,12 +527,14 @@ static const char *GetOperatorString(TOperator op,
             return "metal::rint";
         case TOperator::EOpClamp:
             return "metal::clamp";  // TODO fast vs precise namespace
+        case TOperator::EOpLoopForwardProgress:
+            return "ANGLE_loopForwardProgress";
         case TOperator::EOpSaturate:
             return "metal::saturate";  // TODO fast vs precise namespace
         case TOperator::EOpMix:
-            if (!argType1->isScalar() && argType2 && argType2->getBasicType() == EbtBool)
+            if (argType2 && argType2->getBasicType() == EbtBool)
             {
-                return "ANGLE_mix_bool";
+                return "metal::select";
             }
             return "metal::mix";
         case TOperator::EOpStep:
@@ -693,9 +700,6 @@ static const char *GetOperatorString(TOperator op,
         case TOperator::EOpAtomicCompSwap:
         case TOperator::EOpEmitVertex:
         case TOperator::EOpEndPrimitive:
-        case TOperator::EOpFtransform:
-        case TOperator::EOpPackDouble2x32:
-        case TOperator::EOpUnpackDouble2x32:
         case TOperator::EOpArrayLength:
             UNIMPLEMENTED();
             return "TOperator_TODO";
@@ -1037,7 +1041,7 @@ void GenMetalTraverser::emitType(const TType &type, const EmitTypeConfig &etConf
         {
             if (type.isArray())
             {
-                mOut << "ANGLE_tensor<";
+                mOut << "metal::array<";
             }
         }
         if (evdConfig.isPointer)
@@ -1056,7 +1060,7 @@ void GenMetalTraverser::emitType(const TType &type, const EmitTypeConfig &etConf
     {
         if (type.isArray())
         {
-            mOut << "ANGLE_tensor<";
+            mOut << "metal::array<";
         }
     }
 
@@ -1254,8 +1258,8 @@ void GenMetalTraverser::emitFieldDeclaration(const TField &field,
                         // Put fragment inouts in their own raster order group for better
                         // parallelism.
                         // NOTE: this is not required for the reads to be ordered and coherent.
-                        // TODO(anglebug.com/7279): Consider making raster order groups a PLS layout
-                        // qualifier?
+                        // TODO(anglebug.com/40096838): Consider making raster order groups a PLS
+                        // layout qualifier?
                         mOut << ", raster_order_group(0)";
                     }
                     mOut << "]]";
@@ -1776,7 +1780,7 @@ bool GenMetalTraverser::visitBinary(Visit, TIntermBinary *binaryNode)
             groupedTraverse(leftNode);
             mOut << "[";
             const TConstantUnion *constIndex = rightNode.getConstantValue();
-            // TODO(anglebug.com/8491): Convert type and bound checks to
+            // TODO(anglebug.com/42266914): Convert type and bound checks to
             // assertions after AST validation is enabled for MSL translation.
             if (!leftType.isUnsizedArray() && constIndex != nullptr &&
                 constIndex->getType() == EbtInt && constIndex->getIConst() >= 0 &&
@@ -1870,6 +1874,11 @@ bool GenMetalTraverser::visitUnary(Visit, TIntermUnary *unaryNode)
 
     TIntermTyped &arg    = *unaryNode->getOperand();
     const TType &argType = arg.getType();
+
+    if (op == TOperator::EOpIsnan || op == TOperator::EOpIsinf)
+    {
+        mtl::getTranslatorMetalReflection(&mCompiler)->hasIsnanOrIsinf = true;
+    }
 
     const char *name = GetOperatorString(op, resultType, &argType, nullptr, nullptr);
 
@@ -2160,9 +2169,6 @@ GenMetalTraverser::FuncToName GenMetalTraverser::BuildFuncToName()
     putAngle("texelFetch");
     putAngle("texelFetchOffset");
     putAngle("texture");
-    putAngle("texture1D");
-    putAngle("texture1DLod");
-    putAngle("texture1DProjLod");
     putAngle("texture2D");
     putAngle("texture2DGradEXT");
     putAngle("texture2DLod");
@@ -2171,16 +2177,14 @@ GenMetalTraverser::FuncToName GenMetalTraverser::BuildFuncToName()
     putAngle("texture2DProjGradEXT");
     putAngle("texture2DProjLod");
     putAngle("texture2DProjLodEXT");
-    putAngle("texture2DRect");
-    putAngle("texture2DRectProj");
     putAngle("texture3D");
     putAngle("texture3DLod");
+    putAngle("texture3DProj");
     putAngle("texture3DProjLod");
     putAngle("textureCube");
     putAngle("textureCubeGradEXT");
     putAngle("textureCubeLod");
     putAngle("textureCubeLodEXT");
-    putAngle("textureCubeProjLod");
     putAngle("textureGrad");
     putAngle("textureGradOffset");
     putAngle("textureLod");

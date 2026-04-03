@@ -13,89 +13,110 @@
 // limitations under the License.
 
 import m from 'mithril';
-
-import {channelChanged, getNextChannel, setChannel} from '../common/channels';
+import {channelChanged, getNextChannel, setChannel} from '../core/channels';
 import {Anchor} from '../widgets/anchor';
 import {HotkeyGlyphs} from '../widgets/hotkey_glyphs';
-
-import {globals} from './globals';
-import {createPage} from './pages';
+import {assetSrc} from '../base/assets';
+import {Stack} from '../widgets/stack';
+import {Switch} from '../widgets/switch';
+import {AppImpl} from '../core/app_impl';
 
 export class Hints implements m.ClassComponent {
   view() {
+    const themeSetting = AppImpl.instance.settings.get<string>('theme');
+    const isDarkMode = themeSetting?.get() === 'dark';
+
     return m(
-      '.home-page-hints',
-      m('.tagline', 'New!'),
+      '.pf-home-page__hints',
+      m('.pf-home-page__tagline', 'New!'),
       m(
         'ul',
+        m('li', [
+          m(Switch, {
+            label: ['Try the new dark mode.', isDarkMode && ' \u{1F60E}'],
+            checked: isDarkMode,
+            onchange: (e) => {
+              themeSetting?.set(
+                (e.target as HTMLInputElement).checked ? 'dark' : 'light',
+              );
+            },
+          }),
+        ]),
         m(
           'li',
-          'New updated ',
-          m(
-            Anchor,
-            {
-              href: 'https://perfetto.dev/docs/visualization/perfetto-ui#tabs-v2',
-            },
-            'tabs',
-          ),
-          ' are extensible and user friendly.',
+          'Press ',
+          m(HotkeyGlyphs, {hotkey: 'Mod+P'}),
+          ' to quickly find tracks with fuzzy search.',
         ),
         m(
           'li',
           'Use ',
-          m(HotkeyGlyphs, {hotkey: 'W'}),
-          m(HotkeyGlyphs, {hotkey: 'A'}),
-          m(HotkeyGlyphs, {hotkey: 'S'}),
-          m(HotkeyGlyphs, {hotkey: 'D'}),
+          m(
+            Stack,
+            {inline: true, spacing: 'small', orientation: 'horizontal'},
+            [
+              m(HotkeyGlyphs, {hotkey: 'W'}),
+              m(HotkeyGlyphs, {hotkey: 'A'}),
+              m(HotkeyGlyphs, {hotkey: 'S'}),
+              m(HotkeyGlyphs, {hotkey: 'D'}),
+            ],
+          ),
           ' to navigate the trace.',
         ),
-        m('li',
+        m(
+          'li',
           'Try the ',
-          m(Anchor,
+          m(
+            Anchor,
             {
-              href:
-                      'https://perfetto.dev/docs/visualization/perfetto-ui#command-palette',
+              href: 'https://perfetto.dev/docs/visualization/perfetto-ui#command-palette',
             },
-            'command palette,'),
+            'command palette,',
+          ),
           ' press ',
           m(HotkeyGlyphs, {hotkey: '!Mod+Shift+P'}),
-          '.'),
+          '.',
+        ),
       ),
     );
   }
 }
 
-export const HomePage = createPage({
+export class HomePage implements m.ClassComponent {
   view() {
     return m(
-      '.page.home-page',
+      '.pf-home-page',
       m(
-        '.home-page-center',
+        '.pf-home-page__center',
         m(
-          '.home-page-title',
-          m(`img.logo[src=${globals.root}assets/logo-3d.png]`),
+          '.pf-home-page__title',
+          m(`img.logo[src=${assetSrc('assets/logo-3d.png')}]`),
           'Perfetto',
         ),
         m(Hints),
         m(
-          '.channel-select',
-          m('',
-            'Feeling adventurous? Try our bleeding edge Canary version'),
+          '.pf-home-page__channel-select',
+          m('', 'Feeling adventurous? Try our bleeding edge Canary version'),
           m(
             'fieldset',
             mkChan('stable'),
             mkChan('canary'),
-            m('.highlight'),
+            m('.pf-home-page__highlight'),
           ),
-          m(`.home-page-reload${channelChanged() ? '.show' : ''}`,
-            'You need to reload the page for the changes to have effect'),
+          m(
+            `.pf-home-page__reload${channelChanged() ? '.show' : ''}`,
+            'You need to reload the page for the changes to have effect',
+          ),
         ),
       ),
-      m('a.privacy',
+      m(
+        'a.pf-privacy',
         {href: 'https://policies.google.com/privacy', target: '_blank'},
-        'Privacy policy'));
-  },
-});
+        'Privacy policy',
+      ),
+    );
+  }
+}
 
 function mkChan(chan: string) {
   const checked = getNextChannel() === chan ? '[checked=true]' : '';

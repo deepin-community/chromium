@@ -14,8 +14,13 @@ limitations under the License.
 ==============================================================================*/
 
 #include "tensorflow/core/grappler/graph_analyzer/gen_node.h"
-#include "absl/memory/memory.h"
+
+#include <memory>
+
+#include "absl/status/status.h"
 #include "absl/strings/str_format.h"
+#include "tensorflow/core/framework/graph.pb.h"
+#include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/grappler/graph_analyzer/hash_tools.h"
 #include "tensorflow/core/grappler/op_types.h"
@@ -27,19 +32,19 @@ namespace graph_analyzer {
 
 GenNode::GenNode(const NodeDef* node) : node_(node), op_(nullptr) {}
 
-Status GenNode::BuildGraphInMap(const GraphDef& source, GenNodeMap* map) {
+absl::Status GenNode::BuildGraphInMap(const GraphDef& source, GenNodeMap* map) {
   for (const auto& n : source.node()) {
-    const string& name = n.name();
+    const std::string& name = n.name();
     if (map->find(name) != map->end()) {
       // This error code looks more meaningful than ALREADY_EXISTS.
-      return Status(absl::StatusCode::kInvalidArgument,
-                    "Duplicate node name '" + name + "'.");
+      return absl::Status(absl::StatusCode::kInvalidArgument,
+                          "Duplicate node name '" + name + "'.");
     }
     (*map)[name] = std::make_unique<GenNode>(&n);
   }
   // Now parse the links.
   for (const auto& mapit : *map) {
-    Status st = mapit.second->ParseInputs(map);
+    absl::Status st = mapit.second->ParseInputs(map);
     if (!st.ok()) {
       return st;
     }
@@ -47,11 +52,11 @@ Status GenNode::BuildGraphInMap(const GraphDef& source, GenNodeMap* map) {
   return absl::OkStatus();
 }
 
-Status GenNode::ParseInputs(const GenNodeMap* map) {
+absl::Status GenNode::ParseInputs(const GenNodeMap* map) {
   all_inputs_or_none_ = false;
-  Status st = OpRegistry::Global()->LookUpOpDef(opcode(), &op_);
+  absl::Status st = OpRegistry::Global()->LookUpOpDef(opcode(), &op_);
   if (!st.ok()) {
-    return Status(
+    return absl::Status(
         absl::StatusCode::kInvalidArgument,
         absl::StrFormat("Node '%s' contains an undefined operation '%s': %s",
                         name(), opcode(), st.message()));
@@ -90,10 +95,10 @@ Status GenNode::ParseInputs(const GenNodeMap* map) {
 
   for (int i = 0; i < n_inputs; ++i) {
     int other_position;
-    string other_name = ParseNodeName(node_->input(i), &other_position);
+    std::string other_name = ParseNodeName(node_->input(i), &other_position);
     auto other_it = map->find(other_name);
     if (other_it == map->end()) {
-      return Status(
+      return absl::Status(
           absl::StatusCode::kInvalidArgument,
           absl::StrFormat(
               "Node '%s' input %d refers to a non-existing node '%s'.", name(),
@@ -105,7 +110,7 @@ Status GenNode::ParseInputs(const GenNodeMap* map) {
 
     if (this_position >= 0 && n_multi_inputs == 0 &&
         this_position >= n_named_inputs) {
-      return Status(
+      return absl::Status(
           absl::StatusCode::kInvalidArgument,
           absl::StrFormat(
               "Node '%s' has a non-control input from '%s' at index %d but its "
@@ -133,8 +138,8 @@ bool GenNode::IsMultiInput(Port port) const {
   return (it->second.size() > 1);
 }
 
-GenNode::Port::operator string() const {
-  string result = this->IsInbound() ? "i" : "o";
+GenNode::Port::operator std::string() const {
+  std::string result = this->IsInbound() ? "i" : "o";
   if (this->IsControl()) {
     result.append("C");
   } else {

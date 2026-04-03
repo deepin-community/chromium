@@ -6,28 +6,37 @@
 #define CHROME_BROWSER_UI_VIEWS_WEBAUTHN_MAC_AUTHENTICATION_VIEW_H_
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/functional/callback_forward.h"
-#include "base/memory/scoped_refptr.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "base/timer/timer.h"
+#include "chrome/browser/webauthn/local_authentication_token.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/views/view.h"
 
 // MacAuthenticationView wraps an `LAAuthenticationView` such that it can be
 // used in Views. It shows a biometric UI on macOS that collects Touch ID, and
 // then triggers a callback.
-class API_AVAILABLE(macos(12)) MacAuthenticationView : public views::View {
+class MacAuthenticationView : public views::View {
   METADATA_HEADER(MacAuthenticationView, views::View)
 
  public:
-  explicit MacAuthenticationView(
-      // This callback is called when Touch ID is complete with a boolean that
-      // indicates whether the operation was successful.
-      base::OnceCallback<void(bool)> callback);
+  using Callback = base::OnceCallback<void(
+      std::optional<webauthn::LocalAuthenticationToken>)>;
+
+  // The callback is called when Touch ID is complete with a boolean that
+  // indicates whether the operation was successful and if successful, the
+  // authenticated LAContext.
+  explicit MacAuthenticationView(Callback callback,
+                                 std::u16string touch_id_reason);
   ~MacAuthenticationView() override;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void Layout(PassKey) override;
   void AddedToWidget() override;
   void RemovedFromWidget() override;
@@ -38,10 +47,13 @@ class API_AVAILABLE(macos(12)) MacAuthenticationView : public views::View {
   struct ObjCStorage;
 
   void OnAuthenticationComplete(bool success);
+  void OnTouchIDAnimationComplete(bool success);
 
-  base::OnceCallback<void(bool)> callback_;
+  Callback callback_;
   std::unique_ptr<ObjCStorage> storage_;
   bool evaluation_requested_ = false;
+  base::OneShotTimer touch_id_animation_timer_;
+  const std::u16string touch_id_reason_;
 
   base::WeakPtrFactory<MacAuthenticationView> weak_factory_{this};
 };

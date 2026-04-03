@@ -3,12 +3,13 @@
 // found in the LICENSE file.
 
 #include "partition_alloc/address_pool_manager.h"
-#include "partition_alloc/partition_alloc_buildflags.h"
+#include "partition_alloc/buildflags.h"
+#include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_constants.h"
 #include "partition_alloc/partition_root.h"
 #include "partition_alloc/thread_isolation/thread_isolation.h"
 
-#if BUILDFLAG(ENABLE_PKEYS)
+#if PA_BUILDFLAG(ENABLE_PKEYS)
 
 #include <link.h>
 #include <sys/mman.h>
@@ -54,11 +55,11 @@ int ProtFromSegmentFlags(ElfW(Word) flags) {
 }
 
 int ProtectROSegments(struct dl_phdr_info* info, size_t info_size, void* data) {
-  if (!strcmp(info->dlpi_name, "linux-vdso.so.1")) {
+  if (!PA_UNSAFE_TODO(strcmp(info->dlpi_name, "linux-vdso.so.1"))) {
     return 0;
   }
   for (int i = 0; i < info->dlpi_phnum; i++) {
-    const ElfW(Phdr)* phdr = &info->dlpi_phdr[i];
+    const ElfW(Phdr)* phdr = &PA_UNSAFE_TODO(info->dlpi_phdr[i]);
     if (phdr->p_type != PT_LOAD && phdr->p_type != PT_GNU_RELRO) {
       continue;
     }
@@ -111,7 +112,7 @@ class PkeyTest : public testing::Test {
     }
     isolated_globals.pkey = pkey;
 
-    isolated_globals.allocator->init([]() {
+    isolated_globals.allocator->init([] {
       partition_alloc::PartitionOptions opts;
       opts.thread_isolation = ThreadIsolationOption(isolated_globals.pkey);
       return opts;
@@ -271,4 +272,4 @@ TEST_F(PkeyTest, DumpPkeyPoolStats) {
 
 }  // namespace partition_alloc::internal
 
-#endif  // BUILDFLAG(ENABLE_THREAD_ISOLATION)
+#endif  // PA_BUILDFLAG(ENABLE_THREAD_ISOLATION)

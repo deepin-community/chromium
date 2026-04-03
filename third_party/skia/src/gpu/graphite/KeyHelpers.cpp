@@ -11,6 +11,8 @@
 #include "include/core/SkColorSpace.h"
 #include "include/core/SkData.h"
 #include "include/core/SkImageInfo.h"
+#include "include/core/SkM44.h"
+#include "include/core/SkScalar.h"
 #include "include/effects/SkRuntimeEffect.h"
 #include "include/gpu/graphite/Surface.h"
 #include "src/base/SkHalf.h"
@@ -34,6 +36,8 @@
 #include "src/gpu/DitherUtils.h"
 #include "src/gpu/Swizzle.h"
 #include "src/gpu/graphite/Caps.h"
+#include "src/gpu/graphite/DrawContext.h"
+#include "src/gpu/graphite/Image_Base_Graphite.h"
 #include "src/gpu/graphite/Image_Graphite.h"
 #include "src/gpu/graphite/Image_YUVA_Graphite.h"
 #include "src/gpu/graphite/KeyContext.h"
@@ -47,13 +51,13 @@
 #include "src/gpu/graphite/ResourceProvider.h"
 #include "src/gpu/graphite/RuntimeEffectDictionary.h"
 #include "src/gpu/graphite/ShaderCodeDictionary.h"
+#include "src/gpu/graphite/Surface_Graphite.h"
 #include "src/gpu/graphite/Texture.h"
 #include "src/gpu/graphite/TextureProxy.h"
 #include "src/gpu/graphite/TextureProxyView.h"
 #include "src/gpu/graphite/TextureUtils.h"
 #include "src/gpu/graphite/Uniform.h"
 #include "src/gpu/graphite/UniformManager.h"
-#include "src/gpu/graphite/YUVATextureProxies.h"
 #include "src/image/SkImage_Base.h"
 #include "src/shaders/SkBlendShader.h"
 #include "src/shaders/SkColorFilterShader.h"
@@ -63,6 +67,7 @@
 #include "src/shaders/SkImageShader.h"
 #include "src/shaders/SkLocalMatrixShader.h"
 #include "src/shaders/SkPerlinNoiseShaderImpl.h"
+#include "src/shaders/SkPerlinNoiseShaderType.h"
 #include "src/shaders/SkPictureShader.h"
 #include "src/shaders/SkRuntimeShader.h"
 #include "src/shaders/SkShaderBase.h"
@@ -70,13 +75,11 @@
 #include "src/shaders/SkTriColorShader.h"
 #include "src/shaders/SkWorkingColorSpaceShader.h"
 #include "src/shaders/gradients/SkConicalGradient.h"
-#include "src/shaders/gradients/SkGradientBaseShader.h"
 #include "src/shaders/gradients/SkLinearGradient.h"
 #include "src/shaders/gradients/SkRadialGradient.h"
 #include "src/shaders/gradients/SkSweepGradient.h"
 
-#define VALIDATE_UNIFORMS(gatherer, dict, codeSnippetID) \
-    SkDEBUGCODE(UniformExpectationsValidator uev(gatherer, dict->getUniforms(codeSnippetID));)
+using namespace skia_private;
 
 namespace skgpu::graphite {
 
@@ -84,90 +87,77 @@ namespace skgpu::graphite {
 
 namespace {
 
-void add_solid_uniform_data(const ShaderCodeDictionary* dict,
-                            const SkPMColor4f& premulColor,
-                            PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kSolidColorShader)
-    gatherer->write(premulColor);
+// Automatically calls beginStruct() with the required alignment and endStruct() when it is deleted.
+// Automatically registers uniform expectations in debug builds.
+class ScopedUniformWriter {
+public:
+    ScopedUniformWriter(const KeyContext& keyContext, BuiltInCodeSnippetID codeSnippetID)
+            : ScopedUniformWriter(keyContext.pipelineDataGatherer(),
+                                  keyContext.dict()->getEntry(codeSnippetID)) {}
+
+    ~ScopedUniformWriter() {
+        if (fGatherer) {
+            fGatherer->endStruct();
+        }
+    }
+
+private:
+    ScopedUniformWriter(PipelineDataGatherer* gatherer, const ShaderSnippet* snippet)
+#if defined(SK_DEBUG)
+        : fValidator(gatherer, snippet->fUniforms, SkToBool(snippet->fUniformStructName))
+#endif
+    {
+        if (snippet->fUniformStructName) {
+            gatherer->beginStruct(snippet->fRequiredAlignment);
+            fGatherer = gatherer;
+        } else {
+            fGatherer = nullptr;
+        }
+    }
+
+    PipelineDataGatherer* fGatherer;
+    SkDEBUGCODE(UniformExpectationsValidator fValidator;)
+};
+
+#define BEGIN_WRITE_UNIFORMS(keyContext, codeSnippetID) \
+    ScopedUniformWriter scope{keyContext, codeSnippetID};
+
+void add_solid_uniform_data(const KeyContext& keyContext, const SkPMColor4f& premulColor) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kSolidColorShader)
+    keyContext.pipelineDataGatherer()->write(premulColor);
 }
 
 } // anonymous namespace
 
-void SolidColorShaderBlock::AddBlock(const KeyContext& keyContext,
-                                     PaintParamsKeyBuilder* builder,
-                                     PipelineDataGatherer* gatherer,
-                                     const SkPMColor4f& premulColor) {
-    add_solid_uniform_data(keyContext.dict(), premulColor, gatherer);
-
-    builder->addBlock(BuiltInCodeSnippetID::kSolidColorShader);
+void SolidColorShaderBlock::AddBlock(const KeyContext& keyContext, const SkPMColor4f& premulColor) {
+    add_solid_uniform_data(keyContext, premulColor);
+    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kSolidColorShader);
 }
 
 //--------------------------------------------------------------------------------------------------
 
 namespace {
 
-void add_rgb_paint_color_uniform_data(const ShaderCodeDictionary* dict,
-                                      const SkPMColor4f& premulColor,
-                                      PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kRGBPaintColor)
-    gatherer->writePaintColor(premulColor);
+void add_rgb_paint_color_uniform_data(const KeyContext& keyContext) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kRGBPaintColor)
+    keyContext.pipelineDataGatherer()->writePaintColor(keyContext.paintColor());
 }
 
-void add_alpha_only_paint_color_uniform_data(const ShaderCodeDictionary* dict,
-                                             const SkPMColor4f& premulColor,
-                                             PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kAlphaOnlyPaintColor)
-    gatherer->writePaintColor(premulColor);
+void add_alpha_only_paint_color_uniform_data(const KeyContext& keyContext) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kAlphaOnlyPaintColor)
+    keyContext.pipelineDataGatherer()->writePaintColor(keyContext.paintColor());
 }
 
 } // anonymous namespace
 
-void RGBPaintColorBlock::AddBlock(const KeyContext& keyContext,
-                                  PaintParamsKeyBuilder* builder,
-                                  PipelineDataGatherer* gatherer) {
-    add_rgb_paint_color_uniform_data(keyContext.dict(), keyContext.paintColor(), gatherer);
-
-    builder->addBlock(BuiltInCodeSnippetID::kRGBPaintColor);
+void RGBPaintColorBlock::AddBlock(const KeyContext& keyContext) {
+    add_rgb_paint_color_uniform_data(keyContext);
+    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kRGBPaintColor);
 }
 
-void AlphaOnlyPaintColorBlock::AddBlock(const KeyContext& keyContext,
-                                        PaintParamsKeyBuilder* builder,
-                                        PipelineDataGatherer* gatherer) {
-    add_alpha_only_paint_color_uniform_data(keyContext.dict(), keyContext.paintColor(), gatherer);
-
-    builder->addBlock(BuiltInCodeSnippetID::kAlphaOnlyPaintColor);
-}
-
-//--------------------------------------------------------------------------------------------------
-
-namespace {
-
-void add_dst_read_sample_uniform_data(const ShaderCodeDictionary* dict,
-                                      PipelineDataGatherer* gatherer,
-                                      sk_sp<TextureProxy> dstTexture,
-                                      SkIPoint dstOffset) {
-    static const SkTileMode kTileModes[2] = {SkTileMode::kClamp, SkTileMode::kClamp};
-    gatherer->add(SkSamplingOptions(), kTileModes, dstTexture);
-
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kDstReadSample)
-
-    SkV4 coords{static_cast<float>(dstOffset.x()),
-                static_cast<float>(dstOffset.y()),
-                dstTexture ? 1.0f / dstTexture->dimensions().width()  : 1.0f,
-                dstTexture ? 1.0f / dstTexture->dimensions().height() : 1.0f };
-    gatherer->write(coords);
-}
-
-} // anonymous namespace
-
-void DstReadSampleBlock::AddBlock(const KeyContext& keyContext,
-                                  PaintParamsKeyBuilder* builder,
-                                  PipelineDataGatherer* gatherer,
-                                  sk_sp<TextureProxy> dstTexture,
-                                  SkIPoint dstOffset) {
-    add_dst_read_sample_uniform_data(keyContext.dict(), gatherer, std::move(dstTexture), dstOffset);
-
-    builder->addBlock(BuiltInCodeSnippetID::kDstReadSample);
+void AlphaOnlyPaintColorBlock::AddBlock(const KeyContext& keyContext) {
+    add_alpha_only_paint_color_uniform_data(keyContext);
+    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kAlphaOnlyPaintColor);
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -200,8 +190,9 @@ void add_gradient_preamble(const GradientShaderBlocks::GradientData& gradData,
 //   colorSpace
 //   doUnPremul
 void add_gradient_postamble(const GradientShaderBlocks::GradientData& gradData,
+                            int bufferOffset,
                             PipelineDataGatherer* gatherer) {
-    using ColorSpace = SkGradientShader::Interpolation::ColorSpace;
+    using ColorSpace = SkGradient::Interpolation::ColorSpace;
 
     constexpr int kInternalStopLimit = GradientShaderBlocks::GradientData::kNumInternalStorageStops;
 
@@ -218,6 +209,9 @@ void add_gradient_postamble(const GradientShaderBlocks::GradientData& gradData,
 
     if (gradData.fNumStops > kInternalStopLimit) {
         gatherer->write(gradData.fNumStops);
+        if (gradData.fUseStorageBuffer) {
+            gatherer->write(bufferOffset);
+        }
     }
 
     gatherer->write(static_cast<int>(gradData.fTM));
@@ -225,67 +219,115 @@ void add_gradient_postamble(const GradientShaderBlocks::GradientData& gradData,
     gatherer->write(static_cast<int>(inputPremul));
 }
 
-void add_linear_gradient_uniform_data(const ShaderCodeDictionary* dict,
+void add_linear_gradient_uniform_data(const KeyContext& keyContext,
                                       BuiltInCodeSnippetID codeSnippetID,
                                       const GradientShaderBlocks::GradientData& gradData,
-                                      PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, codeSnippetID)
+                                      int bufferOffset) {
+    BEGIN_WRITE_UNIFORMS(keyContext, codeSnippetID)
 
-    add_gradient_preamble(gradData, gatherer);
-    gatherer->write(gradData.fPoints[0]);
-    gatherer->write(gradData.fPoints[1]);
-    add_gradient_postamble(gradData, gatherer);
-};
+    add_gradient_preamble(gradData, keyContext.pipelineDataGatherer());
+    add_gradient_postamble(gradData, bufferOffset, keyContext.pipelineDataGatherer());
+}
 
-void add_radial_gradient_uniform_data(const ShaderCodeDictionary* dict,
+void add_radial_gradient_uniform_data(const KeyContext& keyContext,
                                       BuiltInCodeSnippetID codeSnippetID,
                                       const GradientShaderBlocks::GradientData& gradData,
-                                      PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, codeSnippetID)
+                                      int bufferOffset) {
+    BEGIN_WRITE_UNIFORMS(keyContext, codeSnippetID)
 
-    add_gradient_preamble(gradData, gatherer);
-    gatherer->write(gradData.fPoints[0]);
-    gatherer->write(gradData.fRadii[0]);
-    add_gradient_postamble(gradData, gatherer);
-};
+    add_gradient_preamble(gradData, keyContext.pipelineDataGatherer());
+    add_gradient_postamble(gradData, bufferOffset, keyContext.pipelineDataGatherer());
+}
 
-void add_sweep_gradient_uniform_data(const ShaderCodeDictionary* dict,
+void add_sweep_gradient_uniform_data(const KeyContext& keyContext,
                                      BuiltInCodeSnippetID codeSnippetID,
                                      const GradientShaderBlocks::GradientData& gradData,
-                                     PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, codeSnippetID)
+                                     int bufferOffset) {
+    BEGIN_WRITE_UNIFORMS(keyContext, codeSnippetID)
 
-    add_gradient_preamble(gradData, gatherer);
-    gatherer->write(gradData.fPoints[0]);
-    gatherer->write(gradData.fBias);
-    gatherer->write(gradData.fScale);
-    add_gradient_postamble(gradData, gatherer);
-};
+    add_gradient_preamble(gradData, keyContext.pipelineDataGatherer());
+    keyContext.pipelineDataGatherer()->write(gradData.fBias);
+    keyContext.pipelineDataGatherer()->write(gradData.fScale);
+    add_gradient_postamble(gradData, bufferOffset, keyContext.pipelineDataGatherer());
+}
 
-void add_conical_gradient_uniform_data(const ShaderCodeDictionary* dict,
-                                       BuiltInCodeSnippetID codeSnippetID,
-                                       const GradientShaderBlocks::GradientData& gradData,
-                                       PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, codeSnippetID)
+void add_conical_gradient_uniform_data(const KeyContext& keyContext,
+                                     BuiltInCodeSnippetID codeSnippetID,
+                                     const GradientShaderBlocks::GradientData& gradData,
+                                     int bufferOffset) {
+    BEGIN_WRITE_UNIFORMS(keyContext, codeSnippetID)
 
-    add_gradient_preamble(gradData, gatherer);
-    gatherer->write(gradData.fPoints[0]);
-    gatherer->write(gradData.fPoints[1]);
-    gatherer->write(gradData.fRadii[0]);
-    gatherer->write(gradData.fRadii[1]);
-    add_gradient_postamble(gradData, gatherer);
-};
+    float dRadius = gradData.fRadii[1] - gradData.fRadii[0];
+    bool isRadial = SkPoint::Distance(gradData.fPoints[1], gradData.fPoints[0])
+                                      < SK_ScalarNearlyZero;
+
+    // When a == 0, encode invA == 1 for radial case, and invA == 0 for linear edge case.
+    float a = 0;
+    float invA = 1;
+    if (!isRadial) {
+        a = 1 - dRadius * dRadius;
+        if (std::abs(a) > SK_ScalarNearlyZero) {
+            invA = 1.0 / (2.0 * a);
+        } else {
+            a = 0;
+            invA = 0;
+        }
+    } else {
+        // Since radius0 is being scaled by 1 / dRadius, and the original radius
+        // is always positive, this gives us the original sign of dRadius.
+        dRadius = gradData.fRadii[0] > 0 ? 1 : -1;
+    }
+
+    add_gradient_preamble(gradData, keyContext.pipelineDataGatherer());
+    keyContext.pipelineDataGatherer()->write(gradData.fRadii[0]);
+    keyContext.pipelineDataGatherer()->write(dRadius);
+    keyContext.pipelineDataGatherer()->write(a);
+    keyContext.pipelineDataGatherer()->write(invA);
+    add_gradient_postamble(gradData, bufferOffset, keyContext.pipelineDataGatherer());
+}
 
 } // anonymous namespace
 
-GradientShaderBlocks::GradientData::GradientData(SkShaderBase::GradientType type, int numStops)
+// Writes the color and offset data directly in the gatherer gradient buffer and returns the
+// offset the data begins at in the buffer.
+static int write_color_and_offset_bufdata(int numStops,
+                                           const SkPMColor4f* colors,
+                                           const float* offsets,
+                                           const SkGradientBaseShader* shader,
+                                           FloatStorageManager* floatStorageManager) {
+    auto [dstData, bufferOffset] = floatStorageManager->allocateGradientData(numStops, shader);
+    if (dstData) {
+        // Data doesn't already exist so we need to write it.
+        // Writes all offset data, then color data. This way when binary searching through the
+        // offsets, there is better cache locality.
+        for (int i = 0, colorIdx = numStops; i < numStops; i++, colorIdx+=4) {
+            float offset = offsets ? offsets[i] : SkIntToFloat(i) / (numStops - 1);
+            SkASSERT(offset >= 0.0f && offset <= 1.0f);
+
+            dstData[i] = offset;
+            dstData[colorIdx + 0] = colors[i].fR;
+            dstData[colorIdx + 1] = colors[i].fG;
+            dstData[colorIdx + 2] = colors[i].fB;
+            dstData[colorIdx + 3] = colors[i].fA;
+        }
+    }
+
+    return bufferOffset;
+}
+
+GradientShaderBlocks::GradientData::GradientData(SkShaderBase::GradientType type,
+                                                 int numStops,
+                                                 bool useStorageBuffer)
         : fType(type)
         , fPoints{{0.0f, 0.0f}, {0.0f, 0.0f}}
         , fRadii{0.0f, 0.0f}
         , fBias(0.0f)
         , fScale(0.0f)
         , fTM(SkTileMode::kClamp)
-        , fNumStops(numStops) {
+        , fNumStops(numStops)
+        , fUseStorageBuffer(useStorageBuffer)
+        , fSrcColors(nullptr)
+        , fSrcOffsets(nullptr) {
     sk_bzero(fColors, sizeof(fColors));
     sk_bzero(fOffsets, sizeof(fOffsets));
 }
@@ -298,13 +340,19 @@ GradientShaderBlocks::GradientData::GradientData(SkShaderBase::GradientType type
                                                  int numStops,
                                                  const SkPMColor4f* colors,
                                                  const float* offsets,
+                                                 const SkGradientBaseShader* shader,
                                                  sk_sp<TextureProxy> colorsAndOffsetsProxy,
-                                                 const SkGradientShader::Interpolation& interp)
+                                                 bool useStorageBuffer,
+                                                 const SkGradient::Interpolation& interp)
         : fType(type)
         , fBias(bias)
         , fScale(scale)
         , fTM(tm)
         , fNumStops(numStops)
+        , fUseStorageBuffer(useStorageBuffer)
+        , fSrcColors(colors)
+        , fSrcOffsets(offsets)
+        , fSrcShader(shader)
         , fInterpolation(interp) {
     SkASSERT(fNumStops >= 1);
 
@@ -331,23 +379,27 @@ GradientShaderBlocks::GradientData::GradientData(SkShaderBase::GradientType type
             rawOffsets[i] = rawOffsets[fNumStops-1];
         }
     } else {
-        fColorsAndOffsetsProxy = std::move(colorsAndOffsetsProxy);
-        SkASSERT(fColorsAndOffsetsProxy);
+        if (!fUseStorageBuffer) {
+            fColorsAndOffsetsProxy = std::move(colorsAndOffsetsProxy);
+            SkASSERT(fColorsAndOffsetsProxy);
+        }
     }
 }
 
-void GradientShaderBlocks::AddBlock(const KeyContext& keyContext,
-                                    PaintParamsKeyBuilder *builder,
-                                    PipelineDataGatherer* gatherer,
-                                    const GradientData& gradData) {
-    auto dict = keyContext.dict();
-
-    if (gradData.fNumStops > GradientData::kNumInternalStorageStops && gatherer) {
-        SkASSERT(gradData.fColorsAndOffsetsProxy);
-
-        static constexpr SkSamplingOptions kNearest(SkFilterMode::kNearest, SkMipmapMode::kNone);
-        static constexpr SkTileMode kClampTiling[2] = {SkTileMode::kClamp, SkTileMode::kClamp};
-        gatherer->add(kNearest, kClampTiling, gradData.fColorsAndOffsetsProxy);
+void GradientShaderBlocks::AddBlock(const KeyContext& keyContext, const GradientData& gradData) {
+    int bufferOffset = 0;
+    if (gradData.fNumStops > GradientData::kNumInternalStorageStops && keyContext.recorder()) {
+        if (gradData.fUseStorageBuffer) {
+            bufferOffset = write_color_and_offset_bufdata(gradData.fNumStops,
+                                                          gradData.fSrcColors,
+                                                          gradData.fSrcOffsets,
+                                                          gradData.fSrcShader,
+                                                          keyContext.floatStorageManager());
+        } else {
+            SkASSERT(gradData.fColorsAndOffsetsProxy);
+            keyContext.pipelineDataGatherer()->add(gradData.fColorsAndOffsetsProxy,
+                          {SkFilterMode::kNearest, SkTileMode::kClamp});
+        }
     }
 
     BuiltInCodeSnippetID codeSnippetID = BuiltInCodeSnippetID::kSolidColorShader;
@@ -356,29 +408,37 @@ void GradientShaderBlocks::AddBlock(const KeyContext& keyContext,
             codeSnippetID =
                     gradData.fNumStops <= 4 ? BuiltInCodeSnippetID::kLinearGradientShader4
                     : gradData.fNumStops <= 8 ? BuiltInCodeSnippetID::kLinearGradientShader8
-                                              : BuiltInCodeSnippetID::kLinearGradientShaderTexture;
-            add_linear_gradient_uniform_data(dict, codeSnippetID, gradData, gatherer);
+                        : gradData.fUseStorageBuffer
+                            ? BuiltInCodeSnippetID::kLinearGradientShaderBuffer
+                            : BuiltInCodeSnippetID::kLinearGradientShaderTexture;
+            add_linear_gradient_uniform_data(keyContext, codeSnippetID, gradData, bufferOffset);
             break;
         case SkShaderBase::GradientType::kRadial:
             codeSnippetID =
                     gradData.fNumStops <= 4 ? BuiltInCodeSnippetID::kRadialGradientShader4
                     : gradData.fNumStops <= 8 ? BuiltInCodeSnippetID::kRadialGradientShader8
-                                              : BuiltInCodeSnippetID::kRadialGradientShaderTexture;
-            add_radial_gradient_uniform_data(dict, codeSnippetID, gradData, gatherer);
+                        : gradData.fUseStorageBuffer
+                            ? BuiltInCodeSnippetID::kRadialGradientShaderBuffer
+                            : BuiltInCodeSnippetID::kRadialGradientShaderTexture;
+            add_radial_gradient_uniform_data(keyContext, codeSnippetID, gradData, bufferOffset);
             break;
         case SkShaderBase::GradientType::kSweep:
             codeSnippetID =
                     gradData.fNumStops <= 4 ? BuiltInCodeSnippetID::kSweepGradientShader4
                     : gradData.fNumStops <= 8 ? BuiltInCodeSnippetID::kSweepGradientShader8
-                                              : BuiltInCodeSnippetID::kSweepGradientShaderTexture;
-            add_sweep_gradient_uniform_data(dict, codeSnippetID, gradData, gatherer);
+                        : gradData.fUseStorageBuffer
+                            ? BuiltInCodeSnippetID::kSweepGradientShaderBuffer
+                            : BuiltInCodeSnippetID::kSweepGradientShaderTexture;
+            add_sweep_gradient_uniform_data(keyContext, codeSnippetID, gradData, bufferOffset);
             break;
         case SkShaderBase::GradientType::kConical:
             codeSnippetID =
                     gradData.fNumStops <= 4 ? BuiltInCodeSnippetID::kConicalGradientShader4
                     : gradData.fNumStops <= 8 ? BuiltInCodeSnippetID::kConicalGradientShader8
-                                              : BuiltInCodeSnippetID::kConicalGradientShaderTexture;
-            add_conical_gradient_uniform_data(dict, codeSnippetID, gradData, gatherer);
+                        : gradData.fUseStorageBuffer
+                            ? BuiltInCodeSnippetID::kConicalGradientShaderBuffer
+                            : BuiltInCodeSnippetID::kConicalGradientShaderTexture;
+            add_conical_gradient_uniform_data(keyContext, codeSnippetID, gradData, bufferOffset);
             break;
         case SkShaderBase::GradientType::kNone:
         default:
@@ -386,168 +446,107 @@ void GradientShaderBlocks::AddBlock(const KeyContext& keyContext,
             break;
     }
 
-    builder->addBlock(codeSnippetID);
+    keyContext.paintParamsKeyBuilder()->addBlock(codeSnippetID);
 }
 
 //--------------------------------------------------------------------------------------------------
-
-namespace {
-
-void add_localmatrixshader_uniform_data(const ShaderCodeDictionary* dict,
-                                        const SkM44& localMatrix,
-                                        PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kLocalMatrixShader)
-
-    SkM44 lmInverse;
-    bool wasInverted = localMatrix.invert(&lmInverse);  // TODO: handle failure up stack
-    if (!wasInverted) {
-        lmInverse.setIdentity();
-    }
-
-    gatherer->write(lmInverse);
-}
-
-} // anonymous namespace
 
 void LocalMatrixShaderBlock::BeginBlock(const KeyContext& keyContext,
-                                        PaintParamsKeyBuilder* builder,
-                                        PipelineDataGatherer* gatherer,
                                         const LMShaderData& lmShaderData) {
+    const SkMatrix& m = lmShaderData.fLocalMatrix;
 
-    add_localmatrixshader_uniform_data(keyContext.dict(), lmShaderData.fLocalMatrix, gatherer);
+    if (lmShaderData.fLocalMatrix.hasPerspective()) {
+        // Perspective local matrices are rare enough and add enough extra instructions that it's
+        // worth specializing since it has to perform a per-pixel division.
+        keyContext.paintParamsKeyBuilder()->beginBlock(
+                BuiltInCodeSnippetID::kLocalMatrixShaderPersp);
+        BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kLocalMatrixShaderPersp)
+        keyContext.pipelineDataGatherer()->write(m);
+    } else {
+        // For an affine 2D transform, we only need to upload the upper 2x2 and XY translation.
+        keyContext.paintParamsKeyBuilder()->beginBlock(BuiltInCodeSnippetID::kLocalMatrixShader);
 
-    builder->beginBlock(BuiltInCodeSnippetID::kLocalMatrixShader);
+        BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kLocalMatrixShader)
+        // The upper 2x2 is expected to be in column major order, but SkMatrix is 3x3 row major.
+        keyContext.pipelineDataGatherer()->write(SkV4{m.getScaleX(), m.getSkewY(),
+                             m.getSkewX(),  m.getScaleY()});
+        keyContext.pipelineDataGatherer()->write(SkV2{m.getTranslateX(), m.getTranslateY()});
+    }
 }
 
 //--------------------------------------------------------------------------------------------------
 
 namespace {
 
-static constexpr int kColorSpaceXformFlagAlphaSwizzle = 0x20;
-
-void add_color_space_uniforms(const SkColorSpaceXformSteps& steps,
-                              ReadSwizzle readSwizzle,
-                              PipelineDataGatherer* gatherer) {
-    // We have 7 source coefficients and 7 destination coefficients. We pass them via a 4x4 matrix;
-    // the first two columns hold the source values, and the second two hold the destination.
-    // (The final value of each 8-element group is ignored.)
-    // In std140, this arrangement is much more efficient than a simple array of scalars.
-    SkM44 coeffs;
-
-    int colorXformFlags = SkTo<int>(steps.flags.mask());
-    if (readSwizzle != ReadSwizzle::kRGBA) {
-        // Ensure that we do the gamut step
-        SkColorSpaceXformSteps gamutSteps;
-        gamutSteps.flags.gamut_transform = true;
-        colorXformFlags |= SkTo<int>(gamutSteps.flags.mask());
-        if (readSwizzle != ReadSwizzle::kBGRA) {
-            // TODO: Maybe add a fullMask() method to XformSteps?
-            SkASSERT(colorXformFlags < kColorSpaceXformFlagAlphaSwizzle);
-            colorXformFlags |= kColorSpaceXformFlagAlphaSwizzle;
-        }
-    }
-    gatherer->write(colorXformFlags);
-
-    if (steps.flags.linearize) {
-        gatherer->write(SkTo<int>(skcms_TransferFunction_getType(&steps.srcTF)));
-        coeffs.setCol(0, {steps.srcTF.g, steps.srcTF.a, steps.srcTF.b, steps.srcTF.c});
-        coeffs.setCol(1, {steps.srcTF.d, steps.srcTF.e, steps.srcTF.f, 0.0f});
-    } else {
-        gatherer->write(SkTo<int>(skcms_TFType::skcms_TFType_Invalid));
-    }
-
-    SkMatrix gamutTransform;
-    const float identity[] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
-    // TODO: it seems odd to copy this into an SkMatrix just to write it to the gatherer
-    // src_to_dst_matrix is column-major, SkMatrix is row-major.
-    const float* m = steps.flags.gamut_transform ? steps.src_to_dst_matrix : identity;
-    if (readSwizzle == ReadSwizzle::kRRR1) {
-        gamutTransform.setAll(m[0] + m[3] + m[6], 0, 0,
-                              m[1] + m[4] + m[7], 0, 0,
-                              m[2] + m[5] + m[8], 0, 0);
-    } else if (readSwizzle == ReadSwizzle::kBGRA) {
-        gamutTransform.setAll(m[6], m[3], m[0],
-                              m[7], m[4], m[1],
-                              m[8], m[5], m[2]);
-    } else if (readSwizzle == ReadSwizzle::k000R) {
-        gamutTransform.setAll(0, 0, 0,
-                              0, 0, 0,
-                              0, 0, 0);
-    } else if (steps.flags.gamut_transform) {
-        gamutTransform.setAll(m[0], m[3], m[6],
-                              m[1], m[4], m[7],
-                              m[2], m[5], m[8]);
-    }
-    gatherer->writeHalf(gamutTransform);
-
-    if (steps.flags.encode) {
-        gatherer->write(SkTo<int>(skcms_TransferFunction_getType(&steps.dstTFInv)));
-        coeffs.setCol(2, {steps.dstTFInv.g, steps.dstTFInv.a, steps.dstTFInv.b, steps.dstTFInv.c});
-        coeffs.setCol(3, {steps.dstTFInv.d, steps.dstTFInv.e, steps.dstTFInv.f, 0.0f});
-    } else {
-        gatherer->write(SkTo<int>(skcms_TFType::skcms_TFType_Invalid));
-    }
-
-    // Pack alpha swizzle in the unused coeff entries.
-    switch (readSwizzle) {
-        case ReadSwizzle::k000R:
-            coeffs.setRC(3, 1, 1.f);
-            coeffs.setRC(3, 3, 0.f);
-            break;
-        case ReadSwizzle::kRGB1:
-        case ReadSwizzle::kRRR1:
-            coeffs.setRC(3, 1, 0.f);
-            coeffs.setRC(3, 3, 1.f);
-            break;
-        default:
-            coeffs.setRC(3, 1, 0.f);
-            coeffs.setRC(3, 3, 0.f);
-            break;
-    }
-
-    gatherer->writeHalf(coeffs);
-}
-
-void add_image_uniform_data(const ShaderCodeDictionary* dict,
-                            const ImageShaderBlock::ImageData& imgData,
-                            PipelineDataGatherer* gatherer) {
+void add_image_uniform_data(const KeyContext& keyContext,
+                            const ImageShaderBlock::ImageData& imgData) {
     SkASSERT(!imgData.fSampling.useCubic);
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kImageShader)
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kImageShader)
 
-    gatherer->write(SkSize::Make(1.f/imgData.fImgSize.width(), 1.f/imgData.fImgSize.height()));
-    gatherer->write(imgData.fSubset);
-    gatherer->write(SkTo<int>(imgData.fTileModes[0]));
-    gatherer->write(SkTo<int>(imgData.fTileModes[1]));
-    gatherer->write(SkTo<int>(imgData.fSampling.filter));
-
-    add_color_space_uniforms(imgData.fSteps, imgData.fReadSwizzle, gatherer);
+    keyContext.pipelineDataGatherer()->write(SkSize::Make(1.f/imgData.fImgSize.width(),
+                                             1.f/imgData.fImgSize.height()));
+    keyContext.pipelineDataGatherer()->write(imgData.fSubset);
+    keyContext.pipelineDataGatherer()->write(SkTo<int>(imgData.fTileModes.first));
+    keyContext.pipelineDataGatherer()->write(SkTo<int>(imgData.fTileModes.second));
+    keyContext.pipelineDataGatherer()->write(SkTo<int>(imgData.fSampling.filter));
 }
 
-void add_cubic_image_uniform_data(const ShaderCodeDictionary* dict,
-                                  const ImageShaderBlock::ImageData& imgData,
-                                  PipelineDataGatherer* gatherer) {
+void add_clamp_image_uniform_data(const KeyContext& keyContext,
+                                  const ImageShaderBlock::ImageData& imgData) {
+    SkASSERT(!imgData.fSampling.useCubic);
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kImageShaderClamp)
+
+    keyContext.pipelineDataGatherer()->write(SkSize::Make(1.f/imgData.fImgSize.width(),
+                                                          1.f/imgData.fImgSize.height()));
+
+    // Matches GrTextureEffect::kLinearInset, to make sure we don't touch an outer row or column
+    // with a weight of 0 when linear filtering.
+    const float kLinearInset = 0.5f + 0.00001f;
+
+    // The subset should clamp texel coordinates to an inset subset to prevent sampling neighboring
+    // texels when coords fall exactly at texel boundaries.
+    SkRect subsetInsetClamp = imgData.fSubset;
+    if (imgData.fSampling.filter == SkFilterMode::kNearest) {
+        subsetInsetClamp.roundOut(&subsetInsetClamp);
+    }
+    subsetInsetClamp.inset(kLinearInset, kLinearInset);
+    keyContext.pipelineDataGatherer()->write(subsetInsetClamp);
+}
+
+void add_cubic_image_uniform_data(const KeyContext& keyContext,
+                                  const ImageShaderBlock::ImageData& imgData) {
     SkASSERT(imgData.fSampling.useCubic);
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kCubicImageShader)
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kCubicImageShader)
 
-    gatherer->write(SkSize::Make(1.f/imgData.fImgSize.width(), 1.f/imgData.fImgSize.height()));
-    gatherer->write(imgData.fSubset);
-    gatherer->write(SkTo<int>(imgData.fTileModes[0]));
-    gatherer->write(SkTo<int>(imgData.fTileModes[1]));
+    keyContext.pipelineDataGatherer()->write(SkSize::Make(1.f/imgData.fImgSize.width(),
+                                                          1.f/imgData.fImgSize.height()));
+    keyContext.pipelineDataGatherer()->write(imgData.fSubset);
+    keyContext.pipelineDataGatherer()->write(SkTo<int>(imgData.fTileModes.first));
+    keyContext.pipelineDataGatherer()->write(SkTo<int>(imgData.fTileModes.second));
     const SkCubicResampler& cubic = imgData.fSampling.cubic;
-    gatherer->writeHalf(SkImageShader::CubicResamplerMatrix(cubic.B, cubic.C));
-
-    add_color_space_uniforms(imgData.fSteps, imgData.fReadSwizzle, gatherer);
+    keyContext.pipelineDataGatherer()->writeHalf(
+            SkImageShader::CubicResamplerMatrix(cubic.B, cubic.C));
 }
 
-void add_hw_image_uniform_data(const ShaderCodeDictionary* dict,
-                               const ImageShaderBlock::ImageData& imgData,
-                               PipelineDataGatherer* gatherer) {
-    SkASSERT(!imgData.fSampling.useCubic);
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kHWImageShader)
+// If clampToBorderSupport is unavailable, kDecal will be substituted to clamp in most cases.
+bool should_substitute_decal(const std::pair<SkTileMode, SkTileMode>& tileMode, const Caps* caps) {
+    return !caps->clampToBorderSupport() && (tileMode.first == SkTileMode::kDecal ||
+                                             tileMode.second == SkTileMode::kDecal);
+}
 
-    gatherer->write(SkSize::Make(1.f/imgData.fImgSize.width(), 1.f/imgData.fImgSize.height()));
+bool can_do_tiling_in_hw(const ImageShaderBlock::ImageData& imgData, const Caps* caps) {
+    return !should_substitute_decal(imgData.fTileModes, caps) &&
+            imgData.fSubset.contains(SkRect::Make(imgData.fImgSize));
+}
 
-    add_color_space_uniforms(imgData.fSteps, imgData.fReadSwizzle, gatherer);
+void add_sampler_data_to_key(const KeyContext& keyContext, const SamplerDesc& samplerDesc) {
+    if (samplerDesc.isImmutable()) {
+        keyContext.paintParamsKeyBuilder()->addData(samplerDesc.asSpan());
+    } else {
+        // Means we have a regular dynamic sampler. Append a default SamplerDesc to convey this,
+        // allowing the key to maintain and convey sampler binding order.
+        keyContext.paintParamsKeyBuilder()->addData({});
+    }
 }
 
 } // anonymous namespace
@@ -557,97 +556,177 @@ ImageShaderBlock::ImageData::ImageData(const SkSamplingOptions& sampling,
                                        SkTileMode tileModeY,
                                        SkISize imgSize,
                                        SkRect subset,
-                                       ReadSwizzle readSwizzle)
+                                       ImmutableSamplerInfo immutableSamplerInfo)
         : fSampling(sampling)
         , fTileModes{tileModeX, tileModeY}
         , fImgSize(imgSize)
         , fSubset(subset)
-        , fReadSwizzle(readSwizzle) {
-    SkASSERT(fSteps.flags.mask() == 0);   // By default, the colorspace should have no effect
+        , fImmutableSamplerInfo(immutableSamplerInfo) {
 }
 
-static bool can_do_tiling_in_hw(const Caps* caps, const ImageShaderBlock::ImageData& imgData) {
-    if (!caps->clampToBorderSupport() && (imgData.fTileModes[0] == SkTileMode::kDecal ||
-                                          imgData.fTileModes[1] == SkTileMode::kDecal)) {
-        return false;
-    }
-    return imgData.fSubset.contains(SkRect::Make(imgData.fImgSize));
-}
 
-void ImageShaderBlock::AddBlock(const KeyContext& keyContext,
-                                PaintParamsKeyBuilder* builder,
-                                PipelineDataGatherer* gatherer,
-                                const ImageData& imgData) {
-
+void ImageShaderBlock::AddBlock(const KeyContext& keyContext, const ImageData& imgData) {
     if (keyContext.recorder() && !imgData.fTextureProxy) {
-        builder->addBlock(BuiltInCodeSnippetID::kError);
+        keyContext.paintParamsKeyBuilder()->addErrorBlock();
         return;
     }
 
     const Caps* caps = keyContext.caps();
-    const bool doTilingInHw = !imgData.fSampling.useCubic && can_do_tiling_in_hw(caps, imgData);
-
-    static constexpr SkTileMode kDefaultTileModes[2] = {SkTileMode::kClamp, SkTileMode::kClamp};
-    gatherer->add(imgData.fSampling,
-                  doTilingInHw ? imgData.fTileModes : kDefaultTileModes,
-                  imgData.fTextureProxy);
+    const bool doTilingInHw = !imgData.fSampling.useCubic && can_do_tiling_in_hw(imgData, caps);
 
     if (doTilingInHw) {
-        add_hw_image_uniform_data(keyContext.dict(), imgData, gatherer);
-        builder->addBlock(BuiltInCodeSnippetID::kHWImageShader);
+        CoordNormalizeShaderBlock::CoordNormalizeData data(SkSize::Make(imgData.fImgSize));
+        CoordNormalizeShaderBlock::BeginBlock(keyContext, data);
+        keyContext.paintParamsKeyBuilder()->beginBlock(BuiltInCodeSnippetID::kHWImageShader);
     } else if (imgData.fSampling.useCubic) {
-        add_cubic_image_uniform_data(keyContext.dict(), imgData, gatherer);
-        builder->addBlock(BuiltInCodeSnippetID::kCubicImageShader);
+        add_cubic_image_uniform_data(keyContext, imgData);
+        keyContext.paintParamsKeyBuilder()->beginBlock(BuiltInCodeSnippetID::kCubicImageShader);
+    } else if (imgData.fTileModes.first == SkTileMode::kClamp &&
+               imgData.fTileModes.second == SkTileMode::kClamp) {
+        add_clamp_image_uniform_data(keyContext, imgData);
+        keyContext.paintParamsKeyBuilder()->beginBlock(BuiltInCodeSnippetID::kImageShaderClamp);
     } else {
-        add_image_uniform_data(keyContext.dict(), imgData, gatherer);
-        builder->addBlock(BuiltInCodeSnippetID::kImageShader);
+        add_image_uniform_data(keyContext, imgData);
+        keyContext.paintParamsKeyBuilder()->beginBlock(BuiltInCodeSnippetID::kImageShader);
+    }
+
+    // Image shaders must append immutable sampler data (or '0' in the more common case where
+    // regular samplers are used).
+    // TODO(b/392623124): In precompile mode (fTextureProxy == null), we still have a need for
+    // immutable samplers, which must be passed in somehow.
+    ImmutableSamplerInfo info = imgData.fTextureProxy
+            ? caps->getImmutableSamplerInfo(imgData.fTextureProxy->textureInfo())
+            : imgData.fImmutableSamplerInfo;
+    auto tileModeWithSubstitution = doTilingInHw ? imgData.fTileModes :
+                                    std::make_pair(SkTileMode::kClamp, SkTileMode::kClamp);
+    SamplerDesc samplerDesc{imgData.fSampling, tileModeWithSubstitution, info};
+    keyContext.pipelineDataGatherer()->add(imgData.fTextureProxy, samplerDesc);
+    add_sampler_data_to_key(keyContext, samplerDesc);
+
+    keyContext.paintParamsKeyBuilder()->endBlock();
+
+    if (doTilingInHw) {
+        // Additional block for coord normalization.
+        keyContext.paintParamsKeyBuilder()->endBlock();
     }
 }
+
 
 //--------------------------------------------------------------------------------------------------
 
 // makes use of ImageShader functions, above
 namespace {
 
-void add_yuv_image_uniform_data(const ShaderCodeDictionary* dict,
-                                const YUVImageShaderBlock::ImageData& imgData,
-                                PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kYUVImageShader)
+void add_yuv_image_uniform_data(const KeyContext& keyContext,
+                                const YUVImageShaderBlock::ImageData& imgData) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kYUVImageShader)
 
-    gatherer->write(SkSize::Make(1.f/imgData.fImgSize.width(), 1.f/imgData.fImgSize.height()));
-    gatherer->write(imgData.fSubset);
-    gatherer->write(SkTo<int>(imgData.fTileModes[0]));
-    gatherer->write(SkTo<int>(imgData.fTileModes[1]));
-    gatherer->write(SkTo<int>(imgData.fSampling.filter));
+    keyContext.pipelineDataGatherer()->write(SkSize::Make(1.f/imgData.fImgSize.width(),
+                                                          1.f/imgData.fImgSize.height()));
+    keyContext.pipelineDataGatherer()->write(SkSize::Make(1.f/imgData.fImgSizeUV.width(),
+                                                          1.f/imgData.fImgSizeUV.height()));
+    keyContext.pipelineDataGatherer()->write(imgData.fSubset);
+    keyContext.pipelineDataGatherer()->write(imgData.fLinearFilterUVInset);
+    keyContext.pipelineDataGatherer()->write(SkTo<int>(imgData.fTileModes.first));
+    keyContext.pipelineDataGatherer()->write(SkTo<int>(imgData.fTileModes.second));
+    keyContext.pipelineDataGatherer()->write(SkTo<int>(imgData.fSampling.filter));
+    keyContext.pipelineDataGatherer()->write(SkTo<int>(imgData.fSamplingUV.filter));
 
     for (int i = 0; i < 4; ++i) {
-        gatherer->writeHalf(imgData.fChannelSelect[i]);
+        keyContext.pipelineDataGatherer()->writeHalf(imgData.fChannelSelect[i]);
     }
-    gatherer->writeHalf(imgData.fYUVtoRGBMatrix);
-    gatherer->write(imgData.fYUVtoRGBTranslate);
-
-    add_color_space_uniforms(imgData.fSteps, ReadSwizzle::kRGBA, gatherer);
+    keyContext.pipelineDataGatherer()->writeHalf(imgData.fYUVtoRGBMatrix);
+    keyContext.pipelineDataGatherer()->writeHalf(imgData.fYUVtoRGBTranslate);
 }
 
-void add_cubic_yuv_image_uniform_data(const ShaderCodeDictionary* dict,
-                                      const YUVImageShaderBlock::ImageData& imgData,
-                                      PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kCubicYUVImageShader)
+void add_cubic_yuv_image_uniform_data(const KeyContext& keyContext,
+                                      const YUVImageShaderBlock::ImageData& imgData) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kCubicYUVImageShader)
 
-    gatherer->write(SkSize::Make(1.f/imgData.fImgSize.width(), 1.f/imgData.fImgSize.height()));
-    gatherer->write(imgData.fSubset);
-    gatherer->write(SkTo<int>(imgData.fTileModes[0]));
-    gatherer->write(SkTo<int>(imgData.fTileModes[1]));
+    keyContext.pipelineDataGatherer()->write(SkSize::Make(1.f/imgData.fImgSize.width(),
+                                                          1.f/imgData.fImgSize.height()));
+    keyContext.pipelineDataGatherer()->write(SkSize::Make(1.f/imgData.fImgSizeUV.width(),
+                                                          1.f/imgData.fImgSizeUV.height()));
+    keyContext.pipelineDataGatherer()->write(imgData.fSubset);
+    keyContext.pipelineDataGatherer()->write(SkTo<int>(imgData.fTileModes.first));
+    keyContext.pipelineDataGatherer()->write(SkTo<int>(imgData.fTileModes.second));
     const SkCubicResampler& cubic = imgData.fSampling.cubic;
-    gatherer->writeHalf(SkImageShader::CubicResamplerMatrix(cubic.B, cubic.C));
+    keyContext.pipelineDataGatherer()->writeHalf(SkImageShader::CubicResamplerMatrix(cubic.B, cubic.C));
 
     for (int i = 0; i < 4; ++i) {
-        gatherer->writeHalf(imgData.fChannelSelect[i]);
+        keyContext.pipelineDataGatherer()->writeHalf(imgData.fChannelSelect[i]);
     }
-    gatherer->writeHalf(imgData.fYUVtoRGBMatrix);
-    gatherer->write(imgData.fYUVtoRGBTranslate);
+    keyContext.pipelineDataGatherer()->writeHalf(imgData.fYUVtoRGBMatrix);
+    keyContext.pipelineDataGatherer()->writeHalf(imgData.fYUVtoRGBTranslate);
+}
 
-    add_color_space_uniforms(imgData.fSteps, ReadSwizzle::kRGBA, gatherer);
+void add_hw_yuv_image_uniform_data(const KeyContext& keyContext,
+                                   const YUVImageShaderBlock::ImageData& imgData) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kHWYUVImageShader)
+
+    keyContext.pipelineDataGatherer()->write(SkSize::Make(1.f/imgData.fImgSize.width(),
+                                                          1.f/imgData.fImgSize.height()));
+    keyContext.pipelineDataGatherer()->write(SkSize::Make(1.f/imgData.fImgSizeUV.width(),
+                                                          1.f/imgData.fImgSizeUV.height()));
+    keyContext.pipelineDataGatherer()->write(imgData.fSubset);
+
+    SkPoint linearFilterUVInset = imgData.fLinearFilterUVInset;
+    // We sign-encode whether we need to adjust the UV coords by applying `fLinearFilterUVInset` for
+    // nearest neighbor filtering in `linearFilterUVInset.fX`.
+    if (imgData.fSampling.filter == SkFilterMode::kNearest) {
+        linearFilterUVInset.fX = -linearFilterUVInset.fX;
+    }
+    // We sign-encode whether we need clamping for subset or mismatched Y/UV plane size draws in
+    // `linearFilterUVInset.fY` - only clamp tiling modes are supported though.
+    if (!imgData.fSubset.contains(SkRect::Make(imgData.fImgSize)) ||
+        imgData.fImgSize != imgData.fImgSizeUV) {
+        SkASSERT(imgData.fTileModes.first == SkTileMode::kClamp &&
+                 imgData.fTileModes.second == SkTileMode::kClamp);
+        linearFilterUVInset.fY = -linearFilterUVInset.fY;
+    }
+    keyContext.pipelineDataGatherer()->write(linearFilterUVInset);
+
+    for (int i = 0; i < 4; ++i) {
+        keyContext.pipelineDataGatherer()->writeHalf(imgData.fChannelSelect[i]);
+    }
+    keyContext.pipelineDataGatherer()->writeHalf(imgData.fYUVtoRGBMatrix);
+    keyContext.pipelineDataGatherer()->writeHalf(imgData.fYUVtoRGBTranslate);
+}
+
+void add_hw_yuv_no_swizzle_image_uniform_data(const KeyContext& keyContext,
+                                              const YUVImageShaderBlock::ImageData& imgData) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kHWYUVNoSwizzleImageShader)
+
+    keyContext.pipelineDataGatherer()->write(SkSize::Make(1.f/imgData.fImgSize.width(),
+                                                          1.f/imgData.fImgSize.height()));
+    keyContext.pipelineDataGatherer()->write(SkSize::Make(1.f/imgData.fImgSizeUV.width(),
+                                                          1.f/imgData.fImgSizeUV.height()));
+    keyContext.pipelineDataGatherer()->write(imgData.fSubset);
+
+    SkPoint linearFilterUVInset = imgData.fLinearFilterUVInset;
+    // We sign-encode whether we need to adjust the UV coords by applying `fLinearFilterUVInset` for
+    // nearest neighbor filtering in `linearFilterUVInset.fX`.
+    if (imgData.fSampling.filter == SkFilterMode::kNearest) {
+        linearFilterUVInset.fX = -linearFilterUVInset.fX;
+    }
+    // We sign-encode whether we need clamping for subset or mismatched Y/UV plane size draws in
+    // `linearFilterUVInset.fY` - only clamp tiling modes are supported though.
+    if (!imgData.fSubset.contains(SkRect::Make(imgData.fImgSize)) ||
+        imgData.fImgSize != imgData.fImgSizeUV) {
+        SkASSERT(imgData.fTileModes.first == SkTileMode::kClamp &&
+                 imgData.fTileModes.second == SkTileMode::kClamp);
+        linearFilterUVInset.fY = -linearFilterUVInset.fY;
+    }
+    keyContext.pipelineDataGatherer()->write(linearFilterUVInset);
+
+    keyContext.pipelineDataGatherer()->writeHalf(imgData.fYUVtoRGBMatrix);
+    SkV4 yuvToRGBXlateAlphaParam = {
+        imgData.fYUVtoRGBTranslate.fX,
+        imgData.fYUVtoRGBTranslate.fY,
+        imgData.fYUVtoRGBTranslate.fZ,
+        imgData.fAlphaParam
+    };
+    keyContext.pipelineDataGatherer()->writeHalf(yuvToRGBXlateAlphaParam);
 }
 
 } // anonymous namespace
@@ -658,33 +737,82 @@ YUVImageShaderBlock::ImageData::ImageData(const SkSamplingOptions& sampling,
                                           SkISize imgSize,
                                           SkRect subset)
         : fSampling(sampling)
+        , fSamplingUV(sampling)
         , fTileModes{tileModeX, tileModeY}
         , fImgSize(imgSize)
+        , fImgSizeUV(imgSize)
         , fSubset(subset) {
-    SkASSERT(fSteps.flags.mask() == 0);   // By default, the colorspace should have no effect
 }
 
-void YUVImageShaderBlock::AddBlock(const KeyContext& keyContext,
-                                   PaintParamsKeyBuilder* builder,
-                                   PipelineDataGatherer* gatherer,
-                                   const ImageData& imgData) {
+static bool can_do_yuv_tiling_in_hw(const YUVImageShaderBlock::ImageData& imgData,
+                                    const Caps* caps) {
+    if (should_substitute_decal(imgData.fTileModes, caps)) {
+        return false;
+    }
+    // Use the HW tiling shader variant if we're drawing the full rect with matched Y and UV plane
+    // sizes and any tiling mode, or if we're drawing a subset with clamp tiling mode.
+    return (imgData.fSubset.contains(SkRect::Make(imgData.fImgSize)) &&
+            imgData.fImgSize == imgData.fImgSizeUV) ||
+           (imgData.fTileModes.first == SkTileMode::kClamp &&
+            imgData.fTileModes.second == SkTileMode::kClamp);
+}
+
+static bool no_yuv_swizzle(const YUVImageShaderBlock::ImageData& imgData) {
+    // Y_U_V or U_Y_V format, reading from R channel for each texture
+    if (imgData.fChannelSelect[0].x == 1 &&
+        imgData.fChannelSelect[1].x == 1 &&
+        imgData.fChannelSelect[2].x == 1 &&
+        imgData.fChannelSelect[3].x == 1) {
+        return true;
+    }
+
+    return false;
+}
+
+void YUVImageShaderBlock::AddBlock(const KeyContext& keyContext, const ImageData& imgData) {
     if (keyContext.recorder() &&
         (!imgData.fTextureProxies[0] || !imgData.fTextureProxies[1] ||
          !imgData.fTextureProxies[2] || !imgData.fTextureProxies[3])) {
-        builder->addBlock(BuiltInCodeSnippetID::kError);
+        keyContext.paintParamsKeyBuilder()->addErrorBlock();
         return;
     }
 
-    for (int i = 0; i < 4; ++i) {
-        gatherer->add(imgData.fSampling, imgData.fTileModes, imgData.fTextureProxies[i]);
-    }
+    const Caps* caps = keyContext.caps();
+    const bool doTilingInHw = !imgData.fSampling.useCubic && can_do_yuv_tiling_in_hw(imgData, caps);
+    const bool noYUVSwizzle = no_yuv_swizzle(imgData);
 
-    if (imgData.fSampling.useCubic) {
-        add_cubic_yuv_image_uniform_data(keyContext.dict(), imgData, gatherer);
-        builder->addBlock(BuiltInCodeSnippetID::kCubicYUVImageShader);
+    // uvs are never SkTileMode::kDecal
+    auto uvTileModes = std::make_pair(imgData.fTileModes.first == SkTileMode::kDecal
+                                            ? SkTileMode::kClamp : imgData.fTileModes.first,
+                                      imgData.fTileModes.second == SkTileMode::kDecal
+                                            ? SkTileMode::kClamp : imgData.fTileModes.second);
+    auto yAlphaTileModes = doTilingInHw ? imgData.fTileModes :
+                           std::make_pair(SkTileMode::kClamp, SkTileMode::kClamp);
+    keyContext.pipelineDataGatherer()->add(imgData.fTextureProxies[0],
+                                           {imgData.fSampling, yAlphaTileModes});
+    keyContext.pipelineDataGatherer()->add(imgData.fTextureProxies[1],
+                                           {imgData.fSamplingUV, uvTileModes});
+    keyContext.pipelineDataGatherer()->add(imgData.fTextureProxies[2],
+                                           {imgData.fSamplingUV, uvTileModes});
+    keyContext.pipelineDataGatherer()->add(imgData.fTextureProxies[3],
+                                           {imgData.fSampling, yAlphaTileModes});
+
+    if (doTilingInHw && noYUVSwizzle) {
+        add_hw_yuv_no_swizzle_image_uniform_data(keyContext, imgData);
+        keyContext.paintParamsKeyBuilder()->addBlock(
+                BuiltInCodeSnippetID::kHWYUVNoSwizzleImageShader);
+    } else if (doTilingInHw) {
+        add_hw_yuv_image_uniform_data(keyContext, imgData);
+        keyContext.paintParamsKeyBuilder()->addBlock(
+                BuiltInCodeSnippetID::kHWYUVImageShader);
+    } else if (imgData.fSampling.useCubic) {
+        add_cubic_yuv_image_uniform_data(keyContext, imgData);
+        keyContext.paintParamsKeyBuilder()->addBlock(
+                BuiltInCodeSnippetID::kCubicYUVImageShader);
     } else {
-        add_yuv_image_uniform_data(keyContext.dict(), imgData, gatherer);
-        builder->addBlock(BuiltInCodeSnippetID::kYUVImageShader);
+        add_yuv_image_uniform_data(keyContext, imgData);
+        keyContext.paintParamsKeyBuilder()->addBlock(
+                BuiltInCodeSnippetID::kYUVImageShader);
     }
 }
 
@@ -692,201 +820,347 @@ void YUVImageShaderBlock::AddBlock(const KeyContext& keyContext,
 
 namespace {
 
-void add_coordclamp_uniform_data(const ShaderCodeDictionary* dict,
-                                 const CoordClampShaderBlock::CoordClampData& clampData,
-                                 PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kCoordClampShader)
+void add_coord_normalize_uniform_data(const KeyContext& keyContext,
+                                      const CoordNormalizeShaderBlock::CoordNormalizeData& data) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kCoordNormalizeShader)
+    keyContext.pipelineDataGatherer()->write(data.fInvDimensions);
+}
 
-    gatherer->write(clampData.fSubset);
+} // anonymous namespace
+
+void CoordNormalizeShaderBlock::BeginBlock(const KeyContext& keyContext,
+                                           const CoordNormalizeData& data) {
+    add_coord_normalize_uniform_data(keyContext, data);
+    keyContext.paintParamsKeyBuilder()->beginBlock(BuiltInCodeSnippetID::kCoordNormalizeShader);
+}
+
+//--------------------------------------------------------------------------------------------------
+
+namespace {
+
+void add_coordclamp_uniform_data(const KeyContext& keyContext,
+                                 const CoordClampShaderBlock::CoordClampData& clampData) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kCoordClampShader)
+    keyContext.pipelineDataGatherer()->write(clampData.fSubset);
 }
 
 } // anonymous namespace
 
 void CoordClampShaderBlock::BeginBlock(const KeyContext& keyContext,
-                                       PaintParamsKeyBuilder* builder,
-                                       PipelineDataGatherer* gatherer,
                                        const CoordClampData& clampData) {
-    add_coordclamp_uniform_data(keyContext.dict(), clampData, gatherer);
-
-    builder->beginBlock(BuiltInCodeSnippetID::kCoordClampShader);
+    add_coordclamp_uniform_data(keyContext, clampData);
+    keyContext.paintParamsKeyBuilder()->beginBlock(BuiltInCodeSnippetID::kCoordClampShader);
 }
 
 //--------------------------------------------------------------------------------------------------
 
 namespace {
 
-void add_dither_uniform_data(const ShaderCodeDictionary* dict,
-                             const DitherShaderBlock::DitherData& ditherData,
-                             PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kDitherShader)
+void add_dither_uniform_data(const KeyContext& keyContext,
+                             const DitherShaderBlock::DitherData& ditherData) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kDitherShader)
 
-    gatherer->writeHalf(ditherData.fRange);
+    keyContext.pipelineDataGatherer()->writeHalf(ditherData.fRange);
 }
 
 } // anonymous namespace
 
-void DitherShaderBlock::AddBlock(const KeyContext& keyContext,
-                                 PaintParamsKeyBuilder* builder,
-                                 PipelineDataGatherer* gatherer,
-                                 const DitherData& data) {
-    add_dither_uniform_data(keyContext.dict(), data, gatherer);
-
-    static constexpr SkSamplingOptions kNearest(SkFilterMode::kNearest, SkMipmapMode::kNone);
-    static constexpr SkTileMode kRepeatTiling[2] = { SkTileMode::kRepeat, SkTileMode::kRepeat };
+void DitherShaderBlock::AddBlock(const KeyContext& keyContext, const DitherData& data) {
+    auto gatherer = keyContext.pipelineDataGatherer();
+    add_dither_uniform_data(keyContext, data);
 
     SkASSERT(data.fLUTProxy || !keyContext.recorder());
-    gatherer->add(kNearest, kRepeatTiling, data.fLUTProxy);
+    gatherer->add(data.fLUTProxy, {SkFilterMode::kNearest, SkTileMode::kRepeat});
 
-    builder->addBlock(BuiltInCodeSnippetID::kDitherShader);
+    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kDitherShader);
 }
 
 //--------------------------------------------------------------------------------------------------
 
 namespace {
 
-void add_perlin_noise_uniform_data(const ShaderCodeDictionary* dict,
-                                   const PerlinNoiseShaderBlock::PerlinNoiseData& noiseData,
-                                   PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kPerlinNoiseShader)
+void add_perlin_noise_uniform_data(const KeyContext& keyContext,
+                                   const PerlinNoiseShaderBlock::PerlinNoiseData& noiseData) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kPerlinNoiseShader)
 
+    auto gatherer = keyContext.pipelineDataGatherer();
     gatherer->write(noiseData.fBaseFrequency);
     gatherer->write(noiseData.fStitchData);
     gatherer->write(static_cast<int>(noiseData.fType));
     gatherer->write(noiseData.fNumOctaves);
     gatherer->write(static_cast<int>(noiseData.stitching()));
 
-    static const SkTileMode kRepeatXTileModes[2] = { SkTileMode::kRepeat, SkTileMode::kClamp };
-    static const SkSamplingOptions kNearestSampling { SkFilterMode::kNearest };
-
-    gatherer->add(kNearestSampling, kRepeatXTileModes, noiseData.fPermutationsProxy);
-    gatherer->add(kNearestSampling, kRepeatXTileModes, noiseData.fNoiseProxy);
+    static const std::pair<SkTileMode, SkTileMode> kRepeatXTileModes =
+            { SkTileMode::kRepeat, SkTileMode::kClamp };
+    gatherer->add(noiseData.fPermutationsProxy, {SkFilterMode::kNearest, kRepeatXTileModes});
+    gatherer->add(noiseData.fNoiseProxy, {SkFilterMode::kNearest, kRepeatXTileModes});
 }
 
 } // anonymous namespace
 
 void PerlinNoiseShaderBlock::AddBlock(const KeyContext& keyContext,
-                                      PaintParamsKeyBuilder* builder,
-                                      PipelineDataGatherer* gatherer,
                                       const PerlinNoiseData& noiseData) {
-    add_perlin_noise_uniform_data(keyContext.dict(), noiseData, gatherer);
+    add_perlin_noise_uniform_data(keyContext, noiseData);
 
-    builder->addBlock(BuiltInCodeSnippetID::kPerlinNoiseShader);
+    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPerlinNoiseShader);
 }
 
 //--------------------------------------------------------------------------------------------------
 
-void BlendShaderBlock::BeginBlock(const KeyContext& keyContext,
-                                  PaintParamsKeyBuilder* builder,
-                                  PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, keyContext.dict(), BuiltInCodeSnippetID::kBlendShader)
+void BlendComposeBlock::BeginBlock(const KeyContext& keyContext) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kBlendCompose)
 
-    builder->beginBlock(BuiltInCodeSnippetID::kBlendShader);
+    keyContext.paintParamsKeyBuilder()->beginBlock(BuiltInCodeSnippetID::kBlendCompose);
 }
 
 //--------------------------------------------------------------------------------------------------
 
-void BlendModeBlenderBlock::AddBlock(const KeyContext& keyContext,
-                                     PaintParamsKeyBuilder* builder,
-                                     PipelineDataGatherer* gatherer,
-                                     SkBlendMode blendMode) {
-    VALIDATE_UNIFORMS(gatherer, keyContext.dict(), BuiltInCodeSnippetID::kBlendModeBlender)
-    gatherer->write(SkTo<int>(blendMode));
-
-    builder->addBlock(BuiltInCodeSnippetID::kBlendModeBlender);
-}
-
-//--------------------------------------------------------------------------------------------------
-
-void CoeffBlenderBlock::AddBlock(const KeyContext& keyContext,
-                                 PaintParamsKeyBuilder* builder,
-                                 PipelineDataGatherer* gatherer,
-                                 SkSpan<const float> coeffs) {
-    VALIDATE_UNIFORMS(gatherer, keyContext.dict(), BuiltInCodeSnippetID::kCoeffBlender)
+void PorterDuffBlenderBlock::AddBlock(const KeyContext& keyContext, SkSpan<const float> coeffs) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kPorterDuffBlender)
     SkASSERT(coeffs.size() == 4);
-    gatherer->writeHalf(SkV4{coeffs[0], coeffs[1], coeffs[2], coeffs[3]});
+    keyContext.pipelineDataGatherer()->writeHalf(SkV4{coeffs[0], coeffs[1], coeffs[2], coeffs[3]});
 
-    builder->addBlock(BuiltInCodeSnippetID::kCoeffBlender);
+    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPorterDuffBlender);
 }
 
 //--------------------------------------------------------------------------------------------------
 
-void ClipShaderBlock::BeginBlock(const KeyContext& keyContext,
-                                 PaintParamsKeyBuilder* builder,
-                                 PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, keyContext.dict(), BuiltInCodeSnippetID::kClipShader)
+void HSLCBlenderBlock::AddBlock(const KeyContext& keyContext, SkSpan<const float> coeffs) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kHSLCBlender)
+    SkASSERT(coeffs.size() == 2);
+    keyContext.pipelineDataGatherer()->writeHalf(SkV2{coeffs[0], coeffs[1]});
 
-    builder->beginBlock(BuiltInCodeSnippetID::kClipShader);
+    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kHSLCBlender);
 }
 
 //--------------------------------------------------------------------------------------------------
 
-void ComposeBlock::BeginBlock(const KeyContext& keyContext,
-                              PaintParamsKeyBuilder* builder,
-                              PipelineDataGatherer* gatherer) {
-    builder->beginBlock(BuiltInCodeSnippetID::kCompose);
+void ComposeBlock::BeginBlock(const KeyContext& keyContext) {
+    keyContext.paintParamsKeyBuilder()->beginBlock(BuiltInCodeSnippetID::kCompose);
 }
 
 //--------------------------------------------------------------------------------------------------
 
 namespace {
 
-void add_matrix_colorfilter_uniform_data(const ShaderCodeDictionary* dict,
-                                         const MatrixColorFilterBlock::MatrixColorFilterData& data,
-                                         PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kMatrixColorFilter)
-    gatherer->write(data.fMatrix);
-    gatherer->write(data.fTranslate);
-    gatherer->write(static_cast<int>(data.fInHSLA));
+void add_matrix_colorfilter_uniform_data(const KeyContext& keyContext,
+                                         const MatrixColorFilterBlock::MatrixColorFilterData& data) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kMatrixColorFilter)
+    auto gatherer = keyContext.pipelineDataGatherer();
+    gatherer->writeHalf(data.fMatrix);
+    gatherer->writeHalf(data.fTranslate);
+    if (data.fClamp) {
+        gatherer->writeHalf(SkV2{0.f, 1.f});
+    } else {
+        // Alpha is always clamped to 1. RGB clamp to the max finite half value.
+        static constexpr float kUnclamped = 65504.f; // SK_HalfMax converted back to float
+        SkASSERT(SkHalfToFloat(SkFloatToHalf(kUnclamped)) == kUnclamped);
+        SkASSERT(SkHalfToFloat(SkFloatToHalf(-kUnclamped)) == -kUnclamped);
+        gatherer->writeHalf(SkV2{-kUnclamped, kUnclamped});
+    }
+}
+
+void add_hsl_matrix_colorfilter_uniform_data(
+        const KeyContext& keyContext,
+        const MatrixColorFilterBlock::MatrixColorFilterData& data) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kHSLMatrixColorFilter)
+    auto gatherer = keyContext.pipelineDataGatherer();
+    gatherer->writeHalf(data.fMatrix);
+    gatherer->writeHalf(data.fTranslate);
 }
 
 } // anonymous namespace
 
 void MatrixColorFilterBlock::AddBlock(const KeyContext& keyContext,
-                                      PaintParamsKeyBuilder* builder,
-                                      PipelineDataGatherer* gatherer,
                                       const MatrixColorFilterData& matrixCFData) {
+    if (matrixCFData.fInHSLA) {
+        add_hsl_matrix_colorfilter_uniform_data(keyContext, matrixCFData);
 
-    add_matrix_colorfilter_uniform_data(keyContext.dict(), matrixCFData, gatherer);
+        keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kHSLMatrixColorFilter);
+    } else {
+        add_matrix_colorfilter_uniform_data(keyContext, matrixCFData);
 
-    builder->addBlock(BuiltInCodeSnippetID::kMatrixColorFilter);
+        keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kMatrixColorFilter);
+    }
 }
 
 //--------------------------------------------------------------------------------------------------
 
 namespace {
 
-void add_table_colorfilter_uniform_data(const ShaderCodeDictionary* dict,
-                                        const TableColorFilterBlock::TableColorFilterData& data,
-                                        PipelineDataGatherer* gatherer) {
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kTableColorFilter)
+void add_table_colorfilter_uniform_data(const KeyContext& keyContext,
+                                        const TableColorFilterBlock::TableColorFilterData& data) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kTableColorFilter)
 
-    static const SkTileMode kTileModes[2] = { SkTileMode::kClamp, SkTileMode::kClamp };
-    gatherer->add(SkSamplingOptions(), kTileModes, data.fTextureProxy);
+    keyContext.pipelineDataGatherer()->add(data.fTextureProxy, {SkFilterMode::kNearest, SkTileMode::kClamp});
 }
 
 } // anonymous namespace
 
 void TableColorFilterBlock::AddBlock(const KeyContext& keyContext,
-                                     PaintParamsKeyBuilder* builder,
-                                     PipelineDataGatherer* gatherer,
                                      const TableColorFilterData& data) {
     SkASSERT(data.fTextureProxy || !keyContext.recorder());
 
-    add_table_colorfilter_uniform_data(keyContext.dict(), data, gatherer);
+    add_table_colorfilter_uniform_data(keyContext, data);
 
-    builder->addBlock(BuiltInCodeSnippetID::kTableColorFilter);
+    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kTableColorFilter);
 }
 
 //--------------------------------------------------------------------------------------------------
 namespace {
 
-void add_color_space_xform_uniform_data(
-        const ShaderCodeDictionary* dict,
-        const ColorSpaceTransformBlock::ColorSpaceTransformData& data,
-        PipelineDataGatherer* gatherer) {
+// There are three variations of color space transforms with increasing complexity, but they are
+// built on the same techniques for managing variations w/o adding branches in the shader.
+void add_color_space_uniforms(const KeyContext& keyContext,
+                              BuiltInCodeSnippetID id,
+                              const SkColorSpaceXformSteps& steps,
+                              ReadSwizzle readSwizzle) {
+    SkASSERT(id == BuiltInCodeSnippetID::kColorSpaceXformPremul ||     // premul/unpremul/opaque
+             id == BuiltInCodeSnippetID::kColorSpaceXformSRGB ||       // + sRGB [d]encode/gamut
+             id == BuiltInCodeSnippetID::kColorSpaceXformColorFilter); // + everything else
 
-    VALIDATE_UNIFORMS(gatherer, dict, BuiltInCodeSnippetID::kColorSpaceXformColorFilter)
-    add_color_space_uniforms(data.fSteps, ReadSwizzle::kRGBA, gatherer);
+    BEGIN_WRITE_UNIFORMS(keyContext, id)
+
+    // To encode whether to do premul/unpremul or make the output opaque, we use
+    // srcDEF_args.w and dstDEF_args.w:
+    // - identity: {0, 1}
+    // - do unpremul: {-1, 1}
+    // - do premul: {0, 0}
+    // - do both: {-1, 0}
+    // - alpha swizzle 1: {1, 1}
+    // - alpha swizzle r: {1, 0}
+    const bool alphaSwizzleR = readSwizzle == ReadSwizzle::k000R;
+    const bool alphaSwizzle1 = readSwizzle == ReadSwizzle::kRGB1 ||
+                               readSwizzle == ReadSwizzle::kRRR1;
+
+    // It doesn't make sense to unpremul/premul in opaque cases, but we might get a request to
+    // anyways, which we can just ignore.
+    const bool unpremul = alphaSwizzle1 ? false : steps.fFlags.unpremul;
+    const bool premul = alphaSwizzle1 ? false : steps.fFlags.premul;
+
+    const float srcW = unpremul ? -1.f :
+                       (alphaSwizzleR || alphaSwizzle1) ? 1.f :
+                                                          0.f;
+    const float dstW = (premul || alphaSwizzleR) ? 0.f : 1.f;
+
+    if (id == BuiltInCodeSnippetID::kColorSpaceXformPremul) {
+        // If either of these asserts would fail, we can't correctly use this specialized shader for
+        // the given transform.
+        SkASSERT(readSwizzle == ReadSwizzle::kRGBA || readSwizzle == ReadSwizzle::kRGB1);
+        // If these are both true, that implies there's a color space transfer or gamut transform.
+        SkASSERT(!(steps.fFlags.unpremul && steps.fFlags.premul));
+        // And given these assertions, the 6 cases encoded in srcW and dstW are reduced to:
+        //    identity, do unpremul, do premul, and make opaque (alpha swizzle 1)
+        keyContext.pipelineDataGatherer()->writeHalf(SkV2{srcW, dstW});
+        return;
+    }
+
+    // srcW and dstW will be used later with the other transfer function values, but for the
+    // more complex shaders, we put the gamut matrix first for alignment.
+
+    SkMatrix gamutTransform;
+    const float identity[] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+    // TODO: it seems odd to copy this into an SkMatrix just to write it to the gatherer
+    // fSrcToDstMatrix is column-major, SkMatrix is row-major.
+    const float* m = steps.fFlags.gamut_transform ? steps.fSrcToDstMatrix : identity;
+    if (readSwizzle == ReadSwizzle::kRRR1) {
+        gamutTransform.setAll(m[0] + m[3] + m[6], 0, 0,
+                            m[1] + m[4] + m[7], 0, 0,
+                            m[2] + m[5] + m[8], 0, 0);
+    } else if (readSwizzle == ReadSwizzle::kBGRA) {
+        gamutTransform.setAll(m[6], m[3], m[0],
+                            m[7], m[4], m[1],
+                            m[8], m[5], m[2]);
+    } else if (readSwizzle == ReadSwizzle::k000R) {
+        gamutTransform.setAll(0, 0, 0,
+                            0, 0, 0,
+                            0, 0, 0);
+    } else if (steps.fFlags.gamut_transform) {
+        gamutTransform.setAll(m[0], m[3], m[6],
+                            m[1], m[4], m[7],
+                            m[2], m[5], m[8]);
+    }
+    keyContext.pipelineDataGatherer()->writeHalf(gamutTransform);
+
+    // To encode which transfer function to apply, we use the src and dst gamma values:
+    // - identity: 0
+    // - sRGB: g > 0
+    // - PQ: -2
+    // - HLG: -1
+    // For the sRGB shader, we allow linear sRGB but that shader has no branches on TF type, so
+    // we have to replace the values with an actual identity sRGB-ish function.
+    const bool treatLinearAsSRGB = id == BuiltInCodeSnippetID::kColorSpaceXformSRGB;
+    if (steps.fFlags.linearize) {
+        const skcms_TFType type = skcms_TransferFunction_getType(&steps.fSrcTF);
+        const float srcG = type == skcms_TFType_sRGBish ? steps.fSrcTF.g :
+                           type == skcms_TFType_PQish ? -2.f :
+                           type == skcms_TFType_HLGish ? -1.f :
+                                                         0.f;
+        keyContext.pipelineDataGatherer()->write(SkV4{srcG, steps.fSrcTF.a,
+                                                      steps.fSrcTF.b, steps.fSrcTF.c});
+        keyContext.pipelineDataGatherer()->write(SkV4{steps.fSrcTF.d, steps.fSrcTF.e,
+                                                      steps.fSrcTF.f, srcW});
+    } else if (treatLinearAsSRGB) {
+        // Branchless identity function with g=1 (sRGB-ish)
+        static constexpr skcms_TransferFunction kI = SkNamedTransferFn::kLinear;
+        keyContext.pipelineDataGatherer()->write(SkV4{kI.g, kI.a, kI.b, kI.c});
+        keyContext.pipelineDataGatherer()->write(SkV4{kI.d, kI.e, kI.f, srcW});
+    } else {
+        // Branched identity that actually skips all operations
+        keyContext.pipelineDataGatherer()->write(SkV4{0.f, 0.f, 0.f, 0.f});
+        keyContext.pipelineDataGatherer()->write(SkV4{0.f, 0.f, 0.f, srcW});
+    }
+
+    if (steps.fFlags.encode) {
+        const skcms_TFType type = skcms_TransferFunction_getType(&steps.fDstTFInv);
+        const float dstG = type == skcms_TFType_sRGBish ? steps.fDstTFInv.g :
+                           type == skcms_TFType_PQish ? -2.f :
+                           type == skcms_TFType_HLGinvish ? -1.f :
+                                                            0.f;
+        keyContext.pipelineDataGatherer()->write(SkV4{dstG, steps.fDstTFInv.a,
+                                                      steps.fDstTFInv.b, steps.fDstTFInv.c});
+        keyContext.pipelineDataGatherer()->write(SkV4{steps.fDstTFInv.d, steps.fDstTFInv.e,
+                                                      steps.fDstTFInv.f, dstW});
+    } else if (treatLinearAsSRGB) {
+        static constexpr skcms_TransferFunction kI = SkNamedTransferFn::kLinear;
+        keyContext.pipelineDataGatherer()->write(SkV4{kI.g, kI.a, kI.b, kI.c});
+        keyContext.pipelineDataGatherer()->write(SkV4{kI.d, kI.e, kI.f, dstW});
+    } else {
+        keyContext.pipelineDataGatherer()->write(SkV4{0.f, 0.f, 0.f, 0.f});
+        keyContext.pipelineDataGatherer()->write(SkV4{0.f, 0.f, 0.f, dstW});
+    }
+
+    const bool hasOOTFUniforms = id == BuiltInCodeSnippetID::kColorSpaceXformColorFilter;
+    if (hasOOTFUniforms) {
+        SkV4 src_ootf = {0.f, 0.f, 0.f, 0.f};
+        SkV4 dst_ootf = {0.f, 0.f, 0.f, 0.f};
+
+        if (steps.fFlags.src_ootf) {
+          if (readSwizzle == ReadSwizzle::kBGRA) {
+              src_ootf = SkV4{
+                  steps.fSrcOotf[2], steps.fSrcOotf[1], steps.fSrcOotf[0], steps.fSrcOotf[3]};
+          } else {
+              src_ootf = SkV4{
+                  steps.fSrcOotf[0], steps.fSrcOotf[1], steps.fSrcOotf[2], steps.fSrcOotf[3]};
+          }
+        }
+
+        if (steps.fFlags.dst_ootf) {
+          if (readSwizzle == ReadSwizzle::kBGRA) {
+              dst_ootf = SkV4{
+                  steps.fDstOotf[2], steps.fDstOotf[1], steps.fDstOotf[0], steps.fDstOotf[3]};
+          } else {
+              dst_ootf = SkV4{
+                  steps.fDstOotf[0], steps.fDstOotf[1], steps.fDstOotf[2], steps.fDstOotf[3]};
+          }
+        }
+
+        keyContext.pipelineDataGatherer()->write(src_ootf);
+        keyContext.pipelineDataGatherer()->write(dst_ootf);
+    } else {
+      SkASSERT(!steps.fFlags.src_ootf);
+      SkASSERT(!steps.fFlags.dst_ootf);
+    }
 }
 
 }  // anonymous namespace
@@ -898,34 +1172,141 @@ ColorSpaceTransformBlock::ColorSpaceTransformData::ColorSpaceTransformData(const
         : fSteps(src, srcAT, dst, dstAT) {}
 
 void ColorSpaceTransformBlock::AddBlock(const KeyContext& keyContext,
-                                        PaintParamsKeyBuilder* builder,
-                                        PipelineDataGatherer* gatherer,
                                         const ColorSpaceTransformData& data) {
-    add_color_space_xform_uniform_data(keyContext.dict(), data, gatherer);
-    builder->addBlock(BuiltInCodeSnippetID::kColorSpaceXformColorFilter);
+    const bool xformNeedsGamutOrXferFn = data.fSteps.fFlags.linearize ||
+                                         data.fSteps.fFlags.encode    ||
+                                         data.fSteps.fFlags.src_ootf  ||
+                                         data.fSteps.fFlags.dst_ootf  ||
+                                         data.fSteps.fFlags.gamut_transform;
+    const bool swizzleNeedsGamutTransform = !(data.fReadSwizzle == ReadSwizzle::kRGBA ||
+                                              data.fReadSwizzle == ReadSwizzle::kRGB1);
+
+    // Use a specialized shader if we don't need transfer function or gamut transforms.
+    if (!(xformNeedsGamutOrXferFn || swizzleNeedsGamutTransform)) {
+        // When enabled, the most specialized is to do nothing at all. To simplify calling code,
+        // this adds a passthrough block vs. having callers know how to reconfigure their blocks.
+        if (SkToBool(keyContext.flags() & KeyGenFlags::kEnableIdentityColorSpaceXform) &&
+            data.fReadSwizzle == ReadSwizzle::kRGBA &&
+            !data.fSteps.fFlags.premul && !data.fSteps.fFlags.unpremul) {
+            keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPriorOutput);
+            return;
+        }
+
+        add_color_space_uniforms(keyContext, BuiltInCodeSnippetID::kColorSpaceXformPremul,
+                                 data.fSteps, data.fReadSwizzle);
+        keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kColorSpaceXformPremul);
+        return;
+    }
+
+    // Use a specialized shader if we're transferring to and from sRGB-ish color spaces.
+    // We take this path even if linearize/encode are false since we can set coefficients
+    // in the sRGB transfer functions to represent identity, and that is better than using the
+    // most general colorspace option.
+    if ((!data.fSteps.fFlags.linearize || skcms_TransferFunction_isSRGBish(&data.fSteps.fSrcTF)) &&
+        (!data.fSteps.fFlags.encode || skcms_TransferFunction_isSRGBish(&data.fSteps.fDstTFInv))) {
+        add_color_space_uniforms(keyContext, BuiltInCodeSnippetID::kColorSpaceXformSRGB,
+                                 data.fSteps, data.fReadSwizzle);
+        keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kColorSpaceXformSRGB);
+        return;
+    }
+
+    // Use the most general color space transform shader if no specializations can be used.
+    add_color_space_uniforms(keyContext, BuiltInCodeSnippetID::kColorSpaceXformColorFilter,
+                             data.fSteps, data.fReadSwizzle);
+    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kColorSpaceXformColorFilter);
+}
+
+//--------------------------------------------------------------------------------------------------
+namespace {
+
+void add_analytic_clip_data(const KeyContext& keyContext,
+                            const NonMSAAClipBlock::NonMSAAClipData& data) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kAnalyticClip)
+    keyContext.pipelineDataGatherer()->write(data.fRect);
+    keyContext.pipelineDataGatherer()->write(data.fRadiusPlusHalf);
+    keyContext.pipelineDataGatherer()->writeHalf(data.fEdgeSelect);
+}
+
+void add_analytic_and_atlas_clip_data(const KeyContext& keyContext,
+                                      const NonMSAAClipBlock::NonMSAAClipData& data) {
+    BEGIN_WRITE_UNIFORMS(keyContext, BuiltInCodeSnippetID::kAnalyticAndAtlasClip)
+    keyContext.pipelineDataGatherer()->write(data.fRect);
+    keyContext.pipelineDataGatherer()->write(data.fRadiusPlusHalf);
+    keyContext.pipelineDataGatherer()->writeHalf(data.fEdgeSelect);
+    keyContext.pipelineDataGatherer()->write(data.fTexCoordOffset);
+    keyContext.pipelineDataGatherer()->write(data.fMaskBounds);
+    if (data.fAtlasTexture) {
+        keyContext.pipelineDataGatherer()->write(
+                SkSize::Make(1.f/data.fAtlasTexture->dimensions().width(),
+                             1.f/data.fAtlasTexture->dimensions().height()));
+    } else {
+        keyContext.pipelineDataGatherer()->write(SkSize::Make(0, 0));
+    }
+}
+
+}  // anonymous namespace
+
+void NonMSAAClipBlock::AddBlock(const KeyContext& keyContext, const NonMSAAClipData& data) {
+    if (data.fAtlasTexture) {
+        add_analytic_and_atlas_clip_data(keyContext, data);
+        keyContext.paintParamsKeyBuilder()->beginBlock(BuiltInCodeSnippetID::kAnalyticAndAtlasClip);
+
+        const Caps* caps = keyContext.caps();
+        ImmutableSamplerInfo info =
+                caps->getImmutableSamplerInfo(data.fAtlasTexture->textureInfo());
+        SamplerDesc samplerDesc {SkSamplingOptions(SkFilterMode::kNearest, SkMipmapMode::kNone),
+                                 {SkTileMode::kClamp, SkTileMode::kClamp},
+                                 info};
+        keyContext.pipelineDataGatherer()->add(data.fAtlasTexture, samplerDesc);
+
+        keyContext.paintParamsKeyBuilder()->endBlock();
+    } else {
+        add_analytic_clip_data(keyContext, data);
+        keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kAnalyticClip);
+    }
 }
 
 //--------------------------------------------------------------------------------------------------
 
-void AddBlendModeColorFilter(const KeyContext& keyContext,
-                             PaintParamsKeyBuilder* builder,
-                             PipelineDataGatherer* gatherer,
-                             SkBlendMode bm,
+void AddPrimitiveColor(const KeyContext& keyContext, bool skipColorXform) {
+    /**
+     * When skipColorXform is true, we assume the primitive color is already in the dst color space.
+    */
+    if (skipColorXform) {
+         keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPrimitiveColor);
+         return;
+    }
+
+    /**
+     * If skipColorXform is false (most cases), the primitive color is assumed to be in sRGB.
+    */
+    ColorSpaceTransformBlock::ColorSpaceTransformData toDst(sk_srgb_singleton(),
+                                                            kPremul_SkAlphaType,
+                                                            keyContext.dstColorInfo().colorSpace(),
+                                                            keyContext.dstColorInfo().alphaType());
+
+    Compose(keyContext,
+            /* addInnerToKey= */ [&]() -> void {
+                keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPrimitiveColor);
+            },
+            /* addOuterToKey= */ [&]() -> void {
+                ColorSpaceTransformBlock::AddBlock(keyContext, toDst);
+            });
+}
+
+//--------------------------------------------------------------------------------------------------
+
+void AddBlendModeColorFilter(const KeyContext& keyContext, SkBlendMode bm,
                              const SkPMColor4f& srcColor) {
-    Blend(keyContext, builder, gatherer,
+    Blend(keyContext,
           /* addBlendToKey= */ [&] () -> void {
-              // Note, we're playing a bit of a game here. By explicitly adding a
-              // BlendModeBlenderBlock we're always forcing the SkSL to call 'sk_blend'
-              // rather than allowing it to sometimes call 'blend_porter_duff'. This reduces
-              // the number of shader combinations and allows the pre-compilation system to more
-              // easily match the rendering path.
-              BlendModeBlenderBlock::AddBlock(keyContext, builder, gatherer, bm);
+              AddBlendMode(keyContext, bm);
           },
           /* addSrcToKey= */ [&]() -> void {
-              SolidColorShaderBlock::AddBlock(keyContext, builder, gatherer, srcColor);
+              SolidColorShaderBlock::AddBlock(keyContext, srcColor);
           },
           /* addDstToKey= */ [&]() -> void {
-              builder->addBlock(BuiltInCodeSnippetID::kPriorOutput);
+              keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPriorOutput);
           });
 }
 
@@ -947,13 +1328,20 @@ bool RuntimeEffectBlock::ShaderData::operator==(const ShaderData& rhs) const {
     return fEffect == rhs.fEffect && skdata_matches(fUniforms.get(), rhs.fUniforms.get());
 }
 
-static void gather_runtime_effect_uniforms(SkSpan<const SkRuntimeEffect::Uniform> rtsUniforms,
+static void gather_runtime_effect_uniforms(const KeyContext& keyContext,
+                                           const SkRuntimeEffect* effect,
                                            SkSpan<const Uniform> graphiteUniforms,
                                            const SkData* uniformData,
                                            PipelineDataGatherer* gatherer) {
-    if (!rtsUniforms.empty() && uniformData) {
-        SkDEBUGCODE(UniformExpectationsValidator uev(gatherer, graphiteUniforms);)
+    if (!uniformData) {
+        return;  // precompiling
+    }
 
+    SkDEBUGCODE(UniformExpectationsValidator uev(gatherer, graphiteUniforms);)
+
+    SkSpan<const SkRuntimeEffect::Uniform> rtsUniforms = effect->uniforms();
+
+    if (!rtsUniforms.empty() && uniformData) {
         // Collect all the other uniforms from the provided SkData.
         const uint8_t* uniformBase = uniformData->bytes();
         for (size_t index = 0; index < rtsUniforms.size(); ++index) {
@@ -966,87 +1354,136 @@ static void gather_runtime_effect_uniforms(SkSpan<const SkRuntimeEffect::Uniform
     }
 }
 
-void RuntimeEffectBlock::BeginBlock(const KeyContext& keyContext,
-                                    PaintParamsKeyBuilder* builder,
-                                    PipelineDataGatherer* gatherer,
-                                    const ShaderData& shaderData) {
+// TODO(robertphillips): when BeginBlock fails we should mark the 'builder' as having failed
+// and explicitly handle the failure in ShaderCodeDictionary::findOrCreate.
+bool RuntimeEffectBlock::BeginBlock(const KeyContext& keyContext, const ShaderData& shaderData) {
     ShaderCodeDictionary* dict = keyContext.dict();
     int codeSnippetID = dict->findOrCreateRuntimeEffectSnippet(shaderData.fEffect.get());
 
-    keyContext.rtEffectDict()->set(codeSnippetID, shaderData.fEffect);
+    if (codeSnippetID < 0) {
+        return false;
+    }
+
+    if (SkKnownRuntimeEffects::IsUserDefinedRuntimeEffect(codeSnippetID)) {
+        keyContext.rtEffectDict()->set(codeSnippetID, shaderData.fEffect);
+    }
 
     const ShaderSnippet* entry = dict->getEntry(codeSnippetID);
-    SkASSERT(entry);
+    if (!entry) {
+        return false;
+    }
 
-    gather_runtime_effect_uniforms(shaderData.fEffect->uniforms(),
+    gather_runtime_effect_uniforms(keyContext,
+                                   shaderData.fEffect.get(),
                                    entry->fUniforms,
                                    shaderData.fUniforms.get(),
-                                   gatherer);
+                                   keyContext.pipelineDataGatherer());
 
-    builder->beginBlock(codeSnippetID);
+    keyContext.paintParamsKeyBuilder()->beginBlock(codeSnippetID);
+    return true;
+}
+
+// TODO(robertphillips): fuse this with the similar code in add_children_to_key and
+// PrecompileRTEffect::addToKey.
+void RuntimeEffectBlock::AddNoOpEffect(const KeyContext& keyContext, SkRuntimeEffect* effect) {
+    if (effect->allowShader()) {
+        // A missing shader returns transparent black
+        SolidColorShaderBlock::AddBlock(keyContext, SK_PMColor4fTRANSPARENT);
+    } else if (effect->allowColorFilter()) {
+        // A "passthrough" color filter returns the input color as-is.
+        keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPriorOutput);
+    } else {
+        SkASSERT(effect->allowBlender());
+        // A "passthrough" blender performs `blend_src_over(src, dest)`.
+        AddFixedBlendMode(keyContext, SkBlendMode::kSrcOver);
+    }
+}
+
+void RuntimeEffectBlock::HandleIntrinsics(const KeyContext& keyContext, const SkRuntimeEffect* effect) {
+    // Runtime effects that reference color transform intrinsics have two extra children that
+    // are bound to the colorspace xform snippet with values to go to and from the linear srgb
+    // to the current working/dst color space.
+    if (SkRuntimeEffectPriv::UsesColorTransform(effect)) {
+        SkColorSpace* dstCS = keyContext.dstColorInfo().colorSpace();
+        if (!dstCS) {
+            dstCS = sk_srgb_linear_singleton(); // turn colorspace conversion into a noop
+        }
+
+        // TODO(b/332565302): If the runtime shader only uses one of these transforms, we could
+        // upload only one set of uniforms.
+
+        // NOTE: This must be kept in sync with the logic used to generate the toLinearSrgb() and
+        // fromLinearSrgb() expressions for each runtime effect. toLinearSrgb() is assumed to be
+        // the second to last child, and fromLinearSrgb() is assumed to be the last.
+        ColorSpaceTransformBlock::ColorSpaceTransformData dstToLinear(dstCS,
+                                                                      kUnpremul_SkAlphaType,
+                                                                      sk_srgb_linear_singleton(),
+                                                                      kUnpremul_SkAlphaType);
+        ColorSpaceTransformBlock::ColorSpaceTransformData linearToDst(sk_srgb_linear_singleton(),
+                                                                      kUnpremul_SkAlphaType,
+                                                                      dstCS,
+                                                                      kUnpremul_SkAlphaType);
+
+        ColorSpaceTransformBlock::AddBlock(keyContext, dstToLinear);
+        ColorSpaceTransformBlock::AddBlock(keyContext, linearToDst);
+    }
 }
 
 // ==================================================================
 
 namespace {
 
-void add_to_key(const KeyContext& keyContext,
-                PaintParamsKeyBuilder* builder,
-                PipelineDataGatherer* gatherer,
-                const SkBlendModeBlender* blender) {
+void add_to_key(const KeyContext& keyContext, const SkBlendModeBlender* blender) {
     SkASSERT(blender);
-
-    AddModeBlend(keyContext, builder, gatherer, blender->mode());
+    AddBlendMode(keyContext, blender->mode());
 }
 
-// Be sure to keep this function in sync w/ its correlate in FactoryFunctions.cpp
+// Be sure to keep this function in sync w/ the code in PrecompileRTEffect::addToKey
 void add_children_to_key(const KeyContext& keyContext,
-                         PaintParamsKeyBuilder* builder,
-                         PipelineDataGatherer* gatherer,
                          SkSpan<const SkRuntimeEffect::ChildPtr> children,
-                         SkSpan<const SkRuntimeEffect::Child> childInfo) {
+                         const SkRuntimeEffect* effect) {
+    SkSpan<const SkRuntimeEffect::Child> childInfo = effect->children();
     SkASSERT(children.size() == childInfo.size());
 
     using ChildType = SkRuntimeEffect::ChildType;
 
-    KeyContextWithScope childContext(keyContext, KeyContext::Scope::kRuntimeEffect);
-
     for (size_t index = 0; index < children.size(); ++index) {
         const SkRuntimeEffect::ChildPtr& child = children[index];
+        KeyContext childContext = keyContext.forRuntimeEffect(effect, index);
+
         std::optional<ChildType> type = child.type();
         if (type == ChildType::kShader) {
-            AddToKey(childContext, builder, gatherer, child.shader());
+            AddToKey(childContext, child.shader());
         } else if (type == ChildType::kColorFilter) {
-            AddToKey(childContext, builder, gatherer, child.colorFilter());
+            AddToKey(childContext, child.colorFilter());
         } else if (type == ChildType::kBlender) {
-            AddToKey(childContext, builder, gatherer, child.blender());
+            AddToKey(childContext, child.blender());
         } else {
             // We don't have a child effect. Substitute in a no-op effect.
             switch (childInfo[index].type) {
                 case ChildType::kShader:
                     // A missing shader returns transparent black
-                    SolidColorShaderBlock::AddBlock(childContext, builder, gatherer,
+                    SolidColorShaderBlock::AddBlock(childContext,
                                                     SK_PMColor4fTRANSPARENT);
                     break;
 
                 case ChildType::kColorFilter:
                     // A "passthrough" color filter returns the input color as-is.
-                    builder->addBlock(BuiltInCodeSnippetID::kPriorOutput);
+                    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPriorOutput);
                     break;
 
                 case ChildType::kBlender:
                     // A "passthrough" blender performs `blend_src_over(src, dest)`.
-                    AddKnownModeBlend(childContext, builder, gatherer, SkBlendMode::kSrcOver);
+                    AddFixedBlendMode(childContext, SkBlendMode::kSrcOver);
                     break;
             }
         }
     }
+
+    RuntimeEffectBlock::HandleIntrinsics(keyContext, effect);
 }
 
-void add_to_key(const KeyContext& keyContext,
-                PaintParamsKeyBuilder* builder,
-                PipelineDataGatherer* gatherer,
-                const SkRuntimeBlender* blender) {
+void add_to_key(const KeyContext& keyContext, const SkRuntimeBlender* blender) {
     SkASSERT(blender);
     sk_sp<SkRuntimeEffect> effect = blender->effect();
     SkASSERT(effect);
@@ -1056,30 +1493,31 @@ void add_to_key(const KeyContext& keyContext,
             keyContext.dstColorInfo().colorSpace());
     SkASSERT(uniforms);
 
-    RuntimeEffectBlock::BeginBlock(keyContext, builder, gatherer,
-                                   { effect, std::move(uniforms) });
+    if (!RuntimeEffectBlock::BeginBlock(keyContext, { effect, std::move(uniforms) })) {
+        RuntimeEffectBlock::AddNoOpEffect(keyContext, effect.get());
+        return;
+    }
 
-    add_children_to_key(keyContext, builder, gatherer,
-                        blender->children(), effect->children());
+    add_children_to_key(keyContext, blender->children(), effect.get());
 
-    builder->endBlock();
+    keyContext.paintParamsKeyBuilder()->endBlock();
 }
 
 } // anonymous namespace
 
-void AddToKey(const KeyContext& keyContext,
-              PaintParamsKeyBuilder* builder,
-              PipelineDataGatherer* gatherer,
-              const SkBlender* blender) {
+void AddToKey(const KeyContext& keyContext, const SkBlender* blender) {
     if (!blender) {
+        // Calling code assumes a block will be appended. Add a fixed block to preserve shader
+        // and PaintParamsKey structure in release builds but assert since this should either not
+        // happen or should be changing high-level logic within PaintParams::toKey().
+        SkASSERT(false);
+        AddFixedBlendMode(keyContext, SkBlendMode::kSrcOver);
         return;
     }
     switch (as_BB(blender)->type()) {
-#define M(type)                                                    \
-    case SkBlenderBase::BlenderType::k##type:                      \
-        add_to_key(keyContext,                                     \
-                   builder,                                        \
-                   gatherer,                                       \
+#define M(type)                                                     \
+    case SkBlenderBase::BlenderType::k##type:                       \
+        add_to_key(keyContext,                                      \
                    static_cast<const Sk##type##Blender*>(blender)); \
         return;
         SK_ALL_BLENDERS(M)
@@ -1090,73 +1528,60 @@ void AddToKey(const KeyContext& keyContext,
 
 //--------------------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------------------
-static SkPMColor4f map_color(const SkColor4f& c, SkColorSpace* src, SkColorSpace* dst) {
+static SkPMColor4f map_color(const SkColor4f& c,
+                             SkColorSpace* src,
+                             SkColorSpace* dst,
+                             SkAlphaType dstAlphaType) {
     SkPMColor4f color = {c.fR, c.fG, c.fB, c.fA};
-    SkColorSpaceXformSteps(src, kUnpremul_SkAlphaType, dst, kPremul_SkAlphaType).apply(color.vec());
+    SkColorSpaceXformSteps(src, kUnpremul_SkAlphaType, dst, dstAlphaType).apply(color.vec());
     return color;
 }
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkBlendModeColorFilter* filter) {
+static void add_to_key(const KeyContext& keyContext, const SkBlendModeColorFilter* filter) {
     SkASSERT(filter);
 
     SkPMColor4f color = map_color(filter->color(), sk_srgb_singleton(),
-                                  keyContext.dstColorInfo().colorSpace());
+                                  keyContext.dstColorInfo().colorSpace(),
+                                  keyContext.dstColorInfo().alphaType());
 
-    AddBlendModeColorFilter(keyContext, builder, gatherer, filter->mode(), color);
+    AddBlendModeColorFilter(keyContext, filter->mode(), color);
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkColorSpaceXformColorFilter* filter) {
+static void add_to_key(const KeyContext& keyContext, const SkColorSpaceXformColorFilter* filter) {
     SkASSERT(filter);
 
     constexpr SkAlphaType kAlphaType = kPremul_SkAlphaType;
     ColorSpaceTransformBlock::ColorSpaceTransformData csData(filter->src().get(), kAlphaType,
                                                              filter->dst().get(), kAlphaType);
-    ColorSpaceTransformBlock::AddBlock(keyContext, builder, gatherer, csData);
+    ColorSpaceTransformBlock::AddBlock(keyContext, csData);
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* keyBuilder,
-                       PipelineDataGatherer* gatherer,
-                       const SkComposeColorFilter* filter) {
+static void add_to_key(const KeyContext& keyContext, const SkComposeColorFilter* filter) {
     SkASSERT(filter);
 
-    Compose(keyContext, keyBuilder, gatherer,
+    Compose(keyContext,
             /* addInnerToKey= */ [&]() -> void {
-                AddToKey(keyContext, keyBuilder, gatherer, filter->inner().get());
+                AddToKey(keyContext, filter->inner().get());
             },
             /* addOuterToKey= */ [&]() -> void {
-                AddToKey(keyContext, keyBuilder, gatherer, filter->outer().get());
+                AddToKey(keyContext, filter->outer().get());
             });
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkGaussianColorFilter*) {
-    builder->addBlock(BuiltInCodeSnippetID::kGaussianColorFilter);
+static void add_to_key(const KeyContext& keyContext, const SkGaussianColorFilter*) {
+    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kGaussianColorFilter);
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkMatrixColorFilter* filter) {
+static void add_to_key(const KeyContext& keyContext, const SkMatrixColorFilter* filter) {
     SkASSERT(filter);
 
     bool inHSLA = filter->domain() == SkMatrixColorFilter::Domain::kHSLA;
-    MatrixColorFilterBlock::MatrixColorFilterData matrixCFData(filter->matrix(), inHSLA);
+    bool clamp = filter->clamp() == SkMatrixColorFilter::Clamp::kYes;
+    MatrixColorFilterBlock::MatrixColorFilterData matrixCFData(filter->matrix(), inHSLA, clamp);
 
-    MatrixColorFilterBlock::AddBlock(keyContext, builder, gatherer, matrixCFData);
+    MatrixColorFilterBlock::AddBlock(keyContext, matrixCFData);
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkRuntimeColorFilter* filter) {
+static void add_to_key(const KeyContext& keyContext, const SkRuntimeColorFilter* filter) {
     SkASSERT(filter);
 
     sk_sp<SkRuntimeEffect> effect = filter->effect();
@@ -1164,39 +1589,36 @@ static void add_to_key(const KeyContext& keyContext,
             effect->uniforms(), filter->uniforms(), keyContext.dstColorInfo().colorSpace());
     SkASSERT(uniforms);
 
-    RuntimeEffectBlock::BeginBlock(keyContext, builder, gatherer, {effect, std::move(uniforms)});
+    if (!RuntimeEffectBlock::BeginBlock(keyContext, { effect, std::move(uniforms) })) {
+        RuntimeEffectBlock::AddNoOpEffect(keyContext, effect.get());
+        return;
+    }
 
-    add_children_to_key(keyContext, builder, gatherer,
-                        filter->children(), effect->children());
+    add_children_to_key(keyContext, filter->children(), effect.get());
 
-    builder->endBlock();
+    keyContext.paintParamsKeyBuilder()->endBlock();
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkTableColorFilter* filter) {
+static void add_to_key(const KeyContext& keyContext, const SkTableColorFilter* filter) {
     SkASSERT(filter);
 
     sk_sp<TextureProxy> proxy = RecorderPriv::CreateCachedProxy(keyContext.recorder(),
-                                                                filter->bitmap());
+                                                                filter->bitmap(),
+                                                                "TableColorFilterTexture");
     if (!proxy) {
         SKGPU_LOG_W("Couldn't create TableColorFilter's table");
 
         // Return the input color as-is.
-        builder->addBlock(BuiltInCodeSnippetID::kPriorOutput);
+        keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPriorOutput);
         return;
     }
 
     TableColorFilterBlock::TableColorFilterData data(std::move(proxy));
 
-    TableColorFilterBlock::AddBlock(keyContext, builder, gatherer, data);
+    TableColorFilterBlock::AddBlock(keyContext, data);
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkWorkingFormatColorFilter* filter) {
+static void add_to_key(const KeyContext& keyContext, const SkWorkingFormatColorFilter* filter) {
     SkASSERT(filter);
 
     const SkColorInfo& dstInfo = keyContext.dstColorInfo();
@@ -1208,52 +1630,51 @@ static void add_to_key(const KeyContext& keyContext,
 
     SkAlphaType workingAT;
     sk_sp<SkColorSpace> workingCS = filter->workingFormat(dstCS, &workingAT);
-    SkColorInfo workingInfo(dstInfo.colorType(), workingAT, workingCS);
-    KeyContextWithColorInfo workingContext(keyContext, workingInfo);
+    KeyContext workingContext =
+            keyContext.withColorInfo({dstInfo.colorType(), workingAT, workingCS});
 
     // Use two nested compose blocks to chain (dst->working), child, and (working->dst) together
     // while appearing as one block to the parent node.
-    Compose(keyContext, builder, gatherer,
+    Compose(keyContext,
             /* addInnerToKey= */ [&]() -> void {
                 // Inner compose
-                Compose(keyContext, builder, gatherer,
+                Compose(keyContext,
                         /* addInnerToKey= */ [&]() -> void {
                             // Innermost (inner of inner compose)
                             ColorSpaceTransformBlock::ColorSpaceTransformData data1(
                                     dstCS.get(), dstAT, workingCS.get(), workingAT);
-                            ColorSpaceTransformBlock::AddBlock(keyContext, builder, gatherer,
-                                                               data1);
+                            ColorSpaceTransformBlock::AddBlock(keyContext, data1);
                         },
                         /* addOuterToKey= */ [&]() -> void {
                             // Middle (outer of inner compose)
-                            AddToKey(workingContext, builder, gatherer, filter->child().get());
+                            AddToKey(workingContext, filter->child().get());
                         });
             },
             /* addOuterToKey= */ [&]() -> void {
                 // Outermost (outer of outer compose)
                 ColorSpaceTransformBlock::ColorSpaceTransformData data2(
                         workingCS.get(), workingAT, dstCS.get(), dstAT);
-                ColorSpaceTransformBlock::AddBlock(keyContext, builder, gatherer, data2);
+                ColorSpaceTransformBlock::AddBlock(keyContext, data2);
             });
 }
 
-void AddToKey(const KeyContext& keyContext,
-              PaintParamsKeyBuilder* builder,
-              PipelineDataGatherer* gatherer,
-              const SkColorFilter* filter) {
+void AddToKey(const KeyContext& keyContext, const SkColorFilter* filter) {
     if (!filter) {
+        // Calling code assumes a block will be appended. Add a fixed block to preserve shader
+        // and PaintParamsKey structure in release builds but assert since this should either not
+        // happen or should be changing high-level logic within PaintParams::toKey().
+        SkASSERT(false);
+        keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPriorOutput);
         return;
     }
     switch (as_CFB(filter)->type()) {
     case SkColorFilterBase::Type::kNoop:
         // Return the input color as-is.
-        builder->addBlock(BuiltInCodeSnippetID::kPriorOutput);
+        keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPriorOutput);
         return;
 #define M(type)                                                        \
     case SkColorFilterBase::Type::k##type:                             \
         add_to_key(keyContext,                                         \
-                   builder,                                            \
-                   gatherer,                                           \
                    static_cast<const Sk##type##ColorFilter*>(filter)); \
         return;
         SK_ALL_COLOR_FILTERS(M)
@@ -1264,132 +1685,191 @@ void AddToKey(const KeyContext& keyContext,
 
 // ==================================================================
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkBlendShader* shader) {
+static void add_to_key(const KeyContext& keyContext, const SkBlendShader* shader) {
     SkASSERT(shader);
 
-    Blend(keyContext, builder, gatherer,
+    Blend(keyContext,
             /* addBlendToKey= */ [&] () -> void {
-                AddModeBlend(keyContext, builder, gatherer, shader->mode());
+                AddBlendMode(keyContext, shader->mode());
             },
             /* addSrcToKey= */ [&]() -> void {
-                AddToKey(keyContext, builder, gatherer, shader->src().get());
+                AddToKey(keyContext, shader->src().get());
             },
             /* addDstToKey= */ [&]() -> void {
-                AddToKey(keyContext, builder, gatherer, shader->dst().get());
+                AddToKey(keyContext, shader->dst().get());
             });
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkCTMShader* shader) {
+template <typename AddInnerToKeyT>
+static void add_local_matrix_to_key(const KeyContext& keyContext,
+                                    const SkMatrix& localMatrix,
+                                    const SkMatrix& postInverseMatrix,
+                                    AddInnerToKeyT addInnerToKey) {
+    auto lmInverse = localMatrix.invert();
+    if (!lmInverse) {
+        keyContext.paintParamsKeyBuilder()->addErrorBlock();
+        return;
+    }
+
+    lmInverse->postConcat(postInverseMatrix);
+
+    LocalMatrixShaderBlock::BeginBlock(keyContext,
+                                       LocalMatrixShaderBlock::LMShaderData(*lmInverse));
+    KeyContextWithLocalMatrix lmContext(keyContext, localMatrix);
+    addInnerToKey(lmContext);
+    keyContext.paintParamsKeyBuilder()->endBlock();
+}
+
+static void add_to_key(const KeyContext& keyContext, const SkCTMShader* shader) {
     // CTM shaders are always given device coordinates, so we don't have to modify the CTM itself
     // with keyContext's local transform.
-    LocalMatrixShaderBlock::LMShaderData lmShaderData(shader->ctm());
-
-    KeyContextWithLocalMatrix newContext(keyContext, shader->ctm());
-
-    LocalMatrixShaderBlock::BeginBlock(newContext, builder, gatherer, lmShaderData);
-
-        AddToKey(newContext, builder, gatherer, shader->proxyShader().get());
-
-    builder->endBlock();
+    add_local_matrix_to_key(keyContext,
+                            /*localMatrix=*/shader->ctm(),
+                            /*postInverseMatrix=*/SkMatrix::I(),
+                            [&](const KeyContext& childCtx) {
+                                    AddToKey(childCtx, shader->proxyShader().get());
+                            });
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkColorShader* shader) {
+static void add_to_key(const KeyContext& keyContext, const SkColorShader* shader) {
     SkASSERT(shader);
 
-    SolidColorShaderBlock::AddBlock(keyContext, builder, gatherer,
-                                    SkColor4f::FromColor(shader->color()).premul());
+    SkPMColor4f color = map_color(shader->color(), sk_srgb_singleton(),
+                                  keyContext.dstColorInfo().colorSpace(),
+                                  keyContext.dstColorInfo().alphaType());
+
+    SolidColorShaderBlock::AddBlock(keyContext, color);
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkColor4Shader* shader) {
+static void add_to_key(const KeyContext& keyContext, const SkColorFilterShader* shader) {
     SkASSERT(shader);
 
-    SolidColorShaderBlock::AddBlock(keyContext, builder, gatherer, shader->color().premul());
-}
-
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkColorFilterShader* shader) {
-    SkASSERT(shader);
-
-    Compose(keyContext, builder, gatherer,
+    Compose(keyContext,
             /* addInnerToKey= */ [&]() -> void {
-                AddToKey(keyContext, builder, gatherer, shader->shader().get());
+                AddToKey(keyContext, shader->shader().get());
             },
             /* addOuterToKey= */ [&]() -> void {
-                AddToKey(keyContext, builder, gatherer, shader->filter().get());
+                AddToKey(keyContext, shader->filter().get());
             });
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkCoordClampShader* shader) {
+static void add_to_key(const KeyContext& keyContext, const SkCoordClampShader* shader) {
     SkASSERT(shader);
 
     CoordClampShaderBlock::CoordClampData data(shader->subset());
 
-    CoordClampShaderBlock::BeginBlock(keyContext, builder, gatherer, data);
-        AddToKey(keyContext, builder, gatherer, shader->shader().get());
-    builder->endBlock();
+    CoordClampShaderBlock::BeginBlock(keyContext, data);
+
+    // Subtleties in clamping implementation can lead to texture samples at non pixel aligned
+    // coordinates, particularly if clamped to non-texel centers.
+    AddToKey(keyContext.withExtraFlags(KeyGenFlags::kDisableSamplingOptimization),
+             shader->shader().get());
+
+    keyContext.paintParamsKeyBuilder()->endBlock();
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkEmptyShader*) {
-    builder->addBlock(BuiltInCodeSnippetID::kPriorOutput);
+static void add_to_key(const KeyContext& keyContext, const SkEmptyShader*) {
+    keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPriorOutput);
 }
 
 static void add_yuv_image_to_key(const KeyContext& keyContext,
-                                 PaintParamsKeyBuilder* builder,
-                                 PipelineDataGatherer* gatherer,
-                                 const SkImageShader* origShader,
-                                 sk_sp<const SkImage> imageToDraw,
-                                 SkSamplingOptions sampling) {
+                                 const SkImage* imageToDraw,
+                                 SkRect subset,
+                                 SkSamplingOptions sampling,
+                                 SkTileMode tileModeX,
+                                 SkTileMode tileModeY,
+                                 bool isRaw) {
     SkASSERT(!imageToDraw->isAlphaOnly());
 
-    const YUVATextureProxies& yuvaProxies =
-            static_cast<const Image_YUVA*>(imageToDraw.get())->yuvaProxies();
-    const SkYUVAInfo& yuvaInfo = yuvaProxies.yuvaInfo();
+    const Image_YUVA* yuvaImage = static_cast<const Image_YUVA*>(imageToDraw);
+    const SkYUVAInfo& yuvaInfo = yuvaImage->yuvaInfo();
+    // We would want to add a translation to the local matrix to handle other sitings.
+    SkASSERT(yuvaInfo.sitingX() == SkYUVAInfo::Siting::kCentered);
+    SkASSERT(yuvaInfo.sitingY() == SkYUVAInfo::Siting::kCentered);
 
     YUVImageShaderBlock::ImageData imgData(sampling,
-                                           origShader->tileModeX(),
-                                           origShader->tileModeY(),
+                                           tileModeX,
+                                           tileModeY,
                                            imageToDraw->dimensions(),
-                                           origShader->subset());
-    for (int i = 0; i < SkYUVAInfo::kYUVAChannelCount; ++i) {
-        memset(&imgData.fChannelSelect[i], 0, sizeof(SkV4));
-    }
-    int textureCount = 0;
-    SkYUVAInfo::YUVALocations yuvaLocations = yuvaProxies.yuvaLocations();
+                                           subset);
     for (int locIndex = 0; locIndex < SkYUVAInfo::kYUVAChannelCount; ++locIndex) {
-        auto [yuvPlane, yuvChannel] = yuvaLocations[locIndex];
-        if (yuvPlane >= 0) {
-            SkASSERT(locIndex == textureCount);
-            TextureProxyView view = yuvaProxies.makeView(yuvPlane);
+        const TextureProxyView& view = yuvaImage->proxyView(locIndex);
+        if (view) {
             imgData.fTextureProxies[locIndex] = view.refProxy();
-            imgData.fChannelSelect[locIndex][static_cast<int>(yuvChannel)] = 1.0f;
-            ++textureCount;
+            // The view's swizzle has the data channel for the YUVA location in all slots, so read
+            // the 0th slot to determine fChannelSelect
+            switch(view.swizzle()[0]) {
+                case 'r': imgData.fChannelSelect[locIndex] = {1.f, 0.f, 0.f, 0.f}; break;
+                case 'g': imgData.fChannelSelect[locIndex] = {0.f, 1.f, 0.f, 0.f}; break;
+                case 'b': imgData.fChannelSelect[locIndex] = {0.f, 0.f, 1.f, 0.f}; break;
+                case 'a': imgData.fChannelSelect[locIndex] = {0.f, 0.f, 0.f, 1.f}; break;
+                default:
+                    imgData.fChannelSelect[locIndex] = {0.f, 0.f, 0.f, 0.f};
+                    SkDEBUGFAILF("Unexpected swizzle for YUVA data: %c", view.swizzle()[0]);
+                    break;
+            }
+        } else {
+            // Only the A proxy view should be null, in which case we bind the Y proxy view to
+            // pass validation and send all 1s for the channel selection to signal opaque alpha.
+            SkASSERT(locIndex == 3);
+            imgData.fTextureProxies[locIndex] = yuvaImage->proxyView(SkYUVAInfo::kY).refProxy();
+            imgData.fChannelSelect[locIndex] = {1.f, 1.f, 1.f, 1.f};
+            // For the hardcoded sampling no-swizzle case, we use this to set constant alpha
+            imgData.fAlphaParam = 1;
         }
     }
-    SkASSERT(textureCount == 3 || textureCount == 4);
-    // If the format has no alpha, we still need to set the proxy to something
-    if (textureCount == 3) {
-        imgData.fTextureProxies[3] = imgData.fTextureProxies[0];
+
+    auto [ssx, ssy] = yuvaImage->uvSubsampleFactors();
+    if (ssx > 1 || ssy > 1) {
+        // We need to adjust the image size we use for sampling to reflect the actual image size of
+        // the UV planes. However, since our coordinates are in Y's texel space we need to scale
+        // accordingly.
+        const TextureProxyView& view = yuvaImage->proxyView(SkYUVAInfo::kU);
+        imgData.fImgSizeUV = {view.dimensions().width()*ssx, view.dimensions().height()*ssy};
+        // This promotion of nearest to linear filtering for UV planes exists to mimic
+        // libjpeg[-turbo]'s do_fancy_upsampling option. We will filter the subsampled plane,
+        // however we want to filter at a fixed point for each logical image pixel to simulate
+        // nearest neighbor. In the shader we detect that the UV filtermode doesn't match the Y
+        // filtermode, and snap to Y pixel centers.
+        if (imgData.fSampling.filter == SkFilterMode::kNearest) {
+            imgData.fSamplingUV = SkSamplingOptions(SkFilterMode::kLinear,
+                                                    imgData.fSampling.mipmap);
+            // Consider a logical image pixel at the edge of the subset. When computing the logical
+            // pixel color value we should use a blend of two values from the subsampled plane.
+            // Depending on where the subset edge falls in actual subsampled plane, one of those
+            // values may come from outside the subset. Hence, we will use the default inset
+            // in Y texel space of 1/2. This applies the wrap mode to the subset but allows
+            // linear filtering to read pixels that are just outside the subset.
+            imgData.fLinearFilterUVInset.fX = 0.5f;
+            imgData.fLinearFilterUVInset.fY = 0.5f;
+        } else if (imgData.fSampling.filter == SkFilterMode::kLinear) {
+            // We need to inset so that we aren't sampling outside the subset, but no farther.
+            // Start by mapping the subset to UV texel space
+            float scaleX = 1.f/ssx;
+            float scaleY = 1.f/ssy;
+            SkRect subsetUV = {imgData.fSubset.fLeft  *scaleX,
+                               imgData.fSubset.fTop   *scaleY,
+                               imgData.fSubset.fRight *scaleX,
+                               imgData.fSubset.fBottom*scaleY};
+            // Round to UV texel borders
+            SkIRect iSubsetUV = subsetUV.roundOut();
+            // Inset in UV and map back to Y texel space. This gives us the largest possible
+            // inset rectangle that will not sample outside of the subset texels in UV space.
+            SkRect insetRectUV = {(iSubsetUV.fLeft  +0.5f)*ssx,
+                                  (iSubsetUV.fTop   +0.5f)*ssy,
+                                  (iSubsetUV.fRight -0.5f)*ssx,
+                                  (iSubsetUV.fBottom-0.5f)*ssy};
+            // Compute intersection with original inset
+            SkRect insetRect = imgData.fSubset.makeOutset(-0.5f, -0.5f);
+            (void) insetRect.intersect(insetRectUV);
+            // Compute max inset values to ensure we always remain within the subset.
+            imgData.fLinearFilterUVInset = {std::max(insetRect.fLeft - imgData.fSubset.fLeft,
+                                                     imgData.fSubset.fRight - insetRect.fRight),
+                                            std::max(insetRect.fTop - imgData.fSubset.fTop,
+                                                     imgData.fSubset.fBottom - insetRect.fBottom)};
+        }
     }
+
     float yuvM[20];
     SkColorMatrix_YUV2RGB(yuvaInfo.yuvColorSpace(), yuvM);
     // We drop the fourth column entirely since the transformation
@@ -1405,195 +1885,262 @@ static void add_yuv_image_to_key(const KeyContext& keyContext,
     );
     imgData.fYUVtoRGBTranslate = {yuvM[4], yuvM[9], yuvM[14]};
 
-    if (!origShader->isRaw()) {
-        imgData.fSteps = SkColorSpaceXformSteps(imageToDraw->colorSpace(),
-                                                imageToDraw->alphaType(),
-                                                keyContext.dstColorInfo().colorSpace(),
-                                                keyContext.dstColorInfo().alphaType());
-    }
+    SkColorSpaceXformSteps steps;
+    SkASSERT(steps.fFlags.mask() == 0);   // By default, the colorspace should have no effect
 
-    // The YUV formats can encode their own origin including reflection and rotation,
-    // so we need to wrap our block in an additional local matrix transform.
-    SkMatrix originMatrix = yuvaInfo.originMatrix();
-    LocalMatrixShaderBlock::LMShaderData lmShaderData(originMatrix);
-
-    KeyContextWithLocalMatrix newContext(keyContext, originMatrix);
-
-    LocalMatrixShaderBlock::BeginBlock(newContext, builder, gatherer, lmShaderData);
-
-        YUVImageShaderBlock::AddBlock(newContext, builder, gatherer, imgData);
-
-    builder->endBlock();
-}
-
-static skgpu::graphite::ReadSwizzle swizzle_class_to_read_enum(const skgpu::Swizzle& swizzle) {
-    if (swizzle == skgpu::Swizzle::RGBA()) {
-        return skgpu::graphite::ReadSwizzle::kRGBA;
-    } else if (swizzle == skgpu::Swizzle::RGB1()) {
-        return skgpu::graphite::ReadSwizzle::kRGB1;
-    } else if (swizzle == skgpu::Swizzle("rrr1")) {
-        return skgpu::graphite::ReadSwizzle::kRRR1;
-    } else if (swizzle == skgpu::Swizzle::BGRA()) {
-        return skgpu::graphite::ReadSwizzle::kBGRA;
-    } else if (swizzle == skgpu::Swizzle("000r")) {
-        return skgpu::graphite::ReadSwizzle::k000R;
+    // The actual output from the YUV image shader for non-opaque images is unpremul so
+    // we need to correct for the fact that the Image_YUVA_Graphite's alpha type is premul.
+    SkAlphaType srcAT = imageToDraw->alphaType() == kPremul_SkAlphaType
+                                ? kUnpremul_SkAlphaType
+                                : imageToDraw->alphaType();
+    if (isRaw) {
+        // Because we've avoided the premul alpha step in the YUV shader, we need to make sure
+        // it happens when drawing unpremul (i.e., non-opaque) images.
+        steps = SkColorSpaceXformSteps(imageToDraw->colorSpace(),
+                                       srcAT,
+                                       imageToDraw->colorSpace(),
+                                       imageToDraw->alphaType());
     } else {
-        SKGPU_LOG_W("%s is an unsupported read swizzle. Defaulting to RGBA.\n",
-                    swizzle.asString().data());
-        return skgpu::graphite::ReadSwizzle::kRGBA;
+        SkAlphaType dstAT = keyContext.dstColorInfo().alphaType();
+        // Setting the dst alphaType up this way is necessary because otherwise the constructor
+        // for SkColorSpaceXformSteps will set dstAT = srcAT when dstAT == kOpaque, and the
+        // premul step needed for non-opaque images won't occur.
+        if (dstAT == kOpaque_SkAlphaType && srcAT == kUnpremul_SkAlphaType) {
+            dstAT = kPremul_SkAlphaType;
+        }
+        steps = SkColorSpaceXformSteps(imageToDraw->colorSpace(),
+                                       srcAT,
+                                       keyContext.dstColorInfo().colorSpace(),
+                                       dstAT);
     }
+    ColorSpaceTransformBlock::ColorSpaceTransformData data(steps);
+
+    Compose(keyContext,
+            /* addInnerToKey= */ [&]() -> void {
+                YUVImageShaderBlock::AddBlock(keyContext, imgData);
+            },
+            /* addOuterToKey= */ [&]() -> void {
+                ColorSpaceTransformBlock::AddBlock(keyContext, data);
+            });
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkImageShader* shader) {
-    SkASSERT(shader);
-
+static void add_image_to_key(const KeyContext& keyContext,
+                             const SkImage* image,
+                             SkRect subset,
+                             SkSamplingOptions sampling,
+                             SkTileMode tileModeX,
+                             SkTileMode tileModeY,
+                             bool isRaw) {
     auto [ imageToDraw, newSampling ] = GetGraphiteBacked(keyContext.recorder(),
-                                                          shader->image().get(),
-                                                          shader->sampling());
+                                                          image,
+                                                          sampling);
     if (!imageToDraw) {
-        SKGPU_LOG_W("Couldn't convert ImageShader's image to a Graphite-backed image");
-        builder->addBlock(BuiltInCodeSnippetID::kError);
+        SKGPU_LOG_W("Couldn't convert SkImage to a Graphite-backed representation");
+        keyContext.paintParamsKeyBuilder()->addErrorBlock();
         return;
     }
+
+    // We must call notifyInUse() here to link the final, Graphite-backed 'imageToDraw'
+    // to the DrawContext that will sample it.
+    //
+    // This is necessary for two primary cases:
+    // 1. The original image was not Graphite-backed.
+    // 2. The original image was already Graphite-backed, but produced through Image::Copy, possibly
+    //    from a different DrawContext.
+    //
+    // Failing to call this can lead to leaked Device and DrawContext memory (b/338453542).
+    SkASSERT(as_IB(imageToDraw)->isGraphiteBacked());
+    SkASSERT(keyContext.drawContext());
+    static_cast<Image_Base*>(imageToDraw.get())->notifyInUse(keyContext.recorder(),
+                                                             keyContext.drawContext());
     if (as_IB(imageToDraw)->isYUVA()) {
         return add_yuv_image_to_key(keyContext,
-                                      builder,
-                                      gatherer,
-                                      shader,
-                                      std::move(imageToDraw),
-                                      newSampling);
+                                    imageToDraw.get(),
+                                    subset,
+                                    newSampling,
+                                    tileModeX,
+                                    tileModeY,
+                                    isRaw);
     }
 
-    skgpu::Mipmapped mipmapped = (newSampling.mipmap != SkMipmapMode::kNone)
-                                     ? skgpu::Mipmapped::kYes : skgpu::Mipmapped::kNo;
+    auto view = AsView(imageToDraw.get());
+    SkASSERT(newSampling.mipmap == SkMipmapMode::kNone || view.mipmapped() == Mipmapped::kYes);
 
-    auto [view, _] = AsView(keyContext.recorder(), imageToDraw.get(), mipmapped);
-
-    ImageShaderBlock::ImageData imgData(shader->sampling(),
-                                        shader->tileModeX(),
-                                        shader->tileModeY(),
+    ImageShaderBlock::ImageData imgData(newSampling,
+                                        tileModeX,
+                                        tileModeY,
                                         view.proxy()->dimensions(),
-                                        shader->subset(),
-                                        ReadSwizzle::kRGBA);
-    imgData.fSampling = newSampling;
+                                        subset);
+
+    // Here we detect pixel aligned blit-like image draws. Some devices have low precision filtering
+    // and will produce degraded (blurry) images unexpectedly for sequential exact pixel blits when
+    // not using nearest filtering. This is common for canvas scrolling implementations. Forcing
+    // nearest filtering when possible can also be a minor perf/power optimization depending on the
+    // hardware.
+    bool samplingHasNoEffect = false;
+    // Cubic sampling is will not filter the same as nearest even when pixel aligned.
+    if (!(keyContext.flags() & KeyGenFlags::kDisableSamplingOptimization || newSampling.useCubic)) {
+        SkMatrix totalM = keyContext.local2Dev().asM33();
+        if (keyContext.localMatrix()) {
+            totalM.preConcat(*keyContext.localMatrix());
+        }
+        totalM.normalizePerspective();
+        // The matrix should be translation with only pixel aligned 2d translation.
+        samplingHasNoEffect = totalM.isTranslate() && SkScalarIsInt(totalM.getTranslateX()) &&
+                              SkScalarIsInt(totalM.getTranslateY());
+    }
+
+    imgData.fSampling = samplingHasNoEffect ? SkFilterMode::kNearest : newSampling;
     imgData.fTextureProxy = view.refProxy();
     skgpu::Swizzle readSwizzle = view.swizzle();
     // If the color type is alpha-only, propagate the alpha value to the other channels.
     if (imageToDraw->isAlphaOnly()) {
         readSwizzle = skgpu::Swizzle::Concat(readSwizzle, skgpu::Swizzle("000a"));
     }
-    imgData.fReadSwizzle = swizzle_class_to_read_enum(readSwizzle);
+    ColorSpaceTransformBlock::ColorSpaceTransformData colorXformData(
+            SwizzleClassToReadEnum(readSwizzle));
 
-    if (!shader->isRaw()) {
-        imgData.fSteps = SkColorSpaceXformSteps(imageToDraw->colorSpace(),
-                                                imageToDraw->alphaType(),
-                                                keyContext.dstColorInfo().colorSpace(),
-                                                keyContext.dstColorInfo().alphaType());
+    if (!isRaw) {
+        colorXformData.fSteps = SkColorSpaceXformSteps(imageToDraw->colorSpace(),
+                                                       imageToDraw->alphaType(),
+                                                       keyContext.dstColorInfo().colorSpace(),
+                                                       keyContext.dstColorInfo().alphaType());
 
-        if (imageToDraw->isAlphaOnly() && keyContext.scope() != KeyContext::Scope::kRuntimeEffect) {
-            Blend(keyContext, builder, gatherer,
+        if (imageToDraw->isAlphaOnly() &&
+            !(keyContext.flags() & KeyGenFlags::kDisableAlphaOnlyImageColorization)) {
+            // NOTE: Alpha is not affected by colorspace conversion to the dst, and the paint color
+            // is already xformed to the dst, but the ColorSpaceTransformBlock is necessary to apply
+            // any read swizzle, which is often necessary for alpha-only color types.
+            Blend(keyContext,
                   /* addBlendToKey= */ [&] () -> void {
-                      AddKnownModeBlend(keyContext, builder, gatherer, SkBlendMode::kDstIn);
+                      AddFixedBlendMode(keyContext, SkBlendMode::kDstIn);
                   },
                   /* addSrcToKey= */ [&] () -> void {
-                      ImageShaderBlock::AddBlock(keyContext, builder, gatherer, imgData);
+                      Compose(keyContext,
+                              /* addInnerToKey= */ [&]() -> void {
+                                  ImageShaderBlock::AddBlock(keyContext,
+                                                             imgData);
+                              },
+                              /* addOuterToKey= */ [&]() -> void {
+                                  ColorSpaceTransformBlock::AddBlock(keyContext,
+                                                                     colorXformData);
+                              });
                   },
                   /* addDstToKey= */ [&]() -> void {
-                      RGBPaintColorBlock::AddBlock(keyContext, builder, gatherer);
+                      RGBPaintColorBlock::AddBlock(keyContext);
                   });
             return;
         }
     }
 
-    ImageShaderBlock::AddBlock(keyContext, builder, gatherer, imgData);
+    Compose(keyContext,
+            /* addInnerToKey= */ [&]() -> void {
+                ImageShaderBlock::AddBlock(keyContext, imgData);
+            },
+            /* addOuterToKey= */ [&]() -> void {
+                ColorSpaceTransformBlock::AddBlock(keyContext, colorXformData);
+            });
 }
 
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkLocalMatrixShader* shader) {
+static void add_to_key(const KeyContext& keyContext, const SkImageShader* shader) {
     SkASSERT(shader);
-    auto wrappedShader = shader->wrappedShader().get();
+    add_image_to_key(keyContext, shader->image().get(), shader->subset(), shader->sampling(),
+                     shader->tileModeX(), shader->tileModeY(), shader->isRaw());
+}
 
-    // Fold the texture's origin flip into the local matrix so that the image shader doesn't need
-    // additional state
-    SkMatrix matrix;
-    if (as_SB(wrappedShader)->type() == SkShaderBase::ShaderType::kImage) {
-        auto imgShader = static_cast<const SkImageShader*>(wrappedShader);
-        // If the image is not graphite backed then we can assume the origin will be TopLeft as we
-        // require that in the ImageProvider utility. Also Graphite YUV images are assumed to be
-        // TopLeft origin.
-        auto imgBase = as_IB(imgShader->image());
-        if (imgBase->isGraphiteBacked() && !imgBase->isYUVA()) {
-            auto imgGraphite = static_cast<Image*>(imgBase);
-            SkASSERT(imgGraphite);
-            const auto& view = imgGraphite->textureProxyView();
+static SkMatrix get_image_origin_matrix(const SkImage* image) {
+    // If the image is not graphite backed then we can assume the origin will be TopLeft as we
+    // require that in the ImageProvider utility. Also Graphite YUV images are assumed to be TopLeft
+    // origin.
+    SkASSERT(image);
+    const auto* imgBase = as_IB(image);
+    if (imgBase->isGraphiteBacked()) {
+        // The YUV formats can encode their own origin including reflection and rotation,
+        // so we need to concat that to the local matrix transform.
+        if (imgBase->isYUVA()) {
+            auto imgYUVA = static_cast<const Image_YUVA*>(imgBase);
+            return imgYUVA->yuvaInfo().inverseOriginMatrix();
+        } else {
+            const auto& view = static_cast<const Image*>(imgBase)->textureProxyView();
             if (view.origin() == Origin::kBottomLeft) {
-                matrix.setScaleY(-1);
-                matrix.setTranslateY(view.height());
+                return SkMatrix::ScaleTranslate(1.f, -1.f, 0.f, view.height());
             }
         }
     }
+    // Otherwise no modification required
+    return SkMatrix::I();
+}
 
-    matrix.postConcat(shader->localMatrix());
-    if (!matrix.isIdentity()) {
+static SkMatrix get_gradient_matrix(const SkGradientBaseShader* gradShader) {
+    // Override the conical gradient matrix since graphite uses a different algorithm
+    // than the ganesh and raster backends.
+    if (gradShader->asGradient() == SkShaderBase::GradientType::kConical) {
+        auto conicalShader = static_cast<const SkConicalGradient*>(gradShader);
 
-        LocalMatrixShaderBlock::LMShaderData lmShaderData(matrix);
-
-        KeyContextWithLocalMatrix newContext(keyContext, matrix);
-
-        LocalMatrixShaderBlock::BeginBlock(newContext, builder, gatherer, lmShaderData);
-
-            AddToKey(newContext, builder, gatherer, wrappedShader);
-
-        builder->endBlock();
-    } else  {
-        AddToKey(keyContext, builder, gatherer, wrappedShader);
+        if (conicalShader->getType() == SkConicalGradient::Type::kRadial) {
+            SkMatrix conicalMatrix = SkMatrix::Translate(-conicalShader->getStartCenter());
+            float scale = sk_ieee_float_divide(1, conicalShader->getDiffRadius());
+            conicalMatrix.postScale(scale, scale);
+            return conicalMatrix;
+        } else {
+            auto mx = (SkConicalGradient::MapToUnitX(conicalShader->getStartCenter(),
+                                                     conicalShader->getEndCenter()));
+            return *mx;
+        }
+    } else {
+        // Use the standard gradient matrix for other types
+        return gradShader->getGradientMatrix();
     }
+}
+
+static void add_to_key(const KeyContext& keyContext, const SkLocalMatrixShader* shader) {
+    SkASSERT(shader);
+    // Fold the texture's origin flip into the local matrix so that the image shader doesn't need
+    // additional state; the same goes for gradient shader's gradient matrix coord conversion.
+    SkShaderBase* wrappedShaderBase = as_SB(shader->wrappedShader().get());
+    SkMatrix xtraMatrix = SkMatrix::I();
+    if (wrappedShaderBase->type() == SkShaderBase::ShaderType::kImage) {
+        auto imgShader = static_cast<const SkImageShader*>(wrappedShaderBase);
+        xtraMatrix = get_image_origin_matrix(imgShader->image().get());
+    } else if (wrappedShaderBase->type() == SkShaderBase::ShaderType::kGradientBase) {
+        auto gradShader = static_cast<const SkGradientBaseShader*>(wrappedShaderBase);
+        xtraMatrix = get_gradient_matrix(gradShader);
+    }
+
+    add_local_matrix_to_key(keyContext,
+                            shader->localMatrix(),
+                            /*postInverseMatrix=*/xtraMatrix,
+                            [&](const KeyContext& childCtx) {
+                                    AddToKey(childCtx, wrappedShaderBase);
+                            });
 }
 
 // If either of these change then the corresponding change must also be made in the SkSL
 // perlin_noise_shader function.
-static_assert((int)SkPerlinNoiseShader::kFractalNoise_Type ==
+static_assert((int)SkPerlinNoiseShaderType::kFractalNoise ==
               (int)PerlinNoiseShaderBlock::Type::kFractalNoise);
-static_assert((int)SkPerlinNoiseShader::kTurbulence_Type ==
+static_assert((int)SkPerlinNoiseShaderType::kTurbulence ==
               (int)PerlinNoiseShaderBlock::Type::kTurbulence);
-static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
-                       const SkPerlinNoiseShader* shader) {
+
+static void add_to_key(const KeyContext& keyContext, const SkPerlinNoiseShader* shader) {
     SkASSERT(shader);
     SkASSERT(shader->numOctaves());
 
-    SkMatrix totalMatrix = keyContext.local2Dev().asM33();
-    if (keyContext.localMatrix()) {
-        totalMatrix.preConcat(*keyContext.localMatrix());
-    }
-
-    SkMatrix invTotal;
-    bool result = totalMatrix.invert(&invTotal);
-    if (!result) {
-        SKGPU_LOG_W("Couldn't invert totalMatrix for PerlinNoiseShader");
-        builder->addBlock(BuiltInCodeSnippetID::kError);
-        return;
-    }
-
-    std::unique_ptr<SkPerlinNoiseShader::PaintingData> paintingData =
-        shader->getPaintingData(totalMatrix);
+    std::unique_ptr<SkPerlinNoiseShader::PaintingData> paintingData = shader->getPaintingData();
     paintingData->generateBitmaps();
 
-    sk_sp<TextureProxy> perm = RecorderPriv::CreateCachedProxy(
-            keyContext.recorder(), paintingData->getPermutationsBitmap());
+    sk_sp<TextureProxy> perm =
+            RecorderPriv::CreateCachedProxy(keyContext.recorder(),
+                                            paintingData->getPermutationsBitmap(),
+                                            "PerlinNoisePermTable");
 
     sk_sp<TextureProxy> noise =
-            RecorderPriv::CreateCachedProxy(keyContext.recorder(), paintingData->getNoiseBitmap());
+            RecorderPriv::CreateCachedProxy(keyContext.recorder(), paintingData->getNoiseBitmap(),
+                                            "PerlinNoiseNoiseTable");
 
     if (!perm || !noise) {
         SKGPU_LOG_W("Couldn't create tables for PerlinNoiseShader");
-        builder->addBlock(BuiltInCodeSnippetID::kError);
+        keyContext.paintParamsKeyBuilder()->addErrorBlock();
         return;
     }
 
@@ -1606,26 +2153,10 @@ static void add_to_key(const KeyContext& keyContext,
     perlinData.fPermutationsProxy = std::move(perm);
     perlinData.fNoiseProxy = std::move(noise);
 
-    // This (1,1) translation is due to WebKit's 1 based coordinates for the noise
-    // (as opposed to 0 based, usually). Remember: this matrix (shader2World) is going to be
-    // inverted before being applied.
-    SkMatrix shader2Local =
-            SkMatrix::Translate(-1 + totalMatrix.getTranslateX(), -1 + totalMatrix.getTranslateY());
-    shader2Local.postConcat(invTotal);
-
-    LocalMatrixShaderBlock::LMShaderData lmShaderData(shader2Local);
-
-    KeyContextWithLocalMatrix newContext(keyContext, shader2Local);
-
-    LocalMatrixShaderBlock::BeginBlock(newContext, builder, gatherer, lmShaderData);
-        PerlinNoiseShaderBlock::AddBlock(newContext, builder, gatherer, perlinData);
-    builder->endBlock();
-
+    PerlinNoiseShaderBlock::AddBlock(keyContext, perlinData);
 }
 
 static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
                        const SkPictureShader* shader) {
     SkASSERT(shader);
 
@@ -1633,8 +2164,7 @@ static void add_to_key(const KeyContext& keyContext,
     const Caps* caps = recorder->priv().caps();
 
     // TODO: We'll need additional plumbing to get the correct props from our callers. In
-    // particular we'll need to expand the keyContext to have the surfaceProps, the dstColorType
-    // and dstColorSpace.
+    // particular we'll need to expand the keyContext to have the surfaceProps.
     SkSurfaceProps props{};
 
     SkMatrix totalM = keyContext.local2Dev().asM33();
@@ -1643,25 +2173,43 @@ static void add_to_key(const KeyContext& keyContext,
     }
     auto info = SkPictureShader::CachedImageInfo::Make(shader->tile(),
                                                        totalM,
-                                                       /* dstColorType= */ kRGBA_8888_SkColorType,
-                                                       /* dstColorSpace= */ nullptr,
+                                                       keyContext.dstColorInfo().colorType(),
+                                                       keyContext.dstColorInfo().colorSpace(),
                                                        caps->maxTextureSize(),
                                                        props);
     if (!info.success) {
         SKGPU_LOG_W("Couldn't access PictureShaders' Image info");
-        builder->addBlock(BuiltInCodeSnippetID::kError);
+        keyContext.paintParamsKeyBuilder()->addErrorBlock();
         return;
     }
 
+    // NOTE: While this is intended to be a "scratch" surface, we don't use MakeScratch() because
+    // the SkPicture could contain arbitrary operations that rely on the Recorder's atlases, which
+    // means the Surface's device has to participate in flushing when the atlas fills up.
+    // TODO: Can this be an approx-fit image that's generated?
     // TODO: right now we're explicitly not caching here. We could expand the ImageProvider
     // API to include already Graphite-backed images, add a Recorder-local cache or add
     // rendered-picture images to the global cache.
-    sk_sp<SkImage> img = info.makeImage(
-            SkSurfaces::RenderTarget(recorder, info.imageInfo, skgpu::Mipmapped::kNo, &info.props),
-            shader->picture().get());
+    sk_sp<Surface> surface = Surface::Make(recorder,
+                                           info.imageInfo,
+                                           "PictureShaderTexture",
+                                           Budgeted::kYes,
+                                           Mipmapped::kNo,
+                                           SkBackingFit::kExact,
+                                           &info.props);
+    if (!surface) {
+        SKGPU_LOG_W("Could not create surface to render PictureShader");
+        keyContext.paintParamsKeyBuilder()->addErrorBlock();
+        return;
+    }
+
+    sk_sp<SkImage> img = info.makeImage(std::move(surface), shader->picture().get());
+    // TODO: 'img' did not exist when notify_in_use() was called, but ideally the DrawTask to render
+    // into 'surface' would be a child of the current device. While we push all tasks to the root
+    // list this works out okay, but will need to be addressed before we move off that system.
     if (!img) {
         SKGPU_LOG_W("Couldn't create SkImage for PictureShader");
-        builder->addBlock(BuiltInCodeSnippetID::kError);
+        keyContext.paintParamsKeyBuilder()->addErrorBlock();
         return;
     }
 
@@ -1670,16 +2218,14 @@ static void add_to_key(const KeyContext& keyContext,
                                                 SkSamplingOptions(shader->filter()), &shaderLM);
     if (!imgShader) {
         SKGPU_LOG_W("Couldn't create SkImageShader for PictureShader");
-        builder->addBlock(BuiltInCodeSnippetID::kError);
+        keyContext.paintParamsKeyBuilder()->addErrorBlock();
         return;
     }
 
-    AddToKey(keyContext, builder, gatherer, imgShader.get());
+    AddToKey(keyContext, imgShader.get());
 }
 
 static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
                        const SkRuntimeShader* shader) {
     SkASSERT(shader);
     sk_sp<SkRuntimeEffect> effect = shader->effect();
@@ -1689,35 +2235,29 @@ static void add_to_key(const KeyContext& keyContext,
             keyContext.dstColorInfo().colorSpace());
     SkASSERT(uniforms);
 
-    RuntimeEffectBlock::BeginBlock(keyContext, builder, gatherer,
-                                   {effect, std::move(uniforms)});
+    if (!RuntimeEffectBlock::BeginBlock(keyContext, { effect, std::move(uniforms) })) {
+        RuntimeEffectBlock::AddNoOpEffect(keyContext, effect.get());
+        return;
+    }
 
-    add_children_to_key(keyContext, builder, gatherer,
-                        shader->children(), effect->children());
+    add_children_to_key(keyContext, shader->children(), effect.get());
 
-    builder->endBlock();
-
+    keyContext.paintParamsKeyBuilder()->endBlock();
 }
 
 static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
                        const SkTransformShader* shader) {
     SKGPU_LOG_W("Raster-only SkShader (SkTransformShader) encountered");
-    builder->addBlock(BuiltInCodeSnippetID::kError);
+    keyContext.paintParamsKeyBuilder()->addErrorBlock();
 }
 
 static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
                        const SkTriColorShader* shader) {
     SKGPU_LOG_W("Raster-only SkShader (SkTriColorShader) encountered");
-    builder->addBlock(BuiltInCodeSnippetID::kError);
+    keyContext.paintParamsKeyBuilder()->addErrorBlock();
 }
 
 static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
                        const SkWorkingColorSpaceShader* shader) {
     SkASSERT(shader);
 
@@ -1728,19 +2268,22 @@ static void add_to_key(const KeyContext& keyContext,
         dstCS = SkColorSpace::MakeSRGB();
     }
 
-    sk_sp<SkColorSpace> workingCS = shader->workingSpace();
-    SkColorInfo workingInfo(dstInfo.colorType(), dstAT, workingCS);
-    KeyContextWithColorInfo workingContext(keyContext, workingInfo);
+    // It requires C++20 to use an auto structured binding and then reference them in the lambda.
+    sk_sp<SkColorSpace> inputCS, outputCS;
+    SkAlphaType workingAT;
+    std::tie(inputCS, outputCS, workingAT) = shader->workingSpace(dstCS, dstAT);
+    KeyContext workingContext = keyContext.withColorInfo({dstInfo.colorType(), workingAT, inputCS});
 
-    // Compose the inner shader (in the working space) with a (working->dst) transform:
-    Compose(keyContext, builder, gatherer,
+    // Compose the inner shader (in the input space) with a (output->dst) transform, under the
+    // assumption that the child shader handles conversion between input and output CS/alpha types.
+    Compose(keyContext,
         /* addInnerToKey= */ [&]() -> void {
-            AddToKey(workingContext, builder, gatherer, shader->shader().get());
+            AddToKey(workingContext, shader->shader().get());
         },
         /* addOuterToKey= */ [&]() -> void {
             ColorSpaceTransformBlock::ColorSpaceTransformData data(
-                    workingCS.get(), dstAT, dstCS.get(), dstAT);
-            ColorSpaceTransformBlock::AddBlock(keyContext, builder, gatherer, data);
+                    outputCS.get(), workingAT, dstCS.get(), dstAT);
+            ColorSpaceTransformBlock::AddBlock(keyContext, data);
         });
 }
 
@@ -1790,12 +2333,10 @@ static SkBitmap create_color_and_offset_bitmap(int numStops,
 // Please see GrGradientShader.cpp::make_interpolated_to_dst for substantial comments
 // as to why this code is structured this way.
 static void make_interpolated_to_dst(const KeyContext& keyContext,
-                                     PaintParamsKeyBuilder* builder,
-                                     PipelineDataGatherer* gatherer,
                                      const GradientShaderBlocks::GradientData& gradData,
-                                     const SkGradientShader::Interpolation& interp,
+                                     const SkGradient::Interpolation& interp,
                                      SkColorSpace* intermediateCS) {
-    using ColorSpace = SkGradientShader::Interpolation::ColorSpace;
+    using ColorSpace = SkGradient::Interpolation::ColorSpace;
 
     bool inputPremul = static_cast<bool>(interp.fInPremul);
 
@@ -1827,18 +2368,16 @@ static void make_interpolated_to_dst(const KeyContext& keyContext,
     // The gradient block and colorSpace conversion block need to be combined
     // (via the Compose block) so that the localMatrix block can treat them as
     // one child.
-    Compose(keyContext, builder, gatherer,
+    Compose(keyContext,
             /* addInnerToKey= */ [&]() -> void {
-                GradientShaderBlocks::AddBlock(keyContext, builder, gatherer, gradData);
+                GradientShaderBlocks::AddBlock(keyContext, gradData);
             },
             /* addOuterToKey= */ [&]() -> void {
-                ColorSpaceTransformBlock::AddBlock(keyContext, builder, gatherer, data);
+                ColorSpaceTransformBlock::AddBlock(keyContext, data);
             });
 }
 
 static void add_gradient_to_key(const KeyContext& keyContext,
-                                PaintParamsKeyBuilder* builder,
-                                PipelineDataGatherer* gatherer,
                                 const SkGradientBaseShader* shader,
                                 SkPoint point0,
                                 SkPoint point1,
@@ -1853,22 +2392,25 @@ static void add_gradient_to_key(const KeyContext& keyContext,
 
     sk_sp<TextureProxy> proxy;
 
-    if (colorCount > GradientShaderBlocks::GradientData::kNumInternalStorageStops) {
+    bool useStorageBuffer = keyContext.caps()->gradientBufferSupport();
+    if (colorCount > GradientShaderBlocks::GradientData::kNumInternalStorageStops
+            && !useStorageBuffer) {
         if (shader->cachedBitmap().empty()) {
             SkBitmap colorsAndOffsetsBitmap =
                     create_color_and_offset_bitmap(colorCount, colors, positions);
             if (colorsAndOffsetsBitmap.empty()) {
                 SKGPU_LOG_W("Couldn't create GradientShader's color and offset bitmap");
-                builder->addBlock(BuiltInCodeSnippetID::kError);
+                keyContext.paintParamsKeyBuilder()->addErrorBlock();
                 return;
             }
             shader->setCachedBitmap(colorsAndOffsetsBitmap);
         }
 
-        proxy = RecorderPriv::CreateCachedProxy(keyContext.recorder(), shader->cachedBitmap());
+        proxy = RecorderPriv::CreateCachedProxy(keyContext.recorder(), shader->cachedBitmap(),
+                                                "GradientTexture");
         if (!proxy) {
             SKGPU_LOG_W("Couldn't create GradientShader's color and offset bitmap proxy");
-            builder->addBlock(BuiltInCodeSnippetID::kError);
+            keyContext.paintParamsKeyBuilder()->addErrorBlock();
             return;
         }
     }
@@ -1884,40 +2426,45 @@ static void add_gradient_to_key(const KeyContext& keyContext,
                                             colorCount,
                                             colors,
                                             positions,
+                                            shader,
                                             std::move(proxy),
+                                            useStorageBuffer,
                                             shader->getInterpolation());
 
     make_interpolated_to_dst(keyContext,
-                             builder,
-                             gatherer,
                              data,
                              shader->getInterpolation(),
                              xformedColors.fIntermediateColorSpace.get());
 }
 
 static void add_gradient_to_key(const KeyContext& keyContext,
-                                PaintParamsKeyBuilder* builder,
-                                PipelineDataGatherer* gatherer,
                                 const SkConicalGradient* shader) {
+    SkScalar r0 = shader->getStartRadius();
+    SkScalar r1 = shader->getEndRadius();
+
+    if (shader->getType() != SkConicalGradient::Type::kRadial) {
+        // Since we map the centers to be (0,0) and (1,0) in the gradient matrix,
+        // there is a scale of 1/distance-between-centers that has to be applied to the radii.
+        r0 /= shader->getCenterX1();
+        r1 /= shader->getCenterX1();
+    } else {
+        r0 /= shader->getDiffRadius();
+        r1 /= shader->getDiffRadius();
+    }
+
     add_gradient_to_key(keyContext,
-                        builder,
-                        gatherer,
                         shader,
                         shader->getStartCenter(),
                         shader->getEndCenter(),
-                        shader->getStartRadius(),
-                        shader->getEndRadius(),
+                        r0,
+                        r1,
                         0.0f,
                         0.0f);
 }
 
 static void add_gradient_to_key(const KeyContext& keyContext,
-                                PaintParamsKeyBuilder* builder,
-                                PipelineDataGatherer* gatherer,
                                 const SkLinearGradient* shader) {
     add_gradient_to_key(keyContext,
-                        builder,
-                        gatherer,
                         shader,
                         shader->start(),
                         shader->end(),
@@ -1928,12 +2475,8 @@ static void add_gradient_to_key(const KeyContext& keyContext,
 }
 
 static void add_gradient_to_key(const KeyContext& keyContext,
-                                PaintParamsKeyBuilder* builder,
-                                PipelineDataGatherer* gatherer,
                                 const SkRadialGradient* shader) {
     add_gradient_to_key(keyContext,
-                        builder,
-                        gatherer,
                         shader,
                         shader->center(),
                         { 0.0f, 0.0f },
@@ -1944,12 +2487,8 @@ static void add_gradient_to_key(const KeyContext& keyContext,
 }
 
 static void add_gradient_to_key(const KeyContext& keyContext,
-                                PaintParamsKeyBuilder* builder,
-                                PipelineDataGatherer* gatherer,
                                 const SkSweepGradient* shader) {
     add_gradient_to_key(keyContext,
-                        builder,
-                        gatherer,
                         shader,
                         shader->center(),
                         { 0.0f, 0.0f },
@@ -1960,16 +2499,12 @@ static void add_gradient_to_key(const KeyContext& keyContext,
 }
 
 static void add_to_key(const KeyContext& keyContext,
-                       PaintParamsKeyBuilder* builder,
-                       PipelineDataGatherer* gatherer,
                        const SkGradientBaseShader* shader) {
     SkASSERT(shader);
     switch (shader->asGradient()) {
 #define M(type)                                                               \
     case SkShaderBase::GradientType::k##type:                                 \
         add_gradient_to_key(keyContext,                                       \
-                            builder,                                          \
-                            gatherer,                                         \
                             static_cast<const Sk##type##Gradient*>(shader));  \
         return;
         SK_ALL_GRADIENTS(M)
@@ -1981,26 +2516,81 @@ static void add_to_key(const KeyContext& keyContext,
     SkUNREACHABLE;
 }
 
-
-void AddToKey(const KeyContext& keyContext,
-              PaintParamsKeyBuilder* builder,
-              PipelineDataGatherer* gatherer,
-              const SkShader* shader) {
+void AddToKey(const KeyContext& keyContext, const SkShader* shader) {
     if (!shader) {
+        // Calling code assumes a block will be appended. Add a fixed block to preserve shader
+        // and PaintParamsKey structure in release builds but assert since this should either not
+        // happen or should be changing high-level logic within PaintParams::toKey().
+        SkASSERT(false);
+        SolidColorShaderBlock::AddBlock(keyContext, SK_PMColor4fTRANSPARENT);
         return;
     }
     switch (as_SB(shader)->type()) {
 #define M(type)                                                        \
-    case SkShaderBase::ShaderType::k##type:                             \
+    case SkShaderBase::ShaderType::k##type:                            \
         add_to_key(keyContext,                                         \
-                   builder,                                            \
-                   gatherer,                                           \
-                   static_cast<const Sk##type##Shader*>(shader)); \
+                   static_cast<const Sk##type##Shader*>(shader));      \
         return;
         SK_ALL_SHADERS(M)
 #undef M
     }
     SkUNREACHABLE;
+}
+
+// An SkImageShader object on a paint is actually always an SkLocalMatrixShader composed with an
+// SkImageShader. This creates the same call sequence with the decomposed objects.
+void AddToKey(const KeyContext& keyContext, const PaintParams::SimpleImage& simpleImage) {
+    add_local_matrix_to_key(keyContext,
+                            simpleImage.fLocalMatrix ? *simpleImage.fLocalMatrix : SkMatrix::I(),
+                            get_image_origin_matrix(simpleImage.fImage),
+                            [&](const KeyContext& childCtx) {
+                                    add_image_to_key(childCtx,
+                                                     simpleImage.fImage,
+                                                     simpleImage.fSubset,
+                                                     simpleImage.fSamplingOptions,
+                                                     SkTileMode::kClamp,
+                                                     SkTileMode::kClamp,
+                                                     /*isRaw=*/false);
+                            });
+}
+
+void AddFixedBlendMode(const KeyContext& keyContext, SkBlendMode bm) {
+    SkASSERT(bm <= SkBlendMode::kLastMode);
+    BuiltInCodeSnippetID id = static_cast<BuiltInCodeSnippetID>(kFixedBlendIDOffset +
+                                                                static_cast<int>(bm));
+    keyContext.paintParamsKeyBuilder()->addBlock(id);
+}
+
+void AddBlendMode(const KeyContext& keyContext, SkBlendMode bm) {
+    // For non-fixed blends, coefficient blend modes are combined into the same shader snippet.
+    // The same goes for the HSLC advanced blends. The remaining advanced blends are fairly unique
+    // in their implementations. To avoid having to compile all of their SkSL, they are treated as
+    // fixed blend modes.
+    SkSpan<const float> coeffs = skgpu::GetPorterDuffBlendConstants(bm);
+    if (!coeffs.empty()) {
+        PorterDuffBlenderBlock::AddBlock(keyContext, coeffs);
+    } else if (bm >= SkBlendMode::kHue) {
+        ReducedBlendModeInfo blendInfo = GetReducedBlendModeInfo(bm);
+        HSLCBlenderBlock::AddBlock(keyContext, blendInfo.fUniformData);
+    } else {
+        AddFixedBlendMode(keyContext, bm);
+    }
+}
+
+void AddDitherBlock(const KeyContext& keyContext, SkColorType ct) {
+    static const SkBitmap gLUT = skgpu::MakeDitherLUT();
+
+    sk_sp<TextureProxy> proxy = RecorderPriv::CreateCachedProxy(keyContext.recorder(), gLUT,
+                                                                "DitherLUT");
+    if (keyContext.recorder() && !proxy) {
+        SKGPU_LOG_W("Couldn't create dither shader's LUT");
+        keyContext.paintParamsKeyBuilder()->addBlock(BuiltInCodeSnippetID::kPriorOutput);
+        return;
+    }
+
+    DitherShaderBlock::DitherData data(skgpu::DitherRangeForConfig(ct), std::move(proxy));
+
+    DitherShaderBlock::AddBlock(keyContext, data);
 }
 
 

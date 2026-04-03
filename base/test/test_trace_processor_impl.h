@@ -9,9 +9,9 @@
 #define BASE_TEST_TEST_TRACE_PROCESSOR_IMPL_H_
 
 #include <memory>
+
 #include "test_trace_processor_export.h"
 #include "third_party/abseil-cpp/absl/status/status.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 
 namespace perfetto::trace_processor {
 struct Config;
@@ -68,15 +68,13 @@ class TEST_TRACE_PROCESSOR_EXPORT TestTraceProcessorImpl {
   // vector of strings.
   QueryResultOrError ExecuteQuery(const std::string& sql) const;
 
-  using PerfettoSQLModule = std::vector<std::pair<std::string, std::string>>;
-  // Overrides PerfettoSQL module with |name| and |files| containing pairs of
+  using PerfettoSQLPackage = std::vector<std::pair<std::string, std::string>>;
+  // Overrides PerfettoSQL package with |name| and |files| containing pairs of
   // strings {include_key, sql_file_contents}.
-  absl::Status OverrideSqlModule(const std::string& name,
-                                 const PerfettoSQLModule& module);
+  absl::Status OverrideSqlPackage(const std::string& name,
+                                  const PerfettoSQLPackage& package);
 
  private:
-  absl::Status ParseTrace(std::unique_ptr<uint8_t[]> buf, size_t size);
-
   std::unique_ptr<perfetto::trace_processor::Config> config_;
   std::unique_ptr<perfetto::trace_processor::TraceProcessor> trace_processor_;
 };

@@ -12,10 +12,10 @@ features:
   dynamic_refresh: true
 owners:
 - file://components/policy/OWNERS
-- emaxx@chromium.org
 schema:
   type: integer
 supported_on:
 - chrome_os:26-
 tags: []
 type: int
+generate_device_proto: False

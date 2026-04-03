@@ -8,19 +8,17 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/compiler_specific.h"
-#include "base/gtest_prod_util.h"
-#include "base/strings/string_piece.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/country_type.h"
-#include "components/autofill/core/browser/data_model/phone_number.h"
+#include "components/autofill/core/browser/data_model/addresses/phone_number.h"
 #include "components/autofill/core/browser/form_parsing/form_field_parser.h"
 #include "components/autofill/core/common/language_code.h"
 
 namespace autofill {
 
-class AutofillField;
 class AutofillScanner;
 
 // A phone number in one of the following formats:
@@ -34,7 +32,7 @@ class PhoneFieldParser : public FormFieldParser {
   PhoneFieldParser& operator=(const PhoneFieldParser&) = delete;
 
   static std::unique_ptr<FormFieldParser> Parse(ParsingContext& context,
-                                                AutofillScanner* scanner);
+                                                AutofillScanner& scanner);
 
 #if defined(UNIT_TEST)
   // Assign types to the fields for the testing purposes.
@@ -71,56 +69,55 @@ class PhoneFieldParser : public FormFieldParser {
     FIELD_EXTENSION,
     FIELD_MAX,
   };
-  using ParsedPhoneFields = std::array<raw_ptr<AutofillField>, FIELD_MAX>;
+  using ParsedPhoneFields =
+      std::array<std::optional<FieldAndMatchInfo>, FIELD_MAX>;
 
   explicit PhoneFieldParser(ParsedPhoneFields fields);
 
   struct Rule {
-    RegexType regex;       // The regex used to match this `phone_part`.
-    PhonePart phone_part;  // The type/index of the field.
-    size_t max_size = 0;   // Max size of the field to match. 0 means any.
+    RegexType regex;        // The regex used to match this `phone_part`.
+    PhonePart phone_part;   // The type/index of the field.
+    size_t max_length = 0;  // FormFieldData::max_length of the field to match.
+                            // 0 means any.
   };
-  using PhoneGrammar = std::vector<Rule>;
+
+  struct PhoneGrammar {
+    PhoneGrammar(std::vector<Rule> rules, size_t id);
+    PhoneGrammar(const PhoneGrammar&);
+    PhoneGrammar(PhoneGrammar&&);
+    PhoneGrammar& operator=(const PhoneGrammar& other);
+    PhoneGrammar& operator=(PhoneGrammar&& other);
+    ~PhoneGrammar();
+
+    std::vector<Rule> rules;
+    // Numerical identifier of grammars used for metrics logging, grammars
+    // should not be renumbered and values should not be reused.
+    size_t id;
+  };
 
   // Returns all the `PhoneGrammar`s used for parsing.
   static const std::vector<PhoneGrammar>& GetPhoneGrammars();
 
-  // Returns the regular expression string corresponding to |regex_id|
-  static std::u16string GetRegExp(RegexType regex_id);
-
-  // Returns the constant name of the regex corresponding to |regex_id|.
-  // This is useful for logging purposes.
-  static const char* GetRegExpName(RegexType regex_id);
-
   // Returns the name of field type which indicated in JSON corresponding to
-  // |regex_id|.
-  static std::string GetJSONFieldType(RegexType phonetype_id);
+  // `regex_type`.
+  static std::string_view GetJSONFieldType(RegexType regex_type);
 
-  // Convenient wrapper for ParseFieldSpecifics().
+  // Convenient wrapper for ParseField().
   static bool ParsePhoneField(ParsingContext& context,
-                              AutofillScanner* scanner,
-                              base::StringPiece16 regex,
-                              raw_ptr<AutofillField>* field,
-                              const char* regex_name,
+                              AutofillScanner& scanner,
+                              std::optional<FieldAndMatchInfo>* match,
                               const bool is_country_code_field,
-                              const std::string& json_field_type);
+                              std::string_view json_field_type);
 
   // Tries parsing the given `grammar` into `parsed_fields` and returns true
   // if it succeeded.
   static bool ParseGrammar(ParsingContext& context,
                            const PhoneGrammar& grammar,
                            ParsedPhoneFields& parsed_fields,
-                           AutofillScanner* scanner);
+                           AutofillScanner& scanner,
+                           bool improve_phone_field_parser_experiment_enabled);
 
-  // Returns true if |scanner| points to a <select> field that appears to be the
-  // phone country code by looking at its option contents.
-  // "Augmented" refers to the fact that we are looking for select options that
-  // contain not only a country code but also further text like "Germany (+49)".
-  static bool LikelyAugmentedPhoneCountryCode(AutofillScanner* scanner,
-                                              raw_ptr<AutofillField>* match);
-
-  // FIELD_PHONE is always present; holds suffix if prefix is present.
-  // The rest could be NULL.
+  // FIELD_PHONE is always present if a match is found. The rest may be nullopt.
   ParsedPhoneFields parsed_phone_fields_;
 };
 

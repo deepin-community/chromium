@@ -11,8 +11,8 @@
 #include "chrome/browser/sync/test/integration/bookmarks_helper.h"
 #include "chrome/browser/sync/test/integration/performance/sync_timing_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
-#include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry.h"
 #include "components/sync/engine/cycle/sync_cycle_context.h"
 #include "content/public/test/browser_test.h"
@@ -29,6 +29,7 @@ using autofill_helper::GetProfileCount;
 using autofill_helper::RemoveKeys;
 using autofill_helper::RemoveProfile;
 using autofill_helper::UpdateProfile;
+using bookmarks_helper::StoreType;
 using sync_timing_helper::TimeMutualSyncCycle;
 
 // These numbers should be as far away from a multiple of
@@ -75,14 +76,6 @@ std::string IntToName(int n) {
   return base::StringPrintf("Name%d", n);
 }
 
-void ForceSync(int profile) {
-  static size_t id = 0;
-  ++id;
-  EXPECT_TRUE(bookmarks_helper::AddURL(
-                  profile, 0, bookmarks_helper::IndexedURLTitle(id),
-                  GURL(bookmarks_helper::IndexedURL(id))) != nullptr);
-}
-
 class AutofillProfileSyncPerfTest : public SyncTest {
  public:
   AutofillProfileSyncPerfTest() : SyncTest(TWO_CLIENT) {}
@@ -90,6 +83,11 @@ class AutofillProfileSyncPerfTest : public SyncTest {
   AutofillProfileSyncPerfTest(const AutofillProfileSyncPerfTest&) = delete;
   AutofillProfileSyncPerfTest& operator=(const AutofillProfileSyncPerfTest&) =
       delete;
+
+  SetupSyncMode GetSetupSyncMode() const override {
+    // The AUTOFILL_PROFILE data type is not supported in transport mode.
+    return SetupSyncMode::kSyncTheFeature;
+  }
 
   // Adds |num_profiles| new autofill profiles to the sync profile |profile|.
   void AddProfiles(int profile, int num_profiles);
@@ -99,6 +97,8 @@ class AutofillProfileSyncPerfTest : public SyncTest {
 
   // Removes all autofill profiles from |profile|.
   void RemoveProfiles(int profile);
+
+  void ForceSync(int profile);
 
  private:
   // Returns a new unique autofill profile.
@@ -132,7 +132,7 @@ void AutofillProfileSyncPerfTest::UpdateProfiles(int profile) {
     guids.push_back(autofill_profile->guid());
   }
   for (const std::string& guid : guids) {
-    UpdateProfile(profile, guid, autofill::AutofillType(autofill::NAME_FIRST),
+    UpdateProfile(profile, guid, autofill::NAME_FIRST,
                   base::UTF8ToUTF16(NextName()));
   }
 }
@@ -148,6 +148,15 @@ void AutofillProfileSyncPerfTest::RemoveProfiles(int profile) {
   for (const std::string& guid : guids) {
     RemoveProfile(profile, guid);
   }
+}
+
+void ForceSync(int profile) {
+  static size_t id = 0;
+  ++id;
+  EXPECT_TRUE(bookmarks_helper::AddURL(
+                  profile, 0, bookmarks_helper::IndexedURLTitle(id),
+                  GURL(bookmarks_helper::IndexedURL(id)),
+                  StoreType::kLocalOrSyncableStore) != nullptr);
 }
 
 const AutofillProfile AutofillProfileSyncPerfTest::NextAutofillProfile() {
@@ -172,7 +181,7 @@ const std::string AutofillProfileSyncPerfTest::NextName() {
 }
 
 IN_PROC_BROWSER_TEST_F(AutofillProfileSyncPerfTest, P0) {
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+  ASSERT_TRUE(SetupSync());
 
   perf_test::PerfResultReporter reporter =
       SetUpReporter(base::NumberToString(kNumProfiles) + "_profiles");
@@ -198,6 +207,11 @@ class AutocompleteSyncPerfTest : public SyncTest {
 
   AutocompleteSyncPerfTest(const AutocompleteSyncPerfTest&) = delete;
   AutocompleteSyncPerfTest& operator=(const AutocompleteSyncPerfTest&) = delete;
+
+  SetupSyncMode GetSetupSyncMode() const override {
+    // The AUTOFILL_PROFILE data type is not supported in transport mode.
+    return SetupSyncMode::kSyncTheFeature;
+  }
 
   // Adds |num_keys| new autocomplete keys to the sync profile |profile|.
   void AddKeys(int profile, int num_keys);
@@ -229,7 +243,7 @@ const std::string AutocompleteSyncPerfTest::NextName() {
 }
 
 IN_PROC_BROWSER_TEST_F(AutocompleteSyncPerfTest, P0) {
-  ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
+  ASSERT_TRUE(SetupSync());
 
   perf_test::PerfResultReporter reporter =
       SetUpReporter(base::NumberToString(kNumKeys) + "_keys");

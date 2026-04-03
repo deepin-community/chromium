@@ -5,6 +5,8 @@
 #ifndef SERVICES_NETWORK_PUBLIC_CPP_FIRST_PARTY_SETS_MOJOM_TRAITS_H_
 #define SERVICES_NETWORK_PUBLIC_CPP_FIRST_PARTY_SETS_MOJOM_TRAITS_H_
 
+#include <optional>
+
 #include "base/containers/flat_map.h"
 #include "base/version.h"
 #include "mojo/public/cpp/bindings/enum_traits.h"
@@ -19,18 +21,6 @@
 #include "services/network/public/mojom/first_party_sets.mojom-shared.h"
 
 namespace mojo {
-
-template <>
-struct COMPONENT_EXPORT(FIRST_PARTY_SETS_MOJOM_TRAITS)
-    StructTraits<network::mojom::SiteIndexDataView,
-                 net::FirstPartySetEntry::SiteIndex> {
-  static uint32_t value(const net::FirstPartySetEntry::SiteIndex& i) {
-    return i.value();
-  }
-
-  static bool Read(network::mojom::SiteIndexDataView index,
-                   net::FirstPartySetEntry::SiteIndex* out);
-};
 
 template <>
 struct COMPONENT_EXPORT(FIRST_PARTY_SETS_MOJOM_TRAITS)
@@ -50,11 +40,6 @@ struct COMPONENT_EXPORT(FIRST_PARTY_SETS_MOJOM_TRAITS)
 
   static net::SiteType site_type(const net::FirstPartySetEntry& e) {
     return e.site_type();
-  }
-
-  static const std::optional<net::FirstPartySetEntry::SiteIndex>& site_index(
-      const net::FirstPartySetEntry& e) {
-    return e.site_index();
   }
 
   static bool Read(network::mojom::FirstPartySetEntryDataView entry,
@@ -103,11 +88,6 @@ struct COMPONENT_EXPORT(FIRST_PARTY_SETS_MOJOM_TRAITS)
     return sets.manual_config_;
   }
 
-  static const base::flat_map<net::SchemefulSite, net::SchemefulSite>&
-  manual_aliases(const net::GlobalFirstPartySets& sets) {
-    return sets.manual_aliases_;
-  }
-
   static bool Read(network::mojom::GlobalFirstPartySetsDataView sets,
                    net::GlobalFirstPartySets* out_sets);
 };
@@ -134,8 +114,12 @@ struct COMPONENT_EXPORT(FIRST_PARTY_SETS_MOJOM_TRAITS)
   customizations(const net::FirstPartySetsContextConfig& config) {
     return config.customizations_;
   }
+  static const base::flat_map<net::SchemefulSite, net::SchemefulSite>& aliases(
+      const net::FirstPartySetsContextConfig& config) {
+    return config.aliases_;
+  }
 
-  static bool Read(network::mojom::FirstPartySetsContextConfigDataView config,
+  static bool Read(network::mojom::FirstPartySetsContextConfigDataView view,
                    net::FirstPartySetsContextConfig* out_config);
 };
 
@@ -148,7 +132,7 @@ struct COMPONENT_EXPORT(FIRST_PARTY_SETS_MOJOM_TRAITS)
     return cache_filter.filter_;
   }
 
-  static int64_t browser_run_id(
+  static std::optional<int64_t> browser_run_id(
       const net::FirstPartySetsCacheFilter& cache_filter) {
     return cache_filter.browser_run_id_;
   }

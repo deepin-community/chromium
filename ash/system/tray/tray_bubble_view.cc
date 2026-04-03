@@ -14,10 +14,12 @@
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/accelerators.h"
 #include "ash/public/cpp/style/color_provider.h"
+#include "ash/root_window_controller.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
 #include "ash/style/ash_color_id.h"
 #include "ash/style/system_shadow.h"
+#include "ash/system/notification_center/notification_center_tray.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_utils.h"
@@ -32,20 +34,26 @@
 #include "ui/aura/window.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_type.h"
 #include "ui/compositor_extra/shadow.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/events/event.h"
+#include "ui/events/types/event_type.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/skia_conversions.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/background.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/highlight_border.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/layout_manager_base.h"
 #include "ui/views/painter.h"
 #include "ui/views/views_delegate.h"
 #include "ui/wm/core/shadow_types.h"
@@ -53,7 +61,7 @@
 
 using views::BubbleBorder;
 using views::BubbleFrameView;
-using views::NonClientFrameView;
+using views::FrameView;
 using views::View;
 using views::ViewsDelegate;
 using views::Widget;
@@ -102,40 +110,55 @@ bool MouseMoveDetectorHost::Contains(const gfx::Point& screen_point,
 
 // Custom layout for the bubble-view. Does the default box-layout if there is
 // enough height. Otherwise, makes sure the bottom rows are visible.
-class BottomAlignedBoxLayout : public views::BoxLayout {
+class BottomAlignedBoxLayout : public views::LayoutManagerBase {
  public:
   explicit BottomAlignedBoxLayout(TrayBubbleView* bubble_view)
-      : BoxLayout(BoxLayout::Orientation::kVertical),
-        bubble_view_(bubble_view) {}
+      : bubble_view_(bubble_view) {
+    box_layout_ = AddOwnedLayout(std::make_unique<views::BoxLayout>());
+    box_layout_->SetDefaultFlex(1);
+    box_layout_->SetOrientation(views::BoxLayout::Orientation::kVertical);
+  }
 
   BottomAlignedBoxLayout(const BottomAlignedBoxLayout&) = delete;
   BottomAlignedBoxLayout& operator=(const BottomAlignedBoxLayout&) = delete;
 
   ~BottomAlignedBoxLayout() override {}
 
+  views::BoxLayout* box_layout() const { return box_layout_; }
+
  private:
-  void Layout(View* host) override {
-    if (host->height() >= host->GetPreferredSize().height() ||
+  views::ProposedLayout CalculateProposedLayout(
+      const views::SizeBounds& size_bounds) const override {
+    if (!size_bounds.is_fully_bounded() ||
+        size_bounds.height() >= host_view()->GetPreferredSize({}).height() ||
         !bubble_view_->is_gesture_dragging()) {
-      BoxLayout::Layout(host);
-      return;
+      return box_layout_->GetProposedLayout(size_bounds, PassKey());
     }
 
+    views::ProposedLayout layout;
     int consumed_height = 0;
-    for (auto i = host->children().rbegin();
-         i != host->children().rend() && consumed_height < host->height();
+    for (auto i = host_view()->children().rbegin();
+         i != host_view()->children().rend() &&
+         consumed_height < size_bounds.height().value();
          ++i) {
-      View* child = *i;
-      if (!child->GetVisible()) {
+      auto& child = layout.child_layouts.emplace_back(*i, (*i)->GetVisible());
+      if (!child.visible) {
         continue;
       }
-      gfx::Size size = child->GetPreferredSize();
-      child->SetBounds(0, host->height() - consumed_height - size.height(),
-                       host->width(), size.height());
+      gfx::Size size = child.child_view->GetPreferredSize({});
+      child.bounds = gfx::Rect(
+          0, size_bounds.height().value() - consumed_height - size.height(),
+          size_bounds.width().value(), size.height());
       consumed_height += size.height();
     }
+
+    layout.host_size =
+        gfx::Size(size_bounds.width().value(), size_bounds.height().value());
+
+    return layout;
   }
 
+  raw_ptr<views::BoxLayout> box_layout_;
   raw_ptr<TrayBubbleView> bubble_view_;
 };
 
@@ -224,6 +247,25 @@ void TrayBubbleView::RerouteEventHandler::OnKeyEvent(ui::KeyEvent* event) {
     }
   }
 
+  // For shelf pod bubble that is anchored to the shelf corner, popup
+  // notifications and the bubble can be shown at the same time. If the keyboard
+  // happens inside the popup collection, we need to let the keyboard event pass
+  // there to make sure notification popups can receive keyboard events.
+  if (target &&
+      tray_bubble_view_->GetBubbleType() == TrayBubbleType::kShelfPodBubble &&
+      tray_bubble_view_->IsAnchoredToShelfCorner()) {
+    auto* popup_collection = RootWindowController::ForWindow(target)
+                                 ->shelf()
+                                 ->GetStatusAreaWidget()
+                                 ->notification_center_tray()
+                                 ->popup_collection();
+
+    if (popup_collection->popup_collection_bounds().Contains(
+            target->GetActualBoundsInScreen())) {
+      return;
+    }
+  }
+
   // Always consumes key event not to pass it to other widgets. Calling
   // StopPropagation here to make this consistent with
   // MenuController::OnWillDispatchKeyEvent.
@@ -249,6 +291,21 @@ void TrayBubbleView::RerouteEventHandler::OnKeyEvent(ui::KeyEvent* event) {
   }
 }
 
+void TrayBubbleView::RerouteEventHandler::OnEvent(ui::Event* event) {
+  if (!tray_bubble_view_->set_can_activate_on_click_or_tap_) {
+    EventHandler::OnEvent(event);
+    return;
+  }
+
+  if (event->type() == ui::EventType::kMousePressed ||
+      event->type() == ui::EventType::kTouchPressed ||
+      event->type() == ui::EventType::kGestureTap) {
+    tray_bubble_view_->SetCanActivate(true);
+  }
+
+  EventHandler::OnEvent(event);
+}
+
 TrayBubbleView::TrayBubbleView(const InitParams& init_params)
     : BubbleDialogDelegateView(init_params.anchor_view,
                                GetArrowAlignment(init_params.shelf_alignment)),
@@ -257,18 +314,15 @@ TrayBubbleView::TrayBubbleView(const InitParams& init_params)
       delegate_(init_params.delegate),
       preferred_width_(init_params.preferred_width),
       is_gesture_dragging_(false),
+      set_can_activate_on_click_or_tap_(
+          init_params.set_can_activate_on_click_or_tap),
       mouse_actively_entered_(false) {
   // We set the dialog role because views::BubbleDialogDelegate defaults this to
   // an alert dialog. This would make screen readers announce the whole of the
   // system tray which is undesirable.
   SetAccessibleWindowRole(ax::mojom::Role::kDialog);
-  // We force to create contents background since the bubble border background
-  // is not shown in this view.
-  set_force_create_contents_background(true);
-  // Bubbles that use transparent colors should not paint their ClientViews to a
-  // layer as doing so could result in visual artifacts.
-  SetPaintClientToLayer(false);
-  SetButtons(ui::DIALOG_BUTTON_NONE);
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+
   DCHECK(delegate_);
   DCHECK(params_.parent_window);
   // anchor_widget() is computed by BubbleDialogDelegateView().
@@ -283,32 +337,41 @@ TrayBubbleView::TrayBubbleView(const InitParams& init_params)
   set_close_on_deactivate(init_params.close_on_deactivate);
   set_margins(init_params.margin.has_value() ? init_params.margin.value()
                                              : gfx::Insets());
+  set_use_round_corners(false);
+  SetBackgroundColor(SK_ColorTRANSPARENT);
+  set_layer_type((params_.translucent || params_.transparent)
+                     ? ui::LAYER_NOT_DRAWN
+                     : ui::LAYER_TEXTURED);
 
-  if (init_params.translucent) {
-    // TODO(crbug/1313073): In the dark light mode feature, remove layer
-    // creation in children views of this view to improve performance.
-    SetPaintToLayer(ui::LAYER_TEXTURED);
-    layer()->SetFillsBoundsOpaquely(false);
+  // Always create a layer so that the layer for FocusRing stays in this view's
+  // layer. Without it, the layer for FocusRing goes above the NativeViewHost
+  // and may steal events.
+  SetPaintToLayer(init_params.transparent ? ui::LAYER_NOT_DRAWN
+                                          : ui::LAYER_TEXTURED);
+
+  if (!init_params.transparent) {
     layer()->SetRoundedCornerRadius(
         gfx::RoundedCornersF{static_cast<float>(params_.corner_radius)});
     layer()->SetIsFastRoundedCorner(true);
-    layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-    layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
-  } else {
-    // Create a layer so that the layer for FocusRing stays in this view's
-    // layer. Without it, the layer for FocusRing goes above the
-    // NativeViewHost and may steal events.
-    SetPaintToLayer(ui::LAYER_NOT_DRAWN);
+    SetBorder(std::make_unique<views::HighlightBorder>(
+        params_.corner_radius,
+        views::HighlightBorder::Type::kHighlightBorderOnShadow));
 
-    if (!init_params.transparent) {
-      SetPaintToLayer();
-      layer()->SetRoundedCornerRadius(
-          gfx::RoundedCornersF{static_cast<float>(params_.corner_radius)});
+    const bool is_translucent =
+        init_params.translucent && chromeos::features::IsSystemBlurEnabled();
+
+    // A translucent TrayBubbleView initializes the widget with NOT_DRAWN_LAYER.
+    // Therefore the BubbleFrameView(FrameView) that provides the
+    // background will not be painted. Therefore TrayBubbleView should paint its
+    // own background.
+    SetBackground(views::CreateSolidBackground(
+        is_translucent ? cros_tokens::kCrosSysSystemBaseElevated
+                       : cros_tokens::kCrosSysSystemBaseElevatedOpaque));
+    layer()->SetFillsBoundsOpaquely(!is_translucent);
+    if (is_translucent) {
+      layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
+      layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
     }
-  }
-
-  if (init_params.transparent) {
-    set_color(SK_ColorTRANSPARENT);
   }
 
   if (params_.has_shadow) {
@@ -324,8 +387,7 @@ TrayBubbleView::TrayBubbleView(const InitParams& init_params)
   }
 
   auto layout = std::make_unique<BottomAlignedBoxLayout>(this);
-  layout->SetDefaultFlex(1);
-  layout_ = SetLayoutManager(std::move(layout));
+  layout_ = SetLayoutManager(std::move(layout))->box_layout();
 
   if (init_params.anchor_mode == AnchorMode::kRect) {
     SetAnchorView(nullptr);
@@ -336,11 +398,21 @@ TrayBubbleView::TrayBubbleView(const InitParams& init_params)
   }
 
   message_center::MessageCenter::Get()->AddObserver(this);
-  Shell::Get()->display_manager()->AddObserver(this);
+  Shell::Get()->display_manager()->AddDisplayObserver(this);
+
+  GetViewAccessibility().SetRole(ax::mojom::Role::kWindow);
+  UpdateAccessibleName();
+  UpdateAccessibleIgnoredState();
+
+  name_changed_subscription_ =
+      GetViewAccessibility().AddStringAttributeChangedCallback(
+          ax::mojom::StringAttribute::kName,
+          base::BindRepeating(&TrayBubbleView::OnAXNameChanged,
+                              base::Unretained(this)));
 }
 
 TrayBubbleView::~TrayBubbleView() {
-  Shell::Get()->display_manager()->RemoveObserver(this);
+  Shell::Get()->display_manager()->RemoveDisplayObserver(this);
   message_center::MessageCenter::Get()->RemoveObserver(this);
 
   mouse_watcher_.reset();
@@ -354,6 +426,8 @@ TrayBubbleView::~TrayBubbleView() {
 void TrayBubbleView::InitializeAndShowBubble() {
   GetWidget()->Show();
   UpdateBubble();
+  UpdateAccessibleName();
+  UpdateAccessibleIgnoredState();
 
   // Manually sets the shadow position since `CreateShadowOnTextureLayer` only
   // constructs the shadow but doesn't deal with shadow positioning.
@@ -414,6 +488,8 @@ void TrayBubbleView::ResetDelegate() {
   reroute_event_handler_.reset();
 
   delegate_ = nullptr;
+  UpdateAccessibleIgnoredState();
+  GetViewAccessibility().SetName(std::u16string());
 }
 
 void TrayBubbleView::ChangeAnchorView(views::View* anchor_view) {
@@ -471,27 +547,21 @@ void TrayBubbleView::OnWidgetBoundsChanged(views::Widget* widget,
   Shell::Get()->system_tray_notifier()->NotifyTrayBubbleBoundsChanged(this);
 }
 
-ui::LayerType TrayBubbleView::GetLayerType() const {
-  if (params_.translucent) {
-    return ui::LAYER_NOT_DRAWN;
-  }
-  return ui::LAYER_TEXTURED;
-}
-
-std::unique_ptr<NonClientFrameView> TrayBubbleView::CreateNonClientFrameView(
-    Widget* widget) {
+std::unique_ptr<FrameView> TrayBubbleView::CreateFrameView(Widget* widget) {
   // Create the customized bubble border.
   std::unique_ptr<BubbleBorder> bubble_border =
       std::make_unique<BubbleBorder>(arrow(), BubbleBorder::NO_SHADOW);
-  if (params_.corner_radius) {
-    bubble_border->SetCornerRadius(params_.corner_radius);
+  if (GetParams().round_corners) {
+    bubble_border->set_rounded_corners(gfx::RoundedCornersF(GetCornerRadius()));
   }
+
+  bubble_border->SetColor(background_color());
   bubble_border->set_avoid_shadow_overlap(true);
   if (params_.insets.has_value()) {
     bubble_border->set_insets(params_.insets.value());
   }
 
-  auto frame = BubbleDialogDelegateView::CreateNonClientFrameView(widget);
+  auto frame = BubbleDialogDelegateView::CreateFrameView(widget);
   auto* frame_ptr = static_cast<views::BubbleFrameView*>(frame.get());
   frame_ptr->SetBubbleBorder(std::move(bubble_border));
   if (params_.anchor_mode == AnchorMode::kView) {
@@ -507,7 +577,8 @@ bool TrayBubbleView::WidgetHasHitTestMask() const {
 
 void TrayBubbleView::GetWidgetHitTestMask(SkPath* mask) const {
   DCHECK(mask);
-  mask->addRect(gfx::RectToSkRect(GetBubbleFrameView()->GetContentsBounds()));
+  *mask = SkPath::Rect(
+      gfx::RectToSkRect(GetBubbleFrameView()->GetContentsBounds()));
 }
 
 std::u16string TrayBubbleView::GetAccessibleWindowTitle() const {
@@ -527,22 +598,21 @@ void TrayBubbleView::AddedToWidget() {
   }
 }
 
-gfx::Size TrayBubbleView::CalculatePreferredSize() const {
-  return gfx::Size(preferred_width_, GetHeightForWidth(preferred_width_));
-}
-
-int TrayBubbleView::GetHeightForWidth(int width) const {
-  width = std::max(width - GetInsets().width(), 0);
-  const auto visible_height = [width](int height, const views::View* child) {
-    return height + (child->GetVisible() ? child->GetHeightForWidth(width) : 0);
-  };
-  const int height = std::accumulate(children().cbegin(), children().cend(),
-                                     GetInsets().height(), visible_height);
+gfx::Size TrayBubbleView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  const int width = std::max(preferred_width_ - GetInsets().width(), 0);
+  const int height = std::transform_reduce(
+      children().cbegin(), children().cend(), GetInsets().height(),
+      std::plus<>(), [width](const views::View* child) {
+        return child->GetVisible() ? child->GetHeightForWidth(width) : 0;
+      });
   if (params_.use_fixed_height) {
-    return (params_.max_height != 0) ? params_.max_height : height;
+    return gfx::Size(preferred_width_,
+                     (params_.max_height != 0) ? params_.max_height : height);
   }
-  return (params_.max_height != 0) ? std::min(height, params_.max_height)
-                                   : height;
+  return gfx::Size(preferred_width_, (params_.max_height != 0)
+                                         ? std::min(height, params_.max_height)
+                                         : height);
 }
 
 void TrayBubbleView::OnMouseEntered(const ui::MouseEvent& event) {
@@ -568,30 +638,6 @@ void TrayBubbleView::OnMouseExited(const ui::MouseEvent& event) {
   if (delegate_ && mouse_actively_entered_) {
     delegate_->OnMouseExitedView();
   }
-}
-
-void TrayBubbleView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  if (delegate_ && CanActivate()) {
-    node_data->role = ax::mojom::Role::kWindow;
-    node_data->SetNameChecked(delegate_->GetAccessibleNameForBubble());
-  }
-}
-
-void TrayBubbleView::OnThemeChanged() {
-  views::BubbleDialogDelegateView::OnThemeChanged();
-  if (params_.transparent) {
-    return;
-  }
-
-  SetBorder(std::make_unique<views::HighlightBorder>(
-      params_.corner_radius,
-      chromeos::features::IsJellyrollEnabled()
-          ? views::HighlightBorder::Type::kHighlightBorderOnShadow
-          : views::HighlightBorder::Type::kHighlightBorder1));
-  set_color(GetColorProvider()->GetColor(
-      chromeos::features::IsJellyEnabled()
-          ? static_cast<ui::ColorId>(cros_tokens::kCrosSysSystemBaseElevated)
-          : kColorAshShieldAndBase80));
 }
 
 void TrayBubbleView::MouseMovedOutOfHost() {
@@ -684,6 +730,16 @@ void TrayBubbleView::CloseBubbleView() {
   delegate_->HideBubble(this);
 }
 
+void TrayBubbleView::UpdateAccessibleName() {
+  if (delegate_->GetAccessibleNameForBubble().empty()) {
+    GetViewAccessibility().SetName(
+        delegate_->GetAccessibleNameForBubble(),
+        ax::mojom::NameFrom::kAttributeExplicitlyEmpty);
+  } else {
+    GetViewAccessibility().SetName(delegate_->GetAccessibleNameForBubble());
+  }
+}
+
 void TrayBubbleView::ChildPreferredSizeChanged(View* child) {
   SizeToContents();
 }
@@ -691,6 +747,17 @@ void TrayBubbleView::ChildPreferredSizeChanged(View* child) {
 void TrayBubbleView::SetBubbleBorderInsets(gfx::Insets insets) {
   if (GetBubbleFrameView()->bubble_border()) {
     GetBubbleFrameView()->bubble_border()->set_insets(insets);
+  }
+}
+
+void TrayBubbleView::UpdateAccessibleIgnoredState() {
+  GetViewAccessibility().SetIsIgnored(!delegate_ || !CanActivate());
+}
+
+void TrayBubbleView::OnAXNameChanged(ax::mojom::StringAttribute attribute,
+                                     const std::optional<std::string>& name) {
+  if (GetWidget()) {
+    GetWidget()->UpdateAccessibleNameForRootView();
   }
 }
 

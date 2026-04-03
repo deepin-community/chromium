@@ -79,28 +79,16 @@ LayerTreePixelTest::CreateLayerTreeFrameSink(
     scoped_refptr<viz::RasterContextProvider>) {
   scoped_refptr<viz::TestInProcessContextProvider> compositor_context_provider;
   scoped_refptr<viz::TestInProcessContextProvider> worker_context_provider;
+  gpu::SharedImageInterface* shared_image_interface = nullptr;
+
   if (!use_software_renderer()) {
     compositor_context_provider =
         base::MakeRefCounted<viz::TestInProcessContextProvider>(
-            viz::TestContextType::kSoftwareRaster, /*support_locking=*/false);
+            viz::TestContextType::kRaster, /*support_locking=*/false);
 
-    viz::TestContextType worker_ri_type;
-    switch (raster_type()) {
-      case TestRasterType::kGpu:
-        worker_ri_type = viz::TestContextType::kGpuRaster;
-        break;
-      case TestRasterType::kOneCopy:
-        worker_ri_type = viz::TestContextType::kSoftwareRaster;
-        break;
-      case TestRasterType::kZeroCopy:
-        worker_ri_type = viz::TestContextType::kSoftwareRaster;
-        break;
-      case TestRasterType::kBitmap:
-        NOTREACHED();
-    }
     worker_context_provider =
         base::MakeRefCounted<viz::TestInProcessContextProvider>(
-            worker_ri_type, /*support_locking=*/true);
+            viz::TestContextType::kRaster, /*support_locking=*/true);
     // Bind worker context to main thread like it is in production. This is
     // needed to fully initialize the context. Compositor context is bound to
     // the impl thread in LayerTreeFrameSink::BindToCurrentSequence().
@@ -114,9 +102,17 @@ LayerTreePixelTest::CreateLayerTreeFrameSink(
     }
     DCHECK_EQ(result, gpu::ContextResult::kSuccess);
   } else {
+    context_provider_sw_ =
+        base::MakeRefCounted<viz::TestInProcessContextProvider>(
+            viz::TestContextType::kRaster, /*support_locking=*/false);
+    gpu::ContextResult result = context_provider_sw_->BindToCurrentSequence();
+    DCHECK_EQ(result, gpu::ContextResult::kSuccess);
+
+    shared_image_interface = context_provider_sw_->SharedImageInterface();
     max_texture_size_ =
         layer_tree_host()->GetSettings().max_render_buffer_bounds_for_sw;
   }
+
   static constexpr bool disable_display_vsync = false;
   bool synchronous_composite =
       !HasImplThread() &&
@@ -127,7 +123,7 @@ LayerTreePixelTest::CreateLayerTreeFrameSink(
   test_settings.dont_round_texture_sizes_for_pixel_tests = true;
   auto delegating_output_surface = std::make_unique<TestLayerTreeFrameSink>(
       compositor_context_provider, worker_context_provider,
-      gpu_memory_buffer_manager(), test_settings, &debug_settings_,
+      shared_image_interface, test_settings, &debug_settings_,
       task_runner_provider(), synchronous_composite, disable_display_vsync,
       refresh_rate);
   delegating_output_surface->SetEnlargePassTextureAmount(
@@ -138,14 +134,9 @@ LayerTreePixelTest::CreateLayerTreeFrameSink(
 void LayerTreePixelTest::DrawLayersOnThread(LayerTreeHostImpl* host_impl) {
   // Verify that we're using Gpu rasterization or not as requested.
   if (!use_software_renderer()) {
-    viz::RasterContextProvider* worker_context_provider =
-        host_impl->layer_tree_frame_sink()->worker_context_provider();
-    viz::RasterContextProvider::ScopedRasterContextLock lock(
-        worker_context_provider);
-    EXPECT_EQ(use_accelerated_raster(),
-              worker_context_provider->ContextCapabilities().gpu_rasterization);
+    EXPECT_EQ(use_accelerated_raster(), host_impl->use_gpu_rasterization());
     EXPECT_EQ(raster_type() == TestRasterType::kGpu,
-              worker_context_provider->ContextCapabilities().gpu_rasterization);
+              host_impl->use_gpu_rasterization());
   } else {
     EXPECT_EQ(TestRasterType::kBitmap, raster_type());
   }
@@ -213,11 +204,6 @@ void LayerTreePixelTest::BeginTest() {
   } else {
     layer_tree_host()->property_trees()->effect_tree_mutable().AddCopyRequest(
         target->effect_tree_index(), CreateCopyOutputRequest());
-    layer_tree_host()
-        ->property_trees()
-        ->effect_tree_mutable()
-        .Node(target->effect_tree_index())
-        ->has_copy_request = true;
   }
   PostSetNeedsCommitToMainThread();
 }

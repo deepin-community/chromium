@@ -6,14 +6,12 @@
 
 #include <linux/magic.h>
 #include <sys/statfs.h>
+
 #include <map>
 #include <set>
 #include <string>
 #include <utility>
 
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/arc_util.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "base/files/file_path.h"
@@ -32,24 +30,31 @@
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_session_tracker.h"
+#include "chrome/browser/ash/guest_os/guest_os_session_tracker_factory.h"
 #include "chrome/browser/ash/guest_os/guest_os_share_path.h"
+#include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
 #include "chrome/browser/ash/login/configuration_keys.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/login/demo_mode/demo_setup_controller.h"
 #include "chrome/browser/ash/login/oobe_configuration.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/arc/arc_web_contents_data.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/tab_contents/tab_util.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
 #include "chromeos/components/mgs/managed_guest_session_utils.h"
 #include "components/embedder_support/user_agent_utils.h"
 #include "components/prefs/pref_service.h"
@@ -60,7 +65,6 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/user_agent.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
@@ -131,7 +135,7 @@ base::LazyInstance<std::map<const Profile*, bool>>::DestructorAtExit
 bool g_disallow_for_testing = false;
 
 // Let IsArcBlockedDueToIncompatibleFileSystem() return the specified value
-// during test runs. Doesn't affect ARC kiosk and public session.
+// during test runs. Doesn't affect public session.
 bool g_arc_blocked_due_to_incompatible_filesystem_for_testing = false;
 
 // TODO(kinaba): Temporary workaround for crbug.com/729034.
@@ -156,6 +160,7 @@ bool IsArcCompatibleFilesystem(const base::FilePath& path) {
   // If it can be verified it is not on ecryptfs, then it is ok.
   struct statfs statfs_buf;
   if (statfs(path.value().c_str(), &statfs_buf) < 0) {
+    VPLOG(1) << "statfs failed";
     return false;
   }
   return statfs_buf.f_type != ECRYPTFS_SUPER_MAGIC;
@@ -164,9 +169,29 @@ bool IsArcCompatibleFilesystem(const base::FilePath& path) {
 FileSystemCompatibilityState GetFileSystemCompatibilityPref(
     const AccountId& account_id) {
   user_manager::KnownUser known_user(g_browser_process->local_state());
-  return static_cast<FileSystemCompatibilityState>(
-      known_user.FindIntPath(account_id, prefs::kArcCompatibleFilesystemChosen)
-          .value_or(kFileSystemIncompatible));
+  if (auto pref = known_user.FindIntPath(account_id,
+                                         prefs::kArcCompatibleFilesystemChosen);
+      pref) {
+    return static_cast<FileSystemCompatibilityState>(pref.value());
+  }
+  VLOG(1) << "arc.compatible_filesystem.chosen not set. Assuming incompatible.";
+  return kFileSystemIncompatible;
+}
+
+// Similar to GetFileSystemCompatibilityPref, but when the pref is not found,
+// it optimistically assumes that the file system is compatible. This is for
+// the mitigation of issues like b/327969092 that unexpectedly clears the pref
+// during the initial sign-in.
+FileSystemCompatibilityState GetFileSystemCompatibilityPrefOptimistic(
+    const AccountId& account_id) {
+  user_manager::KnownUser known_user(g_browser_process->local_state());
+  if (auto pref = known_user.FindIntPath(account_id,
+                                         prefs::kArcCompatibleFilesystemChosen);
+      pref) {
+    return static_cast<FileSystemCompatibilityState>(pref.value());
+  }
+  VLOG(1) << "arc.compatible_filesystem.chosen not set. Assuming compatible.";
+  return kFileSystemCompatible;
 }
 
 // Stores the result of IsArcCompatibleFilesystem posted back from the blocking
@@ -222,12 +247,17 @@ ArcStatus GetArcStatusForProfile(const Profile* profile,
     return ArcStatus::kDisallowedForTesting;
   }
 
-  // ARC Kiosk can be enabled even if ARC is not yet supported on the device.
-  // In that case IsArcKioskMode() should return true as profile is already
-  // created.
-  if (!IsArcAvailable() && !(IsArcKioskMode() && IsArcKioskAvailable())) {
+  if (!IsArcAvailable()) {
     VLOG_IF(1, should_report_reason) << "ARC is not available.";
     return ArcStatus::kNotAvailable;
+  }
+
+  if (ash::switches::IsRevenBranding()) {
+    if (!policy_util::IsAccountManaged(profile)) {
+      VLOG_IF(1, should_report_reason) << "ARC unavailable on reven board due "
+                                          "to unmanaged account.";
+      return ArcStatus::kNotAvailable;
+    }
   }
 
   if (!ash::ProfileHelper::IsPrimaryProfile(profile)) {
@@ -260,27 +290,21 @@ ArcStatus GetArcStatusForProfile(const Profile* profile,
     return ArcStatus::kDisallowedByDevicePolicyRestriction;
   }
 
-  if (base::FeatureList::IsEnabled(kUnaffiliatedDeviceArcRestriction)) {
-    if (!user->IsAffiliated() &&
-        !profile->GetPrefs()->GetBoolean(
-            prefs::kUnaffiliatedDeviceArcAllowed) &&
-        policy_util::IsAccountManaged(profile)) {
-      VLOG_IF(1, should_report_reason)
-          << "ARC disallowed for unaffiliated users";
-      return arc::ArcStatus::kDisallowedByUserPolicyRestriction;
-    }
+  if (!user->IsAffiliated() &&
+      !profile->GetPrefs()->GetBoolean(prefs::kUnaffiliatedDeviceArcAllowed) &&
+      policy_util::IsAccountManaged(profile)) {
+    VLOG_IF(1, should_report_reason) << "ARC disallowed for unaffiliated users";
+    return arc::ArcStatus::kDisallowedByUserPolicyRestriction;
   }
 
   // Please add any condition that disallows ARC above this check.
-  if (base::FeatureList::IsEnabled(kUnaffiliatedDeviceArcRestriction)) {
-    const bool is_arc_allowed_on_unaffiliated_devices =
-        profile->GetPrefs()->GetBoolean(prefs::kUnaffiliatedDeviceArcAllowed);
-    if (user->IsAffiliated() && !is_arc_allowed_on_unaffiliated_devices) {
-      return ArcStatus::kAllowedOnAffiliatedDevice;
-    }
-    if (!user->IsAffiliated() && is_arc_allowed_on_unaffiliated_devices) {
-      return ArcStatus::kAllowedOnUnaffiliatedDevice;
-    }
+  const bool is_arc_allowed_on_unaffiliated_devices =
+      profile->GetPrefs()->GetBoolean(prefs::kUnaffiliatedDeviceArcAllowed);
+  if (user->IsAffiliated() && !is_arc_allowed_on_unaffiliated_devices) {
+    return ArcStatus::kAllowedOnAffiliatedDevice;
+  }
+  if (!user->IsAffiliated() && is_arc_allowed_on_unaffiliated_devices) {
+    return ArcStatus::kAllowedOnUnaffiliatedDevice;
   }
 
   return ArcStatus::kAllowed;
@@ -296,7 +320,7 @@ bool IsArcAllowedForProfileInternal(const Profile* profile,
 }
 
 void ShowContactAdminDialog() {
-  chrome::ShowWarningMessageBox(
+  chrome::ShowWarningMessageBoxAsync(
       nullptr, l10n_util::GetStringUTF16(IDS_ARC_OPT_IN_CONTACT_ADMIN_TITLE),
       l10n_util::GetStringUTF16(IDS_ARC_OPT_IN_CONTACT_ADMIN_CONTEXT));
 }
@@ -309,8 +333,8 @@ void SharePathIfRequired(ConvertToContentUrlsAndShareCallback callback,
   Profile* const profile = ProfileManager::GetPrimaryUserProfile();
   DCHECK(profile);
   for (const auto& path : paths_to_share) {
-    if (!guest_os::GuestOsSharePath::GetForProfile(profile)->IsPathShared(
-            kArcVmName, path)) {
+    if (!guest_os::GuestOsSharePathFactory::GetForProfile(profile)
+             ->IsPathShared(kArcVmName, path)) {
       path_list.push_back(path);
     }
   }
@@ -320,14 +344,14 @@ void SharePathIfRequired(ConvertToContentUrlsAndShareCallback callback,
   }
 
   const auto& vm_info =
-      guest_os::GuestOsSessionTracker::GetForProfile(profile)->GetVmInfo(
+      guest_os::GuestOsSessionTrackerFactory::GetForProfile(profile)->GetVmInfo(
           kArcVmName);
   if (!vm_info) {
     LOG(WARNING) << "ARCVM not running, cannot share paths";
     std::move(callback).Run(std::vector<GURL>());
     return;
   }
-  guest_os::GuestOsSharePath::GetForProfile(profile)->SharePaths(
+  guest_os::GuestOsSharePathFactory::GetForProfile(profile)->SharePaths(
       kArcVmName, vm_info->seneschal_server_handle(), path_list,
       base::BindOnce(
           [](ConvertToContentUrlsAndShareCallback callback,
@@ -422,12 +446,15 @@ bool IsArcBlockedDueToIncompatibleFileSystem(const Profile* profile) {
   const user_manager::User* user =
       ash::ProfileHelper::Get()->GetUserByProfile(profile);
 
-  // Return true for public accounts as they only have ext4 and
+  // Unblock Arc for public accounts as they only have ext4 and
   // for ARC kiosk as migration to ext4 should always be triggered.
   // Without this check it fails to start after browser crash as
   // compatibility info is stored in RAM.
+  // In the other kiosk types we do not/should not start ARCVM or allow android
+  // apps to run hence this method should evaluate the actual file system and
+  // not be bypassed here.
   if (user && (user->GetType() == user_manager::UserType::kPublicAccount ||
-               user->GetType() == user_manager::UserType::kArcKioskApp)) {
+               user->GetType() == user_manager::UserType::kKioskArcvmApp)) {
     return false;
   }
 
@@ -454,7 +481,7 @@ bool IsArcCompatibleFileSystemUsedForUser(const user_manager::User* user) {
   // ash::UserSessionManager does the actual file system check and stores
   // the result to prefs, so that it survives crash-restart.
   FileSystemCompatibilityState filesystem_compatibility =
-      GetFileSystemCompatibilityPref(user->GetAccountId());
+      GetFileSystemCompatibilityPrefOptimistic(user->GetAccountId());
   const bool is_filesystem_compatible =
       filesystem_compatibility != kFileSystemIncompatible ||
       g_known_compatible_users.Get().count(user->GetAccountId()) != 0;
@@ -513,7 +540,8 @@ bool SetArcPlayStoreEnabledForProfile(Profile* profile, bool enabled) {
       return false;
     }
     if (enabled) {
-      arc_session_manager->AllowActivation();
+      arc_session_manager->AllowActivation(
+          ArcSessionManager::AllowActivationReason::kUserEnableAction);
       arc_session_manager->RequestEnable();
     } else {
       arc_session_manager->RequestDisableWithArcDataRemoval();
@@ -529,8 +557,15 @@ bool AreArcAllOptInPreferencesIgnorableForProfile(const Profile* profile) {
   // The preferences are ignorable iff both backup&restore and location services
   // are set by policy.
   const PrefService* prefs = profile->GetPrefs();
-  return prefs->IsManagedPreference(prefs::kArcBackupRestoreEnabled) &&
-         prefs->IsManagedPreference(prefs::kArcLocationServiceEnabled);
+
+  if (ash::features::IsCrosPrivacyHubLocationEnabled()) {
+    // When PH is enabled, location toggle is no longer ARC specific (applies to
+    // entire ChromeOS);
+    return prefs->IsManagedPreference(prefs::kArcBackupRestoreEnabled);
+  } else {
+    return prefs->IsManagedPreference(prefs::kArcBackupRestoreEnabled) &&
+           prefs->IsManagedPreference(prefs::kArcLocationServiceEnabled);
+  }
 }
 
 bool IsArcOobeOptInActive() {
@@ -540,8 +575,6 @@ bool IsArcOobeOptInActive() {
   }
 
   // Check if Chrome OS OOBE flow is currently showing.
-  // TODO(b/65861628): Redesign the OptIn flow since there is no longer reason
-  // to have two different OptIn flows.
   if (!ash::LoginDisplayHost::default_host()) {
     return false;
   }
@@ -674,7 +707,7 @@ void UpdateArcFileSystemCompatibilityPrefIfNeeded(
   // old devices without ARC. We can always safely remove the following 4 lines
   // without changing any functionality when, say, the code clarity becomes
   // more important in the future.
-  if (!IsArcAvailable() && !IsArcKioskAvailable()) {
+  if (!IsArcAvailable() && !IsArcvmKioskAvailable()) {
     std::move(callback).Run();
     return;
   }
@@ -702,12 +735,6 @@ ArcManagementTransition GetManagementTransition(const Profile* profile) {
   const ArcManagementTransition management_transition =
       static_cast<ArcManagementTransition>(
           profile->GetPrefs()->GetInteger(prefs::kArcManagementTransition));
-  const bool is_unmanaged_to_managed_enabled =
-      base::FeatureList::IsEnabled(kEnableUnmanagedToManagedTransitionFeature);
-  if (management_transition == ArcManagementTransition::UNMANAGED_TO_MANAGED &&
-      !is_unmanaged_to_managed_enabled) {
-    return ArcManagementTransition::NO_TRANSITION;
-  }
   return management_transition;
 }
 
@@ -721,11 +748,7 @@ bool IsPlayStoreAvailable() {
   }
 
   // Demo Mode is the only public session scenario that can launch Play.
-  if (!ash::DemoSession::IsDeviceInDemoMode()) {
-    return false;
-  }
-
-  return ash::features::ShouldShowPlayStoreInDemoMode();
+  return ash::demo_mode::IsDeviceInDemoMode();
 }
 
 bool ShouldStartArcSilentlyForManagedProfile(const Profile* profile) {
@@ -762,11 +785,11 @@ std::unique_ptr<content::WebContents> CreateArcCustomTabWebContents(
   // Override the user agent to request mobile version web sites.
   const std::string product = embedder_support::GetProductAndVersion();
   blink::UserAgentOverride ua_override;
-  ua_override.ua_string_override = content::BuildUserAgentFromOSAndProduct(
-      kOsOverrideForTabletSite, product);
+  ua_override.ua_string_override =
+      embedder_support::BuildUserAgentFromOSAndProduct(kOsOverrideForTabletSite,
+                                                       product);
 
-  ua_override.ua_metadata_override =
-      embedder_support::GetUserAgentMetadata(g_browser_process->local_state());
+  ua_override.ua_metadata_override = embedder_support::GetUserAgentMetadata();
   ua_override.ua_metadata_override->platform = "Android";
   ua_override.ua_metadata_override->platform_version = "9";
   ua_override.ua_metadata_override->model = "Chrome tablet";

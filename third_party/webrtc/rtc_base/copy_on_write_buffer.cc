@@ -10,11 +10,15 @@
 
 #include "rtc_base/copy_on_write_buffer.h"
 
-#include <stddef.h>
+#include <algorithm>
+#include <cstddef>
+#include <cstring>
+#include <utility>
 
 #include "absl/strings/string_view.h"
+#include "rtc_base/checks.h"
 
-namespace rtc {
+namespace webrtc {
 
 CopyOnWriteBuffer::CopyOnWriteBuffer() : offset_(0), size_(0) {
   RTC_DCHECK(IsConsistent());
@@ -34,7 +38,8 @@ CopyOnWriteBuffer::CopyOnWriteBuffer(absl::string_view s)
     : CopyOnWriteBuffer(s.data(), s.length()) {}
 
 CopyOnWriteBuffer::CopyOnWriteBuffer(size_t size)
-    : buffer_(size > 0 ? new RefCountedBuffer(size) : nullptr),
+    : buffer_(size > 0 ? new RefCountedBuffer(size, size) : nullptr),
+      // note - the RefCountedBuffer will be created uninitialized.
       offset_(0),
       size_(size) {
   RTC_DCHECK(IsConsistent());
@@ -62,7 +67,8 @@ void CopyOnWriteBuffer::SetSize(size_t size) {
   RTC_DCHECK(IsConsistent());
   if (!buffer_) {
     if (size > 0) {
-      buffer_ = new RefCountedBuffer(size);
+      buffer_ = new RefCountedBuffer(size, size);
+      // Note - the new buffer will be created uninitialized.
       offset_ = 0;
       size_ = size;
     }
@@ -124,4 +130,4 @@ void CopyOnWriteBuffer::UnshareAndEnsureCapacity(size_t new_capacity) {
   RTC_DCHECK(IsConsistent());
 }
 
-}  // namespace rtc
+}  // namespace webrtc

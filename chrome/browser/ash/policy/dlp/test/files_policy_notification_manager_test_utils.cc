@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "chrome/browser/ash/policy/dlp/test/files_policy_notification_manager_test_utils.h"
 
 #include "base/files/file_path.h"
@@ -10,7 +11,7 @@
 #include "chrome/browser/ash/file_manager/copy_or_move_io_task.h"
 #include "chrome/browser/ash/file_manager/io_task.h"
 #include "chrome/browser/ash/file_manager/volume_manager.h"
-#include "components/enterprise/data_controls/dlp_histogram_helper.h"
+#include "components/enterprise/data_controls/core/browser/dlp_histogram_helper.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -18,7 +19,7 @@
 namespace policy {
 
 bool CreateDummyFile(const base::FilePath& path) {
-  return WriteFile(path, "42", sizeof("42")) == sizeof("42");
+  return WriteFile(path, "42");
 }
 
 storage::FileSystemURL CreateFileSystemURL(const blink::StorageKey key,

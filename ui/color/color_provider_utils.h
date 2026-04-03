@@ -5,47 +5,33 @@
 #ifndef UI_COLOR_COLOR_PROVIDER_UTILS_H_
 #define UI_COLOR_COLOR_PROVIDER_UTILS_H_
 
+#include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/component_export.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
-#include "base/strings/string_piece.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/color/color_id.h"
-#include "ui/color/color_id.mojom.h"
-#include "ui/color/color_mixer.h"
+#include "ui/color/color_id.mojom-forward.h"
 #include "ui/color/color_provider_manager.h"
 
 namespace ui {
+
+class ColorMixer;
 
 using RendererColorMap = base::flat_map<color::mojom::RendererColorId, SkColor>;
 
 class COMPONENT_EXPORT(COLOR) ColorProviderUtilsCallbacks {
  public:
   virtual ~ColorProviderUtilsCallbacks();
-  virtual bool ColorIdName(ColorId color_id, base::StringPiece* color_name) = 0;
+  virtual bool ColorIdName(ColorId color_id, std::string_view* color_name) = 0;
 };
 
 // The following functions convert various values to strings intended for
 // logging. Do not retain the results for longer than the scope in which these
 // functions are called.
-
-// Converts the ColorMode.
-base::StringPiece COMPONENT_EXPORT(COLOR)
-    ColorModeName(ColorProviderKey::ColorMode color_mode);
-
-// Converts the ContrastMode.
-base::StringPiece COMPONENT_EXPORT(COLOR)
-    ContrastModeName(ColorProviderKey::ContrastMode contrast_mode);
-
-// Converts the ForcedColors.
-base::StringPiece COMPONENT_EXPORT(COLOR)
-    ForcedColorsName(ColorProviderKey::ForcedColors forced_colors);
-
-// Converts SystemTheme.
-base::StringPiece COMPONENT_EXPORT(COLOR)
-    SystemThemeName(ui::SystemTheme system_theme);
 
 // Converts ColorId.
 std::string COMPONENT_EXPORT(COLOR) ColorIdName(ColorId color_id);
@@ -58,7 +44,7 @@ std::string COMPONENT_EXPORT(COLOR) SkColorName(SkColor color);
 // Converts Color Provider Color Id in string format from kColorXXX to
 // "--color-X-X-X" for CSS
 std::string COMPONENT_EXPORT(COLOR)
-    ConvertColorProviderColorIdToCSSColorId(std::string color_id_name);
+    ConvertColorProviderColorIdToCSSColorId(std::string_view color_id_name);
 
 // Converts SkColor in ARGB format to CSS color in RGBA color. Returns the color
 // in a Hex string representation.
@@ -73,27 +59,30 @@ RendererColorMap COMPONENT_EXPORT(COLOR)
 
 // Used in combination with CreateRendererColormap() to create the ColorProvider
 // in the renderer process.
-ColorProvider COMPONENT_EXPORT(COLOR) CreateColorProviderFromRendererColorMap(
-    const RendererColorMap& renderer_color_map);
+std::unique_ptr<ColorProvider> COMPONENT_EXPORT(COLOR)
+    CreateColorProviderFromRendererColorMap(
+        const RendererColorMap& renderer_color_map);
 
 // Creates a color provider emulating Windows 10 default high contrast color
-// themes. Currently only defines colors for scrollbar parts.
-ColorProvider COMPONENT_EXPORT(COLOR)
+// themes.
+std::unique_ptr<ColorProvider> COMPONENT_EXPORT(COLOR)
     CreateEmulatedForcedColorsColorProvider(bool dark_mode);
 
 // TODO(samomekarajr): Forced colors web tests currently rely on specific set of
 // hardcoded colors for for determining which system colors to render. This
 // function should be updated once the web driver support spec for forced colors
 // mode is updated.
-ColorProvider COMPONENT_EXPORT(COLOR)
+std::unique_ptr<ColorProvider> COMPONENT_EXPORT(COLOR)
     CreateEmulatedForcedColorsColorProviderForTest();
 
-// Creates a default color provider for Blink Pages that are not associated with
-// a web view. This includes tests, dummy pages,  and non ordinary pages. These
-// scenarios do not use the normal machinery to establish color providers in the
-// renderer. The color mappings for this provider are derived from old Aura
-// colors for controls.
-ColorProvider COMPONENT_EXPORT(COLOR)
+// TODO(crbug.com/40779801): Enhance this function by incorporating platform
+// specific overrides, particularly for CSS system colors.
+// Creates a default fallback color provider for Blink Pages that are not
+// associated with a web view. This includes tests, dummy pages, and non
+// ordinary pages. These scenarios do not use the normal machinery to establish
+// color providers in the renderer. The color mappings for this provider are
+// derived from old Aura colors for controls.
+std::unique_ptr<ColorProvider> COMPONENT_EXPORT(COLOR)
     CreateDefaultColorProviderForBlink(bool dark_mode);
 
 // Scrollbars have three main colors. This function completes the
@@ -107,11 +96,23 @@ void COMPONENT_EXPORT(COLOR)
 void COMPONENT_EXPORT(COLOR)
     CompleteControlsForcedColorsDefinition(ui::ColorMixer& mixer);
 
+// Completes default color definitions for the RendererColorIds that are web
+// native.
+void COMPONENT_EXPORT(COLOR)
+    CompleteDefaultWebNativeRendererColorIdsDefinition(ui::ColorMixer& mixer,
+                                                       bool dark_mode,
+                                                       bool high_contrast);
+
 // Completes default color definitions for the RendererColorIds that are non
 // web native.
 void COMPONENT_EXPORT(COLOR)
     CompleteDefaultNonWebNativeRendererColorIdsDefinition(
         ui::ColorMixer& mixer);
+
+// Completes default color definitions for the CSS system colors.
+void COMPONENT_EXPORT(COLOR)
+    CompleteDefaultCssSystemColorDefinition(ui::ColorMixer& mixer,
+                                            bool dark_mode);
 
 // Returns a default set of color maps for tests and non ordinary pages. These
 // places do not use the normal machinery to establish a color provider in the
@@ -123,7 +124,7 @@ RendererColorMap COMPONENT_EXPORT(COLOR)
 // Returns true if `color_provider` and `renderer_color_map` map renderer
 // color ids to the same SkColor.
 bool COMPONENT_EXPORT(COLOR) IsRendererColorMappingEquivalent(
-    const ColorProvider& color_provider,
+    const ColorProvider* color_provider,
     const RendererColorMap& renderer_color_map);
 
 // Sets the callback for converting a ChromeColorId to a string name. This is

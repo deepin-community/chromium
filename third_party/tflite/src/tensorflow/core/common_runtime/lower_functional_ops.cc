@@ -52,7 +52,7 @@ bool CheckBoolAttr(const Node* n, absl::string_view attr_name) {
 
 // Checks if string attribute is defined and it's not empty.
 bool CheckStringAttr(const Node* n, absl::string_view attr_name) {
-  string match;
+  std::string match;
   bool found = TryGetNodeAttr(n->attrs(), attr_name, &match);
   return found && !match.empty();
 }
@@ -90,7 +90,7 @@ const absl::flat_hash_set<std::string>& DevicePropagationOpList() {
   return *op_list;
 }
 
-bool IsPropagatableDevice(StringPiece device_string) {
+bool IsPropagatableDevice(absl::string_view device_string) {
   DeviceNameUtils::ParsedName device;
   return DeviceNameUtils::ParseFullName(device_string, &device) &&
          device.type == DEVICE_TPU;
@@ -98,7 +98,7 @@ bool IsPropagatableDevice(StringPiece device_string) {
 
 }  // namespace
 
-Status LowerFunctionalOpsPass::Run(
+absl::Status LowerFunctionalOpsPass::Run(
     const GraphOptimizationPassOptions& options) {
   if (options.partition_graphs != nullptr) {
     return errors::Internal(

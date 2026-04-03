@@ -14,6 +14,7 @@
 #include "ash/style/typography.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ash/arc/input_overlay/actions/action.h"
+#include "chrome/browser/ash/arc/input_overlay/arc_input_overlay_metrics.h"
 #include "chrome/browser/ash/arc/input_overlay/display_overlay_controller.h"
 #include "chrome/browser/ash/arc/input_overlay/touch_injector.h"
 #include "chrome/browser/ash/arc/input_overlay/ui/action_type_button_group.h"
@@ -82,6 +83,15 @@ class ButtonOptionsActionEdit : public ActionEditView {
         IDS_INPUT_OVERLAY_BUTTON_OPTIONS_ASSIGNED_KEY));
   }
 
+  // views::View:
+  void VisibilityChanged(views::View* starting_from, bool is_visible) override {
+    if (is_visible && action_->is_new() &&
+        labels_view_->IsFirstLabelUnassigned() &&
+        controller_->HasSingleUserAddedAction()) {
+      PerformPulseAnimation();
+    }
+  }
+
  private:
   friend class ButtonOptionsMenuTest;
   friend class EditLabelTest;
@@ -106,47 +116,38 @@ class DoneButton : public views::LabelButton {
       : LabelButton(std::move(pressed_callback),
                     l10n_util::GetStringUTF16(
                         IDS_INPUT_OVERLAY_EDITING_DONE_BUTTON_LABEL)) {
-    // TODO(b/279117180): Replace with proper accessible name.
-    SetAccessibleName(u"done");
+    GetViewAccessibility().SetName(
+        l10n_util::GetStringUTF16(IDS_INPUT_OVERLAY_EDITING_DONE_BUTTON_LABEL));
 
-    SetBackground(views::CreateThemedRoundedRectBackground(
-        cros_tokens::kCrosSysSystemOnBase,
-        /*radius=*/kDoneButtonCornerRadius));
+    SetBackground(
+        views::CreateRoundedRectBackground(cros_tokens::kCrosSysSystemOnBase,
+                                           /*radius=*/kDoneButtonCornerRadius));
     SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(14, 0)));
     SetProperty(views::kMarginsKey, gfx::Insets::TLBR(12, 0, 0, 0));
 
     ash::TypographyProvider::Get()->StyleLabel(
         ash::TypographyToken::kCrosButton2, *label());
-    SetEnabledTextColorIds(cros_tokens::kCrosSysOnSurface);
+    SetEnabledTextColors(cros_tokens::kCrosSysOnSurface);
     SetHorizontalAlignment(gfx::ALIGN_CENTER);
 
     // Set highlight path.
     views::HighlightPathGenerator::Install(
         this, std::make_unique<views::RoundRectHighlightPathGenerator>(
                   gfx::Insets(), /*corner_radius=*/kDoneButtonCornerRadius));
+
+    // Set up highlight and focus ring for `DoneButton`.
+    ash::StyleUtil::SetUpInkDropForButton(this, gfx::Insets(),
+                                          /*highlight_on_hover=*/false,
+                                          /*highlight_on_focus=*/false);
+    auto* focus_ring = views::FocusRing::Get(this);
+    focus_ring->SetHaloInset(kDoneButtonHaloInset);
+    focus_ring->SetHaloThickness(kDoneButtonHaloThickness);
   }
 
   DoneButton(const DoneButton&) = delete;
   DoneButton& operator=(const DoneButton&) = delete;
 
   ~DoneButton() override = default;
-
- private:
-  void OnThemeChanged() override {
-    views::LabelButton::OnThemeChanged();
-
-    // Set up highlight and focus ring for `DoneButton`.
-    ash::StyleUtil::SetUpInkDropForButton(this, gfx::Insets(),
-                                          /*highlight_on_hover=*/true,
-                                          /*highlight_on_focus=*/false);
-
-    // `StyleUtil::SetUpInkDropForButton()` reinstalls the focus ring, so it
-    // needs to set the focus ring size after calling
-    // `StyleUtil::SetUpInkDropForButton()`.
-    auto* focus_ring = views::FocusRing::Get(this);
-    focus_ring->SetHaloInset(kDoneButtonHaloInset);
-    focus_ring->SetHaloThickness(kDoneButtonHaloThickness);
-  }
 };
 
 BEGIN_METADATA(DoneButton)
@@ -202,7 +203,6 @@ void ButtonOptionsMenu::AddHeader() {
                          gfx::Insets::TLBR(0, kHeaderLeftMarginSpacing, 12, 0));
 
   action_name_label_ = container->AddChildView(ash::bubble_utils::CreateLabel(
-      // TODO(b/274690042): Replace placeholder text with localized strings.
       ash::TypographyToken::kCrosTitle1, u"", cros_tokens::kCrosSysOnSurface));
   action_name_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   action_name_label_->SetMultiLine(true);
@@ -239,7 +239,7 @@ void ButtonOptionsMenu::AddActionSelection() {
   // | |feature_tile| |feature_title| |
   // ----------------------------------
   auto* container = AddChildView(std::make_unique<views::View>());
-  container->SetBackground(views::CreateThemedRoundedRectBackground(
+  container->SetBackground(views::CreateRoundedRectBackground(
       cros_tokens::kCrosSysSystemOnBase, /*top_radius=*/16.0f,
       /*bottom_radius=*/0.0f));
   container->SetUseDefaultFillLayout(true);
@@ -281,11 +281,17 @@ void ButtonOptionsMenu::AddDoneButton() {
 }
 
 void ButtonOptionsMenu::OnTrashButtonPressed() {
+  RecordButtonOptionsMenuFunctionTriggered(controller_->GetPackageName(),
+                                           ButtonOptionsMenuFunction::kDelete);
   controller_->RemoveAction(action_);
 }
 
 void ButtonOptionsMenu::OnDoneButtonPressed() {
   controller_->SaveToProtoFile();
+  RecordButtonOptionsMenuFunctionTriggered(controller_->GetPackageName(),
+                                           ButtonOptionsMenuFunction::kDone);
+
+  controller_->SetEditingListVisibility(/*visible=*/true);
 
   // Remove this view at last.
   controller_->RemoveButtonOptionsMenuWidget();
@@ -295,6 +301,10 @@ void ButtonOptionsMenu::OnActionRemoved(const Action& action) {
   if (action_ != &action) {
     return;
   }
+
+  controller_->SetEditingListVisibility(/*visible=*/true);
+
+  // Remove this view at last.
   controller_->RemoveButtonOptionsMenuWidget();
 }
 

@@ -21,6 +21,9 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/strings/string_view.h"
 #include "absl/time/time.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/status.h"
 #include "tensorflow/core/common_runtime/device.h"
 #include "tensorflow/core/common_runtime/device_factory.h"
 #include "tensorflow/core/common_runtime/device_set.h"
@@ -29,9 +32,6 @@ limitations under the License.
 #include "tensorflow/core/framework/metrics.h"
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/public/session_options.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/status.h"
 
 namespace tensorflow {
 namespace {
@@ -65,7 +65,7 @@ void TestOptimizeFunctionGraphWithFunctionNotFound(bool load_from_cache) {
 
   // Try to optimize a function called "FindDevice" which does not exist in
   // library.
-  StatusOr<OptimizedFunctionGraphInfo> optimized_function_graph_info;
+  absl::StatusOr<OptimizedFunctionGraphInfo> optimized_function_graph_info;
   if (load_from_cache) {
     optimized_function_graph_info = OptimizeFunctionGraphOrReadFromFileCache(
         "FindDevice", {}, opts, device_set, lib_def.get(),
@@ -109,10 +109,11 @@ TEST(OptimizeFunctionGraphTest, OptimizeFunctionGraphReturnsCorrectResult) {
     device_set.AddDevice(device.get());
   }
 
-  const StatusOr<OptimizedFunctionGraphInfo> aot_result = OptimizeFunctionGraph(
-      "FindDevice", {}, opts, device_set, lib_def.get(),
-      /*composite_devices=*/{}, devices[0].get(), devices[1].get(),
-      Env::Default(), OptimizedFunctionGraph::AOT);
+  const absl::StatusOr<OptimizedFunctionGraphInfo> aot_result =
+      OptimizeFunctionGraph("FindDevice", {}, opts, device_set, lib_def.get(),
+                            /*composite_devices=*/{}, devices[0].get(),
+                            devices[1].get(), Env::Default(),
+                            OptimizedFunctionGraph::AOT);
   TF_EXPECT_OK(aot_result.status());
   EXPECT_EQ(aot_result->name, "FindDevice");
   // FindDevice function has one return node.
@@ -131,12 +132,12 @@ TEST(OptimizeFunctionGraphTest, OptimizeFunctionGraphAndWriteToCache) {
   Env* env = Env::Default();
 
   // Create a temp directory and set to env variable for the purpose of testing.
-  const string temp_dir = "/tmp/testing_cache_direcroty";
+  const std::string temp_dir = "/tmp/testing_cache_direcroty";
   EXPECT_TRUE(env->RecursivelyCreateDir(temp_dir).ok());
   setenv(kGraphCachingEnvVariableName, temp_dir.c_str(), 1);
 
   // Check that no file exists before caching.
-  std::vector<string> empty_file_list;
+  std::vector<std::string> empty_file_list;
   TF_ASSERT_OK(
       env->GetMatchingPaths(absl::StrCat(temp_dir, "/*"), &empty_file_list));
   ASSERT_TRUE(empty_file_list.empty());
@@ -166,13 +167,13 @@ TEST(OptimizeFunctionGraphTest, OptimizeFunctionGraphAndWriteToCache) {
             0);
 
   // Expect no caching with an extremely high caching threshold.
-  StatusOr<OptimizedFunctionGraphInfo> optimized_info =
+  absl::StatusOr<OptimizedFunctionGraphInfo> optimized_info =
       OptimizeFunctionGraphOrReadFromFileCache(
           "FindDevice_1234", {}, opts, device_set, lib_def.get(),
           /*composite_devices=*/{}, devices[0].get(), devices[1].get(),
           Env::Default(), /*caching_threshold_duration=*/absl::Hours(48));
   TF_ASSERT_OK(optimized_info.status());
-  std::vector<string> file_list;
+  std::vector<std::string> file_list;
   TF_ASSERT_OK(env->GetMatchingPaths(absl::StrCat(temp_dir, "/*"), &file_list));
   EXPECT_EQ(file_list.size(), 0);
   EXPECT_EQ(metrics::GetFunctionGraphOptimizationSavingTimeUsecs(

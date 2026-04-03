@@ -17,19 +17,23 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <sstream>
+#include <filesystem>  // NOLINT
+#include <string>
 #include <vector>
 
 #include "gtest/gtest.h"
 #include "./centipede/binary_info.h"
 #include "./centipede/call_graph.h"
 #include "./centipede/control_flow.h"
-#include "./centipede/defs.h"
 #include "./centipede/feature.h"
 #include "./centipede/feature_set.h"
 #include "./centipede/pc_info.h"
+#include "./centipede/runner_result.h"
+#include "./centipede/util.h"
+#include "./common/defs.h"
+#include "./common/test_util.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 namespace {
 
 TEST(Corpus, GetCmpData) {
@@ -41,14 +45,15 @@ TEST(Corpus, GetCmpData) {
   Corpus corpus;
   ByteArray cmp_data{2, 0, 1, 2, 3};
   FeatureVec features1 = {10, 20, 30};
-  fs.IncrementFrequencies(features1);
-  corpus.Add({1}, features1, /*metadata=*/{.cmp_data = cmp_data}, fs,
+  fs.MergeFeatures(features1);
+  corpus.Add({1}, features1, /*metadata=*/{cmp_data}, /*stats=*/{}, fs,
              coverage_frontier);
   EXPECT_EQ(corpus.NumActive(), 1);
   EXPECT_EQ(corpus.GetMetadata(0).cmp_data, cmp_data);
 }
 
 TEST(Corpus, PrintStats) {
+  const std::filesystem::path test_tmpdir = GetTestTempDir(test_info_->name());
   PCTable pc_table(100);
   CFTable cf_table(100);
   BinaryInfo bin_info{pc_table, {}, cf_table, {}, {}, {}};
@@ -57,14 +62,17 @@ TEST(Corpus, PrintStats) {
   Corpus corpus;
   FeatureVec features1 = {10, 20, 30};
   FeatureVec features2 = {20, 40};
-  fs.IncrementFrequencies(features1);
-  corpus.Add({1, 2, 3}, features1, {}, fs, coverage_frontier);
-  fs.IncrementFrequencies(features2);
-  corpus.Add({4, 5}, features2, {}, fs, coverage_frontier);
-  std::ostringstream os;
-  corpus.PrintStats(os, fs);
-  EXPECT_EQ(os.str(),
-            R"({
+  fs.MergeFeatures(features1);
+  corpus.Add({1, 2, 3}, features1, {}, /*stats=*/{}, fs, coverage_frontier);
+  fs.MergeFeatures(features2);
+  corpus.Add({4, 5}, features2, {}, /*stats=*/{}, fs, coverage_frontier);
+  const std::string stats_filepath = test_tmpdir / "corpus.txt";
+  corpus.DumpStatsToFile(fs, stats_filepath, "Test corpus");
+  std::string stats_file_contents;
+  ReadFromLocalFile(stats_filepath, stats_file_contents);
+  EXPECT_EQ(stats_file_contents,
+            R"(# Test corpus
+{
   "num_inputs": 2,
   "corpus_stats": [
     {"size": 3, "frequencies": [1, 2, 1]},
@@ -85,9 +93,10 @@ TEST(Corpus, Prune) {
   Rng rng(0);
   size_t max_corpus_size = 1000;
 
-  auto Add = [&](const CorpusRecord &record) {
-    fs.IncrementFrequencies(record.features);
-    corpus.Add(record.data, record.features, {}, fs, coverage_frontier);
+  auto Add = [&](const CorpusRecord& record) {
+    fs.MergeFeatures(record.features);
+    corpus.Add(record.data, record.features, {}, /*stats=*/{}, fs,
+               coverage_frontier);
   };
 
   auto VerifyActiveInputs = [&](std::vector<ByteArray> expected_inputs) {
@@ -105,6 +114,8 @@ TEST(Corpus, Prune) {
   Add({{2}, {30, 40}});
   Add({{3}, {40, 50}});
   Add({{4}, {10, 20}});
+  corpus.UpdateWeights(fs, coverage_frontier,
+                       /*scale_by_exec_time=*/false);
 
   // Prune. Features 20 and 40 are frequent => input {0} will be removed.
   EXPECT_EQ(corpus.NumActive(), 5);
@@ -114,6 +125,9 @@ TEST(Corpus, Prune) {
   VerifyActiveInputs({{1}, {2}, {3}, {4}});
 
   Add({{5}, {30, 60}});
+  corpus.UpdateWeights(fs, coverage_frontier,
+                       /*scale_by_exec_time=*/false);
+
   EXPECT_EQ(corpus.NumTotal(), 6);
   // Prune. Feature 30 is now frequent => inputs {1} and {2} will be removed.
   EXPECT_EQ(corpus.NumActive(), 5);
@@ -129,8 +143,204 @@ TEST(Corpus, Prune) {
   EXPECT_EQ(corpus.Prune(fs, coverage_frontier, 1, rng), 1);
   EXPECT_EQ(corpus.NumActive(), 1);
   EXPECT_DEATH(corpus.Prune(fs, coverage_frontier, 0, rng),
-               "max_corpus_size");  // CHECK-fail.
+               "max_corpus_size");  // FUZZTEST_CHECK-fail.
   EXPECT_EQ(corpus.NumTotal(), 6);
+}
+
+TEST(Corpus, UniformWeightMethodsWorkAsExpected) {
+  PCTable pc_table(100);
+  CFTable cf_table(100);
+  BinaryInfo bin_info{pc_table, {}, cf_table, {}, {}, {}};
+  CoverageFrontier coverage_frontier(bin_info);
+  FeatureSet fs(3, {});
+  Corpus corpus(Corpus::WeightMethod::Uniform);
+
+  auto Add = [&](const CorpusRecord& record) {
+    fs.MergeFeatures(record.features);
+    corpus.Add(record.data, record.features, /*metadata=*/{}, /*stats=*/{}, fs,
+               coverage_frontier);
+  };
+
+  Add({/*data=*/{0}, /*features=*/{30, 20}});
+  Add({/*data=*/{1}, /*features=*/{10, 20}});
+  Add({/*data=*/{2}, /*features=*/{10}});
+
+  constexpr int kNumIter = 10000;
+  std::vector<uint64_t> freq;
+
+  Rng rng;
+  auto ComputeFreq = [&]() {
+    freq.clear();
+    freq.resize(corpus.NumActive());
+    for (int i = 0; i < kNumIter; i++) {
+      const auto& record = corpus.WeightedRandom(rng);
+      const auto id = record.data[0];
+      ASSERT_LT(id, freq.size());
+      freq[id]++;
+    }
+  };
+
+  // The weights should be equal with the uniform method
+  corpus.UpdateWeights(fs, coverage_frontier,
+                       /*scale_by_exec_time=*/false);
+  ComputeFreq();
+  EXPECT_NEAR(freq[0], kNumIter / 3, 100);
+  EXPECT_NEAR(freq[1], kNumIter / 3, 100);
+  EXPECT_NEAR(freq[2], kNumIter / 3, 100);
+}
+
+TEST(Corpus, RecencyWeightMethodsWorkAsExpected) {
+  PCTable pc_table(100);
+  CFTable cf_table(100);
+  BinaryInfo bin_info{pc_table, {}, cf_table, {}, {}, {}};
+  CoverageFrontier coverage_frontier(bin_info);
+  FeatureSet fs(3, {});
+  Corpus corpus(Corpus::WeightMethod::Recency);
+
+  auto Add = [&](const CorpusRecord& record) {
+    fs.MergeFeatures(record.features);
+    corpus.Add(record.data, record.features, /*metadata=*/{}, /*stats=*/{}, fs,
+               coverage_frontier);
+  };
+
+  Add({/*data=*/{0}, /*features=*/{30, 20}});
+  Add({/*data=*/{1}, /*features=*/{10, 20}});
+  Add({/*data=*/{2}, /*features=*/{10}});
+
+  constexpr int kNumIter = 10000;
+  std::vector<uint64_t> freq;
+
+  Rng rng;
+  auto ComputeFreq = [&]() {
+    freq.clear();
+    freq.resize(corpus.NumActive());
+    for (int i = 0; i < kNumIter; i++) {
+      const auto& record = corpus.WeightedRandom(rng);
+      const auto id = record.data[0];
+      ASSERT_LT(id, freq.size());
+      freq[id]++;
+    }
+  };
+
+  // The weights should favor {2} over {1} over {0} with the recency method.
+  corpus.UpdateWeights(fs, coverage_frontier,
+                       /*scale_by_exec_time=*/false);
+  ComputeFreq();
+  EXPECT_GT(freq[2], freq[1] + 100);
+  EXPECT_GT(freq[1], freq[0] + 100);
+}
+
+TEST(Corpus, FeatureRarityWeightMethodsWorkAsExpected) {
+  PCTable pc_table(100);
+  CFTable cf_table(100);
+  BinaryInfo bin_info{pc_table, {}, cf_table, {}, {}, {}};
+  CoverageFrontier coverage_frontier(bin_info);
+  FeatureSet fs(3, {});
+  Corpus corpus(Corpus::WeightMethod::FeatureRarity);
+
+  auto Add = [&](const CorpusRecord& record) {
+    fs.MergeFeatures(record.features);
+    corpus.Add(record.data, record.features, /*metadata=*/{}, /*stats=*/{}, fs,
+               coverage_frontier);
+  };
+
+  Add({/*data=*/{0}, /*features=*/{30, 20}});
+  Add({/*data=*/{1}, /*features=*/{10, 20}});
+  Add({/*data=*/{2}, /*features=*/{10}});
+
+  constexpr int kNumIter = 10000;
+  std::vector<uint64_t> freq;
+
+  Rng rng;
+  auto ComputeFreq = [&]() {
+    freq.clear();
+    freq.resize(corpus.NumActive());
+    for (int i = 0; i < kNumIter; i++) {
+      const auto& record = corpus.WeightedRandom(rng);
+      const auto id = record.data[0];
+      ASSERT_LT(id, freq.size());
+      freq[id]++;
+    }
+  };
+
+  // The weights should favor {0} over {1} over {2} with the feature rarity
+  // method.
+  corpus.UpdateWeights(fs, coverage_frontier,
+                       /*scale_by_exec_time=*/false);
+  ComputeFreq();
+  EXPECT_GT(freq[0], freq[1] + 100);
+  EXPECT_GT(freq[1], freq[2] + 100);
+}
+
+TEST(Corpus, ScalesWeightsWithExecTime) {
+  PCTable pc_table(100);
+  CFTable cf_table(100);
+  BinaryInfo bin_info{pc_table, {}, cf_table, {}, {}, {}};
+  CoverageFrontier coverage_frontier(bin_info);
+  FeatureSet fs(2, {});
+  Corpus corpus;
+
+  auto Add = [&](const CorpusRecord& record, uint64_t exec_time_usec) {
+    fs.MergeFeatures(record.features);
+    ExecutionResult::Stats stats = {};
+    stats.exec_time_usec = exec_time_usec;
+    corpus.Add(record.data, record.features, /*metadata=*/{}, stats, fs,
+               coverage_frontier);
+  };
+
+  Add({/*data=*/{0}, /*features=*/{10}}, /*exec_time_usec=*/1);
+  Add({/*data=*/{1}, /*features=*/{20}}, /*exec_time_usec=*/5);
+  Add({/*data=*/{2}, /*features=*/{30}}, /*exec_time_usec=*/9);
+
+  constexpr int kNumIter = 10000;
+  std::vector<uint64_t> freq;
+
+  Rng rng;
+  auto ComputeFreq = [&]() {
+    freq.clear();
+    freq.resize(corpus.NumActive());
+    for (int i = 0; i < kNumIter; i++) {
+      const auto& record = corpus.WeightedRandom(rng);
+      const auto id = record.data[0];
+      ASSERT_LT(id, freq.size());
+      freq[id]++;
+    }
+  };
+
+  // The weights should be equal without exec time scaling.
+  corpus.UpdateWeights(fs, coverage_frontier,
+                       /*scale_by_exec_time=*/false);
+  ComputeFreq();
+  EXPECT_NEAR(freq[0], kNumIter / 3, 100);
+  EXPECT_NEAR(freq[1], kNumIter / 3, 100);
+  EXPECT_NEAR(freq[2], kNumIter / 3, 100);
+
+  // The weights should favor {0} over {1} over {2} with exec time scaling.
+  corpus.UpdateWeights(fs, coverage_frontier,
+                       /*scale_by_exec_time=*/true);
+  ComputeFreq();
+  EXPECT_GT(freq[0], freq[1] + 100);
+  EXPECT_GT(freq[1], freq[2] + 100);
+}
+
+TEST(Corpus, PruneCorpusWithAllEmptyFeatureInputs) {
+  PCTable pc_table(100);
+  CFTable cf_table(100);
+  BinaryInfo bin_info{pc_table, {}, cf_table, {}, {}, {}};
+  CoverageFrontier coverage_frontier(bin_info);
+  FeatureSet fs(1, {});
+  Corpus corpus;
+  Rng rng;
+  size_t max_corpus_size = 1000;
+
+  corpus.Add(/*data=*/{1}, /*fv=*/{}, /*metadata=*/{}, /*stats=*/{}, fs,
+             coverage_frontier);
+  corpus.Add(/*data=*/{2}, /*fv=*/{}, /*metadata=*/{}, /*stats=*/{}, fs,
+             coverage_frontier);
+  corpus.UpdateWeights(fs, coverage_frontier,
+                       /*scale_by_exec_time=*/false);
+  // Should not crash.
+  corpus.Prune(fs, coverage_frontier, max_corpus_size, rng);
 }
 
 // Regression test for a crash in Corpus::Prune().
@@ -144,13 +354,16 @@ TEST(Corpus, PruneRegressionTest1) {
   Rng rng(0);
   size_t max_corpus_size = 1000;
 
-  auto Add = [&](const CorpusRecord &record) {
-    fs.IncrementFrequencies(record.features);
-    corpus.Add(record.data, record.features, {}, fs, coverage_frontier);
+  auto Add = [&](const CorpusRecord& record) {
+    fs.MergeFeatures(record.features);
+    corpus.Add(record.data, record.features, {}, /*stats=*/{}, fs,
+               coverage_frontier);
   };
 
   Add({{1}, {10, 20}});
   Add({{2}, {10}});
+  corpus.UpdateWeights(fs, coverage_frontier,
+                       /*scale_by_exec_time=*/false);
   corpus.Prune(fs, coverage_frontier, max_corpus_size, rng);
 }
 
@@ -166,20 +379,19 @@ TEST(WeightedDistribution, WeightedDistribution) {
     }
   };
 
+  Rng rng(12345);
   auto compute_freq = [&]() {
     freq.clear();
     freq.resize(wd.size());
-    // We use numbers in [0, kNumIter) instead of random numbers
-    // for simplicity.
     for (int i = 0; i < kNumIter; i++) {
-      freq[wd.RandomIndex(i)]++;
+      freq[wd.RandomIndex(rng)]++;
     }
   };
 
   set_weights({1, 1});
   compute_freq();
-  EXPECT_EQ(freq[0], kNumIter / 2);
-  EXPECT_EQ(freq[1], kNumIter / 2);
+  EXPECT_NEAR(freq[0], kNumIter / 2, 100);
+  EXPECT_NEAR(freq[1], kNumIter / 2, 100);
 
   set_weights({1, 2});
   compute_freq();
@@ -318,8 +530,8 @@ TEST(CoverageFrontier, Compute) {
   Corpus corpus;
 
   auto Add = [&](feature_t feature) {
-    fs.IncrementFrequencies({feature});
-    corpus.Add({42}, {feature}, {}, fs, frontier);
+    fs.MergeFeatures({feature});
+    corpus.Add({42}, {feature}, {}, /*stats=*/{}, fs, frontier);
   };
 
   // Add PC-based features.
@@ -396,4 +608,4 @@ TEST(CoverageFrontierDeath, InvalidIndexToFrontier) {
 }
 
 }  // namespace
-}  // namespace centipede
+}  // namespace fuzztest::internal

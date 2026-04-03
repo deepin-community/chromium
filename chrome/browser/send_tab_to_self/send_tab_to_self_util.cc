@@ -21,9 +21,9 @@ namespace send_tab_to_self {
 
 std::optional<EntryPointDisplayReason> GetEntryPointDisplayReason(
     content::WebContents* web_contents) {
-  // TODO(crbug.com/1274173): This can probably be a DCHECK instead.
-  if (!web_contents)
+  if (!web_contents) {
     return std::nullopt;
+  }
 
   send_tab_to_self::SendTabToSelfSyncService* service =
       SendTabToSelfSyncServiceFactory::GetForProfile(
@@ -35,13 +35,6 @@ std::optional<EntryPointDisplayReason> GetEntryPointDisplayReason(
 
 bool ShouldDisplayEntryPoint(content::WebContents* web_contents) {
   return GetEntryPointDisplayReason(web_contents).has_value();
-}
-
-bool ShouldOfferOmniboxIcon(content::WebContents* web_contents) {
-  if (!web_contents)
-    return false;
-  return !web_contents->IsWaitingForResponse() &&
-         ShouldDisplayEntryPoint(web_contents);
 }
 
 }  // namespace send_tab_to_self

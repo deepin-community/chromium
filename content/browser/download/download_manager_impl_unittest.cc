@@ -15,13 +15,13 @@
 #include <tuple>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/gmock_callback_support.h"
@@ -78,6 +78,8 @@ class MockDownloadManagerDelegate : public DownloadManagerDelegate {
   ~MockDownloadManagerDelegate() override;
 
   MOCK_METHOD0(Shutdown, void());
+  MOCK_METHOD1(OnDownloadCanceledAtShutdown,
+               void(download::DownloadItem* item));
   void GetNextId(DownloadIdCallback cb) override { GetNextId_(cb); }
   MOCK_METHOD1(GetNextId_, void(DownloadIdCallback&));
   MOCK_METHOD2(DetermineDownloadTarget,
@@ -174,6 +176,7 @@ class MockDownloadItemFactory final : public download::DownloadItemFactory {
       download::DownloadItemImplDelegate* delegate,
       uint32_t download_id,
       const base::FilePath& path,
+      const base::FilePath& display_name,
       const GURL& url,
       const std::string& mime_type,
       download::DownloadJob::CancelRequestCallback cancel_request_callback)
@@ -188,7 +191,8 @@ class MockDownloadItemFactory final : public download::DownloadItemFactory {
   }
 
  private:
-  std::map<uint32_t, download::MockDownloadItemImpl*> items_;
+  std::map<uint32_t, raw_ptr<download::MockDownloadItemImpl, CtnExperimental>>
+      items_;
   download::DownloadItemImplDelegate item_delegate_;
   bool is_download_persistent_;
   base::WeakPtrFactory<MockDownloadItemFactory> weak_ptr_factory_{this};
@@ -200,15 +204,16 @@ MockDownloadItemFactory::MockDownloadItemFactory()
 MockDownloadItemFactory::~MockDownloadItemFactory() {}
 
 download::MockDownloadItemImpl* MockDownloadItemFactory::GetItem(int id) {
-  if (!base::Contains(items_, id)) {
+  if (!items_.contains(id)) {
     return nullptr;
   }
   return items_[id];
 }
 
 download::MockDownloadItemImpl* MockDownloadItemFactory::PopItem() {
-  if (items_.empty())
+  if (items_.empty()) {
     return nullptr;
+  }
 
   auto first_item = items_.begin();
   download::MockDownloadItemImpl* result = first_item->second;
@@ -217,7 +222,7 @@ download::MockDownloadItemImpl* MockDownloadItemFactory::PopItem() {
 }
 
 void MockDownloadItemFactory::RemoveItem(int id) {
-  DCHECK(base::Contains(items_, id));
+  DCHECK(items_.contains(id));
   items_.erase(id);
 }
 
@@ -249,11 +254,10 @@ download::DownloadItemImpl* MockDownloadItemFactory::CreatePersistedItem(
     base::Time last_access_time,
     bool transient,
     const std::vector<download::DownloadItem::ReceivedSlice>& received_slices) {
-  DCHECK(!base::Contains(items_, download_id));
+  DCHECK(!items_.contains(download_id));
   download::MockDownloadItemImpl* result =
       new StrictMock<download::MockDownloadItemImpl>(&item_delegate_);
-  EXPECT_CALL(*result, GetId())
-      .WillRepeatedly(Return(download_id));
+  EXPECT_CALL(*result, GetId()).WillRepeatedly(Return(download_id));
   EXPECT_CALL(*result, GetGuid()).WillRepeatedly(ReturnRefOfCopy(guid));
   EXPECT_CALL(*result, IsTransient()).WillRepeatedly(Return(transient));
   items_[download_id] = result;
@@ -264,12 +268,11 @@ download::DownloadItemImpl* MockDownloadItemFactory::CreateActiveItem(
     download::DownloadItemImplDelegate* delegate,
     uint32_t download_id,
     const download::DownloadCreateInfo& info) {
-  DCHECK(!base::Contains(items_, download_id));
+  DCHECK(!items_.contains(download_id));
 
   download::MockDownloadItemImpl* result =
       new StrictMock<download::MockDownloadItemImpl>(&item_delegate_);
-  EXPECT_CALL(*result, GetId())
-      .WillRepeatedly(Return(download_id));
+  EXPECT_CALL(*result, GetId()).WillRepeatedly(Return(download_id));
   EXPECT_CALL(*result, GetGuid())
       .WillRepeatedly(
           ReturnRefOfCopy(base::Uuid::GenerateRandomV4().AsLowercaseString()));
@@ -329,23 +332,21 @@ download::DownloadItemImpl* MockDownloadItemFactory::CreateSavePageItem(
     download::DownloadItemImplDelegate* delegate,
     uint32_t download_id,
     const base::FilePath& path,
+    const base::FilePath& display_name,
     const GURL& url,
     const std::string& mime_type,
     download::DownloadJob::CancelRequestCallback cancel_request_callback) {
-  DCHECK(!base::Contains(items_, download_id));
+  DCHECK(!items_.contains(download_id));
 
   download::MockDownloadItemImpl* result =
       new StrictMock<download::MockDownloadItemImpl>(&item_delegate_);
-  EXPECT_CALL(*result, GetId())
-      .WillRepeatedly(Return(download_id));
+  EXPECT_CALL(*result, GetId()).WillRepeatedly(Return(download_id));
   items_[download_id] = result;
 
   return result;
 }
 
-class MockDownloadFileFactory
-    : public download::DownloadFileFactory,
-      public base::SupportsWeakPtr<MockDownloadFileFactory> {
+class MockDownloadFileFactory final : public download::DownloadFileFactory {
  public:
   MockDownloadFileFactory() {}
   ~MockDownloadFileFactory() override {}
@@ -360,9 +361,17 @@ class MockDownloadFileFactory
       const base::FilePath& default_download_directory,
       std::unique_ptr<download::InputStream> stream,
       uint32_t download_id,
+      const base::FilePath& duplicate_download_file_path,
       base::WeakPtr<download::DownloadDestinationObserver> observer) override {
     return MockCreateFile(*save_info, stream.get());
   }
+
+  base::WeakPtr<MockDownloadFileFactory> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
+ private:
+  base::WeakPtrFactory<MockDownloadFileFactory> weak_ptr_factory_{this};
 };
 
 class MockDownloadManagerObserver : public DownloadManager::Observer {
@@ -539,9 +548,7 @@ class DownloadManagerTest : public testing::Test {
     return *mock_download_manager_delegate_;
   }
 
-  MockDownloadManagerObserver& GetMockObserver() {
-    return *observer_;
-  }
+  MockDownloadManagerObserver& GetMockObserver() { return *observer_; }
 
   void DownloadTargetDeterminedCallback(
       download::DownloadTargetInfo target_info) {
@@ -695,8 +702,7 @@ TEST_F(DownloadManagerTest, DetermineDownloadTarget_False) {
   EXPECT_CALL(GetMockDownloadManagerDelegate(),
               DetermineDownloadTarget(&item, _))
       .WillOnce(Return(false));
-  EXPECT_CALL(item, GetForcedFilePath())
-      .WillOnce(ReturnRef(path));
+  EXPECT_CALL(item, GetForcedFilePath()).WillOnce(ReturnRef(path));
 
   // Confirm that the callback was called with the right values in this case.
   DetermineDownloadTarget(&item);
@@ -710,8 +716,9 @@ TEST_F(DownloadManagerTest, DetermineDownloadTarget_False) {
 }
 
 TEST_F(DownloadManagerTest, GetDownloadByGuid) {
-  for (uint32_t i = 0; i < 4; ++i)
+  for (uint32_t i = 0; i < 4; ++i) {
     AddItemToManager();
+  }
 
   download::MockDownloadItemImpl& item = GetMockDownloadItem(0);
   download::DownloadItem* result =
@@ -922,27 +929,13 @@ TEST_F(DownloadManagerTest, BlockingShutdownCount) {
   EXPECT_EQ(download_manager_->BlockingShutdownCount(), 0);
 }
 
-class DownloadManagerWithExpirationTest : public DownloadManagerTest {
- public:
-  DownloadManagerWithExpirationTest() {
-    std::map<std::string, std::string> params = {
-        {download::kExpiredDownloadDeleteTimeFinchKey,
-         base::NumberToString(1)}};
-    scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        download::features::kDeleteExpiredDownloads, params);
-  }
-  ~DownloadManagerWithExpirationTest() override = default;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
 // Verifies that expired canceled or interrupted downloads are deleted
 // correctly.
-TEST_F(DownloadManagerWithExpirationTest, DeleteExpiredDownload) {
+TEST_F(DownloadManagerTest, DeleteExpiredDownload) {
   std::vector<GURL> url_chain;
   url_chain.emplace_back("http://example.com/1.zip");
-  auto expired_start_time = base::Time::Now() - base::Days(10);
+  auto expired_start_time =
+      base::Time::Now() - 2 * download::GetExpiredDownloadDeleteTime();
   download::DownloadItem* download_item = CreateDownloadItem(
       expired_start_time, url_chain, download::DownloadItem::INTERRUPTED);
   EXPECT_FALSE(download_item)
@@ -962,6 +955,40 @@ TEST_F(DownloadManagerWithExpirationTest, DeleteExpiredDownload) {
                                      download::DownloadItem::COMPLETE);
   EXPECT_TRUE(download_item)
       << "Expired complete download will not be deleted.";
+}
+
+class DownloadManagerShutdownTest : public DownloadManagerTest {
+ public:
+  void TearDown() override { download_manager_.reset(); }
+
+ protected:
+  void RunOnDownloadCanceledAtShutdownCalledTest(
+      download::DownloadItem::DownloadState state,
+      int expected_canceled_call_times) {
+    download::MockDownloadItemImpl& item(AddItemToManager());
+
+    EXPECT_CALL(item, GetState()).WillRepeatedly(Return(state));
+    EXPECT_CALL(item, Cancel(false)).Times(expected_canceled_call_times);
+    EXPECT_CALL(GetMockDownloadManagerDelegate(),
+                OnDownloadCanceledAtShutdown(&item))
+        .Times(expected_canceled_call_times);
+    EXPECT_CALL(GetMockObserver(), ManagerGoingDown(download_manager_.get()))
+        .WillOnce(Return());
+    download_manager_->Shutdown();
+    base::RunLoop().RunUntilIdle();
+  }
+};
+
+TEST_F(DownloadManagerShutdownTest,
+       OnDownloadCanceledAtShutdownCalledForInProgressDownload) {
+  RunOnDownloadCanceledAtShutdownCalledTest(download::DownloadItem::IN_PROGRESS,
+                                            /*expected_canceled_call_times=*/1);
+}
+
+TEST_F(DownloadManagerShutdownTest,
+       OnDownloadCanceledAtShutdownNotCalledForCompleteDownload) {
+  RunOnDownloadCanceledAtShutdownCalledTest(download::DownloadItem::COMPLETE,
+                                            /*expected_canceled_call_times=*/0);
 }
 
 }  // namespace content

@@ -1,3 +1,4 @@
+// clang-format off
 // Auto-generated file. Do not edit!
 //   Template: src/qs8-gemm/MRx4c8-sse.c.in
 //   Generator: tools/xngen
@@ -8,11 +9,15 @@
 // LICENSE file in the root directory of this source tree.
 
 #include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include <smmintrin.h>
 
-#include <xnnpack/gemm.h>
-#include <xnnpack/math.h>
+#include "src/xnnpack/common.h"
+#include "src/xnnpack/gemm.h"
+#include "src/xnnpack/math.h"
+#include "src/xnnpack/microparams.h"
 
 
 void xnn_qd8_f32_qc8w_gemm_minmax_ukernel_3x4c8__sse41_ld64(
@@ -25,8 +30,8 @@ void xnn_qd8_f32_qc8w_gemm_minmax_ukernel_3x4c8__sse41_ld64(
     float* restrict c,
     size_t cm_stride,
     size_t cn_stride,
-    const union xnn_f32_minmax_params params[restrict XNN_MIN_ELEMENTS(1)],
-    const struct xnn_qd8_quantization_params quantization_params[restrict XNN_MIN_ELEMENTS(1)]) XNN_OOB_READS
+    const struct xnn_f32_minmax_params* restrict params,
+    const struct xnn_qd8_quantization_params* restrict quantization_params) XNN_OOB_READS
 {
   assert(mr != 0);
   assert(mr <= 3);
@@ -53,11 +58,17 @@ void xnn_qd8_f32_qc8w_gemm_minmax_ukernel_3x4c8__sse41_ld64(
     c2 = c1;
   }
 
+  const __m128 vmin = _mm_set1_ps(params->scalar.min);
+  const __m128 vmax = _mm_set1_ps(params->scalar.max);
+  XNN_FORCE_REALIZATION(vmin);
+  XNN_FORCE_REALIZATION(vmax);
+
+
   do {
     const __m128i vksum = _mm_load_si128((const __m128i*) w);
-    const __m128i vinput_zero_point01 = _mm_loadu_si128((const __m128i*) &quantization_params[0]);
-    const __m128i vinput_zero_point0 = _mm_shuffle_epi32(vinput_zero_point01, _MM_SHUFFLE(0, 0, 0, 0));
-    const __m128i vinput_zero_point1 = _mm_shuffle_epi32(vinput_zero_point01, _MM_SHUFFLE(2, 2, 2, 2));
+    const __m128i vinput_zero_point0_1 = _mm_loadu_si128((const __m128i*) &quantization_params[0]);
+    const __m128i vinput_zero_point0 = _mm_shuffle_epi32(vinput_zero_point0_1, _MM_SHUFFLE(0, 0, 0, 0));
+    const __m128i vinput_zero_point1 = _mm_shuffle_epi32(vinput_zero_point0_1, _MM_SHUFFLE(2, 2, 2, 2));
     __m128i vinput_zero_point2 = _mm_cvtsi32_si128(*((const int*) &quantization_params[2].zero_point));
     vinput_zero_point2 = _mm_shuffle_epi32(vinput_zero_point2, _MM_SHUFFLE(0, 0, 0, 0));
     const __m128i vzero = _mm_setzero_si128();
@@ -140,9 +151,9 @@ void xnn_qd8_f32_qc8w_gemm_minmax_ukernel_3x4c8__sse41_ld64(
     __m128 vout1x0123 = _mm_cvtepi32_ps(vacc1x0123);
     __m128 vout2x0123 = _mm_cvtepi32_ps(vacc2x0123);
 
-    const __m128i vinput_scale01 = _mm_loadu_si128((const __m128i*) &quantization_params[0]);
-    const __m128 vinput_scale0 = _mm_castsi128_ps(_mm_shuffle_epi32(vinput_scale01, _MM_SHUFFLE(1, 1, 1, 1)));
-    const __m128 vinput_scale1 = _mm_castsi128_ps(_mm_shuffle_epi32(vinput_scale01, _MM_SHUFFLE(3, 3, 3, 3)));
+    const __m128i vinput_scale0_1 = _mm_loadu_si128((const __m128i*) &quantization_params[0]);
+    const __m128 vinput_scale0 = _mm_castsi128_ps(_mm_shuffle_epi32(vinput_scale0_1, _MM_SHUFFLE(1, 1, 1, 1)));
+    const __m128 vinput_scale1 = _mm_castsi128_ps(_mm_shuffle_epi32(vinput_scale0_1, _MM_SHUFFLE(3, 3, 3, 3)));
     const __m128 vinput_scale2 = _mm_load1_ps(&quantization_params[2].inv_scale);
 
     vout0x0123 = _mm_mul_ps(vout0x0123, vinput_scale0);
@@ -160,12 +171,10 @@ void xnn_qd8_f32_qc8w_gemm_minmax_ukernel_3x4c8__sse41_ld64(
     vout1x0123 = _mm_add_ps(vout1x0123, vbias0123);
     vout2x0123 = _mm_add_ps(vout2x0123, vbias0123);
 
-    const __m128 vmin = _mm_load_ps(params->sse.min);
     vout0x0123 = _mm_max_ps(vout0x0123, vmin);
     vout1x0123 = _mm_max_ps(vout1x0123, vmin);
     vout2x0123 = _mm_max_ps(vout2x0123, vmin);
 
-    const __m128 vmax = _mm_load_ps(params->sse.max);
     vout0x0123 = _mm_min_ps(vout0x0123, vmax);
     vout1x0123 = _mm_min_ps(vout1x0123, vmax);
     vout2x0123 = _mm_min_ps(vout2x0123, vmax);

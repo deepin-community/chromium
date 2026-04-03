@@ -1,39 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//  Copyright (C) 2012 Google Inc. All rights reserved.
-
-//  Redistribution and use in source and binary forms, with or without
-//  modification, are permitted provided that the following conditions
-//  are met:
-
-//  1.  Redistributions of source code must retain the above copyright
-//      notice, this list of conditions and the following disclaimer.
-//  2.  Redistributions in binary form must reproduce the above copyright
-//      notice, this list of conditions and the following disclaimer in the
-//      documentation and/or other materials provided with the distribution.
-//  3.  Neither the name of Apple Computer, Inc. ("Apple") nor the names of
-//      its contributors may be used to endorse or promote products derived
-//      from this software without specific prior written permission.
-
-//  THIS SOFTWARE IS PROVIDED BY APPLE AND ITS CONTRIBUTORS "AS IS" AND ANY
-//  EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-//  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-//  DISCLAIMED. IN NO EVENT SHALL APPLE OR ITS CONTRIBUTORS BE LIABLE FOR ANY
-//  DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-//  (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-//  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-//  ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-//  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
-//  THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-import {type AreaBounds, type Bounds} from './common.js';
-
-import {drawGridLabels, type GridLabelState} from './css_grid_label_helpers.js';
+import type {AreaBounds, Bounds} from './common.js';
+import {drawGridLabels, type GridLabelState, isHorizontalWritingMode} from './css_grid_label_helpers.js';
 import {applyMatrixToPoint, buildPath, emptyBounds, hatchFillPath} from './highlight_common.js';
 
-// TODO(alexrudenko): Grid label unit tests depend on this style so it cannot be extracted yet.
+/** TODO(alexrudenko): Grid label unit tests depend on this style so it cannot be extracted yet. **/
 export const gridStyle = `
 /* Grid row and column labels */
 .grid-label-content {
@@ -220,24 +193,24 @@ export interface GridHighlight {
   columnGaps: Array<string|number>;
   rows: Array<string|number>;
   columns: Array<string|number>;
-  areaNames: {[key: string]: Array<string|number>};
+  areaNames: Record<string, Array<string|number>>;
   gridHighlightConfig: {
+    gridBorderDash: boolean,
+    rowLineDash: boolean,
+    columnLineDash: boolean,
+    showGridExtensionLines: boolean,
+    showPositiveLineNumbers: boolean,
+    showNegativeLineNumbers: boolean,
+    rowLineColor: string,
+    columnLineColor: string,
+    rowHatchColor: string,
+    columnHatchColor: string,
+    showLineNames: boolean,
     gridBackgroundColor?: string,
     gridBorderColor?: string,
     rowGapColor?: string,
     columnGapColor?: string,
     areaBorderColor?: string,
-                   gridBorderDash: boolean,
-                   rowLineDash: boolean,
-                   columnLineDash: boolean,
-                   showGridExtensionLines: boolean,
-                   showPositiveLineNumbers: boolean,
-                   showNegativeLineNumbers: boolean,
-                   rowLineColor: string,
-                   columnLineColor: string,
-                   rowHatchColor: string,
-                   columnHatchColor: string,
-                   showLineNames: boolean,
   };
 }
 
@@ -313,17 +286,18 @@ export function drawLayoutGridHighlight(
 }
 
 function applyWritingModeTransformation(writingMode: string, gridBounds: Bounds, context: CanvasRenderingContext2D) {
-  if (writingMode !== 'vertical-rl' && writingMode !== 'vertical-lr') {
+  if (isHorizontalWritingMode(writingMode)) {
     return;
   }
 
   const topLeft = gridBounds.allPoints[0];
+  const topRight = gridBounds.allPoints[1];
   const bottomLeft = gridBounds.allPoints[3];
 
   // Move to the top-left corner to do all transformations there.
   context.translate(topLeft.x, topLeft.y);
 
-  if (writingMode === 'vertical-rl') {
+  if (writingMode === 'vertical-rl' || writingMode === 'sideways-rl') {
     context.rotate(90 * Math.PI / 180);
     context.translate(0, -1 * (bottomLeft.y - topLeft.y));
   }
@@ -333,6 +307,11 @@ function applyWritingModeTransformation(writingMode: string, gridBounds: Bounds,
     context.scale(1, -1);
   }
 
+  if (writingMode === 'sideways-lr') {
+    context.rotate(-90 * Math.PI / 180);
+    context.translate(-1 * (topRight.x - topLeft.x), 0);
+  }
+
   // Move back to the original point.
   context.translate(topLeft.x * -1, topLeft.y * -1);
 }
@@ -340,9 +319,9 @@ function applyWritingModeTransformation(writingMode: string, gridBounds: Bounds,
 function drawGridLines(
     context: CanvasRenderingContext2D, highlight: GridHighlight, direction: 'row'|'column',
     emulationScaleFactor: number) {
-  const tracks = highlight[`${direction}s` as 'rows' | 'columns'];
-  const color = highlight.gridHighlightConfig[`${direction}LineColor` as 'rowLineColor' | 'columnLineColor'];
-  const dash = highlight.gridHighlightConfig[`${direction}LineDash` as 'rowLineDash' | 'columnLineDash'];
+  const tracks = highlight[`${direction}s`];
+  const color = highlight.gridHighlightConfig[`${direction}LineColor`];
+  const dash = highlight.gridHighlightConfig[`${direction}LineDash`];
 
   if (!color) {
     return null;
@@ -430,7 +409,7 @@ function drawExtendedGridLines(
  * placing labels in and around the grid for various things is handled later.
  */
 function drawGridAreas(
-    context: CanvasRenderingContext2D, areas: {[key: string]: Array<string|number>}, borderColor: string|undefined,
+    context: CanvasRenderingContext2D, areas: Record<string, Array<string|number>>, borderColor: string|undefined,
     emulationScaleFactor: number): AreaBounds[] {
   if (!areas || !Object.keys(areas).length) {
     return [];

@@ -19,10 +19,10 @@
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/net_export.h"
 #include "net/base/network_anonymization_key.h"
-#include "net/base/privacy_mode.h"
 #include "net/dns/public/host_resolver_results.h"
 #include "net/dns/public/resolve_error_info.h"
 #include "net/socket/connect_job.h"
+#include "net/socket/connect_job_params.h"
 #include "net/socket/connection_attempts.h"
 #include "net/socket/ssl_client_socket.h"
 #include "net/ssl/ssl_cert_request_info.h"
@@ -43,12 +43,9 @@ class NET_EXPORT_PRIVATE SSLSocketParams
 
   // Exactly one of |direct_params|, |socks_proxy_params|, and
   // |http_proxy_params| must be non-NULL.
-  SSLSocketParams(scoped_refptr<TransportSocketParams> direct_params,
-                  scoped_refptr<SOCKSSocketParams> socks_proxy_params,
-                  scoped_refptr<HttpProxySocketParams> http_proxy_params,
+  SSLSocketParams(ConnectJobParams params,
                   const HostPortPair& host_and_port,
                   const SSLConfig& ssl_config,
-                  PrivacyMode privacy_mode,
                   NetworkAnonymizationKey network_anonymization_key);
 
   SSLSocketParams(const SSLSocketParams&) = delete;
@@ -58,18 +55,25 @@ class NET_EXPORT_PRIVATE SSLSocketParams
   ConnectionType GetConnectionType() const;
 
   // Must be called only when GetConnectionType() returns DIRECT.
-  const scoped_refptr<TransportSocketParams>& GetDirectConnectionParams() const;
+  const scoped_refptr<TransportSocketParams>& GetDirectConnectionParams()
+      const {
+    return nested_params_.transport();
+  }
 
   // Must be called only when GetConnectionType() returns SOCKS_PROXY.
-  const scoped_refptr<SOCKSSocketParams>& GetSocksProxyConnectionParams() const;
+  const scoped_refptr<SOCKSSocketParams>& GetSocksProxyConnectionParams()
+      const {
+    return nested_params_.socks();
+  }
 
   // Must be called only when GetConnectionType() returns HTTP_PROXY.
   const scoped_refptr<HttpProxySocketParams>& GetHttpProxyConnectionParams()
-      const;
+      const {
+    return nested_params_.http_proxy();
+  }
 
   const HostPortPair& host_and_port() const { return host_and_port_; }
   const SSLConfig& ssl_config() const { return ssl_config_; }
-  PrivacyMode privacy_mode() const { return privacy_mode_; }
   const NetworkAnonymizationKey& network_anonymization_key() const {
     return network_anonymization_key_;
   }
@@ -78,12 +82,9 @@ class NET_EXPORT_PRIVATE SSLSocketParams
   friend class base::RefCounted<SSLSocketParams>;
   ~SSLSocketParams();
 
-  const scoped_refptr<TransportSocketParams> direct_params_;
-  const scoped_refptr<SOCKSSocketParams> socks_proxy_params_;
-  const scoped_refptr<HttpProxySocketParams> http_proxy_params_;
+  const ConnectJobParams nested_params_;
   const HostPortPair host_and_port_;
   const SSLConfig ssl_config_;
-  const PrivacyMode privacy_mode_;
   const NetworkAnonymizationKey network_anonymization_key_;
 };
 
@@ -205,7 +206,7 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
   // Any DNS aliases for the remote endpoint. Includes all known aliases, e.g.
   // from A, AAAA, or HTTPS, not just from the address used for the connection,
   // in no particular order. Stored because `nested_connect_job_` has a limited
-  // lifetime and the aliases can no longer be retrieved from there by by the
+  // lifetime and the aliases can no longer be retrieved from there by the
   // time that the aliases are needed to be passed in SetSocket.
   std::set<std::string> dns_aliases_;
 
@@ -216,6 +217,18 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
   // If not `std::nullopt`, the ECH retry configs to use in the ECH recovery
   // flow. `endpoint_result_` will then contain the endpoint to reconnect to.
   std::optional<std::vector<uint8_t>> ech_retry_configs_;
+
+  // If not nullopt, the intersection of the client's trusted TLS Trust Anchor
+  // IDs with those advertised by the server during the handshake, in wire
+  // format.  This is the set of Trust Anchor IDs to advertise in the
+  // ClientHello when retrying the connection after receiving an error. When
+  // this is non-empty, `endpoint_result_` will contain the endpoint to
+  // reconnect to.
+  std::optional<std::vector<uint8_t>> trust_anchor_ids_for_retry_;
+
+  // True if the Trust Anchor ID retry attempted to fallback from a
+  // signatureless MTC to a classical cert. Used for metrics.
+  bool trust_anchor_retry_used_mtc_fallback_ = false;
 };
 
 }  // namespace net

@@ -27,7 +27,6 @@
 
 #include "src/tint/lang/wgsl/ast/const_assert.h"
 
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/core/fluent_types.h"
 #include "src/tint/lang/wgsl/ast/helper_test.h"
 
@@ -37,6 +36,7 @@ namespace tint::ast {
 namespace {
 
 using ConstAssertTest = TestHelper;
+using ConstAssertDeathTest = ConstAssertTest;
 
 TEST_F(ConstAssertTest, Creation) {
     auto* cond = Expr(true);
@@ -59,21 +59,11 @@ TEST_F(ConstAssertTest, IsConstAssert) {
     EXPECT_TRUE(stmt->Is<ast::ConstAssert>());
 }
 
-TEST_F(ConstAssertTest, Assert_Null_Condition) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(ConstAssertDeathTest, Assert_Null_Condition) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder b;
             b.ConstAssert(nullptr);
-        },
-        "internal compiler error");
-}
-
-TEST_F(ConstAssertTest, Assert_DifferentGenerationID_Condition) {
-    EXPECT_FATAL_FAILURE(
-        {
-            ProgramBuilder b1;
-            ProgramBuilder b2;
-            b1.ConstAssert(b2.Expr(i32(123)));
         },
         "internal compiler error");
 }

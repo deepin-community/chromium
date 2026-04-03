@@ -5,12 +5,13 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_PERMISSIONS_PERMISSION_PROMPT_BUBBLE_TWO_ORIGINS_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_PERMISSIONS_PERMISSION_PROMPT_BUBBLE_TWO_ORIGINS_VIEW_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
-#include "base/timer/timer.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_bubble_base_view.h"
 #include "components/favicon_base/favicon_types.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/flex_layout_view.h"
+#include "ui/views/view_observer.h"
 
 // Bubble that prompts the user to grant or deny a permission request from from
 // a pair of origins.
@@ -27,12 +28,12 @@
 // |                           [ Block ] [ Allow ] |
 // -------------------------------------------------
 class PermissionPromptBubbleTwoOriginsView
-    : public PermissionPromptBubbleBaseView {
+    : public PermissionPromptBubbleBaseView,
+      public views::ViewObserver {
  public:
   PermissionPromptBubbleTwoOriginsView(
       Browser* browser,
       base::WeakPtr<permissions::PermissionPrompt::Delegate> delegate,
-      base::TimeTicks permission_requested_time,
       PermissionPromptStyle prompt_style);
   PermissionPromptBubbleTwoOriginsView(
       const PermissionPromptBubbleTwoOriginsView&) = delete;
@@ -48,7 +49,7 @@ class PermissionPromptBubbleTwoOriginsView
 
  private:
   void CreateFaviconRow();
-  std::u16string CreateWindowTitle() const;
+  std::u16string CreateWindowTitle();
 
   void OnEmbeddingOriginFaviconLoaded(
       const favicon_base::FaviconRawBitmapResult& favicon_result);
@@ -75,6 +76,9 @@ class PermissionPromptBubbleTwoOriginsView
   void HelpCenterLinkClicked(const ui::Event& event);
 
   void MaybeShow();
+
+  // ViewObserver:
+  void OnViewIsDeleting(views::View* view) override;
 
   // The task tracker for loading favicons.
   std::unique_ptr<base::CancelableTaskTracker> favicon_tracker_;

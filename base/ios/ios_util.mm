@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/ios/ios_util.h"
 
 #import <Foundation/Foundation.h>
@@ -9,7 +14,6 @@
 #include <stddef.h>
 
 #include "base/apple/foundation_util.h"
-#import "base/ios/device_util.h"
 #include "base/system/sys_info.h"
 
 namespace {
@@ -30,6 +34,16 @@ bool IsRunningOnIOS17OrLater() {
   return is_running_on_or_later;
 }
 
+bool IsRunningOnIOS18OrLater() {
+  static const bool is_running_on_or_later = IsRunningOnOrLater(18, 0, 0);
+  return is_running_on_or_later;
+}
+
+bool IsRunningOnIOS26OrLater() {
+  static const bool is_running_on_or_later = IsRunningOnOrLater(26, 0, 0);
+  return is_running_on_or_later;
+}
+
 bool IsRunningOnOrLater(int32_t major, int32_t minor, int32_t bug_fix) {
   static const class OSVersion {
    public:
@@ -40,8 +54,9 @@ bool IsRunningOnOrLater(int32_t major, int32_t minor, int32_t bug_fix) {
 
     bool IsRunningOnOrLater(int32_t version[3]) const {
       for (size_t i = 0; i < std::size(current_version_); ++i) {
-        if (current_version_[i] != version[i])
+        if (current_version_[i] != version[i]) {
           return current_version_[i] > version[i];
+        }
       }
       return true;
     }
@@ -82,13 +97,6 @@ bool IsMultipleScenesSupported() {
 
 bool IsApplicationPreWarmed() {
   return [NSProcessInfo.processInfo.environment objectForKey:@"ActivePrewarm"];
-}
-
-bool HasDynamicIsland() {
-  std::string hardware_model = ::ios::device_util::GetPlatform();
-  static bool is_dynamic_island_model =
-      (hardware_model == "iPhone15,2" || hardware_model == "iPhone15,3");
-  return is_dynamic_island_model;
 }
 
 }  // namespace base::ios

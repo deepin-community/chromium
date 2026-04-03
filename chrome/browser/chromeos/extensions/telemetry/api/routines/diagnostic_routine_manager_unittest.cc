@@ -18,12 +18,13 @@
 #include "base/test/test_future.h"
 #include "base/types/expected.h"
 #include "base/uuid.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/routines/diagnostic_routine.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/routines/fake_diagnostic_routines_service.h"
+#include "chrome/browser/chromeos/extensions/telemetry/api/routines/fake_diagnostic_routines_service_factory.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
+#include "chromeos/ash/components/telemetry_extension/routines/telemetry_diagnostic_routine_service_ash.h"
 #include "chromeos/crosapi/mojom/telemetry_diagnostic_routine_service.mojom.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/ssl_status.h"
@@ -40,16 +41,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/telemetry_extension/routines/telemetry_diagnostic_routine_service_ash.h"
-#include "chrome/browser/chromeos/extensions/telemetry/api/routines/fake_diagnostic_routines_service_factory.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/lacros/lacros_service.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
 namespace chromeos {
 
 namespace {
@@ -57,8 +48,12 @@ namespace {
 namespace crosapi = ::crosapi::mojom;
 
 constexpr char kExtensionId1[] = "gogonhoemckpdpadfnjnpgbjpbjnodgc";
-constexpr char kPwaPattern1[] = "*://googlechromelabs.github.io/*";
-constexpr char kPwaUrl1[] = "https://googlechromelabs.github.io/";
+constexpr char kPwaPattern1[] =
+    "*://googlechromelabs.github.io/cros-sample-telemetry-extension/test-page/"
+    "*";
+constexpr char kPwaUrl1[] =
+    "https://googlechromelabs.github.io/cros-sample-telemetry-extension/"
+    "test-page";
 
 constexpr char kExtensionId2[] = "alnedpmllcfpgldkagbfbjkloonjlfjb";
 constexpr char kPwaPattern2[] = "https://hpcs-appschr.hpcloud.hp.com/*";
@@ -74,28 +69,16 @@ class TelemetryExtensionDiagnosticRoutinesManagerTest
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
     fake_routines_service_impl_ = new FakeDiagnosticRoutinesService();
     fake_routines_service_factory_.SetCreateInstanceResponse(
         std::unique_ptr<FakeDiagnosticRoutinesService>(
             fake_routines_service_impl_.get()));
     ash::TelemetryDiagnosticsRoutineServiceAsh::Factory::SetForTesting(
         &fake_routines_service_factory_);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    fake_routines_service_impl_ =
-        std::make_unique<FakeDiagnosticRoutinesService>();
-    // Replace the production `TelemetryDiagnosticRoutinesService` with a fake
-    // for testing.
-    chromeos::LacrosService::Get()->InjectRemoteForTesting(
-        fake_routines_service_impl_->receiver().BindNewPipeAndPassRemote());
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
   }
 
   void TearDown() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
     fake_routines_service_impl_ = nullptr;
-#endif
     BrowserWithTestWindowTest::TearDown();
   }
 
@@ -120,17 +103,16 @@ class TelemetryExtensionDiagnosticRoutinesManagerTest
   scoped_refptr<const extensions::Extension> CreateExtension(
       const std::string& extension_id,
       const std::vector<std::string> external_connectables) {
-    base::Value::List matches;
+    base::ListValue matches;
     for (const auto& match : external_connectables) {
       matches.Append(match);
     }
     auto extension =
         extensions::ExtensionBuilder("Test ChromeOS System Extension")
-            .SetManifestVersion(3)
-            .SetManifestKey("chromeos_system_extension", base::Value::Dict())
+            .SetManifestKey("chromeos_system_extension", base::DictValue())
             .SetManifestKey(
                 "externally_connectable",
-                base::Value::Dict().Set("matches", std::move(matches)))
+                base::DictValue().Set("matches", std::move(matches)))
             .SetID(extension_id)
             .SetLocation(extensions::mojom::ManifestLocation::kInternal)
             .Build();
@@ -177,13 +159,8 @@ class TelemetryExtensionDiagnosticRoutinesManagerTest
   }
 
  private:
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   raw_ptr<FakeDiagnosticRoutinesService> fake_routines_service_impl_;
   FakeDiagnosticRoutinesServiceFactory fake_routines_service_factory_;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  std::unique_ptr<FakeDiagnosticRoutinesService> fake_routines_service_impl_;
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 };
 
 TEST_F(TelemetryExtensionDiagnosticRoutinesManagerTest,
@@ -404,6 +381,40 @@ TEST_F(TelemetryExtensionDiagnosticRoutinesManagerTest, CancelRoutineSuccess) {
                                               create_result.value());
   EXPECT_FALSE(
       IsUuidRegisteredForExtension(kExtensionId1, create_result.value()));
+}
+
+TEST_F(TelemetryExtensionDiagnosticRoutinesManagerTest,
+       ReplyToRoutineInquiryNoExtension) {
+  EXPECT_FALSE(routine_manager().ReplyToRoutineInquiryForExtension(
+      kExtensionId1, base::Uuid::ParseLowercase(kUnmappedUuid),
+      crosapi::TelemetryDiagnosticRoutineInquiryReply::NewUnrecognizedReply(
+          true)));
+}
+
+TEST_F(TelemetryExtensionDiagnosticRoutinesManagerTest,
+       ReplyToRoutineInquiryNoRoutine) {
+  CreateExtension(kExtensionId1, {kPwaPattern1});
+
+  EXPECT_FALSE(routine_manager().ReplyToRoutineInquiryForExtension(
+      kExtensionId1, base::Uuid::ParseLowercase(kUnmappedUuid),
+      crosapi::TelemetryDiagnosticRoutineInquiryReply::NewUnrecognizedReply(
+          true)));
+}
+
+TEST_F(TelemetryExtensionDiagnosticRoutinesManagerTest,
+       ReplyToRoutineInquirySuccess) {
+  CreateExtension(kExtensionId1, {kPwaPattern1});
+  OpenAppUiUrlAndSetCertificateWithStatus(GURL(kPwaUrl1),
+                                          /*cert_status=*/net::OK);
+
+  auto create_result =
+      routine_manager().CreateRoutine(kExtensionId1, GetMemoryArgument());
+  EXPECT_TRUE(create_result.has_value());
+
+  EXPECT_TRUE(routine_manager().ReplyToRoutineInquiryForExtension(
+      kExtensionId1, create_result.value(),
+      crosapi::TelemetryDiagnosticRoutineInquiryReply::NewUnrecognizedReply(
+          true)));
 }
 
 }  // namespace chromeos

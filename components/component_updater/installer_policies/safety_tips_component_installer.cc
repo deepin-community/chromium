@@ -17,8 +17,6 @@
 #include "components/lookalikes/core/safety_tips.pb.h"
 #include "components/lookalikes/core/safety_tips_config.h"
 
-using component_updater::ComponentUpdateService;
-
 namespace {
 
 const base::FilePath::CharType kSafetyTipsConfigBinaryPbFileName[] =
@@ -69,7 +67,7 @@ bool SafetyTipsComponentInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 SafetyTipsComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& /* manifest */,
+    const base::DictValue& /* manifest */,
     const base::FilePath& /* install_dir */) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -84,7 +82,7 @@ base::FilePath SafetyTipsComponentInstallerPolicy::GetInstalledPath(
 void SafetyTipsComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict /* manifest */) {
+    base::DictValue /* manifest */) {
   DVLOG(1) << "Component ready, version " << version.GetString() << " in "
            << install_dir.value();
 
@@ -104,7 +102,7 @@ void SafetyTipsComponentInstallerPolicy::ComponentReady(
 
 // Called during startup and installation before ComponentReady().
 bool SafetyTipsComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& /* manifest */,
+    const base::DictValue& /* manifest */,
     const base::FilePath& install_dir) const {
   // No need to actually validate the proto here, since we'll do the checking
   // in PopulateFromDynamicUpdate().
@@ -118,9 +116,8 @@ base::FilePath SafetyTipsComponentInstallerPolicy::GetRelativeInstallDir()
 
 void SafetyTipsComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(
-      kSafetyTipsPublicKeySHA256,
-      kSafetyTipsPublicKeySHA256 + std::size(kSafetyTipsPublicKeySHA256));
+  hash->assign(std::begin(kSafetyTipsPublicKeySHA256),
+               std::end(kSafetyTipsPublicKeySHA256));
 }
 
 std::string SafetyTipsComponentInstallerPolicy::GetName() const {

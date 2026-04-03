@@ -14,6 +14,7 @@
 #include "base/base64.h"
 #include "base/json/json_reader.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/gtest_util.h"
@@ -32,6 +33,7 @@
 #include "chromeos/ash/components/quick_start/quick_start_metrics.h"
 #include "chromeos/ash/components/quick_start/types.h"
 #include "components/account_id/account_id.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "net/http/http_status_code.h"
@@ -43,7 +45,6 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 #include "url/gurl.h"
 
 namespace ash::quick_start {
@@ -56,7 +57,6 @@ using ::testing::Eq;
 using ::testing::ExplainMatchResult;
 using ::testing::Field;
 using ::testing::Gt;
-using ::testing::Invoke;
 using ::testing::IsFalse;
 using ::testing::IsTrue;
 using ::testing::Optional;
@@ -111,6 +111,7 @@ BQADQQA/ugzBrjjK9jcWnDVfGHlk3icNRq0oV7Ri32z/+HQX67aRfgZu7KWdI+Ju
 Wm7DCfrPNGVwFWUQOmsPue9rZBgO
 -----END CERTIFICATE-----
     })";
+constexpr char kFakeEmail[] = "fake-user@example.com";
 
 constexpr char kFidoCredentialIdBytes[] = "fake-fido-credential-id";
 constexpr char kFakeDeviceId[] = "fake-device-id";
@@ -273,6 +274,30 @@ class SecondDeviceAuthBrokerTest : public ::testing::Test {
     test_factory_.AddResponse(url, response, status);
   }
 
+  void AddFakeRejectionResponse(const std::string& email,
+                                const std::string& rejection_reason) {
+    // clang-format off
+    AddFakeResponse(kStartSessionUrl, base::StringPrintf(R"(
+        {
+          "sessionStatus": "REJECTED",
+          "email": "%s",
+          "rejectionReason": "%s"
+        }
+      )", email.c_str(), rejection_reason.c_str()));
+    // clang-format on
+  }
+
+  void AddFakeRejectionResponse(const std::string& rejection_reason) {
+    // clang-format off
+    AddFakeResponse(kStartSessionUrl, base::StringPrintf(R"(
+        {
+          "sessionStatus": "REJECTED",
+          "rejectionReason": "%s"
+        }
+      )", rejection_reason.c_str()));
+    // clang-format on
+  }
+
   // Sets an `interceptor`. Overwrites any other interceptor that may have been
   // previously set.
   void SetInterceptor(
@@ -317,19 +342,19 @@ class SecondDeviceAuthBrokerTest : public ::testing::Test {
             return;
           }
 
-          std::optional<base::Value> request_body =
-              base::JSONReader::Read(request.request_body->elements()
-                                         ->at(0)
-                                         .As<network::DataElementBytes>()
-                                         .AsStringPiece());
-          if (!request_body || !request_body->is_dict()) {
+          std::optional<base::DictValue> request_body =
+              base::JSONReader::ReadDict(request.request_body->elements()
+                                             ->at(0)
+                                             .As<network::DataElementBytes>()
+                                             .AsStringPiece(),
+                                         base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+          if (!request_body) {
             SimulateBadRequest(kGetChallengeDataUrl);
             return;
           }
 
-          const base::Value::Dict& request_dict = request_body->GetDict();
           const std::string* target_device_type =
-              request_dict.FindString(kTargetDeviceType);
+              request_body->FindString(kTargetDeviceType);
           if (!target_device_type || *target_device_type != kChromeOS) {
             SimulateBadRequest(kGetChallengeDataUrl);
             return;
@@ -351,14 +376,14 @@ class SecondDeviceAuthBrokerTest : public ::testing::Test {
             /*force_new_key=*/_, /*key_crypto_type=*/_,
             /*key_name=*/attestation::kDeviceSetupKey,
             /*profile_specific_data=*/_, /*callback=*/_))
-        .WillOnce(WithArg<7>(Invoke(
+        .WillOnce(WithArg<7>(
             [](attestation::AttestationFlow::CertificateCallback callback)
                 -> void {
               std::move(callback).Run(
                   /*status=*/ash::attestation::AttestationStatus::
                       ATTESTATION_SERVER_BAD_REQUEST_FAILURE,
                   /*pem_certificate_chain=*/std::string());
-            })));
+            }));
   }
 
   // Set an `EXPECT`ation that expects a remote attestation request, and
@@ -373,14 +398,14 @@ class SecondDeviceAuthBrokerTest : public ::testing::Test {
             /*force_new_key=*/_, /*key_crypto_type=*/_,
             /*key_name=*/attestation::kDeviceSetupKey,
             /*profile_specific_data=*/_, /*callback=*/_))
-        .WillOnce(WithArg<7>(Invoke(
+        .WillOnce(WithArg<7>(
             [](attestation::AttestationFlow::CertificateCallback callback)
                 -> void {
               std::move(callback).Run(
                   /*status=*/ash::attestation::AttestationStatus::
                       ATTESTATION_UNSPECIFIED_FAILURE,
                   /*pem_certificate_chain=*/std::string());
-            })));
+            }));
   }
 
   // Set an `EXPECT`ation that expects a remote attestation request, and
@@ -399,14 +424,14 @@ class SecondDeviceAuthBrokerTest : public ::testing::Test {
                      ::attestation::DeviceSetupCertificateRequestMetadata>(
                 ProtoBufContentBindingEq(fido_credential_id()))),
             /*callback*/ _))
-        .WillOnce(WithArg<7>(Invoke(
+        .WillOnce(WithArg<7>(
             [this](attestation::AttestationFlow::CertificateCallback callback)
                 -> void {
               std::move(callback).Run(
                   /*status=*/ash::attestation::AttestationStatus::
                       ATTESTATION_SUCCESS,
                   /*pem_certificate_chain=*/*GetCertificate());
-            })));
+            }));
   }
 
   // Same as above, except that it expects a particular attestation key type.
@@ -425,14 +450,14 @@ class SecondDeviceAuthBrokerTest : public ::testing::Test {
                      ::attestation::DeviceSetupCertificateRequestMetadata>(
                 ProtoBufContentBindingEq(fido_credential_id()))),
             /*callback*/ _))
-        .WillOnce(WithArg<7>(Invoke(
+        .WillOnce(WithArg<7>(
             [this](attestation::AttestationFlow::CertificateCallback callback)
                 -> void {
               std::move(callback).Run(
                   /*status=*/ash::attestation::AttestationStatus::
                       ATTESTATION_SUCCESS,
                   /*pem_certificate_chain=*/*GetCertificate());
-            })));
+            }));
   }
 
   void MakeAttestationUnavailable() {
@@ -769,15 +794,10 @@ TEST_F(SecondDeviceAuthBrokerTest,
 // they will consider it to be a "less_secure_device" and reject the request.
 TEST_F(SecondDeviceAuthBrokerTest,
        FetchAuthCodeReturnsRejectionResponseForLessSecureDevices) {
-  AddFakeResponse(kStartSessionUrl, std::string(R"(
-      {
-        "sessionStatus": "REJECTED",
-        "email": "fake-user@example.com",
-        "rejectionReason": "LESS_SECURE_DEVICE"
-      }
-    )"));
+  AddFakeRejectionResponse(kFakeEmail,
+                           /*rejection_reason=*/"LESS_SECURE_DEVICE");
   AuthCodeRejectionResponse expected_response;
-  expected_response.email = "fake-user@example.com";
+  expected_response.email = kFakeEmail;
   expected_response.reason =
       AuthCodeRejectionResponse::Reason::kLessSecureDevice;
   SecondDeviceAuthBroker::AuthCodeResponse response =
@@ -785,6 +805,67 @@ TEST_F(SecondDeviceAuthBrokerTest,
                     /*certificate=*/GetCertificate());
   EXPECT_THAT(response, VariantWith<AuthCodeRejectionResponse>(
                             AuthCodeRejectionResponseEq(expected_response)));
+}
+
+TEST_F(SecondDeviceAuthBrokerTest,
+       FetchAuthCodeReturnsRejectionResponseForFederatedEnterpriseAccounts) {
+  AddFakeRejectionResponse(
+      kFakeEmail,
+      /*rejection_reason=*/"ACCOUNT_NOT_SUPPORTED_FEDERATED_DASHER");
+  AuthCodeRejectionResponse expected_response;
+  expected_response.email = kFakeEmail;
+  expected_response.reason = AuthCodeRejectionResponse::Reason::
+      kFederatedEnterpriseAccountNotSupported;
+  SecondDeviceAuthBroker::AuthCodeResponse response =
+      FetchAuthCode(/*fido_assertion_info=*/FidoAssertionInfo{},
+                    /*certificate=*/GetCertificate());
+  EXPECT_THAT(response, VariantWith<AuthCodeRejectionResponse>(
+                            AuthCodeRejectionResponseEq(expected_response)));
+}
+
+// A Unicorn account was used for QuickStart when QuickStart is disallowed for
+// the account.
+TEST_F(SecondDeviceAuthBrokerTest,
+       FetchAuthCodeReturnsRejectionResponseForDisabledUnicornAccounts) {
+  AddFakeRejectionResponse(kFakeEmail,
+                           /*rejection_reason=*/"ACCOUNT_NOT_SUPPORTED_KID");
+  AuthCodeRejectionResponse expected_response;
+  expected_response.email = kFakeEmail;
+  expected_response.reason =
+      AuthCodeRejectionResponse::Reason::kUnicornAccountNotEnabled;
+  SecondDeviceAuthBroker::AuthCodeResponse response =
+      FetchAuthCode(/*fido_assertion_info=*/FidoAssertionInfo{},
+                    /*certificate=*/GetCertificate());
+  EXPECT_THAT(response, VariantWith<AuthCodeRejectionResponse>(
+                            AuthCodeRejectionResponseEq(expected_response)));
+}
+
+TEST_F(SecondDeviceAuthBrokerTest,
+       FetchAuthCodeReturnsRejectionResponseForAccountLookupErrors) {
+  AddFakeRejectionResponse(
+      kFakeEmail,
+      /*rejection_reason=*/"ACCOUNT_LOOKUP_ACCOUNT_NOT_FOUND");
+  AuthCodeRejectionResponse expected_response1;
+  expected_response1.email = kFakeEmail;
+  expected_response1.reason =
+      AuthCodeRejectionResponse::Reason::kAccountNotFound;
+  SecondDeviceAuthBroker::AuthCodeResponse response =
+      FetchAuthCode(/*fido_assertion_info=*/FidoAssertionInfo{},
+                    /*certificate=*/GetCertificate());
+  EXPECT_THAT(response, VariantWith<AuthCodeRejectionResponse>(
+                            AuthCodeRejectionResponseEq(expected_response1)));
+
+  AddFakeRejectionResponse(
+      kFakeEmail,
+      /*rejection_reason=*/"ACCOUNT_LOOKUP_CAPTCHA_REQUIRED");
+  AuthCodeRejectionResponse expected_response2;
+  expected_response2.email = kFakeEmail;
+  expected_response2.reason =
+      AuthCodeRejectionResponse::Reason::kCaptchaRequired;
+  response = FetchAuthCode(/*fido_assertion_info=*/FidoAssertionInfo{},
+                           /*certificate=*/GetCertificate());
+  EXPECT_THAT(response, VariantWith<AuthCodeRejectionResponse>(
+                            AuthCodeRejectionResponseEq(expected_response2)));
 }
 
 TEST_F(
@@ -808,12 +889,7 @@ TEST_F(
 TEST_F(
     SecondDeviceAuthBrokerTest,
     FetchAuthCodeReturnsRejectionResponseWithUnknownReasonForMalformedRejectionReason) {
-  AddFakeResponse(kStartSessionUrl, std::string(R"(
-      {
-        "sessionStatus": "REJECTED",
-        "rejectionReason": "Malformed rejection reason"
-      }
-    )"));
+  AddFakeRejectionResponse(/*rejection_reason=*/"Malformed rejection reason");
   AuthCodeRejectionResponse expected_response{
       .reason = AuthCodeRejectionResponse::Reason::kUnknownReason};
   SecondDeviceAuthBroker::AuthCodeResponse response =
@@ -910,7 +986,7 @@ TEST_F(SecondDeviceAuthBrokerTest, FetchAuthCodeReturnsAnAuthCode) {
   AuthCodeSuccessResponse expected_response;
   expected_response.email = "fake-user@example.com";
   expected_response.auth_code = "fake-auth-code";
-  expected_response.gaia_id = "fake-gaia-id";
+  expected_response.gaia_id = GaiaId("fake-gaia-id");
   SecondDeviceAuthBroker::AuthCodeResponse response =
       FetchAuthCode(/*fido_assertion_info=*/FidoAssertionInfo{},
                     /*certificate=*/GetCertificate());
@@ -934,25 +1010,25 @@ TEST_F(SecondDeviceAuthBrokerTest,
           return;
         }
 
-        std::optional<base::Value> request_body =
-            base::JSONReader::Read(request.request_body->elements()
-                                       ->at(0)
-                                       .As<network::DataElementBytes>()
-                                       .AsStringPiece());
-        if (!request_body || !request_body->is_dict()) {
+        std::optional<base::DictValue> request_body =
+            base::JSONReader::ReadDict(request.request_body->elements()
+                                           ->at(0)
+                                           .As<network::DataElementBytes>()
+                                           .AsStringPiece(),
+                                       base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+        if (!request_body) {
           SimulateBadRequest(kStartSessionUrl);
           return;
         }
 
-        const base::Value::Dict& request_dict = request_body->GetDict();
-        const base::Value::Dict* target_device_info =
-            request_dict.FindDict(kTargetDeviceInfoKey);
+        const base::DictValue* target_device_info =
+            request_body->FindDict(kTargetDeviceInfoKey);
         if (!target_device_info) {
           SimulateBadRequest(kStartSessionUrl);
           return;
         }
 
-        const base::Value::Dict* chromeos_device_info =
+        const base::DictValue* chromeos_device_info =
             target_device_info->FindDict(kChromeOsDeviceInfoKey);
         if (!chromeos_device_info) {
           SimulateBadRequest(kStartSessionUrl);

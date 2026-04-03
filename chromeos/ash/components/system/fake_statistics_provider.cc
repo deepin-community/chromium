@@ -61,6 +61,16 @@ StatisticsProvider::VpdStatus FakeStatisticsProvider::GetVpdStatus() const {
   return vpd_status_;
 }
 
+StatisticsProvider::LoadingState FakeStatisticsProvider::GetLoadingState()
+    const {
+  return loading_state_;
+}
+
+std::optional<std::string> FakeStatisticsProvider::GetUpdatedHardwareClass()
+    const {
+  return updated_hardware_class_;
+}
+
 void FakeStatisticsProvider::SetMachineStatistic(const std::string& key,
                                                  const std::string& value) {
   machine_statistics_[key] = value;
@@ -68,6 +78,10 @@ void FakeStatisticsProvider::SetMachineStatistic(const std::string& key,
 
 void FakeStatisticsProvider::ClearMachineStatistic(std::string_view key) {
   machine_statistics_.erase(key);
+}
+
+void FakeStatisticsProvider::ClearAllMachineStatistics() {
+  machine_statistics_.clear();
 }
 
 void FakeStatisticsProvider::SetMachineFlag(const std::string& key,
@@ -81,6 +95,15 @@ void FakeStatisticsProvider::ClearMachineFlag(std::string_view key) {
 
 void FakeStatisticsProvider::SetVpdStatus(VpdStatus new_status) {
   vpd_status_ = new_status;
+}
+
+void FakeStatisticsProvider::SetLoadingState(LoadingState new_state) {
+  loading_state_ = new_state;
+}
+
+void FakeStatisticsProvider::SetUpdatedHardwareClass(
+    const std::optional<std::string> new_hw_class) {
+  updated_hardware_class_ = new_hw_class;
 }
 
 ScopedFakeStatisticsProvider::ScopedFakeStatisticsProvider() {

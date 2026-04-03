@@ -4,11 +4,13 @@
 
 #include "extensions/renderer/extension_frame_helper.h"
 
+#include <algorithm>
 #include <set>
 
+#include "base/auto_reset.h"
+#include "base/containers/map_util.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/timer/elapsed_timer.h"
 #include "content/public/renderer/render_frame.h"
@@ -25,6 +27,7 @@
 #include "extensions/renderer/native_extension_bindings_system.h"
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/script_context_set.h"
+#include "extensions/renderer/script_injection_manager.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
@@ -36,6 +39,7 @@
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_settings.h"
 #include "third_party/blink/public/web/web_view.h"
+#include "url/gurl.h"
 #include "v8/include/v8-container.h"
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-isolate.h"
@@ -179,10 +183,11 @@ v8::Local<v8::Array> ExtensionFrameHelper::GetV8MainFrames(
     mojom::ViewType view_type) {
   // WebFrame::ScriptCanAccess uses the isolate's current context. We need to
   // make sure that the current context is the one we're expecting.
-  DCHECK(context == context->GetIsolate()->GetCurrentContext());
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  DCHECK(context == isolate->GetCurrentContext());
   std::vector<content::RenderFrame*> render_frames =
       GetExtensionFrames(extension_id, browser_window_id, tab_id, view_type);
-  v8::Local<v8::Array> v8_frames = v8::Array::New(context->GetIsolate());
+  v8::Local<v8::Array> v8_frames = v8::Array::New(isolate);
 
   int v8_index = 0;
   for (content::RenderFrame* frame : render_frames) {
@@ -190,7 +195,7 @@ v8::Local<v8::Array> ExtensionFrameHelper::GetV8MainFrames(
     if (!web_frame->IsOutermostMainFrame())
       continue;
 
-    if (!blink::WebFrame::ScriptCanAccess(context->GetIsolate(), web_frame)) {
+    if (!blink::WebFrame::ScriptCanAccess(isolate, web_frame)) {
       continue;
     }
 
@@ -216,7 +221,7 @@ content::RenderFrame* ExtensionFrameHelper::GetBackgroundPageFrame(
                            extension_misc::kUnknownTabId, extension_id)) {
       blink::WebLocalFrame* web_frame = helper->render_frame()->GetWebFrame();
       // Check if this is the outermost main frame (do not return embedded
-      // main frames like portals or fenced frames).
+      // main frames like fenced frames).
       if (web_frame->IsOutermostMainFrame())
         return helper->render_frame();
     }
@@ -286,6 +291,7 @@ void ExtensionFrameHelper::DidCreateDocumentElement() {
 
 void ExtensionFrameHelper::DidCreateNewDocument() {
   did_create_current_document_element_ = false;
+  active_user_script_worlds_.clear();
 }
 
 void ExtensionFrameHelper::RunScriptsAtDocumentStart() {
@@ -317,6 +323,18 @@ void ExtensionFrameHelper::ScheduleAtDocumentEnd(base::OnceClosure callback) {
 
 void ExtensionFrameHelper::ScheduleAtDocumentIdle(base::OnceClosure callback) {
   document_idle_callbacks_.push_back(std::move(callback));
+}
+
+const std::set<std::optional<std::string>>*
+ExtensionFrameHelper::GetActiveUserScriptWorlds(
+      const ExtensionId& extension_id) {
+  return base::FindOrNull(active_user_script_worlds_, extension_id);
+}
+
+void ExtensionFrameHelper::AddActiveUserScriptWorld(
+    const ExtensionId& extension_id,
+    const std::optional<std::string>& world_id) {
+  active_user_script_worlds_[extension_id].insert(world_id);
 }
 
 mojom::LocalFrameHost* ExtensionFrameHelper::GetLocalFrameHost() {
@@ -366,10 +384,19 @@ void ExtensionFrameHelper::ReadyToCommitNavigation(
     document_loader->BlockParser();
   }
 
+  if (base::FeatureList::IsEnabled(
+          extensions_features::kExtensionsBackgroundCompilation)) {
+    // There might be old script streamers still pending from a previous load.
+    extension_script_streamers_.clear();
+    extension_dispatcher_->script_injection_manager()->StartStreamingJSSources(
+        web_frame, document_loader->GetUrl(), this);
+  }
+
   has_started_first_navigation_ = true;
 
-  if (!delayed_main_world_script_initialization_)
+  if (!delayed_main_world_script_initialization_) {
     return;
+  }
 
   base::AutoReset<bool> auto_reset(&is_initializing_main_world_script_context_,
                                    true);
@@ -390,19 +417,6 @@ void ExtensionFrameHelper::ReadyToCommitNavigation(
   extension_dispatcher_->DidCreateScriptContext(web_frame, context,
                                                 blink::kMainDOMWorldId);
   // TODO(devlin): Add constants for main world id, no extension group.
-}
-
-void ExtensionFrameHelper::DidCommitProvisionalLoad(
-    ui::PageTransition transition) {
-  if (base::FeatureList::IsEnabled(
-          extensions_features::kAvoidEarlyExtensionScriptContextCreation)) {
-    return;
-  }
-  // Grant cross browsing instance frame lookup if we are an extension. This
-  // should match the conditions in FindFrame.
-  content::RenderFrame* frame = render_frame();
-  if (GetExtensionFromFrame(frame))
-    frame->SetAllowsCrossBrowsingInstanceFrameLookup();
 }
 
 void ExtensionFrameHelper::DidCreateScriptContext(
@@ -457,7 +471,7 @@ void ExtensionFrameHelper::NotifyRenderViewType(mojom::ViewType type) {
 void ExtensionFrameHelper::MessageInvoke(const ExtensionId& extension_id,
                                          const std::string& module_name,
                                          const std::string& function_name,
-                                         base::Value::List args) {
+                                         base::ListValue args) {
   extension_dispatcher_->InvokeModuleSystemMethod(
       render_frame(), extension_id, module_name, function_name, args);
 }
@@ -474,10 +488,10 @@ void ExtensionFrameHelper::ExecuteCode(mojom::ExecuteCodeParamsPtr param,
 
     if (param->injection->get_css()->operation ==
             mojom::CSSInjection::Operation::kRemove &&
-        !base::ranges::all_of(param->injection->get_css()->sources,
-                              [](const mojom::CSSSourcePtr& source) {
-                                return source->key.has_value();
-                              })) {
+        !std::ranges::all_of(param->injection->get_css()->sources,
+                             [](const mojom::CSSSourcePtr& source) {
+                               return source->key.has_value();
+                             })) {
       local_frame_receiver_.ReportBadMessage(
           "An injection key must be specified for CSS removal.");
       return;
@@ -528,7 +542,7 @@ void ExtensionFrameHelper::ExecuteDeclarativeScript(
     const ExtensionId& extension_id,
     const std::string& script_id,
     const GURL& url) {
-  // TODO(https://crbug.com/1186220): URL-checking isn't the best approach to
+  // TODO(crbug.com/40753624): URL-checking isn't the best approach to
   // avoid user data leak. Consider what we can do to mitigate this case.
   // Begin script injection workflow only if the current URL is identical to the
   // one that matched declarative conditions in the browser.
@@ -568,23 +582,6 @@ void ExtensionFrameHelper::OnDestruct() {
   delete this;
 }
 
-void ExtensionFrameHelper::DraggableRegionsChanged() {
-  if (!render_frame()->GetWebFrame()->IsOutermostMainFrame())
-    return;
-
-  blink::WebVector<blink::WebDraggableRegion> webregions =
-      render_frame()->GetWebFrame()->GetDocument().DraggableRegions();
-  std::vector<mojom::DraggableRegionPtr> regions;
-  regions.reserve(webregions.size());
-  for (blink::WebDraggableRegion& webregion : webregions) {
-    render_frame()->ConvertViewportToWindow(&webregion.bounds);
-
-    regions.push_back(
-        mojom::DraggableRegion::New(webregion.draggable, webregion.bounds));
-  }
-  GetLocalFrameHost()->UpdateDraggableRegions(std::move(regions));
-}
-
 void ExtensionFrameHelper::DidClearWindowObject() {
   // DidClearWindowObject() is called right at the end of
   // DocumentLoader::CreateParserPostCommit(). This is late enough in the commit
@@ -594,13 +591,12 @@ void ExtensionFrameHelper::DidClearWindowObject() {
   // Calling this multiple times in a page load is safe because
   // SetAllowsCrossBrowsingInstanceFrameLookup() just sets a bool to true on the
   // SecurityOrigin.
-  if (base::FeatureList::IsEnabled(
-          extensions_features::kAvoidEarlyExtensionScriptContextCreation)) {
-    // Grant cross browsing instance frame lookup if we are an extension. This
-    // should match the conditions in FindFrame.
-    content::RenderFrame* frame = render_frame();
-    if (GetExtensionFromFrame(frame))
-      frame->SetAllowsCrossBrowsingInstanceFrameLookup();
+
+  // Grant cross browsing instance frame lookup if we are an extension. This
+  // should match the conditions in FindFrame.
+  content::RenderFrame* frame = render_frame();
+  if (GetExtensionFromFrame(frame)) {
+    frame->SetAllowsCrossBrowsingInstanceFrameLookup();
   }
 }
 
@@ -625,6 +621,11 @@ content::RenderFrame* ExtensionFrameHelper::FindFrameFromFrameTokenString(
   auto* web_frame = blink::WebLocalFrame::FromFrameToken(
       blink::LocalFrameToken(unguessable_token.value()));
   return content::RenderFrame::FromWebFrame(web_frame);
+}
+
+std::map<GURL, std::optional<blink::ExtensionScriptStreamer>>&
+ExtensionFrameHelper::GetScriptStreamersMap() {
+  return extension_script_streamers_;
 }
 
 }  // namespace extensions

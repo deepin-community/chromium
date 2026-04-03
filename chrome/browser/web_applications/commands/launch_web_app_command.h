@@ -10,10 +10,10 @@
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/web_applications/commands/web_app_command.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 
 class Browser;
 class Profile;
@@ -26,6 +26,9 @@ namespace web_app {
 
 class WebAppProvider;
 
+// Launches a web app given a set of launch parameters. This command handles
+// ensuring the app is fully installed with OS integration if needed before
+// launching.
 class LaunchWebAppCommand
     : public WebAppCommand<AppLock,
                            base::WeakPtr<Browser>,
@@ -43,7 +46,8 @@ class LaunchWebAppCommand
   void StartWithLock(std::unique_ptr<AppLock> lock) override;
 
  private:
-  void FirstRunServiceCompleted(bool success);
+  void OnOsIntegrationSynchronized();
+  void DoLaunch();
   void OnAppLaunched(base::WeakPtr<Browser> browser,
                      base::WeakPtr<content::WebContents> web_contents,
                      apps::LaunchContainer container,

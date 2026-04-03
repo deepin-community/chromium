@@ -5,12 +5,13 @@
 #import "chrome/browser/chrome_browser_application_mac.h"
 
 #import "base/apple/foundation_util.h"
+#import "base/apple/scoped_objc_class_swizzler.h"
 #import "base/mac/mac_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/browser_accessibility_state.h"
+#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 
 namespace {
@@ -37,6 +38,23 @@ BOOL g_voice_over_enabled = NO;
 
 @end
 
+@interface NSApplication (ChromeBrowserApplicationMacBrowserTestSwizzle)
+@end
+
+@implementation NSApplication (ChromeBrowserApplicationMacBrowserTestSwizzle)
+
+- (void)testObserveValueForKeyPath:(NSString*)keyPath
+                          ofObject:(id)object
+                            change:
+                                (NSDictionary<NSKeyValueChangeKey, id>*)change
+                           context:(void*)context {
+  if (context) {
+    *static_cast<bool*>(context) = true;
+  }
+}
+
+@end
+
 class ChromeBrowserAppMacBrowserTest : public InProcessBrowserTest {
  public:
   ChromeBrowserAppMacBrowserTest() {
@@ -48,6 +66,14 @@ class ChromeBrowserAppMacBrowserTest : public InProcessBrowserTest {
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     SetVoiceOverEnabled(VoiceOverEnabledAtStartUp());
+  }
+
+  void SetUpOnMainThread() override {
+    // Enable platform activation since that is what is begin tested here.
+    content::BrowserAccessibilityState::GetInstance()
+        ->SetActivationFromPlatformEnabled(
+            /*enabled=*/true);
+    InProcessBrowserTest::SetUpOnMainThread();
   }
 
   // Whether or not we simulate VoiceOver active before the test runs.
@@ -78,18 +104,23 @@ class ChromeBrowserAppMacBrowserTest : public InProcessBrowserTest {
   }
 
   bool BrowserIsInCompleteAccessibilityMode() {
-    return BrowserIsInAccessibilityMode(ui::kAXModeComplete);
+    return BrowserIsInAccessibilityMode(ui::kAXModeComplete |
+                                        ui::AXMode::kScreenReader);
   }
 
   bool BrowserIsInBasicAccessibilityMode() {
     return BrowserIsInAccessibilityMode(ui::kAXModeBasic);
   }
 
+  bool BrowserIsInNativeAPIAccessibilityMode() {
+    return BrowserIsInAccessibilityMode(ui::AXMode::kNativeAPIs);
+  }
+
   bool BrowserAccessibilityDisabled() {
     return BrowserIsInAccessibilityMode(ui::AXMode());
   }
 
-  void RequestAccessibilityRole() { [br_cr_app_ accessibilityRole]; }
+  void RequestAppAccessibilityRole() { [br_cr_app_ accessibilityRole]; }
 
   void EnableEnhancedUserInterface(BOOL enable) {
     // We need to call -accessibilitySetValue:forAttribute: on br_cr_app_, but
@@ -106,6 +137,26 @@ class ChromeBrowserAppMacBrowserTest : public InProcessBrowserTest {
   BrowserCrApplication* br_cr_app_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
+
+// Ensures that overrides to the application's
+// observeValueForKeyPath:ofObject:change:context: method call super on
+// unrecognized key paths.
+IN_PROC_BROWSER_TEST_F(ChromeBrowserAppMacBrowserTest,
+                       KVOObservationCallsSuper) {
+  base::apple::ScopedObjCClassSwizzler swizzler(
+      [NSApplication class],
+      @selector(observeValueForKeyPath:ofObject:change:context:),
+      @selector(testObserveValueForKeyPath:ofObject:change:context:));
+
+  bool super_was_called = false;
+
+  [NSApp observeValueForKeyPath:@"testKeyPath"
+                       ofObject:nil
+                         change:nil
+                        context:&super_was_called];
+
+  EXPECT_TRUE(super_was_called);
+}
 
 // Tests how BrowserCrApplication responds to VoiceOver activations.
 IN_PROC_BROWSER_TEST_F(ChromeBrowserAppMacBrowserTest,
@@ -217,6 +268,8 @@ IN_PROC_BROWSER_TEST_F(ChromeBrowserAppMacBrowserTest,
   EXPECT_FALSE(BrowserAccessibilityDisabled());
 }
 
+// Tests that accessibility role requests to the application enable native
+// accessibility support.
 IN_PROC_BROWSER_TEST_F(ChromeBrowserAppMacBrowserTest,
                        RespondToAccessibilityRoleRequests) {
   if (base::mac::MacOSVersion() < 14'00'00) {
@@ -225,27 +278,28 @@ IN_PROC_BROWSER_TEST_F(ChromeBrowserAppMacBrowserTest,
 
   EXPECT_TRUE(BrowserAccessibilityDisabled());
 
-  RequestAccessibilityRole();
-  EXPECT_TRUE(BrowserIsInBasicAccessibilityMode());
+  RequestAppAccessibilityRole();
+  EXPECT_TRUE(BrowserIsInNativeAPIAccessibilityMode());
 
   // The user activates VoiceOver.
   SetVoiceOverEnabled(YES);
-
   // Requests for AccessibilityRole when VoiceOver is active should not
   // downgrade the AX level.
-  RequestAccessibilityRole();
+  RequestAppAccessibilityRole();
   EXPECT_TRUE(BrowserIsInCompleteAccessibilityMode());
 
+  // After VoiceOver is deactivated, the AXMode is returned to its
+  // previous value.
   SetVoiceOverEnabled(NO);
   WaitThreeSeconds();
-  EXPECT_TRUE(BrowserAccessibilityDisabled());
+  EXPECT_TRUE(BrowserIsInNativeAPIAccessibilityMode());
 
   EnableEnhancedUserInterface(YES);
   WaitThreeSeconds();
 
   // Requests for AccessibilityRole when the AX mode is complete should not
   // downgrade the AX level.
-  RequestAccessibilityRole();
+  RequestAppAccessibilityRole();
   EXPECT_TRUE(BrowserIsInCompleteAccessibilityMode());
 }
 
@@ -267,5 +321,6 @@ IN_PROC_BROWSER_TEST_F(ChromeBrowserAppMacBrowserMacVoiceOverEnabledTest,
 
   // Enable VoiceOver.
   EXPECT_TRUE(VoiceOverEnabled());
-  EXPECT_EQ(accessibility_state->GetAccessibilityMode(), ui::kAXModeComplete);
+  EXPECT_EQ(accessibility_state->GetAccessibilityMode(),
+            ui::kAXModeComplete | ui::AXMode::kScreenReader);
 }

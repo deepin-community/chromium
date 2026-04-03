@@ -43,10 +43,6 @@ bool ServiceImplementation::RequiresDedicatedAllocation(const ExternalImageDescr
             return false;
 
         case NeedsDedicatedAllocation::Detect:
-            if (!mDevice->GetDeviceInfo().HasExt(DeviceExt::DedicatedAllocation)) {
-                return false;
-            }
-
             VkMemoryDedicatedRequirements dedicatedRequirements;
             dedicatedRequirements.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
             dedicatedRequirements.pNext = nullptr;
@@ -65,7 +61,7 @@ bool ServiceImplementation::RequiresDedicatedAllocation(const ExternalImageDescr
 
             // The Vulkan spec requires that prefersDA is set if requiresDA is, so we can just check
             // for prefersDA.
-            return dedicatedRequirements.prefersDedicatedAllocation;
+            return dedicatedRequirements.prefersDedicatedAllocation != 0u;
     }
     DAWN_UNREACHABLE();
 }

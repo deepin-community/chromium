@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_INTERNALS_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_INTERNALS_H_
+#ifndef PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_INTERNALS_H_
+#define PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_INTERNALS_H_
 
-#include "build/build_config.h"
+#include "partition_alloc/build_config.h"
 
 #if defined(__GNUC__)
 
-#if BUILDFLAG(IS_POSIX)
+#if PA_BUILDFLAG(IS_POSIX)
 #include <sys/cdefs.h>  // for __THROW
 #endif
 
@@ -38,16 +38,20 @@
 // To work around the bug we use noinline to prevent the symbols from being
 // inlined.
 //
+// Also the `used` attribute is required to prevent dead-code elimination.
+// Without it, LLVM LTO can causes an undefined symbol error, even if the symbol
+// is defined within liballocator_shim.a.
+//
 // In the long run we probably want to avoid linking the allocator bits into
 // DSOs altogether. This will save a little space and stop giving DSOs the false
 // impression that they can hook the allocator.
-#define SHIM_ALWAYS_EXPORT __attribute__((visibility("default"), noinline))
+#define SHIM_ALWAYS_EXPORT __attribute__((used, visibility("default"), noinline))
 
-#elif BUILDFLAG(IS_WIN)  // __GNUC__
+#elif PA_BUILDFLAG(IS_WIN)  // __GNUC__
 
 #define __THROW
-#define SHIM_ALWAYS_EXPORT __declspec(noinline)
+#define SHIM_ALWAYS_EXPORT __declspec(noinline) __attribute__((used))
 
 #endif  // __GNUC__
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_INTERNALS_H_
+#endif  // PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_INTERNALS_H_

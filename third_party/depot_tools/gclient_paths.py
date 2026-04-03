@@ -40,14 +40,16 @@ def FindGclientRoot(from_dir, filename='.gclient'):
     # a sub directory that is controlled by this configuration.
     entries_filename = os.path.join(path, filename + '_entries')
     if not os.path.exists(entries_filename):
-        # If .gclient_entries does not exist, a previous call to gclient sync
-        # might have failed. In that case, we cannot verify that the .gclient
-        # is the one we want to use. In order to not to cause too much trouble,
-        # just issue a warning and return the path anyway.
-        print(
-            "%s missing, %s file in parent directory %s might not be the file "
-            "you want to use." % (entries_filename, filename, path),
-            file=sys.stderr)
+        if not gclient_utils.IsEnvCog():
+            # If .gclient_entries does not exist, a previous call to
+            # gclient sync might have failed. In that case, we cannot verify
+            # that the .gclient is the one we want to use. In order to not
+            # to cause too much trouble, just issue a warning and return
+            # the path anyway.
+            print("%s missing, %s file in parent directory %s might not be "
+                  "the file you want to use." %
+                  (entries_filename, filename, path),
+                  file=sys.stderr)
         return path
 
     entries_content = gclient_utils.FileRead(entries_filename)
@@ -57,8 +59,12 @@ def FindGclientRoot(from_dir, filename='.gclient'):
     except (SyntaxError, Exception) as e:
         gclient_utils.SyntaxErrorToError(filename, e)
 
-    all_directories = scope['entries'].keys()
-    path_to_check = os.path.relpath(real_from_dir, path)
+    all_directories = set(
+        os.path.relpath(os.path.realpath(os.path.join(path, *k.split('/'))),
+                        start=os.path.realpath(path))
+        for k in scope['entries'].keys())
+    path_to_check = os.path.relpath(os.path.realpath(real_from_dir),
+                                    start=os.path.realpath(path))
     while path_to_check:
         if path_to_check in all_directories:
             return path
@@ -76,7 +82,8 @@ def _GetPrimarySolutionPathInternal(cwd):
         return os.path.join(gclient_root, source_dir_name)
 
     # Some projects might not use .gclient. Try to see whether we're in a git
-    # checkout that contains a 'buildtools' subdir.
+    # checkout that contains a "buildtools" directory or "codereview.settings"
+    # file.
     top_dir = cwd
     try:
         top_dir = subprocess2.check_output(
@@ -86,14 +93,18 @@ def _GetPrimarySolutionPathInternal(cwd):
     except subprocess2.CalledProcessError:
         pass
 
-    if os.path.exists(os.path.join(top_dir, 'buildtools')):
+    if (os.path.exists(os.path.join(top_dir, 'codereview.settings'))
+            or os.path.exists(os.path.join(top_dir, 'buildtools'))):
         return top_dir
     return None
 
 
-def GetPrimarySolutionPath():
+def GetPrimarySolutionPath(from_dir=None):
     """Returns the full path to the primary solution. (gclient_root + src)"""
-    return _GetPrimarySolutionPathInternal(os.getcwd())
+    if not from_dir:
+        from_dir = os.getcwd()
+    from_dir = os.path.abspath(from_dir)
+    return _GetPrimarySolutionPathInternal(from_dir)
 
 
 @functools.lru_cache
@@ -111,6 +122,8 @@ def _GetBuildtoolsPathInternal(cwd, override):
 
     # buildtools may be in the gclient root.
     gclient_root = FindGclientRoot(os.getcwd())
+    if not gclient_root:
+        return None
     buildtools_path = os.path.join(gclient_root, 'buildtools')
     if os.path.exists(buildtools_path):
         return buildtools_path
@@ -152,13 +165,39 @@ def GetExeSuffix():
 
 
 @functools.lru_cache
-def GetGClientPrimarySolutionName(gclient_root_dir_path):
-    """Returns the name of the primary solution in the .gclient file specified."""
+def _GetGClientSolutions(gclient_root_dir_path):
     gclient_config_file = os.path.join(gclient_root_dir_path, '.gclient')
     gclient_config_contents = gclient_utils.FileRead(gclient_config_file)
     env = {}
     exec(gclient_config_contents, env)
-    solutions = env.get('solutions', [])
+    return env.get('solutions', [])
+
+
+def GetGClientPrimarySolutionName(gclient_root_dir_path):
+    """Returns the name of the primary solution in the .gclient file specified."""
+    solutions = _GetGClientSolutions(gclient_root_dir_path)
     if solutions:
         return solutions[0].get('name')
     return None
+
+
+def GetGClientPrimarySolutionURL(gclient_root_dir_path):
+    """Returns the URL of the primary solution in the .gclient file specified."""
+    solutions = _GetGClientSolutions(gclient_root_dir_path)
+    if solutions:
+        return solutions[0].get('url')
+    return None
+
+
+def FindInPath(name: str):
+    """Shutil.which replacement that skips depot_tools in PATH."""
+    env_path = os.getenv('PATH')
+    if not env_path:
+        return
+    for bin_dir in env_path.split(os.pathsep):
+        if bin_dir.rstrip(os.sep).endswith('depot_tools'):
+            # skip depot_tools to avoid calling gn.py infinitely.
+            continue
+        path = os.path.join(bin_dir, name + GetExeSuffix())
+        if os.path.isfile(path):
+            return path

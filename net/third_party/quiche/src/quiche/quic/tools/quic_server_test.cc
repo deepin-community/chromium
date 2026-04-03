@@ -5,6 +5,8 @@
 #include "quiche/quic/tools/quic_server.h"
 
 #include <memory>
+#include <string>
+#include <utility>
 
 #include "absl/base/macros.h"
 #include "quiche/quic/core/crypto/quic_random.h"
@@ -61,7 +63,7 @@ class TestQuicServer : public QuicServer {
   explicit TestQuicServer(QuicEventLoopFactory* event_loop_factory,
                           QuicMemoryCacheBackend* quic_simple_server_backend)
       : QuicServer(crypto_test_utils::ProofSourceForTesting(),
-                   quic_simple_server_backend),
+                   /*proof_verifier=*/nullptr, quic_simple_server_backend),
         quic_simple_server_backend_(quic_simple_server_backend),
         event_loop_factory_(event_loop_factory) {}
 

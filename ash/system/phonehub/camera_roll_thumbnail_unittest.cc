@@ -25,6 +25,7 @@
 #include "ui/gfx/image/image_unittest_util.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/accessibility/accessibility_paint_checks.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/menu_button.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/views/test/views_test_base.h"
@@ -77,6 +78,7 @@ class CameraRollThumbnailTest : public views::ViewsTestBase {
     fake_camera_roll_manager_.reset();
     fake_user_action_recorder_.reset();
     generator_.reset();
+    widget_ = nullptr;
     views::ViewsTestBase::TearDown();
   }
 
@@ -96,7 +98,8 @@ class CameraRollThumbnailTest : public views::ViewsTestBase {
     DCHECK(!widget_);
     widget_ = new views::Widget;
     views::Widget::InitParams params =
-        CreateParams(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+        CreateParams(views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+                     views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
     params.bounds = gfx::Rect(0, 0, 200, 200);
     widget_->Init(std::move(params));
   }
@@ -115,7 +118,7 @@ class CameraRollThumbnailTest : public views::ViewsTestBase {
         IDS_ASH_PHONE_HUB_CAMERA_ROLL_THUMBNAIL_ACCESSIBLE_NAME,
         base::NumberToString16(/* index= */ 1),
         base::NumberToString16(/* camera_roll_manager_size= */ 1));
-    camera_roll_thumbnail_->SetAccessibleName(accessible_name);
+    camera_roll_thumbnail_->GetViewAccessibility().SetName(accessible_name);
     widget_->Show();
   }
 
@@ -132,7 +135,6 @@ class CameraRollThumbnailTest : public views::ViewsTestBase {
         kExpectedCameraRollThumbnailBorderSize.height(), false);
 
     if (is_video) {
-      auto* provider = AshColorProvider::Get();
       cc::PaintFlags flags;
       flags.setAntiAlias(true);
       flags.setStyle(cc::PaintFlags::kFill_Style);
@@ -144,8 +146,8 @@ class CameraRollThumbnailTest : public views::ViewsTestBase {
           CreateVectorIcon(
               kPhoneHubCameraRollItemVideoIcon,
               kExpectedCameraRollThumbnailVideoIconSize,
-              provider->GetContentLayerColor(
-                  AshColorProvider::ContentLayerType::kIconColorPrimary)),
+              camera_roll_thumbnail()->GetColorProvider()->GetColor(
+                  cros_tokens::kIconColorPrimary)),
           kExpectedCameraRollThumbnailVideoIconOrigin.x(),
           kExpectedCameraRollThumbnailVideoIconOrigin.y());
     }
@@ -179,7 +181,7 @@ class CameraRollThumbnailTest : public views::ViewsTestBase {
 
   // This is required in order for the context to find color provider
   AshColorProvider color_provider_;
-  raw_ptr<views::Widget, DanglingUntriaged> widget_ = nullptr;
+  raw_ptr<views::Widget> widget_ = nullptr;
   std::unique_ptr<CameraRollThumbnail> camera_roll_thumbnail_;
   std::unique_ptr<phonehub::FakeUserActionRecorder> fake_user_action_recorder_;
   std::unique_ptr<phonehub::FakeCameraRollManager> fake_camera_roll_manager_;
@@ -191,7 +193,7 @@ TEST_F(CameraRollThumbnailTest, ViewLayout) {
 
   EXPECT_EQ(camera_roll_thumbnail()->GetFocusBehavior(),
             CameraRollThumbnail::FocusBehavior::ALWAYS);
-  EXPECT_STREQ("CameraRollThumbnail", camera_roll_thumbnail()->GetClassName());
+  EXPECT_EQ("CameraRollThumbnail", camera_roll_thumbnail()->GetClassName());
 }
 
 TEST_F(CameraRollThumbnailTest, ImageThumbnail) {

@@ -4,6 +4,11 @@
 // found in the LICENSE file.
 //
 // CLDevice.cpp: Implements the cl::Device class.
+//
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "libANGLE/CLDevice.h"
 
@@ -151,7 +156,16 @@ angle::Result Device::getInfo(DeviceInfo name,
             ANGLE_TRY(mImpl->getInfoString(name, copySize, valString.data()));
             copyValue = valString.data();
             break;
-
+        case DeviceInfo::ExternalMemoryImportHandleTypes:
+            copyValue = mInfo.externalMemoryHandleSupportList.data();
+            copySize  = mInfo.externalMemoryHandleSupportList.size() *
+                       sizeof(*mInfo.externalMemoryHandleSupportList.data());
+            break;
+        case DeviceInfo::ExternalMemoryLinearImagesHandleTypes:
+            // TODO: revisit this later
+            // http://anglebug.com/378017028
+            ANGLE_CL_RETURN_ERROR(CL_INVALID_VALUE);
+            break;
         // Handle all cached values
         case DeviceInfo::Type:
             copyValue = &mInfo.type;
@@ -277,6 +291,19 @@ angle::Result Device::getInfo(DeviceInfo name,
             copyValue = mInfo.partitionType.data();
             copySize =
                 mInfo.partitionType.size() * sizeof(decltype(mInfo.partitionType)::value_type);
+            break;
+        case DeviceInfo::IntegerDotProductCapabilities:
+            copyValue = &mInfo.integerDotProductCapabilities;
+            copySize  = sizeof(mInfo.integerDotProductCapabilities);
+            break;
+        case DeviceInfo::IntegerDotProductAccelerationProperties8bit:
+            copyValue = &mInfo.integerDotProductAccelerationProperties8Bit;
+            copySize  = sizeof(mInfo.integerDotProductAccelerationProperties8Bit);
+            break;
+
+        case DeviceInfo::IntegerDotProductAccelerationProperties4x8bitPacked:
+            copyValue = &mInfo.integerDotProductAccelerationProperties4x8BitPacked;
+            copySize  = sizeof(mInfo.integerDotProductAccelerationProperties4x8BitPacked);
             break;
 
         // Handle all mapped values
@@ -414,6 +441,31 @@ bool Device::supportsImageDimensions(const ImageDescriptor &desc) const
             break;
     }
     return false;
+}
+
+bool Device::hasDeviceEnqueueCaps() const
+{
+    return mInfo.queueOnDeviceMaxSize > 0;
+}
+
+bool Device::supportsNonUniformWorkGroups() const
+{
+    cl_bool support = false;
+
+    if (getPlatform().isVersionOrNewer(3, 0))
+    {
+        if (IsError(mImpl->getInfoUInt(DeviceInfo::NonUniformWorkGroupSupport, &support)))
+        {
+            UNREACHABLE();
+        }
+    }
+    else
+    {
+        // Check older platforms support via device extension
+        support = getInfo().armNonUniformWorkGroupSize;
+    }
+
+    return support;
 }
 
 Device::Device(Platform &platform,

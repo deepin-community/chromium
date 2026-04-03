@@ -57,7 +57,7 @@ const int kMinWindowHeight = 17;
 
 - (void)save:(NSNotification*)notification {
   ScopedDictPrefUpdate update(_prefService, _path);
-  base::Value::Dict& windowPrefs = update.Get();
+  base::DictValue& windowPrefs = update.Get();
   NSRect frame = [_window frame];
   if ([_window styleMask] & NSWindowStyleMaskResizable) {
     // Save the origin of the window.
@@ -77,7 +77,7 @@ const int kMinWindowHeight = 17;
 
 - (void)restore {
   // Get the positioning information.
-  const base::Value::Dict& windowPrefs = _prefService->GetDict(_path);
+  const base::DictValue& windowPrefs = _prefService->GetDict(_path);
   if ([_window styleMask] & NSWindowStyleMaskResizable) {
     std::optional<int> x1 = windowPrefs.FindInt("left");
     std::optional<int> x2 = windowPrefs.FindInt("right");
@@ -91,7 +91,7 @@ const int kMinWindowHeight = 17;
         y2.value() - y1.value() < kMinWindowHeight) {
       // Windows should never be very small.
       ScopedDictPrefUpdate update(_prefService, _path);
-      base::Value::Dict& mutableWindowPrefs = update.Get();
+      base::DictValue& mutableWindowPrefs = update.Get();
       mutableWindowPrefs.Remove("left");
       mutableWindowPrefs.Remove("right");
       mutableWindowPrefs.Remove("top");
@@ -108,8 +108,9 @@ const int kMinWindowHeight = 17;
   } else {
     std::optional<int> x = windowPrefs.FindInt("x");
     std::optional<int> y = windowPrefs.FindInt("y");
-    if (!x.has_value() || !y.has_value())
+    if (!x.has_value() || !y.has_value()) {
       return;  // Nothing stored.
+    }
     // Turn the origin (lower-left) into an upper-left window point.
     NSPoint upperLeft =
         NSMakePoint(x.value(), y.value() + NSHeight([_window frame]));

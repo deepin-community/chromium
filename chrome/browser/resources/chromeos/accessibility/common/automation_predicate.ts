@@ -7,6 +7,10 @@
  */
 import {constants} from './constants.js';
 import {TestImportManager} from './testing/test_import_manager.js';
+// Required for AccessibilityExtensionAutomationPredicateTest
+import {createMockNode} from './testing/test_node_generator.js';
+
+TestImportManager.exportForTesting(createMockNode);
 
 import ActionType = chrome.automation.ActionType;
 import AutomationNode = chrome.automation.AutomationNode;
@@ -167,9 +171,9 @@ export namespace AutomationPredicate {
   export function touchLeaf(node: AutomationNode): boolean {
     return Boolean(!node.firstChild && node.name) ||
         node.role === Role.BUTTON || node.role === Role.CHECK_BOX ||
-        node.role === Role.POP_UP_BUTTON || node.role === Role.PORTAL ||
-        node.role === Role.RADIO_BUTTON || node.role === Role.SLIDER ||
-        node.role === Role.SWITCH || node.role === Role.TEXT_FIELD ||
+        node.role === Role.POP_UP_BUTTON || node.role === Role.RADIO_BUTTON ||
+        node.role === Role.SLIDER || node.role === Role.SWITCH ||
+        node.role === Role.TEXT_FIELD ||
         node.role === Role.TEXT_FIELD_WITH_COMBO_BOX ||
         (node.role === Role.MENU_ITEM && !hasActionableDescendant(node)) ||
         AutomationPredicate.image(node) ||
@@ -371,6 +375,7 @@ export namespace AutomationPredicate {
           Role.BUTTON,
           Role.CELL,
           Role.CHECK_BOX,
+          Role.GRID_CELL,
           Role.RADIO_BUTTON,
           Role.SWITCH,
         ].includes(node.role!) &&
@@ -481,7 +486,7 @@ export namespace AutomationPredicate {
       return true;
     }
 
-    // Ignore structural containres.
+    // Ignore structural containers.
     if (AutomationPredicate.structuralContainer(node)) {
       return true;
     }
@@ -660,8 +665,7 @@ export namespace AutomationPredicate {
 
   export function math(node: AutomationNode): boolean {
     // TODO(b/314203187): Not null asserted, check to make sure it's correct.
-    return node.role === Role.MATH ||
-        Boolean(node.htmlAttributes!['data-mathml']);
+    return Boolean(node.mathContent);
   }
 
   /** Matches against nodes visited during group navigation. */
@@ -766,7 +770,6 @@ export namespace AutomationPredicate {
       Role.MENU_ITEM,
       Role.MENU_ITEM_CHECK_BOX,
       Role.MENU_ITEM_RADIO,
-      Role.MENU_LIST_OPTION,
       Role.SCROLL_BAR,
     ],
   });
@@ -797,6 +800,7 @@ export namespace AutomationPredicate {
     Role.LAYOUT_TABLE,
     Role.LAYOUT_TABLE_CELL,
     Role.LAYOUT_TABLE_ROW,
+    Role.MENU_LIST_POPUP,
     Role.ROOT_WEB_AREA,
     Role.WEB_VIEW,
     Role.WINDOW,
@@ -818,11 +822,11 @@ export namespace AutomationPredicate {
     ],
   });
 
-  // TODO(b/314203187): Not null asserted, check to make sure it's correct.
   export const longClickable = AutomationPredicate.match({
     anyPredicate: [
-      node => node.standardActions!.includes(
-          chrome.automation.ActionType.LONG_CLICK),
+      node => node.standardActions?.includes(
+                  chrome.automation.ActionType.LONG_CLICK) ??
+          false,
       // @ts-ignore Long clickable doesn't seem to be a property?
       node => node.longClickable === true,
     ],
@@ -834,9 +838,8 @@ export namespace AutomationPredicate {
 
   // Table related predicates.
   /** Returns if the node has a cell like role. */
-  export const cellLike =
-      AutomationPredicate.roles(
-        [Role.CELL, Role.ROW_HEADER, Role.COLUMN_HEADER]);
+  export const cellLike = AutomationPredicate.roles(
+      [Role.CELL, Role.GRID_CELL, Role.ROW_HEADER, Role.COLUMN_HEADER]);
 
   /** Returns if the node is a table header. */
   export const tableHeader =
@@ -845,6 +848,9 @@ export namespace AutomationPredicate {
   /** Matches against nodes that we may be able to retrieve image data from. */
   export const supportsImageData =
       AutomationPredicate.roles([Role.CANVAS, Role.IMAGE, Role.VIDEO]);
+
+  /** Matches against menu like nodes. */
+  export const menu = AutomationPredicate.roles([Role.MENU, Role.MENU_BAR]);
 
   /** Matches against menu item like nodes. */
   export const menuItem = AutomationPredicate.roles(

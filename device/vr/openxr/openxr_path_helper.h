@@ -20,10 +20,11 @@ class OpenXRPathHelper {
   OpenXRPathHelper();
   ~OpenXRPathHelper();
 
-  XrResult Initialize(XrInstance instance, XrSystemId system);
+  XrResult Initialize(XrInstance instance, const std::string& system_name);
 
   std::vector<std::string> GetInputProfiles(
-      mojom::OpenXrInteractionProfileType interaction_profile) const;
+      mojom::OpenXrInteractionProfileType interaction_profile,
+      bool hand_joints_enabled) const;
 
   mojom::OpenXrInteractionProfileType GetInputProfileType(
       XrPath interaction_profile) const;

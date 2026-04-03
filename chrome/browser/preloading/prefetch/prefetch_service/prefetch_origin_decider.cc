@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/json/values_util.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/time/time.h"
 #include "chrome/browser/prefetch/pref_names.h"
@@ -72,7 +73,7 @@ void PrefetchOriginDecider::ReportOriginRetryAfter(
 void PrefetchOriginDecider::LoadFromPrefs() {
   origin_retry_afters_.clear();
 
-  const base::Value::Dict& dictionary =
+  const base::DictValue& dictionary =
       pref_service_->GetDict(prefetch::prefs::kRetryAfterPrefPath);
 
   for (auto element : dictionary) {
@@ -80,7 +81,7 @@ void PrefetchOriginDecider::LoadFromPrefs() {
     if (!url_origin.is_valid()) {
       // This may happen in the case of corrupted prefs, or otherwise. Handle
       // gracefully.
-      NOTREACHED();
+      DLOG(FATAL) << "Bad URL origin in prefs";
       continue;
     }
 
@@ -88,7 +89,7 @@ void PrefetchOriginDecider::LoadFromPrefs() {
     if (!retry_after) {
       // This may happen in the case of corrupted prefs, or otherwise. Handle
       // gracefully.
-      NOTREACHED();
+      DLOG(FATAL) << "Bad retry after time in prefs";
       continue;
     }
 
@@ -98,7 +99,7 @@ void PrefetchOriginDecider::LoadFromPrefs() {
 }
 
 void PrefetchOriginDecider::SaveToPrefs() const {
-  base::Value::Dict dictionary;
+  base::DictValue dictionary;
   for (const auto& element : origin_retry_afters_) {
     std::string key = element.first.GetURL().spec();
     base::Value value = base::TimeToValue(element.second);

@@ -7,10 +7,10 @@
 #include <string>
 #include <vector>
 
+#include "core/fxcrt/containers/adapters.h"
 #include "public/fpdf_formfill.h"
 #include "testing/fuzzers/pdf_fuzzer_templates.h"
 #include "testing/fuzzers/pdfium_fuzzer_helper.h"
-#include "third_party/base/containers/adapters.h"
 
 class PDFiumXFAFuzzer : public PDFiumFuzzerHelper {
  public:
@@ -25,8 +25,10 @@ class PDFiumXFAFuzzer : public PDFiumFuzzerHelper {
   // done by the non-xfa fuzzer.
   bool OnFormFillEnvLoaded(FPDF_DOCUMENT doc) override {
     int form_type = FPDF_GetFormType(doc);
-    if (form_type != FORMTYPE_XFA_FULL && form_type != FORMTYPE_XFA_FOREGROUND)
+    if (form_type != FORMTYPE_XFA_FULL &&
+        form_type != FORMTYPE_XFA_FOREGROUND) {
       return false;
+    }
     return FPDF_LoadXFA(doc);
   }
 
@@ -878,7 +880,7 @@ std::string GenXfaTree(FuzzedDataProvider* data_provider) {
       // Push the tag to the stack so we can close it when done
       xml_stack.push_back(tag);
     }
-    for (const std::string& tag : pdfium::base::Reversed(xml_stack)) {
+    for (const std::string& tag : pdfium::Reversed(xml_stack)) {
       xfa_string += "</" + tag + ">";
     }
   }

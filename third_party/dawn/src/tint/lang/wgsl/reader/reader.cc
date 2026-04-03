@@ -38,11 +38,10 @@
 namespace tint::wgsl::reader {
 
 Program Parse(const Source::File* file, const Options& options) {
-    if (TINT_UNLIKELY(file->content.data.size() >
+    if (DAWN_UNLIKELY(file->content.data.size() >
                       static_cast<size_t>(std::numeric_limits<uint32_t>::max()))) {
         ProgramBuilder b;
-        b.Diagnostics().AddError(tint::diag::System::Reader,
-                                 "WGSL source must be 0xffffffff bytes or fewer");
+        b.Diagnostics().AddError(tint::Source{}) << "WGSL source must be 0xffffffff bytes or fewer";
         return Program(std::move(b));
     }
     Parser parser(file);
@@ -52,30 +51,30 @@ Program Parse(const Source::File* file, const Options& options) {
 
 Result<core::ir::Module> WgslToIR(const Source::File* file, const Options& options) {
     Program program = Parse(file, options);
-    auto module = ProgramToIR(program);
-    if (module != Success) {
-        return module.Failure();
-    }
-    // WGSL-dialect -> core-dialect
-    if (auto res = Lower(module.Get()); res != Success) {
-        return res.Failure();
-    }
-    return module;
+    return ProgramToLoweredIR(program);
 }
 
-tint::Result<core::ir::Module> ProgramToLoweredIR(const Program& program) {
-    auto ir = tint::wgsl::reader::ProgramToIR(program);
-    if (ir != Success) {
-        return ir.Failure();
-    }
+Result<core::ir::Module> ProgramToLoweredIR(const Program& program,
+                                            InternalCompilerErrorCallback ice_callback) {
+    TINT_CHECK_RESULT_UNWRAP(ir, ProgramToIR(program));
+    ir.ice_callback = ice_callback;
 
     // Lower from WGSL-dialect to core-dialect
-    auto res = tint::wgsl::reader::Lower(ir.Get());
-    if (res != Success) {
-        return res.Failure();
-    }
+    TINT_CHECK_RESULT(Lower(ir));
 
     return ir;
+}
+
+bool IsUnsupportedByIR(const ast::Enable* enable) {
+    for (auto ext : enable->extensions) {
+        switch (ext->name) {
+            case tint::wgsl::Extension::kChromiumExperimentalFramebufferFetch:
+                return true;
+            default:
+                break;
+        }
+    }
+    return false;
 }
 
 }  // namespace tint::wgsl::reader

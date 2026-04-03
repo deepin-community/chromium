@@ -34,7 +34,7 @@ void DisplayHandler::RegisterMessages() {
                           base::Unretained(this)));
 }
 
-void DisplayHandler::HandleHighlightDisplay(const base::Value::List& args) {
+void DisplayHandler::HandleHighlightDisplay(const base::ListValue& args) {
   AllowJavascript();
 
   int64_t display_id;
@@ -48,7 +48,7 @@ void DisplayHandler::HandleHighlightDisplay(const base::Value::List& args) {
   cros_display_config_->HighlightDisplay(display_id);
 }
 
-void DisplayHandler::HandleDragDisplayDelta(const base::Value::List& args) {
+void DisplayHandler::HandleDragDisplayDelta(const base::ListValue& args) {
   DCHECK_EQ(3U, args.size());
   AllowJavascript();
 
@@ -59,7 +59,6 @@ void DisplayHandler::HandleDragDisplayDelta(const base::Value::List& args) {
   int64_t display_id;
   if (!base::StringToInt64(display_id_str, &display_id)) {
     NOTREACHED() << "Unable to parse |display_id| for HandleDragDisplayDelta";
-    return;
   }
 
   cros_display_config_->DragDisplayDelta(display_id, delta_x, delta_y);

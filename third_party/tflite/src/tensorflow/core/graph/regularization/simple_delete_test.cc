@@ -15,21 +15,25 @@ limitations under the License.
 
 #include "tensorflow/core/graph/regularization/simple_delete.h"
 
+#include <cstdint>
 #include <string>
 
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "tensorflow/core/graph/regularization/util.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/path.h"
-#include "tensorflow/core/platform/statusor.h"
 #include "tensorflow/core/platform/test.h"
+#include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/protobuf/meta_graph.pb.h"
 #include "tensorflow/core/protobuf/saved_model.pb.h"
+#include "tsl/platform/statusor.h"
 
 namespace tensorflow::graph_regularization {
 
 namespace {
 
-StatusOr<SavedModel> ReadSavedModel(absl::string_view file_dir) {
+absl::StatusOr<SavedModel> ReadSavedModel(absl::string_view file_dir) {
   std::string file_path = io::JoinPath(file_dir, "saved_model.pb");
   std::string serialized_saved_model;
   auto status =
@@ -54,7 +58,7 @@ TEST(SimpleDeleteTest, TestSimpleDeleteModelSavedTwice) {
   MetaGraphDef* metagraph = saved_model_pb.mutable_meta_graphs(0);
   GraphDef* graph_def = metagraph->mutable_graph_def();
   SimpleDelete(*graph_def);
-  uint64 hash1 = ComputeHash(*graph_def);
+  uint64_t hash1 = ComputeHash(*graph_def);
 
   const std::string export_dir2 =
       io::JoinPath(testing::TensorFlowSrcRoot(),
@@ -64,7 +68,7 @@ TEST(SimpleDeleteTest, TestSimpleDeleteModelSavedTwice) {
   const MetaGraphDef& metagraph2 = saved_model_pb2.meta_graphs(0);
   GraphDef graph_def2 = metagraph2.graph_def();
   SimpleDelete(graph_def2);
-  uint64 hash2 = ComputeHash(graph_def2);
+  uint64_t hash2 = ComputeHash(graph_def2);
 
   EXPECT_EQ(hash1, hash2);
 }

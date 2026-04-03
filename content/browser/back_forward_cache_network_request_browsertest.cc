@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "build/build_config.h"
 #include "content/browser/back_forward_cache_browsertest.h"
 
+#include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "build/build_config.h"
 #include "content/browser/renderer_host/navigation_request.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/test/browser_test.h"
@@ -64,7 +65,7 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest, FetchWhileStoring) {
 
 // Eviction is triggered when a normal fetch request gets redirected while the
 // page is in back-forward cache.
-// TODO(https://crbug.com/1494692): Disabled due to flakiness.
+// TODO(crbug.com/40937269): Disabled due to flakiness.
 IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
                        DISABLED_FetchRedirectedWhileStoring) {
   net::test_server::ControllableHttpResponse fetch_response(
@@ -115,9 +116,9 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
 
 // Eviction is triggered when a keepalive fetch request gets redirected while
 // the page is in back-forward cache.
-// TODO(https://crbug.com/1137682): We should not trigger eviction on redirects
+// TODO(crbug.com/40724916): We should not trigger eviction on redirects
 // of keepalive fetches.
-// TODO(https://crbug.com/1377737): Disabled for flakiness.
+// TODO(crbug.com/40874525): Disabled for flakiness.
 IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
                        DISABLED_KeepAliveFetchRedirectedWhileStoring) {
   net::test_server::ControllableHttpResponse fetch_response(
@@ -153,7 +154,7 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
 
   // Ensure that the request to /fetch2 was never sent (because the page is
   // immediately evicted) by checking after 3 seconds.
-  // TODO(https://crbug.com/1137682): We should not trigger eviction on
+  // TODO(crbug.com/40724916): We should not trigger eviction on
   // redirects of keepalive fetches and the redirect request should be sent.
   base::RunLoop loop;
   base::OneShotTimer timer;
@@ -381,9 +382,17 @@ INSTANTIATE_TEST_SUITE_P(
       }
     });
 
+// TODO(crbug.com/448737648): Flaky on MacOS.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_PageWithDrainedDatapipeRequestsForScriptStreamerShouldBeEvictedIfStreamedTooMuch \
+  DISABLED_PageWithDrainedDatapipeRequestsForScriptStreamerShouldBeEvictedIfStreamedTooMuch
+#else
+#define MAYBE_PageWithDrainedDatapipeRequestsForScriptStreamerShouldBeEvictedIfStreamedTooMuch \
+  PageWithDrainedDatapipeRequestsForScriptStreamerShouldBeEvictedIfStreamedTooMuch
+#endif
 IN_PROC_BROWSER_TEST_P(
     BackForwardCacheNetworkLimitBrowserTest,
-    PageWithDrainedDatapipeRequestsForScriptStreamerShouldBeEvictedIfStreamedTooMuch) {
+    MAYBE_PageWithDrainedDatapipeRequestsForScriptStreamerShouldBeEvictedIfStreamedTooMuch) {
   net::test_server::ControllableHttpResponse response(embedded_test_server(),
                                                       "/small_script.js");
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -1125,21 +1134,8 @@ IN_PROC_BROWSER_TEST_F(
                     FROM_HERE);
 }
 
-class BackForwardCacheWithKeepaliveSupportBrowserTest
-    : public BackForwardCacheBrowserTest {
- public:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    EnableFeatureAndSetParams(
-        blink::features::kBackForwardCacheWithKeepaliveRequest, "", "");
-
-    BackForwardCacheBrowserTest::SetUpCommandLine(command_line);
-  }
-};
-
-// With the feature, keepalive doesn't prevent the page from entering into the
-// bfcache.
-IN_PROC_BROWSER_TEST_F(BackForwardCacheWithKeepaliveSupportBrowserTest,
-                       KeepAliveFetch) {
+// Keepalive doesn't prevent the page from entering into the bfcache.
+IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest, KeepAliveFetch) {
   net::test_server::ControllableHttpResponse fetch_response(
       embedded_test_server(), "/fetch");
   ASSERT_TRUE(embedded_test_server()->Start());

@@ -8,10 +8,10 @@
 
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
-#include "ash/test/test_widget_builder.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/views/test/test_widget_builder.h"
 
 namespace ash {
 
@@ -27,13 +27,13 @@ class BubbleEventFilterTest : public AshTestBase,
   // testing::Test:
   void SetUp() override {
     AshTestBase::SetUp();
-    widget_ = TestWidgetBuilder()
+    widget_ = views::test::TestWidgetBuilder()
                   .SetBounds({10, 10, 100, 100})
                   .SetShow(true)
                   .BuildOwnsNativeWidget();
     // Create a separate Widget to host the View. A View must live in a Widget
     // to have valid screen coordinates.
-    view_holder_widget_ = TestWidgetBuilder()
+    view_holder_widget_ = views::test::TestWidgetBuilder()
                               .SetBounds({500, 500, 100, 100})
                               .SetShow(true)
                               .BuildOwnsNativeWidget();
@@ -62,7 +62,8 @@ INSTANTIATE_TEST_SUITE_P(MouseOrTouch, BubbleEventFilterTest, testing::Bool());
 
 TEST_P(BubbleEventFilterTest, ClickOutsideWidgetRunsCallback) {
   int callback_count = 0;
-  auto callback = base::BindLambdaForTesting([&]() { ++callback_count; });
+  auto callback = base::BindLambdaForTesting(
+      [&](const ui::LocatedEvent& event) { ++callback_count; });
   BubbleEventFilter filter(widget_.get(), view_, callback);
 
   // Click outside the widget.
@@ -75,7 +76,8 @@ TEST_P(BubbleEventFilterTest, ClickOutsideWidgetRunsCallback) {
 
 TEST_P(BubbleEventFilterTest, ClickInsideWidgetDoesNotRunCallback) {
   bool callback_ran = false;
-  auto callback = base::BindLambdaForTesting([&]() { callback_ran = true; });
+  auto callback = base::BindLambdaForTesting(
+      [&](const ui::LocatedEvent& event) { callback_ran = true; });
   BubbleEventFilter filter(widget_.get(), view_, callback);
 
   // Click inside the widget.
@@ -86,7 +88,8 @@ TEST_P(BubbleEventFilterTest, ClickInsideWidgetDoesNotRunCallback) {
 
 TEST_P(BubbleEventFilterTest, ClickInsideViewDoesNotRunCallback) {
   bool callback_ran = false;
-  auto callback = base::BindLambdaForTesting([&]() { callback_ran = true; });
+  auto callback = base::BindLambdaForTesting(
+      [&](const ui::LocatedEvent& event) { callback_ran = true; });
   BubbleEventFilter filter(widget_.get(), view_, callback);
 
   // Click inside the view.

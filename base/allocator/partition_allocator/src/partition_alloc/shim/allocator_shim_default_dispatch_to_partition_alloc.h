@@ -2,19 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_DEFAULT_DISPATCH_TO_PARTITION_ALLOC_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_DEFAULT_DISPATCH_TO_PARTITION_ALLOC_H_
+#ifndef PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_DEFAULT_DISPATCH_TO_PARTITION_ALLOC_H_
+#define PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_DEFAULT_DISPATCH_TO_PARTITION_ALLOC_H_
 
-#include "partition_alloc/partition_alloc_buildflags.h"
+#include "partition_alloc/buildflags.h"
 
-#if BUILDFLAG(USE_ALLOCATOR_SHIM)
+#if PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
 #include "partition_alloc/partition_alloc.h"
 #include "partition_alloc/partition_alloc_base/component_export.h"
+#include "partition_alloc/shim/allocator_dispatch.h"
 #include "partition_alloc/shim/allocator_shim.h"
 
 namespace allocator_shim {
-
-struct AllocatorDispatch;
 
 namespace internal {
 
@@ -24,68 +23,196 @@ class PA_COMPONENT_EXPORT(ALLOCATOR_SHIM) PartitionAllocMalloc {
   // allocators are effectively set in stone.
   static bool AllocatorConfigurationFinalized();
 
-  static partition_alloc::PartitionRoot* Allocator();
-  // May return |nullptr|, will never return the same pointer as |Allocator()|.
-  static partition_alloc::PartitionRoot* OriginalAllocator();
+  // TODO(crbug.com/477186304): Remove default value for `alloc_token`, once all
+  // callers are updated and verified to make configuration for all roots.
+  static partition_alloc::PartitionRoot* Allocator(
+      AllocToken alloc_token = kDefaultAllocToken);
+  // May return |nullptr|, will never return the same pointer as  |Allocator()|.
+  static partition_alloc::PartitionRoot* OriginalAllocator(
+      AllocToken alloc_token = kDefaultAllocToken);
 };
 
-PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
-void* PartitionMalloc(const AllocatorDispatch*, size_t size, void* context);
+template <partition_alloc::AllocFlags base_alloc_flags,
+          partition_alloc::FreeFlags base_free_flags>
+class PartitionAllocFunctionsInternal {
+ public:
+  static void* Malloc(size_t size, AllocToken alloc_token, void* context);
 
-PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
-void* PartitionMallocUnchecked(const AllocatorDispatch*,
-                               size_t size,
+  static void* MallocUnchecked(size_t size,
+                               AllocToken alloc_token,
                                void* context);
 
-PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
-void* PartitionCalloc(const AllocatorDispatch*,
-                      size_t n,
+  static void* Calloc(size_t n,
                       size_t size,
+                      AllocToken alloc_token,
                       void* context);
 
-PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
-void* PartitionMemalign(const AllocatorDispatch*,
-                        size_t alignment,
+  static void* CallocUnchecked(size_t n,
+                               size_t size,
+                               AllocToken alloc_token,
+                               void* context);
+
+  static void* Memalign(size_t alignment,
                         size_t size,
+                        AllocToken alloc_token,
                         void* context);
 
-PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
-void* PartitionAlignedAlloc(const AllocatorDispatch* dispatch,
-                            size_t size,
+  static void* AlignedAlloc(size_t size,
                             size_t alignment,
+                            AllocToken alloc_token,
                             void* context);
 
-PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
-void* PartitionAlignedRealloc(const AllocatorDispatch* dispatch,
-                              void* address,
+  static void* AlignedAllocUnchecked(size_t size,
+                                     size_t alignment,
+                                     AllocToken alloc_token,
+                                     void* context);
+
+  static void* AlignedRealloc(void* address,
                               size_t size,
                               size_t alignment,
+                              AllocToken alloc_token,
                               void* context);
 
-PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
-void* PartitionRealloc(const AllocatorDispatch*,
-                       void* address,
+  static void* AlignedReallocUnchecked(void* address,
+                                       size_t size,
+                                       size_t alignment,
+                                       AllocToken alloc_token,
+                                       void* context);
+
+  static void* Realloc(void* address,
                        size_t size,
+                       AllocToken alloc_token,
                        void* context);
 
-PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
-void PartitionFree(const AllocatorDispatch*, void* object, void* context);
-
-PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
-size_t PartitionGetSizeEstimate(const AllocatorDispatch*,
-                                void* address,
+  static void* ReallocUnchecked(void* address,
+                                size_t size,
+                                AllocToken alloc_token,
                                 void* context);
+
+  static void Free(void* object, void* context);
+
+  static void FreeWithSize(void* object, size_t size, void* context);
+
+  static void FreeWithAlignment(void* object, size_t alignment, void* context);
+
+  static void FreeWithSizeAndAlignment(void* object,
+                                       size_t size,
+                                       size_t alignment,
+                                       void* context);
+
+  static size_t GetSizeEstimate(void* address, void* context);
+
+#if PA_BUILDFLAG(IS_APPLE)
+  static size_t GoodSize(size_t size, void* context);
+
+  static bool ClaimedAddress(void* address, void* context);
+#endif  // PA_BUILDFLAG(IS_APPLE)
+
+  static unsigned BatchMalloc(size_t size,
+                              void** results,
+                              unsigned num_requested,
+                              void* context);
+
+  static void BatchFree(void** to_be_freed,
+                        unsigned num_to_be_freed,
+                        void* context);
+
+#if PA_BUILDFLAG(IS_APPLE)
+  static void TryFreeDefault(void* address, void* context);
+#endif  // PA_BUILDFLAG(IS_APPLE)
+
+  static constexpr AllocatorDispatch MakeDispatch() {
+    return {
+        &Malloc,                    // alloc_function
+        &MallocUnchecked,           // alloc_unchecked_function
+        &Calloc,                    // alloc_zero_initialized_function
+        &CallocUnchecked,           // alloc_zero_initialized_unchecked_function
+        &Memalign,                  // alloc_aligned_function
+        &Realloc,                   // realloc_function
+        &ReallocUnchecked,          // realloc_unchecked_function
+        &Free,                      // free_function
+        &FreeWithSize,              // free_with_size_function
+        &FreeWithAlignment,         // free_with_alignment_function
+        &FreeWithSizeAndAlignment,  // free_with_size_and_alignment_function
+        &GetSizeEstimate,           // get_size_estimate_function
+#if PA_BUILDFLAG(IS_APPLE)
+        &GoodSize,        // good_size
+        &ClaimedAddress,  // claimed_address
+#else
+        nullptr,  // good_size
+        nullptr,  // claimed_address
+#endif
+        &BatchMalloc,  // batch_malloc_function
+        &BatchFree,    // batch_free_function
+#if PA_BUILDFLAG(IS_APPLE)
+        // On Apple OSes, try_free_default() is sometimes called as an
+        // optimization of free().
+        &TryFreeDefault,
+#else
+        nullptr,  // try_free_default_function
+#endif
+        &AlignedAlloc,             // aligned_malloc_function
+        &AlignedAllocUnchecked,    // aligned_malloc_unchecked_function
+        &AlignedRealloc,           // aligned_realloc_function
+        &AlignedReallocUnchecked,  // aligned_realloc_unchecked_function
+        &Free,                     // aligned_free_function
+        nullptr,                   // next
+    };
+  }
+};
+
+using PartitionAllocFunctions =
+    PartitionAllocFunctionsInternal<partition_alloc::AllocFlags::kNoHooks,
+                                    partition_alloc::FreeFlags::kNoHooks>;
+using PartitionAllocWithAdvancedChecksFunctions =
+    PartitionAllocFunctionsInternal<
+        partition_alloc::AllocFlags::kNoHooks,
+        partition_alloc::FreeFlags::kNoHooks |
+            partition_alloc::FreeFlags::kSchedulerLoopQuarantine>;
+
+// `PartitionAllocFunctions` in instantiated in cc file.
+extern template class PA_EXPORT_TEMPLATE_DECLARE(
+    PA_COMPONENT_EXPORT(ALLOCATOR_SHIM))
+    PartitionAllocFunctionsInternal<partition_alloc::AllocFlags::kNoHooks,
+                                    partition_alloc::FreeFlags::kNoHooks>;
+// `PartitionAllocWithAdvancedChecksFunctions` in instantiated in cc file.
+extern template class PA_EXPORT_TEMPLATE_DECLARE(
+    PA_COMPONENT_EXPORT(ALLOCATOR_SHIM))
+    PartitionAllocFunctionsInternal<
+        partition_alloc::AllocFlags::kNoHooks,
+        partition_alloc::FreeFlags::kNoHooks |
+            partition_alloc::FreeFlags::kSchedulerLoopQuarantine>;
 
 }  // namespace internal
 
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
+void InstallPartitionAllocWithAdvancedChecks();
+
+PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
+void InstallCustomDispatchForTesting(AllocatorDispatch* dispatch);
+
+PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
+void UninstallCustomDispatch();
+
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 // Provide a ConfigurePartitions() helper, to mimic what Chromium uses. This way
 // we're making it more resilient to ConfigurePartitions() interface changes, so
 // that we don't have to modify multiple callers. This is particularly important
 // when callers are in a different repo, like PDFium or Dawn.
+// -----------------------------------------------------------------------------
+// DO NOT MODIFY this signature. This is meant for partition_alloc's embedders
+// only, so that partition_alloc can evolve without breaking them.
+// Chromium/PartitionAlloc are part of the same repo, they must not depend on
+// this function. They should call ConfigurePartitions() directly.
 PA_ALWAYS_INLINE void ConfigurePartitionsForTesting() {
   auto enable_brp = allocator_shim::EnableBrp(true);
-  auto enable_memory_tagging = allocator_shim::EnableMemoryTagging(false);
+  size_t brp_extra_extras_size = 0;
+
+  // Embedders's tests might benefit from MTE checks. However, this is costly
+  // and shouldn't be used in benchmarks.
+  auto enable_memory_tagging = allocator_shim::EnableMemoryTagging(
+      PA_BUILDFLAG(HAS_MEMORY_TAGGING) && PA_BUILDFLAG(DCHECKS_ARE_ON));
+
   // Since the only user of this function is a test function, we use
   // synchronous reporting mode, if MTE is enabled.
   auto memory_tagging_reporting_mode =
@@ -93,19 +220,33 @@ PA_ALWAYS_INLINE void ConfigurePartitionsForTesting() {
           ? partition_alloc::TagViolationReportingMode::kSynchronous
           : partition_alloc::TagViolationReportingMode::kDisabled;
   auto distribution = BucketDistribution::kNeutral;
-  auto scheduler_loop_quarantine = SchedulerLoopQuarantine(false);
-  size_t scheduler_loop_quarantine_capacity_in_bytes = 0;
-  auto zapping_by_free_flags = ZappingByFreeFlags(false);
+
+  auto scheduler_loop_quarantine_global_config =
+      partition_alloc::internal::SchedulerLoopQuarantineConfig();
+  auto scheduler_loop_quarantine_thread_local_config =
+      partition_alloc::internal::SchedulerLoopQuarantineConfig();
+  auto scheduler_loop_quarantine_for_advanced_memory_safety_checks_config =
+      partition_alloc::internal::SchedulerLoopQuarantineConfig();
+
+  auto eventually_zero_freed_memory = EventuallyZeroFreedMemory(false);
+  auto enable_free_with_size = allocator_shim::EnableFreeWithSize(
+      PA_BUILDFLAG(SHIM_SUPPORTS_SIZED_DEALLOC));
+  auto enable_strict_free_size_check =
+      allocator_shim::EnableStrictFreeSizeCheck(true);
 
   ConfigurePartitions(
-      enable_brp, enable_memory_tagging, memory_tagging_reporting_mode,
-      distribution, scheduler_loop_quarantine,
-      scheduler_loop_quarantine_capacity_in_bytes, zapping_by_free_flags);
+      enable_brp, brp_extra_extras_size, enable_memory_tagging,
+      memory_tagging_reporting_mode, distribution,
+      scheduler_loop_quarantine_global_config,
+      scheduler_loop_quarantine_thread_local_config,
+      scheduler_loop_quarantine_for_advanced_memory_safety_checks_config,
+      eventually_zero_freed_memory, enable_free_with_size,
+      enable_strict_free_size_check);
 }
-#endif  // BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 
 }  // namespace allocator_shim
 
-#endif  // BUILDFLAG(USE_ALLOCATOR_SHIM)
+#endif  // PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_DEFAULT_DISPATCH_TO_PARTITION_ALLOC_H_
+#endif  // PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_DEFAULT_DISPATCH_TO_PARTITION_ALLOC_H_

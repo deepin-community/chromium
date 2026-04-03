@@ -7,14 +7,15 @@
 #include "base/containers/flat_map.h"
 #include "base/feature_list.h"
 #include "build/build_config.h"
-#include "components/autofill/core/browser/autofill_type.h"
+#include "components/autofill/core/browser/autofill_server_prediction.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/unique_ids.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 
-using autofill::AutofillType;
+using autofill::AutofillServerPrediction;
 using autofill::CalculateFieldSignatureForField;
 using autofill::CalculateFormSignature;
 using autofill::FieldGlobalId;
@@ -27,22 +28,22 @@ namespace password_manager {
 
 namespace {
 
-FieldType GetServerType(const AutofillType::ServerPrediction& prediction) {
+FieldType GetServerType(const AutofillServerPrediction& prediction) {
   // The main server predictions is in `field.server_type()` but the server can
   // send additional predictions in `field.server_predictions()`. This function
   // chooses the relevant one for Password Manager predictions.
 
-  // 1. If there is cvc prediction returns it.
+  // 1. If there is credit card related prediction, return the prediction.
   for (const auto& server_predictions : prediction.server_predictions) {
-    if (server_predictions.type() == autofill::CREDIT_CARD_VERIFICATION_CODE) {
-      return autofill::CREDIT_CARD_VERIFICATION_CODE;
+    FieldType type = static_cast<FieldType>(server_predictions.type());
+    if (GroupTypeOfFieldType(type) == autofill::FieldTypeGroup::kCreditCard) {
+      return type;
     }
   }
 
   // 2. If there is password related prediction returns it.
   for (const auto& server_predictions : prediction.server_predictions) {
-    FieldType type =
-        ToSafeFieldType(server_predictions.type(), FieldType::NO_SERVER_DATA);
+    FieldType type = static_cast<FieldType>(server_predictions.type());
     if (DeriveFromFieldType(type) != CredentialFieldType::kNone) {
       return type;
     }
@@ -54,6 +55,10 @@ FieldType GetServerType(const AutofillType::ServerPrediction& prediction) {
 }  // namespace
 
 CredentialFieldType DeriveFromFieldType(FieldType type) {
+  if (GroupTypeOfFieldType(type) == autofill::FieldTypeGroup::kCreditCard) {
+    return CredentialFieldType::kNonCredential;
+  }
+
   switch (type) {
     case autofill::USERNAME:
     case autofill::USERNAME_AND_EMAIL_ADDRESS:
@@ -69,10 +74,34 @@ CredentialFieldType DeriveFromFieldType(FieldType type) {
       return CredentialFieldType::kNewPassword;
     case autofill::CONFIRMATION_PASSWORD:
       return CredentialFieldType::kConfirmationPassword;
+    case autofill::NOT_PASSWORD:
+    case autofill::NOT_USERNAME:
+    case autofill::ONE_TIME_CODE:
+      return CredentialFieldType::kNonCredential;
     default:
       return CredentialFieldType::kNone;
   }
 }
+
+PasswordFieldPrediction::PasswordFieldPrediction(
+    autofill::FieldRendererId renderer_id,
+    autofill::FieldSignature signature,
+    autofill::FieldType type,
+    bool is_override)
+    : renderer_id(renderer_id),
+      signature(signature),
+      type(ToSafeFieldType(type, FieldType::NO_SERVER_DATA)),
+      is_override(is_override) {}
+
+PasswordFieldPrediction::PasswordFieldPrediction(
+    const PasswordFieldPrediction&) = default;
+PasswordFieldPrediction& PasswordFieldPrediction::operator=(
+    const PasswordFieldPrediction&) = default;
+PasswordFieldPrediction::PasswordFieldPrediction(PasswordFieldPrediction&&) =
+    default;
+PasswordFieldPrediction& PasswordFieldPrediction::operator=(
+    PasswordFieldPrediction&&) = default;
+PasswordFieldPrediction::~PasswordFieldPrediction() = default;
 
 FormPredictions::FormPredictions() = default;
 FormPredictions::FormPredictions(const FormPredictions&) = default;
@@ -84,7 +113,7 @@ FormPredictions::~FormPredictions() = default;
 FormPredictions ConvertToFormPredictions(
     int driver_id,
     const autofill::FormData& form,
-    const base::flat_map<FieldGlobalId, AutofillType::ServerPrediction>&
+    const base::flat_map<FieldGlobalId, AutofillServerPrediction>&
         predictions) {
   // This is a mostly mechanical transformation, except for the following case:
   // If there is no explicit CONFIRMATION_PASSWORD field, and there are two
@@ -101,7 +130,7 @@ FormPredictions ConvertToFormPredictions(
   FieldSignature last_new_password;
 
   bool explicit_confirmation_hint_present = false;
-  for (const auto& field : form.fields) {
+  for (const auto& field : form.fields()) {
     if (auto it = predictions.find(field.global_id());
         it != predictions.end() &&
         it->second.server_type() == autofill::CONFIRMATION_PASSWORD) {
@@ -111,10 +140,10 @@ FormPredictions ConvertToFormPredictions(
   }
 
   std::vector<PasswordFieldPrediction> field_predictions;
-  for (const auto& field : form.fields) {
+  for (const auto& field : form.fields()) {
     auto it = predictions.find(field.global_id());
     CHECK(it != predictions.end());
-    const AutofillType::ServerPrediction& autofill_prediction = it->second;
+    const AutofillServerPrediction& autofill_prediction = it->second;
     FieldType server_type = GetServerType(autofill_prediction);
 
     FieldSignature current_signature = CalculateFieldSignatureForField(field);
@@ -129,13 +158,9 @@ FormPredictions ConvertToFormPredictions(
       }
     }
 
-    field_predictions.emplace_back();
-    field_predictions.back().renderer_id = field.renderer_id;
-    field_predictions.back().signature = current_signature;
-    field_predictions.back().type = server_type;
-    field_predictions.back().may_use_prefilled_placeholder =
-        autofill_prediction.may_use_prefilled_placeholder.value_or(false);
-    field_predictions.back().is_override = autofill_prediction.is_override();
+    field_predictions.emplace_back(
+        field.renderer_id(), current_signature, server_type,
+        /*is_override=*/autofill_prediction.is_override());
   }
 
   FormPredictions result;

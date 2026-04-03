@@ -48,7 +48,7 @@ GraphDef SimpleTestGraph() {
 }
 
 template <typename T>
-const string GetGraphViewTypeAsString() {
+const std::string GetGraphViewTypeAsString() {
   return std::is_same<T, class GraphView>::value ? "GraphView"
                                                  : "MutableGraphView";
 }
@@ -63,7 +63,7 @@ TYPED_TEST(TypedGraphViewTest, GraphWithDuplicateNodeNames) {
   GraphDef graph =
       GDef({NDef("a", kNoOp, {}), NDef("a", kNoOp, {})}, /*funcs=*/{});
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   EXPECT_FALSE(s.ok());
   EXPECT_EQ(s.message(),
@@ -75,7 +75,7 @@ TYPED_TEST(TypedGraphViewTest, GraphWithDuplicateNodeNames) {
 TYPED_TEST(TypedGraphViewTest, GraphWithMissingFanins) {
   GraphDef graph = GDef({NDef("a", kNoOp, {"b:3"})}, /*funcs=*/{});
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   EXPECT_FALSE(s.ok());
   EXPECT_EQ(s.message(),
@@ -86,7 +86,7 @@ TYPED_TEST(TypedGraphViewTest, GraphWithMissingFanins) {
 TYPED_TEST(TypedGraphViewTest, GraphWithSelfCycles) {
   GraphDef graph = GDef({NDef("a", kNoOp, {"a:4"})}, /*funcs=*/{});
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   EXPECT_FALSE(s.ok());
   EXPECT_EQ(
@@ -99,7 +99,7 @@ TYPED_TEST(TypedGraphViewTest, GraphWithMisorderedFanins) {
   GraphDef graph = GDef({NDef("a", kNoOp, {"^b", "b:4"}), NDef("b", kNoOp, {})},
                         /*funcs=*/{});
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   EXPECT_FALSE(s.ok());
   EXPECT_EQ(s.message(),
@@ -111,7 +111,7 @@ TYPED_TEST(TypedGraphViewTest, GraphWithMisorderedFanins) {
 TYPED_TEST(TypedGraphViewTest, GetNodeWithIndex) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -132,13 +132,13 @@ TYPED_TEST(TypedGraphViewTest, GetNodeWithIndex) {
 TYPED_TEST(TypedGraphViewTest, GetNodeWithName) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
-  std::vector<string> node_names = {"a", "b", "c", "d"};
+  std::vector<std::string> node_names = {"a", "b", "c", "d"};
   for (int i = 0; i < node_names.size(); ++i) {
-    const string& node_name = node_names[i];
+    const std::string& node_name = node_names[i];
     const auto* node = graph_view.GetNode(node_name);
     ASSERT_NE(node, nullptr);
     EXPECT_EQ(node->node(), graph.mutable_node(i));
@@ -152,7 +152,7 @@ TYPED_TEST(TypedGraphViewTest, GetNodeWithName) {
 TYPED_TEST(TypedGraphViewTest, GetNodes) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -169,11 +169,11 @@ TYPED_TEST(TypedGraphViewTest, GetNodes) {
 TYPED_TEST(TypedGraphViewTest, HasNode) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
-  for (const string& node_name : {"a", "b", "c", "d"}) {
+  for (const std::string& node_name : {"a", "b", "c", "d"}) {
     EXPECT_TRUE(graph_view.HasNode(node_name));
   }
 
@@ -184,7 +184,7 @@ TYPED_TEST(TypedGraphViewTest, HasNode) {
 TYPED_TEST(TypedGraphViewTest, NumNodes) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
   EXPECT_EQ(graph_view.NumNodes(), 4);
@@ -193,7 +193,7 @@ TYPED_TEST(TypedGraphViewTest, NumNodes) {
 TYPED_TEST(TypedGraphViewTest, NumNodesEmptyGraph) {
   GraphDef graph;
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
   EXPECT_EQ(graph_view.NumNodes(), 0);
@@ -205,7 +205,7 @@ TEST(MutableGraphViewTest, DedupControlDependencies) {
        NDef("d", kNoOp, {"a:2", "b:1", "^c", "^c", "^a", "^a", "^b", "^c"})},
       /*funcs=*/{});
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
   EXPECT_EQ(graph_view.NumNodes(), 4);
@@ -245,7 +245,7 @@ TYPED_TEST_SUITE(TypedNodeViewTest, GraphViewTypes);
 TYPED_TEST(TypedNodeViewTest, GetName) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -262,7 +262,7 @@ TYPED_TEST(TypedNodeViewTest, GetOp) {
                          NDef("c", "op_c", {}), NDef("d", "op_d", {})},
                         /*funcs=*/{});
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -290,7 +290,7 @@ TYPED_TEST(TypedNodeViewTest, GetDevice) {
        NDef("c", "", {}, {}, "device_c"), NDef("d", "", {}, {})},
       /*funcs=*/{});
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -325,7 +325,7 @@ TYPED_TEST(TypedFaninTest, GetRegularFanins) {
 
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   GraphViewType graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -353,7 +353,7 @@ TYPED_TEST(TypedFaninTest, GetRegularFanin) {
 
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   GraphViewType graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -393,7 +393,7 @@ TYPED_TEST(TypedFaninTest, GetControllingFanins) {
 
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   GraphViewType graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -438,7 +438,7 @@ TYPED_TEST(TypedFanoutTest, GetRegularFanouts) {
 
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   GraphViewType graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -479,7 +479,7 @@ TYPED_TEST(TypedFanoutTest, GetRegularFanout) {
 
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   GraphViewType graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -520,7 +520,7 @@ TYPED_TEST(TypedFanoutTest, GetControlledFanouts) {
 
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   GraphViewType graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -561,7 +561,7 @@ TYPED_TEST(TypedFanoutTest, GetControlledFanouts) {
 TYPED_TEST(TypedNodeViewTest, NumRegularFanins) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -583,7 +583,7 @@ TYPED_TEST(TypedNodeViewTest, NumRegularFanins) {
 TYPED_TEST(TypedNodeViewTest, NumControllingFanins) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -609,7 +609,7 @@ TYPED_TEST(TypedNodeViewTest, NumControllingFanins) {
 TYPED_TEST(TypedNodeViewTest, NumRegularFanouts) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -631,7 +631,7 @@ TYPED_TEST(TypedNodeViewTest, NumRegularFanouts) {
 TYPED_TEST(TypedNodeViewTest, NumControlledFanouts) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -657,7 +657,7 @@ TYPED_TEST(TypedNodeViewTest, NumControlledFanouts) {
 TYPED_TEST(TypedNodeViewTest, HasFanin) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -687,7 +687,7 @@ TYPED_TEST(TypedNodeViewTest, HasFanin) {
 TYPED_TEST(TypedNodeViewTest, HasFanout) {
   GraphDef graph = SimpleTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -727,7 +727,7 @@ GraphDef SimpleAttrTestGraph() {
 TYPED_TEST(TypedNodeViewTest, GetAttr) {
   GraphDef graph = SimpleAttrTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -740,7 +740,7 @@ TYPED_TEST(TypedNodeViewTest, GetAttr) {
 TYPED_TEST(TypedNodeViewTest, GetAttrs) {
   GraphDef graph = SimpleAttrTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -760,7 +760,7 @@ TYPED_TEST(TypedNodeViewTest, GetAttrs) {
 TYPED_TEST(TypedNodeViewTest, NumAttrs) {
   GraphDef graph = SimpleAttrTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -779,7 +779,7 @@ TYPED_TEST(TypedNodeViewTest, NumAttrs) {
 TYPED_TEST(TypedNodeViewTest, HasAttr) {
   GraphDef graph = SimpleAttrTestGraph();
 
-  Status s;
+  absl::Status s;
   TypeParam graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -794,14 +794,14 @@ class CompareGraphTest : public GrapplerTest {
  public:
   void CompareGraphViewWithGraph(MutableGraphView* graph_view,
                                  const GraphDef& expected_graph) {
-    Status s;
+    absl::Status s;
     GraphView expected_graph_view(&expected_graph, &s);
     TF_ASSERT_OK(s);
 
     EXPECT_EQ(graph_view->NumNodes(), expected_graph_view.NumNodes());
 
     for (const NodeView& expected_node_view : expected_graph_view.GetNodes()) {
-      const string& node_name = expected_node_view.GetName();
+      const std::string& node_name = expected_node_view.GetName();
       MutableNodeView* node_view = graph_view->GetNode(node_name);
       ASSERT_NE(node_view, nullptr);
 
@@ -970,7 +970,7 @@ GraphDef SimpleTestGraphForMutation() {
 TEST_F(MutationTest, AddNewNode) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1007,7 +1007,7 @@ TEST_F(MutationTest, AddNewNode) {
 TEST_F(MutationTest, NewNodeBadFaninsAfterAdd) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1020,7 +1020,7 @@ TEST_F(MutationTest, NewNodeBadFaninsAfterAdd) {
   mutation->AddOrUpdateRegularFanin(new_node, 1, {"valid", 2});
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: new node 'valid' is ill-formed.";
   EXPECT_EQ(s.message(), expected_error_msg);
   CompareGraphViewWithGraph(&graph_view, SimpleTestGraphForMutation());
@@ -1029,7 +1029,7 @@ TEST_F(MutationTest, NewNodeBadFaninsAfterAdd) {
 TEST_F(MutationTest, NewNodesConflictingNames) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1045,7 +1045,7 @@ TEST_F(MutationTest, NewNodesConflictingNames) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: multiple nodes with the name: 'a' exists in "
       "Mutation.";
   EXPECT_EQ(s.message(), expected_error_msg);
@@ -1055,7 +1055,7 @@ TEST_F(MutationTest, NewNodesConflictingNames) {
 TEST_F(MutationTest, UpdateNodeAndAddSelfLoop) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1067,7 +1067,7 @@ TEST_F(MutationTest, UpdateNodeAndAddSelfLoop) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: inplace updated node 'd' is ill-formed.";
   EXPECT_EQ(s.message(), expected_error_msg);
   CompareGraphViewWithGraph(&graph_view, SimpleTestGraphForMutation());
@@ -1076,7 +1076,7 @@ TEST_F(MutationTest, UpdateNodeAndAddSelfLoop) {
 TEST_F(MutationTest, RenameNodeAndAddSelfLoop) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1089,7 +1089,7 @@ TEST_F(MutationTest, RenameNodeAndAddSelfLoop) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: renamed updated node 'e' ('d') is ill-formed.";
   EXPECT_EQ(s.message(), expected_error_msg);
   CompareGraphViewWithGraph(&graph_view, SimpleTestGraphForMutation());
@@ -1098,7 +1098,7 @@ TEST_F(MutationTest, RenameNodeAndAddSelfLoop) {
 TEST_F(MutationTest, ExistingNodesConflictingNames) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1114,7 +1114,7 @@ TEST_F(MutationTest, ExistingNodesConflictingNames) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: multiple nodes with the name: 'b' exists in "
       "Mutation.";
   EXPECT_EQ(s.message(), expected_error_msg);
@@ -1124,7 +1124,7 @@ TEST_F(MutationTest, ExistingNodesConflictingNames) {
 TEST_F(MutationTest, NewAndExistingNodesConflictingNames) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1140,7 +1140,7 @@ TEST_F(MutationTest, NewAndExistingNodesConflictingNames) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: multiple nodes with the name: 'a' exists in "
       "Mutation.";
   EXPECT_EQ(s.message(), expected_error_msg);
@@ -1150,7 +1150,7 @@ TEST_F(MutationTest, NewAndExistingNodesConflictingNames) {
 TEST_F(MutationTest, NewAndExistingRenamedNodesConflictingNames) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1166,7 +1166,7 @@ TEST_F(MutationTest, NewAndExistingRenamedNodesConflictingNames) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: multiple nodes with the name: 'e' exists in "
       "Mutation.";
   EXPECT_EQ(s.message(), expected_error_msg);
@@ -1176,7 +1176,7 @@ TEST_F(MutationTest, NewAndExistingRenamedNodesConflictingNames) {
 TEST_F(MutationTest, RemoveNodesWithFanouts) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1188,7 +1188,7 @@ TEST_F(MutationTest, RemoveNodesWithFanouts) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: fanout 'd' exist for missing node 'b'.";
   EXPECT_EQ(s.message(), expected_error_msg);
   CompareGraphViewWithGraph(&graph_view, SimpleTestGraphForMutation());
@@ -1207,7 +1207,7 @@ TEST_F(MutationTest, RemoveNodesWithFanouts) {
 TEST_F(MutationTest, SwapNodeNamesWithCycle) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1222,7 +1222,7 @@ TEST_F(MutationTest, SwapNodeNamesWithCycle) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: renamed updated node 'b' ('d') is ill-formed.";
   EXPECT_EQ(s.message(), expected_error_msg);
   CompareGraphViewWithGraph(&graph_view, SimpleTestGraphForMutation());
@@ -1244,7 +1244,7 @@ TEST_F(MutationTest, SwapNodeNamesWithCycle) {
 TEST_F(MutationTest, RenamedNodeWithFanouts) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1256,7 +1256,7 @@ TEST_F(MutationTest, RenamedNodeWithFanouts) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: fanout 'd' exist for missing node 'a'.";
   EXPECT_EQ(s.message(), expected_error_msg);
   CompareGraphViewWithGraph(&graph_view, SimpleTestGraphForMutation());
@@ -1279,7 +1279,7 @@ TEST_F(MutationTest, RenamedNodeWithFanouts) {
 TEST_F(MutationTest, RemoveExistingNodeAndReplaceWithNewNode) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1306,7 +1306,7 @@ TEST_F(MutationTest, RemoveExistingNodeAndReplaceWithNewNode) {
 TEST_F(MutationTest, UpdateNodeNameAndRemoveFanins) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1332,7 +1332,7 @@ TEST_F(MutationTest, UpdateNodeNameAndRemoveFanins) {
 TEST_F(MutationTest, UpdateNodeNameAndRemoveRegularFanout) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1344,7 +1344,7 @@ TEST_F(MutationTest, UpdateNodeNameAndRemoveRegularFanout) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: fanout 'd' exist for missing node 'a'.";
   EXPECT_EQ(s.message(), expected_error_msg);
   CompareGraphViewWithGraph(&graph_view, SimpleTestGraphForMutation());
@@ -1376,7 +1376,7 @@ TEST_F(MutationTest, UpdateNodeNameAndRemoveRegularFanout) {
 TEST_F(MutationTest, UpdateNodeNameAndRemoveControlledFanout) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1388,7 +1388,7 @@ TEST_F(MutationTest, UpdateNodeNameAndRemoveControlledFanout) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: fanout 'd' exist for missing node 'c'.";
   EXPECT_EQ(s.message(), expected_error_msg);
   CompareGraphViewWithGraph(&graph_view, SimpleTestGraphForMutation());
@@ -1420,7 +1420,7 @@ TEST_F(MutationTest, UpdateNodeNameAndRemoveControlledFanout) {
 TEST_F(MutationTest, EmptyMutation) {
   GraphDef graph = SimpleTestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1447,7 +1447,7 @@ GraphDef TestGraphForMutation() {
 TEST_F(MutationTest, SwapNodeNamesWithNoCycle) {
   GraphDef graph = TestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1475,7 +1475,7 @@ TEST_F(MutationTest, SwapNodeNamesWithNoCycle) {
 TEST_F(MutationTest, RemoveMultipleDependentNodes) {
   GraphDef graph = TestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1502,7 +1502,7 @@ constexpr char kDeviceGPU2[] = "/device:GPU:2";
 TEST_F(MutationTest, AddSimpleNewNode) {
   GraphDef graph = TestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1530,7 +1530,7 @@ constexpr char kDeviceGPU3[] = "/device:GPU:3";
 TEST_F(MutationTest, AddAndUpdateNodesWithFanins) {
   GraphDef graph = TestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1582,7 +1582,7 @@ TEST_F(MutationTest, UpdateNodeNameToReplaceExistingNode) {
 
   GraphDef graph = test_graph();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1606,7 +1606,7 @@ TEST_F(MutationTest, UpdateNodeNameToReplaceExistingNode) {
 TEST_F(MutationTest, NewNodeWithMutations) {
   GraphDef graph = TestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1652,7 +1652,7 @@ TEST_F(MutationTest, NewNodeWithMutations) {
 TEST_F(MutationTest, UpdatedNodeWithNonFaninMutations) {
   GraphDef graph = TestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1690,7 +1690,7 @@ TEST_F(MutationTest, UpdatedNodeWithNonFaninMutations) {
 TEST_F(MutationTest, Reset) {
   GraphDef graph = TestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1705,7 +1705,7 @@ TEST_F(MutationTest, Reset) {
 
   s = mutation->Apply();
   EXPECT_FALSE(s.ok());
-  string expected_error_msg =
+  std::string expected_error_msg =
       "Mutation::Apply error: fanout 'b' exist for missing node 'a'.";
   EXPECT_EQ(s.message(), expected_error_msg);
   CompareGraphViewWithGraph(&graph_view, TestGraphForMutation());
@@ -1718,7 +1718,7 @@ TEST_F(MutationTest, Reset) {
 TEST_F(MutationTest, RenameNodeAndAddNewNodeWithRenamedNodeOldName) {
   GraphDef graph = TestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1759,7 +1759,7 @@ TEST_F(MutationTest, ShiftNodesWithFanouts) {
 
   GraphDef graph = test_graph();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1793,7 +1793,7 @@ TEST_F(MutationTest, RemoveFaninFanoutAndShiftFanout) {
 
   GraphDef graph = test_graph();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1816,7 +1816,7 @@ TEST_F(MutationTest, RemoveFaninFanoutAndShiftFanout) {
 TEST_F(MutationTest, ConsecutiveMutations) {
   GraphDef graph = TestGraphForMutation();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1902,7 +1902,7 @@ TEST_F(MutationTest, OpWithUnsupportedDevice) {
 
   GraphDef graph = test_graph();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1939,7 +1939,7 @@ TEST_F(MutationTest, OpMissingAttribute) {
 
   GraphDef graph = test_graph();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -1975,7 +1975,7 @@ TEST_F(MutationTest, EmptyMutationUpdateIndexPersisting) {
 
   GraphDef graph = test_graph();
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph, &s);
   TF_ASSERT_OK(s);
 
@@ -2002,7 +2002,7 @@ TEST_F(MutationTest, EmptyMutationUpdateIndexPersisting) {
 class TopologicalSortTest : public CompareGraphTest {
  protected:
   void CompareGraphOrder(const MutableGraphView& graph_view,
-                         absl::Span<const string> node_names) {
+                         absl::Span<const std::string> node_names) {
     const int num_nodes = graph_view.NumNodes();
     ASSERT_EQ(num_nodes, node_names.size());
     for (int i = 0; i < num_nodes; ++i) {
@@ -2012,7 +2012,7 @@ class TopologicalSortTest : public CompareGraphTest {
 
   void CompareGraphNodePrecedences(
       const MutableGraphView& graph_view,
-      absl::Span<const std::pair<string, string>> node_precedences) {
+      absl::Span<const std::pair<std::string, std::string>> node_precedences) {
     for (const auto& node_precedence : node_precedences) {
       auto* parent_node = graph_view.GetNode(node_precedence.first);
       ASSERT_NE(parent_node, nullptr);
@@ -2031,7 +2031,7 @@ TEST_F(TopologicalSortTest, ActiveMutationSort) {
   };
 
   GraphDef graph = test_graph();
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view(&graph, &status);
   TF_ASSERT_OK(status);
 
@@ -2058,7 +2058,7 @@ TEST_F(TopologicalSortTest, BadExtraDependenciesSort) {
   };
 
   GraphDef graph_1 = test_graph();
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view_1(&graph_1, &status);
   TF_ASSERT_OK(status);
   MutableNodeView* a_node_1 = graph_view_1.GetNode("a");
@@ -2090,7 +2090,7 @@ TEST_F(TopologicalSortTest, NoCyclesAllowed) {
   };
 
   GraphDef graph = test_graph();
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view(&graph, &status);
   TF_ASSERT_OK(status);
 
@@ -2115,7 +2115,7 @@ TEST_F(TopologicalSortTest, NoNodesWithZeroFanins) {
   };
 
   GraphDef graph = test_graph();
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view(&graph, &status);
   TF_ASSERT_OK(status);
 
@@ -2140,7 +2140,7 @@ TEST_F(TopologicalSortTest, DidNotReachAllNodes) {
   };
 
   GraphDef graph = test_graph();
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view(&graph, &status);
   TF_ASSERT_OK(status);
 
@@ -2166,7 +2166,7 @@ TEST_F(TopologicalSortTest, NoLoopGraph) {
   };
 
   GraphDef graph = test_graph();
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view(&graph, &status);
   TF_ASSERT_OK(status);
 
@@ -2266,7 +2266,7 @@ TEST_F(TopologicalSortTest, ValidLoopGraph) {
   };
 
   GraphDef graph = test_graph();
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view(&graph, &status);
   TF_ASSERT_OK(status);
 
@@ -2282,7 +2282,7 @@ TEST_F(TopologicalSortTest, DuplicateFanins) {
   };
 
   GraphDef graph = test_graph();
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view(&graph, &status);
   TF_ASSERT_OK(status);
 
@@ -2300,7 +2300,7 @@ TEST_F(TopologicalSortTest, DiamondDependencyNotACycle) {
   };
 
   GraphDef graph = test_graph();
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view(&graph, &status);
   TF_ASSERT_OK(status);
 
@@ -2320,7 +2320,7 @@ TEST_F(TopologicalSortTest, ExtraDependencies) {
   };
 
   GraphDef graph = test_graph();
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view(&graph, &status);
   TF_ASSERT_OK(status);
 
@@ -2349,7 +2349,7 @@ TEST_F(TopologicalSortTest, PushVisitedNodes) {
   };
 
   GraphDef graph = test_graph();
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view(&graph, &status);
   TF_ASSERT_OK(status);
 
@@ -2398,7 +2398,7 @@ void BM_GraphViewTConstruction(::testing::benchmark::State& state) {
   GraphDef graph_def = test::CreateGraphDef(num_nodes, num_edges_per_node);
 
   for (auto i : state) {
-    Status s;
+    absl::Status s;
     GraphViewT graph_view(&graph_def, &s);
   }
 }
@@ -2417,7 +2417,7 @@ void BM_MutableGraphViewClearAttrs(::testing::benchmark::State& state) {
 
   GraphDef graph_def = test::CreateGraphDef(num_nodes, num_edges_per_node);
 
-  Status s;
+  absl::Status s;
   MutableGraphView graph_view(&graph_def, &s);
 
   for (auto i : state) {
@@ -2454,7 +2454,7 @@ void BM_GraphViewTConstructionWithControlDependencies(
                                        /*fanout_unique_index=*/true);
 
   for (auto i : state) {
-    Status s;
+    absl::Status s;
     GraphViewT graph_view(&graph_def, &s);
   }
 }
@@ -2478,7 +2478,7 @@ void BM_GraphViewTGetNode(::testing::benchmark::State& state) {
 
   GraphDef graph_def =
       test::CreateGraphDef(num_nodes, /*num_edges_per_node=*/16);
-  Status s;
+  absl::Status s;
   GraphViewT graph_view(&graph_def, &s);
 
   for (auto i : state) {
@@ -2533,7 +2533,7 @@ void BM_GraphViewTGetRegularFanin(::testing::benchmark::State& state) {
   GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
       num_fanins, num_fanouts, num_fanins, num_fanouts,
       /*fanout_unique_index=*/true);
-  Status s;
+  absl::Status s;
   GraphViewT graph_view(&graph_def, &s);
 
   for (auto i : state) {
@@ -2561,7 +2561,7 @@ void BM_GraphViewTGetRegularFanout(::testing::benchmark::State& state) {
   GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
       num_fanins, num_fanouts, num_fanins, num_fanouts,
       /*fanout_unique_index=*/true);
-  Status s;
+  absl::Status s;
   GraphViewT graph_view(&graph_def, &s);
 
   for (auto i : state) {
@@ -2589,7 +2589,7 @@ void BM_GraphViewTGetRegularFanins(::testing::benchmark::State& state) {
   GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
       num_fanins, num_fanouts, num_fanins, num_fanouts,
       /*fanout_unique_index=*/true);
-  Status s;
+  absl::Status s;
   GraphViewT graph_view(&graph_def, &s);
 
   for (auto i : state) {
@@ -2617,7 +2617,7 @@ void BM_GraphViewTGetRegularFanouts(::testing::benchmark::State& state) {
   GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
       num_fanins, num_fanouts, num_fanins, num_fanouts,
       /*fanout_unique_index=*/true);
-  Status s;
+  absl::Status s;
   GraphViewT graph_view(&graph_def, &s);
 
   for (auto i : state) {
@@ -2645,7 +2645,7 @@ void BM_GraphViewTGetControllingFanins(::testing::benchmark::State& state) {
   GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
       num_fanins, num_fanouts, num_fanins, num_fanouts,
       /*fanout_unique_index=*/true);
-  Status s;
+  absl::Status s;
   GraphViewT graph_view(&graph_def, &s);
 
   for (auto i : state) {
@@ -2674,7 +2674,7 @@ void BM_GraphViewTGetControlledFanouts(::testing::benchmark::State& state) {
   GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
       num_fanins, num_fanouts, num_fanins, num_fanouts,
       /*fanout_unique_index=*/true);
-  Status s;
+  absl::Status s;
   GraphViewT graph_view(&graph_def, &s);
 
   for (auto i : state) {
@@ -2703,7 +2703,7 @@ inline void BM_GraphViewTHasRegularFanin(::testing::benchmark::State& state) {
   GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
       num_fanins, num_fanouts, /*num_controlling_fanins=*/0,
       /*num_controlled_fanouts=*/0, /*fanout_unique_index=*/false);
-  Status s;
+  absl::Status s;
   GraphViewT graph_view(&graph_def, &s);
   const int index = IsLast ? num_fanouts - 1 : 0;
   auto* node = graph_view.GetNode(absl::StrFormat("out%05d", index));
@@ -2746,7 +2746,7 @@ inline void BM_GraphViewTHasControllingFanin(
   GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
       num_fanins, num_fanouts, num_fanins, num_fanouts,
       /*fanout_unique_index=*/true);
-  Status s;
+  absl::Status s;
   GraphViewT graph_view(&graph_def, &s);
   const int index = IsLast ? num_fanouts - 1 : 0;
   auto* node = graph_view.GetNode(absl::StrFormat("control_out%05d", index));
@@ -2788,7 +2788,7 @@ inline void BM_GraphViewTHasRegularFanout(::testing::benchmark::State& state) {
   GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
       num_fanins, num_fanouts, /*num_controlling_fanins=*/0,
       /*num_controlled_fanouts=*/0, /*fanout_unique_index=*/false);
-  Status s;
+  absl::Status s;
   GraphViewT graph_view(&graph_def, &s);
   const int index = IsLast ? num_fanins - 1 : 0;
   auto* node = graph_view.GetNode(absl::StrFormat("in%05d", index));
@@ -2831,7 +2831,7 @@ inline void BM_GraphViewTHasControlledFanout(
   GraphDef graph_def = test::CreateFaninFanoutNodeGraph(
       num_fanins, num_fanouts, num_fanins, num_fanouts,
       /*fanout_unique_index=*/false);
-  Status s;
+  absl::Status s;
   GraphViewT graph_view(&graph_def, &s);
   const int index = IsLast ? num_fanins - 1 : 0;
   auto* node = graph_view.GetNode(absl::StrFormat("control_in%05d", index));
@@ -2869,7 +2869,7 @@ void BM_SortTopologically(::testing::benchmark::State& state) {
   const int size = state.range(0);
 
   GraphDef graph = test::CreateRandomGraph(size);
-  Status status;
+  absl::Status status;
   MutableGraphView graph_view(&graph, &status);
   TF_ASSERT_OK(status);
 

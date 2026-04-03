@@ -90,7 +90,8 @@ void FakeRemoteFrame::DisableAutoResize() {}
 void FakeRemoteFrame::DidUpdateVisualProperties(
     const cc::RenderFrameMetadata& metadata) {}
 
-void FakeRemoteFrame::SetFrameSinkId(const viz::FrameSinkId& frame_sink_id) {}
+void FakeRemoteFrame::SetFrameSinkId(const viz::FrameSinkId& frame_sink_id,
+                                     bool allow_paint_holding) {}
 
 void FakeRemoteFrame::ChildProcessGone() {}
 
@@ -106,5 +107,9 @@ void FakeRemoteFrame::CreateRemoteChild(
 }
 
 void FakeRemoteFrame::CreateRemoteChildren(
-    std::vector<blink::mojom::CreateRemoteChildParamsPtr> params) {}
+    std::vector<blink::mojom::CreateRemoteChildParamsPtr> params,
+    const std::optional<base::UnguessableToken>& navigation_metrics_token) {}
+
+void FakeRemoteFrame::ForwardFencedFrameEventToEmbedder(
+    const std::string& event_type) {}
 }  // namespace content

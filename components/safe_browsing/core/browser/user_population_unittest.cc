@@ -42,7 +42,10 @@ std::unique_ptr<PrefService> CreatePrefService() {
 
 }  // namespace
 
-TEST(GetUserPopulationTest, PopulatesPopulation) {
+TEST(GetUserPopulationTest, PopulatesPopulation_WithoutSBERDeprecation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   base::test::TaskEnvironment task_environment;
   auto pref_service = CreatePrefService();
 
@@ -50,16 +53,13 @@ TEST(GetUserPopulationTest, PopulatesPopulation) {
                        SafeBrowsingState::STANDARD_PROTECTION);
   ChromeUserPopulation population =
       GetUserPopulation(pref_service.get(), false, false, false, false, nullptr,
-                        std::optional<size_t>(), std::optional<size_t>(),
-                        std::optional<size_t>());
+                        std::nullopt, std::nullopt);
   EXPECT_EQ(population.user_population(), ChromeUserPopulation::SAFE_BROWSING);
 
   SetSafeBrowsingState(pref_service.get(),
                        SafeBrowsingState::ENHANCED_PROTECTION);
-  population =
-      GetUserPopulation(pref_service.get(), false, false, false, false, nullptr,
-                        std::optional<size_t>(), std::optional<size_t>(),
-                        std::optional<size_t>());
+  population = GetUserPopulation(pref_service.get(), false, false, false, false,
+                                 nullptr, std::nullopt, std::nullopt);
 
   EXPECT_EQ(population.user_population(),
             ChromeUserPopulation::ENHANCED_PROTECTION);
@@ -67,12 +67,49 @@ TEST(GetUserPopulationTest, PopulatesPopulation) {
   SetSafeBrowsingState(pref_service.get(),
                        SafeBrowsingState::STANDARD_PROTECTION);
   SetExtendedReportingPrefForTests(pref_service.get(), true);
-  population =
-      GetUserPopulation(pref_service.get(), false, false, false, false, nullptr,
-                        std::optional<size_t>(), std::optional<size_t>(),
-                        std::optional<size_t>());
+  population = GetUserPopulation(pref_service.get(), false, false, false, false,
+                                 nullptr, std::nullopt, std::nullopt);
   EXPECT_EQ(population.user_population(),
             ChromeUserPopulation::EXTENDED_REPORTING);
+}
+
+TEST(GetUserPopulationTest, PopulatesPopulation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
+  base::test::TaskEnvironment task_environment;
+  auto pref_service = CreatePrefService();
+
+  SetSafeBrowsingState(pref_service.get(),
+                       SafeBrowsingState::STANDARD_PROTECTION);
+  ChromeUserPopulation population =
+      GetUserPopulation(pref_service.get(), false, false, false, false, nullptr,
+                        std::nullopt, std::nullopt);
+  EXPECT_EQ(population.user_population(), ChromeUserPopulation::SAFE_BROWSING);
+
+  SetSafeBrowsingState(pref_service.get(),
+                       SafeBrowsingState::ENHANCED_PROTECTION);
+  population = GetUserPopulation(pref_service.get(), false, false, false, false,
+                                 nullptr, std::nullopt, std::nullopt);
+
+  EXPECT_EQ(population.user_population(),
+            ChromeUserPopulation::ENHANCED_PROTECTION);
+}
+
+TEST(GetUserPopulationTest, PopulatesPopulation_EsbIgnoresSberPref) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
+  base::test::TaskEnvironment task_environment;
+  auto pref_service = CreatePrefService();
+
+  SetSafeBrowsingState(pref_service.get(),
+                       SafeBrowsingState::STANDARD_PROTECTION);
+  SetExtendedReportingPrefForTests(pref_service.get(), true);
+  ChromeUserPopulation population =
+      GetUserPopulation(pref_service.get(), false, false, false, false, nullptr,
+                        std::nullopt, std::nullopt);
+  EXPECT_EQ(population.user_population(), ChromeUserPopulation::SAFE_BROWSING);
 }
 
 TEST(GetUserPopulationTest, PopulatesMBB) {
@@ -83,16 +120,13 @@ TEST(GetUserPopulationTest, PopulatesMBB) {
       unified_consent::prefs::kUrlKeyedAnonymizedDataCollectionEnabled, false);
   ChromeUserPopulation population =
       GetUserPopulation(pref_service.get(), false, false, false, false, nullptr,
-                        std::optional<size_t>(), std::optional<size_t>(),
-                        std::optional<size_t>());
+                        std::nullopt, std::nullopt);
   EXPECT_FALSE(population.is_mbb_enabled());
 
   pref_service->SetBoolean(
       unified_consent::prefs::kUrlKeyedAnonymizedDataCollectionEnabled, true);
-  population =
-      GetUserPopulation(pref_service.get(), false, false, false, false, nullptr,
-                        std::optional<size_t>(), std::optional<size_t>(),
-                        std::optional<size_t>());
+  population = GetUserPopulation(pref_service.get(), false, false, false, false,
+                                 nullptr, std::nullopt, std::nullopt);
   EXPECT_TRUE(population.is_mbb_enabled());
 }
 
@@ -102,14 +136,12 @@ TEST(GetUserPopulationTest, PopulatesIncognito) {
 
   ChromeUserPopulation population =
       GetUserPopulation(pref_service.get(), /*is_incognito=*/false, false,
-                        false, false, nullptr, std::optional<size_t>(),
-                        std::optional<size_t>(), std::optional<size_t>());
+                        false, false, nullptr, std::nullopt, std::nullopt);
   EXPECT_FALSE(population.is_incognito());
 
   population =
       GetUserPopulation(pref_service.get(), /*is_incognito=*/true, false, false,
-                        false, nullptr, std::optional<size_t>(),
-                        std::optional<size_t>(), std::optional<size_t>());
+                        false, nullptr, std::nullopt, std::nullopt);
   EXPECT_TRUE(population.is_incognito());
 }
 
@@ -119,14 +151,12 @@ TEST(GetUserPopulationTest, PopulatesSync) {
 
   ChromeUserPopulation population = GetUserPopulation(
       pref_service.get(), false, /*is_history_sync_active=*/true, false, false,
-      nullptr, std::optional<size_t>(), std::optional<size_t>(),
-      std::optional<size_t>());
+      nullptr, std::nullopt, std::nullopt);
   EXPECT_TRUE(population.is_history_sync_enabled());
 
-  population = GetUserPopulation(
-      pref_service.get(), false, /*is_history_sync_active=*/false, false, false,
-      nullptr, std::optional<size_t>(), std::optional<size_t>(),
-      std::optional<size_t>());
+  population = GetUserPopulation(pref_service.get(), false,
+                                 /*is_history_sync_active=*/false, false, false,
+                                 nullptr, std::nullopt, std::nullopt);
   EXPECT_FALSE(population.is_history_sync_enabled());
 }
 
@@ -136,14 +166,12 @@ TEST(GetUserPopulationTest, PopulatesSignedIn) {
 
   ChromeUserPopulation population =
       GetUserPopulation(pref_service.get(), false, false, /*is_signed_in=*/true,
-                        false, nullptr, std::optional<size_t>(),
-                        std::optional<size_t>(), std::optional<size_t>());
+                        false, nullptr, std::nullopt, std::nullopt);
   EXPECT_TRUE(population.is_signed_in());
 
-  population = GetUserPopulation(
-      pref_service.get(), false, false, /*is_signed_in=*/false, false, nullptr,
-      std::optional<size_t>(), std::optional<size_t>(),
-      std::optional<size_t>());
+  population = GetUserPopulation(pref_service.get(), false, false,
+                                 /*is_signed_in=*/false, false, nullptr,
+                                 std::nullopt, std::nullopt);
   EXPECT_FALSE(population.is_signed_in());
 }
 
@@ -151,16 +179,15 @@ TEST(GetUserPopulationTest, PopulatesAdvancedProtection) {
   base::test::TaskEnvironment task_environment;
   auto pref_service = CreatePrefService();
 
-  ChromeUserPopulation population = GetUserPopulation(
-      pref_service.get(), false, false, false,
-      /*is_under_advanced_protection=*/true, nullptr, std::optional<size_t>(),
-      std::optional<size_t>(), std::optional<size_t>());
+  ChromeUserPopulation population =
+      GetUserPopulation(pref_service.get(), false, false, false,
+                        /*is_under_advanced_protection=*/true, nullptr,
+                        std::nullopt, std::nullopt);
   EXPECT_TRUE(population.is_under_advanced_protection());
 
-  population = GetUserPopulation(
-      pref_service.get(), false, false, false,
-      /*is_under_advanced_protection=*/false, nullptr, std::optional<size_t>(),
-      std::optional<size_t>(), std::optional<size_t>());
+  population = GetUserPopulation(pref_service.get(), false, false, false,
+                                 /*is_under_advanced_protection=*/false,
+                                 nullptr, std::nullopt, std::nullopt);
   EXPECT_FALSE(population.is_under_advanced_protection());
 }
 
@@ -172,8 +199,7 @@ TEST(GetUserPopulationTest, PopulatesUserAgent) {
                     version_info::GetOSType()});
   ChromeUserPopulation population =
       GetUserPopulation(pref_service.get(), false, false, false, false, nullptr,
-                        std::optional<size_t>(), std::optional<size_t>(),
-                        std::optional<size_t>());
+                        std::nullopt, std::nullopt);
   EXPECT_EQ(population.user_agent(), user_agent);
 }
 
@@ -182,18 +208,15 @@ TEST(GetUserPopulationTest, PopulatesProfileRelatedFields) {
   auto pref_service = CreatePrefService();
   ChromeUserPopulation population =
       GetUserPopulation(pref_service.get(), false, false, false, false, nullptr,
-                        std::optional<size_t>(), std::optional<size_t>(),
-                        std::optional<size_t>());
+                        std::nullopt, std::nullopt);
   EXPECT_EQ(population.number_of_profiles(), 0);
   EXPECT_EQ(population.number_of_loaded_profiles(), 0);
-  EXPECT_EQ(population.number_of_open_profiles(), 0);
 
-  population = GetUserPopulation(
-      pref_service.get(), false, false, false, false, nullptr,
-      /*num_profiles=*/3, /*num_loaded_profiles=*/2, /*num_open_profiles=*/1);
+  population =
+      GetUserPopulation(pref_service.get(), false, false, false, false, nullptr,
+                        /*num_profiles=*/3, /*num_loaded_profiles=*/2);
   EXPECT_EQ(population.number_of_profiles(), 3);
   EXPECT_EQ(population.number_of_loaded_profiles(), 2);
-  EXPECT_EQ(population.number_of_open_profiles(), 1);
 }
 
 TEST(GetExperimentStatusTest, HasEnabled) {

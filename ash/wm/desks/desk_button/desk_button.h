@@ -8,15 +8,14 @@
 #include <string>
 
 #include "ash/ash_export.h"
-#include "ash/public/cpp/desk_profiles_delegate.h"
 #include "ash/shelf/shelf.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/image_view.h"
+#include "ui/views/metadata/view_factory.h"
 
 namespace views {
-class ImageView;
 class Label;
 }
 
@@ -43,12 +42,13 @@ class ASH_EXPORT DeskButton : public views::Button {
   bool is_activated() const { return is_activated_; }
 
   bool zero_state() const { return zero_state_; }
-  void set_zero_state(bool zero_state) { zero_state_ = zero_state; }
+
+  void SetZeroState(bool zero_state);
 
   // views::Button:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void Layout(PassKey) override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void OnMouseEvent(ui::MouseEvent* event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
   void AboutToRequestFocusFromTabTraversal(bool reverse) override;
@@ -61,13 +61,16 @@ class ASH_EXPORT DeskButton : public views::Button {
 
   std::u16string GetTitle() const;
 
+  // Returns the button insets given current button state.
+  gfx::Insets GetButtonInsets() const;
+
   // Updates UI status without re-layout.
   void UpdateUi(const Desk* active_desk);
 
-  void UpdateAvatar(const Desk* active_desk);
-
   // Updates locale-specific settings.
   void UpdateLocaleSpecificSettings();
+
+  void UpdateAccessiblePreviousAndNextFocus();
 
  private:
   enum class SwitchButtonUpdateSource {
@@ -90,15 +93,7 @@ class ASH_EXPORT DeskButton : public views::Button {
       std::optional<Shelf::ScopedDisableAutoHide>& disabler,
       bool should_enable_shelf_auto_hide);
 
-  // A view that displays the profile avatar of the current desk.
-  raw_ptr<views::ImageView> desk_avatar_view_;
-
-  // Image for the profile avatar.
-  gfx::ImageSkia desk_avatar_image_;
-
-  // Profile summary of the desk's associated profile. It's cached during
-  // `UpdateAvatar()`.
-  LacrosProfileSummary profile_;
+  void UpdateBackground();
 
   // A label that displays the active desk's name.
   raw_ptr<views::Label> desk_name_label_;
@@ -125,4 +120,4 @@ END_VIEW_BUILDER
 
 DEFINE_VIEW_BUILDER(VIEWS_EXPORT, ash::DeskButton)
 
-#endif
+#endif  // ASH_WM_DESKS_DESK_BUTTON_DESK_BUTTON_H_

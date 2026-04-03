@@ -7,7 +7,6 @@
 
 #include <memory>
 #include <optional>
-#include <unordered_set>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
@@ -64,13 +63,19 @@ class NET_EXPORT ContextHostResolver : public HostResolver {
       const NetworkAnonymizationKey& network_anonymization_key,
       const NetLogWithSource& net_log,
       const std::optional<ResolveHostParameters>& optional_parameters) override;
+  std::unique_ptr<ServiceEndpointRequest> CreateServiceEndpointRequest(
+      Host host,
+      NetworkAnonymizationKey network_anonymization_key,
+      NetLogWithSource net_log,
+      ResolveHostParameters parameters) override;
   std::unique_ptr<ProbeRequest> CreateDohProbeRequest() override;
   std::unique_ptr<MdnsListener> CreateMdnsListener(
       const HostPortPair& host,
       DnsQueryType query_type) override;
   HostCache* GetHostCache() override;
-  base::Value::Dict GetDnsConfigAsValue() const override;
+  base::DictValue GetDnsConfigAsValue() const override;
   void SetRequestContext(URLRequestContext* request_context) override;
+  bool IsHappyEyeballsV3Enabled() const override;
   HostResolverManager* GetManagerForTesting() override;
   const URLRequestContext* GetContextForTesting() const override;
   handles::NetworkHandle GetTargetNetworkForTesting() const override;
@@ -89,6 +94,12 @@ class NET_EXPORT ContextHostResolver : public HostResolver {
   }
 
  private:
+  std::unique_ptr<ResolveHostRequest> CreateRequestInternal(
+      HostResolver::Host host,
+      NetworkAnonymizationKey network_anonymization_key,
+      NetLogWithSource net_log,
+      std::optional<ResolveHostParameters> optional_parameters);
+
   std::unique_ptr<HostResolverManager> owned_manager_;
   // `manager_` might point to `owned_manager_`. It must be declared last and
   // cleared first.

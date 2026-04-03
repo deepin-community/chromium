@@ -21,6 +21,7 @@
 
 #include <ostream>
 #include <string>
+#include <thread>  // NOLINT: for thread IDs.
 
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
@@ -28,7 +29,7 @@
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 
-namespace centipede::perf {
+namespace fuzztest::internal {
 
 //------------------------------------------------------------------------------
 //                              ResourcePool
@@ -75,7 +76,7 @@ namespace centipede::perf {
 //                 .amount = RUsageMemory{.mem_rss = EstimateShardPeakRss()},
 //                 .timeout = absl::Minutes(10),
 //             });
-//         CHECK_OK(rss_lease.status());
+//         FUZZTEST_CHECK_OK(rss_lease.status());
 //         ...
 //       }
 //       // `rss_lease` dtor returns the leased RSS to `rss_pool` and unblocks
@@ -137,14 +138,14 @@ class ResourcePool {
 
     // The outcome of resource acquisition (ie. of
     // `ResourcePool::AcquireLeaseBlocking()`). Must be consulted by the client
-    // at least once, otherwise the dtor will CHECK.
+    // at least once, otherwise the dtor will FUZZTEST_CHECK.
     const absl::Status& status() const;
     // The originating request.
     const LeaseRequest& request() const;
     // A short description that can be used in logs.
     std::string id() const;
     // The thread ID that submitted the request.
-    pid_t thread_id() const;
+    std::thread::id thread_id() const;
     // The creation time and the age of the lease.
     absl::Time created_at() const;
     absl::Duration age() const;
@@ -166,7 +167,7 @@ class ResourcePool {
     LeaseRequest request_ = {};
     absl::Status status_ = absl::OkStatus();
     mutable bool status_checked_ = false;
-    pid_t thread_id_ = ::syscall(__NR_gettid);
+    std::thread::id thread_id_ = std::this_thread::get_id();
     absl::Time created_at_ = absl::Now();
   };
 
@@ -198,6 +199,6 @@ class ResourcePool {
 template <typename R>
 ResourcePool(R r) -> ResourcePool<R>;
 
-}  // namespace centipede::perf
+}  // namespace fuzztest::internal
 
 #endif  // FUZZTEST_CENTIPEDE_RESOURCE_RESOURCE_POOL_H_

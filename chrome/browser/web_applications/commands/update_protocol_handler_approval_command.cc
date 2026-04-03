@@ -7,7 +7,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -98,7 +97,7 @@ void UpdateProtocolHandlerApprovalCommand::StartWithLock(
   }
   // Notify observers that the list of allowed or disallowed protocols was
   // updated.
-  lock_->registrar().NotifyWebAppProtocolSettingsChanged();
+  lock_->registrar().NotifyWebAppProtocolSettingsChanged(app_id_);
 
   os_integration_manager.Synchronize(
       app_id_,
@@ -117,21 +116,9 @@ void UpdateProtocolHandlerApprovalCommand::
   if (original_protocol_handlers ==
       os_integration_manager.GetAppProtocolHandlers(app_id_)) {
     GetMutableDebugValue().Set("was_update_required", false);
-    OnProtocolHandlersUpdated();
-    return;
+  } else {
+    GetMutableDebugValue().Set("was_update_required", true);
   }
-  GetMutableDebugValue().Set("was_update_required", true);
-
-  // TODO(https://crbug.com/1251062): Can we avoid the delay of startup, if the
-  // action as allowed?
-  lock_->os_integration_manager().UpdateProtocolHandlers(
-      app_id_, /*force_shortcut_updates_if_needed=*/true,
-      base::BindOnce(
-          &UpdateProtocolHandlerApprovalCommand::OnProtocolHandlersUpdated,
-          weak_factory_.GetWeakPtr()));
-}
-
-void UpdateProtocolHandlerApprovalCommand::OnProtocolHandlersUpdated() {
   CompleteAndSelfDestruct(CommandResult::kSuccess);
 }
 

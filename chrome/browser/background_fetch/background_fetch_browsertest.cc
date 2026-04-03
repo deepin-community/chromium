@@ -119,15 +119,14 @@ class WaitableDownloadLoggerObserver : public download::Logger::Observer {
   }
 
   // download::Logger::Observer implementation:
-  void OnServiceStatusChanged(
-      const base::Value::Dict& service_status) override {}
+  void OnServiceStatusChanged(const base::DictValue& service_status) override {}
   void OnServiceDownloadsAvailable(
-      const base::Value::List& service_downloads) override {}
+      const base::ListValue& service_downloads) override {}
   void OnServiceDownloadChanged(
-      const base::Value::Dict& service_download) override {}
+      const base::DictValue& service_download) override {}
   void OnServiceDownloadFailed(
-      const base::Value::Dict& service_download) override {}
-  void OnServiceRequestMade(const base::Value::Dict& service_request) override {
+      const base::DictValue& service_download) override {}
+  void OnServiceRequestMade(const base::DictValue& service_request) override {
     const std::string* client = service_request.FindString("client");
     const std::string* guid = service_request.FindString("guid");
     const std::string* result = service_request.FindString("result");
@@ -364,7 +363,7 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
 
   // Intercepts all requests.
   std::unique_ptr<HttpResponse> HandleRequest(const HttpRequest& request) {
-    if (request.GetURL().path() == "/background_fetch/upload") {
+    if (request.GetURL().GetPath() == "/background_fetch/upload") {
       DCHECK(!request.content.empty());
       DCHECK(request_body_.empty());
       request_body_ = request.content;
@@ -374,8 +373,9 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
       return response;
     }
 
-    if (request.GetURL().query() == "clickevent")
+    if (request.GetURL().GetQuery() == "clickevent") {
       std::move(click_event_closure_).Run();
+    }
 
     // The default handlers will take care of this request.
     return nullptr;
@@ -426,8 +426,8 @@ class BackgroundFetchBrowserTest : public InProcessBrowserTest {
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     DownloadRequestLimiter::TabDownloadState* tab_download_state =
-        g_browser_process->download_request_limiter()->GetDownloadState(
-            web_contents, true /* create */);
+        g_browser_process->download_request_limiter()->GetOrCreateDownloadState(
+            web_contents);
     tab_download_state->set_download_seen();
     tab_download_state->SetDownloadStatusAndNotify(
         url::Origin::Create(web_contents->GetVisibleURL()),
@@ -698,7 +698,7 @@ IN_PROC_BROWSER_TEST_F(
             offline_items_collection::OfflineItemState::CANCELLED);
 }
 
-// TODO(crbug.com/1329696): Fix flaky timeouts and re-enable.
+// TODO(crbug.com/40842751): Fix flaky timeouts and re-enable.
 IN_PROC_BROWSER_TEST_F(
     BackgroundFetchBrowserTest,
     DISABLED_OfflineItemCollection_VerifyResourceDownloadedWhenCorrectDownloadTotalSpecified) {
@@ -804,7 +804,7 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest, ClickEventIsDispatched) {
   }
 }
 
-// TODO(crbug.com/1056096): Re-enable this test.
+// TODO(crbug.com/40120187): Re-enable this test.
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest, DISABLED_AbortFromUI) {
   std::vector<OfflineItem> items;
   // Creates a registration with more than one request.
@@ -862,7 +862,7 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest, FetchFromServiceWorker) {
       "StartFetchFromServiceWorker()", "permissionerror"));
 }
 
-// TODO(crbug.com/1271962): Flaky on many platforms.
+// TODO(crbug.com/40805915): Flaky on many platforms.
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
                        DISABLED_FetchFromServiceWorkerWithAsk) {
   auto* settings_map =
@@ -880,7 +880,7 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
             offline_items_collection::OfflineItemState::PAUSED);
 }
 
-// TODO(crbug.com/1271962): Flaky on many platforms.
+// TODO(crbug.com/40805915): Flaky on many platforms.
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
                        DISABLED_FetchFromChildFrameWithPermissions) {
   // Give the needed permissions. The fetch should still start in a paused
@@ -897,7 +897,7 @@ IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
             offline_items_collection::OfflineItemState::PAUSED);
 }
 
-// TODO(crbug.com/1271962): Flaky on many platforms.
+// TODO(crbug.com/40805915): Flaky on many platforms.
 IN_PROC_BROWSER_TEST_F(BackgroundFetchBrowserTest,
                        DISABLED_FetchFromChildFrameWithAsk) {
   SetPermission(ContentSettingsType::AUTOMATIC_DOWNLOADS, CONTENT_SETTING_ASK);

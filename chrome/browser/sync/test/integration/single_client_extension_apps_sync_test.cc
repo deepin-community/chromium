@@ -4,18 +4,23 @@
 
 #include <vector>
 
+#include "base/cfi_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/sync/test/integration/apps_helper.h"
 #include "chrome/browser/sync/test/integration/fake_server_match_status_checker.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/sync/test/integration/updated_progress_marker_checker.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
+#include "components/app_constants/constants.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/base/features.h"
-#include "components/sync/base/model_type.h"
 #include "components/sync/engine/loopback_server/persistent_unique_client_entity.h"
 #include "components/sync/protocol/app_specifics.pb.h"
 #include "components/sync/service/sync_service_impl.h"
 #include "components/sync/test/fake_server.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/test_utils.h"
+#include "extensions/common/constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -25,38 +30,68 @@
 #endif  // BUILDFLAG(IS_WIN)
 
 namespace {
+
 using apps_helper::AllProfilesHaveSameApps;
 using apps_helper::InstallHostedApp;
 using apps_helper::InstallPlatformApp;
+using testing::UnorderedElementsAre;
+
+std::ostream& operator<<(std::ostream& os,
+                         const base::flat_set<std::string>& set) {
+  os << "{";
+  for (const std::string& element : set) {
+    os << element << ", ";
+  }
+  os << "}";
+  return os;
+}
+
+class FakeServerAppChecker : public fake_server::FakeServerMatchStatusChecker {
+ public:
+  // Waits for the APPS entities in the server to be those with ids `app_ids`.
+  // Depending on the platform some apps are auto-installed and synced, so they
+  // are implicitly added to the expected set of ids.
+  explicit FakeServerAppChecker(std::vector<std::string> expected_app_ids) {
+    expected_app_ids.push_back(extensions::kWebStoreAppId);
+#if BUILDFLAG(IS_CHROMEOS)
+    expected_app_ids.push_back(app_constants::kChromeAppId);
+#endif
+    expected_app_ids_ = base::MakeFlatSet<std::string>(expected_app_ids);
+  }
+
+  FakeServerAppChecker(const FakeServerAppChecker&) = delete;
+  FakeServerAppChecker& operator=(const FakeServerAppChecker&) = delete;
+
+  ~FakeServerAppChecker() override = default;
+
+  bool IsExitConditionSatisfied(std::ostream* os) override {
+    std::vector<sync_pb::SyncEntity> app_entities =
+        fake_server()->GetSyncEntitiesByDataType(syncer::APPS);
+    base::flat_set<std::string> actual_app_ids = base::MakeFlatSet<std::string>(
+        app_entities,
+        /*comp=*/{}, /*proj=*/[](const sync_pb::SyncEntity& e) {
+          return e.specifics().app().extension().id();
+        });
+    *os << "Expected app ids in fake server: " << expected_app_ids_
+        << ". Actual app ids " << actual_app_ids << ".";
+    return expected_app_ids_ == actual_app_ids;
+  }
+
+ private:
+  base::flat_set<std::string> expected_app_ids_;
+};
 
 class SingleClientExtensionAppsSyncTest : public SyncTest {
  public:
   SingleClientExtensionAppsSyncTest() : SyncTest(SINGLE_CLIENT) {}
   ~SingleClientExtensionAppsSyncTest() override = default;
 
-  bool UseVerifier() override {
-    // TODO(crbug.com/1137717): rewrite tests to not use verifier profile.
-    return true;
-  }
-
-  bool SetupClients() override {
-    if (!SyncTest::SetupClients()) {
-      return false;
-    }
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    // Apps sync is controlled by a dedicated preference on Lacros,
-    // corresponding to the Apps toggle in OS Sync settings.
-    if (base::FeatureList::IsEnabled(syncer::kSyncChromeOSAppsToggleSharing)) {
-      GetSyncService(0)->GetUserSettings()->SetAppsSyncEnabledByOs(true);
-    }
-#endif
-    return true;
+  // Apps sync is only supported with Sync-the-feature.
+  SetupSyncMode GetSetupSyncMode() const override {
+    return SetupSyncMode::kSyncTheFeature;
   }
 
  private:
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  web_app::test::ScopedSkipMainProfileCheck skip_main_profile_check;
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 #if BUILDFLAG(IS_WIN)
   // This stops extension installation from creating a shortcut in the real
   // desktop startup dir. This prevents Chrome launching with the extension
@@ -67,87 +102,83 @@ class SingleClientExtensionAppsSyncTest : public SyncTest {
 
 IN_PROC_BROWSER_TEST_F(SingleClientExtensionAppsSyncTest, StartWithNoApps) {
   ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(AllProfilesHaveSameApps());
+  ASSERT_TRUE(FakeServerAppChecker({}).Wait());
 }
 
 IN_PROC_BROWSER_TEST_F(SingleClientExtensionAppsSyncTest,
                        StartWithSomeLegacyApps) {
   ASSERT_TRUE(SetupClients());
 
-  const int kNumApps = 2;
-  for (int i = 0; i < kNumApps; ++i) {
-    InstallHostedApp(GetProfile(0), i);
-    InstallHostedApp(verifier(), i);
-  }
+  const std::string id0 = InstallHostedApp(GetProfile(0), 0);
+  const std::string id1 = InstallHostedApp(GetProfile(0), 1);
 
   ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(AllProfilesHaveSameApps());
+  ASSERT_TRUE(FakeServerAppChecker({id0, id1}).Wait());
 }
 
 IN_PROC_BROWSER_TEST_F(SingleClientExtensionAppsSyncTest,
                        StartWithSomePlatformApps) {
   ASSERT_TRUE(SetupClients());
 
-  const int kNumApps = 2;
-  for (int i = 0; i < kNumApps; ++i) {
-    InstallPlatformApp(GetProfile(0), i);
-    InstallPlatformApp(verifier(), i);
-  }
+  const std::string id0 = InstallPlatformApp(GetProfile(0), 0);
+  const std::string id1 = InstallPlatformApp(GetProfile(0), 1);
 
   ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(AllProfilesHaveSameApps());
+  ASSERT_TRUE(FakeServerAppChecker({id0, id1}).Wait());
 }
 
 IN_PROC_BROWSER_TEST_F(SingleClientExtensionAppsSyncTest,
                        InstallSomeLegacyApps) {
   ASSERT_TRUE(SetupSync());
 
-  const int kNumApps = 2;
-  for (int i = 0; i < kNumApps; ++i) {
-    InstallHostedApp(GetProfile(0), i);
-    InstallHostedApp(verifier(), i);
-  }
+  const std::string id0 = InstallHostedApp(GetProfile(0), 0);
+  const std::string id1 = InstallHostedApp(GetProfile(0), 1);
 
-  ASSERT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
-  ASSERT_TRUE(AllProfilesHaveSameApps());
+  ASSERT_TRUE(FakeServerAppChecker({id0, id1}).Wait());
 }
 
+// TODO(crbug.com/480145614): Frequently flaky in Linux dbg, MSAN, and CFI bots.
+#if BUILDFLAG(IS_LINUX) && (defined(MEMORY_SANITIZER) || !defined(NDEBUG) || \
+                            BUILDFLAG(CFI_ICALL_CHECK))
+#define MAYBE_InstallSomePlatformApps DISABLED_InstallSomePlatformApps
+#else
+#define MAYBE_InstallSomePlatformApps InstallSomePlatformApps
+#endif
 IN_PROC_BROWSER_TEST_F(SingleClientExtensionAppsSyncTest,
-                       InstallSomePlatformApps) {
+                       MAYBE_InstallSomePlatformApps) {
   ASSERT_TRUE(SetupSync());
 
-  const int kNumApps = 2;
-  for (int i = 0; i < kNumApps; ++i) {
-    InstallPlatformApp(GetProfile(0), i);
-    InstallPlatformApp(verifier(), i);
-  }
+  const std::string id0 = InstallPlatformApp(GetProfile(0), 0);
+  const std::string id1 = InstallPlatformApp(GetProfile(0), 1);
 
-  ASSERT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
-  ASSERT_TRUE(AllProfilesHaveSameApps());
+  ASSERT_TRUE(FakeServerAppChecker({id0, id1}).Wait());
 }
 
 IN_PROC_BROWSER_TEST_F(SingleClientExtensionAppsSyncTest, InstallSomeApps) {
   ASSERT_TRUE(SetupSync());
 
-  // TODO(crbug.com/1124986): Determine if these values
-  // can be raised without introducing flakiness.
-  const int kNumApps = 1;
-  const int kNumPlatformApps = 1;
+  const std::string id0 = InstallHostedApp(GetProfile(0), 0);
+  const std::string id1 = InstallPlatformApp(GetProfile(0), 1);
 
-  int i = 0;
+  ASSERT_TRUE(FakeServerAppChecker({id0, id1}).Wait());
 
-  for (int j = 0; j < kNumApps; ++i, ++j) {
-    InstallHostedApp(GetProfile(0), i);
-    InstallHostedApp(verifier(), i);
-  }
-
-  for (int j = 0; j < kNumPlatformApps; ++i, ++j) {
-    InstallPlatformApp(GetProfile(0), i);
-    InstallPlatformApp(verifier(), i);
-  }
-
-  ASSERT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
-  ASSERT_TRUE(AllProfilesHaveSameApps());
+  // Context: the call to `InstallPlatformApp` installs and loads a temporary
+  // app. In detail, the background page of the app is built in the
+  // ExtensionURLLoader::LoadExtension method and then sent to the renderer by
+  // calling ExtensionURLLoader::WriteData. The browser then waits for the
+  // renderer to request a second app asset, which will trigger a second call to
+  // ExtensionURLLoader::LoadExtension. This second invocation reaches the end
+  // of the method to the async call to ReadResourceInfo and OnResourceInfoRead.
+  // This last method calls ShouldVerifyContent where the ExtensionRegistry is
+  // accessed.
+  //
+  // The following call ensures that ShouldVerifyContent is invoked while the
+  // ExtensionRegistryFactory is still valid. The other tests in this file do
+  // not need this call as  they install 2 apps, calling WriteData 2 times. This
+  // fills the mojo buffer, so that it gets flushed and transmitted immediately,
+  // effectively making both installations synchronous, and resulting in the
+  // execution of ShouldVerifyContent before the test is completed.
+  content::RunAllTasksUntilIdle();
 }
 
 std::vector<sync_pb::SyncEntity> FilterForBookmarkApps(
@@ -171,7 +202,7 @@ class NoBookmarkAppServerChecker
   // StatusChangeChecker implementation.
   bool IsExitConditionSatisfied(std::ostream* os) override {
     std::vector<sync_pb::SyncEntity> bookmark_entities = FilterForBookmarkApps(
-        fake_server()->GetSyncEntitiesByModelType(syncer::APPS));
+        fake_server()->GetSyncEntitiesByDataType(syncer::APPS));
     testing::StringMatchResultListener result_listener;
     const bool matches = testing::ExplainMatchResult(
         testing::IsEmpty(), bookmark_entities, &result_listener);
@@ -184,7 +215,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientExtensionAppsSyncTest, NoBookmarkApps) {
   const int64_t kDefaultTime = 1234L;
 
   std::vector<sync_pb::SyncEntity> server_apps =
-      GetFakeServer()->GetSyncEntitiesByModelType(syncer::APPS);
+      GetFakeServer()->GetSyncEntitiesByDataType(syncer::APPS);
   ASSERT_EQ(0ul, server_apps.size());
 
   // This creates a "google photos" bookmark app specifics.
@@ -206,11 +237,11 @@ IN_PROC_BROWSER_TEST_F(SingleClientExtensionAppsSyncTest, NoBookmarkApps) {
           /*non_unique_name=*/"", "ncmjhecbjeaamljdfahankockkkdmedg", specifics,
           kDefaultTime, kDefaultTime));
   server_apps = FilterForBookmarkApps(
-      GetFakeServer()->GetSyncEntitiesByModelType(syncer::APPS));
+      GetFakeServer()->GetSyncEntitiesByDataType(syncer::APPS));
   ASSERT_EQ(1u, server_apps.size());
 
   ASSERT_TRUE(SetupSync());
-  // Since bookmark apps are deprecated (https://crbug.com/877898), the client
+  // Since bookmark apps are deprecated (https://crbug.com/40591010), the client
   // should have deleted it from the server.
   EXPECT_TRUE(NoBookmarkAppServerChecker().Wait());
 }

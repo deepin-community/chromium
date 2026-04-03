@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_LOGIN_SCREENS_OSAUTH_FACTOR_SETUP_SUCCESS_SCREEN_H_
 #define CHROME_BROWSER_ASH_LOGIN_SCREENS_OSAUTH_FACTOR_SETUP_SUCCESS_SCREEN_H_
 
+#include <memory>
 #include <string>
 
 #include "base/functional/callback.h"
@@ -44,7 +45,7 @@ class FactorSetupSuccessScreen : public BaseOSAuthSetupScreen {
   bool MaybeSkip(WizardContext& context) override;
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
 
   void InspectContext(UserContext* user_context);
   void DoShow();

@@ -6,7 +6,6 @@
 
 #include "base/check_op.h"
 #include "base/files/file_path.h"
-#include "base/functional/callback_forward.h"
 #include "base/i18n/message_formatter.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -15,6 +14,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/ash/drive/file_system_util.h"
 #include "chrome/browser/ash/file_manager/copy_or_move_io_task.h"
 #include "chrome/browser/ash/file_manager/delete_io_task.h"
@@ -41,27 +42,16 @@ const int kAlternateUrlTimeout = 15;
 // alternate URL.
 const int kAlternateUrlPollInterval = 200;
 
-// Runs the callback provided to `DriveUploadHandler::Upload`.
-void OnUploadDone(scoped_refptr<DriveUploadHandler> drive_upload_handler,
-                  DriveUploadHandler::UploadCallback callback,
-                  OfficeTaskResult task_result,
-                  std::optional<GURL> hosted_url,
-                  int64_t upload_size) {
-  std::move(callback).Run(task_result, std::move(hosted_url), upload_size);
-}
-
 std::string GetTargetAppName(base::FilePath file_path) {
   const std::string extension = base::ToLowerASCII(file_path.FinalExtension());
-  if (base::Contains(file_manager::file_tasks::WordGroupExtensions(),
-                     extension)) {
+  if (file_manager::file_tasks::WordGroupExtensions().contains(extension)) {
     return l10n_util::GetStringUTF8(IDS_OFFICE_FILE_HANDLER_APP_GOOGLE_DOCS);
   }
-  if (base::Contains(file_manager::file_tasks::ExcelGroupExtensions(),
-                     extension)) {
+  if (file_manager::file_tasks::ExcelGroupExtensions().contains(extension)) {
     return l10n_util::GetStringUTF8(IDS_OFFICE_FILE_HANDLER_APP_GOOGLE_SHEETS);
   }
-  if (base::Contains(file_manager::file_tasks::PowerPointGroupExtensions(),
-                     extension)) {
+  if (file_manager::file_tasks::PowerPointGroupExtensions().contains(
+          extension)) {
     return l10n_util::GetStringUTF8(IDS_OFFICE_FILE_HANDLER_APP_GOOGLE_SLIDES);
   }
   return l10n_util::GetStringUTF8(IDS_OFFICE_FILE_HANDLER_APP_GOOGLE_DOCS);
@@ -69,39 +59,28 @@ std::string GetTargetAppName(base::FilePath file_path) {
 
 }  // namespace
 
-// static.
-void DriveUploadHandler::Upload(
-    Profile* profile,
-    const FileSystemURL& source_url,
-    UploadCallback callback,
-    base::SafeRef<CloudOpenMetrics> cloud_open_metrics) {
-  scoped_refptr<DriveUploadHandler> drive_upload_handler =
-      new DriveUploadHandler(profile, source_url, cloud_open_metrics);
-  // Keep `drive_upload_handler` alive until `UploadDone` executes.
-  drive_upload_handler->Run(
-      base::BindOnce(&OnUploadDone, drive_upload_handler, std::move(callback)));
-}
-
 DriveUploadHandler::DriveUploadHandler(
     Profile* profile,
-    const FileSystemURL source_url,
+    const FileSystemURL& source_url,
+    UploadType upload_type,
+    UploadCallback callback,
     base::SafeRef<CloudOpenMetrics> cloud_open_metrics)
     : profile_(profile),
       file_system_context_(
           file_manager::util::GetFileManagerFileSystemContext(profile)),
       drive_integration_service_(
           drive::DriveIntegrationServiceFactory::FindForProfile(profile)),
-      upload_type_(GetUploadType(profile, source_url)),
+      upload_type_(upload_type),
       notification_manager_(
           base::MakeRefCounted<CloudUploadNotificationManager>(
               profile,
-              source_url.path().BaseName().value(),
               l10n_util::GetStringUTF8(IDS_OFFICE_CLOUD_PROVIDER_GOOGLE_DRIVE),
               GetTargetAppName(source_url.path()),
               // TODO(b/242685536) Update when support for multi-files is added.
               /*num_files=*/1,
               upload_type_)),
       source_url_(source_url),
+      callback_(std::move(callback)),
       cloud_open_metrics_(cloud_open_metrics) {
   observed_copy_task_id_ = -1;
   observed_delete_task_id_ = -1;
@@ -109,10 +88,8 @@ DriveUploadHandler::DriveUploadHandler(
 
 DriveUploadHandler::~DriveUploadHandler() = default;
 
-void DriveUploadHandler::Run(UploadCallback callback) {
-  DCHECK(callback);
-  DCHECK(!callback_);
-  callback_ = std::move(callback);
+void DriveUploadHandler::Run() {
+  DCHECK(callback_);
 
   if (!profile_) {
     LOG(ERROR) << "No profile";
@@ -264,9 +241,7 @@ void DriveUploadHandler::OnSuccessfulUpload(
   const OfficeTaskResult task_result = upload_type_ == UploadType::kCopy
                                            ? OfficeTaskResult::kCopied
                                            : OfficeTaskResult::kMoved;
-  if (callback_) {
-    std::move(callback_).Run(task_result, hosted_url, upload_size_);
-  }
+  std::move(callback_).Run(task_result, hosted_url, upload_size_);
 }
 
 void DriveUploadHandler::OnFailedUpload(OfficeFilesUploadResult result_metric,
@@ -281,10 +256,7 @@ void DriveUploadHandler::OnFailedUpload(OfficeFilesUploadResult result_metric,
     LOG(ERROR) << "Upload to Google Drive: " << error_message;
     notification_manager_->ShowUploadError(error_message);
   }
-  if (callback_) {
-    std::move(callback_).Run(OfficeTaskResult::kFailedToUpload, std::nullopt,
-                             0);
-  }
+  std::move(callback_).Run(OfficeTaskResult::kFailedToUpload, std::nullopt, 0);
 }
 
 void DriveUploadHandler::OnIOTaskStatus(
@@ -357,7 +329,6 @@ void DriveUploadHandler::OnCopyStatus(
     case file_manager::io_task::State::kNeedPassword:
       NOTREACHED() << "Encrypted file should not need password to be copied or "
                       "moved. Case should not be reached.";
-      return;
   }
 }
 
@@ -367,7 +338,6 @@ void DriveUploadHandler::OnDeleteStatus(
     case file_manager::io_task::State::kCancelled:
       NOTREACHED() << "Deletion of source or destination file should not have "
                       "been cancelled.";
-      ABSL_FALLTHROUGH_INTENDED;
     case file_manager::io_task::State::kError:
     case file_manager::io_task::State::kSuccess:
       std::move(end_upload_callback_).Run();
@@ -483,7 +453,6 @@ void DriveUploadHandler::OnSyncingStatusUpdate(
         return;
       case drivefs::mojom::ItemEvent::State::kCancelledAndDeleted:
         NOTREACHED();
-        return;
       case drivefs::mojom::ItemEvent::State::kCancelledAndTrashed:
         LOG(ERROR) << "Drive sync error: cancelled and trashed";
         OnEndCopy(OfficeFilesUploadResult::kSyncCancelledAndTrashed);
@@ -561,16 +530,22 @@ void DriveUploadHandler::OnGetDriveMetadata(
 
   // URLs for editing Office files in Web Drive all have a "docs.google.com"
   // host.
-  if (hosted_url.host() != "docs.google.com") {
+  if (hosted_url.GetHost() != "docs.google.com") {
     if (timed_out) {
-      LOG(ERROR) << "Unexpected alternate URL - Drive editing unavailable: "
-                 << hosted_url.host();
-      // TODO(b/323452926): Remove DumpWithoutCrashing() once root cause
-      // discovered.
-      SCOPED_CRASH_KEY_STRING64("OfficeUpload", "UnexpectedHost",
-                                hosted_url.host());
-      base::debug::DumpWithoutCrashing();
-      OnEndCopy(OfficeFilesUploadResult::kUnexpectedAlternateUrlHost);
+      if (hosted_url.GetHost() == "drive.google.com" &&
+          !file_manager::file_tasks::IsOfficeFileMimeType(
+              metadata->content_mime_type)) {
+        // The drive.google.com will appear if an uploaded file has an Office
+        // extension but is not actually an Office file. For example, the user
+        // just renamed their .mp4 to a .doc.
+        LOG(ERROR) << "Non-Office file cannot be opened with Google Docs";
+        OnEndCopy(OfficeFilesUploadResult::kFileNotAnOfficeFile,
+                  base::unexpected(GetNotAValidDocumentErrorMessage()));
+      } else {
+        LOG(ERROR) << "Unexpected alternate URL - Drive editing unavailable: "
+                   << hosted_url.GetHost();
+        OnEndCopy(OfficeFilesUploadResult::kUnexpectedAlternateUrlHost);
+      }
     } else {
       alternate_url_poll_timer_.Start(
           FROM_HERE, base::Milliseconds(kAlternateUrlPollInterval),

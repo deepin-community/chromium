@@ -7,11 +7,11 @@
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
-#include "chrome/browser/ash/login/ui/login_web_dialog.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
+#include "chrome/browser/ui/ash/login/login_web_dialog.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
@@ -56,7 +56,7 @@ void EnableDebuggingScreen::ShowImpl() {
 
 void EnableDebuggingScreen::HideImpl() {}
 
-void EnableDebuggingScreen::OnUserAction(const base::Value::List& args) {
+void EnableDebuggingScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionCancel || action_id == kUserActionDone) {
     exit_callback_.Run();

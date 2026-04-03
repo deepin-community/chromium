@@ -11,12 +11,14 @@
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/enterprise/remote_commands/user_remote_commands_service_factory.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/policy/cloud/user_policy_signin_service_factory.h"
 #include "chrome/browser/policy/device_management_service_configuration.h"
@@ -52,10 +54,6 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/lacros/lacros_test_helper.h"
-#endif
-
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/policy/cloud/user_policy_signin_service_mobile.h"
 #else
@@ -82,11 +80,19 @@ constexpr char kHostedDomainResponse[] = R"(
     })";
 
 std::unique_ptr<UserCloudPolicyManager> BuildCloudPolicyManager() {
-  auto store = std::make_unique<MockUserCloudPolicyStore>();
+  auto store = std::make_unique<MockUserCloudPolicyStore>(
+      dm_protocol::GetChromeUserPolicyType());
   EXPECT_CALL(*store, Load()).Times(AnyNumber());
 
+  std::unique_ptr<MockUserCloudPolicyStore> extension_install_store;
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  extension_install_store = std::make_unique<MockUserCloudPolicyStore>(
+      dm_protocol::kChromeExtensionInstallUserCloudPolicyType);
+  EXPECT_CALL(*extension_install_store, Load()).Times(AnyNumber());
+#endif
+
   return std::make_unique<UserCloudPolicyManager>(
-      std::move(store), base::FilePath(),
+      std::move(store), std::move(extension_install_store), base::FilePath(),
       /*cloud_external_data_manager=*/nullptr,
       base::SingleThreadTaskRunner::GetCurrentDefault(),
       network::TestNetworkConnectionTracker::CreateGetter());
@@ -99,7 +105,10 @@ class UserPolicySigninServiceTest : public testing::Test {
         test_account_id_(AccountId::FromUserEmailGaiaId(
             kTestUser,
             signin::GetTestGaiaIdForEmail(kTestUser))),
-        register_completed_(false) {}
+        register_completed_(false) {
+    scoped_feature_list_.InitAndEnableFeature(
+        enterprise_commands::kUserRemoteCommands);
+  }
 
   MOCK_METHOD1(OnPolicyRefresh, void(bool));
 
@@ -113,6 +122,11 @@ class UserPolicySigninServiceTest : public testing::Test {
     user_affiliation_ids_ = user_affiliation_ids;
   }
 
+  void SigninToChrome() {
+    identity_test_env()->MakePrimaryAccountAvailable(
+        kTestUser, signin::ConsentLevel::kSignin);
+  }
+
   void RegisterPolicyClientWithCallback(UserPolicySigninService* service) {
     UserPolicySigninServiceBase::PolicyRegistrationCallback callback =
         base::BindOnce(&UserPolicySigninServiceTest::OnRegisterCompleted,
@@ -121,12 +135,12 @@ class UserPolicySigninServiceTest : public testing::Test {
         identity_test_env()
             ->identity_manager()
             ->FindExtendedAccountInfoByEmailAddress(kTestUser);
-    if (account_info.IsEmpty()) {
-      account_info = identity_test_env()->MakeAccountAvailable(kTestUser);
-    }
-    DCHECK(!account_info.IsEmpty());
-    service->RegisterForPolicyWithAccountId(kTestUser, account_info.account_id,
-                                            std::move(callback));
+
+    CHECK(!account_info.IsEmpty());
+    service->RegisterForPolicyWithAccountId(
+        kTestUser, account_info.account_id,
+        /*is_registration_for_management_consistency_check=*/false,
+        std::move(callback));
     ASSERT_TRUE(IsRequestActive());
   }
 
@@ -137,14 +151,12 @@ class UserPolicySigninServiceTest : public testing::Test {
     UserPolicySigninServiceFactory::SetDeviceManagementServiceForTesting(
         &device_management_service_);
 
-    local_state_ = std::make_unique<TestingPrefServiceSimple>();
-    RegisterLocalState(local_state_->registry());
-    TestingBrowserProcess::GetGlobal()->SetLocalState(local_state_.get());
     TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(
         test_url_loader_factory_.GetSafeWeakWrapper());
 
     g_browser_process->browser_policy_connector()->Init(
-        local_state_.get(), test_url_loader_factory_.GetSafeWeakWrapper());
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        test_url_loader_factory_.GetSafeWeakWrapper());
 
     // Create a testing profile with cloud-policy-on-signin enabled, and bring
     // up a UserCloudPolicyManager with a MockUserCloudPolicyStore.
@@ -185,11 +197,6 @@ class UserPolicySigninServiceTest : public testing::Test {
     // Free the profile before we clear out the browser prefs.
     identity_test_env_adaptor_.reset();
     profile_.reset();
-    TestingBrowserProcess* testing_browser_process =
-        TestingBrowserProcess::GetGlobal();
-    testing_browser_process->SetLocalState(NULL);
-    local_state_.reset();
-    testing_browser_process->ShutdownBrowserPolicyConnector();
     base::RunLoop run_loop;
     run_loop.RunUntilIdle();
   }
@@ -204,13 +211,8 @@ class UserPolicySigninServiceTest : public testing::Test {
     EXPECT_CALL(*mock_store_, Clear());
 
     // Let the SigninService know that the profile has been created.
-#if BUILDFLAG(IS_ANDROID)
-    UserPolicySigninServiceFactory::GetForProfile(profile_.get())
-        ->OnProfileAdded(profile_.get());
-#else
     UserPolicySigninServiceFactory::GetForProfile(profile_.get())
         ->OnProfileReady(profile_.get());
-#endif  // BUILDFLAG(IS_ANDROID)
   }
 
   bool IsRequestActive() {
@@ -244,11 +246,9 @@ class UserPolicySigninServiceTest : public testing::Test {
     UserPolicySigninService* signin_service =
         UserPolicySigninServiceFactory::GetForProfile(profile_.get());
     EXPECT_CALL(*this, OnPolicyRefresh(true)).Times(0);
-    RegisterPolicyClientWithCallback(signin_service);
 
-    // Sign in to Chrome.
-    identity_test_env()->SetPrimaryAccount(kTestUser,
-                                           signin::ConsentLevel::kSync);
+    SigninToChrome();
+    RegisterPolicyClientWithCallback(signin_service);
 
     // Mimic successful oauth token fetch.
     MakeOAuthTokenFetchSucceed();
@@ -320,15 +320,15 @@ class UserPolicySigninServiceTest : public testing::Test {
   // True if OnRegisterCompleted() was called.
   bool register_completed_;
 
+  base::HistogramTester histogram_tester_;
+
   testing::StrictMock<MockJobCreationHandler> job_creation_handler_;
   FakeDeviceManagementService device_management_service_{
       &job_creation_handler_};
 
-  std::unique_ptr<TestingPrefServiceSimple> local_state_;
   network::TestURLLoaderFactory test_url_loader_factory_;
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  chromeos::ScopedLacrosServiceTestHelper test_helper;
-#endif
+
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 class UserPolicySigninServiceSignedInTest : public UserPolicySigninServiceTest {
@@ -339,16 +339,11 @@ class UserPolicySigninServiceSignedInTest : public UserPolicySigninServiceTest {
 
     // Set the user as signed in.
     identity_test_env()->SetPrimaryAccount(kTestUser,
-                                           signin::ConsentLevel::kSync);
+                                           signin::ConsentLevel::kSignin);
 
     // Let the SigninService know that the profile has been created.
-#if BUILDFLAG(IS_ANDROID)
-    UserPolicySigninServiceFactory::GetForProfile(profile_.get())
-        ->OnProfileAdded(profile_.get());
-#else
     UserPolicySigninServiceFactory::GetForProfile(profile_.get())
         ->OnProfileReady(profile_.get());
-#endif  // BUILDFLAG(IS_ANDROID)
   }
 };
 
@@ -362,7 +357,7 @@ TEST_F(UserPolicySigninServiceTest, InitWhileSignedOut) {
   EXPECT_FALSE(manager_->ArePoliciesRequired());
 }
 
-// TODO(crbug.com/1312544): Extend the test coverage by merging tests from
+// TODO(crbug.com/40831734): Extend the test coverage by merging tests from
 // ios/chrome/browser/policy/cloud/user_policy_signin_service_unittest.mm here.
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -382,7 +377,7 @@ TEST_F(UserPolicySigninServiceTest, InitRefreshTokenAvailableBeforeSignin) {
 
   // Sign in to Chrome.
   identity_test_env()->SetPrimaryAccount(kTestUser,
-                                         signin::ConsentLevel::kSync);
+                                         signin::ConsentLevel::kSignin);
 
   // Complete initialization of the store.
   mock_store_->NotifyStoreLoaded();
@@ -451,7 +446,7 @@ TEST_F(UserPolicySigninServiceTest, SignInAfterInit) {
 
   // Now sign in the user.
   identity_test_env()->SetPrimaryAccount(kTestUser,
-                                         signin::ConsentLevel::kSync);
+                                         signin::ConsentLevel::kSignin);
 
   // Complete initialization of the store.
   mock_store_->NotifyStoreLoaded();
@@ -475,7 +470,7 @@ TEST_F(UserPolicySigninServiceTest, SignInWithNonEnterpriseUser) {
 
   // Now sign in a non-enterprise user (gmail.com domain).
   identity_test_env()->SetPrimaryAccount("non_enterprise_user@gmail.com",
-                                         signin::ConsentLevel::kSync);
+                                         signin::ConsentLevel::kSignin);
 
   // Complete initialization of the store.
   mock_store_->NotifyStoreLoaded();
@@ -497,7 +492,7 @@ TEST_F(UserPolicySigninServiceTest, UnregisteredClient) {
 
   // Now sign in the user.
   identity_test_env()->SetPrimaryAccount(kTestUser,
-                                         signin::ConsentLevel::kSync);
+                                         signin::ConsentLevel::kSignin);
 
   // Make oauth token available.
   identity_test_env()->SetRefreshTokenForPrimaryAccount();
@@ -516,6 +511,10 @@ TEST_F(UserPolicySigninServiceTest, UnregisteredClient) {
   // Client registration should be in progress since we have an oauth token.
   ASSERT_TRUE(IsRequestActive());
   EXPECT_TRUE(manager_->ArePoliciesRequired());
+
+  histogram_tester_.ExpectUniqueSample(
+      kRegisterCloudPolicyServiceHistogramName,
+      RegisterCloudPolicyServiceEvent::kRegistrationWithGaia, 1);
 }
 
 TEST_F(UserPolicySigninServiceTest, RegisteredClient) {
@@ -525,7 +524,7 @@ TEST_F(UserPolicySigninServiceTest, RegisteredClient) {
 
   // Now sign in the user.
   identity_test_env()->SetPrimaryAccount(kTestUser,
-                                         signin::ConsentLevel::kSync);
+                                         signin::ConsentLevel::kSignin);
 
   // Make oauth token available.
   identity_test_env()->SetRefreshTokenForPrimaryAccount();
@@ -542,6 +541,8 @@ TEST_F(UserPolicySigninServiceTest, RegisteredClient) {
   auto data = std::make_unique<enterprise_management::PolicyData>();
   data->set_request_token("fake token");
   data->set_device_id("fake client id");
+  data->set_cec_enabled(true);
+  data->set_command_invalidation_topic("fake-topic");
   mock_store_->set_policy_data_for_testing(std::move(data));
 
   // Since there is a signed-in user expect a policy fetch to be started to
@@ -569,6 +570,10 @@ TEST_F(UserPolicySigninServiceTest, RegisteredClient) {
             job_type_1);
   EXPECT_EQ(DeviceManagementService::JobConfiguration::TYPE_POLICY_FETCH,
             job_type_2);
+
+  histogram_tester_.ExpectUniqueSample(
+      kRegisterCloudPolicyServiceHistogramName,
+      RegisterCloudPolicyServiceEvent::kNoRegistration, 1);
 }
 
 // Tests that the explicit policy registration can coexist with registration
@@ -578,24 +583,7 @@ TEST_F(UserPolicySigninServiceTest,
   UserPolicySigninService* signin_service =
       UserPolicySigninServiceFactory::GetForProfile(profile_.get());
 
-  // Start registration process in a temporary client.
-  RegisterPolicyClientWithCallback(signin_service);
-  // UserCloudPolicyManager should not be initialized.
-  ASSERT_FALSE(manager_->core()->service());
-  // Complete several registration steps.
-  MakeOAuthTokenFetchSucceed();
-  DeviceManagementService::JobForTesting job;
-  EXPECT_CALL(job_creation_handler_, OnJobCreation).WillOnce(SaveArg<0>(&job));
-  ReportHostedDomainStatus(true);
-  ASSERT_FALSE(IsRequestActive());
-  Mock::VerifyAndClearExpectations(&job_creation_handler_);
-  ASSERT_TRUE(job.IsActive());
-  EXPECT_FALSE(register_completed_);
-
-  // Add a primary account now. This should trigger the UserCloudPolicyManager
-  // initialization.
-  identity_test_env()->MakePrimaryAccountAvailable(
-      kTestUser, signin::ConsentLevel::kSignin);
+  SigninToChrome();
   // UserCloudPolicyManager should be initialized.
   EXPECT_EQ(mock_store_->signin_account_id(), test_account_id_);
   ASSERT_TRUE(manager_->core()->service());
@@ -605,6 +593,18 @@ TEST_F(UserPolicySigninServiceTest,
   mock_store_->NotifyStoreLoaded();
   // New access token request has been sent.
   ASSERT_TRUE(IsRequestActive());
+
+  // Start registration process in a temporary client.
+  RegisterPolicyClientWithCallback(signin_service);
+  // Complete several registration steps.
+  MakeOAuthTokenFetchSucceed();
+  DeviceManagementService::JobForTesting job;
+  EXPECT_CALL(job_creation_handler_, OnJobCreation).WillOnce(SaveArg<0>(&job));
+  ReportHostedDomainStatus(true);
+  ASSERT_FALSE(IsRequestActive());
+  Mock::VerifyAndClearExpectations(&job_creation_handler_);
+  ASSERT_TRUE(job.IsActive());
+  EXPECT_FALSE(register_completed_);
 
   // Complete registration in the temporary client.
   em::DeviceManagementResponse registration_response;
@@ -697,6 +697,8 @@ TEST_F(UserPolicySigninServiceTest,
   auto data = std::make_unique<enterprise_management::PolicyData>();
   data->set_request_token("fake token");
   data->set_device_id("fake client id");
+  data->set_cec_enabled(true);
+  data->set_command_invalidation_topic("fake-topic");
   mock_store_->set_policy_data_for_testing(std::move(data));
 
   // Since there is a signed-in user expect a policy fetch to be started to
@@ -762,11 +764,10 @@ TEST_F(UserPolicySigninServiceSignedInTest, SignOutAfterInit) {
 TEST_F(UserPolicySigninServiceTest, RegisterPolicyClientOAuthFailure) {
   UserPolicySigninService* signin_service =
       UserPolicySigninServiceFactory::GetForProfile(profile_.get());
+  SigninToChrome();
   RegisterPolicyClientWithCallback(signin_service);
   Mock::VerifyAndClearExpectations(this);
 
-  // UserCloudPolicyManager should not be initialized.
-  ASSERT_FALSE(manager_->core()->service());
   ASSERT_TRUE(IsRequestActive());
   EXPECT_FALSE(register_completed_);
 
@@ -781,10 +782,9 @@ TEST_F(UserPolicySigninServiceTest, RegisterPolicyClientOAuthFailure) {
 TEST_F(UserPolicySigninServiceTest, RegisterPolicyClientNonHostedDomain) {
   UserPolicySigninService* signin_service =
       UserPolicySigninServiceFactory::GetForProfile(profile_.get());
+  SigninToChrome();
   RegisterPolicyClientWithCallback(signin_service);
 
-  // UserCloudPolicyManager should not be initialized.
-  ASSERT_FALSE(manager_->core()->service());
   ASSERT_TRUE(IsRequestActive());
 
   // Cause the access token request to succeed.
@@ -810,10 +810,8 @@ TEST_F(UserPolicySigninServiceTest, RegisterPolicyClientNonHostedDomain) {
 TEST_F(UserPolicySigninServiceTest, RegisterPolicyClientFailedRegistration) {
   UserPolicySigninService* signin_service =
       UserPolicySigninServiceFactory::GetForProfile(profile_.get());
+  SigninToChrome();
   RegisterPolicyClientWithCallback(signin_service);
-
-  // UserCloudPolicyManager should not be initialized.
-  ASSERT_FALSE(manager_->core()->service());
 
   // Mimic successful oauth token fetch.
   MakeOAuthTokenFetchSucceed();
@@ -852,10 +850,8 @@ TEST_F(UserPolicySigninServiceTest, RegisterPolicyClientFailedRegistration) {
 TEST_F(UserPolicySigninServiceTest, RegisterPolicyClientSucceeded) {
   UserPolicySigninService* signin_service =
       UserPolicySigninServiceFactory::GetForProfile(profile_.get());
+  SigninToChrome();
   RegisterPolicyClientWithCallback(signin_service);
-
-  // UserCloudPolicyManager should not be initialized.
-  ASSERT_FALSE(manager_->core()->service());
 
   // Mimic successful oauth token fetch.
   MakeOAuthTokenFetchSucceed();
@@ -891,8 +887,6 @@ TEST_F(UserPolicySigninServiceTest, RegisterPolicyClientSucceeded) {
 
   EXPECT_TRUE(register_completed_);
   EXPECT_EQ(dm_token_, expected_dm_token);
-  // UserCloudPolicyManager should not be initialized.
-  ASSERT_FALSE(manager_->core()->service());
 }
 
 // Tests `FetchPolicyForSignedInUser()` with no active client.
@@ -902,9 +896,7 @@ TEST_F(UserPolicySigninServiceTest, FetchPolicyForSignedInUser) {
 
   // `FetchPolicyForSignedInUser()` will create a new registered client and
   // fetch policies with it.
-  DeviceManagementService::JobConfiguration::JobType job_type_1 =
-      DeviceManagementService::JobConfiguration::TYPE_INVALID;
-  DeviceManagementService::JobConfiguration::JobType job_type_2 =
+  DeviceManagementService::JobConfiguration::JobType job_type =
       DeviceManagementService::JobConfiguration::TYPE_INVALID;
   em::DeviceManagementRequest policy_fetch_request;
   DeviceManagementService::JobForTesting job;
@@ -914,10 +906,8 @@ TEST_F(UserPolicySigninServiceTest, FetchPolicyForSignedInUser) {
   std::string user_affiliation_id = "user-affiliation_id";
 
   EXPECT_CALL(job_creation_handler_, OnJobCreation)
-      .WillOnce(DoAll(device_management_service_.CaptureJobType(&job_type_1),
-                      SaveArg<0>(&job)))
       .WillOnce(DoAll(
-          device_management_service_.CaptureJobType(&job_type_2),
+          device_management_service_.CaptureJobType(&job_type),
           device_management_service_.CaptureRequest(&policy_fetch_request),
           SaveArg<0>(&job)));
   EXPECT_CALL(device_dm_token_callback,
@@ -941,10 +931,8 @@ TEST_F(UserPolicySigninServiceTest, FetchPolicyForSignedInUser) {
   // Let it execute.
   base::RunLoop().RunUntilIdle();
   Mock::VerifyAndClearExpectations(&job_creation_handler_);
-  EXPECT_EQ(DeviceManagementService::JobConfiguration::TYPE_REMOTE_COMMANDS,
-            job_type_1);
   EXPECT_EQ(DeviceManagementService::JobConfiguration::TYPE_POLICY_FETCH,
-            job_type_2);
+            job_type);
 
   EXPECT_EQ(
       device_dm_token,
@@ -983,6 +971,9 @@ TEST_F(UserPolicySigninServiceTest, SignOutThenSignInAgain) {
 
   // Now sign in again.
   ASSERT_NO_FATAL_FAILURE(TestSuccessfulSignin());
+
+  histogram_tester_.ExpectTotalCount(kRegisterCloudPolicyServiceHistogramName,
+                                     0);
 }
 
 }  // namespace

@@ -7,11 +7,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_ROBIN_HOOD_MAP_INL_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_ROBIN_HOOD_MAP_INL_H_
 
-#include "third_party/blink/renderer/core/css/robin_hood_map.h"
-
 #include <algorithm>
 
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
+#include "third_party/blink/renderer/core/css/robin_hood_map.h"
 
 namespace blink {
 
@@ -40,13 +40,15 @@ RobinHoodMap<Key, Value>::InsertInternal(
       swap(to_insert, *bucket);
       distance = other_distance;
     }
-    ++bucket;
+    UNSAFE_BUFFERS(++bucket);
     ++distance;
     if (static_cast<unsigned>(distance) >= kPossibleBucketsPerKey) {
       // Insertion failed. Stick it in the spare bucket at the very bottom,
       // so that we don't lose it, but the caller will need to rehash.
-      DCHECK(buckets_[num_buckets_ + kPossibleBucketsPerKey - 1].key.IsNull());
-      buckets_[num_buckets_ + kPossibleBucketsPerKey - 1] = to_insert;
+      DCHECK(UNSAFE_BUFFERS(buckets_[num_buckets_ + kPossibleBucketsPerKey - 1])
+                 .key.IsNull());
+      UNSAFE_BUFFERS(buckets_[num_buckets_ + kPossibleBucketsPerKey - 1]) =
+          to_insert;
       return nullptr;
     }
   }
@@ -60,6 +62,10 @@ RobinHoodMap<Key, Value>::InsertInternal(
 template <class Key, class Value>
 typename RobinHoodMap<Key, Value>::Bucket* RobinHoodMap<Key, Value>::Insert(
     const Key& key) {
+  unsigned hash = key.Hash();
+  pre_filter_ |= 1ULL << (hash & 63);
+  pre_filter_ |= 1ULL << ((hash >> 6) & 63);
+
   Bucket* bucket = InsertInternal({key, {}});
   if (bucket != nullptr) {
     // Normal, happy path.
@@ -86,6 +92,7 @@ RobinHoodMap<Key, Value> RobinHoodMap<Key, Value>::Grow() {
       new_ht = new_ht.Grow();
     }
   }
+  new_ht.pre_filter_ = pre_filter_;
   return new_ht;
 }
 
@@ -104,7 +111,8 @@ RobinHoodMap<Key, Value>::InsertWithRehashing(const Key& key) {
   {
     Bucket* bucket = FindBucket(key);
     bool rehashing_would_help = false;
-    for (unsigned i = 0; i < kPossibleBucketsPerKey; ++i, ++bucket) {
+    for (unsigned i = 0; i < kPossibleBucketsPerKey;
+         ++i, UNSAFE_BUFFERS(++bucket)) {
       if (bucket->key.Hash() != key.Hash()) {
         rehashing_would_help = true;
         break;
@@ -116,7 +124,8 @@ RobinHoodMap<Key, Value>::InsertWithRehashing(const Key& key) {
       // the ones we skipped over have the same hash and thus
       // the same distance).
       // This leaves the hash table back into a consistent state.
-      Bucket* sentinel = &buckets_[num_buckets_ + kPossibleBucketsPerKey - 1];
+      Bucket* sentinel =
+          UNSAFE_BUFFERS(&buckets_[num_buckets_ + kPossibleBucketsPerKey - 1]);
       DCHECK_EQ(sentinel->key, key);
       sentinel->key = AtomicString();
       return nullptr;
@@ -132,13 +141,13 @@ RobinHoodMap<Key, Value>::InsertWithRehashing(const Key& key) {
   // Find out where the element ended up (it's hard to keep track of where
   // everything moved during the rehashing).
   Bucket* bucket = FindBucket(key);
-  for (unsigned i = 0; i < kPossibleBucketsPerKey; ++i, ++bucket) {
+  for (unsigned i = 0; i < kPossibleBucketsPerKey;
+       ++i, UNSAFE_BUFFERS(++bucket)) {
     if (bucket->key == key) {
       return bucket;
     }
   }
   NOTREACHED();
-  return nullptr;
 }
 
 }  // namespace blink

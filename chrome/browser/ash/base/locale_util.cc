@@ -4,18 +4,22 @@
 
 #include "chrome/browser/ash/base/locale_util.h"
 
+#include <algorithm>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/language/core/common/locale_util.h"
 #include "components/prefs/pref_service.h"
@@ -50,6 +54,7 @@ struct SwitchLanguageData {
   const bool enable_locale_keyboard_layouts;
   const bool login_layouts_only;
   raw_ptr<Profile, DanglingUntriaged> profile;
+  bool keep_cached_fonts = false;
 };
 
 // Runs on ThreadPool thread under PostTaskAndReply().
@@ -67,10 +72,11 @@ std::unique_ptr<SwitchLanguageData> SwitchLanguageDoReloadLocale(
 }
 
 // Callback after SwitchLanguageDoReloadLocale() back in UI thread.
-void FinishSwitchLanguage(std::unique_ptr<SwitchLanguageData> data) {
+void FinishSwitchLanguage(ApplicationLocaleStorage* application_locale_storage,
+                          std::unique_ptr<SwitchLanguageData> data) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (data->result.success) {
-    g_browser_process->SetApplicationLocale(data->result.loaded_locale);
+    CHECK_DEREF(application_locale_storage).Set(data->result.loaded_locale);
 
     // Ensure chrome app names are localized. Note that the user might prefer
     // a different locale than was actually loaded (e.g. "en-CA" vs. "en-US").
@@ -108,10 +114,13 @@ void FinishSwitchLanguage(std::unique_ptr<SwitchLanguageData> data) {
     }
   }
 
-  // The font clean up of ResourceBundle should be done on UI thread, since the
-  // cached fonts are thread unsafe.
-  ui::ResourceBundle::GetSharedInstance().ReloadFonts();
-  gfx::PlatformFontSkia::ReloadDefaultFont();
+  if (!data->keep_cached_fonts) {
+    // The font clean up of ResourceBundle should be done on UI thread, since
+    // the cached fonts are thread unsafe.
+    ui::ResourceBundle::GetSharedInstance().ReloadFonts();
+    gfx::PlatformFontSkia::ReloadDefaultFont();
+  }
+
   if (!data->callback.is_null())
     std::move(data->callback).Run(data->result);
 }
@@ -139,7 +148,8 @@ LanguageSwitchResult::LanguageSwitchResult(const std::string& requested_locale,
       success(success) {
 }
 
-void SwitchLanguage(const std::string& locale,
+void SwitchLanguage(ApplicationLocaleStorage* application_locale_storage,
+                    const std::string& locale,
                     const bool enable_locale_keyboard_layouts,
                     const bool login_layouts_only,
                     SwitchLanguageCallback callback,
@@ -148,15 +158,33 @@ void SwitchLanguage(const std::string& locale,
   auto data = std::make_unique<SwitchLanguageData>(
       locale, enable_locale_keyboard_layouts, login_layouts_only,
       std::move(callback), profile);
+
+  // Skip resource reloading if requested locale matches the loaded one.
+  if (const auto& loaded_locale =
+          ui::ResourceBundle::GetSharedInstance().GetLoadedLocale();
+      loaded_locale == locale) {
+    // Use resolved locale to match `ResourceBundle::LoadLocaleResources`
+    // behavior. And skip reloading if locale is resolved successfully.
+    if (std::optional<std::string> resolved_locale =
+            l10n_util::CheckAndResolveLocale(
+                locale, l10n_util::CheckLocaleMode::kUseKnownLocalesList)) {
+      data->result.loaded_locale = std::move(*resolved_locale);
+      data->result.success = true;
+      data->keep_cached_fonts = true;
+      FinishSwitchLanguage(application_locale_storage, std::move(data));
+      return;
+    }
+  }
+
   // USER_BLOCKING because it blocks startup on ChromeOS. crbug.com/968554
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
       base::BindOnce(&SwitchLanguageDoReloadLocale, std::move(data)),
-      base::BindOnce(&FinishSwitchLanguage));
+      base::BindOnce(&FinishSwitchLanguage, application_locale_storage));
 }
 
 bool IsAllowedLanguage(const std::string& language, const PrefService* prefs) {
-  const base::Value::List& allowed_languages =
+  const base::ListValue& allowed_languages =
       prefs->GetList(prefs::kAllowedLanguages);
 
   // Empty list means all languages are allowed.
@@ -164,7 +192,7 @@ bool IsAllowedLanguage(const std::string& language, const PrefService* prefs) {
     return true;
 
   // Check if locale is in list of allowed UI locales.
-  return base::Contains(allowed_languages, base::Value(language));
+  return allowed_languages.contains(language);
 }
 
 bool IsAllowedUILanguage(const std::string& language,
@@ -218,7 +246,7 @@ std::string GetAllowedFallbackUILanguage(const PrefService* prefs) {
   }
 
   // Check the allowed UI locales and return the first valid entry.
-  const base::Value::List& allowed_languages =
+  const base::ListValue& allowed_languages =
       prefs->GetList(prefs::kAllowedLanguages);
   for (const base::Value& value : allowed_languages) {
     const std::string& locale = value.GetString();
@@ -237,7 +265,7 @@ bool AddLocaleToPreferredLanguages(const std::string& locale,
   std::vector<std::string> preferred_languages =
       base::SplitString(preferred_languages_string, ",", base::TRIM_WHITESPACE,
                         base::SPLIT_WANT_NONEMPTY);
-  if (!base::Contains(preferred_languages, locale)) {
+  if (!std::ranges::contains(preferred_languages, locale)) {
     preferred_languages.push_back(locale);
     prefs->SetString(language::prefs::kPreferredLanguages,
                      base::JoinString(preferred_languages, ","));

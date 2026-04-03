@@ -7,10 +7,10 @@
 // changes to it require review from the origin trials team, listed in the
 // OWNERS file.
 
-#include "third_party/blink/public/common/origin_trials/origin_trials.h"
+#include <algorithm>
 
-#include "base/containers/contains.h"
-#include "third_party/blink/public/mojom/origin_trial_feature/origin_trial_feature.mojom-shared.h"
+#include "third_party/blink/public/common/origin_trials/origin_trials.h"
+#include "third_party/blink/public/mojom/origin_trials/origin_trial_feature.mojom-shared.h"
 
 namespace blink::origin_trials {
 
@@ -24,12 +24,9 @@ bool FeatureHasExpiryGracePeriod(blink::mojom::OriginTrialFeature feature) {
       blink::mojom::OriginTrialFeature::
           kOriginTrialsSampleAPIPersistentExpiryGracePeriod,
       // Production grace period trials start here:
-      blink::mojom::OriginTrialFeature::kWebViewXRequestedWithDeprecation,
       blink::mojom::OriginTrialFeature::kRTCEncodedFrameSetMetadata,
-      blink::mojom::OriginTrialFeature::kElementCapture,
-      blink::mojom::OriginTrialFeature::kCapturedSurfaceControl,
   };
-  return base::Contains(kHasExpiryGracePeriod, feature);
+  return std::ranges::contains(kHasExpiryGracePeriod, feature);
 }
 
 }  // namespace blink::origin_trials

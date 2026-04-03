@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/compiler/mlir/tfrt/translate/mlrt/mlir_to_bytecode.h"
 
+#include <cstdint>
 #include <cstring>
 #include <iterator>
 #include <optional>
@@ -24,12 +25,27 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/raw_ostream.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
+#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/Region.h"  // from @llvm-project
+#include "mlir/IR/Types.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/tfrt/ir/mlrt/mlrt_dialect.h"
+#include "tensorflow/core/tfrt/mlrt/bytecode/bytecode.h"
 #include "tensorflow/core/tfrt/mlrt/bytecode/executable.h"
+#include "tensorflow/core/tfrt/mlrt/bytecode/function.h"
+#include "tensorflow/core/tfrt/mlrt/bytecode/kernel.h"
 
 namespace mlrt {
 namespace {
@@ -37,8 +53,8 @@ namespace {
 // LINT.IfChange(mlrt_attributes)
 bool CanBeInlined(mlir::Attribute attr, absl::string_view data) {
   // FlatSymbolRefAttr is a special case as we are emitting it as integer.
-  return attr.isa<mlir::IntegerAttr, mlir::FloatAttr,
-                  mlir::FlatSymbolRefAttr>() &&
+  return mlir::isa<mlir::IntegerAttr, mlir::FloatAttr, mlir::FlatSymbolRefAttr>(
+             attr) &&
          data.size() <= sizeof(uint32_t);
 }
 // LINT.ThenChange(../../../../../core/tfrt/mlrt/interpreter/attribute_span.h:mlrt_attributes)
@@ -64,7 +80,7 @@ std::optional<std::string> EncodeListOfInteger(mlir::ArrayAttr array) {
   mlir::Type type;
 
   for (int i = 0; i < array.size(); ++i) {
-    if (auto integer_attr = array[i].dyn_cast<mlir::IntegerAttr>()) {
+    if (auto integer_attr = mlir::dyn_cast<mlir::IntegerAttr>(array[i])) {
       if (type && integer_attr.getType() != type) return std::nullopt;
       type = integer_attr.getType();
       llvm::APInt value = integer_attr.getValue();
@@ -85,7 +101,7 @@ std::optional<std::string> EncodeListOfSymbolRef(
   auto ctor = bc::New<bc::Vector<uint32_t>>(&allocator, array.size());
 
   for (int i = 0; i < array.size(); ++i) {
-    if (auto symbol_ref = array[i].dyn_cast<mlir::FlatSymbolRefAttr>()) {
+    if (auto symbol_ref = mlir::dyn_cast<mlir::FlatSymbolRefAttr>(array[i])) {
       ctor.ConstructAt(i, module_context.GetFunctionId(symbol_ref.getValue()));
     } else {
       return std::nullopt;
@@ -108,6 +124,24 @@ std::optional<std::string> EncodeDenseArray(llvm::ArrayRef<T> array) {
   return std::string(buffer.data(), buffer.size());
 }
 
+// bool values has special encoding in MLIR. It occupies one bit in MLIR
+// but in bytecode it is one byte.
+std::optional<std::string> EncodeDenseBoolArray(llvm::ArrayRef<bool> array) {
+  bc::Buffer buffer;
+  bc::Allocator allocator(&buffer);
+  auto ctor = bc::New<bc::Vector<uint8_t>>(&allocator, array.size());
+
+  if (!array.empty()) {
+    std::vector<uint8_t> data(array.size());
+    int i = 0;
+    for (auto v : array) {
+      data[i++] = static_cast<uint8_t>(v);
+    }
+    ctor.Place(reinterpret_cast<const char*>(data.data()), data.size());
+  }
+  return std::string(buffer.data(), buffer.size());
+}
+
 // Encode a list of strings as bytes using bc::Vector<bc::String>. The bytes
 // can be decoded directly using bc::Vector<bc::String>. If `array` is not a
 // list of strings, a nullopt will be returned.
@@ -117,7 +151,7 @@ std::optional<std::string> EncodeListOfString(mlir::ArrayAttr array) {
   auto ctor = bc::New<bc::Vector<bc::String>>(&allocator, array.size());
 
   for (int i = 0; i < array.size(); ++i) {
-    if (auto string_attr = array[i].dyn_cast<mlir::StringAttr>()) {
+    if (auto string_attr = mlir::dyn_cast<mlir::StringAttr>(array[i])) {
       ctor.ConstructAt(i, string_attr.getValue().str());
     } else {
       return std::nullopt;
@@ -136,19 +170,26 @@ struct FunctionEmitterContext {
   struct RegInfo {
     int num_uses = 0;
     int id = -1;
+    bool persistent = false;  // True if the register should not be freed
   };
 
   int next_reg_id = 0;
   llvm::DenseMap<mlir::Value, RegInfo> register_table;
   std::vector<int> free_regs;
 
-  int AssignRegId() {
-    if (free_regs.empty()) {
+  int AssignRegId(bool is_persistent) {
+    if (is_persistent) {
+      // Persistent types ALWAYS get a brand new ID.
       return next_reg_id++;
     }
-    int id = free_regs.back();
-    free_regs.pop_back();
-    return id;
+
+    // Non-persistent types can reuse from free_regs.
+    if (!free_regs.empty()) {
+      int id = free_regs.back();
+      free_regs.pop_back();
+      return id;
+    }
+    return next_reg_id++;
   }
 
   void FreeRegId(int id) { free_regs.push_back(id); }
@@ -169,7 +210,7 @@ void EmitKernel(FunctionEmitterContext& function_context,
     auto iter = function_context.register_table.find(result);
     CHECK(iter != function_context.register_table.end());  // Crash Ok
     CHECK_EQ(iter->second.id, -1);                         // Crash Ok
-    iter->second.id = function_context.AssignRegId();
+    iter->second.id = function_context.AssignRegId(iter->second.persistent);
     results.push_back(iter->second.id);
   }
   constructor.construct_results(results.size())
@@ -185,9 +226,12 @@ void EmitKernel(FunctionEmitterContext& function_context,
     int id = iter->second.id;
     CHECK_NE(id, -1);  // Crash Ok
     last_uses.push_back(0);
-    if (--iter->second.num_uses == 0) {
-      function_context.FreeRegId(id);
-      last_uses.back() = 1;
+    auto& reg_info = iter->second;
+    if (!reg_info.persistent) {
+      if (--reg_info.num_uses == 0) {
+        function_context.FreeRegId(id);
+        last_uses.back() = 1;
+      }
     }
     arguments.push_back(id);
   }
@@ -249,18 +293,23 @@ void EmitFunction(const ModuleEmitterContext& module_context,
   std::vector<uint32_t> input_regs;
   input_regs.reserve(block.getNumArguments());
   for (auto arg : block.getArguments()) {
-    int id = function_context.AssignRegId();
+    bool persistent = mlir::isa<mlrt::compiler::AsyncHandleType>(arg.getType());
+    int id = function_context.AssignRegId(persistent);
     input_regs.push_back(id);
     register_table[arg] = {static_cast<int>(std::distance(arg.getUses().begin(),
                                                           arg.getUses().end())),
-                           id};
+                           id, persistent};
   }
   constructor.construct_input_regs(input_regs);
 
   for (auto& op : block) {
     for (auto result : op.getResults()) {
-      register_table[result] = {static_cast<int>(
-          std::distance(result.getUses().begin(), result.getUses().end()))};
+      bool persistent =
+          mlir::isa<mlrt::compiler::AsyncHandleType>(result.getType());
+      register_table[result] = {
+          static_cast<int>(
+              std::distance(result.getUses().begin(), result.getUses().end())),
+          -1, persistent};
     }
   }
 
@@ -424,6 +473,10 @@ std::optional<std::string> EncodeSimpleAttribute(
       .Case<mlir::DenseI64ArrayAttr>(
           [](const auto& dense_array_i64) -> std::optional<std::string> {
             return EncodeDenseArray<int64_t>(dense_array_i64);
+          })
+      .Case<mlir::DenseBoolArrayAttr>(
+          [](const auto& dense_array_bool) -> std::optional<std::string> {
+            return EncodeDenseBoolArray(dense_array_bool.asArrayRef());
           })
       .Case<mlir::FlatSymbolRefAttr>([&](const auto& symbol_ref) {
         return EncodeIntegerOrFloat<uint32_t>(

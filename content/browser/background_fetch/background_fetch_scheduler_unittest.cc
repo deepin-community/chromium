@@ -6,7 +6,6 @@
 
 #include <vector>
 
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -59,7 +58,7 @@ class FakeController : public BackgroundFetchJobController {
     // Record the completed request. Store everything after the origin and the
     // slash, to be able to directly compare with the provided requests.
     controller_sequence_list_->push_back(
-        result->response->url_chain[0].path().substr(1));
+        result->response->url_chain[0].GetPath().substr(1));
 
     // Continue normally.
     BackgroundFetchJobController::DidCompleteRequest(guid, std::move(result));

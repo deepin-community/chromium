@@ -1,4 +1,4 @@
-// Copyright 2024 The Chromium Authors
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,6 +24,16 @@ declare namespace chrome {
     }
 
     export interface CrazyObject {}
+
+    export type ArraySimple = string[];
+
+    export type ArrayOfInlineObject = Array<{
+      name: string,
+      value?: string,
+      binaryValue?: number[],
+    }>;
+
+    export type TwoChoices = ArrayBuffer|string;
 
     export function funcWithInlineObj(
         inlineObj: {

@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <ranges>
 #include <string>
 #include <utility>
 
@@ -65,7 +66,7 @@ class TaskManagerClient : public SyncTaskManager::Client {
   TaskManagerClient(const TaskManagerClient&) = delete;
   TaskManagerClient& operator=(const TaskManagerClient&) = delete;
 
-  ~TaskManagerClient() override {}
+  ~TaskManagerClient() override = default;
 
   // DriveFileSyncManager::Client overrides.
   void MaybeScheduleNextTask() override { ++maybe_schedule_next_task_count_; }
@@ -137,7 +138,7 @@ class MultihopSyncTask : public ExclusiveTask {
   MultihopSyncTask(const MultihopSyncTask&) = delete;
   MultihopSyncTask& operator=(const MultihopSyncTask&) = delete;
 
-  ~MultihopSyncTask() override {}
+  ~MultihopSyncTask() override = default;
 
   void RunExclusive(SyncStatusCallback callback) override {
     DCHECK(!*task_started_);
@@ -182,7 +183,7 @@ class BackgroundTask : public SyncTask {
   BackgroundTask(const BackgroundTask&) = delete;
   BackgroundTask& operator=(const BackgroundTask&) = delete;
 
-  ~BackgroundTask() override {}
+  ~BackgroundTask() override = default;
 
   void RunPreflight(std::unique_ptr<SyncTaskToken> token) override {
     std::unique_ptr<TaskBlocker> task_blocker(new TaskBlocker);
@@ -230,13 +231,13 @@ class BlockerUpdateTestHelper : public SyncTask {
                           Log* log)
       : name_(name),
         app_id_(app_id),
-        paths_(paths.begin(), paths.end()),
+        paths_(std::from_range, paths),
         log_(log) {}
 
   BlockerUpdateTestHelper(const BlockerUpdateTestHelper&) = delete;
   BlockerUpdateTestHelper& operator=(const BlockerUpdateTestHelper&) = delete;
 
-  ~BlockerUpdateTestHelper() override {}
+  ~BlockerUpdateTestHelper() override = default;
 
   void RunPreflight(std::unique_ptr<SyncTaskToken> token) override {
     UpdateBlocker(std::move(token));

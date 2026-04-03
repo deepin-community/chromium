@@ -13,6 +13,7 @@
 #include "include/core/SkRegion.h"
 #include "include/core/SkShader.h"
 #include "include/private/base/SkAssert.h"
+#include "include/private/base/SkDebug.h"
 #include "include/private/base/SkNoncopyable.h"
 #include "src/core/SkAAClip.h"
 
@@ -130,7 +131,7 @@ private:
     bool op(const SkRasterClip&, SkClipOp);
 };
 
-class SkAutoRasterClipValidate : SkNoncopyable {
+class [[nodiscard]] SkAutoRasterClipValidate : SkNoncopyable {
 public:
     SkAutoRasterClipValidate(const SkRasterClip& rc) : fRC(rc) {
         fRC.validate();

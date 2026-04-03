@@ -14,17 +14,37 @@
  * limitations under the License.
  */
 
-#include "perfetto/public/abi/data_source_abi.h"
+#include "perfetto/public/data_source.h"
 
+#include <atomic>
 #include <bitset>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <vector>
 
+#include "perfetto/base/compiler.h"
+#include "perfetto/base/logging.h"
+#include "perfetto/base/thread_annotations.h"
+#include "perfetto/protozero/scattered_stream_writer.h"
+#include "perfetto/public/abi/atomic.h"
+#include "perfetto/public/abi/data_source_abi.h"
+#include "perfetto/public/abi/stream_writer_abi.h"
 #include "perfetto/tracing/buffer_exhausted_policy.h"
+#include "perfetto/tracing/core/forward_decls.h"
 #include "perfetto/tracing/data_source.h"
 #include "perfetto/tracing/internal/basic_types.h"
-#include "protos/perfetto/common/data_source_descriptor.gen.h"
-#include "protos/perfetto/config/data_source_config.gen.h"
+#include "perfetto/tracing/internal/data_source_internal.h"
+#include "perfetto/tracing/internal/data_source_type.h"
+#include "perfetto/tracing/internal/tracing_muxer.h"
+#include "perfetto/tracing/internal/tracing_tls.h"
 #include "src/shared_lib/reset_for_testing.h"
 #include "src/shared_lib/stream_writer.h"
+
+#include "protos/perfetto/common/data_source_descriptor.gen.h"  // IWYU pragma: keep
 
 namespace {
 
@@ -58,6 +78,7 @@ struct PerfettoDsImpl {
   // state.
   PerfettoDsOnCreateCustomState on_create_incr_cb = nullptr;
   PerfettoDsOnDeleteCustomState on_delete_incr_cb = nullptr;
+  PerfettoDsOnClearCustomState on_clear_incr_cb = nullptr;
 
   // Passed to all the callbacks as the `user_arg` param.
   void* cb_user_arg;
@@ -65,11 +86,13 @@ struct PerfettoDsImpl {
   perfetto::BufferExhaustedPolicy buffer_exhausted_policy =
       perfetto::BufferExhaustedPolicy::kDrop;
 
+  bool buffer_exhausted_policy_configurable = false;
+
   DataSourceType cpp_type;
   std::atomic<bool> enabled{false};
   std::mutex mu;
-  // Guarded by mu
-  std::bitset<perfetto::internal::kMaxDataSourceInstances> enabled_instances;
+  std::bitset<perfetto::internal::kMaxDataSourceInstances> enabled_instances
+      PERFETTO_GUARDED_BY(mu);
 
   bool IsRegistered() {
     return cpp_type.static_state()->index !=
@@ -77,8 +100,26 @@ struct PerfettoDsImpl {
   }
 };
 
-namespace perfetto {
-namespace shlib {
+struct PerfettoDsOnStopArgs {
+  struct PerfettoDsAsyncStopper* stopper = nullptr;
+};
+
+struct PerfettoDsAsyncStopper {
+  PerfettoDsImpl* ds_impl;
+  uint32_t instance_idx;
+  std::function<void()> async_stop_closure;
+
+  void FinishStop() {
+    std::lock_guard<std::mutex> lock(ds_impl->mu);
+    ds_impl->enabled_instances.reset(instance_idx);
+    if (ds_impl->enabled_instances.none()) {
+      ds_impl->enabled.store(false, std::memory_order_release);
+    }
+    async_stop_closure();
+  }
+};
+
+namespace perfetto::shlib {
 
 // These are only exposed to tests.
 
@@ -90,8 +131,7 @@ void DsImplDestroy(struct PerfettoDsImpl* ds_impl) {
   delete ds_impl;
 }
 
-}  // namespace shlib
-}  // namespace perfetto
+}  // namespace perfetto::shlib
 
 namespace {
 
@@ -124,17 +164,24 @@ class ShlibDataSource : public perfetto::DataSourceBase {
   }
 
   void OnStop(const StopArgs& args) override {
+    PerfettoDsOnStopArgs c_args;
+    c_args.stopper = new PerfettoDsAsyncStopper();
+    // Capturing ds_impl is ok, because data sources cannot be unregistered.
+    c_args.stopper->ds_impl = &type_;
+    c_args.stopper->async_stop_closure = args.HandleStopAsynchronously();
+    c_args.stopper->instance_idx = args.internal_instance_index;
+
     if (type_.on_stop_cb) {
-      type_.on_stop_cb(
-          &type_, args.internal_instance_index, type_.cb_user_arg, inst_ctx_,
-          const_cast<PerfettoDsOnStopArgs*>(
-              reinterpret_cast<const PerfettoDsOnStopArgs*>(&args)));
+      type_.on_stop_cb(&type_, args.internal_instance_index, type_.cb_user_arg,
+                       inst_ctx_, &c_args);
     }
 
-    std::lock_guard<std::mutex> lock(type_.mu);
-    type_.enabled_instances.reset(args.internal_instance_index);
-    if (type_.enabled_instances.none()) {
-      type_.enabled.store(false, std::memory_order_release);
+    // If c_args.stopper is nullptr, the user must have called
+    // PerfettoDsOnStopArgsPostpone() in the callback above: the user will
+    // invoke PerfettoDsStopDone later. If c_args.stopper is not nullptr, we
+    // need to invoke it.
+    if (c_args.stopper) {
+      PerfettoDsStopDone(c_args.stopper);
     }
   }
 
@@ -211,6 +258,14 @@ CreateShlibIncrementalState(DataSourceInstanceThreadLocalState* tls_inst,
       custom_state, ds_impl->on_delete_incr_cb);
 }
 
+bool ClearShlibIncrementalState(void* incremental_state, void* ctx) {
+  auto* ds_impl = reinterpret_cast<PerfettoDsImpl*>(ctx);
+  if (!ds_impl->on_clear_incr_cb) {
+    return false;
+  }
+  return ds_impl->on_clear_incr_cb(incremental_state, ds_impl->cb_user_arg);
+}
+
 }  // namespace
 
 // Exposed through data_source_abi.h
@@ -274,6 +329,12 @@ void PerfettoDsSetOnDeleteIncr(struct PerfettoDsImpl* ds_impl,
   ds_impl->on_delete_incr_cb = cb;
 }
 
+void PerfettoDsSetOnClearIncr(struct PerfettoDsImpl* ds_impl,
+                              PerfettoDsOnClearCustomState cb) {
+  PERFETTO_CHECK(!ds_impl->IsRegistered());
+  ds_impl->on_clear_incr_cb = cb;
+}
+
 void PerfettoDsSetCbUserArg(struct PerfettoDsImpl* ds_impl, void* user_arg) {
   PERFETTO_CHECK(!ds_impl->IsRegistered());
   ds_impl->cb_user_arg = user_arg;
@@ -293,8 +354,24 @@ bool PerfettoDsSetBufferExhaustedPolicy(struct PerfettoDsImpl* ds_impl,
       ds_impl->buffer_exhausted_policy =
           perfetto::BufferExhaustedPolicy::kStall;
       return true;
+    case PERFETTO_DS_BUFFER_EXHAUSTED_POLICY_STALL_AND_DROP:
+      ds_impl->buffer_exhausted_policy =
+          perfetto::BufferExhaustedPolicy::kStallThenDrop;
+      return true;
   }
   return false;
+}
+
+bool PerfettoDsSetBufferExhaustedPolicyConfigurable(
+    struct PerfettoDsImpl* ds_impl,
+    bool configurable) {
+  if (ds_impl->IsRegistered()) {
+    return false;
+  }
+
+  ds_impl->buffer_exhausted_policy_configurable = configurable;
+
+  return true;
 }
 
 bool PerfettoDsImplRegister(struct PerfettoDsImpl* ds_impl,
@@ -314,10 +391,15 @@ bool PerfettoDsImplRegister(struct PerfettoDsImpl* ds_impl,
   DataSourceType::CreateCustomTlsFn create_custom_tls_fn = nullptr;
   DataSourceType::CreateIncrementalStateFn create_incremental_state_fn =
       nullptr;
+  DataSourceType::ClearIncrementalStateFn clear_incremental_state_fn = nullptr;
   void* cb_ctx = nullptr;
   if (data_source_type->on_create_incr_cb &&
       data_source_type->on_delete_incr_cb) {
     create_incremental_state_fn = CreateShlibIncrementalState;
+    cb_ctx = data_source_type.get();
+  }
+  if (data_source_type->on_clear_incr_cb) {
+    clear_incremental_state_fn = ClearShlibIncrementalState;
     cb_ctx = data_source_type.get();
   }
   if (data_source_type->on_create_tls_cb &&
@@ -327,12 +409,17 @@ bool PerfettoDsImplRegister(struct PerfettoDsImpl* ds_impl,
   }
 
   perfetto::internal::DataSourceParams params;
+  params.default_buffer_exhausted_policy = ds_impl->buffer_exhausted_policy;
+  params.buffer_exhausted_policy_configurable =
+      ds_impl->buffer_exhausted_policy_configurable;
   params.supports_multiple_instances = true;
   params.requires_callbacks_under_lock = false;
+  params.default_buffer_exhausted_policy =
+      data_source_type->buffer_exhausted_policy;
   bool success = data_source_type->cpp_type.Register(
-      dsd, factory, params, data_source_type->buffer_exhausted_policy,
-      data_source_type->on_flush_cb == nullptr, create_custom_tls_fn,
-      create_incremental_state_fn, cb_ctx);
+      dsd, factory, params, data_source_type->on_flush_cb == nullptr,
+      create_custom_tls_fn, create_incremental_state_fn,
+      clear_incremental_state_fn, cb_ctx);
   if (!success) {
     return false;
   }
@@ -352,16 +439,14 @@ void PerfettoDsImplUpdateDescriptor(struct PerfettoDsImpl* ds_impl,
 
 PerfettoDsAsyncStopper* PerfettoDsOnStopArgsPostpone(
     PerfettoDsOnStopArgs* args) {
-  auto* cb = new std::function<void()>();
-  *cb = reinterpret_cast<const ShlibDataSource::StopArgs*>(args)
-            ->HandleStopAsynchronously();
-  return reinterpret_cast<PerfettoDsAsyncStopper*>(cb);
+  PerfettoDsAsyncStopper* stopper = args->stopper;
+  args->stopper = nullptr;
+  return stopper;
 }
 
 void PerfettoDsStopDone(PerfettoDsAsyncStopper* stopper) {
-  auto* cb = reinterpret_cast<std::function<void()>*>(stopper);
-  (*cb)();
-  delete cb;
+  stopper->FinishStop();
+  delete stopper;
 }
 
 PerfettoDsAsyncFlusher* PerfettoDsOnFlushArgsPostpone(
@@ -387,7 +472,7 @@ void* PerfettoDsImplGetInstanceLocked(struct PerfettoDsImpl* ds_impl,
   std::unique_lock<std::recursive_mutex> lock(internal_state->lock);
   auto* data_source =
       static_cast<ShlibDataSource*>(internal_state->data_source.get());
-  if (&data_source->type() != ds_impl) {
+  if (!data_source || &data_source->type() != ds_impl) {
     // The data source instance has been destroyed and recreated as a different
     // type while we where tracing.
     return nullptr;
@@ -401,8 +486,10 @@ void* PerfettoDsImplGetInstanceLocked(struct PerfettoDsImpl* ds_impl,
 
 void PerfettoDsImplReleaseInstanceLocked(struct PerfettoDsImpl* ds_impl,
                                          PerfettoDsInstanceIndex idx) {
-  auto* internal_state = ds_impl->cpp_type.static_state()->TryGet(idx);
-  PERFETTO_CHECK(internal_state);
+  // The `valid_instances` bitmap might have changed since the lock has been
+  // taken, but the instance must still be alive (we were holding the lock on
+  // it).
+  auto* internal_state = ds_impl->cpp_type.static_state()->GetUnsafe(idx);
   internal_state->lock.unlock();
 }
 

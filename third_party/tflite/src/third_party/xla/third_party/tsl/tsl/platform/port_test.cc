@@ -15,19 +15,19 @@ limitations under the License.
 
 #include <condition_variable>
 
+#include "xla/tsl/platform/env_time.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/platform/threadpool.h"
 #include "tsl/platform/cpu_info.h"
-#include "tsl/platform/env_time.h"
 #include "tsl/platform/mem.h"
 #include "tsl/platform/mutex.h"
-#include "tsl/platform/test.h"
-#include "tsl/platform/threadpool.h"
 
 namespace tsl {
 namespace port {
 
 TEST(Port, AlignedMalloc) {
   for (size_t alignment = 1; alignment <= 1 << 20; alignment <<= 1) {
-    void* p = AlignedMalloc(1, alignment);
+    void* p = AlignedMalloc(1, static_cast<std::align_val_t>(alignment));
     ASSERT_TRUE(p != nullptr) << "AlignedMalloc(1, " << alignment << ")";
     uintptr_t pval = reinterpret_cast<uintptr_t>(p);
     EXPECT_EQ(pval % alignment, 0);

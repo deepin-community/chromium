@@ -6,7 +6,7 @@
 
 #include "base/logging.h"
 #include "base/notreached.h"
-#include "chromeos/ash/components/cryptohome/cryptohome_util.h"
+#include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
 #include "components/device_event_log/device_event_log.h"
 
 namespace user_data_auth {
@@ -73,9 +73,6 @@ template COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_CRYPTOHOME)
     ReplyToCryptohomeError(const std::optional<CreatePersistentUserReply>&);
 template COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_CRYPTOHOME)
     cryptohome::ErrorWrapper
-    ReplyToCryptohomeError(const std::optional<RestoreDeviceKeyReply>&);
-template COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_CRYPTOHOME)
-    cryptohome::ErrorWrapper
     ReplyToCryptohomeError(const std::optional<PrepareGuestVaultReply>&);
 template COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_CRYPTOHOME)
     cryptohome::ErrorWrapper
@@ -100,6 +97,9 @@ template COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_CRYPTOHOME)
     ReplyToCryptohomeError(const std::optional<UpdateAuthFactorMetadataReply>&);
 template COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_CRYPTOHOME)
     cryptohome::ErrorWrapper
+    ReplyToCryptohomeError(const std::optional<ReplaceAuthFactorReply>&);
+template COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_CRYPTOHOME)
+    cryptohome::ErrorWrapper
     ReplyToCryptohomeError(const std::optional<GetAuthSessionStatusReply>&);
 template COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_CRYPTOHOME)
     cryptohome::ErrorWrapper
@@ -115,10 +115,10 @@ template COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_CRYPTOHOME)
     ReplyToCryptohomeError(const std::optional<TerminateAuthFactorReply>&);
 template COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_CRYPTOHOME)
     cryptohome::ErrorWrapper
-    ReplyToCryptohomeError(const std::optional<GetRecoveryRequestReply>&);
+    ReplyToCryptohomeError(const std::optional<StartMigrateToDircryptoReply>&);
 template COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_CRYPTOHOME)
     cryptohome::ErrorWrapper
-    ReplyToCryptohomeError(const std::optional<StartMigrateToDircryptoReply>&);
+    ReplyToCryptohomeError(const std::optional<LockFactorUntilRebootReply>&);
 
 int64_t AccountDiskUsageReplyToUsageSize(
     const std::optional<GetAccountDiskUsageReply>& reply) {
@@ -135,7 +135,7 @@ int64_t AccountDiskUsageReplyToUsageSize(
   return reply->size();
 }
 
-// TODO(crbug.com/797848): Finish testing this method.
+// TODO(crbug.com/40556176): Finish testing this method.
 cryptohome::MountError CryptohomeErrorToMountError(CryptohomeErrorCode code) {
   switch (code) {
     case CRYPTOHOME_ERROR_NOT_SET:
@@ -200,13 +200,11 @@ cryptohome::MountError CryptohomeErrorToMountError(CryptohomeErrorCode code) {
     case CRYPTOHOME_ERROR_FAILED_TO_READ_PCR:
     case CRYPTOHOME_ERROR_PCR_ALREADY_EXTENDED:
       NOTREACHED();
-      return cryptohome::MOUNT_ERROR_FATAL;
     // TODO(dlunev): remove this temporary case after rolling up system api
     // change and adding proper handling for the new enum value in
     // https://chromium-review.googlesource.com/c/chromium/src/+/2518524
     default:
       NOTREACHED();
-      return cryptohome::MOUNT_ERROR_FATAL;
   }
 }
 

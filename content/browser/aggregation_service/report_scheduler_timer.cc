@@ -22,16 +22,17 @@ namespace content {
 
 ReportSchedulerTimer::ReportSchedulerTimer(std::unique_ptr<Delegate> delegate)
     : delegate_(std::move(delegate)) {
-  DCHECK(delegate_);
+  CHECK(delegate_);
 
   network::NetworkConnectionTracker* tracker = GetNetworkConnectionTracker();
   obs_.Observe(tracker);
 
-  network::mojom::ConnectionType connection_type;
+  net::NetworkChangeNotifier::ConnectionType connection_type;
   bool synchronous_return = tracker->GetConnectionType(
       &connection_type,
       base::BindOnce(&ReportSchedulerTimer::OnConnectionChanged,
                      weak_ptr_factory_.GetWeakPtr()));
+
   if (synchronous_return) {
     OnConnectionChanged(connection_type);
   }
@@ -41,7 +42,8 @@ ReportSchedulerTimer::~ReportSchedulerTimer() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
-network::mojom::ConnectionType ReportSchedulerTimer::connection_type() const {
+net::NetworkChangeNotifier::ConnectionType
+ReportSchedulerTimer::connection_type() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return connection_type_;
 }
@@ -79,18 +81,19 @@ void ReportSchedulerTimer::OnTimerFired() {
 }
 
 void ReportSchedulerTimer::OnConnectionChanged(
-    network::mojom::ConnectionType connection_type) {
+    net::NetworkChangeNotifier::ConnectionType connection_type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  UpdateState(connection_type);
+}
+
+void ReportSchedulerTimer::UpdateState(
+    net::NetworkChangeNotifier::ConnectionType connection_type) {
   bool was_offline = IsOffline();
   connection_type_ = connection_type;
 
   if (IsOffline()) {
     reporting_time_reached_timer_.Stop();
-    if (!was_offline) {
-      delegate_->OnReportingPaused();
-    }
-
   } else if (was_offline) {
     // Add delay to all reports that should have been sent while the browser was
     // offline so they are not temporally joinable. We only need to do this if
@@ -102,7 +105,8 @@ void ReportSchedulerTimer::OnConnectionChanged(
 }
 
 bool ReportSchedulerTimer::IsOffline() const {
-  return connection_type_ == network::mojom::ConnectionType::CONNECTION_NONE;
+  return connection_type_ ==
+         net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE;
 }
 
 }  // namespace content

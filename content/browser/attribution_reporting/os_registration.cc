@@ -22,12 +22,14 @@ OsRegistration::OsRegistration(
     url::Origin top_level_origin,
     std::optional<AttributionInputEvent> input_event,
     bool is_within_fenced_frame,
-    GlobalRenderFrameHostId render_frame_id)
+    GlobalRenderFrameHostId render_frame_id,
+    attribution_reporting::Registrar registrar)
     : registration_items(std::move(items)),
       top_level_origin(std::move(top_level_origin)),
       input_event(std::move(input_event)),
       is_within_fenced_frame(is_within_fenced_frame),
-      render_frame_id(render_frame_id) {
+      render_frame_id(render_frame_id),
+      registrar(registrar) {
   CHECK(!this->registration_items.empty());
 }
 

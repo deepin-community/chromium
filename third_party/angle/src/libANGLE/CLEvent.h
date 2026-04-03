@@ -52,6 +52,10 @@ class Event final : public _cl_event, public Object
 
     void callback(cl_int commandStatus);
 
+    angle::Result initBackend(const rx::CLEventImpl::CreateFunc &createFunc);
+    bool isBackendInitialized() const { return mImpl != nullptr; }
+    bool isUserEvent() const { return mCommandType == CL_COMMAND_USER; }
+
     static EventPtrs Cast(cl_uint numEvents, const cl_event *eventList);
 
   private:
@@ -60,9 +64,7 @@ class Event final : public _cl_event, public Object
 
     Event(Context &context);
 
-    Event(CommandQueue &queue,
-          cl_command_type commandType,
-          const rx::CLEventImpl::CreateFunc &createFunc);
+    Event(CommandQueue &queue, cl_command_type commandType);
 
     const ContextPtr mContext;
     const CommandQueuePtr mCommandQueue;

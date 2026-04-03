@@ -10,11 +10,11 @@
 
 #include <new>
 
-#include "core/fxcrt/fx_memcpy_wrappers.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/fx_memory.h"
 #include "core/fxcrt/fx_safe_types.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
+#include "core/fxcrt/stl_util.h"
 
 namespace fxcrt {
 
@@ -25,8 +25,8 @@ RetainPtr<StringDataTemplate<CharType>> StringDataTemplate<CharType>::Create(
   DCHECK_GT(nLen, 0u);
 
   // Calculate space needed for the fixed portion of the struct plus the
-  // NUL char that is not included in |m_nAllocLength|.
-  int overhead = offsetof(StringDataTemplate, m_String) + sizeof(CharType);
+  // NUL char that is not included in |alloc_length_|.
+  int overhead = offsetof(StringDataTemplate, string_) + sizeof(CharType);
   FX_SAFE_SIZE_T nSize = nLen;
   nSize *= sizeof(CharType);
   nSize += overhead;
@@ -56,39 +56,38 @@ RetainPtr<StringDataTemplate<CharType>> StringDataTemplate<CharType>::Create(
 
 template <typename CharType>
 void StringDataTemplate<CharType>::Release() {
-  if (--m_nRefs <= 0)
+  if (--refs_ <= 0) {
     FX_StringFree(this);
+  }
 }
 
 template <typename CharType>
 void StringDataTemplate<CharType>::CopyContents(
     const StringDataTemplate& other) {
-  DCHECK(other.m_nDataLength <= m_nAllocLength);
-  memcpy(m_String, other.m_String,
-         (other.m_nDataLength + 1) * sizeof(CharType));
+  fxcrt::Copy(other.capacity_span().first(other.data_length_ + 1),
+              capacity_span());
 }
 
 template <typename CharType>
 void StringDataTemplate<CharType>::CopyContents(
     pdfium::span<const CharType> str) {
-  FXSYS_memcpy(m_String, str.data(), str.size_bytes());
-  m_String[str.size()] = 0;
+  fxcrt::Copy(str, capacity_span());
+  capacity_span()[str.size()] = 0;
 }
 
 template <typename CharType>
 void StringDataTemplate<CharType>::CopyContentsAt(
     size_t offset,
     pdfium::span<const CharType> str) {
-  FXSYS_memcpy(m_String + offset, str.data(), str.size_bytes());
-  m_String[offset + str.size()] = 0;
+  fxcrt::Copy(str, capacity_span().subspan(offset));
+  capacity_span()[offset + str.size()] = 0;
 }
 
 template <typename CharType>
 StringDataTemplate<CharType>::StringDataTemplate(size_t dataLen,
                                                  size_t allocLen)
-    : m_nDataLength(dataLen), m_nAllocLength(allocLen) {
-  DCHECK_LE(dataLen, allocLen);
-  m_String[dataLen] = 0;
+    : data_length_(dataLen), alloc_length_(allocLen) {
+  capacity_span()[dataLen] = 0;
 }
 
 // Instantiate.

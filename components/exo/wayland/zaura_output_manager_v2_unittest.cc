@@ -266,7 +266,7 @@ TEST_F(AuraOutputManagerV2Test, ActiveOutputMetricsUpdate) {
   UpdateDisplay("800x600");
   PostToClientAndWait([] {});
 
-  const auto* screen = display::Screen::GetScreen();
+  const auto* screen = display::Screen::Get();
   ASSERT_EQ(1u, screen->GetAllDisplays().size());
 
   const int64_t primary_id = screen->GetAllDisplays()[0].id();
@@ -320,9 +320,11 @@ TEST_F(AuraOutputManagerV2Test, ActiveOutputsAdded) {
   // Start with a single display and round-trip with client to clear the event
   // queue.
   UpdateDisplay("800x600");
-  const auto* screen = display::Screen::GetScreen();
+  const auto* screen = display::Screen::Get();
   ASSERT_EQ(1u, screen->GetAllDisplays().size());
-  PostToClientAndWait([] {});
+  PostToClientAndWait([](test::TestClient* client) {
+    ASSERT_EQ(1u, client->globals().outputs.size());
+  });
 
   // Add two new displays to the configuration, events for two new outputs and
   // their corresponding metrics should be propagated to clients.
@@ -340,16 +342,20 @@ TEST_F(AuraOutputManagerV2Test, ActiveOutputsAdded) {
 
   UpdateDisplay("800x600,1200x800,1600x1200");
   ASSERT_EQ(3u, screen->GetAllDisplays().size());
-  PostToClientAndWait([] {});
+  PostToClientAndWait([](test::TestClient* client) {
+    ASSERT_EQ(3u, client->globals().outputs.size());
+  });
 }
 
 TEST_F(AuraOutputManagerV2Test, ActiveOutputsRemoved) {
   // Start multiple displays and round-trip with client to clear the event
   // queue.
   UpdateDisplay("800x600,1200x800,1600x1200");
-  const auto* screen = display::Screen::GetScreen();
+  const auto* screen = display::Screen::Get();
   ASSERT_EQ(3u, screen->GetAllDisplays().size());
-  PostToClientAndWait([] {});
+  PostToClientAndWait([](test::TestClient* client) {
+    ASSERT_EQ(3u, client->globals().outputs.size());
+  });
 
   const int64_t secondary_id = screen->GetAllDisplays()[1].id();
   const int64_t tertiary_id = screen->GetAllDisplays()[2].id();
@@ -381,6 +387,48 @@ TEST_F(AuraOutputManagerV2Test, ActiveOutputsRemoved) {
 
   UpdateDisplay("800x600");
   ASSERT_EQ(1u, screen->GetAllDisplays().size());
+  // TODO(tluk): Update Globals to correctly handle wl_registry.global_remove
+  // events.
+  PostToClientAndWait([] {});
+}
+
+TEST_F(AuraOutputManagerV2Test, ActivateDisplay) {
+  // Start with a two displays and round-trip with client to clear the event
+  // queue.
+  auto* output_controller = server_->output_controller_for_testing();
+  OutputControllerTestApi output_controller_test_api(*output_controller);
+  UpdateDisplay("800x600,800x600");
+  auto* screen = display::Screen::Get();
+  ASSERT_EQ(2u, screen->GetAllDisplays().size());
+  PostToClientAndWait([](test::TestClient* client) {
+    ASSERT_EQ(2u, client->globals().outputs.size());
+  });
+
+  const int64_t primary_id = screen->GetAllDisplays()[0].id();
+  const uint64_t primary_output_name = wl_global_get_name(
+      output_controller_test_api.GetWaylandDisplayOutput(primary_id)->global(),
+      client_resource_.get());
+  const int64_t secondary_id = screen->GetAllDisplays()[1].id();
+  const uint64_t secondary_output_name = wl_global_get_name(
+      output_controller_test_api.GetWaylandDisplayOutput(secondary_id)
+          ->global(),
+      client_resource_.get());
+
+  // Force activation on the secondary display.
+  EXPECT_NE(secondary_id,
+            output_controller_test_api.GetDispatchedActivatedDisplayId());
+  screen->SetDisplayForNewWindows(secondary_id);
+  EXPECT_EQ(secondary_id,
+            output_controller_test_api.GetDispatchedActivatedDisplayId());
+  EXPECT_CALL(mock_aura_output_manager_,
+              MockOnActivated(secondary_output_name));
+  PostToClientAndWait([] {});
+
+  // Force activation back to the primary display.
+  screen->SetDisplayForNewWindows(primary_id);
+  EXPECT_EQ(primary_id,
+            output_controller_test_api.GetDispatchedActivatedDisplayId());
+  EXPECT_CALL(mock_aura_output_manager_, MockOnActivated(primary_output_name));
   PostToClientAndWait([] {});
 }
 

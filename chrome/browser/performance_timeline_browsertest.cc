@@ -3,12 +3,15 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_browsertest.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/background_script_executor.h"
+#include "extensions/browser/script_executor.h"
 
 namespace {
 
@@ -30,9 +33,8 @@ class PerformanceTimelineBrowserTest : public extensions::ExtensionBrowserTest {
             });
           })();
         )",
-        extension->GetResourceURL(extension->url(), "content_script.js")
-            .spec());
-    EXPECT_EQ(content::EvalJs(web_contents(), script_code).error, "");
+        extension->GetResourceURL("content_script.js").spec());
+    EXPECT_TRUE(content::EvalJs(web_contents(), script_code).is_ok());
   }
 
   int GetActiveTabId() {
@@ -87,10 +89,9 @@ IN_PROC_BROWSER_TEST_F(PerformanceTimelineBrowserTest,
   LoadScript(extension);
 
   // Execute added script which is to fetch resource;
-  EXPECT_EQ(
+  EXPECT_TRUE(
       content::EvalJs(web_contents(), "(async ()=>{await fetchResource();})()")
-          .error,
-      "");
+          .is_ok());
 
   // There should be 1 resource entry emitted.
   EXPECT_EQ(

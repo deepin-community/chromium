@@ -1,11 +1,11 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-const fs = require('fs');
-const https = require('https');
-const path = require('path');
-const parseURL = require('url').parse;
-const promisify = require('util').promisify;
+const fs = require('node:fs');
+const https = require('node:https');
+const path = require('node:path');
+const parseURL = require('node:url').parse;
+const promisify = require('node:util').promisify;
 const WebSocketServer = require('ws').Server;
 
 const remoteDebuggingPort = parseInt(process.env.REMOTE_DEBUGGING_PORT, 10) || 9222;
@@ -26,12 +26,16 @@ while (!fs.existsSync(path.join(pathToOutTargetDir, 'args.gn'))) {
   pathToOutTargetDir = path.resolve(pathToOutTargetDir, '..');
   if (pathToOutTargetDir === fileSystemRootDirectory) {
     console.error(
-        'Could not find the build root directory. You must run the hosted server from within the build root directory containing the args.gn file for it to work. The hosted mode server only works on the built output from DevTools, not from the source input.');
+        'Could not find the build root directory. You must run the hosted server from within the build root directory containing the args.gn file for it to work (node gen/scripts/hosted_mode/server.js). The hosted mode server only works on the built output from DevTools, not from the source input.');
     process.exit(1);
   }
 }
-// We care about everything in the gen/ directory.
-const devtoolsFolder = path.resolve(path.join(pathToOutTargetDir, 'gen'));
+// We care about everything in the gen/ directory, unless we are in a full checkout.
+let devtoolsFolder = path.resolve(path.join(pathToOutTargetDir, 'gen'));
+const fullCheckoutDevtoolsRootFolder = path.join(devtoolsFolder, 'third_party', 'devtools-frontend', 'src');
+if (__dirname.startsWith(fullCheckoutDevtoolsRootFolder)) {
+  devtoolsFolder = fullCheckoutDevtoolsRootFolder;
+}
 
 // The certificate is taken from
 // https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/tools/apache_config/webkit-httpd.pem
@@ -113,8 +117,8 @@ async function requestHandler(request, response) {
 
   let encoding = 'utf8';
   if (absoluteFilePath.endsWith('.wasm') || absoluteFilePath.endsWith('.png') || absoluteFilePath.endsWith('.jpg') ||
-      absoluteFilePath.endsWith('.avif') || absoluteFilePath.endsWith('.wbn') || absoluteFilePath.endsWith('.dwp') ||
-      absoluteFilePath.endsWith('.dwo')) {
+      absoluteFilePath.endsWith('.avif') || absoluteFilePath.endsWith('.dwp') || absoluteFilePath.endsWith('.dwo') ||
+      absoluteFilePath.endsWith('.gz')) {
     encoding = 'binary';
   }
 
@@ -153,6 +157,9 @@ async function requestHandler(request, response) {
     if (path.endsWith('.avif')) {
       return 'image/avif';
     }
+    if (path.endsWith('.gz')) {
+      return 'application/gzip';
+    }
     return null;
   }
 
@@ -184,12 +191,18 @@ async function requestHandler(request, response) {
       // based on the origin that made the request. E.g. the target page loads a script first
       // but then DevTools also wants to load it. In the former, we disallow cross-origin requests by default,
       // while for the latter we allow it.
-      const requestedByDevTools = request.headers.origin?.includes('devtools-frontend.test');
+      const requestedByDevTools = request.headers.origin?.includes('devtools-frontend.test') ||
+          request.headers.origin?.includes('devtools://devtools');
       if (requestedByDevTools) {
         headers.set('Access-Control-Allow-Origin', request.headers.origin);
       }
       headers.set('Vary', 'Origin');
     }
+
+    if (request.url.endsWith('.gz')) {
+      headers.set('Content-Encoding', 'gzip');
+    }
+
     headers.forEach((value, header) => {
       response.setHeader(header, value);
     });

@@ -4,6 +4,8 @@
 
 #include "components/services/app_service/public/cpp/app_update.h"
 
+#include <variant>
+
 #include "base/time/time.h"
 #include "components/services/app_service/public/cpp/icon_effects.h"
 #include "components/services/app_service/public/cpp/intent_filter.h"
@@ -119,6 +121,9 @@ class AppUpdateTest : public testing::Test {
   std::optional<bool> expect_resize_locked_;
   bool expect_resize_locked_changed_;
 
+  std::optional<bool> expect_allow_window_mode_selection_;
+  bool expect_allow_window_mode_selection_changed_;
+
   WindowMode expect_window_mode_;
   bool expect_window_mode_changed_;
 
@@ -142,7 +147,7 @@ class AppUpdateTest : public testing::Test {
   std::optional<std::string> expect_selected_locale_;
   bool expect_selected_locale_changed_;
 
-  std::optional<base::Value::Dict> expect_extra_;
+  std::optional<base::DictValue> expect_extra_;
   bool expect_extra_changed_;
 
   void ExpectNoChange() {
@@ -174,6 +179,7 @@ class AppUpdateTest : public testing::Test {
     expect_paused_changed_ = false;
     expect_intent_filters_changed_ = false;
     expect_resize_locked_changed_ = false;
+    expect_allow_window_mode_selection_changed_ = false;
     expect_window_mode_changed_ = false;
     expect_run_on_os_login_changed_ = false;
     expect_allow_close_changed_ = false;
@@ -270,6 +276,11 @@ class AppUpdateTest : public testing::Test {
     EXPECT_EQ(expect_resize_locked_, u.ResizeLocked());
     EXPECT_EQ(expect_resize_locked_changed_, u.ResizeLockedChanged());
 
+    EXPECT_EQ(expect_allow_window_mode_selection_,
+              u.AllowWindowModeSelection());
+    EXPECT_EQ(expect_allow_window_mode_selection_changed_,
+              u.AllowWindowModeSelectionChanged());
+
     EXPECT_EQ(expect_window_mode_, u.WindowMode());
     EXPECT_EQ(expect_window_mode_changed_, u.WindowModeChanged());
 
@@ -322,6 +333,7 @@ class AppUpdateTest : public testing::Test {
     expect_handles_intents_ = std::nullopt;
     expect_has_badge_ = std::nullopt;
     expect_paused_ = std::nullopt;
+    expect_allow_window_mode_selection_ = true;
     expect_intent_filters_.clear();
     expect_resize_locked_ = std::nullopt;
     expect_window_mode_ = WindowMode::kUnknown;
@@ -384,6 +396,14 @@ class AppUpdateTest : public testing::Test {
       delta->name = test_name_1;
       expect_name_ = test_name_1;
       expect_name_changed_ = true;
+      expect_changed_ = true;
+      CheckExpects(u);
+    }
+
+    if (delta) {
+      delta->readiness = Readiness::kDisabledByLocalSettings;
+      expect_readiness_ = Readiness::kDisabledByLocalSettings;
+      expect_readiness_changed_ = true;
       expect_changed_ = true;
       CheckExpects(u);
     }
@@ -531,7 +551,7 @@ class AppUpdateTest : public testing::Test {
       expect_icon_key_ = IconKey();
       expect_icon_key_->update_version =
           (state && state->icon_key.has_value())
-              ? absl::get<int32_t>(state->icon_key->update_version) + 1
+              ? std::get<int32_t>(state->icon_key->update_version) + 1
               : IconKey::kInitVersion;
       expect_icon_key_changed_ = true;
       expect_changed_ = true;
@@ -992,7 +1012,10 @@ class AppUpdateTest : public testing::Test {
       intent_filter->conditions.push_back(std::move(scheme_condition));
       intent_filter->conditions.push_back(std::move(host_condition));
 
-      state->intent_filters.push_back(intent_filter->Clone());
+      if (!state->intent_filters) {
+        state->intent_filters.emplace();
+      }
+      state->intent_filters->push_back(intent_filter->Clone());
       expect_intent_filters_.push_back(intent_filter->Clone());
       expect_intent_filters_changed_ = false;
       CheckExpects(u);
@@ -1020,7 +1043,10 @@ class AppUpdateTest : public testing::Test {
       intent_filter->conditions.push_back(std::move(scheme_condition));
       intent_filter->conditions.push_back(std::move(host_condition));
 
-      delta->intent_filters.push_back(intent_filter->Clone());
+      if (!delta->intent_filters) {
+        delta->intent_filters.emplace();
+      }
+      delta->intent_filters->push_back(intent_filter->Clone());
       expect_intent_filters_.push_back(intent_filter->Clone());
       expect_intent_filters_changed_ = true;
       expect_changed_ = true;
@@ -1029,7 +1055,7 @@ class AppUpdateTest : public testing::Test {
 
     if (state) {
       apps::AppUpdate::Merge(state, delta);
-      EXPECT_TRUE(IsEqual(expect_intent_filters_, state->intent_filters));
+      EXPECT_TRUE(IsEqual(expect_intent_filters_, *state->intent_filters));
       ExpectNoChange();
       CheckExpects(u);
     }
@@ -1054,6 +1080,31 @@ class AppUpdateTest : public testing::Test {
     if (state) {
       apps::AppUpdate::Merge(state, delta);
       EXPECT_EQ(expect_resize_locked_, state->resize_locked);
+      ExpectNoChange();
+      CheckExpects(u);
+    }
+
+    // AllowWindowModeSelection tests.
+
+    if (state) {
+      state->allow_window_mode_selection = false;
+      expect_allow_window_mode_selection_ = false;
+      expect_allow_window_mode_selection_changed_ = false;
+      CheckExpects(u);
+    }
+
+    if (delta) {
+      delta->allow_window_mode_selection = true;
+      expect_allow_window_mode_selection_ = true;
+      expect_allow_window_mode_selection_changed_ = true;
+      expect_changed_ = true;
+      CheckExpects(u);
+    }
+
+    if (state) {
+      apps::AppUpdate::Merge(state, delta);
+      EXPECT_EQ(expect_allow_window_mode_selection_,
+                state->allow_window_mode_selection);
       ExpectNoChange();
       CheckExpects(u);
     }
@@ -1236,7 +1287,7 @@ class AppUpdateTest : public testing::Test {
     // Extra tests.
 
     if (state) {
-      base::Value::Dict dict;
+      base::DictValue dict;
       dict.Set("vm_name", "vm_name_value");
       state->SetExtraField("vm_name", "vm_name_value");
       expect_extra_ = std::move(dict);
@@ -1245,7 +1296,7 @@ class AppUpdateTest : public testing::Test {
     }
 
     if (delta) {
-      base::Value::Dict dict;
+      base::DictValue dict;
       dict.Set("container_name", "container_name_value");
       delta->SetExtraField("container_name", "container_name_value");
       expect_extra_ = std::move(dict);

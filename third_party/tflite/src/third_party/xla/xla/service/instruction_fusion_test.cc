@@ -15,22 +15,36 @@ limitations under the License.
 
 #include "xla/service/instruction_fusion.h"
 
+#include <optional>
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "xla/hlo/analysis/alias_info.h"
+#include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/parser/hlo_parser.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/hlo/utils/hlo_matchers.h"
-#include "xla/service/hlo_parser.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/shape_util.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 
 namespace op = xla::testing::opcode_matchers;
 
-using InstructionFusionTest = HloTestBase;
+class InstructionFusionTest : public HloHardwareIndependentTestBase {
+ protected:
+  AliasInfo alias_info_;
+};
 
 // Subclass of InstructionFusion exposing the protected methods Fuse and
 // FuseIntoMultiOutput for testing.
 class InstructionFusionForTesting : public InstructionFusion {
  public:
-  explicit InstructionFusionForTesting()
-      : InstructionFusion(InstructionFusion::IsExpensive) {}
+  explicit InstructionFusionForTesting(const AliasInfo* alias_info)
+      : InstructionFusion(InstructionFusion::IsExpensive, alias_info) {}
 
   HloInstruction* Fuse(HloInstruction* producer, HloInstruction* consumer,
                        HloComputation* computation) override {
@@ -56,8 +70,8 @@ TEST_F(InstructionFusionTest, FuseInstructions) {
                     .value();
   HloInstruction* sub = module->entry_computation()->root_instruction();
   HloInstruction* add = sub->mutable_operand(0);
-  HloInstruction* fusion =
-      InstructionFusionForTesting().Fuse(add, sub, module->entry_computation());
+  HloInstruction* fusion = InstructionFusionForTesting(&alias_info_)
+                               .Fuse(add, sub, module->entry_computation());
 
   ASSERT_THAT(fusion, op::Fusion()) << module->ToString();
   EXPECT_THAT(fusion->fused_expression_root(),
@@ -80,8 +94,8 @@ TEST_F(InstructionFusionTest, FuseIntoFusionInstruction) {
                     .value();
   HloInstruction* root = module->entry_computation()->root_instruction();
   HloInstruction* abs = root->mutable_operand(0);
-  HloInstruction* fusion = InstructionFusionForTesting().Fuse(
-      abs, root, module->entry_computation());
+  HloInstruction* fusion = InstructionFusionForTesting(&alias_info_)
+                               .Fuse(abs, root, module->entry_computation());
 
   ASSERT_THAT(fusion, op::Fusion()) << module->ToString();
   EXPECT_THAT(fusion->fused_expression_root(), op::Add(op::Abs(), op::Abs()))
@@ -101,12 +115,68 @@ TEST_F(InstructionFusionTest, FuseInstructionsIntoMultiOutput) {
   HloInstruction* root = module->entry_computation()->root_instruction();
   HloInstruction* abs = root->mutable_operand(0);
   HloInstruction* tanh = root->mutable_operand(1);
-  HloInstruction* fusion = InstructionFusionForTesting().FuseIntoMultiOutput(
-      abs, tanh, module->entry_computation());
+  HloInstruction* fusion =
+      InstructionFusionForTesting(&alias_info_)
+          .FuseIntoMultiOutput(abs, tanh, module->entry_computation());
 
   ASSERT_THAT(fusion, op::Fusion()) << module->ToString();
   EXPECT_THAT(fusion->fused_expression_root(), op::Tuple(op::Tanh(), op::Abs()))
       << module->ToString();
+}
+
+TEST_F(InstructionFusionTest, FuseInstructionsWithOriginalValue) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+  HloModule test_module
+  ENTRY entry_computation {
+    p0 = f32[4,3]{1,0} parameter(0), origin={{"p0"}}
+    add = f32[4,3]{1,0} add(p0, p0), origin={{"add"}}
+    ROOT sub = f32[4,3]{1,0} subtract(add, p0), origin={{"sub"}}
+  })")
+                    .value();
+  HloInstruction* sub = module->entry_computation()->root_instruction();
+  HloInstruction* add = sub->mutable_operand(0);
+  HloInstruction* fusion = InstructionFusionForTesting(&alias_info_)
+                               .Fuse(add, sub, module->entry_computation());
+
+  ASSERT_THAT(fusion, op::Fusion()) << module->ToString();
+  EXPECT_THAT(fusion->fused_expression_root(),
+              op::Subtract(op::Add(), op::Parameter()))
+      << module->ToString();
+  absl::string_view expected_origin = "{\"sub\"}";
+  ASSERT_NE(fusion->original_value(), nullptr);
+  EXPECT_EQ(fusion->original_value()->ToString(), expected_origin);
+  ASSERT_NE(fusion->fused_expression_root()->original_value(), nullptr);
+  ASSERT_EQ(fusion->fused_expression_root()->original_value()->ToString(),
+            expected_origin);
+}
+
+TEST_F(InstructionFusionTest,
+       FuseInstructionsIntoMultiOutputWithOriginalValue) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+  HloModule test_module
+  ENTRY entry_computation {
+    p0 = f32[4,3]{1,0} parameter(0), origin={{"p0"}}
+    abs = f32[4,3]{1,0} abs(p0), origin={{"abs"}}
+    tanh = f32[4,3]{1,0} tanh(abs), origin={{"tanh"}}
+    ROOT add = f32[4,3]{1,0} add(abs, tanh), origin={{"add"}}
+  })")
+                    .value();
+  HloInstruction* root = module->entry_computation()->root_instruction();
+  HloInstruction* abs = root->mutable_operand(0);
+  HloInstruction* tanh = root->mutable_operand(1);
+  HloInstruction* fusion =
+      InstructionFusionForTesting(&alias_info_)
+          .FuseIntoMultiOutput(abs, tanh, module->entry_computation());
+
+  absl::string_view expected_original_value = "({\"tanh\"}, {\"abs\"})";
+  ASSERT_THAT(fusion, op::Fusion()) << module->ToString();
+  EXPECT_THAT(fusion->fused_expression_root(), op::Tuple(op::Tanh(), op::Abs()))
+      << module->ToString();
+  ASSERT_NE(fusion->fused_expression_root()->original_value(), nullptr);
+  ASSERT_EQ(fusion->fused_expression_root()->original_value()->ToString(),
+            expected_original_value);
+  ASSERT_NE(fusion->original_value(), nullptr);
+  EXPECT_EQ(fusion->original_value()->ToString(), expected_original_value);
 }
 
 TEST_F(InstructionFusionTest, AvoidDuplicationIfNotAllFusible) {
@@ -119,19 +189,20 @@ TEST_F(InstructionFusionTest, AvoidDuplicationIfNotAllFusible) {
   HloInstruction* binary1 = builder.AddInstruction(
       HloInstruction::CreateBinary(shape, HloOpcode::kAdd, param0, param1));
   auto token = builder.AddInstruction(HloInstruction::CreateToken());
-  auto send =
-      builder.AddInstruction(HloInstruction::CreateSend(binary1, token, 0));
-  builder.AddInstruction(HloInstruction::CreateSendDone(send));
+  auto send = builder.AddInstruction(HloInstruction::CreateSend(
+      binary1, token, /*channel_id=*/0, /*is_host_transfer=*/false));
+  builder.AddInstruction(HloInstruction::CreateSendDone(
+      send, /*channel_id=*/0, /*is_host_transfer=*/false));
   HloInstruction* unary = builder.AddInstruction(
       HloInstruction::CreateUnary(shape, HloOpcode::kAbs, binary1));
 
   auto module = CreateNewVerifiedModule();
   auto computation = module->AddEntryComputation(builder.Build());
   EXPECT_EQ(unary, computation->root_instruction());
-  EXPECT_FALSE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/true)
-          .Run(module.get())
-          .value())
+  EXPECT_FALSE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                 /*may_duplicate=*/true)
+                   .Run(module.get())
+                   .value())
       << module->ToString();
 }
 
@@ -158,10 +229,10 @@ TEST_F(InstructionFusionTest, FuseCheapNonDuplicatableOps) {
   })")
                     .value();
   // Expect the add and subtraction to be fused.
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/true)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/true)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   EXPECT_EQ(Count(*module, HloOpcode::kFusion), 1) << module->ToString();
 
@@ -188,10 +259,10 @@ TEST_F(InstructionFusionTest, AvoidDuplicationIfNotAllFusibleRecursively) {
   })")
                     .value();
   // We expect abs2 to be fused into root.
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/true)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/true)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   HloInstruction* root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Fusion());
@@ -224,10 +295,10 @@ TEST_F(InstructionFusionTest, AvoidDuplicationIfNotAllFusibleRecursively) {
                .value();
 
   // We expect abs2 to be fused into root and abs1 to be fused into log.
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/true)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/true)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   EXPECT_EQ(Count(*module, HloOpcode::kFusion), 2) << module->ToString();
 
@@ -257,10 +328,10 @@ TEST_F(InstructionFusionTest, AvoidDuplicationIfNotAllFusibleRecursively) {
                .value();
 
   // Expect the add1 and add2 to be fused into root.
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/true)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/true)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   EXPECT_EQ(Count(*module, HloOpcode::kFusion), 1) << module->ToString();
 
@@ -294,10 +365,10 @@ TEST_F(InstructionFusionTest, AvoidDuplicationIfNotAllFusibleRecursively) {
                .value();
 
   // Expect sub1 and sub2 to be fused into root.
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/true)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/true)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Fusion());
@@ -318,19 +389,20 @@ TEST_F(InstructionFusionTest, AllowUnaryDuplication) {
   HloInstruction* unary1 = builder.AddInstruction(
       HloInstruction::CreateUnary(shape, HloOpcode::kFloor, param0));
   auto token = builder.AddInstruction(HloInstruction::CreateToken());
-  auto send =
-      builder.AddInstruction(HloInstruction::CreateSend(unary1, token, 0));
-  builder.AddInstruction(HloInstruction::CreateSendDone(send));
+  auto send = builder.AddInstruction(HloInstruction::CreateSend(
+      unary1, token, /*channel_id=*/0, /*is_host_transfer=*/false));
+  builder.AddInstruction(HloInstruction::CreateSendDone(
+      send, /*channel_id=*/0, /*is_host_transfer=*/false));
   HloInstruction* unary2 = builder.AddInstruction(
       HloInstruction::CreateUnary(shape, HloOpcode::kAbs, unary1));
 
   auto module = CreateNewVerifiedModule();
   auto computation = module->AddEntryComputation(builder.Build());
   EXPECT_EQ(unary2, computation->root_instruction());
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/true)
-          .Run(module.get())
-          .value());
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/true)
+                  .Run(module.get())
+                  .value());
 }
 
 TEST_F(InstructionFusionTest, AllowEffectiveUnaryDuplication) {
@@ -346,19 +418,20 @@ TEST_F(InstructionFusionTest, AllowEffectiveUnaryDuplication) {
   HloInstruction* binary1 = builder.AddInstruction(
       HloInstruction::CreateBinary(shape, HloOpcode::kAdd, broadcast, param1));
   auto token = builder.AddInstruction(HloInstruction::CreateToken());
-  auto send =
-      builder.AddInstruction(HloInstruction::CreateSend(binary1, token, 0));
-  builder.AddInstruction(HloInstruction::CreateSendDone(send));
+  auto send = builder.AddInstruction(HloInstruction::CreateSend(
+      binary1, token, /*channel_id=*/0, /*is_host_transfer=*/false));
+  builder.AddInstruction(HloInstruction::CreateSendDone(
+      send, /*channel_id=*/0, /*is_host_transfer=*/false));
   HloInstruction* unary = builder.AddInstruction(
       HloInstruction::CreateUnary(shape, HloOpcode::kAbs, binary1));
 
   auto module = CreateNewVerifiedModule();
   auto computation = module->AddEntryComputation(builder.Build());
   EXPECT_EQ(unary, computation->root_instruction());
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/true)
-          .Run(module.get())
-          .value());
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/true)
+                  .Run(module.get())
+                  .value());
 }
 
 TEST_F(InstructionFusionTest, AllowBinarySameValueOperandsDuplication) {
@@ -380,10 +453,10 @@ TEST_F(InstructionFusionTest, AllowBinarySameValueOperandsDuplication) {
   })")
                     .value();
   // We expect abs2 to be fused into root.
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/true)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/true)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   HloInstruction* root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Fusion());
@@ -408,10 +481,10 @@ TEST_F(InstructionFusionTest, FuseDiamondGraphsNoDuplication) {
     ROOT add2 = f32[99] add(slice1, slice2)
   })")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
 
   HloInstruction* root = module->entry_computation()->root_instruction();
@@ -433,10 +506,10 @@ TEST_F(InstructionFusionTest, FuseDiamondGraphsAllowDuplication) {
     ROOT add2 = f32[99] add(slice1, slice2)
   })")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/true)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/true)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
 
   HloInstruction* root = module->entry_computation()->root_instruction();
@@ -461,10 +534,10 @@ TEST_F(InstructionFusionTest,
   // The convert should be fused into the add and mul, even though may_duplicate
   // is false, because it's always beneficial to fuse/duplicate widening
   // converts into consumers.
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
 
   HloInstruction* root = module->entry_computation()->root_instruction();
@@ -485,10 +558,10 @@ TEST_F(InstructionFusionTest, BroadcastsAreAlwaysDuplicableIntoConsumers) {
   // The broadcast should be fused into the add and mul, even though
   // may_duplicate is false, because it's always beneficial to fuse/duplicate
   // broadcasts into consumers.
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
 
   HloInstruction* root = module->entry_computation()->root_instruction();
@@ -509,10 +582,10 @@ TEST_F(InstructionFusionTest,
     ROOT dynamic-update-slice.1 = f32[8] dynamic-update-slice(parameter.1, add.9, constant.10)
   })")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   // Verify that we don't fuse dynamic-update-slice and slice together since
   // dynamic-update-slice modifies the input buffer in-place, which is also used
@@ -539,10 +612,10 @@ TEST_F(InstructionFusionTest,
     ROOT dynamic-update-slice.1 = f32[8] dynamic-update-slice(dynamic-update-slice, add, three)
   })")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   // Verify that we don't fuse both dynamic-update-slice ops together, as they
   // have different index values.
@@ -570,10 +643,10 @@ TEST_F(InstructionFusionTest, DynamicUpdateSliceShouldFuseWithElementwise) {
     ROOT dynamic-update-slice.1 = f32[8] dynamic-update-slice(neg, add, three)
   })")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   HloInstruction* root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Fusion(op::Parameter(), op::Parameter()));
@@ -594,10 +667,10 @@ TEST_F(InstructionFusionTest, InPlaceOpShouldFuseWithSliceSameIndex) {
     ROOT dynamic-update-slice.1 = f32[8] dynamic-update-slice(parameter.1, add.9, constant.10)
   })")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   // Verify that we fuse dynamic-update-slice and slice together because they
   // have the same index.
@@ -619,10 +692,10 @@ TEST_F(InstructionFusionTest, InPlaceOpShouldNotFuseWithUnknownDynamicSlice) {
     ROOT dynamic-update-slice.1 = f32[8] dynamic-update-slice(parameter.0, add.9, constant.10)
   })")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   HloInstruction* root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Fusion(op::Parameter(), op::DynamicSlice()));
@@ -641,10 +714,10 @@ TEST_F(InstructionFusionTest, InPlaceOpShouldFuseWithSameDynamicSlice) {
     ROOT dynamic-update-slice.1 = f32[8] dynamic-update-slice(parameter.0, add.9, parameter.1)
   })")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   HloInstruction* root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Fusion(op::Parameter(), op::Parameter()));
@@ -667,10 +740,10 @@ TEST_F(InstructionFusionTest, InPlaceOpShouldNotFuseWithSliceSameIndex) {
     ROOT dynamic-update-slice.1 = f32[8] dynamic-update-slice(parameter.1, reverse, constant.10)
   })")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   // Verify that the slice is not fused because that would fuse with a
   // non-elementwise op (reverse) in between the slice and DUS.
@@ -692,10 +765,10 @@ TEST_F(InstructionFusionTest,
     ROOT dynamic-update-slice.1 = f32[8] dynamic-update-slice(parameter.1, add.9, constant.10)
   })")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   HloInstruction* root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Fusion(op::Parameter(), op::Parameter()));
@@ -719,10 +792,10 @@ TEST_F(InstructionFusionTest, InPlaceOpShouldNotBeFusedIfItSharesOperand) {
   }
   )")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   HloInstruction* root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Scatter());
@@ -738,10 +811,10 @@ TEST_F(InstructionFusionTest, DontFuseAcrossRoot) {
     sub = f32[4,3]{1,0} subtract(p0, add)
   })")
                     .value();
-  EXPECT_TRUE(
-      InstructionFusion(InstructionFusion::IsExpensive, /*may_duplicate=*/false)
-          .Run(module.get())
-          .value())
+  EXPECT_TRUE(InstructionFusion(InstructionFusion::IsExpensive, &alias_info_,
+                                /*may_duplicate=*/false)
+                  .Run(module.get())
+                  .value())
       << module->ToString();
   HloInstruction* root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Fusion(op::Parameter()));
@@ -750,23 +823,53 @@ TEST_F(InstructionFusionTest, DontFuseAcrossRoot) {
       op::Add(op::Multiply(op::Parameter(), op::Parameter()), op::Parameter()));
 }
 
-class FusionDecisionTest : public HloTestBase {};
+TEST_F(InstructionFusionTest, DontFuseProducerIfInplaceConflict) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+  HloModule test_module
+  func {
+    p0 = f32[200,200]{1,0} parameter(0)
+    p1 = f32[200,200]{1,0} parameter(1)
+    p2 = s32[72]{0} parameter(2)
+    bitcast0 = f32[200,200]{0,1} bitcast(p1)
+    bitcast1 = s32[72,1]{1,0} bitcast(p2)
+    gather = f32[72,1,200]{0,2,1} gather(bitcast0, bitcast1), offset_dims={1,2}, collapsed_slice_dims={}, start_index_map={0}, index_vector_dim=1, slice_sizes={1,200}
+    bitcast2 = f32[200,72]{1,0} bitcast(gather)
+    constant0 = s32[] constant(128)
+    constant1 = s32[] constant(0)
+    ROOT dynamic-update-slice = f32[200,200]{1,0} dynamic-update-slice(p0, bitcast2, constant1, constant0)
+  }
+  ENTRY entry_computation {
+    p0 = f32[200,200]{1,0} parameter(0)
+    p1 = f32[200,200]{1,0} parameter(1)
+    p2 = s32[72]{0} parameter(2)
+    add = f32[200,200]{1,0} add(p0, p1)
+    ROOT fusion = f32[200,200]{1,0} fusion(p0, add, p2), kind=kLoop, calls=func
+  })")
+                    .value();
+  HloInstruction* root = module->entry_computation()->root_instruction();
+  HloInstruction* add = root->mutable_operand(1);
+  FusionDecision fusion_decision = InstructionFusion::ShouldFuseInPlaceOp(
+      add, root, &alias_info_, std::nullopt);
+  EXPECT_FALSE(fusion_decision.CanFuse());
+}
+
+class FusionDecisionTest : public HloHardwareIndependentTestBase {};
 
 TEST_F(FusionDecisionTest, NotFusionPossibleDisjunction) {
-  FusionDecision a = {};
-  FusionDecision b = "not possible";
+  FusionDecision a = FusionDecision::Allow();
+  FusionDecision b = FusionDecision::Forbid("not possible");
   EXPECT_TRUE(!a || !b);
 
-  a = "not possible";
-  b = {};
+  a = FusionDecision::Forbid("not possible");
+  b = FusionDecision::Allow();
   EXPECT_TRUE(!a || !b);
 
-  a = "impossible";
-  b = "very impossible";
+  a = FusionDecision::Forbid("impossible");
+  b = FusionDecision::Forbid("very impossible");
   EXPECT_TRUE(!a || !b);
 
-  a = {};
-  b = {};
+  a = FusionDecision::Allow();
+  b = FusionDecision::Allow();
   EXPECT_FALSE(!a || !b);
 }
 

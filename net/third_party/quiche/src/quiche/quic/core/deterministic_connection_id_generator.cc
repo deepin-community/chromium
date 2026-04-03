@@ -4,6 +4,8 @@
 
 #include "quiche/quic/core/deterministic_connection_id_generator.h"
 
+#include <optional>
+
 #include "quiche/quic/core/quic_utils.h"
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
 #include "quiche/quic/platform/api/quic_logging.h"
@@ -56,7 +58,7 @@ DeterministicConnectionIdGenerator::MaybeReplaceConnectionId(
   if (original.length() == expected_connection_id_length_) {
     return std::optional<QuicConnectionId>();
   }
-  QUICHE_DCHECK(version.AllowsVariableLengthConnectionIds());
+  QUICHE_DCHECK(version.IsIetfQuic());
   std::optional<QuicConnectionId> new_connection_id =
       GenerateNextConnectionId(original);
   // Verify that ReplaceShortServerConnectionId is deterministic.

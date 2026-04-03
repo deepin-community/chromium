@@ -44,9 +44,10 @@ class PushMessagingRouter {
                              int64_t service_worker_registration_id,
                              const std::string& message_id,
                              std::optional<std::string> payload,
+                             bool record_network_requests,
                              PushEventCallback deliver_message_callback);
 
-  // TODO(https://crbug.com/753163): Add the ability to trigger a push
+  // TODO(crbug.com/41338108): Add the ability to trigger a push
   // subscription change event in DevTools
   // Fires a pushsubscriptionchangeevent with the arguments |new_subscription|
   // and |old_subscription| to service workers.
@@ -63,6 +64,7 @@ class PushMessagingRouter {
   static void DeliverMessageToWorker(
       const std::string& message_id,
       std::optional<std::string> payload,
+      bool record_network_requests,
       PushEventCallback deliver_message_callback,
       scoped_refptr<ServiceWorkerVersion> service_worker,
       scoped_refptr<ServiceWorkerContextWrapper> service_worker_context,

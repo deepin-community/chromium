@@ -19,8 +19,12 @@
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/file_manager/volume_manager_factory.h"
 #include "chrome/browser/ash/fileapi/file_system_backend.h"
+#include "chrome/common/chrome_features.h"
+#include "chrome/common/pref_names.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/disks/fake_disk_mount_manager.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/test_event_router.h"
@@ -50,7 +54,7 @@ TEST(EventRouterTest, PopulateCrostiniEvent) {
             extensions::api::file_manager_private::CrostiniEventType::kUnshare);
   EXPECT_EQ(ext_event.vm_name, "vmname");
   EXPECT_EQ(ext_event.entries.size(), 1u);
-  base::Value::Dict ext_props;
+  base::DictValue ext_props;
   ext_props.Set(
       "fileSystemRoot",
       "filesystem:chrome-extension://extensionid/external/mountname/");
@@ -71,7 +75,7 @@ TEST(EventRouterTest, PopulateCrostiniEvent) {
             extensions::api::file_manager_private::CrostiniEventType::kShare);
   EXPECT_EQ(swa_event.vm_name, "vmname");
   EXPECT_EQ(swa_event.entries.size(), 1u);
-  base::Value::Dict swa_props;
+  base::DictValue swa_props;
   swa_props.Set("fileSystemRoot",
                 "filesystem:chrome://file-manager/external/mountname/");
   swa_props.Set("fileSystemName", "filesystemname");
@@ -163,22 +167,26 @@ class FileManagerEventRouterTest : public testing::Test {
   }
 
   content::BrowserTaskEnvironment task_environment_;
-  display::test::TestScreen test_screen_{/*create_dispay=*/true,
+  display::test::TestScreen test_screen_{/*create_display=*/true,
                                          /*register_screen=*/true};
   base::ScopedTempDir temp_dir_;
+  ash::disks::FakeDiskMountManager disk_mount_manager_;
   std::unique_ptr<TestingProfile> profile_;
   const blink::StorageKey kTestStorageKey =
       blink::StorageKey::CreateFromStringForTesting("chrome-extension://abc");
   scoped_refptr<storage::FileSystemContext> file_system_context_;
-  ash::disks::FakeDiskMountManager disk_mount_manager_;
 };
+
+MATCHER(ExpectNoArgs, "") {
+  return arg.size() == 0;
+}
 
 // A matcher that matches an `extensions::Event::event_args` and attempts to
 // extract the "outputs" key. It then looks at the output at `index` and matches
 // the `field` against the `expected_value`.
 MATCHER_P3(ExpectEventArgString, index, field, expected_value, "") {
   EXPECT_GE(arg.size(), 1u);
-  const base::Value::List* outputs = arg[0].GetDict().FindList("outputs");
+  const base::ListValue* outputs = arg[0].GetDict().FindList("outputs");
   EXPECT_TRUE(outputs) << "The outputs field is not available on the event";
   EXPECT_GT(outputs->size(), index)
       << "The supplied index on outputs is not available, size: "
@@ -201,17 +209,17 @@ MATCHER_P4(ExpectEventArgPauseParams,
            expected_always_show_review,
            "") {
   EXPECT_GE(arg.size(), 1u);
-  const base::Value::Dict* pause_params =
+  const base::DictValue* pause_params =
       arg[0].GetDict().FindDict("pauseParams");
   EXPECT_TRUE(pause_params)
       << "The pause_params field is not available on the event";
 
-  const base::Value::Dict* conflict_pause_params =
+  const base::DictValue* conflict_pause_params =
       pause_params->FindDict("conflictParams");
   EXPECT_FALSE(conflict_pause_params)
       << "The conflictParams field should not be available on the event";
 
-  const base::Value::Dict* policy_pause_params =
+  const base::DictValue* policy_pause_params =
       pause_params->FindDict("policyParams");
   EXPECT_TRUE(policy_pause_params)
       << "The policyParams field is not available on the event";
@@ -250,7 +258,7 @@ MATCHER_P4(ExpectEventArgPolicyError,
            expected_always_show_review,
            "") {
   EXPECT_GE(arg.size(), 1u);
-  const base::Value::Dict* policy_error =
+  const base::DictValue* policy_error =
       arg[0].GetDict().FindDict("policyError");
   EXPECT_TRUE(policy_error)
       << "The policyError field is not available on the event";
@@ -387,6 +395,41 @@ TEST_F(FileManagerEventRouterTest, OnIOTaskStatusForPolicyError) {
       .WillOnce(RunClosure(run_loop.QuitClosure()));
 
   event_router->OnIOTaskStatus(status);
+  run_loop.Run();
+}
+
+class FileManagerEventRouterLocalFilesTest : public FileManagerEventRouterTest {
+ public:
+  FileManagerEventRouterLocalFilesTest() {
+    scoped_feature_list_.InitAndEnableFeature(features::kSkyVault);
+  }
+  ~FileManagerEventRouterLocalFilesTest() override = default;
+
+  void SetLocalUserFilesPolicy(bool allowed) {
+    TestingBrowserProcess::GetGlobal()->local_state()->SetBoolean(
+        prefs::kLocalUserFilesAllowed, allowed);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(FileManagerEventRouterLocalFilesTest, OnLocalUserFilesPolicyChanged) {
+  // Set up event routers.
+  extensions::TestEventRouter* test_event_router =
+      extensions::CreateAndUseTestEventRouter(profile_.get());
+  TestEventRouterObserver observer(test_event_router);
+  auto event_router = std::make_unique<EventRouter>(profile_.get());
+  event_router->ForceBroadcastingForTesting(true);
+
+  // Expect the preferences changed event.
+  base::ListValue event_args =
+      extensions::api::file_manager_private::OnPreferencesChanged::Create();
+  base::RunLoop run_loop;
+  EXPECT_CALL(observer, OnBroadcastEvent(Field(&extensions::Event::event_args,
+                                               AllOf(ExpectNoArgs()))))
+      .WillOnce(RunClosure(run_loop.QuitClosure()));
+  SetLocalUserFilesPolicy(/*allowed=*/false);
   run_loop.Run();
 }
 

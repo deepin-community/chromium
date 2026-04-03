@@ -7,17 +7,17 @@
 #include <stddef.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/containers/span.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 
 namespace {
 
 base::Value CopyBinaryValueToIntegerList(
     const base::Value::BlobStorage& input) {
-  base::Value::List list;
+  base::ListValue list;
   list.reserve(input.size());
   for (int c : input)
     list.Append(c);
@@ -43,7 +43,6 @@ ExtensionFunction::ResponseAction IdltestSendArrayBufferViewFunction::Run() {
 }
 
 ExtensionFunction::ResponseAction IdltestGetArrayBufferFunction::Run() {
-  static constexpr base::StringPiece kHello = "hello world";
-  return RespondNow(
-      WithArguments(base::Value(base::as_bytes(base::make_span(kHello)))));
+  static constexpr std::string_view kHello = "hello world";
+  return RespondNow(WithArguments(base::Value(base::as_byte_span(kHello))));
 }

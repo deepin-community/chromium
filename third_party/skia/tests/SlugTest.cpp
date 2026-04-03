@@ -16,7 +16,7 @@
 #include "include/core/SkTypeface.h"
 #include "include/core/SkTypes.h"
 #include "include/gpu/GpuTypes.h"
-#include "include/gpu/GrDirectContext.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "include/private/base/SkTDArray.h"
 #include "include/private/chromium/Slug.h"
@@ -45,9 +45,9 @@ DEF_GANESH_TEST_FOR_RENDERING_CONTEXTS(Slug_empty,
     size_t txtLen = strlen(kText);
     int glyphCount = font.countText(kText, txtLen, SkTextEncoding::kUTF8);
 
-    SkTDArray<uint16_t> glyphs;
+    SkTDArray<SkGlyphID> glyphs;
     glyphs.append(glyphCount);
-    font.textToGlyphs(kText, txtLen, SkTextEncoding::kUTF8, glyphs.begin(), glyphCount);
+    font.textToGlyphs(kText, txtLen, SkTextEncoding::kUTF8, glyphs);
 
     SkTextBlobBuilder builder;
 
@@ -57,7 +57,7 @@ DEF_GANESH_TEST_FOR_RENDERING_CONTEXTS(Slug_empty,
     font.setSize(16);
 
     const SkTextBlobBuilder::RunBuffer& buf = builder.allocRun(font, glyphs.size(), 0, 0);
-    memcpy(buf.glyphs, glyphs.begin(), glyphs.size() * sizeof(uint16_t));
+    memcpy(buf.glyphs, glyphs.begin(), glyphs.size() * sizeof(SkGlyphID));
     auto blob = builder.make();
 
     SkPaint p;

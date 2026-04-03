@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/extensions/extension_action_runner.h"
+
 #include <stddef.h>
 
 #include <map>
@@ -10,11 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
-#include "chrome/browser/extensions/active_tab_permission_granter.h"
 #include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
-#include "chrome/browser/extensions/extension_action_runner.h"
-#include "chrome/browser/extensions/permissions_updater.h"
-#include "chrome/browser/extensions/scripting_permissions_modifier.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
@@ -25,6 +23,10 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/navigation_simulator.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/permissions/active_tab_permission_granter.h"
+#include "extensions/browser/permissions/permissions_updater.h"
+#include "extensions/browser/permissions/scripting_permissions_modifier.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_features.h"
@@ -33,6 +35,8 @@
 #include "extensions/common/mojom/injection_type.mojom-shared.h"
 #include "extensions/common/mojom/run_location.mojom-shared.h"
 #include "extensions/common/user_script.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -87,9 +91,10 @@ class ExtensionActionRunnerUnitTest : public ChromeRenderViewHostTestHarness {
 
   void SetUp() override;
 
+  void TearDown() override;
+
   // The associated ExtensionActionRunner.
-  raw_ptr<ExtensionActionRunner, DanglingUntriaged> extension_action_runner_ =
-      nullptr;
+  raw_ptr<ExtensionActionRunner> extension_action_runner_ = nullptr;
 
   // The map of observed executions, keyed by extension id.
   std::map<ExtensionId, int> extension_executions_;
@@ -104,13 +109,13 @@ const Extension* ExtensionActionRunnerUnitTest::AddExtension() {
   const ExtensionId kId = crx_file::id_util::GenerateId("all_hosts_extension");
   extension_ =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "all_hosts_extension")
                            .Set("description", "an extension")
                            .Set("manifest_version", 2)
                            .Set("version", "1.0.0")
-                           .Set("permissions", base::Value::List().Append(
-                                                   kAllHostsPermission)))
+                           .Set("permissions",
+                                base::ListValue().Append(kAllHostsPermission)))
           .SetLocation(mojom::ManifestLocation::kInternal)
           .SetID(kId)
           .Build();
@@ -154,8 +159,9 @@ void ExtensionActionRunnerUnitTest::RequestInjection(
 size_t ExtensionActionRunnerUnitTest::GetExecutionCountForExtension(
     const ExtensionId& extension_id) const {
   auto iter = extension_executions_.find(extension_id);
-  if (iter != extension_executions_.end())
+  if (iter != extension_executions_.end()) {
     return iter->second;
+  }
   return 0u;
 }
 
@@ -171,8 +177,9 @@ ExtensionActionRunnerUnitTest::GetExecutionCallbackForExtension(
 void ExtensionActionRunnerUnitTest::IncrementExecutionCount(
     const ExtensionId& extension_id,
     bool granted) {
-  if (!granted)
+  if (!granted) {
     return;
+  }
   ++extension_executions_[extension_id];
 }
 
@@ -187,14 +194,18 @@ void ExtensionActionRunnerUnitTest::SetUp() {
   DCHECK(extension_action_runner_);
 }
 
-// TODO(crbug.com/1400812): Split the test by need for refresh or not to confirm
-// the blocked actions are running as expected.
-// Tests that when an extension is granted permissions (independent of page
-// reload) the extension is allowed to run.
+void ExtensionActionRunnerUnitTest::TearDown() {
+  extension_action_runner_ = nullptr;
+  ChromeRenderViewHostTestHarness::TearDown();
+}
+
+// TODO(crbug.com/40883928): Split the test by need for refresh or not to
+// confirm the blocked actions are running as expected. Tests that when an
+// extension is granted permissions (independent of page reload) the extension
+// is allowed to run.
 TEST_F(ExtensionActionRunnerUnitTest, GrantTabPermissions) {
   ActiveTabPermissionGranter* active_tab_permission_granter =
-      TabHelper::FromWebContents(web_contents())
-          ->active_tab_permission_granter();
+      ActiveTabPermissionGranter::FromWebContents(web_contents());
   ASSERT_TRUE(active_tab_permission_granter);
 
   const Extension* extension = AddExtension();
@@ -246,7 +257,7 @@ TEST_F(ExtensionActionRunnerUnitTest, RequestPermissionAndExecute) {
   EXPECT_FALSE(RequiresUserConsent(extension));
 
   // Reloading and same-origin navigations shouldn't clear those permissions,
-  // and we shouldn't require user constent again.
+  // and we shouldn't require user consent again.
   content::NavigationSimulator::Reload(web_contents());
   EXPECT_FALSE(RequiresUserConsent(extension));
   NavigateAndCommit(GURL("https://www.google.com/foo"));
@@ -311,8 +322,9 @@ TEST_F(ExtensionActionRunnerUnitTest, MultiplePendingInjection) {
 
   const size_t kNumInjections = 3u;
   // Queue multiple pending injections.
-  for (size_t i = 0u; i < kNumInjections; ++i)
+  for (size_t i = 0u; i < kNumInjections; ++i) {
     RequestInjection(extension);
+  }
 
   EXPECT_EQ(0u, GetExecutionCountForExtension(extension->id()));
 
@@ -328,8 +340,7 @@ TEST_F(ExtensionActionRunnerUnitTest, ActiveScriptsUseActiveTabPermissions) {
   NavigateAndCommit(GURL("https://www.google.com"));
 
   ActiveTabPermissionGranter* active_tab_permission_granter =
-      TabHelper::FromWebContents(web_contents())
-          ->active_tab_permission_granter();
+      ActiveTabPermissionGranter::FromWebContents(web_contents());
   ASSERT_TRUE(active_tab_permission_granter);
   // Grant the extension active tab permissions. This normally happens, e.g.,
   // if the user clicks on a browser action.
@@ -352,7 +363,7 @@ TEST_F(ExtensionActionRunnerUnitTest, ActiveScriptsUseActiveTabPermissions) {
   NavigateAndCommit(GURL("https://yahoo.com"));
   EXPECT_TRUE(RequiresUserConsent(extension));
 
-  // Back to the original origin should also re-require constent.
+  // Back to the original origin should also re-require consent.
   NavigateAndCommit(GURL("https://www.google.com"));
   EXPECT_TRUE(RequiresUserConsent(extension));
 

@@ -73,7 +73,8 @@ class ParallelInterleaveDatasetParams : public DatasetParams {
     return input_tensors;
   }
 
-  Status GetInputNames(std::vector<string>* input_names) const override {
+  absl::Status GetInputNames(
+      std::vector<std::string>* input_names) const override {
     input_names->emplace_back(ParallelInterleaveDatasetOp::kInputDataset);
     for (int i = 0; i < other_arguments_.size(); ++i) {
       input_names->emplace_back(
@@ -89,7 +90,7 @@ class ParallelInterleaveDatasetParams : public DatasetParams {
     return absl::OkStatus();
   }
 
-  Status GetAttributes(AttributeVector* attr_vector) const override {
+  absl::Status GetAttributes(AttributeVector* attr_vector) const override {
     *attr_vector = {{"f", func_},
                     {"deterministic", deterministic_},
                     {"Targuments", type_arguments_},
@@ -99,7 +100,7 @@ class ParallelInterleaveDatasetParams : public DatasetParams {
     return absl::OkStatus();
   }
 
-  string dataset_type() const override {
+  std::string dataset_type() const override {
     return ParallelInterleaveDatasetOp::kDatasetType;
   }
 

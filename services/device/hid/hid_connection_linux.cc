@@ -13,6 +13,9 @@
 #include <tuple>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/containers/auto_spanification_helper.h"
+#include "base/containers/span.h"
 #include "base/files/file_descriptor_watcher_posix.h"
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
@@ -66,7 +69,7 @@ class HidConnectionLinux::BlockingTaskRunnerHelper {
         FROM_HERE, base::BlockingType::MAY_BLOCK);
 
     ssize_t result =
-        HANDLE_EINTR(write(fd_.get(), buffer->front(), buffer->size()));
+        HANDLE_EINTR(write(fd_.get(), buffer->data(), buffer->size()));
     if (result < 0) {
       HID_PLOG(EVENT) << "Write failed";
       return false;
@@ -87,7 +90,7 @@ class HidConnectionLinux::BlockingTaskRunnerHelper {
         FROM_HERE, base::BlockingType::MAY_BLOCK);
 
     int result = HANDLE_EINTR(
-        ioctl(fd_.get(), HIDIOCGFEATURE(buffer->size()), buffer->front()));
+        ioctl(fd_.get(), HIDIOCGFEATURE(buffer->size()), buffer->data()));
     if (result < 0) {
       HID_PLOG(EVENT) << "Failed to get feature report";
       return std::make_tuple(false, nullptr, 0);
@@ -98,7 +101,8 @@ class HidConnectionLinux::BlockingTaskRunnerHelper {
       // Linux adds a 0 to the beginning of the data received from the device.
       auto copied_buffer =
           base::MakeRefCounted<base::RefCountedBytes>(result - 1);
-      memcpy(copied_buffer->front(), buffer->front() + 1, result - 1);
+      UNSAFE_TODO(memcpy(copied_buffer->as_vector().data(), buffer->data() + 1,
+                         result - 1));
       return std::make_tuple(true, std::move(copied_buffer), result - 1);
     } else {
       return std::make_tuple(true, std::move(buffer), result);
@@ -111,7 +115,7 @@ class HidConnectionLinux::BlockingTaskRunnerHelper {
         FROM_HERE, base::BlockingType::MAY_BLOCK);
 
     int result = HANDLE_EINTR(
-        ioctl(fd_.get(), HIDIOCSFEATURE(buffer->size()), buffer->front()));
+        ioctl(fd_.get(), HIDIOCSFEATURE(buffer->size()), buffer->data()));
     if (result < 0) {
       HID_PLOG(EVENT) << "Failed to send feature report";
       return false;
@@ -126,16 +130,16 @@ class HidConnectionLinux::BlockingTaskRunnerHelper {
 
     auto buffer =
         base::MakeRefCounted<base::RefCountedBytes>(report_buffer_size_);
-    uint8_t* data = buffer->front();
+    base::span<uint8_t> data = buffer->as_vector();
     size_t length = report_buffer_size_;
     if (!has_report_id_) {
       // Linux will not prefix the buffer with a report ID if report IDs are not
       // used by the device. Prefix the buffer with 0.
-      *data++ = 0;
+      (base::PostIncrementSpan(data))[0] = 0;
       length--;
     }
 
-    ssize_t bytes_read = HANDLE_EINTR(read(fd_.get(), data, length));
+    ssize_t bytes_read = HANDLE_EINTR(read(fd_.get(), data.data(), length));
     if (bytes_read < 0) {
       if (errno != EAGAIN) {
         HID_PLOG(EVENT) << "Read failed";
@@ -207,7 +211,7 @@ void HidConnectionLinux::PlatformGetFeatureReport(uint8_t report_id,
   DCHECK_GT(device_info()->max_feature_report_size(), 0u);
   auto buffer = base::MakeRefCounted<base::RefCountedBytes>(
       device_info()->max_feature_report_size() + 1);
-  buffer->data()[0] = report_id;
+  buffer->as_vector().data()[0] = report_id;
 
   auto callback_wrapper = base::BindOnce(
       [](ReadCallback callback,

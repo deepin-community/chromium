@@ -5,12 +5,12 @@
 #ifndef COMPONENTS_PASSWORD_MANAGER_IOS_TEST_HELPERS_H_
 #define COMPONENTS_PASSWORD_MANAGER_IOS_TEST_HELPERS_H_
 
+#include <cstdint>
 #include <string>
 
 namespace autofill {
-struct FormData;
+class FormData;
 struct PasswordFormFillData;
-struct FormData;
 }  // namespace autofill
 
 namespace password_manager {

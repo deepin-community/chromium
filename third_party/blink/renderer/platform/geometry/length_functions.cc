@@ -37,13 +37,13 @@ int IntValueForLength(const Length& length, int maximum_value) {
 
 float FloatValueForLength(const Length& length,
                           float maximum_value,
-                          const Length::EvaluationInput& input) {
+                          const EvaluationInput& input) {
   switch (length.GetType()) {
     case Length::kFixed:
-      return length.GetFloatValue();
+      return length.Pixels();
     case Length::kPercent:
       return ClampTo<float>(maximum_value * length.Percent() / 100.0f);
-    case Length::kFillAvailable:
+    case Length::kStretch:
     case Length::kAuto:
       return static_cast<float>(maximum_value);
     case Length::kCalculated:
@@ -59,15 +59,13 @@ float FloatValueForLength(const Length& length,
     case Length::kDeviceHeight:
     case Length::kNone:
       NOTREACHED();
-      return 0;
   }
   NOTREACHED();
-  return 0;
 }
 
 LayoutUnit MinimumValueForLengthInternal(const Length& length,
                                          LayoutUnit maximum_value,
-                                         const Length::EvaluationInput& input) {
+                                         const EvaluationInput& input) {
   switch (length.GetType()) {
     case Length::kPercent:
       // Don't remove the extra cast to float. It is needed for rounding on
@@ -76,7 +74,7 @@ LayoutUnit MinimumValueForLengthInternal(const Length& length,
           static_cast<float>(maximum_value * length.Percent() / 100.0f));
     case Length::kCalculated:
       return LayoutUnit(length.NonNanCalculatedValue(maximum_value, input));
-    case Length::kFillAvailable:
+    case Length::kStretch:
     case Length::kAuto:
       return LayoutUnit();
     case Length::kFixed:
@@ -91,21 +89,19 @@ LayoutUnit MinimumValueForLengthInternal(const Length& length,
     case Length::kDeviceHeight:
     case Length::kNone:
       NOTREACHED();
-      return LayoutUnit();
   }
   NOTREACHED();
-  return LayoutUnit();
 }
 
 LayoutUnit ValueForLength(const Length& length,
                           LayoutUnit maximum_value,
-                          const Length::EvaluationInput& input) {
+                          const EvaluationInput& input) {
   switch (length.GetType()) {
     case Length::kFixed:
     case Length::kPercent:
     case Length::kCalculated:
       return MinimumValueForLength(length, maximum_value, input);
-    case Length::kFillAvailable:
+    case Length::kStretch:
     case Length::kAuto:
       return maximum_value;
     case Length::kMinContent:
@@ -119,10 +115,8 @@ LayoutUnit ValueForLength(const Length& length,
     case Length::kDeviceHeight:
     case Length::kNone:
       NOTREACHED();
-      return LayoutUnit();
   }
   NOTREACHED();
-  return LayoutUnit();
 }
 
 gfx::SizeF SizeForLengthSize(const LengthSize& length_size,

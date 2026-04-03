@@ -7,7 +7,6 @@
 #include <algorithm>
 
 #include "ash/accessibility/accessibility_controller.h"
-#include "ash/constants/ash_features.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/constants/tray_background_view_catalog.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
@@ -36,11 +35,9 @@
 #include "ash/system/tray/tray_container.h"
 #include "ash/system/tray/tray_popup_utils.h"
 #include "ash/system/tray/tray_utils.h"
-#include "ash/webui/eche_app_ui/mojom/eche_app.mojom-shared.h"
 #include "ash/webui/eche_app_ui/mojom/eche_app.mojom.h"
 #include "ash/wm/window_state.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/time/default_tick_clock.h"
@@ -72,6 +69,7 @@
 #include "ui/gfx/text_constants.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
@@ -120,9 +118,6 @@ constexpr base::TimeDelta kUnloadTimeoutDuration = base::Milliseconds(500);
 // Timeout for initializer connection attempts.
 constexpr base::TimeDelta kInitializerTimeout = base::Seconds(6);
 
-// The ID for the "Copy/paste not yet implemented" toast.
-constexpr char kEcheTrayCopyPasteNotImplementedToastId[] =
-    "eche_tray_toast_ids.copy_paste_not_implemented";
 // The ID for the "Tablet mode not supported" toast.
 constexpr char kEcheTrayTabletModeNotSupportedId[] =
     "eche_tray_toast_ids.tablet_mode_not_supported";
@@ -167,10 +162,10 @@ std::unique_ptr<views::Button> CreateButton(
     int message_id) {
   auto button = views::CreateVectorImageButton(std::move(callback));
 
-  views::SetImageFromVectorIconWithColorId(
+  views::SetImageFromVectorIconWithColor(
       button.get(), icon,
-      static_cast<ui::ColorId>(cros_tokens::kCrosSysOnSurface),
-      static_cast<ui::ColorId>(cros_tokens::kButtonIconColorPrimaryDisabled));
+      {cros_tokens::kCrosSysOnSurface,
+       cros_tokens::kButtonIconColorPrimaryDisabled});
   button->SetTooltipText(l10n_util::GetStringUTF16(message_id));
   button->SizeToPreferredSize();
 
@@ -190,12 +185,14 @@ void ConfigureLabelText(views::Label* title) {
   title->SetAllowCharacterBreak(true);
   title->SetProperty(
       views::kFlexBehaviorKey,
-      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
-                               views::MaximumFlexSizeRule::kUnbounded,
-                               /*adjust_height_for_width =*/true)
+      views::FlexSpecification(views::LayoutOrientation::kHorizontal,
+                               views::MinimumFlexSizeRule::kScaleToZero,
+                               views::MaximumFlexSizeRule::kUnbounded)
           .WithWeight(1));
+  title->SetProperty(views::kCrossAxisAlignmentKey,
+                     views::LayoutAlignment::kStretch);
   title->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-  title->SetEnabledColorId(cros_tokens::kCrosSysOnSurface);
+  title->SetEnabledColor(cros_tokens::kCrosSysOnSurface);
   TypographyProvider::Get()->StyleLabel(ash::TypographyToken::kCrosHeadline1,
                                         *title);
 }
@@ -229,20 +226,21 @@ EcheTray::EcheTray(Shelf* shelf)
   // Observers setup
   // Note: `ScreenLayoutObserver` starts observing at its constructor.
   observed_session_.Observe(Shell::Get()->session_controller());
-  icon_->SetTooltipText(GetAccessibleNameForTray());
+  icon_->SetTooltipText(GetAccessibleName());
   UpdateTrayItemColor(is_active());
 
   shelf_observation_.Observe(shelf);
   shell_observer_.Observe(Shell::Get());
   keyboard_observation_.Observe(keyboard::KeyboardUIController::Get());
+
+  GetViewAccessibility().SetName(GetAccessibleName());
 }
 
 EcheTray::~EcheTray() {
   if (bubble_) {
     bubble_->bubble_view()->ResetDelegate();
   }
-  if (features::IsEcheNetworkConnectionStateEnabled() &&
-      eche_connection_status_handler_) {
+  if (eche_connection_status_handler_) {
     eche_connection_status_handler_->RemoveObserver(this);
   }
 }
@@ -251,7 +249,7 @@ bool EcheTray::IsInitialized() const {
   return GetBubbleWidget() != nullptr;
 }
 
-void EcheTray::ClickedOutsideBubble() {
+void EcheTray::ClickedOutsideBubble(const ui::LocatedEvent& event) {
   //  Do nothing
 }
 
@@ -262,14 +260,8 @@ void EcheTray::UpdateTrayItemColor(bool is_active) {
                               : cros_tokens::kCrosSysOnSurface));
 }
 
-std::u16string EcheTray::GetAccessibleNameForTray() {
-  // TODO(nayebi): Change this based on the final model of interaction
-  // between phone hub and Eche.
-  return l10n_util::GetStringUTF16(IDS_ASH_PHONE_HUB_TRAY_ACCESSIBLE_NAME);
-}
-
 void EcheTray::HandleLocaleChange() {
-  icon_->SetTooltipText(GetAccessibleNameForTray());
+  icon_->SetTooltipText(GetAccessibleName());
 }
 
 void EcheTray::HideBubbleWithView(const TrayBubbleView* bubble_view) {
@@ -293,7 +285,7 @@ void EcheTray::Initialize() {
   SetVisiblePreferred(visibility);
 }
 
-void EcheTray::CloseBubble() {
+void EcheTray::CloseBubbleInternal() {
   if (bubble_)
     HideBubble();
 }
@@ -355,7 +347,7 @@ bool EcheTray::CacheBubbleViewForHide() const {
 }
 
 std::u16string EcheTray::GetAccessibleNameForBubble() {
-  return GetAccessibleNameForTray();
+  return GetAccessibleName();
 }
 
 bool EcheTray::ShouldEnableExtraKeyboardAccessibility() {
@@ -407,11 +399,6 @@ void EcheTray::OnKeyboardHidden(bool is_temporary_hide) {
 
 void EcheTray::OnConnectionStatusChanged(
     eche_app::mojom::ConnectionStatus connection_status) {
-  if (!features::IsEcheNetworkConnectionStateEnabled() ||
-      !initializer_webview_) {
-    return;
-  }
-
   switch (connection_status) {
     case eche_app::mojom::ConnectionStatus::kConnectionStatusConnecting:
       break;
@@ -456,7 +443,7 @@ void EcheTray::OnConnectionStatusChanged(
 }
 
 void EcheTray::OnRequestBackgroundConnectionAttempt() {
-  if (!features::IsEcheNetworkConnectionStateEnabled() || web_view_) {
+  if (web_view_) {
     return;
   }
   has_reported_initializer_result_ = false;
@@ -553,7 +540,7 @@ bool EcheTray::LoadBubble(
     const std::u16string& phone_name,
     eche_app::mojom::ConnectionStatus last_connection_status,
     eche_app::mojom::AppStreamLaunchEntryPoint entry_point) {
-  if (Shell::Get()->IsInTabletMode()) {
+  if (display::Screen::Get()->InTabletMode()) {
     ash::ToastManager::Get()->Show(ash::ToastData(
         kEcheTrayTabletModeNotSupportedId,
         ash::ToastCatalogName::kEcheTrayTabletModeNotSupported,
@@ -668,8 +655,7 @@ void EcheTray::InitBubble(
     return;
   }
 
-  if (features::IsEcheNetworkConnectionStateEnabled() &&
-      last_connection_status !=
+  if (last_connection_status !=
           eche_app::mojom::ConnectionStatus::kConnectionStatusConnected &&
       entry_point == eche_app::mojom::AppStreamLaunchEntryPoint::NOTIFICATION) {
     base::UmaHistogramEnumeration(
@@ -697,7 +683,6 @@ void EcheTray::InitBubble(
         break;
       case eche_app::mojom::AppStreamLaunchEntryPoint::UNKNOWN:
         NOTREACHED();
-        break;
     }
   }
   init_stream_timestamp_ = base::TimeTicks::Now();
@@ -718,15 +703,12 @@ void EcheTray::InitBubble(
 
   auto bubble_view = std::make_unique<TrayBubbleView>(init_params);
   bubble_view->SetCanActivate(true);
-  bubble_view->SetBorder(views::CreateEmptyBorder(kBubblePadding));
 
   header_view_ = bubble_view->AddChildView(CreateBubbleHeaderView(phone_name));
 
   // We need the header be always visible with the same size.
-  static_cast<views::BoxLayout*>(bubble_view->GetLayoutManager())
-      ->SetFlexForView(header_view_, 0, true);
-  static_cast<views::BoxLayout*>(bubble_view->GetLayoutManager())
-      ->set_inside_border_insets(kBubblePadding);
+  bubble_view->box_layout()->SetFlexForView(header_view_, 0, true);
+  bubble_view->box_layout()->set_inside_border_insets(kBubblePadding);
 
   // TODO(b/271478560): Re-use initializer_webview_ when available, once support
   // launching apps on prewarmed connection is available.
@@ -773,7 +755,7 @@ void EcheTray::StartGracefulClose() {
 
 gfx::Size EcheTray::CalculateSizeForEche() const {
   const gfx::Rect work_area_bounds =
-      display::Screen::GetScreen()
+      display::Screen::Get()
           ->GetDisplayNearestWindow(
               tray_container()->GetWidget()->GetNativeWindow())
           .work_area();
@@ -783,7 +765,6 @@ gfx::Size EcheTray::CalculateSizeForEche() const {
   height_scale = std::min(height_scale, 1.0f);
   gfx::Size size = gfx::ScaleToFlooredSize(kDefaultBubbleSize, height_scale);
 
-  // TODO(b/258306301): Verify the correct sizing for Landscape
   if (is_landscape_) {
     size = gfx::Size(size.height(), size.width());
   }
@@ -829,7 +810,8 @@ std::unique_ptr<views::View> EcheTray::CreateBubbleHeaderView(
 
   // Add minimize button
   minimize_button_ = header->AddChildView(CreateButton(
-      base::BindRepeating(&EcheTray::CloseBubble, weak_factory_.GetWeakPtr()),
+      base::BindRepeating(&EcheTray::CloseBubble, weak_factory_.GetWeakPtr(),
+                          TrayBackgroundView::CloseReason::kUnspecified),
       kEcheMinimizeIcon, IDS_APP_ACCNAME_MINIMIZE));
 
   // Add close button
@@ -858,6 +840,12 @@ views::ImageButton* EcheTray::GetIcon() {
   if (!phone_hub_tray)
     return nullptr;
   return phone_hub_tray->eche_icon_view();
+}
+
+std::u16string EcheTray::GetAccessibleName() {
+  // TODO(nayebi): Change this based on the final model of interaction
+  // between phone hub and Eche.
+  return l10n_util::GetStringUTF16(IDS_ASH_PHONE_HUB_TRAY_ACCESSIBLE_NAME);
 }
 
 void EcheTray::ResizeIcon(int offset_dip) {
@@ -919,7 +907,7 @@ void EcheTray::UpdateEcheSizeAndBubbleBounds() {
       shelf()->GetSystemTrayAnchorRect());
 }
 
-void EcheTray::OnDisplayConfigurationChanged() {
+void EcheTray::OnDidApplyDisplayChanges() {
   UpdateEcheSizeAndBubbleBounds();
 }
 
@@ -1012,23 +1000,11 @@ bool EcheTray::ProcessAcceleratorKeys(ui::KeyEvent* event) {
   const bool any_modifier_pressed =
       ui::Accelerator::MaskOutKeyEventFlags(event->flags());
 
-  if (event->type() != ui::ET_KEY_PRESSED)
+  if (event->type() != ui::EventType::kKeyPressed) {
     return false;
+  }
 
   switch (key_code) {
-    case ui::VKEY_C:
-    case ui::VKEY_V:
-    case ui::VKEY_X:
-      if (!is_only_control_down)
-        return false;
-      ash::ToastManager::Get()->Show(ash::ToastData(
-          kEcheTrayCopyPasteNotImplementedToastId,
-          ash::ToastCatalogName::kEcheTrayCopyPasteNotImplemented,
-          l10n_util::GetStringUTF16(
-              IDS_ASH_ECHE_TOAST_COPY_PASTE_NOT_IMPLEMENTED),
-          ash::ToastData::kDefaultToastDuration,
-          /*visible_on_lock_screen=*/false));
-      return true;
     case ui::VKEY_W:
       if (!is_only_control_down)
         return false;
@@ -1060,10 +1036,8 @@ bool EcheTray::IsBubbleVisible() {
 
 void EcheTray::SetEcheConnectionStatusHandler(
     eche_app::EcheConnectionStatusHandler* eche_connection_status_handler) {
-  if (features::IsEcheNetworkConnectionStateEnabled()) {
-    eche_connection_status_handler_ = eche_connection_status_handler;
-    eche_connection_status_handler_->AddObserver(this);
-  }
+  eche_connection_status_handler_ = eche_connection_status_handler;
+  eche_connection_status_handler_->AddObserver(this);
 }
 
 bool EcheTray::IsBackgroundConnectionAttemptInProgress() {

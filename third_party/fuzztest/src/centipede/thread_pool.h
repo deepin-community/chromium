@@ -18,18 +18,18 @@
 
 #include <cstddef>
 #include <queue>
-#include <thread>  // NOLINT(build/c++11)
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
-#include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
+#include "./common/logging.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
-// A simple ThreadPool implementation.
+// A simple thread pool implementation based on `std::thread`.
 class ThreadPool {
  public:
   // Initializes this ThreadPool by starting the requested number of worker
@@ -60,7 +60,7 @@ class ThreadPool {
 
   // Schedules a function to be run on a ThreadPool thread immediately.
   void Schedule(absl::AnyInvocable<void()> func) {
-    CHECK(func != nullptr);
+    FUZZTEST_CHECK(func != nullptr);
     absl::MutexLock l{&mu_};
     queue_.push(std::move(func));
   }
@@ -72,8 +72,8 @@ class ThreadPool {
     return !queue_.empty();
   }
 
-  // The work loop that every worker thread iterates over, waiting and executing
-  // newly scheduled work.
+  // The work loop that every worker thread iterates over, waiting and
+  // executing newly scheduled work.
   void WorkLoop() {
     while (true) {
       absl::AnyInvocable<void()> func;
@@ -95,6 +95,6 @@ class ThreadPool {
   std::vector<std::thread> threads_;
 };
 
-}  // namespace centipede
+}  // namespace fuzztest::internal
 
 #endif  // THIRD_PARTY_CENTIPEDE_THREAD_POOL_H_

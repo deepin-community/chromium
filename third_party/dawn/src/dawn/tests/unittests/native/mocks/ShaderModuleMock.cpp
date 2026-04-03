@@ -27,7 +27,11 @@
 
 #include "dawn/tests/unittests/native/mocks/ShaderModuleMock.h"
 
+#include <memory>
+#include <utility>
+
 #include "dawn/native/ChainUtils.h"
+#include "dawn/native/ShaderModuleParseRequest.h"
 
 namespace dawn::native {
 
@@ -35,8 +39,10 @@ using ::testing::NiceMock;
 
 ShaderModuleMock::ShaderModuleMock(DeviceMock* device,
                                    const UnpackedPtr<ShaderModuleDescriptor>& descriptor)
-    : ShaderModuleBase(device, descriptor) {
-    ON_CALL(*this, DestroyImpl).WillByDefault([this] { this->ShaderModuleBase::DestroyImpl(); });
+    : ShaderModuleBase(device, descriptor, {}) {
+    ON_CALL(*this, DestroyImpl).WillByDefault([this](DestroyReason reason) {
+        this->ShaderModuleBase::DestroyImpl(reason);
+    });
 
     SetContentHash(ComputeContentHash());
 }
@@ -47,12 +53,10 @@ ShaderModuleMock::~ShaderModuleMock() = default;
 Ref<ShaderModuleMock> ShaderModuleMock::Create(
     DeviceMock* device,
     const UnpackedPtr<ShaderModuleDescriptor>& descriptor) {
-    ShaderModuleParseResult parseResult;
-    ValidateAndParseShaderModule(device, descriptor, &parseResult, nullptr).AcquireSuccess();
 
     Ref<ShaderModuleMock> shaderModule =
         AcquireRef(new NiceMock<ShaderModuleMock>(device, descriptor));
-    shaderModule->InitializeBase(&parseResult, nullptr).AcquireSuccess();
+    shaderModule->Initialize();
     return shaderModule;
 }
 
@@ -64,7 +68,7 @@ Ref<ShaderModuleMock> ShaderModuleMock::Create(DeviceMock* device,
 
 // static
 Ref<ShaderModuleMock> ShaderModuleMock::Create(DeviceMock* device, const char* source) {
-    ShaderModuleWGSLDescriptor wgslDesc = {};
+    ShaderSourceWGSL wgslDesc = {};
     wgslDesc.code = source;
     ShaderModuleDescriptor desc = {};
     desc.nextInChain = &wgslDesc;

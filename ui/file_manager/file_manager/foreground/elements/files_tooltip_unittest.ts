@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import './files_tooltip.js';
+
 import {getTrustedHTML} from 'chrome://resources/js/static_types.js';
 import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
 
-import {FilesTooltip} from './files_tooltip.js';
+import type {FilesTooltip} from './files_tooltip.js';
 
 let chocolateButton: HTMLButtonElement;
 let cherriesButton: HTMLButtonElement;
@@ -79,7 +81,7 @@ export async function testFocus() {
   chocolateButton.focus();
 
   await waitForMutation(tooltip);
-  const label1 = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label1 = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Chocolate!', label1.textContent?.trim());
   assertTrue(tooltip.hasAttribute('visible'));
   assertEquals('6px', tooltip.style.left);
@@ -88,7 +90,7 @@ export async function testFocus() {
   cherriesButton.focus();
   await waitForMutation(tooltip);
 
-  const label2 = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label2 = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Cherries!', label2.textContent?.trim());
   assertTrue(tooltip.hasAttribute('visible'));
 
@@ -112,7 +114,7 @@ export async function testFocusWithLink() {
 
   await waitForMutation(tooltip);
 
-  const label1 = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label1 = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Chocolate!', label1.textContent?.trim());
   assertTrue(tooltip.hasAttribute('visible'));
   assertEquals('6px', tooltip.style.left);
@@ -121,7 +123,7 @@ export async function testFocusWithLink() {
   cherriesButton.focus();
   await waitForMutation(tooltip);
   // Check the label.
-  const label2 = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label2 = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Cherries!', label2.textContent?.trim());
   // Check the link: it should be visible now.
   const link1 = tooltip.shadowRoot!.querySelector<HTMLLinkElement>('#link')!;
@@ -142,7 +144,7 @@ export async function testFocusWithLink() {
   chocolateButton.focus();
   await waitForMutation(tooltip);
   // Check the label.
-  const label3 = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label3 = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Chocolate!', label3.textContent?.trim());
   // Check the link: it should be hidden and cleared out.
   const link2 = tooltip.shadowRoot!.querySelector<HTMLLinkElement>('#link')!;
@@ -156,7 +158,7 @@ export async function testFocusWithLabelChange() {
   chocolateButton.focus();
 
   await waitForMutation(tooltip);
-  const label1 = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label1 = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Chocolate!', label1.textContent?.trim());
   // Change the button's aria-label attribute and the tooltip should
   // also update.
@@ -165,7 +167,7 @@ export async function testFocusWithLabelChange() {
   tooltip.updateTooltipText(chocolateButton);
   await waitForMutation(tooltip);
 
-  const label2 = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label2 = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('New chocolate!', label2.textContent?.trim());
 }
 
@@ -173,7 +175,7 @@ export async function testHover() {
   chocolateButton.dispatchEvent(new MouseEvent('mouseover'));
 
   await waitForMutation(tooltip);
-  const label1 = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label1 = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Chocolate!', label1.textContent?.trim());
   assertTrue(tooltip.hasAttribute('visible'));
   assertEquals(tooltip.getAttribute('aria-hidden'), 'false');
@@ -185,7 +187,7 @@ export async function testHover() {
   cherriesButton.dispatchEvent(new MouseEvent('mouseover'));
   await waitForMutation(tooltip);
 
-  const label2 = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label2 = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Cherries!', label2.textContent?.trim());
   assertTrue(tooltip.hasAttribute('visible'));
 
@@ -205,7 +207,7 @@ export async function testClickHides() {
 
   await waitForMutation(tooltip);
 
-  const label = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Chocolate!', label.textContent?.trim());
   assertTrue(tooltip.hasAttribute('visible'));
   // Hiding here is synchronous. Dispatch the event asynchronously,
@@ -224,7 +226,7 @@ export async function testCardTooltipHover() {
 
   await waitForMutation(tooltip);
 
-  const label = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Cheese!', label.textContent?.trim());
   assertTrue(tooltip.hasAttribute('visible'));
   assertEquals(tooltip.getAttribute('aria-hidden'), 'false');
@@ -249,7 +251,7 @@ export async function testCardTooltipRTL() {
 
   await waitForMutation(tooltip);
 
-  const label = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Cheese!', label.textContent?.trim());
   assertTrue(tooltip.hasAttribute('visible'));
   assertEquals(tooltip.getAttribute('aria-hidden'), 'false');
@@ -281,7 +283,7 @@ export async function testCardTooltipWithLinkHover() {
   await waitForMutation(tooltip);
 
   // Check the label.
-  const label = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Cheese!', label.textContent?.trim());
   // Check the link: it should be visible now.
   const link = tooltip.shadowRoot!.querySelector<HTMLLinkElement>('#link')!;
@@ -315,7 +317,7 @@ export async function testTooltipWithIncompleteLinkHover() {
   await waitForMutation(tooltip);
 
   // Check the label.
-  const label = tooltip.shadowRoot!.querySelector<HTMLDivElement>('#label')!;
+  const label = tooltip.shadowRoot!.querySelector<HTMLElement>('#label')!;
   assertEquals('Cheese!', label.textContent?.trim());
   // Check the link: it should be hidden since not all required
   // attributes are set.

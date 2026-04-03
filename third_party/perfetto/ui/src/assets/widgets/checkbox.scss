@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-@import "theme";
+@import "../theme";
 
 // This checkbox element is expected to contain a checkbox type input followed
 // by an empty span element.
@@ -31,25 +31,23 @@
 // When transitioning from checked to unchecked, the animation plays in reverse,
 // and the border width is set to 0 right at the end in order to make the tick
 // completely invisible again.
+
+$box-label-padding: 0.33em;
+
 .pf-checkbox {
   $tick-anim-time-width: 100ms;
   $tick-anim-time-height: 150ms;
   $tick-anim-time: $tick-anim-time-width + $tick-anim-time-height;
   $tick-easing: linear;
 
-  $box-size: 18px;
-  $tick-height: 9px;
-  $tick-width: 5px;
-  $box-label-padding: 6px;
+  $tick-height: 0.55em;
+  $tick-width: 0.3em;
 
-  display: inline-block;
+  display: inline;
+  align-items: baseline;
   position: relative; // Turns this container into a positioned element
-  font-family: $pf-font;
-  font-size: inherit;
-  color: $pf-minimal-foreground;
   user-select: none;
   cursor: pointer;
-  padding-left: $box-size + $box-label-padding;
 
   // Hide the default checkbox
   input {
@@ -58,80 +56,116 @@
     pointer-events: none;
   }
 
-  // The span forms the "box" of the checkbox
-  span {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    margin-top: auto;
-    margin-bottom: auto;
-    height: $box-size;
-    width: $box-size;
-    border-radius: $pf-border-radius;
-    border: solid 2px $pf-minimal-foreground;
-    transition: background $pf-anim-timing;
+  &__box {
+    display: inline-block;
+    position: relative; // Align ::after to this box
+    top: -0.1em;
+    vertical-align: middle;
+    height: 1em;
+    transition: background $anim-timing;
+
+    &:after {
+      content: "";
+      position: absolute;
+    }
+  }
+
+  input:focus-visible + .pf-checkbox__box {
+    @include focus;
+  }
+
+  &.pf-disabled {
+    opacity: 0.5;
+    pointer-events: none;
+    cursor: not-allowed;
+  }
+
+  &__label {
+    padding-left: $box-label-padding;
+  }
+
+  &__label-left {
+    padding-right: $box-label-padding;
+  }
+
+  // 'Check' style checkbox
+
+  &__box--check {
+    aspect-ratio: 1;
+    border-radius: $border-radius;
+    border: solid 2px currentColor;
     background: none;
 
     // The :after element forms the "tick" of the checkbox
     &:after {
-      content: "";
-      display: block;
-      position: absolute;
-      bottom: 7.5px;
-      left: 1px;
+      bottom: 0.4em;
+      left: 0em;
       width: 0px;
       height: 0px;
-      border-color: $pf-primary-foreground;
+      border-color: var(--pf-color-text-on-primary);
       border-style: solid;
       border-width: 0;
       transform-origin: 0% 100%; // Put the origin at the short edge of the tick
       transform: rotate(45deg);
-      transition: height $tick-anim-time-height $tick-easing,
+      transition:
+        height $tick-anim-time-height $tick-easing,
         width $tick-anim-time-width $tick-anim-time-height $tick-easing,
         border-width 0ms $tick-anim-time;
     }
   }
 
-  &:hover {
-    span {
-      background: $pf-minimal-background-hover;
-    }
+  &:hover .pf-checkbox__box--check {
+    background: color_hover(transparent);
   }
 
-  input:checked + span {
-    border-color: $pf-primary-background;
-    background: $pf-primary-background;
+  input:checked + .pf-checkbox__box--check {
+    border-color: var(--pf-color-primary);
+    background: var(--pf-color-primary);
   }
 
-  input:focus-visible + span {
-    @include focus;
-  }
-
-  input:checked + span:after {
+  input:checked + .pf-checkbox__box--check:after {
     width: $tick-width;
     height: $tick-height;
-    border-width: 0 2px 2px 0;
-    transition: width $tick-anim-time-height $tick-easing,
+    border-width: 0 0.15em 0.15em 0;
+    transition:
+      width $tick-anim-time-height $tick-easing,
       height $tick-anim-time-height $tick-anim-time-width $tick-easing,
       border-width 0ms;
   }
 
-  &.pf-disabled {
-    cursor: not-allowed;
-    color: $pf-minimal-foreground-disabled;
+  // 'Switch' style checkbox
 
-    span {
-      border-color: $pf-minimal-foreground-disabled;
-      background: none;
-      &:after {
-        border-color: $pf-primary-foreground;
-      }
-    }
+  &__box--switch {
+    height: 16px;
+    width: 30px;
+    border-radius: 1em; // Pill shape
+    background: var(--pf-color-border);
+    vertical-align: middle;
 
-    input:checked ~ span {
-      border-color: $pf-primary-background-disabled;
-      background: $pf-primary-background-disabled;
+    // The :after element forms the "thumb" of the switch
+    &:after {
+      content: "";
+      display: block;
+      position: absolute;
+      left: 2px;
+      top: 0;
+      bottom: 0;
+      margin-top: auto;
+      margin-bottom: auto;
+      width: 12px;
+      height: 12px;
+      background: white;
+      box-sizing: border-box;
+      border-radius: 50%;
+      transition: left $anim-timing;
     }
+  }
+
+  input:checked + .pf-checkbox__box--switch {
+    background: var(--pf-color-primary);
+  }
+
+  input:checked + .pf-checkbox__box--switch:after {
+    left: 16px;
   }
 }

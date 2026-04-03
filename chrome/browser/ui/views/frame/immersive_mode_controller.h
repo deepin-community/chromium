@@ -8,13 +8,15 @@
 #include <memory>
 
 #include "base/observer_list.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 class BrowserView;
+class BrowserWindowInterface;
 
 namespace gfx {
 class Rect;
 class Size;
-}
+}  // namespace gfx
 
 namespace views {
 class Widget;
@@ -25,10 +27,10 @@ class Widget;
 // See ImmersiveModeController::GetRevealedLock for details.
 class ImmersiveRevealedLock {
  public:
-  virtual ~ImmersiveRevealedLock() {}
+  virtual ~ImmersiveRevealedLock() = default;
 
  protected:
-  ImmersiveRevealedLock() {}
+  ImmersiveRevealedLock() = default;
 };
 
 // Controller for an "immersive mode" similar to MacOS presentation mode where
@@ -38,10 +40,9 @@ class ImmersiveRevealedLock {
 // Currently, immersive mode is only available for Chrome OS and macOS.
 class ImmersiveModeController {
  public:
-  enum AnimateReveal {
-    ANIMATE_REVEAL_YES,
-    ANIMATE_REVEAL_NO
-  };
+  DECLARE_USER_DATA(ImmersiveModeController);
+
+  enum AnimateReveal { ANIMATE_REVEAL_YES, ANIMATE_REVEAL_NO };
 
   class Observer {
    public:
@@ -61,15 +62,19 @@ class ImmersiveModeController {
     virtual void OnImmersiveFullscreenExited() {}
 
    protected:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
   };
 
-  ImmersiveModeController();
+  explicit ImmersiveModeController(BrowserWindowInterface* browser);
 
   ImmersiveModeController(const ImmersiveModeController&) = delete;
   ImmersiveModeController& operator=(const ImmersiveModeController&) = delete;
 
   virtual ~ImmersiveModeController();
+
+  static ImmersiveModeController* From(BrowserWindowInterface* browser);
+  static const ImmersiveModeController* From(
+      const BrowserWindowInterface* browser);
 
   // Must initialize after browser view has a Widget and native window.
   virtual void Init(BrowserView* browser_view) = 0;
@@ -77,9 +82,6 @@ class ImmersiveModeController {
   // Enables or disables immersive mode.
   virtual void SetEnabled(bool enabled) = 0;
   virtual bool IsEnabled() const = 0;
-
-  // True when the top views are hidden due to immersive mode.
-  virtual bool ShouldHideTopViews() const = 0;
 
   // True when the top views are fully or partially visible.
   virtual bool IsRevealed() const = 0;
@@ -117,13 +119,6 @@ class ImmersiveModeController {
   // in which case we should stay in immersive mode.
   virtual bool ShouldStayImmersiveAfterExitingFullscreen() = 0;
 
-  // Called by browser view to indicate the widget activation has changed.
-  // Immersive mode should be enabled/disabled if the widget is
-  // active/nonactive when the auto hide title bars in tablet mode feature is
-  // on.
-  virtual void OnWidgetActivationChanged(views::Widget* widget,
-                                         bool active) = 0;
-
   // Returns the minimum y-offset for the web contents. Used on Mac to prevent
   // find results from hiding under the top chrome when the find bar is in use.
   virtual int GetMinimumContentOffset() const = 0;
@@ -145,6 +140,7 @@ class ImmersiveModeController {
 
  protected:
   base::ObserverList<Observer>::Unchecked observers_;
+  ui::ScopedUnownedUserData<ImmersiveModeController> scoped_unowned_user_data_;
 };
 
 class BrowserView;
@@ -153,7 +149,7 @@ namespace chrome {
 
 // Implemented in immersive_mode_controller_factory.cc.
 std::unique_ptr<ImmersiveModeController> CreateImmersiveModeController(
-    const BrowserView* browser_view);
+    BrowserView* browser_view);
 
 }  // namespace chrome
 

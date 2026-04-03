@@ -49,6 +49,9 @@ class CustomLinksManagerImpl : public CustomLinksManager,
 
   const std::vector<Link>& GetLinks() const override;
 
+  bool AddLinkTo(const GURL& url,
+                 const std::u16string& title,
+                 size_t pos) override;
   bool AddLink(const GURL& url, const std::u16string& title) override;
   bool UpdateLink(const GURL& url,
                   const GURL& new_url,
@@ -75,14 +78,11 @@ class CustomLinksManagerImpl : public CustomLinksManager,
   // created through preinstalled apps.
   void RemoveCustomLinksForPreinstalledApps();
 
-  // Returns an iterator into |custom_links_|.
-  std::vector<Link>::iterator FindLinkWithUrl(const GURL& url);
-
   // history::HistoryServiceObserver implementation.
   // Deletes any Most Visited links whose URL is in |deletion_info|. Clears
   // |previous_links_|. Does not delete entries expired by HistoryService.
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
   void HistoryServiceBeingDeleted(
       history::HistoryService* history_service) override;
 

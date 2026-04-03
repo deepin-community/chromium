@@ -10,34 +10,33 @@
 #include "base/android/jni_string.h"
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/offline_pages/offline_page_utils.h"
-#include "chrome/browser/tab/jni_headers/TrustedCdn_jni.h"
 #include "components/embedder_support/android/util/cdn_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "url/android/gurl_android.h"
 #include "url/gurl.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/tab/jni_headers/TrustedCdn_jni.h"
+
 using base::android::ConvertUTF8ToJavaString;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 using content::WebContents;
 
-TrustedCdn::TrustedCdn(JNIEnv* env, const JavaParamRef<jobject>& obj)
-    : jobj_(env, obj) {}
+TrustedCdn::TrustedCdn() = default;
 
 TrustedCdn::~TrustedCdn() = default;
 
 void TrustedCdn::SetWebContents(JNIEnv* env,
-                                const JavaParamRef<jobject>& obj,
-                                const JavaParamRef<jobject>& jweb_contents) {
+                                const JavaRef<jobject>& jweb_contents) {
   web_contents_ = WebContents::FromJavaWebContents(jweb_contents);
 }
 
-void TrustedCdn::ResetWebContents(JNIEnv* env,
-                                  const JavaParamRef<jobject>& obj) {
+void TrustedCdn::ResetWebContents(JNIEnv* env) {
   web_contents_ = nullptr;
 }
 
-void TrustedCdn::OnDestroyed(JNIEnv* env, const JavaParamRef<jobject>& obj) {
+void TrustedCdn::OnDestroyed(JNIEnv* env) {
   delete this;
 }
 
@@ -57,7 +56,8 @@ base::android::ScopedJavaLocalRef<jobject> TrustedCdn::GetPublisherUrl(
       embedder_support::GetPublisherURL(web_contents_->GetPrimaryMainFrame()));
 }
 
-static jlong JNI_TrustedCdn_Init(JNIEnv* env,
-                                 const JavaParamRef<jobject>& obj) {
-  return reinterpret_cast<intptr_t>(new TrustedCdn(env, obj));
+static int64_t JNI_TrustedCdn_Init(JNIEnv* env) {
+  return reinterpret_cast<intptr_t>(new TrustedCdn());
 }
+
+DEFINE_JNI(TrustedCdn)

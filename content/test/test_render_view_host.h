@@ -12,11 +12,12 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/input/cursor_manager.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "components/viz/host/host_frame_sink_client.h"
-#include "content/browser/renderer_host/cursor_manager.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
 #include "content/browser/renderer_host/render_widget_host_view_child_frame.h"
@@ -87,11 +88,24 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
   void ShowSharePicker(
       const std::string& title,
       const std::string& text,
-      const std::string& url,
+      const GURL& url,
       const std::vector<std::string>& file_paths,
       blink::mojom::ShareService::ShareCallback callback) override;
   uint64_t GetNSViewId() const override;
 #endif  // BUILDFLAG(IS_MAC)
+
+#if BUILDFLAG(IS_ANDROID)
+  bool IsTouchSequencePotentiallyActiveOnViz() override;
+
+  void RequestInputBackForDragAndDrop(
+      blink::mojom::DragDataPtr drag_data,
+      const url::Origin& source_origin,
+      blink::DragOperationsMask drag_operations_mask,
+      SkBitmap bitmap,
+      gfx::Vector2d cursor_offset_in_dip,
+      gfx::Rect drag_obj_rect_in_dip,
+      blink::mojom::DragEventSourceInfoPtr event_info) override {}
+#endif
 
   // Notified in response to a CommitPending where there is no content for
   // TakeFallbackContentFrom to use.
@@ -100,6 +114,8 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
   // ensures that stale surfaces are not presented to the user for an indefinite
   // period of time.
   void ResetFallbackToFirstNavigationSurface() override {}
+
+  void OnUnconfirmedTapConvertedToTap() override;
 
   void TakeFallbackContentFrom(RenderWidgetHostView* view) override;
   void EnsureSurfaceSynchronizedForWebTest() override;
@@ -120,6 +136,7 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
                                  const gfx::Rect& bounds) override {}
   void ClearKeyboardTriggeredTooltip() override {}
   gfx::Rect GetBoundsInRootWindow() override;
+  const viz::LocalSurfaceId& IncrementSurfaceIdForNavigation() override;
   blink::mojom::PointerLockResult LockPointer(bool) override;
   blink::mojom::PointerLockResult ChangePointerLock(bool) override;
   void UnlockPointer() override;
@@ -129,7 +146,7 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
   std::unique_ptr<SyntheticGestureTarget> CreateSyntheticGestureTarget()
       override;
   ui::Compositor* GetCompositor() override;
-  CursorManager* GetCursorManager() override;
+  input::CursorManager* GetCursorManager() override;
   void InvalidateLocalSurfaceIdAndAllocationGroup() override {}
 
   bool is_showing() const { return is_showing_; }
@@ -159,7 +176,8 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
   // RenderWidgetHostViewBase:
   void UpdateBackgroundColor() override;
   std::optional<DisplayFeature> GetDisplayFeature() override;
-  void SetDisplayFeatureForTesting(
+  void DisableDisplayFeatureOverrideForEmulation() override;
+  void OverrideDisplayFeatureForEmulation(
       const DisplayFeature* display_feature) override;
   void NotifyHostAndDelegateOnWasShown(
       blink::mojom::RecordContentToVisibleTimeRequestPtr) override;
@@ -194,7 +212,7 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
 
   raw_ptr<ui::Compositor, DanglingUntriaged> compositor_ = nullptr;
 
-  CursorManager cursor_manager_;
+  input::CursorManager cursor_manager_;
 };
 
 // TestRenderWidgetHostViewChildFrame -----------------------------------------
@@ -286,7 +304,9 @@ class TestRenderViewHost : public RenderViewHostImpl,
   bool CreateRenderView(
       const std::optional<blink::FrameToken>& opener_frame_token,
       int proxy_route_id,
-      bool window_was_created_with_opener) override;
+      bool window_was_created_with_opener,
+      const std::optional<base::UnguessableToken>& navigation_metrics_token)
+      override;
   bool IsTestRenderViewHost() const override;
 
   // RenderViewHostTester implementation.
@@ -367,6 +387,8 @@ class RenderViewHostImplTestHarness : public RenderViewHostTestHarness {
   TestRenderFrameHost* main_test_rfh();
 
  private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+
   ui::test::ScopedSetSupportedResourceScaleFactors
       scoped_set_supported_scale_factors_{{ui::k100Percent}};
 };

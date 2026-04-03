@@ -27,14 +27,14 @@ namespace eager {
 void RemoteExecuteNode::RunAsync(StatusCallback done) {
   auto response = std::make_shared<EnqueueResponse>();
 
-  const gtl::InlinedVector<TensorHandle*, 4>& inputs = inputs_;
-  const gtl::InlinedVector<TensorHandle*, 2>& retvals = retvals_;
+  const absl::InlinedVector<TensorHandle*, 4UL>& inputs = inputs_;
+  const absl::InlinedVector<TensorHandle*, 2UL>& retvals = retvals_;
   Device* device = device_;
 
   // Filled and used only when VLOG(3) is on.
-  string rpc_description;
+  std::string rpc_description;
   if (VLOG_IS_ON(3)) {
-    std::vector<string> ops;
+    std::vector<std::string> ops;
     ops.reserve(request_->queue_size());
     for (const QueueItem& item : request_->queue()) {
       if (item.has_operation()) {
@@ -60,7 +60,7 @@ void RemoteExecuteNode::RunAsync(StatusCallback done) {
     const bool already_cancelled = !cm->RegisterCallback(
         token, [call_opts, response, done]() { call_opts->StartCancel(); });
     if (already_cancelled) {
-      Status s = errors::Cancelled("RemoteExecuteNode::RunAsync");
+      absl::Status s = errors::Cancelled("RemoteExecuteNode::RunAsync");
       for (size_t i = 0; i < retvals.size(); ++i) {
         retvals[i]->PoisonRemote(s, device, context_view_id_);
       }
@@ -81,7 +81,7 @@ void RemoteExecuteNode::RunAsync(StatusCallback done) {
       request_.get(), response.get(),
       [inputs, retvals, call_opts, response, device,
        context_view_id = context_view_id_, rpc_description, cm, token,
-       done](const Status& status) {
+       done](const absl::Status& status) {
         if (cm != nullptr) {
           cm->TryDeregisterCallback(token);
         }
@@ -96,11 +96,11 @@ void RemoteExecuteNode::RunAsync(StatusCallback done) {
         }
         for (size_t i = 0; i < retvals.size(); ++i) {
           if (status.ok()) {
-            const string output_device =
+            const std::string output_device =
                 response->queue_response(0).device().empty()
                     ? ""
                     : response->queue_response(0).device(i);
-            Status s = retvals[i]->SetRemoteShapeAndDevice(
+            absl::Status s = retvals[i]->SetRemoteShapeAndDevice(
                 response->queue_response(0).shape(i), device, context_view_id,
                 output_device);
 

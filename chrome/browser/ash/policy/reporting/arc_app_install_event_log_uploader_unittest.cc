@@ -26,7 +26,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::_;
-using testing::Invoke;
 using testing::Mock;
 using testing::WithArgs;
 
@@ -60,7 +59,7 @@ MATCHER_P(MatchValue, expected, "matches base::Value") {
 class MockArcAppInstallEventLogUploaderDelegate
     : public ArcAppInstallEventLogUploader::Delegate {
  public:
-  MockArcAppInstallEventLogUploaderDelegate() {}
+  MockArcAppInstallEventLogUploaderDelegate() = default;
 
   MockArcAppInstallEventLogUploaderDelegate(
       const MockArcAppInstallEventLogUploaderDelegate&) = delete;
@@ -111,9 +110,10 @@ class ArcAppInstallEventLogUploaderTest : public testing::Test {
 
   void CompleteSerialize() {
     EXPECT_CALL(delegate_, SerializeForUpload_)
-        .WillOnce(WithArgs<0>(Invoke(
-            [=](ArcAppInstallEventLogUploader::Delegate::SerializationCallback&
-                    callback) { std::move(callback).Run(&log_); })));
+        .WillOnce(WithArgs<0>(
+            [=, this](
+                ArcAppInstallEventLogUploader::Delegate::SerializationCallback&
+                    callback) { std::move(callback).Run(&log_); }));
   }
 
   void CaptureSerialize(
@@ -124,24 +124,24 @@ class ArcAppInstallEventLogUploaderTest : public testing::Test {
 
   void CompleteUpload(bool success) {
     value_report_.clear();
-    base::Value::Dict context = reporting::GetContext(/*profile=*/nullptr);
-    base::Value::List events = ConvertArcAppProtoToValue(&log_, context);
+    base::DictValue context = reporting::GetContext(/*profile=*/nullptr);
+    base::ListValue events = ConvertArcAppProtoToValue(&log_, context);
     value_report_ = RealtimeReportingJobConfiguration::BuildReport(
         std::move(events), std::move(context));
 
     EXPECT_CALL(client_, UploadAppInstallReport(MatchValue(&value_report_), _))
         .WillOnce(
-            WithArgs<1>(Invoke([=](CloudPolicyClient::ResultCallback callback) {
+            WithArgs<1>([=](CloudPolicyClient::ResultCallback callback) {
               std::move(callback).Run(CloudPolicyClient::Result(
                   success ? DM_STATUS_SUCCESS
                           : DM_STATUS_TEMPORARY_UNAVAILABLE));
-            })));
+            }));
   }
 
   void CaptureUpload(CloudPolicyClient::ResultCallback* callback) {
     value_report_.clear();
-    base::Value::Dict context = reporting::GetContext(/*profile=*/nullptr);
-    base::Value::List events = ConvertArcAppProtoToValue(&log_, context);
+    base::DictValue context = reporting::GetContext(/*profile=*/nullptr);
+    base::ListValue events = ConvertArcAppProtoToValue(&log_, context);
     value_report_ = RealtimeReportingJobConfiguration::BuildReport(
         std::move(events), std::move(context));
 
@@ -164,7 +164,7 @@ class ArcAppInstallEventLogUploaderTest : public testing::Test {
   base::test::SingleThreadTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   em::AppInstallReportRequest log_;
-  base::Value::Dict value_report_;
+  base::DictValue value_report_;
 
   MockCloudPolicyClient client_;
   MockArcAppInstallEventLogUploaderDelegate delegate_;

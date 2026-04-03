@@ -31,36 +31,37 @@
 #include <memory>
 
 #include "base/notreached.h"
-#include "base/task/single_thread_task_runner.h"
+#include "net/storage_access_api/status.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink-forward.h"
 #include "services/network/public/mojom/referrer_policy.mojom-blink-forward.h"
+#include "third_party/blink/public/common/fingerprinting_protection/noise_token.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
-#include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/lifecycle.mojom-blink-forward.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom-blink-forward.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/origin_trials/origin_trial_feature.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/permissions_policy/policy_disposition.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/v8_cache_options.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/sanitize_script_errors.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
 #include "third_party/blink/renderer/core/frame/web_feature_forward.h"
+#include "third_party/blink/renderer/platform/feature_context.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
-#include "third_party/blink/renderer/platform/heap_observer_set.h"
-#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/loader/fetch/console_logger.h"
+#include "third_party/blink/renderer/platform/heap_observer_list.h"
+#include "third_party/blink/renderer/platform/loader/fetch/guardrail_policy_asset_type.h"
 #include "third_party/blink/renderer/platform/loader/fetch/https_state.h"
 #include "third_party/blink/renderer/platform/loader/fetch/loader_freeze_mode.h"
 #include "third_party/blink/renderer/platform/mojo/mojo_binding_context.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
+#include "third_party/blink/renderer/platform/use_counter_and_console_logger.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "v8/include/v8-callbacks.h"
 #include "v8/include/v8-forward.h"
 
 namespace base {
+class SingleThreadTaskRunner;
 class UnguessableToken;
 }  // namespace base
 
@@ -71,10 +72,6 @@ class UkmRecorder;
 namespace v8 {
 class MicrotaskQueue;
 }  // namespace v8
-
-namespace perfetto::protos::pbzero {
-class BlinkExecutionContext;
-}  // namespace perfetto::protos::pbzero
 
 namespace blink {
 
@@ -91,7 +88,6 @@ class ErrorEvent;
 class EventTarget;
 class FrameOrWorkerScheduler;
 class KURL;
-class LocalDOMWindow;
 class OriginTrialContext;
 class RuntimeFeatureStateOverrideContext;
 class PolicyContainer;
@@ -133,8 +129,7 @@ enum ReferrerPolicySource { kPolicySourceHttpHeader, kPolicySourceMetaTag };
 // in common.
 class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
                                      public MojoBindingContext,
-                                     public ConsoleLogger,
-                                     public UseCounter,
+                                     public UseCounterAndConsoleLogger,
                                      public FeatureContext {
  public:
   ExecutionContext(const ExecutionContext&) = delete;
@@ -179,6 +174,8 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
 
   virtual bool ShouldInstallV8Extensions() const { return false; }
 
+  virtual void MaybeRecordNetworkRequestUrlForPushEvents(const KURL& url) {}
+
   virtual void CountUseOnlyInCrossSiteIframe(mojom::blink::WebFeature feature) {
   }
 
@@ -201,7 +198,7 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
 
   // Returns a reference to the current world we are in. If the current v8
   // context is empty, returns null.
-  scoped_refptr<const DOMWrapperWorld> GetCurrentWorld() const;
+  const DOMWrapperWorld* GetCurrentWorld() const;
 
   // Returns the content security policy to be used based on the current
   // JavaScript world we are in.
@@ -256,12 +253,6 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
   void SetLifecycleState(mojom::FrameLifecycleState);
   virtual void NotifyContextDestroyed();
 
-  using ConsoleLogger::AddConsoleMessage;
-
-  void AddConsoleMessage(ConsoleMessage* message,
-                         bool discard_duplicates = false) {
-    AddConsoleMessageImpl(message, discard_duplicates);
-  }
   virtual void AddInspectorIssue(AuditsIssue) = 0;
 
   void CountDeprecation(WebFeature feature) override;
@@ -350,9 +341,9 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
   // Report-To endpoints, via ReportPermissionsPolicyViolation(), if the feature
   // is disabled. The optional ConsoleMessage will be sent to the console if
   // present, or else a default message will be used instead.
-  bool IsFeatureEnabled(mojom::blink::PermissionsPolicyFeature) const;
+  bool IsFeatureEnabled(network::mojom::PermissionsPolicyFeature) const;
   bool IsFeatureEnabled(
-      mojom::blink::PermissionsPolicyFeature,
+      network::mojom::PermissionsPolicyFeature,
       ReportOptions report_option = ReportOptions::kDoNotReport,
       const String& message = g_empty_string);
 
@@ -375,17 +366,24 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
   // to both remain const qualified and output console message, needs
   // to call |frame_->Console().AddMessage()| directly.
   virtual void ReportPermissionsPolicyViolation(
-      mojom::blink::PermissionsPolicyFeature,
+      network::mojom::PermissionsPolicyFeature,
       mojom::blink::PolicyDisposition,
-      const std::optional<String>& reporting_endpoint,
+      const String& reporting_endpoint,
       const String& message = g_empty_string) const {}
+  virtual void ReportPotentialPermissionsPolicyViolation(
+      network::mojom::PermissionsPolicyFeature,
+      mojom::blink::PolicyDisposition,
+      const String& reporting_endpoint,
+      const String& message = g_empty_string,
+      const String& allow_attribute = g_empty_string,
+      const String& src_attribute = g_empty_string) const {}
   virtual void ReportDocumentPolicyViolation(
       mojom::blink::DocumentPolicyFeature,
       mojom::blink::PolicyDisposition,
       const String& message = g_empty_string,
       const String& source_file = g_empty_string) const {}
 
-  HeapObserverSet<ContextLifecycleObserver>& ContextLifecycleObserverSet();
+  HeapObserverList<ContextLifecycleObserver>& ContextLifecycleObserverSet();
   unsigned ContextLifecycleStateObserverCountForTesting() const;
 
   // Implementation of WindowOrWorkerGlobalScope.crossOriginIsolated.
@@ -401,6 +399,11 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
   //
   // TODO(mkwst): We need a specification for the necessary restrictions.
   virtual bool IsIsolatedContext() const = 0;
+
+  // Returns true if scripts within this ExecutionContext are considered
+  // sufficiently protected from injection attacks (e.g. by enforcing a strict
+  // CSP, a la https://csp.withgoogle.com/docs/strict-csp.html.
+  bool IsInjectionMitigatedContext() const;
 
   // Returns true if SharedArrayBuffers can be transferred via PostMessage,
   // false otherwise. SharedArrayBuffer allows pages to craft high-precision
@@ -432,10 +435,7 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
   // ExecutionContext subclasses are usually the V8 global object, which means
   // they are also a ScriptWrappable. This casts the ExecutionContext to a
   // ScriptWrappable if possible.
-  virtual ScriptWrappable* ToScriptWrappable() {
-    NOTREACHED();
-    return nullptr;
-  }
+  virtual ScriptWrappable* ToScriptWrappable() { NOTREACHED(); }
 
   bool has_filed_shared_array_buffer_creation_issue() const {
     return has_filed_shared_array_buffer_creation_issue_;
@@ -446,10 +446,6 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
   bool IsInRequestAnimationFrame() const {
     return is_in_request_animation_frame_;
   }
-
-  // Write a representation of this object into a trace.
-  using Proto = perfetto::protos::pbzero::BlinkExecutionContext;
-  void WriteIntoTrace(perfetto::TracedProto<Proto> proto) const;
 
   // For use by FrameRequestCallbackCollection::ExecuteFrameCallbacks();
   // IsInRequestAnimationFrame() for the corresponding ExecutionContext will
@@ -471,9 +467,34 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
     ExecutionContext* context_;
   };
 
-  // Returns true if this execution context has obtained storage access via the
-  // Storage Access API.
-  virtual bool HasStorageAccess() const { return false; }
+  // Returns the context's Storage Access API status.
+  virtual net::StorageAccessApiStatus GetStorageAccessApiStatus() const {
+    return net::StorageAccessApiStatus::kNone;
+  }
+
+  const std::optional<NoiseToken>& CanvasNoiseToken() const {
+    return canvas_noise_token_;
+  }
+
+  void SetCanvasNoiseToken(std::optional<NoiseToken> token) {
+    canvas_noise_token_ = token;
+  }
+
+  // Returns the policy state for network-efficiency-guardrails in this
+  // document.
+  virtual std::optional<mojom::blink::PolicyDisposition>
+  GetGuardrailsPolicyState() const {
+    return std::nullopt;
+  }
+
+  // Check for guardrails policy state and report large asset violation if
+  // necessary. Returns true if a violation was reported.
+  virtual bool CheckGuardrailsPolicyForAssetSize(
+      GuardrailPolicyAssetType asset_type,
+      size_t bytes,
+      const KURL& url) const {
+    return false;
+  }
 
  protected:
   ExecutionContext(v8::Isolate* isolate, Agent* agent, bool is_window = false);
@@ -505,7 +526,7 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
   unsigned circular_sequential_id_;
 
   bool in_dispatch_error_event_;
-  HeapVector<Member<ErrorEvent>> pending_exceptions_;
+  HeapVector<Member<ErrorEvent> > pending_exceptions_;
 
   mojom::FrameLifecycleState lifecycle_state_;
 
@@ -537,7 +558,9 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
   Member<RuntimeFeatureStateOverrideContext>
       runtime_feature_state_override_context_;
 
-  bool require_safe_types_ = false;
+  bool require_trusted_types_ = false;
+
+  std::optional<NoiseToken> canvas_noise_token_;
 };
 
 }  // namespace blink

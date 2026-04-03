@@ -8,8 +8,8 @@
 
 #include "base/functional/callback.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "ui/gfx/image/image_skia.h"
 
@@ -104,7 +104,7 @@ void RemoteApps::LaunchAppWithParams(AppLaunchParams&& params,
                                      LaunchCallback callback) {
   Launch(params.app_id, ui::EF_NONE, LaunchSource::kUnknown, nullptr);
 
-  // TODO(crbug.com/1244506): Add launch return value.
+  // TODO(crbug.com/40787924): Add launch return value.
   std::move(callback).Run(LaunchResult());
 }
 

@@ -3,11 +3,11 @@
 // found in the LICENSE file.
 
 import {assert} from 'chrome://resources/js/assert.js';
-import {BigBuffer} from 'chrome://resources/mojo/mojo/public/mojom/base/big_buffer.mojom-webui.js';
-import {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
+import type {BigBuffer} from 'chrome://resources/mojo/mojo/public/mojom/base/big_buffer.mojom-webui.js';
+import type {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
 
-import {UserImage} from '../../personalization_app.mojom-webui.js';
-import {PersonalizationState} from '../personalization_state.js';
+import type {UserImage} from '../../personalization_app.mojom-webui.js';
+import type {PersonalizationState} from '../personalization_state.js';
 
 import {AVATAR_PLACEHOLDER_URL} from './utils.js';
 
@@ -35,21 +35,20 @@ function bufferToPngObjectUrl(value: BigBuffer): Url|null {
   }
 
   try {
-    let bytes: Uint8Array;
+    let bytes: Uint8Array<ArrayBuffer>;
     if (Array.isArray(value.bytes)) {
       bytes = new Uint8Array(value.bytes);
     } else {
       assert(!!value.sharedMemory, 'sharedMemory must be defined here');
-      const sharedMemory = value.sharedMemory!;
+      const sharedMemory = value.sharedMemory;
       const {buffer, result} =
           sharedMemory.bufferHandle.mapBuffer(0, sharedMemory.size);
-      assert(result === Mojo.RESULT_OK, 'Could not map buffer');
+      assert(
+          result === Mojo.RESULT_OK, `Could not map buffer. error: ${result}`);
       bytes = new Uint8Array(buffer);
     }
 
-    const result = {
-      url: URL.createObjectURL(new Blob([bytes], {type: 'image/png'})),
-    };
+    const result = URL.createObjectURL(new Blob([bytes], {type: 'image/png'}));
     objectUrlCache.set(value, result);
     return result;
 
@@ -63,9 +62,7 @@ function bufferToPngObjectUrl(value: BigBuffer): Url|null {
  * The placeholder url is used as the user image url for invalid or unknown
  * urls.
  */
-const placeHolderUrl = {
-  url: AVATAR_PLACEHOLDER_URL,
-};
+const placeHolderUrl = AVATAR_PLACEHOLDER_URL;
 
 /**
  * Derive a user image |Url| from |PersonalizationState|. Return a |Url| rather

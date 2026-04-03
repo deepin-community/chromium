@@ -4,6 +4,11 @@
 // found in the LICENSE file.
 //
 // CLProgram.cpp: Implements the cl::Program class.
+//
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "libANGLE/CLProgram.h"
 
@@ -109,12 +114,18 @@ angle::Result Program::getInfo(ProgramInfo name,
             copySize  = devices.size() * sizeof(decltype(devices)::value_type);
             break;
         case ProgramInfo::Source:
-            copyValue = mSource.c_str();
-            copySize  = mSource.length() + 1u;
+            if (!mSource.empty())
+            {
+                copyValue = mSource.c_str();
+                copySize  = mSource.length() + 1u;
+            }
             break;
         case ProgramInfo::IL:
-            copyValue = mIL.c_str();
-            copySize  = mIL.length() + 1u;
+            if (!mIL.empty())
+            {
+                copyValue = mIL.c_str();
+                copySize  = mIL.length() + 1u;
+            }
             break;
         case ProgramInfo::BinarySizes:
         case ProgramInfo::Binaries:
@@ -253,13 +264,18 @@ Program::Program(Context &context,
       mNumAttachedKernels(0u),
       mImpl(nullptr)
 {
-    if (!IsError(context.getImpl().linkProgram(*this, mDevices, options, inputPrograms,
-                                               pfnNotify != nullptr ? this : nullptr, &mImpl)))
+    if (pfnNotify != nullptr)
     {
         // This program has to be retained until the notify callback is called.
-        mCallback =
-            pfnNotify != nullptr ? (retain(), CallbackData(pfnNotify, userData)) : CallbackData();
+        retain();
+        *mCallback = CallbackData(pfnNotify, userData);
     }
+    else
+    {
+        *mCallback = CallbackData();
+    }
+    ANGLE_CL_IMPL_TRY(context.getImpl().linkProgram(*this, mDevices, options, inputPrograms,
+                                                    pfnNotify != nullptr ? this : nullptr, &mImpl));
 }
 
 }  // namespace cl

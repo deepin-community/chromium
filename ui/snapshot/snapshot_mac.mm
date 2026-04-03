@@ -12,39 +12,24 @@
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/mac/mac_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/image/image.h"
-
-// TODO: Remove when Chromium is built against the macOS 14.4 SDK or newer.
-#if !defined(MAC_OS_VERSION_14_4)
-
-@interface SCShareableContent (APINewIn14Point4)
-+ (void)getCurrentProcessShareableContentWithCompletionHandler:
-    (void (^)(SCShareableContent* _Nullable shareableContent,
-              NSError* _Nullable error))completionHandler
-    API_AVAILABLE(macos(14.4));
-@end
-
-#endif  // !defined(MAC_OS_VERSION_14_4)
-
-// The API that allows an app TCC-less access to its own windows is new in macOS
-// 14.4. While this has been tested extensively on 14.4 betas, because this is a
-// new API added in an OS dot release, have a "break in case of emergency" off-
-// switch.
-BASE_FEATURE(kUseScreenCaptureKitForSnapshots,
-             "UseScreenCaptureKitForSnapshots",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+#include "ui/snapshot/snapshot_mac.h"
 
 namespace ui {
 
 namespace {
+
+SnapshotAPI g_snapshot_api = SnapshotAPI::kUnspecified;
 
 void GrabViewSnapshotScreenCaptureKitImpl(gfx::NativeView native_view,
                                           const gfx::Rect& source_rect,
                                           GrabSnapshotImageCallback callback)
     API_AVAILABLE(macos(14.4)) {
   NSView* view = native_view.GetNativeNSView();
+  NSInteger window_number = view.window.windowNumber;
   __block GrabSnapshotImageCallback local_callback = std::move(callback);
 
   // Get the view frame relative to the window, and flip it to have an
@@ -74,7 +59,7 @@ void GrabViewSnapshotScreenCaptureKitImpl(gfx::NativeView native_view,
       NSUInteger sc_window_index =
           [sc_windows indexOfObjectPassingTest:^BOOL(
                           SCWindow* obj, NSUInteger idx, BOOL* stop) {
-            return obj.windowID == view.window.windowNumber;
+            return obj.windowID == window_number;
           }];
       if (sc_window_index == NSNotFound) {
         DLOG(ERROR) << "failed to find window";
@@ -95,6 +80,7 @@ void GrabViewSnapshotScreenCaptureKitImpl(gfx::NativeView native_view,
       config.ignoreShadowsSingleWindow = YES;
       config.captureResolution = SCCaptureResolutionBest;
       config.ignoreGlobalClipSingleWindow = YES;
+      config.includeChildWindows = NO;
 
       [SCScreenshotManager
           captureImageWithFilter:filter
@@ -105,8 +91,11 @@ void GrabViewSnapshotScreenCaptureKitImpl(gfx::NativeView native_view,
                  // enqueuing the block.
                  NSImage* image;
                  if (sample_buffer) {
+                   // Do not correctly size here. Downstream callers are
+                   // assuming that the image returned is scaled by the device
+                   // pixel ratio.
                    image = [[NSImage alloc] initWithCGImage:sample_buffer
-                                                       size:image_size];
+                                                       size:NSZeroSize];
                  }
                  dispatch_async(dispatch_get_main_queue(), ^{
                    if (error2) {
@@ -126,13 +115,13 @@ gfx::Image GrabViewSnapshotCGWindowListImpl(gfx::NativeView native_view,
   NSView* view = native_view.GetNativeNSView();
   NSWindow* window = view.window;
   NSScreen* screen = NSScreen.screens.firstObject;
-  gfx::Rect screen_bounds = gfx::Rect(NSRectToCGRect(screen.frame));
+  gfx::Rect screen_bounds(screen.frame);
 
   // Get the view bounds relative to the screen.
   NSRect frame = [view convertRect:view.bounds toView:nil];
   frame = [window convertRectToScreen:frame];
 
-  gfx::Rect view_bounds = gfx::Rect(NSRectToCGRect(frame));
+  gfx::Rect view_bounds(frame);
 
   // Flip window coordinates based on the primary screen.
   view_bounds.set_y(screen_bounds.height() - view_bounds.y() -
@@ -158,7 +147,31 @@ gfx::Image GrabViewSnapshotCGWindowListImpl(gfx::NativeView native_view,
                                                 size:NSZeroSize]);
 }
 
+bool ShouldForceOldAPIUse() {
+  // The SCK API +[SCShareableContent
+  // getCurrentProcessShareableContentWithCompletionHandler:] was introduced in
+  // macOS 14.4, but it did not work correctly when there were multiple
+  // instances of an app with the same bundle ID.
+  //
+  // This is fixed in macOS 15.
+  //
+  // https://crbug.com/333443445, FB13717818
+  if (base::mac::MacOSVersion() >= 15'00'00) {
+    return false;
+  }
+
+  return [NSRunningApplication
+             runningApplicationsWithBundleIdentifier:NSBundle.mainBundle
+                                                         .bundleIdentifier]
+             .count > 1;
+}
+
 }  // namespace
+
+void ForceAPIUsageForTesting(SnapshotAPI api) {
+  CHECK(base::mac::MacOSVersion() >= 14'04'00 || api != SnapshotAPI::kNewAPI);
+  g_snapshot_api = api;
+}
 
 void GrabWindowSnapshot(gfx::NativeWindow native_window,
                         const gfx::Rect& source_rect,
@@ -167,14 +180,29 @@ void GrabWindowSnapshot(gfx::NativeWindow native_window,
   // tabstrip.
   NSView* view = native_window.GetNativeNSWindow().contentView.superview;
 
-  GrabViewSnapshot(view, source_rect, std::move(callback));
+  GrabViewSnapshot(gfx::NativeView(view), source_rect, std::move(callback));
 }
 
 void GrabViewSnapshot(gfx::NativeView view,
                       const gfx::Rect& source_rect,
                       GrabSnapshotImageCallback callback) {
+  SnapshotAPI api = g_snapshot_api;
+  if (api == SnapshotAPI::kUnspecified) {
+    if (base::mac::MacOSVersion() >= 14'04'00 && !ShouldForceOldAPIUse()) {
+      api = SnapshotAPI::kNewAPI;
+    } else {
+      api = SnapshotAPI::kOldAPI;
+    }
+  }
+
+  // On macOS 26, the CGWindowList API is not supported for snapshots - in
+  // existing tests, no screenshot is returned when using the CGWindowList API.
+  if (base::mac::MacOSVersion() >= 26'00'00) {
+    api = SnapshotAPI::kNewAPI;
+  }
+
   if (@available(macOS 14.4, *)) {
-    if (base::FeatureList::IsEnabled(kUseScreenCaptureKitForSnapshots)) {
+    if (api == SnapshotAPI::kNewAPI) {
       GrabViewSnapshotScreenCaptureKitImpl(view, source_rect,
                                            std::move(callback));
       return;

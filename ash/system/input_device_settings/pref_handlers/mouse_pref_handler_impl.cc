@@ -6,10 +6,10 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
-#include "ash/public/mojom/input_device_settings.mojom-forward.h"
 #include "ash/public/mojom/input_device_settings.mojom.h"
 #include "ash/shell.h"
 #include "ash/system/input_device_settings/input_device_settings_defaults.h"
+#include "ash/system/input_device_settings/input_device_settings_logging.h"
 #include "ash/system/input_device_settings/input_device_settings_metadata.h"
 #include "ash/system/input_device_settings/input_device_settings_pref_names.h"
 #include "ash/system/input_device_settings/input_device_settings_utils.h"
@@ -57,7 +57,7 @@ void UpdateButtonRemappingsWithCompleteList(
   auto default_remappings =
       GetButtonRemappingListForConfig(mouse_button_config);
   for (auto& remapping : default_remappings) {
-    const auto iter = base::ranges::find(
+    const auto iter = std::ranges::find(
         current_button_remappings, *remapping->button,
         [](const mojom::ButtonRemappingPtr& current_remapping) {
           return *current_remapping->button;
@@ -127,7 +127,7 @@ mojom::MouseSettingsPtr GetMouseSettingsFromPrefs(
 
 mojom::MouseSettingsPtr RetrieveMouseSettings(
     const mojom::MousePolicies& mouse_policies,
-    const base::Value::Dict& settings_dict) {
+    const base::DictValue& settings_dict) {
   mojom::MouseSettingsPtr settings = mojom::MouseSettings::New();
   settings->swap_right =
       settings_dict.FindBool(prefs::kMouseSettingSwapRight)
@@ -160,13 +160,13 @@ mojom::MouseSettingsPtr GetDefaultMouseSettings(
   return RetrieveMouseSettings(mouse_policies, /*settings_dict=*/{});
 }
 
-base::Value::Dict ConvertSettingsToDict(
+base::DictValue ConvertSettingsToDict(
     const mojom::Mouse& mouse,
     const mojom::MousePolicies& mouse_policies,
     const ForceMouseSettingPersistence& force_persistence,
-    const base::Value::Dict* existing_settings_dict) {
+    const base::DictValue* existing_settings_dict) {
   // Populate `settings_dict` with all settings in `settings`.
-  base::Value::Dict settings_dict;
+  base::DictValue settings_dict;
 
   if (ShouldPersistSetting(
           mouse_policies.swap_right_policy, prefs::kMouseSettingSwapRight,
@@ -225,9 +225,9 @@ void UpdateButtonRemappingDictPref(PrefService* pref_service,
                                    const mojom::Mouse& mouse,
                                    const base::Time time_stamp) {
   const mojom::MouseSettings& settings = *mouse.settings;
-  base::Value::List button_remappings = ConvertButtonRemappingArrayToList(
+  base::ListValue button_remappings = ConvertButtonRemappingArrayToList(
       settings.button_remappings, mouse.customization_restriction);
-  base::Value::Dict button_remappings_dict =
+  base::DictValue button_remappings_dict =
       pref_service->GetDict(prefs::kMouseButtonRemappingsDictPref).Clone();
   button_remappings_dict.Set(mouse.device_key, std::move(button_remappings));
   const auto time_stamp_path =
@@ -245,12 +245,12 @@ void UpdateMouseSettingsImpl(
     const ForceMouseSettingPersistence& force_persistence) {
   DCHECK(mouse.settings);
   const base::Time time_stamp = base::Time::Now();
-  base::Value::Dict devices_dict =
+  base::DictValue devices_dict =
       pref_service->GetDict(prefs::kMouseDeviceSettingsDictPref).Clone();
-  base::Value::Dict* existing_settings_dict =
+  base::DictValue* existing_settings_dict =
       devices_dict.FindDict(mouse.device_key);
 
-  base::Value::Dict settings_dict = ConvertSettingsToDict(
+  base::DictValue settings_dict = ConvertSettingsToDict(
       mouse, mouse_policies, force_persistence, existing_settings_dict);
 
   settings_dict.Set(prefs::kLastUpdatedKey, base::TimeToValue(time_stamp));
@@ -313,15 +313,10 @@ void InitializeSettingsUpdateMetricInfo(
                         std::move(updated_metric_info));
 }
 
-}  // namespace
-
-MousePrefHandlerImpl::MousePrefHandlerImpl() = default;
-MousePrefHandlerImpl::~MousePrefHandlerImpl() = default;
-
-void MousePrefHandlerImpl::InitializeMouseSettings(
-    PrefService* pref_service,
-    const mojom::MousePolicies& mouse_policies,
-    mojom::Mouse* mouse) {
+void InitializeMouseSettingsImpl(PrefService* pref_service,
+                                 const mojom::MousePolicies& mouse_policies,
+                                 mojom::Mouse* mouse,
+                                 bool force_initialize_to_default_settings) {
   if (!pref_service) {
     mouse->settings = GetDefaultMouseSettings(pref_service, mouse_policies);
     return;
@@ -330,6 +325,9 @@ void MousePrefHandlerImpl::InitializeMouseSettings(
   const auto& devices_dict =
       pref_service->GetDict(prefs::kMouseDeviceSettingsDictPref);
   const auto* settings_dict = devices_dict.FindDict(mouse->device_key);
+  if (force_initialize_to_default_settings) {
+    settings_dict = nullptr;
+  }
 
   ForceMouseSettingPersistence force_persistence;
   SettingsUpdatedMetricsInfo::Category category;
@@ -347,6 +345,16 @@ void MousePrefHandlerImpl::InitializeMouseSettings(
     category = HasDefaultSettings(pref_service)
                    ? SettingsUpdatedMetricsInfo::Category::kDefault
                    : SettingsUpdatedMetricsInfo::Category::kFirstEver;
+  }
+  if (category == SettingsUpdatedMetricsInfo::Category::kSynced) {
+    PR_LOG(INFO, Feature::IDS)
+        << GetMouseSettingsLog("Synced with latest settings", *mouse);
+  } else if (category == SettingsUpdatedMetricsInfo::Category::kDefault) {
+    PR_LOG(INFO, Feature::IDS)
+        << GetMouseSettingsLog("Using default settings", *mouse);
+  } else {
+    PR_LOG(INFO, Feature::IDS)
+        << GetMouseSettingsLog("First time connected", *mouse);
   }
   if (features::IsPeripheralCustomizationEnabled()) {
     const auto& button_remappings_dict =
@@ -377,6 +385,19 @@ void MousePrefHandlerImpl::InitializeMouseSettings(
   }
 }
 
+}  // namespace
+
+MousePrefHandlerImpl::MousePrefHandlerImpl() = default;
+MousePrefHandlerImpl::~MousePrefHandlerImpl() = default;
+
+void MousePrefHandlerImpl::InitializeMouseSettings(
+    PrefService* pref_service,
+    const mojom::MousePolicies& mouse_policies,
+    mojom::Mouse* mouse) {
+  InitializeMouseSettingsImpl(pref_service, mouse_policies, mouse,
+                              /*force_initialize_to_default_settings=*/false);
+}
+
 void MousePrefHandlerImpl::UpdateMouseSettings(
     PrefService* pref_service,
     const mojom::MousePolicies& mouse_policies,
@@ -390,10 +411,6 @@ void MousePrefHandlerImpl::InitializeLoginScreenMouseSettings(
     const AccountId& account_id,
     const mojom::MousePolicies& mouse_policies,
     mojom::Mouse* mouse) {
-  // Verify if the flag is enabled.
-  if (!features::IsInputDeviceSettingsSplitEnabled()) {
-    return;
-  }
   CHECK(local_state);
 
   const auto* settings_dict = GetLoginScreenSettingsDict(
@@ -474,6 +491,14 @@ void MousePrefHandlerImpl::UpdateDefaultMouseSettings(
       ConvertSettingsToDict(mouse, mouse_policies, /*force_persistence=*/{true},
                             /*existing_settings_dict=*/nullptr);
   pref_service->SetDict(prefs::kMouseDefaultSettings, std::move(settings_dict));
+}
+
+void MousePrefHandlerImpl::ForceInitializeWithDefaultSettings(
+    PrefService* pref_service,
+    const mojom::MousePolicies& mouse_policies,
+    mojom::Mouse* mouse) {
+  InitializeMouseSettingsImpl(pref_service, mouse_policies, mouse,
+                              /*force_initialize_to_default_settings=*/true);
 }
 
 }  // namespace ash

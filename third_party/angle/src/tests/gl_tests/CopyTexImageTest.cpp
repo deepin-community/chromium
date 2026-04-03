@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
 
@@ -40,7 +44,7 @@ class CopyTexImageTest : public ANGLETest<>
 
     void testTearDown() override { glDeleteProgram(mTextureProgram); }
 
-    void initializeResources(GLenum internalFormat, GLenum format, GLenum type)
+    void initializeResources(GLenum internalFormat, GLenum format, GLenum type, bool solidColor)
     {
         for (size_t i = 0; i < kFboCount; ++i)
         {
@@ -56,7 +60,16 @@ class CopyTexImageTest : public ANGLETest<>
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                    mFboTextures[i], 0);
 
-            glClearColor(kFboColors[i][0], kFboColors[i][1], kFboColors[i][2], kFboColors[i][3]);
+            if (solidColor)
+            {
+                glClearColor(kSolidColors[i][0], kSolidColors[i][1], kSolidColors[i][2],
+                             kSolidColors[i][3]);
+            }
+            else
+            {
+                glClearColor(kFboColors[i][0], kFboColors[i][1], kFboColors[i][2],
+                             kFboColors[i][3]);
+            }
             glClear(GL_COLOR_BUFFER_BIT);
         }
 
@@ -65,7 +78,7 @@ class CopyTexImageTest : public ANGLETest<>
 
     void initializeResources(GLenum format, GLenum type)
     {
-        initializeResources(format, format, type);
+        initializeResources(format, format, type, false);
     }
 
     void verifyResults(GLuint texture,
@@ -74,7 +87,8 @@ class CopyTexImageTest : public ANGLETest<>
                        GLint xs,
                        GLint ys,
                        GLint xe,
-                       GLint ye)
+                       GLint ye,
+                       double errorBounds)
     {
         glViewport(0, 0, fboSize, fboSize);
 
@@ -88,11 +102,13 @@ class CopyTexImageTest : public ANGLETest<>
         drawQuad(mTextureProgram, essl1_shaders::PositionAttrib(), 0.5f);
 
         // Expect that the rendered quad has the same color as the source texture
-        EXPECT_PIXEL_NEAR(xs, ys, data[0], data[1], data[2], data[3], 1.0);
-        EXPECT_PIXEL_NEAR(xs, ye - 1, data[0], data[1], data[2], data[3], 1.0);
-        EXPECT_PIXEL_NEAR(xe - 1, ys, data[0], data[1], data[2], data[3], 1.0);
-        EXPECT_PIXEL_NEAR(xe - 1, ye - 1, data[0], data[1], data[2], data[3], 1.0);
-        EXPECT_PIXEL_NEAR((xs + xe) / 2, (ys + ye) / 2, data[0], data[1], data[2], data[3], 1.0);
+        EXPECT_PIXEL_NEAR(xs, ys, data[0], data[1], data[2], data[3], errorBounds);
+        EXPECT_PIXEL_NEAR(xs, ye - 1, data[0], data[1], data[2], data[3], errorBounds);
+        EXPECT_PIXEL_NEAR(xe - 1, ys, data[0], data[1], data[2], data[3], errorBounds);
+        EXPECT_PIXEL_NEAR(xe - 1, ye - 1, data[0], data[1], data[2], data[3], errorBounds);
+        EXPECT_PIXEL_NEAR((xs + xe) / 2, (ys + ye) / 2, data[0], data[1], data[2], data[3],
+                          errorBounds);
+        ASSERT_GL_NO_ERROR();
     }
 
     void verifyCheckeredResults(GLuint texture,
@@ -122,7 +138,7 @@ class CopyTexImageTest : public ANGLETest<>
                         data3[3]);
     }
 
-    void runCopyTexImageTest(GLenum format, GLubyte expected[3][4])
+    void runCopyTexImageTest(GLenum format, GLubyte expected[3][4], double errorBounds = 1.0)
     {
         GLTexture tex;
         glBindTexture(GL_TEXTURE_2D, tex);
@@ -144,8 +160,59 @@ class CopyTexImageTest : public ANGLETest<>
             glCopyTexImage2D(GL_TEXTURE_2D, 0, format, 0, 0, kFboSizes[i], kFboSizes[i], 0);
             ASSERT_GL_NO_ERROR();
 
-            verifyResults(tex, expected[i], kFboSizes[i], 0, 0, kFboSizes[i], kFboSizes[i]);
+            verifyResults(tex, expected[i], kFboSizes[i], 0, 0, kFboSizes[i], kFboSizes[i],
+                          errorBounds);
         }
+    }
+
+    // Similar test to runCopyTexImageTest, except a different texture is used when the fbo size
+    // changes. This is to add more coverage for the webgpu backend specifically, as whenever a
+    // texture changes size an entirely new texture has to be created, and this tests a simpler set
+    // of functionality.
+    void runCopyTexImageTestNoResize(GLenum format,
+                                     GLubyte expected[3][4],
+                                     double errorBounds = 1.0)
+    {
+        GLTexture tex1;
+        glBindTexture(GL_TEXTURE_2D, tex1);
+
+        // Disable mipmapping
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+        // First iteration, bind a new texture, then attempt a copy with the first fbo size.
+        glBindFramebuffer(GL_FRAMEBUFFER, mFbos[0]);
+
+        glCopyTexImage2D(GL_TEXTURE_2D, 0, format, 0, 0, kFboSizes[0], kFboSizes[0], 0);
+        ASSERT_GL_NO_ERROR();
+
+        verifyResults(tex1, expected[0], kFboSizes[0], 0, 0, kFboSizes[0], kFboSizes[0],
+                      errorBounds);
+
+        // Second iteration, use the same texture and same fbo size, attempt another copy.
+        glBindFramebuffer(GL_FRAMEBUFFER, mFbos[1]);
+
+        glCopyTexImage2D(GL_TEXTURE_2D, 0, format, 0, 0, kFboSizes[1], kFboSizes[1], 0);
+        ASSERT_GL_NO_ERROR();
+
+        verifyResults(tex1, expected[1], kFboSizes[1], 0, 0, kFboSizes[1], kFboSizes[1],
+                      errorBounds);
+
+        GLTexture tex2;
+        glBindTexture(GL_TEXTURE_2D, tex2);
+
+        // Disable mipmapping
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+        // Third iteration, bind a new texture with a different size, do another copy.
+        glBindFramebuffer(GL_FRAMEBUFFER, mFbos[2]);
+
+        glCopyTexImage2D(GL_TEXTURE_2D, 0, format, 0, 0, kFboSizes[2], kFboSizes[2], 0);
+        ASSERT_GL_NO_ERROR();
+
+        verifyResults(tex2, expected[2], kFboSizes[2], 0, 0, kFboSizes[2], kFboSizes[2],
+                      errorBounds);
     }
 
     // x, y, width, height specify the portion of fbo to be copied into tex.
@@ -189,7 +256,7 @@ class CopyTexImageTest : public ANGLETest<>
         }
     }
 
-    void runCopyTexSubImageTest(GLenum format, GLubyte expected[3][4])
+    void runCopyTexSubImageTest(GLenum format, GLubyte expected[3][4], double errorBounds = 1.0)
     {
         GLTexture tex;
         glBindTexture(GL_TEXTURE_2D, tex);
@@ -203,7 +270,8 @@ class CopyTexImageTest : public ANGLETest<>
         glCopyTexImage2D(GL_TEXTURE_2D, 0, format, 0, 0, kFboSizes[0], kFboSizes[0], 0);
         ASSERT_GL_NO_ERROR();
 
-        verifyResults(tex, expected[0], kFboSizes[0], 0, 0, kFboSizes[0], kFboSizes[0]);
+        verifyResults(tex, expected[0], kFboSizes[0], 0, 0, kFboSizes[0], kFboSizes[0],
+                      errorBounds);
 
         // Make sure out-of-bound writes to the texture return invalid value.
         glBindFramebuffer(GL_FRAMEBUFFER, mFbos[1]);
@@ -228,12 +296,13 @@ class CopyTexImageTest : public ANGLETest<>
                             extent, extent);
         ASSERT_GL_NO_ERROR();
 
-        verifyResults(tex, expected[1], kFboSizes[0], offset, offset, kFboSizes[0], kFboSizes[0]);
+        verifyResults(tex, expected[1], kFboSizes[0], offset, offset, kFboSizes[0], kFboSizes[0],
+                      errorBounds);
 
         // The rest of the image should be untouched
-        verifyResults(tex, expected[0], kFboSizes[0], 0, 0, offset, offset);
-        verifyResults(tex, expected[0], kFboSizes[0], offset, 0, kFboSizes[0], offset);
-        verifyResults(tex, expected[0], kFboSizes[0], 0, offset, offset, kFboSizes[0]);
+        verifyResults(tex, expected[0], kFboSizes[0], 0, 0, offset, offset, errorBounds);
+        verifyResults(tex, expected[0], kFboSizes[0], offset, 0, kFboSizes[0], offset, errorBounds);
+        verifyResults(tex, expected[0], kFboSizes[0], 0, offset, offset, kFboSizes[0], errorBounds);
 
         // Copy the third fbo over another portion of the image.
         glBindFramebuffer(GL_FRAMEBUFFER, mFbos[2]);
@@ -250,20 +319,20 @@ class CopyTexImageTest : public ANGLETest<>
         ASSERT_GL_NO_ERROR();
 
         verifyResults(tex, expected[2], kFboSizes[0], offset, offset, effectiveExtent,
-                      effectiveExtent);
+                      effectiveExtent, errorBounds);
 
         // The rest of the image should be untouched
         verifyResults(tex, expected[1], kFboSizes[0], offset + effectiveExtent, kFboSizes[0] / 2,
-                      kFboSizes[0], kFboSizes[0]);
+                      kFboSizes[0], kFboSizes[0], errorBounds);
         verifyResults(tex, expected[1], kFboSizes[0], kFboSizes[0] / 2, offset + effectiveExtent,
-                      kFboSizes[0], kFboSizes[0]);
+                      kFboSizes[0], kFboSizes[0], errorBounds);
 
-        verifyResults(tex, expected[0], kFboSizes[0], 0, 0, kFboSizes[0], offset);
-        verifyResults(tex, expected[0], kFboSizes[0], 0, 0, offset, kFboSizes[0]);
+        verifyResults(tex, expected[0], kFboSizes[0], 0, 0, kFboSizes[0], offset, errorBounds);
+        verifyResults(tex, expected[0], kFboSizes[0], 0, 0, offset, kFboSizes[0], errorBounds);
         verifyResults(tex, expected[0], kFboSizes[0], offset + effectiveExtent, 0, kFboSizes[0],
-                      kFboSizes[0] / 2);
+                      kFboSizes[0] / 2, errorBounds);
         verifyResults(tex, expected[0], kFboSizes[0], 0, offset + effectiveExtent, kFboSizes[0] / 2,
-                      kFboSizes[0]);
+                      kFboSizes[0], errorBounds);
     }
 
     void testBGRAToRGBAConversion()
@@ -329,10 +398,15 @@ class CopyTexImageTest : public ANGLETest<>
     static constexpr GLfloat kFboColors[kFboCount][4] = {{0.25f, 1.0f, 0.75f, 0.5f},
                                                          {1.0f, 0.75f, 0.5f, 0.25f},
                                                          {0.5f, 0.25f, 1.0f, 0.75f}};
+    static constexpr GLfloat kSolidColors[kFboCount][4] = {{1.0f, 0.0f, 0.0f, 1.0f},
+                                                           {0.0f, 1.0f, 0.0f, 1.0f},
+                                                           {0.0f, 0.0f, 1.0f, 1.0f}};
 };
 
-TEST_P(CopyTexImageTest, RGBAToRGB)
+// CopyTexImage from GL_RGBA to GL_RGB8
+TEST_P(CopyTexImageTest, RGBAToRGB8)
 {
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
     GLubyte expected[3][4] = {
         {64, 255, 191, 255},
         {255, 191, 127, 255},
@@ -340,7 +414,49 @@ TEST_P(CopyTexImageTest, RGBAToRGB)
     };
 
     initializeResources(GL_RGBA, GL_UNSIGNED_BYTE);
-    runCopyTexImageTest(GL_RGB, expected);
+    runCopyTexImageTest(GL_RGB8, expected);
+}
+
+// CopyTexImage from GL_RGBA to GL_RGB8
+TEST_P(CopyTexImageTest, NoResizeRGBAToRGB8)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
+    GLubyte expected[3][4] = {
+        {64, 255, 191, 255},
+        {255, 191, 127, 255},
+        {127, 64, 255, 255},
+    };
+
+    initializeResources(GL_RGBA, GL_UNSIGNED_BYTE);
+    runCopyTexImageTestNoResize(GL_RGB8, expected);
+}
+
+// CopyTexImage from GL_RGBA to GL_RGBA
+TEST_P(CopyTexImageTest, RGBAToRGBA)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
+    GLubyte expected[3][4] = {
+        {64, 255, 191, 128},
+        {255, 191, 127, 64},
+        {127, 64, 255, 192},
+    };
+
+    initializeResources(GL_RGBA, GL_UNSIGNED_BYTE);
+    runCopyTexImageTest(GL_RGBA, expected);
+}
+
+// CopyTexImage from GL_RGBA to GL_RGBA without resizing the same texture.
+TEST_P(CopyTexImageTest, NoResizeRGBAToRGBA)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
+    GLubyte expected[3][4] = {
+        {64, 255, 191, 128},
+        {255, 191, 127, 64},
+        {127, 64, 255, 192},
+    };
+
+    initializeResources(GL_RGBA, GL_UNSIGNED_BYTE);
+    runCopyTexImageTestNoResize(GL_RGBA, expected);
 }
 
 TEST_P(CopyTexImageTest, RGBAToL)
@@ -355,16 +471,18 @@ TEST_P(CopyTexImageTest, RGBAToL)
     runCopyTexImageTest(GL_LUMINANCE, expected);
 }
 
-TEST_P(CopyTexImageTest, RGBToL)
+// CopyTexImage from GL_RGBA to GL_LUMINANCE8_OES
+TEST_P(CopyTexImageTest, RGBAToL8)
 {
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
     GLubyte expected[3][4] = {
         {64, 64, 64, 255},
         {255, 255, 255, 255},
         {127, 127, 127, 255},
     };
 
-    initializeResources(GL_RGB, GL_UNSIGNED_BYTE);
-    runCopyTexImageTest(GL_LUMINANCE, expected);
+    initializeResources(GL_RGBA, GL_UNSIGNED_BYTE);
+    runCopyTexImageTest(GL_LUMINANCE8_OES, expected);
 }
 
 TEST_P(CopyTexImageTest, RGBAToLA)
@@ -379,6 +497,34 @@ TEST_P(CopyTexImageTest, RGBAToLA)
     runCopyTexImageTest(GL_LUMINANCE_ALPHA, expected);
 }
 
+// CopyTexImage from GL_RGBA to GL_LUMINANCE8_ALPHA8_OES
+TEST_P(CopyTexImageTest, RGBAToL8A8)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
+    GLubyte expected[3][4] = {
+        {64, 64, 64, 127},
+        {255, 255, 255, 64},
+        {127, 127, 127, 191},
+    };
+
+    initializeResources(GL_RGBA, GL_UNSIGNED_BYTE);
+    runCopyTexImageTest(GL_LUMINANCE8_ALPHA8_OES, expected);
+}
+
+// CopyTexImage from GL_RGBA to GL_LUMINANCE4_ALPHA4_OES
+TEST_P(CopyTexImageTest, RGBAToL4A4)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
+    GLubyte expected[3][4] = {
+        {64, 64, 64, 127},
+        {255, 255, 255, 64},
+        {127, 127, 127, 191},
+    };
+
+    initializeResources(GL_RGBA, GL_UNSIGNED_BYTE);
+    runCopyTexImageTest(GL_LUMINANCE4_ALPHA4_OES, expected, 9.0);
+}
+
 TEST_P(CopyTexImageTest, RGBAToA)
 {
     GLubyte expected[3][4] = {
@@ -390,7 +536,75 @@ TEST_P(CopyTexImageTest, RGBAToA)
     initializeResources(GL_RGBA, GL_UNSIGNED_BYTE);
     runCopyTexImageTest(GL_ALPHA, expected);
 }
+// CopyTexImage from GL_RGBA to GL_ALPHA8_OES
+TEST_P(CopyTexImageTest, RGBAToA8)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
+    GLubyte expected[3][4] = {
+        {0, 0, 0, 127},
+        {0, 0, 0, 64},
+        {0, 0, 0, 191},
+    };
 
+    initializeResources(GL_RGBA, GL_UNSIGNED_BYTE);
+    runCopyTexImageTest(GL_ALPHA8_OES, expected);
+}
+
+// CopyTexImage from GL_RGBA to GL_RGBA4
+TEST_P(CopyTexImageTest, RGBAToRGBA4)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
+    GLubyte expected[3][4] = {
+        {255, 0, 0, 255},
+        {0, 255, 0, 255},
+        {0, 0, 255, 255},
+    };
+
+    initializeResources(GL_RGBA4, GL_RGBA, GL_UNSIGNED_BYTE, true);
+    runCopyTexImageTest(GL_RGBA4, expected);
+}
+
+// CopyTexImage from GL_RGB to GL_RGB565
+TEST_P(CopyTexImageTest, RGBToRGB565)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
+    GLubyte expected[3][4] = {
+        {255, 0, 0, 255},
+        {0, 255, 0, 255},
+        {0, 0, 255, 255},
+    };
+
+    initializeResources(GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE, true);
+    runCopyTexImageTest(GL_RGB565, expected);
+}
+
+// CopyTexImage from GL_RGBA to GL_RGB5_A1
+TEST_P(CopyTexImageTest, RGBAToRGB5A1)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
+    GLubyte expected[3][4] = {
+        {255, 0, 0, 255},
+        {0, 255, 0, 255},
+        {0, 0, 255, 255},
+    };
+
+    initializeResources(GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_BYTE, true);
+    runCopyTexImageTest(GL_RGB5_A1, expected);
+}
+
+// CopyTexImage from GL_RGB to GL_LUMINANCE
+TEST_P(CopyTexImageTest, RGBToL)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_required_internalformat"));
+    GLubyte expected[3][4] = {
+        {64, 64, 64, 255},
+        {255, 255, 255, 255},
+        {127, 127, 127, 255},
+    };
+
+    initializeResources(GL_RGB, GL_UNSIGNED_BYTE);
+    runCopyTexImageTest(GL_LUMINANCE, expected);
+}
 TEST_P(CopyTexImageTest, SubImageRGBAToRGB)
 {
     GLubyte expected[3][4] = {
@@ -449,7 +663,7 @@ TEST_P(CopyTexImageTest, RGBXToL)
         {127, 127, 127, 255},
     };
 
-    initializeResources(GL_RGBX8_ANGLE, GL_RGB, GL_UNSIGNED_BYTE);
+    initializeResources(GL_RGBX8_ANGLE, GL_RGB, GL_UNSIGNED_BYTE, false);
     runCopyTexImageTest(GL_LUMINANCE, expected);
 }
 
@@ -594,7 +808,7 @@ TEST_P(CopyTexImageTest, CopyTexSubImageToNonCubeCompleteDestination)
     }
 }
 
-// Deleting textures after copying to them. http://anglebug.com/4267
+// Deleting textures after copying to them. http://anglebug.com/40644715
 TEST_P(CopyTexImageTest, DeleteAfterCopyingToTextures)
 {
     GLTexture texture;
@@ -645,11 +859,11 @@ TEST_P(CopyTexImageTest, DeleteAfterCopyingToTextures)
 TEST_P(CopyTexImageTest, CopyTexSubImageFrom3DTexureOES)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_texture_3D"));
-    // TODO(anglebug.com/3801)
+    // TODO(anglebug.com/42262446)
     // Seems to fail on D3D11 Windows.
     ANGLE_SKIP_TEST_IF(IsD3D11() && IsWindows());
 
-    // http://anglebug.com/4927
+    // http://anglebug.com/42263501
     ANGLE_SKIP_TEST_IF((IsPixel2() || IsNexus5X()) && IsOpenGLES());
 
     constexpr GLsizei kDepth = 6;
@@ -953,7 +1167,7 @@ TEST_P(CopyTexImageTestES3, 2DArraySubImage)
 // GL_TEXTURE_2D.
 TEST_P(CopyTexImageTestES3, CopyTexSubImageFromTexture3D)
 {
-    // TODO(anglebug.com/3801)
+    // TODO(anglebug.com/42262446)
     // Seems to fail on D3D11 Windows.
     ANGLE_SKIP_TEST_IF(IsD3D11() && IsWindows());
 
@@ -986,10 +1200,50 @@ TEST_P(CopyTexImageTestES3, CopyTexSubImageFromTexture3D)
     ASSERT_GL_NO_ERROR();
 }
 
+// Test that copying a 3D texture slice into another 3D texture slice via framebuffer works
+TEST_P(CopyTexImageTestES3, CopyTexSubImage3DFromTexture3D)
+{
+    constexpr GLsizei kTexSize = 4;
+    constexpr GLsizei kLayers  = 2;
+    std::vector<GLColor> red(kTexSize * kTexSize, GLColor::red);
+    std::vector<GLColor> green(kTexSize * kTexSize, GLColor::green);
+
+    GLTexture srcTex;
+    glBindTexture(GL_TEXTURE_3D, srcTex);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, kTexSize, kTexSize, kLayers, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, nullptr);
+    glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, kTexSize, kTexSize, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                    red.data());
+    glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 1, kTexSize, kTexSize, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                    green.data());
+    ASSERT_GL_NO_ERROR();
+
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+
+    GLTexture dstTex;
+    glBindTexture(GL_TEXTURE_3D, dstTex);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, kTexSize, kTexSize, kLayers, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, nullptr);
+    ASSERT_GL_NO_ERROR();
+
+    // Copy while swapping the layers
+    glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, srcTex, 0, 0);
+    glCopyTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 1, 0, 0, kTexSize, kTexSize);
+    glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, srcTex, 0, 1);
+    glCopyTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, 0, 0, kTexSize, kTexSize);
+    ASSERT_GL_NO_ERROR();
+
+    glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, dstTex, 0, 0);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, dstTex, 0, 1);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+}
+
 // Test that copying from a non-zero base texture works.
 TEST_P(CopyTexImageTestES3, CopyTexSubImageFromNonZeroBase)
 {
-    // http://anglebug.com/5000
+    // http://anglebug.com/40644750
     ANGLE_SKIP_TEST_IF(IsOpenGL() && IsIntel() && IsWindows());
 
     constexpr GLsizei kTexSize = 4;
@@ -1026,7 +1280,7 @@ TEST_P(CopyTexImageTestES3, CopyTexSubImageFromNonZeroBase)
 
     // Verify it.
     constexpr std::array<GLubyte, 4> kExpected = {0, 255, 0, 255};
-    verifyResults(dstColor, kExpected.data(), kTexSize, 0, 0, kTexSize / 2, kTexSize / 2);
+    verifyResults(dstColor, kExpected.data(), kTexSize, 0, 0, kTexSize / 2, kTexSize / 2, 1.0);
 
     // Copy into another part of the texture.  The previous verification ensures that the texture's
     // internal image is allocated, so this should be a direct copy.
@@ -1037,13 +1291,57 @@ TEST_P(CopyTexImageTestES3, CopyTexSubImageFromNonZeroBase)
 
     // Verify it.
     verifyResults(dstColor, kExpected.data(), kTexSize, kTexSize / 2, kTexSize / 2, kTexSize,
-                  kTexSize);
+                  kTexSize, 1.0);
+}
+
+// Similar to CopyTexSubImageFromNonZeroBase, but with different source and dest formats.
+TEST_P(CopyTexImageTestES3, CopyTexSubImageFromNonZeroBaseDifferentFormats)
+{
+    // http://anglebug.com/40644750
+    ANGLE_SKIP_TEST_IF(IsOpenGL() && IsIntel() && IsWindows());
+
+    constexpr GLsizei kTexSize = 4;
+    std::vector<GLColor> red(kTexSize * kTexSize, GLColor::red);
+    std::vector<GLColor> green(kTexSize * kTexSize * 4, GLColor::green);
+
+    // Create a framebuffer attached to a non-zero base texture
+    GLTexture srcColor;
+    glBindTexture(GL_TEXTURE_2D, srcColor);
+    glTexStorage2D(GL_TEXTURE_2D, 2, GL_RGBA8, kTexSize * 2, kTexSize * 2);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kTexSize * 2, kTexSize * 2, GL_RGBA, GL_UNSIGNED_BYTE,
+                    green.data());
+    glTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, kTexSize, kTexSize, GL_RGBA, GL_UNSIGNED_BYTE,
+                    red.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1);
+    ASSERT_GL_NO_ERROR();
+
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcColor, 1);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    // Create a texture with an identical format
+    GLTexture dstColor;
+    glBindTexture(GL_TEXTURE_2D, dstColor);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, kTexSize, kTexSize, 0, GL_LUMINANCE_ALPHA,
+                 GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    ASSERT_GL_NO_ERROR();
+
+    // Copy into a part of this texture.
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, kTexSize / 2, kTexSize / 2);
+    ASSERT_GL_NO_ERROR();
+
+    // Verify it.  Note: the sampled texture is LUMA, with 255 in both luminance and alpha.
+    constexpr std::array<GLubyte, 4> kExpected = {255, 255, 255, 255};
+    verifyResults(dstColor, kExpected.data(), kTexSize, 0, 0, kTexSize / 2, kTexSize / 2, 1.0);
 }
 
 // Test that copying into a non-zero base texture works.
 TEST_P(CopyTexImageTestES3, CopyTexSubImageToNonZeroBase)
 {
-    // http://anglebug.com/5000
+    // http://anglebug.com/40644750
     ANGLE_SKIP_TEST_IF(IsOpenGL() && IsIntel() && IsWindows());
 
     constexpr GLsizei kTexSize = 4;
@@ -1080,7 +1378,7 @@ TEST_P(CopyTexImageTestES3, CopyTexSubImageToNonZeroBase)
 
     // Verify it.
     constexpr std::array<GLubyte, 4> kExpected = {0, 255, 0, 255};
-    verifyResults(dstColor, kExpected.data(), kTexSize, 0, 0, kTexSize / 2, kTexSize / 2);
+    verifyResults(dstColor, kExpected.data(), kTexSize, 0, 0, kTexSize / 2, kTexSize / 2, 1.0);
 
     // Copy into another part of the texture.  The previous verification ensures that the texture's
     // internal image is allocated, so this should be a direct copy.
@@ -1091,7 +1389,7 @@ TEST_P(CopyTexImageTestES3, CopyTexSubImageToNonZeroBase)
 
     // Verify it.
     verifyResults(dstColor, kExpected.data(), kTexSize, kTexSize / 2, kTexSize / 2, kTexSize,
-                  kTexSize);
+                  kTexSize, 1.0);
 }
 
 // Initialize the 3D texture we will copy the subImage data into
@@ -1224,9 +1522,6 @@ TEST_P(CopyTexImageTestES3, 3DSubImageRawTextureData)
 // Test glCopyTexSubImage3D with initialized texture data that was drawn to
 TEST_P(CopyTexImageTestES3, 3DSubImageDrawTextureData)
 {
-    // TODO(anglebug.com/3801)
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsD3D11());
-
     GLFramebuffer fbo;
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
@@ -1271,12 +1566,6 @@ TEST_P(CopyTexImageTestES3, 3DSubImageDrawTextureData)
 // Test glCopyTexSubImage3D with mismatched texture formats
 TEST_P(CopyTexImageTestES3, 3DSubImageDrawMismatchedTextureTypes)
 {
-    // TODO(anglebug.com/3801)
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsD3D11());
-
-    // TODO(anglebug.com/5491)
-    ANGLE_SKIP_TEST_IF(IsIOS() && IsOpenGLES());
-
     GLFramebuffer fbo;
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
@@ -1501,6 +1790,32 @@ TEST_P(CopyTexImageTestES3, BGRAAndRGBAConversions)
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_format_BGRA8888"));
     testBGRAToRGBAConversion();
     testRGBAToBGRAConversion();
+}
+
+// Test that the implementation can handle uploading data with mixed formats to cube maps even if it
+// the cube map is not complete.
+TEST_P(CopyTexImageTest, MixedCubeMapFormats)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_ANGLE_texture_compression_dxt3"));
+
+    GLTexture texture;
+    glBindTexture(GL_TEXTURE_CUBE_MAP, texture);
+
+    constexpr GLsizei size          = 512;
+    constexpr GLenum internalFormat = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT;
+    const std::vector<uint8_t> data(size * size, 129);
+
+    glCompressedTexImage2D(GL_TEXTURE_CUBE_MAP_NEGATIVE_X, 0, internalFormat, size, size, 0,
+                           data.size(), data.data());
+    EXPECT_GL_NO_ERROR();
+
+    glCopyTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_Y, 0, GL_LUMINANCE_ALPHA, 0, 0, size, size, 0);
+    EXPECT_GL_NO_ERROR();
+
+    const std::vector<uint8_t> subData(size * size, 124);
+    glCompressedTexSubImage2D(GL_TEXTURE_CUBE_MAP_NEGATIVE_X, 0, 0, 0, size, size, internalFormat,
+                              subData.size(), subData.data());
+    EXPECT_GL_NO_ERROR();
 }
 
 ANGLE_INSTANTIATE_TEST_ES2_AND(

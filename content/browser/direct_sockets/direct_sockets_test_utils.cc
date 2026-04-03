@@ -4,6 +4,8 @@
 
 #include "content/browser/direct_sockets/direct_sockets_test_utils.h"
 
+#include <string_view>
+
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/strings/stringprintf.h"
@@ -12,9 +14,10 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/web_contents_tester.h"
 #include "net/dns/host_resolver.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/clear_data_filter.mojom.h"
 #include "services/network/public/mojom/udp_socket.mojom.h"
-#include "third_party/blink/public/common/permissions_policy/origin_with_possible_wildcards.h"
+#include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
 #include "url/origin.h"
 
 namespace content::test {
@@ -74,7 +77,7 @@ MockRestrictedUDPSocket::~MockRestrictedUDPSocket() = default;
 MockNetworkContext::MockNetworkContext()
     : MockNetworkContext(/*host_mapping_rules=*/"") {}
 
-MockNetworkContext::MockNetworkContext(base::StringPiece host_mapping_rules)
+MockNetworkContext::MockNetworkContext(std::string_view host_mapping_rules)
     : network::TestNetworkContextWithHostResolver(
           net::HostResolver::CreateStandaloneResolver(
               net::NetLog::Get(),
@@ -91,6 +94,7 @@ void MockNetworkContext::CreateRestrictedUDPSocket(
     network::mojom::RestrictedUDPSocketParamsPtr params,
     mojo::PendingReceiver<network::mojom::RestrictedUDPSocket> receiver,
     mojo::PendingRemote<network::mojom::UDPSocketListener> listener,
+    bool allow_multicast,
     CreateRestrictedUDPSocketCallback callback) {
   auto socket = CreateMockUDPSocket(std::move(listener));
   DCHECK_EQ(mode, network::mojom::RestrictedUDPSocketMode::CONNECTED);
@@ -112,14 +116,14 @@ AsyncJsRunner::AsyncJsRunner(content::WebContents* web_contents)
 
 AsyncJsRunner::~AsyncJsRunner() = default;
 
-std::unique_ptr<base::test::TestFuture<std::string>> AsyncJsRunner::RunScript(
+base::test::TestFuture<std::string> AsyncJsRunner::RunScript(
     const std::string& async_script) {
   // Do not leave behind hanging futures from previous invocations.
   DCHECK(!future_callback_);
-  auto future = std::make_unique<base::test::TestFuture<std::string>>();
+  base::test::TestFuture<std::string> future;
 
   token_ = base::Token::CreateRandom();
-  future_callback_ = future->GetCallback();
+  future_callback_ = future.GetCallback();
   const std::string wrapped_script =
       MakeScriptSendResultToDomQueue(async_script);
   ExecuteScriptAsync(web_contents(), wrapped_script);
@@ -168,22 +172,20 @@ bool IsolatedWebAppContentBrowserClient::ShouldUrlUseApplicationIsolationLevel(
   return isolated_app_origin_ == url::Origin::Create(url);
 }
 
-std::optional<blink::ParsedPermissionsPolicy>
+std::optional<std::vector<blink::mojom::IsolatedAppPermissionPolicyEntryPtr>>
 IsolatedWebAppContentBrowserClient::GetPermissionsPolicyForIsolatedWebApp(
     content::BrowserContext* browser_context,
     const url::Origin& app_origin) {
-  blink::ParsedPermissionsPolicyDeclaration coi_decl(
-      blink::mojom::PermissionsPolicyFeature::kCrossOriginIsolated,
-      /*allowed_origins=*/{},
-      /*self_if_matches=*/std::nullopt,
-      /*matches_all_origins=*/true, /*matches_opaque_src=*/false);
-
-  blink::ParsedPermissionsPolicyDeclaration sockets_decl(
-      blink::mojom::PermissionsPolicyFeature::kDirectSockets,
-      /*allowed_origins=*/{},
-      /*self_if_matches=*/app_origin,
-      /*matches_all_origins=*/false, /*matches_opaque_src=*/false);
-  return {{coi_decl, sockets_decl}};
+  std::vector<blink::mojom::IsolatedAppPermissionPolicyEntryPtr> policies;
+  policies.push_back(blink::mojom::IsolatedAppPermissionPolicyEntry::New(
+      "cross-origin-isolated", std::vector<std::string>{"*"}));
+  policies.push_back(blink::mojom::IsolatedAppPermissionPolicyEntry::New(
+      "direct-sockets", std::vector<std::string>{"'self'"}));
+  policies.push_back(blink::mojom::IsolatedAppPermissionPolicyEntry::New(
+      "direct-sockets-private", std::vector<std::string>{"'self'"}));
+  policies.push_back(blink::mojom::IsolatedAppPermissionPolicyEntry::New(
+      "direct-sockets-multicast", std::vector<std::string>{"'self'"}));
+  return policies;
 }
 
 // misc

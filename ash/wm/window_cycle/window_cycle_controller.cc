@@ -4,6 +4,8 @@
 
 #include "ash/wm/window_cycle/window_cycle_controller.h"
 
+#include <algorithm>
+
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/events/event_rewriter_controller_impl.h"
@@ -21,14 +23,15 @@
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/screen_pinning_controller.h"
 #include "ash/wm/snap_group/snap_group.h"
+#include "ash/wm/snap_group/snap_group_controller.h"
 #include "ash/wm/window_cycle/window_cycle_event_filter.h"
 #include "ash/wm/window_cycle/window_cycle_list.h"
 #include "ash/wm/window_util.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
+#include "base/strings/string_util.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -192,7 +195,6 @@ void WindowCycleController::HandleKeyboardNavigation(
     case KeyboardNavDirection::kInvalid:
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -413,8 +415,7 @@ WindowCycleController::BuildWindowListForWindowCycling(
       Shell::Get()->mru_window_tracker()->BuildWindowForCycleWithPipList(
           desks_mru_type);
 
-  SnapGroupController* snap_group_controller =
-      Shell::Get()->snap_group_controller();
+  SnapGroupController* snap_group_controller = SnapGroupController::Get();
   if (!snap_group_controller) {
     return window_list;
   }
@@ -423,7 +424,7 @@ WindowCycleController::BuildWindowListForWindowCycling(
   for (aura::Window* window : window_list) {
     // The latter-activated window in a snap group should have been added. Skip
     // inserting to avoid duplicates.
-    if (base::Contains(adjusted_window_list, window)) {
+    if (std::ranges::contains(adjusted_window_list, window)) {
       continue;
     }
 
@@ -432,8 +433,10 @@ WindowCycleController::BuildWindowListForWindowCycling(
       // Insert the windows if they belong to a group following the order of the
       // actual window layout, i.e. primary snapped window comes first followed
       // by the secondary snapped window.
-      adjusted_window_list.push_back(snap_group->window1());
-      adjusted_window_list.push_back(snap_group->window2());
+      adjusted_window_list.push_back(
+          snap_group->GetPhysicallyLeftOrTopWindow());
+      adjusted_window_list.push_back(
+          snap_group->GetPhysicallyRightOrBottomWindow());
     } else {
       adjusted_window_list.push_back(window);
     }

@@ -7,15 +7,15 @@
             "builder_id": {
               "bucket": "ci",
               "builder": "chromeos-amd64-generic-rel",
-              "project": "chromium-m123"
+              "project": "chromium-m146"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-chromiumos-archive",
               "builder_group": "chromium.chromiumos",
               "execution_mode": "COMPILE_AND_TEST",
               "legacy_chromium_config": {
                 "apply_configs": [
-                  "mb"
+                  "mb",
+                  "shared_build_dir"
                 ],
                 "build_config": "Release",
                 "config": "chromium",
@@ -32,7 +32,7 @@
               "legacy_gclient_config": {
                 "apply_configs": [
                   "chromeos",
-                  "checkout_lacros_sdk"
+                  "chromium_with_telemetry_dependencies"
                 ],
                 "config": "chromium"
               }
@@ -42,10 +42,9 @@
             "builder_id": {
               "bucket": "ci",
               "builder": "chromeos-amd64-generic-rel-gtest",
-              "project": "chromium-m123"
+              "project": "chromium-m146"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-chromiumos-archive",
               "builder_group": "chromium.chromiumos",
               "execution_mode": "TEST",
               "legacy_chromium_config": {
@@ -66,15 +65,14 @@
               },
               "legacy_gclient_config": {
                 "apply_configs": [
-                  "chromeos",
-                  "checkout_lacros_sdk"
+                  "chromeos"
                 ],
                 "config": "chromium"
               },
               "parent": {
                 "bucket": "ci",
                 "builder": "chromeos-amd64-generic-rel",
-                "project": "chromium-m123"
+                "project": "chromium-m146"
               }
             }
           }
@@ -84,7 +82,7 @@
         {
           "bucket": "ci",
           "builder": "chromeos-amd64-generic-rel-gtest",
-          "project": "chromium-m123"
+          "project": "chromium-m146"
         }
       ],
       "mirroring_builder_group_and_names": [
@@ -96,7 +94,10 @@
           "builder": "chromeos-amd64-generic-rel-gtest-and-tast",
           "group": "tryserver.chromium.chromiumos"
         }
-      ]
+      ],
+      "retry_failed_shards": true,
+      "retry_invalid_shards": true,
+      "targets_spec_directory": "infra/config/generated/builders/ci/chromeos-amd64-generic-rel-gtest/targets"
     }
   },
   "$recipe_engine/resultdb/test_presentation": {
@@ -107,6 +108,9 @@
     ]
   },
   "builder_group": "chromium.chromiumos",
+  "gardener_rotations": [
+    "chrome_browser_release"
+  ],
   "recipe": "chromium",
   "sheriff_rotations": [
     "chrome_browser_release"

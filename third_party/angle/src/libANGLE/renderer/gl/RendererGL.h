@@ -47,7 +47,6 @@ class ClearMultiviewGL;
 class ContextImpl;
 class DisplayGL;
 class FunctionsGL;
-class PLSProgramCache;
 class RendererGL;
 class StateManagerGL;
 
@@ -82,9 +81,7 @@ class RendererGL : angle::NonCopyable
     const angle::FeaturesGL &getFeatures() const { return mFeatures; }
     BlitGL *getBlitter() const { return mBlitter; }
     ClearMultiviewGL *getMultiviewClearer() const { return mMultiviewClearer; }
-    PLSProgramCache *getPLSProgramCache();
 
-    MultiviewImplementationTypeGL getMultiviewImplementationType() const;
     const gl::Caps &getNativeCaps() const;
     const gl::TextureCapsMap &getNativeTextureCaps() const;
     const gl::Extensions &getNativeExtensions() const;
@@ -130,9 +127,6 @@ class RendererGL : angle::NonCopyable
     BlitGL *mBlitter;
     ClearMultiviewGL *mMultiviewClearer;
 
-    // Load/store programs for EXT_shader_pixel_local_storage.
-    PLSProgramCache *mPLSProgramCache = nullptr;
-
     bool mUseDebugOutput;
 
     mutable bool mCapsInitialized;
@@ -141,7 +135,6 @@ class RendererGL : angle::NonCopyable
     mutable gl::Extensions mNativeExtensions;
     mutable gl::Limitations mNativeLimitations;
     mutable ShPixelLocalStorageOptions mNativePLSOptions;
-    mutable MultiviewImplementationTypeGL mMultiviewImplementationType;
 
     bool mWorkDoneSinceLastFlush = false;
 
@@ -149,7 +142,7 @@ class RendererGL : angle::NonCopyable
 
     angle::FeaturesGL mFeatures;
 
-    // Workaround for anglebug.com/4267
+    // Workaround for anglebug.com/40644715
     bool mNeedsFlushBeforeDeleteTextures;
 };
 

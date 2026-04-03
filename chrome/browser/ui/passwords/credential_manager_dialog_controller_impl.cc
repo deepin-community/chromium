@@ -28,18 +28,21 @@
 
 namespace {
 
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
 std::u16string GetAuthenticationMessage(PasswordsModelDelegate* delegate) {
-  if (!delegate || !delegate->GetWebContents())
+  std::u16string message;
+  if (!delegate || !delegate->GetWebContents()) {
     return u"";
+  }
   const std::u16string origin = base::UTF8ToUTF16(
       password_manager::GetShownOrigin(delegate->GetWebContents()
                                            ->GetPrimaryMainFrame()
                                            ->GetLastCommittedOrigin()));
-  return l10n_util::GetStringFUTF16(IDS_PASSWORD_MANAGER_FILLING_REAUTH,
-                                    origin);
+  message =
+      l10n_util::GetStringFUTF16(IDS_PASSWORD_MANAGER_FILLING_REAUTH, origin);
+  return message;
 }
-#endif
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace
 
@@ -85,7 +88,7 @@ CredentialManagerDialogControllerImpl::GetLocalForms() const {
   return local_credentials_;
 }
 
-std::u16string CredentialManagerDialogControllerImpl::GetAccoutChooserTitle()
+std::u16string CredentialManagerDialogControllerImpl::GetAccountChooserTitle()
     const {
   return l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_ACCOUNT_CHOOSER_TITLE);
 }
@@ -112,11 +115,8 @@ std::u16string CredentialManagerDialogControllerImpl::GetAutoSigninText()
 bool CredentialManagerDialogControllerImpl::ShouldShowFooter() const {
   const syncer::SyncService* sync_service =
       SyncServiceFactory::GetForProfile(profile_);
-  // TODO(crbug.com/1464264): Migrate away from `ConsentLevel::kSync` on desktop
-  // platforms and remove #ifdef below.
-#if BUILDFLAG(IS_ANDROID)
-#error If this code is built on Android, please update TODO above.
-#endif  // BUILDFLAG(IS_ANDROID)
+  // TODO(crbug.com/40066949): Remove this codepath once
+  // `IsSyncFeatureEnabled()` is fully deprecated.
   return password_manager::sync_util::IsSyncFeatureEnabledIncludingPasswords(
       sync_service);
 }
@@ -124,7 +124,7 @@ bool CredentialManagerDialogControllerImpl::ShouldShowFooter() const {
 void CredentialManagerDialogControllerImpl::OnChooseCredentials(
     const password_manager::PasswordForm& password_form,
     password_manager::CredentialType credential_type) {
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
   if (delegate_->GetPasswordFeatureManager()
           ->IsBiometricAuthenticationBeforeFillingEnabled()) {
     delegate_->AuthenticateUserWithMessage(
@@ -141,7 +141,7 @@ void CredentialManagerDialogControllerImpl::OnChooseCredentials(
 
 void CredentialManagerDialogControllerImpl::OnSignInClicked() {
   CHECK_EQ(1u, local_credentials_.size());
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
   if (delegate_->GetPasswordFeatureManager()
           ->IsBiometricAuthenticationBeforeFillingEnabled()) {
     delegate_->AuthenticateUserWithMessage(
@@ -206,8 +206,9 @@ void CredentialManagerDialogControllerImpl::OnBiometricReauthCompleted(
     password_manager::PasswordForm password_form,
     password_manager::CredentialType credential_type,
     bool result) {
-  if (!result)
+  if (!result) {
     return;
+  }
   ResetDialog();
   delegate_->ChooseCredential(password_form, credential_type);
 }

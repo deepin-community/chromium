@@ -7,6 +7,7 @@ desc: |-
         If the policy is set to false or left unset, the display and graphics
         statuses will not be reported. If set to true, display and graphics
         statuses will be reported.
+default: false
 device_only: true
 example_value: false
 features:
@@ -17,7 +18,7 @@ items:
 - caption: Disable device graphics status reporting
   value: false
 owners:
-- cros-reporting-team@google.com
+- cros-reporting-eng@google.com
 - lbaraz@chromium.org
 schema:
   type: boolean
@@ -26,3 +27,4 @@ supported_on:
 tags:
 - admin-sharing
 type: main
+generate_device_proto: False

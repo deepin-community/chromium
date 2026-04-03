@@ -13,18 +13,18 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.skia.org/infra/go/common"
 	"go.skia.org/infra/go/depot_tools"
 	"go.skia.org/infra/go/exec"
 	"go.skia.org/infra/go/gerrit"
+	"go.skia.org/infra/go/git"
 	"go.skia.org/infra/go/git/git_common"
+	"go.skia.org/infra/go/skerr"
 	"go.skia.org/infra/go/sklog"
 	"go.skia.org/infra/promk/go/pushgateway"
 	"go.skia.org/infra/task_driver/go/lib/auth_steps"
-	"go.skia.org/infra/task_driver/go/lib/checkout"
-	"go.skia.org/infra/task_driver/go/lib/gerrit_steps"
 	"go.skia.org/infra/task_driver/go/lib/os_steps"
 	"go.skia.org/infra/task_driver/go/td"
-	"go.skia.org/infra/task_scheduler/go/types"
 )
 
 const (
@@ -153,13 +153,6 @@ func main() {
 	if err != nil {
 		td.Fatal(ctx, err)
 	}
-	var g gerrit.GerritInterface
-	if !*dryRun {
-		g, err = gerrit.NewGerrit("https://skia-review.googlesource.com", client)
-		if err != nil {
-			td.Fatal(ctx, err)
-		}
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		td.Fatal(ctx, err)
@@ -191,36 +184,22 @@ func main() {
 	defer func() {
 		_ = os_steps.RemoveAll(ctx, tmp)
 	}()
-	recipesCfgFile := filepath.Join(skiaDir, "infra", "config", "recipes.cfg")
 
 	// Check out depot_tools at the exact revision expected by tests (defined in recipes.cfg), and
 	// make it available to tests by by adding it to the PATH.
 	var depotToolsDir string
 	if err := td.Do(ctx, td.Props("Check out depot_tools"), func(ctx context.Context) error {
 		var err error
-		depotToolsDir, err = depot_tools.Sync(ctx, tmp, recipesCfgFile)
+		co, err := git.NewCheckout(ctx, common.REPO_DEPOT_TOOLS, tmp)
+		if err != nil {
+			return skerr.Wrap(err)
+		}
+		depotToolsDir = co.Dir()
 		return err
 	}); err != nil {
 		td.Fatal(ctx, err)
 	}
-
-	// Hack warning: Sync depot tools to HEAD because of problems syncing chrome
-	// due to submodule-related failures on older depot tools revisions
-	// (b/303291416). Updating depot tools via recipes.cfg was risky because
-	// recipes.cfg has not been updated in years and other tasks may break if that
-	// was done. We may move away from recipes in the future anyway.
-	depotToolsUpdateCommand := &exec.Command{
-		Name: filepath.Join(depotToolsDir, "update_depot_tools"),
-		Dir:  skiaDir,
-		Env: []string{
-			fmt.Sprintf("PATH=%s:%s", os.Getenv("PATH"), depotToolsDir),
-		},
-	}
-	if err := exec.Run(ctx, depotToolsUpdateCommand); err != nil {
-		td.Fatal(ctx, err)
-	}
-
-	ctx = td.WithEnv(ctx, []string{"PATH=%(PATH)s:" + depotToolsDir})
+	ctx = td.WithEnv(ctx, depot_tools.Env(depotToolsDir))
 
 	// Sync Chrome.
 	if !*skipSync {
@@ -302,47 +281,4 @@ func main() {
 	}
 	// Report that the asset creation was successful.
 	_ = pg.Push(ctx, creatingSKPsFailureMetricName, metricValue_NoFailure)
-	if *dryRun {
-		return
-	}
-
-	// Retrieve the new SKP version.
-	versionFileSubPath := filepath.Join("infra", "bots", "assets", "skp", "VERSION")
-	skpVersion, err := os_steps.ReadFile(ctx, filepath.Join(skiaDir, versionFileSubPath))
-	if err != nil {
-		td.Fatal(ctx, err)
-	}
-
-	// Sync a new checkout of Skia to create the CL.
-	tmpSkia := filepath.Join(tmp, "skia")
-	co, err := checkout.EnsureGitCheckout(ctx, tmpSkia, types.RepoState{
-		Repo:     "https://skia.googlesource.com/skia.git",
-		Revision: "origin/main",
-	})
-	if err != nil {
-		td.Fatal(ctx, err)
-	}
-	baseRev, err := co.FullHash(ctx, "HEAD")
-	if err != nil {
-		td.Fatal(ctx, err)
-	}
-
-	// Write the new SKP version.
-	if err := os_steps.WriteFile(ctx, filepath.Join(co.Dir(), versionFileSubPath), skpVersion, os.ModePerm); err != nil {
-		td.Fatal(ctx, err)
-	}
-
-	// Regenerate tasks.json.
-	if _, err := exec.RunCwd(ctx, tmpSkia, "go", "run", "./infra/bots/gen_tasks.go"); err != nil {
-		td.Fatal(ctx, err)
-	}
-
-	// Upload a CL.
-	commitMsg := `Update SKP version
-
-Automatic commit by the RecreateSKPs bot.
-`
-	if err := gerrit_steps.UploadCL(ctx, g, co, "skia", "main", baseRev, "", commitMsg, []string{"rmistry@google.com"}, false); err != nil {
-		td.Fatal(ctx, err)
-	}
 }

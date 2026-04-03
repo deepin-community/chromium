@@ -14,6 +14,7 @@
 
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "media/base/audio_decoder_config.h"
@@ -56,8 +57,8 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
             MediaLog* media_log) override;
   void Flush() override;
   bool GetGenerateTimestampsFlag() const override;
-  [[nodiscard]] bool AppendToParseBuffer(const uint8_t* buf,
-                                         size_t size) override;
+  [[nodiscard]] bool AppendToParseBuffer(
+      base::span<const uint8_t> buf) override;
   [[nodiscard]] ParseStatus Parse(int max_pending_bytes_to_inspect) override;
 
  private:
@@ -170,7 +171,7 @@ class MEDIA_EXPORT Mp2tStreamParser : public StreamParser {
   // able to pop it from the queue. So this value may be lower than the actual
   // amount of bytes in `ts_byte_queue_`, since more data is needed to complete
   // the parse.
-  int uninspected_pending_bytes_ = 0;
+  size_t uninspected_pending_bytes_ = 0;
   ByteQueue ts_byte_queue_;
 
   // List of PIDs and their state.

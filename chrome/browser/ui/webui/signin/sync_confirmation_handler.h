@@ -9,13 +9,14 @@
 #include <string>
 #include <unordered_map>
 
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/safety_checks.h"
 #include "base/notreached.h"
+#include "base/scoped_observation.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service.h"
 #include "components/signin/public/identity_manager/account_capabilities.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -31,18 +32,18 @@ enum class SyncConfirmationScreenMode : int {
   kPending = 1,
   kRestricted = 2,
   kUnrestricted = 3,
+  kDeadlined = 4,
 };
 
 SyncConfirmationScreenMode GetScreenMode(
     const AccountCapabilities& capabilities);
-// LINT.ThenChange(//chrome/browser/resources/signin/sync_confirmation/sync_confirmation_app.ts:screen_mode)
+// LINT.ThenChange(//chrome/browser/resources/signin/sync_confirmation/sync_confirmation_browser_proxy.ts:screen_mode)
 
 // WebUI message handler for the sync confirmation dialog. IdentityManager calls
 // in this class use signin::ConsentLevel::kSignin because the user hasn't
 // consented to sync yet.
 class SyncConfirmationHandler : public content::WebUIMessageHandler,
-                                public signin::IdentityManager::Observer,
-                                public BrowserListObserver {
+                                public signin::IdentityManager::Observer {
  public:
   // Creates a SyncConfirmationHandler for the `profile`. All strings in the
   // corresponding Web UI should be represented in `string_to_grd_id_map` and
@@ -64,52 +65,47 @@ class SyncConfirmationHandler : public content::WebUIMessageHandler,
   // signin::IdentityManager::Observer:
   void OnExtendedAccountInfoUpdated(const AccountInfo& info) override;
 
-  // BrowserListObserver:
-  void OnBrowserRemoved(Browser* browser) override;
+  void OnBrowserClosed(BrowserWindowInterface* browser);
 
  protected:
   // Handles "confirm" message from the page. No arguments.
   // This message is sent when the user confirms that they want complete sign in
   // with default sync settings.
-  virtual void HandleConfirm(const base::Value::List& args);
+  virtual void HandleConfirm(const base::ListValue& args);
 
   // Handles "undo" message from the page. No arguments.
   // This message is sent when the user clicks "undo" on the sync confirmation
   // dialog, which aborts signin and prevents sync from starting.
-  virtual void HandleUndo(const base::Value::List& args);
+  virtual void HandleUndo(const base::ListValue& args);
 
   // Handles "goToSettings" message from the page. No arguments.
   // This message is sent when the user clicks on the "Settings" link in the
   // sync confirmation dialog, which completes sign in but takes the user to the
   // sync settings page for configuration before starting sync.
-  virtual void HandleGoToSettings(const base::Value::List& args);
+  virtual void HandleGoToSettings(const base::ListValue& args);
 
   // Handles the web ui message sent when the html content is done being laid
   // out and it's time to resize the native view hosting it to fit. `args` is
   // a single integer value for the height the native view should resize to.
-  virtual void HandleInitializedWithSize(const base::Value::List& args);
+  virtual void HandleInitializedWithSize(const base::ListValue& args);
 
   // Handles the "accountInfoRequest" message sent after the
   // "account-info-changed" WebUIListener was added. This method calls
   // `OnAvatarChanged` with the signed-in user's picture url.
-  virtual void HandleAccountInfoRequest(const base::Value::List& args);
+  virtual void HandleAccountInfoRequest(const base::ListValue& args);
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Handles the "openDeviceSyncSettings" message from the page. No arguments.
-  // This message is sent when the user clicks on the device settings link
-  // in the sync confirmation dialog, which keep the dialogue open and open
-  // new window in ash for device sync settings .
-  virtual void HandleOpenDeviceSyncSettings(const base::Value::List& args);
-#endif
   // Records the user's consent to sync. Called from `HandleConfirm` and
   // `HandleGoToSettings`, and expects two parameters to be passed through
   // these methods from the WebUI:
-  // 1. List of strings (names of the string resources constituting the consent
-  //                     description as per WebUIDataSource)
-  // 2. Strings (name of the string resource of the consent confirmation)
-  // This message is sent when the user interacts with the dialog in a positive
-  // manner, i.e. clicks on the confirmation button or the settings link.
-  virtual void RecordConsent(const base::Value::List& args);
+  // `consent_description`: a list of strings (names of the string resources
+  // constituting the consent description as per WebUIDataSource)
+  // `consent_confirmation`: a string (name of the string resource of the
+  // consent confirmation).
+  // This message is sent when the user interacts with the
+  // dialog in a positive manner, i.e. clicks on the confirmation button or the
+  // settings link.
+  virtual void RecordConsent(const base::ListValue& consent_description,
+                             const std::string& consent_confirmation);
 
   // Dispatches incoming account info to respective ui listeners
   // (::OnAvatarChanged, ::OnScreenModeChanged).
@@ -161,6 +157,8 @@ class SyncConfirmationHandler : public content::WebUIMessageHandler,
   // Tracks time that passes between the UI is fully initialized, but the
   // confirm / not now buttons are not ready yet.
   std::optional<base::ElapsedTimer> user_visible_latency_;
+
+  base::CallbackListSubscription browser_close_subscription_;
 };
 
 #endif  // CHROME_BROWSER_UI_WEBUI_SIGNIN_SYNC_CONFIRMATION_HANDLER_H_

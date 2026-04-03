@@ -10,6 +10,8 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "url/url_canon_internal.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "url/url_jni_headers/IDNStringUtil_jni.h"
 
 using base::android::ScopedJavaLocalRef;
@@ -32,8 +34,10 @@ bool IDNToASCII(std::u16string_view src, CanonOutputW* output) {
 
   std::u16string utf16_result =
       base::android::ConvertJavaStringToUTF16(java_result);
-  output->Append(utf16_result.data(), utf16_result.size());
+  output->Append(utf16_result);
   return true;
 }
 
 }  // namespace url
+
+DEFINE_JNI(IDNStringUtil)

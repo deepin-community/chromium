@@ -4,12 +4,12 @@
 
 #include "components/history_clusters/core/config.h"
 
+#include <algorithm>
+
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/no_destructor.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "build/build_config.h"
 #include "components/history_clusters/core/features.h"
@@ -71,84 +71,12 @@ Config::Config() {
             sort_clusters_within_batch_for_query);
   }
 
-  // The `kJourneysLabels` feature and child params.
-  {
-    labels_from_hostnames = GetFieldTrialParamByFeatureAsBool(
-        internal::kJourneysLabels, "labels_from_hostnames",
-        labels_from_hostnames);
-
-    labels_from_entities = GetFieldTrialParamByFeatureAsBool(
-        internal::kJourneysLabels, "labels_from_entities",
-        labels_from_entities);
-
-    labels_from_search_visit_entities = GetFieldTrialParamByFeatureAsBool(
-        internal::kJourneysLabels, "labels_from_search_visit_entities",
-        labels_from_search_visit_entities);
-  }
-
   // The `kJourneysImages` feature.
   {
     images = base::FeatureList::IsEnabled(internal::kJourneysImages);
 
     images_cover = GetFieldTrialParamByFeatureAsBool(
         internal::kJourneysImages, "JourneysImagesCover", images_cover);
-  }
-
-  // The `kPersistedClusters` feature and child params.
-  {
-    persist_clusters_in_history_db =
-        base::FeatureList::IsEnabled(internal::kPersistedClusters);
-
-    persist_clusters_in_history_db_after_startup_delay_minutes =
-        base::GetFieldTrialParamByFeatureAsInt(
-            internal::kPersistedClusters,
-            "JourneysPersistClustersInHistoryDbAfterStartupDelayMinutes",
-            persist_clusters_in_history_db_after_startup_delay_minutes);
-
-    persist_clusters_in_history_db_period_minutes =
-        base::GetFieldTrialParamByFeatureAsInt(
-            internal::kPersistedClusters,
-            "JourneysPersistClustersInHistoryDbPeriodMinutes",
-            persist_clusters_in_history_db_period_minutes);
-
-    persist_on_query = base::GetFieldTrialParamByFeatureAsBool(
-        internal::kPersistedClusters, "persist_on_query", persist_on_query);
-
-    max_persisted_clusters_to_fetch = base::GetFieldTrialParamByFeatureAsInt(
-        internal::kPersistedClusters, "max_persisted_clusters_to_fetch",
-        max_persisted_clusters_to_fetch);
-
-    max_persisted_cluster_visits_to_fetch_soft_cap =
-        base::GetFieldTrialParamByFeatureAsInt(
-            internal::kPersistedClusters,
-            "max_persisted_cluster_visits_to_fetch_soft_cap",
-            max_persisted_cluster_visits_to_fetch_soft_cap);
-
-    persist_clusters_recluster_window_days =
-        base::GetFieldTrialParamByFeatureAsInt(
-            internal::kPersistedClusters,
-            "persist_clusters_recluster_window_days",
-            persist_clusters_recluster_window_days);
-  }
-
-  // The `kOmniboxAction` feature and child params.
-  {
-    omnibox_action = base::FeatureList::IsEnabled(internal::kOmniboxAction);
-
-    omnibox_action_with_pedals = base::GetFieldTrialParamByFeatureAsBool(
-        internal::kOmniboxAction, "omnibox_action_with_pedals",
-        omnibox_action_with_pedals);
-
-    omnibox_action_on_navigation_intents =
-        base::GetFieldTrialParamByFeatureAsBool(
-            internal::kOmniboxAction, "omnibox_action_on_navigation_intents",
-            omnibox_action_on_navigation_intents);
-
-    omnibox_action_navigation_intent_score_threshold =
-        base::GetFieldTrialParamByFeatureAsInt(
-            internal::kOmniboxAction,
-            "omnibox_action_on_navigation_intent_score_threshold",
-            omnibox_action_navigation_intent_score_threshold);
   }
 
   // The `kOmniboxHistoryClusterProvider` feature and child params.
@@ -243,59 +171,6 @@ Config::Config() {
             number_interesting_visits_filter_threshold);
   }
 
-  // The `kUseEngagementScoreCache` feature and child params.
-  {
-    use_engagement_score_cache =
-        base::FeatureList::IsEnabled(features::kUseEngagementScoreCache);
-
-    engagement_score_cache_size = GetFieldTrialParamByFeatureAsInt(
-        features::kUseEngagementScoreCache, "engagement_score_cache_size",
-        engagement_score_cache_size);
-
-    engagement_score_cache_refresh_duration =
-        base::Minutes(GetFieldTrialParamByFeatureAsInt(
-            features::kUseEngagementScoreCache,
-            "engagement_score_cache_refresh_duration_minutes",
-            engagement_score_cache_refresh_duration.InMinutes()));
-  }
-
-  // The `kOnDeviceClusteringContentClustering` feature and child params.
-  {
-    content_clustering_enabled = base::FeatureList::IsEnabled(
-        features::kOnDeviceClusteringContentClustering);
-
-    content_clustering_search_visits_only = GetFieldTrialParamByFeatureAsBool(
-        features::kOnDeviceClusteringContentClustering, "search_visits_only",
-        content_clustering_search_visits_only);
-
-    content_clustering_similarity_threshold =
-        GetFieldTrialParamByFeatureAsDouble(
-            features::kOnDeviceClusteringContentClustering,
-            "content_clustering_similarity_threshold",
-            content_clustering_similarity_threshold);
-    // Ensure that the value is [0.0 and 1.0].
-    DCHECK_GE(content_clustering_similarity_threshold, 0.0f);
-    DCHECK_LE(content_clustering_similarity_threshold, 1.0f);
-
-    exclude_entities_that_have_no_collections_from_content_clustering =
-        GetFieldTrialParamByFeatureAsBool(
-            features::kOnDeviceClusteringContentClustering,
-            "exclude_entities_that_have_no_collections",
-            exclude_entities_that_have_no_collections_from_content_clustering);
-
-    collections_to_block_from_content_clustering =
-        JourneysCollectionContentClusteringBlocklist(
-            collections_to_block_from_content_clustering);
-
-    use_pairwise_merge = GetFieldTrialParamByFeatureAsBool(
-        features::kOnDeviceClusteringContentClustering, "use_pairwise_merge",
-        use_pairwise_merge);
-
-    max_pairwise_merge_iterations = GetFieldTrialParamByFeatureAsInt(
-        features::kOnDeviceClusteringContentClustering,
-        "max_pairwise_merge_iterations", max_pairwise_merge_iterations);
-  }
-
   // The `kHistoryClustersVisitDeduping` feature and child params.
   {
     use_host_for_visit_deduping = GetFieldTrialParamByFeatureAsBool(
@@ -352,31 +227,6 @@ Config::Config() {
             cluster_triggerability_cutoff_duration.InMinutes()));
   }
 
-  // WebUI features and params.
-  {
-    named_new_tab_groups =
-        base::FeatureList::IsEnabled(internal::kJourneysNamedNewTabGroups);
-  }
-
-  // The `kJourneysZeroStateFiltering` feature and child params.
-  {
-    apply_zero_state_filtering =
-        base::FeatureList::IsEnabled(internal::kJourneysZeroStateFiltering);
-  }
-
-  // The `kNtpChromeCartInHistoryClusterModule` child params.
-  {
-    use_ntp_specific_intracluster_ranking = GetFieldTrialParamByFeatureAsBool(
-        ntp_features::kNtpChromeCartInHistoryClusterModule,
-        "use_ntp_specific_intracluster_ranking",
-        use_ntp_specific_intracluster_ranking);
-
-    ntp_visit_duration_ranking_weight = GetFieldTrialParamByFeatureAsDouble(
-        ntp_features::kNtpChromeCartInHistoryClusterModule,
-        "ntp_visit_duration_ranking_weight", ntp_visit_duration_ranking_weight);
-    DCHECK_GE(ntp_visit_duration_ranking_weight, 0.0f);
-  }
-
   // Lonely features without child params.
   {
     non_user_visible_debug =
@@ -385,27 +235,15 @@ Config::Config() {
     user_visible_debug =
         base::FeatureList::IsEnabled(internal::kUserVisibleDebug);
 
-    persist_context_annotations_in_history_db = base::FeatureList::IsEnabled(
-        internal::kPersistContextAnnotationsInHistoryDb);
-
     history_clusters_internals_page =
         base::FeatureList::IsEnabled(internal::kHistoryClustersInternalsPage);
 
     should_check_hosts_to_skip_clustering_for =
         base::FeatureList::IsEnabled(features::kOnDeviceClusteringBlocklists);
 
-    use_continue_on_shutdown = base::FeatureList::IsEnabled(
-        internal::kHistoryClustersUseContinueOnShutdown);
-
     should_show_all_clusters_unconditionally_on_prominent_ui_surfaces =
         base::CommandLine::ForCurrentProcess()->HasSwitch(
             switches::kShouldShowAllClustersOnProminentUiSurfaces);
-
-    include_synced_visits =
-        base::FeatureList::IsEnabled(internal::kJourneysIncludeSyncedVisits);
-
-    persist_caches_to_prefs =
-        base::FeatureList::IsEnabled(internal::kJourneysPersistCachesToPrefs);
   }
 }
 
@@ -414,42 +252,6 @@ Config::~Config() = default;
 
 void SetConfigForTesting(const Config& config) {
   GetConfigInternal() = config;
-}
-
-base::flat_set<std::string> JourneysCollectionContentClusteringBlocklist(
-    const base::flat_set<std::string>& default_value) {
-  const base::FeatureParam<std::string>
-      kJourneysCollectionContentClusteringBlocklist{
-          &features::kOnDeviceClusteringContentClustering,
-          "collections_blocklist", ""};
-  std::string blocklist_string =
-      kJourneysCollectionContentClusteringBlocklist.Get();
-  if (blocklist_string.empty())
-    return default_value;
-
-  auto blocklist = base::SplitString(blocklist_string, ",",
-                                     base::WhitespaceHandling::TRIM_WHITESPACE,
-                                     base::SplitResult::SPLIT_WANT_NONEMPTY);
-
-  return blocklist.empty()
-             ? default_value
-             : base::flat_set<std::string>(blocklist.begin(), blocklist.end());
-}
-
-base::flat_set<std::string> JourneysMidBlocklist() {
-  const base::FeatureParam<std::string> kJourneysMidBlocklist{
-      &internal::kHistoryClustersKeywordFiltering, "JourneysMidBlocklist", ""};
-  std::string blocklist_string = kJourneysMidBlocklist.Get();
-  if (blocklist_string.empty())
-    return {};
-
-  auto blocklist = base::SplitString(blocklist_string, ",",
-                                     base::WhitespaceHandling::TRIM_WHITESPACE,
-                                     base::SplitResult::SPLIT_WANT_NONEMPTY);
-
-  return blocklist.empty()
-             ? base::flat_set<std::string>()
-             : base::flat_set<std::string>(blocklist.begin(), blocklist.end());
 }
 
 bool IsApplicationLocaleSupportedByJourneys(
@@ -466,8 +268,9 @@ bool IsApplicationLocaleSupportedByJourneys(
 
   // To allow for using any locale, we also interpret the special '*' value.
   auto allowlist_string = kLocaleOrLanguageAllowlist.Get();
-  if (allowlist_string == "*")
+  if (allowlist_string == "*") {
     return true;
+  }
 
   // Allow comma and colon as delimiters to the language list.
   auto allowlist = base::SplitString(
@@ -477,8 +280,10 @@ bool IsApplicationLocaleSupportedByJourneys(
   // Allow any exact locale matches, and also allow any users where the
   // primary language subtag, e.g. "en" from "en-US" to match any element of
   // the list.
-  return allowlist.empty() || base::Contains(allowlist, application_locale) ||
-         base::Contains(allowlist, l10n_util::GetLanguage(application_locale));
+  return allowlist.empty() ||
+         std::ranges::contains(allowlist, application_locale) ||
+         std::ranges::contains(allowlist,
+                               l10n_util::GetLanguage(application_locale));
 }
 
 const Config& GetConfig() {

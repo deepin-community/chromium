@@ -19,23 +19,25 @@ class WebViewImpl;
 struct InspectorEvent {
   InspectorEvent();
   ~InspectorEvent();
+  InspectorEvent(InspectorEvent&& other);
   std::string method;
-  std::optional<base::Value::Dict> params;
+  std::optional<base::DictValue> params;
 };
 
 struct InspectorCommandResponse {
   InspectorCommandResponse();
   ~InspectorCommandResponse();
+  InspectorCommandResponse(InspectorCommandResponse&& other);
   int id;
   std::string error;
-  std::optional<base::Value::Dict> result;
+  std::optional<base::DictValue> result;
 };
 
 // A DevTools client of a single DevTools debugger.
 class DevToolsClient {
  public:
-  typedef base::RepeatingCallback<Status(bool* is_condition_met)>
-      ConditionalFunc;
+  using ConditionalFunc =
+      base::RepeatingCallback<Status(bool* is_condition_met)>;
 
   virtual ~DevToolsClient() = default;
 
@@ -55,7 +57,7 @@ class DevToolsClient {
   // Precondition: IsConnected()
   // Precondition: BiDi tunnel for CDP traffic is not set.
   virtual Status StartBidiServer(std::string bidi_mapper_script,
-                                 const base::Value::Dict& mapper_options) = 0;
+                                 bool enable_unsafe_extension_debugging) = 0;
 
   virtual bool WasCrashed() = 0;
 
@@ -63,35 +65,35 @@ class DevToolsClient {
 
   virtual bool IsConnected() const = 0;
 
-  virtual Status PostBidiCommand(base::Value::Dict command) = 0;
+  virtual Status PostBidiCommand(base::DictValue command) = 0;
 
   virtual Status SendCommand(const std::string& method,
-                             const base::Value::Dict& params) = 0;
+                             const base::DictValue& params) = 0;
 
   virtual Status SendCommandFromWebSocket(const std::string& method,
-                                          const base::Value::Dict& params,
+                                          const base::DictValue& params,
                                           const int client_command_id) = 0;
 
   virtual Status SendCommandWithTimeout(const std::string& method,
-                                        const base::Value::Dict& params,
+                                        const base::DictValue& params,
                                         const Timeout* timeout) = 0;
 
   virtual Status SendAsyncCommand(const std::string& method,
-                                  const base::Value::Dict& params) = 0;
+                                  const base::DictValue& params) = 0;
 
   virtual Status SendCommandAndGetResult(const std::string& method,
-                                         const base::Value::Dict& params,
-                                         base::Value::Dict* result) = 0;
+                                         const base::DictValue& params,
+                                         base::DictValue* result) = 0;
 
   virtual Status SendCommandAndGetResultWithTimeout(
       const std::string& method,
-      const base::Value::Dict& params,
+      const base::DictValue& params,
       const Timeout* timeout,
-      base::Value::Dict* result) = 0;
+      base::DictValue* result) = 0;
 
   virtual Status SendCommandAndIgnoreResponse(
       const std::string& method,
-      const base::Value::Dict& params) = 0;
+      const base::DictValue& params) = 0;
 
   // Adds a listener. This must only be done when the client is disconnected.
   virtual void AddListener(DevToolsEventListener* listener) = 0;
@@ -122,6 +124,8 @@ class DevToolsClient {
 
   virtual bool IsMainPage() const = 0;
 
+  virtual bool IsTabTarget() const = 0;
+
   virtual Status SendRaw(const std::string& message) = 0;
 
   virtual bool HasMessageForAnySession() const = 0;
@@ -135,10 +139,9 @@ class DevToolsClient {
 
   virtual Status OnConnected() = 0;
 
-  virtual Status ProcessEvent(const InspectorEvent& event) = 0;
+  virtual Status ProcessEvent(InspectorEvent event) = 0;
 
-  virtual Status ProcessCommandResponse(
-      const InspectorCommandResponse& response) = 0;
+  virtual Status ProcessCommandResponse(InspectorCommandResponse response) = 0;
 
   virtual int NextMessageId() const = 0;
 
@@ -148,6 +151,19 @@ class DevToolsClient {
                                     bool log_timeout,
                                     const Timeout& timeout,
                                     DevToolsClient* caller) = 0;
+
+  virtual bool IsDialogOpen() const = 0;
+
+  virtual bool AutoAcceptsBeforeunload() const = 0;
+
+  virtual void SetAutoAcceptBeforeunload(bool value) = 0;
+
+  virtual Status GetDialogMessage(std::string& message) const = 0;
+
+  virtual Status GetTypeOfDialog(std::string& type) const = 0;
+
+  virtual Status HandleDialog(bool accept,
+                              const std::optional<std::string>& text) = 0;
 };
 
 #endif  // CHROME_TEST_CHROMEDRIVER_CHROME_DEVTOOLS_CLIENT_H_

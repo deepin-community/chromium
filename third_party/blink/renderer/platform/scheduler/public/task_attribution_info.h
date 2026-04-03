@@ -7,36 +7,36 @@
 
 #include "third_party/blink/public/common/scheduler/task_attribution_id.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/heap/member.h"
-#include "third_party/blink/renderer/platform/heap/visitor.h"
-#include "third_party/blink/renderer/platform/scheduler/public/task_attribution_tracker.h"
+#include "third_party/blink/renderer/platform/platform_export.h"
+
+namespace blink {
+class SoftNavigationContext;
+class ResourceTimingContext;
+}  // namespace blink
 
 namespace blink::scheduler {
 
-class TaskAttributionInfo final : public GarbageCollected<TaskAttributionInfo> {
+// Interface for task state that can be propagated to descendant tasks and
+// continuations.
+class PLATFORM_EXPORT TaskAttributionInfo : public GarbageCollectedMixin {
  public:
-  TaskAttributionInfo(TaskAttributionId task_id, TaskAttributionInfo* parent)
-      : task_id_(task_id),
-        parent_(parent),
-        chain_length_(parent ? parent->chain_length_ + 1 : 1) {}
+  // Returns an id for this object, which is unique for the associated tracker.
+  // This is primarily used for tracking task state across IPCs, e.g. for
+  // navigation and postMessage.
+  virtual TaskAttributionId Id() const = 0;
 
-  ~TaskAttributionInfo() = default;
+  // Returns the test async data associated with this task, if any, otherwise
+  // 0. Used by window.scheduler.asyncData to expose Task Attribution for
+  // testing.
+  virtual uint32_t AsyncDataForTest() const = 0;
 
-  TaskAttributionId Id() const { return task_id_; }
-  TaskAttributionInfo* Parent() const { return parent_.Get(); }
-  bool MaxChainLengthReached() const {
-    return chain_length_ >= kMaxChainLength;
-  }
+  // Returns the `SoftNavigationContext` associated with the task state, which
+  // can be null.
+  virtual SoftNavigationContext* GetSoftNavigationContext() = 0;
 
-  void Trace(Visitor* visitor) const {
-    visitor->Trace(parent_);
-  }
-
- private:
-  static constexpr uint8_t kMaxChainLength = 10;
-  const TaskAttributionId task_id_;
-  const Member<TaskAttributionInfo> parent_;
-  const uint8_t chain_length_;
+  // Returns the `ResourceTimingContext` associated with the task state, which
+  // can be null.
+  virtual ResourceTimingContext* GetResourceTimingContext() = 0;
 };
 
 }  // namespace blink::scheduler

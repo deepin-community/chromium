@@ -13,12 +13,12 @@ import '//resources/ash/common/cr_elements/cr_hidden_style.css.js';
 import '//resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
 import '//resources/polymer/v3_0/paper-spinner/paper-spinner-lite.js';
 
-import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
-import {assert} from 'chrome://resources/js/assert.js';
+import {I18nMixin} from '//resources/ash/common/cr_elements/i18n_mixin.js';
+import {assert} from '//resources/js/assert.js';
+import type {CellularMetadata} from '//resources/mojo/chromeos/ash/services/cellular_setup/public/mojom/cellular_setup.mojom-webui.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {CellularMetadata} from 'chrome://resources/mojo/chromeos/ash/services/cellular_setup/public/mojom/cellular_setup.mojom-webui.js';
 
-import {CellularSetupDelegate} from './cellular_setup_delegate.js';
+import type {CellularSetupDelegate} from './cellular_setup_delegate.js';
 import {getTemplate} from './provisioning_page.html.js';
 import {postDeviceDataToWebview} from './webview_post_util.js';
 
@@ -150,13 +150,13 @@ export class ProvisioningPageElement extends ProvisioningPageElementBase {
     // POST request body, use a utility function to load the webview.
     if (this.cellularMetadata.paymentPostData) {
       postDeviceDataToWebview(
-          portalWebview, this.cellularMetadata.paymentUrl.url,
+          portalWebview, this.cellularMetadata.paymentUrl,
           this.cellularMetadata.paymentPostData);
       return;
     }
 
     // Otherwise, use a normal GET request by specifying the "src".
-    portalWebview.src = this.cellularMetadata.paymentUrl.url;
+    portalWebview.src = this.cellularMetadata.paymentUrl;
   }
 
   private resetPage_(): void {
@@ -189,7 +189,7 @@ export class ProvisioningPageElement extends ProvisioningPageElementBase {
     const contentWindow = portalWebview.contentWindow;
     assert(!!contentWindow);
     contentWindow.postMessage(
-        {msg: 'loadedInWebview'}, this.cellularMetadata!.paymentUrl?.url);
+        {msg: 'loadedInWebview'}, this.cellularMetadata!.paymentUrl);
   }
 
   private onMessageReceived_(event: MessageEvent) {
@@ -210,7 +210,7 @@ export class ProvisioningPageElement extends ProvisioningPageElementBase {
             IMEI: this.cellularMetadata!.imei,
             MDN: this.cellularMetadata!.mdn,
           },
-          this.cellularMetadata!.paymentUrl?.url);
+          this.cellularMetadata!.paymentUrl);
       return;
     }
 

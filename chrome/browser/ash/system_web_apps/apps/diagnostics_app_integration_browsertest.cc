@@ -4,11 +4,15 @@
 
 #include "ash/webui/diagnostics_ui/url_constants.h"
 #include "ash/webui/system_apps/public/system_web_app_type.h"
+#include "ash/wm/window_pin_util.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_integration_test.h"
-#include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/webui/ash/diagnostics_dialog/diagnostics_dialog.h"
+#include "chrome/browser/ui/webui/ash/system_web_dialog/system_web_dialog_delegate.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -37,6 +41,11 @@ const size_t kUsedWithSuccess = 2;
 class DiagnosticsAppIntegrationTest : public ash::SystemWebAppIntegrationTest {
  public:
   DiagnosticsAppIntegrationTest() = default;
+
+  static bool IsDiagnosticsDialogVisible() {
+    return ash::SystemWebDialogDelegate::HasInstance(
+        GURL("chrome://diagnostics"));
+  }
 
  protected:
   base::HistogramTester histogram_tester_;
@@ -92,8 +101,9 @@ IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest, UsageMetricsTest) {
 
   // Find system browser for diagnostics and close it to trigger usage metrics.
   EXPECT_TRUE(ash::IsSystemWebApp(system_app_browser));
+  ui_test_utils::BrowserDestroyedObserver observer(system_app_browser);
   chrome::CloseWindow(system_app_browser);
-  ui_test_utils::WaitForBrowserToClose();
+  observer.Wait();
 
   histogram_tester_.ExpectBucketCount(kDiagnosticsUmaFeatureFullPath,
                                       kUsedWithSuccess, 1);
@@ -142,12 +152,6 @@ IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest,
 
 IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest,
                        DiagnosticsAppRecordsScreenOpenDuration) {
-  // TODO(b/287165206): Fix the test and remove this.
-  if (GetParam().crosapi_state == TestProfileParam::CrosapiParam::kEnabled) {
-    GTEST_SKIP()
-        << "Skipping test body for CrosapiParam::kEnabled, see b/287165206.";
-  }
-
   content::WebContents* web_contents = LaunchDiagnosticsApp();
 
   histogram_tester_.ExpectUniqueSample("ChromeOS.DiagnosticsUi.InitialScreen",
@@ -156,7 +160,7 @@ IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest,
   EXPECT_TRUE(content::ExecJs(web_contents,
                               "chrome.send('recordNavigation', [0, 1]);"));
 
-  chrome::CloseAllBrowsers();
+  ash::BrowserController::GetInstance()->MayCloseAllBrowsers();
 
   histogram_tester_.ExpectTotalCount(
       "ChromeOS.DiagnosticsUi.System.OpenDuration", 1);
@@ -166,12 +170,6 @@ IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest,
 
 IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest,
                        DiagnosticsAppIgnoresInvalidRecordNavigationCall) {
-  // TODO(b/287165206): Fix the test and remove this.
-  if (GetParam().crosapi_state == TestProfileParam::CrosapiParam::kEnabled) {
-    GTEST_SKIP()
-        << "Skipping test body for CrosapiParam::kEnabled, see b/287165206.";
-  }
-
   content::WebContents* web_contents = LaunchDiagnosticsApp();
 
   histogram_tester_.ExpectUniqueSample("ChromeOS.DiagnosticsUi.InitialScreen",
@@ -187,7 +185,7 @@ IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest,
   EXPECT_TRUE(
       content::ExecJs(web_contents, "chrome.send('recordNavigation', []);"));
 
-  chrome::CloseAllBrowsers();
+  ash::BrowserController::GetInstance()->MayCloseAllBrowsers();
 
   histogram_tester_.ExpectTotalCount(
       "ChromeOS.DiagnosticsUi.System.OpenDuration", 1);
@@ -220,6 +218,17 @@ IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest,
                    .ExtractBool());
   EXPECT_TRUE(content::EvalJs(app_web_contents, kFindDiagnosticsAppScript)
                   .ExtractBool());
+}
+
+IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest,
+                       DiagnosticsDialogClosesForLockedFullscreen) {
+  ash::DiagnosticsDialog::ShowDialog();
+  EXPECT_TRUE(IsDiagnosticsDialogVisible());
+
+  // Enter locked fullscreen.
+  ash::PinWindow(browser()->window()->GetNativeWindow(), /*trusted=*/true);
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return !IsDiagnosticsDialogVisible(); }));
 }
 
 INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_REGULAR_PROFILE_P(

@@ -35,7 +35,7 @@
 
 namespace dawn::wire::client {
 
-class Client;
+class ClientBase;
 
 // A helper class used in Client, ObjectStore owns the association of some ObjectBase and
 // ObjectHandles. The lifetime of the ObjectBase is then owned by the ObjectStore, destruction
@@ -49,14 +49,16 @@ class ObjectStore {
     ObjectStore();
 
     ObjectHandle ReserveHandle();
-    void Insert(std::unique_ptr<ObjectBase> obj);
-    void Free(ObjectBase* obj);
+    void Insert(ObjectBase* obj, const ClientBase* forClient);
+    void Remove(ObjectBase* obj, const ClientBase* forClient);
+
     ObjectBase* Get(ObjectId id) const;
+    const std::vector<raw_ptr<ObjectBase>>& GetAllObjects() const;
 
   private:
     uint32_t mCurrentId;
     std::vector<ObjectHandle> mFreeHandles;
-    std::vector<std::unique_ptr<ObjectBase>> mObjects;
+    std::vector<raw_ptr<ObjectBase>> mObjects;
 };
 
 }  // namespace dawn::wire::client

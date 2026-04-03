@@ -11,7 +11,6 @@
 #include <string>
 
 #include "base/component_export.h"
-#include "base/feature_list.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
@@ -25,13 +24,6 @@ class RE2;
 }
 
 namespace redaction {
-namespace features {
-COMPONENT_EXPORT(REDACTION_TOOL)
-BASE_DECLARE_FEATURE(kEnableCreditCardRedaction);
-
-COMPONENT_EXPORT(REDACTION_TOOL)
-BASE_DECLARE_FEATURE(kEnableIbanRedaction);
-}  // namespace features
 
 struct CustomPatternWithAlias {
   // A string literal used in redaction tests. Matches to the |pattern| are
@@ -152,6 +144,13 @@ class RedactionTool {
   void DetectWithCustomPatterns(
       std::string input,
       std::map<PIIType, std::set<std::string>>* detected);
+
+  // Some strings can contain pieces that match like IPv4 addresses but aren't.
+  // This function can be used to determine if this was the case by evaluating
+  // the skipped piece. It returns true, if the matched address was erroneous
+  // and should be skipped instead.
+  bool ShouldSkipIPv4Address(std::string_view skipped);
+
   // Redacts PII sensitive data that matches |pattern| from |input| and returns
   // the redacted string. Adds the redacted PII sensitive data to |detected| if
   // |detected| is not nullptr.

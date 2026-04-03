@@ -10,8 +10,8 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkStream.h"
 #include "include/core/SkTextureCompressionType.h"
-#include "include/gpu/GrDirectContext.h"
-#include "include/gpu/GrRecordingContext.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/GrRecordingContext.h"
 #include "include/gpu/ganesh/SkImageGanesh.h"
 #include "src/core/SkCompressedDataUtils.h"
 #include "src/core/SkMipmap.h"
@@ -22,7 +22,7 @@
 #include "src/gpu/ganesh/image/SkImage_GaneshBase.h"
 #include "src/image/SkImage_Base.h"
 #include "tools/Resources.h"
-#include "tools/gpu/ProxyUtils.h"
+#include "tools/ganesh/ProxyUtils.h"
 
 using namespace skia_private;
 

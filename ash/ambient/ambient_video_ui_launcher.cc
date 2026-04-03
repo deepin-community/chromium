@@ -10,6 +10,7 @@
 #include "ash/ambient/ambient_controller.h"
 #include "ash/ambient/ambient_photo_controller.h"
 #include "ash/ambient/ambient_ui_settings.h"
+#include "ash/ambient/metrics/ambient_metrics.h"
 #include "ash/ambient/ui/ambient_video_view.h"
 #include "ash/ambient/util/ambient_util.h"
 #include "ash/ambient/util/time_of_day_utils.h"
@@ -30,6 +31,8 @@ std::string_view GetVideoFile(AmbientVideo video) {
       return kTimeOfDayNewMexicoVideo;
     case AmbientVideo::kClouds:
       return kTimeOfDayCloudsVideo;
+    case AmbientVideo::kJupiter:
+      return kTimeOfDayJupiterVideo;
   }
 }
 
@@ -51,12 +54,15 @@ void AmbientVideoUiLauncher::Initialize(InitializationCallback on_done) {
   CHECK(ui_settings.video())
       << "AmbientVideoUiLauncher should not be active for "
       << ambient::util::AmbientThemeToString(ui_settings.theme());
+  ambient::RecordAmbientModeTopicSource(
+      personalization_app::mojom::TopicSource::kVideo);
   current_video_ = *ui_settings.video();
   weather_refresher_ = Shell::Get()
                            ->ambient_controller()
                            ->ambient_weather_controller()
                            ->CreateScopedRefresher();
   GetAmbientVideoHtmlPath(
+      ambient::kAmbientVideoDlcForegroundLabel,
       base::BindOnce(&AmbientVideoUiLauncher::SetVideoHtmlPath,
                      weak_factory_.GetWeakPtr(), std::move(on_done)));
 }

@@ -31,9 +31,12 @@ limitations under the License.
 
 #include "tensorflow/core/distributed_runtime/master.h"
 
+#include <memory>
 #include <unordered_set>
 #include <vector>
 
+#include "absl/synchronization/notification.h"
+#include "xla/tsl/protobuf/rpc_options.pb.h"
 #include "tensorflow/core/common_runtime/device_set.h"
 #include "tensorflow/core/common_runtime/process_util.h"
 #include "tensorflow/core/distributed_runtime/remote_device.h"
@@ -55,7 +58,6 @@ limitations under the License.
 #include "tensorflow/core/protobuf/worker.pb.h"
 #include "tensorflow/core/public/session_options.h"
 #include "tensorflow/core/util/device_name_utils.h"
-#include "tsl/protobuf/rpc_options.pb.h"
 
 namespace tensorflow {
 
@@ -100,7 +102,7 @@ void Master::GC() {
     if (shutdown_) {
       break;
     }
-    std::vector<string> handles;
+    std::vector<std::string> handles;
     const int64_t num_micros =
         static_cast<int64_t>(session_gc_seconds_ * 1000000);
     for (const auto& entry : sessions_) {
@@ -122,7 +124,7 @@ void Master::GC() {
   }
 }
 
-MasterSession* Master::FindMasterSession(const string& handle) {
+MasterSession* Master::FindMasterSession(const std::string& handle) {
   MasterSession* session = nullptr;
   {
     mutex_lock l(mu_);
@@ -136,31 +138,32 @@ MasterSession* Master::FindMasterSession(const string& handle) {
 
 class DeviceFinder {
  public:
-  static Status GetRemoteDevices(
-      const protobuf::RepeatedPtrField<string>& device_filters, MasterEnv* env,
-      WorkerCacheInterface* worker_cache,
+  static absl::Status GetRemoteDevices(
+      const protobuf::RepeatedPtrField<std::string>& device_filters,
+      MasterEnv* env, WorkerCacheInterface* worker_cache,
       std::vector<std::unique_ptr<Device>>* out_remote) {
     DeviceFinder finder(device_filters, env, worker_cache);
     finder.Start();
     TF_RETURN_IF_ERROR(finder.Wait());
     finder.GetRemoteDevices(env->local_devices, out_remote);
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   static void GetRemoteWorkers(
-      const protobuf::RepeatedPtrField<string>& device_filters, MasterEnv* env,
-      WorkerCacheInterface* worker_cache, std::vector<string>* workers) {
+      const protobuf::RepeatedPtrField<std::string>& device_filters,
+      MasterEnv* env, WorkerCacheInterface* worker_cache,
+      std::vector<std::string>* workers) {
     DeviceFinder finder(device_filters, env, worker_cache);
     *workers = finder.targets_;
   }
 
  private:
   explicit DeviceFinder(
-      const protobuf::RepeatedPtrField<string>& device_filters, MasterEnv* env,
-      WorkerCacheInterface* worker_cache)
+      const protobuf::RepeatedPtrField<std::string>& device_filters,
+      MasterEnv* env, WorkerCacheInterface* worker_cache)
       : env_(env), worker_cache_(worker_cache) {
     CHECK(worker_cache) << "Worker cache was null!";
-    auto process_filter = [this](const string& filter) {
+    auto process_filter = [this](const std::string& filter) {
       DeviceNameUtils::ParsedName parsed;
       if (DeviceNameUtils::ParseFullName(filter, &parsed)) {
         filters_.push_back(parsed);
@@ -168,7 +171,7 @@ class DeviceFinder {
         LOG(FATAL) << "Skipping invalid filter: " << filter;
       }
     };
-    for (const string& filter : device_filters) {
+    for (const std::string& filter : device_filters) {
       process_filter(filter);
     }
     // Enumerates all known workers' target. A target name is a
@@ -176,19 +179,19 @@ class DeviceFinder {
     if (filters_.empty()) {
       // If no filters were specified, we list all known workers in
       // `worker_cache`.
-      std::vector<string> workers;
+      std::vector<std::string> workers;
       worker_cache->ListWorkers(&workers);
       std::swap(workers, targets_);
     } else {
       // When applying filters, we must include the local worker, even if it
       // does not match any of the filters.
       CHECK_GT(env_->local_devices.size(), 0) << "No local devices provided.";
-      const string& local_device_name = env_->local_devices[0]->name();
+      const std::string& local_device_name = env_->local_devices[0]->name();
       DeviceNameUtils::ParsedName local_parsed_name;
       CHECK(DeviceNameUtils::ParseFullName(local_device_name,
                                            &local_parsed_name));
       bool all_filters_have_job = true;
-      std::unordered_set<string> filter_job_names({local_parsed_name.job});
+      std::unordered_set<std::string> filter_job_names({local_parsed_name.job});
       for (const DeviceNameUtils::ParsedName& filter : filters_) {
         all_filters_have_job = all_filters_have_job && filter.has_job;
         if (filter.has_job) {
@@ -196,14 +199,14 @@ class DeviceFinder {
         }
       }
 
-      std::vector<string> workers;
+      std::vector<std::string> workers;
       if (all_filters_have_job) {
         // If all of the device filters have a job specified, then we only need
         // to list the workers in the jobs named in the filter, because a worker
         // in any other job would not match any filter.
-        for (const string& job_name : filter_job_names) {
+        for (const std::string& job_name : filter_job_names) {
           VLOG(2) << "Selectively listing workers in job: " << job_name;
-          std::vector<string> workers_in_job;
+          std::vector<std::string> workers_in_job;
           worker_cache->ListWorkersInJob(job_name, &workers_in_job);
           workers.insert(workers.end(), workers_in_job.begin(),
                          workers_in_job.end());
@@ -216,13 +219,13 @@ class DeviceFinder {
         if (device_filters.empty()) {
           VLOG(2) << "- <NO FILTERS>";
         } else {
-          for (const string& filter : device_filters) {
+          for (const std::string& filter : device_filters) {
             VLOG(2) << "- " << filter;
           }
         }
         worker_cache->ListWorkers(&workers);
       }
-      for (const string& name : workers) {
+      for (const std::string& name : workers) {
         if (MatchFilters(name) ||
             DeviceNameUtils::IsSameAddressSpace(name, local_device_name)) {
           targets_.push_back(name);
@@ -252,7 +255,7 @@ class DeviceFinder {
       // never be called.
       NewRemoteDevices(
           env_->env, worker_cache_, targets_[i],
-          [this, i](const Status& s, std::vector<Device*>* devices) {
+          [this, i](const absl::Status& s, std::vector<Device*>* devices) {
             WhenFound(i, s, devices);
           });
     }
@@ -261,9 +264,9 @@ class DeviceFinder {
   // Every `kLoggingPeriodMs`, while the DeviceFinder is still waiting
   // to hear from workers, log a list of the workers who have not
   // responded.
-  const int32 kLoggingPeriodMs = 10 * 1000;
+  const int32_t kLoggingPeriodMs = 10 * 1000;
 
-  Status Wait() {
+  absl::Status Wait() {
     mutex_lock l(mu_);
     // TODO(mrry): Propagate a timeout here, since `num_pending_` may
     // never become zero.
@@ -285,11 +288,11 @@ class DeviceFinder {
   // The caller takes the ownership of returned remote devices.
   void GetRemoteDevices(const std::vector<Device*>& local,
                         std::vector<std::unique_ptr<Device>>* remote) {
-    std::unordered_set<string> names(local.size());
+    std::unordered_set<std::string> names(local.size());
     for (Device* dev : local) names.insert(dev->name());
     mutex_lock l(mu_);
     for (Device* dev : found_) {
-      const string& name = dev->name();
+      const std::string& name = dev->name();
       if (names.insert(name).second && MatchFilters(name)) {
         remote->push_back(std::unique_ptr<Device>(dev));
       } else {
@@ -311,11 +314,11 @@ class DeviceFinder {
   // List of targets to be contacted by this DeviceFinder. The
   // respective `bool` in `seen_targets_` indicates whether we have
   // heard from this target or not.
-  std::vector<string> targets_;
+  std::vector<std::string> targets_;
   std::vector<bool> seen_targets_ TF_GUARDED_BY(mu_);
-  Status status_;
+  absl::Status status_;
 
-  void WhenFound(int target_index, const Status& s,
+  void WhenFound(int target_index, const absl::Status& s,
                  std::vector<Device*>* devices) {
     mutex_lock l(mu_);
     seen_targets_[target_index] = true;
@@ -345,7 +348,7 @@ class DeviceFinder {
   }
 
   // Returns true iff 'name' matches one of the filters_.
-  bool MatchFilters(const string& name) {
+  bool MatchFilters(const std::string& name) {
     if (filters_.empty()) return true;
     DeviceNameUtils::ParsedName x;
     if (DeviceNameUtils::ParseFullName(name, &x)) {
@@ -363,7 +366,7 @@ class DeviceFinder {
 void Master::CreateSession(const CreateSessionRequest* req,
                            CreateSessionResponse* resp, MyClosure done) {
   SchedClosure([this, req, resp, done]() {
-    Status status;
+    absl::Status status;
     WorkerCacheFactoryOptions worker_cache_factory_options;
     auto call_done = gtl::MakeCleanup([&status, &done] { done(status); });
     status = ValidateExternalGraphDefSyntax(req->graph_def());
@@ -384,7 +387,7 @@ void Master::CreateSession(const CreateSessionRequest* req,
     if (!cluster_def.job().empty()) {
       worker_cache_factory_options.cluster_def = cluster_def;
       // If the target starts with gRPC protocol prefix, remove the prefix
-      string normalized_string(req->target());
+      std::string normalized_string(req->target());
       RE2::Replace(&normalized_string, kGrpcPrefixRegex, "");
 
       // Set the server_def's job_name and task_index fields.
@@ -427,7 +430,7 @@ void Master::CreateSession(const CreateSessionRequest* req,
           DeviceFinder::GetRemoteDevices(req->config().device_filters(), env_,
                                          worker_cache, remote_devices.get());
       if (!status.ok()) return;
-      device_set.reset(new DeviceSet);
+      device_set = std::make_unique<DeviceSet>();
       for (auto&& d : *remote_devices) {
         device_set->AddDevice(d.get());
         DeviceNameUtils::ParsedName name = d->parsed_name();
@@ -470,7 +473,7 @@ void Master::CreateSession(const CreateSessionRequest* req,
     options.config.mutable_experimental()
         ->set_disable_optimize_for_static_graph(true);
 
-    std::vector<string> filtered_worker_list;
+    std::vector<std::string> filtered_worker_list;
     DeviceFinder::GetRemoteWorkers(req->config().device_filters(), env_,
                                    worker_cache, &filtered_worker_list);
 
@@ -505,7 +508,7 @@ void Master::ExtendSession(const ExtendSessionRequest* req,
   }
 
   SchedClosure([session, req, resp, done]() {
-    Status status = ValidateExternalGraphDefSyntax(req->graph_def());
+    absl::Status status = ValidateExternalGraphDefSyntax(req->graph_def());
     if (status.ok()) {
       status = session->Extend(req, resp);
     }
@@ -516,8 +519,8 @@ void Master::ExtendSession(const ExtendSessionRequest* req,
 
 void Master::PartialRunSetup(const PartialRunSetupRequest* req,
                              PartialRunSetupResponse* resp, MyClosure done) {
-  Status s = recent_request_ids_.TrackUnique(req->request_id(),
-                                             "PartialRunSetup (Master)", *req);
+  absl::Status s = recent_request_ids_.TrackUnique(
+      req->request_id(), "PartialRunSetup (Master)", *req);
   if (!s.ok()) {
     done(s);
     return;
@@ -529,7 +532,7 @@ void Master::PartialRunSetup(const PartialRunSetupRequest* req,
   }
 
   SchedClosure([session, req, resp, done]() {
-    Status s = session->PartialRunSetup(req, resp);
+    absl::Status s = session->PartialRunSetup(req, resp);
     session->Unref();
     done(s);
   });
@@ -537,8 +540,8 @@ void Master::PartialRunSetup(const PartialRunSetupRequest* req,
 
 void Master::RunStep(CallOptions* opts, const RunStepRequestWrapper* req,
                      MutableRunStepResponseWrapper* resp, MyClosure done) {
-  Status s = recent_request_ids_.TrackUnique(req->request_id(),
-                                             "RunStep (Master)", req);
+  absl::Status s = recent_request_ids_.TrackUnique(req->request_id(),
+                                                   "RunStep (Master)", req);
   if (!s.ok()) {
     done(s);
     return;
@@ -551,9 +554,9 @@ void Master::RunStep(CallOptions* opts, const RunStepRequestWrapper* req,
   }
 
   SchedClosure([this, start_time, session, opts, req, resp, done]() {
-    Status status = session->Run(opts, *req, resp);
+    absl::Status status = session->Run(opts, *req, resp);
     session->Unref();
-    uint64 done_time = env_->env->NowMicros();
+    uint64_t done_time = env_->env->NowMicros();
     done(status);
     mutex_lock l(mu_);
     last_1000_steps_.AddValue((done_time - start_time) / 1e9);
@@ -584,7 +587,7 @@ void Master::CloseSession(const CloseSessionRequest* req,
   // Session Close() blocks on thread shutdown. Therefore, we need to
   // delete it in non-critical thread.
   SchedClosure([session, done]() {
-    Status s = session->Close();
+    absl::Status s = session->Close();
     session->Unref();
     done(s);
   });
@@ -602,13 +605,13 @@ void Master::ListDevices(const ListDevicesRequest* req,
         return;
       }
       core::ScopedUnref ref(session);
-      Status s = session->ListDevices(resp);
+      absl::Status s = session->ListDevices(resp);
       done(s);
       return;
     }
     std::vector<std::unique_ptr<Device>> remote_devices;
-    Status s = DeviceFinder::GetRemoteDevices({}, env_, env_->worker_cache,
-                                              &remote_devices);
+    absl::Status s = DeviceFinder::GetRemoteDevices(
+        {}, env_, env_->worker_cache, &remote_devices);
     if (s.ok()) {
       for (Device* dev : env_->local_devices) {
         *(resp->add_local_device()) = dev->attributes();
@@ -622,22 +625,22 @@ void Master::ListDevices(const ListDevicesRequest* req,
 }
 
 void Master::CleanupWorkers(const ResetRequest& reset) {
-  std::vector<string> worker_names;
+  std::vector<std::string> worker_names;
   DeviceFinder::GetRemoteWorkers(reset.device_filters(), env_,
                                  env_->worker_cache, &worker_names);
   if (!worker_names.empty()) {
     const int num_workers = worker_names.size();
-    std::vector<Notification> n(num_workers);
+    std::vector<absl::Notification> n(num_workers);
     CleanupAllRequest req;
     (*req.mutable_container()) = reset.container();
     std::vector<CleanupAllResponse> resp(num_workers);
     int c = 0;
     for (int i = 0; i < num_workers; ++i) {
-      const string& worker_name = worker_names[i];
+      const std::string& worker_name = worker_names[i];
       auto worker = env_->worker_cache->GetOrCreateWorker(worker_name);
       if (worker) {
         worker->CleanupAllAsync(
-            &req, &resp[i], [this, &n, worker_name, worker, c](Status s) {
+            &req, &resp[i], [this, &n, worker_name, worker, c](absl::Status s) {
               if (!s.ok()) {
                 LOG(ERROR) << "Worker CleanupAll failed: " << s;
               }
@@ -673,7 +676,7 @@ void Master::Reset(const ResetRequest* req, ResetResponse* resp,
   CleanupWorkers(*req);
 
   SchedClosure([sessions_to_close, done]() {
-    Status s;
+    absl::Status s;
     for (MasterSession* session : sessions_to_close) {
       s.Update(session->Close());
       session->Unref();
@@ -684,8 +687,8 @@ void Master::Reset(const ResetRequest* req, ResetResponse* resp,
 
 void Master::MakeCallable(const MakeCallableRequest* req,
                           MakeCallableResponse* resp, MyClosure done) {
-  Status s = recent_request_ids_.TrackUnique(req->request_id(),
-                                             "MakeCallable (Master)", *req);
+  absl::Status s = recent_request_ids_.TrackUnique(
+      req->request_id(), "MakeCallable (Master)", *req);
   if (!s.ok()) {
     done(s);
     return;
@@ -697,7 +700,7 @@ void Master::MakeCallable(const MakeCallableRequest* req,
   }
 
   SchedClosure([session, req, resp, done = std::move(done)]() {
-    Status s = session->MakeCallable(*req, resp);
+    absl::Status s = session->MakeCallable(*req, resp);
     session->Unref();
     done(s);
   });
@@ -705,8 +708,8 @@ void Master::MakeCallable(const MakeCallableRequest* req,
 
 void Master::RunCallable(CallOptions* opts, const RunCallableRequest* req,
                          RunCallableResponse* resp, MyClosure done) {
-  Status s = recent_request_ids_.TrackUnique(req->request_id(),
-                                             "RunCallable (Master)", *req);
+  absl::Status s = recent_request_ids_.TrackUnique(
+      req->request_id(), "RunCallable (Master)", *req);
   if (!s.ok()) {
     done(s);
     return;
@@ -718,7 +721,7 @@ void Master::RunCallable(CallOptions* opts, const RunCallableRequest* req,
   }
 
   SchedClosure([session, opts, req, resp, done = std::move(done)]() {
-    Status s = session->RunCallable(opts, *req, resp);
+    absl::Status s = session->RunCallable(opts, *req, resp);
     session->Unref();
     done(s);
   });
@@ -733,7 +736,7 @@ void Master::ReleaseCallable(const ReleaseCallableRequest* req,
   }
 
   SchedClosure([session, req, resp, done = std::move(done)]() {
-    Status s = session->ReleaseCallable(*req, resp);
+    absl::Status s = session->ReleaseCallable(*req, resp);
     session->Unref();
     done(s);
   });

@@ -20,7 +20,7 @@ SamlConfirmPasswordHandler::~SamlConfirmPasswordHandler() = default;
 
 void SamlConfirmPasswordHandler::Show(const std::string& email,
                                       bool is_manual) {
-  base::Value::Dict data;
+  base::DictValue data;
   data.Set("email", email);
   data.Set("manualPasswordInput", is_manual);
   ShowInWebUI(std::move(data));
@@ -28,6 +28,10 @@ void SamlConfirmPasswordHandler::Show(const std::string& email,
 
 void SamlConfirmPasswordHandler::ShowPasswordStep(bool retry) {
   CallExternalAPI("showPasswordStep", retry);
+}
+
+base::WeakPtr<SamlConfirmPasswordView> SamlConfirmPasswordHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 void SamlConfirmPasswordHandler::DeclareLocalizedValues(

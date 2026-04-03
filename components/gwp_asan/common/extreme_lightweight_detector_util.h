@@ -5,6 +5,8 @@
 #ifndef COMPONENTS_GWP_ASAN_COMMON_EXTREME_LIGHTWEIGHT_DETECTOR_UTIL_H_
 #define COMPONENTS_GWP_ASAN_COMMON_EXTREME_LIGHTWEIGHT_DETECTOR_UTIL_H_
 
+#include "base/compiler_specific.h"
+
 namespace gwp_asan::internal {
 
 // Provides utility functions shared by the quarantine code and crash handler.
@@ -29,8 +31,8 @@ class ExtremeLightweightDetectorUtil {
     std::fill_n(static_cast<decltype(zap_value)*>(ptr), count, zap_value);
     size_t remainder_offset = sizeof zap_value * count;
     size_t remainder_size = size - remainder_offset;
-    std::fill_n(static_cast<uint8_t*>(ptr) + remainder_offset, remainder_size,
-                kRemainderZapValue);
+    std::fill_n(UNSAFE_TODO(static_cast<uint8_t*>(ptr) + remainder_offset),
+                remainder_size, kRemainderZapValue);
   }
 
  private:

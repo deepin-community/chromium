@@ -1,15 +1,21 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 import * as SDK from '../../core/sdk/sdk.js';
 import type * as Protocol from '../../generated/protocol.js';
-import * as TimelineModel from '../../models/timeline_model/timeline_model.js';
-import * as TraceEngine from '../../models/trace/trace.js';
+import * as Geometry from '../../models/geometry/geometry.js';
+import * as Trace from '../../models/trace/trace.js';
 import * as UI from '../../ui/legacy/legacy.js';
+import * as Lit from '../../ui/lit/lit.js';
 import * as LayerViewer from '../layer_viewer/layer_viewer.js';
 
 import timelinePaintProfilerStyles from './timelinePaintProfiler.css.js';
+import {TracingFrameLayerTree} from './TracingLayerTree.js';
+
+const {html, render} = Lit;
+const {createRef, ref} = Lit.Directives;
 
 export class TimelinePaintProfilerView extends UI.SplitWidget.SplitWidget {
   private readonly logAndImageSplitWidget: UI.SplitWidget.SplitWidget;
@@ -18,21 +24,19 @@ export class TimelinePaintProfilerView extends UI.SplitWidget.SplitWidget {
   private readonly logTreeView: LayerViewer.PaintProfilerView.PaintProfilerCommandLogView;
   private needsUpdateWhenVisible: boolean;
   private pendingSnapshot: SDK.PaintProfiler.PaintProfilerSnapshot|null;
-  private event: TraceEngine.Types.TraceEvents.TraceEventData|null;
+  private event: Trace.Types.Events.Event|null;
   private paintProfilerModel: SDK.PaintProfiler.PaintProfilerModel|null;
   private lastLoadedSnapshot: SDK.PaintProfiler.PaintProfilerSnapshot|null;
-  #traceEngineData: TraceEngine.Handlers.Types.TraceParseData;
+  #parsedTrace: Trace.TraceModel.ParsedTrace;
 
-  constructor(traceEngineData: TraceEngine.Handlers.Types.TraceParseData) {
+  constructor(parsedTrace: Trace.TraceModel.ParsedTrace) {
     super(false, false);
-    this.element.classList.add('timeline-paint-profiler-view');
     this.setSidebarSize(60);
     this.setResizable(false);
 
-    this.#traceEngineData = traceEngineData;
+    this.#parsedTrace = parsedTrace;
 
-    this.logAndImageSplitWidget = new UI.SplitWidget.SplitWidget(true, false);
-    this.logAndImageSplitWidget.element.classList.add('timeline-paint-profiler-log-split');
+    this.logAndImageSplitWidget = new UI.SplitWidget.SplitWidget(true, false, 'timeline-paint-profiler-log-split');
     this.setMainWidget(this.logAndImageSplitWidget);
     this.imageView = new TimelinePaintImageView();
     this.logAndImageSplitWidget.setMainWidget(this.imageView);
@@ -40,7 +44,7 @@ export class TimelinePaintProfilerView extends UI.SplitWidget.SplitWidget {
     this.paintProfilerView =
         new LayerViewer.PaintProfilerView.PaintProfilerView(this.imageView.showImage.bind(this.imageView));
     this.paintProfilerView.addEventListener(
-        LayerViewer.PaintProfilerView.Events.WindowChanged, this.onWindowChanged, this);
+        LayerViewer.PaintProfilerView.Events.WINDOW_CHANGED, this.onWindowChanged, this);
     this.setSidebarWidget(this.paintProfilerView);
 
     this.logTreeView = new LayerViewer.PaintProfilerView.PaintProfilerCommandLogView();
@@ -68,33 +72,31 @@ export class TimelinePaintProfilerView extends UI.SplitWidget.SplitWidget {
     this.updateWhenVisible();
   }
 
-  #rasterEventHasTile(event: TraceEngine.Types.TraceEvents.TraceEventRasterTask): boolean {
+  #rasterEventHasTile(event: Trace.Types.Events.RasterTask): boolean {
     const data = event.args.tileData;
     if (!data) {
       return false;
     }
 
-    const frame = this.#traceEngineData.Frames.framesById[data.sourceFrameNumber];
-    if (!frame || !frame.layerTree) {
+    const frame = this.#parsedTrace.data.Frames.framesById[data.sourceFrameNumber];
+    if (!frame?.layerTree) {
       return false;
     }
     return true;
   }
 
-  setEvent(
-      paintProfilerModel: SDK.PaintProfiler.PaintProfilerModel,
-      event: TraceEngine.Types.TraceEvents.TraceEventData): boolean {
+  setEvent(paintProfilerModel: SDK.PaintProfiler.PaintProfilerModel, event: Trace.Types.Events.Event): boolean {
     this.releaseSnapshot();
     this.paintProfilerModel = paintProfilerModel;
     this.pendingSnapshot = null;
     this.event = event;
 
     this.updateWhenVisible();
-    if (TraceEngine.Types.TraceEvents.isTraceEventPaint(event)) {
-      const snapshot = this.#traceEngineData.LayerTree.paintsToSnapshots.get(event);
+    if (Trace.Types.Events.isPaint(event)) {
+      const snapshot = this.#parsedTrace.data.LayerTree.paintsToSnapshots.get(event);
       return Boolean(snapshot);
     }
-    if (TraceEngine.Types.TraceEvents.isTraceEventRasterTask(event)) {
+    if (Trace.Types.Events.isRasterTask(event)) {
       return this.#rasterEventHasTile(event);
     }
     return false;
@@ -108,7 +110,7 @@ export class TimelinePaintProfilerView extends UI.SplitWidget.SplitWidget {
     }
   }
 
-  async #rasterTilePromise(rasterEvent: TraceEngine.Types.TraceEvents.TraceEventRasterTask): Promise<{
+  async #rasterTilePromise(rasterEvent: Trace.Types.Events.RasterTask): Promise<{
     rect: Protocol.DOM.Rect,
     snapshot: SDK.PaintProfiler.PaintProfilerSnapshot,
   }|null> {
@@ -126,20 +128,20 @@ export class TimelinePaintProfilerView extends UI.SplitWidget.SplitWidget {
       return null;
     }
 
-    const frame = this.#traceEngineData.Frames.framesById[data.sourceFrameNumber];
-    if (!frame || !frame.layerTree) {
+    const frame = this.#parsedTrace.data.Frames.framesById[data.sourceFrameNumber];
+    if (!frame?.layerTree) {
       return null;
     }
 
-    const layerTree = new TimelineModel.TracingLayerTree.TracingFrameLayerTree(
+    const layerTree = new TracingFrameLayerTree(
         target,
         frame.layerTree,
     );
     const tracingLayerTree = await layerTree.layerTreePromise();
-    return tracingLayerTree ? tracingLayerTree.pictureForRasterTile(data.tileId.id_ref) : null;
+    return tracingLayerTree ? await tracingLayerTree.pictureForRasterTile(data.tileId.id_ref) : null;
   }
 
-  private update(): void {
+  update(): void {
     this.logTreeView.setCommandLog([]);
     void this.paintProfilerView.setSnapshotAndLog(null, [], null);
 
@@ -149,23 +151,23 @@ export class TimelinePaintProfilerView extends UI.SplitWidget.SplitWidget {
     }|null>;
     if (this.pendingSnapshot) {
       snapshotPromise = Promise.resolve({rect: null, snapshot: this.pendingSnapshot});
-    } else if (this.event && this.paintProfilerModel && TraceEngine.Types.TraceEvents.isTraceEventPaint(this.event)) {
+    } else if (this.event && this.paintProfilerModel && Trace.Types.Events.isPaint(this.event)) {
       // When we process events (TimelineModel#processEvent) and find a
       // snapshot event, we look for the last paint that occurred and link the
       // snapshot to that paint event. That is why here if the event is a Paint
       // event, we look to see if it has had a matching picture event set for
       // it.
-      const snapshotEvent = this.#traceEngineData.LayerTree.paintsToSnapshots.get(this.event);
+      const snapshotEvent = this.#parsedTrace.data.LayerTree.paintsToSnapshots.get(this.event);
       if (snapshotEvent) {
         const encodedData = snapshotEvent.args.snapshot.skp64;
         snapshotPromise = this.paintProfilerModel.loadSnapshot(encodedData).then(snapshot => {
-          return snapshot && {rect: null, snapshot: snapshot};
+          return snapshot && {rect: null, snapshot};
         });
       } else {
         snapshotPromise = Promise.resolve(null);
       }
 
-    } else if (this.event && TraceEngine.Types.TraceEvents.isTraceEventRasterTask(this.event)) {
+    } else if (this.event && Trace.Types.Events.isRasterTask(this.event)) {
       snapshotPromise = this.#rasterTilePromise(this.event);
     } else {
       console.assert(false, 'Unexpected event type or no snapshot');
@@ -204,53 +206,112 @@ export class TimelinePaintProfilerView extends UI.SplitWidget.SplitWidget {
   }
 }
 
+export interface TimelinePaintImageViewInput {
+  maskElementHidden: boolean;
+  imageContainerHidden: boolean;
+  imageURL: string;
+  imageContainerWebKitTransform: string;
+  maskElementStyle: {
+    width?: string,
+    height?: string,
+    borderLeftWidth?: string,
+    borderTopWidth?: string,
+    borderRightWidth?: string,
+    borderBottomWidth?: string,
+  };
+}
+
+export const DEFAULT_VIEW = (input: TimelinePaintImageViewInput, output: undefined, target: HTMLElement): {
+  imageElementNaturalHeight: number,
+  imageElementNaturalWidth: number,
+} => {
+  const imageElementRef = createRef<HTMLImageElement>();
+  // clang-format off
+  render(html`
+  <div class="paint-profiler-image-view fill">
+    <div class="paint-profiler-image-container" style="-webkit-transform: ${input.imageContainerWebKitTransform}">
+      <img src=${input.imageURL} display=${input.imageContainerHidden ? 'none' : 'block'} ${ref(imageElementRef)}>
+      <div style=${Lit.Directives.styleMap({
+        display: input.maskElementHidden ? 'none' : 'block',
+        ...input.maskElementStyle,})}>
+      </div>
+    </div>
+  </div>`,
+ target);
+  // clang-format on
+
+  // The elements are guaranteed to exist after render completes
+  // because they are not conditionally rendered within the template.
+  const imageElement = imageElementRef.value;
+
+  if (!imageElement?.naturalHeight || !imageElement.naturalWidth) {
+    throw new Error('ImageElement were not found in the TimelinePaintImageView.');
+  }
+
+  return {imageElementNaturalHeight: imageElement.naturalHeight, imageElementNaturalWidth: imageElement.naturalWidth};
+};
 export class TimelinePaintImageView extends UI.Widget.Widget {
-  private imageContainer: HTMLElement;
-  private imageElement: HTMLImageElement;
-  private readonly maskElement: HTMLElement;
   private transformController: LayerViewer.TransformController.TransformController;
   private maskRectangle?: Protocol.DOM.Rect|null;
-  constructor() {
-    super(true);
 
-    this.contentElement.classList.add('fill', 'paint-profiler-image-view');
-    this.imageContainer = this.contentElement.createChild('div', 'paint-profiler-image-container');
-    this.imageElement = (this.imageContainer.createChild('img') as HTMLImageElement);
-    this.maskElement = this.imageContainer.createChild('div');
-    this.imageElement.addEventListener('load', this.updateImagePosition.bind(this), false);
-    this.transformController =
-        new LayerViewer.TransformController.TransformController((this.contentElement as HTMLElement), true);
+  #inputData: TimelinePaintImageViewInput = {
+    maskElementHidden: true,
+    imageContainerHidden: true,
+    imageURL: '',
+    imageContainerWebKitTransform: '',
+    maskElementStyle: {},
+  };
+
+  #view: typeof DEFAULT_VIEW;
+  #imageElementDimensions?: {
+    naturalHeight: number,
+    naturalWidth: number,
+  };
+
+  constructor(view = DEFAULT_VIEW) {
+    super();
+    this.registerRequiredCSS(timelinePaintProfilerStyles);
+    this.#view = view;
+    this.transformController = new LayerViewer.TransformController.TransformController((this.contentElement), true);
     this.transformController.addEventListener(
-        LayerViewer.TransformController.Events.TransformChanged, this.updateImagePosition, this);
+        LayerViewer.TransformController.Events.TRANSFORM_CHANGED, this.updateImagePosition, this);
   }
 
   override onResize(): void {
-    if (this.imageElement.src) {
-      this.updateImagePosition();
-    }
+    this.requestUpdate();
+    this.updateImagePosition();
   }
 
   private updateImagePosition(): void {
-    const width = this.imageElement.naturalWidth;
-    const height = this.imageElement.naturalHeight;
+    if (!this.#imageElementDimensions) {
+      return;
+    }
+
+    const width = this.#imageElementDimensions.naturalWidth;
+    const height = this.#imageElementDimensions.naturalHeight;
     const clientWidth = this.contentElement.clientWidth;
     const clientHeight = this.contentElement.clientHeight;
 
     const paddingFraction = 0.1;
     const paddingX = clientWidth * paddingFraction;
-    const paddingY = clientHeight * paddingFraction;
-    const scaleX = (clientWidth - paddingX) / width;
-    const scaleY = (clientHeight - paddingY) / height;
-    const scale = Math.min(scaleX, scaleY);
+    const scale = clientHeight / height;
 
+    const oldMaskStyle = JSON.stringify(this.#inputData.maskElementStyle);
+    let newMaskStyle = {};
     if (this.maskRectangle) {
-      const style = this.maskElement.style;
-      style.width = width + 'px';
-      style.height = height + 'px';
-      style.borderLeftWidth = this.maskRectangle.x + 'px';
-      style.borderTopWidth = this.maskRectangle.y + 'px';
-      style.borderRightWidth = (width - this.maskRectangle.x - this.maskRectangle.width) + 'px';
-      style.borderBottomWidth = (height - this.maskRectangle.y - this.maskRectangle.height) + 'px';
+      newMaskStyle = {
+        width: width + 'px',
+        height: height + 'px',
+        borderLeftWidth: this.maskRectangle.x + 'px',
+        borderTopWidth: this.maskRectangle.y + 'px',
+        borderRightWidth: (width - this.maskRectangle.x - this.maskRectangle.width) + 'px',
+        borderBottomWidth: (height - this.maskRectangle.y - this.maskRectangle.height) + 'px',
+      };
+    }
+    this.#inputData.maskElementStyle = newMaskStyle;
+
+    if (!this.transformController) {
+      return;
     }
     this.transformController.setScaleConstraints(0.5, 10 / scale);
     let matrix = new WebKitCSSMatrix()
@@ -258,29 +319,41 @@ export class TimelinePaintImageView extends UI.Widget.Widget {
                      .translate(clientWidth / 2, clientHeight / 2)
                      .scale(scale, scale)
                      .translate(-width / 2, -height / 2);
-    const bounds = UI.Geometry.boundsForTransformedPoints(matrix, [0, 0, 0, width, height, 0]);
-    this.transformController.clampOffsets(
-        paddingX - bounds.maxX, clientWidth - paddingX - bounds.minX, paddingY - bounds.maxY,
-        clientHeight - paddingY - bounds.minY);
+    const bounds = Geometry.boundsForTransformedPoints(matrix, [0, 0, 0, width, height, 0]);
+    this.transformController.clampOffsets(paddingX - bounds.maxX, clientWidth - paddingX - bounds.minX, 0, 0);
     matrix = new WebKitCSSMatrix()
                  .translate(this.transformController.offsetX(), this.transformController.offsetY())
                  .multiply(matrix);
-    this.imageContainer.style.webkitTransform = matrix.toString();
+
+    const oldTransform = this.#inputData.imageContainerWebKitTransform;
+    const newTransform = matrix.toString();
+    this.#inputData.imageContainerWebKitTransform = newTransform;
+
+    if (oldTransform !== newTransform || oldMaskStyle !== JSON.stringify(newMaskStyle)) {
+      this.requestUpdate();
+    }
   }
 
   showImage(imageURL?: string): void {
-    this.imageContainer.classList.toggle('hidden', !imageURL);
+    this.#inputData.imageContainerHidden = !imageURL;
     if (imageURL) {
-      this.imageElement.src = imageURL;
+      this.#inputData.imageURL = imageURL;
     }
+    this.requestUpdate();
   }
 
   setMask(maskRectangle: Protocol.DOM.Rect|null): void {
     this.maskRectangle = maskRectangle;
-    this.maskElement.classList.toggle('hidden', !maskRectangle);
+
+    this.#inputData.maskElementHidden = !maskRectangle;
+    this.requestUpdate();
   }
-  override wasShown(): void {
-    super.wasShown();
-    this.registerCSSFiles([timelinePaintProfilerStyles]);
+
+  override performUpdate(): void {
+    const {imageElementNaturalHeight, imageElementNaturalWidth} =
+        this.#view(this.#inputData, undefined, this.contentElement);
+    this.#imageElementDimensions = {naturalHeight: imageElementNaturalHeight, naturalWidth: imageElementNaturalWidth};
+    // Image can only be updated to correctly fit the component when the component has loaded.
+    this.updateImagePosition();
   }
 }

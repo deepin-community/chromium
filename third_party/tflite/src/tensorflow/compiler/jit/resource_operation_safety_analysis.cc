@@ -96,9 +96,10 @@ namespace {
 // Maps `n` to the XlaResourceOpKind corresponding to its operation.  If `n` is
 // not a resource operation recognized by XLA then sets `out_resource_op_kind`
 // to nullopt.
-Status XlaResourceOpKindForNode(
+absl::Status XlaResourceOpKindForNode(
     const Node& n, const FunctionLibraryDefinition* flib_def,
-    const std::function<Status(const Node&, bool*)>& resource_ops_to_ignore,
+    const std::function<absl::Status(const Node&, bool*)>&
+        resource_ops_to_ignore,
     std::optional<XlaResourceOpKind>* out_resource_op_kind) {
   bool should_ignore = false;
   if (resource_ops_to_ignore) {
@@ -142,7 +143,7 @@ bool IsEdgeSafe(XlaResourceOpKind from, XlaResourceOpKind to) {
 
 using ResourceOp = std::pair<int, XlaResourceOpKind>;
 
-string ResourceOpToString(const ResourceOp& resource_op) {
+std::string ResourceOpToString(const ResourceOp& resource_op) {
   return absl::StrCat(
       resource_op.first, ": ",
       XlaResourceOpInfo::XlaResourceOpKindToString(resource_op.second));
@@ -232,23 +233,24 @@ class ResourceOpSet {
   void operator=(const ResourceOpSet&) = delete;
 };
 
-string ResourceOpSetToString(const ResourceOpSet& resource_op_set) {
-  std::vector<string> elements_debug_string;
+std::string ResourceOpSetToString(const ResourceOpSet& resource_op_set) {
+  std::vector<std::string> elements_debug_string;
   std::transform(resource_op_set.begin(), resource_op_set.end(),
                  std::back_inserter(elements_debug_string), ResourceOpToString);
   return absl::StrCat("{", absl::StrJoin(elements_debug_string, ","), "}");
 }
 
-string NodeToString(const Node& n, XlaResourceOpKind resource_op_kind) {
+std::string NodeToString(const Node& n, XlaResourceOpKind resource_op_kind) {
   return absl::StrCat(
       "[", n.name(), ": ", n.type_string(), "(",
       XlaResourceOpInfo::XlaResourceOpKindToString(resource_op_kind), ")", "]");
 }
 }  // namespace
 
-Status ComputeIncompatibleResourceOperationPairs(
+absl::Status ComputeIncompatibleResourceOperationPairs(
     const Graph& g, const FunctionLibraryDefinition* flib_def,
-    const std::function<Status(const Node&, bool*)>& resource_ops_to_ignore,
+    const std::function<absl::Status(const Node&, bool*)>&
+        resource_ops_to_ignore,
     std::vector<std::pair<int, int>>* result) {
   CHECK(result->empty());
 

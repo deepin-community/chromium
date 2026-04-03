@@ -25,13 +25,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "src/tint/lang/core/access.h"
-#include "src/tint/lang/core/address_space.h"
-#include "src/tint/lang/core/builtin_value.h"
+#include "src/tint/lang/core/enums.h"
 #include "src/tint/lang/core/fluent_types.h"
-#include "src/tint/lang/core/interpolation_sampling.h"
-#include "src/tint/lang/core/interpolation_type.h"
-#include "src/tint/lang/core/texel_format.h"
 #include "src/tint/lang/wgsl/resolver/resolver.h"
 #include "src/tint/lang/wgsl/resolver/resolver_helper_test.h"
 
@@ -51,7 +46,7 @@ using ResolverAccessUsedWithTemplateArgs = ResolverTestWithParam<std::string_vie
 TEST_P(ResolverAccessUsedWithTemplateArgs, Test) {
     // @group(0) @binding(0) var t : texture_storage_2d<rgba8unorm, ACCESS<i32>>;
     auto* tmpl = Ident(Source{{12, 34}}, GetParam(), "i32");
-    GlobalVar("v", ty("texture_storage_2d", "rgba8unorm", tmpl), Group(0_u), Binding(0_u));
+    GlobalVar("v", ty.AsType("texture_storage_2d", "rgba8unorm", tmpl), Group(0_u), Binding(0_u));
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(), "12:34 error: access '" + std::string(GetParam()) +
@@ -71,7 +66,7 @@ TEST_P(ResolverAddressSpaceUsedWithTemplateArgs, Test) {
     // fn f(p : ptr<ADDRESS_SPACE<T>, f32) {}
 
     auto* tmpl = Ident(Source{{12, 34}}, GetParam(), "T");
-    Func("f", Vector{Param("p", ty("ptr", tmpl, ty.f32()))}, ty.void_(), tint::Empty);
+    Func("f", Vector{Param("p", ty.AsType("ptr", tmpl, ty.f32()))}, ty.void_(), tint::Empty);
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(), "12:34 error: address space '" + std::string(GetParam()) +
                                 "' does not take template arguments");
@@ -82,89 +77,15 @@ INSTANTIATE_TEST_SUITE_P(,
                          testing::ValuesIn(core::kAddressSpaceStrings));
 
 ////////////////////////////////////////////////////////////////////////////////
-// builtin value
-////////////////////////////////////////////////////////////////////////////////
-using ResolverBuiltinValueUsedWithTemplateArgs = ResolverTestWithParam<std::string_view>;
-
-TEST_P(ResolverBuiltinValueUsedWithTemplateArgs, Test) {
-    // fn f(@builtin(BUILTIN<T>) p : vec4<f32>) {}
-    auto* tmpl = Ident(Source{{12, 34}}, GetParam(), "T");
-    Func("f", Vector{Param("p", ty.vec4<f32>(), Vector{Builtin(tmpl)})}, ty.void_(), tint::Empty,
-         Vector{Stage(ast::PipelineStage::kFragment)});
-    EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: builtin value '" + std::string(GetParam()) +
-                                "' does not take template arguments");
-}
-
-INSTANTIATE_TEST_SUITE_P(,
-                         ResolverBuiltinValueUsedWithTemplateArgs,
-                         testing::ValuesIn(core::kBuiltinValueStrings));
-
-////////////////////////////////////////////////////////////////////////////////
-// interpolation sampling
-////////////////////////////////////////////////////////////////////////////////
-using ResolverInterpolationSamplingUsedWithTemplateArgs = ResolverTestWithParam<std::string_view>;
-
-TEST_P(ResolverInterpolationSamplingUsedWithTemplateArgs, Test) {
-    // @fragment
-    // fn f(@location(0) @interpolate(linear, INTERPOLATION_SAMPLING<T>) p : vec4<f32>) {}
-    auto* tmpl = Ident(Source{{12, 34}}, GetParam(), "T");
-    Func("f",
-         Vector{Param("p", ty.vec4<f32>(),
-                      Vector{
-                          Location(0_a),
-                          Interpolate(core::InterpolationType::kLinear, tmpl),
-                      })},
-         ty.void_(), tint::Empty,
-         Vector{
-             Stage(ast::PipelineStage::kFragment),
-         });
-    EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: interpolation sampling '" + std::string(GetParam()) +
-                                "' does not take template arguments");
-}
-
-INSTANTIATE_TEST_SUITE_P(,
-                         ResolverInterpolationSamplingUsedWithTemplateArgs,
-                         testing::ValuesIn(core::kInterpolationSamplingStrings));
-
-////////////////////////////////////////////////////////////////////////////////
-// interpolation type
-////////////////////////////////////////////////////////////////////////////////
-using ResolverInterpolationTypeUsedWithTemplateArgs = ResolverTestWithParam<std::string_view>;
-
-TEST_P(ResolverInterpolationTypeUsedWithTemplateArgs, Test) {
-    // @fragment
-    // fn f(@location(0) @interpolate(INTERPOLATION_TYPE<T>, center) p : vec4<f32>) {}
-    auto* tmpl = Ident(Source{{12, 34}}, GetParam(), "T");
-    Func("f",
-         Vector{Param("p", ty.vec4<f32>(),
-                      Vector{
-                          Location(0_a),
-                          Interpolate(tmpl, core::InterpolationSampling::kCenter),
-                      })},
-         ty.void_(), tint::Empty,
-         Vector{
-             Stage(ast::PipelineStage::kFragment),
-         });
-    EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: interpolation type '" + std::string(GetParam()) +
-                                "' does not take template arguments");
-}
-
-INSTANTIATE_TEST_SUITE_P(,
-                         ResolverInterpolationTypeUsedWithTemplateArgs,
-                         testing::ValuesIn(core::kInterpolationTypeStrings));
-
-////////////////////////////////////////////////////////////////////////////////
 // texel format
 ////////////////////////////////////////////////////////////////////////////////
 using ResolverTexelFormatUsedWithTemplateArgs = ResolverTestWithParam<std::string_view>;
 
 TEST_P(ResolverTexelFormatUsedWithTemplateArgs, Test) {
     // @group(0) @binding(0) var t : texture_storage_2d<TEXEL_FORMAT<T>, write>
-    auto* tmpl = Ident(Source{{12, 34}}, GetParam(), "T");
-    GlobalVar("t", ty("texture_storage_2d", ty(tmpl), "write"), Group(0_u), Binding(0_u));
+    GlobalVar(
+        "t", ty.AsType("texture_storage_2d", ty.AsType(Source{{12, 34}}, GetParam(), "T"), "write"),
+        Group(0_u), Binding(0_u));
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(), "12:34 error: texel format '" + std::string(GetParam()) +
                                 "' does not take template arguments");

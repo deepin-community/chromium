@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/webui/ash/settings/pages/privacy/metrics_consent_handler.h"
 
-#include "ash/constants/ash_features.h"
 #include "base/check.h"
 #include "chrome/browser/ash/settings/stats_reporting_controller.h"
 #include "chrome/browser/browser_process.h"
@@ -51,13 +50,13 @@ void MetricsConsentHandler::OnJavascriptAllowed() {}
 void MetricsConsentHandler::OnJavascriptDisallowed() {}
 
 void MetricsConsentHandler::HandleGetMetricsConsentState(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   CHECK_EQ(1U, args.size());
 
   const base::Value& callback_id = args[0];
 
-  base::Value::Dict response;
+  base::DictValue response;
 
   base::Value consent_pref =
       ShouldUseUserConsent()
@@ -71,7 +70,7 @@ void MetricsConsentHandler::HandleGetMetricsConsentState(
 }
 
 void MetricsConsentHandler::HandleUpdateMetricsConsent(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   CHECK_EQ(2U, args.size());
   CHECK_EQ(args[1].type(), base::Value::Type::DICT);
@@ -99,12 +98,18 @@ void MetricsConsentHandler::HandleUpdateMetricsConsent(
 }
 
 bool MetricsConsentHandler::IsMetricsConsentConfigurable() const {
+  // TODO(b/333911538): In the interim, completely disable child users
+  // from being able to toggle consent in the settings. Once the parent sets
+  // the consent for the child during OOBE, it cannot be updated afterwards.
+  if (user_manager_->IsLoggedInAsChildUser()) {
+    return false;
+  }
+
   return ShouldUseUserConsent() || user_manager_->IsCurrentUserOwner();
 }
 
 bool MetricsConsentHandler::ShouldUseUserConsent() const {
-  return base::FeatureList::IsEnabled(ash::features::kPerUserMetrics) &&
-         metrics_service_->GetCurrentUserMetricsConsent().has_value();
+  return metrics_service_->GetCurrentUserMetricsConsent().has_value();
 }
 
 }  // namespace ash::settings

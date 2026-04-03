@@ -29,15 +29,17 @@
 #define SRC_DAWN_NATIVE_COMMANDENCODER_H_
 
 #include <string>
-
-#include "dawn/native/dawn_platform.h"
-#include "partition_alloc/pointers/raw_ptr.h"
+#include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "dawn/common/NonMovable.h"
+#include "dawn/common/StackAllocated.h"
 #include "dawn/native/EncodingContext.h"
 #include "dawn/native/Error.h"
 #include "dawn/native/ObjectBase.h"
 #include "dawn/native/PassResourceUsage.h"
+#include "dawn/native/dawn_platform.h"
+#include "partition_alloc/pointers/raw_ptr.h"
 
 namespace dawn::native {
 
@@ -53,12 +55,13 @@ class CommandEncoder final : public ApiObjectBase {
   public:
     static Ref<CommandEncoder> Create(DeviceBase* device,
                                       const UnpackedPtr<CommandEncoderDescriptor>& descriptor);
-    static Ref<CommandEncoder> MakeError(DeviceBase* device, const char* label);
+    static Ref<CommandEncoder> MakeError(DeviceBase* device, StringView label);
 
     ObjectType GetType() const override;
 
     CommandIterator AcquireCommands();
     CommandBufferResourceUsage AcquireResourceUsages();
+    std::vector<IndirectDrawMetadata> AcquireIndirectDrawMetadata();
 
     void TrackUsedQuerySet(QuerySetBase* querySet);
     void TrackQueryAvailability(QuerySetBase* querySet, uint32_t queryIndex);
@@ -77,27 +80,28 @@ class CommandEncoder final : public ApiObjectBase {
                                                      BufferBase* destination,
                                                      uint64_t destinationOffset,
                                                      uint64_t size);
-    void APICopyBufferToTexture(const ImageCopyBuffer* source,
-                                const ImageCopyTexture* destination,
+    void APICopyBufferToTexture(const TexelCopyBufferInfo* source,
+                                const TexelCopyTextureInfo* destination,
                                 const Extent3D* copySize);
-    void APICopyTextureToBuffer(const ImageCopyTexture* source,
-                                const ImageCopyBuffer* destination,
+    void APICopyTextureToBuffer(const TexelCopyTextureInfo* source,
+                                const TexelCopyBufferInfo* destination,
                                 const Extent3D* copySize);
-    void APICopyTextureToTexture(const ImageCopyTexture* source,
-                                 const ImageCopyTexture* destination,
+    void APICopyTextureToTexture(const TexelCopyTextureInfo* source,
+                                 const TexelCopyTextureInfo* destination,
                                  const Extent3D* copySize);
     void APIClearBuffer(BufferBase* destination, uint64_t destinationOffset, uint64_t size);
 
-    void APIInjectValidationError(const char* message);
-    void APIInsertDebugMarker(const char* groupLabel);
+    void APIInjectValidationError(StringView message);
+    void APIInsertDebugMarker(StringView groupLabel);
     void APIPopDebugGroup();
-    void APIPushDebugGroup(const char* groupLabel);
+    void APIPushDebugGroup(StringView groupLabel);
 
     void APIResolveQuerySet(QuerySetBase* querySet,
                             uint32_t firstQuery,
                             uint32_t queryCount,
                             BufferBase* destination,
                             uint64_t destinationOffset);
+    void APISetResourceTable(ResourceTableBase* table);
     void APIWriteBuffer(BufferBase* buffer,
                         uint64_t bufferOffset,
                         const uint8_t* data,
@@ -114,14 +118,11 @@ class CommandEncoder final : public ApiObjectBase {
     // `InternalUsageScope` is a scoped class that temporarily changes validation such that the
     // command encoder includes internal resource usages.
     friend class InternalUsageScope;
-    class [[nodiscard]] InternalUsageScope : public NonMovable {
+    class [[nodiscard]] InternalUsageScope : public NonMovable, public StackAllocated {
       public:
         ~InternalUsageScope();
 
       private:
-        // Disable heap allocation
-        void* operator new(size_t) = delete;
-
         // Only CommandEncoder can make this class.
         friend class CommandEncoder;
         InternalUsageScope(CommandEncoder* encoder);
@@ -132,24 +133,24 @@ class CommandEncoder final : public ApiObjectBase {
 
     [[nodiscard]] InternalUsageScope MakeInternalUsageScope();
 
+    ResourceTableBase* GetResourceTable() const { return mResourceTable; }
+
   private:
     CommandEncoder(DeviceBase* device, const UnpackedPtr<CommandEncoderDescriptor>& descriptor);
-    CommandEncoder(DeviceBase* device, ObjectBase::ErrorTag tag, const char* label);
+    CommandEncoder(DeviceBase* device, ObjectBase::ErrorTag tag, StringView label);
 
-    void DestroyImpl() override;
-
-    ResultOrError<std::function<void()>> ApplyRenderPassWorkarounds(
-        DeviceBase* device,
-        RenderPassResourceUsageTracker* usageTracker,
-        BeginRenderPassCmd* cmd,
-        std::function<void()> passEndCallback = nullptr);
+    void DestroyImpl(DestroyReason reason) override;
 
     MaybeError ValidateFinish() const;
+
+    // An owning Ref<> is part of the CommandAllocator.
+    raw_ptr<ResourceTableBase> mResourceTable = nullptr;
 
     EncodingContext mEncodingContext;
     absl::flat_hash_set<BufferBase*> mTopLevelBuffers;
     absl::flat_hash_set<TextureBase*> mTopLevelTextures;
     absl::flat_hash_set<QuerySetBase*> mUsedQuerySets;
+    absl::flat_hash_set<ResourceTableBase*> mUsedResourceTables;
 
     uint64_t mDebugGroupStackSize = 0;
 

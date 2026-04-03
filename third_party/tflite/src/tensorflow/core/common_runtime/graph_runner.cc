@@ -51,14 +51,14 @@ class SimpleRendezvous : public RendezvousInterface {
  public:
   explicit SimpleRendezvous() {}
 
-  Status Send(const ParsedKey& parsed, const Args& send_args, const Tensor& val,
-              const bool is_dead) override {
+  absl::Status Send(const ParsedKey& parsed, const Args& send_args,
+                    const Tensor& val, const bool is_dead) override {
     if (is_dead) {
       return errors::Internal("Send of a dead tensor");
     }
 
     mutex_lock l(mu_);
-    string edge_name(parsed.edge_name);
+    std::string edge_name(parsed.edge_name);
     if (table_.count(edge_name) > 0) {
       return errors::Internal("Send of an already sent tensor");
     }
@@ -69,9 +69,9 @@ class SimpleRendezvous : public RendezvousInterface {
   void RecvAsync(const ParsedKey& parsed, const Args& recv_args,
                  DoneCallback done) override {
     Tensor tensor;
-    Status status = absl::OkStatus();
+    absl::Status status = absl::OkStatus();
     {
-      string key(parsed.edge_name);
+      std::string key(parsed.edge_name);
       mutex_lock l(mu_);
       if (table_.count(key) <= 0) {
         status = errors::Internal("Did not find key ", key);
@@ -82,10 +82,10 @@ class SimpleRendezvous : public RendezvousInterface {
     done(status, Args{}, recv_args, tensor, false);
   }
 
-  void StartAbort(const Status& status) override {}
+  void StartAbort(const absl::Status& status) override {}
 
  private:
-  typedef std::unordered_map<string, Tensor> Table;
+  typedef std::unordered_map<std::string, Tensor> Table;
 
   mutex mu_;
   Table table_ TF_GUARDED_BY(mu_);
@@ -100,10 +100,11 @@ GraphRunner::GraphRunner(Device* device) : device_(device) {}
 
 GraphRunner::~GraphRunner() {}
 
-Status GraphRunner::Run(Graph* graph, FunctionLibraryRuntime* function_library,
-                        const NamedTensorList& inputs,
-                        const std::vector<string>& output_names,
-                        std::vector<Tensor>* outputs) {
+absl::Status GraphRunner::Run(Graph* graph,
+                              FunctionLibraryRuntime* function_library,
+                              const NamedTensorList& inputs,
+                              const std::vector<std::string>& output_names,
+                              std::vector<Tensor>* outputs) {
   if (device_ == nullptr) {
     return errors::NotFound("Cannot find a device for GraphRunner.");
   }
@@ -129,12 +130,12 @@ Status GraphRunner::Run(Graph* graph, FunctionLibraryRuntime* function_library,
   SimpleRendezvous rendez;
 
   // Extract the input names and keys, and feed in the inputs.
-  std::vector<string> input_names;
+  std::vector<std::string> input_names;
   for (const auto& in : inputs) {
-    const string& tensor_name = in.first;
+    const std::string& tensor_name = in.first;
     input_names.emplace_back(tensor_name);
-    string full_key = Rendezvous::CreateKey("/device:CPU:0", 1, "/device:CPU:1",
-                                            tensor_name, FrameAndIter(0, 0));
+    std::string full_key = Rendezvous::CreateKey(
+        "/device:CPU:0", 1, "/device:CPU:1", tensor_name, FrameAndIter(0, 0));
     Rendezvous::ParsedKey parsed;
     TF_RETURN_IF_ERROR(Rendezvous::ParseKey(full_key, &parsed));
     TF_RETURN_IF_ERROR(rendez.Send(parsed, Rendezvous::Args(), in.second,
@@ -184,13 +185,16 @@ Status GraphRunner::Run(Graph* graph, FunctionLibraryRuntime* function_library,
 
   CancellationManager cancellation_manager;
   args.cancellation_manager = &cancellation_manager;
+  if (function_library != nullptr) {
+    args.session_config = function_library->config_proto();
+  }
 
   // Run the graph.
   TF_RETURN_IF_ERROR(executor->Run(args));
 
   outputs->resize(output_names.size());
   for (size_t i = 0; i < output_names.size(); ++i) {
-    const string& output_key =
+    const std::string& output_key =
         Rendezvous::CreateKey("/device:CPU:0", 1, "/device:CPU:1",
                               output_names[i], FrameAndIter(0, 0));
     Rendezvous::ParsedKey parsed;

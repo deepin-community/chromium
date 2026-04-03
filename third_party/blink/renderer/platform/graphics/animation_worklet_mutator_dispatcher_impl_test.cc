@@ -63,13 +63,12 @@ class MockAnimationWorkletMutator
   // signaled. This blocking ensures that tests of async mutations do not
   // encounter race conditions when validating queuing strategies.
   void BlockWorkletThread() {
-    PostCrossThreadTask(
-        *expected_runner_, FROM_HERE,
-        CrossThreadBindOnce(
-            [](base::WaitableEvent* start_processing_event) {
-              start_processing_event->Wait();
-            },
-            WTF::CrossThreadUnretained(&start_processing_event_)));
+    PostCrossThreadTask(*expected_runner_, FROM_HERE,
+                        CrossThreadBindOnce(
+                            [](base::WaitableEvent* start_processing_event) {
+                              start_processing_event->Wait();
+                            },
+                            CrossThreadUnretained(&start_processing_event_)));
   }
 
   void UnblockWorkletThread() { start_processing_event_.Signal(); }
@@ -113,7 +112,7 @@ class AnimationWorkletMutatorDispatcherImplTest : public ::testing::Test {
 
   test::TaskEnvironment task_environment_;
   std::unique_ptr<::testing::StrictMock<MockCompositorMutatorClient>> client_;
-  raw_ptr<AnimationWorkletMutatorDispatcherImpl, ExperimentalRenderer> mutator_;
+  raw_ptr<AnimationWorkletMutatorDispatcherImpl> mutator_;
 };
 
 std::unique_ptr<AnimationWorkletDispatcherInput> CreateTestMutatorInput() {

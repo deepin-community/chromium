@@ -22,6 +22,14 @@ enum class PrivateKeySource {
   // Key created from inside the browser, which is not protected by any hardware
   // mechanism.
   kSoftwareKey = 1,
+
+  // Key created by the operating system that is not hardware-backed.
+  kOsSoftwareKey = 2,
+
+  // Key created by the Android StrongBox service.
+  kAndroidKey = 3,
+
+  kMaxValue = kAndroidKey
 };
 
 // Converts a `proto_key_source` from the proto values to the C++ enum values.
@@ -32,6 +40,9 @@ std::optional<PrivateKeySource> ToPrivateKeySource(
 // Converts a `private_key_source` from the C++ enum values to the proto values.
 client_certificates_pb::PrivateKey::PrivateKeySource ToProtoKeySource(
     PrivateKeySource private_key_source);
+
+// Converts a `pref_key_source` from the int values to the C++ enum values.
+std::optional<PrivateKeySource> ToPrivateKeySource(int pref_key_source);
 
 }  // namespace client_certificates
 

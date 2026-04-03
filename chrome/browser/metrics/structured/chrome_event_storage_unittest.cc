@@ -9,6 +9,7 @@
 
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -38,9 +39,10 @@ class ChromeEventStorageTest : public testing::Test {
 
   StructuredDataProto GetReport(ChromeEventStorage* storage) {
     StructuredDataProto structured_data;
-
-    *structured_data.mutable_events() = storage->TakeEvents();
-
+    storage->TakeEvents(
+        base::BindLambdaForTesting([&](ChromeEventStorage::Events events) {
+          *structured_data.mutable_events() = events;
+        }));
     return structured_data;
   }
 
@@ -71,7 +73,7 @@ TEST_F(ChromeEventStorageTest, StoreAndProvideEvents) {
 
   EventsProto events;
   storage.CopyEvents(&events);
-  EXPECT_EQ(events.non_uma_events_size(), 1);
+  EXPECT_EQ(events.events_size(), 1);
 
   StructuredDataProto proto = GetReport(&storage);
   EXPECT_EQ(proto.events_size(), 1);
@@ -79,7 +81,7 @@ TEST_F(ChromeEventStorageTest, StoreAndProvideEvents) {
   // Storage should have no events after a successful dump.
   events.Clear();
   storage.CopyEvents(&events);
-  EXPECT_EQ(events.non_uma_events_size(), 0);
+  EXPECT_EQ(events.events_size(), 0);
 
   ExpectNoErrors();
 }

@@ -5,15 +5,16 @@
 #ifndef COMPONENTS_MEDIA_ROUTER_BROWSER_LOGGER_IMPL_H_
 #define COMPONENTS_MEDIA_ROUTER_BROWSER_LOGGER_IMPL_H_
 
+#include <string_view>
+
 #include "base/containers/circular_deque.h"
 #include "base/gtest_prod_util.h"
-#include "base/strings/string_piece.h"
+#include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/media_router/common/mojom/logger.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
-#include "mojo/public/cpp/bindings/remote.h"
 
 namespace media_router {
 
@@ -68,11 +69,11 @@ class LoggerImpl : mojom::Logger {
     Entry(Severity severity,
           mojom::LogCategory category,
           base::Time time,
-          base::StringPiece component,
-          base::StringPiece message,
-          base::StringPiece sink_id,
+          std::string_view component,
+          std::string_view message,
+          std::string_view sink_id,
           std::string media_source,
-          base::StringPiece session_id);
+          std::string_view session_id);
     Entry(Entry&& other);
     Entry(const Entry&) = delete;
     ~Entry();
@@ -91,7 +92,7 @@ class LoggerImpl : mojom::Logger {
     std::string session_id;
   };
 
-  static base::Value::Dict AsValue(const Entry& entry);
+  static base::DictValue AsValue(const Entry& entry);
 
   mojo::ReceiverSet<mojom::Logger> receivers_;
   base::circular_deque<Entry> entries_;

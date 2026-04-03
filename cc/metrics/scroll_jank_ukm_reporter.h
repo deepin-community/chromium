@@ -6,8 +6,11 @@
 #define CC_METRICS_SCROLL_JANK_UKM_REPORTER_H_
 
 #include <optional>
+
 #include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "cc/cc_export.h"
+#include "cc/metrics/event_metrics.h"
 
 namespace cc {
 class UkmManager;
@@ -26,7 +29,7 @@ class CC_EXPORT ScrollJankUkmReporter {
   void IncrementPredictorJankyFrames();
 
   void EmitScrollJankUkm();
-  void EmitPredictorJankUkm();
+  void UpdateLatestFrameAndEmitPredictorJank(base::TimeTicks latest_timestamp);
   void ResetPredictorMetrics();
 
   void set_max_missed_vsyncs(int max_missed_vsyncs) {
@@ -44,6 +47,8 @@ class CC_EXPORT ScrollJankUkmReporter {
   }
 
   void set_ukm_manager(UkmManager* manager) { ukm_manager_ = manager; }
+
+
 
  private:
   // Scroll metrics

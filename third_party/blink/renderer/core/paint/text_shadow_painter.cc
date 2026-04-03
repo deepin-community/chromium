@@ -4,21 +4,15 @@
 
 #include "third_party/blink/renderer/core/paint/text_shadow_painter.h"
 
+#include <algorithm>
+
+#include "base/containers/heap_array.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/ranges/algorithm.h"
 #include "third_party/blink/renderer/core/style/shadow_list.h"
 
 namespace blink {
 
 namespace {
-
-DropShadowPaintFilter::ShadowMode PickShadowMode(int shadow_index) {
-  // If this is the first shadow to be painted, also include the foreground.
-  if (shadow_index == 0) {
-    return DropShadowPaintFilter::ShadowMode::kDrawShadowAndForeground;
-  }
-  return DropShadowPaintFilter::ShadowMode::kDrawShadowOnly;
-}
 
 sk_sp<PaintFilter> MakeOneTextShadowFilter(
     const ShadowData& shadow,
@@ -32,9 +26,8 @@ sk_sp<PaintFilter> MakeOneTextShadowFilter(
   }
   const gfx::Vector2dF& offset = shadow.Offset();
 
-  const float blur = shadow.Blur();
-  DCHECK_GE(blur, 0);
-  const auto sigma = BlurRadiusToStdDev(blur);
+  const float sigma = shadow.BlurAsSigma();
+  DCHECK_GE(sigma, 0);
   return sk_make_sp<DropShadowPaintFilter>(offset.x(), offset.y(), sigma, sigma,
                                            color.toSkColor4f(), shadow_mode,
                                            nullptr);
@@ -44,16 +37,17 @@ sk_sp<PaintFilter> MakeTextShadowFilter(const TextPaintStyle& text_style) {
   DCHECK(text_style.shadow);
   const auto& shadow_list = text_style.shadow->Shadows();
   if (shadow_list.size() == 1) {
-    return MakeOneTextShadowFilter(shadow_list[0], text_style.current_color,
-                                   text_style.color_scheme, PickShadowMode(0));
+    return MakeOneTextShadowFilter(
+        shadow_list[0], text_style.current_color, text_style.color_scheme,
+        DropShadowPaintFilter::ShadowMode::kDrawShadowOnly);
   }
   auto shadow_filters =
-      std::make_unique<sk_sp<PaintFilter>[]>(shadow_list.size());
+      base::HeapArray<sk_sp<PaintFilter>>::WithSize(shadow_list.size());
   wtf_size_t count = 0;
   for (const ShadowData& shadow : shadow_list) {
     if (sk_sp<PaintFilter> shadow_filter = MakeOneTextShadowFilter(
             shadow, text_style.current_color, text_style.color_scheme,
-            PickShadowMode(count))) {
+            DropShadowPaintFilter::ShadowMode::kDrawShadowOnly)) {
       shadow_filters[count++] = std::move(shadow_filter);
     }
   }
@@ -61,10 +55,9 @@ sk_sp<PaintFilter> MakeTextShadowFilter(const TextPaintStyle& text_style) {
     return nullptr;
   }
   // Reverse to get the proper paint order (last shadow painted first).
-  base::span<sk_sp<PaintFilter>> used_filters(shadow_filters.get(), count);
-  base::ranges::reverse(used_filters);
-  return sk_make_sp<MergePaintFilter>(shadow_filters.get(),
-                                      base::saturated_cast<int>(count));
+  base::span<sk_sp<PaintFilter>> used_filters(shadow_filters.first(count));
+  std::ranges::reverse(used_filters);
+  return sk_make_sp<MergePaintFilter>(used_filters);
 }
 
 }  // namespace

@@ -11,6 +11,10 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/kernels/data/fixed_length_record_dataset_op.h"
 
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "tensorflow/core/data/dataset_test_base.h"
 
 namespace tensorflow {
@@ -32,7 +36,7 @@ class FixedLengthRecordDatasetParams : public DatasetParams {
                                  int64_t header_bytes, int64_t record_bytes,
                                  int64_t footer_bytes, int64_t buffer_size,
                                  CompressionType compression_type,
-                                 string node_name)
+                                 std::string node_name)
       : DatasetParams({DT_STRING}, {PartialTensorShape({})},
                       std::move(node_name)),
         filenames_(filenames),
@@ -55,7 +59,8 @@ class FixedLengthRecordDatasetParams : public DatasetParams {
         CreateTensor<tstring>(TensorShape({}), {ToString(compression_type_)})};
   }
 
-  Status GetInputNames(std::vector<string>* input_names) const override {
+  absl::Status GetInputNames(
+      std::vector<std::string>* input_names) const override {
     input_names->clear();
     *input_names = {FixedLengthRecordDatasetOp::kFileNames,
                     FixedLengthRecordDatasetOp::kHeaderBytes,
@@ -66,13 +71,13 @@ class FixedLengthRecordDatasetParams : public DatasetParams {
     return absl::OkStatus();
   }
 
-  Status GetAttributes(AttributeVector* attr_vector) const override {
+  absl::Status GetAttributes(AttributeVector* attr_vector) const override {
     attr_vector->clear();
     attr_vector->emplace_back("metadata", "");
     return absl::OkStatus();
   }
 
-  string dataset_type() const override {
+  std::string dataset_type() const override {
     return FixedLengthRecordDatasetOp::kDatasetType;
   }
 
@@ -87,9 +92,9 @@ class FixedLengthRecordDatasetParams : public DatasetParams {
 
 class FixedLengthRecordDatasetOpTest : public DatasetOpsTestBase {};
 
-Status CreateTestFiles(const std::vector<tstring>& filenames,
-                       const std::vector<string>& contents,
-                       CompressionType compression_type) {
+absl::Status CreateTestFiles(const std::vector<tstring>& filenames,
+                             const std::vector<std::string>& contents,
+                             CompressionType compression_type) {
   if (filenames.size() != contents.size()) {
     return tensorflow::errors::InvalidArgument(
         "The number of files does not match with the contents");
@@ -113,13 +118,13 @@ Status CreateTestFiles(const std::vector<tstring>& filenames,
 // Test case 1: multiple fixed-length record files with ZLIB compression.
 FixedLengthRecordDatasetParams FixedLengthRecordDatasetParams1() {
   std::vector<tstring> filenames = {LocalTempFilename(), LocalTempFilename()};
-  std::vector<string> contents = {
+  std::vector<std::string> contents = {
       absl::StrCat("HHHHH", "111", "222", "333", "FF"),
       absl::StrCat("HHHHH", "aaa", "bbb", "FF")};
   CompressionType compression_type = CompressionType::ZLIB;
   if (!CreateTestFiles(filenames, contents, compression_type).ok()) {
-    VLOG(WARNING) << "Failed to create the test files: "
-                  << absl::StrJoin(filenames, ", ");
+    LOG(WARNING) << "Failed to create the test files: "
+                 << absl::StrJoin(filenames, ", ");
   }
 
   return FixedLengthRecordDatasetParams(filenames,
@@ -134,13 +139,13 @@ FixedLengthRecordDatasetParams FixedLengthRecordDatasetParams1() {
 // Test case 2: multiple fixed-length record files with GZIP compression.
 FixedLengthRecordDatasetParams FixedLengthRecordDatasetParams2() {
   std::vector<tstring> filenames = {LocalTempFilename(), LocalTempFilename()};
-  std::vector<string> contents = {
+  std::vector<std::string> contents = {
       absl::StrCat("HHHHH", "111", "222", "333", "FF"),
       absl::StrCat("HHHHH", "aaa", "bbb", "FF")};
   CompressionType compression_type = CompressionType::GZIP;
   if (!CreateTestFiles(filenames, contents, compression_type).ok()) {
-    VLOG(WARNING) << "Failed to create the test files: "
-                  << absl::StrJoin(filenames, ", ");
+    LOG(WARNING) << "Failed to create the test files: "
+                 << absl::StrJoin(filenames, ", ");
   }
   return FixedLengthRecordDatasetParams(filenames,
                                         /*header_bytes=*/5,
@@ -154,13 +159,13 @@ FixedLengthRecordDatasetParams FixedLengthRecordDatasetParams2() {
 // Test case 3: multiple fixed-length record files without compression.
 FixedLengthRecordDatasetParams FixedLengthRecordDatasetParams3() {
   std::vector<tstring> filenames = {LocalTempFilename(), LocalTempFilename()};
-  std::vector<string> contents = {
+  std::vector<std::string> contents = {
       absl::StrCat("HHHHH", "111", "222", "333", "FF"),
       absl::StrCat("HHHHH", "aaa", "bbb", "FF")};
   CompressionType compression_type = CompressionType::UNCOMPRESSED;
   if (!CreateTestFiles(filenames, contents, compression_type).ok()) {
-    VLOG(WARNING) << "Failed to create the test files: "
-                  << absl::StrJoin(filenames, ", ");
+    LOG(WARNING) << "Failed to create the test files: "
+                 << absl::StrJoin(filenames, ", ");
   }
   return FixedLengthRecordDatasetParams(filenames,
                                         /*header_bytes=*/5,

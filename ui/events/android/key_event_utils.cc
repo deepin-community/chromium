@@ -4,6 +4,7 @@
 
 #include "ui/events/android/key_event_utils.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "ui/events/keyevent_jni_headers/KeyEvent_jni.h"
 
 namespace ui {
@@ -21,6 +22,13 @@ int GetKeyEventUnicodeChar(JNIEnv* env,
                            int meta_state) {
   return static_cast<int>(
       JNI_KeyEvent::Java_KeyEvent_getUnicodeChar(env, event, meta_state));
+}
+
+bool IsVirtualKeyboardEvent(JNIEnv* env,
+                            const base::android::JavaRef<jobject>& event) {
+  int flags =
+      static_cast<int>(JNI_KeyEvent::Java_KeyEvent_getFlags(env, event));
+  return (flags & JNI_KeyEvent::FLAG_SOFT_KEYBOARD) != 0;
 }
 
 }  // namespace android

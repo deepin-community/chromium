@@ -18,11 +18,13 @@
 #include "base/apple/foundation_util.h"
 #include "base/apple/osstatus_logging.h"
 #include "base/apple/scoped_cftyperef.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
 #include "base/memory/scoped_policy.h"
 #include "base/numerics/safe_conversions.h"
+#include "crypto/evp.h"
 #include "crypto/openssl_util.h"
 #include "net/base/net_errors.h"
 #include "net/cert/x509_certificate.h"
@@ -90,7 +92,7 @@ class SSLPlatformKeySecKey : public ThreadedSSLPrivateKey::Delegate {
   ~SSLPlatformKeySecKey() override = default;
 
   std::string GetProviderName() override {
-    // TODO(https://crbug.com/900721): Is there a more descriptive name to
+    // TODO(crbug.com/41423739): Is there a more descriptive name to
     // return?
     return "SecKey";
   }
@@ -121,7 +123,8 @@ class SSLPlatformKeySecKey : public ThreadedSSLPrivateKey::Delegate {
                            md, nullptr)) {
       return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
     }
-    base::span<const uint8_t> digest = base::make_span(digest_buf, digest_len);
+    base::span<const uint8_t> digest =
+        UNSAFE_TODO(base::span(digest_buf, digest_len));
 
     std::optional<std::vector<uint8_t>> pss_storage;
     if (pss_fallback) {
@@ -148,9 +151,8 @@ class SSLPlatformKeySecKey : public ThreadedSSLPrivateKey::Delegate {
       return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
     }
 
-    signature->assign(CFDataGetBytePtr(signature_ref.get()),
-                      CFDataGetBytePtr(signature_ref.get()) +
-                          CFDataGetLength(signature_ref.get()));
+    auto signature_span = base::apple::CFDataToSpan(signature_ref.get());
+    signature->assign(signature_span.begin(), signature_span.end());
     return OK;
   }
 
@@ -194,6 +196,20 @@ scoped_refptr<SSLPrivateKey> CreateSSLPrivateKeyForSecKey(
 
   return base::MakeRefCounted<ThreadedSSLPrivateKey>(
       std::make_unique<SSLPlatformKeySecKey>(std::move(pubkey), key),
+      GetSSLPlatformKeyTaskRunner());
+}
+
+scoped_refptr<SSLPrivateKey> WrapUnexportableKey(
+    const crypto::UnexportableSigningKey& unexportable_key) {
+  bssl::UniquePtr<EVP_PKEY> pubkey = crypto::evp::PublicKeyFromBytes(
+      unexportable_key.GetSubjectPublicKeyInfo());
+  if (!pubkey) {
+    return nullptr;
+  }
+
+  return base::MakeRefCounted<ThreadedSSLPrivateKey>(
+      std::make_unique<SSLPlatformKeySecKey>(std::move(pubkey),
+                                             unexportable_key.GetSecKeyRef()),
       GetSSLPlatformKeyTaskRunner());
 }
 

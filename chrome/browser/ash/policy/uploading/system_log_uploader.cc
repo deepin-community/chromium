@@ -68,7 +68,6 @@ const char* const kSystemLogFileNames[] = {"/var/log/bios_info.txt",
                                            "/var/log/eventlog.txt",
                                            "/var/log/extensions.log",
                                            "/var/log/extensions.1.log",
-                                           "/var/log/platform_info.txt",
                                            "/var/log/messages",
                                            "/var/log/messages.1",
                                            "/var/log/net.log",
@@ -181,7 +180,7 @@ SystemLogDelegate::SystemLogDelegate(
     scoped_refptr<base::SequencedTaskRunner> task_runner)
     : task_runner_(task_runner) {}
 
-SystemLogDelegate::~SystemLogDelegate() {}
+SystemLogDelegate::~SystemLogDelegate() = default;
 
 std::string SystemLogDelegate::GetPolicyAsJSON() {
   bool include_user_policies = false;
@@ -342,7 +341,7 @@ SystemLogUploader::SystemLogUploader(
   RefreshUploadSettings();
 }
 
-SystemLogUploader::~SystemLogUploader() {}
+SystemLogUploader::~SystemLogUploader() = default;
 
 void SystemLogUploader::OnSuccess() {
   SYSLOG(INFO) << "Upload successful.";
@@ -493,7 +492,7 @@ base::Time SystemLogUploader::UpdateLocalStateForLogs() {
   const base::Time now = base::Time::NowFromSystemTime();
   PrefService* local_state = g_browser_process->local_state();
 
-  const base::Value::List& prev_log_uploads =
+  const base::ListValue& prev_log_uploads =
       local_state->GetList(prefs::kStoreLogStatesAcrossReboots);
 
   std::vector<base::Time> updated_log_uploads;
@@ -523,7 +522,7 @@ base::Time SystemLogUploader::UpdateLocalStateForLogs() {
     updated_log_uploads.erase(updated_log_uploads.begin());
 
   // Create a list to be updated for the pref.
-  base::Value::List updated_prev_log_uploads;
+  base::ListValue updated_prev_log_uploads;
   for (auto it : updated_log_uploads) {
     updated_prev_log_uploads.Append(it.InSecondsFSinceUnixEpoch());
   }

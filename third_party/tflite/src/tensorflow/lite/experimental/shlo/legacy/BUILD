@@ -1,7 +1,9 @@
 # StableHLO Device Profile reference implementation
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 package(
-    default_applicable_licenses = ["//tensorflow:LICENSE"],
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:LICENSE"],
     default_visibility = [":__subpackages__"],
 )
 
@@ -26,6 +28,7 @@ cc_library(
         "src/storage.h",
         "src/util.h",
     ],
+    tags = ["no_oss"],
     deps = [
         ":float",
         "@com_google_absl//absl/log",
@@ -42,6 +45,7 @@ cc_library(
     hdrs = [
         "src/debug.h",
     ],
+    tags = ["no_oss"],
     deps = [
         ":float",
         ":shlo",
@@ -60,6 +64,7 @@ cc_library(
         "src/f16.h",
         "src/has_keyword.h",
     ],
+    tags = ["no_oss"],
     deps = [
     ],
 )

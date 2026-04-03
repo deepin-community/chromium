@@ -112,6 +112,8 @@ enum {
      *
      * Corresponding formats:
      *   Android: AHARDWAREBUFFER_FORMAT_BLOB
+     *   Vulkan: N/A
+     *   OpenGL ES: N/A
      */
     ANGLE_AHB_FORMAT_BLOB                     = 0x21,
 
@@ -171,22 +173,24 @@ enum {
      *
      * Corresponding formats:
      *   Android: AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420
+     *   Vulkan: VK_FORMAT_G8_B8R8_2PLANE_420_UNORM_KHR
+     *   OpenGL ES: N/A
      */
     ANGLE_AHB_FORMAT_Y8Cb8Cr8_420             = 0x23,
 
     /**
      * Corresponding formats:
      *   Android: AHARDWAREBUFFER_FORMAT_YV12
-     *   Vulkan: VK_FORMAT_S8_UINT
-     *   OpenGL ES: GL_STENCIL_INDEX8
+     *   Vulkan: VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM
+     *   OpenGL ES: N/A
      */
     ANGLE_AHB_FORMAT_YV12                     = 0x32315659,
 
     /**
      * Corresponding formats:
      *   Android: AHARDWAREBUFFER_FORMAT_IMPLEMENTATION_DEFINED
-     *   Vulkan: VK_FORMAT_S8_UINT
-     *   OpenGL ES: GL_STENCIL_INDEX8
+     *   Vulkan: N/A
+     *   OpenGL ES: N/A
      */
     ANGLE_AHB_FORMAT_IMPLEMENTATION_DEFINED   = 0x22,
 
@@ -226,6 +230,8 @@ bool NativePixelFormatIsYUV(int pixelFormat);
 AHardwareBuffer *ANativeWindowBufferToAHardwareBuffer(ANativeWindowBuffer *windowBuffer);
 
 uint64_t GetAHBUsage(int eglNativeBufferUsage);
+
+bool IsValidNativeWindowBuffer(ANativeWindowBuffer *windowBuffer);
 
 bool GetSystemProperty(const char *propertyName, std::string *value);
 static constexpr const char *kManufacturerSystemPropertyName = "ro.product.manufacturer";

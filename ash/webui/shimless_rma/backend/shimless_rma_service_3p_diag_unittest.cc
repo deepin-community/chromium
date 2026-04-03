@@ -7,10 +7,9 @@
 #include <string>
 #include <utility>
 
-#include "ash/webui/shimless_rma/3p_diagnostics/external_app_dialog.h"
+#include "ash/webui/shimless_rma/backend/external_app_dialog.h"
 #include "ash/webui/shimless_rma/backend/fake_shimless_rma_delegate.h"
 #include "ash/webui/shimless_rma/backend/shimless_rma_service.h"
-#include "ash/webui/shimless_rma/mojom/shimless_rma.mojom-shared.h"
 #include "ash/webui/shimless_rma/mojom/shimless_rma.mojom.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"

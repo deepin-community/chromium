@@ -9,7 +9,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/webui_url_constants.h"
@@ -18,22 +17,23 @@
 #include "components/omnibox/browser/autocomplete_provider_client.h"
 #include "components/omnibox/browser/buildflags.h"
 #include "components/omnibox/browser/omnibox_client.h"
-#include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/omnibox/resources/grit/omnibox_pedal_synonyms.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/search.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/sync/base/features.h"
 #include "components/vector_icons/vector_icons.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#endif
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 #include "chrome/app/vector_icons/vector_icons.h"
 #endif
 
-#if BUILDFLAG(IS_ANDROID)
-#include "base/android/build_info.h"
-#endif
 
 // =============================================================================
 
@@ -386,35 +386,9 @@ class OmniboxPedalUpdateChrome : public OmniboxPedal {
 class OmniboxPedalRunChromeSafetyCheck : public OmniboxPedal {
  public:
   OmniboxPedalRunChromeSafetyCheck()
-      : OmniboxPedal(
-            OmniboxPedalId::RUN_CHROME_SAFETY_CHECK,
-#if BUILDFLAG(IS_ANDROID)
-            LabelStrings(
-                IDS_ANDROID_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_HINT,
-                IDS_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_SUGGESTION_CONTENTS,
-                IDS_ACC_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_SUFFIX,
-                IDS_ACC_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK),
-#else
-            LabelStrings(
-                IDS_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_HINT,
-                IDS_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_SUGGESTION_CONTENTS,
-                IDS_ACC_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_SUFFIX,
-                IDS_ACC_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK),
-#endif  // BUILDFLAG(IS_ANDROID)
-            GURL("chrome://settings/safetyCheck?activateSafetyCheck")) {
-#if !BUILDFLAG(IS_ANDROID)
-    // If SafetyHub flag is enabled, the label strings and url should be
-    // updated.
-    if (base::FeatureList::IsEnabled(features::kSafetyHub)) {
-      strings_ = LabelStrings(
-          IDS_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_V2_HINT,
-          IDS_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_V2_SUGGESTION_CONTENTS,
-          IDS_ACC_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_V2_SUFFIX,
-          IDS_ACC_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_V2);
-      url_ = GURL("chrome://settings/safetyCheck");
-    }
-#endif  // !BUILDFLAG(IS_ANDROID)
-  }
+      : OmniboxPedal(OmniboxPedalId::RUN_CHROME_SAFETY_CHECK,
+                     GetLabelStrings(),
+                     GetUrl()) {}
 
   std::vector<SynonymGroupSpec> SpecifySynonymGroups(
       bool locale_is_english) const override {
@@ -454,6 +428,18 @@ class OmniboxPedalRunChromeSafetyCheck : public OmniboxPedal {
 
  protected:
   ~OmniboxPedalRunChromeSafetyCheck() override = default;
+
+  LabelStrings GetLabelStrings() {
+      return LabelStrings(
+          IDS_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_V2_HINT,
+          IDS_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_V2_SUGGESTION_CONTENTS,
+          IDS_ACC_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_V2_SUFFIX,
+          IDS_ACC_OMNIBOX_PEDAL_RUN_CHROME_SAFETY_CHECK_V2);
+  }
+
+  GURL GetUrl() {
+    return GURL("chrome://settings/safetyCheck");
+  }
 };
 
 // =============================================================================
@@ -613,16 +599,54 @@ class OmniboxPedalManageAddresses : public OmniboxPedal {
 class OmniboxPedalManageSync : public OmniboxPedal {
  public:
   OmniboxPedalManageSync()
-      : OmniboxPedal(
-            OmniboxPedalId::MANAGE_SYNC,
-            LabelStrings(IDS_OMNIBOX_PEDAL_MANAGE_SYNC_HINT,
-                         IDS_OMNIBOX_PEDAL_MANAGE_SYNC_SUGGESTION_CONTENTS,
-                         IDS_ACC_OMNIBOX_PEDAL_MANAGE_SYNC_SUFFIX,
-                         IDS_ACC_OMNIBOX_PEDAL_MANAGE_SYNC),
-            GURL("chrome://settings/syncSetup/advanced")) {}
+      : OmniboxPedal(OmniboxPedalId::MANAGE_SYNC,
+                     GetLabelStrings(),
+                     GURL("chrome://settings/syncSetup/advanced")) {}
+
+  static LabelStrings GetLabelStrings() {
+#if !BUILDFLAG(IS_CHROMEOS)
+    if (base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp)) {
+      return LabelStrings(
+          IDS_OMNIBOX_PEDAL_MANAGE_SYNC_HINT_UPDATED,
+          IDS_OMNIBOX_PEDAL_MANAGE_SYNC_SUGGESTION_CONTENTS_UPDATED,
+          IDS_ACC_OMNIBOX_PEDAL_MANAGE_SYNC_SUFFIX_UPDATED,
+          IDS_ACC_OMNIBOX_PEDAL_MANAGE_SYNC_UPDATED);
+    }
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+    return LabelStrings(IDS_OMNIBOX_PEDAL_MANAGE_SYNC_HINT,
+                        IDS_OMNIBOX_PEDAL_MANAGE_SYNC_SUGGESTION_CONTENTS,
+                        IDS_ACC_OMNIBOX_PEDAL_MANAGE_SYNC_SUFFIX,
+                        IDS_ACC_OMNIBOX_PEDAL_MANAGE_SYNC);
+  }
 
   std::vector<SynonymGroupSpec> SpecifySynonymGroups(
       bool locale_is_english) const override {
+#if !BUILDFLAG(IS_CHROMEOS)
+    if (base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp)) {
+      if (locale_is_english) {
+        return {
+            {
+                true,
+                true,
+                IDS_OMNIBOX_PEDAL_SYNONYMS_MANAGE_SYNC_ONE_REQUIRED_SYNC_SETTINGS_UPDATED,
+            },
+            {
+                true,
+                false,
+                IDS_OMNIBOX_PEDAL_SYNONYMS_MANAGE_SYNC_ANY_REQUIRED_GOOGLE_CHROME,
+            },
+        };
+      } else {
+        return {
+            {
+                true,
+                true,
+                IDS_OMNIBOX_PEDAL_SYNONYMS_MANAGE_SYNC_UPDATED,
+            },
+        };
+      }
+    }
+#endif  // !BUILDFLAG(IS_CHROMEOS)
     if (locale_is_english) {
       return {
           {
@@ -664,7 +688,7 @@ class OmniboxPedalManageSiteSettings : public OmniboxPedal {
                 IDS_OMNIBOX_PEDAL_MANAGE_SITE_SETTINGS_SUGGESTION_CONTENTS,
                 IDS_ACC_OMNIBOX_PEDAL_MANAGE_SITE_SETTINGS_SUFFIX,
                 IDS_ACC_OMNIBOX_PEDAL_MANAGE_SITE_SETTINGS),
-            GURL("chrome://settings/content")) {}
+            GURL(chrome::kChromeUIContentSettingsURL)) {}
 
   std::vector<SynonymGroupSpec> SpecifySynonymGroups(
       bool locale_is_english) const override {
@@ -1179,11 +1203,7 @@ class OmniboxPedalManageGoogleAccount : public OmniboxPedalAuthRequired {
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   const gfx::VectorIcon& GetVectorIcon() const override {
-    if (OmniboxFieldTrial::IsActionsUISimplificationEnabled()) {
-      return vector_icons::kGoogleGLogoMonochromeIcon;
-    } else {
-      return vector_icons::kGoogleSuperGIcon;
-    }
+    return vector_icons::kGoogleGLogoMonochromeIcon;
   }
 #endif
 
@@ -1242,11 +1262,7 @@ class OmniboxPedalChangeGooglePassword : public OmniboxPedalAuthRequired {
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   const gfx::VectorIcon& GetVectorIcon() const override {
-    if (OmniboxFieldTrial::IsActionsUISimplificationEnabled()) {
-      return vector_icons::kGoogleGLogoMonochromeIcon;
-    } else {
-      return vector_icons::kGoogleSuperGIcon;
-    }
+    return vector_icons::kGoogleGLogoMonochromeIcon;
   }
 #endif
 
@@ -1302,9 +1318,7 @@ class OmniboxPedalCloseIncognitoWindows : public OmniboxPedal {
             GURL()) {}
 
   const gfx::VectorIcon& GetVectorIcon() const override {
-    return OmniboxFieldTrial::IsChromeRefreshActionChipIconsEnabled()
-               ? omnibox::kIncognitoCr2023Icon
-               : omnibox::kIncognitoIcon;
+    return omnibox::kIncognitoCr2023Icon;
   }
 
   std::vector<SynonymGroupSpec> SpecifySynonymGroups(
@@ -1358,9 +1372,7 @@ class OmniboxPedalPlayChromeDinoGame : public OmniboxPedal {
 
 #if defined(SUPPORT_PEDALS_VECTOR_ICONS)
   const gfx::VectorIcon& GetVectorIcon() const override {
-    return OmniboxFieldTrial::IsChromeRefreshActionChipIconsEnabled()
-               ? omnibox::kDinoCr2023Icon
-               : omnibox::kDinoIcon;
+    return omnibox::kDinoCr2023Icon;
   }
 #endif
 
@@ -1439,11 +1451,7 @@ class OmniboxPedalFindMyPhone : public OmniboxPedalAuthRequired {
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   const gfx::VectorIcon& GetVectorIcon() const override {
-    if (OmniboxFieldTrial::IsActionsUISimplificationEnabled()) {
-      return vector_icons::kGoogleGLogoMonochromeIcon;
-    } else {
-      return vector_icons::kGoogleSuperGIcon;
-    }
+    return vector_icons::kGoogleGLogoMonochromeIcon;
   }
 #endif
 
@@ -1492,11 +1500,7 @@ class OmniboxPedalManageGooglePrivacy : public OmniboxPedalAuthRequired {
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   const gfx::VectorIcon& GetVectorIcon() const override {
-    if (OmniboxFieldTrial::IsActionsUISimplificationEnabled()) {
-      return vector_icons::kGoogleGLogoMonochromeIcon;
-    } else {
-      return vector_icons::kGoogleSuperGIcon;
-    }
+    return vector_icons::kGoogleGLogoMonochromeIcon;
   }
 #endif
 
@@ -1996,25 +2000,13 @@ class OmniboxPedalSetChromeAsDefaultBrowser : public OmniboxPedal {
 
 const gfx::VectorIcon& GetSharingHubVectorIcon() {
 #if BUILDFLAG(IS_MAC)
-  return OmniboxFieldTrial::IsChromeRefreshIconsEnabled() ||
-                 OmniboxFieldTrial::IsChromeRefreshActionChipIconsEnabled()
-             ? omnibox::kShareMacChromeRefreshIcon
-             : omnibox::kShareMacIcon;
+  return omnibox::kShareMacChromeRefreshIcon;
 #elif BUILDFLAG(IS_WIN)
-  return OmniboxFieldTrial::IsChromeRefreshIconsEnabled() ||
-                 OmniboxFieldTrial::IsChromeRefreshActionChipIconsEnabled()
-             ? omnibox::kShareWinChromeRefreshIcon
-             : omnibox::kShareWinIcon;
+  return omnibox::kShareWinChromeRefreshIcon;
 #elif BUILDFLAG(IS_LINUX)
-  return OmniboxFieldTrial::IsChromeRefreshIconsEnabled() ||
-                 OmniboxFieldTrial::IsChromeRefreshActionChipIconsEnabled()
-             ? omnibox::kShareLinuxChromeRefreshIcon
-             : omnibox::kShareIcon;
+  return omnibox::kShareLinuxChromeRefreshIcon;
 #else
-  return OmniboxFieldTrial::IsChromeRefreshIconsEnabled() ||
-                 OmniboxFieldTrial::IsChromeRefreshActionChipIconsEnabled()
-             ? omnibox::kShareChromeRefreshIcon
-             : omnibox::kShareIcon;
+  return omnibox::kShareChromeRefreshIcon;
 #endif
 }
 
@@ -2040,7 +2032,7 @@ GetPedalImplementations(bool incognito, bool guest, bool testing) {
   add(new OmniboxPedalManagePasswords());
   add(new OmniboxPedalUpdateCreditCard());
   add(new OmniboxPedalLaunchIncognito());
-  if (!base::android::BuildInfo::GetInstance()->is_automotive()) {
+  if (!base::android::device_info::is_automotive()) {
     add(new OmniboxPedalRunChromeSafetyCheck());
   }
   add(new OmniboxPedalPlayChromeDinoGame());

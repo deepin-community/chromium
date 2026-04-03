@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_cssstylevalue_undefined.h"
 #include "third_party/blink/renderer/core/animation/compositor_animations.h"
 #include "third_party/blink/renderer/core/css/css_unparsed_declaration_value.h"
 #include "third_party/blink/renderer/core/css/css_variable_data.h"
@@ -19,6 +20,7 @@
 #include "third_party/blink/renderer/core/css/properties/css_property_ref.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 
@@ -33,8 +35,7 @@ class PaintWorkletStylePropertyMapIterationSource final
 
   bool FetchNextItem(ScriptState*,
                      String& key,
-                     CSSStyleValueVector& value,
-                     ExceptionState&) override {
+                     CSSStyleValueVector& value) override {
     if (index_ >= values_.size()) {
       return false;
     }
@@ -71,7 +72,7 @@ bool BuildNativeValues(const ComputedStyle& style,
         CSSProperty::Get(property_id)
             .CrossThreadStyleValueFromComputedStyle(
                 style, /* layout_object */ nullptr,
-                /* allow_visited_style */ false);
+                /* allow_visited_style */ false, CSSValuePhase::kComputedValue);
     if (value->GetType() ==
         CrossThreadStyleValue::StyleValueType::kUnknownType) {
       return false;
@@ -95,7 +96,7 @@ bool BuildCustomValues(
     std::unique_ptr<CrossThreadStyleValue> value =
         ref.GetProperty().CrossThreadStyleValueFromComputedStyle(
             style, /* layout_object */ nullptr,
-            /* allow_visited_style */ false);
+            /* allow_visited_style */ false, CSSValuePhase::kComputedValue);
     if (value->GetType() ==
         CrossThreadStyleValue::StyleValueType::kUnknownType) {
       return false;
@@ -161,13 +162,17 @@ PaintWorkletStylePropertyMap::PaintWorkletStylePropertyMap(CrossThreadData data)
   DCHECK(!IsMainThread());
 }
 
-CSSStyleValue* PaintWorkletStylePropertyMap::get(
+V8UnionCSSStyleValueOrUndefined* PaintWorkletStylePropertyMap::get(
     const ExecutionContext* execution_context,
     const String& property_name,
     ExceptionState& exception_state) const {
   CSSStyleValueVector all_values =
       getAll(execution_context, property_name, exception_state);
-  return all_values.empty() ? nullptr : all_values[0];
+  return all_values.empty()
+             ? MakeGarbageCollected<V8UnionCSSStyleValueOrUndefined>(
+                   ToV8UndefinedGenerator())
+             : MakeGarbageCollected<V8UnionCSSStyleValueOrUndefined>(
+                   all_values[0]);
 }
 
 CSSStyleValueVector PaintWorkletStylePropertyMap::getAll(
@@ -176,7 +181,8 @@ CSSStyleValueVector PaintWorkletStylePropertyMap::getAll(
     ExceptionState& exception_state) const {
   CSSPropertyID property_id = CssPropertyID(execution_context, property_name);
   if (property_id == CSSPropertyID::kInvalid) {
-    exception_state.ThrowTypeError("Invalid propertyName: " + property_name);
+    exception_state.ThrowTypeError(
+        StrCat({"Invalid propertyName: ", property_name}));
     return CSSStyleValueVector();
   }
 
@@ -203,9 +209,7 @@ unsigned PaintWorkletStylePropertyMap::size() const {
 }
 
 PaintWorkletStylePropertyMap::IterationSource*
-PaintWorkletStylePropertyMap::CreateIterationSource(
-    ScriptState* script_state,
-    ExceptionState& exception_state) {
+PaintWorkletStylePropertyMap::CreateIterationSource(ScriptState* script_state) {
   // TODO(xidachen): implement this function. Note that the output should be
   // sorted.
   HeapVector<PaintWorkletStylePropertyMap::StylePropertyMapEntry> result;

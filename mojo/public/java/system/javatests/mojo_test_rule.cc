@@ -14,9 +14,11 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/test_support_android.h"
 #include "mojo/core/embedder/embedder.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "mojo/public/java/system/test_support_jni/MojoTestRule_jni.h"
 
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 
 namespace {
 
@@ -39,25 +41,26 @@ static void JNI_MojoTestRule_Init(JNIEnv* env) {
   base::InitAndroidTestMessageLoop();
 }
 
-static jlong JNI_MojoTestRule_SetupTestEnvironment(JNIEnv* env) {
-  return reinterpret_cast<jlong>(new TestEnvironment());
+static int64_t JNI_MojoTestRule_SetupTestEnvironment(JNIEnv* env) {
+  return reinterpret_cast<int64_t>(new TestEnvironment());
 }
 
 static void JNI_MojoTestRule_TearDownTestEnvironment(
     JNIEnv* env,
-    jlong raw_test_environment) {
+    int64_t raw_test_environment) {
   delete reinterpret_cast<TestEnvironment*>(raw_test_environment);
 }
 
-static void JNI_MojoTestRule_QuitLoop(JNIEnv* env, jlong raw_test_environment) {
+static void JNI_MojoTestRule_QuitLoop(JNIEnv* env,
+                                      int64_t raw_test_environment) {
   auto* test_environment =
       reinterpret_cast<TestEnvironment*>(raw_test_environment);
   test_environment->run_loop->Quit();
 }
 
 static void JNI_MojoTestRule_RunLoop(JNIEnv* env,
-                                     jlong raw_test_environment,
-                                     jlong timeout_ms) {
+                                     int64_t raw_test_environment,
+                                     int64_t timeout_ms) {
   auto& run_loop = reinterpret_cast<TestEnvironment*>(raw_test_environment)
                        ->run_loop.emplace();
   if (timeout_ms == 0) {
@@ -74,3 +77,5 @@ static void JNI_MojoTestRule_RunLoop(JNIEnv* env,
 
 }  // namespace android
 }  // namespace mojo
+
+DEFINE_JNI(MojoTestRule)

@@ -7,7 +7,7 @@ import {assert} from 'chrome://resources/js/assert.js';
 
 import {crInjectTypeAndInit} from '../../../common/js/cr_ui.js';
 
-import {Menu} from './menu.js';
+import type {Menu} from './menu.js';
 import {MenuItem, type MenuItemActivationEvent} from './menu_item.js';
 import {MultiMenu} from './multi_menu.js';
 import {AnchorType, positionPopupAroundElement} from './position_util.js';
@@ -238,6 +238,8 @@ export class MultiMenuButton extends CrButtonElement {
         e.preventDefault();
         e.stopPropagation();
         break;
+      default:
+        break;
     }
   }
 
@@ -408,6 +410,8 @@ export class MultiMenuButton extends CrButtonElement {
       case 'Tab':
         this.hideMenu();
         break;
+      default:
+        break;
     }
   }
 
@@ -422,7 +426,8 @@ export class MultiMenuButton extends CrButtonElement {
       case 'Escape':
       case 'Tab':
         return true;
+      default:
+        return false;
     }
-    return false;
   }
 }

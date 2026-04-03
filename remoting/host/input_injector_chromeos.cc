@@ -15,6 +15,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/icu_string_conversions.h"
 #include "base/location.h"
+#include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/task/single_thread_task_runner.h"
@@ -53,7 +54,6 @@ ui::EventFlags MouseButtonToUIFlags(MouseEvent::MouseButton button) {
       return ui::EF_MIDDLE_MOUSE_BUTTON;
     default:
       NOTREACHED();
-      return ui::EF_NONE;
   }
 }
 
@@ -171,7 +171,8 @@ void InputInjectorChromeos::Core::InjectKeyEvent(const KeyEvent& event) {
 
   // Ignore events which can't be mapped.
   if (dom_code != ui::DomCode::NONE) {
-    VLOG(3) << "Injecting key " << (event.pressed() ? "down" : "up") << " event.";
+    VLOG(3) << "Injecting key " << (event.pressed() ? "down" : "up")
+            << " event.";
     delegate_->InjectKeyEvent(dom_code, event.pressed(),
                               true /* suppress_auto_repeat */);
   }
@@ -196,8 +197,9 @@ void InputInjectorChromeos::Core::InjectTextEvent(const TextEvent& event) {
     return;
   }
   ui::TextInputClient* text_input_client = input_method->GetTextInputClient();
-  if (!text_input_client) {
-    LOG(ERROR) << "text_input_client is null, can't inject text.";
+  if (!text_input_client ||
+      text_input_client->GetTextInputType() == ui::TEXT_INPUT_TYPE_NONE) {
+    LOG(ERROR) << "text_input_client is null or none, can't inject text.";
     return;
   }
 
@@ -213,17 +215,22 @@ void InputInjectorChromeos::Core::InjectTextEvent(const TextEvent& event) {
 
 void InputInjectorChromeos::Core::InjectMouseEvent(const MouseEvent& event) {
   if (event.has_button() && event.has_button_down()) {
+    if (event.has_x() || event.has_y()) {
+      // Ensure the mouse button click happens at the correct position.
+      InjectMouseMove(event);
+    }
     delegate_->InjectMouseButton(MouseButtonToUIFlags(event.button()),
                                  event.button_down());
-  } else if (event.has_wheel_delta_y() || event.has_wheel_delta_x()) {
+  } else if (event.has_wheel_delta_x() || event.has_wheel_delta_y()) {
     delegate_->InjectMouseWheel(event.wheel_delta_x(), event.wheel_delta_y());
-  } else {
+  } else if (event.has_x() || event.has_y()) {
     InjectMouseMove(event);
+  } else {
+    LOG(WARNING) << "Ignoring mouse event of unknown type";
   }
 }
 
 void InputInjectorChromeos::Core::InjectMouseMove(const MouseEvent& event) {
-  DCHECK(event.has_x() && event.has_y());
   gfx::PointF location_in_screen_in_dip = gfx::PointF(event.x(), event.y());
   gfx::PointF location_in_screen_in_pixels =
       PointTransformer::ConvertScreenInDipToScreenInPixel(
@@ -243,7 +250,7 @@ void InputInjectorChromeos::Core::Start(
     // dependency issues.
     delegate = std::make_unique<SystemInputInjectorStub>();
   }
-  DCHECK(delegate);
+  CHECK(delegate);
 
   StartWithDelegate(std::move(delegate), std::move(client_clipboard));
 }

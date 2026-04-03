@@ -4,6 +4,7 @@
 
 #include "extensions/browser/api/content_settings/content_settings_store.h"
 
+#include <algorithm>
 #include <memory>
 #include <set>
 #include <string>
@@ -15,7 +16,6 @@
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/content_settings_info.h"
@@ -147,6 +147,17 @@ void ContentSettingsStore::SetExtensionContentSetting(
     ContentSettingsType type,
     ContentSetting setting,
     ChromeSettingScope scope) {
+  if (primary_pattern.Matches(GURL("chrome-extension://" + ext_id))) {
+    content_settings_uma_util::RecordContentSettingsHistogram(
+        "Extensions.ContentSettings.PrimaryPatternMatchesExtensionOrigin",
+        type);
+  }
+  if (secondary_pattern.Matches(GURL("chrome-extension://" + ext_id))) {
+    content_settings_uma_util::RecordContentSettingsHistogram(
+        "Extensions.ContentSettings.SecondaryPatternMatchesExtensionOrigin",
+        type);
+  }
+
   if (primary_pattern == ContentSettingsPattern::Wildcard()) {
     if (secondary_pattern == ContentSettingsPattern::Wildcard()) {
       content_settings_uma_util::RecordContentSettingsHistogram(
@@ -300,7 +311,6 @@ const OriginValueMap* ContentSettingsStore::GetValueMap(
     case ChromeSettingScope::kRegularOnly:
       // TODO(bauerb): Implement regular-only content settings.
       NOTREACHED();
-      return nullptr;
     case ChromeSettingScope::kIncognitoPersistent:
       return &entry->incognito_persistent_settings;
     case ChromeSettingScope::kIncognitoSessionOnly:
@@ -310,7 +320,6 @@ const OriginValueMap* ContentSettingsStore::GetValueMap(
   }
 
   NOTREACHED();
-  return nullptr;
 }
 
 void ContentSettingsStore::ClearContentSettingsForExtension(
@@ -346,7 +355,7 @@ void ContentSettingsStore::ClearContentSettingsForExtensionAndContentType(
   NotifyOfContentSettingChanged(ext_id, scope != ChromeSettingScope::kRegular);
 }
 
-base::Value::List ContentSettingsStore::GetSettingsForExtension(
+base::ListValue ContentSettingsStore::GetSettingsForExtension(
     const ExtensionId& extension_id,
     ChromeSettingScope scope) const {
   base::AutoLock lock(lock_);
@@ -360,7 +369,7 @@ base::Value::List ContentSettingsStore::GetSettingsForExtension(
     base::AutoLock map_lock(map->GetLock());
     keys = map->types();
   }
-  base::Value::List settings;
+  base::ListValue settings;
   for (ContentSettingsType key : keys) {
     std::unique_ptr<RuleIterator> rule_iterator(map->GetRuleIterator(key));
     if (!rule_iterator)
@@ -368,7 +377,7 @@ base::Value::List ContentSettingsStore::GetSettingsForExtension(
 
     while (rule_iterator->HasNext()) {
       std::unique_ptr<Rule> rule = rule_iterator->Next();
-      base::Value::Dict setting_dict;
+      base::DictValue setting_dict;
       setting_dict.Set(kPrimaryPatternKey, rule->primary_pattern.ToString());
       setting_dict.Set(kSecondaryPatternKey,
                        rule->secondary_pattern.ToString());
@@ -396,7 +405,7 @@ base::Value::List ContentSettingsStore::GetSettingsForExtension(
 
 void ContentSettingsStore::SetExtensionContentSettingFromList(
     const ExtensionId& extension_id,
-    const base::Value::List& list,
+    const base::ListValue& list,
     ChromeSettingScope scope) {
   for (const base::Value& value : list) {
     if (!value.is_dict()) {
@@ -404,7 +413,7 @@ void ContentSettingsStore::SetExtensionContentSettingFromList(
       continue;
     }
 
-    const base::Value::Dict& dict = value.GetDict();
+    const base::DictValue& dict = value.GetDict();
     const std::string* primary_pattern_str =
         dict.FindString(kPrimaryPatternKey);
     if (!primary_pattern_str) {
@@ -521,13 +530,13 @@ bool ContentSettingsStore::OnCorrectThread() {
 
 ContentSettingsStore::ExtensionEntry* ContentSettingsStore::FindEntry(
     const std::string& ext_id) const {
-  auto iter = base::ranges::find(entries_, ext_id, &ExtensionEntry::id);
+  auto iter = std::ranges::find(entries_, ext_id, &ExtensionEntry::id);
   return iter == entries_.end() ? nullptr : iter->get();
 }
 
 ContentSettingsStore::ExtensionEntries::iterator
 ContentSettingsStore::FindIterator(const std::string& ext_id) {
-  return base::ranges::find(entries_, ext_id, &ExtensionEntry::id);
+  return std::ranges::find(entries_, ext_id, &ExtensionEntry::id);
 }
 
 }  // namespace extensions

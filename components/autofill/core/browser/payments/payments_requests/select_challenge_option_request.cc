@@ -7,8 +7,6 @@
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
-#include "components/autofill/core/browser/autofill_client.h"
-#include "components/autofill/core/browser/payments/payments_network_interface.h"
 
 namespace autofill {
 namespace payments {
@@ -19,9 +17,8 @@ const char kSelectChallengeOptionRequestPath[] =
 }  // namespace
 
 SelectChallengeOptionRequest::SelectChallengeOptionRequest(
-    PaymentsNetworkInterface::SelectChallengeOptionRequestDetails
-        request_details,
-    base::OnceCallback<void(AutofillClient::PaymentsRpcResult,
+    SelectChallengeOptionRequestDetails request_details,
+    base::OnceCallback<void(payments::PaymentsAutofillClient::PaymentsRpcResult,
                             const std::string&)> callback)
     : request_details_(request_details), callback_(std::move(callback)) {}
 
@@ -36,8 +33,8 @@ std::string SelectChallengeOptionRequest::GetRequestContentType() {
 }
 
 std::string SelectChallengeOptionRequest::GetRequestContent() {
-  base::Value::Dict request_dict;
-  base::Value::Dict context;
+  base::DictValue request_dict;
+  base::DictValue context;
   context.Set("billable_service", kUnmaskPaymentMethodBillableServiceNumber);
   if (request_details_.billing_customer_number != 0) {
     context.Set("customer_context",
@@ -46,14 +43,14 @@ std::string SelectChallengeOptionRequest::GetRequestContent() {
   }
   request_dict.Set("context", std::move(context));
 
-  base::Value::Dict selected_idv_method;
+  base::DictValue selected_idv_method;
 
   DCHECK_NE(request_details_.selected_challenge_option.type,
             CardUnmaskChallengeOptionType::kUnknownType);
   // Set if selected idv option is sms otp option.
   if (request_details_.selected_challenge_option.type ==
       CardUnmaskChallengeOptionType::kSmsOtp) {
-    base::Value::Dict sms_challenge_option;
+    base::DictValue sms_challenge_option;
     // We only get and set the challenge id.
     if (!request_details_.selected_challenge_option.id.value().empty()) {
       sms_challenge_option.Set(
@@ -65,7 +62,7 @@ std::string SelectChallengeOptionRequest::GetRequestContent() {
   }
   if (request_details_.selected_challenge_option.type ==
       CardUnmaskChallengeOptionType::kEmailOtp) {
-    base::Value::Dict email_challenge_option;
+    base::DictValue email_challenge_option;
     // We only get and set the challenge id.
     if (!request_details_.selected_challenge_option.id.value().empty()) {
       email_challenge_option.Set(
@@ -82,14 +79,13 @@ std::string SelectChallengeOptionRequest::GetRequestContent() {
     request_dict.Set("context_token", request_details_.context_token);
   }
 
-  std::string request_content;
-  base::JSONWriter::Write(request_dict, &request_content);
-  VLOG(3) << "selectchallengeoption request body: " << request_content;
+  std::string request_content = base::WriteJson(request_dict).value_or("");
+  DVLOG(3) << "selectchallengeoption request body: " << request_content;
   return request_content;
 }
 
 void SelectChallengeOptionRequest::ParseResponse(
-    const base::Value::Dict& response) {
+    const base::DictValue& response) {
   const std::string* updated_context_token =
       response.FindString("context_token");
   updated_context_token_ =
@@ -101,7 +97,7 @@ bool SelectChallengeOptionRequest::IsResponseComplete() {
 }
 
 void SelectChallengeOptionRequest::RespondToDelegate(
-    AutofillClient::PaymentsRpcResult result) {
+    payments::PaymentsAutofillClient::PaymentsRpcResult result) {
   std::move(callback_).Run(result, updated_context_token_);
 }
 

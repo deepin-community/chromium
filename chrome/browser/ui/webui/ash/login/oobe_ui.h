@@ -5,20 +5,22 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_ASH_LOGIN_OOBE_UI_H_
 #define CHROME_BROWSER_UI_WEBUI_ASH_LOGIN_OOBE_UI_H_
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "ash/webui/common/backend/webui_syslog_emitter.h"
 #include "ash/webui/common/chrome_os_webui_config.h"
+#include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/screens/core_oobe.h"
 #include "chrome/browser/ui/webui/ash/login/base_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/core_oobe_handler.h"
+#include "chrome/browser/ui/webui/ash/login/oobe_screens_handler_factory.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-forward.h"
 #include "chromeos/ash/services/cellular_setup/public/mojom/esim_manager.mojom-forward.h"
@@ -27,11 +29,6 @@
 #include "content/public/common/url_constants.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "ui/webui/mojo_web_ui_controller.h"
-#include "ui/webui/resources/cr_components/color_change_listener/color_change_listener.mojom.h"
-
-namespace ui {
-class ColorChangeHandler;
-}
 
 namespace content {
 class WebUIDataSource;
@@ -62,9 +59,10 @@ class OobeUI : public ui::MojoWebUIController {
  public:
   // List of known types of OobeUI. Type added as path in chrome://oobe url, for
   // example chrome://oobe/gaia-signin.
-  static const char kAppLaunchSplashDisplay[];
-  static const char kGaiaSigninDisplay[];
-  static const char kOobeDisplay[];
+  static inline constexpr char kAppLaunchSplashDisplay[] = "app-launch-splash";
+  static inline constexpr char kGaiaSigninDisplay[] = "gaia-signin";
+  static inline constexpr char kOobeDisplay[] = "oobe";
+  static inline constexpr char kOobeTestLoader[] = "test_loader.html";
 
   class Observer {
    public:
@@ -91,9 +89,10 @@ class OobeUI : public ui::MojoWebUIController {
 
   CoreOobe* GetCoreOobe();
   ErrorScreen* GetErrorScreen();
+  OobeScreensHandlerFactory* GetOobeScreensHandlerFactory();
 
   // Collects localized strings from the owned handlers.
-  base::Value::Dict GetLocalizedStrings();
+  base::DictValue GetLocalizedStrings();
 
   // Initializes the handlers.
   void InitializeHandlers();
@@ -143,12 +142,12 @@ class OobeUI : public ui::MojoWebUIController {
   THandler* GetHandler() {
     OobeScreenId expected_screen = THandler::kScreenId;
     for (BaseScreenHandler* handler : screen_handlers_) {
-      if (expected_screen == handler->oobe_screen())
+      if (expected_screen == handler->oobe_screen()) {
         return static_cast<THandler*>(handler);
+      }
     }
 
     NOTREACHED() << "Unable to find handler for screen " << expected_screen;
-    return nullptr;
   }
 
   // Instantiates implementor of the mojom::MultiDeviceSetup mojo interface
@@ -172,11 +171,6 @@ class OobeUI : public ui::MojoWebUIController {
   void BindInterface(
       mojo::PendingReceiver<ash::cellular_setup::mojom::ESimManager> receiver);
 
-  // Binds to the Jelly dynamic color Mojo
-  void BindInterface(
-      mojo::PendingReceiver<color_change_listener::mojom::PageHandler>
-          receiver);
-
   // Binds to the cros authentication factor editing services.
   void BindInterface(
       mojo::PendingReceiver<auth::mojom::AuthFactorConfig> receiver);
@@ -184,6 +178,12 @@ class OobeUI : public ui::MojoWebUIController {
       mojo::PendingReceiver<auth::mojom::PinFactorEditor> receiver);
   void BindInterface(
       mojo::PendingReceiver<auth::mojom::PasswordFactorEditor> receiver);
+
+  void BindInterface(
+      mojo::PendingReceiver<screens_factory::mojom::ScreensFactory> receiver);
+
+  void BindInterface(
+      mojo::PendingReceiver<common::mojom::WebUiSyslogEmitter> receiver);
 
   static void AddOobeComponents(content::WebUIDataSource* source);
 
@@ -219,7 +219,9 @@ class OobeUI : public ui::MojoWebUIController {
   std::vector<raw_ptr<BaseScreenHandler, VectorExperimental>>
       screen_handlers_;  // Non-owning pointers.
 
-  std::unique_ptr<ui::ColorChangeHandler> color_provider_handler_;
+  std::unique_ptr<OobeScreensHandlerFactory> oobe_screens_handler_factory_;
+
+  std::unique_ptr<WebUiSyslogEmitter> webui_syslog_emitter_;
 
   std::unique_ptr<ErrorScreen> error_screen_;
 

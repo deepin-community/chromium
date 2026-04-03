@@ -17,7 +17,6 @@
 #include "chrome/test/chromedriver/chrome/web_view.h"
 
 class DevToolsClient;
-class JavaScriptDialogManager;
 class Status;
 class Timeout;
 
@@ -26,13 +25,11 @@ class NavigationTracker : public PageLoadStrategy {
  public:
   NavigationTracker(DevToolsClient* client,
                     WebView* web_view,
-                    const JavaScriptDialogManager* dialog_manager,
                     const bool is_eager = false);
 
   NavigationTracker(DevToolsClient* client,
                     LoadingState known_state,
                     WebView* web_view,
-                    const JavaScriptDialogManager* dialog_manager,
                     const bool is_eager = false);
 
   NavigationTracker(const NavigationTracker&) = delete;
@@ -55,10 +52,10 @@ class NavigationTracker : public PageLoadStrategy {
   Status OnConnected(DevToolsClient* client) override;
   Status OnEvent(DevToolsClient* client,
                  const std::string& method,
-                 const base::Value::Dict& params) override;
+                 const base::DictValue& params) override;
   Status OnCommandSuccess(DevToolsClient* client,
                           const std::string& method,
-                          const base::Value::Dict* result,
+                          const base::DictValue* result,
                           const Timeout& command_timeout) override;
 
  private:
@@ -77,7 +74,6 @@ class NavigationTracker : public PageLoadStrategy {
   // May be empty to signify current frame is
   // no longer valid
   std::string current_frame_id_;
-  raw_ptr<const JavaScriptDialogManager> dialog_manager_;
   const bool is_eager_;
   bool timed_out_;
   std::unordered_map<std::string, LoadingState> frame_to_state_map_;

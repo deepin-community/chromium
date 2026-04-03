@@ -2,11 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/download/public/common/download_path_reservation_tracker.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -19,8 +23,6 @@
 #include "base/test/test_file_util.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "components/download/public/common/download_path_reservation_tracker.h"
 #include "components/download/public/common/mock_download_item.h"
 #include "net/base/filename_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -462,8 +464,9 @@ TEST_F(DownloadPathReservationTrackerTest, UnresolvedConflicts) {
   // Make room for the path with no uniquifier, the |kMaxUniqueFiles|
   // numerically uniquified paths, and then one more for the timestamp
   // uniquified path.
-  std::unique_ptr<MockDownloadItem>
-      items[DownloadPathReservationTracker::kMaxUniqueFiles + 2];
+  std::array<std::unique_ptr<MockDownloadItem>,
+             DownloadPathReservationTracker::kMaxUniqueFiles + 2>
+      items;
 
   // Create |kMaxUniqueFiles + 2| reservations for |path|. The first reservation
   // will have no uniquifier. Then |kMaxUniqueFiles| paths have numeric
@@ -504,7 +507,7 @@ TEST_F(DownloadPathReservationTrackerTest, UnresolvedConflicts) {
 }
 
 #if BUILDFLAG(IS_FUCHSIA)
-// TODO(crbug.com/1314073): Re-enable when UnwriteableDirectory works on
+// TODO(crbug.com/40221275): Re-enable when UnwriteableDirectory works on
 // Fuchsia.
 #define MAYBE_UnwriteableDirectory DISABLED_UnwriteableDirectory
 #else
@@ -620,7 +623,7 @@ TEST_F(DownloadPathReservationTrackerTest, UpdatesToTargetPath) {
 
 // Tests for long name truncation. On other platforms automatic truncation
 // is not performed (yet).
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_CHROMEOS)
 
 TEST_F(DownloadPathReservationTrackerTest, BasicTruncation) {
   int real_max_length =

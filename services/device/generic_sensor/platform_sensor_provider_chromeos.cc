@@ -9,10 +9,8 @@
 #include <map>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chromeos/components/sensors/sensor_util.h"
@@ -76,6 +74,11 @@ PlatformSensorProviderChromeOS::~PlatformSensorProviderChromeOS() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 }
 
+base::WeakPtr<PlatformSensorProvider>
+PlatformSensorProviderChromeOS::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 void PlatformSensorProviderChromeOS::SetUpChannel(
     mojo::PendingRemote<chromeos::sensors::mojom::SensorService>
         pending_remote) {
@@ -106,7 +109,7 @@ void PlatformSensorProviderChromeOS::OnNewDeviceAdded(
     const std::vector<chromeos::sensors::mojom::DeviceType>& types) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-  if (base::Contains(sensors_, iio_device_id))
+  if (sensors_.contains(iio_device_id))
     return;
 
   RegisterDevice(iio_device_id, types);
@@ -114,7 +117,6 @@ void PlatformSensorProviderChromeOS::OnNewDeviceAdded(
 
 void PlatformSensorProviderChromeOS::CreateSensorInternal(
     mojom::SensorType type,
-    SensorReadingSharedBuffer* reading_buffer,
     CreateSensorCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
@@ -131,7 +133,7 @@ void PlatformSensorProviderChromeOS::CreateSensorInternal(
   // algorithm, wait until all sensors ready before processing the fusion
   // sensors as well.
   if (IsFusionSensorType(type)) {
-    CreateFusionSensor(type, reading_buffer, std::move(callback));
+    CreateFusionSensor(type, std::move(callback));
     return;
   }
 
@@ -141,14 +143,14 @@ void PlatformSensorProviderChromeOS::CreateSensorInternal(
     return;
   }
   int32_t id = id_opt.value();
-  DCHECK(base::Contains(sensors_, id));
+  DCHECK(sensors_.contains(id));
 
   auto& sensor = sensors_[id];
   DCHECK(sensor.scale.has_value());
 
   auto sensor_device_remote = GetSensorDeviceRemote(id);
   std::move(callback).Run(base::MakeRefCounted<PlatformSensorChromeOS>(
-      id, type, reading_buffer, this,
+      id, type, GetSensorReadingSharedBufferForType(type), AsWeakPtr(),
       base::BindOnce(&PlatformSensorProviderChromeOS::OnSensorDeviceDisconnect,
                      weak_ptr_factory_.GetWeakPtr(), id),
       sensor.scale.value(), std::move(sensor_device_remote)));
@@ -196,7 +198,7 @@ PlatformSensorProviderChromeOS::ParseLocation(
       chromeos::sensors::mojom::kLocationBase,
       chromeos::sensors::mojom::kLocationLid,
       chromeos::sensors::mojom::kLocationCamera};
-  const auto it = base::ranges::find(location_strings, raw_location.value());
+  const auto it = std::ranges::find(location_strings, raw_location.value());
   if (it == std::end(location_strings))
     return std::nullopt;
 
@@ -348,7 +350,7 @@ void PlatformSensorProviderChromeOS::GetAttributesCallback(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   auto it = sensors_.find(id);
-  DCHECK(it != sensors_.end());
+  CHECK(it != sensors_.end());
   auto& sensor = it->second;
   DCHECK(sensor.remote.is_bound());
 
@@ -412,7 +414,7 @@ bool PlatformSensorProviderChromeOS::AreAllSensorsReady() const {
   if (!sensor_ids_received_)
     return false;
 
-  return base::ranges::all_of(sensors_, [](const auto& sensor) {
+  return std::ranges::all_of(sensors_, [](const auto& sensor) {
     return sensor.second.ignored ||
            (sensor.second.scale.has_value() &&
             (!DeviceNeedsLocationWithTypes(sensor.second.types) ||
@@ -550,7 +552,8 @@ void PlatformSensorProviderChromeOS::DetermineLightSensor() {
 
   for (const auto& sensor : sensors_) {
     if (sensor.second.ignored ||
-        !base::Contains(sensor.second.types, mojom::SensorType::AMBIENT_LIGHT))
+        !std::ranges::contains(sensor.second.types,
+                               mojom::SensorType::AMBIENT_LIGHT))
       continue;
 
     if (!id.has_value() || sensor.second.location == SensorLocation::kLid)
@@ -579,7 +582,7 @@ void PlatformSensorProviderChromeOS::RemoveUnusedSensorDeviceRemotes() {
     used_ids.emplace(type_id.second);
 
   for (auto& sensor : sensors_) {
-    if (!base::Contains(used_ids, sensor.first))
+    if (!used_ids.contains(sensor.first))
       sensor.second.remote.reset();
   }
 }
@@ -588,17 +591,18 @@ void PlatformSensorProviderChromeOS::ProcessStoredRequests() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   std::vector<mojom::SensorType> request_types = GetPendingRequestTypes();
   for (const auto& type : request_types) {
+    if (IsFusionSensorType(type)) {
+      CreateFusionSensor(
+          type,
+          base::BindOnce(&PlatformSensorProviderChromeOS::NotifySensorCreated,
+                         weak_ptr_factory_.GetWeakPtr(), type));
+      continue;
+    }
+
     SensorReadingSharedBuffer* reading_buffer =
         GetSensorReadingSharedBufferForType(type);
 
-    if (!reading_buffer)
-      continue;
-
-    if (IsFusionSensorType(type)) {
-      CreateFusionSensor(
-          type, reading_buffer,
-          base::BindOnce(&PlatformSensorProviderChromeOS::NotifySensorCreated,
-                         weak_ptr_factory_.GetWeakPtr(), type));
+    if (!reading_buffer) {
       continue;
     }
 
@@ -609,7 +613,7 @@ void PlatformSensorProviderChromeOS::ProcessStoredRequests() {
     }
 
     int32_t id = id_opt.value();
-    DCHECK(base::Contains(sensors_, id));
+    DCHECK(sensors_.contains(id));
 
     auto& sensor = sensors_[id];
     DCHECK(sensor.scale.has_value());
@@ -617,7 +621,7 @@ void PlatformSensorProviderChromeOS::ProcessStoredRequests() {
     auto sensor_device_remote = GetSensorDeviceRemote(id);
     NotifySensorCreated(
         type, base::MakeRefCounted<PlatformSensorChromeOS>(
-                  id, type, reading_buffer, this,
+                  id, type, reading_buffer, AsWeakPtr(),
                   base::BindOnce(
                       &PlatformSensorProviderChromeOS::OnSensorDeviceDisconnect,
                       weak_ptr_factory_.GetWeakPtr(), id),

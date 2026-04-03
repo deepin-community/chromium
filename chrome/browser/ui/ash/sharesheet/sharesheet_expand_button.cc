@@ -15,6 +15,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/font_list.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/layout/box_layout.h"
 
 namespace ash {
@@ -33,40 +34,29 @@ SharesheetExpandButton::SharesheetExpandButton(PressedCallback callback)
   icon_ = AddChildView(std::make_unique<views::ImageView>());
 
   label_ = AddChildView(
-      chromeos::features::IsJellyEnabled()
-          ? CreateShareLabel(std::u16string(), TypographyToken::kCrosButton2,
-                             cros_tokens::kCrosSysPrimary, gfx::ALIGN_CENTER)
-          : CreateShareLabel(
-                std::u16string(), CONTEXT_SHARESHEET_BUBBLE_BODY,
-                kPrimaryTextLineHeight,
-                AshColorProvider::Get()->GetContentLayerColor(
-                    AshColorProvider::ContentLayerType::kButtonLabelColorBlue),
-                gfx::ALIGN_CENTER));
+      CreateShareLabel(std::u16string(), TypographyToken::kCrosButton2,
+                       cros_tokens::kCrosSysPrimary, gfx::ALIGN_CENTER));
   SetFocusBehavior(View::FocusBehavior::ALWAYS);
   SetToDefaultState();
 }
 
 void SharesheetExpandButton::SetToDefaultState() {
   icon_->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kCaretDownIcon,
-      AshColorProvider::Get()->GetContentLayerColor(
-          AshColorProvider::ContentLayerType::kIconColorProminent),
+      vector_icons::kCaretDownIcon, cros_tokens::kIconColorProminent,
       kExpandButtonCaretIconSize));
   auto display_name = l10n_util::GetStringUTF16(IDS_SHARESHEET_MORE_APPS_LABEL);
   label_->SetText(display_name);
-  SetAccessibleName(display_name);
+  GetViewAccessibility().SetName(display_name);
 }
 
 void SharesheetExpandButton::SetToExpandedState() {
   icon_->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kCaretUpIcon,
-      AshColorProvider::Get()->GetContentLayerColor(
-          AshColorProvider::ContentLayerType::kIconColorProminent),
+      vector_icons::kCaretUpIcon, cros_tokens::kIconColorProminent,
       kExpandButtonCaretIconSize));
   auto display_name =
       l10n_util::GetStringUTF16(IDS_SHARESHEET_FEWER_APPS_LABEL);
   label_->SetText(display_name);
-  SetAccessibleName(display_name);
+  GetViewAccessibility().SetName(display_name);
 }
 
 BEGIN_METADATA(SharesheetExpandButton)

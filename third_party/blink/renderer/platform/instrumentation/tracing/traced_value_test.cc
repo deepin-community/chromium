@@ -14,7 +14,8 @@ namespace blink {
 
 std::optional<base::Value> ParseTracedValue(
     std::unique_ptr<TracedValueJSON> value) {
-  return base::JSONReader::Read(value->ToJSON().Utf8());
+  return base::JSONReader::Read(value->ToJSON().Utf8(),
+                                base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 }
 
 TEST(TracedValueTest, FlatDictionary) {
@@ -26,7 +27,7 @@ TEST(TracedValueTest, FlatDictionary) {
 
   std::optional<base::Value> parsed = ParseTracedValue(std::move(value));
   ASSERT_TRUE(parsed->is_dict());
-  const base::Value::Dict& dict = parsed->GetDict();
+  const base::DictValue& dict = parsed->GetDict();
   std::optional<int> int_value = dict.FindInt("int");
   ASSERT_TRUE(int_value.has_value());
   EXPECT_EQ(2014, *int_value);
@@ -61,7 +62,7 @@ TEST(TracedValueTest, Hierarchy) {
 
   std::optional<base::Value> parsed = ParseTracedValue(std::move(value));
   ASSERT_TRUE(parsed->is_dict());
-  const base::Value::Dict& dict = parsed->GetDict();
+  const base::DictValue& dict = parsed->GetDict();
   std::optional<int> i0 = dict.FindInt("i0");
   ASSERT_TRUE(i0.has_value());
   EXPECT_EQ(2014, *i0);
@@ -80,7 +81,7 @@ TEST(TracedValueTest, Hierarchy) {
   std::optional<bool> b0 = dict.FindBool("b0");
   ASSERT_TRUE(b0.has_value());
   EXPECT_TRUE(*b0);
-  const base::Value::List* a1 = dict.FindList("a1");
+  const base::ListValue* a1 = dict.FindList("a1");
   ASSERT_NE(nullptr, a1);
   std::optional<int> a1i0 = (*a1)[0].GetIfInt();
   ASSERT_TRUE(a1i0.has_value());
@@ -108,7 +109,7 @@ TEST(TracedValueTest, Escape) {
 
   std::optional<base::Value> parsed = ParseTracedValue(std::move(value));
   ASSERT_TRUE(parsed->is_dict());
-  const base::Value::Dict& dict = parsed->GetDict();
+  const base::DictValue& dict = parsed->GetDict();
   const std::string* s0 = dict.FindString("s0");
   ASSERT_NE(nullptr, s0);
   EXPECT_EQ("value0\\", *s0);
@@ -144,7 +145,7 @@ TEST(TracedValueTest, NonCopiedNames) {
 
   std::optional<base::Value> parsed = ParseTracedValue(std::move(value));
   ASSERT_TRUE(parsed->is_dict());
-  const base::Value::Dict& dict = parsed->GetDict();
+  const base::DictValue& dict = parsed->GetDict();
   std::optional<int> int_value = dict.FindInt(int_str);
   ASSERT_TRUE(int_value.has_value());
   EXPECT_EQ(2014, *int_value);
@@ -157,7 +158,7 @@ TEST(TracedValueTest, NonCopiedNames) {
   const std::string* string_value = dict.FindString(string_str);
   ASSERT_NE(nullptr, string_value);
   EXPECT_EQ("string", *string_value);
-  const base::Value::List* a1 = dict.FindList(array_str);
+  const base::ListValue* a1 = dict.FindList(array_str);
   ASSERT_TRUE(a1);
   ASSERT_FALSE(a1->empty());
   std::optional<int> el0 = (*a1)[0].GetIfInt();

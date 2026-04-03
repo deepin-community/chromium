@@ -51,45 +51,12 @@ void ElementIntersectionObserverData::TrackWithController(
     controller.AddTrackedObserver(*observer);
 }
 
-void ElementIntersectionObserverData::StopTrackingWithController(
-    IntersectionObserverController& controller) {
-  for (auto& entry : observations_)
-    controller.RemoveTrackedObservation(*entry.value);
-  for (auto& observer : observers_)
-    controller.RemoveTrackedObserver(*observer);
-}
-
-bool ElementIntersectionObserverData::ComputeIntersectionsForTarget(
-    unsigned flags) {
-  bool needs_occlusion_tracking = false;
-  std::optional<base::TimeTicks> monotonic_time;
-  std::optional<IntersectionGeometry::RootGeometry> root_geometry;
-  for (auto& entry : observations_) {
-    needs_occlusion_tracking |= entry.key->NeedsOcclusionTracking();
-    entry.value->ComputeIntersection(flags,
-                                     IntersectionGeometry::kInfiniteScrollDelta,
-                                     monotonic_time, root_geometry);
-  }
-  return needs_occlusion_tracking;
-}
-
 bool ElementIntersectionObserverData::NeedsOcclusionTracking() const {
   for (auto& entry : observations_) {
     if (entry.key->trackVisibility())
       return true;
   }
   return false;
-}
-
-void ElementIntersectionObserverData::InvalidateCachedRects() {
-  if (!RuntimeEnabledFeatures::IntersectionOptimizationEnabled()) {
-    for (auto& observer : observers_) {
-      observer->InvalidateCachedRects();
-    }
-  }
-  for (auto& entry : observations_) {
-    entry.value->InvalidateCachedRects();
-  }
 }
 
 void ElementIntersectionObserverData::Trace(Visitor* visitor) const {

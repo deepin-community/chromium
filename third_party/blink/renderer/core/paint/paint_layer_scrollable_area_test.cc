@@ -10,9 +10,12 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/animation/scroll_timeline.h"
 #include "third_party/blink/renderer/core/css/css_numeric_literal_value.h"
+#include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/layout_box_model_object.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/page/scrolling/snap_coordinator.h"
 #include "third_party/blink/renderer/core/paint/paint_controller_paint_test.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
@@ -74,6 +77,23 @@ class PaintLayerScrollableAreaTest : public PaintControllerPaintTest {
       }
     }
     return false;
+  }
+
+  // Default browser preferred color scheme is light. The method sets both
+  // browser-based and the OS-based preferred color schemes to dark.
+  void SetPreferredColorSchemesToDark(ColorSchemeHelper& color_scheme_helper) {
+    color_scheme_helper.SetPreferredRootScrollbarColorScheme(
+        mojom::blink::PreferredColorScheme::kDark);
+    color_scheme_helper.SetPreferredColorScheme(
+        mojom::blink::PreferredColorScheme::kDark);
+  }
+
+  void AssertDefaultPreferredColorSchemes() const {
+    ASSERT_EQ(GetDocument().GetPreferredColorScheme(),
+              mojom::blink::PreferredColorScheme::kLight);
+    ASSERT_EQ(
+        GetDocument().GetSettings()->GetPreferredRootScrollbarColorScheme(),
+        mojom::blink::PreferredColorScheme::kLight);
   }
 
   void ExpectEqAllScrollControlsNeedPaintInvalidation(
@@ -355,12 +375,7 @@ TEST_P(PaintLayerScrollableAreaTest, SelectElementPromotionTest) {
   element->setAttribute(html_names::kClassAttr, AtomicString("composited"));
   UpdateAllLifecyclePhasesForTest();
   EXPECT_TRUE(HasDirectCompositingReasons(element->GetLayoutBox()));
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-  // <select> implementation is different and not scrollable on Android and iOS.
-  EXPECT_FALSE(UsesCompositedScrolling(element->GetLayoutBox()));
-#else
   EXPECT_TRUE(UsesCompositedScrolling(element->GetLayoutBox()));
-#endif
 }
 
 // Ensure OverlayScrollbarColorTheme get updated when page load
@@ -384,12 +399,12 @@ TEST_P(PaintLayerScrollableAreaTest, OverlayScrollbarColorThemeUpdated) {
   ASSERT_TRUE(white_layer);
   ASSERT_TRUE(black_layer);
 
-  ASSERT_EQ(ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeDark,
-            none_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
-  ASSERT_EQ(ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeDark,
-            white_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
-  ASSERT_EQ(ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeLight,
-            black_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
+  ASSERT_EQ(mojom::blink::ColorScheme::kLight,
+            none_layer->GetScrollableArea()->GetOverlayScrollbarColorScheme());
+  ASSERT_EQ(mojom::blink::ColorScheme::kLight,
+            white_layer->GetScrollableArea()->GetOverlayScrollbarColorScheme());
+  ASSERT_EQ(mojom::blink::ColorScheme::kDark,
+            black_layer->GetScrollableArea()->GetOverlayScrollbarColorScheme());
 }
 
 TEST_P(PaintLayerScrollableAreaTest,
@@ -408,25 +423,25 @@ TEST_P(PaintLayerScrollableAreaTest,
     </div>
   )HTML");
   PaintLayer* scroll_paint_layer = GetPaintLayerByElementId("scroller");
-  EXPECT_EQ(
-      ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeDark,
-      scroll_paint_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
+  EXPECT_EQ(mojom::blink::ColorScheme::kLight,
+            scroll_paint_layer->GetScrollableArea()
+                ->GetOverlayScrollbarColorScheme());
 
   GetElementById("scroller")
       ->setAttribute(html_names::kStyleAttr,
                      AtomicString("background: rgb(34, 85, 51);"));
   UpdateAllLifecyclePhasesForTest();
-  EXPECT_EQ(
-      ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeLight,
-      scroll_paint_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
+  EXPECT_EQ(mojom::blink::ColorScheme::kDark,
+            scroll_paint_layer->GetScrollableArea()
+                ->GetOverlayScrollbarColorScheme());
 
   GetElementById("scroller")
       ->setAttribute(html_names::kStyleAttr,
                      AtomicString("background: rgb(236, 143, 185);"));
   UpdateAllLifecyclePhasesForTest();
-  EXPECT_EQ(
-      ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeDark,
-      scroll_paint_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
+  EXPECT_EQ(mojom::blink::ColorScheme::kLight,
+            scroll_paint_layer->GetScrollableArea()
+                ->GetOverlayScrollbarColorScheme());
 }
 
 // The scrollbar overlay color theme should follow the used color scheme when a
@@ -461,22 +476,22 @@ TEST_P(PaintLayerScrollableAreaTest, PreferredOverlayScrollbarColorTheme) {
   PaintLayer* none_layer = GetPaintLayerByElementId("none");
   PaintLayer* white_layer = GetPaintLayerByElementId("white");
   PaintLayer* black_layer = GetPaintLayerByElementId("black");
-  EXPECT_EQ(ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeLight,
-            none_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
-  EXPECT_EQ(ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeDark,
-            white_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
-  EXPECT_EQ(ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeLight,
-            black_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
+  EXPECT_EQ(mojom::blink::ColorScheme::kDark,
+            none_layer->GetScrollableArea()->GetOverlayScrollbarColorScheme());
+  EXPECT_EQ(mojom::blink::ColorScheme::kLight,
+            white_layer->GetScrollableArea()->GetOverlayScrollbarColorScheme());
+  EXPECT_EQ(mojom::blink::ColorScheme::kDark,
+            black_layer->GetScrollableArea()->GetOverlayScrollbarColorScheme());
 
   color_scheme_helper.SetPreferredColorScheme(
       mojom::blink::PreferredColorScheme::kLight);
   UpdateAllLifecyclePhasesForTest();
-  EXPECT_EQ(ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeDark,
-            none_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
-  EXPECT_EQ(ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeDark,
-            white_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
-  EXPECT_EQ(ScrollbarOverlayColorTheme::kScrollbarOverlayColorThemeLight,
-            black_layer->GetScrollableArea()->GetScrollbarOverlayColorTheme());
+  EXPECT_EQ(mojom::blink::ColorScheme::kLight,
+            none_layer->GetScrollableArea()->GetOverlayScrollbarColorScheme());
+  EXPECT_EQ(mojom::blink::ColorScheme::kLight,
+            white_layer->GetScrollableArea()->GetOverlayScrollbarColorScheme());
+  EXPECT_EQ(mojom::blink::ColorScheme::kDark,
+            black_layer->GetScrollableArea()->GetOverlayScrollbarColorScheme());
 }
 
 TEST_P(PaintLayerScrollableAreaTest, HideTooltipWhenScrollPositionChanges) {
@@ -497,7 +512,8 @@ TEST_P(PaintLayerScrollableAreaTest, HideTooltipWhenScrollPositionChanges) {
                                      GetDocument().GetFrame(), String(), _))
       .Times(1);
   scrollable_area->SetScrollOffset(ScrollOffset(1, 1),
-                                   mojom::blink::ScrollType::kUser);
+                                   mojom::blink::ScrollType::kUser,
+                                   cc::ScrollSourceType::kNone);
 
   // Programmatic scrolling should not dismiss the tooltip, so
   // UpdateTooltipUnderCursor should not be called for this invocation.
@@ -505,7 +521,8 @@ TEST_P(PaintLayerScrollableAreaTest, HideTooltipWhenScrollPositionChanges) {
                                      GetDocument().GetFrame(), String(), _))
       .Times(0);
   scrollable_area->SetScrollOffset(ScrollOffset(2, 2),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
 }
 
 TEST_P(PaintLayerScrollableAreaTest, IncludeOverlayScrollbarsInVisibleWidth) {
@@ -525,7 +542,8 @@ TEST_P(PaintLayerScrollableAreaTest, IncludeOverlayScrollbarsInVisibleWidth) {
       scroller->GetLayoutBox()->GetScrollableArea();
   ASSERT_TRUE(scrollable_area);
   scrollable_area->SetScrollOffset(ScrollOffset(100, 0),
-                                   mojom::blink::ScrollType::kClamping);
+                                   mojom::blink::ScrollType::kClamping,
+                                   cc::ScrollSourceType::kStationaryScroll);
   EXPECT_EQ(scrollable_area->GetScrollOffset().x(), 15);
 }
 
@@ -641,7 +659,8 @@ TEST_P(PaintLayerScrollableAreaTest, OverflowHiddenScrollOffsetInvalidation) {
 
   // A property update is needed when scroll offset changes.
   scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   EXPECT_TRUE(scroller->NeedsPaintPropertyUpdate());
   UpdateAllLifecyclePhasesExceptPaint();
   EXPECT_TRUE(scroller->PaintingLayer()->SelfNeedsRepaint());
@@ -653,7 +672,8 @@ TEST_P(PaintLayerScrollableAreaTest, OverflowHiddenScrollOffsetInvalidation) {
   UpdateAllLifecyclePhasesForTest();
 
   scrollable_area->SetScrollOffset(ScrollOffset(0, 2),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   EXPECT_TRUE(scroller->NeedsPaintPropertyUpdate());
   UpdateAllLifecyclePhasesExceptPaint();
   EXPECT_TRUE(scroller->PaintingLayer()->SelfNeedsRepaint());
@@ -665,7 +685,8 @@ TEST_P(PaintLayerScrollableAreaTest, OverflowHiddenScrollOffsetInvalidation) {
   UpdateAllLifecyclePhasesForTest();
 
   scrollable_area->SetScrollOffset(ScrollOffset(0, 0),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   EXPECT_TRUE(scroller->NeedsPaintPropertyUpdate());
   UpdateAllLifecyclePhasesExceptPaint();
   EXPECT_TRUE(scroller->PaintingLayer()->SelfNeedsRepaint());
@@ -691,8 +712,7 @@ TEST_P(PaintLayerScrollableAreaTest, ScrollDoesNotInvalidate) {
   )HTML");
 
   auto* scroller = GetLayoutBoxByElementId("scroller");
-  auto* scrollable_area =
-      To<LayoutBoxModelObject>(scroller)->GetScrollableArea();
+  auto* scrollable_area = scroller->GetScrollableArea();
 
   const auto* properties = scroller->FirstFragment().PaintProperties();
   // Scroll offset translation is needed even when scroll offset is zero.
@@ -701,7 +721,8 @@ TEST_P(PaintLayerScrollableAreaTest, ScrollDoesNotInvalidate) {
 
   // Changing the scroll offset should not require paint invalidation.
   scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   EXPECT_FALSE(scroller->ShouldDoFullPaintInvalidation());
   EXPECT_TRUE(scroller->NeedsPaintPropertyUpdate());
   UpdateAllLifecyclePhasesForTest();
@@ -736,10 +757,11 @@ TEST_P(PaintLayerScrollableAreaTest, ScrollWithStickyNeedsCompositingUpdate) {
   // Changing the scroll offset requires a compositing update to rerun overlap
   // testing.
   scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   UpdateAllLifecyclePhasesExceptPaint();
-  EXPECT_FALSE(
-      GetDocument().View()->GetPaintArtifactCompositor()->NeedsUpdate());
+  EXPECT_EQ(GetDocument().View()->GetPaintArtifactCompositor()->NeedsUpdate(),
+            PaintArtifactCompositor::UpdateType::kNone);
   UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(ScrollOffset(0, 1), scrollable_area->GetScrollOffset());
 }
@@ -773,10 +795,11 @@ TEST_P(PaintLayerScrollableAreaTest,
   // though fixed-pos content is present as fixed bounds is already expanded to
   // include all possible scroll offsets.
   scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   UpdateAllLifecyclePhasesExceptPaint();
-  EXPECT_FALSE(
-      GetDocument().View()->GetPaintArtifactCompositor()->NeedsUpdate());
+  EXPECT_EQ(GetDocument().View()->GetPaintArtifactCompositor()->NeedsUpdate(),
+            PaintArtifactCompositor::UpdateType::kNone);
   UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(ScrollOffset(0, 1), scrollable_area->GetScrollOffset());
 }
@@ -807,7 +830,8 @@ TEST_P(PaintLayerScrollableAreaTest,
 
   // Programmatically changing the scroll offset.
   scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   // No paint invalidation because it uses composited scrolling.
   EXPECT_FALSE(scroller->ShouldDoFullPaintInvalidation());
   EXPECT_FALSE(scroller->BackgroundNeedsFullPaintInvalidation());
@@ -869,7 +893,8 @@ TEST_P(PaintLayerScrollableAreaTest,
 
   // Programmatically changing the scroll offset.
   scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   // No invalidation because the background paints into the main layer.
   EXPECT_TRUE(scroller->ShouldDoFullPaintInvalidation());
   EXPECT_TRUE(scroller->BackgroundNeedsFullPaintInvalidation());
@@ -908,8 +933,9 @@ TEST_P(PaintLayerScrollableAreaTest, ViewScrollWithFixedAttachmentBackground) {
 
   // Programmatically changing the view's scroll offset. Should invalidate all
   // objects with fixed attachment background.
-  view_scrollable_area->SetScrollOffset(
-      ScrollOffset(0, 1), mojom::blink::ScrollType::kProgrammatic);
+  view_scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
+                                        mojom::blink::ScrollType::kProgrammatic,
+                                        cc::ScrollSourceType::kNone);
   EXPECT_TRUE(fixed_background_div->ShouldDoFullPaintInvalidation());
   EXPECT_TRUE(fixed_background_div->BackgroundNeedsFullPaintInvalidation());
   EXPECT_FALSE(fixed_background_div->NeedsPaintPropertyUpdate());
@@ -921,7 +947,8 @@ TEST_P(PaintLayerScrollableAreaTest, ViewScrollWithFixedAttachmentBackground) {
   // Programmatically changing the div's scroll offset. Should invalidate the
   // scrolled div with fixed attachment background.
   div_scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
-                                       mojom::blink::ScrollType::kProgrammatic);
+                                       mojom::blink::ScrollType::kProgrammatic,
+                                       cc::ScrollSourceType::kNone);
   EXPECT_TRUE(fixed_background_div->ShouldDoFullPaintInvalidation());
   EXPECT_TRUE(fixed_background_div->BackgroundNeedsFullPaintInvalidation());
   EXPECT_TRUE(fixed_background_div->NeedsPaintPropertyUpdate());
@@ -961,8 +988,9 @@ TEST_P(PaintLayerScrollableAreaTest,
 
   // Programmatically changing the view's scroll offset. Should invalidate all
   // objects with fixed attachment background.
-  view_scrollable_area->SetScrollOffset(
-      ScrollOffset(0, 1), mojom::blink::ScrollType::kProgrammatic);
+  view_scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
+                                        mojom::blink::ScrollType::kProgrammatic,
+                                        cc::ScrollSourceType::kNone);
   EXPECT_FALSE(fixed_background_div->ShouldDoFullPaintInvalidation());
   EXPECT_FALSE(fixed_background_div->BackgroundNeedsFullPaintInvalidation());
   EXPECT_FALSE(fixed_background_div->NeedsPaintPropertyUpdate());
@@ -974,7 +1002,8 @@ TEST_P(PaintLayerScrollableAreaTest,
   // Programmatically changing the div's scroll offset. Should invalidate the
   // scrolled div with fixed attachment background.
   div_scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
-                                       mojom::blink::ScrollType::kProgrammatic);
+                                       mojom::blink::ScrollType::kProgrammatic,
+                                       cc::ScrollSourceType::kNone);
   EXPECT_FALSE(fixed_background_div->ShouldDoFullPaintInvalidation());
   EXPECT_FALSE(fixed_background_div->BackgroundNeedsFullPaintInvalidation());
   EXPECT_TRUE(fixed_background_div->NeedsPaintPropertyUpdate());
@@ -1015,8 +1044,9 @@ TEST_P(PaintLayerScrollableAreaTest,
 
   // Programmatically changing the view's scroll offset. Should invalidate all
   // objects with fixed attachment background except the layout view.
-  view_scrollable_area->SetScrollOffset(
-      ScrollOffset(0, 1), mojom::blink::ScrollType::kProgrammatic);
+  view_scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
+                                        mojom::blink::ScrollType::kProgrammatic,
+                                        cc::ScrollSourceType::kNone);
   EXPECT_TRUE(fixed_background_div->ShouldDoFullPaintInvalidation());
   EXPECT_TRUE(fixed_background_div->BackgroundNeedsFullPaintInvalidation());
   EXPECT_FALSE(fixed_background_div->NeedsPaintPropertyUpdate());
@@ -1028,7 +1058,8 @@ TEST_P(PaintLayerScrollableAreaTest,
   // Programmatically changing the div's scroll offset. Should invalidate the
   // scrolled div with fixed attachment background.
   div_scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
-                                       mojom::blink::ScrollType::kProgrammatic);
+                                       mojom::blink::ScrollType::kProgrammatic,
+                                       cc::ScrollSourceType::kNone);
   EXPECT_TRUE(fixed_background_div->ShouldDoFullPaintInvalidation());
   EXPECT_TRUE(fixed_background_div->BackgroundNeedsFullPaintInvalidation());
   EXPECT_TRUE(fixed_background_div->NeedsPaintPropertyUpdate());
@@ -1049,8 +1080,9 @@ TEST_P(PaintLayerScrollableAreaTest, ViewScrollWithScrollAttachmentBackground) {
             GetLayoutView().GetBackgroundPaintLocation());
   auto* view_scrollable_area = GetLayoutView().GetScrollableArea();
   EXPECT_FALSE(view_scrollable_area->BackgroundNeedsRepaintOnScroll());
-  view_scrollable_area->SetScrollOffset(
-      ScrollOffset(0, 1), mojom::blink::ScrollType::kProgrammatic);
+  view_scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
+                                        mojom::blink::ScrollType::kProgrammatic,
+                                        cc::ScrollSourceType::kNone);
   EXPECT_FALSE(GetLayoutView().ShouldDoFullPaintInvalidation());
   EXPECT_FALSE(GetLayoutView().BackgroundNeedsFullPaintInvalidation());
   EXPECT_TRUE(GetLayoutView().NeedsPaintPropertyUpdate());
@@ -1068,8 +1100,9 @@ TEST_P(PaintLayerScrollableAreaTest, ViewScrollWithLocalAttachmentBackground) {
             GetLayoutView().GetBackgroundPaintLocation());
   auto* view_scrollable_area = GetLayoutView().GetScrollableArea();
   EXPECT_FALSE(view_scrollable_area->BackgroundNeedsRepaintOnScroll());
-  view_scrollable_area->SetScrollOffset(
-      ScrollOffset(0, 1), mojom::blink::ScrollType::kProgrammatic);
+  view_scrollable_area->SetScrollOffset(ScrollOffset(0, 1),
+                                        mojom::blink::ScrollType::kProgrammatic,
+                                        cc::ScrollSourceType::kNone);
   EXPECT_FALSE(GetLayoutView().ShouldDoFullPaintInvalidation());
   EXPECT_FALSE(GetLayoutView().BackgroundNeedsFullPaintInvalidation());
   EXPECT_TRUE(GetLayoutView().NeedsPaintPropertyUpdate());
@@ -1096,8 +1129,7 @@ TEST_P(PaintLayerScrollableAreaTest, HitTestOverlayScrollbars) {
   )HTML");
 
   auto* scroller = GetLayoutBoxByElementId("scroller");
-  auto* scrollable_area =
-      To<LayoutBoxModelObject>(scroller)->GetScrollableArea();
+  auto* scrollable_area = scroller->GetScrollableArea();
 
   scrollable_area->SetScrollbarsHiddenIfOverlay(true);
 
@@ -1125,6 +1157,11 @@ TEST_P(PaintLayerScrollableAreaTest, HitTestOverlayScrollbars) {
 
 TEST_P(PaintLayerScrollableAreaTest,
        ShowNonCompositedScrollbarOnCompositorScroll) {
+  // Scrollbars are always composited in RasterInducingScroll.
+  if (RuntimeEnabledFeatures::RasterInducingScrollEnabled()) {
+    return;
+  }
+
   SetBodyInnerHTML(R"HTML(
     <style>
     html, body {
@@ -1144,8 +1181,7 @@ TEST_P(PaintLayerScrollableAreaTest,
   )HTML");
 
   auto* scroller = GetLayoutBoxByElementId("scroller");
-  auto* scrollable_area =
-      To<LayoutBoxModelObject>(scroller)->GetScrollableArea();
+  auto* scrollable_area = scroller->GetScrollableArea();
 
   scrollable_area->SetScrollbarsHiddenIfOverlay(true);
 
@@ -1156,7 +1192,8 @@ TEST_P(PaintLayerScrollableAreaTest,
   EXPECT_FALSE(scrollable_area->UsesCompositedScrolling());
 
   scrollable_area->SetScrollOffset(ScrollOffset(0, 20),
-                                   mojom::blink::ScrollType::kCompositor);
+                                   mojom::blink::ScrollType::kCompositor,
+                                   cc::ScrollSourceType::kNone);
 
   EXPECT_FALSE(scrollable_area->ScrollbarsHiddenIfOverlay());
 }
@@ -1182,7 +1219,8 @@ TEST_P(PaintLayerScrollableAreaTest, CompositedStickyDescendant) {
                   ->IsIdentity());
 
   scrollable_area->SetScrollOffset(ScrollOffset(0, 50),
-                                   mojom::blink::ScrollType::kUser);
+                                   mojom::blink::ScrollType::kUser,
+                                   cc::ScrollSourceType::kNone);
   UpdateAllLifecyclePhasesForTest();
 
   EXPECT_EQ(gfx::Vector2dF(0, 50), sticky->FirstFragment()
@@ -1209,6 +1247,65 @@ TEST_P(PaintLayerScrollableAreaTest, StickyPositionUseCounter) {
                      AtomicString("top: 0; position: sticky;"));
   UpdateAllLifecyclePhasesForTest();
   EXPECT_TRUE(GetDocument().IsUseCounted(WebFeature::kPositionSticky));
+}
+
+// Test when the observed behavior will change as a result of enabling
+// OverscrollBehaviorRespectedOnAllScrollContainers.
+TEST_P(PaintLayerScrollableAreaTest,
+       OverscrollBehaviorOnNonScrollableScrollContainerUseCounter) {
+  SetBodyInnerHTML(R"HTML(
+    <div id=scroller style="overflow: auto; width: 300px; height: 300px;">
+      <div id=content style="width: 200px; height: 200px;"></div>
+    </div>
+  )HTML");
+
+  mojom::WebFeature feature =
+      WebFeature::kOverscrollBehaviorOnNonScrollableScrollContainer;
+  EXPECT_FALSE(GetDocument().IsUseCounted(feature));
+
+  auto* scroller = GetElementById("scroller");
+  scroller->SetInlineStyleProperty(CSSPropertyID::kOverscrollBehaviorY,
+                                   CSSValueID::kNone);
+  UpdateAllLifecyclePhasesForTest();
+  // If we have non-auto overscroll behavior on a non-scrollable scroll
+  // container, the behavior will be respected with the feature enabled.
+  EXPECT_TRUE(GetDocument().IsUseCounted(feature));
+  EXPECT_EQ(scroller->ComputedStyleRef().OverscrollBehaviorX(),
+            EOverscrollBehavior::kAuto);
+  EXPECT_EQ(scroller->ComputedStyleRef().OverscrollBehaviorY(),
+            EOverscrollBehavior::kNone);
+
+  GetDocument().ClearUseCounterForTesting(feature);
+  EXPECT_FALSE(GetDocument().IsUseCounted(feature));
+
+  scroller->SetInlineStyleProperty(CSSPropertyID::kOverflow,
+                                   CSSValueID::kHidden);
+  UpdateAllLifecyclePhasesForTest();
+  // If we have non-auto overscroll behavior on a overflow: hidden scroll
+  // container, the behavior will be respected with the feature enabled.
+  EXPECT_TRUE(GetDocument().IsUseCounted(feature));
+  EXPECT_EQ(scroller->ComputedStyleRef().OverflowX(), EOverflow::kHidden);
+  EXPECT_EQ(scroller->ComputedStyleRef().OverflowY(), EOverflow::kHidden);
+
+  GetDocument().ClearUseCounterForTesting(feature);
+  EXPECT_FALSE(GetDocument().IsUseCounted(feature));
+
+  auto* content = GetElementById("content");
+  content->SetInlineStyleProperty(CSSPropertyID::kWidth, "400px");
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(GetDocument().IsUseCounted(feature));
+
+  GetDocument().ClearUseCounterForTesting(feature);
+  EXPECT_FALSE(GetDocument().IsUseCounted(feature));
+
+  scroller->SetInlineStyleProperty(CSSPropertyID::kOverscrollBehaviorY,
+                                   CSSValueID::kAuto);
+  UpdateAllLifecyclePhasesForTest();
+  // If we have auto overscroll behavior on a scroll container, the behavior
+  // will not be affected with the feature enabled.
+  EXPECT_FALSE(GetDocument().IsUseCounted(feature));
+  EXPECT_EQ(scroller->ComputedStyleRef().OverscrollBehaviorY(),
+            EOverscrollBehavior::kAuto);
 }
 
 // Delayed scroll offset clamping should not crash. https://crbug.com/842495
@@ -1370,12 +1467,14 @@ TEST_P(PaintLayerScrollableAreaTest,
 
   HistoryItem::ViewState view_state;
   view_state.scroll_offset_ = ScrollOffset(0, 100);
-  scrollable_area->SetPendingHistoryRestoreScrollOffset(view_state, true);
+  scrollable_area->SetPendingHistoryRestoreScrollOffset(
+      view_state, true, mojom::blink::ScrollBehavior::kAuto);
   scrollable_area->ApplyPendingHistoryRestoreScrollOffset();
   EXPECT_EQ(ScrollOffset(0, 100), scrollable_area->GetScrollOffset());
 
   scrollable_area->SetScrollOffset(ScrollOffset(0, 50),
-                                   mojom::blink::ScrollType::kUser);
+                                   mojom::blink::ScrollType::kUser,
+                                   cc::ScrollSourceType::kNone);
 
   // The second call to ApplyPendingHistoryRestoreScrollOffset should
   // do nothing, since the history was already restored.
@@ -1511,6 +1610,44 @@ TEST_P(PaintLayerScrollableAreaTest,
 }
 
 TEST_P(PaintLayerScrollableAreaTest,
+       ShowRootScrollbarsForVisualViewportIfOverlay) {
+  ScopedMockOverlayScrollbars scoped_mock_overlay_scrollbars;
+
+  SetBodyInnerHTML(R"HTML(
+    <div>foo</div>
+  )HTML");
+
+  const auto* root_scrollable = GetDocument().View()->LayoutViewport();
+  EXPECT_FALSE(root_scrollable->HasScrollbar());
+
+  // Simulate pinch-zoom.
+  GetPage().GetVisualViewport().SetScale(2);
+
+  // Overlay scrollbars are shown because the visual viewport is scrollable
+  // after pinch-zooming.
+  EXPECT_TRUE(root_scrollable->HasScrollbar());
+}
+
+TEST_P(PaintLayerScrollableAreaTest,
+       DoNotShowRootScrollbarsForVisualViewportIfNotOverlay) {
+  USE_NON_OVERLAY_SCROLLBARS_OR_QUIT();
+
+  SetBodyInnerHTML(R"HTML(
+    <div>foo</div>
+  )HTML");
+
+  const auto* root_scrollable = GetDocument().View()->LayoutViewport();
+  EXPECT_FALSE(root_scrollable->HasScrollbar());
+
+  // Simulate pinch-zoom.
+  GetPage().GetVisualViewport().SetScale(2);
+
+  // Scrollbars are not shown even though the visual viewport is scrolalble
+  // because showing scrollbars would cause layout changes.
+  EXPECT_FALSE(root_scrollable->HasScrollbar());
+}
+
+TEST_P(PaintLayerScrollableAreaTest,
        ResizeSmallerToBeScrollableWithResizerAndStackedChild) {
   USE_NON_OVERLAY_SCROLLBARS_OR_QUIT();
 
@@ -1591,8 +1728,7 @@ TEST_P(PaintLayerScrollableAreaTest, UsedColorSchemeRootScrollbarsDark) {
     </div>
   )HTML");
 
-  ASSERT_EQ(GetDocument().GetPreferredColorScheme(),
-            mojom::blink::PreferredColorScheme::kLight);
+  AssertDefaultPreferredColorSchemes();
 
   const auto* root_scrollable_area = GetLayoutView().GetScrollableArea();
   ASSERT_TRUE(root_scrollable_area);
@@ -1616,13 +1752,22 @@ TEST_P(PaintLayerScrollableAreaTest, UsedColorSchemeRootScrollbarsDark) {
       mojom::blink::PreferredColorScheme::kDark);
   UpdateAllLifecyclePhasesForTest();
 
-  if (RuntimeEnabledFeatures::UsedColorSchemeRootScrollbarsEnabled()) {
-    EXPECT_EQ(root_scrollable_area->UsedColorSchemeScrollbars(),
-              mojom::blink::ColorScheme::kDark);
-  } else {
-    EXPECT_EQ(root_scrollable_area->UsedColorSchemeScrollbars(),
-              mojom::blink::ColorScheme::kLight);
-  }
+  // Root scrollable area hasn't changed its value because the browser color
+  // scheme is light.
+  EXPECT_EQ(root_scrollable_area->UsedColorSchemeScrollbars(),
+            mojom::blink::ColorScheme::kLight);
+  EXPECT_EQ(non_root_scrollable_area_dark->UsedColorSchemeScrollbars(),
+            mojom::blink::ColorScheme::kDark);
+  EXPECT_EQ(non_root_scrollable_area_normal->UsedColorSchemeScrollbars(),
+            mojom::blink::ColorScheme::kLight);
+
+  // Change browser preferred color scheme to dark.
+  color_scheme_helper.SetPreferredRootScrollbarColorScheme(
+      mojom::blink::PreferredColorScheme::kDark);
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_EQ(root_scrollable_area->UsedColorSchemeScrollbars(),
+            mojom::blink::ColorScheme::kDark);
   EXPECT_EQ(non_root_scrollable_area_dark->UsedColorSchemeScrollbars(),
             mojom::blink::ColorScheme::kDark);
   EXPECT_EQ(non_root_scrollable_area_normal->UsedColorSchemeScrollbars(),
@@ -1640,8 +1785,7 @@ TEST_P(PaintLayerScrollableAreaTest,
     </style>
   )HTML");
 
-  ASSERT_EQ(GetDocument().GetPreferredColorScheme(),
-            mojom::blink::PreferredColorScheme::kLight);
+  AssertDefaultPreferredColorSchemes();
 
   const auto* root_scrollable_area = GetLayoutView().GetScrollableArea();
   ASSERT_TRUE(root_scrollable_area);
@@ -1649,10 +1793,8 @@ TEST_P(PaintLayerScrollableAreaTest,
   EXPECT_EQ(root_scrollable_area->UsedColorSchemeScrollbars(),
             mojom::blink::ColorScheme::kLight);
 
-  // Change color scheme to dark.
   ColorSchemeHelper color_scheme_helper(GetDocument());
-  color_scheme_helper.SetPreferredColorScheme(
-      mojom::blink::PreferredColorScheme::kDark);
+  SetPreferredColorSchemesToDark(color_scheme_helper);
   UpdateAllLifecyclePhasesForTest();
 
   EXPECT_EQ(root_scrollable_area->UsedColorSchemeScrollbars(),
@@ -1669,8 +1811,7 @@ TEST_P(PaintLayerScrollableAreaTest, UsedColorSchemeRootScrollbarsHtmlLight) {
     </style>
   )HTML");
 
-  ASSERT_EQ(GetDocument().GetPreferredColorScheme(),
-            mojom::blink::PreferredColorScheme::kLight);
+  AssertDefaultPreferredColorSchemes();
 
   const auto* root_scrollable_area = GetLayoutView().GetScrollableArea();
   ASSERT_TRUE(root_scrollable_area);
@@ -1678,10 +1819,8 @@ TEST_P(PaintLayerScrollableAreaTest, UsedColorSchemeRootScrollbarsHtmlLight) {
   EXPECT_EQ(root_scrollable_area->UsedColorSchemeScrollbars(),
             mojom::blink::ColorScheme::kLight);
 
-  // Change color scheme to dark.
   ColorSchemeHelper color_scheme_helper(GetDocument());
-  color_scheme_helper.SetPreferredColorScheme(
-      mojom::blink::PreferredColorScheme::kDark);
+  SetPreferredColorSchemesToDark(color_scheme_helper);
   UpdateAllLifecyclePhasesForTest();
 
   EXPECT_EQ(root_scrollable_area->UsedColorSchemeScrollbars(),
@@ -1698,8 +1837,7 @@ TEST_P(PaintLayerScrollableAreaTest, UsedColorSchemeRootScrollbarsBodyLight) {
     </style>
   )HTML");
 
-  ASSERT_EQ(GetDocument().GetPreferredColorScheme(),
-            mojom::blink::PreferredColorScheme::kLight);
+  AssertDefaultPreferredColorSchemes();
 
   const auto* root_scrollable_area = GetLayoutView().GetScrollableArea();
   ASSERT_TRUE(root_scrollable_area);
@@ -1723,8 +1861,7 @@ TEST_P(PaintLayerScrollableAreaTest,
     </div>
   )HTML");
 
-  ASSERT_EQ(GetDocument().GetPreferredColorScheme(),
-            mojom::blink::PreferredColorScheme::kLight);
+  AssertDefaultPreferredColorSchemes();
 
   const auto* non_root_scroller = GetLayoutBoxByElementId("normal");
   ASSERT_TRUE(non_root_scroller);
@@ -1757,8 +1894,7 @@ TEST_P(PaintLayerScrollableAreaTest,
     </div>
   )HTML");
 
-  ASSERT_EQ(GetDocument().GetPreferredColorScheme(),
-            mojom::blink::PreferredColorScheme::kLight);
+  AssertDefaultPreferredColorSchemes();
 
   const auto* root_scrollable_area = GetLayoutView().GetScrollableArea();
   ASSERT_TRUE(root_scrollable_area);
@@ -1766,10 +1902,8 @@ TEST_P(PaintLayerScrollableAreaTest,
       GetPaintLayerByElementId("normal")->GetScrollableArea();
   ASSERT_TRUE(non_root_scrollable_area);
 
-  // Change preferred color scheme to dark.
   ColorSchemeHelper color_scheme_helper(GetDocument());
-  color_scheme_helper.SetPreferredColorScheme(
-      mojom::blink::PreferredColorScheme::kDark);
+  SetPreferredColorSchemesToDark(color_scheme_helper);
   UpdateAllLifecyclePhasesForTest();
 
   // Set root element's color scheme to light.
@@ -1783,11 +1917,7 @@ TEST_P(PaintLayerScrollableAreaTest,
 
   // Root scrollbars should be set for invalidation after the color scheme
   // change.
-  if (RuntimeEnabledFeatures::UsedColorSchemeRootScrollbarsEnabled()) {
-    ExpectEqAllScrollControlsNeedPaintInvalidation(root_scrollable_area, true);
-  } else {
-    ExpectEqAllScrollControlsNeedPaintInvalidation(root_scrollable_area, false);
-  }
+  ExpectEqAllScrollControlsNeedPaintInvalidation(root_scrollable_area, true);
 
   // Non root scrollbars should not change.
   ExpectEqAllScrollControlsNeedPaintInvalidation(non_root_scrollable_area,
@@ -1812,8 +1942,7 @@ TEST_P(PaintLayerScrollableAreaTest,
     </div>
   )HTML");
 
-  ASSERT_EQ(GetDocument().GetPreferredColorScheme(),
-            mojom::blink::PreferredColorScheme::kLight);
+  AssertDefaultPreferredColorSchemes();
 
   const auto* root_scrollable_area = GetLayoutView().GetScrollableArea();
   ASSERT_TRUE(root_scrollable_area);
@@ -1821,10 +1950,8 @@ TEST_P(PaintLayerScrollableAreaTest,
       GetPaintLayerByElementId("normal")->GetScrollableArea();
   ASSERT_TRUE(non_root_scrollable_area);
 
-  // Change preferred color scheme to dark.
   ColorSchemeHelper color_scheme_helper(GetDocument());
-  color_scheme_helper.SetPreferredColorScheme(
-      mojom::blink::PreferredColorScheme::kDark);
+  SetPreferredColorSchemesToDark(color_scheme_helper);
   UpdateAllLifecyclePhasesForTest();
 
   // Set root element's color scheme to normal.
@@ -1838,23 +1965,38 @@ TEST_P(PaintLayerScrollableAreaTest,
 
   // Root scrollbars should be set for invalidation after the color scheme
   // change.
-  if (RuntimeEnabledFeatures::UsedColorSchemeRootScrollbarsEnabled()) {
-    ExpectEqAllScrollControlsNeedPaintInvalidation(root_scrollable_area, true);
-  } else {
-    ExpectEqAllScrollControlsNeedPaintInvalidation(root_scrollable_area, false);
-  }
+  ExpectEqAllScrollControlsNeedPaintInvalidation(root_scrollable_area, true);
 
   // Non root scrollbars should not change.
   ExpectEqAllScrollControlsNeedPaintInvalidation(non_root_scrollable_area,
                                                  false);
 
-  if (RuntimeEnabledFeatures::UsedColorSchemeRootScrollbarsEnabled()) {
-    EXPECT_EQ(root_scrollable_area->UsedColorSchemeScrollbars(),
-              mojom::blink::ColorScheme::kDark);
-  } else {
-    EXPECT_EQ(root_scrollable_area->UsedColorSchemeScrollbars(),
-              mojom::blink::ColorScheme::kLight);
-  }
+  EXPECT_EQ(root_scrollable_area->UsedColorSchemeScrollbars(),
+            mojom::blink::ColorScheme::kDark);
+}
+
+TEST_P(PaintLayerScrollableAreaTest,
+       UsedColorSchemeRootScrollbarsUseCounterUpdated) {
+  USE_NON_OVERLAY_SCROLLBARS_OR_QUIT();
+
+  SetHtmlInnerHTML(R"HTML(
+    <style>
+      :root { height: 1000px; }
+    </style>
+  )HTML");
+
+  AssertDefaultPreferredColorSchemes();
+
+  const auto* root_scrollable_area = GetLayoutView().GetScrollableArea();
+  ASSERT_TRUE(root_scrollable_area);
+
+  ColorSchemeHelper color_scheme_helper(GetDocument());
+  SetPreferredColorSchemesToDark(color_scheme_helper);
+  UpdateAllLifecyclePhasesForTest();
+
+  root_scrollable_area->UsedColorSchemeScrollbars();
+  EXPECT_TRUE(GetDocument().IsUseCounted(
+      WebFeature::kUsedColorSchemeRootScrollbarsDark));
 }
 
 // TODO(crbug.com/1020913): Actually this tests a situation that should not
@@ -1879,6 +2021,280 @@ TEST_P(PaintLayerScrollableAreaTest,
   EXPECT_FALSE(scrollable_area->ScrollsOverflow());
   ASSERT_TRUE(scrollable_area->HorizontalScrollbar());
   EXPECT_TRUE(scrollable_area->HorizontalScrollbar()->Maximum());
+}
+
+// TODO(crbug.com/340578714): The expectations match the current actual outputs
+// which may not be fully correct.
+TEST_P(PaintLayerScrollableAreaTest,
+       ScrollbarGutterBothEdgesWithHorizontalScrollbar) {
+  USE_NON_OVERLAY_SCROLLBARS_OR_QUIT();
+  SetBodyInnerHTML(R"HTML(
+    <div id="scroll" style="width: 100px; height: 100px; overflow: auto;
+                            border: 20px solid blue; padding: 10px;
+                            scrollbar-gutter: stable both-edges">
+      <div style="width: 300px"></div>
+    </div>
+  )HTML");
+
+  auto* scroll = GetLayoutBoxByElementId("scroll")->GetScrollableArea();
+  EXPECT_EQ(PhysicalRect(0, 0, 90, 105),
+            scroll->LayoutContentRect(kExcludeScrollbars));
+  EXPECT_EQ(PhysicalRect(0, 0, 120, 120),
+            scroll->LayoutContentRect(kIncludeScrollbars));
+  EXPECT_EQ(gfx::Size(320, 105), scroll->ContentsSize());
+  EXPECT_EQ(PhysicalRect(35, 20, 320, 105),
+            scroll->GetLayoutBox()->ScrollableOverflowRect());
+  EXPECT_EQ(PhysicalRect(20, 20, 120, 105),
+            scroll->GetLayoutBox()->OverflowClipRect(PhysicalOffset()));
+  EXPECT_EQ(gfx::Point(), scroll->ScrollOrigin());
+}
+
+// TODO(crbug.com/340578714): The expectations match the current actual outputs
+// which may not be fully correct.
+TEST_P(PaintLayerScrollableAreaTest,
+       ScrollbarGutterBothEdgesWithVerticalScrollbars) {
+  USE_NON_OVERLAY_SCROLLBARS_OR_QUIT();
+  SetBodyInnerHTML(R"HTML(
+    <div id="scroll" style="width: 100px; height: 100px; overflow: auto;
+                            border: 20px solid blue; padding: 10px;
+                            scrollbar-gutter: stable both-edges">
+      <div style="height: 300px"></div>
+    </div>
+  )HTML");
+
+  auto* scroll = GetLayoutBoxByElementId("scroll")->GetScrollableArea();
+  EXPECT_EQ(PhysicalRect(0, 0, 90, 120),
+            scroll->LayoutContentRect(kExcludeScrollbars));
+  EXPECT_EQ(PhysicalRect(0, 0, 120, 120),
+            scroll->LayoutContentRect(kIncludeScrollbars));
+  EXPECT_EQ(gfx::Size(90, 320), scroll->ContentsSize());
+  EXPECT_EQ(PhysicalRect(35, 20, 90, 320),
+            scroll->GetLayoutBox()->ScrollableOverflowRect());
+  EXPECT_EQ(PhysicalRect(20, 20, 105, 120),
+            scroll->GetLayoutBox()->OverflowClipRect(PhysicalOffset()));
+  EXPECT_EQ(gfx::Point(), scroll->ScrollOrigin());
+}
+
+// TODO(crbug.com/340578714): The expectations match the current actual outputs
+// which may not be fully correct.
+TEST_P(PaintLayerScrollableAreaTest,
+       ScrollbarGutterBothEdgesWithBothScrollbars) {
+  USE_NON_OVERLAY_SCROLLBARS_OR_QUIT();
+  SetBodyInnerHTML(R"HTML(
+    <div id="scroll" style="width: 100px; height: 100px; overflow: auto;
+                            border: 20px solid blue; padding: 10px;
+                            scrollbar-gutter: stable both-edges">
+      <div style="width: 300px; height: 300px"></div>
+    </div>
+  )HTML");
+
+  auto* scroll = GetLayoutBoxByElementId("scroll")->GetScrollableArea();
+  EXPECT_EQ(PhysicalRect(0, 0, 90, 105),
+            scroll->LayoutContentRect(kExcludeScrollbars));
+  EXPECT_EQ(PhysicalRect(0, 0, 120, 120),
+            scroll->LayoutContentRect(kIncludeScrollbars));
+  EXPECT_EQ(gfx::Size(320, 320), scroll->ContentsSize());
+  EXPECT_EQ(PhysicalRect(35, 20, 320, 320),
+            scroll->GetLayoutBox()->ScrollableOverflowRect());
+  EXPECT_EQ(PhysicalRect(20, 20, 105, 105),
+            scroll->GetLayoutBox()->OverflowClipRect(PhysicalOffset()));
+  EXPECT_EQ(gfx::Point(), scroll->ScrollOrigin());
+}
+
+// TODO(crbug.com/340578714): The expectations match the current actual outputs
+// which may not be fully correct.
+TEST_P(PaintLayerScrollableAreaTest,
+       ScrollbarGutterBothEdgesOverflowIntoGutter) {
+  USE_NON_OVERLAY_SCROLLBARS_OR_QUIT();
+  SetBodyInnerHTML(R"HTML(
+    <div id="scroll" style="width: 100px; height: 100px; overflow: auto;
+                            border: 20px solid blue; padding: 10px;
+                            scrollbar-gutter: stable both-edges">
+      <div style="position: relative; left: -15px; width: 100px"></div>
+    </div>
+  )HTML");
+
+  auto* scroll = GetLayoutBoxByElementId("scroll")->GetScrollableArea();
+  EXPECT_EQ(PhysicalRect(0, 0, 90, 120),
+            scroll->LayoutContentRect(kExcludeScrollbars));
+  EXPECT_EQ(PhysicalRect(0, 0, 120, 120),
+            scroll->LayoutContentRect(kIncludeScrollbars));
+  EXPECT_EQ(gfx::Size(120, 120), scroll->ContentsSize());
+  EXPECT_EQ(PhysicalRect(35, 20, 120, 120),
+            scroll->GetLayoutBox()->ScrollableOverflowRect());
+  EXPECT_EQ(PhysicalRect(20, 20, 120, 120),
+            scroll->GetLayoutBox()->OverflowClipRect(PhysicalOffset()));
+  EXPECT_EQ(gfx::Point(), scroll->ScrollOrigin());
+}
+
+// TODO(crbug.com/340578714): The expectations match the current actual outputs
+// which may not be fully correct.
+TEST_P(PaintLayerScrollableAreaTest,
+       ScrollbarGutterBothEdgesRtlWithHorizontalScrollbar) {
+  USE_NON_OVERLAY_SCROLLBARS_OR_QUIT();
+  SetBodyInnerHTML(R"HTML(
+    <div id="scroll" style="width: 100px; height: 100px; overflow: auto;
+                            border: 20px solid blue; padding: 10px;
+                            scrollbar-gutter: stable both-edges;
+                            direction: rtl">
+      <div style="width: 300px"></div>
+    </div>
+  )HTML");
+
+  auto* scroll = GetLayoutBoxByElementId("scroll")->GetScrollableArea();
+  EXPECT_EQ(PhysicalRect(200, 0, 90, 105),
+            scroll->LayoutContentRect(kExcludeScrollbars));
+  EXPECT_EQ(PhysicalRect(200, 0, 120, 120),
+            scroll->LayoutContentRect(kIncludeScrollbars));
+  EXPECT_EQ(gfx::Size(320, 105), scroll->ContentsSize());
+  EXPECT_EQ(PhysicalRect(-195, 20, 320, 105),
+            scroll->GetLayoutBox()->ScrollableOverflowRect());
+  EXPECT_EQ(PhysicalRect(20, 20, 120, 105),
+            scroll->GetLayoutBox()->OverflowClipRect(PhysicalOffset()));
+  EXPECT_EQ(gfx::Point(230, 0), scroll->ScrollOrigin());
+}
+
+// TODO(crbug.com/340578714): The expectations match the current actual outputs
+// which may not be fully correct.
+TEST_P(PaintLayerScrollableAreaTest,
+       ScrollbarGutterBothEdgesRtlWithVerticalScrollbar) {
+  USE_NON_OVERLAY_SCROLLBARS_OR_QUIT();
+  SetBodyInnerHTML(R"HTML(
+    <div id="scroll" style="width: 100px; height: 100px; overflow: auto;
+                            border: 20px solid blue; padding: 10px;
+                            scrollbar-gutter: stable both-edges;
+                            direction: rtl">
+      <div style="height: 300px"></div>
+    </div>
+  )HTML");
+
+  auto* scroll = GetLayoutBoxByElementId("scroll")->GetScrollableArea();
+  EXPECT_EQ(PhysicalRect(0, 0, 90, 120),
+            scroll->LayoutContentRect(kExcludeScrollbars));
+  EXPECT_EQ(PhysicalRect(0, 0, 120, 120),
+            scroll->LayoutContentRect(kIncludeScrollbars));
+  EXPECT_EQ(gfx::Size(90, 320), scroll->ContentsSize());
+  EXPECT_EQ(PhysicalRect(35, 20, 90, 320),
+            scroll->GetLayoutBox()->ScrollableOverflowRect());
+  EXPECT_EQ(PhysicalRect(35, 20, 105, 120),
+            scroll->GetLayoutBox()->OverflowClipRect(PhysicalOffset()));
+  EXPECT_EQ(gfx::Point(0, 0), scroll->ScrollOrigin());
+}
+
+// TODO(crbug.com/340578714): The expectations match the current actual outputs
+// which may not be fully correct.
+TEST_P(PaintLayerScrollableAreaTest,
+       ScrollbarGutterBothEdgesRtlWithBothScrollbars) {
+  USE_NON_OVERLAY_SCROLLBARS_OR_QUIT();
+  SetBodyInnerHTML(R"HTML(
+    <div id="scroll" style="width: 100px; height: 100px; overflow: auto;
+                            border: 20px solid blue; padding: 10px;
+                            scrollbar-gutter: stable both-edges;
+                            direction: rtl">
+      <div style="width: 300px; height: 300px"></div>
+    </div>
+  )HTML");
+
+  auto* scroll = GetLayoutBoxByElementId("scroll")->GetScrollableArea();
+  EXPECT_EQ(PhysicalRect(215, 0, 90, 105),
+            scroll->LayoutContentRect(kExcludeScrollbars));
+  EXPECT_EQ(PhysicalRect(215, 0, 120, 120),
+            scroll->LayoutContentRect(kIncludeScrollbars));
+  EXPECT_EQ(gfx::Size(320, 320), scroll->ContentsSize());
+  EXPECT_EQ(PhysicalRect(-195, 20, 320, 320),
+            scroll->GetLayoutBox()->ScrollableOverflowRect());
+  EXPECT_EQ(PhysicalRect(35, 20, 105, 105),
+            scroll->GetLayoutBox()->OverflowClipRect(PhysicalOffset()));
+  EXPECT_EQ(gfx::Point(230, 0), scroll->ScrollOrigin());
+}
+
+TEST_P(PaintLayerScrollableAreaTest,
+       OverscrollBehaviorWithOverflowHiddenUseCounter) {
+  SetBodyInnerHTML(R"HTML(
+    <div id=scroller style="overflow: hidden; width: 300px; height: 300px; overscroll-behavior: contain;">
+      <div id=content style="width: 200px; height: 200px;"></div>
+    </div>
+  )HTML");
+
+  mojom::WebFeature feature =
+      WebFeature::kOverscrollBehaviorOnNonScrollableScrollContainer;
+  mojom::WebFeature feature_with_hidden =
+      WebFeature::kOverscrollBehaviorWithOverflowHidden;
+  EXPECT_TRUE(GetDocument().IsUseCounted(feature));
+  EXPECT_TRUE(GetDocument().IsUseCounted(feature_with_hidden));
+
+  GetDocument().ClearUseCounterForTesting(feature);
+  GetDocument().ClearUseCounterForTesting(feature_with_hidden);
+  EXPECT_FALSE(GetDocument().IsUseCounted(feature));
+  EXPECT_FALSE(GetDocument().IsUseCounted(feature_with_hidden));
+
+  auto* scroller = GetElementById("scroller");
+  scroller->SetInlineStyleProperty(CSSPropertyID::kOverscrollBehavior,
+                                   CSSValueID::kAuto);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(GetDocument().IsUseCounted(feature));
+  EXPECT_FALSE(GetDocument().IsUseCounted(feature_with_hidden));
+
+  scroller->SetInlineStyleProperty(CSSPropertyID::kOverscrollBehavior,
+                                   CSSValueID::kContain);
+  scroller->SetInlineStyleProperty(CSSPropertyID::kOverflowX,
+                                   CSSValueID::kHidden);
+  scroller->SetInlineStyleProperty(CSSPropertyID::kOverflowY,
+                                   CSSValueID::kAuto);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(GetDocument().IsUseCounted(feature));
+  EXPECT_FALSE(GetDocument().IsUseCounted(feature_with_hidden));
+}
+
+class PaintLayerScrollableAreaWithWebFrameTest : public ::testing::Test {
+ public:
+  void SetUp() override { web_view_helper_.Initialize(); }
+  void TearDown() override { web_view_helper_.Reset(); }
+
+  Document& GetDocument() {
+    return *web_view_helper_.LocalMainFrame()->GetFrame()->GetDocument();
+  }
+
+ private:
+  test::TaskEnvironment task_environment;
+  frame_test_helpers::WebViewHelper web_view_helper_;
+};
+
+// This test needs a WebLocalFrame for accurate main thread scrolling reasons.
+// Otherwise we'll force main-thread scrolling for reason kPopupNoThreadedInput
+// because threaded scrolling is not possible without a WebLocalFrame.
+TEST_F(PaintLayerScrollableAreaWithWebFrameTest,
+       UpdateShouldAnimateScrollOnMainThread) {
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <div id="scroller"
+         style="width: 100px; height: 100px; background: red; overflow: hidden">
+      <div style="height: 2000px"></div>
+    </div>
+  )HTML");
+  GetDocument().View()->UpdateAllLifecyclePhasesForTest();
+
+  auto* scroller = GetDocument().getElementById(AtomicString("scroller"));
+  auto* box = scroller->GetLayoutBox();
+  auto* scrollable_area = box->GetScrollableArea();
+  ASSERT_TRUE(scrollable_area);
+  EXPECT_TRUE(scrollable_area->ShouldScrollOnMainThread());
+  EXPECT_FALSE(box->FirstFragment().PaintProperties()->Scroll());
+
+  scroller->SetInlineStyleProperty(CSSPropertyID::kOverflow, CSSValueID::kAuto);
+  GetDocument().View()->UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(scrollable_area->ShouldScrollOnMainThread());
+  EXPECT_TRUE(box->FirstFragment().PaintProperties()->Scroll());
+
+  scroller->SetInlineStyleProperty(CSSPropertyID::kOverflow,
+                                   CSSValueID::kHidden);
+  GetDocument().View()->UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(scrollable_area->ShouldScrollOnMainThread());
+  EXPECT_FALSE(box->FirstFragment().PaintProperties()->Scroll());
+
+  scroller->scrollToForTesting(0, 200);
+  GetDocument().View()->UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(scrollable_area->ShouldScrollOnMainThread());
+  EXPECT_TRUE(box->FirstFragment().PaintProperties()->Scroll());
 }
 
 }  // namespace blink

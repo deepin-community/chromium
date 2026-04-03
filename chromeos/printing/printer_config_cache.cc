@@ -6,6 +6,8 @@
 
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -16,7 +18,6 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
@@ -40,9 +41,9 @@ constexpr char kLocalhostRoot[] = "http://localhost:7002/";
 std::string PrependServingRoot(const std::string& name,
                                bool use_localhost_as_root) {
   if (use_localhost_as_root) {
-    return base::StrCat({base::StringPiece(kLocalhostRoot), name});
+    return base::StrCat({kLocalhostRoot, name});
   }
-  return base::StrCat({base::StringPiece(kServingRoot), name});
+  return base::StrCat({kServingRoot, name});
 }
 
 // Accepts a relative |path| to a value in the Chrome OS Printing
@@ -227,16 +228,18 @@ class PrinterConfigCacheImpl : public PrinterConfigCache {
 
   // Called by |fetcher_| once DownloadToString() completes.
   void FinishNetworkedFetch(std::unique_ptr<FetchContext> context,
-                            std::unique_ptr<std::string> contents) {
+                            std::optional<std::string> contents) {
     // Wherever |fetcher_| works its sorcery, it had better have posted
     // back onto _our_ sequence.
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
     if (fetcher_->NetError() == net::Error::OK) {
+      CHECK(contents);
       // We only want to update our local cache if the |fetcher_|
       // succeeded; otherwise, prefer to either retain the stale entry
       // (if extant) or retain no entry at all (if not).
-      const Entry newly_inserted = Entry(*contents, clock_->Now());
+      const Entry newly_inserted =
+          Entry(std::move(contents).value(), clock_->Now());
       cache_.insert_or_assign(context->key, newly_inserted);
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(std::move(context->cb),

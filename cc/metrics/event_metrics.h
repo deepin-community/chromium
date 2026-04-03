@@ -5,17 +5,20 @@
 #ifndef CC_METRICS_EVENT_METRICS_H_
 #define CC_METRICS_EVENT_METRICS_H_
 
+#include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include <optional>
 #include "base/memory/raw_ptr.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "base/types/id_type.h"
 #include "cc/cc_export.h"
+#include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "ui/events/types/event_type.h"
 #include "ui/events/types/scroll_input_type.h"
 #include "ui/latency/latency_info.h"
@@ -36,9 +39,9 @@ class CC_EXPORT EventMetrics {
     kMousePressed,
     kMouseReleased,
     kMouseWheel,
-    // TODO(crbug/1071645): Currently, all ET_KEY_PRESSED events are reported
-    // under EventLatency.KeyPressed histogram. This includes both key-down and
-    // key-char events. Consider reporting them separately.
+    // TODO(crbug.com/40126863): Currently, all EventType::kKeyPressed events
+    // are reported under EventLatency.KeyPressed histogram. This includes both
+    // key-down and key-char events. Consider reporting them separately.
     kKeyPressed,
     kKeyReleased,
     kTouchPressed,
@@ -63,7 +66,8 @@ class CC_EXPORT EventMetrics {
     kGesturePinchUpdate,
     kInertialGestureScrollUpdate,
     kMouseMoved,
-    kMaxValue = kMouseMoved,
+    kInertialGestureScrollEnd,
+    kMaxValue = kInertialGestureScrollEnd,
   };
 
   // Stages of event dispatch in different processes/threads.
@@ -128,6 +132,10 @@ class CC_EXPORT EventMetrics {
   const char* GetTypeName() const;
   static const char* GetTypeName(EventType type);
 
+  // Whether `EventMetrics` with `type` should be kept around even if handling
+  // the event didn't cause a frame update.
+  static bool ShouldKeepEvenWithoutCausingFrameUpdate(EventType type);
+
   // Returns custom histogram bucketing for the metric. If returns `nullopt`,
   // default bucketing will be used.
   struct HistogramBucketing {
@@ -178,6 +186,11 @@ class CC_EXPORT EventMetrics {
     requires_main_thread_update_ = true;
   }
 
+  bool caused_frame_update() const { return caused_frame_update_; }
+  void set_caused_frame_update(bool caused_frame_update) {
+    caused_frame_update_ = caused_frame_update;
+  }
+
  protected:
   EventMetrics(EventType type,
                base::TimeTicks timestamp,
@@ -195,6 +208,8 @@ class CC_EXPORT EventMetrics {
   // directly correspond to an event, it won't be used in recording trace
   // events.
   EventMetrics(const EventMetrics& other);
+
+  void CoalesceWith(const EventMetrics& newer_event);
 
   // Copy timestamps of dispatch stages (up to and including
   // `last_dispatch_stage`) from `other`.
@@ -224,9 +239,8 @@ class CC_EXPORT EventMetrics {
   // Timestamps of different stages of event dispatch. Timestamps are set as the
   // event moves forward in the pipeline. In the end, some stages might not have
   // a timestamp which means the event did not pass those stages.
-  base::TimeTicks
-      dispatch_stage_timestamps_[static_cast<int>(DispatchStage::kMaxValue) +
-                                 1];
+  std::array<base::TimeTicks, static_cast<int>(DispatchStage::kMaxValue) + 1>
+      dispatch_stage_timestamps_;
 
   // Determines whether a tracing event should be recorded for this object or
   // not. This is `true` by default and set to `false` after a tracing event is
@@ -244,6 +258,10 @@ class CC_EXPORT EventMetrics {
   // have a corresponding input, for example a generated event based on existing
   // event.
   std::optional<TraceId> trace_id_;
+
+  // Whether handling the event caused a frame update. See
+  // `EventsMetricsManager::ScopedMonitor`.
+  bool caused_frame_update_ = true;
 };
 
 class CC_EXPORT ScrollEventMetrics : public EventMetrics {
@@ -256,6 +274,26 @@ class CC_EXPORT ScrollEventMetrics : public EventMetrics {
     kTouchscreen,
     kWheel,
     kMaxValue = kWheel,
+  };
+
+  // A small number of fields from `viz::BeginFrameArgs` about the frame in
+  // which an event was dispatched to avoid copying the whole args (>100 bytes).
+  struct CC_EXPORT DispatchBeginFrameArgs {
+    // See `viz::BeginFrameArgs::frame_time`.
+    base::TimeTicks frame_time;
+
+    // See `viz::BeginFrameArgs::interval`.
+    base::TimeDelta interval;
+
+    // See `viz::BeginFrameArgs::frame_id`.
+    viz::BeginFrameId frame_id;
+
+    // Note: If this was an explicit constructor, it would prevent us from using
+    // designated initializers (e.g.
+    // `{.frame_time = X, .interval = Y, .frame_id = Z}`).
+    static DispatchBeginFrameArgs From(const viz::BeginFrameArgs& args);
+
+    bool operator==(const DispatchBeginFrameArgs&) const = default;
   };
 
   // Returns a new instance if the event is of a type we are interested in.
@@ -321,6 +359,16 @@ class CC_EXPORT ScrollEventMetrics : public EventMetrics {
 
   std::unique_ptr<EventMetrics> Clone() const override;
 
+  void set_begin_frame_args(const viz::BeginFrameArgs& args) { args_ = args; }
+
+  const viz::BeginFrameArgs& begin_frame_args() const { return args_; }
+
+  void set_dispatch_args(const DispatchBeginFrameArgs& dispatch_args) {
+    dispatch_args_ = dispatch_args;
+  }
+
+  const DispatchBeginFrameArgs& dispatch_args() const { return dispatch_args_; }
+
  protected:
   ScrollEventMetrics(EventType type,
                      ScrollType scroll_type,
@@ -342,6 +390,18 @@ class CC_EXPORT ScrollEventMetrics : public EventMetrics {
 
   // Type of the input device for the event.
   ScrollType scroll_type_;
+
+  // The active viz::BeginFrameArgs when the event arrived in the Renderer.
+  // These may not match those of CompositorFrameReporter for which the event
+  // is eventually displayed.
+  viz::BeginFrameArgs args_;
+
+  // A small number of fields from `viz::BeginFrameArgs` about the frame in
+  // which this event was dispatched. It's usually the next frame after `args_`.
+  //
+  // These may not match those of CompositorFrameReporter for which the event
+  // is eventually displayed.
+  DispatchBeginFrameArgs dispatch_args_;
 };
 
 class CC_EXPORT ScrollUpdateEventMetrics : public ScrollEventMetrics {
@@ -356,11 +416,12 @@ class CC_EXPORT ScrollUpdateEventMetrics : public ScrollEventMetrics {
 
   // Returns a new instance if the event is of a type we are interested in.
   // Otherwise, returns `nullptr`. Should only be used for scroll-update events.
-  // The |blocking_touch_dispatched_to_renderer| must be not null only for
+  // The `arrived_in_browser_main_timestamp` can be null for events that were
+  // generated synthetically within the Renderer.  The
+  // `blocking_touch_dispatched_to_renderer` must be not null only for
   // scrolls which corresponding TouchMove was blocking.
   //
-  // TODO(b/224960731): Fix tests and stop supporting the case when
-  // `arrived_in_browser_main_timestamp` is null.
+  // TODO(b/329346768): Build `trace_id` generation for synthetic events.
   static std::unique_ptr<ScrollUpdateEventMetrics> Create(
       ui::EventType type,
       ui::ScrollInputType input_type,
@@ -369,8 +430,8 @@ class CC_EXPORT ScrollUpdateEventMetrics : public ScrollEventMetrics {
       float delta,
       base::TimeTicks timestamp,
       base::TimeTicks arrived_in_browser_main_timestamp,
-      TraceId trace_id,
-      base::TimeTicks blocking_touch_dispatched_to_renderer);
+      base::TimeTicks blocking_touch_dispatched_to_renderer,
+      std::optional<TraceId> trace_id);
 
   // Prefer to use `Create()` above. This method is used only by the Browser
   // process which have own breakdowns.
@@ -416,6 +477,8 @@ class CC_EXPORT ScrollUpdateEventMetrics : public ScrollEventMetrics {
 
   ~ScrollUpdateEventMetrics() override;
 
+  // Note: Synthetic scroll updates (see `is_synthetic_`) should never be
+  // coalesced.
   void CoalesceWith(const ScrollUpdateEventMetrics& newer_scroll_update);
 
   ScrollUpdateEventMetrics* AsScrollUpdate() override;
@@ -440,6 +503,12 @@ class CC_EXPORT ScrollUpdateEventMetrics : public ScrollEventMetrics {
   std::optional<bool> is_janky_scrolled_frame() const {
     return is_janky_scrolled_frame_;
   }
+
+  void set_did_scroll(bool did_scroll) { did_scroll_ = did_scroll; }
+  bool did_scroll() const { return did_scroll_; }
+
+  void set_is_synthetic(bool is_synthetic) { is_synthetic_ = is_synthetic; }
+  bool is_synthetic() const { return is_synthetic_; }
 
  protected:
   ScrollUpdateEventMetrics(EventType type,
@@ -474,6 +543,24 @@ class CC_EXPORT ScrollUpdateEventMetrics : public ScrollEventMetrics {
   int32_t coalesced_event_count_ = 1;
 
   std::optional<bool> is_janky_scrolled_frame_ = std::nullopt;
+
+  // The scroll delta may not be actually applied. Event if it is consumed. This
+  // denotes that a scroll did actually occur.
+  bool did_scroll_ = false;
+
+  // Whether the scroll update is a synthetic event, which was predicted by
+  // Chrome (see `blink::ScrollPredictor::GenerateSyntheticScrollUpdate()`). In
+  // contrast to real scroll updates, metrics cannot blindly "trust" synthetic
+  // scroll updates' input generation timestamps
+  // (`GetDispatchStageTimestamp(DispatchStage::kGenerated)`) and raw scroll
+  // deltas (`delta_`) because the scroll updates didn't originate from
+  // hardware/OS.
+  // TODO(crbug.com/456180776): For now, while we incrementally implement
+  // support for synthetic scroll updates in the scroll jank v4 metric, this
+  // field is only set to true in unit tests. Set this to true in
+  // `blink::ScrollPredictor::GenerateSyntheticScrollUpdate()` once the metric
+  // fully supports synthetic scroll updates.
+  bool is_synthetic_ = false;
 };
 
 class CC_EXPORT PinchEventMetrics : public EventMetrics {
@@ -538,7 +625,8 @@ struct CC_EXPORT EventMetricsSet {
   EventMetricsSet();
   ~EventMetricsSet();
   EventMetricsSet(EventMetrics::List main_thread_event_metrics,
-                  EventMetrics::List impl_thread_event_metrics);
+                  EventMetrics::List impl_thread_event_metrics,
+                  EventMetrics::List raster_thread_event_metrics);
   EventMetricsSet(EventMetricsSet&&);
   EventMetricsSet& operator=(EventMetricsSet&&);
 
@@ -547,6 +635,7 @@ struct CC_EXPORT EventMetricsSet {
 
   EventMetrics::List main_event_metrics;
   EventMetrics::List impl_event_metrics;
+  EventMetrics::List raster_event_metrics;
 };
 
 }  // namespace cc

@@ -11,7 +11,6 @@
 #include "ash/rotator/screen_rotation_animator_observer.h"
 #include "ash/shell_observer.h"
 #include "ash/wm/desks/desks_controller.h"
-#include "base/gtest_prod_util.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "chromeos/ui/base/window_state_type.h"
@@ -206,6 +205,8 @@ class ASH_EXPORT FloatController : public display::DisplayObserver,
   // Counts of how many floated window are moved to another desk within a
   // session. `kFloatWindowMoveToAnotherDeskCountsHistogramName`
   int floated_window_move_to_another_desk_counter_ = 0;
+
+  bool disable_tuck_education_for_testing_{false};
 
   base::ScopedMultiSourceObservation<ScreenRotationAnimator,
                                      ScreenRotationAnimatorObserver>

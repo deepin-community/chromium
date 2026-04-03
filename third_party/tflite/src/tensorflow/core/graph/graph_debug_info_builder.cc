@@ -18,12 +18,14 @@ limitations under the License.
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/hash/hash.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
 #include "absl/types/span.h"
+#include "tensorflow/core/config/flag_defs.h"
 #include "tensorflow/core/framework/function.h"
 #include "tensorflow/core/framework/graph_debug_info.pb.h"
 #include "tensorflow/core/framework/logging.h"
@@ -95,6 +97,10 @@ FrozenStackTrace::FrozenStackTrace(
 }
 
 absl::Span<StackFrame const> FrozenStackTrace::ToFrames() const {
+  return frames_;
+}
+
+std::vector<StackFrame> FrozenStackTrace::ToUncachedFrames() const {
   return frames_;
 }
 
@@ -173,10 +179,19 @@ void GraphDebugInfoBuilder::AccumulateStackTrace(
         AppendToStackTraceProto(stack_frame, stack_trace_proto);
       }
     } else {
-      frame_to_index_.reserve(frame_to_index_.size() +
-                              trace->ToFrames().size());
-      for (const auto& stack_frame : trace->ToFrames()) {
-        AppendToStackTraceProto(stack_frame, stack_trace_proto);
+      if (flags::Global()
+              .enable_graph_debug_info_caching_for_stack_frames.value()) {
+        frame_to_index_.reserve(frame_to_index_.size() +
+                                trace->ToFrames().size());
+        for (const auto& stack_frame : trace->ToFrames()) {
+          AppendToStackTraceProto(stack_frame, stack_trace_proto);
+        }
+      } else {
+        frame_to_index_.reserve(frame_to_index_.size() +
+                                trace->ToUncachedFrames().size());
+        for (const auto& stack_frame : trace->ToUncachedFrames()) {
+          AppendToStackTraceProto(stack_frame, stack_trace_proto);
+        }
       }
     }
   }
@@ -226,7 +241,7 @@ GraphDebugInfo GraphDebugInfoBuilder::Build() const { return *debug_info_; }
 absl::Status GraphDebugInfoBuilder::AppendGraphDebugInfoStr(
     absl::string_view prefix, absl::string_view new_info_str) {
   GraphDebugInfo debug_info;
-  if (!debug_info.ParseFromArray(new_info_str.data(), new_info_str.size())) {
+  if (!debug_info.ParseFromString(new_info_str)) {
     return absl::InvalidArgumentError("Failed to parse GraphDebugInfo proto.");
   }
   AppendGraphDebugInfo(prefix, debug_info);
@@ -265,8 +280,7 @@ StackTracesMap LoadTracesFromDebugInfo(const GraphDebugInfo& debug_info) {
 absl::StatusOr<StackTracesMap> LoadTracesFromDebugInfoStr(
     absl::string_view debug_info_str) {
   GraphDebugInfo debug_info;
-  if (!debug_info.ParseFromArray(debug_info_str.data(),
-                                 debug_info_str.size())) {
+  if (!debug_info.ParseFromString(debug_info_str)) {
     return absl::InvalidArgumentError("Failed to parse GraphDebugInfo proto.");
   }
   return LoadTracesFromDebugInfo(debug_info);

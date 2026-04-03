@@ -27,13 +27,13 @@
 
 #include "src/tint/lang/wgsl/ast/unary_op_expression.h"
 
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/wgsl/ast/helper_test.h"
 
 namespace tint::ast {
 namespace {
 
 using UnaryOpExpressionTest = TestHelper;
+using UnaryOpExpressionDeathTest = UnaryOpExpressionTest;
 
 TEST_F(UnaryOpExpressionTest, Creation) {
     auto* ident = Expr("ident");
@@ -58,21 +58,11 @@ TEST_F(UnaryOpExpressionTest, IsUnaryOp) {
     EXPECT_TRUE(u->Is<UnaryOpExpression>());
 }
 
-TEST_F(UnaryOpExpressionTest, Assert_Null_Expression) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(UnaryOpExpressionDeathTest, Assert_Null_Expression) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder b;
             b.create<UnaryOpExpression>(core::UnaryOp::kNot, nullptr);
-        },
-        "internal compiler error");
-}
-
-TEST_F(UnaryOpExpressionTest, Assert_DifferentGenerationID_Expression) {
-    EXPECT_FATAL_FAILURE(
-        {
-            ProgramBuilder b1;
-            ProgramBuilder b2;
-            b1.create<UnaryOpExpression>(core::UnaryOp::kNot, b2.Expr(true));
         },
         "internal compiler error");
 }

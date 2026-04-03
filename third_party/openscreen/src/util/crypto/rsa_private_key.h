@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "platform/base/error.h"
-#include "platform/base/macros.h"
+#include "platform/base/span.h"
 
 namespace openscreen {
 
@@ -22,8 +22,10 @@ namespace openscreen {
 // keys to other formats, or to extract a public key.
 class RSAPrivateKey {
  public:
-  RSAPrivateKey(RSAPrivateKey&& other) noexcept = default;
-  RSAPrivateKey& operator=(RSAPrivateKey&& other) = default;
+  RSAPrivateKey(const RSAPrivateKey&) = delete;
+  RSAPrivateKey(RSAPrivateKey&& other) noexcept;
+  RSAPrivateKey& operator=(const RSAPrivateKey& other) = delete;
+  RSAPrivateKey& operator=(RSAPrivateKey&& other);
   ~RSAPrivateKey();
 
   // Create a new random instance. Can return nullptr if initialization fails.
@@ -31,11 +33,10 @@ class RSAPrivateKey {
 
   // Create a new instance by importing an existing private key. The format is
   // an ASN.1-encoded PrivateKeyInfo block from PKCS #8.
-  static ErrorOr<RSAPrivateKey> CreateFromPrivateKeyInfo(
-      const std::vector<uint8_t>& input);
+  static ErrorOr<RSAPrivateKey> CreateFromPrivateKeyInfo(ByteView input);
 
   // Create a new instance from an existing EVP_PKEY, taking a
-  // reference to it. |key| must be an RSA key.
+  // reference to it. `key` must be an RSA key.
   static ErrorOr<RSAPrivateKey> CreateFromKey(EVP_PKEY* key);
 
   // Creates a copy of the object.
@@ -55,8 +56,6 @@ class RSAPrivateKey {
   RSAPrivateKey();
 
   bssl::UniquePtr<EVP_PKEY> key_;
-
-  OSP_DISALLOW_COPY_AND_ASSIGN(RSAPrivateKey);
 };
 
 }  // namespace openscreen

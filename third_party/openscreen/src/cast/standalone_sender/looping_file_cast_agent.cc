@@ -9,12 +9,13 @@
 #include <utility>
 #include <vector>
 
+#include "build/build_config.h"
 #include "cast/common/channel/message_util.h"
 #include "cast/common/public/cast_streaming_app_ids.h"
 #include "cast/standalone_sender/looping_file_sender.h"
-#include "cast/streaming/capture_recommendations.h"
-#include "cast/streaming/constants.h"
-#include "cast/streaming/offer_messages.h"
+#include "cast/streaming/public/capture_recommendations.h"
+#include "cast/streaming/public/constants.h"
+#include "cast/streaming/public/offer_messages.h"
 #include "json/value.h"
 #include "platform/api/tls_connection_factory.h"
 #include "util/json/json_helpers.h"
@@ -34,14 +35,14 @@ LoopingFileCastAgent::LoopingFileCastAgent(
     ShutdownCallback shutdown_callback)
     : task_runner_(task_runner),
       shutdown_callback_(std::move(shutdown_callback)),
-      connection_handler_(&router_, this),
-      socket_factory_(this,
+      connection_handler_(router_, *this),
+      socket_factory_(*this,
                       task_runner_,
                       std::move(cast_trust_store),
                       CastCRLTrustStore::Create()),
       connection_factory_(
-          TlsConnectionFactory::CreateFactory(&socket_factory_, task_runner_)),
-      message_port_(&router_) {
+          TlsConnectionFactory::CreateFactory(socket_factory_, task_runner_)),
+      message_port_(router_) {
   router_.AddHandlerForLocalId(kPlatformSenderId, this);
   socket_factory_.set_factory(connection_factory_.get());
 }
@@ -53,16 +54,16 @@ LoopingFileCastAgent::~LoopingFileCastAgent() {
 void LoopingFileCastAgent::Connect(ConnectionSettings settings) {
   TRACE_DEFAULT_SCOPED(TraceCategory::kStandaloneSender);
 
-  OSP_DCHECK(!connection_settings_);
+  OSP_CHECK(!connection_settings_);
   connection_settings_ = std::move(settings);
   const auto policy = connection_settings_->should_include_video
                           ? DeviceMediaPolicy::kIncludesVideo
                           : DeviceMediaPolicy::kAudioOnly;
 
   task_runner_.PostTask([this, policy] {
-#if defined(__APPLE__)
+#if BUILDFLAG(IS_APPLE)
     wake_lock_ = ScopedWakeLock::Create(task_runner_);
-#endif  // defined(__APPLE__)
+#endif  // BUILDFLAG(IS_APPLE)
     socket_factory_.Connect(connection_settings_->receiver_endpoint, policy,
                             &router_);
   });
@@ -91,7 +92,7 @@ void LoopingFileCastAgent::OnConnected(SenderSocketFactory* factory,
 
 void LoopingFileCastAgent::OnError(SenderSocketFactory* factory,
                                    const IPEndpoint& endpoint,
-                                   Error error) {
+                                   const Error& error) {
   OSP_LOG_ERROR << "Cast agent received socket factory error: " << error;
   Shutdown();
 }
@@ -101,7 +102,7 @@ void LoopingFileCastAgent::OnClose(CastSocket* cast_socket) {
   Shutdown();
 }
 
-void LoopingFileCastAgent::OnError(CastSocket* socket, Error error) {
+void LoopingFileCastAgent::OnError(CastSocket* socket, const Error& error) {
   OSP_LOG_ERROR << "Cast agent received socket error: " << error;
   Shutdown();
 }
@@ -113,11 +114,11 @@ bool LoopingFileCastAgent::IsConnectionAllowed(
 
 void LoopingFileCastAgent::OnMessage(VirtualConnectionRouter* router,
                                      CastSocket* socket,
-                                     ::cast::channel::CastMessage message) {
+                                     proto::CastMessage message) {
   if (message_port_.GetSocketId() == ToCastSocketId(socket) &&
       !message_port_.source_id().empty() &&
       message_port_.source_id() == message.destination_id()) {
-    OSP_DCHECK(message.destination_id() != kPlatformSenderId);
+    OSP_CHECK_NE(message.destination_id(), kPlatformSenderId);
     message_port_.OnMessage(router, socket, std::move(message));
     return;
   }
@@ -129,7 +130,7 @@ void LoopingFileCastAgent::OnMessage(VirtualConnectionRouter* router,
 
   if (message.namespace_() == kReceiverNamespace &&
       message_port_.GetSocketId() == ToCastSocketId(socket)) {
-    if (message.payload_type() != ::cast::channel::CastMessage::STRING) {
+    if (message.payload_type() != proto::CastMessage::STRING) {
       OSP_DLOG_WARN << ": received an unsupported BINARY type message.";
     }
 
@@ -256,8 +257,8 @@ void LoopingFileCastAgent::OnRemoteMessagingOpened(bool success) {
 
 void LoopingFileCastAgent::OnReceiverMessagingOpened(bool success) {
   // We established a platform connection and now need to launch.
-  OSP_DCHECK(platform_remote_connection_);
-  OSP_DCHECK(!remote_connection_);
+  OSP_CHECK(platform_remote_connection_);
+  OSP_CHECK(!remote_connection_);
   if (!success) {
     OSP_LOG_INFO << "Failed to establish messaging to the Cast Receiver.";
     Shutdown();
@@ -265,33 +266,34 @@ void LoopingFileCastAgent::OnReceiverMessagingOpened(bool success) {
   }
 
   static constexpr char kLaunchMessageTemplate[] =
-      R"({"type":"LAUNCH", "requestId":%d, "appId":"%s", "language": "en-US",
-       "supportedAppTypes":["WEB"]})";
+      R"({{"type":"LAUNCH", "requestId":{}, "appId":"{}", "language": "en-US",
+       "supportedAppTypes":["WEB"]}})";
   router_.Send(*platform_remote_connection_,
                MakeSimpleUTF8Message(
                    kReceiverNamespace,
-                   StringPrintf(kLaunchMessageTemplate, next_request_id_++,
+                   StringFormat(kLaunchMessageTemplate, next_request_id_++,
                                 GetStreamingAppId())));
 }
 
 void LoopingFileCastAgent::CreateAndStartSession() {
   TRACE_DEFAULT_SCOPED(TraceCategory::kStandaloneSender);
 
-  OSP_DCHECK(remote_connection_.has_value());
+  OSP_CHECK(remote_connection_.has_value());
   environment_ =
       std::make_unique<Environment>(&Clock::now, task_runner_, IPEndpoint{});
 
   SenderSession::Configuration config{
       connection_settings_->receiver_endpoint.address,
-      this,
+      *this,
       environment_.get(),
       &message_port_,
       remote_connection_->local_id,
       remote_connection_->peer_id,
-      connection_settings_->use_android_rtp_hack};
+      connection_settings_->use_android_rtp_hack,
+      connection_settings_->enable_dscp};
   current_session_ = std::make_unique<SenderSession>(std::move(config));
   current_session_->SetStatsClient(this);
-  OSP_DCHECK(!message_port_.source_id().empty());
+  OSP_CHECK(!message_port_.source_id().empty());
 
   AudioCaptureConfig audio_config;
   // Opus does best at 192kbps, so we cap that here.
@@ -340,7 +342,8 @@ void LoopingFileCastAgent::OnNegotiated(
   }
 }
 
-void LoopingFileCastAgent::OnError(const SenderSession* session, Error error) {
+void LoopingFileCastAgent::OnError(const SenderSession* session,
+                                   const Error& error) {
   OSP_LOG_ERROR << "SenderSession fatal error: " << error;
   Shutdown();
 }
@@ -350,13 +353,13 @@ void LoopingFileCastAgent::OnStatisticsUpdated(
   // Only log every 10 times, or roughly every 5 seconds.
   constexpr int kLoggingInterval = 10;
   if ((num_times_on_statistics_updated_called_++ % kLoggingInterval) == 0) {
-    OSP_VLOG << __func__ << ": updated_stats=" << updated_stats.ToString();
+    OSP_VLOG << __func__ << ": updated_stats=" << updated_stats;
   }
   last_reported_statistics_ = std::make_optional<SenderStats>(updated_stats);
 }
 
 void LoopingFileCastAgent::OnReady() {
-  OSP_DCHECK(cast_mode_ == CastMode::kRemoting);
+  OSP_CHECK_EQ(cast_mode_, CastMode::kRemoting);
   is_ready_for_remoting_ = true;
   if (current_negotiation_) {
     StartFileSender();
@@ -368,9 +371,9 @@ void LoopingFileCastAgent::OnPlaybackRateChange(double rate) {
 }
 
 void LoopingFileCastAgent::StartFileSender() {
-  OSP_DCHECK(current_negotiation_);
+  OSP_CHECK(current_negotiation_);
   file_sender_ = std::make_unique<LoopingFileSender>(
-      environment_.get(), connection_settings_.value(), current_session_.get(),
+      *environment_, connection_settings_.value(), current_session_.get(),
       std::move(*current_negotiation_), [this]() { shutdown_callback_(); });
   current_negotiation_.reset();
   is_ready_for_remoting_ = false;
@@ -385,16 +388,15 @@ void LoopingFileCastAgent::Shutdown() {
     current_session_.reset();
 
     if (last_reported_statistics_) {
-      OSP_LOG_INFO << "Last reported statistics="
-                   << last_reported_statistics_->ToString();
+      OSP_LOG_INFO << "Last reported statistics=" << *last_reported_statistics_;
     }
   }
-  OSP_DCHECK(message_port_.source_id().empty());
+  OSP_CHECK(message_port_.source_id().empty());
   environment_.reset();
 
   if (platform_remote_connection_) {
     const VirtualConnection connection = *platform_remote_connection_;
-    // Reset |platform_remote_connection_| because ConnectionNamespaceHandler
+    // Reset `platform_remote_connection_` because ConnectionNamespaceHandler
     // may call-back into OnReceiverMessagingOpened().
     platform_remote_connection_.reset();
     connection_handler_.CloseRemoteConnection(connection);
@@ -402,7 +404,7 @@ void LoopingFileCastAgent::Shutdown() {
 
   if (remote_connection_) {
     const VirtualConnection connection = *remote_connection_;
-    // Reset |remote_connection_| because ConnectionNamespaceHandler may
+    // Reset `remote_connection_` because ConnectionNamespaceHandler may
     // call-back into OnRemoteMessagingOpened().
     remote_connection_.reset();
     connection_handler_.CloseRemoteConnection(connection);
@@ -411,8 +413,8 @@ void LoopingFileCastAgent::Shutdown() {
   if (!app_session_id_.empty()) {
     OSP_LOG_INFO << "Stopping the Cast Receiver's Mirroring App...";
     static constexpr char kStopMessageTemplate[] =
-        R"({"type":"STOP", "requestId":%d, "sessionId":"%s"})";
-    std::string stop_json = StringPrintf(
+        R"({{"type":"STOP", "requestId":{}, "sessionId":"{}"}})";
+    std::string stop_json = StringFormat(
         kStopMessageTemplate, next_request_id_++, app_session_id_.c_str());
     router_.Send(
         VirtualConnection{kPlatformSenderId, kPlatformReceiverId,

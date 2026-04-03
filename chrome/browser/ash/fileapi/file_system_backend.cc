@@ -18,7 +18,6 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_util.h"
-#include "chrome/browser/ash/file_manager/app_id.h"
 #include "chrome/browser/ash/fileapi/file_access_permissions.h"
 #include "chrome/browser/ash/fileapi/file_system_backend.h"
 #include "chrome/browser/ash/fileapi/file_system_backend_delegate.h"
@@ -27,6 +26,7 @@
 #include "chrome/browser/media_galleries/fileapi/media_file_system_backend.h"
 #include "chrome/common/url_constants.h"
 #include "chromeos/ash/components/dbus/cros_disks/cros_disks_client.h"
+#include "chromeos/ash/components/file_manager/app_id.h"
 #include "components/file_access/scoped_file_access_delegate.h"
 #include "components/user_manager/user.h"
 #include "extensions/common/extension.h"
@@ -109,7 +109,7 @@ FileSystemBackend::FileSystemBackend(
       mount_points_(mount_points),
       system_mount_points_(system_mount_points) {}
 
-FileSystemBackend::~FileSystemBackend() {}
+FileSystemBackend::~FileSystemBackend() = default;
 
 // static
 FileSystemBackend* FileSystemBackend::Get(
@@ -330,7 +330,6 @@ storage::AsyncFileUtil* FileSystemBackend::GetAsyncFileUtil(
     default:
       NOTREACHED();
   }
-  return nullptr;
 }
 
 storage::WatcherManager* FileSystemBackend::GetWatcherManager(
@@ -419,14 +418,13 @@ bool FileSystemBackend::HasInplaceCopyImplementation(
     case storage::kFileSystemTypeArcDocumentsProvider:
     case storage::kFileSystemTypeLocal:
     case storage::kFileSystemTypeArcContent:
-    // TODO(crbug.com/939235): Implement in-place copy in SmbFs.
+    // TODO(crbug.com/41445433): Implement in-place copy in SmbFs.
     case storage::kFileSystemTypeSmbFs:
     case storage::kFileSystemTypeFuseBox:
       return false;
     default:
       NOTREACHED();
   }
-  return true;
 }
 
 std::unique_ptr<storage::FileStreamReader>
@@ -477,7 +475,6 @@ FileSystemBackend::CreateFileStreamReader(
     default:
       NOTREACHED();
   }
-  return nullptr;
 }
 
 std::unique_ptr<storage::FileStreamWriter>
@@ -516,46 +513,12 @@ FileSystemBackend::CreateFileStreamWriter(
     default:
       NOTREACHED();
   }
-  return nullptr;
 }
 
 bool FileSystemBackend::GetVirtualPath(const base::FilePath& filesystem_path,
                                        base::FilePath* virtual_path) const {
   return mount_points_->GetVirtualPath(filesystem_path, virtual_path) ||
          system_mount_points_->GetVirtualPath(filesystem_path, virtual_path);
-}
-
-void FileSystemBackend::GetRedirectURLForContents(
-    const storage::FileSystemURL& url,
-    storage::URLCallback callback) const {
-  DCHECK(url.is_valid());
-
-  if (!IsAccessAllowed(BackendFunction::kGetRedirectURLForContents,
-                       storage::OperationType::kNone, url)) {
-    std::move(callback).Run(GURL());
-    return;
-  }
-
-  switch (url.type()) {
-    case storage::kFileSystemTypeProvided:
-      file_system_provider_delegate_->GetRedirectURLForContents(
-          url, std::move(callback));
-      return;
-    case storage::kFileSystemTypeDeviceMediaAsFileStorage:
-      mtp_delegate_->GetRedirectURLForContents(url, std::move(callback));
-      return;
-    case storage::kFileSystemTypeLocal:
-    case storage::kFileSystemTypeArcContent:
-    case storage::kFileSystemTypeArcDocumentsProvider:
-    case storage::kFileSystemTypeDriveFs:
-    case storage::kFileSystemTypeSmbFs:
-    case storage::kFileSystemTypeFuseBox:
-      std::move(callback).Run(GURL());
-      return;
-    default:
-      NOTREACHED();
-  }
-  std::move(callback).Run(GURL());
 }
 
 storage::FileSystemURL FileSystemBackend::CreateInternalURL(

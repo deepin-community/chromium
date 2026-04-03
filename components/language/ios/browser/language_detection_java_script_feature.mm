@@ -32,10 +32,7 @@ LanguageDetectionJavaScriptFeature::GetInstance() {
 
 LanguageDetectionJavaScriptFeature::LanguageDetectionJavaScriptFeature()
     : web::JavaScriptFeature(
-          // TODO(crbug.com/1380918): Move language detection feature to
-          // kIsolatedWorld once WebFrameManager supports tracking frames in
-          // an isolated world.
-          web::ContentWorld::kPageContentWorld,
+          web::ContentWorld::kIsolatedWorld,
           {FeatureScript::CreateWithFilename(
               kScriptName,
               FeatureScript::InjectionTime::kDocumentStart,
@@ -62,7 +59,7 @@ void LanguageDetectionJavaScriptFeature::ScriptMessageReceived(
     return;
   }
 
-  base::Value::Dict& body_dict = script_message.body()->GetDict();
+  base::DictValue& body_dict = script_message.body()->GetDict();
 
   std::optional<bool> has_notranslate = body_dict.FindBool("hasNoTranslate");
   const std::string* html_lang = body_dict.FindString("htmlLang");

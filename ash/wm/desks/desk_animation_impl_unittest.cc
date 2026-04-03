@@ -4,7 +4,6 @@
 
 #include "ash/wm/desks/desk_animation_impl.h"
 
-#include "ash/constants/ash_features.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/desks/desk.h"
@@ -13,16 +12,16 @@
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/desks/desks_histogram_enums.h"
 #include "ash/wm/desks/desks_test_util.h"
-#include "ash/wm/desks/legacy_desk_bar_view.h"
+#include "ash/wm/desks/overview_desk_bar_view.h"
 #include "ash/wm/desks/root_window_desk_switch_animator_test_api.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/overview/overview_grid.h"
+#include "ash/wm/overview/overview_grid_test_api.h"
 #include "ash/wm/overview/overview_test_util.h"
 #include "base/barrier_closure.h"
-#include "base/test/scoped_feature_list.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace ash {
 
@@ -147,8 +146,8 @@ TEST_F(DeskActivationAnimationTest, CloseWindowDuringAnimation) {
 // Tests that if a fast swipe is detected, we will still wait for the ending
 // screenshot to be taken and animated to.
 TEST_F(DeskActivationAnimationTest, AnimatingAfterFastSwipe) {
-  ui::ScopedAnimationDurationScaleMode animation_scale(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode animation_scale(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   auto* desks_controller = DesksController::Get();
   desks_controller->NewDesk(DesksCreationRemovalSource::kButton);
@@ -210,8 +209,7 @@ TEST_F(DeskActivationAnimationTest, StartAndEndSwipeBeforeScreenshotsTaken) {
 
 class OverviewDeskNavigationTest : public AshTestBase {
  public:
-  OverviewDeskNavigationTest()
-      : scoped_feature_list_(features::kOverviewDeskNavigation) {}
+  OverviewDeskNavigationTest() {}
   OverviewDeskNavigationTest(const OverviewDeskNavigationTest&) = delete;
   OverviewDeskNavigationTest& operator=(const OverviewDeskNavigationTest&) =
       delete;
@@ -227,16 +225,13 @@ class OverviewDeskNavigationTest : public AshTestBase {
     ASSERT_EQ(2u, desks_controller->desks().size());
     EXPECT_TRUE(desks_controller->GetDeskAtIndex(0)->is_active());
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Tests when we switch between desks in overview that the desk switch animation
 // doesn't exit overview.
 TEST_F(OverviewDeskNavigationTest, SwitchDesksWithoutExitingOverview) {
-  ui::ScopedAnimationDurationScaleMode animation_scale(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode animation_scale(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   EnterOverview();
   auto* overview_controller = Shell::Get()->overview_controller();
@@ -302,15 +297,14 @@ TEST_F(OverviewDeskNavigationTest, ClickingMiniViewExitsOverview) {
 // Tests that overview is not exited when a short desk swipe is detected during
 // a desk activation animation.
 TEST_F(OverviewDeskNavigationTest, ShortSwipeStaysInOverview) {
-  ui::ScopedAnimationDurationScaleMode animation_scale(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode animation_scale(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   EnterOverview();
   auto* overview_controller = Shell::Get()->overview_controller();
   ASSERT_TRUE(overview_controller->InOverviewSession());
   const gfx::Rect initial_overview_grid_bounds =
-      GetOverviewGridForRoot(Shell::GetPrimaryRootWindow())
-          ->bounds_for_testing();
+      OverviewGridTestApi(Shell::GetPrimaryRootWindow()).bounds();
 
   // Start a swipe animation, but only swipe to show 1/10 of the next desk. This
   // will cause the animation to animate back to the starting desk.
@@ -349,8 +343,7 @@ TEST_F(OverviewDeskNavigationTest, ShortSwipeStaysInOverview) {
   // specifically use `OverviewEnterExitType::kImmediateEnter` to enter overview
   // in these cases.
   EXPECT_EQ(initial_overview_grid_bounds,
-            GetOverviewGridForRoot(Shell::GetPrimaryRootWindow())
-                ->bounds_for_testing());
+            OverviewGridTestApi(Shell::GetPrimaryRootWindow()).bounds());
 }
 
 // Tests that inputs to exit overview are ignored during the desk switch

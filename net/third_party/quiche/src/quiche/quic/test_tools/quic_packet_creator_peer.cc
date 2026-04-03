@@ -4,6 +4,10 @@
 
 #include "quiche/quic/test_tools/quic_packet_creator_peer.h"
 
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "quiche/quic/core/frames/quic_frame.h"
 #include "quiche/quic/core/quic_packet_creator.h"
 #include "quiche/quic/core/quic_types.h"
@@ -108,13 +112,6 @@ SerializedPacket QuicPacketCreatorPeer::SerializeAllFrames(
   // The caller takes ownership of the QuicEncryptedPacket.
   creator->packet_.encrypted_buffer = nullptr;
   return packet;
-}
-
-// static
-std::unique_ptr<SerializedPacket>
-QuicPacketCreatorPeer::SerializeConnectivityProbingPacket(
-    QuicPacketCreator* creator) {
-  return creator->SerializeConnectivityProbingPacket();
 }
 
 // static

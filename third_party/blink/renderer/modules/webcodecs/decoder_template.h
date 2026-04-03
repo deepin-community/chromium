@@ -6,8 +6,10 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBCODECS_DECODER_TEMPLATE_H_
 
 #include <stdint.h>
+
 #include <memory>
 
+#include "base/sequence_checker.h"
 #include "media/base/decoder_status.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
@@ -62,10 +64,10 @@ class MODULES_EXPORT DecoderTemplate
   DEFINE_ATTRIBUTE_EVENT_LISTENER(dequeue, kDequeue)
   void configure(const ConfigType*, ExceptionState&);
   void decode(const InputType*, ExceptionState&);
-  ScriptPromise flush(ExceptionState&);
+  ScriptPromise<IDLUndefined> flush(ExceptionState&);
   void reset(ExceptionState&);
   void close(ExceptionState&);
-  String state() const { return state_; }
+  V8CodecState state() const { return state_; }
 
   // EventTarget override.
   ExecutionContext* GetExecutionContext() const override;
@@ -101,6 +103,9 @@ class MODULES_EXPORT DecoderTemplate
   // The default implementation does nothing and must be overridden by derived
   // classes if needed.
   virtual void SetHardwarePreference(HardwarePreference preference);
+
+  // Called when the active configuration changes after a configure().
+  virtual void OnActiveConfigChanged(const MediaConfigType& config);
 
   // Virtual for UTs.
   virtual MediaDecoderType* decoder() { return decoder_.get(); }
@@ -156,7 +161,7 @@ class MODULES_EXPORT DecoderTemplate
     scoped_refptr<media::DecoderBuffer> decoder_buffer;
 
     // For kFlush Requests.
-    Member<ScriptPromiseResolver> resolver;
+    Member<ScriptPromiseResolver<IDLUndefined>> resolver;
 
     // For reporting an error at the time when a request is processed.
     media::DecoderStatus status;
@@ -247,6 +252,7 @@ class MODULES_EXPORT DecoderTemplate
   // initialization.
   bool low_delay_ = false;
   std::unique_ptr<MediaConfigType> active_config_;
+  std::optional<HardwarePreference> active_preference_;
 
   // TODO(sandersd): Store the last config, flush, and reset so that
   // duplicates can be elided.

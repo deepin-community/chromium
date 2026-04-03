@@ -2,9 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/password_manager/core/browser/leak_detection/encryption_utils.h"
+
+#include <stdint.h>
 
 #include <optional>
+
+#include "components/password_manager/core/browser/leak_detection/encryption_utils.h"
 
 namespace password_manager {
 

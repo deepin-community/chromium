@@ -9,6 +9,9 @@
 
 #include "src/gpu/ganesh/GrMeshDrawTarget.h"
 
+#include <algorithm>
+#include <limits>
+
 GrVertexChunkBuilder::~GrVertexChunkBuilder() {
     if (!fChunks->empty()) {
         fTarget->putBackVertices(fCurrChunkVertexCapacity - fCurrChunkVertexCount, fStride);
@@ -28,13 +31,19 @@ bool GrVertexChunkBuilder::allocChunk(int minCount) {
                                                               minAllocCount, &chunk->fBuffer,
                                                               &chunk->fBase,
                                                               &fCurrChunkVertexCapacity);
-    if (!fCurrChunkVertexWriter || !chunk->fBuffer || fCurrChunkVertexCapacity < minCount) {
+    if (!fCurrChunkVertexWriter || !chunk->fBuffer || fCurrChunkVertexCapacity < minCount) SK_UNLIKELY {
         SkDebugf("WARNING: Failed to allocate vertex buffer for GrVertexChunk.\n");
         fChunks->pop_back();
         SkASSERT(fCurrChunkVertexCount == 0);
         fCurrChunkVertexCapacity = 0;
         return false;
     }
-    fMinVerticesPerChunk *= 2;
+
+    int maxVerticesPerChunk = std::numeric_limits<int>::max() / fStride;
+    if (maxVerticesPerChunk / 2 > fMinVerticesPerChunk) {
+        fMinVerticesPerChunk *= 2;
+    } else {
+        fMinVerticesPerChunk = maxVerticesPerChunk;
+    }
     return true;
 }

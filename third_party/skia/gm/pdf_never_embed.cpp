@@ -26,11 +26,11 @@ static void excercise_draw_pos_text(SkCanvas* canvas,
                                     SkScalar x, SkScalar y,
                                     const SkFont& font,
                                     const SkPaint& paint) {
-    const int count = font.countText(text, strlen(text), SkTextEncoding::kUTF8);
+    const size_t count = font.countText(text, strlen(text), SkTextEncoding::kUTF8);
     SkTextBlobBuilder builder;
     auto rec = builder.allocRunPos(font, count);
-    font.textToGlyphs(text, strlen(text), SkTextEncoding::kUTF8, rec.glyphs, count);
-    font.getPos(rec.glyphs, count, rec.points());
+    font.textToGlyphs(text, strlen(text), SkTextEncoding::kUTF8, {rec.glyphs, count});
+    font.getPos({rec.glyphs, count}, {rec.points(), count});
     canvas->drawTextBlob(builder.make(), x, y, paint);
 }
 

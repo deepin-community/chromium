@@ -5,6 +5,7 @@
 #include "ash/public/cpp/system_tray_test_api.h"
 
 #include <string>
+#include <string_view>
 
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
@@ -40,10 +41,6 @@ ash::UnifiedSystemTray* GetTray() {
       ->GetPrimaryRootWindowController()
       ->GetStatusAreaWidget()
       ->unified_system_tray();
-}
-
-views::View* GetBubbleView(int view_id) {
-  return GetTray()->bubble()->GetBubbleView()->GetViewByID(view_id);
 }
 
 }  // namespace
@@ -87,19 +84,20 @@ AccessibilityDetailedView* SystemTrayTestApi::GetAccessibilityDetailedView() {
 bool SystemTrayTestApi::IsBubbleViewVisible(int view_id, bool open_tray) {
   if (open_tray)
     GetTray()->ShowBubble();
-  views::View* view = GetBubbleView(view_id);
+  views::View* view = GetMainBubbleView()->GetViewByID(view_id);
   return view && view->GetVisible();
 }
 
 bool SystemTrayTestApi::IsToggleOn(int view_id) {
-  auto* view = static_cast<TrayToggleButton*>(GetBubbleView(view_id));
+  auto* view =
+      static_cast<TrayToggleButton*>(GetMainBubbleView()->GetViewByID(view_id));
   DCHECK(view);
   return view->GetIsOn();
 }
 
 void SystemTrayTestApi::ScrollToShowView(views::ScrollView* scroll_view,
                                          int view_id) {
-  views::View* view = GetBubbleView(view_id);
+  views::View* view = GetMainBubbleView()->GetViewByID(view_id);
   DCHECK(view && scroll_view->Contains(view));
 
   gfx::Point view_center = view->GetBoundsInScreen().CenterPoint();
@@ -113,7 +111,7 @@ void SystemTrayTestApi::ScrollToShowView(views::ScrollView* scroll_view,
 }
 
 void SystemTrayTestApi::ClickBubbleView(int view_id) {
-  views::View* view = GetBubbleView(view_id);
+  views::View* view = GetMainBubbleView()->GetViewByID(view_id);
   if (view && view->GetVisible()) {
     gfx::Point cursor_location = view->GetLocalBounds().CenterPoint();
     views::View::ConvertPointToScreen(view, &cursor_location);
@@ -124,9 +122,13 @@ void SystemTrayTestApi::ClickBubbleView(int view_id) {
   }
 }
 
+views::View* SystemTrayTestApi::GetMainBubbleView() {
+  return GetTray()->bubble()->GetBubbleView();
+}
+
 std::u16string SystemTrayTestApi::GetBubbleViewTooltip(int view_id) {
-  views::View* view = GetBubbleView(view_id);
-  return view ? view->GetTooltipText(gfx::Point()) : std::u16string();
+  views::View* view = GetMainBubbleView()->GetViewByID(view_id);
+  return view ? view->GetRenderedTooltipText(gfx::Point()) : std::u16string();
 }
 
 std::u16string SystemTrayTestApi::GetShutdownButtonTooltip() {
@@ -139,18 +141,19 @@ std::u16string SystemTrayTestApi::GetShutdownButtonTooltip() {
                           ->footer_for_testing()
                           ->power_button_for_testing()
                           ->button_content_for_testing();
-  return icon_button ? icon_button->GetTooltipText(gfx::Point())
+  return icon_button ? icon_button->GetRenderedTooltipText(gfx::Point())
                      : std::u16string();
 }
 
-std::u16string SystemTrayTestApi::GetBubbleViewText(int view_id) {
-  views::View* view = GetBubbleView(view_id);
-  return view ? static_cast<views::Label*>(view)->GetText() : std::u16string();
+std::u16string_view SystemTrayTestApi::GetBubbleViewText(int view_id) {
+  views::View* view = GetMainBubbleView()->GetViewByID(view_id);
+  return view ? static_cast<views::Label*>(view)->GetText()
+              : std::u16string_view();
 }
 
 bool SystemTrayTestApi::Is24HourClock() {
   base::HourClockType type =
-      GetTray()->time_view_->time_view()->GetHourTypeForTesting();
+      GetTray()->time_tray_item_view_->time_view()->GetHourTypeForTesting();
   return type == base::k24HourClock;
 }
 

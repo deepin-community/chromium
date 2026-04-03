@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -86,16 +86,16 @@ class Fuchsia(TestSuite):
     return DiffTestBlueprint(
         trace=DataPath('fuchsia_trace.fxt'),
         query="""
-        SELECT track.type AS type, depth, count(*) AS count
+        SELECT depth, count(*) AS count
         FROM slice
         JOIN track ON slice.track_id = track.id
-        GROUP BY track.type, depth
-        ORDER BY track.type, depth;
+        GROUP BY depth
+        ORDER BY depth;
         """,
         out=Csv("""
-        "type","depth","count"
-        "thread_track",0,2153
-        "thread_track",1,1004
+        "depth","count"
+        0,2153
+        1,1004
         """))
 
   def test_fuchsia_smoke_instants(self):
@@ -175,23 +175,22 @@ class Fuchsia(TestSuite):
         query="""
         SELECT
           id,
-          name,
-          type
+          name
         FROM track
         LIMIT 10;
         """,
         out=Csv("""
-        "id","name","type"
-        0,"[NULL]","thread_track"
-        1,"[NULL]","thread_track"
-        2,"[NULL]","thread_track"
-        3,"[NULL]","thread_track"
-        4,"[NULL]","thread_track"
-        5,"cpu_usage:average_cpu_percentage:0","process_counter_track"
-        6,"[NULL]","thread_track"
-        7,"[NULL]","thread_track"
-        8,"[NULL]","thread_track"
-        9,"[NULL]","thread_track"
+        "id","name"
+        0,"[NULL]"
+        1,"[NULL]"
+        2,"[NULL]"
+        3,"[NULL]"
+        4,"[NULL]"
+        5,"cpu_usage:average_cpu_percentage:0"
+        6,"[NULL]"
+        7,"[NULL]"
+        8,"[NULL]"
+        9,"[NULL]"
         """))
 
   # Smoke test a high-CPU trace.
@@ -199,13 +198,35 @@ class Fuchsia(TestSuite):
     return DiffTestBlueprint(
         trace=DataPath('fuchsia_workstation.fxt'),
         query="""
-        SELECT track.type AS type, depth, count(*) AS count
+        SELECT depth, count(*) AS count
         FROM slice
         JOIN track ON slice.track_id = track.id
-        GROUP BY track.type, depth
-        ORDER BY track.type, depth;
+        GROUP BY depth
+        ORDER BY depth;
         """,
-        out=Path('fuchsia_workstation_smoke_slices.out'))
+        out=Csv('''
+          "depth","count"
+          0,15294
+          1,11654
+          2,9723
+          3,2033
+          4,3943
+          5,2458
+          6,1839
+          7,2225
+          8,2193
+          9,1667
+          10,349
+          11,329
+          12,304
+          13,246
+          14,207
+          15,175
+          16,114
+          17,38
+          18,12
+          19,1
+        '''))
 
   def test_fuchsia_workstation_smoke_args(self):
     return DiffTestBlueprint(
@@ -224,7 +245,7 @@ class Fuchsia(TestSuite):
         "Escher frame number",33
         "Expected presentation time",17
         "Frame number",33
-        "MinikinFontsCount",2
+        "MinikinFontsCount",1
         "Predicted frame duration(ms)",21
         "Render time(ms)",21
         "Timestamp",917
@@ -238,20 +259,29 @@ class Fuchsia(TestSuite):
         query="""
         SELECT key,int_value,string_value,real_value,value_type,display_value
         FROM args
-        LIMIT 12;
+        GROUP BY key
+        ORDER BY key
         """,
         out=Csv("""
         "key","int_value","string_value","real_value","value_type","display_value"
         "SomeNullArg","[NULL]","null","[NULL]","string","null"
-        "Someuint32",2145,"[NULL]","[NULL]","int","2145"
-        "Someuint64",423621626134123415,"[NULL]","[NULL]","int","423621626134123415"
+        "Somedouble","[NULL]","[NULL]",3.141500,"real","3.1415"
         "Someint32",-7,"[NULL]","[NULL]","int","-7"
         "Someint64",-234516543631231,"[NULL]","[NULL]","int","-234516543631231"
-        "Somedouble","[NULL]","[NULL]",3.141500,"real","3.1415"
+        "Someuint32",2145,"[NULL]","[NULL]","int","2145"
+        "Someuint64",423621626134123415,"[NULL]","[NULL]","int","423621626134123415"
+        "name","[NULL]","example_counter:somedataseries:0","[NULL]","string","example_counter:somedataseries:0"
         "ping","[NULL]","pong","[NULL]","string","pong"
-        "somepointer",3285933758964,"[NULL]","[NULL]","pointer","0x2fd10ea19f4"
-        "someotherpointer",43981,"[NULL]","[NULL]","pointer","0xabcd"
-        "somekoid",18,"[NULL]","[NULL]","int","18"
+        "scope","[NULL]","[NULL]","[NULL]","string","[NULL]"
         "somebool",1,"[NULL]","[NULL]","bool","true"
+        "somekoid",18,"[NULL]","[NULL]","int","18"
         "someotherbool",0,"[NULL]","[NULL]","bool","false"
+        "someotherpointer",43981,"[NULL]","[NULL]","pointer","0xabcd"
+        "somepointer",3285933758964,"[NULL]","[NULL]","pointer","0x2fd10ea19f4"
+        "source","[NULL]","chrome","[NULL]","string","chrome"
+        "source_scope","[NULL]","[NULL]","[NULL]","string","[NULL]"
+        "trace_id_is_process_scoped",0,"[NULL]","[NULL]","bool","false"
+        "track_compressor_idx",0,"[NULL]","[NULL]","int","0"
+        "upid",1,"[NULL]","[NULL]","int","1"
+        "utid",2,"[NULL]","[NULL]","int","2"
         """))

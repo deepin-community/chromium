@@ -4,7 +4,12 @@
 
 #include "content/browser/permissions/embedded_permission_control_checker.h"
 
-#include <optional>
+#include <cstddef>
+#include <string>
+
+#include "base/strings/string_number_conversions.h"
+#include "content/browser/log_console_message.h"
+#include "third_party/blink/public/common/features_generated.h"
 
 using blink::mojom::EmbeddedPermissionControlClient;
 using blink::mojom::PermissionName;
@@ -17,9 +22,16 @@ namespace {
 // type, so as to limit the potential for abuse/misuse, for example: embedded
 // iframes can be intentionally disruptive by appending too many embedded
 // permission elements.
-// TODO(crbug.com/1462930): Add a command line switch to disable the check
-// policy and other security measures.
-constexpr static int kMaxPEPCPerPage = 2;
+constexpr static int kMaxPEPCPerPage = 3;
+constexpr static int kMaxInstallPerPage = 24;
+
+size_t GetMaxElementsPerPageForSource(
+    EmbeddedPermissionControlChecker::Source source) {
+  if (source == EmbeddedPermissionControlChecker::Source::kInstallElement) {
+    return kMaxInstallPerPage;
+  }
+  return kMaxPEPCPerPage;
+}
 
 }  // namespace
 
@@ -29,25 +41,43 @@ EmbeddedPermissionControlChecker::EmbeddedPermissionControlChecker(Page& page)
 EmbeddedPermissionControlChecker::~EmbeddedPermissionControlChecker() = default;
 
 void EmbeddedPermissionControlChecker::CheckPageEmbeddedPermission(
+    Source source,
     std::set<PermissionName> permissions,
     mojo::PendingRemote<EmbeddedPermissionControlClient> pending_client,
     RegisterPageEmbeddedPermissionCallback callback) {
   auto client =
-      std::make_unique<Client>(this, std::move(permissions),
+      std::make_unique<Client>(this, source, std::move(permissions),
                                std::move(pending_client), std::move(callback));
-  auto& queue = client_map_[client->permissions()];
-  if (queue.size() < kMaxPEPCPerPage) {
+  ClientKey key(client->source(), client->permissions());
+  auto& queue = client_map_[key];
+
+  const size_t max_elements = GetMaxElementsPerPageForSource(source);
+  if (queue.size() < max_elements ||
+      base::FeatureList::IsEnabled(
+          blink::features::kBypassPepcSecurityForTesting)) {
     client->OnEmbeddedPermissionControlRegistered(/*allow=*/true);
   }
-
   queue.push_back(std::move(client));
+  if (queue.size() == max_elements) {
+    page().GetMainDocument().AddMessageToConsole(
+        blink::mojom::ConsoleMessageLevel::kWarning,
+        "Maximum limit of " + base::NumberToString(max_elements) +
+            " permission elements has been reached. More permission"
+            " elements can be added but they will not be clickable");
+  }
 }
 
 PAGE_USER_DATA_KEY_IMPL(EmbeddedPermissionControlChecker);
 
 void EmbeddedPermissionControlChecker::OnClientDisconnect(
     Client* disconnected_client) {
-  auto client_map_it = client_map_.find(disconnected_client->permissions());
+  // Store the max elements for the source type before erasing the client.
+  const int max_elements =
+      GetMaxElementsPerPageForSource(disconnected_client->source());
+
+  ClientKey key(disconnected_client->source(),
+                disconnected_client->permissions());
+  auto client_map_it = client_map_.find(key);
   CHECK(client_map_it != client_map_.end() && !client_map_it->second.empty());
   auto& queue = client_map_it->second;
   for (auto& client : queue) {
@@ -58,7 +88,7 @@ void EmbeddedPermissionControlChecker::OnClientDisconnect(
   }
 
   for (auto it = queue.begin();
-       it != queue.end() && std::distance(queue.begin(), it) < kMaxPEPCPerPage;
+       it != queue.end() && std::distance(queue.begin(), it) < max_elements;
        ++it) {
     (*it)->OnEmbeddedPermissionControlRegistered(/*allow=*/true);
   }
@@ -66,10 +96,12 @@ void EmbeddedPermissionControlChecker::OnClientDisconnect(
 
 EmbeddedPermissionControlChecker::Client::Client(
     EmbeddedPermissionControlChecker* checker,
+    Source source,
     std::set<PermissionName> permissions,
     mojo::PendingRemote<EmbeddedPermissionControlClient> client,
     RegisterPageEmbeddedPermissionCallback callback)
     : checker_(checker),
+      source_(source),
       permissions_(std::move(permissions)),
       client_(std::move(client)),
       callback_(std::move(callback)) {
@@ -78,6 +110,25 @@ EmbeddedPermissionControlChecker::Client::Client(
 }
 
 EmbeddedPermissionControlChecker::Client::~Client() = default;
+
+EmbeddedPermissionControlChecker::ClientKey::ClientKey(
+    Source source,
+    std::set<PermissionName> permissions)
+    : source(source), permissions(std::move(permissions)) {}
+
+EmbeddedPermissionControlChecker::ClientKey::ClientKey(const ClientKey& other) =
+    default;
+EmbeddedPermissionControlChecker::ClientKey::ClientKey(ClientKey&& other) =
+    default;
+EmbeddedPermissionControlChecker::ClientKey::~ClientKey() = default;
+
+bool EmbeddedPermissionControlChecker::ClientKey::operator<(
+    const ClientKey& other) const {
+  if (source != other.source) {
+    return source < other.source;
+  }
+  return permissions < other.permissions;
+}
 
 void EmbeddedPermissionControlChecker::Client::OnMojoDisconnect() {
   checker_->OnClientDisconnect(this);

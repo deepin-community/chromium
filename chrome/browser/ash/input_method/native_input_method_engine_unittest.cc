@@ -10,6 +10,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller_impl.h"
 #include "chrome/browser/ash/input_method/autocorrect_prefs.h"
 #include "chrome/browser/ash/input_method/input_method_settings.h"
 #include "chrome/browser/ash/input_method/stub_input_method_engine_observer.h"
@@ -145,30 +146,27 @@ class MockInputMethod : public ime::mojom::InputMethod {
   mojo::AssociatedReceiver<ime::mojom::InputMethod> receiver_{this};
 };
 
+void SetEmptyPrefs(Profile& profile) {
+  profile.GetPrefs()->SetDict(::prefs::kLanguageInputMethodSpecificSettings,
+                              base::DictValue());
+}
+
 void SetInputMethodOptions(Profile& profile,
                            bool autocorrect_enabled,
                            bool predictive_writing_enabled) {
-  base::Value::Dict input_method_setting;
+  base::DictValue input_method_setting;
   input_method_setting.SetByDottedPath(
       std::string(kEngineIdUs) + ".physicalKeyboardAutoCorrectionLevel",
       autocorrect_enabled ? 1 : 0);
   input_method_setting.SetByDottedPath(
       std::string(kEngineIdUs) + ".physicalKeyboardEnablePredictiveWriting",
-      predictive_writing_enabled);
+      base::Value(predictive_writing_enabled));
   profile.GetPrefs()->SetDict(::prefs::kLanguageInputMethodSpecificSettings,
                               std::move(input_method_setting));
 }
 
-// TODO - support setting Japanese InputMethodOptions too.
-void SetInputMethodOptionsJapaneseMigrationCompleted(
-    Profile& profile,
-    bool japanese_migration_completed) {
-  SetJapaneseSettingsMigrationComplete(*(profile.GetPrefs()),
-                                       japanese_migration_completed);
-}
-
 void SetPinyinLayoutPrefs(Profile& profile, const std::string& layout) {
-  base::Value::Dict input_method_setting;
+  base::DictValue input_method_setting;
   input_method_setting.SetByDottedPath("zh-t-i0-pinyin.xkbLayout", layout);
   profile.GetPrefs()->SetDict(::prefs::kLanguageInputMethodSpecificSettings,
                               std::move(input_method_setting));
@@ -200,10 +198,9 @@ class FakeConnectionFactory : public ime::mojom::ConnectionFactory {
     std::move(callback).Run(/*bound=*/true);
   }
 
-  void ConnectToJapaneseDecoder(
-      mojo::PendingAssociatedReceiver<ime::mojom::JapaneseDecoder>
-          japanese_decoder,
-      ConnectToJapaneseDecoderCallback callback) override {
+  void Unused(
+      mojo::PendingAssociatedReceiver<ime::mojom::JpUnused> japanese_decoder,
+      UnusedCallback callback) override {
     std::move(callback).Run(true);
   }
 
@@ -275,6 +272,8 @@ class NativeInputMethodEngineTest : public ::testing::Test {
     chromeos::machine_learning::ServiceConnection::
         UseFakeServiceConnectionForTesting(&fake_service_connection_);
     chromeos::machine_learning::ServiceConnection::GetInstance()->Initialize();
+
+    browser_controller_ = std::make_unique<ash::BrowserControllerImpl>();
   }
 
   // TODO(b/264817001): Refactor EnableDefaultFeature*() functions to be
@@ -297,14 +296,14 @@ class NativeInputMethodEngineTest : public ::testing::Test {
         /*disabled_features=*/DisabledFeatures());
   }
 
-  void EnableDefaultFeatureListWithJapaneseSystemPk() {
+  void EnableDefaultFeatureListWithMultiwordDisabled() {
     feature_list_.Reset();
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/
-        {
-            features::kSystemJapanesePhysicalTyping,
-        },
-        /*disabled_features=*/DisabledFeatures());
+
+    std::vector<base::test::FeatureRef> disabled_features = DisabledFeatures();
+    disabled_features.push_back(features::kAssistMultiWord);
+
+    feature_list_.InitWithFeatures(/*enabled_features=*/{},
+                                   /*disabled_features=*/disabled_features);
   }
 
   base::test::ScopedFeatureList feature_list_;
@@ -315,6 +314,7 @@ class NativeInputMethodEngineTest : public ::testing::Test {
       keyboard_controller_client_test_helper_;
   chromeos::machine_learning::FakeServiceConnectionImpl
       fake_service_connection_;
+  std::unique_ptr<ash::BrowserControllerImpl> browser_controller_;
 };
 
 TEST_F(NativeInputMethodEngineTest,
@@ -339,6 +339,7 @@ TEST_F(NativeInputMethodEngineTest,
 
 TEST_F(NativeInputMethodEngineTest, LaunchesImeServiceIfAutocorrectIsOn) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/true,
                         /*predictive_writing_enabled=*/false);
 
@@ -356,130 +357,11 @@ TEST_F(NativeInputMethodEngineTest, LaunchesImeServiceIfAutocorrectIsOn) {
   InputMethodManager::Shutdown();
 }
 
-TEST_F(NativeInputMethodEngineTest, CheckThatJapaneseStartupRecordedWhen) {
-  base::HistogramTester histogram_tester;
-  histogram_tester.ExpectUniqueSample(
-      "InputMethod.PhysicalKeyboard.Japanese.StartupAction",
-      JapaneseStartupAction::kPerformMigration, 0);
-  TestingProfile testing_profile;
-  EnableDefaultFeatureListWithJapaneseSystemPk();
-  SetInputMethodOptionsJapaneseMigrationCompleted(testing_profile, false);
-
-  testing::StrictMock<MockInputMethod> mock_input_method;
-  InputMethodManager::Initialize(
-      new TestInputMethodManager(&mock_input_method));
-  NativeInputMethodEngine engine;
-  engine.Initialize(std::make_unique<StubInputMethodEngineObserver>(),
-                    /*extension_id=*/"", &testing_profile);
-
-  engine.Enable(kEngineIdUs);
-  EXPECT_FALSE(engine.IsConnectedForTesting());
-  engine.Enable("nacl_mozc_jp");
-  engine.FlushForTesting();  // ensure input_method is connected.
-  EXPECT_TRUE(engine.IsConnectedForTesting());
-
-  histogram_tester.ExpectUniqueSample(
-      "InputMethod.PhysicalKeyboard.Japanese.StartupAction",
-      JapaneseStartupAction::kPerformMigration, 1);
-
-  InputMethodManager::Shutdown();
-}
-
-TEST_F(NativeInputMethodEngineTest,
-       CheckThatJapaneseStartupEnumMarkedAsAlreadyMigrated) {
-  base::HistogramTester histogram_tester;
-  histogram_tester.ExpectUniqueSample(
-      "InputMethod.PhysicalKeyboard.Japanese.StartupAction",
-      JapaneseStartupAction::kAlreadyMigrated, 0);
-  TestingProfile testing_profile;
-  EnableDefaultFeatureListWithJapaneseSystemPk();
-  SetInputMethodOptionsJapaneseMigrationCompleted(testing_profile, true);
-
-  testing::StrictMock<MockInputMethod> mock_input_method;
-  InputMethodManager::Initialize(
-      new TestInputMethodManager(&mock_input_method));
-  NativeInputMethodEngine engine;
-  engine.Initialize(std::make_unique<StubInputMethodEngineObserver>(),
-                    /*extension_id=*/"", &testing_profile);
-
-  engine.Enable(kEngineIdUs);
-  EXPECT_FALSE(engine.IsConnectedForTesting());
-  engine.Enable("nacl_mozc_jp");
-  engine.FlushForTesting();  // ensure input_method is connected.
-  EXPECT_TRUE(engine.IsConnectedForTesting());
-
-  histogram_tester.ExpectUniqueSample(
-      "InputMethod.PhysicalKeyboard.Japanese.StartupAction",
-      JapaneseStartupAction::kAlreadyMigrated, 1);
-
-  InputMethodManager::Shutdown();
-}
-
-TEST_F(NativeInputMethodEngineTest,
-       CheckThatJapaneseStartupEnumIsMarkedAsStillLegacyInLegacyCode) {
-  base::HistogramTester histogram_tester;
-  histogram_tester.ExpectUniqueSample(
-      "InputMethod.PhysicalKeyboard.Japanese.StartupAction",
-      JapaneseStartupAction::kStillLegacy, 0);
-  TestingProfile testing_profile;
-  EnableDefaultFeatureList();
-  SetInputMethodOptionsJapaneseMigrationCompleted(testing_profile, false);
-
-  testing::StrictMock<MockInputMethod> mock_input_method;
-  InputMethodManager::Initialize(
-      new TestInputMethodManager(&mock_input_method));
-  NativeInputMethodEngine engine;
-  engine.Initialize(std::make_unique<StubInputMethodEngineObserver>(),
-                    /*extension_id=*/"", &testing_profile);
-
-  engine.Enable(kEngineIdUs);
-  EXPECT_FALSE(engine.IsConnectedForTesting());
-  engine.Enable("nacl_mozc_jp");
-  engine.FlushForTesting();  // ensure input_method is connected.
-  EXPECT_FALSE(engine.IsConnectedForTesting());
-
-  histogram_tester.ExpectUniqueSample(
-      "InputMethod.PhysicalKeyboard.Japanese.StartupAction",
-      JapaneseStartupAction::kStillLegacy, 1);
-
-  InputMethodManager::Shutdown();
-}
-
-TEST_F(NativeInputMethodEngineTest,
-       CheckThatJapaneseStartupEnumIsRevertedIfDisabled) {
-  base::HistogramTester histogram_tester;
-
-  histogram_tester.ExpectUniqueSample(
-      "InputMethod.PhysicalKeyboard.Japanese.StartupAction",
-      JapaneseStartupAction::kUndoMigration, 0);
-
-  TestingProfile testing_profile;
-  EnableDefaultFeatureList();
-  SetInputMethodOptionsJapaneseMigrationCompleted(testing_profile, true);
-
-  testing::StrictMock<MockInputMethod> mock_input_method;
-  InputMethodManager::Initialize(
-      new TestInputMethodManager(&mock_input_method));
-  NativeInputMethodEngine engine;
-  engine.Initialize(std::make_unique<StubInputMethodEngineObserver>(),
-                    /*extension_id=*/"", &testing_profile);
-
-  engine.Enable(kEngineIdUs);
-  EXPECT_FALSE(engine.IsConnectedForTesting());
-  engine.Enable("nacl_mozc_jp");
-  engine.FlushForTesting();  // ensure input_method is connected.
-  EXPECT_FALSE(engine.IsConnectedForTesting());
-
-  histogram_tester.ExpectUniqueSample(
-      "InputMethod.PhysicalKeyboard.Japanese.StartupAction",
-      JapaneseStartupAction::kUndoMigration, 1);
-
-  InputMethodManager::Shutdown();
-}
-
 TEST_F(NativeInputMethodEngineTest,
        PredictiveWritingDoesNotLaunchImeServiceWithMultiWordFlagDisabled) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
+  EnableDefaultFeatureListWithMultiwordDisabled();
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/false,
                         /*predictive_writing_enabled=*/true);
 
@@ -500,6 +382,7 @@ TEST_F(NativeInputMethodEngineTest,
 TEST_F(NativeInputMethodEngineTest,
        PredictiveWritingDoesNotLaunchImeServiceWithNonEnUsEngineId) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   EnableDefaultFeatureListWithMultiWord();
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/false,
                         /*predictive_writing_enabled=*/true);
@@ -521,6 +404,7 @@ TEST_F(NativeInputMethodEngineTest,
 TEST_F(NativeInputMethodEngineTest,
        PredictiveWritingLaunchesImeServiceWithEnglishEngineId) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   EnableDefaultFeatureListWithMultiWord();
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/false,
                         /*predictive_writing_enabled=*/true);
@@ -541,6 +425,14 @@ TEST_F(NativeInputMethodEngineTest,
 
 TEST_F(NativeInputMethodEngineTest, TogglesImeServiceWhenAutocorrectChanges) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
+
+  feature_list_.Reset();
+  feature_list_.InitWithFeatures(
+      /*enabled_features=*/{},
+      /*disabled_features=*/{features::kAutocorrectByDefault,
+                             features::kAssistMultiWord});
+
   testing::StrictMock<MockInputMethod> mock_input_method;
   InputMethodManager::Initialize(
       new TestInputMethodManager(&mock_input_method));
@@ -565,6 +457,7 @@ TEST_F(NativeInputMethodEngineTest, TogglesImeServiceWhenAutocorrectChanges) {
 
 TEST_F(NativeInputMethodEngineTest, EnableInitializesConnection) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/true,
                         /*predictive_writing_enabled=*/false);
 
@@ -606,16 +499,16 @@ TEST_F(NativeInputMethodEngineTest, FocusCallsRightMojoFunctions) {
                             ime::mojom::TextPredictionMode::kDisabled)),
                         _, _))
         .WillOnce(
-            ::testing::Invoke([](ime::mojom::InputFieldInfoPtr info,
-                                 ime::mojom::InputMethodSettingsPtr settings,
-                                 OnFocusCallback callback) {
+            [](ime::mojom::InputFieldInfoPtr info,
+               ime::mojom::InputMethodSettingsPtr settings,
+               OnFocusCallback callback) {
               EXPECT_EQ(*settings,
                         *ime::mojom::InputMethodSettings::NewLatinSettings(
                             ime::mojom::LatinSettings::New(
                                 /*autocorrect=*/true,
                                 /*predictive_writing=*/false)));
               std::move(callback).Run(true, EmptyInputMethodMetadata());
-            }));
+            });
     EXPECT_CALL(mock_input_method, OnSurroundingTextChanged(_, _, _));
   }
 
@@ -630,6 +523,7 @@ TEST_F(NativeInputMethodEngineTest, FocusCallsRightMojoFunctions) {
 TEST_F(NativeInputMethodEngineTest,
        DisablesAutocorrectAndLearningAndIMEAtLockScreen) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/true,
                         /*predictive_writing_enabled=*/false);
 
@@ -651,16 +545,16 @@ TEST_F(NativeInputMethodEngineTest,
                             ime::mojom::PersonalizationMode::kDisabled)),
                         _, _))
         .WillOnce(
-            ::testing::Invoke([](ime::mojom::InputFieldInfoPtr info,
-                                 ime::mojom::InputMethodSettingsPtr settings,
-                                 OnFocusCallback callback) {
+            [](ime::mojom::InputFieldInfoPtr info,
+               ime::mojom::InputMethodSettingsPtr settings,
+               OnFocusCallback callback) {
               EXPECT_EQ(*settings,
                         *ime::mojom::InputMethodSettings::NewLatinSettings(
                             ime::mojom::LatinSettings::New(
                                 /*autocorrect=*/true,
                                 /*predictive_writing=*/false)));
               std::move(callback).Run(true, EmptyInputMethodMetadata());
-            }));
+            });
     EXPECT_CALL(mock_input_method, OnSurroundingTextChanged(_, _, _));
   }
 
@@ -700,6 +594,7 @@ TEST_F(NativeInputMethodEngineTest, FocusUpdatesXkbLayout) {
 TEST_F(NativeInputMethodEngineTest,
        FocusCallsPassPredictiveWritingPrefWhenEnabled) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/true,
                         /*predictive_writing_enabled=*/true);
   EnableDefaultFeatureListWithMultiWord();
@@ -722,16 +617,16 @@ TEST_F(NativeInputMethodEngineTest,
                             ime::mojom::TextPredictionMode::kEnabled)),
                         _, _))
         .WillOnce(
-            ::testing::Invoke([](ime::mojom::InputFieldInfoPtr info,
-                                 ime::mojom::InputMethodSettingsPtr settings,
-                                 OnFocusCallback callback) {
+            [](ime::mojom::InputFieldInfoPtr info,
+               ime::mojom::InputMethodSettingsPtr settings,
+               OnFocusCallback callback) {
               EXPECT_EQ(*settings,
                         *ime::mojom::InputMethodSettings::NewLatinSettings(
                             ime::mojom::LatinSettings::New(
                                 /*autocorrect=*/true,
                                 /*predictive_writing=*/true)));
               std::move(callback).Run(true, EmptyInputMethodMetadata());
-            }));
+            });
     EXPECT_CALL(mock_input_method, OnSurroundingTextChanged(_, _, _));
   }
 
@@ -747,6 +642,7 @@ TEST_F(
     NativeInputMethodEngineTest,
     FocusCallsPassPredictiveWritingDisabledWhenMultiDisabledInBrowserContext) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/true,
                         /*predictive_writing_enabled=*/true);
   EnableDefaultFeatureListWithMultiWord();
@@ -769,16 +665,16 @@ TEST_F(
                             ime::mojom::TextPredictionMode::kDisabled)),
                         _, _))
         .WillOnce(
-            ::testing::Invoke([](ime::mojom::InputFieldInfoPtr info,
-                                 ime::mojom::InputMethodSettingsPtr settings,
-                                 OnFocusCallback callback) {
+            [](ime::mojom::InputFieldInfoPtr info,
+               ime::mojom::InputMethodSettingsPtr settings,
+               OnFocusCallback callback) {
               EXPECT_EQ(*settings,
                         *ime::mojom::InputMethodSettings::NewLatinSettings(
                             ime::mojom::LatinSettings::New(
                                 /*autocorrect=*/true,
                                 /*predictive_writing=*/true)));
               std::move(callback).Run(true, EmptyInputMethodMetadata());
-            }));
+            });
     EXPECT_CALL(mock_input_method, OnSurroundingTextChanged(_, _, _));
   }
 
@@ -834,8 +730,8 @@ TEST_P(AutocorrectByDefaultDisabledByInputMethodMetadata,
   const InputMethodMetadataCase& test_case = GetParam();
   feature_list_.Reset();
   feature_list_.InitWithFeatures(
-      {features::kAutocorrectByDefault, features::kImeFstDecoderParamsUpdate},
-      DisabledFeatures());
+      {features::kAutocorrectByDefault},
+      {features::kImeRuleConfig, features::kAssistMultiWord});
   TestingProfile testing_profile;
   SetPhysicalKeyboardAutocorrectAsEnabledByDefault(testing_profile.GetPrefs(),
                                                    kEngineIdUs);
@@ -858,9 +754,9 @@ TEST_P(AutocorrectByDefaultDisabledByInputMethodMetadata,
                             ime::mojom::TextPredictionMode::kDisabled)),
                         _, _))
         .WillOnce(
-            ::testing::Invoke([&](ime::mojom::InputFieldInfoPtr info,
-                                  ime::mojom::InputMethodSettingsPtr settings,
-                                  OnFocusCallback callback) {
+            [&](ime::mojom::InputFieldInfoPtr info,
+                ime::mojom::InputMethodSettingsPtr settings,
+                OnFocusCallback callback) {
               // Because we are retrieving the model details from the OnFocus
               // callback, when we first make a call to OnFocus the model
               // details wont be available. Thus autocorrect should be disabled
@@ -874,7 +770,7 @@ TEST_P(AutocorrectByDefaultDisabledByInputMethodMetadata,
                   true,
                   ime::mojom::InputMethodMetadata::New(
                       /*autocorrect_suggestion_provider=*/test_case.provider));
-            }));
+            });
     EXPECT_CALL(mock_input_method, OnSurroundingTextChanged(_, _, _));
     EXPECT_CALL(mock_input_method, OnBlur());
 
@@ -886,9 +782,9 @@ TEST_P(AutocorrectByDefaultDisabledByInputMethodMetadata,
                             ime::mojom::TextPredictionMode::kDisabled)),
                         _, _))
         .WillOnce(
-            ::testing::Invoke([&](ime::mojom::InputFieldInfoPtr info,
-                                  ime::mojom::InputMethodSettingsPtr settings,
-                                  OnFocusCallback callback) {
+            [&](ime::mojom::InputFieldInfoPtr info,
+                ime::mojom::InputMethodSettingsPtr settings,
+                OnFocusCallback callback) {
               // Now that we have received the model details from the first
               // OnFocus callback, we can validate the expected autocorrect
               // enabled/disabled state sent with the OnFocus call.
@@ -901,7 +797,7 @@ TEST_P(AutocorrectByDefaultDisabledByInputMethodMetadata,
                   true,
                   ime::mojom::InputMethodMetadata::New(
                       /*autocorrect_suggestion_provider=*/test_case.provider));
-            }));
+            });
     EXPECT_CALL(mock_input_method, OnSurroundingTextChanged(_, _, _));
     EXPECT_CALL(mock_input_method, OnBlur());
   }
@@ -922,17 +818,17 @@ TEST_P(AutocorrectByDefaultDisabledByInputMethodMetadata,
 
 TEST_F(NativeInputMethodEngineTest, HandleAutocorrectChangesAutocorrectRange) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/true,
                         /*predictive_writing_enabled=*/false);
 
   testing::NiceMock<MockInputMethod> mock_input_method;
   EXPECT_CALL(mock_input_method, OnFocus(_, _, _))
-      .WillOnce(
-          ::testing::Invoke([](ime::mojom::InputFieldInfoPtr info,
-                               ime::mojom::InputMethodSettingsPtr settings,
-                               OnFocusCallback callback) {
-            std::move(callback).Run(true, EmptyInputMethodMetadata());
-          }));
+      .WillOnce([](ime::mojom::InputFieldInfoPtr info,
+                   ime::mojom::InputMethodSettingsPtr settings,
+                   OnFocusCallback callback) {
+        std::move(callback).Run(true, EmptyInputMethodMetadata());
+      });
 
   InputMethodManager::Initialize(
       new TestInputMethodManager(&mock_input_method));
@@ -958,6 +854,7 @@ TEST_F(NativeInputMethodEngineTest, HandleAutocorrectChangesAutocorrectRange) {
 TEST_F(NativeInputMethodEngineTest,
        SurroundingTextChangeConvertsToUtf8Correctly) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/true,
                         /*predictive_writing_enabled=*/false);
 
@@ -973,12 +870,11 @@ TEST_F(NativeInputMethodEngineTest,
   {
     testing::InSequence seq;
     EXPECT_CALL(mock_input_method, OnFocus(_, _, _))
-        .WillOnce(
-            ::testing::Invoke([](ime::mojom::InputFieldInfoPtr info,
-                                 ime::mojom::InputMethodSettingsPtr settings,
-                                 OnFocusCallback callback) {
-              std::move(callback).Run(true, EmptyInputMethodMetadata());
-            }));
+        .WillOnce([](ime::mojom::InputFieldInfoPtr info,
+                     ime::mojom::InputMethodSettingsPtr settings,
+                     OnFocusCallback callback) {
+          std::move(callback).Run(true, EmptyInputMethodMetadata());
+        });
     EXPECT_CALL(mock_input_method, OnSurroundingTextChanged("", _, _));
 
     // Each character in "你好" is three UTF-8 code units.
@@ -1002,6 +898,7 @@ TEST_F(NativeInputMethodEngineTest,
 
 TEST_F(NativeInputMethodEngineTest, ProcessesDeadKeysCorrectly) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/true,
                         /*predictive_writing_enabled=*/false);
 
@@ -1017,26 +914,25 @@ TEST_F(NativeInputMethodEngineTest, ProcessesDeadKeysCorrectly) {
   {
     testing::InSequence seq;
     EXPECT_CALL(mock_input_method, OnFocus(_, _, _))
-        .WillOnce(
-            ::testing::Invoke([](ime::mojom::InputFieldInfoPtr info,
-                                 ime::mojom::InputMethodSettingsPtr settings,
-                                 OnFocusCallback callback) {
-              std::move(callback).Run(true, EmptyInputMethodMetadata());
-            }));
+        .WillOnce([](ime::mojom::InputFieldInfoPtr info,
+                     ime::mojom::InputMethodSettingsPtr settings,
+                     OnFocusCallback callback) {
+          std::move(callback).Run(true, EmptyInputMethodMetadata());
+        });
 
     EXPECT_CALL(mock_input_method, OnSurroundingTextChanged(_, _, _));
 
-    // TODO(https://crbug.com/1187982): Expect the actual arguments to the call
+    // TODO(crbug.com/40173140): Expect the actual arguments to the call
     // once the Mojo API is replaced with protos. GMock does not play well with
     // move-only types like PhysicalKeyEvent.
     EXPECT_CALL(mock_input_method, ProcessKeyEvent(_, _))
         .Times(2)
-        .WillRepeatedly(::testing::Invoke(
+        .WillRepeatedly(
             [](ime::mojom::PhysicalKeyEventPtr,
                ime::mojom::InputMethod::ProcessKeyEventCallback callback) {
               std::move(callback).Run(
                   ime::mojom::KeyEventResult::kNeedsHandlingBySystem);
-            }));
+            });
   }
 
   engine.Enable(kEngineIdUs);
@@ -1045,16 +941,18 @@ TEST_F(NativeInputMethodEngineTest, ProcessesDeadKeysCorrectly) {
 
   // Quote ("VKEY_OEM_7") + A is a dead key combination.
   engine.ProcessKeyEvent(
-      {ui::ET_KEY_PRESSED, ui::VKEY_OEM_7, ui::DomCode::QUOTE, ui::EF_NONE,
-       ui::DomKey::DeadKeyFromCombiningCharacter(u'\u0301'), base::TimeTicks()},
+      {ui::EventType::kKeyPressed, ui::VKEY_OEM_7, ui::DomCode::QUOTE,
+       ui::EF_NONE, ui::DomKey::DeadKeyFromCombiningCharacter(u'\u0301'),
+       base::TimeTicks()},
       base::DoNothing());
   engine.ProcessKeyEvent(
-      {ui::ET_KEY_RELEASED, ui::VKEY_OEM_7, ui::DomCode::QUOTE, ui::EF_NONE,
-       ui::DomKey::DeadKeyFromCombiningCharacter(u'\u0301'), base::TimeTicks()},
+      {ui::EventType::kKeyReleased, ui::VKEY_OEM_7, ui::DomCode::QUOTE,
+       ui::EF_NONE, ui::DomKey::DeadKeyFromCombiningCharacter(u'\u0301'),
+       base::TimeTicks()},
       base::DoNothing());
-  engine.ProcessKeyEvent({ui::ET_KEY_PRESSED, ui::VKEY_A, ui::EF_NONE},
+  engine.ProcessKeyEvent({ui::EventType::kKeyPressed, ui::VKEY_A, ui::EF_NONE},
                          base::DoNothing());
-  engine.ProcessKeyEvent({ui::ET_KEY_RELEASED, ui::VKEY_A, ui::EF_NONE},
+  engine.ProcessKeyEvent({ui::EventType::kKeyReleased, ui::VKEY_A, ui::EF_NONE},
                          base::DoNothing());
   engine.FlushForTesting();
 
@@ -1063,6 +961,7 @@ TEST_F(NativeInputMethodEngineTest, ProcessesDeadKeysCorrectly) {
 
 TEST_F(NativeInputMethodEngineTest, ProcessesNamedKeysCorrectly) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/true,
                         /*predictive_writing_enabled=*/false);
 
@@ -1078,27 +977,26 @@ TEST_F(NativeInputMethodEngineTest, ProcessesNamedKeysCorrectly) {
   {
     testing::InSequence seq;
     EXPECT_CALL(mock_input_method, OnFocus(_, _, _))
-        .WillOnce(
-            ::testing::Invoke([](ime::mojom::InputFieldInfoPtr info,
-                                 ime::mojom::InputMethodSettingsPtr settings,
-                                 OnFocusCallback callback) {
-              std::move(callback).Run(true, EmptyInputMethodMetadata());
-            }));
+        .WillOnce([](ime::mojom::InputFieldInfoPtr info,
+                     ime::mojom::InputMethodSettingsPtr settings,
+                     OnFocusCallback callback) {
+          std::move(callback).Run(true, EmptyInputMethodMetadata());
+        });
 
     EXPECT_CALL(mock_input_method, OnSurroundingTextChanged(_, _, _));
 
-    // TODO(https://crbug.com/1187982): Expect the actual arguments to the call
+    // TODO(crbug.com/40173140): Expect the actual arguments to the call
     // once the Mojo API is replaced with protos. GMock does not play well with
     // move-only types like PhysicalKeyEvent.
     EXPECT_CALL(mock_input_method, ProcessKeyEvent(_, _))
         .Times(4)
-        .WillRepeatedly(::testing::Invoke(
+        .WillRepeatedly(
             [](ime::mojom::PhysicalKeyEventPtr event,
                ime::mojom::InputMethod::ProcessKeyEventCallback callback) {
               EXPECT_TRUE(event->key->is_named_key());
               std::move(callback).Run(
                   ime::mojom::KeyEventResult::kNeedsHandlingBySystem);
-            }));
+            });
   }
 
   engine.Enable(kEngineIdUs);
@@ -1107,17 +1005,19 @@ TEST_F(NativeInputMethodEngineTest, ProcessesNamedKeysCorrectly) {
 
   // Enter and Backspace are named keys with Unicode representation.
   engine.ProcessKeyEvent(
-      {ui::ET_KEY_PRESSED, ui::VKEY_RETURN, ui::DomCode::ENTER, ui::EF_NONE,
-       ui::DomKey::ENTER, base::TimeTicks()},
+      {ui::EventType::kKeyPressed, ui::VKEY_RETURN, ui::DomCode::ENTER,
+       ui::EF_NONE, ui::DomKey::ENTER, base::TimeTicks()},
       base::DoNothing());
-  engine.ProcessKeyEvent({ui::ET_KEY_RELEASED, ui::VKEY_RETURN, ui::EF_NONE},
-                         base::DoNothing());
   engine.ProcessKeyEvent(
-      {ui::ET_KEY_PRESSED, ui::VKEY_BACK, ui::DomCode::BACKSPACE, ui::EF_NONE,
-       ui::DomKey::BACKSPACE, base::TimeTicks()},
+      {ui::EventType::kKeyReleased, ui::VKEY_RETURN, ui::EF_NONE},
       base::DoNothing());
-  engine.ProcessKeyEvent({ui::ET_KEY_RELEASED, ui::VKEY_BACK, ui::EF_NONE},
-                         base::DoNothing());
+  engine.ProcessKeyEvent(
+      {ui::EventType::kKeyPressed, ui::VKEY_BACK, ui::DomCode::BACKSPACE,
+       ui::EF_NONE, ui::DomKey::BACKSPACE, base::TimeTicks()},
+      base::DoNothing());
+  engine.ProcessKeyEvent(
+      {ui::EventType::kKeyReleased, ui::VKEY_BACK, ui::EF_NONE},
+      base::DoNothing());
   engine.FlushForTesting();
 
   InputMethodManager::Shutdown();
@@ -1125,6 +1025,7 @@ TEST_F(NativeInputMethodEngineTest, ProcessesNamedKeysCorrectly) {
 
 TEST_F(NativeInputMethodEngineTest, DoesNotSendUnhandledNamedKeys) {
   TestingProfile testing_profile;
+  SetEmptyPrefs(testing_profile);
   SetInputMethodOptions(testing_profile, /*autocorrect_enabled=*/true,
                         /*predictive_writing_enabled=*/false);
 
@@ -1140,12 +1041,11 @@ TEST_F(NativeInputMethodEngineTest, DoesNotSendUnhandledNamedKeys) {
   {
     testing::InSequence seq;
     EXPECT_CALL(mock_input_method, OnFocus(_, _, _))
-        .WillOnce(
-            ::testing::Invoke([](ime::mojom::InputFieldInfoPtr info,
-                                 ime::mojom::InputMethodSettingsPtr settings,
-                                 OnFocusCallback callback) {
-              std::move(callback).Run(true, EmptyInputMethodMetadata());
-            }));
+        .WillOnce([](ime::mojom::InputFieldInfoPtr info,
+                     ime::mojom::InputMethodSettingsPtr settings,
+                     OnFocusCallback callback) {
+          std::move(callback).Run(true, EmptyInputMethodMetadata());
+        });
     EXPECT_CALL(mock_input_method, OnSurroundingTextChanged(_, _, _));
     EXPECT_CALL(mock_input_method, ProcessKeyEvent(_, _)).Times(0);
   }
@@ -1154,11 +1054,13 @@ TEST_F(NativeInputMethodEngineTest, DoesNotSendUnhandledNamedKeys) {
   engine.Focus(TextInputMethod::InputContext(ui::TEXT_INPUT_TYPE_TEXT));
 
   // Help is a named DOM key, but is not used by IMEs.
-  engine.ProcessKeyEvent({ui::ET_KEY_PRESSED, ui::VKEY_HELP, ui::DomCode::HELP,
-                          ui::EF_NONE, ui::DomKey::HELP, base::TimeTicks()},
-                         base::DoNothing());
-  engine.ProcessKeyEvent({ui::ET_KEY_RELEASED, ui::VKEY_HELP, ui::EF_NONE},
-                         base::DoNothing());
+  engine.ProcessKeyEvent(
+      {ui::EventType::kKeyPressed, ui::VKEY_HELP, ui::DomCode::HELP,
+       ui::EF_NONE, ui::DomKey::HELP, base::TimeTicks()},
+      base::DoNothing());
+  engine.ProcessKeyEvent(
+      {ui::EventType::kKeyReleased, ui::VKEY_HELP, ui::EF_NONE},
+      base::DoNothing());
   engine.FlushForTesting();
 
   InputMethodManager::Shutdown();
@@ -1177,6 +1079,8 @@ class NativeInputMethodEngineWithRenderViewHostTest
     chromeos::machine_learning::ServiceConnection::
         UseFakeServiceConnectionForTesting(&fake_service_connection_);
     chromeos::machine_learning::ServiceConnection::GetInstance()->Initialize();
+
+    browser_controller_ = std::make_unique<ash::BrowserControllerImpl>();
   }
 
   std::unique_ptr<content::BrowserContext> CreateBrowserContext() override {
@@ -1189,6 +1093,7 @@ class NativeInputMethodEngineWithRenderViewHostTest
       keyboard_controller_client_test_helper_;
   chromeos::machine_learning::FakeServiceConnectionImpl
       fake_service_connection_;
+  std::unique_ptr<ash::BrowserControllerImpl> browser_controller_;
 };
 
 TEST_F(NativeInputMethodEngineWithRenderViewHostTest,
@@ -1235,50 +1140,6 @@ TEST_F(NativeInputMethodEngineWithRenderViewHostTest,
       test_recorder.GetEntriesByName("InputMethod.NonCompliantApi");
   ukm::TestAutoSetUkmRecorder::ExpectEntryMetric(
       entries[0], "NonCompliantOperation", 1);  // kSetCompositionText
-
-  InputMethodManager::Shutdown();
-}
-
-TEST_F(NativeInputMethodEngineWithRenderViewHostTest,
-       RecordUkmAddsAssistiveMatchUkmEntry) {
-  GURL url("https://www.example.com/");
-  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
-                                                             url);
-
-  auto* testing_profile = static_cast<TestingProfile*>(browser_context());
-  testing::NiceMock<MockInputMethod> mock_input_method;
-  InputMethodManager::Initialize(
-      new TestInputMethodManager(&mock_input_method));
-  NativeInputMethodEngine engine;
-  engine.Initialize(std::make_unique<StubInputMethodEngineObserver>(),
-                    /*extension_id=*/"", testing_profile);
-  engine.get_assistive_suggester_for_testing()
-      ->get_emoji_suggester_for_testing()
-      ->LoadEmojiMapForTesting("happy,😀;😃;😄");
-
-  ui::FakeTextInputClient fake_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
-  fake_text_input_client.set_source_id(main_rfh()->GetPageUkmSourceId());
-
-  InputMethodAsh ime(nullptr);
-  ime.SetFocusedTextInputClient(&fake_text_input_client);
-  IMEBridge::Get()->SetInputContextHandler(&ime);
-
-  ukm::TestAutoSetUkmRecorder test_recorder;
-  test_recorder.UpdateRecording({ukm::UkmConsentType::MSBB});
-  ASSERT_EQ(0u, test_recorder.entries_count());
-
-  // Should not record when random text is entered.
-  engine.SetSurroundingText(u"random text ", gfx::Range(12), 0);
-  EXPECT_EQ(0u, test_recorder.entries_count());
-
-  // Should record when match is triggered.
-  engine.SetSurroundingText(u"happy ", gfx::Range(6), 0);
-  EXPECT_EQ(0u, test_recorder.sources_count());
-  EXPECT_EQ(1u, test_recorder.entries_count());
-  const auto entries =
-      test_recorder.GetEntriesByName("InputMethod.Assistive.Match");
-  ukm::TestAutoSetUkmRecorder::ExpectEntryMetric(entries[0], "Type",
-                                                 (int)AssistiveType::kEmoji);
 
   InputMethodManager::Shutdown();
 }

@@ -40,6 +40,7 @@ struct packet_traits<std::complex<float> > : default_packet_traits {
     HasNegate = 1,
     HasSqrt = 1,
     HasLog = 1,
+    HasExp = 1,
     HasAbs = 0,
     HasAbs2 = 0,
     HasMin = 0,
@@ -81,8 +82,8 @@ EIGEN_STRONG_INLINE Packet8cf pnegate(const Packet8cf& a) {
 template <>
 EIGEN_STRONG_INLINE Packet8cf pconj(const Packet8cf& a) {
   const __m512 mask = _mm512_castsi512_ps(_mm512_setr_epi32(
-      0x00000000, 0x80000000, 0x00000000, 0x80000000, 0x00000000, 0x80000000, 0x00000000, 0x80000000, 0x00000000,
-      0x80000000, 0x00000000, 0x80000000, 0x00000000, 0x80000000, 0x00000000, 0x80000000));
+      0x00000000, SIGN_MASK_I32, 0x00000000, SIGN_MASK_I32, 0x00000000, SIGN_MASK_I32, 0x00000000, SIGN_MASK_I32,
+      0x00000000, SIGN_MASK_I32, 0x00000000, SIGN_MASK_I32, 0x00000000, SIGN_MASK_I32, 0x00000000, SIGN_MASK_I32));
   return Packet8cf(pxor(a.v, mask));
 }
 
@@ -183,7 +184,7 @@ EIGEN_STRONG_INLINE std::complex<float> predux_mul<Packet8cf>(const Packet8cf& a
 }
 
 template <>
-EIGEN_STRONG_INLINE Packet4cf predux_half_dowto4<Packet8cf>(const Packet8cf& a) {
+EIGEN_STRONG_INLINE Packet4cf predux_half<Packet8cf>(const Packet8cf& a) {
   __m256 lane0 = extract256<0>(a.v);
   __m256 lane1 = extract256<1>(a.v);
   __m256 res = _mm256_add_ps(lane0, lane1);
@@ -261,8 +262,9 @@ EIGEN_STRONG_INLINE Packet4cd pnegate(const Packet4cd& a) {
 }
 template <>
 EIGEN_STRONG_INLINE Packet4cd pconj(const Packet4cd& a) {
-  const __m512d mask = _mm512_castsi512_pd(_mm512_set_epi32(0x80000000, 0x0, 0x0, 0x0, 0x80000000, 0x0, 0x0, 0x0,
-                                                            0x80000000, 0x0, 0x0, 0x0, 0x80000000, 0x0, 0x0, 0x0));
+  const __m512d mask =
+      _mm512_castsi512_pd(_mm512_set_epi32(SIGN_MASK_I32, 0x0, 0x0, 0x0, SIGN_MASK_I32, 0x0, 0x0, 0x0, SIGN_MASK_I32,
+                                           0x0, 0x0, 0x0, SIGN_MASK_I32, 0x0, 0x0, 0x0));
   return Packet4cd(pxor(a.v, mask));
 }
 
@@ -458,6 +460,11 @@ EIGEN_STRONG_INLINE Packet4cd plog<Packet4cd>(const Packet4cd& a) {
 template <>
 EIGEN_STRONG_INLINE Packet8cf plog<Packet8cf>(const Packet8cf& a) {
   return plog_complex<Packet8cf>(a);
+}
+
+template <>
+EIGEN_STRONG_INLINE Packet8cf pexp<Packet8cf>(const Packet8cf& a) {
+  return pexp_complex<Packet8cf>(a);
 }
 
 }  // end namespace internal

@@ -8,7 +8,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringize_macros.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/client_native_pixmap.h"
 #include "ui/gfx/color_space.h"
@@ -22,7 +21,7 @@
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/ozone/public/surface_factory_ozone.h"
 
-// TODO(crbug.com/969798): Fix memory leaks in tests and re-enable on LSAN.
+// TODO(crbug.com/40630408): Fix memory leaks in tests and re-enable on LSAN.
 #ifdef LEAK_SANITIZER
 #define MAYBE_Create DISABLED_Create
 #else
@@ -32,11 +31,18 @@
 namespace gl {
 namespace {
 
-bool SkipTest(GLDisplay* display) {
+constexpr gfx::BufferUsage kUsage = gfx::BufferUsage::SCANOUT;
+constexpr viz::SharedImageFormat kFormat = viz::SinglePlaneFormat::kBGRA_8888;
+
+bool SkipTest() {
+  ui::OzonePlatform::InitParams params;
+  params.single_process = true;
+  ui::OzonePlatform::InitializeForGPU(params);
+
   ui::GLOzone* gl_ozone = ui::OzonePlatform::GetInstance()
                               ->GetSurfaceFactoryOzone()
                               ->GetCurrentGLOzone();
-  if (!gl_ozone || !gl_ozone->CanImportNativePixmap()) {
+  if (!gl_ozone || !gl_ozone->CanImportNativePixmap(kFormat)) {
     LOG(WARNING) << "Skip test, ozone implementation can't import native "
                  << "pixmaps";
     return true;
@@ -53,6 +59,9 @@ class NativePixmapGLBindingTest : public testing::Test {
  protected:
   // Overridden from testing::Test:
   void SetUp() override {
+    if (SkipTest()) {
+      GTEST_SKIP();
+    }
     display_ = GLTestSupport::InitializeGL(std::nullopt);
     surface_ = gl::init::CreateOffscreenGLSurface(display_, gfx::Size());
     context_ =
@@ -63,8 +72,10 @@ class NativePixmapGLBindingTest : public testing::Test {
     if (texture_id_) {
       glDeleteTextures(1, &texture_id_);
     }
-    context_->ReleaseCurrent(surface_.get());
-    context_ = nullptr;
+    if (context_) {
+      context_->ReleaseCurrent(surface_.get());
+      context_ = nullptr;
+    }
     surface_ = nullptr;
     GLTestSupport::CleanupGL(display_);
   }
@@ -72,16 +83,12 @@ class NativePixmapGLBindingTest : public testing::Test {
  protected:
   std::unique_ptr<ui::NativePixmapGLBinding> CreateSolidColorImage(
       const gfx::Size& size) {
-    auto kUsage = gfx::BufferUsage::SCANOUT;
-    auto kFormat = gfx::BufferFormat::BGRA_8888;
-
     ui::SurfaceFactoryOzone* surface_factory =
         ui::OzonePlatform::GetInstance()->GetSurfaceFactoryOzone();
     scoped_refptr<gfx::NativePixmap> pixmap =
         surface_factory->CreateNativePixmap(gfx::kNullAcceleratedWidget,
                                             nullptr, size, kFormat, kUsage);
-    DCHECK(pixmap) << "Offending format: "
-                   << gfx::BufferFormatToString(kFormat);
+    DCHECK(pixmap) << "Offending format: " << kFormat.ToString();
 
     // Create a dummy texture ID to bind - these tests don't actually care about
     // binding.
@@ -89,13 +96,14 @@ class NativePixmapGLBindingTest : public testing::Test {
       glGenTextures(1, &texture_id_);
     }
 
-    auto binding =
-        ui::OzonePlatform::GetInstance()
-            ->GetSurfaceFactoryOzone()
-            ->GetCurrentGLOzone()
-            ->ImportNativePixmap(
-                std::move(pixmap), kFormat, gfx::BufferPlane::DEFAULT, size,
-                gfx::ColorSpace(), GL_TEXTURE_EXTERNAL_OES, texture_id_);
+    ui::GLOzone* gl_ozone = ui::OzonePlatform::GetInstance()
+                                ->GetSurfaceFactoryOzone()
+                                ->GetCurrentGLOzone();
+    EXPECT_TRUE(gl_ozone->CanImportNativePixmap(kFormat));
+
+    auto binding = gl_ozone->ImportNativePixmap(
+        std::move(pixmap), kFormat, gfx::BufferPlane::DEFAULT, size,
+        gfx::ColorSpace(), GL_TEXTURE_EXTERNAL_OES, texture_id_);
     EXPECT_TRUE(binding);
     return binding;
   }
@@ -108,10 +116,6 @@ class NativePixmapGLBindingTest : public testing::Test {
 };
 
 TEST_F(NativePixmapGLBindingTest, MAYBE_Create) {
-  if (SkipTest(this->display_)) {
-    GTEST_SKIP() << "Skip because GL initialization failed";
-  }
-
   // NOTE: On some drm devices (mediatek) the minimum width/height to add an fb
   // for a bo must be 64, and YVU_420 in i915 requires at least 128 length.
   const gfx::Size small_image_size(128, 128);

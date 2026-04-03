@@ -5,9 +5,8 @@
 #ifndef CHROMEOS_COMPONENTS_QUICK_ANSWERS_PUBLIC_CPP_CONTROLLER_QUICK_ANSWERS_CONTROLLER_H_
 #define CHROMEOS_COMPONENTS_QUICK_ANSWERS_PUBLIC_CPP_CONTROLLER_QUICK_ANSWERS_CONTROLLER_H_
 
+#include <memory>
 #include <string>
-
-#include "ui/gfx/geometry/rect.h"
 
 namespace quick_answers {
 class QuickAnswersClient;
@@ -43,6 +42,7 @@ class QuickAnswersController {
   // Passes in a client instance for the controller to use.
   virtual void SetClient(
       std::unique_ptr<quick_answers::QuickAnswersClient> client) = 0;
+  virtual quick_answers::QuickAnswersClient* GetClient() const = 0;
 
   // Dismiss the specific quick-answers, user-consent, or rich-answers view
   // currently shown. |exit_point| indicates the exit point of the view.
@@ -51,7 +51,7 @@ class QuickAnswersController {
 
   virtual quick_answers::QuickAnswersDelegate* GetQuickAnswersDelegate() = 0;
 
-  virtual QuickAnswersVisibility GetVisibilityForTesting() const = 0;
+  virtual QuickAnswersVisibility GetQuickAnswersVisibility() const = 0;
 
   virtual void SetVisibility(QuickAnswersVisibility visibility) = 0;
 };

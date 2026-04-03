@@ -11,8 +11,8 @@
 #include "quiche/quic/core/http/quic_spdy_client_session.h"
 #include "quiche/quic/tools/quic_client_base.h"
 #include "quiche/quic/tools/quic_simple_client_stream.h"
+#include "quiche/common/http/http_header_block.h"
 #include "quiche/common/quiche_callbacks.h"
-#include "quiche/spdy/core/http2_header_block.h"
 
 namespace quic {
 
@@ -35,6 +35,18 @@ class QuicSimpleClientSession : public QuicSpdyClientSession {
                           QuicCryptoClientConfig* crypto_config,
                           bool drop_response_body, bool enable_web_transport);
 
+  QuicSimpleClientSession(const QuicConfig& config,
+                          const ParsedQuicVersionVector& supported_versions,
+                          QuicConnection* connection,
+                          QuicSession::Visitor* visitor,
+                          QuicForceBlockablePacketWriter* absl_nullable writer,
+                          QuicMigrationHelper* absl_nullable migration_helper,
+                          const QuicConnectionMigrationConfig& migration_config,
+                          QuicClientBase::NetworkHelper* network_helper,
+                          const QuicServerId& server_id,
+                          QuicCryptoClientConfig* crypto_config,
+                          bool drop_response_body, bool enable_web_transport);
+
   std::unique_ptr<QuicSpdyClientStream> CreateClientStream() override;
   WebTransportHttp3VersionSet LocallySupportedWebTransportVersions()
       const override;
@@ -46,13 +58,13 @@ class QuicSimpleClientSession : public QuicSpdyClientSession {
   bool drop_response_body() const { return drop_response_body_; }
 
   void set_on_interim_headers(
-      quiche::MultiUseCallback<void(const spdy::Http2HeaderBlock&)>
+      quiche::MultiUseCallback<void(const quiche::HttpHeaderBlock&)>
           on_interim_headers) {
     on_interim_headers_ = std::move(on_interim_headers);
   }
 
  private:
-  quiche::MultiUseCallback<void(const spdy::Http2HeaderBlock&)>
+  quiche::MultiUseCallback<void(const quiche::HttpHeaderBlock&)>
       on_interim_headers_;
   QuicClientBase::NetworkHelper* network_helper_;
   const bool drop_response_body_;

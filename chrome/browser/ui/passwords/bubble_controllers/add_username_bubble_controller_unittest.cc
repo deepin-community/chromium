@@ -17,8 +17,6 @@ using ::testing::ReturnRef;
 namespace {
 constexpr char kUIDismissalReasonGeneralMetric[] =
     "PasswordManager.UIDismissalReason";
-constexpr char kUsernameAddedMetric[] =
-    "PasswordBubble.AddUsernameBubble.UsernameAdded";
 constexpr char16_t kUsername[] = u"Admin";
 constexpr char16_t kPassword[] = u"AdminPass";
 }  // namespace
@@ -73,14 +71,13 @@ TEST_F(AddUsernameBubbleControllerTest, Destroy) {
   histogram_tester.ExpectUniqueSample(
       kUIDismissalReasonGeneralMetric,
       password_manager::metrics_util::NO_DIRECT_INTERACTION, 1);
-  histogram_tester.ExpectUniqueSample(kUsernameAddedMetric, false, 1);
 }
 
 TEST_F(AddUsernameBubbleControllerTest, SavePassword) {
   base::HistogramTester histogram_tester;
   CreateController();
 
-  EXPECT_CALL(*delegate(), OnAddUsernameSaveClicked(Eq(kUsername)));
+  EXPECT_CALL(*delegate(), OnAddUsernameSaveClicked(Eq(kUsername), _));
   controller()->OnSaveClicked();
 
   EXPECT_CALL(*delegate(), OnBubbleHidden());
@@ -88,7 +85,6 @@ TEST_F(AddUsernameBubbleControllerTest, SavePassword) {
   histogram_tester.ExpectUniqueSample(
       kUIDismissalReasonGeneralMetric,
       password_manager::metrics_util::CLICKED_ACCEPT, 1);
-  histogram_tester.ExpectUniqueSample(kUsernameAddedMetric, true, 1);
 }
 
 TEST_F(AddUsernameBubbleControllerTest, Title) {

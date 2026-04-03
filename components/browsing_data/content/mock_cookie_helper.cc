@@ -7,7 +7,6 @@
 #include <memory>
 #include <optional>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback_helpers.h"
 #include "base/time/time.h"
 #include "net/cookies/cookie_options.h"
@@ -18,7 +17,7 @@ namespace browsing_data {
 MockCookieHelper::MockCookieHelper(content::StoragePartition* storage_partition)
     : CookieHelper(storage_partition, base::NullCallback()) {}
 
-MockCookieHelper::~MockCookieHelper() {}
+MockCookieHelper::~MockCookieHelper() = default;
 
 void MockCookieHelper::StartFetching(FetchCallback callback) {
   ASSERT_FALSE(callback.is_null());
@@ -27,7 +26,7 @@ void MockCookieHelper::StartFetching(FetchCallback callback) {
 }
 
 void MockCookieHelper::DeleteCookie(const net::CanonicalCookie& cookie) {
-  ASSERT_TRUE(base::Contains(cookies_, cookie));
+  ASSERT_TRUE(cookies_.contains(cookie));
   cookies_[cookie] = false;
 }
 
@@ -35,9 +34,10 @@ void MockCookieHelper::AddCookieSamples(
     const GURL& url,
     const std::string& cookie_line,
     std::optional<net::CookiePartitionKey> cookie_partition_key) {
-  std::unique_ptr<net::CanonicalCookie> cc(net::CanonicalCookie::Create(
-      url, cookie_line, base::Time::Now(), std::nullopt /* server_time */,
-      cookie_partition_key));
+  std::unique_ptr<net::CanonicalCookie> cc(
+      net::CanonicalCookie::CreateForTesting(
+          url, cookie_line, base::Time::Now(), std::nullopt /* server_time */,
+          cookie_partition_key));
 
   if (cc.get()) {
     if (cookies_.count(*cc))

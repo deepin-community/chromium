@@ -46,9 +46,7 @@ class SharedMemoryVirtualDeviceMojoAdapter
              mojo::PendingRemote<mojom::VideoFrameHandler> receiver) override;
   void StartInProcess(
       const media::VideoCaptureParams& requested_settings,
-      const base::WeakPtr<media::VideoFrameReceiver>& frame_handler,
-      mojo::PendingRemote<video_capture::mojom::VideoEffectsManager>
-          video_effects_manager) override;
+      const base::WeakPtr<media::VideoFrameReceiver>& frame_handler) override;
   void MaybeSuspend() override;
   void Resume() override;
   void GetPhotoState(GetPhotoStateCallback callback) override;

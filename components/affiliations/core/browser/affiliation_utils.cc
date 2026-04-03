@@ -4,14 +4,13 @@
 
 #include "components/affiliations/core/browser/affiliation_utils.h"
 
+#include <algorithm>
 #include <map>
 #include <ostream>
+#include <string_view>
 
 #include "base/base64.h"
-#include "base/containers/cxx20_erase.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/escape.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "components/url_formatter/elide_url.h"
@@ -26,22 +25,23 @@ namespace {
 // The scheme used for identifying Android applications.
 const char kAndroidAppScheme[] = "android";
 
-// Returns a StringPiece corresponding to |component| in |uri|, or the empty
+// Returns a std::string_view corresponding to |component| in |uri|, or the empty
 // string in case there is no such component.
-base::StringPiece ComponentString(const std::string& uri,
-                                  const url::Component& component) {
-  if (!component.is_valid())
-    return base::StringPiece();
-  return base::StringPiece(uri.c_str() + component.begin, component.len);
+std::string_view ComponentString(const std::string& uri,
+                                 const url::Component& component) {
+  if (!component.is_valid()) {
+    return std::string_view();
+  }
+  return std::string_view(uri).substr(component.begin, component.len);
 }
 
 // Returns true if the passed ASCII |input| string contains nothing else than
 // alphanumeric characters and those in |other_characters|.
-bool ContainsOnlyAlphanumericAnd(const base::StringPiece& input,
-                                 const base::StringPiece& other_characters) {
+bool ContainsOnlyAlphanumericAnd(std::string_view input,
+                                 std::string_view other_characters) {
   for (char c : input) {
     if (!base::IsAsciiAlpha(c) && !base::IsAsciiDigit(c) &&
-        other_characters.find(c) == base::StringPiece::npos)
+        other_characters.find(c) == std::string_view::npos)
       return false;
   }
   return true;
@@ -55,10 +55,9 @@ bool CanonicalizeWebFacetURI(const std::string& input_uri,
   url::Parsed canonical_parsed;
   url::StdStringCanonOutput canonical_output(canonical_uri);
 
-  bool canonicalization_succeeded = url::CanonicalizeStandardURL(
-      input_uri.c_str(), input_parsed,
-      url::SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION, nullptr,
-      &canonical_output, &canonical_parsed);
+  bool canonicalization_succeeded = url::CanonicalizeStandardUrl(
+      input_uri, input_parsed, url::SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION,
+      nullptr, &canonical_output, &canonical_parsed);
   canonical_output.Complete();
 
   if (canonicalization_succeeded && canonical_parsed.host.is_nonempty() &&
@@ -91,7 +90,7 @@ bool CanonicalizeBase64Padding(std::string* data) {
 // Canonicalizes the username component in an Android facet URI (containing the
 // certificate hash), and returns true if canonicalization was successful and
 // produced a valid non-empty component.
-bool CanonicalizeHashComponent(const base::StringPiece& input_hash,
+bool CanonicalizeHashComponent(std::string_view input_hash,
                                url::CanonOutput* canonical_output) {
   // Characters other than alphanumeric that are used in the "URL and filename
   // safe" base64 alphabet; plus the padding ('=').
@@ -115,7 +114,7 @@ bool CanonicalizeHashComponent(const base::StringPiece& input_hash,
 // package name), and returns true if canonicalization was successful and
 // produced a valid non-empty component.
 bool CanonicalizePackageNameComponent(
-    const base::StringPiece& input_package_name,
+    std::string_view input_package_name,
     url::CanonOutput* canonical_output) {
   // Characters other than alphanumeric that are permitted in the package names.
   const char kPackageNameNonAlphanumericChars[] = "._";
@@ -142,7 +141,7 @@ bool CanonicalizeAndroidFacetURI(const std::string& input_uri,
 
   url::Component unused;
   bool success = url::CanonicalizeScheme(
-      input_uri.c_str(), input_parsed.scheme, &canonical_output, &unused);
+      input_parsed.scheme.AsViewOn(input_uri), &canonical_output, &unused);
 
   canonical_output.push_back('/');
   canonical_output.push_back('/');
@@ -174,10 +173,8 @@ bool ParseAndCanonicalizeFacetURI(const std::string& input_uri,
   canonical_uri->clear();
   canonical_uri->reserve(input_uri.size() + 32);
 
-  url::Parsed input_parsed;
-  url::ParseStandardURL(input_uri.c_str(), input_uri.size(), &input_parsed);
-
-  base::StringPiece scheme = ComponentString(input_uri, input_parsed.scheme);
+  url::Parsed input_parsed = url::ParseStandardUrl(input_uri);
+  std::string_view scheme = ComponentString(input_uri, input_parsed.scheme);
   if (base::EqualsCaseInsensitiveASCII(scheme, url::kHttpsScheme)) {
     return CanonicalizeWebFacetURI(input_uri, input_parsed, canonical_uri);
   }
@@ -194,7 +191,7 @@ bool ParseAndCanonicalizeFacetURI(const std::string& input_uri,
 std::vector<FacetURI> ExtractAndSortFacetURIs(const AffiliatedFacets& facets) {
   std::vector<FacetURI> uris;
   uris.reserve(facets.size());
-  base::ranges::transform(facets, std::back_inserter(uris), &Facet::uri);
+  std::ranges::transform(facets, std::back_inserter(uris), &Facet::uri);
   std::sort(uris.begin(), uris.end());
   return uris;
 }
@@ -267,7 +264,7 @@ class DisjointSet {
       disjoint_sets[root].push_back(i);
     }
     // Clear empty sets.
-    base::EraseIf(disjoint_sets, [](const auto& set) { return set.empty(); });
+    std::erase_if(disjoint_sets, [](const auto& set) { return set.empty(); });
     return disjoint_sets;
   }
 
@@ -331,7 +328,7 @@ std::string FacetURI::GetAndroidPackageDisplayName() const {
   CHECK(IsValidAndroidFacetURI());
   std::vector<std::string> parts = base::SplitString(
       android_package_name(), ".", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-  std::reverse(parts.begin(), parts.end());
+  std::ranges::reverse(parts);
   return base::JoinString(parts, ".");
 }
 
@@ -339,8 +336,7 @@ FacetURI::FacetURI(const std::string& canonical_spec, bool is_valid)
     : is_valid_(is_valid), canonical_spec_(canonical_spec) {
   // TODO(engedy): Refactor code in order to avoid to avoid parsing the URL
   // twice.
-  url::ParseStandardURL(canonical_spec_.c_str(), canonical_spec_.size(),
-                        &parsed_);
+  parsed_ = url::ParseStandardUrl(canonical_spec_);
 }
 
 // Facet
@@ -452,32 +448,11 @@ std::ostream& operator<<(std::ostream& os, const FacetURI& facet_uri) {
   return os << facet_uri.potentially_invalid_spec();
 }
 
-bool operator==(const FacetBrandingInfo& lhs, const FacetBrandingInfo& rhs) {
-  return std::tie(lhs.name, lhs.icon_url) == std::tie(rhs.name, rhs.icon_url);
-}
-
-bool operator!=(const FacetBrandingInfo& lhs, const FacetBrandingInfo& rhs) {
-  return !(lhs == rhs);
-}
-
-bool operator==(const Facet& lhs, const Facet& rhs) {
-  return std::tie(lhs.uri, lhs.branding_info, lhs.main_domain) ==
-         std::tie(rhs.uri, rhs.branding_info, rhs.main_domain);
-}
-
-bool operator!=(const Facet& lhs, const Facet& rhs) {
-  return !(lhs == rhs);
-}
-
 bool operator==(const GroupedFacets& lhs, const GroupedFacets& rhs) {
-  if (!base::ranges::is_permutation(lhs.facets, rhs.facets)) {
+  if (!std::ranges::is_permutation(lhs.facets, rhs.facets)) {
     return false;
   }
   return lhs.branding_info == rhs.branding_info;
-}
-
-bool operator!=(const GroupedFacets& lhs, const GroupedFacets& rhs) {
-  return !(lhs == rhs);
 }
 
 bool AreEquivalenceClassesEqual(const AffiliatedFacets& a,
@@ -502,7 +477,7 @@ std::string GetExtendedTopLevelDomain(
     return main_domain;
   }
 
-  std::string full_domain = url.host();
+  std::string full_domain = url.GetHost();
 
   // Something went wrong, and it shouldn't happen. Return early in this case to
   // avoid undefined behaviour.
@@ -519,6 +494,23 @@ std::string GetExtendedTopLevelDomain(
     IncreaseDomainLevel(full_domain, main_domain);
   }
   return main_domain;
+}
+
+bool IsExtendedPublicSuffixDomainMatch(
+    const GURL& url1,
+    const GURL& url2,
+    const base::flat_set<std::string>& psl_extensions) {
+  if (!url1.is_valid() || !url2.is_valid()) {
+    return false;
+  }
+
+  std::string domain1(GetExtendedTopLevelDomain(url1, psl_extensions));
+  std::string domain2(GetExtendedTopLevelDomain(url2, psl_extensions));
+  if (domain1.empty() || domain2.empty()) {
+    return false;
+  }
+
+  return domain1 == domain2;
 }
 
 }  // namespace affiliations

@@ -1,9 +1,11 @@
 # Copyright 2023 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import annotations
 
 import unittest
 from argparse import ArgumentTypeError
+from typing import Any
 
 from crossbench.browsers.viewport import Viewport, ViewportMode
 from tests import test_helper
@@ -99,11 +101,11 @@ class ViewportTestCase(unittest.TestCase):
     self.assertEqual(Viewport(x=100, y=200).y, 200)
 
   def test_parse_invalid(self):
-    INVALID_INPUTS = ("-", "-100x", "100x", "100xXX", "100x-100", "-100x100",
+    invalid_inputs = ("-", "-100x", "100x", "100xXX", "100x-100", "-100x100",
                       "asdf", "100x100,,", "100x100,a", "100x100,100",
                       "100x100,100x", "100x100,-100", "100x100,100x-100",
                       "100x100,-100x100")
-    for invalid in INVALID_INPUTS:
+    for invalid in invalid_inputs:
       with self.subTest(value=invalid):
         with self.assertRaises((ValueError, ArgumentTypeError)):
           Viewport.parse(invalid)
@@ -135,11 +137,13 @@ class ViewportTestCase(unittest.TestCase):
     self.assertTupleEqual(viewport.position, (22, 33))
 
   def test_parse_sized_invalid(self):
-    for invalid in (None, 1, tuple()):
+    invalid: Any
+    for invalid in (None, 1, ()):
       with self.assertRaises(ArgumentTypeError):
         Viewport.parse_sized(invalid)
 
   def test_parse_sized_invalid_no_size(self):
+    invalid: Any
     for invalid in ("fullscreen", Viewport.FULLSCREEN, "headless",
                     Viewport.HEADLESS):
       with self.assertRaises(ArgumentTypeError) as cm:

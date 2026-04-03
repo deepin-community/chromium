@@ -10,7 +10,7 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 
 @class NativeFileDialog;
@@ -31,8 +31,7 @@ class SelectFileDialogImpl : public SelectFileDialog {
   bool IsRunning(gfx::NativeWindow parent_window) const override;
   void ListenerDestroyed() override;
 
-  void FileWasSelected(void* params,
-                       bool is_multi,
+  void FileWasSelected(bool is_multi,
                        bool was_cancelled,
                        const std::vector<base::FilePath>& files,
                        int index);
@@ -46,7 +45,6 @@ class SelectFileDialogImpl : public SelectFileDialog {
                       int file_type_index,
                       const base::FilePath::StringType& default_extension,
                       gfx::NativeWindow owning_window,
-                      void* params,
                       const GURL* caller) override;
   bool HasMultipleFileTypeChoicesImpl() override;
 

@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FENCED_FRAME_FENCED_FRAME_CONFIG_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FENCED_FRAME_FENCED_FRAME_CONFIG_H_
 
+#include "base/gtest_prod_util.h"
 #include "base/notreached.h"
 #include "base/types/pass_key.h"
 #include "third_party/blink/public/common/fenced_frame/redacted_fenced_frame_config.h"
@@ -34,8 +35,6 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
  public:
   enum class Attribute {
     kURL,
-    kWidth,
-    kHeight,
   };
 
   // Note this visibility has different semantics from
@@ -57,14 +56,11 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
   static FencedFrameConfig* Create(const String& url);
 
   static FencedFrameConfig* Create(const KURL url,
-                                   uint32_t width,
-                                   uint32_t height,
                                    const String& shared_storage_context,
                                    std::optional<KURL> urn_uuid,
                                    std::optional<gfx::Size> container_size,
                                    std::optional<gfx::Size> content_size,
                                    AttributeVisibility url_visibility,
-                                   AttributeVisibility size_visibility,
                                    bool freeze_initial_size);
 
   static FencedFrameConfig* From(
@@ -74,14 +70,11 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
   explicit FencedFrameConfig(const String& url);
 
   explicit FencedFrameConfig(const KURL url,
-                             uint32_t width,
-                             uint32_t height,
                              const String& shared_storage_context,
                              std::optional<KURL> urn_uuid,
                              std::optional<gfx::Size> container_size,
                              std::optional<gfx::Size> content_size,
                              AttributeVisibility url_visibility,
-                             AttributeVisibility size_visibility,
                              bool freeze_initial_size);
 
   // Construct an inner config given a redacted fenced frame config
@@ -106,10 +99,6 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
   auto GetValueIgnoringVisibility() const {
     if constexpr (attr == Attribute::kURL) {
       return url_;
-    } else if constexpr (attr == Attribute::kWidth) {
-      return width_;
-    } else if constexpr (attr == Attribute::kHeight) {
-      return height_;
     }
     NOTREACHED();
   }
@@ -166,14 +155,11 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
 
  private:
   KURL url_;
-  uint32_t width_;
-  uint32_t height_;
 
   // `shared_storage_context_` can be set, but has no web-exposed getter here.
   String shared_storage_context_;
 
   AttributeVisibility url_attribute_visibility_ = AttributeVisibility::kNull;
-  AttributeVisibility size_attribute_visibility_ = AttributeVisibility::kNull;
 
   // Attribute's union type based on its value type.
   template <typename T>
@@ -185,9 +171,6 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
     switch (attr) {
       case Attribute::kURL:
         return url_attribute_visibility_;
-      case Attribute::kWidth:
-      case Attribute::kHeight:
-        return size_attribute_visibility_;
     }
     NOTREACHED();
   }
@@ -197,10 +180,6 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
   auto GetValue() const {
     if constexpr (attr == Attribute::kURL) {
       return url_.GetString();
-    } else if constexpr (attr == Attribute::kWidth) {
-      return width_;
-    } else if constexpr (attr == Attribute::kHeight) {
-      return height_;
     }
     NOTREACHED();
   }
@@ -253,7 +232,7 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
   // compatibility.
   bool deprecated_should_freeze_initial_size_ = false;
 
-  static_assert(__LINE__ == 256, R"(
+  static_assert(__LINE__ == 235, R"(
 If adding or modifying a field in FencedFrameConfig, be sure to also make
 the field serializable. To do that:
 

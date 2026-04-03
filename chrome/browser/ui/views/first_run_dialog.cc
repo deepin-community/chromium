@@ -7,16 +7,18 @@
 #include <string>
 
 #include "base/functional/bind.h"
+#include "base/process/process.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/first_run/first_run_dialog.h"
 #include "chrome/browser/headless/headless_mode_util.h"
+#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/metrics/metrics_reporting_state.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/shell_integration.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/common/url_constants.h"
@@ -26,6 +28,8 @@
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/link.h"
 #include "ui/views/layout/box_layout.h"
@@ -38,14 +42,16 @@ void ShowFirstRunDialog() {
   // Don't show first run dialog when running in headless mode since this
   // would effectively block the UI because there is no one to interact with
   // the dialog.
-  if (headless::IsHeadlessMode())
+  if (headless::IsHeadlessMode()) {
     return;
+  }
 
 #if BUILDFLAG(IS_MAC)
-  if (base::FeatureList::IsEnabled(features::kViewsFirstRunDialog))
+  if (base::FeatureList::IsEnabled(features::kViewsFirstRunDialog)) {
     ShowFirstRunDialogViews();
-  else
+  } else {
     ShowFirstRunDialogCocoa();
+  }
 #else
   ShowFirstRunDialogViews();
 #endif
@@ -53,28 +59,51 @@ void ShowFirstRunDialog() {
 
 void ShowFirstRunDialogViews() {
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+  bool closed_through_accept_button = false;
+
+  auto on_close_callback = base::BindOnce(
+      [](bool* out_result, base::RepeatingClosure quit_loop,
+         bool closed_through_accept_button) {
+        *out_result = closed_through_accept_button;
+        quit_loop.Run();
+      },
+      &closed_through_accept_button, run_loop.QuitClosure());
   FirstRunDialog::Show(
       base::BindRepeating(&platform_util::OpenExternal,
                           GURL(chrome::kLearnMoreReportingURL)),
-      run_loop.QuitClosure());
+      std::move(on_close_callback));
   run_loop.Run();
+
+  if (!closed_through_accept_button) {
+    // If the user closed the dialog without accepting, exit the process.
+    chrome::AttemptUserExit();
+  }
 }
 
 }  // namespace first_run
 
+// FirstRunDialog::TestApi
+FirstRunDialog::TestApi::TestApi(FirstRunDialog* dialog) : dialog_(dialog) {}
+
+void FirstRunDialog::TestApi::SetMakeDefaultCheckboxChecked(bool checked) {
+  dialog_->make_default_->SetChecked(checked);
+}
+
 // static
 void FirstRunDialog::Show(base::RepeatingClosure learn_more_callback,
-                          base::RepeatingClosure quit_runloop) {
+                          OnCloseCallback on_close_callback) {
   FirstRunDialog* dialog = new FirstRunDialog(std::move(learn_more_callback),
-                                              std::move(quit_runloop));
-  views::DialogDelegate::CreateDialogWidget(dialog, NULL, NULL)->Show();
+                                              std::move(on_close_callback));
+  views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
+      dialog, gfx::NativeWindow(), gfx::NativeView());
+  widget->Show();
 }
 
 FirstRunDialog::FirstRunDialog(base::RepeatingClosure learn_more_callback,
-                               base::RepeatingClosure quit_runloop)
-    : quit_runloop_(quit_runloop) {
+                               OnCloseCallback on_close_callback)
+    : on_close_callback_(std::move(on_close_callback)) {
   SetTitle(l10n_util::GetStringUTF16(IDS_FIRST_RUN_DIALOG_WINDOW_TITLE));
-  SetButtons(ui::DIALOG_BUTTON_OK);
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk));
   SetExtraView(
       std::make_unique<views::Link>(l10n_util::GetStringUTF16(IDS_LEARN_MORE)))
       ->SetCallback(std::move(learn_more_callback));
@@ -94,37 +123,30 @@ FirstRunDialog::FirstRunDialog(base::RepeatingClosure learn_more_callback,
   report_crashes_ = AddChildView(std::make_unique<views::Checkbox>(
       l10n_util::GetStringUTF16(IDS_FR_ENABLE_LOGGING)));
   // Having this box checked means the user has to opt-out of metrics recording.
-  report_crashes_->SetChecked(!first_run::IsMetricsReportingOptIn());
+  report_crashes_->SetChecked(true);
 }
 
-FirstRunDialog::~FirstRunDialog() {
-}
-
-void FirstRunDialog::Done() {
-  CHECK(!quit_runloop_.is_null());
-
-  if (!closed_through_accept_button_) {
-    ChangeMetricsReportingState(false);
-  }
-
-  quit_runloop_.Run();
-}
+FirstRunDialog::~FirstRunDialog() = default;
 
 bool FirstRunDialog::Accept() {
-  GetWidget()->Hide();
   closed_through_accept_button_ = true;
 
-  ChangeMetricsReportingState(report_crashes_->GetChecked());
+  ChangeMetricsReportingState(
+      report_crashes_->GetChecked(),
+      ChangeMetricsReportingStateCalledFrom::kUiFirstRun);
 
-  if (make_default_->GetChecked())
+  if (make_default_->GetChecked()) {
     shell_integration::SetAsDefaultBrowser();
+  }
 
-  Done();
+  GetWidget()->CloseNow();
   return true;
 }
 
 void FirstRunDialog::WindowClosing() {
-  Done();
+  CHECK(!on_close_callback_.is_null());
+
+  std::move(on_close_callback_).Run(closed_through_accept_button_);
 }
 
 BEGIN_METADATA(FirstRunDialog)

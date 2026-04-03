@@ -8,10 +8,9 @@
 #include <string>
 
 #include "base/check_op.h"
-#include "base/memory/weak_ptr.h"
+#include "base/component_export.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/gfx_export.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/win/msg_util.h"
 
 namespace gfx {
@@ -37,7 +36,7 @@ class MessageMapInterface {
 //  Windows.
 //
 ///////////////////////////////////////////////////////////////////////////////
-class GFX_EXPORT WindowImpl : public MessageMapInterface {
+class COMPONENT_EXPORT(GFX) WindowImpl : public MessageMapInterface {
  public:
   // |debugging_id| is reported with crashes to help attribute the code that
   // created the WindowImpl.
@@ -71,6 +70,10 @@ class GFX_EXPORT WindowImpl : public MessageMapInterface {
   // Sets the extended window styles. See comment about |set_window_style|.
   void set_window_ex_style(DWORD style) { window_ex_style_ = style; }
   DWORD window_ex_style() const { return window_ex_style_; }
+
+  void set_window_name(const wchar_t* name) { window_name_ = name; }
+
+  void set_window_class_name(const wchar_t* name) { class_name_ = name; }
 
   // Sets the class style to use. The default is CS_DBLCLKS.
   void set_initial_class_style(UINT class_style) {
@@ -119,15 +122,14 @@ class GFX_EXPORT WindowImpl : public MessageMapInterface {
   // Style of the class to use.
   UINT class_style_;
 
+  // Name of the window class to use. Otherwise one will be generated.
+  const wchar_t* class_name_ = nullptr;
+
+  // Name of the window to use.  Otherwise it will be null.
+  const wchar_t* window_name_ = nullptr;
+
   // Our hwnd.
   HWND hwnd_ = nullptr;
-
-  // For debugging.
-  // TODO(sky): nuke this when get crash data.
-  bool got_create_ = false;
-  bool got_valid_hwnd_ = false;
-  // For tracking whether this object has been destroyed. Must be last.
-  base::WeakPtrFactory<WindowImpl> weak_factory_{this};
 };
 
 }  // namespace gfx

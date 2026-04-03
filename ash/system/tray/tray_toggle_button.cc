@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "ash/style/ash_color_provider.h"
+#include "ash/style/ash_color_id.h"
 #include "ash/system/tray/tray_constants.h"
 #include "chromeos/utils/haptics_util.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -14,6 +14,7 @@
 #include "ui/color/color_id.h"
 #include "ui/events/devices/haptic_touchpad_effects.h"
 #include "ui/events/event.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/focus_ring.h"
 
@@ -32,21 +33,14 @@ TrayToggleButton::TrayToggleButton(PressedCallback callback,
         gfx::Insets::VH(vertical_padding, horizontal_padding)));
   }
   if (accessible_name_id.has_value())
-    SetAccessibleName(l10n_util::GetStringUTF16(accessible_name_id.value()));
+    GetViewAccessibility().SetName(
+        l10n_util::GetStringUTF16(accessible_name_id.value()));
   views::FocusRing::Get(this)->SetColorId(ui::kColorAshFocusRing);
-}
 
-void TrayToggleButton::OnThemeChanged() {
-  views::ToggleButton::OnThemeChanged();
-  auto* color_provider = AshColorProvider::Get();
-  SetThumbOnColor(color_provider->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kSwitchKnobColorActive));
-  SetThumbOffColor(color_provider->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kSwitchKnobColorInactive));
-  SetTrackOnColor(color_provider->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kSwitchTrackColorActive));
-  SetTrackOffColor(color_provider->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kSwitchTrackColorInactive));
+  SetThumbOnColor(kColorAshSwitchKnobColorActive);
+  SetThumbOffColor(kColorAshSwitchKnobColorInactive);
+  SetTrackOnColor(kColorAshSwitchTrackColorActive);
+  SetTrackOffColor(kColorAshSwitchTrackColorInactive);
 }
 
 void TrayToggleButton::NotifyClick(const ui::Event& event) {

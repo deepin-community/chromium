@@ -4,16 +4,21 @@
 
 #include "content/public/common/content_client.h"
 
+#include <algorithm>
+#include <string_view>
+
+#include "base/feature_list.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/no_destructor.h"
-#include "base/notreached.h"
-#include "base/strings/string_piece.h"
+#include "base/notimplemented.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/origin_util.h"
-#include "content/public/common/user_agent.h"
 #include "ui/gfx/image/image.h"
 
 namespace content {
@@ -104,10 +109,14 @@ std::u16string ContentClient::GetLocalizedString(
   return std::u16string();
 }
 
-base::StringPiece ContentClient::GetDataResource(
+bool ContentClient::HasDataResource(int resource_id) const {
+  return false;
+}
+
+std::string_view ContentClient::GetDataResource(
     int resource_id,
     ui::ResourceScaleFactor scale_factor) {
-  return base::StringPiece();
+  return std::string_view();
 }
 
 base::RefCountedMemory* ContentClient::GetDataResourceBytes(int resource_id) {
@@ -120,7 +129,7 @@ std::string ContentClient::GetDataResourceString(int resource_id) {
       GetDataResourceBytes(resource_id);
   if (!memory)
     return std::string();
-  return std::string(memory->front_as<char>(), memory->size());
+  return std::string(base::as_string_view(*memory));
 }
 
 gfx::Image& ContentClient::GetNativeImageNamed(int resource_id) {
@@ -150,5 +159,48 @@ media::MediaDrmBridgeClient* ContentClient::GetMediaDrmBridgeClient() {
 void ContentClient::ExposeInterfacesToBrowser(
     scoped_refptr<base::SequencedTaskRunner> io_task_runner,
     mojo::BinderMap* binders) {}
+
+bool ContentClient::ShouldAllowDefaultSiteInstanceGroup() {
+  return true;
+}
+
+bool ContentClient::ShouldIgnoreDuplicateNavs(
+    const GURL& url,
+    bool is_renderer_initiated) const {
+  if (!base::FeatureList::IsEnabled(features::kIgnoreDuplicateNavs)) {
+    return false;
+  }
+  if (is_renderer_initiated &&
+      features::kSkipIgnoreRendererInitiatedNavs.Get()) {
+    return false;
+  }
+  const std::string& origins_list_str =
+      features::kIgnoreDuplicateNavsOrigins.Get();
+  // Ignore browser-initiated navigations, or if the origin list parameter is
+  // empty, which means the feature should apply to all origins.
+  if (!is_renderer_initiated || origins_list_str.empty()) {
+    return true;
+  }
+  static const base::NoDestructor<std::vector<url::Origin>>
+      target_origin_ignorelist([&origins_list_str] {
+        std::vector<url::Origin> origins;
+        const auto& origin_strings =
+            base::SplitString(origins_list_str, ",", base::TRIM_WHITESPACE,
+                              base::SPLIT_WANT_NONEMPTY);
+        origins.reserve(origin_strings.size());
+        for (const auto& origin_str : origin_strings) {
+          origins.push_back(url::Origin::Create(GURL(origin_str)));
+        }
+        return origins;
+      }());
+
+  const url::Origin navigation_origin = url::Origin::Create(url);
+  return std::ranges::contains(*target_origin_ignorelist, navigation_origin);
+}
+
+bool ContentClient::IsFilePickerAllowedForCrossOriginSubframe(
+    const url::Origin& origin) {
+  return false;
+}
 
 }  // namespace content

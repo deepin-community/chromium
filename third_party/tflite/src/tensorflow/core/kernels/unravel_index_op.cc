@@ -14,16 +14,17 @@ limitations under the License.
 ==============================================================================*/
 
 #include <cstdint>
+#include <limits>
 
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/platform/types.h"
 #define EIGEN_USE_THREADS
 
+#include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
-#include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
 
 namespace tensorflow {
 
@@ -50,7 +51,9 @@ class UnravelIndexOp : public OpKernel {
                 errors::InvalidArgument(
                     "The indices can only be scalar or vector, got \"",
                     indices_tensor.shape().DebugString(), "\""));
-
+    OP_REQUIRES(ctx, indices_tensor.NumElements() > 0,
+                errors::InvalidArgument("received empty tensor indices: ",
+                                        indices_tensor.DebugString()));
     const Tensor& dims_tensor = ctx->input(1);
     OP_REQUIRES(
         ctx, TensorShapeUtils::IsVector(dims_tensor.shape()),
@@ -62,9 +65,9 @@ class UnravelIndexOp : public OpKernel {
     double prod = 1;
     uint64_t limit;
     if (dtidx_ == DataType::DT_INT64) {
-      limit = kint64max;
+      limit = std::numeric_limits<int64_t>::max();
     } else {
-      limit = kint32max;
+      limit = std::numeric_limits<int32_t>::max();
     }
 
     for (int i = 0; i < dims.size(); i++) {

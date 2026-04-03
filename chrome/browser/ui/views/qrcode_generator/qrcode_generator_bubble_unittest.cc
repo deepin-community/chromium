@@ -9,6 +9,7 @@
 #include "base/scoped_observation.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
+#include "components/qr_code_generator/bitmap_generator.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -39,38 +40,6 @@ TEST_F(QRCodeGeneratorBubbleTest, SuggestedDownloadURLNoIP) {
       u"qrcode_chrome.png");
 }
 
-TEST_F(QRCodeGeneratorBubbleTest, GeneratedCodeHasQuietZone) {
-  const int kBaseSizeDip = 16;
-  const int kQuietZoneTiles = 4;
-  const int kTileToDip = 2;
-  const int kQuietZoneDip = kQuietZoneTiles * kTileToDip;
-
-  SkBitmap base_bitmap;
-  base_bitmap.allocN32Pixels(kBaseSizeDip, kBaseSizeDip);
-  base_bitmap.eraseColor(SK_ColorRED);
-  auto base_image = gfx::ImageSkia::CreateFrom1xBitmap(base_bitmap);
-
-  auto image = QRCodeGeneratorBubble::AddQRCodeQuietZone(
-      base_image,
-      gfx::Size(kBaseSizeDip / kTileToDip, kBaseSizeDip / kTileToDip),
-      SK_ColorTRANSPARENT);
-
-  EXPECT_EQ(base_image.width(), kBaseSizeDip);
-  EXPECT_EQ(base_image.height(), kBaseSizeDip);
-  EXPECT_EQ(image.width(), kBaseSizeDip + kQuietZoneDip * 2);
-  EXPECT_EQ(image.height(), kBaseSizeDip + kQuietZoneDip * 2);
-
-  EXPECT_EQ(SK_ColorRED, base_image.bitmap()->getColor(0, 0));
-
-  EXPECT_EQ(SK_ColorTRANSPARENT, image.bitmap()->getColor(0, 0));
-  EXPECT_EQ(SK_ColorTRANSPARENT,
-            image.bitmap()->getColor(kQuietZoneDip, kQuietZoneDip - 1));
-  EXPECT_EQ(SK_ColorTRANSPARENT,
-            image.bitmap()->getColor(kQuietZoneDip - 1, kQuietZoneDip));
-  EXPECT_EQ(SK_ColorRED,
-            image.bitmap()->getColor(kQuietZoneDip, kQuietZoneDip));
-}
-
 class VisibilityChangedWaiter : public views::ViewObserver {
  public:
   explicit VisibilityChangedWaiter(views::View* view) {
@@ -80,7 +49,8 @@ class VisibilityChangedWaiter : public views::ViewObserver {
   void Wait() { run_loop_.Run(); }
 
   void OnViewVisibilityChanged(views::View* view,
-                               views::View* starting_view) override {
+                               views::View* starting_view,
+                               bool visible) override {
     run_loop_.Quit();
   }
 
@@ -96,7 +66,9 @@ class QRCodeGeneratorBubbleUITest : public ChromeViewsTestBase {
     web_contents_ =
         content::WebContentsTester::CreateTestWebContents(&profile_, nullptr);
 
-    anchor_widget_.reset(CreateTestWidget().release());
+    anchor_widget_.reset(
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET)
+            .release());
     anchor_view_ =
         anchor_widget_->SetContentsView(std::make_unique<views::View>());
     CHECK(anchor_view_);
@@ -105,6 +77,9 @@ class QRCodeGeneratorBubbleUITest : public ChromeViewsTestBase {
         base::DoNothing(), GURL("https://www.chromium.org/a"));
 
     bubble_ = bubble.get();
+    // TODO(crbug.com/40232479) - We can probably clean this up and
+    // get rid of the need for a WidgetAutoClosePtr when we switch to
+    // CLIENT_OWNS_WIDGET.
     bubble_widget_.reset(
         views::BubbleDialogDelegateView::CreateBubble(std::move(bubble)));
   }
@@ -141,13 +116,15 @@ class QRCodeGeneratorBubbleUITest : public ChromeViewsTestBase {
   // of the conditions for the label to appear are true.
   bool ErrorLabelShowing() {
     return error_label()->GetVisible() &&
-           error_label()->GetPreferredSize().height() > 0 &&
-           error_label()->GetPreferredSize().width() > 0;
+           !error_label()
+                ->GetPreferredSize(
+                    views::SizeBounds(error_label()->width(), {}))
+                .IsEmpty();
   }
 
   bool ErrorLabelHiddenAndA11yIgnored() {
     return !error_label()->GetVisible() &&
-           error_label()->GetViewAccessibility().IsIgnored();
+           error_label()->GetViewAccessibility().GetIsIgnored();
   }
 
  private:
@@ -155,7 +132,7 @@ class QRCodeGeneratorBubbleUITest : public ChromeViewsTestBase {
   TestingProfile profile_;
   std::unique_ptr<content::WebContents> web_contents_;
 
-  WidgetAutoclosePtr anchor_widget_;
+  std::unique_ptr<views::Widget> anchor_widget_;
   raw_ptr<views::View, DanglingUntriaged> anchor_view_;
   WidgetAutoclosePtr bubble_widget_;
   raw_ptr<QRCodeGeneratorBubble, DanglingUntriaged> bubble_;

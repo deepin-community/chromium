@@ -19,8 +19,8 @@
 #include "extensions/browser/image_loader.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_icon_set.h"
 #include "extensions/common/extension_resource.h"
+#include "extensions/common/icons/extension_icon_set.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "extensions/common/manifest_url_handlers.h"
 #include "net/base/url_util.h"
@@ -32,7 +32,6 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_rep.h"
-#include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -60,7 +59,7 @@ AppInfoHeaderPanel::AppInfoHeaderPanel(Profile* profile,
   CreateControls();
 }
 
-AppInfoHeaderPanel::~AppInfoHeaderPanel() {}
+AppInfoHeaderPanel::~AppInfoHeaderPanel() = default;
 
 void AppInfoHeaderPanel::OnIconUpdated(extensions::ChromeAppIcon* icon) {
   app_icon_view_->SetImage(ui::ImageModel::FromImageSkia(icon->image_skia()));

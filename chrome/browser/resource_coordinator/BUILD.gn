@@ -11,13 +11,21 @@ mojom("mojo_bindings") {
   webui_module_path = "/"
 }
 
-source_set("tab_manager_features") {
-  public = [ "tab_manager_features.h" ]
+source_set("resource_coordinator") {
+  sources = []
+  public_deps = []
 
-  sources = [ "tab_manager_features.cc" ]
-
-  deps = [
-    "//base",
-    "//chrome/common:chrome_features",
-  ]
+  if (!is_android) {
+    sources += [
+      "lifecycle_unit.h",
+      "tab_lifecycle_unit_external.h",
+      "tab_load_tracker.h",
+    ]
+    public_deps += [
+      ":mojo_bindings",
+      ":mojo_bindings__generator",
+      "//base",
+      "//content/public/browser",
+    ]
+  }
 }

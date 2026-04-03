@@ -11,16 +11,16 @@ import 'chrome://resources/ash/common/personalization/personalization_shared_ico
 
 import {isNonEmptyArray} from 'chrome://resources/ash/common/sea_pen/sea_pen_utils.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {mojoString16ToString} from 'chrome://resources/js/mojo_type_util.js';
-import {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
+import type {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
 
-import {DefaultUserImage, UserImage} from '../../personalization_app.mojom-webui.js';
+import type {DefaultUserImage, UserImage} from '../../personalization_app.mojom-webui.js';
 import {isUserAvatarCustomizationSelectorsEnabled} from '../load_time_booleans.js';
 import {setErrorAction} from '../personalization_actions.js';
 import {WithPersonalizationStore} from '../personalization_store.js';
-import {getCheckmarkIcon, isSelectionEvent} from '../utils.js';
+import {isSelectionEvent} from '../utils.js';
 
-import {AvatarCameraElement, AvatarCameraMode} from './avatar_camera_element.js';
+import type {AvatarCameraElement} from './avatar_camera_element.js';
+import {AvatarCameraMode} from './avatar_camera_element.js';
 import {getTemplate} from './avatar_list_element.html.js';
 import {fetchDefaultUserImages} from './user_controller.js';
 import {getUserProvider} from './user_interface_provider.js';
@@ -188,12 +188,12 @@ export class AvatarListElement extends WithPersonalizationStore {
         icon: 'personalization:folder',
         title: this.i18n('chooseAFile'),
       });
-      if (profileImage && profileImage.url) {
+      if (profileImage) {
         options.push({
           id: OptionId.PROFILE_IMAGE,
           class: 'image-container',
-          imgSrc: profileImage.url,
-          icon: getCheckmarkIcon(),
+          imgSrc: profileImage,
+          icon: 'personalization-shared:circle-checkmark',
           title: this.i18n('googleProfilePhoto'),
         });
       }
@@ -201,8 +201,8 @@ export class AvatarListElement extends WithPersonalizationStore {
         options.push({
           id: OptionId.LAST_EXTERNAL_IMAGE,
           class: 'image-container',
-          imgSrc: lastExternalUserImageUrl.url,
-          icon: getCheckmarkIcon(),
+          imgSrc: lastExternalUserImageUrl,
+          icon: 'personalization-shared:circle-checkmark',
           title: this.i18n('lastExternalImageTitle'),
         });
       }
@@ -212,9 +212,9 @@ export class AvatarListElement extends WithPersonalizationStore {
         options.push({
           id: `defaultUserImage-${defaultImage.index}`,
           class: 'image-container',
-          imgSrc: defaultImage.url.url,
-          icon: getCheckmarkIcon(),
-          title: mojoString16ToString(defaultImage.title),
+          imgSrc: defaultImage.url,
+          icon: 'personalization-shared:circle-checkmark',
+          title: defaultImage.title,
           defaultImageIndex: defaultImage.index,
         });
       });
@@ -247,8 +247,8 @@ export class AvatarListElement extends WithPersonalizationStore {
   }
 
   private onLastExternalUserImageUrlChanged_(_: Url|null, old: Url|null) {
-    if (old && old.url && old.url.startsWith('blob:')) {
-      URL.revokeObjectURL(old.url);
+    if (old && old.startsWith('blob:')) {
+      URL.revokeObjectURL(old);
     }
   }
 
@@ -429,7 +429,8 @@ export class AvatarListElement extends WithPersonalizationStore {
       assert(
           !url.startsWith('chrome://image/'),
           'The URL shouldn\'t be sanitized');
-      return `background-image: url('${getAvatarUrl(url)}&staticEncode=true')`;
+      return `background-image: url('${
+          getAvatarUrl(url, /*staticEncode=*/ true)}')`;
     }
     return '';
   }

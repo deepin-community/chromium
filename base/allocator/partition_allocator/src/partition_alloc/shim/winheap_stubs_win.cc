@@ -8,16 +8,17 @@
 
 #include "partition_alloc/shim/winheap_stubs_win.h"
 
-#include <malloc.h>
-#include <new.h>
 #include <windows.h>
 
-#include <algorithm>
-#include <bit>
+#include <malloc.h>
+#include <new.h>
+
 #include <climits>
 #include <limits>
 
 #include "partition_alloc/partition_alloc_base/bits.h"
+#include "partition_alloc/partition_alloc_base/compiler_specific.h"
+#include "partition_alloc/partition_alloc_base/cxx_wrapper/algorithm.h"
 #include "partition_alloc/partition_alloc_base/numerics/safe_conversions.h"
 #include "partition_alloc/partition_alloc_check.h"
 
@@ -103,12 +104,12 @@ struct AlignedPrefix {
   static_assert(
       kMaxWindowsAllocation < std::numeric_limits<unsigned int>::max(),
       "original_allocation_offset must be able to fit into an unsigned int");
-#if BUILDFLAG(PA_DCHECK_IS_ON)
+#if PA_BUILDFLAG(DCHECKS_ARE_ON)
   // Magic value used to check that _aligned_free() and _aligned_realloc() are
   // only ever called on an aligned allocated chunk.
   static constexpr unsigned int kMagic = 0x12003400;
   unsigned int magic;
-#endif  // BUILDFLAG(PA_DCHECK_IS_ON)
+#endif  // PA_BUILDFLAG(DCHECKS_ARE_ON)
 };
 
 // Compute how large an allocation we need to fit an allocation with the given
@@ -129,24 +130,26 @@ void* AlignAllocation(void* ptr, size_t alignment) {
       address + sizeof(AlignedPrefix), alignment);
 
   // Write the prefix.
-  AlignedPrefix* prefix = reinterpret_cast<AlignedPrefix*>(address) - 1;
+  AlignedPrefix* prefix =
+      PA_UNSAFE_TODO(reinterpret_cast<AlignedPrefix*>(address) - 1);
   prefix->original_allocation_offset =
       partition_alloc::internal::base::checked_cast<unsigned int>(
           address - reinterpret_cast<uintptr_t>(ptr));
-#if BUILDFLAG(PA_DCHECK_IS_ON)
+#if PA_BUILDFLAG(DCHECKS_ARE_ON)
   prefix->magic = AlignedPrefix::kMagic;
-#endif  // BUILDFLAG(PA_DCHECK_IS_ON)
+#endif  // PA_BUILDFLAG(DCHECKS_ARE_ON)
   return reinterpret_cast<void*>(address);
 }
 
 // Return the original allocation from an aligned allocation.
 void* UnalignAllocation(void* ptr) {
-  AlignedPrefix* prefix = reinterpret_cast<AlignedPrefix*>(ptr) - 1;
-#if BUILDFLAG(PA_DCHECK_IS_ON)
+  AlignedPrefix* prefix =
+      PA_UNSAFE_TODO(reinterpret_cast<AlignedPrefix*>(ptr) - 1);
+#if PA_BUILDFLAG(DCHECKS_ARE_ON)
   PA_DCHECK(prefix->magic == AlignedPrefix::kMagic);
-#endif  // BUILDFLAG(PA_DCHECK_IS_ON)
-  void* unaligned =
-      static_cast<uint8_t*>(ptr) - prefix->original_allocation_offset;
+#endif  // PA_BUILDFLAG(DCHECKS_ARE_ON)
+  void* unaligned = PA_UNSAFE_TODO(static_cast<uint8_t*>(ptr) -
+                                   prefix->original_allocation_offset);
   PA_CHECK(unaligned < ptr);
   PA_CHECK(reinterpret_cast<uintptr_t>(ptr) -
                reinterpret_cast<uintptr_t>(unaligned) <=
@@ -157,7 +160,7 @@ void* UnalignAllocation(void* ptr) {
 }  // namespace
 
 void* WinHeapAlignedMalloc(size_t size, size_t alignment) {
-  PA_CHECK(std::has_single_bit(alignment));
+  PA_CHECK(partition_alloc::internal::base::bits::HasSingleBit(alignment));
 
   size_t adjusted = AdjustedSize(size, alignment);
   if (adjusted >= kMaxWindowsAllocation) {
@@ -173,7 +176,7 @@ void* WinHeapAlignedMalloc(size_t size, size_t alignment) {
 }
 
 void* WinHeapAlignedRealloc(void* ptr, size_t size, size_t alignment) {
-  PA_CHECK(std::has_single_bit(alignment));
+  PA_CHECK(partition_alloc::internal::base::bits::HasSingleBit(alignment));
 
   if (!ptr) {
     return WinHeapAlignedMalloc(size, alignment);
@@ -206,7 +209,7 @@ void* WinHeapAlignedRealloc(void* ptr, size_t size, size_t alignment) {
   size_t gap =
       reinterpret_cast<uintptr_t>(ptr) - reinterpret_cast<uintptr_t>(unaligned);
   size_t old_size = WinHeapGetSizeEstimate(unaligned) - gap;
-  memcpy(new_ptr, ptr, std::min(size, old_size));
+  PA_UNSAFE_TODO(memcpy(new_ptr, ptr, std::min(size, old_size)));
   WinHeapAlignedFree(ptr);
   return new_ptr;
 }

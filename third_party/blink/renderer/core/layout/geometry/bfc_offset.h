@@ -9,6 +9,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 
@@ -50,8 +51,6 @@ struct CORE_EXPORT BfcOffset {
     return std::tie(other.line_offset, other.block_offset) ==
            std::tie(line_offset, block_offset);
   }
-
-  bool operator!=(const BfcOffset& other) const { return !operator==(other); }
 
   String ToString() const;
 };

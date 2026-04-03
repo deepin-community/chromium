@@ -12,6 +12,7 @@
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/app_list/app_list_model_provider.h"
 #include "ash/app_list/app_list_util.h"
+#include "ash/app_list/apps_collections_controller.h"
 #include "ash/app_list/model/app_list_folder_item.h"
 #include "ash/app_list/views/app_list_a11y_announcer.h"
 #include "ash/app_list/views/app_list_bubble_apps_collections_page.h"
@@ -20,14 +21,13 @@
 #include "ash/app_list/views/app_list_folder_view.h"
 #include "ash/app_list/views/app_list_search_view.h"
 #include "ash/app_list/views/apps_grid_view.h"
-#include "ash/app_list/views/assistant/app_list_bubble_assistant_page.h"
+#include "ash/app_list/views/button_focus_skipper.h"
 #include "ash/app_list/views/folder_background_view.h"
 #include "ash/app_list/views/scrollable_apps_grid_view.h"
 #include "ash/app_list/views/search_box_view.h"
 #include "ash/app_list/views/search_result_page_dialog_controller.h"
 #include "ash/ash_element_identifiers.h"
 #include "ash/bubble/bubble_constants.h"
-#include "ash/constants/ash_features.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/public/cpp/app_list/app_list_config_provider.h"
 #include "ash/public/cpp/app_list/app_list_features.h"
@@ -35,7 +35,6 @@
 #include "ash/public/cpp/metrics_util.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/public/cpp/shelf_types.h"
-#include "ash/public/cpp/view_shadow.h"
 #include "ash/search_box/search_box_constants.h"
 #include "ash/shell.h"
 #include "ash/style/ash_color_id.h"
@@ -48,7 +47,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
-#include "chromeos/ash/services/assistant/public/cpp/assistant_enums.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
@@ -68,6 +66,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/animation/animation_builder.h"
+#include "ui/views/background.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/focus/focus_manager.h"
@@ -75,6 +74,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/view_shadow.h"
 
 using views::BoxLayout;
 
@@ -83,9 +83,6 @@ namespace {
 
 // Folder view inset from the edge of the bubble.
 constexpr int kFolderViewInset = 16;
-
-// Elevation for the bubble's shadow.
-constexpr int kShadowElevation = 3;
 
 AppListConfig* GetAppListConfig() {
   return AppListConfigProvider::Get().GetConfigForType(
@@ -105,24 +102,18 @@ class SeparatorWithLayer : public views::View {
 
  public:
   SeparatorWithLayer() {
-    SetPaintToLayer(ui::LAYER_SOLID_COLOR);
-    // Color is set in OnThemeChanged().
-    layer()->SetFillsBoundsOpaquely(false);
+    SetBackground(
+        views::CreateLayerBasedSolidBackground(cros_tokens::kSeparatorColor));
   }
   SeparatorWithLayer(const SeparatorWithLayer&) = delete;
   SeparatorWithLayer& operator=(const SeparatorWithLayer&) = delete;
   ~SeparatorWithLayer() override = default;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override {
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
     // The parent's layout manager will stretch it horizontally.
     return gfx::Size(1, 1);
-  }
-
-  void OnThemeChanged() override {
-    views::View::OnThemeChanged();
-    layer()->SetColor(ColorProvider::Get()->GetContentLayerColor(
-        ColorProvider::ContentLayerType::kSeparatorColor));
   }
 };
 
@@ -161,94 +152,38 @@ const ui::DropTargetEvent GetTranslatedDropTargetEvent(
 
 }  // namespace
 
-// Makes focus traversal skip the assistant button and the hide continue section
-// button when pressing the down arrow key or the up arrow key. Normally views
-// would move focus from the search box to the assistant button on arrow down.
-// However, these buttons are visually to the right, so this feels weird.
-// Likewise, on arrow up from continue tasks it feels better to put focus
-// directly in the search box.
-class ButtonFocusSkipper : public ui::EventHandler {
- public:
-  ButtonFocusSkipper() { Shell::Get()->AddPreTargetHandler(this); }
-
-  ~ButtonFocusSkipper() override { Shell::Get()->RemovePreTargetHandler(this); }
-
-  void AddButton(views::View* button) {
-    DCHECK(button);
-    buttons_.push_back(button);
-  }
-
-  // ui::EventHandler:
-  void OnEvent(ui::Event* event) override {
-    // Don't adjust focus behavior if the user already focused the button.
-    for (views::View* button : buttons_) {
-      if (button->HasFocus()) {
-        return;
-      }
-    }
-
-    bool skip_focus = false;
-    // This class overrides OnEvent() to examine all events so that focus
-    // behavior is restored by mouse events, gesture events, etc.
-    if (event->type() == ui::ET_KEY_PRESSED) {
-      ui::KeyboardCode key = event->AsKeyEvent()->key_code();
-      if (key == ui::VKEY_UP || key == ui::VKEY_DOWN) {
-        skip_focus = true;
-      }
-    }
-    for (views::View* button : buttons_) {
-      button->SetFocusBehavior(skip_focus ? views::View::FocusBehavior::NEVER
-                                          : views::View::FocusBehavior::ALWAYS);
-    }
-  }
-
- private:
-  std::vector<raw_ptr<views::View, VectorExperimental>> buttons_;
-};
-
-AppListBubbleView::AppListBubbleView(
-    AppListViewDelegate* view_delegate,
-    ApplicationDragAndDropHost* drag_and_drop_host)
+AppListBubbleView::AppListBubbleView(AppListViewDelegate* view_delegate)
     : view_delegate_(view_delegate) {
   DCHECK(view_delegate);
-  DCHECK(drag_and_drop_host);
   SetProperty(views::kElementIdentifierKey, kAppListBubbleViewElementId);
 
   // Set up rounded corners and background blur, similar to TrayBubbleView.
-  // Layer background is set in OnThemeChanged().
   SetPaintToLayer();
   layer()->SetRoundedCornerRadius(gfx::RoundedCornersF{kBubbleCornerRadius});
-  layer()->SetFillsBoundsOpaquely(false);
   layer()->SetIsFastRoundedCorner(true);
-  layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-  layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+  if (chromeos::features::IsSystemBlurEnabled()) {
+    layer()->SetFillsBoundsOpaquely(false);
+    layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
+    layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+  }
 
-  const bool is_jelly_enabled = chromeos::features::IsJellyEnabled();
-  ui::ColorId background_color_id =
-      is_jelly_enabled
-          ? static_cast<ui::ColorId>(cros_tokens::kCrosSysSystemBaseElevated)
-          : kColorAshShieldAndBase80;
-  SetBackground(views::CreateThemedRoundedRectBackground(background_color_id,
-                                                         kBubbleCornerRadius));
+  const ui::ColorId background_color_id =
+      chromeos::features::IsSystemBlurEnabled()
+          ? cros_tokens::kCrosSysSystemBaseElevated
+          : cros_tokens::kCrosSysSystemBaseElevatedOpaque;
+  SetBackground(views::CreateSolidBackground(background_color_id));
 
   SetBorder(std::make_unique<views::HighlightBorder>(
       kBubbleCornerRadius,
-      is_jelly_enabled ? views::HighlightBorder::Type::kHighlightBorderOnShadow
-                       : views::HighlightBorder::Type::kHighlightBorder1,
+      views::HighlightBorder::Type::kHighlightBorderOnShadow,
       /*insets_type=*/views::HighlightBorder::InsetsType::kHalfInsets));
 
   SetLayoutManager(std::make_unique<views::FillLayout>());
   a11y_announcer_ = std::make_unique<AppListA11yAnnouncer>(
       AddChildView(std::make_unique<views::View>()));
-  InitContentsView(drag_and_drop_host);
+  InitContentsView();
 
-  // Add assistant page as a top-level child so it will fill the bubble and
-  // suggestion chips will appear at the bottom of the bubble view.
-  assistant_page_ = AddChildView(std::make_unique<AppListBubbleAssistantPage>(
-      view_delegate_->GetAssistantViewDelegate()));
-  assistant_page_->SetVisible(false);
-
-  InitFolderView(drag_and_drop_host);
+  InitFolderView();
   // Folder view is laid out manually based on its contents.
   folder_view_->SetProperty(views::kViewIgnoredByLayoutKey, true);
 
@@ -265,22 +200,17 @@ AppListBubbleView::~AppListBubbleView() {
   // (associated with the folder), so destroy it before the root apps grid view.
   delete folder_view_;
   folder_view_ = nullptr;
+
+  // Reset the dialog_controller for the AppsCollections page to prevent it from
+  // dangling at destruction after the views are removed.
+  apps_collections_page_->SetDialogController(nullptr);
 }
 
 void AppListBubbleView::UpdateSuggestions() {
   apps_page_->UpdateSuggestions();
 }
 
-void AppListBubbleView::SetDragAndDropHostOfCurrentAppList(
-    ApplicationDragAndDropHost* drag_and_drop_host) {
-  apps_page_->scrollable_apps_grid_view()->SetDragAndDropHostOfCurrentAppList(
-      drag_and_drop_host);
-  folder_view_->items_grid_view()->SetDragAndDropHostOfCurrentAppList(
-      drag_and_drop_host);
-}
-
-void AppListBubbleView::InitContentsView(
-    ApplicationDragAndDropHost* drag_and_drop_host) {
+void AppListBubbleView::InitContentsView() {
   auto* contents = AddChildView(std::make_unique<views::View>());
 
   auto* layout = contents->SetLayoutManager(
@@ -291,9 +221,10 @@ void AppListBubbleView::InitContentsView(
       /*delegate=*/this, view_delegate_, /*is_app_list_bubble=*/true));
   search_box_view_->InitializeForBubbleLauncher();
 
-  // Skip the assistant button on arrow up/down in app list.
-  button_focus_skipper_ = std::make_unique<ButtonFocusSkipper>();
-  button_focus_skipper_->AddButton(search_box_view_->assistant_button());
+  // Skip the Sunfish and Gemini button on arrow up/down in app list.
+  button_focus_skipper_ = std::make_unique<ButtonFocusSkipper>(this);
+  button_focus_skipper_->AddButton(search_box_view_->sunfish_button());
+  button_focus_skipper_->AddButton(search_box_view_->gemini_button());
 
   // The main view has a solid color layer, so the separator needs its own
   // layer to visibly paint.
@@ -319,11 +250,17 @@ void AppListBubbleView::InitContentsView(
   // another root window.
   apps_page_ =
       pages_container->AddChildView(std::make_unique<AppListBubbleAppsPage>(
-          view_delegate_, drag_and_drop_host, GetAppListConfig(),
-          a11y_announcer_.get(), /*folder_controller=*/this,
+          view_delegate_, GetAppListConfig(), a11y_announcer_.get(),
+          /*folder_controller=*/this,
           /*search_box=*/search_box_view_));
+
   apps_collections_page_ = pages_container->AddChildView(
-      std::make_unique<AppListBubbleAppsCollectionsPage>());
+      std::make_unique<AppListBubbleAppsCollectionsPage>(
+          view_delegate_, GetAppListConfig(), a11y_announcer_.get(),
+          search_page_dialog_controller_.get(),
+          base::BindOnce(&AppListBubbleView::ShowPage,
+                         weak_factory_.GetWeakPtr(),
+                         AppListBubblePage::kApps)));
 
   // Skip the "hide continue section" button on arrow up/down in app list.
   button_focus_skipper_->AddButton(
@@ -380,13 +317,10 @@ views::View::DropCallback AppListBubbleView::GetDropCallback(
       GetTranslatedDropTargetEvent(event, this, scrollable_apps_grid));
 }
 
-void AppListBubbleView::InitFolderView(
-    ApplicationDragAndDropHost* drag_and_drop_host) {
+void AppListBubbleView::InitFolderView() {
   auto folder_view = std::make_unique<AppListFolderView>(
       this, apps_page_->scrollable_apps_grid_view(), a11y_announcer_.get(),
       view_delegate_, /*tablet_mode=*/false);
-  folder_view->items_grid_view()->SetDragAndDropHostOfCurrentAppList(
-      drag_and_drop_host);
   folder_view->UpdateAppListConfig(GetAppListConfig());
   folder_background_view_ =
       AddChildView(std::make_unique<FolderBackgroundView>(folder_view.get()));
@@ -528,17 +462,6 @@ bool AppListBubbleView::Back() {
     return true;
   }
   if (search_box_view_->HasSearch()) {
-    // When showing the `AppListBubblePage::kAssistant`, it will not change the
-    // search box text. Therefore, if the `AppListBubblePage::kAssistant` is
-    // from search result, the search query is not empty, Back() here will clear
-    // the search, QueryChanged() will set the page to
-    // `AppListBubblePage::kApps`. If the `AppListBubblePage::kAssistant` is
-    // from other `AssistantVisibilityEntryPoint`, the search box is empty,
-    // Back() will return false and then the AppList will be closed.
-    if (IsShowingEmbeddedAssistantUI()) {
-      view_delegate_->EndAssistant(
-          assistant::AssistantExitPoint::kBackInLauncher);
-    }
     search_box_view_->ClearSearch();
     return true;
   }
@@ -555,9 +478,8 @@ void AppListBubbleView::ShowPage(AppListBubblePage page) {
   const AppListBubblePage previous_page = current_page_;
   current_page_ = page;
 
-  // The assistant has its own text input field.
-  search_box_view_->SetVisible(page != AppListBubblePage::kAssistant);
-  separator_->SetVisible(page != AppListBubblePage::kAssistant);
+  search_box_view_->SetVisible(true);
+  separator_->SetVisible(true);
 
   const bool supports_anchored_dialogs =
       page == AppListBubblePage::kApps ||
@@ -565,11 +487,10 @@ void AppListBubbleView::ShowPage(AppListBubblePage page) {
       page == AppListBubblePage::kSearch;
 
   search_page_dialog_controller_->Reset(/*enabled=*/supports_anchored_dialogs);
-  assistant_page_->SetVisible(page == AppListBubblePage::kAssistant);
   switch (current_page_) {
     case AppListBubblePage::kNone:
+    case AppListBubblePage::kAssistant:
       NOTREACHED();
-      break;
     case AppListBubblePage::kApps:
       apps_page_->ResetScrollPosition();
       if (previous_page == AppListBubblePage::kSearch) {
@@ -616,34 +537,7 @@ void AppListBubbleView::ShowPage(AppListBubblePage page) {
       }
       MaybeFocusAndActivateSearchBox();
       break;
-    case AppListBubblePage::kAssistant:
-      if (showing_folder_)
-        HideFolderView(/*animate=*/false, /*hide_for_reparent=*/false);
-      if (previous_page == AppListBubblePage::kApps)
-        apps_page_->AnimateHidePage();
-      else
-        apps_page_->SetVisible(false);
-      search_page_->SetVisible(false);
-      apps_collections_page_->SetVisible(false);
-      // Explicitly set search box inactive so the next attempt to activate it
-      // will succeed.
-      search_box_view_->SetSearchBoxActive(false,
-                                           /*event_type=*/ui::ET_UNKNOWN);
-      assistant_page_->RequestFocus();
-      break;
   }
-}
-
-bool AppListBubbleView::IsShowingEmbeddedAssistantUI() const {
-  return current_page_ == AppListBubblePage::kAssistant;
-}
-
-void AppListBubbleView::ShowEmbeddedAssistantUI() {
-  DVLOG(1) << __PRETTY_FUNCTION__;
-  if (IsShowingEmbeddedAssistantUI()) {
-    return;
-  }
-  ShowPage(AppListBubblePage::kAssistant);
 }
 
 int AppListBubbleView::GetHeightToFitAllApps() const {
@@ -700,7 +594,6 @@ bool AppListBubbleView::AcceleratorPressed(const ui::Accelerator& accelerator) {
       break;
     default:
       NOTREACHED();
-      return false;
   }
 
   // Don't let the accelerator propagate any further.
@@ -736,7 +629,7 @@ void AppListBubbleView::QueryChanged(const std::u16string& trimmed_query,
     search_page_->search_view()->UpdateForNewSearch(!trimmed_query.empty());
     if (!trimmed_query.empty()) {
       ShowPage(AppListBubblePage::kSearch);
-    } else if (app_list_features::IsAppsCollectionsEnabled()) {
+    } else if (AppsCollectionsController::Get()->ShouldShowAppsCollection()) {
       ShowPage(AppListBubblePage::kAppsCollections);
     } else {
       ShowPage(AppListBubblePage::kApps);
@@ -745,16 +638,10 @@ void AppListBubbleView::QueryChanged(const std::u16string& trimmed_query,
   SchedulePaint();
 }
 
-void AppListBubbleView::AssistantButtonPressed() {
-  // Showing the assistant via the delegate triggers the assistant's visibility
-  // change notification and ensures its initial visual state is correct.
-  view_delegate_->StartAssistant(
-      assistant::AssistantEntryPoint::kLauncherSearchBoxIcon);
-}
-
 void AppListBubbleView::CloseButtonPressed() {
   // Activate and focus the search box.
-  search_box_view_->SetSearchBoxActive(true, /*event_type=*/ui::ET_UNKNOWN);
+  search_box_view_->SetSearchBoxActive(true,
+                                       /*event_type=*/ui::EventType::kUnknown);
   search_box_view_->ClearSearch();
 }
 
@@ -767,12 +654,6 @@ void AppListBubbleView::OnSearchBoxKeyEvent(ui::KeyEvent* event) {
 bool AppListBubbleView::CanSelectSearchResults() {
   return current_page_ == AppListBubblePage::kSearch &&
          search_page_->search_view()->CanSelectSearchResults();
-}
-
-bool AppListBubbleView::HandleFocusMoveAboveSearchResults(
-    const ui::KeyEvent& key_event) {
-  return search_page_->search_view()->OverrideKeyNavigationAboveSearchResults(
-      key_event);
 }
 
 void AppListBubbleView::ShowFolderForItemView(AppListItemView* folder_item_view,
@@ -841,10 +722,6 @@ void AppListBubbleView::ReparentDragEnded() {
   // Nothing to do.
 }
 
-void AppListBubbleView::InitializeUIForBubbleView() {
-  assistant_page_->InitializeUIForBubbleView();
-}
-
 void AppListBubbleView::DisableFocusForShowingActiveFolder(bool disabled) {
   search_box_view_->SetEnabled(!disabled);
   SetViewIgnoredForAccessibility(search_box_view_, disabled);
@@ -858,13 +735,10 @@ void AppListBubbleView::OnShowAnimationEnded(const gfx::Rect& layer_bounds) {
   // is needed to reset state before starting the hide animation.
   layer()->SetBounds(layer_bounds);
 
-  // Add a shadow.
-  // TODO(b/292286998): The shadow is removed when jelly is enabled for
-  // consistency with bubbles in status area. Add it when status area bubbles
-  // get updated.
-  if (!chromeos::features::IsJellyEnabled()) {
-    view_shadow_ = std::make_unique<ViewShadow>(this, kShadowElevation);
-    view_shadow_->SetRoundedCornerRadius(kBubbleCornerRadius);
+  if (current_page_ == AppListBubblePage::kAppsCollections) {
+    apps_collections_page_->RecordAboveTheFoldMetrics();
+  } else if (current_page_ == AppListBubblePage::kApps) {
+    apps_page_->RecordAboveTheFoldMetrics();
   }
 }
 
@@ -883,7 +757,6 @@ void AppListBubbleView::OnHideAnimationEnded(const gfx::Rect& layer_bounds) {
   current_page_ = AppListBubblePage::kNone;
   apps_page_->SetVisible(true);
   search_page_->SetVisible(false);
-  assistant_page_->SetVisible(false);
 
   is_hiding_ = false;
   if (on_hide_animation_ended_) {
@@ -921,7 +794,8 @@ void AppListBubbleView::MaybeFocusAndActivateSearchBox() {
     return;
   }
 
-  search_box_view_->SetSearchBoxActive(true, /*event_type=*/ui::ET_UNKNOWN);
+  search_box_view_->SetSearchBoxActive(true,
+                                       /*event_type=*/ui::EventType::kUnknown);
   // Explicitly request focus in case the search box was active before.
   search_box_view_->search_box()->RequestFocus();
 }

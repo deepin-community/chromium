@@ -26,10 +26,13 @@
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/lock_state_observer.h"
 #include "ash/wm/overview/overview_observer.h"
+#include "ash/wm/snap_group/snap_group.h"
+#include "ash/wm/snap_group/snap_group_observer.h"
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/splitview/split_view_observer.h"
 #include "ash/wm/wm_default_layout_manager.h"
 #include "ash/wm/workspace/workspace_types.h"
+#include "base/cancelable_callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -74,8 +77,9 @@ class ASH_EXPORT ShelfLayoutManager : public AppListControllerObserver,
                                       public ShelfObserver,
                                       public ShellObserver,
                                       public SplitViewObserver,
+                                      public SnapGroupObserver,
                                       public OverviewObserver,
-                                      public ::wm::ActivationChangeObserver,
+                                      public wm::ActivationChangeObserver,
                                       public LockStateObserver,
                                       public WmDefaultLayoutManager,
                                       public display::DisplayObserver,
@@ -269,11 +273,17 @@ class ASH_EXPORT ShelfLayoutManager : public AppListControllerObserver,
   // ShellObserver:
   void OnUserWorkAreaInsetsChanged(aura::Window* root_window) override;
   void OnPinnedStateChanged(aura::Window* pinned_window) override;
+  void OnRootWindowWillShutdown(aura::Window* root_window) override;
   void OnShellDestroying() override;
 
   // SplitViewObserver:
   void OnSplitViewStateChanged(SplitViewController::State previous_state,
                                SplitViewController::State state) override;
+
+  // SnapGroupObserver:
+  void OnSnapGroupAdded(SnapGroup* snap_group) override;
+  void OnSnapGroupRemoving(SnapGroup* snap_group,
+                           SnapGroupExitPoint exit_pint) override;
 
   // OverviewObserver:
   void OnOverviewModeWillStart() override;
@@ -297,7 +307,8 @@ class ASH_EXPORT ShelfLayoutManager : public AppListControllerObserver,
 
   // SessionObserver:
   void OnSessionStateChanged(session_manager::SessionState state) override;
-  void OnLoginStatusChanged(LoginStatus loing_status) override;
+  void OnAppModeSessionStarted() override;
+  void OnLoginStatusChanged(LoginStatus login_status) override;
 
   // WallpaperControllerObserver:
   void OnWallpaperBlurChanged() override;

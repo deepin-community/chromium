@@ -7,27 +7,7 @@
  * #scheme=relative
  * #css_wrapper_metadata_end */
 
-:host dialog {
-  background-color: var(--cr-menu-background-color);
-  border: none;
-  border-radius: var(--cr-menu-border-radius, 4px);
-  box-shadow: var(--cr-menu-shadow);
-  margin: 0;
-  min-width: 128px;
-  outline: none;
-  padding: 0;
-  position: absolute;
-}
-
-@media (forced-colors: active) {
-  :host dialog {
-    /* Use border instead of box-shadow (which does not work) in Windows
-       HCM. */
-    border: var(--cr-border-hcm);
-  }
-}
-
-:host-context([chrome-refresh-2023]) {
+:host {
   --cr-hairline: 1px solid var(--color-menu-separator,
       var(--cr-fallback-color-divider));
   --cr-action-menu-disabled-item-color:
@@ -40,6 +20,27 @@
   --cr-menu-shadow: var(--cr-elevation-2);
   --cr-primary-text-color: var(--color-menu-item-foreground,
       var(--cr-fallback-color-on-surface));
+}
+
+:host dialog {
+  background-color: var(--cr-menu-background-color);
+  border: none;
+  border-radius: var(--cr-menu-border-radius, 4px);
+  box-shadow: var(--cr-menu-shadow);
+  margin: 0;
+  min-width: 128px;
+  outline: none;
+  overflow: var(--cr-action-menu-overflow, auto);
+  padding: 0;
+  position: absolute;
+}
+
+@media (forced-colors: active) {
+  :host dialog {
+    /* Use border instead of box-shadow (which does not work) in Windows
+       HCM. */
+    border: var(--cr-border-hcm);
+  }
 }
 
 :host dialog::backdrop {
@@ -81,6 +82,11 @@
   outline: none;
 }
 
+:host ::slotted(.dropdown-item:focus-visible) {
+  outline: solid 2px var(--cr-focus-outline-color);
+  outline-offset: -2px;
+}
+
 @media (forced-colors: active) {
   :host ::slotted(.dropdown-item:focus) {
     /* Use outline instead of background-color (which does not work) in
@@ -90,11 +96,6 @@
 }
 
 .item-wrapper {
-  background: var(--cr-menu-background-sheen);
   outline: none;
-  padding: 8px 0;
-}
-
-:host-context([chrome-refresh-2023]) .item-wrapper {
-  background: none;
+  padding: var(--cr-action-menu-padding, 8px 0);
 }

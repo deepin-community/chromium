@@ -86,13 +86,13 @@ class ExtensionSupportsConnectionFromNativeAppTest : public ::testing::Test {
     if (natively_connectable) {
       manifest_builder.Set(
           manifest_keys::kNativelyConnectable,
-          base::Value::List()
+          base::ListValue()
               .Append(ScopedTestNativeMessagingHost::kHostName)
               .Append(ScopedTestNativeMessagingHost::
                           kSupportsNativeInitiatedConnectionsHostName));
     }
 
-    base::Value::List permissions;
+    base::ListValue permissions;
     if (transient_background_permission) {
       permissions.Append("transientBackground");
     }
@@ -104,7 +104,7 @@ class ExtensionSupportsConnectionFromNativeAppTest : public ::testing::Test {
     base::FilePath path;
     EXPECT_TRUE(base::PathService::Get(DIR_TEST_DATA, &path));
 
-    std::string error;
+    std::u16string error;
     scoped_refptr<Extension> extension(
         Extension::Create(path, mojom::ManifestLocation::kInternal,
                           manifest_builder, Extension::NO_FLAGS, &error));

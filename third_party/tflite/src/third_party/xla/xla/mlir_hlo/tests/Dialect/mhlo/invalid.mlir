@@ -56,7 +56,7 @@ func.func @tuple_type_mismatch(%arg0: tensor<1xf64>) -> tensor<1xf64> {
 // -----
 
 func.func @tuple_count_mismatch(%arg0: tensor<1xf64>) -> tensor<1xf64> {
-  // expected-error @+1 {{custom op 'mhlo.tuple' 2 operands present, but expected 1}}
+  // expected-error @+1 {{custom op 'mhlo.tuple' number of operands and types do not match: got 2 operands and 1 types}}
   %0 = mhlo.tuple %arg0, %arg0 : tuple<tensor<1xf64>>
   func.return %0 : tensor<1xf64>
 }
@@ -64,7 +64,7 @@ func.func @tuple_count_mismatch(%arg0: tensor<1xf64>) -> tensor<1xf64> {
 // -----
 
 func.func @pairwise_count_mismatch(%arg0: tensor<1xf64>) -> tensor<1xf64> {
-  // expected-error @+1 {{custom op 'mhlo.optimization_barrier' 2 operands present, but expected 1}}
+  // expected-error @+1 {{custom op 'mhlo.optimization_barrier' number of operands and types do not match: got 2 operands and 1 types}}
   %0 = mhlo.optimization_barrier %arg0, %arg0 : tensor<1xf64>
   func.return %0 : tensor<1xf64>
 }
@@ -196,4 +196,40 @@ func.func @reduce_precision_no_m_num(%arg0: tensor<3x4xf32>) -> (tensor<3x4xf32>
   // expected-error @+1 {{custom op 'mhlo.reduce_precision' expected exponent mantissa in format e#m#, saw e2m}}
   %0 = mhlo.reduce_precision %arg0, format = e2m : tensor<3x4xf32>
   func.return %0 : tensor<?x?xf64>
+}
+
+// -----
+
+func.func @scan_body_returns_too_few_results(%input: tensor<10xf32>, %init: tensor<f32>) -> tensor<10xf32> {
+  // expected-error @+2 {{'mhlo.scan' op failed to infer returned types}}
+  // expected-error @+1 {{ScanOp body must return at least 1 values (carries)}}
+  %0:2 = mhlo.scan (%input) inits (%init) dimension=0 {
+  ^bb0(%input0: tensor<f32>, %carry0: tensor<f32>):
+    "mhlo.return"() : () -> ()
+  } : (tensor<10xf32>, tensor<f32>) -> (tensor<10xf32>, tensor<f32>)
+  func.return %0#0 : tensor<10xf32>
+}
+
+// -----
+
+func.func @scan_dim_out_of_bounds(%input: tensor<10xf32>, %init: tensor<f32>) -> tensor<10xf32> {
+  // expected-error @+1 {{scan dimension of operand 0 is out of bounds}}
+  %0:2 = mhlo.scan (%input) inits (%init) dimension=1 {
+  ^bb0(%carry0: tensor<f32>, %input0: tensor<f32>):
+    %1 = mhlo.add %carry0, %input0 : tensor<f32>
+    mhlo.return %1, %1 : tensor<f32>, tensor<f32>
+  } : (tensor<10xf32>, tensor<f32>) -> (tensor<10xf32>, tensor<f32>)
+  func.return %0#0 : tensor<10xf32>
+}
+
+// -----
+
+func.func @scan_dim_out_of_bounds_output(%input: tensor<10x10xf32>, %init: tensor<f32>) -> tensor<10x10xf32> {
+  // expected-error @+1 {{operand and body argument 0 are incompatible}}
+  %0:2 = mhlo.scan (%input) inits (%init) dimension=1 {
+  ^bb0(%carry0: tensor<f32>, %input0: tensor<10xf32>):
+    %1 = mhlo.add %carry0, %carry0 : tensor<f32>
+    mhlo.return %1, %1 : tensor<f32>, tensor<f32>
+  } : (tensor<10x10xf32>, tensor<f32>) -> (tensor<10x10xf32>, tensor<f32>)
+  func.return %0#0 : tensor<10x10xf32>
 }

@@ -5,9 +5,9 @@
 #ifndef BASE_MEMORY_RAW_PTR_ASAN_BOUND_ARG_TRACKER_H_
 #define BASE_MEMORY_RAW_PTR_ASAN_BOUND_ARG_TRACKER_H_
 
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_buildflags.h"
+#include "partition_alloc/buildflags.h"
 
-#if BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)
+#if PA_BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -67,6 +67,8 @@ class BASE_EXPORT RawPtrAsanBoundArgTracker {
   template <typename T>
   void AddArg(const T& arg) {}
 
+  // Since V2 uses raw_ptr<T> hooks, V2 needs no bound args.
+#if !PA_BUILDFLAG(USE_ASAN_BACKUP_REF_PTR_V2)
   // No specialization for raw_ptr<T> directly, since bound raw_ptr<T>
   // arguments are stored in UnretainedWrapper.
 
@@ -79,7 +81,7 @@ class BASE_EXPORT RawPtrAsanBoundArgTracker {
       auto inner = arg.get();
       // The argument may unwrap into a raw_ptr or a T* depending if it is
       // allowed to dangle.
-      if constexpr (IsRawPtrV<decltype(inner)>) {
+      if constexpr (IsRawPtr<decltype(inner)>) {
         Add(reinterpret_cast<uintptr_t>(inner.get()));
       } else {
         Add(reinterpret_cast<uintptr_t>(inner));
@@ -97,6 +99,7 @@ class BASE_EXPORT RawPtrAsanBoundArgTracker {
       Add(reinterpret_cast<uintptr_t>(&arg.get()));
     }
   }
+#endif  // !PA_BUILDFLAG(USE_ASAN_BACKUP_REF_PTR_V2)
 
   template <typename... Args>
   void AddArgs(Args&&... args) {
@@ -119,5 +122,5 @@ class BASE_EXPORT RawPtrAsanBoundArgTracker {
 
 }  // namespace base
 
-#endif  // BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)
+#endif  // PA_BUILDFLAG(USE_ASAN_BACKUP_REF_PTR)
 #endif  // BASE_MEMORY_RAW_PTR_ASAN_BOUND_ARG_TRACKER_H_

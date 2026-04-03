@@ -10,7 +10,7 @@
 #include "base/time/time.h"
 #include "third_party/blink/public/common/origin_trials/trial_token.h"
 #include "third_party/blink/public/common/origin_trials/trial_token_validator.h"
-#include "third_party/blink/public/mojom/origin_trial_state/origin_trial_state_host.mojom-blink.h"
+#include "third_party/blink/public/mojom/origin_trials/origin_trial_state_host.mojom-blink.h"
 #include "third_party/blink/public/mojom/runtime_feature_state/runtime_feature.mojom-shared.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -211,13 +211,6 @@ class CORE_EXPORT OriginTrialContext final
   // invalid in the browser's present configuration).
   bool CanEnableTrialFromName(const StringView& trial_name);
 
-  // Returns features which are currently restricted for a given trial name,
-  // these features *will not* be enabled by the origin trial infrastructure if
-  // the given trial is enabled. The corresponding runtime features may still be
-  // enabled via command line flags, etc.
-  Vector<mojom::blink::OriginTrialFeature> RestrictedFeaturesForTrial(
-      const String& trial_name);
-
   // Enable features by trial name. Returns a OriginTrialFeaturesEnabled struct
   // containing whether one or more trials were enabled, and a Vector of the
   // OriginTrialFeatures representing those trials.
@@ -269,8 +262,7 @@ class CORE_EXPORT OriginTrialContext final
   HashSet<mojom::blink::OriginTrialFeature> enabled_features_;
   HashSet<mojom::blink::OriginTrialFeature> installed_features_;
   HashSet<mojom::blink::OriginTrialFeature> navigation_activated_features_;
-  WTF::HashMap<mojom::blink::OriginTrialFeature, base::Time>
-      feature_expiry_times_;
+  HashMap<mojom::blink::OriginTrialFeature, base::Time> feature_expiry_times_;
   std::unique_ptr<TrialTokenValidator> trial_token_validator_;
   Member<ExecutionContext> context_;
   // Stores raw origin trial token along with the parse result.

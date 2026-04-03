@@ -50,7 +50,7 @@ class ExtensionProvider : public ProviderInterface,
   std::unique_ptr<ProvidedFileSystemInterface> CreateProvidedFileSystem(
       Profile* profile,
       const ProvidedFileSystemInfo& file_system_info,
-      ContentCache* content_cache) override;
+      CacheManager* cache_manager) override;
   const Capabilities& GetCapabilities() const override;
   const ProviderId& GetId() const override;
   const std::string& GetName() const override;
@@ -67,8 +67,6 @@ class ExtensionProvider : public ProviderInterface,
   void OnAppUpdate(const apps::AppUpdate& update) override;
   void OnAppRegistryCacheWillBeDestroyed(
       apps::AppRegistryCache* cache) override;
-
-  void OnLacrosOperationForwarded(int request_id, base::File::Error error);
 
   ProviderId provider_id_;
   Capabilities capabilities_;

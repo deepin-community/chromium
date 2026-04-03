@@ -8,7 +8,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/browser_process.h"
@@ -77,7 +77,7 @@ void DeviceAuthenticatorWin::AuthenticateWithMessage(
 }
 
 void DeviceAuthenticatorWin::Cancel() {
-  // TODO(crbug.com/1354552): Add implementation of the Cancel method.
+  // TODO(crbug.com/40235610): Add implementation of the Cancel method.
   NOTIMPLEMENTED();
 }
 

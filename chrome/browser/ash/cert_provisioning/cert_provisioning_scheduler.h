@@ -20,12 +20,16 @@
 #include "chrome/browser/ash/cert_provisioning/cert_provisioning_invalidator.h"
 #include "chrome/browser/ash/cert_provisioning/cert_provisioning_platform_keys_helpers.h"
 #include "chrome/browser/ash/platform_keys/platform_keys_service.h"
-#include "chrome/browser/chromeos/platform_keys/platform_keys.h"
 #include "chromeos/ash/components/network/network_state_handler_observer.h"
+#include "chromeos/ash/components/platform_keys/platform_keys.h"
 #include "components/prefs/pref_change_registrar.h"
 
 class Profile;
 class PrefService;
+
+namespace invalidation {
+class InvalidationListener;
+}  // namespace invalidation
 
 namespace policy {
 class CloudPolicyClient;
@@ -52,6 +56,9 @@ struct FailedWorkerInfo {
   ~FailedWorkerInfo();
   FailedWorkerInfo(const FailedWorkerInfo&);
   FailedWorkerInfo& operator=(const FailedWorkerInfo&);
+
+  // The ID of the certificate provisioning process.
+  std::string process_id;
   // The state the worker had prior to switching to the failed state
   // (CertProvisioningWorkerState::kFailed).
   CertProvisioningWorkerState state_before_failure =
@@ -113,11 +120,13 @@ class CertProvisioningSchedulerImpl
  public:
   static std::unique_ptr<CertProvisioningScheduler>
   CreateUserCertProvisioningScheduler(Profile* profile);
+
+  // `local_state` must be non-null, and must outlive the returned object.
   static std::unique_ptr<CertProvisioningScheduler>
   CreateDeviceCertProvisioningScheduler(
+      PrefService* local_state,
       policy::CloudPolicyClient* cloud_policy_client,
-      policy::AffiliatedInvalidationServiceProvider*
-          invalidation_service_provider);
+      invalidation::InvalidationListener* invalidation_listener);
 
   CertProvisioningSchedulerImpl(
       CertScope cert_scope,
@@ -147,6 +156,7 @@ class CertProvisioningSchedulerImpl
   // its final state.
   // Public so it can be called from tests.
   void OnProfileFinished(CertProfile profile,
+                         std::string process_id,
                          CertProvisioningWorkerState state);
 
   // Called when any state visible from the outside has changed.
@@ -201,6 +211,11 @@ class CertProvisioningSchedulerImpl
   // is true.
   void RemoveWorkerFromMap(WorkerMap::iterator worker_iter,
                            bool send_visible_state_changed_update);
+  // Removes the failed worker with `cert_profile_id` and notifies the
+  // observers.
+  void RemoveFailedWorker(const CertProfileId& cert_profile_id);
+  // Removes all failed workers and notifies the observers.
+  void ClearFailedWorkers();
 
   // Returns true if the process can be continued (if it's not required to
   // wait).

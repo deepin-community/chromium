@@ -8,10 +8,10 @@
 #include <linux/input.h>
 #include <stddef.h>
 
+#include <algorithm>
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
@@ -30,6 +30,7 @@
 #include "ui/events/ozone/evdev/event_device_info.h"
 #include "ui/events/ozone/evdev/gamepad_event_converter_evdev.h"
 #include "ui/events/ozone/evdev/imposter_checker_evdev.h"
+#include "ui/events/ozone/evdev/imposter_checker_evdev_state.h"
 #include "ui/events/ozone/evdev/input_controller_evdev.h"
 #include "ui/events/ozone/evdev/input_device_settings_evdev.h"
 #include "ui/events/ozone/evdev/microphone_mute_switch_event_converter_evdev.h"
@@ -105,7 +106,9 @@ InputDeviceFactoryEvdev::InputDeviceFactoryEvdev(
       gesture_property_provider_(new GesturePropertyProvider),
 #endif
       dispatcher_(std::move(dispatcher)),
-      imposter_checker_(new ImposterCheckerEvdev),
+      keyboard_used_palm_suppression_enabled_(
+          base::FeatureList::IsEnabled(kEnableKeyboardUsedPalmSuppression)),
+      imposter_checker_(new ImposterCheckerEvdev()),
       input_device_opener_(std::move(input_device_opener)),
       input_controller_(input_controller) {
 }
@@ -180,6 +183,15 @@ void InputDeviceFactoryEvdev::AttachInputDevice(
                               base::Unretained(this)));
     }
 
+    // Register notification callback for internal keyboards.
+    if (keyboard_used_palm_suppression_enabled_ &&
+        (converter->type() == InputDeviceType::INPUT_DEVICE_INTERNAL) &&
+        converter->HasKeyboard()) {
+      converter->SetReceivedValidInputCallback(base::BindRepeating(
+          &InputDeviceFactoryEvdev::NotifyInternalKeyboardUsed,
+          base::Unretained(this)));
+    }
+
     if ((converter->type() == InputDeviceType::INPUT_DEVICE_USB ||
          converter->type() == InputDeviceType::INPUT_DEVICE_BLUETOOTH) &&
         (converter->HasKeyboard() || converter->HasMouse())) {
@@ -200,7 +212,7 @@ void InputDeviceFactoryEvdev::AttachInputDevice(
         imposter_checker_->OnDeviceAdded(converters_[path].get());
     // Check for imposters on all devices that share the same physical port.
     for (const auto& it : converters_) {
-      if (base::Contains(ids_to_check, it.second->id()) &&
+      if (std::ranges::contains(ids_to_check, it.second->id()) &&
           imposter_checker_->FlagSuspectedImposter(it.second.get())) {
         UpdateDirtyFlags(it.second.get());
       }
@@ -242,7 +254,7 @@ void InputDeviceFactoryEvdev::DetachInputDevice(const base::FilePath& path) {
     // Declassify any devices as no longer imposters, if the removal of this
     // device changes their status.
     for (const auto& it : converters_) {
-      if (base::Contains(ids_to_check, it.second->id()) &&
+      if (std::ranges::contains(ids_to_check, it.second->id()) &&
           !imposter_checker_->FlagSuspectedImposter(it.second.get())) {
         UpdateDirtyFlags(it.second.get());
       }
@@ -442,7 +454,7 @@ void InputDeviceFactoryEvdev::ApplyInputDeviceSettings() {
 
     // Block modifiers on the current converter if the device id exists in
     // `input_device_settings_.blocked_modifiers_devices`
-    converter->SetBlockModifiers(base::Contains(
+    converter->SetBlockModifiers(std::ranges::contains(
         input_device_settings_.blocked_modifiers_devices, converter->id()));
 
     converter->ApplyDeviceSettings(input_device_settings_);
@@ -617,7 +629,8 @@ void InputDeviceFactoryEvdev::NotifyKeyboardsUpdated() {
   for (auto& converter : converters_) {
     if (converter.second->HasKeyboard()) {
       keyboards.emplace_back(converter.second->input_device(),
-                             converter.second->HasAssistantKey());
+                             converter.second->HasAssistantKey(),
+                             converter.second->HasFunctionKey());
       key_bits_mapping[converter.second->id()] =
           converter.second->GetKeyboardKeyBits();
     }
@@ -728,9 +741,41 @@ void InputDeviceFactoryEvdev::NotifyUncategorizedDevicesUpdated() {
 }
 
 void InputDeviceFactoryEvdev::UpdateDevicesOnImposterOverride(
-    const EventConverterEvdev* converter) {
+    const EventConverterEvdev* converter,
+    const double /*input_timestamp_in_seconds*/) {
   UpdateDirtyFlags(converter);
   NotifyDevicesUpdated();
+}
+
+void InputDeviceFactoryEvdev::NotifyInternalKeyboardUsed(
+    const EventConverterEvdev* converter,
+    const double input_timestamp_in_seconds) {
+  if (!keyboard_used_palm_suppression_enabled_) {
+    return;
+  }
+#if defined(USE_EVDEV_GESTURES)
+  // Find the internal touchpad and set the keyboard touched properties.
+  for (const auto& [path, device] : converters_) {
+    if ((device->type() == InputDeviceType::INPUT_DEVICE_INTERNAL) &&
+        device->HasTouchpad()) {
+      const int id = device->id();
+
+      // TODO: crbug.com/387226021 - Remove this when gesturelib has been
+      // updated to receive a single double property.
+      int seconds = static_cast<int>(input_timestamp_in_seconds);
+      int microseconds =
+          static_cast<int>((input_timestamp_in_seconds - seconds) *
+                           base::Time::kMicrosecondsPerSecond);
+
+      // Always write high first since receiver triggers on low. Another reason
+      // for crbug.com/387226021.
+      SetIntPropertyForOneDevice(id, "Keyboard Touched Timeval High", seconds);
+      SetIntPropertyForOneDevice(id, "Keyboard Touched Timeval Low",
+                                 microseconds);
+      break;
+    }
+  }
+#endif
 }
 
 void InputDeviceFactoryEvdev::SetBoolPropertyForOneDevice(
@@ -801,6 +846,21 @@ void InputDeviceFactoryEvdev::EnableDevices() {
   // ApplyInputDeviceSettings() instead of this function.
   for (const auto& it : converters_)
     it.second->SetEnabled(IsDeviceEnabled(it.second.get()));
+}
+
+void InputDeviceFactoryEvdev::DisableKeyboardImposterCheck() {
+  ImposterCheckerEvdevState::Get().SetKeyboardCheckEnabled(/*enabled=*/false);
+  ForceReloadKeyboards();
+}
+
+void InputDeviceFactoryEvdev::ForceReloadKeyboards() {
+  for (const auto& it : converters_) {
+    if (it.second->HasKeyboard()) {
+      imposter_checker_->FlagSuspectedImposter(it.second.get());
+      UpdateDirtyFlags(it.second.get());
+    }
+  }
+  NotifyDevicesUpdated();
 }
 
 void InputDeviceFactoryEvdev::SetLatestStylusState(

@@ -13,15 +13,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
+#include <map>
+#include <utility>
+
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #define EIGEN_USE_THREADS
 
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 #define EIGEN_USE_GPU
 #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
-#include "tensorflow/core/kernels/rnn/lstm_ops.h"
-
-#include <memory>
 #include <vector>
 
 #include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
@@ -31,6 +36,7 @@ limitations under the License.
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/tensor_types.h"
 #include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/kernels/rnn/lstm_ops.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/macros.h"
 
@@ -805,7 +811,7 @@ class SliceHelper {
 
   // Slice through an input tensor. This may copy unaligned slices, but no
   // copying back will be done at the end.
-  const Tensor InputSlice(const Tensor& t, int pos, const string& name) {
+  Tensor InputSlice(const Tensor& t, int pos, const string& name) {
     Tensor res = UnalignedSlice(t, pos);
     if (res.IsAligned()) {
       return res;
@@ -1232,6 +1238,28 @@ class BlockLSTMGradOp : public OpKernel {
 
     const Tensor* h_out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("h", &h_out));
+
+    OP_REQUIRES(ctx, i_out->dims() == 3,
+                absl::InvalidArgumentError(absl::StrCat(
+                    "i must be rank 3. Received: ", i_out->dims())));
+    OP_REQUIRES(ctx, cs_out->dims() == 3,
+                absl::InvalidArgumentError(absl::StrCat(
+                    "cs must be rank 3. Received: ", cs_out->dims())));
+    OP_REQUIRES(ctx, f_out->dims() == 3,
+                absl::InvalidArgumentError(absl::StrCat(
+                    "f must be rank 3. Received: ", f_out->dims())));
+    OP_REQUIRES(ctx, o_out->dims() == 3,
+                absl::InvalidArgumentError(absl::StrCat(
+                    "o must be rank 3. Received: ", o_out->dims())));
+    OP_REQUIRES(ctx, ci_out->dims() == 3,
+                absl::InvalidArgumentError(absl::StrCat(
+                    "ci must be rank 3. Received: ", ci_out->dims())));
+    OP_REQUIRES(ctx, co_out->dims() == 3,
+                absl::InvalidArgumentError(absl::StrCat(
+                    "co must be rank 3. Received: ", co_out->dims())));
+    OP_REQUIRES(ctx, h_out->dims() == 3,
+                absl::InvalidArgumentError(absl::StrCat(
+                    "h must be rank 3. Received: ", h_out->dims())));
 
     const Tensor* cs_grad = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("cs_grad", &cs_grad));

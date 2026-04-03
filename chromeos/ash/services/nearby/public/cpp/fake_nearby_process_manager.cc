@@ -7,15 +7,14 @@
 #include <utility>
 
 #include "base/functional/bind.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "chromeos/ash/services/nearby/public/cpp/fake_nearby_presence.h"
 #include "chromeos/ash/services/nearby/public/cpp/mock_nearby_connections.h"
 #include "chromeos/ash/services/nearby/public/cpp/mock_nearby_sharing_decoder.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder.mojom.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 
-namespace ash {
-namespace nearby {
+namespace ash::nearby {
 
 FakeNearbyProcessManager::FakeNearbyProcessReference::
     FakeNearbyProcessReference(
@@ -23,7 +22,8 @@ FakeNearbyProcessManager::FakeNearbyProcessReference::
             ::nearby::connections::mojom::NearbyConnections>& connections,
         const mojo::SharedRemote<
             ::ash::nearby::presence::mojom::NearbyPresence>& presence,
-        const mojo::SharedRemote<sharing::mojom::NearbySharingDecoder>& decoder,
+        const mojo::SharedRemote<::sharing::mojom::NearbySharingDecoder>&
+            decoder,
         const mojo::SharedRemote<quick_start::mojom::QuickStartDecoder>&
             quick_start_decoder,
         base::OnceClosure destructor_callback)
@@ -50,7 +50,7 @@ FakeNearbyProcessManager::FakeNearbyProcessReference::GetNearbyPresence()
   return presence_;
 }
 
-const mojo::SharedRemote<sharing::mojom::NearbySharingDecoder>&
+const mojo::SharedRemote<::sharing::mojom::NearbySharingDecoder>&
 FakeNearbyProcessManager::FakeNearbyProcessReference::GetNearbySharingDecoder()
     const {
   return decoder_;
@@ -138,5 +138,4 @@ void FakeNearbyProcessManager::OnReferenceDeleted(
   }
 }
 
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby

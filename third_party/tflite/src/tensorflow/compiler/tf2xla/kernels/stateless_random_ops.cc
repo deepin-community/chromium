@@ -13,26 +13,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <cmath>
+#include <cstdint>
+#include <string>
 #include <tuple>
 
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "tensorflow/compiler/tf2xla/kernels/random_ops_util.h"
 #include "tensorflow/compiler/tf2xla/lib/broadcast.h"
 #include "tensorflow/compiler/tf2xla/lib/random.h"
 #include "tensorflow/compiler/tf2xla/shape_util.h"
-#include "tensorflow/compiler/tf2xla/type_util.h"
-#include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/math.h"
-#include "xla/client/lib/prng.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/prng.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/primitive_util.h"
+#include "xla/shape.h"
+#include "xla/util.h"
 #include "xla/xla_data.pb.h"
 #include "tensorflow/core/framework/op_kernel.h"
-#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/op_requires.h"
 #include "tensorflow/core/framework/tensor_shape.h"
-#include "tensorflow/core/lib/math/math_util.h"
+#include "tensorflow/core/framework/types.pb.h"
+#include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
 
@@ -73,7 +78,7 @@ xla::XlaOp MaybeConvertF32ToBF16(xla::XlaOp input, DataType dtype) {
     // `BitcastConvertType(ConvertElementType(u32, U16), BF16)`, to avoid the
     // unclear `ConvertElementType(f32, BF16)` behavior.
     xla::XlaOp output = xla::BitcastConvertType(input, xla::U32) &
-                        xla::ConstantR0<uint32>(builder, 0xFFFF0000);
+                        xla::ConstantR0<uint32_t>(builder, 0xFFFF0000);
     return xla::ConvertElementType(xla::BitcastConvertType(output, xla::F32),
                                    xla::BF16);
   } else {
@@ -181,7 +186,7 @@ class StatelessRandomUniformOp : public XlaOpKernel {
 
  private:
   DataType dtype_;
-  string device_type_string_;
+  std::string device_type_string_;
 
   StatelessRandomUniformOp(const StatelessRandomUniformOp&) = delete;
   void operator=(const StatelessRandomUniformOp&) = delete;
@@ -237,7 +242,7 @@ class StatelessRandomUniformIntOp : public XlaOpKernel {
 
  private:
   DataType dtype_;
-  string device_type_string_;
+  std::string device_type_string_;
 
   StatelessRandomUniformIntOp(const StatelessRandomUniformIntOp&) = delete;
   void operator=(const StatelessRandomUniformIntOp&) = delete;
@@ -280,7 +285,7 @@ class StatelessRandomUniformFullIntOp : public XlaOpKernel {
 
  private:
   DataType dtype_;
-  string device_type_string_;
+  std::string device_type_string_;
 
   StatelessRandomUniformFullIntOp(const StatelessRandomUniformFullIntOp&) =
       delete;
@@ -333,7 +338,7 @@ class StatelessRandomNormalOp : public XlaOpKernel {
 
  private:
   DataType dtype_;
-  string device_type_string_;
+  std::string device_type_string_;
 
   StatelessRandomNormalOp(const StatelessRandomNormalOp&) = delete;
   void operator=(const StatelessRandomNormalOp&) = delete;
@@ -381,7 +386,7 @@ class StatelessTruncatedNormalOp : public XlaOpKernel {
 
  private:
   DataType dtype_;
-  string device_type_string_;
+  std::string device_type_string_;
 
   StatelessTruncatedNormalOp(const StatelessTruncatedNormalOp&) = delete;
   void operator=(const StatelessTruncatedNormalOp&) = delete;
@@ -446,7 +451,7 @@ class StatelessParameterizedTruncatedNormalOp : public XlaOpKernel {
 
  private:
   DataType dtype_;
-  string device_type_string_;
+  std::string device_type_string_;
 
   StatelessParameterizedTruncatedNormalOp(
       const StatelessParameterizedTruncatedNormalOp&) = delete;

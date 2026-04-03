@@ -8,9 +8,11 @@
 #include <stdint.h>
 
 #include <set>
+#include <vector>
 
 #include "base/files/file.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/services/font/public/mojom/font_service.mojom.h"
@@ -33,7 +35,8 @@ class MappedFontFile;
 // of this mismatch, we create a thread which owns the mojo pipe, sends and
 // receives messages. The multiple threads which call through FontLoader class
 // do blocking message calls to this thread.
-// TODO(936569): Rename FontServiceThread since it's no longer a thread.
+// TODO(crbug.com/40615872): Rename FontServiceThread since it's no longer a
+// thread.
 class FontServiceThread : public base::RefCountedThreadSafe<FontServiceThread> {
  public:
   FontServiceThread();
@@ -74,6 +77,7 @@ class FontServiceThread : public base::RefCountedThreadSafe<FontServiceThread> {
       mojom::FontIdentityPtr* out_identity);
 
 #if BUILDFLAG(ENABLE_PDF)
+  std::vector<std::string> ListFamilies();
   void MatchFontWithFallback(std::string family,
                              bool is_bold,
                              bool is_italic,
@@ -167,6 +171,11 @@ class FontServiceThread : public base::RefCountedThreadSafe<FontServiceThread> {
       bool* out_valid,
       mojom::FontIdentityPtr* out_font_identity,
       mojom::FontIdentityPtr font_identity);
+  void ListFamiliesImpl(base::WaitableEvent* done_event,
+                        std::vector<std::string>* families);
+  void OnListFamiliesComplete(base::WaitableEvent* done_event,
+                              std::vector<std::string>* families,
+                              const std::vector<std::string>& response);
 
 #if BUILDFLAG(ENABLE_PDF)
   void MatchFontWithFallbackImpl(base::WaitableEvent* done_event,

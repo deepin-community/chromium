@@ -15,6 +15,58 @@ namespace storage {
 
 namespace {
 
+bool MigrateToVersion6(sql::Database& db, sql::MetaTable& meta_table) {
+  sql::Transaction transaction(&db);
+  if (!transaction.Begin()) {
+    return false;
+  }
+
+  static constexpr char kNewOriginTableSql[] =
+      "CREATE TABLE new_per_origin_mapping("
+      "context_origin TEXT NOT NULL PRIMARY KEY,"
+      "creation_time INTEGER NOT NULL,"
+      "num_bytes INTEGER NOT NULL) WITHOUT ROWID";
+  if (!db.Execute(kNewOriginTableSql)) {
+    return false;
+  }
+
+  static constexpr char kInsertSql[] =
+      "INSERT INTO new_per_origin_mapping(context_origin, creation_time, "
+      "num_bytes) "
+      "SELECT context_origin, creation_time, num_bytes "
+      "FROM per_origin_mapping";
+  if (!db.Execute(kInsertSql)) {
+    return false;
+  }
+
+  static constexpr char kDropOldOriginTableSql[] =
+      "DROP TABLE per_origin_mapping";
+  if (!db.Execute(kDropOldOriginTableSql)) {
+    return false;
+  }
+
+  static constexpr char kRenameOriginTableSql[] =
+      "ALTER TABLE new_per_origin_mapping RENAME TO per_origin_mapping";
+  if (!db.Execute(kRenameOriginTableSql)) {
+    return false;
+  }
+
+  static constexpr char kDropOldCreationTimeIndexSql[] =
+      "DROP INDEX IF EXISTS per_origin_mapping_creation_time_idx";
+  if (!db.Execute(kDropOldCreationTimeIndexSql)) {
+    return false;
+  }
+
+  static constexpr char kAddCreationTimeIndexSql[] =
+      "CREATE INDEX per_origin_mapping_creation_time_idx "
+      "ON per_origin_mapping(creation_time)";
+  if (!db.Execute(kAddCreationTimeIndexSql)) {
+    return false;
+  }
+
+  return meta_table.SetVersionNumber(6) && transaction.Commit();
+}
+
 bool MigrateToVersion5(sql::Database& db, sql::MetaTable& meta_table) {
   sql::Transaction transaction(&db);
   if (!transaction.Begin()) {
@@ -123,9 +175,9 @@ bool MigrateToVersion4(sql::Database& db, sql::MetaTable& meta_table) {
 
   while (select_statement.Step()) {
     net::SchemefulSite context_site =
-        net::SchemefulSite::Deserialize(select_statement.ColumnString(1));
+        net::SchemefulSite::Deserialize(select_statement.ColumnStringView(1));
     if (context_site.opaque() ||
-        context_site.GetURL().scheme() == url::kFileScheme) {
+        context_site.GetURL().GetScheme() == url::kFileScheme) {
       continue;
     }
 
@@ -198,7 +250,7 @@ bool MigrateToVersion3(sql::Database& db, sql::MetaTable& meta_table) {
   while (select_statement.Step()) {
     sql::Statement insert_statement(
         db.GetCachedStatement(SQL_FROM_HERE, kInsertIntoNewValuesSql));
-    insert_statement.BindString(0, select_statement.ColumnString(0));
+    insert_statement.BindString(0, select_statement.ColumnStringView(0));
     insert_statement.BindBlob(1, select_statement.ColumnString16(1));
     insert_statement.BindBlob(2, select_statement.ColumnString16(2));
     insert_statement.BindTime(3, select_statement.ColumnTime(3));
@@ -321,6 +373,10 @@ bool UpgradeSharedStorageDatabaseSchema(sql::Database& db,
   }
   if (meta_table.GetVersionNumber() == 4 &&
       !MigrateToVersion5(db, meta_table)) {
+    return false;
+  }
+  if (meta_table.GetVersionNumber() == 5 &&
+      !MigrateToVersion6(db, meta_table)) {
     return false;
   }
   return true;

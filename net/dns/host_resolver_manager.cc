@@ -4,6 +4,7 @@
 
 #include "net/dns/host_resolver_manager.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iterator>
@@ -13,15 +14,16 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/linked_list.h"
 #include "base/debug/debugger.h"
@@ -40,13 +42,13 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
+#include "base/notimplemented.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
+#include "base/rand_util.h"
 #include "base/sequence_checker.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -57,6 +59,7 @@
 #include "base/threading/scoped_blocking_call.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "base/types/optional_util.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -74,9 +77,7 @@
 #include "net/base/prioritized_dispatcher.h"
 #include "net/base/request_priority.h"
 #include "net/base/trace_constants.h"
-#include "net/base/tracing.h"
 #include "net/base/url_util.h"
-#include "net/dns/address_sorter.h"
 #include "net/dns/dns_alias_utility.h"
 #include "net/dns/dns_client.h"
 #include "net/dns/dns_names_util.h"
@@ -89,6 +90,7 @@
 #include "net/dns/host_resolver_internal_result.h"
 #include "net/dns/host_resolver_manager_job.h"
 #include "net/dns/host_resolver_manager_request_impl.h"
+#include "net/dns/host_resolver_manager_service_endpoint_request_impl.h"
 #include "net/dns/host_resolver_mdns_listener_impl.h"
 #include "net/dns/host_resolver_mdns_task.h"
 #include "net/dns/host_resolver_nat64_task.h"
@@ -116,7 +118,6 @@
 #include "net/log/net_log_with_source.h"
 #include "net/socket/client_socket_factory.h"
 #include "net/url_request/url_request_context.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 #include "url/scheme_host_port.h"
 #include "url/url_constants.h"
 
@@ -133,7 +134,6 @@
 #include <net/if.h>
 #include "net/base/sys_addrinfo.h"
 #if BUILDFLAG(IS_ANDROID)
-#include "base/android/build_info.h"
 #else  // !BUILDFLAG(IS_ANDROID)
 #include <ifaddrs.h>
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -157,7 +157,7 @@ const uint8_t kIPv6ProbeAddress[] = {0x20, 0x01, 0x48, 0x60, 0x48, 0x60,
                                      0x00, 0x00, 0x88, 0x88};
 
 // True if |hostname| ends with either ".local" or ".local.".
-bool ResemblesMulticastDNSName(base::StringPiece hostname) {
+bool ResemblesMulticastDNSName(std::string_view hostname) {
   return hostname.ends_with(".local") || hostname.ends_with(".local.");
 }
 
@@ -177,8 +177,8 @@ bool ConfigureAsyncDnsNoFallbackFieldTrial() {
   return kDefault;
 }
 
-base::Value::Dict NetLogIPv6AvailableParams(bool ipv6_available, bool cached) {
-  base::Value::Dict dict;
+base::DictValue NetLogIPv6AvailableParams(bool ipv6_available, bool cached) {
+  base::DictValue dict;
   dict.Set("ipv6_available", ipv6_available);
   dict.Set("cached", cached);
   return dict;
@@ -214,18 +214,16 @@ PrioritizedDispatcher::Limits GetDispatcherLimits(
   // The format of the group name is a list of non-negative integers separated
   // by ':'. Each of the elements in the list corresponds to an element in
   // |reserved_slots|, except the last one which is the |total_jobs|.
-  std::vector<base::StringPiece> group_parts = base::SplitStringPiece(
+  std::vector<std::string_view> group_parts = base::SplitStringPiece(
       group, ":", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   if (group_parts.size() != NUM_PRIORITIES + 1) {
     NOTREACHED();
-    return limits;
   }
 
   std::vector<size_t> parsed(group_parts.size());
   for (size_t i = 0; i < group_parts.size(); ++i) {
     if (!base::StringToSizeT(group_parts[i], &parsed[i])) {
       NOTREACHED();
-      return limits;
     }
   }
 
@@ -233,13 +231,12 @@ PrioritizedDispatcher::Limits GetDispatcherLimits(
   parsed.pop_back();
 
   const size_t total_reserved_slots =
-      std::accumulate(parsed.begin(), parsed.end(), 0u);
+      std::accumulate(parsed.begin(), parsed.end(), size_t{0});
 
   // There must be some unreserved slots available for the all priorities.
   if (total_reserved_slots > total_jobs ||
       (total_reserved_slots == total_jobs && parsed[MINIMUM_PRIORITY] == 0)) {
     NOTREACHED();
-    return limits;
   }
 
   limits.total_jobs = total_jobs;
@@ -247,16 +244,28 @@ PrioritizedDispatcher::Limits GetDispatcherLimits(
   return limits;
 }
 
-base::Value::Dict NetLogResults(const HostCache::Entry& results) {
-  base::Value::Dict dict;
+base::DictValue NetLogResults(const HostCache::Entry& results) {
+  base::DictValue dict;
   dict.Set("results", results.NetLogParams());
+  return dict;
+}
+
+base::DictValue NetLogResults(
+    const std::set<std::unique_ptr<HostResolverInternalResult>>& results) {
+  auto list = base::ListValue::with_capacity(results.size());
+  for (const std::unique_ptr<HostResolverInternalResult>& result : results) {
+    list.Append(result->ToValue());
+  }
+
+  base::DictValue dict;
+  dict.Set("results", std::move(list));
   return dict;
 }
 
 std::vector<IPEndPoint> FilterAddresses(std::vector<IPEndPoint> addresses,
                                         DnsQueryTypeSet query_types) {
   DCHECK(!query_types.Has(DnsQueryType::UNSPECIFIED));
-  DCHECK(!query_types.Empty());
+  DCHECK(!query_types.empty());
 
   const AddressFamily want_family =
       HostResolver::DnsQueryTypeSetToAddressFamily(query_types);
@@ -265,12 +274,11 @@ std::vector<IPEndPoint> FilterAddresses(std::vector<IPEndPoint> addresses,
     return addresses;
 
   // Keep only the endpoints that match `want_family`.
-  addresses.erase(
-      base::ranges::remove_if(
-          addresses,
-          [want_family](AddressFamily family) { return family != want_family; },
-          &IPEndPoint::GetFamily),
-      addresses.end());
+  auto removed = std::ranges::remove_if(
+      addresses,
+      [want_family](AddressFamily family) { return family != want_family; },
+      &IPEndPoint::GetFamily);
+  addresses.erase(removed.begin(), removed.end());
   return addresses;
 }
 
@@ -282,26 +290,45 @@ int GetPortForGloballyReachableCheck() {
   return features::kAlternativePortForGloballyReachableCheck.Get();
 }
 
-// Only use scheme/port in JobKey if `https_svcb_options_enabled` is true
-// (or the query is explicitly for HTTPS). Otherwise DNS will not give different
-// results for the same hostname.
-absl::variant<url::SchemeHostPort, std::string> CreateHostForJobKey(
-    const HostResolver::Host& input,
-    DnsQueryType query_type,
-    bool https_svcb_options_enabled) {
-  if ((https_svcb_options_enabled || query_type == DnsQueryType::HTTPS) &&
-      input.HasScheme()) {
-    return input.AsSchemeHostPort();
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(DnsClientCapability)
+enum class DnsClientCapability {
+  kSecureDisabledInsecureDisabled = 0,
+  kSecureDisabledInsecureEnabled = 1,
+  kSecureEnabledInsecureDisabled = 2,
+  kSecureEnabledInsecureEnabled = 3,
+  kMaxValue = kSecureEnabledInsecureEnabled,
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/net/enums.xml:DnsClientCapability)
+
+void RecordDnsClientCapabilityMetrics(const DnsClient* dns_client) {
+  if (!dns_client) {
+    return;
   }
-
-  return std::string(input.GetHostnameWithoutBrackets());
+  DnsClientCapability capability;
+  if (dns_client->CanUseSecureDnsTransactions()) {
+    if (dns_client->CanUseInsecureDnsTransactions()) {
+      capability = DnsClientCapability::kSecureEnabledInsecureEnabled;
+    } else {
+      capability = DnsClientCapability::kSecureEnabledInsecureDisabled;
+    }
+  } else {
+    if (dns_client->CanUseInsecureDnsTransactions()) {
+      capability = DnsClientCapability::kSecureDisabledInsecureEnabled;
+    } else {
+      capability = DnsClientCapability::kSecureDisabledInsecureDisabled;
+    }
+  }
+  base::UmaHistogramEnumeration("Net.DNS.DnsConfig.DnsClientCapability",
+                                capability);
 }
-
 }  // namespace
 
 //-----------------------------------------------------------------------------
 
-bool ResolveLocalHostname(base::StringPiece host,
+bool ResolveLocalHostname(std::string_view host,
                           std::vector<IPEndPoint>* address_list) {
   address_list->clear();
   if (!IsLocalHostname(host))
@@ -409,6 +436,8 @@ HostResolverManager::HostResolverManager(
       check_ipv6_on_wifi_(options.check_ipv6_on_wifi),
       ipv6_reachability_override_(base::FeatureList::IsEnabled(
           features::kEnableIPv6ReachabilityOverride)),
+      is_happy_eyeballs_v3_enabled_(
+          base::FeatureList::IsEnabled(features::kHappyEyeballsV3)),
       tick_clock_(base::DefaultTickClock::GetInstance()),
       https_svcb_options_(
           options.https_svcb_options
@@ -490,7 +519,7 @@ HostResolverManager::CreateNetworkBoundHostResolverManager(
 
 std::unique_ptr<HostResolver::ResolveHostRequest>
 HostResolverManager::CreateRequest(
-    absl::variant<url::SchemeHostPort, HostPortPair> host,
+    std::variant<url::SchemeHostPort, HostPortPair> host,
     NetworkAnonymizationKey network_anonymization_key,
     NetLogWithSource net_log,
     std::optional<ResolveHostParameters> optional_parameters,
@@ -551,6 +580,27 @@ HostResolverManager::CreateMdnsListener(const HostPortPair& host,
   return listener;
 }
 
+std::unique_ptr<HostResolver::ServiceEndpointRequest>
+HostResolverManager::CreateServiceEndpointRequest(
+    HostResolver::Host host,
+    NetworkAnonymizationKey network_anonymization_key,
+    NetLogWithSource net_log,
+    ResolveHostParameters parameters,
+    ResolveContext* resolve_context) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK(!invalidation_in_progress_);
+  DCHECK_EQ(resolve_context->GetTargetNetwork(), target_network_);
+  if (resolve_context) {
+    DCHECK(registered_contexts_.HasObserver(resolve_context));
+  }
+
+  return std::make_unique<ServiceEndpointRequestImpl>(
+      std::move(host), std::move(network_anonymization_key), std::move(net_log),
+      std::move(parameters),
+      resolve_context ? resolve_context->GetWeakPtr() : nullptr,
+      weak_ptr_factory_.GetWeakPtr(), tick_clock_);
+}
+
 void HostResolverManager::SetInsecureDnsClientEnabled(
     bool enabled,
     bool additional_dns_types_enabled) {
@@ -577,10 +627,10 @@ void HostResolverManager::SetInsecureDnsClientEnabled(
   }
 }
 
-base::Value::Dict HostResolverManager::GetDnsConfigAsValue() const {
+base::DictValue HostResolverManager::GetDnsConfigAsValue() const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   return dns_client_ ? dns_client_->GetDnsConfigAsValueForNetLog()
-                     : base::Value::Dict();
+                     : base::DictValue();
 }
 
 void HostResolverManager::SetDnsConfigOverrides(DnsConfigOverrides overrides) {
@@ -634,6 +684,14 @@ void HostResolverManager::SetTickClockForTesting(
 void HostResolverManager::SetIPv6ReachabilityOverride(
     bool reachability_override) {
   ipv6_reachability_override_ = reachability_override;
+}
+
+void HostResolverManager::SetIsHappyEyeballsV3Enabled(bool enabled) {
+  is_happy_eyeballs_v3_enabled_ = enabled;
+}
+
+bool HostResolverManager::IsHappyEyeballsV3Enabled() const {
+  return is_happy_eyeballs_v3_enabled_;
 }
 
 void HostResolverManager::SetMaxQueuedJobsForTesting(size_t value) {
@@ -694,19 +752,16 @@ bool HostResolverManager::IsLocalTask(TaskType task) {
 }
 
 void HostResolverManager::InitializeJobKeyAndIPAddress(
-    const HostResolver::Host& host,
     const NetworkAnonymizationKey& network_anonymization_key,
     const ResolveHostParameters& parameters,
     const NetLogWithSource& source_net_log,
     JobKey& out_job_key,
     IPAddress& out_ip_address) {
-  out_job_key.host = CreateHostForJobKey(host, parameters.dns_query_type,
-                                         https_svcb_options_.enable);
   out_job_key.network_anonymization_key = network_anonymization_key;
   out_job_key.source = parameters.source;
 
   const bool is_ip = out_ip_address.AssignFromIPLiteral(
-      HostResolver::GetHostname(out_job_key.host));
+      out_job_key.host.GetHostnameWithoutBrackets());
 
   out_job_key.secure_dns_mode =
       GetEffectiveSecureDnsMode(parameters.secure_dns_policy);
@@ -739,15 +794,13 @@ void HostResolverManager::InitializeJobKeyAndIPAddress(
     effective_types.Remove(DnsQueryType::AAAA);
   }
 
-  // Optimistically enable feature-controlled queries. These queries may be
-  // skipped at a later point.
-
-  // `https_svcb_options_.enable` has precedence, so if enabled, ignore any
-  // other related features.
-  if (https_svcb_options_.enable && host.HasScheme()) {
-    static const char* const kSchemesForHttpsQuery[] = {
+  // Optimistically enable HTTPS record. It may be skipped at a later point.
+  if (base::FeatureList::IsEnabled(features::kUseDnsHttpsSvcb) &&
+      out_job_key.host.HasScheme()) {
+    static constexpr std::string_view kSchemesForHttpsQuery[] = {
         url::kHttpScheme, url::kHttpsScheme, url::kWsScheme, url::kWssScheme};
-    if (base::Contains(kSchemesForHttpsQuery, host.GetScheme())) {
+    if (std::ranges::contains(kSchemesForHttpsQuery,
+                              out_job_key.host.GetScheme())) {
       effective_types.Put(DnsQueryType::HTTPS);
     }
   }
@@ -770,6 +823,14 @@ HostCache::Entry HostResolverManager::ResolveLocally(
   *out_stale_info = std::nullopt;
 
   CreateTaskSequence(job_key, cache_usage, secure_dns_policy, out_tasks);
+  source_net_log.AddEvent(
+      NetLogEventType::HOST_RESOLVER_MANAGER_TASK_SEQUENCE_CREATED, [&] {
+        base::ListValue tasks_list;
+        for (TaskType task : *out_tasks) {
+          tasks_list.Append(static_cast<int>(task));
+        }
+        return base::DictValue().Set("tasks", std::move(tasks_list));
+      });
 
   if (!ip_address.IsValid()) {
     // Check that the caller supplied a valid hostname to resolve. For
@@ -778,10 +839,8 @@ HostCache::Entry HostResolverManager::ResolveLocally(
     // than implicitly based on |source|.
     const bool is_valid_hostname =
         job_key.source == HostResolverSource::MULTICAST_DNS
-            ? dns_names_util::IsValidDnsName(
-                  HostResolver::GetHostname(job_key.host))
-            : IsCanonicalizedHostCompliant(
-                  HostResolver::GetHostname(job_key.host));
+            ? dns_names_util::IsValidDnsName(job_key.host.GetHostname())
+            : IsCanonicalizedHostCompliant(job_key.host.GetHostname());
     if (!is_valid_hostname) {
       return HostCache::Entry(ERR_NAME_NOT_RESOLVED,
                               HostCache::Entry::SOURCE_UNKNOWN);
@@ -795,8 +854,8 @@ HostCache::Entry HostResolverManager::ResolveLocally(
   // The result of |getaddrinfo| for empty hosts is inconsistent across systems.
   // On Windows it gives the default interface's address, whereas on Linux it
   // gives an error. We will make it fail on all platforms for consistency.
-  if (HostResolver::GetHostname(job_key.host).empty() ||
-      HostResolver::GetHostname(job_key.host).size() > kMaxHostLength) {
+  if (job_key.host.GetHostname().empty() ||
+      job_key.host.GetHostname().size() > kMaxHostLength) {
     return HostCache::Entry(ERR_NAME_NOT_RESOLVED,
                             HostCache::Entry::SOURCE_UNKNOWN);
   }
@@ -817,8 +876,8 @@ HostCache::Entry HostResolverManager::ResolveLocally(
   // Special-case localhost names, as per the recommendations in
   // https://tools.ietf.org/html/draft-west-let-localhost-be-localhost.
   std::optional<HostCache::Entry> resolved =
-      ServeLocalhost(HostResolver::GetHostname(job_key.host),
-                     job_key.query_types, default_family_due_to_no_ipv6);
+      ServeLocalhost(job_key.host.GetHostname(), job_key.query_types,
+                     default_family_due_to_no_ipv6);
   if (resolved)
     return resolved.value();
 
@@ -842,7 +901,7 @@ HostCache::Entry HostResolverManager::ResolveLocally(
             NetLogEventType::HOST_RESOLVER_MANAGER_CACHE_HIT,
             [&] { return NetLogResults(resolved.value()); });
 
-        // TODO(crbug.com/1200908): Call StartBootstrapFollowup() if the Secure
+        // TODO(crbug.com/40178456): Call StartBootstrapFollowup() if the Secure
         // DNS Policy is kBootstrap and the result is not secure.  Note: A naive
         // implementation could cause an infinite loop if |resolved| always
         // expires or is evicted before the followup runs.
@@ -859,14 +918,20 @@ HostCache::Entry HostResolverManager::ResolveLocally(
         return resolved.value();
       }
     } else if (task == TaskType::HOSTS) {
-      resolved = ServeFromHosts(HostResolver::GetHostname(job_key.host),
-                                job_key.query_types,
-                                default_family_due_to_no_ipv6, *out_tasks);
-      if (resolved) {
+      std::set<std::unique_ptr<HostResolverInternalResult>> results =
+          ServeFromHosts(job_key.host.GetHostname(), job_key.query_types,
+                         default_family_due_to_no_ipv6, *out_tasks);
+
+      if (!results.empty() &&
+          std::ranges::any_of(results, [](const auto& result) {
+            return result->type() == HostResolverInternalResult::Type::kData;
+          })) {
         source_net_log.AddEvent(
             NetLogEventType::HOST_RESOLVER_MANAGER_HOSTS_HIT,
-            [&] { return NetLogResults(resolved.value()); });
-        return resolved.value();
+            [&] { return NetLogResults(results); });
+        return HostCache::Entry(results, base::Time::Now(),
+                                tick_clock_->NowTicks(),
+                                HostCache::Entry::SOURCE_HOSTS);
       }
     } else {
       NOTREACHED();
@@ -909,10 +974,28 @@ HostResolverManager::Job* HostResolverManager::AddJobWithoutRequest(
   auto insert_result = jobs_.emplace(std::move(key), std::move(new_job));
   auto& iterator = insert_result.first;
   bool is_new = insert_result.second;
-  DCHECK(is_new);
+  CHECK(is_new);
   auto& job = iterator->second;
   job->OnAddedToJobMap(iterator);
   return job.get();
+}
+
+void HostResolverManager::CreateAndStartJobForServiceEndpointRequest(
+    JobKey key,
+    std::deque<TaskType> tasks,
+    ServiceEndpointRequestImpl* request) {
+  CHECK(!tasks.empty());
+
+  auto jobit = jobs_.find(key);
+  if (jobit == jobs_.end()) {
+    Job* job = AddJobWithoutRequest(key, request->parameters().cache_usage,
+                                    request->host_cache(), std::move(tasks),
+                                    request->priority(), request->net_log());
+    job->AddServiceEndpointRequest(request);
+    job->RunNextTask();
+  } else {
+    jobit->second->AddServiceEndpointRequest(request);
+  }
 }
 
 HostCache::Entry HostResolverManager::ResolveAsIP(DnsQueryTypeSet query_types,
@@ -983,10 +1066,11 @@ std::optional<HostCache::Entry> HostResolverManager::MaybeServeFromCache(
 std::optional<HostCache::Entry> HostResolverManager::MaybeReadFromConfig(
     const JobKey& key) {
   DCHECK(HasAddressType(key.query_types));
-  if (!absl::holds_alternative<url::SchemeHostPort>(key.host))
+  if (!key.host.HasScheme()) {
     return std::nullopt;
+  }
   std::optional<std::vector<IPEndPoint>> preset_addrs =
-      dns_client_->GetPresetAddrs(absl::get<url::SchemeHostPort>(key.host));
+      dns_client_->GetPresetAddrs(key.host.AsSchemeHostPort());
   if (!preset_addrs)
     return std::nullopt;
 
@@ -994,6 +1078,11 @@ std::optional<HostCache::Entry> HostResolverManager::MaybeReadFromConfig(
       FilterAddresses(std::move(*preset_addrs), key.query_types);
   if (filtered_addresses.empty())
     return std::nullopt;
+
+  if (base::FeatureList::IsEnabled(
+          features::kEnableBootstrapIPRandomizationForDoh)) {
+    base::RandomShuffle(filtered_addresses.begin(), filtered_addresses.end());
+  }
 
   return HostCache::Entry(OK, std::move(filtered_addresses), /*aliases=*/{},
                           HostCache::Entry::SOURCE_CONFIG);
@@ -1016,65 +1105,100 @@ void HostResolverManager::StartBootstrapFollowup(
   job->RunNextTask();
 }
 
-std::optional<HostCache::Entry> HostResolverManager::ServeFromHosts(
-    base::StringPiece hostname,
-    DnsQueryTypeSet query_types,
-    bool default_family_due_to_no_ipv6,
-    const std::deque<TaskType>& tasks) {
+std::set<std::unique_ptr<HostResolverInternalResult>>
+HostResolverManager::ServeFromHosts(std::string_view hostname,
+                                    DnsQueryTypeSet query_types,
+                                    bool default_family_due_to_no_ipv6,
+                                    const std::deque<TaskType>& tasks) {
   DCHECK(!query_types.Has(DnsQueryType::UNSPECIFIED));
   // Don't attempt a HOSTS lookup if there is no DnsConfig or the HOSTS lookup
   // is going to be done next as part of a system lookup.
   if (!dns_client_ || !HasAddressType(query_types) ||
-      (!tasks.empty() && tasks.front() == TaskType::SYSTEM))
-    return std::nullopt;
+      (!tasks.empty() && tasks.front() == TaskType::SYSTEM)) {
+    return {};
+  }
   const DnsHosts* hosts = dns_client_->GetHosts();
 
-  if (!hosts || hosts->empty())
-    return std::nullopt;
+  if (!hosts || hosts->empty()) {
+    return {};
+  }
 
   // HOSTS lookups are case-insensitive.
   std::string effective_hostname = base::ToLowerASCII(hostname);
 
-  // If |address_family| is ADDRESS_FAMILY_UNSPECIFIED other implementations
-  // (glibc and c-ares) return the first matching line. We have more
-  // flexibility, but lose implicit ordering.
-  // We prefer IPv6 because "happy eyeballs" will fall back to IPv4 if
-  // necessary.
-  std::vector<IPEndPoint> addresses;
+  std::unique_ptr<HostResolverInternalResult> ipv6_result;
   if (query_types.Has(DnsQueryType::AAAA)) {
     auto it = hosts->find(DnsHostsKey(effective_hostname, ADDRESS_FAMILY_IPV6));
-    if (it != hosts->end()) {
-      addresses.emplace_back(it->second, 0);
+    if (it == hosts->end()) {
+      ipv6_result = std::make_unique<HostResolverInternalErrorResult>(
+          std::string(hostname), DnsQueryType::AAAA,
+          /*expiration=*/std::nullopt, /*timed_expiration=*/std::nullopt,
+          HostResolverInternalErrorResult::Source::kHosts,
+          ERR_NAME_NOT_RESOLVED);
+    } else {
+      // HOSTS results are currently only for immediate use, so set the
+      // expiration to `Now()` to immediately expire.
+      ipv6_result = std::make_unique<HostResolverInternalDataResult>(
+          std::string(hostname), DnsQueryType::AAAA,
+          /*expiration=*/tick_clock_->NowTicks(),
+          /*timed_expiration=*/base::Time::Now(),
+          HostResolverInternalResult::Source::kHosts,
+          /*endpoints=*/std::vector<IPEndPoint>{{it->second, 0}},
+          /*strings=*/std::vector<std::string>{},
+          /*hosts=*/std::vector<HostPortPair>{});
     }
   }
 
+  std::unique_ptr<HostResolverInternalResult> ipv4_result;
   if (query_types.Has(DnsQueryType::A)) {
     auto it = hosts->find(DnsHostsKey(effective_hostname, ADDRESS_FAMILY_IPV4));
-    if (it != hosts->end()) {
-      addresses.emplace_back(it->second, 0);
+    if (it == hosts->end()) {
+      ipv4_result = std::make_unique<HostResolverInternalErrorResult>(
+          std::string(hostname), DnsQueryType::A,
+          /*expiration=*/std::nullopt, /*timed_expiration=*/std::nullopt,
+          HostResolverInternalErrorResult::Source::kHosts,
+          ERR_NAME_NOT_RESOLVED);
+    } else {
+      // HOSTS results are currently only for immediate use, so set the
+      // expiration to `Now()` to immediately expire.
+      ipv4_result = std::make_unique<HostResolverInternalDataResult>(
+          std::string(hostname), DnsQueryType::A,
+          /*expiration=*/tick_clock_->NowTicks(),
+          /*timed_expiration=*/base::Time::Now(),
+          HostResolverInternalResult::Source::kHosts,
+          /*endpoints=*/std::vector<IPEndPoint>{{it->second, 0}},
+          /*strings=*/std::vector<std::string>{},
+          /*hosts=*/std::vector<HostPortPair>{});
     }
   }
 
-  // If got only loopback addresses and the family was restricted, resolve
-  // again, without restrictions. See SystemHostResolverCall for rationale.
-  if (default_family_due_to_no_ipv6 &&
-      base::ranges::all_of(addresses, &IPAddress::IsIPv4,
-                           &IPEndPoint::address) &&
-      base::ranges::all_of(addresses, &IPAddress::IsLoopback,
-                           &IPEndPoint::address)) {
+  // If got only loopback addresses (or no addresses) and the family was
+  // restricted, resolve again, without restrictions. See SystemHostResolverCall
+  // for rationale.
+  if (default_family_due_to_no_ipv6 && ipv4_result &&
+      (ipv4_result->type() == HostResolverInternalResult::Type::kError ||
+       (ipv4_result->type() == HostResolverInternalResult::Type::kData &&
+        std::ranges::all_of(ipv4_result->AsData().endpoints(),
+                            &IPAddress::IsLoopback, &IPEndPoint::address)))) {
+    CHECK(!ipv6_result) << "Requesting AAAA is incompatible with "
+                           "`default_family_due_to_no_ipv6`.";
     query_types.Put(DnsQueryType::AAAA);
-    return ServeFromHosts(hostname, query_types, false, tasks);
+    return ServeFromHosts(hostname, query_types,
+                          /*default_family_due_to_no_ipv6=*/false, tasks);
   }
 
-  if (addresses.empty())
-    return std::nullopt;
-
-  return HostCache::Entry(OK, std::move(addresses),
-                          /*aliases=*/{}, HostCache::Entry::SOURCE_HOSTS);
+  std::set<std::unique_ptr<HostResolverInternalResult>> results;
+  if (ipv6_result) {
+    results.insert(std::move(ipv6_result));
+  }
+  if (ipv4_result) {
+    results.insert(std::move(ipv4_result));
+  }
+  return results;
 }
 
 std::optional<HostCache::Entry> HostResolverManager::ServeLocalhost(
-    base::StringPiece hostname,
+    std::string_view hostname,
     DnsQueryTypeSet query_types,
     bool default_family_due_to_no_ipv6) {
   DCHECK(!query_types.Has(DnsQueryType::UNSPECIFIED));
@@ -1108,9 +1232,9 @@ void HostResolverManager::CacheResult(HostCache* cache,
 
 std::unique_ptr<HostResolverManager::Job> HostResolverManager::RemoveJob(
     JobMap::iterator job_it) {
-  DCHECK(job_it != jobs_.end());
-  DCHECK(job_it->second);
-  DCHECK_EQ(1u, jobs_.count(job_it->first));
+  CHECK(job_it != jobs_.end());
+  CHECK(job_it->second);
+  CHECK(jobs_.find(job_it->first) != jobs_.end());
 
   std::unique_ptr<Job> job;
   job_it->second.swap(job);
@@ -1147,9 +1271,9 @@ bool HostResolverManager::ShouldForceSystemResolverDueToTestOverride() const {
   if (HostResolverProc::GetDefault() && system_resolver_disabled_for_testing_) {
     DCHECK(dns_client_);
     DCHECK(dns_client_->GetEffectiveConfig());
-    DCHECK(base::ranges::none_of(dns_client_->GetEffectiveConfig()->nameservers,
-                                 &IPAddress::IsPubliclyRoutable,
-                                 &IPEndPoint::address))
+    DCHECK(std::ranges::none_of(dns_client_->GetEffectiveConfig()->nameservers,
+                                &IPAddress::IsPubliclyRoutable,
+                                &IPEndPoint::address))
         << "Test could query a publicly-routable address.";
   }
   return !host_resolver_system_params_.resolver_proc &&
@@ -1219,12 +1343,11 @@ void HostResolverManager::PushDnsTasks(bool system_task_allowed,
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   constexpr TaskType kWantTasks[] = {TaskType::DNS, TaskType::SECURE_DNS};
   const bool no_dns_or_secure_tasks =
-      base::ranges::find_first_of(*out_tasks, kWantTasks) == out_tasks->end();
+      std::ranges::find_first_of(*out_tasks, kWantTasks) == out_tasks->end();
   // The system resolver can be used as a fallback for a non-existent or
   // failing DnsTask if allowed by the request parameters.
   if (system_task_allowed &&
@@ -1268,6 +1391,10 @@ void HostResolverManager::CreateTaskSequence(
 
   switch (job_key.source) {
     case HostResolverSource::ANY:
+      // Records DnsClient capability metrics, only when `source` is ANY. This
+      // is to avoid the metrics being skewed by mechanical requests of other
+      // source types.
+      RecordDnsClientCapabilityMetrics(dns_client_.get());
       // Force address queries with canonname to use HostResolverSystemTask to
       // counter poor CNAME support in DnsTask. See https://crbug.com/872665
       //
@@ -1277,8 +1404,7 @@ void HostResolverManager::CreateTaskSequence(
       // address queries and MdnsTask for non- address queries.
       if ((job_key.flags & HOST_RESOLVER_CANONNAME) && has_address_type) {
         out_tasks->push_back(TaskType::SYSTEM);
-      } else if (!ResemblesMulticastDNSName(
-                     HostResolver::GetHostname(job_key.host))) {
+      } else if (!ResemblesMulticastDNSName(job_key.host.GetHostname())) {
         bool system_task_allowed =
             has_address_type &&
             job_key.secure_dns_mode != SecureDnsMode::kSecure;
@@ -1327,8 +1453,8 @@ void HostResolverManager::CreateTaskSequence(
 
   // `HOST_RESOLVER_CANONNAME` is only supported through system resolution.
   if (job_key.flags & HOST_RESOLVER_CANONNAME) {
-    DCHECK(base::ranges::find(*out_tasks, TaskType::DNS) == out_tasks->end());
-    DCHECK(base::ranges::find(*out_tasks, TaskType::MDNS) == out_tasks->end());
+    DCHECK(std::ranges::find(*out_tasks, TaskType::DNS) == out_tasks->end());
+    DCHECK(std::ranges::find(*out_tasks, TaskType::MDNS) == out_tasks->end());
   }
 }
 
@@ -1349,7 +1475,7 @@ bool RequestWillUseWiFi(handles::NetworkHandle network) {
 void HostResolverManager::FinishIPv6ReachabilityCheck(
     CompletionOnceCallback callback,
     int rv) {
-  SetLastIPv6ProbeResult((rv == OK) ? true : false);
+  SetLastIPv6ProbeResult(rv == OK);
   std::move(callback).Run(OK);
   if (!ipv6_request_callbacks_.empty()) {
     std::vector<CompletionOnceCallback> tmp_request_callbacks;
@@ -1390,7 +1516,7 @@ int HostResolverManager::StartIPv6ReachabilityCheck(
         base::BindOnce(&HostResolverManager::FinishIPv6ReachabilityCheck,
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
     if (rv != ERR_IO_PENDING) {
-      SetLastIPv6ProbeResult((rv == OK) ? true : false);
+      SetLastIPv6ProbeResult(rv == OK);
       rv = OK;
     }
     cached = false;
@@ -1540,7 +1666,7 @@ void HostResolverManager::AbortInsecureDnsTasks(int error, bool fallback_only) {
   dispatcher_->SetLimits(limits);
 }
 
-// TODO(crbug.com/995984): Consider removing this and its usage.
+// TODO(crbug.com/40641277): Consider removing this and its usage.
 void HostResolverManager::TryServingAllJobsFromHosts() {
   if (!dns_client_ || !dns_client_->GetEffectiveConfig())
     return;
@@ -1559,7 +1685,8 @@ void HostResolverManager::TryServingAllJobsFromHosts() {
   }
 }
 
-void HostResolverManager::OnIPAddressChanged() {
+void HostResolverManager::OnIPAddressChanged(
+    NetworkChangeNotifier::IPAddressChangeType change_type) {
   DCHECK(!IsBoundToNetwork());
   last_ipv6_probe_time_ = base::TimeTicks();
   // Abandon all ProbeJobs.
@@ -1586,9 +1713,9 @@ void HostResolverManager::OnSystemDnsConfigChanged(
   // that we are not at risk of sending queries beyond the local network.
   if (HostResolverProc::GetDefault() && system_resolver_disabled_for_testing_ &&
       config.has_value()) {
-    DCHECK(base::ranges::none_of(config->nameservers,
-                                 &IPAddress::IsPubliclyRoutable,
-                                 &IPEndPoint::address))
+    DCHECK(std::ranges::none_of(config->nameservers,
+                                &IPAddress::IsPubliclyRoutable,
+                                &IPEndPoint::address))
         << "Test could query a publicly-routable address.";
   }
 
@@ -1661,7 +1788,6 @@ int HostResolverManager::GetOrCreateMdnsClient(MDnsClient** out_client) {
 #else
   // Should not request MDNS resoltuion unless MDNS is enabled.
   NOTREACHED();
-  return ERR_UNEXPECTED;
 #endif
 }
 

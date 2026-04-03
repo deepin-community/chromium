@@ -7,10 +7,11 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
+#include "base/containers/flat_set.h"
 #include "base/memory/ref_counted.h"
 #include "gpu/command_buffer/common/context_creation_attribs.h"
-#include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 #include "gpu/command_buffer/service/gles2_cmd_validation.h"
 #include "gpu/config/gpu_driver_bug_workarounds.h"
@@ -34,12 +35,9 @@ class GPU_GLES2_EXPORT FeatureInfo : public base::RefCounted<FeatureInfo> {
  public:
   struct FeatureFlags {
     FeatureFlags();
+    ~FeatureFlags();
 
-    GpuMemoryBufferFormatSet gpu_memory_buffer_formats = {
-        gfx::BufferFormat::BGR_565,   gfx::BufferFormat::RGBA_4444,
-        gfx::BufferFormat::RGBA_8888, gfx::BufferFormat::RGBX_8888,
-        gfx::BufferFormat::YVU_420,   gfx::BufferFormat::YUV_420_BIPLANAR,
-    };
+    base::flat_set<viz::SharedImageFormat> mappable_formats;
     // Use glBlitFramebuffer() and glRenderbufferStorageMultisample() with
     // GL_EXT_framebuffer_multisample-style semantics (as opposed to
     // GL_EXT_multisampled_render_to_texture semantics).
@@ -67,15 +65,13 @@ class GPU_GLES2_EXPORT FeatureInfo : public base::RefCounted<FeatureInfo> {
     bool angle_pack_reverse_row_order = false;
     bool arb_texture_rectangle = false;
     bool angle_instanced_arrays = false;
-    bool occlusion_query = false;
     bool occlusion_query_boolean = false;
-    bool use_arb_occlusion_query2_for_occlusion_query_boolean = false;
-    bool use_arb_occlusion_query_for_occlusion_query_boolean = false;
     bool native_vertex_array_object = false;
     bool ext_texture_format_astc = false;
     bool ext_texture_format_astc_hdr = false;
     bool ext_texture_format_atc = false;
     bool ext_texture_format_bgra8888 = false;
+    bool disable_mac_swangle_rgbx = false;
     bool ext_texture_format_dxt1 = false;
     bool ext_texture_format_dxt5 = false;
     bool enable_shader_name_hashing = false;
@@ -88,7 +84,7 @@ class GPU_GLES2_EXPORT FeatureInfo : public base::RefCounted<FeatureInfo> {
     bool map_buffer_range = false;
     bool ext_discard_framebuffer = false;
     bool angle_depth_texture = false;
-    bool is_swiftshader_for_webgl = false;
+    bool is_software_webgl = false;
     bool angle_texture_usage = false;
     bool ext_texture_storage = false;
     bool blend_equation_advanced = false;
@@ -104,8 +100,6 @@ class GPU_GLES2_EXPORT FeatureInfo : public base::RefCounted<FeatureInfo> {
     bool ext_multisample_compatibility = false;
     bool ext_blend_func_extended = false;
     bool ext_read_format_bgra = false;
-    bool desktop_srgb_support = false;
-    bool arb_es3_compatibility = false;
     bool chromium_color_buffer_float_rgb = false;
     bool chromium_color_buffer_float_rgba = false;
     bool angle_robust_client_memory = false;
@@ -131,7 +125,6 @@ class GPU_GLES2_EXPORT FeatureInfo : public base::RefCounted<FeatureInfo> {
     bool mesa_framebuffer_flip_y = false;
     bool ovr_multiview2 = false;
     bool khr_parallel_shader_compile = false;
-    bool android_surface_control = false;
     bool khr_robust_buffer_access_behavior = false;
     bool webgl_multi_draw = false;
     bool nv_internalformat_sample_query = false;
@@ -152,6 +145,7 @@ class GPU_GLES2_EXPORT FeatureInfo : public base::RefCounted<FeatureInfo> {
     bool angle_polygon_mode = false;
     bool ext_clip_control = false;
     bool ext_polygon_offset_clamp = false;
+    bool angle_blob_cache = false;
   };
 
   FeatureInfo();
@@ -166,8 +160,18 @@ class GPU_GLES2_EXPORT FeatureInfo : public base::RefCounted<FeatureInfo> {
   // Initializes the feature information. Needs a current GL context.
   void Initialize(ContextType context_type,
                   bool is_passthrough_cmd_decoder,
-                  const DisallowedFeatures& disallowed_features,
-                  bool force_reinitialize = false);
+                  const DisallowedFeatures& disallowed_features);
+
+  // Same as initialize but with a provided `complete_fbo_for_workarounds` to
+  // use with the ensure_previous_framebuffer_not_deleted driver bug workaround.
+  void InitializeWithCompleteFramebufferForWorkarounds(
+      ContextType context_type,
+      bool is_passthrough_cmd_decoder,
+      const DisallowedFeatures& disallowed_features,
+      uint32_t complete_fbo_for_workarounds);
+
+  // Same as above, but allows reinitialization.
+  void ForceReinitialize();
 
   // Helper that defaults to no disallowed features and a GLES2 context.
   void InitializeForTesting();
@@ -208,7 +212,6 @@ class GPU_GLES2_EXPORT FeatureInfo : public base::RefCounted<FeatureInfo> {
   bool IsWebGL1OrES2Context() const;
   bool IsWebGL2OrES3Context() const;
   bool IsWebGL2OrES3OrHigherContext() const;
-  bool IsES31ForTestingContext() const;
 
   void EnableCHROMIUMColorBufferFloatRGBA();
   void EnableCHROMIUMColorBufferFloatRGB();
@@ -251,9 +254,9 @@ class GPU_GLES2_EXPORT FeatureInfo : public base::RefCounted<FeatureInfo> {
 
   ~FeatureInfo();
 
-  void AddExtensionString(const base::StringPiece& s);
+  void AddExtensionString(std::string_view s);
   void InitializeBasicState(const base::CommandLine* command_line);
-  void InitializeFeatures();
+  void InitializeFeatures(uint32_t complete_fbo_for_workarounds);
   void InitializeFloatAndHalfFloatFeatures(const gfx::ExtensionSet& extensions);
 
   void EnableANGLEInstancedArrayIfPossible(const gfx::ExtensionSet& extensions);

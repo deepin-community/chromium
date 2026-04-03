@@ -16,11 +16,17 @@ import os
 from fnmatch import fnmatch
 from pprint import pformat
 
+import gclient_utils
 import git_common as git
+import setup_color
+
+from third_party import colorama
 
 STARTING_BRANCH_KEY = 'depot-tools.rebase-update.starting-branch'
 STARTING_WORKDIR_KEY = 'depot-tools.rebase-update.starting-workdir'
 
+RESET = colorama.Fore.RESET + colorama.Back.RESET + colorama.Style.RESET_ALL
+BRIGHT = colorama.Style.BRIGHT
 
 def find_return_branch_workdir():
     """Finds the branch and working directory which we should return to after
@@ -139,7 +145,10 @@ def remove_empty_branches(branch_tree):
         print(git.run('branch', '-d', branch))
 
 
-def rebase_branch(branch, parent, start_hash):
+def format_branch_name(branch):
+    return BRIGHT + branch + RESET
+
+def rebase_branch(branch, parent, start_hash, no_squash):
     logging.debug('considering %s(%s) -> %s(%s) : %s', branch,
                   git.hash_one(branch), parent, git.hash_one(parent),
                   start_hash)
@@ -159,8 +168,9 @@ def rebase_branch(branch, parent, start_hash):
 
     if git.hash_one(parent) != start_hash:
         # Try a plain rebase first
-        print('Rebasing:', branch)
-        consider_squashing = git.get_num_commits(branch) != 1
+        print('Rebasing:', format_branch_name(branch))
+        consider_squashing = git.get_num_commits(branch) != 1 and not (
+            no_squash)
         rebase_ret = git.rebase(parent,
                                 start_hash,
                                 branch,
@@ -178,7 +188,10 @@ def rebase_branch(branch, parent, start_hash):
             if not consider_squashing:
                 print(mid_rebase_message)
                 return False
-            print("Failed! Attempting to squash", branch, "...", end=' ')
+            print("Failed! Attempting to squash",
+                  format_branch_name(branch),
+                  "...",
+                  end=' ')
             sys.stdout.flush()
             squash_branch = branch + "_squash_attempt"
             git.run('checkout', '-b', squash_branch)
@@ -223,7 +236,7 @@ def rebase_branch(branch, parent, start_hash):
                     print(mid_rebase_message)
                     return False
     else:
-        print('%s up-to-date' % branch)
+        print('%s up-to-date' % format_branch_name(branch))
 
     git.remove_merge_base(branch)
     git.get_or_create_merge_base(branch)
@@ -231,7 +244,23 @@ def rebase_branch(branch, parent, start_hash):
     return True
 
 
+def with_downstream_branches(base_branches, branch_tree):
+    """Returns a set of base_branches and all downstream branches."""
+    downstream_branches = set()
+    for branch, parent in git.topo_iter(branch_tree):
+        if parent in base_branches or parent in downstream_branches:
+            downstream_branches.add(branch)
+
+    return downstream_branches.union(base_branches)
+
+
 def main(args=None):
+    if gclient_utils.IsEnvCog():
+        print(
+            'rebase-update command is not supported. Please navigate to source '
+            'control view in the activity bar to rebase your changes.',
+            file=sys.stderr)
+        return 1
     parser = argparse.ArgumentParser()
     parser.add_argument('--verbose', '-v', action='store_true')
     parser.add_argument('--keep-going',
@@ -246,6 +275,10 @@ def main(args=None):
     parser.add_argument('--current',
                         action='store_true',
                         help='Only rebase the current branch.')
+    parser.add_argument('--tree',
+                        action='store_true',
+                        help='Rebase all branches downstream from the '
+                        'selected branch(es).')
     parser.add_argument('branches',
                         nargs='*',
                         help='Branches to be rebased. All branches are assumed '
@@ -254,6 +287,11 @@ def main(args=None):
                         '-e',
                         action='store_true',
                         help='Do not automatically delete empty branches.')
+    parser.add_argument(
+        '--no-squash',
+        action='store_true',
+        help='Will not try to squash branches if rebasing fails.')
+
     opts = parser.parse_args(args)
 
     if opts.verbose:  # pragma: no cover
@@ -290,10 +328,14 @@ def main(args=None):
         branches_to_rebase.add(git.current_branch())
 
     skipped, branch_tree = git.get_branch_tree(use_limit=not opts.current)
+    if opts.tree:
+        branches_to_rebase = with_downstream_branches(branches_to_rebase,
+                                                      branch_tree)
+
     if branches_to_rebase:
         skipped = set(skipped).intersection(branches_to_rebase)
     for branch in skipped:
-        print('Skipping %s: No upstream specified' % branch)
+        print('Skipping %s: No upstream specified' % format_branch_name(branch))
 
     if not opts.no_fetch:
         fetch_remotes(branch_tree)
@@ -314,9 +356,10 @@ def main(args=None):
         if branches_to_rebase and branch not in branches_to_rebase:
             continue
         if git.is_dormant(branch):
-            print('Skipping dormant branch', branch)
+            print('Skipping dormant branch', format_branch_name(branch))
         else:
-            ret = rebase_branch(branch, parent, merge_base[branch])
+            ret = rebase_branch(branch, parent, merge_base[branch],
+                                opts.no_squash)
             if not ret:
                 retcode = 1
 
@@ -337,7 +380,7 @@ def main(args=None):
         print()
         print('The following branches could not be cleanly rebased:')
         for branch in unrebased_branches:
-            print('  %s' % branch)
+            print('  %s' % format_branch_name(branch))
 
     if not retcode:
         if not opts.keep_empty:
@@ -374,6 +417,7 @@ def main(args=None):
 
 
 if __name__ == '__main__':  # pragma: no cover
+    setup_color.init()
     try:
         sys.exit(main())
     except KeyboardInterrupt:

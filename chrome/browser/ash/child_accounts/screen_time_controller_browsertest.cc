@@ -73,7 +73,7 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
   void SetUpInProcessBrowserTestFixture() override {
     MixinBasedInProcessBrowserTest::SetUpInProcessBrowserTestFixture();
     // A basic starting policy.
-    base::Value::Dict policy_content =
+    base::DictValue policy_content =
         utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
     logged_in_user_mixin_.GetUserPolicyMixin()
         ->RequestPolicyUpdate()
@@ -128,7 +128,7 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
     return session_manager::SessionManager::Get()->IsScreenLocked();
   }
 
-  void SetUsageTimeLimitPolicy(const base::Value::Dict& policy_content) {
+  void SetUsageTimeLimitPolicy(const base::DictValue& policy_content) {
     logged_in_user_mixin_.GetUserPolicyMixin()
         ->RequestPolicyUpdate()
         ->policy_payload()
@@ -143,13 +143,9 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
   raw_ptr<Profile, DanglingUntriaged> child_profile_ = nullptr;
 
  private:
-  LoggedInUserMixin logged_in_user_mixin_{&mixin_host_,
-                                          LoggedInUserMixin::LogInType::kChild,
-                                          embedded_test_server(),
-                                          this,
-                                          true /*should_launch_browser*/,
-                                          std::nullopt /*account_id*/,
-                                          false /*include_initial_user*/};
+  LoggedInUserMixin logged_in_user_mixin_{
+      &mixin_host_, /*test_base=*/this, embedded_test_server(),
+      LoggedInUserMixin::LogInType::kChild, /*include_initial_user=*/false};
 };
 
 // Tests a simple lock override.
@@ -165,7 +161,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, LockOverride) {
   EXPECT_TRUE(IsAuthEnabled());
 
   // Set new policy.
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddOverride(&policy_content,
                      usage_time_limit::TimeLimitOverride::Action::kLock,
@@ -184,7 +180,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, UnlockBedtime) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 BRT");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kFriday,
                             utils::CreateTime(21, 0), utils::CreateTime(7, 0),
@@ -224,7 +220,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, OverrideBedtimeWithDuration) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 PST");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kFriday,
                             utils::CreateTime(21, 0), utils::CreateTime(7, 0),
@@ -282,7 +278,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 BRT");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeUsageLimit(&policy_content, utils::kMonday, base::Hours(2),
                            last_updated);
@@ -334,7 +330,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, UnlockBedtimeWithDuration) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 GMT");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kFriday,
                             utils::CreateTime(21, 0), utils::CreateTime(7, 0),
@@ -388,7 +384,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, UnlockDailyLimitWithDuration) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 PST");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeUsageLimit(&policy_content, utils::kMonday, base::Hours(2),
                            last_updated);
@@ -432,13 +428,8 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, UnlockDailyLimitWithDuration) {
 }
 
 // Tests the default time window limit.
-// TODO(crbug.com/1358216): Flaky on Linux
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_ASH)
-#define MAYBE_DefaultBedtime DISABLED_DefaultBedtime
-#else
-#define MAYBE_DefaultBedtime DefaultBedtime
-#endif
-IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, MAYBE_DefaultBedtime) {
+// TODO(crbug.com/1358216): Flaky
+IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_DefaultBedtime) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 10:00:00 GMT");
   ScreenLockerTester().Lock();
 
@@ -446,7 +437,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, MAYBE_DefaultBedtime) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 GMT");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kMonday,
                             utils::CreateTime(21, 0), utils::CreateTime(7, 0),
@@ -502,7 +493,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DefaultDailyLimit) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 GMT");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeUsageLimit(&policy_content, utils::kMonday, base::Hours(3),
                            last_updated);
@@ -560,7 +551,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, ActiveSessionBedtime) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 PST");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kMonday,
                             utils::CreateTime(23, 0), utils::CreateTime(8, 0),
@@ -591,7 +582,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, ActiveSessionDailyLimit) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 PST");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeUsageLimit(&policy_content, utils::kMonday, base::Hours(1),
                            last_updated);
@@ -621,7 +612,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, BedtimeOnTimezoneChange) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("3 Jan 2018 0:00 GMT-0600");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kWednesday,
                             utils::CreateTime(19, 0), utils::CreateTime(7, 0),
@@ -666,7 +657,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, BedtimeLockScreen24HourClock) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 GMT");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kMonday,
                             utils::CreateTime(21, 0), utils::CreateTime(17, 0),
@@ -690,7 +681,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("3 Jan 2018 0:00 GMT+1300");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kTuesday,
                             utils::CreateTime(20, 0), utils::CreateTime(7, 0),
@@ -717,14 +708,15 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
 }
 
 // Tests if call the observers for usage time limit warning.
-IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, CallObservers) {
+// TODO(crbug.com/334160972): Flaky on CrOS.
+IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_CallObservers) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 10:00:00 PST");
 
   system::TimezoneSettings::GetInstance()->SetTimezoneFromID(u"PST");
 
   // Set new policy with 3 hours of time usage limit.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 PST");
-  base::Value::Dict policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeUsageLimit(&policy_content, utils::kMonday, base::Hours(3),
                            last_updated);

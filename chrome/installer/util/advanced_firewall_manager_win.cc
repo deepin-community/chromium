@@ -5,8 +5,11 @@
 #include "chrome/installer/util/advanced_firewall_manager_win.h"
 
 #include <objbase.h>
+
 #include <stddef.h>
 
+#include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions_win.h"
 #include "base/strings/utf_string_conversions.h"
@@ -16,9 +19,9 @@
 
 namespace installer {
 
-AdvancedFirewallManager::AdvancedFirewallManager() {}
+AdvancedFirewallManager::AdvancedFirewallManager() = default;
 
-AdvancedFirewallManager::~AdvancedFirewallManager() {}
+AdvancedFirewallManager::~AdvancedFirewallManager() = default;
 
 bool AdvancedFirewallManager::Init(const std::wstring& app_name,
                                    const base::FilePath& app_path) {
@@ -49,10 +52,10 @@ bool AdvancedFirewallManager::IsFirewallEnabled() {
   // The most-restrictive active profile takes precedence.
   const NET_FW_PROFILE_TYPE2 kProfileTypes[] = {
       NET_FW_PROFILE2_PUBLIC, NET_FW_PROFILE2_PRIVATE, NET_FW_PROFILE2_DOMAIN};
-  for (size_t i = 0; i < std::size(kProfileTypes); ++i) {
-    if ((profile_types & kProfileTypes[i]) != 0) {
+  for (NET_FW_PROFILE_TYPE2 profile_type : kProfileTypes) {
+    if ((profile_types & profile_type) != 0) {
       VARIANT_BOOL enabled = VARIANT_TRUE;
-      hr = firewall_policy_->get_FirewallEnabled(kProfileTypes[i], &enabled);
+      hr = firewall_policy_->get_FirewallEnabled(profile_type, &enabled);
       // Assume the firewall is enabled if we can't determine.
       if (FAILED(hr) || enabled != VARIANT_FALSE)
         return true;

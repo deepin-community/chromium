@@ -25,6 +25,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "xla/tsl/lib/core/status_test_util.h"
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/platform/path.h"
 #include "tensorflow/core/protobuf/meta_graph.pb.h"
@@ -32,7 +33,6 @@ limitations under the License.
 #include "tensorflow/tools/proto_splitter/cc/util.h"
 #include "tensorflow/tools/proto_splitter/chunk.pb.h"
 #include "tensorflow/tools/proto_splitter/testdata/test_message.pb.h"
-#include "tsl/lib/core/status_test_util.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/status_matchers.h"
 #include "tsl/platform/statusor.h"
@@ -51,12 +51,12 @@ using fingerprinting_utils_internal::HashSavedObjectGraph;
 using fingerprinting_utils_internal::HashSignatureDef;
 using fingerprinting_utils_internal::PruneChunkedMessage;
 using fingerprinting_utils_internal::SerializeProto;
-using ::proto_splitter::ChunkedField;
-using ::proto_splitter::ChunkedMessage;
-using ::proto_splitter::ChunkInfo;
-using ::proto_splitter::ChunkMetadata;
-using ::proto_splitter::FieldIndex;
-using ::proto_splitter_testdata::ManyFields;
+using ::tensorflow::proto_splitter::ChunkedField;
+using ::tensorflow::proto_splitter::ChunkedMessage;
+using ::tensorflow::proto_splitter::ChunkInfo;
+using ::tensorflow::proto_splitter::ChunkMetadata;
+using ::tensorflow::proto_splitter::FieldIndex;
+using ::tensorflow::proto_splitter_testdata::ManyFields;
 using ::tensorflow::protobuf::Message;
 using ::tensorflow::protobuf::RepeatedPtrField;
 using ::tensorflow::protobuf::TextFormat;
@@ -82,8 +82,8 @@ absl::Status ParseTextProto(absl::string_view text_proto,
       absl::StrCat("Could not parse text proto: ", text_proto));
 }
 
-absl::StatusOr<RepeatedPtrField<::proto_splitter::FieldIndex>> ExtractFieldTags(
-    absl::string_view chunked_field_text_proto) {
+absl::StatusOr<RepeatedPtrField<::tensorflow::proto_splitter::FieldIndex>>
+ExtractFieldTags(absl::string_view chunked_field_text_proto) {
   ChunkedField chunked_field;
   TF_RETURN_IF_ERROR(ParseTextProto(chunked_field_text_proto, &chunked_field));
   return chunked_field.field_tag();
@@ -101,7 +101,8 @@ TEST(FingerprintingTest, TestFieldTagMatchesInitialSubsequence) {
   field_tags_sub.CopyFrom(field_tags);
   field_tags_sub.DeleteSubrange(2, 2);
 
-  EXPECT_THAT(fieldTagMatches(field_tags_sub, field_tags), IsOkAndHolds(2));
+  EXPECT_THAT(fieldTagMatches(field_tags_sub, field_tags),
+              absl_testing::IsOkAndHolds(2));
 }
 
 TEST(FingerprintingTest, TestFieldTagMatchesNoninitialSubsequence) {
@@ -116,7 +117,8 @@ TEST(FingerprintingTest, TestFieldTagMatchesNoninitialSubsequence) {
   field_tags_sub.CopyFrom(field_tags);
   field_tags_sub.DeleteSubrange(0, 2);
 
-  EXPECT_THAT(fieldTagMatches(field_tags_sub, field_tags), IsOkAndHolds(0));
+  EXPECT_THAT(fieldTagMatches(field_tags_sub, field_tags),
+              absl_testing::IsOkAndHolds(0));
 }
 
 TEST(FingerprintingTest, TestFieldTagMatchesIdenticalSubsequence) {
@@ -130,7 +132,8 @@ TEST(FingerprintingTest, TestFieldTagMatchesIdenticalSubsequence) {
   RepeatedPtrField<FieldIndex> field_tags_sub;
   field_tags_sub.CopyFrom(field_tags);
 
-  EXPECT_THAT(fieldTagMatches(field_tags_sub, field_tags), IsOkAndHolds(4));
+  EXPECT_THAT(fieldTagMatches(field_tags_sub, field_tags),
+              absl_testing::IsOkAndHolds(4));
 }
 
 TEST(FingerprintingTest, TestFieldTagMatchesSuperSubsequence) {
@@ -145,7 +148,8 @@ TEST(FingerprintingTest, TestFieldTagMatchesSuperSubsequence) {
   field_tags_sub.CopyFrom(field_tags);
   field_tags_sub.Add()->set_field(6);
 
-  EXPECT_THAT(fieldTagMatches(field_tags_sub, field_tags), IsOkAndHolds(4));
+  EXPECT_THAT(fieldTagMatches(field_tags_sub, field_tags),
+              absl_testing::IsOkAndHolds(4));
 }
 
 TEST(FingerprintingTest, TestPruneChunkedMessageSingleTarget) {
@@ -338,7 +342,7 @@ TEST(FingerprintingTest, TestHashGraphDef) {
   GraphDef graph_def;
   EXPECT_THAT(
       HashGraphDef(&graph_def, chunk_metadata.message(), reader, chunks_info),
-      IsOkAndHolds(16782272393894422524U));
+      absl_testing::IsOkAndHolds(16782272393894422524U));
 }
 
 TEST(FingerprintingTest, TestHashSignatureDef) {
@@ -361,7 +365,7 @@ TEST(FingerprintingTest, TestHashSignatureDef) {
   SignatureDef signature_def;
   EXPECT_THAT(HashSignatureDef(signature_def_map, chunk_metadata.message(),
                                reader, chunks_info),
-              IsOkAndHolds(0));
+              absl_testing::IsOkAndHolds(0));
 }
 
 TEST(FingerprintingTest, TestHashSavedObjectGraph) {
@@ -384,7 +388,7 @@ TEST(FingerprintingTest, TestHashSavedObjectGraph) {
   EXPECT_THAT(
       HashSavedObjectGraph(&saved_object_graph, chunk_metadata.message(),
                            reader, chunks_info),
-      IsOkAndHolds(17454850744699451884U));
+      absl_testing::IsOkAndHolds(17454850744699451884U));
 }
 
 }  // namespace

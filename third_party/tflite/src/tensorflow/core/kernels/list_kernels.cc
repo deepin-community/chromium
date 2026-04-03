@@ -46,9 +46,9 @@ namespace tensorflow {
 
 typedef Eigen::ThreadPoolDevice CPUDevice;
 
-Status TensorShapeFromTensor(const Tensor& t, PartialTensorShape* out) {
+absl::Status TensorShapeFromTensor(const Tensor& t, PartialTensorShape* out) {
   if (t.shape() == TensorShape({})) {
-    if ((t.dtype() == DT_INT32 && t.scalar<int32>()() == -1) ||
+    if ((t.dtype() == DT_INT32 && t.scalar<int32_t>()() == -1) ||
         (t.dtype() == DT_INT64 && t.scalar<int64_t>()() == -1)) {
       *out = PartialTensorShape();
       return absl::OkStatus();
@@ -61,7 +61,7 @@ Status TensorShapeFromTensor(const Tensor& t, PartialTensorShape* out) {
                                    t.shape().dims());
   }
   if (t.dtype() == DT_INT32) {
-    return PartialTensorShape::MakePartialShape(t.vec<int32>().data(),
+    return PartialTensorShape::MakePartialShape(t.vec<int32_t>().data(),
                                                 t.NumElements(), out);
   } else if (t.dtype() == DT_INT64) {
     return PartialTensorShape::MakePartialShape(t.vec<int64_t>().data(),
@@ -72,9 +72,9 @@ Status TensorShapeFromTensor(const Tensor& t, PartialTensorShape* out) {
       DataTypeString(t.dtype()));
 }
 
-Status GetElementShapeFromInput(OpKernelContext* c,
-                                const TensorList& tensor_list, int index,
-                                PartialTensorShape* element_shape) {
+absl::Status GetElementShapeFromInput(OpKernelContext* c,
+                                      const TensorList& tensor_list, int index,
+                                      PartialTensorShape* element_shape) {
   TF_RETURN_IF_ERROR(TensorShapeFromTensor(c->input(index), element_shape));
   // Check that `element_shape` and `tensor_list.element_shape` are
   // compatible and store the merged shape in `element_shape`.
@@ -83,7 +83,8 @@ Status GetElementShapeFromInput(OpKernelContext* c,
   return absl::OkStatus();
 }
 
-Status GetInputList(OpKernelContext* c, int index, const TensorList** list) {
+absl::Status GetInputList(OpKernelContext* c, int index,
+                          const TensorList** list) {
   if (!TensorShapeUtils::IsScalar(c->input(index).shape())) {
     return errors::InvalidArgument("Input list must be a scalar saw: ",
                                    c->input(index).shape().DebugString());
@@ -98,10 +99,11 @@ Status GetInputList(OpKernelContext* c, int index, const TensorList** list) {
   return absl::OkStatus();
 }
 
-Status ForwardInputOrCreateNewList(OpKernelContext* c, int32_t input_index,
-                                   int32_t output_index,
-                                   const TensorList& input_list,
-                                   TensorList** output_list) {
+absl::Status ForwardInputOrCreateNewList(OpKernelContext* c,
+                                         int32_t input_index,
+                                         int32_t output_index,
+                                         const TensorList& input_list,
+                                         TensorList** output_list) {
   // Attempt to forward the input tensor to the output if possible.
   std::unique_ptr<Tensor> maybe_output = c->forward_input(
       input_index, output_index, DT_VARIANT, TensorShape{},
@@ -155,7 +157,7 @@ class EmptyTensorList : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape{}, &result, attr));
     TensorList empty;
     empty.element_dtype = element_dtype_;
-    empty.max_num_elements = max_num_elements_t.scalar<int32>()();
+    empty.max_num_elements = max_num_elements_t.scalar<int32_t>()();
     PartialTensorShape element_shape;
     OP_REQUIRES_OK(ctx, TensorShapeFromTensor(ctx->input(0), &element_shape));
     empty.element_shape = element_shape;
@@ -255,7 +257,7 @@ class TensorListLength : public OpKernel {
     OP_REQUIRES_OK(c, GetInputList(c, 0, &l));
     Tensor* result;
     OP_REQUIRES_OK(c, c->allocate_output(0, TensorShape{}, &result));
-    result->scalar<int32>()() = l->tensors().size();
+    result->scalar<int32_t>()() = l->tensors().size();
   }
 };
 
@@ -285,7 +287,7 @@ class TensorListElementShape : public OpKernel {
     if (l->element_shape.unknown_rank()) {
       OP_REQUIRES_OK(c, c->allocate_output(0, TensorShape({}), &result));
       if (result->dtype() == DT_INT32) {
-        result->scalar<int32>()() = -1;
+        result->scalar<int32_t>()() = -1;
       } else {
         result->scalar<int64_t>()() = -1;
       }
@@ -294,7 +296,7 @@ class TensorListElementShape : public OpKernel {
                             0, TensorShape{l->element_shape.dims()}, &result));
       for (int i = 0; i < l->element_shape.dims(); ++i) {
         if (result->dtype() == DT_INT32) {
-          result->flat<int32>()(i) = l->element_shape.dim_size(i);
+          result->flat<int32_t>()(i) = l->element_shape.dim_size(i);
         } else {
           result->flat<int64_t>()(i) = l->element_shape.dim_size(i);
         }
@@ -334,7 +336,7 @@ class TensorListReserve : public OpKernel {
         errors::InvalidArgument(
             "The num_elements to reserve must be a tensor size 1, but got ",
             c->input(1).shape()));
-    int32_t num_elements = c->input(1).scalar<int32>()();
+    int32_t num_elements = c->input(1).scalar<int32_t>()();
     OP_REQUIRES(c, num_elements >= 0,
                 errors::InvalidArgument("The num_elements to reserve must be a "
                                         "non negative number, but got ",
@@ -382,7 +384,7 @@ class TensorListResize : public OpKernel {
     OP_REQUIRES_OK(c, GetInputList(c, 0, &input_list));
     OP_REQUIRES(c, TensorShapeUtils::IsScalar(c->input(1).shape()),
                 errors::InvalidArgument("size must be a scalar"));
-    int32_t size = c->input(1).scalar<int32>()();
+    int32_t size = c->input(1).scalar<int32_t>()();
     OP_REQUIRES(
         c, size >= 0,
         errors::InvalidArgument(
@@ -471,7 +473,7 @@ class TensorListSetItem : public OpKernel {
                     " list shape: ", l->element_shape.DebugString()));
     TensorList* output_list = nullptr;
     OP_REQUIRES_OK(c, ForwardInputOrCreateNewList(c, 0, 0, *l, &output_list));
-    int32_t index = c->input(1).scalar<int32>()();
+    int32_t index = c->input(1).scalar<int32_t>()();
     if (!resize_if_index_out_of_bounds_) {
       OP_REQUIRES(c, index < l->tensors().size(),
                   errors::InvalidArgument("Trying to modify element ", index,
@@ -697,7 +699,7 @@ REGISTER_UNARY_VARIANT_UNARY_OP_FUNCTION(ZEROS_LIKE_VARIANT_UNARY_OP,
                                          DEVICE_CPU, TensorList,
                                          TensorListZerosLike<CPUDevice>);
 
-static Status TensorListDeviceCopy(
+static absl::Status TensorListDeviceCopy(
     const TensorList& from, TensorList* to,
     const UnaryVariantOpRegistry::AsyncTensorDeviceCopyFn& copy) {
   to->element_shape = from.element_shape;

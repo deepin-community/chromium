@@ -2,13 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "cc/paint/render_surface_filters.h"
+
 #include <stddef.h>
+
 #include <algorithm>
 #include <utility>
 
-#include "cc/paint/render_surface_filters.h"
-
-#include "base/numerics/math_constants.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/numerics/angle_conversions.h"
 #include "cc/paint/filter_operation.h"
 #include "cc/paint/filter_operations.h"
 #include "cc/paint/paint_filter.h"
@@ -21,31 +24,31 @@ namespace cc {
 
 namespace {
 
-void GetBrightnessMatrix(float amount, float matrix[20]) {
+void GetBrightnessMatrix(float amount, base::span<float, 20> matrix) {
   // Spec implementation
   // (http://dvcs.w3.org/hg/FXTF/raw-file/tip/filters/index.html#brightnessEquivalent)
   // <feFunc[R|G|B] type="linear" slope="[amount]">
-  memset(matrix, 0, 20 * sizeof(float));
+  std::ranges::fill(matrix, 0.0f);
   matrix[0] = matrix[6] = matrix[12] = amount;
   matrix[18] = 1.f;
 }
 
-void GetSaturatingBrightnessMatrix(float amount, float matrix[20]) {
+void GetSaturatingBrightnessMatrix(float amount, base::span<float, 20> matrix) {
   // Legacy implementation used by internal clients.
   // <feFunc[R|G|B] type="linear" intercept="[amount]"/>
-  memset(matrix, 0, 20 * sizeof(float));
+  std::ranges::fill(matrix, 0.0f);
   matrix[0] = matrix[6] = matrix[12] = matrix[18] = 1.f;
   matrix[4] = matrix[9] = matrix[14] = amount;
 }
 
-void GetContrastMatrix(float amount, float matrix[20]) {
-  memset(matrix, 0, 20 * sizeof(float));
+void GetContrastMatrix(float amount, base::span<float, 20> matrix) {
+  std::ranges::fill(matrix, 0.0f);
   matrix[0] = matrix[6] = matrix[12] = amount;
   matrix[4] = matrix[9] = matrix[14] = (-0.5f * amount + 0.5f);
   matrix[18] = 1.f;
 }
 
-void GetSaturateMatrix(float amount, float matrix[20]) {
+void GetSaturateMatrix(float amount, base::span<float, 20> matrix) {
   // Note, these values are computed to ensure MatrixNeedsClamping is false
   // for amount in [0..1]
   matrix[0] = 0.213f + 0.787f * amount;
@@ -64,9 +67,9 @@ void GetSaturateMatrix(float amount, float matrix[20]) {
   matrix[18] = 1.f;
 }
 
-void GetHueRotateMatrix(float hue, float matrix[20]) {
-  float cos_hue = cosf(hue * base::kPiFloat / 180.f);
-  float sin_hue = sinf(hue * base::kPiFloat / 180.f);
+void GetHueRotateMatrix(float hue, base::span<float, 20> matrix) {
+  float cos_hue = cosf(base::DegToRad(hue));
+  float sin_hue = sinf(base::DegToRad(hue));
   matrix[0] = 0.213f + cos_hue * 0.787f - sin_hue * 0.213f;
   matrix[1] = 0.715f - cos_hue * 0.715f - sin_hue * 0.715f;
   matrix[2] = 0.072f - cos_hue * 0.072f + sin_hue * 0.928f;
@@ -84,20 +87,20 @@ void GetHueRotateMatrix(float hue, float matrix[20]) {
   matrix[19] = 0.f;
 }
 
-void GetInvertMatrix(float amount, float matrix[20]) {
-  memset(matrix, 0, 20 * sizeof(float));
+void GetInvertMatrix(float amount, base::span<float, 20> matrix) {
+  std::ranges::fill(matrix, 0.0f);
   matrix[0] = matrix[6] = matrix[12] = 1.f - 2.f * amount;
   matrix[4] = matrix[9] = matrix[14] = amount;
   matrix[18] = 1.f;
 }
 
-void GetOpacityMatrix(float amount, float matrix[20]) {
-  memset(matrix, 0, 20 * sizeof(float));
+void GetOpacityMatrix(float amount, base::span<float, 20> matrix) {
+  std::ranges::fill(matrix, 0.0f);
   matrix[0] = matrix[6] = matrix[12] = 1.f;
   matrix[18] = amount;
 }
 
-void GetGrayscaleMatrix(float amount, float matrix[20]) {
+void GetGrayscaleMatrix(float amount, base::span<float, 20> matrix) {
   // Note, these values are computed to ensure MatrixNeedsClamping is false
   // for amount in [0..1]
   matrix[0] = 0.2126f + 0.7874f * amount;
@@ -119,7 +122,7 @@ void GetGrayscaleMatrix(float amount, float matrix[20]) {
   matrix[18] = 1.f;
 }
 
-void GetSepiaMatrix(float amount, float matrix[20]) {
+void GetSepiaMatrix(float amount, base::span<float, 20> matrix) {
   matrix[0] = 0.393f + 0.607f * amount;
   matrix[1] = 0.769f - 0.769f * amount;
   matrix[2] = 0.189f - 0.189f * amount;

@@ -32,7 +32,7 @@ SelectToSpeakHandler::SelectToSpeakHandler() = default;
 
 SelectToSpeakHandler::~SelectToSpeakHandler() = default;
 
-void SelectToSpeakHandler::HandleGetAppLocale(const base::Value::List& args) {
+void SelectToSpeakHandler::HandleGetAppLocale(const base::ListValue& args) {
   const std::string& app_locale = g_browser_process->GetApplicationLocale();
   AllowJavascript();
   FireWebUIListener("app-locale-updated", base::Value(app_locale));
@@ -47,10 +47,10 @@ void SelectToSpeakHandler::OnVoicesChanged() {
       GURL(chrome::GetOSSettingsUrl(
           chromeos::settings::mojom::kSelectToSpeakSubpagePath)),
       &voices);
-  base::Value::List responses;
+  base::ListValue responses;
   for (const auto& voice : voices) {
-    base::Value::Dict response;
-    base::Value::List event_types;
+    base::DictValue response;
+    base::ListValue event_types;
     std::string language_code;
     std::string language_and_country_code = voice.lang;
     if (!language_and_country_code.empty()) {
@@ -69,8 +69,7 @@ void SelectToSpeakHandler::OnVoicesChanged() {
                        g_browser_process->GetApplicationLocale(), true));
     }
     for (auto& event : voice.events) {
-      const char* event_name_constant = TtsEventTypeToString(event);
-      event_types.Append(event_name_constant);
+      event_types.Append(TtsEventTypeToString(event));
     }
     response.Set("eventTypes", std::move(event_types));
     response.Set("extensionId", voice.engine_id);

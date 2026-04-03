@@ -24,6 +24,7 @@
 
 #include <optional>
 
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/fx_extension.h"
 #include "fxbarcode/datamatrix/BC_Encoder.h"
 #include "fxbarcode/datamatrix/BC_EncoderContext.h"
@@ -47,11 +48,17 @@ size_t DetermineConsecutiveDigitCount(const WideString& msg, size_t startpos) {
   size_t count = 0;
   const size_t size = msg.GetLength();
   const wchar_t* data = msg.c_str();
-  for (size_t i = startpos; i < size; ++i) {
-    if (!FXSYS_IsDecimalDigit(data[i]))
-      break;
-    ++count;
-  }
+
+  // SAFETY: performance-sensitive.
+  UNSAFE_BUFFERS({
+    for (size_t i = startpos; i < size; ++i) {
+      if (!FXSYS_IsDecimalDigit(data[i])) {
+        break;
+      }
+      ++count;
+    }
+  });
+
   return count;
 }
 
@@ -66,21 +73,22 @@ CBC_HighLevelEncoder::Encoding CBC_ASCIIEncoder::GetEncodingMode() {
 }
 
 bool CBC_ASCIIEncoder::Encode(CBC_EncoderContext* context) {
-  size_t n = DetermineConsecutiveDigitCount(context->m_msg, context->m_pos);
+  size_t n = DetermineConsecutiveDigitCount(context->msg_, context->pos_);
   if (n >= 2) {
     std::optional<wchar_t> code = EncodeASCIIDigits(
-        context->m_msg[context->m_pos], context->m_msg[context->m_pos + 1]);
-    if (!code.has_value())
+        context->msg_[context->pos_], context->msg_[context->pos_ + 1]);
+    if (!code.has_value()) {
       return false;
+    }
 
     context->writeCodeword(code.value());
-    context->m_pos += 2;
+    context->pos_ += 2;
     return true;
   }
 
   wchar_t c = context->getCurrentChar();
   CBC_HighLevelEncoder::Encoding newMode = CBC_HighLevelEncoder::LookAheadTest(
-      context->m_msg, context->m_pos, GetEncodingMode());
+      context->msg_, context->pos_, GetEncodingMode());
   if (newMode != GetEncodingMode()) {
     switch (newMode) {
       case CBC_HighLevelEncoder::Encoding::BASE256:
@@ -111,6 +119,6 @@ bool CBC_ASCIIEncoder::Encode(CBC_EncoderContext* context) {
   } else {
     context->writeCodeword(static_cast<wchar_t>(c + 1));
   }
-  context->m_pos++;
+  context->pos_++;
   return true;
 }

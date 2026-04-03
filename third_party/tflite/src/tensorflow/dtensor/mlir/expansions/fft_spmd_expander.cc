@@ -21,32 +21,24 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/IRMapping.h"  // from @llvm-project
+#include "mlir/IR/Location.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
-#include "mlir/Support/DebugStringHelper.h"  // from @llvm-project
-#include "tensorflow/cc/framework/ops.h"
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
-#include "tensorflow/core/platform/errors.h"
-#include "tensorflow/core/platform/statusor.h"
+#include "tensorflow/core/platform/types.h"
 #include "tensorflow/dtensor/cc/dstatus.h"
 #include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/collectives.h"
-#include "tensorflow/dtensor/mlir/expansions/meta_spmd_expander.h"
-#include "tensorflow/dtensor/mlir/ir/tf_dtensor.h"
 #include "tensorflow/dtensor/mlir/layout_parsing.h"
 #include "tensorflow/dtensor/mlir/op_utils.h"
 #include "tensorflow/dtensor/mlir/shape_utils.h"
-#include "tensorflow/dtensor/mlir/spmd_expander.h"
-#include "tensorflow/dtensor/mlir/spmd_expander_common.h"
 #include "tensorflow/dtensor/mlir/value_utils.h"
 
 namespace tensorflow {
@@ -74,11 +66,11 @@ bool IsDistributedFFTN(int num_transform_axes, const Layout& layout) {
 bool IsComplexFFT(mlir::Value input) {
   auto data_type =
       mlir::dyn_cast<mlir::TensorType>(input.getType()).getElementType();
-  return data_type.isa<mlir::ComplexType>();
+  return mlir::isa<mlir::ComplexType>(data_type);
 }
 
-Status IsProperFFTLength(mlir::Operation* op,
-                         const llvm::SmallVector<int64_t, 4>& fft_length_vec) {
+absl::Status IsProperFFTLength(
+    mlir::Operation* op, const llvm::SmallVector<int64_t, 4>& fft_length_vec) {
   TF_ASSIGN_OR_RETURN(auto input_layout,
                       ExtractRequiredLayoutFromOperand(op->getOperand(0)));
   const Mesh& mesh = input_layout.mesh();
@@ -167,7 +159,7 @@ StatusOr<mlir::Value> EmitTransposeRelayout(mlir::OpBuilder& builder,
   return transposed_input;
 }
 
-Status NormalizeAxes(std::vector<int>& transform_axes, int input_rank) {
+absl::Status NormalizeAxes(std::vector<int>& transform_axes, int input_rank) {
   std::sort(transform_axes.begin(), transform_axes.end());
   for (int i = 0; i < transform_axes.size(); ++i) {
     if (transform_axes[i] >= input_rank) {
@@ -234,8 +226,8 @@ StatusOr<mlir::Operation*> ExpandFFTNImpl(
         EmitTransposeRelayout(builder, location, output, intermediate_layout,
                               mesh, perm_axes));
 
-    new_fft_op = builder.create<mlir::TF::FFTOp>(
-        location, transposed_input.getType(), transposed_input);
+    new_fft_op = mlir::TF::FFTOp::create(
+        builder, location, transposed_input.getType(), transposed_input);
     SetSingleLayoutOnOp(new_fft_op, intermediate_layout);
     output = new_fft_op.getOutput();
   }
@@ -281,15 +273,15 @@ StatusOr<mlir::Operation*> ExpandFFTN(mlir::Operation* fft_op,
 
   if (IsComplexFFT(input)) {
     // FFT for the last axis.
-    mlir::TF::FFTOp fft_output_op = builder.create<mlir::TF::FFTOp>(
-        location, intermediate.getType(), intermediate);
+    mlir::TF::FFTOp fft_output_op = mlir::TF::FFTOp::create(
+        builder, location, intermediate.getType(), intermediate);
     transform_axes.pop_back();
     return ExpandFFTNImpl(fft_output_op, fft_op, transform_axes, input_rank,
                           builder, location, intermediate_layout, mesh);
   } else {
     TF_ASSIGN_OR_RETURN(auto fft_length_vec, ExtractFFTLengthFromOp(fft_op));
     mlir::Value fft_length = IntConst(
-        builder, location, (int32)fft_length_vec[num_transform_axes - 1]);
+        builder, location, (int32_t)fft_length_vec[num_transform_axes - 1]);
     llvm::ArrayRef<int64_t> rfft_shape =
         mlir::dyn_cast<mlir::TensorType>(intermediate.getType()).getShape();
     std::vector<int64_t> rfft_shape_vec = rfft_shape.vec();
@@ -306,8 +298,8 @@ StatusOr<mlir::Operation*> ExpandFFTN(mlir::Operation* fft_op,
         mlir::dyn_cast<mlir::TensorType>(fft_op->getResult(0).getType())
             .getElementType());
     // Real FFT for the last axis.
-    mlir::TF::RFFTOp rfft_output_op = builder.create<mlir::TF::RFFTOp>(
-        location, output_type, intermediate, fft_length);
+    mlir::TF::RFFTOp rfft_output_op = mlir::TF::RFFTOp::create(
+        builder, location, output_type, intermediate, fft_length);
     transform_axes.pop_back();
     return ExpandFFTNImpl(rfft_output_op, fft_op, transform_axes, input_rank,
                           builder, location, intermediate_layout, mesh);
@@ -361,8 +353,8 @@ StatusOr<mlir::Operation*> ExpandIFFTN(mlir::Operation* ifft_op,
   while (transform_axes.size() > 1) {
     ax = transform_axes[1] - 1;
     transform_axes.erase(transform_axes.begin() + 1);
-    fft_new_op = builder.create<mlir::TF::IFFTOp>(
-        location, transposed_output.getType(), transposed_output);
+    fft_new_op = mlir::TF::IFFTOp::create(
+        builder, location, transposed_output.getType(), transposed_output);
     SetSingleLayoutOnOp(fft_new_op, intermediate_layout);
     transposed_output = fft_new_op.getOutput();
     // Swap and relayout
@@ -375,8 +367,8 @@ StatusOr<mlir::Operation*> ExpandIFFTN(mlir::Operation* ifft_op,
 
   if (IsComplexFFT(ifft_op->getResult(0))) {
     // IFFT for the last axis.
-    mlir::TF::IFFTOp ifft_output_op = builder.create<mlir::TF::IFFTOp>(
-        location, transposed_output.getType(), transposed_output);
+    mlir::TF::IFFTOp ifft_output_op = mlir::TF::IFFTOp::create(
+        builder, location, transposed_output.getType(), transposed_output);
     SetSingleLayoutOnOp(ifft_output_op, intermediate_layout);
     builder.setInsertionPointAfter(ifft_output_op);
 
@@ -388,10 +380,10 @@ StatusOr<mlir::Operation*> ExpandIFFTN(mlir::Operation* ifft_op,
                         ExtractFFTLengthFromOp(ifft_op));
     mlir::Value ifft_length =
         IntConst(builder, location,
-                 (int32)complex_fft_length_vec[num_transform_axes - 1]);
+                 (int32_t)complex_fft_length_vec[num_transform_axes - 1]);
     // IRFFT for the last axis.
-    mlir::TF::IRFFTOp irfft_output_op = builder.create<mlir::TF::IRFFTOp>(
-        location, ifft_op->getResult(0).getType(), transposed_output,
+    mlir::TF::IRFFTOp irfft_output_op = mlir::TF::IRFFTOp::create(
+        builder, location, ifft_op->getResult(0).getType(), transposed_output,
         ifft_length);
     SetSingleLayoutOnOp(irfft_output_op, intermediate_layout);
     builder.setInsertionPointAfter(irfft_output_op);

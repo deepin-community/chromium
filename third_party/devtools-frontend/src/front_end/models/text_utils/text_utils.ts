@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@ import * as Text from './Text.js';
 import * as TextCursor from './TextCursor.js';
 import * as TextRange from './TextRange.js';
 import * as TextUtils from './TextUtils.js';
+import * as WasmDisassembly from './WasmDisassembly.js';
 
 export {
   CodeMirrorUtils,
@@ -22,4 +23,5 @@ export {
   TextCursor,
   TextRange,
   TextUtils,
+  WasmDisassembly,
 };

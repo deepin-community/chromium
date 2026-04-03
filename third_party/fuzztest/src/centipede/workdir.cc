@@ -16,22 +16,22 @@
 
 #include <cstddef>
 #include <filesystem>  // NOLINT
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>  // NOLINT
 #include <utility>
 #include <vector>
 
-#include "absl/log/check.h"
-#include "absl/log/log.h"
 #include "absl/strings/match.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/strip.h"
 #include "./centipede/environment.h"
-#include "./centipede/logging.h"
+#include "./common/logging.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
 namespace {
 
@@ -44,7 +44,7 @@ inline constexpr std::string_view kDistilledCorpusShardStemPrefix =
 std::string NormalizeAnnotation(std::string_view annotation) {
   std::string ret;
   if (!annotation.empty()) {
-    CHECK_NE(annotation.front(), '.');
+    FUZZTEST_CHECK_NE(annotation.front(), '.');
     ret = absl::StrCat(".", annotation);
   }
   return ret;
@@ -53,31 +53,40 @@ std::string NormalizeAnnotation(std::string_view annotation) {
 }  // namespace
 
 //------------------------------------------------------------------------------
-//                             WorkDir::PathInfo
+//                             WorkDir::PathShards
 
-WorkDir::ShardedFileInfo::ShardedFileInfo(std::string_view base_dir,
-                                          std::string_view rel_prefix,
-                                          size_t my_shard_index)
+WorkDir::PathShards::PathShards(std::string_view base_dir,
+                                std::string_view rel_prefix,
+                                size_t my_shard_index)
     : prefix_{std::filesystem::path(base_dir) / rel_prefix},
       my_shard_index_{my_shard_index} {}
 
-std::string WorkDir::ShardedFileInfo::ShardPath(size_t shard_index) const {
+std::string WorkDir::PathShards::Shard(size_t shard_index) const {
   return absl::StrFormat("%s%0*d", prefix_, kDigitsInShardIndex, shard_index);
 }
 
-std::string WorkDir::ShardedFileInfo::MyShardPath() const {
-  return ShardPath(my_shard_index_);
+std::string WorkDir::PathShards::MyShard() const {
+  return Shard(my_shard_index_);
 }
 
-std::string WorkDir::ShardedFileInfo::AllShardsGlob() const {
+std::string WorkDir::PathShards::AllShardsGlob() const {
   return absl::StrCat(prefix_, "*");
 }
 
-bool WorkDir::ShardedFileInfo::IsShardPath(std::string_view path) const {
+bool WorkDir::PathShards::IsShard(std::string_view path) const {
   // TODO(ussuri): This is as barebones as it can be right now. Possible
   //  improvements: 1. Make `path` & `prefix_` absolute before comparing (or in
   //  ctor for `prefix_`). 2. Add option to require the actual file's existence.
   return absl::StartsWith(path, prefix_);
+}
+
+std::optional<size_t> WorkDir::PathShards::GetShardIndex(
+    std::string_view path) const {
+  if (!absl::ConsumePrefix(&path, prefix_)) return std::nullopt;
+  if (path.size() != kDigitsInShardIndex) return std::nullopt;
+  size_t shard = 0;
+  if (!absl::SimpleAtoi(path, &shard)) return std::nullopt;
+  return shard;
 }
 
 //------------------------------------------------------------------------------
@@ -90,15 +99,16 @@ WorkDir WorkDir::FromCorpusShardPath(    //
   const std::filesystem::path path{corpus_shard_path};
   const std::string dir = path.parent_path();
   const std::string stem = path.stem();
-  CHECK(stem == kCorpusShardStem ||
-        absl::StartsWith(stem, kDistilledCorpusShardStemPrefix))
+  FUZZTEST_CHECK(stem == kCorpusShardStem ||
+                 absl::StartsWith(stem, kDistilledCorpusShardStemPrefix))
       << VV(corpus_shard_path);
   const std::string dot_ext = path.extension();
-  CHECK(!dot_ext.empty() && dot_ext[0] == '.') << VV(corpus_shard_path);
+  FUZZTEST_CHECK(!dot_ext.empty() && dot_ext[0] == '.')
+      << VV(corpus_shard_path);
   const std::string ext = dot_ext.substr(1);
-  CHECK_EQ(ext.size(), kDigitsInShardIndex) << VV(corpus_shard_path);
+  FUZZTEST_CHECK_EQ(ext.size(), kDigitsInShardIndex) << VV(corpus_shard_path);
   size_t shard_index = -1;
-  CHECK(absl::SimpleAtoi(ext, &shard_index)) << VV(corpus_shard_path);
+  FUZZTEST_CHECK(absl::SimpleAtoi(ext, &shard_index)) << VV(corpus_shard_path);
   return WorkDir{
       dir,
       std::string{binary_name},
@@ -121,13 +131,13 @@ WorkDir::WorkDir(                  //
       binary_hash_{binary_hash_holder_},
       my_shard_index_{my_shard_index_holder_} {}
 
-WorkDir::WorkDir(const centipede::Environment& env)
+WorkDir::WorkDir(const fuzztest::internal::Environment& env)
     : workdir_{env.workdir},
       binary_name_{env.binary_name},
       binary_hash_{env.binary_hash},
       my_shard_index_{env.my_shard_index} {}
 
-WorkDir::ShardedFileInfo WorkDir::CorpusFiles() const {
+WorkDir::PathShards WorkDir::CorpusFilePaths() const {
   return {workdir_, absl::StrCat(kCorpusShardStem, "."), my_shard_index_};
 }
 
@@ -136,8 +146,12 @@ std::string WorkDir::CoverageDirPath() const {
          absl::StrCat(binary_name_, "-", binary_hash_);
 }
 
-std::string WorkDir::CrashReproducerDirPath() const {
-  return std::filesystem::path(workdir_) / "crashes";
+WorkDir::PathShards WorkDir::CrashReproducerDirPaths() const {
+  return {workdir_, "crashes.", my_shard_index_};
+}
+
+WorkDir::PathShards WorkDir::CrashMetadataDirPaths() const {
+  return {workdir_, "crash-metadata.", my_shard_index_};
 }
 
 std::string WorkDir::BinaryInfoDirPath() const {
@@ -148,17 +162,17 @@ std::string WorkDir::DebugInfoDirPath() const {
   return std::filesystem::path(workdir_) / "debug";
 }
 
-WorkDir::ShardedFileInfo WorkDir::DistilledCorpusFiles() const {
+WorkDir::PathShards WorkDir::DistilledCorpusFilePaths() const {
   return {workdir_,
           absl::StrCat(kDistilledCorpusShardStemPrefix, binary_name_, "."),
           my_shard_index_};
 }
 
-WorkDir::ShardedFileInfo WorkDir::FeaturesFiles() const {
+WorkDir::PathShards WorkDir::FeaturesFilePaths() const {
   return {CoverageDirPath(), "features.", my_shard_index_};
 }
 
-WorkDir::ShardedFileInfo WorkDir::DistilledFeaturesFiles() const {
+WorkDir::PathShards WorkDir::DistilledFeaturesFilePaths() const {
   return {CoverageDirPath(),
           absl::StrCat("distilled-features-", binary_name_, "."),
           my_shard_index_};
@@ -226,8 +240,8 @@ std::vector<std::string> WorkDir::EnumerateRawCoverageProfiles() const {
   const auto dir_iter =
       std::filesystem::directory_iterator(dir_path, dir_error);
   if (dir_error) {
-    LOG(ERROR) << "Failed to access coverage dir '" << dir_path
-               << "': " << dir_error.message();
+    FUZZTEST_LOG(ERROR) << "Failed to access coverage dir '" << dir_path
+                        << "': " << dir_error.message();
     return {};
   }
   std::vector<std::string> raw_profiles;
@@ -238,5 +252,4 @@ std::vector<std::string> WorkDir::EnumerateRawCoverageProfiles() const {
   return raw_profiles;
 }
 
-}  // namespace centipede
-
+}  // namespace fuzztest::internal

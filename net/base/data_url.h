@@ -18,6 +18,12 @@ namespace net {
 
 class HttpResponseHeaders;
 
+// When enabled, whitespace is removed from non-Base64 data URLs. This was the
+// behavior of older versions of Chrome, and can be set part of an enterprise
+// policy.
+inline constexpr std::string_view kRemoveWhitespaceForDataURLs =
+    "remove-keep-whitespace-for-data-urls";
+
 // See RFC 2397 for a complete description of the 'data' URL scheme.
 //
 // Briefly, a 'data' URL has the form:
@@ -69,9 +75,11 @@ class NET_EXPORT DataURL {
 
   // Similar to parse, except that it also generates a bogus set of response
   // headers, with Content-Type populated, and takes a method. Only the "HEAD"
-  // method modifies the response, resulting in a 0-length body. All arguments
-  // except must be non-null. All std::string pointers must point to empty
-  // strings, and |*headers| must be nullptr. Returns net::OK on success.
+  // method modifies the response, resulting in a 0-length body. On success,
+  // |mime_type| receives only the MIME type essence (type/subtype), while
+  // Content-Type parameters are preserved in |headers|. All arguments except
+  // must be non-null. All std::string pointers must point to empty strings,
+  // and |*headers| must be nullptr. Returns net::OK on success.
   [[nodiscard]] static Error BuildResponse(
       const GURL& url,
       std::string_view method,

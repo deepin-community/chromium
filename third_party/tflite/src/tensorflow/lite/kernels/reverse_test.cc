@@ -20,6 +20,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "tensorflow/lite/kernels/test_util.h"
 #include "tensorflow/lite/schema/schema_generated.h"
+#include "tensorflow/lite/types/half.h"
 
 namespace tflite {
 namespace {
@@ -350,6 +351,88 @@ TEST(ReverseOpTest, Int16MultiDimensions) {
       model.GetOutput(),
       ElementsAreArray({5,  6,  3,  4,  1,  2,  11, 12, 9,  10, 7,  8,
                         17, 18, 15, 16, 13, 14, 23, 24, 21, 22, 19, 20}));
+}
+
+// float16 tests.
+TEST(ReverseOpTest, Float16OneDimension) {
+  ReverseOpModel<half> model({TensorType_FLOAT16, {4}},
+                             {TensorType_INT32, {1}});
+  model.PopulateTensor<half>(model.input(),
+                             {half(1), half(2), half(3), half(4)});
+  model.PopulateTensor<int32_t>(model.axis(), {0});
+  ASSERT_EQ(model.Invoke(), kTfLiteOk);
+
+  EXPECT_THAT(model.GetOutputShape(), ElementsAre(4));
+  EXPECT_THAT(model.GetOutput(),
+              ElementsAreArray({half(4), half(3), half(2), half(1)}));
+}
+
+TEST(ReverseOpTest, Float16MultiDimensions) {
+  ReverseOpModel<half> model({TensorType_FLOAT16, {4, 3, 2}},
+                             {TensorType_INT32, {1}});
+  model.PopulateTensor<half>(
+      model.input(),
+      {half(1),  half(2),  half(3),  half(4),  half(5),  half(6),
+       half(7),  half(8),  half(9),  half(10), half(11), half(12),
+       half(13), half(14), half(15), half(16), half(17), half(18),
+       half(19), half(20), half(21), half(22), half(23), half(24)});
+  model.PopulateTensor<int32_t>(model.axis(), {1});
+  ASSERT_EQ(model.Invoke(), kTfLiteOk);
+
+  EXPECT_THAT(model.GetOutputShape(), ElementsAre(4, 3, 2));
+  EXPECT_THAT(
+      model.GetOutput(),
+      ElementsAreArray({half(5),  half(6),  half(3),  half(4),  half(1),
+                        half(2),  half(11), half(12), half(9),  half(10),
+                        half(7),  half(8),  half(17), half(18), half(15),
+                        half(16), half(13), half(14), half(23), half(24),
+                        half(21), half(22), half(19), half(20)}));
+}
+
+// bfloat16 tests.
+TEST(ReverseOpTest, BFloat16OneDimension) {
+  ReverseOpModel<Eigen::bfloat16> model({TensorType_BFLOAT16, {4}},
+                                        {TensorType_INT32, {1}});
+  model.PopulateTensor<Eigen::bfloat16>(
+      model.input(), {Eigen::bfloat16(1), Eigen::bfloat16(2),
+                      Eigen::bfloat16(3), Eigen::bfloat16(4)});
+  model.PopulateTensor<int32_t>(model.axis(), {0});
+  ASSERT_EQ(model.Invoke(), kTfLiteOk);
+
+  EXPECT_THAT(model.GetOutputShape(), ElementsAre(4));
+  EXPECT_THAT(model.GetOutput(),
+              ElementsAreArray({Eigen::bfloat16(4), Eigen::bfloat16(3),
+                                Eigen::bfloat16(2), Eigen::bfloat16(1)}));
+}
+
+TEST(ReverseOpTest, BFloat16MultiDimensions) {
+  ReverseOpModel<Eigen::bfloat16> model({TensorType_BFLOAT16, {4, 3, 2}},
+                                        {TensorType_INT32, {1}});
+  model.PopulateTensor<Eigen::bfloat16>(
+      model.input(),
+      {Eigen::bfloat16(1),  Eigen::bfloat16(2),  Eigen::bfloat16(3),
+       Eigen::bfloat16(4),  Eigen::bfloat16(5),  Eigen::bfloat16(6),
+       Eigen::bfloat16(7),  Eigen::bfloat16(8),  Eigen::bfloat16(9),
+       Eigen::bfloat16(10), Eigen::bfloat16(11), Eigen::bfloat16(12),
+       Eigen::bfloat16(13), Eigen::bfloat16(14), Eigen::bfloat16(15),
+       Eigen::bfloat16(16), Eigen::bfloat16(17), Eigen::bfloat16(18),
+       Eigen::bfloat16(19), Eigen::bfloat16(20), Eigen::bfloat16(21),
+       Eigen::bfloat16(22), Eigen::bfloat16(23), Eigen::bfloat16(24)});
+  model.PopulateTensor<int32_t>(model.axis(), {1});
+  ASSERT_EQ(model.Invoke(), kTfLiteOk);
+
+  EXPECT_THAT(model.GetOutputShape(), ElementsAre(4, 3, 2));
+  EXPECT_THAT(
+      model.GetOutput(),
+      ElementsAreArray(
+          {Eigen::bfloat16(5),  Eigen::bfloat16(6),  Eigen::bfloat16(3),
+           Eigen::bfloat16(4),  Eigen::bfloat16(1),  Eigen::bfloat16(2),
+           Eigen::bfloat16(11), Eigen::bfloat16(12), Eigen::bfloat16(9),
+           Eigen::bfloat16(10), Eigen::bfloat16(7),  Eigen::bfloat16(8),
+           Eigen::bfloat16(17), Eigen::bfloat16(18), Eigen::bfloat16(15),
+           Eigen::bfloat16(16), Eigen::bfloat16(13), Eigen::bfloat16(14),
+           Eigen::bfloat16(23), Eigen::bfloat16(24), Eigen::bfloat16(21),
+           Eigen::bfloat16(22), Eigen::bfloat16(19), Eigen::bfloat16(20)}));
 }
 
 }  // namespace

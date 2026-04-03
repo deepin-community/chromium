@@ -6,17 +6,18 @@
 
 #include <stdint.h>
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
+#include "build/buildflag.h"
 #include "ui/display/display.h"
 #include "ui/display/display_observer.h"
 
 namespace display {
 
-DisplayChangeNotifier::DisplayChangeNotifier() {}
+DisplayChangeNotifier::DisplayChangeNotifier() = default;
 
-DisplayChangeNotifier::~DisplayChangeNotifier() {}
+DisplayChangeNotifier::~DisplayChangeNotifier() = default;
 
 void DisplayChangeNotifier::AddObserver(DisplayObserver* obs) {
   observer_list_.AddObserver(obs);
@@ -29,34 +30,28 @@ void DisplayChangeNotifier::RemoveObserver(DisplayObserver* obs) {
 void DisplayChangeNotifier::NotifyDisplaysChanged(
     const std::vector<Display>& old_displays,
     const std::vector<Display>& new_displays) {
-  bool did_remove_displays = false;
+  std::vector<Display> removed_displays;
   // Display present in old_displays but not in new_displays has been removed.
   for (auto old_it = old_displays.begin(); old_it != old_displays.end();
        ++old_it) {
-    if (!base::Contains(new_displays, old_it->id(), &Display::id)) {
-      did_remove_displays = true;
-      for (DisplayObserver& observer : observer_list_) {
-        observer.OnDisplayRemoved(*old_it);
-      }
+    if (!std::ranges::contains(new_displays, old_it->id(), &Display::id)) {
+      removed_displays.push_back(*old_it);
     }
   }
 
-  if (did_remove_displays) {
-    for (DisplayObserver& observer : observer_list_) {
-      observer.OnDidRemoveDisplays();
-    }
+  if (!removed_displays.empty()) {
+    observer_list_.Notify(&DisplayObserver::OnDisplaysRemoved,
+                          removed_displays);
   }
 
   // Display present in new_displays but not in old_displays has been added.
   // Display present in both might have been modified.
   for (auto new_it = new_displays.begin(); new_it != new_displays.end();
        ++new_it) {
-    auto old_it = base::ranges::find(old_displays, new_it->id(), &Display::id);
+    auto old_it = std::ranges::find(old_displays, new_it->id(), &Display::id);
 
     if (old_it == old_displays.end()) {
-      for (DisplayObserver& observer : observer_list_) {
-        observer.OnDisplayAdded(*new_it);
-      }
+      observer_list_.Notify(&DisplayObserver::OnDisplayAdded, *new_it);
       continue;
     }
 
@@ -83,18 +78,21 @@ void DisplayChangeNotifier::NotifyDisplaysChanged(
     }
 
     if (metrics != DisplayObserver::DISPLAY_METRIC_NONE) {
-      for (DisplayObserver& observer : observer_list_) {
-        observer.OnDisplayMetricsChanged(*new_it, metrics);
-      }
+      observer_list_.Notify(&DisplayObserver::OnDisplayMetricsChanged, *new_it,
+                            metrics);
     }
   }
 }
 
 void DisplayChangeNotifier::NotifyCurrentWorkspaceChanged(
     const std::string& workspace) {
-  for (DisplayObserver& observer : observer_list_) {
-    observer.OnCurrentWorkspaceChanged(workspace);
-  }
+  observer_list_.Notify(&DisplayObserver::OnCurrentWorkspaceChanged, workspace);
 }
+
+#if BUILDFLAG(IS_MAC)
+void DisplayChangeNotifier::NotifyPrimaryDisplayChanged() {
+  observer_list_.Notify(&DisplayObserver::OnPrimaryDisplayChanged);
+}
+#endif
 
 }  // namespace display

@@ -17,6 +17,7 @@
 #include "ash/system/session/shutdown_confirmation_dialog.h"
 #include "ash/system/system_notification_controller.h"
 #include "ash/test/ash_test_base.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -94,8 +95,7 @@ class UpdateNotificationControllerTest : public AshTestBase {
         Shell::Get()->system_tray_model()->enterprise_domain();
     enterprise_domain->SetEnterpriseAccountDomainInfo(kDomain);
     enterprise_domain->SetDeviceEnterpriseInfo(
-        DeviceEnterpriseInfo{kDeviceDomain, /*active_directory_managed=*/false,
-                             ManagementDeviceMode::kNone});
+        DeviceEnterpriseInfo{kDeviceDomain, ManagementDeviceMode::kNone});
   }
 
  protected:
@@ -114,7 +114,7 @@ class UpdateNotificationControllerTest : public AshTestBase {
     return base::UTF16ToUTF8(GetNotification()->message());
   }
 
-  std::string GetNotificationButton(int index) {
+  std::string GetNotificationButtonText(int index) {
     return base::UTF16ToUTF8(GetNotification()->buttons().at(index).title);
   }
 
@@ -151,7 +151,7 @@ class UpdateNotificationControllerTest : public AshTestBase {
     const auto color_id = GetNotification()->accent_color_id();
     const auto color = GetNotification()->accent_color();
 
-    if (chromeos::features::IsJellyEnabled() && color_id.has_value()) {
+    if (color_id.has_value()) {
       // We use `ui::ColorId` for Jelly.
       EXPECT_EQ(expected_color_id_for_jelly, color_id);
     } else if (color.has_value()) {
@@ -162,8 +162,7 @@ class UpdateNotificationControllerTest : public AshTestBase {
   std::u16string system_app_name_;
 };
 
-// Tests that the update icon becomes visible when an update becomes
-// available.
+// Tests that the update icon becomes visible when an update becomes available.
 TEST_F(UpdateNotificationControllerTest, VisibilityAfterUpdate) {
   ShowDefaultUpdateNotification();
 
@@ -177,13 +176,13 @@ TEST_F(UpdateNotificationControllerTest, VisibilityAfterUpdate) {
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorNormal,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysPrimary);
-  EXPECT_TRUE(strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) ==
-              0);
-  EXPECT_EQ("Update available", GetNotificationTitle());
+  UNSAFE_TODO(EXPECT_TRUE(
+      strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) == 0));
+  EXPECT_EQ("Update device", GetNotificationTitle());
   EXPECT_EQ("Learn more about the latest " +
                 base::UTF16ToUTF8(system_app_name_) + " update",
             GetNotificationMessage());
-  EXPECT_EQ("Restart to update", GetNotificationButton(0));
+  EXPECT_EQ("Restart", GetNotificationButtonText(0));
 
   // Click the restart button.
   message_center::MessageCenter::Get()->ClickOnNotificationButton(
@@ -214,15 +213,15 @@ TEST_F(UpdateNotificationControllerTest, VisibilityAfterUpdateWithSlowReboot) {
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorNormal,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysPrimary);
-  EXPECT_TRUE(strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) ==
-              0);
-  EXPECT_EQ("Update available", GetNotificationTitle());
+  UNSAFE_TODO(EXPECT_TRUE(
+      strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) == 0));
+  EXPECT_EQ("Update device", GetNotificationTitle());
   EXPECT_EQ("Learn more about the latest " +
                 base::UTF16ToUTF8(system_app_name_) +
                 " update. This Chromebook needs to restart to apply an update. "
                 "This can take up to 1 minute.",
             GetNotificationMessage());
-  EXPECT_EQ("Restart to update", GetNotificationButton(0));
+  EXPECT_EQ("Restart", GetNotificationButtonText(0));
 
   // Ensure Slow Boot Dialog is not open.
   EXPECT_FALSE(GetSlowBootConfirmationDialog());
@@ -261,9 +260,9 @@ TEST_F(UpdateNotificationControllerTest,
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorNormal,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysPrimary);
-  EXPECT_TRUE(strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) ==
-              0);
-  EXPECT_EQ("Update available", GetNotificationTitle());
+  UNSAFE_TODO(EXPECT_TRUE(
+      strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) == 0));
+  EXPECT_EQ("Update device", GetNotificationTitle());
   EXPECT_EQ("Learn more about the latest " +
                 base::UTF16ToUTF8(system_app_name_) + " update",
             GetNotificationMessage());
@@ -301,15 +300,15 @@ TEST_F(UpdateNotificationControllerTest,
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorNormal,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysPrimary);
-  EXPECT_TRUE(strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) ==
-              0);
+  UNSAFE_TODO(EXPECT_TRUE(
+      strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) == 0));
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_TITLE),
             GetNotificationTitle());
   EXPECT_EQ(l10n_util::GetStringFUTF8(IDS_UPDATE_NOTIFICATION_MESSAGE_POWERWASH,
                                       chrome_os_device_name, system_app_name_),
             GetNotificationMessage());
-  EXPECT_EQ(l10n_util::GetStringUTF8(IDS_ASH_STATUS_TRAY_RESET_TO_UPDATE),
-            GetNotificationButton(0));
+  EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
+            GetNotificationButtonText(0));
 }
 
 TEST_F(UpdateNotificationControllerTest, NoUpdateNotification) {
@@ -335,16 +334,16 @@ TEST_F(UpdateNotificationControllerTest, RollbackNotification) {
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorWarning,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysWarning);
-  EXPECT_TRUE(
-      strcmp(kSystemMenuRollbackIcon.name, GetNotificationIcon().name) == 0);
+  UNSAFE_TODO(EXPECT_TRUE(
+      strcmp(kSystemMenuRollbackIcon.name, GetNotificationIcon().name) == 0));
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_ROLLBACK_NOTIFICATION_TITLE),
             GetNotificationTitle());
   EXPECT_EQ(l10n_util::GetStringFUTF8(IDS_UPDATE_NOTIFICATION_MESSAGE_ROLLBACK,
                                       base::ASCIIToUTF16(kDomain),
                                       chrome_os_device_name),
             GetNotificationMessage());
-  EXPECT_EQ(l10n_util::GetStringUTF8(IDS_ROLLBACK_NOTIFICATION_RESTART_BUTTON),
-            GetNotificationButton(0));
+  EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
+            GetNotificationButtonText(0));
 }
 
 TEST_F(UpdateNotificationControllerTest, RollbackRecommendedNotification) {
@@ -367,16 +366,16 @@ TEST_F(UpdateNotificationControllerTest, RollbackRecommendedNotification) {
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorWarning,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysWarning);
-  EXPECT_TRUE(
-      strcmp(kSystemMenuRollbackIcon.name, GetNotificationIcon().name) == 0);
+  UNSAFE_TODO(EXPECT_TRUE(
+      strcmp(kSystemMenuRollbackIcon.name, GetNotificationIcon().name) == 0));
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_ROLLBACK_NOTIFICATION_TITLE),
             GetNotificationTitle());
   EXPECT_EQ(l10n_util::GetStringFUTF8(IDS_UPDATE_NOTIFICATION_MESSAGE_ROLLBACK,
                                       base::ASCIIToUTF16(kDomain),
                                       chrome_os_device_name),
             GetNotificationMessage());
-  EXPECT_EQ(l10n_util::GetStringUTF8(IDS_ROLLBACK_NOTIFICATION_RESTART_BUTTON),
-            GetNotificationButton(0));
+  EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
+            GetNotificationButtonText(0));
 }
 
 TEST_F(UpdateNotificationControllerTest,
@@ -399,16 +398,16 @@ TEST_F(UpdateNotificationControllerTest,
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorCriticalWarning,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysError);
-  EXPECT_TRUE(
-      strcmp(kSystemMenuRollbackIcon.name, GetNotificationIcon().name) == 0);
+  UNSAFE_TODO(EXPECT_TRUE(
+      strcmp(kSystemMenuRollbackIcon.name, GetNotificationIcon().name) == 0));
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_ROLLBACK_OVERDUE_NOTIFICATION_TITLE),
             GetNotificationTitle());
   EXPECT_EQ(l10n_util::GetStringFUTF8(
                 IDS_UPDATE_NOTIFICATION_MESSAGE_ROLLBACK_OVERDUE,
                 base::ASCIIToUTF16(kDomain), chrome_os_device_name),
             GetNotificationMessage());
-  EXPECT_EQ(l10n_util::GetStringUTF8(IDS_ROLLBACK_NOTIFICATION_RESTART_BUTTON),
-            GetNotificationButton(0));
+  EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
+            GetNotificationButtonText(0));
 }
 
 TEST_F(UpdateNotificationControllerTest, RollbackRequiredNotification) {
@@ -434,8 +433,8 @@ TEST_F(UpdateNotificationControllerTest, RollbackRequiredNotification) {
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorCriticalWarning,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysError);
-  EXPECT_TRUE(
-      strcmp(kSystemMenuRollbackIcon.name, GetNotificationIcon().name) == 0);
+  UNSAFE_TODO(EXPECT_TRUE(
+      strcmp(kSystemMenuRollbackIcon.name, GetNotificationIcon().name) == 0));
   EXPECT_EQ(
       l10n_util::GetPluralStringFUTF8(IDS_ROLLBACK_REQUIRED_TITLE_SECONDS, 3),
       GetNotificationTitle());
@@ -443,14 +442,12 @@ TEST_F(UpdateNotificationControllerTest, RollbackRequiredNotification) {
                                       base::ASCIIToUTF16(kDomain),
                                       chrome_os_device_name),
             GetNotificationMessage());
-  EXPECT_EQ(l10n_util::GetStringUTF8(IDS_ROLLBACK_NOTIFICATION_RESTART_BUTTON),
-            GetNotificationButton(0));
+  EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
+            GetNotificationButtonText(0));
 }
 
 TEST_F(UpdateNotificationControllerTest, SetUpdateNotificationRecommended) {
   ShowDefaultUpdateNotification();
-
-  const std::u16string chrome_os_device_name = ui::GetChromeOSDeviceName();
 
   Shell::Get()->system_tray_model()->SetRelaunchNotificationState(
       {.requirement_type = RelaunchNotificationState::kRecommendedNotOverdue});
@@ -460,26 +457,23 @@ TEST_F(UpdateNotificationControllerTest, SetUpdateNotificationRecommended) {
   const std::string expected_notification_title =
       l10n_util::GetStringUTF8(IDS_RELAUNCH_RECOMMENDED_TITLE);
   const std::string expected_notification_body = l10n_util::GetStringFUTF8(
-      IDS_RELAUNCH_RECOMMENDED_BODY, base::ASCIIToUTF16(kDomain),
-      chrome_os_device_name);
+      IDS_RELAUNCH_RECOMMENDED_BODY, base::ASCIIToUTF16(kDomain));
 
   ASSERT_TRUE(HasNotification());
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorNormal,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysPrimary);
-  EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
-                     GetNotificationIcon().name) == 0);
+  UNSAFE_TODO(EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
+                                 GetNotificationIcon().name) == 0));
   EXPECT_EQ(expected_notification_title, GetNotificationTitle());
   EXPECT_EQ(expected_notification_body, GetNotificationMessage());
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
-            GetNotificationButton(0));
+            GetNotificationButtonText(0));
 }
 
 TEST_F(UpdateNotificationControllerTest,
        SetUpdateNotificationRecommendedOverdue) {
   ShowDefaultUpdateNotification();
-
-  const std::u16string chrome_os_device_name = ui::GetChromeOSDeviceName();
 
   Shell::Get()->system_tray_model()->SetRelaunchNotificationState(
       {.requirement_type = RelaunchNotificationState::kRecommendedAndOverdue});
@@ -489,25 +483,23 @@ TEST_F(UpdateNotificationControllerTest,
   const std::string expected_notification_title =
       l10n_util::GetStringUTF8(IDS_RELAUNCH_RECOMMENDED_OVERDUE_TITLE);
   const std::string expected_notification_body = l10n_util::GetStringFUTF8(
-      IDS_RELAUNCH_RECOMMENDED_OVERDUE_BODY, base::ASCIIToUTF16(kDomain),
-      chrome_os_device_name);
+      IDS_RELAUNCH_RECOMMENDED_OVERDUE_BODY, base::ASCIIToUTF16(kDomain));
 
   ASSERT_TRUE(HasNotification());
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorNormal,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysPrimary);
-  EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
-                     GetNotificationIcon().name) == 0);
+  UNSAFE_TODO(EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
+                                 GetNotificationIcon().name) == 0));
   EXPECT_EQ(expected_notification_title, GetNotificationTitle());
   EXPECT_EQ(expected_notification_body, GetNotificationMessage());
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
-            GetNotificationButton(0));
+            GetNotificationButtonText(0));
 }
 
 TEST_F(UpdateNotificationControllerTest, SetUpdateNotificationRequiredDays) {
   ShowDefaultUpdateNotification();
 
-  const std::u16string chrome_os_device_name = ui::GetChromeOSDeviceName();
   constexpr base::TimeDelta remaining_time = base::Days(3);
 
   Shell::Get()->system_tray_model()->SetRelaunchNotificationState({
@@ -520,21 +512,20 @@ TEST_F(UpdateNotificationControllerTest, SetUpdateNotificationRequiredDays) {
   const std::string expected_notification_title =
       l10n_util::GetPluralStringFUTF8(IDS_RELAUNCH_REQUIRED_TITLE_DAYS, 3);
   const std::string expected_notification_body = l10n_util::GetStringFUTF8(
-      IDS_RELAUNCH_REQUIRED_BODY, base::ASCIIToUTF16(kDomain),
-      chrome_os_device_name);
+      IDS_RELAUNCH_REQUIRED_BODY, base::ASCIIToUTF16(kDomain));
 
   ASSERT_TRUE(HasNotification());
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorWarning,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysWarning);
-  EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
-                     GetNotificationIcon().name) == 0);
+  UNSAFE_TODO(EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
+                                 GetNotificationIcon().name) == 0));
   EXPECT_EQ(message_center::SYSTEM_PRIORITY, GetNotificationPriority());
   EXPECT_EQ(true, GetNotificationNeverTimeout());
   EXPECT_EQ(expected_notification_title, GetNotificationTitle());
   EXPECT_EQ(expected_notification_body, GetNotificationMessage());
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
-            GetNotificationButton(0));
+            GetNotificationButtonText(0));
 }
 
 TEST_F(UpdateNotificationControllerTest,
@@ -550,8 +541,7 @@ TEST_F(UpdateNotificationControllerTest,
   waiter.Wait();
 
   const std::string expected_notification_body = l10n_util::GetStringFUTF8(
-      IDS_RELAUNCH_REQUIRED_BODY, base::ASCIIToUTF16(kDeviceDomain),
-      ui::GetChromeOSDeviceName());
+      IDS_RELAUNCH_REQUIRED_BODY, base::ASCIIToUTF16(kDeviceDomain));
 
   ASSERT_TRUE(HasNotification());
   EXPECT_EQ(expected_notification_body, GetNotificationMessage());
@@ -581,7 +571,6 @@ TEST_F(UpdateNotificationControllerTest,
 TEST_F(UpdateNotificationControllerTest, SetUpdateNotificationRequiredHours) {
   ShowDefaultUpdateNotification();
 
-  const std::u16string chrome_os_device_name = ui::GetChromeOSDeviceName();
   constexpr base::TimeDelta remaining_time = base::Hours(3);
 
   Shell::Get()->system_tray_model()->SetRelaunchNotificationState({
@@ -594,27 +583,25 @@ TEST_F(UpdateNotificationControllerTest, SetUpdateNotificationRequiredHours) {
   const std::string expected_notification_title =
       l10n_util::GetPluralStringFUTF8(IDS_RELAUNCH_REQUIRED_TITLE_HOURS, 3);
   const std::string expected_notification_body = l10n_util::GetStringFUTF8(
-      IDS_RELAUNCH_REQUIRED_BODY, base::ASCIIToUTF16(kDomain),
-      chrome_os_device_name);
+      IDS_RELAUNCH_REQUIRED_BODY, base::ASCIIToUTF16(kDomain));
 
   ASSERT_TRUE(HasNotification());
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorWarning,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysWarning);
-  EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
-                     GetNotificationIcon().name) == 0);
+  UNSAFE_TODO(EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
+                                 GetNotificationIcon().name) == 0));
   EXPECT_EQ(message_center::SYSTEM_PRIORITY, GetNotificationPriority());
   EXPECT_EQ(true, GetNotificationNeverTimeout());
   EXPECT_EQ(expected_notification_title, GetNotificationTitle());
   EXPECT_EQ(expected_notification_body, GetNotificationMessage());
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
-            GetNotificationButton(0));
+            GetNotificationButtonText(0));
 }
 
 TEST_F(UpdateNotificationControllerTest, SetUpdateNotificationRequiredMinutes) {
   ShowDefaultUpdateNotification();
 
-  const std::u16string chrome_os_device_name = ui::GetChromeOSDeviceName();
   constexpr base::TimeDelta remaining_time = base::Minutes(3);
 
   Shell::Get()->system_tray_model()->SetRelaunchNotificationState({
@@ -627,27 +614,25 @@ TEST_F(UpdateNotificationControllerTest, SetUpdateNotificationRequiredMinutes) {
   const std::string expected_notification_title =
       l10n_util::GetPluralStringFUTF8(IDS_RELAUNCH_REQUIRED_TITLE_MINUTES, 3);
   const std::string expected_notification_body = l10n_util::GetStringFUTF8(
-      IDS_RELAUNCH_REQUIRED_BODY, base::ASCIIToUTF16(kDomain),
-      chrome_os_device_name);
+      IDS_RELAUNCH_REQUIRED_BODY, base::ASCIIToUTF16(kDomain));
 
   ASSERT_TRUE(HasNotification());
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorWarning,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysWarning);
-  EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
-                     GetNotificationIcon().name) == 0);
+  UNSAFE_TODO(EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
+                                 GetNotificationIcon().name) == 0));
   EXPECT_EQ(message_center::SYSTEM_PRIORITY, GetNotificationPriority());
   EXPECT_EQ(true, GetNotificationNeverTimeout());
   EXPECT_EQ(expected_notification_title, GetNotificationTitle());
   EXPECT_EQ(expected_notification_body, GetNotificationMessage());
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
-            GetNotificationButton(0));
+            GetNotificationButtonText(0));
 }
 
 TEST_F(UpdateNotificationControllerTest, SetUpdateNotificationRequiredSeconds) {
   ShowDefaultUpdateNotification();
 
-  const std::u16string chrome_os_device_name = ui::GetChromeOSDeviceName();
   constexpr base::TimeDelta remaining_time = base::Seconds(3);
 
   Shell::Get()->system_tray_model()->SetRelaunchNotificationState({
@@ -660,21 +645,20 @@ TEST_F(UpdateNotificationControllerTest, SetUpdateNotificationRequiredSeconds) {
   const std::string expected_notification_title =
       l10n_util::GetPluralStringFUTF8(IDS_RELAUNCH_REQUIRED_TITLE_SECONDS, 3);
   const std::string expected_notification_body = l10n_util::GetStringFUTF8(
-      IDS_RELAUNCH_REQUIRED_BODY, base::ASCIIToUTF16(kDomain),
-      chrome_os_device_name);
+      IDS_RELAUNCH_REQUIRED_BODY, base::ASCIIToUTF16(kDomain));
 
   ASSERT_TRUE(HasNotification());
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorWarning,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysWarning);
-  EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
-                     GetNotificationIcon().name) == 0);
+  UNSAFE_TODO(EXPECT_TRUE(strcmp(vector_icons::kBusinessIcon.name,
+                                 GetNotificationIcon().name) == 0));
   EXPECT_EQ(message_center::SYSTEM_PRIORITY, GetNotificationPriority());
   EXPECT_EQ(true, GetNotificationNeverTimeout());
   EXPECT_EQ(expected_notification_title, GetNotificationTitle());
   EXPECT_EQ(expected_notification_body, GetNotificationMessage());
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
-            GetNotificationButton(0));
+            GetNotificationButtonText(0));
 }
 
 // Simulates setting the notification back to the default after showing
@@ -696,15 +680,15 @@ TEST_F(UpdateNotificationControllerTest, SetBackToDefault) {
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorNormal,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysPrimary);
-  EXPECT_TRUE(strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) ==
-              0);
+  UNSAFE_TODO(EXPECT_TRUE(
+      strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) == 0));
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_TITLE),
             GetNotificationTitle());
   EXPECT_EQ(l10n_util::GetStringFUTF8(
                 IDS_UPDATE_NOTIFICATION_MESSAGE_LEARN_MORE, system_app_name_),
             GetNotificationMessage());
   EXPECT_EQ(l10n_util::GetStringUTF8(IDS_UPDATE_NOTIFICATION_RESTART_BUTTON),
-            GetNotificationButton(0));
+            GetNotificationButtonText(0));
   EXPECT_NE(message_center::NotificationPriority::SYSTEM_PRIORITY,
             GetNotificationPriority());
 }
@@ -724,15 +708,14 @@ TEST_F(UpdateNotificationControllerTest,
   CompareNotificationColor(
       /*expected_color=*/kSystemNotificationColorNormal,
       /*expected_color_id_for_jelly=*/cros_tokens::kCrosSysPrimary);
-  EXPECT_TRUE(strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) ==
-              0);
-  EXPECT_EQ("Update available", GetNotificationTitle());
+  UNSAFE_TODO(EXPECT_TRUE(
+      strcmp(kSystemMenuUpdateIcon.name, GetNotificationIcon().name) == 0));
+  EXPECT_EQ("Update device", GetNotificationTitle());
   EXPECT_EQ(
       "Get the latest features and security improvements. Updates happen in "
       "the background.",
       GetNotificationMessage());
-  EXPECT_EQ("Update", GetNotificationButton(0));
-  EXPECT_EQ("Automatic updates", GetNotificationButton(1));
+  EXPECT_EQ("Restart", GetNotificationButtonText(0));
 }
 
 TEST_F(UpdateNotificationControllerTest,

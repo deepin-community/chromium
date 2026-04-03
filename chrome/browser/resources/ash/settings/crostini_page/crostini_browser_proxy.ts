@@ -11,17 +11,43 @@ import 'chrome://resources/ash/common/cr_elements/cr_input/cr_input.js';
 
 import {sendWithPromise} from 'chrome://resources/js/cr.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {SkColor} from 'chrome://resources/mojo/skia/public/mojom/skcolor.mojom-webui.js';
+import type {SkColor} from 'chrome://resources/mojo/skia/public/mojom/skcolor.mojom-webui.js';
 
-import {GuestId, TERMINA_VM_TYPE} from '../guest_os/guest_os_browser_proxy.js';
+import {type GuestId, TERMINA_VM_TYPE} from '../guest_os/guest_os_browser_proxy.js';
+
+/**
+ * Type of VM.
+ * These values must be kept in sync with the VmType enum in
+ * third_party/cros_system_api/dbus/vm_applications/apps.proto
+ */
+export enum VmType {
+  TERMINA = 0,
+  PLUGIN_VM = 1,
+  BOREALIS = 2,
+  BRUSCHETTA = 3,
+  UNKNOWN = 4,
+  ARCVM = 5,
+  BAGUETTE = 6,
+}
 
 // Identifiers for the default Crostini VM and container.
 export const DEFAULT_CROSTINI_VM = TERMINA_VM_TYPE;
 export const DEFAULT_CROSTINI_CONTAINER = 'penguin';
+export const DEFAULT_CROSTINI_VM_TYPE = VmType.TERMINA;
+
+export const DEFAULT_BAGUETTE_VM = TERMINA_VM_TYPE;
+export const DEFAULT_BAGUETTE_CONTAINER = 'penguin';
 
 export const DEFAULT_CROSTINI_GUEST_ID: GuestId = {
   vm_name: DEFAULT_CROSTINI_VM,
+  vm_type: VmType.TERMINA,
   container_name: DEFAULT_CROSTINI_CONTAINER,
+};
+
+export const DEFAULT_BAGUETTE_GUEST_ID: GuestId = {
+  vm_name: DEFAULT_BAGUETTE_VM,
+  vm_type: VmType.BAGUETTE,
+  container_name: DEFAULT_BAGUETTE_CONTAINER,
 };
 
 /**
@@ -73,9 +99,8 @@ export interface CrostiniPortActiveSetting {
 
 export const PortState = {
   VALID: '',
-  INVALID: loadTimeData.getString('crostiniPortForwardingAddError') as string,
-  DUPLICATE: loadTimeData.getString('crostiniPortForwardingAddExisting') as
-      string,
+  INVALID: loadTimeData.getString('crostiniPortForwardingAddError'),
+  DUPLICATE: loadTimeData.getString('crostiniPortForwardingAddExisting'),
 };
 
 export const MIN_VALID_PORT_NUMBER = 1024;   // Minimum 16-bit integer value.
@@ -112,6 +137,18 @@ export interface CrostiniBrowserProxy {
    */
   importCrostiniContainer(containerId: GuestId): void;
 
+  /**
+   * Export guest disk image.
+   * @param containerId container id of container to export disk image from..
+   */
+  exportDiskImage(containerId: GuestId): void;
+
+  /**
+   * Import guest disk image.
+   * @param containerId container id of container to import disk image into.
+   */
+  importDiskImage(containerId: GuestId): void;
+
   /** Queries the current status of ARC ADB Sideloading. */
   requestArcAdbSideloadStatus(): void;
 
@@ -123,21 +160,6 @@ export interface CrostiniBrowserProxy {
 
   /** Initiates the flow to disable ARC ADB Sideloading. */
   disableArcAdbSideload(): void;
-
-  /** Show the container upgrade UI. */
-  requestCrostiniContainerUpgradeView(): void;
-
-  /**
-   * Request chrome send a crostini-upgrader-status-changed event with the
-   * current upgrader dialog status
-   */
-  requestCrostiniUpgraderDialogStatus(): void;
-
-  /**
-   * Request chrome send a crostini-container-upgrade-available-changed event
-   * with the availability of an upgrade for the container.
-   */
-  requestCrostiniContainerUpgradeAvailable(): void;
 
   /**
    * @param vmName Name of the VM to get disk info for.
@@ -218,10 +240,17 @@ export interface CrostiniBrowserProxy {
 
   checkCrostiniIsRunning(): Promise<boolean>;
 
+  checkBruschettaIsRunning(): Promise<boolean>;
+
   /**
    * Shuts Crostini (Termina VM) down.
    */
   shutdownCrostini(): void;
+
+  /**
+   * Shuts Bruschetta (gLinux for ChromeOS) down.
+   */
+  shutdownBruschetta(): void;
 
   /**
    * @param enabled Set Crostini's access to the mic.
@@ -340,6 +369,14 @@ export class CrostiniBrowserProxyImpl implements CrostiniBrowserProxy {
     chrome.send('importCrostiniContainer', [containerId]);
   }
 
+  exportDiskImage(containerId: GuestId): void {
+    chrome.send('exportDiskImage', [containerId]);
+  }
+
+  importDiskImage(containerId: GuestId): void {
+    chrome.send('importDiskImage', [containerId]);
+  }
+
   requestArcAdbSideloadStatus(): void {
     chrome.send('requestArcAdbSideloadStatus');
   }
@@ -354,18 +391,6 @@ export class CrostiniBrowserProxyImpl implements CrostiniBrowserProxy {
 
   disableArcAdbSideload(): void {
     chrome.send('disableArcAdbSideload');
-  }
-
-  requestCrostiniContainerUpgradeView(): void {
-    chrome.send('requestCrostiniContainerUpgradeView');
-  }
-
-  requestCrostiniUpgraderDialogStatus(): void {
-    chrome.send('requestCrostiniUpgraderDialogStatus');
-  }
-
-  requestCrostiniContainerUpgradeAvailable(): void {
-    chrome.send('requestCrostiniContainerUpgradeAvailable');
   }
 
   getCrostiniDiskInfo(vmName: string, fullInfo: boolean):
@@ -425,8 +450,16 @@ export class CrostiniBrowserProxyImpl implements CrostiniBrowserProxy {
     return sendWithPromise('checkCrostiniIsRunning');
   }
 
+  checkBruschettaIsRunning(): Promise<boolean> {
+    return sendWithPromise('checkBruschettaIsRunning');
+  }
+
   shutdownCrostini(): void {
     chrome.send('shutdownCrostini');
+  }
+
+  shutdownBruschetta(): void {
+    chrome.send('shutdownBruschetta');
   }
 
   setCrostiniMicSharingEnabled(enabled: boolean): void {

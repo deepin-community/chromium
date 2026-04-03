@@ -4,33 +4,60 @@
 
 from __future__ import annotations
 
-from typing import Final, Tuple
+from typing import TYPE_CHECKING, ClassVar, Type
 
-from .speedometer import ProbeClsTupleT, SpeedometerBenchmark, SpeedometerProbe
-from .speedometer_2 import Speedometer2Story
+from typing_extensions import override
+
+from crossbench.benchmarks.speedometer.speedometer import ProbeClsTupleT, \
+    SpeedometerBenchmark
+from crossbench.benchmarks.speedometer.speedometer_2 import \
+    Speedometer2Probe, Speedometer2ProbeContext, Speedometer2Story
+
+if TYPE_CHECKING:
+  from crossbench.benchmarks.base import VersionParts
 
 
-class Speedometer21Probe(SpeedometerProbe):
-  NAME: str = "speedometer_2.1"
+class Speedometer21Probe(Speedometer2Probe):
+  NAME: ClassVar[str] = "speedometer_2.1"
+
+  @override
+  def get_context_cls(self) -> Type[Speedometer21ProbeContext]:
+    return Speedometer21ProbeContext
+
+
+class Speedometer21ProbeContext(Speedometer2ProbeContext):
+  pass
 
 
 class Speedometer21Story(Speedometer2Story):
-  NAME: str = "speedometer_2.1"
-  URL: str = "https://browserbench.org/Speedometer2.1/"
-  PROBES: ProbeClsTupleT = (Speedometer21Probe,)
+  NAME: ClassVar[str] = "speedometer_2.1"
+  URL: ClassVar[str] = "https://chromium-workloads.web.app/speedometer/v2.1/"
+  URL_OFFICIAL: ClassVar[str] = "https://browserbench.org/Speedometer2.1/"
+  URL_CHROME_FORK: ClassVar[
+      str] = "https://chromium-workloads.web.app/speedometer/v2.1-custom/"
 
 
 class Speedometer21Benchmark(SpeedometerBenchmark):
   """
   Benchmark runner for Speedometer 2.1
   """
-  NAME: str = "speedometer_2.1"
-  DEFAULT_STORY_CLS = Speedometer21Story
+  NAME: ClassVar[str] = "speedometer_2.1"
+  DEFAULT_STORY_CLS: ClassVar = Speedometer21Story
+  PROBES: ClassVar[ProbeClsTupleT] = (Speedometer21Probe,)
 
   @classmethod
-  def version(cls) -> Tuple[int, ...]:
+  @override
+  def version(cls) -> VersionParts:
     return (2, 1)
 
   @classmethod
-  def aliases(cls) -> Tuple[str, ...]:
-    return ("sp", "speedometer", "sp2", "speedometer2") + super().aliases()
+  @override
+  def aliases(cls) -> tuple[str, ...]:
+    return (
+        "sp2",
+        "sp2-latest",
+        "speedometer2",
+        "speedometer2-latest",
+        "speedometer_2",
+        "speedometer_2-latest",
+    ) + super().aliases()

@@ -13,8 +13,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
 #include <memory>
 
+#include "absl/log/log.h"
 #include "absl/strings/string_view.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
@@ -42,7 +44,7 @@ namespace {
 // the list of devices that are a part of the same reduction group.
 template <class ReduceOpType>
 mlir::LogicalResult GetAllReduceGroupSize(ReduceOpType reduce_op,
-                                          int32* group_size) {
+                                          int32_t* group_size) {
   mlir::DenseIntElementsAttr group_assignment_attr;
   if (!matchPattern(reduce_op.getGroupAssignment(),
                     m_Constant(&group_assignment_attr)))
@@ -69,9 +71,7 @@ template <class ReduceOpType>
 mlir::LogicalResult MaybeUpcastForReduction(ReduceOpType reduce_op,
                                             bool* changed) {
   const mlir::RankedTensorType& input_type =
-      reduce_op.getInput()
-          .getType()
-          .template dyn_cast<mlir::RankedTensorType>();
+      mlir::dyn_cast<mlir::RankedTensorType>(reduce_op.getInput().getType());
   if (!input_type.getElementType().isBF16()) {
     // Upcast only applies for bfloat16 input.
     return mlir::success();
@@ -80,7 +80,7 @@ mlir::LogicalResult MaybeUpcastForReduction(ReduceOpType reduce_op,
   mlir::OpBuilder builder(reduce_op);
   const mlir::Location loc = reduce_op.getLoc();
 
-  int32 group_size;
+  int32_t group_size;
   if (mlir::failed(GetAllReduceGroupSize(reduce_op, &group_size)))
     return mlir::failure();
   if (group_size <= ReduceInBfloat16MaxGroupSize())
@@ -96,20 +96,18 @@ mlir::LogicalResult MaybeUpcastForReduction(ReduceOpType reduce_op,
   // The original output tensor type that would have been used by all users of
   // the reduce op.
   const mlir::RankedTensorType& output_type =
-      reduce_op.getOutput()
-          .getType()
-          .template dyn_cast<mlir::RankedTensorType>();
+      mlir::dyn_cast<mlir::RankedTensorType>(reduce_op.getOutput().getType());
 
-  mlir::TF::CastOp upcast = builder.create<mlir::TF::CastOp>(
-      loc,
+  mlir::TF::CastOp upcast = mlir::TF::CastOp::create(
+      builder, loc,
       mlir::RankedTensorType::get(input_type.getShape(), builder.getF32Type()),
       reduce_op.getInput());
   reduce_op->setOperand(0, upcast.getY());
   reduce_op.getOutput().setType(upcast.getY().getType());
 
   builder.setInsertionPointAfter(reduce_op);
-  mlir::TF::CastOp downcast = builder.create<mlir::TF::CastOp>(
-      loc,
+  mlir::TF::CastOp downcast = mlir::TF::CastOp::create(
+      builder, loc,
       mlir::RankedTensorType::get(output_type.getShape(),
                                   output_type.getElementType()),
       reduce_op);

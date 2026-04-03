@@ -4,9 +4,10 @@
 
 #include "chrome/browser/preloading/preview/preview_navigation_throttle.h"
 
+#include <string_view>
+
 #include "base/command_line.h"
 #include "base/memory/ptr_util.h"
-#include "base/strings/string_piece.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
@@ -22,22 +23,20 @@
 #include "url/gurl.h"
 
 // static
-std::unique_ptr<PreviewNavigationThrottle>
-PreviewNavigationThrottle::MaybeCreateThrottleFor(
-    content::NavigationHandle* navigation_handle) {
+void PreviewNavigationThrottle::MaybeCreateAndAdd(
+    content::NavigationThrottleRegistry& registry) {
   auto* web_contents = content::WebContents::FromFrameTreeNodeId(
-      navigation_handle->GetFrameTreeNodeId());
+      registry.GetNavigationHandle().GetFrameTreeNodeId());
   CHECK(web_contents);
   if (web_contents->IsInPreviewMode()) {
-    return base::WrapUnique(new PreviewNavigationThrottle(navigation_handle));
+    registry.AddThrottle(
+        base::WrapUnique(new PreviewNavigationThrottle(registry)));
   }
-
-  return nullptr;
 }
 
 PreviewNavigationThrottle::PreviewNavigationThrottle(
-    content::NavigationHandle* navigation_handle)
-    : content::NavigationThrottle(navigation_handle) {}
+    content::NavigationThrottleRegistry& registry)
+    : content::NavigationThrottle(registry) {}
 
 PreviewNavigationThrottle::~PreviewNavigationThrottle() = default;
 
@@ -49,7 +48,7 @@ std::string MakeErrorPage(content::NavigationHandle& navigation_handle,
                           error_page::LinkPreviewErrorCode error_code) {
   const auto error = error_page::Error::LinkPreviewError(
       navigation_handle.GetURL(), error_code);
-  base::Value::Dict error_page_params;
+  base::DictValue error_page_params;
   error_page::LocalizedError::PageState page_state =
       error_page::LocalizedError::GetPageState(
           error.reason(), error.domain(), error.url(),
@@ -61,7 +60,6 @@ std::string MakeErrorPage(content::NavigationHandle& navigation_handle,
           Profile::FromBrowserContext(
               navigation_handle.GetWebContents()->GetBrowserContext())
               ->IsIncognitoProfile(),
-          /*offline_content_feature_enabled=*/false,
           /*auto_fetch_feature_enabled=*/false,
           /*is_kiosk_mode=*/
           base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -72,8 +70,8 @@ std::string MakeErrorPage(content::NavigationHandle& navigation_handle,
   std::string extracted_string =
       ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
           IDR_NET_ERROR_HTML);
-  base::StringPiece template_html(extracted_string.data(),
-                                  extracted_string.size());
+  std::string_view template_html(extracted_string.data(),
+                                 extracted_string.size());
   CHECK(!template_html.empty()) << "unable to load template.";
   return webui::GetLocalizedHtml(template_html, page_state.strings);
 }

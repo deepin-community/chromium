@@ -2,18 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/parsers/webp_parser.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
 #include <memory>
 
 #include "base/base_paths.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/path_service.h"
 #include "media/parsers/vp8_parser.h"
-#include "media/parsers/webp_parser.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace media {
@@ -198,8 +200,8 @@ TEST(WebPParserTest, ParseLossyWebP) {
   ASSERT_TRUE(stream.Initialize(file_path))
       << "Couldn't open stream file: " << file_path.MaybeAsASCII();
 
-  std::unique_ptr<Vp8FrameHeader> result =
-      ParseWebPImage(base::span<const uint8_t>(stream.data(), stream.length()));
+  std::unique_ptr<Vp8FrameHeader> result = ParseWebPImage(
+      UNSAFE_TODO(base::span<const uint8_t>(stream.data(), stream.length())));
   ASSERT_TRUE(result);
 
   ASSERT_TRUE(result->IsKeyframe());
@@ -225,8 +227,8 @@ TEST(WebPParserTest, ParseLosslessWebP) {
       << "Couldn't open stream file: " << file_path.MaybeAsASCII();
 
   // Should fail because WebP parser does not parse lossless webp images.
-  std::unique_ptr<Vp8FrameHeader> result =
-      ParseWebPImage(base::span<const uint8_t>(stream.data(), stream.length()));
+  std::unique_ptr<Vp8FrameHeader> result = ParseWebPImage(
+      UNSAFE_TODO(base::span<const uint8_t>(stream.data(), stream.length())));
   ASSERT_FALSE(result);
 }
 
@@ -244,8 +246,8 @@ TEST(WebPParserTest, ParseExtendedWebP) {
       << "Couldn't open stream file: " << file_path.MaybeAsASCII();
 
   // Should fail because WebP parser does not parse extended webp images.
-  std::unique_ptr<Vp8FrameHeader> result =
-      ParseWebPImage(base::span<const uint8_t>(stream.data(), stream.length()));
+  std::unique_ptr<Vp8FrameHeader> result = ParseWebPImage(
+      UNSAFE_TODO(base::span<const uint8_t>(stream.data(), stream.length())));
   ASSERT_FALSE(result);
 }
 

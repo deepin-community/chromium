@@ -140,17 +140,18 @@ void GatewayCanBePingedRoutine::PingGateways() {
 bool GatewayCanBePingedRoutine::ParseICMPResult(const std::string& status,
                                                 std::string* ip,
                                                 base::TimeDelta* latency) {
-  std::optional<base::Value> parsed_value(base::JSONReader::Read(status));
+  std::optional<base::Value> parsed_value(
+      base::JSONReader::Read(status, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
   if (!parsed_value.has_value()) {
     return false;
   }
-  const base::Value::Dict* parsed_value_dict = parsed_value->GetIfDict();
+  const base::DictValue* parsed_value_dict = parsed_value->GetIfDict();
   if (!parsed_value_dict || parsed_value_dict->size() != 1) {
     return false;
   }
   auto iter = parsed_value_dict->begin();
   const std::string& ip_addr = iter->first;
-  const base::Value::Dict* info = iter->second.GetIfDict();
+  const base::DictValue* info = iter->second.GetIfDict();
   if (!info) {
     return false;
   }
@@ -201,7 +202,14 @@ void GatewayCanBePingedRoutine::OnManagedPropertiesReceived(
     if (managed_properties->ip_configs.has_value() &&
         managed_properties->ip_configs->size() != 0) {
       for (const auto& ip_config : managed_properties->ip_configs.value()) {
-        if (ip_config->gateway.has_value()) {
+        // TODO(b/277696397): Reaching a link-local address needs to specify the
+        // interface. Currently we don't have a good way to get the interface
+        // here, so skip link-local addresses instead of always reporting a
+        // failure here. Revisit this part when we can get the interface name,
+        // or ideally we should rely on the layer 2 link monitor signal for the
+        // diagnostic.
+        if (ip_config->gateway.has_value() &&
+            !ip_config->gateway->starts_with("fe80::")) {
           const std::string& gateway = ip_config->gateway.value();
           if (managed_properties->guid == default_network_guid_) {
             default_network_gateway_ = gateway;

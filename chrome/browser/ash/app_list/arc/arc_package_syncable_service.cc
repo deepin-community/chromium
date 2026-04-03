@@ -4,25 +4,25 @@
 
 #include "chrome/browser/ash/app_list/arc/arc_package_syncable_service.h"
 
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/session/connection_holder.h"
 #include "ash/constants/ash_pref_names.h"
-#include "base/containers/contains.h"
+#include "base/containers/flat_set.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/app_list/arc/arc_package_install_priority_handler.h"
 #include "chrome/browser/ash/app_list/arc/arc_package_syncable_service_factory.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/session/connection_holder.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/sync/model/sync_change_processor.h"
 #include "components/sync/model/sync_data.h"
 #include "components/sync/protocol/arc_package_specifics.pb.h"
+#include "components/sync/protocol/entity_data.h"
 #include "components/sync/protocol/entity_specifics.pb.h"
 
 namespace arc {
@@ -146,7 +146,7 @@ void ArcPackageSyncableService::WaitUntilReadyToSync(base::OnceClosure done) {
 
 std::optional<syncer::ModelError>
 ArcPackageSyncableService::MergeDataAndStartSyncing(
-    syncer::ModelType type,
+    syncer::DataType type,
     const syncer::SyncDataList& initial_sync_data,
     std::unique_ptr<syncer::SyncChangeProcessor> sync_processor) {
   DCHECK(sync_processor.get());
@@ -159,10 +159,8 @@ ArcPackageSyncableService::MergeDataAndStartSyncing(
   metrics_helper_.SetTimeSyncStarted();
   uint64_t num_expected_apps = 0;
 
-  const std::vector<std::string> local_packages =
-      prefs_->GetPackagesFromPrefs();
-  const std::unordered_set<std::string> local_package_set(
-      local_packages.begin(), local_packages.end());
+  const base::flat_set<std::string> local_package_set(
+      prefs_->GetPackagesFromPrefs());
 
   // Creates sync items from synced data.
   for (const syncer::SyncData& sync_data : initial_sync_data) {
@@ -173,7 +171,7 @@ ArcPackageSyncableService::MergeDataAndStartSyncing(
     if (!ShouldSyncPackage(package_name))
       continue;
 
-    if (!base::Contains(local_package_set, package_name)) {
+    if (!local_package_set.contains(package_name)) {
       pending_install_items_[package_name] = std::move(sync_item);
       if (base::FeatureList::IsEnabled(arc::kSyncInstallPriority)) {
         prefs_->GetInstallPriorityHandler()->InstallSyncedPacakge(
@@ -193,9 +191,10 @@ ArcPackageSyncableService::MergeDataAndStartSyncing(
 
   // Creates sync items for local unsynced packages.
   syncer::SyncChangeList change_list;
-  for (const auto& local_package_name : local_packages) {
-    if (base::Contains(sync_items_, local_package_name))
+  for (const auto& local_package_name : local_package_set) {
+    if (sync_items_.contains(local_package_name)) {
       continue;
+    }
 
     if (!ShouldSyncPackage(local_package_name))
       continue;
@@ -210,7 +209,7 @@ ArcPackageSyncableService::MergeDataAndStartSyncing(
   return std::nullopt;
 }
 
-void ArcPackageSyncableService::StopSyncing(syncer::ModelType type) {
+void ArcPackageSyncableService::StopSyncing(syncer::DataType type) {
   DCHECK_EQ(type, syncer::ARC_PACKAGE);
 
   sync_processor_.reset();
@@ -225,8 +224,9 @@ std::optional<syncer::ModelError> ArcPackageSyncableService::ProcessSyncChanges(
     const base::Location& from_here,
     const syncer::SyncChangeList& change_list) {
   if (!sync_processor_.get()) {
-    return syncer::ModelError(FROM_HERE,
-                              "ARC package syncable service is not started.");
+    return syncer::ModelError(
+        FROM_HERE,
+        syncer::ModelError::Type::kArcPackageSyncableServiceNotStarted);
   }
 
   for (const auto& change : change_list) {
@@ -255,6 +255,11 @@ std::optional<syncer::ModelError> ArcPackageSyncableService::ProcessSyncChanges(
 
 base::WeakPtr<syncer::SyncableService> ArcPackageSyncableService::AsWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
+}
+
+std::string ArcPackageSyncableService::GetClientTag(
+    const syncer::EntityData& entity_data) const {
+  return entity_data.specifics.arc_package().package_name();
 }
 
 bool ArcPackageSyncableService::SyncStarted() {

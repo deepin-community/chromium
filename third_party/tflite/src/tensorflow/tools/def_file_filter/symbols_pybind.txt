@@ -31,13 +31,18 @@ tensorflow::FlattenDictItems
 tensorflow::IsGoogleCudaEnabled
 tensorflow::IsBuiltWithROCm
 tensorflow::IsBuiltWithNvcc
+tensorflow::IsAArch32Available
+tensorflow::IsAArch64Available
+tensorflow::IsPowerPCAvailable
+tensorflow::IsSystemZAvailable
+tensorflow::IsX86Available
 tensorflow::GpuSupportsHalfMatMulAndConv
 tensorflow::IsMklEnabled
 
 [//tensorflow/compiler/tf2xla:tf2xla_opset] # tf2xla_opset
 tensorflow::GetRegisteredXlaOpsForDevice
 
-[//external/local_xla/xla/stream_executor:stream_executor_pimpl] # stat_summarizer
+[//external/xla/xla/stream_executor:stream_executor_pimpl] # stat_summarizer
 stream_executor::StreamExecutor::EnablePeerAccessTo
 stream_executor::StreamExecutor::CanEnablePeerAccessTo
 
@@ -54,7 +59,7 @@ tensorflow::tfprof::SerializeToString
 [//tensorflow/core/grappler/graph_analyzer:graph_analyzer_tool] # graph_analyze
 tensorflow::grappler::graph_analyzer::GraphAnalyzerTool
 
-[//external/local_tsl/tsl/python/lib/core:ml_dtypes_lib] # bfloat16, float8
+[//external/xla/xla/tsl/python/lib/core:ml_dtypes_lib] # bfloat16, float8
 tsl::ml_dtypes::RegisterTypes
 tsl::ml_dtypes::GetBfloat16Dtype
 tsl::ml_dtypes::GetFloat8E4m3b11fnuzDtype
@@ -252,6 +257,14 @@ tensorflow::ExperimentalTFLiteToTosaBytecode
 tensorflow::ImportGraphDef
 tensorflow::ImportFunction
 
+[//tensorflow/compiler/mlir/lite/python:converter_python_api] # converter_python_api
+tflite::Convert
+tflite::MlirQuantizeModel
+tflite::MlirSparsifyModel
+tflite::RegisterCustomOpdefs
+tflite::RetrieveCollectedErrors
+tflite::FlatBufferFileToMlir
+
 [//tensorflow/core:op_gen_lib] # tf_session
 tensorflow::ApiDefMap::~ApiDefMap
 
@@ -302,7 +315,7 @@ tensorflow::AddWhileInputHack
 tensorflow::RecordMutation
 tensorflow::Graph::IsControlEdge
 
-[//external/local_tsl/tsl/python/lib/core:numpy] # tf_session
+[//external/xla/xla/tsl/python/lib/core:numpy] # tf_session
 tsl::ImportNumpy
 _tsl_numpy_api
 
@@ -388,13 +401,13 @@ tensorflow::grappler::GetNumAvailableLogicalCPUCores
 [//tensorflow/core/profiler/internal:traceme_recorder_impl] # profiler
 tensorflow::profiler::TraceMeRecorder::Record
 
-[//external/local_tsl/tsl/profiler/lib:profiler_session_impl] # profiler
+[//external/xla/tsl/profiler/lib:profiler_session_impl] # profiler
 tsl::ProfilerSession::Create
 tsl::ProfilerSession::CollectData
 tsl::ProfilerSession::Status
 tsl::ProfilerSession::~ProfilerSession
 
-[//external/local_tsl/tsl/profiler/rpc:profiler_server_impl] # profiler
+[//external/xla/xla/tsl/profiler/rpc:profiler_server_impl] # profiler
 tsl::profiler::ProfilerServer::StartProfilerServer
 tsl::profiler::ProfilerServer::~ProfilerServer
 
@@ -407,7 +420,7 @@ tensorflow::profiler::RemoteProfilerSession::GetServiceAddress
 tensorflow::profiler::RemoteProfilerSession::WaitForCompletion
 tensorflow::profiler::RemoteProfilerSession::~RemoteProfilerSession
 
-[//external/local_tsl/tsl/profiler/rpc/client:profiler_client_impl] # profiler
+[//external/xla/xla/tsl/profiler/rpc/client:profiler_client_impl] # profiler
 tsl::profiler::ProfileGrpc
 tsl::profiler::NewSessionGrpc
 tsl::profiler::MonitorGrpc
@@ -416,14 +429,21 @@ tsl::profiler::RemoteProfilerSession::GetServiceAddress
 tsl::profiler::RemoteProfilerSession::WaitForCompletion
 tsl::profiler::RemoteProfilerSession::~RemoteProfilerSession
 
-[//external/local_xla/xla:status_macros] # tfcompile
+[//external/xla/xla/tsl/concurrency:async_value] # tfcompile
+tsl::AsyncValue::CreateTypeInfoAndReturnTypeIdImpl
+tsl::AsyncValue::TypeInfo
+tsl::internal::ConcreteAsyncValue
+tsl::DummyValueForErrorAsyncValue
+tsl::internal::ConcreteAsyncValue
+
+[//external/xla/xla:status_macros] # tfcompile
 xla::status_macros::MakeErrorStream::Impl::Impl
 xla::status_macros::MakeErrorStream::Impl::~Impl
 xla::status_macros::MakeErrorStream::Impl::GetStatus
 xla::status_macros::MakeErrorStream::CheckNotDone
 xla::status_macros::MakeErrorStream::add_ret_check_failure
 
-[//external/local_xla/xla/hlo/ir:hlo] # tfcompile
+[//external/xla/xla/hlo/ir:hlo] # tfcompile
 xla::DfsHloVisitorBase::SetVisited
 xla::DfsHloVisitorBase<class xla::HloInstruction.*>::SetVisited
 xla::HloComputation::Accept
@@ -484,7 +504,7 @@ tensorflow::GetMlirCommonFlags
 tensorflow::GetXlaDeviceFlags
 tensorflow::ResetJitCompilerFlags
 
-[//external/local_tsl/tsl/platform:tensor_float_32_utils] # tensor_float_32
+[//external/tsl/tsl/platform:tensor_float_32_utils] # tensor_float_32
 tsl::enable_tensor_float_32_execution
 tsl::tensor_float_32_execution_enabled
 
@@ -557,8 +577,13 @@ tensorflow::Safe_PyObjectPtr
 tensorflow::quantization::QuantizeQatModel
 tensorflow::quantization::QuantizePtqModelPreCalibration
 tensorflow::quantization::QuantizePtqModelPostCalibration
-tensorflow::quantization::QuantizePtqDynamicRange
+tensorflow::quantization::QuantizeStaticRangePtq
+tensorflow::quantization::QuantizeDynamicRangePtq
 tensorflow::quantization::QuantizeWeightOnly
+
+[//tensorflow/compiler/mlir/tensorflow_to_stablehlo/python:pywrap_tensorflow_to_stablehlo_lib_impl] # tensorflow_to_stablehlo
+mlir::tensorflow_to_stablehlo::pywrap::PywrapSavedModelToStablehlo
+mlir::tensorflow_to_stablehlo::pywrap::PywrapTfModuleToStablehlo
 
 [//tensorflow/dtensor/cc:dtensor_device_cc] # DTensor
 tensorflow::dtensor::AllocateDTensorDevice
@@ -584,3 +609,9 @@ tensorflow::dtensor::SetIteratorElementLayouts
 tensorflow::dtensor::Mesh
 tensorflow::dtensor::Layout
 tensorflow::dtensor::Layout::LayoutType
+
+[//tensorflow/core/tpu/kernels:sparse_core_layout] #SparseCoreLayoutStacker
+tensorflow::tpu::SparseCoreLayoutStacker::AddTable
+tensorflow::tpu::SparseCoreLayoutStacker::SparseCoreLayoutStacker
+tensorflow::tpu::SparseCoreLayoutStacker::AddTable
+tensorflow::tpu::SparseCoreLayoutStacker::GetLayouts

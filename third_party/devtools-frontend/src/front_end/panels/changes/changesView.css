@@ -1,21 +1,30 @@
 /*
- * Copyright (c) 2017 The Chromium Authors. All rights reserved.
+ * Copyright 2017 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
-[slot="insertion-point-main"] {
+[slot="main"] {
   flex-direction: column;
   display: flex;
 }
 
-[slot="insertion-point-sidebar"] {
+[slot="sidebar"] {
   overflow: auto;
 }
 
 .diff-container {
   flex: 1;
   overflow: auto;
+
+  & .widget:first-child {
+    height: 100%;
+  }
+
+  .combined-diff-view {
+    padding-inline: var(--sys-size-6);
+    padding-block: var(--sys-size-4);
+  }
 }
 
 :focus.selected {
@@ -26,4 +35,14 @@
 .changes-toolbar {
   background-color: var(--sys-color-cdt-base-container);
   border-top: 1px solid var(--sys-color-divider);
+}
+
+[hidden] {
+  display: none !important; /* stylelint-disable-line declaration-no-important */
+}
+
+.copy-to-prompt {
+  margin: var(--sys-size-4);
+  /* Got to override the default flex properties for widgets */
+  flex-grow: 0 !important; /* stylelint-disable-line declaration-no-important */
 }

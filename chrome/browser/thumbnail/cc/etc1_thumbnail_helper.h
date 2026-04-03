@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_THUMBNAIL_CC_ETC1_THUMBNAIL_HELPER_H_
 
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/thumbnail/cc/thumbnail.h"
 
@@ -25,8 +26,10 @@ class Etc1ThumbnailHelper {
 
   // `post_compression_task` will run on the thread that created this
   // Etc1ThumbnailHelper.
+  // `supports_etc_non_power_of_two` is true if the encoded bitmap bounds don't
+  // need to be a multiple of 2.
   void Compress(SkBitmap raw_data,
-                gfx::Size encoded_size,
+                bool supports_etc_non_power_of_two,
                 base::OnceCallback<void(sk_sp<SkPixelRef>, const gfx::Size&)>
                     post_compression_task);
   // `post_write_task` will run on the thread that created this

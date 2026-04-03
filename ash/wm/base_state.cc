@@ -10,6 +10,8 @@
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/wm/overview/overview_controller.h"
+#include "ash/wm/snap_group/snap_group.h"
+#include "ash/wm/snap_group/snap_group_controller.h"
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/splitview/split_view_types.h"
 #include "ash/wm/splitview/split_view_utils.h"
@@ -33,11 +35,12 @@ BaseState::~BaseState() = default;
 void BaseState::OnWMEvent(WindowState* window_state, const WMEvent* event) {
   if (event->IsWorkspaceEvent()) {
     HandleWorkspaceEvents(window_state, event);
-    if (window_state->IsSnapped() && !window_state->CanSnap())
+    if (window_state->IsSnapped() && !window_state->CanSnap()) {
       window_state->Restore();
+    }
     return;
   }
-  if ((window_state->IsTrustedPinned() || window_state->IsPinned()) &&
+  if ((window_state->IsLockedFullscreen() || window_state->IsPinned()) &&
       (event->type() != WM_EVENT_NORMAL && event->type() != WM_EVENT_RESTORE &&
        event->IsTransitionEvent())) {
     // PIN state can be exited only by normal event or restore event.
@@ -89,8 +92,8 @@ WindowStateType BaseState::GetStateForTransitionEvent(WindowState* window_state,
       return WindowStateType::kPip;
     case WM_EVENT_FLOAT:
       return WindowStateType::kFloated;
-    case WM_EVENT_TRUSTED_PIN:
-      return WindowStateType::kTrustedPinned;
+    case WM_EVENT_LOCKED_FULLSCREEN:
+      return WindowStateType::kLockedFullscreen;
     default:
       break;
   }
@@ -109,7 +112,7 @@ WindowStateType BaseState::GetStateForTransitionEvent(WindowState* window_state,
 void BaseState::CycleSnap(WindowState* window_state, WMEventType event) {
   auto* shell = Shell::Get();
   // For tablet mode, use `TabletModeWindowState::CycleTabletSnap`.
-  DCHECK(!display::Screen::GetScreen()->InTabletMode());
+  DCHECK(!display::Screen::Get()->InTabletMode());
 
   WindowStateType desired_snap_state = event == WM_EVENT_CYCLE_SNAP_PRIMARY
                                            ? WindowStateType::kPrimarySnapped
@@ -144,11 +147,20 @@ void BaseState::CycleSnap(WindowState* window_state, WMEventType event) {
                                    : IDS_WM_SNAP_WINDOW_TO_RIGHT_ON_SHORTCUT);
     return;
   }
-  // If |window| is already in |desired_snap_state|, then unsnap |window|.
+  // If |window| is in a snap group, ungroup it. If it's not in a snap group and
+  // it's already snapped, restore it.
   if (window_state->IsSnapped()) {
-    window_state->Restore();
-    window_state->ReadOutWindowCycleSnapAction(
-        IDS_WM_RESTORE_SNAPPED_WINDOW_ON_SHORTCUT);
+    auto* snap_group_controller = Shell::Get()->snap_group_controller();
+    auto* snap_group = snap_group_controller->GetSnapGroupForGivenWindow(
+        window_state->window());
+    if (snap_group) {
+      snap_group_controller->RemoveSnapGroup(
+          snap_group, SnapGroupExitPoint::kToggleSnapGroupAccelerator);
+    } else {
+      window_state->Restore();
+      window_state->ReadOutWindowCycleSnapAction(
+          IDS_WM_RESTORE_SNAPPED_WINDOW_ON_SHORTCUT);
+    }
     return;
   }
   // If |window| cannot be snapped, then do a window bounce animation.
@@ -189,9 +201,19 @@ gfx::Rect BaseState::GetSnappedWindowBoundsInParent(
     const WindowStateType state_type,
     float snap_ratio) {
   CHECK(chromeos::IsSnappedWindowStateType(state_type));
+  if (auto* snap_group_controller = SnapGroupController::Get()) {
+    if (auto* snap_group =
+            snap_group_controller->GetSnapGroupForGivenWindow(window)) {
+      // If `window` belongs to a snap group, the snap group should manage its
+      // bounds. Bounds in root are the same as in parent for snapped windows.
+      return snap_group->GetSnappedWindowBoundsInRoot(window, state_type,
+                                                      snap_ratio);
+    }
+  }
+
   if (auto* split_view_controller = SplitViewController::Get(window);
       split_view_controller->IsWindowInSplitView(window) ||
-      Shell::Get()->IsInTabletMode()) {
+      display::Screen::Get()->InTabletMode()) {
     // In tablet mode `SplitViewController` always manages snapped windows, in
     // clamshell state it only manages windows in split view.
     return split_view_controller->GetSnappedWindowBoundsInParent(
@@ -200,6 +222,7 @@ gfx::Rect BaseState::GetSnappedWindowBoundsInParent(
             : SnapPosition::kSecondary,
         window, snap_ratio);
   }
+
   return ash::GetSnappedWindowBoundsInParent(
       window,
       state_type == WindowStateType::kPrimarySnapped ? SnapViewType::kPrimary
@@ -211,16 +234,22 @@ void BaseState::HandleWindowSnapping(
     WindowState* window_state,
     WMEventType event_type,
     WindowSnapActionSource snap_action_source) {
-  DCHECK(event_type == WM_EVENT_SNAP_PRIMARY ||
-         event_type == WM_EVENT_SNAP_SECONDARY);
-  DCHECK(window_state->CanSnap());
+  CHECK(event_type == WM_EVENT_SNAP_PRIMARY ||
+        event_type == WM_EVENT_SNAP_SECONDARY);
+  CHECK(window_state->CanSnap());
 
   window_state->SetBoundsChangedByUser(true);
+
   aura::Window* window = window_state->window();
+  WindowSnapGrouping snap_group_restore =
+      (snap_action_source == WindowSnapActionSource::kSnapByWindowStateRestore)
+          ? window_state->GetSnapGroupingForRestore()
+          : WindowSnapGrouping::kUngrouped;
+
   // `SplitViewController` will decide if the window needs to be snapped in
   // split view.
-  SplitViewController::Get(window)->OnSnapEvent(window, event_type,
-                                                snap_action_source);
+  SplitViewController::Get(window)->OnSnapEvent(
+      window, event_type, snap_action_source, snap_group_restore);
 }
 
 }  // namespace ash

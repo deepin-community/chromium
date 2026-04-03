@@ -12,6 +12,7 @@
 #include "base/test/bind.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/values_test_util.h"
+#include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_content_browser_client.h"
@@ -22,10 +23,13 @@
 #include "chrome/browser/hid/hid_chooser_context_factory.h"
 #include "chrome/browser/hid/hid_connection_tracker.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/mixin_based_in_process_browser_test.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/console_message.h"
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/service_worker_context_observer.h"
@@ -48,10 +52,12 @@
 #include "extensions/test/test_extension_dir.h"
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
-#include "components/user_manager/scoped_user_manager.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/test/regular_logged_in_browser_test_mixin.h"
+#include "components/account_id/account_id.h"
+#include "components/account_id/account_id_literal.h"  // nogncheck
+#include "components/user_manager/user_manager.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/hid/hid_pinned_notification.h"
@@ -192,10 +198,11 @@ class TestServiceWorkerConsoleObserver
       scoped_observation_{this};
 };
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-const AccountId kManagedUserAccountId =
-    AccountId::FromUserEmail("example@example.com");
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+constexpr auto kManagedUserAccountId =
+    AccountId::Literal::FromUserEmailGaiaId("example@example.com",
+                                            GaiaId::Literal("12345"));
+#endif  // BUILDFLAG(IS_CHROMEOS)
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Need to fill it with an url.
@@ -232,12 +239,26 @@ device::mojom::HidDeviceInfoPtr CreateTestDeviceWithInputAndOutputReports() {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 // Base Test fixture with kEnableWebHidOnExtensionServiceWorker default
 // disabled.
-class WebHidExtensionBrowserTest : public extensions::ExtensionBrowserTest {
+class WebHidExtensionBrowserTest : public InProcessBrowserTestMixinHostSupport<
+                                       extensions::ExtensionBrowserTest> {
  public:
-  WebHidExtensionBrowserTest() = default;
+  WebHidExtensionBrowserTest() {
+#if BUILDFLAG(IS_CHROMEOS)
+    // The user is created via RegularLoggedInBrowserTestMixin.
+    set_chromeos_user_ = false;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  }
 
   void SetUpOnMainThread() override {
-    ExtensionBrowserTest::SetUpOnMainThread();
+    InProcessBrowserTestMixinHostSupport<
+        extensions::ExtensionBrowserTest>::SetUpOnMainThread();
+#if BUILDFLAG(IS_CHROMEOS)
+    user_manager::UserManager::Get()->SetUserPolicyStatus(
+        kManagedUserAccountId, /*is_managed=*/true, /*is_affiliated=*/true);
+    display_service_for_system_notification_ =
+        std::make_unique<NotificationDisplayServiceTester>(
+            /*profile=*/nullptr);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
     mojo::PendingRemote<device::mojom::HidManager> hid_manager;
     hid_manager_.Bind(hid_manager.InitWithNewPipeAndPassReceiver());
@@ -253,40 +274,7 @@ class WebHidExtensionBrowserTest : public extensions::ExtensionBrowserTest {
               run_loop.Quit();
             }));
     run_loop.Run();
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    // This is to set up affliated user for chromeos ash environment.
-    auto fake_user_manager = std::make_unique<ash::FakeChromeUserManager>();
-    fake_user_manager->AddUserWithAffiliation(kManagedUserAccountId, true);
-    fake_user_manager->LoginUser(kManagedUserAccountId);
-    scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
-        std::move(fake_user_manager));
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-#if BUILDFLAG(IS_CHROMEOS)
-    display_service_for_system_notification_ =
-        std::make_unique<NotificationDisplayServiceTester>(
-            /*profile=*/nullptr);
-#endif  // BUILDFLAG(IS_CHROMEOS)
   }
-
-  void TearDownOnMainThread() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    // Explicitly removing the user is required; otherwise ProfileHelper keeps
-    // a dangling pointer to the User.
-    // TODO(b/208629291): Consider removing all users from ProfileHelper in the
-    // destructor of ash::FakeChromeUserManager.
-    GetFakeUserManager()->RemoveUserFromList(kManagedUserAccountId);
-    scoped_user_manager_.reset();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-  }
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  ash::FakeChromeUserManager* GetFakeUserManager() const {
-    return static_cast<ash::FakeChromeUserManager*>(
-        user_manager::UserManager::Get());
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   void SetUpPolicy(const Extension* extension) {
     g_browser_process->local_state()->Set(
@@ -323,7 +311,7 @@ class WebHidExtensionBrowserTest : public extensions::ExtensionBrowserTest {
     CHECK(extension);
     CHECK_EQ(extension->id(), kTestExtensionId);
 
-    // TODO(crbug.com/1336400): Grant permission using requestDevice().
+    // TODO(crbug.com/40847683): Grant permission using requestDevice().
     // Run the test.
     SetUpPolicy(extension);
     EXPECT_TRUE(ready_listener.WaitUntilSatisfied());
@@ -387,57 +375,19 @@ class WebHidExtensionBrowserTest : public extensions::ExtensionBrowserTest {
 #endif
   }
 
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
+ private:
 #if BUILDFLAG(IS_CHROMEOS)
+  ash::RegularLoggedInBrowserTestMixin logged_in_mixin_{&mixin_host_,
+                                                        kManagedUserAccountId};
   std::unique_ptr<NotificationDisplayServiceTester>
       display_service_for_system_notification_;
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
- private:
   device::FakeHidManager hid_manager_;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 };
 
-// Test fixture with kEnableWebHidOnExtensionServiceWorker disabled.
-class WebHidExtensionFeatureDisabledBrowserTest
-    : public WebHidExtensionBrowserTest {
- public:
-  WebHidExtensionFeatureDisabledBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {}, {features::kEnableWebHidOnExtensionServiceWorker});
-  }
-};
-
-// TODO(crbug.com/1521554): Re-enable on linux.
-#if BUILDFLAG(IS_LINUX)
-#define MAYBE_FeatureDisabled DISABLED_FeatureDisabled
-#else
-#define MAYBE_FeatureDisabled FeatureDisabled
-#endif
-IN_PROC_BROWSER_TEST_F(WebHidExtensionFeatureDisabledBrowserTest,
-                       MAYBE_FeatureDisabled) {
-  extensions::TestExtensionDir test_dir;
-
-  constexpr char kBackgroundJs[] = R"(
-    chrome.test.sendMessage("ready", async () => {
-      try {
-        chrome.test.assertEq(navigator.hid, undefined);
-        chrome.test.notifyPass();
-
-      } catch (e) {
-        chrome.test.fail(e.name + ':' + e.message);
-      }
-    });
-  )";
-
-  LoadExtensionAndRunTest(kBackgroundJs);
-}
-
-// TODO(crbug.com/1521554): Re-enable on ash-chrome.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+// TODO(crbug.com/41494522): Re-enable on ChromeOS.
+#if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_GetDevices DISABLED_GetDevices
 #else
 #define MAYBE_GetDevices GetDevices
@@ -463,8 +413,8 @@ IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest, MAYBE_GetDevices) {
   LoadExtensionAndRunTest(kBackgroundJs);
 }
 
-// TODO(crbug.com/1521554): Re-enable on ash-chrome.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+// TODO(crbug.com/41494522): Re-enable on ChromeOS.
+#if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_RequestDevice DISABLED_RequestDevice
 #else
 #define MAYBE_RequestDevice RequestDevice
@@ -488,7 +438,7 @@ IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest, MAYBE_RequestDevice) {
 
 // Test the scenario of waking up the service worker upon device events and
 // the service worker being kept alive with active device session.
-// TODO(crbug.com/1520400): enable the flaky test.
+// TODO(crbug.com/41493373): enable the flaky test.
 #if (BUILDFLAG(IS_LINUX) && defined(LEAK_SANITIZER)) || \
     (BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_CHROMEOS_DEVICE))
 #define MAYBE_DeviceConnectAndOpenDeviceWhenServiceWorkerStopped \
@@ -544,7 +494,7 @@ IN_PROC_BROWSER_TEST_F(
                                                 ReplyBehavior::kWillReply);
   extensions::ResultCatcher result_catcher;
   const Extension* extension = LoadExtension(test_dir.UnpackedPath());
-  // TODO(crbug.com/1336400): Grant permission using requestDevice().
+  // TODO(crbug.com/40847683): Grant permission using requestDevice().
   // Run the test.
   SetUpPolicy(extension);
   ASSERT_TRUE(extension);
@@ -602,8 +552,8 @@ IN_PROC_BROWSER_TEST_F(
   SimulateClickOnSystemTrayIconButton(browser(), extension);
 }
 
-// TODO(crbug.com/1521554): Re-enable on linux.
-#if BUILDFLAG(IS_LINUX)
+// TODO(crbug.com/41494522): Flaky on non-Mac release builds.
+#if !BUILDFLAG(IS_MAC) && defined(NDEBUG)
 #define MAYBE_EventListenerAddedAfterServiceWorkerIsActivated \
   DISABLED_EventListenerAddedAfterServiceWorkerIsActivated
 #else
@@ -640,7 +590,7 @@ IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest,
   // Launch the test app.
   extensions::ResultCatcher result_catcher;
   const Extension* extension = LoadExtension(test_dir.UnpackedPath());
-  // TODO(crbug.com/1336400): Grant permission using requestDevice().
+  // TODO(crbug.com/40847683): Grant permission using requestDevice().
   // Run the test.
   SetUpPolicy(extension);
   ASSERT_TRUE(extension);

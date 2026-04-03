@@ -34,22 +34,8 @@ namespace {
 
 class MockTranslateBubbleModel : public TranslateBubbleModel {
  public:
-  explicit MockTranslateBubbleModel(TranslateBubbleModel::ViewState view_state)
-      : error_type_(translate::TranslateErrors::NONE),
-        source_language_index_(1),
-        target_language_index_(2),
-        never_translate_language_(false),
-        never_translate_site_(false),
-        should_show_always_translate_sortcut_(false),
-        should_always_translate_(false),
-        always_translate_checked_(false),
-        set_always_translate_called_count_(0),
-        translate_called_(false),
-        revert_translation_called_(false),
-        translation_declined_(false),
-        source_language_index_on_translation_(-1),
-        target_language_index_on_translation_(-1),
-        can_add_site_to_never_prompt_list(true) {
+  explicit MockTranslateBubbleModel(
+      TranslateBubbleModel::ViewState view_state) {
     DCHECK_NE(VIEW_STATE_SOURCE_LANGUAGE, view_state);
     DCHECK_NE(VIEW_STATE_TARGET_LANGUAGE, view_state);
     current_view_state_ = view_state;
@@ -80,8 +66,9 @@ class MockTranslateBubbleModel : public TranslateBubbleModel {
   }
 
   std::string GetSourceLanguageCode() const override {
-    if (source_language_index_ == 0)
+    if (source_language_index_ == 0) {
       return "und";
+    }
     return "eng-US";
   }
 
@@ -162,21 +149,21 @@ class MockTranslateBubbleModel : public TranslateBubbleModel {
   void ReportUIChange(bool is_ui_shown) override {}
 
   ViewState current_view_state_;
-  translate::TranslateErrors error_type_;
-  int source_language_index_;
-  int target_language_index_;
-  bool never_translate_language_;
-  bool never_translate_site_;
-  bool should_show_always_translate_sortcut_;
-  bool should_always_translate_;
-  bool always_translate_checked_;
-  int set_always_translate_called_count_;
-  bool translate_called_;
-  bool revert_translation_called_;
-  bool translation_declined_;
-  int source_language_index_on_translation_;
-  int target_language_index_on_translation_;
-  bool can_add_site_to_never_prompt_list;
+  translate::TranslateErrors error_type_ = translate::TranslateErrors::NONE;
+  int source_language_index_ = 1;
+  int target_language_index_ = 2;
+  bool never_translate_language_ = false;
+  bool never_translate_site_ = false;
+  bool should_show_always_translate_sortcut_ = false;
+  bool should_always_translate_ = false;
+  bool always_translate_checked_ = false;
+  int set_always_translate_called_count_ = 0;
+  bool translate_called_ = false;
+  bool revert_translation_called_ = false;
+  bool translation_declined_ = false;
+  int source_language_index_on_translation_ = -1;
+  int target_language_index_on_translation_ = -1;
+  bool can_add_site_to_never_prompt_list = true;
 };
 
 }  // namespace
@@ -190,7 +177,9 @@ class TranslateBubbleViewTest : public ChromeViewsTestBase {
     ChromeViewsTestBase::SetUp();
 
     // The bubble needs the parent as an anchor.
-    anchor_widget_ = CreateTestWidget(views::Widget::InitParams::TYPE_WINDOW);
+    anchor_widget_ =
+        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+                         views::Widget::InitParams::TYPE_WINDOW);
     anchor_widget_->Show();
 
     mock_model_ = new MockTranslateBubbleModel(
@@ -208,12 +197,16 @@ class TranslateBubbleViewTest : public ChromeViewsTestBase {
   void PressButton(TranslateBubbleView::ButtonID id) {
     views::Button* button =
         static_cast<views::Button*>(bubble_->GetViewByID(id));
-    views::test::ButtonTestApi(button).NotifyClick(ui::KeyEvent(
-        ui::ET_KEY_PRESSED, ui::VKEY_RETURN, ui::DomCode::ENTER, ui::EF_NONE));
+    views::test::ButtonTestApi(button).NotifyClick(
+        ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_RETURN,
+                     ui::DomCode::ENTER, ui::EF_NONE));
   }
 
   void TearDown() override {
-    bubble_->GetWidget()->CloseNow();
+    mock_model_ = nullptr;
+    if (bubble_) {
+      bubble_.ExtractAsDangling()->GetWidget()->CloseNow();
+    }
     anchor_widget_.reset();
 
     ChromeViewsTestBase::TearDown();
@@ -230,8 +223,8 @@ class TranslateBubbleViewTest : public ChromeViewsTestBase {
   }
 
   std::unique_ptr<views::Widget> anchor_widget_;
-  raw_ptr<MockTranslateBubbleModel, DanglingUntriaged> mock_model_;
-  raw_ptr<TranslateBubbleView, DanglingUntriaged> bubble_;
+  raw_ptr<MockTranslateBubbleModel> mock_model_ = nullptr;
+  raw_ptr<TranslateBubbleView> bubble_ = nullptr;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
@@ -254,7 +247,8 @@ TEST_F(TranslateBubbleViewTest, OptionsMenuNeverTranslateLanguage) {
 
   const size_t index =
       bubble_->options_menu_model_
-          ->GetIndexOfCommandId(TranslateBubbleView::NEVER_TRANSLATE_LANGUAGE)
+          ->GetIndexOfCommandId(static_cast<int>(
+              TranslateBubbleView::OptionsMenuItem::kNeverTranslateLanguage))
           .value();
   bubble_->options_menu_model_->ActivatedAt(index);
 
@@ -275,7 +269,8 @@ TEST_F(TranslateBubbleViewTest, OptionsMenuNeverTranslateSite) {
   TriggerOptionsMenu();
   const size_t index =
       bubble_->options_menu_model_
-          ->GetIndexOfCommandId(TranslateBubbleView::NEVER_TRANSLATE_SITE)
+          ->GetIndexOfCommandId(static_cast<int>(
+              TranslateBubbleView::OptionsMenuItem::kNeverTranslateSite))
           .value();
   bubble_->options_menu_model_->ActivatedAt(index);
 
@@ -465,12 +460,14 @@ TEST_F(TranslateBubbleViewTest, OptionsMenuRespectsBlocklistSite) {
   // NEVER_TRANSLATE_SITE shouldn't show up for sites that can't be blocklisted.
   EXPECT_FALSE(
       bubble_->options_menu_model_
-          ->GetIndexOfCommandId(TranslateBubbleView::NEVER_TRANSLATE_SITE)
+          ->GetIndexOfCommandId(static_cast<int>(
+              TranslateBubbleView::OptionsMenuItem::kNeverTranslateSite))
           .has_value());
   // Verify that the menu is populated so previous check makes sense.
   EXPECT_TRUE(
       bubble_->options_menu_model_
-          ->GetIndexOfCommandId(TranslateBubbleView::NEVER_TRANSLATE_LANGUAGE)
+          ->GetIndexOfCommandId(static_cast<int>(
+              TranslateBubbleView::OptionsMenuItem::kNeverTranslateLanguage))
           .has_value());
 }
 
@@ -484,16 +481,19 @@ TEST_F(TranslateBubbleViewTest, MenuOptionsHiddenOnUnknownSource) {
   // the source language is "Unknown".
   EXPECT_FALSE(
       bubble_->options_menu_model_
-          ->GetIndexOfCommandId(TranslateBubbleView::NEVER_TRANSLATE_LANGUAGE)
+          ->GetIndexOfCommandId(static_cast<int>(
+              TranslateBubbleView::OptionsMenuItem::kNeverTranslateLanguage))
           .has_value());
   EXPECT_FALSE(
       bubble_->options_menu_model_
-          ->GetIndexOfCommandId(TranslateBubbleView::ALWAYS_TRANSLATE_LANGUAGE)
+          ->GetIndexOfCommandId(static_cast<int>(
+              TranslateBubbleView::OptionsMenuItem::kAlwaysTranslateLanguage))
           .has_value());
   // Verify that the menu is populated so previous checks make sense.
   EXPECT_TRUE(
       bubble_->options_menu_model_
-          ->GetIndexOfCommandId(TranslateBubbleView::CHANGE_TARGET_LANGUAGE)
+          ->GetIndexOfCommandId(static_cast<int>(
+              TranslateBubbleView::OptionsMenuItem::kChangeTargetLanguage))
           .has_value());
 }
 
@@ -503,7 +503,8 @@ TEST_F(TranslateBubbleViewTest, AlwaysTranslateLanguageMenuItem) {
   TriggerOptionsMenu();
   const size_t index =
       bubble_->options_menu_model_
-          ->GetIndexOfCommandId(TranslateBubbleView::ALWAYS_TRANSLATE_LANGUAGE)
+          ->GetIndexOfCommandId(static_cast<int>(
+              TranslateBubbleView::OptionsMenuItem::kAlwaysTranslateLanguage))
           .value();
 
   EXPECT_FALSE(mock_model_->ShouldAlwaysTranslate());
@@ -551,7 +552,8 @@ TEST_F(TranslateBubbleViewTest, AlwaysTranslateTriggerTranslation) {
   TriggerOptionsMenu();
   const size_t index =
       bubble_->options_menu_model_
-          ->GetIndexOfCommandId(TranslateBubbleView::ALWAYS_TRANSLATE_LANGUAGE)
+          ->GetIndexOfCommandId(static_cast<int>(
+              TranslateBubbleView::OptionsMenuItem::kAlwaysTranslateLanguage))
           .value();
 
   EXPECT_FALSE(mock_model_->ShouldAlwaysTranslate());

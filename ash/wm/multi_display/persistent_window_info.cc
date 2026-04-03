@@ -16,11 +16,11 @@ PersistentWindowInfo::PersistentWindowInfo(
     bool is_landscape_before_rotation,
     const gfx::Rect& restore_bounds_in_parent)
     : is_landscape_(is_landscape_before_rotation) {
-  const auto& display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(window);
+  const auto& display = display::Screen::Get()->GetDisplayNearestWindow(window);
   window_bounds_in_screen_ = window->GetBoundsInScreen();
   display_id_ = display.id();
-  display_bounds_in_screen_ = display.bounds();
+  display_offset_from_origin_in_screen_ = display.bounds().OffsetFromOrigin();
+  display_size_in_pixel_ = display.GetSizeInPixel();
 
   WindowState* window_state = WindowState::Get(window);
   DCHECK(window_state);

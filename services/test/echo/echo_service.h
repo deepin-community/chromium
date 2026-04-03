@@ -5,7 +5,10 @@
 #ifndef SERVICES_TEST_ECHO_ECHO_SERVICE_H_
 #define SERVICES_TEST_ECHO_ECHO_SERVICE_H_
 
+#include <vector>
+
 #include "build/build_config.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/test/echo/public/mojom/echo.mojom.h"
@@ -32,11 +35,15 @@ class EchoService : public mojom::EchoService {
 #if BUILDFLAG(IS_WIN)
   void DelayLoad() override;
   void LoadNativeLibrary(const ::base::FilePath& library,
-                         bool call_sec32_fn,
+                         bool call_winmm_fn,
                          LoadNativeLibraryCallback callback) override;
-  void CallUser32(const std::string& lower,
-                  CallUser32Callback callback) override;
 #endif
+
+  void DecryptEncrypt(os_crypt_async::Encryptor encryptor,
+                      const std::vector<uint8_t>& input,
+                      DecryptEncryptCallback callback) override;
+
+  void VerifyCheckIsTest(VerifyCheckIsTestCallback callback) override;
 
   mojo::Receiver<mojom::EchoService> receiver_;
 };

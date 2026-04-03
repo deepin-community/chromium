@@ -5,6 +5,8 @@
 #ifndef UI_GFX_MOJOM_HDR_METADATA_MOJOM_TRAITS_H_
 #define UI_GFX_MOJOM_HDR_METADATA_MOJOM_TRAITS_H_
 
+#include "skia/public/mojom/hdr_metadata_mojom_traits.h"
+#include "third_party/skia/include/private/SkHdrMetadata.h"
 #include "ui/gfx/hdr_metadata.h"
 #include "ui/gfx/mojom/hdr_metadata.mojom.h"
 
@@ -83,6 +85,9 @@ struct StructTraits<gfx::mojom::HDRMetadataDataView, gfx::HDRMetadata> {
       const gfx::HDRMetadata& input) {
     return input.extended_range;
   }
+
+  static std::optional<skhdr::AdaptiveGlobalToneMap> agtm(
+      const gfx::HDRMetadata& input);
 
   static bool Read(gfx::mojom::HDRMetadataDataView data,
                    gfx::HDRMetadata* output);

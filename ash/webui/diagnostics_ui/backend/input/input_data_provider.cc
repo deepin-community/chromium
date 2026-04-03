@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 
+#include <algorithm>
 #include <vector>
 
 #include "ash/accelerators/accelerator_controller_impl.h"
@@ -17,6 +18,7 @@
 #include "ash/system/diagnostics/diagnostics_log_controller.h"
 #include "ash/system/diagnostics/keyboard_input_log.h"
 #include "ash/system/diagnostics/mojom/input.mojom.h"
+#include "ash/system/input_device_settings/input_device_settings_utils.h"
 #include "ash/webui/diagnostics_ui/backend/common/histogram_util.h"
 #include "ash/webui/diagnostics_ui/backend/input/event_watcher_factory.h"
 #include "ash/webui/diagnostics_ui/backend/input/input_data_event_watcher.h"
@@ -26,7 +28,8 @@
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/window_util.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/display/screen.h"
@@ -154,7 +157,8 @@ void InputDataProvider::GetConnectedDevices(
   bool has_internal_keyboard = false;
   for (const ui::KeyboardDevice& keyboard :
        ui::DeviceDataManager::GetInstance()->GetKeyboardDevices()) {
-    if (keyboard.type == ui::InputDeviceType::INPUT_DEVICE_INTERNAL) {
+    if (keyboard.type == ui::InputDeviceType::INPUT_DEVICE_INTERNAL &&
+        !IsSplitModifierKeyboard(keyboard.id)) {
       has_internal_keyboard = true;
       break;
     }
@@ -176,24 +180,19 @@ void InputDataProvider::GetConnectedDevices(
 
 void InputDataProvider::GetConnectedDevicesHelper(
     GetConnectedDevicesCallback callback) {
-  std::vector<mojom::KeyboardInfoPtr> keyboard_vector;
-  keyboard_vector.reserve(keyboards_.size());
-  for (auto& keyboard_info : keyboards_) {
-    keyboard_vector.push_back(keyboard_info.second.Clone());
-  }
+  auto connected_devices = mojom::ConnectedDevices::New();
 
-  std::vector<mojom::TouchDeviceInfoPtr> touch_device_vector;
-  touch_device_vector.reserve(touch_devices_.size());
-  for (auto& touch_device_info : touch_devices_) {
-    touch_device_vector.push_back(touch_device_info.second.Clone());
-  }
+  connected_devices->keyboards.reserve(keyboards_.size());
+  std::ranges::transform(keyboards_,
+                         std::back_inserter(connected_devices->keyboards),
+                         [](const auto& pair) { return pair.second.Clone(); });
 
-  base::ranges::sort(keyboard_vector, std::less<>(), &mojom::KeyboardInfo::id);
-  base::ranges::sort(touch_device_vector, std::less<>(),
-                     &mojom::TouchDeviceInfo::id);
+  connected_devices->touch_devices.reserve(touch_devices_.size());
+  std::ranges::transform(touch_devices_,
+                         std::back_inserter(connected_devices->touch_devices),
+                         [](const auto& pair) { return pair.second.Clone(); });
 
-  std::move(callback).Run(std::move(keyboard_vector),
-                          std::move(touch_device_vector));
+  std::move(callback).Run(std::move(connected_devices));
 }
 
 void InputDataProvider::ObserveConnectedDevices(
@@ -285,7 +284,7 @@ void InputDataProvider::OnPowerStateChanged(
 void InputDataProvider::MoveAppToTestingScreen(uint32_t evdev_id) {
   aura::Window* window = widget_->GetNativeWindow();
   const int64_t current_display_id =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(window).id();
+      display::Screen::Get()->GetDisplayNearestWindow(window).id();
 
   // Find the testing touchscreen device.
   auto it = touch_devices_.find((int)evdev_id);
@@ -585,6 +584,14 @@ void InputDataProvider::AddKeyboard(const InputDeviceInformation* device_info) {
       keyboard_helper_.ConstructKeyboard(device_info, aux_data.get());
   const bool is_internal_keyboard =
       keyboard->connection_type == mojom::ConnectionType::kInternal;
+  // Don't add keyboard if internal keyboard is a split modifier keyboard
+  // and the config for bottom left/right is unknown.
+  if (is_internal_keyboard &&
+      IsSplitModifierKeyboard(device_info->input_device.id) &&
+      (keyboard->bottom_left_layout == mojom::BottomLeftLayout::kUnknown ||
+        keyboard->bottom_right_layout == mojom::BottomRightLayout::kUnknown)) {
+      return;
+    }
   if (!features::IsExternalKeyboardInDiagnosticsAppEnabled() &&
       !is_internal_keyboard) {
     return;

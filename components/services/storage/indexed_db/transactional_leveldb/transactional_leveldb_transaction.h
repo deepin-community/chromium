@@ -12,14 +12,13 @@
 
 #include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "components/services/storage/indexed_db/scopes/leveldb_scope_deletion_mode.h"
 #include "third_party/leveldatabase/src/include/leveldb/status.h"
 
-namespace content {
+namespace content::indexed_db {
 class TransactionalLevelDBDatabase;
 class TransactionalLevelDBIterator;
 class LevelDBScope;
@@ -69,8 +68,6 @@ class TransactionalLevelDBTransaction
   // transaction.  This may return null, if it does, status will explain why.
   std::unique_ptr<TransactionalLevelDBIterator> CreateIterator(
       leveldb::Status& status);
-
-  uint64_t GetTransactionSize() const;
 
   // Sets a callback that will be called after the undo log for this transaction
   // is cleaned up and any deferred deletions (from RemoveRange) are complete.
@@ -131,7 +128,8 @@ class TransactionalLevelDBTransaction
   // TransactionalLevelDBDatabase ensures a maximum number of
   // TransactionalLevelDBDatabase::kDefaultMaxOpenIteratorsPerDatabase loaded
   // iterators.
-  base::flat_set<TransactionalLevelDBIterator*> loaded_iterators_;
+  base::flat_set<raw_ptr<TransactionalLevelDBIterator, CtnExperimental>>
+      loaded_iterators_;
   std::set<raw_ptr<TransactionalLevelDBIterator, SetExperimental>>
       evicted_iterators_;
   bool is_evicting_all_loaded_iterators_ = false;
@@ -171,6 +169,6 @@ class LevelDBDirectTransaction {
   std::unique_ptr<LevelDBWriteBatch> write_batch_;
 };
 
-}  // namespace content
+}  // namespace content::indexed_db
 
 #endif  // COMPONENTS_SERVICES_STORAGE_INDEXED_DB_TRANSACTIONAL_LEVELDB_TRANSACTIONAL_LEVELDB_TRANSACTION_H_

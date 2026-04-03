@@ -6,6 +6,7 @@
 #define SYSTEM_API_DBUS_CROS_DISKS_DBUS_CONSTANTS_H_
 
 #include <ostream>
+#include <type_traits>
 
 namespace cros_disks {
 
@@ -38,8 +39,6 @@ const char kMountProgress[] = "MountProgress";
 const char kRenameCompleted[] = "RenameCompleted";
 
 // Properties.
-// TODO(benchan): Drop unnecessary 'Device' / 'Drive' prefix as they were
-// carried through old code base.
 const char kDeviceFile[] = "DeviceFile";
 const char kDeviceIsDrive[] = "DeviceIsDrive";
 const char kDeviceIsMediaAvailable[] = "DeviceIsMediaAvailable";
@@ -173,8 +172,11 @@ enum class MountError {
   // The device is busy.
   kBusy = 20,
 
+  // The file system of the device contains some errors or corruption.
+  kCorrupted = 21,
+
   // Modify when adding enum values.
-  kMaxValue = 20,
+  kMaxValue = 21,
 };
 
 // MountSourceType enum values are solely used by Chrome/CrosDisks in
@@ -263,6 +265,7 @@ std::basic_ostream<C>& operator<<(std::basic_ostream<C>& out,
     PRINT(InProgress)
     PRINT(Cancelled)
     PRINT(Busy)
+    PRINT(Corrupted)
 #undef PRINT
   }
 

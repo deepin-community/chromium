@@ -13,22 +13,29 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <memory>
+#include <vector>
+
 #include <gtest/gtest.h>
 #include "absl/strings/match.h"
 #include "tensorflow/cc/client/client_session.h"
 #include "tensorflow/cc/framework/ops.h"
+#include "tensorflow/cc/framework/scope.h"
 #include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/control_flow_ops_internal.h"
 #include "tensorflow/cc/ops/function_ops.h"
 #include "tensorflow/cc/ops/standard_ops.h"
+#include "xla/tsl/lib/core/status_test_util.h"
 #include "tensorflow/core/common_runtime/graph_constructor.h"
 #include "tensorflow/core/common_runtime/graph_runner.h"
 #include "tensorflow/core/common_runtime/lower_functional_ops.h"
+#include "tensorflow/core/config/flag_defs.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/function_testlib.h"
 #include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/types.pb.h"
+#include "tensorflow/core/graph/graph.h"
 #include "tensorflow/core/graph/graph_def_builder.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/lib/strings/str_util.h"
@@ -45,7 +52,7 @@ SessionOptions SessionOptionsWithInlining() {
   return session_options;
 }
 
-Status Rewrite(std::unique_ptr<Graph>* graph) {
+absl::Status Rewrite(std::unique_ptr<Graph>* graph) {
   FunctionLibraryDefinition flib_def((*graph)->flib_def());
   GraphOptimizationPassOptions opt_options;
   SessionOptions session_options = SessionOptionsWithInlining();
@@ -173,6 +180,65 @@ TEST(LowerWhileOpTest, Simple) {
   }
 }
 
+static void DanglingNodeTestHelper(int expected_count) {
+  std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
+
+  // Add test functions for cond and body.
+  FunctionDefLibrary f_lib_proto;
+  *f_lib_proto.add_function() =
+      test::function::XTimesTwoWithDanglingFloorDivNode();
+  *f_lib_proto.add_function() = test::function::LessThanOrEqualToN(8);
+
+  Scope root = Scope::NewRootScope().ExitOnError();
+  TF_ASSERT_OK(root.graph()->AddFunctionLibrary(f_lib_proto));
+  auto a = ops::Placeholder(root.WithOpName("A"), DT_INT32);
+  Node* while_node;
+  std::vector<NodeBuilder::NodeOut> inputs({NodeBuilder::NodeOut(a.node())});
+  AttrValue cond_func;
+  cond_func.mutable_func()->set_name("LessThanOrEqualToN");
+  AttrValue body_func;
+  body_func.mutable_func()->set_name("XTimesTwoWithDanglingFloorDivNode");
+  TF_ASSERT_OK(
+      NodeBuilder("while", "While", &root.graph()->flib_def())
+          .Input(inputs)
+          .Attr("T", {DT_INT32})
+          .Attr("cond", cond_func)
+          .Attr("body", body_func)
+          .Attr("parallel_iterations", 100)
+          .Attr(LowerFunctionalOpsPass::kLowerUsingSwitchMergeAttr, true)
+          .Finalize(root.graph(), &while_node));
+  auto c = ops::Identity(
+      root.WithOpName("C").WithControlDependencies(Output(while_node)),
+      Output(while_node));
+  TF_ASSERT_OK(root.DoShapeInference(while_node));
+  TF_ASSERT_OK(root.ToGraph(graph.get()));
+
+  TF_ASSERT_OK(Rewrite(&graph));
+
+  int mul_count = 0;
+  int floor_div_count = 0;
+
+  for (const auto* op : graph->op_nodes()) {
+    if (op->type_string() == "Mul") {
+      mul_count++;
+    }
+    if (op->type_string() == "FloorDiv") {
+      floor_div_count++;
+    }
+  }
+
+  ASSERT_EQ(mul_count, 1);
+  ASSERT_EQ(floor_div_count, expected_count);
+}
+
+TEST(LowerWhileOpTest, DanglingNode) { DanglingNodeTestHelper(1); }
+
+TEST(LowerWhileOpTest, DanglingNodeWithPruning) {
+  flags::Global().enable_function_pruning_before_inlining.reset(true);
+  DanglingNodeTestHelper(0);
+  flags::Global().enable_function_pruning_before_inlining.reset(false);
+}
+
 TEST(LowerWhileOpTest, ForwardAssignedInputDevice) {
   std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
 
@@ -187,7 +253,8 @@ TEST(LowerWhileOpTest, ForwardAssignedInputDevice) {
   TF_CHECK_OK(NodeBuilder("placed_node", "Placeholder")
                   .Attr("dtype", type)
                   .Finalize(graph.get(), &placeholder));
-  const string assigned_device_name = "/job:localhost/replica:0/task:0/gpu:0";
+  const std::string assigned_device_name =
+      "/job:localhost/replica:0/task:0/gpu:0";
   placeholder->set_assigned_device_name(assigned_device_name);
   Node* while_node;
   std::vector<NodeBuilder::NodeOut> inputs({NodeBuilder::NodeOut(placeholder)});
@@ -277,11 +344,11 @@ TEST(LowerWhileOpTest, ForwardRequestedInputDevice) {
   TF_ASSERT_OK(graph->AddFunctionLibrary(f_lib_proto));
   auto type = DT_FLOAT;
   // We will place the loop var on the gpu:0.
-  const string gpu_0_device = "/job:localhost/replica:0/task:0/gpu:0";
+  const std::string gpu_0_device = "/job:localhost/replica:0/task:0/gpu:0";
   // We will place loop's control input on the gpu:1.
-  const string gpu_1_device = "/job:localhost/replica:0/task:0/gpu:1";
+  const std::string gpu_1_device = "/job:localhost/replica:0/task:0/gpu:1";
   // We will place While op on gpu:2.
-  const string gpu_2_device = "/job:localhost/replica:0/task:0/gpu:2";
+  const std::string gpu_2_device = "/job:localhost/replica:0/task:0/gpu:2";
   Node* gpu_0_ph;
   TF_CHECK_OK(NodeBuilder("placed_node", "Placeholder")
                   .Attr("dtype", type)
@@ -417,11 +484,11 @@ TEST(LowerWhileOpTest, ForwardColocationKeyAttribute) {
   TF_ASSERT_OK(graph->AddFunctionLibrary(f_lib_proto));
   auto type = DT_FLOAT;
   // We will place the loop var on the gpu:0.
-  const string gpu_0_device = "/job:localhost/replica:0/task:0/gpu:0";
+  const std::string gpu_0_device = "/job:localhost/replica:0/task:0/gpu:0";
   // We will place loop's control input on the gpu:1.
-  const string gpu_1_device = "/job:localhost/replica:0/task:0/gpu:1";
+  const std::string gpu_1_device = "/job:localhost/replica:0/task:0/gpu:1";
   // We will place While op on gpu:2.
-  const string gpu_2_device = "/job:localhost/replica:0/task:0/gpu:2";
+  const std::string gpu_2_device = "/job:localhost/replica:0/task:0/gpu:2";
   Node* gpu_0_ph;
   AttrValue gpu_0_colocation_attr;
   gpu_0_colocation_attr.mutable_list()->add_s("loc@:some_op_on_gpu_0_device");

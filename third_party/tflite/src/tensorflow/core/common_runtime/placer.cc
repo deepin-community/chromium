@@ -27,6 +27,7 @@ limitations under the License.
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/types.pb.h"
+#include "tensorflow/core/graph/graph.h"
 #include "tensorflow/core/graph/graph_node_util.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/platform/path.h"
@@ -39,10 +40,10 @@ namespace {
 
 struct NameCounts {
   mutex counts_mutex;
-  std::unordered_map<string, int> counts;
+  std::unordered_map<std::string, int> counts;
 };
 
-string MakeUniqueFilename(string name) {
+std::string MakeUniqueFilename(std::string name) {
   static NameCounts& instance = *new NameCounts;
 
   // Remove illegal characters from `name`.
@@ -59,7 +60,7 @@ string MakeUniqueFilename(string name) {
     count = instance.counts[name]++;
   }
 
-  string filename = name;
+  std::string filename = name;
   if (count > 0) {
     absl::StrAppend(&filename, "_", count);
   }
@@ -67,7 +68,7 @@ string MakeUniqueFilename(string name) {
   return filename;
 }
 
-Status GetFileName(string base_name, string* fname) {
+absl::Status GetFileName(std::string base_name, std::string* fname) {
   const char* dir = nullptr;
   dir = getenv("TF_DUMP_GRAPH_PREFIX");
   if (!dir) {
@@ -89,10 +90,10 @@ Status GetFileName(string base_name, string* fname) {
   return absl::OkStatus();
 }
 
-void DumpColocationGraph(const string& base_name,
+void DumpColocationGraph(const std::string& base_name,
                          const ColocationGraph& colocation_graph) {
-  string fname;
-  Status status = GetFileName(base_name, &fname);
+  std::string fname;
+  absl::Status status = GetFileName(base_name, &fname);
   if (status.ok()) {
     status = WriteStringToFile(Env::Default(), fname,
                                colocation_graph.DebugString());
@@ -117,6 +118,42 @@ bool IsGeneratorNode(const Node* node) {
          !IsRefType(node->output_type(0));
 }
 
+// If a node is an Identity op with input and output on the same device,
+// assign this Identity the same device. If the node already has a requested
+// or assigned device, don't touch it.
+bool MatchIdentityOperation(const Node* node) {
+  if (!node) {
+    return false;
+  }
+
+  if (!node->IsIdentity()) {
+    return false;
+  }
+
+  if (node->has_assigned_device_name()) {
+    return false;
+  }
+
+  if (!node->requested_device().empty()) {
+    return false;
+  }
+
+  // Strictly only check for IDENTITY nodes with only 1 input and
+  // 1 output edge.
+  if (node->in_edges().size() != 1) {
+    return false;
+  }
+
+  if (node->out_edges().size() != 1) {
+    return false;
+  }
+
+  const Node* input = *node->in_nodes().begin();
+  const Node* output = *node->out_nodes().begin();
+
+  return input->requested_device() == output->requested_device();
+}
+
 void LogDeviceAssignment(const Node* node, bool log_device_placement) {
   // Log placement if log_device_placement is set.
   if (log_device_placement) {
@@ -138,9 +175,9 @@ void LogDeviceAssignment(const Node* node, bool log_device_placement) {
   }
 }
 
-Status AssignAndLog(int assigned_device, Node* node,
-                    ColocationGraph* colocation_graph,
-                    bool log_device_placement) {
+absl::Status AssignAndLog(int assigned_device, Node* node,
+                          ColocationGraph* colocation_graph,
+                          bool log_device_placement) {
   node->set_assigned_device_name_index(assigned_device);
 
   // Constraint the group of node to the assigned device.
@@ -152,7 +189,7 @@ Status AssignAndLog(int assigned_device, Node* node,
 
 }  // namespace
 
-Placer::Placer(Graph* graph, const string& function_name,
+Placer::Placer(Graph* graph, const std::string& function_name,
                const FunctionLibraryDefinition* flib_def,
                const DeviceSet* devices, const Device* default_local_device,
                bool allow_soft_placement, bool log_device_placement)
@@ -164,34 +201,33 @@ Placer::Placer(Graph* graph, const string& function_name,
       allow_soft_placement_(allow_soft_placement),
       log_device_placement_(log_device_placement) {}
 
-Placer::Placer(Graph* graph, const string& function_name,
+Placer::Placer(Graph* graph, const std::string& function_name,
                const FunctionLibraryDefinition* flib_def,
                const DeviceSet* devices, const Device* default_local_device)
     : Placer(graph, function_name, flib_def, devices, default_local_device,
              true, false) {}
-Placer::Placer(Graph* graph, const string& function_name,
+Placer::Placer(Graph* graph, const std::string& function_name,
                const FunctionLibraryDefinition* flib_def,
                const DeviceSet* devices)
     : Placer(graph, function_name, flib_def, devices, nullptr, true, false) {}
 
 Placer::~Placer() {}
 
-Status Placer::Run() {
+absl::Status Placer::Run() {
   GraphOptimizationPassOptions options;
   // options.debug_filename_prefix, which is used to create graph dump files,
   // will be an empty string.
   return Run(options);
 }
 
-Status Placer::Run(const GraphOptimizationPassOptions& options) {
+absl::Status Placer::Run(const GraphOptimizationPassOptions& options) {
   if (devices_->devices().empty()) {
     return errors::FailedPrecondition("No devices are registered");
   }
 
   if (VLOG_IS_ON(3)) {
-    DumpGraphToFile(
-        strings::StrCat(options.debug_filename_prefix, "placer_input"), *graph_,
-        nullptr);
+    DumpGraphToFile(absl::StrCat(options.debug_filename_prefix, "placer_input"),
+                    *graph_, nullptr);
   }
   if (VLOG_IS_ON(5)) {
     for (const Node* node : graph_->op_nodes()) {
@@ -233,7 +269,7 @@ Status Placer::Run(const GraphOptimizationPassOptions& options) {
     }
 
     const std::vector<Device*>* devices;
-    Status status = colocation_graph.GetDevicesForNode(node, &devices);
+    absl::Status status = colocation_graph.GetDevicesForNode(node, &devices);
     if (!status.ok()) {
       return AttachDef(
           errors::InvalidArgument("Cannot assign a device for operation ",
@@ -254,10 +290,10 @@ Status Placer::Run(const GraphOptimizationPassOptions& options) {
     // to perform good placement we can add an interface for this.
     int assigned_device = -1;
 
-    // Heuristic B: If the node only operates on metadata, not data,
-    // then it is desirable to place that metadata node with its
+    // Heuristic B: If the node only operates on metadata (not data) or is
+    // an identity node, then it is desirable to place that node with its
     // input.
-    if (IsMetadata(node)) {
+    if (IsMetadata(node) || MatchIdentityOperation(node)) {
       // Make sure that the input device type is in the list of supported
       // device types for this node.
       const Node* input = (*node->in_edges().begin())->src();
@@ -283,7 +319,7 @@ Status Placer::Run(const GraphOptimizationPassOptions& options) {
   // skipped during the first pass.
   for (Node* node : second_pass) {
     const std::vector<Device*>* devices;
-    Status status = colocation_graph.GetDevicesForNode(node, &devices);
+    absl::Status status = colocation_graph.GetDevicesForNode(node, &devices);
     if (!status.ok()) {
       return AttachDef(
           errors::InvalidArgument("Cannot assign a device for operation ",
@@ -321,16 +357,16 @@ Status Placer::Run(const GraphOptimizationPassOptions& options) {
 
   if (VLOG_IS_ON(3)) {
     DumpGraphToFile(
-        strings::StrCat(options.debug_filename_prefix, "placer_output"),
-        *graph_, nullptr);
+        absl::StrCat(options.debug_filename_prefix, "placer_output"), *graph_,
+        nullptr);
     DumpColocationGraph(
-        strings::StrCat(options.debug_filename_prefix, "colocation_graph"),
+        absl::StrCat(options.debug_filename_prefix, "colocation_graph"),
         colocation_graph);
   }
   return absl::OkStatus();
 }
 
-bool Placer::CanAssignToDevice(const string& candidate_device_name,
+bool Placer::CanAssignToDevice(const std::string& candidate_device_name,
                                const std::vector<Device*>& devices) const {
   if (!candidate_device_name.empty()) {
     // 'devices' lists the set of devices that the placer or the user has

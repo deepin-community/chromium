@@ -5,8 +5,6 @@
 #ifndef COMPONENTS_SYNC_TEST_SYNC_CLIENT_MOCK_H_
 #define COMPONENTS_SYNC_TEST_SYNC_CLIENT_MOCK_H_
 
-#include <map>
-
 #include "base/files/file_path.h"
 #include "components/sync/service/local_data_description.h"
 #include "components/sync/service/sync_client.h"
@@ -26,10 +24,6 @@ class SyncClientMock : public SyncClient {
   MOCK_METHOD(PrefService*, GetPrefService, (), (override));
   MOCK_METHOD(signin::IdentityManager*, GetIdentityManager, (), (override));
   MOCK_METHOD(base::FilePath, GetLocalSyncBackendFolder, (), (override));
-  MOCK_METHOD(DataTypeController::TypeVector,
-              CreateDataTypeControllers,
-              (SyncService * sync_service),
-              (override));
   MOCK_METHOD(syncer::SyncInvalidationsService*,
               GetSyncInvalidationsService,
               (),
@@ -42,23 +36,13 @@ class SyncClientMock : public SyncClient {
               GetExtensionsActivity,
               (),
               (override));
-  MOCK_METHOD(SyncApiComponentFactory*,
-              GetSyncApiComponentFactory,
-              (),
-              (override));
+  MOCK_METHOD(SyncEngineFactory*, GetSyncEngineFactory, (), (override));
   MOCK_METHOD(bool, IsCustomPassphraseAllowed, (), (override));
-  MOCK_METHOD(void, OnLocalSyncTransportDataCleared, (), (override));
-  MOCK_METHOD(
-      void,
-      GetLocalDataDescriptions,
-      (ModelTypeSet types,
-       base::OnceCallback<void(std::map<ModelType, LocalDataDescription>)>
-           callback),
-      (override));
   MOCK_METHOD(void,
-              TriggerLocalDataMigration,
-              (ModelTypeSet types),
+              RegisterTrustedVaultAutoUpgradeSyntheticFieldTrial,
+              (const TrustedVaultAutoUpgradeSyntheticFieldTrialGroup&),
               (override));
+  MOCK_METHOD(bool, IsMetricsAndCrashReportingEnabled, (), (override));
 };
 
 }  // namespace syncer

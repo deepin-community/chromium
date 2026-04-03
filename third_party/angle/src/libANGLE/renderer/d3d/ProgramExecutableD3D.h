@@ -101,13 +101,6 @@ struct D3DUniformBlock : D3DInterfaceBlock
     gl::ShaderMap<unsigned int> mStructureByteStrides;
 };
 
-struct ShaderStorageBlock
-{
-    std::string name;
-    unsigned int arraySize     = 0;
-    unsigned int registerIndex = 0;
-};
-
 struct D3DUBOCache
 {
     unsigned int registerIndex;
@@ -177,41 +170,26 @@ class D3DPixelExecutable
 {
   public:
     D3DPixelExecutable(const std::vector<GLenum> &outputSignature,
+                       const gl::ImageUnitTextureTypeMap &image2DSignature,
                        ShaderExecutableD3D *shaderExecutable);
     ~D3DPixelExecutable();
 
-    bool matchesSignature(const std::vector<GLenum> &signature) const
+    bool matchesSignature(const std::vector<GLenum> &outputSignature,
+                          const gl::ImageUnitTextureTypeMap &image2DSignature) const
     {
-        return mOutputSignature == signature;
+        return mOutputSignature == outputSignature && mImage2DSignature == image2DSignature;
     }
 
     const std::vector<GLenum> &outputSignature() const { return mOutputSignature; }
+
+    const gl::ImageUnitTextureTypeMap &image2DSignature() const { return mImage2DSignature; }
 
     ShaderExecutableD3D *shaderExecutable() const { return mShaderExecutable; }
 
   private:
     const std::vector<GLenum> mOutputSignature;
+    const gl::ImageUnitTextureTypeMap mImage2DSignature;
     ShaderExecutableD3D *mShaderExecutable;
-};
-
-class D3DComputeExecutable
-{
-  public:
-    D3DComputeExecutable(const gl::ImageUnitTextureTypeMap &signature,
-                         std::unique_ptr<ShaderExecutableD3D> shaderExecutable);
-    ~D3DComputeExecutable();
-
-    bool matchesSignature(const gl::ImageUnitTextureTypeMap &signature) const
-    {
-        return mSignature == signature;
-    }
-
-    const gl::ImageUnitTextureTypeMap &signature() const { return mSignature; }
-    ShaderExecutableD3D *shaderExecutable() const { return mShaderExecutable.get(); }
-
-  private:
-    gl::ImageUnitTextureTypeMap mSignature;
-    std::unique_ptr<ShaderExecutableD3D> mShaderExecutable;
 };
 
 struct D3DSampler
@@ -300,7 +278,7 @@ class ProgramExecutableD3D : public ProgramExecutableImpl
                                  UniqueSerial associatedSerial,
                                  const gl::State &state);
     void updateCachedOutputLayout(const gl::Context *context, const gl::Framebuffer *framebuffer);
-    void updateCachedComputeImage2DBindLayout(const gl::Context *context);
+    void updateCachedImage2DBindLayout(const gl::Context *context, const gl::ShaderType shaderType);
     void updateUniformBufferCache(const gl::Caps &caps);
 
     // Checks if we need to recompile certain shaders.
@@ -309,7 +287,6 @@ class ProgramExecutableD3D : public ProgramExecutableImpl
                                                const gl::State &state,
                                                gl::PrimitiveMode drawMode);
     bool hasPixelExecutableForCachedOutputLayout();
-    bool hasComputeExecutableForCachedImage2DBindLayout();
 
     bool anyShaderUniformsDirty() const { return mShaderUniformsDirty.any(); }
     bool areShaderUniformsDirty(gl::ShaderType shaderType) const
@@ -335,10 +312,6 @@ class ProgramExecutableD3D : public ProgramExecutableImpl
     {
         return mAttribLocationToD3DSemantic;
     }
-    unsigned int getAtomicCounterBufferRegisterIndex(GLuint binding,
-                                                     gl::ShaderType shaderType) const;
-    unsigned int getShaderStorageBufferRegisterIndex(GLuint blockIndex,
-                                                     gl::ShaderType shaderType) const;
     const std::vector<D3DUBOCache> &getShaderUniformBufferCache(gl::ShaderType shaderType) const;
     const std::vector<D3DUBOCacheUseSB> &getShaderUniformBufferCacheUseSB(
         gl::ShaderType shaderType) const;
@@ -363,7 +336,6 @@ class ProgramExecutableD3D : public ProgramExecutableImpl
                             const gl::ProvokingVertexConvention provokingVertex,
                             gl::PrimitiveMode drawMode) const;
     bool usesGeometryShaderForPointSpriteEmulation(RendererD3D *renderer) const;
-    bool usesInstancedPointSpriteEmulation(RendererD3D *renderer) const;
 
     angle::Result getVertexExecutableForCachedInputLayout(d3d::Context *context,
                                                           RendererD3D *renderer,
@@ -381,10 +353,6 @@ class ProgramExecutableD3D : public ProgramExecutableImpl
                                                           RendererD3D *renderer,
                                                           ShaderExecutableD3D **outExectuable,
                                                           gl::InfoLog *infoLog);
-    angle::Result getComputeExecutableForImage2DBindLayout(d3d::Context *context,
-                                                           RendererD3D *renderer,
-                                                           ShaderExecutableD3D **outExecutable,
-                                                           gl::InfoLog *infoLog);
 
     bool hasShaderStage(gl::ShaderType shaderType) const
     {
@@ -431,13 +399,11 @@ class ProgramExecutableD3D : public ProgramExecutableImpl
 
     void reset();
     void initializeUniformBlocks();
-    void initializeShaderStorageBlocks(const gl::ShaderMap<gl::SharedCompiledShaderState> &shaders);
     void initializeUniformStorage(RendererD3D *renderer,
                                   const gl::ShaderBitSet &availableShaderStages);
 
     void updateCachedVertexExecutableIndex();
     void updateCachedPixelExecutableIndex();
-    void updateCachedComputeExecutableIndex();
 
     void defineUniformsAndAssignRegisters(
         RendererD3D *renderer,
@@ -456,7 +422,6 @@ class ProgramExecutableD3D : public ProgramExecutableImpl
                                gl::RangeUI *outUsedRange);
 
     void assignAllImageRegisters();
-    void assignAllAtomicCounterRegisters();
     void assignImageRegisters(size_t uniformIndex);
     static void AssignImages(unsigned int startImageIndex,
                              int startLogicalImageUnit,
@@ -478,7 +443,6 @@ class ProgramExecutableD3D : public ProgramExecutableImpl
     std::vector<std::unique_ptr<D3DPixelExecutable>> mPixelExecutables;
     angle::PackedEnumMap<gl::PrimitiveMode, std::unique_ptr<ShaderExecutableD3D>>
         mGeometryExecutables;
-    std::vector<std::unique_ptr<D3DComputeExecutable>> mComputeExecutables;
 
     gl::ShaderMap<std::string> mShaderHLSL;
     gl::ShaderMap<CompilerWorkaroundsD3D> mShaderWorkarounds;
@@ -508,7 +472,6 @@ class ProgramExecutableD3D : public ProgramExecutableImpl
     gl::ShaderMap<std::vector<D3DImage>> mReadonlyImages;
     gl::ShaderMap<gl::RangeUI> mUsedImageRange;
     gl::ShaderMap<gl::RangeUI> mUsedReadonlyImageRange;
-    gl::ShaderMap<gl::RangeUI> mUsedAtomicCounterRange;
 
     // Cache for pixel shader output layout to save reallocations.
     std::vector<GLenum> mPixelShaderOutputLayoutCache;
@@ -525,16 +488,10 @@ class ProgramExecutableD3D : public ProgramExecutableImpl
     std::vector<D3DVarying> mStreamOutVaryings;
     std::vector<D3DUniform *> mD3DUniforms;
     std::map<std::string, int> mImageBindingMap;
-    std::map<std::string, int> mAtomicBindingMap;
     std::vector<D3DUniformBlock> mD3DUniformBlocks;
-    std::vector<D3DInterfaceBlock> mD3DShaderStorageBlocks;
-    gl::ShaderMap<std::vector<ShaderStorageBlock>> mShaderStorageBlocks;
-    std::array<unsigned int, gl::IMPLEMENTATION_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS>
-        mComputeAtomicCounterBufferRegisterIndices;
 
     gl::ShaderMap<std::vector<sh::ShaderVariable>> mImage2DUniforms;
     gl::ShaderMap<gl::ImageUnitTextureTypeMap> mImage2DBindLayoutCache;
-    Optional<size_t> mCachedComputeExecutableIndex;
 
     gl::ShaderBitSet mShaderUniformsDirty;
 

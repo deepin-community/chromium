@@ -11,16 +11,21 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/geometry/box_sides.h"
 #include "third_party/blink/renderer/core/layout/geometry/logical_offset.h"
-#include "third_party/blink/renderer/core/layout/geometry/physical_offset.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
+#include "third_party/blink/renderer/platform/geometry/physical_offset.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
 #include "third_party/blink/renderer/platform/text/writing_mode.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "ui/gfx/geometry/outsets_f.h"
 
 namespace blink {
 
 struct LineBoxStrut;
+struct LogicalRect;
+struct LogicalSize;
 struct PhysicalBoxStrut;
+struct PhysicalRect;
+struct PhysicalSize;
 
 // This struct is used for storing margins, borders or padding of a box on all
 // four edges.
@@ -35,6 +40,13 @@ struct CORE_EXPORT BoxStrut {
         block_start(block_start),
         block_end(block_end) {}
   BoxStrut(const LineBoxStrut&, bool is_flipped_lines);
+
+  // Create a strut based on an inner rectangle positioned within an area.
+  BoxStrut(const LogicalSize& outer_size, const LogicalRect& inner_rect);
+
+  // Update each of data members with std::min(this->member, other.member).
+  // This function returns `*this`.
+  BoxStrut& Intersect(const BoxStrut& other);
 
   LayoutUnit LineLeft(TextDirection direction) const {
     return IsLtr(direction) ? inline_start : inline_end;
@@ -87,7 +99,6 @@ struct CORE_EXPORT BoxStrut {
                     other.block_end) ==
            std::tie(inline_start, inline_end, block_start, block_end);
   }
-  bool operator!=(const BoxStrut& other) const { return !(*this == other); }
 
   String ToString() const;
 
@@ -152,12 +163,14 @@ struct CORE_EXPORT PhysicalBoxStrut {
                    LayoutUnit left)
       : top(top), right(right), bottom(bottom), left(left) {}
 
-  // Arguments are clamped to [LayoutUnix::Min(), LayoutUnit::Max()].
-  PhysicalBoxStrut(int t, int r, int b, int l)
-      : top(LayoutUnit(t)),
-        right(LayoutUnit(r)),
-        bottom(LayoutUnit(b)),
-        left(LayoutUnit(l)) {}
+  // Arguments are clamped to [LayoutUnit::Min(), LayoutUnit::Max()].
+  static PhysicalBoxStrut FromInts(int t, int r, int b, int l) {
+    return PhysicalBoxStrut(t, r, b, l);
+  }
+
+  // Create a strut based on an inner rectangle positioned within an area.
+  PhysicalBoxStrut(const PhysicalSize& outer_size,
+                   const PhysicalRect& inner_rect);
 
   // Creates new PhysicalBoxStrut instance from the specified `outsets`.
   // A data member of `outsets` is rounded up to the minimum LayoutUnit value
@@ -272,6 +285,13 @@ struct CORE_EXPORT PhysicalBoxStrut {
   LayoutUnit right;
   LayoutUnit bottom;
   LayoutUnit left;
+
+ private:
+  PhysicalBoxStrut(int t, int r, int b, int l)
+      : top(LayoutUnit(t)),
+        right(LayoutUnit(r)),
+        bottom(LayoutUnit(b)),
+        left(LayoutUnit(l)) {}
 };
 
 inline PhysicalBoxStrut BoxStrut::ConvertToPhysical(
@@ -296,7 +316,6 @@ inline PhysicalBoxStrut BoxStrut::ConvertToPhysical(
                               block_start);
     default:
       NOTREACHED();
-      return PhysicalBoxStrut();
   }
 }
 

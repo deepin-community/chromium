@@ -21,21 +21,19 @@ limitations under the License.
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/Dialect.h"  // from @llvm-project
+#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/Visitors.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
-#include "mlir/Transforms/Passes.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_dialect.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
-#include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
-#include "tensorflow/compiler/mlir/tensorflow/utils/error_util.h"
 #include "tensorflow/dtensor/cc/constants.h"
 #include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/dtensor_dialect/ir/dialect.h"
-#include "tensorflow/dtensor/mlir/dtensor_mlir_passes.h"
 #include "tensorflow/dtensor/mlir/ir/tf_dtensor.h"
 #include "tensorflow/dtensor/mlir/layout_parsing.h"
 
@@ -53,8 +51,8 @@ mlir::LogicalResult WrapDeviceCluster(mlir::OpBuilder *builder,
                                       mlir::Operation *op) {
   // Create new tf_device.cluster op wrapping a single operation.
   builder->setInsertionPoint(op);
-  auto cluster = builder->create<mlir::tf_device::ClusterOp>(
-      op->getLoc(), op->getResultTypes());
+  auto cluster = mlir::tf_device::ClusterOp::create(*builder, op->getLoc(),
+                                                    op->getResultTypes());
   if (auto layout_op = llvm::dyn_cast<mlir::TF::DTensorLayout>(op)) {
     cluster->setAttr(kMeshAttr, builder->getStringAttr(
                                     layout_op.getLayout().mesh().ToString()));
@@ -91,7 +89,7 @@ mlir::LogicalResult WrapDeviceCluster(mlir::OpBuilder *builder,
   cluster.getBody().push_back(new mlir::Block);
 
   builder->setInsertionPointToEnd(&cluster.GetBody());
-  builder->create<mlir::tf_device::ReturnOp>(op->getLoc(), op->getResults());
+  mlir::tf_device::ReturnOp::create(*builder, op->getLoc(), op->getResults());
 
   // Move `op` inside newly created `ClusterOp`.
   op->moveBefore(cluster.GetBody().getTerminator());

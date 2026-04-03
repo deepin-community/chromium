@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <signal.h>
+
 #include <cstdio>
 #include <iostream>
 #include <memory>
@@ -11,6 +12,7 @@
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/power_monitor/iopm_power_source_sampling_event_source.h"
 #include "base/power_monitor/timer_sampling_event_source.h"
 #include "base/process/process_handle.h"
@@ -38,7 +40,6 @@ void InitLogging() {
   logging::LoggingSettings settings;
   settings.logging_dest =
       logging::LOG_TO_SYSTEM_DEBUG_LOG | logging::LOG_TO_STDERR;
-  settings.log_file_path = nullptr;
   settings.lock_log = logging::DONT_LOCK_LOG_FILE;
   settings.delete_old = logging::APPEND_TO_OLD_LOG_FILE;
   bool logging_res = logging::InitLogging(settings);
@@ -112,8 +113,8 @@ bool MaybeAddSamplerToController(
 
 bool ConsumeSamplerName(const std::string& sampler_name,
                         base::flat_set<std::string>& sampler_names) {
-  if (sampler_names.contains(sampler_name)) {
-    sampler_names.erase(sampler_name);
+  if (auto it = sampler_names.find(sampler_name); it != sampler_names.end()) {
+    sampler_names.erase(it);
     return true;
   }
   return false;

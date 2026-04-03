@@ -90,8 +90,6 @@ static int librsvg_decode_frame(AVCodecContext *avctx, AVFrame *frame,
         goto end;
 
     avctx->pix_fmt = AV_PIX_FMT_RGB32;
-    viewport.width = dimensions.width;
-    viewport.height = dimensions.height;
 
     ret = ff_get_buffer(avctx, frame, 0);
     if (ret < 0)
@@ -116,6 +114,8 @@ static int librsvg_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     cairo_restore(crender);
 
 #if LIBRSVG_MAJOR_VERSION > 2 || LIBRSVG_MAJOR_VERSION == 2 && LIBRSVG_MINOR_VERSION >= 52
+    viewport.width = dimensions.width;
+    viewport.height = dimensions.height;
     gret = rsvg_handle_render_document(handle, crender, &viewport, &error);
 #else
     cairo_scale(crender, dimensions.width / (double)unscaled_dimensions.width,
@@ -156,6 +156,7 @@ static const AVOption options[] = {
 
 static const AVClass librsvg_decoder_class = {
     .class_name = "Librsvg",
+    .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };

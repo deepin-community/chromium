@@ -81,6 +81,12 @@ class VIEWS_EXPORT AnimatedImageView : public ImageViewBase,
     additional_translation_ = std::move(additional_translation);
   }
 
+  State state() const { return state_; }
+
+  lottie::Animation* GetAnimatedImageForTesting() {
+    return animated_image_.get();
+  }
+
  private:
   // Overridden from View:
   void OnPaint(gfx::Canvas* canvas) override;

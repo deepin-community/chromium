@@ -4,8 +4,10 @@
 
 #include "extensions/browser/api/runtime/runtime_api.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/check.h"
 #include "base/functional/bind.h"
@@ -41,6 +43,7 @@
 #include "extensions/common/extension_id.h"
 #include "extensions/common/manifest_handlers/background_info.h"
 #include "extensions/common/manifest_handlers/shared_module_info.h"
+#include "extensions/common/mojom/view_type.mojom.h"
 #include "storage/browser/file_system/isolated_context.h"
 #include "url/gurl.h"
 
@@ -90,7 +93,6 @@ constexpr char kErrorOnlyKioskModeAllowed[] =
     "API available only for ChromeOS kiosk mode.";
 constexpr char kErrorOnlyFirstExtensionAllowed[] =
     "Not the first extension to call this API.";
-constexpr char kErrorInvalidStatus[] = "Invalid restart request status.";
 constexpr char kErrorRequestedTooSoon[] =
     "Restart was requested too soon. It was throttled instead.";
 
@@ -147,7 +149,7 @@ void DispatchOnStartupEventImpl(
 
   auto event = std::make_unique<Event>(events::RUNTIME_ON_STARTUP,
                                        runtime::OnStartup::kEventName,
-                                       base::Value::List());
+                                       base::ListValue());
   EventRouter::Get(browser_context)
       ->DispatchEventToExtension(extension_id, std::move(event));
 }
@@ -164,37 +166,39 @@ bool ExtensionContextMatchesFilter(
     const api::runtime::ExtensionContext& context,
     const api::runtime::ContextFilter& filter) {
   if (filter.context_types &&
-      !base::Contains(*filter.context_types, context.context_type)) {
+      !std::ranges::contains(*filter.context_types, context.context_type)) {
     return false;
   }
   if (filter.context_ids &&
-      !base::Contains(*filter.context_ids, context.context_id)) {
+      !std::ranges::contains(*filter.context_ids, context.context_id)) {
     return false;
   }
-  if (filter.tab_ids && !base::Contains(*filter.tab_ids, context.tab_id)) {
+  if (filter.tab_ids &&
+      !std::ranges::contains(*filter.tab_ids, context.tab_id)) {
     return false;
   }
   if (filter.window_ids &&
-      !base::Contains(*filter.window_ids, context.window_id)) {
+      !std::ranges::contains(*filter.window_ids, context.window_id)) {
     return false;
   }
   if (filter.document_ids &&
       (!context.document_id ||
-       !base::Contains(*filter.document_ids, *context.document_id))) {
+       !std::ranges::contains(*filter.document_ids, *context.document_id))) {
     return false;
   }
   if (filter.frame_ids &&
-      !base::Contains(*filter.frame_ids, context.frame_id)) {
+      !std::ranges::contains(*filter.frame_ids, context.frame_id)) {
     return false;
   }
   if (filter.document_urls &&
       (!context.document_url ||
-       !base::Contains(*filter.document_urls, *context.document_url))) {
+       !std::ranges::contains(*filter.document_urls, *context.document_url))) {
     return false;
   }
   if (filter.document_origins &&
       (!context.document_origin ||
-       !base::Contains(*filter.document_origins, *context.document_origin))) {
+       !std::ranges::contains(*filter.document_origins,
+                              *context.document_origin))) {
     return false;
   }
   if (filter.incognito && *filter.incognito != context.incognito) {
@@ -273,9 +277,9 @@ void RuntimeAPI::OnExtensionLoaded(content::BrowserContext* browser_context,
 
   // Dispatch the onInstalled event with reason "chrome_update".
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&RuntimeEventRouter::DispatchOnInstalledEvent,
-                     browser_context_, extension->id(), base::Version(), true));
+      FROM_HERE, base::BindOnce(&RuntimeEventRouter::DispatchOnInstalledEvent,
+                                static_cast<void*>(browser_context_),
+                                extension->id(), base::Version(), true));
 }
 
 void RuntimeAPI::OnExtensionUninstalled(
@@ -293,9 +297,9 @@ void RuntimeAPI::Shutdown() {
       ->RemoveObserver(this);
 }
 
-void RuntimeAPI::OnAppUpdateAvailable(const Extension* extension) {
+void RuntimeAPI::OnAppUpdateAvailable(const Extension& extension) {
   RuntimeEventRouter::DispatchOnUpdateAvailableEvent(
-      browser_context_, extension->id(), extension->manifest()->value());
+      browser_context_, extension.id(), extension.manifest()->value());
 }
 
 void RuntimeAPI::OnChromeUpdateAvailable() {
@@ -480,13 +484,15 @@ void RuntimeEventRouter::DispatchOnStartupEvent(
 
 // static
 void RuntimeEventRouter::DispatchOnInstalledEvent(
-    content::BrowserContext* context,
+    void* context_id,
     const ExtensionId& extension_id,
     const base::Version& old_version,
     bool chrome_updated) {
-  if (!ExtensionsBrowserClient::Get()->IsValidContext(context)) {
+  if (!ExtensionsBrowserClient::Get()->IsValidContext(context_id)) {
     return;
   }
+  content::BrowserContext* context =
+      reinterpret_cast<content::BrowserContext*>(context_id);
   ExtensionSystem* system = ExtensionSystem::Get(context);
   if (!system) {
     return;
@@ -504,8 +510,8 @@ void RuntimeEventRouter::DispatchOnInstalledEvent(
     return;
   }
 
-  base::Value::List event_args;
-  base::Value::Dict info;
+  base::ListValue event_args;
+  base::DictValue info;
   if (old_version.IsValid()) {
     info.Set(kInstallReason, kInstallReasonUpdate);
     info.Set(kInstallPreviousVersion, old_version.GetString());
@@ -531,8 +537,8 @@ void RuntimeEventRouter::DispatchOnInstalledEvent(
           system->GetDependentExtensions(extension);
       for (ExtensionSet::const_iterator i = dependents->begin();
            i != dependents->end(); i++) {
-        base::Value::List sm_event_args;
-        base::Value::Dict sm_info;
+        base::ListValue sm_event_args;
+        base::DictValue sm_info;
         sm_info.Set(kInstallReason, kInstallReasonSharedModuleUpdate);
         sm_info.Set(kInstallPreviousVersion, old_version.GetString());
         sm_info.Set(kInstallId, extension_id);
@@ -551,13 +557,13 @@ void RuntimeEventRouter::DispatchOnInstalledEvent(
 void RuntimeEventRouter::DispatchOnUpdateAvailableEvent(
     content::BrowserContext* context,
     const ExtensionId& extension_id,
-    const base::Value::Dict* manifest) {
+    const base::DictValue* manifest) {
   ExtensionSystem* system = ExtensionSystem::Get(context);
   if (!system) {
     return;
   }
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(manifest->Clone());
   EventRouter* event_router = EventRouter::Get(context);
   DCHECK(event_router);
@@ -579,7 +585,7 @@ void RuntimeEventRouter::DispatchOnBrowserUpdateAvailableEvent(
   DCHECK(event_router);
   auto event = std::make_unique<Event>(
       events::RUNTIME_ON_BROWSER_UPDATE_AVAILABLE,
-      runtime::OnBrowserUpdateAvailable::kEventName, base::Value::List());
+      runtime::OnBrowserUpdateAvailable::kEventName, base::ListValue());
   event_router->BroadcastEvent(std::move(event));
 }
 
@@ -637,8 +643,8 @@ void RuntimeAPI::OnExtensionInstalledAndLoaded(
     const base::Version& previous_version) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&RuntimeEventRouter::DispatchOnInstalledEvent,
-                                browser_context_, extension->id(),
-                                previous_version, false));
+                                static_cast<void*>(browser_context_),
+                                extension->id(), previous_version, false));
 }
 
 ExtensionFunction::ResponseAction RuntimeGetBackgroundPageFunction::Run() {
@@ -765,7 +771,6 @@ ExtensionFunction::ResponseAction RuntimeRestartAfterDelayFunction::Run() {
   }
 
   NOTREACHED();
-  return RespondNow(Error(kErrorInvalidStatus));
 }
 
 ExtensionFunction::ResponseAction RuntimeGetPlatformInfoFunction::Run() {
@@ -794,7 +799,7 @@ RuntimeGetPackageDirectoryEntryFunction::Run() {
   content::ChildProcessSecurityPolicy* policy =
       content::ChildProcessSecurityPolicy::GetInstance();
   policy->GrantReadFileSystem(source_process_id(), filesystem.id());
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("fileSystemId", filesystem.id());
   dict.Set("baseName", relative_path);
   return RespondNow(WithArguments(std::move(dict)));
@@ -815,8 +820,8 @@ ExtensionFunction::ResponseAction RuntimeGetContextsFunction::Run() {
   // Minor optimization: only construct the context if there's a chance it will
   // match the filter.
   if (!filter.context_types ||
-      base::Contains(*filter.context_types,
-                     api::runtime::ContextType::kBackground)) {
+      std::ranges::contains(*filter.context_types,
+                            api::runtime::ContextType::kBackground)) {
     if (std::optional<api::runtime::ExtensionContext> worker =
             GetWorkerContext()) {
       result.push_back(std::move(*worker));
@@ -829,7 +834,7 @@ ExtensionFunction::ResponseAction RuntimeGetContextsFunction::Run() {
                 std::make_move_iterator(frame_contexts.end()));
 
   // Erase any contexts that don't match the specified filter.
-  base::EraseIf(result,
+  std::erase_if(result,
                 [&filter](const api::runtime::ExtensionContext& context) {
                   return !ExtensionContextMatchesFilter(context, filter);
                 });
@@ -846,9 +851,12 @@ RuntimeGetContextsFunction::GetWorkerContext() {
 
   std::vector<WorkerId> active_workers =
       process_manager->GetServiceWorkersForExtension(extension()->id());
-  // TODO(crbug.com/1493391): Upgrade this to a CHECK once multiple active
-  // workers has been resolved.
-  DCHECK_LE(active_workers.size(), 1u);
+
+  // TODO(crbug.com/40936639):Enable this CHECK once multiple active workers is
+  // resolved.
+  // CHECK_LE(active_workers.size(), 1u)
+  //     << "runtime.getContexts() API call found more than one service worker "
+  //        "for extension.";
 
   if (active_workers.empty()) {
     return std::nullopt;
@@ -874,7 +882,7 @@ RuntimeGetContextsFunction::GetFrameContexts() {
       ProcessManager::Get(browser_context());
   CHECK(process_manager);
 
-  auto get_context_type = [](content::WebContents* web_contents) {
+  auto get_context_type = [this](content::WebContents* web_contents) {
     mojom::ViewType view_type = GetViewType(web_contents);
     switch (view_type) {
       // These should never be reached for extensions capable of calling this
@@ -884,7 +892,9 @@ RuntimeGetContextsFunction::GetFrameContexts() {
       case mojom::ViewType::kBackgroundContents:
       case mojom::ViewType::kComponent:
       case mojom::ViewType::kExtensionBackgroundPage:
-        NOTREACHED();
+        DUMP_WILL_BE_NOTREACHED()
+            << "Unexpected view type found: " << (static_cast<int>(view_type))
+            << ", Extension ID: " << extension_id();
         break;
 
       case mojom::ViewType::kExtensionPopup:
@@ -895,6 +905,8 @@ RuntimeGetContextsFunction::GetFrameContexts() {
         return api::runtime::ContextType::kOffscreenDocument;
       case mojom::ViewType::kExtensionSidePanel:
         return api::runtime::ContextType::kSidePanel;
+      case mojom::ViewType::kDeveloperTools:
+        return api::runtime::ContextType::kDeveloperTools;
 
       case mojom::ViewType::kExtensionGuest:
         // Skip these view types for now.
@@ -927,12 +939,11 @@ RuntimeGetContextsFunction::GetFrameContexts() {
     context.context_type = context_type;
     context.context_id =
         ExtensionApiFrameIdMap::GetContextId(host).AsLowercaseString();
-    context.tab_id = sessions::SessionTabHelper::IdForTab(web_contents).id();
-    context.window_id =
-        sessions::SessionTabHelper::IdForWindowContainingTab(web_contents).id();
+    context.tab_id = GetTabId(*web_contents);
+    context.frame_id = GetFrameId(*host);
+    context.window_id = GetWindowId(*web_contents);
     context.document_id =
         ExtensionApiFrameIdMap::GetDocumentId(host).ToString();
-    context.frame_id = ExtensionApiFrameIdMap::GetFrameId(host);
     context.document_url = host->GetLastCommittedURL().spec();
     context.document_origin = host->GetLastCommittedOrigin().Serialize();
     context.incognito = host->GetBrowserContext()->IsOffTheRecord();
@@ -941,6 +952,42 @@ RuntimeGetContextsFunction::GetFrameContexts() {
   }
 
   return results;
+}
+
+int RuntimeGetContextsFunction::GetTabId(content::WebContents& web_contents) {
+  mojom::ViewType view_type = extensions::GetViewType(&web_contents);
+
+  if (view_type == extensions::mojom::ViewType::kDeveloperTools) {
+    return -1;
+  }
+
+  return sessions::SessionTabHelper::IdForTab(&web_contents).id();
+}
+
+int RuntimeGetContextsFunction::GetFrameId(content::RenderFrameHost& host) {
+  mojom::ViewType view_type = extensions::GetViewType(&host);
+
+  if (view_type == extensions::mojom::ViewType::kDeveloperTools) {
+    return -1;
+  }
+
+  return ExtensionApiFrameIdMap::GetFrameId(&host);
+}
+
+int RuntimeGetContextsFunction::GetWindowId(
+    content::WebContents& web_contents) {
+  mojom::ViewType view_type = extensions::GetViewType(&web_contents);
+
+  if (view_type != extensions::mojom::ViewType::kDeveloperTools) {
+    return sessions::SessionTabHelper::IdForWindowContainingTab(&web_contents)
+        .id();
+  }
+
+  // For developer tools, ask the embedder for the window ID.
+  std::unique_ptr<RuntimeAPIDelegate> delegate =
+      ExtensionsBrowserClient::Get()->CreateRuntimeAPIDelegate(
+          browser_context());
+  return delegate->GetDeveloperToolsWindowId(&web_contents);
 }
 
 }  // namespace extensions

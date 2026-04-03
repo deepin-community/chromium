@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2016, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -32,20 +32,6 @@
 
 #if CONFIG_MULTITHREAD
 
-#if defined(_WIN32) && !HAVE_PTHREAD_H
-// _beginthreadex requires __stdcall
-#if defined(__GNUC__) && \
-    (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 2))
-#define THREADFN __attribute__((force_align_arg_pointer)) unsigned int __stdcall
-#else
-#define THREADFN unsigned int __stdcall
-#endif
-#define THREAD_EXIT_SUCCESS 0
-#else  // _WIN32
-#define THREADFN void *
-#define THREAD_EXIT_SUCCESS NULL
-#endif
-
 struct AVxWorkerImpl {
   pthread_mutex_t mutex_;
   pthread_cond_t condition_;
@@ -58,6 +44,7 @@ static void execute(AVxWorker *const worker);  // Forward declaration.
 
 static THREADFN thread_loop(void *ptr) {
   AVxWorker *const worker = (AVxWorker *)ptr;
+#ifdef HAVE_PTHREAD_SETNAME_NP
 #ifdef __APPLE__
   if (worker->thread_name != NULL) {
     // Apple's version of pthread_setname_np takes one argument and operates on
@@ -79,6 +66,7 @@ static THREADFN thread_loop(void *ptr) {
     thread_name[sizeof(thread_name) - 1] = '\0';
     pthread_setname_np(pthread_self(), thread_name);
   }
+#endif
 #endif
   pthread_mutex_lock(&worker->impl_->mutex_);
   for (;;) {
@@ -165,21 +153,23 @@ static int reset(AVxWorker *const worker) {
     }
     pthread_attr_t attr;
     if (pthread_attr_init(&attr)) goto Error2;
-      // Debug ASan builds require at least ~1MiB of stack; prevents
-      // failures on macOS arm64 where the default is 512KiB.
-      // See: https://crbug.com/aomedia/3379
+    // Debug ASan builds require at least ~1MiB of stack; prevents
+    // failures on macOS arm64 where the default is 512KiB.
+    // See: https://crbug.com/aomedia/3379
 #if defined(AOM_ADDRESS_SANITIZER) && defined(__APPLE__) && AOM_ARCH_ARM && \
     !defined(NDEBUG)
+    const size_t kMinStackSize = 1024 * 1024;
+#else
+    const size_t kMinStackSize = 256 * 1024;
+#endif
     size_t stacksize;
     if (!pthread_attr_getstacksize(&attr, &stacksize)) {
-      const size_t kMinStackSize = 1 << 20;  // 1 MiB
       if (stacksize < kMinStackSize &&
           pthread_attr_setstacksize(&attr, kMinStackSize)) {
         pthread_attr_destroy(&attr);
         goto Error2;
       }
     }
-#endif
     pthread_mutex_lock(&worker->impl_->mutex_);
     ok = !pthread_create(&worker->impl_->thread_, &attr, thread_loop, worker);
     if (ok) worker->status_ = AVX_WORKER_STATUS_OK;

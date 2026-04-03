@@ -7,6 +7,8 @@
 
 #include "chrome/installer/util/install_util.h"
 
+#include <windows.h>
+
 #include <shellapi.h>
 #include <shlobj.h>
 
@@ -335,6 +337,27 @@ bool InstallUtil::IsStartMenuShortcutWithActivatorGuidInstalled() {
 }
 
 // static
+bool InstallUtil::IsRunningAsInteractiveUser() {
+  // Get the SID for interactive user.
+  DWORD sid_size = SECURITY_MAX_SID_SIZE;
+  uint8_t sid_bytes[SECURITY_MAX_SID_SIZE] = {};
+  SID* interactive_sid = reinterpret_cast<SID*>(sid_bytes);
+  if (!::CreateWellKnownSid(WinInteractiveSid, nullptr, interactive_sid,
+                            &sid_size)) {
+    PLOG(ERROR) << "Failed to create well known SID";
+    return false;
+  }
+
+  BOOL is_member = FALSE;
+  if (!::CheckTokenMembership(nullptr, interactive_sid, &is_member)) {
+    PLOG(ERROR) << "Failed to check token membership for WinInteractiveSid";
+    return false;
+  }
+
+  return is_member;
+}
+
+// static
 std::wstring InstallUtil::GetToastActivatorRegistryPath() {
   return L"Software\\Classes\\CLSID\\" +
          base::win::WStringFromGUID(install_static::GetToastActivatorClsid());
@@ -390,7 +413,7 @@ void InstallUtil::AppendModeAndChannelSwitches(
 // static
 std::wstring InstallUtil::GetCurrentDate() {
   static const wchar_t kDateFormat[] = L"yyyyMMdd";
-  wchar_t date_str[std::size(kDateFormat)] = {0};
+  wchar_t date_str[std::size(kDateFormat)] = {};
   int len = GetDateFormatW(LOCALE_INVARIANT, 0, nullptr, kDateFormat, date_str,
                            std::size(date_str));
   if (len) {
@@ -512,7 +535,7 @@ std::wstring InstallUtil::GetCloudManagementEnrollmentToken() {
   // way for administrators to enroll chrome throughout their fleet by pushing
   // this token via SCCM.
   // TODO(rogerta): This may not be the best place for the helpers dealing with
-  // the enrollment and/or DM tokens.  See crbug.com/823852 for details.
+  // the enrollment and/or DM tokens.  See crbug.com/41377717 for details.
   RegKey key;
   std::wstring value;
   for (const auto& key_and_value :
@@ -563,11 +586,6 @@ std::wstring InstallUtil::GetShortcutName() {
 }
 
 // static
-std::wstring InstallUtil::GetChromeShortcutDirNameDeprecated() {
-  return GetShortcutName();
-}
-
-// static
 std::wstring InstallUtil::GetChromeAppsShortcutDirName() {
   // IDS_APP_SHORTCUTS_SUBDIR_NAME is automatically mapped to the mode-specific
   // dir name; see MODE_SPECIFIC_STRINGS in prebuild/create_string_rc.py.
@@ -583,7 +601,7 @@ std::wstring InstallUtil::GetLongAppDescription() {
 std::wstring InstallUtil::GuidToSquid(std::wstring_view guid) {
   std::wstring squid;
   squid.reserve(32);
-  auto* input = guid.begin();
+  auto input = guid.begin();
   auto output = std::back_inserter(squid);
 
   // Reverse-copy relevant characters, skipping separators.

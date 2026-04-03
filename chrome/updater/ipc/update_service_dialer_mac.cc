@@ -9,6 +9,7 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/logging.h"
 #include "base/process/launch.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/updater_scope.h"
@@ -20,16 +21,22 @@ namespace updater {
 namespace {
 
 // Start the update service by running the launcher directly.
-bool DialUpdateService(const base::FilePath& updater, bool internal) {
+bool DialUpdateService(const base::FilePath& updater,
+                       bool is_internal_service) {
   if (!base::PathExists(updater)) {
     // If there's no updater present, abandon dialing.
     return false;
   }
   base::CommandLine command_line(updater);
-  if (internal) {
+  if (is_internal_service) {
     command_line.AppendSwitch("--internal");
   }
-  base::LaunchProcess(command_line, {});
+  std::string output;
+  if (!base::GetAppOutputAndError(command_line, &output)) {
+    VLOG(1) << __func__ << " launcher failure: " << output;
+    // If the launcher fails, abandon dialing - no server will appear.
+    return false;
+  }
 
   return true;
 }

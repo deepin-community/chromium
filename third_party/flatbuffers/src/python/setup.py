@@ -16,15 +16,16 @@ from setuptools import setup
 
 setup(
     name='flatbuffers',
-    version='23.5.26',
+    version='25.9.23',
     license='Apache 2.0',
-    license_files='../LICENSE',
     author='Derek Bailey',
     author_email='derekbailey@google.com',
     url='https://google.github.io/flatbuffers/',
-    long_description=('Python runtime library for use with the '
-                      '`Flatbuffers <https://google.github.io/flatbuffers/>`_ '
-                      'serialization format.'),
+    long_description=(
+        'Python runtime library for use with the '
+        '`Flatbuffers <https://google.github.io/flatbuffers/>`_ '
+        'serialization format.'
+    ),
     packages=['flatbuffers'],
     include_package_data=True,
     requires=[],

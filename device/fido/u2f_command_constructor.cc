@@ -4,13 +4,14 @@
 
 #include "device/fido/u2f_command_constructor.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "components/apdu/apdu_command.h"
-#include "device/fido/fido_constants.h"
+#include "crypto/hash.h"
 #include "device/fido/fido_parsing_utils.h"
+#include "device/fido/public/fido_constants.h"
 
 namespace device {
 
@@ -20,7 +21,7 @@ bool IsConvertibleToU2fRegisterCommand(
       request.resident_key_required)
     return false;
 
-  return base::Contains(
+  return std::ranges::contains(
       request.public_key_credential_params.public_key_credential_params(),
       static_cast<int32_t>(CoseAlgorithmIdentifier::kEs256),
       &PublicKeyCredentialParams::CredentialInfo::algorithm);
@@ -55,17 +56,16 @@ std::optional<std::vector<uint8_t>> ConvertToU2fRegisterCommand(
   const bool is_individual_attestation =
       request.attestation_preference ==
       AttestationConveyancePreference::kEnterpriseApprovedByBrowser;
-  return ConstructU2fRegisterCommand(
-      fido_parsing_utils::CreateSHA256Hash(request.rp.id),
-      request.client_data_hash, is_individual_attestation);
+  return ConstructU2fRegisterCommand(crypto::hash::Sha256(request.rp.id),
+                                     request.client_data_hash,
+                                     is_individual_attestation);
 }
 
 std::optional<std::vector<uint8_t>> ConvertToU2fSignCommandWithBogusChallenge(
     const CtapMakeCredentialRequest& request,
     base::span<const uint8_t> key_handle) {
-  return ConstructU2fSignCommand(
-      fido_parsing_utils::CreateSHA256Hash(request.rp.id),
-      kBogusChallenge, key_handle);
+  return ConstructU2fSignCommand(crypto::hash::Sha256(request.rp.id),
+                                 kBogusChallenge, key_handle);
 }
 
 std::optional<std::vector<uint8_t>> ConvertToU2fSignCommand(
@@ -77,7 +77,7 @@ std::optional<std::vector<uint8_t>> ConvertToU2fSignCommand(
 
   const auto& application_parameter =
       application_parameter_type == ApplicationParameterType::kPrimary
-          ? fido_parsing_utils::CreateSHA256Hash(request.rp_id)
+          ? crypto::hash::Sha256(request.rp_id)
           : request.alternative_application_parameter.value_or(
                 std::array<uint8_t, kRpIdHashLength>());
 

@@ -22,7 +22,7 @@ using shape_inference::DimensionHandle;
 using shape_inference::InferenceContext;
 using shape_inference::ShapeHandle;
 
-Status RaggedGatherShapeFn(InferenceContext* c);
+absl::Status RaggedGatherShapeFn(InferenceContext* c);
 
 //==============================================================================
 // Registered Ops
@@ -106,7 +106,7 @@ REGISTER_OP("RaggedCross")
       int dense_start = num_ragged * 2 + num_sparse * 3;
       for (int i = 0; i < dense_types.size(); ++i) {
         ShapeHandle dense_input = c->input(i + dense_start);
-        int32 rank = c->Rank(dense_input);
+        int32_t rank = c->Rank(dense_input);
         if (rank == InferenceContext::kUnknownRank) {
           continue;
         } else if (rank != 2) {
@@ -125,7 +125,7 @@ REGISTER_OP("RaggedCross")
 
       c->set_output(0, out_values);
       c->set_output(1, out_splits);
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("RaggedFillEmptyRows")
@@ -161,7 +161,7 @@ REGISTER_OP("RaggedFillEmptyRows")
       c->set_output(1, output_values);
       c->set_output(2, empty_row_indicator);
       c->set_output(3, reverse_index_map);
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("RaggedFillEmptyRowsGrad")
@@ -177,14 +177,14 @@ REGISTER_OP("RaggedFillEmptyRowsGrad")
       TF_RETURN_IF_ERROR(c->WithRank(grad_values, 1, &grad_values));
       c->set_output(0, reverse_index_map);
       c->set_output(1, c->Scalar());
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 //==============================================================================
 // Shape Functions
 //==============================================================================
 
-Status RaggedGatherShapeFn(InferenceContext* c) {
+absl::Status RaggedGatherShapeFn(InferenceContext* c) {
   int num_splits;
   int64_t PARAMS_RAGGED_RANK;
   TF_RETURN_IF_ERROR(
@@ -219,7 +219,7 @@ Status RaggedGatherShapeFn(InferenceContext* c) {
   TF_RETURN_IF_ERROR(c->Concatenate(c->UnknownShapeOfRank(1), value, &values));
   c->set_output(num_splits, values);
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace tensorflow

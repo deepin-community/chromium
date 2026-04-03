@@ -7,11 +7,20 @@
 
 #include <memory>
 
+#include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/threading/sequence_bound.h"
+#include "base/time/time.h"
+#include "components/metrics/delegating_provider.h"
+#include "components/metrics/metrics_provider.h"
 #include "components/metrics/structured/reporting/structured_metrics_reporting_service.h"
+#include "components/metrics/structured/storage_manager.h"
 #include "components/metrics/structured/structured_metrics_recorder.h"
 #include "components/metrics/structured/structured_metrics_scheduler.h"
 #include "components/metrics/unsent_log_store.h"
+#include "third_party/metrics_proto/chrome_user_metrics_extension.pb.h"
 
 FORWARD_DECLARE_TEST(StructuredMetricsServiceTest, RotateLogs);
 
@@ -20,9 +29,12 @@ class PrefRegistrySimple;
 namespace metrics {
 class StructuredMetricsServiceTestBase;
 class TestStructuredMetricsServiceDisabled;
+class TestStructuredMetricsService;
 
 FORWARD_DECLARE_TEST(TestStructuredMetricsServiceDisabled,
                      ValidStateWhenDisabled);
+
+FORWARD_DECLARE_TEST(TestStructuredMetricsService, CreateLogs);
 }  // namespace metrics
 
 namespace metrics::structured {
@@ -47,6 +59,8 @@ class StructuredMetricsService final {
   StructuredMetricsService& operator=(StructuredMetricsService&) = delete;
 
   void EnableRecording();
+
+  void RegisterMetricsProvider(std::unique_ptr<MetricsProvider> provider);
   void DisableRecording();
 
   void EnableReporting();
@@ -72,6 +86,10 @@ class StructuredMetricsService final {
 
   metrics::LogStore* log_store() { return reporting_service_->log_store(); }
 
+  reporting::StructuredMetricsReportingService* reporting_service() {
+    return reporting_service_.get();
+  }
+
  private:
   friend class StructuredMetricsServiceTest;
   friend class StructuredMetricsMixin;
@@ -82,6 +100,7 @@ class StructuredMetricsService final {
 
   FRIEND_TEST_ALL_PREFIXES(metrics::structured::StructuredMetricsServiceTest,
                            RotateLogs);
+  FRIEND_TEST_ALL_PREFIXES(metrics::TestStructuredMetricsService, CreateLogs);
   FRIEND_TEST_ALL_PREFIXES(metrics::TestStructuredMetricsServiceDisabled,
                            ValidStateWhenDisabled);
 
@@ -94,8 +113,25 @@ class StructuredMetricsService final {
   // Creates a new log and sends any currently stages logs.
   void RotateLogsAndSend();
 
-  // Collects the events from the recorder and builds a new log.
-  void BuildAndStoreLog(metrics::MetricsLogsEventManager::CreateReason reason);
+  // Populates an UMA proto with data that must be accessed form the UI
+  // sequence. A task to collect events is posted which updates the created UMA
+  // proto. On Windows, Mac, and Linux logs are built synchronously.
+  //
+  // Must be called from the UI sequence.
+  void CreateLogs(metrics::MetricsLogsEventManager::CreateReason reason,
+                  bool notify_scheduler);
+
+  // Adds metadata to the uma proto and stores a temporary log into the log
+  // store.
+  void StoreLog(metrics::MetricsLogsEventManager::CreateReason reason,
+                StructuredDataProto structured_data);
+
+  // Adds metadata to the uma proto, stores a temporary log into the log store,
+  // and starts an upload.
+  void StoreLogAndStartUpload(
+      metrics::MetricsLogsEventManager::CreateReason reason,
+      bool notify_scheduler,
+      StructuredDataProto structured_data);
 
   // Starts the initialization process for |this|.
   void Initialize();
@@ -115,11 +151,21 @@ class StructuredMetricsService final {
   // called.
   void MaybeStartUpload();
 
+  // Sets callback to be performed after a logs is created and stored. When set
+  // uploads will be blocked.
+  void SetCreateLogsCallbackInTests(base::OnceClosure callback);
+
   // Helper function to serialize a ChromeUserMetricsExtension proto.
   static std::string SerializeLog(const ChromeUserMetricsExtension& uma_proto);
 
   // Retrieves the storage parameters to control the reporting service.
   static UnsentLogStore::UnsentLogStoreLimits GetLogStoreLimits();
+
+  // The time at which the current log was created.
+  base::TimeTicks log_creation_time_;
+
+  // Registered metrics providers.
+  metrics::DelegatingProvider metrics_providers_;
 
   // Manages on-device recording of events.
   std::unique_ptr<StructuredMetricsRecorder> recorder_;
@@ -143,6 +189,9 @@ class StructuredMetricsService final {
 
   // The metrics client |this| is service is associated.
   raw_ptr<MetricsServiceClient> client_;
+
+  // Callback to be performed once a log is created and stored.
+  base::OnceClosure create_log_callback_for_tests_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

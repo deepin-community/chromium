@@ -9,35 +9,36 @@
 
 #include "base/component_export.h"
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/memory/raw_ptr.h"
 #include "base/types/expected.h"
+#include "base/uuid.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "services/on_device_model/public/cpp/on_device_model.h"
+#include "mojo/public/cpp/bindings/unique_receiver_set.h"
+#include "services/on_device_model/backend.h"
+#include "services/on_device_model/ml/chrome_ml.h"
+#include "services/on_device_model/ml/gpu_blocklist.h"
+#include "services/on_device_model/ml/ts_model.h"
 #include "services/on_device_model/public/mojom/on_device_model.mojom.h"
 #include "services/on_device_model/public/mojom/on_device_model_service.mojom.h"
-
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-#include "sandbox/policy/linux/sandbox_linux.h"
-#endif
 
 namespace on_device_model {
 
 class COMPONENT_EXPORT(ON_DEVICE_MODEL) OnDeviceModelService
     : public mojom::OnDeviceModelService {
  public:
-  // Must be called in the service's process before sandbox initialization.
-  // These are defined separately in pre_sandbox_init.cc for explicit security
-  // review coverage.
-  [[nodiscard]] static bool PreSandboxInit();
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-  static void AddSandboxLinuxOptions(
-      sandbox::policy::SandboxLinux::Options& options);
-#endif
+  OnDeviceModelService(
+      mojo::PendingReceiver<mojom::OnDeviceModelService> receiver,
+      const ml::ChromeML& impl);
+  OnDeviceModelService(
+      mojo::PendingReceiver<mojom::OnDeviceModelService> receiver,
+      scoped_refptr<Backend> backend);
 
-  static mojom::PerformanceClass GetEstimatedPerformanceClass();
+  // Creates a service bound to the receiver.
+  static std::unique_ptr<mojom::OnDeviceModelService> Create(
+      mojo::PendingReceiver<mojom::OnDeviceModelService> receiver,
+      scoped_refptr<Backend> backend = nullptr);
 
-  explicit OnDeviceModelService(
-      mojo::PendingReceiver<mojom::OnDeviceModelService> receiver);
   ~OnDeviceModelService() override;
 
   OnDeviceModelService(const OnDeviceModelService&) = delete;
@@ -47,20 +48,26 @@ class COMPONENT_EXPORT(ON_DEVICE_MODEL) OnDeviceModelService
   void LoadModel(mojom::LoadModelParamsPtr params,
                  mojo::PendingReceiver<mojom::OnDeviceModel> model,
                  LoadModelCallback callback) override;
-  void GetEstimatedPerformanceClass(
-      GetEstimatedPerformanceClassCallback callback) override;
+  void GetCapabilities(ModelFile model_file,
+                       GetCapabilitiesCallback callback) override;
+  void LoadTextSafetyModel(
+      mojom::TextSafetyModelParamsPtr params,
+      mojo::PendingReceiver<mojom::TextSafetyModel> model) override;
+  void GetDeviceAndPerformanceInfo(
+      GetDeviceAndPerformanceInfoCallback callback) override;
 
   size_t NumModelsForTesting() const { return models_.size(); }
 
- private:
-  static base::expected<std::unique_ptr<OnDeviceModel>, mojom::LoadModelResult>
-  CreateModel(mojom::LoadModelParamsPtr params);
+  void SetForceQueueingForTesting(bool force_queueing);
 
-  void DeleteModel(mojom::OnDeviceModel* model);
+ private:
+  void DeleteModel(base::WeakPtr<mojom::OnDeviceModel> model);
 
   mojo::Receiver<mojom::OnDeviceModelService> receiver_;
   std::set<std::unique_ptr<mojom::OnDeviceModel>, base::UniquePtrComparator>
       models_;
+  scoped_refptr<Backend> backend_;
+  base::WeakPtrFactory<OnDeviceModelService> weak_factory_{this};
 };
 
 }  // namespace on_device_model

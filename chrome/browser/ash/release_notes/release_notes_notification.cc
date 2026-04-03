@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "ash/constants/ash_features.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
 #include "ash/resources/vector_icons/vector_icons.h"
@@ -34,15 +35,21 @@ namespace ash {
 ReleaseNotesNotification::ReleaseNotesNotification(Profile* profile)
     : profile_(profile), weak_ptr_factory_(this) {}
 
-ReleaseNotesNotification::~ReleaseNotesNotification() {}
+ReleaseNotesNotification::~ReleaseNotesNotification() = default;
 
 void ReleaseNotesNotification::MaybeShowReleaseNotes() {
   release_notes_storage_ = std::make_unique<ReleaseNotesStorage>(profile_);
-  if (!release_notes_storage_->ShouldNotify())
+  if (!release_notes_storage_->ShouldNotify() ||
+      !base::FeatureList::IsEnabled(
+          features::kReleaseNotesNotificationAlwaysEligible)) {
     return;
+  }
   ShowReleaseNotesNotification();
   base::RecordAction(base::UserMetricsAction("ReleaseNotes.NotificationShown"));
   release_notes_storage_->MarkNotificationShown();
+  // When the notification is shown we should also show the suggestion chip a
+  // number of times.
+  release_notes_storage_->StartShowingSuggestionChip();
 }
 
 void ReleaseNotesNotification::HandleClickShowNotification() {

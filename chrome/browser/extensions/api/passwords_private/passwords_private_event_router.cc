@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
@@ -28,7 +27,7 @@ PasswordsPrivateEventRouter::PasswordsPrivateEventRouter(
   event_router_ = EventRouter::Get(context_);
 }
 
-PasswordsPrivateEventRouter::~PasswordsPrivateEventRouter() {}
+PasswordsPrivateEventRouter::~PasswordsPrivateEventRouter() = default;
 
 void PasswordsPrivateEventRouter::OnSavedPasswordsListChanged(
     const std::vector<api::passwords_private::PasswordUiEntry>& entries) {
@@ -78,7 +77,7 @@ void PasswordsPrivateEventRouter::OnPasswordsExportProgress(
   params.file_path = file_path;
   params.folder_name = folder_name;
 
-  base::Value::List event_value;
+  base::ListValue event_value;
   event_value.Append(params.ToValue());
 
   auto extension_event = std::make_unique<Event>(
@@ -88,13 +87,25 @@ void PasswordsPrivateEventRouter::OnPasswordsExportProgress(
   event_router_->BroadcastEvent(std::move(extension_event));
 }
 
-void PasswordsPrivateEventRouter::OnAccountStorageOptInStateChanged(
-    bool opted_in) {
+void PasswordsPrivateEventRouter::OnAccountStorageActiveStateChanged(
+    bool active) {
   auto extension_event = std::make_unique<Event>(
-      events::PASSWORDS_PRIVATE_ON_ACCOUNT_STORAGE_OPT_IN_STATE_CHANGED,
-      api::passwords_private::OnAccountStorageOptInStateChanged::kEventName,
-      api::passwords_private::OnAccountStorageOptInStateChanged::Create(
-          opted_in));
+      events::PASSWORDS_PRIVATE_ON_ACCOUNT_STORAGE_ENABLED_STATE_CHANGED,
+      api::passwords_private::OnAccountStorageActiveStateChanged::kEventName,
+      api::passwords_private::OnAccountStorageActiveStateChanged::Create(
+          active));
+  event_router_->BroadcastEvent(std::move(extension_event));
+}
+
+void PasswordsPrivateEventRouter::
+    OnShouldShowAccountStorageSettingToggleChanged(bool enabled) {
+  auto extension_event = std::make_unique<Event>(
+      events::
+          PASSWORDS_PRIVATE_ON_SHOULD_SHOW_ACCOUNT_STORAGE_SETTING_TOGGLE_CHANGED,
+      api::passwords_private::OnShouldShowAccountStorageSettingToggleChanged::
+          kEventName,
+      api::passwords_private::OnShouldShowAccountStorageSettingToggleChanged::
+          Create(enabled));
   event_router_->BroadcastEvent(std::move(extension_event));
 }
 

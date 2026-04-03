@@ -7,14 +7,15 @@
  * intended to facilitate passing data between elements in the MultiDevice page
  * cleanly and concisely. It includes some constants and utility methods.
  */
+import type {I18nMixinInterface} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
+import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
+import type {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {dedupingMixin} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {I18nMixin, I18nMixinInterface} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
-import {dedupingMixin, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {Constructor} from '../common/types.js';
 
-import {isRevampWayfindingEnabled} from '../common/load_time_booleans.js';
-import {Constructor} from '../common/types.js';
-
-import {MultiDeviceFeature, MultiDeviceFeatureState, MultiDevicePageContentData, MultiDeviceSettingsMode, PhoneHubFeatureAccessStatus} from './multidevice_constants.js';
+import type {MultiDevicePageContentData} from './multidevice_constants.js';
+import {MultiDeviceFeature, MultiDeviceFeatureState, MultiDeviceSettingsMode, PhoneHubFeatureAccessStatus} from './multidevice_constants.js';
 
 export interface MultiDeviceFeatureMixinInterface extends I18nMixinInterface {
   pageContentData: MultiDevicePageContentData;
@@ -239,9 +240,7 @@ export const MultiDeviceFeatureMixin = dedupingMixin(
          * (i.e. [iron-iconset-svg name]:[SVG <g> tag id]) for a given feature.
          */
         getIconName(feature: MultiDeviceFeature): string {
-          const deviceIcon = isRevampWayfindingEnabled() ?
-              'os-settings:connected-devices-android-phone' :
-              'os-settings:multidevice-better-together-suite';
+          const deviceIcon = 'os-settings:connected-devices-android-phone';
 
           switch (feature) {
             case MultiDeviceFeature.BETTER_TOGETHER_SUITE:

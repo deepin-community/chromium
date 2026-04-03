@@ -28,15 +28,18 @@
 #ifndef SRC_DAWN_WIRE_CLIENT_DEVICE_H_
 #define SRC_DAWN_WIRE_CLIENT_DEVICE_H_
 
+#include <webgpu/webgpu.h>
+
 #include <memory>
+#include <optional>
 
 #include "dawn/common/LinkedList.h"
-#include "dawn/webgpu.h"
+#include "dawn/common/MutexProtected.h"
+#include "dawn/common/RefCountedWithExternalCount.h"
 #include "dawn/wire/WireCmd_autogen.h"
 #include "dawn/wire/client/ApiObjects_autogen.h"
 #include "dawn/wire/client/LimitsAndFeatures.h"
 #include "dawn/wire/client/ObjectBase.h"
-#include "dawn/wire/client/RequestTracker.h"
 #include "partition_alloc/pointers/raw_ptr.h"
 
 namespace dawn::wire::client {
@@ -44,72 +47,85 @@ namespace dawn::wire::client {
 class Client;
 class Queue;
 
-class Device final : public ObjectWithEventsBase {
+class Device final : public RefCountedWithExternalCount<ObjectWithEventsBase> {
   public:
-    explicit Device(const ObjectBaseParams& params,
-                    const ObjectHandle& eventManagerHandle,
-                    const WGPUDeviceDescriptor* descriptor);
-    ~Device() override;
+    Device(const ObjectBaseParams& params,
+           const ObjectHandle& eventManagerHandle,
+           Adapter* adapter,
+           const WGPUDeviceDescriptor* descriptor);
 
     ObjectType GetObjectType() const override;
 
-    void SetUncapturedErrorCallback(WGPUErrorCallback errorCallback, void* errorUserdata);
-    void SetLoggingCallback(WGPULoggingCallback errorCallback, void* errorUserdata);
-    void SetDeviceLostCallback(WGPUDeviceLostCallback errorCallback, void* errorUserdata);
-    void InjectError(WGPUErrorType type, const char* message);
-    void PopErrorScope(WGPUErrorCallback callback, void* userdata);
-    WGPUFuture PopErrorScopeF(const WGPUPopErrorScopeCallbackInfo& callbackInfo);
-    WGPUBuffer CreateBuffer(const WGPUBufferDescriptor* descriptor);
-    void CreateComputePipelineAsync(WGPUComputePipelineDescriptor const* descriptor,
-                                    WGPUCreateComputePipelineAsyncCallback callback,
-                                    void* userdata);
-    WGPUFuture CreateComputePipelineAsyncF(
-        WGPUComputePipelineDescriptor const* descriptor,
-        const WGPUCreateComputePipelineAsyncCallbackInfo& callbackInfo);
-    void CreateRenderPipelineAsync(WGPURenderPipelineDescriptor const* descriptor,
-                                   WGPUCreateRenderPipelineAsyncCallback callback,
-                                   void* userdata);
-    WGPUFuture CreateRenderPipelineAsyncF(
-        WGPURenderPipelineDescriptor const* descriptor,
-        const WGPUCreateRenderPipelineAsyncCallbackInfo& callbackInfo);
-
-    void HandleError(WGPUErrorType errorType, const char* message);
-    void HandleLogging(WGPULoggingType loggingType, const char* message);
-    void HandleDeviceLost(WGPUDeviceLostReason reason, const char* message);
-
-    bool GetLimits(WGPUSupportedLimits* limits) const;
-    bool HasFeature(WGPUFeatureName feature) const;
-    size_t EnumerateFeatures(WGPUFeatureName* features) const;
-    void SetLimits(const WGPUSupportedLimits* limits);
+    void SetLimits(const WGPULimits* limits);
     void SetFeatures(const WGPUFeatureName* features, uint32_t featuresCount);
 
-    WGPUQueue GetQueue();
+    bool IsAlive() const;
+    Queue* GetQueue();
+    const LimitsAndFeatures& GetLimitsAndFeatures() const;
 
-    std::weak_ptr<bool> GetAliveWeakPtr();
+    void HandleError(WGPUErrorType errorType, WGPUStringView message);
+    void HandleLogging(WGPULoggingType loggingType, WGPUStringView message);
+    void HandleDeviceLost(WGPUDeviceLostReason reason, WGPUStringView message);
+    class DeviceLostEvent;
+
+    // WebGPU API
+    void APISetLoggingCallback(const WGPULoggingCallbackInfo& callbackInfo);
+    void APIInjectError(WGPUErrorType type, WGPUStringView message);
+    WGPUFuture APIPopErrorScope(const WGPUPopErrorScopeCallbackInfo& callbackInfo);
+
+    WGPUBuffer APICreateBuffer(const WGPUBufferDescriptor* descriptor);
+    WGPUBuffer APICreateErrorBuffer(const WGPUBufferDescriptor* descriptor);
+    WGPUFuture APICreateComputePipelineAsync(
+        WGPUComputePipelineDescriptor const* descriptor,
+        const WGPUCreateComputePipelineAsyncCallbackInfo& callbackInfo);
+    WGPUFuture APICreateRenderPipelineAsync(
+        WGPURenderPipelineDescriptor const* descriptor,
+        const WGPUCreateRenderPipelineAsyncCallbackInfo& callbackInfo);
+    WGPUResourceTable APICreateResourceTable(const WGPUResourceTableDescriptor* descriptor);
+    WGPUTexture APICreateTexture(const WGPUTextureDescriptor* descriptor);
+    WGPUTexture APICreateErrorTexture(const WGPUTextureDescriptor* descriptor);
+
+    WGPUStatus APIGetLimits(WGPULimits* limits) const;
+    WGPUFuture APIGetLostFuture();
+    bool APIHasFeature(WGPUFeatureName feature) const;
+    void APIGetFeatures(WGPUSupportedFeatures* features) const;
+    WGPUStatus APIGetAdapterInfo(WGPUAdapterInfo* info) const;
+    WGPUAdapter APIGetAdapter() const;
+    WGPUQueue APIGetQueue();
+
+    void APIDestroy();
 
   private:
+    void WillDropLastExternalRef() override;
     template <typename Event,
               typename Cmd,
               typename CallbackInfo = typename Event::CallbackInfo,
               typename Descriptor = decltype(std::declval<Cmd>().descriptor)>
-    WGPUFuture CreatePipelineAsyncF(Descriptor const* descriptor, const CallbackInfo& callbackInfo);
+    WGPUFuture CreatePipelineAsync(Descriptor const* descriptor, const CallbackInfo& callbackInfo);
 
     LimitsAndFeatures mLimitsAndFeatures;
+    std::variant<Ref<TrackedEvent>, FutureID> mDeviceLostInfo;
 
-    WGPUErrorCallback mErrorCallback = nullptr;
-    WGPUDeviceLostCallback mDeviceLostCallback = nullptr;
-    WGPULoggingCallback mLoggingCallback = nullptr;
-    bool mDidRunLostCallback = false;
-    // TODO(https://crbug.com/dawn/2345): Investigate `DanglingUntriaged` in dawn/wire:
-    raw_ptr<void, DanglingUntriaged> mErrorUserdata = nullptr;
-    // TODO(https://crbug.com/dawn/2345): Investigate `DanglingUntriaged` in dawn/wire:
-    raw_ptr<void, DanglingUntriaged> mDeviceLostUserdata = nullptr;
-    raw_ptr<void> mLoggingUserdata = nullptr;
+    struct CallbackInfos {
+        CallbackInfos(const WGPUUncapturedErrorCallbackInfo& error,
+                      const WGPULoggingCallbackInfo& logging);
 
-    // TODO(https://crbug.com/dawn/2345): Investigate `DanglingUntriaged` in dawn/wire:
-    raw_ptr<Queue, DanglingUntriaged> mQueue = nullptr;
+        // The callback infos are optional because once the device is lost, they are set to
+        // std::nullopt and no longer do anything.
+        std::optional<WGPUUncapturedErrorCallbackInfo> error = std::nullopt;
+        std::optional<WGPULoggingCallbackInfo> logging = std::nullopt;
 
-    std::shared_ptr<bool> mIsAlive;
+        // Counter that tracks how many places are currently using callback infos. This is used to
+        // ensure that before we call the device lost callback (which may deallocate the uncaptured
+        // error and logging callbacks), we have ensured that there are no outstanding references to
+        // those callbacks.
+        uint32_t semaphore = 0;
+    };
+    MutexCondVarProtected<CallbackInfos> mCallbackInfos;
+
+    Ref<Adapter> mAdapter;
+    Ref<Queue> mQueue;
+    bool mIsAlive = true;
 };
 
 }  // namespace dawn::wire::client

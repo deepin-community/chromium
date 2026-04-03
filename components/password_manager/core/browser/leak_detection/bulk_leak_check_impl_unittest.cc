@@ -4,6 +4,8 @@
 
 #include "components/password_manager/core/browser/leak_detection/bulk_leak_check_impl.h"
 
+#include <string_view>
+
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/task_environment.h"
@@ -12,8 +14,10 @@
 #include "components/password_manager/core/browser/leak_detection/mock_leak_detection_delegate.h"
 #include "components/password_manager/core/browser/leak_detection/mock_leak_detection_request_factory.h"
 #include "components/password_manager/core/browser/leak_detection/single_lookup_response.h"
+#include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "crypto/sha2.h"
+#include "net/base/net_errors.h"
 #include "services/network/test/test_shared_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -76,7 +80,7 @@ struct PayloadAndCallback {
   LeakDetectionRequestInterface::LookupSingleLeakCallback callback;
 };
 
-LeakCheckCredential TestCredential(base::StringPiece16 username) {
+LeakCheckCredential TestCredential(std::u16string_view username) {
   return LeakCheckCredential(std::u16string(username), kTestPassword16);
 }
 
@@ -154,9 +158,8 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsAndDestroyImmediately) {
 }
 
 TEST_F(BulkLeakCheckTest, CheckCredentialsAndDestroyAfterPayload) {
-  AccountInfo info = identity_test_env().MakeAccountAvailable(kTestEmail);
-  identity_test_env().SetCookieAccounts({{info.email, info.gaia}});
-  identity_test_env().SetRefreshTokenForAccount(info.account_id);
+  identity_test_env().MakePrimaryAccountAvailable(
+      kTestEmail, signin::ConsentLevel::kSignin);
 
   EXPECT_CALL(delegate(), OnFinishedCredential).Times(0);
   EXPECT_CALL(delegate(), OnError).Times(0);
@@ -170,9 +173,8 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsAndDestroyAfterPayload) {
 }
 
 TEST_F(BulkLeakCheckTest, CheckCredentialsAccessTokenAuthError) {
-  AccountInfo info = identity_test_env().MakeAccountAvailable(kTestEmail);
-  identity_test_env().SetCookieAccounts({{info.email, info.gaia}});
-  identity_test_env().SetRefreshTokenForAccount(info.account_id);
+  identity_test_env().MakePrimaryAccountAvailable(
+      kTestEmail, signin::ConsentLevel::kSignin);
 
   EXPECT_CALL(delegate(), OnError(LeakDetectionError::kTokenRequestFailure));
 
@@ -186,9 +188,8 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsAccessTokenAuthError) {
 }
 
 TEST_F(BulkLeakCheckTest, CheckCredentialsAccessTokenNetError) {
-  AccountInfo info = identity_test_env().MakeAccountAvailable(kTestEmail);
-  identity_test_env().SetCookieAccounts({{info.email, info.gaia}});
-  identity_test_env().SetRefreshTokenForAccount(info.account_id);
+  identity_test_env().MakePrimaryAccountAvailable(
+      kTestEmail, signin::ConsentLevel::kSignin);
 
   EXPECT_CALL(delegate(), OnError(LeakDetectionError::kNetworkError));
 
@@ -202,9 +203,8 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsAccessTokenNetError) {
 }
 
 TEST_F(BulkLeakCheckTest, CheckCredentialsAccessTokenSignedOut) {
-  AccountInfo info = identity_test_env().MakeAccountAvailable(kTestEmail);
-  identity_test_env().SetCookieAccounts({{info.email, info.gaia}});
-  identity_test_env().SetRefreshTokenForAccount(info.account_id);
+  identity_test_env().MakePrimaryAccountAvailable(
+      kTestEmail, signin::ConsentLevel::kSignin);
 
   EXPECT_CALL(delegate(), OnError(LeakDetectionError::kNotSignIn));
 
@@ -220,9 +220,8 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsAccessTokenSignedOut) {
 }
 
 TEST_F(BulkLeakCheckTest, CheckCredentialsAccessDoesNetworkRequest) {
-  AccountInfo info = identity_test_env().MakeAccountAvailable(kTestEmail);
-  identity_test_env().SetCookieAccounts({{info.email, info.gaia}});
-  identity_test_env().SetRefreshTokenForAccount(info.account_id);
+  identity_test_env().MakePrimaryAccountAvailable(
+      kTestEmail, signin::ConsentLevel::kSignin);
 
   std::vector<LeakCheckCredential> credentials;
   credentials.push_back(TestCredential(u"USERNAME@gmail.com"));
@@ -246,9 +245,8 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsAccessDoesNetworkRequest) {
 }
 
 TEST_F(BulkLeakCheckTest, CheckCredentialsMultipleNetworkRequests) {
-  AccountInfo info = identity_test_env().MakeAccountAvailable(kTestEmail);
-  identity_test_env().SetCookieAccounts({{info.email, info.gaia}});
-  identity_test_env().SetRefreshTokenForAccount(info.account_id);
+  identity_test_env().MakePrimaryAccountAvailable(
+      kTestEmail, signin::ConsentLevel::kSignin);
 
   EXPECT_EQ(0u, bulk_check().GetPendingChecksCount());
   std::vector<LeakCheckCredential> credentials;
@@ -278,9 +276,8 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsMultipleNetworkRequests) {
 }
 
 TEST_F(BulkLeakCheckTest, CheckCredentialsDecryptionError) {
-  AccountInfo info = identity_test_env().MakeAccountAvailable(kTestEmail);
-  identity_test_env().SetCookieAccounts({{info.email, info.gaia}});
-  identity_test_env().SetRefreshTokenForAccount(info.account_id);
+  identity_test_env().MakePrimaryAccountAvailable(
+      kTestEmail, signin::ConsentLevel::kSignin);
 
   PayloadAndCallback payload_and_callback =
       ImitateNetworkRequest(TestCredential(kTestEmail16));
@@ -294,7 +291,7 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsDecryptionError) {
       "trash_bytes";
   response->encrypted_leak_match_prefixes.push_back(
       crypto::SHA256HashString(*CipherEncryptWithKey(
-          *ScryptHashUsernameAndPassword("another_username", kTestPassword),
+          ScryptHashUsernameAndPassword("another_username", kTestPassword),
           key_server)));
 
   EXPECT_CALL(delegate(), OnError(LeakDetectionError::kHashingFailure));
@@ -305,9 +302,8 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsDecryptionError) {
 }
 
 TEST_F(BulkLeakCheckTest, CheckCredentialsNotLeaked) {
-  AccountInfo info = identity_test_env().MakeAccountAvailable(kTestEmail);
-  identity_test_env().SetCookieAccounts({{info.email, info.gaia}});
-  identity_test_env().SetRefreshTokenForAccount(info.account_id);
+  identity_test_env().MakePrimaryAccountAvailable(
+      kTestEmail, signin::ConsentLevel::kSignin);
 
   LeakCheckCredential leaked_credential = TestCredential(kTestEmail16);
   leaked_credential.SetUserData(kUniqueString,
@@ -322,7 +318,7 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsNotLeaked) {
       *CipherReEncrypt(payload_and_callback.payload, &key_server);
   response->encrypted_leak_match_prefixes.push_back(
       crypto::SHA256HashString(*CipherEncryptWithKey(
-          *ScryptHashUsernameAndPassword("another_username", kTestPassword),
+          ScryptHashUsernameAndPassword("another_username", kTestPassword),
           key_server)));
 
   EXPECT_EQ(1u, bulk_check().GetPendingChecksCount());
@@ -338,9 +334,8 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsNotLeaked) {
 }
 
 TEST_F(BulkLeakCheckTest, CheckCredentialsLeaked) {
-  AccountInfo info = identity_test_env().MakeAccountAvailable(kTestEmail);
-  identity_test_env().SetCookieAccounts({{info.email, info.gaia}});
-  identity_test_env().SetRefreshTokenForAccount(info.account_id);
+  identity_test_env().MakePrimaryAccountAvailable(
+      kTestEmail, signin::ConsentLevel::kSignin);
 
   LeakCheckCredential leaked_credential = TestCredential(u"abc");
   leaked_credential.SetUserData(kUniqueString,
@@ -355,7 +350,7 @@ TEST_F(BulkLeakCheckTest, CheckCredentialsLeaked) {
       *CipherReEncrypt(payload_and_callback.payload, &key_server);
   response->encrypted_leak_match_prefixes.push_back(
       crypto::SHA256HashString(*CipherEncryptWithKey(
-          *ScryptHashUsernameAndPassword("abc", kTestPassword), key_server)));
+          ScryptHashUsernameAndPassword("abc", kTestPassword), key_server)));
 
   EXPECT_EQ(1u, bulk_check().GetPendingChecksCount());
   leaked_credential = TestCredential(u"abc");

@@ -12,7 +12,7 @@
       "/path/to/tmp/json",
       "ensure-directory",
       "--mode",
-      "0777",
+      "0o777",
       "[CACHE]/builder/perfetto"
     ],
     "infra_step": true,
@@ -62,7 +62,8 @@
       "git",
       "fetch",
       "--tags",
-      "https://android.googlesource.com/platform/external/perfetto",
+      "--force",
+      "https://chromium.googlesource.com/external/github.com/google/perfetto",
       "refs/heads/main"
     ],
     "cwd": "[CACHE]/builder/perfetto",
@@ -264,7 +265,7 @@
       "tools/gn",
       "gen",
       "[CACHE]/builder/perfetto/out/mac-amd64",
-      "--args=is_debug=false monolithic_binaries=true target_os=\"mac\" target_cpu=\"x64\""
+      "--args=is_clang=true monolithic_binaries=true is_debug=false enable_perfetto_etm_importer=false target_os=\"mac\" target_cpu=\"x64\""
     ],
     "cwd": "[CACHE]/builder/perfetto",
     "luci_context": {
@@ -401,7 +402,41 @@
     "name": "mac-amd64.Artifact upload.gsutil upload",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/trace_processor_shell@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/trace_processor_shell@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-amd64/stripped/trace_processor_shell",
+      "gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-amd64.Artifact upload.gsutil upload (2)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\"}@@@"
     ]
   },
   {
@@ -418,6 +453,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -451,10 +487,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -506,10 +545,44 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "mac-amd64.Artifact upload.gsutil upload (2)",
+    "name": "mac-amd64.Artifact upload.gsutil upload (3)",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/traceconv@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/traceconv@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-amd64/stripped/traceconv",
+      "gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-amd64.Artifact upload.gsutil upload (4)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-amd64/traceconv@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\"}@@@"
     ]
   },
   {
@@ -526,6 +599,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -559,10 +633,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -614,10 +691,44 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "mac-amd64.Artifact upload.gsutil upload (3)",
+    "name": "mac-amd64.Artifact upload.gsutil upload (5)",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/tracebox@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/tracebox@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-amd64/stripped/tracebox",
+      "gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-amd64.Artifact upload.gsutil upload (6)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-amd64/tracebox@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\"}@@@"
     ]
   },
   {
@@ -634,6 +745,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -667,10 +779,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -722,10 +837,44 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "mac-amd64.Artifact upload.gsutil upload (4)",
+    "name": "mac-amd64.Artifact upload.gsutil upload (7)",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/perfetto@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/perfetto@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-amd64/stripped/perfetto",
+      "gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-amd64.Artifact upload.gsutil upload (8)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-amd64/perfetto@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\"}@@@"
     ]
   },
   {
@@ -742,6 +891,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -775,10 +925,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -830,10 +983,44 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "mac-amd64.Artifact upload.gsutil upload (5)",
+    "name": "mac-amd64.Artifact upload.gsutil upload (9)",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/traced@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/traced@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-amd64/stripped/traced",
+      "gs://perfetto-luci-artifacts/latest/mac-amd64/traced"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-amd64.Artifact upload.gsutil upload (10)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-amd64/traced@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\"}@@@"
     ]
   },
   {
@@ -850,6 +1037,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -883,10 +1071,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -938,10 +1129,44 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "mac-amd64.Artifact upload.gsutil upload (6)",
+    "name": "mac-amd64.Artifact upload.gsutil upload (11)",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/traced_probes@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-amd64/traced_probes@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-amd64/stripped/traced_probes",
+      "gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-amd64.Artifact upload.gsutil upload (12)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-amd64/traced_probes@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\"}@@@"
     ]
   },
   {
@@ -958,6 +1183,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -991,10 +1217,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1129,7 +1358,7 @@
       "tools/gn",
       "gen",
       "[CACHE]/builder/perfetto/out/mac-arm64",
-      "--args=is_debug=false monolithic_binaries=true target_os=\"mac\" target_cpu=\"arm64\""
+      "--args=is_clang=true monolithic_binaries=true is_debug=false enable_perfetto_etm_importer=false target_os=\"mac\" target_cpu=\"arm64\""
     ],
     "cwd": "[CACHE]/builder/perfetto",
     "luci_context": {
@@ -1266,7 +1495,41 @@
     "name": "mac-arm64.Artifact upload.gsutil upload",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/trace_processor_shell@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/trace_processor_shell@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-arm64/stripped/trace_processor_shell",
+      "gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-arm64.Artifact upload.gsutil upload (2)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell\"}@@@"
     ]
   },
   {
@@ -1283,6 +1546,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1316,10 +1580,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1371,10 +1638,44 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "mac-arm64.Artifact upload.gsutil upload (2)",
+    "name": "mac-arm64.Artifact upload.gsutil upload (3)",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/traceconv@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/traceconv@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-arm64/traceconv\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-arm64/stripped/traceconv",
+      "gs://perfetto-luci-artifacts/latest/mac-arm64/traceconv"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-arm64.Artifact upload.gsutil upload (4)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-arm64/traceconv@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traceconv\"}@@@"
     ]
   },
   {
@@ -1391,6 +1692,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1424,10 +1726,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1479,10 +1784,44 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "mac-arm64.Artifact upload.gsutil upload (3)",
+    "name": "mac-arm64.Artifact upload.gsutil upload (5)",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/tracebox@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/tracebox@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-arm64/tracebox\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-arm64/stripped/tracebox",
+      "gs://perfetto-luci-artifacts/latest/mac-arm64/tracebox"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-arm64.Artifact upload.gsutil upload (6)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-arm64/tracebox@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/tracebox\"}@@@"
     ]
   },
   {
@@ -1499,6 +1838,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1532,10 +1872,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1587,10 +1930,44 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "mac-arm64.Artifact upload.gsutil upload (4)",
+    "name": "mac-arm64.Artifact upload.gsutil upload (7)",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/perfetto@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/perfetto@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-arm64/perfetto\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-arm64/stripped/perfetto",
+      "gs://perfetto-luci-artifacts/latest/mac-arm64/perfetto"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-arm64.Artifact upload.gsutil upload (8)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-arm64/perfetto@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-arm64/perfetto\", \"mac-arm64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/perfetto\"}@@@"
     ]
   },
   {
@@ -1607,6 +1984,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1640,10 +2018,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1695,10 +2076,44 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "mac-arm64.Artifact upload.gsutil upload (5)",
+    "name": "mac-arm64.Artifact upload.gsutil upload (9)",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/traced@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/traced@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-arm64/perfetto\", \"mac-arm64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/perfetto\", \"mac-arm64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-arm64/traced\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-arm64/stripped/traced",
+      "gs://perfetto-luci-artifacts/latest/mac-arm64/traced"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-arm64.Artifact upload.gsutil upload (10)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-arm64/traced@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traced\", \"mac-arm64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-arm64/perfetto\", \"mac-arm64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/perfetto\", \"mac-arm64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-arm64/traced\"}@@@"
     ]
   },
   {
@@ -1715,6 +2130,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1748,10 +2164,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1803,10 +2222,44 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "mac-arm64.Artifact upload.gsutil upload (6)",
+    "name": "mac-arm64.Artifact upload.gsutil upload (11)",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/traced_probes@@@"
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts//mac-arm64/traced_probes@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traced\", \"mac-arm64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-arm64/traced_probes\", \"mac-arm64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-arm64/perfetto\", \"mac-arm64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/perfetto\", \"mac-arm64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-arm64/traced\"}@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "python3",
+      "-u",
+      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "--",
+      "RECIPE_REPO[depot_tools]/gsutil.py",
+      "----",
+      "cp",
+      "[CACHE]/builder/perfetto/out/mac-arm64/stripped/traced_probes",
+      "gs://perfetto-luci-artifacts/latest/mac-arm64/traced_probes"
+    ],
+    "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
+    "luci_context": {
+      "realm": {
+        "name": "perfetto:ci"
+      },
+      "resultdb": {
+        "current_invocation": {
+          "name": "invocations/build:8945511751514863184",
+          "update_token": "token"
+        },
+        "hostname": "rdbhost"
+      }
+    },
+    "name": "mac-arm64.Artifact upload.gsutil upload (12)",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/perfetto-luci-artifacts/latest/mac-arm64/traced_probes@@@",
+      "@@@SET_BUILD_PROPERTY@gsutil_urls@{\"mac-amd64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced\", \"mac-amd64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traced_probes\", \"mac-amd64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/trace_processor_shell\", \"mac-amd64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/traceconv\", \"mac-amd64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/tracebox\", \"mac-amd64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-amd64/perfetto\", \"mac-amd64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-amd64/traced\", \"mac-arm64|Artifact upload|gsutil upload\": \"gs://perfetto-luci-artifacts//mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (10)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traced\", \"mac-arm64|Artifact upload|gsutil upload (11)\": \"gs://perfetto-luci-artifacts//mac-arm64/traced_probes\", \"mac-arm64|Artifact upload|gsutil upload (12)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traced_probes\", \"mac-arm64|Artifact upload|gsutil upload (2)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/trace_processor_shell\", \"mac-arm64|Artifact upload|gsutil upload (3)\": \"gs://perfetto-luci-artifacts//mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (4)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/traceconv\", \"mac-arm64|Artifact upload|gsutil upload (5)\": \"gs://perfetto-luci-artifacts//mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (6)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/tracebox\", \"mac-arm64|Artifact upload|gsutil upload (7)\": \"gs://perfetto-luci-artifacts//mac-arm64/perfetto\", \"mac-arm64|Artifact upload|gsutil upload (8)\": \"gs://perfetto-luci-artifacts/latest/mac-arm64/perfetto\", \"mac-arm64|Artifact upload|gsutil upload (9)\": \"gs://perfetto-luci-artifacts//mac-arm64/traced\"}@@@"
     ]
   },
   {
@@ -1823,6 +2276,7 @@
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"
@@ -1856,10 +2310,13 @@
       "latest",
       "-tag",
       "git_revision:",
+      "-metadata",
+      "build_id:8945511751514863184",
       "-json-output",
       "/path/to/tmp/json"
     ],
     "cwd": "[CACHE]/builder/perfetto",
+    "infra_step": true,
     "luci_context": {
       "realm": {
         "name": "perfetto:ci"

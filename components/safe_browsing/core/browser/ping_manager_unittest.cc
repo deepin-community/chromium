@@ -3,10 +3,14 @@
 // found in the LICENSE file.
 
 #include "components/safe_browsing/core/browser/ping_manager.h"
+
 #include "base/base64.h"
 #include "base/base64url.h"
+#include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/metrics/statistics_recorder.h"
 #include "base/run_loop.h"
 #include "base/strings/escape.h"
 #include "base/strings/stringprintf.h"
@@ -14,6 +18,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_file_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/safe_browsing/core/browser/db/v4_test_util.h"
@@ -30,11 +35,11 @@
 
 using base::Time;
 using network::GetUploadData;
-using safe_browsing::HitReport;
-using safe_browsing::ThreatSource;
 using ::testing::_;
 
 namespace safe_browsing {
+
+using enum ExtendedReportingLevel;
 
 class FakeSafeBrowsingHatsDelegate : public SafeBrowsingHatsDelegate {
  public:
@@ -51,18 +56,17 @@ class MockWebUIDelegate : public PingManager::WebUIDelegate {
  public:
   MOCK_METHOD1(AddToCSBRRsSent,
                void(std::unique_ptr<ClientSafeBrowsingReportRequest> csbrr));
-  MOCK_METHOD1(AddToHitReportsSent,
-               void(std::unique_ptr<HitReport> hit_report));
 };
 class PingManagerTest : public testing::Test {
  protected:
+  using enum SBThreatType;
+
   void SetUp() override;
   void TearDown() override;
   void RunReportThreatDetailsTest(
       bool expect_access_token,
       std::optional<ChromeUserPopulation> expected_user_population,
-      std::optional<std::string> expected_page_load_token_value,
-      bool expect_cookies_removed);
+      std::optional<std::string> expected_page_load_token_value);
   PingManager* ping_manager();
   void SetNewPingManager(
       std::optional<base::RepeatingCallback<bool()>>
@@ -71,13 +75,20 @@ class PingManagerTest : public testing::Test {
           get_user_population_callback,
       std::optional<
           base::RepeatingCallback<ChromeUserPopulation::PageLoadToken(GURL)>>
-          get_page_load_token_callback);
-  void SetUpFeatureList(bool should_enable_remove_cookies);
+          get_page_load_token_callback,
+      std::optional<base::RepeatingCallback<bool()>>
+          get_should_send_persisted_report);
+  // Returns a copy of the serialized persisted report that can be used to
+  // verify the data sent through URL loader.
+  std::string CallPersistThreatDetails(const std::string& url);
 
-  base::test::TaskEnvironment task_environment_;
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   std::string key_param_;
   std::unique_ptr<MockWebUIDelegate> webui_delegate_ =
       std::make_unique<MockWebUIDelegate>();
+  base::FilePath persister_root_path_;
+  base::FilePath persister_dir_;
   FakeSafeBrowsingHatsDelegate* SetUpHatsDelegate();
 
  private:
@@ -93,7 +104,9 @@ void PingManagerTest::SetUp() {
     key_param_ = base::StringPrintf(
         "&key=%s", base::EscapeQueryParamValue(key, true).c_str());
   }
-  SetNewPingManager(std::nullopt, std::nullopt, std::nullopt);
+  persister_root_path_ = base::CreateUniqueTempDirectoryScopedToTest();
+  persister_dir_ = persister_root_path_.AppendASCII("DownloadReports");
+  SetNewPingManager(std::nullopt, std::nullopt, std::nullopt, std::nullopt);
 }
 
 void PingManagerTest::TearDown() {
@@ -112,25 +125,43 @@ void PingManagerTest::SetNewPingManager(
         get_user_population_callback,
     std::optional<
         base::RepeatingCallback<ChromeUserPopulation::PageLoadToken(GURL)>>
-        get_page_load_token_callback) {
+        get_page_load_token_callback,
+    std::optional<base::RepeatingCallback<bool()>>
+        get_should_send_persisted_report) {
   ping_manager_.reset(new PingManager(
       safe_browsing::GetTestV4ProtocolConfig(), nullptr, nullptr,
       get_should_fetch_access_token.value_or(
           base::BindRepeating([]() { return false; })),
       webui_delegate_.get(), base::SequencedTaskRunner::GetCurrentDefault(),
       get_user_population_callback.value_or(base::NullCallback()),
-      get_page_load_token_callback.value_or(base::NullCallback()), nullptr));
+      get_page_load_token_callback.value_or(base::NullCallback()), nullptr,
+      persister_root_path_,
+      get_should_send_persisted_report.value_or(
+          base::BindRepeating([]() { return false; }))));
 }
 
-void PingManagerTest::SetUpFeatureList(bool should_enable_remove_cookies) {
-  std::vector<base::test::FeatureRef> enabled_features;
-  std::vector<base::test::FeatureRef> disabled_features;
-  if (should_enable_remove_cookies) {
-    enabled_features.push_back(kSafeBrowsingRemoveCookiesInAuthRequests);
-  } else {
-    disabled_features.push_back(kSafeBrowsingRemoveCookiesInAuthRequests);
-  }
-  feature_list_.InitWithFeatures(enabled_features, disabled_features);
+std::string PingManagerTest::CallPersistThreatDetails(const std::string& url) {
+  base::RunLoop run_loop;
+  auto histogram_waiter =
+      std::make_unique<base::StatisticsRecorder::ScopedHistogramSampleObserver>(
+          "SafeBrowsing.ClientSafeBrowsingReport.PersisterWriteResult",
+          run_loop.QuitClosure());
+
+  std::unique_ptr<ClientSafeBrowsingReportRequest> report =
+      std::make_unique<ClientSafeBrowsingReportRequest>();
+  report->set_type(
+      ClientSafeBrowsingReportRequest::DANGEROUS_DOWNLOAD_PROFILE_CLOSED);
+  report->set_url(url);
+  std::string serialized_report;
+  EXPECT_TRUE(report->SerializeToString(&serialized_report));
+
+  PingManager::PersistThreatDetailsResult result =
+      ping_manager()->PersistThreatDetailsAndReportOnNextStartup(
+          std::move(report));
+  EXPECT_EQ(result,
+            PingManager::PersistThreatDetailsResult::kPersistTaskPosted);
+  run_loop.Run();
+  return serialized_report;
 }
 
 TestSafeBrowsingTokenFetcher* PingManagerTest::SetUpTokenFetcher() {
@@ -150,8 +181,7 @@ FakeSafeBrowsingHatsDelegate* PingManagerTest::SetUpHatsDelegate() {
 void PingManagerTest::RunReportThreatDetailsTest(
     bool expect_access_token,
     std::optional<ChromeUserPopulation> expected_user_population,
-    std::optional<std::string> expected_page_load_token_value,
-    bool expect_cookies_removed) {
+    std::optional<std::string> expected_page_load_token_value) {
   base::HistogramTester histogram_tester;
   TestSafeBrowsingTokenFetcher* raw_token_fetcher = SetUpTokenFetcher();
   std::string input_report_content;
@@ -179,20 +209,18 @@ void PingManagerTest::RunReportThreatDetailsTest(
 
   std::string access_token = "testing_access_token";
   network::TestURLLoaderFactory test_url_loader_factory;
+  bool interceptor_called = false;
   test_url_loader_factory.SetInterceptor(
       base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
+        interceptor_called = true;
         EXPECT_EQ(GetUploadData(request), expected_report_content);
-        std::string header_value;
-        bool found_header = request.headers.GetHeader(
-            net::HttpRequestHeaders::kAuthorization, &header_value);
-        EXPECT_EQ(found_header, expect_access_token);
-        if (expect_access_token) {
-          EXPECT_EQ(header_value, "Bearer " + access_token);
-        }
+        EXPECT_THAT(
+            request.headers.GetHeader(net::HttpRequestHeaders::kAuthorization),
+            testing::Conditional(expect_access_token,
+                                 testing::Optional("Bearer " + access_token),
+                                 std::nullopt));
         EXPECT_EQ(request.credentials_mode,
-                  expect_cookies_removed
-                      ? network::mojom::CredentialsMode::kOmit
-                      : network::mojom::CredentialsMode::kInclude);
+                  network::mojom::CredentialsMode::kInclude);
         histogram_tester.ExpectUniqueSample(
             "SafeBrowsing.ClientSafeBrowsingReport.RequestHasToken",
             /*sample=*/expect_access_token,
@@ -201,8 +229,15 @@ void PingManagerTest::RunReportThreatDetailsTest(
   ping_manager()->SetURLLoaderFactoryForTesting(
       base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
           &test_url_loader_factory));
-
+  test_url_loader_factory.AddResponse(
+      "https://safebrowsing.google.com/safebrowsing/clientreport/"
+      "malware?client=unittest&appver=1.0&pver=4.0" +
+          key_param_,
+      "");
   EXPECT_CALL(*webui_delegate_.get(), AddToCSBRRsSent(_)).Times(1);
+  base::RunLoop run_loop;
+  ping_manager()->SetOnURLLoaderCompleteCallbackForTesting(
+      run_loop.QuitClosure());
   PingManager::ReportThreatDetailsResult result =
       ping_manager()->ReportThreatDetails(std::move(report));
   EXPECT_EQ(result, PingManager::ReportThreatDetailsResult::SUCCESS);
@@ -210,209 +245,41 @@ void PingManagerTest::RunReportThreatDetailsTest(
   if (expect_access_token) {
     raw_token_fetcher->RunAccessTokenCallback(access_token);
   }
-}
-
-TEST_F(PingManagerTest, TestSafeBrowsingHitUrl) {
-  HitReport base_hp;
-  base_hp.malicious_url = GURL("http://malicious.url.com");
-  base_hp.page_url = GURL("http://page.url.com");
-  base_hp.referrer_url = GURL("http://referrer.url.com");
-
-  {
-    HitReport hp(base_hp);
-    hp.threat_type = SB_THREAT_TYPE_URL_MALWARE;
-    hp.threat_source = ThreatSource::LOCAL_PVER4;
-    hp.is_subresource = true;
-    hp.extended_reporting_level = SBER_LEVEL_LEGACY;
-    hp.is_metrics_reporting_active = true;
-    hp.is_enhanced_protection = true;
-
-    EXPECT_EQ(
-        "https://safebrowsing.google.com/safebrowsing/report?client=unittest&"
-        "appver=1.0&pver=4.0" +
-            key_param_ +
-            "&ext=1&enh=1&evts=malblhit&evtd=http%3A%2F%2Fmalicious.url.com%2F&"
-            "evtr=http%3A%2F%2Fpage.url.com%2F&evhr=http%3A%2F%2Freferrer."
-            "url.com%2F&evtb=1&src=l4&m=1",
-        ping_manager()->SafeBrowsingHitUrl(&hp).spec());
+  run_loop.Run();
+  EXPECT_TRUE(interceptor_called);
+  histogram_tester.ExpectUniqueSample(
+      /*name=*/"SafeBrowsing.ClientSafeBrowsingReport.NetworkResult",
+      /*sample=*/200,
+      /*expected_bucket_count=*/1);
+  if (expect_access_token) {
+    histogram_tester.ExpectUniqueSample(
+        /*name=*/
+        "SafeBrowsing.ClientSafeBrowsingReport.NetworkResult.YesAccessToken",
+        /*sample=*/200,
+        /*expected_bucket_count=*/1);
+  } else {
+    histogram_tester.ExpectUniqueSample(
+        /*name=*/
+        "SafeBrowsing.ClientSafeBrowsingReport.NetworkResult.NoAccessToken",
+        /*sample=*/200,
+        /*expected_bucket_count=*/1);
   }
-
-  {
-    HitReport hp(base_hp);
-    hp.threat_type = SB_THREAT_TYPE_URL_PHISHING;
-    hp.threat_source = ThreatSource::LOCAL_PVER4;
-    hp.is_subresource = false;
-    hp.extended_reporting_level = SBER_LEVEL_LEGACY;
-    hp.is_metrics_reporting_active = true;
-    hp.is_enhanced_protection = false;
-    EXPECT_EQ(
-        "https://safebrowsing.google.com/safebrowsing/report?client=unittest&"
-        "appver=1.0&pver=4.0" +
-            key_param_ +
-            "&ext=1&evts=phishblhit&"
-            "evtd=http%3A%2F%2Fmalicious.url.com%2F&"
-            "evtr=http%3A%2F%2Fpage.url.com%2F&evhr=http%3A%2F%2Freferrer."
-            "url.com%2F&evtb=0&src=l4&m=1",
-        ping_manager()->SafeBrowsingHitUrl(&hp).spec());
-  }
-
-  {
-    HitReport hp(base_hp);
-    hp.threat_type = SB_THREAT_TYPE_URL_PHISHING;
-    hp.threat_source = ThreatSource::LOCAL_PVER4;
-    hp.is_subresource = false;
-    hp.extended_reporting_level = SBER_LEVEL_SCOUT;
-    hp.is_metrics_reporting_active = true;
-    hp.is_enhanced_protection = true;
-    EXPECT_EQ(
-        "https://safebrowsing.google.com/safebrowsing/report?client=unittest&"
-        "appver=1.0&pver=4.0" +
-            key_param_ +
-            "&ext=2&enh=1&evts=phishblhit&"
-            "evtd=http%3A%2F%2Fmalicious.url.com%2F&"
-            "evtr=http%3A%2F%2Fpage.url.com%2F&evhr=http%3A%2F%2Freferrer."
-            "url.com%2F&evtb=0&src=l4&m=1",
-        ping_manager()->SafeBrowsingHitUrl(&hp).spec());
-  }
-
-  {
-    HitReport hp(base_hp);
-    hp.threat_type = SB_THREAT_TYPE_URL_BINARY_MALWARE;
-    hp.threat_source = ThreatSource::REMOTE;
-    hp.extended_reporting_level = SBER_LEVEL_OFF;
-    hp.is_metrics_reporting_active = true;
-    hp.is_subresource = false;
-    hp.is_enhanced_protection = true;
-    EXPECT_EQ(
-        "https://safebrowsing.google.com/safebrowsing/report?client=unittest&"
-        "appver=1.0&pver=4.0" +
-            key_param_ +
-            "&ext=0&enh=1&evts=binurlhit&"
-            "evtd=http%3A%2F%2Fmalicious.url.com%2F&"
-            "evtr=http%3A%2F%2Fpage.url.com%2F&evhr=http%3A%2F%2Freferrer."
-            "url.com%2F&evtb=0&src=rem&m=1",
-        ping_manager()->SafeBrowsingHitUrl(&hp).spec());
-  }
-
-  {
-    HitReport hp(base_hp);
-    hp.threat_type = SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING;
-    hp.threat_source = ThreatSource::LOCAL_PVER4;
-    hp.extended_reporting_level = SBER_LEVEL_OFF;
-    hp.is_metrics_reporting_active = false;
-    hp.is_subresource = false;
-    hp.is_enhanced_protection = true;
-    EXPECT_EQ(
-        "https://safebrowsing.google.com/safebrowsing/report?client=unittest&"
-        "appver=1.0&pver=4.0" +
-            key_param_ +
-            "&ext=0&enh=1&evts=phishcsdhit&"
-            "evtd=http%3A%2F%2Fmalicious.url.com%2F&"
-            "evtr=http%3A%2F%2Fpage.url.com%2F&evhr=http%3A%2F%2Freferrer."
-            "url.com%2F&evtb=0&src=l4&m=0",
-        ping_manager()->SafeBrowsingHitUrl(&hp).spec());
-  }
-
-  // Same as above, but add population_id
-  {
-    HitReport hp(base_hp);
-    hp.threat_type = SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING;
-    hp.threat_source = ThreatSource::LOCAL_PVER4;
-    hp.extended_reporting_level = SBER_LEVEL_OFF;
-    hp.is_metrics_reporting_active = false;
-    hp.is_subresource = false;
-    hp.population_id = "foo bar";
-    hp.is_enhanced_protection = true;
-    EXPECT_EQ(
-        "https://safebrowsing.google.com/safebrowsing/report?client=unittest&"
-        "appver=1.0&pver=4.0" +
-            key_param_ +
-            "&ext=0&enh=1&evts=phishcsdhit&"
-            "evtd=http%3A%2F%2Fmalicious.url.com%2F&"
-            "evtr=http%3A%2F%2Fpage.url.com%2F&evhr=http%3A%2F%2Freferrer."
-            "url.com%2F&evtb=0&src=l4&m=0&up=foo+bar",
-        ping_manager()->SafeBrowsingHitUrl(&hp).spec());
-  }
-
-  // Threat source is URL real-time check.
-  {
-    HitReport hp(base_hp);
-    hp.threat_type = SB_THREAT_TYPE_URL_PHISHING;
-    hp.threat_source = ThreatSource::URL_REAL_TIME_CHECK;
-    hp.is_subresource = false;
-    hp.extended_reporting_level = SBER_LEVEL_SCOUT;
-    hp.is_metrics_reporting_active = true;
-    hp.is_enhanced_protection = true;
-    EXPECT_EQ(
-        "https://safebrowsing.google.com/safebrowsing/report?client=unittest&"
-        "appver=1.0&pver=4.0" +
-            key_param_ +
-            "&ext=2&enh=1&evts=phishblhit&"
-            "evtd=http%3A%2F%2Fmalicious.url.com%2F&"
-            "evtr=http%3A%2F%2Fpage.url.com%2F&evhr=http%3A%2F%2Freferrer."
-            "url.com%2F&evtb=0&src=rt&m=1",
-        ping_manager()->SafeBrowsingHitUrl(&hp).spec());
-  }
-
-  // Threat source is native hash real-time check.
-  {
-    HitReport hp(base_hp);
-    hp.threat_type = SB_THREAT_TYPE_URL_PHISHING;
-    hp.threat_source = ThreatSource::NATIVE_PVER5_REAL_TIME;
-    hp.is_subresource = false;
-    hp.extended_reporting_level = SBER_LEVEL_SCOUT;
-    hp.is_metrics_reporting_active = false;
-    hp.is_enhanced_protection = false;
-    EXPECT_EQ(
-        "https://safebrowsing.google.com/safebrowsing/report?client=unittest&"
-        "appver=1.0&pver=4.0" +
-            key_param_ +
-            "&ext=2&evts=phishblhit&"
-            "evtd=http%3A%2F%2Fmalicious.url.com%2F&"
-            "evtr=http%3A%2F%2Fpage.url.com%2F&evhr=http%3A%2F%2Freferrer."
-            "url.com%2F&evtb=0&src=n5rt&m=0",
-        ping_manager()->SafeBrowsingHitUrl(&hp).spec());
-  }
-
-  // Threat source is Android hash real-time check.
-  {
-    HitReport hp(base_hp);
-    hp.threat_type = SB_THREAT_TYPE_URL_PHISHING;
-    hp.threat_source = ThreatSource::ANDROID_SAFEBROWSING_REAL_TIME;
-    hp.is_subresource = false;
-    hp.extended_reporting_level = SBER_LEVEL_SCOUT;
-    hp.is_metrics_reporting_active = false;
-    hp.is_enhanced_protection = false;
-    EXPECT_EQ(
-        "https://safebrowsing.google.com/safebrowsing/report?client=unittest&"
-        "appver=1.0&pver=4.0" +
-            key_param_ +
-            "&ext=2&evts=phishblhit&"
-            "evtd=http%3A%2F%2Fmalicious.url.com%2F&"
-            "evtr=http%3A%2F%2Fpage.url.com%2F&evhr=http%3A%2F%2Freferrer."
-            "url.com%2F&evtb=0&src=asbrt&m=0",
-        ping_manager()->SafeBrowsingHitUrl(&hp).spec());
-  }
-
-  // Threat source is Android local blocklist check.
-  {
-    HitReport hp(base_hp);
-    hp.threat_type = SB_THREAT_TYPE_URL_PHISHING;
-    hp.threat_source = ThreatSource::ANDROID_SAFEBROWSING;
-    hp.is_subresource = false;
-    hp.extended_reporting_level = SBER_LEVEL_SCOUT;
-    hp.is_metrics_reporting_active = false;
-    hp.is_enhanced_protection = false;
-    EXPECT_EQ(
-        "https://safebrowsing.google.com/safebrowsing/report?client=unittest&"
-        "appver=1.0&pver=4.0" +
-            key_param_ +
-            "&ext=2&evts=phishblhit&"
-            "evtd=http%3A%2F%2Fmalicious.url.com%2F&"
-            "evtr=http%3A%2F%2Fpage.url.com%2F&evhr=http%3A%2F%2Freferrer."
-            "url.com%2F&evtb=0&src=asb&m=0",
-        ping_manager()->SafeBrowsingHitUrl(&hp).spec());
-  }
+  histogram_tester.ExpectUniqueSample(
+      /*name=*/
+      "SafeBrowsing.ClientSafeBrowsingReport.NetworkResult.URLPhishing",
+      /*sample=*/200,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectTotalCount(
+      /*name=*/"SafeBrowsing.ClientSafeBrowsingReport.BadRequestReportType",
+      /*expected_count=*/0);
+  histogram_tester.ExpectUniqueSample(
+      /*name=*/"SafeBrowsing.ClientSafeBrowsingReport.ResponseReceived",
+      /*sample=*/ClientSafeBrowsingReportRequest::URL_PHISHING,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample(
+      /*name=*/"SafeBrowsing.ClientSafeBrowsingReport.ResponseSuccessful",
+      /*sample=*/ClientSafeBrowsingReportRequest::URL_PHISHING,
+      /*expected_bucket_count=*/1);
 }
 
 TEST_F(PingManagerTest, TestThreatDetailsUrl) {
@@ -429,6 +296,48 @@ TEST_F(PingManagerTest, TestReportThreatDetails_EmptyReport) {
   PingManager::ReportThreatDetailsResult result =
       ping_manager()->ReportThreatDetails(std::move(report));
   EXPECT_EQ(result, PingManager::ReportThreatDetailsResult::EMPTY_REPORT);
+}
+
+TEST_F(PingManagerTest, TestReportThreatDetails_BadRequestLog) {
+  base::HistogramTester histogram_tester;
+  std::unique_ptr<ClientSafeBrowsingReportRequest> report =
+      std::make_unique<ClientSafeBrowsingReportRequest>();
+  report->set_type(ClientSafeBrowsingReportRequest::URL_PHISHING);
+
+  network::TestURLLoaderFactory test_url_loader_factory;
+  test_url_loader_factory.AddResponse(
+      "https://safebrowsing.google.com/safebrowsing/clientreport/"
+      "malware?client=unittest&appver=1.0&pver=4.0" +
+          key_param_,
+      "", net::HTTP_BAD_REQUEST);
+  ping_manager()->SetURLLoaderFactoryForTesting(
+      base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+          &test_url_loader_factory));
+
+  base::RunLoop run_loop;
+  ping_manager()->SetOnURLLoaderCompleteCallbackForTesting(
+      run_loop.QuitClosure());
+  PingManager::ReportThreatDetailsResult result =
+      ping_manager()->ReportThreatDetails(std::move(report));
+  EXPECT_EQ(result, PingManager::ReportThreatDetailsResult::SUCCESS);
+  run_loop.Run();
+
+  histogram_tester.ExpectUniqueSample(
+      /*name=*/"SafeBrowsing.ClientSafeBrowsingReport.BadRequestReportType",
+      /*sample=*/ClientSafeBrowsingReportRequest::URL_PHISHING,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample(
+      /*name=*/"SafeBrowsing.ClientSafeBrowsingReport.ResponseReceived",
+      /*sample=*/ClientSafeBrowsingReportRequest::URL_PHISHING,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectTotalCount(
+      /*name=*/"SafeBrowsing.ClientSafeBrowsingReport.ResponseSuccessful",
+      /*expected_count=*/0);
+  histogram_tester.ExpectUniqueSample(
+      /*name=*/
+      "SafeBrowsing.ClientSafeBrowsingReport.NetworkResult.URLPhishing",
+      /*sample=*/net::HTTP_BAD_REQUEST,
+      /*expected_bucket_count=*/1);
 }
 
 TEST_F(PingManagerTest, TestSanitizeThreatDetailsReport) {
@@ -469,54 +378,16 @@ TEST_F(PingManagerTest, TestSanitizeThreatDetailsReport) {
   }
 }
 
-TEST_F(PingManagerTest, TestSanitizeHitReport) {
-  // Blank report.
-  {
-    std::unique_ptr<HitReport> hit_report = std::make_unique<HitReport>();
-    ping_manager()->SanitizeHitReport(hit_report.get());
-    EXPECT_EQ(hit_report->malicious_url.spec(), "");
-    EXPECT_EQ(hit_report->page_url.spec(), "");
-    EXPECT_EQ(hit_report->referrer_url.spec(), "");
-  }
-  // One field needs sanitizing.
-  {
-    std::unique_ptr<HitReport> hit_report = std::make_unique<HitReport>();
-    hit_report->malicious_url = GURL("http://user1:pass2@malicious.url.com/");
-    hit_report->page_url = GURL("http://page.url.com/");
-    // Sanity check it is indeed the SanitizeHitReport method responsible for
-    // the user1:pass2 being removed and not something about the URL being
-    // invalid.
-    EXPECT_EQ(hit_report->malicious_url.spec(),
-              "http://user1:pass2@malicious.url.com/");
-    ping_manager()->SanitizeHitReport(hit_report.get());
-    EXPECT_EQ(hit_report->malicious_url.spec(), "http://malicious.url.com/");
-    EXPECT_EQ(hit_report->page_url.spec(), "http://page.url.com/");
-    EXPECT_EQ(hit_report->referrer_url.spec(), "");
-  }
-  // Multiple fields need sanitizing.
-  {
-    std::unique_ptr<HitReport> hit_report = std::make_unique<HitReport>();
-    hit_report->malicious_url = GURL("http://user1:pass2@malicious.url.com/");
-    hit_report->page_url = GURL("http://u1:p2@page.url.com/");
-    hit_report->referrer_url = GURL("http://a:b@referrer.url.com/");
-    ping_manager()->SanitizeHitReport(hit_report.get());
-    EXPECT_EQ(hit_report->malicious_url.spec(), "http://malicious.url.com/");
-    EXPECT_EQ(hit_report->page_url.spec(), "http://page.url.com/");
-    EXPECT_EQ(hit_report->referrer_url.spec(), "http://referrer.url.com/");
-  }
-}
-
 TEST_F(PingManagerTest, ReportThreatDetailsWithAccessToken) {
   SetNewPingManager(
       /*get_should_fetch_access_token=*/base::BindRepeating(
           []() { return true; }),
       /*get_user_population_callback=*/std::nullopt,
-      /*get_page_load_token_callback=*/std::nullopt);
-  SetUpFeatureList(/*should_enable_remove_cookies=*/true);
+      /*get_page_load_token_callback=*/std::nullopt,
+      /*get_should_send_persisted_report=*/std::nullopt);
   RunReportThreatDetailsTest(/*expect_access_token=*/true,
                              /*expected_user_population=*/std::nullopt,
-                             /*expected_page_load_token_value=*/std::nullopt,
-                             /*expect_cookies_removed=*/true);
+                             /*expected_page_load_token_value=*/std::nullopt);
 }
 TEST_F(PingManagerTest,
        ReportThreatDetailsWithAccessToken_RemoveCookiesFeatureDisabled) {
@@ -524,12 +395,11 @@ TEST_F(PingManagerTest,
       /*get_should_fetch_access_token=*/base::BindRepeating(
           []() { return true; }),
       /*get_user_population_callback=*/std::nullopt,
-      /*get_page_load_token_callback=*/std::nullopt);
-  SetUpFeatureList(/*should_enable_remove_cookies=*/false);
+      /*get_page_load_token_callback=*/std::nullopt,
+      /*get_should_send_persisted_report=*/std::nullopt);
   RunReportThreatDetailsTest(/*expect_access_token=*/true,
                              /*expected_user_population=*/std::nullopt,
-                             /*expected_page_load_token_value=*/std::nullopt,
-                             /*expect_cookies_removed=*/false);
+                             /*expected_page_load_token_value=*/std::nullopt);
 }
 TEST_F(PingManagerTest, ReportThreatDetailsWithUserPopulation) {
   SetNewPingManager(
@@ -539,13 +409,13 @@ TEST_F(PingManagerTest, ReportThreatDetailsWithUserPopulation) {
         population.set_user_population(ChromeUserPopulation::SAFE_BROWSING);
         return population;
       }),
-      /*get_page_load_token_callback=*/std::nullopt);
+      /*get_page_load_token_callback=*/std::nullopt,
+      /*get_should_send_persisted_report=*/std::nullopt);
   auto population = ChromeUserPopulation();
   population.set_user_population(ChromeUserPopulation::SAFE_BROWSING);
   RunReportThreatDetailsTest(/*expect_access_token=*/false,
                              /*expected_user_population=*/population,
-                             /*expected_page_load_token_value=*/std::nullopt,
-                             /*expect_cookies_removed=*/false);
+                             /*expected_page_load_token_value=*/std::nullopt);
 }
 TEST_F(PingManagerTest, ReportThreatDetailsWithPageLoadToken) {
   base::HistogramTester histogram_tester;
@@ -556,38 +426,181 @@ TEST_F(PingManagerTest, ReportThreatDetailsWithPageLoadToken) {
         ChromeUserPopulation::PageLoadToken token;
         token.set_token_value("testing_page_load_token");
         return token;
-      }));
+      }),
+      /*get_should_send_persisted_report=*/std::nullopt);
   RunReportThreatDetailsTest(
       /*expect_access_token=*/false,
       /*expected_user_population=*/std::nullopt,
-      /*expected_page_load_token_value=*/"testing_page_load_token",
-      /*expect_cookies_removed=*/false);
+      /*expected_page_load_token_value=*/"testing_page_load_token");
 }
 
-TEST_F(PingManagerTest, ReportSafeBrowsingHit) {
-  std::unique_ptr<HitReport> hit_report = std::make_unique<HitReport>();
-  std::string post_data = "testing_hit_report_post_data";
-  hit_report->post_data = post_data;
-  // Threat type, threat source and other fields are arbitrary but specified so
-  // that determining the URL does not throw an error due to input validation.
-  hit_report->threat_type = SB_THREAT_TYPE_URL_PHISHING;
-  hit_report->threat_source = ThreatSource::LOCAL_PVER4;
-  hit_report->is_subresource = false;
-  hit_report->extended_reporting_level = SBER_LEVEL_SCOUT;
-  hit_report->is_metrics_reporting_active = false;
-  hit_report->is_enhanced_protection = false;
+TEST_F(PingManagerTest, PersistThreatDetailsAtShutdown) {
+  base::HistogramTester histogram_tester;
+
+  CallPersistThreatDetails("https://some.url.com/");
+  ASSERT_TRUE(base::PathExists(persister_dir_));
+  base::FileEnumerator directory_enumerator(persister_dir_,
+                                            /*recursive=*/false,
+                                            base::FileEnumerator::FILES);
+  int number_of_files = 0;
+  for (base::FilePath file_name = directory_enumerator.Next();
+       !file_name.empty(); file_name = directory_enumerator.Next()) {
+    number_of_files++;
+    std::string persisted_report_string;
+    bool success = base::ReadFileToString(file_name, &persisted_report_string);
+    ASSERT_TRUE(success);
+    auto persisted_report = std::make_unique<ClientSafeBrowsingReportRequest>();
+    bool parse_successful =
+        persisted_report->ParseFromString(persisted_report_string);
+    ASSERT_TRUE(parse_successful);
+    EXPECT_EQ(
+        persisted_report->type(),
+        ClientSafeBrowsingReportRequest::DANGEROUS_DOWNLOAD_PROFILE_CLOSED);
+    EXPECT_EQ(persisted_report->url(), "https://some.url.com/");
+  }
+  EXPECT_EQ(number_of_files, 1);
+  histogram_tester.ExpectUniqueSample(
+      "SafeBrowsing.ClientSafeBrowsingReport.PersisterWriteResult",
+      /*sample=*/PingManager::Persister::WriteResult::kSuccess,
+      /*expected_bucket_count=*/1);
+}
+
+TEST_F(PingManagerTest, PersistThreatDetailsAtShutdown_EmptyReport) {
+  std::unique_ptr<ClientSafeBrowsingReportRequest> report =
+      std::make_unique<ClientSafeBrowsingReportRequest>();
+  PingManager::PersistThreatDetailsResult result =
+      ping_manager()->PersistThreatDetailsAndReportOnNextStartup(
+          std::move(report));
+  EXPECT_EQ(result, PingManager::PersistThreatDetailsResult::kEmptyReport);
+}
+
+TEST_F(PingManagerTest, SendPersistedThreatDetailsOnStartup) {
+  base::HistogramTester histogram_tester;
+  std::string persisted_report1 =
+      CallPersistThreatDetails("https://some.url1.com/");
+  std::string persisted_report2 =
+      CallPersistThreatDetails("https://some.url2.com/");
+  EXPECT_TRUE(base::PathExists(persister_dir_));
+
+  // Create a new ping manager instance to simulate browser startup.
+  SetNewPingManager(
+      /*get_should_fetch_access_token=*/std::nullopt,
+      /*get_user_population_callback=*/std::nullopt,
+      /*get_page_load_token_callback=*/std::nullopt,
+      /*get_should_send_persisted_report=*/base::BindRepeating([]() {
+        return true;
+      }));
 
   network::TestURLLoaderFactory test_url_loader_factory;
+  bool report1_sent = false, report2_sent = false;
   test_url_loader_factory.SetInterceptor(
       base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
-        EXPECT_EQ(GetUploadData(request), post_data);
+        std::string upload_data = GetUploadData(request);
+        if (upload_data == persisted_report1) {
+          report1_sent = true;
+        } else if (upload_data == persisted_report2) {
+          report2_sent = true;
+        }
       }));
   ping_manager()->SetURLLoaderFactoryForTesting(
       base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
           &test_url_loader_factory));
+  EXPECT_CALL(*webui_delegate_.get(), AddToCSBRRsSent(_)).Times(2);
 
-  EXPECT_CALL(*webui_delegate_.get(), AddToHitReportsSent(_)).Times(1);
-  ping_manager()->ReportSafeBrowsingHit(std::move(hit_report));
+  // Request is sent after delay.
+  task_environment_.FastForwardBy(base::Seconds(14));
+  EXPECT_EQ(test_url_loader_factory.total_requests(), 0u);
+  task_environment_.FastForwardBy(base::Seconds(1));
+  EXPECT_EQ(test_url_loader_factory.total_requests(), 2u);
+  EXPECT_TRUE(report1_sent);
+  EXPECT_TRUE(report2_sent);
+  // Directory is deleted.
+  EXPECT_FALSE(base::PathExists(persister_dir_));
+  histogram_tester.ExpectUniqueSample(
+      "SafeBrowsing.ClientSafeBrowsingReport.PersisterReadReportSuccessful",
+      /*sample=*/true,
+      /*expected_bucket_count=*/2);
+  histogram_tester.ExpectUniqueSample(
+      "SafeBrowsing.ClientSafeBrowsingReport.PersisterReportCountOnStartup",
+      /*sample=*/2,
+      /*expected_bucket_count=*/1);
+}
+
+TEST_F(PingManagerTest, SendPersistedThreatDetailsOnStartup_MalformedReports) {
+  base::CreateDirectory(persister_dir_);
+  base::FilePath empty_file = persister_dir_.AppendASCII("empty");
+  base::WriteFile(empty_file, "");
+  base::FilePath malformed_file = persister_dir_.AppendASCII("malformed");
+  base::WriteFile(malformed_file, "malformed_report");
+
+  // Create a new ping manager instance to simulate browser startup.
+  SetNewPingManager(
+      /*get_should_fetch_access_token=*/std::nullopt,
+      /*get_user_population_callback=*/std::nullopt,
+      /*get_page_load_token_callback=*/std::nullopt,
+      /*get_should_send_persisted_report=*/base::BindRepeating([]() {
+        return true;
+      }));
+
+  network::TestURLLoaderFactory test_url_loader_factory;
+  ping_manager()->SetURLLoaderFactoryForTesting(
+      base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+          &test_url_loader_factory));
+
+  task_environment_.FastForwardBy(base::Seconds(15));
+  // Persisted report should not be sent because their content is invalid.
+  EXPECT_EQ(test_url_loader_factory.total_requests(), 0u);
+  // Persisted report should still be deleted from disk.
+  EXPECT_FALSE(base::PathExists(persister_dir_));
+}
+
+TEST_F(PingManagerTest, SendPersistedThreatDetailsOnStartup_EmptyDirectory) {
+  base::CreateDirectory(persister_dir_);
+
+  // Create a new ping manager instance to simulate browser startup.
+  SetNewPingManager(
+      /*get_should_fetch_access_token=*/std::nullopt,
+      /*get_user_population_callback=*/std::nullopt,
+      /*get_page_load_token_callback=*/std::nullopt,
+      /*get_should_send_persisted_report=*/base::BindRepeating([]() {
+        return true;
+      }));
+
+  network::TestURLLoaderFactory test_url_loader_factory;
+  ping_manager()->SetURLLoaderFactoryForTesting(
+      base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+          &test_url_loader_factory));
+
+  task_environment_.FastForwardBy(base::Seconds(15));
+  // The directory should be cleaned up.
+  EXPECT_FALSE(base::PathExists(persister_dir_));
+}
+
+TEST_F(PingManagerTest,
+       SendPersistedThreatDetailsOnStartup_ShouldNotSendReport) {
+  CallPersistThreatDetails("https://some.url1.com/");
+  EXPECT_TRUE(base::PathExists(persister_dir_));
+
+  // Create a new ping manager instance to simulate browser startup.
+  SetNewPingManager(
+      /*get_should_fetch_access_token=*/std::nullopt,
+      /*get_user_population_callback=*/std::nullopt,
+      /*get_page_load_token_callback=*/std::nullopt,
+      /*get_should_send_persisted_report=*/base::BindRepeating([]() {
+        return false;
+      }));
+
+  network::TestURLLoaderFactory test_url_loader_factory;
+  ping_manager()->SetURLLoaderFactoryForTesting(
+      base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+          &test_url_loader_factory));
+
+  task_environment_.FastForwardBy(base::Seconds(15));
+  // Persisted report should not be sent because
+  // get_should_send_persisted_report is false.
+  EXPECT_EQ(test_url_loader_factory.total_requests(), 0u);
+  // Persisted report should still be deleted from disk.
+  EXPECT_FALSE(base::PathExists(persister_dir_));
 }
 
 TEST_F(PingManagerTest, AttachThreatDetailsAndLaunchSurvey) {
@@ -608,7 +621,8 @@ TEST_F(PingManagerTest, AttachThreatDetailsAndLaunchSurvey) {
         ChromeUserPopulation::PageLoadToken token;
         token.set_token_value("testing_page_load_token");
         return token;
-      }));
+      }),
+      /*get_should_send_persisted_report=*/std::nullopt);
   FakeSafeBrowsingHatsDelegate* raw_fake_sb_hats_delegate = SetUpHatsDelegate();
   ping_manager()->AttachThreatDetailsAndLaunchSurvey(std::move(report));
   std::string deserialized_report_string;

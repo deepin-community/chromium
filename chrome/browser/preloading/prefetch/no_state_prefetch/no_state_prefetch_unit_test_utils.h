@@ -9,7 +9,6 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_manager_delegate.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_contents.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "content/public/browser/preloading_data.h"
@@ -117,7 +116,8 @@ class UnitTestNoStatePrefetchManager : public NoStatePrefetchManager {
   // Maintain a map from route pairs to NoStatePrefetchContents for
   // GetNoStatePrefetchContentsForRoute.
   using NoStatePrefetchContentsMap =
-      std::map<std::pair<int, int>, NoStatePrefetchContents*>;
+      std::map<std::pair<int, int>,
+               raw_ptr<NoStatePrefetchContents, CtnExperimental>>;
   NoStatePrefetchContentsMap no_state_prefetch_contents_map_;
 
   std::unique_ptr<NoStatePrefetchContents> next_no_state_prefetch_contents_;

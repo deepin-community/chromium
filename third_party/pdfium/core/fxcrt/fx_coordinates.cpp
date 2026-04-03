@@ -18,10 +18,6 @@
 #include "core/fxcrt/fx_safe_types.h"
 #include "core/fxcrt/fx_system.h"
 
-#ifndef NDEBUG
-#include <ostream>
-#endif
-
 namespace {
 
 void MatchFloatRange(float f1, float f2, int* i1, int* i2) {
@@ -66,14 +62,15 @@ static_assert(sizeof(FX_RECT::bottom) == sizeof(RECT::bottom),
 
 template <>
 float CFX_VTemplate<float>::Length() const {
-  return FXSYS_sqrt2(x, y);
+  return hypotf(x, y);
 }
 
 template <>
 void CFX_VTemplate<float>::Normalize() {
   float fLen = Length();
-  if (fLen < 0.0001f)
+  if (fLen < 0.0001f) {
     return;
+  }
 
   x /= fLen;
   y /= fLen;
@@ -88,10 +85,12 @@ bool FX_RECT::Valid() const {
 }
 
 void FX_RECT::Normalize() {
-  if (left > right)
+  if (left > right) {
     std::swap(left, right);
-  if (top > bottom)
+  }
+  if (top > bottom) {
     std::swap(top, bottom);
+  }
 }
 
 void FX_RECT::Intersect(const FX_RECT& src) {
@@ -139,14 +138,15 @@ CFX_FloatRect::CFX_FloatRect(const CFX_PointF& point)
 
 // static
 CFX_FloatRect CFX_FloatRect::GetBBox(pdfium::span<const CFX_PointF> pPoints) {
-  if (pPoints.empty())
+  if (pPoints.empty()) {
     return CFX_FloatRect();
+  }
 
   float min_x = pPoints.front().x;
   float max_x = pPoints.front().x;
   float min_y = pPoints.front().y;
   float max_y = pPoints.front().y;
-  for (const auto& point : pPoints.subspan(1)) {
+  for (const auto& point : pPoints.subspan<1u>()) {
     min_x = std::min(min_x, point.x);
     max_x = std::max(max_x, point.x);
     min_y = std::min(min_y, point.y);
@@ -156,10 +156,12 @@ CFX_FloatRect CFX_FloatRect::GetBBox(pdfium::span<const CFX_PointF> pPoints) {
 }
 
 void CFX_FloatRect::Normalize() {
-  if (left > right)
+  if (left > right) {
     std::swap(left, right);
-  if (bottom > top)
+  }
+  if (bottom > top) {
     std::swap(top, bottom);
+  }
 }
 
 void CFX_FloatRect::Intersect(const CFX_FloatRect& other_rect) {
@@ -170,8 +172,9 @@ void CFX_FloatRect::Intersect(const CFX_FloatRect& other_rect) {
   bottom = std::max(bottom, other.bottom);
   right = std::min(right, other.right);
   top = std::min(top, other.top);
-  if (left > right || bottom > top)
+  if (left > right || bottom > top) {
     *this = CFX_FloatRect();
+  }
 }
 
 void CFX_FloatRect::Union(const CFX_FloatRect& other_rect) {
@@ -186,20 +189,20 @@ void CFX_FloatRect::Union(const CFX_FloatRect& other_rect) {
 
 FX_RECT CFX_FloatRect::GetOuterRect() const {
   FX_RECT rect;
-  rect.left = pdfium::base::saturated_cast<int>(floor(left));
-  rect.bottom = pdfium::base::saturated_cast<int>(ceil(top));
-  rect.right = pdfium::base::saturated_cast<int>(ceil(right));
-  rect.top = pdfium::base::saturated_cast<int>(floor(bottom));
+  rect.left = pdfium::saturated_cast<int>(floor(left));
+  rect.bottom = pdfium::saturated_cast<int>(ceil(top));
+  rect.right = pdfium::saturated_cast<int>(ceil(right));
+  rect.top = pdfium::saturated_cast<int>(floor(bottom));
   rect.Normalize();
   return rect;
 }
 
 FX_RECT CFX_FloatRect::GetInnerRect() const {
   FX_RECT rect;
-  rect.left = pdfium::base::saturated_cast<int>(ceil(left));
-  rect.bottom = pdfium::base::saturated_cast<int>(floor(top));
-  rect.right = pdfium::base::saturated_cast<int>(floor(right));
-  rect.top = pdfium::base::saturated_cast<int>(ceil(bottom));
+  rect.left = pdfium::saturated_cast<int>(ceil(left));
+  rect.bottom = pdfium::saturated_cast<int>(floor(top));
+  rect.right = pdfium::saturated_cast<int>(floor(right));
+  rect.top = pdfium::saturated_cast<int>(ceil(bottom));
   rect.Normalize();
   return rect;
 }
@@ -281,8 +284,9 @@ void CFX_FloatRect::Deflate(const CFX_FloatRect& rt) {
 }
 
 CFX_FloatRect CFX_FloatRect::GetDeflated(float x, float y) const {
-  if (IsEmpty())
+  if (IsEmpty()) {
     return CFX_FloatRect();
+  }
 
   CFX_FloatRect that = *this;
   that.Deflate(x, y);
@@ -373,25 +377,12 @@ FX_RECT CFX_RectF::GetOuterRect() const {
                  static_cast<int32_t>(ceil(bottom())));
 }
 
-#ifndef NDEBUG
-std::ostream& operator<<(std::ostream& os, const CFX_FloatRect& rect) {
-  os << "rect[w " << rect.Width() << " x h " << rect.Height() << " (left "
-     << rect.left << ", bot " << rect.bottom << ")]";
-  return os;
-}
-
-std::ostream& operator<<(std::ostream& os, const CFX_RectF& rect) {
-  os << "rect[w " << rect.Width() << " x h " << rect.Height() << " (left "
-     << rect.left << ", top " << rect.top << ")]";
-  return os;
-}
-#endif  // NDEBUG
-
 CFX_Matrix CFX_Matrix::GetInverse() const {
   CFX_Matrix inverse;
   float i = a * d - b * c;
-  if (fabs(i) == 0)
+  if (fabs(i) == 0) {
     return inverse;
+  }
 
   float j = -i;
   inverse.a = d / i;
@@ -450,19 +441,23 @@ void CFX_Matrix::MatchRect(const CFX_FloatRect& dest,
 }
 
 float CFX_Matrix::GetXUnit() const {
-  if (b == 0)
+  if (b == 0) {
     return (a > 0 ? a : -a);
-  if (a == 0)
+  }
+  if (a == 0) {
     return (b > 0 ? b : -b);
-  return FXSYS_sqrt2(a, b);
+  }
+  return hypotf(a, b);
 }
 
 float CFX_Matrix::GetYUnit() const {
-  if (c == 0)
+  if (c == 0) {
     return (d > 0 ? d : -d);
-  if (d == 0)
+  }
+  if (d == 0) {
     return (c > 0 ? c : -c);
-  return FXSYS_sqrt2(c, d);
+  }
+  return hypotf(c, d);
 }
 
 CFX_FloatRect CFX_Matrix::GetUnitRect() const {
@@ -472,7 +467,7 @@ CFX_FloatRect CFX_Matrix::GetUnitRect() const {
 float CFX_Matrix::TransformXDistance(float dx) const {
   float fx = a * dx;
   float fy = b * dx;
-  return FXSYS_sqrt2(fx, fy);
+  return hypotf(fx, fy);
 }
 
 float CFX_Matrix::TransformDistance(float distance) const {

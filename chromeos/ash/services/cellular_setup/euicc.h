@@ -5,7 +5,6 @@
 #ifndef CHROMEOS_ASH_SERVICES_CELLULAR_SETUP_EUICC_H_
 #define CHROMEOS_ASH_SERVICES_CELLULAR_SETUP_EUICC_H_
 
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_euicc_client.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_profile_client.h"
@@ -47,7 +46,6 @@ class Euicc : public mojom::Euicc {
       RequestAvailableProfilesCallback callback) override;
   void RefreshInstalledProfiles(
       RefreshInstalledProfilesCallback callback) override;
-  void RequestPendingProfiles(RequestPendingProfilesCallback callback) override;
   void GetEidQRCode(GetEidQRCodeCallback callback) override;
 
   // Updates list of eSIM profiles for this euicc from with the given
@@ -68,11 +66,6 @@ class Euicc : public mojom::Euicc {
   const mojom::EuiccPropertiesPtr& properties() { return properties_; }
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(EuiccTest_SmdsSupportDisabled,
-                           RequestPendingProfiles);
-  FRIEND_TEST_ALL_PREFIXES(EuiccTest_SmdsSupportEnabled,
-                           RequestPendingProfiles);
-
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
   enum class RequestPendingProfilesResult {
@@ -89,21 +82,10 @@ class Euicc : public mojom::Euicc {
       HermesResponseStatus hermes_status,
       std::optional<dbus::ObjectPath> profile_path,
       std::optional<std::string> service_path);
-  void PerformRequestPendingProfiles(
-      RequestPendingProfilesCallback callback,
-      std::unique_ptr<CellularInhibitor::InhibitLock> inhibit_lock);
   void OnRequestAvailableProfiles(
       RequestAvailableProfilesCallback callback,
       mojom::ESimOperationResult result,
       std::vector<CellularESimProfile> profile_list);
-  void OnRefreshSmdxProfilesResult(
-      RequestPendingProfilesCallback callback,
-      std::unique_ptr<CellularInhibitor::InhibitLock> inhibit_lock,
-      HermesResponseStatus status,
-      const std::vector<dbus::ObjectPath>& profile_paths);
-  mojom::ProfileInstallResult GetPendingProfileInfoFromActivationCode(
-      const std::string& activation_code,
-      ESimProfile** profile_info);
   // Updates an ESimProfile in |esim_profiles_| with values from given
   // |esim_profile_state| or creates new one if it doesn't exist. Returns
   // pointer to ESimProfile object if one was created.

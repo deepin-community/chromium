@@ -6,7 +6,6 @@
 
 #include <string>
 
-#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace ui {
@@ -59,7 +58,11 @@ bool PlatformWindow::CanSetDecorationInsets() const {
   return false;
 }
 
-void PlatformWindow::SetDecorationInsets(const gfx::Insets* insets_px) {}
+void PlatformWindow::SetVideoCapture() {}
+
+void PlatformWindow::ReleaseVideoCapture() {}
+
+void PlatformWindow::ShowWindowControlsMenu(const gfx::Point& point) {}
 
 void PlatformWindow::SetOpaqueRegion(
     std::optional<std::vector<gfx::Rect>> region_px) {}

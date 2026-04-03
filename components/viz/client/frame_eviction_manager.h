@@ -9,12 +9,11 @@
 
 #include <list>
 #include <map>
-#include <memory>
 #include <optional>
 #include <utility>
 
 #include "base/gtest_prod_util.h"
-#include "base/memory/memory_pressure_listener.h"
+#include "base/memory/post_delayed_memory_reduction_task.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
 #include "base/task/single_thread_task_runner.h"
@@ -25,11 +24,19 @@
 #include "base/trace_event/memory_dump_request_args.h"
 #include "components/viz/client/viz_client_export.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/pre_freeze_background_memory_trimmer.h"
+#endif
+
+namespace ash {
+FORWARD_DECLARE_TEST(LockStateControllerTest, PauseFrameEvictionWhileLocked);
+}  // namespace ash
+
 namespace viz {
 
 class FrameEvictionManagerClient {
  public:
-  virtual ~FrameEvictionManagerClient() {}
+  virtual ~FrameEvictionManagerClient() = default;
   virtual void EvictCurrentFrame() = 0;
 };
 
@@ -70,11 +77,6 @@ class VIZ_CLIENT_EXPORT FrameEvictionManager
     max_number_of_saved_frames_ = max_number_of_saved_frames;
   }
 
-  // React on memory pressure events to adjust the number of cached frames.
-  // Please make this private when crbug.com/443824 has been fixed.
-  void OnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level);
-
   // Purges all unlocked frames, allowing us to reclaim resources.
   void PurgeAllUnlockedFrames();
 
@@ -87,14 +89,19 @@ class VIZ_CLIENT_EXPORT FrameEvictionManager
  private:
   friend struct base::DefaultSingletonTraits<FrameEvictionManager>;
   FRIEND_TEST_ALL_PREFIXES(FrameEvictionManagerTest, PeriodicCulling);
+  FRIEND_TEST_ALL_PREFIXES(ash::LockStateControllerTest,
+                           PauseFrameEvictionWhileLocked);
 
   FrameEvictionManager();
   ~FrameEvictionManager() override;
 
+  void StartFrameCullingTimer();
   void CullUnlockedFrames(size_t saved_frame_limit);
+#if BUILDFLAG(IS_ANDROID)
+  void CullOldUnlockedFrames(base::MemoryReductionTaskContext task_type);
+#else
   void CullOldUnlockedFrames();
-
-  void PurgeMemory(int percentage);
+#endif
 
   // Pauses/unpauses frame eviction.
   void Pause();
@@ -110,9 +117,7 @@ class VIZ_CLIENT_EXPORT FrameEvictionManager
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
 
-  // Listens for system under pressure notifications and adjusts number of
-  // cached frames accordingly.
-  std::unique_ptr<base::MemoryPressureListener> memory_pressure_listener_;
+  bool is_paused_for_testing() const { return pause_count_ != 0; }
 
   std::map<FrameEvictionManagerClient*, size_t> locked_frames_;
   // {FrameEvictionManagerClient, Last Unlock() time}, ordered with the most
@@ -127,7 +132,7 @@ class VIZ_CLIENT_EXPORT FrameEvictionManager
   // Argument of the last CullUnlockedFrames call while paused.
   std::optional<size_t> pending_unlocked_frame_limit_;
 
-  base::RepeatingTimer idle_frames_culling_timer_;
+  base::OneShotDelayedBackgroundTimer idle_frame_culling_timer_;
   raw_ptr<const base::TickClock> clock_ = base::DefaultTickClock::GetInstance();
 };
 

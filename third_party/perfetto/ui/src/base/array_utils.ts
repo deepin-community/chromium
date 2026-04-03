@@ -42,6 +42,46 @@ export function arrayEquals<T>(a: ArrayLike<T>, b: ArrayLike<T>): boolean {
 }
 
 export function isArrayOf<P, Q>(
-  predicate: (x: P|Q) => x is P, xs: (P|Q)[]): xs is P[] {
+  predicate: (x: P | Q) => x is P,
+  xs: (P | Q)[],
+): xs is P[] {
   return xs.every(predicate);
+}
+
+// Filter out falsy values from an array, leaving only the truthy ones
+export function removeFalsyValues<T>(
+  array: ReadonlyArray<T | false | null | undefined>,
+): T[] {
+  return array.filter(Boolean) as T[];
+}
+
+// Move an item from a given index in the array (`from`) to a new index (`to`).
+// `from`: index in the current array in [0, len(array) - 1] range.
+// `to`: new location, in [0, len(array)] range. The element will be inserted
+//       in the position before current element at `to` index.
+export function moveArrayItem<T>(array: T[], from: number, to: number) {
+  if (from === to) return;
+  const value = array[from];
+  array.splice(from, 1);
+  if (from < to) {
+    // We have deleted an item, therefore we need to adjust the target index.
+    --to;
+  }
+  array.splice(to, 0, value);
+}
+
+// If all values in the array are the same, returns that value. Otherwise
+// returns undefined. If the array is empty, returns undefined.
+export function valueIfAllEqual<T>(arr: ReadonlyArray<T>): T | undefined {
+  if (arr.length === 0) return undefined;
+  if (arr.every((val) => val === arr[0])) return arr[0];
+  return undefined;
+}
+
+// Inserts a separator between each element of an array. Similar to
+// Array.join(), but returns an array instead of a string.
+export function intersperse<T, S>(arr: T[], separator: S): (T | S)[] {
+  return arr.flatMap((item, i) =>
+    i < arr.length - 1 ? [item, separator] : [item],
+  );
 }

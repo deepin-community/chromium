@@ -15,9 +15,12 @@ limitations under the License.
 
 #include "xla/pjrt/worker_thread.h"
 
-#include <functional>
 #include <string>
 #include <utility>
+
+#include "absl/functional/any_invocable.h"
+#include "absl/log/check.h"
+#include "absl/synchronization/mutex.h"
 
 namespace xla {
 
@@ -27,13 +30,13 @@ WorkerThread::WorkerThread(tsl::Env* env, const std::string& name) {
 }
 
 WorkerThread::~WorkerThread() {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   work_queue_.push(nullptr);
 }
 
-void WorkerThread::Schedule(std::function<void()> fn) {
+void WorkerThread::Schedule(absl::AnyInvocable<void() &&> fn) {
   CHECK(fn != nullptr);
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   work_queue_.push(std::move(fn));
 }
 
@@ -41,9 +44,9 @@ bool WorkerThread::WorkAvailable() { return !work_queue_.empty(); }
 
 void WorkerThread::WorkLoop() {
   while (true) {
-    std::function<void()> fn;
+    absl::AnyInvocable<void() &&> fn;
     {
-      absl::MutexLock lock(&mu_);
+      absl::MutexLock lock(mu_);
       mu_.Await(absl::Condition(this, &WorkerThread::WorkAvailable));
       fn = std::move(work_queue_.front());
       work_queue_.pop();
@@ -51,7 +54,7 @@ void WorkerThread::WorkLoop() {
     if (!fn) {
       return;
     }
-    fn();
+    std::move(fn)();
   }
 }
 

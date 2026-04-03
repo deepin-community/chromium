@@ -86,7 +86,7 @@ MatrixType MatrixFunctionAtomic<MatrixType>::compute(const MatrixType& A) {
         for (Index i = 0; i < rows; i++)
           mx = (std::max)(mx, std::abs(m_f(Ashifted(i, i) + avgEival, static_cast<int>(s + r))));
         if (r != 0) rfactorial *= RealScalar(r);
-        delta = (std::max)(delta, mx / rfactorial);
+        delta = (std::max)(delta, RealScalar(mx / rfactorial));
       }
       const RealScalar P_norm = P.cwiseAbs().rowwise().sum().maxCoeff();
       if (mu * delta * P_norm < NumTraits<Scalar>::epsilon() * F_norm)  // series converged
@@ -382,7 +382,7 @@ struct matrix_function_compute<MatrixType, 0> {
     static const int Rows = Traits::RowsAtCompileTime, Cols = Traits::ColsAtCompileTime;
     static const int MaxRows = Traits::MaxRowsAtCompileTime, MaxCols = Traits::MaxColsAtCompileTime;
 
-    typedef std::complex<Scalar> ComplexScalar;
+    typedef internal::make_complex_t<Scalar> ComplexScalar;
     typedef Matrix<ComplexScalar, Rows, Cols, 0, MaxRows, MaxCols> ComplexMatrix;
 
     ComplexMatrix CA = A.template cast<ComplexScalar>();
@@ -476,7 +476,7 @@ class MatrixFunctionReturnValue : public ReturnByValue<MatrixFunctionReturnValue
     typedef typename internal::nested_eval<Derived, 10>::type NestedEvalType;
     typedef internal::remove_all_t<NestedEvalType> NestedEvalTypeClean;
     typedef internal::traits<NestedEvalTypeClean> Traits;
-    typedef std::complex<typename NumTraits<Scalar>::Real> ComplexScalar;
+    typedef internal::make_complex_t<Scalar> ComplexScalar;
     typedef Matrix<ComplexScalar, Dynamic, Dynamic, 0, Traits::RowsAtCompileTime, Traits::ColsAtCompileTime>
         DynMatrixType;
 

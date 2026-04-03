@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2016, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -256,6 +256,11 @@ enum {
 
 typedef struct {
   TX_TYPE_PRUNE_MODE prune_2d_txfm_mode;
+
+  // Limit the intra transform search type.
+  // 1 : Limit the intra transform search type to the ones in the table
+  // av1_derived_intra_tx_used_flag[INTRA_MODES].
+  // 2 : Limit the intra transform search type to the default transform.
   int fast_intra_tx_type_search;
 
   // INT_MAX: Disable fast search.
@@ -357,10 +362,12 @@ typedef enum {
  */
 typedef enum {
   NO_PRUNING = -1,
-  SIMPLE_AGG_LVL0,     /*!< Simple prune aggressiveness level 0. */
-  SIMPLE_AGG_LVL1,     /*!< Simple prune aggressiveness level 1. */
-  SIMPLE_AGG_LVL2,     /*!< Simple prune aggressiveness level 2. */
-  SIMPLE_AGG_LVL3,     /*!< Simple prune aggressiveness level 3. */
+  SIMPLE_AGG_LVL0,     /*!< Simple prune aggressiveness level 0. speed = 0 */
+  SIMPLE_AGG_LVL1,     /*!< Simple prune aggressiveness level 1. speed = 1 */
+  SIMPLE_AGG_LVL2,     /*!< Simple prune aggressiveness level 2. speed = 2 */
+  SIMPLE_AGG_LVL3,     /*!< Simple prune aggressiveness level 3. speed >= 3 */
+  SIMPLE_AGG_LVL4,     /*!< Simple prune aggressiveness level 4. speed >= 4 */
+  SIMPLE_AGG_LVL5,     /*!< Simple prune aggressiveness level 5. speed >= 5 */
   QIDX_BASED_AGG_LVL1, /*!< Qindex based prune aggressiveness level, aggressive
                           level maps to simple agg level 1 or 2 based on qindex.
                         */
@@ -368,7 +375,7 @@ typedef enum {
                                                   aggressiveness levels. */
   TOTAL_QINDEX_BASED_AGG_LVLS =
       QIDX_BASED_AGG_LVL1 -
-      SIMPLE_AGG_LVL3, /*!< Total number of qindex based simple prune
+      SIMPLE_AGG_LVL5, /*!< Total number of qindex based simple prune
                           aggressiveness levels. */
   TOTAL_AGG_LVLS = TOTAL_SIMPLE_AGG_LVLS +
                    TOTAL_QINDEX_BASED_AGG_LVLS, /*!< Total number of levels. */
@@ -482,6 +489,21 @@ typedef struct HIGH_LEVEL_SPEED_FEATURES {
    * 1: Conditionally allow motion estimation based on 4x4 sub-blocks variance.
    */
   int allow_sub_blk_me_in_tf;
+
+  /*!
+   * Decide whether to disable temporal mv prediction.
+   * 0: Do not disable
+   * 1: Conditionally disable
+   * 2: Always disable
+   */
+  int ref_frame_mvs_lvl;
+
+  /*!
+   *  Decide whether to enable screen detection mode 2 fast detection.
+   *  0: Regular detection
+   *  1: Fast detection
+   */
+  int screen_detection_mode2_fast_detection;
 } HIGH_LEVEL_SPEED_FEATURES;
 
 /*!
@@ -592,6 +614,10 @@ typedef struct GLOBAL_MOTION_SPEED_FEATURES {
 
   // Number of refinement steps to apply after initial model generation
   int num_refinement_steps;
+
+  // Error advantage threshold level used to determine whether global motion
+  // compensation should be enabled
+  int gm_erroradv_tr_level;
 } GLOBAL_MOTION_SPEED_FEATURES;
 
 typedef struct PARTITION_SPEED_FEATURES {
@@ -647,10 +673,16 @@ typedef struct PARTITION_SPEED_FEATURES {
   int partition_search_breakout_rate_thr;
 
   // Thresholds for ML based partition search breakout.
-  int ml_partition_search_breakout_thresh[PARTITION_BLOCK_SIZES];
+  float ml_partition_search_breakout_thresh[PARTITION_BLOCK_SIZES];
+
+  // ML based partition search breakout model index
+  int ml_partition_search_breakout_model_index;
+
+  // ML based partition search breakout model index
+  int ml_4_partition_search_level_index;
 
   // Aggressiveness levels for pruning split and rectangular partitions based on
-  // simple_motion_search. SIMPLE_AGG_LVL0 to SIMPLE_AGG_LVL3 correspond to
+  // simple_motion_search. SIMPLE_AGG_LVL0 to SIMPLE_AGG_LVL5 correspond to
   // simple motion search based pruning. QIDX_BASED_AGG_LVL1 corresponds to
   // qindex based and simple motion search based pruning.
   int simple_motion_search_prune_agg;
@@ -822,6 +854,11 @@ typedef struct PARTITION_SPEED_FEATURES {
 
   // Disables 8x8 and below partitions for low quantizers.
   int disable_8x8_part_based_on_qidx;
+
+  // Decoder side speed feature to add penalty for use of smaller partitions.
+  // Takes values 0 - 2, 0 indicating no penalty and higher level indicating
+  // increased penalty.
+  int split_partition_penalty_level;
 } PARTITION_SPEED_FEATURES;
 
 typedef struct MV_SPEED_FEATURES {
@@ -829,7 +866,9 @@ typedef struct MV_SPEED_FEATURES {
   SEARCH_METHODS search_method;
 
   // Enable the use of faster, less accurate mv search method
-  // 0: disable, 1: if bsize >= BLOCK_32X32, 2: based on bsize, SAD and qp
+  // 0: Disable
+  // 1 - 3: Disable for larger bsize
+  // 4: Based on bsize, SAD and qp
   // TODO(chiyotsai@google.com): Take the clip's resolution and mv activity into
   // account.
   int use_bsize_dependent_search_method;
@@ -886,6 +925,22 @@ typedef struct MV_SPEED_FEATURES {
   // Allow intrabc motion search
   int use_intrabc;
 
+  // Prune intrabc candidate block hash search
+  // 0: check every block hash candidate
+  // 1: check the first 64 block hash candidates only
+  int prune_intrabc_candidate_block_hash_search;
+
+  // Intrabc search level
+  // 0: top + left search, all block sizes, always hash plus pixel search
+  // 1: top search only, 4x4, 8x8 and 16x16 block sizes only, perform pixel
+  //    search if and only if hash search failed to find a candidate
+  int intrabc_search_level;
+
+  // Whether the maximum intrabc block size to hash is 8x8
+  // 0: Hash from 4x4 up to superblock size
+  // 1: Hash 4x4 and 8x8 only
+  int hash_max_8x8_intrabc_blocks;
+
   // Whether to downsample the rows in sad calculation during motion search.
   // This is only active when there are at least 16 rows. When this sf is
   // active, if there is a large discrepancy in the SAD values for the final
@@ -908,11 +963,14 @@ typedef struct MV_SPEED_FEATURES {
   // 2: disable second MV
   int disable_second_mv;
 
-  // Skips full pixel search based on start mv of prior ref_mv_idx.
+  // Skips full pixel search based on closeness of start mv and ref mv
+  // of previous search.
   // 0: Disabled
-  // 1: Skips the full pixel search upto 4 neighbor full-pel MV positions.
-  // 2: Skips the full pixel search upto 8 neighbor full-pel MV positions.
-  int skip_fullpel_search_using_startmv;
+  // 1: Skips the full pixel search upto 4 neighbor full-pel start MV and ref MV
+  // positions.
+  // 2: Skips the full pixel search upto 8 neighbor full-pel start MV and ref MV
+  // positions.
+  int skip_fullpel_search_using_startmv_refmv;
 
   // Method to use for refining WARPED_CAUSAL motion vectors
   // TODO(rachelbarker): Can this be unified with OBMC in some way?
@@ -1169,6 +1227,16 @@ typedef struct INTER_MODE_SPEED_FEATURES {
   // Speed 2: 2%  faster, 0.05% psnr loss.
   // No change for speed 3 and up, because |disable_onesided_comp| is true.
   int skip_arf_compound;
+
+  // Percentage of scaling used to increase the rd cost of warp mode so that
+  // encoder decisions are biased against local warp, favoring low complexity
+  // modes.
+  int bias_warp_mode_rd_scale_pct;
+
+  // Percentage of scaling used to increase the rd cost of obmc motion mode so
+  // that encoder decisions are biased against local obmc, favoring low
+  // complexity modes.
+  float bias_obmc_mode_rd_scale_pct;
 } INTER_MODE_SPEED_FEATURES;
 
 typedef struct INTERP_FILTER_SPEED_FEATURES {
@@ -1498,15 +1566,46 @@ typedef struct LOOP_FILTER_SPEED_FEATURES {
   // level.
   int use_coarse_filter_level_search;
 
+  // Reset luma filter levels to zero based on minimum filter levels of
+  // reference frames and current frame's pyramid level.
+  int adaptive_luma_loop_filter_skip;
+
+  // Reset luma filter levels to zero when the percentage of SSE difference
+  // between the unfiltered and filtered versions of the current frame is below
+  // a threshold.
+  int skip_loop_filter_using_filt_error;
+
   // Control how the CDEF strength is determined.
   CDEF_PICK_METHOD cdef_pick_method;
+
+  // Decoder side speed feature for adaptive CDEF with strength reduction.
+  // Zero out values with low CDEF strengths (luma and/or chroma). This is
+  // done as CDEF is a relatively-expensive filter to compute during decode.
+  // This speed feature is only enabled in all intra mode.
+  bool zero_low_cdef_strengths;
 
   // Decoder side speed feature to add penalty for use of dual-sgr filters.
   // Takes values 0 - 10, 0 indicating no penalty and each additional level
   // adding a penalty of 1%
   int dual_sgr_penalty_level;
 
-  // prune sgr ep using binary search like mechanism
+  // Restricts loop restoration to RESTORE_SWITCHABLE by skipping RD cost
+  // comparisons for RESTORE_WIENER and RESTORE_SGRPROJ. Also applies a bias
+  // during switchable restoration search: each level adds a 0.5% penalty to
+  // Wiener and SGR selection.
+  // 0 : No restriction or bias (all restoration types allowed)
+  // 1+: Skip WIENER/SGRPROJ and apply (level x 0.5%) penalty in
+  // search_switchable()
+  int switchable_lr_with_bias_level;
+
+  // Enable fast search in self guided restoration
+  // 0 : Search over all 16 SGR projection parameters listed
+  //     in av1_sgr_params[SGRPROJ_PARAMS].
+  // 1 : Approximate search using binary search like mechanism,
+  //     a total of 8 SGR projection parameters are searched.
+  // 2 : Search only 'ep' values in
+  //     sgproj_ep_grp1_seed[SGRPROJ_EP_GRP1_SEARCH_COUNT],
+  //     a total of 4 SGR projection parameters are searched.
   int enable_sgr_ep_pruning;
 
   // Disable loop restoration for Chroma plane
@@ -1593,6 +1692,11 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // This flag controls the use of non-RD mode decision.
   int use_nonrd_pick_mode;
 
+  // Flag that controls discounting for color map cost during palette search.
+  // This saves about 5% of CPU and in non-RD speeds delivers better results
+  // across rtc_screen set (on speed 10 overall BDRate growth is 13%)
+  int discount_color_cost;
+
   // Use ALTREF frame in non-RD mode decision.
   int use_nonrd_altref_frame;
 
@@ -1629,6 +1733,15 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // 2 : use rd for bsize < 16x16 and src var >= 101, nonrd otherwise
   int hybrid_intra_pickmode;
 
+  // Filter blocks by certain criteria such as SAD, source variance, such that
+  // fewer blocks will go through the palette search.
+  // For nonrd encoding path, enable this feature reduces encoding time when
+  // palette mode is used. Disabling it leads to better compression efficiency.
+  // 0: off
+  // 1: less aggressive pruning mode
+  // 2, 3: more aggressive pruning mode
+  int prune_palette_search_nonrd;
+
   // Compute variance/sse on source difference, prior to encoding superblock.
   int source_metrics_sb_nonrd;
 
@@ -1638,6 +1751,12 @@ typedef struct REAL_TIME_SPEED_FEATURES {
 
   // Check for scene/content change detection on every frame before encoding.
   int check_scene_detection;
+
+  // For keyframes in rtc: adjust the rc_bits_per_mb, to reduce overshoot.
+  int rc_adjust_keyframe;
+
+  // On scene change or keyframe: compute spatial variance.
+  int rc_compute_spatial_var_sc_kf;
 
   // For nonrd mode: Prefer larger partition blks in variance based partitioning
   // 0: disabled, 1-3: increasing aggressiveness
@@ -1754,14 +1873,13 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // Must be off for lossless mode.
   int use_rtc_tf;
 
-  // Prune the use of the identity transform in nonrd_pickmode,
-  // used for screen content mode: only for smaller blocks
-  // and higher spatial variance, and when skip_txfm is not
-  // already set.
-  int prune_idtx_nonrd;
+  // Use of the identity transform in nonrd_pickmode,
+  int use_idtx_nonrd;
 
-  // Prune the use of paletter mode in nonrd pickmode.
-  int prune_palette_nonrd;
+  // Prune the use of the identity transform in nonrd_pickmode:
+  // only for smaller blocks and higher spatial variance, and when skip_txfm
+  // is not already set.
+  int prune_idtx_nonrd;
 
   // Force to only use dct for palette search in nonrd pickmode.
   int dct_only_palette_nonrd;
@@ -1773,6 +1891,10 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // 2: aggrssive mode, where skip is done for all frames that
   // where rc->high_source_sad = 0 (no slide-changes).
   int skip_lf_screen;
+
+  // Threshold on the active/inactive region percent to disable
+  // the loopfilter and cdef. Setting to 100 disables this feature.
+  int thresh_active_maps_skip_lf_cdef;
 
   // For nonrd: early exit out of variance partition that sets the
   // block size to superblock size, and sets mode to zeromv-last skip.
@@ -1898,6 +2020,22 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // This generally leads to better coding efficiency but with some speed loss.
   // Only used for screen content and for nonrd_pickmode.
   bool increase_color_thresh_palette;
+
+  // Flag to indicate selecting of higher threshold for scenee change detection.
+  int higher_thresh_scene_detection;
+
+  // FLag to indicate skip testing of NEWMV for flat blocks.
+  int skip_newmv_flat_blocks_screen;
+
+  // Flag to force skip encoding for non_reference_frame on slide/scene changes.
+  int skip_encoding_non_reference_slide_change;
+
+  // Flag to indicate more aggressive QP downward adjustment for screen static
+  // content, to make convergence to min_qp faster.
+  int rc_faster_convergence_static;
+
+  // Skip NEWMV mode evaluation based on sad for screen content.
+  int skip_newmv_mode_sad_screen;
 } REAL_TIME_SPEED_FEATURES;
 
 /*!\endcond */

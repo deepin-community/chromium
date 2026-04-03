@@ -21,6 +21,10 @@ namespace base {
 class SingleThreadTaskRunner;
 }
 
+namespace media {
+struct AudioGlitchInfo;
+}
+
 namespace blink {
 
 PLATFORM_EXPORT extern const int kFallbackAudioLatencyMs;
@@ -123,10 +127,7 @@ class PLATFORM_EXPORT MediaStreamAudioSource
     return std::nullopt;
   }
 
-  std::optional<media::AudioCapturerSource::ErrorCode> ErrorCode() {
-    DCHECK(GetTaskRunner()->BelongsToCurrentThread());
-    return error_code_;
-  }
+  std::optional<media::AudioCapturerSource::ErrorCode> ErrorCode();
 
   // Returns a new MediaStreamAudioTrack. |id| is the blink track's ID in UTF-8.
   // Subclasses may override this to provide an extended implementation.
@@ -168,7 +169,8 @@ class PLATFORM_EXPORT MediaStreamAudioSource
   // Called by subclasses to deliver audio data to the currently-connected
   // tracks. This method is thread-safe.
   void DeliverDataToTracks(const media::AudioBus& audio_bus,
-                           base::TimeTicks reference_time);
+                           base::TimeTicks reference_time,
+                           const media::AudioGlitchInfo& glitch_info);
 
   // Called by subclasses when capture error occurs.
   // Note: This can be called on any thread, and will post a task to the main
@@ -195,10 +197,7 @@ class PLATFORM_EXPORT MediaStreamAudioSource
 
   void LogMessage(const std::string& message);
 
-  void SetErrorCode(media::AudioCapturerSource::ErrorCode code) {
-    DCHECK(GetTaskRunner()->BelongsToCurrentThread());
-    error_code_ = code;
-  }
+  void SetErrorCode(media::AudioCapturerSource::ErrorCode code);
 
   // The portion of StopSourceOnError processing carried out on the main thread.
   void StopSourceOnErrorOnTaskRunner(

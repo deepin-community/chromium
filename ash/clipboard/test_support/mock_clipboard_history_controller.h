@@ -11,19 +11,13 @@
 
 #include "ash/public/cpp/clipboard_history_controller.h"
 #include "ash/public/cpp/scoped_clipboard_history_pause.h"
+#include "base/functional/callback.h"
 #include "testing/gmock/include/gmock/gmock.h"
-
-namespace crosapi::mojom {
-enum class ClipboardHistoryControllerShowSource;
-}  // namespace crosapi::mojom
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 
 namespace gfx {
 class Rect;
 }  // namespace gfx
-
-namespace ui {
-enum MenuSourceType;
-}  // namespace ui
 
 namespace ash {
 
@@ -42,14 +36,14 @@ class MockClipboardHistoryController : public ClipboardHistoryController {
   MOCK_METHOD(bool,
               ShowMenu,
               (const gfx::Rect&,
-               ui::MenuSourceType,
-               crosapi::mojom::ClipboardHistoryControllerShowSource),
+               ui::mojom::MenuSourceType,
+               chromeos::clipboard_history::ShowSource),
               (override));
   MOCK_METHOD(bool,
               ShowMenu,
               (const gfx::Rect&,
-               ui::MenuSourceType,
-               crosapi::mojom::ClipboardHistoryControllerShowSource,
+               ui::mojom::MenuSourceType,
+               chromeos::clipboard_history::ShowSource,
                OnMenuClosingCallback),
               (override));
   MOCK_METHOD(void, OnScreenshotNotificationCreated, (), (override));
@@ -69,7 +63,7 @@ class MockClipboardHistoryController : public ClipboardHistoryController {
               PasteClipboardItemById,
               (const std::string&,
                int,
-               crosapi::mojom::ClipboardHistoryControllerShowSource),
+               chromeos::clipboard_history::ShowSource),
               (override));
   MOCK_METHOD(bool, DeleteClipboardItemById, (const std::string&), (override));
 };

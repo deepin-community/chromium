@@ -66,6 +66,7 @@ class ActiveScriptWrappableCreationKey final {
   friend class MediaSource;
   friend class MediaRecorder;
   friend class MediaStream;
+  friend class MediaStreamAudioDestinationNode;
   friend class MediaStreamAudioSourceNode;
   friend class MediaStreamTrack;
   friend class MessagePort;
@@ -109,8 +110,7 @@ class ActiveScriptWrappableCreationKey final {
   friend class WebPrintJob;
   friend class WebSocketStream;
   friend class WebTransport;
-  friend class WorkerGlobalScope;
-  friend class WorkletGlobalScope;
+  friend class WorkerOrWorkletGlobalScope;
   friend class XMLHttpRequest;
   friend class XRSession;
 };

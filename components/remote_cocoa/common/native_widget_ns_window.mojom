@@ -6,12 +6,15 @@ module remote_cocoa.mojom;
 
 import "components/remote_cocoa/common/select_file_dialog.mojom";
 import "components/remote_cocoa/common/menu.mojom";
+import "mojo/public/mojom/base/file_path.mojom";
 import "mojo/public/mojom/base/string16.mojom";
 import "services/network/public/mojom/network_param.mojom";
 import "ui/base/cursor/mojom/cursor.mojom";
+import "ui/base/mojom/color_mode.mojom";
 import "ui/base/mojom/ui_base_types.mojom";
 import "ui/events/mojom/event_constants.mojom";
 import "ui/gfx/geometry/mojom/geometry.mojom";
+import "ui/gfx/image/mojom/image.mojom";
 import "ui/gfx/mojom/ca_layer_params.mojom";
 
 // The window class (subclass of kNativeWidgetMacNSWindow) to use for a given
@@ -23,6 +26,8 @@ enum WindowClass {
   kBrowser,
   // NativeWidgetMacFramelessNSWindow
   kFrameless,
+  // NativeWidgetMacOverlayNSWindow
+  kOverlay,
 };
 
 // Parameters used to described creation of an NSWindow.
@@ -78,8 +83,6 @@ struct NativeWidgetNSWindowInitParams {
   // NSWindowCollectionBehaviorParticipatesInCycle (this is not the
   // default for NSWindows with NSWindowStyleMaskBorderless).
   bool force_into_collection_cycle;
-  // If true, the window was created in headless mode.
-  bool is_headless_mode_window;
   // An opaque blob of AppKit data which includes, among other things, a
   // window's workspace and fullscreen state, and can be retrieved from or
   // applied to a window.
@@ -100,6 +103,18 @@ enum ToolbarVisibilityStyle {
   // The toolbar will autohide. It can be revealed by placing the mouse at the
   // top of the screen.
   kAutohide,
+};
+
+// Data for dragging a file from the window.
+struct FileDragData {
+  // The file path to drag.
+  mojo_base.mojom.FilePath file_path;
+
+  // Optional drag image.
+  gfx.mojom.ImageSkia? drag_image;
+
+  // Offset from the mouse cursor to the drag image origin.
+  gfx.mojom.Vector2d image_offset;
 };
 
 // The interface through which a NativeWidgetMac may interact with an NSWindow
@@ -138,7 +153,11 @@ interface NativeWidgetNSWindow {
 
   // Create the NSView to be the content view for the window. Use |ns_view_id|
   // to look up this NSView in other functions (e.g, to specify a parent view).
-  CreateContentView(uint64 ns_view_id, gfx.mojom.Rect bounds);
+  // If `corner_radius` is set, the content view clips sublayers to a rounded
+  // corner mask of the given radius.
+  CreateContentView(uint64 ns_view_id,
+                    gfx.mojom.Rect bounds,
+                    int32? corner_radius);
 
   // Destroy the content NSView for this window. Note that the window will
   // become blank once this has been called.
@@ -225,6 +244,18 @@ interface NativeWidgetNSWindow {
   // Set the window level of the NSWindow.
   SetWindowLevel(int32 level);
 
+  // Set or un-set the NSWindow as being "activation independent". This sets
+  // two properties:
+  //
+  // - If Chromium is hidden (from the Dock menu or programmatically), the
+  //   NSWindow is not forced to be hidden as well.
+  // - The NSWindow can be interacted with without causing Chromium to be
+  //   activated.
+  //
+  // To accomplish this, the activation independence state of all ancestor
+  // NSWindows is set as well.
+  SetActivationIndependence(bool independence);
+
   // Set the aspect ratio of the NSWindow. `aspect_ratio` must not be empty.
   // The aspect ratio refers to the client area only; system-drawn window
   // decorations like a title bar are not considered in the aspect ratio.
@@ -282,8 +313,7 @@ interface NativeWidgetNSWindow {
 
   // Enables immersive fullscreen. |fullscreen_overlay_widget_id| is the id of
   // the overlay widget which is hosting top chrome.
-  // |tab_widget_id| is provided when the ImmersiveFullscreenTabs feature is
-  // enabled. It holds the id of the tab hosting widget.
+  // |tab_widget_id| holds the id of the tab hosting widget.
   EnableImmersiveFullscreen(uint64 fullscreen_overlay_widget_id,
                             uint64 tab_widget_id);
 
@@ -319,4 +349,15 @@ interface NativeWidgetNSWindow {
   DisplayContextMenu(ContextMenu menu,
                      pending_remote<MenuHost> host,
                      pending_receiver<Menu> receiver);
+
+  // Set whether the window should be included in screenshots or not.
+  SetAllowScreenshots(bool allow);
+
+  // Set the color mode of the window.
+  SetColorMode(ui.mojom.ColorMode color_mode);
+
+  // Begin a file drag operation. Used for download drag-and-drop from PWA
+  // running in a separate (app shim) process.
+  BeginFileDrag(FileDragData file_drag_data,
+                gfx.mojom.PointF mouse_location);
 };

@@ -46,6 +46,14 @@
         .arch           AS_ARCH_LEVEL
 #endif
 
+#if HAVE_AS_ARCHEXT_CRC_DIRECTIVE
+#define ENABLE_ARM_CRC  .arch_extension crc
+#define DISABLE_ARM_CRC .arch_extension nocrc
+#else
+#define ENABLE_ARM_CRC
+#define DISABLE_ARM_CRC
+#endif
+
 #if HAVE_AS_ARCHEXT_DOTPROD_DIRECTIVE
 #define ENABLE_DOTPROD  .arch_extension dotprod
 #define DISABLE_DOTPROD .arch_extension nodotprod
@@ -62,8 +70,36 @@
 #define DISABLE_I8MM
 #endif
 
+#if HAVE_AS_ARCHEXT_SVE_DIRECTIVE
+#define ENABLE_SVE  .arch_extension sve
+#define DISABLE_SVE .arch_extension nosve
+#else
+#define ENABLE_SVE
+#define DISABLE_SVE
+#endif
+
+#if HAVE_AS_ARCHEXT_SVE2_DIRECTIVE
+#define ENABLE_SVE2  .arch_extension sve2
+#define DISABLE_SVE2 .arch_extension nosve2
+#else
+#define ENABLE_SVE2
+#define DISABLE_SVE2
+#endif
+
+#if HAVE_AS_ARCHEXT_SME_DIRECTIVE
+#define ENABLE_SME   .arch_extension sme
+#define DISABLE_SME  .arch_extension nosme
+#else
+#define ENABLE_SME
+#define DISABLE_SME
+#endif
+
+DISABLE_ARM_CRC
 DISABLE_DOTPROD
 DISABLE_I8MM
+DISABLE_SVE
+DISABLE_SVE2
+DISABLE_SME
 
 
 /* Support macros for
@@ -184,7 +220,7 @@ DISABLE_I8MM
         .popsection
 #endif
 
-.macro  function name, export=0, align=2
+.macro  function name, export=0, align=4
     .macro endfunc
 ELF     .size   \name, . - \name
 FUNC    .endfunc
@@ -208,7 +244,7 @@ FUNC    .func   \name
     .endif
 .endm
 
-.macro  const   name, align=2, relocate=0
+.macro  const   name, align=4, relocate=0
     .macro endconst
 ELF     .size   \name, . - \name
         .purgem endconst

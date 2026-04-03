@@ -6,13 +6,32 @@
 
 #include <memory>
 
+#include "base/values.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_constants.h"
-#include "chrome/browser/ui/safety_hub/safety_hub_service.h"
-#include "chrome/browser/ui/webui/settings/safety_hub_handler.h"
+#include "chrome/browser/ui/safety_hub/safety_hub_result.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/prefs/pref_service.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "ui/base/l10n/l10n_util.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+namespace {
+base::DictValue CardDataToValue(int header_id,
+                                int subheader_id,
+                                safety_hub::SafetyHubCardState card_state) {
+  base::DictValue card_info;
+
+  card_info.Set(safety_hub::kCardHeaderKey,
+                l10n_util::GetStringUTF16(header_id));
+  card_info.Set(safety_hub::kCardSubheaderKey,
+                l10n_util::GetStringUTF16(subheader_id));
+  card_info.Set(safety_hub::kCardStateKey, static_cast<int>(card_state));
+
+  return card_info;
+}
+}  // namespace
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 SafetyHubSafeBrowsingResult::SafetyHubSafeBrowsingResult(
     SafeBrowsingState status)
@@ -26,41 +45,76 @@ SafetyHubSafeBrowsingResult& SafetyHubSafeBrowsingResult::operator=(
 SafetyHubSafeBrowsingResult::~SafetyHubSafeBrowsingResult() = default;
 
 // static
-std::optional<std::unique_ptr<SafetyHubService::Result>>
+std::optional<std::unique_ptr<SafetyHubResult>>
 SafetyHubSafeBrowsingResult::GetResult(const PrefService* pref_service) {
+  SafeBrowsingState state = SafetyHubSafeBrowsingResult::GetState(pref_service);
+  return std::make_unique<SafetyHubSafeBrowsingResult>(state);
+}
+
+// static
+SafeBrowsingState SafetyHubSafeBrowsingResult::GetState(
+    const PrefService* pref_service) {
   if (safe_browsing::IsEnhancedProtectionEnabled(*pref_service)) {
-    return std::make_unique<SafetyHubSafeBrowsingResult>(
-        SafeBrowsingState::kEnabledEnhanced);
+    return SafeBrowsingState::kEnabledEnhanced;
   }
   if (safe_browsing::IsSafeBrowsingEnabled(*pref_service)) {
-    return std::make_unique<SafetyHubSafeBrowsingResult>(
-        SafeBrowsingState::kEnabledStandard);
+    return SafeBrowsingState::kEnabledStandard;
   }
   if (safe_browsing::IsSafeBrowsingPolicyManaged(*pref_service)) {
-    return std::make_unique<SafetyHubSafeBrowsingResult>(
-        SafeBrowsingState::kDisabledByAdmin);
+    return SafeBrowsingState::kDisabledByAdmin;
   }
   if (safe_browsing::IsSafeBrowsingExtensionControlled(*pref_service)) {
-    return std::make_unique<SafetyHubSafeBrowsingResult>(
-        SafeBrowsingState::kDisabledByExtension);
+    return SafeBrowsingState::kDisabledByExtension;
   }
-  return std::make_unique<SafetyHubSafeBrowsingResult>(
-      SafeBrowsingState::kDisabledByUser);
+  return SafeBrowsingState::kDisabledByUser;
 }
 
-SafetyHubSafeBrowsingResult::SafetyHubSafeBrowsingResult(
-    const base::Value::Dict& dict) {
-  status_ = static_cast<SafeBrowsingState>(
-      dict.FindInt(safety_hub::kSafetyHubSafeBrowsingStatusKey).value());
+#if !BUILDFLAG(IS_ANDROID)
+base::DictValue SafetyHubSafeBrowsingResult::GetSafeBrowsingCardData(
+    const PrefService* pref_service) {
+  base::DictValue sb_card_info;
+  SafeBrowsingState state = SafetyHubSafeBrowsingResult::GetState(pref_service);
+  switch (state) {
+    case SafeBrowsingState::kEnabledEnhanced:
+      sb_card_info =
+          CardDataToValue(IDS_SETTINGS_SAFETY_HUB_SB_ON_ENHANCED_HEADER,
+                          IDS_SETTINGS_SAFETY_HUB_SB_ON_ENHANCED_SUBHEADER,
+                          safety_hub::SafetyHubCardState::kSafe);
+      break;
+    case SafeBrowsingState::kEnabledStandard:
+      sb_card_info =
+          CardDataToValue(IDS_SETTINGS_SAFETY_HUB_SB_ON_STANDARD_HEADER,
+                          IDS_SETTINGS_SAFETY_HUB_SB_ON_STANDARD_SUBHEADER,
+                          safety_hub::SafetyHubCardState::kSafe);
+      break;
+    case SafeBrowsingState::kDisabledByAdmin:
+      sb_card_info =
+          CardDataToValue(IDS_SETTINGS_SAFETY_HUB_SB_OFF_HEADER,
+                          IDS_SETTINGS_SAFETY_HUB_SB_OFF_MANAGED_SUBHEADER,
+                          safety_hub::SafetyHubCardState::kInfo);
+      break;
+    case SafeBrowsingState::kDisabledByExtension:
+      sb_card_info =
+          CardDataToValue(IDS_SETTINGS_SAFETY_HUB_SB_OFF_HEADER,
+                          IDS_SETTINGS_SAFETY_HUB_SB_OFF_EXTENSION_SUBHEADER,
+                          safety_hub::SafetyHubCardState::kInfo);
+      break;
+    default:
+      sb_card_info =
+          CardDataToValue(IDS_SETTINGS_SAFETY_HUB_SB_OFF_HEADER,
+                          IDS_SETTINGS_SAFETY_HUB_SB_OFF_USER_SUBHEADER,
+                          safety_hub::SafetyHubCardState::kWarning);
+  }
+  return sb_card_info;
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
-std::unique_ptr<SafetyHubService::Result> SafetyHubSafeBrowsingResult::Clone()
-    const {
+std::unique_ptr<SafetyHubResult> SafetyHubSafeBrowsingResult::Clone() const {
   return std::make_unique<SafetyHubSafeBrowsingResult>(*this);
 }
 
-base::Value::Dict SafetyHubSafeBrowsingResult::ToDictValue() const {
-  base::Value::Dict result = BaseToDictValue();
+base::DictValue SafetyHubSafeBrowsingResult::ToDictValue() const {
+  base::DictValue result = BaseToDictValue();
   result.Set(safety_hub::kSafetyHubSafeBrowsingStatusKey,
              static_cast<int>(status_));
   return result;
@@ -71,7 +125,7 @@ bool SafetyHubSafeBrowsingResult::IsTriggerForMenuNotification() const {
 }
 
 bool SafetyHubSafeBrowsingResult::WarrantsNewMenuNotification(
-    const Result& previousResult) const {
+    const base::DictValue& previous_result_dict) const {
   return true;
 }
 

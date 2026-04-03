@@ -4,16 +4,17 @@
 
 #include "net/ssl/ssl_platform_key_util.h"
 
-#include "base/lazy_instance.h"
+#include <string_view>
+
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
+#include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
+#include "crypto/evp.h"
 #include "crypto/openssl_util.h"
 #include "net/cert/asn1_util.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util.h"
-#include "third_party/boringssl/src/include/openssl/bytestring.h"
 #include "third_party/boringssl/src/include/openssl/ec_key.h"
 #include "third_party/boringssl/src/include/openssl/evp.h"
 #include "third_party/boringssl/src/include/openssl/rsa.h"
@@ -43,20 +44,18 @@ class SSLPlatformKeyTaskRunner {
   base::Thread worker_thread_;
 };
 
-base::LazyInstance<SSLPlatformKeyTaskRunner>::Leaky g_platform_key_task_runner =
-    LAZY_INSTANCE_INITIALIZER;
-
 }  // namespace
 
 scoped_refptr<base::SingleThreadTaskRunner> GetSSLPlatformKeyTaskRunner() {
-  return g_platform_key_task_runner.Get().task_runner();
+  static base::NoDestructor<SSLPlatformKeyTaskRunner> instance;
+  return instance->task_runner();
 }
 
 bssl::UniquePtr<EVP_PKEY> GetClientCertPublicKey(
     const X509Certificate* certificate) {
   crypto::OpenSSLErrStackTracer tracker(FROM_HERE);
 
-  base::StringPiece spki;
+  std::string_view spki;
   if (!asn1::ExtractSPKIFromDERCert(
           x509_util::CryptoBufferAsStringPiece(certificate->cert_buffer()),
           &spki)) {
@@ -64,21 +63,26 @@ bssl::UniquePtr<EVP_PKEY> GetClientCertPublicKey(
     return nullptr;
   }
 
-  CBS cbs;
-  CBS_init(&cbs, reinterpret_cast<const uint8_t*>(spki.data()), spki.size());
-  bssl::UniquePtr<EVP_PKEY> key(EVP_parse_public_key(&cbs));
-  if (!key || CBS_len(&cbs) != 0) {
-    LOG(ERROR) << "Could not parse public key.";
-    return nullptr;
-  }
-
-  return key;
+  return crypto::evp::PublicKeyFromBytes(base::as_byte_span(spki));
 }
 
 bool GetClientCertInfo(const X509Certificate* certificate,
                        int* out_type,
                        size_t* out_max_length) {
   bssl::UniquePtr<EVP_PKEY> key = GetClientCertPublicKey(certificate);
+  if (!key) {
+    return false;
+  }
+
+  *out_type = EVP_PKEY_id(key.get());
+  *out_max_length = EVP_PKEY_size(key.get());
+  return true;
+}
+
+bool GetPublicKeyInfo(base::span<const uint8_t> spki,
+                      int* out_type,
+                      size_t* out_max_length) {
+  auto key = crypto::evp::PublicKeyFromBytes(spki);
   if (!key) {
     return false;
   }

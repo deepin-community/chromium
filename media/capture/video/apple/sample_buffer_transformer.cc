@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
@@ -57,13 +58,13 @@ struct I420Planes {
 
 size_t GetContiguousI420BufferSize(size_t width, size_t height) {
   gfx::Size dimensions(width, height);
-  return VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::kYPlane,
+  return VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::Plane::kY,
                                dimensions)
              .GetArea() +
-         VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::kUPlane,
+         VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::Plane::kU,
                                dimensions)
              .GetArea() +
-         VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::kVPlane,
+         VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::Plane::kV,
                                dimensions)
              .GetArea();
 }
@@ -72,18 +73,20 @@ I420Planes GetI420PlanesFromContiguousBuffer(uint8_t* data_base_address,
                                              size_t width,
                                              size_t height) {
   gfx::Size dimensions(width, height);
-  gfx::Size y_plane_size =
-      VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::kYPlane, dimensions);
-  gfx::Size u_plane_size =
-      VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::kUPlane, dimensions);
-  gfx::Size v_plane_size =
-      VideoFrame::PlaneSize(PIXEL_FORMAT_I420, VideoFrame::kUPlane, dimensions);
+  gfx::Size y_plane_size = VideoFrame::PlaneSize(
+      PIXEL_FORMAT_I420, VideoFrame::Plane::kY, dimensions);
+  gfx::Size u_plane_size = VideoFrame::PlaneSize(
+      PIXEL_FORMAT_I420, VideoFrame::Plane::kU, dimensions);
+  gfx::Size v_plane_size = VideoFrame::PlaneSize(
+      PIXEL_FORMAT_I420, VideoFrame::Plane::kU, dimensions);
   I420Planes i420_planes;
   i420_planes.width = width;
   i420_planes.height = height;
   i420_planes.y_plane_data = data_base_address;
-  i420_planes.u_plane_data = i420_planes.y_plane_data + y_plane_size.GetArea();
-  i420_planes.v_plane_data = i420_planes.u_plane_data + u_plane_size.GetArea();
+  i420_planes.u_plane_data =
+      UNSAFE_TODO(i420_planes.y_plane_data + y_plane_size.GetArea());
+  i420_planes.v_plane_data =
+      UNSAFE_TODO(i420_planes.u_plane_data + u_plane_size.GetArea());
   i420_planes.y_plane_stride = y_plane_size.width();
   i420_planes.u_plane_stride = u_plane_size.width();
   i420_planes.v_plane_stride = v_plane_size.width();
@@ -149,10 +152,10 @@ void CopyNV12(const uint8_t* src_y,
 
 size_t GetContiguousNV12BufferSize(size_t width, size_t height) {
   gfx::Size dimensions(width, height);
-  return VideoFrame::PlaneSize(PIXEL_FORMAT_NV12, VideoFrame::kYPlane,
+  return VideoFrame::PlaneSize(PIXEL_FORMAT_NV12, VideoFrame::Plane::kY,
                                dimensions)
              .GetArea() +
-         VideoFrame::PlaneSize(PIXEL_FORMAT_NV12, VideoFrame::kUVPlane,
+         VideoFrame::PlaneSize(PIXEL_FORMAT_NV12, VideoFrame::Plane::kUV,
                                dimensions)
              .GetArea();
 }
@@ -161,15 +164,16 @@ NV12Planes GetNV12PlanesFromContiguousBuffer(uint8_t* data_base_address,
                                              size_t width,
                                              size_t height) {
   gfx::Size dimensions(width, height);
-  gfx::Size y_plane_size =
-      VideoFrame::PlaneSize(PIXEL_FORMAT_NV12, VideoFrame::kYPlane, dimensions);
+  gfx::Size y_plane_size = VideoFrame::PlaneSize(
+      PIXEL_FORMAT_NV12, VideoFrame::Plane::kY, dimensions);
   gfx::Size uv_plane_size = VideoFrame::PlaneSize(
-      PIXEL_FORMAT_NV12, VideoFrame::kUVPlane, dimensions);
+      PIXEL_FORMAT_NV12, VideoFrame::Plane::kUV, dimensions);
   NV12Planes nv12_planes;
   nv12_planes.width = width;
   nv12_planes.height = height;
   nv12_planes.y_plane_data = data_base_address;
-  nv12_planes.uv_plane_data = nv12_planes.y_plane_data + y_plane_size.GetArea();
+  nv12_planes.uv_plane_data =
+      UNSAFE_TODO(nv12_planes.y_plane_data + y_plane_size.GetArea());
   nv12_planes.y_plane_stride = y_plane_size.width();
   nv12_planes.uv_plane_stride = uv_plane_size.width();
   return nv12_planes;
@@ -442,8 +446,7 @@ const SampleBufferTransformer::Transformer
 SampleBufferTransformer::Transformer
 SampleBufferTransformer::GetBestTransformerForNv12Output(
     CMSampleBufferRef sample_buffer) {
-  if (CVPixelBufferRef pixel_buffer =
-          CMSampleBufferGetImageBuffer(sample_buffer)) {
+  if (CMSampleBufferGetImageBuffer(sample_buffer)) {
     return kBestTransformerForPixelBufferToNv12Output;
   }
   // When we don't have a pixel buffer (e.g. it's MJPEG or we get a SW-backed

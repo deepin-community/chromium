@@ -14,7 +14,12 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/c/experimental/ops/gen/cpp/renderers/include_renderer.h"
 
-#include "tensorflow/core/lib/io/path.h"
+#include <string>
+
+#include "tensorflow/c/experimental/ops/gen/cpp/renderers/renderer.h"
+#include "tensorflow/c/experimental/ops/gen/cpp/renderers/renderer_context.h"
+#include "tensorflow/core/platform/path.h"
+#include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
 namespace generator {
@@ -27,13 +32,13 @@ void IncludeRenderer::SelfHeader() {
   BlankLine();
 }
 
-string IncludeRenderer::SelfHeaderPath() const {
+std::string IncludeRenderer::SelfHeaderPath() const {
   return io::JoinPath(context_.path_config.tf_root_dir,
                       context_.path_config.tf_output_dir,
                       context_.cpp_config.unit + "_ops.h");
 }
 
-void IncludeRenderer::Include(const string &tf_file_path) {
+void IncludeRenderer::Include(const std::string& tf_file_path) {
   CodeLine("#include \"$0\"",
            io::JoinPath(context_.path_config.tf_prefix_dir, tf_file_path));
 }

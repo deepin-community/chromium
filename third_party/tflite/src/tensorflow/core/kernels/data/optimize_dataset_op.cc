@@ -57,7 +57,7 @@ void MakeDatasetHelper(OpKernelContext* ctx,
   // The vector stores the graduated experiment names which will be turned on
   // for all input pipelines.
   // clang-format off
-  std::vector<string> graduated_experiments = {
+  std::vector<std::string> graduated_experiments = {
     "disable_intra_op_parallelism",
     "use_private_thread_pool"
   };
@@ -83,10 +83,10 @@ void MakeDatasetHelper(OpKernelContext* ctx,
   };
 
   core::RefCountPtr<DatasetBase> rewritten;
-  Status s = RewriteDataset(ctx, input, std::move(config_factory),
-                            /*record_fingerprint=*/false, &rewritten);
+  absl::Status s = RewriteDataset(ctx, input, std::move(config_factory),
+                                  /*record_fingerprint=*/false, &rewritten);
   *output = rewritten.release();
-  if (errors::IsDeadlineExceeded(s)) {
+  if (absl::IsDeadlineExceeded(s)) {
     // Ignore DeadlineExceeded as it implies that the attempted rewrite took too
     // long which should not prevent further computation.
     LOG(WARNING) << s.ToString();

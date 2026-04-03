@@ -25,7 +25,8 @@ void AddMaterialTabStripColorMixer(ui::ColorProvider* provider,
     return;
   }
 
-  // TODO(crbug.com/1399942): Validate final mappings for ChromeRefresh23 color.
+  // TODO(crbug.com/40883407): Validate final mappings for ChromeRefresh23
+  // color.
   ui::ColorMixer& mixer = provider->AddMixer();
   mixer[kColorTabBackgroundActiveFrameActive] = {ui::kColorSysBase};
   mixer[kColorTabBackgroundActiveFrameInactive] = {
@@ -36,6 +37,7 @@ void AddMaterialTabStripColorMixer(ui::ColorProvider* provider,
       ui::kColorSysHeaderInactive};
   mixer[kColorTabBackgroundInactiveHoverFrameActive] = {
       ui::kColorSysStateHeaderHover};
+  mixer[kColorTabStripComboButtonSeparator] = {ui::kColorSysDivider};
   mixer[kColorTabStripControlButtonInkDrop] = {ui::kColorSysStateHeaderHover};
   mixer[kColorTabStripControlButtonInkDropRipple] = {
       ui::kColorSysStateRippleNeutralOnSubtle};
@@ -55,8 +57,10 @@ void AddMaterialTabStripColorMixer(ui::ColorProvider* provider,
   mixer[kColorTabBackgroundSelectedHoverFrameInactive] = {
       ui::GetResultingPaintColor(ui::kColorSysStateHoverDimBlendProtection,
                                  kColorTabBackgroundSelectedFrameInactive)};
-  mixer[kColorTabDiscardRingFrameActive] = {ui::kColorSysOutline};
+#if !BUILDFLAG(IS_ANDROID)
+  mixer[kColorTabDiscardRingFrameActive] = {ui::kColorSysStateInactiveRing};
   mixer[kColorTabDiscardRingFrameInactive] = {kColorTabDiscardRingFrameActive};
+#endif
   mixer[kColorTabForegroundActiveFrameActive] = {ui::kColorSysOnSurface};
   mixer[kColorTabForegroundActiveFrameInactive] = {
       kColorTabForegroundActiveFrameActive};

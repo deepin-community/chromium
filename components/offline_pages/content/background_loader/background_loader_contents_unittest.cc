@@ -11,7 +11,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/window_container_type.mojom-shared.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
 #include "url/gurl.h"
@@ -65,7 +64,7 @@ BackgroundLoaderContentsTest::BackgroundLoaderContentsTest()
       waiter_(base::WaitableEvent::ResetPolicy::MANUAL,
               base::WaitableEvent::InitialState::NOT_SIGNALED) {}
 
-BackgroundLoaderContentsTest::~BackgroundLoaderContentsTest() {}
+BackgroundLoaderContentsTest::~BackgroundLoaderContentsTest() = default;
 
 void BackgroundLoaderContentsTest::SetUp() {
   contents_.reset(new BackgroundLoaderContents());
@@ -107,10 +106,6 @@ void BackgroundLoaderContentsTest::MediaAccessCallback(
   waiter_.Signal();
 }
 
-TEST_F(BackgroundLoaderContentsTest, NotVisible) {
-  ASSERT_TRUE(contents()->IsNeverComposited(nullptr));
-}
-
 TEST_F(BackgroundLoaderContentsTest, SuppressDialogs) {
   ASSERT_TRUE(contents()->ShouldSuppressDialogs(nullptr));
 }
@@ -142,7 +137,7 @@ TEST_F(BackgroundLoaderContentsTest, CanDownload_DelegateCalledWhenSet) {
 
 TEST_F(BackgroundLoaderContentsTest, ShouldNotCreateWebContents) {
   ASSERT_TRUE(contents()->IsWebContentsCreationOverridden(
-      nullptr /* source_site_instance */,
+      nullptr /* opener */, nullptr /* source_site_instance */,
       content::mojom::WindowContainerType::NORMAL /* window_container_type */,
       GURL() /* opener_url */, "foo" /* frame_name */,
       GURL() /* target_url */));
@@ -170,7 +165,8 @@ TEST_F(BackgroundLoaderContentsTest, DoesNotGiveMediaAccessPermission) {
       blink::mojom::MediaStreamType::GUM_TAB_AUDIO_CAPTURE /* audio_type */,
       blink::mojom::MediaStreamType::GUM_TAB_VIDEO_CAPTURE /* video_type */,
       false /* disable_local_echo */,
-      false /* request_pan_tilt_zoom_permission */);
+      false /* request_pan_tilt_zoom_permission */,
+      false /* captured_surface_control_active */);
   contents()->RequestMediaAccessPermission(
       nullptr /* contents */, request /* request */,
       base::BindRepeating(&BackgroundLoaderContentsTest::MediaAccessCallback,

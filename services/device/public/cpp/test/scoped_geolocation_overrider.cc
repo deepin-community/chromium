@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "services/device/public/cpp/test/scoped_geolocation_overrider.h"
+
 #include <set>
 #include <vector>
 
@@ -13,9 +15,10 @@
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "services/device/device_service.h"
 #include "services/device/public/cpp/geolocation/geoposition.h"
-#include "services/device/public/cpp/test/scoped_geolocation_overrider.h"
 #include "services/device/public/mojom/geolocation.mojom.h"
+#include "services/device/public/mojom/geolocation_client_id.mojom.h"
 #include "services/device/public/mojom/geolocation_context.mojom.h"
+#include "services/device/public/mojom/geoposition.mojom-forward.h"
 #include "url/origin.h"
 
 namespace device {
@@ -26,11 +29,13 @@ namespace device {
 class ScopedGeolocationOverrider::FakeGeolocationContext
     : public mojom::GeolocationContext {
  public:
-  explicit FakeGeolocationContext(mojom::GeopositionResultPtr result);
+  explicit FakeGeolocationContext(
+      mojom::GeopositionResultPtr result,
+      mojom::GeopositionResultPtr high_accuracy_result);
   ~FakeGeolocationContext() override;
 
   void UpdateLocation(mojom::GeopositionResultPtr result);
-  const mojom::GeopositionResult* GetGeoposition() const;
+  const mojom::GeopositionResult* GetGeoposition(bool high_accuracy_hint) const;
 
   void Pause();
   void Resume();
@@ -42,11 +47,17 @@ class ScopedGeolocationOverrider::FakeGeolocationContext
   void OnDisconnect(FakeGeolocation* impl);
 
   // mojom::GeolocationContext implementation:
+  // The `has_precise_permission` parameter is ignored as approximate │
+  // geolocation is not yet supported by this fake test class.
   void BindGeolocation(mojo::PendingReceiver<mojom::Geolocation> receiver,
-                       const GURL& requesting_url) override;
-  void OnPermissionRevoked(const url::Origin& origin) override;
-
+                       const GURL& requesting_url,
+                       mojom::GeolocationClientId client_id,
+                       bool has_precise_permission) override;
+  void OnPermissionUpdated(
+      const url::Origin& origin,
+      mojom::GeolocationPermissionLevel permission_level) override;
   void SetOverride(mojom::GeopositionResultPtr result) override;
+  void SetHighAccuracyOverride(mojom::GeopositionResultPtr result);
   void ClearOverride() override;
 
   bool is_paused() const { return is_paused_; }
@@ -59,6 +70,9 @@ class ScopedGeolocationOverrider::FakeGeolocationContext
   // |override_result_| enables overriding the override set by this class, as
   // required by the mojom::GeolocationContext interface.
   mojom::GeopositionResultPtr override_result_;
+  // Optionally allows to set a different override value to be returned if
+  // enableHighAccuracy=true.
+  mojom::GeopositionResultPtr high_accuracy_override_result_;
   std::set<std::unique_ptr<FakeGeolocation>, base::UniquePtrComparator> impls_;
   mojo::ReceiverSet<mojom::GeolocationContext> context_receivers_;
   bool is_paused_ = false;
@@ -80,7 +94,7 @@ class ScopedGeolocationOverrider::FakeGeolocation : public mojom::Geolocation {
 
   // mojom::Geolocation implementation:
   void QueryNextPosition(QueryNextPositionCallback callback) override;
-  void SetHighAccuracy(bool high_accuracy) override;
+  void SetHighAccuracyHint(bool high_accuracy) override;
   const GURL& url() { return url_; }
 
  private:
@@ -89,13 +103,15 @@ class ScopedGeolocationOverrider::FakeGeolocation : public mojom::Geolocation {
   const GURL url_;
   raw_ptr<FakeGeolocationContext> context_;
   bool needs_update_ = true;
+  bool high_accuracy_hint_ = false;
   QueryNextPositionCallback position_callback_;
   mojo::Receiver<mojom::Geolocation> receiver_{this};
 };
 
 ScopedGeolocationOverrider::ScopedGeolocationOverrider(
-    mojom::GeopositionResultPtr position) {
-  OverrideGeolocation(std::move(position));
+    mojom::GeopositionResultPtr position,
+    mojom::GeopositionResultPtr high_accuracy_position) {
+  OverrideGeolocation(std::move(position), std::move(high_accuracy_position));
 }
 
 ScopedGeolocationOverrider::ScopedGeolocationOverrider(double latitude,
@@ -107,7 +123,7 @@ ScopedGeolocationOverrider::ScopedGeolocationOverrider(double latitude,
   position->accuracy = 0.;
   position->timestamp = base::Time::Now();
   OverrideGeolocation(
-      mojom::GeopositionResult::NewPosition(std::move(position)));
+      mojom::GeopositionResult::NewPosition(std::move(position)), nullptr);
 }
 
 ScopedGeolocationOverrider::~ScopedGeolocationOverrider() {
@@ -116,9 +132,10 @@ ScopedGeolocationOverrider::~ScopedGeolocationOverrider() {
 }
 
 void ScopedGeolocationOverrider::OverrideGeolocation(
-    mojom::GeopositionResultPtr result) {
-  geolocation_context_ =
-      std::make_unique<FakeGeolocationContext>(std::move(result));
+    mojom::GeopositionResultPtr result,
+    mojom::GeopositionResultPtr high_accuracy_result) {
+  geolocation_context_ = std::make_unique<FakeGeolocationContext>(
+      std::move(result), std::move(high_accuracy_result));
   DeviceService::OverrideGeolocationContextBinderForTesting(
       base::BindRepeating(&FakeGeolocationContext::BindForOverrideService,
                           base::Unretained(geolocation_context_.get())));
@@ -158,8 +175,10 @@ void ScopedGeolocationOverrider::SetGeolocationCloseCallback(
 }
 
 ScopedGeolocationOverrider::FakeGeolocationContext::FakeGeolocationContext(
-    mojom::GeopositionResultPtr result)
-    : result_(std::move(result)) {}
+    mojom::GeopositionResultPtr result,
+    mojom::GeopositionResultPtr high_accuracy_result)
+    : result_(std::move(result)),
+      high_accuracy_override_result_(std::move(high_accuracy_result)) {}
 
 ScopedGeolocationOverrider::FakeGeolocationContext::~FakeGeolocationContext() {}
 
@@ -188,7 +207,11 @@ void ScopedGeolocationOverrider::FakeGeolocationContext::OnDisconnect(
 }
 
 const mojom::GeopositionResult*
-ScopedGeolocationOverrider::FakeGeolocationContext::GetGeoposition() const {
+ScopedGeolocationOverrider::FakeGeolocationContext::GetGeoposition(
+    bool high_accuracy_hint) const {
+  if (high_accuracy_hint && high_accuracy_override_result_) {
+    return high_accuracy_override_result_.get();
+  }
   if (override_result_) {
     return override_result_.get();
   }
@@ -203,21 +226,32 @@ void ScopedGeolocationOverrider::FakeGeolocationContext::BindForOverrideService(
 
 void ScopedGeolocationOverrider::FakeGeolocationContext::BindGeolocation(
     mojo::PendingReceiver<mojom::Geolocation> receiver,
-    const GURL& requesting_origin) {
+    const GURL& requesting_url,
+    mojom::GeolocationClientId client_id,
+    bool has_precise_permission) {
+  // The `has_precise_permission` parameter is ignored as approximate
+  // geolocation is not yet supported by this fake test class.
   impls_.insert(std::make_unique<FakeGeolocation>(std::move(receiver),
-                                                  requesting_origin, this));
+                                                  requesting_url, this));
 }
 
-void ScopedGeolocationOverrider::FakeGeolocationContext::OnPermissionRevoked(
-    const url::Origin& origin) {
-  std::erase_if(impls_, [&origin](const auto& impl) {
+void ScopedGeolocationOverrider::FakeGeolocationContext::OnPermissionUpdated(
+    const url::Origin& origin,
+    mojom::GeolocationPermissionLevel permission_level) {
+  // This function currently only handles the kDenied permission level. It
+  // should be updated to handle other permission levels if the fake needs to
+  // support them.
+  std::erase_if(impls_, [&origin, &permission_level](const auto& impl) {
     if (!origin.IsSameOriginWith(impl->url())) {
       return false;
     }
-    // Invoke the position callback with kPermissionDenied before removing.
-    impl->OnPermissionRevoked();
-    return true;
+    if (permission_level == mojom::GeolocationPermissionLevel::kDenied) {
+      impl->OnPermissionRevoked();
+      return true;
+    }
+    return false;
   });
+  return;
 }
 
 void ScopedGeolocationOverrider::FakeGeolocationContext::SetOverride(
@@ -230,6 +264,11 @@ void ScopedGeolocationOverrider::FakeGeolocationContext::SetOverride(
   for (auto& impl : impls_) {
     impl->UpdateLocation();
   }
+}
+
+void ScopedGeolocationOverrider::FakeGeolocationContext::
+    SetHighAccuracyOverride(mojom::GeopositionResultPtr result) {
+  high_accuracy_override_result_ = std::move(result);
 }
 
 void ScopedGeolocationOverrider::FakeGeolocationContext::ClearOverride() {
@@ -283,7 +322,8 @@ void ScopedGeolocationOverrider::FakeGeolocation::
   if (position_callback_.is_null())
     return;
 
-  const mojom::GeopositionResult* result = context_->GetGeoposition();
+  const mojom::GeopositionResult* result =
+      context_->GetGeoposition(high_accuracy_hint_);
   if (!result) {
     return;
   }
@@ -316,7 +356,9 @@ void ScopedGeolocationOverrider::FakeGeolocation::QueryNextPosition(
   RunPositionCallbackIfNeeded();
 }
 
-void ScopedGeolocationOverrider::FakeGeolocation::SetHighAccuracy(
-    bool high_accuracy) {}
+void ScopedGeolocationOverrider::FakeGeolocation::SetHighAccuracyHint(
+    bool high_accuracy) {
+  high_accuracy_hint_ = high_accuracy;
+}
 
 }  // namespace device

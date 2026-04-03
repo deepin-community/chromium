@@ -7,6 +7,7 @@
 #include <array>
 #include <cstring>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
@@ -70,35 +71,39 @@ int64_t CalculateNanojoulesDeltaFromSamples(
     const EnergyMetricsProvider::EnergyMetrics& new_sample,
     const EnergyMetricsProvider::EnergyMetrics& old_sample,
     const char* metric) {
-  if (std::strcmp(metric, kPackagePowerTraceCounterName) == 0) {
+  if (UNSAFE_TODO(std::strcmp(metric, kPackagePowerTraceCounterName)) == 0) {
     return static_cast<int64_t>(new_sample.package_nanojoules -
                                 old_sample.package_nanojoules);
-  } else if (std::strcmp(metric, kCpuPowerTraceCounterName) == 0) {
+  } else if (UNSAFE_TODO(std::strcmp(metric, kCpuPowerTraceCounterName)) == 0) {
     return static_cast<int64_t>(new_sample.cpu_nanojoules -
                                 old_sample.cpu_nanojoules);
-  } else if (std::strcmp(metric, kIntegratedGpuPowerTraceCounterName) == 0) {
+  } else if (UNSAFE_TODO(std::strcmp(
+                 metric, kIntegratedGpuPowerTraceCounterName)) == 0) {
     return static_cast<int64_t>(new_sample.gpu_nanojoules -
                                 old_sample.gpu_nanojoules);
-  } else if (std::strcmp(metric, kDramPowerTraceCounterName) == 0) {
+  } else if (UNSAFE_TODO(std::strcmp(metric, kDramPowerTraceCounterName)) ==
+             0) {
     return static_cast<int64_t>(new_sample.dram_nanojoules -
                                 old_sample.dram_nanojoules);
-  } else if (std::strcmp(metric, kPsysPowerTraceCounterName) == 0) {
+  } else if (UNSAFE_TODO(std::strcmp(metric, kPsysPowerTraceCounterName)) ==
+             0) {
     return static_cast<int64_t>(new_sample.psys_nanojoules -
                                 old_sample.psys_nanojoules);
-  } else if (std::strcmp(metric, kVddcrVddTraceCounterName) == 0) {
+  } else if (UNSAFE_TODO(std::strcmp(metric, kVddcrVddTraceCounterName)) == 0) {
     return static_cast<int64_t>(new_sample.vdd_nanojoules -
                                 old_sample.vdd_nanojoules);
-  } else if (std::strcmp(metric, kVddcrSocTraceCounterName) == 0) {
+  } else if (UNSAFE_TODO(std::strcmp(metric, kVddcrSocTraceCounterName)) == 0) {
     return static_cast<int64_t>(new_sample.soc_nanojoules -
                                 old_sample.soc_nanojoules);
-  } else if (std::strcmp(metric, kCurrentSocketTraceCounterName) == 0) {
+  } else if (UNSAFE_TODO(std::strcmp(metric, kCurrentSocketTraceCounterName)) ==
+             0) {
     return static_cast<int64_t>(new_sample.socket_nanojoules -
                                 old_sample.socket_nanojoules);
-  } else if (std::strcmp(metric, kApuPowerTraceCounterName) == 0) {
+  } else if (UNSAFE_TODO(std::strcmp(metric, kApuPowerTraceCounterName)) == 0) {
     return static_cast<int64_t>(new_sample.apu_nanojoules -
                                 old_sample.apu_nanojoules);
   }
-  NOTREACHED_NORETURN() << "Unexpected metric: " << metric;
+  NOTREACHED() << "Unexpected metric: " << metric;
 }
 
 }  // namespace
@@ -122,13 +127,19 @@ bool SystemPowerMonitorDelegate::IsTraceCategoryEnabled() const {
 SystemPowerMonitorHelper::SystemPowerMonitorHelper(
     std::unique_ptr<EnergyMetricsProvider> provider,
     std::unique_ptr<SystemPowerMonitorDelegate> delegate)
-    : provider_(std::move(provider)), delegate_(std::move(delegate)) {}
+    : provider_(std::move(provider)), delegate_(std::move(delegate)) {
+  base::trace_event::TraceSessionObserverList::AddObserver(this);
+}
 
-SystemPowerMonitorHelper::~SystemPowerMonitorHelper() = default;
+SystemPowerMonitorHelper::~SystemPowerMonitorHelper() {
+  base::trace_event::TraceSessionObserverList::RemoveObserver(this);
+}
 
 void SystemPowerMonitorHelper::Start() {
   CHECK(provider_);
-  CHECK(!timer_.IsRunning());
+  if (timer_.IsRunning()) {
+    return;
+  }
   if (!delegate_->IsTraceCategoryEnabled()) {
     return;
   }
@@ -162,6 +173,10 @@ void SystemPowerMonitorHelper::Stop() {
 }
 
 void SystemPowerMonitorHelper::Sample() {
+  if (!delegate_->IsTraceCategoryEnabled()) {
+    Stop();
+    return;
+  }
   // If the provider fails to capture valid metrics after the timer started,
   // we leave the timer running.
   auto sample = provider_->CaptureMetrics();
@@ -186,6 +201,11 @@ void SystemPowerMonitorHelper::Sample() {
   last_timestamp_ = timestamp;
 }
 
+void SystemPowerMonitorHelper::OnStart(
+    const perfetto::DataSourceBase::StartArgs&) {
+  Start();
+}
+
 bool SystemPowerMonitorHelper::IsTimerRunningForTesting() {
   return timer_.IsRunning();
 }
@@ -207,17 +227,8 @@ SystemPowerMonitor::SystemPowerMonitor(
 SystemPowerMonitor::~SystemPowerMonitor() = default;
 
 // static
-SystemPowerMonitor* SystemPowerMonitor::GetInstance() {
+void SystemPowerMonitor::Initialize() {
   static base::NoDestructor<SystemPowerMonitor> instance;
-  return instance.get();
-}
-
-void SystemPowerMonitor::OnTraceLogEnabled() {
-  helper_.AsyncCall(&SystemPowerMonitorHelper::Start);
-}
-
-void SystemPowerMonitor::OnTraceLogDisabled() {
-  helper_.AsyncCall(&SystemPowerMonitorHelper::Stop);
 }
 
 base::SequenceBound<SystemPowerMonitorHelper>*

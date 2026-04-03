@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "base/base64.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -141,7 +142,7 @@ void InfoCardTracker::ResetState(int info_card_type) {
 }
 
 InfoCardTrackingState InfoCardTracker::GetState(int info_card_type) const {
-  const base::Value::Dict& all_states =
+  const base::DictValue& all_states =
       profile_prefs_->GetDict(prefs::kInfoCardStates);
   const std::string* base64_serialized_state =
       all_states.FindString(InfoCardTypeToString(info_card_type));
@@ -158,9 +159,9 @@ void InfoCardTracker::SetState(int info_card_type,
   std::string serialized_state;
   state.SerializeToString(&serialized_state);
 
-  const base::Value::Dict& states =
+  const base::DictValue& states =
       profile_prefs_->GetDict(prefs::kInfoCardStates);
-  base::Value::Dict updated_states = states.Clone();
+  base::DictValue updated_states = states.Clone();
   updated_states.Set(InfoCardTypeToString(info_card_type),
                      base::Base64Encode(serialized_state));
   profile_prefs_->SetDict(prefs::kInfoCardStates, std::move(updated_states));

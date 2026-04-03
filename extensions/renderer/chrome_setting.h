@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "extensions/renderer/bindings/argument_spec.h"
+#include "gin/public/wrappable_pointer_tags.h"
 #include "gin/wrappable.h"
 #include "v8/include/v8-forward.h"
 
@@ -25,8 +26,19 @@ class BindingAccessChecker;
 // The custom implementation of the ChromeSetting type exposed to APIs.
 class ChromeSetting final : public gin::Wrappable<ChromeSetting> {
  public:
+  static constexpr gin::WrapperInfo kWrapperInfo = {{gin::kEmbedderNativeGin},
+                                                    gin::kChromeSetting};
+
   ChromeSetting(const ChromeSetting&) = delete;
+
   ChromeSetting& operator=(const ChromeSetting&) = delete;
+
+  ChromeSetting(APIRequestHandler* request_handler,
+                APIEventHandler* event_handler,
+                const APITypeReferenceMap* type_refs,
+                const BindingAccessChecker* access_checker,
+                const std::string& pref_name,
+                const base::DictValue& argument_spec);
 
   ~ChromeSetting() override;
 
@@ -34,25 +46,20 @@ class ChromeSetting final : public gin::Wrappable<ChromeSetting> {
   static v8::Local<v8::Object> Create(
       v8::Isolate* isolate,
       const std::string& property_name,
-      const base::Value::List* property_values,
+      const base::ListValue* property_values,
       APIRequestHandler* request_handler,
       APIEventHandler* event_handler,
       APITypeReferenceMap* type_refs,
       const BindingAccessChecker* access_checker);
 
-  static gin::WrapperInfo kWrapperInfo;
-
-  gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
-      v8::Isolate* isolate) override;
-  const char* GetTypeName() override;
-
  private:
-  ChromeSetting(APIRequestHandler* request_handler,
-                APIEventHandler* event_handler,
-                const APITypeReferenceMap* type_refs,
-                const BindingAccessChecker* access_checker,
-                const std::string& pref_name,
-                const base::Value::Dict& argument_spec);
+  // gin::Wrappable:
+  gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
+      v8::Isolate* isolate) final;
+
+  const char* GetHumanReadableName() const override;
+
+  const gin::WrapperInfo* wrapper_info() const override;
 
   // JS function handlers:
   void Get(gin::Arguments* arguments);

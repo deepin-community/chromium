@@ -2,10 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "sandbox/win/src/process_mitigations.h"
 
-#include <stddef.h>
 #include <windows.h>
+
+#include <stddef.h>
 #include <wow64apiset.h>
 
 #include <algorithm>
@@ -531,6 +537,14 @@ void ConvertProcessMitigationsToPolicy(MitigationFlags flags,
     }
   }
 
+  // This mitigation is supported on systems with no non-architectural core
+  // sharing and have enabled support for SMT isolation scheduling.
+  if (version >= base::win::Version::WIN11_24H2 &&
+      flags & MITIGATION_RESTRICT_CORE_SHARING) {
+    *policy_value_2 |=
+        PROCESS_CREATION_MITIGATION_POLICY2_RESTRICT_CORE_SHARING_ALWAYS_ON;
+  }
+
   // When done setting policy flags, sanity check supported policies on this
   // machine, and then update |size|.
 
@@ -568,7 +582,8 @@ bool ApplyProcessMitigationsToSuspendedProcess(HANDLE process,
     char* ptr = 0;
     const size_t kMask64k = 0xFFFF;
     // Random range (512k-16.5mb) in 64k steps.
-    auto limit = static_cast<unsigned int>(base::RandInt(512, 512 + 16384 - 1));
+    auto limit =
+        static_cast<unsigned int>(base::RandIntInclusive(512, 512 + 16384 - 1));
     const char* end = ptr + ((limit * 1024) & ~kMask64k);
     while (ptr < end) {
       MEMORY_BASIC_INFORMATION memory_info;

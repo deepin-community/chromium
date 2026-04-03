@@ -13,17 +13,24 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
+#include <string>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/statusor.h"
 #include "tensorflow/compiler/tf2xla/mlir_xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/type_util.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/math.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/math.h"
+#include "xla/hlo/builder/xla_builder.h"
 #include "xla/util.h"
+#include "xla/xla_data.pb.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/util/tensor_format.h"
 
 namespace tensorflow {
@@ -51,7 +58,7 @@ class CollectiveReduceV2Op : public XlaOpKernel {
 
     // Store all traversed collective configurations, and generate channel_id
     // for the collective.
-    StatusOr<int64_t> channel_id =
+    absl::StatusOr<int64_t> channel_id =
         ctx->xla_context()->RecordCollectiveInfo(group_key, group_size);
     OP_REQUIRES_OK(ctx, channel_id.status());
 
@@ -88,9 +95,9 @@ class CollectiveReduceV2Op : public XlaOpKernel {
 
  private:
   DataType dtype_ = DT_INVALID;
-  string merge_op_name_;
-  string final_op_name_;
-  string communication_hint_;
+  std::string merge_op_name_;
+  std::string final_op_name_;
+  std::string communication_hint_;
 
   CollectiveReduceV2Op(const CollectiveReduceV2Op&) = delete;
   void operator=(const CollectiveReduceV2Op&) = delete;

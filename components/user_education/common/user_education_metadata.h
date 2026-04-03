@@ -10,6 +10,7 @@
 
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
 
 namespace user_education {
 
@@ -17,7 +18,7 @@ namespace user_education {
 // Badge, etc.).
 //
 // Metadata will be shown and used on the tester page
-// (chrome://internals/user-education), and also provides information as to when
+// (chrome://user-education-internals), and also provides information as to when
 // the journey was added to Chrome and by whom.
 struct Metadata {
   // The platform the experience can be shown on.
@@ -30,16 +31,16 @@ struct Metadata {
     kWindows = 0,
     kMac = 1,
     kLinux = 2,
-    kChromeOSAsh = 3,
-    kChromeOSLacros = 9,
+    kChromeOS = 3,
   };
 
   // All desktop platforms.
   static constexpr std::initializer_list<Platforms> kAllDesktopPlatforms{
       Platforms::kWindows, Platforms::kMac, Platforms::kLinux,
-      Platforms::kChromeOSAsh, Platforms::kChromeOSLacros};
+      Platforms::kChromeOS};
 
-  using FeatureSet = base::flat_set<const base::Feature*>;
+  using FeatureSet =
+      base::flat_set<raw_ptr<const base::Feature, CtnExperimental>>;
   using PlatformSet = base::flat_set<Platforms>;
 
   Metadata(int launch_milestone,

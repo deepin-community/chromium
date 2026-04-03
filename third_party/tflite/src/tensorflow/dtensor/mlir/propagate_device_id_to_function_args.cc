@@ -15,26 +15,26 @@ limitations under the License.
 
 #include <memory>
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/SymbolTable.h"  // from @llvm-project
 #include "mlir/IR/Visitors.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
-#include "mlir/Transforms/Passes.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops_n_z.h"
-#include "tensorflow/compiler/mlir/tensorflow/utils/attribute_utils.h"
 #include "tensorflow/dtensor/mlir/device_utils.h"
-#include "tensorflow/dtensor/mlir/dtensor_mlir_passes.h"
 #include "tensorflow/dtensor/mlir/op_utils.h"
-#include "tensorflow/dtensor/mlir/spmd_expander_common.h"
 
 namespace tensorflow {
 namespace dtensor {
@@ -69,7 +69,7 @@ llvm::SmallVector<FunctionToChangeInfo, 4> FindFunctionsToRewrite(
       symbol = call_op.getF();
     } else {
       auto symbol_ref = llvm::dyn_cast<mlir::TF::PartitionedCallOp>(op).getF();
-      if (!symbol_ref.isa<mlir::FlatSymbolRefAttr>()) return;
+      if (!mlir::isa<mlir::FlatSymbolRefAttr>(symbol_ref)) return;
       symbol = symbol_ref.getRootReference().getValue();
     }
 
@@ -125,17 +125,21 @@ mlir::LogicalResult PrependDeviceIdToCallsites(mlir::OpBuilder* builder,
   mlir::Operation* new_call = nullptr;
   if (auto stateful_partitioned_call =
           llvm::dyn_cast<mlir::TF::StatefulPartitionedCallOp>(op)) {
-    new_call = builder->create<mlir::TF::StatefulPartitionedCallOp>(
-        op->getLoc(), op->getResultTypes(), new_operands,
-        stateful_partitioned_call.getF(), stateful_partitioned_call.getConfig(),
+    new_call = mlir::TF::StatefulPartitionedCallOp::create(
+        *builder, op->getLoc(), op->getResultTypes(), new_operands,
+        /*args_attrs=*/nullptr,
+        /*res_attrs=*/nullptr, stateful_partitioned_call.getF(),
+        stateful_partitioned_call.getConfig(),
         stateful_partitioned_call.getConfigProto(),
         stateful_partitioned_call.getExecutorType());
   } else {
     auto partitioned_call = llvm::cast<mlir::TF::PartitionedCallOp>(op);
-    new_call = builder->create<mlir::TF::PartitionedCallOp>(
-        op->getLoc(), op->getResultTypes(), new_operands,
-        partitioned_call.getF(), partitioned_call.getConfig(),
-        partitioned_call.getConfigProto(), partitioned_call.getExecutorType());
+    new_call = mlir::TF::PartitionedCallOp::create(
+        *builder, op->getLoc(), op->getResultTypes(), new_operands,
+        /*args_attrs=*/nullptr,
+        /*res_attrs=*/nullptr, partitioned_call.getF(),
+        partitioned_call.getConfig(), partitioned_call.getConfigProto(),
+        partitioned_call.getExecutorType());
   }
 
   for (auto results : llvm::zip(op->getResults(), new_call->getResults()))

@@ -26,6 +26,8 @@
 #include "ash/system/tray/tray_info_label.h"
 #include "ash/system/tray/tray_popup_utils.h"
 #include "ash/system/tray/tray_utils.h"
+#include "base/check.h"
+#include "base/check_deref.h"
 #include "base/i18n/number_formatting.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/services/network_config/public/cpp/cros_network_config_util.h"
@@ -80,7 +82,6 @@ bool NetworkTypeIsConfigurable(NetworkType type) {
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 ActivationStateType GetNetworkActivationState(
@@ -102,7 +103,6 @@ bool IsCellularNetworkSimLocked(
 
 bool IsCellularNetworkCarrierLocked(
     const NetworkStatePropertiesPtr& network_properties) {
-  CHECK(features::IsCellularCarrierLockEnabled());
   CHECK(
       NetworkTypeMatchesType(network_properties->type, NetworkType::kCellular));
   return network_properties->type_state->get_cellular()->sim_locked &&
@@ -186,7 +186,6 @@ gfx::ImageSkia GetNetworkImageForNetwork(
 
   if (NetworkTypeMatchesType(network_properties->type,
                              NetworkType::kCellular) &&
-      features::IsCellularCarrierLockEnabled() &&
       IsCellularNetworkCarrierLocked(network_properties)) {
     network_image = network_icon::GetImageForCarrierLockedNetwork(
         color_provider, network_icon::ICON_TYPE_LIST);
@@ -231,10 +230,8 @@ gfx::ImageSkia GetNetworkImageForNetwork(
 
 int GetCellularNetworkSubText(
     const NetworkStatePropertiesPtr& network_properties) {
-  if (features::IsCellularCarrierLockEnabled()) {
-    if (IsCellularNetworkCarrierLocked(network_properties)) {
-      return IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CARRIER_LOCKED;
-    }
+  if (IsCellularNetworkCarrierLocked(network_properties)) {
+    return IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CARRIER_LOCKED;
   }
 
   if (IsCellularNetworkUnActivated(network_properties)) {
@@ -290,7 +287,7 @@ void NetworkListNetworkItemView::UpdateViewForNetwork(
   }
 
   if (text_label()) {
-    text_label()->SetEnabledColorId(cros_tokens::kCrosSysOnSurface);
+    text_label()->SetEnabledColor(cros_tokens::kCrosSysOnSurface);
     TypographyProvider::Get()->StyleLabel(TypographyToken::kCrosButton2,
                                           *text_label());
   }
@@ -322,15 +319,15 @@ void NetworkListNetworkItemView::UpdateViewForNetwork(
     network_icon::NetworkIconAnimation::GetInstance()->RemoveObserver(this);
   }
 
-  SetAccessibleName(GenerateAccessibilityLabel(label));
+  GetViewAccessibility().SetName(GenerateAccessibilityLabel(label));
   GetViewAccessibility().SetDescription(GenerateAccessibilityDescription());
 }
 
 void NetworkListNetworkItemView::NetworkIconChanged() {
   DCHECK(views::IsViewClass<views::ImageView>(left_view()));
   static_cast<views::ImageView*>(left_view())
-      ->SetImage(
-          GetNetworkImageForNetwork(GetColorProvider(), network_properties_));
+      ->SetImage(ui::ImageModel::FromImageSkia(
+          GetNetworkImageForNetwork(GetColorProvider(), network_properties_)));
 }
 
 void NetworkListNetworkItemView::OnThemeChanged() {
@@ -350,7 +347,7 @@ void NetworkListNetworkItemView::SetupCellularSubtext() {
   }
 
   SetSubText(l10n_util::GetStringUTF16(cellular_subtext_message_id));
-  sub_text_label()->SetEnabledColorId(cros_tokens::kCrosSysWarning);
+  sub_text_label()->SetEnabledColor(cros_tokens::kCrosSysWarning);
   TypographyProvider::Get()->StyleLabel(TypographyToken::kCrosAnnotation1,
                                         *sub_text_label());
 }
@@ -391,8 +388,10 @@ void NetworkListNetworkItemView::UpdateDisabledTextColor() {
 
 void NetworkListNetworkItemView::AddPowerStatusView() {
   auto image_icon = std::make_unique<views::ImageView>();
-  const SkColor icon_color = AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kIconColorPrimary);
+
+  auto& color_provider = CHECK_DEREF(GetColorProvider());
+  const SkColor icon_color =
+      color_provider.GetColor(cros_tokens::kIconColorPrimary);
   image_icon->SetPreferredSize(gfx::Size(kMenuIconSize, kMenuIconSize));
   image_icon->SetFlipCanvasOnPaintForRTLUI(true);
 
@@ -413,10 +412,8 @@ void NetworkListNetworkItemView::AddPowerStatusView() {
 void NetworkListNetworkItemView::AddPolicyView() {
   std::unique_ptr<views::ImageView> controlled_icon(
       TrayPopupUtils::CreateMainImageView(/*use_wide_layout=*/false));
-  const SkColor icon_color = AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kIconColorPrimary);
-  controlled_icon->SetImage(
-      gfx::CreateVectorIcon(kSystemMenuBusinessIcon, icon_color));
+  controlled_icon->SetImage(ui::ImageModel::FromVectorIcon(
+      kSystemMenuBusinessIcon, cros_tokens::kIconColorPrimary));
   AddRightView(controlled_icon.release());
 }
 
@@ -543,11 +540,9 @@ std::u16string
 NetworkListNetworkItemView::GenerateAccessibilityDescriptionForCellular(
     const std::u16string& connection_status,
     int signal_strength) {
-  if (features::IsCellularCarrierLockEnabled()) {
-    if (IsCellularNetworkCarrierLocked(network_properties())) {
-      return l10n_util::GetStringUTF16(
-          IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CARRIER_LOCKED);
-    }
+  if (IsCellularNetworkCarrierLocked(network_properties())) {
+    return l10n_util::GetStringUTF16(
+        IDS_ASH_STATUS_TRAY_NETWORK_STATUS_CARRIER_LOCKED);
   }
   if (IsCellularNetworkUnActivated(network_properties())) {
     if (Shell::Get()->session_controller()->login_status() ==

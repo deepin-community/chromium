@@ -6,13 +6,13 @@
 
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
+#include "chrome/browser/supervised_user/supervised_user_url_filtering_service_factory.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/supervised_user/core/browser/family_link_user_log_record.h"
-#include "components/supervised_user/core/browser/supervised_user_service.h"
+#include "components/supervised_user/core/browser/supervised_user_log_record.h"
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -24,12 +24,10 @@ FamilyLinkUserMetricsProvider::~FamilyLinkUserMetricsProvider() = default;
 bool FamilyLinkUserMetricsProvider::ProvideHistograms() {
   // This function is called at unpredictable intervals throughout the Chrome
   // session, so guarantee it will never crash.
-  ProfileManager* profile_manager = g_browser_process->profile_manager();
-  std::vector<Profile*> profile_list = profile_manager->GetLoadedProfiles();
-  std::vector<supervised_user::FamilyLinkUserLogRecord> records;
-  for (Profile* profile : profile_list) {
+  std::vector<supervised_user::SupervisedUserLogRecord> records;
+  for (Profile* const profile :
+       g_browser_process->profile_manager()->GetLoadedProfiles()) {
 #if !BUILDFLAG(IS_ANDROID)
-    // TODO(b/274889379): Mock call to GetBrowserCount().
     if (!FamilyLinkUserMetricsProvider::
             skip_active_browser_count_for_unittesting_ &&
         chrome::GetBrowserCount(profile) == 0) {
@@ -38,13 +36,13 @@ bool FamilyLinkUserMetricsProvider::ProvideHistograms() {
       continue;
     }
 #endif
-
-    supervised_user::SupervisedUserService* service =
-        SupervisedUserServiceFactory::GetForProfile(profile);
-
-    records.push_back(supervised_user::FamilyLinkUserLogRecord::Create(
-        IdentityManagerFactory::GetForProfile(profile),
-        service ? service->GetURLFilter() : nullptr));
+    records.push_back(supervised_user::SupervisedUserLogRecord::Create(
+        IdentityManagerFactory::GetForProfile(profile), *profile->GetPrefs(),
+        *HostContentSettingsMapFactory::GetForProfile(profile),
+        supervised_user::SupervisedUserUrlFilteringServiceFactory::
+            GetForProfile(profile),
+        g_browser_process->device_parental_controls()));
   }
-  return supervised_user::EmitLogRecordHistograms(records);
+  return supervised_user::SupervisedUserLogRecord::EmitHistograms(
+      records, g_browser_process->device_parental_controls());
 }

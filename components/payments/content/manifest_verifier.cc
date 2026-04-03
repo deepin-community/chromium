@@ -6,17 +6,16 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
-#include "components/payments/content/payment_manifest_web_data_service.h"
 #include "components/payments/content/utility/payment_manifest_parser.h"
+#include "components/payments/content/web_payments_web_data_service.h"
 #include "components/payments/core/method_strings.h"
 #include "components/payments/core/payment_manifest_downloader.h"
 #include "components/payments/core/url_util.h"
@@ -40,7 +39,7 @@ void EnableMethodManifestUrlForSupportedApps(
     std::map<GURL, std::set<GURL>>* prohibited_payment_methods) {
   for (auto app_id : app_ids) {
     auto* app = (*apps)[app_id].get();
-    app->has_explicitly_verified_methods = base::Contains(
+    app->has_explicitly_verified_methods = std::ranges::contains(
         supported_origin_strings,
         url::Origin::Create(app->scope.DeprecatedGetOriginAsURL()).Serialize());
     if (app->has_explicitly_verified_methods) {
@@ -52,18 +51,11 @@ void EnableMethodManifestUrlForSupportedApps(
 
 }  // namespace
 
-ManifestVerifier::CacheLookupData::CacheLookupData() = default;
-
-ManifestVerifier::CacheLookupData::CacheLookupData(
-    const GURL& method_manifest_url,
-    base::TimeTicks start_time)
-    : method_manifest_url(method_manifest_url), start_time(start_time) {}
-
 ManifestVerifier::ManifestVerifier(const url::Origin& merchant_origin,
                                    content::WebContents* web_contents,
                                    PaymentManifestDownloader* downloader,
                                    PaymentManifestParser* parser,
-                                   PaymentManifestWebDataService* cache)
+                                   WebPaymentsWebDataService* cache)
     : merchant_origin_(merchant_origin),
       log_(web_contents),
       downloader_(downloader),
@@ -74,7 +66,7 @@ ManifestVerifier::ManifestVerifier(const url::Origin& merchant_origin,
 
 ManifestVerifier::~ManifestVerifier() {
   for (const auto& handle : cache_request_handles_) {
-    cache_->CancelRequest(handle.first);
+    cache_->CancelRequest(handle);
   }
 }
 
@@ -140,15 +132,17 @@ void ManifestVerifier::Verify(
   }
 
   for (const auto& method_manifest_url : manifests_to_download) {
-    WebDataServiceBase::Handle handle =
-        cache_->GetPaymentMethodManifest(method_manifest_url.spec(), this);
-    cache_request_handles_[handle] =
-        CacheLookupData(method_manifest_url, base::TimeTicks::Now());
+    WebDataServiceBase::Handle handle = cache_->GetPaymentMethodManifest(
+        method_manifest_url.spec(),
+        base::BindOnce(&ManifestVerifier::OnGetPaymentMethodManifest,
+                       weak_ptr_factory_.GetWeakPtr(), method_manifest_url));
+    cache_request_handles_.insert(handle);
   }
 }
 
-void ManifestVerifier::OnWebDataServiceRequestDone(
-    WebDataServiceBase::Handle h,
+void ManifestVerifier::OnGetPaymentMethodManifest(
+    const GURL& method_manifest_url,
+    WebDataServiceBase::Handle handle,
     std::unique_ptr<WDTypedResult> result) {
   DCHECK_LT(0U, number_of_manifests_to_verify_);
 
@@ -156,15 +150,7 @@ void ManifestVerifier::OnWebDataServiceRequestDone(
     return;
   }
 
-  auto it = cache_request_handles_.find(h);
-  if (it == cache_request_handles_.end()) {
-    return;
-  }
-
-  GURL method_manifest_url = it->second.method_manifest_url;
-  base::TimeDelta check_cache_duration =
-      (base::TimeTicks::Now() - it->second.start_time);
-  cache_request_handles_.erase(it);
+  cache_request_handles_.erase(handle);
 
   const std::vector<std::string>& cached_strings =
       (static_cast<const WDResult<std::vector<std::string>>*>(result.get()))
@@ -186,8 +172,7 @@ void ManifestVerifier::OnWebDataServiceRequestDone(
       manifest_url_to_app_id_map_[method_manifest_url],
       &prohibited_payment_methods_);
 
-  bool cache_hit = !supported_origin_strings.empty();
-  if (cache_hit) {
+  if (!supported_origin_strings.empty()) {
     cached_manifest_urls_.insert(method_manifest_url);
     if (--number_of_manifests_to_verify_ == 0) {
       RemoveInvalidPaymentApps();
@@ -196,23 +181,14 @@ void ManifestVerifier::OnWebDataServiceRequestDone(
     }
   }
 
-  UMA_HISTOGRAM_TIMES(
-      "PaymentRequest.ManifestVerifierCheckCachePaymentMethodDuration",
-      check_cache_duration);
-  UMA_HISTOGRAM_BOOLEAN("PaymentRequest.ManifestVerifierCacheHitPaymentMethod",
-                        cache_hit);
-
-  base::TimeTicks method_manifest_download_start_time = base::TimeTicks::Now();
   downloader_->DownloadPaymentMethodManifest(
       merchant_origin_, method_manifest_url,
       base::BindOnce(&ManifestVerifier::OnPaymentMethodManifestDownloaded,
-                     weak_ptr_factory_.GetWeakPtr(), method_manifest_url,
-                     method_manifest_download_start_time));
+                     weak_ptr_factory_.GetWeakPtr(), method_manifest_url));
 }
 
 void ManifestVerifier::OnPaymentMethodManifestDownloaded(
     const GURL& method_manifest_url,
-    base::TimeTicks method_manifest_download_start_time,
     const GURL& unused_method_manifest_url_after_redirects,
     const std::string& content,
     const std::string& error_message) {
@@ -240,26 +216,18 @@ void ManifestVerifier::OnPaymentMethodManifestDownloaded(
   parser_->ParsePaymentMethodManifest(
       method_manifest_url, content,
       base::BindOnce(&ManifestVerifier::OnPaymentMethodManifestParsed,
-                     weak_ptr_factory_.GetWeakPtr(), method_manifest_url,
-                     method_manifest_download_start_time));
+                     weak_ptr_factory_.GetWeakPtr(), method_manifest_url));
 }
 
 void ManifestVerifier::OnPaymentMethodManifestParsed(
     const GURL& method_manifest_url,
-    base::TimeTicks method_manifest_download_start_time,
     const std::vector<GURL>& default_applications,
     const std::vector<url::Origin>& supported_origins) {
   DCHECK_LT(0U, number_of_manifests_to_download_);
 
-  base::TimeDelta download_and_parse_time =
-      (base::TimeTicks::Now() - method_manifest_download_start_time);
-  UMA_HISTOGRAM_TIMES(
-      "PaymentRequest.ManifestVerifierDownloadAndParseMethodManifestDuration",
-      download_and_parse_time);
-
   std::vector<std::string> supported_origin_strings(supported_origins.size());
-  base::ranges::transform(supported_origins, supported_origin_strings.begin(),
-                          &url::Origin::Serialize);
+  std::ranges::transform(supported_origins, supported_origin_strings.begin(),
+                         &url::Origin::Serialize);
 
   if (cached_manifest_urls_.find(method_manifest_url) ==
       cached_manifest_urls_.end()) {

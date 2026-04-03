@@ -8,8 +8,9 @@
 #include <map>
 #include <set>
 
+#include "base/compiler_specific.h"
+#include "build/android_buildflags.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/policy_constants.h"
@@ -19,17 +20,19 @@ namespace policy {
 
 namespace {
 
-#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_FUCHSIA) && (!BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_DESKTOP_ANDROID))
 constexpr const char* kDictionaryPoliciesToMerge[] = {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     key::kExtensionSettings,       key::kDeviceLoginScreenPowerManagement,
     key::kKeyPermissions,          key::kPowerManagementIdleSettings,
     key::kScreenBrightnessPercent, key::kScreenLockDelays,
 #else
     key::kExtensionSettings,
-#endif  //  BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  //  BUILDFLAG(IS_CHROMEOS)
 };
-#endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
+#endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_FUCHSIA) &&
+        // (!BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID))
 
 }  // namespace
 
@@ -173,7 +176,7 @@ void PolicyListMerger::DoMerge(PolicyMap::Entry* policy) const {
 
   auto new_conflict = policy->DeepCopy();
   if (value_changed) {
-    base::Value::List new_value;
+    base::ListValue new_value;
     for (const base::Value* it : merged_values)
       new_value.Append(it->Clone());
 
@@ -186,7 +189,8 @@ void PolicyListMerger::DoMerge(PolicyMap::Entry* policy) const {
 
 PolicyDictionaryMerger::PolicyDictionaryMerger(
     base::flat_set<std::string> policies_to_merge)
-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_FUCHSIA) || \
+    (BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_DESKTOP_ANDROID))
     : policies_to_merge_(std::move(policies_to_merge)){}
 #else
     : policies_to_merge_(std::move(policies_to_merge)),
@@ -262,7 +266,7 @@ void PolicyDictionaryMerger::DoMerge(PolicyMap::Entry* policy,
         return policy_map.EntryHasHigherPriority(*b, *a);
       });
 
-  base::Value::Dict merged_dictionary;
+  base::DictValue merged_dictionary;
   bool value_changed = false;
 
   // Merges all the keys from the policies from different sources.
@@ -271,7 +275,7 @@ void PolicyDictionaryMerger::DoMerge(PolicyMap::Entry* policy,
                             *it, *policy, AllowUserCloudPolicyMerging()))
       continue;
 
-    const base::Value::Dict* dict =
+    const base::DictValue* dict =
         it->value(base::Value::Type::DICT)->GetIfDict();
     DCHECK(dict);
 
@@ -295,7 +299,7 @@ void PolicyDictionaryMerger::DoMerge(PolicyMap::Entry* policy,
 
 void PolicyGroupMerger::Merge(PolicyMap* policies) const {
   for (size_t i = 0; i < kPolicyAtomicGroupMappingsLength; ++i) {
-    const AtomicGroup& group = kPolicyAtomicGroupMappings[i];
+    const AtomicGroup& group = UNSAFE_TODO(kPolicyAtomicGroupMappings[i]);
     bool use_highest_set_priority = false;
 
     // Defaults to the lowest priority.
@@ -304,7 +308,7 @@ void PolicyGroupMerger::Merge(PolicyMap* policies) const {
     // Find the policy with the highest priority that is both in |policies| and
     // |group.policies|, an array ending with a nullptr.
     for (const char* const* policy_name = group.policies; *policy_name;
-         ++policy_name) {
+         UNSAFE_TODO(++policy_name)) {
       const auto* policy = policies->Get(*policy_name);
       if (!policy)
         continue;
@@ -338,7 +342,7 @@ void PolicyGroupMerger::Merge(PolicyMap* policies) const {
     // nullptr, that do not share the same source as the one with the highest
     // priority.
     for (const char* const* policy_name = group.policies; *policy_name;
-         ++policy_name) {
+         UNSAFE_TODO(++policy_name)) {
       auto* policy = policies->GetMutable(*policy_name);
       if (!policy)
         continue;

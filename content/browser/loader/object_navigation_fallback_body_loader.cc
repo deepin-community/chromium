@@ -7,7 +7,6 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
@@ -137,8 +136,8 @@ void ObjectNavigationFallbackBodyLoader::OnComplete(
   navigation_request_->RenderFallbackContentForObjectTag();
 }
 
-void ObjectNavigationFallbackBodyLoader::OnDataAvailable(const void* data,
-                                                         size_t num_bytes) {}
+void ObjectNavigationFallbackBodyLoader::OnDataAvailable(
+    base::span<const uint8_t> data) {}
 
 void ObjectNavigationFallbackBodyLoader::OnDataComplete() {}
 

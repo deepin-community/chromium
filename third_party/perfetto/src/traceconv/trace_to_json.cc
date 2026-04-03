@@ -19,6 +19,7 @@
 #include <stdio.h>
 
 #include "perfetto/base/logging.h"
+#include "perfetto/ext/base/file_utils.h"
 #include "perfetto/ext/base/scoped_file.h"
 #include "perfetto/ext/base/string_utils.h"
 #include "perfetto/ext/base/temp_file.h"
@@ -57,7 +58,7 @@ bool ExportUserspaceEvents(trace_processor::TraceProcessor* tp,
     return false;
   }
 
-  base::ScopedFstream source(fopen(file.path().c_str(), "r"));
+  base::ScopedFstream source = base::OpenFstream(file.path(), "r");
   if (!source) {
     PERFETTO_ELOG("Could not convert userspace events: Couldn't read file %s",
                   file.path().c_str());
@@ -94,7 +95,9 @@ int TraceToJson(std::istream* input,
 
   if (!ReadTraceUnfinalized(tp.get(), input))
     return 1;
-  tp->NotifyEndOfFile();
+  if (auto status = tp->NotifyEndOfFile(); !status.ok()) {
+    return 1;
+  }
 
   // TODO(eseckler): Support truncation of userspace event data.
   if (ExportUserspaceEvents(tp.get(), trace_writer.get())) {

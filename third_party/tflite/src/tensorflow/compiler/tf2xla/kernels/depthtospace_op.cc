@@ -13,13 +13,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
+#include <string>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/types/span.h"
 #include "tensorflow/compiler/tf2xla/lib/data_format.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/xla_builder.h"
 #include "tensorflow/core/util/tensor_format.h"
 
 namespace tensorflow {
@@ -28,7 +32,7 @@ namespace {
 class DepthToSpaceOp : public XlaOpKernel {
  public:
   explicit DepthToSpaceOp(OpKernelConstruction* ctx) : XlaOpKernel(ctx) {
-    string data_format_str;
+    std::string data_format_str;
     OP_REQUIRES_OK(ctx, ctx->GetAttr("data_format", &data_format_str));
     OP_REQUIRES(ctx, FormatFromString(data_format_str, &data_format_),
                 errors::InvalidArgument("Invalid data format"));

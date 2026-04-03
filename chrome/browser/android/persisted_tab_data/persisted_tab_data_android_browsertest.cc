@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/android/persisted_tab_data/persisted_tab_data_android.h"
+
 #include <deque>
 
-#include "chrome/browser/android/persisted_tab_data/persisted_tab_data_android.h"
+#include "chrome/browser/android/persisted_tab_data/persisted_tab_data_config_android.h"
 #include "chrome/browser/android/persisted_tab_data/test/bar_persisted_tab_data.h"
 #include "chrome/browser/android/persisted_tab_data/test/foo_persisted_tab_data.h"
 #include "chrome/browser/profiles/profile.h"
@@ -22,6 +24,8 @@
 namespace {
 const int32_t INITIAL_VALUE = 42;
 const int32_t CHANGED_VALUE = 52;
+const char kBarId[] = "barId";
+const char kFooId[] = "fooId";
 }  // namespace
 
 class PersistedTabDataAndroidBrowserTest : public AndroidBrowserTest {
@@ -35,11 +39,19 @@ class PersistedTabDataAndroidBrowserTest : public AndroidBrowserTest {
     // Create a second Tab.
     TabModel* tab_model =
         TabModelList::GetTabModelForWebContents(web_contents());
+    ASSERT_EQ(1, tab_model->GetTabCount());
     std::unique_ptr<content::WebContents> contents =
         content::WebContents::Create(
             content::WebContents::CreateParams(profile()));
-    content::WebContents* second_web_contents = contents.release();
-    tab_model->CreateTab(tab_android(), second_web_contents);
+    tab_model->CreateTab(tab_android(), std::move(contents),
+                         TabModel::kInvalidIndex,
+                         TabModel::TabLaunchType::FROM_RECENT_TABS_FOREGROUND,
+                         /*should_pin=*/false);
+    ASSERT_EQ(2, tab_model->GetTabCount());
+    PersistedTabDataConfigAndroid::AddConfigForTesting(
+        FooPersistedTabDataAndroid::UserDataKey(), kFooId);
+    PersistedTabDataConfigAndroid::AddConfigForTesting(
+        BarPersistedTabDataAndroid::UserDataKey(), kBarId);
   }
 
   TabAndroid* tab_android() {
@@ -49,7 +61,8 @@ class PersistedTabDataAndroidBrowserTest : public AndroidBrowserTest {
   TabAndroid* another_tab() {
     TabModel* tab_model =
         TabModelList::GetTabModelForWebContents(web_contents());
-    return tab_model->GetTabAt(1);
+    int another_tab_index = tab_model->GetTabAt(0) == tab_android() ? 1 : 0;
+    return tab_model->GetTabAt(another_tab_index);
   }
 
   void FooExistsForTesting(TabAndroid* tab_android,
@@ -84,7 +97,7 @@ class PersistedTabDataAndroidBrowserTest : public AndroidBrowserTest {
 
   void OnDeferredStartup() { PersistedTabDataAndroid::OnDeferredStartup(); }
 
-  std::deque<std::unique_ptr<PersistedTabDataAndroid::DeferredRequest>>*
+  const base::circular_deque<PersistedTabDataAndroidDeferredRequest>&
   GetDeferredRequests() {
     return PersistedTabDataAndroid::GetDeferredRequests();
   }
@@ -225,7 +238,7 @@ IN_PROC_BROWSER_TEST_F(PersistedTabDataAndroidBrowserTest,
   another_tab_bar_persisted_tab_data_android.SetValue(false);
 
   base::RunLoop run_loop[4];
-  int beginning_deferred_request_size = GetDeferredRequests()->size();
+  int beginning_deferred_request_size = GetDeferredRequests().size();
   FooPersistedTabDataAndroid::From(
       tab_android(), base::BindOnce(
                          [](base::OnceClosure done,
@@ -241,13 +254,12 @@ IN_PROC_BROWSER_TEST_F(PersistedTabDataAndroidBrowserTest,
                          },
                          run_loop[1].QuitClosure()));
   // Requests should be stored for deferred startup.
-  EXPECT_EQ(beginning_deferred_request_size + 2u,
-            GetDeferredRequests()->size());
+  EXPECT_EQ(beginning_deferred_request_size + 2u, GetDeferredRequests().size());
   OnDeferredStartup();
   run_loop[0].Run();
   run_loop[1].Run();
   // Deferred requests should have been executed.
-  EXPECT_EQ(0u, GetDeferredRequests()->size());
+  EXPECT_EQ(0u, GetDeferredRequests().size());
   FooPersistedTabDataAndroid::From(
       another_tab(), base::BindOnce(
                          [](base::OnceClosure done,
@@ -264,7 +276,7 @@ IN_PROC_BROWSER_TEST_F(PersistedTabDataAndroidBrowserTest,
                          run_loop[3].QuitClosure()));
   // Should no longer be added to deferred startup queue because
   // deferred startup has happened.
-  EXPECT_EQ(0u, GetDeferredRequests()->size());
+  EXPECT_EQ(0u, GetDeferredRequests().size());
   run_loop[2].Run();
   run_loop[3].Run();
 }

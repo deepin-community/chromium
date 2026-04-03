@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,7 +33,7 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-import {type Brand} from './brand.js';
+import type {Brand} from './Brand.js';
 
 export type LocalizedString = Brand<string, 'LocalizedString'>;
 export const LocalizedEmptyString = '' as LocalizedString;

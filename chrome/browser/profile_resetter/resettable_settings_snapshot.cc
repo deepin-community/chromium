@@ -8,15 +8,14 @@
 #include <utility>
 
 #include "base/functional/bind.h"
-#include "base/hash/md5.h"
 #include "base/stl_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/uuid.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -35,16 +34,17 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_thread.h"
+#include "crypto/random.h"
 #include "extensions/browser/extension_registry.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace {
 
 template <class StringType>
-void AddPair(base::Value::List& list,
+void AddPair(base::ListValue& list,
              const std::u16string& key,
              const StringType& value) {
-  base::Value::Dict results;
+  base::DictValue results;
   results.Set("key", key);
   results.Set("value", value);
   list.Append(std::move(results));
@@ -83,9 +83,8 @@ ResettableSettingsSnapshot::ResettableSettingsSnapshot(Profile* profile)
   // ExtensionSet is sorted but it seems to be an implementation detail.
   std::sort(enabled_extensions_.begin(), enabled_extensions_.end());
 
-  // Calculate the MD5 sum of the GUID to make sure that no part of the GUID
-  // contains information identifying the sender of the report.
-  guid_ = base::MD5String(base::Uuid::GenerateRandomV4().AsLowercaseString());
+  // Choose a random ID for this snapshot and store it.
+  guid_ = base::HexEncodeLower(crypto::RandBytesAsArray<16>());
 }
 
 ResettableSettingsSnapshot::~ResettableSettingsSnapshot() {
@@ -234,12 +233,12 @@ void SendSettingsFeedbackProto(const reset_report::ChromeResetReport& report,
       ->DispatchReport(report);
 }
 
-base::Value::List GetReadableFeedbackForSnapshot(
+base::ListValue GetReadableFeedbackForSnapshot(
     Profile* profile,
     const ResettableSettingsSnapshot& snapshot) {
   DCHECK(profile);
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  base::Value::List list;
+  base::ListValue list;
   AddPair(list,
           l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_LOCALE),
           g_browser_process->GetApplicationLocale());
@@ -257,7 +256,7 @@ base::Value::List GetReadableFeedbackForSnapshot(
   for (auto i = urls.begin(); i != urls.end(); ++i) {
     if (!startup_urls.empty())
       startup_urls += ' ';
-    startup_urls += i->host();
+    startup_urls += i->GetHost();
   }
   if (!startup_urls.empty()) {
     AddPair(list,
@@ -316,9 +315,8 @@ base::Value::List GetReadableFeedbackForSnapshot(
   DCHECK(service);
   const TemplateURL* dse = service->GetDefaultSearchProvider();
   if (dse) {
-    AddPair(list,
-            l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_DSE),
-            dse->GenerateSearchURL(service->search_terms_data()).host());
+    AddPair(list, l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_DSE),
+            dse->GenerateSearchURL(service->search_terms_data()).GetHost());
   }
 
   if (snapshot.shortcuts_determined()) {

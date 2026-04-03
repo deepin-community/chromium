@@ -11,10 +11,12 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/login/quickstart_controller.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/quick_start_screen_handler.h"
 
 namespace ash {
+
+class ScopedSessionRefresher;
 
 class QuickStartScreen : public BaseScreen,
                          public quick_start::QuickStartController::UiDelegate {
@@ -28,6 +30,7 @@ class QuickStartScreen : public BaseScreen,
     CANCEL_AND_RETURN_TO_SIGNIN,
     SETUP_COMPLETE_NEXT_BUTTON,
     WIFI_CREDENTIALS_RECEIVED,
+    FALLBACK_URL_ON_GAIA,
   };
 
   using ScreenExitCallback = base::RepeatingCallback<void(Result result)>;
@@ -48,7 +51,7 @@ class QuickStartScreen : public BaseScreen,
   bool MaybeSkip(WizardContext& context) override;
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
 
   // quick_start::QuickStartController::UiDelegate:
   void OnUiUpdateRequested(
@@ -60,6 +63,8 @@ class QuickStartScreen : public BaseScreen,
 
   base::WeakPtr<TView> view_;
   raw_ptr<quick_start::QuickStartController> controller_;
+  // For keeping the AuthSession alive while the success steps is shown.
+  std::unique_ptr<ScopedSessionRefresher> session_refresher_;
   ScreenExitCallback exit_callback_;
 };
 

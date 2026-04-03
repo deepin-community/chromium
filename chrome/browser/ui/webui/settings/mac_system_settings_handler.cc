@@ -22,9 +22,9 @@ void MacSystemSettingsHandler::RegisterMessages() {
 }
 
 void MacSystemSettingsHandler::HandleOpenTrackpadGesturesSettings(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
-  // TODO(crbug.com/1473415): Figure out how to directly open the more gestures
+  // TODO(crbug.com/40279003): Figure out how to directly open the more gestures
   // subpane. Currently this only opens the first subpane of trackpad settings.
   base::mac::OpenSystemSettingsPane(base::mac::SystemSettingsPane::kTrackpad);
 }

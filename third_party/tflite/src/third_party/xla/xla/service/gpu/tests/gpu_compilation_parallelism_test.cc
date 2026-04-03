@@ -13,11 +13,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <memory>
 #include <utility>
 
-#include "xla/hlo/ir/hlo_instruction.h"
+#include <gtest/gtest.h>
+#include "xla/error_spec.h"
+#include "xla/hlo/testlib/verified_hlo_module.h"
 #include "xla/service/gpu/tests/gpu_codegen_test.h"
-#include "xla/service/hlo_module_config.h"
+#include "xla/xla.pb.h"
+#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {
@@ -25,7 +29,7 @@ namespace gpu {
 namespace {
 
 class CompilationParallelismTest : public GpuCodegenTest {
-  DebugOptions GetDebugOptionsForTest() override {
+  DebugOptions GetDebugOptionsForTest() const override {
     DebugOptions debug_options = GpuCodegenTest::GetDebugOptionsForTest();
     // Use multiple threads for compilation
     debug_options.set_xla_gpu_force_compilation_parallelism(4);

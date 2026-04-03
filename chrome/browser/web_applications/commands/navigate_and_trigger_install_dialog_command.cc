@@ -8,6 +8,8 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
+#include "base/strings/to_string.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/commands/web_app_command.h"
@@ -16,10 +18,15 @@
 #include "chrome/browser/web_applications/locks/web_app_lock_manager.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
-#include "chrome/browser/web_applications/web_contents/web_app_url_loader.h"
+#include "components/webapps/browser/install_result_code.h"
 #include "components/webapps/browser/installable/installable_logging.h"
+#include "components/webapps/browser/installable/installable_metrics.h"
+#include "components/webapps/browser/web_contents/web_app_url_loader.h"
+#include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
@@ -31,9 +38,10 @@ NavigateAndTriggerInstallDialogCommand::NavigateAndTriggerInstallDialogCommand(
     const GURL& install_url,
     const GURL& origin_url,
     bool is_renderer_initiated,
+    webapps::WebappInstallSource source,
     NavigateAndTriggerInstallDialogCommandCallback callback,
     base::WeakPtr<WebAppUiManager> ui_manager,
-    std::unique_ptr<WebAppUrlLoader> url_loader,
+    std::unique_ptr<webapps::WebAppUrlLoader> url_loader,
     std::unique_ptr<WebAppDataRetriever> data_retriever,
     Profile* profile)
     : WebAppCommand<NoopLock, NavigateAndTriggerInstallDialogCommandResult>(
@@ -45,6 +53,7 @@ NavigateAndTriggerInstallDialogCommand::NavigateAndTriggerInstallDialogCommand(
       install_url_(install_url),
       origin_url_(origin_url),
       is_renderer_initiated_(is_renderer_initiated),
+      source_(source),
       ui_manager_(ui_manager),
       url_loader_(std::move(url_loader)),
       data_retriever_(std::move(data_retriever)),
@@ -78,18 +87,27 @@ void NavigateAndTriggerInstallDialogCommand::StartWithLock(
   // specify an initiator origin.
   load_url_params.initiator_origin = url::Origin::Create(origin_url_);
 
-  web_contents_ = ui_manager_->CreateNewTab()->GetWeakPtr();
+  content::WebContents* new_tab = ui_manager_->CreateNewTab();
+  if (!new_tab) {
+    // Browser may be shutting down.
+    // TODO(b/331691742): Avoid starting commands when the browser is shutting
+    // down.
+    CompleteAndSelfDestruct(
+        CommandResult::kFailure,
+        NavigateAndTriggerInstallDialogCommandResult::kFailure);
+    return;
+  }
+  web_contents_ = new_tab->GetWeakPtr();
   url_loader_->LoadUrl(
       std::move(load_url_params), web_contents_.get(),
-      WebAppUrlLoader::UrlComparison::kIgnoreQueryParamsAndRef,
+      webapps::WebAppUrlLoader::UrlComparison::kIgnoreQueryParamsAndRef,
       base::BindOnce(&NavigateAndTriggerInstallDialogCommand::OnUrlLoaded,
                      weak_factory_.GetWeakPtr()));
 }
 
 void NavigateAndTriggerInstallDialogCommand::OnUrlLoaded(
-    WebAppUrlLoader::Result result) {
-  GetMutableDebugValue().Set("WebAppUrlLoader::Result",
-                             ConvertUrlLoaderResultToString(result));
+    webapps::WebAppUrlLoaderResult result) {
+  GetMutableDebugValue().Set("WebAppUrlLoader::Result", base::ToString(result));
   if (IsWebContentsDestroyed()) {
     GetMutableDebugValue().Set("web_contents_destroyed", true);
     CompleteAndSelfDestruct(
@@ -97,7 +115,7 @@ void NavigateAndTriggerInstallDialogCommand::OnUrlLoaded(
         NavigateAndTriggerInstallDialogCommandResult::kFailure);
     return;
   }
-  if (result != WebAppUrlLoader::Result::kUrlLoaded) {
+  if (result != webapps::WebAppUrlLoaderResult::kUrlLoaded) {
     CompleteAndSelfDestruct(
         CommandResult::kFailure,
         NavigateAndTriggerInstallDialogCommandResult::kFailure);
@@ -112,7 +130,6 @@ void NavigateAndTriggerInstallDialogCommand::OnUrlLoaded(
 
 void NavigateAndTriggerInstallDialogCommand::OnInstallabilityChecked(
     blink::mojom::ManifestPtr opt_manifest,
-    const GURL& manifest_url,
     bool valid_manifest_for_web_app,
     webapps::InstallableStatusCode error_code) {
   GetMutableDebugValue().Set("webapps::InstallableStatusCode",
@@ -132,15 +149,16 @@ void NavigateAndTriggerInstallDialogCommand::OnInstallabilityChecked(
   }
   CHECK(opt_manifest);
   app_id_ = GenerateAppIdFromManifest(*opt_manifest);
+  app_lock_ = std::make_unique<AppLock>();
   command_manager()->lock_manager().UpgradeAndAcquireLock(
-      std::move(noop_lock_), {app_id_},
+      std::move(noop_lock_), *app_lock_, {app_id_},
       base::BindOnce(&NavigateAndTriggerInstallDialogCommand::OnAppLockGranted,
                      weak_factory_.GetWeakPtr()));
 }
 
-void NavigateAndTriggerInstallDialogCommand::OnAppLockGranted(
-    std::unique_ptr<AppLock> app_lock) {
-  app_lock_ = std::move(app_lock);
+void NavigateAndTriggerInstallDialogCommand::OnAppLockGranted() {
+  CHECK(app_lock_);
+  CHECK(app_lock_->IsGranted());
 
   if (IsWebContentsDestroyed()) {
     GetMutableDebugValue().Set("web_contents_destroyed", true);
@@ -150,7 +168,27 @@ void NavigateAndTriggerInstallDialogCommand::OnAppLockGranted(
     return;
   }
   CHECK(!app_id_.empty());
-  if (app_lock_->registrar().IsInstalled(app_id_)) {
+
+  std::optional<proto::InstallState> install_state =
+      app_lock_->registrar().GetInstallState(app_id_);
+
+  bool is_installable;
+  if (!install_state) {
+    is_installable = true;
+  } else {
+    switch (*install_state) {
+      case web_app::proto::SUGGESTED_FROM_ANOTHER_DEVICE:
+      case web_app::proto::SUGGESTED_FROM_MIGRATION:
+        is_installable = true;
+        break;
+      case web_app::proto::INSTALLED_WITH_OS_INTEGRATION:
+      case web_app::proto::INSTALLED_WITHOUT_OS_INTEGRATION:
+        is_installable = false;
+        break;
+    }
+  }
+
+  if (!is_installable) {
     // If the app is already installed, we don't show the dialog. Since nothing
     // went wrong, this is still considered a success.
     CompleteAndSelfDestruct(
@@ -158,7 +196,8 @@ void NavigateAndTriggerInstallDialogCommand::OnAppLockGranted(
         NavigateAndTriggerInstallDialogCommandResult::kAlreadyInstalled);
     return;
   }
-  ui_manager_->TriggerInstallDialog(web_contents_.get());
+  ui_manager_->TriggerInstallDialog(web_contents_.get(), source_,
+                                    base::DoNothing());
   CompleteAndSelfDestruct(
       CommandResult::kSuccess,
       NavigateAndTriggerInstallDialogCommandResult::kDialogShown);

@@ -13,7 +13,7 @@
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_limits_allowlist_policy_test_utils.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_limits_policy_builder.h"
 #include "chrome/browser/policy/developer_tools_policy_handler.h"
-#include "chrome/test/base/chromeos/crosier/interactive_ash_test.h"
+#include "chrome/test/base/ash/interactive/interactive_ash_test.h"
 
 namespace {
 constexpr char kEduCoexistenceToSVersion[] = "333024512";
@@ -29,30 +29,24 @@ void SetUpSupervisedUserPolicies(
           policy::DeveloperToolsPolicyHandler::Availability::kDisallowed));
   policy_payload->mutable_educoexistencetosversion()->set_value(
       kEduCoexistenceToSVersion);
-  policy_payload->mutable_lacrossecondaryprofilesallowed()->set_value(false);
 
-  std::string parent_access_config;
-  base::JSONWriter::Write(parent_access::PolicyFromConfigs(
-                              parent_access::GetDefaultTestConfig(),
-                              parent_access::GetDefaultTestConfig(), {}),
-                          &parent_access_config);
+  std::string parent_access_config =
+      base::WriteJson(parent_access::PolicyFromConfigs(
+                          parent_access::GetDefaultTestConfig(),
+                          parent_access::GetDefaultTestConfig(), {}))
+          .value_or("");
   policy_payload->mutable_parentaccesscodeconfig()->set_value(
       parent_access_config);
 
   app_time::AppTimeLimitsPolicyBuilder time_limits_policy;
   time_limits_policy.SetResetTime(6, 0);
-  std::string time_limits_policy_value;
-  base::JSONWriter::Write(time_limits_policy.value(),
-                          &time_limits_policy_value);
   policy_payload->mutable_perapptimelimits()->set_value(
-      time_limits_policy_value);
+      base::WriteJson(time_limits_policy.value()).value_or(""));
 
   app_time::AppTimeLimitsAllowlistPolicyBuilder allowlist_policy;
   allowlist_policy.SetUp();
-  std::string allowlist_policy_value;
-  base::JSONWriter::Write(allowlist_policy.dict(), &allowlist_policy_value);
   policy_payload->mutable_perapptimelimitsallowlist()->set_value(
-      allowlist_policy_value);
+      base::WriteJson(allowlist_policy.dict()).value_or(""));
 
   policy_payload->mutable_reportarcstatusenabled()->set_value(true);
   policy_payload->mutable_urlblocklist()->mutable_value()->add_entries(

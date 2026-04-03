@@ -4,7 +4,7 @@
 
 #include "remoting/host/ipc_screen_controls.h"
 
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "remoting/host/desktop_session_proxy.h"
 
 namespace remoting {
@@ -18,7 +18,7 @@ IpcScreenControls::~IpcScreenControls() = default;
 void IpcScreenControls::SetScreenResolution(
     const ScreenResolution& resolution,
     std::optional<webrtc::ScreenId> screen_id) {
-  // TODO(crbug.com/1326339): Pass |screen_id| over IPC.
+  // TODO(crbug.com/40225767): Pass |screen_id| over IPC.
   desktop_session_proxy_->SetScreenResolution(resolution);
 }
 

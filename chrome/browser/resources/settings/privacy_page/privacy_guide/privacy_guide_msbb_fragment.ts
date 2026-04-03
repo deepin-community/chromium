@@ -7,12 +7,14 @@
  * 'privacy-guide-msbb-fragment' is the fragment in a privacy guide card
  * that contains the MSBB setting with a two-column description.
  */
-import 'chrome://resources/cr_components/settings_prefs/prefs.js';
+
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
+import '/shared/settings/prefs/prefs.js';
 import '../../controls/settings_toggle_button.js';
-import './privacy_guide_description_item.js';
+import '../../icons.html.js';
 import './privacy_guide_fragment_shared.css.js';
 
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import type {MetricsBrowserProxy} from '../../metrics_browser_proxy.js';
@@ -30,18 +32,6 @@ export class PrivacyGuideMsbbFragmentElement extends
 
   static get template() {
     return getTemplate();
-  }
-
-  static get properties() {
-    return {
-      /**
-       * Preferences state.
-       */
-      prefs: {
-        type: Object,
-        notify: true,
-      },
-    };
   }
 
   private metricsBrowserProxy_: MetricsBrowserProxy =
@@ -85,7 +75,7 @@ export class PrivacyGuideMsbbFragmentElement extends
       state = endStateMsbbOn ? PrivacyGuideSettingsStates.MSBB_OFF_TO_ON :
                                PrivacyGuideSettingsStates.MSBB_OFF_TO_OFF;
     }
-    this.metricsBrowserProxy_.recordPrivacyGuideSettingsStatesHistogram(state!);
+    this.metricsBrowserProxy_.recordPrivacyGuideSettingsStatesHistogram(state);
   }
 
   private onMsbbToggleClick_() {

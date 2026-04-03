@@ -12,15 +12,15 @@
 #include "third_party/blink/renderer/core/animation/timing.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/node.h"
+#include "third_party/blink/renderer/core/frame/post_layout_snapshot_client.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
-#include "third_party/blink/renderer/core/scroll/scroll_snapshot_client.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 
 namespace blink {
 
 // See ScrollTimeline.
 class CORE_EXPORT ScrollSnapshotTimeline : public AnimationTimeline,
-                                           public ScrollSnapshotClient {
+                                           public PostLayoutSnapshotClient {
  public:
   using ScrollOffsets = cc::ScrollTimeline::ScrollOffsets;
   using ScrollAxis = V8ScrollAxis::Enum;
@@ -77,6 +77,8 @@ class CORE_EXPORT ScrollSnapshotTimeline : public AnimationTimeline,
   std::optional<ScrollOffsets> GetResolvedScrollOffsets() const;
   std::optional<ViewOffsets> GetResolvedViewOffsets() const;
 
+  std::optional<ScrollOffsets> GetResolvedScrollLimits() const;
+
   float GetResolvedZoom() const { return timeline_state_snapshotted_.zoom; }
 
   // Mark every effect target of every Animation attached to this timeline
@@ -106,6 +108,9 @@ class CORE_EXPORT ScrollSnapshotTimeline : public AnimationTimeline,
   virtual ScrollAxis GetAxis() const = 0;
 
  protected:
+  // For access to TimelineState.
+  friend class TimelineTrigger;
+
   PhaseAndTime CurrentPhaseAndTime() override;
 
   AnimationTimeDelta CalculateIntrinsicIterationDuration(
@@ -124,6 +129,14 @@ class CORE_EXPORT ScrollSnapshotTimeline : public AnimationTimeline,
     // current_time.
     TimelinePhase phase = TimelinePhase::kInactive;
     std::optional<base::TimeDelta> current_time;
+    // Offsets corresponding to the entire scroll range of the scroll
+    // container backing the timeline in the axis of the timeline.
+    std::optional<ScrollOffsets> scroll_limits;
+    // Offset corresponding to either:
+    //  1. the entire scroll range of the scroll container backing the timeline
+    //     (if it's a ScrollTimeline).
+    //  2. the boundaries of the view progress of the subject within the scroll
+    //     container backing the timeline. (if it's a ViewTimeline).
     std::optional<ScrollOffsets> scroll_offsets;
     // The view offsets will be null unless using a view timeline.
     std::optional<ViewOffsets> view_offsets;
@@ -157,19 +170,25 @@ class CORE_EXPORT ScrollSnapshotTimeline : public AnimationTimeline,
     }
   };
 
-  // ScrollSnapshotClient:
+  // PostLayoutSnapshotClient:
   // https://wicg.github.io/scroll-animations/#avoiding-cycles
   // Snapshots scroll timeline current time and phase.
   // Called once per animation frame.
-  void UpdateSnapshot() override;
-  bool ValidateSnapshot() override;
+  bool UpdateSnapshot() override;
   bool ShouldScheduleNextService() override;
+  void UpdateSnapshotForServiceAnimations() override;
 
  public:
   // Public for DeferredTimeline::ComputeTimelineState.
   virtual TimelineState ComputeTimelineState() const = 0;
 
+  void CalculateScrollLimits(PaintLayerScrollableArea* scrollable_area,
+                             ScrollOrientation physical_orientation,
+                             TimelineState* state) const;
+
  private:
+  bool UpdateSnapshotInternal(bool service_animations);
+
   // Snapshotted value produced by the last SnapshotState call.
   TimelineState timeline_state_snapshotted_;
 };

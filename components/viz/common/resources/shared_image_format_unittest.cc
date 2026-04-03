@@ -15,6 +15,8 @@ namespace {
 
 constexpr gfx::Size kDefaultSize(100, 100);
 constexpr gfx::Size kOddSize(9, 9);
+constexpr gfx::Size kMaxSize(std::numeric_limits<int>::max(),
+                             std::numeric_limits<int>::max());
 
 class SharedImageFormatTest : public testing::Test {
  public:
@@ -31,18 +33,59 @@ class SharedImageFormatTest : public testing::Test {
   }
 };
 
-TEST_F(SharedImageFormatTest, MultiPlaneYUVBiplanar8bit) {
+TEST_F(SharedImageFormatTest, MultiPlaneNV12) {
   // 8-bit 4:2:0 Y_UV biplanar format (YUV_420_BIPLANAR)
   SharedImageFormat format = MultiPlaneFormat::kNV12;
   // Test for NumChannelsInPlane
   std::vector<int> expected_channels = {1, 2};
   TestNumChannelsInPlane(expected_channels, format);
 
+  // Y: 100 bytes per row (1 channel * 1 byte * 100 width) * 100 rows = 10000
+  // bytes.
+  // UV: 100 bytes per row (2 channel * 1 byte * 50 width) * 50 rows = 5000
+  // bytes.
   EXPECT_EQ(format.EstimatedSizeInBytes(kDefaultSize), 15000u);
 
   // Y: 9 bytes per row (1 channel * 1 byte * 9 width) * 9 rows = 81 bytes.
-  // UV: 5 bytes per row (2 channels * 1 byte * 5 width) * 5 rows = 50 bytes.
+  // UV: 10 bytes per row (2 channels * 1 byte * 5 width) * 5 rows = 50 bytes.
   EXPECT_EQ(format.EstimatedSizeInBytes(kOddSize), 131u);
+}
+
+TEST_F(SharedImageFormatTest, MultiPlaneNV16) {
+  // 8-bit 4:2:2 Y_UV biplanar format (YUV_422_BIPLANAR)
+  SharedImageFormat format = MultiPlaneFormat::kNV16;
+  // Test for NumChannelsInPlane
+  std::vector<int> expected_channels = {1, 2};
+  TestNumChannelsInPlane(expected_channels, format);
+
+  // Y: 100 bytes per row (1 channel * 1 byte * 100 width) * 100 rows = 10000
+  // bytes.
+  // UV: 100 bytes per row (2 channel * 1 byte * 50 width) * 100 rows = 10000
+  // bytes.
+  EXPECT_EQ(format.EstimatedSizeInBytes(kDefaultSize), 20000u);
+
+  // Y: 9 bytes per row (1 channel * 1 byte * 9 width) * 9 rows = 81 bytes.
+  // UV: 10 bytes per row (2 channels * 1 byte * 5 width) * 9 rows = 90 bytes.
+  EXPECT_EQ(format.EstimatedSizeInBytes(kOddSize), 171u);
+}
+
+TEST_F(SharedImageFormatTest, MultiPlaneNV24) {
+  // 8-bit 4:4:4 Y_UV biplanar format (YUV_444_BIPLANAR)
+  SharedImageFormat format = MultiPlaneFormat::kNV24;
+  // Test for NumChannelsInPlane
+  std::vector<int> expected_channels = {1, 2};
+  TestNumChannelsInPlane(expected_channels, format);
+
+  // Y: 100 bytes per row (1 channel * 1 byte * 100 width) * 100 rows = 10000
+  // bytes.
+  // UV: 200 bytes per row (2 channel * 1 byte * 100 width) * 100 rows = 20000
+  // bytes.
+  EXPECT_EQ(format.EstimatedSizeInBytes(kDefaultSize), 30000u);
+
+  // Y: 9 bytes per row (1 channel * 1 byte * 9 width) * 9 rows = 81 bytes.
+  // UV: 20 bytes per row (2 channels * 1 byte * 9 width) * 9 rows = 162
+  // bytes.
+  EXPECT_EQ(format.EstimatedSizeInBytes(kOddSize), 243u);
 }
 
 TEST_F(SharedImageFormatTest, MultiPlaneYVU) {
@@ -130,11 +173,53 @@ TEST_F(SharedImageFormatTest, MultiPlaneP010) {
   std::vector<int> expected_channels = {1, 2};
   TestNumChannelsInPlane(expected_channels, format);
 
+  // Y: 200 bytes per row (1 channel * 2 byte * 100 width) * 100 rows = 20000
+  // bytes.
+  // UV: 200 bytes per row (2 channel * 2 byte * 50 width) * 50 rows = 10000
+  // bytes.
   EXPECT_EQ(format.EstimatedSizeInBytes(kDefaultSize), 30000u);
 
   // Y: 18 bytes per row (1 channel * 2 bytes * 9 width) * 9 rows = 162 bytes.
   // UV: 20 bytes per row (2 channels * 2 bytes * 5 width) * 5 rows = 100 bytes.
   EXPECT_EQ(format.EstimatedSizeInBytes(kOddSize), 262u);
+}
+
+TEST_F(SharedImageFormatTest, MultiPlaneP210) {
+  // 10-bit 4:2:2 Y_UV biplanar format (P210)
+  SharedImageFormat format = MultiPlaneFormat::kP210;
+  // Test for NumChannelsInPlane
+  std::vector<int> expected_channels = {1, 2};
+  TestNumChannelsInPlane(expected_channels, format);
+
+  // Y: 200 bytes per row (1 channel * 2 byte * 100 width) * 100 rows = 20000
+  // bytes.
+  // UV: 200 bytes per row (2 channel * 2 byte * 50 width) * 100 rows = 20000
+  // bytes.
+  EXPECT_EQ(format.EstimatedSizeInBytes(kDefaultSize), 40000u);
+
+  // Y: 18 bytes per row (1 channel * 2 bytes * 9 width) * 9 rows = 162 bytes.
+  // UV: 20 bytes per row (2 channels * 2 bytes * 5 width) * 9 rows = 180
+  // bytes.
+  EXPECT_EQ(format.EstimatedSizeInBytes(kOddSize), 342u);
+}
+
+TEST_F(SharedImageFormatTest, MultiPlaneP410) {
+  // 10-bit 4:4:4 Y_UV biplanar format (P410)
+  SharedImageFormat format = MultiPlaneFormat::kP410;
+  // Test for NumChannelsInPlane
+  std::vector<int> expected_channels = {1, 2};
+  TestNumChannelsInPlane(expected_channels, format);
+
+  // Y: 200 bytes per row (1 channel * 2 byte * 100 width) * 100 rows = 20000
+  // bytes.
+  // UV: 400 bytes per row (2 channel * 2 byte * 100 width) * 100 rows = 40000
+  // bytes.
+  EXPECT_EQ(format.EstimatedSizeInBytes(kDefaultSize), 60000u);
+
+  // Y: 18 bytes per row (1 channel * 2 bytes * 9 width) * 9 rows = 162 bytes.
+  // UV: 36 bytes per row (2 channels * 2 bytes * 9 width) * 9 rows = 324
+  // bytes.
+  EXPECT_EQ(format.EstimatedSizeInBytes(kOddSize), 486u);
 }
 
 TEST_F(SharedImageFormatTest, MultiPlaneYUVBiplanar16bit) {
@@ -278,59 +363,47 @@ TEST_F(SharedImageFormatTest, SinglePlaneETC1) {
   auto format = SinglePlaneFormat::kETC1;
   EXPECT_EQ(1, format.NumberOfPlanes());
 
-  // 4 bits (not bytes) per pixel.
-  EXPECT_EQ(format.EstimatedSizeInBytes(kDefaultSize), 5000u);
+  // 1 block * 8 bytes = 8 bytes.
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(4, 4)), 8u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(3, 4)), 8u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(3, 2)), 8u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(2, 1)), 8u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(4, 3)), 8u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(2, 3)), 8u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(1, 2)), 8u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(1, 1)), 8u);
 
-  // 5 bytes per row (rounded up) * 9 rows.
-  EXPECT_EQ(format.EstimatedSizeInBytes(kOddSize), 45u);
-}
+  // 6 blocks * 8 bytes = 48.
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(8, 12)), 48u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(7, 12)), 48u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(7, 10)), 48u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(6, 9)), 48u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(8, 11)), 48u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(6, 10)), 48u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(5, 10)), 48u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(gfx::Size(5, 9)), 48u);
 
-TEST_F(SharedImageFormatTest, LegacyMultiPlaneP010) {
-  auto format = LegacyMultiPlaneFormat::kP010;
-  EXPECT_EQ(1, format.NumberOfPlanes());
-
-  EXPECT_EQ(format.EstimatedSizeInBytes(kDefaultSize), 30000u);
-  EXPECT_EQ(format.EstimatedSizeInBytes(kOddSize), 262u);
-}
-
-TEST_F(SharedImageFormatTest, LegacyMultiPlaneYV12) {
-  auto format = LegacyMultiPlaneFormat::kYV12;
-  EXPECT_EQ(1, format.NumberOfPlanes());
-
-  EXPECT_EQ(format.EstimatedSizeInBytes(kDefaultSize), 15000u);
-  EXPECT_EQ(format.EstimatedSizeInBytes(kOddSize), 131u);
-}
-
-TEST_F(SharedImageFormatTest, LegacyMultiPlaneNV12) {
-  auto format = LegacyMultiPlaneFormat::kNV12;
-  EXPECT_EQ(1, format.NumberOfPlanes());
-
-  EXPECT_EQ(format.EstimatedSizeInBytes(kDefaultSize), 15000u);
-  EXPECT_EQ(format.EstimatedSizeInBytes(kOddSize), 131u);
-}
-
-TEST_F(SharedImageFormatTest, LegacyMultiPlaneNV12A) {
-  auto format = LegacyMultiPlaneFormat::kNV12A;
-  EXPECT_EQ(1, format.NumberOfPlanes());
-
-  EXPECT_EQ(format.EstimatedSizeInBytes(kDefaultSize), 25000u);
-  EXPECT_EQ(format.EstimatedSizeInBytes(kOddSize), 212u);
+  // Largest possible size shouldn't overflow with 64bit size_t but will
+  // overflow with 32 bit size_t.
+  if constexpr (sizeof(size_t) == sizeof(uint64_t)) {
+    EXPECT_EQ(format.EstimatedSizeInBytes(kMaxSize), 0x2000000000000000ul);
+  } else {
+    EXPECT_EQ(format.EstimatedSizeInBytes(kMaxSize), 0u);
+    EXPECT_FALSE(format.MaybeEstimatedSizeInBytes(kMaxSize).has_value());
+  }
 }
 
 TEST_F(SharedImageFormatTest, EstimatedSizeInBytesOverflow) {
   auto format = SinglePlaneFormat::kRGBA_F16;
 
-  constexpr gfx::Size max_size(std::numeric_limits<int>::max(),
-                               std::numeric_limits<int>::max());
-
   // MaybeEstimatedSizeInBytes() will return nullopt on overflow.
-  EXPECT_FALSE(format.MaybeEstimatedSizeInBytes(max_size).has_value());
+  EXPECT_FALSE(format.MaybeEstimatedSizeInBytes(kMaxSize).has_value());
 
   // EstimatedSizeInBytes() will return 0 on overflow.
-  EXPECT_EQ(format.EstimatedSizeInBytes(max_size), 0u);
+  EXPECT_EQ(format.EstimatedSizeInBytes(kMaxSize), 0u);
 
   // VerifySizeInBytes() should return false on overflow.
-  EXPECT_FALSE(format.VerifySizeInBytes(max_size));
+  EXPECT_FALSE(format.VerifySizeInBytes(kMaxSize));
 }
 
 TEST_F(SharedImageFormatTest, PrefersExternalSampler) {

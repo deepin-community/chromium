@@ -34,7 +34,7 @@
 #include "media/filters/decoder_stream.h"
 #include "media/filters/video_renderer_algorithm.h"
 #include "media/renderers/renderer_impl_factory.h"
-#include "media/video/gpu_memory_buffer_video_frame_pool.h"
+#include "media/video/mappable_shared_image_video_frame_pool.h"
 
 namespace base {
 class TickClock;
@@ -62,7 +62,7 @@ class MEDIA_EXPORT VideoRendererImpl
       const CreateVideoDecodersCB& create_video_decoders_cb,
       bool drop_frames,
       MediaLog* media_log,
-      std::unique_ptr<GpuMemoryBufferVideoFramePool> gmb_pool,
+      std::unique_ptr<MappableSharedImageVideoFramePool> mappable_si_pool,
       MediaPlayerLoggingID media_player_id);
 
   VideoRendererImpl(const VideoRendererImpl&) = delete;
@@ -217,6 +217,7 @@ class MEDIA_EXPORT VideoRendererImpl
   // Paints first frame and sets `painted_first_frame_` to true if
   // `painted_first_frame_` is false.
   void PaintFirstFrame();
+  void PaintFirstFrame_Locked();
 
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
@@ -238,11 +239,12 @@ class MEDIA_EXPORT VideoRendererImpl
 
   raw_ptr<RendererClient> client_;
 
-  // Pool of GpuMemoryBuffers and resources used to create hardware frames.
+  // Pool of MappableSharedImages and resources used to create hardware frames.
   // Ensure this is destructed after |algorithm_| for optimal memory release
   // when a frames are still held by the compositor. Must be destructed after
   // |video_decoder_stream_| since it holds a callback to the pool.
-  std::unique_ptr<GpuMemoryBufferVideoFramePool> gpu_memory_buffer_pool_;
+  std::unique_ptr<MappableSharedImageVideoFramePool>
+      mappable_shared_image_pool_;
 
   // Provides video frames to VideoRendererImpl.
   std::unique_ptr<VideoDecoderStream> video_decoder_stream_;
@@ -251,7 +253,7 @@ class MEDIA_EXPORT VideoRendererImpl
   raw_ptr<DemuxerStream> demuxer_stream_;
 
   // This dangling raw_ptr occurred in:
-  // webkit_unit_tests: WebMediaPlayerImplTest.MediaPositionState_Playing
+  // blink_unittests: WebMediaPlayerImplTest.MediaPositionState_Playing
   // https://ci.chromium.org/ui/p/chromium/builders/try/linux-rel/1425143/test-results?q=ExactID%3Aninja%3A%2F%2Fthird_party%2Fblink%2Frenderer%2Fcontroller%3Ablink_unittests%2FWebMediaPlayerImplTest.MediaPositionState_Playing+VHash%3A896f1103f2d1008d&sortby=&groupby=
   raw_ptr<MediaLog, FlakyDanglingUntriaged> media_log_;
 
@@ -314,7 +316,7 @@ class MEDIA_EXPORT VideoRendererImpl
 
   // Algorithm for selecting which frame to render; manages frames and all
   // timing related information. Ensure this is destructed before
-  // |gpu_memory_buffer_pool_| for optimal memory release when a frames are
+  // |mappable_shared_image_pool_| for optimal memory release when a frames are
   // still held by the compositor.
   std::unique_ptr<VideoRendererAlgorithm> algorithm_;
 

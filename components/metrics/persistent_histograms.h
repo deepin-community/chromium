@@ -6,11 +6,11 @@
 #define COMPONENTS_METRICS_PERSISTENT_HISTOGRAMS_H_
 
 #include <string>
+#include <string_view>
 
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/strings/string_piece.h"
 
 // Feature definition for enabling histogram persistence. Note that this feature
 // (along with its param `kPersistentHistogramsStorage`, declared below) is not
@@ -44,6 +44,11 @@ extern const char kBrowserMetricsName[];
 // future session's metrics instead of independently.
 extern const char kDeferredBrowserMetricsName[];
 
+// Get the path under the given base directory that wil be used to create a
+// "spare" file if a mapped file is being used for the allocator.
+base::FilePath GetPersistentHistogramsSpareFilePath(
+    const base::FilePath& metrics_dir);
+
 // Do all the checking and work necessary to enable persistent histograms.
 // `metrics_dir` specifies the root directory where persistent histograms will
 // live. If `persistent_histograms_enabled` is false, this is essentially a
@@ -55,7 +60,7 @@ extern const char kDeferredBrowserMetricsName[];
 // should be made when appropriate.
 void InstantiatePersistentHistograms(const base::FilePath& metrics_dir,
                                      bool persistent_histograms_enabled,
-                                     base::StringPiece storage);
+                                     std::string_view storage);
 
 // Schedule the tasks required to cleanup the persistent metrics files.
 void PersistentHistogramsCleanup(const base::FilePath& metrics_dir);

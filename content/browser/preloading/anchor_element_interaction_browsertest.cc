@@ -2,11 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
+#include <string_view>
+
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "build/build_config.h"
+#include "components/input/render_widget_host_input_event_router.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
-#include "content/browser/renderer_host/render_widget_host_input_event_router.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents.h"
@@ -23,6 +26,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/input/synthetic_web_input_event_builders.h"
 #include "third_party/blink/public/common/input/web_gesture_event.h"
+#include "third_party/blink/public/common/navigation/preloading_headers.h"
 
 namespace content {
 namespace {
@@ -74,7 +78,7 @@ class AnchorElementInteractionBrowserTest : public ContentBrowserTest {
 
 struct TestScriptOptions {
   gfx::Rect link_area;
-  base::StringPiece eagerness = "conservative";
+  std::string_view eagerness = "conservative";
 };
 
 std::string MakeTestScript(const TestScriptOptions& options = {}) {
@@ -111,7 +115,14 @@ std::string MakeTestScript(const TestScriptOptions& options = {}) {
 }
 
 // End-to-end test that document rules can cause prefetch on mouse down.
-IN_PROC_BROWSER_TEST_F(AnchorElementInteractionBrowserTest, MouseDownPrefetch) {
+// TODO(crbug.com/422253225): Flaky on TSan bots.
+#ifdef THREAD_SANITIZER
+#define MAYBE_MouseDownPrefetch DISABLED_MouseDownPrefetch
+#else
+#define MAYBE_MouseDownPrefetch MouseDownPrefetch
+#endif
+IN_PROC_BROWSER_TEST_F(AnchorElementInteractionBrowserTest,
+                       MAYBE_MouseDownPrefetch) {
   ASSERT_TRUE(
       NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
   ASSERT_TRUE(ExecJs(shell()->web_contents(),
@@ -119,12 +130,12 @@ IN_PROC_BROWSER_TEST_F(AnchorElementInteractionBrowserTest, MouseDownPrefetch) {
 
   auto* widget = GetWidgetHost();
   MainThreadFrameObserver(widget).Wait();
-  blink::WebMouseEvent mouse_events[] = {
+  auto mouse_events = std::to_array<blink::WebMouseEvent>({
       blink::SyntheticWebMouseEventBuilder::Build(
           blink::WebInputEvent::Type::kMouseDown, 50, 50, 0),
       blink::SyntheticWebMouseEventBuilder::Build(
           blink::WebInputEvent::Type::kMouseUp, 50, 50, 0),
-  };
+  });
   for (auto& event : mouse_events) {
     event.button = blink::WebMouseEvent::Button::kLeft;
     event.click_count = 1;
@@ -133,7 +144,8 @@ IN_PROC_BROWSER_TEST_F(AnchorElementInteractionBrowserTest, MouseDownPrefetch) {
   widget->ForwardMouseEvent(mouse_events[0]);
   net::test_server::HttpRequest prefetch_request = AwaitNextRequest();
   EXPECT_EQ(prefetch_request.relative_url, "/title2.html");
-  EXPECT_EQ(prefetch_request.headers["sec-purpose"], "prefetch");
+  EXPECT_EQ(prefetch_request.headers[blink::kSecPurposeHeaderName],
+            blink::kSecPurposePrefetchHeaderValue);
 
   TestNavigationObserver navigation_observer(shell()->web_contents());
   widget->ForwardMouseEvent(mouse_events[1]);
@@ -145,8 +157,14 @@ IN_PROC_BROWSER_TEST_F(AnchorElementInteractionBrowserTest, MouseDownPrefetch) {
 }
 
 // End-to-end test that document rules can cause prefetch on mouse hover.
+// TODO(crbug.com/462761508): Flaky on TSan bots.
+#ifdef THREAD_SANITIZER
+#define MAYBE_MouseHoverPrefetch DISABLED_MouseHoverPrefetch
+#else
+#define MAYBE_MouseHoverPrefetch MouseHoverPrefetch
+#endif
 IN_PROC_BROWSER_TEST_F(AnchorElementInteractionBrowserTest,
-                       MouseHoverPrefetch) {
+                       MAYBE_MouseHoverPrefetch) {
   ASSERT_TRUE(
       NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
   ASSERT_TRUE(ExecJs(shell()->web_contents(),
@@ -160,7 +178,8 @@ IN_PROC_BROWSER_TEST_F(AnchorElementInteractionBrowserTest,
                      blink::WebInputEvent::Type::kMouseMove, {50, 50});
   net::test_server::HttpRequest prefetch_request = AwaitNextRequest();
   EXPECT_EQ(prefetch_request.relative_url, "/title2.html");
-  EXPECT_EQ(prefetch_request.headers["sec-purpose"], "prefetch");
+  EXPECT_EQ(prefetch_request.headers[blink::kSecPurposeHeaderName],
+            blink::kSecPurposePrefetchHeaderValue);
 
   TestNavigationObserver navigation_observer(shell()->web_contents());
   SimulateMouseClickAt(shell()->web_contents(), 0,
@@ -176,7 +195,14 @@ IN_PROC_BROWSER_TEST_F(AnchorElementInteractionBrowserTest,
 #if !BUILDFLAG(IS_MAC)
 
 // End-to-end test that document rules can cause prefetch on touch down.
-IN_PROC_BROWSER_TEST_F(AnchorElementInteractionBrowserTest, TouchDownPrefetch) {
+// TODO(crbug.com/438933681): Flaky on TSan bots, fails consistently locally.
+#ifdef THREAD_SANITIZER
+#define MAYBE_TouchDownPrefetch DISABLED_TouchDownPrefetch
+#else
+#define MAYBE_TouchDownPrefetch TouchDownPrefetch
+#endif
+IN_PROC_BROWSER_TEST_F(AnchorElementInteractionBrowserTest,
+                       MAYBE_TouchDownPrefetch) {
   ASSERT_TRUE(
       NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
   ASSERT_TRUE(ExecJs(shell()->web_contents(),
@@ -192,7 +218,8 @@ IN_PROC_BROWSER_TEST_F(AnchorElementInteractionBrowserTest, TouchDownPrefetch) {
   router->RouteTouchEvent(view, &touch_event, ui::LatencyInfo());
   net::test_server::HttpRequest prefetch_request = AwaitNextRequest();
   EXPECT_EQ(prefetch_request.relative_url, "/title2.html");
-  EXPECT_EQ(prefetch_request.headers["sec-purpose"], "prefetch");
+  EXPECT_EQ(prefetch_request.headers[blink::kSecPurposeHeaderName],
+            blink::kSecPurposePrefetchHeaderValue);
 
   // The synthetic click originates from the gesture recognizer's tap gesture,
   // not the touch end.

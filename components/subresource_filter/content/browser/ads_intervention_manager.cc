@@ -31,8 +31,9 @@ const char kAdsInterventionRecordedHistogramName[] =
 
 AdsInterventionStatus GetAdsInterventionStatus(bool activation_status,
                                                bool intervention_active) {
-  if (!intervention_active)
+  if (!intervention_active) {
     return AdsInterventionStatus::kExpired;
+  }
 
   return activation_status ? AdsInterventionStatus::kBlocking
                            : AdsInterventionStatus::kWouldBlock;
@@ -61,7 +62,7 @@ AdsInterventionManager::~AdsInterventionManager() = default;
 void AdsInterventionManager::TriggerAdsInterventionForUrlOnSubsequentLoads(
     const GURL& url,
     mojom::AdsViolation ads_violation) {
-  base::Value::Dict additional_metadata;
+  base::DictValue additional_metadata;
 
   double now = clock_->Now().InSecondsFSinceUnixEpoch();
   additional_metadata.Set(kLastAdsViolationTimeKey, now);
@@ -84,11 +85,11 @@ void AdsInterventionManager::TriggerAdsInterventionForUrlOnSubsequentLoads(
 std::optional<AdsInterventionManager::LastAdsIntervention>
 AdsInterventionManager::GetLastAdsIntervention(const GURL& url) const {
   // The last active ads intervention is stored in the site metadata.
-  std::optional<base::Value::Dict> dict =
-      settings_manager_->GetSiteMetadata(url);
+  std::optional<base::DictValue> dict = settings_manager_->GetSiteMetadata(url);
 
-  if (!dict)
+  if (!dict) {
     return std::nullopt;
+  }
 
   std::optional<int> ads_violation = dict->FindInt(kLastAdsViolationKey);
   std::optional<double> last_violation_time =
@@ -109,7 +110,7 @@ AdsInterventionManager::GetLastAdsIntervention(const GURL& url) const {
 bool AdsInterventionManager::ShouldActivate(
     content::NavigationHandle* navigation_handle) const {
   const GURL& url(navigation_handle->GetURL());
-  // TODO(https://crbug.com/1136987): Add new ads intervention
+  // TODO(crbug.com/40724530): Add new ads intervention
   // manager function to return struct with all ads intervention
   // metadata to reduce metadata accesses.
   std::optional<AdsInterventionManager::LastAdsIntervention> last_intervention =
@@ -121,7 +122,7 @@ bool AdsInterventionManager::ShouldActivate(
       settings_manager_->GetSiteActivationFromMetadata(url);
   bool has_active_ads_intervention = false;
 
-  // TODO(crbug.com/1131971): If a host triggers multiple times on a single
+  // TODO(crbug.com/40721691): If a host triggers multiple times on a single
   // navigate and the durations don't match, we'll use the last duration rather
   // than the longest. The metadata should probably store the activation with
   // the longest duration.

@@ -50,9 +50,6 @@ class BLINK_PLATFORM_EXPORT WebThreadScheduler
   // Returns main thread scheduler for the main thread of the current process.
   static WebThreadScheduler& MainThreadScheduler();
 
-  // Returns the compositor task runner.
-  virtual scoped_refptr<base::SingleThreadTaskRunner> CompositorTaskRunner();
-
   // Returns a default task runner. This is basically same as the default task
   // runner, but is explicitly allowed to run JavaScript. For the detail, see
   // the comment at blink::ThreadScheduler::DeprecatedDefaultTaskRunner.
@@ -66,11 +63,6 @@ class BLINK_PLATFORM_EXPORT WebThreadScheduler
   // main thread.
   virtual std::unique_ptr<WebAgentGroupScheduler>
   CreateWebAgentGroupScheduler() = 0;
-
-  // Tells the scheduler about the change of renderer visibility status (e.g.
-  // "all widgets are hidden" condition). Used mostly for metric purposes.
-  // Must be called on the main thread.
-  virtual void SetRendererHidden(bool hidden);
 
   // Tells the scheduler about the change of renderer background status, i.e.,
   // there are no critical, user facing activities (visual, audio, etc...)
@@ -91,10 +83,6 @@ class BLINK_PLATFORM_EXPORT WebThreadScheduler
   virtual void PauseTimersForAndroidWebView();
   virtual void ResumeTimersForAndroidWebView();
 #endif  // BUILDFLAG(IS_ANDROID)
-
-  // Sets the kind of renderer process. Should be called on the main thread
-  // once.
-  virtual void SetRendererProcessType(WebRendererProcessType type);
 
   // IPC::Channel::UrgentMessageDelegate implementation:
   void OnUrgentMessageReceived() override;

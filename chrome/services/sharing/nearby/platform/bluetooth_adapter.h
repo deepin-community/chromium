@@ -12,8 +12,7 @@
 #include "third_party/nearby/src/internal/platform/implementation/ble_v2.h"
 #include "third_party/nearby/src/internal/platform/implementation/bluetooth_adapter.h"
 
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 // Concrete BluetoothAdapter implementation and BleV2Peripheral implementation.
 // api::BluetoothAdapter is a synchronous interface, so this implementation
@@ -35,8 +34,8 @@ class BluetoothAdapter : public api::BluetoothAdapter,
   ScanMode GetScanMode() const override;
   bool SetScanMode(ScanMode scan_mode) override;
   std::string GetName() const override;
-  bool SetName(absl::string_view name, bool persist) override;
-  bool SetName(absl::string_view name) override;
+  bool SetName(std::string_view name, bool persist) override;
+  bool SetName(std::string_view name) override;
   std::string GetMacAddress() const override;
 
   // api::ble_v2::BlePeripheral:
@@ -47,7 +46,6 @@ class BluetoothAdapter : public api::BluetoothAdapter,
   const mojo::SharedRemote<bluetooth::mojom::Adapter> adapter_;
 };
 
-}  // namespace chrome
-}  // namespace nearby
+}  // namespace nearby::chrome
 
 #endif  // CHROME_SERVICES_SHARING_NEARBY_PLATFORM_BLUETOOTH_ADAPTER_H_

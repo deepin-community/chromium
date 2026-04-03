@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/signin/sync_confirmation_handler.h"
 
+#include <optional>
 #include <vector>
 
 #include "base/functional/bind.h"
@@ -13,13 +14,11 @@
 #include "base/metrics/user_metrics.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/consent_auditor/consent_auditor_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/signin/signin_view_controller_delegate.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
@@ -29,19 +28,13 @@
 #include "components/consent_auditor/consent_auditor.h"
 #include "components/signin/public/base/avatar_icon_util.h"
 #include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/tribool.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "url/gurl.h"
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "ash/webui/settings/public/constants/routes.mojom.h"
-#include "chrome/browser/lacros/lacros_url_handling.h"
-#include "chrome/common/webui_url_constants.h"
-#include "components/sync/base/features.h"
-#endif
 
 using signin::ConsentLevel;
 
@@ -50,26 +43,12 @@ const int kProfileImageSize = 128;
 
 // Derives screen mode of sync opt in screen from the
 // CanShowHistorySyncOptInsWithoutMinorModeRestrictions capability.
-bool UseMinorModeRestrictions() {
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+constexpr bool UseMinorModeRestrictions() {
+#if BUILDFLAG(IS_CHROMEOS)
   // ChromeOS handles minor modes separately.
   return false;
 #else
-  return base::FeatureList::IsEnabled(
-      ::switches::kMinorModeRestrictionsForHistorySyncOptIn);
-#endif
-}
-
-// After this time delta, user must see a screen. If it was impossible to get
-// the CanShowHistorySyncOptInsWithoutMinorModeRestrictions capability before
-// the deadline, the screen should be configured in minor-safe way.
-base::TimeDelta GetMinorModeRestrictionsDeadline() {
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Not implemented for those platforms.
-  NOTREACHED_NORETURN();
-#else
-  return base::Milliseconds(
-      ::switches::kMinorModeRestrictionsFetchDeadlineMs.Get());
+  return true;
 #endif
 }
 
@@ -78,6 +57,24 @@ inline bool ScreenModeIsPending(const AccountInfo& primary_account_info) {
          SyncConfirmationScreenMode::kPending;
 }
 
+// Translates screen `mode` to the corresponding metric describing what type of
+// buttons are presented.
+signin_metrics::SyncButtonsType GetButtonTypeMetricValue(
+    SyncConfirmationScreenMode mode) {
+  switch (mode) {
+    case SyncConfirmationScreenMode::kRestricted:
+      return signin_metrics::SyncButtonsType::kSyncEqualWeightedFromCapability;
+    case SyncConfirmationScreenMode::kDeadlined:
+      return signin_metrics::SyncButtonsType::kSyncEqualWeightedFromDeadline;
+    case SyncConfirmationScreenMode::kUnrestricted:
+      return signin_metrics::SyncButtonsType::kSyncNotEqualWeighted;
+
+    // Metric is not emitted for these cases:
+    case SyncConfirmationScreenMode::kUnsupported:
+    case SyncConfirmationScreenMode::kPending:
+      NOTREACHED();
+  }
+}
 }  // namespace
 
 SyncConfirmationScreenMode GetScreenMode(
@@ -103,12 +100,14 @@ SyncConfirmationHandler::SyncConfirmationHandler(
       browser_(browser),
       identity_manager_(IdentityManagerFactory::GetForProfile(profile_)) {
   DCHECK(profile_);
-  BrowserList::AddObserver(this);
+  if (browser_) {
+    browser_close_subscription_ =
+        browser_->RegisterBrowserDidClose(base::BindRepeating(
+            &SyncConfirmationHandler::OnBrowserClosed, base::Unretained(this)));
+  }
 }
 
 SyncConfirmationHandler::~SyncConfirmationHandler() {
-  BrowserList::RemoveObserver(this);
-
   // Abort signin and prevent sync from starting if none of the actions on the
   // sync confirmation dialog are taken by the user.
   if (!did_user_explicitly_interact_) {
@@ -116,9 +115,10 @@ SyncConfirmationHandler::~SyncConfirmationHandler() {
   }
 }
 
-void SyncConfirmationHandler::OnBrowserRemoved(Browser* browser) {
-  if (browser_ == browser)
+void SyncConfirmationHandler::OnBrowserClosed(BrowserWindowInterface* browser) {
+  if (browser_ == browser) {
     browser_ = nullptr;
+  }
 }
 
 void SyncConfirmationHandler::RegisterMessages() {
@@ -140,36 +140,31 @@ void SyncConfirmationHandler::RegisterMessages() {
       "accountInfoRequest",
       base::BindRepeating(&SyncConfirmationHandler::HandleAccountInfoRequest,
                           base::Unretained(this)));
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  web_ui()->RegisterMessageCallback(
-      "openDeviceSyncSettings",
-      base::BindRepeating(
-          &SyncConfirmationHandler::HandleOpenDeviceSyncSettings,
-          base::Unretained(this)));
-#endif
 }
 
-void SyncConfirmationHandler::HandleConfirm(const base::Value::List& args) {
+void SyncConfirmationHandler::HandleConfirm(const base::ListValue& args) {
+  CHECK_EQ(3U, args.size());
   did_user_explicitly_interact_ = true;
-  RecordConsent(args);
+  RecordConsent(args[0].GetList(), args[1].GetString());
   CloseModalSigninWindow(LoginUIService::SYNC_WITH_DEFAULT_SETTINGS);
 }
 
-void SyncConfirmationHandler::HandleGoToSettings(
-    const base::Value::List& args) {
+void SyncConfirmationHandler::HandleGoToSettings(const base::ListValue& args) {
+  CHECK_EQ(3U, args.size());
   DCHECK(SyncServiceFactory::IsSyncAllowed(profile_));
   did_user_explicitly_interact_ = true;
-  RecordConsent(args);
+  RecordConsent(args[0].GetList(), args[1].GetString());
   CloseModalSigninWindow(LoginUIService::CONFIGURE_SYNC_FIRST);
 }
 
-void SyncConfirmationHandler::HandleUndo(const base::Value::List& args) {
+void SyncConfirmationHandler::HandleUndo(const base::ListValue& args) {
+  CHECK_EQ(1U, args.size());
   did_user_explicitly_interact_ = true;
   CloseModalSigninWindow(LoginUIService::ABORT_SYNC);
 }
 
 void SyncConfirmationHandler::HandleAccountInfoRequest(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(SyncServiceFactory::IsSyncAllowed(profile_));
   AccountInfo primary_account_info = identity_manager_->FindExtendedAccountInfo(
       identity_manager_->GetPrimaryAccountInfo(ConsentLevel::kSignin));
@@ -181,20 +176,9 @@ void SyncConfirmationHandler::HandleAccountInfoRequest(
   DispatchAccountInfoUpdate(primary_account_info);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-void SyncConfirmationHandler::HandleOpenDeviceSyncSettings(
-    const base::Value::List& args) {
-  std::string os_sync_settings_url = chrome::kChromeUIOSSettingsURL;
-  os_sync_settings_url.append(chromeos::settings::mojom::kSyncSubpagePath);
-  lacros_url_handling::NavigateInAsh(GURL(os_sync_settings_url));
-}
-#endif
-
-void SyncConfirmationHandler::RecordConsent(const base::Value::List& args) {
-  CHECK_EQ(2U, args.size());
-  const base::Value::List& consent_description = args[0].GetList();
-  const std::string& consent_confirmation = args[1].GetString();
-
+void SyncConfirmationHandler::RecordConsent(
+    const base::ListValue& consent_description,
+    const std::string& consent_confirmation) {
   // The strings returned by the WebUI are not free-form, they must belong into
   // a pre-determined set of strings (stored in |string_to_grd_id_map_|). As
   // this has privacy and legal implications, CHECK the integrity of the strings
@@ -223,27 +207,28 @@ void SyncConfirmationHandler::RecordConsent(const base::Value::List& args) {
   consent_auditor::ConsentAuditor* consent_auditor =
       ConsentAuditorFactory::GetForProfile(profile_);
   consent_auditor->RecordSyncConsent(
-      identity_manager_->GetPrimaryAccountId(ConsentLevel::kSignin),
+      identity_manager_->GetPrimaryAccountInfo(ConsentLevel::kSignin).gaia,
       sync_consent);
 }
 
 void SyncConfirmationHandler::OnAvatarChanged(const AccountInfo& info) {
-  DCHECK(info.IsValid());
+  CHECK(info.GetAvatarUrl().has_value());
   avatar_notified_ = true;
 
-  GURL picture_gurl(info.picture_url);
+  GURL picture_gurl(*info.GetAvatarUrl());
   GURL picture_gurl_with_options = signin::GetAvatarImageURLWithOptions(
       picture_gurl, kProfileImageSize, /*no_silhouette=*/false);
 
-  base::Value::Dict value;
+  base::DictValue value;
   value.Set("src", picture_gurl_with_options.spec());
-  value.Set("showEnterpriseBadge", info.IsManaged());
+  value.Set("showEnterpriseBadge", info.IsManaged() == signin::Tribool::kTrue);
   FireWebUIListener("account-info-changed", value);
 }
 
 void SyncConfirmationHandler::OnScreenModeChanged(
     SyncConfirmationScreenMode mode) {
-  DCHECK(mode != SyncConfirmationScreenMode::kPending);
+  DCHECK_NE(mode, SyncConfirmationScreenMode::kPending);
+  DCHECK_NE(mode, SyncConfirmationScreenMode::kUnsupported);
   DCHECK(!screen_mode_notified_) << "Must be called only once";
   screen_mode_notified_ = true;
   screen_mode_deadline_.Stop();
@@ -270,12 +255,19 @@ void SyncConfirmationHandler::OnScreenModeChanged(
   }
 
   FireWebUIListener("screen-mode-changed", static_cast<int>(mode));
+  base::UmaHistogramEnumeration("Signin.SyncButtons.Shown",
+                                GetButtonTypeMetricValue(mode));
 }
 
 void SyncConfirmationHandler::OnDeadline() {
-  if (!screen_mode_notified_) {
-    OnScreenModeChanged(SyncConfirmationScreenMode::kRestricted);
+  if (screen_mode_notified_ || !IsJavascriptAllowed()) {
+    // Do not override already configured screen mode, and ignore update attempt
+    // when the UI is no longer present. Note: this is called from a timer
+    // routine rather than directly from being handled from the UI app.
+    return;
   }
+
+  OnScreenModeChanged(SyncConfirmationScreenMode::kDeadlined);
 }
 
 void SyncConfirmationHandler::DispatchAccountInfoUpdate(
@@ -297,6 +289,7 @@ void SyncConfirmationHandler::DispatchAccountInfoUpdate(
     return;
   }
 
+  // Subsequent code will send updates to the UI.
   AllowJavascript();
 
   if (info.IsValid() && !avatar_notified_) {
@@ -354,7 +347,7 @@ void SyncConfirmationHandler::CloseModalSigninWindow(
 }
 
 void SyncConfirmationHandler::HandleInitializedWithSize(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AccountInfo primary_account_info = identity_manager_->FindExtendedAccountInfo(
       identity_manager_->GetPrimaryAccountInfo(ConsentLevel::kSignin));
   if (primary_account_info.IsEmpty()) {
@@ -384,10 +377,12 @@ void SyncConfirmationHandler::HandleInitializedWithSize(
 
   if (!screen_mode_notified_ && UseMinorModeRestrictions()) {
     // Deadline timer for the case when screen mode doesn't arrive in time.
-    screen_mode_deadline_.Start(FROM_HERE, GetMinorModeRestrictionsDeadline(),
+    screen_mode_deadline_.Start(FROM_HERE,
+                                signin::GetMinorModeRestrictionsDeadline(),
                                 this, &SyncConfirmationHandler::OnDeadline);
   }
 
-  if (browser_)
+  if (browser_) {
     signin::SetInitializedModalHeight(browser_, web_ui(), args);
+  }
 }

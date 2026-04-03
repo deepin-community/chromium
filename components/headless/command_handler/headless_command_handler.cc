@@ -6,9 +6,10 @@
 
 #include <cstdint>
 #include <iostream>
-#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "base/base64.h"
 #include "base/command_line.h"
@@ -26,6 +27,7 @@
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -54,6 +56,11 @@ const char kChromeHeadlessURL[] = "chrome://headless/";
 
 const char kHeadlessCommandHtml[] = "headless_command.html";
 const char kHeadlessCommandJs[] = "headless_command.js";
+
+// Specifies the initial window size: --window-size=w,h. Headless Chrome users
+// historically use this to specify expected screenshot size. Originally defined
+// in //chrome/common/chrome_switches.h which we cannot include from here.
+const char kWindowSize[] = "window-size";
 
 HeadlessCommandHandler::DoneCallback& GetGlobalDoneCallback() {
   static base::NoDestructor<HeadlessCommandHandler::DoneCallback> done_callback;
@@ -96,8 +103,8 @@ void CreateAndAddHeadlessHostDataSource(
   source->AddResourcePath(kHeadlessCommandJs, IDR_HEADLESS_COMMAND_JS);
 }
 
-base::Value::Dict GetColorDictFromHexColor(uint32_t color, bool has_alpha) {
-  base::Value::Dict dict;
+base::DictValue GetColorDictFromHexColor(uint32_t color, bool has_alpha) {
+  base::DictValue dict;
   if (has_alpha) {
     dict.Set("r", static_cast<int>((color & 0xff000000) >> 24));
     dict.Set("g", static_cast<int>((color & 0x00ff0000) >> 16));
@@ -112,7 +119,19 @@ base::Value::Dict GetColorDictFromHexColor(uint32_t color, bool has_alpha) {
   return dict;
 }
 
-bool GetCommandDictAndOutputPaths(base::Value::Dict* commands,
+bool ParseWindowSize(const std::string& window_size, int* width, int* height) {
+  std::vector<std::string_view> width_and_height = base::SplitStringPiece(
+      window_size, ",x", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
+  if (width_and_height.size() != 2 ||
+      !base::StringToInt(width_and_height[0], width) ||
+      !base::StringToInt(width_and_height[1], height)) {
+    return false;
+  }
+
+  return *width > 0 && *height > 0;
+}
+
+bool GetCommandDictAndOutputPaths(base::DictValue* commands,
                                   base::FilePath* pdf_file_path,
                                   base::FilePath* screenshot_file_path) {
   const base::CommandLine* command_line =
@@ -132,7 +151,7 @@ bool GetCommandDictAndOutputPaths(base::Value::Dict* commands,
     }
     *pdf_file_path = path;
 
-    base::Value::Dict params;
+    base::DictValue params;
     if (command_line->HasSwitch(switches::kNoPDFHeaderFooter)) {
       params.Set("noHeaderFooter", true);
     }
@@ -161,22 +180,34 @@ bool GetCommandDictAndOutputPaths(base::Value::Dict* commands,
         base::ToLowerASCII(path.FinalExtension());
 
     static constexpr auto kImageFileTypes =
-        base::MakeFixedFlatMap<base::FilePath::StringPieceType, const char*>({
+        base::MakeFixedFlatMap<base::FilePath::StringViewType, const char*>({
             {FILE_PATH_LITERAL(".jpeg"), "jpeg"},
             {FILE_PATH_LITERAL(".jpg"), "jpeg"},
             {FILE_PATH_LITERAL(".png"), "png"},
             {FILE_PATH_LITERAL(".webp"), "webp"},
         });
 
-    auto* it = kImageFileTypes.find(extension);
+    auto it = kImageFileTypes.find(extension);
     if (it == kImageFileTypes.cend()) {
       LOG(ERROR) << "Unsupported screenshot image file type: "
                  << path.FinalExtension();
       return false;
     }
 
-    base::Value::Dict params;
+    base::DictValue params;
     params.Set("format", it->second);
+
+    if (command_line->HasSwitch(kWindowSize)) {
+      int width, height;
+      if (ParseWindowSize(command_line->GetSwitchValueASCII(kWindowSize),
+                          &width, &height)) {
+        params.Set("width", width);
+        params.Set("height", height);
+      } else {
+        LOG(ERROR) << "Invalid --" << kWindowSize << " specification ignored";
+      }
+    }
+
     commands->Set("screenshot", std::move(params));
   }
 
@@ -229,8 +260,7 @@ bool GetCommandDictAndOutputPaths(base::Value::Dict* commands,
 }
 
 bool WriteFileTask(base::FilePath file_path, std::string file_data) {
-  auto file_span = base::make_span(
-      reinterpret_cast<const uint8_t*>(file_data.data()), file_data.size());
+  auto file_span = base::as_byte_span(file_data);
   if (!base::WriteFile(file_path, file_span)) {
     PLOG(ERROR) << "Failed to write file " << file_path;
     return false;
@@ -313,7 +343,25 @@ void HeadlessCommandHandler::ProcessCommands(
 }
 
 void HeadlessCommandHandler::DocumentOnLoadCompletedInPrimaryMainFrame() {
-  base::Value::Dict commands;
+  // Expose DevTools protocol to the target.
+  base::DictValue expose_params;
+  expose_params.Set("targetId", devtools_client_.GetTargetId());
+  browser_devtools_client_.SendCommand(
+      "Target.exposeDevToolsProtocol", std::move(expose_params),
+      base::BindOnce(&HeadlessCommandHandler::OnDevToolsProtocolExposed,
+                     base::Unretained(this)));
+}
+
+void HeadlessCommandHandler::OnDevToolsProtocolExposed(base::DictValue) {
+  // Set up Inspector domain.
+  devtools_client_.AddEventHandler(
+      "Inspector.targetCrashed",
+      base::BindRepeating(&HeadlessCommandHandler::OnTargetCrashed,
+                          base::Unretained(this)));
+  devtools_client_.SendCommand("Inspector.enable");
+
+  // Prepare headless commands.
+  base::DictValue commands;
   if (!GetCommandDictAndOutputPaths(&commands, &pdf_file_path_,
                                     &screenshot_file_path_) ||
       commands.empty()) {
@@ -323,24 +371,10 @@ void HeadlessCommandHandler::DocumentOnLoadCompletedInPrimaryMainFrame() {
 
   commands.Set("targetUrl", target_url_.spec());
 
-  // Expose DevTools protocol to the target.
-  base::Value::Dict expose_params;
-  expose_params.Set("targetId", devtools_client_.GetTargetId());
-  browser_devtools_client_.SendCommand("Target.exposeDevToolsProtocol",
-                                       std::move(expose_params));
-
-  // Set up Inspector domain.
-  devtools_client_.AddEventHandler(
-      "Inspector.targetCrashed",
-      base::BindRepeating(&HeadlessCommandHandler::OnTargetCrashed,
-                          base::Unretained(this)));
-  devtools_client_.SendCommand("Inspector.enable");
-
-  std::string json_commands;
-  base::JSONWriter::Write(commands, &json_commands);
+  std::string json_commands = base::WriteJson(commands).value_or("");
   std::string script = "executeCommands(JSON.parse('" + json_commands + "'))";
 
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("expression", script);
   params.Set("awaitPromise", true);
   params.Set("returnByValue", true);
@@ -355,12 +389,12 @@ void HeadlessCommandHandler::WebContentsDestroyed() {
   Done();
 }
 
-void HeadlessCommandHandler::OnTargetCrashed(const base::Value::Dict&) {
+void HeadlessCommandHandler::OnTargetCrashed(const base::DictValue&) {
   LOG(ERROR) << "Abnormal renderer termination.";
   Done();
 }
 
-void HeadlessCommandHandler::OnCommandsResult(base::Value::Dict result) {
+void HeadlessCommandHandler::OnCommandsResult(base::DictValue result) {
   if (result.FindBoolByDottedPath("result.result.value.pageLoadTimedOut")
           .value_or(false)) {
     result_ = Result::kPageLoadTimeout;

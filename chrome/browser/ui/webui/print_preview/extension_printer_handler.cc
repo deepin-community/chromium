@@ -65,8 +65,9 @@ void UpdateJobFileInfo(std::unique_ptr<extensions::PrinterProviderPrintJob> job,
                        base::ReadOnlySharedMemoryRegion pwg_region) {
   auto data =
       base::RefCountedSharedMemoryMapping::CreateFromWholeRegion(pwg_region);
-  if (data)
+  if (data) {
     job->document_bytes = data;
+  }
   std::move(callback).Run(std::move(job));
 }
 
@@ -94,8 +95,9 @@ std::optional<ProvisionalUsbPrinter> ParseProvisionalUsbPrinterId(
     const std::string& printer_id) {
   std::vector<std::string> components = base::SplitString(
       printer_id, ":", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-  if (components.size() != 3 || components[0] != kProvisionalUsbLabel)
+  if (components.size() != 3 || components[0] != kProvisionalUsbLabel) {
     return std::nullopt;
+  }
   return ProvisionalUsbPrinter{.extension_id = std::move(components[1]),
                                .device_guid = std::move(components[2])};
 }
@@ -115,7 +117,7 @@ struct ExtensionPrinterSettings {
   std::string destination_id;
   std::string capabilities;
   gfx::Size page_size;
-  base::Value::Dict ticket;
+  base::DictValue ticket;
 };
 
 // Parses print job `settings` for an extension printer and returns the parsed
@@ -123,7 +125,7 @@ struct ExtensionPrinterSettings {
 // this function triggers a crash, that means the TS code and the C++ code are
 // out of sync.
 ExtensionPrinterSettings ParseExtensionPrinterSettings(
-    const base::Value::Dict& settings) {
+    const base::DictValue& settings) {
   ExtensionPrinterSettings parsed_settings;
   parsed_settings.destination_id = *settings.FindString(kSettingDeviceName);
   parsed_settings.capabilities = *settings.FindString(kSettingCapabilities);
@@ -132,7 +134,8 @@ ExtensionPrinterSettings ParseExtensionPrinterSettings(
       settings.FindInt(kSettingPageHeight).value_or(0));
   CHECK(!parsed_settings.page_size.IsEmpty());
   parsed_settings.ticket =
-      *base::JSONReader::ReadDict(*settings.FindString(kSettingTicket));
+      *base::JSONReader::ReadDict(*settings.FindString(kSettingTicket),
+                                  base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   return parsed_settings;
 }
 
@@ -141,8 +144,7 @@ ExtensionPrinterSettings ParseExtensionPrinterSettings(
 ExtensionPrinterHandler::ExtensionPrinterHandler(Profile* profile)
     : profile_(profile) {}
 
-ExtensionPrinterHandler::~ExtensionPrinterHandler() {
-}
+ExtensionPrinterHandler::~ExtensionPrinterHandler() = default;
 
 void ExtensionPrinterHandler::Reset() {
   // TODO(tbarzic): Keep track of pending request ids issued by |this| and
@@ -158,7 +160,7 @@ void ExtensionPrinterHandler::StartGetPrinters(
   DCHECK_EQ(pending_enumeration_count_, 0);
   pending_enumeration_count_ = 1;
   done_callback_ = std::move(done_callback);
-  PRINTER_LOG(DEBUG) << "ExtensionPrinterHandler::StartGetPrinters() called";
+  PRINTER_LOG(EVENT) << "ExtensionPrinterHandler::StartGetPrinters() called";
 
   bool extension_supports_usb_printers = false;
   ExtensionRegistry* registry = ExtensionRegistry::Get(profile_);
@@ -171,7 +173,7 @@ void ExtensionPrinterHandler::StartGetPrinters(
   }
 
   if (extension_supports_usb_printers) {
-    PRINTER_LOG(DEBUG) << "ExtensionPrinterHandler::StartGetPrinters() - "
+    PRINTER_LOG(EVENT) << "ExtensionPrinterHandler::StartGetPrinters() - "
                        << "usb printers detected";
     pending_enumeration_count_++;
     UsbDeviceManager* usb_manager = UsbDeviceManager::Get(profile_);
@@ -197,7 +199,7 @@ void ExtensionPrinterHandler::StartGetCapability(
 
 void ExtensionPrinterHandler::StartPrint(
     const std::u16string& job_title,
-    base::Value::Dict settings,
+    base::DictValue settings,
     scoped_refptr<base::RefCountedMemory> print_data,
     PrintCallback callback) {
   ExtensionPrinterSettings parsed_settings =
@@ -244,7 +246,7 @@ void ExtensionPrinterHandler::StartGrantPrinterAccess(
   std::optional<ProvisionalUsbPrinter> printer =
       ParseProvisionalUsbPrinterId(printer_id);
   if (!printer.has_value()) {
-    std::move(callback).Run(base::Value::Dict());
+    std::move(callback).Run(base::DictValue());
     return;
   }
 
@@ -252,7 +254,7 @@ void ExtensionPrinterHandler::StartGrantPrinterAccess(
       UsbDeviceManager::Get(profile_)->GetDeviceInfo(
           printer.value().device_guid);
   if (!device) {
-    std::move(callback).Run(base::Value::Dict());
+    std::move(callback).Run(base::DictValue());
     return;
   }
 
@@ -278,8 +280,9 @@ void ExtensionPrinterHandler::ConvertToPWGRaster(
     const gfx::Size& page_size,
     std::unique_ptr<extensions::PrinterProviderPrintJob> job,
     PrintJobCallback callback) {
-  if (!pwg_raster_converter_)
+  if (!pwg_raster_converter_) {
     pwg_raster_converter_ = PwgRasterConverter::CreateDefault();
+  }
 
   PwgRasterSettings bitmap_settings =
       PwgRasterConverter::GetBitmapSettings(printer_description, print_ticket);
@@ -316,26 +319,29 @@ void ExtensionPrinterHandler::DispatchPrintJob(
 
 void ExtensionPrinterHandler::WrapGetPrintersCallback(
     AddedPrintersCallback callback,
-    base::Value::List printers,
+    base::ListValue printers,
     bool done) {
   DCHECK_GT(pending_enumeration_count_, 0);
-  PRINTER_LOG(DEBUG) << "ExtensionPrinterHandler::WrapGetPrintersCallback(): "
+  PRINTER_LOG(EVENT) << "ExtensionPrinterHandler::WrapGetPrintersCallback(): "
                      << "printers.size()=" << printers.size()
                      << " done=" << done;
-  if (!printers.empty())
+  if (!printers.empty()) {
     callback.Run(std::move(printers));
+  }
 
-  if (done)
+  if (done) {
     pending_enumeration_count_--;
-  if (pending_enumeration_count_ == 0)
+  }
+  if (pending_enumeration_count_ == 0) {
     std::move(done_callback_).Run();
+  }
 }
 
 void ExtensionPrinterHandler::WrapGetCapabilityCallback(
     GetCapabilityCallback callback,
-    base::Value::Dict capability) {
-  base::Value::Dict capabilities;
-  base::Value::Dict cdd = ValidateCddForPrintPreview(std::move(capability));
+    base::DictValue capability) {
+  base::DictValue capabilities;
+  base::DictValue cdd = ValidateCddForPrintPreview(std::move(capability));
   // Leave |capabilities| empty if |cdd| is empty.
   if (!cdd.empty()) {
     capabilities.Set(kSettingCapabilities,
@@ -352,26 +358,27 @@ void ExtensionPrinterHandler::WrapPrintCallback(PrintCallback callback,
 
 void ExtensionPrinterHandler::WrapGetPrinterInfoCallback(
     GetPrinterInfoCallback callback,
-    base::Value::Dict printer_info) {
+    base::DictValue printer_info) {
   std::move(callback).Run(std::move(printer_info));
 }
 
 void ExtensionPrinterHandler::OnUsbDevicesEnumerated(
     AddedPrintersCallback callback,
     std::vector<device::mojom::UsbDeviceInfoPtr> devices) {
-  PRINTER_LOG(DEBUG) << "ExtensionPrinterHandler::OnUsbDevicesEnumerated() "
+  PRINTER_LOG(EVENT) << "ExtensionPrinterHandler::OnUsbDevicesEnumerated() "
                      << " called";
   ExtensionRegistry* registry = ExtensionRegistry::Get(profile_);
   DevicePermissionsManager* permissions_manager =
       DevicePermissionsManager::Get(profile_);
 
-  base::Value::List printer_list;
+  base::ListValue printer_list;
 
   for (const auto& extension : registry->enabled_extensions()) {
     const UsbPrinterManifestData* manifest_data =
         UsbPrinterManifestData::Get(extension.get());
-    if (!manifest_data || !HasUsbPrinterProviderPermissions(extension.get()))
+    if (!manifest_data || !HasUsbPrinterProviderPermissions(extension.get())) {
       continue;
+    }
 
     const extensions::DevicePermissions* device_permissions =
         permissions_manager->GetForExtension(extension->id());
@@ -388,7 +395,7 @@ void ExtensionPrinterHandler::OnUsbDevicesEnumerated(
         }
 
         printer_list.Append(
-            base::Value::Dict()
+            base::DictValue()
                 .Set("id",
                      GenerateProvisionalUsbPrinterId(extension.get(), *device))
                 .Set("name",
@@ -406,11 +413,13 @@ void ExtensionPrinterHandler::OnUsbDevicesEnumerated(
 
   DCHECK_GT(pending_enumeration_count_, 0);
   pending_enumeration_count_--;
-  base::Value::List list = std::move(printer_list);
-  if (!list.empty())
+  base::ListValue list = std::move(printer_list);
+  if (!list.empty()) {
     callback.Run(std::move(list));
-  if (pending_enumeration_count_ == 0)
+  }
+  if (pending_enumeration_count_ == 0) {
     std::move(done_callback_).Run();
+  }
 }
 
 }  // namespace printing

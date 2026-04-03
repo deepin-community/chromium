@@ -10,10 +10,12 @@
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
@@ -86,11 +88,12 @@ void ParseModalias(const dbus::ObjectPath& object_path,
   BluetoothDevice::VendorIDSource source_value;
   int vendor_value, product_value, device_value;
 
-  if (sscanf(modalias.c_str(), "bluetooth:v%04xp%04xd%04x", &vendor_value,
-             &product_value, &device_value) == 3) {
+  if (UNSAFE_TODO(sscanf(modalias.c_str(), "bluetooth:v%04xp%04xd%04x",
+                         &vendor_value, &product_value, &device_value)) == 3) {
     source_value = BluetoothDevice::VENDOR_ID_BLUETOOTH;
-  } else if (sscanf(modalias.c_str(), "usb:v%04xp%04xd%04x", &vendor_value,
-                    &product_value, &device_value) == 3) {
+  } else if (UNSAFE_TODO(sscanf(modalias.c_str(), "usb:v%04xp%04xd%04x",
+                                &vendor_value, &product_value,
+                                &device_value)) == 3) {
     source_value = BluetoothDevice::VENDOR_ID_USB;
   } else {
     return;
@@ -241,7 +244,6 @@ device::BluetoothTransport BluetoothDeviceBlueZ::GetType() const {
   }
 
   NOTREACHED();
-  return device::BLUETOOTH_TRANSPORT_INVALID;
 }
 
 void BluetoothDeviceBlueZ::CreateGattConnectionImpl(
@@ -299,7 +301,7 @@ void BluetoothDeviceBlueZ::DisconnectGatt() {
 
   // IsPaired() returns true if we've connected to the device before. So we
   // check the dbus property directly.
-  // TODO(crbug.com/649651): Use IsPaired once it returns true only for paired
+  // TODO(crbug.com/40486156): Use IsPaired once it returns true only for paired
   // devices.
   bluez::BluetoothDeviceClient::Properties* properties =
       bluez::BluezDBusManager::Get()->GetBluetoothDeviceClient()->GetProperties(
@@ -569,7 +571,6 @@ void BluetoothDeviceBlueZ::SetConnectionLatency(
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   BLUETOOTH_LOG(EVENT) << "Setting LE connection parameters: min="

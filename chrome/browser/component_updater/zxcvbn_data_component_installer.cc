@@ -4,11 +4,13 @@
 
 #include "chrome/browser/component_updater/zxcvbn_data_component_installer.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_map.h"
@@ -22,8 +24,6 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/ranges/algorithm.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
@@ -38,20 +38,20 @@
 
 namespace component_updater {
 
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kEnglishWikipediaTxtFileName;
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kFemaleNamesTxtFileName;
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kMaleNamesTxtFileName;
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kPasswordsTxtFileName;
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kSurnamesTxtFileName;
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kUsTvAndFilmTxtFileName;
 
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kCombinedRankedDictsFileName;
 
 namespace {
@@ -88,7 +88,7 @@ constexpr std::array<uint8_t, 32> kZxcvbnDataPublicKeySha256 = {
 }  // namespace
 
 bool ZxcvbnDataComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   const std::string* version_string = manifest.FindString("version");
   if (!version_string) {
@@ -100,7 +100,7 @@ bool ZxcvbnDataComponentInstallerPolicy::VerifyInstallation(
     return false;
   }
 
-  if (base::ranges::any_of(kFileNames, [&install_dir](const auto& file_name) {
+  if (std::ranges::any_of(kFileNames, [&install_dir](const auto& file_name) {
         return !base::PathExists(install_dir.Append(file_name));
       })) {
     return false;
@@ -140,7 +140,7 @@ bool ZxcvbnDataComponentInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 ZxcvbnDataComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(update_client::InstallError::NONE);
 }
@@ -150,7 +150,7 @@ void ZxcvbnDataComponentInstallerPolicy::OnCustomUninstall() {}
 void ZxcvbnDataComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   DVLOG(1) << "Zxcvbn Data Component ready, version " << version.GetString()
            << " in " << install_dir;
 

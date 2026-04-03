@@ -6,6 +6,8 @@
 
 #include "content/browser/web_contents/web_contents_android.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "content/public/android/content_jni_headers/DevicePosturePlatformProviderAndroid_jni.h"
 
 namespace content {
@@ -77,3 +79,5 @@ void DevicePosturePlatformProviderAndroid::UpdateDisplayFeature(
 }
 
 }  // namespace content
+
+DEFINE_JNI(DevicePosturePlatformProviderAndroid)

@@ -4,15 +4,17 @@
 
 #include "components/crash/core/common/crash_keys.h"
 
+#include <array>
 #include <deque>
+#include <string_view>
 #include <vector>
 
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/format_macros.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -40,8 +42,8 @@ void SetMetricsClientIdFromGUID(const std::string& metrics_client_guid) {
 #if !BUILDFLAG(USE_CRASHPAD_ANNOTATION)
   std::string stripped_guid(metrics_client_guid);
   // Remove all instance of '-' char from the GUID. So BCD-WXY becomes BCDWXY.
-  base::ReplaceSubstringsAfterOffset(
-      &stripped_guid, 0, "-", base::StringPiece());
+  base::ReplaceSubstringsAfterOffset(&stripped_guid, 0, "-",
+                                     std::string_view());
   if (stripped_guid.empty())
     return;
 
@@ -109,12 +111,12 @@ void ResetCommandLineForTesting() {
 }
 
 using PrinterInfoKey = crash_reporter::CrashKeyString<64>;
-static PrinterInfoKey printer_info_keys[] = {
+static std::array<PrinterInfoKey, 4> printer_info_keys = {{
     {"prn-info-1", PrinterInfoKey::Tag::kArray},
     {"prn-info-2", PrinterInfoKey::Tag::kArray},
     {"prn-info-3", PrinterInfoKey::Tag::kArray},
     {"prn-info-4", PrinterInfoKey::Tag::kArray},
-};
+}};
 
 ScopedPrinterInfo::ScopedPrinterInfo(const std::string& printer_name,
                                      std::vector<std::string> data) {

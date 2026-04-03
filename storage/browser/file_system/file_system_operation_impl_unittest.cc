@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
@@ -264,8 +265,7 @@ class FileSystemOperationImplTest : public testing::Test {
   void GrantQuotaForCurrentUsage() {
     int64_t usage;
     GetUsageAndQuota(&usage, nullptr);
-    quota_manager()->SetQuota(sandbox_file_system_.storage_key(),
-                              sandbox_file_system_.storage_type(), usage);
+    quota_manager()->SetQuota(sandbox_file_system_.storage_key(), usage);
   }
 
   int64_t GetUsage() {
@@ -278,7 +278,6 @@ class FileSystemOperationImplTest : public testing::Test {
     int64_t quota;
     GetUsageAndQuota(nullptr, &quota);
     quota_manager()->SetQuota(sandbox_file_system_.storage_key(),
-                              sandbox_file_system_.storage_type(),
                               quota + quota_delta);
   }
 
@@ -543,7 +542,7 @@ TEST_F(FileSystemOperationImplTest, TestMoveSuccessSrcFileAndOverwrite) {
       Move(src_file, dest_file, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(FileExists("dest"));
 
-  EXPECT_EQ(1, change_observer()->get_and_reset_modify_file_count());
+  EXPECT_EQ(1, change_observer()->get_and_reset_create_file_from_count());
   EXPECT_EQ(1, change_observer()->get_and_reset_remove_file_count());
   EXPECT_TRUE(change_observer()->HasNoChange());
 
@@ -843,7 +842,7 @@ TEST_F(FileSystemOperationImplTest, TestCopyInForeignFileSuccess) {
   EXPECT_EQ(data_size,
             base::ReadFile(PlatformPath("dest/file"), buffer, data_size));
   for (int i = 0; i < data_size; ++i)
-    EXPECT_EQ(test_data.at(i), buffer[i]);
+    UNSAFE_TODO(EXPECT_EQ(test_data.at(i), buffer[i]));
 }
 
 TEST_F(FileSystemOperationImplTest, TestCopyInForeignFileFailureByQuota) {
@@ -1102,9 +1101,9 @@ TEST_F(FileSystemOperationImplTest, TestTruncate) {
   EXPECT_EQ(length, base::ReadFile(platform_path, data, length));
   for (int i = 0; i < length; ++i) {
     if (i < static_cast<int>(test_data.size())) {
-      EXPECT_EQ(test_data.at(i), data[i]);
+      UNSAFE_TODO(EXPECT_EQ(test_data.at(i), data[i]));
     } else {
-      EXPECT_EQ(0, data[i]);
+      UNSAFE_TODO(EXPECT_EQ(0, data[i]));
     }
   }
 
@@ -1119,7 +1118,7 @@ TEST_F(FileSystemOperationImplTest, TestTruncate) {
   EXPECT_EQ(length, GetFileSize("file"));
   EXPECT_EQ(length, base::ReadFile(platform_path, data, length));
   for (int i = 0; i < length; ++i)
-    EXPECT_EQ(test_data.at(i), data[i]);
+    UNSAFE_TODO(EXPECT_EQ(test_data.at(i), data[i]));
 
   // Truncate is not a 'read' access.  (Here expected access count is 1
   // since we made 1 read access for GetMetadata.)
@@ -1145,7 +1144,7 @@ TEST_F(FileSystemOperationImplTest, TestTruncateFailureByQuota) {
   EXPECT_EQ(10, GetFileSize("dir/file"));
 }
 
-// TODO(https://crbug.com/702990): Remove this test once last_access_time has
+// TODO(crbug.com/40511450): Remove this test once last_access_time has
 // been removed after PPAPI has been deprecated. Fuchsia does not support touch,
 // which breaks this test that relies on it. Since PPAPI is being deprecated,
 // this test is excluded from the Fuchsia build.

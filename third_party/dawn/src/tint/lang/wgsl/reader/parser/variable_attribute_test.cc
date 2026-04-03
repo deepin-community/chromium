@@ -25,12 +25,15 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "src/tint/lang/core/builtin_value.h"
+#include "src/tint/lang/core/enums.h"
 #include "src/tint/lang/wgsl/ast/helper_test.h"
 #include "src/tint/lang/wgsl/reader/parser/helper_test.h"
 
 namespace tint::wgsl::reader {
 namespace {
+
+const core::BuiltinDepthMode kDepthModes[] = {
+    core::BuiltinDepthMode::kAny, core::BuiltinDepthMode::kGreater, core::BuiltinDepthMode::kLess};
 
 TEST_F(WGSLParserTest, Attribute_Id) {
     auto p = parser("id(4)");
@@ -233,8 +236,8 @@ TEST_F(WGSLParserTest, Attribute_Location_MissingInvalid) {
 class BuiltinTest : public WGSLParserTestWithParam<core::BuiltinValue> {};
 
 TEST_P(BuiltinTest, Attribute_Builtin) {
-    auto str = tint::ToString(GetParam());
-    auto p = parser("builtin(" + str + ")");
+    auto param = GetParam();
+    auto p = parser("builtin(" + tint::ToString(param) + ")");
 
     auto attr = p->attribute();
     EXPECT_TRUE(attr.matched);
@@ -246,11 +249,11 @@ TEST_P(BuiltinTest, Attribute_Builtin) {
     ASSERT_TRUE(var_attr->Is<ast::BuiltinAttribute>());
 
     auto* builtin = var_attr->As<ast::BuiltinAttribute>();
-    ast::CheckIdentifier(builtin->builtin, str);
+    EXPECT_EQ(builtin->builtin, param);
 }
 TEST_P(BuiltinTest, Attribute_Builtin_TrailingComma) {
-    auto str = tint::ToString(GetParam());
-    auto p = parser("builtin(" + str + ",)");
+    auto param = GetParam();
+    auto p = parser("builtin(" + tint::ToString(param) + ",)");
 
     auto attr = p->attribute();
     EXPECT_TRUE(attr.matched);
@@ -262,7 +265,41 @@ TEST_P(BuiltinTest, Attribute_Builtin_TrailingComma) {
     ASSERT_TRUE(var_attr->Is<ast::BuiltinAttribute>());
 
     auto* builtin = var_attr->As<ast::BuiltinAttribute>();
-    ast::CheckIdentifier(builtin->builtin, str);
+    EXPECT_EQ(builtin->builtin, param);
+}
+TEST_P(BuiltinTest, Attribute_Builtin_DepthMode_TrailingComma) {
+    auto param = GetParam();
+    for (auto depth_mode : kDepthModes) {
+        auto p =
+            parser("builtin(" + tint::ToString(param) + ", " + tint::ToString(depth_mode) + ",)");
+
+        auto attr = p->attribute();
+        EXPECT_TRUE(attr.matched);
+        EXPECT_FALSE(attr.errored);
+        ASSERT_NE(attr.value, nullptr);
+        auto* var_attr = attr.value->As<ast::Attribute>();
+        ASSERT_FALSE(p->has_error()) << p->error();
+        ASSERT_NE(var_attr, nullptr);
+        ASSERT_TRUE(var_attr->Is<ast::BuiltinAttribute>());
+
+        auto* builtin = var_attr->As<ast::BuiltinAttribute>();
+        EXPECT_EQ(builtin->builtin, param);
+    }
+}
+TEST_P(BuiltinTest, Attribute_Builtin_DepthMode_First) {
+    auto param = GetParam();
+    for (auto depth_mode : kDepthModes) {
+        auto p =
+            parser("builtin(" + tint::ToString(depth_mode) + ", " + tint::ToString(param) + ",)");
+
+        auto attr = p->attribute();
+        EXPECT_FALSE(attr.matched);
+        EXPECT_TRUE(attr.errored);
+        EXPECT_EQ(attr.value, nullptr);
+        EXPECT_TRUE(p->has_error());
+        EXPECT_EQ(p->error(), R"(1:9: expected builtin value name
+Possible values: 'barycentric_coord', 'clip_distances', 'frag_depth', 'front_facing', 'global_invocation_id', 'instance_index', 'local_invocation_id', 'local_invocation_index', 'num_subgroups', 'num_workgroups', 'position', 'primitive_index', 'sample_index', 'sample_mask', 'subgroup_id', 'subgroup_invocation_id', 'subgroup_size', 'vertex_index', 'workgroup_id')");
+    }
 }
 INSTANTIATE_TEST_SUITE_P(WGSLParserTest,
                          BuiltinTest,
@@ -278,6 +315,52 @@ INSTANTIATE_TEST_SUITE_P(WGSLParserTest,
                                          core::BuiltinValue::kNumWorkgroups,
                                          core::BuiltinValue::kSampleIndex,
                                          core::BuiltinValue::kSampleMask));
+
+class BuiltinDepthModeTest : public WGSLParserTestWithParam<core::BuiltinDepthMode> {};
+
+TEST_P(BuiltinDepthModeTest, Attribute_Builtin_DepthModeOnly) {
+    auto param = GetParam();
+    auto p = parser("builtin(" + tint::ToString(param) + ",)");
+
+    auto attr = p->attribute();
+    EXPECT_FALSE(attr.matched);
+    EXPECT_TRUE(attr.errored);
+    EXPECT_EQ(attr.value, nullptr);
+    EXPECT_TRUE(p->has_error());
+    EXPECT_EQ(p->error(), R"(1:9: expected builtin value name
+Possible values: 'barycentric_coord', 'clip_distances', 'frag_depth', 'front_facing', 'global_invocation_id', 'instance_index', 'local_invocation_id', 'local_invocation_index', 'num_subgroups', 'num_workgroups', 'position', 'primitive_index', 'sample_index', 'sample_mask', 'subgroup_id', 'subgroup_invocation_id', 'subgroup_size', 'vertex_index', 'workgroup_id')");
+}
+TEST_P(BuiltinDepthModeTest, Attribute_Builtin_DepthMode_Twice) {
+    auto param = GetParam();
+    auto p = parser("builtin(frag_depth, " + tint::ToString(param) + ", " + tint::ToString(param) +
+                    ",)");
+
+    auto attr = p->attribute();
+    EXPECT_FALSE(attr.matched);
+    EXPECT_TRUE(attr.errored);
+    EXPECT_EQ(attr.value, nullptr);
+    EXPECT_TRUE(p->has_error());
+    std::stringstream ss;
+    ss << "1:" << 23 + tint::ToString(param).length() << ": expected ')' for builtin attribute";
+    EXPECT_EQ(p->error(), ss.str());
+}
+INSTANTIATE_TEST_SUITE_P(WGSLParserTest, BuiltinDepthModeTest, testing::ValuesIn(kDepthModes));
+
+TEST_F(WGSLParserTest, Attribute_Builtin_DepthModeInvalid) {
+    for (auto invalid_string : {"42", "position", "<"}) {
+        auto p = parser(std::string("builtin(frag_depth, ") + invalid_string + ")");
+        auto attr = p->attribute();
+        EXPECT_FALSE(attr.matched);
+        EXPECT_TRUE(attr.errored);
+        EXPECT_EQ(attr.value, nullptr);
+        EXPECT_TRUE(p->has_error());
+        EXPECT_TRUE(p->error() == R"(1:21: expected builtin depth mode name
+Possible values: 'any', 'greater', 'less')" ||
+                    p->error() == R"(1:21: expected builtin depth mode name
+Did you mean 'any'?
+Possible values: 'any', 'greater', 'less')");
+    }
+}
 
 TEST_F(WGSLParserTest, Attribute_Builtin_MissingLeftParen) {
     auto p = parser("builtin position)");
@@ -306,7 +389,20 @@ TEST_F(WGSLParserTest, Attribute_Builtin_MissingValue) {
     EXPECT_TRUE(attr.errored);
     EXPECT_EQ(attr.value, nullptr);
     EXPECT_TRUE(p->has_error());
-    EXPECT_EQ(p->error(), "1:1: builtin expects 1 argument");
+    EXPECT_EQ(p->error(), R"(1:9: expected builtin value name
+Possible values: 'barycentric_coord', 'clip_distances', 'frag_depth', 'front_facing', 'global_invocation_id', 'instance_index', 'local_invocation_id', 'local_invocation_index', 'num_subgroups', 'num_workgroups', 'position', 'primitive_index', 'sample_index', 'sample_mask', 'subgroup_id', 'subgroup_invocation_id', 'subgroup_size', 'vertex_index', 'workgroup_id')");
+}
+
+TEST_F(WGSLParserTest, Attribute_Builtin_MisspelledValue) {
+    auto p = parser("builtin(positon)");
+    auto attr = p->attribute();
+    EXPECT_FALSE(attr.matched);
+    EXPECT_TRUE(attr.errored);
+    EXPECT_EQ(attr.value, nullptr);
+    EXPECT_TRUE(p->has_error());
+    EXPECT_EQ(p->error(), R"(1:9: expected builtin value name
+Did you mean 'position'?
+Possible values: 'barycentric_coord', 'clip_distances', 'frag_depth', 'front_facing', 'global_invocation_id', 'instance_index', 'local_invocation_id', 'local_invocation_index', 'num_subgroups', 'num_workgroups', 'position', 'primitive_index', 'sample_index', 'sample_mask', 'subgroup_id', 'subgroup_invocation_id', 'subgroup_size', 'vertex_index', 'workgroup_id')");
 }
 
 TEST_F(WGSLParserTest, Attribute_Interpolate_Flat) {
@@ -321,8 +417,40 @@ TEST_F(WGSLParserTest, Attribute_Interpolate_Flat) {
     ASSERT_TRUE(var_attr->Is<ast::InterpolateAttribute>());
 
     auto* interp = var_attr->As<ast::InterpolateAttribute>();
-    ast::CheckIdentifier(interp->type, "flat");
-    EXPECT_EQ(interp->sampling, nullptr);
+    EXPECT_EQ(interp->interpolation.type, core::InterpolationType::kFlat);
+    EXPECT_EQ(interp->interpolation.sampling, core::InterpolationSampling::kUndefined);
+}
+
+TEST_F(WGSLParserTest, Attribute_Interpolate_Flat_First) {
+    auto p = parser("interpolate(flat, first)");
+    auto attr = p->attribute();
+    EXPECT_TRUE(attr.matched);
+    EXPECT_FALSE(attr.errored);
+    ASSERT_NE(attr.value, nullptr);
+    auto* var_attr = attr.value->As<ast::Attribute>();
+    ASSERT_NE(var_attr, nullptr);
+    ASSERT_FALSE(p->has_error());
+    ASSERT_TRUE(var_attr->Is<ast::InterpolateAttribute>());
+
+    auto* interp = var_attr->As<ast::InterpolateAttribute>();
+    EXPECT_EQ(interp->interpolation.type, core::InterpolationType::kFlat);
+    EXPECT_EQ(interp->interpolation.sampling, core::InterpolationSampling::kFirst);
+}
+
+TEST_F(WGSLParserTest, Attribute_Interpolate_Either) {
+    auto p = parser("interpolate(flat, either)");
+    auto attr = p->attribute();
+    EXPECT_TRUE(attr.matched);
+    EXPECT_FALSE(attr.errored);
+    ASSERT_NE(attr.value, nullptr);
+    auto* var_attr = attr.value->As<ast::Attribute>();
+    ASSERT_NE(var_attr, nullptr);
+    ASSERT_FALSE(p->has_error());
+    ASSERT_TRUE(var_attr->Is<ast::InterpolateAttribute>());
+
+    auto* interp = var_attr->As<ast::InterpolateAttribute>();
+    EXPECT_EQ(interp->interpolation.type, core::InterpolationType::kFlat);
+    EXPECT_EQ(interp->interpolation.sampling, core::InterpolationSampling::kEither);
 }
 
 TEST_F(WGSLParserTest, Attribute_Interpolate_Single_TrailingComma) {
@@ -337,8 +465,8 @@ TEST_F(WGSLParserTest, Attribute_Interpolate_Single_TrailingComma) {
     ASSERT_TRUE(var_attr->Is<ast::InterpolateAttribute>());
 
     auto* interp = var_attr->As<ast::InterpolateAttribute>();
-    ast::CheckIdentifier(interp->type, "flat");
-    EXPECT_EQ(interp->sampling, nullptr);
+    EXPECT_EQ(interp->interpolation.type, core::InterpolationType::kFlat);
+    EXPECT_EQ(interp->interpolation.sampling, core::InterpolationSampling::kUndefined);
 }
 
 TEST_F(WGSLParserTest, Attribute_Interpolate_Single_DoubleTrailingComma) {
@@ -348,7 +476,8 @@ TEST_F(WGSLParserTest, Attribute_Interpolate_Single_DoubleTrailingComma) {
     EXPECT_TRUE(attr.errored);
     EXPECT_EQ(attr.value, nullptr);
     EXPECT_TRUE(p->has_error());
-    EXPECT_EQ(p->error(), "1:18: expected expression for interpolate");
+    EXPECT_EQ(p->error(), R"(1:18: expected interpolation sampling name
+Possible values: 'center', 'centroid', 'either', 'first', 'sample')");
 }
 
 TEST_F(WGSLParserTest, Attribute_Interpolate_Perspective_Center) {
@@ -363,8 +492,8 @@ TEST_F(WGSLParserTest, Attribute_Interpolate_Perspective_Center) {
     ASSERT_TRUE(var_attr->Is<ast::InterpolateAttribute>());
 
     auto* interp = var_attr->As<ast::InterpolateAttribute>();
-    ast::CheckIdentifier(interp->type, "perspective");
-    ast::CheckIdentifier(interp->sampling, "center");
+    EXPECT_EQ(interp->interpolation.type, core::InterpolationType::kPerspective);
+    EXPECT_EQ(interp->interpolation.sampling, core::InterpolationSampling::kCenter);
 }
 
 TEST_F(WGSLParserTest, Attribute_Interpolate_Double_TrailingComma) {
@@ -379,8 +508,8 @@ TEST_F(WGSLParserTest, Attribute_Interpolate_Double_TrailingComma) {
     ASSERT_TRUE(var_attr->Is<ast::InterpolateAttribute>());
 
     auto* interp = var_attr->As<ast::InterpolateAttribute>();
-    ast::CheckIdentifier(interp->type, "perspective");
-    ast::CheckIdentifier(interp->sampling, "center");
+    EXPECT_EQ(interp->interpolation.type, core::InterpolationType::kPerspective);
+    EXPECT_EQ(interp->interpolation.sampling, core::InterpolationSampling::kCenter);
 }
 
 TEST_F(WGSLParserTest, Attribute_Interpolate_Perspective_Centroid) {
@@ -395,8 +524,8 @@ TEST_F(WGSLParserTest, Attribute_Interpolate_Perspective_Centroid) {
     ASSERT_TRUE(var_attr->Is<ast::InterpolateAttribute>());
 
     auto* interp = var_attr->As<ast::InterpolateAttribute>();
-    ast::CheckIdentifier(interp->type, "perspective");
-    ast::CheckIdentifier(interp->sampling, "centroid");
+    EXPECT_EQ(interp->interpolation.type, core::InterpolationType::kPerspective);
+    EXPECT_EQ(interp->interpolation.sampling, core::InterpolationSampling::kCentroid);
 }
 
 TEST_F(WGSLParserTest, Attribute_Interpolate_Linear_Sample) {
@@ -411,8 +540,8 @@ TEST_F(WGSLParserTest, Attribute_Interpolate_Linear_Sample) {
     ASSERT_TRUE(var_attr->Is<ast::InterpolateAttribute>());
 
     auto* interp = var_attr->As<ast::InterpolateAttribute>();
-    ast::CheckIdentifier(interp->type, "linear");
-    ast::CheckIdentifier(interp->sampling, "sample");
+    EXPECT_EQ(interp->interpolation.type, core::InterpolationType::kLinear);
+    EXPECT_EQ(interp->interpolation.sampling, core::InterpolationSampling::kSample);
 }
 
 TEST_F(WGSLParserTest, Attribute_Interpolate_MissingLeftParen) {
@@ -442,7 +571,32 @@ TEST_F(WGSLParserTest, Attribute_Interpolate_MissingFirstValue) {
     EXPECT_TRUE(attr.errored);
     EXPECT_EQ(attr.value, nullptr);
     EXPECT_TRUE(p->has_error());
-    EXPECT_EQ(p->error(), "1:1: interpolate expects at least 1 argument");
+    EXPECT_EQ(p->error(), R"(1:13: expected interpolation type name
+Possible values: 'flat', 'linear', 'perspective')");
+}
+
+TEST_F(WGSLParserTest, Attribute_Interpolate_MisspelledType) {
+    auto p = parser("interpolate(liner)");
+    auto attr = p->attribute();
+    EXPECT_FALSE(attr.matched);
+    EXPECT_TRUE(attr.errored);
+    EXPECT_EQ(attr.value, nullptr);
+    EXPECT_TRUE(p->has_error());
+    EXPECT_EQ(p->error(), R"(1:13: expected interpolation type name
+Did you mean 'linear'?
+Possible values: 'flat', 'linear', 'perspective')");
+}
+
+TEST_F(WGSLParserTest, Attribute_Interpolate_MisspelledSampling) {
+    auto p = parser("interpolate(linear, centre)");
+    auto attr = p->attribute();
+    EXPECT_FALSE(attr.matched);
+    EXPECT_TRUE(attr.errored);
+    EXPECT_EQ(attr.value, nullptr);
+    EXPECT_TRUE(p->has_error());
+    EXPECT_EQ(p->error(), R"(1:21: expected interpolation sampling name
+Did you mean 'center'?
+Possible values: 'center', 'centroid', 'either', 'first', 'sample')");
 }
 
 TEST_F(WGSLParserTest, Attribute_Binding) {
@@ -645,6 +799,49 @@ TEST_F(WGSLParserTest, Attribute_Group_MissingInvalid) {
     EXPECT_EQ(attr.value, nullptr);
     EXPECT_TRUE(p->has_error());
     EXPECT_EQ(p->error(), "1:7: expected expression for group");
+}
+
+TEST_F(WGSLParserTest, Attribute_InputAttachmentIndex) {
+    auto p = parser("input_attachment_index(4)");
+    auto attr = p->attribute();
+    EXPECT_TRUE(attr.matched);
+    EXPECT_FALSE(attr.errored);
+    ASSERT_NE(attr.value, nullptr);
+    auto* var_attr = attr.value->As<ast::Attribute>();
+    ASSERT_FALSE(p->has_error());
+    ASSERT_NE(var_attr, nullptr);
+    ASSERT_TRUE(var_attr->Is<ast::InputAttachmentIndexAttribute>());
+
+    auto* group = var_attr->As<ast::InputAttachmentIndexAttribute>();
+    ASSERT_TRUE(group->expr->Is<ast::IntLiteralExpression>());
+    auto* expr = group->expr->As<ast::IntLiteralExpression>();
+    EXPECT_EQ(expr->value, 4);
+    EXPECT_EQ(expr->suffix, ast::IntLiteralExpression::Suffix::kNone);
+}
+
+TEST_F(WGSLParserTest, Attribute_InputAttachmentIndex_expression) {
+    auto p = parser("input_attachment_index(4 + 5)");
+    auto attr = p->attribute();
+    EXPECT_TRUE(attr.matched);
+    EXPECT_FALSE(attr.errored);
+    ASSERT_NE(attr.value, nullptr);
+    auto* var_attr = attr.value->As<ast::Attribute>();
+    ASSERT_FALSE(p->has_error());
+    ASSERT_NE(var_attr, nullptr);
+    ASSERT_TRUE(var_attr->Is<ast::InputAttachmentIndexAttribute>());
+
+    auto* group = var_attr->As<ast::InputAttachmentIndexAttribute>();
+    ASSERT_TRUE(group->expr->Is<ast::BinaryExpression>());
+    auto* expr = group->expr->As<ast::BinaryExpression>();
+
+    EXPECT_EQ(core::BinaryOp::kAdd, expr->op);
+    auto* v = expr->lhs->As<ast::IntLiteralExpression>();
+    ASSERT_NE(nullptr, v);
+    EXPECT_EQ(v->value, 4u);
+
+    v = expr->rhs->As<ast::IntLiteralExpression>();
+    ASSERT_NE(nullptr, v);
+    EXPECT_EQ(v->value, 5u);
 }
 
 }  // namespace

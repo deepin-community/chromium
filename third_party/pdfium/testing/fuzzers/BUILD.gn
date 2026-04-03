@@ -146,6 +146,10 @@ source_set("fuzzer_init_public") {
       deps += [ ":fuzzer_xfa_process_state" ]
     }
   }
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 if (is_component_build) {
@@ -314,7 +318,6 @@ if (pdf_enable_v8) {
           "../../core/fxcodec",
           "../../core/fxcrt",
           "../../core/fxge",
-          "../../third_party:pdfium_base",
         ]
       }
     }
@@ -329,16 +332,12 @@ if (pdf_enable_v8) {
           "../../core/fxcodec",
           "../../core/fxcrt",
           "../../core/fxge",
-          "../../third_party:pdfium_base",
         ]
       }
 
       pdfium_fuzzer("pdf_lzw_fuzzer") {
         sources = [ "pdf_lzw_fuzzer.cc" ]
-        deps = [
-          "../../core/fxcodec",
-          "../../third_party:pdfium_base",
-        ]
+        deps = [ "../../core/fxcodec" ]
       }
     }
 
@@ -351,7 +350,6 @@ if (pdf_enable_v8) {
         "../../core/fxcodec",
         "../../core/fxcrt",
         "../../core/fxge",
-        "../../third_party:pdfium_base",
       ]
     }
 
@@ -365,7 +363,6 @@ if (pdf_enable_v8) {
           "../../core/fxcodec",
           "../../core/fxcrt",
           "../../core/fxge",
-          "../../third_party:pdfium_base",
         ]
       }
     }
@@ -380,7 +377,6 @@ if (pdf_enable_v8) {
           "../../core/fxcodec",
           "../../core/fxcrt",
           "../../core/fxge",
-          "../../third_party:pdfium_base",
         ]
       }
     }
@@ -468,7 +464,6 @@ if (is_clang) {
       "../../core/fpdfapi/page",
       "../../core/fpdfapi/parser",
       "../../core/fpdfdoc",
-      "../../third_party:pdfium_base",
     ]
   }
   if (pdf_enable_xfa) {
@@ -477,7 +472,7 @@ if (is_clang) {
       deps = [
         ":fuzzer_helper",
         ":fuzzer_pdf_templates",
-        "../../third_party:pdfium_base",
+        "../../core/fxcrt",
       ]
       public_fuzzer = true
     }
@@ -486,7 +481,6 @@ if (is_clang) {
       deps = [
         ":fuzzer_helper",
         ":fuzzer_pdf_templates",
-        "../../third_party:pdfium_base",
       ]
       public_fuzzer = true
     }
@@ -507,7 +501,6 @@ pdfium_fuzzer("pdf_cmap_fuzzer") {
     "../../:freetype_common",
     "../../core/fpdfapi/font",
     "../../core/fxcrt",
-    "../../third_party:pdfium_base",
   ]
 }
 
@@ -565,7 +558,6 @@ pdfium_fuzzer("pdf_hint_table_fuzzer") {
   deps = [
     "../../core/fpdfapi/parser",
     "../../core/fxcrt",
-    "../../third_party:pdfium_base",
   ]
 }
 
@@ -581,10 +573,7 @@ pdfium_fuzzer("pdf_jpx_fuzzer") {
 
 pdfium_fuzzer("pdf_psengine_fuzzer") {
   sources = [ "pdf_psengine_fuzzer.cc" ]
-  deps = [
-    "../../core/fpdfapi/page",
-    "../../third_party:pdfium_base",
-  ]
+  deps = [ "../../core/fpdfapi/page" ]
 }
 
 pdfium_fuzzer("pdf_scanlinecompositor_fuzzer") {
@@ -593,7 +582,6 @@ pdfium_fuzzer("pdf_scanlinecompositor_fuzzer") {
     ":fuzzer_utils",
     "../../core/fxcrt",
     "../../core/fxge",
-    "../../third_party:pdfium_base",
   ]
 }
 
@@ -602,16 +590,12 @@ pdfium_fuzzer("pdf_streamparser_fuzzer") {
   deps = [
     "../../core/fpdfapi/page",
     "../../core/fpdfapi/parser",
-    "../../third_party:pdfium_base",
   ]
 }
 
 pdfium_fuzzer("pdf_xml_fuzzer") {
   sources = [ "pdf_xml_fuzzer.cc" ]
-  deps = [
-    "../../core/fxcrt",
-    "../../third_party:pdfium_base",
-  ]
+  deps = [ "../../core/fxcrt" ]
 }
 
 pdfium_fuzzer("pdfium_fuzzer") {

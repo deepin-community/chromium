@@ -21,6 +21,8 @@ limitations under the License.
 #include <vector>
 
 #include "fuzztest/fuzztest.h"
+#include "absl/strings/string_view.h"
+#include "google/protobuf/io/tokenizer.h"
 #include "tensorflow/core/common_runtime/graph_constructor.h"
 #include "tensorflow/core/public/session.h"
 
@@ -39,7 +41,7 @@ void FuzzGraphEndToEndSimpleFixedInput(const GraphDef& graph_def) {
   // Load an arbitrary graph and run a session on it using simple input.
   ImportGraphDefOptions options;
   auto graph = std::make_unique<Graph>(OpRegistry::Global());
-  Status status =
+  absl::Status status =
       ImportGraphDef(options, graph_def, graph.get(), nullptr, nullptr);
   if (!status.ok()) {
     return;
@@ -61,10 +63,10 @@ void FuzzGraphEndToEndSimpleFixedInput(const GraphDef& graph_def) {
   p1.scalar<float>()() = 1.0;
   Tensor p2(DT_FLOAT, TensorShape({1}));
   p2.scalar<float>()() = 2.0;
-  std::vector<std::pair<string, Tensor>> inputs = {{"Placeholder", p1},
-                                                   {"Placeholder_1", p2}};
-  std::vector<string> output_names = {"O_FUZZ"};
-  std::vector<string> target_names;
+  std::vector<std::pair<std::string, Tensor>> inputs = {{"Placeholder", p1},
+                                                        {"Placeholder_1", p2}};
+  std::vector<std::string> output_names = {"O_FUZZ"};
+  std::vector<std::string> target_names;
   std::vector<Tensor> outputs;
   status = sess->Run(inputs, output_names, target_names, &outputs);
 }
@@ -77,7 +79,7 @@ void FuzzGraphEndToEndAllStatic(const GraphDef& graph_def) {
   // to explore any arbitrary graph computation.
   ImportGraphDefOptions options;
   auto graph = std::make_unique<Graph>(OpRegistry::Global());
-  Status status =
+  absl::Status status =
       ImportGraphDef(options, graph_def, graph.get(), nullptr, nullptr);
   if (!status.ok()) {
     return;
@@ -91,22 +93,22 @@ void FuzzGraphEndToEndAllStatic(const GraphDef& graph_def) {
     return;
   }
 
-  std::vector<std::pair<string, Tensor>> inputs = {};
-  std::vector<string> output_names = {};
-  std::vector<string> target_names = {};
+  std::vector<std::pair<std::string, Tensor>> inputs = {};
+  std::vector<std::string> output_names = {};
+  std::vector<std::string> target_names = {};
   std::vector<Tensor> outputs = {};
   status = sess->Run(inputs, output_names, target_names, &outputs);
 }
 FUZZ_TEST(GraphDefFuzz, FuzzGraphEndToEndAllStatic);
 
-Node* FindNode(const string& name, Graph* graph) {
+Node* FindNode(const std::string& name, Graph* graph) {
   for (Node* n : graph->nodes()) {
     if (n->name() == name) return n;
   }
   return nullptr;
 }
 
-bool HasNode(const string& name, Graph* graph) {
+bool HasNode(const std::string& name, Graph* graph) {
   return FindNode(name, graph) != nullptr;
 }
 
@@ -114,12 +116,8 @@ class EmptyErrorCollector : public protobuf::io::ErrorCollector {
  public:
   EmptyErrorCollector() {}
   ~EmptyErrorCollector() override {}
-  void AddError(int line, int column, const std::string& message) override {
-    // log error
-  }
-  void AddWarning(int line, int column, const std::string& message) override {
-    // log warning
-  }
+  void RecordError(int line, protobuf::io::ColumnNumber column,
+                   absl::string_view message) override {}
 };
 
 std::vector<std::string> ops = {
@@ -353,7 +351,7 @@ void FuzzGraphEndToEndFDP(std::vector<uint8_t> data) {
   }
 
   std::unique_ptr<Graph> graph = std::make_unique<Graph>(OpRegistry::Global());
-  Status s = ImportGraphDef(opts, gdef_, graph.get(), nullptr, nullptr);
+  absl::Status s = ImportGraphDef(opts, gdef_, graph.get(), nullptr, nullptr);
   if (!s.ok()) {
     return;
   }
@@ -401,10 +399,10 @@ void FuzzGraphEndToEndFDP(std::vector<uint8_t> data) {
     input_tensors.push_back(input_tensor);
   }
 
-  std::vector<std::pair<string, Tensor>> inputs = {{"N0", input_tensors[0]},
-                                                   {"N1", input_tensors[1]}};
-  std::vector<string> output_names = {last_node};
-  std::vector<string> target_names;
+  std::vector<std::pair<std::string, Tensor>> inputs = {
+      {"N0", input_tensors[0]}, {"N1", input_tensors[1]}};
+  std::vector<std::string> output_names = {last_node};
+  std::vector<std::string> target_names;
   std::vector<Tensor> outputs;
   s = sess->Run(inputs, output_names, target_names, &outputs);
   if (!s.ok()) {

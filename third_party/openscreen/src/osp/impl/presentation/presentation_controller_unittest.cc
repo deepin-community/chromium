@@ -9,11 +9,13 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "osp/impl/presentation/presentation_utils.h"
 #include "osp/impl/presentation/testing/mock_connection_delegate.h"
+#include "osp/impl/presentation/url_availability_requester.h"
 #include "osp/impl/quic/testing/quic_test_support.h"
-#include "osp/impl/service_listener_impl.h"
 #include "osp/public/message_demuxer.h"
 #include "osp/public/network_service_manager.h"
+#include "osp/public/service_listener.h"
 #include "osp/public/testing/message_demuxer_test_support.h"
 #include "platform/test/fake_clock.h"
 #include "platform/test/fake_task_runner.h"
@@ -21,42 +23,53 @@
 namespace openscreen::osp {
 
 using ::testing::_;
-using ::testing::Invoke;
 using ::testing::NiceMock;
 
 namespace {
 
-const char kTestUrl[] = "https://example.foo";
+constexpr char kTestUrl1[] = "https://example.foo";
+constexpr char kTestUrl2[] = "https://example.bar";
 
-class MockServiceListenerDelegate final : public ServiceListenerImpl::Delegate {
+class MockServiceListenerDelegate final : public ServiceListener::Delegate {
  public:
   ~MockServiceListenerDelegate() override = default;
 
-  ServiceListenerImpl* listener() { return listener_; }
+  ServiceListener* listener() { return listener_; }
 
-  MOCK_METHOD1(StartListener, void(const ServiceListener::Config& config));
-  MOCK_METHOD1(StartAndSuspendListener,
-               void(const ServiceListener::Config& config));
-  MOCK_METHOD0(StopListener, void());
-  MOCK_METHOD0(SuspendListener, void());
-  MOCK_METHOD0(ResumeListener, void());
-  MOCK_METHOD1(SearchNow, void(ServiceListener::State from));
-  MOCK_METHOD0(RunTasksListener, void());
+  MOCK_METHOD(void,
+              StartListener,
+              (const ServiceListener::Config& config),
+              (override));
+  MOCK_METHOD(void,
+              StartAndSuspendListener,
+              (const ServiceListener::Config& config),
+              (override));
+  MOCK_METHOD(void, StopListener, (), (override));
+  MOCK_METHOD(void, SuspendListener, (), (override));
+  MOCK_METHOD(void, ResumeListener, (), (override));
+  MOCK_METHOD(void, SearchNow, (ServiceListener::State from), (override));
+  MOCK_METHOD(void, RunTasksListener, ());
 };
 
 class MockReceiverObserver final : public ReceiverObserver {
  public:
   ~MockReceiverObserver() override = default;
 
-  MOCK_METHOD2(OnRequestFailed,
-               void(const std::string& presentation_url,
-                    const std::string& service_id));
-  MOCK_METHOD2(OnReceiverAvailable,
-               void(const std::string& presentation_url,
-                    const std::string& service_id));
-  MOCK_METHOD2(OnReceiverUnavailable,
-               void(const std::string& presentation_url,
-                    const std::string& service_id));
+  MOCK_METHOD(void,
+              OnRequestFailed,
+              (const std::string& presentation_url,
+               const std::string& instance_name),
+              (override));
+  MOCK_METHOD(void,
+              OnReceiverAvailable,
+              (const std::string& presentation_url,
+               const std::string& instance_name),
+              (override));
+  MOCK_METHOD(void,
+              OnReceiverUnavailable,
+              (const std::string& presentation_url,
+               const std::string& instance_name),
+              (override));
 };
 
 class MockRequestDelegate final : public RequestDelegate {
@@ -67,8 +80,10 @@ class MockRequestDelegate final : public RequestDelegate {
   void OnConnection(std::unique_ptr<Connection> connection) override {
     OnConnectionMock(connection);
   }
-  MOCK_METHOD1(OnConnectionMock, void(std::unique_ptr<Connection>& connection));
-  MOCK_METHOD1(OnError, void(const Error& error));
+  MOCK_METHOD(void,
+              OnConnectionMock,
+              (std::unique_ptr<Connection> & connection));
+  MOCK_METHOD(void, OnError, (const Error& error), (override));
 };
 
 }  // namespace
@@ -77,10 +92,11 @@ class ControllerTest : public ::testing::Test {
  public:
   ControllerTest()
       : fake_clock_(Clock::time_point(std::chrono::milliseconds(11111))),
-        task_runner_(&fake_clock_),
+        task_runner_(fake_clock_),
         quic_bridge_(task_runner_, FakeClock::now) {
-    receiver_info1 = {
-        "service-id1", "lucas-auer", 1, quic_bridge_.kReceiverEndpoint, {}};
+    receiver_info1 = {quic_bridge_.kInstanceName,     quic_bridge_.kFingerprint,
+                      quic_bridge_.kAuthToken,        1,
+                      quic_bridge_.kReceiverEndpoint, {}};
   }
 
  protected:
@@ -88,43 +104,48 @@ class ControllerTest : public ::testing::Test {
     auto mock_listener_delegate =
         std::make_unique<MockServiceListenerDelegate>();
     mock_listener_delegate_ = mock_listener_delegate.get();
-    auto service_listener = std::make_unique<ServiceListenerImpl>(
-        std::move(mock_listener_delegate));
-    NetworkServiceManager::Create(std::move(service_listener), nullptr,
-                                  std::move(quic_bridge_.quic_client),
-                                  std::move(quic_bridge_.quic_server));
+    auto service_listener =
+        std::make_unique<ServiceListener>(std::move(mock_listener_delegate));
+    service_listener->AddObserver(*quic_bridge_.GetQuicClient());
+    quic_bridge_.CreateNetworkServiceManager(std::move(service_listener),
+                                             nullptr);
     controller_ = std::make_unique<Controller>(FakeClock::now);
-    ON_CALL(quic_bridge_.mock_server_observer, OnIncomingConnectionMock(_))
-        .WillByDefault(
-            Invoke([this](std::unique_ptr<ProtocolConnection>& connection) {
-              controller_endpoint_id_ = connection->endpoint_id();
-            }));
+    ON_CALL(quic_bridge_.mock_server_observer(), OnIncomingConnectionMock(_))
+        .WillByDefault([this](std::unique_ptr<ProtocolConnection>& connection) {
+          controller_instance_id_ = connection->GetInstanceID();
+          server_connections_.push_back(std::move(connection));
+        });
+    ON_CALL(quic_bridge_.mock_client_observer(), OnIncomingConnectionMock(_))
+        .WillByDefault([this](std::unique_ptr<ProtocolConnection>& connection) {
+          client_connections_.push_back(std::move(connection));
+        });
 
     availability_watch_ =
-        quic_bridge_.receiver_demuxer->SetDefaultMessageTypeWatch(
+        quic_bridge_.GetReceiverDemuxer().SetDefaultMessageTypeWatch(
             msgs::Type::kPresentationUrlAvailabilityRequest, &mock_callback_);
+    controller_->BuildConnection(quic_bridge_.kInstanceName);
+    quic_bridge_.RunTasksUntilIdle();
   }
 
   void TearDown() override {
-    availability_watch_ = MessageDemuxer::MessageWatch();
+    availability_watch_.Reset();
     controller_.reset();
-    NetworkServiceManager::Dispose();
   }
 
   void ExpectAvailabilityRequest(
       msgs::PresentationUrlAvailabilityRequest& request) {
-    ssize_t decode_result = -1;
+    msgs::CborResult decode_result = -1;
     msgs::Type msg_type;
     EXPECT_CALL(mock_callback_, OnStreamMessage(_, _, _, _, _, _))
-        .WillOnce(Invoke([&request, &msg_type, &decode_result](
-                             uint64_t endpoint_id, uint64_t cid,
-                             msgs::Type message_type, const uint8_t* buffer,
-                             size_t buffer_size, Clock::time_point now) {
+        .WillOnce([&request, &msg_type, &decode_result](
+                      uint64_t instance_id, uint64_t cid,
+                      msgs::Type message_type, const uint8_t* buffer,
+                      size_t buffer_size, Clock::time_point now) {
           msg_type = message_type;
           decode_result = msgs::DecodePresentationUrlAvailabilityRequest(
               buffer, buffer_size, request);
           return decode_result;
-        }));
+        });
     quic_bridge_.RunTasksUntilIdle();
     ASSERT_EQ(msg_type, msgs::Type::kPresentationUrlAvailabilityRequest);
     ASSERT_GT(decode_result, 0);
@@ -133,9 +154,7 @@ class ControllerTest : public ::testing::Test {
   void SendAvailabilityResponse(
       const msgs::PresentationUrlAvailabilityResponse& response) {
     std::unique_ptr<ProtocolConnection> controller_connection =
-        NetworkServiceManager::Get()
-            ->GetProtocolConnectionServer()
-            ->CreateProtocolConnection(controller_endpoint_id_);
+        CreateServerProtocolConnection(controller_instance_id_);
     ASSERT_TRUE(controller_connection);
     ASSERT_EQ(Error::Code::kNone,
               controller_connection
@@ -146,9 +165,7 @@ class ControllerTest : public ::testing::Test {
 
   void SendStartResponse(const msgs::PresentationStartResponse& response) {
     std::unique_ptr<ProtocolConnection> protocol_connection =
-        NetworkServiceManager::Get()
-            ->GetProtocolConnectionServer()
-            ->CreateProtocolConnection(controller_endpoint_id_);
+        CreateServerProtocolConnection(controller_instance_id_);
     ASSERT_TRUE(protocol_connection);
     ASSERT_EQ(
         Error::Code::kNone,
@@ -160,9 +177,7 @@ class ControllerTest : public ::testing::Test {
   void SendAvailabilityEvent(
       const msgs::PresentationUrlAvailabilityEvent& event) {
     std::unique_ptr<ProtocolConnection> controller_connection =
-        NetworkServiceManager::Get()
-            ->GetProtocolConnectionServer()
-            ->CreateProtocolConnection(controller_endpoint_id_);
+        CreateServerProtocolConnection(controller_instance_id_);
     ASSERT_TRUE(controller_connection);
     ASSERT_EQ(
         Error::Code::kNone,
@@ -174,9 +189,7 @@ class ControllerTest : public ::testing::Test {
   void SendTerminationResponse(
       const msgs::PresentationTerminationResponse& response) {
     std::unique_ptr<ProtocolConnection> protocol_connection =
-        NetworkServiceManager::Get()
-            ->GetProtocolConnectionServer()
-            ->CreateProtocolConnection(controller_endpoint_id_);
+        CreateServerProtocolConnection(controller_instance_id_);
     ASSERT_TRUE(protocol_connection);
     ASSERT_EQ(Error::Code::kNone,
               protocol_connection
@@ -187,9 +200,7 @@ class ControllerTest : public ::testing::Test {
 
   void SendTerminationEvent(const msgs::PresentationTerminationEvent& event) {
     std::unique_ptr<ProtocolConnection> protocol_connection =
-        NetworkServiceManager::Get()
-            ->GetProtocolConnectionServer()
-            ->CreateProtocolConnection(controller_endpoint_id_);
+        CreateServerProtocolConnection(controller_instance_id_);
     ASSERT_TRUE(protocol_connection);
     ASSERT_EQ(
         Error::Code::kNone,
@@ -198,48 +209,43 @@ class ControllerTest : public ::testing::Test {
             .code());
   }
 
-  void ExpectCloseRequest(MockMessageCallback* mock_callback,
-                          msgs::PresentationConnectionCloseRequest& request,
-                          Connection* connection) {
-    ssize_t decode_result = -1;
+  void ExpectCloseEvent(MockMessageCallback* mock_callback,
+                        Connection* connection) {
+    msgs::CborResult decode_result = -1;
     msgs::Type msg_type;
+    msgs::PresentationConnectionCloseEvent event;
     EXPECT_CALL(*mock_callback, OnStreamMessage(_, _, _, _, _, _))
-        .WillOnce(Invoke([&request, &msg_type, &decode_result](
-                             uint64_t endpoint_id, uint64_t cid,
-                             msgs::Type message_type, const uint8_t* buffer,
-                             size_t buffer_size, Clock::time_point now) {
+        .WillOnce([&event, &msg_type, &decode_result](
+                      uint64_t instance_id, uint64_t cid,
+                      msgs::Type message_type, const uint8_t* buffer,
+                      size_t buffer_size, Clock::time_point now) {
           msg_type = message_type;
-          decode_result = msgs::DecodePresentationConnectionCloseRequest(
-              buffer, buffer_size, request);
+          decode_result = msgs::DecodePresentationConnectionCloseEvent(
+              buffer, buffer_size, event);
           return decode_result;
-        }));
+        });
     connection->Close(Connection::CloseReason::kClosed);
     EXPECT_EQ(connection->state(), Connection::State::kClosed);
     quic_bridge_.RunTasksUntilIdle();
-    ASSERT_EQ(msg_type, msgs::Type::kPresentationConnectionCloseRequest);
+    ASSERT_EQ(msg_type, msgs::Type::kPresentationConnectionCloseEvent);
     ASSERT_GT(decode_result, 0);
   }
 
-  void SendCloseResponse(
-      const msgs::PresentationConnectionCloseResponse& response) {
+  void SendCloseEvent(msgs::PresentationConnectionCloseEvent& event) {
     std::unique_ptr<ProtocolConnection> protocol_connection =
-        NetworkServiceManager::Get()
-            ->GetProtocolConnectionServer()
-            ->CreateProtocolConnection(controller_endpoint_id_);
+        CreateServerProtocolConnection(controller_instance_id_);
     ASSERT_TRUE(protocol_connection);
-    ASSERT_EQ(Error::Code::kNone,
-              protocol_connection
-                  ->WriteMessage(
-                      response, msgs::EncodePresentationConnectionCloseResponse)
-                  .code());
+    ASSERT_EQ(
+        Error::Code::kNone,
+        protocol_connection
+            ->WriteMessage(event, msgs::EncodePresentationConnectionCloseEvent)
+            .code());
   }
 
   void SendOpenResponse(
       const msgs::PresentationConnectionOpenResponse& response) {
     std::unique_ptr<ProtocolConnection> protocol_connection =
-        NetworkServiceManager::Get()
-            ->GetProtocolConnectionServer()
-            ->CreateProtocolConnection(controller_endpoint_id_);
+        CreateServerProtocolConnection(controller_instance_id_);
     ASSERT_TRUE(protocol_connection);
     ASSERT_EQ(Error::Code::kNone,
               protocol_connection
@@ -252,7 +258,7 @@ class ControllerTest : public ::testing::Test {
                          MockConnectionDelegate* mock_connection_delegate,
                          std::unique_ptr<Connection>* connection) {
     MessageDemuxer::MessageWatch start_presentation_watch =
-        quic_bridge_.receiver_demuxer->SetDefaultMessageTypeWatch(
+        quic_bridge_.GetReceiverDemuxer().SetDefaultMessageTypeWatch(
             msgs::Type::kPresentationStartRequest, mock_callback);
     mock_listener_delegate_->listener()->OnReceiverUpdated({receiver_info1});
     quic_bridge_.RunTasksUntilIdle();
@@ -261,34 +267,32 @@ class ControllerTest : public ::testing::Test {
     msgs::PresentationStartRequest request;
     msgs::Type msg_type;
     EXPECT_CALL(*mock_callback, OnStreamMessage(_, _, _, _, _, _))
-        .WillOnce(Invoke([&request, &msg_type](
-                             uint64_t endpoint_id, uint64_t cid,
-                             msgs::Type message_type, const uint8_t* buffer,
-                             size_t buffer_size, Clock::time_point now) {
+        .WillOnce([&request, &msg_type](
+                      uint64_t instance_id, uint64_t cid,
+                      msgs::Type message_type, const uint8_t* buffer,
+                      size_t buffer_size, Clock::time_point now) {
           msg_type = message_type;
-          ssize_t result = msgs::DecodePresentationStartRequest(
+          const msgs::CborResult result = msgs::DecodePresentationStartRequest(
               buffer, buffer_size, request);
           return result;
-        }));
+        });
     Controller::ConnectRequest connect_request = controller_->StartPresentation(
-        "https://example.com/receiver.html", receiver_info1.service_id,
+        "https://example.com/receiver.html", receiver_info1.instance_name,
         &mock_request_delegate, mock_connection_delegate);
     ASSERT_TRUE(connect_request);
     quic_bridge_.RunTasksUntilIdle();
     ASSERT_EQ(msgs::Type::kPresentationStartRequest, msg_type);
 
-    msgs::PresentationStartResponse response;
-    response.request_id = request.request_id;
-    response.result = msgs::PresentationStartResponse_result::kSuccess;
-    response.connection_id = 1;
-    response.has_http_response_code = false;
-    response.http_response_code = 0u;
+    msgs::PresentationStartResponse response = {
+        .request_id = request.request_id,
+        .result = msgs::PresentationStartResponse_result::kSuccess,
+        .connection_id = 1};
     SendStartResponse(response);
 
     EXPECT_CALL(mock_request_delegate, OnConnectionMock(_))
-        .WillOnce(Invoke([connection](std::unique_ptr<Connection>& c) {
+        .WillOnce([connection](std::unique_ptr<Connection>& c) {
           *connection = std::move(c);
-        }));
+        });
     EXPECT_CALL(*mock_connection_delegate, OnConnected());
     quic_bridge_.RunTasksUntilIdle();
 
@@ -304,11 +308,14 @@ class ControllerTest : public ::testing::Test {
   std::unique_ptr<Controller> controller_;
   ServiceInfo receiver_info1;
   MockReceiverObserver mock_receiver_observer_;
-  uint64_t controller_endpoint_id_{0};
+  uint64_t controller_instance_id_ = 0;
+  std::vector<std::unique_ptr<ProtocolConnection>> server_connections_;
+  std::vector<std::unique_ptr<ProtocolConnection>> client_connections_;
 };
 
 TEST_F(ControllerTest, ReceiverWatchMoves) {
-  std::vector<std::string> urls{"one fish", "two fish", "red fish", "gnu fish"};
+  std::vector<std::string> urls = {"one fish", "two fish", "red fish",
+                                   "gnu fish"};
   MockReceiverObserver mock_observer;
 
   Controller::ReceiverWatch watch1(controller_.get(), urls, &mock_observer);
@@ -324,10 +331,10 @@ TEST_F(ControllerTest, ReceiverWatchMoves) {
 }
 
 TEST_F(ControllerTest, ConnectRequestMoves) {
-  std::string service_id{"service-id1"};
+  std::string instance_name = "instance-name1";
   uint64_t request_id = 7;
 
-  Controller::ConnectRequest request1(controller_.get(), service_id, false,
+  Controller::ConnectRequest request1(controller_.get(), instance_name, false,
                                       request_id);
   EXPECT_TRUE(request1);
   Controller::ConnectRequest request2;
@@ -343,35 +350,243 @@ TEST_F(ControllerTest, ConnectRequestMoves) {
 TEST_F(ControllerTest, ReceiverAvailable) {
   mock_listener_delegate_->listener()->OnReceiverUpdated({receiver_info1});
   Controller::ReceiverWatch watch =
-      controller_->RegisterReceiverWatch({kTestUrl}, &mock_receiver_observer_);
+      controller_->RegisterReceiverWatch({kTestUrl1}, &mock_receiver_observer_);
 
   msgs::PresentationUrlAvailabilityRequest request;
   ExpectAvailabilityRequest(request);
 
-  msgs::PresentationUrlAvailabilityResponse response;
-  response.request_id = request.request_id;
-  response.url_availabilities.push_back(msgs::UrlAvailability::kAvailable);
+  msgs::PresentationUrlAvailabilityResponse response = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kAvailable}};
   SendAvailabilityResponse(response);
   EXPECT_CALL(mock_receiver_observer_, OnReceiverAvailable(_, _));
   quic_bridge_.RunTasksUntilIdle();
 
+  // `quic_bridge_.RunTasksUntilIdle()` is not used here to test availability is
+  // cached.
   MockReceiverObserver mock_receiver_observer2;
   EXPECT_CALL(mock_receiver_observer2, OnReceiverAvailable(_, _));
   Controller::ReceiverWatch watch2 =
-      controller_->RegisterReceiverWatch({kTestUrl}, &mock_receiver_observer2);
+      controller_->RegisterReceiverWatch({kTestUrl1}, &mock_receiver_observer2);
+}
+
+TEST_F(ControllerTest, ReceiverUnavailable) {
+  mock_listener_delegate_->listener()->OnReceiverUpdated({receiver_info1});
+  Controller::ReceiverWatch watch =
+      controller_->RegisterReceiverWatch({kTestUrl1}, &mock_receiver_observer_);
+
+  msgs::PresentationUrlAvailabilityRequest request;
+  ExpectAvailabilityRequest(request);
+
+  msgs::PresentationUrlAvailabilityResponse response = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kUnavailable}};
+  SendAvailabilityResponse(response);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverAvailable(_, _)).Times(0);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(_, _));
+  quic_bridge_.RunTasksUntilIdle();
+}
+
+TEST_F(ControllerTest, AvailabilityCacheIsTransient) {
+  mock_listener_delegate_->listener()->OnReceiverUpdated({receiver_info1});
+  Controller::ReceiverWatch watch =
+      controller_->RegisterReceiverWatch({kTestUrl1}, &mock_receiver_observer_);
+
+  msgs::PresentationUrlAvailabilityRequest request;
+  ExpectAvailabilityRequest(request);
+
+  msgs::PresentationUrlAvailabilityResponse response = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kUnavailable}};
+  SendAvailabilityResponse(response);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverAvailable(_, _)).Times(0);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(_, _));
+  quic_bridge_.RunTasksUntilIdle();
+
+  controller_->availability_requester()->RemoveObserverUrls(
+      {kTestUrl1}, &mock_receiver_observer_);
+  MockReceiverObserver mock_receiver_observer2;
+  EXPECT_CALL(mock_receiver_observer2, OnReceiverAvailable(_, _)).Times(0);
+  EXPECT_CALL(mock_receiver_observer2, OnReceiverUnavailable(_, _)).Times(0);
+  Controller::ReceiverWatch watch2 =
+      controller_->RegisterReceiverWatch({kTestUrl1}, &mock_receiver_observer2);
+}
+
+TEST_F(ControllerTest, AvailabilityPartiallyCachedAnswer) {
+  mock_listener_delegate_->listener()->OnReceiverUpdated({receiver_info1});
+  Controller::ReceiverWatch watch =
+      controller_->RegisterReceiverWatch({kTestUrl1}, &mock_receiver_observer_);
+
+  msgs::PresentationUrlAvailabilityRequest request;
+  ExpectAvailabilityRequest(request);
+
+  msgs::PresentationUrlAvailabilityResponse response = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kUnavailable}};
+  SendAvailabilityResponse(response);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverAvailable(_, _)).Times(0);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(_, _));
+  quic_bridge_.RunTasksUntilIdle();
+
+  MockReceiverObserver mock_receiver_observer2;
+  EXPECT_CALL(mock_receiver_observer2, OnReceiverAvailable(kTestUrl1, _))
+      .Times(0);
+  EXPECT_CALL(mock_receiver_observer2, OnReceiverUnavailable(kTestUrl1, _));
+  Controller::ReceiverWatch watch2 = controller_->RegisterReceiverWatch(
+      {kTestUrl1, kTestUrl2}, &mock_receiver_observer2);
+  ExpectAvailabilityRequest(request);
+  quic_bridge_.RunTasksUntilIdle();
+
+  msgs::PresentationUrlAvailabilityResponse response2 = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kUnavailable}};
+  SendAvailabilityResponse(response2);
+  EXPECT_CALL(mock_receiver_observer2, OnReceiverAvailable(kTestUrl2, _))
+      .Times(0);
+  EXPECT_CALL(mock_receiver_observer2, OnReceiverUnavailable(kTestUrl2, _));
+  quic_bridge_.RunTasksUntilIdle();
+}
+
+TEST_F(ControllerTest, RemoveObserver) {
+  mock_listener_delegate_->listener()->OnReceiverUpdated({receiver_info1});
+  Controller::ReceiverWatch watch =
+      controller_->RegisterReceiverWatch({kTestUrl1}, &mock_receiver_observer_);
+
+  msgs::PresentationUrlAvailabilityRequest request;
+  ExpectAvailabilityRequest(request);
+  uint64_t url1_watch_id = request.watch_id;
+
+  msgs::PresentationUrlAvailabilityResponse response = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kAvailable}};
+  SendAvailabilityResponse(response);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverAvailable(_, _));
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(_, _)).Times(0);
+  quic_bridge_.RunTasksUntilIdle();
+
+  MockReceiverObserver mock_receiver_observer2;
+  EXPECT_CALL(mock_receiver_observer2, OnReceiverAvailable(kTestUrl1, _));
+  Controller::ReceiverWatch watch2 = controller_->RegisterReceiverWatch(
+      {kTestUrl1, kTestUrl2}, &mock_receiver_observer2);
+  ExpectAvailabilityRequest(request);
+  quic_bridge_.RunTasksUntilIdle();
+
+  controller_->availability_requester()->RemoveObserver(
+      &mock_receiver_observer_);
+  msgs::PresentationUrlAvailabilityResponse response2 = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kUnavailable}};
+  SendAvailabilityResponse(response2);
+  EXPECT_CALL(mock_receiver_observer2, OnReceiverAvailable(_, _)).Times(0);
+  EXPECT_CALL(mock_receiver_observer2, OnReceiverUnavailable(kTestUrl2, _));
+  quic_bridge_.RunTasksUntilIdle();
+
+  msgs::PresentationUrlAvailabilityEvent event1 = {
+      .watch_id = url1_watch_id,
+      .url_availabilities = {msgs::UrlAvailability::kUnavailable}};
+  SendAvailabilityEvent(event1);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(_, _)).Times(0);
+  EXPECT_CALL(mock_receiver_observer2, OnReceiverUnavailable(kTestUrl1, _));
+  quic_bridge_.RunTasksUntilIdle();
+
+  controller_->availability_requester()->RemoveObserver(
+      &mock_receiver_observer2);
+  msgs::PresentationUrlAvailabilityEvent event2 = {
+      .watch_id = url1_watch_id,
+      .url_availabilities = {msgs::UrlAvailability::kAvailable}};
+  SendAvailabilityEvent(event2);
+
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(_, _)).Times(0);
+  EXPECT_CALL(mock_receiver_observer2, OnReceiverUnavailable(_, _)).Times(0);
+  quic_bridge_.RunTasksUntilIdle();
+}
+
+TEST_F(ControllerTest, EventUpdate) {
+  mock_listener_delegate_->listener()->OnReceiverUpdated({receiver_info1});
+  Controller::ReceiverWatch watch = controller_->RegisterReceiverWatch(
+      {kTestUrl1, kTestUrl2}, &mock_receiver_observer_);
+
+  msgs::PresentationUrlAvailabilityRequest request;
+  ExpectAvailabilityRequest(request);
+
+  msgs::PresentationUrlAvailabilityResponse response = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kAvailable,
+                             msgs::UrlAvailability::kAvailable}};
+  SendAvailabilityResponse(response);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverAvailable(kTestUrl1, _));
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverAvailable(kTestUrl2, _));
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(_, _)).Times(0);
+  quic_bridge_.RunTasksUntilIdle();
+
+  msgs::PresentationUrlAvailabilityEvent event = {
+      .watch_id = request.watch_id,
+      .url_availabilities = {msgs::UrlAvailability::kAvailable,
+                             msgs::UrlAvailability::kUnavailable}};
+  SendAvailabilityEvent(event);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(kTestUrl2, _));
+  quic_bridge_.RunTasksUntilIdle();
+}
+
+TEST_F(ControllerTest, RefreshWatches) {
+  mock_listener_delegate_->listener()->OnReceiverUpdated({receiver_info1});
+  Controller::ReceiverWatch watch =
+      controller_->RegisterReceiverWatch({kTestUrl1}, &mock_receiver_observer_);
+
+  msgs::PresentationUrlAvailabilityRequest request;
+  ExpectAvailabilityRequest(request);
+
+  msgs::PresentationUrlAvailabilityResponse response = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kUnavailable}};
+  SendAvailabilityResponse(response);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverAvailable(_, _)).Times(0);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(_, _));
+  quic_bridge_.RunTasksUntilIdle();
+
+  fake_clock_.Advance(std::chrono::seconds(60));
+  controller_->availability_requester()->RefreshWatches();
+  ExpectAvailabilityRequest(request);
+
+  msgs::PresentationUrlAvailabilityResponse response2 = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kAvailable}};
+  SendAvailabilityResponse(response2);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverAvailable(_, _));
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(_, _)).Times(0);
+  quic_bridge_.RunTasksUntilIdle();
+}
+
+TEST_F(ControllerTest, RemoveAvailabilityObserverInSteps) {
+  mock_listener_delegate_->listener()->OnReceiverUpdated({receiver_info1});
+  Controller::ReceiverWatch watch =
+      controller_->RegisterReceiverWatch({kTestUrl1}, &mock_receiver_observer_);
+
+  msgs::PresentationUrlAvailabilityRequest request;
+  ExpectAvailabilityRequest(request);
+
+  controller_->availability_requester()->RemoveObserverUrls(
+      {kTestUrl1}, &mock_receiver_observer_);
+  msgs::PresentationUrlAvailabilityResponse response = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kUnavailable}};
+  SendAvailabilityResponse(response);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverAvailable(_, _)).Times(0);
+  EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(_, _)).Times(0);
+  quic_bridge_.RunTasksUntilIdle();
 }
 
 TEST_F(ControllerTest, ReceiverWatchCancel) {
   mock_listener_delegate_->listener()->OnReceiverUpdated({receiver_info1});
   Controller::ReceiverWatch watch =
-      controller_->RegisterReceiverWatch({kTestUrl}, &mock_receiver_observer_);
+      controller_->RegisterReceiverWatch({kTestUrl1}, &mock_receiver_observer_);
 
   msgs::PresentationUrlAvailabilityRequest request;
   ExpectAvailabilityRequest(request);
 
-  msgs::PresentationUrlAvailabilityResponse response;
-  response.request_id = request.request_id;
-  response.url_availabilities.push_back(msgs::UrlAvailability::kAvailable);
+  msgs::PresentationUrlAvailabilityResponse response = {
+      .request_id = request.request_id,
+      .url_availabilities = {msgs::UrlAvailability::kAvailable}};
   SendAvailabilityResponse(response);
   EXPECT_CALL(mock_receiver_observer_, OnReceiverAvailable(_, _));
   quic_bridge_.RunTasksUntilIdle();
@@ -379,12 +594,12 @@ TEST_F(ControllerTest, ReceiverWatchCancel) {
   MockReceiverObserver mock_receiver_observer2;
   EXPECT_CALL(mock_receiver_observer2, OnReceiverAvailable(_, _));
   Controller::ReceiverWatch watch2 =
-      controller_->RegisterReceiverWatch({kTestUrl}, &mock_receiver_observer2);
+      controller_->RegisterReceiverWatch({kTestUrl1}, &mock_receiver_observer2);
 
-  watch = Controller::ReceiverWatch();
-  msgs::PresentationUrlAvailabilityEvent event;
-  event.watch_id = request.watch_id;
-  event.url_availabilities.push_back(msgs::UrlAvailability::kUnavailable);
+  watch.Reset();
+  msgs::PresentationUrlAvailabilityEvent event = {
+      .watch_id = request.watch_id,
+      .url_availabilities = {msgs::UrlAvailability::kUnavailable}};
 
   EXPECT_CALL(mock_receiver_observer2, OnReceiverUnavailable(_, _));
   EXPECT_CALL(mock_receiver_observer_, OnReceiverUnavailable(_, _)).Times(0);
@@ -406,29 +621,29 @@ TEST_F(ControllerTest, TerminatePresentationFromController) {
   StartPresentation(&mock_callback, &mock_connection_delegate, &connection);
 
   MessageDemuxer::MessageWatch terminate_presentation_watch =
-      quic_bridge_.receiver_demuxer->SetDefaultMessageTypeWatch(
+      quic_bridge_.GetReceiverDemuxer().SetDefaultMessageTypeWatch(
           msgs::Type::kPresentationTerminationRequest, &mock_callback);
   msgs::PresentationTerminationRequest termination_request;
   msgs::Type msg_type;
   EXPECT_CALL(mock_callback, OnStreamMessage(_, _, _, _, _, _))
-      .WillOnce(Invoke([&termination_request, &msg_type](
-                           uint64_t endpoint_id, uint64_t cid,
-                           msgs::Type message_type, const uint8_t* buffer,
-                           size_t buffer_size, Clock::time_point now) {
+      .WillOnce([&termination_request, &msg_type](
+                    uint64_t instance_id, uint64_t cid, msgs::Type message_type,
+                    const uint8_t* buffer, size_t buffer_size,
+                    Clock::time_point now) {
         msg_type = message_type;
-        ssize_t result = msgs::DecodePresentationTerminationRequest(
-            buffer, buffer_size, termination_request);
+        const msgs::CborResult result =
+            msgs::DecodePresentationTerminationRequest(buffer, buffer_size,
+                                                       termination_request);
         return result;
-      }));
+      });
   connection->Terminate(TerminationSource::kController,
                         TerminationReason::kApplicationTerminated);
   quic_bridge_.RunTasksUntilIdle();
 
   ASSERT_EQ(msgs::Type::kPresentationTerminationRequest, msg_type);
-  msgs::PresentationTerminationResponse termination_response;
-  termination_response.request_id = termination_request.request_id;
-  termination_response.result =
-      msgs::PresentationTerminationResponse_result::kSuccess;
+  msgs::PresentationTerminationResponse termination_response = {
+      .request_id = termination_request.request_id,
+      .result = msgs::PresentationTerminationResponse_result::kSuccess};
   SendTerminationResponse(termination_response);
 
   // TODO(btolsch): Check OnTerminated of other connections when reconnect
@@ -442,11 +657,10 @@ TEST_F(ControllerTest, TerminatePresentationFromReceiver) {
   std::unique_ptr<Connection> connection;
   StartPresentation(&mock_callback, &mock_connection_delegate, &connection);
 
-  msgs::PresentationTerminationEvent termination_event;
-  termination_event.presentation_id = connection->presentation_info().id;
-  termination_event.source = msgs::PresentationTerminationSource::kReceiver;
-  termination_event.reason =
-      msgs::PresentationTerminationReason::kApplicationRequest;
+  msgs::PresentationTerminationEvent termination_event = {
+      .presentation_id = connection->presentation_info().id,
+      .source = msgs::PresentationTerminationSource::kReceiver,
+      .reason = msgs::PresentationTerminationReason::kApplicationRequest};
   SendTerminationEvent(termination_event);
 
   EXPECT_CALL(mock_connection_delegate, OnTerminated());
@@ -459,17 +673,27 @@ TEST_F(ControllerTest, CloseConnection) {
   std::unique_ptr<Connection> connection;
   StartPresentation(&mock_callback, &mock_connection_delegate, &connection);
 
-  MessageDemuxer::MessageWatch close_request_watch =
-      quic_bridge_.receiver_demuxer->SetDefaultMessageTypeWatch(
-          msgs::Type::kPresentationConnectionCloseRequest, &mock_callback);
-  msgs::PresentationConnectionCloseRequest close_request;
-  ExpectCloseRequest(&mock_callback, close_request, connection.get());
+  MessageDemuxer::MessageWatch close_event_watch =
+      quic_bridge_.GetReceiverDemuxer().SetDefaultMessageTypeWatch(
+          msgs::Type::kPresentationConnectionCloseEvent, &mock_callback);
+  ExpectCloseEvent(&mock_callback, connection.get());
+}
 
-  msgs::PresentationConnectionCloseResponse close_response;
-  close_response.request_id = close_request.request_id;
-  close_response.result =
-      msgs::PresentationConnectionCloseResponse_result::kSuccess;
-  SendCloseResponse(close_response);
+TEST_F(ControllerTest, CloseConnectionFromPeer) {
+  MockMessageCallback mock_callback;
+  MockConnectionDelegate mock_connection_delegate;
+  std::unique_ptr<Connection> connection;
+  StartPresentation(&mock_callback, &mock_connection_delegate, &connection);
+
+  msgs::PresentationConnectionCloseEvent close_event = {
+      .connection_id = connection->connection_id(),
+      .reason =
+          msgs::PresentationConnectionCloseEvent_reason::kCloseMethodCalled,
+      .connection_count = 1,
+      .has_error_message = false};
+
+  SendCloseEvent(close_event);
+  EXPECT_CALL(mock_connection_delegate, OnClosedByRemote());
   quic_bridge_.RunTasksUntilIdle();
 }
 
@@ -479,21 +703,14 @@ TEST_F(ControllerTest, Reconnect) {
   std::unique_ptr<Connection> connection;
   StartPresentation(&mock_callback, &mock_connection_delegate, &connection);
 
-  MessageDemuxer::MessageWatch close_request_watch =
-      quic_bridge_.receiver_demuxer->SetDefaultMessageTypeWatch(
-          msgs::Type::kPresentationConnectionCloseRequest, &mock_callback);
-  msgs::PresentationConnectionCloseRequest close_request;
-  ExpectCloseRequest(&mock_callback, close_request, connection.get());
-
-  msgs::PresentationConnectionCloseResponse close_response;
-  close_response.request_id = close_request.request_id;
-  close_response.result =
-      msgs::PresentationConnectionCloseResponse_result::kSuccess;
-  SendCloseResponse(close_response);
+  MessageDemuxer::MessageWatch close_event_watch =
+      quic_bridge_.GetReceiverDemuxer().SetDefaultMessageTypeWatch(
+          msgs::Type::kPresentationConnectionCloseEvent, &mock_callback);
+  ExpectCloseEvent(&mock_callback, connection.get());
   quic_bridge_.RunTasksUntilIdle();
 
   MessageDemuxer::MessageWatch connection_open_watch =
-      quic_bridge_.receiver_demuxer->SetDefaultMessageTypeWatch(
+      quic_bridge_.GetReceiverDemuxer().SetDefaultMessageTypeWatch(
           msgs::Type::kPresentationConnectionOpenRequest, &mock_callback);
   msgs::PresentationConnectionOpenRequest open_request;
   MockRequestDelegate reconnect_delegate;
@@ -501,35 +718,34 @@ TEST_F(ControllerTest, Reconnect) {
       controller_->ReconnectConnection(std::move(connection),
                                        &reconnect_delegate);
   ASSERT_TRUE(reconnect_request);
-  ssize_t decode_result = -1;
+  msgs::CborResult decode_result = -1;
   msgs::Type msg_type;
   EXPECT_CALL(mock_callback, OnStreamMessage(_, _, _, _, _, _))
-      .WillOnce(Invoke([&open_request, &msg_type, &decode_result](
-                           uint64_t endpoint_id, uint64_t cid,
-                           msgs::Type message_type, const uint8_t* buffer,
-                           size_t buffer_size, Clock::time_point now) {
+      .WillOnce([&open_request, &msg_type, &decode_result](
+                    uint64_t instance_id, uint64_t cid, msgs::Type message_type,
+                    const uint8_t* buffer, size_t buffer_size,
+                    Clock::time_point now) {
         msg_type = message_type;
         decode_result = msgs::DecodePresentationConnectionOpenRequest(
             buffer, buffer_size, open_request);
         return decode_result;
-      }));
+      });
   quic_bridge_.RunTasksUntilIdle();
 
   ASSERT_FALSE(connection);
   ASSERT_EQ(msg_type, msgs::Type::kPresentationConnectionOpenRequest);
   ASSERT_GT(decode_result, 0);
-  msgs::PresentationConnectionOpenResponse open_response;
-  open_response.request_id = open_request.request_id;
-  open_response.connection_id = 17;
-  open_response.result =
-      msgs::PresentationConnectionOpenResponse_result::kSuccess;
-  open_response.connection_count = 1ULL;
+  msgs::PresentationConnectionOpenResponse open_response = {
+      .request_id = open_request.request_id,
+      .result = msgs::PresentationConnectionOpenResponse_result::kSuccess,
+      .connection_id = 17,
+      .connection_count = 1ULL};
   SendOpenResponse(open_response);
 
   EXPECT_CALL(reconnect_delegate, OnConnectionMock(_))
-      .WillOnce(Invoke([&connection](std::unique_ptr<Connection>& c) {
+      .WillOnce([&connection](std::unique_ptr<Connection>& c) {
         connection = std::move(c);
-      }));
+      });
   EXPECT_CALL(mock_connection_delegate, OnConnected());
   quic_bridge_.RunTasksUntilIdle();
   ASSERT_TRUE(connection);

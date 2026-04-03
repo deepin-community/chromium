@@ -21,6 +21,16 @@ const PROVIDER_STATE_ENUM: {[key: number]: string} = {
   2: 'Low Accuracy',
   3: 'Blocked By System Permission',
 };
+export const LOCATION_PROVIDER_MANAGER_MODE_TABLE_ID =
+    'location-provider-manager-mode-table';
+const LOCATION_PROVIDER_MANAGER_MODE_ENUM: {[key: number]: string} = {
+  0: 'kNetworkOnly',
+  1: 'kPlatformOnly',
+  2: 'kCustomOnly',
+  3: 'kHybridPlatform',
+  4: 'kHybridFallbackNetwork',
+  5: 'kHybridPlatform2',
+};
 export const WATCH_TABLE_ID = 'watch-position-table';
 export const WIFI_DATA_TABLE_ID = 'wifi-data-table';
 export const POSITION_CACHE_TABLE_ID = 'position-cache-table';
@@ -46,7 +56,7 @@ function mojoTimeToDate(mojoTime: Time) {
 }
 
 // Returns a string representation of `mojoTime`.
-function stringifyMojoTime(mojoTime?: Time) {
+function stringifyMojoTime(mojoTime: Time|null) {
   if (!mojoTime) {
     return 'None';
   }
@@ -55,7 +65,7 @@ function stringifyMojoTime(mojoTime?: Time) {
 
 // Returns a string representation of `mojoGeopositionResult`.
 function stringifyMojoGeopositionResult(
-    mojoGeopositionResult?: GeopositionResult) {
+    mojoGeopositionResult: GeopositionResult|null) {
   if (!mojoGeopositionResult) {
     return 'None';
   }
@@ -134,6 +144,7 @@ export class DiagnoseInfoViewElement extends CustomElement {
   };
 
   private providerStateTable_: DiagnoseInfoTableElement;
+  private locationProviderManagerModeTable_: DiagnoseInfoTableElement;
   private wifiDataTable_: DiagnoseInfoTableElement;
   private positionCacheTable_: DiagnoseInfoTableElement;
   private watchPositionTable_: DiagnoseInfoTableElement;
@@ -146,6 +157,9 @@ export class DiagnoseInfoViewElement extends CustomElement {
     this.providerStateTable_ =
         this.getRequiredElement<DiagnoseInfoTableElement>(
             `#${PROVIDER_STATE_TABLE_ID}`);
+    this.locationProviderManagerModeTable_ =
+        this.getRequiredElement<DiagnoseInfoTableElement>(
+            `#${LOCATION_PROVIDER_MANAGER_MODE_TABLE_ID}`);
     this.wifiDataTable_ = this.getRequiredElement<DiagnoseInfoTableElement>(
         `#${WIFI_DATA_TABLE_ID}`);
     this.positionCacheTable_ =
@@ -166,6 +180,7 @@ export class DiagnoseInfoViewElement extends CustomElement {
 
   updateDiagnosticsTables(data: GeolocationDiagnostics) {
     this.updateProviderState(data.providerState);
+    this.updateLocationProviderManagerMode(data.locationProviderManagerMode);
     this.updateNetworkLocationDiagnostics(data.networkLocationDiagnostics);
     this.updatePositionCacheDiagnostics(data.positionCacheDiagnostics);
     this.updateWifiPollingPolicyTable(data.wifiPollingPolicyDiagnostics);
@@ -186,6 +201,21 @@ export class DiagnoseInfoViewElement extends CustomElement {
     }
     this.providerStateTable_.updateTable(
         PROVIDER_STATE_TABLE_ID, [{'Provider State': providerStateString}]);
+  }
+
+  updateLocationProviderManagerMode(locationProviderManagerMode: number|null) {
+    if (locationProviderManagerMode === null) {
+      return;
+    }
+    let locationProviderManagerModeString =
+        LOCATION_PROVIDER_MANAGER_MODE_ENUM[locationProviderManagerMode];
+    if (locationProviderManagerModeString === undefined) {
+      locationProviderManagerModeString = 'Invalid state';
+    }
+    this.locationProviderManagerModeTable_.updateTable(
+        LOCATION_PROVIDER_MANAGER_MODE_TABLE_ID, [
+          {'Location Provider Manager Mode': locationProviderManagerModeString},
+        ]);
   }
 
   accessPointDataToRecordArray(data: AccessPointData[]) {
@@ -228,8 +258,8 @@ export class DiagnoseInfoViewElement extends CustomElement {
     return tableData;
   }
 
-  updateNetworkLocationDiagnostics(networkLocationDiagnostics?:
-                                       NetworkLocationDiagnostics) {
+  updateNetworkLocationDiagnostics(networkLocationDiagnostics:
+                                       NetworkLocationDiagnostics|null) {
     if (!networkLocationDiagnostics) {
       this.wifiDataTable_.hideTable();
       return;
@@ -250,8 +280,8 @@ export class DiagnoseInfoViewElement extends CustomElement {
         WIFI_DATA_TABLE_ID, wifiData, footerMessage);
   }
 
-  updatePositionCacheDiagnostics(positionCacheDiagnostics?:
-                                     PositionCacheDiagnostics) {
+  updatePositionCacheDiagnostics(positionCacheDiagnostics:
+                                     PositionCacheDiagnostics|null) {
     if (!positionCacheDiagnostics) {
       this.positionCacheTable_.hideTable();
       return;
@@ -276,7 +306,7 @@ export class DiagnoseInfoViewElement extends CustomElement {
     this.watchPositionTable_.updateTable(WATCH_TABLE_ID, [data], footerMessage);
   }
 
-  updateWifiPollingPolicyTable(data?: WifiPollingPolicyDiagnostics) {
+  updateWifiPollingPolicyTable(data: WifiPollingPolicyDiagnostics|null) {
     if (!data) {
       this.wifiPollingPolicyTable_.hideTable();
       return;
@@ -327,7 +357,7 @@ export class DiagnoseInfoViewElement extends CustomElement {
   }
 
   outputTables(): Record<string, any> {
-    const tables = this.$all<DiagnoseInfoTableElement>('diagnose-info-table');
+    const tables = this.$all('diagnose-info-table');
     const output: Record<string, any> = {};
     output['LocationInternals'] = [];
     for (const table of tables) {

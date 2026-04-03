@@ -59,7 +59,7 @@ REGISTER_OP("CudnnRNNParamsSize")
       TF_RETURN_IF_ERROR(c->WithRank(c->input(2), 0, &unused));
 
       c->set_output(0, c->Vector(1));
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("CudnnRNN")
@@ -92,9 +92,9 @@ REGISTER_OP("CudnnRNN")
       auto batch_size = c->Dim(input_shape, 1);
       auto num_units = c->Dim(input_h_shape, 2);
 
-      string direction;
+      std::string direction;
       TF_RETURN_IF_ERROR(c->GetAttr("direction", &direction));
-      string rnn_mode;
+      std::string rnn_mode;
       TF_RETURN_IF_ERROR(c->GetAttr("rnn_mode", &rnn_mode));
       int dir_count = (direction == "bidirectional") ? 2 : 1;
       DimensionHandle output_size;
@@ -107,7 +107,7 @@ REGISTER_OP("CudnnRNN")
       c->set_output(1, output_h_shape);
       c->set_output(2, output_c_shape);
       c->set_output(3, c->UnknownShape());
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("CudnnRNNV2")
@@ -140,9 +140,9 @@ REGISTER_OP("CudnnRNNV2")
       auto seq_length = c->Dim(input_shape, 0);
       auto batch_size = c->Dim(input_shape, 1);
       auto num_units = c->Dim(input_h_shape, 2);
-      string direction;
+      std::string direction;
       TF_RETURN_IF_ERROR(c->GetAttr("direction", &direction));
-      string rnn_mode;
+      std::string rnn_mode;
       TF_RETURN_IF_ERROR(c->GetAttr("rnn_mode", &rnn_mode));
       int dir_count = (direction == "bidirectional") ? 2 : 1;
       DimensionHandle output_size;
@@ -156,7 +156,7 @@ REGISTER_OP("CudnnRNNV2")
       c->set_output(2, output_c_shape);
       c->set_output(3, c->UnknownShape());
       c->set_output(4, c->UnknownShape());
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("CudnnRNNV3")
@@ -195,9 +195,9 @@ REGISTER_OP("CudnnRNNV3")
       auto batch_size = c->Dim(input_shape, 1);
       auto num_units = c->Dim(input_h_shape, 2);
 
-      string direction;
+      std::string direction;
       TF_RETURN_IF_ERROR(c->GetAttr("direction", &direction));
-      string rnn_mode;
+      std::string rnn_mode;
       TF_RETURN_IF_ERROR(c->GetAttr("rnn_mode", &rnn_mode));
       if (rnn_mode == "lstm") {
         TF_RETURN_IF_ERROR(c->WithRank(input_c_shape, 3, &unused));
@@ -215,7 +215,7 @@ REGISTER_OP("CudnnRNNV3")
       c->set_output(2, output_c_shape);
       c->set_output(3, c->UnknownShape());
       c->set_output(4, c->UnknownShape());
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("CudnnRNNBackprop")
@@ -251,7 +251,7 @@ REGISTER_OP("CudnnRNNBackprop")
       c->set_output(1, input_h_shape);
       c->set_output(2, input_c_shape);
       c->set_output(3, params_shape);
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("CudnnRNNBackpropV2")
@@ -288,7 +288,7 @@ REGISTER_OP("CudnnRNNBackpropV2")
       c->set_output(1, input_h_shape);
       c->set_output(2, input_c_shape);
       c->set_output(3, params_shape);
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("CudnnRNNBackpropV3")
@@ -328,7 +328,7 @@ REGISTER_OP("CudnnRNNBackpropV3")
       c->set_output(1, input_h_shape);
       c->set_output(2, input_c_shape);
       c->set_output(3, params_shape);
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("CudnnRNNParamsToCanonical")
@@ -360,7 +360,7 @@ REGISTER_OP("CudnnRNNParamsToCanonical")
       for (int i = 0; i < num_params; i++) {
         c->set_output(num_params + i, c->Vector(InferenceContext::kUnknownDim));
       }
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("CudnnRNNParamsToCanonicalV2")
@@ -397,7 +397,7 @@ REGISTER_OP("CudnnRNNParamsToCanonicalV2")
         c->set_output(num_params_weights + i,
                       c->Vector(InferenceContext::kUnknownDim));
       }
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("CudnnRNNCanonicalToParams")
@@ -417,7 +417,7 @@ REGISTER_OP("CudnnRNNCanonicalToParams")
     .Attr("seed2: int = 0")
     .SetShapeFn([](InferenceContext* c) {
       c->set_output(0, c->Vector(InferenceContext::kUnknownDim));
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 REGISTER_OP("CudnnRNNCanonicalToParamsV2")
@@ -439,7 +439,7 @@ REGISTER_OP("CudnnRNNCanonicalToParamsV2")
     .Attr("num_proj: int = 0")
     .SetShapeFn([](InferenceContext* c) {
       c->set_output(0, c->Vector(InferenceContext::kUnknownDim));
-      return OkStatus();
+      return absl::OkStatus();
     });
 
 }  // namespace tensorflow

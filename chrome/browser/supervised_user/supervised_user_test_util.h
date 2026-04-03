@@ -5,10 +5,27 @@
 #ifndef CHROME_BROWSER_SUPERVISED_USER_SUPERVISED_USER_TEST_UTIL_H_
 #define CHROME_BROWSER_SUPERVISED_USER_SUPERVISED_USER_TEST_UTIL_H_
 
+#include <memory>
 #include <string>
+#include <string_view>
+
+#include "base/check_deref.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_key.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/supervised_user/android/supervised_user_service_platform_delegate.h"
+#include "chrome/browser/supervised_user/family_link_settings_service_factory.h"
+#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
+#include "components/keyed_service/core/keyed_service_factory.h"
+#include "components/supervised_user/core/browser/device_parental_controls.h"
+#include "components/supervised_user/core/browser/kids_chrome_management_url_checker_client.h"
+#include "components/supervised_user/core/common/supervised_user_constants.h"
+#include "components/supervised_user/test_support/supervised_user_url_filter_test_utils.h"
+#include "content/public/browser/storage_partition.h"
 
 struct AccountInfo;
-class Profile;
 
 namespace supervised_user_test_util {
 
@@ -24,10 +41,15 @@ void SetSupervisedUserExtensionsMayRequestPermissionsPref(Profile* profile,
 void SetSkipParentApprovalToInstallExtensionsPref(Profile* profile,
                                                   bool enabled);
 
-// Populates account info with a `given_name` and other fake data needed for a
-// valid `AccountInfo` structure.
-void PopulateAccountInfoWithName(AccountInfo& info,
-                                 const std::string& given_name);
+// Sets the Geolocation content setting value.
+void SetSupervisedUserGeolocationEnabledContentSetting(Profile* profile,
+                                                       bool enabled);
+
+// Returns `info` copy with populated `given_name` and other fake data needed
+// for a valid `AccountInfo` structure.
+[[nodiscard]] AccountInfo PopulateAccountInfoWithName(
+    const AccountInfo& info,
+    const std::string& given_name);
 
 // Updates manual block/allow list with a given host.
 // e.g. SetManualFilterForHost(profile, "www.example.com", false) adds the
@@ -36,8 +58,49 @@ void PopulateAccountInfoWithName(AccountInfo& info,
 // SetManualFilterForHost(profile, "www.example.com", true) adds the host to the
 // allowlist. The supervised user will be able to access this host.
 void SetManualFilterForHost(Profile* profile,
-                            const std::string& host,
+                            std::string_view host,
                             bool allowlist);
+
+// Updates manual block/allow list with a given url.
+// e.g. SetManualFilterForUrl(profile, "http://www.example.com", false) adds the
+// given url to the blocklist and the supervised user
+// will not be able to access this url. Similarly
+// SetManualFilterForUrl(profile, "www.example.com", true) adds the url to the
+// allowlist. The supervised user will be able to access this url.
+void SetManualFilterForUrl(Profile* profile,
+                           std::string_view url,
+                           bool allowlist);
+
+// Convenience method for browser tests emulating parent changes to web
+// filtering.
+void SetWebFilterType(const Profile* profile,
+                      supervised_user::WebFilterType web_filter_type);
+
+// Handy utility to use with TestingProfile::TestingFactory, that attaches to
+// the testing profile a supervised user service instance with substituted url
+// filtering functionalities.
+template <typename URLFilter,
+          typename URLFilterDelegate = supervised_user::FakeURLFilterDelegate>
+std::unique_ptr<KeyedService> BuildSupervisedUserService(
+    content::BrowserContext* browser_context) {
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  supervised_user::FamilyLinkSettingsService& settings_service = CHECK_DEREF(
+      supervised_user::FamilyLinkSettingsServiceFactory::GetInstance()
+          ->GetForKey(profile->GetProfileKey()));
+
+  return std::make_unique<supervised_user::SupervisedUserService>(
+      IdentityManagerFactory::GetForProfile(profile),
+      profile->GetDefaultStoragePartition()
+          ->GetURLLoaderFactoryForBrowserProcess(),
+      *profile->GetPrefs(), settings_service,
+      SyncServiceFactory::GetInstance()->GetForProfile(profile),
+      std::make_unique<URLFilter>(
+          settings_service, *profile->GetPrefs(),
+          std::make_unique<URLFilterDelegate>(),
+          std::make_unique<supervised_user::MockUrlCheckerClient>()),
+      std::make_unique<SupervisedUserServicePlatformDelegate>(*profile),
+      g_browser_process->device_parental_controls());
+}
 
 }  // namespace supervised_user_test_util
 

@@ -37,7 +37,7 @@ OpDef ToOpDef(const OpDefBuilder& builder) {
   return op_reg_data.op_def;
 }
 
-NodeDef ToNodeDef(const string& text) {
+NodeDef ToNodeDef(const std::string& text) {
   NodeDef node_def;
   EXPECT_TRUE(protobuf::TextFormat::MergeFromString(text, &node_def));
   return node_def;
@@ -50,20 +50,20 @@ NodeDef ToNodeDef(NodeDefBuilder&& builder) {
 }
 
 void ExpectSuccess(const NodeDef& good, const OpDef& op_def) {
-  EXPECT_EQ(OkStatus(), ValidateNodeDef(good, op_def))
+  EXPECT_EQ(absl::OkStatus(), ValidateNodeDef(good, op_def))
       << "NodeDef: " << SummarizeNodeDef(good)
       << "; OpDef: " << SummarizeOpDef(op_def);
 }
 
 void ExpectFailure(const NodeDef& bad, const OpDef& op_def,
-                   const string& message) {
-  Status status = ValidateNodeDef(bad, op_def);
+                   const std::string& message) {
+  absl::Status status = ValidateNodeDef(bad, op_def);
 
   EXPECT_FALSE(status.ok()) << "NodeDef: " << SummarizeNodeDef(bad)
                             << "; OpDef: " << SummarizeOpDef(op_def);
   if (status.ok()) return;
 
-  EXPECT_TRUE(errors::IsInvalidArgument(status))
+  EXPECT_TRUE(absl::IsInvalidArgument(status))
       << status << "; NodeDef: " << SummarizeNodeDef(bad)
       << "; OpDef: " << SummarizeOpDef(op_def);
 
@@ -318,19 +318,19 @@ TEST(NodeDefUtilTest, Device) {
 }
 
 void ExpectValidSyntax(const NodeDef& good) {
-  EXPECT_EQ(OkStatus(), ValidateExternalNodeDefSyntax(good))
+  EXPECT_EQ(absl::OkStatus(), ValidateExternalNodeDefSyntax(good))
       << "NodeDef: " << SummarizeNodeDef(good);
 }
 
-void ExpectInvalidSyntax(const NodeDef& bad, const string& message) {
-  Status status = ValidateExternalNodeDefSyntax(bad);
+void ExpectInvalidSyntax(const NodeDef& bad, const std::string& message) {
+  absl::Status status = ValidateExternalNodeDefSyntax(bad);
 
   ASSERT_FALSE(status.ok()) << "NodeDef: " << SummarizeNodeDef(bad);
 
-  EXPECT_TRUE(errors::IsInvalidArgument(status))
+  EXPECT_TRUE(absl::IsInvalidArgument(status))
       << status << "; NodeDef: " << SummarizeNodeDef(bad);
 
-  EXPECT_TRUE(absl::StrContains(StringPiece(status.ToString()), message))
+  EXPECT_TRUE(absl::StrContains(absl::string_view(status.ToString()), message))
       << "NodeDef: " << SummarizeNodeDef(bad) << ", " << status << ", "
       << message;
 }
@@ -761,11 +761,11 @@ TEST(AddPrefixAndSuffixToNode, Enter) {
   node_def.set_name("enter");
   node_def.set_op("Enter");
   AddNodeAttr("frame_name", "test_frame", &node_def);
-  const string prefix = "prefix/";
-  const string suffix = "/suffix";
+  const std::string prefix = "prefix/";
+  const std::string suffix = "/suffix";
   TF_ASSERT_OK(AddPrefixAndSuffixToNode(prefix, suffix, &node_def));
   EXPECT_EQ("prefix/enter/suffix", node_def.name());
-  string frame_name;
+  std::string frame_name;
   TF_ASSERT_OK(GetNodeAttr(node_def, "frame_name", &frame_name));
   EXPECT_EQ("prefix/test_frame/suffix", frame_name);
 }
@@ -775,20 +775,20 @@ TEST(MaybeAddPrefixToColocationConstraints, Basic) {
   node_def.set_name("Identity");
   node_def.set_op("Identity");
   AddNodeAttr(kColocationAttrName,
-              {strings::StrCat(kColocationGroupPrefix, "Node1"),
-               strings::StrCat(kColocationGroupPrefix, "Node2"),
-               strings::StrCat(kColocationGroupPrefix, "Node3")},
+              {absl::StrCat(kColocationGroupPrefix, "Node1"),
+               absl::StrCat(kColocationGroupPrefix, "Node2"),
+               absl::StrCat(kColocationGroupPrefix, "Node3")},
               &node_def);
 
-  std::unordered_set<string> match;
+  std::unordered_set<std::string> match;
   match.insert("Node1");
   match.insert("Node3");
   TF_ASSERT_OK(MaybeAddPrefixToColocationConstraints(match, "fn/", &node_def));
-  std::vector<string> coloc_constraints;
+  std::vector<std::string> coloc_constraints;
   TF_ASSERT_OK(GetNodeAttr(node_def, kColocationAttrName, &coloc_constraints));
-  EXPECT_EQ(
-      coloc_constraints,
-      std::vector<string>({"loc:@fn/Node1", "loc:@Node2", "loc:@fn/Node3"}));
+  EXPECT_EQ(coloc_constraints,
+            std::vector<std::string>(
+                {"loc:@fn/Node1", "loc:@Node2", "loc:@fn/Node3"}));
 }
 
 TEST(MaybeAddPrefixToColocationConstraints, NoConstraints) {
@@ -796,7 +796,7 @@ TEST(MaybeAddPrefixToColocationConstraints, NoConstraints) {
   node_def.set_name("Identity");
   node_def.set_op("Identity");
 
-  std::unordered_set<string> match;
+  std::unordered_set<std::string> match;
   match.insert("Node1");
   match.insert("Node3");
   TF_ASSERT_OK(MaybeAddPrefixToColocationConstraints(match, "fn/", &node_def));
@@ -808,19 +808,19 @@ TEST(MaybeUpdateColocationConstraintsWithMap, Basic) {
   node_def.set_name("Identity");
   node_def.set_op("Identity");
   AddNodeAttr(kColocationAttrName,
-              {strings::StrCat(kColocationGroupPrefix, "Node1"),
-               strings::StrCat(kColocationGroupPrefix, "Node2"),
-               strings::StrCat(kColocationGroupPrefix, "Node3")},
+              {absl::StrCat(kColocationGroupPrefix, "Node1"),
+               absl::StrCat(kColocationGroupPrefix, "Node2"),
+               absl::StrCat(kColocationGroupPrefix, "Node3")},
               &node_def);
 
   std::map<absl::string_view, absl::string_view> node_map;
   node_map["Node1"] = "Node4";
   node_map["Invalid"] = "Node5";
   TF_ASSERT_OK(MaybeUpdateColocationConstraintsWithMap(node_map, &node_def));
-  std::vector<string> coloc_constraints;
+  std::vector<std::string> coloc_constraints;
   TF_ASSERT_OK(GetNodeAttr(node_def, kColocationAttrName, &coloc_constraints));
-  EXPECT_EQ(coloc_constraints,
-            std::vector<string>({"loc:@Node4", "loc:@Node2", "loc:@Node3"}));
+  EXPECT_EQ(coloc_constraints, std::vector<std::string>(
+                                   {"loc:@Node4", "loc:@Node2", "loc:@Node3"}));
 }
 
 TEST(MaybeUpdateColocationConstraintsWithMap, NoConstraints) {
@@ -876,10 +876,10 @@ TEST(AttachDef, AllowMultipleFormattedNode) {
   a.set_name("a");
   NodeDef b;
   b.set_name("b");
-  Status s = Status(absl::StatusCode::kCancelled, "Error");
-  Status s2 = AttachDef(s, a, true);
+  absl::Status s = absl::Status(absl::StatusCode::kCancelled, "Error");
+  absl::Status s2 = AttachDef(s, a, true);
   EXPECT_EQ("Error\n\t [[{{node a}}]]", s2.message());
-  Status s3 = AttachDef(s2, b, true);
+  absl::Status s3 = AttachDef(s2, b, true);
   EXPECT_EQ("Error\n\t [[{{node a}}]]\n\t [[{{node b}}]]", s3.message());
 }
 
@@ -888,10 +888,10 @@ TEST(AttachDef, DisallowMultipleFormattedNode) {
   a.set_name("a");
   NodeDef b;
   b.set_name("b");
-  Status s = Status(absl::StatusCode::kCancelled, "Error");
-  Status s2 = AttachDef(s, a, false);
+  absl::Status s = absl::Status(absl::StatusCode::kCancelled, "Error");
+  absl::Status s2 = AttachDef(s, a, false);
   EXPECT_EQ("Error\n\t [[{{node a}}]]", s2.message());
-  Status s3 = AttachDef(s2, b, false);
+  absl::Status s3 = AttachDef(s2, b, false);
   EXPECT_EQ("Error\n\t [[{{node a}}]]\n\t [[b]]", s3.message());
 }
 

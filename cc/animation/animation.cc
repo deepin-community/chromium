@@ -223,7 +223,7 @@ void Animation::DelegateAnimationEvent(const AnimationEvent& event) {
         break;
 
       case AnimationEvent::Type::kTakeOver:
-        // TODO(crbug.com/1018213): Routing TAKEOVER events is broken.
+        // TODO(crbug.com/40655283): Routing TAKEOVER events is broken.
         DCHECK(!event.is_impl_only);
         DCHECK(event.target_property == TargetProperty::SCROLL_OFFSET);
         DCHECK(event.curve);
@@ -307,6 +307,10 @@ void Animation::AddKeyframeModel(
 void Animation::PauseKeyframeModel(int keyframe_model_id,
                                    base::TimeDelta time_offset) {
   keyframe_effect()->PauseKeyframeModel(keyframe_model_id, time_offset);
+}
+
+void Animation::PauseKeyframeModels(base::TimeDelta time_offset) {
+  keyframe_effect()->PauseKeyframeModels(time_offset);
 }
 
 void Animation::RemoveKeyframeModel(int keyframe_model_id) {

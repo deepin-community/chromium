@@ -30,6 +30,7 @@ class KeyAccessibilityEnablerTest : public AshTestBase,
   }
 
   void TearDown() override {
+    key_accessibility_enabler_ = nullptr;
     ui::SetEventTickClockForTesting(nullptr);
     Shell::Get()->accessibility_controller()->RemoveObserver(this);
     AshTestBase::TearDown();
@@ -53,19 +54,18 @@ class KeyAccessibilityEnablerTest : public AshTestBase,
   void OnAccessibilityStatusChanged() override { run_loop_->Quit(); }
 
   std::unique_ptr<base::RunLoop> run_loop_;
-  raw_ptr<KeyAccessibilityEnabler, DanglingUntriaged>
-      key_accessibility_enabler_;
+  raw_ptr<KeyAccessibilityEnabler> key_accessibility_enabler_;
   base::SimpleTestTickClock clock_;
 };
 
 TEST_F(KeyAccessibilityEnablerTest, TwoVolumeKeyDown) {
-  ui::KeyEvent vol_down_press(ui::ET_KEY_PRESSED, ui::VKEY_VOLUME_DOWN,
+  ui::KeyEvent vol_down_press(ui::EventType::kKeyPressed, ui::VKEY_VOLUME_DOWN,
                               ui::EF_NONE);
-  ui::KeyEvent vol_up_press(ui::ET_KEY_PRESSED, ui::VKEY_VOLUME_UP,
+  ui::KeyEvent vol_up_press(ui::EventType::kKeyPressed, ui::VKEY_VOLUME_UP,
                             ui::EF_NONE);
-  ui::KeyEvent vol_down_release(ui::ET_KEY_RELEASED, ui::VKEY_VOLUME_DOWN,
-                                ui::EF_NONE);
-  ui::KeyEvent vol_up_release(ui::ET_KEY_RELEASED, ui::VKEY_VOLUME_UP,
+  ui::KeyEvent vol_down_release(ui::EventType::kKeyReleased,
+                                ui::VKEY_VOLUME_DOWN, ui::EF_NONE);
+  ui::KeyEvent vol_up_release(ui::EventType::kKeyReleased, ui::VKEY_VOLUME_UP,
                               ui::EF_NONE);
 
   AccessibilityController* controller =

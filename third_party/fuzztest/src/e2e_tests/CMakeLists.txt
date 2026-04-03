@@ -1,8 +1,22 @@
-get_filename_component(PARENT_DIR ../ ABSOLUTE)
-include_directories(${PARENT_DIR})
-include_directories(${PARENT_DIR}/domain_tests)
 
-add_subdirectory(testdata)
+fuzztest_cc_library(
+  NAME
+    test_binary_util
+  HDRS
+    test_binary_util.h
+  SRCS
+    test_binary_util.cc
+  DEPS
+    absl::check
+    absl::flat_hash_map
+    absl::strings
+    absl::string_view
+    absl::time
+    fuzztest::common_logging
+    fuzztest_flag_name
+    fuzztest_subprocess
+  TESTONLY
+)
 
 add_executable(
   functional_test
@@ -11,12 +25,15 @@ add_executable(
 target_link_libraries(
   functional_test
   PUBLIC
-  fuzztest_domain_testing
+  fuzztest_escaping
   fuzztest_io
-  fuzztest_logging
+  fuzztest_common_logging
+  fuzztest_printer
   fuzztest_serialization
   fuzztest_subprocess
+  fuzztest_test_binary_util
   fuzztest_type_support
+  fuzztest_temp_dir
   re2
   absl::flat_hash_map
   absl::strings
@@ -44,7 +61,7 @@ add_executable(
 target_link_libraries(
   benchmark_test
   PUBLIC
-  fuzztest_logging
+  fuzztest_common_logging
   fuzztest_subprocess
   re2
   absl::flat_hash_map

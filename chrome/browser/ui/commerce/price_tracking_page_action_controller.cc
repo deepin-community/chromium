@@ -6,6 +6,7 @@
 
 #include "base/check_is_test.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/string_number_conversions.h"
 #include "components/commerce/core/price_tracking_utils.h"
 #include "components/commerce/core/shopping_service.h"
 #include "components/feature_engagement/public/tracker.h"
@@ -258,7 +259,8 @@ void PriceTrackingPageActionController::MaybeDoProductImageFetch(
     return;
   }
 
-  // TODO(1360850): Delay this fetch by possibly waiting until page load has
+  // TODO(crbug.com/40863328): Delay this fetch by possibly waiting until page
+  // load has
   //                finished.
   image_fetcher_->FetchImage(
       info.value().image_url,

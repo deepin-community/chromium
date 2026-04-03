@@ -6,7 +6,6 @@
 
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
@@ -128,10 +127,10 @@ void FakeBluetoothGattDescriptorClient::ReadValue(
 
 void FakeBluetoothGattDescriptorClient::WriteValue(
     const dbus::ObjectPath& object_path,
-    const std::vector<uint8_t>& value,
+    base::span<const uint8_t> value,
     base::OnceClosure callback,
     ErrorCallback error_callback) {
-  if (!base::Contains(properties_, object_path)) {
+  if (!properties_.contains(object_path)) {
     std::move(error_callback).Run(kUnknownDescriptorError, "");
     return;
   }

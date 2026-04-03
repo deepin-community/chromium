@@ -6,17 +6,18 @@
 // should be kept in sync with those in ios/chrome/browser/variations/
 // variations_safe_mode_egtest.mm.
 
+#include <ranges>
 #include <string>
+#include <string_view>
 
 #include "base/atomic_sequence_num.h"
+#include "base/base64.h"
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/metrics/field_trial.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
-#include "base/ranges/ranges.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -33,7 +34,9 @@
 #include "components/prefs/json_pref_store.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/pref_service_factory.h"
+#include "components/variations/entropy_provider.h"
 #include "components/variations/pref_names.h"
+#include "components/variations/seed_reader_writer.h"
 #include "components/variations/service/variations_field_trial_creator.h"
 #include "components/variations/service/variations_service.h"
 #include "components/variations/variations_switches.h"
@@ -41,12 +44,26 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/zlib/google/compression_utils.h"
 
 #if BUILDFLAG(IS_POSIX)
 #include <sys/wait.h>
 #endif
 
 namespace variations {
+namespace {
+
+constexpr char kSafeSeedFilename[] = "VariationsSafeSeedV2";
+constexpr char kSeedFilename[] = "VariationsSeedV2";
+
+void WriteSeedFile(const base::FilePath& path,
+                   const StoredSeedInfo& stored_seed_info) {
+  std::string parsed_seed_info;
+  ASSERT_TRUE(stored_seed_info.SerializeToString(&parsed_seed_info));
+  std::string compressed_seed_info =
+      SeedReaderWriter::CompressForSeedFileForTesting(parsed_seed_info);
+  ASSERT_TRUE(base::WriteFile(path, compressed_seed_info));
+}
 
 class VariationsSafeModeEndToEndBrowserTestHelper
     : public InProcessBrowserTest {
@@ -86,12 +103,13 @@ IN_PROC_BROWSER_TEST_F(VariationsSafeModeEndToEndBrowserTestHelper,
   const bool is_first_run = (crash_streak == 0);
   const bool is_null_seed = (crash_streak == kCrashStreakNullSeedThreshold);
   const bool safe_seed_was_used =
-      FieldTrialListHasAllStudiesFrom(kTestSeedData);
+      FieldTrialListHasAllStudiesFrom(TestSeedData());
   EXPECT_NE(is_first_run || is_null_seed, safe_seed_was_used)  // ==> XOR
       << "crash_streak=" << crash_streak;
 }
 
-class VariationsSafeModeEndToEndBrowserTest : public ::testing::Test {
+class VariationsSafeModeEndToEndBrowserTest
+    : public ::testing::TestWithParam<std::string> {
  public:
   void SetUp() override {
     ::testing::Test::SetUp();
@@ -125,6 +143,12 @@ class VariationsSafeModeEndToEndBrowserTest : public ::testing::Test {
     // Assign the test environment to be on the Canary channel. This ensures
     // compatibility with the crashing study in the seed.
     sub_test.AppendSwitchASCII(switches::kFakeVariationsChannel, "canary");
+
+    // Assign the test experiment group.
+    // TODO(crbug.com/391565578): Remove after Seed File experiment is complete.
+    sub_test.AppendSwitchASCII(
+        ::switches::kForceFieldTrials,
+        base::StrCat({variations::kSeedFileTrial, "/", GetParam()}));
 
     // Explicitly avoid any terminal control characters in the output.
     sub_test.AppendSwitchASCII("gtest_color", "no");
@@ -189,7 +213,12 @@ class VariationsSafeModeEndToEndBrowserTest : public ::testing::Test {
   base::FilePath local_state_file_;
 };
 
-TEST_F(VariationsSafeModeEndToEndBrowserTest, ExtendedSafeSeedEndToEnd) {
+INSTANTIATE_TEST_SUITE_P(SeedFileExperimentGroups,
+                         VariationsSafeModeEndToEndBrowserTest,
+                         ::testing::Values(variations::kControlGroup,
+                                           variations::kSeedFilesGroup));
+
+TEST_P(VariationsSafeModeEndToEndBrowserTest, ExtendedSafeSeedEndToEnd) {
   base::CommandLine sub_test = SetUpSubTest();
 
   // Initial sub-test run should be successful.
@@ -198,12 +227,40 @@ TEST_F(VariationsSafeModeEndToEndBrowserTest, ExtendedSafeSeedEndToEnd) {
   // To speed up the test, skip the first k-1 crashing runs.
   const int initial_crash_count = kCrashStreakSafeSeedThreshold - 1;
 
-  // Inject the safe and crashing seeds into the Local State of |sub_test|.
-  {
+  // Inject the safe and crashing seeds into the Seed Files XOR Local State of
+  // |sub_test|. Experiment moving the seed from Local State to Seed File
+  // in progress, so we need to cover both cases.
+  if (GetParam() == variations::kSeedFilesGroup) {
     auto local_state = LoadLocalState(local_state_file());
     local_state->SetInteger(prefs::kVariationsCrashStreak, initial_crash_count);
-    WriteSeedData(local_state.get(), kTestSeedData, kSafeSeedPrefKeys);
-    WriteSeedData(local_state.get(), kCrashingSeedData, kRegularSeedPrefKeys);
+
+    std::string crashing_seed_uncompressed_data;
+    ASSERT_TRUE(base::Base64Decode(CrashingSeedData().base64_uncompressed_data,
+                                   &crashing_seed_uncompressed_data));
+    StoredSeedInfo stored_seed_info;
+    stored_seed_info.set_data(crashing_seed_uncompressed_data);
+    stored_seed_info.set_signature(CrashingSeedData().base64_signature);
+
+    std::string test_seed_uncompressed_data;
+    ASSERT_TRUE(base::Base64Decode(TestSeedData().base64_uncompressed_data,
+                                   &test_seed_uncompressed_data));
+    StoredSeedInfo stored_safe_seed_info;
+    stored_safe_seed_info.set_data(test_seed_uncompressed_data);
+    stored_safe_seed_info.set_signature(TestSeedData().base64_signature);
+
+    ASSERT_EQ(local_state->GetString(prefs::kVariationsCompressedSeed), "");
+    ASSERT_EQ(local_state->GetString(prefs::kVariationsSafeCompressedSeed), "");
+    // Write the seeds to the Seed Files.
+    WriteSeedFile(user_data_dir().AppendASCII(kSafeSeedFilename),
+                  stored_safe_seed_info);
+    WriteSeedFile(user_data_dir().AppendASCII(kSeedFilename), stored_seed_info);
+  } else {
+    // GetParam() == variations::kControlGroup
+    // TODO(crbug.com/379869158): Remove after Seed File experiment is complete.
+    auto local_state = LoadLocalState(local_state_file());
+    local_state->SetInteger(prefs::kVariationsCrashStreak, initial_crash_count);
+    WriteSeedData(local_state.get(), TestSeedData(), kSafeSeedPrefKeys);
+    WriteSeedData(local_state.get(), CrashingSeedData(), kRegularSeedPrefKeys);
   }
 
   // The next run will be |kCrashStreakSafeSeedThreshold| crashing runs of the
@@ -222,7 +279,8 @@ TEST_F(VariationsSafeModeEndToEndBrowserTest, ExtendedSafeSeedEndToEnd) {
   RunAndExpectSuccessfulSubTest(sub_test);
 }
 
-TEST_F(VariationsSafeModeEndToEndBrowserTest, ExtendedNullSeedEndToEnd) {
+TEST_P(VariationsSafeModeEndToEndBrowserTest, ExtendedNullSeedEndToEnd) {
+  base::ScopedAllowBlockingForTesting allow_io;
   base::CommandLine sub_test = SetUpSubTest();
 
   // Initial sub-test run should be successful.
@@ -231,12 +289,32 @@ TEST_F(VariationsSafeModeEndToEndBrowserTest, ExtendedNullSeedEndToEnd) {
   // To speed up the test, skip the first k-1 crashing runs.
   const int initial_crash_count = kCrashStreakNullSeedThreshold - 1;
 
-  // Inject the crashing seeds for both Regular and Safe.
-  {
+  // Inject the crashing seeds for both Regular and Safe into the Seed Files XOR
+  // Local State of |sub_test|. Experiment moving the seed from Local State to
+  // Seed File in progress, so we need to cover both cases.
+  if (GetParam() == variations::kSeedFilesGroup) {
     auto local_state = LoadLocalState(local_state_file());
     local_state->SetInteger(prefs::kVariationsCrashStreak, initial_crash_count);
-    WriteSeedData(local_state.get(), kCrashingSeedData, kSafeSeedPrefKeys);
-    WriteSeedData(local_state.get(), kCrashingSeedData, kRegularSeedPrefKeys);
+    std::string seed_uncompressed_data;
+    ASSERT_TRUE(base::Base64Decode(CrashingSeedData().base64_uncompressed_data,
+                                   &seed_uncompressed_data));
+    StoredSeedInfo stored_seed_info;
+    stored_seed_info.set_data(seed_uncompressed_data);
+    stored_seed_info.set_signature(CrashingSeedData().base64_signature);
+
+    ASSERT_EQ(local_state->GetString(prefs::kVariationsCompressedSeed), "");
+    ASSERT_EQ(local_state->GetString(prefs::kVariationsSafeCompressedSeed), "");
+    // Write the seeds to the Seed Files.
+    WriteSeedFile(user_data_dir().AppendASCII(kSafeSeedFilename),
+                  stored_seed_info);
+    WriteSeedFile(user_data_dir().AppendASCII(kSeedFilename), stored_seed_info);
+  } else {
+    // GetParam() == variations::kControlGroup
+    // TODO(crbug.com/391565578): Remove after Seed File experiment is complete.
+    auto local_state = LoadLocalState(local_state_file());
+    local_state->SetInteger(prefs::kVariationsCrashStreak, initial_crash_count);
+    WriteSeedData(local_state.get(), CrashingSeedData(), kSafeSeedPrefKeys);
+    WriteSeedData(local_state.get(), CrashingSeedData(), kRegularSeedPrefKeys);
   }
 
   // The next run will be |kCrashStreakNullSeedThreshold| crashing runs of the
@@ -255,4 +333,5 @@ TEST_F(VariationsSafeModeEndToEndBrowserTest, ExtendedNullSeedEndToEnd) {
   RunAndExpectSuccessfulSubTest(sub_test);
 }
 
+}  // namespace
 }  // namespace variations

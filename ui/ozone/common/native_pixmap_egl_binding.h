@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/threading/thread_checker.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/native_pixmap.h"
 #include "ui/gl/scoped_egl_image.h"
@@ -19,9 +20,11 @@ namespace ui {
 class NativePixmapEGLBinding : public NativePixmapGLBinding {
  public:
   NativePixmapEGLBinding(const gfx::Size& size,
-                         gfx::BufferFormat format,
+                         viz::SharedImageFormat format,
                          gfx::BufferPlane plane);
   ~NativePixmapEGLBinding() override;
+
+  static bool IsSharedImageFormatSupported(viz::SharedImageFormat format);
 
   // Create an EGLImage from a given NativePixmap and plane and bind
   // |texture_id| to |target| followed by binding the image to |target|. The
@@ -30,16 +33,12 @@ class NativePixmapEGLBinding : public NativePixmapGLBinding {
   // (limited or null), and |color_space| conveys this.
   static std::unique_ptr<NativePixmapGLBinding> Create(
       scoped_refptr<gfx::NativePixmap> pixmap,
-      gfx::BufferFormat plane_format,
+      viz::SharedImageFormat plane_format,
       gfx::BufferPlane plane,
       gfx::Size plane_size,
       const gfx::ColorSpace& color_space,
       GLenum target,
       GLuint texture_id);
-
-  // NativePixmapGLBinding:
-  GLuint GetInternalFormat() override;
-  GLenum GetDataType() override;
 
  private:
   // Create an EGLImage from a given NativePixmap and bind |texture_id| to
@@ -53,7 +52,7 @@ class NativePixmapEGLBinding : public NativePixmapGLBinding {
   gl::ScopedEGLImage egl_image_;
   const gfx::Size size_;
   THREAD_CHECKER(thread_checker_);
-  gfx::BufferFormat format_;
+  viz::SharedImageFormat format_;
   scoped_refptr<gfx::NativePixmap> pixmap_;
   gfx::BufferPlane plane_;
 };

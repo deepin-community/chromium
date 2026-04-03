@@ -24,6 +24,7 @@ limitations under the License.
 #include "tensorflow/lite/kernels/test_util.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/string_type.h"
+#include "tensorflow/lite/types/half.h"
 
 namespace tflite {
 namespace {
@@ -132,17 +133,19 @@ TEST_P(FillOpTest, FillFloat) {
   FillOpModel<int64_t, float> m(TensorType_INT64, {3}, {2, 2, 2}, 4.0,
                                 GetParam());
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.GetOutput(),
-              ElementsAreArray({4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0}));
+  EXPECT_THAT(
+      m.GetOutput(),
+      Pointwise(FloatingPointEq(), {4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0}));
   EXPECT_THAT(m.GetOutputShape(), ElementsAreArray({2, 2, 2}));
 }
 
 TEST_P(FillOpTest, FillFloat16) {
-  FillOpModel<int64_t, Eigen::half> m(TensorType_INT64, {3}, {2, 2, 2},
-                                      Eigen::half(4.0f), GetParam());
+  FillOpModel<int64_t, half> m(TensorType_INT64, {3}, {2, 2, 2}, half(4.0f),
+                               GetParam());
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.GetOutput(),
-              ElementsAreArray({4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0}));
+  EXPECT_THAT(
+      m.GetOutput(),
+      Pointwise(FloatingPointEq(), {4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0}));
   EXPECT_THAT(m.GetOutputShape(), ElementsAreArray({2, 2, 2}));
 }
 
@@ -150,15 +153,16 @@ TEST_P(FillOpTest, FillFloatInt32Dims) {
   FillOpModel<int32_t, float> m(TensorType_INT32, {3}, {2, 2, 2}, 4.0,
                                 GetParam());
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.GetOutput(),
-              ElementsAreArray({4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0}));
+  EXPECT_THAT(
+      m.GetOutput(),
+      Pointwise(FloatingPointEq(), {4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0}));
   EXPECT_THAT(m.GetOutputShape(), ElementsAreArray({2, 2, 2}));
 }
 
 TEST_P(FillOpTest, FillOutputScalar) {
   FillOpModel<int64_t, float> m(TensorType_INT64, {0}, {}, 4.0, GetParam());
   ASSERT_EQ(m.Invoke(), kTfLiteOk);
-  EXPECT_THAT(m.GetOutput(), ElementsAreArray({4.0}));
+  EXPECT_THAT(m.GetOutput(), Pointwise(FloatingPointEq(), {4.0}));
   EXPECT_THAT(m.GetOutputShape(), IsEmpty());
 }
 

@@ -42,11 +42,10 @@ struct SessionInfo {
 //     "issueCaseId": "issue_case_id",
 //     "issueDescription": "issue description",
 //     "requestedDataCollectors": [<requested data collectors>],
-//     "requestedPiiTypes": [],
-//     "requesterMetadata": "obfuscated123"
+//     "requestedPiiTypes": []
 //   }
 // }
-base::Value::Dict GetFetchSupportPacketCommandPayloadDict(
+base::DictValue GetFetchSupportPacketCommandPayloadDict(
     const std::vector<support_tool::DataCollectorType>& data_collectors,
     const std::vector<support_tool::PiiType>& pii_types = {});
 

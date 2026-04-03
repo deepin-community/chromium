@@ -19,15 +19,15 @@
 #include "include/core/SkTextureCompressionType.h"
 #include "include/core/SkTypes.h"
 #include "include/gpu/GpuTypes.h"
-#include "include/gpu/GrBackendSurface.h"
-#include "include/gpu/GrContextOptions.h"
-#include "include/gpu/GrDirectContext.h"
-#include "include/gpu/GrTypes.h"
+#include "include/gpu/ganesh/GrBackendSurface.h"
+#include "include/gpu/ganesh/GrContextOptions.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/GrTypes.h"
 #include "include/gpu/ganesh/SkImageGanesh.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
-#include "include/private/SkColorData.h"
 #include "include/private/gpu/ganesh/GrTypesPriv.h"
 #include "src/core/SkAutoPixmapStorage.h"
+#include "src/core/SkColorData.h"
 #include "src/gpu/RefCntedCallback.h"
 #include "src/gpu/Swizzle.h"
 #include "src/gpu/ganesh/GrCaps.h"
@@ -43,16 +43,17 @@
 #include "src/gpu/ganesh/GrSurfaceProxy.h"
 #include "src/gpu/ganesh/GrSurfaceProxyView.h"
 #include "src/gpu/ganesh/GrTextureProxy.h"
+#include "src/gpu/ganesh/GrUtil.h"
 #include "src/gpu/ganesh/SurfaceContext.h"
 #include "src/gpu/ganesh/SurfaceFillContext.h"
 #include "src/gpu/ganesh/effects/GrTextureEffect.h"
+#include "tests/ComparePixels.h"
 #include "tests/CtsEnforcement.h"
 #include "tests/Test.h"
-#include "tests/TestUtils.h"
 #include "tools/ToolUtils.h"
+#include "tools/ganesh/ProxyUtils.h"
 #include "tools/gpu/ContextType.h"
 #include "tools/gpu/ManagedBackendTexture.h"
-#include "tools/gpu/ProxyUtils.h"
 
 #include <array>
 #include <functional>
@@ -62,17 +63,18 @@
 
 #if defined(SK_GL)
 #include "include/gpu/ganesh/gl/GrGLBackendSurface.h"
-#include "include/gpu/gl/GrGLInterface.h"
-#include "include/gpu/gl/GrGLTypes.h"
+#include "include/gpu/ganesh/gl/GrGLInterface.h"
+#include "include/gpu/ganesh/gl/GrGLTypes.h"
 #include "src/gpu/ganesh/gl/GrGLCaps.h"
 #include "src/gpu/ganesh/gl/GrGLContext.h"
 #include "src/gpu/ganesh/gl/GrGLDefines.h"
 #include "src/gpu/ganesh/gl/GrGLGpu.h"
-#include "tools/gpu/gl/GLTestContext.h"
+#include "tools/ganesh/gl/GLTestContext.h"
 #endif
 
 #if defined(SK_METAL)
-#include "include/gpu/mtl/GrMtlTypes.h"
+#include "include/gpu/ganesh/mtl/GrMtlBackendSurface.h"
+#include "include/gpu/ganesh/mtl/GrMtlTypes.h"
 #include "src/gpu/ganesh/mtl/GrMtlCppUtil.h"
 #endif
 
@@ -82,7 +84,7 @@
 
 #if defined(SK_VULKAN)
 #include "include/gpu/ganesh/vk/GrVkBackendSurface.h"
-#include "include/gpu/vk/GrVkTypes.h"
+#include "include/gpu/ganesh/vk/GrVkTypes.h"
 #include "src/gpu/ganesh/vk/GrVkCaps.h"
 #include <vulkan/vulkan_core.h>
 #endif
@@ -195,7 +197,7 @@ static bool isBGRA8(const GrBackendFormat& format) {
         }
         case GrBackendApi::kMetal:
 #ifdef SK_METAL
-            return GrMtlFormatIsBGRA8(format.asMtlFormat());
+            return GrMtlFormatIsBGRA8(GrBackendFormats::AsMtlFormat(format));
 #else
             return false;
 #endif
@@ -305,7 +307,7 @@ static void check_base_readbacks(GrDirectContext* dContext,
                                  skiatest::Reporter* reporter,
                                  const char* label) {
     if (isRGB(backendTex.getBackendFormat())) {
-        // readPixels is busted for the RGB backend format (skbug.com/8862)
+        // readPixels is busted for the RGB backend format (skbug.com/40040143)
         // TODO: add a GrColorType::kRGB_888 to fix the situation
         return;
     }
@@ -418,7 +420,7 @@ static void check_mipmaps(GrDirectContext* dContext,
                           skiatest::Reporter* reporter,
                           const char* label) {
 #ifdef SK_GL
-    // skbug.com/9141 (RGBA_F32 mipmaps appear to be broken on some Mali devices)
+    // skbug.com/40040438 (RGBA_F32 mipmaps appear to be broken on some Mali devices)
     if (GrBackendApi::kOpenGL == dContext->backend()) {
         GrGLGpu* glGPU = static_cast<GrGLGpu*>(dContext->priv().getGpu());
 
@@ -430,7 +432,7 @@ static void check_mipmaps(GrDirectContext* dContext,
 #endif
 
     if (isRGB(backendTex.getBackendFormat())) {
-        // readPixels is busted for the RGB backend format (skbug.com/8862)
+        // readPixels is busted for the RGB backend format (skbug.com/40040143)
         // TODO: add a GrColorType::kRGB_888 to fix the situation
         return;
     }
@@ -621,16 +623,19 @@ void color_type_backend_allocation_test(const sk_gpu_test::ContextInfo& ctxInfo,
         // TODO: readback is busted for *10A2 when alpha = 0.5f (perhaps premul vs. unpremul)
         { kRGBA_1010102_SkColorType,      { 0.25f, 0.5f, 0.75f, 1.0f }},
         { kBGRA_1010102_SkColorType,      { 0.25f, 0.5f, 0.75f, 1.0f }},
-        // RGB/BGR 101010x have no Ganesh correlate
-        { kRGB_101010x_SkColorType,       { 0, 0.5f, 0, 0.5f }     },
+        { kRGB_101010x_SkColorType,       { 0.25f, 0.5f, 0.75f, 0.5f }},
+        // BGR 101010x has no Ganesh correlate
         { kBGR_101010x_SkColorType,       { 0, 0.5f, 0, 0.5f }     },
         { kBGR_101010x_XR_SkColorType,    { 0, 0.5f, 0, 0.5f }     },
         { kRGBA_10x6_SkColorType,         { 0.25f, 0.5f, 0.75f, 1.0f }},
+        { kBGRA_10101010_XR_SkColorType,  { 0.25f, 0.5f, 0.75f, 1.0f }},
         { kGray_8_SkColorType,            kGrayCol                 },
         { kRGBA_F16Norm_SkColorType,      SkColors::kLtGray        },
         { kRGBA_F16_SkColorType,          SkColors::kYellow        },
+        { kRGB_F16F16F16x_SkColorType,    { 0, 0.5f, 0, 0.5f }     },
         { kRGBA_F32_SkColorType,          SkColors::kGray          },
         { kR8G8_unorm_SkColorType,        { .25f, .75f, 0, 1 }     },
+        { kR16_unorm_SkColorType,         SkColors::kRed           },
         { kR16G16_unorm_SkColorType,      SkColors::kGreen         },
         { kA16_unorm_SkColorType,         kTransCol                },
         { kA16_float_SkColorType,         kTransCol                },
@@ -645,7 +650,7 @@ void color_type_backend_allocation_test(const sk_gpu_test::ContextInfo& ctxInfo,
         SkColorType colorType = combo.fColorType;
 
         if (GrBackendApi::kMetal == context->backend()) {
-            // skbug.com/9086 (Metal caps may not be handling RGBA32 correctly)
+            // skbug.com/40040379 (Metal caps may not be handling RGBA32 correctly)
             if (kRGBA_F32_SkColorType == combo.fColorType) {
                 continue;
             }
@@ -669,7 +674,9 @@ void color_type_backend_allocation_test(const sk_gpu_test::ContextInfo& ctxInfo,
                 }
 
                 if (GrRenderable::kYes == renderable) {
-                    if (kRGB_888x_SkColorType == combo.fColorType) {
+                    if (kRGB_888x_SkColorType == combo.fColorType ||
+                        kRGB_F16F16F16x_SkColorType == combo.fColorType ||
+                        kRGB_101010x_SkColorType == combo.fColorType) {
                         // Ganesh can't perform the blends correctly when rendering this format
                         continue;
                     }
@@ -825,6 +832,7 @@ DEF_GANESH_TEST_FOR_GL_CONTEXT(GLBackendAllocationTest,
         // TODO: readback is busted when alpha = 0.5f (perhaps premul vs. unpremul)
         { GrColorType::kRGBA_1010102,     GR_GL_RGB10_A2,             { 0.25f, 0.5f, 0.75f, 1.f }},
         { GrColorType::kBGRA_1010102,     GR_GL_RGB10_A2,             { 0.25f, 0.5f, 0.75f, 1.f }},
+        { GrColorType::kRGB_101010x,      GR_GL_RGB10_A2,             { 0.25f, 0.5f, 0.75f, 0.5f}},
         { GrColorType::kBGR_565,          GR_GL_RGB565,               SkColors::kRed       },
         { GrColorType::kABGR_4444,        GR_GL_RGBA4,                SkColors::kGreen     },
 
@@ -840,6 +848,7 @@ DEF_GANESH_TEST_FOR_GL_CONTEXT(GLBackendAllocationTest,
 
         { GrColorType::kRGBA_F16_Clamped, GR_GL_RGBA16F,              SkColors::kLtGray    },
         { GrColorType::kRGBA_F16,         GR_GL_RGBA16F,              SkColors::kYellow    },
+        { GrColorType::kRGB_F16F16F16x,   GR_GL_RGBA16F,              { 0, 0.5f, 0, 0.5f } },
 
         { GrColorType::kRG_88,            GR_GL_RG8,                  { 1, 0.5f, 0, 1 }    },
         { GrColorType::kAlpha_F16,        GR_GL_R16F,                 { 1.0f, 0, 0, 0.5f } },
@@ -920,6 +929,10 @@ DEF_GANESH_TEST_FOR_GL_CONTEXT(GLBackendAllocationTest,
                             case GrColorType::kAlpha_F16:
                                 swizzle = skgpu::Swizzle("aaaa");
                                 break;
+                            case GrColorType::kRGB_F16F16F16x:
+                            case GrColorType::kRGB_101010x:
+                                swizzle = skgpu::Swizzle("rgb1");
+                                break;
                             default:
                                 break;
                         }
@@ -985,6 +998,8 @@ DEF_GANESH_TEST_FOR_VULKAN_CONTEXT(VkBackendAllocationTest,
                                                                       { 0.25f, 0.5f, 0.75f, 1.0f }},
         { GrColorType::kBGRA_1010102,     VK_FORMAT_A2R10G10B10_UNORM_PACK32,
                                                                       { 0.25f, 0.5f, 0.75f, 1.0f }},
+        { GrColorType::kRGB_101010x,      VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+                                                                      { 0.25f, 0.5f, 0.75f, 0.5f }},
         { GrColorType::kRGBA_10x6,        VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16,
                                                                       { 0.25f, 0.5f, 0.75f, 1.0f }},
         { GrColorType::kBGR_565,          VK_FORMAT_R5G6B5_UNORM_PACK16,      SkColors::kRed      },
@@ -1001,6 +1016,7 @@ DEF_GANESH_TEST_FOR_VULKAN_CONTEXT(VkBackendAllocationTest,
 
         { GrColorType::kRGBA_F16_Clamped, VK_FORMAT_R16G16B16A16_SFLOAT,      SkColors::kLtGray   },
         { GrColorType::kRGBA_F16,         VK_FORMAT_R16G16B16A16_SFLOAT,      SkColors::kYellow   },
+        { GrColorType::kRGB_F16F16F16x,   VK_FORMAT_R16G16B16A16_SFLOAT,      { 0, 0.5f, 0, 0.5f }},
 
         { GrColorType::kRG_88,            VK_FORMAT_R8G8_UNORM,               { 1, 0.5f, 0, 1 }   },
         { GrColorType::kAlpha_F16,        VK_FORMAT_R16_SFLOAT,               { 1.0f, 0, 0, 0.5f }},

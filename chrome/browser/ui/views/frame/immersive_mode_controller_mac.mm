@@ -6,21 +6,26 @@
 
 #include <AppKit/AppKit.h>
 
+#include <algorithm>
 #include <vector>
 
 #include "base/apple/foundation_util.h"
+#include "base/auto_reset.h"
 #include "base/check.h"
-#include "base/ranges/algorithm.h"
+#include "base/feature_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
 #include "chrome/browser/ui/fullscreen_util_mac.h"
-#include "chrome/browser/ui/views/frame/browser_non_client_frame_view_mac.h"
-#include "chrome/browser/ui/views/frame/browser_view_layout.h"
+#include "chrome/browser/ui/views/frame/browser_frame_view_mac.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/frame/top_container_view.h"
 #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.h"
 #include "chrome/common/chrome_features.h"
 #include "components/constrained_window/constrained_window_views.h"
+#include "components/remote_cocoa/app_shim/features.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -30,15 +35,16 @@
 #include "ui/views/focus/focus_search.h"
 #include "ui/views/widget/native_widget.h"
 
+#if BUILDFLAG(ENABLE_GLIC)
+#include "chrome/browser/glic/widget/glic_widget.h"
+#endif
+
 namespace {
 
-// The width of the traffic lights. Used to layout the tab strip leaving a hole
-// for the traffic lights.
-// TODO(https://crbug.com/1414521): Get this dynamically. Unfortunately the
-// values in BrowserNonClientFrameViewMac::GetCaptionButtonInsets don't account
-// for a window with an NSToolbar.
-const int kTrafficLightsWidth = 70;
-
+// This FocusSearch connects BrowserView, the overlay widget and the tab
+// overlay widget to form a complete focus traversal cycle. It finds the
+// next focusable view from another widget when the FocusManager cannot
+// find the next focusable view in the currently focused widget.
 class ImmersiveModeFocusSearchMac : public views::FocusSearch {
  public:
   explicit ImmersiveModeFocusSearchMac(BrowserView* browser_view);
@@ -58,6 +64,7 @@ class ImmersiveModeFocusSearchMac : public views::FocusSearch {
       views::View** focus_traversable_view) override;
 
  private:
+  bool finding_next_focusable_view_ = false;
   raw_ptr<BrowserView> browser_view_;
 };
 
@@ -68,12 +75,16 @@ ImmersiveModeControllerMac::RevealedLock::RevealedLock(
     : controller_(std::move(controller)) {}
 
 ImmersiveModeControllerMac::RevealedLock::~RevealedLock() {
-  if (auto* controller = controller_.get())
+  if (auto* controller = controller_.get()) {
     controller->LockDestroyed();
+  }
 }
 
-ImmersiveModeControllerMac::ImmersiveModeControllerMac(bool separate_tab_strip)
-    : separate_tab_strip_(separate_tab_strip), weak_ptr_factory_(this) {}
+ImmersiveModeControllerMac::ImmersiveModeControllerMac(
+    BrowserWindowInterface* browser,
+    bool separate_tab_strip)
+    : ImmersiveModeController(browser),
+      separate_tab_strip_(separate_tab_strip) {}
 
 ImmersiveModeControllerMac::~ImmersiveModeControllerMac() {
   CHECK(!views::WidgetObserver::IsInObserverList());
@@ -82,6 +93,10 @@ ImmersiveModeControllerMac::~ImmersiveModeControllerMac() {
 void ImmersiveModeControllerMac::Init(BrowserView* browser_view) {
   browser_view_ = browser_view;
   focus_search_ = std::make_unique<ImmersiveModeFocusSearchMac>(browser_view);
+  browser_close_subscription_ =
+      browser_view_->browser()->RegisterBrowserDidClose(
+          base::BindRepeating(&ImmersiveModeControllerMac::BrowserDidClose,
+                              base::Unretained(this)));
 }
 
 void ImmersiveModeControllerMac::SetEnabled(bool enabled) {
@@ -90,10 +105,12 @@ void ImmersiveModeControllerMac::SetEnabled(bool enabled) {
   }
   enabled_ = enabled;
   if (enabled) {
-    if (separate_tab_strip_) {
-      tab_widget_height_ = browser_view_->tab_strip_region_view()->height();
-      tab_widget_height_ += static_cast<BrowserNonClientFrameViewMac*>(
-                                browser_view_->frame()->GetFrameView())
+    // Vertical tab strip should stay visible and will not be reparented to the
+    // tab overlay.
+    if (separate_tab_strip_ && !browser_view_->ShouldDrawVerticalTabStrip()) {
+      tab_widget_height_ = browser_view_->tab_strip_view()->height();
+      tab_widget_height_ += static_cast<BrowserFrameViewMac*>(
+                                browser_view_->browser_widget()->GetFrameView())
                                 ->GetTopInset(false);
 
       browser_view_->tab_overlay_widget()->SetSize(gfx::Size(
@@ -102,19 +119,11 @@ void ImmersiveModeControllerMac::SetEnabled(bool enabled) {
 
       // Move the tab strip to the `tab_overlay_widget`, the host of the
       // `tab_overlay_view`.
-      browser_view_->tab_overlay_view()->AddChildView(
-          browser_view_->tab_strip_region_view());
+      browser_view_->tab_overlay_view()->AddChildViewRaw(
+          static_cast<views::View*>(browser_view_->tab_strip_view()));
 
-      // Inset the start of |tab_strip_region_view()| by |kTrafficLightsWidth|.
-      // This will leave a hole for the traffic light to appear.
-      // Without this +1 top inset the tabs sit 1px too high. I assume this is
-      // because in fullscreen there is no resize handle.
-      gfx::Insets insets =
-          browser_view_->frame()->GetFrameView()->CaptionButtonsOnLeadingEdge()
-              ? gfx::Insets::TLBR(1, kTrafficLightsWidth, 0, 0)
-              : gfx::Insets::TLBR(1, 0, 0, kTrafficLightsWidth);
-      browser_view_->tab_strip_region_view()->SetBorder(
-          views::CreateEmptyBorder(insets));
+      browser_view_->tab_strip_view()->SetBorder(
+          views::CreateEmptyBorder(GetTabStripRegionViewInsets()));
 
       views::NativeWidgetMacNSWindowHost* tab_overlay_host =
           views::NativeWidgetMacNSWindowHost::GetFromNativeWindow(
@@ -122,7 +131,6 @@ void ImmersiveModeControllerMac::SetEnabled(bool enabled) {
       SetTabNativeWidgetID(tab_overlay_host->bridged_native_widget_id());
     }
     top_container_observation_.Observe(browser_view_->top_container());
-    browser_frame_observation_.Observe(browser_view_->GetWidget());
     overlay_widget_observation_.Observe(browser_view_->overlay_widget());
 
     // Capture the overlay content view before enablement. Once enabled the view
@@ -137,7 +145,7 @@ void ImmersiveModeControllerMac::SetEnabled(bool enabled) {
 
     views::NativeWidgetMacNSWindowHost::GetFromNativeWindow(
         browser_view_->GetWidget()->GetNativeWindow())
-        ->set_immersive_mode_reveal_client(this);
+        ->set_immersive_mode_reveal_client(weak_ptr_factory_.GetWeakPtr());
 
     // Move the appropriate children from the browser widget to the overlay
     // widget, unless we are entering content fullscreen. Make sure to call
@@ -157,9 +165,9 @@ void ImmersiveModeControllerMac::SetEnabled(bool enabled) {
     // transition.
     OnImmersiveModeToolbarRevealChanged(true);
 
-    // Move top chrome to the overlay view.
-    browser_view_->OnImmersiveRevealStarted();
-    browser_view_->InvalidateLayout();
+    for (Observer& observer : observers_) {
+      observer.OnImmersiveFullscreenEntered();
+    }
 
     views::NativeWidgetMacNSWindowHost* overlay_host =
         views::NativeWidgetMacNSWindowHost::GetFromNativeWindow(
@@ -188,19 +196,17 @@ void ImmersiveModeControllerMac::SetEnabled(bool enabled) {
   } else {
     if (separate_tab_strip_) {
       browser_view_->tab_overlay_widget()->Hide();
-      browser_view_->tab_strip_region_view()->SetBorder(nullptr);
-      browser_view_->top_container()->AddChildViewAt(
-          browser_view_->tab_strip_region_view(), 0);
+      browser_view_->tab_strip_view()->SetBorder(nullptr);
     }
     top_container_observation_.Reset();
-    browser_frame_observation_.Reset();
     overlay_widget_observation_.Reset();
 
     // Notify BrowserView about the fullscreen exit so that the top container
     // can be reparented, otherwise it might be destroyed along with the
     // overlay widget.
-    for (Observer& observer : observers_)
+    for (Observer& observer : observers_) {
       observer.OnImmersiveFullscreenExited();
+    }
 
     // Rollback the view shuffling from enablement.
     MoveChildren(browser_view_->overlay_widget(), browser_view_->GetWidget());
@@ -227,18 +233,36 @@ void ImmersiveModeControllerMac::SetEnabled(bool enabled) {
   }
 }
 
-bool ImmersiveModeControllerMac::IsEnabled() const {
-  return enabled_;
+// LINT.IfChange(MacTabStripInsets)
+gfx::Insets ImmersiveModeControllerMac::GetTabStripRegionViewInsets() {
+  // TODO(crbug.com/40892148): Get this dynamically. Unfortunately the
+  // values in BrowserFrameViewMac::GetCaptionButtonInsets don't
+  // account for a window with an NSToolbar. (This is now done for
+  // the Mac browser frame view, but not yet here.)
+  int right_left_inset = 0;
+  if (@available(macOS 26, *)) {
+    right_left_inset = 74;
+  } else {
+    right_left_inset = 66;
+  }
+
+  // Without this +1 top inset the tabs sit 1px too high. I assume this is
+  // because in fullscreen there is no resize handle.
+  return browser_view_->browser_widget()
+                 ->GetFrameView()
+                 ->CaptionButtonsOnLeadingEdge()
+             ? gfx::Insets::TLBR(1, right_left_inset, 0, 0)
+             : gfx::Insets::TLBR(1, 0, 0, right_left_inset);
+}
+// LINT.ThenChange(//chrome/browser/ui/views/frame/browser_frame_view_mac.mm:MacTabStripInsets)
+
+void ImmersiveModeControllerMac::BrowserDidClose(
+    BrowserWindowInterface* browser) {
+  SetEnabled(false);
 }
 
-bool ImmersiveModeControllerMac::ShouldHideTopViews() const {
-  // Always return false to ensure the top UI is pre-rendered and ready for
-  // display. We don't have full control over the visibility of the top UI. For
-  // instance, in auto-hide mode, the top UI is revealed when the user hovers
-  // over the screen's upper border. Notifications about this visibility change
-  // arrive only after the UI is already displayed, so it's crucial to have the
-  // top UI fully rendered by then.
-  return false;
+bool ImmersiveModeControllerMac::IsEnabled() const {
+  return enabled_;
 }
 
 bool ImmersiveModeControllerMac::IsRevealed() const {
@@ -272,12 +296,8 @@ bool ImmersiveModeControllerMac::ShouldStayImmersiveAfterExitingFullscreen() {
   return false;
 }
 
-void ImmersiveModeControllerMac::OnWidgetActivationChanged(
-    views::Widget* widget,
-    bool active) {}
-
 int ImmersiveModeControllerMac::GetMinimumContentOffset() const {
-  if (find_bar_visible_ &&
+  if ((find_bar_visible_ || HasVisibleBubbleInOverlay()) &&
       !fullscreen_utils::IsAlwaysShowToolbarEnabled(browser_view_->browser()) &&
       !fullscreen_utils::IsInContentFullscreen(browser_view_->browser())) {
     return overlay_height_;
@@ -315,15 +335,14 @@ void ImmersiveModeControllerMac::OnContentFullscreenChanged(
   }
 }
 
-void ImmersiveModeControllerMac::OnWillChangeFocus(views::View* focused_before,
-                                                   views::View* focused_now) {}
-
 void ImmersiveModeControllerMac::OnDidChangeFocus(views::View* focused_before,
                                                   views::View* focused_now) {
   if (browser_view_->top_container()->Contains(focused_now) ||
-      browser_view_->tab_overlay_view()->Contains(focused_now)) {
-    if (!focus_lock_)
+      (browser_view_->tab_overlay_view() &&
+       browser_view_->tab_overlay_view()->Contains(focused_now))) {
+    if (!focus_lock_) {
       focus_lock_ = GetRevealedLock(ANIMATE_REVEAL_NO);
+    }
   } else {
     focus_lock_.reset();
   }
@@ -336,22 +355,23 @@ void ImmersiveModeControllerMac::OnViewBoundsChanged(
     return;
   }
   overlay_height_ = bounds.height();
-  if (separate_tab_strip_) {
+  // TODO(b/475222200): Currently tab strips are duplicated when switching to
+  // vertical tabs while in immersive leaves behind the horizontal tab, and
+  // OnViewBoundsChanged does not get called.
+  // tab_overlay_widget size should only be set if we aren't drawing the
+  // vertical tabstrip.
+  if (separate_tab_strip_ && !browser_view_->ShouldDrawVerticalTabStrip()) {
     gfx::Size new_size(bounds.width(), tab_widget_height_);
     browser_view_->tab_overlay_widget()->SetSize(new_size);
     browser_view_->tab_overlay_view()->SetSize(new_size);
-    browser_view_->tab_strip_region_view()->SetSize(gfx::Size(
-        new_size.width(), browser_view_->tab_strip_region_view()->height()));
+    browser_view_->tab_strip_view()->SetSize(
+        gfx::Size(new_size.width(), browser_view_->tab_strip_view()->height()));
     overlay_height_ += tab_widget_height_;
   }
   browser_view_->overlay_widget()->SetSize(bounds.size());
   if (auto* window = GetNSWindowMojo()) {
     window->OnTopContainerViewBoundsChanged(bounds);
   }
-}
-
-void ImmersiveModeControllerMac::OnWidgetDestroying(views::Widget* widget) {
-  SetEnabled(false);
 }
 
 void ImmersiveModeControllerMac::LockDestroyed() {
@@ -374,14 +394,28 @@ void ImmersiveModeControllerMac::MoveChildren(views::Widget* from_widget,
     return;
   }
 
-  views::Widget::Widgets widgets;
-  views::Widget::GetAllChildWidgets(from_widget->GetNativeView(), &widgets);
+  views::Widget::Widgets widgets =
+      views::Widget::GetAllChildWidgets(from_widget->GetNativeView());
   for (views::Widget* widget : widgets) {
     if (ShouldMoveChild(widget)) {
       views::Widget::ReparentNativeView(widget->GetNativeView(),
                                         to_widget->GetNativeView());
     }
   }
+}
+
+bool ImmersiveModeControllerMac::HasVisibleBubbleInOverlay() const {
+  if (!browser_view_->overlay_widget()) {
+    return false;
+  }
+  for (views::Widget* widget : views::Widget::GetAllChildWidgets(
+           browser_view_->overlay_widget()->GetNativeView())) {
+    if (widget->IsVisible() && widget->widget_delegate() &&
+        widget->widget_delegate()->AsBubbleDialogDelegate()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool ImmersiveModeControllerMac::ShouldMoveChild(views::Widget* child) {
@@ -394,16 +428,28 @@ bool ImmersiveModeControllerMac::ShouldMoveChild(views::Widget* child) {
   }
 
   // The find bar should be reparented if it exists.
-  if (browser_view_->browser()->HasFindBarController()) {
+  if (browser_view_->browser()->GetFeatures().HasFindBarController()) {
     FindBarController* find_bar_controller =
-        browser_view_->browser()->GetFindBarController();
+        browser_view_->browser()->GetFeatures().GetFindBarController();
     if (child == find_bar_controller->find_bar()->GetHostWidget()) {
       return true;
     }
   }
 
-  if (child->GetNativeWindowProperty(views::kWidgetIdentifierKey) ==
-      constrained_window::kConstrainedWindowWidgetIdentifier) {
+  const void* widget_identifier =
+      child->GetNativeWindowProperty(views::kWidgetIdentifierKey);
+  if (widget_identifier ==
+          constrained_window::kConstrainedWindowWidgetIdentifier
+#if BUILDFLAG(ENABLE_GLIC)
+      || widget_identifier == glic::kGlicWidgetIdentifier
+#endif
+  ) {
+    return true;
+  }
+
+  // Reparent the Omnibox popup. Popup is not a BubbleDialogDelegate, so it
+  // fails the check below.
+  if (widget_identifier == omnibox::kOmniboxWebUIPopupWidgetId) {
     return true;
   }
 
@@ -418,13 +464,12 @@ bool ImmersiveModeControllerMac::ShouldMoveChild(views::Widget* child) {
   if (!bubble_dialog) {
     return false;
   }
-  // Both `top_container` and `tab_strip_region_view` are checked individually
-  // because `tab_strip_region_view` is pulled out of `top_container` to be
+  // Both `top_container` and `tab_strip_view` are checked individually
+  // because `tab_strip_view` is pulled out of `top_container` to be
   // displayed in the titlebar.
   views::View* anchor_view = bubble_dialog->GetAnchorView();
-  if (anchor_view &&
-      (browser_view_->top_container()->Contains(anchor_view) ||
-       browser_view_->tab_strip_region_view()->Contains(anchor_view))) {
+  if (anchor_view && (browser_view_->top_container()->Contains(anchor_view) ||
+                      browser_view_->tab_strip_view()->Contains(anchor_view))) {
     return true;
   }
 
@@ -434,19 +479,27 @@ bool ImmersiveModeControllerMac::ShouldMoveChild(views::Widget* child) {
 
 void ImmersiveModeControllerMac::OnImmersiveModeToolbarRevealChanged(
     bool is_revealed) {
+  if (is_revealed_ == is_revealed) {
+    return;
+  }
   is_revealed_ = is_revealed;
-  // TODO(crbug.com/1414521): update tabstrip position so that it occupies full
-  // width when the traffic lights are hidden.
+
+  // Notify observers that immersive reveal has started.
+  for (Observer& observer : observers_) {
+    if (is_revealed) {
+      observer.OnImmersiveRevealStarted();
+    } else {
+      observer.OnImmersiveRevealEnded();
+    }
+  }
 }
 
 void ImmersiveModeControllerMac::OnImmersiveModeMenuBarRevealChanged(
-    float reveal_amount) {
+    double reveal_amount) {
   reveal_amount_ = reveal_amount;
   if (!browser_view_->infobar_container()->IsEmpty()) {
     browser_view_->InvalidateLayout();
   }
-  // TODO(crbug.com/1414521): update tabstrip position so that it occupies full
-  // width when the traffic lights are hidden.
 }
 
 void ImmersiveModeControllerMac::OnAutohidingMenuBarHeightChanged(
@@ -492,6 +545,14 @@ views::View* ImmersiveModeFocusSearchMac::FindNextFocusableView(
     AnchoredDialogPolicy can_go_into_anchored_dialog,
     views::FocusTraversable** focus_traversable,
     views::View** focus_traversable_view) {
+  // Re-entering ImmersiveModeFocusSearchMac. This means that the last focus
+  // search fails to find a focusable view in the widget. Early exit to
+  // prevent infinite focus search loop.
+  if (finding_next_focusable_view_) {
+    return nullptr;
+  }
+  base::AutoReset<bool> auto_reset(&finding_next_focusable_view_, true);
+
   // Search in the `starting_view` traversable tree.
   views::FocusTraversable* starting_focus_traversable =
       starting_view->GetFocusTraversable();
@@ -522,7 +583,7 @@ views::View* ImmersiveModeFocusSearchMac::FindNextFocusableView(
     traverse_order.push_back(browser_view_->tab_overlay_widget());
   }
 
-  auto current_widget_it = base::ranges::find_if(
+  auto current_widget_it = std::ranges::find_if(
       traverse_order, [starting_view](const views::Widget* widget) {
         return widget->GetRootView()->Contains(starting_view);
       });
@@ -537,12 +598,6 @@ views::View* ImmersiveModeFocusSearchMac::FindNextFocusableView(
       nullptr, traverse_order[next_widget_ind], reverse, true);
 }
 
-std::unique_ptr<ImmersiveModeController> CreateImmersiveModeControllerMac(
-    const BrowserView* browser_view) {
-  return std::make_unique<ImmersiveModeControllerMac>(
-      /*separate_tab_strip=*/browser_view->UsesImmersiveFullscreenTabbedMode());
-}
-
 ImmersiveModeOverlayWidgetObserver::ImmersiveModeOverlayWidgetObserver(
     ImmersiveModeControllerMac* controller)
     : controller_(controller) {}
@@ -554,6 +609,24 @@ void ImmersiveModeOverlayWidgetObserver::OnWidgetBoundsChanged(
     views::Widget* widget,
     const gfx::Rect& new_bounds) {
   // Update web dialog position when the overlay widget moves by invalidating
-  // the browse view layout.
+  // the browser view layout.
   controller_->browser_view()->InvalidateLayout();
+
+  // The overlay widget moving can affect the position of its child widgets
+  // (e.g. bubbles) relative to their anchors (which might be in the browser
+  // widget). We need to re-anchor them.
+  for (views::Widget* child :
+       views::Widget::GetAllChildWidgets(widget->GetNativeView())) {
+    if (views::WidgetDelegate* widget_delegate = child->widget_delegate()) {
+      if (views::BubbleDialogDelegate* bubble =
+              widget_delegate->AsBubbleDialogDelegate()) {
+        bubble->OnAnchorBoundsChanged();
+      }
+    }
+  }
+}
+
+void ImmersiveModeOverlayWidgetObserver::OnWidgetDestroying(
+    views::Widget* widget) {
+  controller_->SetEnabled(false);
 }

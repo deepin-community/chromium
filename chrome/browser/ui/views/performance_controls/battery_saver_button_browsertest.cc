@@ -2,18 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/performance_controls/battery_saver_button.h"
+
 #include "base/power_monitor/battery_state_sampler.h"
 #include "base/test/bind.h"
 #include "base/test/power_monitor_test_utils.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/performance_manager/public/user_tuning/battery_saver_mode_manager.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/performance_controls/test_support/battery_saver_browser_test_mixin.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 #include "chrome/browser/ui/views/performance_controls/battery_saver_bubble_view.h"
-#include "chrome/browser/ui/views/performance_controls/battery_saver_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/browser/ui/views/user_education/browser_feature_promo_controller.h"
+#include "chrome/browser/user_education/user_education_service.h"
+#include "chrome/browser/user_education/user_education_service_factory.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/user_education/interactive_feature_promo_test.h"
@@ -22,14 +26,15 @@
 #include "components/feature_engagement/public/tracker.h"
 #include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/user_tuning/prefs.h"
-#include "components/user_education/views/help_bubble_factory_views.h"
 #include "components/user_education/views/help_bubble_view.h"
+#include "components/user_education/views/help_bubble_views.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
-#include "ui/views/interaction/element_tracker_views.h"
+#include "ui/views/controls/button/button.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
 #include "ui/views/test/widget_test.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/any_widget_observer.h"
 
 class BatterySaverHelpPromoTest
@@ -45,9 +50,10 @@ class BatterySaverHelpPromoTest
         button, ui::test::InteractionTestUtil::InputType::kMouse);
   }
 
-  BrowserFeaturePromoController* GetFeaturePromoController() {
-    return static_cast<BrowserFeaturePromoController*>(
-        browser()->window()->GetFeaturePromoController());
+  user_education::FeaturePromoControllerCommon* GetFeaturePromoController() {
+    return static_cast<user_education::FeaturePromoControllerCommon*>(
+        UserEducationServiceFactory::GetForBrowserContext(browser()->profile())
+            ->GetFeaturePromoControllerForTesting());
   }
 };
 
@@ -65,11 +71,10 @@ IN_PROC_BROWSER_TEST_F(BatterySaverHelpPromoTest, ShowPromoOnModeActivation) {
   EXPECT_TRUE(promo_active);
 
   views::test::WidgetDestroyedWaiter destroyed_waiter(widget);
-  views::View* const battery_saver_button_view =
-      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
-          kToolbarBatterySaverButtonElementId,
-          browser()->window()->GetElementContext());
-  PressButton(static_cast<views::Button*>(battery_saver_button_view));
+  auto* const battery_saver_button =
+      BrowserElementsViews::From(browser())->GetViewAs<views::Button>(
+          kToolbarBatterySaverButtonElementId);
+  PressButton(battery_saver_button);
   destroyed_waiter.Wait();
 }
 
@@ -107,14 +112,13 @@ IN_PROC_BROWSER_TEST_F(BatterySaverHelpPromoTest, PromoCustomActionClicked) {
 
   content::TestNavigationObserver navigation_observer(
       browser()->tab_strip_model()->GetWebContentsAt(0));
-  auto* promo_bubble = promo_controller->promo_bubble_for_testing()
-                           ->AsA<user_education::HelpBubbleViews>()
-                           ->bubble_view();
-  auto* custom_action_button = promo_bubble->GetNonDefaultButtonForTesting(0);
-  PressButton(custom_action_button);
+  auto* const button =
+      BrowserElementsViews::From(browser())->GetViewAs<views::Button>(
+          user_education::HelpBubbleView::kFirstNonDefaultButtonIdForTesting);
+  PressButton(button);
   navigation_observer.Wait();
 
-  GURL expected_url(chrome::kChromeUIPerformanceSettingsURL);
+  GURL expected_url(chrome::GetSettingsUrl(chrome::kPerformanceSubPage));
   EXPECT_EQ(expected_url, navigation_observer.last_navigation_url());
 }
 

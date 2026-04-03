@@ -5,39 +5,52 @@
 #include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/containers/map_util.h"
+#include "base/debug/crash_logging.h"
+#include "base/debug/stack_trace.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "base/system/sys_info.h"
+#include "base/task/common/task_annotator.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_id_helper.h"
 #include "base/trace_event/typed_macros.h"
 #include "build/build_config.h"
 #include "cc/base/features.h"
+#include "components/input/utils.h"
 #include "components/viz/common/constants.h"
 #include "components/viz/common/features.h"
+#include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
 #include "components/viz/common/quads/compositor_frame.h"
+#include "components/viz/common/quads/compositor_frame_metadata.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
-#include "components/viz/common/resources/bitmap_allocation.h"
+#include "components/viz/common/quads/trees_in_viz_timing.h"
 #include "components/viz/common/surfaces/surface_info.h"
 #include "components/viz/common/surfaces/video_capture_target.h"
+#include "components/viz/common/viz_utils.h"
 #include "components/viz/service/display/display.h"
-#include "components/viz/service/display/shared_bitmap_manager.h"
 #include "components/viz/service/frame_sinks/frame_counter.h"
 #include "components/viz/service/frame_sinks/frame_sink_bundle_impl.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
+#include "components/viz/service/layers/layer_context_impl.h"
+#include "components/viz/service/performance_hint/hint_session.h"
 #include "components/viz/service/surfaces/surface.h"
 #include "components/viz/service/surfaces/surface_reference.h"
 #include "components/viz/service/transitions/surface_animation_manager.h"
 #include "media/filters/video_cadence_estimator.h"
 #include "mojo/public/cpp/system/platform_handle.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 // This determines whether the provided time since last interval corresponds
 // to a cadence frame that needs to be rendered.
@@ -54,6 +67,10 @@ bool HasElapsedCadenceInterval(
 namespace viz {
 namespace {
 
+// The maximum amount of time to wait for a new interactive frame before
+// assuming that interaction has ended.
+constexpr base::TimeDelta kInteractionTimeout = base::Milliseconds(250);
+
 bool RecordShouldSendBeginFrame(const std::string& reason, bool should_send) {
   TRACE_EVENT2("viz", "SendBeginFrameDecision", "reason", reason, "should_send",
                should_send);
@@ -65,8 +82,9 @@ void AdjustPresentationFeedback(gfx::PresentationFeedback* feedback,
   // Swap start to end breakdown is always reported if ready timestamp is
   // available. The other timestamps are adjusted to assume 0 delay in those
   // stages if the breakdown is not available.
-  if (feedback->ready_timestamp.is_null())
+  if (feedback->ready_timestamp.is_null()) {
     return;
+  }
 
   feedback->available_timestamp =
       std::max(feedback->available_timestamp, swap_start);
@@ -92,6 +110,25 @@ gfx::Rect IntersectInSpace(const gfx::Rect& rect,
   return intersected.value_or(gfx::Rect{});
 }
 
+void RemoveSurfaceReferenceAndDispatchCopyOutputRequestCallback(
+    base::WeakPtr<FrameSinkManagerImpl> frame_sink_manager,
+    const SurfaceId& holds_ref_surface_id,
+    const blink::SameDocNavigationScreenshotDestinationToken& destination_token,
+    std::unique_ptr<CopyOutputResult> result) {
+  if (!frame_sink_manager) {
+    return;
+  }
+  if (auto* surface_holds_ref =
+          frame_sink_manager->surface_manager()->GetSurfaceForId(
+              holds_ref_surface_id)) {
+    surface_holds_ref->ResetPendingCopySurfaceId();
+  }
+  // Send the IPC to the browser process even if `result` is empty. The empty
+  // result will be handled on the browser side.
+  frame_sink_manager->OnScreenshotCaptured(destination_token,
+                                           std::move(result));
+}
+
 }  // namespace
 
 CompositorFrameSinkSupport::CompositorFrameSinkSupport(
@@ -111,6 +148,10 @@ CompositorFrameSinkSupport::CompositorFrameSinkSupport(
 }
 
 CompositorFrameSinkSupport::~CompositorFrameSinkSupport() {
+  // Shut down the layer context so that it no longer calls into
+  // |this|, before doing other tear down.
+  layer_context_.reset();
+
   // Unregister |this| as a BeginFrameObserver so that the
   // BeginFrameSource does not call into |this| after it's deleted.
   callback_received_begin_frame_ = true;
@@ -126,10 +167,12 @@ CompositorFrameSinkSupport::~CompositorFrameSinkSupport() {
     surface_manager_->RemoveSurfaceReferences({reference});
   }
 
-  if (last_activated_surface_id_.is_valid())
+  if (last_activated_surface_id_.is_valid()) {
     EvictLastActiveSurface();
-  if (last_created_surface_id_.is_valid())
+  }
+  if (last_created_surface_id_.is_valid()) {
     surface_manager_->MarkSurfaceForDestruction(last_created_surface_id_);
+  }
   frame_sink_manager_->UnregisterCompositorFrameSinkSupport(frame_sink_id_);
   // When we unregister `this` from `frame_sink_manager_` from above,
   // `FrameSinkManagerImpl::DiscardPendingCopyOfOutputRequests` clears out all
@@ -141,18 +184,13 @@ CompositorFrameSinkSupport::~CompositorFrameSinkSupport() {
   // clear the requests here regardless.
   ClearAllPendingCopyOutputRequests();
 
-  // The display compositor has ownership of shared memory for each
-  // SharedBitmapId that has been reported from the client. Since the client is
-  // gone that memory can be freed. If we don't then it would leak.
-  for (const auto& id : owned_bitmaps_)
-    frame_sink_manager_->shared_bitmap_manager()->ChildDeletedSharedBitmap(id);
-
   // No video capture clients should remain after calling
   // UnregisterCompositorFrameSinkSupport().
   DCHECK(capture_clients_.empty());
 
-  if (begin_frame_source_ && added_frame_observer_)
+  if (begin_frame_source_ && added_frame_observer_) {
     begin_frame_source_->RemoveObserver(this);
+  }
 
   if (bundle_id_.has_value()) {
     if (auto* bundle = frame_sink_manager_->GetFrameSinkBundle(*bundle_id_)) {
@@ -194,8 +232,9 @@ void CompositorFrameSinkSupport::SetBeginFrameSource(
     // OnBeginFrameSourcePausedChanged(false) is not handled here because it's
     // handled in AddObserver() depending on current status of begin frame
     // source.
-    if (!begin_frame_source)
+    if (!begin_frame_source) {
       OnBeginFrameSourcePausedChanged(true);
+    }
     added_frame_observer_ = false;
   }
 
@@ -230,36 +269,26 @@ void CompositorFrameSinkSupport::SetBundle(const FrameSinkBundleId& bundle_id) {
   UpdateNeedsBeginFramesInternal();
 }
 
-void CompositorFrameSinkSupport::SetLastKnownVsync(
-    base::TimeDelta vsync_interval) {
-  if (last_known_vsync_interval_ == vsync_interval) {
-    return;
-  }
-  last_known_vsync_interval_ = vsync_interval;
-  ThrottleBeginFrame(begin_frame_interval_, /*simple_cadence_only=*/true);
+base::TimeDelta CompositorFrameSinkSupport::begin_frame_interval() const {
+  return throttler_.begin_frame_interval();
 }
 
-bool CompositorFrameSinkSupport::ThrottleBeginFrame(base::TimeDelta interval,
-                                                    bool simple_cadence_only) {
-  if (!interval.is_positive()) {
-    // Remove any existing throttling
-    begin_frame_interval_ = base::TimeDelta();
-    return true;
+void CompositorFrameSinkSupport::SetThrottleInterval(base::TimeDelta interval) {
+  throttler_.SetThrottleInterval(interval);
+}
+
+void CompositorFrameSinkSupport::SetAllowThrottling(bool allowed) {
+  throttler_.SetAllowThrottling(allowed);
+}
+
+void CompositorFrameSinkSupport::SetIsHandlingInteraction(
+    bool is_handling_interaction) {
+  if (is_handling_interaction_ != is_handling_interaction) {
+    is_handling_interaction_ = is_handling_interaction;
   }
 
-  if (!last_known_vsync_interval_.is_positive() || !simple_cadence_only) {
-    // No known vsync interval or forcing throttle interval.
-    begin_frame_interval_ = interval;
-    return true;
-  }
-
-  if (media::VideoCadenceEstimator::HasSimpleCadence(
-          last_known_vsync_interval_, interval, kMaxTimeUntilNextGlitch)) {
-    begin_frame_interval_ = interval;
-    return true;
-  } else {
-    begin_frame_interval_ = base::TimeDelta();
-    return false;
+  if (is_handling_interaction_) {
+    last_interaction_time_ = base::TimeTicks::Now();
   }
 }
 
@@ -277,22 +306,25 @@ void CompositorFrameSinkSupport::OnSurfaceActivated(Surface* surface) {
   DCHECK(!surface->HasPendingFrame());
 
   pending_surfaces_.erase(surface);
-  if (pending_surfaces_.empty())
+  if (pending_surfaces_.empty()) {
     UpdateNeedsBeginFramesInternal();
+  }
 
-  for (const auto& directive :
-       surface->GetActiveFrameMetadata().transition_directives) {
+  const CompositorFrameMetadata& active_frame_metadata =
+      surface->GetActiveFrameMetadata();
+  for (const auto& directive : active_frame_metadata.transition_directives) {
     ProcessCompositorFrameTransitionDirective(directive, surface);
   }
 
   // The directives above generate TransferableResources which are required to
   // replace shared elements with the corresponding cached snapshots. This step
   // must be done after processing directives above.
-  if (surface_animation_manager_)
-    surface_animation_manager_->ReplaceSharedElementResources(surface);
+  SurfaceAnimationManager::ReplaceSharedElementResources(
+      surface, view_transition_token_to_animation_manager_);
 
-  if (surface->surface_id() == last_activated_surface_id_)
+  if (surface->surface_id() == last_activated_surface_id_) {
     return;
+  }
 
   Surface* previous_surface =
       surface_manager_->GetSurfaceForId(last_activated_surface_id_);
@@ -323,11 +355,26 @@ void CompositorFrameSinkSupport::OnSurfaceActivated(Surface* surface) {
   }
 
   MaybeEvictSurfaces();
+
+  // Update |device_scale_factor_| if it changes with latest activated surface.
+  float new_device_scale_factor = active_frame_metadata.device_scale_factor;
+  if (device_scale_factor_ != new_device_scale_factor) {
+    frame_sink_manager_->OnFrameSinkDeviceScaleFactorChanged(
+        surface->surface_id().frame_sink_id(), new_device_scale_factor);
+    device_scale_factor_ = new_device_scale_factor;
+  }
+
+  if (is_mobile_optimized_ != active_frame_metadata.is_mobile_optimized) {
+    is_mobile_optimized_ = active_frame_metadata.is_mobile_optimized;
+    frame_sink_manager_->OnFrameSinkMobileOptimizedChanged(
+        frame_sink_id_, is_mobile_optimized_);
+  }
 }
 
 void CompositorFrameSinkSupport::OnSurfaceWillDraw(Surface* surface) {
-  if (last_drawn_frame_index_ >= surface->GetActiveFrameIndex())
+  if (last_drawn_frame_index_ >= surface->GetActiveFrameIndex()) {
     return;
+  }
   last_drawn_frame_index_ = surface->GetActiveFrameIndex();
 }
 
@@ -364,22 +411,22 @@ bool CompositorFrameSinkSupport::IsVideoCaptureStarted() {
   return number_clients_capturing_ > 0;
 }
 
-base::flat_set<base::PlatformThreadId>
-CompositorFrameSinkSupport::GetThreadIds() {
-  return thread_ids_;
+std::vector<Thread> CompositorFrameSinkSupport::GetThreads() {
+  return threads_;
 }
 
 void CompositorFrameSinkSupport::OnSurfaceDestroyed(Surface* surface) {
   pending_surfaces_.erase(surface);
 
-  if (surface->surface_id() == last_activated_surface_id_)
+  if (surface->surface_id() == last_activated_surface_id_) {
     last_activated_surface_id_ = SurfaceId();
+  }
 
-  if (surface->surface_id() == last_created_surface_id_)
+  if (surface->surface_id() == last_created_surface_id_) {
     last_created_surface_id_ = SurfaceId();
+  }
 
-  if (!ShouldMergeBeginFrameWithAcks() || !client_ ||
-      surface_returned_resources_.empty()) {
+  if (!client_ || surface_returned_resources_.empty()) {
     return;
   }
   client_->ReclaimResources(std::move(surface_returned_resources_));
@@ -391,45 +438,58 @@ void CompositorFrameSinkSupport::OnSurfacePresented(
     base::TimeTicks draw_start_timestamp,
     const gfx::SwapTimings& swap_timings,
     const gfx::PresentationFeedback& feedback) {
-  DidPresentCompositorFrame(frame_token, draw_start_timestamp, swap_timings,
-                            feedback);
+  // If the frame was submitted locally (from inside viz), do not tell the
+  // client about it, since the client did not send it.
+  if (frame_token != kLocalFrameToken) {
+    DidPresentCompositorFrame(frame_token, draw_start_timestamp, swap_timings,
+                              feedback);
+  }
 }
 
 void CompositorFrameSinkSupport::RefResources(
     const std::vector<TransferableResource>& resources) {
-  if (surface_animation_manager_)
-    surface_animation_manager_->RefResources(resources);
+  ForAllReservedResourceDelegates(
+      [&resources](ReservedResourceDelegate& delegate) {
+        delegate.RefResources(resources);
+      });
+
   surface_resource_holder_.RefResources(resources);
 }
 
 void CompositorFrameSinkSupport::UnrefResources(
-    std::vector<ReturnedResource> resources) {
-  // |surface_animation_manager_| allocates ResourceIds in a different range
+    std::vector<ReturnedResourceViz> resources) {
+  // `ReservedResourceDelegate` allocates ResourceIds in a different range
   // than the client so it can process returned resources before
   // |surface_resource_holder_|.
-  if (surface_animation_manager_)
-    surface_animation_manager_->UnrefResources(resources);
+  ForAllReservedResourceDelegates(
+      [&resources](ReservedResourceDelegate& delegate) {
+        delegate.UnrefResources(resources);
+      });
+
   surface_resource_holder_.UnrefResources(std::move(resources));
 }
 
 void CompositorFrameSinkSupport::ReturnResources(
     std::vector<ReturnedResource> resources) {
-  if (resources.empty())
+  if (resources.empty()) {
     return;
+  }
 
-  // When features::OnBeginFrameAcks is disabled we attempt to return resources
-  // in DidReceiveCompositorFrameAck. However if there are no pending frames
-  // then we don't expect that signal soon. In which case we return the
-  // resources to the `client_` now.
-  //
-  // When features::OnBeginFrameAcks is enabled we attempt to return resources
-  // during the next OnBeginFrame. However if we currently do not
-  // `needs_begin_frame_` or if we have been disconnected from a
-  // `begin_frame_source_` then we don't expect that signal soon. In which case
-  // we return the resources to the `client_` now.
-  if (pending_frames_.empty() && client_ &&
-      (!ShouldMergeBeginFrameWithAcks() ||
-       (!needs_begin_frame_ || !begin_frame_source_))) {
+  if (layer_context_) {
+    // Resource management is delegated to LayerContext when it's in use.
+    layer_context_->ReceiveReturnsFromParent(std::move(resources));
+    return;
+  }
+
+  DoReturnResources(std::move(resources));
+}
+
+void CompositorFrameSinkSupport::DoReturnResources(
+    std::vector<ReturnedResource> resources) {
+  // When we attempt to return resources in DidReceiveCompositorFrameAck.
+  // However if there are no pending frames then we don't expect that signal
+  // soon. In which case we return the resources to the `client_` now.
+  if (!pending_frames_ && client_) {
     client_->ReclaimResources(std::move(resources));
     return;
   }
@@ -440,22 +500,30 @@ void CompositorFrameSinkSupport::ReturnResources(
 
 void CompositorFrameSinkSupport::ReceiveFromChild(
     const std::vector<TransferableResource>& resources) {
+  ForAllReservedResourceDelegates(
+      [&resources](ReservedResourceDelegate& delegate) {
+        delegate.ReceiveFromChild(resources);
+      });
+
   surface_resource_holder_.ReceiveFromChild(resources);
 }
 
-std::vector<PendingCopyOutputRequest>
+std::vector<std::unique_ptr<PendingCopyOutputRequest>>
 CompositorFrameSinkSupport::TakeCopyOutputRequests(
     const LocalSurfaceId& latest_local_id) {
-  std::vector<PendingCopyOutputRequest> results;
+  std::vector<std::unique_ptr<PendingCopyOutputRequest>> results;
   for (auto it = copy_output_requests_.begin();
        it != copy_output_requests_.end();) {
+    if ((*it)->IsTimedOut()) {
+      it = copy_output_requests_.erase(it);
+    }
     // Pick up the requests that require an exact `LocalSurfaceId` match.
-    if (it->capture_exact_surface_id) {
+    else if ((*it)->capture_exact_surface_id) {  // NOLINT
       // `ui::DelegatedFrameHostAndroid` won't send a `CopyOutputRequest`
       // without a valid `LocalSurfaceId`. This is guaranteed as we can't
       // serialize/deserialize an empty `LocalSurfaceId`.
-      CHECK(it->local_surface_id.is_valid());
-      if (it->local_surface_id == latest_local_id) {
+      CHECK((*it)->local_surface_id.is_valid());
+      if ((*it)->local_surface_id == latest_local_id) {
         results.push_back(std::move(*it));
         it = copy_output_requests_.erase(it);
       } else {
@@ -464,9 +532,17 @@ CompositorFrameSinkSupport::TakeCopyOutputRequests(
     }
     // Requests with a non-valid local id should be satisfied as soon as
     // possible.
-    else if (!it->local_surface_id.is_valid() ||  // NOLINT
-             it->local_surface_id <= latest_local_id) {
+    else if (!(*it)->local_surface_id.is_valid() ||  // NOLINT
+             latest_local_id.IsSameOrNewerThan((*it)->local_surface_id)) {
       results.push_back(std::move(*it));
+      it = copy_output_requests_.erase(it);
+    } else if (latest_local_id.IsNewerThanIgnoringEmbedToken(
+                   (*it)->local_surface_id) &&
+               latest_local_id.embed_token() !=
+                   (*it)->local_surface_id.embed_token()) {
+      // This must be that the embedding changed, so discard.
+      (*it)->copy_output_request->SendError(
+          CopyOutputResult::Error::kEmbeddingTokenChanged);
       it = copy_output_requests_.erase(it);
     } else {
       ++it;
@@ -488,8 +564,9 @@ void CompositorFrameSinkSupport::EvictSurface(const LocalSurfaceId& id) {
 }
 
 void CompositorFrameSinkSupport::MaybeEvictSurfaces() {
-  if (IsEvicted(last_activated_surface_id_.local_surface_id()))
+  if (IsEvicted(last_activated_surface_id_.local_surface_id())) {
     EvictLastActiveSurface();
+  }
   if (IsEvicted(last_created_surface_id_.local_surface_id())) {
     surface_manager_->MarkSurfaceForDestruction(last_created_surface_id_);
     last_created_surface_id_ = SurfaceId();
@@ -498,8 +575,9 @@ void CompositorFrameSinkSupport::MaybeEvictSurfaces() {
 
 void CompositorFrameSinkSupport::EvictLastActiveSurface() {
   SurfaceId to_destroy_surface_id = last_activated_surface_id_;
-  if (last_created_surface_id_ == last_activated_surface_id_)
+  if (last_created_surface_id_ == last_activated_surface_id_) {
     last_created_surface_id_ = SurfaceId();
+  }
   last_activated_surface_id_ = SurfaceId();
   surface_manager_->MarkSurfaceForDestruction(to_destroy_surface_id);
 
@@ -515,6 +593,7 @@ void CompositorFrameSinkSupport::EvictLastActiveSurface() {
 
 void CompositorFrameSinkSupport::SetNeedsBeginFrame(bool needs_begin_frame) {
   client_needs_begin_frame_ = needs_begin_frame;
+  SetIsHandlingInteraction(false);
   UpdateNeedsBeginFramesInternal();
 }
 
@@ -522,79 +601,70 @@ void CompositorFrameSinkSupport::SetWantsAnimateOnlyBeginFrames() {
   wants_animate_only_begin_frames_ = true;
 }
 
-void CompositorFrameSinkSupport::SetWantsBeginFrameAcks() {
-  wants_begin_frame_acks_ = true;
-}
-
 void CompositorFrameSinkSupport::SetAutoNeedsBeginFrame() {
   auto_needs_begin_frame_ = true;
+}
+
+void CompositorFrameSinkSupport::SetNoCompositorFrameAcks() {
+  no_compositor_frame_acks_ = true;
 }
 
 bool CompositorFrameSinkSupport::WantsAnimateOnlyBeginFrames() const {
   return wants_animate_only_begin_frames_;
 }
 
-void CompositorFrameSinkSupport::InitializeCompositorFrameSinkType(
-    mojom::CompositorFrameSinkType type) {
-  if (frame_sink_type_ != mojom::CompositorFrameSinkType::kUnspecified ||
-      type == mojom::CompositorFrameSinkType::kUnspecified) {
-    return;
-  }
-  frame_sink_type_ = type;
-
-  if (frame_sink_manager_->frame_counter()) {
-    frame_sink_manager_->frame_counter()->SetFrameSinkType(frame_sink_id_,
-                                                           frame_sink_type_);
-  }
-}
-
 void CompositorFrameSinkSupport::BindLayerContext(
-    mojom::PendingLayerContext& context) {
-  layer_context_impl_ = std::make_unique<LayerContextImpl>(context);
+    mojom::PendingLayerContext& context,
+    mojom::LayerContextSettingsPtr settings) {
+  layer_context_ =
+      std::make_unique<LayerContextImpl>(this, context, std::move(settings));
 }
 
-void CompositorFrameSinkSupport::SetThreadIds(
+void CompositorFrameSinkSupport::SetThreads(
     bool from_untrusted_client,
-    base::flat_set<base::PlatformThreadId> unverified_thread_ids) {
+    std::vector<Thread> unverified_threads) {
   if (!from_untrusted_client) {
-    thread_ids_ = unverified_thread_ids;
+    threads_ = std::move(unverified_threads);
     return;
+  }
+  base::flat_set<base::PlatformThreadId> thread_ids;
+  for (const auto& thread : unverified_threads) {
+    thread_ids.insert(base::PlatformThreadId(thread.id));
   }
   frame_sink_manager_->VerifySandboxedThreadIds(
-      unverified_thread_ids,
+      thread_ids,
       base::BindOnce(
           &CompositorFrameSinkSupport::UpdateThreadIdsPostVerification,
-          weak_factory_.GetWeakPtr(), unverified_thread_ids));
+          weak_factory_.GetWeakPtr(), unverified_threads));
 }
 
 void CompositorFrameSinkSupport::UpdateThreadIdsPostVerification(
-    base::flat_set<base::PlatformThreadId> thread_ids,
+    std::vector<Thread> threads,
     bool passed_verification) {
   if (passed_verification) {
-    thread_ids_ = std::move(thread_ids);
+    threads_ = std::move(threads);
+  } else {
+    std::vector<base::PlatformThreadId> thread_ids;
+    for (const auto& thread : threads) {
+      thread_ids.push_back(thread.id);
+    }
+    TRACE_EVENT_INSTANT("viz,android.adpf",
+                        "FailedToUpdateThreadIdsPostVerification", "thread_ids",
+                        thread_ids);
   }
-}
-
-base::TimeDelta CompositorFrameSinkSupport::GetPreferredFrameInterval(
-    mojom::CompositorFrameSinkType* type) const {
-  if (type)
-    *type = frame_sink_type_;
-  return preferred_frame_interval_;
-}
-
-bool CompositorFrameSinkSupport::IsRoot() const {
-  return is_root_;
 }
 
 void CompositorFrameSinkSupport::DidNotProduceFrame(const BeginFrameAck& ack) {
   TRACE_EVENT(
       "viz,benchmark,graphics.pipeline", "Graphics.Pipeline",
       perfetto::Flow::Global(ack.trace_id), [&](perfetto::EventContext ctx) {
+        base::TaskAnnotator::EmitTaskTimingDetails(ctx);
         auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
         auto* data = event->set_chrome_graphics_pipeline();
         data->set_step(perfetto::protos::pbzero::ChromeGraphicsPipeline::
                            StepName::STEP_DID_NOT_PRODUCE_FRAME);
         frame_sink_id_.WriteIntoTrace(ctx.Wrap(data->set_frame_sink_id()));
+        data->set_surface_frame_trace_id(ack.trace_id);
       });
   DCHECK(ack.frame_id.IsSequenceValid());
 
@@ -604,11 +674,19 @@ void CompositorFrameSinkSupport::DidNotProduceFrame(const BeginFrameAck& ack) {
   BeginFrameAck modified_ack(ack);
   modified_ack.has_damage = false;
 
+  // We only check for a timeout if we are currently handling an interaction.
+  if (is_handling_interaction_ &&
+      (last_interaction_time_ - last_begin_frame_args_.frame_time) >=
+          kInteractionTimeout) {
+    SetIsHandlingInteraction(false);
+  }
+
   // If the client doesn't produce a frame, we assume it's no longer interactive
   // for scheduling.
-  if (last_activated_surface_id_.is_valid())
+  if (last_activated_surface_id_.is_valid()) {
     surface_manager_->SurfaceModified(last_activated_surface_id_, modified_ack,
                                       SurfaceObserver::HandleInteraction::kNo);
+  }
 
   if (begin_frame_source_) {
     begin_frame_source_->DidFinishFrame(this);
@@ -621,65 +699,17 @@ void CompositorFrameSinkSupport::SubmitCompositorFrame(
     CompositorFrame frame,
     std::optional<HitTestRegionList> hit_test_region_list,
     uint64_t submit_time) {
-  const auto result = MaybeSubmitCompositorFrame(
-      local_surface_id, std::move(frame), std::move(hit_test_region_list),
-      submit_time,
-      mojom::CompositorFrameSink::SubmitCompositorFrameSyncCallback());
+  const auto result =
+      MaybeSubmitCompositorFrame(local_surface_id, std::move(frame),
+                                 std::move(hit_test_region_list), submit_time);
   DCHECK_EQ(result, SubmitResult::ACCEPTED);
-}
-
-bool CompositorFrameSinkSupport::DidAllocateSharedBitmap(
-    base::ReadOnlySharedMemoryRegion region,
-    const SharedBitmapId& id) {
-  if (!frame_sink_manager_->shared_bitmap_manager()->ChildAllocatedSharedBitmap(
-          region.Map(), id)) {
-    return false;
-  }
-
-  owned_bitmaps_.insert(id);
-  return true;
-}
-
-void CompositorFrameSinkSupport::DidDeleteSharedBitmap(
-    const SharedBitmapId& id) {
-  frame_sink_manager_->shared_bitmap_manager()->ChildDeletedSharedBitmap(id);
-  owned_bitmaps_.erase(id);
-}
-
-void CompositorFrameSinkSupport::SubmitCompositorFrameLocally(
-    const SurfaceId& surface_id,
-    CompositorFrame frame,
-    const RendererSettings& settings) {
-  CHECK_EQ(surface_id, last_created_surface_id_);
-
-  pending_frames_.push_back(FrameData{.local_frame = true});
-  Surface* surface = surface_manager_->GetSurfaceForId(surface_id);
-
-  auto frame_rejected_callback =
-      base::ScopedClosureRunner(base::BindOnce([] { NOTREACHED(); }));
-  auto frame_index = ++last_frame_index_;
-  Surface::QueueFrameResult result = surface->QueueFrame(
-      std::move(frame), frame_index, std::move(frame_rejected_callback));
-  // Currently, frames are only queued on Android, and we don't need to use
-  // `SubmitCompositorFrameLocally` for evicting resources on Android.
-  CHECK_EQ(result, Surface::QueueFrameResult::ACCEPTED_ACTIVE);
-
-  // Make sure this surface will be stretched to match the display size. If
-  // `auto_resize_output_surface` is false, then swap will not occur meaning
-  // that the content of this compositor frame will not be presented. If it is
-  // not, then we won't properly push out existing resources. A mismatch between
-  // root surface size and display size can happen. For example, there is a race
-  // condition if `Display` is resized after it is set not visible but before
-  // any compositor frame with that new size is submitted.
-  CHECK(settings.auto_resize_output_surface);
 }
 
 SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
     const LocalSurfaceId& local_surface_id,
     CompositorFrame frame,
     std::optional<HitTestRegionList> hit_test_region_list,
-    uint64_t submit_time,
-    mojom::CompositorFrameSink::SubmitCompositorFrameSyncCallback callback) {
+    uint64_t submit_time) {
   if (!client_needs_begin_frame_ && auto_needs_begin_frame_) {
     // SetNeedsBeginFrame(true) below may cause `last_begin_frame_args_` to be
     // updated.
@@ -706,11 +736,14 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
       "viz,benchmark,graphics.pipeline", "Graphics.Pipeline",
       perfetto::Flow::Global((frame.metadata.begin_frame_ack.trace_id)),
       [&](perfetto::EventContext ctx) {
+        base::TaskAnnotator::EmitTaskTimingDetails(ctx);
         auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
         auto* data = event->set_chrome_graphics_pipeline();
         data->set_step(perfetto::protos::pbzero::ChromeGraphicsPipeline::
                            StepName::STEP_RECEIVE_COMPOSITOR_FRAME);
         frame_sink_id_.WriteIntoTrace(ctx.Wrap(data->set_frame_sink_id()));
+        data->set_surface_frame_trace_id(
+            frame.metadata.begin_frame_ack.trace_id);
       });
 
   DCHECK(local_surface_id.is_valid());
@@ -721,22 +754,21 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
   CHECK(callback_received_receive_ack_);
 
   begin_frame_tracker_.ReceivedAck(frame.metadata.begin_frame_ack);
-  pending_frames_.push_back(FrameData{.local_frame = false});
-
-  if (frame.metadata.begin_frame_ack.frame_id.source_id ==
-      BeginFrameArgs::kManualSourceId) {
-    pending_manual_begin_frame_source_ = true;
-  }
-
-  compositor_frame_callback_ = std::move(callback);
-  if (compositor_frame_callback_) {
-    callback_received_begin_frame_ = false;
-    callback_received_receive_ack_ = false;
-    UpdateNeedsBeginFramesInternal();
-  }
+  pending_frames_++;
 
   base::TimeTicks now_time = base::TimeTicks::Now();
-  pending_received_frame_times_.emplace(frame.metadata.frame_token, now_time);
+  pending_received_frame_times_.emplace(
+      frame.metadata.frame_token,
+      std::make_unique<PendingFrameDetails>(
+          now_time, frame.metadata.trees_in_viz_timing_details,
+          surface_manager_));
+
+#if BUILDFLAG(IS_ANDROID)
+  // If the renderer thread has requested a temporary boost for
+  // interaction, we ask ADPF to temporarily lift CPU capacity restrictions.
+  frame_sink_manager_->SetPreferEfficientScheduling(
+      frame.metadata.prefer_efficient_scheduling);
+#endif
 
   // Override the has_damage flag (ignoring invalid data from clients).
   frame.metadata.begin_frame_ack.has_damage = true;
@@ -769,32 +801,41 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
     return SubmitResult::COPY_OUTPUT_REQUESTS_NOT_ALLOWED;
   }
 
-  // TODO(crbug.com/846739): It should be possible to use
+  // TODO(crbug.com/40578019): It should be possible to use
   // |frame.metadata.frame_token| instead of maintaining a |last_frame_index_|.
-  uint64_t frame_index = ++last_frame_index_;
+  CHECK_LT(last_frame_index_, std::numeric_limits<uint32_t>::max());
+  uint32_t frame_index = ++last_frame_index_;
 
-  if (frame.metadata.preferred_frame_interval)
-    preferred_frame_interval_ = *frame.metadata.preferred_frame_interval;
-  else
-    preferred_frame_interval_ = BeginFrameArgs::MinInterval();
+  if (features::ShouldOnBeginFrameThrottleVideo()) {
+    const auto& interval_info =
+        frame.metadata.frame_interval_inputs.content_interval_info;
+    auto info_itr =
+        std::find_if(interval_info.begin(), interval_info.end(),
+                     [](const ContentFrameIntervalInfo& info) {
+                       return info.type == ContentFrameIntervalType::kVideo;
+                     });
+    if (info_itr != interval_info.end()) {
+      base::TimeDelta preferred_frame_interval = info_itr->frame_interval;
 
-  if (features::ShouldOnBeginFrameThrottleVideo() &&
-      frame_sink_type_ == mojom::CompositorFrameSinkType::kVideo) {
-    // Skip throttling for very small changes in frame interval.
-    // A value of 2 ms proved to be enough to not have throttle firing during
-    // a constant video playback but can be changed to a higher value if
-    // over firing occurs in some edge case while always aiming to keep it
-    // lower than a full frame interval.
-    if ((last_known_frame_interval_ - preferred_frame_interval_).magnitude() >
-        base::Milliseconds(2)) {
-      TRACE_EVENT_INSTANT2("viz", "Set sink framerate",
-                           TRACE_EVENT_SCOPE_THREAD, "interval",
-                           preferred_frame_interval_, "sourceid",
-                           frame.metadata.begin_frame_ack.frame_id.source_id);
-      last_known_frame_interval_ = preferred_frame_interval_;
-      // Only throttle simple cadences.
-      ThrottleBeginFrame(preferred_frame_interval_,
-                         /*simple_cadence_only=*/true);
+      // Skip throttling for very small changes in frame interval.
+      // A value of 2 ms proved to be enough to not have throttle firing during
+      // a constant video playback but can be changed to a higher value if
+      // over firing occurs in some edge case while always aiming to keep it
+      // lower than a full frame interval.
+      if ((last_known_frame_interval_ - preferred_frame_interval).magnitude() >
+          base::Milliseconds(2)) {
+        TRACE_EVENT_INSTANT2("viz", "Set sink framerate",
+                             TRACE_EVENT_SCOPE_THREAD, "interval",
+                             preferred_frame_interval, "sourceid",
+                             frame.metadata.begin_frame_ack.frame_id.source_id);
+        last_known_frame_interval_ = preferred_frame_interval;
+        // Only throttle simple cadences.
+        throttler_.SetCadenceThrottleInterval(preferred_frame_interval);
+      }
+    } else if (last_known_frame_interval_ > BeginFrameArgs::MinInterval()) {
+      // Reset simple cadence throttling if no video is detected
+      last_known_frame_interval_ = BeginFrameArgs::MinInterval();
+      throttler_.SetCadenceThrottleInterval(base::TimeDelta());
     }
   }
 
@@ -805,13 +846,11 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
       local_surface_id == last_created_surface_id_.local_surface_id()) {
     current_surface = prev_surface;
   } else {
-    TRACE_EVENT_WITH_FLOW2(
-        TRACE_DISABLED_BY_DEFAULT("viz.surface_id_flow"),
-        "LocalSurfaceId.Submission.Flow",
-        TRACE_ID_GLOBAL(local_surface_id.submission_trace_id()),
-        TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT, "step",
-        "ReceiveCompositorFrame", "local_surface_id",
-        local_surface_id.ToString());
+    TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("viz.surface_id_flow"),
+                "LocalSurfaceId.Submission.Flow",
+                perfetto::Flow::Global(local_surface_id.submission_trace_id()),
+                "step", "ReceiveCompositorFrame", "local_surface_id",
+                local_surface_id.ToString());
 
     SurfaceId surface_id(frame_sink_id_, local_surface_id);
     SurfaceInfo surface_info(surface_id, frame.device_scale_factor(),
@@ -855,29 +894,116 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
       return SubmitResult::ACCEPTED;
     }
 
-    current_surface = surface_manager_->CreateSurface(
-        weak_factory_.GetWeakPtr(), surface_info);
-    if (!current_surface) {
+    const bool has_copy_request_against_prev_surface =
+        frame.metadata.screenshot_destination.has_value() && prev_surface;
+
+    auto create_surface_return = surface_manager_->CreateSurface(
+        weak_factory_.GetWeakPtr(), surface_info,
+        has_copy_request_against_prev_surface ? last_created_surface_id_
+                                              : SurfaceId());
+
+    // The previous surface needs to be valid to generate a screenshot.
+    //
+    // NOTE: In order for the previous surface to be copied, it needs to be
+    // reachable and kept alive. This is achieved by adding a reference from the
+    // current surface to the previous surface. Normally this reference is
+    // removed when the copy is finished in Viz. However we could run into an
+    // edge case where the frame sink is destroyed before the copy is finished.
+    // If that happens, we will rely on the GC of the current surface to remove
+    // the reference.
+    if (has_copy_request_against_prev_surface) {
+      using ResultDestination = CopyOutputRequest::ResultDestination;
+      auto destination =
+          features::IsBackForwardTransitionsSameDocSharedImageEnabled()
+              ? ResultDestination::kSharedImage
+              : ResultDestination::kSystemMemory;
+      auto copy_request = std::make_unique<CopyOutputRequest>(
+          CopyOutputRequest::ResultFormat::RGBA, destination,
+          base::BindOnce(
+              &RemoveSurfaceReferenceAndDispatchCopyOutputRequestCallback,
+              frame_sink_manager_->GetWeakPtr(), surface_info.id(),
+              frame.metadata.screenshot_destination.value()));
+      if (const auto& size_for_testing =
+              frame_sink_manager_
+                  ->copy_output_request_result_size_for_testing();  // IN-TEST
+          !size_for_testing.IsEmpty()) [[unlikely]] {
+        SetCopyOutputRequestResultSize(copy_request.get(), gfx::Rect(),
+                                       size_for_testing,
+                                       prev_surface->size_in_pixels());
+      }
+
+      copy_request->set_result_task_runner(
+          base::SequencedTaskRunner::GetCurrentDefault());
+
+      RequestCopyOfOutput(std::make_unique<PendingCopyOutputRequest>(
+          last_created_surface_id_.local_surface_id(), SubtreeCaptureId{},
+          std::move(copy_request),
+          /*capture_exact_id=*/true));
+    }
+
+    if (!create_surface_return.has_value()) {
       TRACE_EVENT_INSTANT0("viz", "Surface belongs to another client",
                            TRACE_EVENT_SCOPE_THREAD);
+
+      static auto* const crash_key_local_surface_id =
+          base::debug::AllocateCrashKeyString(
+              "Local surface id", base::debug::CrashKeySize::Size32);
+      base::debug::SetCrashKeyString(crash_key_local_surface_id,
+                                     local_surface_id.ToString());
+
+      static auto* const crash_key_last_created_local_surface_id =
+          base::debug::AllocateCrashKeyString(
+              "Last created local surface id",
+              base::debug::CrashKeySize::Size32);
+      base::debug::SetCrashKeyString(
+          crash_key_last_created_local_surface_id,
+          last_created_surface_id_.local_surface_id().ToString());
+
+      static auto* const crash_key_prev_surface =
+          base::debug::AllocateCrashKeyString(
+              "Prev surface", base::debug::CrashKeySize::Size32);
+      base::debug::SetCrashKeyString(crash_key_prev_surface,
+                                     prev_surface ? "exist" : "not_exist");
+
+      static auto* const crash_key_create_surface_error =
+          base::debug::AllocateCrashKeyString(
+              "Create surface error", base::debug::CrashKeySize::Size32);
+      base::debug::SetCrashKeyString(crash_key_create_surface_error,
+                                     create_surface_return.error());
+
       return SubmitResult::SURFACE_OWNED_BY_ANOTHER_CLIENT;
     }
+    current_surface = create_surface_return.value();
     last_created_surface_id_ = SurfaceId(frame_sink_id_, local_surface_id);
 
     surface_manager_->SurfaceDamageExpected(current_surface->surface_id(),
                                             last_begin_frame_args_);
   }
 
+  // We use `last_created_surface_id_` to use the embedding timestamp of the
+  // last Surface which was successfully presented before this point, in case
+  // the frame is rejected. Now that we know this frame can be presented, use
+  // its correct SurfaceId.
+  pending_received_frame_times_[frame.metadata.frame_token]->set_surface_id(
+      last_created_surface_id_);
+
+  pending_received_frame_times_[frame.metadata.frame_token]->set_frame_id(
+      frame.metadata.begin_frame_ack.frame_id);
+
   const int64_t trace_id = ~frame.metadata.begin_frame_ack.trace_id;
-  TRACE_EVENT_WITH_FLOW1(TRACE_DISABLED_BY_DEFAULT("viz.hit_testing_flow"),
-                         "Event.Pipeline", TRACE_ID_GLOBAL(trace_id),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT,
-                         "step", "ReceiveHitTestData");
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("viz.hit_testing_flow"),
+              "Event.Pipeline", perfetto::Flow::Global(trace_id), "step",
+              "ReceiveHitTestData");
 
   // QueueFrame can fail in unit tests, so SubmitHitTestRegionList has to be
   // called before that.
   frame_sink_manager()->SubmitHitTestRegionList(
       last_created_surface_id_, frame_index, std::move(hit_test_region_list));
+  // Update the interaction state at the end of this method to ensure it only
+  // reflects valid frames that were successfully accepted. This prevents
+  // invalid frames (e.g. those with a size mismatch) from affecting the global
+  // interaction state.
+  SetIsHandlingInteraction(frame.metadata.is_handling_interaction);
 
   Surface::QueueFrameResult result = current_surface->QueueFrame(
       std::move(frame), frame_index, std::move(frame_rejected_callback));
@@ -902,65 +1028,31 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
   return SubmitResult::ACCEPTED;
 }
 
+void CompositorFrameSinkSupport::NotifyNewLocalSurfaceIdExpectedWhilePaused() {
+  if (!last_activated_surface_id_.is_valid()) {
+    return;
+  }
+  Surface* previous_surface =
+      surface_manager_->GetSurfaceForId(last_activated_surface_id_);
+  previous_surface->ClearNonRootCopyRequests();
+}
+
 SurfaceReference CompositorFrameSinkSupport::MakeTopLevelRootReference(
     const SurfaceId& surface_id) {
   return SurfaceReference(surface_manager_->GetRootSurfaceId(), surface_id);
 }
 
-void CompositorFrameSinkSupport::HandleCallback() {
-  if (!compositor_frame_callback_ || !callback_received_begin_frame_ ||
-      !callback_received_receive_ack_) {
-    return;
-  }
-
-  std::move(compositor_frame_callback_)
-      .Run(std::move(surface_returned_resources_));
-  surface_returned_resources_.clear();
-}
-
 void CompositorFrameSinkSupport::DidReceiveCompositorFrameAck() {
-  DCHECK(!pending_frames_.empty());
-  bool was_pending_manual_begin_frame_source_ =
-      pending_manual_begin_frame_source_;
-  bool was_local_frame = pending_frames_.front().local_frame;
-  pending_frames_.pop_front();
+  DCHECK_GT(pending_frames_, 0);
+  pending_frames_--;
 
-  if (pending_frames_.empty()) {
-    pending_manual_begin_frame_source_ = false;
-  }
-  if (!client_)
+  if (!client_) {
     return;
+  }
 
-  // If this frame came from viz directly and not from the client, don't send
-  // the client an ack, since it didn't do anything. Just return the resources.
-  if (was_local_frame) {
+  if (no_compositor_frame_acks_) {
     client_->ReclaimResources(std::move(surface_returned_resources_));
     surface_returned_resources_.clear();
-    return;
-  }
-
-  // If we have a callback, we only return the resource on onBeginFrame.
-  if (compositor_frame_callback_) {
-    callback_received_receive_ack_ = true;
-    UpdateNeedsBeginFramesInternal();
-    HandleCallback();
-    return;
-  }
-
-  // When we want to merge OnBeginFrame signals with Acks, we want to enqueue
-  // the Ack here, and exit. An exception to this are when the frame was
-  // submitted with a manual BeginFrameSource, as that is driven by the client,
-  // and not by our `begin_frame_source_`.
-  //
-  // The other exception is when we have just sent an OnBeginFrame, however
-  // there was an Ack pending at that time. This typically occurs when a client
-  // submits a frame right before the next VSync. In this case we do want to
-  // send a separate Ack, so they can unthrottle and begin frame production.
-  if (ShouldMergeBeginFrameWithAcks() &&
-      !was_pending_manual_begin_frame_source_ &&
-      !ack_pending_during_on_begin_frame_) {
-    ack_queued_for_client_count_++;
-    UpdateNeedsBeginFramesInternal();
     return;
   }
 
@@ -973,7 +1065,8 @@ void CompositorFrameSinkSupport::DidPresentCompositorFrame(
     base::TimeTicks draw_start_timestamp,
     const gfx::SwapTimings& swap_timings,
     const gfx::PresentationFeedback& feedback) {
-  CHECK_NE(frame_token, kInvalidOrLocalFrameToken);
+  CHECK_NE(frame_token, kInvalidFrameToken);
+  CHECK_NE(frame_token, kLocalFrameToken);
   DCHECK((feedback.flags & gfx::PresentationFeedback::kFailure) ||
          (!draw_start_timestamp.is_null() && !swap_timings.is_null()));
 
@@ -984,20 +1077,33 @@ void CompositorFrameSinkSupport::DidPresentCompositorFrame(
 
   FrameTimingDetails details;
   details.received_compositor_frame_timestamp =
-      received_frame_timestamp->second;
+      received_frame_timestamp->second->frame_submit_timestamp();
+  details.embedded_frame_timestamp =
+      is_root_ ? details.received_compositor_frame_timestamp
+               : received_frame_timestamp->second->frame_embed_timestamp();
   details.draw_start_timestamp = draw_start_timestamp;
   details.swap_timings = swap_timings;
   details.presentation_feedback = feedback;
+  details.frame_id = received_frame_timestamp->second->frame_id();
   AdjustPresentationFeedback(&details.presentation_feedback,
                              swap_timings.swap_start);
   // Override with the throttled interval if one has been set. Otherwise,
   // consumers will assume that the default vsync interval was the target and
   // that the frames are presented too late when in fact, this is intentional.
-  if (begin_frame_interval_.is_positive() &&
-      details.presentation_feedback.interval.is_positive() &&
-      ShouldAdjustBeginFrameArgs()) {
-    details.presentation_feedback.interval = begin_frame_interval_;
+  if (begin_frame_interval().is_positive() &&
+      details.presentation_feedback.interval.is_positive()) {
+    details.presentation_feedback.interval = begin_frame_interval();
   }
+
+  details.start_update_display_tree =
+      received_frame_timestamp->second->start_update_display_tree();
+  details.start_prepare_to_draw =
+      received_frame_timestamp->second->start_prepare_to_draw();
+  details.start_draw_layers =
+      received_frame_timestamp->second->start_draw_layers();
+  details.submit_compositor_frame =
+      received_frame_timestamp->second->submit_compositor_frame();
+
   pending_received_frame_times_.erase(received_frame_timestamp);
 
   // We should only ever get one PresentationFeedback per frame_token.
@@ -1020,8 +1126,9 @@ void CompositorFrameSinkSupport::DidRejectCompositorFrame(
                        TRACE_EVENT_SCOPE_THREAD);
   // TODO(eseckler): Should these be stored and attached to the next successful
   // frame submission instead?
-  for (ui::LatencyInfo& info : latency_info)
+  for (ui::LatencyInfo& info : latency_info) {
     info.Terminate();
+  }
 
   std::vector<ReturnedResource> resources =
       TransferableResource::ReturnResources(frame_resource_list);
@@ -1047,88 +1154,97 @@ void CompositorFrameSinkSupport::UpdateDisplayRootReference(
 }
 
 void CompositorFrameSinkSupport::OnBeginFrame(const BeginFrameArgs& args) {
-  if (compositor_frame_callback_) {
-    callback_received_begin_frame_ = true;
-    UpdateNeedsBeginFramesInternal();
-    HandleCallback();
-  }
+  int64_t trace_id = base::trace_event::GetNextGlobalTraceId();
+  TRACE_EVENT(
+      "viz,benchmark,graphics.pipeline", "Graphics.Pipeline",
+      perfetto::Flow::Global(trace_id),
+      [trace_id, &args](perfetto::EventContext ctx) {
+        base::TaskAnnotator::EmitTaskTimingDetails(ctx);
+        auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
+        auto* data = event->set_chrome_graphics_pipeline();
+        data->set_step(perfetto::protos::pbzero::ChromeGraphicsPipeline::
+                           StepName::STEP_ISSUE_BEGIN_FRAME);
+        data->set_surface_frame_trace_id(trace_id);
+        auto* possible_deadlines = data->set_possible_deadlines();
+        possible_deadlines->set_frame_time_us(
+            args.frame_time.since_origin().InMicroseconds());
+        if (args.possible_deadlines.has_value()) {
+          for (const PossibleDeadline& deadline :
+               args.possible_deadlines->deadlines) {
+            auto* timeline = possible_deadlines->add_frame_timeline();
+            timeline->set_vsync_id(deadline.vsync_id);
+            timeline->set_latch_delta_us(deadline.latch_delta.InMicroseconds());
+            timeline->set_present_delta_us(
+                deadline.present_delta.InMicroseconds());
+          }
+          possible_deadlines->set_preferred_frame_timeline_index(
+              args.possible_deadlines->preferred_index);
+        }
+      });
 
   CheckPendingSurfaces();
 
   BeginFrameArgs adjusted_args = args;
   adjusted_args.dispatch_time = base::TimeTicks::Now();
-  if (begin_frame_interval_.is_positive() && ShouldAdjustBeginFrameArgs()) {
-    adjusted_args.interval = begin_frame_interval_;
+  if (begin_frame_interval().is_positive()) {
+    adjusted_args.interval = begin_frame_interval();
     // Deadline is not necessarily frame_time + interval. For example, it may
     // incorporate an estimate for the frame's draw/swap time, so it's
     // desirable to preserve any offset from the next scheduled frame.
     base::TimeDelta offset_from_next_scheduled_frame =
         args.deadline - (args.frame_time + args.interval);
-    adjusted_args.deadline = args.frame_time + begin_frame_interval_ +
+    adjusted_args.deadline = args.frame_time + begin_frame_interval() +
                              offset_from_next_scheduled_frame;
   }
-  SetLastKnownVsync(args.interval);
-  bool send_begin_frame_to_client =
-      client_ && ShouldSendBeginFrame(adjusted_args.frame_time, args.interval);
-  if (send_begin_frame_to_client) {
-    if (last_activated_surface_id_.is_valid())
+  throttler_.SetLastKnownVsync(args.interval, args.unthrottled_interval);
+  const bool should_send_begin_frame =
+      ShouldSendBeginFrame(args.frame_id, adjusted_args.frame_time,
+                           args.interval) &&
+      (client_ || layer_context_);
+  if (should_send_begin_frame) {
+    if (last_activated_surface_id_.is_valid()) {
       surface_manager_->SurfaceDamageExpected(last_activated_surface_id_,
                                               adjusted_args);
+    }
     last_begin_frame_args_ = adjusted_args;
 
     // Force full frame if surface not yet activated to ensure surface creation.
-    if (!last_activated_surface_id_.is_valid())
+    if (!last_activated_surface_id_.is_valid()) {
       adjusted_args.animate_only = false;
+    }
 
-    adjusted_args.trace_id = ComputeTraceId();
-    TRACE_EVENT(
-        "viz,benchmark,graphics.pipeline", "Graphics.Pipeline",
-        perfetto::Flow::Global((adjusted_args.trace_id)),
-        [&](perfetto::EventContext ctx) {
-          auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
-          auto* data = event->set_chrome_graphics_pipeline();
-          data->set_step(perfetto::protos::pbzero::ChromeGraphicsPipeline::
-                             StepName::STEP_ISSUE_BEGIN_FRAME);
-        });
+    adjusted_args.trace_id = trace_id;
     adjusted_args.frames_throttled_since_last = frames_throttled_since_last_;
     frames_throttled_since_last_ = 0;
 
     last_frame_time_ = adjusted_args.frame_time;
 
-    if (ShouldMergeBeginFrameWithAcks()) {
-      bool frame_ack = ack_queued_for_client_count_ > 0;
-      ack_pending_during_on_begin_frame_ =
-          !frame_ack && !pending_frames_.empty();
-
-      // No need to send a BeginFrame request immediately to the client if this
-      // OnBeginFrame() call is triggered by an unsolicited frame in the
-      // AutoNeedsBeginFrame mode.
-      if (!handling_auto_needs_begin_frame_) {
-        client_->OnBeginFrame(adjusted_args, frame_timing_details_, frame_ack,
-                              std::move(surface_returned_resources_));
-        frame_timing_details_.clear();
-      } else {
-        if (frame_ack) {
-          client_->DidReceiveCompositorFrameAck(
-              std::move(surface_returned_resources_));
-        } else if (!surface_returned_resources_.empty()) {
-          client_->ReclaimResources(std::move(surface_returned_resources_));
-        }
-      }
-
-      if (frame_ack) {
-        ack_queued_for_client_count_--;
-      }
-      surface_returned_resources_.clear();
-    } else if (!handling_auto_needs_begin_frame_) {
+    if (client_ && !handling_auto_needs_begin_frame_) {
+      TRACE_EVENT(
+          "graphics.pipeline", "Graphics.Pipeline",
+          perfetto::Flow::Global(adjusted_args.trace_id),
+          [&](perfetto::EventContext ctx) {
+            auto* event =
+                ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
+            auto* data = event->set_chrome_graphics_pipeline();
+            data->set_step(perfetto::protos::pbzero::ChromeGraphicsPipeline::
+                               StepName::STEP_SEND_ON_BEGIN_FRAME_MOJO_MESSAGE);
+            data->set_surface_frame_trace_id(adjusted_args.trace_id);
+          });
       client_->OnBeginFrame(adjusted_args, frame_timing_details_,
-                            /*frame_ack=*/false,
                             std::vector<ReturnedResource>());
       frame_timing_details_.clear();
     }
+
     begin_frame_tracker_.SentBeginFrame(adjusted_args);
     frame_sink_manager_->DidBeginFrame(frame_sink_id_, adjusted_args);
     UpdateNeedsBeginFramesInternal();
+
+    if (layer_context_) {
+      // NOTE: BeginFrame() re-enters `this` to finish the frame.
+      layer_context_->BeginFrame(adjusted_args);
+      frame_timing_details_.clear();
+    }
   } else if (begin_frame_source_) {
     begin_frame_source_->DidFinishFrame(this);
   }
@@ -1140,13 +1256,15 @@ const BeginFrameArgs& CompositorFrameSinkSupport::LastUsedBeginFrameArgs()
 }
 
 void CompositorFrameSinkSupport::OnBeginFrameSourcePausedChanged(bool paused) {
-  if (client_)
+  if (client_) {
     client_->OnBeginFramePausedChanged(paused);
+  }
 }
 
 void CompositorFrameSinkSupport::UpdateNeedsBeginFramesInternal() {
-  if (!begin_frame_source_)
+  if (!begin_frame_source_) {
     return;
+  }
 
   // We require a begin frame if there's a callback pending, or if the client
   // requested it, or if the client needs to get some frame timing details, or
@@ -1154,11 +1272,7 @@ void CompositorFrameSinkSupport::UpdateNeedsBeginFramesInternal() {
   // return.
   needs_begin_frame_ =
       (client_needs_begin_frame_ || !frame_timing_details_.empty() ||
-       !pending_surfaces_.empty() ||
-       (compositor_frame_callback_ && !callback_received_begin_frame_) ||
-       (ShouldMergeBeginFrameWithAcks() &&
-        (!surface_returned_resources_.empty() ||
-         ack_queued_for_client_count_)));
+       !pending_surfaces_.empty() || layer_context_wants_begin_frames_);
 
   if (bundle_id_.has_value()) {
     // When bundled with other sinks, observation of BeginFrame notifications is
@@ -1173,8 +1287,9 @@ void CompositorFrameSinkSupport::UpdateNeedsBeginFramesInternal() {
     return;
   }
 
-  if (needs_begin_frame_ == added_frame_observer_)
+  if (needs_begin_frame_ == added_frame_observer_) {
     return;
+  }
 
   if (needs_begin_frame_) {
     StartObservingBeginFrameSource();
@@ -1199,19 +1314,22 @@ const FrameSinkId& CompositorFrameSinkSupport::GetFrameSinkId() const {
 
 void CompositorFrameSinkSupport::AttachCaptureClient(
     CapturableFrameSink::Client* client) {
-  DCHECK(!base::Contains(capture_clients_, client));
+  DCHECK(!std::ranges::contains(capture_clients_, client));
   capture_clients_.push_back(client);
-  if (client->IsVideoCaptureStarted())
+  if (client->IsVideoCaptureStarted()) {
     OnClientCaptureStarted();
+  }
 }
 
 void CompositorFrameSinkSupport::DetachCaptureClient(
     CapturableFrameSink::Client* client) {
-  const auto it = base::ranges::find(capture_clients_, client);
-  if (it != capture_clients_.end())
+  const auto it = std::ranges::find(capture_clients_, client);
+  if (it != capture_clients_.end()) {
     capture_clients_.erase(it);
-  if (client->IsVideoCaptureStarted())
+  }
+  if (client->IsVideoCaptureStarted()) {
     OnClientCaptureStopped();
+  }
 }
 
 void CompositorFrameSinkSupport::OnClientCaptureStarted() {
@@ -1232,8 +1350,9 @@ void CompositorFrameSinkSupport::OnClientCaptureStopped() {
 std::optional<CapturableFrameSink::RegionProperties>
 CompositorFrameSinkSupport::GetRequestRegionProperties(
     const VideoCaptureSubTarget& sub_target) const {
-  if (!last_activated_surface_id_.is_valid())
+  if (!last_activated_surface_id_.is_valid()) {
     return {};
+  }
 
   Surface* current_surface =
       surface_manager_->GetSurfaceForId(last_activated_surface_id_);
@@ -1258,11 +1377,12 @@ CompositorFrameSinkSupport::GetRequestRegionProperties(
   // If we have a region capture crop ID, capture a subsection of the root
   // render pass.
   if (IsRegionCapture(sub_target)) {
-    const auto it = current_capture_bounds_.bounds().find(
-        absl::get<RegionCaptureCropId>(sub_target));
-    if (it != current_capture_bounds_.bounds().end() && !it->second.IsEmpty() &&
-        gfx::Rect(out.root_render_pass_size).Contains(it->second)) {
-      out.render_pass_subrect = it->second;
+    const gfx::Rect* rect =
+        base::FindOrNull(current_capture_bounds_.bounds(),
+                         std::get<RegionCaptureCropId>(sub_target));
+    if (rect && !rect->IsEmpty() &&
+        gfx::Rect(out.root_render_pass_size).Contains(*rect)) {
+      out.render_pass_subrect = *rect;
       return out;
     }
 
@@ -1273,7 +1393,7 @@ CompositorFrameSinkSupport::GetRequestRegionProperties(
   // Else, we have a subtree capture ID and should capture a subsection of a
   // child render pass.
   CHECK(IsSubtreeCapture(sub_target));
-  const SubtreeCaptureId& id = absl::get<SubtreeCaptureId>(sub_target);
+  const SubtreeCaptureId& id = std::get<SubtreeCaptureId>(sub_target);
   for (const auto& render_pass : frame.render_pass_list) {
     if (render_pass->subtree_capture_id == id) {
       out.transform_to_root = render_pass->transform_to_root_target;
@@ -1298,7 +1418,7 @@ CompositorFrameSinkSupport::GetRequestRegionProperties(
 }
 
 void CompositorFrameSinkSupport::RequestCopyOfOutput(
-    PendingCopyOutputRequest pending_copy_output_request) {
+    std::unique_ptr<PendingCopyOutputRequest> pending_copy_output_request) {
   copy_output_requests_.push_back(std::move(pending_copy_output_request));
   if (last_activated_surface_id_.is_valid()) {
     BeginFrameAck ack;
@@ -1311,8 +1431,9 @@ void CompositorFrameSinkSupport::RequestCopyOfOutput(
 
 const CompositorFrameMetadata*
 CompositorFrameSinkSupport::GetLastActivatedFrameMetadata() {
-  if (!last_activated_surface_id_.is_valid())
+  if (!last_activated_surface_id_.is_valid()) {
     return nullptr;
+  }
   Surface* surface =
       surface_manager_->GetSurfaceForId(last_activated_surface_id_);
   DCHECK(surface);
@@ -1344,23 +1465,22 @@ const char* CompositorFrameSinkSupport::GetSubmitResultAsString(
       return "Surface belongs to another client";
   }
   NOTREACHED();
-  return nullptr;
-}
-
-int64_t CompositorFrameSinkSupport::ComputeTraceId() {
-  // This is losing some info, but should normally be sufficient to avoid
-  // collisions.
-  ++trace_sequence_;
-  uint64_t client = (frame_sink_id_.client_id() & 0xffff);
-  uint64_t sink = (frame_sink_id_.sink_id() & 0xffff);
-  return (client << 48) | (sink << 32) | trace_sequence_;
 }
 
 bool CompositorFrameSinkSupport::ShouldSendBeginFrame(
+    BeginFrameId frame_id,
     base::TimeTicks frame_time,
     base::TimeDelta vsync_interval) {
+  // Don't send the same BeginFrameId to a client twice. This could otherwise
+  // happen if the client removes and then immediately re-adds a
+  // BeginFrameObserver before the next BeginFrame arrives. See
+  // https://crbug.com/40286473.
+  if (frame_id == last_begin_frame_args_.frame_id) {
+    return RecordShouldSendBeginFrame("DuplicateFrameId", false);
+  }
+
   // We should throttle OnBeginFrame() if it has been less than
-  // |begin_frame_interval_| since the last one was sent because clients have
+  // begin_frame_interval() since the last one was sent if clients have
   // requested to update at such rate.
   const bool should_throttle_as_requested =
       ShouldThrottleBeginFrameAsRequested(frame_time, vsync_interval);
@@ -1377,7 +1497,7 @@ bool CompositorFrameSinkSupport::ShouldSendBeginFrame(
 
     DCHECK(surface);
     DCHECK(surface->HasActiveFrame());
-    uint64_t active_frame_index = surface->GetActiveFrameIndex();
+    uint32_t active_frame_index = surface->GetActiveFrameIndex();
 
     // Since we have an active frame, and frame indexes strictly increase
     // during the lifetime of the CompositorFrameSinkSupport, our active frame
@@ -1409,13 +1529,15 @@ bool CompositorFrameSinkSupport::ShouldSendBeginFrame(
     return RecordShouldSendBeginFrame("SendFrameTiming", true);
   }
 
-  // If the client is waiting for an ack from a previously submitted frame, then
-  // the client needs to receive the begin-frame.
-  if (ack_queued_for_client_count_ && !should_throttle_as_requested) {
-    return RecordShouldSendBeginFrame("SendFrameAck", true);
+  if (base::FeatureList::IsEnabled(features::kNoCompositorFrameAcks)) {
+    const int pending_frames_limit =
+        features::kNumberPendingFramesUntilThrottle.Get();
+    if (pending_frames_ >= pending_frames_limit) {
+      return RecordShouldSendBeginFrame("PendingAck", false);
+    }
   }
 
-  if (!client_needs_begin_frame_) {
+  if (!client_needs_begin_frame_ && !layer_context_wants_begin_frames_) {
     return RecordShouldSendBeginFrame("StopNotRequested", false);
   }
 
@@ -1454,27 +1576,20 @@ bool CompositorFrameSinkSupport::ShouldSendBeginFrame(
 }
 
 void CompositorFrameSinkSupport::CheckPendingSurfaces() {
-  if (pending_surfaces_.empty())
+  if (pending_surfaces_.empty()) {
     return;
-  base::flat_set<Surface*> pending_surfaces(pending_surfaces_);
+  }
+  base::flat_set<raw_ptr<Surface, CtnExperimental>> pending_surfaces(
+      pending_surfaces_);
   for (Surface* surface : pending_surfaces) {
     surface->ActivateIfDeadlinePassed();
   }
 }
 
-bool CompositorFrameSinkSupport::ShouldMergeBeginFrameWithAcks() const {
-  return features::IsOnBeginFrameAcksEnabled() && wants_begin_frame_acks_;
-}
-
-bool CompositorFrameSinkSupport::ShouldAdjustBeginFrameArgs() const {
-  return features::ShouldOverrideThrottledFrameRateParams() ||
-         features::ShouldOnBeginFrameThrottleVideo();
-}
-
 bool CompositorFrameSinkSupport::ShouldThrottleBeginFrameAsRequested(
     base::TimeTicks frame_time,
     base::TimeDelta vsync_interval) {
-  if (!begin_frame_interval_.is_positive() || !vsync_interval.is_positive()) {
+  if (!begin_frame_interval().is_positive() || !vsync_interval.is_positive()) {
     return false;
   }
 
@@ -1482,94 +1597,126 @@ bool CompositorFrameSinkSupport::ShouldThrottleBeginFrameAsRequested(
   // need to know if the current frame has elapsed a full cadence interval to
   // know its time to render.
   base::TimeDelta time_since_last_frame = frame_time - last_frame_time_;
-  return !HasElapsedCadenceInterval(vsync_interval, begin_frame_interval_,
+  return !HasElapsedCadenceInterval(vsync_interval, begin_frame_interval(),
                                     time_since_last_frame);
 }
 
 void CompositorFrameSinkSupport::ProcessCompositorFrameTransitionDirective(
     const CompositorFrameTransitionDirective& directive,
     Surface* surface) {
+  const auto& transition_token = directive.transition_token();
+
   switch (directive.type()) {
     case CompositorFrameTransitionDirective::Type::kSave:
-      // Initialize this before creating the SurfaceAnimationManager since the
-      // save operation may execute synchronously.
-      in_flight_save_sequence_id_ = directive.sequence_id();
-      surface_animation_manager_ = SurfaceAnimationManager::CreateWithSave(
-          directive, surface, frame_sink_manager_->shared_bitmap_manager(),
-          base::BindOnce(&CompositorFrameSinkSupport::
-                             OnCompositorFrameTransitionDirectiveProcessed,
-                         base::Unretained(this)));
-      break;
-    case CompositorFrameTransitionDirective::Type::kAnimateRenderer:
-      // The save operation must have been executed before we see an animate
-      // directive.
-      if (in_flight_save_sequence_id_ != 0) {
-        LOG(ERROR)
-            << "Ignoring animate directive, save operation pending completion";
-        break;
+      // The save directive is used to start a new transition sequence. Ensure
+      // we don't have any existing state for this transition.
+      if (frame_sink_manager_->ClearSurfaceAnimationManager(transition_token))
+          [[unlikely]] {
+        view_transition_token_to_animation_manager_.erase(transition_token);
+        return;
+      }
+      if (view_transition_token_to_animation_manager_.erase(transition_token))
+          [[unlikely]] {
+        return;
       }
 
-      if (directive.navigation_id()) {
-        if (surface_animation_manager_) {
-          LOG(ERROR) << "Deleting existing SurfaceAnimationManager for "
-                        "transition with navigation_id : "
-                     << directive.navigation_id();
+      if (features::ShouldAckCOREarlyForViewTransition() &&
+          !directive.maybe_cross_frame_sink() &&
+          directive.delay_layer_tree_view_deletion()) {
+        // Register the token for same-doc transitions to ensure
+        // CopyOutputRequest can complete.
+        frame_sink_manager_->RegisterSameDocViewTransitionToken(
+            transition_token);
+      }
+
+      view_transition_token_to_animation_manager_[transition_token] =
+          SurfaceAnimationManager::CreateWithSave(
+              directive, surface,
+              frame_sink_manager_->GetSharedImageInterface(),
+              frame_sink_manager_->reserved_resource_id_tracker(),
+              base::BindOnce(&CompositorFrameSinkSupport::
+                                 OnSaveTransitionDirectiveProcessed,
+                             base::Unretained(this)),
+              frame_sink_manager_
+                  ->GetViewTransitionResourcesCapturedCallback());
+      if (surface_animation_manager_callback_) {
+        std::move(surface_animation_manager_callback_).Run();
+      }
+      break;
+    case CompositorFrameTransitionDirective::Type::kAnimateRenderer: {
+      if (directive.maybe_cross_frame_sink()) {
+        // We shouldn't have an existing SurfaceAnimationManager for this
+        // token.
+        if (view_transition_token_to_animation_manager_.erase(
+                transition_token)) {
+          return;
         }
-
-        surface_animation_manager_ =
-            frame_sink_manager_->TakeSurfaceAnimationManager(
-                directive.navigation_id());
+        std::unique_ptr<SurfaceAnimationManager> surface_animation_manager =
+            frame_sink_manager_->TakeSurfaceAnimationManager(transition_token);
+        // Emit how often for cross frame-sink view transitions,
+        // SurfaceAnimationManager is not cached when `kAnimateRenderer` is
+        // requested.
+        base::UmaHistogramBoolean(
+            "Viz.CompositorFrameSinkSupport."
+            "HasSurfaceAnimationManagerOnAnimate",
+            !!surface_animation_manager);
+        // If Frame deadline has passed before Save is completed, there is no
+        // SurfaceAnimationManager in the map.
+        if (!surface_animation_manager) {
+          return;
+        }
+        view_transition_token_to_animation_manager_[transition_token] =
+            std::move(surface_animation_manager);
       }
 
-      if (surface_animation_manager_)
-        surface_animation_manager_->Animate();
-      else
-        LOG(ERROR) << "Animate directive with no saved data.";
+      auto it =
+          view_transition_token_to_animation_manager_.find(transition_token);
+      if (it == view_transition_token_to_animation_manager_.end()) {
+        return;
+      }
 
-      break;
+      // The save operation must have been completed before the renderer sends
+      // an animate directive.
+      auto& surface_animation_manager = it->second;
+      if (!surface_animation_manager->Animate()) {
+        view_transition_token_to_animation_manager_.erase(it);
+        return;
+      }
+    } break;
     case CompositorFrameTransitionDirective::Type::kRelease:
-      surface_animation_manager_.reset();
-
-      // This `surface_animation_manager_` could correspond to an in-flight
-      // save, reset the tracking here.
-      in_flight_save_sequence_id_ = 0;
-
-      // If we had a `navigation_id`, also make sure to clean up the
-      // `frame_sink_manager_` in case the animation was never started (which
-      // would be the case if the destination renderer didn't opt-in to the
-      // animation behavior). Note that this operation is harmless if there
-      // is no surface animation manager to clear.
-      if (directive.navigation_id()) {
-        frame_sink_manager_->ClearSurfaceAnimationManager(
-            directive.navigation_id());
-      }
+      frame_sink_manager_->ClearSurfaceAnimationManager(
+          directive.transition_token());
+      view_transition_token_to_animation_manager_.erase(
+          directive.transition_token());
+      frame_sink_manager_->ClearSameDocViewTransitionToken(
+          directive.transition_token());
       break;
   }
 }
 
-void CompositorFrameSinkSupport::OnCompositorFrameTransitionDirectiveProcessed(
+void CompositorFrameSinkSupport::OnSaveTransitionDirectiveProcessed(
     const CompositorFrameTransitionDirective& directive) {
   DCHECK_EQ(directive.type(), CompositorFrameTransitionDirective::Type::kSave)
       << "Only save directives need to be ack'd back to the client";
+
+  auto it = view_transition_token_to_animation_manager_.find(
+      directive.transition_token());
+  if (it == view_transition_token_to_animation_manager_.end()) {
+    return;
+  }
+
+  CHECK(it->second);
 
   if (client_) {
     client_->OnCompositorFrameTransitionDirectiveProcessed(
         directive.sequence_id());
   }
 
-  // There could be an ID mismatch if there are consecutive save operations
-  // before the first one is ack'd. This should never happen but handled safely
-  // here since the directives are untrusted input from the renderer.
-  if (in_flight_save_sequence_id_ == directive.sequence_id() &&
-      directive.navigation_id()) {
-    // Note that this can fail if there is already a cached
-    // SurfaceAnimationManager for this |navigation_id|. Should never happen
-    // but handled safely because its untrusted input from the renderer.
+  if (directive.maybe_cross_frame_sink()) {
     frame_sink_manager_->CacheSurfaceAnimationManager(
-        directive.navigation_id(), std::move(surface_animation_manager_));
+        directive.transition_token(), std::move(it->second));
+    view_transition_token_to_animation_manager_.erase(it);
   }
-
-  in_flight_save_sequence_id_ = 0;
 }
 
 bool CompositorFrameSinkSupport::IsEvicted(
@@ -1583,21 +1730,23 @@ bool CompositorFrameSinkSupport::IsEvicted(
 void CompositorFrameSinkSupport::ClearAllPendingCopyOutputRequests() {
   CHECK(surface_manager_);
   for (auto& request : copy_output_requests_) {
-    // If the frame sink is getting destroyed while there are still
-    // outstanding `CopyOutputRequest`s to capture an associated surface,
-    // transfer these requests to the corresponding `Surface`s.
-    //
-    // Resources reclamation: once frame sink is destroyed, the `Surface`s
-    // won't be able to notify the client code (the renderer's
-    // `cc::LayerTreeHostImpl`) to reclaim the resources. This is fine,
-    // because the destruction of the renderer and its CC (as part of a
-    // cross-RenderFrame navigation) will implicitly reclaim all the
-    // resources. The `Surface` kept alive will still have a reference to
-    // the underlying GPU resources. The GPU resources will finally be
-    // released when the `Surface` is destroyed (in this case, after the
-    // CopyOutputRequest is fulfilled).
-    if (request.capture_exact_surface_id) {
-      const SurfaceId target_id(frame_sink_id_, request.local_surface_id);
+    if (request->IsTimedOut()) {
+      // Do nothing, request will be discarded.
+    } else if (request->capture_exact_surface_id) {
+      // If the frame sink is getting destroyed while there are still
+      // outstanding `CopyOutputRequest`s to capture an associated surface,
+      // transfer these requests to the corresponding `Surface`s.
+      //
+      // Resources reclamation: once frame sink is destroyed, the `Surface`s
+      // won't be able to notify the client code (the renderer's
+      // `cc::LayerTreeHostImpl`) to reclaim the resources. This is fine,
+      // because the destruction of the renderer and its CC (as part of a
+      // cross-RenderFrame navigation) will implicitly reclaim all the
+      // resources. The `Surface` kept alive will still have a reference to
+      // the underlying GPU resources. The GPU resources will finally be
+      // released when the `Surface` is destroyed (in this case, after the
+      // CopyOutputRequest is fulfilled).
+      const SurfaceId target_id(frame_sink_id_, request->local_surface_id);
       auto* target_surface = surface_manager_->GetSurfaceForId(target_id);
       if (target_surface) {
         target_surface->RequestCopyOfOutput(std::move(request));
@@ -1616,7 +1765,7 @@ void CompositorFrameSinkSupport::ClearAllPendingCopyOutputRequests() {
                         "CopyOutputRequest specificc for it.";
       }
     } else {
-      // TODO(https://crbug.com/1467314): We should probably transfer all
+      // TODO(crbug.com/40276723): We should probably transfer all
       // the requests to their corresponding `Surface`s or `RenderPass`es.
     }
   }
@@ -1625,9 +1774,25 @@ void CompositorFrameSinkSupport::ClearAllPendingCopyOutputRequests() {
   copy_output_requests_.clear();
 }
 
-SurfaceAnimationManager*
-CompositorFrameSinkSupport::GetSurfaceAnimationManagerForTesting() {
-  return surface_animation_manager_.get();
+void CompositorFrameSinkSupport::SetExternalReservedResourceDelegate(
+    ReservedResourceDelegate* delegate) {
+  external_reserved_resource_delegate_ = delegate;
+}
+
+void CompositorFrameSinkSupport::SetLayerContextWantsBeginFrames(
+    bool wants_begin_frames) {
+  layer_context_wants_begin_frames_ = wants_begin_frames;
+  UpdateNeedsBeginFramesInternal();
+}
+
+void CompositorFrameSinkSupport::RegisterSurfaceAnimationManagerNotification(
+    base::OnceCallback<void()> callback) {
+  if (!view_transition_token_to_animation_manager_.empty()) {
+    std::move(callback).Run();
+  } else {
+    CHECK(!surface_animation_manager_callback_);
+    surface_animation_manager_callback_ = std::move(callback);
+  }
 }
 
 void CompositorFrameSinkSupport::DestroySelf() {
@@ -1643,6 +1808,67 @@ void CompositorFrameSinkSupport::ScheduleSelfDestruction() {
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&CompositorFrameSinkSupport::DestroySelf,
                                 weak_factory_.GetWeakPtr()));
+}
+
+void CompositorFrameSinkSupport::ForAllReservedResourceDelegates(
+    base::FunctionRef<void(ReservedResourceDelegate&)> func) {
+  if (external_reserved_resource_delegate_) {
+    func(*external_reserved_resource_delegate_);
+  }
+
+  for (auto& it : view_transition_token_to_animation_manager_) {
+    func(*it.second);
+  }
+}
+
+CompositorFrameSinkSupport::PendingFrameDetails::PendingFrameDetails(
+    base::TimeTicks frame_submit_timestamp,
+    TreesInVizTiming timing_details,
+    SurfaceManager* surface_manager)
+    : frame_submit_timestamp_(frame_submit_timestamp),
+      trees_in_viz_timing_details_(timing_details),
+      // Use the submit timestamp as the default value, so that the metrics
+      // won't get skewed in case the surface never gets embedded/the surface
+      // ID never gets set.
+      frame_embed_timestamp_(frame_submit_timestamp),
+      surface_manager_(surface_manager) {}
+
+void CompositorFrameSinkSupport::PendingFrameDetails::
+    SetOrObserveFrameEmbedTimeStamp() {
+  frame_embed_timestamp_ =
+      surface_manager_->GetSurfaceReferencedTimestamp(surface_id_);
+  if (frame_embed_timestamp_ == base::TimeTicks()) {
+    // The frame hasn't been embedded yet. Observe `OnAddedSurfaceReference()`
+    // to be notified when the surface for the frame gets embedded.
+    surface_manager_->AddObserver(this);
+  }
+}
+
+CompositorFrameSinkSupport::PendingFrameDetails::~PendingFrameDetails() {
+  surface_manager_->RemoveObserver(this);
+}
+
+void CompositorFrameSinkSupport::PendingFrameDetails::set_surface_id(
+    SurfaceId surface_id) {
+  CHECK(!surface_id_.is_valid());
+  surface_id_ = surface_id;
+  SetOrObserveFrameEmbedTimeStamp();
+}
+
+void CompositorFrameSinkSupport::PendingFrameDetails::OnAddedSurfaceReference(
+    const SurfaceId& parent_id,
+    const SurfaceId& child_id) {
+  CHECK_EQ(frame_embed_timestamp_, base::TimeTicks());
+  if (child_id != surface_id_) {
+    return;
+  }
+  frame_embed_timestamp_ = base::TimeTicks::Now();
+  surface_manager_->RemoveObserver(this);
+}
+
+void CompositorFrameSinkSupport::PendingFrameDetails::set_frame_id(
+    BeginFrameId frame_id) {
+  frame_id_ = frame_id;
 }
 
 }  // namespace viz

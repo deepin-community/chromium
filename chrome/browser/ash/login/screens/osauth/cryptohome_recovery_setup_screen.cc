@@ -5,21 +5,26 @@
 #include "chrome/browser/ash/login/screens/osauth/cryptohome_recovery_setup_screen.h"
 
 #include <optional>
+#include <string>
+#include <utility>
 
-#include "ash/constants/ash_features.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/memory/weak_ptr.h"
+#include "base/values.h"
+#include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_factory.h"
-#include "chrome/browser/ash/login/quick_unlock/quick_unlock_storage.h"
+#include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chrome/browser/ash/login/screens/pin_setup_screen.h"
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/ash/login/cryptohome_recovery_setup_screen_handler.h"
-#include "chromeos/ash/components/login/auth/auth_factor_editor.h"
+#include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/ash/components/osauth/public/auth_session_storage.h"
-#include "chromeos/ash/components/osauth/public/common_types.h"
 #include "chromeos/ash/services/auth_factor_config/in_process_instances.h"
-#include "chromeos/ash/services/auth_factor_config/recovery_factor_editor.h"
+#include "chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-shared.h"
 
 namespace ash {
 
@@ -32,6 +37,7 @@ constexpr char kUserActionRetry[] = "retry";
 
 // static
 std::string CryptohomeRecoverySetupScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::NOT_APPLICABLE:
       return BaseScreen::kNotApplicable;
@@ -40,6 +46,7 @@ std::string CryptohomeRecoverySetupScreen::GetResultString(Result result) {
     case Result::SKIPPED:
       return "Skipped";
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 CryptohomeRecoverySetupScreen::CryptohomeRecoverySetupScreen(
@@ -50,7 +57,9 @@ CryptohomeRecoverySetupScreen::CryptohomeRecoverySetupScreen(
       view_(std::move(view)),
       exit_callback_(std::move(exit_callback)),
       auth_performer_(UserDataAuthClient::Get()),
-      cryptohome_pin_engine_(&auth_performer_) {}
+      // TODO(crbug.com/404133029): Remove g_browser_process usage.
+      cryptohome_pin_engine_(g_browser_process->local_state(),
+                             &auth_performer_) {}
 
 CryptohomeRecoverySetupScreen::~CryptohomeRecoverySetupScreen() = default;
 
@@ -66,8 +75,7 @@ void CryptohomeRecoverySetupScreen::ShowImpl() {
 
 void CryptohomeRecoverySetupScreen::HideImpl() {}
 
-void CryptohomeRecoverySetupScreen::OnUserAction(
-    const base::Value::List& args) {
+void CryptohomeRecoverySetupScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionSkip) {
     exit_callback_.Run(Result::SKIPPED);
@@ -83,8 +91,7 @@ void CryptohomeRecoverySetupScreen::OnUserAction(
 
 bool CryptohomeRecoverySetupScreen::MaybeSkip(WizardContext& wizard_context) {
   // Skip recovery setup if the user didn't opt-in.
-  if (wizard_context.skip_post_login_screens_for_tests ||
-      !wizard_context.recovery_setup.recovery_factor_opted_in) {
+  if (!wizard_context.recovery_setup.recovery_factor_opted_in) {
     ExitScreen(wizard_context, Result::NOT_APPLICABLE);
     return true;
   }
@@ -111,20 +118,6 @@ void CryptohomeRecoverySetupScreen::SetupRecovery() {
 void CryptohomeRecoverySetupScreen::ExitScreen(
     WizardContext& wizard_context,
     CryptohomeRecoverySetupScreen::Result result) {
-  // Clear the auth session if it's not needed for PIN setup.
-  if (wizard_context.extra_factors_token.has_value()) {
-    auto& token = wizard_context.extra_factors_token.value();
-    auto* storage = ash::AuthSessionStorage::Get();
-    const bool authsession_required =
-        ash::features::AreLocalPasswordsEnabledForConsumers();
-    if (storage->IsValid(token) && !authsession_required &&
-        cryptohome_pin_engine_.ShouldSkipSetupBecauseOfPolicy(
-            storage->Peek(token)->GetAccountId())) {
-      storage->Invalidate(token, base::DoNothing());
-      wizard_context.extra_factors_token = std::nullopt;
-    }
-  }
-
   exit_callback_.Run(result);
 }
 

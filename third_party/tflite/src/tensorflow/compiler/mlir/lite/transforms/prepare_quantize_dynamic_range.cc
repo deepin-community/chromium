@@ -19,15 +19,18 @@ limitations under the License.
 #include <utility>
 
 #include "llvm/Support/CommandLine.h"
-#include "mlir/Dialect/Quant/QuantOps.h"  // from @llvm-project
-#include "mlir/Dialect/Quant/QuantTypes.h"  // from @llvm-project
+#include "mlir/Dialect/Quant/IR/Quant.h"  // from @llvm-project
+#include "mlir/Dialect/Quant/IR/QuantTypes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/Dialect.h"  // from @llvm-project
+#include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"
+#include "tensorflow/compiler/mlir/lite/quantization/common/quantization_lib/quantization_config.h"
+#include "tensorflow/compiler/mlir/lite/quantization/common/quantization_lib/quantization_utils.h"
 #include "tensorflow/compiler/mlir/lite/quantization/lite/tfl_to_std.h"
-#include "tensorflow/compiler/mlir/lite/quantization/quantization_config.h"
 #include "tensorflow/compiler/mlir/lite/transforms/passes.h"
 #include "tensorflow/compiler/mlir/lite/transforms/prepare_quantize_helper.h"
 #include "tensorflow/core/framework/types.pb.h"
@@ -67,11 +70,12 @@ class PrepareDynamicRangeQuantizePass
   }
 
   // Constructor used by manually creating the pass.
-  explicit PrepareDynamicRangeQuantizePass(
-      const quant::QuantizationSpecs& quant_specs)
+  explicit PrepareDynamicRangeQuantizePass(const QuantizationSpecs& quant_specs)
       : quant_specs_(quant_specs) {
     enable_dynamic_range_per_channel_quantization_ =
         !quant_specs_.disable_per_channel;
+    enable_dynamic_range_per_channel_quantization_for_dense_layers_ =
+        !quant_specs_.disable_per_channel_for_dense_layers;
     min_elements_for_weights_ = quant_specs_.minimum_elements_for_weights;
   }
 
@@ -88,7 +92,7 @@ class PrepareDynamicRangeQuantizePass
   // minimum_elements_for_weights threshold. Prevents emitting duplicate
   // warnings for the same op, once deemed ineligible for quantization.
   llvm::SetVector<Operation*> visited_nonquantizable_ops_;
-  quant::QuantizationSpecs quant_specs_;
+  QuantizationSpecs quant_specs_;
 };
 
 #include "tensorflow/compiler/mlir/lite/utils/generated_op_quant_spec_getters.inc"
@@ -99,7 +103,7 @@ class PrepareDynamicRangeQuantizableOp
     : public OpRewritePattern<arith::ConstantOp> {
  public:
   explicit PrepareDynamicRangeQuantizableOp(
-      MLIRContext* context, const quant::QuantizationSpecs& quant_specs,
+      MLIRContext* context, const QuantizationSpecs& quant_specs,
       llvm::SetVector<Operation*>* const visited_nonquantizable_ops)
       : OpRewritePattern<arith::ConstantOp>(context),
         visited_nonquantizable_ops_(visited_nonquantizable_ops),
@@ -191,7 +195,7 @@ class PrepareDynamicRangeQuantizableOp
           continue;
         }
 
-        if (attr.dyn_cast<DenseFPElementsAttr>().size() >=
+        if (mlir::dyn_cast<DenseFPElementsAttr>(attr).size() >=
             quant_specs_.minimum_elements_for_weights) {
           continue;
         }
@@ -203,7 +207,7 @@ class PrepareDynamicRangeQuantizableOp
             "supported. The operand ")
             << const_op->getName().getStringRef().str() << " at index " << qi
             << " was not quantized because it has "
-            << attr.dyn_cast<DenseFPElementsAttr>().size()
+            << mlir::dyn_cast<DenseFPElementsAttr>(attr).size()
             << " elements which is fewer than the "
                "`minimum_elements_for_weights` threshold of "
             << quant_specs_.minimum_elements_for_weights;
@@ -231,8 +235,8 @@ class PrepareDynamicRangeQuantizableOp
 
     // Get types
     TensorType old_result_type =
-        op.getResult().getType().template dyn_cast<TensorType>();
-    FloatType quantized_type = FloatType::getF16(op.getContext());
+        mlir::dyn_cast<TensorType>(op.getResult().getType());
+    FloatType quantized_type = Float16Type::get(op.getContext());
     ShapedType new_result_type = old_result_type.clone(quantized_type);
 
     // Insert CastOp if it does not exist yet. Otherwise, just rewire without
@@ -246,7 +250,7 @@ class PrepareDynamicRangeQuantizableOp
     }
     rewriter.setInsertionPointAfter(op);
     auto new_cast_op =
-        rewriter.create<CastOp>(op->getLoc(), new_result_type, op.getResult());
+        CastOp::create(rewriter, op->getLoc(), new_result_type, op.getResult());
     quantize_op->setOperand(quantize_operand_num, new_cast_op.getResult());
   }
 
@@ -275,33 +279,37 @@ class PrepareDynamicRangeQuantizableOp
       op_with_per_axis_support = op_with_narrow_range &&
                                  affine_user.GetQuantizationDimIndex() != -1 &&
                                  !quant_specs_.disable_per_channel;
+      if (dyn_cast<FullyConnectedOp>(quantize_op)) {
+        op_with_per_axis_support &=
+            !quant_specs_.disable_per_channel_for_dense_layers;
+      }
     }
 
     QuantizedType quant_type = nullptr;
     DenseFPElementsAttr attr;
     if (!matchPattern(op->getResult(0), m_Constant(&attr))) return false;
 
-    if (attr.dyn_cast<DenseFPElementsAttr>().size() <
+    if (mlir::dyn_cast<DenseFPElementsAttr>(attr).size() <
         quant_specs_.minimum_elements_for_weights) {
       op->emitRemark("Quantization is skipped for ")
           << quantize_op->getName().getStringRef().str() << " because it has "
-          << attr.dyn_cast<DenseFPElementsAttr>().size()
+          << mlir::dyn_cast<DenseFPElementsAttr>(attr).size()
           << " elements which is fewer than the threshold("
           << quant_specs_.minimum_elements_for_weights << " elements).";
       return false;
     }
 
     if (op_with_per_axis_support) {
-      quant_type = quant::GetUniformQuantizedPerAxisTypeForWeight(
-                       attr, affine_user.GetQuantizationDimIndex(),
-                       /*symmetric=*/true, bit_width, is_signed,
-                       is_narrow_range, is_legacy_float)
-                       .template dyn_cast<quant::QuantizedType>();
+      quant_type = mlir::dyn_cast<quant::QuantizedType>(
+          GetUniformQuantizedPerAxisTypeForWeight(
+              attr, affine_user.GetQuantizationDimIndex(),
+              /*symmetric=*/true, bit_width, is_signed, is_narrow_range,
+              is_legacy_float));
     } else {
-      quant_type = quant::GetUniformQuantizedTypeForWeight(
-                       attr, is_narrow_range && is_signed, bit_width, is_signed,
-                       is_narrow_range, is_legacy_float)
-                       .template dyn_cast<quant::QuantizedType>();
+      quant_type =
+          mlir::dyn_cast<quant::QuantizedType>(GetUniformQuantizedTypeForWeight(
+              attr, is_narrow_range && is_signed, bit_width, is_signed,
+              is_narrow_range, is_legacy_float));
     }
     return insertQDQ(rewriter, op, quant_type, quant_op);
   }
@@ -329,8 +337,8 @@ class PrepareDynamicRangeQuantizableOp
       }
     }
     rewriter.setInsertionPointAfter(op);
-    auto q = rewriter.create<Q>(op->getLoc(), cast_type, op.getResult());
-    auto dq = rewriter.create<DQ>(op->getLoc(), expressed_type, q);
+    auto q = Q::create(rewriter, op->getLoc(), cast_type, op.getResult());
+    auto dq = DQ::create(rewriter, op->getLoc(), expressed_type, q);
     quantize_op->setOperand(quantize_operand_num, dq.getResult());
     return true;
   }
@@ -340,7 +348,7 @@ class PrepareDynamicRangeQuantizableOp
   bool getQuantizableOps(arith::ConstantOp op,
                          QuantizationUnits& quantizable_ops) const {
     // Non-float tensors do not need quantization.
-    auto type = op.getType().dyn_cast<ShapedType>();
+    auto type = mlir::dyn_cast<ShapedType>(op.getType());
     if (!type || !type.getElementType().isF32()) return false;
 
     Value value = op.getResult();
@@ -414,7 +422,7 @@ class PrepareDynamicRangeQuantizableOp
       // Get types
       Type old_result_type = op.getResult().getType();
       ShapedType new_result_type =
-          cast_op.getType().template dyn_cast<ShapedType>();
+          mlir::dyn_cast<ShapedType>(cast_op.getType());
 
       // Proceeds only if the casting is to float16
       if (!new_result_type.getElementType().isF16()) continue;
@@ -422,7 +430,7 @@ class PrepareDynamicRangeQuantizableOp
       // Cast values
       std::vector<Eigen::half> new_values;
       DenseFPElementsAttr value_attr =
-          op.getValue().cast<DenseFPElementsAttr>();
+          mlir::cast<DenseFPElementsAttr>(op.getValue());
       new_values.reserve(value_attr.getNumElements());
 
       constexpr float kMaxFloat16Value = 65504.f;
@@ -439,9 +447,9 @@ class PrepareDynamicRangeQuantizableOp
       // old ConstantOp is guaranteed to have one F32->F16 cast regardless of
       // its number of users.
       rewriter.setInsertionPointAfter(op);
-      auto new_const = rewriter.create<arith::ConstantOp>(
-          op->getLoc(), new_result_type, new_value_attr);
-      auto dq = rewriter.create<DQ>(op->getLoc(), old_result_type, new_const);
+      auto new_const = arith::ConstantOp::create(
+          rewriter, op->getLoc(), new_result_type, new_value_attr);
+      auto dq = DQ::create(rewriter, op->getLoc(), old_result_type, new_const);
       cast_op->replaceAllUsesWith(dq);
 
       // Return without scanning for the next CastOp as only one CastOp is
@@ -452,7 +460,7 @@ class PrepareDynamicRangeQuantizableOp
   }
 
  protected:
-  quant::QuantizationSpecs quant_specs_;
+  QuantizationSpecs quant_specs_;
 };
 
 // Remove all the stats ops which are redundant for dynamic range quantizaiton.
@@ -473,11 +481,13 @@ void PrepareDynamicRangeQuantizePass::runOnOperation() {
 
   quant_specs_.disable_per_channel =
       !enable_dynamic_range_per_channel_quantization_;
+  quant_specs_.disable_per_channel_for_dense_layers =
+      !enable_dynamic_range_per_channel_quantization_for_dense_layers_;
   quant_specs_.minimum_elements_for_weights = min_elements_for_weights_;
 
   if (!enable_custom_op_quantization_.empty()) {
     ParseCustomOpSpecs(enable_custom_op_quantization_,
-                       quant::CustomOpUpdateOptions::kInputIndices,
+                       CustomOpUpdateOptions::kInputIndices,
                        quant_specs_.custom_map);
   }
 
@@ -487,7 +497,7 @@ void PrepareDynamicRangeQuantizePass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   patterns.add<PrepareDynamicRangeQuantizableOp>(ctx, quant_specs_,
                                                  &visited_nonquantizable_ops_);
-  (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
+  (void)applyPatternsGreedily(func, std::move(patterns));
 
   ConvertMlirQuantOpsToTFLQuantOps(func);
 }
@@ -497,8 +507,7 @@ void PrepareDynamicRangeQuantizePass::runOnOperation() {
 // Creates an instance of the TensorFlow Lite dialect
 // PrepareDynamicRangeQuantize pass.
 std::unique_ptr<OperationPass<func::FuncOp>>
-CreatePrepareDynamicRangeQuantizePass(
-    const quant::QuantizationSpecs& quant_specs) {
+CreatePrepareDynamicRangeQuantizePass(const QuantizationSpecs& quant_specs) {
   return std::make_unique<PrepareDynamicRangeQuantizePass>(quant_specs);
 }
 

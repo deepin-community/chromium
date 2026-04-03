@@ -5,7 +5,9 @@
 #include "third_party/blink/renderer/core/layout/inline/paragraph_line_breaker.h"
 
 #include <numeric>
+
 #include "third_party/blink/renderer/core/layout/inline/inline_break_token.h"
+#include "third_party/blink/renderer/core/layout/inline/inline_layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_node.h"
 #include "third_party/blink/renderer/core/layout/inline/line_breaker.h"
 #include "third_party/blink/renderer/core/layout/inline/line_info.h"
@@ -15,13 +17,6 @@
 namespace blink {
 
 namespace {
-
-// Max number of lines to balance.
-wtf_size_t MaxLinesToBisectForBalance() {
-  return RuntimeEnabledFeatures::CSSTextWrapBalanceByScoreEnabled()
-             ? kMaxLinesForBalance
-             : 4;
-}
 
 struct LineBreakResult {
   LayoutUnit width;
@@ -56,6 +51,7 @@ struct LineBreakResults {
 
   Status BreakLines(const LayoutUnit available_width,
                     wtf_size_t max_lines,
+                    const LayoutUnit line_clamp_ellipsis_width = {},
                     const InlineBreakToken* stop_at = nullptr) {
     DCHECK(lines_.empty());
     const LineLayoutOpportunity line_opportunity(available_width);
@@ -67,6 +63,9 @@ struct LineBreakResults {
                                line_opportunity, leading_floats, break_token_,
                                /* column_spanner_path_ */ nullptr,
                                &exclusion_space);
+      if (max_lines == 1 && line_clamp_ellipsis_width) [[unlikely]] {
+        line_breaker.SetLineClampEllipsisWidth(line_clamp_ellipsis_width);
+      }
       line_breaker.NextLine(&line_info);
       // Bisecting can't find the desired value if the paragraph has forced line
       // breaks.
@@ -76,7 +75,7 @@ struct LineBreakResults {
       }
       break_token_ = line_info.GetBreakToken();
       lines_.push_back(LineBreakResult{line_info.Width()});
-      DCHECK_LE(lines_.size(), MaxLinesToBisectForBalance());
+      DCHECK_LE(lines_.size(), kMaxLinesForBalance);
       if (!break_token_ ||
           (stop_at && break_token_->Start() >= stop_at->Start())) {
         return Status::kFinished;
@@ -90,6 +89,7 @@ struct LineBreakResults {
   LayoutUnit BisectAvailableWidth(const LayoutUnit max_available_width,
                                   const LayoutUnit min_available_width,
                                   const LayoutUnit epsilon,
+                                  const LayoutUnit line_clamp_ellipsis_width,
                                   const wtf_size_t num_lines,
                                   const InlineBreakToken* stop_at = nullptr) {
     DCHECK_GT(epsilon, LayoutUnit());  // 0 may cause an infinite loop
@@ -99,7 +99,8 @@ struct LineBreakResults {
     LayoutUnit lower = min_available_width;
     while (lower + epsilon < upper) {
       const LayoutUnit middle = (upper + lower) / 2;
-      const Status status = BreakLines(middle, num_lines, stop_at);
+      const Status status =
+          BreakLines(middle, num_lines, line_clamp_ellipsis_width, stop_at);
       if (status != Status::kFinished) {
         lower = middle;
       } else {
@@ -151,19 +152,38 @@ std::optional<LayoutUnit> ParagraphLineBreaker::AttemptParagraphBalancing(
 
   const ComputedStyle& block_style = node.Style();
   const LayoutUnit available_width = line_opportunity.AvailableInlineSize();
+  LayoutUnit line_clamp_ellipsis_width;
   LineBreakResults normal_lines(node, space);
-  const wtf_size_t max_lines = MaxLinesToBisectForBalance();
-  const int lines_until_clamp = space.LinesUntilClamp().value_or(0);
+  constexpr wtf_size_t max_lines = kMaxLinesForBalance;
+  const int lines_until_clamp =
+      space.GetLineClampData().LinesUntilClamp().value_or(0);
   if (lines_until_clamp > 0 &&
       static_cast<unsigned>(lines_until_clamp) <= max_lines) {
     if (lines_until_clamp == 1) {
       return std::nullopt;  // Balancing not needed for single line paragraphs.
     }
 
-    const LineBreakResults::Status status =
-        normal_lines.BreakLines(available_width, lines_until_clamp);
+    if (RuntimeEnabledFeatures::CSSLineClampLineBreakingEllipsisEnabled()) {
+      line_clamp_ellipsis_width =
+          InlineLayoutAlgorithm::ShapeLineClampEllipsis(node)
+              .shape_result->SnappedWidth();
+    }
+
+    const LineBreakResults::Status status = normal_lines.BreakLines(
+        available_width, lines_until_clamp, line_clamp_ellipsis_width);
     if (status == LineBreakResults::Status::kNotApplicable) {
       return std::nullopt;
+    }
+
+    DCHECK_LE(normal_lines.Size(),
+              static_cast<unsigned int>(lines_until_clamp));
+    if (normal_lines.Size() != static_cast<unsigned int>(lines_until_clamp)) {
+      // The paragraph ended before the ellipsis line. The bisecting algorithm
+      // will consider the last line in `normal_lines` as having the ellipsis,
+      // which is wrong in this case. So we clear the ellipsis width to make
+      // sure it doesn't affect balancing.
+      DCHECK_EQ(status, LineBreakResults::Status::kFinished);
+      line_clamp_ellipsis_width = LayoutUnit();
     }
   } else {
     // Estimate the number of lines to see if the text is too long to balance.
@@ -171,7 +191,7 @@ std::optional<LayoutUnit> ParagraphLineBreaker::AttemptParagraphBalancing(
     const InlineItemsData& items_data = node.ItemsData(
         /* use_first_line_style */ false);
     const wtf_size_t estimated_num_lines = EstimateNumLines(
-        items_data.text_content, block_style.GetFont().PrimaryFont(),
+        items_data.text_content, block_style.GetFont()->PrimaryFont(),
         line_opportunity.AvailableInlineSize());
     if (estimated_num_lines > max_lines * 2) {
       return std::nullopt;
@@ -206,8 +226,8 @@ std::optional<LayoutUnit> ParagraphLineBreaker::AttemptParagraphBalancing(
   const LayoutUnit min_available_width =
       LayoutUnit::FromFloatRound(avg_line_width * .8f);
   return balanced_lines.BisectAvailableWidth(
-      available_width, min_available_width, epsilon, num_lines,
-      normal_lines.BreakToken());
+      available_width, min_available_width, epsilon, line_clamp_ellipsis_width,
+      num_lines, normal_lines.BreakToken());
 }
 
 }  // namespace blink

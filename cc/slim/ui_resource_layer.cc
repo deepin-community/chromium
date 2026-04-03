@@ -11,6 +11,7 @@
 #include "components/viz/common/quads/compositor_render_pass.h"
 #include "components/viz/common/quads/texture_draw_quad.h"
 #include "components/viz/common/resources/resource_id.h"
+#include "ui/gfx/geometry/point_f.h"
 
 namespace cc::slim {
 
@@ -50,27 +51,6 @@ void UIResourceLayer::SetUV(const gfx::PointF& top_left,
 
   uv_top_left_ = top_left;
   uv_bottom_right_ = bottom_right;
-  NotifyPropertyChanged();
-}
-
-void UIResourceLayer::SetVertexOpacity(float bottom_left,
-                                       float top_left,
-                                       float top_right,
-                                       float bottom_right) {
-  // Indexing according to the quad vertex generation:
-  // 1--2
-  // |  |
-  // 0--3
-  auto& opacity = vertex_opacity_;
-  if (opacity[0] == bottom_left && opacity[1] == top_left &&
-      opacity[2] == top_right && opacity[3] == bottom_right) {
-    return;
-  }
-
-  opacity[0] = bottom_left;
-  opacity[1] = top_left;
-  opacity[2] = top_right;
-  opacity[3] = bottom_right;
   NotifyPropertyChanged();
 }
 
@@ -122,19 +102,23 @@ void UIResourceLayer::AppendQuads(viz::CompositorRenderPass& render_pass,
 
   viz::TextureDrawQuad* quad =
       render_pass.CreateAndAppendDrawQuad<viz::TextureDrawQuad>();
-  constexpr bool kFlipped = false;
   constexpr bool kNearest = false;
-  constexpr bool kPremultiplied = true;
   constexpr bool kSecureOutputOnly = false;
   constexpr auto kVideoType = gfx::ProtectedVideoType::kClear;
   const bool needs_blending = !static_cast<LayerTreeImpl*>(layer_tree())
                                    ->IsUIResourceOpaque(resource_id_);
+  const gfx::Size resource_size = static_cast<LayerTreeImpl*>(layer_tree())
+                                      ->GetUIResourceSize(resource_id_);
+  const gfx::PointF tex_coord_top_left = gfx::ScalePoint(
+      uv_top_left(), resource_size.width(), resource_size.height());
+  const gfx::PointF tex_coord_bottom_right = gfx::ScalePoint(
+      uv_bottom_right(), resource_size.width(), resource_size.height());
+
   quad->SetNew(quad_state, quad_state->quad_layer_rect,
                quad_state->visible_quad_layer_rect, needs_blending,
-               viz_resource_id, kPremultiplied, uv_top_left(),
-               uv_bottom_right(), SkColors::kTransparent, kFlipped, kNearest,
-               kSecureOutputOnly, kVideoType);
-  quad->set_vertex_opacity(vertex_opacity_);
+               viz_resource_id, tex_coord_top_left, tex_coord_bottom_right,
+               SkColors::kTransparent, kNearest, kSecureOutputOnly, kVideoType,
+               /*is_tex_coords_normalized=*/false);
 }
 
 }  // namespace cc::slim

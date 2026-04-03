@@ -128,7 +128,7 @@ void IdleTimeoutActionsPolicyHandler::ApplyPolicySettings(
   DCHECK(policy_value);
 
   // Convert strings to integers (from the ActionType enum).
-  base::Value::List converted_actions;
+  base::ListValue converted_actions;
   for (const base::Value& action : policy_value->GetList()) {
     if (!action.is_string()) {
       continue;
@@ -203,7 +203,7 @@ bool IdleTimeoutActionsPolicyHandler::CheckPolicySettings(
   const base::Value* value =
       policies.GetValue(this->policy_name(), base::Value::Type::LIST);
   DCHECK(value);
-  base::Value::List clear_data_actions;
+  base::ListValue clear_data_actions;
   for (const base::Value& action : value->GetList()) {
     if (!action.is_string()) {
       continue;
@@ -225,17 +225,16 @@ bool IdleTimeoutActionsPolicyHandler::CheckPolicySettings(
 void IdleTimeoutActionsPolicyHandler::PrepareForDisplaying(
     policy::PolicyMap* policies) const {
   policy::PolicyMap::Entry* entry = policies->GetMutable(policy_name());
-  if (!entry || forced_disabled_sync_types_.Size() == 0) {
+  if (!entry || forced_disabled_sync_types_.empty()) {
     return;
   }
   // `PolicyConversionsClient::GetPolicyValue()` doesn't support
   // MessageType::kInfo in the PolicyErrorMap, so add the message to the policy
   // when it is prepared to be displayed on chrome://policy.
-  if (forced_disabled_sync_types_.Size() > 0) {
-    entry->AddMessage(policy::PolicyMap::MessageType::kInfo,
-                      IDS_POLICY_BROWSING_DATA_DEPENDENCY_APPLIED_INFO,
-                      {base::UTF8ToUTF16(UserSelectableTypeSetToString(
-                          forced_disabled_sync_types_))});
-  }
+  entry->AddMessage(policy::PolicyMap::MessageType::kInfo,
+                    IDS_POLICY_BROWSING_DATA_DEPENDENCY_APPLIED_INFO,
+                    {base::UTF8ToUTF16(UserSelectableTypeSetToString(
+                        forced_disabled_sync_types_))});
 }
+
 }  // namespace enterprise_idle

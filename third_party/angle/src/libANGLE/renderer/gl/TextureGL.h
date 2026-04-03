@@ -179,6 +179,18 @@ class TextureGL : public TextureImpl
 
     angle::Result generateMipmap(const gl::Context *context) override;
 
+    angle::Result clearImage(const gl::Context *context,
+                             GLint level,
+                             GLenum format,
+                             GLenum type,
+                             const uint8_t *data) override;
+    angle::Result clearSubImage(const gl::Context *context,
+                                GLint level,
+                                const gl::Box &area,
+                                GLenum format,
+                                GLenum type,
+                                const uint8_t *data) override;
+
     angle::Result bindTexImage(const gl::Context *context, egl::Surface *surface) override;
     angle::Result releaseTexImage(const gl::Context *context) override;
 
@@ -255,12 +267,13 @@ class TextureGL : public TextureImpl
                                                const gl::PixelUnpackState &unpack,
                                                const gl::Buffer *unpackBuffer,
                                                const uint8_t *pixels);
+    angle::Result allocateMipmapLevelsForGeneration(const gl::Context *context);
 
     angle::Result syncTextureStateSwizzle(const gl::Context *context,
                                           const FunctionsGL *functions,
                                           GLenum name,
                                           GLenum value,
-                                          GLenum *outValue);
+                                          GLenum *currentlyAppliedValue);
 
     void setLevelInfo(const gl::Context *context,
                       gl::TextureTarget target,
@@ -287,6 +300,7 @@ class TextureGL : public TextureImpl
     gl::SamplerState mAppliedSampler;
     GLuint mAppliedBaseLevel;
     GLuint mAppliedMaxLevel;
+    GLenum mAppliedDepthStencilTextureMode;
 
     GLuint mTextureID;
 };

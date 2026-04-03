@@ -7,36 +7,13 @@
 #include <fstream>
 #include <vector>
 
-#include "core/fxcrt/fx_safe_types.h"
-#include "testing/image_diff/image_diff_png.h"
-#include "third_party/base/check.h"
+#include "core/fxcrt/check.h"
+#include "testing/utils/png_encode.h"
 
 // static
 void BitmapSaver::WriteBitmapToPng(FPDF_BITMAP bitmap,
                                    const std::string& filename) {
-  const int stride = FPDFBitmap_GetStride(bitmap);
-  const int width = FPDFBitmap_GetWidth(bitmap);
-  const int height = FPDFBitmap_GetHeight(bitmap);
-  CHECK(stride >= 0);
-  CHECK(width >= 0);
-  CHECK(height >= 0);
-  FX_SAFE_FILESIZE size = stride;
-  size *= height;
-  auto input = pdfium::make_span(
-      static_cast<const uint8_t*>(FPDFBitmap_GetBuffer(bitmap)),
-      pdfium::base::ValueOrDieForType<size_t>(size));
-
-  std::vector<uint8_t> png;
-  int format = FPDFBitmap_GetFormat(bitmap);
-  if (format == FPDFBitmap_Gray) {
-    png = image_diff_png::EncodeGrayPNG(input, width, height, stride);
-  } else if (format == FPDFBitmap_BGR) {
-    png = image_diff_png::EncodeBGRPNG(input, width, height, stride);
-  } else {
-    png = image_diff_png::EncodeBGRAPNG(input, width, height, stride,
-                                        /*discard_transparency=*/false);
-  }
-
+  std::vector<uint8_t> png = EncodePng(bitmap);
   DCHECK(!png.empty());
   DCHECK(filename.size() < 256u);
 

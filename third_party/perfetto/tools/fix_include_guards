@@ -22,6 +22,12 @@ import sys
 from codecs import open
 from compat import xrange
 
+EXCLUDED_FILES = [
+    'src/trace_processor/perfetto_sql/preprocessor/preprocessor_grammar.h',
+    'src/trace_processor/perfetto_sql/grammar/perfettosql_grammar.h',
+    'contrib/rust-sdk/perfetto-sys/wrapper.h',
+]
+
 
 def fix_guards(fpath, checkonly):
   with open(fpath, 'r', encoding='utf-8') as f:
@@ -73,7 +79,9 @@ def main():
       for name in files:
         if not name.endswith('.h'):
           continue
-        fpath = os.path.join(root, name)
+        fpath = os.path.join(root, name).replace(os.path.sep, '/')
+        if fpath in EXCLUDED_FILES:
+          continue
         num_files_changed += fix_guards(fpath, checkonly)
   if checkonly:
     return 0 if num_files_changed == 0 else 1

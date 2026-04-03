@@ -36,7 +36,7 @@
 #include "dawn/native/BindingInfo.h"
 #include "dawn/native/Error.h"
 #include "dawn/native/Forward.h"
-#include "partition_alloc/pointers/raw_ptr.h"
+#include "partition_alloc/pointers/raw_ptr_exclusion.h"
 
 namespace dawn::native {
 
@@ -68,21 +68,30 @@ class CommandBufferStateTracker {
                       BindGroupBase* bindgroup,
                       uint32_t dynamicOffsetCount,
                       const uint32_t* dynamicOffsets);
-    void SetIndexBuffer(wgpu::IndexFormat format, uint64_t size);
+    void SetResourceTable(ResourceTableBase* resourceTable);
+    void SetIndexBuffer(BufferBase* buffer,
+                        wgpu::IndexFormat format,
+                        uint64_t offset,
+                        uint64_t size);
     void UnsetVertexBuffer(VertexBufferSlot slot);
     void SetVertexBuffer(VertexBufferSlot slot, uint64_t size);
+    void SetImmediateData(uint32_t offset, uint32_t size);
+    void End();
 
-    static constexpr size_t kNumAspects = 4;
+    static constexpr size_t kNumAspects = 6;
     using ValidationAspects = std::bitset<kNumAspects>;
 
     BindGroupBase* GetBindGroup(BindGroupIndex index) const;
     const std::vector<uint32_t>& GetDynamicOffsets(BindGroupIndex index) const;
     bool HasPipeline() const;
+    bool IndexBufferSet() const;
     RenderPipelineBase* GetRenderPipeline() const;
     ComputePipelineBase* GetComputePipeline() const;
     PipelineLayoutBase* GetPipelineLayout() const;
+    BufferBase* GetIndexBuffer() const;
     wgpu::IndexFormat GetIndexFormat() const;
     uint64_t GetIndexBufferSize() const;
+    uint64_t GetIndexBufferOffset() const;
 
   private:
     MaybeError ValidateOperation(ValidationAspects requiredAspects);
@@ -93,23 +102,26 @@ class CommandBufferStateTracker {
 
     ValidationAspects mAspects;
 
-    PerBindGroup<BindGroupBase*> mBindgroups = {};
-    PerBindGroup<std::vector<uint32_t>> mDynamicOffsets = {};
-
     VertexBufferMask mVertexBuffersUsed;
     PerVertexBuffer<uint64_t> mVertexBufferSizes = {};
 
-    bool mIndexBufferSet = false;
     wgpu::IndexFormat mIndexFormat;
     uint64_t mIndexBufferSize = 0;
+    uint64_t mIndexBufferOffset = 0;
+    RAW_PTR_EXCLUSION BufferBase* mIndexBuffer = nullptr;
 
-    // TODO(https://crbug.com/dawn/2349): Investigate DanglingUntriaged in dawn/native.
-    raw_ptr<PipelineLayoutBase, DanglingUntriaged> mLastPipelineLayout = nullptr;
-    // TODO(https://crbug.com/dawn/2349): Investigate DanglingUntriaged in dawn/native.
-    raw_ptr<PipelineBase, DanglingUntriaged> mLastPipeline = nullptr;
+    // RAW_PTR_EXCLUSION: These pointers are very hot in command recording code and point at
+    // various objects referenced by the object graph of the CommandBuffer so they cannot be
+    // freed from underneath this class.
+    RAW_PTR_EXCLUSION PerBindGroup<BindGroupBase*> mBindgroups = {};
+    PerBindGroup<std::vector<uint32_t>> mDynamicOffsets = {};
+    RAW_PTR_EXCLUSION ResourceTableBase* mResourceTable = nullptr;
 
-    // TODO(https://crbug.com/dawn/2349): Investigate DanglingUntriaged in dawn/native.
-    raw_ptr<const RequiredBufferSizes, DanglingUntriaged> mMinBufferSizes = nullptr;
+    RAW_PTR_EXCLUSION PipelineLayoutBase* mLastPipelineLayout = nullptr;
+    RAW_PTR_EXCLUSION PipelineBase* mLastPipeline = nullptr;
+    RAW_PTR_EXCLUSION const RequiredBufferSizes* mMinBufferSizes = nullptr;
+
+    ImmediateConstantMask mImmediateDataMask;
 };
 
 }  // namespace dawn::native

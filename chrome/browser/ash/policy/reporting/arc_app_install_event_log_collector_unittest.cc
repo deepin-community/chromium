@@ -6,7 +6,6 @@
 
 #include <vector>
 
-#include "ash/components/arc/mojom/app.mojom.h"
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
 #include "base/memory/ptr_util.h"
@@ -20,6 +19,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/shill/shill_service_client.h"
 #include "chromeos/ash/components/network/network_handler_test_helper.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_service.h"
@@ -141,12 +141,10 @@ class ArcAppInstallEventLogCollectorTest : public testing::Test {
   ~ArcAppInstallEventLogCollectorTest() override = default;
 
   void SetUp() override {
-    RegisterLocalState(pref_service_.registry());
-    TestingBrowserProcess::GetGlobal()->SetLocalState(&pref_service_);
-
     chromeos::PowerManagerClient::InitializeFake();
+    arc_app_test_.PreProfileSetUp();
     profile_ = std::make_unique<TestingProfile>();
-    arc_app_test_.SetUp(profile_.get());
+    arc_app_test_.PostProfileSetUp(profile_.get());
 
     network_handler_test_helper_ =
         std::make_unique<ash::NetworkHandlerTestHelper>();
@@ -161,11 +159,10 @@ class ArcAppInstallEventLogCollectorTest : public testing::Test {
 
   void TearDown() override {
     network_handler_test_helper_.reset();
-    arc_app_test_.TearDown();
-
+    arc_app_test_.PreProfileTearDown();
     profile_.reset();
+    arc_app_test_.PostProfileTearDown();
     chromeos::PowerManagerClient::Shutdown();
-    TestingBrowserProcess::GetGlobal()->SetLocalState(nullptr);
   }
 
   void SetNetworkState(
@@ -176,20 +173,22 @@ class ArcAppInstallEventLogCollectorTest : public testing::Test {
         service_path, shill::kStateProperty, base::Value(state));
     base::RunLoop().RunUntilIdle();
 
-    network::mojom::ConnectionType connection_type =
-        network::mojom::ConnectionType::CONNECTION_NONE;
+    net::NetworkChangeNotifier::ConnectionType connection_type =
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE;
     const std::string* network_state =
         network_handler_test_helper_->service_test()
             ->GetServiceProperties(kWifiServicePath)
             ->FindString(shill::kStateProperty);
     if (network_state && *network_state == shill::kStateOnline) {
-      connection_type = network::mojom::ConnectionType::CONNECTION_WIFI;
+      connection_type =
+          net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI;
     }
     network_state = network_handler_test_helper_->service_test()
                         ->GetServiceProperties(kEthernetServicePath)
                         ->FindString(shill::kStateProperty);
     if (network_state && *network_state == shill::kStateOnline) {
-      connection_type = network::mojom::ConnectionType::CONNECTION_ETHERNET;
+      connection_type =
+          net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET;
     }
     if (observer)
       observer->OnConnectionChanged(connection_type);
@@ -207,7 +206,6 @@ class ArcAppInstallEventLogCollectorTest : public testing::Test {
   std::unique_ptr<ash::NetworkHandlerTestHelper> network_handler_test_helper_;
   std::unique_ptr<TestingProfile> profile_;
   FakeAppInstallEventLogCollectorDelegate delegate_;
-  TestingPrefServiceSimple pref_service_;
   ArcAppTest arc_app_test_;
 };
 

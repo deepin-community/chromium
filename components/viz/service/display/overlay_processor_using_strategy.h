@@ -15,7 +15,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/viz/common/quads/aggregated_render_pass.h"
 #include "components/viz/common/quads/quad_list.h"
 #include "components/viz/service/display/aggregated_frame.h"
@@ -33,16 +32,14 @@
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/overlay_transform.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // TODO(b/181974042):  Remove when color space is plumbed.
 #include "ui/gfx/color_space.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-namespace cc {
-class DisplayResourceProvider;
-}
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace viz {
+
+class DisplayResourceProvider;
 
 // OverlayProcessor subclass that goes through a list of strategies to determine
 // overlay candidates. This is used by Android and Ozone platforms.
@@ -50,6 +47,9 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
     : public OverlayProcessorInterface {
  public:
   using CandidateList = OverlayCandidateList;
+  // TODO(crbug.com/444264038): Delete this declaration when the RPDQ refactor
+  // is finished. Need to avoid hiding the base class' overload.
+  using OverlayProcessorInterface::ProcessForOverlays;
 
   OverlayProcessorUsingStrategy(const OverlayProcessorUsingStrategy&) = delete;
   OverlayProcessorUsingStrategy& operator=(
@@ -57,7 +57,6 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
 
   ~OverlayProcessorUsingStrategy() override;
 
-  gfx::Rect GetPreviousFrameOverlaysBoundingRect() const final;
   gfx::Rect GetAndResetOverlayDamage() final;
 
   // Override OverlayProcessor.
@@ -73,7 +72,7 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
       const FilterOperationsMap& render_pass_filters,
       const FilterOperationsMap& render_pass_backdrop_filters,
       SurfaceDamageRectList surface_damage_rect_list,
-      OutputSurfaceOverlayPlane* output_surface_plane,
+      const PrimaryPlaneParams& primary_plane_params,
       CandidateList* overlay_candidates,
       gfx::Rect* damage_rect,
       std::vector<gfx::Rect>* content_bounds)
@@ -81,15 +80,6 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
       // |OverlayProcessorDelegated| has been reintegrated into
       // |OverlayProcessorOzone|.
       override;
-
-  // This function takes a pointer to the std::optional instance so the
-  // instance can be reset. When overlay strategy covers the entire output
-  // surface, we no longer need the output surface as a separate overlay. This
-  // is also used by SurfaceControl to adjust rotation.
-  // TODO(weiliangc): Internalize the |output_surface_plane| inside the overlay
-  // processor.
-  void AdjustOutputSurfaceOverlay(
-      std::optional<OutputSurfaceOverlayPlane>* output_surface_plane) override;
 
   OverlayProcessorUsingStrategy();
 
@@ -99,9 +89,8 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   // to be traditionally composited. Candidates with |overlay_handled| set to
   // true must also have their |display_rect| converted to integer
   // coordinates if necessary.
-  void CheckOverlaySupport(
-      const OverlayProcessorInterface::OutputSurfaceOverlayPlane* primary_plane,
-      OverlayCandidateList* candidate_list);
+  void CheckOverlaySupport(const std::optional<OverlayCandidate>& primary_plane,
+                           OverlayCandidateList* candidate_list);
 
   // Clears the cache of attempted overlay combinations and their results.
   void ClearOverlayCombinationCache();
@@ -111,11 +100,28 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   // the overlay on the display with the requirement only.
   virtual void RegisterOverlayRequirement(bool requires_overlay) {}
 
+  // Disable overlay if there has been a copy request in the last 10 frames
+  // 10 was chosen because worst case the copy request might be 15 fps and
+  // we might have display with 120 Hz.
+  static const int kCopyRequestSkipOverlayFrames = 10;
+
+  const std::unordered_map<ProposedCandidateKey,
+                           OverlayCandidateTemporalTracker,
+                           ProposedCandidateKeyHasher>&
+  GetTrackedCandidatesForTesting() const {
+    return tracked_candidates_;
+  }
+
  protected:
   virtual gfx::Rect GetOverlayDamageRectForOutputSurface(
       const OverlayCandidate& overlay) const;
 
+  virtual void InsertPrimaryPlane(OverlayCandidate primary_plane,
+                                  OverlayCandidateList& candidates);
+
   std::vector<std::unique_ptr<OverlayProcessorStrategy>> strategies_;
+
+  // Only tracked when multi-overlay is not used.
   raw_ptr<OverlayProcessorStrategy> last_successful_strategy_ = nullptr;
 
   gfx::Rect overlay_damage_rect_;
@@ -142,8 +148,12 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   // confirmed in `OverlayProcessorOzone::ReceiveHardwareCapabilities`.
   int max_overlays_considered_ = 1;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
  protected:
+  // This is used by `OverlayProcessorAndroid` and `OverlayProcessorWebView`,
+  // which do not use an overlay for the primary plane.
+  virtual bool ShouldCreatePrimaryPlane() const;
+
+#if BUILDFLAG(IS_CHROMEOS)
   // TODO(b/181974042):  Remove when color space is plumbed.
   gfx::ColorSpace primary_plane_color_space_;
 #endif
@@ -179,7 +189,7 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   // The platform specific implementation to check overlay support that will be
   // called by `CheckOverlaySupport()`.
   virtual void CheckOverlaySupportImpl(
-      const OverlayProcessorInterface::OutputSurfaceOverlayPlane* primary_plane,
+      const std::optional<OverlayCandidate>& primary_plane,
       OverlayCandidateList* candidate_list) = 0;
 
   // Updates |damage_rect| by removing damage caused by overlays.
@@ -201,13 +211,17 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
       const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
       const OverlayProcessorInterface::FilterOperationsMap&
           render_pass_backdrop_filters,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_pass_list,
       SurfaceDamageRectList* surface_damage_rect_list,
-      OverlayProcessorInterface::OutputSurfaceOverlayPlane* primary_plane,
+      std::optional<OverlayCandidate>& primary_plane,
       OverlayCandidateList* candidates,
       std::vector<gfx::Rect>* content_bounds,
       gfx::Rect* incoming_damage);
+
+  // Skips overlay when we have recently had copy output requests
+  // on root render pass to avoid flickering during screen capture
+  bool BlockForCopyRequests(const AggregatedRenderPass* root_render_pass);
 
   // Determines if we should attempt multiple overlays. This is based on
   // `max_overlays_considered_`, the strategies proposed, and if any of the
@@ -223,7 +237,7 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   // UseMultipleOverlays feature.
   bool AttemptMultipleOverlays(
       const std::vector<OverlayProposedCandidate>& sorted_candidates,
-      OverlayProcessorInterface::OutputSurfaceOverlayPlane* primary_plane,
+      std::optional<OverlayCandidate>& primary_plane,
       AggregatedRenderPass* render_pass,
       OverlayCandidateList& candidates);
 
@@ -243,7 +257,8 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   virtual void SortProposedOverlayCandidates(
       std::vector<OverlayProposedCandidate>* proposed_candidates);
 
-  // Used by Android pre-SurfaceControl to notify promotion hints.
+  // Used by Android pre-SurfaceControl to notify promotion hints, and by
+  // Ozone to notify overlay manager what overlays are actually promoted.
   virtual void NotifyOverlayPromotion(
       DisplayResourceProvider* display_resource_provider,
       const OverlayCandidateList& candidate_list,
@@ -253,10 +268,6 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   // should be the src->dst scaling amount that is < 1.0f and |success| should
   // be whether that scaling worked or not.
   void UpdateDownscalingCapabilities(float scale_factor, bool success);
-
-  // Logs the number of times CheckOverlaySupport was called this frame, and
-  // resets the counter to 0.
-  void LogCheckOverlaySupportMetrics();
 
   // Moves `curr_overlays` into `prev_overlays`, and updates `curr_overlays` to
   // reflect the overlays that will be promoted this frame in `candidates`.
@@ -268,11 +279,7 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
       tracked_candidates_;
 
   // These variables are used only for UMA purposes.
-  void OnOverlaySwitchUMA(ProposedCandidateKey overlay_tracking_key);
-  base::TimeTicks last_time_interval_switch_overlay_tick_;
-  ProposedCandidateKey prev_overlay_tracking_id_;
   uint64_t frame_sequence_number_ = 0;
-  int check_overlay_support_call_count_ = 0;
 
   // These values are used for tracking how much we can downscale with overlays
   // and is used for when we require an overlay so we can determine how much we
@@ -287,6 +294,10 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
   OverlayStatusMap curr_overlays_;
 
   OverlayCombinationCache overlay_combination_cache_;
+
+  // Used to count the number of frames we should wait until enabling overlay
+  // again.
+  int copy_request_counter_ = 0;
 };
 
 }  // namespace viz

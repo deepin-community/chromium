@@ -36,6 +36,7 @@
 #include "dawn/native/Instance.h"
 #include "dawn/native/dawn_platform.h"
 #include "dawn/platform/DawnPlatform.h"
+#include "dawn/webgpu_cpp_print.h"
 
 namespace dawn::native {
 
@@ -81,19 +82,26 @@ void DawnNativeTest::SetUp() {
 
     adapter = instance->EnumerateAdapters(&options)[0];
     device = wgpu::Device::Acquire(CreateTestDevice());
-    device.SetUncapturedErrorCallback(DawnNativeTest::OnDeviceError, nullptr);
 }
 
 std::unique_ptr<dawn::platform::Platform> DawnNativeTest::CreateTestPlatform() {
     return nullptr;
 }
 
-WGPUDevice DawnNativeTest::CreateTestDevice() {
-    return adapter.CreateDevice();
+wgpu::DawnTogglesDescriptor DawnNativeTest::DeviceToggles() {
+    return wgpu::DawnTogglesDescriptor{};
 }
 
-// static
-void DawnNativeTest::OnDeviceError(WGPUErrorType type, const char* message, void* userdata) {
-    DAWN_ASSERT(type != WGPUErrorType_NoError);
-    FAIL() << "Unexpected error: " << message;
+WGPUDevice DawnNativeTest::CreateTestDevice() {
+    wgpu::DeviceDescriptor desc = {};
+    desc.SetUncapturedErrorCallback(
+        [](const wgpu::Device&, wgpu::ErrorType type, wgpu::StringView message) {
+            DAWN_ASSERT(type != wgpu::ErrorType::NoError);
+            FAIL() << "Unexpected error: " << message;
+        });
+
+    wgpu::DawnTogglesDescriptor toggles = DeviceToggles();
+    desc.nextInChain = &toggles;
+
+    return adapter.CreateDevice(&desc);
 }

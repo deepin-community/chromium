@@ -15,18 +15,11 @@
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size_conversions.h"
-#include "ui/gfx/geometry/size_f.h"
 
 namespace headless {
 
 PDFPageBitmap::PDFPageBitmap() = default;
 PDFPageBitmap::~PDFPageBitmap() = default;
-
-bool PDFPageBitmap::Render(const std::string& pdf_data, int page_index) {
-  auto pdf_span = base::make_span(
-      reinterpret_cast<const uint8_t*>(pdf_data.data()), pdf_data.size());
-  return Render(pdf_span, page_index);
-}
 
 bool PDFPageBitmap::Render(base::span<const uint8_t> pdf_data, int page_index) {
   std::optional<gfx::SizeF> page_size_in_points =
@@ -35,8 +28,10 @@ bool PDFPageBitmap::Render(base::span<const uint8_t> pdf_data, int page_index) {
     return false;
   }
 
+  page_size_in_points_ = page_size_in_points.value();
+
   gfx::SizeF page_size_in_pixels =
-      gfx::ScaleSize(page_size_in_points.value(),
+      gfx::ScaleSize(page_size_in_points_,
                      static_cast<float>(kDpi) / printing::kPointsPerInch);
 
   gfx::Rect page_rect(gfx::ToCeiledSize(page_size_in_pixels));

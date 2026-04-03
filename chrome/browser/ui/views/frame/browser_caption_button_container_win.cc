@@ -4,18 +4,20 @@
 
 #include "chrome/browser/ui/views/frame/browser_caption_button_container_win.h"
 
+#include <windows.h>
+
 #include <memory>
 
 #include "chrome/browser/ui/frame/window_frame_util.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_win.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/windows_caption_button.h"
-#include "chrome/browser/ui/views/frame/windows_tab_search_caption_button.h"
 #include "chrome/browser/win/titlebar_config.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/view_class_properties.h"
 
@@ -33,7 +35,8 @@ std::unique_ptr<WindowsCaptionButton> CreateCaptionButton(
 
 bool HitTestCaptionButton(WindowsCaptionButton* button,
                           const gfx::Point& point) {
-  return button && button->GetVisible() && button->bounds().Contains(point);
+  return button && button->GetVisible() &&
+         button->GetMirroredBounds().Contains(point);
 }
 
 }  // anonymous namespace
@@ -42,38 +45,30 @@ BrowserCaptionButtonContainer::BrowserCaptionButtonContainer(
     BrowserFrameViewWin* frame_view)
     : frame_view_(frame_view),
       minimize_button_(AddChildView(CreateCaptionButton(
-          base::BindRepeating(&BrowserFrame::Minimize,
-                              base::Unretained(frame_view_->frame())),
+          base::BindRepeating(&BrowserWidget::Minimize,
+                              base::Unretained(frame_view_->browser_widget())),
           frame_view_,
           VIEW_ID_MINIMIZE_BUTTON,
           IDS_APP_ACCNAME_MINIMIZE))),
       maximize_button_(AddChildView(CreateCaptionButton(
-          base::BindRepeating(&BrowserFrame::Maximize,
-                              base::Unretained(frame_view_->frame())),
+          base::BindRepeating(&BrowserWidget::Maximize,
+                              base::Unretained(frame_view_->browser_widget())),
           frame_view_,
           VIEW_ID_MAXIMIZE_BUTTON,
           IDS_APP_ACCNAME_MAXIMIZE))),
       restore_button_(AddChildView(CreateCaptionButton(
-          base::BindRepeating(&BrowserFrame::Restore,
-                              base::Unretained(frame_view_->frame())),
+          base::BindRepeating(&BrowserWidget::Restore,
+                              base::Unretained(frame_view_->browser_widget())),
           frame_view_,
           VIEW_ID_RESTORE_BUTTON,
           IDS_APP_ACCNAME_RESTORE))),
       close_button_(AddChildView(CreateCaptionButton(
-          base::BindRepeating(&BrowserFrame::CloseWithReason,
-                              base::Unretained(frame_view_->frame()),
+          base::BindRepeating(&BrowserWidget::CloseWithReason,
+                              base::Unretained(frame_view_->browser_widget()),
                               views::Widget::ClosedReason::kCloseButtonClicked),
           frame_view_,
           VIEW_ID_CLOSE_BUTTON,
           IDS_APP_ACCNAME_CLOSE))) {
-  if (WindowFrameUtil::IsWindowsTabSearchCaptionButtonEnabled(
-          frame_view_->browser_view()->browser())) {
-    tab_search_button_ =
-        AddChildViewAt(std::make_unique<WindowsTabSearchCaptionButton>(
-                           frame_view_, VIEW_ID_TAB_SEARCH_BUTTON,
-                           l10n_util::GetStringUTF16(IDS_ACCNAME_TAB_SEARCH)),
-                       0);
-  }
   // Layout is horizontal, with buttons placed at the trailing end of the view.
   // This allows the container to expand to become a faux titlebar/drag handle.
   auto* const layout = SetLayoutManager(std::make_unique<views::FlexLayout>());
@@ -88,7 +83,7 @@ BrowserCaptionButtonContainer::BrowserCaptionButtonContainer(
                                    /* adjust_width_for_height */ false,
                                    views::MinimumFlexSizeRule::kScaleToZero));
 
-  if (frame_view_->browser_view()->AppUsesWindowControlsOverlay()) {
+  if (frame_view_->GetBrowserView()->AppUsesWindowControlsOverlay()) {
     UpdateButtonToolTipsForWindowControlsOverlay();
   }
 }
@@ -99,14 +94,11 @@ int BrowserCaptionButtonContainer::NonClientHitTest(
     const gfx::Point& point) const {
   DCHECK(HitTestPoint(point))
       << "should only be called with a point inside this view's bounds";
-  if (tab_search_button_ && HitTestCaptionButton(tab_search_button_, point)) {
-    return HTCLIENT;
-  }
   // BrowserView covers the frame view when Window Controls Overlay is enabled.
   // The native window that encompasses Web Contents gets the mouse events meant
   // for the caption buttons, so returning HTClient allows these buttons to be
   // highlighted on hover.
-  if (frame_view_->browser_view()->IsWindowControlsOverlayEnabled() &&
+  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled() &&
       (HitTestCaptionButton(minimize_button_, point) ||
        HitTestCaptionButton(maximize_button_, point) ||
        HitTestCaptionButton(restore_button_, point) ||
@@ -129,7 +121,7 @@ int BrowserCaptionButtonContainer::NonClientHitTest(
 }
 
 void BrowserCaptionButtonContainer::OnWindowControlsOverlayEnabledChanged() {
-  if (frame_view_->browser_view()->IsWindowControlsOverlayEnabled()) {
+  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled()) {
     SetBackground(
         views::CreateSolidBackground(frame_view_->GetTitlebarColor()));
 
@@ -143,13 +135,8 @@ void BrowserCaptionButtonContainer::OnWindowControlsOverlayEnabledChanged() {
   UpdateButtonToolTipsForWindowControlsOverlay();
 }
 
-TabSearchBubbleHost* BrowserCaptionButtonContainer::GetTabSearchBubbleHost() {
-  return tab_search_button_ ? tab_search_button_->tab_search_bubble_host()
-                            : nullptr;
-}
-
 void BrowserCaptionButtonContainer::OnThemeChanged() {
-  if (frame_view_->browser_view()->IsWindowControlsOverlayEnabled()) {
+  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled()) {
     SetBackground(
         views::CreateSolidBackground(frame_view_->GetTitlebarColor()));
   }
@@ -157,9 +144,6 @@ void BrowserCaptionButtonContainer::OnThemeChanged() {
 }
 
 void BrowserCaptionButtonContainer::ResetWindowControls() {
-  if (tab_search_button_) {
-    tab_search_button_->SetState(views::Button::STATE_NORMAL);
-  }
   minimize_button_->SetState(views::Button::STATE_NORMAL);
   maximize_button_->SetState(views::Button::STATE_NORMAL);
   restore_button_->SetState(views::Button::STATE_NORMAL);
@@ -175,7 +159,7 @@ void BrowserCaptionButtonContainer::AddedToWidget() {
 
   UpdateButtons();
 
-  if (frame_view_->browser_view()->IsWindowControlsOverlayEnabled()) {
+  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled()) {
     SetBackground(
         views::CreateSolidBackground(frame_view_->GetTitlebarColor()));
     // BrowserView paints to a layer, so this must do the same to ensure that it
@@ -196,7 +180,7 @@ void BrowserCaptionButtonContainer::OnWidgetBoundsChanged(
 }
 
 void BrowserCaptionButtonContainer::UpdateButtons() {
-  if (!ShouldBrowserCustomDrawTitlebar(frame_view_->browser_view())) {
+  if (!ShouldBrowserCustomDrawTitlebar(frame_view_->GetBrowserView())) {
     minimize_button_->SetVisible(false);
     maximize_button_->SetVisible(false);
     restore_button_->SetVisible(false);
@@ -204,10 +188,10 @@ void BrowserCaptionButtonContainer::UpdateButtons() {
     return;
   }
 
-  minimize_button_->SetVisible(frame_view_->browser_view()->CanMinimize());
+  minimize_button_->SetVisible(frame_view_->GetBrowserView()->CanMinimize());
 
   const bool is_maximized = frame_view_->IsMaximized();
-  const bool can_maximize = frame_view_->browser_view()->CanMaximize();
+  const bool can_maximize = frame_view_->GetBrowserView()->CanMaximize();
   restore_button_->SetVisible(is_maximized && can_maximize);
   maximize_button_->SetVisible(!is_maximized && can_maximize);
 
@@ -215,7 +199,7 @@ void BrowserCaptionButtonContainer::UpdateButtons() {
 
   // In touch mode, windows cannot be taken out of fullscreen or tiled mode, so
   // the maximize/restore button should be disabled, unless the window is not
-  // maximized. TODO(crbug.com/1338572): Also check if the window is tiled.
+  // maximized. TODO(crbug.com/40849150): Also check if the window is tiled.
   const bool is_touch = ui::TouchUiController::Get()->touch_ui();
   restore_button_->SetEnabled(!is_touch);
   maximize_button_->SetEnabled(!is_touch || !is_maximized);
@@ -223,11 +207,15 @@ void BrowserCaptionButtonContainer::UpdateButtons() {
 
 void BrowserCaptionButtonContainer::
     UpdateButtonToolTipsForWindowControlsOverlay() {
-  if (frame_view_->browser_view()->IsWindowControlsOverlayEnabled()) {
-    minimize_button_->SetTooltipText(minimize_button_->GetAccessibleName());
-    maximize_button_->SetTooltipText(maximize_button_->GetAccessibleName());
-    restore_button_->SetTooltipText(restore_button_->GetAccessibleName());
-    close_button_->SetTooltipText(close_button_->GetAccessibleName());
+  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled()) {
+    minimize_button_->SetTooltipText(
+        minimize_button_->GetViewAccessibility().GetCachedName());
+    maximize_button_->SetTooltipText(
+        maximize_button_->GetViewAccessibility().GetCachedName());
+    restore_button_->SetTooltipText(
+        restore_button_->GetViewAccessibility().GetCachedName());
+    close_button_->SetTooltipText(
+        close_button_->GetViewAccessibility().GetCachedName());
   } else {
     minimize_button_->SetTooltipText(u"");
     maximize_button_->SetTooltipText(u"");

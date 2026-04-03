@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
 
@@ -80,7 +84,7 @@ void main()
 };
 
 // If glBufferData was not called yet the capturing must not try to
-// read the data. http://anglebug.com/6093
+// read the data. http://anglebug.com/42264622
 TEST_P(BufferDataTest, Uninitialized)
 {
     // Trigger frame capture to try capturing the
@@ -146,7 +150,7 @@ TEST_P(BufferDataTest, RepeatedDrawWithDynamic)
 // DYNAMIC
 TEST_P(BufferDataTest, RepeatedDrawDynamicBug)
 {
-    // http://anglebug.com/2843: Seems to be an Intel driver bug.
+    // http://anglebug.com/42261546: Seems to be an Intel driver bug.
     ANGLE_SKIP_TEST_IF(IsVulkan() && IsIntel() && IsWindows());
 
     glUseProgram(mProgram);
@@ -461,7 +465,7 @@ void main()
 // https://code.google.com/p/angleproject/issues/detail?id=709
 TEST_P(IndexedBufferCopyTest, IndexRangeBug)
 {
-    // TODO(geofflang): Figure out why this fails on AMD OpenGL (http://anglebug.com/1291)
+    // TODO(geofflang): Figure out why this fails on AMD OpenGL (http://anglebug.com/42260302)
     ANGLE_SKIP_TEST_IF(IsAMD() && IsOpenGL());
 
     unsigned char vertexData[] = {255, 0, 0, 0, 0, 0};
@@ -826,7 +830,7 @@ TEST_P(BufferDataTest, MapBufferOES)
     FillVectorWithRandomUBytes(&data);
 
     GLBuffer buffer;
-    glBindBuffer(GL_ARRAY_BUFFER, buffer.get());
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
     glBufferData(GL_ARRAY_BUFFER, data.size(), nullptr, GL_STATIC_DRAW);
 
     // Validate that other map flags don't work.
@@ -884,7 +888,7 @@ void main()
         color[4 * i + 3] = 255;
     }
     GLBuffer buffer;
-    glBindBuffer(GL_ARRAY_BUFFER, buffer.get());
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
     glBufferData(GL_ARRAY_BUFFER, color.size(), color.data(), GL_DYNAMIC_DRAW);
 
     ANGLE_GL_PROGRAM(program, simpleVertex, simpleFragment);
@@ -1043,7 +1047,7 @@ TEST_P(BufferDataTestES3, GLDriverErrorWhenMappingArrayBuffersDuringDraw)
     auto quadVertices = GetQuadVertices();
 
     GLBuffer vb;
-    glBindBuffer(GL_ARRAY_BUFFER, vb.get());
+    glBindBuffer(GL_ARRAY_BUFFER, vb);
     glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * quadVertices.size(), quadVertices.data(),
                  GL_STATIC_DRAW);
 
@@ -1287,10 +1291,10 @@ TEST_P(BufferDataTestES3, BufferDataUnmap)
 // works.  Regression test for the Vulkan backend where that flag caused use after free.
 TEST_P(BufferSubDataTest, MapInvalidateThenBufferSubData)
 {
-    // http://anglebug.com/5984
+    // http://anglebug.com/42264515
     ANGLE_SKIP_TEST_IF(IsWindows() && IsOpenGL() && IsIntel());
 
-    // http://anglebug.com/5985
+    // http://anglebug.com/42264516
     ANGLE_SKIP_TEST_IF(IsNexus5X() && IsOpenGLES());
 
     const std::array<GLColor, 4> kInitialData = {GLColor::red, GLColor::red, GLColor::red,
@@ -1312,7 +1316,7 @@ precision mediump float;
 uniform block {
     uvec4 data;
 } ubo;
-uniform uint expect;
+uniform highp uint expect;
 uniform vec4 successOutput;
 out vec4 colorOut;
 void main()
@@ -1638,7 +1642,7 @@ TEST_P(BufferStorageTestES3, StorageBufferMapBufferOES)
     FillVectorWithRandomUBytes(&data);
 
     GLBuffer buffer;
-    glBindBuffer(GL_ARRAY_BUFFER, buffer.get());
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
     glBufferStorageEXT(GL_ARRAY_BUFFER, data.size(), nullptr, GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
 
     // Validate that other map flags don't work.
@@ -1676,12 +1680,12 @@ TEST_P(BufferStorageTestES3, StorageCopyBufferSubDataMapped)
 
     // Set up the read buffer
     GLBuffer readBuffer;
-    glBindBuffer(GL_ARRAY_BUFFER, readBuffer.get());
+    glBindBuffer(GL_ARRAY_BUFFER, readBuffer);
     glBufferData(GL_ARRAY_BUFFER, sizeof(kInitialData), kInitialData.data(), GL_DYNAMIC_DRAW);
 
     // Set up the write buffer to be persistently mapped
     GLBuffer writeBuffer;
-    glBindBuffer(GL_COPY_WRITE_BUFFER, writeBuffer.get());
+    glBindBuffer(GL_COPY_WRITE_BUFFER, writeBuffer);
     glBufferStorageEXT(GL_COPY_WRITE_BUFFER, 16, nullptr,
                        GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT_EXT | GL_MAP_COHERENT_BIT_EXT);
     void *readMapPtr =
@@ -1691,7 +1695,7 @@ TEST_P(BufferStorageTestES3, StorageCopyBufferSubDataMapped)
     ASSERT_GL_NO_ERROR();
 
     // Verify we can copy into the write buffer
-    glBindBuffer(GL_COPY_READ_BUFFER, readBuffer.get());
+    glBindBuffer(GL_COPY_READ_BUFFER, readBuffer);
     glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, 16);
     ASSERT_GL_NO_ERROR();
 
@@ -1716,7 +1720,7 @@ TEST_P(BufferStorageTestES3, DrawElementsElementArrayBufferMapped)
                                -1.0f, 1.0f,  1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     // Set up array buffer
     GLBuffer readBuffer;
-    glBindBuffer(GL_ARRAY_BUFFER, readBuffer.get());
+    glBindBuffer(GL_ARRAY_BUFFER, readBuffer);
     glBufferData(GL_ARRAY_BUFFER, sizeof(kVertexBuffer), kVertexBuffer, GL_DYNAMIC_DRAW);
     GLint vLoc = glGetAttribLocation(mProgram, "position");
     GLint cLoc = mAttribLocation;
@@ -1729,7 +1733,7 @@ TEST_P(BufferStorageTestES3, DrawElementsElementArrayBufferMapped)
     GLshort kElementArrayBuffer[] = {0, 0, 0, 0, 0, 0};
 
     GLBuffer indexBuffer;
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer.get());
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
     glBufferStorageEXT(GL_ELEMENT_ARRAY_BUFFER, sizeof(kElementArrayBuffer), kElementArrayBuffer,
                        GL_DYNAMIC_STORAGE_BIT_EXT | GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT |
                            GL_MAP_COHERENT_BIT_EXT);
@@ -1773,7 +1777,7 @@ TEST_P(BufferStorageTestES3, NoUnmap)
     GLsizei size = sizeof(GLfloat) * 128;
 
     GLBuffer buffer;
-    glBindBuffer(GL_ARRAY_BUFFER, buffer.get());
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
     glBufferStorageEXT(GL_ARRAY_BUFFER, size, nullptr,
                        GL_DYNAMIC_STORAGE_BIT_EXT | GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT |
                            GL_MAP_COHERENT_BIT_EXT);
@@ -1797,7 +1801,7 @@ TEST_P(BufferStorageTestES3, TexImage2DPixelUnpackBufferMappedPersistently)
     FillVectorWithRandomUBytes(&data);
 
     GLBuffer buffer;
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, buffer.get());
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, buffer);
     glBufferStorageEXT(GL_PIXEL_UNPACK_BUFFER, data.size(), data.data(),
                        GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT);
 
@@ -1832,7 +1836,7 @@ TEST_P(BufferStorageTestES3, StorageBufferSubDataMapped)
 
     // Set up the buffer to be persistently mapped and dynamic
     GLBuffer buffer;
-    glBindBuffer(GL_ARRAY_BUFFER, buffer.get());
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
     glBufferStorageEXT(GL_ARRAY_BUFFER, 16, nullptr,
                        GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT |
                            GL_MAP_COHERENT_BIT_EXT | GL_DYNAMIC_STORAGE_BIT_EXT);
@@ -1886,7 +1890,7 @@ void main()
     glViewport(0, 0, getWindowWidth(), getWindowHeight());
     glClear(GL_COLOR_BUFFER_BIT);
 
-    glBindBuffer(GL_UNIFORM_BUFFER, uniformBuffer.get());
+    glBindBuffer(GL_UNIFORM_BUFFER, uniformBuffer);
 
     glBufferStorageEXT(GL_UNIFORM_BUFFER, sizeof(float) * 4, nullptr,
                        GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT | GL_MAP_COHERENT_BIT_EXT);
@@ -1898,7 +1902,7 @@ void main()
 
     ASSERT_NE(mapPtr, nullptr);
 
-    glBindBufferBase(GL_UNIFORM_BUFFER, 0, uniformBuffer.get());
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, uniformBuffer);
 
     glUniformBlockBinding(program, uniformBufferIndex, 0);
 
@@ -1935,7 +1939,7 @@ TEST_P(BufferStorageTestES3, VertexBufferMapped)
     size_t bufferSize = sizeof(GLfloat) * quadVertices.size() * 3;
 
     GLBuffer positionBuffer;
-    glBindBuffer(GL_ARRAY_BUFFER, positionBuffer.get());
+    glBindBuffer(GL_ARRAY_BUFFER, positionBuffer);
 
     glBufferStorageEXT(GL_ARRAY_BUFFER, bufferSize, nullptr,
                        GL_DYNAMIC_STORAGE_BIT_EXT | GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT |
@@ -1962,6 +1966,40 @@ TEST_P(BufferStorageTestES3, VertexBufferMapped)
     EXPECT_GL_NO_ERROR();
 }
 
+// Verify that glReadPixels works with a persistently mapped buffer.
+TEST_P(BufferStorageTestES3, ReadPixelsPersistentBuffer)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_buffer_storage"));
+
+    GLBuffer buffer;
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, buffer);
+    glBufferStorageEXT(GL_PIXEL_PACK_BUFFER, 4, nullptr,
+                       GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT_EXT | GL_MAP_COHERENT_BIT_EXT);
+    ASSERT_GL_NO_ERROR();
+
+    void *mapPtr =
+        glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 4,
+                         GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT_EXT | GL_MAP_COHERENT_BIT_EXT);
+    ASSERT_NE(nullptr, mapPtr);
+    ASSERT_GL_NO_ERROR();
+
+    glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+    ASSERT_GL_NO_ERROR();
+
+    glFinish();
+
+    GLColor actual;
+    memcpy(&actual, mapPtr, sizeof(actual));
+
+    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+    ASSERT_GL_NO_ERROR();
+
+    EXPECT_EQ(GLColor::green, actual);
+}
+
 void TestPageSharingBuffers(std::function<void(void)> swapCallback,
                             size_t bufferSize,
                             const std::array<Vector3, 6> &quadVertices,
@@ -1982,7 +2020,7 @@ void TestPageSharingBuffers(std::function<void(void)> swapCallback,
     // Init and map
     for (uint32_t i = 0; i < bufferCount; i++)
     {
-        glBindBuffer(GL_ARRAY_BUFFER, buffers[i].get());
+        glBindBuffer(GL_ARRAY_BUFFER, buffers[i]);
 
         glBufferStorageEXT(GL_ARRAY_BUFFER, bufferSize, nullptr,
                            GL_DYNAMIC_STORAGE_BIT_EXT | GL_MAP_WRITE_BIT |
@@ -2008,7 +2046,7 @@ void TestPageSharingBuffers(std::function<void(void)> swapCallback,
             reinterpret_cast<float *>(mapPointers[i])[lastPosition] = 1.0f;
         }
 
-        glBindBuffer(GL_ARRAY_BUFFER, buffers[i].get());
+        glBindBuffer(GL_ARRAY_BUFFER, buffers[i]);
         glVertexAttribPointer(positionLocation, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
         glDrawArrays(GL_TRIANGLES, 0, quadVertices.size());
         EXPECT_PIXEL_COLOR_EQ(8, 8, GLColor::red);
@@ -2150,7 +2188,7 @@ TEST_P(BufferStorageTestES3Threaded, VertexBuffer)
 
     // Set up position buffer
     GLBuffer positionBuffer;
-    glBindBuffer(GL_ARRAY_BUFFER, positionBuffer.get());
+    glBindBuffer(GL_ARRAY_BUFFER, positionBuffer);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices[0]) * vertices.size(), vertices.data(),
                  GL_STATIC_DRAW);
 
@@ -2160,7 +2198,7 @@ TEST_P(BufferStorageTestES3Threaded, VertexBuffer)
 
     // Set up color buffer
     GLBuffer colorBuffer;
-    glBindBuffer(GL_ARRAY_BUFFER, colorBuffer.get());
+    glBindBuffer(GL_ARRAY_BUFFER, colorBuffer);
 
     // Let's create a big buffer which fills 10 pages at pagesize 4096
     GLint bufferSize   = sizeof(GLfloat) * 1024 * 10;
@@ -2175,7 +2213,7 @@ TEST_P(BufferStorageTestES3Threaded, VertexBuffer)
     auto indices = GetQuadIndices();
 
     GLBuffer indexBuffer;
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer.get());
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices[0]) * indices.size(), indices.data(),
                  GL_STATIC_DRAW);
 
@@ -2334,6 +2372,47 @@ void main()
     ASSERT_GL_NO_ERROR();
 }
 
+// Test that checks buffer object state after calling glBufferStorageEXT
+TEST_P(BufferStorageTestES3, BufferStorageGetParameter)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_buffer_storage"));
+
+    GLint64 value = -1;
+    GLint size    = 3;
+
+    GLBuffer buffer;
+    glBindBuffer(GL_COPY_READ_BUFFER, buffer);
+    glBufferStorageEXT(GL_COPY_READ_BUFFER, size, NULL, GL_MAP_WRITE_BIT);
+    ASSERT_GL_NO_ERROR();
+
+    /* Check the value of GL_BUFFER_SIZE. */
+    glGetBufferParameteri64v(GL_COPY_READ_BUFFER, GL_BUFFER_SIZE, &value);
+    ASSERT_GL_NO_ERROR();
+    ASSERT_EQ(size, static_cast<GLint>(value));
+
+    /* Check the value of GL_BUFFER_USAGE. */
+    value = -1;
+    glGetBufferParameteri64v(GL_COPY_READ_BUFFER, GL_BUFFER_USAGE, &value);
+    ASSERT_GL_NO_ERROR();
+    ASSERT_EQ(GL_DYNAMIC_DRAW, value);
+
+    /* Check the value of GL_BUFFER_IMMUTABLE_STORAGE_EXT. */
+    value = -1;
+    glGetBufferParameteri64v(GL_COPY_READ_BUFFER, GL_BUFFER_IMMUTABLE_STORAGE_EXT, &value);
+    ASSERT_GL_NO_ERROR();
+    ASSERT_EQ(GL_TRUE, value);
+
+    /* Check the value of GL_BUFFER_STORAGE_FLAGS_EXT. */
+    value = -1;
+    glGetBufferParameteri64v(GL_COPY_READ_BUFFER, GL_BUFFER_STORAGE_FLAGS_EXT, &value);
+    ASSERT_GL_NO_ERROR();
+    ASSERT_EQ(GL_MAP_WRITE_BIT, value);
+
+    /* Clean up. */
+    glUnmapBuffer(GL_COPY_READ_BUFFER);
+    glBindBuffer(GL_COPY_READ_BUFFER, 0);
+}
+
 ANGLE_INSTANTIATE_TEST_ES2(BufferDataTest);
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(BufferSubDataTest);
@@ -2406,26 +2485,26 @@ TEST_P(BufferDataOverflowTest, VertexBufferIntegerOverflow)
         "}";
 
     ANGLE_GL_PROGRAM(program, vertexShaderStr.str().c_str(), kFS);
-    glUseProgram(program.get());
+    glUseProgram(program);
 
     std::vector<GLfloat> data(numItems, 1.0f);
 
     for (GLsizei bufferIndex = 0; bufferIndex < bufferCnt; ++bufferIndex)
     {
-        glBindBuffer(GL_ARRAY_BUFFER, buffers[bufferIndex].get());
+        glBindBuffer(GL_ARRAY_BUFFER, buffers[bufferIndex]);
         glBufferData(GL_ARRAY_BUFFER, numItems * sizeof(float), &data[0], GL_DYNAMIC_DRAW);
 
         std::stringstream attribNameStr;
         attribNameStr << "attrib" << bufferIndex;
 
-        GLint attribLocation = glGetAttribLocation(program.get(), attribNameStr.str().c_str());
+        GLint attribLocation = glGetAttribLocation(program, attribNameStr.str().c_str());
         ASSERT_NE(-1, attribLocation);
 
         glVertexAttribPointer(attribLocation, 1, GL_FLOAT, GL_FALSE, 4, nullptr);
         glEnableVertexAttribArray(attribLocation);
     }
 
-    GLint positionLocation = glGetAttribLocation(program.get(), "position");
+    GLint positionLocation = glGetAttribLocation(program, "position");
     ASSERT_NE(-1, positionLocation);
     glDisableVertexAttribArray(positionLocation);
     glVertexAttrib2f(positionLocation, 1.0f, 1.0f);
@@ -2439,7 +2518,7 @@ TEST_P(BufferDataOverflowTest, VertexBufferIntegerOverflow)
     {
         std::stringstream attribNameStr;
         attribNameStr << "attrib" << bufferIndex;
-        GLint attribLocation = glGetAttribLocation(program.get(), attribNameStr.str().c_str());
+        GLint attribLocation = glGetAttribLocation(program, attribNameStr.str().c_str());
         ASSERT_NE(-1, attribLocation);
         glDisableVertexAttribArray(attribLocation);
     }
@@ -2453,8 +2532,8 @@ TEST_P(BufferDataOverflowTest, CopySubDataValidation)
 {
     GLBuffer readBuffer, writeBuffer;
 
-    glBindBuffer(GL_COPY_READ_BUFFER, readBuffer.get());
-    glBindBuffer(GL_COPY_WRITE_BUFFER, writeBuffer.get());
+    glBindBuffer(GL_COPY_READ_BUFFER, readBuffer);
+    glBindBuffer(GL_COPY_WRITE_BUFFER, writeBuffer);
 
     constexpr int bufSize = 100;
 

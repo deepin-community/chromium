@@ -41,7 +41,7 @@ CastMessage CreateNonKeepAliveMessage(const std::string& message_type) {
   output.set_payload_type(
       CastMessage::PayloadType::CastMessage_PayloadType_STRING);
 
-  base::Value::Dict type_dict;
+  base::DictValue type_dict;
   type_dict.Set("type", message_type);
   CHECK(base::JSONWriter::Write(type_dict, output.mutable_payload_utf8()));
   return output;
@@ -51,8 +51,8 @@ CastMessage CreateNonKeepAliveMessage(const std::string& message_type) {
 // test code to set GMock expectations for Timer::Reset().
 class MockTimerWithMonitoredReset : public base::MockRetainingOneShotTimer {
  public:
-  MockTimerWithMonitoredReset() {}
-  ~MockTimerWithMonitoredReset() override {}
+  MockTimerWithMonitoredReset() = default;
+  ~MockTimerWithMonitoredReset() override = default;
 
   // Instrumentation point for determining how many times Reset() was called.
   MOCK_METHOD0(ResetTriggered, void(void));
@@ -75,12 +75,12 @@ class KeepAliveDelegateTest : public testing::Test {
  public:
   using ChannelError = ::cast_channel::ChannelError;
 
-  KeepAliveDelegateTest() {}
+  KeepAliveDelegateTest() = default;
 
   KeepAliveDelegateTest(const KeepAliveDelegateTest&) = delete;
   KeepAliveDelegateTest& operator=(const KeepAliveDelegateTest&) = delete;
 
-  ~KeepAliveDelegateTest() override {}
+  ~KeepAliveDelegateTest() override = default;
 
  protected:
   void SetUp() override {

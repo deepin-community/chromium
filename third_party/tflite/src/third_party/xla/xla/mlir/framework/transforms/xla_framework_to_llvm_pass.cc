@@ -14,8 +14,9 @@ limitations under the License.
 ==============================================================================*/
 
 #include <array>
+#include <cassert>
+#include <cstdint>
 #include <memory>
-#include <stdexcept>
 #include <utility>
 
 #include "llvm/ADT/ArrayRef.h"
@@ -23,20 +24,20 @@ limitations under the License.
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/IR/Constants.h"
-#include "mlir/Conversion/LLVMCommon/LoweringOptions.h"  // from @llvm-project
-#include "mlir/Conversion/LLVMCommon/Pattern.h"  // from @llvm-project
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"  // from @llvm-project
-#include "mlir/Dialect/LLVMIR/LLVMTypes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/IRMapping.h"  // from @llvm-project
-#include "mlir/IR/OperationSupport.h"  // from @llvm-project
-#include "mlir/IR/TypeRange.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
-#include "mlir/Transforms/DialectConversion.h"  // from @llvm-project
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
+#include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/IR/OperationSupport.h"
+#include "mlir/IR/TypeRange.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "xla/mlir/framework/ir/xla_framework.h"
 #include "xla/mlir/framework/transforms/passes.h"
 
@@ -78,8 +79,9 @@ struct BarePtrFuncOpConversion : public ConvertOpToLLVMPattern<func::FuncOp> {
   Value LoadValue(ConversionPatternRewriter &rewriter, Location loc,
                   Value pointer, Value index) const {
     auto ptr = LLVM::LLVMPointerType::get(rewriter.getContext());
-    return rewriter.create<LLVM::LoadOp>(
-        loc, ptr, rewriter.create<LLVM::GEPOp>(loc, ptr, ptr, pointer, index));
+    return LLVM::LoadOp::create(
+        rewriter, loc, ptr,
+        LLVM::GEPOp::create(rewriter, loc, ptr, ptr, pointer, index));
   }
 
   mlir::func::FuncOp convertFuncOpToLLVMFuncOp(
@@ -100,8 +102,9 @@ struct BarePtrFuncOpConversion : public ConvertOpToLLVMPattern<func::FuncOp> {
     if (!llvm_type) return nullptr;
 
     rewriter.setInsertionPoint(funcOp);
-    auto new_func_op = rewriter.create<mlir::func::FuncOp>(
-        loc, funcOp.getName(), llvm_type, llvm::SmallVector<NamedAttribute>());
+    auto new_func_op =
+        mlir::func::FuncOp::create(rewriter, loc, funcOp.getName(), llvm_type,
+                                   llvm::SmallVector<NamedAttribute>());
     auto locs = llvm::SmallVector<mlir::Location>(arg_types.size(), loc);
     Block *new_entry =
         rewriter.createBlock(&new_func_op.getBody(), {}, arg_types, locs);
@@ -117,16 +120,18 @@ struct BarePtrFuncOpConversion : public ConvertOpToLLVMPattern<func::FuncOp> {
     auto result_index = 0;
     for (unsigned i = 0; i < num_refs; ++i) {
       if (funcOp.getArgAttr(i, "xla_framework.input_mapping")) {
-        Value index = rewriter.create<LLVM::ConstantOp>(
-            loc, typeConverter->convertType(rewriter.getIntegerType(32)),
+        Value index = LLVM::ConstantOp::create(
+            rewriter, loc,
+            typeConverter->convertType(rewriter.getIntegerType(32)),
             funcOp.getArgAttrOfType<mlir::IntegerAttr>(
                 i, "xla_framework.input_mapping"));
 
         Value ptr = LoadValue(rewriter, loc, new_entry->getArgument(3), index);
         mapping.map(funcOp.front().getArgument(i), ptr);
       } else {
-        Value index = rewriter.create<LLVM::ConstantOp>(
-            loc, typeConverter->convertType(rewriter.getIntegerType(32)),
+        Value index = LLVM::ConstantOp::create(
+            rewriter, loc,
+            typeConverter->convertType(rewriter.getIntegerType(32)),
             funcOp->getAttrOfType<mlir::IntegerAttr>(
                 "xla_framework.result_mapping"));
         Value first_load =
@@ -135,14 +140,15 @@ struct BarePtrFuncOpConversion : public ConvertOpToLLVMPattern<func::FuncOp> {
         // Handle multi-value results which are wrapped in a tuple.
         if (funcOp->hasAttr("xla_framework.result_inner_mapping")) {
           auto current_index = result_index++;
-          Value inner_index = rewriter.create<LLVM::ConstantOp>(
-              loc, typeConverter->convertType(rewriter.getIntegerType(32)),
+          Value inner_index = LLVM::ConstantOp::create(
+              rewriter, loc,
+              typeConverter->convertType(rewriter.getIntegerType(32)),
               rewriter.getI32IntegerAttr(static_cast<int32_t>(
-                  funcOp
-                      ->getAttrOfType<mlir::ArrayAttr>(
-                          "xla_framework.result_inner_mapping")
-                      .getValue()[current_index]
-                      .cast<mlir::IntegerAttr>()
+                  mlir::cast<mlir::IntegerAttr>(
+                      funcOp
+                          ->getAttrOfType<mlir::ArrayAttr>(
+                              "xla_framework.result_inner_mapping")
+                          .getValue()[current_index])
                       .getValue()
                       .getSExtValue())));
 
@@ -151,13 +157,14 @@ struct BarePtrFuncOpConversion : public ConvertOpToLLVMPattern<func::FuncOp> {
           mapping.map(funcOp.front().getArgument(i), ptr);
 
           auto ptr_type = LLVM::LLVMPointerType::get(rewriter.getContext());
-          Value second_index = rewriter.create<LLVM::ConstantOp>(
-              loc, typeConverter->convertType(rewriter.getIntegerType(32)),
+          Value second_index = LLVM::ConstantOp::create(
+              rewriter, loc,
+              typeConverter->convertType(rewriter.getIntegerType(32)),
               rewriter.getI32IntegerAttr(current_index));
-          rewriter.create<LLVM::StoreOp>(
-              loc, ptr,
-              rewriter.create<LLVM::GEPOp>(loc, ptr_type, ptr_type, first_load,
-                                           llvm::ArrayRef(second_index)));
+          LLVM::StoreOp::create(
+              rewriter, loc, ptr,
+              LLVM::GEPOp::create(rewriter, loc, ptr_type, ptr_type, first_load,
+                                  llvm::ArrayRef(second_index)));
 
         } else {
           // Non tuple outputs can be simply mapped to the first load op.
@@ -170,7 +177,7 @@ struct BarePtrFuncOpConversion : public ConvertOpToLLVMPattern<func::FuncOp> {
     // return values now.
     for (auto &op : funcOp.front()) {
       if (isa<mlir::func::ReturnOp>(op)) {
-        rewriter.create<mlir::func::ReturnOp>(loc, ValueRange());
+        mlir::func::ReturnOp::create(rewriter, loc, ValueRange());
       } else {
         rewriter.clone(op, mapping);
       }
@@ -227,10 +234,11 @@ class LegalizeXLAFrameworkToLLVMPass
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     target.addIllegalDialect<xla_framework::XLAFrameworkDialect>();
     target.addDynamicallyLegalOp<func::FuncOp>([](func::FuncOp op) {
-      if (llvm::any_of(
-              llvm::concat<const Type>(op.getArgumentTypes(),
-                                       op.getResultTypes()),
-              [](Type type) { return type.isa<xla_framework::BufferType>(); }))
+      if (llvm::any_of(llvm::concat<const Type>(op.getArgumentTypes(),
+                                                op.getResultTypes()),
+                       [](Type type) {
+                         return mlir::isa<xla_framework::BufferType>(type);
+                       }))
         return false;
       return true;
     });

@@ -23,6 +23,7 @@ source_set("types") {
     "task_state.h",
     "tcp_state.h",
     "trace_processor_context.h",
+    "trace_processor_context_ptr.h",
     "variadic.h",
     "version_number.h",
   ]
@@ -31,6 +32,8 @@ source_set("types") {
     "../../../include/perfetto/ext/base",
     "../../../include/perfetto/trace_processor",
     "../containers",
+    "../tables:tables_python",
+    "../util:trace_type",
   ]
 }
 

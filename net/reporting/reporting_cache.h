@@ -22,6 +22,7 @@
 #include "net/reporting/reporting_endpoint.h"
 #include "net/reporting/reporting_header_parser.h"
 #include "net/reporting/reporting_report.h"
+#include "net/reporting/reporting_target_type.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -74,10 +75,10 @@ class NET_EXPORT ReportingCache {
       const std::string& user_agent,
       const std::string& group_name,
       const std::string& type,
-      base::Value::Dict body,
+      base::DictValue body,
       int depth,
       base::TimeTicks queued,
-      int attempts) = 0;
+      ReportingTargetType target_type) = 0;
 
   // Gets all reports in the cache. The returned pointers are valid as long as
   // either no calls to |RemoveReports| have happened or the reports' |pending|
@@ -327,6 +328,11 @@ class NET_EXPORT ReportingCache {
       const ReportingEndpointGroupKey& group_key,
       const base::UnguessableToken& reporting_source,
       const IsolationInfo& isolation_info,
+      const GURL& url) = 0;
+
+  // Sets an enterprise endpoint.
+  virtual void SetEnterpriseEndpointForTesting(
+      const ReportingEndpointGroupKey& group_key,
       const GURL& url) = 0;
 
   // Gets the isolation info associated with `reporting_source`, used when

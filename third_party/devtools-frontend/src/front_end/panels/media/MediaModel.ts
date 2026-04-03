@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,20 +13,20 @@ export interface PlayerEvent extends Protocol.Media.PlayerEvent {
 }
 
 export const enum Events {
-  PlayerPropertiesChanged = 'PlayerPropertiesChanged',
-  PlayerEventsAdded = 'PlayerEventsAdded',
-  PlayerMessagesLogged = 'PlayerMessagesLogged',
-  PlayerErrorsRaised = 'PlayerErrorsRaised',
-  PlayersCreated = 'PlayersCreated',
+  PLAYER_PROPERTIES_CHANGED = 'PlayerPropertiesChanged',
+  PLAYER_EVENTS_ADDED = 'PlayerEventsAdded',
+  PLAYER_MESSAGES_LOGGED = 'PlayerMessagesLogged',
+  PLAYER_ERRORS_RAISED = 'PlayerErrorsRaised',
+  PLAYER_CREATED = 'PlayerCreated',
 }
 
-export type EventTypes = {
-  [Events.PlayerPropertiesChanged]: Protocol.Media.PlayerPropertiesChangedEvent,
-  [Events.PlayerEventsAdded]: Protocol.Media.PlayerEventsAddedEvent,
-  [Events.PlayerMessagesLogged]: Protocol.Media.PlayerMessagesLoggedEvent,
-  [Events.PlayerErrorsRaised]: Protocol.Media.PlayerErrorsRaisedEvent,
-  [Events.PlayersCreated]: Protocol.Media.PlayerId[],
-};
+export interface EventTypes {
+  [Events.PLAYER_PROPERTIES_CHANGED]: Protocol.Media.PlayerPropertiesChangedEvent;
+  [Events.PLAYER_EVENTS_ADDED]: Protocol.Media.PlayerEventsAddedEvent;
+  [Events.PLAYER_MESSAGES_LOGGED]: Protocol.Media.PlayerMessagesLoggedEvent;
+  [Events.PLAYER_ERRORS_RAISED]: Protocol.Media.PlayerErrorsRaisedEvent;
+  [Events.PLAYER_CREATED]: Protocol.Media.Player;
+}
 
 export class MediaModel extends SDK.SDKModel.SDKModel<EventTypes> implements ProtocolProxyApi.MediaDispatcher {
   private enabled: boolean;
@@ -43,7 +43,7 @@ export class MediaModel extends SDK.SDKModel.SDKModel<EventTypes> implements Pro
 
   override async resumeModel(): Promise<void> {
     if (!this.enabled) {
-      return Promise.resolve();
+      return await Promise.resolve();
     }
     await this.agent.invoke_enable();
   }
@@ -54,23 +54,23 @@ export class MediaModel extends SDK.SDKModel.SDKModel<EventTypes> implements Pro
   }
 
   playerPropertiesChanged(event: Protocol.Media.PlayerPropertiesChangedEvent): void {
-    this.dispatchEventToListeners(Events.PlayerPropertiesChanged, event);
+    this.dispatchEventToListeners(Events.PLAYER_PROPERTIES_CHANGED, event);
   }
 
   playerEventsAdded(event: Protocol.Media.PlayerEventsAddedEvent): void {
-    this.dispatchEventToListeners(Events.PlayerEventsAdded, event);
+    this.dispatchEventToListeners(Events.PLAYER_EVENTS_ADDED, event);
   }
 
   playerMessagesLogged(event: Protocol.Media.PlayerMessagesLoggedEvent): void {
-    this.dispatchEventToListeners(Events.PlayerMessagesLogged, event);
+    this.dispatchEventToListeners(Events.PLAYER_MESSAGES_LOGGED, event);
   }
 
   playerErrorsRaised(event: Protocol.Media.PlayerErrorsRaisedEvent): void {
-    this.dispatchEventToListeners(Events.PlayerErrorsRaised, event);
+    this.dispatchEventToListeners(Events.PLAYER_ERRORS_RAISED, event);
   }
 
-  playersCreated({players}: Protocol.Media.PlayersCreatedEvent): void {
-    this.dispatchEventToListeners(Events.PlayersCreated, players);
+  playerCreated({player}: Protocol.Media.PlayerCreatedEvent): void {
+    this.dispatchEventToListeners(Events.PLAYER_CREATED, player);
   }
 }
-SDK.SDKModel.SDKModel.register(MediaModel, {capabilities: SDK.Target.Capability.Media, autostart: false});
+SDK.SDKModel.SDKModel.register(MediaModel, {capabilities: SDK.Target.Capability.MEDIA, autostart: false});

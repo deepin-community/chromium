@@ -10,8 +10,6 @@ export enum ExpertOption {
   CUSTOM_VIDEO_PARAMETERS = 'custom-video-parameters',
   ENABLE_FPS_PICKER_FOR_BUILTIN = 'enable-fps-picker-for-builtin',
   ENABLE_FULL_SIZED_VIDEO_SNAPSHOT = 'enable-full-sized-video-snapshot',
-  ENABLE_MULTISTREAM_RECORDING = 'enable-multistream-recording',
-  ENABLE_MULTISTREAM_RECORDING_CHROME = 'enable-multistream-recording-chrome',
   ENABLE_PTZ_FOR_BUILTIN = 'enable-ptz-for-builtin',
   EXPERT = 'expert',
   PRINT_PERFORMANCE_LOGS = 'print-performance-logs',
@@ -34,8 +32,6 @@ export function setExpertMode(enable: boolean): void {
  * Toggles expert mode.
  */
 export function toggleExpertMode(): void {
-  // TODO(b/231535710): When toggle expert mode, also check the state of all
-  // options under expert mode
   const newState = !state.get(ExpertOption.EXPERT);
   setExpertMode(newState);
 }

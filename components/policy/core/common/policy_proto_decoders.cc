@@ -8,9 +8,12 @@
 #include <limits>
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/json/json_reader.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -19,6 +22,7 @@
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "components/policy/proto/cloud_policy.pb.h"
+#include "components/policy/proto/device_management_backend.pb.h"
 #include "components/strings/grit/components_strings.h"
 
 namespace policy {
@@ -63,7 +67,7 @@ base::Value DecodeBooleanProto(const em::BooleanPolicyProto& proto) {
 // Convert an IntegerPolicyProto to an int base::Value.
 base::Value DecodeIntegerProto(const em::IntegerPolicyProto& proto,
                                std::string* error) {
-  google::protobuf::int64 value = proto.value();
+  int64_t value = proto.value();
 
   if (value < std::numeric_limits<int>::min() ||
       value > std::numeric_limits<int>::max()) {
@@ -84,7 +88,7 @@ base::Value DecodeStringProto(const em::StringPolicyProto& proto) {
 // Convert a StringListPolicyProto to a List base::Value, where each list value
 // is of Type::STRING.
 base::Value DecodeStringListProto(const em::StringListPolicyProto& proto) {
-  base::Value::List list_value;
+  base::ListValue list_value;
   for (const auto& entry : proto.value().entries())
     list_value.Append(entry);
   return base::Value(std::move(list_value));
@@ -130,13 +134,111 @@ bool UseExternalDataFetcher(const char* policy_name,
     return true;
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-  if (strcmp(policy_name, key::kWebAppInstallForceList) == 0)
+  if (UNSAFE_TODO(strcmp(policy_name, key::kWebAppInstallForceList)) == 0) {
     return true;
+  }
 #endif
   return false;
 }
 
 }  // namespace
+
+ExtensionInstallDecision ConvertToExtensionInstallDecision(
+    const em::ExtensionInstallPolicies& policies,
+    const ExtensionIdAndVersion& extension_id_and_version) {
+  for (em::ExtensionInstallPolicy policy : policies.policies()) {
+    if (!policy.has_extension_id()) {
+      VLOG_POLICY(1, POLICY_PROCESSING)
+          << "ExtensionInstallCloudPolicy missing extension id";
+      continue;
+    }
+    if (!policy.has_extension_version()) {
+      VLOG_POLICY(1, POLICY_PROCESSING) << base::StringPrintf(
+          "ExtensionInstallCloudPolicy - %s: missing version",
+          policy.extension_id());
+      continue;
+    }
+    std::string policy_key = base::StringPrintf("%s@%s", policy.extension_id(),
+                                                policy.extension_version());
+
+    if (!policy.has_action()) {
+      VLOG_POLICY(1, POLICY_PROCESSING) << base::StringPrintf(
+          "ExtensionInstallCloudPolicy - %s:missing action", policy_key);
+      continue;
+    }
+
+    if (policy.extension_id() == extension_id_and_version.extension_id &&
+        policy.extension_version() ==
+            extension_id_and_version.extension_version) {
+      std::set<em::ExtensionInstallPolicy::Reason> reasons;
+      for (const auto& reason : policy.reasons()) {
+        reasons.insert(static_cast<em::ExtensionInstallPolicy::Reason>(reason));
+      }
+      return ExtensionInstallDecision(policy.action(), std::move(reasons));
+    }
+  }
+  VLOG_POLICY(1, POLICY_PROCESSING) << base::StringPrintf(
+      "ExtensionInstallCloudPolicy - %s@%s:missing policy",
+      extension_id_and_version.extension_id,
+      extension_id_and_version.extension_version);
+  return ExtensionInstallDecision();
+}
+
+void DecodeProtoFields(
+    const em::ExtensionInstallPolicies& policies,
+    base::WeakPtr<CloudExternalDataManager> external_data_manager,
+    PolicySource source,
+    PolicyScope scope,
+    PolicyMap* map,
+    PolicyPerProfileFilter per_profile) {
+  std::map<std::string, base::Value> extension_id_to_policy_value;
+  for (const em::ExtensionInstallPolicy& policy : policies.policies()) {
+    if (!policy.has_extension_id()) {
+      VLOG_POLICY(2, POLICY_PROCESSING)
+          << "ExtensionInstallPolicy missing extension id";
+      continue;
+    }
+    if (!policy.has_extension_version()) {
+      VLOG_POLICY(2, POLICY_PROCESSING)
+          << base::StringPrintf("ExtensionInstallPolicy - %s: missing version",
+                                policy.extension_id());
+      continue;
+    }
+
+    if (!policy.has_action()) {
+      VLOG_POLICY(2, POLICY_PROCESSING) << base::StringPrintf(
+          "ExtensionInstallPolicy - %s - version %s: missing action",
+          policy.extension_id(), policy.extension_version());
+      continue;
+    }
+    base::Value action(policy.action());
+    base::ListValue reasons;
+    for (const auto& reason : policy.reasons()) {
+      reasons.Append(reason);
+    }
+
+    VLOG_POLICY(2, POLICY_PROCESSING) << base::StringPrintf(
+        "ExtensionInstallPolicy - %s - version:%s action: %s, reasons: %s",
+        policy.extension_id(), policy.extension_version(), action.DebugString(),
+        reasons.DebugString());
+
+    base::Value policy_value(base::Value::Type::DICT);
+    policy_value.GetDict().Set("action", std::move(action));
+    policy_value.GetDict().Set("reasons", std::move(reasons));
+
+    if (!extension_id_to_policy_value.contains(policy.extension_id())) {
+      extension_id_to_policy_value.emplace(
+          policy.extension_id(), base::Value(base::Value::Type::DICT));
+    }
+    extension_id_to_policy_value[policy.extension_id()].GetDict().Set(
+        policy.extension_version(), std::move(policy_value));
+  }
+  for (auto& [extension_id, policy_value] :
+       extension_id_to_policy_value) {
+    map->Set(extension_id, POLICY_LEVEL_MANDATORY, scope, source,
+             std::move(policy_value), /*external_data_fetcher=*/nullptr);
+  }
+}
 
 void DecodeProtoFields(
     const em::CloudPolicySettings& policy,
@@ -227,7 +329,7 @@ void DecodeProtoFields(
   }
 }
 
-bool ParseComponentPolicy(base::Value::Dict json_dict,
+bool ParseComponentPolicy(base::DictValue json_dict,
                           PolicyScope scope,
                           PolicySource source,
                           PolicyMap* policy,
@@ -243,7 +345,7 @@ bool ParseComponentPolicy(base::Value::Dict json_dict,
       return false;
     }
 
-    base::Value::Dict& description_dict = description.GetDict();
+    base::DictValue& description_dict = description.GetDict();
     std::optional<base::Value> value = description_dict.Extract(kValue);
     if (!value.has_value()) {
       *error = base::StrCat(

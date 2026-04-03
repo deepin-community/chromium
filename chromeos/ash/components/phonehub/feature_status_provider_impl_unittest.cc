@@ -8,14 +8,16 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "chromeos/ash/components/multidevice/remote_device_test_util.h"
+#include "chromeos/ash/components/phonehub/phone_hub_structured_metrics_logger.h"
 #include "chromeos/ash/services/device_sync/public/cpp/fake_device_sync_client.h"
 #include "chromeos/ash/services/multidevice_setup/public/cpp/fake_multidevice_setup_client.h"
 #include "chromeos/ash/services/secure_channel/public/cpp/client/fake_connection_manager.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power/power_manager_client.h"
+#include "components/prefs/testing_pref_service.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
@@ -137,13 +139,18 @@ class FeatureStatusProviderImplTest : public testing::Test {
     device::BluetoothAdapterFactory::SetAdapterForTesting(mock_adapter_);
     fake_device_sync_client_.NotifyReady();
 
-    session_manager_ = std::make_unique<session_manager::SessionManager>();
+    session_manager_ = std::make_unique<session_manager::SessionManager>(
+        std::make_unique<session_manager::FakeSessionManagerDelegate>());
     fake_power_manager_client_ =
         std::make_unique<chromeos::FakePowerManagerClient>();
+    PhoneHubStructuredMetricsLogger::RegisterPrefs(pref_service_.registry());
+    phone_hub_structured_metrics_logger_ =
+        std::make_unique<PhoneHubStructuredMetricsLogger>(&pref_service_);
     provider_ = std::make_unique<FeatureStatusProviderImpl>(
         &fake_device_sync_client_, &fake_multidevice_setup_client_,
         &fake_connection_manager_, session_manager_.get(),
-        fake_power_manager_client_.get());
+        fake_power_manager_client_.get(),
+        phone_hub_structured_metrics_logger_.get());
     provider_->AddObserver(&fake_observer_);
   }
 
@@ -254,6 +261,9 @@ class FeatureStatusProviderImplTest : public testing::Test {
   bool is_adapter_present_ = true;
   bool is_adapter_powered_ = true;
 
+  TestingPrefServiceSimple pref_service_;
+  std::unique_ptr<PhoneHubStructuredMetricsLogger>
+      phone_hub_structured_metrics_logger_;
   FakeObserver fake_observer_;
   std::unique_ptr<session_manager::SessionManager> session_manager_;
   std::unique_ptr<chromeos::FakePowerManagerClient> fake_power_manager_client_;

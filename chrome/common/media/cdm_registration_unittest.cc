@@ -51,10 +51,9 @@ base::Version GetBundledWidevineVersion() {
 
   auto manifest_path = cdm_base_path.Append(FILE_PATH_LITERAL("manifest.json"));
   if (base::PathExists(manifest_path)) {
-    base::Version version;
     media::CdmCapability capability;
-    if (ParseCdmManifestFromPath(manifest_path, &version, &capability)) {
-      return version;
+    if (ParseCdmManifestFromPath(manifest_path, &capability)) {
+      return capability.version;
     }
   }
 
@@ -86,7 +85,7 @@ void CreateFakeComponentUpdatedWidevine(
 
     // Create a manifest. This is the minimum needed so that
     // ParseCdmManifestFromPath() will be happy with it.
-    base::Value::Dict manifest;
+    base::DictValue manifest;
     manifest.Set("version", version.GetString());
     manifest.Set("x-cdm-codecs", "vp8,vp09,av01");
     manifest.Set("x-cdm-module-versions", "4");
@@ -100,10 +99,8 @@ void CreateFakeComponentUpdatedWidevine(
     EXPECT_TRUE(serializer.Serialize(manifest));
 
     // Verify that the manifest is actually usable.
-    base::Version manifest_version;
     media::CdmCapability capability;
-    EXPECT_TRUE(ParseCdmManifestFromPath(manifest_path, &manifest_version,
-                                         &capability));
+    EXPECT_TRUE(ParseCdmManifestFromPath(manifest_path, &capability));
 
     // Now create a dummy executable. It is in a nested directory, so create the
     // directory first. Contents don't matter as only its existence is checked.
@@ -130,10 +127,10 @@ TEST(CdmRegistrationTest, ChooseBundledCdm) {
 
   // With no Component Updated Widevine CDM (i.e. no hint file), it should
   // select the bundled CDM, if it exists.
-  auto cdms = GetSoftwareSecureWidevineForTesting();
+  auto cdms = GetSoftwareSecureWidevine();
 #if BUILDFLAG(BUNDLE_WIDEVINE_CDM)
   EXPECT_EQ(cdms.size(), 1u);
-  EXPECT_EQ(cdms[0].version, bundled_version);
+  EXPECT_EQ(cdms[0].capability->version, bundled_version);
 #else
   EXPECT_EQ(cdms.size(), 0u);
 #endif  // BUILDFLAG(BUNDLE_WIDEVINE_CDM)
@@ -152,15 +149,15 @@ TEST(CdmRegistrationTest, ChooseComponentUpdatedCdm) {
   // Now create a downloaded Widevine CDM with a higher version.
   CreateFakeComponentUpdatedWidevine(component_updated_version, std::nullopt);
 
-  auto cdms = GetSoftwareSecureWidevineForTesting();
+  auto cdms = GetSoftwareSecureWidevine();
 #if BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
   // Component Updated CDM has the higher version so it should be chosen.
   EXPECT_EQ(cdms.size(), 1u);
-  EXPECT_EQ(cdms[0].version, component_updated_version);
+  EXPECT_EQ(cdms[0].capability->version, component_updated_version);
 #elif BUILDFLAG(BUNDLE_WIDEVINE_CDM)
   // No Component Update support but a bundled CDM, so it should be chosen.
   EXPECT_EQ(cdms.size(), 1u);
-  EXPECT_EQ(cdms[0].version, bundled_version);
+  EXPECT_EQ(cdms[0].capability->version, bundled_version);
 #else
   // No CDM available.
   EXPECT_EQ(cdms.size(), 0u);
@@ -185,16 +182,16 @@ TEST(CdmRegistrationTest, ChooseDowngradedCdm) {
   CreateFakeComponentUpdatedWidevine(component_updated_version,
                                      bundled_version);
 
-  auto cdms = GetSoftwareSecureWidevineForTesting();
+  auto cdms = GetSoftwareSecureWidevine();
 #if BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
   // Even though the Component Updated CDM has the lower version, it should be
   // chosen. Doesn't matter if there is a bundled CDM or not.
   EXPECT_EQ(cdms.size(), 1u);
-  EXPECT_EQ(cdms[0].version, component_updated_version);
+  EXPECT_EQ(cdms[0].capability->version, component_updated_version);
 #elif BUILDFLAG(BUNDLE_WIDEVINE_CDM)
   // No Component Update support but a bundled CDM, so it should be chosen.
   EXPECT_EQ(cdms.size(), 1u);
-  EXPECT_EQ(cdms[0].version, bundled_version);
+  EXPECT_EQ(cdms[0].capability->version, bundled_version);
 #else
   // No CDM available.
   EXPECT_EQ(cdms.size(), 0u);
@@ -234,18 +231,18 @@ TEST(CdmRegistrationTest, ChooseCorrectCdm) {
     CreateFakeComponentUpdatedWidevine(versions[c.hinted],
                                        versions[c.last_bundled]);
 
-    auto cdms = GetSoftwareSecureWidevineForTesting();
+    auto cdms = GetSoftwareSecureWidevine();
 #if BUILDFLAG(BUNDLE_WIDEVINE_CDM) && BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
     EXPECT_EQ(cdms.size(), 1u);
-    EXPECT_EQ(cdms[0].version, versions[c.selected]);
+    EXPECT_EQ(cdms[0].capability->version, versions[c.selected]);
 #elif BUILDFLAG(BUNDLE_WIDEVINE_CDM)
     // Only support for bundled CDM, so it will always be returned.
     EXPECT_EQ(cdms.size(), 1u);
-    EXPECT_EQ(cdms[0].version, versions[c.bundled]);
+    EXPECT_EQ(cdms[0].capability->version, versions[c.bundled]);
 #elif BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
     // Only support for component updated CDM, so it will always be returned.
     EXPECT_EQ(cdms.size(), 1u);
-    EXPECT_EQ(cdms[0].version, versions[c.hinted]);
+    EXPECT_EQ(cdms[0].capability->version, versions[c.hinted]);
 #else
     EXPECT_EQ(cdms.size(), 0u);
 #endif

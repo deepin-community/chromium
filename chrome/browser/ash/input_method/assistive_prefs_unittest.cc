@@ -23,7 +23,7 @@ void SetManagedPkPredictiveWritingAllowed(Profile& profile, bool allowed) {
 }
 
 void SetPredictiveWritingEnabled(Profile& profile, bool enabled) {
-  base::Value::Dict input_method_setting;
+  base::DictValue input_method_setting;
   input_method_setting.SetByDottedPath(
       "xkb:us::eng.physicalKeyboardEnabledPredictiveWriting", enabled);
   profile.GetPrefs()->Set(::prefs::kLanguageInputMethodSpecificSettings,
@@ -37,7 +37,7 @@ class AssistivePrefsTest : public ::testing::Test {
 };
 
 TEST_F(AssistivePrefsTest, PredictiveWritingIsEnabledByDefault) {
-  EXPECT_TRUE(IsPredictiveWritingPrefEnabled(profile_.GetPrefs(), kUsEnglish));
+  EXPECT_TRUE(IsPredictiveWritingPrefEnabled(*profile_.GetPrefs(), kUsEnglish));
 }
 
 TEST_F(AssistivePrefsTest,
@@ -45,14 +45,15 @@ TEST_F(AssistivePrefsTest,
   SetPredictiveWritingEnabled(profile_, true);
   SetManagedPkPredictiveWritingAllowed(profile_, false);
 
-  EXPECT_FALSE(IsPredictiveWritingPrefEnabled(profile_.GetPrefs(), kUsEnglish));
+  EXPECT_FALSE(
+      IsPredictiveWritingPrefEnabled(*profile_.GetPrefs(), kUsEnglish));
 }
 
 TEST_F(AssistivePrefsTest, WhenAdminAllowsPredictiveWritingItCanBeEnabled) {
   SetPredictiveWritingEnabled(profile_, true);
   SetManagedPkPredictiveWritingAllowed(profile_, true);
 
-  EXPECT_TRUE(IsPredictiveWritingPrefEnabled(profile_.GetPrefs(), kUsEnglish));
+  EXPECT_TRUE(IsPredictiveWritingPrefEnabled(*profile_.GetPrefs(), kUsEnglish));
 }
 
 }  // namespace

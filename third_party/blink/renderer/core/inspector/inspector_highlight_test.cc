@@ -12,7 +12,6 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/inspector_protocol/crdtp/json.h"
 #include "third_party/inspector_protocol/crdtp/span.h"
@@ -24,6 +23,7 @@ namespace {
 using base::test::ParseJson;
 using testing::ByRef;
 using testing::Eq;
+using testing::UnorderedElementsAre;
 
 void AssertValueEqualsJSON(const std::unique_ptr<protocol::Value>& actual_value,
                            const std::string& json_expected) {
@@ -55,7 +55,7 @@ void InspectorHighlightTest::SetUp() {
 }
 
 TEST_F(InspectorHighlightTest, BuildSnapContainerInfoNoSnapAreas) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <div id="target">test</div>
   )HTML");
   GetDocument().View()->UpdateAllLifecyclePhasesForTest();
@@ -64,7 +64,7 @@ TEST_F(InspectorHighlightTest, BuildSnapContainerInfoNoSnapAreas) {
 }
 
 TEST_F(InspectorHighlightTest, BuildSnapContainerInfoSnapAreas) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       #snap {
         background-color: white;
@@ -115,7 +115,7 @@ TEST_F(InspectorHighlightTest, BuildSnapContainerInfoSnapAreas) {
 }
 
 TEST_F(InspectorHighlightTest, BuildSnapContainerInfoTopLevelSnapAreas) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       :root {
         scroll-snap-type: y mandatory;
@@ -159,7 +159,7 @@ TEST_F(InspectorHighlightTest, BuildSnapContainerInfoTopLevelSnapAreas) {
 
 TEST_F(InspectorHighlightTest,
        BuildContainerQueryContainerInfoWithoutDescendants) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       #container {
         width: 400px;
@@ -189,7 +189,7 @@ TEST_F(InspectorHighlightTest,
 
 TEST_F(InspectorHighlightTest,
        BuildContainerQueryContainerInfoWithDescendants) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       #container {
         width: 400px;
@@ -238,7 +238,7 @@ TEST_F(InspectorHighlightTest,
 }
 
 TEST_F(InspectorHighlightTest, BuildIsolatedElementInfo) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       #element {
         width: 400px;
@@ -292,7 +292,7 @@ static std::string GetBackgroundColorFromElementInfo(Element* element) {
   auto status_to_json = crdtp::json::ConvertCBORToJSON(
       crdtp::SpanFrom(actual_value->Serialize()), &json_actual);
   EXPECT_TRUE(status_to_json.ok());
-  base::Value::Dict parsed_json_actual = ParseJson(json_actual).TakeDict();
+  base::DictValue parsed_json_actual = ParseJson(json_actual).TakeDict();
   auto* style = parsed_json_actual.FindDict("style");
   EXPECT_TRUE(style);
   auto* background_color = style->FindString("background-color-css-text");
@@ -304,7 +304,7 @@ static std::string GetBackgroundColorFromElementInfo(Element* element) {
 }
 
 TEST_F(InspectorHighlightTest, BuildElementInfo_Colors) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       div {
         width: 400px;
@@ -354,7 +354,7 @@ TEST_F(InspectorHighlightTest, BuildElementInfo_Colors) {
 }
 
 TEST_F(InspectorHighlightTest, GridLineNames) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
     #grid {
       display: grid;
@@ -390,34 +390,27 @@ TEST_F(InspectorHighlightTest, GridLineNames) {
       InspectorGridHighlight(subgrid, InspectorHighlight::DefaultGridConfig());
   EXPECT_TRUE(info);
 
-  auto CompareLineNames = [](protocol::ListValue* row_or_column_list,
-                             WTF::Vector<WTF::String>& expected_names) -> void {
+  auto GetLineNames = [](protocol::ListValue* row_or_column_list) {
+    Vector<String> ret;
     for (wtf_size_t i = 0; i < row_or_column_list->size(); ++i) {
       protocol::DictionaryValue* current_value =
           static_cast<protocol::DictionaryValue*>(row_or_column_list->at(i));
 
-      WTF::String string_value;
+      String string_value;
       EXPECT_TRUE(current_value->getString("name", &string_value));
-
-      EXPECT_EQ(expected_names[i], string_value);
+      ret.push_back(string_value);
     }
+    return ret;
   };
 
-  protocol::ListValue* row_info = info->getArray("rowLineNameOffsets");
-  EXPECT_EQ(row_info->size(), 6u);
-  WTF::Vector<WTF::String> expected_row_names = {"d", "e_sub", "e",
-                                                 "f", "d_sub", "f_sub"};
-  CompareLineNames(row_info, expected_row_names);
-
-  protocol::ListValue* column_info = info->getArray("columnLineNameOffsets");
-  EXPECT_EQ(column_info->size(), 6u);
-  WTF::Vector<WTF::String> expected_column_names = {"b", "a_sub", "b_sub",
-                                                    "c", "a",     "c_sub"};
-  CompareLineNames(column_info, expected_column_names);
+  EXPECT_THAT(GetLineNames(info->getArray("rowLineNameOffsets")),
+              UnorderedElementsAre("d", "d_sub", "e", "e_sub", "f", "f_sub"));
+  EXPECT_THAT(GetLineNames(info->getArray("columnLineNameOffsets")),
+              UnorderedElementsAre("a", "a_sub", "b", "b_sub", "c", "c_sub"));
 }
 
 TEST_F(InspectorHighlightTest, GridAreaNames) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
     #grid {
       display: grid;
@@ -457,8 +450,8 @@ TEST_F(InspectorHighlightTest, GridAreaNames) {
   GetDocument().View()->UpdateAllLifecyclePhasesForTest();
 
   auto CompareAreaNames = [](protocol::DictionaryValue* area_names,
-                             WTF::Vector<WTF::String>& expected_names) -> void {
-    for (WTF::String& name : expected_names) {
+                             Vector<String>& expected_names) -> void {
+    for (String& name : expected_names) {
       EXPECT_TRUE(area_names->get(name));
     }
   };
@@ -472,7 +465,7 @@ TEST_F(InspectorHighlightTest, GridAreaNames) {
       grid_info->getObject("areaNames");
   EXPECT_EQ(grid_area_names->size(), 3u);
 
-  WTF::Vector<WTF::String> expected_grid_area_names = {"a", "b", "c"};
+  Vector<String> expected_grid_area_names = {"a", "b", "c"};
   CompareAreaNames(grid_area_names, expected_grid_area_names);
 
   Node* subgrid = GetDocument().getElementById(AtomicString("subgrid"));
@@ -485,9 +478,101 @@ TEST_F(InspectorHighlightTest, GridAreaNames) {
       subgrid_info->getObject("areaNames");
   EXPECT_EQ(subgrid_area_names->size(), 6u);
 
-  WTF::Vector<WTF::String> expected_subgrid_area_names = {"a", "b", "c",
-                                                          "d", "e", "f"};
+  Vector<String> expected_subgrid_area_names = {"a", "b", "c", "d", "e", "f"};
   CompareAreaNames(subgrid_area_names, expected_subgrid_area_names);
+}
+
+TEST_F(InspectorHighlightTest, FieldsetGrid) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+    #grid {
+      display: grid;
+      width: 200px;
+      height: 200px;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+    }
+    </style>
+    <fieldset id="grid">
+      <legend>legend</legend>
+      <div></div>
+      <div></div>
+      <div></div>
+      <div></div>
+    </fieldset>
+  )HTML");
+  GetDocument().View()->UpdateAllLifecyclePhasesForTest();
+  Node* grid = GetDocument().getElementById(AtomicString("grid"));
+  EXPECT_TRUE(grid);
+  auto info =
+      InspectorGridHighlight(grid, InspectorHighlight::DefaultGridConfig());
+  EXPECT_TRUE(info);
+  EXPECT_TRUE(info->get("gridBorder"));
+  EXPECT_EQ(2u, info->getArray("rowTrackSizes")->size());
+  EXPECT_EQ(2u, info->getArray("columnTrackSizes")->size());
+}
+
+TEST_F(InspectorHighlightTest, FieldsetFlex) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+    #flex {
+      display: flex;
+      width: 200px;
+      height: 200px;
+    }
+    </style>
+    <fieldset id="flex">
+      <legend>legend</legend>
+      <div></div>
+      <div></div>
+    </fieldset>
+  )HTML");
+  GetDocument().View()->UpdateAllLifecyclePhasesForTest();
+  Element* flex = GetDocument().getElementById(AtomicString("flex"));
+  EXPECT_TRUE(flex);
+  auto info = InspectorFlexContainerHighlight(
+      flex, InspectorHighlight::DefaultFlexContainerConfig());
+  EXPECT_TRUE(info);
+  EXPECT_TRUE(info->get("containerBorder"));
+  EXPECT_EQ(1u, info->getArray("lines")->size());
+}
+
+TEST_F(InspectorHighlightTest, OffsetPathHighlight) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      div {
+        width: 50px;
+        height: 50px;
+        offset-rotate: 0deg;
+        offset-path: circle(100px at 150px 150px);
+        offset-distance: 0;
+        position: relative;
+        left: 50px;
+        box-sizing: border-box;
+      }
+    </style>
+    <div>test</div>
+  )HTML");
+  GetDocument().View()->UpdateAllLifecyclePhasesForTest();
+  Element* element = GetDocument().QuerySelector(AtomicString("div"));
+  EXPECT_TRUE(element);
+
+  std::unique_ptr<protocol::DOM::BoxModel> model;
+  EXPECT_TRUE(InspectorHighlight::GetBoxModel(element, &model, false));
+
+  const auto& content_quad = *model->getContent();
+  EXPECT_NEAR(225, content_quad[0], 0.1);
+  EXPECT_NEAR(125, content_quad[1], 0.1);
+  EXPECT_NEAR(275, content_quad[2], 0.1);
+  EXPECT_NEAR(125, content_quad[3], 0.1);
+  EXPECT_NEAR(275, content_quad[4], 0.1);
+  EXPECT_NEAR(175, content_quad[5], 0.1);
+  EXPECT_NEAR(225, content_quad[6], 0.1);
+  EXPECT_NEAR(175, content_quad[7], 0.1);
 }
 
 }  // namespace blink

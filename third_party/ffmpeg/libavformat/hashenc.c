@@ -24,6 +24,7 @@
 #include "libavutil/avstring.h"
 #include "libavutil/hash.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "avformat.h"
 #include "internal.h"
@@ -52,6 +53,7 @@ static const AVOption hash_streamhash_options[] = {
 
 static const AVClass hash_streamhashenc_class = {
     .class_name = "(stream) hash muxer",
+    .item_name  = av_default_item_name,
     .option     = hash_streamhash_options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
@@ -191,6 +193,7 @@ const FFOutputFormat ff_hash_muxer = {
 #if CONFIG_MD5_MUXER
 static const AVClass md5enc_class = {
     .class_name = "MD5 muxer",
+    .item_name  = av_default_item_name,
     .option     = md5_options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
@@ -303,7 +306,7 @@ static int framehash_write_packet(struct AVFormatContext *s, AVPacket *pkt)
             } else
                 av_hash_update(c->hashes[0], pkt->side_data[i].data, pkt->side_data[i].size);
             snprintf(buf, sizeof(buf) - (AV_HASH_MAX_SIZE * 2 + 1),
-                     ", %8"SIZE_SPECIFIER", ", pkt->side_data[i].size);
+                     ", %8zu, ", pkt->side_data[i].size);
             len = strlen(buf);
             av_hash_final_hex(c->hashes[0], buf + len, sizeof(buf) - len);
             avio_write(s->pb, buf, strlen(buf));
@@ -318,6 +321,7 @@ static int framehash_write_packet(struct AVFormatContext *s, AVPacket *pkt)
 #if CONFIG_FRAMEHASH_MUXER
 static const AVClass framehash_class = {
     .class_name = "frame hash muxer",
+    .item_name  = av_default_item_name,
     .option     = framehash_options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
@@ -341,6 +345,7 @@ const FFOutputFormat ff_framehash_muxer = {
 #if CONFIG_FRAMEMD5_MUXER
 static const AVClass framemd5_class = {
     .class_name = "frame MD5 muxer",
+    .item_name  = av_default_item_name,
     .option     = framemd5_options,
     .version    = LIBAVUTIL_VERSION_INT,
 };

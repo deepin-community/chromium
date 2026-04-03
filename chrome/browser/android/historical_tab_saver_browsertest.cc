@@ -7,6 +7,8 @@
 #include "base/android/jni_android.h"
 #include "base/test/gtest_util.h"
 #include "chrome/browser/android/tab_android.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/tab/web_contents_state.h"
 #include "chrome/test/base/android/android_browser_test.h"
 #include "chrome/test/base/chrome_test_utils.h"
@@ -33,6 +35,8 @@ class HistoricalTabSaverBrowserTest : public AndroidBrowserTest {
     return chrome_test_utils::GetActiveWebContents(this);
   }
 
+  Profile* GetProfile() { return chrome_test_utils::GetProfile(this); }
+
  private:
   void SetUpOnMainThread() override {
     ASSERT_TRUE(embedded_test_server()->Start());
@@ -57,12 +61,11 @@ IN_PROC_BROWSER_TEST_F(HistoricalTabSaverBrowserTest,
   WebContentsStateByteBuffer web_contents_state =
       WebContentsStateByteBuffer(result, 2);
 
-  EXPECT_NE(web_contents_state.byte_buffer_data, nullptr);
-  EXPECT_GT(web_contents_state.byte_buffer_size, 0);
+  EXPECT_FALSE(web_contents_state.backing_buffer.empty());
 
   WebContentsStateByteBuffer* web_contents_state_ptr = &web_contents_state;
   auto native_contents = WebContentsState::RestoreContentsFromByteBuffer(
-      web_contents_state_ptr, true, false);
+      GetProfile(), web_contents_state_ptr, true, false);
 
   ASSERT_TRUE(native_contents);
 }
@@ -82,9 +85,10 @@ IN_PROC_BROWSER_TEST_F(HistoricalTabSaverBrowserTest,
       WebContentsStateByteBuffer(result, 2);
   WebContentsStateByteBuffer* web_contents_state_ptr = &web_contents_state;
 
-  ASSERT_DCHECK_DEATH_WITH(WebContentsState::RestoreContentsFromByteBuffer(
-                               web_contents_state_ptr, true, false),
-                           "Check failed: data != nullptr (0x0 vs. nullptr)");
+  ASSERT_DCHECK_DEATH_WITH(
+      WebContentsState::RestoreContentsFromByteBuffer(
+          GetProfile(), web_contents_state_ptr, true, false),
+      "Check failed: data != nullptr (0x0 vs. nullptr)");
 #endif
 }
 
@@ -103,9 +107,10 @@ IN_PROC_BROWSER_TEST_F(HistoricalTabSaverBrowserTest,
       WebContentsStateByteBuffer(result, 2);
   WebContentsStateByteBuffer* web_contents_state_ptr = &web_contents_state;
 
-  ASSERT_DCHECK_DEATH_WITH(WebContentsState::RestoreContentsFromByteBuffer(
-                               web_contents_state_ptr, true, false),
-                           "Check failed: size > 0 (0 vs. 0)");
+  ASSERT_DCHECK_DEATH_WITH(
+      WebContentsState::RestoreContentsFromByteBuffer(
+          GetProfile(), web_contents_state_ptr, true, false),
+      "Check failed: size > 0 (0 vs. 0)");
 #endif
 }
 

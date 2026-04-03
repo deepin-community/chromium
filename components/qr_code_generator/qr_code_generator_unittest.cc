@@ -7,10 +7,9 @@
 #include <limits>
 #include <optional>
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
-#include "base/test/scoped_feature_list.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace qr_code_generator {
 
@@ -29,13 +28,13 @@ TEST(QRCodeGeneratorTest, Generate) {
   for (const bool use_alphanum : {false, true}) {
     SCOPED_TRACE(use_alphanum);
     // 'A' is in the alphanumeric set, but 'a' is not.
-    memset(input, use_alphanum ? 'A' : 'a', sizeof(input));
+    UNSAFE_TODO(memset(input, use_alphanum ? 'A' : 'a', sizeof(input)));
 
     for (size_t input_len = 30; input_len < kMaxInputLen; input_len += 10) {
       SCOPED_TRACE(input_len);
 
-      base::expected<GeneratedCode, Error> qr_code =
-          GenerateCode(base::span<const uint8_t>(input, input_len));
+      base::expected<GeneratedCode, Error> qr_code = GenerateCode(
+          UNSAFE_TODO(base::span<const uint8_t>(input, input_len)));
       ASSERT_TRUE(qr_code.has_value());
       auto& qr_data = qr_code->data;
 

@@ -10,7 +10,6 @@
 #include <optional>
 #include <set>
 #include <string>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -29,6 +28,7 @@
 #include "net/reporting/reporting_endpoint.h"
 #include "net/reporting/reporting_header_parser.h"
 #include "net/reporting/reporting_report.h"
+#include "net/reporting/reporting_target_type.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -50,10 +50,10 @@ class ReportingCacheImpl : public ReportingCache {
                  const std::string& user_agent,
                  const std::string& group_name,
                  const std::string& type,
-                 base::Value::Dict body,
+                 base::DictValue body,
                  int depth,
                  base::TimeTicks queued,
-                 int attempts) override;
+                 ReportingTargetType target_type) override;
   void GetReports(
       std::vector<raw_ptr<const ReportingReport, VectorExperimental>>*
           reports_out) const override;
@@ -143,6 +143,9 @@ class ReportingCacheImpl : public ReportingCache {
                                const base::UnguessableToken& reporting_source,
                                const IsolationInfo& isolation_info,
                                const GURL& url) override;
+  void SetEnterpriseEndpointForTesting(
+      const ReportingEndpointGroupKey& group_key,
+      const GURL& url) override;
   IsolationInfo GetIsolationInfoForEndpoint(
       const ReportingEndpoint& endpoint) const override;
 
@@ -393,6 +396,9 @@ class ReportingCacheImpl : public ReportingCache {
   // token. This contains only V1 document endpoints.
   std::map<base::UnguessableToken, std::vector<ReportingEndpoint>>
       document_endpoints_;
+
+  // Endpoints set by the enterprise policy.
+  std::vector<ReportingEndpoint> enterprise_endpoints_;
 
   // Isolation info for each reporting source. Used for determining credentials
   // to send when delivering reports. This contains only V1 document endpoints.

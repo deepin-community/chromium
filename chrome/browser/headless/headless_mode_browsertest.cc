@@ -11,31 +11,36 @@
 // providing a compile time condition over the entire file.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
-#include <memory>
 #include <string>
 
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/files/file.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_restrictions.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/headless/headless_mode_browsertest_utils.h"
 #include "chrome/browser/headless/headless_mode_util.h"
+#include "chrome/browser/infobars/confirm_infobar_creator.h"
 #include "chrome/browser/process_singleton.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/page_info/page_info_infobar_delegate.h"
 #include "chrome/browser/ui/views/frame/app_menu_button.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/headless/clipboard/headless_clipboard.h"     // nogncheck
 #include "components/infobars/content/content_infobar_manager.h"  // nogncheck
+#include "components/infobars/core/confirm_infobar_delegate.h"
+#include "components/infobars/core/infobar.h"
+#include "components/infobars/core/infobars_switches.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -52,15 +57,13 @@
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/models/dialog_model.h"
 #include "ui/display/display_switches.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/switches.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
-using testing::Ge;
-using testing::SizeIs;
 using views::Widget;
 
 namespace headless {
@@ -76,6 +79,8 @@ HeadlessModeBrowserTest::HeadlessModeBrowserTest() {
       FILE_PATH_LITERAL("chrome/browser/headless/test/data"));
   embedded_test_server()->AddDefaultHandlers(test_data);
 }
+
+HeadlessModeBrowserTest::~HeadlessModeBrowserTest() = default;
 
 void HeadlessModeBrowserTest::SetUpCommandLine(
     base::CommandLine* command_line) {
@@ -100,23 +105,15 @@ void HeadlessModeBrowserTest::AppendHeadlessCommandLineSwitches(
   if (command_line->HasSwitch(switches::kHeadfulMode)) {
     headful_mode_ = true;
   } else {
-    command_line->AppendSwitchASCII(::switches::kHeadless,
-                                    kHeadlessSwitchValue);
-    headless::InitHeadlessMode();
+    command_line->AppendSwitch(::switches::kHeadless);
+    auto init_headless_mode = headless::InitHeadlessMode();
+    CHECK(init_headless_mode.has_value()) << init_headless_mode.error();
+    headless_mode_handle_ = std::move(headless::InitHeadlessMode().value());
   }
 }
 
 content::WebContents* HeadlessModeBrowserTest::GetActiveWebContents() {
   return browser()->tab_strip_model()->GetActiveWebContents();
-}
-
-void HeadlessModeBrowserTestWithUserDataDir::SetUpCommandLine(
-    base::CommandLine* command_line) {
-  ASSERT_TRUE(user_data_dir_.CreateUniqueTempDir());
-  ASSERT_TRUE(base::IsDirectoryEmpty(user_data_dir()));
-  command_line->AppendSwitchPath(::switches::kUserDataDir, user_data_dir());
-
-  AppendHeadlessCommandLineSwitches(command_line);
 }
 
 void HeadlessModeBrowserTestWithStartWindowMode::SetUpCommandLine(
@@ -135,23 +132,6 @@ void HeadlessModeBrowserTestWithStartWindowMode::SetUpCommandLine(
   }
 }
 
-void HeadlessModeBrowserTestWithWindowSize::SetUpCommandLine(
-    base::CommandLine* command_line) {
-  HeadlessModeBrowserTest::SetUpCommandLine(command_line);
-  command_line->AppendSwitchASCII(
-      ::switches::kWindowSize,
-      base::StringPrintf("%u,%u", kWindowSize.width(), kWindowSize.height()));
-}
-
-void HeadlessModeBrowserTestWithWindowSizeAndScale::SetUpCommandLine(
-    base::CommandLine* command_line) {
-  HeadlessModeBrowserTest::SetUpCommandLine(command_line);
-  command_line->AppendSwitchASCII(
-      ::switches::kWindowSize,
-      base::StringPrintf("%u,%u", kWindowSize.width(), kWindowSize.height()));
-  command_line->AppendSwitchASCII(::switches::kForceDeviceScaleFactor, "1.5");
-}
-
 namespace {
 
 // Miscellaneous tests -------------------------------------------------------
@@ -160,7 +140,58 @@ IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest, BrowserWindowIsActive) {
   EXPECT_TRUE(browser()->window()->IsActive());
 }
 
-IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest, NoInfoBarInHeadless) {
+// Infobar tests -------------------------------------------------------------
+
+class TestInfoBarDelegate : public ConfirmInfoBarDelegate {
+ public:
+  TestInfoBarDelegate(const TestInfoBarDelegate&) = delete;
+  TestInfoBarDelegate& operator=(const TestInfoBarDelegate&) = delete;
+
+  static void Create(infobars::ContentInfoBarManager* infobar_manager,
+                     int buttons) {
+    infobar_manager->AddInfoBar(
+        CreateConfirmInfoBar(std::unique_ptr<ConfirmInfoBarDelegate>(
+            new TestInfoBarDelegate(buttons))));
+  }
+
+  // ConfirmInfoBarDelegate:
+  infobars::InfoBarDelegate::InfoBarIdentifier GetIdentifier() const override {
+    return TEST_INFOBAR;
+  }
+  std::u16string GetMessageText() const override {
+    return buttons_ ? u"BUTTON" : u"";
+  }
+  int GetButtons() const override { return buttons_; }
+
+ private:
+  explicit TestInfoBarDelegate(int buttons) : buttons_(buttons) {}
+  ~TestInfoBarDelegate() override = default;
+
+  int buttons_;
+};
+
+class HeadlessModeInfobarBrowserTest
+    : public HeadlessModeBrowserTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  HeadlessModeInfobarBrowserTest() = default;
+  ~HeadlessModeInfobarBrowserTest() override = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    HeadlessModeBrowserTest::SetUpCommandLine(command_line);
+    if (disable_infobars()) {
+      command_line->AppendSwitch(::switches::kDisableInfoBars);
+    }
+  }
+
+  bool disable_infobars() const { return GetParam(); }
+};
+
+INSTANTIATE_TEST_SUITE_P(/* no prefix */,
+                         HeadlessModeInfobarBrowserTest,
+                         ::testing::Bool());
+
+IN_PROC_BROWSER_TEST_P(HeadlessModeInfobarBrowserTest, InfoBarsCanBeDisabled) {
   content::WebContents* web_contents = GetActiveWebContents();
   ASSERT_TRUE(web_contents);
 
@@ -168,9 +199,21 @@ IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest, NoInfoBarInHeadless) {
       infobars::ContentInfoBarManager::FromWebContents(web_contents);
   ASSERT_TRUE(infobar_manager);
 
-  PageInfoInfoBarDelegate::Create(infobar_manager);
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  // Chrome for Testing shows its disclaimer infobar upon start.
+  infobar_manager->RemoveAllInfoBars(/*animate=*/false);
+#endif
 
-  EXPECT_THAT(infobar_manager->infobars(), testing::IsEmpty());
+  ASSERT_THAT(infobar_manager->infobars(), testing::IsEmpty());
+
+  TestInfoBarDelegate::Create(infobar_manager,
+                              ConfirmInfoBarDelegate::BUTTON_NONE);
+  TestInfoBarDelegate::Create(infobar_manager,
+                              ConfirmInfoBarDelegate::BUTTON_OK);
+
+  // The infobar with a button should appear even if infobars are disabled.
+  EXPECT_THAT(infobar_manager->infobars(),
+              testing::SizeIs(disable_infobars() ? 1 : 2));
 }
 
 // UserAgent tests -----------------------------------------------------------
@@ -257,26 +300,27 @@ IN_PROC_BROWSER_TEST_F(HeadlessModeUserAgentBrowserTest, UserAgentHasHeadless) {
 
 // Incognito mode tests ------------------------------------------------------
 
-IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTestWithUserDataDir,
-                       StartWithUserDataDir) {
-  // With user data dir expect to start in non incognito mode.
+IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest, StartNonIncognito) {
+  // HeadlessModeBrowserTest class is derived from InProcessBrowserTest which
+  // guarantees that tests are running with a unique user data dir, so expect to
+  // start in non incognito mode which is the default when user data dir is
+  // specified.
   EXPECT_FALSE(browser()->profile()->IsOffTheRecord());
 }
 
-class HeadlessModeBrowserTestWithUserDataDirAndIncognito
-    : public HeadlessModeBrowserTestWithUserDataDir {
+class HeadlessModeBrowserTestWithIncognito : public HeadlessModeBrowserTest {
  public:
-  HeadlessModeBrowserTestWithUserDataDirAndIncognito() = default;
-  ~HeadlessModeBrowserTestWithUserDataDirAndIncognito() override = default;
+  HeadlessModeBrowserTestWithIncognito() = default;
+  ~HeadlessModeBrowserTestWithIncognito() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    HeadlessModeBrowserTestWithUserDataDir::SetUpCommandLine(command_line);
+    HeadlessModeBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(::switches::kIncognito);
   }
 };
 
-IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTestWithUserDataDirAndIncognito,
-                       StartWithUserDataDirAndIncognito) {
+IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTestWithIncognito,
+                       StartWithIncognito) {
   // With user data dir and incognito expect to start in incognito mode.
   EXPECT_TRUE(browser()->profile()->IsOffTheRecord());
 }
@@ -370,15 +414,7 @@ Widget* ShowTestBubble(Browser* browser) {
 }
 
 IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest, HeadlessBubbleVisibility) {
-  // Desktop window widget should be headless.
-  gfx::NativeWindow desktop_window = browser()->window()->GetNativeWindow();
-  Widget* desktop_widget = Widget::GetWidgetForNativeWindow(desktop_window);
-  ASSERT_TRUE(desktop_widget);
-  ASSERT_TRUE(desktop_widget->is_headless());
-
-  // Bubble widget is expected to be headless.
   Widget* bubble_widget = ShowTestBubble(browser());
-  EXPECT_TRUE(bubble_widget->is_headless());
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   // On Windows and Mac in headless mode we still have actual platform
@@ -397,8 +433,6 @@ IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest, HeadlessBubbleVisibility) {
 
 IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest, HeadlessBubbleSize) {
   Widget* bubble_widget = ShowTestBubble(browser());
-  ASSERT_TRUE(bubble_widget->is_headless());
-
   gfx::Rect bounds = test::GetPlatformWindowExpectedBounds(bubble_widget);
   EXPECT_FALSE(bounds.IsEmpty());
 }

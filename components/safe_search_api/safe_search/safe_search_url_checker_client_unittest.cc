@@ -4,6 +4,7 @@
 
 #include "components/safe_search_api/safe_search/safe_search_url_checker_client.h"
 
+#include <array>
 #include <memory>
 #include <utility>
 
@@ -30,25 +31,27 @@ constexpr char kSafeSearchApiUrl[] =
     "https://safesearch.googleapis.com/v1:classify";
 
 std::string BuildResponse(bool is_porn) {
-  base::Value::Dict dict;
-  base::Value::Dict classification_dict;
+  base::DictValue dict;
+  base::DictValue classification_dict;
   if (is_porn)
     classification_dict.Set("pornography", is_porn);
-  base::Value::List classifications_list;
+  base::ListValue classifications_list;
   classifications_list.Append(std::move(classification_dict));
   dict.Set("classifications", std::move(classifications_list));
-  std::string result;
-  base::JSONWriter::Write(dict, &result);
-  return result;
+  return base::WriteJson(dict).value_or("");
 }
 
-const char* kURLs[] = {
-    "http://www.randomsite1.com", "http://www.randomsite2.com",
-    "http://www.randomsite3.com", "http://www.randomsite4.com",
-    "http://www.randomsite5.com", "http://www.randomsite6.com",
-    "http://www.randomsite7.com", "http://www.randomsite8.com",
+constexpr auto kURLs = std::to_array<const char*>({
+    "http://www.randomsite1.com",
+    "http://www.randomsite2.com",
+    "http://www.randomsite3.com",
+    "http://www.randomsite4.com",
+    "http://www.randomsite5.com",
+    "http://www.randomsite6.com",
+    "http://www.randomsite7.com",
+    "http://www.randomsite8.com",
     "http://www.randomsite9.com",
-};
+});
 
 }  // namespace
 

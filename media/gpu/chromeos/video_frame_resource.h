@@ -6,6 +6,7 @@
 #define MEDIA_GPU_CHROMEOS_VIDEO_FRAME_RESOURCE_H_
 
 #include "base/time/time.h"
+#include "base/types/pass_key.h"
 #include "media/base/video_frame_layout.h"
 #include "media/base/video_frame_metadata.h"
 #include "media/gpu/chromeos/frame_resource.h"
@@ -17,6 +18,8 @@ namespace media {
 // Implements a FrameResource that is backed by a media::VideoFrame.
 class VideoFrameResource : public FrameResource {
  public:
+  VideoFrameResource(base::PassKey<VideoFrameResource>,
+                     scoped_refptr<const VideoFrame> frame);
   VideoFrameResource(const VideoFrameResource&) = delete;
   VideoFrameResource& operator=(const VideoFrameResource&) = delete;
 
@@ -35,11 +38,11 @@ class VideoFrameResource : public FrameResource {
   uint8_t* GetWritableVisibleData(size_t plane) override;
   size_t NumDmabufFds() const override;
   int GetDmabufFd(size_t i) const override;
-  scoped_refptr<gfx::NativePixmapDmaBuf> CreateNativePixmapDmaBuf()
+  scoped_refptr<const gfx::NativePixmapDmaBuf> GetNativePixmapDmaBuf()
       const override;
   gfx::GpuMemoryBufferHandle CreateGpuMemoryBufferHandle() const override;
-  gfx::GpuMemoryBuffer* GetGpuMemoryBuffer() const override;
-  gfx::GenericSharedMemoryId GetSharedMemoryId() const override;
+  bool HasMappableSharedImage() const override;
+  scoped_refptr<gpu::ClientSharedImage> GetSharedImage() const override;
   const VideoFrameLayout& layout() const override;
   VideoPixelFormat format() const override;
   int stride(size_t plane) const override;
@@ -48,17 +51,14 @@ class VideoFrameResource : public FrameResource {
   const gfx::Size& coded_size() const override;
   const gfx::Rect& visible_rect() const override;
   const gfx::Size& natural_size() const override;
-  const std::optional<gpu::VulkanYCbCrInfo>& ycbcr_info() const override;
-  void set_ycbcr_info(
-      const std::optional<gpu::VulkanYCbCrInfo>& ycbcr_info) override;
   const VideoFrameMetadata& metadata() const override;
   VideoFrameMetadata& metadata() override;
   void set_metadata(const VideoFrameMetadata& metadata) override;
+  const base::UnguessableToken& tracking_token() const override;
   gfx::ColorSpace ColorSpace() const override;
   void set_color_space(const gfx::ColorSpace& color_space) override;
-  const std::optional<gfx::HDRMetadata>& hdr_metadata() const override;
-  void set_hdr_metadata(
-      const std::optional<gfx::HDRMetadata>& hdr_metadata) override;
+  const gfx::HDRMetadata& hdr_metadata() const override;
+  void set_hdr_metadata(const gfx::HDRMetadata& hdr_metadata) override;
   base::TimeDelta timestamp() const override;
   void set_timestamp(base::TimeDelta timestamp) override;
   void AddDestructionObserver(base::OnceClosure callback) override;
@@ -66,16 +66,20 @@ class VideoFrameResource : public FrameResource {
       const gfx::Rect& visible_rect,
       const gfx::Size& natural_size) override;
   std::string AsHumanReadableString() const override;
+  gfx::GpuMemoryBufferHandle GetGpuMemoryBufferHandleForTesting()
+      const override;
 
   // GetMutableVideoFrame() and GetVideoFrame() return a pointer to the
   // underlying VideoFrame. This lets VideoFrameResource be used to adapt code
   // to work on both VideoFrame and FrameResource types without code
-  // duplication.
+  // duplication. The methods share ownership of the underlying VideoFrame, so
+  // the VideoFrame pointed to by the returned scoped_refptr can outlive |this|.
+  // Conversely, the underlying VideoFrame is guaranteed to remain alive as long
+  // as |this| lives.
   scoped_refptr<VideoFrame> GetMutableVideoFrame();
   scoped_refptr<const VideoFrame> GetVideoFrame() const;
 
  private:
-  explicit VideoFrameResource(scoped_refptr<const VideoFrame> frame);
   ~VideoFrameResource() override;
 
   const scoped_refptr<const VideoFrame> frame_;

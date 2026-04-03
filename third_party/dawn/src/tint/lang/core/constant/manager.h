@@ -30,6 +30,7 @@
 
 #include <utility>
 
+#include "src/tint/lang/core/constant/invalid.h"
 #include "src/tint/lang/core/constant/value.h"
 #include "src/tint/lang/core/number.h"
 #include "src/tint/lang/core/type/manager.h"
@@ -38,6 +39,7 @@
 
 namespace tint::core::constant {
 class Splat;
+class String;
 
 template <typename T>
 class Scalar;
@@ -64,21 +66,6 @@ class Manager final {
 
     /// Destructor
     ~Manager();
-
-    /// Wrap returns a new Manager created with the constants and types of `inner`.
-    /// The Manager returned by Wrap is intended to temporarily extend the constants and types of an
-    /// existing immutable Manager. As the copied constants and types are owned by `inner`, `inner`
-    /// must not be destructed or assigned while using the returned Manager.
-    /// TODO(bclayton) - Evaluate whether there are safer alternatives to this
-    /// function. See crbug.com/tint/460.
-    /// @param inner the immutable Manager to extend
-    /// @return the Manager that wraps `inner`
-    static Manager Wrap(const Manager& inner) {
-        Manager out;
-        out.values_.Wrap(inner.values_);
-        out.types = core::type::Manager::Wrap(inner.types);
-        return out;
-    }
 
     /// @param args the arguments used to construct the type, unique node or node.
     /// @return a pointer to an instance of `T` with the provided arguments.
@@ -108,11 +95,8 @@ class Manager final {
     /// Constructs a splat constant.
     /// @param type the splat type
     /// @param element the splat element
-    /// @param n the number of elements
     /// @returns the value pointer
-    const constant::Splat* Splat(const core::type::Type* type,
-                                 const constant::Value* element,
-                                 size_t n);
+    const constant::Splat* Splat(const core::type::Type* type, const constant::Value* element);
 
     /// @param value the constant value
     /// @return a Scalar holding the i32 value @p value
@@ -121,6 +105,22 @@ class Manager final {
     /// @param value the constant value
     /// @return a Scalar holding the u32 value @p value
     const Scalar<u32>* Get(u32 value);
+
+    /// @param value the constant value
+    /// @return a Scalar holding the u64 value @p value
+    const Scalar<u64>* Get(u64 value);
+
+    /// @param value the constant value
+    /// @return a Scalar holding the i8 value @p value
+    const Scalar<i8>* Get(i8 value);
+
+    /// @param value the constant value
+    /// @return a Scalar holding the u8 value @p value
+    const Scalar<u8>* Get(u8 value);
+
+    /// @param value the constant value
+    /// @return a Scalar holding the u16 value @p value
+    const Scalar<u16>* Get(u16 value);
 
     /// @param value the constant value
     /// @return a Scalar holding the f32 value @p value
@@ -142,10 +142,18 @@ class Manager final {
     /// @return a Scalar holding the AInt value @p value
     const Scalar<AInt>* Get(AInt value);
 
+    /// @param value the string value
+    /// @return a String holding the value @p value
+    const String* Get(std::string_view value);
+
     /// Constructs a constant zero-value of the type @p type.
     /// @param type the constant type
     /// @returns a constant zero-value for the type
     const Value* Zero(const core::type::Type* type);
+
+    /// Constructs an invalid constant
+    /// @returns an invalid constant
+    const constant::Invalid* Invalid();
 
     /// The type manager
     core::type::Manager types;

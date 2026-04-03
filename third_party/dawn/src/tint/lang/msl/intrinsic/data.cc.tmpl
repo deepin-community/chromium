@@ -16,11 +16,14 @@ See:
 
 {{- $I := LoadIntrinsics "src/tint/lang/msl/msl.def" -}}
 
+// clang-format off
+
 #include <limits>
 #include <string>
 
 #include "src/tint/lang/core/intrinsic/type_matchers.h"
 #include "src/tint/lang/msl/intrinsic/dialect.h"
+#include "src/tint/lang/msl/intrinsic/type_matchers.h"
 #include "src/tint/utils/text/string_stream.h"
 
 namespace tint::msl::intrinsic {
@@ -32,3 +35,5 @@ using namespace tint::core::intrinsic;  // NOLINT(build/namespaces)
   "Name"       "Dialect::kData" -}}
 
 }  // namespace tint::msl::intrinsic
+
+// clang-format on

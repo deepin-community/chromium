@@ -5,12 +5,13 @@
 import './xf_button.js';
 import './xf_circular_progress.js';
 
+import {assertNotReachedCase} from 'chrome://resources/js/assert.js';
 import type {IronIconElement} from 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
 
 import {str} from '../../common/js/translations.js';
 
-import {PanelButton} from './xf_button.js';
-import {CircularProgress} from './xf_circular_progress.js';
+import type {PanelButton} from './xf_button.js';
+import type {CircularProgress} from './xf_circular_progress.js';
 import {getTemplate} from './xf_panel_item.html.js';
 
 export enum PanelType {
@@ -43,7 +44,7 @@ export class PanelItem extends HTMLElement {
   /**
    * Callback that signals events happening in the panel (e.g. click).
    */
-  private signal_: (clickedButton: string) => void = console.log;
+  private signal_: (clickedButton: string) => void = console.info;
 
   private updateSummaryPanel_: VoidCallback|null = null;
   private updateProgress_: VoidCallback|null = null;
@@ -205,6 +206,10 @@ export class PanelItem extends HTMLElement {
       case PanelType.SYNC_PROGRESS:
         this.setAttribute('indicator', 'progress');
         break;
+      case PanelType.DEFAULT:
+        break;
+      default:
+        assertNotReachedCase(type);
     }
 
     this.panelType_ = type;
@@ -270,6 +275,8 @@ export class PanelItem extends HTMLElement {
               indicator.setAttribute('icon', `files36:${status}`);
             }
             break;
+          default:
+            break;
         }
         this.indicator_ = indicator;
         if (indicator) {
@@ -328,6 +335,8 @@ export class PanelItem extends HTMLElement {
           textNode.textContent = newValue;
         }
         break;
+      default:
+        break;
     }
   }
 
@@ -349,7 +358,7 @@ export class PanelItem extends HTMLElement {
    */
   disconnectedCallback() {
     // Replace references to any signal callback.
-    this.signal_ = console.log;
+    this.signal_ = console.info;
   }
 
   /**
@@ -374,7 +383,7 @@ export class PanelItem extends HTMLElement {
    * Sets the callback that triggers signals from events on the panel.
    */
   set signalCallback(signal: (signal: string) => void) {
-    this.signal_ = signal || console.log;
+    this.signal_ = signal || console.info;
   }
 
   /**
@@ -525,7 +534,7 @@ export class PanelItem extends HTMLElement {
    * Getter for the panel text div.
    */
   get textDiv() {
-    return this.shadowRoot!.querySelector<HTMLDivElement>('.xf-panel-text');
+    return this.shadowRoot!.querySelector<HTMLElement>('.xf-panel-text');
   }
 
   /**

@@ -113,4 +113,26 @@ TEST(MainMenuBuilderTest, Hidden) {
   EXPECT_EQ(true, [item isHidden]);
 }
 
+TEST(MainMenuBuilderTest, CloseWindowKeyEquivalentApp) {
+  // Close Window shortcut for browser mode.
+  NSMenu* mainMenu = chrome::BuildMainMenu(nil, nil, u"", /* is_pwa */ false,
+                                           /* is_rtl */ false);
+
+  // First comes the App menu, then the File menu.
+  const int kFileMenuItemIndex = 1;
+
+  NSMenuItem* fileMenuItem = [mainMenu itemArray][kFileMenuItemIndex];
+  NSMenuItem* closeWindowMenuItem =
+      [[fileMenuItem submenu] itemWithTag:IDC_CLOSE_WINDOW];
+  EXPECT_TRUE([@"W" isEqualToString:closeWindowMenuItem.keyEquivalent]);
+
+  // Close Window shortcut for PWAs.
+  mainMenu = chrome::BuildMainMenu(nil, nil, u"", /* is_pwa */ true,
+                                   /* is_rtl */ false);
+
+  fileMenuItem = [mainMenu itemArray][kFileMenuItemIndex];
+  closeWindowMenuItem = [[fileMenuItem submenu] itemWithTag:IDC_CLOSE_WINDOW];
+  EXPECT_TRUE([@"w" isEqualToString:closeWindowMenuItem.keyEquivalent]);
+}
+
 }  // namespace

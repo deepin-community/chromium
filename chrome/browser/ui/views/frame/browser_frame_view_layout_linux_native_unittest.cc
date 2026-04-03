@@ -8,7 +8,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "ui/base/models/image_model.h"
@@ -66,19 +65,11 @@ class TestLayoutDelegate : public OpaqueBrowserFrameViewLayoutDelegate {
   bool IsFullscreen() const override { return false; }
   bool IsTabStripVisible() const override { return true; }
   bool GetBorderlessModeEnabled() const override { return false; }
-  int GetTabStripHeight() const override {
-    return GetLayoutConstant(TAB_HEIGHT);
-  }
   bool IsToolbarVisible() const override { return true; }
-  gfx::Size GetTabstripMinimumSize() const override {
-    return gfx::Size(78, 29);
-  }
   int GetTopAreaHeight() const override { return 0; }
   bool UseCustomFrame() const override { return true; }
   bool IsFrameCondensed() const override { return false; }
-  bool EverHasVisibleBackgroundTabShapes() const override { return false; }
-  void UpdateWindowControlsOverlay(
-      const gfx::Rect& bounding_rect) const override {}
+  void UpdateWindowControlsOverlay(const gfx::Rect& bounding_rect) override {}
   bool ShouldDrawRestoredFrameShadow() const override { return true; }
 #if BUILDFLAG(IS_LINUX)
   bool IsTiled() const override { return false; }
@@ -107,7 +98,7 @@ class TestNavButtonProvider : public ui::NavButtonProvider {
       case ui::NavButtonProvider::FrameButtonDisplayType::kMinimize:
         return GetTestImageForSize(kMinimizeButtonSize);
       default:
-        NOTREACHED_NORETURN();
+        NOTREACHED();
     }
   }
 
@@ -121,7 +112,7 @@ class TestNavButtonProvider : public ui::NavButtonProvider {
       case ui::NavButtonProvider::FrameButtonDisplayType::kMinimize:
         return kMinimizeButtonMargin;
       default:
-        NOTREACHED_NORETURN();
+        NOTREACHED();
     }
   }
 
@@ -170,12 +161,14 @@ class BrowserFrameViewLayoutLinuxNativeTest : public ChromeViewsTestBase {
     frame_provider_ = std::make_unique<::TestFrameProvider>();
     auto layout = std::make_unique<BrowserFrameViewLayoutLinuxNative>(
         nav_button_provider_.get(),
-        base::BindRepeating([](ui::WindowFrameProvider* frame_provider,
-                               bool tiled) { return frame_provider; },
-                            frame_provider_.get()));
+        base::BindRepeating(
+            [](ui::WindowFrameProvider* frame_provider, bool tiled,
+               bool maximized) { return frame_provider; },
+            frame_provider_.get()));
     layout->set_delegate(delegate_.get());
     layout->set_forced_window_caption_spacing_for_test(0);
-    widget_ = CreateTestWidget();
+    widget_ =
+        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
     root_view_ = widget_->GetRootView();
     root_view_->SetSize(gfx::Size(kWindowWidth, kWindowWidth));
     layout_manager_ = root_view_->SetLayoutManager(std::move(layout));

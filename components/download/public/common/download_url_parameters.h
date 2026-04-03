@@ -14,15 +14,16 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/types/optional_ref.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_save_info.h"
 #include "components/download/public/common/download_source.h"
 #include "net/base/isolation_info.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/referrer_policy.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "services/network/public/cpp/resource_request_body.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
-#include "storage/browser/blob/blob_data_handle.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -61,8 +62,6 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   using RequestHeadersNameValuePair = std::pair<std::string, std::string>;
   using RequestHeadersType = std::vector<RequestHeadersNameValuePair>;
   using RangeRequestOffsets = std::pair<int64_t, int64_t>;
-  using BlobStorageContextGetter =
-      base::OnceCallback<storage::BlobStorageContext*()>;
   using UploadProgressCallback =
       base::RepeatingCallback<void(uint64_t bytes_uploaded)>;
 
@@ -141,11 +140,6 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   // Body of the HTTP POST request.
   void set_post_body(scoped_refptr<network::ResourceRequestBody> post_body) {
     post_body_ = post_body;
-  }
-
-  // The blob storage context to be used for uploading blobs, if any.
-  void set_blob_storage_context_getter(BlobStorageContextGetter blob_getter) {
-    blob_storage_context_getter_ = std::move(blob_getter);
   }
 
   // If |prefer_cache| is true and the response to |url| is in the HTTP cache,
@@ -284,6 +278,12 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
     update_first_party_url_on_redirect_ = update_first_party_url_on_redirect;
   }
 
+  void set_permissions_policy(
+      const base::optional_ref<const network::PermissionsPolicy>
+          permissions_policy) {
+    permissions_policy_ = permissions_policy.CopyAsOptional();
+  }
+
   OnStartedCallback& callback() { return callback_; }
   bool content_initiated() const { return content_initiated_; }
   const std::string& last_modified() const { return last_modified_; }
@@ -301,9 +301,6 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   const std::string& referrer_encoding() const { return referrer_encoding_; }
   const std::optional<url::Origin>& initiator() const { return initiator_; }
   const std::string& request_origin() const { return request_origin_; }
-  BlobStorageContextGetter get_blob_storage_context_getter() {
-    return std::move(blob_storage_context_getter_);
-  }
 
   // These will be -1 if the request is not associated with a frame. See
   // the constructors for more.
@@ -343,6 +340,9 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   bool update_first_party_url_on_redirect() const {
     return update_first_party_url_on_redirect_;
   }
+  std::optional<network::PermissionsPolicy> permissions_policy() const {
+    return permissions_policy_;
+  }
 
   // STATE CHANGING: All save_info_ sub-objects will be in an indeterminate
   // state following this call.
@@ -368,7 +368,6 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   std::string method_;
   ::network::mojom::CredentialsMode credentials_mode_;
   scoped_refptr<network::ResourceRequestBody> post_body_;
-  BlobStorageContextGetter blob_storage_context_getter_;
   int64_t post_id_;
   bool prefer_cache_;
   GURL referrer_;
@@ -392,6 +391,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   std::optional<net::IsolationInfo> isolation_info_;
   bool has_user_gesture_;
   bool update_first_party_url_on_redirect_;
+  std::optional<network::PermissionsPolicy> permissions_policy_;
 };
 
 }  // namespace download

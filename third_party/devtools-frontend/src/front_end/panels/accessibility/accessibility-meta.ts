@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@ const UIStrings = {
    * @description Command for showing the 'Accessibility' tool
    */
   shoAccessibility: 'Show Accessibility',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/accessibility/accessibility-meta.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
 

@@ -48,6 +48,12 @@ const char* GetContextTypeString(ContextType context_type) {
       return "pathways_exec";
     case ContextType::kPjrtLibraryCall:
       return "pjrt_library_call";
+    case ContextType::kThreadpoolEvent:
+      return "threadpool_event";
+    case ContextType::kJaxServingExecutor:
+      return "jax_serving";
+    case ContextType::kScOffload:
+      return "sparsecore_offload";
   }
 }
 

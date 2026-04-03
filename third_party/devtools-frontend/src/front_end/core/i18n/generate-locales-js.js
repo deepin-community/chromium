@@ -1,11 +1,14 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-const path = require('path');
-const {writeIfChanged} = require('../../../scripts/build/ninja/write-if-changed.js');
+import * as path from 'node:path';
+import yargs from 'yargs';
+import {hideBin} from 'yargs/helpers';
 
-const yargsObject = require('yargs')
+import {writeIfChanged} from '../../../scripts/build/ninja/write-if-changed.js';
+
+const yargsObject = yargs(hideBin(process.argv))
                         .option('target-gen-dir', {
                           type: 'string',
                           demandOption: true,
@@ -31,7 +34,7 @@ const yargsObject = require('yargs')
                           demandOption: true,
                         })
                         .strict()
-                        .argv;
+                        .parseSync();
 
 const remoteLocaleList = yargsObject['remote-locales'].map(locale => `\n  '${locale}',`).join('');
 const bundledLocaleList = yargsObject['bundled-locales'].map(locale => `\n  '${locale}',`).join('');

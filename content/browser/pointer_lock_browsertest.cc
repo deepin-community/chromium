@@ -2,17 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <string>
-
 #include "content/browser/pointer_lock_browsertest.h"
+
+#include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "components/input/render_widget_host_input_event_router.h"
 #include "content/browser/renderer_host/frame_tree.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
-#include "content/browser/renderer_host/render_widget_host_input_event_router.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/features.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -32,6 +31,10 @@
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"
 #include "content/browser/web_contents/web_contents_view_aura.h"
 #endif  // USE_AURA
+#if BUILDFLAG(IS_ANDROID)
+#include "content/browser/renderer_host/render_widget_host_view_android.h"
+#include "content/browser/web_contents/web_contents_view_android.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace content {
 
@@ -114,6 +117,57 @@ void InstallCreateHooksForPointerLockBrowserTests() {
       });
 }
 #endif  // USE_AURA
+#if BUILDFLAG(IS_ANDROID)
+class MockPointerLockRenderWidgetHostView : public RenderWidgetHostViewAndroid {
+ public:
+  MockPointerLockRenderWidgetHostView(RenderWidgetHostImpl* rwhi,
+                                      gfx::NativeView parent_native_view,
+                                      cc::slim::Layer* parent_layer)
+      : RenderWidgetHostViewAndroid(rwhi, parent_native_view, parent_layer) {}
+  ~MockPointerLockRenderWidgetHostView() override {
+    if (pointer_locked_) {
+      UnlockPointer();
+    }
+  }
+
+  blink::mojom::PointerLockResult LockPointer(
+      bool request_unadjusted_movement) override {
+    pointer_locked_ = true;
+
+    return blink::mojom::PointerLockResult::kSuccess;
+  }
+
+  blink::mojom::PointerLockResult ChangePointerLock(
+      bool request_unadjusted_movement) override {
+    return blink::mojom::PointerLockResult::kSuccess;
+  }
+
+  void UnlockPointer() override {
+    if (RenderWidgetHostImpl* host =
+            RenderWidgetHostImpl::From(GetRenderWidgetHost())) {
+      host->LostPointerLock();
+    }
+    pointer_locked_ = false;
+  }
+
+  bool IsPointerLocked() override { return pointer_locked_; }
+
+  bool HasFocus() override { return true; }
+  bool CanBePointerLocked() override { return true; }
+
+ private:
+  bool pointer_locked_ = false;
+};
+
+void InstallCreateHooksForPointerLockBrowserTests() {
+  WebContentsViewAndroid::InstallCreateHookForTests(
+      [](RenderWidgetHostImpl* rwhi, gfx::NativeView parent_native_view,
+         cc::slim::Layer* parent_layer) -> RenderWidgetHostViewAndroid* {
+        return new MockPointerLockRenderWidgetHostView(rwhi, parent_native_view,
+                                                       parent_layer);
+      });
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 class PointerLockBrowserTest : public ContentBrowserTest {
  public:
@@ -285,7 +339,7 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest, MAYBE_PointerLockEventRouting) {
 
   FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
   FrameTreeNode* child = root->child_at(0);
-  RenderWidgetHostInputEventRouter* router =
+  input::RenderWidgetHostInputEventRouter* router =
       web_contents()->GetInputEventRouter();
   RenderWidgetHostViewBase* root_view = static_cast<RenderWidgetHostViewBase*>(
       root->current_frame_host()->GetView());
@@ -293,6 +347,9 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest, MAYBE_PointerLockEventRouting) {
       child->current_frame_host()->GetView());
 
   WaitForHitTestData(child->current_frame_host());
+  // Make sure that page_scale is 1, on Android page scale is not guaranteed to
+  // be 1
+  web_contents()->SetPageScale(1.0);
 
   std::string set_mouse_move_event_listener = R"(
     mouseMoveExecuted = new Promise(function (resolve, reject) {
@@ -335,11 +392,7 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest, MAYBE_PointerLockEventRouting) {
   EXPECT_EQ(true, EvalJs(root,
                          "(async ()=> {return await "
                          "mouseMoveExecuted.then(()=>true);})();"));
-  if (base::FeatureList::IsEnabled(features::kConsolidatedMovementXY))
-    EXPECT_EQ("[6,7,0,0]", EvalJs(root, "JSON.stringify([x,y,mX,mY])"));
-  else
-    EXPECT_EQ("[6,7,8,9]", EvalJs(root, "JSON.stringify([x,y,mX,mY])"));
-
+  EXPECT_EQ("[6,7,0,0]", EvalJs(root, "JSON.stringify([x,y,mX,mY])"));
   EXPECT_EQ(true, PointerLockHelper::RequestPointerLockOnBody(root));
   // Root frame should have been granted pointer lock.
   EXPECT_EQ(true, PointerLockHelper::IsPointerLockOnBody(root));
@@ -355,10 +408,7 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest, MAYBE_PointerLockEventRouting) {
                          "(async ()=> {return await "
                          "mouseMoveExecuted.then(()=>true);})();"));
   // Locked event has same coordinates as before locked.
-  if (base::FeatureList::IsEnabled(features::kConsolidatedMovementXY))
-    EXPECT_EQ("[6,7,4,5]", EvalJs(root, "JSON.stringify([x,y,mX,mY])"));
-  else
-    EXPECT_EQ("[6,7,12,13]", EvalJs(root, "JSON.stringify([x,y,mX,mY])"));
+  EXPECT_EQ("[6,7,4,5]", EvalJs(root, "JSON.stringify([x,y,mX,mY])"));
 
   EXPECT_EQ(true, PointerLockHelper::ExitPointerLock(root));
 
@@ -389,10 +439,7 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest, MAYBE_PointerLockEventRouting) {
                          "(async ()=> {return await "
                          "mouseMoveExecuted.then(()=>true);})()"));
   // This is the first event to child render, so the coordinates is (0, 0)
-  if (base::FeatureList::IsEnabled(features::kConsolidatedMovementXY))
-    EXPECT_EQ("[0,0,0,0]", EvalJs(child, "JSON.stringify([x,y,mX,mY])"));
-  else
-    EXPECT_EQ("[0,0,16,17]", EvalJs(child, "JSON.stringify([x,y,mX,mY])"));
+  EXPECT_EQ("[0,0,0,0]", EvalJs(child, "JSON.stringify([x,y,mX,mY])"));
 }
 
 // Tests that the browser will not unlock the pointer if a RenderWidgetHostView
@@ -542,7 +589,7 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest,
 
   FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
   FrameTreeNode* child = root->child_at(0);
-  RenderWidgetHostInputEventRouter* router =
+  input::RenderWidgetHostInputEventRouter* router =
       web_contents()->GetInputEventRouter();
   RenderWidgetHostViewBase* root_view = static_cast<RenderWidgetHostViewBase*>(
       root->current_frame_host()->GetView());
@@ -550,6 +597,9 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest,
       child->current_frame_host()->GetView());
 
   WaitForHitTestData(child->current_frame_host());
+  // Make sure that page_scale is 1, on Android page scale is not guaranteed to
+  // be 1
+  web_contents()->SetPageScale(1.0);
 
   // Add a mouse move event listener to the root frame.
   EXPECT_TRUE(ExecJs(
@@ -573,10 +623,7 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest,
   MainThreadFrameObserver root_observer(root_view->GetRenderWidgetHost());
   root_observer.Wait();
 
-  if (base::FeatureList::IsEnabled(features::kConsolidatedMovementXY))
-    EXPECT_EQ("[6,7,0,0]", EvalJs(root, "JSON.stringify([x,y,mX,mY])"));
-  else
-    EXPECT_EQ("[6,7,8,9]", EvalJs(root, "JSON.stringify([x,y,mX,mY])"));
+  EXPECT_EQ("[6,7,0,0]", EvalJs(root, "JSON.stringify([x,y,mX,mY])"));
 
   EXPECT_EQ(true, PointerLockHelper::RequestPointerLockOnBody(root));
 
@@ -712,8 +759,16 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest, PointerLockOnDroppedElem) {
   EXPECT_TRUE(ExecJs(shell(), "", EXECUTE_SCRIPT_NO_USER_GESTURE));
 }
 
+// unajustedMovement flag is not supported on Android
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_PointerLockRequestUnadjustedMovement \
+  DISABLED_PointerLockRequestUnadjustedMovement
+#else
+#define MAYBE_PointerLockRequestUnadjustedMovement \
+  PointerLockRequestUnadjustedMovement
+#endif
 IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest,
-                       PointerLockRequestUnadjustedMovement) {
+                       MAYBE_PointerLockRequestUnadjustedMovement) {
   GURL main_url(embedded_test_server()->GetURL(
       "a.com", "/cross_site_iframe_factory.html?a(b)"));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
@@ -780,7 +835,7 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest, DISABLED_UnadjustedMovement) {
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
 
   FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
-  RenderWidgetHostInputEventRouter* router =
+  input::RenderWidgetHostInputEventRouter* router =
       web_contents()->GetInputEventRouter();
   RenderWidgetHostViewBase* root_view = static_cast<RenderWidgetHostViewBase*>(
       root->current_frame_host()->GetView());
@@ -845,8 +900,8 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest, DISABLED_UnadjustedMovement) {
 #endif
 
 #if defined(USE_AURA)
-// TODO(https://crbug.com/982379): Remove failure test when fully implemented
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS_ASH)
+// TODO(crbug.com/40635377): Remove failure test when fully implemented
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_ChangeUnadjustedMovementFailure \
   DISABLED_ChangeUnadjustedMovementFailure
 #else
@@ -887,7 +942,7 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest,
       "request are not supported on this platform.\"\n",
       EvalJs(child,
              "document.body.requestPointerLock({unadjustedMovement:true})")
-          .error);
+          .ExtractError());
 
   // The change errored out but the original lock should still be in place.
   EXPECT_TRUE(child_view->IsPointerLocked());
@@ -931,7 +986,7 @@ IN_PROC_BROWSER_TEST_F(PointerLockBrowserTest,
 
   // Request to change pointer lock options and wait for return.
   EXPECT_EQ(
-      nullptr,
+      base::Value(),
       EvalJs(child,
              "document.body.requestPointerLock({unadjustedMovement:true})"));
 

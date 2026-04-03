@@ -47,10 +47,10 @@ SkPath CreatePathSegment(const SkPath& path, float start, float end) {
   start *= measure.getLength();
   end *= measure.getLength();
 
-  SkPath path_segment;
+  SkPathBuilder path_segment;
   measure.getSegment(start, end, &path_segment, /*start_with_move_to=*/true);
 
-  return path_segment;
+  return path_segment.detach();
 }
 
 // Returns a rounded rect path from the specified `rect` and `corner_radius`.
@@ -110,10 +110,15 @@ float GetInnerRingStrokeWidth(const ui::Layer* layer) {
          std::min(size.width(), size.height());
 }
 
+// TODO(b/324644877): We want the progress ring still keep the same opacity
+// after the `Pulse` animation. Please also provide an option for our this
+// expectation after removing `kForcedShow`.
 // Returns the opacity for the outer ring given the current `progress`.
 float GetOuterRingOpacity(const std::optional<float>& progress) {
-  return progress != ProgressIndicator::kProgressComplete ? kOuterRingOpacity
-                                                          : 1.f;
+  return (progress == ProgressIndicator::kProgressComplete ||
+          progress == ProgressIndicator::kForcedShow)
+             ? 1.f
+             : kOuterRingOpacity;
 }
 
 // Returns the stroke width for the outer ring given `layer` dimensions and
@@ -188,15 +193,17 @@ class DefaultProgressIndicatorAnimationRegistry
         FROM_HERE,
         base::BindOnce(
             [](const base::WeakPtr<DefaultProgressIndicatorAnimationRegistry>&
-                   registry,
-               ProgressRingAnimation* animation) {
-              if (!registry)
+                   self,
+               MayBeDangling<ProgressRingAnimation> animation) {
+              if (!self) {
                 return;
-              auto key = registry->progress_indicator_->animation_key();
-              if (registry->GetProgressRingAnimationForKey(key) == animation)
-                registry->SetProgressRingAnimationForKey(key, nullptr);
+              }
+              auto key = self->progress_indicator_->animation_key();
+              if (self->GetProgressRingAnimationForKey(key) == animation) {
+                self->SetProgressRingAnimationForKey(key, nullptr);
+              }
             },
-            weak_ptr_factory_.GetWeakPtr(), animation));
+            weak_ptr_factory_.GetWeakPtr(), base::UnsafeDangling(animation)));
   }
 
   // Ensures that a progress icon animation exists and is started.
@@ -532,8 +539,10 @@ void ProgressIndicator::OnPaintLayer(const ui::PaintContext& context) {
     // If `start` > `end`, join two path segments as a single path and use that
     // to draw the progress ring. This works around limitations of
     // `SkPathMeasure` which require that `start` be <= `end`.
-    SkPath joined_path(CreatePathSegment(path, start, 1.0f));
-    joined_path.addPath(CreatePathSegment(path, 0.f, end));
+    const SkPath joined_path =
+        SkPathBuilder(CreatePathSegment(path, start, 1.0f))
+            .addPath(CreatePathSegment(path, 0.f, end))
+            .detach();
     canvas->DrawPath(joined_path, flags);
   }
 

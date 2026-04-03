@@ -27,9 +27,10 @@
 
 #include "dawn/native/RenderBundleEncoder.h"
 
+#include <string>
 #include <utility>
 
-#include "dawn/common/StackContainer.h"
+#include "dawn/native/Adapter.h"
 #include "dawn/native/CommandValidation.h"
 #include "dawn/native/Commands.h"
 #include "dawn/native/Device.h"
@@ -47,7 +48,7 @@ MaybeError ValidateColorAttachmentFormat(const DeviceBase* device,
     DAWN_TRY(ValidateTextureFormat(textureFormat));
     const Format* format = nullptr;
     DAWN_TRY_ASSIGN(format, device->GetInternalFormat(textureFormat));
-    DAWN_INVALID_IF(!format->IsColor() || !format->isRenderable,
+    DAWN_INVALID_IF(!format->IsColor() || !format->IsRenderable(),
                     "Texture format %s is not color renderable.", textureFormat);
     return {};
 }
@@ -59,7 +60,7 @@ MaybeError ValidateDepthStencilAttachmentFormat(const DeviceBase* device,
     DAWN_TRY(ValidateTextureFormat(textureFormat));
     const Format* format = nullptr;
     DAWN_TRY_ASSIGN(format, device->GetInternalFormat(textureFormat));
-    DAWN_INVALID_IF(!format->HasDepthOrStencil() || !format->isRenderable,
+    DAWN_INVALID_IF(!format->HasDepthOrStencil() || !format->IsRenderable(),
                     "Texture format %s is not depth/stencil renderable.", textureFormat);
     return {};
 }
@@ -71,8 +72,10 @@ MaybeError ValidateRenderBundleEncoderDescriptor(DeviceBase* device,
 
     uint32_t maxColorAttachments = device->GetLimits().v1.maxColorAttachments;
     DAWN_INVALID_IF(descriptor->colorFormatCount > maxColorAttachments,
-                    "Color formats count (%u) exceeds maximum number of color attachements (%u).",
-                    descriptor->colorFormatCount, maxColorAttachments);
+                    "Color formats count (%u) exceeds maximum number of color attachments (%u).%s",
+                    descriptor->colorFormatCount, maxColorAttachments,
+                    DAWN_INCREASE_LIMIT_MESSAGE(device->GetAdapter()->GetLimits().v1,
+                                                maxColorAttachments, descriptor->colorFormatCount));
 
     bool allColorFormatsUndefined = true;
     ColorAttachmentFormats colorAttachmentFormats;
@@ -81,7 +84,7 @@ MaybeError ValidateRenderBundleEncoderDescriptor(DeviceBase* device,
         if (format != wgpu::TextureFormat::Undefined) {
             DAWN_TRY_CONTEXT(ValidateColorAttachmentFormat(device, format),
                              "validating colorFormats[%u]", i);
-            colorAttachmentFormats->push_back(&device->GetValidInternalFormat(format));
+            colorAttachmentFormats.push_back(&device->GetValidInternalFormat(format));
             allColorFormatsUndefined = false;
         }
     }
@@ -114,12 +117,18 @@ RenderBundleEncoder::RenderBundleEncoder(DeviceBase* device,
     GetObjectTrackingList()->Track(this);
 }
 
-RenderBundleEncoder::RenderBundleEncoder(DeviceBase* device, ErrorTag errorTag, const char* label)
+RenderBundleEncoder::RenderBundleEncoder(DeviceBase* device, ErrorTag errorTag, StringView label)
     : RenderEncoderBase(device, &mBundleEncodingContext, errorTag, label),
-      mBundleEncodingContext(device, this) {}
+      mBundleEncodingContext(device, errorTag) {}
 
-void RenderBundleEncoder::DestroyImpl() {
-    RenderEncoderBase::DestroyImpl();
+RenderBundleEncoder::~RenderBundleEncoder() {
+    mEncodingContext = nullptr;
+}
+
+void RenderBundleEncoder::DestroyImpl(DestroyReason reason) {
+    mIndirectDrawMetadata.ClearIndexedIndirectBufferValidationInfo();
+    mCommandBufferState.End();
+    RenderEncoderBase::DestroyImpl(reason);
     mBundleEncodingContext.Destroy();
 }
 
@@ -131,7 +140,7 @@ Ref<RenderBundleEncoder> RenderBundleEncoder::Create(
 }
 
 // static
-Ref<RenderBundleEncoder> RenderBundleEncoder::MakeError(DeviceBase* device, const char* label) {
+Ref<RenderBundleEncoder> RenderBundleEncoder::MakeError(DeviceBase* device, StringView label) {
     return AcquireRef(new RenderBundleEncoder(device, ObjectBase::kError, label));
 }
 
@@ -143,10 +152,18 @@ CommandIterator RenderBundleEncoder::AcquireCommands() {
     return mBundleEncodingContext.AcquireCommands();
 }
 
+RenderPassResourceUsage RenderBundleEncoder::AcquireRenderPassUsages() {
+    return std::move(mUsages);
+}
+
+IndirectDrawMetadata RenderBundleEncoder::AcquireIndirectDrawMetadata() {
+    return std::move(mIndirectDrawMetadata);
+}
+
 RenderBundleBase* RenderBundleEncoder::APIFinish(const RenderBundleDescriptor* descriptor) {
     Ref<RenderBundleBase> result;
 
-    if (GetDevice()->ConsumedError(FinishImpl(descriptor), &result, "calling %s.Finish(%s).", this,
+    if (GetDevice()->ConsumedError(Finish(descriptor), &result, "calling %s.Finish(%s).", this,
                                    descriptor)) {
         result = RenderBundleBase::MakeError(GetDevice(), descriptor ? descriptor->label : nullptr);
         result->SetEncoderLabel(this->GetLabel());
@@ -155,28 +172,27 @@ RenderBundleBase* RenderBundleEncoder::APIFinish(const RenderBundleDescriptor* d
     return ReturnToAPI(std::move(result));
 }
 
-ResultOrError<Ref<RenderBundleBase>> RenderBundleEncoder::FinishImpl(
+ResultOrError<Ref<RenderBundleBase>> RenderBundleEncoder::Finish(
     const RenderBundleDescriptor* descriptor) {
+    mCommandBufferState.End();
     // Even if mBundleEncodingContext.Finish() validation fails, calling it will mutate the
     // internal state of the encoding context. Subsequent calls to encode commands will generate
     // errors.
     DAWN_TRY(mBundleEncodingContext.Finish());
+    DAWN_TRY(GetDevice()->ValidateIsAlive());
 
-    RenderPassResourceUsage usages = mUsageTracker.AcquireResourceUsage();
+    mUsages = mUsageTracker.AcquireResourceUsage();
     if (IsValidationEnabled()) {
-        DAWN_TRY(GetDevice()->ValidateObject(this));
-        DAWN_TRY(ValidateProgrammableEncoderEnd());
-        DAWN_TRY(ValidateFinish(usages));
+        DAWN_TRY(ValidateFinish(mUsages));
     }
 
-    return AcquireRef(new RenderBundleBase(this, descriptor, AcquireAttachmentState(),
-                                           IsDepthReadOnly(), IsStencilReadOnly(),
-                                           std::move(usages), std::move(mIndirectDrawMetadata)));
+    return GetDevice()->CreateRenderBundle(this, descriptor);
 }
 
 MaybeError RenderBundleEncoder::ValidateFinish(const RenderPassResourceUsage& usages) const {
     TRACE_EVENT0(GetDevice()->GetPlatform(), Validation, "RenderBundleEncoder::ValidateFinish");
     DAWN_TRY(GetDevice()->ValidateObject(this));
+    DAWN_TRY(ValidateProgrammableEncoderEnd());
     DAWN_TRY(ValidateSyncScopeResourceUsage(usages));
     return {};
 }

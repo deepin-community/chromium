@@ -15,8 +15,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/strings/strcat.h"
@@ -120,6 +120,7 @@ inline constexpr char kGetConnectedDevices[] = "GetConnectedDevices";
 inline constexpr char kSdpSearch[] = "SdpSearch";
 inline constexpr char kCreateSdpRecord[] = "CreateSdpRecord";
 inline constexpr char kRemoveSdpRecord[] = "RemoveSdpRecord";
+inline constexpr char kGetSupportedRoles[] = "GetSupportedRoles";
 
 // TODO(abps) - Rename this to AdapterCallback in platform and here
 inline constexpr char kCallbackInterface[] =
@@ -133,6 +134,7 @@ inline constexpr char kOnNameChanged[] = "OnNameChanged";
 inline constexpr char kOnDiscoverableChanged[] = "OnDiscoverableChanged";
 inline constexpr char kOnDeviceFound[] = "OnDeviceFound";
 inline constexpr char kOnDeviceCleared[] = "OnDeviceCleared";
+inline constexpr char kOnDeviceKeyMissing[] = "OnDeviceKeyMissing";
 inline constexpr char kOnDevicePropertiesChanged[] =
     "OnDevicePropertiesChanged";
 inline constexpr char kOnDiscoveringChanged[] = "OnDiscoveringChanged";
@@ -145,6 +147,7 @@ inline constexpr char kOnSdpSearchComplete[] = "OnSdpSearchComplete";
 inline constexpr char kOnSdpRecordCreated[] = "OnSdpRecordCreated";
 inline constexpr char kOnDeviceConnected[] = "OnDeviceConnected";
 inline constexpr char kOnDeviceDisconnected[] = "OnDeviceDisconnected";
+inline constexpr char kOnDeviceConnectionFailed[] = "OnDeviceConnectionFailed";
 
 inline constexpr char kOnScannerRegistered[] = "OnScannerRegistered";
 inline constexpr char kOnScanResult[] = "OnScanResult";
@@ -342,6 +345,7 @@ inline constexpr char kOnDevicePolicyEffectChanged[] =
 inline constexpr char kSetAllowedServices[] = "SetAllowedServices";
 inline constexpr char kGetAllowedServices[] = "GetAllowedServices";
 inline constexpr char kGetDevicePolicyEffect[] = "GetDevicePolicyEffect";
+inline constexpr char kSetSimpleSecurePairingEnabled[] = "SetAcceptSspRequest";
 }  // namespace admin
 
 namespace adapter_logging {
@@ -351,7 +355,6 @@ inline constexpr char kSetDebugLogging[] = "SetDebugLogging";
 
 namespace experimental {
 inline constexpr char kSetLLPrivacy[] = "SetLLPrivacy";
-inline constexpr char kSetDevCoredump[] = "SetDevCoredump";
 }  // namespace experimental
 
 // BluetoothDevice structure for DBus apis.
@@ -524,6 +527,9 @@ class DEVICE_BLUETOOTH_EXPORT FlossDBusClient {
     kJniThreadAttachError,
     kWakelockError,
     kTimeout,
+    kDeviceNotFound,
+    kUnexpectedState,
+    kSocketError,
   };
 
   enum class BluetoothTransport {
@@ -544,7 +550,7 @@ class DEVICE_BLUETOOTH_EXPORT FlossDBusClient {
   // Error: Invalid return.
   static const char kErrorInvalidReturn[];
 
-  // Property key for absl::Optional dbus serialization.
+  // Property key for std::optional dbus serialization.
   static const char kOptionalValueKey[];
 
   // Error: does not exist.
@@ -567,6 +573,10 @@ class DEVICE_BLUETOOTH_EXPORT FlossDBusClient {
 
   // Convert adapter number to logging object path.
   static dbus::ObjectPath GenerateLoggingPath(int adapter_index);
+
+  // Convert Floss error codes to BluetoothDevice defined error codes.
+  static device::BluetoothDevice::ConnectErrorCode BtifStatusToConnectErrorCode(
+      FlossDBusClient::BtifStatus status);
 
   // Generalized DBus serialization (used for generalized method call
   // invocation).
@@ -613,6 +623,12 @@ class DEVICE_BLUETOOTH_EXPORT FlossDBusClient {
       array.CloseContainer(&dict);
     }
     writer->CloseContainer(&array);
+  }
+
+  // Specialized write for base::span<const uint8_t>.
+  static void WriteDBusParam(dbus::MessageWriter* writer,
+                             base::span<const uint8_t> value) {
+    writer->AppendArrayOfBytes(value);
   }
 
   // Optional container type needs to be explicitly listed here.
@@ -815,14 +831,14 @@ class DEVICE_BLUETOOTH_EXPORT FlossDBusClient {
         if (!entry_reader.PopString(&key))
           return false;
 
-        if (base::Contains(fields_, key)) {
+        if (fields_.contains(key)) {
           dbus::MessageReader variant_reader(nullptr);
           entry_reader.PopVariant(&variant_reader);
 
           if (!fields_[key](&variant_reader, data))
             return false;
 
-          if (base::Contains(parsed_fields, key))
+          if (parsed_fields.contains(key))
             return false;
 
           parsed_fields.insert(key);

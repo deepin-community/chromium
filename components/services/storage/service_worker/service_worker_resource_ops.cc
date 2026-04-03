@@ -4,12 +4,20 @@
 
 #include "components/services/storage/service_worker/service_worker_resource_ops.h"
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/numerics/checked_math.h"
 #include "base/pickle.h"
+#include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/services/storage/public/cpp/big_io_buffer.h"
+#include "components/services/storage/service_worker/service_worker_database.pb.h"
+#include "crypto/hash.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_response_info.h"
 #include "services/network/public/cpp/net_adapters.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -76,30 +84,8 @@ std::unique_ptr<base::Pickle> ConvertToPickle(
 
   const bool kSkipTransientHeaders = true;
   const bool kTruncated = false;
-  auto pickle = std::make_unique<base::Pickle>();
-  response_info.Persist(pickle.get(), kSkipTransientHeaders, kTruncated);
-  return pickle;
+  return response_info.MakePickle(kSkipTransientHeaders, kTruncated);
 }
-
-// An IOBuffer that wraps a pickle's data. Used to write URLResponseHead.
-class WrappedPickleIOBuffer : public net::WrappedIOBuffer {
- public:
-  explicit WrappedPickleIOBuffer(std::unique_ptr<const base::Pickle> pickle)
-      : net::WrappedIOBuffer(*pickle), pickle_(std::move(pickle)) {
-    DCHECK(pickle_->data());
-  }
-
-  size_t size() const { return pickle_->size(); }
-
- private:
-  ~WrappedPickleIOBuffer() override {
-    // `data_` is a pointer on `pickle_` and should be nullified before that to
-    // prevent it from being dangling.
-    data_ = nullptr;
-  }
-
-  const std::unique_ptr<const base::Pickle> pickle_;
-};
 
 }  // namespace
 
@@ -322,7 +308,6 @@ class ServiceWorkerResourceReaderImpl::DataReader {
       case MOJO_RESULT_INVALID_ARGUMENT:
       case MOJO_RESULT_BUSY:
         NOTREACHED();
-        return;
       case MOJO_RESULT_FAILED_PRECONDITION:
         Complete(net::ERR_ABORTED);
         return;
@@ -363,6 +348,13 @@ class ServiceWorkerResourceReaderImpl::DataReader {
       return;
     }
 
+    if (read_bytes > 0 && owner_) {
+      if (owner_->sha256_checksum_) {
+        owner_->hasher_.Update(buffer->first(read_bytes));
+      }
+      owner_->bytes_read_so_far_ += read_bytes;
+    }
+
     producer_handle_ = pending_buffer_->Complete(read_bytes);
     DCHECK(producer_handle_.is_valid());
     pending_buffer_.reset();
@@ -391,7 +383,7 @@ class ServiceWorkerResourceReaderImpl::DataReader {
     }
 
     if (owner_) {
-      owner_->DidReadDataComplete();
+      owner_->DidReadDataComplete(status);
     }
   }
 
@@ -421,9 +413,11 @@ class ServiceWorkerResourceReaderImpl::DataReader {
 ServiceWorkerResourceReaderImpl::ServiceWorkerResourceReaderImpl(
     int64_t resource_id,
     base::WeakPtr<ServiceWorkerDiskCache> disk_cache,
-    mojo::PendingReceiver<mojom::ServiceWorkerResourceReader> receiver,
-    base::OnceClosure disconnect_handler)
+    mojo::PendingReceiver<storage::mojom::ServiceWorkerResourceReader> receiver,
+    base::OnceClosure disconnect_handler,
+    const std::optional<const net::SHA256HashValue>& sha256_checksum)
     : entry_opener_(resource_id, std::move(disk_cache)),
+      sha256_checksum_(sha256_checksum),
       receiver_(this, std::move(receiver)) {
   receiver_.set_disconnect_handler(std::move(disconnect_handler));
 }
@@ -532,10 +526,12 @@ void ServiceWorkerResourceReaderImpl::DidReadHttpResponseInfo(
   }
 
   // Deserialize the http info structure, ensuring we got headers.
-  base::Pickle pickle(buffer->data(), status);
+  base::PickleIterator pickle_iter =
+      base::PickleIterator::WithData(base::as_bytes(UNSAFE_TODO(
+          base::span(buffer->data(), base::checked_cast<size_t>(status)))));
   auto http_info = std::make_unique<net::HttpResponseInfo>();
   bool response_truncated = false;
-  if (!http_info->InitFromPickle(pickle, &response_truncated) ||
+  if (!http_info->InitFromPickle(pickle_iter, &response_truncated) ||
       !http_info->headers.get()) {
     FailReadResponseHead(net::ERR_FAILED);
     return;
@@ -544,6 +540,7 @@ void ServiceWorkerResourceReaderImpl::DidReadHttpResponseInfo(
 
   int64_t response_data_size =
       entry_opener_.entry()->GetSize(kResponseContentIndex);
+  expected_total_size_ = response_data_size;
 
   response_head_ = ConvertHttpResponseInfo(*http_info, response_data_size);
 
@@ -562,13 +559,15 @@ void ServiceWorkerResourceReaderImpl::DidReadHttpResponseInfo(
       kResponseMetadataIndex, /*offset=*/0, metadata_buffer_.get(),
       metadata_size,
       base::BindOnce(&ServiceWorkerResourceReaderImpl::DidReadMetadata,
-                     weak_factory_.GetWeakPtr()));
+                     weak_factory_.GetWeakPtr(), metadata_buffer_));
   if (rv != net::ERR_IO_PENDING) {
-    DidReadMetadata(rv);
+    DidReadMetadata(metadata_buffer_, rv);
   }
 }
 
-void ServiceWorkerResourceReaderImpl::DidReadMetadata(int status) {
+void ServiceWorkerResourceReaderImpl::DidReadMetadata(
+    scoped_refptr<BigIOBuffer> metadata_buffer,
+    int status) {
 #if DCHECK_IS_ON()
   DCHECK_EQ(state_, State::kResponseInfoRead);
   state_ = State::kMetadataRead;
@@ -609,12 +608,21 @@ void ServiceWorkerResourceReaderImpl::CompleteReadResponseHead(int status) {
       .Run(status, std::move(response_head_), std::move(metadata));
 }
 
-void ServiceWorkerResourceReaderImpl::DidReadDataComplete() {
+void ServiceWorkerResourceReaderImpl::DidReadDataComplete(int status) {
 #if DCHECK_IS_ON()
   DCHECK_EQ(state_, State::kReadDataStarted);
   state_ = State::kIdle;
 #endif
   DCHECK(data_reader_);
+
+  if (status >= 0 && sha256_checksum_ &&
+      bytes_read_so_far_ == expected_total_size_) {
+    net::SHA256HashValue calculated_checksum;
+    hasher_.Finish(calculated_checksum);
+    base::UmaHistogramBoolean("ServiceWorker.ResourceChecksumMatch",
+                              *sha256_checksum_ == calculated_checksum);
+  }
+
   data_reader_.reset();
 }
 
@@ -671,7 +679,7 @@ void ServiceWorkerResourceWriterImpl::WriteResponseHeadToEntry(
 
   std::unique_ptr<const base::Pickle> pickle =
       ConvertToPickle(std::move(response_head));
-  auto buffer = base::MakeRefCounted<WrappedPickleIOBuffer>(std::move(pickle));
+  auto buffer = base::MakeRefCounted<net::PickledIOBuffer>(std::move(pickle));
 
   size_t write_amount = buffer->size();
   int rv = entry_creator_.entry()->Write(

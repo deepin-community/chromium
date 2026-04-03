@@ -33,13 +33,13 @@ constexpr int32_t kShrinkAxis = -1, kNewAxis = -2;
 // if one does foo[3:5, ..., -3], this will have 3 length tensors
 struct StridedSliceSparseSpec {
   int64_t dims;
-  int32 num_add_axis_after_ellipsis;
+  int32_t num_add_axis_after_ellipsis;
   const Tensor* begin_tensor;
   const Tensor* end_tensor;
   const Tensor& strides_tensor;
-  const int32 begin_mask, end_mask;
-  int32 ellipsis_mask;
-  const int32 new_axis_mask, shrink_axis_mask;
+  const int32_t begin_mask, end_mask;
+  int32_t ellipsis_mask;
+  const int32_t new_axis_mask, shrink_axis_mask;
 };
 
 // Dense slicing specification
@@ -49,38 +49,38 @@ struct StridedSliceSparseSpec {
 // sparse had 3 length tensors.
 struct StridedSliceDenseSpec {
   const int64_t dims;
-  int32 begin_mask;
-  int32 end_mask;
+  int32_t begin_mask;
+  int32_t end_mask;
   bool begin_valid;
   bool end_valid;
-  gtl::InlinedVector<int64_t, 4>& begin;
-  gtl::InlinedVector<int64_t, 4>& end;
-  gtl::InlinedVector<int64_t, 4>& strides;
+  absl::InlinedVector<int64_t, 4UL>& begin;
+  absl::InlinedVector<int64_t, 4UL>& end;
+  absl::InlinedVector<int64_t, 4UL>& strides;
   // This vector helps construct the final shape of the slice.
   // The final tensor is reduced in rank whenever a single index e.g. foo[3]
   // is called for. The final tensor increases in rank with tf.newaxis
   // entries. If an index in this array is positive, the size of the dimension
   // is obtained from canonical end-begin. Otherwise, if it is a kNewAxis,
   // it will be 1. A shrunk dimension is skipped.
-  gtl::InlinedVector<int32, 4> final_shape_gather_indices;
+  absl::InlinedVector<int32_t, 4UL> final_shape_gather_indices;
   // This vector has the same size as final_shape_gather_indices, but it
   // remembers the sparse index that a dimension comes from, instead of dense
   // index. A -1 in this vector means there the index is not from the sparse
   // input.
-  gtl::InlinedVector<int32, 4> final_shape_gather_indices_sparse;
-  gtl::InlinedVector<int32, 4> input_shape_gather_indices_sparse;
+  absl::InlinedVector<int32_t, 4UL> final_shape_gather_indices_sparse;
+  absl::InlinedVector<int32_t, 4UL> input_shape_gather_indices_sparse;
   // The dense indexed shrink mask is which processing dimensions
   // should be shrunk. For example, if foo.shape = (10,10,10,10)
   // foo[3, ..., 5] has sparse_shrink_axis_mask of 0x5 and
   // dense_shrink_axis_mask of 0x9, yielding a final shape (10,10).
-  int32 shrink_axis_mask;
+  int32_t shrink_axis_mask;
 };
 
 }  // namespace
 
 template <class T>
-static Status TF_MUST_USE_RESULT BuildDenseSpec(
-    const StridedSliceSparseSpec& sparse, StridedSliceDenseSpec* dense) {
+static absl::Status BuildDenseSpec(const StridedSliceSparseSpec& sparse,
+                                   StridedSliceDenseSpec* dense) {
   if (dense->dims < 0) {
     return errors::InvalidArgument("Unexpected negative dense.dims: %d",
                                    dense->dims);
@@ -180,18 +180,19 @@ static Status TF_MUST_USE_RESULT BuildDenseSpec(
       }
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status ValidateStridedSliceOp(
+absl::Status ValidateStridedSliceOp(
     const Tensor* begin_tensor, const Tensor* end_tensor,
     const Tensor& strides_tensor, const PartialTensorShape& input_shape,
     int32_t begin_mask_spec, int32_t end_mask_spec, const int32_t ellipsis_mask,
     int32_t new_axis_mask, int32_t shrink_axis_mask,
     PartialTensorShape* processing_shape, PartialTensorShape* final_shape,
     bool* is_identity, bool* is_simple_slice, bool* slice_dim0,
-    gtl::InlinedVector<int64_t, 4>* begin, gtl::InlinedVector<int64_t, 4>* end,
-    gtl::InlinedVector<int64_t, 4>* strides,
+    absl::InlinedVector<int64_t, 4UL>* begin,
+    absl::InlinedVector<int64_t, 4UL>* end,
+    absl::InlinedVector<int64_t, 4UL>* strides,
     StridedSliceShapeSpec* shape_spec) {
   if (input_shape.unknown_rank()) {
     // Note: If the rank is unknown, "input_shape.dims()" is -1.
@@ -280,7 +281,7 @@ Status ValidateStridedSliceOp(
                                       *strides};
 
   if (strides_tensor.dtype() == DT_INT32) {
-    TF_RETURN_IF_ERROR(BuildDenseSpec<int32>(sparse_spec, &dense_spec));
+    TF_RETURN_IF_ERROR(BuildDenseSpec<int32_t>(sparse_spec, &dense_spec));
   } else if (strides_tensor.dtype() == DT_INT64) {
     TF_RETURN_IF_ERROR(BuildDenseSpec<int64_t>(sparse_spec, &dense_spec));
   } else if (strides_tensor.dtype() == DT_INT16) {
@@ -437,18 +438,19 @@ Status ValidateStridedSliceOp(
     }
   }
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status ValidateStridedSliceOp(
+absl::Status ValidateStridedSliceOp(
     const Tensor* begin_tensor, const Tensor* end_tensor,
     const Tensor& strides_tensor, const PartialTensorShape& input_shape,
     int32_t begin_mask_spec, int32_t end_mask_spec, const int32_t ellipsis_mask,
     int32_t new_axis_mask, int32_t shrink_axis_mask,
     TensorShape* processing_shape, TensorShape* final_shape, bool* is_identity,
     bool* is_simple_slice, bool* slice_dim0,
-    gtl::InlinedVector<int64_t, 4>* begin, gtl::InlinedVector<int64_t, 4>* end,
-    gtl::InlinedVector<int64_t, 4>* strides,
+    absl::InlinedVector<int64_t, 4UL>* begin,
+    absl::InlinedVector<int64_t, 4UL>* end,
+    absl::InlinedVector<int64_t, 4UL>* strides,
     StridedSliceShapeSpec* shape_spec) {
   // Validate with PartialTensorShape output
   PartialTensorShape partial_processing_shape, partial_final_shape;
@@ -465,7 +467,7 @@ Status ValidateStridedSliceOp(
                             partial_processing_shape.DebugString(), " and ",
                             partial_final_shape.DebugString());
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 StridedSliceAssignBCast::StridedSliceAssignBCast(

@@ -7,41 +7,37 @@
 #include <memory>
 
 #include "base/check_is_test.h"
-#include "base/debug/alias.h"
-#include "base/debug/dump_without_crashing.h"
+#include "base/cpu.h"
 #include "base/files/file_path.h"
-#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
-#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/screen_ai/pref_names.h"
 #include "components/prefs/pref_service.h"
-#include "components/services/screen_ai/public/cpp/utilities.h"
-#include "content/public/browser/browser_thread.h"
+#include "services/screen_ai/public/cpp/utilities.h"
 #include "ui/accessibility/accessibility_features.h"
 
-#if BUILDFLAG(IS_LINUX)
-#include "base/cpu.h"
-#include "base/files/file_util.h"
-#endif
-
 namespace {
+// From 140.3, the proto has the new `whitespace_bounding_box` field.
+const char kMinExpectedVersion[] = "140.3";
 const int kScreenAICleanUpDelayInDays = 30;
-const char kMinExpectedVersion[] = "123.1";
 
 bool IsDeviceCompatible() {
+#if defined(ARCH_CPU_X86_FAMILY)
   // Check if the CPU has the required instruction set to run the Screen AI
   // library.
-#if BUILDFLAG(IS_LINUX)
-  if (!base::CPU().has_sse41()) {
-    return false;
-  }
+  // TODO(crbug.com/381256355): Update when ScreenAI library is compatible with
+  // older CPUs.
+  static const bool device_compatible = base::CPU().has_sse42();
+#elif BUILDFLAG(IS_LINUX)
+  // On Linux, the library is only built for X86 CPUs.
+  static constexpr bool device_compatible = false;
+#else
+  static constexpr bool device_compatible = true;
 #endif
-  return true;
+
+  return device_compatible;
 }
 
 }  // namespace
@@ -82,26 +78,6 @@ bool ScreenAIInstallState::VerifyLibraryVersion(const base::Version& version) {
   return true;
 }
 
-// TODO(b/41489907): Remove this function once we know why the path is sometimes
-// unexpected.
-// static
-bool ScreenAIInstallState::VerifyLibraryAvailablity(
-    const base::FilePath& install_dir) {
-  // Check the file iterator heuristic to find the library in the sandbox
-  // returns the same directory as `install_dir`.
-  base::FilePath binary_path = screen_ai::GetLatestComponentBinaryPath();
-  if (binary_path.DirName() == install_dir) {
-    return true;
-  }
-
-  VLOG(0) << "Library is installed in an unexpected folder.";
-  DEBUG_ALIAS_FOR_CSTR(expected_path, binary_path.MaybeAsASCII().c_str(), 1024);
-  DEBUG_ALIAS_FOR_CSTR(installed_path, install_dir.MaybeAsASCII().c_str(),
-                       1024);
-  base::debug::DumpWithoutCrashing();
-  return false;
-}
-
 ScreenAIInstallState::ScreenAIInstallState() {
   CHECK_EQ(g_instance, nullptr);
   g_instance = this;
@@ -114,7 +90,10 @@ ScreenAIInstallState::~ScreenAIInstallState() {
 
 // static
 bool ScreenAIInstallState::ShouldInstall(PrefService* local_state) {
-  if (!IsDeviceCompatible()) {
+  bool device_compatible = IsDeviceCompatible();
+  base::UmaHistogramBoolean("Accessibility.ScreenAI.DeviceCompatible",
+                            device_compatible);
+  if (!device_compatible) {
     return false;
   }
 
@@ -132,18 +111,6 @@ bool ScreenAIInstallState::ShouldInstall(PrefService* local_state) {
   }
 
   return true;
-}
-
-// static
-void ScreenAIInstallState::RecordComponentInstallationResult(bool install,
-                                                             bool successful) {
-  if (install) {
-    base::UmaHistogramBoolean("Accessibility.ScreenAI.Component.Install",
-                              successful);
-  } else {
-    base::UmaHistogramBoolean("Accessibility.ScreenAI.Component.Uninstall",
-                              successful);
-  }
 }
 
 void ScreenAIInstallState::AddObserver(
@@ -205,7 +172,6 @@ void ScreenAIInstallState::SetState(State state) {
 }
 
 void ScreenAIInstallState::SetDownloadProgress(double progress) {
-  DCHECK_EQ(state_, State::kDownloading);
   for (ScreenAIInstallState::Observer& observer : observers_) {
     observer.DownloadProgressChanged(progress);
   }

@@ -80,9 +80,8 @@ class DepthStencilLoadOpTests : public DawnTestWithParams<DepthStencilLoadOpTest
 
         DAWN_TEST_UNSUPPORTED_IF(!mIsFormatSupported);
 
-        // Readback of Depth/Stencil textures not fully supported on GL right now.
-        // Also depends on glTextureView which is not supported on ES.
-        DAWN_SUPPRESS_TEST_IF(IsOpenGL() || IsOpenGLES());
+        // TODO(crbug.com/473870505): [Capture] support depth/stencil and multi-planar textures.
+        DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
 
         wgpu::TextureDescriptor descriptor;
         descriptor.size = {kRTSize, kRTSize};
@@ -130,6 +129,8 @@ class DepthStencilLoadOpTests : public DawnTestWithParams<DepthStencilLoadOpTest
         switch (GetParam().mCheck) {
             case Check::SampleDepth: {
                 DAWN_TEST_UNSUPPORTED_IF(utils::IsStencilOnlyFormat(GetParam().mFormat));
+                // textureLoad with texture_depth_xxx is not supported in compat mode.
+                DAWN_TEST_UNSUPPORTED_IF(IsCompatibilityMode());
 
                 std::vector<float> expectedDepth(mipSize * mipSize, kDepthValues[mipLevel]);
                 ExpectSampledDepthData(
@@ -225,6 +226,9 @@ TEST_P(DepthStencilLoadOpTests, ClearBothMip0Then1) {
     // TODO(crbug.com/dawn/1828): depth16unorm broken on Apple GPUs.
     DAWN_SUPPRESS_TEST_IF(IsApple() && GetParam().mFormat == wgpu::TextureFormat::Depth16Unorm);
 
+    // TODO(42242119): fail on Qualcomm Adreno X1.
+    DAWN_SUPPRESS_TEST_IF(IsD3D11() && IsQualcomm());
+
     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
     encoder.BeginRenderPass(&renderPassDescriptors[0]).End();
     encoder.BeginRenderPass(&renderPassDescriptors[1]).End();
@@ -239,6 +243,9 @@ TEST_P(DepthStencilLoadOpTests, ClearBothMip0Then1) {
 TEST_P(DepthStencilLoadOpTests, ClearBothMip1Then0) {
     // TODO(crbug.com/dawn/1828): depth16unorm broken on Apple GPUs.
     DAWN_SUPPRESS_TEST_IF(IsApple() && GetParam().mFormat == wgpu::TextureFormat::Depth16Unorm);
+
+    // TODO(42242119): fail on Qualcomm Adreno X1.
+    DAWN_SUPPRESS_TEST_IF(IsD3D11() && IsQualcomm());
 
     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
     encoder.BeginRenderPass(&renderPassDescriptors[1]).End();
@@ -255,7 +262,7 @@ namespace {
 auto GenerateParam() {
     auto params1 = MakeParamGenerator<DepthStencilLoadOpTestParams>(
         {D3D11Backend(), D3D12Backend(), D3D12Backend({}, {"use_d3d12_render_pass"}),
-         MetalBackend(), OpenGLBackend(), OpenGLESBackend(), VulkanBackend()},
+         MetalBackend(), OpenGLBackend(), OpenGLESBackend(), VulkanBackend(), WebGPUBackend()},
         {wgpu::TextureFormat::Depth32Float, wgpu::TextureFormat::Depth16Unorm},
         {Check::CopyDepth, Check::DepthTest, Check::SampleDepth});
 
@@ -264,7 +271,7 @@ auto GenerateParam() {
          MetalBackend(), MetalBackend({"metal_use_combined_depth_stencil_format_for_stencil8"}),
          MetalBackend(
              {"metal_use_both_depth_and_stencil_attachments_for_combined_depth_stencil_formats"}),
-         OpenGLBackend(), OpenGLESBackend(), VulkanBackend()},
+         OpenGLBackend(), OpenGLESBackend(), VulkanBackend(), WebGPUBackend()},
         {wgpu::TextureFormat::Depth24PlusStencil8, wgpu::TextureFormat::Depth32FloatStencil8,
          wgpu::TextureFormat::Stencil8},
         {Check::CopyStencil, Check::StencilTest, Check::DepthTest, Check::SampleDepth});
@@ -288,6 +295,9 @@ class StencilClearValueOverflowTest : public DepthStencilLoadOpTests {};
 // stencil clear value in encoder.BeginRenderPass() (currently Dawn only supports 8-bit stencil
 // format).
 TEST_P(StencilClearValueOverflowTest, StencilClearValueOverFlowUint8) {
+    // TODO(crbug.com/473870505): [Capture] support depth/stencil and multi-planar textures.
+    DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
+
     constexpr uint32_t kOverflowedStencilValue = kStencilValues[0] + 0x100;
     renderPassDescriptors[0].cDepthStencilAttachmentInfo.stencilClearValue =
         kOverflowedStencilValue;
@@ -304,6 +314,9 @@ TEST_P(StencilClearValueOverflowTest, StencilClearValueOverFlowUint8) {
 // the stencil clear value in encoder.BeginRenderPass() (currently Dawn only supports 8-bit stencil
 // format).
 TEST_P(StencilClearValueOverflowTest, StencilClearValueOverFlowUint16) {
+    // TODO(crbug.com/473870505): [Capture] support depth/stencil and multi-planar textures.
+    DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
+
     constexpr uint32_t kOverflowedStencilValue = kStencilValues[0] + 0x10000;
     renderPassDescriptors[0].cDepthStencilAttachmentInfo.stencilClearValue =
         kOverflowedStencilValue;
@@ -319,7 +332,7 @@ TEST_P(StencilClearValueOverflowTest, StencilClearValueOverFlowUint16) {
 DAWN_INSTANTIATE_TEST_P(StencilClearValueOverflowTest,
                         {D3D11Backend(), D3D12Backend(),
                          D3D12Backend({}, {"use_d3d12_render_pass"}), MetalBackend(),
-                         OpenGLBackend(), OpenGLESBackend(), VulkanBackend()},
+                         OpenGLBackend(), OpenGLESBackend(), VulkanBackend(), WebGPUBackend()},
                         {wgpu::TextureFormat::Depth24PlusStencil8,
                          wgpu::TextureFormat::Depth32FloatStencil8, wgpu::TextureFormat::Stencil8},
                         {Check::CopyStencil, Check::StencilTest});
@@ -380,7 +393,10 @@ class DepthTextureClearTwiceTest : public DawnTestWithParams<DepthTextureClearTw
 };
 
 TEST_P(DepthTextureClearTwiceTest, ClearDepthAspectTwice) {
-    DAWN_SUPPRESS_TEST_IF(!mIsFormatSupported);
+    DAWN_TEST_UNSUPPORTED_IF(!mIsFormatSupported);
+
+    // TODO(crbug.com/473870505): [Capture] support depth/stencil and multi-planar textures.
+    DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
 
     constexpr uint32_t kSize = 64;
     constexpr uint32_t kLevelCount = 5;
@@ -435,14 +451,18 @@ TEST_P(DepthTextureClearTwiceTest, ClearDepthAspectTwice) {
     }
 }
 
-DAWN_INSTANTIATE_TEST_P(DepthTextureClearTwiceTest,
-                        {D3D11Backend(), D3D12Backend(), MetalBackend(), OpenGLBackend(),
-                         OpenGLESBackend(), VulkanBackend()},
-                        {wgpu::TextureFormat::Depth16Unorm, wgpu::TextureFormat::Depth24Plus,
-                         wgpu::TextureFormat::Depth32Float,
-                         wgpu::TextureFormat::Depth32FloatStencil8,
-                         wgpu::TextureFormat::Depth24PlusStencil8},
-                        {true, false});
+DAWN_INSTANTIATE_TEST_P(
+    DepthTextureClearTwiceTest,
+    {D3D11Backend(), D3D11Backend({"use_packed_depth24_unorm_stencil8_format"}), D3D12Backend(),
+     D3D12Backend({"use_packed_depth24_unorm_stencil8_format"}), MetalBackend(), OpenGLBackend(),
+     OpenGLESBackend(), VulkanBackend({"vulkan_use_dynamic_rendering"}, {}),
+     VulkanBackend({"vulkan_use_create_render_pass_2"}, {"vulkan_use_dynamic_rendering"}),
+     VulkanBackend({}, {"vulkan_use_create_render_pass_2", "vulkan_use_dynamic_rendering"}),
+     WebGPUBackend()},
+    {wgpu::TextureFormat::Depth16Unorm, wgpu::TextureFormat::Depth24Plus,
+     wgpu::TextureFormat::Depth32Float, wgpu::TextureFormat::Depth32FloatStencil8,
+     wgpu::TextureFormat::Depth24PlusStencil8},
+    {true, false});
 
 }  // anonymous namespace
 }  // namespace dawn

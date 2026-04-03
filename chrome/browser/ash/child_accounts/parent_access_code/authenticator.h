@@ -13,10 +13,8 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/account_id/account_id.h"
-#include "crypto/hmac.h"
 
-namespace ash {
-namespace parent_access {
+namespace ash::parent_access {
 
 // Configuration used to generate and verify parent access code.
 class AccessCodeConfig {
@@ -24,7 +22,7 @@ class AccessCodeConfig {
   // Returns AccessCodeConfig created from a |dictionary|, if the |dictionary|
   // contains valid config data.
   static std::optional<AccessCodeConfig> FromDictionary(
-      const base::Value::Dict& dictionary);
+      const base::DictValue& dictionary);
 
   // TODO(agawronska): Make constructor private.
   // To create valid AccessCodeConfig:
@@ -56,7 +54,7 @@ class AccessCodeConfig {
   }
 
   // Converts the AccessCodeConfig object to its dictionary equivalent.
-  base::Value::Dict ToDictionary() const;
+  base::DictValue ToDictionary() const;
 
  private:
   std::string shared_secret_;
@@ -90,8 +88,7 @@ class AccessCode {
   // Code expiration time.
   base::Time valid_to() const { return valid_to_; }
 
-  bool operator==(const AccessCode&) const;
-  bool operator!=(const AccessCode&) const;
+  friend bool operator==(const AccessCode&, const AccessCode&) = default;
   friend std::ostream& operator<<(std::ostream&, const AccessCode&);
 
  private:
@@ -137,12 +134,8 @@ class Authenticator {
 
   // Configuration used to generate and validate parent access code.
   const AccessCodeConfig config_;
-
-  // Keyed-hash message authentication generator.
-  crypto::HMAC hmac_{crypto::HMAC::SHA1};
 };
 
-}  // namespace parent_access
-}  // namespace ash
+}  // namespace ash::parent_access
 
 #endif  // CHROME_BROWSER_ASH_CHILD_ACCOUNTS_PARENT_ACCESS_CODE_AUTHENTICATOR_H_

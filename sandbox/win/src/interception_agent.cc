@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 // For information about interceptions as a whole see
 // http://dev.chromium.org/developers/design-documents/sandbox .
 
@@ -160,19 +165,9 @@ bool InterceptionAgent::PatchDll(const DllPatchInfo* dll_info,
     if (!resolver)
       return false;
 
-    const char* interceptor =
-        function->function + GetNtExports()->strlen(function->function) + 1;
-
-    if (!IsWithinRange(function, function->record_bytes, interceptor) ||
-        !IsWithinRange(dll_info, dll_info->record_bytes, interceptor)) {
-      NOTREACHED_NT();
-      return false;
-    }
-
     NTSTATUS ret = resolver->Setup(
-        thunks->base, interceptions_->interceptor_base, function->function,
-        interceptor, function->interceptor_address, &thunks->thunks[i],
-        sizeof(ThunkData), nullptr);
+        thunks->base, function->function, function->interceptor_address,
+        &thunks->thunks[i], sizeof(ThunkData), nullptr);
     if (!NT_SUCCESS(ret)) {
       NOTREACHED_NT();
       return false;

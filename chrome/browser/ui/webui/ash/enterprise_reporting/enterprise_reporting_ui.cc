@@ -15,7 +15,6 @@
 #include "chrome/browser/profiles/reporting_util.h"
 #include "chrome/browser/ui/webui/ash/enterprise_reporting/enterprise_reporting.mojom.h"
 #include "chrome/browser/ui/webui/ash/enterprise_reporting/enterprise_reporting_page_handler.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/enterprise_reporting_resources.h"
 #include "chrome/grit/enterprise_reporting_resources_map.h"
@@ -25,12 +24,13 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/webui/mojo_web_ui_controller.h"
+#include "ui/webui/webui_util.h"
 
 namespace {
 // Returns the device information to be displayed on the
 // chrome://enterprise-reporting page.
-base::Value::Dict GetDeviceInfo(content::WebUI* web_ui) {
-  base::Value::Dict device_info;
+base::DictValue GetDeviceInfo(content::WebUI* web_ui) {
+  base::DictValue device_info;
   policy::BrowserPolicyConnectorAsh* connector =
       g_browser_process->platform_part()->browser_policy_connector_ash();
 
@@ -60,15 +60,12 @@ EnterpriseReportingUI::EnterpriseReportingUI(content::WebUI* web_ui)
           chrome::kChromeUIEnterpriseReportingHost);
 
   // Populate device info.
-  std::string device_info_json;
-  base::JSONWriter::Write(GetDeviceInfo(web_ui), &device_info_json);
-  html_source->AddString("deviceInfo", device_info_json);
+  html_source->AddString("deviceInfo",
+                         base::WriteJson(GetDeviceInfo(web_ui)).value_or(""));
 
   // Add required resources.
   webui::SetupWebUIDataSource(
-      html_source,
-      base::make_span(kEnterpriseReportingResources,
-                      kEnterpriseReportingResourcesSize),
+      html_source, kEnterpriseReportingResources,
       IDR_ENTERPRISE_REPORTING_ENTERPRISE_REPORTING_HTML);
 }
 

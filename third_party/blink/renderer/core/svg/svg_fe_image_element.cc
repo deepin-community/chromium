@@ -24,13 +24,16 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/id_target_observer.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_fe_image.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_preserve_aspect_ratio.h"
+#include "third_party/blink/renderer/core/svg/svg_filter_element.h"
 #include "third_party/blink/renderer/core/svg/svg_preserve_aspect_ratio.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
@@ -56,10 +59,10 @@ void SVGFEImageElement::Trace(Visitor* visitor) const {
   ImageResourceObserver::Trace(visitor);
 }
 
-bool SVGFEImageElement::CurrentFrameHasSingleSecurityOrigin() const {
+bool SVGFEImageElement::HasSingleSecurityOrigin() const {
   if (cached_image_) {
     if (Image* image = cached_image_->GetImage())
-      return image->CurrentFrameHasSingleSecurityOrigin();
+      return image->HasSingleSecurityOrigin();
   }
   return true;
 }
@@ -120,13 +123,11 @@ void SVGFEImageElement::SvgAttributeChanged(
     const SvgAttributeChangedParams& params) {
   const QualifiedName& attr_name = params.name;
   if (attr_name == svg_names::kPreserveAspectRatioAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
 
   if (SVGURIReference::IsKnownAttribute(attr_name)) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     BuildPendingResource();
     return;
   }
@@ -167,6 +168,7 @@ const SVGElement* SVGFEImageElement::TargetElement() const {
 }
 
 FilterEffect* SVGFEImageElement::Build(SVGFilterBuilder*, Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFEImageElement);
   if (cached_image_) {
     // Don't use the broken image icon on image loading errors.
     scoped_refptr<Image> image =

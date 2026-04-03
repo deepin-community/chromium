@@ -18,37 +18,35 @@ limitations under the License.
 #include <utility>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "xla/python/ifrt/array.h"
-#include "tsl/concurrency/ref_count.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace tensorflow {
 namespace ifrt_serving {
 
-absl::Status IfrtLoadedVariableRegistry::RegisterLoadedVariable(
-    absl::string_view name,
-    tsl::RCReference<xla::ifrt::Array> loaded_variable) {
-  absl::MutexLock lock(&mutex_);
-  auto& variable = loaded_variable_map_[name];
-  if (variable != nullptr) {
+absl::Status IfrtLoadedVariableRegistry::TryRegisterLoadedVariable(
+    const Key& key, LoadedVariableConstructor&& loaded_variable_constructor) {
+  absl::MutexLock lock(mutex_);
+  auto& variable = loaded_variable_map_[key];
+  if (variable.array.IsValid()) {
     return absl::AlreadyExistsError(
-        absl::StrCat("Variable '", name, "' already exists."));
+        absl::StrCat("Variable '", key.input_name, "' already registered."));
   }
-  variable = std::move(loaded_variable);
+  TF_ASSIGN_OR_RETURN(variable, loaded_variable_constructor());
   return absl::OkStatus();
 }
 
-absl::StatusOr<tsl::RCReference<xla::ifrt::Array>>
-IfrtLoadedVariableRegistry::GetLoadedVariable(absl::string_view name) const {
-  absl::MutexLock lock(&mutex_);
-  auto it = loaded_variable_map_.find(name);
+absl::StatusOr<IfrtLoadedVariableRegistry::LoadedVariable>
+IfrtLoadedVariableRegistry::GetLoadedVariable(const Key& key) const {
+  absl::MutexLock lock(mutex_);
+  auto it = loaded_variable_map_.find(key);
   if (it == loaded_variable_map_.end()) {
     return absl::NotFoundError(
-        absl::StrCat("Variable '", name, "' not found."));
+        absl::StrCat("Variable '", key.input_name, "' not found."));
   }
   return it->second;
 }

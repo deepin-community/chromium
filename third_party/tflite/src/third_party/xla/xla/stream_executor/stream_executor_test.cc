@@ -15,27 +15,48 @@ limitations under the License.
 
 #include "xla/stream_executor/stream_executor.h"
 
+#include <cstdint>
 #include <memory>
 
-#include "xla/stream_executor/multi_platform_manager.h"
+#include <gtest/gtest.h>
+#include "absl/status/statusor.h"
 #include "xla/stream_executor/platform.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/test.h"
+#include "xla/stream_executor/platform_manager.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 
 namespace stream_executor {
 
-static std::unique_ptr<StreamExecutor> NewStreamExecutor() {
-  Platform* platform = MultiPlatformManager::PlatformWithName("Host").value();
-  StreamExecutorConfig config(/*ordinal=*/0);
-  return platform->GetUncachedExecutor(config).value();
+struct TestResource : public StreamExecutor::Resource {
+  TestResource() = default;
+  explicit TestResource(int32_t value) : value(value) {}
+  int32_t value = 0;
+};
+
+static absl::StatusOr<StreamExecutor*> NewStreamExecutor() {
+  TF_ASSIGN_OR_RETURN(auto platform, PlatformManager::PlatformWithName("Host"));
+  TF_ASSIGN_OR_RETURN(auto stream_exec, platform->ExecutorForDevice(0));
+  return stream_exec;
 }
 
 TEST(StreamExecutorTest, HostMemoryAllocate) {
-  auto executor = NewStreamExecutor();
-
+  TF_ASSERT_OK_AND_ASSIGN(auto executor, NewStreamExecutor());
   TF_ASSERT_OK_AND_ASSIGN(auto allocation, executor->HostMemoryAllocate(1024));
-  EXPECT_NE(allocation->opaque(), nullptr);
-  EXPECT_EQ(allocation->size(), 1024);
+  EXPECT_NE(allocation->address().opaque(), nullptr);
+  EXPECT_EQ(allocation->address().size(), 1024);
+}
+
+TEST(StreamExecutorTest, GetOrCreateResource) {
+  TF_ASSERT_OK_AND_ASSIGN(auto executor, NewStreamExecutor());
+
+  EXPECT_EQ(executor->GetOrNullResource<TestResource>(), nullptr);
+
+  TestResource* resource = executor->GetOrCreateResource<TestResource>(
+      [] { return std::make_unique<TestResource>(42); });
+  EXPECT_NE(resource, nullptr);
+  EXPECT_EQ(resource->value, 42);
+
+  EXPECT_EQ(executor->GetOrNullResource<TestResource>(), resource);
 }
 
 }  // namespace stream_executor

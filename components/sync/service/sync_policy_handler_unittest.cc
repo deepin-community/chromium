@@ -9,13 +9,14 @@
 #include <utility>
 #include <vector>
 
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
 #include "components/policy/core/browser/policy_error_map.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_value_map.h"
+#include "components/sync/base/features.h"
 #include "components/sync/base/pref_names.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -71,7 +72,7 @@ TEST(SyncPolicyHandlerTest, SyncTypesListDisabled) {
 
   // Create a policy that disables some types.
   policy::PolicyMap policy;
-  auto disabled_types = base::Value::List()
+  auto disabled_types = base::ListValue()
                             .Append("bookmarks")
                             .Append("readingList")
                             .Append("preferences");
@@ -113,7 +114,7 @@ TEST(SyncPolicyHandlerTest, SyncTypesListDisabledAutofill) {
 
   // Create a policy that disables autofill.
   policy::PolicyMap policy;
-  auto disabled_types = base::Value::List().Append("autofill");
+  auto disabled_types = base::ListValue().Append("autofill");
   policy.Set(policy::key::kSyncTypesListDisabled,
              policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
              policy::POLICY_SOURCE_CLOUD,
@@ -139,6 +140,32 @@ TEST(SyncPolicyHandlerTest, SyncTypesListDisabledAutofill) {
   EXPECT_TRUE(enabled);
 }
 
+TEST(SyncPolicyHandlerTest, SyncTypesListDisabled_TabsAndSavedTabGroups) {
+  // Start with prefs enabled so we can sense that they have changed.
+  PrefValueMap prefs;
+  prefs.SetBoolean(prefs::internal::kSyncTabs, true);
+  prefs.SetBoolean(prefs::internal::kSyncSavedTabGroups, true);
+
+  // Create a policy that disables tabs.
+  policy::PolicyMap policy;
+  auto disabled_types = base::ListValue().Append("tabs");
+  policy.Set(policy::key::kSyncTypesListDisabled,
+             policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+             policy::POLICY_SOURCE_CLOUD,
+             base::Value(std::move(disabled_types)), nullptr);
+  SyncPolicyHandler handler;
+  handler.ApplyPolicySettings(policy, &prefs);
+
+  // Both tabs and saved tab groups should be disabled.
+  bool enabled;
+  ASSERT_TRUE(prefs.GetBoolean(prefs::internal::kSyncTabs, &enabled));
+  EXPECT_FALSE(enabled);
+  ASSERT_TRUE(prefs.GetBoolean(prefs::internal::kSyncSavedTabGroups, &enabled));
+  EXPECT_FALSE(enabled);
+}
+
+
+
 TEST(SyncPolicyHandlerTest, SyncTypesListDisabledInvalidEntry) {
   // Start with prefs enabled so we can sense that they have changed.
   PrefValueMap prefs;
@@ -151,7 +178,7 @@ TEST(SyncPolicyHandlerTest, SyncTypesListDisabledInvalidEntry) {
   // entry in the list.
   policy::PolicyMap policy;
   auto disabled_types =
-      base::Value::List().Append("bookmarks").Append(123).Append("preferences");
+      base::ListValue().Append("bookmarks").Append(123).Append("preferences");
   policy.Set(policy::key::kSyncTypesListDisabled,
              policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
              policy::POLICY_SOURCE_CLOUD,
@@ -195,7 +222,7 @@ TEST(SyncPolicyHandlerTest, SyncTypesListDisabledUnknownEntry) {
   // or a new data type that this version of the browser doesn't know about yet,
   // or just a typo in the configuration).
   policy::PolicyMap policy;
-  auto disabled_types = base::Value::List()
+  auto disabled_types = base::ListValue()
                             .Append("bookmarks")
                             .Append("nonexistent")
                             .Append("preferences");
@@ -230,7 +257,7 @@ TEST(SyncPolicyHandlerTest, SyncTypesListDisabledUnknownEntry) {
   EXPECT_TRUE(enabled);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
 TEST(SyncPolicyHandlerOsTest, SyncTypesListDisabled_OsTypes) {
   // Start with prefs enabled so we can sense that they have changed.
@@ -241,7 +268,7 @@ TEST(SyncPolicyHandlerOsTest, SyncTypesListDisabled_OsTypes) {
 
   // Create a policy that disables the types.
   policy::PolicyMap policy;
-  auto disabled_types = base::Value::List()
+  auto disabled_types = base::ListValue()
                             .Append("osApps")
                             .Append("osPreferences")
                             .Append("osWifiConfigurations");
@@ -272,7 +299,7 @@ TEST(SyncPolicyHandlerOsTest, SyncTypesListDisabled_MigratedTypes) {
   // Create a policy that disables the types, but using the original browser
   // policy names from before the SplitSettingsSync launch.
   policy::PolicyMap policy;
-  auto disabled_types = base::Value::List()
+  auto disabled_types = base::ListValue()
                             .Append("apps")
                             .Append("wifiConfigurations")
                             .Append("preferences");
@@ -293,7 +320,7 @@ TEST(SyncPolicyHandlerOsTest, SyncTypesListDisabled_MigratedTypes) {
   ASSERT_TRUE(prefs.GetBoolean(prefs::internal::kSyncOsPreferences, &enabled));
   EXPECT_FALSE(enabled);
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace
 }  // namespace syncer

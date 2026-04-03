@@ -5,27 +5,22 @@
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_INSTALL_UTILS_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_INSTALL_UTILS_H_
 
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
-#include "base/strings/string_piece.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_icon_operations.h"
 #include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
+#include "chrome/browser/web_applications/web_app_management_type.h"
 #include "components/services/app_service/public/cpp/file_handler.h"
 #include "components/webapps/common/web_app_id.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom-forward.h"
 
 class GURL;
-
-namespace blink {
-namespace mojom {
-class Manifest;
-}  // namespace mojom
-}  // namespace blink
 
 namespace content {
 class WebContents;
@@ -39,7 +34,6 @@ enum class WebappUninstallSource;
 namespace web_app {
 
 class WebApp;
-class WebAppRegistrar;
 struct WebAppInstallParams;
 
 enum class ForInstallableSite {
@@ -65,18 +59,6 @@ void PopulateFileHandlerInfoFromManifest(
     const GURL& app_scope,
     WebAppInstallInfo* web_app_info);
 
-// Update the given WebAppInstallInfo with information from the manifest.
-// Will sanitise the manifest fields to be suitable for installation to prevent
-// sites from using arbitrarily large amounts of disk space.
-void UpdateWebAppInfoFromManifest(const blink::mojom::Manifest& manifest,
-                                  const GURL& manifest_url,
-                                  WebAppInstallInfo* web_app_info);
-
-// Same as above, but returns a fresh WebAppInstallInfo.
-WebAppInstallInfo CreateWebAppInfoFromManifest(
-    const blink::mojom::Manifest& manifest,
-    const GURL& manifest_url);
-
 // Populate non-product icons in WebAppInstallInfo using the IconsMap. This
 // currently covers shortcut item icons and file handler icons. It ignores
 // icons that might have already existed in `web_app_info`.
@@ -92,6 +74,13 @@ void PopulateOtherIcons(WebAppInstallInfo* web_app_info,
 void PopulateProductIcons(WebAppInstallInfo* web_app_info,
                           const IconsMap* icons_map);
 
+// Populates `web_app_info.trusted_icon_bitmaps`, using the information in
+// `trusted_icons` from the downloaded icons in `icons_map`. It is possible that
+// at the end of the call, the `web_app_info.trusted_icon_bitmaps` field might
+// not be populated due to various factors like icon downloading failure etc.
+void PopulateTrustedIconBitmaps(WebAppInstallInfo& web_app_info,
+                                const IconsMap& icons_map);
+
 // Records downloaded icons result and http code and code class.
 void RecordDownloadedIconsResultAndHttpStatusCodes(
     IconsDownloadedResult result,
@@ -100,13 +89,13 @@ void RecordDownloadedIconsResultAndHttpStatusCodes(
 // Records the class of http status code (2XX, 3XX, 4XX, 5XX) for each processed
 // icon url.
 void RecordDownloadedIconsHttpResultsCodeClass(
-    base::StringPiece histogram_name,
+    std::string_view histogram_name,
     IconsDownloadedResult result,
     const DownloadedIconsHttpResults& icons_http_results);
 
 // Records http status code for each processed icon url.
 void RecordDownloadedIconHttpStatusCodes(
-    base::StringPiece histogram_name,
+    std::string_view histogram_name,
     const DownloadedIconsHttpResults& icons_http_results);
 
 WebAppManagement::Type ConvertExternalInstallSourceToSource(
@@ -124,20 +113,6 @@ WebAppManagement::Type ConvertInstallSurfaceToWebAppSource(
 
 void CreateWebAppInstallTabHelpers(content::WebContents* web_contents);
 
-// The function should be called after removing a source from the WebApp.
-// TODO: Remove this when cleaning up after os integration sub-manager launch.
-void MaybeRegisterOsUninstall(const WebApp* web_app,
-                              WebAppManagementTypes original_sources,
-                              OsIntegrationManager& os_integration_manager,
-                              InstallOsHooksCallback callback);
-
-// The function should be called before adding source to the WebApp.
-// TODO(crbug.com/1401125): Remove this when cleaning up after os integration
-// sub-manager launch.
-void MaybeUnregisterOsUninstall(const WebApp* web_app,
-                                WebAppManagement::Type source_installing,
-                                OsIntegrationManager& os_integration_manager);
-
 // Updates |web_app| using |web_app_info|
 void SetWebAppManifestFields(const WebAppInstallInfo& web_app_info,
                              WebApp& web_app,
@@ -147,13 +122,10 @@ void SetWebAppManifestFields(const WebAppInstallInfo& web_app_info,
 void SetWebAppProductIconFields(const WebAppInstallInfo& web_app_info,
                                 WebApp& web_app);
 
-// Possibly updates |options| to disable OS-integrations based on the
-// configuration of the given app.
-void MaybeDisableOsIntegration(const WebAppRegistrar* app_registrar,
-                               const webapps::AppId& app_id,
-                               InstallOsHooksOptions* options);
-
 // Update |web_app_info| using |install_params|.
+// TODO(crbug.com/354981650): Remove this method after moving fields that modify
+// the web app definition from WebAppInstallParams, and remove install-config
+// information from WebAppInstallInfo.
 void ApplyParamsToWebAppInstallInfo(const WebAppInstallParams& install_params,
                                     WebAppInstallInfo& web_app_info);
 
@@ -164,6 +136,8 @@ void ApplyParamsToFinalizeOptions(
 
 // Returns whether the home tab icons exist.
 bool HomeTabIconsExistInTabStrip(const WebAppInstallInfo& web_app_info);
+
+bool IsSyncEnabledForApps(Profile* profile);
 
 }  // namespace web_app
 

@@ -10,6 +10,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 
 namespace media {
 
@@ -19,17 +20,32 @@ std::string AudioGlitchInfo::ToString() const {
        ", count: ", base::NumberToString(count)});
 }
 
+void AudioGlitchInfo::MaybeAddTraceEvent() const {
+  if (!count) {
+    return;
+  }
+  TRACE_EVENT_INSTANT("audio", "Glitch!", "glitch count", count,
+                      "glitch duration", duration);
+}
+
 // static
-AudioGlitchInfo AudioGlitchInfo::SingleBoundedGlitch(
+AudioGlitchInfo AudioGlitchInfo::SingleBoundedSystemGlitch(
     const base::TimeDelta duration,
     const Direction direction) {
   CHECK(duration.is_positive());
-  if (direction == Direction::kRender) {
-    UMA_HISTOGRAM_LONG_TIMES("Media.Audio.Render.SystemGlitchDuration",
-                             duration);
-  } else {
-    UMA_HISTOGRAM_LONG_TIMES("Media.Audio.Capture.SystemGlitchDuration",
-                             duration);
+  switch (direction) {
+    case Direction::kRender:
+      UMA_HISTOGRAM_LONG_TIMES("Media.Audio.Render.SystemGlitchDuration",
+                               duration);
+      break;
+    case Direction::kCapture:
+      UMA_HISTOGRAM_LONG_TIMES("Media.Audio.Capture.SystemGlitchDuration",
+                               duration);
+      break;
+    case Direction::kLoopback:
+      UMA_HISTOGRAM_LONG_TIMES("Media.Audio.Loopback.SystemGlitchDuration",
+                               duration);
+      break;
   }
   return AudioGlitchInfo{
       .duration = std::clamp(duration, base::Seconds(0), base::Seconds(1)),

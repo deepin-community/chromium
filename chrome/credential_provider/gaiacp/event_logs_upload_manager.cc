@@ -5,11 +5,13 @@
 #include "chrome/credential_provider/gaiacp/event_logs_upload_manager.h"
 
 #include <windows.h>
+
 #include <winevt.h>
 
 #include <memory>
 #include <unordered_map>
 
+#include "base/compiler_specific.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
@@ -229,9 +231,10 @@ bool EventLogReader::HasValidQueryResults() {
     PEVT_VARIANT query_statuses = &status_buffer[0];
 
     for (DWORD i = 0; i < query_names->Count; ++i) {
-      if (query_statuses->UInt32Arr[i] != ERROR_SUCCESS) {
+      if (UNSAFE_TODO(query_statuses->UInt32Arr[i]) != ERROR_SUCCESS) {
         LOGFN(ERROR) << "Query path " << query_names->StringArr[0]
-                     << " has error status " << query_statuses->UInt32Arr[i];
+                     << " has error status "
+                     << UNSAFE_TODO(query_statuses->UInt32Arr[i]);
         return false;
       }
     }
@@ -419,7 +422,7 @@ HRESULT EventLogsUploadManager::UploadEventViewerLogs(
   uint64_t chunk_id = 0;
   size_t log_entries_payload_size = 0;
   int num_upload_requests_made = 0;
-  std::unique_ptr<base::Value::List> log_entry_value_list;
+  std::unique_ptr<base::ListValue> log_entry_value_list;
   EventLogEntry log_entry;
 
   while (event_log_reader.GetNextEventLogEntry(&log_entry) &&
@@ -429,7 +432,7 @@ HRESULT EventLogsUploadManager::UploadEventViewerLogs(
 
     chunk_id = std::max(chunk_id, log_entry.event_id);
 
-    base::Value::Dict log_entry_value = log_entry.ToValue();
+    base::DictValue log_entry_value = log_entry.ToValue();
 
     // Get the JSON for the log to keep track of payload size.
     std::string log_entry_json;
@@ -440,7 +443,7 @@ HRESULT EventLogsUploadManager::UploadEventViewerLogs(
     }
 
     if (!log_entry_value_list) {
-      log_entry_value_list = std::make_unique<base::Value::List>();
+      log_entry_value_list = std::make_unique<base::ListValue>();
     }
     log_entry_value_list->Append(std::move(log_entry_value));
 
@@ -475,7 +478,7 @@ HRESULT EventLogsUploadManager::UploadEventViewerLogs(
 HRESULT EventLogsUploadManager::MakeUploadLogChunkRequest(
     const std::string& access_token,
     uint64_t chunk_id,
-    std::unique_ptr<base::Value::List> log_entries_value_list) {
+    std::unique_ptr<base::ListValue> log_entries_value_list) {
   // The GCPW service uses serial number and machine GUID for identifying
   // the device entry.
   std::wstring serial_number = GetSerialNumber();
@@ -488,7 +491,7 @@ HRESULT EventLogsUploadManager::MakeUploadLogChunkRequest(
 
   size_t num_events_to_upload = log_entries_value_list->size();
 
-  base::Value::Dict request_dict;
+  base::DictValue request_dict;
   request_dict.Set(kRequestSerialNumberParameterName,
                    base::WideToUTF8(serial_number));
   request_dict.Set(kRequestMachineGuidParameterName,
@@ -496,7 +499,7 @@ HRESULT EventLogsUploadManager::MakeUploadLogChunkRequest(
   request_dict.Set(kRequestChunkIdParameterName, static_cast<int>(chunk_id));
   base::Value log_entries = base::Value(std::move(*log_entries_value_list));
   request_dict.Set(kRequestLogEntriesParameterName, std::move(log_entries));
-  std::optional<base::Value> request_result;
+  std::optional<base::DictValue> request_result;
 
   // Make the upload HTTP request.
   hr = WinHttpUrlFetcher::BuildRequestAndFetchResultFromHttpService(
@@ -517,14 +520,14 @@ HRESULT EventLogsUploadManager::MakeUploadLogChunkRequest(
   return S_OK;
 }
 
-base::Value::Dict EventLogsUploadManager::EventLogEntry::ToValue() const {
-  return base::Value::Dict()
+base::DictValue EventLogsUploadManager::EventLogEntry::ToValue() const {
+  return base::DictValue()
       .Set(kEventLogDataParameterName, base::WideToUTF8(data))
       .Set(kEventLogEventIdParameterName, static_cast<int>(event_id))
       .Set(kEventLogSeverityLevelParameterName,
            static_cast<int>(severity_level))
       .Set(kEventLogTimeStampParameterName,
-           base::Value::Dict()
+           base::DictValue()
                .Set(kEventLogTimeStampSecondsParameterName,
                     static_cast<int>(created_ts.seconds))
                .Set(kEventLogTimeStampNanosParameterName,

@@ -6,69 +6,64 @@
 
 #include <jni.h>
 
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/android_autofill/browser/jni_headers_features/AndroidAutofillFeatures_jni.h"
 
 namespace autofill::features {
 
 namespace {
 
-const base::Feature* kFeaturesExposedToJava[] = {
-    &kAndroidAutofillBottomSheetWorkaround,
-    &kAndroidAutofillPrefillRequestsForLoginForms,
-    &kAndroidAutofillSupportVisibilityChanges,
-    &kAndroidAutofillUsePwmPredictionsForOverrides,
-};
+const base::Feature* const kFeaturesExposedToJava[] = {
+    &kAndroidAutofillLazyFrameworkWrapper,
+    &kAutofillVirtualViewStructureAndroidPasskeyLongPress,
+    &kAndroidAutofillForwardIframeOrigin,
+    &kAndroidAutofillImprovedVisibilityDetection};
 
 }  // namespace
 
-// If enabled, we send SparseArrayWithWorkaround class as the PrefillHints for
-// the platform API `AutofillManager.notifyViewReady()` as a workaround for the
-// platform bug, see the comment on the class. This works as a kill switch for
-// the workaround in case any unexpected thing goes wrong.
-BASE_FEATURE(kAndroidAutofillBottomSheetWorkaround,
-             "AndroidAutofillBottomSheetWorkaround",
+// If enabled, at least one passkey must be present to forward passkey requests
+// to the Android Credential Manager. Users can then always (re-)trigger the
+// passkey request with a long-press action on webauthn-annotated fields.
+BASE_FEATURE(kAutofillVirtualViewStructureAndroidPasskeyLongPress,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-// If enabled, we explicitly cancel the ongoing Android autofill session on new
-// document navigation by calling `AutofillManager.cancel()`, we clear the
-// request state in the java side as it works as an indicator to the current
-// session.
-BASE_FEATURE(kAndroidAutofillCancelSessionOnNavigation,
-             "AndroidAutofillCancelSessionOnNavigation",
+// If enabled, the AutofillManagerWrapper class will not be initialized when the
+// AutofillProvider Java class is initialized. Some apps do not use Autofill at
+// all, yet they incur the latency cost of initializing the wrapper. This
+// experiment tests whether lazily initializing the wrapper will cause any
+// issues.
+BASE_FEATURE(kAndroidAutofillLazyFrameworkWrapper,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// If enabled, prefill requests (i.e. calls to
-// `AutofillManager.notifyVirtualViewsReady`) are supported. Such prefill
-// requests are sent at most once per WebView session and are limited to forms
-// that are assumed to be login forms.
-// Future features may extend prefill requests to more form types.
-BASE_FEATURE(kAndroidAutofillPrefillRequestsForLoginForms,
-             "AndroidAutofillPrefillRequestsForLoginForms",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+// If enabled, the origin of a field is forwarded to the Autofill framework if
+// it differs from the origin of the main frame.
+BASE_FEATURE(kAndroidAutofillForwardIframeOrigin,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-// If enabled, visibility changes of form fields of the form of an ongoing
-// Autofill session are communicated to Android's `AutofillManager` by calling
-// `AutofillManager.notifyViewVisibilityChanged()`.
-// See
-// https://developer.android.com/reference/android/view/autofill/AutofillManager#notifyViewVisibilityChanged(android.view.View,%20int,%20boolean)
-// for more details on the API.
-BASE_FEATURE(kAndroidAutofillSupportVisibilityChanges,
-             "AndroidAutofillSupportVisibilityChanges",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+// If enabled, an additional custom "visible" attribute in each node's HtmlInfo
+// is set and sent to the framework.
+BASE_FEATURE(kAndroidAutofillImprovedVisibilityDetection,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-// If enabled, username and password field predictions are taken from
-// `password_manager::FormDataParser` and overwrite Autofill's native
-// predictions. Furthermore, similarity checks between cached forms and focused
-// forms that serve to decide whether to show a bottomsheet are performed using
-// these predictions: Two forms are considered similar iff they have the same
-// `FormDataParser` predictions.
-BASE_FEATURE(kAndroidAutofillUsePwmPredictionsForOverrides,
-             "AndroidAutofillUsePwmPredictionsForOverrides",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+// If enabled, the native autofill provider is updated when the web contents
+// change.
+BASE_FEATURE(kAndroidAutofillUpdateContextForWebContents,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-static jlong JNI_AndroidAutofillFeatures_GetFeature(JNIEnv* env, jint ordinal) {
-  return reinterpret_cast<jlong>(kFeaturesExposedToJava[ordinal]);
+// If enabled, the URL of the current page is passed to the HttpAuth dialog for
+// autofill purposes. Functions as a kill switch. Remove in or after M146.
+BASE_FEATURE(kAndroidAutofillSupportForHttpAuth,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+static int64_t JNI_AndroidAutofillFeatures_GetFeature(JNIEnv* env,
+                                                      int32_t ordinal) {
+  return reinterpret_cast<int64_t>(
+      UNSAFE_TODO(kFeaturesExposedToJava[ordinal]));
 }
 
 }  // namespace autofill::features
+
+DEFINE_JNI(AndroidAutofillFeatures)

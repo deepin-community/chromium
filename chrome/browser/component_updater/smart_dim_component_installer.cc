@@ -75,7 +75,7 @@ std::optional<ComponentFileContents> ReadComponentFiles(
                          std::move(model_flatbuffer));
 }
 
-void UpdateSmartDimMlAgent(const std::optional<ComponentFileContents>& result) {
+void UpdateSmartDimMlAgent(std::optional<ComponentFileContents> result) {
   if (result == std::nullopt) {
     LogLoadComponentEvent(LoadComponentEvent::kReadComponentFilesError);
     return;
@@ -110,7 +110,7 @@ bool SmartDimComponentInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 SmartDimComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -120,7 +120,7 @@ void SmartDimComponentInstallerPolicy::OnCustomUninstall() {}
 void SmartDimComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   // If IsDownloadWorkerReady(), newly downloaded components will take effect
   // on next reboot. This makes sure the updating happens at most once.
@@ -144,7 +144,7 @@ void SmartDimComponentInstallerPolicy::ComponentReady(
 
 // Called during startup and installation before ComponentReady().
 bool SmartDimComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   // Get component version from manifest and compare to the expected_version_.
   // Note: versions should not be treated as simple strings, for example,
@@ -173,8 +173,8 @@ base::FilePath SmartDimComponentInstallerPolicy::GetRelativeInstallDir() const {
 void SmartDimComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
   DCHECK(hash);
-  hash->assign(kSmartDimPublicKeySHA256,
-               kSmartDimPublicKeySHA256 + std::size(kSmartDimPublicKeySHA256));
+  hash->assign(std::begin(kSmartDimPublicKeySHA256),
+               std::end(kSmartDimPublicKeySHA256));
 }
 
 std::string SmartDimComponentInstallerPolicy::GetName() const {

@@ -7,11 +7,11 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <array>
 #include <set>
 #include <string>
 
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -46,7 +46,7 @@ ConfigDirPolicyLoader::ConfigDirPolicyLoader(
       config_dir_(config_dir),
       scope_(scope) {}
 
-ConfigDirPolicyLoader::~ConfigDirPolicyLoader() {}
+ConfigDirPolicyLoader::~ConfigDirPolicyLoader() = default;
 
 void ConfigDirPolicyLoader::InitOnBackgroundThread() {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
@@ -70,9 +70,11 @@ PolicyBundle ConfigDirPolicyLoader::Load() {
 }
 
 base::Time ConfigDirPolicyLoader::LastModificationTime() {
-  static constexpr const base::FilePath::CharType* kConfigDirSuffixes[] = {
-      kMandatoryConfigDir, kRecommendedConfigDir,
-  };
+  constexpr static const auto kConfigDirSuffixes =
+      std::to_array<const base::FilePath::CharType*>({
+          kMandatoryConfigDir,
+          kRecommendedConfigDir,
+      });
 
   base::Time last_modification = base::Time();
   base::File::Info info;
@@ -110,12 +112,12 @@ void ConfigDirPolicyLoader::LoadFromPath(const base::FilePath& path,
   for (base::FilePath config_file_path = file_enumerator.Next();
        !config_file_path.empty(); config_file_path = file_enumerator.Next()) {
     files.insert(config_file_path);
-    LOG_POLICY(INFO, POLICY_FETCHING)
+    VLOG_POLICY(1, POLICY_FETCHING)
         << "Found " << policy_level << " policy file: " << config_file_path;
   }
 
   if (files.empty()) {
-    LOG_POLICY(INFO, POLICY_FETCHING)
+    VLOG_POLICY(1, POLICY_FETCHING)
         << "Skipping " << policy_level
         << " platform policies because no policy file was found at: " << path;
     return;
@@ -137,7 +139,7 @@ void ConfigDirPolicyLoader::LoadFromPath(const base::FilePath& path,
                       << config_file.value() << ": " << error_msg;
       continue;
     }
-    base::Value::Dict* dictionary_value = value->GetIfDict();
+    base::DictValue* dictionary_value = value->GetIfDict();
     if (!dictionary_value) {
       SYSLOG(WARNING) << "Expected JSON dictionary in configuration file "
                       << config_file.value();
@@ -171,7 +173,7 @@ void ConfigDirPolicyLoader::Merge3rdPartyPolicy(const base::Value* policies,
   // entries are component IDs, and the third-level entries are the policies
   // for that domain/component namespace.
 
-  const base::Value::Dict* domains_dictionary = policies->GetIfDict();
+  const base::DictValue* domains_dictionary = policies->GetIfDict();
   if (!domains_dictionary) {
     SYSLOG(WARNING) << "3rdparty value is not a dictionary!";
     return;
@@ -184,13 +186,13 @@ void ConfigDirPolicyLoader::Merge3rdPartyPolicy(const base::Value* policies,
                                         : POLICY_DOMAIN_EXTENSIONS;
 
   for (auto domains_it : *domains_dictionary) {
-    if (!base::Contains(supported_domains, domains_it.first)) {
+    if (!supported_domains.contains(domains_it.first)) {
       SYSLOG(WARNING) << "Unsupported 3rd party policy domain: "
                       << domains_it.first;
       continue;
     }
 
-    const base::Value::Dict* components_dictionary =
+    const base::DictValue* components_dictionary =
         domains_it.second.GetIfDict();
     if (!components_dictionary) {
       SYSLOG(WARNING) << "3rdparty/" << domains_it.first
@@ -200,7 +202,7 @@ void ConfigDirPolicyLoader::Merge3rdPartyPolicy(const base::Value* policies,
 
     PolicyDomain domain = supported_domains[domains_it.first];
     for (auto components_it : *components_dictionary) {
-      const base::Value::Dict* policy_dictionary =
+      const base::DictValue* policy_dictionary =
           components_it.second.GetIfDict();
       if (!policy_dictionary) {
         SYSLOG(WARNING) << "3rdparty/" << domains_it.first << "/"

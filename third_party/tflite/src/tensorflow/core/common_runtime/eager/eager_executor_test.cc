@@ -17,12 +17,12 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/status.h"
+#include "xla/tsl/protobuf/error_codes.pb.h"
 #include "tensorflow/core/platform/status.h"
 #include "tensorflow/core/platform/status_matchers.h"
 #include "tensorflow/core/platform/test.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/status.h"
-#include "tsl/protobuf/error_codes.pb.h"
 
 namespace tensorflow {
 namespace {
@@ -44,16 +44,16 @@ class TestState {
 class TestEagerNode : public EagerNode {
  public:
   explicit TestEagerNode(TestState* state,
-                         Status prepare_return_status = OkStatus(),
-                         Status run_return_status = OkStatus())
+                         absl::Status prepare_return_status = absl::OkStatus(),
+                         absl::Status run_return_status = absl::OkStatus())
       : state_(state),
         prepare_return_status_(prepare_return_status),
         run_return_status_(run_return_status) {}
   TestEagerNode(const TestEagerNode&) = delete;
   TestEagerNode& operator=(const TestEagerNode&) = delete;
-  Status Prepare() override { return prepare_return_status_; }
+  absl::Status Prepare() override { return prepare_return_status_; }
 
-  Status Run() override {
+  absl::Status Run() override {
     if (run_return_status_.ok()) {
       state_->update_success_state();
     } else {
@@ -62,27 +62,27 @@ class TestEagerNode : public EagerNode {
     return run_return_status_;
   };
 
-  void Abort(Status status) override {}
-  string DebugString() const override { return "testEagerNode"; }
+  void Abort(absl::Status status) override {}
+  std::string DebugString() const override { return "testEagerNode"; }
 
  private:
   TestState* state_;
-  Status prepare_return_status_;
-  Status run_return_status_;
+  absl::Status prepare_return_status_;
+  absl::Status run_return_status_;
 };
 
 class TestAsyncEagerNode : public AsyncEagerNode {
  public:
-  explicit TestAsyncEagerNode(TestState* state,
-                              Status prepare_return_status = OkStatus(),
-                              Status run_return_status = OkStatus())
+  explicit TestAsyncEagerNode(
+      TestState* state, absl::Status prepare_return_status = absl::OkStatus(),
+      absl::Status run_return_status = absl::OkStatus())
       : state_(state),
         prepare_return_status_(prepare_return_status),
         run_return_status_(run_return_status) {}
   TestAsyncEagerNode(const TestAsyncEagerNode&) = delete;
   TestAsyncEagerNode& operator=(const TestAsyncEagerNode&) = delete;
 
-  Status Prepare() override { return prepare_return_status_; }
+  absl::Status Prepare() override { return prepare_return_status_; }
 
   void RunAsync(StatusCallback done) override {
     if (run_return_status_.ok()) {
@@ -93,13 +93,13 @@ class TestAsyncEagerNode : public AsyncEagerNode {
     done(run_return_status_);
   };
 
-  void Abort(Status status) override {}
-  string DebugString() const override { return "testAsyncEagerNode"; }
+  void Abort(absl::Status status) override {}
+  std::string DebugString() const override { return "testAsyncEagerNode"; }
 
  private:
   TestState* state_;
-  Status prepare_return_status_;
-  Status run_return_status_;
+  absl::Status prepare_return_status_;
+  absl::Status run_return_status_;
 };
 
 TEST(EagerExecutorTest, TestSyncExecutorWithEagerNode) {
@@ -121,7 +121,7 @@ TEST(EagerExecutorTest, TestSyncExecuteMethodFailureCases) {
   auto sync_node = std::make_unique<TestEagerNode>(state.get());
 
   EXPECT_THAT(async_executor->SyncExecute(sync_node.get()),
-              tensorflow::testing::StatusIs(tensorflow::error::INTERNAL));
+              absl_testing::StatusIs(tensorflow::error::INTERNAL));
   ASSERT_EQ(state->read_state(), TestState::kNotRun);
 
   // Sync Executor with Async node fails
@@ -132,7 +132,7 @@ TEST(EagerExecutorTest, TestSyncExecuteMethodFailureCases) {
   auto async_node = std::make_unique<TestAsyncEagerNode>(state.get());
 
   EXPECT_THAT(sync_executor->SyncExecute(async_node.get()),
-              tensorflow::testing::StatusIs(tensorflow::error::INTERNAL));
+              absl_testing::StatusIs(tensorflow::error::INTERNAL));
   ASSERT_EQ(state->read_state(), TestState::State::kNotRun);
 }
 
@@ -165,7 +165,7 @@ TEST(EagerExecutorTest, TestSyncExecutorFailRun) {
       /*async=*/false, /*enable_streaming_enqueue=*/true);
 
   auto state = std::make_unique<TestState>();
-  auto node = std::make_unique<TestEagerNode>(state.get(), OkStatus(),
+  auto node = std::make_unique<TestEagerNode>(state.get(), absl::OkStatus(),
                                               errors::Internal("test"));
 
   auto status = sync_executor->AddOrExecute(std::move(node));
@@ -232,7 +232,7 @@ TEST(EagerExecutorTest, TestAsyncExecutorFailRun) {
       /*async=*/true, /*enable_streaming_enqueue=*/true);
 
   auto state = std::make_unique<TestState>();
-  auto node = std::make_unique<TestEagerNode>(state.get(), OkStatus(),
+  auto node = std::make_unique<TestEagerNode>(state.get(), absl::OkStatus(),
                                               errors::Internal("test"));
 
   TF_ASSERT_OK(async_executor->AddOrExecute(std::move(node)));
@@ -259,8 +259,8 @@ TEST(EagerExecutorTest, TestAsyncExecutorFailRunWithAsyncNode) {
       /*async=*/true, /*enable_streaming_enqueue=*/true);
 
   auto state = std::make_unique<TestState>();
-  auto node = std::make_unique<TestAsyncEagerNode>(state.get(), OkStatus(),
-                                                   errors::Internal("test"));
+  auto node = std::make_unique<TestAsyncEagerNode>(
+      state.get(), absl::OkStatus(), errors::Internal("test"));
 
   TF_ASSERT_OK(async_executor->AddOrExecute(std::move(node)));
 
@@ -277,9 +277,8 @@ TEST(EagerExecutorTest, TestAsyncExecutorAddNodesAfterShutdown) {
   auto node = std::make_unique<TestAsyncEagerNode>(state.get());
 
   TF_ASSERT_OK(async_executor->ShutDown());
-  EXPECT_THAT(
-      async_executor->AddOrExecute(std::move(node)),
-      tensorflow::testing::StatusIs(tensorflow::error::FAILED_PRECONDITION));
+  EXPECT_THAT(async_executor->AddOrExecute(std::move(node)),
+              absl_testing::StatusIs(tensorflow::error::FAILED_PRECONDITION));
 }
 }  // namespace
 }  // namespace tensorflow

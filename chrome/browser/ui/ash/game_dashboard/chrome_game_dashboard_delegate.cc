@@ -4,20 +4,23 @@
 
 #include "chrome/browser/ui/ash/game_dashboard/chrome_game_dashboard_delegate.h"
 
-#include "ash/components/arc/compat_mode/arc_resize_lock_manager.h"
-#include "ash/components/arc/compat_mode/compat_mode_button_controller.h"
-#include "ash/components/arc/session/connection_holder.h"
-#include "ash/public/cpp/multi_user_window_manager.h"
+#include "ash/multi_user/multi_user_window_manager.h"
+#include "ash/shell.h"
+#include "base/functional/callback_helpers.h"
+#include "chrome/browser/apps/app_service/metrics/app_platform_metrics.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/scalable_iph/scalable_iph_factory.h"
-#include "chrome/browser/ui/ash/multi_user/multi_user_window_manager_helper.h"
-#include "chromeos/ash/components/scalable_iph/scalable_iph.h"
+#include "chromeos/ash/components/growth/campaigns_constants.h"
+#include "chromeos/ash/components/growth/campaigns_manager.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/compat_mode/arc_resize_lock_manager.h"
+#include "chromeos/ash/experiences/arc/compat_mode/compat_mode_button_controller.h"
+#include "chromeos/ash/experiences/arc/session/connection_holder.h"
 #include "components/user_manager/user_manager.h"
 
-ChromeGameDashboardDelegate::ChromeGameDashboardDelegate() {}
+ChromeGameDashboardDelegate::ChromeGameDashboardDelegate() = default;
 
-ChromeGameDashboardDelegate::~ChromeGameDashboardDelegate() {}
+ChromeGameDashboardDelegate::~ChromeGameDashboardDelegate() = default;
 
 void ChromeGameDashboardDelegate::GetIsGame(const std::string& app_id,
                                             IsGameCallback callback) {
@@ -25,6 +28,11 @@ void ChromeGameDashboardDelegate::GetIsGame(const std::string& app_id,
   auto* profile = ProfileManager::GetPrimaryUserProfile();
   CHECK(profile);
   auto* arc_app_list_prefs = ArcAppListPrefs::Get(profile);
+  if (!arc_app_list_prefs) {
+    // If there's no ArcAppListPrefs, assume the app is not a game.
+    std::move(callback).Run(/*is_game=*/false);
+    return;
+  }
   const auto app_category = arc_app_list_prefs->GetAppCategory(app_id);
   // If the category is anything except `kUndefined`, fire the callback,
   // otherwise, retrieve the category from ARC.
@@ -63,6 +71,12 @@ std::string ChromeGameDashboardDelegate::GetArcAppName(
 
 void ChromeGameDashboardDelegate::RecordGameWindowOpenedEvent(
     aura::Window* window) {
+  auto* campaigns_manager = growth::CampaignsManager::Get();
+  if (campaigns_manager) {
+    campaigns_manager->RecordEvent(
+        growth::kGrowthCampaignsEventGameWindowOpened);
+  }
+
   user_manager::UserManager* user_manager = user_manager::UserManager::Get();
   CHECK(user_manager);
   if (user_manager->GetActiveUser() != user_manager->GetPrimaryUser()) {
@@ -70,7 +84,7 @@ void ChromeGameDashboardDelegate::RecordGameWindowOpenedEvent(
   }
 
   ash::MultiUserWindowManager* multi_user_window_manager =
-      MultiUserWindowManagerHelper::GetWindowManager();
+      ash::Shell::Get()->multi_user_window_manager();
   if (multi_user_window_manager) {
     // If multi user is not enabled, `MultiUserWindowManagerStub` is set. It
     // returns an invalid account id.
@@ -81,16 +95,6 @@ void ChromeGameDashboardDelegate::RecordGameWindowOpenedEvent(
       return;
     }
   }
-
-  Profile* profile = ProfileManager::GetPrimaryUserProfile();
-  CHECK(profile);
-
-  scalable_iph::ScalableIph* scalable_iph =
-      ScalableIphFactory::GetForBrowserContext(profile);
-  if (scalable_iph) {
-    scalable_iph->RecordEvent(
-        scalable_iph::ScalableIph::Event::kGameWindowOpened);
-  }
 }
 
 void ChromeGameDashboardDelegate::ShowResizeToggleMenu(aura::Window* window) {
@@ -98,6 +102,14 @@ void ChromeGameDashboardDelegate::ShowResizeToggleMenu(aura::Window* window) {
   GetCompatModeButtonController()->ShowResizeToggleMenu(
       window,
       /*callback=*/base::DoNothing());
+}
+
+ukm::SourceId ChromeGameDashboardDelegate::GetUkmSourceId(
+    const std::string& app_id) {
+  // Get the ukm source id from apps::AppPlatformMetrics.
+  auto* profile = ProfileManager::GetPrimaryUserProfile();
+  CHECK(profile);
+  return apps::AppPlatformMetrics::GetSourceId(profile, app_id);
 }
 
 arc::CompatModeButtonController*

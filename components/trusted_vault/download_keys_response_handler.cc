@@ -4,14 +4,15 @@
 
 #include "components/trusted_vault/download_keys_response_handler.h"
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <utility>
 
-#include "base/ranges/algorithm.h"
 #include "components/trusted_vault/proto/vault.pb.h"
 #include "components/trusted_vault/proto_string_bytes_conversion.h"
 #include "components/trusted_vault/securebox.h"
+#include "components/trusted_vault/standalone_trusted_vault_server_constants.h"
 #include "components/trusted_vault/trusted_vault_connection.h"
 #include "components/trusted_vault/trusted_vault_crypto.h"
 #include "components/trusted_vault/trusted_vault_server_constants.h"
@@ -156,7 +157,6 @@ DownloadKeysResponseHandler::GetErrorFromHttpStatus(
   }
 
   NOTREACHED();
-  return std::nullopt;
 }
 
 DownloadKeysResponseHandler::DownloadKeysResponseHandler(
@@ -187,7 +187,7 @@ DownloadKeysResponseHandler::ProcessResponse(
         /*status=*/TrustedVaultDownloadKeysStatus::kOtherError);
   }
 
-  // TODO(crbug.com/1113598): consider validation of member public key.
+  // TODO(crbug.com/40143544): consider validation of member public key.
   const trusted_vault_pb::SecurityDomainMember::SecurityDomainMembership*
       membership = FindMembershipForSecurityDomain(member, security_domain_);
   if (!membership) {

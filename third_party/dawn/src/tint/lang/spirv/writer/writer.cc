@@ -27,80 +27,160 @@
 
 #include "src/tint/lang/spirv/writer/writer.h"
 
-#include <memory>
-#include <utility>
+#include <string>
 
-#include "src/tint/lang/spirv/writer/ast_printer/ast_printer.h"
+#include "src/tint/lang/core/ir/analysis/subgroup_matrix.h"
+#include "src/tint/lang/core/ir/core_builtin_call.h"
+#include "src/tint/lang/core/ir/referenced_module_vars.h"
+#include "src/tint/lang/core/ir/validator.h"
+#include "src/tint/lang/core/ir/var.h"
+#include "src/tint/lang/core/type/pointer.h"
+#include "src/tint/lang/core/type/u16.h"
 #include "src/tint/lang/spirv/writer/common/option_helpers.h"
 #include "src/tint/lang/spirv/writer/printer/printer.h"
 #include "src/tint/lang/spirv/writer/raise/raise.h"
 
 // Included by 'ast_printer.h', included again here for './tools/run gen' track the dependency.
-#include "spirv/unified1/spirv.h"
+#include "spirv/unified1/spirv.h"  // IWYU pragma: export
 
 namespace tint::spirv::writer {
 
-Result<Output> Generate(core::ir::Module& ir, const Options& options) {
-    bool zero_initialize_workgroup_memory =
-        !options.disable_workgroup_init && options.use_zero_initialize_workgroup_memory_extension;
+Result<SuccessType> CanGenerate(const core::ir::Module& ir, const Options& options) {
+    // The enum is accessible in the API so ensure we have a valid value.
+    switch (options.spirv_version) {
+        case SpvVersion::kSpv13:
+        case SpvVersion::kSpv14:
+        case SpvVersion::kSpv15:
+            break;
+        default:
+            return Failure("unsupported SPIR-V version");
+    }
 
-    {
-        auto res = ValidateBindingOptions(options);
-        if (res != Success) {
-            return res.Failure();
+    // Check optionally supported types against their required options.
+    for (auto* ty : ir.Types()) {
+        if (ty->Is<core::type::SubgroupMatrix>()) {
+            if (!options.extensions.use_vulkan_memory_model) {
+                return Failure("using subgroup matrices requires the Vulkan Memory Model");
+            }
+        }
+        if (ty->Is<core::type::Buffer>()) {
+            return Failure("buffers are not supported by the SPIR-V backend");
+        }
+        if (ty->Is<core::type::U16>()) {
+            return Failure("16-bit unsigned integers are not supported by the SPIR-V backend");
         }
     }
 
-    Output output;
+    // If a remapped entry point name is provided, it must not be empty, and must not contain
+    // embedded null characters.
+    if (!options.remapped_entry_point_name.empty()) {
+        if (options.remapped_entry_point_name.find('\0') != std::string::npos) {
+            return Failure("remapped entry point name contains null character");
+        }
 
-    // Raise from core-dialect to SPIR-V-dialect.
-    if (auto res = Raise(ir, options); res != Success) {
-        return std::move(res.Failure());
+        // Check for multiple entry points.
+        // TODO(375388101): Remove this check when SingleEntryPoint is part of the backend.
+        bool has_entry_point = false;
+        for (auto& func : ir.functions) {
+            if (func->IsEntryPoint()) {
+                if (has_entry_point) {
+                    return Failure("module must only contain a single entry point");
+                }
+                has_entry_point = true;
+            }
+        }
     }
 
-    // Generate the SPIR-V code.
-    auto spirv = Print(ir, zero_initialize_workgroup_memory);
-    if (spirv != Success) {
-        return std::move(spirv.Failure());
+    core::ir::Function* ep_func = nullptr;
+    for (auto* f : ir.functions) {
+        if (!f->IsEntryPoint()) {
+            continue;
+        }
+        if (ir.NameOf(f).NameView() == options.entry_point_name) {
+            ep_func = f;
+            break;
+        }
     }
-    output.spirv = std::move(spirv.Get());
 
-    return output;
+    // No entrypoint, so no bindings needed
+    if (!ep_func) {
+        return Failure("entry point not found");
+    }
+
+    core::ir::ReferencedModuleVars<const core::ir::Module> referenced_module_vars{ir};
+    auto& refs = referenced_module_vars.TransitiveReferences(ep_func);
+
+    // Check for unsupported module-scope variable address spaces.
+    for (auto* var : refs) {
+        auto* ptr = var->Result()->Type()->As<core::type::Pointer>();
+        if (ptr->AddressSpace() == core::AddressSpace::kPixelLocal) {
+            return Failure("pixel_local address space is not supported by the SPIR-V backend");
+        }
+    }
+
+    // Check for calls to unsupported builtin functions.
+    for (auto* inst : ir.Instructions()) {
+        auto* call = inst->As<core::ir::CoreBuiltinCall>();
+        if (!call) {
+            continue;
+        }
+
+        if (call->Func() == core::BuiltinFn::kPrint) {
+            return Failure("print is not supported by the SPIR-V backend");
+        }
+        if (call->Func() == core::BuiltinFn::kHasResource ||
+            call->Func() == core::BuiltinFn::kGetResource) {
+            if (!options.resource_table) {
+                return Failure("hasResource and getResource require a resource table");
+            }
+        }
+    }
+
+    // Check for unsupported shader IO builtins.
+    auto check_io_attributes = [&](const core::IOAttributes& attributes) -> Result<SuccessType> {
+        if (attributes.color.has_value()) {
+            return Failure("@color attribute is not supported by the SPIR-V backend");
+        }
+        return Success;
+    };
+    // Check input attributes.
+    for (auto* param : ep_func->Params()) {
+        if (auto* str = param->Type()->As<core::type::Struct>()) {
+            for (auto* member : str->Members()) {
+                TINT_CHECK_RESULT(check_io_attributes(member->Attributes()));
+            }
+        } else {
+            TINT_CHECK_RESULT(check_io_attributes(param->Attributes()));
+        }
+    }
+    // Check output attributes.
+    if (auto* str = ep_func->ReturnType()->As<core::type::Struct>()) {
+        for (auto* member : str->Members()) {
+            TINT_CHECK_RESULT(check_io_attributes(member->Attributes()));
+        }
+    } else {
+        TINT_CHECK_RESULT(check_io_attributes(ep_func->ReturnAttributes()));
+    }
+
+    TINT_CHECK_RESULT(ValidateBindingOptions(options));
+
+    return Success;
 }
 
-Result<Output> Generate(const Program& program, const Options& options) {
-    if (!program.IsValid()) {
-        return Failure{program.Diagnostics()};
-    }
+Result<Output> Generate(core::ir::Module& ir, const Options& options) {
+    // There are currently no plans on supporting override-expressions, so we can pull this
+    // information out before the raise. If we want to support overrides then this either needs to
+    // happen in raise, before the builtins are polyfilled, or the analysis needs to also look for
+    // `*` operations with subgroup matrices.
+    auto sm_info = core::ir::analysis::GatherSubgroupMatrixInfo(ir);
 
-    bool zero_initialize_workgroup_memory =
-        !options.disable_workgroup_init && options.use_zero_initialize_workgroup_memory_extension;
+    // Raise from core-dialect to SPIR-V-dialect.
+    TINT_CHECK_RESULT(Raise(ir, options));
 
-    {
-        auto res = ValidateBindingOptions(options);
-        if (res != Success) {
-            return res.Failure();
-        }
-    }
+    TINT_CHECK_RESULT_UNWRAP(res, Print(ir, options));
+    res.subgroup_matrix_info = sm_info;
 
-    Output output;
-
-    // Sanitize the program.
-    auto sanitized_result = Sanitize(program, options);
-    if (!sanitized_result.program.IsValid()) {
-        return Failure{sanitized_result.program.Diagnostics()};
-    }
-
-    // Generate the SPIR-V code.
-    auto impl =
-        std::make_unique<ASTPrinter>(sanitized_result.program, zero_initialize_workgroup_memory,
-                                     options.experimental_require_subgroup_uniform_control_flow);
-    if (!impl->Generate()) {
-        return Failure{impl->Diagnostics()};
-    }
-    output.spirv = std::move(impl->Result());
-
-    return output;
+    return res;
 }
 
 }  // namespace tint::spirv::writer

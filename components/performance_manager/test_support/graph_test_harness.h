@@ -6,12 +6,14 @@
 #define COMPONENTS_PERFORMANCE_MANAGER_TEST_SUPPORT_GRAPH_TEST_HARNESS_H_
 
 #include <stdint.h>
+
 #include <memory>
 #include <string>
 #include <utility>
 
 #include "base/check_op.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/test/task_environment.h"
 #include "components/performance_manager/embedder/graph_features.h"
 #include "components/performance_manager/graph/frame_node_impl.h"
@@ -25,9 +27,15 @@
 #include "components/performance_manager/public/browser_child_process_host_proxy.h"
 #include "components/performance_manager/public/render_process_host_id.h"
 #include "components/performance_manager/public/render_process_host_proxy.h"
+#include "content/public/browser/browsing_instance_id.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
+#include "url/origin.h"
+
+namespace content {
+class WebContents;
+}
 
 namespace performance_manager {
 
@@ -110,12 +118,14 @@ struct TestNodeWrapper<FrameNodeImpl>::Factory {
       const blink::LocalFrameToken& frame_token = blink::LocalFrameToken(),
       content::BrowsingInstanceId browsing_instance_id =
           content::BrowsingInstanceId(0),
-      content::SiteInstanceId site_instance_id = content::SiteInstanceId(0),
-      bool is_current = true) {
+      content::SiteInstanceGroupId site_instance_group_id =
+          content::SiteInstanceGroupId(0),
+      bool is_current = true,
+      bool is_active = true) {
     return std::make_unique<FrameNodeImpl>(
         process_node, page_node, parent_frame_node,
         outer_document_for_fenced_frame, render_frame_id, frame_token,
-        browsing_instance_id, site_instance_id, is_current);
+        browsing_instance_id, site_instance_group_id, is_current, is_active);
   }
 };
 
@@ -142,8 +152,8 @@ struct TestNodeWrapper<ProcessNodeImpl>::Factory {
       proxy = RenderProcessHostProxy::CreateForTesting(
           NextTestRenderProcessHostId());
     }
-    return std::make_unique<ProcessNodeImpl>(std::move(proxy),
-                                             base::TaskPriority::HIGHEST);
+    return std::make_unique<ProcessNodeImpl>(
+        std::move(proxy), base::Process::Priority::kMaxValue);
   }
 
   // Creates a ProcessNode for a non-renderer child process.
@@ -170,15 +180,14 @@ struct TestNodeWrapper<ProcessNodeImpl>::Factory {
 template <>
 struct TestNodeWrapper<PageNodeImpl>::Factory {
   static std::unique_ptr<PageNodeImpl> Create(
-      const WebContentsProxy& wc_proxy = WebContentsProxy(),
+      base::WeakPtr<content::WebContents> web_contents = nullptr,
       const std::string& browser_context_id = std::string(),
       const GURL& url = GURL(),
       PagePropertyFlags initial_property_flags = {},
-      base::TimeTicks visibility_change_time = base::TimeTicks::Now(),
-      PageNode::PageState page_state = PageNode::PageState::kActive) {
-    return std::make_unique<PageNodeImpl>(wc_proxy, browser_context_id, url,
-                                          initial_property_flags,
-                                          visibility_change_time, page_state);
+      base::TimeTicks visibility_change_time = base::TimeTicks::Now()) {
+    return std::make_unique<PageNodeImpl>(
+        std::move(web_contents), browser_context_id, url,
+        initial_property_flags, visibility_change_time);
   }
 };
 
@@ -190,9 +199,10 @@ struct TestNodeWrapper<WorkerNodeImpl>::Factory {
       WorkerNode::WorkerType worker_type,
       ProcessNodeImpl* process_node,
       const std::string& browser_context_id = std::string(),
-      const blink::WorkerToken& token = blink::WorkerToken()) {
+      const blink::WorkerToken& token = blink::WorkerToken(),
+      const url::Origin& origin = url::Origin()) {
     return std::make_unique<WorkerNodeImpl>(browser_context_id, worker_type,
-                                            process_node, token);
+                                            process_node, token, origin);
   }
 };
 
@@ -248,7 +258,9 @@ class TestGraphImpl : public GraphImpl {
   TestNodeWrapper<FrameNodeImpl> CreateFrameNodeAutoId(
       ProcessNodeImpl* process_node,
       PageNodeImpl* page_node,
-      FrameNodeImpl* parent_frame_node = nullptr);
+      FrameNodeImpl* parent_frame_node = nullptr,
+      content::BrowsingInstanceId browsing_instance_id =
+          content::BrowsingInstanceId());
 
   // Wrappers around Create<ProcessNodeImpl>(...) that make the type of process
   // more clear.
@@ -295,9 +307,11 @@ class GraphTestHarness : public ::testing::Test {
   TestNodeWrapper<FrameNodeImpl> CreateFrameNodeAutoId(
       ProcessNodeImpl* process_node,
       PageNodeImpl* page_node,
-      FrameNodeImpl* parent_frame_node = nullptr) {
-    return graph()->CreateFrameNodeAutoId(process_node, page_node,
-                                          parent_frame_node);
+      FrameNodeImpl* parent_frame_node = nullptr,
+      content::BrowsingInstanceId browsing_instance_id =
+          content::BrowsingInstanceId()) {
+    return graph()->CreateFrameNodeAutoId(
+        process_node, page_node, parent_frame_node, browsing_instance_id);
   }
 
   TestNodeWrapper<ProcessNodeImpl> CreateBrowserProcessNode() {

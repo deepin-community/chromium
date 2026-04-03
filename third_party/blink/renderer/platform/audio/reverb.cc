@@ -35,6 +35,7 @@
 #include <utility>
 
 #include "build/build_config.h"
+#include "media/base/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/vector_math.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
@@ -267,7 +268,7 @@ void Reverb::Process(const AudioBus* source_bus,
 
     destination_bus->SumFrom(*temp_buffer_);
   } else {
-    DUMP_WILL_BE_NOTREACHED_NORETURN();
+    DUMP_WILL_BE_NOTREACHED();
     destination_bus->Zero();
   }
 }

@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "extensions/common/utils/extension_types_utils.h"
+
+#include "base/notreached.h"
 #include "extensions/common/api/extension_types.h"
 #include "extensions/common/mojom/execution_world.mojom-shared.h"
 
@@ -20,7 +22,6 @@ mojom::RunLocation ConvertRunLocation(api::extension_types::RunAt run_at) {
   }
 
   NOTREACHED();
-  return mojom::RunLocation::kDocumentIdle;
 }
 
 api::extension_types::RunAt ConvertRunLocationForAPI(
@@ -41,7 +42,6 @@ api::extension_types::RunAt ConvertRunLocationForAPI(
   }
 
   NOTREACHED();
-  return api::extension_types::RunAt::kDocumentIdle;
 }
 
 mojom::ExecutionWorld ConvertExecutionWorld(
@@ -73,7 +73,6 @@ api::extension_types::ExecutionWorld ConvertExecutionWorldForAPI(
   }
 
   NOTREACHED();
-  return api::extension_types::ExecutionWorld::kIsolated;
 }
 
 }  // namespace extensions

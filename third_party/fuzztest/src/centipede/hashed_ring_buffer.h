@@ -22,13 +22,15 @@
 //
 // This library must not depend on anything other than libc so that fuzz targets
 // using it doesn't gain redundant coverage. For the same reason this library
-// uses raw __builtin_trap instead of CHECKs.
+// uses raw __builtin_trap instead of FUZZTEST_CHECKs.
 // We make an exception for <algorithm> for std::sort/std::unique,
 // since <algorithm> is very lightweight.
 // This library is also header-only, with all functions defined as inline.
 
 #ifndef THIRD_PARTY_CENTIPEDE_HASHED_RING_BUFFER_H_
 #define THIRD_PARTY_CENTIPEDE_HASHED_RING_BUFFER_H_
+
+#include <string.h>
 
 // WARNING!!!: Be very careful with what STL headers or other dependencies you
 // add here. This header needs to remain mostly bare-bones so that we can
@@ -38,7 +40,7 @@
 
 #include "./centipede/rolling_hash.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
 // Fixed-size ring buffer that maintains a 32-bit hash of its elements.
 // Create objects of this type as zero-initialized globals or thread-locals.
@@ -67,7 +69,8 @@ class HashedRingBuffer {
   // Resets the current state, sets the ring buffer size to `size_` (<= kSize).
   void Reset(size_t size) {
     memset(this, 0, sizeof(*this));
-    if (size > kSize) __builtin_trap();  // can't use CHECK in the runner.
+    if (size > kSize)
+      __builtin_trap();  // can't use FUZZTEST_CHECK in the runner.
     size_ = size;
     hash_.Reset(size);
   }
@@ -79,6 +82,6 @@ class HashedRingBuffer {
   RollingHash hash_;
 };
 
-}  // namespace centipede
+}  // namespace fuzztest::internal
 
 #endif  // THIRD_PARTY_CENTIPEDE_HASHED_RING_BUFFER_H_

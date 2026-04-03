@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "cast/streaming/constants.h"
+#include "cast/streaming/public/constants.h"
 #include "platform/base/interface_info.h"
 
 namespace openscreen::cast {
@@ -31,7 +31,7 @@ struct ConnectionSettings {
 
   // Whether we should use the hacky RTP stream IDs for legacy android
   // receivers, or if we should use the proper values. For more information,
-  // see https://issuetracker.google.com/184438154.
+  // see issuetracker.google.com/184438154.
   bool use_android_rtp_hack = true;
 
   // Whether we should use remoting for the video, instead of the default of
@@ -43,6 +43,9 @@ struct ConnectionSettings {
 
   // The codec to use for encoding negotiated video streams.
   VideoCodec codec;
+
+  // Whether DSCP support should be enabled for Quality of Service.
+  bool enable_dscp = true;
 };
 
 }  // namespace openscreen::cast

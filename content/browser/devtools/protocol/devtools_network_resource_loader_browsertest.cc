@@ -75,10 +75,13 @@ class DevtoolsNetworkResourceLoaderTest : public ContentBrowserTest {
         frame, frame->GetLastCommittedOrigin(),
         frame->GetIsolationInfoForSubresources(),
         frame->BuildClientSecurityState(),
-        /**coep_reporter=*/mojo::NullRemote(), frame->GetProcess(),
+        /*coep_reporter=*/mojo::NullRemote(),
+        /*dip_reporter=*/mojo::NullRemote(), frame->GetProcess(),
         network::mojom::TrustTokenOperationPolicyVerdict::kForbid,
         network::mojom::TrustTokenOperationPolicyVerdict::kForbid,
-        net::CookieSettingOverrides(), "DevtoolsNetworkResourceLoaderTest");
+        net::CookieSettingOverrides(),
+        /*network_restrictions_id=*/std::nullopt,
+        "DevtoolsNetworkResourceLoaderTest");
     // Let DevTools fetch resources without CORS and ORB. Source maps are valid
     // JSON and would otherwise require a CORS fetch + correct response headers.
     // See BUG(chromium:1076435) for more context.
@@ -164,7 +167,7 @@ IN_PROC_BROWSER_TEST_F(DevtoolsNetworkResourceLoaderTest, BasicDownload) {
 }
 
 // This test is fetching a source map from a cross-origin URL. While the fetch
-// isn't a CORS fetch, the source map is JSON, so this tests that CORB is
+// isn't a CORS fetch, the source map is JSON, so this tests that ORB is
 // disabled.
 IN_PROC_BROWSER_TEST_F(DevtoolsNetworkResourceLoaderTest,
                        BasicDownloadCrossOrigin) {

@@ -6,7 +6,6 @@
 #define DEVICE_FIDO_MAC_UTIL_H_
 
 #import <Security/Security.h>
-#include <os/availability.h>
 
 #include <memory>
 #include <optional>
@@ -15,12 +14,11 @@
 
 #include "base/component_export.h"
 #include "base/containers/span.h"
-#include "base/functional/callback.h"
 #include "device/fido/attested_credential_data.h"
 #include "device/fido/authenticator_data.h"
-#include "device/fido/fido_constants.h"
 #include "device/fido/mac/credential_metadata.h"
 #include "device/fido/p256_public_key.h"
+#include "device/fido/public/fido_constants.h"
 
 namespace device::fido::mac {
 
@@ -65,12 +63,37 @@ enum class CodeSigningState {
 // signed.
 CodeSigningState ProcessIsSigned();
 
+// Overrides the result of `ProcessIsSigned` for testing.
+class COMPONENT_EXPORT(DEVICE_FIDO) ScopedProcessIsSignedOverride {
+ public:
+  explicit ScopedProcessIsSignedOverride(CodeSigningState process_is_signed);
+  ScopedProcessIsSignedOverride(const ScopedProcessIsSignedOverride&) = delete;
+  ScopedProcessIsSignedOverride& operator=(
+      const ScopedProcessIsSignedOverride&) = delete;
+  ~ScopedProcessIsSignedOverride();
+};
+
+// Returns whether the macOS profile authenticator will do user verification.
+COMPONENT_EXPORT(DEVICE_FIDO)
+bool ProfileAuthenticatorWillDoUserVerification(
+    device::UserVerificationRequirement requirement,
+    bool platform_has_biometrics);
+
 // Returns whether biometrics are available for use. On macOS, this translates
 // to whether the device supports Touch ID, and whether the sensor is ready to
 // be used (i.e. not soft-locked from consecutive bad attempts; laptop lid not
 // closed).
 COMPONENT_EXPORT(DEVICE_FIDO)
 bool DeviceHasBiometricsAvailable();
+
+// Overrides the result of `DeviceHasBiometricsAvailable` for testing.
+class COMPONENT_EXPORT(DEVICE_FIDO) ScopedBiometricsOverride {
+ public:
+  explicit ScopedBiometricsOverride(bool has_biometrics);
+  ScopedBiometricsOverride(const ScopedBiometricsOverride&) = delete;
+  ScopedBiometricsOverride& operator=(const ScopedBiometricsOverride&) = delete;
+  ~ScopedBiometricsOverride();
+};
 
 }  // namespace device::fido::mac
 

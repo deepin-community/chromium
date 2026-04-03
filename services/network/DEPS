@@ -3,7 +3,7 @@ include_rules = [
   "+components/content_settings/core/common",
   "+components/cookie_config",
   "+components/domain_reliability",
-  "+components/miracle_parameter",
+  "+components/enterprise/buildflags",
   "+components/network_session_configurator",
   "+components/os_crypt/async",
   "+components/os_crypt/sync",
@@ -11,8 +11,10 @@ include_rules = [
   # store for networking-related data (Like which servers support QUIC), rather
   # than to store user preferences.
   "+components/prefs",
-  "+components/privacy_sandbox/masked_domain_list",
+  "+components/privacy_sandbox/privacy_sandbox_features.h",
+  "+components/unexportable_keys",
   "+components/url_matcher",
+  "+components/url_pattern",
   "+components/version_info",
   "+components/web_package",
   # FakeSSLClientSocket
@@ -22,10 +24,10 @@ include_rules = [
   "+net",
   "+sandbox",
   "+services/proxy_resolver/public/mojom",
-  "+services/proxy_resolver_win/public/mojom",
   "+services/service_manager/public",
   "+third_party/boringssl/src/include",
   "+third_party/boringssl/src/pki",
+  "+third_party/fuzztest",
   "+url",
 ]
 
@@ -33,5 +35,11 @@ specific_include_rules = {
   # Some tests use a real proxy_resolver::ProxyResolverImpl.
   "test_mojo_proxy_resolver_factory\.h": [
     "+services/proxy_resolver/proxy_resolver_factory_impl.h",
+  ],
+  "prefetch_matches_unittest\.cc": [
+    "+third_party/blink/public/common/navigation/preloading_headers.h",
+  ],
+  "network_service\.cc": [
+    "+components/enterprise/platform_auth/url_session_url_loader_bridge.h",
   ],
 }

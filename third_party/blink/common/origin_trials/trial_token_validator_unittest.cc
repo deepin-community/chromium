@@ -6,13 +6,13 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ref.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/test/simple_test_clock.h"
 #include "base/time/time.h"
@@ -295,11 +295,11 @@ class TestOriginTrialPolicy : public OriginTrialPolicy {
       const override {
     return keys_;
   }
-  bool IsFeatureDisabled(base::StringPiece feature) const override {
+  bool IsFeatureDisabled(std::string_view feature) const override {
     return disabled_features_.count(feature) > 0;
   }
 
-  bool IsFeatureDisabledForUser(base::StringPiece feature) const override {
+  bool IsFeatureDisabledForUser(std::string_view feature) const override {
     return disabled_features_for_user_.count(std::string(feature)) > 0;
   }
 
@@ -319,7 +319,7 @@ class TestOriginTrialPolicy : public OriginTrialPolicy {
   }
 
  protected:
-  bool IsTokenDisabled(base::StringPiece token_signature) const override {
+  bool IsTokenDisabled(std::string_view token_signature) const override {
     return disabled_tokens_.count(std::string(token_signature)) > 0;
   }
 
@@ -410,14 +410,14 @@ class ValidateTokenWrapper {
       : validator_(validator) {}
   virtual ~ValidateTokenWrapper() = default;
 
-  virtual TrialTokenResult Validate(base::StringPiece token,
+  virtual TrialTokenResult Validate(std::string_view token,
                                     const url::Origin& origin,
                                     base::Time timestamp) const {
     return validator_->ValidateToken(token, origin, timestamp);
   }
 
   virtual TrialTokenResult Validate(
-      base::StringPiece token,
+      std::string_view token,
       const url::Origin& origin,
       base::span<const url::Origin> script_origins,
       base::Time timestamp) const {
@@ -435,13 +435,13 @@ class ValidateTokenAndTrialWrapper : public ValidateTokenWrapper {
       : ValidateTokenWrapper(validator) {}
   ~ValidateTokenAndTrialWrapper() override = default;
 
-  TrialTokenResult Validate(base::StringPiece token,
+  TrialTokenResult Validate(std::string_view token,
                             const url::Origin& origin,
                             base::Time timestamp) const override {
     return validator_->ValidateTokenAndTrial(token, origin, timestamp);
   }
 
-  TrialTokenResult Validate(base::StringPiece token,
+  TrialTokenResult Validate(std::string_view token,
                             const url::Origin& origin,
                             base::span<const url::Origin> script_origins,
                             base::Time timestamp) const override {
@@ -457,14 +457,14 @@ class ValidateTokenAndTrialWithOriginInfoWrapper : public ValidateTokenWrapper {
       : ValidateTokenWrapper(validator) {}
   ~ValidateTokenAndTrialWithOriginInfoWrapper() override = default;
 
-  TrialTokenResult Validate(base::StringPiece token,
+  TrialTokenResult Validate(std::string_view token,
                             const url::Origin& origin,
                             base::Time timestamp) const override {
     return validator_->ValidateTokenAndTrialWithOriginInfo(
         token, TrialTokenValidator::OriginInfo(origin), {}, timestamp);
   }
 
-  TrialTokenResult Validate(base::StringPiece token,
+  TrialTokenResult Validate(std::string_view token,
                             const url::Origin& origin,
                             base::span<const url::Origin> script_origins,
                             base::Time timestamp) const override {
@@ -520,13 +520,13 @@ class TrialTokenValidatorEquivalenceTest
   ~TrialTokenValidatorEquivalenceTest() noexcept override = default;
 
   // Expose the |Validate| functions of the wrapper for shorter code in tests
-  TrialTokenResult Validate(base::StringPiece token,
+  TrialTokenResult Validate(std::string_view token,
                             const url::Origin& origin,
                             base::Time timestamp) const {
     return validator_wrapper_->Validate(token, origin, timestamp);
   }
 
-  TrialTokenResult Validate(base::StringPiece token,
+  TrialTokenResult Validate(std::string_view token,
                             const url::Origin& origin,
                             base::span<const url::Origin> script_origins,
                             base::Time timestamp) const {
@@ -1256,51 +1256,6 @@ TEST_F(TrialTokenValidatorTest, RevalidateDisabledTrialForUser) {
       kAppropriateThirdPartyFeatureName, kSampleTokenExpiryTime,
       blink::TrialToken::UsageRestriction::kSubset, valid_token_signature_,
       Now()));
-}
-
-TEST_F(TrialTokenValidatorTest, XRWTrialAllowedForAll3POrigins) {
-  // Specific test for WebViewXRequestedWithDeprecation origin trial, which
-  // omits origin checks for third-party tokens.
-  // Can be removed when the origin trial is removed from
-  // |runtime_enabled_features.json5|.
-
-  // Generated with
-  // tools/origin_trials/generate_token.py thirdparty.com
-  // WebViewXRequestedWithDeprecation --expire-timestamp=2000000000
-  const char kXRW1PToken[] =
-      "Ay6L+HCN2v3sAGUg/"
-      "UUqhAD5OR2rE+FzVlQpAVBbSUrzDvx3Uz76a84EpeLiOyMpy6NGNH5z4KrC+"
-      "CEnhCGLOgIAAABteyJvcmlnaW4iOiAiaHR0cHM6Ly90aGlyZHBhcnR5LmNvbTo0NDMiLCAiZ"
-      "mVhdHVyZSI6ICJXZWJWaWV3WFJlcXVlc3RlZFdpdGhEZXByZWNhdGlvbiIsICJleHBpcnkiO"
-      "iAyMDAwMDAwMDAwfQ==";
-
-  // Generated with
-  // tools/origin_trials/generate_token.py thirdparty.com
-  // WebViewXRequestedWithDeprecation --expire-timestamp=2000000000
-  // --is-third-party
-  const char kXRW3PToken[] =
-      "AwINH5I2lshWrnPvEqz1KRya3QU2Zx5djBDcr7Q5CnnccjUgNtWaAecPL26JnZlvye3WgAz6"
-      "/MZDIRfewUNHOg4AAACDeyJvcmlnaW4iOiAiaHR0cHM6Ly90aGlyZHBhcnR5LmNvbTo0NDMi"
-      "LCAiZmVhdHVyZSI6ICJXZWJWaWV3WFJlcXVlc3RlZFdpdGhEZXByZWNhdGlvbiIsICJleHBp"
-      "cnkiOiAyMDAwMDAwMDAwLCAiaXNUaGlyZFBhcnR5IjogdHJ1ZX0=";
-
-  // Note that the tokens are for thirdparty.com, which is different from both
-  // `appropriate_origin_` (valid.example.com) and `inappropriate_origin_`
-  // (invalid.example.com)
-  url::Origin scriptOrigins[] = {appropriate_origin_};
-
-  // First party tokens should match the origin, so we expect a non-success
-  // result.
-  TrialTokenResult firstPartyResult = validator_.ValidateTokenAndTrial(
-      kXRW1PToken, inappropriate_origin_, scriptOrigins, Now());
-  EXPECT_EQ(blink::OriginTrialTokenStatus::kWrongOrigin,
-            firstPartyResult.Status());
-
-  // For this trial only, we have disabled the origin check on third-party
-  // tokens. See |trial_token.cc|.
-  TrialTokenResult thirdPartyResult = validator_.ValidateTokenAndTrial(
-      kXRW3PToken, inappropriate_origin_, scriptOrigins, Now());
-  EXPECT_EQ(blink::OriginTrialTokenStatus::kSuccess, thirdPartyResult.Status());
 }
 
 }  // namespace blink::trial_token_validator_unittest

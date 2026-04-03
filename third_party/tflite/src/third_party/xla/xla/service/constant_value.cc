@@ -15,14 +15,21 @@ limitations under the License.
 
 #include "xla/service/constant_value.h"
 
+#include <cstdint>
 #include <string>
+
+#include "absl/base/casts.h"
+#include "absl/log/check.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 
 namespace xla {
 
-StatusOr<ConstantValue> ConstantValue::FromLiteral(const Literal& literal) {
-  CHECK_EQ(literal.shape().dimensions_size(), 0) << "Expected scalar literal";
-  return primitive_util::PrimitiveTypeSwitch<StatusOr<ConstantValue>>(
-      [&](auto primitive_type_constant) -> StatusOr<ConstantValue> {
+absl::StatusOr<ConstantValue> ConstantValue::FromLiteral(
+    const Literal& literal) {
+  CHECK_EQ(literal.shape().dimensions().size(), 0) << "Expected scalar literal";
+  return primitive_util::PrimitiveTypeSwitch<absl::StatusOr<ConstantValue>>(
+      [&](auto primitive_type_constant) -> absl::StatusOr<ConstantValue> {
         if constexpr (primitive_util::IsIntegralType(primitive_type_constant)) {
           return ConstantValue(
               static_cast<uint64_t>(

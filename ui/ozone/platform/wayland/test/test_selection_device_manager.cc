@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ui/ozone/platform/wayland/test/test_selection_device_manager.h"
 
 #include <wayland-server-core.h>
@@ -29,10 +30,11 @@ std::vector<uint8_t> ReadDataOnWorkerThread(base::ScopedFD fd) {
   constexpr size_t kChunkSize = 1024;
   std::vector<uint8_t> bytes;
   while (true) {
-    uint8_t chunk[kChunkSize];
-    ssize_t bytes_read = HANDLE_EINTR(read(fd.get(), chunk, kChunkSize));
+    std::array<uint8_t, kChunkSize> chunk;
+    ssize_t bytes_read =
+        HANDLE_EINTR(read(fd.get(), chunk.data(), chunk.size()));
     if (bytes_read > 0) {
-      bytes.insert(bytes.end(), chunk, chunk + bytes_read);
+      bytes.insert(bytes.end(), chunk.begin(), chunk.begin() + bytes_read);
       continue;
     }
     if (bytes_read < 0) {
@@ -46,7 +48,7 @@ std::vector<uint8_t> ReadDataOnWorkerThread(base::ScopedFD fd) {
 
 void WriteDataOnWorkerThread(base::ScopedFD fd,
                              ui::PlatformClipboard::Data data) {
-  if (!base::WriteFileDescriptor(fd.get(), data->data())) {
+  if (!base::WriteFileDescriptor(fd.get(), data->as_vector())) {
     LOG(ERROR) << "Failed to write selection data to clipboard.";
   }
 }
@@ -88,7 +90,11 @@ TestSelectionSource::TestSelectionSource(wl_resource* resource,
       task_runner_(
           base::ThreadPool::CreateSequencedTaskRunner({base::MayBlock()})) {}
 
-TestSelectionSource::~TestSelectionSource() = default;
+TestSelectionSource::~TestSelectionSource() {
+  if (manager_) {
+    manager_->set_source(nullptr);
+  }
+}
 
 void TestSelectionSource::ReadData(const std::string& mime_type,
                                    ReadDataCallback callback) {
@@ -121,6 +127,10 @@ void TestSelectionSource::OnDndAction(uint32_t action) {
   delegate_->SendDndAction(action);
 }
 
+void TestSelectionSource::OnDndDropPerformed() {
+  delegate_->SendDndDropPerformed();
+}
+
 void TestSelectionSource::Offer(struct wl_client* client,
                                 struct wl_resource* resource,
                                 const char* mime_type) {
@@ -134,7 +144,11 @@ TestSelectionDevice::TestSelectionDevice(wl_resource* resource,
                                          std::unique_ptr<Delegate> delegate)
     : ServerObject(resource), delegate_(std::move(delegate)) {}
 
-TestSelectionDevice::~TestSelectionDevice() = default;
+TestSelectionDevice::~TestSelectionDevice() {
+  if (manager_) {
+    manager_->set_device(nullptr);
+  }
+}
 
 TestSelectionOffer* TestSelectionDevice::OnDataOffer() {
   return delegate_->CreateAndSendOffer();
@@ -153,8 +167,10 @@ void TestSelectionDevice::SetSelection(struct wl_client* client,
   auto* src = source ? GetUserDataAs<TestSelectionSource>(source) : nullptr;
   self->selection_serial_ = serial;
   self->delegate_->HandleSetSelection(src, serial);
-  if (self->manager_)
+  if (self->manager_) {
     self->manager_->set_source(src);
+    src->set_manager(self->manager_);
+  }
 }
 
 TestSelectionDeviceManager::TestSelectionDeviceManager(

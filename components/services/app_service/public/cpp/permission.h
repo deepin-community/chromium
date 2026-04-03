@@ -8,12 +8,12 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "base/component_export.h"
 #include "base/values.h"
 #include "components/services/app_service/public/cpp/macros.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 
 namespace apps {
 
@@ -42,7 +42,7 @@ ENUM(TriState,
 struct COMPONENT_EXPORT(APP_TYPES) Permission {
   // The value of a permission can be a TriState or a bool, depending on how the
   // publisher represents permissions.
-  using PermissionValue = absl::variant<bool, TriState>;
+  using PermissionValue = std::variant<bool, TriState>;
 
   Permission(PermissionType permission_type,
              PermissionValue value,
@@ -52,8 +52,7 @@ struct COMPONENT_EXPORT(APP_TYPES) Permission {
   Permission& operator=(const Permission&) = delete;
   ~Permission();
 
-  bool operator==(const Permission& other) const;
-  bool operator!=(const Permission& other) const;
+  friend bool operator==(const Permission&, const Permission&) = default;
 
   std::unique_ptr<Permission> Clone() const;
 
@@ -84,7 +83,7 @@ Permissions ClonePermissions(const Permissions& source_permissions);
 COMPONENT_EXPORT(APP_TYPES)
 bool IsEqual(const Permissions& source, const Permissions& target);
 
-// Converts `permission` to base::Value::Dict, e.g.:
+// Converts `permission` to base::DictValue, e.g.:
 // {
 //   "PermissionType": 3,
 //   "TriState": 2,
@@ -92,13 +91,13 @@ bool IsEqual(const Permissions& source, const Permissions& target);
 //   "details": "xyz",
 // }
 COMPONENT_EXPORT(APP_TYPES)
-base::Value::Dict ConvertPermissionToDict(const PermissionPtr& permission);
+base::DictValue ConvertPermissionToDict(const PermissionPtr& permission);
 
-// Converts base::Value::Dict to PermissionPtr.
+// Converts base::DictValue to PermissionPtr.
 COMPONENT_EXPORT(APP_TYPES)
-PermissionPtr ConvertDictToPermission(const base::Value::Dict& dict);
+PermissionPtr ConvertDictToPermission(const base::DictValue& dict);
 
-// Converts `permissions` to base::Value::List, e.g.:
+// Converts `permissions` to base::ListValue, e.g.:
 // {
 //   {
 //     "PermissionType": 3,
@@ -113,11 +112,11 @@ PermissionPtr ConvertDictToPermission(const base::Value::Dict& dict);
 //   },
 // }
 COMPONENT_EXPORT(APP_TYPES)
-base::Value::List ConvertPermissionsToList(const Permissions& permissions);
+base::ListValue ConvertPermissionsToList(const Permissions& permissions);
 
-// Converts base::Value::List to Permissions.
+// Converts base::ListValue to Permissions.
 COMPONENT_EXPORT(APP_TYPES)
-Permissions ConvertListToPermissions(const base::Value::List* list);
+Permissions ConvertListToPermissions(const base::ListValue* list);
 
 }  // namespace apps
 

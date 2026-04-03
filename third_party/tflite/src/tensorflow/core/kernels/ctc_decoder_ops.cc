@@ -56,11 +56,11 @@ class CTCDecodeHelper {
   inline int GetTopPaths() const { return top_paths_; }
   void SetTopPaths(int tp) { top_paths_ = tp; }
 
-  Status ValidateInputsGenerateOutputs(
+  absl::Status ValidateInputsGenerateOutputs(
       OpKernelContext* ctx, const Tensor** inputs, const Tensor** seq_len,
       Tensor** log_prob, OpOutputList* decoded_indices,
       OpOutputList* decoded_values, OpOutputList* decoded_shape) const {
-    Status status = ctx->input("inputs", inputs);
+    absl::Status status = ctx->input("inputs", inputs);
     if (!status.ok()) return status;
     status = ctx->input("sequence_length", seq_len);
     if (!status.ok()) return status;
@@ -91,7 +91,7 @@ class CTCDecodeHelper {
           " batch_size: ", batch_size);
     }
 
-    auto seq_len_t = (*seq_len)->vec<int32>();
+    auto seq_len_t = (*seq_len)->vec<int32_t>();
 
     for (int b = 0; b < batch_size; ++b) {
       if (!(seq_len_t(b) <= max_time)) {
@@ -100,7 +100,7 @@ class CTCDecodeHelper {
       }
     }
 
-    Status s = ctx->allocate_output(
+    absl::Status s = ctx->allocate_output(
         "log_probability", TensorShape({batch_size, top_paths_}), log_prob);
     if (!s.ok()) return s;
 
@@ -115,8 +115,8 @@ class CTCDecodeHelper {
   }
 
   // sequences[b][p][ix] stores decoded value "ix" of path "p" for batch "b".
-  Status StoreAllDecodedSequences(
-      const std::vector<std::vector<std::vector<int> > >& sequences,
+  absl::Status StoreAllDecodedSequences(
+      const std::vector<std::vector<std::vector<int>>>& sequences,
       OpOutputList* decoded_indices, OpOutputList* decoded_values,
       OpOutputList* decoded_shape) const {
     // Calculate the total number of entries for each path
@@ -138,7 +138,7 @@ class CTCDecodeHelper {
 
       const int64_t p_num = num_entries[p];
 
-      Status s =
+      absl::Status s =
           decoded_indices->allocate(p, TensorShape({p_num, 2}), &p_indices);
       if (!s.ok()) return s;
       s = decoded_values->allocate(p, TensorShape({p_num}), &p_values);
@@ -220,7 +220,7 @@ class CTCGreedyDecoderOp : public OpKernel {
       input_list_t.emplace_back(inputs_t.data() + t * batch_size * num_classes,
                                 batch_size, num_classes);
     }
-    auto seq_len_t = seq_len->vec<int32>();
+    auto seq_len_t = seq_len->vec<int32_t>();
     auto log_prob_t = log_prob->matrix<T>();
 
     log_prob_t.setZero();
@@ -309,7 +309,7 @@ class CTCBeamSearchDecoderOp : public OpKernel {
                             &decoded_values, &decoded_shape));
 
     auto inputs_t = inputs->tensor<T, 3>();
-    auto seq_len_t = seq_len->vec<int32>();
+    auto seq_len_t = seq_len->vec<int32_t>();
     auto log_prob_t = log_prob->matrix<T>();
 
     const TensorShape& inputs_shape = inputs->shape();

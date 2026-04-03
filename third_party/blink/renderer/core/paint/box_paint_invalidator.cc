@@ -12,7 +12,6 @@
 #include "third_party/blink/renderer/core/paint/paint_invalidator.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 
 namespace blink {
 
@@ -41,8 +40,9 @@ static bool ShouldFullyInvalidateFillLayersOnWidthChange(
   }
 
   // TODO(alancutter): Make this work correctly for calc lengths.
-  if (layer.PositionX().IsPercentOrCalc() && !layer.PositionX().IsZero())
+  if (layer.PositionX().HasPercent() && !layer.PositionX().IsZero()) {
     return true;
+  }
 
   if (layer.BackgroundXOrigin() != BackgroundEdgeOrigin::kLeft)
     return true;
@@ -57,8 +57,9 @@ static bool ShouldFullyInvalidateFillLayersOnWidthChange(
 
   // TODO(alancutter): Make this work correctly for calc lengths.
   const Length& width = layer.SizeLength().Width();
-  if (width.IsPercentOrCalc() && !width.IsZero())
+  if (width.HasPercent() && !width.IsZero()) {
     return true;
+  }
 
   if (width.IsAuto() && !image->HasIntrinsicSize())
     return true;
@@ -84,8 +85,9 @@ static bool ShouldFullyInvalidateFillLayersOnHeightChange(
   }
 
   // TODO(alancutter): Make this work correctly for calc lengths.
-  if (layer.PositionY().IsPercentOrCalc() && !layer.PositionY().IsZero())
+  if (layer.PositionY().HasPercent() && !layer.PositionY().IsZero()) {
     return true;
+  }
 
   if (layer.BackgroundYOrigin() != BackgroundEdgeOrigin::kTop)
     return true;
@@ -100,8 +102,9 @@ static bool ShouldFullyInvalidateFillLayersOnHeightChange(
 
   // TODO(alancutter): Make this work correctly for calc lengths.
   const Length& height = layer.SizeLength().Height();
-  if (height.IsPercentOrCalc() && !height.IsZero())
+  if (height.HasPercent() && !height.IsZero()) {
     return true;
+  }
 
   if (height.IsAuto() && !image->HasIntrinsicSize())
     return true;
@@ -154,7 +157,8 @@ PaintInvalidationReason BoxPaintInvalidator::ComputePaintInvalidationReason() {
   // TODO(crbug.com/1205708): Audit this.
   InkOverflow::ReadUnsetAsNoneScope read_unset_as_none;
 #endif
-  if (box_.PreviousSize() == box_.Size() &&
+  PhysicalSize stitched_size = box_.StitchedSize();
+  if (box_.PreviousSize() == stitched_size &&
       box_.PreviousSelfVisualOverflowRect() == box_.SelfVisualOverflowRect()) {
     return IsFullPaintInvalidationReason(reason)
                ? reason
@@ -163,7 +167,7 @@ PaintInvalidationReason BoxPaintInvalidator::ComputePaintInvalidationReason() {
 
   // Incremental invalidation is not applicable if there is visual overflow.
   if (box_.PreviousSelfVisualOverflowRect().size != box_.PreviousSize() ||
-      box_.SelfVisualOverflowRect().size != box_.Size()) {
+      box_.SelfVisualOverflowRect().size != stitched_size) {
     return PaintInvalidationReason::kLayout;
   }
 
@@ -171,7 +175,7 @@ PaintInvalidationReason BoxPaintInvalidator::ComputePaintInvalidationReason() {
   // fraction.
   if (context_.old_paint_offset.HasFraction() ||
       context_.fragment_data->PaintOffset().HasFraction() ||
-      box_.PreviousSize().HasFraction() || box_.Size().HasFraction()) {
+      box_.PreviousSize().HasFraction() || stitched_size.HasFraction()) {
     return PaintInvalidationReason::kLayout;
   }
 
@@ -277,7 +281,7 @@ BoxPaintInvalidator::ComputeViewBackgroundInvalidation() {
         const auto& background_layers = box_.StyleRef().BackgroundLayers();
         if (ShouldFullyInvalidateFillLayersOnSizeChange(
                 background_layers, root_box->PreviousSize(),
-                root_box->Size())) {
+                root_box->StitchedSize())) {
           return BackgroundInvalidationType::kFull;
         }
         if (BackgroundGeometryDependsOnScrollableOverflowRect() &&
@@ -325,7 +329,7 @@ BoxPaintInvalidator::ComputeBackgroundInvalidation(
   const auto& background_layers = box_.StyleRef().BackgroundLayers();
   if (background_layers.AnyLayerHasDefaultAttachmentImage() &&
       ShouldFullyInvalidateFillLayersOnSizeChange(
-          background_layers, box_.PreviousSize(), box_.Size())) {
+          background_layers, box_.PreviousSize(), box_.StitchedSize())) {
     return BackgroundInvalidationType::kFull;
   }
 
@@ -423,7 +427,7 @@ bool BoxPaintInvalidator::NeedsToSavePreviousContentBoxRect() {
   // crbug.com/490533
   if ((style.BackgroundLayers().AnyLayerUsesContentBox() ||
        style.MaskLayers().AnyLayerUsesContentBox()) &&
-      box_.ContentSize() != box_.Size()) {
+      box_.ContentSize() != box_.StitchedSize()) {
     return true;
   }
 

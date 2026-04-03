@@ -13,12 +13,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include "tensorflow/lite/kernels/internal/reference/slice.h"
+
 #include <stdint.h>
 
 #include <algorithm>
 #include <string>
 #include <vector>
 
+#include "Eigen/Core"
 #include "tensorflow/lite/context_util.h"
 #include "tensorflow/lite/core/c/common.h"
 #include "tensorflow/lite/kernels/internal/compatibility.h"
@@ -205,6 +208,27 @@ TfLiteStatus Eval(TfLiteContext* context, TfLiteNode* node) {
   // The dimensions in the kernel used to be in reverse-order, and TFLite
   // arranged the begins and sizes vectors accordingly. This macro incorporates
   // the needed reversing.
+#define TF_LITE_SLICE_INT4()                                            \
+  {                                                                     \
+    TF_LITE_ENSURE_EQ(context, begins.size(), kMaxDim);                 \
+    TF_LITE_ENSURE_EQ(context, sizes.size(), kMaxDim);                  \
+    tflite::SliceParams op_params;                                      \
+    op_params.begin_count = kMaxDim;                                    \
+    op_params.size_count = kMaxDim;                                     \
+    for (int i = 0; i < kMaxDim; ++i) {                                 \
+      op_params.begin[i] = begins[i];                                   \
+      op_params.size[i] = sizes[i];                                     \
+    }                                                                   \
+                                                                        \
+    if (kernel_type == kGenericOptimized) {                             \
+      optimized_ops::SliceInt4(op_params, GetTensorShape(input), input, \
+                               GetTensorShape(output), output);         \
+    } else {                                                            \
+      reference_ops::SliceInt4(op_params, GetTensorShape(input), input, \
+                               GetTensorShape(output), output);         \
+    }                                                                   \
+  }
+
 #define TF_LITE_SLICE(data_type)                                               \
   {                                                                            \
     TF_LITE_ENSURE_EQ(context, begins.size(), kMaxDim);                        \
@@ -230,6 +254,9 @@ TfLiteStatus Eval(TfLiteContext* context, TfLiteNode* node) {
     case kTfLiteFloat32:
       TF_LITE_SLICE(float);
       break;
+    case kTfLiteInt4:
+      TF_LITE_SLICE_INT4();
+      break;
     case kTfLiteInt32:
       TF_LITE_SLICE(int32_t);
       break;
@@ -253,6 +280,12 @@ TfLiteStatus Eval(TfLiteContext* context, TfLiteNode* node) {
       break;
     case kTfLiteString:
       TF_LITE_SLICE(string);
+      break;
+    case kTfLiteFloat16:
+      TF_LITE_SLICE(Eigen::half);
+      break;
+    case kTfLiteBFloat16:
+      TF_LITE_SLICE(Eigen::bfloat16);
       break;
     default:
       TF_LITE_KERNEL_LOG(

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -13,6 +14,7 @@
 #include "quiche/quic/core/http/web_transport_stream_adapter.h"
 #include "quiche/quic/core/quic_crypto_client_stream.h"
 #include "quiche/quic/core/quic_session.h"
+#include "quiche/quic/core/quic_stream_priority.h"
 #include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/core/quic_utils.h"
 #include "quiche/quic/core/quic_versions.h"
@@ -57,13 +59,21 @@ class QUICHE_EXPORT QuicGenericStream : public QuicStream {
                    QuicUtils::GetStreamType(
                        id, session->connection()->perspective(),
                        session->IsIncomingStream(id), session->version())),
-        adapter_(session, this, sequencer()) {}
+        adapter_(session, this, sequencer(), std::nullopt) {
+    sequencer()->set_level_triggered(true);
+    adapter_.SetPriority(webtransport::StreamPriority{0, 0});
+  }
 
   WebTransportStreamAdapter* adapter() { return &adapter_; }
 
   // QuicSession method implementations.
   void OnDataAvailable() override { adapter_.OnDataAvailable(); }
   void OnCanWriteNewData() override { adapter_.OnCanWriteNewData(); }
+  void OnWriteSideInDataRecvdState() override {
+    if (adapter_.visitor() != nullptr) {
+      adapter_.visitor()->OnWriteSideInDataRecvdState();
+    }
+  }
 
  private:
   WebTransportStreamAdapter adapter_;
@@ -76,7 +86,8 @@ QuicGenericSessionBase::QuicGenericSessionBase(
     std::unique_ptr<QuicDatagramQueue::Observer> datagram_observer)
     : QuicSession(connection, owner, config, GetQuicVersionsForGenericSession(),
                   /*num_expected_unidirectional_static_streams=*/0,
-                  std::move(datagram_observer)),
+                  std::move(datagram_observer),
+                  QuicPriorityType::kWebTransport),
       alpn_(std::move(alpn)),
       visitor_(visitor),
       owns_connection_(owns_connection),
@@ -90,6 +101,11 @@ QuicGenericSessionBase::~QuicGenericSessionBase() {
     delete visitor_;
     visitor_ = nullptr;
   }
+}
+
+void QuicGenericSessionBase::Initialize() {
+  QuicSession::Initialize();
+  connection()->sent_packet_manager().EnableOverheadMeasurement();
 }
 
 QuicStream* QuicGenericSessionBase::CreateIncomingStream(QuicStreamId id) {
@@ -163,8 +179,8 @@ QuicGenericStream* QuicGenericSessionBase::CreateStream(QuicStreamId id) {
   return stream_ptr;
 }
 
-void QuicGenericSessionBase::OnMessageReceived(absl::string_view message) {
-  visitor_->OnDatagramReceived(message);
+void QuicGenericSessionBase::OnDatagramReceived(absl::string_view datagram) {
+  visitor_->OnDatagramReceived(datagram);
 }
 
 void QuicGenericSessionBase::OnCanCreateNewOutgoingStream(bool unidirectional) {
@@ -188,7 +204,7 @@ webtransport::DatagramStatus QuicGenericSessionBase::SendOrQueueDatagram(
     absl::string_view datagram) {
   quiche::QuicheBuffer buffer = quiche::QuicheBuffer::Copy(
       quiche::SimpleBufferAllocator::Get(), datagram);
-  return MessageStatusToWebTransportStatus(
+  return DatagramStatusToWebTransportStatus(
       datagram_queue()->SendOrQueueDatagram(
           quiche::QuicheMemSlice(std::move(buffer))));
 }

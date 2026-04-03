@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_CDM_RENDERER_WIDEVINE_KEY_SYSTEM_INFO_H_
 #define COMPONENTS_CDM_RENDERER_WIDEVINE_KEY_SYSTEM_INFO_H_
 
-#include <optional>
 #include <string>
 
 #include "base/containers/flat_set.h"
@@ -65,11 +64,6 @@ class WidevineKeySystemInfo : public media::KeySystemInfo {
   // `kWidevineExperimentKeySystem` and `kWidevineKeySystem`. Please refer to
   // b/219818166 for more information.
   void set_experimental() { is_experimental_ = true; }
-
-  // `is_experimental_two_` is used to differentiate between
-  // `kWidevineExperiment2KeySystem` and `kWidevineKeySystem`. Please refer to
-  // b/268749229 for more information.
-  void set_experimental_two() { is_experimental_two_ = true; }
 #endif  // BUILDFLAG(IS_WIN)
 
  private:
@@ -85,7 +79,6 @@ class WidevineKeySystemInfo : public media::KeySystemInfo {
   const media::EmeFeatureSupport distinctive_identifier_support_;
 #if BUILDFLAG(IS_WIN)
   bool is_experimental_ = false;
-  bool is_experimental_two_ = false;
 #endif  // BUILDFLAG(IS_WIN)
 };
 

@@ -17,7 +17,6 @@
 #include "base/time/time.h"
 #include "chrome/browser/ash/extensions/file_manager/logged_extension_function.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
-#include "chromeos/ash/components/drivefs/mojom/drivefs.mojom-forward.h"
 #include "components/drive/file_errors.h"
 
 namespace extensions {
@@ -93,7 +92,7 @@ class FileManagerPrivateSearchDriveFunction : public LoggedExtensionFunction {
   ResponseAction Run() override;
 
  private:
-  void OnSearchDriveFs(std::optional<base::Value::List> results);
+  void OnSearchDriveFs(std::optional<base::ListValue> results);
 
   base::TimeTicks operation_start_;
   bool is_offline_;
@@ -122,7 +121,7 @@ class FileManagerPrivateSearchDriveMetadataFunction
 
  private:
   void OnSearchDriveFs(const std::string& query_text,
-                       std::optional<base::Value::List> results);
+                       std::optional<base::ListValue> results);
 
   base::TimeTicks operation_start_;
   SearchType search_type_;

@@ -6,6 +6,8 @@
 */
 
 #include "tools/sk_app/ios/Window_ios.h"
+
+#include "tools/window/DisplayParams.h"
 #include "tools/window/ios/WindowContextFactory_ios.h"
 
 #if __has_feature(objc_arc)
@@ -21,12 +23,13 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 using sk_app::Window;
+using skwindow::DisplayParams;
 
 namespace sk_app {
 
 Window_ios* Window_ios::gWindow = nullptr;
 
-Window* Window::CreateNativeWindow(void*) {
+Window* Windows::CreateNativeWindow(void*) {
     // already have a window
     if (Window_ios::MainWindow()) {
         return nullptr;
@@ -84,17 +87,22 @@ bool Window_ios::attach(BackendType attachType) {
     info.fWindow = this;
     info.fViewController = fWindow.rootViewController;
     switch (attachType) {
-#ifdef SK_METAL
-        case kMetal_BackendType:
-            fWindowContext = skwindow::MakeMetalForIOS(info, fRequestedDisplayParams);
+#if defined(SK_METAL)
+        case BackendType::kMetal:
+            fWindowContext = skwindow::MakeMetalForIOS(info, fRequestedDisplayParams->clone());
+            break;
+#if defined(SK_GRAPHITE)
+        case BackendType::kGraphiteMetal:
+            fWindowContext = MakeGraphiteMetalForIOS(info, fRequestedDisplayParams->clone());
             break;
 #endif
-#ifdef SK_GL
-        case kNativeGL_BackendType:
-            fWindowContext = skwindow::MakeGLForIOS(info, fRequestedDisplayParams);
+#endif
+#if defined(SK_GL)
+        case BackendType::kNativeGL:
+            fWindowContext = skwindow::MakeGLForIOS(info, fRequestedDisplayParams->clone());
             break;
-        case kRaster_BackendType:
-            fWindowContext = skwindow::MakeRasterForIOS(info, fRequestedDisplayParams);
+        case BackendType::kRaster:
+            fWindowContext = skwindow::MakeRasterForIOS(info, fRequestedDisplayParams->clone());
             break;
 #endif
         default:

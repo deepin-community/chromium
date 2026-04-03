@@ -18,6 +18,10 @@ SELECT RUN_METRIC('android/cpu_info.sql');
 
 -- Create the base tables and views containing the launch spans.
 INCLUDE PERFETTO MODULE android.startup.startups;
+
+-- TTID and TTFD
+INCLUDE PERFETTO MODULE android.startup.time_to_display;
+
 SELECT RUN_METRIC('android/process_metadata.sql');
 
 -- Define the helper functions which will be used throught the remainder
@@ -109,12 +113,10 @@ DROP VIEW IF EXISTS startup_view;
 CREATE PERFETTO VIEW startup_view AS
 SELECT
   AndroidStartupMetric_Startup(
-    'startup_id',launches.startup_id,
-    'startup_type', (
-      SELECT lp.startup_type
-      FROM android_startup_processes lp
-      WHERE lp.startup_id =launches.startup_id
-      LIMIT 1
+    'startup_id', launches.startup_id,
+    'startup_type', launches.startup_type,
+    'cpu_count', (
+      SELECT COUNT(DISTINCT cpu) from sched
     ),
     'package_name', launches.package,
     'process_name', (
@@ -160,6 +162,16 @@ SELECT
     'activity_hosting_process_count', (
       SELECT COUNT(1) FROM android_startup_processes p
       WHERE p.startup_id =launches.startup_id
+    ),
+    'time_to_initial_display', (
+      SELECT time_to_initial_display
+      FROM android_startup_time_to_display s
+      WHERE s.startup_id = launches.startup_id
+    ),
+    'time_to_full_display', (
+      SELECT time_to_full_display
+      FROM android_startup_time_to_display s
+      WHERE s.startup_id = launches.startup_id
     ),
     'event_timestamps', AndroidStartupMetric_EventTimestamps(
       'intent_received', launches.ts,
@@ -224,6 +236,8 @@ SELECT
       dur_sum_slice_proto_for_launch(launches.startup_id, 'inflate'),
       'time_get_resources',
       dur_sum_slice_proto_for_launch(launches.startup_id, 'ResourcesManager#getResources'),
+      'time_class_initialization',
+      dur_sum_slice_proto_for_launch(launches.startup_id, 'L*/*;'),
       'time_dex_open',
       dur_sum_slice_proto_for_launch(launches.startup_id, 'OpenDexFilesFromOat*'),
       'time_verify_class',
@@ -275,6 +289,10 @@ SELECT
         SELECT IIF(COUNT(1) = 0, NULL, COUNT(1))
         FROM ANDROID_SLICES_FOR_STARTUP_AND_SLICE_NAME(launches.startup_id, 'JIT compiling*')
         WHERE thread_name = 'Jit thread pool'
+      ),
+      'class_initialization_count', (
+        SELECT IIF(COUNT(1) = 0, NULL, COUNT(1))
+        FROM ANDROID_SLICES_FOR_STARTUP_AND_SLICE_NAME(launches.startup_id, 'L*/*;')
       ),
       'other_processes_spawned_count', (
         SELECT COUNT(1)
@@ -500,19 +518,9 @@ SELECT
 
       )
     ),
-    'slow_start_reason_detailed', get_slow_start_reason_detailed(launches.startup_id)
+    'slow_start_reason_with_details', get_slow_start_reason_with_details(launches.startup_id)
   ) AS startup
 FROM android_startups launches;
-
-DROP VIEW IF EXISTS android_startup_event;
-CREATE PERFETTO VIEW android_startup_event AS
-SELECT
-  'slice' AS track_type,
-  'Android App Startups' AS track_name,
-  l.ts AS ts,
-  l.dur AS dur,
-  l.package AS slice_name
-FROM android_startups l;
 
 DROP VIEW IF EXISTS android_startup_output;
 CREATE PERFETTO VIEW android_startup_output AS

@@ -21,6 +21,10 @@ include "mlir/Pass/PassBase.td"
 def GpuKernelToNVVMPass : Pass<"gpu-kernel-to-nvvm", "gpu::GPUModuleOp"> {
   let summary = "Pass to transform a gpu module to nvvm.";
   let dependentDialects = ["LLVM::LLVMDialect", "NVVM::NVVMDialect"];
+  let options = [
+      Option<"useBarePtrCallConv", "use-bare-ptr-call-conv", "bool",
+             /*default=*/"false", "Use bare pointer memref to llvm lowering">,
+  ];
   let constructor = "createGpuKernelToNvvmPass()";
 }
 
@@ -28,6 +32,11 @@ def GpuKernelToROCDLPass : Pass<"gpu-kernel-to-rocdl", "gpu::GPUModuleOp"> {
   let summary = "Pass to transform a gpu module to rocdl.";
   let dependentDialects = ["LLVM::LLVMDialect", "ROCDL::ROCDLDialect"];
   let constructor = "createGpuKernelToRocdlPass()";
+  let options = [
+    Option<"chipset", "chipset", "std::string",
+           /*default=*/"\"gfx000\"",
+           "Chipset that these operations will run on">,
+  ];
 }
 
 #endif // MLIR_HLO_TRANSFORMS_GPU_PASSES

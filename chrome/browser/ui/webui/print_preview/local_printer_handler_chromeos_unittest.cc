@@ -14,13 +14,14 @@
 
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
-#include "base/strings/string_piece.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
 #include "chrome/test/chromeos/printing/fake_local_printer_chromeos.h"
 #include "chromeos/crosapi/mojom/local_printer.mojom.h"
 #include "content/public/test/browser_task_environment.h"
+#include "printing/backend/print_backend.h"
 #include "printing/print_job_constants.h"
 #include "printing/print_settings_conversion_chromeos.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -35,7 +36,7 @@ using ::crosapi::mojom::LocalPrinter;
 using ::crosapi::mojom::OAuthNotNeeded;
 using ::printing::mojom::IppClientInfo;
 using ::printing::mojom::IppClientInfoPtr;
-using ::testing::Invoke;
+using ::testing::ElementsAre;
 using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::WithArg;
@@ -98,8 +99,8 @@ class MockLocalPrinter : public TestLocalPrinter {
 // Used as a callback to `StartGetPrinters()` in tests.
 // Increases `call_count` and records values returned by `StartGetPrinters()`.
 void RecordPrinterList(size_t& call_count,
-                       base::Value::List& printers_out,
-                       base::Value::List printers) {
+                       base::ListValue& printers_out,
+                       base::ListValue printers) {
   ++call_count;
   printers_out = std::move(printers);
 }
@@ -110,8 +111,8 @@ void RecordPrintersDone(bool& is_done_out) {
   is_done_out = true;
 }
 
-void RecordGetCapability(base::Value::Dict& capabilities_out,
-                         base::Value::Dict capability) {
+void RecordGetCapability(base::DictValue& capabilities_out,
+                         base::DictValue capability) {
   capabilities_out = std::move(capability);
 }
 
@@ -120,12 +121,12 @@ void RecordGetEulaUrl(std::string& fetched_eula_url,
   fetched_eula_url = eula_url;
 }
 
-void RecordAshJobSettings(base::Value::Dict& fetched_settings,
-                          base::Value::Dict settings) {
+void RecordAshJobSettings(base::DictValue& fetched_settings,
+                          base::DictValue settings) {
   fetched_settings = std::move(settings);
 }
 
-const base::Value::Dict kInitialJobSettings = base::test::ParseJsonDict(R"({
+const base::DictValue kInitialJobSettings = base::test::ParseJsonDict(R"({
   "key": "value"
 })");
 
@@ -145,7 +146,7 @@ class LocalPrinterHandlerChromeosNoAshTest : public testing::Test {
 
   void SetUp() override {
     local_printer_handler_ = LocalPrinterHandlerChromeos::CreateForTesting(
-        /*local_printer=*/nullptr);
+        /*cros_local_printer=*/nullptr, /*local_printer=*/nullptr);
   }
 
   LocalPrinterHandlerChromeos* local_printer_handler() {
@@ -170,7 +171,7 @@ class LocalPrinterHandlerChromeosWithAshTest : public testing::Test {
 
   void SetUp() override {
     local_printer_handler_ =
-        LocalPrinterHandlerChromeos::CreateForTesting(&local_printer_);
+        LocalPrinterHandlerChromeos::CreateForTesting(&local_printer_, nullptr);
   }
 
   LocalPrinterHandlerChromeos* local_printer_handler() {
@@ -186,10 +187,10 @@ class LocalPrinterHandlerChromeosWithAshTest : public testing::Test {
 
 TEST_F(LocalPrinterHandlerChromeosNoAshTest,
        PrinterStatusRequest_ProvidesDefaultValue) {
-  std::optional<base::Value::Dict> printer_status = base::Value::Dict();
+  std::optional<base::DictValue> printer_status = base::DictValue();
   local_printer_handler()->StartPrinterStatusRequest(
       "printer1",
-      base::BindLambdaForTesting([&](std::optional<base::Value::Dict> status) {
+      base::BindLambdaForTesting([&](std::optional<base::DictValue> status) {
         printer_status = std::move(status);
       }));
   EXPECT_EQ(std::nullopt, printer_status);
@@ -197,7 +198,7 @@ TEST_F(LocalPrinterHandlerChromeosNoAshTest,
 
 TEST_F(LocalPrinterHandlerChromeosNoAshTest, GetPrinters_ProvidesDefaultValue) {
   size_t call_count = 0;
-  base::Value::List printers;
+  base::ListValue printers;
   bool is_done = false;
   local_printer_handler()->StartGetPrinters(
       base::BindRepeating(&RecordPrinterList, std::ref(call_count),
@@ -221,7 +222,7 @@ TEST_F(LocalPrinterHandlerChromeosNoAshTest,
 
 TEST_F(LocalPrinterHandlerChromeosNoAshTest,
        GetCapability_ProvidesDefaultValue) {
-  base::Value::Dict fetched_caps;
+  base::DictValue fetched_caps;
   local_printer_handler()->StartGetCapability(
       "printer1", base::BindOnce(&RecordGetCapability, std::ref(fetched_caps)));
   EXPECT_TRUE(fetched_caps.empty());
@@ -236,7 +237,7 @@ TEST_F(LocalPrinterHandlerChromeosNoAshTest, GetEulaUrl_ProvidesDefaultValue) {
 }
 
 TEST_F(LocalPrinterHandlerChromeosNoAshTest, GetAshJobSettingsEmpty) {
-  base::Value::Dict fetched_settings;
+  base::DictValue fetched_settings;
   local_printer_handler()->GetAshJobSettingsForTesting(
       "printer1",
       base::BindOnce(&RecordAshJobSettings, std::ref(fetched_settings)),
@@ -247,7 +248,7 @@ TEST_F(LocalPrinterHandlerChromeosNoAshTest, GetAshJobSettingsEmpty) {
 
 TEST_F(LocalPrinterHandlerChromeosWithAshTest, GetAshJobSettingsEmpty) {
   local_printer().DelegateToBase();
-  base::Value::Dict fetched_settings;
+  base::DictValue fetched_settings;
   local_printer_handler()->GetAshJobSettingsForTesting(
       "printer1",
       base::BindOnce(&RecordAshJobSettings, std::ref(fetched_settings)),
@@ -263,9 +264,9 @@ TEST_F(LocalPrinterHandlerChromeosWithAshTest, GetAshJobSettingsUsername) {
         std::move(cb).Run("chronos");
       };
   EXPECT_CALL(local_printer(), GetUsernamePerPolicy)
-      .WillOnce(WithArg<0>(Invoke(return_expected_username)));
+      .WillOnce(WithArg<0>(return_expected_username));
 
-  base::Value::Dict fetched_settings;
+  base::DictValue fetched_settings;
   local_printer_handler()->GetAshJobSettingsForTesting(
       "printer1",
       base::BindOnce(&RecordAshJobSettings, std::ref(fetched_settings)),
@@ -273,7 +274,7 @@ TEST_F(LocalPrinterHandlerChromeosWithAshTest, GetAshJobSettingsUsername) {
 
   // Test that `username` and `sendUserInfo` are in job settings, together with
   // the old settings.
-  const base::Value::Dict kExpectedValue = base::test::ParseJsonDict(R"({
+  const base::DictValue kExpectedValue = base::test::ParseJsonDict(R"({
     "key": "value",
     "username": "chronos",
     "sendUserInfo": true
@@ -289,16 +290,16 @@ TEST_F(LocalPrinterHandlerChromeosWithAshTest, GetAshJobSettingsOAuthToken) {
             crosapi::mojom::OAuthAccessToken::New("token")));
       };
   EXPECT_CALL(local_printer(), GetOAuthAccessToken)
-      .WillOnce(WithArg<1>(Invoke(return_expected_oauth_token)));
+      .WillOnce(WithArg<1>(return_expected_oauth_token));
 
-  base::Value::Dict fetched_settings;
+  base::DictValue fetched_settings;
   local_printer_handler()->GetAshJobSettingsForTesting(
       "printer1",
       base::BindOnce(&RecordAshJobSettings, std::ref(fetched_settings)),
       kInitialJobSettings.Clone());
 
   // Test that oauth token is in job settings, together with the old settings.
-  const base::Value::Dict kExpectedValue = base::test::ParseJsonDict(R"({
+  const base::DictValue kExpectedValue = base::test::ParseJsonDict(R"({
     "key": "value",
     "chromeos-access-oauth-token": "token"
   })");
@@ -310,7 +311,7 @@ TEST_F(LocalPrinterHandlerChromeosWithAshTest,
   local_printer().DelegateToBase();
   EXPECT_CALL(local_printer(), GetIppClientInfo).Times(0);
 
-  base::Value::Dict fetched_settings;
+  base::DictValue fetched_settings;
   local_printer_handler()->GetAshJobSettingsForTesting(
       "", base::BindOnce(&RecordAshJobSettings, std::ref(fetched_settings)),
       kInitialJobSettings.Clone());
@@ -334,16 +335,16 @@ TEST_F(LocalPrinterHandlerChromeosWithAshTest, GetAshJobSettingsClientInfo) {
         std::move(cb).Run(std::move(client_infos_to_send));
       };
   EXPECT_CALL(local_printer(), GetIppClientInfo)
-      .WillOnce(WithArg<1>(Invoke(std::move(return_expected_client_info))));
+      .WillOnce(WithArg<1>(std::move(return_expected_client_info)));
 
-  base::Value::Dict fetched_settings;
+  base::DictValue fetched_settings;
   local_printer_handler()->GetAshJobSettingsForTesting(
       "printer1",
       base::BindOnce(&RecordAshJobSettings, std::ref(fetched_settings)),
       kInitialJobSettings.Clone());
 
   // Test that oauth token is in job settings, together with the old settings.
-  const base::Value::Dict kExpectedValue = base::test::ParseJsonDict(R"({
+  const base::DictValue kExpectedValue = base::test::ParseJsonDict(R"({
     "key": "value",
     "ipp-client-info": [
       {
@@ -364,6 +365,7 @@ TEST_F(LocalPrinterHandlerChromeosWithAshTest, GetAshJobSettingsClientInfo) {
 }
 
 TEST(LocalPrinterHandlerChromeos, PrinterToValue) {
+  // Printer status.
   crosapi::mojom::PrinterStatusPtr status =
       crosapi::mojom::PrinterStatus::New();
   status->printer_id = "printer_id";
@@ -371,12 +373,25 @@ TEST(LocalPrinterHandlerChromeos, PrinterToValue) {
   status->status_reasons.push_back(crosapi::mojom::StatusReason::New(
       crosapi::mojom::StatusReason::Reason::kOutOfInk,
       crosapi::mojom::StatusReason::Severity::kWarning));
-  crosapi::mojom::LocalDestinationInfo input("device_name", "printer_name",
-                                             "printer_description", false, "",
-                                             std::move(status));
+  // Managed print options.
+  crosapi::mojom::ManagedPrintOptionsPtr managed_print_options =
+      crosapi::mojom::ManagedPrintOptions::New();
+  managed_print_options->color = crosapi::mojom::BoolOption::New();
+  managed_print_options->color->default_value = false;
+  managed_print_options->color->allowed_values = {false, true};
+
+  crosapi::mojom::LocalDestinationInfo input(
+      "device_name", "printer_name", "printer_description", false, "",
+      std::move(status), std::move(managed_print_options));
   const base::Value kExpectedValue = base::test::ParseJson(R"({
    "cupsEnterprisePrinter": false,
    "deviceName": "device_name",
+   "managedPrintOptions": {
+      "color": {
+        "defaultValue": false,
+        "allowedValues": [false, true],
+      },
+   },
    "printerDescription": "printer_description",
    "printerName": "printer_name",
    "printerStatus": {
@@ -397,6 +412,7 @@ TEST(LocalPrinterHandlerChromeos, PrinterToValue_ConfiguredViaPolicy) {
   const base::Value kExpectedValue = base::test::ParseJson(R"({
    "cupsEnterprisePrinter": true,
    "deviceName": "device_name",
+   "managedPrintOptions": {},
    "printerDescription": "printer_description",
    "printerName": "printer_name",
    "printerStatus": {}
@@ -405,12 +421,206 @@ TEST(LocalPrinterHandlerChromeos, PrinterToValue_ConfiguredViaPolicy) {
             LocalPrinterHandlerChromeos::PrinterToValue(printer));
 }
 
+TEST(LocalPrinterHandlerChromeos, ManagedPrintOptionsToValue_MediaSize) {
+  crosapi::mojom::ManagedPrintOptions managed_print_options;
+  managed_print_options.media_size = crosapi::mojom::SizeOption::New();
+  managed_print_options.media_size->default_value = crosapi::mojom::Size::New();
+  managed_print_options.media_size->default_value->width = 5;
+  managed_print_options.media_size->default_value->height = 10;
+  std::vector<crosapi::mojom::SizePtr> allowed_values(2);
+  allowed_values[0] = crosapi::mojom::Size::New(5, 10);
+  allowed_values[1] = crosapi::mojom::Size::New(15, 20);
+  managed_print_options.media_size->allowed_values = std::move(allowed_values);
+
+  const base::DictValue managed_print_options_dict =
+      LocalPrinterHandlerChromeos::ManagedPrintOptionsToValue(
+          managed_print_options);
+
+  EXPECT_EQ(
+      *managed_print_options_dict.FindDict(kManagedPrintOptions_MediaSize)
+           ->FindDict(kManagedPrintOptions_DefaultValue),
+      base::DictValue()
+          .Set(kManagedPrintOptions_SizeWidth, 5)
+          .Set(kManagedPrintOptions_SizeHeight, 10));
+  EXPECT_EQ(
+      *managed_print_options_dict.FindDict(kManagedPrintOptions_MediaSize)
+           ->FindList(kManagedPrintOptions_AllowedValues),
+      base::ListValue()
+          .Append(base::DictValue()
+                      .Set(kManagedPrintOptions_SizeWidth, 5)
+                      .Set(kManagedPrintOptions_SizeHeight, 10))
+          .Append(base::DictValue()
+                      .Set(kManagedPrintOptions_SizeWidth, 15)
+                      .Set(kManagedPrintOptions_SizeHeight, 20)));
+}
+
+TEST(LocalPrinterHandlerChromeos, ManagedPrintOptionsToValue_MediaType) {
+  crosapi::mojom::ManagedPrintOptions managed_print_options;
+  managed_print_options.media_type = crosapi::mojom::StringOption::New();
+  managed_print_options.media_type->default_value = "paper";
+  managed_print_options.media_type->allowed_values = {"paper", "metal", "wood"};
+
+  const base::DictValue managed_print_options_dict =
+      LocalPrinterHandlerChromeos::ManagedPrintOptionsToValue(
+          managed_print_options);
+
+  EXPECT_EQ(
+      *managed_print_options_dict.FindDict(kManagedPrintOptions_MediaType)
+           ->FindString(kManagedPrintOptions_DefaultValue),
+      "paper");
+  EXPECT_THAT(
+      *managed_print_options_dict.FindDict(kManagedPrintOptions_MediaType)
+           ->FindList(kManagedPrintOptions_AllowedValues),
+      ElementsAre("paper", "metal", "wood"));
+}
+
+TEST(LocalPrinterHandlerChromeos, ManagedPrintOptionsToValue_Duplex) {
+  crosapi::mojom::ManagedPrintOptions managed_print_options;
+  managed_print_options.duplex = crosapi::mojom::DuplexOption::New();
+  managed_print_options.duplex->default_value =
+      crosapi::mojom::DuplexType::kOneSided;
+  managed_print_options.duplex->allowed_values = {
+      crosapi::mojom::DuplexType::kOneSided,
+      crosapi::mojom::DuplexType::kShortEdge};
+
+  const base::DictValue managed_print_options_dict =
+      LocalPrinterHandlerChromeos::ManagedPrintOptionsToValue(
+          managed_print_options);
+
+  EXPECT_EQ(*managed_print_options_dict.FindDict(kManagedPrintOptions_Duplex)
+                 ->FindInt(kManagedPrintOptions_DefaultValue),
+            static_cast<int>(crosapi::mojom::DuplexType::kOneSided));
+  EXPECT_THAT(
+      *managed_print_options_dict.FindDict(kManagedPrintOptions_Duplex)
+           ->FindList(kManagedPrintOptions_AllowedValues),
+      ElementsAre(static_cast<int>(crosapi::mojom::DuplexType::kOneSided),
+                  static_cast<int>(crosapi::mojom::DuplexType::kShortEdge)));
+}
+
+TEST(LocalPrinterHandlerChromeos, ManagedPrintOptionsToValue_Color) {
+  crosapi::mojom::ManagedPrintOptions managed_print_options;
+  managed_print_options.color = crosapi::mojom::BoolOption::New();
+  managed_print_options.color->default_value = false;
+  managed_print_options.color->allowed_values = {false, true};
+
+  const base::DictValue managed_print_options_dict =
+      LocalPrinterHandlerChromeos::ManagedPrintOptionsToValue(
+          managed_print_options);
+
+  EXPECT_EQ(*managed_print_options_dict.FindDict(kManagedPrintOptions_Color)
+                 ->FindBool(kManagedPrintOptions_DefaultValue),
+            false);
+  EXPECT_THAT(*managed_print_options_dict.FindDict(kManagedPrintOptions_Color)
+                   ->FindList(kManagedPrintOptions_AllowedValues),
+              ElementsAre(false, true));
+}
+
+TEST(LocalPrinterHandlerChromeos, ManagedPrintOptionsToValue_Dpi) {
+  crosapi::mojom::ManagedPrintOptions managed_print_options;
+  managed_print_options.dpi = crosapi::mojom::DpiOption::New();
+  managed_print_options.dpi->default_value = crosapi::mojom::Dpi::New();
+  managed_print_options.dpi->default_value->vertical = 1000;
+  managed_print_options.dpi->default_value->horizontal = 1500;
+  managed_print_options.dpi->allowed_values =
+      std::vector<crosapi::mojom::DpiPtr>();
+
+  const base::DictValue managed_print_options_dict =
+      LocalPrinterHandlerChromeos::ManagedPrintOptionsToValue(
+          managed_print_options);
+
+  EXPECT_EQ(*managed_print_options_dict.FindDict(kManagedPrintOptions_Dpi)
+                 ->FindDict(kManagedPrintOptions_DefaultValue),
+            base::DictValue()
+                .Set(kManagedPrintOptions_DpiHorizontal, 1500)
+                .Set(kManagedPrintOptions_DpiVertical, 1000));
+  EXPECT_EQ(*managed_print_options_dict.FindDict(kManagedPrintOptions_Dpi)
+                 ->FindList(kManagedPrintOptions_AllowedValues),
+            base::ListValue());
+}
+
+TEST(LocalPrinterHandlerChromeos, ManagedPrintOptionsToValue_Quality) {
+  crosapi::mojom::ManagedPrintOptions managed_print_options;
+  managed_print_options.quality = crosapi::mojom::QualityOption::New();
+  managed_print_options.quality->default_value =
+      crosapi::mojom::QualityType::kDraft;
+  managed_print_options.quality->allowed_values = {
+      crosapi::mojom::QualityType::kDraft, crosapi::mojom::QualityType::kHigh};
+
+  const base::DictValue managed_print_options_dict =
+      LocalPrinterHandlerChromeos::ManagedPrintOptionsToValue(
+          managed_print_options);
+
+  EXPECT_EQ(*managed_print_options_dict.FindDict(kManagedPrintOptions_Quality)
+                 ->FindInt(kManagedPrintOptions_DefaultValue),
+            static_cast<int>(crosapi::mojom::QualityType::kDraft));
+  EXPECT_THAT(
+      *managed_print_options_dict.FindDict(kManagedPrintOptions_Quality)
+           ->FindList(kManagedPrintOptions_AllowedValues),
+      ElementsAre(static_cast<int>(crosapi::mojom::QualityType::kDraft),
+                  static_cast<int>(crosapi::mojom::QualityType::kHigh)));
+}
+
+TEST(LocalPrinterHandlerChromeos, ManagedPrintOptionsToValue_PrintAsImage) {
+  crosapi::mojom::ManagedPrintOptions managed_print_options;
+  managed_print_options.print_as_image = crosapi::mojom::BoolOption::New();
+  managed_print_options.print_as_image->default_value = std::nullopt;
+  managed_print_options.print_as_image->allowed_values = {false, true};
+
+  const base::DictValue managed_print_options_dict =
+      LocalPrinterHandlerChromeos::ManagedPrintOptionsToValue(
+          managed_print_options);
+
+  EXPECT_EQ(
+      managed_print_options_dict.FindDict(kManagedPrintOptions_PrintAsImage)
+          ->FindBool(kManagedPrintOptions_DefaultValue),
+      std::nullopt);
+  EXPECT_THAT(
+      *managed_print_options_dict.FindDict(kManagedPrintOptions_PrintAsImage)
+           ->FindList(kManagedPrintOptions_AllowedValues),
+      ElementsAre(false, true));
+}
+
 TEST(LocalPrinterHandlerChromeos, CapabilityToValue) {
-  auto caps = crosapi::mojom::CapabilitiesResponse::New();
-  caps->basic_info = crosapi::mojom::LocalDestinationInfo::New(
-      "device_name", "printer_name", "printer_description", false);
+  std::optional<chromeos::Printer> printer(chromeos::Printer("device_name"));
+  printer->set_display_name("printer_name");
+  printer->set_description("printer_description");
+
+  std::optional<::printing::PrinterSemanticCapsAndDefaults> caps(
+      (::printing::PrinterSemanticCapsAndDefaults()));
 
   const base::Value kExpectedValue = base::test::ParseJson(R"({
+   "capabilities": {
+     "printer": {
+        "color": {
+           "option": [ {
+              "is_default": true,
+              "type": "STANDARD_MONOCHROME",
+              "vendor_id": "0"
+           } ]
+        },
+        "copies": {
+           "default": 1,
+           "max": 1
+        },
+        "page_orientation": {
+           "option": [ {
+              "is_default": true,
+              "type": "PORTRAIT"
+           }, {
+              "type": "LANDSCAPE"
+           }, {
+              "type": "AUTO"
+           } ]
+        },
+        "pin": {
+           "supported": false
+        },
+        "supported_content_type": [ {
+           "content_type": "application/pdf"
+        } ]
+     },
+     "version": "1.0"
+   },
    "printer": {
       "cupsEnterprisePrinter": false,
       "deviceName": "device_name",
@@ -421,15 +631,52 @@ TEST(LocalPrinterHandlerChromeos, CapabilityToValue) {
 })");
   ASSERT_TRUE(kExpectedValue.is_dict());
   EXPECT_EQ(kExpectedValue.GetDict(),
-            LocalPrinterHandlerChromeos::CapabilityToValue(std::move(caps)));
+            LocalPrinterHandlerChromeos::CapabilityToValue(std::move(printer),
+                                                           std::move(caps)));
 }
 
 TEST(LocalPrinterHandlerChromeos, CapabilityToValue_ConfiguredViaPolicy) {
-  auto caps = crosapi::mojom::CapabilitiesResponse::New();
-  caps->basic_info = crosapi::mojom::LocalDestinationInfo::New(
-      "device_name", "printer_name", "printer_description", true);
+  std::optional<chromeos::Printer> printer(chromeos::Printer("device_name"));
+  printer->set_display_name("printer_name");
+  printer->set_description("printer_description");
+  printer->set_source(chromeos::Printer::SRC_POLICY);
+
+  std::optional<::printing::PrinterSemanticCapsAndDefaults> caps(
+      (::printing::PrinterSemanticCapsAndDefaults()));
 
   const base::Value kExpectedValue = base::test::ParseJson(R"({
+   "capabilities": {
+     "printer": {
+        "color": {
+           "option": [ {
+              "is_default": true,
+              "type": "STANDARD_MONOCHROME",
+              "vendor_id": "0"
+           } ]
+        },
+        "copies": {
+           "default": 1,
+           "max": 1
+        },
+        "page_orientation": {
+           "option": [ {
+              "is_default": true,
+              "type": "PORTRAIT"
+           }, {
+              "type": "LANDSCAPE"
+           }, {
+              "type": "AUTO"
+           } ]
+        },
+        "pin": {
+           "supported": false
+        },
+        "supported_content_type": [ {
+           "content_type": "application/pdf"
+        } ]
+     },
+     "version": "1.0"
+   },
    "printer": {
       "cupsEnterprisePrinter": true,
       "deviceName": "device_name",
@@ -440,11 +687,14 @@ TEST(LocalPrinterHandlerChromeos, CapabilityToValue_ConfiguredViaPolicy) {
 })");
   ASSERT_TRUE(kExpectedValue.is_dict());
   EXPECT_EQ(kExpectedValue.GetDict(),
-            LocalPrinterHandlerChromeos::CapabilityToValue(std::move(caps)));
+            LocalPrinterHandlerChromeos::CapabilityToValue(std::move(printer),
+                                                           std::move(caps)));
 }
 
 TEST(LocalPrinterHandlerChromeos, CapabilityToValue_EmptyInput) {
-  EXPECT_TRUE(LocalPrinterHandlerChromeos::CapabilityToValue(nullptr).empty());
+  EXPECT_TRUE(
+      LocalPrinterHandlerChromeos::CapabilityToValue(std::nullopt, std::nullopt)
+          .empty());
 }
 
 TEST(LocalPrinterHandlerChromeos, StatusToValue) {
@@ -463,6 +713,50 @@ TEST(LocalPrinterHandlerChromeos, StatusToValue) {
    "timestamp": 1e+12
 })");
   EXPECT_EQ(kExpectedValue, LocalPrinterHandlerChromeos::StatusToValue(status));
+}
+
+TEST(LocalPrinterHandlerChromeos, RecordDpi) {
+  base::HistogramTester histogram_tester;
+  printing::PrinterSemanticCapsAndDefaults printer_caps;
+
+  std::optional<chromeos::Printer> printer(chromeos::Printer("device_name"));
+  printer->set_display_name("printer_name");
+  printer->set_description("printer_description");
+
+  std::optional<::printing::PrinterSemanticCapsAndDefaults> caps(
+      (::printing::PrinterSemanticCapsAndDefaults()));
+  // Represent DPI values in hex to simplify cross checking the values with the
+  // metric output.
+  caps->default_dpi = {0x00C8, 0x0190};
+  caps->dpis = {
+      {0x0064, 0x0064}, {0x00C8, 0x0190}, {0x00C8, 0x01F4}, {0x03E8, 0x03E8}};
+
+  LocalPrinterHandlerChromeos::CapabilityToValue(std::move(printer),
+                                                 std::move(caps));
+
+  histogram_tester.ExpectUniqueSample("Printing.CUPS.DPI.Count", /*sample=*/4,
+                                      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample("Printing.CUPS.DPI.Default",
+                                      /*sample=*/0x00C80190,
+                                      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample("Printing.CUPS.DPI.Min",
+                                      /*sample=*/0x00640064,
+                                      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample("Printing.CUPS.DPI.Max",
+                                      /*sample=*/0x03E803E8,
+                                      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectBucketCount("Printing.CUPS.DPI.AllValues",
+                                     /*sample=*/0x00640064,
+                                     /*expected_count=*/1);
+  histogram_tester.ExpectBucketCount("Printing.CUPS.DPI.AllValues",
+                                     /*sample=*/0x00C80190,
+                                     /*expected_count=*/1);
+  histogram_tester.ExpectBucketCount("Printing.CUPS.DPI.AllValues",
+                                     /*sample=*/0x00C801F4,
+                                     /*expected_count=*/1);
+  histogram_tester.ExpectBucketCount("Printing.CUPS.DPI.AllValues",
+                                     /*sample=*/0x03E803E8,
+                                     /*expected_count=*/1);
 }
 
 }  // namespace printing

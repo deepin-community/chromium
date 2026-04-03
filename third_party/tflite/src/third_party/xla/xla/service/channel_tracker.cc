@@ -19,14 +19,14 @@ limitations under the License.
 
 namespace xla {
 
-StatusOr<ChannelHandle> ChannelTracker::NewChannel(
+absl::StatusOr<ChannelHandle> ChannelTracker::NewChannel(
     ChannelHandle::ChannelType type) {
   if (type != ChannelHandle::DEVICE_TO_DEVICE &&
       type != ChannelHandle::HOST_TO_DEVICE &&
       type != ChannelHandle::DEVICE_TO_HOST) {
     return InvalidArgument("Invalid channel type: %d", type);
   }
-  absl::MutexLock lock(&channel_mutex_);
+  absl::MutexLock lock(channel_mutex_);
 
   // Create a new channel handle with a unique value.
   ChannelHandle new_handle;

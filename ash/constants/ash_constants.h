@@ -31,8 +31,13 @@ constexpr int kFocusBarThickness = 3;
 constexpr int kShelfDisplayOffset = 1;
 
 constexpr int kDefaultLargeCursorSize = 64;
+constexpr int kMinLargeCursorSize = 25;
+constexpr int kMaxLargeCursorSize = 128;
 
-constexpr SkColor kDefaultCursorColor = SK_ColorBLACK;
+constexpr int kDefaultCaretBlinkIntervalMs = 500;
+
+// Default notification flash color is yellow.
+constexpr SkColor kDefaultFlashNotificationsColor = 0xffff00;
 
 // These device types are a subset of ui::InputDeviceType. These strings are
 // also used in Switch Access webui.
@@ -83,6 +88,16 @@ constexpr base::TimeDelta kDefaultKeyAutoRepeatInterval =
 // Constants for notification.
 const char kPrivacyIndicatorsNotificationIdPrefix[] = "privacy-indicators";
 const char kPrivacyIndicatorsNotifierId[] = "ash.privacy-indicators";
+const char kPrivacyIndicatorsMultiCaptureNotifierId[] =
+    "ash.multi-capture-active-privacy-indicators";
+
+// The default delay between last key release and accepting a new key press.
+inline constexpr base::TimeDelta kDefaultAccessibilityBounceKeysDelay =
+    base::Milliseconds(500);
+
+// The default delay before accepting a held key press.
+inline constexpr base::TimeDelta kDefaultAccessibilitySlowKeysDelay =
+    base::Milliseconds(500);
 
 // The default value for audio strategy in ChromeVox.
 COMPONENT_EXPORT(ASH_CONSTANTS)
@@ -184,13 +199,17 @@ constexpr bool kDefaultAccessibilitySelectToSpeakVoiceSwitching = false;
 constexpr bool kDefaultAccessibilitySelectToSpeakWordHighlight = true;
 
 // How much to scale cursor speed in various directions.
-constexpr int kDefaultFaceGazeCursorSpeed = 20;
-
-// How much FaceGaze should smooth recent cursor movements.
-constexpr int kDefaultFaceGazeCursorSmoothing = 6;
+constexpr int kDefaultFaceGazeCursorSpeed = 10;
 
 // Whether to use cursor acceleration.
 constexpr bool kDefaultFaceGazeCursorUseAcceleration = true;
+
+// How much FaceGaze should threshold velocity, e.g. to implement deadzone.
+constexpr int kDefaultFaceGazeVelocityThreshold = 9;
+
+// How much FaceGaze should dampen the mouse speed during a precision click.
+// Note that this value represents a percentage, e.g. 50%.
+constexpr int kDefaultFaceGazePrecisionClickSpeedFactor = 50;
 
 }  // namespace ash
 

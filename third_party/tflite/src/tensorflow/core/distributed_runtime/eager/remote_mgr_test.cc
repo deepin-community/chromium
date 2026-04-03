@@ -35,7 +35,7 @@ class TestRemoteMgr : public RemoteMgr {
   TestRemoteMgr(bool is_master, EagerContext* ctx)
       : RemoteMgr(is_master, ctx) {}
 
-  uint64 OpId() {
+  uint64_t OpId() {
     tf_shared_lock l(next_id_mutex_);
     return next_op_id_;
   }
@@ -75,7 +75,7 @@ TEST_F(RemoteMgrTest, SerializeLocalTensorHandleWithRemoteMirror) {
 
   TensorHandle* handle = TensorHandle::CreateLocalHandle(
       std::move(t), local_device_, local_device_, ctx_);
-  const uint64 op_id = 2;
+  const uint64_t op_id = 2;
   const int output_num = 3;
   TF_ASSERT_OK(handle->AddUnshapedRemoteMirror(remote_device_, op_id,
                                                output_num, "", ctx_));
@@ -94,14 +94,13 @@ TEST_F(RemoteMgrTest, SerializeLocalTensorHandleWithRemoteMirror) {
 TEST_F(RemoteMgrTest, SerializeRemoteTensorHandle) {
   RemoteMgr remote_mgr(false, ctx_);
 
-  const uint64 op_id = 3;
+  const uint64_t op_id = 3;
   const int output_num = 1;
   TensorHandle* handle = TensorHandle::CreateLazyRemoteHandle(
       op_id, output_num, DT_FLOAT, remote_device_, /*is_ready=*/true, ctx_);
   RemoteTensorHandle remote_handle;
   TF_ASSERT_OK(remote_mgr.SerializeRemoteTensorHandle(
-      handle, /*wait_until_ready=*/true, &remote_handle, remote_device_,
-      remote_device_->name()));
+      handle, /*wait_until_ready=*/true, &remote_handle, remote_device_));
   EXPECT_EQ(op_id, remote_handle.op_id());
   EXPECT_EQ(output_num, remote_handle.output_num());
   EXPECT_EQ(remote_device_->name(), remote_handle.device());
@@ -114,7 +113,7 @@ TEST_F(RemoteMgrTest, InvalidateRemoteMirrorWithClusterUpdate) {
 
   TensorHandle* handle = TensorHandle::CreateLocalHandle(
       std::move(t), local_device_, local_device_, ctx_);
-  const uint64 op_id = 2;
+  const uint64_t op_id = 2;
   const int output_num = 3;
   TF_ASSERT_OK(handle->AddUnshapedRemoteMirror(remote_device_, op_id,
                                                output_num, "", ctx_));
@@ -135,7 +134,7 @@ TEST_F(RemoteMgrTest, InvalidateRemoteMirrorWithClusterUpdate) {
 TEST_F(RemoteMgrTest, SetRemoteShapeWithClusterUpdate) {
   RemoteMgr remote_mgr(false, ctx_);
 
-  const uint64 op_id = 3;
+  const uint64_t op_id = 3;
   const int output_num = 1;
   TensorHandle* handle = TensorHandle::CreateUnshapedRemoteHandle(
       op_id, output_num,
@@ -158,20 +157,19 @@ TEST_F(RemoteMgrTest, SetRemoteShapeWithClusterUpdate) {
 TEST_F(RemoteMgrTest, ErrorSourcesShouldExist) {
   RemoteMgr remote_mgr(false, ctx_);
 
-  const uint64 op_id = 3;
+  const uint64_t op_id = 3;
   const int output_num = 1;
   TensorHandle* handle = TensorHandle::CreateLazyRemoteHandle(
       op_id, output_num, DT_FLOAT, remote_device_, /*is_ready=*/true, ctx_);
   RemoteTensorHandle remote_handle;
   remote_mgr.AddOperationOutput(handle, op_id, output_num);
   TF_ASSERT_OK(remote_mgr.SerializeRemoteTensorHandle(
-      handle, /*wait_until_ready=*/true, &remote_handle, remote_device_,
-      remote_device_->name()));
+      handle, /*wait_until_ready=*/true, &remote_handle, remote_device_));
   auto remote_handle_internal = RemoteTensorHandleInternal(remote_handle);
   TF_ASSERT_OK(remote_mgr.DeleteTensorHandle(remote_handle_internal));
 
   // Now that the tensor has been deleted, we cannot access the remote handle.
-  Status s = remote_mgr.DeleteTensorHandle(remote_handle_internal);
+  absl::Status s = remote_mgr.DeleteTensorHandle(remote_handle_internal);
   EXPECT_FALSE(s.ok());
   EXPECT_TRUE(s.GetPayload(kErrorSource).has_value());
 

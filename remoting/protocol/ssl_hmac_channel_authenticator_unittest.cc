@@ -15,7 +15,6 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
 #include "base/timer/timer.h"
-#include "crypto/rsa_private_key.h"
 #include "net/base/net_errors.h"
 #include "net/cert/x509_util.h"
 #include "net/test/cert_test_util.h"
@@ -206,7 +205,7 @@ TEST_F(SslHmacChannelAuthenticatorTest, InvalidCertificate) {
   host_auth_ = SslHmacChannelAuthenticator::CreateForHost(host_cert_, key_pair_,
                                                           kTestSharedSecret);
 
-  // TODO(https://crbug.com/912383): The server sees
+  // TODO(crbug.com/41430308): The server sees
   // ERR_BAD_SSL_CLIENT_AUTH_CERT because its peer (the client) alerts it with
   // bad_certificate. The alert-mapping code assumes it is running on a client,
   // so it translates bad_certificate to ERR_BAD_SSL_CLIENT_AUTH_CERT, which

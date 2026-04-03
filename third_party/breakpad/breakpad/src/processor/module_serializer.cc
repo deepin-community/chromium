@@ -38,9 +38,11 @@
 
 #include "processor/module_serializer.h"
 
-#include <cstdint>
-#include <cstring>
+#include <stdint.h>
+#include <string.h>
+
 #include <map>
+#include <memory>
 #include <string>
 
 #include "common/scoped_ptr.h"
@@ -132,7 +134,7 @@ char* ModuleSerializer::Serialize(const BasicSourceLineResolver::Module& module,
     BPLOG(ERROR) << "ModuleSerializer: memory allocation failed, "
                  << "size to alloc: " << size_to_alloc;
     if (size) *size = 0;
-    return NULL;
+    return nullptr;
   }
 
   // Write serialized data to allocated memory chunk.
@@ -172,10 +174,10 @@ bool ModuleSerializer::SerializeModuleAndLoadIntoFastResolver(
   // Copy the data into string.
   // Must pass string to LoadModuleUsingMapBuffer(), instead of passing char* to
   // LoadModuleUsingMemoryBuffer(), because of data ownership/lifetime issue.
-  string symbol_data_string(symbol_data.get(), size);
+  std::string symbol_data_string(symbol_data.get(), size);
   symbol_data.reset();
 
-  scoped_ptr<CodeModule> code_module(
+  std::unique_ptr<CodeModule> code_module(
       new BasicCodeModule(0, 0, iter->first, "", "", "", ""));
 
   return fast_resolver->LoadModuleUsingMapBuffer(code_module.get(),
@@ -197,8 +199,7 @@ void ModuleSerializer::ConvertAllModules(
 }
 
 bool ModuleSerializer::ConvertOneModule(
-    const string& moduleid,
-    const BasicSourceLineResolver* basic_resolver,
+    const std::string& moduleid, const BasicSourceLineResolver* basic_resolver,
     FastSourceLineResolver* fast_resolver) {
   // Check for NULL pointer.
   if (!basic_resolver || !fast_resolver)
@@ -212,17 +213,17 @@ bool ModuleSerializer::ConvertOneModule(
   return SerializeModuleAndLoadIntoFastResolver(iter, fast_resolver);
 }
 
-char* ModuleSerializer::SerializeSymbolFileData(const string& symbol_data,
+char* ModuleSerializer::SerializeSymbolFileData(const std::string& symbol_data,
                                                 size_t* size) {
-  scoped_ptr<BasicSourceLineResolver::Module> module(
+  std::unique_ptr<BasicSourceLineResolver::Module> module(
       new BasicSourceLineResolver::Module("no name"));
   scoped_array<char> buffer(new char[symbol_data.size() + 1]);
   memcpy(buffer.get(), symbol_data.c_str(), symbol_data.size());
   buffer.get()[symbol_data.size()] = '\0';
   if (!module->LoadMapFromMemory(buffer.get(), symbol_data.size() + 1)) {
-    return NULL;
+    return nullptr;
   }
-  buffer.reset(NULL);
+  buffer.reset(nullptr);
   return Serialize(*module, size);
 }
 

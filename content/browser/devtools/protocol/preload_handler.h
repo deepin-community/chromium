@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "content/browser/devtools/protocol/devtools_domain_handler.h"
 #include "content/browser/devtools/protocol/preload.h"
 #include "content/browser/preloading/prefetch/prefetch_status.h"
@@ -39,13 +40,16 @@ class PreloadHandler : public DevToolsDomainHandler, public Preload::Backend {
       const base::UnguessableToken& initiator_devtools_navigation_token,
       const std::string& initiating_frame_id,
       const GURL& prefetch_url,
+      const base::UnguessableToken& preload_pipeline_id,
       PreloadingTriggeringOutcome status,
       PrefetchStatus prefetch_status,
       const std::string& request_id);
   void DidUpdatePrerenderStatus(
       const base::UnguessableToken& initiator_devtools_navigation_token,
+      blink::mojom::SpeculationAction action,
       const GURL& prerender_url,
       std::optional<blink::mojom::SpeculationTargetHint> target_hint,
+      const base::UnguessableToken& preload_pipeline_id,
       PreloadingTriggeringOutcome status,
       std::optional<PrerenderFinalStatus> prerender_status,
       std::optional<std::string> disallowed_mojo_interface,
@@ -61,8 +65,9 @@ class PreloadHandler : public DevToolsDomainHandler, public Preload::Backend {
                    RenderFrameHostImpl* frame_host) override;
 
   void SendInitialPreloadEnabledState();
+  void SendCurrentPreloadStatus();
 
-  RenderFrameHostImpl* host_ = nullptr;
+  raw_ptr<RenderFrameHostImpl> host_ = nullptr;
 
   bool enabled_ = false;
 

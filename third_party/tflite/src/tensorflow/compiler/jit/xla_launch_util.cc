@@ -15,50 +15,76 @@ limitations under the License.
 
 #include "tensorflow/compiler/jit/xla_launch_util.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/cleanup/cleanup.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_join.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "tensorflow/compiler/jit/pjrt_tensor_buffer.h"
 #include "tensorflow/compiler/jit/pjrt_tensor_buffer_util.h"
 #include "tensorflow/compiler/jit/variable_info.h"
 #include "tensorflow/compiler/jit/variable_info_util.h"
+#include "tensorflow/compiler/jit/xla_tensor.h"
 #include "tensorflow/compiler/tf2xla/const_analysis.h"
 #include "tensorflow/compiler/tf2xla/shape_util.h"
 #include "tensorflow/compiler/tf2xla/xla_compiler.h"
+#include "tensorflow/compiler/tf2xla/xla_helpers.h"
+#include "tensorflow/compiler/tf2xla/xla_resource.h"
 #include "xla/client/local_client.h"
+#include "xla/future.h"
+#include "xla/hlo/ir/hlo_input_output_alias_config.h"
 #include "xla/pjrt/pjrt_client.h"
-#include "xla/pjrt/pjrt_future.h"
-#include "xla/pjrt/pjrt_stream_executor_client.h"
-#include "xla/pjrt/tracked_device_buffer.h"
+#include "xla/pjrt/pjrt_common.h"
+#include "xla/pjrt/pjrt_executable.h"
+#include "xla/service/executable.h"
+#include "xla/service/maybe_owning_device_memory.h"
+#include "xla/service/shaped_buffer.h"
+#include "xla/service/transfer_manager.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/status_macros.h"
+#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/device_memory_allocator.h"
+#include "xla/stream_executor/event.h"
+#include "xla/stream_executor/host/host_platform_id.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/platform_manager.h"
+#include "xla/tsl/framework/device_id_utils.h"
+#include "xla/tsl/framework/serving_device_selector_policies.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/util.h"
 #include "tensorflow/core/common_runtime/dma_helper.h"
+#include "tensorflow/core/common_runtime/gpu/gpu_serving_device_selector.h"
 #include "tensorflow/core/common_runtime/gpu_device_context.h"
 #include "tensorflow/core/framework/allocator.h"
-#include "tensorflow/core/framework/op.h"
+#include "tensorflow/core/framework/device_base.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/resource_handle.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/refcount.h"
 #include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/platform/status.h"
-#include "tensorflow/core/platform/statusor.h"
 #include "tensorflow/core/tfrt/common/async_value_tensor.h"
-#include "tensorflow/core/util/stream_executor_util.h"
-#include "tsl/framework/device_id_utils.h"
-#include "tsl/platform/status.h"
-#include "tsl/platform/statusor.h"
+#include "tsl/platform/casts.h"
 
 namespace tensorflow {
 namespace {
@@ -96,7 +122,7 @@ std::vector<const Tensor*> InputsFromContext(OpKernelContext* ctx) {
   return inputs;
 }
 
-StatusOr<std::vector<int>> GetConstantInputIndicesFromContext(
+absl::StatusOr<std::vector<int>> GetConstantInputIndicesFromContext(
     OpKernelContext* ctx) {
   std::vector<int> constant_input_indices;
   TF_RETURN_IF_ERROR(GetCompileTimeConstInputs(
@@ -125,11 +151,11 @@ XlaComputationLaunchContext::XlaComputationLaunchContext(
 
 // Fills in `execution_input` with `buffer` for `index`.
 static void PopulateExecutionInputBuffer(xla::ExecutionInput& execution_input,
-                                         xla::ShapeIndex index,
+                                         const xla::ShapeIndex& index,
                                          se::DeviceMemoryBase buffer,
                                          bool donate_buffer, int device_ordinal,
                                          se::DeviceMemoryAllocator* allocator) {
-  xla::MaybeOwningDeviceMemory* in_buffer =
+  xla::MaybeOwningDeviceAddress* in_buffer =
       execution_input.MutableBuffer(index);
   if (donate_buffer) {
     // Here we pass ownership of the buffer to execution_input without releasing
@@ -143,22 +169,22 @@ static void PopulateExecutionInputBuffer(xla::ExecutionInput& execution_input,
   }
 }
 
-StatusOr<std::vector<xla::ExecutionInput>>
+absl::StatusOr<std::vector<xla::ExecutionInput>>
 XlaComputationLaunchContext::PopulateInputs(
     OpKernelContext* ctx,
     const XlaCompiler::CompilationResult* compilation_result,
-    const std::map<int, const Tensor*>& resource_vars,
+    const absl::flat_hash_map<int, const Tensor*>& resource_vars,
     int missing_ctx_input_prefix,
     const xla::HloInputOutputAliasConfig& input_output_alias) {
   std::vector<xla::ExecutionInput> arguments;
   arguments.reserve(compilation_result->xla_input_shapes.size());
 
+  xla::ShapeIndex root_index = {};
+
   for (int i = 0; i < compilation_result->xla_input_shapes.size(); ++i) {
     int arg_num = compilation_result->input_mapping[i];
     CHECK_GE(arg_num, missing_ctx_input_prefix);
     const xla::Shape& device_shape = compilation_result->xla_input_shapes[i];
-    const xla::Shape& host_shape =
-        xla::ShapeUtil::DeviceShapeToHostShape(device_shape);
 
     auto resource_var_it = resource_vars.find(arg_num);
     bool is_resource_variable = resource_var_it != resource_vars.end();
@@ -176,9 +202,8 @@ XlaComputationLaunchContext::PopulateInputs(
                           ? resource_var_it->second
                           : &(ctx->input(arg_num - missing_ctx_input_prefix));
     CHECK(t);
-    bool donate_buffer =
-        t->RefCountIsOne() && is_updated_resource_variable &&
-        input_output_alias.ParameterHasAlias(i, xla::ShapeIndex{});
+    bool donate_buffer = t->RefCountIsOne() && is_updated_resource_variable &&
+                         input_output_alias.ParameterHasAlias(i, root_index);
     VLOG(3) << "Processing input: " << i
             << "; is_resource_variable=" << is_resource_variable
             << "; is_updated_resource_variable=" << is_updated_resource_variable
@@ -193,10 +218,10 @@ XlaComputationLaunchContext::PopulateInputs(
           ctx->op_device_context()->stream());
     }
 
-    arguments.emplace_back(device_shape, host_shape);
+    arguments.emplace_back(&device_shape);
     xla::ExecutionInput& execution_input = arguments.back();
     se::DeviceMemoryBase dmem = XlaTensor::DeviceMemoryFromTensor(*t);
-    PopulateExecutionInputBuffer(execution_input, xla::ShapeIndex{}, dmem,
+    PopulateExecutionInputBuffer(execution_input, root_index, dmem,
                                  donate_buffer, device_ordinal_,
                                  xla_allocator_);
   }
@@ -217,12 +242,12 @@ static Tensor MakeTensor(DataType dtype, const TensorShape& shape,
 // Get aliased tensor from output, or make a new one for the corresponding
 // output operation. Transfers ownership of the buffer from output to the
 // returned tensor.
-static StatusOr<Tensor> GetOrCreateTensorForOutput(
+static absl::StatusOr<Tensor> GetOrCreateTensorForOutput(
     xla::ScopedShapedBuffer& output, int output_num, OpKernelContext* ctx,
     int missing_ctx_input_prefix,
     const xla::HloInputOutputAliasConfig& input_output_alias,
     absl::Span<const int> input_mapping,
-    const std::map<int, const Tensor*>& resource_vars_snapshots,
+    const absl::flat_hash_map<int, const Tensor*>& resource_vars_snapshots,
     DataType output_dtype, const TensorShape& output_shape,
     Allocator* output_allocator, bool allocate_xla_tensors, se::Stream* stream,
     bool use_multiple_streams, std::shared_ptr<se::Event> definition_event) {
@@ -275,7 +300,7 @@ static StatusOr<Tensor> GetOrCreateTensorForOutput(
 }
 
 // Sets output `output_num` for `ctx` provided it is known at a compile time.
-Status SetOutputForConstant(
+absl::Status SetOutputForConstant(
     OpKernelContext* ctx, bool requires_copy_to_device,
     const XlaCompiler::CompilationResult* compilation_result, int output_num) {
   CHECK(compilation_result->outputs[output_num].is_constant);
@@ -298,7 +323,7 @@ Status SetOutputForConstant(
     }
     ctx->op_device_context()->CopyCPUTensorToDevice(
         &const_tensor, device, output_tensor,
-        [&](Status status) { TF_CHECK_OK(status); });
+        [&](absl::Status status) { CHECK_OK(status); });
 
     if (device->device_type() == DEVICE_GPU) {
       // The GPUDeviceContext enqueues the host->device transfer in a
@@ -307,30 +332,30 @@ Status SetOutputForConstant(
       // stream now otherwise we will create a race condition.
       auto* gpu_device_context =
           static_cast<GPUDeviceContext*>(ctx->op_device_context());
-      gpu_device_context->stream()->ThenWaitFor(
-          gpu_device_context->host_to_device_stream());
+      TF_RETURN_IF_ERROR(gpu_device_context->stream()->WaitFor(
+          gpu_device_context->host_to_device_stream()));
     }
   } else {
     // No copy required.
     ctx->set_output(output_num, const_tensor);
     output_tensor = ctx->mutable_output(output_num);
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-static StatusOr<Var*> GetOrCreateResourceVar(
+static absl::StatusOr<Var*> GetOrCreateResourceVar(
     OpKernelContext* ctx, const ResourceHandle& handle,
     const XlaCompiler::ResourceUpdate& write) {
   Var* variable = nullptr;
   TF_RETURN_IF_ERROR(
       LookupOrCreateResource<Var>(ctx, handle, &variable, [&write](Var** ptr) {
         *ptr = new Var(write.type);
-        return OkStatus();
+        return absl::OkStatus();
       }));
   return variable;
 }
 
-StatusOr<std::vector<VariableInfo>> GatherVariableInfo(
+absl::StatusOr<std::vector<VariableInfo>> GatherVariableInfo(
     OpKernelContext* ctx,
     const XlaCompiler::CompilationResult& compilation_result,
     int missing_ctx_input_prefix) {
@@ -341,7 +366,7 @@ StatusOr<std::vector<VariableInfo>> GatherVariableInfo(
         compilation_result.resource_updates[i];
     int actual_input_index = write.input_index - missing_ctx_input_prefix;
     if (actual_input_index < 0 || actual_input_index >= ctx->num_inputs()) {
-      return errors::Internal("Invalid input index for variable write.");
+      return xla::Internal("Invalid input index for variable write.");
     }
 
     const ResourceHandle handle = HandleFromInput(ctx, actual_input_index);
@@ -353,21 +378,21 @@ StatusOr<std::vector<VariableInfo>> GatherVariableInfo(
   return std::move(out);
 }
 
-Status XlaComputationLaunchContext::PopulateOutputs(
+absl::Status XlaComputationLaunchContext::PopulateOutputs(
     OpKernelContext* ctx,
     const XlaCompiler::CompilationResult* compilation_result,
     ScopedShapedBuffer output, int missing_ctx_input_prefix,
     absl::Span<VariableInfo> variable_infos,
     const xla::HloInputOutputAliasConfig& input_output_alias,
-    const std::map<int, const Tensor*>& resource_vars) {
+    const absl::flat_hash_map<int, const Tensor*>& resource_vars) {
   se::Stream* stream =
       ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
   Allocator* allocator = ctx->device()->GetAllocator({});
 
   // Computation output should always be a tuple.
-  VLOG(2) << "Result tuple shape: " << output.on_host_shape().DebugString();
+  VLOG(2) << "Result tuple shape: " << output.on_host_shape().ToString();
   VLOG(2) << "Result tuple shape (on device): "
-          << output.on_device_shape().DebugString();
+          << output.on_device_shape().ToString();
   CHECK_EQ(ctx->num_outputs(), compilation_result->outputs.size());
 
   // If the on-host-shape isn't a tuple, create a new single-element tuple
@@ -376,27 +401,23 @@ Status XlaComputationLaunchContext::PopulateOutputs(
   if (!output.on_host_shape().IsTuple()) {
     ShapedBuffer nontuple_buffer = output.release();
     ShapedBuffer buffer(
-        xla::ShapeUtil::MakeTupleShape({nontuple_buffer.on_host_shape()}),
         xla::ShapeUtil::MakeTupleShape({nontuple_buffer.on_device_shape()}),
         output.device_ordinal());
     buffer.buffers().CopySubtreeFrom(nontuple_buffer.buffers(),
-                                     /*source_base_index=*/{},
-                                     /*target_base_index=*/{0});
+                                     /*src_index=*/{},
+                                     /*dst_index=*/{0});
     output = ScopedShapedBuffer(std::move(buffer), output.memory_allocator());
   }
 
   std::shared_ptr<se::Event> definition_event;
   if (use_multiple_streams_ && stream) {
-    definition_event = std::make_shared<se::Event>(stream->parent());
-    if (!definition_event->Init()) {
-      return errors::Internal("Failed to initialize tensor definition event.");
-    }
-    stream->ThenRecordEvent(definition_event.get());
+    TF_ASSIGN_OR_RETURN(definition_event, stream->parent()->CreateEvent());
+    TF_RETURN_IF_ERROR(stream->RecordEvent(definition_event.get()));
   }
 
   for (const XlaOutputDescription& descr : compilation_result->outputs) {
     if (descr.type == DT_VARIANT) {
-      return errors::Unimplemented(
+      return xla::Unimplemented(
           "Support for TensorList crossing the XLA/TF boundary "
           "is not implemented");
     }
@@ -407,11 +428,11 @@ Status XlaComputationLaunchContext::PopulateOutputs(
   if (output.on_host_shape().is_dynamic()) {
     const se::Platform* platform = nullptr;
     if (stream != nullptr) {
-      platform = stream->parent()->platform();
+      platform = stream->parent()->GetPlatform();
     } else {
       // Stream is not set for the host platform.
       TF_ASSIGN_OR_RETURN(platform,
-                          se::MultiPlatformManager::PlatformWithId(
+                          se::PlatformManager::PlatformWithId(
                               XlaPlatformInfoFromDevice(ctx->device())));
     }
     TF_ASSIGN_OR_RETURN(auto transfer_manager,
@@ -505,10 +526,10 @@ Status XlaComputationLaunchContext::PopulateOutputs(
     *var->tensor() = output_tensor;
     ++output_num;
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-StatusOr<std::vector<XlaCompiler::Argument>>
+absl::StatusOr<std::vector<XlaCompiler::Argument>>
 XlaComputationLaunchContext::BuildXlaCompilerArguments(
     absl::Span<int const> must_be_constant_idxs,
     absl::Span<const Tensor* const> inputs,
@@ -521,7 +542,7 @@ XlaComputationLaunchContext::BuildXlaCompilerArguments(
           << absl::StrJoin(must_be_constant_idxs, ",") << "} out of "
           << inputs.size() << " args";
   std::vector<XlaCompiler::Argument> out;
-  out.resize(inputs.size());
+  out.reserve(inputs.size());
 
   // TODO(cheshire): Avoid duplication with framework/op_kernel.h
   DeviceContext* device_context = nullptr;
@@ -541,11 +562,11 @@ XlaComputationLaunchContext::BuildXlaCompilerArguments(
   }
 
   absl::flat_hash_map<int, const VariableInfo*> variable_info_lookup;
-  TF_CHECK_OK(CreateVariableInfoLookup(variable_args, variable_info_lookup));
+  CHECK_OK(CreateVariableInfoLookup(variable_args, variable_info_lookup));
   for (int64_t input_num = 0; input_num < inputs.size(); ++input_num) {
     const Tensor* input = inputs[input_num];
+    XlaCompiler::Argument& arg = out.emplace_back();
 
-    XlaCompiler::Argument& arg = out[input_num];
     if (variable_info_lookup.count(input_num) && device != nullptr) {
       // Handles resource variables.
       TF_RET_CHECK(input->dtype() == DT_RESOURCE);
@@ -605,7 +626,7 @@ XlaComputationLaunchContext::BuildXlaCompilerArguments(
 }
 
 // TODO(b/289002708) Create a unit test to cover use_pjrt_tensor_buffer=true.
-Status PreparePjRtExecutableArguments(
+absl::Status PreparePjRtExecutableArguments(
     int num_missing_prefix_ctx_inputs, const std::vector<int>& input_mapping,
     const std::vector<const Tensor*>& inputs,
     const absl::flat_hash_map<int, const Tensor*>& variable_snapshots,
@@ -647,27 +668,15 @@ Status PreparePjRtExecutableArguments(
       } else {
         // Creates a PjRtBuffer from DeviceMemoryBase. The newly created
         // PjRtBuffer needs to be persisted till XLA execution is completed.
-        auto dmem = se::DeviceMemoryBase(
-            const_cast<char*>(tensor->tensor_data().data()),
-            tensor->tensor_data().size());
-        absl::Span<const std::shared_ptr<xla::BufferSequencingEvent>>
-            definition_events;
-        TF_ASSIGN_OR_RETURN(
-            xla::LocalDeviceState * local_device_state,
-            tensorflow::down_cast<xla::PjRtStreamExecutorDevice*>(pjrt_device)
-                ->GetLocalDeviceState());
-        auto device_buffer = std::make_shared<xla::TrackedDeviceBuffer>(
-            /*allocator=*/nullptr,
-            local_device_state->local_device_id().value(),
-            std::initializer_list<se::DeviceMemoryBase>{dmem},
-            definition_events, /*on_delete_callback=*/[]() {});
         xla::Shape device_shape;
         TF_RETURN_IF_ERROR(TensorShapeToXLAShape(
             tensor->dtype(), tensor->shape(), &device_shape));
-        std::unique_ptr<xla::PjRtBuffer> pjrt_buffer =
-            std::make_unique<xla::PjRtStreamExecutorBuffer>(
-                device_shape, std::move(device_buffer), pjrt_client,
-                pjrt_device);
+        TF_ASSIGN_OR_RETURN(
+            std::unique_ptr<xla::PjRtBuffer> pjrt_buffer,
+            pjrt_client->CreateViewOfDeviceBuffer(
+                const_cast<char*>(tensor->tensor_data().data()), device_shape,
+                pjrt_device->default_memory_space().value_or(nullptr),
+                [tensor = *tensor]() {}));
         owned_args->push_back(std::move(pjrt_buffer));
         args->push_back(owned_args->back().get());
       }
@@ -683,11 +692,11 @@ Status PreparePjRtExecutableArguments(
       non_donatable_input_indices->insert(args->size() - 1);
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 // TODO(b/289002708) Create a unit test to cover use_pjrt_tensor_buffer=true.
-Status PopulateCtxOutputsFromPjRtExecutableOutputs(
+absl::Status PopulateCtxOutputsFromPjRtExecutableOutputs(
     int num_missing_prefix_ctx_inputs, const std::vector<const Tensor*>& inputs,
     const std::vector<VariableInfo>& variables,
     const XlaCompiler::CompilationResult& compilation_result,
@@ -793,15 +802,13 @@ Status PopulateCtxOutputsFromPjRtExecutableOutputs(
     var->is_initialized |= write.modified;
     ++output_num;
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 xla::ExecuteOptions GetPjRtExecuteOptions(
     const DeviceType& device_type,
     absl::flat_hash_set<int> non_donatable_input_indices) {
   xla::ExecuteOptions options;
-  options.arguments_are_tupled = false;
-  options.untuple_result = true;
   // Hardcode run id to always be one: TF distributed strategy
   // differentiates between subsequent runs using dependency edges. This
   // is safe, as only TF dist-strat can produce distributed ops, and we
@@ -823,12 +830,11 @@ xla::ExecuteOptions GetPjRtExecuteOptions(
 }
 
 DeviceType GetDeviceType(OpKernelContext* ctx) {
-  auto* device =
-      tensorflow::down_cast<Device*>(ctx->device()->UnderlyingDevice());
+  auto* device = tsl::down_cast<Device*>(ctx->device()->UnderlyingDevice());
   return DeviceType(device->device_type());
 }
 
-Status RunPjRtExecutable(
+absl::Status RunPjRtExecutable(
     const std::vector<const Tensor*>& inputs,
     const std::vector<VariableInfo>& variables,
     const XlaCompiler::CompilationResult& compilation_result,
@@ -844,38 +850,64 @@ Status RunPjRtExecutable(
 }
 
 // TODO(b/289421064): Add unit test for this.
-Status RunPjRtExecutable(
+absl::Status RunPjRtExecutable(
     int num_missing_prefix_ctx_inputs, const std::vector<const Tensor*>& inputs,
     const absl::flat_hash_map<int, const Tensor*>& variable_snapshots,
     const std::vector<VariableInfo>& updated_variables,
     const XlaCompiler::CompilationResult& compilation_result,
     xla::PjRtClient* pjrt_client, xla::PjRtLoadedExecutable* executable,
     OpKernelContext* ctx) {
-  const bool use_pjrt_tensor_buffer = ctx->device()
-                                          ->tensorflow_accelerator_device_info()
-                                          ->use_pjrt_tensor_buffer;
+  const CompositeDevice::AcceleratorDeviceInfo* accelerator_device_info =
+      ctx->device()->tensorflow_accelerator_device_info();
+  const bool use_pjrt_tensor_buffer =
+      (accelerator_device_info == nullptr)
+          ? true
+          : accelerator_device_info->use_pjrt_tensor_buffer;
 
   const DeviceType& device_type = GetDeviceType(ctx);
-  TF_ASSIGN_OR_RETURN(const int pjrt_device_id,
-                      tsl::GetDeviceIdFromDeviceParsedName(
-                          ctx->device()->parsed_name(), device_type));
+  const int pjrt_device_id =
+      tsl::GetDeviceIdFromDeviceParsedName(ctx->device()->parsed_name());
   TF_ASSIGN_OR_RETURN(xla::PjRtDevice * device,
-                      pjrt_client->LookupAddressableDevice(pjrt_device_id));
+                      pjrt_client->LookupAddressableDevice(
+                          xla::PjRtLocalDeviceId(pjrt_device_id)));
 
+  gpu::GpuServingDeviceSelectorResource* device_selector_resource = nullptr;
+  if (device_type == DEVICE_GPU) {
+    auto rm = ctx->resource_manager();
+    TF_RETURN_IF_ERROR(rm->LookupOrCreate<
+                       gpu::GpuServingDeviceSelectorResource>(
+        rm->default_container(), gpu::kGpuServingDeviceSelectorResourceName,
+        &device_selector_resource,
+        [&](gpu::GpuServingDeviceSelectorResource** device_selector_resource) {
+          *device_selector_resource = new gpu::GpuServingDeviceSelectorResource(
+              pjrt_client->addressable_device_count(),
+              std::make_unique<tsl::RoundRobinPolicy>());
+          return absl::OkStatus();
+        }));
+    core::ScopedUnref device_selector_resource_ref(device_selector_resource);
+
+    TF_ASSIGN_OR_RETURN(absl::string_view fingerprint,
+                        executable->FingerprintExecutable());
+    device_selector_resource->selector()->Enqueue(pjrt_device_id, fingerprint);
+  }
   TF_ASSIGN_OR_RETURN(
       std::vector<std::unique_ptr<xla::PjRtBuffer>> execute_outputs,
       RunPjRtExecutable(num_missing_prefix_ctx_inputs, inputs,
                         variable_snapshots, updated_variables, device_type,
                         use_pjrt_tensor_buffer, compilation_result, device,
                         pjrt_client, executable));
+  if (device_selector_resource != nullptr) {
+    device_selector_resource->selector()->Completed(pjrt_device_id,
+                                                    /*had_error=*/false);
+  }
 
   TF_RETURN_IF_ERROR(PopulateCtxOutputsFromPjRtExecutableOutputs(
       num_missing_prefix_ctx_inputs, inputs, updated_variables,
       compilation_result, use_pjrt_tensor_buffer, execute_outputs, ctx));
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-StatusOr<std::vector<std::unique_ptr<xla::PjRtBuffer>>> RunPjRtExecutable(
+absl::StatusOr<std::vector<std::unique_ptr<xla::PjRtBuffer>>> RunPjRtExecutable(
     int num_missing_prefix_ctx_inputs, const std::vector<const Tensor*>& inputs,
     const absl::flat_hash_map<int, const Tensor*>& variable_snapshots,
     const std::vector<VariableInfo>& updated_variables,
@@ -894,7 +926,7 @@ StatusOr<std::vector<std::unique_ptr<xla::PjRtBuffer>>> RunPjRtExecutable(
       &executable_args, &owned_executable_args, &non_donatable_input_indices));
 
   std::vector<std::unique_ptr<xla::PjRtBuffer>> execute_outputs;
-  std::optional<xla::PjRtFuture<Status>> future;
+  std::optional<tsl::Future<void>> future;
   if (executable->num_replicas() != 1 || executable->num_partitions() != 1) {
     TF_ASSIGN_OR_RETURN(
         execute_outputs,
@@ -920,7 +952,7 @@ StatusOr<std::vector<std::unique_ptr<xla::PjRtBuffer>>> RunPjRtExecutable(
   // is ready i.e. when the execution is complete.
   if (!owned_executable_args.empty() && future.has_value()) {
     future->OnReady([owned_executable_args =
-                         std::move(owned_executable_args)](Status s) {});
+                         std::move(owned_executable_args)](absl::Status s) {});
   }
 
   return execute_outputs;

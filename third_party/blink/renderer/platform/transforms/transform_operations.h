@@ -25,10 +25,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_TRANSFORMS_TRANSFORM_OPERATIONS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_TRANSFORMS_TRANSFORM_OPERATIONS_H_
 
-#include "base/memory/scoped_refptr.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/transforms/transform_operation.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-#include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "ui/gfx/geometry/size_f.h"
 
 namespace gfx {
@@ -48,8 +49,9 @@ class PLATFORM_EXPORT TransformOperations {
   TransformOperations() = default;
   TransformOperations(const EmptyTransformOperations&) {}
 
+  void Trace(Visitor* visitor) const { visitor->Trace(operations_); }
+
   bool operator==(const TransformOperations& o) const;
-  bool operator!=(const TransformOperations& o) const { return !(*this == o); }
 
   // Constructs a transformation matrix from the operations. The parameter
   // |border_box_size| is used when computing styles that are size-dependent.
@@ -127,16 +129,16 @@ class PLATFORM_EXPORT TransformOperations {
 
   void clear() { operations_.clear(); }
 
-  Vector<scoped_refptr<TransformOperation>, 2>& Operations() {
+  HeapVector<Member<TransformOperation>, 2>& Operations() {
     return operations_;
   }
-  const Vector<scoped_refptr<TransformOperation>, 2>& Operations() const {
+  const HeapVector<Member<TransformOperation>, 2>& Operations() const {
     return operations_;
   }
 
   wtf_size_t size() const { return operations_.size(); }
   const TransformOperation* at(wtf_size_t index) const {
-    return index < operations_.size() ? operations_.at(index).get() : nullptr;
+    return index < operations_.size() ? operations_.at(index).Get() : nullptr;
   }
 
   bool BlendedBoundsForBox(const gfx::BoxF&,
@@ -162,7 +164,7 @@ class PLATFORM_EXPORT TransformOperations {
     kDisallow,
   };
 
-  scoped_refptr<TransformOperation> BlendRemainingByUsingMatrixInterpolation(
+  TransformOperation* BlendRemainingByUsingMatrixInterpolation(
       const TransformOperations& from,
       wtf_size_t matching_prefix_length,
       double progress,
@@ -176,12 +178,32 @@ class PLATFORM_EXPORT TransformOperations {
   TransformOperations Add(const TransformOperations& addend) const;
   TransformOperations Zoom(double factor) const;
 
+  bool CanSmoothlyBlendWith(const TransformOperations& other) const;
+
   // Perform accumulation of |to| onto |this|, as specified in
   // https://drafts.csswg.org/css-transforms-2/#combining-transform-lists
   TransformOperations Accumulate(const TransformOperations& to) const;
 
+  bool ContainsSingularMatrixTransform() const;
+  bool IsMergedTransformSingular(wtf_size_t offset) const;
+
+  // For debugging/logging only.
+  friend std::ostream& operator<<(std::ostream& stream,
+                                  const TransformOperations& ops) {
+    stream << "[";
+    bool first = true;
+    for (const TransformOperation* op : ops.operations_) {
+      if (!first) {
+        stream << ", ";
+      }
+      first = false;
+      stream << *op;
+    }
+    return stream << "]";
+  }
+
  private:
-  Vector<scoped_refptr<TransformOperation>, 2> operations_;
+  HeapVector<Member<TransformOperation>, 2> operations_;
 };
 
 }  // namespace blink

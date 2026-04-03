@@ -12,11 +12,6 @@
 
 namespace apps {
 
-// Returns whether `process` has a valid code signature that fulfills
-// `requirement`.
-OSStatus ProcessIsSignedAndFulfillsRequirement(pid_t process,
-                                               SecRequirementRef requirement);
-
 // Reason why no requirement could be returned.
 enum class MissingRequirementReason {
   NoOrAdHocSignature,

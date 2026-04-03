@@ -4,12 +4,12 @@
 
 #include "services/network/trust_tokens/trust_token_store.h"
 
+#include <algorithm>
+#include <map>
 #include <memory>
 #include <optional>
 #include <utility>
 
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "services/network/public/cpp/trust_token_parameterization.h"
@@ -62,7 +62,6 @@ std::unique_ptr<TrustTokenStore> TrustTokenStore::CreateForTesting(
 }
 
 void TrustTokenStore::RecordIssuance(const SuitableTrustTokenOrigin& issuer) {
-  SuitableTrustTokenOrigin issuer_origin = issuer;
   std::unique_ptr<TrustTokenIssuerConfig> config =
       persister_->GetIssuerConfig(issuer);
   if (!config)
@@ -134,7 +133,8 @@ bool TrustTokenStore::IsAssociated(const SuitableTrustTokenOrigin& issuer,
       persister_->GetToplevelConfig(top_level);
   if (!config)
     return false;
-  return base::Contains(config->associated_issuers(), issuer.Serialize());
+  return std::ranges::contains(config->associated_issuers(),
+                               issuer.Serialize());
 }
 
 bool TrustTokenStore::SetAssociation(
@@ -146,7 +146,7 @@ bool TrustTokenStore::SetAssociation(
     config = std::make_unique<TrustTokenToplevelConfig>();
   auto string_issuer = issuer.Serialize();
 
-  if (base::Contains(config->associated_issuers(), string_issuer))
+  if (std::ranges::contains(config->associated_issuers(), string_issuer))
     return true;
 
   if (config->associated_issuers_size() >=
@@ -177,8 +177,8 @@ void TrustTokenStore::PruneStaleIssuerState(
 
   google::protobuf::RepeatedPtrField<TrustToken> filtered_tokens;
   for (auto& token : *config->mutable_tokens()) {
-    if (base::Contains(keys, token.signing_key(),
-                       &mojom::TrustTokenVerificationKey::body)) {
+    if (std::ranges::contains(keys, token.signing_key(),
+                              &mojom::TrustTokenVerificationKey::body)) {
       *filtered_tokens.Add() = std::move(token);
     }
   }
@@ -224,11 +224,11 @@ std::vector<TrustToken> TrustTokenStore::RetrieveMatchingTokens(
   if (!config)
     return matching_tokens;
 
-  base::ranges::copy_if(config->tokens(), std::back_inserter(matching_tokens),
-                        [&key_matcher](const TrustToken& token) {
-                          return token.has_signing_key() &&
-                                 key_matcher.Run(token.signing_key());
-                        });
+  std::ranges::copy_if(config->tokens(), std::back_inserter(matching_tokens),
+                       [&key_matcher](const TrustToken& token) {
+                         return token.has_signing_key() &&
+                                key_matcher.Run(token.signing_key());
+                       });
 
   return matching_tokens;
 }
@@ -314,7 +314,8 @@ bool TrustTokenStore::ClearDataForFilter(mojom::ClearDataFilterPtr filter) {
         // - it is an eTLD+1 (aka "domain and registry") match with anything
         // on |filter|'s domain list, or
         // - it is an origin match with anything on |filter|'s origin list.
-        bool is_match = base::Contains(filter.origins, storage_key.origin());
+        bool is_match =
+            std::ranges::contains(filter.origins, storage_key.origin());
 
         // Computing the domain might be a little expensive, so
         // skip it if we know for sure the origin is a match because it
@@ -324,7 +325,7 @@ bool TrustTokenStore::ClearDataForFilter(mojom::ClearDataFilterPtr filter) {
               net::registry_controlled_domains::GetDomainAndRegistry(
                   storage_key.origin(),
                   net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
-          is_match = base::Contains(filter.domains, etld1_for_origin);
+          is_match = std::ranges::contains(filter.domains, etld1_for_origin);
         }
 
         switch (filter.type) {
@@ -396,6 +397,10 @@ bool TrustTokenStore::DeleteStoredTrustTokens(
 base::flat_map<SuitableTrustTokenOrigin, int>
 TrustTokenStore::GetStoredTrustTokenCounts() {
   return persister_->GetStoredTrustTokenCounts();
+}
+
+IssuerRedemptionRecordMap TrustTokenStore::GetRedemptionRecords() {
+  return persister_->GetRedemptionRecords();
 }
 
 }  // namespace network

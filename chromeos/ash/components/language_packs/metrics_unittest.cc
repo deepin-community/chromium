@@ -1,29 +1,26 @@
 // Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-#include <map>
+
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/hash/hash.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/metrics/histogram_enum_reader.h"
+#include "chromeos/ash/components/language_packs/language_pack_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ash::language_packs {
 
 TEST(LanguagePackMetricsTest, CheckLanguageCodes) {
-  const std::vector<std::string> language_codes = {
-      "am", "ar",    "be",    "bg",    "bn",    "ca",    "cs",  "da", "de",
-      "el", "en-au", "en-gb", "en-us", "es-es", "es-us", "es",  "et", "fa",
-      "fi", "fr",    "ga",    "gu",    "hi",    "hr",    "hu",  "hy", "id",
-      "is", "it",    "iw",    "ja",    "ka",    "kk",    "km",  "kn", "ko",
-      "lo", "lt",    "lv",    "ml",    "mn",    "mr",    "ms",  "mt", "my",
-      "nb", "ne",    "nl",    "no",    "or",    "pa",    "pl",  "pt", "ro",
-      "ru", "si",    "sk",    "sl",    "sr",    "sv",    "ta",  "te", "th",
-      "ti", "tl",    "tr",    "uk",    "ur",    "vi",    "yue", "zh"};
+  std::vector<std::string> language_codes;
+  for (auto& [pack_spec_pair, unused_dlc_id] : GetAllLanguagePackDlcIds()) {
+    language_codes.push_back(pack_spec_pair.locale);
+  }
 
   std::optional<base::HistogramEnumEntryMap> language_codes_map =
       base::ReadEnumFromEnumsXml("LanguagePackLanguageCodes",
@@ -36,7 +33,7 @@ TEST(LanguagePackMetricsTest, CheckLanguageCodes) {
   std::string missing_codes;
   for (const std::string& code : language_codes) {
     const auto hashed = static_cast<int32_t>(base::PersistentHash(code));
-    if (!base::Contains(*language_codes_map, hashed)) {
+    if (!language_codes_map->contains(hashed)) {
       base::StrAppend(&missing_codes,
                       {"<int value=\"", base::NumberToString(hashed),
                        "\" label=\"", code, "\"/>\n"});
@@ -44,9 +41,9 @@ TEST(LanguagePackMetricsTest, CheckLanguageCodes) {
   }
 
   EXPECT_TRUE(missing_codes.empty())
-      << "tools/metrics/histograms/enums.xml enum LanguagePackLanguagesCode "
-         "doesn't contain all expected language codes. "
-      << "Consider adding the following entries:\n\n"
+      << "tools/metrics/histograms/metadata/chromeos/enums.xml enum "
+         "LanguagePackLanguageCodes doesn't contain all expected language "
+         "codes. Consider adding the following entries:\n\n"
       << missing_codes;
 }
 

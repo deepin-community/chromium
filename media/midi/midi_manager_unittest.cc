@@ -7,12 +7,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <vector>
 
 #include "base/check_op.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/system/system_monitor.h"
@@ -26,6 +26,10 @@
 #if BUILDFLAG(IS_WIN)
 #include "media/midi/midi_manager_win.h"
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_ANDROID)
+#include "media/midi/midi_manager_android.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace midi {
 
@@ -132,8 +136,7 @@ class FakeMidiManagerClient : public MidiManagerClient {
     std::move(on_session_start_cb_).Run();
   }
   void ReceiveMidiData(uint32_t port_index,
-                       const uint8_t* data,
-                       size_t size,
+                       base::span<const uint8_t> data,
                        base::TimeTicks timestamp) override {}
   void AccumulateMidiBytesSent(size_t size) override {}
   void Detach() override {}
@@ -274,10 +277,12 @@ TEST_F(MidiManagerTest, StartMultipleSessions) {
 
 TEST_F(MidiManagerTest, TooManyPendingSessions) {
   // Push as many client requests for starting session as possible.
-  std::unique_ptr<base::test::TestFuture<void>>
-      test_futures[MidiManager::kMaxPendingClientCount];
-  std::unique_ptr<FakeMidiManagerClient>
-      many_existing_clients[MidiManager::kMaxPendingClientCount];
+  std::array<std::unique_ptr<base::test::TestFuture<void>>,
+             MidiManager::kMaxPendingClientCount>
+      test_futures;
+  std::array<std::unique_ptr<FakeMidiManagerClient>,
+             MidiManager::kMaxPendingClientCount>
+      many_existing_clients;
   test_futures[0] = std::make_unique<base::test::TestFuture<void>>();
   many_existing_clients[0] =
       std::make_unique<FakeMidiManagerClient>(test_futures[0]->GetCallback());
@@ -360,6 +365,8 @@ class PlatformMidiManagerTest : public ::testing::Test {
 #if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_WIN) && \
     !(defined(USE_ALSA) && defined(USE_UDEV)) && !BUILDFLAG(IS_ANDROID)
     return false;
+#elif BUILDFLAG(IS_ANDROID)
+    return HasSystemFeatureMidiForTesting();
 #else
     return true;
 #endif

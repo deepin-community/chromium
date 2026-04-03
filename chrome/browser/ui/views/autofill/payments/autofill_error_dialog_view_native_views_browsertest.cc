@@ -6,7 +6,7 @@
 
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ui/autofill/payments/view_factory.h"
+#include "chrome/browser/ui/autofill/payments/payments_view_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
@@ -26,10 +26,7 @@ class AutofillErrorDialogViewNativeViewsBrowserTest
     : public DialogBrowserTest,
       public testing::WithParamInterface<std::tuple<bool, bool>> {
  public:
-  AutofillErrorDialogViewNativeViewsBrowserTest() {
-    autofill_error_dialog_controller_ =
-        std::make_unique<AutofillErrorDialogControllerImpl>();
-  }
+  AutofillErrorDialogViewNativeViewsBrowserTest() = default;
 
   ~AutofillErrorDialogViewNativeViewsBrowserTest() override = default;
 
@@ -55,17 +52,24 @@ class AutofillErrorDialogViewNativeViewsBrowserTest
     } else if (name.find("permanent") != std::string::npos) {
       autofill_error_dialog_context.type =
           AutofillErrorDialogType::kVirtualCardPermanentError;
+    } else if (name.find("unsupported_currency") != std::string::npos) {
+      autofill_error_dialog_context.type =
+          AutofillErrorDialogType::kBnplUnsupportedCurrencyError;
+    } else if (name.find("bnpl") != std::string::npos) {
+      autofill_error_dialog_context.type =
+          AutofillErrorDialogType::kBnplPermanentError;
     } else {
       CHECK_NE(name.find("eligibility"), std::string::npos);
       autofill_error_dialog_context.type =
           AutofillErrorDialogType::kVirtualCardNotEligibleError;
     }
 
-    autofill_error_dialog_controller_->Show(
-        autofill_error_dialog_context,
-        base::BindOnce(&CreateAndShowAutofillErrorDialog,
-                       base::Unretained(controller()),
-                       base::Unretained(contents())));
+    autofill_error_dialog_controller_ =
+        std::make_unique<AutofillErrorDialogControllerImpl>(
+            autofill_error_dialog_context);
+    autofill_error_dialog_controller_->Show(base::BindOnce(
+        &CreateAndShowAutofillErrorDialog, base::Unretained(controller()),
+        base::Unretained(contents())));
   }
 
   AutofillErrorDialogViewNativeViews* GetDialogViews() {
@@ -75,8 +79,9 @@ class AutofillErrorDialogViewNativeViewsBrowserTest
 
     base::WeakPtr<AutofillErrorDialogView> dialog_view =
         autofill_error_dialog_controller_->autofill_error_dialog_view();
-    if (!dialog_view)
+    if (!dialog_view) {
       return nullptr;
+    }
 
     return static_cast<AutofillErrorDialogViewNativeViews*>(dialog_view.get());
   }
@@ -162,6 +167,51 @@ IN_PROC_BROWSER_TEST_P(AutofillErrorDialogViewNativeViewsBrowserTest,
           "Autofill.ErrorDialogShown.WithServerText"),
       BucketsAre(base::Bucket(
           AutofillErrorDialogType::kVirtualCardNotEligibleError,
+          /*count=*/server_did_return_title() && server_did_return_description()
+              ? 1
+              : 0)));
+}
+
+// Verify that the dialog is shown, and the metrics for shown are incremented
+// correctly for a BNPL error.
+IN_PROC_BROWSER_TEST_P(AutofillErrorDialogViewNativeViewsBrowserTest,
+                       InvokeUi_bnpl) {
+  base::HistogramTester histogram_tester;
+
+  ShowAndVerifyUi();
+
+  // Verify that the metric for shown is incremented.
+  EXPECT_THAT(histogram_tester.GetAllSamples("Autofill.ErrorDialogShown"),
+              BucketsAre(base::Bucket(
+                  AutofillErrorDialogType::kBnplPermanentError, 1)));
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples(
+          "Autofill.ErrorDialogShown.WithServerText"),
+      BucketsAre(base::Bucket(
+          AutofillErrorDialogType::kBnplPermanentError,
+          /*count=*/server_did_return_title() && server_did_return_description()
+              ? 1
+              : 0)));
+}
+
+// Verify that the dialog is shown, and the metrics for shown are incremented
+// correctly for a BNPL unsupported currency error.
+IN_PROC_BROWSER_TEST_P(AutofillErrorDialogViewNativeViewsBrowserTest,
+                       InvokeUi_bnpl_unsupported_currency) {
+  base::HistogramTester histogram_tester;
+
+  ShowAndVerifyUi();
+
+  // Verify that the metric for shown is incremented.
+  EXPECT_THAT(histogram_tester.GetAllSamples("Autofill.ErrorDialogShown"),
+              BucketsAre(base::Bucket(
+                  AutofillErrorDialogType::kBnplUnsupportedCurrencyError, 1)));
+
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples(
+          "Autofill.ErrorDialogShown.WithServerText"),
+      BucketsAre(base::Bucket(
+          AutofillErrorDialogType::kBnplUnsupportedCurrencyError,
           /*count=*/server_did_return_title() && server_did_return_description()
               ? 1
               : 0)));

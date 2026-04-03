@@ -4,6 +4,7 @@
 
 #include "ash/app_list/views/page_switcher.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -15,7 +16,6 @@
 #include "base/functional/bind.h"
 #include "base/i18n/number_formatting.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -71,7 +71,7 @@ class PageSwitcherButton : public IconButton {
     selected_ = selected;
     SchedulePaint();
     if (selected)
-      NotifyAccessibilityEvent(ax::mojom::Event::kAlert, true);
+      NotifyAccessibilityEventDeprecated(ax::mojom::Event::kAlert, true);
   }
 
   // IconButton:
@@ -107,8 +107,8 @@ class PageSwitcherButton : public IconButton {
   // Paints a button based on the |info|.
   void PaintButton(gfx::Canvas* canvas, PaintButtonInfo info) {
     gfx::Rect rect(GetContentsBounds());
-    SkPath path;
-    path.addCircle(rect.CenterPoint().x(), rect.CenterPoint().y(), info.radius);
+    const SkPath path = SkPath::Circle(rect.CenterPoint().x(),
+                                       rect.CenterPoint().y(), info.radius);
 
     cc::PaintFlags flags;
     flags.setAntiAlias(true);
@@ -140,7 +140,7 @@ PageSwitcher::PageSwitcher(PaginationModel* model)
       views::BoxLayout::Orientation::kVertical, gfx::Insets(),
       kVerticalButtonPadding));
 
-  AddChildView(buttons_.get());
+  AddChildViewRaw(buttons_.get());
 
   TotalPagesChanged(0, model->total_pages());
   SelectedPageChanged(-1, model->selected_page());
@@ -152,11 +152,20 @@ PageSwitcher::~PageSwitcher() {
     model_->RemoveObserver(this);
 }
 
-gfx::Size PageSwitcher::CalculatePreferredSize() const {
+gfx::Size PageSwitcher::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  views::SizeBounds content_available_size(available_size);
+  content_available_size.set_width(2 * PageSwitcher::kMaxButtonRadius);
+
+  gfx::Insets insets = GetInsets();
+  content_available_size.Enlarge(-insets.width(), -insets.height());
+
+  gfx::Size buttons_size = buttons_->GetPreferredSize(content_available_size);
+
   // Always return a size with correct width so that container resize is not
   // needed when more pages are added.
   return gfx::Size(2 * PageSwitcher::kMaxButtonRadius,
-                   buttons_->GetPreferredSize().height());
+                   buttons_size.height() + insets.height());
 }
 
 void PageSwitcher::Layout(PassKey) {
@@ -183,7 +192,7 @@ void PageSwitcher::HandlePageSwitch(const ui::Event& event) {
     return;
 
   const auto& children = buttons_->children();
-  const auto it = base::ranges::find(children, event.target());
+  const auto it = std::ranges::find(children, event.target());
   DCHECK(it != children.end());
   const int page = std::distance(children.begin(), it);
   if (page == model_->selected_page())

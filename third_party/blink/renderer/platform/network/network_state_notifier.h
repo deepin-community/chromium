@@ -42,7 +42,6 @@
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -52,7 +51,7 @@ class PLATFORM_EXPORT NetworkStateNotifier {
 
  public:
   struct NetworkState {
-    static const int kInvalidMaxBandwidth = -1;
+    static constexpr int kInvalidMaxBandwidth = -1;
     bool on_line_initialized = false;
     bool on_line = true;
     bool connection_initialized = false;
@@ -116,9 +115,9 @@ class PLATFORM_EXPORT NetworkStateNotifier {
     ~NetworkStateObserverHandle();
 
    private:
-    raw_ptr<NetworkStateNotifier, ExperimentalRenderer> notifier_;
+    raw_ptr<NetworkStateNotifier> notifier_;
     ObserverType type_;
-    raw_ptr<NetworkStateObserver, ExperimentalRenderer> observer_;
+    raw_ptr<NetworkStateObserver> observer_;
     scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
   };
 
@@ -217,7 +216,6 @@ class PLATFORM_EXPORT NetworkStateNotifier {
         return false;
     }
     NOTREACHED();
-    return false;
   }
 
   // Can be called on any thread.
@@ -251,7 +249,7 @@ class PLATFORM_EXPORT NetworkStateNotifier {
       WebConnectionType,
       std::optional<WebEffectiveConnectionType> effective_type,
       int64_t http_rtt_msec,
-      double max_bandwidth_mbps);
+      std::optional<double> max_bandwidth_mbps);
   void SetSaveDataEnabledOverride(bool enabled);
   void ClearOverride();
 
@@ -362,22 +360,11 @@ class PLATFORM_EXPORT NetworkStateNotifier {
   ObserverListMap connection_observers_;
   ObserverListMap on_line_state_observers_;
 
-  const uint8_t randomization_salt_ = base::RandInt(1, 20);
+  const uint8_t randomization_salt_ = base::RandIntInclusive(1, 20);
 };
 
 PLATFORM_EXPORT NetworkStateNotifier& GetNetworkStateNotifier();
 
 }  // namespace blink
-
-namespace WTF {
-
-template <>
-struct CrossThreadCopier<blink::NetworkStateNotifier::NetworkState>
-    : public CrossThreadCopierPassThrough<
-          blink::NetworkStateNotifier::NetworkState> {
-  STATIC_ONLY(CrossThreadCopier);
-};
-
-}  // namespace WTF
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_NETWORK_NETWORK_STATE_NOTIFIER_H_

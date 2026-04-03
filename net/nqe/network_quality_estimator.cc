@@ -22,20 +22,19 @@
 #include "base/metrics/histogram_macros_local.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/task/lazy_thread_pool_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_tick_clock.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "net/base/features.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/load_flags.h"
 #include "net/base/load_timing_info.h"
 #include "net/base/network_interfaces.h"
 #include "net/base/trace_constants.h"
-#include "net/base/tracing.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_response_info.h"
 #include "net/http/http_status_code.h"
@@ -48,9 +47,20 @@
 
 namespace net {
 
+BASE_FEATURE(kNetworkQualityEstimatorAsyncNotifyStartTransaction,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 namespace {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+// If true, don't call NotifyStartTransaction asynchronously as a task but
+// defers it until the next step like NotifyHeadersReceived.
+BASE_FEATURE_PARAM(bool,
+                   kDeferUntilNextStep,
+                   &kNetworkQualityEstimatorAsyncNotifyStartTransaction,
+                   "defer_until_next_step",
+                   false);
+
+#if BUILDFLAG(IS_CHROMEOS)
 // SequencedTaskRunner to get the network id. A SequencedTaskRunner is used
 // rather than parallel tasks to avoid having many threads getting the network
 // id concurrently.
@@ -70,7 +80,6 @@ NetworkQualityObservationSource ProtocolSourceToObservationSource(
       return NETWORK_QUALITY_OBSERVATION_SOURCE_QUIC;
   }
   NOTREACHED();
-  return NETWORK_QUALITY_OBSERVATION_SOURCE_TCP;
 }
 
 // Returns true if the scheme of the |request| is either HTTP or HTTPS.
@@ -80,11 +89,54 @@ bool RequestSchemeIsHTTPOrHTTPS(const URLRequest& request) {
 
 nqe::internal::NetworkID DoGetCurrentNetworkID(
     NetworkQualityEstimatorParams* params) {
-    nqe::internal::NetworkID network_id(
-        NetworkChangeNotifier::GetConnectionType(), std::string(), INT32_MIN);
+  nqe::internal::NetworkID network_id(
+      NetworkChangeNotifier::GetConnectionType(), std::string(), INT32_MIN);
 
-      return network_id;
+  return network_id;
+}
+
+const char* CategoryToString(nqe::internal::ObservationCategory category) {
+  switch (category) {
+    case nqe::internal::OBSERVATION_CATEGORY_HTTP:
+      return "HTTP";
+    case nqe::internal::OBSERVATION_CATEGORY_TRANSPORT:
+      return "Transport";
+    case nqe::internal::OBSERVATION_CATEGORY_END_TO_END:
+      return "EndToEnd";
+    case nqe::internal::OBSERVATION_CATEGORY_COUNT:
+      NOTREACHED();
   }
+}
+
+base::TimeTicks GetStartTimeFromThreshold(int threshold) {
+  if (threshold < 0) {
+    return base::TimeTicks();
+  }
+  return base::TimeTicks::Now() - base::Seconds(threshold);
+}
+
+base::TimeTicks GetHTTPStartTime() {
+  static const int threshold = features::kRecentHTTPThresholdInSeconds.Get();
+  return GetStartTimeFromThreshold(threshold);
+}
+
+base::TimeTicks GetTransportStartTime() {
+  static const int threshold =
+      features::kRecentTransportThresholdInSeconds.Get();
+  return GetStartTimeFromThreshold(threshold);
+}
+
+base::TimeTicks GetEndToEndStartTime() {
+  static const int threshold =
+      features::kRecentEndToEndThresholdInSeconds.Get();
+  return GetStartTimeFromThreshold(threshold);
+}
+
+void RecordFallbackSuccess(std::string_view category, bool fallback_success) {
+  base::UmaHistogramBoolean(
+      base::StrCat({"NQE.RTT.HittingThreshold.", category, ".FallbackSuccess"}),
+      fallback_success);
+}
 
 }  // namespace
 
@@ -119,6 +171,8 @@ NetworkQualityEstimator::NetworkQualityEstimator(
               tick_clock_,
               params_->weight_multiplier_per_second(),
               1.0 /*params_->weight_multiplier_per_signal_strength_level()*/)},
+      effective_connection_type_recomputation_interval_(
+          features::kEffectiveConnectionTypeRecomputationInterval.Get()),
       net_log_(NetLogWithSource::Make(
           net_log,
           net::NetLogSourceType::NETWORK_QUALITY_ESTIMATOR)),
@@ -206,8 +260,55 @@ NetworkQualityEstimator::~NetworkQualityEstimator() {
   NetworkChangeNotifier::RemoveConnectionTypeObserver(this);
 }
 
-void NetworkQualityEstimator::NotifyStartTransaction(
+void NetworkQualityEstimator::NotifyStartTransaction(URLRequest& request) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  const base::TimeTicks now = tick_clock_->NowTicks();
+  if (base::FeatureList::IsEnabled(
+          kNetworkQualityEstimatorAsyncNotifyStartTransaction)) {
+    if (!kDeferUntilNextStep.Get()) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              &NetworkQualityEstimator::NotifyStartTransactionInternalAsync,
+              weak_ptr_factory_.GetWeakPtr(), request.GetWeakPtr()));
+    }
+    waiting_async_notify_start_transactions_[&request] = now;
+  } else {
+    NotifyStartTransactionInternal(request, now);
+  }
+}
+
+void NetworkQualityEstimator::NotifyStartTransactionInternalAsync(
+    base::WeakPtr<URLRequest> request) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!request) {
+    return;
+  }
+  WaitNotifyStartTransactionDone(*request);
+}
+
+void NetworkQualityEstimator::WaitNotifyStartTransactionDone(
     const URLRequest& request) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(base::FeatureList::IsEnabled(
+      kNetworkQualityEstimatorAsyncNotifyStartTransaction));
+
+  auto request_it = waiting_async_notify_start_transactions_.find(&request);
+  if (request_it == waiting_async_notify_start_transactions_.end()) {
+    // Already called.
+    return;
+  }
+
+  NotifyStartTransactionInternal(*request_it->first, request_it->second);
+  CHECK_EQ(waiting_async_notify_start_transactions_.erase(&request), 1u);
+}
+
+void NetworkQualityEstimator::NotifyStartTransactionInternal(
+    const URLRequest& request,
+    const base::TimeTicks& time) {
+  TRACE_EVENT(NetTracingCategory(),
+              "NetworkQualityEstimator::NotifyStartTransaction");
+  SCOPED_UMA_HISTOGRAM_TIMER("NQE.Duration.NotifyStartTransaction");
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!RequestSchemeIsHTTPOrHTTPS(request))
@@ -219,7 +320,7 @@ void NetworkQualityEstimator::NotifyStartTransaction(
   } else {
     MaybeComputeEffectiveConnectionType();
   }
-  throughput_analyzer_->NotifyStartTransaction(request);
+  throughput_analyzer_->NotifyStartTransaction(request, time);
 }
 
 bool NetworkQualityEstimator::IsHangingRequest(
@@ -275,9 +376,15 @@ bool NetworkQualityEstimator::IsHangingRequest(
 void NetworkQualityEstimator::NotifyHeadersReceived(
     const URLRequest& request,
     int64_t prefilter_total_bytes_read) {
-  TRACE_EVENT0(NetTracingCategory(),
-               "NetworkQualityEstimator::NotifyHeadersReceived");
+  TRACE_EVENT(NetTracingCategory(),
+              "NetworkQualityEstimator::NotifyHeadersReceived");
+  SCOPED_UMA_HISTOGRAM_TIMER("NQE.Duration.NotifyHeadersReceived");
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (base::FeatureList::IsEnabled(
+          kNetworkQualityEstimatorAsyncNotifyStartTransaction)) {
+    WaitNotifyStartTransactionDone(request);
+  }
 
   if (!RequestSchemeIsHTTPOrHTTPS(request) ||
       !RequestProvidesRTTObservation(request)) {
@@ -310,6 +417,25 @@ void NetworkQualityEstimator::NotifyHeadersReceived(
   if (IsHangingRequest(observed_http_rtt))
     return;
 
+  // Metrics on estimation errors.
+  const auto& estimated_rtt = GetHttpRTT();
+  if (estimated_rtt) {
+    const base::TimeDelta estimation_error = observed_http_rtt - *estimated_rtt;
+    if (estimation_error.is_zero()) {
+      base::UmaHistogramBoolean("NQE.RTT.Error.IsZero", true);
+      base::UmaHistogramTimes("NQE.RTT.Error.Absolute", estimation_error);
+    } else {
+      base::UmaHistogramBoolean("NQE.RTT.Error.IsZero", false);
+      if (estimation_error.is_positive()) {
+        base::UmaHistogramTimes("NQE.RTT.Error.Positive", estimation_error);
+        base::UmaHistogramTimes("NQE.RTT.Error.Absolute", estimation_error);
+      } else {  // Negative.
+        base::UmaHistogramTimes("NQE.RTT.Error.Negative", -estimation_error);
+        base::UmaHistogramTimes("NQE.RTT.Error.Absolute", -estimation_error);
+      }
+    }
+  }
+
   Observation http_rtt_observation(observed_http_rtt.InMilliseconds(),
                                    tick_clock_->NowTicks(),
                                    current_network_id_.signal_strength,
@@ -323,15 +449,26 @@ void NetworkQualityEstimator::NotifyHeadersReceived(
 void NetworkQualityEstimator::NotifyBytesRead(
     const URLRequest& request,
     int64_t prefilter_total_bytes_read) {
+  TRACE_EVENT(NetTracingCategory(), "NetworkQualityEstimator::NotifyBytesRead");
+  SCOPED_UMA_HISTOGRAM_TIMER("NQE.Duration.NotifyBytesRead");
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (base::FeatureList::IsEnabled(
+          kNetworkQualityEstimatorAsyncNotifyStartTransaction)) {
+    WaitNotifyStartTransactionDone(request);
+  }
   throughput_analyzer_->NotifyBytesRead(request);
 }
 
 void NetworkQualityEstimator::NotifyRequestCompleted(
     const URLRequest& request) {
-  TRACE_EVENT0(NetTracingCategory(),
-               "NetworkQualityEstimator::NotifyRequestCompleted");
+  TRACE_EVENT(NetTracingCategory(),
+              "NetworkQualityEstimator::NotifyRequestCompleted");
+  SCOPED_UMA_HISTOGRAM_TIMER("NQE.Duration.NotifyRequestCompleted");
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (base::FeatureList::IsEnabled(
+          kNetworkQualityEstimatorAsyncNotifyStartTransaction)) {
+    WaitNotifyStartTransactionDone(request);
+  }
 
   if (!RequestSchemeIsHTTPOrHTTPS(request))
     return;
@@ -341,7 +478,14 @@ void NetworkQualityEstimator::NotifyRequestCompleted(
 
 void NetworkQualityEstimator::NotifyURLRequestDestroyed(
     const URLRequest& request) {
+  TRACE_EVENT(NetTracingCategory(),
+              "NetworkQualityEstimator::NotifyURLRequestDestroyed");
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  SCOPED_UMA_HISTOGRAM_TIMER("NQE.Duration.NotifyURLRequestDestroyed");
+  if (base::FeatureList::IsEnabled(
+          kNetworkQualityEstimatorAsyncNotifyStartTransaction)) {
+    WaitNotifyStartTransactionDone(request);
+  }
 
   if (!RequestSchemeIsHTTPOrHTTPS(request))
     return;
@@ -485,7 +629,7 @@ void NetworkQualityEstimator::OnConnectionTypeChanged(
 void NetworkQualityEstimator::GatherEstimatesForNextConnectionType() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (get_network_id_asynchronously_) {
     // Doing PostTaskAndReplyWithResult by handle because it requires the result
     // type have a default constructor and nqe::internal::NetworkID does not
@@ -506,7 +650,7 @@ void NetworkQualityEstimator::GatherEstimatesForNextConnectionType() {
                            weak_ptr_factory_.GetWeakPtr())));
     return;
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   ContinueGatherEstimatesForNextConnectionType(GetCurrentNetworkID());
 }
@@ -549,6 +693,10 @@ void NetworkQualityEstimator::ComputeEffectiveConnectionType() {
   if (network_quality_.http_rtt() != nqe::internal::InvalidRTT()) {
     UMA_HISTOGRAM_TIMES("NQE.RTT.OnECTComputation",
                         network_quality_.http_rtt());
+  }
+  if (network_quality_.transport_rtt() != nqe::internal::InvalidRTT()) {
+    base::UmaHistogramTimes("NQE.TransportRTT.OnECTComputation",
+                            network_quality_.transport_rtt());
   }
 
   end_to_end_rtt_ = std::nullopt;
@@ -752,21 +900,41 @@ NetworkQualityEstimator::GetRecentEffectiveConnectionTypeUsingMetrics(
     return EFFECTIVE_CONNECTION_TYPE_SLOW_2G;
   }
 
-  if (!GetRecentRTT(nqe::internal::OBSERVATION_CATEGORY_HTTP, base::TimeTicks(),
-                    http_rtt, nullptr)) {
-    *http_rtt = nqe::internal::InvalidRTT();
+  if (!GetRecentRTT(nqe::internal::OBSERVATION_CATEGORY_HTTP,
+                    GetHTTPStartTime(), http_rtt, nullptr)) {
+    bool fallback_success = true;
+    if (!GetRecentRTT(nqe::internal::OBSERVATION_CATEGORY_HTTP,
+                      base::TimeTicks(), http_rtt, nullptr)) {
+      *http_rtt = nqe::internal::InvalidRTT();
+      fallback_success = false;
+    }
+    RecordFallbackSuccess("HTTP", fallback_success);
   }
 
   if (!GetRecentRTT(nqe::internal::OBSERVATION_CATEGORY_TRANSPORT,
-                    base::TimeTicks(), transport_rtt,
+                    GetTransportStartTime(), transport_rtt,
                     transport_rtt_observation_count)) {
-    *transport_rtt = nqe::internal::InvalidRTT();
+    bool fallback_success = true;
+    if (!GetRecentRTT(nqe::internal::OBSERVATION_CATEGORY_TRANSPORT,
+                      base::TimeTicks(), transport_rtt,
+                      transport_rtt_observation_count)) {
+      *transport_rtt = nqe::internal::InvalidRTT();
+      fallback_success = false;
+    }
+    RecordFallbackSuccess("Transport", fallback_success);
   }
 
   if (!GetRecentRTT(nqe::internal::OBSERVATION_CATEGORY_END_TO_END,
-                    base::TimeTicks(), end_to_end_rtt,
+                    GetEndToEndStartTime(), end_to_end_rtt,
                     end_to_end_rtt_observation_count)) {
-    *end_to_end_rtt = nqe::internal::InvalidRTT();
+    bool fallback_success = true;
+    if (!GetRecentRTT(nqe::internal::OBSERVATION_CATEGORY_END_TO_END,
+                      base::TimeTicks(), end_to_end_rtt,
+                      end_to_end_rtt_observation_count)) {
+      *end_to_end_rtt = nqe::internal::InvalidRTT();
+      fallback_success = false;
+    }
+    RecordFallbackSuccess("EndToEnd", fallback_success);
   }
 
   UpdateHttpRttUsingAllRttValues(http_rtt, *transport_rtt, *end_to_end_rtt);
@@ -919,7 +1087,6 @@ base::TimeDelta NetworkQualityEstimator::GetRTTEstimateInternal(
               .value_or(nqe::internal::INVALID_RTT_THROUGHPUT));
     case nqe::internal::OBSERVATION_CATEGORY_COUNT:
       NOTREACHED();
-      return base::TimeDelta();
   }
 }
 
@@ -1071,7 +1238,17 @@ void NetworkQualityEstimator::AddAndNotifyObserversOfRTT(
       observation.GetObservationCategories();
   for (nqe::internal::ObservationCategory observation_category :
        observation_categories) {
-    rtt_ms_observations_[observation_category].AddObservation(observation);
+    auto evicted =
+        rtt_ms_observations_[observation_category].AddObservation(observation);
+    if (evicted) {
+      auto delta = base::TimeTicks::Now() - evicted->timestamp();
+      base::UmaHistogramLongTimes100(
+          base::StrCat({"NQE.RTT.ObservationBufferLifeTime2.",
+                        CategoryToString(observation_category)}),
+          delta);
+      base::UmaHistogramLongTimes100("NQE.RTT.ObservationBufferLifeTime2.All",
+                                     delta);
+    }
   }
 
   if (observation.source() == NETWORK_QUALITY_OBSERVATION_SOURCE_TCP ||
@@ -1311,11 +1488,11 @@ void NetworkQualityEstimator::OnPrefsRead(
   ReadCachedNetworkQualityEstimate();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void NetworkQualityEstimator::EnableGetNetworkIdAsynchronously() {
   get_network_id_asynchronously_ = true;
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 std::optional<base::TimeDelta> NetworkQualityEstimator::GetHttpRTT() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -1357,8 +1534,7 @@ void NetworkQualityEstimator::MaybeUpdateCachedEstimateApplied(
   }
 
   cached_estimate_applied_ = true;
-  bool deleted_observation_sources[NETWORK_QUALITY_OBSERVATION_SOURCE_MAX] = {
-      false};
+  DeletedObservationSources deleted_observation_sources = {};
   deleted_observation_sources
       [NETWORK_QUALITY_OBSERVATION_SOURCE_DEFAULT_HTTP_FROM_PLATFORM] = true;
   deleted_observation_sources

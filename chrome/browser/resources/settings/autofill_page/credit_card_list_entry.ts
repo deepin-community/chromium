@@ -8,17 +8,17 @@
  */
 
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
-import 'chrome://resources/cr_elements/cr_screen_reader_only.css.js';
 import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
-import '../i18n_setup.js';
 import '../settings_shared.css.js';
 import './passwords_shared.css.js';
+import './screen_reader_only.css.js';
 
 import {I18nMixin} from '//resources/cr_elements/i18n_mixin.js';
 import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {loadTimeData} from '../i18n_setup.js';
+import {CardBenefitsUserAction, MetricsBrowserProxyImpl} from '../metrics_browser_proxy.js';
 
 import {getTemplate} from './credit_card_list_entry.html.js';
 
@@ -49,10 +49,20 @@ export class SettingsCreditCardListEntryElement extends
     return {
       /** A saved credit card. */
       creditCard: Object,
+
+      autofillEnableWalletBrandingEnabled_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('autofillEnableWalletBranding');
+        },
+        readOnly: true,
+      },
     };
   }
 
-  creditCard: chrome.autofillPrivate.CreditCardEntry;
+  declare creditCard: chrome.autofillPrivate.CreditCardEntry;
+
+  declare private autofillEnableWalletBrandingEnabled_: boolean;
 
   get dotsMenu(): HTMLElement|null {
     return this.shadowRoot!.getElementById('creditCardMenu');
@@ -83,6 +93,12 @@ export class SettingsCreditCardListEntryElement extends
     }));
   }
 
+  private onSummarySublabelTermsLinkClick_() {
+    // Log the metric for user clicking on the card benefits terms hyperlink.
+    MetricsBrowserProxyImpl.getInstance().recordAction(
+        CardBenefitsUserAction.CARD_BENEFITS_TERMS_LINK_CLICKED);
+  }
+
   private getCardNumberDescription_(
       creditCard: chrome.autofillPrivate.CreditCardEntry): string|undefined {
     const cardNumber = creditCard.cardNumber;
@@ -100,24 +116,42 @@ export class SettingsCreditCardListEntryElement extends
   /**
    * @returns the title for the More Actions button corresponding to the card
    *     which is described by the nickname or the network name and last 4
-   *     digits or name
+   *     digits or name. If a card has CVC saved, there will be additional
+   *     description to notify of the same.
    */
   private moreActionsTitle_(): string {
     const cardDescription = this.creditCard.nickname ||
         this.getCardNumberDescription_(this.creditCard) ||
         this.creditCard.name!;
-    return this.i18n('moreActionsForCreditCard', cardDescription);
+    return this.i18n(
+        this.creditCard.cvc ? 'moreActionsForCreditCardWithCvc' :
+                              'moreActionsForCreditCard',
+        cardDescription);
+  }
+
+  /**
+   * The card has a product description or a nickname.
+   */
+  private hasCardIdentifier_(): boolean {
+    return (this.creditCard.metadata!.summarySublabel || '').length > 0;
   }
 
   /**
    * The 3-dot menu should be shown if the card is not a masked server card or
-   * if the card is eligble for virtual card enrollment.
+   * if the card is eligible for virtual card enrollment.
    */
   private showDots_(): boolean {
     return !!(
         this.creditCard.metadata!.isLocal ||
-        this.creditCard.metadata!.isCached ||
         this.isVirtualCardEnrollmentEligible_());
+  }
+
+  private shouldShowOutlinkWithWalletBranding_(): boolean {
+    return !this.showDots_() && this.autofillEnableWalletBrandingEnabled_;
+  }
+
+  private shouldShowOutlinkWithoutWalletBranding_(): boolean {
+    return !this.showDots_() && !this.autofillEnableWalletBrandingEnabled_;
   }
 
   private isVirtualCardEnrollmentEligible_(): boolean {
@@ -128,6 +162,10 @@ export class SettingsCreditCardListEntryElement extends
     return this.creditCard.metadata!.isVirtualCardEnrolled!;
   }
 
+  private getCardIdentifierAriaLabel_(): string {
+    return this.creditCard.metadata!.summaryLabel || '';
+  }
+
   private getSummaryAriaLabel_(): string {
     const cardNumberDescription =
         this.getCardNumberDescription_(this.creditCard);
@@ -135,6 +173,20 @@ export class SettingsCreditCardListEntryElement extends
       return this.i18n('creditCardA11yLabeled', cardNumberDescription);
     }
     return this.creditCard.metadata!.summaryLabel;
+  }
+
+  /**
+   * Returns an aria label for the benefits terms link such as "See terms for
+   * Amex ending in 0001". If no card description is available, then the
+   * default text such as "See terms here" is returned.
+   */
+  private getBenefitsTermsAriaLabel_(): string {
+    const cardNumberDescription =
+        this.getCardNumberDescription_(this.creditCard);
+    if (cardNumberDescription) {
+      return this.i18n('benefitsTermsAriaLabel', cardNumberDescription);
+    }
+    return this.i18n('benefitsTermsTagForCreditCardListEntry');
   }
 
   private getCardExpiryDate_(): string {
@@ -167,17 +219,22 @@ export class SettingsCreditCardListEntryElement extends
   }
 
   /**
+   * Returns expiration date.
+   */
+  private getExpirationlabel_(): string {
+    return ' · ' + this.getCardExpiryDate_();
+  }
+
+  /**
    * Returns one of the following sublabels, based on the card's status:
    *   Virtual card enrollment tag
-   *   Expiration date tag (MM/YY)
    *   'CVC saved' tag
    *   Benefit tag (Place the benefit tag last because it includes a link to
    *                product terms.)
    * e.g., one of the following:
-   *   11/23
-   *   11/23 | CVC saved
-   *   11/23 | Card benefits available (terms apply)
-   *   11/23 | CVC saved | Card benefits available (terms apply)
+   *   CVC saved
+   *   Card benefits available (terms apply)
+   *   CVC saved | Card benefits available (terms apply)
    *   Virtual card turned on
    *   Virtual card turned on | CVC saved
    *   Virtual card turned on | Card benefits available (terms apply)
@@ -186,17 +243,20 @@ export class SettingsCreditCardListEntryElement extends
    */
   private getSummarySublabel_(): string {
     const separator = ' | ';
-    let summarySublabel = this.isVirtualCardEnrolled_() ?
-        this.i18n('virtualCardTurnedOn') :
-        this.getCardExpiryDate_();
+    let summarySublabel =
+        this.isVirtualCardEnrolled_() ? this.i18n('virtualCardTurnedOn') : '';
     if (this.isCardCvcAvailable_()) {
-      summarySublabel += separator + this.i18n('cvcTagForCreditCardListEntry');
-    }
-    if (this.isCardBenefitsProductUrlAvailable_()) {
-      summarySublabel +=
-          separator + this.i18n('benefitsAvailableTagForCreditCardListEntry');
+      if (summarySublabel.length > 0) {
+        summarySublabel += separator;
+      }
+      summarySublabel += this.i18n('cvcTagForCreditCardListEntry');
     }
     return summarySublabel;
+  }
+
+  private hasSummaryAndBenefitSublabel_(): boolean {
+    return this.getSummarySublabel_().length > 0 &&
+        this.isCardBenefitsProductUrlAvailable_();
   }
 
   private getSummaryAriaSublabel_(): string {
@@ -205,13 +265,15 @@ export class SettingsCreditCardListEntryElement extends
       case CardSummarySublabelType.VIRTUAL_CARD_WITH_BENEFITS_TAG:
       case CardSummarySublabelType.VIRTUAL_CARD_WITH_CVC_TAG:
       case CardSummarySublabelType.VIRTUAL_CARD:
-        return this.getSummarySublabel_();
+        return this.i18n(
+                   'creditCardExpDateA11yLabeled', this.getCardExpiryDate_()) +
+            this.getSummarySublabel_();
       case CardSummarySublabelType.EXPIRATION_DATE_WITH_CVC_AND_BENEFITS_TAG:
       case CardSummarySublabelType.EXPIRATION_DATE_WITH_BENEFITS_TAG:
       case CardSummarySublabelType.EXPIRATION_DATE_WITH_CVC_TAG:
       case CardSummarySublabelType.EXPIRATION_DATE:
         return this.i18n(
-            'creditCardExpDateA11yLabeled', this.getSummarySublabel_());
+            'creditCardExpDateA11yLabeled', this.getCardExpiryDate_());
       default:
         assertNotReached();
     }
@@ -227,25 +289,37 @@ export class SettingsCreditCardListEntryElement extends
     return !this.creditCard.metadata!.isLocal;
   }
 
-  private getPaymentsLabel_(): string {
-    if (this.creditCard.metadata!.isCached) {
-      return this.i18n('googlePaymentsCached');
-    }
-    return this.i18n('googlePayments');
-  }
-
   private isCardCvcAvailable_(): boolean {
     return loadTimeData.getBoolean('cvcStorageAvailable') &&
         !!this.creditCard.cvc;
   }
 
   private isCardBenefitsProductUrlAvailable_(): boolean {
-    return loadTimeData.getBoolean('autofillCardBenefitsAvailable') &&
-        !!this.creditCard.productTermsUrl;
+    return !!this.creditCard.productTermsUrl;
   }
 
   private getCardBenefitsProductUrl_(): string {
     return this.creditCard.productTermsUrl || '';
+  }
+
+  /**
+   * When the provided `imageSrc` points toward a processor's default card art,
+   * this function returns a string that will scale the image based on the
+   * user's screen resolution, otherwise it will return the unmodified
+   * `imageSrc`.
+   */
+  private getCardImage_(imageSrc: string): string {
+    return imageSrc.startsWith('chrome://theme') ?
+        this.getScaledSrcSet_(imageSrc) :
+        imageSrc;
+  }
+
+  /**
+   * This function returns a string that can be used in a srcset to scale
+   * the provided `url` based on the user's screen resolution.
+   */
+  private getScaledSrcSet_(url: string): string {
+    return `${url} 1x, ${url}@2x 2x`;
   }
 }
 

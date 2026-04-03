@@ -36,7 +36,7 @@ namespace {
 using namespace tint::core::fluent_types;     // NOLINT
 using namespace tint::core::number_suffixes;  // NOLINT
 
-struct ResolverVariableValidationTest : public resolver::TestHelper, public testing::Test {};
+using ResolverVariableValidationTest = ResolverTest;
 
 TEST_F(ResolverVariableValidationTest, VarNoInitializerNoType) {
     // var a;
@@ -101,8 +101,8 @@ TEST_F(ResolverVariableValidationTest, GlobalVarUsedAtModuleScope) {
     GlobalVar("b", ty.i32(), core::AddressSpace::kPrivate, Expr(Source{{56, 78}}, "a"));
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), R"(56:78 error: var 'a' cannot be referenced at module-scope
-12:34 note: var 'a' declared here)");
+    EXPECT_EQ(r()->error(), R"(56:78 error: 'var a' cannot be referenced at module-scope
+12:34 note: 'var a' declared here)");
 }
 
 TEST_F(ResolverVariableValidationTest, OverrideNoInitializerNoType) {
@@ -164,8 +164,12 @@ TEST_F(ResolverVariableValidationTest, LetTypeNotConstructible) {
     auto* t2 = Let(Source{{56, 78}}, "t2", Expr(t1));
     WrapInFunction(t2);
 
-    EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "56:78 error: texture_2d<f32> cannot be used as the type of a 'let'");
+    wgsl::AllowedFeatures allowed_features{};
+    Resolver resolver{this, allowed_features};
+
+    EXPECT_FALSE(resolver.Resolve());
+    EXPECT_EQ(resolver.error(),
+              "56:78 error: texture_2d<f32> cannot be used as the type of a 'let'");
 }
 
 TEST_F(ResolverVariableValidationTest, OverrideExplicitTypeNotScalar) {
@@ -190,7 +194,7 @@ TEST_F(ResolverVariableValidationTest, ConstInitializerWrongType) {
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(),
-              R"(3:3 error: cannot initialize const of type 'i32' with value of type 'u32')");
+              R"(3:3 error: cannot initialize 'const' of type 'i32' with value of type 'u32')");
 }
 
 TEST_F(ResolverVariableValidationTest, LetInitializerWrongType) {
@@ -199,7 +203,7 @@ TEST_F(ResolverVariableValidationTest, LetInitializerWrongType) {
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(),
-              R"(3:3 error: cannot initialize let of type 'i32' with value of type 'u32')");
+              R"(3:3 error: cannot initialize 'let' of type 'i32' with value of type 'u32')");
 }
 
 TEST_F(ResolverVariableValidationTest, VarInitializerWrongType) {
@@ -208,7 +212,7 @@ TEST_F(ResolverVariableValidationTest, VarInitializerWrongType) {
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(),
-              R"(3:3 error: cannot initialize var of type 'i32' with value of type 'u32')");
+              R"(3:3 error: cannot initialize 'var' of type 'i32' with value of type 'u32')");
 }
 
 TEST_F(ResolverVariableValidationTest, ConstInitializerWrongTypeViaAlias) {
@@ -217,7 +221,7 @@ TEST_F(ResolverVariableValidationTest, ConstInitializerWrongTypeViaAlias) {
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(),
-              R"(3:3 error: cannot initialize const of type 'i32' with value of type 'u32')");
+              R"(3:3 error: cannot initialize 'const' of type 'i32' with value of type 'u32')");
 }
 
 TEST_F(ResolverVariableValidationTest, LetInitializerWrongTypeViaAlias) {
@@ -226,7 +230,7 @@ TEST_F(ResolverVariableValidationTest, LetInitializerWrongTypeViaAlias) {
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(),
-              R"(3:3 error: cannot initialize let of type 'i32' with value of type 'u32')");
+              R"(3:3 error: cannot initialize 'let' of type 'i32' with value of type 'u32')");
 }
 
 TEST_F(ResolverVariableValidationTest, VarInitializerWrongTypeViaAlias) {
@@ -235,7 +239,7 @@ TEST_F(ResolverVariableValidationTest, VarInitializerWrongTypeViaAlias) {
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(),
-              R"(3:3 error: cannot initialize var of type 'i32' with value of type 'u32')");
+              R"(3:3 error: cannot initialize 'var' of type 'i32' with value of type 'u32')");
 }
 
 TEST_F(ResolverVariableValidationTest, LetOfPtrConstructedWithRef) {
@@ -250,7 +254,7 @@ TEST_F(ResolverVariableValidationTest, LetOfPtrConstructedWithRef) {
 
     EXPECT_EQ(
         r()->error(),
-        R"(12:34 error: cannot initialize let of type 'ptr<function, f32, read_write>' with value of type 'f32')");
+        R"(12:34 error: cannot initialize 'let' of type 'ptr<function, f32, read_write>' with value of type 'f32')");
 }
 
 TEST_F(ResolverVariableValidationTest, LocalLetRedeclared) {
@@ -338,10 +342,9 @@ TEST_F(ResolverVariableValidationTest, InferredPtrStorageAccessMismatch) {
     WrapInFunction(ptr);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(),
-              "12:34 error: cannot initialize let of type "
-              "'ptr<storage, i32, read_write>' with value of type "
-              "'ptr<storage, i32, read>'");
+    EXPECT_EQ(
+        r()->error(),
+        R"(12:34 error: cannot initialize 'let' of type 'ptr<storage, i32, read_write>' with value of type 'ptr<storage, i32, read>')");
 }
 
 TEST_F(ResolverVariableValidationTest, NonConstructibleType_Atomic) {
@@ -518,17 +521,15 @@ TEST_F(ResolverVariableValidationTest, ConstInitWithOverrideExpr) {
 56:78 note: consider changing 'const' to 'let')");
 }
 
-TEST_F(ResolverVariableValidationTest, GlobalVariable_PushConstantWithInitializer) {
-    // enable chromium_experimental_push_constant;
-    // var<push_constant> a : u32 = 0u;
-    Enable(wgsl::Extension::kChromiumExperimentalPushConstant);
-    GlobalVar(Source{{1u, 2u}}, "a", ty.u32(), core::AddressSpace::kPushConstant,
+TEST_F(ResolverVariableValidationTest, GlobalVariable_ImmediateWithInitializer) {
+    // var<immediate> a : u32 = 0u;
+    GlobalVar(Source{{1u, 2u}}, "a", ty.u32(), core::AddressSpace::kImmediate,
               Expr(Source{{3u, 4u}}, u32(0)));
 
     ASSERT_FALSE(r()->Resolve());
     EXPECT_EQ(
         r()->error(),
-        R"(1:2 error: var of address space 'push_constant' cannot have an initializer. var initializers are only supported for the address spaces 'private' and 'function')");
+        R"(1:2 error: var of address space 'immediate' cannot have an initializer. var initializers are only supported for the address spaces 'private' and 'function')");
 }
 
 }  // namespace

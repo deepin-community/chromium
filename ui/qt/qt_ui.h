@@ -23,7 +23,8 @@
 
 namespace qt {
 
-class QtNativeTheme;
+class NativeThemeQt;
+class OsSettingsProviderQt;
 
 // Interface to QT desktop features.
 class QtUi : public ui::LinuxUiAndTheme, QtInterface::Delegate {
@@ -38,13 +39,12 @@ class QtUi : public ui::LinuxUiAndTheme, QtInterface::Delegate {
   // ui::LinuxUi:
   bool Initialize() override;
   void InitializeFontSettings() override;
-  base::TimeDelta GetCursorBlinkInterval() const override;
   gfx::Image GetIconForContentType(const std::string& content_type,
                                    int size,
                                    float scale) const override;
   base::flat_map<std::string, std::string> GetKeyboardLayoutMap() override;
 #if BUILDFLAG(ENABLE_PRINTING)
-  printing::PrintDialogLinuxInterface* CreatePrintDialog(
+  std::unique_ptr<printing::PrintDialogLinuxInterface> CreatePrintDialog(
       printing::PrintingContextLinux* context) override;
   gfx::Size GetPdfPaperSize(printing::PrintingContextLinux* context) override;
 #endif
@@ -55,10 +55,8 @@ class QtUi : public ui::LinuxUiAndTheme, QtInterface::Delegate {
   int GetCursorThemeSize() override;
   std::unique_ptr<ui::LinuxInputMethodContext> CreateInputMethodContext(
       ui::LinuxInputMethodContextDelegate* delegate) const override;
-  bool GetTextEditCommandsForEvent(
-      const ui::Event& event,
-      int text_flags,
-      std::vector<ui::TextEditCommandAuraLinux>* commands) override;
+  ui::TextEditCommand GetTextEditCommandForEvent(const ui::Event& event,
+                                                 int text_flags) override;
   gfx::FontRenderParams GetDefaultFontRenderParams() override;
   bool AnimationsEnabled() const override;
   void AddWindowButtonOrderObserver(
@@ -67,6 +65,9 @@ class QtUi : public ui::LinuxUiAndTheme, QtInterface::Delegate {
       ui::WindowButtonOrderObserver* observer) override;
   WindowFrameAction GetWindowFrameAction(
       WindowFrameActionSource source) override;
+  bool PrimaryPasteEnabled() const override;
+  int GetWindowDragThresholdPx() const override;
+  std::vector<std::string> GetCmdLineFlagsForCopy() const override;
 
   // ui::LinuxUiTheme:
   ui::NativeTheme* GetNativeTheme() const override;
@@ -79,9 +80,11 @@ class QtUi : public ui::LinuxUiAndTheme, QtInterface::Delegate {
   void GetInactiveSelectionFgColor(SkColor* color) const override;
   bool PreferDarkTheme() const override;
   void SetDarkTheme(bool dark) override;
+  void SetAccentColor(std::optional<SkColor>) override;
   std::unique_ptr<ui::NavButtonProvider> CreateNavButtonProvider() override;
   ui::WindowFrameProvider* GetWindowFrameProvider(bool solid_frame,
-                                                  bool tiled) override;
+                                                  bool tiled,
+                                                  bool maximized) override;
 
   // QtInterface::Delegate:
   void FontChanged() override;
@@ -96,7 +99,7 @@ class QtUi : public ui::LinuxUiAndTheme, QtInterface::Delegate {
 
   std::optional<SkColor> GetColor(int id, bool use_custom_frame) const;
 
-  // TODO(https://crbug.com/1317782): This is a fallback for any unimplemented
+  // TODO(crbug.com/40222643): This is a fallback for any unimplemented
   // functionality in the QT backend and should eventually be removed.
   ui::LinuxUi* const fallback_linux_ui_;
 
@@ -110,7 +113,10 @@ class QtUi : public ui::LinuxUiAndTheme, QtInterface::Delegate {
   std::optional<gfx::FontRenderParams> font_params_;
   std::unique_ptr<QtInterface> shim_;
 
-  std::unique_ptr<QtNativeTheme> native_theme_;
+  std::unique_ptr<OsSettingsProviderQt> os_settings_provider_;
+  std::unique_ptr<NativeThemeQt> native_theme_;
+
+  std::optional<SkColor> accent_color_;
 
   bool scale_factor_task_active_ = false;
 

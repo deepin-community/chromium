@@ -95,12 +95,15 @@ class ContentIndexTest : public InProcessBrowserTest,
     NOTREACHED();
   }
 
-  void OnContentProviderGoingDown() override {}
+  void OnContentProviderGoingDown() override {
+    // Clear the cached pointer to avoid a dangling pointer error later.
+    provider_ = nullptr;
+  }
 
   // TabStripModelObserver implementation:
-  void TabChangedAt(content::WebContents* contents,
-                    int index,
-                    TabChangeType change_type) override {
+  void OnTabChangedAt(tabs::TabInterface* tab,
+                      int index,
+                      TabChangeType change_type) override {
     if (wait_for_tab_change_)
       std::move(wait_for_tab_change_).Run();
   }
@@ -152,7 +155,7 @@ class ContentIndexTest : public InProcessBrowserTest,
 
  private:
   std::map<std::string, OfflineItem> offline_items_;
-  raw_ptr<ContentIndexProviderImpl, DanglingUntriaged> provider_;
+  raw_ptr<ContentIndexProviderImpl> provider_;
   std::unique_ptr<net::EmbeddedTestServer> https_server_;
   base::OnceClosure wait_for_tab_change_;
 };
@@ -284,7 +287,7 @@ IN_PROC_BROWSER_TEST_F(ContentIndexTest, UserDeletedEntryDispatchesEvent) {
   EXPECT_TRUE(GetAllItems().empty());
 }
 
-// TODO(crbug.com/1080922): flaky.
+// TODO(crbug.com/40691072): flaky.
 IN_PROC_BROWSER_TEST_F(ContentIndexTest, DISABLED_MetricsCollected) {
   // Record that two articles were added.
   {

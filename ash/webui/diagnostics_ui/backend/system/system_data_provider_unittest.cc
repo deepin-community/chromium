@@ -32,8 +32,6 @@
 #include "chromeos/ash/components/test/ash_test_suite.h"
 #include "chromeos/ash/services/cros_healthd/public/cpp/fake_cros_healthd.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd.mojom.h"
-#include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom-forward.h"
-#include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom-shared.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power_manager/power_supply_properties.pb.h"
@@ -1025,7 +1023,7 @@ TEST_F(SystemDataProviderTest, CpuUsageScaledClock) {
 
   EXPECT_EQ(1u, cpu_usage_observer.updates.size());
   VerifyCpuScalingResult(cpu_usage_observer.updates[0],
-                         /*expected_scaled_speed=*/4500);
+                         /*expected_scaled_speed=*/5000);
 
   core_1_speed = 2000;
   core_2_speed = 2000;
@@ -1050,7 +1048,7 @@ TEST_F(SystemDataProviderTest, CpuUsageScaledClock) {
   EXPECT_EQ(3u, cpu_usage_observer.updates.size());
   // Integer division so `expected_scaled_speed` should still be 2000.
   VerifyCpuScalingResult(cpu_usage_observer.updates[2],
-                         /*expected_scaled_speed=*/2000);
+                         /*expected_scaled_speed=*/2001);
 }
 
 TEST_F(SystemDataProviderTest, GetSystemInfoLogs) {

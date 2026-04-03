@@ -15,7 +15,6 @@
 #include "components/subresource_filter/core/common/flat/indexed_ruleset_generated.h"
 #include "components/subresource_filter/core/common/load_policy.h"
 #include "components/url_pattern_index/url_pattern_index.h"
-#include "third_party/abseil-cpp/absl/base/attributes.h"
 #include "third_party/flatbuffers/src/include/flatbuffers/flatbuffers.h"
 
 class GURL;
@@ -28,7 +27,7 @@ namespace url_pattern_index {
 namespace proto {
 class UrlRule;
 }
-}
+}  // namespace url_pattern_index
 
 namespace subresource_filter {
 
@@ -81,8 +80,9 @@ class RulesetIndexer {
 
   // Returns a pointer to the buffer containing the serialized flat data
   // structures. Should only be called after Finish().
-  base::span<const uint8_t> data() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
-    return base::span(builder_.GetBufferPointer(), builder_.GetSize());
+  base::span<const uint8_t> data() const LIFETIME_BOUND {
+    return UNSAFE_TODO(
+        base::span(builder_.GetBufferPointer(), builder_.GetSize()));
   }
 
  private:
@@ -102,7 +102,9 @@ class IndexedRulesetMatcher {
  public:
   // Returns whether the |buffer| of the given |size| contains a valid
   // flat::IndexedRuleset FlatBuffer.
-  static bool Verify(base::span<const uint8_t> buffer, int expected_checksum);
+  static bool Verify(base::span<const uint8_t> buffer,
+                     int expected_checksum,
+                     std::string_view uma_tag);
 
   // Creates an instance that matches URLs against the flat::IndexedRuleset
   // provided as the root object of serialized data in the |buffer|.
@@ -124,12 +126,16 @@ class IndexedRulesetMatcher {
 
   // Returns the LoadPolicy for a network request to |url| of |element_type|
   // initiated by |document_origin|. Always returns ALLOW if the  |url| is not
-  // valid or |element_type| == ELEMENT_TYPE_UNSPECIFIED.
+  // valid or |element_type| == ELEMENT_TYPE_UNSPECIFIED. If `out_rule` is
+  // non-null and the result load policy is DISALLOW, then `out_rule` will be
+  // populated with a pointer to the matching filterlist rule. `out_rule` is
+  // valid as long as the ruleset is kept alive.
   LoadPolicy GetLoadPolicyForResourceLoad(
       const GURL& url,
       const FirstPartyOrigin& first_party,
       url_pattern_index::proto::ElementType element_type,
-      bool disable_generic_rules) const;
+      bool disable_generic_rules,
+      const url_pattern_index::flat::UrlRule** out_rule) const;
 
   // Like ShouldDisallowResourceLoad, but returns the matching rule that
   // determines whether the request should be allowed or not. Allowlist rules

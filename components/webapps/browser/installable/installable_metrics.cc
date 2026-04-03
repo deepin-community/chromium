@@ -12,9 +12,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/time/time.h"
 #include "components/webapps/browser/webapps_client.h"
-#include "content/public/browser/service_worker_context.h"
 
 namespace webapps {
 
@@ -64,8 +62,16 @@ std::ostream& operator<<(std::ostream& os, WebappInstallSource source) {
       return os << "rich install ui weblayer";
     case WebappInstallSource::KIOSK:
       return os << "kiosk";
-    case WebappInstallSource::ISOLATED_APP_DEV_INSTALL:
-      return os << "isolated app dev install";
+    case WebappInstallSource::IWA_GRAPHICAL_INSTALLER:
+      return os << "isolated web app: graphical installer";
+    case WebappInstallSource::IWA_DEV_COMMAND_LINE:
+      return os << "isolated web app: dev command line";
+    case WebappInstallSource::IWA_DEV_UI:
+      return os << "isolated web app: dev UI";
+    case WebappInstallSource::IWA_EXTERNAL_POLICY:
+      return os << "isolated web app: external policy";
+    case WebappInstallSource::IWA_SHIMLESS_RMA:
+      return os << "isolated web app: shimless RMA";
     case WebappInstallSource::EXTERNAL_LOCK_SCREEN:
       return os << "external lock screen";
     case WebappInstallSource::PRELOADED_OEM:
@@ -78,8 +84,18 @@ std::ostream& operator<<(std::ostream& os, WebappInstallSource source) {
       return os << "ml promotion";
     case WebappInstallSource::PRELOADED_DEFAULT:
       return os << "preloaded default";
-    case WebappInstallSource::COUNT:
-      return os << "count";
+    case WebappInstallSource::ALMANAC_INSTALL_APP_URI:
+      return os << "app install uri";
+    case WebappInstallSource::WEBAPK_RESTORE:
+      return os << "webapk restore";
+    case WebappInstallSource::OOBE_APP_RECOMMENDATIONS:
+      return os << "oobe app recommendations";
+    case WebappInstallSource::WEB_INSTALL:
+      return os << "web install";
+    case WebappInstallSource::CHROMEOS_HELP_APP:
+      return os << "chromeos help app";
+    case WebappInstallSource::MIGRATION:
+      return os << "migration";
   }
 }
 
@@ -131,6 +147,12 @@ std::ostream& operator<<(std::ostream& os, WebappUninstallSource source) {
       return os << "Healthcare User Install Cleanup";
     case webapps::WebappUninstallSource::kIwaEnterprisePolicy:
       return os << "Isolated Web Apps Enterprise Policy";
+    case webapps::WebappUninstallSource::kDevtools:
+      return os << "Devtools";
+    case webapps::WebappUninstallSource::kIwaBlocklisted:
+      return os << "Isolated Web App Blocklisted";
+    case webapps::WebappUninstallSource::kAppMigration:
+      return os << "AppMigration";
   }
 }
 
@@ -151,6 +173,7 @@ bool IsUserUninstall(WebappUninstallSource source) {
     case webapps::WebappUninstallSource::kInstallUrlDeduping:
     case webapps::WebappUninstallSource::kHealthcareUserInstallCleanup:
     case webapps::WebappUninstallSource::kIwaEnterprisePolicy:
+    case webapps::WebappUninstallSource::kIwaBlocklisted:
       return false;
     case webapps::WebappUninstallSource::kUnknown:
     case webapps::WebappUninstallSource::kAppMenu:
@@ -160,6 +183,8 @@ bool IsUserUninstall(WebappUninstallSource source) {
     case webapps::WebappUninstallSource::kAppList:
     case webapps::WebappUninstallSource::kShelf:
     case webapps::WebappUninstallSource::kExternalLockScreen:
+    case webapps::WebappUninstallSource::kDevtools:
+    case webapps::WebappUninstallSource::kAppMigration:
       return true;
   }
 }
@@ -167,8 +192,7 @@ bool IsUserUninstall(WebappUninstallSource source) {
 // static
 void InstallableMetrics::TrackInstallEvent(WebappInstallSource source) {
   DCHECK(IsReportableInstallSource(source));
-  base::UmaHistogramEnumeration("Webapp.Install.InstallEvent", source,
-                                WebappInstallSource::COUNT);
+  base::UmaHistogramEnumeration("Webapp.Install.InstallEvent", source);
 }
 
 // static
@@ -199,14 +223,21 @@ bool InstallableMetrics::IsReportableInstallSource(WebappInstallSource source) {
     case WebappInstallSource::RICH_INSTALL_UI_WEBLAYER:
     case WebappInstallSource::SYSTEM_DEFAULT:
     case WebappInstallSource::PRELOADED_DEFAULT:
+    case WebappInstallSource::ALMANAC_INSTALL_APP_URI:
+    case WebappInstallSource::WEBAPK_RESTORE:
+    case WebappInstallSource::OOBE_APP_RECOMMENDATIONS:
+    case WebappInstallSource::WEB_INSTALL:
+    case WebappInstallSource::CHROMEOS_HELP_APP:
       return true;
-    case WebappInstallSource::ISOLATED_APP_DEV_INSTALL:
+    case WebappInstallSource::IWA_GRAPHICAL_INSTALLER:
+    case WebappInstallSource::IWA_DEV_UI:
+    case WebappInstallSource::IWA_DEV_COMMAND_LINE:
+    case WebappInstallSource::IWA_EXTERNAL_POLICY:
+    case WebappInstallSource::IWA_SHIMLESS_RMA:
     case WebappInstallSource::MANAGEMENT_API:
+    case WebappInstallSource::MIGRATION:
     case WebappInstallSource::SUB_APP:
     case WebappInstallSource::SYNC:
-      return false;
-    case WebappInstallSource::COUNT:
-      NOTREACHED();
       return false;
   }
 }
@@ -219,50 +250,18 @@ WebappInstallSource InstallableMetrics::GetInstallSource(
 }
 
 // static
-void InstallableMetrics::RecordCheckServiceWorkerTime(base::TimeDelta time) {
-  UMA_HISTOGRAM_MEDIUM_TIMES("Webapp.CheckServiceWorker.Time", time);
-}
-
-// static
-void InstallableMetrics::RecordCheckServiceWorkerStatus(
-    ServiceWorkerOfflineCapability status) {
-  UMA_HISTOGRAM_ENUMERATION("Webapp.CheckServiceWorker.Status", status);
-}
-
-// static
-ServiceWorkerOfflineCapability
-InstallableMetrics::ConvertFromServiceWorkerCapability(
-    content::ServiceWorkerCapability capability) {
-  switch (capability) {
-    case content::ServiceWorkerCapability::SERVICE_WORKER_WITH_FETCH_HANDLER:
-      return ServiceWorkerOfflineCapability::kServiceWorkerWithOfflineSupport;
-    case content::ServiceWorkerCapability::SERVICE_WORKER_NO_FETCH_HANDLER:
-      return ServiceWorkerOfflineCapability::kServiceWorkerNoFetchHandler;
-    case content::ServiceWorkerCapability::NO_SERVICE_WORKER:
-      return ServiceWorkerOfflineCapability::kNoServiceWorker;
-  }
-  NOTREACHED();
-}
-
-// static
-ServiceWorkerOfflineCapability InstallableMetrics::ConvertFromOfflineCapability(
-    content::OfflineCapability capability) {
-  switch (capability) {
-    case content::OfflineCapability::kSupported:
-      return ServiceWorkerOfflineCapability::kServiceWorkerWithOfflineSupport;
-    case content::OfflineCapability::kUnsupported:
-      return ServiceWorkerOfflineCapability::kServiceWorkerNoOfflineSupport;
-  }
-  NOTREACHED();
-}
-
-// static
 void InstallableMetrics::TrackUninstallEvent(WebappUninstallSource source) {
   base::UmaHistogramEnumeration("Webapp.Install.UninstallEvent", source);
 }
 
 // static
-void InstallableMetrics::TrackInstallResult(bool result) {
+void InstallableMetrics::TrackInstallResult(bool result,
+                                            WebappInstallSource source) {
   base::UmaHistogramBoolean("WebApp.Install.Result", result);
+  if (IsReportableInstallSource(source)) {
+    base::UmaHistogramEnumeration(result ? "WebApp.Install.Source.Success"
+                                         : "WebApp.Install.Source.Failure",
+                                  source);
+  }
 }
 }  // namespace webapps

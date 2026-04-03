@@ -13,15 +13,16 @@
 #include "components/history_clusters/core/url_constants.h"
 #include "components/omnibox/browser/actions/history_clusters_action.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
+#include "components/omnibox/browser/autocomplete_enums.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_match_classification.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
-#include "third_party/metrics_proto/omnibox_event.pb.h"
-
 #include "components/omnibox/browser/autocomplete_provider_client.h"
 #include "components/omnibox/browser/autocomplete_provider_listener.h"
+#include "components/omnibox/browser/omnibox_triggered_feature_service.h"
 #include "components/strings/grit/components_strings.h"
+#include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "ui/base/l10n/l10n_util.h"
 
 HistoryClusterProvider::HistoryClusterProvider(
@@ -63,8 +64,7 @@ void HistoryClusterProvider::CompleteHistoryClustersMatch(
 
 void HistoryClusterProvider::Start(const AutocompleteInput& input,
                                    bool minimal_changes) {
-  Stop(true, false);
-
+  Stop(AutocompleteStopReason::kClobbered);
   if (input.omit_asynchronous_matches())
     return;
 
@@ -179,10 +179,8 @@ AutocompleteMatch HistoryClusterProvider::CreateMatch(
       FindTermMatches(input_.text(), text), text.length(),
       ACMatchClassification::MATCH, ACMatchClassification::NONE);
 
-  match.contents = l10n_util::GetStringUTF16(
-      base::FeatureList::IsEnabled(history_clusters::kRenameJourneys)
-          ? IDS_OMNIBOX_HISTORY_CLUSTERS_SEARCH_HINT
-          : IDS_OMNIBOX_ACTION_HISTORY_CLUSTERS_SEARCH_HINT);
+  match.contents =
+      l10n_util::GetStringUTF16(IDS_OMNIBOX_HISTORY_CLUSTERS_SEARCH_HINT);
   match.contents_class = {{0, ACMatchClassification::DIM}};
 
   CompleteHistoryClustersMatch(base::UTF16ToUTF8(text),

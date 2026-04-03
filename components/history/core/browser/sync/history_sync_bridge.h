@@ -12,15 +12,16 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/sequence_checker.h"
 #include "components/history/core/browser/history_backend_observer.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/sync/history_backend_for_sync.h"
-#include "components/sync/model/model_type_sync_bridge.h"
+#include "components/sync/model/data_type_sync_bridge.h"
 #include "components/sync/service/sync_service.h"
 
 namespace syncer {
+class DataTypeLocalChangeProcessor;
 class MetadataChangeList;
-class ModelTypeChangeProcessor;
 }  // namespace syncer
 
 namespace history {
@@ -28,7 +29,7 @@ namespace history {
 class HistorySyncMetadataDatabase;
 class VisitIDRemapper;
 
-class HistorySyncBridge : public syncer::ModelTypeSyncBridge,
+class HistorySyncBridge : public syncer::DataTypeSyncBridge,
                           public HistoryBackendObserver {
  public:
   // `history_backend` must not be null.
@@ -36,14 +37,14 @@ class HistorySyncBridge : public syncer::ModelTypeSyncBridge,
   HistorySyncBridge(
       HistoryBackendForSync* history_backend,
       HistorySyncMetadataDatabase* sync_metadata_store,
-      std::unique_ptr<syncer::ModelTypeChangeProcessor> change_processor);
+      std::unique_ptr<syncer::DataTypeLocalChangeProcessor> change_processor);
 
   HistorySyncBridge(const HistorySyncBridge&) = delete;
   HistorySyncBridge& operator=(const HistorySyncBridge&) = delete;
 
   ~HistorySyncBridge() override;
 
-  // syncer::ModelTypeSyncBridge implementation.
+  // syncer::DataTypeSyncBridge implementation.
   std::unique_ptr<syncer::MetadataChangeList> CreateMetadataChangeList()
       override;
   std::optional<syncer::ModelError> MergeFullSyncData(
@@ -54,10 +55,14 @@ class HistorySyncBridge : public syncer::ModelTypeSyncBridge,
       syncer::EntityChangeList entity_changes) override;
   void ApplyDisableSyncChanges(std::unique_ptr<syncer::MetadataChangeList>
                                    delete_metadata_change_list) override;
-  void GetData(StorageKeyList storage_keys, DataCallback callback) override;
-  void GetAllDataForDebugging(DataCallback callback) override;
-  std::string GetClientTag(const syncer::EntityData& entity_data) override;
-  std::string GetStorageKey(const syncer::EntityData& entity_data) override;
+  std::unique_ptr<syncer::DataBatch> GetDataForCommit(
+      StorageKeyList storage_keys) override;
+  std::unique_ptr<syncer::DataBatch> GetAllDataForDebugging() override;
+  std::string GetClientTag(
+      const syncer::EntityData& entity_data) const override;
+  std::string GetStorageKey(
+      const syncer::EntityData& entity_data) const override;
+  bool IsEntityDataValid(const syncer::EntityData& entity_data) const override;
   syncer::ConflictResolution ResolveConflict(
       const std::string& storage_key,
       const syncer::EntityData& remote_data) const override;
@@ -69,11 +74,11 @@ class HistorySyncBridge : public syncer::ModelTypeSyncBridge,
   void OnURLsModified(HistoryBackend* history_backend,
                       const URLRows& changed_urls,
                       bool is_from_expiration) override;
-  void OnURLsDeleted(HistoryBackend* history_backend,
-                     bool all_history,
-                     bool expired,
-                     const URLRows& deleted_rows,
-                     const std::set<GURL>& favicon_urls) override;
+  void OnHistoryDeletions(HistoryBackend* history_backend,
+                          bool all_history,
+                          bool expired,
+                          const URLRows& deleted_rows,
+                          const std::set<GURL>& favicon_urls) override;
   void OnVisitUpdated(const VisitRow& visit_row,
                       VisitUpdateReason reason) override;
   void OnVisitDeleted(const VisitRow& visit_row) override;
@@ -135,6 +140,8 @@ class HistorySyncBridge : public syncer::ModelTypeSyncBridge,
   // called after `change_processor()->IsTrackingMetadata()` returns true
   // (because before that, the cache GUID isn't known).
   std::string GetLocalCacheGuid() const;
+
+  std::unique_ptr<syncer::DataBatch> GetDataImpl(StorageKeyList storage_keys);
 
   // A non-owning pointer to the backend, which we're syncing local changes from
   // and sync changes to. Never null.

@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/json/json_reader.h"
@@ -73,14 +73,14 @@ bool VideoBitstream::LoadMetadata(const base::FilePath& json_file_path,
   if (!base::ReadFileToString(json_file_path, &json_data)) {
     return false;
   }
-  auto metadata_result =
-      base::JSONReader::ReadAndReturnValueWithError(json_data);
+  auto metadata_result = base::JSONReader::ReadAndReturnValueWithError(
+      json_data, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!metadata_result.has_value()) {
     LOG(ERROR) << "Failed to parse video metadata: " << json_file_path << ": "
                << metadata_result.error().message;
     return false;
   }
-  const base::Value::Dict& metadata_dict = metadata_result->GetDict();
+  const base::DictValue& metadata_dict = metadata_result->GetDict();
 
   const std::string* profile = metadata_dict.FindString("profile");
   auto converted_profile = ConvertStringtoProfile(*profile);
@@ -132,7 +132,7 @@ bool VideoBitstream::LoadMetadata(const base::FilePath& json_file_path,
   metadata.resolution =
       gfx::Size(static_cast<uint32_t>(*width), static_cast<uint32_t>(*height));
 
-  const base::Value::List* md5_checksums =
+  const base::ListValue* md5_checksums =
       metadata_dict.FindList("md5_checksums");
   for (const base::Value& checksum : *md5_checksums) {
     metadata.frame_checksums.push_back(checksum.GetString());
@@ -182,24 +182,25 @@ std::unique_ptr<VideoBitstream> VideoBitstream::Create(
     return nullptr;
   }
   // We set |has_keyframeless_resolution_change| by looking at the file name.
-  const char* kKeyFrameLessResolutionChangeFiles[] = {
-      "frm_resize",
-      "sub8x8_sf",
+  base::FilePath kKeyFrameLessResolutionChangeFiles[] = {
+      base::FilePath::FromASCII("frm_resize"),
+      base::FilePath::FromASCII("sub8x8_sf"),
   };
-  metadata.has_keyframeless_resolution_change = std::find_if(
-      std::cbegin(kKeyFrameLessResolutionChangeFiles),
-      std::cend(kKeyFrameLessResolutionChangeFiles),
-      [filepath = data_file_path.value()](const char* substr) {
-        return base::Contains(base::ToLowerASCII(filepath), substr);
-      });
+  metadata.has_keyframeless_resolution_change =
+      std::find_if(std::cbegin(kKeyFrameLessResolutionChangeFiles),
+                   std::cend(kKeyFrameLessResolutionChangeFiles),
+                   [filepath = data_file_path.value()](base::FilePath substr) {
+                     return base::ToLowerASCII(filepath).contains(
+                         base::ToLowerASCII(substr.value()));
+                   });
   return base::WrapUnique(
       new VideoBitstream(std::move(memory_mapped_file), metadata));
 }
 
 base::span<const uint8_t> VideoBitstream::Data() const {
   CHECK(memory_mapped_file_ && memory_mapped_file_->IsValid());
-  return base::span<const uint8_t>(memory_mapped_file_->data(),
-                                   memory_mapped_file_->length());
+  return UNSAFE_TODO(base::span<const uint8_t>(memory_mapped_file_->data(),
+                                               memory_mapped_file_->length()));
 }
 // static
 base::FilePath VideoBitstream::test_data_path_;

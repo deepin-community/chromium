@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/modules/launch/dom_window_launch_queue.h"
 
+#include "base/time/time.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/modules/file_system_access/file_system_handle.h"
 #include "third_party/blink/renderer/modules/launch/launch_params.h"
@@ -17,21 +18,20 @@ const char DOMWindowLaunchQueue::kSupplementName[] = "DOMWindowLaunchQueue";
 DOMWindowLaunchQueue::DOMWindowLaunchQueue(LocalDOMWindow& window)
     : Supplement(window), launch_queue_(MakeGarbageCollected<LaunchQueue>()) {}
 
-Member<LaunchQueue> DOMWindowLaunchQueue::launchQueue(LocalDOMWindow& window) {
-  return FromState(&window)->launch_queue_;
+LaunchQueue* DOMWindowLaunchQueue::launchQueue(LocalDOMWindow& window) {
+  return FromState(&window)->launch_queue_.Get();
 }
 
-void DOMWindowLaunchQueue::UpdateLaunchFiles(
+void DOMWindowLaunchQueue::EnqueueLaunchParams(
     LocalDOMWindow* window,
-    HeapVector<Member<FileSystemHandle>> files) {
-  FromState(window)->launch_queue_->Enqueue(
-      MakeGarbageCollected<LaunchParams>(std::move(files)));
-}
-
-void DOMWindowLaunchQueue::EnqueueLaunchParams(LocalDOMWindow* window,
-                                               const KURL& launch_url) {
-  FromState(window)->launch_queue_->Enqueue(
-      MakeGarbageCollected<LaunchParams>(launch_url));
+    const KURL& launch_url,
+    base::TimeTicks time_navigation_started_in_browser,
+    bool navigation_started,
+    HeapVector<Member<FileSystemHandle>> optional_files) {
+  CHECK(launch_url.IsValid());
+  FromState(window)->launch_queue_->Enqueue(MakeGarbageCollected<LaunchParams>(
+      launch_url, time_navigation_started_in_browser, navigation_started,
+      optional_files));
 }
 
 void DOMWindowLaunchQueue::Trace(Visitor* visitor) const {

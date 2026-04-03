@@ -5,11 +5,12 @@
 import {getFileTypeForName} from 'chrome://file-manager/common/js/file_types_base.js';
 import {assert} from 'chrome://resources/js/assert.js';
 
-import {ImageCache} from './cache.js';
+import type {ImageCache} from './cache.js';
 import {resizeAndCrop, shouldProcess} from './image_loader_util.js';
 import {ImageOrientation} from './image_orientation.js';
 import {cacheKey, type LoadImageRequest, LoadImageResponse, LoadImageResponseStatus} from './load_image_request.js';
 import {PiexLoader} from './piex_loader.js';
+import type {PrivateApi} from './sw_od_messages.js';
 
 const ExtensionContentTypeMap = new Map<string, string>([
   ['gif', 'image/gif'],
@@ -20,6 +21,31 @@ const ExtensionContentTypeMap = new Map<string, string>([
   ['jpeg', 'image/jpeg'],
 ]);
 
+const adpRegExp = RegExp(
+    '^filesystem:chrome-extension://[a-z]+/external/arc-documents-provider/');
+
+/**
+ * Calls the imageLoaderPrivate API with the given message.
+ *
+ * @param msg The imageLoaderPrivate call arguments.
+ * @return A promise for the thumbnailDataUrl.
+ */
+function callImageLoaderPrivate(msg: PrivateApi): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    chrome.runtime.sendMessage(
+        null, msg, undefined, (thumbnailDataUrl: string) => {
+          if (chrome.runtime.lastError) {
+            console.warn(chrome.runtime.lastError.message);
+            reject(chrome.runtime.lastError);
+          } else if (thumbnailDataUrl) {
+            resolve(thumbnailDataUrl);
+          } else {
+            reject();
+          }
+        });
+  });
+}
+
 /**
  * Creates and starts downloading and then resizing of the image. Finally,
  * returns the image using the callback.
@@ -29,7 +55,7 @@ export class ImageRequestTask {
    * The maximum milliseconds to load video. If loading video exceeds the limit,
    * we give up generating video thumbnail and free the consumed memory.
    */
-  static readonly MAX_MILLISECONDS_TO_LOAD_VIDEO: number = 3000;
+  static readonly MAX_MILLISECONDS_TO_LOAD_VIDEO: number = 10000;
 
   /**
    * The default width of a non-square thumbnail. The value is set to match the
@@ -288,56 +314,54 @@ export class ImageRequestTask {
     }
 
     const onExternalThumbnail = (dataUrl: string) => {
-      if (chrome.runtime.lastError) {
-        console.warn(chrome.runtime.lastError.message);
-        onFailure();
-      } else if (dataUrl) {
-        this.image_.src = dataUrl;
-        this.contentType_ = ImageRequestTask.getDataUrlMimeType(dataUrl);
-      } else {
-        onFailure();
-      }
+      this.image_.src = dataUrl;
+      this.contentType_ = ImageRequestTask.getDataUrlMimeType(dataUrl);
     };
 
     // Load Drive source thumbnail.
     const drivefsUrlMatches = requestUrl.match(/^drivefs:(.*)/);
     if (drivefsUrlMatches) {
-      const url = drivefsUrlMatches[1];
-      const cropToSquare = !!this.request_.crop;
-      chrome.imageLoaderPrivate.getDriveThumbnail(
-          url || '',
-          cropToSquare,
-          onExternalThumbnail,
-      );
+      callImageLoaderPrivate({
+        apiMethod: 'getDriveThumbnail',
+        params: {
+          url: drivefsUrlMatches[1] || '',
+          cropToSquare: !!this.request_.crop,
+        },
+      })
+          .then(onExternalThumbnail)
+          .catch(onFailure);
       return;
     }
 
     // Load PDF source thumbnail.
     if (requestUrl.endsWith('.pdf')) {
       const {width, height} = this.targetThumbnailSize_();
-      chrome.imageLoaderPrivate.getPdfThumbnail(
-          requestUrl,
+      callImageLoaderPrivate({
+        apiMethod: 'getPdfThumbnail',
+        params: {
+          url: requestUrl,
           width,
           height,
-          onExternalThumbnail,
-      );
+        },
+      })
+          .then(onExternalThumbnail)
+          .catch(onFailure);
       return;
     }
 
-    // Load DocumentsProvider thumbnail, if supported.
-    const isDocumentsProviderRequest = !!requestUrl.match(
-        RegExp(
-            'filesystem:chrome-extension://[a-z]+/external/arc-documents-provider/.*',
-            ),
-    );
-    if (isDocumentsProviderRequest) {
+    // Load ARC DocumentsProvider thumbnail, if supported.
+    if (requestUrl.match(adpRegExp)) {
       const {width, height} = this.targetThumbnailSize_();
-      chrome.imageLoaderPrivate.getArcDocumentsProviderThumbnail(
-          requestUrl,
-          width,
-          height,
-          onExternalThumbnail,
-      );
+      callImageLoaderPrivate({
+        apiMethod: 'getArcDocumentsProviderThumbnail',
+        params: {
+          url: requestUrl,
+          widthHint: width,
+          heightHint: height,
+        },
+      })
+          .then(onExternalThumbnail)
+          .catch(onFailure);
       return;
     }
 
@@ -410,8 +434,13 @@ export class ImageRequestTask {
                   video.addEventListener('loadeddata', () => resolve());
                 }
               });
-              const halfDuration = video.duration / 2;
-              video.currentTime = halfDuration;
+              // For videos with longer duration (>= 6 seconds), consider the
+              // frame at 3rd second, or use the frame at midpoint otherwise.
+              // This ensures the target position is always close to the
+              // beginning of the video. Seek operations may be costly if the
+              // video doesn't contain keyframes for referencing.
+              const thumbnailPosition = Math.min(video.duration / 2, 3);
+              video.currentTime = thumbnailPosition;
             });
             video.addEventListener('error', reject);
             video.preload = 'metadata';
@@ -425,8 +454,8 @@ export class ImageRequestTask {
             // If we can't get the frame at the midpoint of the video after 3
             // seconds have passed for some reason (e.g. unseekable video), we
             // give up generating thumbnail.
-            video.src =
-                '';  // Make sure to stop loading remaining part of the video.
+            // Make sure to stop loading remaining part of the video.
+            video.src = '';
             throw new Error('Seeking video failed.');
           }),
         ])
@@ -435,6 +464,8 @@ export class ImageRequestTask {
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
           canvas.getContext('2d')!.drawImage(video, 0, 0);
+          // Clearing the `src` helps the decoder to dispose its memory earlier.
+          video.src = '';
           return canvas.toDataURL();
         });
   }

@@ -25,19 +25,80 @@
 
 #include "third_party/blink/renderer/core/layout/layout_iframe.h"
 
+#include "base/notreached.h"
 #include "third_party/blink/renderer/core/page/scrolling/root_scroller_controller.h"
+#include "third_party/blink/renderer/core/style/computed_style_base_constants.h"
 
 namespace blink {
+
+namespace {
+
+EFrameSizing PhysicalFrameSizing(const ComputedStyle& style) {
+  const EFrameSizing value = style.FrameSizing();
+  switch (value) {
+    case EFrameSizing::kAuto:
+    case EFrameSizing::kContentWidth:
+    case EFrameSizing::kContentHeight:
+      return value;
+    case EFrameSizing::kContentInlineSize:
+      return style.IsHorizontalWritingMode() ? EFrameSizing::kContentWidth
+                                             : EFrameSizing::kContentHeight;
+    case EFrameSizing::kContentBlockSize:
+      return style.IsHorizontalWritingMode() ? EFrameSizing::kContentHeight
+                                             : EFrameSizing::kContentWidth;
+  }
+}
+
+}  // namespace
 
 LayoutIFrame::LayoutIFrame(HTMLFrameOwnerElement* element)
     : LayoutEmbeddedContent(element) {}
 
-void LayoutIFrame::UpdateLayout() {
+void LayoutIFrame::UpdateAfterLayout() {
   NOT_DESTROYED();
-  DCHECK(NeedsLayout());
+  LayoutEmbeddedContent::UpdateAfterLayout();
 
-  ClearScrollableOverflow();
-  ClearNeedsLayout();
+  const ComputedStyle& style = StyleRef();
+  if (!style.IsResponsivelySized()) {
+    return;
+  }
+  DCHECK(RuntimeEnabledFeatures::ResponsiveIframesEnabled());
+  if (!GetEmbeddedContentView() && GetFrameView()) {
+    GetFrameView()->AddPartToUpdate(*this);
+  }
+}
+
+PhysicalNaturalSizingInfo LayoutIFrame::GetNaturalDimensions() const {
+  NOT_DESTROYED();
+  const ComputedStyle& style = StyleRef();
+  if (style.IsResponsivelySized()) {
+    DCHECK(RuntimeEnabledFeatures::ResponsiveIframesEnabled());
+    if (FrameView* frame_view = ChildFrameView()) {
+      // Use the natural size received from the child frame if it exists.
+      if (std::optional<NaturalSizingInfo> sizing_info =
+              frame_view->GetNaturalDimensions()) {
+        switch (PhysicalFrameSizing(style)) {
+          case EFrameSizing::kContentWidth:
+            sizing_info->has_height = false;
+            break;
+          case EFrameSizing::kContentHeight:
+            sizing_info->has_width = false;
+            break;
+          case EFrameSizing::kAuto:
+          case EFrameSizing::kContentInlineSize:
+          case EFrameSizing::kContentBlockSize:
+            NOTREACHED();
+        }
+
+        // Scale based on our zoom as the embedded document doesn't have that
+        // info.
+        sizing_info->size.Scale(style.EffectiveZoom());
+        return PhysicalNaturalSizingInfo::FromSizingInfo(*sizing_info);
+      }
+    }
+  }
+
+  return LayoutEmbeddedContent::GetNaturalDimensions();
 }
 
 }  // namespace blink

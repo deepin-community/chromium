@@ -14,6 +14,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/trace_event/trace_event.h"
 #include "media/base/decoder_status.h"
+#include "media/base/media_switches.h"
 #include "media/base/media_util.h"
 #include "media/media_buildflags.h"
 #include "media/video/gpu_video_accelerator_factories.h"
@@ -42,9 +43,9 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace blink {
 
@@ -85,6 +86,8 @@ DecoderTemplate<Traits>::DecoderTemplate(ScriptState* script_state,
   logger_ = std::make_unique<CodecLogger<media::DecoderStatus>>(
       context, main_thread_task_runner_);
 
+  logger_->SendPlayerNameInformation(*context, Traits::GetName());
+
   logger_->log()->SetProperty<media::MediaLogProperty::kFrameUrl>(
       context->Url().GetString().Ascii());
 
@@ -96,7 +99,8 @@ template <typename Traits>
 DecoderTemplate<Traits>::~DecoderTemplate() {
   DVLOG(1) << __func__;
   base::UmaHistogramSparse(
-      String::Format("Blink.WebCodecs.%s.FinalStatus", Traits::GetName())
+      UNSAFE_TODO(
+          String::Format("Blink.WebCodecs.%s.FinalStatus", Traits::GetName()))
           .Ascii()
           .c_str(),
       static_cast<int>(logger_->status_code()));
@@ -125,6 +129,9 @@ bool DecoderTemplate<Traits>::GetLowDelayPreference(const ConfigType&) {
 
 template <typename Traits>
 void DecoderTemplate<Traits>::SetHardwarePreference(HardwarePreference) {}
+
+template <typename Traits>
+void DecoderTemplate<Traits>::OnActiveConfigChanged(const MediaConfigType&) {}
 
 template <typename Traits>
 void DecoderTemplate<Traits>::configure(const ConfigType* config,
@@ -191,7 +198,7 @@ void DecoderTemplate<Traits>::decode(const InputType* chunk,
     request->status = std::move(status_or_buffer).error();
     if (request->status == media::DecoderStatus::Codes::kKeyFrameRequired) {
       exception_state.ThrowDOMException(DOMExceptionCode::kDataError,
-                                        request->status.message().c_str());
+                                        String(request->status.message()));
       return;
     }
   }
@@ -203,14 +210,15 @@ void DecoderTemplate<Traits>::decode(const InputType* chunk,
 }
 
 template <typename Traits>
-ScriptPromise DecoderTemplate<Traits>::flush(ExceptionState& exception_state) {
+ScriptPromise<IDLUndefined> DecoderTemplate<Traits>::flush(
+    ExceptionState& exception_state) {
   DVLOG(3) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (ThrowIfCodecStateClosed(state_, "flush", exception_state))
-    return ScriptPromise();
+    return EmptyPromise();
 
   if (ThrowIfCodecStateUnconfigured(state_, "flush", exception_state))
-    return ScriptPromise();
+    return EmptyPromise();
 
   MarkCodecActive();
 
@@ -218,8 +226,8 @@ ScriptPromise DecoderTemplate<Traits>::flush(ExceptionState& exception_state) {
 
   Request* request = MakeGarbageCollected<Request>();
   request->type = Request::Type::kFlush;
-  ScriptPromiseResolver* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state_);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state_);
   request->resolver = resolver;
   request->reset_generation = reset_generation_;
   requests_.push_back(request);
@@ -313,11 +321,10 @@ bool DecoderTemplate<Traits>::ProcessConfigureRequest(Request* request) {
   if (!request->media_config) {
     main_thread_task_runner_->PostTask(
         FROM_HERE,
-        WTF::BindOnce(&DecoderTemplate<Traits>::Shutdown,
-                      WrapWeakPersistent(this),
-                      WrapPersistent(MakeGarbageCollected<DOMException>(
-                          DOMExceptionCode::kNotSupportedError,
-                          request->js_error_message))));
+        BindOnce(&DecoderTemplate<Traits>::Shutdown, WrapWeakPersistent(this),
+                 WrapPersistent(MakeGarbageCollected<DOMException>(
+                     DOMExceptionCode::kNotSupportedError,
+                     request->js_error_message))));
     return false;
   }
 
@@ -351,6 +358,7 @@ void DecoderTemplate<Traits>::ContinueConfigureWithGpuFactories(
   if (MaybeAbortRequest(request)) {
     DCHECK_EQ(request, pending_request_);
     pending_request_.Release()->EndTracing();
+    ProcessRequests();
     return;
   }
 
@@ -371,18 +379,25 @@ void DecoderTemplate<Traits>::ContinueConfigureWithGpuFactories(
     initializing_sync_ = true;
     Traits::InitializeDecoder(
         *decoder(), request->low_delay.value(), *request->media_config,
-        WTF::BindOnce(&DecoderTemplate::OnInitializeDone,
-                      WrapWeakPersistent(this)),
-        WTF::BindRepeating(&DecoderTemplate::OnOutput, WrapWeakPersistent(this),
-                           reset_generation_));
+        BindOnce(&DecoderTemplate::OnInitializeDone, WrapWeakPersistent(this)),
+        blink::BindRepeating(&DecoderTemplate::OnOutput,
+                             WrapWeakPersistent(this), reset_generation_));
     initializing_sync_ = false;
     return;
   }
 
+  // configure() generates an implicit config change per the WebCodecs spec. On
+  // some platforms, providing the next config may allow the decoder to elide
+  // costly reinitialization work.
+  auto eos_buffer =
+      base::FeatureList::IsEnabled(media::kWebCodecsDecoderFlushOptimizations)
+          ? media::DecoderBuffer::CreateEOSBuffer(*request->media_config)
+          : media::DecoderBuffer::CreateEOSBuffer();
+
   // Processing continues in OnFlushDone().
   decoder()->Decode(
-      media::DecoderBuffer::CreateEOSBuffer(),
-      WTF::BindOnce(&DecoderTemplate::OnFlushDone, WrapWeakPersistent(this)));
+      std::move(eos_buffer),
+      BindOnce(&DecoderTemplate::OnFlushDone, WrapWeakPersistent(this)));
 }
 
 template <typename Traits>
@@ -407,7 +422,7 @@ bool DecoderTemplate<Traits>::ProcessDecodeRequest(Request* request) {
   }
 
   // The request may be invalid, if so report that now.
-  if (!request->decoder_buffer || request->decoder_buffer->data_size() == 0) {
+  if (!request->decoder_buffer || request->decoder_buffer->empty()) {
     if (request->status.is_ok()) {
       Shutdown(MakeEncodingError("Null or empty decoder buffer.",
                                  media::DecoderStatus::Codes::kFailed));
@@ -435,10 +450,9 @@ bool DecoderTemplate<Traits>::ProcessDecodeRequest(Request* request) {
         GetTraceNames()->decode.c_str(), *request->decoder_buffer);
   }
 
-  decoder()->Decode(
-      std::move(request->decoder_buffer),
-      WTF::BindOnce(&DecoderTemplate::OnDecodeDone, WrapWeakPersistent(this),
-                    pending_decode_id_));
+  decoder()->Decode(std::move(request->decoder_buffer),
+                    BindOnce(&DecoderTemplate::OnDecodeDone,
+                             WrapWeakPersistent(this), pending_decode_id_));
   return true;
 }
 
@@ -467,7 +481,7 @@ bool DecoderTemplate<Traits>::ProcessFlushRequest(Request* request) {
 
   decoder()->Decode(
       media::DecoderBuffer::CreateEOSBuffer(),
-      WTF::BindOnce(&DecoderTemplate::OnFlushDone, WrapWeakPersistent(this)));
+      BindOnce(&DecoderTemplate::OnFlushDone, WrapWeakPersistent(this)));
   return true;
 }
 
@@ -480,6 +494,11 @@ bool DecoderTemplate<Traits>::ProcessResetRequest(Request* request) {
   DCHECK_EQ(request->type, Request::Type::kReset);
   DCHECK_GT(reset_generation_, 0u);
 
+  if (shutting_down_) {
+    // No need to process reset during shutdown.
+    return true;
+  }
+
   // Signal [[codec implementation]] to cease producing output for the previous
   // configuration.
   if (decoder()) {
@@ -488,7 +507,7 @@ bool DecoderTemplate<Traits>::ProcessResetRequest(Request* request) {
 
     // Processing continues in OnResetDone().
     decoder()->Reset(
-        WTF::BindOnce(&DecoderTemplate::OnResetDone, WrapWeakPersistent(this)));
+        BindOnce(&DecoderTemplate::OnResetDone, WrapWeakPersistent(this)));
   }
 
   return true;
@@ -536,6 +555,7 @@ void DecoderTemplate<Traits>::Shutdown(DOMException* exception) {
   error_cb_.Release();
 
   // Prevent any further logging from being reported.
+  logger_->log()->OnWebMediaPlayerDestroyed();
   logger_->Neuter();
 
   // Clear decoding and JS-visible queue state. Use DeleteSoon() to avoid
@@ -543,17 +563,9 @@ void DecoderTemplate<Traits>::Shutdown(DOMException* exception) {
   // in the stack.
   main_thread_task_runner_->DeleteSoon(FROM_HERE, std::move(decoder_));
 
-  if (pending_request_) {
-    // This request was added as part of calling ResetAlgorithm above. However,
-    // OnResetDone() will never execute, since we are now in a kClosed state,
-    // and |decoder_| has been reset.
-    DCHECK_EQ(pending_request_->type, Request::Type::kReset);
-    pending_request_.Release()->EndTracing(/*shutting_down=*/true);
-  }
+  DCHECK(!pending_request_);
 
-  bool trace_enabled = false;
-  TRACE_EVENT_CATEGORY_GROUP_ENABLED(kCategory, &trace_enabled);
-  if (trace_enabled) {
+  if (TRACE_EVENT_CATEGORY_ENABLED(kCategory)) {
     for (auto& pending_decode : pending_decodes_)
       pending_decode.value->decode_trace.reset();
   }
@@ -587,6 +599,7 @@ void DecoderTemplate<Traits>::ResetAlgorithm() {
   // Since configure is always required after reset we can drop any cached
   // configuration.
   active_config_.reset();
+  active_preference_.reset();
 
   Request* request = MakeGarbageCollected<Request>();
   request->type = Request::Type::kReset;
@@ -606,31 +619,44 @@ void DecoderTemplate<Traits>::OnFlushDone(media::DecoderStatus status) {
   DCHECK(pending_request_->type == Request::Type::kConfigure ||
          pending_request_->type == Request::Type::kFlush);
 
-  if (!status.is_ok()) {
+  const bool did_elide_eos =
+      status.code() ==
+      media::DecoderStatus::Codes::kElidedEndOfStreamForConfigChange;
+
+  if (!status.is_ok() && !did_elide_eos) {
     Shutdown(MakeEncodingError("Error during flush.", status));
     return;
   }
 
-  // If reset() has been called during the Flush(), we can skip reinitialization
-  // since the client is required to do so manually.
-  const bool is_flush = pending_request_->type == Request::Type::kFlush;
-  if (is_flush && MaybeAbortRequest(pending_request_)) {
+  // If reset() has been called during the configure() or flush(), we can skip
+  // reinitialization since the client is required to do so manually.
+  if (MaybeAbortRequest(pending_request_)) {
     pending_request_.Release()->EndTracing();
     ProcessRequests();
     return;
   }
 
-  if (!is_flush)
+  const bool is_flush = pending_request_->type == Request::Type::kFlush;
+  if (is_flush) {
+    DCHECK(!did_elide_eos);
+  } else {
     SetHardwarePreference(pending_request_->hw_pref.value());
+
+    // Skip reinitialization if the codec supports it and the new config has the
+    // same hardware preference.
+    if (did_elide_eos && active_preference_ == pending_request_->hw_pref) {
+      OnInitializeDone(media::OkStatus());
+      return;
+    }
+  }
 
   // Processing continues in OnInitializeDone().
   Traits::InitializeDecoder(
       *decoder(), is_flush ? low_delay_ : pending_request_->low_delay.value(),
       is_flush ? *active_config_ : *pending_request_->media_config,
-      WTF::BindOnce(&DecoderTemplate::OnInitializeDone,
-                    WrapWeakPersistent(this)),
-      WTF::BindRepeating(&DecoderTemplate::OnOutput, WrapWeakPersistent(this),
-                         reset_generation_));
+      BindOnce(&DecoderTemplate::OnInitializeDone, WrapWeakPersistent(this)),
+      blink::BindRepeating(&DecoderTemplate::OnOutput, WrapWeakPersistent(this),
+                           reset_generation_));
 }
 
 template <typename Traits>
@@ -646,6 +672,16 @@ void DecoderTemplate<Traits>::OnInitializeDone(media::DecoderStatus status) {
 
   const bool is_flush = pending_request_->type == Request::Type::kFlush;
   if (!status.is_ok()) {
+    if (status.code() == media::DecoderStatus::Codes::kTooManyDecoders) {
+      Shutdown(MakeGarbageCollected<DOMException>(
+          DOMExceptionCode::kQuotaExceededError,
+          is_flush
+              ? "Unexpectedly ran out of decoders during initialize after "
+                "flush. Close all pending frames and try again."
+              : "Decoder initialization failed, too many decoders in use."));
+      return;
+    }
+
     std::string error_message;
     if (is_flush) {
       error_message = "Error during initialize after flush.";
@@ -674,6 +710,8 @@ void DecoderTemplate<Traits>::OnInitializeDone(media::DecoderStatus status) {
 
     low_delay_ = pending_request_->low_delay.value();
     active_config_ = std::move(pending_request_->media_config);
+    active_preference_ = pending_request_->hw_pref.value();
+    OnActiveConfigChanged(*active_config_);
   }
 
   pending_request_.Release()->EndTracing();
@@ -788,9 +826,8 @@ void DecoderTemplate<Traits>::ScheduleDequeueEvent() {
   event->async_task_context()->Schedule(GetExecutionContext(), event->type());
 
   main_thread_task_runner_->PostTask(
-      FROM_HERE,
-      WTF::BindOnce(&DecoderTemplate<Traits>::DispatchDequeueEvent,
-                    WrapWeakPersistent(this), WrapPersistent(event)));
+      FROM_HERE, BindOnce(&DecoderTemplate<Traits>::DispatchDequeueEvent,
+                          WrapWeakPersistent(this), WrapPersistent(event)));
 }
 
 template <typename Traits>
@@ -894,7 +931,8 @@ void DecoderTemplate<Traits>::Request::StartTracing() {
   DCHECK(!is_tracing);
   is_tracing = true;
 #endif
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0(kCategory, TraceNameFromType(), this);
+  TRACE_EVENT_BEGIN(kCategory, perfetto::DynamicString(TraceNameFromType()),
+                    perfetto::Track::FromPointer(this));
 }
 
 template <typename Traits>
@@ -903,8 +941,8 @@ void DecoderTemplate<Traits>::Request::EndTracing(bool shutting_down) {
   DCHECK(is_tracing);
   is_tracing = false;
 #endif
-  TRACE_EVENT_NESTABLE_ASYNC_END1(kCategory, TraceNameFromType(), this,
-                                  "completed", !shutting_down);
+  TRACE_EVENT_END(kCategory, perfetto::Track::FromPointer(this), "completed",
+                  !shutting_down);
 }
 
 template <typename Traits>

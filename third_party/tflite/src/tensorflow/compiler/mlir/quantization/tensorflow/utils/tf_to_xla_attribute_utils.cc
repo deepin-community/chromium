@@ -20,10 +20,11 @@ limitations under the License.
 #include "absl/algorithm/container.h"
 #include "absl/strings/str_format.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/kernels/padding.h"
 #include "tensorflow/compiler/mlir/quantization/common/attrs_and_constraints.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/cc/constant_fold.h"
 #include "xla/xla_data.pb.h"
-#include "tensorflow/lite/kernels/padding.h"
 
 namespace mlir::quant {
 namespace {
@@ -31,11 +32,10 @@ namespace {
 Value GetDimValue(OpBuilder &builder, Location loc, Value shape_value,
                   int32_t dim) {
   Type attribute_type = builder.getI64Type();
-  return builder.create<TF::StridedSliceOp>(
-      loc,
+  return TF::StridedSliceOp::create(
+      builder, loc,
       RankedTensorType::get(
-          {},
-          shape_value.getType().template cast<ShapedType>().getElementType()),
+          {}, mlir::cast<ShapedType>(shape_value.getType()).getElementType()),
       /*input=*/shape_value,
       /*begin=*/Create1DConstValue<int32_t>(builder, loc, {dim}),
       /*end=*/Create1DConstValue<int32_t>(builder, loc, {dim + 1}),
@@ -60,16 +60,16 @@ void GetSamePaddingValues(OpBuilder &builder, Location loc, Value input_size,
   Type int32_scalar_type = zero.getType();
 
   auto scalar_add = [&](Value lhs, Value rhs) {
-    return builder.create<TF::AddOp>(loc, int32_scalar_type, lhs, rhs);
+    return TF::AddOp::create(builder, loc, int32_scalar_type, lhs, rhs);
   };
   auto scalar_mul = [&](Value lhs, Value rhs) {
-    return builder.create<TF::MulOp>(loc, int32_scalar_type, lhs, rhs);
+    return TF::MulOp::create(builder, loc, int32_scalar_type, lhs, rhs);
   };
   auto scalar_sub = [&](Value lhs, Value rhs) {
-    return builder.create<TF::SubOp>(loc, int32_scalar_type, lhs, rhs);
+    return TF::SubOp::create(builder, loc, int32_scalar_type, lhs, rhs);
   };
   auto scalar_div = [&](Value lhs, Value rhs) {
-    return builder.create<TF::DivOp>(loc, int32_scalar_type, lhs, rhs);
+    return TF::DivOp::create(builder, loc, int32_scalar_type, lhs, rhs);
   };
 
   // effective_filter_size = (filter_size - 1) * dilation_rate + 1
@@ -90,7 +90,7 @@ void GetSamePaddingValues(OpBuilder &builder, Location loc, Value input_size,
       scalar_add(effective_filter_size_op,
                  scalar_mul(stride_value, scalar_sub(output_size, one))),
       input_size);
-  padding_needed = builder.create<TF::MaximumOp>(loc, padding_needed, zero);
+  padding_needed = TF::MaximumOp::create(builder, loc, padding_needed, zero);
   padding_low = scalar_div(padding_needed, two);
   padding_high = scalar_sub(padding_needed, padding_low);
 }
@@ -104,19 +104,20 @@ Value PadForDynamicShapedInputSamePadding(
 
   auto reshape_op = [&](Value value, const SmallVector<int64_t> &shape) {
     const int64_t rank = shape.size();
-    return builder.create<TF::ReshapeOp>(
-        loc, RankedTensorType::get(shape, builder.getI32Type()), value,
+    return TF::ReshapeOp::create(
+        builder, loc, RankedTensorType::get(shape, builder.getI32Type()), value,
         CreateConstValue<int64_t>(builder, loc, {rank}, shape));
   };
 
-  ShapedType filter_shape = filter.getType().template cast<ShapedType>();
-  Value input_shape_value = builder.create<TF::ShapeOp>(
-      loc, RankedTensorType::get({num_dims}, builder.getI32Type()), input);
+  ShapedType filter_shape = mlir::cast<ShapedType>(filter.getType());
+  Value input_shape_value = TF::ShapeOp::create(
+      builder, loc, RankedTensorType::get({num_dims}, builder.getI32Type()),
+      input);
   auto scalar_to_rank1 = [&](Value value) { return reshape_op(value, {1}); };
   for (int i : llvm::seq<int>(1, num_dims - 1)) {
     Value input_size_i = GetDimValue(builder, loc, input_shape_value, i);
-    const int stride_i = strides[i].cast<IntegerAttr>().getInt();
-    const int dilation_i = dilations[i].cast<IntegerAttr>().getInt();
+    const int stride_i = mlir::cast<IntegerAttr>(strides[i]).getInt();
+    const int dilation_i = mlir::cast<IntegerAttr>(dilations[i]).getInt();
     const int filter_i = filter_shape.getDimSize(i - 1);
     Value pad_i_low, pad_i_high;
     GetSamePaddingValues(builder, loc, input_size_i, filter_i, dilation_i,
@@ -131,12 +132,12 @@ Value PadForDynamicShapedInputSamePadding(
       builder, loc, /*shape=*/{num_dims - 2, 2},
       /*values=*/SmallVector<int32_t>(2 * (num_dims - 2), 0));
   Value zero = CreateScalarConstValue(builder, loc, 0);
-  Value temp_padding_rank1 = builder.create<TF::ConcatOp>(
-      loc, RankedTensorType::get({2 * num_dims}, builder.getI32Type()), zero,
-      temp_padding_values);
+  Value temp_padding_rank1 = TF::ConcatOp::create(
+      builder, loc, RankedTensorType::get({2 * num_dims}, builder.getI32Type()),
+      zero, temp_padding_values);
   Value temp_padding = reshape_op(temp_padding_rank1, {num_dims, 2});
-  return builder.create<TF::PadV2Op>(
-      loc, input.getType(), input, temp_padding,
+  return TF::PadV2Op::create(
+      builder, loc, input.getType(), input, temp_padding,
       CreateScalarConstValue<int8_t>(builder, loc, input_zp_value));
 }
 
@@ -154,21 +155,21 @@ Value CalculatePaddingAndPadIfNeeded(OpBuilder &builder, Location loc,
                                      StringAttr conv_padding,
                                      ArrayAttr explicit_paddings,
                                      Value &padding, int num_dims) {
-  ShapedType input_shape = input.getType().template cast<ShapedType>();
+  ShapedType input_shape = mlir::cast<ShapedType>(input.getType());
   SmallVector<int64_t> spatial_dims(num_dims - 2);
   absl::c_iota(spatial_dims, 1);
   bool has_dynamic_spatial_dim = absl::c_any_of(
       spatial_dims,
       [&input_shape](int64_t dim) { return input_shape.isDynamicDim(dim); });
-  if (conv_padding.strref().equals("SAME") && has_dynamic_spatial_dim) {
+  if (conv_padding.strref() == "SAME" && has_dynamic_spatial_dim) {
     return PadForDynamicShapedInputSamePadding(
         builder, loc, input, filter, input_zp_value, strides, dilations,
         conv_padding, padding, num_dims);
   }
 
-  ShapedType filter_shape = filter.getType().template cast<ShapedType>();
+  ShapedType filter_shape = mlir::cast<ShapedType>(filter.getType());
   SmallVector<int32_t> padding_values(2 * num_dims, 0);
-  if (conv_padding.strref().equals("EXPLICIT")) {
+  if (conv_padding.strref() == "EXPLICIT") {
     if (explicit_paddings.size() != 2 * num_dims) {
       emitError(loc,
                 absl::StrFormat(
@@ -178,22 +179,26 @@ Value CalculatePaddingAndPadIfNeeded(OpBuilder &builder, Location loc,
     }
     for (int i : spatial_dims) {
       padding_values[2 * i] =
-          explicit_paddings[2 * i].cast<IntegerAttr>().getInt();
+          mlir::cast<IntegerAttr>(explicit_paddings[2 * i]).getInt();
       padding_values[2 * i + 1] =
-          explicit_paddings[2 * i + 1].cast<IntegerAttr>().getInt();
+          mlir::cast<IntegerAttr>(explicit_paddings[2 * i + 1]).getInt();
     }
-  } else if (conv_padding.strref().equals("SAME")) {
+  } else if (conv_padding.strref() == "SAME") {
     for (int i : spatial_dims) {
       int input_size = input_shape.getDimSize(i);
       int filter_size = filter_shape.getDimSize(i - 1);
-      int stride_i = strides[i].cast<IntegerAttr>().getInt();
-      int dilation_i = dilations[i].cast<IntegerAttr>().getInt();
-      int out_size = tflite::ComputeOutSize(kTfLitePaddingSame, input_size,
-                                            filter_size, stride_i, dilation_i);
+      int stride_i = mlir::cast<IntegerAttr>(strides[i]).getInt();
+      int dilation_i = mlir::cast<IntegerAttr>(dilations[i]).getInt();
+
+      // LINT.IfChange
+      int out_size = tflite_migration::ComputeOutSize(
+          kTfLitePaddingSame, input_size, filter_size, stride_i, dilation_i);
 
       int offset = 0;
-      int padding_before = tflite::ComputePaddingWithOffset(
+      int padding_before = tflite_migration::ComputePaddingWithOffset(
           stride_i, dilation_i, input_size, filter_size, out_size, &offset);
+      // LINT.ThenChange(//tensorflow/lite/kernels/padding.h)
+
       int padding_after = padding_before + offset;
       padding_values[2 * i] = padding_before;
       padding_values[2 * i + 1] = padding_after;
@@ -220,9 +225,9 @@ Value CalculatePaddingAndPadIfNeeded(OpBuilder &builder, Location loc,
     output_shape[i] += padding_values[2 * i] + padding_values[2 * i + 1];
   }
 
-  return builder.create<TF::PadV2Op>(
-      loc, RankedTensorType::get(output_shape, builder.getI8Type()), input,
-      temp_padding,
+  return TF::PadV2Op::create(
+      builder, loc, RankedTensorType::get(output_shape, builder.getI8Type()),
+      input, temp_padding,
       CreateScalarConstValue<int8_t>(builder, loc, input_zp_value));
 }
 
@@ -243,14 +248,14 @@ Value CalculatePaddingAndPadIfNeeded(OpBuilder &builder, Location loc,
 //
 // packed_value = bitwise_or(packed_low, packed_high)
 Value PackOperand(OpBuilder &builder, Location loc, Value value, int pack_dim) {
-  ShapedType value_type = value.getType().cast<ShapedType>();
+  ShapedType value_type = mlir::cast<ShapedType>(value.getType());
   const int rank = value_type.getRank();
 
   SmallVector<int64_t> packed_shape(value_type.getShape().begin(),
                                     value_type.getShape().end());
   RankedTensorType shape_type =
       RankedTensorType::get({rank}, builder.getI64Type());
-  Value shape_value = builder.create<TF::ShapeOp>(loc, shape_type, value);
+  Value shape_value = TF::ShapeOp::create(builder, loc, shape_type, value);
 
   // It is guaranteed that packed_shape[pack_dim] is known.
   if (packed_shape[pack_dim] % 2 != 0) {
@@ -259,14 +264,14 @@ Value PackOperand(OpBuilder &builder, Location loc, Value value, int pack_dim) {
     padding[pack_dim * 2 + 1] = 1;
     Value padding_value =
         CreateConstValue<int32_t>(builder, loc, {rank, 2}, padding);
-    value = builder.create<TF::PadV2Op>(
-        loc, RankedTensorType::get(packed_shape, builder.getI8Type()), value,
-        padding_value, CreateScalarConstValue<int8_t>(builder, loc, 0));
+    value = TF::PadV2Op::create(
+        builder, loc, RankedTensorType::get(packed_shape, builder.getI8Type()),
+        value, padding_value, CreateScalarConstValue<int8_t>(builder, loc, 0));
 
     SmallVector<int64_t> shape_add(rank, 0);
     shape_add[pack_dim] = 1;
-    shape_value = builder.create<TF::AddOp>(
-        loc, shape_type, shape_value,
+    shape_value = TF::AddOp::create(
+        builder, loc, shape_type, shape_value,
         CreateConstValue<int64_t>(builder, loc, {rank}, shape_add));
   }
   packed_shape[pack_dim] /= 2;
@@ -275,17 +280,17 @@ Value PackOperand(OpBuilder &builder, Location loc, Value value, int pack_dim) {
 
   RankedTensorType packed_output_type =
       RankedTensorType::get(packed_shape, builder.getI8Type());
-  Value packed_shape_value = builder.create<TF::DivOp>(
-      loc, shape_type, shape_value,
+  Value packed_shape_value = TF::DivOp::create(
+      builder, loc, shape_type, shape_value,
       CreateConstValue<int64_t>(builder, loc, {rank}, divisor));
 
   Value packed_low_begin_value = CreateConstValue<int64_t>(
       builder, loc, {rank}, SmallVector<int64_t>(rank, 0));
   Value packed_low_value =
-      builder.create<TF::SliceOp>(loc, packed_output_type, value,
-                                  packed_low_begin_value, packed_shape_value);
-  packed_low_value = builder.create<TF::BitwiseAndOp>(
-      loc, packed_output_type, packed_low_value,
+      TF::SliceOp::create(builder, loc, packed_output_type, value,
+                          packed_low_begin_value, packed_shape_value);
+  packed_low_value = TF::BitwiseAndOp::create(
+      builder, loc, packed_output_type, packed_low_value,
       CreateScalarConstValue<int8_t>(builder, loc, 0x0F));
 
   SmallVector<int64_t> packed_high_begin(rank, 0);
@@ -293,14 +298,14 @@ Value PackOperand(OpBuilder &builder, Location loc, Value value, int pack_dim) {
   Value packed_high_begin_value =
       CreateConstValue<int64_t>(builder, loc, {rank}, packed_high_begin);
   Value packed_high_value =
-      builder.create<TF::SliceOp>(loc, packed_output_type, value,
-                                  packed_high_begin_value, packed_shape_value);
-  packed_high_value = builder.create<TF::LeftShiftOp>(
-      loc, packed_output_type, packed_high_value,
+      TF::SliceOp::create(builder, loc, packed_output_type, value,
+                          packed_high_begin_value, packed_shape_value);
+  packed_high_value = TF::LeftShiftOp::create(
+      builder, loc, packed_output_type, packed_high_value,
       CreateScalarConstValue<int8_t>(builder, loc, 4));
 
-  Operation *packed = builder.create<TF::BitwiseOrOp>(
-      loc, packed_output_type, packed_low_value, packed_high_value);
+  Operation* packed = TF::BitwiseOrOp::create(
+      builder, loc, packed_output_type, packed_low_value, packed_high_value);
   return ConstantFoldOpIfPossible(packed).front();
 }
 

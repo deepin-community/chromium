@@ -4,7 +4,7 @@
 
 #include <libweston/libweston.h>
 #include <linux/input-event-codes.h>
-#include <ui-controls-unstable-v1-server-protocol.h>
+#include <ui-controls-unstable-v2-server-protocol.h>
 #include <wayland-server-protocol.h>
 #include <wayland-util.h>
 
@@ -13,7 +13,7 @@
 // Needed for `weston_touch_create_touch_device()`.
 #include "libweston-internal.h"
 
-static const uint32_t kUiControlsVersion = 2;
+static const uint32_t kUiControlsVersion = 1;
 
 struct ui_controls_state {
   struct weston_compositor* compositor;
@@ -24,6 +24,8 @@ struct ui_controls_state {
   bool is_seat_initialized;
 };
 
+void reset_mouse_position(struct ui_controls_state* state);
+
 static int ui_controls_seat_init(struct ui_controls_state* state) {
   assert(!state->is_seat_initialized);
 
@@ -31,6 +33,9 @@ static int ui_controls_seat_init(struct ui_controls_state* state) {
   state->is_seat_initialized = true;
 
   weston_seat_init_pointer(&state->seat);
+  // Initialize pointer to (0, 0) to prevent BackButton or other components
+  // hover events from triggering flaky tests of Chromium.
+  reset_mouse_position(state);
   if (weston_seat_init_keyboard(&state->seat, NULL) < 0) {
     return -1;
   }
@@ -58,12 +63,29 @@ static void maybe_translate_coordinates_from_surface_local(
     int32_t* y) {
   assert(x && y);
   if (surface_resource) {
-    struct weston_desktop_surface* surface =
+    struct weston_surface* surface =
         wl_resource_get_user_data(surface_resource);
-    struct weston_geometry geometry;
-    weston_desktop_surface_get_root_geometry(surface, &geometry);
-    *x += geometry.x;
-    *y += geometry.y;
+    if (strcmp(surface->role_name, "wl_subsurface") == 0) {
+      struct weston_subsurface* subsurface = surface->committed_private;
+      *x += subsurface->position.offset.c.x;
+      *y += subsurface->position.offset.c.y;
+      maybe_translate_coordinates_from_surface_local(
+          subsurface->parent->resource, x, y);
+    } else {
+      struct weston_desktop_surface* desktop_surface =
+          surface->committed_private;
+      if (!desktop_surface) {
+        desktop_surface = weston_surface_get_desktop_surface(surface);
+        if (!desktop_surface) {
+          wl_resource_post_no_memory(surface_resource);
+          return;
+        }
+      }
+      struct weston_geometry geometry;
+      weston_desktop_surface_get_root_geometry(desktop_surface, &geometry);
+      *x += geometry.x;
+      *y += geometry.y;
+    }
   }
 }
 
@@ -72,19 +94,19 @@ static void handle_modifiers(struct ui_controls_state* state,
                              enum wl_keyboard_key_state key_state) {
   struct timespec time;
 
-  if (pressed_modifiers & ZCR_UI_CONTROLS_V1_MODIFIER_SHIFT) {
+  if (pressed_modifiers & ZCR_UI_CONTROLS_V2_MODIFIER_SHIFT) {
     weston_compositor_get_time(&time);
     notify_key(&state->seat, &time, KEY_LEFTSHIFT, key_state,
                STATE_UPDATE_AUTOMATIC);
   }
 
-  if (pressed_modifiers & ZCR_UI_CONTROLS_V1_MODIFIER_ALT) {
+  if (pressed_modifiers & ZCR_UI_CONTROLS_V2_MODIFIER_ALT) {
     weston_compositor_get_time(&time);
     notify_key(&state->seat, &time, KEY_LEFTALT, key_state,
                STATE_UPDATE_AUTOMATIC);
   }
 
-  if (pressed_modifiers & ZCR_UI_CONTROLS_V1_MODIFIER_CONTROL) {
+  if (pressed_modifiers & ZCR_UI_CONTROLS_V2_MODIFIER_CONTROL) {
     weston_compositor_get_time(&time);
     notify_key(&state->seat, &time, KEY_LEFTCTRL, key_state,
                STATE_UPDATE_AUTOMATIC);
@@ -102,13 +124,13 @@ static void send_key_events(struct wl_client* client,
 
   handle_modifiers(state, pressed_modifiers, WL_KEYBOARD_KEY_STATE_PRESSED);
 
-  if (key_state & ZCR_UI_CONTROLS_V1_KEY_STATE_PRESS) {
+  if (key_state & ZCR_UI_CONTROLS_V2_KEY_STATE_PRESS) {
     weston_compositor_get_time(&time);
     notify_key(&state->seat, &time, key, WL_KEYBOARD_KEY_STATE_PRESSED,
                STATE_UPDATE_AUTOMATIC);
   }
 
-  if (key_state & ZCR_UI_CONTROLS_V1_KEY_STATE_RELEASE) {
+  if (key_state & ZCR_UI_CONTROLS_V2_KEY_STATE_RELEASE) {
     weston_compositor_get_time(&time);
     notify_key(&state->seat, &time, key, WL_KEYBOARD_KEY_STATE_RELEASED,
                STATE_UPDATE_AUTOMATIC);
@@ -116,7 +138,7 @@ static void send_key_events(struct wl_client* client,
 
   handle_modifiers(state, pressed_modifiers, WL_KEYBOARD_KEY_STATE_RELEASED);
 
-  zcr_ui_controls_v1_send_request_processed(resource, id);
+  zcr_ui_controls_v2_send_request_processed(resource, id);
 }
 
 static void send_mouse_move(struct wl_client* client,
@@ -140,7 +162,18 @@ static void send_mouse_move(struct wl_client* client,
 
   // Sending wl_pointer.frame happens automatically.
 
-  zcr_ui_controls_v1_send_request_processed(resource, id);
+  zcr_ui_controls_v2_send_request_processed(resource, id);
+}
+
+void reset_mouse_position(
+    struct ui_controls_state* state
+) {
+  struct timespec time;
+  struct weston_pointer_motion_event event = {0};
+  event.mask = WESTON_POINTER_MOTION_ABS;
+  event.abs.c = weston_coord(0, 0);
+  weston_compositor_get_time(&event.time);
+  notify_motion(&state->seat, &time, &event);
 }
 
 static void send_mouse_button(struct wl_client* client,
@@ -153,25 +186,25 @@ static void send_mouse_button(struct wl_client* client,
   struct timespec time;
 
   switch (button) {
-    case ZCR_UI_CONTROLS_V1_MOUSE_BUTTON_LEFT:
+    case ZCR_UI_CONTROLS_V2_MOUSE_BUTTON_LEFT:
       button = BTN_LEFT;
       break;
-    case ZCR_UI_CONTROLS_V1_MOUSE_BUTTON_MIDDLE:
+    case ZCR_UI_CONTROLS_V2_MOUSE_BUTTON_MIDDLE:
       button = BTN_MIDDLE;
       break;
-    case ZCR_UI_CONTROLS_V1_MOUSE_BUTTON_RIGHT:
+    case ZCR_UI_CONTROLS_V2_MOUSE_BUTTON_RIGHT:
       button = BTN_RIGHT;
       break;
   }
 
   handle_modifiers(state, pressed_modifiers, WL_KEYBOARD_KEY_STATE_PRESSED);
 
-  if (button_state & ZCR_UI_CONTROLS_V1_MOUSE_BUTTON_STATE_DOWN) {
+  if (button_state & ZCR_UI_CONTROLS_V2_MOUSE_BUTTON_STATE_DOWN) {
     weston_compositor_get_time(&time);
     notify_button(&state->seat, &time, button, WL_POINTER_BUTTON_STATE_PRESSED);
   }
 
-  if (button_state & ZCR_UI_CONTROLS_V1_MOUSE_BUTTON_STATE_UP) {
+  if (button_state & ZCR_UI_CONTROLS_V2_MOUSE_BUTTON_STATE_UP) {
     weston_compositor_get_time(&time);
     notify_button(&state->seat, &time, button,
                   WL_POINTER_BUTTON_STATE_RELEASED);
@@ -181,46 +214,11 @@ static void send_mouse_button(struct wl_client* client,
 
   // Sending wl_pointer.frame happens automatically.
 
-  zcr_ui_controls_v1_send_request_processed(resource, id);
+  zcr_ui_controls_v2_send_request_processed(resource, id);
 }
 
-static void send_touch(struct wl_client* client,
-                       struct wl_resource* resource,
-                       uint32_t action,
-                       uint32_t touch_id,
-                       int32_t x,
-                       int32_t y,
-                       struct wl_resource* surface_resource,
-                       uint32_t id) {
-  struct ui_controls_state* state = wl_resource_get_user_data(resource);
-  struct timespec time;
-
-  maybe_translate_coordinates_from_surface_local(surface_resource, &x, &y);
-
-  struct weston_coord_global pos = {weston_coord(x, y)};
-
-  if (action & ZCR_UI_CONTROLS_V1_TOUCH_TYPE_PRESS) {
-    weston_compositor_get_time(&time);
-    notify_touch(state->touch_device, &time, touch_id, &pos, WL_TOUCH_DOWN);
-  }
-
-  if (action & ZCR_UI_CONTROLS_V1_TOUCH_TYPE_MOVE) {
-    weston_compositor_get_time(&time);
-    notify_touch(state->touch_device, &time, touch_id, &pos, WL_TOUCH_MOTION);
-  }
-
-  if (action & ZCR_UI_CONTROLS_V1_TOUCH_TYPE_RELEASE) {
-    weston_compositor_get_time(&time);
-    notify_touch(state->touch_device, &time, touch_id, NULL, WL_TOUCH_UP);
-  }
-
-  notify_touch_frame(state->touch_device);
-
-  zcr_ui_controls_v1_send_request_processed(resource, id);
-}
-
-static const struct zcr_ui_controls_v1_interface ui_controls_implementation = {
-    send_key_events, send_mouse_move, send_mouse_button, send_touch};
+static const struct zcr_ui_controls_v2_interface ui_controls_implementation = {
+    send_key_events, send_mouse_move, send_mouse_button};
 
 static void reset_inputs(struct wl_resource* resource) {
   struct ui_controls_state* state = wl_resource_get_user_data(resource);
@@ -258,6 +256,8 @@ static void reset_inputs(struct wl_resource* resource) {
     notify_touch(state->touch_device, &time, /*touch_id=*/0, NULL, WL_TOUCH_UP);
   }
   notify_touch_frame(state->touch_device);
+
+  reset_mouse_position(state);
 }
 
 static void bind_ui_controls(struct wl_client* client,
@@ -266,7 +266,7 @@ static void bind_ui_controls(struct wl_client* client,
                              uint32_t id) {
   struct ui_controls_state* state = data;
   struct wl_resource* resource = wl_resource_create(
-      client, &zcr_ui_controls_v1_interface, kUiControlsVersion, id);
+      client, &zcr_ui_controls_v2_interface, kUiControlsVersion, id);
   if (!resource) {
     wl_client_post_no_memory(client);
     return;
@@ -304,7 +304,7 @@ WL_EXPORT int wet_module_init(struct weston_compositor* compositor,
 
   state->compositor = compositor;
 
-  if (wl_global_create(compositor->wl_display, &zcr_ui_controls_v1_interface,
+  if (wl_global_create(compositor->wl_display, &zcr_ui_controls_v2_interface,
                        kUiControlsVersion, state, bind_ui_controls) == NULL) {
     goto out_free;
   }

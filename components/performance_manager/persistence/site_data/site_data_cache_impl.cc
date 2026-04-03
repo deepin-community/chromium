@@ -6,7 +6,7 @@
 
 #include <set>
 
-#include "base/containers/contains.h"
+#include "base/check.h"
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
@@ -30,9 +30,12 @@ SiteDataCacheImpl::SiteDataCacheImpl(const std::string& browser_context_id,
   data_store_ = std::make_unique<LevelDBSiteDataStore>(
       browser_context_path.AppendASCII(kDataStoreDBName));
 
-  // Register the debug interface against the browser context.
-  SiteDataCacheFactory::GetInstance()->SetDataCacheInspectorForBrowserContext(
-      this, browser_context_id_);
+  // Register the debug interface against the browser context. The factory
+  // should always exist by the time this is called, since it is created once
+  // there's a browser context with keyed services enabled.
+  auto* factory = SiteDataCacheFactory::GetInstance();
+  CHECK(factory);
+  factory->SetDataCacheInspectorForBrowserContext(this, browser_context_id_);
 }
 
 SiteDataCacheImpl::SiteDataCacheImpl(const std::string& browser_context_id)
@@ -135,7 +138,7 @@ internal::SiteDataImpl* SiteDataCacheImpl::GetOrCreateFeatureImpl(
 void SiteDataCacheImpl::OnSiteDataImplDestroyed(internal::SiteDataImpl* impl) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(impl);
-  DCHECK(base::Contains(origin_data_map_, impl->origin()));
+  DCHECK(origin_data_map_.contains(impl->origin()));
   // Remove the entry for this origin as this is about to get destroyed.
   auto num_erased = origin_data_map_.erase(impl->origin());
   DCHECK_EQ(1U, num_erased);

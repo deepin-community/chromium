@@ -124,7 +124,7 @@
  */
 // #define SK_HISTOGRAM_BOOLEAN(name, value)
 // #define SK_HISTOGRAM_ENUMERATION(name, value, boundary_value)
-#include "third_party/base/component_export.h"
+#include "core/fxcrt/component_export.h"
 
 // ===== Begin Chrome-specific definitions =====
 
@@ -195,6 +195,10 @@ SK_API void SkDebugf_FileLine(const char* file,
 #define SK_SUPPORT_LEGACY_ANISOTROPIC_MIPMAP_SCALE
 #endif
 
+// Staging
+#define SK_DISABLE_LEGACY_NONCONST_ENCODED_IMAGE_DATA
+#define SK_DISABLE_LEGACY_NONCONST_SERIAL_PROCS
+
 ///////////////////////// Imported from BUILD.gn
 
 /* In some places Skia can use static initializers for global initialization,
@@ -208,21 +212,8 @@ SK_API void SkDebugf_FileLine(const char* file,
 
 #define SK_IGNORE_BLURRED_RRECT_OPT
 #define SK_USE_DISCARDABLE_SCALEDIMAGECACHE
-#define SK_WILL_NEVER_DRAW_PERSPECTIVE_TEXT
 
 #define SK_ATTR_DEPRECATED SK_NOTHING_ARG1
-#define SK_ENABLE_INST_COUNT 0
-#define GR_GL_CUSTOM_SETUP_HEADER "GrGLConfig_chrome.h"
-
-// Blink layout tests are baselined to Clang optimizing through the UB in
-// SkDivBits.
-#define SK_SUPPORT_LEGACY_DIVBITS_UB
-
-// mtklein's fiddling with Src / SrcOver.  Will rebaseline these only once when
-// done.
-#define SK_SUPPORT_LEGACY_X86_BLITS
-
-#define SK_DISABLE_TILE_IMAGE_FILTER_OPTIMIZATION
 
 #if defined(SK_BUILD_FOR_WIN) && !defined(__clang__)
 #define SK_ABORT(format, ...) \

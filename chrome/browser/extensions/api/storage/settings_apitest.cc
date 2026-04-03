@@ -7,15 +7,14 @@
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/memory/ref_counted.h"
+#include "base/one_shot_event.h"
 #include "base/run_loop.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/storage/settings_sync_util.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/extensions/extension_system_factory.h"
 #include "chrome/browser/policy/schema_registry_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_bundle.h"
@@ -37,12 +36,15 @@
 #include "extensions/browser/api/storage/storage_area_namespace.h"
 #include "extensions/browser/api/storage/storage_frontend.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/features/feature_channel.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
 #include "extensions/test/test_extension_dir.h"
 #include "testing/gmock/include/gmock/gmock.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -51,7 +53,7 @@ using testing::NiceMock;
 namespace {
 
 // TODO(kalman): test both EXTENSION_SETTINGS and APP_SETTINGS.
-const syncer::ModelType kModelType = syncer::EXTENSION_SETTINGS;
+const syncer::DataType kDataType = syncer::EXTENSION_SETTINGS;
 
 // The managed_storage extension has a key defined in its manifest, so that
 // its extension ID is well-known and the policy system can push policies for
@@ -138,7 +140,7 @@ class ExtensionSettingsApiTest : public ExtensionApiTest {
     EXPECT_FALSE(
         syncable_service
             ->MergeDataAndStartSyncing(
-                kModelType, syncer::SyncDataList(),
+                kDataType, syncer::SyncDataList(),
                 std::make_unique<syncer::SyncChangeProcessorWrapperForTest>(
                     sync_processor))
             .has_value());
@@ -152,7 +154,7 @@ class ExtensionSettingsApiTest : public ExtensionApiTest {
         FROM_HERE,
         base::BindOnce(&InitSyncOnBackgroundSequence,
                        settings_sync_util::GetSyncableServiceProvider(
-                           profile(), kModelType),
+                           profile(), kDataType),
                        sync_processor),
         loop.QuitClosure());
     loop.Run();
@@ -179,13 +181,13 @@ class ExtensionSettingsApiTest : public ExtensionApiTest {
         FROM_HERE,
         base::BindOnce(&SendChangesOnBackgroundSequence,
                        settings_sync_util::GetSyncableServiceProvider(
-                           profile(), kModelType),
+                           profile(), kDataType),
                        change_list),
         loop.QuitClosure());
     loop.Run();
   }
 
-  void SetPolicies(const base::Value::Dict& policies) {
+  void SetPolicies(const base::DictValue& policies) {
     policy::PolicyBundle bundle;
     policy::PolicyMap& policy_map = bundle.Get(policy::PolicyNamespace(
         policy::POLICY_DOMAIN_EXTENSIONS, kManagedStorageExtensionId));
@@ -228,13 +230,11 @@ class ExtensionSettingsApiTest : public ExtensionApiTest {
   std::string CreateMessage(StorageAreaNamespace storage_area,
                             const std::string& action,
                             bool is_final_action) {
-    base::Value::Dict message;
+    base::DictValue message;
     message.Set("namespace", StorageAreaToString(storage_area));
     message.Set("action", action);
     message.Set("isFinalAction", is_final_action);
-    std::string message_json;
-    base::JSONWriter::Write(message, &message_json);
-    return message_json;
+    return base::WriteJson(message).value_or("");
   }
 
   void SendChangesToSyncableService(
@@ -290,9 +290,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest, SplitModeIncognito) {
   // regular and incognito mode.
   ResultCatcher catcher;
   ResultCatcher catcher_incognito;
-  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher.RestrictToBrowserContext(profile());
   catcher_incognito.RestrictToBrowserContext(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
 
   // Sync, local and managed follow the same storage flow (RunWithStorage),
   // whereas session follows a separate flow (RunWithSession). For the purpose
@@ -319,7 +319,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest, SplitModeIncognito) {
   EXPECT_TRUE(catcher_incognito.GetNextResult()) << catcher.message();
 }
 
-// TODO(crbug.com/1229351): Service worker extension listener should receive an
+// TODO(crbug.com/40189896): Service worker extension listener should receive an
 // event before the callback is made. Current workaround: wait for the event to
 // be received by the extension before checking for it. Potential solution: once
 // browser-side observation of SW lifetime work is finished, check if it fixes
@@ -330,9 +330,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
   // regular and incognito mode.
   ResultCatcher catcher;
   ResultCatcher catcher_incognito;
-  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher.RestrictToBrowserContext(profile());
   catcher_incognito.RestrictToBrowserContext(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
 
   StorageAreaNamespace storage_areas[2] = {StorageAreaNamespace::kSync,
                                            StorageAreaNamespace::kSession};
@@ -378,9 +378,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
   // regular and incognito mode.
   ResultCatcher catcher;
   ResultCatcher catcher_incognito;
-  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher.RestrictToBrowserContext(profile());
   catcher_incognito.RestrictToBrowserContext(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
 
   LoadAndReplyWhenSatisfied(StorageAreaNamespace::kSync,
                             "assertNoNotifications", "assertNoNotifications",
@@ -480,7 +480,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
   EXPECT_TRUE(catcher_incognito.GetNextResult()) << catcher.message();
 }
 
-// TODO(crbug.com/1229351): Service worker extension listener should receive an
+// TODO(crbug.com/40189896): Service worker extension listener should receive an
 // event before the callback is made. Current workaround: wait for the event to
 // be received by the extension before checking for it. Potential solution: once
 // browser-side observation of SW lifetime work is finished, check if it fixes
@@ -490,9 +490,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
   // We need 2 ResultCatchers because we'll be running the same test in both
   // regular and incognito mode.
   ResultCatcher catcher, catcher_incognito;
-  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher.RestrictToBrowserContext(profile());
   catcher_incognito.RestrictToBrowserContext(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
 
   const Extension* extension = LoadAndReplyWhenSatisfied(
       StorageAreaNamespace::kSync, "assertNoNotifications",
@@ -505,8 +505,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
   // Set "foo" to "bar" via sync.
   syncer::SyncChangeList sync_changes;
   base::Value bar("bar");
-  sync_changes.push_back(settings_sync_util::CreateAdd(
-      extension_id, "foo", bar, kModelType));
+  sync_changes.push_back(
+      settings_sync_util::CreateAdd(extension_id, "foo", bar, kDataType));
   SendChanges(sync_changes);
 
   ReplyWhenSatisfied(StorageAreaNamespace::kSync, "assertAddFooNotification",
@@ -516,8 +516,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
 
   // Remove "foo" via sync.
   sync_changes.clear();
-  sync_changes.push_back(settings_sync_util::CreateDelete(
-      extension_id, "foo", kModelType));
+  sync_changes.push_back(
+      settings_sync_util::CreateDelete(extension_id, "foo", kDataType));
   SendChanges(sync_changes);
 
   FinalReplyWhenSatisfied(StorageAreaNamespace::kSync,
@@ -535,9 +535,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
   // We need 2 ResultCatchers because we'll be running the same test in both
   // regular and incognito mode.
   ResultCatcher catcher, catcher_incognito;
-  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher.RestrictToBrowserContext(profile());
   catcher_incognito.RestrictToBrowserContext(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
 
   const Extension* extension = LoadAndReplyWhenSatisfied(
       StorageAreaNamespace::kLocal, "assertNoNotifications",
@@ -550,8 +550,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
   // Set "foo" to "bar" via sync.
   syncer::SyncChangeList sync_changes;
   base::Value bar("bar");
-  sync_changes.push_back(settings_sync_util::CreateAdd(
-      extension_id, "foo", bar, kModelType));
+  sync_changes.push_back(
+      settings_sync_util::CreateAdd(extension_id, "foo", bar, kDataType));
   SendChanges(sync_changes);
 
   ReplyWhenSatisfied(StorageAreaNamespace::kLocal, "assertNoNotifications",
@@ -559,8 +559,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
 
   // Remove "foo" via sync.
   sync_changes.clear();
-  sync_changes.push_back(settings_sync_util::CreateDelete(
-      extension_id, "foo", kModelType));
+  sync_changes.push_back(
+      settings_sync_util::CreateDelete(extension_id, "foo", kDataType));
   SendChanges(sync_changes);
 
   FinalReplyWhenSatisfied(StorageAreaNamespace::kLocal, "assertNoNotifications",
@@ -571,14 +571,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest, IsStorageEnabled) {
-  StorageFrontend* frontend = StorageFrontend::Get(browser()->profile());
+  StorageFrontend* frontend = StorageFrontend::Get(profile());
   EXPECT_TRUE(frontend->IsStorageEnabled(settings_namespace::LOCAL));
   EXPECT_TRUE(frontend->IsStorageEnabled(settings_namespace::SYNC));
 
   EXPECT_TRUE(frontend->IsStorageEnabled(settings_namespace::MANAGED));
 }
 
-using ContextType = ExtensionBrowserTest::ContextType;
+using ContextType = extensions::browser_test_util::ContextType;
 
 class ExtensionSettingsManagedStorageApiTest
     : public ExtensionSettingsApiTest,
@@ -592,7 +592,7 @@ class ExtensionSettingsManagedStorageApiTest
   ExtensionSettingsManagedStorageApiTest& operator=(
       const ExtensionSettingsManagedStorageApiTest& other) = delete;
 
-  // TODO(crbug.com/1247323): Remove this.
+  // TODO(crbug.com/40789870): Remove this.
   // The ManagedStorageEvents test has a PRE_ step loads an extension which
   // then runs in the main step. Since the extension immediately starts
   // running the tests, constructing a ResultCatcher in the body of the
@@ -602,9 +602,12 @@ class ExtensionSettingsManagedStorageApiTest
   ResultCatcher events_result_catcher_;
 };
 
+// Desktop Android supports only service worker, not persistent background.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 INSTANTIATE_TEST_SUITE_P(PersistentBackground,
                          ExtensionSettingsManagedStorageApiTest,
                          ::testing::Values(ContextType::kPersistentBackground));
+#endif
 
 INSTANTIATE_TEST_SUITE_P(ServiceWorker,
                          ExtensionSettingsManagedStorageApiTest,
@@ -613,8 +616,7 @@ INSTANTIATE_TEST_SUITE_P(ServiceWorker,
 IN_PROC_BROWSER_TEST_P(ExtensionSettingsManagedStorageApiTest,
                        ExtensionsSchemas) {
   // Verifies that the Schemas for the extensions domain are created on startup.
-  Profile* profile = browser()->profile();
-  ExtensionSystem* extension_system = ExtensionSystem::Get(profile);
+  ExtensionSystem* extension_system = ExtensionSystem::Get(profile());
   if (!extension_system->ready().is_signaled()) {
     // Wait until the extension system is ready.
     base::RunLoop run_loop;
@@ -628,7 +630,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionSettingsManagedStorageApiTest,
   message_.clear();
 
   policy::SchemaRegistry* registry =
-      profile->GetPolicySchemaRegistryService()->registry();
+      profile()->GetPolicySchemaRegistryService()->registry();
   ASSERT_TRUE(registry);
   EXPECT_FALSE(registry->schema_map()->GetSchema(policy::PolicyNamespace(
       policy::POLICY_DOMAIN_EXTENSIONS, kManagedStorageExtensionId)));
@@ -695,12 +697,12 @@ IN_PROC_BROWSER_TEST_P(ExtensionSettingsManagedStorageApiTest,
   EXPECT_EQ(base::Value::Type::INTEGER, dict.GetProperty("anything").type());
 }
 
-// TODO(crbug.com/1247323): This test should be rewritten. See the bug for more
+// TODO(crbug.com/40789870): This test should be rewritten. See the bug for more
 // details.
 IN_PROC_BROWSER_TEST_P(ExtensionSettingsManagedStorageApiTest, ManagedStorage) {
   // Set policies for the test extension.
-  base::Value::Dict policy =
-      base::Value::Dict()
+  base::DictValue policy =
+      base::DictValue()
           .Set("string-policy", "value")
           .Set("string-enum-policy", "value-1")
           .Set("another-string-policy", 123)  // Test invalid policy value.
@@ -709,19 +711,23 @@ IN_PROC_BROWSER_TEST_P(ExtensionSettingsManagedStorageApiTest, ManagedStorage) {
           .Set("double-policy", 456e7)
           .Set("boolean-policy", true)
           .Set("list-policy",
-               base::Value::List().Append("one").Append("two").Append("three"))
+               base::ListValue().Append("one").Append("two").Append("three"))
           .Set("dict-policy",
-               base::Value::Dict().Set(
+               base::DictValue().Set(
                    "list",
-                   base::Value::List()
-                       .Append(base::Value::Dict().Set("one", 1).Set("two", 2))
-                       .Append(base::Value::Dict().Set("three", 3))));
+                   base::ListValue()
+                       .Append(base::DictValue().Set("one", 1).Set("two", 2))
+                       .Append(base::DictValue().Set("three", 3))));
   SetPolicies(policy);
   // Now run the extension.
   ASSERT_TRUE(RunExtensionTest("settings/managed_storage")) << message_;
 }
 
-// TODO(crbug.com/1247323): This test should be rewritten. See the bug for more
+// TODO(crbug.com/40200835): PRE_ test does not work on android_browsertest,
+// therefore, disabled the following tests until the PRE_ test issue is
+// resolved.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+// TODO(crbug.com/40789870): This test should be rewritten. See the bug for more
 // details.
 IN_PROC_BROWSER_TEST_P(ExtensionSettingsManagedStorageApiTest,
                        PRE_ManagedStorageEvents) {
@@ -730,10 +736,10 @@ IN_PROC_BROWSER_TEST_P(ExtensionSettingsManagedStorageApiTest,
   message_.clear();
 
   // Set policies for the test extension.
-  base::Value::Dict policy = base::Value::Dict()
-                                 .Set("constant-policy", "aaa")
-                                 .Set("changes-policy", "bbb")
-                                 .Set("deleted-policy", "ccc");
+  base::DictValue policy = base::DictValue()
+                               .Set("constant-policy", "aaa")
+                               .Set("changes-policy", "bbb")
+                               .Set("deleted-policy", "ccc");
   SetPolicies(policy);
 
   ExtensionTestMessageListener ready_listener("ready");
@@ -749,7 +755,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionSettingsManagedStorageApiTest,
   ASSERT_TRUE(ready_listener.WaitUntilSatisfied());
 
   // Now change the policies and wait until the extension is done.
-  policy = base::Value::Dict()
+  policy = base::DictValue()
                .Set("constant-policy", "aaa")
                .Set("changes-policy", "ddd")
                .Set("new-policy", "eee");
@@ -767,6 +773,8 @@ IN_PROC_BROWSER_TEST_P(ExtensionSettingsManagedStorageApiTest,
 
   // Verify that the test extension is still installed.
   const Extension* extension = GetSingleLoadedExtension();
+  // TODO(crbug.com/40200835): On desktop Android this assert fails because the
+  // extension was not loaded. It's not clear why.
   ASSERT_TRUE(extension);
   EXPECT_EQ(kManagedStorageExtensionId, extension->id());
 
@@ -775,11 +783,12 @@ IN_PROC_BROWSER_TEST_P(ExtensionSettingsManagedStorageApiTest,
   EXPECT_TRUE(events_result_catcher_.GetNextResult())
       << events_result_catcher_.message();
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 IN_PROC_BROWSER_TEST_P(ExtensionSettingsManagedStorageApiTest,
                        ManagedStorageDisabled) {
   // Disable the 'managed' namespace.
-  StorageFrontend* frontend = StorageFrontend::Get(browser()->profile());
+  StorageFrontend* frontend = StorageFrontend::Get(profile());
   frontend->DisableStorageForTesting(settings_namespace::MANAGED);
   EXPECT_FALSE(frontend->IsStorageEnabled(settings_namespace::MANAGED));
   // Now run the extension.

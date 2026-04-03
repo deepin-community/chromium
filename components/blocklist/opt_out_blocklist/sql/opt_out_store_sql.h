@@ -10,7 +10,6 @@
 #include <memory>
 #include <string>
 
-#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
@@ -26,8 +25,6 @@ class Database;
 }  // namespace sql
 
 namespace blocklist {
-
-BASE_DECLARE_FEATURE(kOptOutStoreSQLUseBuiltInRecoveryIfSupported);
 
 // OptOutStoreSQL is an instance of OptOutStore
 // which is implemented using a SQLite database.

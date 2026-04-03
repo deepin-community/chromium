@@ -5,13 +5,13 @@
 #include "chrome/browser/apps/platform_apps/platform_app_launch.h"
 
 #include "build/build_config.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
 #include "chrome/browser/extensions/launch_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_metrics.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_prefs.h"
@@ -19,15 +19,13 @@
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/web_applications/extension_status_utils.h"
 #include "chrome/common/webui_url_constants.h"
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_FUCHSIA)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 namespace apps {
 
@@ -88,8 +86,7 @@ bool OpenExtensionApplicationWindow(Profile* profile,
   if (launch_container == LaunchContainer::kLaunchContainerTab)
     return false;
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   if (OpenDeprecatedApplicationPrompt(profile, app_id)) {
     return false;
   }
@@ -110,20 +107,20 @@ bool OpenExtensionApplicationWindow(Profile* profile,
   return tab_in_app_window != nullptr || ::CanLaunchViaEvent(app);
 }
 
-bool OpenExtensionApplicationTab(Profile* profile, const std::string& app_id) {
+content::WebContents* OpenExtensionApplicationTab(Profile* profile,
+                                                  const std::string& app_id) {
   apps::LaunchContainer launch_container;
   const extensions::Extension* app;
   if (!GetAppLaunchContainer(profile, app_id, &app, &launch_container))
-    return false;
+    return nullptr;
 
   // If the user doesn't want to open a tab, fail.
   if (launch_container != apps::LaunchContainer::kLaunchContainerTab)
-    return false;
+    return nullptr;
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   if (OpenDeprecatedApplicationPrompt(profile, app_id)) {
-    return false;
+    return nullptr;
   }
 #endif
 
@@ -134,11 +131,10 @@ bool OpenExtensionApplicationTab(Profile* profile, const std::string& app_id) {
       apps::AppLaunchParams(app_id, apps::LaunchContainer::kLaunchContainerTab,
                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
                             apps::LaunchSource::kFromCommandLine));
-  return app_tab != nullptr;
+  return app_tab;
 }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 bool OpenDeprecatedApplicationPrompt(Profile* profile,
                                      const std::string& app_id) {
   if (!extensions::IsExtensionUnsupportedDeprecatedApp(profile, app_id))
@@ -164,8 +160,7 @@ bool OpenDeprecatedApplicationPrompt(Profile* profile,
 
   return true;
 }
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_FUCHSIA)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 bool OpenExtensionApplicationWithReenablePrompt(
     Profile* profile,
@@ -175,8 +170,7 @@ bool OpenExtensionApplicationWithReenablePrompt(
   if (!GetPlatformApp(profile, app_id))
     return false;
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   if (OpenDeprecatedApplicationPrompt(profile, app_id)) {
     return false;
   }
@@ -198,8 +192,7 @@ content::WebContents* OpenExtensionAppShortcutWindow(Profile* profile,
                                          ->enabled_extensions()
                                          .GetAppByURL(url);
   if (app) {
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
     if (OpenDeprecatedApplicationPrompt(profile, app->id())) {
       return nullptr;
     }
@@ -222,8 +215,7 @@ void RecordExtensionAppLaunchOnTabRestored(Profile* profile, const GURL& url) {
   if (!extension)
     return;
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   if (OpenDeprecatedApplicationPrompt(profile, extension->id())) {
     return;
   }

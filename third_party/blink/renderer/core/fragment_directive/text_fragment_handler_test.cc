@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -82,7 +83,7 @@ class TextFragmentHandlerTest : public SimTest {
           callback_called = true;
         };
     auto callback =
-        WTF::BindOnce(lambda, std::ref(callback_called), std::ref(selector));
+        BindOnce(lambda, std::ref(callback_called), std::ref(selector));
     GetTextFragmentHandler().RequestSelector(std::move(callback));
     base::RunLoop().RunUntilIdle();
 
@@ -98,8 +99,8 @@ class TextFragmentHandlerTest : public SimTest {
       target_texts = fetched_target_texts;
       callback_called = true;
     };
-    auto callback = WTF::BindOnce(lambda, std::ref(callback_called),
-                                  std::ref(target_texts));
+    auto callback =
+        BindOnce(lambda, std::ref(callback_called), std::ref(target_texts));
 
     GetTextFragmentHandler().ExtractTextFragmentsMatches(std::move(callback));
 
@@ -115,8 +116,8 @@ class TextFragmentHandlerTest : public SimTest {
       text_fragment_rect = fetched_text_fragment_rect;
       callback_called = true;
     };
-    auto callback = WTF::BindOnce(lambda, std::ref(callback_called),
-                                  std::ref(text_fragment_rect));
+    auto callback = BindOnce(lambda, std::ref(callback_called),
+                             std::ref(text_fragment_rect));
 
     GetTextFragmentHandler().ExtractFirstFragmentRect(std::move(callback));
 
@@ -125,11 +126,12 @@ class TextFragmentHandlerTest : public SimTest {
   }
 
   void LoadAhem() {
-    scoped_refptr<SharedBuffer> shared_buffer =
+    std::optional<Vector<char>> data =
         test::ReadFromFile(test::CoreTestDataPath("Ahem.ttf"));
+    ASSERT_TRUE(data);
     auto* buffer =
         MakeGarbageCollected<V8UnionArrayBufferOrArrayBufferViewOrString>(
-            DOMArrayBuffer::Create(shared_buffer));
+            DOMArrayBuffer::Create(base::as_byte_span(*data)));
     FontFace* ahem = FontFace::Create(GetDocument().GetExecutionContext(),
                                       AtomicString("Ahem"), buffer,
                                       FontFaceDescriptors::Create());
@@ -423,7 +425,7 @@ TEST_F(TextFragmentHandlerTest, ExtractFirstTextFragmentRectScroll) {
       GetDocument().GetFrame()->View()->FrameToViewport(rect);
   // ExtractFirstTextFragmentsRect should return the first matched scaled
   // viewport relative location since the page is loaded zoomed in 4X
-  ASSERT_EQ(gfx::Rect(432, 300, 360, 40), expected_rect);
+  ASSERT_EQ(gfx::Rect(432, 296, 360, 40), expected_rect);
 
   gfx::Rect text_fragment_rect = ExtractFirstTextFragmentsRect();
 
@@ -660,8 +662,8 @@ TEST_F(TextFragmentHandlerTest, SecondGenerationCrash) {
   SetSelection(start, end);
 
   auto callback =
-      WTF::BindOnce([](const TextFragmentSelector& selector,
-                       shared_highlighting::LinkGenerationError error) {});
+      BindOnce([](const TextFragmentSelector& selector,
+                  shared_highlighting::LinkGenerationError error) {});
   MakeGarbageCollected<TextFragmentSelectorGenerator>(GetDocument().GetFrame())
       ->SetCallbackForTesting(std::move(callback));
 
@@ -909,7 +911,7 @@ TEST_F(TextFragmentHandlerTest,
         callback_called = true;
       };
   auto callback =
-      WTF::BindOnce(lambda, std::ref(callback_called), std::ref(selector));
+      BindOnce(lambda, std::ref(callback_called), std::ref(selector));
   remote->RequestSelector(std::move(callback));
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(callback_called);
@@ -997,6 +999,9 @@ TEST_F(TextFragmentHandlerTest,
 // crbug.com/1266937 Even if |TextFragmentSelectorGenerator| gets reset between
 // generation completion and selector request we should record the correct error
 // code.
+// TODO(https://crbug.com/338340754): It's not clear how useful this behavior is
+// and it prevents us from clearing the TextFragmentHandler and
+// TextFragmentSelectorGenerator entirely between navigations.
 TEST_F(TextFragmentHandlerTest, IfGeneratorResetShouldRecordCorrectError) {
   SimRequest request("https://example.com/test.html", "text/html");
   LoadURL("https://example.com/test.html");
@@ -1045,6 +1050,25 @@ TEST_F(TextFragmentHandlerTest, NotGenerated) {
   ASSERT_EQ(" ", PlainText(EphemeralRange(selected_start, selected_end)));
 
   SetSelection(selected_start, selected_end);
+  EXPECT_EQ(RequestSelector(), "");
+
+  shared_highlighting::LinkGenerationError expected_error =
+      shared_highlighting::LinkGenerationError::kNotGenerated;
+  EXPECT_EQ(expected_error, GetTextFragmentHandler().error_);
+}
+
+// https://crbug.com/447973114
+TEST_F(TextFragmentHandlerTest, NotGeneratedWithFileInput) {
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete(R"HTML(
+    <!DOCTYPE html>
+    <input type="file">
+  )HTML");
+  GetDocument().GetFrame()->Selection().SelectAll();
+  // This shouldn't crash.
+  TextFragmentHandler::OpenedContextMenuOverSelection(GetDocument().GetFrame());
+
   EXPECT_EQ(RequestSelector(), "");
 
   shared_highlighting::LinkGenerationError expected_error =

@@ -14,12 +14,11 @@ package_group(
         "//learning/brain/google/xla/kernels/...",
         # copybara:uncomment "//learning/brain/research/pjrt/...",
         # copybara:uncomment "//learning/brain/tfrt/...",
-        # copybara:uncomment "//learning/infra/mira/distributed/...",
-        # copybara:uncomment "//learning/pathways/serving/...",
         "//learning/serving/...",
         "//quality/webanswers/...",
         "//smartass/brain/inference/...",
         # copybara:uncomment "//smartass/brain/ops/...",
+        # copybara:uncomment "//third_party/pathways/google/serving/...",
         "//tensorflow/c/eager/...",
         "//tensorflow/compiler/mlir/tfrt/...",
         "//tensorflow/core/runtime_fallback/...",
@@ -51,13 +50,13 @@ cc_library(
         "//tensorflow/core/tfrt/runtime",
         "//tensorflow/core/tpu:virtual_device",
         "@com_google_absl//absl/status",
-        "@local_xla//xla:status_macros",
         "@tf_runtime//:bef",
         "@tf_runtime//:befexecutor",
         "@tf_runtime//:core_runtime",
         "@tf_runtime//:dtype",
         "@tf_runtime//:hostcontext",
         "@tf_runtime//:support",
+        "@xla//xla:status_macros",
     ],
 )
 
@@ -155,9 +154,10 @@ tf_cc_test(
     deps = [
         ":error_util",
         "//tensorflow/core/platform:status",
+        "@com_google_absl//absl/status",
         "@com_google_googletest//:gtest_main",
         "@tf_runtime//:support",
-        "@tf_runtime//cpp_tests:common",
+        "@xla//xla/tsl/concurrency:async_value",
     ],
 )
 
@@ -204,7 +204,8 @@ cc_library(
     hdrs = ["tfrt_graph_execution_state.h"],
     deps = [
         "//tensorflow/compiler/mlir/tensorflow:mlir_roundtrip_flags",
-        "//tensorflow/compiler/mlir/tensorflow:upgrade_graph",
+        "//tensorflow/compiler/mlir/tf2xla/api/v1:mlir_bridge_config_v1_proto_cc",
+        "//tensorflow/compiler/tf2xla:functionalize_control_flow",
         "//tensorflow/core:core_cpu_base",
         "//tensorflow/core:framework",
         "//tensorflow/core/common_runtime:core_cpu_internal",
@@ -219,11 +220,14 @@ cc_library(
         "//tensorflow/core/platform:statusor",
         "//tensorflow/core/protobuf:for_core_protos_cc",
         "//tensorflow/core/tfrt/fallback:fallback_state",
+        "//tensorflow/core/tfrt/graph_executor:config",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/log",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
+        "@xla//xla/tsl/platform:errors",
     ],
 )
 
@@ -240,15 +244,26 @@ tf_cc_test(
         "//tensorflow/cc:cc_ops",
         "//tensorflow/cc:const_op",
         "//tensorflow/cc:functional_ops",
+        "//tensorflow/cc:ops",
+        "//tensorflow/cc:scope",
         "//tensorflow/cc:while_loop",
+        "//tensorflow/compiler/mlir:mlir_graph_optimization_pass_registration",
+        "//tensorflow/compiler/mlir/tensorflow:attribute_utils",
+        "//tensorflow/compiler/mlir/tensorflow:mlir_roundtrip_flags",
         "//tensorflow/core:framework",
         "//tensorflow/core:test",
         "//tensorflow/core/framework:graph_proto_cc",
         "//tensorflow/core/framework:tensor_testutil",
         "//tensorflow/core/framework:types_proto_cc",
         "//tensorflow/core/grappler/utils:grappler_test",
+        "//tensorflow/core/lib/monitoring:cell_reader",
+        "//tensorflow/core/platform:status",
         "//tensorflow/core/protobuf:for_core_protos_cc",
+        "//tensorflow/core/tfrt/fallback:fallback_state",
+        "//tensorflow/core/tfrt/graph_executor:config",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_googletest//:gtest_main",
+        "@xla//xla/tsl/platform:statusor",
     ],
 )
 
@@ -259,7 +274,8 @@ cc_library(
     deps = [
         "//tensorflow/core/common_runtime:dma_helper",
         "//tensorflow/core/framework:tensor",
-        "@local_tsl//tsl/profiler/lib:traceme",
+        "@com_google_absl//absl/log:check",
+        "@tsl//tsl/profiler/lib:traceme",
     ],
 )
 

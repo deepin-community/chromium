@@ -18,6 +18,12 @@ limitations under the License.
 #include <string>
 
 #include "absl/container/flat_hash_set.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/Casting.h"
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops_n_z.h"
 #include "tensorflow/dtensor/cc/dstatus.h"
 #include "tensorflow/dtensor/cc/tensor_layout.h"
@@ -116,9 +122,9 @@ StatusOr<mlir::Operation*> UnsortedSegmentSumSPMDExpander::ExpandOp(
       EmitRelayout(segment_ids, segment_ids_layout, new_segment_ids_layout));
 
   mlir::OpBuilder builder(op);
-  mlir::Operation* new_sum_op = builder.create<mlir::TF::UnsortedSegmentSumOp>(
-      op->getLoc(), sum_op.getOutput().getType(), data, new_segment_ids,
-      sum_op.getNumSegments());
+  mlir::Operation* new_sum_op = mlir::TF::UnsortedSegmentSumOp::create(
+      builder, op->getLoc(), sum_op.getOutput().getType(), data,
+      new_segment_ids, sum_op.getNumSegments());
 
   InferSPMDExpandedLocalShape(new_sum_op);
 

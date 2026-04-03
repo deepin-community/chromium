@@ -43,8 +43,8 @@ class PLATFORM_EXPORT MIMETypeRegistry {
   // For Media MIME type checks.
   enum SupportsType { kNotSupported, kSupported, kMaybeSupported };
 
-  static String GetMIMETypeForExtension(const String& extension);
-  static String GetWellKnownMIMETypeForExtension(const String& extension);
+  static String GetMIMETypeForExtension(const StringView& extension);
+  static String GetWellKnownMIMETypeForExtension(const StringView& extension);
 
   // Checks to see if the given mime type is supported.
   static bool IsSupportedMIMEType(const String& mime_type);
@@ -66,6 +66,8 @@ class PLATFORM_EXPORT MIMETypeRegistry {
   // Checks to see if a mime type is suitable for being loaded as a JavaScript
   // resource.
   static bool IsSupportedJavaScriptMIMEType(const String& mime_type);
+
+  static bool IsWasmMIMEType(const String& mime_type);
 
   // https://mimesniff.spec.whatwg.org/#json-mime-type
   static bool IsJSONMimeType(const String& mime_type);
@@ -109,6 +111,10 @@ class PLATFORM_EXPORT MIMETypeRegistry {
   // Checks to see if a mime type is suitable for being loaded as XML.
   // https://mimesniff.spec.whatwg.org/#xml-mime-type
   static bool IsXMLMIMEType(const String& mime_type);
+
+  // Returns true if the MIME type is suitable for loading as a XML external
+  // entity.
+  static bool IsXMLExternalEntityMIMEType(const String& mime_type);
 
   // Checks to see if a mime type is suitable for being loaded as plain text.
   static bool IsPlainTextMIMEType(const String& mime_type);

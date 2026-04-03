@@ -36,15 +36,15 @@ class GbmPixmap : public gfx::NativePixmap {
   size_t GetDmaBufPlaneSize(size_t plane) const override;
   size_t GetNumberOfPlanes() const override;
   bool SupportsZeroCopyWebGPUImport() const override;
-  uint64_t GetBufferFormatModifier() const override;
-  gfx::BufferFormat GetBufferFormat() const override;
+  uint64_t GetFormatModifier() const override;
+  viz::SharedImageFormat GetSharedImageFormat() const override;
   gfx::Size GetBufferSize() const override;
   uint32_t GetUniqueId() const override;
   bool ScheduleOverlayPlane(gfx::AcceleratedWidget widget,
                             const gfx::OverlayPlaneData& overlay_plane_data,
                             std::vector<gfx::GpuFence> acquire_fences,
                             std::vector<gfx::GpuFence> release_fences) override;
-  gfx::NativePixmapHandle ExportHandle() override;
+  gfx::NativePixmapHandle ExportHandle() const override;
 
   GbmBuffer* buffer() const { return buffer_.get(); }
   const scoped_refptr<DrmFramebuffer>& framebuffer() const {

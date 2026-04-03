@@ -36,7 +36,7 @@
 #include "services/network/public/mojom/network_service_test.mojom.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
 #endif
 
 namespace content {
@@ -127,9 +127,9 @@ class SandboxedHttpCacheBrowserTest : public ContentBrowserTest {
       // On older android, we cannot use ftruncate in the network process.
       // See https://crbug.com/1315933 and https://crrev.com/c/3581676.
       // Let's skip the tests.
-      const int sdk_version =
-          base::android::BuildInfo::GetInstance()->sdk_int();
-      if (sdk_version <= base::android::SdkVersion::SDK_VERSION_MARSHMALLOW) {
+      const int sdk_version = base::android::android_info::sdk_int();
+      if (sdk_version <=
+          base::android::android_info::SdkVersion::SDK_VERSION_MARSHMALLOW) {
         DVLOG(0) << "Android is too old: " << sdk_version;
         GTEST_SKIP();
       }
@@ -385,7 +385,7 @@ IN_PROC_BROWSER_TEST_F(SandboxedHttpCacheBrowserTest,
   IgnoreNetworkServiceCrashes();
 }
 
-// TODO(crbug.com/1459570): Flaky on at least Mac11.
+// TODO(crbug.com/40919503): Flaky on at least Mac11.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_CreateSimpleCacheWithParentDirectoryTraversal \
   DISABLED_CreateSimpleCacheWithParentDirectoryTraversal
@@ -762,7 +762,7 @@ IN_PROC_BROWSER_TEST_F(SandboxedHttpCacheBrowserTest, DoomEntryWithoutOpening) {
   ASSERT_TRUE(network_service_test().is_connected());
 }
 
-// TODO(crbug.com/1394543): Re-enable this test
+// TODO(crbug.com/40881636): Re-enable this test
 IN_PROC_BROWSER_TEST_F(SandboxedHttpCacheBrowserTest,
                        DISABLED_EnumerateEntries) {
   const std::string kKey1 = "abc";

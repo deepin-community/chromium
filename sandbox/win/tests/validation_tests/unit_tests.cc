@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/test/launcher/unit_test_launcher.h"
 #include "base/test/test_suite.h"
@@ -10,8 +11,9 @@
 
 int wmain(int argc, wchar_t **argv) {
   if (argc >= 2) {
-    if (0 == _wcsicmp(argv[1], L"-child"))
+    if (0 == _wcsicmp(UNSAFE_TODO(argv[1]), L"-child")) {
       return sandbox::DispatchCall(argc, argv);
+    }
   }
 
   // Force binary unduplication for crbug.com/959223.

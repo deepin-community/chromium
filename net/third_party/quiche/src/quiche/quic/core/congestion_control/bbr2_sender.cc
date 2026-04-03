@@ -4,7 +4,11 @@
 
 #include "quiche/quic/core/congestion_control/bbr2_sender.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <ostream>
+#include <sstream>
+#include <string>
 
 #include "quiche/quic/core/congestion_control/bandwidth_sampler.h"
 #include "quiche/quic/core/congestion_control/bbr2_drain.h"
@@ -190,29 +194,22 @@ void Bbr2Sender::ApplyConnectionOptions(
   if (ContainsQuicTag(connection_options, kBBRB)) {
     model_.SetLimitMaxAckHeightTrackerBySendRate(true);
   }
+  if (ContainsQuicTag(connection_options, kADP0)) {
+    model_.SetEnableAppDrivenPacing(true);
+  }
   if (ContainsQuicTag(connection_options, kB206)) {
     params_.startup_full_loss_count = params_.probe_bw_full_loss_count;
   }
-  if (ContainsQuicTag(connection_options, kBBPD)) {
-    // Derived constant to ensure fairness.
-    params_.probe_bw_probe_down_pacing_gain = 0.91;
-  }
-  if (GetQuicReloadableFlag(quic_bbr2_simplify_inflight_hi) &&
-      ContainsQuicTag(connection_options, kBBHI)) {
-    QUIC_RELOADABLE_FLAG_COUNT(quic_bbr2_simplify_inflight_hi);
+  if (ContainsQuicTag(connection_options, kBBHI)) {
     params_.probe_up_simplify_inflight_hi = true;
     // Simplify inflight_hi is intended as an alternative to ignoring it,
     // so ensure we're not ignoring it.
     params_.probe_up_ignore_inflight_hi = false;
   }
-  if (GetQuicReloadableFlag(quic_bbr2_probe_two_rounds) &&
-      ContainsQuicTag(connection_options, kBB2U)) {
-    QUIC_RELOADABLE_FLAG_COUNT_N(quic_bbr2_probe_two_rounds, 1, 3);
+  if (ContainsQuicTag(connection_options, kBB2U)) {
     params_.max_probe_up_queue_rounds = 2;
   }
-  if (GetQuicReloadableFlag(quic_bbr2_probe_two_rounds) &&
-      ContainsQuicTag(connection_options, kBB2S)) {
-    QUIC_RELOADABLE_FLAG_COUNT_N(quic_bbr2_probe_two_rounds, 2, 3);
+  if (ContainsQuicTag(connection_options, kBB2S)) {
     params_.max_startup_queue_rounds = 2;
   }
 }
@@ -271,6 +268,12 @@ void Bbr2Sender::SetInitialCongestionWindowInPackets(
     // The cwnd limits is unchanged and still applies to the new cwnd.
     cwnd_ = cwnd_limits().ApplyLimits(congestion_window * kDefaultTCPMSS);
   }
+}
+
+void Bbr2Sender::SetApplicationDrivenPacingRate(
+    QuicBandwidth application_bandwidth_target) {
+  QUIC_CODE_COUNT(quic_bbr2_set_app_driven_pacing_rate);
+  model_.SetApplicationBandwidthTarget(application_bandwidth_target);
 }
 
 void Bbr2Sender::OnCongestionEvent(bool /*rtt_updated*/,

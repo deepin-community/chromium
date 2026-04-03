@@ -6,6 +6,7 @@
 
 #include <string_view>
 
+#include "ash/constants/ash_features.h"
 #include "base/check.h"
 #include "base/check_is_test.h"
 #include "base/logging.h"
@@ -24,6 +25,8 @@ namespace {
 // Profile path format: [user_data_dir]/u-[$hash]
 // Ex.: /home/chronos/u-0123456789
 constexpr char kBrowserContextDirPrefix[] = "u-";
+
+bool g_enable_implicit_browser_context_creation = true;
 
 BrowserContextHelper* g_instance = nullptr;
 
@@ -105,21 +108,24 @@ content::BrowserContext* BrowserContextHelper::GetBrowserContextByUser(
     return nullptr;
   }
 
-  content::BrowserContext* browser_context = delegate_->GetBrowserContextByPath(
-      GetBrowserContextPathByUserIdHash(user->username_hash()));
+  content::BrowserContext* browser_context =
+      UseAnnotatedAccountId()
+          ? delegate_->GetBrowserContextByAccountId(user->GetAccountId())
+          : delegate_->GetBrowserContextByPath(
+                GetBrowserContextPathByUserIdHash(user->username_hash()));
 
   // GetBrowserContextByPath() returns a new instance of ProfileImpl,
   // but actually its off-the-record profile should be used.
   // TODO(hidehiko): Replace this by user->GetType() == kGuest.
   if (user_manager::UserManager::Get()->IsLoggedInAsGuest()) {
-    browser_context =
-        delegate_->GetOrCreatePrimaryOTRBrowserContext(browser_context);
+    browser_context = delegate_->GetPrimaryOTRBrowserContext(
+        browser_context, g_enable_implicit_browser_context_creation);
   }
 
   return browser_context;
 }
 
-const user_manager::User* BrowserContextHelper::GetUserByBrowserContext(
+user_manager::User* BrowserContextHelper::GetUserByBrowserContext(
     content::BrowserContext* browser_context) {
   if (!IsUserBrowserContext(browser_context)) {
     return nullptr;
@@ -128,24 +134,26 @@ const user_manager::User* BrowserContextHelper::GetUserByBrowserContext(
   browser_context = delegate_->GetOriginalBrowserContext(browser_context);
   const AccountId* account_id = AnnotatedAccountId::Get(browser_context);
   if (!account_id) {
-    // TODO(crbug.com/1325210): fix tests to annotate AccountId properly.
-    LOG(ERROR) << "AccountId is not annotated";
-    CHECK_IS_TEST();
+    // TODO(crbug.com/40225390): fix tests to annotate AccountId properly.
+    CHECK_IS_TEST() << "AccountId is not annotated";
+  }
+  if (UseAnnotatedAccountId()) {
+    CHECK(account_id);
+    return user_manager::UserManager::Get()->FindUserAndModify(*account_id);
   }
 
   const std::string hash = GetUserIdHashFromBrowserContext(browser_context);
 
   // Finds the matching user in logged-in user list since only a logged-in
   // user would have a profile.
-  // TODO(crbug.com/1325210): find user by AccountId, once it is annotated
+  // TODO(crbug.com/40225390): find user by AccountId, once it is annotated
   // to Profile in tests.
   auto* user_manager = user_manager::UserManager::Get();
-  for (const user_manager::User* user : user_manager->GetLoggedInUsers()) {
+  for (user_manager::User* user : user_manager->GetLoggedInUsers()) {
     if (user->username_hash() == hash) {
       if (!account_id || *account_id != user->GetAccountId()) {
-        // TODO(crbug.com/1325210): fix tests to annotate AccountId properly.
-        LOG(ERROR) << "AccountId is mismatched";
-        CHECK_IS_TEST();
+        // TODO(crbug.com/40225390): fix tests to annotate AccountId properly.
+        CHECK_IS_TEST() << "AccountId is mismatched";
       }
       return user;
     }
@@ -186,23 +194,24 @@ content::BrowserContext* BrowserContextHelper::GetSigninBrowserContext() {
   if (!browser_context) {
     return nullptr;
   }
-  return delegate_->GetOrCreatePrimaryOTRBrowserContext(browser_context);
+
+  return delegate_->GetPrimaryOTRBrowserContext(
+      browser_context, g_enable_implicit_browser_context_creation);
 }
 
 content::BrowserContext*
 BrowserContextHelper::DeprecatedGetOrCreateSigninBrowserContext() {
+  if (!g_enable_implicit_browser_context_creation) {
+    return GetSigninBrowserContext();
+  }
+
   content::BrowserContext* browser_context =
       delegate_->DeprecatedGetBrowserContext(GetSigninBrowserContextPath());
   if (!browser_context) {
     return nullptr;
   }
-  return delegate_->GetOrCreatePrimaryOTRBrowserContext(browser_context);
-}
-
-base::FilePath BrowserContextHelper::GetLockScreenAppBrowserContextPath()
-    const {
-  return delegate_->GetUserDataDir()->Append(
-      kLockScreenAppBrowserContextBaseName);
+  return delegate_->GetPrimaryOTRBrowserContext(browser_context,
+                                                /*create_if_needed=*/true);
 }
 
 base::FilePath BrowserContextHelper::GetLockScreenBrowserContextPath() const {
@@ -215,13 +224,32 @@ content::BrowserContext* BrowserContextHelper::GetLockScreenBrowserContext() {
   if (!browser_context) {
     return nullptr;
   }
-  return delegate_->GetOrCreatePrimaryOTRBrowserContext(browser_context);
+
+  return delegate_->GetPrimaryOTRBrowserContext(
+      browser_context, g_enable_implicit_browser_context_creation);
 }
 
 base::FilePath BrowserContextHelper::GetShimlessRmaAppBrowserContextPath()
     const {
   return delegate_->GetUserDataDir()->Append(
       kShimlessRmaAppBrowserContextBaseName);
+}
+
+bool BrowserContextHelper::UseAnnotatedAccountId() {
+  return base::FeatureList::IsEnabled(ash::features::kUseAnnotatedAccountId) ||
+         use_annotated_account_id_for_testing_;
+}
+
+base::AutoReset<bool>
+BrowserContextHelper::DisableImplicitBrowserContextCreationForTest() {
+  CHECK(g_enable_implicit_browser_context_creation);
+  base::AutoReset<bool> result(&g_enable_implicit_browser_context_creation,
+                               false);
+  return result;
+}
+
+bool BrowserContextHelper::IsImplicitBrowserContextCreationEnabled() {
+  return g_enable_implicit_browser_context_creation;
 }
 
 }  // namespace ash

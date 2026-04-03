@@ -24,7 +24,11 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/notification.h"
+#include "absl/types/span.h"
+#include "xla/tsl/framework/allocator.h"
+#include "xla/tsl/lib/core/status_test_util.h"
 #include "tensorflow/core/common_runtime/device_mgr.h"
 #include "tensorflow/core/common_runtime/next_pluggable_device/c/tf_rendezvous_c_api_helper.h"
 #include "tensorflow/core/common_runtime/next_pluggable_device/c/tf_rendezvous_c_api_internal.h"
@@ -44,8 +48,6 @@ limitations under the License.
 #include "tensorflow/core/platform/status.h"
 #include "tensorflow/core/platform/stringpiece.h"
 #include "tensorflow/core/platform/types.h"
-#include "tsl/framework/allocator.h"
-#include "tsl/lib/core/status_test_util.h"
 #include "tsl/platform/status.h"
 
 namespace tensorflow {
@@ -56,7 +58,7 @@ Tensor CreateTestTensor() {
   Tensor t(DT_INT8, TensorShape({10, 20}));
   for (int64_t a = 0; a < t.shape().dim_size(0); a++) {
     for (int64_t b = 0; b < t.shape().dim_size(1); b++) {
-      t.matrix<int8>()(a, b) = static_cast<int8>((a + 1) * (b + 1));
+      t.matrix<int8_t>()(a, b) = static_cast<int8_t>((a + 1) * (b + 1));
     }
   }
   return t;
@@ -66,7 +68,8 @@ class FakeAllocator : public Allocator {
  public:
   std::string Name() override { return "fake"; }
   void* AllocateRaw(size_t alignment, size_t num_bytes) override {
-    return port::AlignedMalloc(num_bytes, alignment);
+    return tsl::port::AlignedMalloc(num_bytes,
+                                    static_cast<std::align_val_t>(alignment));
   }
   void DeallocateRaw(void* ptr) override { return port::AlignedFree(ptr); }
 };
@@ -74,7 +77,7 @@ class FakeAllocator : public Allocator {
 class FakeDevice : public Device {
  public:
   explicit FakeDevice(const DeviceAttributes& attr) : Device(nullptr, attr) {}
-  Status Sync() override { return absl::OkStatus(); }
+  absl::Status Sync() override { return absl::OkStatus(); }
   Allocator* GetAllocator(AllocatorAttributes) override {
     return allocator_.get();
   }
@@ -102,15 +105,17 @@ class FakeDeviceManager : public DeviceMgr {
   }
   std::string DebugString() const override { return ""; }
   std::string DeviceMappingString() const override { return ""; }
-  absl::Status LookupDevice(StringPiece name, Device** device) const override {
+  absl::Status LookupDevice(absl::string_view name,
+                            Device** device) const override {
     *device = fake_device_.get();
     return absl::OkStatus();
   }
   bool ContainsDevice(int64_t device_incarnation) const override {
     return false;
   }
-  void ClearContainers(gtl::ArraySlice<string> containers) const override {}
-  int NumDeviceType(const string& type) const override { return 0; }
+  void ClearContainers(
+      absl::Span<const std::string> containers) const override {}
+  int NumDeviceType(const std::string& type) const override { return 0; }
   int NumDevices() const override { return 0; }
   Device* HostCPU() const override { return nullptr; }
 
@@ -124,7 +129,7 @@ class TestDeviceContext : public DeviceContext {
                              Tensor* device_tensor, StatusCallback done,
                              bool sync_dst_compute) const override {
     Tensor test_tensor = CreateTestTensor();
-    test::ExpectTensorEqual<int8>(test_tensor, *cpu_tensor);
+    test::ExpectTensorEqual<int8_t>(test_tensor, *cpu_tensor);
     done(absl::OkStatus());
   }
 
@@ -188,7 +193,7 @@ TEST(RendezvousCAPI, DeviceToHost) {
                         });
   callback_done.WaitForNotification();
   Tensor test_tensor = CreateTestTensor();
-  test::ExpectTensorEqual<int8>(test_tensor, result);
+  test::ExpectTensorEqual<int8_t>(test_tensor, result);
 
   Destroy(thunk);
   delete thunk;

@@ -8,9 +8,9 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <string>
 
-#include <optional>
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/task/single_thread_task_runner.h"
@@ -33,7 +33,7 @@ const int kDefaultRasterizeRepeatCount = 100;
 }  // namespace
 
 RasterizeAndRecordBenchmark::RasterizeAndRecordBenchmark(
-    base::Value::Dict settings,
+    base::DictValue settings,
     MicroBenchmark::DoneCallback callback)
     : MicroBenchmark(std::move(callback)),
       record_repeat_count_(kDefaultRecordRepeatCount),
@@ -89,7 +89,7 @@ void RasterizeAndRecordBenchmark::DidUpdateLayers(
 }
 
 void RasterizeAndRecordBenchmark::RecordRasterResults(
-    base::Value::Dict results_value) {
+    base::DictValue results_value) {
   DCHECK(main_thread_benchmark_done_);
 
   results_.Merge(std::move(results_value));

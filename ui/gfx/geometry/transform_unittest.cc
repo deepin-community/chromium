@@ -7,13 +7,18 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <array>
 #include <limits>
+#include <numbers>
 #include <optional>
 #include <ostream>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/numerics/angle_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/gfx/geometry/angle_conversions.h"
 #include "ui/gfx/geometry/axis_transform2d.h"
 #include "ui/gfx/geometry/box_f.h"
 #include "ui/gfx/geometry/decomposed_transform.h"
@@ -1156,7 +1161,7 @@ TEST(XFormTest, BlendForRotationAboutX) {
   to.Blend(from, 0.0);
   EXPECT_EQ(from, to);
 
-  double expectedRotationAngle = gfx::DegToRad(22.5);
+  double expectedRotationAngle = base::DegToRad(22.5);
   to = Transform();
   to.RotateAbout(Vector3dF(1.0, 0.0, 0.0), 90.0);
   to.Blend(from, 0.25);
@@ -1167,7 +1172,7 @@ TEST(XFormTest, BlendForRotationAboutX) {
                    std::cos(expectedRotationAngle), 0.0, to, kErrorThreshold);
   EXPECT_ROW3_EQ(0.0f, 0.0f, 0.0f, 1.0f, to);
 
-  expectedRotationAngle = gfx::DegToRad(45.0);
+  expectedRotationAngle = base::DegToRad(45.0);
   to = Transform();
   to.RotateAbout(Vector3dF(1.0, 0.0, 0.0), 90.0);
   to.Blend(from, 0.5);
@@ -1197,7 +1202,7 @@ TEST(XFormTest, BlendForRotationAboutY) {
   to.Blend(from, 0.0);
   EXPECT_EQ(from, to);
 
-  double expectedRotationAngle = gfx::DegToRad(22.5);
+  double expectedRotationAngle = base::DegToRad(22.5);
   to = Transform();
   to.RotateAbout(Vector3dF(0.0, 1.0, 0.0), 90.0);
   to.Blend(from, 0.25);
@@ -1208,7 +1213,7 @@ TEST(XFormTest, BlendForRotationAboutY) {
                    std::cos(expectedRotationAngle), 0.0, to, kErrorThreshold);
   EXPECT_ROW3_EQ(0.0f, 0.0f, 0.0f, 1.0f, to);
 
-  expectedRotationAngle = gfx::DegToRad(45.0);
+  expectedRotationAngle = base::DegToRad(45.0);
   to = Transform();
   to.RotateAbout(Vector3dF(0.0, 1.0, 0.0), 90.0);
   to.Blend(from, 0.5);
@@ -1238,7 +1243,7 @@ TEST(XFormTest, BlendForRotationAboutZ) {
   to.Blend(from, 0.0);
   EXPECT_EQ(from, to);
 
-  double expectedRotationAngle = gfx::DegToRad(22.5);
+  double expectedRotationAngle = base::DegToRad(22.5);
   to = Transform();
   to.RotateAbout(Vector3dF(0.0, 0.0, 1.0), 90.0);
   to.Blend(from, 0.25);
@@ -1251,7 +1256,7 @@ TEST(XFormTest, BlendForRotationAboutZ) {
   EXPECT_ROW2_EQ(0.0, 0.0, 1.0, 0.0, to);
   EXPECT_ROW3_EQ(0.0f, 0.0f, 0.0f, 1.0f, to);
 
-  expectedRotationAngle = gfx::DegToRad(45.0);
+  expectedRotationAngle = base::DegToRad(45.0);
   to = Transform();
   to.RotateAbout(Vector3dF(0.0, 0.0, 1.0), 90.0);
   to.Blend(from, 0.5);
@@ -1361,9 +1366,8 @@ gfx::DecomposedTransform GetRotationDecomp(double x,
   return decomp;
 }
 
-const double kCos30deg = std::cos(base::kPiDouble / 6);
+const double kCos30deg = std::cos(base::DegToRad(30.0));
 const double kSin30deg = 0.5;
-const double kRoot2 = std::sqrt(2);
 
 TEST(XFormTest, QuaternionFromRotationMatrix) {
   // Test rotation around each axis.
@@ -1397,7 +1401,8 @@ TEST(XFormTest, QuaternionFromRotationMatrix) {
   ASSERT_TRUE(decomp);
   EXPECT_QUATERNION_NEAR(
       decomp->quaternion,
-      gfx::Quaternion(kSin30deg / kRoot2, kSin30deg / kRoot2, 0, kCos30deg),
+      gfx::Quaternion(kSin30deg / std::numbers::sqrt2,
+                      kSin30deg / std::numbers::sqrt2, 0, kCos30deg),
       1e-6);
 
   // Test edge tests.
@@ -1458,9 +1463,10 @@ TEST(XFormTest, QuaternionToRotationMatrixTest) {
   // Test non-axis aligned rotation
   Transform rotate_xy_60deg;
   rotate_xy_60deg.RotateAbout(1, 1, 0, 60);
-  EXPECT_TRANSFORM_EQ(rotate_xy_60deg, Transform::Compose(GetRotationDecomp(
-                                           kSin30deg / kRoot2,
-                                           kSin30deg / kRoot2, 0, kCos30deg)));
+  EXPECT_TRANSFORM_EQ(rotate_xy_60deg,
+                      Transform::Compose(GetRotationDecomp(
+                          kSin30deg / std::numbers::sqrt2,
+                          kSin30deg / std::numbers::sqrt2, 0, kCos30deg)));
 
   // Test 180deg rotation.
   auto rotate_z_180deg = Transform::Affine(-1, 0, 0, -1, 0, 0);
@@ -1503,7 +1509,8 @@ TEST(XFormTest, QuaternionInterpolation) {
   to_matrix.RotateAbout(0, 0, 1, 90);
   EXPECT_TRUE(to_matrix.Blend(from_matrix, 0.5));
   Transform expected;
-  expected.RotateAbout(1 / kRoot2, 0, 1 / kRoot2, 70.528778372);
+  expected.RotateAbout(1 / std::numbers::sqrt2, 0, 1 / std::numbers::sqrt2,
+                       70.528778372);
   EXPECT_TRANSFORM_EQ(expected, to_matrix);
 }
 
@@ -1539,7 +1546,7 @@ TEST(XFormTest, DecomposeTranslateRotateScale) {
     EXPECT_FLOAT_EQ(decomp->translate[0], degrees * 2);
     EXPECT_FLOAT_EQ(decomp->translate[1], -degrees * 3);
     double rotation =
-        gfx::RadToDeg(std::acos(double{decomp->quaternion.w()}) * 2);
+        base::RadToDeg(std::acos(double{decomp->quaternion.w()}) * 2);
     while (rotation < 0.0)
       rotation += 360.0;
     while (rotation > 360.0)
@@ -1585,16 +1592,15 @@ TEST(XFormTest, Decompose2d) {
           {0, 0, 0}, {1, 1, 1}, {0, 0, 0}, {0, 0, 0, 1}, {0, 0, 1, 0}}),
       decomp_rotate_180);
 
-  const double kSqrt2 = std::sqrt(2);
-  const double kInvSqrt2 = 1.0 / kSqrt2;
   DecomposedTransform decomp_rotate_90 =
       *Transform::Make90degRotation().Decompose();
   EXPECT_DECOMPOSED_TRANSFORM_EQ(
-      (DecomposedTransform{{0, 0, 0},
-                           {1, 1, 1},
-                           {0, 0, 0},
-                           {0, 0, 0, 1},
-                           {0, 0, kInvSqrt2, kInvSqrt2}}),
+      (DecomposedTransform{
+          {0, 0, 0},
+          {1, 1, 1},
+          {0, 0, 0},
+          {0, 0, 0, 1},
+          {0, 0, 1.0 / std::numbers::sqrt2, 1.0 / std::numbers::sqrt2}}),
       decomp_rotate_90);
 
   auto translate_rotate_90 =
@@ -1602,22 +1608,23 @@ TEST(XFormTest, Decompose2d) {
   DecomposedTransform decomp_translate_rotate_90 =
       *translate_rotate_90.Decompose();
   EXPECT_DECOMPOSED_TRANSFORM_EQ(
-      (DecomposedTransform{{-1, 1, 0},
-                           {1, 1, 1},
-                           {0, 0, 0},
-                           {0, 0, 0, 1},
-                           {0, 0, kInvSqrt2, kInvSqrt2}}),
+      (DecomposedTransform{
+          {-1, 1, 0},
+          {1, 1, 1},
+          {0, 0, 0},
+          {0, 0, 0, 1},
+          {0, 0, 1.0 / std::numbers::sqrt2, 1.0 / std::numbers::sqrt2}}),
       decomp_translate_rotate_90);
 
   DecomposedTransform decomp_skew_rotate =
       *Transform::Affine(1, 1, 1, 0, 0, 0).Decompose();
   EXPECT_DECOMPOSED_TRANSFORM_EQ(
       (DecomposedTransform{{0, 0, 0},
-                           {kSqrt2, -kInvSqrt2, 1},
+                           {std::numbers::sqrt2, -1.0 / std::numbers::sqrt2, 1},
                            {-1, 0, 0},
                            {0, 0, 0, 1},
-                           {0, 0, std::sin(base::kPiDouble / 8),
-                            std::cos(base::kPiDouble / 8)}}),
+                           {0, 0, std::sin(std::numbers::pi / 8),
+                            std::cos(std::numbers::pi / 8)}}),
       decomp_skew_rotate);
 }
 
@@ -1631,7 +1638,7 @@ double ComputeDecompRecompError(const Transform& transform) {
   composed.GetColMajorF(actual);
   double sse = 0;
   for (int i = 0; i < 16; i++) {
-    double diff = expected[i] - actual[i];
+    double diff = UNSAFE_TODO(expected[i]) - UNSAFE_TODO(actual[i]);
     sse += diff * diff;
   }
   return sse;
@@ -1961,7 +1968,7 @@ TEST(XFormTest, verifyCopyConstructor) {
 TEST(XFormTest, GetColMajor) {
   auto transform = GetTestMatrix1();
 
-  double data[16];
+  std::array<double, 16> data;
   transform.GetColMajor(data);
   for (int i = 0; i < 16; i++) {
     EXPECT_EQ(i + 10.0, data[i]);
@@ -2026,7 +2033,7 @@ TEST(XFormTest, ColMajorF) {
   float data1[16];
   transform.GetColMajorF(data1);
   for (int i = 0; i < 16; i++)
-    EXPECT_EQ(data1[i], data[i]);
+    UNSAFE_TODO(EXPECT_EQ(data1[i], data[i]));
   EXPECT_EQ(transform, Transform::ColMajorF(data1));
 }
 
@@ -3087,6 +3094,117 @@ TEST(XFormTest, IsFlat) {
   EXPECT_TRUE(transform.IsFlat());
 }
 
+TEST(XFormTest, Preserves2dAffine) {
+  static const struct TestCase {
+    gfx::Transform transform;
+    bool expected;
+  } test_cases[] = {
+      // Skew z axis in x and y direction
+      {
+          gfx::Transform::ColMajor(1.0, 0.0, 0.0, 0.0,  //
+                                   0.0, 1.0, 0.0, 0.0,  //
+                                   0.1, 0.1, 1.0, 0.0,  //
+                                   0.0, 0.0, 0.0, 1.0),
+          true,
+      },
+
+      // Scale z axis
+      {
+          gfx::Transform::ColMajor(1.0, 0.0, 0.0, 0.0,  //
+                                   0.0, 1.0, 0.0, 0.0,  //
+                                   0.0, 0.0, 2.0, 0.0,  //
+                                   0.0, 0.0, 0.0, 1.0),
+          true,
+      },
+
+      // Perspective projection along the z axis
+      {
+          gfx::Transform::ColMajor(1.0, 0.0, 0.0, 0.0,  //
+                                   0.0, 1.0, 0.0, 0.0,  //
+                                   0.0, 0.0, 1.0, 0.1,  //
+                                   0.0, 0.0, 0.0, 1.0),
+          true,
+      },
+
+      // All together, including x and y axis skew and translation
+      {
+          gfx::Transform::ColMajor(1.0, 0.1, 0.0, 0.0,  //
+                                   0.1, 1.0, 0.0, 0.0,  //
+                                   0.1, 0.1, 2.0, 0.1,  //
+                                   0.1, 0.1, 0.0, 1.0),
+          true,
+      },
+
+      // Skew x axis in the z direction.
+      {
+          gfx::Transform::ColMajor(1.0, 0.0, 0.1, 0.0,  //
+                                   0.0, 1.0, 0.0, 0.0,  //
+                                   0.0, 0.0, 1.0, 0.0,  //
+                                   0.0, 0.0, 0.0, 1.0),
+          false,
+      },
+
+      // Add y perspective
+      {
+          gfx::Transform::ColMajor(1.0, 0.0, 0.0, 0.0,  //
+                                   0.0, 1.0, 0.0, 0.1,  //
+                                   0.0, 0.0, 1.0, 0.0,  //
+                                   0.0, 0.0, 0.0, 1.0),
+          false,
+      },
+
+      // Add z translation
+      {
+          gfx::Transform::ColMajor(1.0, 0.0, 0.0, 0.0,  //
+                                   0.0, 1.0, 0.0, 0.1,  //
+                                   0.0, 0.0, 1.0, 0.0,  //
+                                   0.0, 0.0, 0.1, 1.0),
+          false,
+      },
+  };
+
+  // Another implementation of Preserves2dAffine that isn't as fast, good for
+  // testing the faster implementation.
+  auto EmpiricallyPreserves2dAffine = [](const Transform& transform) {
+    Point3F p1(5.0f, 5.0f, 0.0f);
+    Point3F p2(10.0f, 5.0f, 0.0f);
+    Point3F p3(10.0f, 20.0f, 0.0f);
+    Point3F p4(5.0f, 20.0f, 0.0f);
+
+    QuadF test_quad(PointF(p1.x(), p1.y()), PointF(p2.x(), p2.y()),
+                    PointF(p3.x(), p3.y()), PointF(p4.x(), p4.y()));
+    EXPECT_TRUE(test_quad.IsRectilinear());
+
+    p1 = transform.MapPoint(p1);
+    p2 = transform.MapPoint(p2);
+    p3 = transform.MapPoint(p3);
+    p4 = transform.MapPoint(p4);
+
+    // We expect our quad on the x/y plane to remain so.
+    if (p1.z() != 0 || p2.z() != 0 || p3.z() != 0 || p4.z() != 0) {
+      return false;
+    }
+
+    // In an affine transform, parallel lines are preserved.
+    return CrossProduct(p2 - p1, p3 - p4).IsZero() &&
+           CrossProduct(p4 - p1, p3 - p2).IsZero();
+  };
+
+  for (const auto& value : test_cases) {
+    SCOPED_TRACE(base::StringPrintf("transform = %s, expected = %d",
+                                    value.transform.ToString().c_str(),
+                                    value.expected));
+
+    if (value.expected) {
+      EXPECT_TRUE(EmpiricallyPreserves2dAffine(value.transform));
+      EXPECT_TRUE(value.transform.Preserves2dAffine());
+    } else {
+      EXPECT_FALSE(EmpiricallyPreserves2dAffine(value.transform));
+      EXPECT_FALSE(value.transform.Preserves2dAffine());
+    }
+  }
+}
+
 // Another implementation of Preserves2dAxisAlignment that isn't as fast,
 // good for testing the faster implementation.
 static bool EmpiricallyPreserves2dAxisAlignment(const Transform& transform) {
@@ -3491,6 +3609,43 @@ TEST(XFormTest, Round2dTranslationComponents) {
   EXPECT_EQ(expected.ToString(), translation.ToString());
 }
 
+TEST(XFormTest, Floor2dTranslationComponents) {
+  Transform translation;
+  Transform expected;
+
+  translation.Floor2dTranslationComponents();
+  EXPECT_EQ(expected.ToString(), translation.ToString());
+
+  translation.Translate(1.0f, 1.0f);
+  expected.Translate(1.0f, 1.0f);
+  translation.Floor2dTranslationComponents();
+  EXPECT_EQ(expected.ToString(), translation.ToString());
+
+  translation.Translate(0.5f, 0.4f);
+  expected.Translate(0.0f, 0.0f);
+  translation.Floor2dTranslationComponents();
+  EXPECT_EQ(expected.ToString(), translation.ToString());
+
+  // Flooring should only affect 2d translation components.
+  translation.Translate3d(0.f, 0.f, 0.5f);
+  expected.Translate3d(0.f, 0.f, 0.5f);
+  translation.Floor2dTranslationComponents();
+  EXPECT_EQ(expected.ToString(), translation.ToString());
+
+  translation.Translate(3.9f, 4.4f);
+  expected.Translate(3.0f, 4.0f);
+  translation.Floor2dTranslationComponents();
+  EXPECT_EQ(expected.ToString(), translation.ToString());
+
+  translation.Translate(3.9f, 4.4f);
+  translation.EnsureFullMatrixForTesting();
+  expected.Translate(3.0f, 4.0f);
+  translation.EnsureFullMatrixForTesting();
+
+  translation.Floor2dTranslationComponents();
+  EXPECT_EQ(expected.ToString(), translation.ToString());
+}
+
 TEST(XFormTest, BackFaceVisiblilityTolerance) {
   Transform backface_invisible;
   backface_invisible.set_rc(0, 3, 1.f);
@@ -3523,7 +3678,7 @@ TEST(XFormTest, TransformVector4) {
   std::array<float, 4> input = {11.5f, 22.5f, 33.5f, 44.5f};
   auto vector = input;
   std::array<float, 4> expected = {28.75f, 78.75f, 150.75f, 244.75f};
-  transform.TransformVector4(vector.data());
+  transform.TransformVector4(vector);
   EXPECT_EQ(expected, vector);
 
   // With translations and perspectives.
@@ -3535,7 +3690,7 @@ TEST(XFormTest, TransformVector4) {
   transform.set_rc(3, 2, 60);
   vector = input;
   expected = {473.75f, 968.75f, 1485.75f, 3839.75f};
-  transform.TransformVector4(vector.data());
+  transform.TransformVector4(vector);
   EXPECT_EQ(expected, vector);
 
   // TransformVector4 with simple 2d transform.
@@ -3543,12 +3698,12 @@ TEST(XFormTest, TransformVector4) {
       Transform::MakeTranslation(10, 20) * Transform::MakeScale(2.5f, 3.5f);
   vector = input;
   expected = {473.75f, 968.75f, 33.5f, 44.5f};
-  transform.TransformVector4(vector.data());
+  transform.TransformVector4(vector);
   EXPECT_EQ(expected, vector);
 
   vector = input;
   transform.EnsureFullMatrixForTesting();
-  transform.TransformVector4(vector.data());
+  transform.TransformVector4(vector);
   EXPECT_EQ(expected, vector);
 }
 
@@ -3767,7 +3922,7 @@ TEST(XFormTest, ClampOutput) {
 
   for (double* entry : entries) {
     const float mv = entry[0];
-    const float factor = entry[1];
+    const float factor = UNSAFE_TODO(entry[1]);
 
     auto is_valid_point = [&](const PointF& p) -> bool {
       return std::isfinite(p.x()) && std::isfinite(p.y());
@@ -3787,10 +3942,11 @@ TEST(XFormTest, ClampOutput) {
       return is_valid_point(r.origin()) && std::isfinite(r.width()) &&
              std::isfinite(r.height());
     };
-    auto is_valid_array = [&](const float* a, size_t size) -> bool {
-      for (size_t i = 0; i < size; i++) {
-        if (!std::isfinite(a[i]))
+    auto is_valid_array = [&](base::span<const float> a) -> bool {
+      for (const float& val : a) {
+        if (!std::isfinite(val)) {
           return false;
+        }
       }
       return true;
     };
@@ -3812,7 +3968,7 @@ TEST(XFormTest, ClampOutput) {
 
       float v4[4] = {factor, factor, factor, factor};
       m.TransformVector4(v4);
-      EXPECT_TRUE(is_valid_array(v4, 4));
+      EXPECT_TRUE(is_valid_array(v4));
 
       auto v2 = m.To2dTranslation();
       EXPECT_TRUE(is_valid_vector2(v2)) << v2.ToString();

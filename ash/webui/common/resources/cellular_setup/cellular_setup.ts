@@ -12,12 +12,13 @@ import './esim_flow_ui.js';
 
 import {afterNextRender, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {ButtonBarElement} from './button_bar.js';
+import type {ButtonBarElement} from './button_bar.js';
 import {getTemplate} from './cellular_setup.html.js';
-import {CellularSetupDelegate} from './cellular_setup_delegate.js';
-import {ButtonBarState, CellularSetupPageName} from './cellular_types.js';
-import {EsimFlowUiElement} from './esim_flow_ui.js';
-import {PsimFlowUiElement} from './psim_flow_ui.js';
+import type {CellularSetupDelegate} from './cellular_setup_delegate.js';
+import type {ButtonBarState} from './cellular_types.js';
+import {CellularSetupPageName} from './cellular_types.js';
+import type {EsimFlowUiElement} from './esim_flow_ui.js';
+import type {PsimFlowUiElement} from './psim_flow_ui.js';
 
 export interface CellularSetupElement {
   $: {
@@ -117,8 +118,6 @@ export class CellularSetupElement extends PolymerElement {
   override ready() {
     super.ready();
 
-    this.addEventListener(
-        'backward-nav-requested', this.onBackwardNavRequested_);
     this.addEventListener('retry-requested', this.onRetryRequested_);
     this.addEventListener('forward-nav-requested', this.onForwardNavRequested_);
     this.addEventListener('cancel-requested', this.onCancelRequested_);
@@ -132,10 +131,6 @@ export class CellularSetupElement extends PolymerElement {
     }
   }
 
-  private onBackwardNavRequested_(): void {
-    this.currentPage_.navigateBackward();
-  }
-
   private onCancelRequested_(): void {
     this.dispatchEvent(new CustomEvent('exit-cellular-setup', {
       bubbles: true,
@@ -144,7 +139,7 @@ export class CellularSetupElement extends PolymerElement {
   }
 
   private onRetryRequested_(): void {
-    // TODO(crbug.com/1093185): Add try again logic.
+    // TODO(crbug.com/40134918): Add try again logic.
   }
 
   private onForwardNavRequested_(): void {

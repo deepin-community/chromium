@@ -36,6 +36,7 @@
 #include "libavutil/bprint.h"
 #include "libavutil/dict.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 #include "libavcodec/png.h"
 #include "avio_internal.h"
 #include "demux.h"
@@ -136,6 +137,7 @@ const CodecMime ff_id3v2_mime_tags[] = {
     { "image/png",  AV_CODEC_ID_PNG   },
     { "image/tiff", AV_CODEC_ID_TIFF  },
     { "image/bmp",  AV_CODEC_ID_BMP   },
+    { "image/webp", AV_CODEC_ID_WEBP  },
     { "JPG",        AV_CODEC_ID_MJPEG }, /* ID3v2.2  */
     { "PNG",        AV_CODEC_ID_PNG   }, /* ID3v2.2  */
     { "",           AV_CODEC_ID_NONE  },
@@ -255,6 +257,9 @@ static int decode_str(AVFormatContext *s, AVIOContext *pb, int encoding,
         return ret;
     }
 
+    if (left == 0)
+        goto end;
+
     switch (encoding) {
     case ID3v2_ENCODING_ISO8859:
         while (left && ch) {
@@ -271,13 +276,16 @@ static int decode_str(AVFormatContext *s, AVIOContext *pb, int encoding,
             *dst = NULL;
             return AVERROR_INVALIDDATA;
         }
-        switch (avio_rb16(pb)) {
+        uint16_t bom = avio_rb16(pb);
+        switch (bom) {
         case 0xfffe:
             get = avio_rl16;
         case 0xfeff:
             break;
+        case 0: // empty string without bom
+            goto end;
         default:
-            av_log(s, AV_LOG_ERROR, "Incorrect BOM value\n");
+            av_log(s, AV_LOG_ERROR, "Incorrect BOM value: 0x%x\n", bom);
             ffio_free_dyn_buf(&dynbuf);
             *dst = NULL;
             *maxread = left;
@@ -302,9 +310,10 @@ static int decode_str(AVFormatContext *s, AVIOContext *pb, int encoding,
         }
         break;
     default:
-        av_log(s, AV_LOG_WARNING, "Unknown encoding\n");
+        av_log(s, AV_LOG_WARNING, "Unknown encoding %d\n", encoding);
     }
 
+end:
     if (ch)
         avio_w8(dynbuf, 0);
 
@@ -353,7 +362,7 @@ static void read_ttag(AVFormatContext *s, AVIOContext *pb, int taglen,
             return;
         }
         dict_flags |= AV_DICT_DONT_STRDUP_KEY;
-    } else if (!*dst)
+    } else if (dst && !*dst)
         av_freep(&dst);
 
     if (dst)
@@ -370,7 +379,7 @@ static void read_uslt(AVFormatContext *s, AVIOContext *pb, int taglen,
     int encoding;
     int ok = 0;
 
-    if (taglen < 1)
+    if (taglen < 4)
         goto error;
 
     encoding = avio_r8(pb);
@@ -477,7 +486,7 @@ static void read_geobtag(AVFormatContext *s, AVIOContext *pb, int taglen,
 
     new_extra = av_mallocz(sizeof(ID3v2ExtraMeta));
     if (!new_extra) {
-        av_log(s, AV_LOG_ERROR, "Failed to alloc %"SIZE_SPECIFIER" bytes\n",
+        av_log(s, AV_LOG_ERROR, "Failed to alloc %zu bytes\n",
                sizeof(ID3v2ExtraMeta));
         return;
     }
@@ -895,7 +904,7 @@ static void id3v2_parse(AVIOContext *pb, AVDictionary **metadata,
         int tunsync         = 0;
         int tcomp           = 0;
         int tencr           = 0;
-        unsigned long av_unused dlen;
+        av_unused unsigned long dlen;
 
         if (isv34) {
             if (avio_read(pb, tag, 4) < 4)
@@ -1010,7 +1019,7 @@ static void id3v2_parse(AVIOContext *pb, AVDictionary **metadata,
                 if (tcomp) {
                     int err;
 
-                    av_log(s, AV_LOG_DEBUG, "Compresssed frame %s tlen=%d dlen=%ld\n", tag, tlen, dlen);
+                    av_log(s, AV_LOG_DEBUG, "Compressed frame %s tlen=%d dlen=%ld\n", tag, tlen, dlen);
 
                     if (tlen <= 0)
                         goto seek;

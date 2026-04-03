@@ -54,8 +54,7 @@ TEST_F(ResolverAssignmentValidationTest, ReadOnlyBuffer) {
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(),
-              "56:78 error: cannot store into a read-only type 'ref<storage, "
-              "i32, read>'");
+              R"(56:78 error: cannot store into a read-only type 'ref<storage, i32, read>')");
 }
 
 TEST_F(ResolverAssignmentValidationTest, AssignIncompatibleTypes) {
@@ -85,7 +84,7 @@ TEST_F(ResolverAssignmentValidationTest, AssignArraysWithDifferentSizeExpression
     GlobalConst("len", Expr(4_u));
 
     auto* a = Var("a", ty.array<f32, 4>());
-    auto* b = Var("b", ty.array(ty.f32(), "len"));
+    auto* b = Var("b", ty.array(ty.f32(), Expr("len")));
 
     auto* assign = Assign(Source{{12, 34}}, "a", "b");
     WrapInFunction(a, b, assign);
@@ -104,7 +103,7 @@ TEST_F(ResolverAssignmentValidationTest, AssignArraysWithDifferentSizeExpression
     GlobalConst("len", Expr(5_u));
 
     auto* a = Var("a", ty.array<f32, 4>());
-    auto* b = Var("b", ty.array(ty.f32(), "len"));
+    auto* b = Var("b", ty.array(ty.f32(), Expr("len")));
 
     auto* assign = Assign(Source{{12, 34}}, "a", "b");
     WrapInFunction(a, b, assign);
@@ -234,9 +233,9 @@ TEST_F(ResolverAssignmentValidationTest, AssignToOverride_Fail) {
     WrapInFunction(Assign(Expr(Source{{12, 34}}, "a"), 2_i));
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), R"(12:34 error: cannot assign to override 'a'
+    EXPECT_EQ(r()->error(), R"(12:34 error: cannot assign to 'override a'
 12:34 note: 'override' variables are immutable
-56:78 note: override 'a' declared here)");
+56:78 note: 'override a' declared here)");
 }
 
 TEST_F(ResolverAssignmentValidationTest, AssignToLet_Fail) {
@@ -248,9 +247,9 @@ TEST_F(ResolverAssignmentValidationTest, AssignToLet_Fail) {
                    Assign(Expr(Source{{12, 34}}, "a"), 2_i));
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), R"(12:34 error: cannot assign to let 'a'
+    EXPECT_EQ(r()->error(), R"(12:34 error: cannot assign to 'let a'
 12:34 note: 'let' variables are immutable
-56:78 note: let 'a' declared here)");
+56:78 note: 'let a' declared here)");
 }
 
 TEST_F(ResolverAssignmentValidationTest, AssignToConst_Fail) {
@@ -262,9 +261,9 @@ TEST_F(ResolverAssignmentValidationTest, AssignToConst_Fail) {
                    Assign(Expr(Source{{12, 34}}, "a"), 2_i));
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), R"(12:34 error: cannot assign to const 'a'
+    EXPECT_EQ(r()->error(), R"(12:34 error: cannot assign to 'const a'
 12:34 note: 'const' variables are immutable
-56:78 note: const 'a' declared here)");
+56:78 note: 'const a' declared here)");
 }
 
 TEST_F(ResolverAssignmentValidationTest, AssignToParam_Fail) {
@@ -288,13 +287,13 @@ TEST_F(ResolverAssignmentValidationTest, AssignToLetMember_Fail) {
     //  a.i = 2i
     // }
     Structure("S", Vector{Member("i", ty.i32())});
-    WrapInFunction(Let(Source{{98, 76}}, "a", ty("S"), Call("S")),  //
+    WrapInFunction(Let(Source{{98, 76}}, "a", ty.AsType("S"), Call("S")),  //
                    Assign(MemberAccessor(Source{{12, 34}}, Expr(Source{{56, 78}}, "a"), "i"), 2_i));
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(), R"(12:34 error: cannot assign to value of type 'i32'
 56:78 note: 'let' variables are immutable
-98:76 note: let 'a' declared here)");
+98:76 note: 'let a' declared here)");
 }
 
 TEST_F(ResolverAssignmentValidationTest, AssignNonConstructible_Handle) {
@@ -366,10 +365,9 @@ TEST_F(ResolverAssignmentValidationTest, AssignToPhony_NonConstructibleStruct_Fa
     WrapInFunction(Assign(Phony(), Expr(Source{{12, 34}}, "s")));
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(),
-              "12:34 error: cannot assign 'S' to '_'. "
-              "'_' can only be assigned a constructible, pointer, texture or "
-              "sampler type");
+    EXPECT_EQ(
+        r()->error(),
+        R"(12:34 error: cannot assign 'S' to '_'. '_' can only be assigned a constructible, pointer, texture or sampler type)");
 }
 
 TEST_F(ResolverAssignmentValidationTest, AssignToPhony_DynamicArray_Fail) {
@@ -388,10 +386,9 @@ TEST_F(ResolverAssignmentValidationTest, AssignToPhony_DynamicArray_Fail) {
     WrapInFunction(Assign(Phony(), MemberAccessor(Source{{12, 34}}, "s", "arr")));
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(),
-              "12:34 error: cannot assign 'array<i32>' to '_'. "
-              "'_' can only be assigned a constructible, pointer, texture or sampler "
-              "type");
+    EXPECT_EQ(
+        r()->error(),
+        R"(12:34 error: cannot assign 'array<i32>' to '_'. '_' can only be assigned a constructible, pointer, texture or sampler type)");
 }
 
 TEST_F(ResolverAssignmentValidationTest, AssignToPhony_Pass) {

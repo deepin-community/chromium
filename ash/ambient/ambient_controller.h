@@ -16,9 +16,9 @@
 #include "ash/ambient/ambient_weather_controller.h"
 #include "ash/ambient/managed/screensaver_images_policy_handler.h"
 #include "ash/ambient/model/ambient_backend_model.h"
+#include "ash/ambient/resources/ambient_dlc_background_installer.h"
 #include "ash/ambient/ui/ambient_view_delegate.h"
 #include "ash/ash_export.h"
-#include "ash/assistant/model/assistant_interaction_model_observer.h"
 #include "ash/public/cpp/ambient/ambient_ui_model.h"
 #include "ash/public/cpp/screen_backlight_observer.h"
 #include "ash/public/cpp/session/session_observer.h"
@@ -67,7 +67,6 @@ class ASH_EXPORT AmbientController
       public device::mojom::FingerprintObserver,
       public ui::UserActivityObserver,
       public ui::EventHandler,
-      public AssistantInteractionModelObserver,
       public AmbientUiLauncher::Observer {
  public:
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
@@ -119,9 +118,6 @@ class ASH_EXPORT AmbientController
   void OnKeyEvent(ui::KeyEvent* event) override;
   void OnMouseEvent(ui::MouseEvent* event) override;
   void OnTouchEvent(ui::TouchEvent* event) override;
-
-  // AssistantInteractionModelObserver:
-  void OnInteractionStateChanged(InteractionState interaction_state) override;
 
   // AmbientUiLauncher::Observer:
   void OnReadyStateChanged(bool is_ready) override;
@@ -294,10 +290,13 @@ class ASH_EXPORT AmbientController
   // this will return the `sign_in_pref_change_registrar_`.
   PrefChangeRegistrar* GetActivePrefChangeRegistrar();
 
+  void MaybeStopUiEventPropagation(ui::Event* event);
+
   AmbientViewDelegateImpl delegate_{this};
   AmbientUiModel ambient_ui_model_;
 
   AmbientAccessTokenController access_token_controller_;
+  AmbientBackgroundDlcInstaller background_dlc_installer_;
   std::unique_ptr<AmbientBackendController> ambient_backend_controller_;
   std::unique_ptr<AmbientWeatherController> ambient_weather_controller_;
 
@@ -351,9 +350,10 @@ class ASH_EXPORT AmbientController
 
   bool close_widgets_immediately_ = false;
 
-  // ui::ET_MOUSE_MOVE is fired before many mouse events. An event is an actual
-  // mouse move event only if the last event was ui::ET_MOUSE_MOVE too. Used
-  // to keep track of the last event and identify a true mouse move event.
+  // ui::EventType::kMouseMove is fired before many mouse events. An event is an
+  // actual mouse move event only if the last event was
+  // ui::EventType::kMouseMove too. Used to keep track of the last event and
+  // identify a true mouse move event.
   // TODO(safarli): Remove this workaround when b/266234711 is fixed.
   bool last_mouse_event_was_move_ = false;
 

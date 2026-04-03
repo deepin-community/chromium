@@ -11,7 +11,7 @@
 #include "base/apple/scoped_cftyperef.h"
 #include "base/mac/mac_util.h"
 #include "base/memory/ptr_util.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "remoting/base/logging.h"
 
 namespace {
@@ -92,7 +92,7 @@ void DesktopResizerMac::SetResolution(const ScreenResolution& resolution,
       int depth = 0;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-      // TODO(https://crbug.com/1394415): Find non-deprecated replacement.
+      // TODO(crbug.com/40248574): Find non-deprecated replacement.
       base::apple::ScopedCFTypeRef<CFStringRef> encoding(
           CGDisplayModeCopyPixelEncoding(mode));
 #pragma clang diagnostic pop

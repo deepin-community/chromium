@@ -12,13 +12,13 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/login/oobe_quick_start/target_device_bootstrap_controller.h"
 #include "chrome/browser/ash/login/quickstart_controller.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chromeos/ash/components/network/network_state_handler_observer.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
-#include "chromeos/services/network_config/public/mojom/cros_network_config.mojom-shared.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
@@ -61,6 +61,10 @@ class NetworkScreen : public BaseScreen,
     exit_callback_ = exit_callback;
   }
 
+  void set_no_quickstart_delay_for_testing() {
+    quickstart_stabilization_period_ = base::Seconds(0);
+  }
+
  protected:
   // Give test overrides access to the exit callback.
   ScreenExitCallback* exit_callback() { return &exit_callback_; }
@@ -81,7 +85,7 @@ class NetworkScreen : public BaseScreen,
   bool MaybeSkip(WizardContext& context) override;
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
   bool HandleAccelerator(LoginAcceleratorAction action) override;
 
   // NetworkStateHandlerObserver:
@@ -166,6 +170,20 @@ class NetworkScreen : public BaseScreen,
   // Indicates whether the device has already been connected to Ethernet in this
   // session or not.
   bool first_ethernet_connection_ = true;
+
+  // Whether wifi credentials were automatically received via Quick Start.
+  bool did_receive_quickstart_wifi_credentials_ = false;
+
+  // Whether the network screen is waiting the QuickStart stabilization period
+  // before proceeding to the next screen.
+  bool waiting_for_quickstart_stabilization_period_ = false;
+
+  // Whether the QuickStart entry point visibility has already been determined.
+  // This flag prevents duplicate histogram entries.
+  bool has_emitted_quick_start_visible = false;
+
+  // Default period to wait when going through QuickStart. Overridden in tests.
+  base::TimeDelta quickstart_stabilization_period_ = base::Seconds(2);
 
   // Timer for connection timeout.
   base::OneShotTimer connection_timer_;

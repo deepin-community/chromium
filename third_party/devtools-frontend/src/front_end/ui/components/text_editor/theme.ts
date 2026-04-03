@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -49,6 +49,10 @@ export const editorTheme = CM.EditorView.theme({
 
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
     background: 'var(--sys-color-tonal-container)',
+  },
+
+  '.cm-line::selection': {
+    color: 'currentColor',
   },
 
   '.cm-selectionBackground': {

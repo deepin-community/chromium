@@ -8,14 +8,14 @@
 
 namespace app_list {
 
-void Ranker::Start(const std::u16string& query, CategoriesList& categories) {}
+void Ranker::Start(const std::u16string& query,
+                   const CategoriesList& categories) {}
 
 // Ranks search results. Should return a vector of scores that is the same
 // length as |results|.
 std::vector<double> Ranker::GetResultRanks(const ResultsMap& results,
                                            ProviderType provider) {
   NOTREACHED() << "This function should be overridden by its child ranker.";
-  return std::vector<double>(results.size(), 0.0);
 }
 
 // Ranks search results. Implementations should modify the scoring structs of
@@ -28,7 +28,6 @@ std::vector<double> Ranker::GetCategoryRanks(const ResultsMap& results,
                                              const CategoriesList& categories,
                                              ProviderType provider) {
   NOTREACHED() << "This function should be overridden by its child ranker.";
-  return std::vector<double>(categories.size(), 0.0);
 }
 
 // Ranks categories. Implementations should modify the scoring members of

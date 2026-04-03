@@ -39,8 +39,8 @@ typedef Eigen::GpuDevice GPUDevice;
     if (!TF_PREDICT_TRUE(EXP)) return (STATUS); \
   } while (false)
 
-Status InitConv2DParameters(const OpKernelConstruction* context,
-                            Conv2DParameters* params) {
+absl::Status InitConv2DParameters(const OpKernelConstruction* context,
+                                  Conv2DParameters* params) {
   TF_RETURN_IF_ERROR(context->GetAttr("dilations", &params->dilations));
   TF_RETURN_IF_ERROR(context->GetAttr("strides", &params->strides));
   TF_RETURN_IF_ERROR(context->GetAttr("padding", &params->padding));
@@ -48,7 +48,7 @@ Status InitConv2DParameters(const OpKernelConstruction* context,
     TF_RETURN_IF_ERROR(
         context->GetAttr("explicit_paddings", &params->explicit_paddings));
   }
-  string data_format_string;
+  std::string data_format_string;
   TF_RETURN_IF_ERROR(context->GetAttr("data_format", &data_format_string));
   TF_REQUIRES(FormatFromString(data_format_string, &params->data_format),
               errors::InvalidArgument("Invalid data format"));
@@ -94,9 +94,9 @@ Status InitConv2DParameters(const OpKernelConstruction* context,
   return absl::OkStatus();
 }
 
-Status ComputeConv2DDimension(const Conv2DParameters& params,
-                              const Tensor& input, const Tensor& filter,
-                              Conv2DDimensions* dimensions) {
+absl::Status ComputeConv2DDimension(const Conv2DParameters& params,
+                                    const Tensor& input, const Tensor& filter,
+                                    Conv2DDimensions* dimensions) {
   int required_dims =
       params.data_format == TensorFormat::FORMAT_NCHW_VECT_C ? 5 : 4;
   // Check that 2D convolution input and filter have exactly required_dims.
@@ -224,8 +224,7 @@ int64_t GetDnnWorkspaceLimit(const string& envvar_in_mb,
   if (workspace_limit_in_mb_str != nullptr &&
       strcmp(workspace_limit_in_mb_str, "") != 0) {
     int64_t scratch_limit_in_mb = -1;
-    if (strings::safe_strto64(workspace_limit_in_mb_str,
-                              &scratch_limit_in_mb)) {
+    if (absl::SimpleAtoi(workspace_limit_in_mb_str, &scratch_limit_in_mb)) {
       return scratch_limit_in_mb * (1 << 20);
     } else {
       LOG(WARNING) << "Invalid value for env-var " << envvar_in_mb << ": "

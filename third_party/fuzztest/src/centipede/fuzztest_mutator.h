@@ -20,12 +20,17 @@
 #include <memory>
 #include <vector>
 
-#include "./centipede/defs.h"
 #include "./centipede/execution_metadata.h"
 #include "./centipede/knobs.h"
 #include "./centipede/mutation_input.h"
+#include "./common/defs.h"
+#include "./fuzztest/internal/table_of_recent_compares.h"
 
-namespace centipede {
+namespace fuzztest::internal {
+
+// Populates comparison entries in `metadata` to `cmp_tables`.
+void PopulateCmpEntries(const ExecutionMetadata& metadata,
+                        TablesOfRecentCompares& cmp_tables);
 
 // Mutator based on the FuzzTest std::vector domain.  It always
 // generates non-empty results, with a default limit on the mutant
@@ -38,10 +43,9 @@ class FuzzTestMutator {
   explicit FuzzTestMutator(const Knobs &knobs, uint64_t seed);
   ~FuzzTestMutator();
 
-  // Takes non-empty `inputs`, produces `num_mutants` mutations in `mutants`.
-  // Old contents of `mutants` are discarded.
-  void MutateMany(const std::vector<MutationInputRef>& inputs,
-                  size_t num_mutants, std::vector<ByteArray>& mutants);
+  // Takes non-empty `inputs` and produces `num_mutants` mutants.
+  std::vector<ByteArray> MutateMany(const std::vector<MutationInputRef> &inputs,
+                                    size_t num_mutants);
 
   // Adds `dict_entries` to the internal mutation dictionary.
   void AddToDictionary(const std::vector<ByteArray>& dict_entries);
@@ -54,10 +58,8 @@ class FuzzTestMutator {
   // TODO(xinhaoyuan): Support set_alignment().
 
  private:
+  struct MutationMetadata;
   class MutatorDomain;
-
-  // Propagates the execution `metadata` to the internal mutation dictionary.
-  void SetMetadata(const ExecutionMetadata& metadata);
 
   // The crossover algorithm based on the legacy ByteArrayMutator.
   // TODO(ussuri): Implement and use the domain level crossover.
@@ -65,16 +67,14 @@ class FuzzTestMutator {
   void CrossOverOverwrite(ByteArray &data, const ByteArray &other);
   void CrossOver(ByteArray &data, const ByteArray &other);
 
-  // Size limits on the cmp entries to be used in mutation.
-  static constexpr uint8_t kMaxCmpEntrySize = 15;
-  static constexpr uint8_t kMinCmpEntrySize = 2;
-
   const Knobs &knobs_;
   Rng prng_;
   size_t max_len_ = 1000;
+
+  std::unique_ptr<MutationMetadata> mutation_metadata_;
   std::unique_ptr<MutatorDomain> domain_;
 };
 
-}  // namespace centipede
+}  // namespace fuzztest::internal
 
 #endif

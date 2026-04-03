@@ -42,7 +42,7 @@ class SimpleMessagePort : public MessagePort {
     client_->OnMessage(sender_id, namespace_, message);
   }
 
-  void ReceiveError(Error error) {
+  void ReceiveError(const Error& error) {
     ASSERT_NE(client_, nullptr);
     client_->OnError(error);
   }
@@ -56,6 +56,8 @@ class SimpleMessagePort : public MessagePort {
   const std::vector<std::string> posted_messages() const {
     return posted_messages_;
   }
+
+  void clear() { posted_messages_.clear(); }
 
  private:
   MessagePort::Client* client_ = nullptr;

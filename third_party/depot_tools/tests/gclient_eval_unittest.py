@@ -30,6 +30,11 @@ class GClientEvalTest(unittest.TestCase):
     def test_str(self):
         self.assertEqual('foo', gclient_eval._gclient_eval('"foo"'))
 
+    def test_num(self):
+        self.assertEqual(42, gclient_eval._gclient_eval('42'))
+        self.assertEqual(1024.0, gclient_eval._gclient_eval('1024.0'))
+        self.assertEqual(42j, gclient_eval._gclient_eval('42j'))
+
     def test_tuple(self):
         self.assertEqual(('a', 'b'), gclient_eval._gclient_eval('("a", "b")'))
 
@@ -40,6 +45,7 @@ class GClientEvalTest(unittest.TestCase):
         self.assertEqual({'a': 'b'}, gclient_eval._gclient_eval('{"a": "b"}'))
 
     def test_name_safe(self):
+        self.assertEqual(None, gclient_eval._gclient_eval('None'))
         self.assertEqual(True, gclient_eval._gclient_eval('True'))
 
     def test_name_unsafe(self):
@@ -93,8 +99,8 @@ class GClientEvalTest(unittest.TestCase):
     def test_not_whitelisted(self):
         with self.assertRaises(ValueError) as cm:
             gclient_eval._gclient_eval('[x for x in [1, 2, 3]]')
-        self.assertIn('unexpected AST node: <ast.ListComp object',
-                      str(cm.exception))
+        self.assertIn('unexpected AST node', str(cm.exception))
+        self.assertIn('ast.ListComp object', str(cm.exception))
 
     def test_dict_ordered(self):
         for test_case in itertools.permutations(range(4)):

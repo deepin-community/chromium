@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 The Chromium Authors. All rights reserved.
+ * Copyright 2018 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -81,7 +81,8 @@
 
 .tree-outline .hex-data {
   display: block;
-  word-break: break-word;
+  word-break: normal;
+  overflow-wrap: anywhere;
   margin-left: 20px;
 }
 

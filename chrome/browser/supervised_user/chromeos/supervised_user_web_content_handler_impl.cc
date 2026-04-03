@@ -7,86 +7,60 @@
 #include "base/functional/bind.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/supervised_user/chromeos/chromeos_utils.h"
 #include "chrome/browser/supervised_user/chromeos/supervised_user_favicon_request_handler.h"
+#include "chrome/browser/supervised_user/family_link_settings_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_browser_utils.h"
-#include "chrome/browser/supervised_user/supervised_user_settings_service_factory.h"
 #include "chrome/browser/ui/chrome_pages.h"
-#include "chromeos/crosapi/mojom/parent_access.mojom.h"
 #include "components/favicon/core/large_icon_service.h"
-#include "components/supervised_user/core/browser/supervised_user_settings_service.h"
+#include "components/supervised_user/core/browser/family_link_settings_service.h"
 #include "components/supervised_user/core/common/features.h"
+#include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "content/public/browser/web_contents.h"
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/lacros/lacros_service.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
+#include "ui/gfx/codec/png_codec.h"
 
 namespace {
 
-supervised_user::WebContentHandler::LocalApprovalResult
-ChromeOSResultToLocalApprovalResult(
-    crosapi::mojom::ParentAccessResult::Tag result) {
-  switch (result) {
-    case crosapi::mojom::ParentAccessResult::Tag::kApproved:
-      return supervised_user::WebContentHandler::LocalApprovalResult::kApproved;
-    case crosapi::mojom::ParentAccessResult::Tag::kDeclined:
-      return supervised_user::WebContentHandler::LocalApprovalResult::kDeclined;
-    case crosapi::mojom::ParentAccessResult::Tag::kCanceled:
-      return supervised_user::WebContentHandler::LocalApprovalResult::kCanceled;
-    case crosapi::mojom::ParentAccessResult::Tag::kError:
-      return supervised_user::WebContentHandler::LocalApprovalResult::kError;
-    case crosapi::mojom::ParentAccessResult::Tag::kDisabled:
+supervised_user::LocalApprovalResult ChromeOSResultToLocalApprovalResult(
+    std::unique_ptr<ash::ParentAccessDialog::Result> result) {
+  switch (result->status) {
+    case ash::ParentAccessDialog::Result::Status::kApproved:
+      return supervised_user::LocalApprovalResult::kApproved;
+    case ash::ParentAccessDialog::Result::Status::kDeclined:
+      return supervised_user::LocalApprovalResult::kDeclined;
+    case ash::ParentAccessDialog::Result::Status::kCanceled:
+      return supervised_user::LocalApprovalResult::kCanceled;
+    case ash::ParentAccessDialog::Result::Status::kError:
+      return supervised_user::LocalApprovalResult::kError;
+    case ash::ParentAccessDialog::Result::Status::kDisabled:
       // Disabled is not a possible result for Local Web Approvals.
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 
-void HandleChromeOSErrorResult(
-    crosapi::mojom::ParentAccessErrorResult::Type type) {
-  switch (type) {
-    case crosapi::mojom::ParentAccessErrorResult::Type::kNotAChildUser:
+void HandleChromeOSShowError(
+    ash::ParentAccessDialogProvider::ShowError show_error) {
+  switch (show_error) {
+    case ash::ParentAccessDialogProvider::ShowError::kNotAChildUser:
       // Fatal debug error because this can only occur due to a programming
       // error.
       DLOG(FATAL) << "ParentAccess UI invoked by non-child user";
       return;
-    case crosapi::mojom::ParentAccessErrorResult::Type::kAlreadyVisible:
+    case ash::ParentAccessDialogProvider::ShowError::kDialogAlreadyVisible:
       // Fatal debug error because this can only occur due to a programming
       // error.
       DLOG(FATAL) << "ParentAccess UI invoked while instance already visible";
       return;
-    case crosapi::mojom::ParentAccessErrorResult::Type::kUnknown:
-      LOG(ERROR) << "Unknown error in ParentAccess UI";
-      return;
-    case crosapi::mojom::ParentAccessErrorResult::Type::kNone:
+    case ash::ParentAccessDialogProvider::ShowError::kNone:
       NOTREACHED();
-      return;
   }
 }
-
-// Returns whether website approvals are supported on the current ChromeOS
-// platform.
-bool IsWebsiteApprovalSupported() {
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  chromeos::LacrosService* service = chromeos::LacrosService::Get();
-  CHECK(service);
-  const int version =
-      service->GetInterfaceVersion<crosapi::mojom::ParentAccess>();
-  if (version < int{crosapi::mojom::ParentAccess::MethodMinVersions::
-                        kGetWebsiteParentApprovalMinVersion}) {
-    return false;
-  }
-#endif
-  return true;
-}
-
 }  // namespace
 
 SupervisedUserWebContentHandlerImpl::SupervisedUserWebContentHandlerImpl(
     content::WebContents* web_contents,
     const GURL& url,
     favicon::LargeIconService& large_icon_service,
-    int frame_id,
+    content::FrameTreeNodeId frame_id,
     int64_t interstitial_navigation_id)
     : ChromeSupervisedUserWebContentHandlerBase(web_contents,
                                                 frame_id,
@@ -94,8 +68,8 @@ SupervisedUserWebContentHandlerImpl::SupervisedUserWebContentHandlerImpl(
       favicon_handler_(std::make_unique<SupervisedUserFaviconRequestHandler>(
           url.GetWithEmptyPath(),
           &large_icon_service)),
-      profile_(
-          *Profile::FromBrowserContext(web_contents->GetBrowserContext())) {
+      profile_(*Profile::FromBrowserContext(web_contents->GetBrowserContext())),
+      dialog_provider_(std::make_unique<ash::ParentAccessDialogProvider>()) {
   CHECK(web_contents_);
   if (supervised_user::IsLocalWebApprovalsEnabled()) {
     // Prefetch the favicon which will be rendered as part of the web approvals
@@ -110,42 +84,57 @@ SupervisedUserWebContentHandlerImpl::~SupervisedUserWebContentHandlerImpl() =
     default;
 
 void SupervisedUserWebContentHandlerImpl::RequestLocalApproval(
-    const GURL& url,
+    const GURL& target_url,
+    supervised_user::WebFilteringResult filtering_result,
     const std::u16string& child_display_name,
     ApprovalRequestInitiatedCallback callback) {
   CHECK(web_contents_);
-  supervised_user::SupervisedUserSettingsService* settings_service =
-      SupervisedUserSettingsServiceFactory::GetForKey(
+  supervised_user::FamilyLinkSettingsService* family_link_settings_service =
+      supervised_user::FamilyLinkSettingsServiceFactory::GetForKey(
           Profile::FromBrowserContext(web_contents_->GetBrowserContext())
               ->GetProfileKey());
 
-  // Website approval is supported in Lacros from the version 0 and ash does not
-  // have version skew.
-  CHECK(IsWebsiteApprovalSupported());
+  // Encode the favicon as a PNG bitmap.
+  std::optional<std::vector<uint8_t>> favicon_bitmap =
+      gfx::PNGCodec::FastEncodeBGRASkBitmap(
+          favicon_handler_->GetFaviconOrFallback(),
+          /*discard_transparency=*/false);
 
-  crosapi::mojom::ParentAccess* parent_access =
-      supervised_user::GetParentAccessApi();
-  CHECK(parent_access);
-  parent_access->GetWebsiteParentApproval(
-      url.GetWithEmptyPath(), child_display_name,
-      favicon_handler_->GetFaviconOrFallback(),
+  // Assemble the parameters for a website access request.
+  parent_access_ui::mojom::ParentAccessParamsPtr params =
+      parent_access_ui::mojom::ParentAccessParams::New(
+          parent_access_ui::mojom::ParentAccessParams::FlowType::kWebsiteAccess,
+          parent_access_ui::mojom::FlowTypeParams::NewWebApprovalsParams(
+              parent_access_ui::mojom::WebApprovalsParams::New(
+                  target_url.GetWithEmptyPath(), child_display_name,
+                  favicon_bitmap.value_or(std::vector<uint8_t>()))),
+          /* is_disabled= */ false);
+  base::TimeTicks start_time = base::TimeTicks::Now();
+  auto show_error = dialog_provider_->Show(
+      std::move(params),
       base::BindOnce(
           &SupervisedUserWebContentHandlerImpl::OnLocalApprovalRequestCompleted,
-          weak_ptr_factory_.GetWeakPtr(), std::ref(*settings_service), url,
-          base::TimeTicks::Now()));
-  std::move(callback).Run(true);
+          weak_ptr_factory_.GetWeakPtr(),
+          std::ref(*family_link_settings_service), target_url, start_time));
+  if (show_error == ash::ParentAccessDialogProvider::ShowError::kNone) {
+    std::move(callback).Run(true);
+  } else {
+    std::move(callback).Run(false);
+    WebContentHandler::OnLocalApprovalRequestCompleted(
+        *family_link_settings_service, target_url, start_time,
+        supervised_user::LocalApprovalResult::kError,
+        /*local_approval_error_type=*/std::nullopt);
+    HandleChromeOSShowError(show_error);
+  }
 }
 
 void SupervisedUserWebContentHandlerImpl::OnLocalApprovalRequestCompleted(
-    supervised_user::SupervisedUserSettingsService& settings_service,
+    supervised_user::FamilyLinkSettingsService& family_link_settings_service,
     const GURL& url,
     base::TimeTicks start_time,
-    crosapi::mojom::ParentAccessResultPtr result) {
+    std::unique_ptr<ash::ParentAccessDialog::Result> result) {
   WebContentHandler::OnLocalApprovalRequestCompleted(
-      settings_service, url, start_time,
-      ChromeOSResultToLocalApprovalResult(result->which()));
-
-  if (result->is_error()) {
-    HandleChromeOSErrorResult(result->get_error()->type);
-  }
+      family_link_settings_service, url, start_time,
+      ChromeOSResultToLocalApprovalResult(std::move(result)),
+      /*local_approval_error_type=*/std::nullopt);
 }

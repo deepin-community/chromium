@@ -9,13 +9,11 @@
 #include <vector>
 
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/location.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -34,6 +32,7 @@
 #include "net/cookies/site_for_cookies.h"
 #include "net/http/http_request_headers.h"
 #include "net/socket/socket_test_util.h"
+#include "net/storage_access_api/status.h"
 #include "net/url_request/url_request_context.h"
 #include "net/websockets/websocket_stream.h"
 #include "net/websockets/websocket_stream_create_test_base.h"
@@ -49,7 +48,7 @@ namespace {
 using ::testing::TestWithParam;
 using ::testing::ValuesIn;
 
-const WebSocketExtraHeaders kNoCookieHeader = {};
+constexpr WebSocketExtraHeaders kNoCookieHeader = {};
 
 class TestBase : public WebSocketStreamCreateTestBase {
  public:
@@ -61,11 +60,11 @@ class TestBase : public WebSocketStreamCreateTestBase {
                         const std::string& response_body) {
     url_request_context_host_.SetExpectations(
         WebSocketStandardRequestWithCookies(
-            url.path(), url.host(), origin, cookie_header,
+            url.GetPath(), url.GetHost(), origin, cookie_header,
             /*send_additional_request_headers=*/{}, /*extra_headers=*/{}),
         response_body);
     CreateAndConnectStream(url, NoSubProtocols(), origin, site_for_cookies,
-                           /*has_storage_access=*/false, isolation_info,
+                           StorageAccessApiStatus::kNone, isolation_info,
                            HttpRequestHeaders(), nullptr);
   }
 };
@@ -161,9 +160,8 @@ TEST_P(WebSocketStreamClientUseCookieTest, ClientUseCookie) {
   base::WeakPtrFactory<bool> weak_set_cookie_result(&set_cookie_result);
 
   base::RunLoop run_loop;
-  auto cookie = CanonicalCookie::Create(
-      cookie_url, cookie_line, base::Time::Now(),
-      std::nullopt /* server_time */, std::nullopt /* cookie_partition_key */);
+  auto cookie = CanonicalCookie::CreateForTesting(cookie_url, cookie_line,
+                                                  base::Time::Now());
   store->SetCanonicalCookieAsync(
       std::move(cookie), cookie_url, net::CookieOptions::MakeAllInclusive(),
       base::BindOnce(&SetCookieHelperFunction, run_loop.QuitClosure(),
@@ -229,6 +227,8 @@ TEST_P(WebSocketStreamServerSetCookieTest, ServerSetCookie) {
 
 // Test parameters definitions follow...
 
+// The WebSocketExtraHeaders field can't be initialized at compile time, so this
+// array is constructed at startup, but that's okay in a test.
 const ClientUseCookieParameter kClientUseCookieParameters[] = {
     // Non-secure cookies for ws
     {"ws://www.example.com",
@@ -381,6 +381,7 @@ INSTANTIATE_TEST_SUITE_P(WebSocketStreamClientUseCookieTest,
                          WebSocketStreamClientUseCookieTest,
                          ValuesIn(kClientUseCookieParameters));
 
+// As with `kClientUseCookieParameters`, this is initialised at runtime.
 const ServerSetCookieParameter kServerSetCookieParameters[] = {
     // Cookies coming from ws
     {"ws://www.example.com",

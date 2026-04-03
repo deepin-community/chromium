@@ -295,6 +295,10 @@ function getCSS() {
       -webkit-mask-image: url(../foreground/images/filetype/filetype_gmap.svg);
     }
 
+    :host([type="gproject"]) span {
+      -webkit-mask-image: url(../foreground/images/filetype/filetype_gproject.svg);
+    }
+
     :host([type="gsheet"]) span {
       -webkit-mask-image: url(../foreground/images/filetype/filetype_gsheet.svg);
     }
@@ -427,6 +431,14 @@ function getCSS() {
       -webkit-mask-image: url(../foreground/images/files/ui/error_banner_icon.svg);
     }
 
+    :host([type='star']) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/star.svg);
+    }
+
+    :host([type='odfs']) span {
+      -webkit-mask-image: url(../foreground/images/files/ui/odfs.svg);
+    }
+
     :host([type='gdoc']) span,
     :host([type='script']) span,
     :host([type='tini']) span {
@@ -459,6 +471,10 @@ function getCSS() {
     :host([type='gsite']) span,
     :host([type='sites']) span {
       background-color: var(--cros-sys-file_site);
+    }
+
+    :host([type='gproject']) span {
+      background-color: var(--cros-sys-file_project);
     }
 
     :host([type='excel']) span {

@@ -18,15 +18,16 @@ struct WebViewInfo {
   enum Type {
     kApp,
     kBackgroundPage,
-    kPage,
-    kWorker,
-    kWebView,
+    kBrowser,
+    kExternal,
     kIFrame,
     kOther,
+    kPage,
     kServiceWorker,
     kSharedWorker,
-    kExternal,
-    kBrowser,
+    kWebView,
+    kWorker,
+    kTab,
   };
 
   WebViewInfo(const std::string& id,
@@ -38,8 +39,9 @@ struct WebViewInfo {
 
   bool IsFrontend() const;
   bool IsInactiveBackgroundPage() const;
+  bool IsExtensionTarget() const;
 
-  static Status ParseType(const std::string& data, WebViewInfo::Type* type);
+  static Status ParseType(const std::string& data, WebViewInfo::Type& type);
 
   std::string id;
   std::string debugger_url;
@@ -56,7 +58,7 @@ class WebViewsInfo {
   const WebViewInfo& Get(int index) const;
   size_t GetSize() const;
   const WebViewInfo* GetForId(const std::string& id) const;
-  Status FillFromTargetsInfo(const base::Value::List& target_infos);
+  Status FillFromTargetsInfo(const base::ListValue& target_infos);
   bool ContainsTargetType(WebViewInfo::Type type) const;
   const WebViewInfo* FindFirst(WebViewInfo::Type type) const;
 

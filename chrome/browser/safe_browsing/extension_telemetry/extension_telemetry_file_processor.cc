@@ -35,7 +35,7 @@ constexpr base::FilePath::CharType kHTMLFileSuffix[] =
 constexpr base::FilePath::CharType kCSSFileSuffix[] = FILE_PATH_LITERAL(".css");
 
 constexpr auto kFileTypePriorityMap =
-    base::MakeFixedFlatMap<base::FilePath::StringPieceType, int>(
+    base::MakeFixedFlatMap<base::FilePath::StringViewType, int>(
         {{kJSFileSuffix, 3}, {kHTMLFileSuffix, 2}, {kCSSFileSuffix, 1}});
 
 void RecordLargestFileSizeObserved(size_t size) {
@@ -89,12 +89,12 @@ ExtensionTelemetryFileProcessor::ExtensionTelemetryFileProcessor()
       max_file_size_(kMaxFileSizeBytes),
       max_files_to_read_(kMaxFilesToRead) {}
 
-base::Value::Dict ExtensionTelemetryFileProcessor::ProcessExtension(
+base::DictValue ExtensionTelemetryFileProcessor::ProcessExtension(
     const base::FilePath& root_dir) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (root_dir.empty()) {
     RecordValidExtension(false);
-    return base::Value::Dict();
+    return base::DictValue();
   }
 
   // Check if Manifest.json file is valid. If invalid, record in histogram and
@@ -104,7 +104,7 @@ base::Value::Dict ExtensionTelemetryFileProcessor::ProcessExtension(
   if (!base::ReadFileToString(manifest_path, &manifest_contents) ||
       manifest_contents.empty()) {
     RecordValidExtension(false);
-    return base::Value::Dict();
+    return base::DictValue();
   }
 
   // Gather all installed extension files, filter and sort by types.
@@ -113,7 +113,7 @@ base::Value::Dict ExtensionTelemetryFileProcessor::ProcessExtension(
   RecordNumFilesFound(installed_files.size() + 1);
 
   // Compute hashes of files until |max_files_to_process_| limit is reached.
-  base::Value::Dict extension_data =
+  base::DictValue extension_data =
       ComputeHashes(root_dir, std::move(installed_files));
   extension_data.Set(manifest_path.BaseName().AsUTF8Unsafe(),
                      std::move(manifest_contents));
@@ -140,18 +140,22 @@ ExtensionTelemetryFileProcessor::RetrieveFilePaths(
       break;
     }
 
-    int64_t file_size;
-    // Skip invalid, empty, and non-applicable type files
-    if (!base::GetFileSize(full_path, &file_size) || file_size <= 0 ||
-        !IsApplicableType(full_path)) {
+    // Skip non-applicable type files.
+    if (!IsApplicableType(full_path)) {
+      continue;
+    }
+
+    // Skip invalid and empty files.
+    std::optional<int64_t> file_size = base::GetFileSize(full_path);
+    if (!file_size.has_value() || file_size.value() <= 0) {
       continue;
     }
 
     // Record largest file size observed.
-    largest_file_size = std::max(largest_file_size, file_size);
+    largest_file_size = std::max(largest_file_size, file_size.value());
 
     // Add file for processing if within size limit, otherwise, skip and record.
-    if (file_size <= max_file_size_) {
+    if (file_size.value() <= max_file_size_) {
       sorted_file_paths.insert(std::move(full_path));
     } else {
       exceeded_file_size_counter++;
@@ -163,10 +167,10 @@ ExtensionTelemetryFileProcessor::RetrieveFilePaths(
   return sorted_file_paths;
 }
 
-base::Value::Dict ExtensionTelemetryFileProcessor::ComputeHashes(
+base::DictValue ExtensionTelemetryFileProcessor::ComputeHashes(
     const base::FilePath& root_dir,
     const SortedFilePaths& file_paths) {
-  base::Value::Dict extension_data;
+  base::DictValue extension_data;
 
   for (const auto& full_path : file_paths) {
     if (extension_data.size() >= max_files_to_process_) {

@@ -17,7 +17,7 @@
 
 namespace autofill {
 
-struct FormFieldData;
+class FormFieldData;
 
 namespace test {
 
@@ -149,11 +149,17 @@ inline constexpr char kIbanValue_2[] = "CH93 0076 2011 6238 5295 7";
                                                 std::string_view value,
                                                 FormControlType type);
 
+[[nodiscard]] FormFieldData CreateTestFormField(std::u16string_view label,
+                                                std::u16string_view name,
+                                                std::u16string_view value,
+                                                FormControlType type);
+
 [[nodiscard]] FormFieldData CreateTestFormField(std::string_view label,
                                                 std::string_view name,
                                                 std::string_view value,
                                                 FormControlType type,
                                                 std::string_view autocomplete);
+
 [[nodiscard]] FormFieldData CreateTestFormField(std::string_view label,
                                                 std::string_view name,
                                                 std::string_view value,
@@ -180,7 +186,7 @@ inline constexpr char kIbanValue_2[] = "CH93 0076 2011 6238 5295 7";
 [[nodiscard]] FormFieldData CreateTestSelectField(
     const std::vector<const char*>& values);
 
-[[nodiscard]] FormFieldData CreateTestSelectOrSelectListField(
+[[nodiscard]] FormFieldData CreateTestSelectField(
     std::string_view label,
     std::string_view name,
     std::string_view value,
@@ -202,26 +208,37 @@ inline constexpr char kIbanValue_2[] = "CH93 0076 2011 6238 5295 7";
 [[nodiscard]] FormData CreateTestPersonalInformationFormData();
 
 // Populates `form` with data corresponding to a simple credit card form.
-// Note that this actually appends fields to the form data, which can be
-// useful for building up more complex test forms.
 [[nodiscard]] FormData CreateTestCreditCardFormData(bool is_https,
                                                     bool use_month_type,
                                                     bool split_names = false);
 
 // Populates `form_data` with data corresponding to an IBAN form (a form with a
-// single IBAN field). Note that this actually appends fields to the form data,
-// which can be useful for building up more complex test forms.
+// single IBAN field).
 [[nodiscard]] FormData CreateTestIbanFormData(
-    std::string_view value = kIbanValue);
+    std::string_view value = kIbanValue,
+    bool is_https = true);
 
-// Creates a `form_data` with a single unclassified field.
+// Populates `form_data` with data corresponding to a loyalty card form (a form
+// with a single loyalty card field).
+[[nodiscard]] FormData CreateTestLoyaltyCardFormData();
+
+// Populates `form_data` with data corresponding to an email or loyalty card
+// field (a form with a single field).
+[[nodiscard]] FormData CreateTestEmailOrLoyaltyCardFormData();
+
+// Populates `form_data` with data corresponding to a merchant promo code form
+// (a form with a single merchant promo code field).
+[[nodiscard]] FormData CreateTestMerchantPromoCodeFormData();
+
+// Creates a `FormData` with a username and a password field.
+[[nodiscard]] FormData CreateTestPasswordFormData();
+
+// Creates a `FormData` that mimics a signup form (username field and two
+// password fields).
+[[nodiscard]] FormData CreateTestSignupFormData();
+
+// Creates a `FormData` with a single unclassified field.
 [[nodiscard]] FormData CreateTestUnclassifiedFormData();
-
-MATCHER_P(DeepEqualsFormData,
-          form_data,
-          negation ? "does not equal" : "equals") {
-  return FormData::DeepEqual(arg, form_data);
-}
 
 }  // namespace test
 

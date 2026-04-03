@@ -65,9 +65,9 @@ LogicalResult RewriteToFullJit(func::FuncOp op) {
                                          old_body->getArgumentTypes(), locs);
 
   // Create the JIT compile op.
-  auto jit_compile_op = rewriter.create<tf_framework::JITCompileOp>(
-      loc, rewriter.getType<tf_framework::JITCallableType>(),
-      /*ctx=*/std::nullopt);
+  auto jit_compile_op = tf_framework::JITCompileOp::create(
+      rewriter, loc, rewriter.getType<tf_framework::JITCallableType>(),
+      /*ctx=*/mlir::Value());
 
   // Move the original functions operations into the body.
   {
@@ -80,18 +80,18 @@ LogicalResult RewriteToFullJit(func::FuncOp op) {
 
     Operation *terminator = jit_block->getTerminator();
     rewriter.setInsertionPointAfter(terminator);
-    rewriter.create<tf_framework::JITCompileYieldOp>(
-        loc, terminator->getOperands().front());
+    tf_framework::JITCompileYieldOp::create(rewriter, loc,
+                                            terminator->getOperands().front());
     terminator->erase();
   }
 
   // Create JIT execute op.
-  auto execute = rewriter.create<tf_framework::JITExecuteOp>(
-      loc, op.getResultTypes().front(), /*ctx=*/Value(),
+  auto execute = tf_framework::JITExecuteOp::create(
+      rewriter, loc, op.getResultTypes().front(), /*ctx=*/Value(),
       jit_compile_op.getResult(), new_body->getArguments());
 
   // Create a return.
-  rewriter.create<func::ReturnOp>(loc, execute.getResult());
+  func::ReturnOp::create(rewriter, loc, execute.getResult());
   return success();
 }
 
@@ -111,28 +111,28 @@ LogicalResult RewriteToLargeSizeJit(FuncOp op) {
 
   // Create large argument condition.
   auto arg_1 = new_body->getArgument(0);
-  auto shape_1 = rewriter.create<shape::ShapeOfOp>(loc, arg_1);
-  auto num_elems_1 = rewriter.create<shape::NumElementsOp>(loc, shape_1);
-  Value cst_i32_limit = rewriter.create<arith::ConstantIndexOp>(loc, i32Limit);
-  Value large_tensor_predicate = rewriter.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::sgt, num_elems_1, cst_i32_limit);
+  auto shape_1 = shape::ShapeOfOp::create(rewriter, loc, arg_1);
+  auto num_elems_1 = shape::NumElementsOp::create(rewriter, loc, shape_1);
+  Value cst_i32_limit = arith::ConstantIndexOp::create(rewriter, loc, i32Limit);
+  Value large_tensor_predicate = arith::CmpIOp::create(
+      rewriter, loc, arith::CmpIPredicate::sgt, num_elems_1, cst_i32_limit);
   if (new_body->getNumArguments() > 1) {
     auto arg_2 = new_body->getArgument(1);
-    auto shape_2 = rewriter.create<shape::ShapeOfOp>(loc, arg_2);
-    auto num_elems_2 = rewriter.create<shape::NumElementsOp>(loc, shape_2);
-    large_tensor_predicate = rewriter.create<arith::OrIOp>(
-        loc, large_tensor_predicate,
+    auto shape_2 = shape::ShapeOfOp::create(rewriter, loc, arg_2);
+    auto num_elems_2 = shape::NumElementsOp::create(rewriter, loc, shape_2);
+    large_tensor_predicate = arith::OrIOp::create(
+        rewriter, loc, large_tensor_predicate,
         // Compare op to check size of the second op
-        rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt,
-                                       num_elems_2, cst_i32_limit));
+        arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sgt,
+                              num_elems_2, cst_i32_limit));
   }
 
   // Create dispatch code.
   auto jit_body_builder_fn = [&](OpBuilder &b, Location loc) {
     // Create JIT compile op.
     auto callable_ty = b.getType<tf_framework::JITCallableType>();
-    auto jit_compile_op =
-        b.create<tf_framework::JITCompileOp>(loc, callable_ty, /*ctx=*/Value());
+    auto jit_compile_op = tf_framework::JITCompileOp::create(
+        b, loc, callable_ty, /*ctx=*/Value());
     {
       OpBuilder::InsertionGuard g(b);
       Block *block = b.createBlock(
@@ -144,15 +144,15 @@ LogicalResult RewriteToLargeSizeJit(FuncOp op) {
       for (auto &op : old_body->without_terminator()) {
         b.clone(op, bvm);
       }
-      b.create<tf_framework::JITCompileYieldOp>(
-          loc, block->back().getResults().front());
+      tf_framework::JITCompileYieldOp::create(
+          b, loc, block->back().getResults().front());
     }
 
     // Create JIT execute op.
-    auto jit_execute_op = b.create<tf_framework::JITExecuteOp>(
-        loc, op.getResultTypes().front(), /*ctx=*/Value(),
+    auto jit_execute_op = tf_framework::JITExecuteOp::create(
+        b, loc, op.getResultTypes().front(), /*ctx=*/Value(),
         jit_compile_op.getResult(), new_body->getArguments());
-    b.create<scf::YieldOp>(loc, jit_execute_op.getResult());
+    scf::YieldOp::create(b, loc, jit_execute_op.getResult());
   };
   auto aot_body_builder_fn = [&](OpBuilder &b, Location loc) {
     IRMapping bvm;
@@ -161,13 +161,13 @@ LogicalResult RewriteToLargeSizeJit(FuncOp op) {
     for (auto &op : old_body->without_terminator()) {
       last_clone = b.clone(op, bvm);
     }
-    b.create<scf::YieldOp>(loc, last_clone->getResults().front());
+    scf::YieldOp::create(b, loc, last_clone->getResults().front());
   };
 
   // Create the conditional and return operation.
-  auto ifOp = rewriter.create<scf::IfOp>(
-      loc, large_tensor_predicate, jit_body_builder_fn, aot_body_builder_fn);
-  rewriter.create<func::ReturnOp>(loc, ifOp.getResults().front());
+  auto ifOp = scf::IfOp::create(rewriter, loc, large_tensor_predicate,
+                                jit_body_builder_fn, aot_body_builder_fn);
+  func::ReturnOp::create(rewriter, loc, ifOp.getResults().front());
 
   // Remove the old body.
   rewriter.eraseBlock(old_body);
@@ -176,8 +176,7 @@ LogicalResult RewriteToLargeSizeJit(FuncOp op) {
 
 void PackJITCompileOp(tf_framework::JITCompileOp op,
                       llvm::ArrayRef<int64_t> tile_sizes,
-                      llvm::ArrayRef<int64_t> unroll_factors,
-                      int64_t max_supported_rank, bool enable_ftz,
+                      llvm::ArrayRef<int64_t> unroll_factors, bool enable_ftz,
                       bool index_64bit, bool cpu_codegen) {
   IRRewriter rewriter(op.getContext());
   Block *body = op.SingleBlock::getBody();
@@ -187,19 +186,19 @@ void PackJITCompileOp(tf_framework::JITCompileOp op,
   // Temporarily, build the module that would be JIT-compiled. This is only to
   // obtain the serialized code attribute.
   auto loc = op->getLoc();
-  auto jit_module = rewriter.create<ModuleOp>(loc);
+  auto jit_module = ModuleOp::create(rewriter, loc);
   {
     OpBuilder::InsertionGuard g(rewriter);
     rewriter.setInsertionPointToStart(jit_module.SingleBlock::getBody());
-    auto jit_function = rewriter.create<func::FuncOp>(
-        loc, tf_framework::JITCompileFromStrOp::kJITEntryFunctionName,
+    auto jit_function = func::FuncOp::create(
+        rewriter, loc, tf_framework::JITCompileFromStrOp::kJITEntryFunctionName,
         rewriter.getFunctionType(body->getArgumentTypes(),
                                  yield_op->getOperandTypes()));
     jit_function->setAttr(tf_framework::TFFrameworkDialect::kTFEntryAttrName,
                           rewriter.getUnitAttr());
     jit_function.getBody().takeBody(op.getBodyRegion());
     rewriter.setInsertionPointToEnd(&jit_function.getBody().front());
-    rewriter.create<func::ReturnOp>(loc, yield_op.getResult());
+    func::ReturnOp::create(rewriter, loc, yield_op.getResult());
     rewriter.eraseOp(yield_op);
   }
 
@@ -219,7 +218,6 @@ void PackJITCompileOp(tf_framework::JITCompileOp op,
       op, op->getResultTypes(), op.getCtx(), rewriter.getStringAttr(code),
       rewriter.getI64ArrayAttr(tile_sizes),
       rewriter.getI64ArrayAttr(unroll_factors),
-      rewriter.getI64IntegerAttr(max_supported_rank),
       rewriter.getBoolAttr(enable_ftz), rewriter.getBoolAttr(index_64bit),
       rewriter.getBoolAttr(cpu_codegen));
 }
@@ -231,12 +229,11 @@ struct FuncToJITInvocationPass
     : public impl::FuncToJITInvocationPassBase<FuncToJITInvocationPass> {
   explicit FuncToJITInvocationPass(llvm::ArrayRef<int64_t> tile_sizes,
                                    llvm::ArrayRef<int64_t> unroll_factors,
-                                   int64_t max_supported_rank, bool enable_ftz,
-                                   bool index_64bit, bool cpu_codegen,
+                                   bool enable_ftz, bool index_64bit,
+                                   bool cpu_codegen,
                                    bool jit_i64_indexed_for_large_tensors) {
     tile_sizes_ = tile_sizes;
     unroll_factors_ = unroll_factors;
-    max_supported_rank_ = max_supported_rank;
     enable_ftz_ = enable_ftz;
     index_64bit_ = index_64bit;
     cpu_codegen_ = cpu_codegen;
@@ -255,9 +252,9 @@ struct FuncToJITInvocationPass
     }
 
     getOperation().walk([&](tf_framework::JITCompileOp op) {
-      PackJITCompileOp(
-          op, tile_sizes_, unroll_factors_, max_supported_rank_, enable_ftz_,
-          index_64bit_ || jit_i64_indexed_for_large_tensors_, cpu_codegen_);
+      PackJITCompileOp(op, tile_sizes_, unroll_factors_, enable_ftz_,
+                       index_64bit_ || jit_i64_indexed_for_large_tensors_,
+                       cpu_codegen_);
     });
   }
 };
@@ -266,11 +263,11 @@ struct FuncToJITInvocationPass
 
 std::unique_ptr<OperationPass<func::FuncOp>> CreateFuncToJITInvocationPass(
     llvm::ArrayRef<int64_t> tile_sizes, llvm::ArrayRef<int64_t> unroll_factors,
-    int64_t max_supported_rank, bool enable_ftz, bool index_64bit,
-    bool cpu_codegen, bool jit_i64_indexed_for_large_tensors) {
+    bool enable_ftz, bool index_64bit, bool cpu_codegen,
+    bool jit_i64_indexed_for_large_tensors) {
   return std::make_unique<FuncToJITInvocationPass>(
-      tile_sizes, unroll_factors, max_supported_rank, enable_ftz, index_64bit,
-      cpu_codegen, jit_i64_indexed_for_large_tensors);
+      tile_sizes, unroll_factors, enable_ftz, index_64bit, cpu_codegen,
+      jit_i64_indexed_for_large_tensors);
 }
 
 }  // namespace transforms

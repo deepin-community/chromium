@@ -23,6 +23,7 @@
 #include "config_components.h"
 #include "libavutil/avassert.h"
 #include "libavutil/hwcontext_d3d12va_internal.h"
+#include "libavutil/mem.h"
 #include "av1dec.h"
 #include "dxva2_internal.h"
 #include "d3d12va_decode.h"
@@ -44,7 +45,10 @@ typedef struct AV1DecodePictureContext {
     unsigned            bitstream_size;
 } AV1DecodePictureContext;
 
-static int d3d12va_av1_start_frame(AVCodecContext *avctx, av_unused const uint8_t *buffer,  av_unused uint32_t size)
+static int d3d12va_av1_start_frame(AVCodecContext *avctx,
+                                   av_unused const AVBufferRef *buffer_ref,
+                                   av_unused const uint8_t *buffer,
+                                   av_unused uint32_t size)
 {
     const AV1DecContext     *h       = avctx->priv_data;
     AV1DecodePictureContext *ctx_pic = h->cur_frame.hwaccel_picture_private;
@@ -108,12 +112,9 @@ static int d3d12va_av1_decode_slice(AVCodecContext *avctx,
 
 static int update_input_arguments(AVCodecContext *avctx, D3D12_VIDEO_DECODE_INPUT_STREAM_ARGUMENTS *input_args, ID3D12Resource *buffer)
 {
-    D3D12VADecodeContext    *ctx          = D3D12VA_DECODE_CONTEXT(avctx);
-    AVHWFramesContext       *frames_ctx   = D3D12VA_FRAMES_CONTEXT(avctx);
-    AVD3D12VAFramesContext  *frames_hwctx = frames_ctx->hwctx;
     const AV1DecContext     *h            = avctx->priv_data;
     AV1DecodePictureContext *ctx_pic      = h->cur_frame.hwaccel_picture_private;
-    uint8_t *mapped_data;
+    void *mapped_data;
 
     D3D12_VIDEO_DECODE_FRAME_ARGUMENT *args = &input_args->FrameArguments[input_args->NumFrameArguments++];
     args->Type  = D3D12_VIDEO_DECODE_ARGUMENT_TYPE_SLICE_CONTROL;
@@ -142,7 +143,6 @@ static int d3d12va_av1_end_frame(AVCodecContext *avctx)
 {
     int ret;
     const AV1DecContext     *h       = avctx->priv_data;
-    D3D12VADecodeContext    *ctx     = D3D12VA_DECODE_CONTEXT(avctx);
     AV1DecodePictureContext *ctx_pic = h->cur_frame.hwaccel_picture_private;
 
     if (ctx_pic->tiles <= 0 || ctx_pic->bitstream_size <= 0)
@@ -154,17 +154,15 @@ static int d3d12va_av1_end_frame(AVCodecContext *avctx)
     return ret;
 }
 
-static int d3d12va_av1_decode_init(AVCodecContext *avctx)
+static av_cold int d3d12va_av1_decode_init(AVCodecContext *avctx)
 {
-    const AV1DecContext     *h       = avctx->priv_data;
     D3D12VADecodeContext    *ctx     = D3D12VA_DECODE_CONTEXT(avctx);
     D3D12AV1DecodeContext   *av1_ctx = D3D12_AV1_DECODE_CONTEXT(avctx);
-    AV1DecodePictureContext *ctx_pic = h->cur_frame.hwaccel_picture_private;
     DXVA_PicParams_AV1 pp;
 
     int ret;
 
-    if (avctx->profile != FF_PROFILE_AV1_MAIN)
+    if (avctx->profile != AV_PROFILE_AV1_MAIN)
         return AVERROR(EINVAL);
 
     ctx->cfg.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_AV1_PROFILE0;
@@ -184,11 +182,9 @@ static int d3d12va_av1_decode_init(AVCodecContext *avctx)
     return 0;
 }
 
-static int d3d12va_av1_decode_uninit(AVCodecContext *avctx)
+static av_cold int d3d12va_av1_decode_uninit(AVCodecContext *avctx)
 {
-    const AV1DecContext     *h       = avctx->priv_data;
     D3D12AV1DecodeContext   *ctx     = D3D12_AV1_DECODE_CONTEXT(avctx);
-    AV1DecodePictureContext *ctx_pic = h->cur_frame.hwaccel_picture_private;
 
     if (ctx->bitstream_buffer)
         av_freep(&ctx->bitstream_buffer);

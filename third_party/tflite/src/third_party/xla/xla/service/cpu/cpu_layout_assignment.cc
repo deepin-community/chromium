@@ -20,14 +20,21 @@ limitations under the License.
 #include <optional>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "xla/backends/cpu/codegen/target_machine_features.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
+#include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
-#include "xla/map_util.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/layout_util.h"
 #include "xla/service/cpu/dot_op_emitter.h"
 #include "xla/service/cpu/ir_emission_utils.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "tsl/platform/errors.h"
+#include "xla/tsl/platform/errors.h"
 
 namespace xla {
 namespace cpu {
@@ -90,7 +97,7 @@ static Shape RowMajorShape(Shape shape) {
         if (!subshape->IsArray()) {
           return;
         }
-        std::vector<int64_t> dimension_order(subshape->dimensions_size());
+        std::vector<int64_t> dimension_order(subshape->dimensions().size());
         std::iota(dimension_order.rbegin(), dimension_order.rend(), 0);
         *subshape->mutable_layout() = LayoutUtil::MakeLayout(dimension_order);
       });
@@ -99,8 +106,8 @@ static Shape RowMajorShape(Shape shape) {
 
 static Shape ColMajorShape(const Shape& old_shape) {
   Shape new_shape(old_shape);
-  std::vector<int64_t> dimension_order(new_shape.dimensions_size());
-  std::iota(dimension_order.begin(), dimension_order.end(), 0);
+  std::vector<int64_t> dimension_order(new_shape.dimensions().size());
+  absl::c_iota(dimension_order, 0);
   *new_shape.mutable_layout() = LayoutUtil::MakeLayout(dimension_order);
   return new_shape;
 }
@@ -111,16 +118,18 @@ static bool OperandsAndResultMustHaveRowMajorLayout(
   if (instr.opcode() == HloOpcode::kConvolution) {
     return PotentiallyImplementedAsEigenConvolution(instr,
                                                     target_machine_features);
-  } else if (instr.opcode() == HloOpcode::kDot) {
-    return DotOperandsAndResultMustHaveRowMajorLayout(instr,
-                                                      target_machine_features);
-  } else if (instr.opcode() == HloOpcode::kCustomCall) {
+  }
+  if (instr.opcode() == HloOpcode::kDot) {
+    return DotOperandsAndResultMustHaveRowMajorLayout(
+        instr, target_machine_features, /*allow_runtime_calls=*/true);
+  }
+  if (instr.opcode() == HloOpcode::kCustomCall) {
     return instr.custom_call_target() == "TopK";
   }
   return false;
 }
 
-Status CpuLayoutAssignment::AddBackendConstraints(
+absl::Status CpuLayoutAssignment::AddBackendConstraints(
     LayoutConstraints* constraints) {
   ShouldMakeOperandColMajorCache cache;
 
@@ -185,7 +194,7 @@ Status CpuLayoutAssignment::AddBackendConstraints(
       }
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 }  // namespace cpu
 }  // namespace xla

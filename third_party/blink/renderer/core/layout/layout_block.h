@@ -34,13 +34,12 @@
 
 namespace blink {
 
-class BlockNode;
 struct PaintInfo;
 
-typedef HeapLinkedHashSet<Member<LayoutBox>> TrackedLayoutBoxLinkedHashSet;
-typedef HeapHashMap<WeakMember<const LayoutBlock>,
-                    Member<TrackedLayoutBoxLinkedHashSet>>
-    TrackedDescendantsMap;
+using TrackedLayoutBoxLinkedHashSet = GCedHeapLinkedHashSet<Member<LayoutBox>>;
+using TrackedDescendantsMap =
+    GCedHeapHashMap<WeakMember<const LayoutBlock>,
+                    Member<TrackedLayoutBoxLinkedHashSet>>;
 
 // LayoutBlock is the class that is used by any LayoutObject
 // that is a containing block.
@@ -106,8 +105,6 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
  public:
   void Trace(Visitor*) const override;
 
-  bool IsLayoutNGObject() const override;
-
   LayoutObject* FirstChild() const {
     NOT_DESTROYED();
     DCHECK_EQ(Children(), VirtualChildren());
@@ -132,14 +129,9 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
     return &children_;
   }
 
-  // These two functions are overridden for inline-block.
-  LayoutUnit FirstLineHeight() const override;
-
-  bool UseLogicalBottomMarginEdgeForInlineBlockBaseline() const;
-
   const char* GetName() const override;
 
- protected:
+ private:
   // Insert a child correctly into the tree when |before_descendant| isn't a
   // direct child of |this|. This happens e.g. when there's an anonymous block
   // child of |this| and |before_descendant| has been reparented into that one.
@@ -164,15 +156,14 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
   static LayoutBlock* CreateAnonymousWithParentAndDisplay(
       const LayoutObject*,
       EDisplay = EDisplay::kBlock);
-  LayoutBlock* CreateAnonymousBlock(EDisplay display = EDisplay::kBlock) const {
+  LayoutBlock* CreateAnonymousBlock() const {
     NOT_DESTROYED();
-    return CreateAnonymousWithParentAndDisplay(this, display);
+    return CreateAnonymousWithParentAndDisplay(this, EDisplay::kBlock);
   }
 
   LayoutBox* CreateAnonymousBoxWithSameTypeAs(
       const LayoutObject* parent) const override;
 
- public:
   RecalcScrollableOverflowResult RecalcScrollableOverflow() override;
 
   void RecalcVisualOverflow() override;
@@ -200,11 +191,6 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
  protected:
   void WillBeDestroyed() override;
 
-  void UpdateLayout() override {
-    NOT_DESTROYED();
-    NOTREACHED_NORETURN();
-  }
-
  public:
   void Paint(const PaintInfo&) const override;
 
@@ -219,14 +205,9 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
                    HitTestPhase) override;
 
  protected:
-  bool HitTestChildren(HitTestResult&,
-                       const HitTestLocation&,
-                       const PhysicalOffset& accumulated_offset,
-                       HitTestPhase) override;
-
-  void StyleWillChange(StyleDifference,
-                       const ComputedStyle& new_style) override;
-  void StyleDidChange(StyleDifference, const ComputedStyle* old_style) override;
+  void StyleDidChange(StyleDifference,
+                      const ComputedStyle* old_style,
+                      const StyleChangeContext&) override;
   bool RespectsCSSOverflow() const override;
 
  protected:
@@ -263,9 +244,8 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
   void ImageChanged(WrappedImagePtr, CanDeferInvalidation) override;
 
  private:
-  PhysicalRect LocalCaretRect(
-      int caret_offset,
-      LayoutUnit* extra_width_to_end_of_line = nullptr) const final;
+  PhysicalRect LocalCaretRect(int caret_offset,
+                              CaretShape caret_shape) const final;
   bool IsInlineBoxWrapperActuallyChild() const;
 
   // End helper functions and structs used by layoutBlockChildren.
@@ -278,17 +258,9 @@ class CORE_EXPORT LayoutBlock : public LayoutBox {
 
   LayoutObjectChildList children_;
 
-  unsigned has_svg_text_descendants_ : 1;
-
-  unsigned may_be_non_contiguous_ifc_ : 1 = false;
-
   // FIXME: This is temporary as we move code that accesses block flow
   // member variables out of LayoutBlock and into LayoutBlockFlow.
   friend class LayoutBlockFlow;
-
-  // This is necessary for now for interoperability between the old and new
-  // layout code. Primarily for calling layoutPositionedObjects at the moment.
-  friend class BlockNode;
 };
 
 template <>

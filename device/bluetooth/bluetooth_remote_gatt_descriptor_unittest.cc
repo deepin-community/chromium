@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
+
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -39,9 +42,22 @@ class BluetoothRemoteGattDescriptorTest :
 #else
     BluetoothTest::SetUp();
 #endif
-    if (!PlatformSupportsLowEnergy()) {
-      GTEST_SKIP() << "Bluetooth Low Energy unavailable.";
-    }
+  }
+
+  void TearDown() override {
+    // Reset raw pointers before the teardown process destroys the objects they
+    // refer to.
+    device_ = nullptr;
+    service_ = nullptr;
+    characteristic_ = nullptr;
+    descriptor1_ = nullptr;
+    descriptor2_ = nullptr;
+
+#if BUILDFLAG(IS_WIN)
+    BluetoothTestWinrt::TearDown();
+#else
+    BluetoothTest::TearDown();
+#endif
   }
 
   // Creates adapter_, device_, service_, characteristic_,
@@ -137,7 +153,7 @@ TEST_F(BluetoothRemoteGattDescriptorTest, MAYBE_GetIdentifier) {
   BluetoothRemoteGattCharacteristic* char5 = service3->GetCharacteristics()[0];
   BluetoothRemoteGattCharacteristic* char6 = service3->GetCharacteristics()[1];
   // 6 descriptors (same UUID), 1 on each characteristic
-  // TODO(576900) Test multiple descriptors with same UUID on one
+  // TODO(crbug.com/40452039) Test multiple descriptors with same UUID on one
   // characteristic.
   SimulateGattDescriptor(char1, kTestUUIDCharacteristicUserDescription);
   SimulateGattDescriptor(char2, kTestUUIDCharacteristicUserDescription);
@@ -299,7 +315,8 @@ TEST_F(BluetoothRemoteGattDescriptorTest,
       GetReadValueCallback(Call::NOT_EXPECTED, Result::FAILURE));
 
   RememberDescriptorForSubsequentAction(descriptor1_);
-  DeleteDevice(device_);  // TODO(576906) delete only the descriptor.
+  DeleteDevice(
+      device_);  // TODO(crbug.com/40452041) delete only the descriptor.
 
   std::vector<uint8_t> empty_vector;
   SimulateGattDescriptorRead(/* use remembered descriptor */ nullptr,
@@ -328,7 +345,8 @@ TEST_F(BluetoothRemoteGattDescriptorTest,
                                       GetGattErrorCallback(Call::NOT_EXPECTED));
 
   RememberDescriptorForSubsequentAction(descriptor1_);
-  DeleteDevice(device_);  // TODO(576906) delete only the descriptor.
+  DeleteDevice(
+      device_);  // TODO(crbug.com/40452041) delete only the descriptor.
 
   SimulateGattDescriptorWrite(/* use remembered descriptor */ nullptr);
   base::RunLoop().RunUntilIdle();
@@ -352,8 +370,10 @@ TEST_F(BluetoothRemoteGattDescriptorTest, MAYBE_ReadRemoteDescriptor) {
       GetReadValueCallback(Call::EXPECTED, Result::SUCCESS));
   EXPECT_EQ(1, gatt_read_descriptor_attempts_);
 
-  uint8_t values[] = {0, 1, 2, 3, 4, 0xf, 0xf0, 0xff};
-  std::vector<uint8_t> test_vector(values, values + std::size(values));
+  auto values = std::to_array<uint8_t>({0, 1, 2, 3, 4, 0xf, 0xf0, 0xff});
+  std::vector<uint8_t> test_vector(
+      values.data(),
+      base::span<uint8_t>(values).subspan(std::size(values)).data());
   SimulateGattDescriptorRead(descriptor1_, test_vector);
   base::RunLoop().RunUntilIdle();
 
@@ -379,8 +399,10 @@ TEST_F(BluetoothRemoteGattDescriptorTest, MAYBE_WriteRemoteDescriptor) {
 #endif
   ASSERT_NO_FATAL_FAILURE(FakeDescriptorBoilerplate());
 
-  uint8_t values[] = {0, 1, 2, 3, 4, 0xf, 0xf0, 0xff};
-  std::vector<uint8_t> test_vector(values, values + std::size(values));
+  auto values = std::to_array<uint8_t>({0, 1, 2, 3, 4, 0xf, 0xf0, 0xff});
+  std::vector<uint8_t> test_vector(
+      values.data(),
+      base::span<uint8_t>(values).subspan(std::size(values)).data());
   descriptor1_->WriteRemoteDescriptor(test_vector, GetCallback(Call::EXPECTED),
                                       GetGattErrorCallback(Call::NOT_EXPECTED));
   EXPECT_EQ(1, gatt_write_descriptor_attempts_);
@@ -408,8 +430,10 @@ TEST_F(BluetoothRemoteGattDescriptorTest, MAYBE_ReadRemoteDescriptor_Twice) {
       GetReadValueCallback(Call::EXPECTED, Result::SUCCESS));
   EXPECT_EQ(1, gatt_read_descriptor_attempts_);
 
-  uint8_t values[] = {0, 1, 2, 3, 4, 0xf, 0xf0, 0xff};
-  std::vector<uint8_t> test_vector(values, values + std::size(values));
+  auto values = std::to_array<uint8_t>({0, 1, 2, 3, 4, 0xf, 0xf0, 0xff});
+  std::vector<uint8_t> test_vector(
+      values.data(),
+      base::span<uint8_t>(values).subspan(std::size(values)).data());
   SimulateGattDescriptorRead(descriptor1_, test_vector);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(1, callback_count_);
@@ -444,8 +468,10 @@ TEST_F(BluetoothRemoteGattDescriptorTest, MAYBE_WriteRemoteDescriptor_Twice) {
 #endif
   ASSERT_NO_FATAL_FAILURE(FakeDescriptorBoilerplate());
 
-  uint8_t values[] = {0, 1, 2, 3, 4, 0xf, 0xf0, 0xff};
-  std::vector<uint8_t> test_vector(values, values + std::size(values));
+  auto values = std::to_array<uint8_t>({0, 1, 2, 3, 4, 0xf, 0xf0, 0xff});
+  std::vector<uint8_t> test_vector(
+      values.data(),
+      base::span<uint8_t>(values).subspan(std::size(values)).data());
   descriptor1_->WriteRemoteDescriptor(test_vector, GetCallback(Call::EXPECTED),
                                       GetGattErrorCallback(Call::NOT_EXPECTED));
   EXPECT_EQ(1, gatt_write_descriptor_attempts_);
@@ -831,18 +857,18 @@ TEST_F(BluetoothRemoteGattDescriptorTest,
 // Tests that read requests after a device disconnects but before the
 // disconnect task runs do not result in a crash.
 // macOS: Does not apply. All events arrive on the UI Thread.
-// TODO(crbug.com/694102): Enable this test on Windows.
+// TODO(crbug.com/41303035): Enable this test on Windows.
 TEST_F(BluetoothRemoteGattDescriptorTest, MAYBE_ReadDuringDisconnect) {
   ASSERT_NO_FATAL_FAILURE(FakeDescriptorBoilerplate());
 
   SimulateGattDisconnection(device_);
   // Don't run the disconnect task.
-  // TODO(crbug.com/621901): Expect an error.
+  // TODO(crbug.com/40473783): Expect an error.
   descriptor1_->ReadRemoteDescriptor(
       GetReadValueCallback(Call::NOT_EXPECTED, Result::FAILURE));
 
   base::RunLoop().RunUntilIdle();
-  // TODO(crbug.com/621901): Test error callback was called.
+  // TODO(crbug.com/40473783): Test error callback was called.
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -853,7 +879,7 @@ TEST_F(BluetoothRemoteGattDescriptorTest, MAYBE_ReadDuringDisconnect) {
 // Tests that write requests after a device disconnects but before the
 // disconnect task runs do not result in a crash.
 // macOS: Does not apply. All events arrive on the UI Thread.
-// TODO(crbug.com/694102): Enable this test on Windows.
+// TODO(crbug.com/41303035): Enable this test on Windows.
 TEST_F(BluetoothRemoteGattDescriptorTest, MAYBE_WriteDuringDisconnect) {
   ASSERT_NO_FATAL_FAILURE(FakeDescriptorBoilerplate());
 
@@ -861,11 +887,11 @@ TEST_F(BluetoothRemoteGattDescriptorTest, MAYBE_WriteDuringDisconnect) {
   // Don't run the disconnect task.
   descriptor1_->WriteRemoteDescriptor(
       std::vector<uint8_t>(), GetCallback(Call::NOT_EXPECTED),
-      // TODO(crbug.com/621901): Expect an error.
+      // TODO(crbug.com/40473783): Expect an error.
       GetGattErrorCallback(Call::NOT_EXPECTED));
 
   base::RunLoop().RunUntilIdle();
-  // TODO(crbug.com/621901): Test that an error was returned.
+  // TODO(crbug.com/40473783): Test that an error was returned.
 }
 
 #if BUILDFLAG(IS_APPLE)
@@ -901,7 +927,8 @@ TEST_F(BluetoothRemoteGattDescriptorTest, ReadRemoteDescriptor_NSNumber) {
   base::RunLoop().RunUntilIdle();
 
   uint8_t values[] = {0x34, 0x12};
-  std::vector<uint8_t> test_vector(values, values + std::size(values));
+  std::vector<uint8_t> test_vector(values,
+                                   UNSAFE_TODO(values + std::size(values)));
   EXPECT_EQ(test_vector, last_read_value_);
   EXPECT_EQ(test_vector, descriptor1_->GetValue());
 }

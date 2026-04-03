@@ -8,7 +8,11 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/notimplemented.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
@@ -18,10 +22,18 @@
 #include "chrome/browser/ui/webui/app_management/app_management_page_handler_base.h"
 #include "chrome/browser/ui/webui/app_management/app_management_shelf_delegate_chromeos.h"
 #include "chrome/browser/ui/webui/ash/settings/os_settings_features_util.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "components/services/app_service/public/cpp/intent_filter.h"
 #include "components/services/app_service/public/cpp/intent_filter_util.h"
 #include "components/services/app_service/public/cpp/preferred_apps_list_handle.h"
+#include "extensions/browser/extension_registry.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/extension.h"
+#include "extensions/common/permissions/permission_message.h"
+#include "extensions/common/permissions/permissions_data.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -92,6 +104,17 @@ app_management::mojom::LocalePtr CreateLocaleForTag(
           : native_display_name);
 }
 
+app_management::mojom::ExtensionAppPermissionMessagePtr
+CreateExtensionAppPermissionMessage(
+    const extensions::PermissionMessage& message) {
+  std::vector<std::string> submessages;
+  for (const auto& submessage : message.submessages()) {
+    submessages.push_back(base::UTF16ToUTF8(submessage));
+  }
+  return app_management::mojom::ExtensionAppPermissionMessage::New(
+      base::UTF16ToUTF8(message.message()), std::move(submessages));
+}
+
 }  // namespace
 
 AppManagementPageHandlerChromeOs::AppManagementPageHandlerChromeOs(
@@ -101,9 +124,9 @@ AppManagementPageHandlerChromeOs::AppManagementPageHandlerChromeOs(
     AppManagementPageHandlerBase::Delegate& delegate)
     : AppManagementPageHandlerBase(std::move(receiver),
                                    std::move(page),
-                                   profile,
-                                   delegate),
-      shelf_delegate_(this, profile) {
+                                   profile),
+      shelf_delegate_(this, profile),
+      delegate_(delegate) {
   apps::AppServiceProxy* proxy =
       apps::AppServiceProxyFactory::GetForProfile(profile);
   preferred_apps_list_handle_observer_.Observe(&proxy->PreferredAppsList());
@@ -117,6 +140,44 @@ void AppManagementPageHandlerChromeOs::OnPinnedChanged(
   NotifyAppChanged(app_id);
 }
 
+void AppManagementPageHandlerChromeOs::GetSubAppToParentMap(
+    GetSubAppToParentMapCallback callback) {
+  auto* provider = web_app::WebAppProvider::GetForWebApps(profile());
+  if (provider) {
+    provider->scheduler().ScheduleCallbackWithResult(
+        "AppManagementPageHandlerBase::GetSubAppToParentMap",
+        web_app::AllAppsLockDescription(),
+        base::BindOnce(
+            [](web_app::AllAppsLock& lock, base::DictValue& /*debug_value*/) {
+              return lock.registrar().GetSubAppToParentMap();
+            }),
+        /*on_complete=*/std::move(callback),
+        /*arg_for_shutdown=*/base::flat_map<std::string, std::string>());
+  } else {
+    LOG(ERROR) << "Could not find WebAppProvider.";
+    std::move(callback).Run(base::flat_map<std::string, std::string>());
+  }
+}
+
+void AppManagementPageHandlerChromeOs::GetExtensionAppPermissionMessages(
+    const std::string& app_id,
+    GetExtensionAppPermissionMessagesCallback callback) {
+  extensions::ExtensionRegistry* registry =
+      extensions::ExtensionRegistry::Get(profile());
+  const extensions::Extension* extension = registry->GetExtensionById(
+      app_id, extensions::ExtensionRegistry::ENABLED |
+                  extensions::ExtensionRegistry::DISABLED |
+                  extensions::ExtensionRegistry::BLOCKLISTED);
+  std::vector<app_management::mojom::ExtensionAppPermissionMessagePtr> messages;
+  if (extension) {
+    for (const auto& message :
+         extension->permissions_data()->GetPermissionMessages()) {
+      messages.push_back(CreateExtensionAppPermissionMessage(message));
+    }
+  }
+  std::move(callback).Run(std::move(messages));
+}
+
 void AppManagementPageHandlerChromeOs::SetPinned(const std::string& app_id,
                                                  bool pinned) {
   shelf_delegate_.SetPinned(app_id, pinned);
@@ -127,6 +188,24 @@ void AppManagementPageHandlerChromeOs::SetResizeLocked(
     bool locked) {
   apps::AppServiceProxyFactory::GetForProfile(profile())->SetResizeLocked(
       app_id, locked);
+}
+
+void AppManagementPageHandlerChromeOs::Uninstall(const std::string& app_id) {
+  auto* const proxy = apps::AppServiceProxyFactory::GetForProfile(profile());
+
+  std::optional<bool> allow_uninstall;
+  proxy->AppRegistryCache().ForOneApp(
+      app_id, [&](const apps::AppUpdate& update) {
+        allow_uninstall = update.AllowUninstall();
+      });
+
+  if (!allow_uninstall.value_or(false)) {
+    mojo::ReportBadMessage("Invalid attempt to uninstall app.");
+    return;
+  }
+
+  proxy->Uninstall(app_id, apps::UninstallSource::kAppManagement,
+                   delegate_->GetUninstallAnchorWindow());
 }
 
 void AppManagementPageHandlerChromeOs::SetPreferredApp(
@@ -244,6 +323,8 @@ app_management::mojom::AppPtr AppManagementPageHandlerChromeOs::CreateApp(
       app_id, [this, &app](const apps::AppUpdate& update) {
         app->resize_locked = update.ResizeLocked().value_or(false);
         app->hide_resize_locked = !update.ResizeLocked().has_value();
+
+        app->allow_uninstall = update.AllowUninstall().value_or(false);
 
         if (ash::settings::IsPerAppLanguageEnabled(profile())) {
           const std::string& system_locale =

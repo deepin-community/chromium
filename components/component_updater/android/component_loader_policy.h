@@ -43,10 +43,19 @@ enum class ComponentLoadResult {
   kMaxValue = kInvalidVersion,
 };
 
+inline constexpr char kManifestFileName[] = "manifest.json";
+inline constexpr char kMetadataFileName[] = "aw_extra_component_metadata.json";
+
+inline constexpr char kMetadataFileCohortIdKey[] = "cohortId";
+
+inline constexpr char kComponentsCrashKeyName[] = "crx-components";
+inline constexpr char kCohortHashCrashKeyName[] =
+    "crx-components-cohort-hashes";
+
 // Components should use `AndroidComponentLoaderPolicy` by defining a class that
 // implements the members of `ComponentLoaderPolicy`, and then registering a
 // `AndroidComponentLoaderPolicy` that has been constructed with an instance of
-// that class in an instance of embedded WebView or WebLayer with the Java
+// that class in an instance of embedded WebView with the Java
 // AndroidComponentLoaderPolicy. The `AndroidComponentLoaderPolicy` will fetch
 // the components files from the Android `ComponentsProviderService` and invoke
 // the callbacks defined in this class.
@@ -77,7 +86,7 @@ class ComponentLoaderPolicy {
   virtual void ComponentLoaded(
       const base::Version& version,
       base::flat_map<std::string, base::ScopedFD>& fd_map,
-      base::Value::Dict manifest) = 0;
+      base::DictValue manifest) = 0;
 
   // Called if connection to the service fails, components files are not found
   // or if the manifest file is missing or invalid.
@@ -127,7 +136,7 @@ class AndroidComponentLoaderPolicy {
   void ComponentLoaded(JNIEnv* env,
                        const base::android::JavaRef<jobjectArray>& jfile_names,
                        const base::android::JavaRef<jintArray>& jfds);
-  void ComponentLoadFailed(JNIEnv* env, jint error_code);
+  void ComponentLoadFailed(JNIEnv* env, int32_t error_code);
   base::android::ScopedJavaLocalRef<jstring> GetComponentId(JNIEnv* env);
 
  private:
@@ -137,8 +146,10 @@ class AndroidComponentLoaderPolicy {
 
   std::string GetComponentId() const;
 
-  void NotifyNewVersion(base::flat_map<std::string, base::ScopedFD>& fd_map,
-                        std::optional<base::Value::Dict> manifest);
+  void NotifyNewVersion(
+      base::flat_map<std::string, base::ScopedFD>& fd_map,
+      std::pair<std::optional<base::DictValue>, std::optional<base::DictValue>>
+          component_files);
 
   void ComponentLoadFailedInternal(ComponentLoadResult error);
 

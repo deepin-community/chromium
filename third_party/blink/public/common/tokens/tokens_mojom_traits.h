@@ -242,13 +242,6 @@ struct StructTraits<blink::mojom::AttributionSrcTokenDataView,
           blink::AttributionSrcToken> {};
 
 template <>
-struct StructTraits<blink::mojom::ClipboardSequenceNumberTokenDataView,
-                    blink::ClipboardSequenceNumberToken>
-    : public blink::TokenMojomTraitsHelper<
-          blink::mojom::ClipboardSequenceNumberTokenDataView,
-          blink::ClipboardSequenceNumberToken> {};
-
-template <>
 struct BLINK_COMMON_EXPORT
     UnionTraits<blink::mojom::ExecutionContextTokenDataView,
                 blink::ExecutionContextToken> {
@@ -330,9 +323,24 @@ struct BLINK_COMMON_EXPORT
 };
 
 template <>
+struct StructTraits<
+    blink::mojom::SameDocNavigationScreenshotDestinationTokenDataView,
+    blink::SameDocNavigationScreenshotDestinationToken>
+    : public blink::TokenMojomTraitsHelper<
+          blink::mojom::SameDocNavigationScreenshotDestinationTokenDataView,
+          blink::SameDocNavigationScreenshotDestinationToken> {};
+
+template <>
 struct StructTraits<blink::mojom::V8ContextTokenDataView, blink::V8ContextToken>
     : public blink::TokenMojomTraitsHelper<blink::mojom::V8ContextTokenDataView,
                                            blink::V8ContextToken> {};
+
+template <>
+struct StructTraits<blink::mojom::ViewTransitionTokenDataView,
+                    blink::ViewTransitionToken>
+    : public blink::TokenMojomTraitsHelper<
+          blink::mojom::ViewTransitionTokenDataView,
+          blink::ViewTransitionToken> {};
 
 template <>
 struct BLINK_COMMON_EXPORT
@@ -378,6 +386,27 @@ struct BLINK_COMMON_EXPORT
     return token.GetAs<blink::ServiceWorkerToken>();
   }
 };
+
+template <>
+struct StructTraits<blink::mojom::WebNNContextTokenDataView,
+                    blink::WebNNContextToken>
+    : public blink::TokenMojomTraitsHelper<
+          blink::mojom::WebNNContextTokenDataView,
+          blink::WebNNContextToken> {};
+
+template <>
+struct StructTraits<blink::mojom::WebNNPendingConstantTokenDataView,
+                    blink::WebNNPendingConstantToken>
+    : public blink::TokenMojomTraitsHelper<
+          blink::mojom::WebNNPendingConstantTokenDataView,
+          blink::WebNNPendingConstantToken> {};
+
+template <>
+struct StructTraits<blink::mojom::WebNNTensorTokenDataView,
+                    blink::WebNNTensorToken>
+    : public blink::TokenMojomTraitsHelper<
+          blink::mojom::WebNNTensorTokenDataView,
+          blink::WebNNTensorToken> {};
 
 }  // namespace mojo
 

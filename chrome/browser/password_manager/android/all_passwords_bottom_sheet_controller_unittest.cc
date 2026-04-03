@@ -4,13 +4,14 @@
 
 #include "chrome/browser/password_manager/android/all_passwords_bottom_sheet_controller.h"
 
-#include "base/android/build_info.h"
+#include "base/android/device_info.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/types/pass_key.h"
 #include "chrome/browser/password_manager/password_manager_test_util.h"
+#include "chrome/browser/plus_addresses/plus_address_service_factory.h"
 #include "chrome/browser/ui/android/passwords/all_passwords_bottom_sheet_view.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-forward.h"
@@ -23,7 +24,12 @@
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/browser/stub_password_manager_driver.h"
 #include "components/password_manager/core/common/password_manager_features.h"
+#include "components/plus_addresses/core/browser/fake_plus_address_service.h"
+#include "components/plus_addresses/core/browser/plus_address_service.h"
+#include "components/plus_addresses/core/browser/plus_address_test_utils.h"
+#include "components/plus_addresses/core/common/features.h"
 #include "components/safe_browsing/core/browser/password_protection/stub_password_reuse_detection_manager_client.h"
+#include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -42,6 +48,7 @@ using device_reauth::MockDeviceAuthenticator;
 using password_manager::PasswordForm;
 using password_manager::TestPasswordStore;
 using password_manager::UiCredential;
+using plus_addresses::FakePlusAddressService;
 
 using CallbackFunctionMock = testing::MockFunction<void()>;
 
@@ -84,6 +91,10 @@ class MockPasswordManagerClient
               GetDeviceAuthenticator,
               (),
               (override));
+  MOCK_METHOD(bool,
+              IsReauthBeforeFillingRequired,
+              (device_reauth::DeviceAuthenticator*),
+              (override));
 };
 
 class MockPasswordReuseDetectionManagerClient
@@ -118,15 +129,24 @@ class AllPasswordsBottomSheetControllerTest
     : public ChromeRenderViewHostTestHarness {
  protected:
   AllPasswordsBottomSheetControllerTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        password_manager::features::kBiometricTouchToFill);
+    // Make sure that the `kPlusAddressesEnabled` feature is known to be
+    // enabled, such that `PlusAddressServiceFactory` doesn't bail early with a
+    // null return.
+    scoped_feature_list_.InitWithFeatures(
+        {password_manager::features::kBiometricTouchToFill,
+         plus_addresses::features::kPlusAddressesEnabled},
+        {});
   }
 
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
+    PlusAddressServiceFactory::GetInstance()->SetTestingFactory(
+        browser_context(),
+        base::BindRepeating(&AllPasswordsBottomSheetControllerTest::
+                                PlusAddressServiceTestFactory,
+                            base::Unretained(this)));
     profile_store_ = CreateAndUseTestPasswordStore(profile());
-    profile_store_->Init(/*prefs=*/nullptr,
-                         /*affiliated_match_helper=*/nullptr);
+    profile_store_->Init(/*affiliated_match_helper=*/nullptr);
     createAllPasswordsController(FocusedFieldType::kFillablePasswordField);
   }
 
@@ -142,8 +162,12 @@ class AllPasswordsBottomSheetControllerTest
             driver_.AsWeakPtr(), profile_store_.get(), account_store_.get(),
             dissmissal_callback_.Get(), focused_field_type,
             mock_pwd_manager_client_.get(),
-            mock_pwd_reuse_detection_manager_client_.get(),
-            show_migration_warning_callback_.Get());
+            mock_pwd_reuse_detection_manager_client_.get());
+  }
+
+  std::unique_ptr<KeyedService> PlusAddressServiceTestFactory(
+      content::BrowserContext* context) {
+    return std::make_unique<FakePlusAddressService>();
   }
 
   void TearDown() override {
@@ -178,12 +202,6 @@ class AllPasswordsBottomSheetControllerTest
     return *mock_pwd_reuse_detection_manager_client_.get();
   }
 
-  base::MockCallback<
-      AllPasswordsBottomSheetController::ShowMigrationWarningCallback>&
-  show_migration_warning_callback() {
-    return show_migration_warning_callback_;
-  }
-
  protected:
   MockPasswordManagerDriver driver_;
   scoped_refptr<TestPasswordStore> profile_store_;
@@ -197,9 +215,6 @@ class AllPasswordsBottomSheetControllerTest
   std::unique_ptr<MockPasswordReuseDetectionManagerClient>
       mock_pwd_reuse_detection_manager_client_ =
           std::make_unique<MockPasswordReuseDetectionManagerClient>();
-  base::MockCallback<
-      AllPasswordsBottomSheetController::ShowMigrationWarningCallback>
-      show_migration_warning_callback_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
@@ -271,14 +286,13 @@ TEST_F(AllPasswordsBottomSheetControllerTest,
 
 TEST_F(AllPasswordsBottomSheetControllerTest, FillsPasswordIfAuthNotAvailable) {
   // Auth is required to fill passwords in Android automotive.
-  if (base::android::BuildInfo::GetInstance()->is_automotive()) {
+  if (base::android::device_info::is_automotive()) {
     GTEST_SKIP();
   }
 
   auto authenticator = std::make_unique<MockDeviceAuthenticator>();
 
-  EXPECT_CALL(*authenticator, CanAuthenticateWithBiometrics)
-      .WillOnce(Return(false));
+  EXPECT_CALL(client(), IsReauthBeforeFillingRequired).WillOnce(Return(false));
   EXPECT_CALL(client(), GetDeviceAuthenticator)
       .WillOnce(Return(testing::ByMove(std::move(authenticator))));
   EXPECT_CALL(driver(), FillIntoFocusedField(true, std::u16string(kPassword)));
@@ -291,8 +305,7 @@ TEST_F(AllPasswordsBottomSheetControllerTest, FillsPasswordIfAuthNotAvailable) {
 TEST_F(AllPasswordsBottomSheetControllerTest, FillsPasswordIfAuthSuccessful) {
   auto authenticator = std::make_unique<MockDeviceAuthenticator>();
 
-  ON_CALL(*authenticator, CanAuthenticateWithBiometrics)
-      .WillByDefault(Return(true));
+  ON_CALL(client(), IsReauthBeforeFillingRequired).WillByDefault(Return(true));
   EXPECT_CALL(*authenticator, AuthenticateWithMessage)
       .WillOnce(RunOnceCallback<1>(true));
   EXPECT_CALL(client(), GetDeviceAuthenticator)
@@ -308,8 +321,7 @@ TEST_F(AllPasswordsBottomSheetControllerTest, FillsPasswordIfAuthSuccessful) {
 TEST_F(AllPasswordsBottomSheetControllerTest, DoesntFillPasswordIfAuthFailed) {
   auto authenticator = std::make_unique<MockDeviceAuthenticator>();
 
-  ON_CALL(*authenticator, CanAuthenticateWithBiometrics)
-      .WillByDefault(Return(true));
+  ON_CALL(client(), IsReauthBeforeFillingRequired).WillByDefault(Return(true));
   EXPECT_CALL(*authenticator, AuthenticateWithMessage)
       .WillOnce(RunOnceCallback<1>(false));
   EXPECT_CALL(client(), GetDeviceAuthenticator)
@@ -327,8 +339,7 @@ TEST_F(AllPasswordsBottomSheetControllerTest, CancelsAuthIfDestroyed) {
   auto authenticator = std::make_unique<MockDeviceAuthenticator>();
   auto* authenticator_ptr = authenticator.get();
 
-  ON_CALL(*authenticator, CanAuthenticateWithBiometrics)
-      .WillByDefault(Return(true));
+  ON_CALL(client(), IsReauthBeforeFillingRequired).WillByDefault(Return(true));
   EXPECT_CALL(*authenticator_ptr, AuthenticateWithMessage);
   EXPECT_CALL(client(), GetDeviceAuthenticator)
       .WillOnce(Return(testing::ByMove(std::move(authenticator))));
@@ -349,7 +360,7 @@ TEST_F(AllPasswordsBottomSheetControllerTest, OnDismiss) {
 
 TEST_F(AllPasswordsBottomSheetControllerTest,
        OnCredentialSelectedTriggersPhishGuard) {
-  if (base::android::BuildInfo::GetInstance()->is_automotive()) {
+  if (base::android::device_info::is_automotive()) {
     auto authenticator = std::make_unique<MockDeviceAuthenticator>();
     ON_CALL(*authenticator, AuthenticateWithMessage)
         .WillByDefault(
@@ -393,61 +404,27 @@ TEST_F(AllPasswordsBottomSheetControllerTest,
       kUsername1, kPassword, RequestsToFillPassword(true));
 }
 
-TEST_F(AllPasswordsBottomSheetControllerTest,
-       ShowMigrationWarningOnUsernameFillIfEnabled) {
-  base::test::ScopedFeatureList scoped_feature_list(
-      password_manager::features::
-          kUnifiedPasswordManagerLocalPasswordsMigrationWarning);
-  createAllPasswordsController(FocusedFieldType::kFillableUsernameField);
-  EXPECT_CALL(show_migration_warning_callback(), Run);
-  all_passwords_controller()->OnCredentialSelected(
-      kUsername1, kPassword, RequestsToFillPassword(false));
-}
+TEST_F(AllPasswordsBottomSheetControllerTest, IsPlusAddress) {
+  scoped_feature_list_.Reset();
+  scoped_feature_list_.InitWithFeatures(
+      {password_manager::features::kBiometricTouchToFill,
+       plus_addresses::features::kPlusAddressesEnabled},
+      {});
 
-TEST_F(AllPasswordsBottomSheetControllerTest,
-       ShowMigrationWarningOnPasswordFillIfEnabled) {
-  // TODO(crbug.com/1484686): Migration warning isn't reached if authenticator
-  // is present.
-  if (base::android::BuildInfo::GetInstance()->is_automotive()) {
-    GTEST_SKIP();
-  }
-
-  base::test::ScopedFeatureList scoped_feature_list(
-      password_manager::features::
-          kUnifiedPasswordManagerLocalPasswordsMigrationWarning);
-  createAllPasswordsController(FocusedFieldType::kFillablePasswordField);
-  EXPECT_CALL(show_migration_warning_callback(),
-              Run(_, _,
-                  password_manager::metrics_util::
-                      PasswordMigrationWarningTriggers::kAllPasswords));
-  all_passwords_controller()->OnCredentialSelected(
-      kUsername1, kPassword, RequestsToFillPassword(true));
-}
-
-TEST_F(AllPasswordsBottomSheetControllerTest,
-       DoesntTriggersMigrationWarningIfDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(
-      password_manager::features::
-          kUnifiedPasswordManagerLocalPasswordsMigrationWarning);
-  createAllPasswordsController(FocusedFieldType::kFillableUsernameField);
-  EXPECT_CALL(show_migration_warning_callback(), Run).Times(0);
-  all_passwords_controller()->OnCredentialSelected(
-      kUsername1, kPassword, RequestsToFillPassword(false));
+  // Not a plus address according to the `FakePlusAddressService`.
+  EXPECT_FALSE(all_passwords_controller()->IsPlusAddress("exampe@gmail.com"));
+  EXPECT_TRUE(all_passwords_controller()->IsPlusAddress(
+      plus_addresses::test::kFakePlusAddress));
 }
 
 class AllPasswordsBottomSheetControllerAccountStoreTest
     : public AllPasswordsBottomSheetControllerTest {
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
-    profile()->GetPrefs()->SetInteger(
-        password_manager::prefs::kPasswordsUseUPMLocalAndSeparateStores, 2);
     profile_store_ = CreateAndUseTestPasswordStore(profile());
-    profile_store_->Init(/*prefs=*/nullptr,
-                         /*affiliated_match_helper=*/nullptr);
+    profile_store_->Init(/*affiliated_match_helper=*/nullptr);
     account_store_ = CreateAndUseTestAccountPasswordStore(profile());
-    account_store_->Init(/*prefs=*/nullptr,
-                         /*affiliated_match_helper=*/nullptr);
+    account_store_->Init(/*affiliated_match_helper=*/nullptr);
     createAllPasswordsController(FocusedFieldType::kFillablePasswordField);
   }
 };

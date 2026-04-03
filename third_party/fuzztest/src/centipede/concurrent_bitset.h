@@ -22,7 +22,7 @@
 //
 // This library must not depend on anything other than libc so that fuzz targets
 // using it doesn't gain redundant coverage. For the same reason this library
-// uses raw __builtin_trap instead of CHECKs.
+// uses raw __builtin_trap instead of FUZZTEST_CHECKs.
 // We make an exception for <algorithm> for std::sort/std::unique,
 // since <algorithm> is very lightweight.
 // This library is also header-only, with all functions defined as inline.
@@ -43,11 +43,15 @@
 #include "absl/base/const_init.h"
 #include "./centipede/concurrent_byteset.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
 // A fixed-size bitset with a lossy concurrent set() function.
 // kSize (in bits) must be a multiple of 2**16.
-// Should only be constructed with static storage duration.
+//
+// IMPORTANT!!! Objects of this class should only be constructed with static
+// storage duration. This is because the class has intentionally uninitialized
+// direct and transitive data members that rely on static initialization in the
+// compiled process image.
 template <size_t kSizeInBits>
 class ConcurrentBitSet {
  public:
@@ -127,18 +131,20 @@ class ConcurrentBitSet {
   static constexpr size_t kBytesInWord = sizeof(word_t);
   static constexpr size_t kBitsInWord = CHAR_BIT * kBytesInWord;
   static constexpr size_t kSizeInWords = kSizeInBits / kBitsInWord;
-
   // All words are logically split into lines.
-  // When Set() is called, we set the corresponding element of lines_ to 1, so
-  // that we now know that at least 1 bit in that line is set. Then, in
-  // ForEachNonZeroBit, we iterate only those lines that have non-zero bits.
+  // When `set()` is called, we set the corresponding element of `lines_` to 1,
+  // so that we now know that at least 1 bit in that line is set. Then, in
+  // `ForEachNonZeroBit()`, we iterate only those lines that have non-zero bits.
   static constexpr size_t kBytesInLine = 64 * 8;
   static constexpr size_t kWordsInLine = kBytesInLine / kBytesInWord;
   static constexpr size_t kSizeInLines = kSizeInWords / kWordsInLine;
   ConcurrentByteSet<kSizeInLines> lines_;
-  word_t words_[kSizeInWords];  // No initializer.
+  // NOTE: No initializer for performance (`kSizeInWords` can be quite large).
+  // Relies on static initialization in the process image (see the class
+  // comment).
+  word_t words_[kSizeInWords];
 };
 
-}  // namespace centipede
+}  // namespace fuzztest::internal
 
 #endif  // THIRD_PARTY_CENTIPEDE_CONCURRENT_BITSET_H_

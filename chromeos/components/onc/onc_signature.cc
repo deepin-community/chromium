@@ -4,9 +4,9 @@
 
 #include "chromeos/components/onc/onc_signature.h"
 
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "components/onc/onc_constants.h"
-
 using base::Value;
 
 namespace chromeos {
@@ -182,6 +182,8 @@ const OncFieldSignature third_party_vpn_fields[] = {
 
 const OncFieldSignature arc_vpn_fields[] = {
     {::onc::kRecommended, &kRecommendedSignature},
+    // Deprecated. Keeping the signature for ONC backward compatibility. See
+    // b/185202698 for details.
     {::onc::arc_vpn::kTunnelChrome, &kStringSignature},
     {nullptr}};
 
@@ -230,6 +232,7 @@ const OncFieldSignature ipconfig_fields[] = {
     {::onc::ipconfig::kType, &kStringSignature,
      []() { return base::Value(::onc::ipconfig::kIPv4); }},
     {::onc::ipconfig::kWebProxyAutoDiscoveryUrl, &kStringSignature},
+    {::onc::ipconfig::kMTU, &kIntegerSignature},
     {nullptr}};
 
 const OncFieldSignature proxy_location_fields[] = {
@@ -289,6 +292,7 @@ const OncFieldSignature cellular_provider_fields[] = {
     {nullptr}};
 
 const OncFieldSignature cellular_apn_fields[] = {
+    {::onc::kRecommended, &kRecommendedSignature},
     {::onc::cellular_apn::kAccessPointName, &kStringSignature},
     {::onc::cellular_apn::kName, &kStringSignature},
     {::onc::cellular_apn::kUsername, &kStringSignature},
@@ -363,6 +367,7 @@ const OncFieldSignature cellular_with_state_fields[] = {
 
 const OncFieldSignature network_configuration_fields[] = {
     {::onc::network_config::kCellular, &kCellularSignature},
+    {::onc::network_config::kCheckCaptivePortal, &kStringSignature},
     {::onc::network_config::kEthernet, &kEthernetSignature},
     {::onc::network_config::kGUID, &kStringSignature},
     {::onc::network_config::kIPAddressConfigType, &kStringSignature,
@@ -426,6 +431,8 @@ const OncFieldSignature global_network_configuration_fields[] = {
      &kStringListSignature},
     {::onc::global_network_config::kPSIMAdminAssignedAPNs,
      &kCellularApnListSignature},
+    {::onc::global_network_config::kDisconnectWiFiOnEthernet,
+     &kStringSignature},
     {nullptr}};
 
 const OncFieldSignature certificate_fields[] = {
@@ -524,6 +531,8 @@ const OncValueSignature kGlobalNetworkConfigurationSignature = {
     base::Value::Type::DICT, global_network_configuration_fields, nullptr};
 const OncValueSignature kCertificateListSignature = {
     base::Value::Type::LIST, nullptr, &kCertificateSignature};
+const OncValueSignature kAdminApnListSignature = {
+    base::Value::Type::LIST, nullptr, &kCellularApnSignature};
 const OncValueSignature kNetworkConfigurationListSignature = {
     base::Value::Type::LIST, nullptr, &kNetworkConfigurationSignature};
 const OncValueSignature kToplevelConfigurationSignature = {
@@ -564,7 +573,8 @@ const OncFieldSignature* GetFieldSignature(const OncValueSignature& signature,
   if (!signature.fields)
     return nullptr;
   for (const OncFieldSignature* field_signature = signature.fields;
-       field_signature->onc_field_name != nullptr; ++field_signature) {
+       field_signature->onc_field_name != nullptr;
+       UNSAFE_TODO(++field_signature)) {
     if (onc_field_name == field_signature->onc_field_name)
       return field_signature;
   }
@@ -576,8 +586,8 @@ const OncFieldSignature* GetFieldSignature(const OncValueSignature& signature,
 namespace {
 
 struct CredentialEntry {
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #global-scope
+  // This field is not a raw_ptr<> because it only ever points to statically-
+  // allocated data which is never freed, and thus can never dangle.
   RAW_PTR_EXCLUSION const OncValueSignature* value_signature;
   const char* field_name;
 };
@@ -603,7 +613,7 @@ const CredentialEntry credentials[] = {
 bool FieldIsCredential(const OncValueSignature& signature,
                        const std::string& onc_field_name) {
   for (const CredentialEntry* entry = credentials;
-       entry->value_signature != nullptr; ++entry) {
+       entry->value_signature != nullptr; UNSAFE_TODO(++entry)) {
     if (&signature == entry->value_signature &&
         onc_field_name == entry->field_name) {
       return true;

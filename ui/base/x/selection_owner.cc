@@ -6,8 +6,11 @@
 
 #include <algorithm>
 
+#include "base/compiler_specific.h"
+#include "base/containers/flat_set.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
+#include "base/time/time.h"
 #include "ui/base/x/selection_utils.h"
 #include "ui/base/x/x11_util.h"
 #include "ui/events/platform/x11/x11_event_source.h"
@@ -28,14 +31,14 @@ const char kMultiple[] = "MULTIPLE";
 const char kTimestamp[] = "TIMESTAMP";
 
 // The period of |incremental_transfer_abort_timer_|. Arbitrary but must be <=
-// than kIncrementalTransferTimeoutMs.
-const int KSelectionOwnerTimerPeriodMs = 1000;
+// than kIncrementalTransferTimeout.
+constexpr base::TimeDelta kSelectionOwnerTimerPeriod = base::Seconds(1);
 
 // The amount of time to wait for the selection requestor to process the data
 // sent by the selection owner before aborting an incremental data transfer.
-const int kIncrementalTransferTimeoutMs = 10000;
+constexpr base::TimeDelta kIncrementalTransferTimeout = base::Seconds(10);
 
-static_assert(KSelectionOwnerTimerPeriodMs <= kIncrementalTransferTimeoutMs,
+static_assert(kSelectionOwnerTimerPeriod <= kIncrementalTransferTimeout,
               "timer period must be <= transfer timeout");
 
 size_t GetMaxIncrementalTransferSize() {
@@ -97,8 +100,23 @@ SelectionOwner::~SelectionOwner() {
 }
 
 void SelectionOwner::RetrieveTargets(std::vector<x11::Atom>* targets) {
+  base::flat_set<x11::Atom> seen(targets->begin(), targets->end());
+  auto add_if_present = [&](const std::vector<x11::Atom>& preferred) {
+    for (x11::Atom p : preferred) {
+      if (format_map_.contains(p) && seen.insert(p).second) {
+        targets->push_back(p);
+      }
+    }
+  };
+
+  add_if_present(GetURIListAtomsFrom());
+  add_if_present(GetURLAtomsFrom());
+  add_if_present(GetTextAtomsFrom());
+
   for (const auto& format_target : format_map_) {
-    targets->push_back(format_target.first);
+    if (seen.insert(format_target.first).second) {
+      targets->push_back(format_target.first);
+    }
   }
 }
 
@@ -140,6 +158,7 @@ void SelectionOwner::OnSelectionRequest(
     if (GetAtomPairArrayProperty(connection_.get(), requestor,
                                  requested_property, &conversions)) {
       std::vector<x11::Atom> conversion_results;
+      conversion_results.reserve(conversions.size() * 2);
       for (const std::pair<x11::Atom, x11::Atom>& conversion : conversions) {
         bool conversion_successful =
             ProcessTarget(conversion.first, requestor, conversion.second);
@@ -236,8 +255,7 @@ bool SelectionOwner::ProcessTarget(x11::Atom target,
       // the selection result before sending the first chunk of data. The
       // selection requestor indicates this by deleting |property|.
       base::TimeTicks timeout =
-          base::TimeTicks::Now() +
-          base::Milliseconds(kIncrementalTransferTimeoutMs);
+          base::TimeTicks::Now() + kIncrementalTransferTimeout;
       incremental_transfers_.emplace_back(
           requestor, target, property,
           connection_->ScopedSelectEvent(requestor,
@@ -249,12 +267,13 @@ bool SelectionOwner::ProcessTarget(x11::Atom target,
       // the data transfer.
       if (!incremental_transfer_abort_timer_.IsRunning()) {
         incremental_transfer_abort_timer_.Start(
-            FROM_HERE, base::Milliseconds(KSelectionOwnerTimerPeriodMs), this,
+            FROM_HERE, kSelectionOwnerTimerPeriod, this,
             &SelectionOwner::AbortStaleIncrementalTransfers);
       }
     } else {
       auto& mem = it->second;
-      std::vector<uint8_t> data(mem->data(), mem->data() + mem->size());
+      std::vector<uint8_t> data(mem->data(),
+                                UNSAFE_TODO(mem->data() + mem->size()));
       connection_->SetArrayProperty(requestor, property, target, data);
     }
     return true;
@@ -268,13 +287,12 @@ bool SelectionOwner::ProcessTarget(x11::Atom target,
 void SelectionOwner::ProcessIncrementalTransfer(IncrementalTransfer* transfer) {
   size_t remaining = transfer->data->size() - transfer->offset;
   size_t chunk_length = std::min(remaining, GetMaxIncrementalTransferSize());
-  const uint8_t* data = transfer->data->front() + transfer->offset;
-  std::vector<uint8_t> buf(data, data + chunk_length);
+  const uint8_t* data = UNSAFE_TODO(transfer->data->data() + transfer->offset);
+  std::vector<uint8_t> buf(data, UNSAFE_TODO(data + chunk_length));
   connection_->SetArrayProperty(transfer->window, transfer->property,
                                 transfer->target, buf);
   transfer->offset += chunk_length;
-  transfer->timeout = base::TimeTicks::Now() +
-                      base::Milliseconds(kIncrementalTransferTimeoutMs);
+  transfer->timeout = base::TimeTicks::Now() + kIncrementalTransferTimeout;
 
   // When offset == data->size(), we still need to transfer a zero-sized chunk
   // to notify the selection requestor that the transfer is complete. Clear

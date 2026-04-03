@@ -11,9 +11,7 @@
 #include "base/strings/string_util.h"
 #include "base/test/icu_test_util.h"
 #include "base/test/mock_callback.h"
-#include "base/test/scoped_feature_list.h"
-#include "chromeos/constants/chromeos_features.h"
-#include "chromeos/crosapi/mojom/clipboard_history.mojom.h"
+#include "chromeos/ui/clipboard_history/clipboard_history_types.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/clipboard/clipboard_data.h"
@@ -35,7 +33,7 @@ using ::testing::WithParamInterface;
 
 struct FormatPair {
   ui::ClipboardInternalFormat clipboard_format;
-  crosapi::mojom::ClipboardHistoryDisplayFormat display_format;
+  chromeos::clipboard_history::DisplayFormat display_format;
 };
 
 }  // namespace
@@ -50,7 +48,7 @@ TEST_F(ClipboardHistoryItemTest, SetDisplayImageNotifiesCallback) {
   builder.SetFormat(ui::ClipboardInternalFormat::kHtml);
   ClipboardHistoryItem item = builder.Build();
   EXPECT_EQ(item.display_format(),
-            crosapi::mojom::ClipboardHistoryDisplayFormat::kHtml);
+            chromeos::clipboard_history::DisplayFormat::kHtml);
   ASSERT_TRUE(item.display_image().has_value());
   EXPECT_EQ(item.display_image().value(),
             clipboard_history_util::GetHtmlPreviewPlaceholder());
@@ -98,30 +96,7 @@ TEST_F(ClipboardHistoryItemTest, SetDisplayImageNotifiesCallback) {
   }
 }
 
-// Base class for tests parameterized by whether the clipboard history refresh
-// is enabled.
-class ClipboardHistoryItemRefreshTest
-    : public ClipboardHistoryItemTest,
-      public WithParamInterface</*enable_refresh=*/bool> {
- public:
-  ClipboardHistoryItemRefreshTest() {
-    scoped_feature_list_.InitWithFeatureStates(
-        {{chromeos::features::kClipboardHistoryRefresh,
-          IsClipboardHistoryRefreshEnabled()},
-         {chromeos::features::kJelly, IsClipboardHistoryRefreshEnabled()}});
-  }
-
-  bool IsClipboardHistoryRefreshEnabled() { return GetParam(); }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         ClipboardHistoryItemRefreshTest,
-                         /*enable_refresh=*/Bool());
-
-TEST_P(ClipboardHistoryItemRefreshTest, DisplayText) {
+TEST_F(ClipboardHistoryItemTest, DisplayText) {
   base::test::ScopedRestoreICUDefaultLocale locale("en_US");
 
   // Populate a builder with all the data formats that we expect to handle.
@@ -171,9 +146,7 @@ TEST_P(ClipboardHistoryItemRefreshTest, DisplayText) {
   builder.ClearRtf();
 
   // In the absence of RTF data, filename data takes precedence.
-  EXPECT_EQ(builder.Build().display_text(), IsClipboardHistoryRefreshEnabled()
-                                                ? u"2 files"
-                                                : u"File.txt, Other File.txt");
+  EXPECT_EQ(builder.Build().display_text(), u"2 files");
 
   builder.ClearFilenames();
 
@@ -194,19 +167,12 @@ TEST_P(ClipboardHistoryItemRefreshTest, DisplayText) {
 }
 
 // Base class for tests parameterized by the type of item being tested, based on
-// its display format. The clipboard history refresh enablement status is also
-// parameterized as the refresh changes whether some items will have icons.
+// its display format.
 class ClipboardHistoryItemDisplayFormatTest
     : public ClipboardHistoryItemTest,
-      public WithParamInterface<
-          std::tuple<FormatPair, /*enable_refresh=*/bool>> {
+      public WithParamInterface<FormatPair> {
  public:
-  ClipboardHistoryItemDisplayFormatTest() {
-    scoped_feature_list_.InitWithFeatureStates(
-        {{chromeos::features::kClipboardHistoryRefresh,
-          IsClipboardHistoryRefreshEnabled()},
-         {chromeos::features::kJelly, IsClipboardHistoryRefreshEnabled()}});
-  }
+  ClipboardHistoryItemDisplayFormatTest() = default;
 
   ClipboardHistoryItem BuildClipboardHistoryItem() const {
     ClipboardHistoryItemBuilder builder;
@@ -217,61 +183,48 @@ class ClipboardHistoryItemDisplayFormatTest
   }
 
   ui::ClipboardInternalFormat GetClipboardFormat() const {
-    return std::get<0>(GetParam()).clipboard_format;
+    return GetParam().clipboard_format;
   }
-  crosapi::mojom::ClipboardHistoryDisplayFormat GetDisplayFormat() const {
-    return std::get<0>(GetParam()).display_format;
+  chromeos::clipboard_history::DisplayFormat GetDisplayFormat() const {
+    return GetParam().display_format;
   }
-
-  bool IsClipboardHistoryRefreshEnabled() { return std::get<1>(GetParam()); }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 INSTANTIATE_TEST_SUITE_P(
     All,
     ClipboardHistoryItemDisplayFormatTest,
-    Combine(
-        Values(FormatPair{ui::ClipboardInternalFormat::kText,
-                          crosapi::mojom::ClipboardHistoryDisplayFormat::kText},
-               FormatPair{ui::ClipboardInternalFormat::kPng,
-                          crosapi::mojom::ClipboardHistoryDisplayFormat::kPng},
-               FormatPair{ui::ClipboardInternalFormat::kHtml,
-                          crosapi::mojom::ClipboardHistoryDisplayFormat::kHtml},
-               FormatPair{
-                   ui::ClipboardInternalFormat::kFilenames,
-                   crosapi::mojom::ClipboardHistoryDisplayFormat::kFile}),
-        /*enable_refresh=*/Bool()));
+    Values(FormatPair{ui::ClipboardInternalFormat::kText,
+                      chromeos::clipboard_history::DisplayFormat::kText},
+           FormatPair{ui::ClipboardInternalFormat::kPng,
+                      chromeos::clipboard_history::DisplayFormat::kPng},
+           FormatPair{ui::ClipboardInternalFormat::kHtml,
+                      chromeos::clipboard_history::DisplayFormat::kHtml},
+           FormatPair{ui::ClipboardInternalFormat::kFilenames,
+                      chromeos::clipboard_history::DisplayFormat::kFile}));
 
 TEST_P(ClipboardHistoryItemDisplayFormatTest, Icon) {
   const auto item = BuildClipboardHistoryItem();
   const auto& maybe_icon = item.icon();
-  if (IsClipboardHistoryRefreshEnabled() ||
-      GetDisplayFormat() ==
-          crosapi::mojom::ClipboardHistoryDisplayFormat::kFile) {
-    ASSERT_TRUE(maybe_icon.has_value());
-    EXPECT_TRUE(maybe_icon.value().IsVectorIcon());
-  } else {
-    EXPECT_FALSE(maybe_icon.has_value());
-  }
+
+  ASSERT_TRUE(maybe_icon.has_value());
+  EXPECT_TRUE(maybe_icon.value().IsVectorIcon());
 }
 
 TEST_P(ClipboardHistoryItemDisplayFormatTest, DisplayImage) {
   const auto item = BuildClipboardHistoryItem();
   const auto& maybe_image = item.display_image();
   switch (GetDisplayFormat()) {
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kUnknown:
-      NOTREACHED_NORETURN();
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kText:
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kFile:
+    case chromeos::clipboard_history::DisplayFormat::kUnknown:
+      NOTREACHED();
+    case chromeos::clipboard_history::DisplayFormat::kText:
+    case chromeos::clipboard_history::DisplayFormat::kFile:
       EXPECT_FALSE(maybe_image);
       break;
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kPng:
+    case chromeos::clipboard_history::DisplayFormat::kPng:
       ASSERT_TRUE(maybe_image);
       EXPECT_TRUE(maybe_image.value().IsImage());
       break;
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kHtml:
+    case chromeos::clipboard_history::DisplayFormat::kHtml:
       // Because the HTML placeholder image is a static `ImageModel`,
       // `maybe_image` might be a vector icon or an image depending on which
       // test cases are being run. What we know reliably is that the value of

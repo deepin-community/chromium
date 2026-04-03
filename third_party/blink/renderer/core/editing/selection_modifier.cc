@@ -44,6 +44,7 @@
 #include "third_party/blink/renderer/core/layout/layout_block.h"
 #include "third_party/blink/renderer/core/layout/physical_fragment.h"
 #include "third_party/blink/renderer/core/page/spatial_navigation.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -94,7 +95,11 @@ VisiblePositionInFlatTree SelectionModifier::PreviousParagraphPosition(
         new_position.DeepEquivalent() == position.DeepEquivalent())
       break;
     position = new_position;
-  } while (InSameParagraph(passed_position, position));
+  } while (InSameParagraph(
+      passed_position, position,
+      RuntimeEnabledFeatures::ModifyParagraphCrossEditingoundaryEnabled()
+          ? kCanCrossEditingBoundary
+          : kCannotCrossEditingBoundary));
   return position;
 }
 
@@ -111,7 +116,11 @@ VisiblePositionInFlatTree SelectionModifier::NextParagraphPosition(
         new_position.DeepEquivalent() == position.DeepEquivalent())
       break;
     position = new_position;
-  } while (InSameParagraph(passed_position, position));
+  } while (InSameParagraph(
+      passed_position, position,
+      RuntimeEnabledFeatures::ModifyParagraphCrossEditingoundaryEnabled()
+          ? kCanCrossEditingBoundary
+          : kCannotCrossEditingBoundary));
   return position;
 }
 
@@ -240,7 +249,6 @@ static bool IsAnchorStart(const VisibleSelectionInFlatTree& visible_selection,
       return false;
   }
   NOTREACHED() << "We should handle " << static_cast<int>(direction);
-  return true;
 }
 
 // This function returns |VisibleSelectionInFlatTree| from start and end
@@ -374,7 +382,6 @@ VisiblePositionInFlatTree SelectionModifier::ModifyExtendingRightInternal(
       return ModifyExtendingForwardInternal(granularity);
   }
   NOTREACHED() << static_cast<int>(granularity);
-  return VisiblePositionInFlatTree();
 }
 
 VisiblePositionInFlatTree SelectionModifier::ModifyExtendingRight(
@@ -428,7 +435,6 @@ VisiblePositionInFlatTree SelectionModifier::ModifyExtendingForwardInternal(
     }
   }
   NOTREACHED() << static_cast<int>(granularity);
-  return VisiblePositionInFlatTree();
 }
 
 VisiblePositionInFlatTree SelectionModifier::ModifyExtendingForward(
@@ -471,7 +477,6 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingRight(
                                  DirectionOfEnclosingBlock());
   }
   NOTREACHED() << static_cast<int>(granularity);
-  return VisiblePositionInFlatTree();
 }
 
 VisiblePositionInFlatTree SelectionModifier::ModifyMovingForward(
@@ -493,27 +498,28 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingForward(
               ComputeVisibleFocus(selection_).DeepEquivalent()),
           TextAffinity::kUpstreamIfPossible);
     case TextGranularity::kLine: {
-      // down-arrowing from a range selection that ends at the start of a line
-      // needs to leave the selection at that line start (no need to call
-      // nextLinePosition!)
       const VisiblePositionInFlatTree& pos = EndForPlatform();
-      if (selection_.IsRange() && IsStartOfLine(pos))
-        return pos;
       DCHECK(pos.IsValid()) << pos;
       return CreateVisiblePosition(NextLinePosition(
           pos.ToPositionWithAffinity(),
-          LineDirectionPointForBlockDirectionNavigation(selection_.Start())));
+          LineDirectionPointForBlockDirectionNavigation(selection_.Focus())));
     }
     case TextGranularity::kParagraph:
       return NextParagraphPosition(
           EndForPlatform(),
-          LineDirectionPointForBlockDirectionNavigation(selection_.Start()));
+          LineDirectionPointForBlockDirectionNavigation(selection_.Focus()));
     case TextGranularity::kSentenceBoundary:
       return EndOfSentence(EndForPlatform());
     case TextGranularity::kLineBoundary:
       return LogicalEndOfLine(EndForPlatform());
     case TextGranularity::kParagraphBoundary:
-      return EndOfParagraph(EndForPlatform());
+      return EndOfParagraph(
+          EndForPlatform(),
+          RuntimeEnabledFeatures::
+                      MoveToParagraphStartOrEndSkipsNonEditableEnabled() &&
+                  IsEditablePosition(EndForPlatform().DeepEquivalent())
+              ? EditingBoundaryCrossingRule::kCanSkipOverEditingBoundary
+              : EditingBoundaryCrossingRule::kCannotCrossEditingBoundary);
     case TextGranularity::kDocumentBoundary: {
       const VisiblePositionInFlatTree& pos = EndForPlatform();
       if (IsEditablePosition(pos.DeepEquivalent())) {
@@ -525,7 +531,6 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingForward(
     }
   }
   NOTREACHED() << static_cast<int>(granularity);
-  return VisiblePositionInFlatTree();
 }
 
 VisiblePositionInFlatTree SelectionModifier::ModifyExtendingLeftInternal(
@@ -564,7 +569,6 @@ VisiblePositionInFlatTree SelectionModifier::ModifyExtendingLeftInternal(
       return ModifyExtendingBackwardInternal(granularity);
   }
   NOTREACHED() << static_cast<int>(granularity);
-  return VisiblePositionInFlatTree();
 }
 
 VisiblePositionInFlatTree SelectionModifier::ModifyExtendingLeft(
@@ -621,7 +625,6 @@ VisiblePositionInFlatTree SelectionModifier::ModifyExtendingBackwardInternal(
     }
   }
   NOTREACHED() << static_cast<int>(granularity);
-  return VisiblePositionInFlatTree();
 }
 
 VisiblePositionInFlatTree SelectionModifier::ModifyExtendingBackward(
@@ -664,7 +667,6 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingLeft(
                                 DirectionOfEnclosingBlock());
   }
   NOTREACHED() << static_cast<int>(granularity);
-  return VisiblePositionInFlatTree();
 }
 
 VisiblePositionInFlatTree SelectionModifier::ModifyMovingBackward(
@@ -692,13 +694,13 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingBackward(
       DCHECK(start.IsValid()) << start;
       pos = CreateVisiblePosition(PreviousLinePosition(
           start.ToPositionWithAffinity(),
-          LineDirectionPointForBlockDirectionNavigation(selection_.Start())));
+          LineDirectionPointForBlockDirectionNavigation(selection_.Focus())));
       break;
     }
     case TextGranularity::kParagraph:
       pos = PreviousParagraphPosition(
           StartForPlatform(),
-          LineDirectionPointForBlockDirectionNavigation(selection_.Start()));
+          LineDirectionPointForBlockDirectionNavigation(selection_.Focus()));
       break;
     case TextGranularity::kSentenceBoundary:
       pos = CreateVisiblePosition(
@@ -708,7 +710,13 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingBackward(
       pos = LogicalStartOfLine(StartForPlatform());
       break;
     case TextGranularity::kParagraphBoundary:
-      pos = StartOfParagraph(StartForPlatform());
+      pos = StartOfParagraph(
+          StartForPlatform(),
+          RuntimeEnabledFeatures::
+                      MoveToParagraphStartOrEndSkipsNonEditableEnabled() &&
+                  IsEditablePosition(StartForPlatform().DeepEquivalent())
+              ? EditingBoundaryCrossingRule::kCanSkipOverEditingBoundary
+              : EditingBoundaryCrossingRule::kCannotCrossEditingBoundary);
       break;
     case TextGranularity::kDocumentBoundary:
       pos = StartForPlatform();
@@ -753,7 +761,6 @@ VisiblePositionInFlatTree SelectionModifier::ComputeModifyPosition(
       return ModifyMovingBackward(granularity);
   }
   NOTREACHED() << static_cast<int>(direction);
-  return VisiblePositionInFlatTree();
 }
 
 bool SelectionModifier::Modify(SelectionModifyAlteration alter,
@@ -762,7 +769,7 @@ bool SelectionModifier::Modify(SelectionModifyAlteration alter,
   DCHECK(!GetFrame().GetDocument()->NeedsLayoutTreeUpdate());
   if (granularity == TextGranularity::kLine ||
       granularity == TextGranularity::kParagraph)
-    UpdateLifecycleToPrePaintClean();
+    UpdateAllLifecyclePhasesExceptPaint();
   DocumentLifecycle::DisallowTransitionScope disallow_transition(
       GetFrame().GetDocument()->Lifecycle());
 
@@ -887,7 +894,7 @@ bool SelectionModifier::ModifyWithPageGranularity(
     return false;
 
   DCHECK(!GetFrame().GetDocument()->NeedsLayoutTreeUpdate());
-  UpdateLifecycleToPrePaintClean();
+  UpdateAllLifecyclePhasesExceptPaint();
   DocumentLifecycle::DisallowTransitionScope disallow_transition(
       GetFrame().GetDocument()->Lifecycle());
 
@@ -995,10 +1002,12 @@ static LayoutUnit LineDirectionPointForBlockDirectionNavigationOf(
   // This ignores transforms on purpose, for now. Vertical navigation is done
   // without consulting transforms, so that 'up' in transformed text is 'up'
   // relative to the text, not absolute 'up'.
-  PhysicalOffset caret_point =
-      UNLIKELY(caret_rect.layout_object->HasFlippedBlocksWritingMode())
-          ? caret_rect.rect.MaxXMinYCorner()
-          : caret_rect.rect.MinXMinYCorner();
+  PhysicalOffset caret_point;
+  if (caret_rect.layout_object->HasFlippedBlocksWritingMode()) [[unlikely]] {
+    caret_point = caret_rect.rect.MaxXMinYCorner();
+  } else {
+    caret_point = caret_rect.rect.MinXMinYCorner();
+  }
   caret_point = caret_rect.layout_object->LocalToAbsolutePoint(
       caret_point, kIgnoreTransforms);
   return caret_rect.layout_object->IsHorizontalWritingMode() ? caret_point.left
@@ -1028,11 +1037,12 @@ LayoutUnit SelectionModifier::LineDirectionPointForBlockDirectionNavigation(
   return x;
 }
 
-void SelectionModifier::UpdateLifecycleToPrePaintClean() {
+void SelectionModifier::UpdateAllLifecyclePhasesExceptPaint() {
   LocalFrameView* const frame_view = frame_->View();
   if (!frame_view)
     return;
-  frame_view->UpdateLifecycleToPrePaintClean(DocumentUpdateReason::kSelection);
+  frame_view->UpdateAllLifecyclePhasesExceptPaint(
+      DocumentUpdateReason::kSelection);
 }
 
 }  // namespace blink

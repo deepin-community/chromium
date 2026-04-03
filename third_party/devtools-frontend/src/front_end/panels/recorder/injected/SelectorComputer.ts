@@ -1,18 +1,18 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {type SelectorType} from '../../../third_party/puppeteer-replay/puppeteer-replay.js';
-import {type Logger} from './Logger.js';
-import {MonotonicArray} from './MonotonicArray.js';
+import type {SelectorType} from '../../../third_party/puppeteer-replay/puppeteer-replay.js';
 
+import type {Logger} from './Logger.js';
+import {MonotonicArray} from './MonotonicArray.js';
 import {
-  computeARIASelector,
   type AccessibilityBindings,
+  computeARIASelector,
 } from './selectors/ARIASelector.js';
 import {computeCSSSelector} from './selectors/CSSSelector.js';
 import {computePierceSelector} from './selectors/PierceSelector.js';
-import {type Selector} from './selectors/Selector.js';
+import type {Selector} from './selectors/Selector.js';
 import {computeTextSelector} from './selectors/TextSelector.js';
 import {computeXPath} from './selectors/XPath.js';
 

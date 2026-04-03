@@ -8,19 +8,21 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "base/containers/heap_array.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/sequence_checker.h"
 #include "build/build_config.h"
 #include "chrome/browser/media/webrtc/rtp_dump_type.h"
 #include "chrome/browser/media/webrtc/webrtc_log_uploader.h"
 #include "chrome/browser/media/webrtc/webrtc_text_log_handler.h"
 #include "chrome/common/media/webrtc_logging.mojom.h"
+#include "components/webrtc_logging/browser/text_log_list.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/render_process_host.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -84,17 +86,12 @@ class WebRtcLoggingController
   // be called after text logging has stopped. Must be called on the IO thread.
   void UploadLog(UploadDoneCallback callback);
 
-  // Uploads a log that was previously saved via a call to StoreLog().
-  // Otherwise operates in the same way as UploadLog.
-  void UploadStoredLog(const std::string& log_id, UploadDoneCallback callback);
-
   // Discards the log and the RTP dumps. May only be called after logging has
   // stopped. Must be called on the IO thread.
   void DiscardLog(GenericDoneCallback callback);
 
   // Stores the log locally using a hash of log_id + security origin.
   void StoreLog(const std::string& log_id, GenericDoneCallback callback);
-
   // May be called on any thread. |upload_log_on_render_close_| is used
   // for decision making and it's OK if it changes before the execution based
   // on that decision has finished.
@@ -115,8 +112,7 @@ class WebRtcLoggingController
 
   // Called when an RTP packet is sent or received. Must be called on the UI
   // thread.
-  void OnRtpPacket(std::unique_ptr<uint8_t[]> packet_header,
-                   size_t header_length,
+  void OnRtpPacket(base::HeapArray<uint8_t> packet_header,
                    size_t packet_length,
                    bool incoming);
 
@@ -133,13 +129,15 @@ class WebRtcLoggingController
                          size_t web_app_id,
                          const StartEventLoggingCallback& callback);
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  base::RepeatingCallback<void(const std::string&)> GetLogMessageCallback();
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   // Ensures that the WebRTC Logs directory exists and then grants render
   // process access to the 'WebRTC Logs' directory, and invokes |callback| with
   // the ids necessary to create a DirectoryEntry object.
   void GetLogsDirectory(LogsDirectoryCallback callback,
                         LogsDirectoryErrorCallback error_callback);
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif
 
   // chrome::mojom::WebRtcLoggingClient methods:
   void OnAddMessages(
@@ -162,7 +160,6 @@ class WebRtcLoggingController
   // Called after stopping RTP dumps.
   void StoreLogContinue(const std::string& log_id,
                         GenericDoneCallback callback);
-
   // Writes a formatted log |message| to the |circular_buffer_|.
   void LogToCircularBuffer(const std::string& message);
 
@@ -173,7 +170,6 @@ class WebRtcLoggingController
                            std::unique_ptr<WebRtcLogPaths> log_paths,
                            GenericDoneCallback done_callback,
                            const base::FilePath& directory);
-
   // A helper for TriggerUpload to do the real work.
   void DoUploadLogAndRtpDumps(const base::FilePath& log_directory,
                               UploadDoneCallback callback);
@@ -197,7 +193,9 @@ class WebRtcLoggingController
 
   content::BrowserContext* GetBrowserContext() const;
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  webrtc_logging::ApiType GetApiType() const;
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   // Grants the render process access to the 'WebRTC Logs' directory, and
   // invokes |callback| with the ids necessary to create a DirectoryEntry
   // object. If the |logs_path| couldn't be created or found, |error_callback|
@@ -205,10 +203,11 @@ class WebRtcLoggingController
   void GrantLogsDirectoryAccess(LogsDirectoryCallback callback,
                                 LogsDirectoryErrorCallback error_callback,
                                 const base::FilePath& logs_path);
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif
 
   static base::FilePath GetLogDirectoryAndEnsureExists(
-      const base::FilePath& browser_context_directory_path);
+      const base::FilePath& browser_context_directory_path,
+      webrtc_logging::ApiType api_type);
 
   SEQUENCE_CHECKER(sequence_checker_);
 
@@ -220,7 +219,8 @@ class WebRtcLoggingController
 
   // A callback that needs to be run from a blocking worker pool and returns
   // the browser context directory path associated with our renderer process.
-  base::RepeatingCallback<base::FilePath(void)> log_directory_getter_;
+  base::RepeatingCallback<base::FilePath(webrtc_logging::ApiType)>
+      log_directory_getter_;
 
   // True if we should upload whatever log we have when the renderer closes.
   bool upload_log_on_render_close_;

@@ -10,15 +10,6 @@
 
 namespace webauthn {
 
-// JSONUser enumerates the callers of the parsing functions since they currently
-// need different semantics.
-//
-// TODO(https://crbug.com/1454841): remove this.
-enum class JSONUser {
-  kAndroid,
-  kRemoteDesktop,
-};
-
 // Converts a `PublicKeyCredentialCreationOptions` into a `base::Value`.
 //
 // The output conforms to the WebAuthn `PublicKeyCredentialCreationOptionsJSON`
@@ -35,6 +26,15 @@ base::Value ToValue(
 base::Value ToValue(
     const blink::mojom::PublicKeyCredentialRequestOptionsPtr& options);
 
+// Converts a `PublicKeyCredentialReportOptions` into a `base::Value`.
+//
+// This is not formally specified, but corresponds to the JSON expected in
+// `requestJSON` field in `SignalCredentialStateRequest` in the Android
+// Credentials API.
+// https://developer.android.com/reference/androidx/credentials/SignalCredentialStateRequest
+base::Value ToValue(
+    const blink::mojom::PublicKeyCredentialReportOptionsPtr& options);
+
 // Converts a `base::Value` encoding a `PublicKeyCredential` instance from a
 // WebAuthn `get()` request into a `MakeCredentialAuthenticatorResponse`.
 // Returns a pair of the converted message and an error string. The message will
@@ -44,7 +44,7 @@ base::Value ToValue(
 // dictionary IDL (see
 // https://w3c.github.io/webauthn/#dictdef-registrationresponsejson).
 std::pair<blink::mojom::MakeCredentialAuthenticatorResponsePtr, std::string>
-MakeCredentialResponseFromValue(const base::Value& value, JSONUser user);
+MakeCredentialResponseFromValue(const base::Value& value);
 
 // Converts a `base::Value` encoding a `PublicKeyCredential` instance from a
 // WebAuthn `get()` request into a `GetAssertionAuthenticatorResponse`. Returns
@@ -55,7 +55,7 @@ MakeCredentialResponseFromValue(const base::Value& value, JSONUser user);
 // dictionary IDL (see
 // https://w3c.github.io/webauthn/#dictdef-authenticationresponsejson).
 std::pair<blink::mojom::GetAssertionAuthenticatorResponsePtr, std::string>
-GetAssertionResponseFromValue(const base::Value& value, JSONUser user);
+GetAssertionResponseFromValue(const base::Value& value);
 
 }  // namespace webauthn
 

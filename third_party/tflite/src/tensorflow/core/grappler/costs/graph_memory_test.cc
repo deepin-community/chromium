@@ -25,7 +25,7 @@ namespace {
 
 class GraphMemoryTest : public ::testing::Test {
  protected:
-  std::unordered_map<string, DeviceProperties> devices_;
+  std::unordered_map<std::string, DeviceProperties> devices_;
 
  public:
   GraphMemoryTest() {
@@ -49,21 +49,21 @@ TEST_F(GraphMemoryTest, Basic) {
   item.feed.clear();
 
   GraphMemory memory(item);
-  Status s = memory.InferStatically(devices_);
+  absl::Status s = memory.InferStatically(devices_);
   TF_CHECK_OK(s);
   const GraphMemory::MemoryUsage& mem_usage =
       memory.GetPeakMemoryUsage("/CPU:0");
   EXPECT_EQ(120, mem_usage.used_memory);
 
-  std::set<string> tensors;
+  std::set<std::string> tensors;
   for (const auto& t : mem_usage.live_tensors) {
-    tensors.insert(strings::StrCat(t.node, ":", t.output_id));
+    tensors.insert(absl::StrCat(t.node, ":", t.output_id));
   }
   // When the execution of the 'Sign' node completes, TF can start executing
   // 'Sign_1' and release the memory used by 'x'. Since we can't be sure of
   // the order in which this takes place, in the worst case the 3 tensors are in
   // memory.
-  std::set<string> expected;
+  std::set<std::string> expected;
   expected.insert("Sign:0");
   expected.insert("Sign_1:0");
   expected.insert("x:0");
@@ -77,7 +77,7 @@ TEST_F(GraphMemoryTest, UnknownBatchSize) {
   item.feed.clear();
 
   GraphMemory memory(item);
-  Status s = memory.InferStatically(devices_);
+  absl::Status s = memory.InferStatically(devices_);
   TF_CHECK_OK(s);
   // Same maths as before, except that batch size is unknown and therefore
   // assumed to be one.
@@ -85,11 +85,11 @@ TEST_F(GraphMemoryTest, UnknownBatchSize) {
       memory.GetPeakMemoryUsage("/CPU:0");
   EXPECT_EQ(16, mem_usage.used_memory);
 
-  std::set<string> tensors;
+  std::set<std::string> tensors;
   for (const auto& t : mem_usage.live_tensors) {
-    tensors.insert(strings::StrCat(t.node, ":", t.output_id));
+    tensors.insert(absl::StrCat(t.node, ":", t.output_id));
   }
-  std::set<string> expected;
+  std::set<std::string> expected;
   expected.insert("Const/Const:0");
   expected.insert("Sign:0");
   expected.insert("x:0");
@@ -104,16 +104,16 @@ TEST_F(GraphMemoryTest, MultiDevice) {
   item.feed.clear();
 
   GraphMemory memory(item);
-  Status s = memory.InferStatically(devices_);
+  absl::Status s = memory.InferStatically(devices_);
   TF_CHECK_OK(s);
 
   const GraphMemory::MemoryUsage& cpu_mem = memory.GetPeakMemoryUsage("/CPU:0");
   EXPECT_EQ(16777216, cpu_mem.used_memory);
-  std::set<string> cpu_tensors;
+  std::set<std::string> cpu_tensors;
   for (const auto& t : cpu_mem.live_tensors) {
-    cpu_tensors.insert(strings::StrCat(t.node, ":", t.output_id));
+    cpu_tensors.insert(absl::StrCat(t.node, ":", t.output_id));
   }
-  std::set<string> cpu_expected;
+  std::set<std::string> cpu_expected;
   cpu_expected.insert("Recv_Sign_1_0_on_/CPU_0:0");
   cpu_expected.insert("Sign:0");
   cpu_expected.insert("x:0");
@@ -122,11 +122,11 @@ TEST_F(GraphMemoryTest, MultiDevice) {
 
   const GraphMemory::MemoryUsage& gpu_mem = memory.GetPeakMemoryUsage("/GPU:0");
   EXPECT_EQ(16777216, gpu_mem.used_memory);
-  std::set<string> gpu_tensors;
+  std::set<std::string> gpu_tensors;
   for (const auto& t : gpu_mem.live_tensors) {
-    gpu_tensors.insert(strings::StrCat(t.node, ":", t.output_id));
+    gpu_tensors.insert(absl::StrCat(t.node, ":", t.output_id));
   }
-  std::set<string> gpu_expected;
+  std::set<std::string> gpu_expected;
   gpu_expected.insert("Recv_AddN_0_on_/GPU_0:0");
   gpu_expected.insert("Sign_1:0");
   gpu_expected.insert("AddN_1:0");
@@ -143,17 +143,17 @@ TEST_F(GraphMemoryTest, GpuSwapping) {
   {
     // Estimate the max memory usage for the graph.
     GraphMemory memory(item);
-    Status s = memory.InferStatically(devices_);
+    absl::Status s = memory.InferStatically(devices_);
     TF_CHECK_OK(s);
 
     const GraphMemory::MemoryUsage& gpu_mem =
         memory.GetPeakMemoryUsage("/GPU:0");
     EXPECT_EQ(20971520, gpu_mem.used_memory);
-    std::set<string> gpu_tensors;
+    std::set<std::string> gpu_tensors;
     for (const auto& t : gpu_mem.live_tensors) {
-      gpu_tensors.insert(strings::StrCat(t.node, ":", t.output_id));
+      gpu_tensors.insert(absl::StrCat(t.node, ":", t.output_id));
     }
-    std::set<string> gpu_expected;
+    std::set<std::string> gpu_expected;
     gpu_expected.insert("Sign:0");
     gpu_expected.insert("Sign_1:0");
     gpu_expected.insert("AddN:0");
@@ -171,16 +171,16 @@ TEST_F(GraphMemoryTest, GpuSwapping) {
       }
     }
     GraphMemory memory(item);
-    Status s = memory.InferStatically(devices_);
+    absl::Status s = memory.InferStatically(devices_);
     TF_CHECK_OK(s);
     const GraphMemory::MemoryUsage& new_gpu_mem =
         memory.GetPeakMemoryUsage("/GPU:0");
     EXPECT_EQ(20971520, new_gpu_mem.used_memory);
-    std::set<string> new_gpu_tensors;
+    std::set<std::string> new_gpu_tensors;
     for (const auto& t : new_gpu_mem.live_tensors) {
-      new_gpu_tensors.insert(strings::StrCat(t.node, ":", t.output_id));
+      new_gpu_tensors.insert(absl::StrCat(t.node, ":", t.output_id));
     }
-    std::set<string> new_gpu_expected;
+    std::set<std::string> new_gpu_expected;
     new_gpu_expected.insert("AddN:0");
     new_gpu_expected.insert("AddN_1:0");
     new_gpu_expected.insert("AddN_2:0");
@@ -207,16 +207,16 @@ TEST_F(GraphMemoryTest, CtrlDependencies) {
   TF_CHECK_OK(s.ToGraphDef(&item.graph));
 
   GraphMemory memory(item);
-  Status status = memory.InferStatically(devices_);
+  absl::Status status = memory.InferStatically(devices_);
   TF_CHECK_OK(status);
 
   const GraphMemory::MemoryUsage& mem = memory.GetPeakMemoryUsage("/CPU:0");
   EXPECT_EQ(36, mem.used_memory);
-  std::set<string> tensors;
+  std::set<std::string> tensors;
   for (const auto& t : mem.live_tensors) {
-    tensors.insert(strings::StrCat(t.node, ":", t.output_id));
+    tensors.insert(absl::StrCat(t.node, ":", t.output_id));
   }
-  std::set<string> expected;
+  std::set<std::string> expected;
   expected.insert("a:0");
   expected.insert("v:0");
   expected.insert("assign:0");

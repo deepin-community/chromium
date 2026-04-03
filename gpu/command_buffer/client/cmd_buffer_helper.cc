@@ -9,6 +9,8 @@
 #include <stdint.h>
 
 #include <algorithm>
+
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
@@ -317,7 +319,7 @@ void CommandBufferHelper::WaitForAvailableEntries(int32_t count) {
     int32_t num_entries = total_entry_count_ - put_;
     while (num_entries > 0) {
       int32_t num_to_skip = std::min(CommandHeader::kMaxSize, num_entries);
-      cmd::Noop::Set(&entries_[put_], num_to_skip);
+      cmd::Noop::Set(UNSAFE_TODO(&entries_[put_]), num_to_skip);
       put_ += num_to_skip;
       num_entries -= num_to_skip;
     }
@@ -382,7 +384,7 @@ bool CommandBufferHelper::OnMemoryDump(
           ->GetTracingProcessId();
 
   MemoryAllocatorDump* dump = pmd->CreateAllocatorDump(base::StringPrintf(
-      "gpu/command_buffer_memory/buffer_%d", ring_buffer_id_));
+      "gpu/command_buffer_memory/buffer_0x%x", ring_buffer_id_));
   dump->AddScalar(MemoryAllocatorDump::kNameSize,
                   MemoryAllocatorDump::kUnitsBytes, ring_buffer_size_);
 

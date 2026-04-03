@@ -9,12 +9,11 @@
 
 class FPDFRenderPatternEmbedderTest : public EmbedderTest {};
 
-TEST_F(FPDFRenderPatternEmbedderTest, LoadError_547706) {
+TEST_F(FPDFRenderPatternEmbedderTest, LoadError547706) {
   // Test shading where object is a dictionary instead of a stream.
   ASSERT_TRUE(OpenDocument("bug_547706.pdf"));
-  FPDF_PAGE page = LoadPage(0);
+  ScopedPage page = LoadScopedPage(0);
   ASSERT_TRUE(page);
-  ScopedFPDFBitmap bitmap = RenderLoadedPage(page);
-  CompareBitmap(bitmap.get(), 612, 792, pdfium::kBlankPage612By792Checksum);
-  UnloadPage(page);
+  ScopedFPDFBitmap bitmap = RenderLoadedPage(page.get());
+  CompareBitmapToPng(bitmap.get(), pdfium::kBlankPage612By792Png);
 }

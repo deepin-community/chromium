@@ -4,12 +4,12 @@
 
 #include "content/services/auction_worklet/lazy_filler.h"
 
-#include <optional>
 #include <string_view>
 
 #include "base/memory/raw_ptr.h"
 #include "content/services/auction_worklet/auction_v8_helper.h"
 #include "gin/converter.h"
+#include "gin/public/gin_embedders.h"
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-external.h"
 #include "v8/include/v8-function-callback.h"
@@ -29,13 +29,13 @@ void LazyFiller::SetResult(const v8::PropertyCallbackInfo<v8::Value>& info,
 }
 
 bool LazyFiller::DefineLazyAttribute(v8::Local<v8::Object> object,
-                                     base::StringPiece name,
+                                     std::string_view name,
                                      v8::AccessorNameGetterCallback getter) {
   v8::Isolate* isolate = v8_helper_->isolate();
 
   v8::Maybe<bool> success = object->SetLazyDataProperty(
       isolate->GetCurrentContext(), gin::StringToSymbol(isolate, name), getter,
-      v8::External::New(isolate, this),
+      v8::External::New(isolate, this, gin::kLazyFillerTag),
       /*attributes=*/v8::None,
       /*getter_side_effect_type=*/v8::SideEffectType::kHasNoSideEffect,
       /*setter_side_effect_type=*/v8::SideEffectType::kHasSideEffect);
@@ -45,7 +45,7 @@ bool LazyFiller::DefineLazyAttribute(v8::Local<v8::Object> object,
 bool LazyFiller::DefineLazyAttributeWithMetadata(
     v8::Local<v8::Object> object,
     v8::Local<v8::Value> metadata,
-    base::StringPiece name,
+    std::string_view name,
     v8::AccessorNameGetterCallback getter,
     v8::Local<v8::ObjectTemplate>& lazy_filler_template) {
   v8::Isolate* isolate = v8_helper_->isolate();
@@ -57,7 +57,8 @@ bool LazyFiller::DefineLazyAttributeWithMetadata(
   }
   v8::Local<v8::Object> data =
       lazy_filler_template->NewInstance(context).ToLocalChecked();
-  data->SetInternalField(0, v8::External::New(isolate, this));
+  data->SetInternalField(0,
+                         v8::External::New(isolate, this, gin::kLazyFillerTag));
   data->SetInternalField(1, metadata);
 
   v8::Maybe<bool> success = object->SetLazyDataProperty(
@@ -74,7 +75,7 @@ void* LazyFiller::GetSelfWithMetadataInternal(
   v8::Local<v8::Object> data = v8::Local<v8::Object>::Cast(info.Data());
   metadata = data->GetInternalField(1).As<v8::Value>();
   return (data->GetInternalField(0).As<v8::Value>().As<v8::External>())
-      ->Value();
+      ->Value(gin::kLazyFillerTag);
 }
 
 }  // namespace auction_worklet

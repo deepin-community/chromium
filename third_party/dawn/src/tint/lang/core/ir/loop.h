@@ -31,7 +31,6 @@
 #include <string>
 
 #include "src/tint/lang/core/ir/control_instruction.h"
-#include "src/tint/utils/containers/const_propagating_ptr.h"
 
 // Forward declarations
 namespace tint::core::ir {
@@ -73,13 +72,15 @@ namespace tint::core::ir {
 class Loop final : public Castable<Loop, ControlInstruction> {
   public:
     /// Constructor (no results, no operands, no blocks)
-    Loop();
+    /// @param id the instruction id
+    explicit Loop(Id id);
 
     /// Constructor
+    /// @param id the instruction id
     /// @param i the initializer block
     /// @param b the body block
     /// @param c the continuing block
-    Loop(ir::Block* i, ir::MultiInBlock* b, ir::MultiInBlock* c);
+    Loop(Id id, ir::Block* i, ir::MultiInBlock* b, ir::MultiInBlock* c);
     ~Loop() override;
 
     /// @copydoc Instruction::Clone()
@@ -87,6 +88,9 @@ class Loop final : public Castable<Loop, ControlInstruction> {
 
     /// @copydoc ControlInstruction::ForeachBlock
     void ForeachBlock(const std::function<void(ir::Block*)>& cb) override;
+
+    /// @copydoc ControlInstruction::ForeachBlock
+    void ForeachBlock(const std::function<void(const ir::Block*)>& cb) const override;
 
     /// @returns the switch initializer block
     ir::Block* Initializer() { return initializer_; }
@@ -127,9 +131,9 @@ class Loop final : public Castable<Loop, ControlInstruction> {
     std::string FriendlyName() const override { return "loop"; }
 
   private:
-    ConstPropagatingPtr<ir::Block> initializer_;
-    ConstPropagatingPtr<ir::MultiInBlock> body_;
-    ConstPropagatingPtr<ir::MultiInBlock> continuing_;
+    ir::Block* initializer_ = nullptr;
+    ir::MultiInBlock* body_ = nullptr;
+    ir::MultiInBlock* continuing_ = nullptr;
 };
 
 }  // namespace tint::core::ir

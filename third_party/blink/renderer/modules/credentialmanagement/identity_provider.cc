@@ -4,8 +4,14 @@
 
 #include "third_party/blink/renderer/modules/credentialmanagement/identity_provider.h"
 
+#include "third_party/blink/public/common/messaging/message_port_descriptor.h"
 #include "third_party/blink/public/mojom/webid/federated_auth_request.mojom-blink.h"
+#include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/public/platform/web_v8_value_converter.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_identity_provider_token.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_identity_resolve_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_identity_user_info.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -18,16 +24,18 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace blink {
 
 namespace {
 
+using mojom::blink::RegisterIdpStatus;
 using mojom::blink::RequestUserInfoStatus;
 
 void OnRequestUserInfo(
-    ScriptPromiseResolverTyped<IDLSequence<IdentityUserInfo>>* resolver,
+    ScriptPromiseResolver<IDLSequence<IdentityUserInfo>>* resolver,
     RequestUserInfoStatus status,
     std::optional<Vector<mojom::blink::IdentityUserInfoPtr>>
         all_user_info_ptr) {
@@ -60,19 +68,19 @@ void OnRequestUserInfo(
 
 }  // namespace
 
-ScriptPromiseTyped<IDLSequence<IdentityUserInfo>> IdentityProvider::getUserInfo(
+ScriptPromise<IDLSequence<IdentityUserInfo>> IdentityProvider::getUserInfo(
     ScriptState* script_state,
     const blink::IdentityProviderConfig* provider,
     ExceptionState& exception_state) {
   auto* resolver = MakeGarbageCollected<
-      ScriptPromiseResolverTyped<IDLSequence<IdentityUserInfo>>>(
+      ScriptPromiseResolver<IDLSequence<IdentityUserInfo>>>(
       script_state, exception_state.GetContext());
   auto promise = resolver->Promise();
   if (!resolver->GetExecutionContext()->IsFeatureEnabled(
-          mojom::blink::PermissionsPolicyFeature::kIdentityCredentialsGet)) {
+          network::mojom::PermissionsPolicyFeature::kIdentityCredentialsGet)) {
     resolver->Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kNotAllowedError,
-        "The 'identity-credentials-get` feature is not enabled in this "
+        "The 'identity-credentials-get' feature is not enabled in this "
         "document."));
     return promise;
   }
@@ -117,7 +125,7 @@ ScriptPromiseTyped<IDLSequence<IdentityUserInfo>> IdentityProvider::getUserInfo(
       CredentialManagerProxy::From(script_state)->FederatedAuthRequest();
   user_info_request->RequestUserInfo(
       std::move(identity_provider),
-      WTF::BindOnce(&OnRequestUserInfo, WrapPersistent(resolver)));
+      BindOnce(&OnRequestUserInfo, WrapPersistent(resolver)));
 
   return promise;
 }
@@ -128,73 +136,169 @@ void IdentityProvider::close(ScriptState* script_state) {
   request->CloseModalDialogView();
 }
 
-void OnRegisterIdP(ScriptPromiseResolver* resolver, bool accepted) {
-  if (!accepted) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kNotAllowedError,
-        "User declined the permission to register the Identity Provider."));
-    return;
+void OnRegisterIdP(ScriptPromiseResolver<IDLBoolean>* resolver,
+                   RegisterIdpStatus status) {
+  switch (status) {
+    case RegisterIdpStatus::kSuccess: {
+      resolver->Resolve(true);
+      return;
+    }
+    case RegisterIdpStatus::kErrorFeatureDisabled: {
+      resolver->Reject(MakeGarbageCollected<DOMException>(
+          DOMExceptionCode::kNotAllowedError,
+          "FedCM IdP registration feature is disabled."));
+      return;
+    }
+    case RegisterIdpStatus::kErrorCrossOriginConfig: {
+      resolver->Reject(MakeGarbageCollected<DOMException>(
+          DOMExceptionCode::kNotAllowedError,
+          "Attempting to register a cross-origin config."));
+      return;
+    }
+    case RegisterIdpStatus::kErrorNoTransientActivation: {
+      resolver->Reject(MakeGarbageCollected<DOMException>(
+          DOMExceptionCode::kNotAllowedError,
+          "There is no transient user activation for identity provider "
+          "registration."));
+      return;
+    }
+    case RegisterIdpStatus::kErrorDeclined: {
+      resolver->Reject(MakeGarbageCollected<DOMException>(
+          DOMExceptionCode::kNotAllowedError,
+          "User declined the permission to register the identity provider."));
+      return;
+    }
+    case RegisterIdpStatus::kErrorInvalidConfig: {
+      resolver->Reject(MakeGarbageCollected<DOMException>(
+          DOMExceptionCode::kNotAllowedError,
+          "Invalid identity provider registration config."));
+      return;
+    }
   }
-  resolver->Resolve();
 }
 
-ScriptPromise IdentityProvider::registerIdentityProvider(
+ScriptPromise<IDLBoolean> IdentityProvider::registerIdentityProvider(
     ScriptState* script_state,
     const String& configURL) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(script_state);
+  auto promise = resolver->Promise();
 
   auto* request =
       CredentialManagerProxy::From(script_state)->FederatedAuthRequest();
   request->RegisterIdP(KURL(configURL),
-                       WTF::BindOnce(&OnRegisterIdP, WrapPersistent(resolver)));
+                       BindOnce(&OnRegisterIdP, WrapPersistent(resolver)));
 
   return promise;
 }
 
-void OnUnregisterIdP(ScriptPromiseResolver* resolver, bool accepted) {
+void OnUnregisterIdP(ScriptPromiseResolver<IDLUndefined>* resolver,
+                     bool accepted) {
   if (!accepted) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
+    resolver->RejectWithDOMException(
         DOMExceptionCode::kNotAllowedError,
-        "Not allowed to unregister the Identity Provider."));
+        "Not allowed to unregister the Identity Provider.");
     return;
   }
   resolver->Resolve();
 }
 
-ScriptPromise IdentityProvider::unregisterIdentityProvider(
+ScriptPromise<IDLUndefined> IdentityProvider::unregisterIdentityProvider(
     ScriptState* script_state,
     const String& configURL) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
+  auto promise = resolver->Promise();
 
   auto* request =
       CredentialManagerProxy::From(script_state)->FederatedAuthRequest();
-  request->UnregisterIdP(
-      KURL(configURL),
-      WTF::BindOnce(&OnUnregisterIdP, WrapPersistent(resolver)));
+  request->UnregisterIdP(KURL(configURL),
+                         BindOnce(&OnUnregisterIdP, WrapPersistent(resolver)));
 
   return promise;
 }
 
-void OnResolveTokenRequest(ScriptPromiseResolver* resolver, bool accepted) {
+void OnResolveTokenRequest(ScriptPromiseResolver<IDLUndefined>* resolver,
+                           bool accepted) {
   if (!accepted) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kNotAllowedError, "Not allowed to provide a token."));
+    resolver->RejectWithDOMException(DOMExceptionCode::kNotAllowedError,
+                                     "Not allowed to provide a token.");
     return;
   }
   resolver->Resolve();
 }
 
-ScriptPromise IdentityProvider::resolve(ScriptState* script_state,
-                                        const String& token) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+ScriptPromise<IDLUndefined> IdentityProvider::resolve(
+    ScriptState* script_state,
+    const ScriptValue& token_value,
+    const IdentityResolveOptions* options) {
+  DCHECK(options);
 
+  String account_id;
+  if (options->hasAccountId() && !options->accountId().empty()) {
+    account_id = options->accountId();
+  }
+
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
+  auto promise = resolver->Promise();
+
+  std::unique_ptr<base::Value> token_base_value;
+  if (RuntimeEnabledFeatures::FedCmNonStringTokenEnabled()) {
+    std::unique_ptr<WebV8ValueConverter> converter =
+        Platform::Current()->CreateWebV8ValueConverter();
+
+    token_base_value = converter->FromV8Value(token_value.V8Value(),
+                                              script_state->GetContext());
+    if (!token_base_value) {
+      resolver->RejectWithDOMException(DOMExceptionCode::kDataError,
+                                       "Failed to convert token value.");
+      return promise;
+    }
+  } else {
+    String token_string;
+    if (!token_value.ToString(token_string)) {
+      resolver->RejectWithDOMException(
+          DOMExceptionCode::kDataError,
+          "Failed to convert token value to string.");
+      return promise;
+    }
+
+    token_base_value = std::make_unique<base::Value>(token_string.Utf8());
+  }
+
+  ExecutionContext* context = ExecutionContext::From(script_state);
+  std::optional<KURL> redirect_to;
+  if (options->redirect()) {
+    String url_string;
+    if (!token_value.ToString(url_string)) {
+      resolver->RejectWithDOMException(DOMExceptionCode::kDataError,
+                                       "Failed to convert value to string.");
+      return promise;
+    }
+
+    redirect_to = context->CompleteURL(url_string);
+    if (!redirect_to->IsValid()) {
+      resolver->RejectWithDOMException(DOMExceptionCode::kDataError,
+                                       "Invalid redirect URL.");
+      return promise;
+    }
+  }
+
+  if (!script_state->ContextIsValid()) {
+    // This can happen if converting the `token` parameter had side effects
+    // that destroyed the document. With an invalid context, we also can't
+    // reject the promise.
+    return promise;
+  }
+
+  // There must not be JavaScript execution between getting the request pointer
+  // and using it.
   auto* request =
       CredentialManagerProxy::From(script_state)->FederatedAuthRequest();
   request->ResolveTokenRequest(
-      token, WTF::BindOnce(&OnResolveTokenRequest, WrapPersistent(resolver)));
+      account_id, redirect_to, std::move(*token_base_value),
+      BindOnce(&OnResolveTokenRequest, WrapPersistent(resolver)));
 
   return promise;
 }

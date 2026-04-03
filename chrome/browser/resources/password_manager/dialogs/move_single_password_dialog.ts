@@ -15,11 +15,10 @@ import {assert} from 'chrome://resources/js/assert.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {PasswordManagerImpl} from '../password_manager_proxy.js';
+import {MoveToAccountStoreTrigger, recordMoveToAccountStoreAccepted, recordMoveToAccountStoreOffered} from '../sharing/metrics_utils.js';
 import {UserUtilMixin} from '../user_utils_mixin.js';
 
-import {MoveToAccountStoreTrigger} from './move_passwords_dialog.js';
 import {getTemplate} from './move_single_password_dialog.html.js';
-
 
 export interface MoveSinglePasswordDialogElement {
   $: {
@@ -51,20 +50,21 @@ export class MoveSinglePasswordDialogElement extends
        * Password UI entry.
        */
       password: Object,
+      trigger_: {
+        type: Object,
+        value: () =>
+            MoveToAccountStoreTrigger
+                .EXPLICITLY_TRIGGERED_FOR_SINGLE_PASSWORD_IN_DETAILS_IN_SETTINGS,
+      },
     };
   }
 
-  password: chrome.passwordsPrivate.PasswordUiEntry;
+  declare password: chrome.passwordsPrivate.PasswordUiEntry;
+  declare private trigger_: MoveToAccountStoreTrigger;
 
   override connectedCallback() {
     super.connectedCallback();
-
-    chrome.metricsPrivate.recordEnumerationValue(
-        'PasswordManager.AccountStorage.MoveToAccountStoreFlowOffered',
-        MoveToAccountStoreTrigger
-            .EXPLICITLY_TRIGGERED_FOR_SINGLE_PASSWORD_IN_DETAILS_IN_SETTINGS,
-        MoveToAccountStoreTrigger.COUNT);
-
+    recordMoveToAccountStoreOffered(this.trigger_);
     this.$.dialog.showModal();
   }
 
@@ -73,16 +73,16 @@ export class MoveSinglePasswordDialogElement extends
   }
 
   private onMoveButtonClick_() {
-    assert(this.isOptedInForAccountStorage);
+    assert(this.isAccountStoreUser);
+
     PasswordManagerImpl.getInstance().movePasswordsToAccount(
         [this.password.id]);
-    this.dispatchEvent(new CustomEvent('password-moved', {
+    this.dispatchEvent(new CustomEvent('passwords-moved', {
       bubbles: true,
       composed: true,
-      detail: {
-        accountEmail: this.accountEmail,
-      },
+      detail: {accountEmail: this.accountEmail, numberOfPasswords: 1},
     }));
+    recordMoveToAccountStoreAccepted(this.trigger_);
 
     this.$.dialog.close();
   }

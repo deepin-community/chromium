@@ -1,4 +1,4 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,16 @@ import * as CodeMirror from '../../../../third_party/codemirror.next/codemirror.
 
 const cssParser = CodeMirror.css.cssLanguage.parser;
 
-export type Point = {
-  input: number,
-  output: number,
-};
+export interface Point {
+  input: number;
+  output: number;
+}
 
-type LinearStop = {
-  number: number,
-  lengthA?: number,
-  lengthB?: number,
-};
+interface LinearStop {
+  number: number;
+  lengthA?: number;
+  lengthB?: number;
+}
 
 const numberFormatter = new Intl.NumberFormat('en', {
   maximumFractionDigits: 2,
@@ -102,13 +102,13 @@ function consumeLinearFunction(text: string): LinearStop[]|null {
 }
 
 const KeywordToValue: Record<string, string> = {
-  'linear': 'linear(0 0%, 1 100%)',
+  linear: 'linear(0 0%, 1 100%)',
 };
 
 export class CSSLinearEasingModel {
   #points: Point[];
 
-  private constructor(points: Point[]) {
+  constructor(points: Point[]) {
     this.#points = points;
   }
 

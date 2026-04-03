@@ -14,24 +14,25 @@
 // Don't wrap close calls in WrapEINTR. Use IGNORE_EINTR macro if the return
 // value of close is significant. See http://crbug.com/269623.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PARTITION_ALLOC_BASE_POSIX_EINTR_WRAPPER_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PARTITION_ALLOC_BASE_POSIX_EINTR_WRAPPER_H_
+#ifndef PARTITION_ALLOC_PARTITION_ALLOC_BASE_POSIX_EINTR_WRAPPER_H_
+#define PARTITION_ALLOC_PARTITION_ALLOC_BASE_POSIX_EINTR_WRAPPER_H_
 
-#include "build/build_config.h"
+#include "partition_alloc/build_config.h"
+#include "partition_alloc/buildflags.h"
 
-#if BUILDFLAG(IS_POSIX)
+#if PA_BUILDFLAG(IS_POSIX)
 #include <cerrno>
 #include <utility>
 #endif
 
 namespace partition_alloc {
-#if BUILDFLAG(IS_POSIX)
+#if PA_BUILDFLAG(IS_POSIX)
 
 template <typename Fn>
 inline auto WrapEINTR(Fn fn) {
   return [fn](auto&&... args) {
     int out = -1;
-#if defined(NDEBUG)
+#if !PA_BUILDFLAG(IS_DEBUG)
     while (true)
 #else
     for (int retry_count = 0; retry_count < 100; ++retry_count)
@@ -46,15 +47,15 @@ inline auto WrapEINTR(Fn fn) {
   };
 }
 
-#else  // !BUILDFLAG(IS_POSIX)
+#else  // !PA_BUILDFLAG(IS_POSIX)
 
 template <typename Fn>
 inline auto WrapEINTR(Fn fn) {
   return fn;
 }
 
-#endif  // !BUILDFLAG(IS_POSIX)
+#endif  // !PA_BUILDFLAG(IS_POSIX)
 
 }  // namespace partition_alloc
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PARTITION_ALLOC_BASE_POSIX_EINTR_WRAPPER_H_
+#endif  // PARTITION_ALLOC_PARTITION_ALLOC_BASE_POSIX_EINTR_WRAPPER_H_

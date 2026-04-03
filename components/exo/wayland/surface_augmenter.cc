@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "components/exo/buffer.h"
 #include "components/exo/sub_surface.h"
@@ -37,13 +38,14 @@ class AugmentedSurface : public SurfaceObserver {
  public:
   explicit AugmentedSurface(Surface* surface) : surface_(surface) {
     surface_->AddSurfaceObserver(this);
-    surface_->SetProperty(kSurfaceHasAugmentedSurfaceKey, true);
+    surface_->set_is_augmented(true);
     // No need to create AX Tree for augmented surfaces because they're
     // equivalent to quads.
     // TODO(b/296326746): Revert this CL and set the property to the root
     // surface once arc accessibility is refactored.
     surface_->window()->SetProperty(ui::kAXConsiderInvisibleAndIgnoreChildren,
                                     true);
+    surface_->set_leave_enter_callback(Surface::LeaveEnterCallback());
     surface_->set_legacy_buffer_release_skippable(true);
   }
   AugmentedSurface(const AugmentedSurface&) = delete;
@@ -51,7 +53,6 @@ class AugmentedSurface : public SurfaceObserver {
   ~AugmentedSurface() override {
     if (surface_) {
       surface_->RemoveSurfaceObserver(this);
-      surface_->SetProperty(kSurfaceHasAugmentedSurfaceKey, false);
     }
   }
 
@@ -76,10 +77,6 @@ class AugmentedSurface : public SurfaceObserver {
 
   void SetBackgroundColor(std::optional<SkColor4f> background_color) {
     surface_->SetBackgroundColor(background_color);
-  }
-
-  void SetTrustedDamage(bool trusted_damage) {
-    surface_->SetTrustedDamage(trusted_damage);
   }
 
   void SetClipRect(float x, float y, float width, float height) {
@@ -153,16 +150,17 @@ void augmented_surface_set_background_color(wl_client* client,
   // Empty data means no color.
   if (color_data->size) {
     float* data = reinterpret_cast<float*>(color_data->data);
-    sk_color = {data[0], data[1], data[2], data[3]};
+    sk_color = {data[0], UNSAFE_TODO(data[1]), UNSAFE_TODO(data[2]),
+                UNSAFE_TODO(data[3])};
   }
 
   GetUserDataAs<AugmentedSurface>(resource)->SetBackgroundColor(sk_color);
 }
 
-void augmented_surface_set_trusted_damage(wl_client* client,
-                                          wl_resource* resource,
-                                          int enabled) {
-  GetUserDataAs<AugmentedSurface>(resource)->SetTrustedDamage(enabled);
+void augmented_surface_set_trusted_damage_DEPRECATED(wl_client* client,
+                                                     wl_resource* resource,
+                                                     int enabled) {
+  LOG(WARNING) << "Deprecated. The server doesn't support this request.";
 }
 
 void augmented_surface_set_rounded_corners_clip_bounds(wl_client* client,
@@ -235,7 +233,7 @@ const struct augmented_surface_interface augmented_implementation = {
     augmented_surface_set_destination_size,
     augmented_surface_set_rounded_corners_bounds_DEPRECATED,
     augmented_surface_set_background_color,
-    augmented_surface_set_trusted_damage,
+    augmented_surface_set_trusted_damage_DEPRECATED,
     augmented_surface_set_rounded_corners_clip_bounds,
     augmented_surface_set_clip_rect,
     augmented_surface_set_frame_trace_id,
@@ -254,8 +252,6 @@ class AugmentedSubSurface : public SubSurfaceObserver {
       : sub_surface_(sub_surface) {
     sub_surface_->AddSubSurfaceObserver(this);
     sub_surface_->SetProperty(kSubSurfaceHasAugmentedSubSurfaceKey, true);
-    sub_surface_->surface()->set_leave_enter_callback(
-        Surface::LeaveEnterCallback());
   }
   AugmentedSubSurface(const AugmentedSubSurface&) = delete;
   AugmentedSubSurface& operator=(const AugmentedSubSurface&) = delete;
@@ -268,15 +264,6 @@ class AugmentedSubSurface : public SubSurfaceObserver {
 
   void SetPosition(float x, float y) {
     sub_surface_->SetPosition(gfx::PointF(x, y));
-  }
-
-  void SetClipRect(float x, float y, float width, float height) {
-    std::optional<gfx::RectF> clip_rect;
-    if (x >= 0 && y >= 0 && width >= 0 && height >= 0) {
-      clip_rect = gfx::RectF(x, y, width, height);
-    }
-    // TODO(rivr): Should we send a protocol error if there are invalid values?
-    sub_surface_->SetClipRect(clip_rect);
   }
 
   void SetTransform(const gfx::Transform& transform) {
@@ -311,13 +298,7 @@ void augmented_sub_surface_set_clip_rect_DEPRECATED(wl_client* client,
                                                     wl_fixed_t y,
                                                     wl_fixed_t width,
                                                     wl_fixed_t height) {
-  LOG(WARNING) << "Deprecated. Do NOT use this for new codes.";
-
-  // TODO(crbug.com/1457446): Remove the fallback implementation here once
-  // augmented_surface_set_clip_rect is spread enough.
-  GetUserDataAs<AugmentedSubSurface>(resource)->SetClipRect(
-      wl_fixed_to_double(x), wl_fixed_to_double(y), wl_fixed_to_double(width),
-      wl_fixed_to_double(height));
+  LOG(WARNING) << "Deprecated. The server doesn't support this request.";
 }
 
 void augmented_sub_surface_set_transform(wl_client* client,
@@ -330,12 +311,14 @@ void augmented_sub_surface_set_transform(wl_client* client,
     // | b d y | -> float[6] { a b c d x y }
     float* data = reinterpret_cast<float*>(matrix_data->data);
     // If b and c are 0, make a simplified transform using AxisTransform2d.
-    if (data[1] == 0 && data[2] == 0) {
+    if (UNSAFE_TODO(data[1]) == 0 && UNSAFE_TODO(data[2]) == 0) {
       transform = gfx::Transform(gfx::AxisTransform2d::FromScaleAndTranslation(
-          gfx::Vector2dF(data[0], data[3]), gfx::Vector2dF(data[4], data[5])));
+          gfx::Vector2dF(data[0], UNSAFE_TODO(data[3])),
+          gfx::Vector2dF(UNSAFE_TODO(data[4]), UNSAFE_TODO(data[5]))));
     } else {
-      transform = gfx::Transform::Affine(data[0], data[1], data[2], data[3],
-                                         data[4], data[5]);
+      transform = gfx::Transform::Affine(
+          data[0], UNSAFE_TODO(data[1]), UNSAFE_TODO(data[2]),
+          UNSAFE_TODO(data[3]), UNSAFE_TODO(data[4]), UNSAFE_TODO(data[5]));
     }
   } else if (matrix_data->size != 0) {
     wl_resource_post_error(resource, AUGMENTED_SUB_SURFACE_ERROR_INVALID_SIZE,
@@ -382,7 +365,8 @@ void augmenter_create_solid_color_buffer(wl_client* client,
                                          int width,
                                          int height) {
   float* data = reinterpret_cast<float*>(color_data->data);
-  SkColor4f color = {data[0], data[1], data[2], data[3]};
+  SkColor4f color = {data[0], UNSAFE_TODO(data[1]), UNSAFE_TODO(data[2]),
+                     UNSAFE_TODO(data[3])};
   std::unique_ptr<SolidColorBuffer> buffer =
       std::make_unique<SolidColorBuffer>(color, gfx::Size(width, height));
   wl_resource* buffer_resource = wl_resource_create(
@@ -399,7 +383,7 @@ void augmenter_get_augmented_surface(wl_client* client,
                                      uint32_t id,
                                      wl_resource* surface_resource) {
   Surface* surface = GetUserDataAs<Surface>(surface_resource);
-  if (surface->GetProperty(kSurfaceHasAugmentedSurfaceKey)) {
+  if (surface->is_augmented()) {
     wl_resource_post_error(resource,
                            SURFACE_AUGMENTER_ERROR_AUGMENTED_SURFACE_EXISTS,
                            "an augmenter for that surface already exists");

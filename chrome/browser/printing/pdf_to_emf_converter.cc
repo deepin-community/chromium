@@ -4,8 +4,9 @@
 
 #include "chrome/browser/printing/pdf_to_emf_converter.h"
 
-#include <stdint.h>
 #include <windows.h>
+
+#include <stdint.h>
 
 #include <memory>
 #include <optional>
@@ -19,7 +20,6 @@
 #include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/threading/thread_restrictions.h"
@@ -120,8 +120,6 @@ class PdfConverterImpl : public PdfConverter {
 
   void OnFailed(std::string_view error_message);
 
-  void RecordConversionMetrics();
-
   const PdfRenderSettings settings_;
 
   std::optional<bool> use_skia_;
@@ -136,11 +134,6 @@ class PdfConverterImpl : public PdfConverter {
   // Use containers that keeps element pointers valid after push() and pop().
   using GetPageCallbacks = base::queue<GetPageCallbackData>;
   GetPageCallbacks get_page_callbacks_;
-
-  // Keep track of document size and page counts for metrics.
-  size_t bytes_generated_ = 0;
-  uint32_t pages_generated_ = 0;
-  uint32_t page_count_ = 0;
 
   mojo::Remote<mojom::PdfToEmfConverter> pdf_to_emf_converter_;
 
@@ -188,8 +181,6 @@ PdfConverterImpl::PdfConverterImpl(scoped_refptr<base::RefCountedMemory> data,
 
 PdfConverterImpl::~PdfConverterImpl() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  RecordConversionMetrics();
 }
 
 void PdfConverterImpl::Initialize(scoped_refptr<base::RefCountedMemory> data) {
@@ -206,7 +197,7 @@ void PdfConverterImpl::Initialize(scoped_refptr<base::RefCountedMemory> data) {
   }
 
   PRINTER_LOG(EVENT) << "PdfConverter created. Mode: " << settings_.mode;
-  memcpy(memory.mapping.memory(), data->front(), data->size());
+  memory.mapping.GetMemoryAsSpan<uint8_t>().copy_prefix_from(*data);
 
   GetPrintingService()->BindPdfToEmfConverterFactory(
       pdf_to_emf_converter_factory_.BindNewPipeAndPassReceiver());
@@ -234,7 +225,6 @@ void PdfConverterImpl::OnPageCount(
     pdf_to_emf_converter_->SetUseSkiaRendererPolicy(*use_skia_);
   }
   std::move(start_callback_).Run(page_count);
-  page_count_ = page_count;
 }
 
 void PdfConverterImpl::GetPage(
@@ -266,12 +256,7 @@ void PdfConverterImpl::OnPageDone(base::ReadOnlySharedMemoryRegion emf_region,
   if (emf_region.IsValid()) {
     base::ReadOnlySharedMemoryMapping mapping = emf_region.Map();
     if (mapping.IsValid()) {
-      size_t mapping_size = mapping.size();
       metafile = GetMetaFileFromMapping(std::move(mapping));
-      if (metafile) {
-        ++pages_generated_;
-        bytes_generated_ += mapping_size;
-      }
     }
   }
 
@@ -310,44 +295,6 @@ void PdfConverterImpl::OnFailed(std::string_view error_message) {
   }
 
   Stop();
-}
-
-void PdfConverterImpl::RecordConversionMetrics() {
-  if (!page_count_ || page_count_ != pages_generated_) {
-    // TODO(thestig): Consider adding UMA to track failure rates.
-    return;
-  }
-
-  DCHECK(bytes_generated_);
-  size_t average_page_size_in_kb = bytes_generated_ / 1024;
-  average_page_size_in_kb /= page_count_;
-  switch (settings_.mode) {
-    case PdfRenderSettings::Mode::NORMAL:
-      UMA_HISTOGRAM_MEMORY_KB("Printing.ConversionSize.Emf",
-                              average_page_size_in_kb);
-      return;
-    case PdfRenderSettings::Mode::TEXTONLY:
-      // Intentionally not logged.
-      return;
-    case PdfRenderSettings::Mode::POSTSCRIPT_LEVEL2:
-      UMA_HISTOGRAM_MEMORY_KB("Printing.ConversionSize.PostScript2",
-                              average_page_size_in_kb);
-      return;
-    case PdfRenderSettings::Mode::POSTSCRIPT_LEVEL3:
-      UMA_HISTOGRAM_MEMORY_KB("Printing.ConversionSize.PostScript3",
-                              average_page_size_in_kb);
-      return;
-    case PdfRenderSettings::Mode::EMF_WITH_REDUCED_RASTERIZATION:
-      UMA_HISTOGRAM_MEMORY_KB(
-          "Printing.ConversionSize.EmfWithReducedRasterization",
-          average_page_size_in_kb);
-      return;
-    case PdfRenderSettings::Mode::POSTSCRIPT_LEVEL3_WITH_TYPE42_FONTS:
-      UMA_HISTOGRAM_MEMORY_KB(
-          "Printing.ConversionSize.PostScript3WithType42Fonts",
-          average_page_size_in_kb);
-      return;
-  }
 }
 
 }  // namespace

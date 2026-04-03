@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import './strings.m.js';
+import '/strings.m.js';
 
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
@@ -35,8 +35,8 @@ export enum DialogCloseReason {
 }
 
 export class BrowserProxy {
-  callbackRouter: PageCallbackRouter;
-  handler: PageHandlerInterface;
+  callbackRouter: PageCallbackRouter|undefined;
+  handler: PageHandlerInterface|undefined;
 
   constructor(omitHandler?: boolean) {
     if (omitHandler) {

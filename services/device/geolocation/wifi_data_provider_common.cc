@@ -4,6 +4,7 @@
 
 #include "services/device/geolocation/wifi_data_provider_common.h"
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/strings/stringprintf.h"
@@ -12,7 +13,7 @@
 
 namespace device {
 
-std::string MacAddressAsString(const uint8_t mac_as_int[6]) {
+std::string MacAddressAsString(base::span<const uint8_t, 6> mac_as_int) {
   // |mac_as_int| is big-endian. Write in byte chunks.
   // Format is XX-XX-XX-XX-XX-XX.
   static constexpr char kMacFormatString[] = "%02x-%02x-%02x-%02x-%02x-%02x";
@@ -67,11 +68,18 @@ void WifiDataProviderCommon::DoWifiScanTask() {
   if (!wlan_api_)
     return;
 
+  wlan_api_->GetAccessPointData(base::BindOnce(
+      &WifiDataProviderCommon::OnWifiScanTaskDone, weak_factory_.GetWeakPtr()));
+}
+
+void WifiDataProviderCommon::OnWifiScanTaskDone(
+    std::unique_ptr<WifiData::AccessPointDataSet> new_access_point_data) {
   bool update_available = false;
-  WifiData new_data;
-  if (!wlan_api_->GetAccessPointData(&new_data.access_point_data)) {
+  if (!new_access_point_data) {
     ScheduleNextScan(WifiPollingPolicy::Get()->NoWifiInterval());
   } else {
+    WifiData new_data;
+    new_data.access_point_data = std::move(*new_access_point_data);
     update_available = wifi_data_.DiffersSignificantly(new_data);
     wifi_data_ = new_data;
     WifiPollingPolicy::Get()->UpdatePollingInterval(update_available);

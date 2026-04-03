@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/strings/string_number_conversions.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/security_interstitials/content/security_interstitial_controller_client.h"
 #include "components/security_interstitials/content/security_interstitial_page.h"
@@ -68,7 +69,7 @@ MITMSoftwareBlockingPage::GetTypeForTesting() {
 }
 
 void MITMSoftwareBlockingPage::PopulateInterstitialStrings(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   mitm_software_ui_->PopulateStringsForHTML(load_time_data);
 
   PopulateEnhancedProtectionMessage(load_time_data);

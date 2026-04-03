@@ -61,7 +61,8 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const URLSecurityPolicy& url_security_policy,
       mojo::PendingRemote<device::mojom::WakeLockProvider> wake_lock_provider,
-      const scoped_refptr<base::SingleThreadTaskRunner>& task_runner);
+      const scoped_refptr<base::SingleThreadTaskRunner>& task_runner,
+      bool is_transient);
 
   ResourceDownloader(
       base::WeakPtr<UrlDownloadHandler::Delegate> delegate,
@@ -104,7 +105,8 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       net::CertStatus cert_status,
       network::mojom::URLResponseHeadPtr response_head,
       mojo::ScopedDataPipeConsumerHandle response_body,
-      network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints);
+      network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
+      bool is_transient);
 
   // Ask the |delegate_| to destroy this object.
   void Destroy();
@@ -170,8 +172,8 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
   bool is_content_initiated_;
 
 #if BUILDFLAG(IS_ANDROID)
-  // Whether the original URL must be downloaded.
-  bool is_must_download_ = true;
+  // Whether the original URL can be auto opened after download.
+  bool allow_auto_open_after_completion_ = false;
 #endif  // BUILDFLAG(IS_ANDROID)
 
   // Used to keep the system from sleeping while a download is ongoing. If the

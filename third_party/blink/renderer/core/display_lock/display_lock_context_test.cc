@@ -2,13 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "third_party/blink/renderer/core/display_lock/display_lock_context.h"
 
 #include <memory>
 #include <utility>
 
 #include "base/memory/ptr_util.h"
-#include "base/test/scoped_feature_list.h"
 #include "cc/base/features.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -20,7 +20,6 @@
 #include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
 #include "third_party/blink/renderer/core/dom/dom_token_list.h"
 #include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/finder/text_finder.h"
@@ -33,10 +32,13 @@
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
 #include "third_party/blink/renderer/core/html/html_plugin_element.h"
 #include "third_party/blink/renderer/core/html/html_template_element.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/core/timing/soft_navigation_context.h"
+#include "third_party/blink/renderer/core/timing/soft_navigation_heuristics.h"
+#include "third_party/blink/renderer/core/timing/soft_navigation_paint_attribution_tracker.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
@@ -99,13 +101,8 @@ class DisplayLockEmptyEventListener final : public NativeEventListener {
 };
 }  // namespace
 
-class DisplayLockContextTest : public testing::Test,
-                               public testing::WithParamInterface<bool>,
-                               private ScopedIntersectionOptimizationForTest {
+class DisplayLockContextTest : public testing::Test {
  public:
-  DisplayLockContextTest()
-      : ScopedIntersectionOptimizationForTest(GetParam()) {}
-
   void SetUp() override { web_view_helper_.Initialize(); }
 
   void TearDown() override { web_view_helper_.Reset(); }
@@ -130,7 +127,8 @@ class DisplayLockContextTest : public testing::Test,
   }
 
   void SetHtmlInnerHTML(const char* content) {
-    GetDocument().documentElement()->setInnerHTML(String::FromUTF8(content));
+    GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
+        String::FromUTF8(content));
     UpdateAllLifecyclePhasesForTest();
   }
 
@@ -200,9 +198,7 @@ class DisplayLockContextTest : public testing::Test,
   frame_test_helpers::WebViewHelper web_view_helper_;
 };
 
-INSTANTIATE_TEST_SUITE_P(All, DisplayLockContextTest, testing::Bool());
-
-TEST_P(DisplayLockContextTest, LockAfterAppendStyleDirtyBits) {
+TEST_F(DisplayLockContextTest, LockAfterAppendStyleDirtyBits) {
   SetHtmlInnerHTML(R"HTML(
     <style>
     div {
@@ -288,7 +284,7 @@ TEST_P(DisplayLockContextTest, LockAfterAppendStyleDirtyBits) {
       Color::FromRGB(0, 0, 255));
 }
 
-TEST_P(DisplayLockContextTest, LockedElementIsNotSearchableViaFindInPage) {
+TEST_F(DisplayLockContextTest, LockedElementIsNotSearchableViaFindInPage) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -316,7 +312,7 @@ TEST_P(DisplayLockContextTest, LockedElementIsNotSearchableViaFindInPage) {
   EXPECT_EQ(1, client.Count());
 }
 
-TEST_P(DisplayLockContextTest,
+TEST_F(DisplayLockContextTest,
        ActivatableLockedElementIsSearchableViaFindInPage) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
@@ -355,7 +351,7 @@ TEST_P(DisplayLockContextTest,
   EXPECT_GT(GetDocument().scrollingElement()->scrollTop(), 1000);
 }
 
-TEST_P(DisplayLockContextTest, FindInPageContinuesAfterRelock) {
+TEST_F(DisplayLockContextTest, FindInPageContinuesAfterRelock) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -399,7 +395,7 @@ TEST_P(DisplayLockContextTest, FindInPageContinuesAfterRelock) {
   EXPECT_EQ(1, client.Count());
 }
 
-TEST_P(DisplayLockContextTest, FindInPageTargetBelowLockedSize) {
+TEST_F(DisplayLockContextTest, FindInPageTargetBelowLockedSize) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -431,13 +427,10 @@ TEST_P(DisplayLockContextTest, FindInPageTargetBelowLockedSize) {
   UpdateAllLifecyclePhasesForTest();
   EXPECT_FALSE(container->GetDisplayLockContext()->IsLocked());
 
-  if (RuntimeEnabledFeatures::FractionalScrollOffsetsEnabled())
-    EXPECT_FLOAT_EQ(GetDocument().scrollingElement()->scrollTop(), 1768.5);
-  else
-    EXPECT_FLOAT_EQ(GetDocument().scrollingElement()->scrollTop(), 1768);
+  EXPECT_FLOAT_EQ(GetDocument().scrollingElement()->scrollTop(), 1769);
 }
 
-TEST_P(DisplayLockContextTest,
+TEST_F(DisplayLockContextTest,
        ActivatableLockedElementTickmarksAreAtLockedRoots) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
@@ -516,7 +509,7 @@ TEST_P(DisplayLockContextTest,
   EXPECT_EQ(gfx::Rect(0, y_offset, 200, 200), tick_rects[3]);
 }
 
-TEST_P(DisplayLockContextTest,
+TEST_F(DisplayLockContextTest,
        FindInPageWhileLockedContentChangesDoesNotCrash) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
@@ -546,11 +539,11 @@ TEST_P(DisplayLockContextTest,
   EXPECT_TRUE(container->GetDisplayLockContext()->IsLocked());
 
   // Change the inner text, this should not DCHECK.
-  container->setInnerHTML("please don't DCHECK");
+  container->SetInnerHTMLWithoutTrustedTypes("please don't DCHECK");
   UpdateAllLifecyclePhasesForTest();
 }
 
-TEST_P(DisplayLockContextTest, FindInPageWithChangedContent) {
+TEST_F(DisplayLockContextTest, FindInPageWithChangedContent) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -567,7 +560,7 @@ TEST_P(DisplayLockContextTest, FindInPageWithChangedContent) {
   auto* container = GetDocument().getElementById(AtomicString("container"));
   LockElement(*container, true /* activatable */);
   EXPECT_TRUE(container->GetDisplayLockContext()->IsLocked());
-  container->setInnerHTML(
+  container->SetInnerHTMLWithoutTrustedTypes(
       "testing"
       "<div>testing</div>"
       "tes<div style='display:none;'>x</div>ting");
@@ -579,7 +572,7 @@ TEST_P(DisplayLockContextTest, FindInPageWithChangedContent) {
   EXPECT_FALSE(container->GetDisplayLockContext()->IsLocked());
 }
 
-TEST_P(DisplayLockContextTest, FindInPageWithNoMatchesWontUnlock) {
+TEST_F(DisplayLockContextTest, FindInPageWithNoMatchesWontUnlock) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -605,7 +598,7 @@ TEST_P(DisplayLockContextTest, FindInPageWithNoMatchesWontUnlock) {
   EXPECT_TRUE(container->GetDisplayLockContext()->IsLocked());
 }
 
-TEST_P(DisplayLockContextTest,
+TEST_F(DisplayLockContextTest,
        NestedActivatableLockedElementIsSearchableViaFindInPage) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
@@ -660,7 +653,7 @@ TEST_P(DisplayLockContextTest,
   EXPECT_TRUE(nested_non_activatable->GetDisplayLockContext()->IsLocked());
 }
 
-TEST_P(DisplayLockContextTest,
+TEST_F(DisplayLockContextTest,
        NestedActivatableLockedElementIsNotUnlockedByFindInPage) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
@@ -694,7 +687,7 @@ TEST_P(DisplayLockContextTest,
   EXPECT_FALSE(child->GetDisplayLockContext()->IsLocked());
 }
 
-TEST_P(DisplayLockContextTest, CallUpdateStyleAndLayoutAfterChange) {
+TEST_F(DisplayLockContextTest, CallUpdateStyleAndLayoutAfterChange) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -742,7 +735,7 @@ TEST_P(DisplayLockContextTest, CallUpdateStyleAndLayoutAfterChange) {
   EXPECT_FALSE(element->ChildNeedsReattachLayoutTree());
 
   // Testing whitespace reattachment + dirty style.
-  element->setInnerHTML("<div>something</div>");
+  element->SetInnerHTMLWithoutTrustedTypes("<div>something</div>");
 
   EXPECT_FALSE(element->NeedsStyleRecalc());
   EXPECT_TRUE(element->ChildNeedsStyleRecalc());
@@ -775,7 +768,7 @@ TEST_P(DisplayLockContextTest, CallUpdateStyleAndLayoutAfterChange) {
   EXPECT_TRUE(element->ChildNeedsReattachLayoutTree());
 }
 
-TEST_P(DisplayLockContextTest, CallUpdateStyleAndLayoutAfterChangeCSS) {
+TEST_F(DisplayLockContextTest, CallUpdateStyleAndLayoutAfterChangeCSS) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -835,7 +828,7 @@ TEST_P(DisplayLockContextTest, CallUpdateStyleAndLayoutAfterChangeCSS) {
   EXPECT_TRUE(inner->GetLayoutObject());
 }
 
-TEST_P(DisplayLockContextTest, LockedElementAndDescendantsAreNotFocusable) {
+TEST_F(DisplayLockContextTest, LockedElementAndDescendantsAreNotFocusable) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -855,7 +848,7 @@ TEST_P(DisplayLockContextTest, LockedElementAndDescendantsAreNotFocusable) {
   // We start off as being focusable.
   ASSERT_TRUE(GetDocument()
                   .getElementById(AtomicString("textfield"))
-                  ->IsKeyboardFocusable());
+                  ->IsKeyboardFocusableSlow());
   ASSERT_TRUE(
       GetDocument().getElementById(AtomicString("textfield"))->IsFocusable());
   ASSERT_TRUE(
@@ -884,7 +877,7 @@ TEST_P(DisplayLockContextTest, LockedElementAndDescendantsAreNotFocusable) {
   // The input should not be focusable now.
   EXPECT_FALSE(GetDocument()
                    .getElementById(AtomicString("textfield"))
-                   ->IsKeyboardFocusable());
+                   ->IsKeyboardFocusableSlow());
   EXPECT_FALSE(
       GetDocument().getElementById(AtomicString("textfield"))->IsFocusable());
   EXPECT_FALSE(
@@ -911,7 +904,7 @@ TEST_P(DisplayLockContextTest, LockedElementAndDescendantsAreNotFocusable) {
             0);
   EXPECT_TRUE(GetDocument()
                   .getElementById(AtomicString("textfield"))
-                  ->IsKeyboardFocusable());
+                  ->IsKeyboardFocusableSlow());
   EXPECT_TRUE(
       GetDocument().getElementById(AtomicString("textfield"))->IsFocusable());
   EXPECT_TRUE(
@@ -923,7 +916,7 @@ TEST_P(DisplayLockContextTest, LockedElementAndDescendantsAreNotFocusable) {
             GetDocument().getElementById(AtomicString("textfield")));
 }
 
-TEST_P(DisplayLockContextTest, DisplayLockPreventsActivation) {
+TEST_F(DisplayLockContextTest, DisplayLockPreventsActivation) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <body>
@@ -942,8 +935,8 @@ TEST_P(DisplayLockContextTest, DisplayLockPreventsActivation) {
       *slotted, DisplayLockActivationReason::kAny));
 
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML(
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(
       "<div id='container' style='contain:style layout "
       "paint;'><slot></slot></div>");
   UpdateAllLifecyclePhasesForTest();
@@ -1031,7 +1024,7 @@ TEST_P(DisplayLockContextTest, DisplayLockPreventsActivation) {
       *non_viewport, DisplayLockActivationReason::kUserFocus));
 }
 
-TEST_P(DisplayLockContextTest,
+TEST_F(DisplayLockContextTest,
        LockedElementAndFlatTreeDescendantsAreNotFocusable) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
@@ -1045,13 +1038,13 @@ TEST_P(DisplayLockContextTest,
   auto* host = GetDocument().getElementById(AtomicString("shadowHost"));
   auto* text_field = GetDocument().getElementById(AtomicString("textfield"));
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML(
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(
       "<div id='container' style='contain:style layout "
       "paint;'><slot></slot></div>");
 
   UpdateAllLifecyclePhasesForTest();
-  ASSERT_TRUE(text_field->IsKeyboardFocusable());
+  ASSERT_TRUE(text_field->IsKeyboardFocusableSlow());
   ASSERT_TRUE(text_field->IsFocusable());
 
   auto* element = shadow_root.getElementById(AtomicString("container"));
@@ -1069,7 +1062,7 @@ TEST_P(DisplayLockContextTest,
             1);
 
   // The input should not be focusable now.
-  EXPECT_FALSE(text_field->IsKeyboardFocusable());
+  EXPECT_FALSE(text_field->IsKeyboardFocusableSlow());
   EXPECT_FALSE(text_field->IsFocusable());
 
   // Calling explicit focus() should also not focus the element.
@@ -1077,7 +1070,7 @@ TEST_P(DisplayLockContextTest,
   EXPECT_FALSE(GetDocument().FocusedElement());
 }
 
-TEST_P(DisplayLockContextTest, LockedCountsWithMultipleLocks) {
+TEST_F(DisplayLockContextTest, LockedCountsWithMultipleLocks) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -1170,7 +1163,7 @@ TEST_P(DisplayLockContextTest, LockedCountsWithMultipleLocks) {
             0);
 }
 
-TEST_P(DisplayLockContextTest, ActivatableNotCountedAsBlocking) {
+TEST_F(DisplayLockContextTest, ActivatableNotCountedAsBlocking) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -1247,7 +1240,7 @@ TEST_P(DisplayLockContextTest, ActivatableNotCountedAsBlocking) {
       DisplayLockActivationReason::kAny));
 }
 
-TEST_P(DisplayLockContextTest, ElementInTemplate) {
+TEST_F(DisplayLockContextTest, ElementInTemplate) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -1364,7 +1357,7 @@ TEST_P(DisplayLockContextTest, ElementInTemplate) {
             Color::FromRGB(0, 0, 255));
 }
 
-TEST_P(DisplayLockContextTest, AncestorAllowedTouchAction) {
+TEST_F(DisplayLockContextTest, AncestorAllowedTouchAction) {
   SetHtmlInnerHTML(R"HTML(
     <style>
     #locked {
@@ -1507,7 +1500,7 @@ TEST_P(DisplayLockContextTest, AncestorAllowedTouchAction) {
   EXPECT_TRUE(lockedchild_object->InsideBlockingTouchEventHandler());
 }
 
-TEST_P(DisplayLockContextTest, DescendantAllowedTouchAction) {
+TEST_F(DisplayLockContextTest, DescendantAllowedTouchAction) {
   SetHtmlInnerHTML(R"HTML(
     <style>
     #locked {
@@ -1645,7 +1638,7 @@ TEST_P(DisplayLockContextTest, DescendantAllowedTouchAction) {
   EXPECT_TRUE(handler_object->InsideBlockingTouchEventHandler());
 }
 
-TEST_P(DisplayLockContextTest, AncestorWheelEventHandler) {
+TEST_F(DisplayLockContextTest, AncestorWheelEventHandler) {
   SetHtmlInnerHTML(R"HTML(
     <style>
     #locked {
@@ -1783,7 +1776,7 @@ TEST_P(DisplayLockContextTest, AncestorWheelEventHandler) {
   EXPECT_TRUE(lockedchild_object->InsideBlockingWheelEventHandler());
 }
 
-TEST_P(DisplayLockContextTest, DescendantWheelEventHandler) {
+TEST_F(DisplayLockContextTest, DescendantWheelEventHandler) {
   SetHtmlInnerHTML(R"HTML(
     <style>
     #locked {
@@ -1915,7 +1908,7 @@ TEST_P(DisplayLockContextTest, DescendantWheelEventHandler) {
   EXPECT_TRUE(handler_object->InsideBlockingWheelEventHandler());
 }
 
-TEST_P(DisplayLockContextTest, DescendantNeedsPaintPropertyUpdateBlocked) {
+TEST_F(DisplayLockContextTest, DescendantNeedsPaintPropertyUpdateBlocked) {
   SetHtmlInnerHTML(R"HTML(
     <style>
     #locked {
@@ -2023,14 +2016,10 @@ TEST_P(DisplayLockContextTest, DescendantNeedsPaintPropertyUpdateBlocked) {
   EXPECT_FALSE(handler_object->DescendantNeedsPaintPropertyUpdate());
 }
 
-class DisplayLockContextRenderingTest
-    : public RenderingTest,
-      public testing::WithParamInterface<bool>,
-      private ScopedIntersectionOptimizationForTest {
+class DisplayLockContextRenderingTest : public RenderingTest {
  public:
   DisplayLockContextRenderingTest()
-      : RenderingTest(MakeGarbageCollected<SingleChildLocalFrameClient>()),
-        ScopedIntersectionOptimizationForTest(GetParam()) {}
+      : RenderingTest(MakeGarbageCollected<SingleChildLocalFrameClient>()) {}
 
   void SetUp() override {
     EnableCompositing();
@@ -2061,9 +2050,7 @@ class DisplayLockContextRenderingTest
   }
 };
 
-INSTANTIATE_TEST_SUITE_P(All, DisplayLockContextRenderingTest, testing::Bool());
-
-TEST_P(DisplayLockContextRenderingTest, FrameDocumentRemovedWhileAcquire) {
+TEST_F(DisplayLockContextRenderingTest, FrameDocumentRemovedWhileAcquire) {
   SetHtmlInnerHTML(R"HTML(
     <iframe id="frame"></iframe>
   )HTML");
@@ -2082,7 +2069,7 @@ TEST_P(DisplayLockContextRenderingTest, FrameDocumentRemovedWhileAcquire) {
   LockImmediate(&target->EnsureDisplayLockContext());
 }
 
-TEST_P(DisplayLockContextRenderingTest,
+TEST_F(DisplayLockContextRenderingTest,
        VisualOverflowCalculateOnChildPaintLayer) {
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -2133,7 +2120,7 @@ TEST_P(DisplayLockContextRenderingTest,
   EXPECT_FALSE(child_layer->NeedsVisualOverflowRecalc());
 }
 
-TEST_P(DisplayLockContextRenderingTest, FloatChildLocked) {
+TEST_F(DisplayLockContextRenderingTest, FloatChildLocked) {
   SetHtmlInnerHTML(R"HTML(
     <style>
       .hidden { content-visibility: hidden }
@@ -2183,7 +2170,7 @@ TEST_P(DisplayLockContextRenderingTest, FloatChildLocked) {
             lockable_box->ScrollableOverflowRect());
 }
 
-TEST_P(DisplayLockContextRenderingTest,
+TEST_F(DisplayLockContextRenderingTest,
        VisualOverflowCalculateOnChildPaintLayerInForcedLock) {
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -2239,38 +2226,8 @@ TEST_P(DisplayLockContextRenderingTest,
 
   UpdateAllLifecyclePhasesForTest();
 }
-TEST_P(DisplayLockContextRenderingTest,
-       SelectionOnAnonymousColumnSpannerDoesNotCrash) {
-  SetHtmlInnerHTML(R"HTML(
-    <style>
-      #columns {
-        column-count: 5;
-      }
-      #spanner {
-        column-span: all;
-      }
-    </style>
-    <div id="columns">
-      <div id="spanner"></div>
-    </div>
-  )HTML");
 
-  auto* columns_object =
-      GetDocument().getElementById(AtomicString("columns"))->GetLayoutObject();
-  LayoutObject* spanner_placeholder_object = nullptr;
-  for (auto* candidate = columns_object->SlowFirstChild(); candidate;
-       candidate = candidate->NextSibling()) {
-    if (candidate->IsLayoutMultiColumnSpannerPlaceholder()) {
-      spanner_placeholder_object = candidate;
-      break;
-    }
-  }
-
-  ASSERT_TRUE(spanner_placeholder_object);
-  EXPECT_FALSE(spanner_placeholder_object->CanBeSelectionLeaf());
-}
-
-TEST_P(DisplayLockContextRenderingTest, ObjectsNeedingLayoutConsidersLocks) {
+TEST_F(DisplayLockContextRenderingTest, ObjectsNeedingLayoutConsidersLocks) {
   SetHtmlInnerHTML(R"HTML(
     <div id=a>
       <div id=b>
@@ -2351,7 +2308,7 @@ TEST_P(DisplayLockContextRenderingTest, ObjectsNeedingLayoutConsidersLocks) {
   EXPECT_EQ(total_count, 4u);
 }
 
-TEST_P(DisplayLockContextRenderingTest,
+TEST_F(DisplayLockContextRenderingTest,
        PaintDirtyBitsNotPropagatedAcrossBoundary) {
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -2483,7 +2440,7 @@ TEST_P(DisplayLockContextRenderingTest,
   EXPECT_FALSE(grandchild_layer->DescendantNeedsRepaint());
 }
 
-TEST_P(DisplayLockContextRenderingTest,
+TEST_F(DisplayLockContextRenderingTest,
        NestedLockDoesNotInvalidateOnHideOrShow) {
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -2603,7 +2560,7 @@ TEST_P(DisplayLockContextRenderingTest,
   EXPECT_FALSE(inner_element->GetLayoutObject()->SelfNeedsFullLayout());
 }
 
-TEST_P(DisplayLockContextRenderingTest, NestedLockDoesHideWhenItIsOffscreen) {
+TEST_F(DisplayLockContextRenderingTest, NestedLockDoesHideWhenItIsOffscreen) {
   SetHtmlInnerHTML(R"HTML(
     <style>
       .auto { content-visibility: auto; }
@@ -2735,7 +2692,7 @@ TEST_P(DisplayLockContextRenderingTest, NestedLockDoesHideWhenItIsOffscreen) {
   EXPECT_TRUE(inner_context->IsLocked());
 }
 
-TEST_P(DisplayLockContextRenderingTest,
+TEST_F(DisplayLockContextRenderingTest,
        LockedCanvasWithFallbackHasFocusableStyle) {
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -2754,7 +2711,7 @@ TEST_P(DisplayLockContextRenderingTest,
   EXPECT_TRUE(target->IsFocusable());
 }
 
-TEST_P(DisplayLockContextRenderingTest, ForcedUnlockBookkeeping) {
+TEST_F(DisplayLockContextRenderingTest, ForcedUnlockBookkeeping) {
   SetHtmlInnerHTML(R"HTML(
     <style>
       .hidden { content-visibility: hidden; }
@@ -2779,7 +2736,7 @@ TEST_P(DisplayLockContextRenderingTest, ForcedUnlockBookkeeping) {
       GetDocument().GetDisplayLockDocumentState().LockedDisplayLockCount(), 0);
 }
 
-TEST_P(DisplayLockContextRenderingTest, LayoutRootIsSkippedIfLocked) {
+TEST_F(DisplayLockContextRenderingTest, LayoutRootIsSkippedIfLocked) {
   SetHtmlInnerHTML(R"HTML(
     <style>
       .hidden { content-visibility: hidden; }
@@ -2827,7 +2784,7 @@ TEST_P(DisplayLockContextRenderingTest, LayoutRootIsSkippedIfLocked) {
   EXPECT_FALSE(new_parent->GetLayoutObject()->NeedsLayout());
 }
 
-TEST_P(DisplayLockContextRenderingTest,
+TEST_F(DisplayLockContextRenderingTest,
        LayoutRootIsProcessedIfLockedAndForced) {
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -2883,7 +2840,7 @@ TEST_P(DisplayLockContextRenderingTest,
   EXPECT_FALSE(new_parent->GetLayoutObject()->NeedsLayout());
 }
 
-TEST_P(DisplayLockContextRenderingTest, ContainStrictChild) {
+TEST_F(DisplayLockContextRenderingTest, ContainStrictChild) {
   SetHtmlInnerHTML(R"HTML(
     <style>
       .hidden { content-visibility: hidden; }
@@ -2908,7 +2865,7 @@ TEST_P(DisplayLockContextRenderingTest, ContainStrictChild) {
   UpdateAllLifecyclePhasesForTest();
 }
 
-TEST_P(DisplayLockContextRenderingTest, UseCounter) {
+TEST_F(DisplayLockContextRenderingTest, UseCounter) {
   SetHtmlInnerHTML(R"HTML(
     <style>
       .auto { content-visibility: auto; }
@@ -2942,7 +2899,7 @@ TEST_P(DisplayLockContextRenderingTest, UseCounter) {
   EXPECT_TRUE(GetDocument().IsUseCounted(WebFeature::kContentVisibilityHidden));
 }
 
-TEST_P(DisplayLockContextRenderingTest,
+TEST_F(DisplayLockContextRenderingTest,
        NeedsLayoutTreeUpdateForNodeRespectsForcedLocks) {
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -2971,7 +2928,7 @@ TEST_P(DisplayLockContextRenderingTest,
   EXPECT_TRUE(GetDocument().NeedsLayoutTreeUpdateForNode(*target));
 }
 
-TEST_P(DisplayLockContextRenderingTest, InnerScrollerAutoVisibilityMargin) {
+TEST_F(DisplayLockContextRenderingTest, InnerScrollerAutoVisibilityMargin) {
   SetHtmlInnerHTML(R"HTML(
     <style>
       .auto { content-visibility: auto; }
@@ -3003,7 +2960,7 @@ TEST_P(DisplayLockContextRenderingTest, InnerScrollerAutoVisibilityMargin) {
   EXPECT_FALSE(target->GetDisplayLockContext()->IsLocked());
 }
 
-TEST_P(DisplayLockContextRenderingTest,
+TEST_F(DisplayLockContextRenderingTest,
        AutoReachesStableStateOnContentSmallerThanLockedSize) {
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -3054,7 +3011,7 @@ TEST_P(DisplayLockContextRenderingTest,
   EXPECT_EQ(GetDocument().scrollingElement()->scrollTop(), 29000.);
 }
 
-TEST_P(DisplayLockContextRenderingTest,
+TEST_F(DisplayLockContextRenderingTest,
        AutoReachesStableStateOnContentSmallerThanLockedSizeInLtr) {
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -3106,7 +3063,7 @@ TEST_P(DisplayLockContextRenderingTest,
   EXPECT_EQ(GetDocument().scrollingElement()->scrollLeft(), 29000.);
 }
 
-TEST_P(DisplayLockContextRenderingTest,
+TEST_F(DisplayLockContextRenderingTest,
        AutoReachesStableStateOnContentSmallerThanLockedSizeInRtl) {
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -3157,7 +3114,7 @@ TEST_P(DisplayLockContextRenderingTest,
   EXPECT_EQ(GetDocument().scrollingElement()->scrollLeft(), -29000.);
 }
 
-TEST_P(DisplayLockContextRenderingTest, FirstAutoFramePaintsInViewport) {
+TEST_F(DisplayLockContextRenderingTest, FirstAutoFramePaintsInViewport) {
   SetHtmlInnerHTML(R"HTML(
     <style>
       .spacer { height: 10000px }
@@ -3194,7 +3151,7 @@ TEST_P(DisplayLockContextRenderingTest, FirstAutoFramePaintsInViewport) {
   EXPECT_FLOAT_EQ(hidden_rect->height(), 200);
 }
 
-TEST_P(DisplayLockContextRenderingTest,
+TEST_F(DisplayLockContextRenderingTest,
        HadIntersectionNotificationsResetsWhenConnected) {
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -3221,7 +3178,7 @@ TEST_P(DisplayLockContextRenderingTest,
   EXPECT_TRUE(context->HadAnyViewportIntersectionNotifications());
 }
 
-TEST_P(DisplayLockContextTest, PrintingUnlocksAutoLocks) {
+TEST_F(DisplayLockContextTest, PrintingUnlocksAutoLocks) {
   ResizeAndFocus();
 
   SetHtmlInnerHTML(R"HTML(
@@ -3244,8 +3201,8 @@ TEST_P(DisplayLockContextTest, PrintingUnlocksAutoLocks) {
 
   {
     // Create a paint preview scope.
-    Document::PaintPreviewScope scope(GetDocument(),
-                                      Document::kPaintingPreview);
+    Document::PaintPreviewScope scope(GetDocument(), Document::kPaintingPreview,
+                                      /*allow_scrollbars=*/false);
     UpdateAllLifecyclePhasesForTest();
 
     EXPECT_FALSE(target->GetDisplayLockContext()->IsLocked());
@@ -3259,7 +3216,7 @@ TEST_P(DisplayLockContextTest, PrintingUnlocksAutoLocks) {
   EXPECT_TRUE(nested->GetDisplayLockContext()->IsLocked());
 }
 
-TEST_P(DisplayLockContextTest, CullRectUpdate) {
+TEST_F(DisplayLockContextTest, CullRectUpdate) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -3310,7 +3267,7 @@ TEST_P(DisplayLockContextTest, CullRectUpdate) {
             target->FirstFragment().GetCullRect().Rect());
 }
 
-TEST_P(DisplayLockContextTest, DisconnectedElementIsUnlocked) {
+TEST_F(DisplayLockContextTest, DisconnectedElementIsUnlocked) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -3333,7 +3290,7 @@ TEST_P(DisplayLockContextTest, DisconnectedElementIsUnlocked) {
   EXPECT_EQ(context->GetState(), EContentVisibility::kVisible);
 }
 
-TEST_P(DisplayLockContextTest, ConnectedElementDefersSubtreeChecks) {
+TEST_F(DisplayLockContextTest, ConnectedElementDefersSubtreeChecks) {
   ResizeAndFocus();
   SetHtmlInnerHTML(R"HTML(
     <style>
@@ -3356,10 +3313,10 @@ TEST_P(DisplayLockContextTest, ConnectedElementDefersSubtreeChecks) {
   range->setEnd(GetDocument().getElementById(AtomicString("s2"))->firstChild(),
                 5);
 
-  Selection().SetSelectionAndEndTyping(
-      SelectionInDOMTree::Builder()
-          .SetBaseAndExtent(EphemeralRange(range))
-          .Build());
+  Selection().SetSelection(SelectionInDOMTree::Builder()
+                               .SetBaseAndExtent(EphemeralRange(range))
+                               .Build(),
+                           SetSelectionOptions());
 
   UpdateAllLifecyclePhasesForTest();
 
@@ -3375,8 +3332,8 @@ TEST_P(DisplayLockContextTest, ConnectedElementDefersSubtreeChecks) {
   EXPECT_TRUE(HasSelection(context));
 }
 
-TEST_P(DisplayLockContextTest, BlockedReattachOfSlotted) {
-  GetDocument().body()->setHTMLUnsafe(R"HTML(
+TEST_F(DisplayLockContextTest, BlockedReattachOfSlotted) {
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
     <div id="host">
       <template shadowrootmode="open">
         <style>
@@ -3404,8 +3361,8 @@ TEST_P(DisplayLockContextTest, BlockedReattachOfSlotted) {
   EXPECT_FALSE(slotted->GetLayoutObject());
 }
 
-TEST_P(DisplayLockContextTest, BlockedReattachOfShadowTree) {
-  GetDocument().body()->setHTMLUnsafe(R"HTML(
+TEST_F(DisplayLockContextTest, BlockedReattachOfShadowTree) {
+  GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
     <style>
       .locked { content-visibility: hidden; }
     </style>
@@ -3431,8 +3388,8 @@ TEST_P(DisplayLockContextTest, BlockedReattachOfShadowTree) {
   EXPECT_FALSE(span->GetLayoutObject());
 }
 
-TEST_P(DisplayLockContextTest, BlockedReattachOfPseudoElements) {
-  GetDocument().documentElement()->setInnerHTML(R"HTML(
+TEST_F(DisplayLockContextTest, BlockedReattachOfPseudoElements) {
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       #locked::before { content: "X"; }
       .locked { content-visibility: hidden; }
@@ -3456,8 +3413,8 @@ TEST_P(DisplayLockContextTest, BlockedReattachOfPseudoElements) {
   EXPECT_FALSE(locked->GetPseudoElement(kPseudoIdBefore)->GetLayoutObject());
 }
 
-TEST_P(DisplayLockContextTest, BlockedReattachWhitespaceSibling) {
-  GetDocument().documentElement()->setInnerHTML(R"HTML(
+TEST_F(DisplayLockContextTest, BlockedReattachWhitespaceSibling) {
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       #locked { display: inline-block; }
       .locked { content-visibility: hidden; }
@@ -3485,8 +3442,8 @@ TEST_P(DisplayLockContextTest, BlockedReattachWhitespaceSibling) {
   EXPECT_TRUE(locked->nextSibling()->nextSibling()->GetLayoutObject());
 }
 
-TEST_P(DisplayLockContextTest, ReattachPropagationBlockedByDisplayLock) {
-  GetDocument().documentElement()->setInnerHTML(R"HTML(
+TEST_F(DisplayLockContextTest, ReattachPropagationBlockedByDisplayLock) {
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       #locked { content-visibility: hidden; }
     </style>
@@ -3536,8 +3493,8 @@ TEST_P(DisplayLockContextTest, ReattachPropagationBlockedByDisplayLock) {
   EXPECT_TRUE(GetDocument().GetStyleEngine().NeedsLayoutTreeRebuild());
 }
 
-TEST_P(DisplayLockContextTest, NoUpdatesInDisplayNone) {
-  GetDocument().documentElement()->setInnerHTML(R"HTML(
+TEST_F(DisplayLockContextTest, NoUpdatesInDisplayNone) {
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <div id=displaynone style="display:none">
       <div id=displaylocked style="content-visibility:hidden">
         <div id=child>hello</div>
@@ -3565,7 +3522,7 @@ TEST_P(DisplayLockContextTest, NoUpdatesInDisplayNone) {
   EXPECT_FALSE(child->GetLayoutObject());
 }
 
-TEST_P(DisplayLockContextTest, ElementActivateDisplayLockIfNeeded) {
+TEST_F(DisplayLockContextTest, ElementActivateDisplayLockIfNeeded) {
   SetHtmlInnerHTML(R"HTML(
     <div style="height: 10000px"></div>
     <div style="content-visibility: hidden" hidden="until-found"></div>
@@ -3578,7 +3535,7 @@ TEST_P(DisplayLockContextTest, ElementActivateDisplayLockIfNeeded) {
       DisplayLockActivationReason::kScrollIntoView));
 }
 
-TEST_P(DisplayLockContextTest, ShouldForceUnlockObjectWithFallbackContent) {
+TEST_F(DisplayLockContextTest, ShouldForceUnlockObjectWithFallbackContent) {
   SetHtmlInnerHTML(R"HTML(
     <div style="height: 10000px"></div>
     <object style="content-visibility: auto" id="target">foo bar</object>
@@ -3597,6 +3554,391 @@ TEST_P(DisplayLockContextTest, ShouldForceUnlockObjectWithFallbackContent) {
   target->UpdatePlugin();
   UpdateAllLifecyclePhasesForTest();
   EXPECT_FALSE(target->GetDisplayLockContext()->IsLocked());
+}
+
+class SoftNavigationDisplayLockContextTest : public DisplayLockContextTest {};
+
+TEST_F(SoftNavigationDisplayLockContextTest, AncestorSoftNavigationContext) {
+  SetHtmlInnerHTML(R"HTML(
+    <style>
+    #locked {
+      width: 100px;
+      height: 100px;
+      contain: style layout paint;
+    }
+    </style>
+    <div id="ancestor">
+      <div id="target">
+        <div id="descendant">
+          <div id="locked">
+            <div id="lockedchild">Content</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )HTML");
+
+  auto* ancestor_element =
+      GetDocument().getElementById(AtomicString("ancestor"));
+  auto* target_element = GetDocument().getElementById(AtomicString("target"));
+  auto* descendant_element =
+      GetDocument().getElementById(AtomicString("descendant"));
+  auto* locked_element = GetDocument().getElementById(AtomicString("locked"));
+  auto* lockedchild_element =
+      GetDocument().getElementById(AtomicString("lockedchild"));
+
+  LockElement(*locked_element, false);
+  EXPECT_TRUE(locked_element->GetDisplayLockContext()->IsLocked());
+
+  auto* ancestor_object = ancestor_element->GetLayoutObject();
+  auto* target_object = target_element->GetLayoutObject();
+  auto* descendant_object = descendant_element->GetLayoutObject();
+  auto* locked_object = locked_element->GetLayoutObject();
+  auto* lockedchild_object = lockedchild_element->GetLayoutObject();
+
+  EXPECT_FALSE(ancestor_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(lockedchild_object->SoftNavigationContextChanged());
+
+  EXPECT_FALSE(ancestor_object->DescendantBlockingWheelEventHandlerChanged());
+  EXPECT_FALSE(target_object->DescendantBlockingWheelEventHandlerChanged());
+  EXPECT_FALSE(descendant_object->DescendantBlockingWheelEventHandlerChanged());
+  EXPECT_FALSE(locked_object->DescendantBlockingWheelEventHandlerChanged());
+  EXPECT_FALSE(
+      lockedchild_object->DescendantBlockingWheelEventHandlerChanged());
+
+  EXPECT_TRUE(ancestor_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(target_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(descendant_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(locked_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(lockedchild_object->ShouldInheritSoftNavigationContext());
+
+  SoftNavigationContext* context =
+      MakeGarbageCollected<SoftNavigationContext>(*GetDocument().domWindow());
+  SoftNavigationHeuristics* heuristics =
+      GetDocument().domWindow()->GetSoftNavigationHeuristics();
+  ASSERT_TRUE(heuristics);
+  SoftNavigationPaintAttributionTracker* tracker =
+      heuristics->GetPaintAttributionTracker();
+  ASSERT_TRUE(tracker);
+  tracker->MarkNodeAsDirectlyModified(target_element, context);
+
+  EXPECT_FALSE(ancestor_object->SoftNavigationContextChanged());
+  EXPECT_TRUE(target_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(lockedchild_object->SoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(lockedchild_object->DescendantSoftNavigationContextChanged());
+
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(ancestor_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(lockedchild_object->SoftNavigationContextChanged());
+
+  EXPECT_FALSE(ancestor_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(lockedchild_object->DescendantSoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor_object->ShouldInheritSoftNavigationContext());
+  EXPECT_FALSE(target_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(descendant_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(locked_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(lockedchild_object->ShouldInheritSoftNavigationContext());
+
+  EXPECT_FALSE(tracker->IsAttributable(lockedchild_element, context));
+
+  // Manually commit the lock so that we can verify which dirty bits get
+  // propagated.
+  CommitElement(*locked_element, false);
+  UnlockImmediate(locked_element->GetDisplayLockContext());
+
+  EXPECT_FALSE(ancestor_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->SoftNavigationContextChanged());
+  EXPECT_TRUE(locked_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(lockedchild_object->SoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor_object->DescendantSoftNavigationContextChanged());
+  EXPECT_TRUE(target_object->DescendantSoftNavigationContextChanged());
+  EXPECT_TRUE(descendant_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(lockedchild_object->DescendantSoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor_object->ShouldInheritSoftNavigationContext());
+  EXPECT_FALSE(target_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(descendant_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(locked_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(lockedchild_object->ShouldInheritSoftNavigationContext());
+
+  EXPECT_FALSE(tracker->IsAttributable(lockedchild_element, context));
+
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(ancestor_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(lockedchild_object->SoftNavigationContextChanged());
+
+  EXPECT_FALSE(ancestor_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(lockedchild_object->DescendantSoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor_object->ShouldInheritSoftNavigationContext());
+  EXPECT_FALSE(target_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(descendant_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(locked_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(lockedchild_object->ShouldInheritSoftNavigationContext());
+
+  EXPECT_TRUE(tracker->IsAttributable(lockedchild_element, context));
+}
+
+TEST_F(SoftNavigationDisplayLockContextTest, DescendantSoftNavigationContext) {
+  SetHtmlInnerHTML(R"HTML(
+    <style>
+    #locked {
+      width: 100px;
+      height: 100px;
+      contain: style layout paint;
+    }
+    </style>
+    <div id="ancestor">
+      <div id="descendant">
+        <div id="locked">
+          <div id="target">
+            <div id="content">Content</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )HTML");
+
+  auto* ancestor_element =
+      GetDocument().getElementById(AtomicString("ancestor"));
+  auto* descendant_element =
+      GetDocument().getElementById(AtomicString("descendant"));
+  auto* locked_element = GetDocument().getElementById(AtomicString("locked"));
+  auto* target_element = GetDocument().getElementById(AtomicString("target"));
+  auto* content_element = GetDocument().getElementById(AtomicString("content"));
+
+  LockElement(*locked_element, false);
+  EXPECT_TRUE(locked_element->GetDisplayLockContext()->IsLocked());
+
+  auto* ancestor_object = ancestor_element->GetLayoutObject();
+  auto* descendant_object = descendant_element->GetLayoutObject();
+  auto* locked_object = locked_element->GetLayoutObject();
+  auto* target_object = target_element->GetLayoutObject();
+  auto* content_object = content_element->GetLayoutObject();
+
+  EXPECT_FALSE(ancestor_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->SoftNavigationContextChanged());
+
+  EXPECT_FALSE(ancestor_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->DescendantSoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(descendant_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(locked_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(target_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(content_object->ShouldInheritSoftNavigationContext());
+
+  auto* context =
+      MakeGarbageCollected<SoftNavigationContext>(*GetDocument().domWindow());
+  SoftNavigationHeuristics* heuristics =
+      GetDocument().domWindow()->GetSoftNavigationHeuristics();
+  ASSERT_TRUE(heuristics);
+  SoftNavigationPaintAttributionTracker* tracker =
+      heuristics->GetPaintAttributionTracker();
+  ASSERT_TRUE(tracker);
+  tracker->MarkNodeAsDirectlyModified(target_element, context);
+
+  EXPECT_FALSE(ancestor_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->SoftNavigationContextChanged());
+  EXPECT_TRUE(target_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->SoftNavigationContextChanged());
+
+  EXPECT_FALSE(ancestor_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->DescendantSoftNavigationContextChanged());
+  EXPECT_TRUE(locked_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->DescendantSoftNavigationContextChanged());
+
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(ancestor_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->SoftNavigationContextChanged());
+  EXPECT_TRUE(target_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->SoftNavigationContextChanged());
+
+  EXPECT_FALSE(ancestor_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->DescendantSoftNavigationContextChanged());
+  EXPECT_TRUE(locked_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->DescendantSoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(descendant_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(locked_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(target_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(content_object->ShouldInheritSoftNavigationContext());
+  EXPECT_FALSE(tracker->IsAttributable(content_element, context));
+
+  // Do the same check again. For now, nothing is expected to change. However,
+  // when we separate self and child layout, then some flags would be different.
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(ancestor_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->SoftNavigationContextChanged());
+  EXPECT_TRUE(target_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->SoftNavigationContextChanged());
+
+  EXPECT_FALSE(ancestor_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->DescendantSoftNavigationContextChanged());
+  EXPECT_TRUE(locked_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->DescendantSoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(descendant_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(locked_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(target_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(content_object->ShouldInheritSoftNavigationContext());
+  EXPECT_FALSE(tracker->IsAttributable(content_element, context));
+
+  // Manually commit the lock so that we can verify which dirty bits get
+  // propagated.
+  CommitElement(*locked_element, false);
+  UnlockImmediate(locked_element->GetDisplayLockContext());
+
+  EXPECT_FALSE(ancestor_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->SoftNavigationContextChanged());
+  EXPECT_TRUE(locked_object->SoftNavigationContextChanged());
+  EXPECT_TRUE(target_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->SoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor_object->DescendantSoftNavigationContextChanged());
+  EXPECT_TRUE(descendant_object->DescendantSoftNavigationContextChanged());
+  EXPECT_TRUE(locked_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->DescendantSoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(descendant_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(locked_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(target_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(content_object->ShouldInheritSoftNavigationContext());
+  EXPECT_FALSE(tracker->IsAttributable(content_element, context));
+
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(ancestor_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->SoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->SoftNavigationContextChanged());
+
+  EXPECT_FALSE(ancestor_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(descendant_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(locked_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target_object->DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(content_object->DescendantSoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(descendant_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(locked_object->ShouldInheritSoftNavigationContext());
+  EXPECT_FALSE(target_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(content_object->ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(tracker->IsAttributable(content_element, context));
+}
+
+TEST_F(DisplayLockContextRenderingTest,
+       VisualOverflowCalculateOnDescendantOfLockedSVGDoesNotCrash) {
+  SetHtmlInnerHTML(R"HTML(
+    <svg width=100 height=100>
+      <g id=outer_lock>
+        <foreignObject id=inner_lock width=100 height=100>
+          <div id=child style="width: 50px; height: 50px; background: blue;"></div>
+        </foreignObject>
+      </g>
+    </svg>
+  )HTML");
+
+  auto* outer = GetDocument().getElementById(AtomicString("outer_lock"));
+  auto* inner = GetDocument().getElementById(AtomicString("inner_lock"));
+
+  LockImmediate(&outer->EnsureDisplayLockContext());
+  LockImmediate(&inner->EnsureDisplayLockContext());
+
+  UpdateAllLifecyclePhasesForTest();
+
+  // Verify that outer doesn't have a layer, but inner does.
+  EXPECT_FALSE(outer->GetLayoutObject()->HasLayer());
+  auto* inner_layer = GetPaintLayerByElementId("inner_lock");
+  ASSERT_TRUE(inner_layer);
+
+  // Mark inner for overflow recalc.
+  inner_layer->SetNeedsVisualOverflowRecalc();
+
+  // Ensure no crash.
+  UpdateAllLifecyclePhasesForTest();
+}
+
+TEST_F(DisplayLockContextRenderingTest, VisualOverflowUpdateAfterUnlock) {
+  SetHtmlInnerHTML(R"HTML(
+    <style>
+      #target {
+        width: 100px;
+        height: 100px;
+        background: blue;
+        box-shadow: 10px 10px 0px red;
+        contain: style layout;
+      }
+    </style>
+    <div id="target"></div>
+  )HTML");
+
+  auto* target = GetDocument().getElementById(AtomicString("target"));
+  auto* box = target->GetLayoutBox();
+  auto* layer = box->Layer();
+
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(layer->GetLayoutObject().VisualOverflowRect(),
+            PhysicalRect(0, 0, 110, 110));
+
+  LockImmediate(&target->EnsureDisplayLockContext());
+  UpdateAllLifecyclePhasesForTest();
+
+  target->setAttribute(html_names::kStyleAttr,
+                       AtomicString("box-shadow: 20px 20px 0px red;"));
+  GetDocument().UpdateStyleAndLayoutTree();
+  EXPECT_TRUE(layer->NeedsVisualOverflowRecalc());
+
+  UpdateAllLifecyclePhasesForTest();
+
+  target->GetDisplayLockContext()->SetRequestedState(
+      EContentVisibility::kVisible);
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_EQ(layer->GetLayoutObject().VisualOverflowRect(),
+            PhysicalRect(0, 0, 120, 120));
 }
 
 }  // namespace blink

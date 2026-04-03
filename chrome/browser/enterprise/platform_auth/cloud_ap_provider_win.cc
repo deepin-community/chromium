@@ -4,22 +4,25 @@
 
 #include "chrome/browser/enterprise/platform_auth/cloud_ap_provider_win.h"
 
-#include <stdint.h>
-#include <windows.h>  // Must precede lmjoin.h.
+#include <objbase.h>
+
+#include <windows.h>
 
 #include <lmcons.h>
 #include <lmjoin.h>
-#include <objbase.h>
 #include <proofofpossessioncookieinfo.h>
+#include <stdint.h>
 #include <windows.security.authentication.web.core.h>
 #include <wrl/client.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/callback_list.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -33,6 +36,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -44,6 +48,7 @@
 #include "base/win/scoped_hstring.h"
 #include "chrome/browser/enterprise/platform_auth/cloud_ap_utils_win.h"
 #include "chrome/browser/enterprise/platform_auth/platform_auth_features.h"
+#include "components/policy/core/common/policy_logger.h"
 #include "net/cookies/cookie_util.h"
 #include "net/http/http_request_headers.h"
 #include "url/gurl.h"
@@ -187,10 +192,15 @@ void ParseCookieInfo(const ProofOfPossessionCookieInfo* cookie_info,
 
   // If the auth cookie name begins with 'x-ms-', attach the cookie as a
   // new header. Otherwise, append it to the existing list of cookies.
-  static constexpr base::StringPiece kHeaderPrefix("x-ms-");
+  static constexpr std::string_view kHeaderPrefix("x-ms-");
   for (DWORD i = 0; i < cookie_info_count; ++i) {
-    const ProofOfPossessionCookieInfo& cookie = cookie_info[i];
+    const ProofOfPossessionCookieInfo& cookie = UNSAFE_TODO(cookie_info[i]);
     auto ascii_cookie_name = base::WideToASCII(cookie.name);
+    // TODO(b/425887809): Remove after debugging.
+    VLOG_POLICY(1, EXTENSIBLE_SSO)
+        << "[CloudAPAuthEnabled] Fetched cookie with name " << ascii_cookie_name
+        << " and size " << wcslen(cookie.data);
+
     if (base::StartsWith(ascii_cookie_name, kHeaderPrefix,
                          base::CompareCase::INSENSITIVE_ASCII)) {
       // Removing cookie attributes from the value before setting it as a
@@ -249,11 +259,18 @@ net::HttpRequestHeaders GetAuthData(const GURL& url) {
     base::UmaHistogramExactLinear("Enterprise.PlatformAuth.GetAuthData.Count",
                                   cookie_info_count,
                                   10);  // Expect < 10 cookies.
+    // TODO(b/425887809): Remove after debugging.
+    VLOG_POLICY(1, EXTENSIBLE_SSO)
+        << "[CloudAPAuthEnabled] Successfully fetched " << cookie_info_count
+        << " cookies.";
   } else {
     base::UmaHistogramTimes("Enterprise.PlatformAuth.GetAuthData.FailureTime",
                             delta);
     base::UmaHistogramSparse(
         "Enterprise.PlatformAuth.GetAuthData.FailureHresult", int{hresult});
+    // TODO(b/425887809): Remove after debugging.
+    VLOG_POLICY(1, EXTENSIBLE_SSO)
+        << "[CloudAPAuthEnabled] Failed to fetch cookies.";
   }
 
   return auth_headers;
@@ -389,6 +406,10 @@ CloudApProviderWin::CloudApProviderWin() = default;
 
 CloudApProviderWin::~CloudApProviderWin() = default;
 
+bool CloudApProviderWin::SupportsOriginFiltering() {
+  return true;
+}
+
 void CloudApProviderWin::FetchOrigins(FetchOriginsCallback on_fetch_complete) {
   // The strategy is as follows:
   // 1. See if the ProofOfPossessionCookieInfoManager can be instantiated. If
@@ -416,7 +437,8 @@ void CloudApProviderWin::FetchOrigins(FetchOriginsCallback on_fetch_complete) {
 void CloudApProviderWin::GetData(
     const GURL& url,
     PlatformAuthProviderManager::GetDataCallback callback) {
-  get_data_subscription_ = on_get_data_callback_list_.Add(std::move(callback));
+  get_data_subscriptions_.push_back(
+      on_get_data_callback_list_.Add(std::move(callback)));
   if (!base::ThreadPool::CreateCOMSTATaskRunner(
            {base::TaskPriority::USER_BLOCKING,
             base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN, base::MayBlock()})

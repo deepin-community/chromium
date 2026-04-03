@@ -4,9 +4,6 @@
 
 #include "chrome/browser/ui/webui/ash/arc_power_control/arc_power_control_handler.h"
 
-#include "ash/components/arc/mojom/power.mojom.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
 #include "base/functional/bind.h"
 #include "base/linux_util.h"
 #include "base/process/launch.h"
@@ -21,6 +18,9 @@
 #include "chrome/browser/ash/arc/tracing/present_frames_tracer.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chromeos/ash/experiences/arc/mojom/power.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 
 namespace ash {
 
@@ -165,8 +165,9 @@ void ArcPowerControlHandler::OnThrottle(bool throttled) {
   std::string mode = kThrottlingAuto;
   auto* observer = instance_throttle_->GetObserverByName(
       arc::ArcInstanceThrottle::kChromeArcPowerControlPageObserver);
-  if (observer && observer->enforced())
+  if (observer && observer->enforced()) {
     mode = observer->active() ? kThrottlingDisable : kThrottlingForce;
+  }
 
   CallJavascriptFunction(GetJavascriptDomain() + "setThrottlingMode",
                          base::Value(mode));
@@ -177,12 +178,13 @@ void ArcPowerControlHandler::OnThrottle(bool throttled) {
   }
 }
 
-void ArcPowerControlHandler::HandleReady(const base::Value::List& args) {
+void ArcPowerControlHandler::HandleReady(const base::ListValue& args) {
   arc::mojom::PowerInstance* power_instance = ARC_GET_INSTANCE_FOR_METHOD(
       arc::ArcServiceManager::Get()->arc_bridge_service()->power(),
       GetWakefulnessMode);
-  if (!power_instance)
+  if (!power_instance) {
     return;
+  }
 
   power_instance->GetWakefulnessMode(
       base::BindOnce(&ArcPowerControlHandler::OnWakefulnessChanged,
@@ -198,7 +200,7 @@ void ArcPowerControlHandler::HandleReady(const base::Value::List& args) {
 }
 
 void ArcPowerControlHandler::HandleSetWakefulnessMode(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK_EQ(1U, args.size());
 
   if (!power_control_enabled_) {
@@ -220,19 +222,22 @@ void ArcPowerControlHandler::HandleSetWakefulnessMode(
     if (wakefulness_mode_ == arc::mojom::WakefulnessMode::ASLEEP) {
       arc::mojom::PowerInstance* const power_instance =
           ARC_GET_INSTANCE_FOR_METHOD(power, Resume);
-      if (power_instance)
+      if (power_instance) {
         power_instance->Resume();
+      }
     } else {
       arc::mojom::PowerInstance* const power_instance =
           ARC_GET_INSTANCE_FOR_METHOD(power, SetIdleState);
-      if (power_instance)
+      if (power_instance) {
         power_instance->SetIdleState(arc::mojom::IdleState::ACTIVE);
+      }
     }
   } else if (mode == kWakenessfullDoze) {
     arc::mojom::PowerInstance* const power_instance =
         ARC_GET_INSTANCE_FOR_METHOD(power, SetIdleState);
-    if (power_instance)
+    if (power_instance) {
       power_instance->SetIdleState(arc::mojom::IdleState::INACTIVE);
+    }
   } else if (mode == kWakenessfullForceDoze) {
     arc::mojom::PowerInstance* const power_instance =
         ARC_GET_INSTANCE_FOR_METHOD(power, SetIdleState);
@@ -242,15 +247,15 @@ void ArcPowerControlHandler::HandleSetWakefulnessMode(
   } else if (mode == kWakenessfullSleep) {
     arc::mojom::PowerInstance* const power_instance =
         ARC_GET_INSTANCE_FOR_METHOD(power, Suspend);
-    if (power_instance)
+    if (power_instance) {
       power_instance->Suspend(base::BindOnce(&OnAndroidSuspendReady));
+    }
   } else {
     LOG(ERROR) << "Invalid mode: " << mode;
   }
 }
 
-void ArcPowerControlHandler::HandleSetThrottling(
-    const base::Value::List& args) {
+void ArcPowerControlHandler::HandleSetThrottling(const base::ListValue& args) {
   DCHECK_EQ(1U, args.size());
 
   if (!power_control_enabled_) {
@@ -287,12 +292,12 @@ void ArcPowerControlHandler::HandleSetThrottling(
   }
 }
 
-void ArcPowerControlHandler::HandleStartTracing(const base::Value::List& args) {
+void ArcPowerControlHandler::HandleStartTracing(const base::ListValue& args) {
   DCHECK(!args.size());
   StartTracing();
 }
 
-void ArcPowerControlHandler::HandleStopTracing(const base::Value::List& args) {
+void ArcPowerControlHandler::HandleStopTracing(const base::ListValue& args) {
   DCHECK(!args.size());
   StopTracing();
 }
@@ -317,8 +322,9 @@ void ArcPowerControlHandler::StartTracing() {
 }
 
 void ArcPowerControlHandler::StopTracing() {
-  if (!system_stat_collector_)
+  if (!system_stat_collector_) {
     return;
+  }
 
   const base::TimeTicks tracing_time_max = TRACE_TIME_TICKS_NOW();
   stop_tracing_timer_.Stop();
@@ -371,10 +377,11 @@ void ArcPowerControlHandler::UpdatePowerControlStatus() {
   }
 
   status += " (";
-  if (instance_throttle_->should_throttle())
+  if (instance_throttle_->should_throttle()) {
     status += "throttling";
-  else
+  } else {
     status += "critical foreground";
+  }
   status += ")";
 
   CallJavascriptFunction(GetJavascriptDomain() + "setPowerControlStatus",

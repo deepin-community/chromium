@@ -33,16 +33,14 @@ const char kMessageTypeUnlockResponse[] = "unlock_response";
 const char kUnlockEventName[] = "easy_unlock";
 
 // Serializes the |value| to a JSON string and returns the result.
-std::string SerializeValueToJson(const base::Value::Dict& value) {
-  std::string json;
-  base::JSONWriter::Write(value, &json);
-  return json;
+std::string SerializeValueToJson(const base::DictValue& value) {
+  return base::WriteJson(value).value_or("");
 }
 
 // Returns the message type represented by the |message|. This is a convenience
 // wrapper that should only be called when the |message| is known to specify its
 // message type, i.e. this should not be called for untrusted input.
-std::string GetMessageType(const base::Value::Dict& message) {
+std::string GetMessageType(const base::DictValue& message) {
   const std::string* type = message.FindString(kTypeKey);
   return type ? *type : std::string();
 }
@@ -69,7 +67,7 @@ void MessengerImpl::RemoveObserver(MessengerObserver* observer) {
 }
 
 void MessengerImpl::DispatchUnlockEvent() {
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set(kTypeKey, kMessageTypeLocalEvent);
   message.Set(kNameKey, kUnlockEventName);
   queued_messages_.push_back(PendingMessage(message));
@@ -77,7 +75,7 @@ void MessengerImpl::DispatchUnlockEvent() {
 }
 
 void MessengerImpl::RequestUnlock() {
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set(kTypeKey, kMessageTypeUnlockRequest);
   queued_messages_.push_back(PendingMessage(message));
   ProcessMessageQueue();
@@ -94,7 +92,7 @@ MessengerImpl::PendingMessage::PendingMessage() = default;
 
 MessengerImpl::PendingMessage::~PendingMessage() = default;
 
-MessengerImpl::PendingMessage::PendingMessage(const base::Value::Dict& message)
+MessengerImpl::PendingMessage::PendingMessage(const base::DictValue& message)
     : json_message(SerializeValueToJson(message)),
       type(GetMessageType(message)) {}
 
@@ -118,7 +116,7 @@ void MessengerImpl::ProcessMessageQueue() {
 }
 
 void MessengerImpl::HandleRemoteStatusUpdateMessage(
-    const base::Value::Dict& message) {
+    const base::DictValue& message) {
   std::unique_ptr<RemoteStatusUpdate> status_update =
       RemoteStatusUpdate::Deserialize(message);
   if (!status_update) {
@@ -131,7 +129,7 @@ void MessengerImpl::HandleRemoteStatusUpdateMessage(
 }
 
 void MessengerImpl::HandleUnlockResponseMessage(
-    const base::Value::Dict& message) {
+    const base::DictValue& message) {
   for (auto& observer : observers_)
     observer.OnUnlockResponse(true);
 }
@@ -147,14 +145,14 @@ void MessengerImpl::OnMessageReceived(const std::string& payload) {
 
 void MessengerImpl::HandleMessage(const std::string& message) {
   // The decoded message should be a JSON string.
-  std::optional<base::Value> message_value = base::JSONReader::Read(message);
-  if (!message_value || !message_value->is_dict()) {
+  std::optional<base::DictValue> message_value =
+      base::JSONReader::ReadDict(message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!message_value) {
     PA_LOG(ERROR) << "Unable to parse message as JSON:\n" << message;
     return;
   }
 
-  const base::Value::Dict& message_dictionary = message_value->GetDict();
-  const std::string* type = message_dictionary.FindString(kTypeKey);
+  const std::string* type = message_value->FindString(kTypeKey);
   if (!type) {
     PA_LOG(ERROR) << "Missing '" << kTypeKey << "' key in message:\n "
                   << message;
@@ -163,7 +161,7 @@ void MessengerImpl::HandleMessage(const std::string& message) {
 
   // Remote status updates can be received out of the blue.
   if (*type == kMessageTypeRemoteStatusUpdate) {
-    HandleRemoteStatusUpdateMessage(message_dictionary);
+    HandleRemoteStatusUpdateMessage(*message_value);
     return;
   }
 
@@ -178,8 +176,11 @@ void MessengerImpl::HandleMessage(const std::string& message) {
   if (pending_message_->type == kMessageTypeUnlockRequest) {
     expected_type = kMessageTypeUnlockResponse;
   } else {
-    DUMP_WILL_BE_NOTREACHED_NORETURN();  // There are no other message types
-                                         // that expect a response.
+    // (crbug.com/286944516): Unexpected path occurring.
+    PA_LOG(ERROR) << "Response received from unexpected message type: "
+                  << pending_message_->type;
+    DUMP_WILL_BE_NOTREACHED();  // There are no other message types
+                                // that expect a response.
   }
 
   if (*type != expected_type) {
@@ -190,7 +191,7 @@ void MessengerImpl::HandleMessage(const std::string& message) {
   }
 
   if (*type == kMessageTypeUnlockResponse) {
-    HandleUnlockResponseMessage(message_dictionary);
+    HandleUnlockResponseMessage(*message_value);
   } else {
     NOTREACHED();  // There are no other message types that expect a response.
   }
@@ -209,8 +210,15 @@ void MessengerImpl::OnSendMessageResult(bool success) {
   // Don't wait if the message could not be sent, as there won't ever be a
   // response in that case. Likewise, don't wait for a response to local
   // event messages, as there is no response for such messages.
-  if (success && pending_message_->type != kMessageTypeLocalEvent)
+  if (success && pending_message_->type != kMessageTypeLocalEvent) {
     return;
+  }
+
+  // Be prepared in case that an observer deletes this object.
+  //
+  // Note that it's not clear whether it's allowed/supported by design or not
+  // that an observer deletes this object. See also crbug.com/392028938
+  base::WeakPtr<MessengerImpl> weak_this = weak_ptr_factory_.GetWeakPtr();
 
   // Notify observer of failure if sending the message fails.
   // For local events, we don't expect a response, so on success, we
@@ -224,6 +232,12 @@ void MessengerImpl::OnSendMessageResult(bool success) {
   } else {
     PA_LOG(ERROR) << "Message of unknown type '" << pending_message_->type
                   << "' sent.";
+  }
+
+  // Note that it's not clear whether it's allowed/supported by design or not
+  // that an observer deletes this object. See also crbug.com/392028938
+  if (!weak_this) {
+    return;  // An observer has deleted this object.
   }
 
   pending_message_.reset();

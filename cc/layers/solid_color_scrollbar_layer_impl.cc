@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/memory/ptr_util.h"
+#include "cc/input/scroll_utils.h"
 #include "cc/trees/occlusion.h"
 #include "components/viz/common/quads/solid_color_draw_quad.h"
 
@@ -26,6 +27,10 @@ SolidColorScrollbarLayerImpl::Create(LayerTreeImpl* tree_impl,
 }
 
 SolidColorScrollbarLayerImpl::~SolidColorScrollbarLayerImpl() = default;
+
+mojom::LayerType SolidColorScrollbarLayerImpl::GetLayerType() const {
+  return mojom::LayerType::kSolidColorScrollbar;
+}
 
 std::unique_ptr<LayerImpl> SolidColorScrollbarLayerImpl::CreateLayerImpl(
     LayerTreeImpl* tree_impl) const {
@@ -66,12 +71,8 @@ int SolidColorScrollbarLayerImpl::ThumbThickness() const {
   }
 }
 
-int SolidColorScrollbarLayerImpl::ThumbLength() const {
-  float thumb_length = TrackLength();
-  if (scroll_layer_length())
-    thumb_length *= clip_layer_length() / scroll_layer_length();
-
-  return std::max(static_cast<int>(thumb_length), ThumbThickness());
+int SolidColorScrollbarLayerImpl::MinimumThumbLength() const {
+  return ThumbThickness();
 }
 
 float SolidColorScrollbarLayerImpl::TrackLength() const {
@@ -89,6 +90,7 @@ bool SolidColorScrollbarLayerImpl::IsThumbResizable() const {
 }
 
 void SolidColorScrollbarLayerImpl::AppendQuads(
+    const AppendQuadsContext& context,
     viz::CompositorRenderPass* render_pass,
     AppendQuadsData* append_quads_data) {
   viz::SharedQuadState* shared_quad_state =
@@ -108,10 +110,6 @@ void SolidColorScrollbarLayerImpl::AppendQuads(
   auto* quad = render_pass->CreateAndAppendDrawQuad<viz::SolidColorDrawQuad>();
   quad->SetNew(shared_quad_state, thumb_quad_rect, visible_quad_rect, color_,
                false);
-}
-
-const char* SolidColorScrollbarLayerImpl::LayerTypeAsString() const {
-  return "cc::SolidColorScrollbarLayerImpl";
 }
 
 }  // namespace cc

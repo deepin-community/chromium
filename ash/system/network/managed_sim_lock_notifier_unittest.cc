@@ -10,6 +10,7 @@
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "chromeos/ash/components/network/cellular_metrics_logger.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_handler_test_helper.h"
@@ -61,7 +62,7 @@ class ManagedSimLockNotifierTest : public NoSessionAshTestBase {
     network_handler_test_helper_.reset();
   }
 
-  void LogIn() { SimulateUserLogin("user1@test.com"); }
+  void LogIn() { SimulateUserLogin({"user1@test.com"}); }
 
   void LogOut() { ClearLogin(); }
 
@@ -81,7 +82,7 @@ class ManagedSimLockNotifierTest : public NoSessionAshTestBase {
       bool enable,
       const std::optional<std::string>& lock_type = std::nullopt) {
     // Simulate a locked SIM.
-    base::Value::Dict sim_lock_status;
+    base::DictValue sim_lock_status;
     sim_lock_status.Set(shill::kSIMLockEnabledProperty, enable);
     if (lock_type.has_value())
       sim_lock_status.Set(shill::kSIMLockTypeProperty, *lock_type);
@@ -92,8 +93,8 @@ class ManagedSimLockNotifierTest : public NoSessionAshTestBase {
             base::Value(std::move(sim_lock_status)), /*notify_changed=*/true);
 
     // Set the cellular service to be the active profile.
-    base::Value::List sim_slot_infos;
-    base::Value::Dict slot_info_item;
+    base::ListValue sim_slot_infos;
+    base::DictValue slot_info_item;
     slot_info_item.Set(shill::kSIMSlotInfoICCID, kTestIccid);
     slot_info_item.Set(shill::kSIMSlotInfoPrimary, true);
     sim_slot_infos.Append(std::move(slot_info_item));
@@ -107,12 +108,12 @@ class ManagedSimLockNotifierTest : public NoSessionAshTestBase {
   }
 
   void SetAllowCellularSimLock(bool allow_cellular_sim_lock) {
-    base::Value::Dict global_config;
+    base::DictValue global_config;
     global_config.Set(::onc::global_network_config::kAllowCellularSimLock,
                       allow_cellular_sim_lock);
     managed_network_configuration_handler()->SetPolicy(
         ::onc::ONC_SOURCE_DEVICE_POLICY, /*userhash=*/std::string(),
-        base::Value::List(), global_config);
+        base::ListValue(), global_config);
     base::RunLoop().RunUntilIdle();
   }
 
@@ -162,10 +163,13 @@ class ManagedSimLockNotifierTest : public NoSessionAshTestBase {
   std::unique_ptr<network_config::CrosNetworkConfigTestHelper>
       network_config_helper_;
   std::unique_ptr<NetworkHandlerTestHelper> network_handler_test_helper_;
+  base::test::ScopedFeatureList scoped_feature_list_;
   base::HistogramTester histogram_tester_;
 };
 
 TEST_F(ManagedSimLockNotifierTest, PolicyChanged) {
+  scoped_feature_list_.InitAndDisableFeature(
+      ash::features::kAllowApnModificationPolicy);
   AddCellularDevice();
   AddCellularService();
   EXPECT_FALSE(GetManagedSimLockNotification());
@@ -181,6 +185,8 @@ TEST_F(ManagedSimLockNotifierTest, PolicyChanged) {
 }
 
 TEST_F(ManagedSimLockNotifierTest, NewActiveSession) {
+  scoped_feature_list_.InitAndDisableFeature(
+      ash::features::kAllowApnModificationPolicy);
   AddCellularDevice();
   AddCellularService();
   SetCellularSimLockEnabled(true);
@@ -233,6 +239,8 @@ TEST_F(ManagedSimLockNotifierTest, NewActiveSession) {
 }
 
 TEST_F(ManagedSimLockNotifierTest, HideNotificationOnLockDisabled) {
+  scoped_feature_list_.InitAndDisableFeature(
+      ash::features::kAllowApnModificationPolicy);
   AddCellularDevice();
   AddCellularService();
   SetCellularSimLockEnabled(true);
@@ -246,6 +254,8 @@ TEST_F(ManagedSimLockNotifierTest, HideNotificationOnLockDisabled) {
 }
 
 TEST_F(ManagedSimLockNotifierTest, PrimarySimIccidChanged) {
+  scoped_feature_list_.InitAndDisableFeature(
+      ash::features::kAllowApnModificationPolicy);
   AddCellularDevice();
   AddCellularService();
   SetCellularSimLockEnabled(true);
@@ -256,13 +266,13 @@ TEST_F(ManagedSimLockNotifierTest, PrimarySimIccidChanged) {
 
   EXPECT_FALSE(GetManagedSimLockNotification());
   // Simulate primary ICCID changed. Notification should be shown after.
-  base::Value::List sim_slot_infos;
-  base::Value::Dict slot_info_item;
+  base::ListValue sim_slot_infos;
+  base::DictValue slot_info_item;
   slot_info_item.Set(shill::kSIMSlotInfoICCID, kTestIccid);
   slot_info_item.Set(shill::kSIMSlotInfoPrimary, false);
   sim_slot_infos.Append(std::move(slot_info_item));
 
-  base::Value::Dict slot_info_item_2;
+  base::DictValue slot_info_item_2;
   slot_info_item_2.Set(shill::kSIMSlotInfoICCID, "kTestIccid2");
   slot_info_item_2.Set(shill::kSIMSlotInfoPrimary, true);
   sim_slot_infos.Append(std::move(slot_info_item_2));
@@ -279,6 +289,8 @@ TEST_F(ManagedSimLockNotifierTest, PrimarySimIccidChanged) {
 }
 
 TEST_F(ManagedSimLockNotifierTest, NotificationOnCellularOnOrOff) {
+  scoped_feature_list_.InitAndDisableFeature(
+      ash::features::kAllowApnModificationPolicy);
   base::HistogramTester histograms;
 
   AddCellularDevice();
@@ -301,6 +313,8 @@ TEST_F(ManagedSimLockNotifierTest, NotificationOnCellularOnOrOff) {
 }
 
 TEST_F(ManagedSimLockNotifierTest, NotificationClicked) {
+  scoped_feature_list_.InitAndDisableFeature(
+      ash::features::kAllowApnModificationPolicy);
   base::HistogramTester histograms;
 
   AddCellularDevice();
@@ -326,6 +340,8 @@ TEST_F(ManagedSimLockNotifierTest, NotificationClicked) {
 }
 
 TEST_F(ManagedSimLockNotifierTest, NotificationDismissedByUser) {
+  scoped_feature_list_.InitAndDisableFeature(
+      ash::features::kAllowApnModificationPolicy);
   base::HistogramTester histograms;
 
   AddCellularDevice();
@@ -349,6 +365,8 @@ TEST_F(ManagedSimLockNotifierTest, NotificationDismissedByUser) {
 }
 
 TEST_F(ManagedSimLockNotifierTest, SIMLockTypeMetrics) {
+  scoped_feature_list_.InitAndDisableFeature(
+      ash::features::kAllowApnModificationPolicy);
   base::HistogramTester histograms;
 
   AddCellularDevice();

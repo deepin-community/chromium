@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -131,4 +131,34 @@ class LinuxSysfsPower(TestSuite):
         """,
         out=Csv("""
         "value"
+        """))
+
+  # Test calculating power counter from current and voltage.
+  def test_power_from_current_and_voltage(self):
+    return DiffTestBlueprint(
+        trace=TextProto("""
+        packet {
+          timestamp: 3000000
+          battery {
+            current_ua: 710000
+            voltage_uv: 11900000
+          }
+        }
+        packet {
+          timestamp: 4000000
+          battery {
+            current_ua: -510000
+            voltage_uv: 12000000
+          }
+        }
+        """),
+        query="""
+        SELECT value
+        FROM counters
+        WHERE name = "batt.power_mw"
+        """,
+        out=Csv("""
+        "value"
+        8449.000000
+        6120.000000
         """))

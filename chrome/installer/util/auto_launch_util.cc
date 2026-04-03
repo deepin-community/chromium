@@ -10,6 +10,7 @@
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -19,9 +20,10 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/installer/util/util_constants.h"
-#include "crypto/sha2.h"
+#include "components/app_launch_prefetch/app_launch_prefetch.h"
+#include "crypto/hash.h"
 
-namespace {
+namespace auto_launch_util {
 
 // The prefix of the Chrome Auto-launch key under the Run key.
 constexpr wchar_t kAutolaunchKeyValue[] = L"GoogleChromeAutoLaunch";
@@ -35,39 +37,46 @@ std::wstring GetAutoLaunchKeyName() {
   if (!base::PathService::Get(chrome::DIR_USER_DATA, &path)) {
     return {};
   }
-  // Background auto-launch is only supported for the Default profile at the
-  // moment, but keep the door opened to a multi-profile implementation by
-  // encoding the Default profile in the hash.
+  // Auto-launch is only supported for the Default profile at the moment, but
+  // keep the door opened to a multi-profile implementation by encoding the
+  // Default profile in the hash.
   path = path.AppendASCII(chrome::kInitialProfile);
 
-  std::string input(path.AsUTF8Unsafe());
-  uint8_t hash[16];
-  crypto::SHA256HashString(input, hash, std::size(hash));
-  return base::StrCat(
-      {kAutolaunchKeyValue, L"_", base::ASCIIToWide(base::HexEncode(hash))});
+  const auto hash = crypto::hash::Sha256(path.AsUTF8Unsafe());
+
+  // This code has historically used the first 16 bytes of the SHA-256 of the
+  // path, primarily to keep the registry key name shorter since we do not need
+  // cryptographic collision resistance.
+  const auto truncated_hash = base::span<const uint8_t>(hash).first<16>();
+  return base::StrCat({kAutolaunchKeyValue, L"_",
+                       base::ASCIIToWide(base::HexEncode(truncated_hash))});
 }
 
-}  // namespace
-
-namespace auto_launch_util {
-
-void EnableBackgroundStartAtLogin() {
+void EnableStartAtLogin(StartupLaunchMode startup_launch_mode) {
   base::FilePath application_dir;
   if (!base::PathService::Get(base::DIR_EXE, &application_dir)) {
     return;
   }
 
   base::CommandLine cmd_line(application_dir.Append(installer::kChromeExe));
-  cmd_line.AppendSwitch(switches::kNoStartupWindow);
-  cmd_line.AppendArg(switches::kPrefetchArgumentBrowserBackground);
 
+  switch (startup_launch_mode) {
+    case StartupLaunchMode::kBackground:
+      cmd_line.AppendSwitch(switches::kNoStartupWindow);
+      cmd_line.AppendArgNative(app_launch_prefetch::GetPrefetchSwitch(
+          app_launch_prefetch::SubprocessType::kBrowserBackground));
+      break;
+    case StartupLaunchMode::kForeground:
+      cmd_line.AppendSwitch(switches::kStartupForegroundLaunch);
+      break;
+  }
   if (auto key_name = GetAutoLaunchKeyName(); !key_name.empty()) {
     base::win::AddCommandToAutoRun(HKEY_CURRENT_USER, key_name,
                                    cmd_line.GetCommandLineString());
   }
 }
 
-void DisableBackgroundStartAtLogin() {
+void DisableStartAtLogin() {
   if (auto key_name = GetAutoLaunchKeyName(); !key_name.empty()) {
     base::win::RemoveCommandFromAutoRun(HKEY_CURRENT_USER, key_name);
   }

@@ -15,9 +15,9 @@
 #include "ash/public/cpp/ash_public_export.h"
 #include "base/functional/callback_forward.h"
 #include "base/time/time.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "ui/base/models/simple_menu_model.h"
-#include "url/gurl.h"
+#include "components/account_id/account_id.h"
+#include "ui/base/models/image_model.h"
+#include "ui/menus/simple_menu_model.h"
 
 namespace ash {
 
@@ -96,7 +96,8 @@ class ASH_PUBLIC_EXPORT AppListClient {
   virtual void ActivateItem(int profile_id,
                             const std::string& id,
                             int event_flags,
-                            ash::AppListLaunchedFrom launched_from) = 0;
+                            ash::AppListLaunchedFrom launched_from,
+                            bool is_above_the_fold) = 0;
   // Returns the context menu model for the item with |id|, or an empty array if
   // there is currently no menu for the item (e.g. during install).
   // `item_context` is where the item is being shown (e.g. apps grid or recent
@@ -136,6 +137,27 @@ class ASH_PUBLIC_EXPORT AppListClient {
   // Returns the sorting order that is saved in perf service and gets shared
   // among synced devices.
   virtual ash::AppListSortOrder GetPermanentSortingOrder() const = 0;
+
+  // If present, indicates whether the user associated with the given
+  // `account_id` is considered new across all ChromeOS devices (i,e, it is the
+  // first device the user has ever logged into). A user is considered new if
+  // the first app list sync in the session was the first sync ever across all
+  // ChromeOS devices and sessions for the given user. As such, this value is
+  // absent until the first app list sync of the session is completed. NOTE:
+  // Currently only the primary user profile is supported.
+  virtual std::optional<bool> IsNewUser(const AccountId& account_id) const = 0;
+
+  // Record metrics regarding the current visibility of apps in the launcher.
+  virtual void RecordAppsDefaultVisibility(
+      const std::vector<std::string>& apps_above_the_fold,
+      const std::vector<std::string>& apps_below_the_fold,
+      bool is_apps_collections_page) = 0;
+
+  // Whether the app list was reordered locally.
+  virtual bool HasReordered() = 0;
+
+  // Returns a Gemini icon. Gemini icon resource exists in //chrome.
+  virtual gfx::Image GetGeminiIcon() = 0;
 
  protected:
   virtual ~AppListClient() = default;

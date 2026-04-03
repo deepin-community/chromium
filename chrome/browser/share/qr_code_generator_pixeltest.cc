@@ -5,8 +5,7 @@
 #include "base/containers/span.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
-#include "base/test/metrics/histogram_tester.h"
-#include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/platform_browser_test.h"
 #include "components/qr_code_generator/bitmap_generator.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
@@ -23,34 +22,22 @@ class QrCodeGeneratorServicePixelTest : public PlatformBrowserTest {
                   const qr_code_generator::CenterImage& center_image,
                   const qr_code_generator::ModuleStyle& module_style,
                   const qr_code_generator::LocatorStyle& locator_style) {
-    base::HistogramTester histograms;
     auto response = qr_code_generator::GenerateBitmap(
-        base::as_byte_span(data),
-        module_style,
-        locator_style,
-        center_image);
+        base::as_byte_span(data), module_style, locator_style, center_image,
+        qr_code_generator::QuietZone::kIncluded);
 
     // Verify that we got a successful response.
     ASSERT_TRUE(response.has_value());
 
     // Version 1 of QR codes has 21x21 modules/tiles/pixels.  Verify that the
     // returned QR image has a size that is at least 21x21.
-    ASSERT_GE(response->data_size.width(), 21);
+    ASSERT_GE(response->height(), 21);
+    ASSERT_GE(response->width(), 21);
 
     // The QR code should be a square.
-    ASSERT_EQ(response->data_size.width(), response->data_size.height());
-    ASSERT_EQ(response->bitmap.width(), response->bitmap.height());
+    ASSERT_EQ(response->width(), response->height());
 
-    // The bitmap size should be a multiple of the QR size.
-    ASSERT_EQ(response->bitmap.width() % response->data_size.width(), 0);
-    ASSERT_EQ(response->bitmap.height() % response->data_size.height(), 0);
-
-    // Verify that the expected UMA metrics got logged.
-    // TODO(1246137): Cover BytesToQrPixels and QrPixelsToQrImage as well.
-    histograms.ExpectTotalCount("Sharing.QRCodeGeneration.Duration", 1);
-
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
     // Verify image contents through go/chrome-engprod-skia-gold.
     if (base::CommandLine::ForCurrentProcess()->HasSwitch(
             switches::kVerifyPixels)) {
@@ -62,7 +49,7 @@ class QrCodeGeneratorServicePixelTest : public PlatformBrowserTest {
       ASSERT_TRUE(pixel_diff->CompareScreenshot(
           ui::test::SkiaGoldPixelDiff::GetGoldenImageName(
               test_info, ui::test::SkiaGoldPixelDiff::GetPlatform()),
-          response->bitmap));
+          response.value()));
     }
 #endif
   }
@@ -78,6 +65,14 @@ IN_PROC_BROWSER_TEST_F(QrCodeGeneratorServicePixelTest,
 IN_PROC_BROWSER_TEST_F(QrCodeGeneratorServicePixelTest,
                        PassKeyWithSquareQrPixelsAndLocators) {
   TestGolden("https://example.com", qr_code_generator::CenterImage::kPasskey,
+             qr_code_generator::ModuleStyle::kSquares,
+             qr_code_generator::LocatorStyle::kSquare);
+}
+
+IN_PROC_BROWSER_TEST_F(QrCodeGeneratorServicePixelTest,
+                       ProductLogoWithSquareQrPixelsAndLocators) {
+  TestGolden("https://example.com",
+             qr_code_generator::CenterImage::kProductLogo,
              qr_code_generator::ModuleStyle::kSquares,
              qr_code_generator::LocatorStyle::kSquare);
 }

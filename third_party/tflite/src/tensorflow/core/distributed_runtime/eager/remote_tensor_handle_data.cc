@@ -29,9 +29,10 @@ namespace tensorflow {
 
 namespace {
 
-void DestroyRemoteTensorHandle(EagerContext* ctx, const string& remote_task,
-                               uint64 context_id, uint64 op_id, int output_num,
-                               bool ready) {
+void DestroyRemoteTensorHandle(EagerContext* ctx,
+                               const std::string& remote_task,
+                               uint64_t context_id, uint64_t op_id,
+                               int output_num, bool ready) {
   if (ctx->GetContextId() != context_id) {
     // This means that this tensor was pointing to a remote device, which
     // has been changed out from under us. Simply return since there is
@@ -40,7 +41,7 @@ void DestroyRemoteTensorHandle(EagerContext* ctx, const string& remote_task,
   }
 
   core::RefCountPtr<eager::EagerClient> eager_client;
-  Status status = ctx->GetClient(remote_task, &eager_client);
+  absl::Status status = ctx->GetClient(remote_task, &eager_client);
   if (!status.ok()) {
     LOG_EVERY_N_SEC(INFO, 60)
         << "Unable to destroy remote tensor handle because the target "
@@ -61,7 +62,7 @@ void DestroyRemoteTensorHandle(EagerContext* ctx, const string& remote_task,
           std::move(request), std::move(eager_client), ready));
   auto& executor = ctx->Executor();
   if (executor.Async()) {
-    Status status = executor.AddOrExecute(std::move(node));
+    absl::Status status = executor.AddOrExecute(std::move(node));
     if (!status.ok()) {
       LOG_EVERY_N_SEC(WARNING, 60)
           << "Unable to destroy remote tensor handles. If you are "
@@ -74,7 +75,7 @@ void DestroyRemoteTensorHandle(EagerContext* ctx, const string& remote_task,
     // to send out the destroy request in a new thread to avoid deadlock.
     auto* released_node = node.release();
     (*ctx->runner())([ctx, released_node] {
-      Status status =
+      absl::Status status =
           ctx->Executor().AddOrExecute(absl::WrapUnique(released_node));
       if (!status.ok()) {
         LOG_EVERY_N_SEC(WARNING, 60)
@@ -89,7 +90,7 @@ void DestroyRemoteTensorHandle(EagerContext* ctx, const string& remote_task,
 }  // namespace
 
 RemoteTensorHandleData::RemoteTensorHandleData(int64_t op_id, int output_num,
-                                               uint64 context_view_id,
+                                               uint64_t context_view_id,
                                                bool is_ready)
     : is_ready_(is_ready),
       op_id_(op_id),
@@ -102,7 +103,7 @@ RemoteTensorHandleData::RemoteTensorHandleData(int64_t op_id, int output_num,
 }
 
 RemoteTensorHandleData::RemoteTensorHandleData(int64_t op_id, int output_num,
-                                               const string& remote_task,
+                                               const std::string& remote_task,
                                                EagerContext* ctx)
     : is_ready_(false),
       op_id_(op_id),
@@ -125,7 +126,7 @@ RemoteTensorHandleData::~RemoteTensorHandleData() {
   }
 }
 
-Status RemoteTensorHandleData::Shape(TensorShape* shape) const {
+absl::Status RemoteTensorHandleData::Shape(TensorShape* shape) const {
   TF_RETURN_IF_ERROR(WaitReady("Shape"));
 
   tf_shared_lock l(mu_);
@@ -134,7 +135,7 @@ Status RemoteTensorHandleData::Shape(TensorShape* shape) const {
   return absl::OkStatus();
 }
 
-Status RemoteTensorHandleData::NumDims(int* num_dims) const {
+absl::Status RemoteTensorHandleData::NumDims(int* num_dims) const {
   TF_RETURN_IF_ERROR(WaitReady("NumDims"));
 
   tf_shared_lock l(mu_);
@@ -143,7 +144,7 @@ Status RemoteTensorHandleData::NumDims(int* num_dims) const {
   return absl::OkStatus();
 }
 
-Status RemoteTensorHandleData::Dim(int dim_index, int64_t* dim) const {
+absl::Status RemoteTensorHandleData::Dim(int dim_index, int64_t* dim) const {
   TF_RETURN_IF_ERROR(WaitReady("Dim"));
 
   tf_shared_lock l(mu_);
@@ -152,7 +153,7 @@ Status RemoteTensorHandleData::Dim(int dim_index, int64_t* dim) const {
   return absl::OkStatus();
 }
 
-Status RemoteTensorHandleData::NumElements(int64_t* num_elements) const {
+absl::Status RemoteTensorHandleData::NumElements(int64_t* num_elements) const {
   TF_RETURN_IF_ERROR(WaitReady("NumElements"));
 
   tf_shared_lock l(mu_);
@@ -166,23 +167,23 @@ bool RemoteTensorHandleData::IsReady() const {
   return is_ready_;
 }
 
-void RemoteTensorHandleData::Poison(Status status) {
+void RemoteTensorHandleData::Poison(absl::Status status) {
   mutex_lock l(mu_);
   is_poisoned_ = status;
   is_ready_ = true;
 }
 
-Status RemoteTensorHandleData::IsPoisoned() const {
+absl::Status RemoteTensorHandleData::IsPoisoned() const {
   tf_shared_lock l(mu_);
   return is_poisoned_;
 }
 
-Status RemoteTensorHandleData::SetShape(const TensorShape& shape) {
+absl::Status RemoteTensorHandleData::SetShape(const TensorShape& shape) {
   return SetShapeAndRemoteTask(shape, /*remote_task=*/"");
 }
 
-Status RemoteTensorHandleData::SetShapeAndRemoteTask(
-    const TensorShape& shape, const string& remote_task) {
+absl::Status RemoteTensorHandleData::SetShapeAndRemoteTask(
+    const TensorShape& shape, const std::string& remote_task) {
   // If `is_ready_` is set previously due to poisoning, return the original
   // error that poisoned this tensor.
   TF_RETURN_IF_ERROR(IsPoisoned());
@@ -216,14 +217,13 @@ Status RemoteTensorHandleData::SetShapeAndRemoteTask(
   return absl::OkStatus();
 }
 
-string RemoteTensorHandleData::DebugString() const {
+std::string RemoteTensorHandleData::DebugString() const {
   return absl::StrCat("RemoteTensorHandleData:", " op_id: ", op_id_,
                       " output_num: ", output_num_);
 }
 
-Status RemoteTensorHandleData::OpIdAndOutputNum(const bool wait_until_ready,
-                                                int64_t* op_id,
-                                                int32* output_num) const {
+absl::Status RemoteTensorHandleData::OpIdAndOutputNum(
+    const bool wait_until_ready, int64_t* op_id, int32_t* output_num) const {
   if (wait_until_ready) {
     TF_RETURN_IF_ERROR(WaitReady("OpIdAndOutputNumUntilReady"));
   }
@@ -232,12 +232,12 @@ Status RemoteTensorHandleData::OpIdAndOutputNum(const bool wait_until_ready,
   return absl::OkStatus();
 }
 
-Status RemoteTensorHandleData::WaitReady(const char* caller) const {
+absl::Status RemoteTensorHandleData::WaitReady(const char* caller) const {
   tf_shared_lock l(mu_);
   if (!is_ready_) {
-    profiler::TraceMe activity(
+    tsl::profiler::TraceMe activity(
         [caller] { return absl::StrCat(caller, " WaitReady"); },
-        profiler::TraceMeLevel::kInfo);
+        tsl::profiler::TraceMeLevel::kInfo);
     DVLOG(3) << "WaitReady: " << caller << " " << this;
     mu_.Await(Condition(&is_ready_));
   }

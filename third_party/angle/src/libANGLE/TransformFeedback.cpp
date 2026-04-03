@@ -140,7 +140,7 @@ angle::Result TransformFeedback::begin(const Context *context,
                                        PrimitiveMode primitiveMode,
                                        Program *program)
 {
-    // TODO: http://anglebug.com/5486: This method should take in as parameter a
+    // TODO: http://anglebug.com/42264023: This method should take in as parameter a
     // ProgramExecutable instead of a Program.
 
     ANGLE_TRY(mImplementation->begin(context, primitiveMode));
@@ -149,29 +149,7 @@ angle::Result TransformFeedback::begin(const Context *context,
     mState.mPaused        = false;
     mState.mVerticesDrawn = 0;
     bindProgram(context, program);
-
-    // In one of the angle_unittests - "TransformFeedbackTest.SideEffectsOfStartAndStop"
-    // there is a code path where <context> is a nullptr, account for that possiblity.
-    const ProgramExecutable *programExecutable =
-        context ? context->getState().getLinkedProgramExecutable(context) : nullptr;
-    if (programExecutable)
-    {
-        // Compute the number of vertices we can draw before overflowing the bound buffers.
-        auto strides = programExecutable->getTransformFeedbackStrides();
-        ASSERT(strides.size() <= mState.mIndexedBuffers.size() && !strides.empty());
-        GLsizeiptr minCapacity = std::numeric_limits<GLsizeiptr>::max();
-        for (size_t index = 0; index < strides.size(); index++)
-        {
-            GLsizeiptr capacity =
-                GetBoundBufferAvailableSize(mState.mIndexedBuffers[index]) / strides[index];
-            minCapacity = std::min(minCapacity, capacity);
-        }
-        mState.mVertexCapacity = minCapacity;
-    }
-    else
-    {
-        mState.mVertexCapacity = 0;
-    }
+    recomputeVertexCapacity(context);
     return angle::Result::Continue;
 }
 
@@ -202,6 +180,7 @@ angle::Result TransformFeedback::resume(const Context *context)
 {
     ANGLE_TRY(mImplementation->resume(context));
     mState.mPaused = false;
+    recomputeVertexCapacity(context);
     return angle::Result::Continue;
 }
 
@@ -234,7 +213,7 @@ void TransformFeedback::onVerticesDrawn(const Context *context, GLsizei count, G
     {
         if (buffer.get() != nullptr)
         {
-            buffer->onDataChanged();
+            buffer->onDataChanged(context);
         }
     }
 }
@@ -252,6 +231,32 @@ void TransformFeedback::bindProgram(const Context *context, Program *program)
         {
             mState.mProgram->addRef();
         }
+    }
+}
+
+void TransformFeedback::recomputeVertexCapacity(const Context *context)
+{
+    // In one of the angle_unittests - "TransformFeedbackTest.SideEffectsOfStartAndStop"
+    // there is a code path where <context> is a nullptr, account for that possibility.
+    const ProgramExecutable *programExecutable =
+        context ? context->getState().getLinkedProgramExecutable(context) : nullptr;
+    if (programExecutable)
+    {
+        // Compute the number of vertices we can draw before overflowing the bound buffers.
+        auto strides = programExecutable->getTransformFeedbackStrides();
+        ASSERT(strides.size() <= mState.mIndexedBuffers.size() && !strides.empty());
+        GLsizeiptr minCapacity = std::numeric_limits<GLsizeiptr>::max();
+        for (size_t index = 0; index < strides.size(); index++)
+        {
+            GLsizeiptr capacity =
+                GetBoundBufferAvailableSize(mState.mIndexedBuffers[index]) / strides[index];
+            minCapacity = std::min(minCapacity, capacity);
+        }
+        mState.mVertexCapacity = minCapacity;
+    }
+    else
+    {
+        mState.mVertexCapacity = 0;
     }
 }
 
@@ -324,9 +329,16 @@ bool TransformFeedback::buffersBoundForOtherUseInWebGL() const
     return false;
 }
 
-rx::TransformFeedbackImpl *TransformFeedback::getImplementation() const
+bool TransformFeedback::isBufferBound(BufferID bufferID) const
 {
-    return mImplementation;
+    for (const auto &buffer : mState.mIndexedBuffers)
+    {
+        if (buffer.id() == bufferID)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 void TransformFeedback::onBindingChanged(const Context *context, bool bound)

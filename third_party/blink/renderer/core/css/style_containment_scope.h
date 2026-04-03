@@ -5,88 +5,41 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_STYLE_CONTAINMENT_SCOPE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_STYLE_CONTAINMENT_SCOPE_H_
 
-#include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/css/ordered_scope_tree.h"
 #include "third_party/blink/renderer/core/layout/layout_quote.h"
 
 namespace blink {
 
-class LayoutCounter;
-class CountersScope;
-class CountersScopeTree;
+// Explicit specializations of OrderedScope<LayoutQuote> static methods.
+// These define how LayoutQuote items interact with contain:style scopes.
+// Declared here, defined in style_containment_scope.cc.
 
-// Represents the scope of the subtree that contains style.
-// Manages quotes and child scopes.
-// Managed by StyleContainmentScopeTree.
-class StyleContainmentScope final
-    : public GarbageCollected<StyleContainmentScope> {
- public:
-  StyleContainmentScope(const Element* element,
-                        StyleContainmentScopeTree* style_containment_tree);
+template <>
+const Element* OrderedScope<LayoutQuote>::GetItemElement(const LayoutQuote*);
 
-  // Handles the self remove.
-  void ReattachToParent();
+template <>
+void OrderedScope<LayoutQuote>::OnItemAttached(LayoutQuote*,
+                                               OrderedScope<LayoutQuote>*);
 
-  void AttachQuote(LayoutQuote&);
-  void DetachQuote(LayoutQuote&);
-  void UpdateQuotes() const;
+template <>
+void OrderedScope<LayoutQuote>::OnItemDetached(LayoutQuote*);
 
-  CORE_EXPORT CountersScope* FindCountersScopeForElement(
-      const Element&,
-      const AtomicString&) const;
-  CORE_EXPORT void CreateCounterNodesForLayoutObject(LayoutObject&);
-  void CreateCounterNodeForLayoutObject(LayoutObject& object,
-                                        const AtomicString& identifier);
-  CORE_EXPORT void CreateCounterNodeForLayoutCounter(LayoutCounter&);
-  void CreateListItemCounterNodeForLayoutObject(LayoutObject&);
-  void RemoveCounterNodeForLayoutCounter(LayoutCounter&);
-  void ReparentCountersToStyleScope(StyleContainmentScope&);
-  void UpdateCounters() const;
+template <>
+bool OrderedScope<LayoutQuote>::CreatesScope(const Element&);
 
-  void InvalidateAnchorNameReferences() const;
+template <>
+void OrderedScope<LayoutQuote>::UpdateItemsInScope(
+    const OrderedScope<LayoutQuote>*);
 
-  bool IsAncestorOf(const Element*, const Element* stay_within = nullptr);
+// Explicit template instantiation declarations.
+// These prevent implicit instantiation in every translation unit that includes
+// this header. The actual instantiation is in style_containment_scope.cc.
+extern template class OrderedScope<LayoutQuote>;
+extern template class OrderedScopeTree<LayoutQuote>;
 
-  void AppendChild(StyleContainmentScope*);
-  void RemoveChild(StyleContainmentScope*);
-
-  const Element* GetElement() const { return element_.Get(); }
-  CountersScopeTree* GetCountersScopeTree() { return counters_tree_.Get(); }
-  StyleContainmentScope* Parent() { return parent_.Get(); }
-  void SetParent(StyleContainmentScope* parent) { parent_ = parent; }
-  const HeapVector<Member<LayoutQuote>>& Quotes() const { return quotes_; }
-  const HeapVector<Member<StyleContainmentScope>>& Children() const {
-    return children_;
-  }
-
-  StyleContainmentScopeTree* GetStyleContainmentScopeTree() const {
-    return style_containment_tree_.Get();
-  }
-
-  void Trace(Visitor*) const;
-
-#if DCHECK_IS_ON()
-  String ScopesTreeToString(wtf_size_t depth = 0u) const;
-#endif  // DCHECK_IS_ON()
-
- private:
-  // Get the quote which would be the last in preorder traversal before we hit
-  // Element*.
-  const LayoutQuote* FindQuotePrecedingElement(const Element&) const;
-  int ComputeInitialQuoteDepth() const;
-
-  // Element with style containment which is the root of the scope.
-  WeakMember<const Element> element_;
-  // Parent scope.
-  Member<StyleContainmentScope> parent_;
-  // Vector of quotes.
-  HeapVector<Member<LayoutQuote>> quotes_;
-  // Counters tree.
-  Member<CountersScopeTree> counters_tree_;
-  // Vector of children scope.
-  HeapVector<Member<StyleContainmentScope>> children_;
-  // Style containment tree.
-  WeakMember<StyleContainmentScopeTree> style_containment_tree_;
-};
+// Type alias for backward compatibility.
+using StyleContainmentScope = OrderedScope<LayoutQuote>;
+using StyleContainmentScopeTree = OrderedScopeTree<LayoutQuote>;
 
 }  // namespace blink
 

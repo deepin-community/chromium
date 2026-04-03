@@ -53,7 +53,8 @@ class Device final : public DeviceBase {
     static ResultOrError<Ref<Device>> Create(AdapterBase* adapter,
                                              NSPRef<id<MTLDevice>> mtlDevice,
                                              const UnpackedPtr<DeviceDescriptor>& descriptor,
-                                             const TogglesState& deviceToggles);
+                                             const TogglesState& deviceToggles,
+                                             Ref<DeviceBase::DeviceLostEvent>&& lostEvent);
     ~Device() override;
 
     MaybeError Initialize(const UnpackedPtr<DeviceDescriptor>& descriptor);
@@ -62,13 +63,13 @@ class Device final : public DeviceBase {
 
     id<MTLDevice> GetMTLDevice() const;
 
-    MaybeError CopyFromStagingToBufferImpl(BufferBase* source,
-                                           uint64_t sourceOffset,
-                                           BufferBase* destination,
-                                           uint64_t destinationOffset,
-                                           uint64_t size) override;
-    MaybeError CopyFromStagingToTextureImpl(const BufferBase* source,
-                                            const TextureDataLayout& dataLayout,
+    MaybeError CopyFromStagingToBuffer(BufferBase* source,
+                                       uint64_t sourceOffset,
+                                       BufferBase* destination,
+                                       uint64_t destinationOffset,
+                                       uint64_t size) override;
+    MaybeError CopyFromStagingToTextureImpl(BufferBase* source,
+                                            const TexelCopyBufferLayout& dataLayout,
                                             const TextureCopy& dst,
                                             const Extent3D& copySizePixels) override;
 
@@ -77,10 +78,12 @@ class Device final : public DeviceBase {
 
     float GetTimestampPeriodInNS() const override;
 
-    bool IsResolveTextureBlitWithDrawSupported() const override;
+    bool CanTextureLoadResolveTargetInTheSameRenderpass() const override;
 
     bool UseCounterSamplingAtCommandBoundary() const;
     bool UseCounterSamplingAtStageBoundary() const;
+
+    bool BackendWillValidateMultiDraw() const override;
 
     // Get a MTLBuffer that can be used as a mock in a no-op blit encoder based on filling this
     // single-byte buffer
@@ -90,12 +93,13 @@ class Device final : public DeviceBase {
     Device(AdapterBase* adapter,
            NSPRef<id<MTLDevice>> mtlDevice,
            const UnpackedPtr<DeviceDescriptor>& descriptor,
-           const TogglesState& deviceToggles);
+           const TogglesState& deviceToggles,
+           Ref<DeviceBase::DeviceLostEvent>&& lostEvent);
 
     ResultOrError<Ref<BindGroupBase>> CreateBindGroupImpl(
-        const BindGroupDescriptor* descriptor) override;
+        const UnpackedPtr<BindGroupDescriptor>& descriptor) override;
     ResultOrError<Ref<BindGroupLayoutInternalBase>> CreateBindGroupLayoutImpl(
-        const BindGroupLayoutDescriptor* descriptor) override;
+        const UnpackedPtr<BindGroupLayoutDescriptor>& descriptor) override;
     ResultOrError<Ref<BufferBase>> CreateBufferImpl(
         const UnpackedPtr<BufferDescriptor>& descriptor) override;
     ResultOrError<Ref<CommandBufferBase>> CreateCommandBuffer(
@@ -105,40 +109,38 @@ class Device final : public DeviceBase {
         const UnpackedPtr<PipelineLayoutDescriptor>& descriptor) override;
     ResultOrError<Ref<QuerySetBase>> CreateQuerySetImpl(
         const QuerySetDescriptor* descriptor) override;
+    ResultOrError<Ref<ResourceTableBase>> CreateResourceTableImpl(
+        const ResourceTableDescriptor* descriptor) override;
     ResultOrError<Ref<SamplerBase>> CreateSamplerImpl(const SamplerDescriptor* descriptor) override;
     ResultOrError<Ref<ShaderModuleBase>> CreateShaderModuleImpl(
         const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
-        ShaderModuleParseResult* parseResult,
-        OwnedCompilationMessages* compilationMessages) override;
+        const std::vector<tint::wgsl::Extension>& internalExtensions) override;
     ResultOrError<Ref<SwapChainBase>> CreateSwapChainImpl(
         Surface* surface,
         SwapChainBase* previousSwapChain,
-        const SwapChainDescriptor* descriptor) override;
+        const SurfaceConfiguration* config) override;
     ResultOrError<Ref<TextureBase>> CreateTextureImpl(
         const UnpackedPtr<TextureDescriptor>& descriptor) override;
     ResultOrError<Ref<TextureViewBase>> CreateTextureViewImpl(
         TextureBase* texture,
-        const TextureViewDescriptor* descriptor) override;
+        const UnpackedPtr<TextureViewDescriptor>& descriptor) override;
     Ref<ComputePipelineBase> CreateUninitializedComputePipelineImpl(
         const UnpackedPtr<ComputePipelineDescriptor>& descriptor) override;
     Ref<RenderPipelineBase> CreateUninitializedRenderPipelineImpl(
         const UnpackedPtr<RenderPipelineDescriptor>& descriptor) override;
-    void InitializeComputePipelineAsyncImpl(Ref<ComputePipelineBase> computePipeline,
-                                            WGPUCreateComputePipelineAsyncCallback callback,
-                                            void* userdata) override;
-    void InitializeRenderPipelineAsyncImpl(Ref<RenderPipelineBase> renderPipeline,
-                                           WGPUCreateRenderPipelineAsyncCallback callback,
-                                           void* userdata) override;
-
-    ResultOrError<wgpu::TextureUsage> GetSupportedSurfaceUsageImpl(
-        const Surface* surface) const override;
+    void InitializeComputePipelineAsyncImpl(Ref<CreateComputePipelineAsyncEvent> event) override;
+    void InitializeRenderPipelineAsyncImpl(Ref<CreateRenderPipelineAsyncEvent> event) override;
 
     ResultOrError<Ref<SharedTextureMemoryBase>> ImportSharedTextureMemoryImpl(
         const SharedTextureMemoryDescriptor* descriptor) override;
     ResultOrError<Ref<SharedFenceBase>> ImportSharedFenceImpl(
         const SharedFenceDescriptor* descriptor) override;
 
-    void DestroyImpl() override;
+    void StartTrace();
+    void StopTrace();
+    bool mTraceInProgress = false;
+
+    void DestroyImpl(DestroyReason reason) override;
 
     NSPRef<id<MTLDevice>> mMtlDevice;
 
@@ -146,8 +148,8 @@ class Device final : public DeviceBase {
     float mTimestampPeriod = 1.0f;
     // The base of CPU timestamp and GPU timestamp to measure the linear regression between GPU
     // and CPU timestamps.
-    MTLTimestamp mCpuTimestamp API_AVAILABLE(macos(10.15), ios(14.0)) = 0;
-    MTLTimestamp mGpuTimestamp API_AVAILABLE(macos(10.15), ios(14.0)) = 0;
+    MTLTimestamp mCpuTimestamp = 0;
+    MTLTimestamp mGpuTimestamp = 0;
     // The parameters for kalman filter
     std::unique_ptr<KalmanInfo> mKalmanInfo;
     bool mIsTimestampQueryEnabled = false;

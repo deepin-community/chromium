@@ -13,18 +13,19 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/web_applications/commands/web_app_command.h"
+#include "chrome/browser/web_applications/jobs/manifest_to_web_app_install_info_job.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/manifest_update_utils.h"
 #include "chrome/browser/web_applications/scope_extension_info.h"
 #include "chrome/browser/web_applications/web_app_callback_app_identity.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
+#include "chrome/browser/web_applications/web_app_origin_association_manager.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
 #include "chrome/browser/web_applications/web_contents/web_app_icon_downloader.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_contents_observer.h"
 
 class GURL;
-struct WebAppInstallInfo;
 
 namespace content {
 class NavigationHandle;
@@ -32,6 +33,8 @@ class WebContents;
 }  // namespace content
 
 namespace web_app {
+
+struct WebAppInstallInfo;
 
 // Documentation: docs/webapps/manifest_update_process.md
 //
@@ -49,15 +52,15 @@ namespace web_app {
 class ManifestUpdateCheckCommand
     : public WebAppCommand<AppLock,
                            ManifestUpdateCheckResult,
-                           std::optional<WebAppInstallInfo>>,
+                           std::unique_ptr<WebAppInstallInfo>>,
       public content::WebContentsObserver {
  public:
-  // TODO(crbug.com/1409710): Merge ManifestUpdateDataFetchCommand and
+  // TODO(crbug.com/40254036): Merge ManifestUpdateDataFetchCommand and
   // ManifestUpdateFinalizeCommand into one so we don't have to return optional
   // early exit results to the caller.
   using CompletedCallback = base::OnceCallback<void(
       ManifestUpdateCheckResult check_result,
-      std::optional<WebAppInstallInfo> new_install_info)>;
+      std::unique_ptr<WebAppInstallInfo> new_install_info)>;
 
   ManifestUpdateCheckCommand(
       const GURL& url,
@@ -85,21 +88,18 @@ class ManifestUpdateCheckCommand
       WebAppDataRetriever::CheckInstallabilityCallback next_step_callback);
   void StashNewManifestJson(base::OnceClosure next_step_callback,
                             blink::mojom::ManifestPtr opt_manifest,
-                            const GURL& manifest_url,
                             bool valid_manifest_for_web_app,
                             webapps::InstallableStatusCode installable_status);
-  void DownloadNewIconBitmaps(
-      WebAppIconDownloader::WebAppIconDownloaderCallback next_step_callback);
-  void StashNewIconBitmaps(base::OnceClosure next_step_callback,
-                           IconsDownloadedResult result,
-                           IconsMap icons_map,
-                           DownloadedIconsHttpResults icons_http_results);
-
+  void ParseManifestAndCreateWebAppInfo(
+      WebAppInstallInfoCreationCallback creation_callback);
+  void ValidateAndStashWebAppInfo(
+      base::OnceClosure next_step_callback,
+      std::unique_ptr<WebAppInstallInfo> install_info);
   void ValidateNewScopeExtensions(
       OnDidGetWebAppOriginAssociations next_step_callback);
   void StashValidatedScopeExtensions(
       base::OnceClosure next_step_callback,
-      ScopeExtensions validated_scope_extensions);
+      OriginAssociations validated_origin_associations);
 
   // Stage: Loading existing manifest data from disk.
   // (ManifestUpdateCheckStage::kLoadingExistingManifestData)
@@ -107,7 +107,7 @@ class ManifestUpdateCheckCommand
   void LoadExistingAppIcons(
       WebAppIconManager::ReadIconBitmapsCallback next_step_callback);
   void StashExistingAppIcons(base::OnceClosure next_step_callback,
-                             IconBitmaps icon_bitmaps);
+                             WebAppIconManager::WebAppBitmaps icon_bitmaps);
   void LoadExistingShortcutsMenuIcons(
       WebAppIconManager::ReadShortcutsMenuIconsCallback next_step_callback);
   void StashExistingShortcutsMenuIcons(
@@ -153,11 +153,14 @@ class ManifestUpdateCheckCommand
   base::WeakPtr<content::WebContents> web_contents_;
   std::unique_ptr<WebAppDataRetriever> data_retriever_;
   std::unique_ptr<WebAppIconDownloader> icon_downloader_;
+  std::unique_ptr<ManifestToWebAppInstallInfoJob> manifest_to_install_info_job_;
 
   // Temporary variables stored here while the update check progresses
   // asynchronously.
   std::unique_ptr<WebAppInstallInfo> new_install_info_;
+  blink::mojom::ManifestPtr opt_manifest_;
   IconBitmaps existing_app_icon_bitmaps_;
+  IconBitmaps existing_app_icon_trusted_bitmaps_;
   ShortcutsMenuIconBitmaps existing_shortcuts_menu_icon_bitmaps_;
   ManifestDataChanges manifest_data_changes_;
 

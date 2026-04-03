@@ -5,12 +5,8 @@
 #include "chrome/browser/first_party_sets/first_party_sets_navigation_throttle.h"
 
 #include <memory>
-#include <utility>
 
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/time/time.h"
-#include "base/timer/timer.h"
 #include "chrome/browser/first_party_sets/first_party_sets_policy_service.h"
 #include "chrome/browser/first_party_sets/first_party_sets_policy_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -21,21 +17,12 @@
 
 namespace first_party_sets {
 
-namespace {
-
 using ThrottleCheckResult = content::NavigationThrottle::ThrottleCheckResult;
 
-void RecordResumeOnTimeout(bool is_timeout) {
-  base::UmaHistogramBoolean("FirstPartySets.NavigationThrottle.ResumeOnTimeout",
-                            is_timeout);
-}
-
-}  // namespace
-
 FirstPartySetsNavigationThrottle::FirstPartySetsNavigationThrottle(
-    content::NavigationHandle* navigation_handle,
+    content::NavigationThrottleRegistry& registry,
     FirstPartySetsPolicyService& service)
-    : content::NavigationThrottle(navigation_handle), service_(service) {
+    : content::NavigationThrottle(registry), service_(service) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
@@ -55,9 +42,6 @@ ThrottleCheckResult FirstPartySetsNavigationThrottle::WillStartRequest() {
         base::BindOnce(&FirstPartySetsNavigationThrottle::OnTimeOut,
                        weak_factory_.GetWeakPtr()));
 
-    CHECK(!throttle_navigation_timer_.has_value());
-    throttle_navigation_timer_ = {base::ElapsedTimer()};
-
     return content::NavigationThrottle::DEFER;
   }
   return content::NavigationThrottle::PROCEED;
@@ -68,17 +52,17 @@ const char* FirstPartySetsNavigationThrottle::GetNameForLogging() {
 }
 
 // static
-std::unique_ptr<FirstPartySetsNavigationThrottle>
-FirstPartySetsNavigationThrottle::MaybeCreateNavigationThrottle(
-    content::NavigationHandle* navigation_handle) {
+void FirstPartySetsNavigationThrottle::MaybeCreateAndAdd(
+    content::NavigationThrottleRegistry& registry) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  content::NavigationHandle& navigation_handle = registry.GetNavigationHandle();
   Profile* profile = Profile::FromBrowserContext(
-      navigation_handle->GetWebContents()->GetBrowserContext());
+      navigation_handle.GetWebContents()->GetBrowserContext());
   // The `service` might be null for some irregular profiles.
-  // TODO(https://crbug.com/1348572): regular profiles and guest sessions
-  // aren't mutually exclusive on ChromeOS.
-  if (!profile->IsRegularProfile() || profile->IsGuestSession())
-    return nullptr;
+
+  if (!profile->IsRegularProfile()) {
+    return;
+  }
 
   FirstPartySetsPolicyService* service =
       FirstPartySetsPolicyServiceFactory::GetForBrowserContext(profile);
@@ -88,17 +72,16 @@ FirstPartySetsNavigationThrottle::MaybeCreateNavigationThrottle(
           net::features::kWaitForFirstPartySetsInit) ||
       net::features::kWaitForFirstPartySetsInitNavigationThrottleTimeout.Get()
           .is_zero() ||
-      navigation_handle->GetParentFrameOrOuterDocument()) {
-    return nullptr;
+      navigation_handle.GetParentFrameOrOuterDocument()) {
+    return;
   }
-  return std::make_unique<FirstPartySetsNavigationThrottle>(navigation_handle,
-                                                            *service);
+  registry.AddThrottle(
+      std::make_unique<FirstPartySetsNavigationThrottle>(registry, *service));
 }
 
 void FirstPartySetsNavigationThrottle::OnTimeOut() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(!resume_navigation_timer_.IsRunning());
-  RecordResumeOnTimeout(true);
   Resume();
 }
 
@@ -114,7 +97,6 @@ void FirstPartySetsNavigationThrottle::OnReadyToResume() {
   // Stop the timer to make sure we won't try to resume again due to hitting
   // the timeout.
   resume_navigation_timer_.Stop();
-  RecordResumeOnTimeout(false);
   Resume();
 }
 
@@ -123,9 +105,6 @@ void FirstPartySetsNavigationThrottle::Resume() {
   CHECK(!resumed_);
   resumed_ = true;
 
-  CHECK(throttle_navigation_timer_.has_value());
-  base::UmaHistogramTimes("FirstPartySets.NavigationThrottle.ResumeDelta",
-                          throttle_navigation_timer_->Elapsed());
   NavigationThrottle::Resume();
 }
 

@@ -7,6 +7,8 @@
 #include <memory>
 #include <utility>
 
+#include "base/functional/callback_helpers.h"
+#include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
@@ -19,9 +21,10 @@
 #include "chrome/browser/web_applications/web_app_install_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
-#include "chrome/browser/web_applications/web_contents/web_app_url_loader.h"
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
 #include "components/webapps/browser/install_result_code.h"
+#include "components/webapps/browser/web_contents/web_app_url_loader.h"
+#include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -41,7 +44,7 @@ const base::TimeDelta ICON_DOWNLOAD_RETRY_DELAY = base::Seconds(5);
 
 InstallPlaceholderJob::InstallPlaceholderJob(
     Profile* profile,
-    base::Value::Dict& debug_value,
+    base::DictValue& debug_value,
     const ExternalInstallOptions& install_options,
     InstallAndReplaceCallback callback,
     SharedWebContentsWithAppLock& lock)
@@ -54,6 +57,9 @@ InstallPlaceholderJob::InstallPlaceholderJob(
       install_options_(install_options),
       callback_(std::move(callback)),
       web_contents_(&lock_->shared_web_contents()),
+      url_loader_(WebAppProvider::GetForWebApps(&profile_.get())
+                      ->web_contents_manager()
+                      .CreateUrlLoader()),
       data_retriever_(WebAppProvider::GetForWebApps(&profile_.get())
                           ->web_contents_manager()
                           .CreateDataRetriever()) {
@@ -64,9 +70,8 @@ InstallPlaceholderJob::InstallPlaceholderJob(
 InstallPlaceholderJob::~InstallPlaceholderJob() = default;
 
 void InstallPlaceholderJob::Start() {
-  url_loader_ = lock_->web_contents_manager().CreateUrlLoader();
   url_loader_->LoadUrl(install_options_.install_url, web_contents_,
-                       WebAppUrlLoader::UrlComparison::kSameOrigin,
+                       webapps::WebAppUrlLoader::UrlComparison::kSameOrigin,
                        base::BindOnce(&InstallPlaceholderJob::OnUrlLoaded,
                                       weak_factory_.GetWeakPtr()));
 }
@@ -76,17 +81,24 @@ void InstallPlaceholderJob::SetDataRetrieverForTesting(
   data_retriever_ = std::move(data_retriever);
 }
 
+void InstallPlaceholderJob::SetUrlLoaderForTesting(
+    std::unique_ptr<webapps::WebAppUrlLoader> url_loader) {
+  url_loader_ = std::move(url_loader);
+}
+
 void InstallPlaceholderJob::Abort(webapps::InstallResultCode code) {
   debug_value_->Set("result_code", base::ToString(code));
   if (!callback_) {
     return;
   }
-  webapps::InstallableMetrics::TrackInstallResult(false);
+  webapps::InstallableMetrics::TrackInstallResult(
+      false, ConvertExternalInstallSourceToInstallSource(
+                 install_options_.install_source));
   std::move(callback_).Run(code, std::move(app_id_));
 }
 
 void InstallPlaceholderJob::OnUrlLoaded(
-    WebAppUrlLoader::Result load_url_result) {
+    webapps::WebAppUrlLoaderResult load_url_result) {
   CHECK(web_contents_ && !web_contents_->IsBeingDestroyed());
 
   if (install_options_.override_icon_url) {
@@ -100,13 +112,46 @@ void InstallPlaceholderJob::OnUrlLoaded(
 
 void InstallPlaceholderJob::FetchCustomIcon(const GURL& url, int retries_left) {
   CHECK(web_contents_ && !web_contents_->IsBeingDestroyed());
+  // Navigate the web contents to the icon origin such that the content security
+  // policy of the web app page can't prevent a cross-origin download.
+  url_loader_->LoadUrl(
+      url, web_contents_, webapps::WebAppUrlLoader::UrlComparison::kSameOrigin,
+      base::BindOnce(&InstallPlaceholderJob::OnIconNavigationCompleted,
+                     weak_factory_.GetWeakPtr(), url, retries_left));
+}
+
+void InstallPlaceholderJob::OnIconNavigationCompleted(
+    const GURL& url,
+    int retries_left,
+    webapps::WebAppUrlLoaderResult load_url_result) {
+  if (load_url_result != webapps::WebAppUrlLoaderResult::kUrlLoaded) {
+    MaybeRetryFetchCustomIcon(url, retries_left);
+    return;
+  }
 
   data_retriever_->GetIcons(
       web_contents_.get(), {IconUrlWithSize::CreateForUnspecifiedSize(url)},
-      /*skip_page_favicons=*/true,
+      /*download_page_favicons=*/false,
       /*fail_all_if_any_fail=*/false,
       base::BindOnce(&InstallPlaceholderJob::OnCustomIconFetched,
                      weak_factory_.GetWeakPtr(), url, retries_left));
+}
+
+void InstallPlaceholderJob::MaybeRetryFetchCustomIcon(const GURL& url,
+                                                      int retries_left) {
+  if (retries_left <= 0) {
+    // Download failed.
+    debug_value_->Set("custom_icon_download_success", false);
+    FinalizeInstall(std::nullopt);
+    return;
+  }
+
+  // Retry download.
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&InstallPlaceholderJob::FetchCustomIcon,
+                     weak_factory_.GetWeakPtr(), url, retries_left - 1),
+      ICON_DOWNLOAD_RETRY_DELAY);
 }
 
 void InstallPlaceholderJob::OnCustomIconFetched(
@@ -122,27 +167,20 @@ void InstallPlaceholderJob::OnCustomIconFetched(
     FinalizeInstall(bitmaps_it->second);
     return;
   }
-  if (retries_left <= 0) {
-    // Download failed.
-    debug_value_->Set("custom_icon_download_success", false);
-    FinalizeInstall(std::nullopt);
-    return;
-  }
-  // Retry download.
-  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(&InstallPlaceholderJob::FetchCustomIcon,
-                     weak_factory_.GetWeakPtr(), image_url, retries_left - 1),
-      ICON_DOWNLOAD_RETRY_DELAY);
+
+  MaybeRetryFetchCustomIcon(image_url, retries_left);
 }
 
 void InstallPlaceholderJob::FinalizeInstall(
     std::optional<std::reference_wrapper<const std::vector<SkBitmap>>>
         bitmaps) {
   // For placeholder installs, the install_url is treated as the start_url.
-  WebAppInstallInfo web_app_info(
-      GenerateManifestIdFromStartUrlOnly(install_options_.install_url));
-  web_app_info.title =
+  GURL start_url = install_options_.install_url;
+  webapps::ManifestId manifest_id =
+      GenerateManifestIdFromStartUrlOnly(start_url);
+  auto web_app_info =
+      std::make_unique<WebAppInstallInfo>(manifest_id, start_url);
+  web_app_info->title =
       install_options_.override_name
           ? base::UTF8ToUTF16(install_options_.override_name.value())
       : install_options_.fallback_app_name
@@ -153,13 +191,20 @@ void InstallPlaceholderJob::FinalizeInstall(
     IconsMap icons_map;
     icons_map.emplace(GURL(install_options_.override_icon_url.value()),
                       bitmaps.value());
-    PopulateProductIcons(&web_app_info, &icons_map);
+    PopulateProductIcons(web_app_info.get(), &icons_map);
+
+    // For icon overrides, the app icon needs to be used as the trusted icon,
+    // since it's guaranteed that the icon is coming from a trusted source, as
+    // it is externally installed.
+    apps::IconInfo trusted_bitmap;
+    trusted_bitmap.url = GURL(install_options_.override_icon_url.value());
+    web_app_info->trusted_icons = {trusted_bitmap};
+    PopulateTrustedIconBitmaps(*web_app_info.get(), icons_map);
   }
 
-  web_app_info.start_url = install_options_.install_url;
-  web_app_info.install_url = install_options_.install_url;
+  web_app_info->install_url = install_options_.install_url;
 
-  web_app_info.user_display_mode = install_options_.user_display_mode;
+  web_app_info->user_display_mode = install_options_.user_display_mode;
 
   WebAppInstallFinalizer::FinalizeOptions options(
       ConvertExternalInstallSourceToInstallSource(
@@ -172,17 +217,17 @@ void InstallPlaceholderJob::FinalizeInstall(
   options.add_to_desktop = install_options_.add_to_desktop;
   options.add_to_quick_launch_bar = install_options_.add_to_quick_launch_bar;
 
-  web_app_info.is_placeholder = true;
+  web_app_info->is_placeholder = true;
 
   lock_->install_finalizer().FinalizeInstall(
-      web_app_info, options,
+      *web_app_info, options,
       base::BindOnce(&InstallPlaceholderJob::OnInstallFinalized,
                      weak_factory_.GetWeakPtr()));
 }
 
-void InstallPlaceholderJob::OnInstallFinalized(const webapps::AppId& app_id,
-                                               webapps::InstallResultCode code,
-                                               OsHooksErrors os_hooks_errors) {
+void InstallPlaceholderJob::OnInstallFinalized(
+    const webapps::AppId& app_id,
+    webapps::InstallResultCode code) {
   debug_value_->Set("result_code", base::ToString(code));
 
   CHECK(web_contents_ && !web_contents_->IsBeingDestroyed());
@@ -199,7 +244,9 @@ void InstallPlaceholderJob::OnInstallFinalized(const webapps::AppId& app_id,
       ConvertExternalInstallSourceToInstallSource(
           install_options_.install_source));
 
-  webapps::InstallableMetrics::TrackInstallResult(webapps::IsSuccess(code));
+  webapps::InstallableMetrics::TrackInstallResult(
+      webapps::IsSuccess(code), ConvertExternalInstallSourceToInstallSource(
+                                    install_options_.install_source));
 
   std::move(callback_).Run(code, std::move(app_id));
 }

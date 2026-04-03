@@ -9,25 +9,22 @@
 #include "base/barrier_closure.h"
 #include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
-#include "chrome/browser/apps/app_service/app_service_proxy.h"
-#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/apps/app_service/browser_app_launcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
+#include "chrome/browser/web_applications/extensions/launch.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/os_integration/web_app_file_handler_manager.h"
-#include "chrome/browser/web_applications/os_integration/web_app_shortcut_mac.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/chrome_switches.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "net/base/filename_util.h"
-#include "third_party/blink/public/common/custom_handlers/protocol_handler_utils.h"
 
 namespace web_app {
 
@@ -60,11 +57,9 @@ void LaunchAppWithParams(
         GetBrowserAppLauncherForTesting().Run(params_copy);
         barrier_callback.Run();
       } else {
-        apps::AppServiceProxyFactory::GetForProfile(profile)
-            ->BrowserAppLauncher()
-            ->LaunchAppWithParams(
-                std::move(params_copy),
-                base::IgnoreArgs<content::WebContents*>(barrier_callback));
+        web_app::LaunchExtensionOrWebApp(
+            profile, std::move(params_copy),
+            base::IgnoreArgs<content::WebContents*>(barrier_callback));
       }
     }
     return;
@@ -74,11 +69,9 @@ void LaunchAppWithParams(
     GetBrowserAppLauncherForTesting().Run(params);
     std::move(launch_finished_callback).Run();
   } else {
-    apps::AppServiceProxyFactory::GetForProfile(profile)
-        ->BrowserAppLauncher()
-        ->LaunchAppWithParams(std::move(params),
-                              base::IgnoreArgs<content::WebContents*>(
-                                  std::move(launch_finished_callback)));
+    web_app::LaunchExtensionOrWebApp(profile, std::move(params),
+                                     base::IgnoreArgs<content::WebContents*>(
+                                         std::move(launch_finished_callback)));
   }
 }
 
@@ -128,7 +121,7 @@ void UserChoiceDialogCompleted(
         allowed ? ApiApprovalState::kAllowed : ApiApprovalState::kDisallowed;
     if (protocol_url) {
       provider->scheduler().UpdateProtocolHandlerUserApproval(
-          app_id, protocol_url->scheme(), approval_state,
+          app_id, protocol_url->GetScheme(), approval_state,
           std::move(persist_done));
     } else {
       DCHECK(is_file_launch);
@@ -168,7 +161,7 @@ void WebAppShimManagerDelegate::CloseAppWindows(Profile* profile,
     return;
   }
   // This is only used by legacy apps.
-  // TODO(https://crbug.com/1431891): This seems to happen in the wild although
+  // TODO(crbug.com/40902596): This seems to happen in the wild although
   // though shouldn't be possible. Once legacy apps are no longer supported all
   // this legacy app specific code should get deleted entirely.
   // NOTREACHED();
@@ -179,9 +172,15 @@ bool WebAppShimManagerDelegate::AppIsInstalled(Profile* profile,
   if (UseFallback(profile, app_id)) {
     return fallback_delegate_->AppIsInstalled(profile, app_id);
   }
-  return profile &&
-         WebAppProvider::GetForWebApps(profile)->registrar_unsafe().IsInstalled(
-             app_id);
+  if (!profile || !AreWebAppsEnabled(profile)) {
+    return false;
+  }
+  WebAppProvider* provider = WebAppProvider::GetForWebApps(profile);
+  CHECK(provider);
+  // TODO(crbug.com/379136842): This is likely too 'permissive' of a check, and
+  // different more restrictive filter should likely be used instead.
+  return provider->registrar_unsafe().AppMatches(
+      app_id, WebAppFilter::IsAppSurfaceableToUser());
 }
 
 bool WebAppShimManagerDelegate::AppCanCreateHost(Profile* profile,
@@ -195,16 +194,18 @@ bool WebAppShimManagerDelegate::AppCanCreateHost(Profile* profile,
 bool WebAppShimManagerDelegate::AppUsesRemoteCocoa(
     Profile* profile,
     const webapps::AppId& app_id) {
-  if (UseFallback(profile, app_id))
+  if (UseFallback(profile, app_id)) {
     return fallback_delegate_->AppUsesRemoteCocoa(profile, app_id);
+  }
   // All PWAs, and bookmark apps that open in their own window (not in a browser
   // window) can attach to a host.
-  if (!profile)
+  if (!profile || !AreWebAppsEnabled(profile)) {
     return false;
-  auto& registrar = WebAppProvider::GetForWebApps(profile)->registrar_unsafe();
-  return registrar.IsInstalled(app_id) &&
-         registrar.GetAppEffectiveDisplayMode(app_id) !=
-             web_app::DisplayMode::kBrowser;
+  }
+  WebAppProvider* provider = WebAppProvider::GetForWebApps(profile);
+  CHECK(provider);
+  return provider->registrar_unsafe().AppMatches(
+      app_id, WebAppFilter::OpensInDedicatedWindow());
 }
 
 bool WebAppShimManagerDelegate::AppIsMultiProfile(
@@ -243,6 +244,9 @@ void WebAppShimManagerDelegate::LaunchApp(
                                   std::move(launch_finished_callback));
     return;
   }
+  CHECK(profile);
+  CHECK(AreWebAppsEnabled(profile));
+
   base::ScopedClosureRunner run_launch_finished(
       std::move(launch_finished_callback));
 
@@ -265,6 +269,9 @@ void WebAppShimManagerDelegate::LaunchApp(
   // permitted file launch.
   std::vector<base::FilePath> launch_files = files;
   params.override_url = override_url;
+
+  WebAppProvider* const provider = WebAppProvider::GetForWebApps(profile);
+  CHECK(provider);
 
   for (const GURL& url : urls) {
     if (!url.is_valid() || !url.has_scheme()) {
@@ -292,8 +299,8 @@ void WebAppShimManagerDelegate::LaunchApp(
 
     // Validate that the scheme is something that could be registered by the PWA
     // via the manifest.
-    if (!blink::IsValidCustomHandlerScheme(
-            url.scheme(), blink::ProtocolHandlerSecurityLevel::kStrict)) {
+    if (!provider->registrar_unsafe().IsRegisteredLaunchProtocol(
+            app_id, url.GetScheme())) {
       DLOG(ERROR) << "Protocol is not a valid custom handler scheme.";
       continue;
     }
@@ -302,7 +309,6 @@ void WebAppShimManagerDelegate::LaunchApp(
     params.launch_source = apps::LaunchSource::kFromProtocolHandler;
   }
 
-  WebAppProvider* const provider = WebAppProvider::GetForWebApps(profile);
   WebAppFileHandlerManager::LaunchInfos file_launches;
   if (!params.protocol_handler_launch_url) {
     file_launches = provider->os_integration_manager()
@@ -321,14 +327,14 @@ void WebAppShimManagerDelegate::LaunchApp(
     // Protocol handlers should prompt the user before launching the app,
     // unless the user has granted or denied permission to this protocol scheme
     // previously.
-    web_app::WebAppRegistrar& registrar =
-        WebAppProvider::GetForWebApps(profile)->registrar_unsafe();
-    if (registrar.IsDisallowedLaunchProtocol(app_id, protocol_url.scheme())) {
+    web_app::WebAppRegistrar& registrar = provider->registrar_unsafe();
+    if (registrar.IsDisallowedLaunchProtocol(app_id,
+                                             protocol_url.GetScheme())) {
       CancelAppLaunch(profile, app_id);
       return;
     }
 
-    if (!registrar.IsAllowedLaunchProtocol(app_id, protocol_url.scheme())) {
+    if (!registrar.IsAllowedLaunchProtocol(app_id, protocol_url.GetScheme())) {
       ShowWebAppProtocolLaunchDialog(
           std::move(protocol_url), profile, app_id,
           base::BindOnce(&UserChoiceDialogCompleted, std::move(params),
@@ -376,9 +382,11 @@ void WebAppShimManagerDelegate::LaunchShim(
                                    std::move(terminated_callback));
     return;
   }
+  CHECK(profile);
+  CHECK(AreWebAppsEnabled(profile));
   WebAppProvider::GetForWebApps(profile)
       ->os_integration_manager()
-      .GetShortcutInfoForApp(
+      .GetShortcutInfoForAppFromRegistrar(
           app_id, base::BindOnce(&web_app::LaunchShim, update_behavior,
                                  launch_mode, std::move(launched_callback),
                                  std::move(terminated_callback)));
@@ -400,8 +408,12 @@ bool WebAppShimManagerDelegate::UseFallback(
   // If |app_id| is installed via WebAppProvider, then use |this| as the
   // delegate.
   auto* provider = WebAppProvider::GetForWebApps(profile);
-  if (provider->registrar_unsafe().IsInstalled(app_id))
+  // TODO(crbug.com/379136842): This is likely too 'permissive' of a check, and
+  // different more restrictive filter should likely be used instead.
+  if (provider && provider->registrar_unsafe().AppMatches(
+                      app_id, WebAppFilter::IsAppSurfaceableToUser())) {
     return false;
+  }
 
   // Use |fallback_delegate_| only if |app_id| is installed for |profile|
   // as an extension.

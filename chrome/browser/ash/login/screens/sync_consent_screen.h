@@ -33,6 +33,7 @@ class ScopedSessionRefresher;
 class SyncConsentScreen : public BaseScreen,
                           public syncer::SyncServiceObserver {
  public:
+  using TView = SyncConsentScreenView;
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused. Public for testing. See
   // GetSyncScreenBehavior() for documentation on each case.
@@ -79,15 +80,6 @@ class SyncConsentScreen : public BaseScreen,
         const std::string& consent_confirmation) = 0;
   };
 
-  class SyncConsentScreenExitTestDelegate {
-   public:
-    virtual ~SyncConsentScreenExitTestDelegate() = default;
-
-    virtual void OnSyncConsentScreenExit(
-        Result result,
-        ScreenExitCallback& original_callback) = 0;
-  };
-
   // Launches the sync consent settings dialog if the user requested to review
   // them after completing OOBE.
   static void MaybeLaunchSyncConsentSettings(Profile* profile);
@@ -100,11 +92,20 @@ class SyncConsentScreen : public BaseScreen,
 
   ~SyncConsentScreen() override;
 
+  void set_exit_callback_for_testing(const ScreenExitCallback& exit_callback) {
+    exit_callback_ = exit_callback;
+  }
+
+  const ScreenExitCallback& get_exit_callback_for_testing() {
+    return exit_callback_;
+  }
+
   // Inits `user_`, its `profile_` and `behavior_` before using the screen.
   void Init(const WizardContext& context);
 
   // syncer::SyncServiceObserver:
   void OnStateChanged(syncer::SyncService* sync) override;
+  void OnSyncShutdown(syncer::SyncService* sync) override;
 
   // Reacts to user action on sync.
   void OnContinue(const bool opted_in,
@@ -120,14 +121,14 @@ class SyncConsentScreen : public BaseScreen,
 
   void OnAshContinue(const bool opted_in,
                      const bool review_sync,
-                     const base::Value::List& consent_description_list,
+                     const base::ListValue& consent_description_list,
                      const std::string& consent_confirmation);
 
-  void OnLacrosContinue(const base::Value::List& consent_description_list,
+  void OnLacrosContinue(const base::ListValue& consent_description_list,
                         const std::string& consent_confirmation);
 
   void RecordAllConsents(const bool opted_in,
-                         const base::Value::List& consent_description_list,
+                         const base::ListValue& consent_description_list,
                          const std::string& consent_confirmation);
 
   // Sets internal condition "Sync disabled by policy" for tests.
@@ -141,10 +142,6 @@ class SyncConsentScreen : public BaseScreen,
       SyncConsentScreen::SyncConsentScreenTestDelegate* delegate);
   SyncConsentScreenTestDelegate* GetDelegateForTesting() const;
 
-  // When set, test callback will be called instead of the |exit_callback_|.
-  static void SetSyncConsentScreenExitTestDelegate(
-      SyncConsentScreenExitTestDelegate* test_delegate);
-
   // Test API
   // Returns true if profile sync is disabled by policy for test.
   bool IsProfileSyncDisabledByPolicyForTest() const;
@@ -157,7 +154,7 @@ class SyncConsentScreen : public BaseScreen,
   bool MaybeSkip(WizardContext& context) override;
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
 
   // Returns new SyncScreenBehavior value.
   SyncScreenBehavior GetSyncScreenBehavior(const WizardContext& context) const;
@@ -175,9 +172,6 @@ class SyncConsentScreen : public BaseScreen,
 
   // Returns true if profile sync has finished initialization.
   bool IsProfileSyncEngineInitialized() const;
-
-  // Check if OSSyncRevamp and Lacros are enabled.
-  bool IsOsSyncLacros();
 
   // This function does two things based on account capability: turn on "sync
   // everything" toggle for non-minor users; pass the minor mode signal to

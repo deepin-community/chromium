@@ -35,7 +35,7 @@ img {
 
 #container {
   display: flex;
-  height: 100%
+  height: 100%;
 }
 
 #infobar {
@@ -97,6 +97,7 @@ img {
   min-width: 32em;
   padding: 0 20px 65px 0;
 }
+
 #content > div:not(.selected) {
   display: none;
 }
@@ -312,8 +313,14 @@ img {
 }
 
 .settings-bar label {
-  display: inline-block;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
   width: 35ex;
+
+  &.full-width {
+    width: 100%;
+  }
 }
 
 .settings-bar button {
@@ -451,7 +458,16 @@ dialog.target-discovery .port-forwarding {
 }
 
 .config-buttons > label {
-  flex-grow: 1
+  flex-grow: 1;
+}
+
+#bubble-locking-label {
+  width: unset;
+}
+
+.remote-debugging-text {
+  padding: 5px 0;
+  max-width: 500px;
 }
 
 @media (forced-colors: active) {
@@ -497,4 +513,15 @@ dialog.target-discovery .port-forwarding {
     border-color: ButtonText;
     outline: none;
   }
+}
+
+.extended-lifetime-label {
+  background-color: var(--google-grey-300);
+  border-radius: 3px;
+  color: var(--google-grey-900);
+  display: inline-block;
+  font-size: 0.8em;
+  margin-left: 4px;
+  padding: 1px 4px;
+  vertical-align: middle;
 }

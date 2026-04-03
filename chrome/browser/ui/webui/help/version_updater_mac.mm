@@ -24,11 +24,11 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/version.h"
-#include "chrome/browser/updater/browser_updater_client.h"
-#include "chrome/browser/updater/browser_updater_client_util.h"
+#include "chrome/browser/updater/updater.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/updater/constants.h"
 #include "chrome/updater/update_service.h"
 #include "chrome/updater/updater_scope.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -37,10 +37,11 @@
 namespace {
 
 int GetDownloadProgress(int64_t downloaded_bytes, int64_t total_bytes) {
-  if (downloaded_bytes < 0 || total_bytes <= 0)
+  if (downloaded_bytes < 0 || total_bytes <= 0) {
     return -1;
+  }
   return 100 * std::clamp(static_cast<double>(downloaded_bytes) / total_bytes,
-                           0.0, 1.0);
+                          0.0, 1.0);
 }
 
 void UpdateStatus(VersionUpdater::StatusCallback status_callback,
@@ -48,7 +49,7 @@ void UpdateStatus(VersionUpdater::StatusCallback status_callback,
   VersionUpdater::Status status = VersionUpdater::Status::CHECKING;
   int progress = 0;
   std::string version;
-  std::string err_message;
+  std::u16string err_message;
 
   switch (update_state.state) {
     case updater::UpdateService::UpdateState::State::kCheckingForUpdates:
@@ -59,6 +60,10 @@ void UpdateStatus(VersionUpdater::StatusCallback status_callback,
     case updater::UpdateService::UpdateState::State::kDownloading:
       progress = GetDownloadProgress(update_state.downloaded_bytes,
                                      update_state.total_bytes);
+      [[fallthrough]];
+    case updater::UpdateService::UpdateState::State::kDecompressing:
+      [[fallthrough]];
+    case updater::UpdateService::UpdateState::State::kPatching:
       [[fallthrough]];
     case updater::UpdateService::UpdateState::State::kInstalling:
       status = VersionUpdater::Status::UPDATING;
@@ -72,11 +77,28 @@ void UpdateStatus(VersionUpdater::StatusCallback status_callback,
                    : VersionUpdater::Status::UPDATED;
       break;
     case updater::UpdateService::UpdateState::State::kUpdateError:
-      status = VersionUpdater::Status::FAILED;
-      // TODO(https://crbug.com/1146201): Localize error string.
-      err_message = base::StringPrintf(
-          "An error occurred. (Error code: %d) (Extra code: %d)",
-          update_state.error_code, update_state.extra_code1);
+      switch (update_state.error_code) {
+        case updater::GOOPDATE_E_APP_UPDATE_DISABLED_BY_POLICY:
+          status = VersionUpdater::Status::DISABLED_BY_ADMIN;
+          err_message =
+              l10n_util::GetStringUTF16(IDS_UPGRADE_DISABLED_BY_POLICY);
+          break;
+        case updater::GOOPDATE_E_APP_UPDATE_DISABLED_BY_POLICY_MANUAL:
+          status = VersionUpdater::Status::DISABLED_BY_ADMIN;
+          err_message =
+              l10n_util::GetStringUTF16(IDS_UPGRADE_DISABLED_BY_POLICY_MANUAL);
+          break;
+        default:
+          status = VersionUpdater::Status::FAILED;
+          err_message = l10n_util::GetStringFUTF16(
+              IDS_ABOUT_BOX_ERROR_DURING_UPDATE_CHECK,
+              l10n_util::GetStringFUTF16(IDS_ABOUT_BOX_GOOGLE_UPDATE_ERROR,
+                                         base::UTF8ToUTF16(base::StringPrintf(
+                                             "%d", update_state.error_code)),
+                                         base::UTF8ToUTF16(base::StringPrintf(
+                                             "%d", update_state.extra_code1))));
+          break;
+      }
       break;
     case updater::UpdateService::UpdateState::State::kNotStarted:
       [[fallthrough]];
@@ -84,8 +106,7 @@ void UpdateStatus(VersionUpdater::StatusCallback status_callback,
       return;
   }
 
-  status_callback.Run(status, progress, false, false, version, 0,
-                      base::UTF8ToUTF16(err_message));
+  status_callback.Run(status, progress, false, false, version, 0, err_message);
 }
 
 // macOS implementation of version update functionality, used by the WebUI
@@ -100,32 +121,13 @@ class VersionUpdaterMac : public VersionUpdater {
   // VersionUpdater implementation.
   void CheckForUpdate(StatusCallback status_callback,
                       PromoteCallback promote_callback) override {
-    EnsureUpdater(
-        base::BindOnce(
-            [](PromoteCallback prompt) {
-              prompt.Run(PromotionState::PROMOTE_ENABLED);
-            },
-            promote_callback),
-        base::BindOnce(
-            [](base::RepeatingCallback<void(
-                   const updater::UpdateService::UpdateState&)>
-                   status_callback) {
-              base::ThreadPool::PostTaskAndReplyWithResult(
-                  FROM_HERE, {base::MayBlock()},
-                  base::BindOnce(&GetUpdaterScope),
-                  base::BindOnce(
-                      [](base::RepeatingCallback<void(
-                             const updater::UpdateService::UpdateState&)>
-                             status_callback,
-                         updater::UpdaterScope scope) {
-                        BrowserUpdaterClient::Create(scope)->CheckForUpdate(
-                            status_callback);
-                      },
-                      status_callback));
-            },
-            base::BindRepeating(&UpdateStatus, status_callback)));
+    updater::EnsureUpdater(
+        base::TaskPriority::USER_VISIBLE,
+        base::BindOnce(promote_callback, PromotionState::PROMOTE_ENABLED),
+        base::BindOnce(&updater::CheckForUpdate,
+                       base::BindRepeating(&UpdateStatus, status_callback)));
   }
-  void PromoteUpdater() override { SetupSystemUpdater(); }
+  void PromoteUpdater() override { updater::SetUpSystemUpdater(); }
 };
 
 }  // namespace

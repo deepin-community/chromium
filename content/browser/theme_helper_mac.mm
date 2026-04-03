@@ -39,14 +39,14 @@ void FillScrollbarThemeParams(
   // in +[NSApplication _initializeRegisteredDefaults] as of 10.15. Their values
   // still seem to affect behavior, but their use is logged as an "unusual app
   // config", so it's not clear how much longer they'll be implemented.
-  params->has_initial_button_delay =
-      [defaults objectForKey:@"NSScrollerButtonDelay"] != nil;
-  params->initial_button_delay =
-      [defaults floatForKey:@"NSScrollerButtonDelay"];
-  params->has_autoscroll_button_delay =
-      [defaults objectForKey:@"NSScrollerButtonPeriod"] != nil;
-  params->autoscroll_button_delay =
-      [defaults floatForKey:@"NSScrollerButtonPeriod"];
+  if ([defaults objectForKey:@"NSScrollerButtonDelay"]) {
+    params->initial_button_delay =
+        [defaults floatForKey:@"NSScrollerButtonDelay"];
+  }
+  if ([defaults objectForKey:@"NSScrollerButtonPeriod"]) {
+    params->autoscroll_button_delay =
+        [defaults floatForKey:@"NSScrollerButtonPeriod"];
+  }
   params->jump_on_track_click =
       [defaults boolForKey:@"AppleScrollerPagingBehavior"];
   params->preferred_scroller_style =
@@ -315,7 +315,6 @@ void ThemeHelperMac::LoadSystemColorsForCurrentAppearance(
         break;
       case blink::MacSystemColorID::kCount:
         NOTREACHED();
-        break;
     }
   }
 }
@@ -326,31 +325,17 @@ void ThemeHelperMac::LoadSystemColors() {
   base::span<SkColor> values = writable_color_map_.GetMemoryAsSpan<SkColor>(
       blink::kMacSystemColorIDCount * blink::kMacSystemColorSchemeCount);
 
-  if (@available(macOS 11, *)) {
-    [[NSAppearance appearanceNamed:NSAppearanceNameAqua]
-        performAsCurrentDrawingAppearance:^{
-          LoadSystemColorsForCurrentAppearance(values.subspan(
-              0, static_cast<size_t>(blink::MacSystemColorID::kCount)));
-        }];
-    [[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]
-        performAsCurrentDrawingAppearance:^{
-          LoadSystemColorsForCurrentAppearance(values.subspan(
-              static_cast<size_t>(blink::MacSystemColorID::kCount),
-              static_cast<size_t>(blink::MacSystemColorID::kCount)));
-        }];
-  } else {
-    NSAppearance* saved_appearance = NSAppearance.currentAppearance;
-    NSAppearance.currentAppearance =
-        [NSAppearance appearanceNamed:NSAppearanceNameAqua];
-    LoadSystemColorsForCurrentAppearance(values.subspan(
-        0, static_cast<size_t>(blink::MacSystemColorID::kCount)));
-    NSAppearance.currentAppearance =
-        [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
-    LoadSystemColorsForCurrentAppearance(
-        values.subspan(static_cast<size_t>(blink::MacSystemColorID::kCount),
-                       static_cast<size_t>(blink::MacSystemColorID::kCount)));
-    NSAppearance.currentAppearance = saved_appearance;
-  }
+  [[NSAppearance appearanceNamed:NSAppearanceNameAqua]
+      performAsCurrentDrawingAppearance:^{
+        LoadSystemColorsForCurrentAppearance(
+            values.first<blink::kMacSystemColorIDCount>());
+      }];
+  [[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]
+      performAsCurrentDrawingAppearance:^{
+        LoadSystemColorsForCurrentAppearance(
+            values.subspan<blink::kMacSystemColorIDCount,
+                           blink::kMacSystemColorIDCount>());
+      }];
 }
 
 void ThemeHelperMac::OnRenderProcessHostCreated(
@@ -367,6 +352,13 @@ void ThemeHelperMac::OnRenderProcessHostCreated(
   content::mojom::Renderer* renderer = process_host->GetRendererInterface();
   renderer->UpdateScrollbarTheme(std::move(params));
   SendSystemColorsChangedMessage(renderer);
+}
+
+void ThemeHelperMac::SetAccentColorForTesting(SkColor accent_color) {
+  auto values = writable_color_map_.GetMemoryAsSpan<SkColor>(
+      blink::kMacSystemColorIDCount * blink::kMacSystemColorSchemeCount);
+  values[static_cast<size_t>(blink::MacSystemColorID::kControlAccentColor)] =
+      accent_color;
 }
 
 }  // namespace content

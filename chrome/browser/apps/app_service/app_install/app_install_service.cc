@@ -6,7 +6,14 @@
 
 #include <ostream>
 
+#include "chrome/browser/apps/app_service/app_install/app_install_service_ash.h"
+
 namespace apps {
+
+// static
+std::unique_ptr<AppInstallService> AppInstallService::Create(Profile& profile) {
+  return std::make_unique<AppInstallServiceAsh>(profile);
+}
 
 AppInstallService::~AppInstallService() = default;
 

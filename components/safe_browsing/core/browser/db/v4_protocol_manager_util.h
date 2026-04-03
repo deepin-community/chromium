@@ -13,13 +13,13 @@
 #include <iosfwd>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "base/containers/flat_set.h"
 #include "base/gtest_prod_util.h"
-#include "base/strings/string_piece.h"
 #include "components/safe_browsing/core/browser/db/safebrowsing.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "url/gurl.h"
@@ -29,6 +29,8 @@ class HttpRequestHeaders;
 }  // namespace net
 
 namespace safe_browsing {
+
+struct V4ProtocolConfig;
 
 // The size of the hash prefix, in bytes. It should be between 4 to 32 (full
 // hash).
@@ -51,36 +53,6 @@ using ListUpdateRequest = FetchThreatListUpdatesRequest::ListUpdateRequest;
 using ListUpdateResponse = FetchThreatListUpdatesResponse::ListUpdateResponse;
 
 void SetSbV4UrlPrefixForTesting(const char* url_prefix);
-
-// Config passed to the constructor of a V4 protocol manager.
-struct V4ProtocolConfig {
-  // The safe browsing client name sent in each request.
-  std::string client_name;
-
-  // Disable auto-updates using a command line switch.
-  bool disable_auto_update;
-
-  // The Google API key.
-  std::string key_param;
-
-  // Current product version sent in each request.
-  std::string version;
-
-  V4ProtocolConfig(const std::string& client_name,
-                   bool disable_auto_update,
-                   const std::string& key_param,
-                   const std::string& version);
-  V4ProtocolConfig(const V4ProtocolConfig& other);
-  ~V4ProtocolConfig();
-
- private:
-  V4ProtocolConfig() = delete;
-};
-
-// Get the v4 protocol config struct with a given client name, and ability to
-// enable/disable database auto update.
-V4ProtocolConfig GetV4ProtocolConfig(const std::string& client_name,
-                                     bool disable_auto_update);
 
 // Returns the URL to use for sending threat reports and other Safe Browsing
 // hits back to Safe Browsing service.
@@ -105,7 +77,7 @@ enum class CheckBrowseUrlType {
 // numeric values should never be reused.
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.safe_browsing
 // GENERATED_JAVA_PREFIX_TO_STRIP: SB_THREAT_TYPE_
-enum SBThreatType {
+enum class SBThreatType {
   // This type can be used for lists that can be checked synchronously so a
   // client callback isn't required, or for allowlists.
   SB_THREAT_TYPE_UNUSED = 0,
@@ -125,8 +97,9 @@ enum SBThreatType {
   // The download URL is malware.
   SB_THREAT_TYPE_URL_BINARY_MALWARE = 5,
 
-  // Url detected by the client-side phishing model.  Note that unlike the
-  // above values, this does not correspond to a downloaded list.
+  // Url detected by the client-side phishing model or the on-device model. Note
+  // that unlike the above values, this does not correspond to a downloaded
+  // list.
   SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING = 6,
 
   // The Chrome extension or app (given by its ID) is malware.
@@ -138,7 +111,7 @@ enum SBThreatType {
 
   // Url leads to a blocklisted resource script. Note that no warnings should be
   // shown on this threat type, but an incident report might be sent.
-  SB_THREAT_TYPE_BLOCKLISTED_RESOURCE = 9,
+  // DEPRECATED: SB_THREAT_TYPE_BLOCKLISTED_RESOURCE = 9,
 
   // Url abuses a permission API.
   SB_THREAT_TYPE_API_ABUSE = 10,
@@ -196,7 +169,7 @@ enum SBThreatType {
   // Managed policy indicated to block a navigation.
   SB_THREAT_TYPE_MANAGED_POLICY_BLOCK = 27,
 
-  SB_THREAT_TYPE_MAX = SB_THREAT_TYPE_MANAGED_POLICY_BLOCK,
+  kMaxValue = SB_THREAT_TYPE_MANAGED_POLICY_BLOCK,
 };
 
 using SBThreatTypeSet = base::flat_set<SBThreatType>;
@@ -226,8 +199,8 @@ class ListIdentifier {
                  ThreatType threat_type);
   explicit ListIdentifier(const ListUpdateResponse&);
 
-  bool operator==(const ListIdentifier& other) const;
-  bool operator!=(const ListIdentifier& other) const;
+  friend bool operator==(const ListIdentifier&,
+                         const ListIdentifier&) = default;
   size_t hash() const;
 
   PlatformType platform_type() const { return platform_type_; }
@@ -247,7 +220,6 @@ std::ostream& operator<<(std::ostream& os, const ListIdentifier& id);
 PlatformType GetCurrentPlatformType();
 ListIdentifier GetChromeExtMalwareId();
 ListIdentifier GetChromeUrlApiId();
-ListIdentifier GetChromeUrlClientIncidentId();
 ListIdentifier GetUrlBillingId();
 ListIdentifier GetUrlCsdDownloadAllowlistId();
 ListIdentifier GetUrlCsdAllowlistId();
@@ -277,8 +249,8 @@ struct StoreAndHashPrefix {
   StoreAndHashPrefix(ListIdentifier list_id, const HashPrefixStr& hash_prefix);
   ~StoreAndHashPrefix();
 
-  bool operator==(const StoreAndHashPrefix& other) const;
-  bool operator!=(const StoreAndHashPrefix& other) const;
+  friend bool operator==(const StoreAndHashPrefix&,
+                         const StoreAndHashPrefix&) = default;
   size_t hash() const;
 
  private:
@@ -409,7 +381,7 @@ class V4ProtocolManagerUtil {
       std::vector<std::string>* list_client_states);
 
  private:
-  V4ProtocolManagerUtil() {}
+  V4ProtocolManagerUtil() = default;
 
   FRIEND_TEST_ALL_PREFIXES(V4ProtocolManagerUtilTest, TestBackOffLogic);
   FRIEND_TEST_ALL_PREFIXES(V4ProtocolManagerUtilTest,
@@ -437,8 +409,7 @@ class V4ProtocolManagerUtil {
   static void GeneratePathsToCheck(const GURL& url,
                                    std::vector<std::string>* paths);
 
-  static std::string RemoveConsecutiveChars(base::StringPiece str,
-                                            const char c);
+  static std::string RemoveConsecutiveChars(std::string_view str, const char c);
 };
 
 using StoresToCheck = std::unordered_set<ListIdentifier>;

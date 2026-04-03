@@ -23,7 +23,7 @@ limitations under the License.
 #include "tensorflow/compiler/tf2xla/sharding_util.h"
 #include "tensorflow/compiler/tf2xla/xla_context.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/xla_builder.h"
 #include "tensorflow/core/common_runtime/local_device.h"
 #include "tensorflow/core/framework/device_base.h"
 #include "tensorflow/core/platform/mem.h"
@@ -39,13 +39,14 @@ class XlaCompilationAllocator : public Allocator {
   XlaCompilationAllocator() {}
   ~XlaCompilationAllocator() override {}
 
-  string Name() override { return "xla_compilation"; }
+  std::string Name() override { return "xla_compilation"; }
 
   void* AllocateRaw(size_t alignment, size_t num_bytes) override {
     // Regardless of the size requested, always allocates an XlaExpression.
     // Respects the alignment request because there is alignment checking even
     // for Tensors whose data is never accessed.
-    void* p = port::AlignedMalloc(sizeof(XlaExpression), alignment);
+    void* p = tsl::port::AlignedMalloc(
+        sizeof(XlaExpression), static_cast<std::align_val_t>(alignment));
     XlaExpression* expression = reinterpret_cast<XlaExpression*>(p);
     new (expression) XlaExpression();
     return expression;
@@ -140,9 +141,9 @@ void XlaCompilationDevice::Compute(OpKernel* op_kernel,
   VLOG(4) << "Done";
 }
 
-Status XlaCompilationDevice::Sync() { return absl::OkStatus(); }
+absl::Status XlaCompilationDevice::Sync() { return absl::OkStatus(); }
 
-Status XlaCompilationDevice::MakeTensorFromProto(
+absl::Status XlaCompilationDevice::MakeTensorFromProto(
     const TensorProto& tensor_proto, const AllocatorAttributes alloc_attrs,
     Tensor* tensor) {
   return errors::InvalidArgument(

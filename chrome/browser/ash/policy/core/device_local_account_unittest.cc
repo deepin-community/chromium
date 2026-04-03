@@ -7,9 +7,10 @@
 #include <utility>
 
 #include "base/values.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
+#include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -24,11 +25,11 @@ constexpr char kKioskAppId[] = "kiosk_app_id";
 
 base::Value BuildDeviceLocalAccountsWithOneKioskAppWithEphemeralMode(
     DeviceLocalAccount::EphemeralMode ephemeral_mode) {
-  return base::Value(base::Value::List().Append(
-      base::Value::Dict()
+  return base::Value(base::ListValue().Append(
+      base::DictValue()
           .Set(ash::kAccountsPrefDeviceLocalAccountsKeyId, kAccountId)
           .Set(ash::kAccountsPrefDeviceLocalAccountsKeyType,
-               static_cast<int>(DeviceLocalAccount::TYPE_KIOSK_APP))
+               static_cast<int>(DeviceLocalAccountType::kKioskApp))
           .Set(ash::kAccountsPrefDeviceLocalAccountsKeyEphemeralMode,
                static_cast<int>(ephemeral_mode))
           .Set(ash::kAccountsPrefDeviceLocalAccountsKeyKioskAppId,
@@ -87,11 +88,11 @@ TEST_F(DeviceLocalAccountTest,
 
 TEST_F(DeviceLocalAccountTest,
        GetDeviceLocalAccountsWithMissingEphemeralModeShouldDefaultToUnset) {
-  SetDeviceLocalAccountsPolicy(base::Value(base::Value::List().Append(
-      base::Value::Dict()
+  SetDeviceLocalAccountsPolicy(base::Value(base::ListValue().Append(
+      base::DictValue()
           .Set(ash::kAccountsPrefDeviceLocalAccountsKeyId, kAccountId)
           .Set(ash::kAccountsPrefDeviceLocalAccountsKeyType,
-               static_cast<int>(DeviceLocalAccount::TYPE_KIOSK_APP))
+               static_cast<int>(DeviceLocalAccountType::kKioskApp))
           .Set(ash::kAccountsPrefDeviceLocalAccountsKeyKioskAppId,
                kKioskAppId))));
 
@@ -105,11 +106,11 @@ TEST_F(DeviceLocalAccountTest,
 
 TEST_F(DeviceLocalAccountTest,
        GetDeviceLocalAccountsEphemeralModeShouldBeIgnoredForPublicSession) {
-  SetDeviceLocalAccountsPolicy(base::Value(base::Value::List().Append(
-      base::Value::Dict()
+  SetDeviceLocalAccountsPolicy(base::Value(base::ListValue().Append(
+      base::DictValue()
           .Set(ash::kAccountsPrefDeviceLocalAccountsKeyId, kAccountId)
           .Set(ash::kAccountsPrefDeviceLocalAccountsKeyType,
-               static_cast<int>(DeviceLocalAccount::TYPE_PUBLIC_SESSION))
+               static_cast<int>(DeviceLocalAccountType::kPublicSession))
           .Set(ash::kAccountsPrefDeviceLocalAccountsKeyEphemeralMode,
                static_cast<int>(DeviceLocalAccount::EphemeralMode::kEnable)))));
 

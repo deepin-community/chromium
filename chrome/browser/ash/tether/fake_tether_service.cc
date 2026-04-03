@@ -4,6 +4,9 @@
 
 #include "chrome/browser/ash/tether/fake_tether_service.h"
 
+#include "base/compiler_specific.h"
+#include "base/strings/string_number_conversions.h"
+
 namespace ash {
 namespace tether {
 
@@ -37,8 +40,8 @@ void FakeTetherService::StartTetherIfPossible() {
 
   for (int i = 0; i < num_tether_networks_; ++i) {
     network_state_handler()->AddTetherNetworkState(
-        kTetherGuidPrefix + std::to_string(i),
-        kTetherNamePrefix + std::to_string(i), kCarrier,
+        kTetherGuidPrefix + base::NumberToString(i),
+        kTetherNamePrefix + base::NumberToString(i), kCarrier,
         100 /* battery_percentage */, 100 /* signal_strength */,
         false /* has_connected_to_host */);
   }
@@ -46,7 +49,8 @@ void FakeTetherService::StartTetherIfPossible() {
 
 void FakeTetherService::StopTetherIfNecessary() {
   for (int i = 0; i < num_tether_networks_; ++i) {
-    network_state_handler()->RemoveTetherNetworkState(kTetherGuidPrefix + i);
+    network_state_handler()->RemoveTetherNetworkState(
+        UNSAFE_TODO(kTetherGuidPrefix + i));
   }
 }
 

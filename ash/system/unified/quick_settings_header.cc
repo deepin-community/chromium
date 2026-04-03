@@ -8,6 +8,7 @@
 
 #include "ash/ash_element_identifiers.h"
 #include "ash/constants/quick_settings_catalogs.h"
+#include "ash/login/ui/lock_screen.h"
 #include "ash/public/cpp/ash_view_ids.h"
 #include "ash/public/cpp/session/session_observer.h"
 #include "ash/public/cpp/system_tray_client.h"
@@ -30,6 +31,7 @@
 #include "ash/system/unified/quick_settings_metrics_util.h"
 #include "ash/system/unified/unified_system_tray_controller.h"
 #include "ash/system/update/eol_notice_quick_settings_view.h"
+#include "ash/system/update/extended_updates_notice_quick_settings_view.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
@@ -73,14 +75,6 @@ constexpr float kManagedStateStrokeWidth = 1.0f;
 constexpr auto kManagedStateBorderInsets = gfx::Insets::TLBR(0, 12, 0, 12);
 constexpr gfx::Size kManagedStateImageSize(20, 20);
 
-// Shows enterprise managed device information.
-void ShowEnterpriseInfo(UnifiedSystemTrayController* controller,
-                        const ui::Event& event) {
-  quick_settings_metrics_util::RecordQsButtonActivated(
-      QsButtonCatalogName::kManagedButton);
-  controller->HandleEnterpriseInfoAction();
-}
-
 // Shows account settings in OS settings, which includes a link to install or
 // open the Family Link app to see supervision settings.
 void ShowAccountSettings() {
@@ -95,7 +89,7 @@ class QuickSettingsHeader::ManagedStateView : public views::Button {
   METADATA_HEADER(ManagedStateView, views::Button)
 
  public:
-  ManagedStateView(PressedCallback callback,
+  ManagedStateView(base::OnceClosure callback,
                    int label_id,
                    const gfx::VectorIcon& icon)
       : views::Button(std::move(callback)), icon_(icon) {
@@ -116,7 +110,7 @@ class QuickSettingsHeader::ManagedStateView : public views::Button {
     label_->SetText(l10n_util::GetStringUTF16(label_id));
 
     image_->SetPreferredSize(kManagedStateImageSize);
-    label_->SetEnabledColorId(cros_tokens::kCrosSysOnSurfaceVariant);
+    label_->SetEnabledColor(cros_tokens::kCrosSysOnSurfaceVariant);
     TypographyProvider::Get()->StyleLabel(ash::TypographyToken::kCrosBody2,
                                           *label_);
     SetInstallFocusRingOnFocus(true);
@@ -148,7 +142,7 @@ class QuickSettingsHeader::ManagedStateView : public views::Button {
     const std::pair<SkColor, float> base_color_and_opacity =
         AshColorProvider::Get()->GetInkDropBaseColorAndOpacity();
     views::InkDrop::Get(this)->SetBaseColor(base_color_and_opacity.first);
-    image_->SetImage(gfx::CreateVectorIcon(
+    image_->SetImage(ui::ImageModel::FromVectorIcon(
         *icon_,
         GetColorProvider()->GetColor(cros_tokens::kCrosSysOnSurfaceVariant)));
   }
@@ -187,10 +181,20 @@ class QuickSettingsHeader::EnterpriseManagedView
 
  public:
   explicit EnterpriseManagedView(UnifiedSystemTrayController* controller)
-      : ManagedStateView(base::BindRepeating(&ShowEnterpriseInfo,
-                                             base::Unretained(controller)),
-                         IDS_ASH_ENTERPRISE_DEVICE_MANAGED_SHORT,
-                         kQuickSettingsManagedIcon) {
+      : ManagedStateView(
+            base::BindRepeating(
+                &QuickSettingsHeader::ShowEnterpriseInfo,
+                base::Unretained(controller),
+                base::FeatureList::IsEnabled(
+                    ash::features::kImprovedManagementDisclosure),
+                Shell::Get()->session_controller()->IsUserSessionBlocked(),
+                !Shell::Get()
+                     ->system_tray_model()
+                     ->enterprise_domain()
+                     ->enterprise_domain_manager()
+                     .empty()),
+            IDS_ASH_ENTERPRISE_DEVICE_MANAGED_SHORT,
+            kQuickSettingsManagedIcon) {
     DCHECK(Shell::Get());
     SetID(VIEW_ID_QS_MANAGED_BUTTON);
     SetProperty(views::kElementIdentifierKey, kEnterpriseManagedView);
@@ -234,7 +238,6 @@ class QuickSettingsHeader::EnterpriseManagedView
     const std::string account_domain_manager = model->account_domain_manager();
 
     const bool visible = session_controller->ShouldDisplayManagedUI() ||
-                         model->active_directory_managed() ||
                          !enterprise_domain_manager.empty() ||
                          !account_domain_manager.empty();
     SetVisible(visible);
@@ -308,12 +311,19 @@ QuickSettingsHeader::QuickSettingsHeader(
     if (Shell::Get()->system_tray_model()->update_model()->show_eol_notice()) {
       eol_notice_ =
           AddChildView(std::make_unique<EolNoticeQuickSettingsView>());
+    } else if (Shell::Get()
+                   ->system_tray_model()
+                   ->update_model()
+                   ->show_extended_updates_notice()) {
+      extended_updates_notice_ = AddChildView(
+          std::make_unique<ExtendedUpdatesNoticeQuickSettingsView>());
     }
   }
 
   // If the release track is not "stable" then show the channel indicator UI.
   auto channel = Shell::Get()->shell_delegate()->GetChannel();
-  if (channel_indicator_utils::IsDisplayableChannel(channel) && !eol_notice_) {
+  if (channel_indicator_utils::IsDisplayableChannel(channel) && !eol_notice_ &&
+      !extended_updates_notice_) {
     channel_view_ =
         AddChildView(std::make_unique<ChannelIndicatorQuickSettingsView>(
             channel, is_active_state && Shell::Get()
@@ -347,23 +357,28 @@ views::Label* QuickSettingsHeader::GetSupervisedButtonLabelForTest() {
   return supervised_view_->label();
 }
 
+views::View* QuickSettingsHeader::GetExtendedUpdatesViewForTest() {
+  return extended_updates_notice_;
+}
+
 void QuickSettingsHeader::UpdateVisibilityAndLayout() {
   // The managed view and the supervised view are never shown together.
   DCHECK(!enterprise_managed_view_->GetVisible() ||
          !supervised_view_->GetVisible());
 
+  // The notice views are never shown together.
+  DCHECK(!!channel_view_ + !!eol_notice_ + !!extended_updates_notice_ <= 1);
+
   // Make `this` view visible if a child is visible.
   bool managed_view_visible =
       enterprise_managed_view_->GetVisible() || supervised_view_->GetVisible();
-  bool channel_view_visible = !!channel_view_;
-  bool eol_notice_visible = !!eol_notice_;
+  bool notice_view_visible =
+      channel_view_ || eol_notice_ || extended_updates_notice_;
 
-  SetVisible(managed_view_visible || channel_view_visible ||
-             eol_notice_visible);
+  SetVisible(managed_view_visible || notice_view_visible);
 
   // Update button sizes for one column vs. two columns.
-  bool two_columns =
-      managed_view_visible && (channel_view_visible || eol_notice_visible);
+  bool two_columns = managed_view_visible && notice_view_visible;
   gfx::Size size = two_columns ? kNarrowButtonSize : kWideButtonSize;
   enterprise_managed_view_->SetPreferredSize(size);
   supervised_view_->SetPreferredSize(size);
@@ -373,6 +388,9 @@ void QuickSettingsHeader::UpdateVisibilityAndLayout() {
   if (eol_notice_) {
     eol_notice_->SetPreferredSize(size);
   }
+  if (extended_updates_notice_) {
+    extended_updates_notice_->SetPreferredSize(size);
+  }
 
   // Use custom narrow layouts when two columns are showing.
   enterprise_managed_view_->SetNarrowLayout(two_columns);
@@ -381,6 +399,27 @@ void QuickSettingsHeader::UpdateVisibilityAndLayout() {
   }
   if (eol_notice_) {
     eol_notice_->SetNarrowLayout(two_columns);
+  }
+  if (extended_updates_notice_) {
+    extended_updates_notice_->SetNarrowLayout(two_columns);
+  }
+}
+
+// static
+void QuickSettingsHeader::ShowEnterpriseInfo(
+    UnifiedSystemTrayController* controller,
+    bool show_management_disclosure_dialog,
+    bool is_user_session_blocked,
+    bool has_enterprise_domain_manager) {
+  quick_settings_metrics_util::RecordQsButtonActivated(
+      QsButtonCatalogName::kManagedButton);
+  // Show the new disclosure when on the login/lock screen and feature is
+  // enabled.
+  if (show_management_disclosure_dialog && is_user_session_blocked &&
+      has_enterprise_domain_manager) {
+    LockScreen::Get()->ShowManagementDisclosureDialog();
+  } else {
+    controller->HandleEnterpriseInfoAction();
   }
 }
 

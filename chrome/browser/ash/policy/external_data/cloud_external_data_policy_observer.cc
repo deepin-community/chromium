@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -17,8 +16,10 @@
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/policy/handlers/configuration_policy_handler_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
 #include "components/policy/core/browser/policy_error_map.h"
@@ -27,6 +28,7 @@
 #include "components/policy/core/common/external_data_fetcher.h"
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/core/common/policy_service.h"
+#include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
 
 namespace policy {
@@ -63,7 +65,7 @@ CloudExternalDataPolicyObserver::PolicyServiceObserver::PolicyServiceObserver(
     : parent_(parent), user_id_(user_id), policy_service_(policy_service) {
   policy_service_->AddObserver(POLICY_DOMAIN_CHROME, this);
 
-  if (!IsDeviceLocalAccountUser(user_id, nullptr)) {
+  if (!IsDeviceLocalAccountUser(user_id)) {
     // Notify |parent_| if the external data reference for |user_id_| is set
     // during login. This is omitted for device-local accounts because their
     // policy is available before login and the external data reference will
@@ -115,21 +117,22 @@ void CloudExternalDataPolicyObserver::Delegate::OnExternalDataFetched(
     std::unique_ptr<std::string> data,
     const base::FilePath& file_path) {}
 
-CloudExternalDataPolicyObserver::Delegate::~Delegate() {}
-
 CloudExternalDataPolicyObserver::CloudExternalDataPolicyObserver(
     ash::CrosSettings* cros_settings,
     DeviceLocalAccountPolicyService* device_local_account_policy_service,
     const std::string& policy,
-    Delegate* delegate)
+    user_manager::UserManager* user_manager,
+    std::unique_ptr<Delegate> delegate)
     : cros_settings_(cros_settings),
       device_local_account_policy_service_(device_local_account_policy_service),
       policy_(policy),
-      delegate_(delegate) {
+      delegate_(std::move(delegate)) {
   auto* session_manager = session_manager::SessionManager::Get();
   // SessionManager might not exist in unit tests.
   if (session_manager)
     session_observation_.Observe(session_manager);
+
+  user_manager_observation_.Observe(user_manager);
 
   if (device_local_account_policy_service_)
     device_local_account_policy_service_->AddObserver(this);
@@ -159,13 +162,11 @@ void CloudExternalDataPolicyObserver::OnUserProfileLoaded(
       ash::ProfileHelper::Get()->GetUserByProfile(profile);
   if (!user) {
     NOTREACHED();
-    return;
   }
 
   const std::string& user_id = user->GetAccountId().GetUserEmail();
-  if (base::Contains(logged_in_user_observers_, user_id)) {
+  if (logged_in_user_observers_.contains(user_id)) {
     NOTREACHED();
-    return;
   }
 
   ProfilePolicyConnector* policy_connector =
@@ -174,9 +175,14 @@ void CloudExternalDataPolicyObserver::OnUserProfileLoaded(
       this, user_id, policy_connector->policy_service());
 }
 
+void CloudExternalDataPolicyObserver::OnUserToBeRemoved(
+    const AccountId& account_id) {
+  delegate_->RemoveForAccountId(account_id);
+}
+
 void CloudExternalDataPolicyObserver::OnPolicyUpdated(
     const std::string& user_id) {
-  if (base::Contains(logged_in_user_observers_, user_id)) {
+  if (logged_in_user_observers_.contains(user_id)) {
     // When a device-local account is logged in, a policy change triggers both
     // OnPolicyUpdated() and PolicyServiceObserver::OnPolicyUpdated(). Ignore
     // the former so that the policy change is handled only once.
@@ -224,6 +230,14 @@ void CloudExternalDataPolicyObserver::OnDeviceLocalAccountsChanged() {
   // handled via the kAccountsPrefDeviceLocalAccounts device setting observer.
 }
 
+// static
+AccountId CloudExternalDataPolicyObserver::GetAccountId(
+    const std::string& user_id) {
+  user_manager::KnownUser known_user(g_browser_process->local_state());
+  return known_user.GetAccountId(user_id, /*id=*/std::string(),
+                                 AccountType::UNKNOWN);
+}
+
 void CloudExternalDataPolicyObserver::RetrieveDeviceLocalAccounts() {
   // Schedule a callback if device policy has not yet been verified.
   if (ash::CrosSettingsProvider::TRUSTED !=
@@ -245,7 +259,7 @@ void CloudExternalDataPolicyObserver::RetrieveDeviceLocalAccounts() {
   for (DeviceLocalAccountEntryMap::iterator it =
            device_local_account_entries_.begin();
        it != device_local_account_entries_.end();) {
-    if (!base::Contains(device_local_accounts, it->first)) {
+    if (!device_local_accounts.contains(it->first)) {
       const std::string user_id = it->first;
       device_local_account_entries_.erase(it++);
       // When a device-local account whose external data reference was set is

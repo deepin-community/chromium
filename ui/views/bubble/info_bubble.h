@@ -37,9 +37,9 @@ class VIEWS_EXPORT InfoBubble : public BubbleDialogDelegateView {
   void Hide();
 
   // BubbleDialogDelegateView:
-  std::unique_ptr<NonClientFrameView> CreateNonClientFrameView(
-      Widget* widget) override;
-  gfx::Size CalculatePreferredSize() const override;
+  std::unique_ptr<FrameView> CreateFrameView(Widget* widget) override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& available_size) const override;
   void OnWidgetBoundsChanged(Widget* widget,
                              const gfx::Rect& new_bounds) override;
 

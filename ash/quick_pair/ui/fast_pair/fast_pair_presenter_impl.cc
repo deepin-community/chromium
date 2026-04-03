@@ -24,7 +24,6 @@
 #include "ash/system/model/system_tray_model.h"
 #include "ash/system/tray/tray_popup_utils.h"
 #include "ash/system/tray/tray_utils.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -264,7 +263,7 @@ void FastPairPresenterImpl::OnDiscoveryDismissed(
 
 void FastPairPresenterImpl::OnDiscoveryLearnMoreClicked(
     DiscoveryCallback callback) {
-  NewWindowDelegate::GetPrimary()->OpenUrl(
+  NewWindowDelegate::GetInstance()->OpenUrl(
       GURL(kDiscoveryLearnMoreLink),
       NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       NewWindowDelegate::Disposition::kNewForegroundTab);
@@ -348,7 +347,6 @@ void FastPairPresenterImpl::OnPairingFailedDismissed(
       // Fast Pair Error Notifications do not have a timeout, so this is never
       // expected to be hit.
       NOTREACHED();
-      break;
     default:
       NOTREACHED();
   }
@@ -420,7 +418,7 @@ void FastPairPresenterImpl::OnAssociateAccountActionClicked(
 
 void FastPairPresenterImpl::OnAssociateAccountLearnMoreClicked(
     AssociateAccountCallback callback) {
-  NewWindowDelegate::GetPrimary()->OpenUrl(
+  NewWindowDelegate::GetInstance()->OpenUrl(
       GURL(kAssociateAccountLearnMoreLink),
       NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       NewWindowDelegate::Disposition::kNewForegroundTab);
@@ -581,6 +579,11 @@ void FastPairPresenterImpl::OnCompanionAppDismissed(
     default:
       NOTREACHED();
   }
+}
+
+void FastPairPresenterImpl::ShowPasskey(std::u16string device_name,
+                                        uint32_t passkey) {
+  notification_controller_->ShowPasskey(device_name, passkey);
 }
 
 void FastPairPresenterImpl::RemoveNotifications() {

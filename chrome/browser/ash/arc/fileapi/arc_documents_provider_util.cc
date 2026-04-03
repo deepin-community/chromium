@@ -8,13 +8,11 @@
 #include <string_view>
 #include <utility>
 
-#include "ash/components/arc/mojom/file_system.mojom.h"
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "chromeos/ash/experiences/arc/mojom/file_system.mojom.h"
 #include "net/base/mime_util.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "url/gurl.h"
@@ -217,7 +215,7 @@ std::vector<base::FilePath::StringType> GetExtensionsForArcMimeType(
       base::FilePath::StringType preferred_extension;
       if (net::GetPreferredExtensionForMimeType(mime_type,
                                                 &preferred_extension)) {
-        auto iter = base::ranges::find(extensions, preferred_extension);
+        auto iter = std::ranges::find(extensions, preferred_extension);
         if (iter == extensions.end()) {
           // This is unlikely to happen, but there is no guarantee.
           extensions.insert(extensions.begin(), preferred_extension);
@@ -259,13 +257,13 @@ std::string FindArcMimeTypeFromExtension(const std::string& ext) {
   for (const auto& mapping : kAndroidMimeTypeMappings) {
     std::vector<std::string_view> extensions = base::SplitStringPiece(
         mapping.extensions, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-    if (base::Contains(extensions, ext))
+    if (std::ranges::contains(extensions, ext)) {
       return mapping.mime_type;
+    }
   }
   return std::string();
 }
 
-// TODO(crbug.com/675868): Consolidate with the similar logic for Drive.
 base::FilePath::StringType GetFileNameForDocument(
     const mojom::DocumentPtr& document) {
   base::FilePath::StringType filename = document->display_name;
@@ -293,7 +291,7 @@ base::FilePath::StringType GetFileNameForDocument(
       GetExtensionsForArcMimeType(document->mime_type);
 
   if (!possible_extensions.empty() &&
-      !base::Contains(possible_extensions, extension)) {
+      !std::ranges::contains(possible_extensions, extension)) {
     // Lookup the extension in the hardcoded map before appending an extension,
     // as some extensions (eg. 3gp) are typed differently by Android. Only
     // append the suggested extension if the lookup fails (i.e. no valid mime

@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -398,9 +399,10 @@ TEST_F(SystemTPMTokenInfoGetterTest, TpmEnabledCallFails) {
   EXPECT_EQ(1, result->slot());
 
   const int64_t kExpectedDelays[] = {100};
-  EXPECT_EQ(std::vector<int64_t>(kExpectedDelays,
-                                 kExpectedDelays + std::size(kExpectedDelays)),
-            delays_);
+  UNSAFE_TODO(EXPECT_EQ(
+      std::vector<int64_t>(kExpectedDelays,
+                           kExpectedDelays + std::size(kExpectedDelays)),
+      delays_));
 }
 
 TEST_F(SystemTPMTokenInfoGetterTest, GetTpmTokenInfoInitiallyNotReady) {
@@ -426,9 +428,10 @@ TEST_F(SystemTPMTokenInfoGetterTest, GetTpmTokenInfoInitiallyNotReady) {
   EXPECT_EQ(1, result->slot());
 
   const int64_t kExpectedDelays[] = {100};
-  EXPECT_EQ(std::vector<int64_t>(kExpectedDelays,
-                                 kExpectedDelays + std::size(kExpectedDelays)),
-            delays_);
+  UNSAFE_TODO(EXPECT_EQ(
+      std::vector<int64_t>(kExpectedDelays,
+                           kExpectedDelays + std::size(kExpectedDelays)),
+      delays_));
 }
 
 TEST_F(SystemTPMTokenInfoGetterTest, GetTpmTokenInfoInitiallyFails) {
@@ -454,9 +457,10 @@ TEST_F(SystemTPMTokenInfoGetterTest, GetTpmTokenInfoInitiallyFails) {
   EXPECT_EQ(1, result->slot());
 
   const int64_t kExpectedDelays[] = {100};
-  EXPECT_EQ(std::vector<int64_t>(kExpectedDelays,
-                                 kExpectedDelays + std::size(kExpectedDelays)),
-            delays_);
+  UNSAFE_TODO(EXPECT_EQ(
+      std::vector<int64_t>(kExpectedDelays,
+                           kExpectedDelays + std::size(kExpectedDelays)),
+      delays_));
 }
 
 TEST_F(SystemTPMTokenInfoGetterTest, RetryDelaysIncreaseExponentially) {
@@ -486,9 +490,10 @@ TEST_F(SystemTPMTokenInfoGetterTest, RetryDelaysIncreaseExponentially) {
   EXPECT_EQ(1, result->slot());
 
   int64_t kExpectedDelays[] = {100, 200, 400, 800, 1600, 3200};
-  ASSERT_EQ(std::vector<int64_t>(kExpectedDelays,
-                                 kExpectedDelays + std::size(kExpectedDelays)),
-            delays_);
+  UNSAFE_TODO(ASSERT_EQ(
+      std::vector<int64_t>(kExpectedDelays,
+                           kExpectedDelays + std::size(kExpectedDelays)),
+      delays_));
 }
 
 TEST_F(SystemTPMTokenInfoGetterTest, RetryDelayBounded) {
@@ -521,9 +526,10 @@ TEST_F(SystemTPMTokenInfoGetterTest, RetryDelayBounded) {
   int64_t kExpectedDelays[] = {100,    200,    400,    800,    1600,
                                3200,   6400,   12800,  25600,  51200,
                                102400, 204800, 300000, 300000, 300000};
-  ASSERT_EQ(std::vector<int64_t>(kExpectedDelays,
-                                 kExpectedDelays + std::size(kExpectedDelays)),
-            delays_);
+  UNSAFE_TODO(ASSERT_EQ(
+      std::vector<int64_t>(kExpectedDelays,
+                           kExpectedDelays + std::size(kExpectedDelays)),
+      delays_));
 }
 
 TEST_F(UserTPMTokenInfoGetterTest, BasicFlow) {
@@ -574,9 +580,10 @@ TEST_F(UserTPMTokenInfoGetterTest, GetTpmTokenInfoInitiallyFails) {
   EXPECT_EQ(1, result->slot());
 
   const int64_t kExpectedDelays[] = {100};
-  EXPECT_EQ(std::vector<int64_t>(kExpectedDelays,
-                                 kExpectedDelays + std::size(kExpectedDelays)),
-            delays_);
+  UNSAFE_TODO(EXPECT_EQ(
+      std::vector<int64_t>(kExpectedDelays,
+                           kExpectedDelays + std::size(kExpectedDelays)),
+      delays_));
 }
 
 TEST_F(UserTPMTokenInfoGetterTest, GetTpmTokenInfoInitiallyNotReady) {
@@ -603,9 +610,10 @@ TEST_F(UserTPMTokenInfoGetterTest, GetTpmTokenInfoInitiallyNotReady) {
   EXPECT_EQ(1, result->slot());
 
   const int64_t kExpectedDelays[] = {100};
-  EXPECT_EQ(std::vector<int64_t>(kExpectedDelays,
-                                 kExpectedDelays + std::size(kExpectedDelays)),
-            delays_);
+  UNSAFE_TODO(EXPECT_EQ(
+      std::vector<int64_t>(kExpectedDelays,
+                           kExpectedDelays + std::size(kExpectedDelays)),
+      delays_));
 }
 
 }  // namespace

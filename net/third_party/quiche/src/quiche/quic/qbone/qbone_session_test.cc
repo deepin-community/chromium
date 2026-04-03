@@ -2,8 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <functional>
 #include <memory>
+#include <queue>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/strings/string_view.h"
 #include "quiche/quic/core/io/quic_default_event_loop.h"
@@ -36,7 +40,6 @@ using ::testing::_;
 using ::testing::Contains;
 using ::testing::ElementsAre;
 using ::testing::Eq;
-using ::testing::Invoke;
 using ::testing::NiceMock;
 using ::testing::Not;
 
@@ -109,7 +112,7 @@ class IndirectionProofSource : public ProofSource {
                                        std::move(callback));
   }
 
-  absl::InlinedVector<uint16_t, 8> SupportedTlsSignatureAlgorithms()
+  QuicSignatureAlgorithmVector SupportedTlsSignatureAlgorithms()
       const override {
     if (!proof_source_) {
       return {};
@@ -323,7 +326,7 @@ class QboneSessionTest : public QuicTestWithParam<ParsedQuicVersion> {
       client_peer_ = std::make_unique<QboneClientSession>(
           client_connection_, client_crypto_config_.get(),
           /*owner=*/nullptr, config, supported_versions_,
-          QuicServerId("test.example.com", 1234, false), client_writer_.get(),
+          QuicServerId("test.example.com", 1234), client_writer_.get(),
           client_handler_.get());
     }
 
@@ -358,11 +361,11 @@ class QboneSessionTest : public QuicTestWithParam<ParsedQuicVersion> {
     MockPacketWriter* client_writer = static_cast<MockPacketWriter*>(
         QuicConnectionPeer::GetWriter(client_peer_->connection()));
     ON_CALL(*client_writer, WritePacket(_, _, _, _, _, _))
-        .WillByDefault(Invoke([this](const char* buffer, size_t buf_len,
-                                     const QuicIpAddress& self_address,
-                                     const QuicSocketAddress& peer_address,
-                                     PerPacketOptions* option,
-                                     const QuicPacketWriterParams& params) {
+        .WillByDefault([this](const char* buffer, size_t buf_len,
+                              const QuicIpAddress& self_address,
+                              const QuicSocketAddress& peer_address,
+                              PerPacketOptions* option,
+                              const QuicPacketWriterParams& params) {
           char* copy = new char[1024 * 1024];
           memcpy(copy, buffer, buf_len);
           runner_.Schedule([this, copy, buf_len] {
@@ -373,15 +376,15 @@ class QboneSessionTest : public QuicTestWithParam<ParsedQuicVersion> {
             delete[] copy;
           });
           return WriteResult(WRITE_STATUS_OK, buf_len);
-        }));
+        });
     MockPacketWriter* server_writer = static_cast<MockPacketWriter*>(
         QuicConnectionPeer::GetWriter(server_peer_->connection()));
     ON_CALL(*server_writer, WritePacket(_, _, _, _, _, _))
-        .WillByDefault(Invoke([this](const char* buffer, size_t buf_len,
-                                     const QuicIpAddress& self_address,
-                                     const QuicSocketAddress& peer_address,
-                                     PerPacketOptions* options,
-                                     const QuicPacketWriterParams& params) {
+        .WillByDefault([this](const char* buffer, size_t buf_len,
+                              const QuicIpAddress& self_address,
+                              const QuicSocketAddress& peer_address,
+                              PerPacketOptions* options,
+                              const QuicPacketWriterParams& params) {
           char* copy = new char[1024 * 1024];
           memcpy(copy, buffer, buf_len);
           runner_.Schedule([this, copy, buf_len] {
@@ -392,7 +395,7 @@ class QboneSessionTest : public QuicTestWithParam<ParsedQuicVersion> {
             delete[] copy;
           });
           return WriteResult(WRITE_STATUS_OK, buf_len);
-        }));
+        });
   }
 
   void StartHandshake() {
@@ -419,7 +422,7 @@ class QboneSessionTest : public QuicTestWithParam<ParsedQuicVersion> {
 
   // Test handshake establishment and sending/receiving of data for two
   // directions.
-  void TestStreamConnection(bool use_messages) {
+  void TestStreamConnection(bool use_datagrams) {
     ASSERT_TRUE(server_peer_->OneRttKeysAvailable());
     ASSERT_TRUE(client_peer_->OneRttKeysAvailable());
     ASSERT_TRUE(server_peer_->IsEncryptionEstablished());
@@ -459,10 +462,10 @@ class QboneSessionTest : public QuicTestWithParam<ParsedQuicVersion> {
     QUIC_LOG(INFO) << "Sending server -> client long data";
     server_peer_->ProcessPacketFromNetwork(TestPacketIn(long_data));
     runner_.Run();
-    if (use_messages) {
+    if (use_datagrams) {
       ExpectICMPTooBigResponse(
           server_writer_->data(),
-          server_peer_->connection()->GetGuaranteedLargestMessagePayload(),
+          server_peer_->connection()->GetGuaranteedLargestDatagramPayload(),
           TestPacketOut(long_data));
     } else {
       EXPECT_THAT(client_writer_->data(), Contains(TestPacketOut(long_data)));
@@ -475,10 +478,10 @@ class QboneSessionTest : public QuicTestWithParam<ParsedQuicVersion> {
     QUIC_LOG(INFO) << "Sending client -> server long data";
     client_peer_->ProcessPacketFromNetwork(TestPacketIn(long_data));
     runner_.Run();
-    if (use_messages) {
+    if (use_datagrams) {
       ExpectICMPTooBigResponse(
           client_writer_->data(),
-          client_peer_->connection()->GetGuaranteedLargestMessagePayload(),
+          client_peer_->connection()->GetGuaranteedLargestDatagramPayload(),
           TestPacketIn(long_data));
     } else {
       EXPECT_THAT(server_writer_->data(), Contains(TestPacketOut(long_data)));
@@ -487,21 +490,21 @@ class QboneSessionTest : public QuicTestWithParam<ParsedQuicVersion> {
     EXPECT_FALSE(client_peer_->ReceivedInchoateReject());
     EXPECT_THAT(client_peer_->GetNumReceivedServerConfigUpdates(), Eq(0));
 
-    if (!use_messages) {
+    if (!use_datagrams) {
       EXPECT_THAT(client_peer_->GetNumStreamedPackets(), Eq(1));
       EXPECT_THAT(server_peer_->GetNumStreamedPackets(), Eq(1));
     }
 
-    if (use_messages) {
+    if (use_datagrams) {
       EXPECT_THAT(client_peer_->GetNumEphemeralPackets(), Eq(0));
       EXPECT_THAT(server_peer_->GetNumEphemeralPackets(), Eq(0));
-      EXPECT_THAT(client_peer_->GetNumMessagePackets(), Eq(2));
-      EXPECT_THAT(server_peer_->GetNumMessagePackets(), Eq(2));
+      EXPECT_THAT(client_peer_->GetNumDatagramPackets(), Eq(2));
+      EXPECT_THAT(server_peer_->GetNumDatagramPackets(), Eq(2));
     } else {
       EXPECT_THAT(client_peer_->GetNumEphemeralPackets(), Eq(2));
       EXPECT_THAT(server_peer_->GetNumEphemeralPackets(), Eq(2));
-      EXPECT_THAT(client_peer_->GetNumMessagePackets(), Eq(0));
-      EXPECT_THAT(server_peer_->GetNumMessagePackets(), Eq(0));
+      EXPECT_THAT(client_peer_->GetNumDatagramPackets(), Eq(0));
+      EXPECT_THAT(server_peer_->GetNumDatagramPackets(), Eq(0));
     }
 
     // All streams are ephemeral and should be gone.
@@ -548,16 +551,16 @@ INSTANTIATE_TEST_SUITE_P(Tests, QboneSessionTest,
 
 TEST_P(QboneSessionTest, StreamConnection) {
   CreateClientAndServerSessions();
-  client_peer_->set_send_packets_as_messages(false);
-  server_peer_->set_send_packets_as_messages(false);
+  client_peer_->set_send_packets_as_datagrams(false);
+  server_peer_->set_send_packets_as_datagrams(false);
   StartHandshake();
   TestStreamConnection(false);
 }
 
-TEST_P(QboneSessionTest, Messages) {
+TEST_P(QboneSessionTest, Datagrams) {
   CreateClientAndServerSessions();
-  client_peer_->set_send_packets_as_messages(true);
-  server_peer_->set_send_packets_as_messages(true);
+  client_peer_->set_send_packets_as_datagrams(true);
+  server_peer_->set_send_packets_as_datagrams(true);
   StartHandshake();
   TestStreamConnection(true);
 }

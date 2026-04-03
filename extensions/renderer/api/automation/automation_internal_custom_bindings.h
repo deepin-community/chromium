@@ -79,7 +79,7 @@ class AutomationInternalCustomBindings : public ObjectBackedNativeHandler,
   // accessibility events forwarded to this process.
   void StopCachingAccessibilityTrees() override;
   void DispatchEvent(const std::string& event_name,
-                     const base::Value::List& event_args) const override;
+                     const base::ListValue& event_args) const override;
 
  private:
   // ObjectBackedNativeHandler overrides:
@@ -89,7 +89,7 @@ class AutomationInternalCustomBindings : public ObjectBackedNativeHandler,
   void IsInteractPermitted(
       const v8::FunctionCallbackInfo<v8::Value>& args) const;
 
-  raw_ptr<NativeExtensionBindingsSystem, ExperimentalRenderer> bindings_system_;
+  raw_ptr<NativeExtensionBindingsSystem> bindings_system_;
   bool should_ignore_context_;
 
   std::unique_ptr<ui::AutomationV8Bindings> automation_v8_bindings_;

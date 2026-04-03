@@ -8,7 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 #include "./vpx_config.h"
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 #include "test/codec_factory.h"
 #include "test/encode_test_driver.h"
 #include "test/i420_video_source.h"
@@ -22,7 +22,7 @@
 namespace svc_test {
 namespace {
 
-typedef enum {
+enum INTER_LAYER_PRED {
   // Inter-layer prediction is on on all frames.
   INTER_LAYER_PRED_ON,
   // Inter-layer prediction is off on all frames.
@@ -33,7 +33,7 @@ typedef enum {
   // that any layer S (> 0) can only predict from previous spatial
   // layer S-1, from the same superframe.
   INTER_LAYER_PRED_ON_CONSTRAINED
-} INTER_LAYER_PRED;
+};
 
 class ScalePartitionOnePassCbrSvc
     : public OnePassCbrSvc,

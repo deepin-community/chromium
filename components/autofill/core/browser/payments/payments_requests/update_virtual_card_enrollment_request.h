@@ -9,8 +9,8 @@
 #include <string>
 
 #include "base/functional/callback.h"
-#include "components/autofill/core/browser/autofill_client.h"
-#include "components/autofill/core/browser/payments/payments_network_interface.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
 #include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
 namespace base {
@@ -27,9 +27,9 @@ namespace payments {
 class UpdateVirtualCardEnrollmentRequest : public PaymentsRequest {
  public:
   UpdateVirtualCardEnrollmentRequest(
-      const PaymentsNetworkInterface::UpdateVirtualCardEnrollmentRequestDetails&
-          request_details,
-      base::OnceCallback<void(AutofillClient::PaymentsRpcResult)> callback);
+      const UpdateVirtualCardEnrollmentRequestDetails& request_details,
+      base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult)>
+          callback);
   UpdateVirtualCardEnrollmentRequest(
       const UpdateVirtualCardEnrollmentRequest&) = delete;
   UpdateVirtualCardEnrollmentRequest& operator=(
@@ -40,24 +40,26 @@ class UpdateVirtualCardEnrollmentRequest : public PaymentsRequest {
   std::string GetRequestUrlPath() override;
   std::string GetRequestContentType() override;
   std::string GetRequestContent() override;
-  void ParseResponse(const base::Value::Dict& response) override;
+  void ParseResponse(const base::DictValue& response) override;
   bool IsResponseComplete() override;
-  void RespondToDelegate(AutofillClient::PaymentsRpcResult result) override;
+  void RespondToDelegate(
+      PaymentsAutofillClient::PaymentsRpcResult result) override;
+  std::string GetHistogramName() const override;
+  std::optional<base::TimeDelta> GetTimeout() const override;
 
  private:
   friend class UpdateVirtualCardEnrollmentRequestTest;
 
   // Modifies the base::Value that |request_dict| points to by setting all of
   // the fields needed for an Enroll request.
-  void BuildEnrollRequestDictionary(base::Value::Dict* request_dict);
+  void BuildEnrollRequestDictionary(base::DictValue* request_dict);
 
   // Modifies the base::Value that |request_dict| points to by setting all of
   // the fields needed for an Unenroll request.
-  void BuildUnenrollRequestDictionary(base::Value::Dict* request_dict);
+  void BuildUnenrollRequestDictionary(base::DictValue* request_dict);
 
-  PaymentsNetworkInterface::UpdateVirtualCardEnrollmentRequestDetails
-      request_details_;
-  base::OnceCallback<void(AutofillClient::PaymentsRpcResult)> callback_;
+  UpdateVirtualCardEnrollmentRequestDetails request_details_;
+  base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult)> callback_;
   std::optional<std::string> enroll_result_;
 };
 

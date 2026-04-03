@@ -1,6 +1,7 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 import * as Common from '../../core/common/common.js';
 import * as Host from '../../core/host/host.js';
@@ -11,38 +12,38 @@ import type * as Protocol from '../../generated/protocol.js';
 import type * as IssuesManager from '../../models/issues_manager/issues_manager.js';
 import * as Logs from '../../models/logs/logs.js';
 import type * as NetworkForward from '../../panels/network/forward/forward.js';
-import * as IconButton from '../../ui/components/icon_button/icon_button.js';
 import * as RequestLinkIcon from '../../ui/components/request_link_icon/request_link_icon.js';
+import {Icon} from '../../ui/kit/kit.js';
 import * as Components from '../../ui/legacy/components/utils/utils.js';
 import * as UI from '../../ui/legacy/legacy.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
+import * as PanelsCommon from '../common/common.js';
 
-import {type AggregatedIssue} from './IssueAggregator.js';
-import {type IssueView} from './IssueView.js';
+import type {IssueView} from './IssueView.js';
 
 const UIStrings = {
   /**
-   *@description Text in Object Properties Section
+   * @description Text in Object Properties Section
    */
   unknown: 'unknown',
   /**
-   *@description Tooltip for button linking to the Elements panel
+   * @description Tooltip for button linking to the Elements panel
    */
   clickToRevealTheFramesDomNodeIn: 'Click to reveal the frame\'s DOM node in the Elements panel',
   /**
-   *@description Replacement text for a link to an HTML element which is not available (anymore).
+   * @description Replacement text for a link to an HTML element which is not available (anymore).
    */
   unavailable: 'unavailable',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/issues/AffectedResourcesView.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
 export const enum AffectedItem {
-  Cookie = 'Cookie',
-  Directive = 'Directive',
-  Element = 'Element',
-  Request = 'Request',
-  Source = 'Source',
+  COOKIE = 'Cookie',
+  DIRECTIVE = 'Directive',
+  ELEMENT = 'Element',
+  REQUEST = 'Request',
+  SOURCE = 'Source',
 }
 
 export const extractShortPath = (path: Platform.DevToolsPath.UrlString): string => {
@@ -64,7 +65,7 @@ export interface CreateRequestCellOptions {
  */
 export abstract class AffectedResourcesView extends UI.TreeOutline.TreeElement {
   readonly #parentView: IssueView;
-  protected issue: AggregatedIssue;
+  protected issue: IssuesManager.IssueAggregator.AggregatedIssue;
   protected affectedResourcesCountElement: HTMLElement;
   protected affectedResources: HTMLElement;
   #affectedResourcesCount: number;
@@ -72,8 +73,8 @@ export abstract class AffectedResourcesView extends UI.TreeOutline.TreeElement {
   #unresolvedFrameIds: Set<string>;
   protected requestResolver: Logs.RequestResolver.RequestResolver;
 
-  constructor(parent: IssueView, issue: AggregatedIssue) {
-    super();
+  constructor(parent: IssueView, issue: IssuesManager.IssueAggregator.AggregatedIssue, jslogContext: string) {
+    super(/* title */ undefined, /* expandable */ undefined, jslogContext);
     this.#parentView = parent;
     this.issue = issue;
     this.toggleOnClick = true;
@@ -90,7 +91,7 @@ export abstract class AffectedResourcesView extends UI.TreeOutline.TreeElement {
    * Sets the issue to take the resources from. Does not
    * trigger an update, the caller needs to do that explicitly.
    */
-  setIssue(issue: AggregatedIssue): void {
+  setIssue(issue: IssuesManager.IssueAggregator.AggregatedIssue): void {
     this.issue = issue;
   }
 
@@ -142,13 +143,13 @@ export abstract class AffectedResourcesView extends UI.TreeOutline.TreeElement {
    */
   #resolveFrameId(frameId: Protocol.Page.FrameId): SDK.ResourceTreeModel.ResourceTreeFrame|null {
     const frame = SDK.FrameManager.FrameManager.instance().getFrame(frameId);
-    if (!frame || !frame.url) {
+    if (!frame?.url) {
       this.#unresolvedFrameIds.add(frameId);
       if (!this.#frameListeners.length) {
         const addListener = SDK.FrameManager.FrameManager.instance().addEventListener(
-            SDK.FrameManager.Events.FrameAddedToTarget, this.#onFrameChanged, this);
+            SDK.FrameManager.Events.FRAME_ADDED_TO_TARGET, this.#onFrameChanged, this);
         const navigateListener = SDK.FrameManager.FrameManager.instance().addEventListener(
-            SDK.FrameManager.Events.FrameNavigated, this.#onFrameChanged, this);
+            SDK.FrameManager.Events.FRAME_NAVIGATED, this.#onFrameChanged, this);
         this.#frameListeners = [addListener, navigateListener];
       }
     }
@@ -179,11 +180,11 @@ export abstract class AffectedResourcesView extends UI.TreeOutline.TreeElement {
     const frameCell = document.createElement('td');
     frameCell.classList.add('affected-resource-cell');
     if (frame) {
-      const icon = new IconButton.Icon.Icon();
-      icon.data = {iconName: 'code-circle', color: 'var(--icon-link)', width: '16px', height: '16px'};
-      icon.classList.add('link', 'elements-panel');
+      const icon = new Icon();
+      icon.name = 'code-circle';
+      icon.classList.add('link', 'elements-panel', 'medium');
       icon.onclick = async () => {
-        Host.userMetrics.issuesPanelResourceOpened(issueCategory, AffectedItem.Element);
+        Host.userMetrics.issuesPanelResourceOpened(issueCategory, AffectedItem.ELEMENT);
         const frame = SDK.FrameManager.FrameManager.instance().getFrame(frameId);
         if (frame) {
           const ownerNode = await frame.getOwnerDOMNodeOrDocument();
@@ -226,11 +227,11 @@ export abstract class AffectedResourcesView extends UI.TreeOutline.TreeElement {
     }
 
     function sendTelemetry(): void {
-      Host.userMetrics.issuesPanelResourceOpened(issueCategory, AffectedItem.Element);
+      Host.userMetrics.issuesPanelResourceOpened(issueCategory, AffectedItem.ELEMENT);
     }
 
     const deferredDOMNode = new SDK.DOMModel.DeferredDOMNode(target, backendNodeId);
-    const anchorElement = (await Common.Linkifier.Linkifier.linkify(deferredDOMNode)) as HTMLElement;
+    const anchorElement = PanelsCommon.DOMLinkifier.Linkifier.instance().linkify(deferredDOMNode) as HTMLElement;
     anchorElement.textContent = nodeName;
     anchorElement.addEventListener('click', () => sendTelemetry());
     anchorElement.addEventListener('keydown', (event: Event) => {
@@ -246,14 +247,13 @@ export abstract class AffectedResourcesView extends UI.TreeOutline.TreeElement {
 
   protected appendSourceLocation(
       element: HTMLElement,
-      sourceLocation: {url: string, scriptId?: Protocol.Runtime.ScriptId, lineNumber: number, columnNumber?: number}|
+      sourceLocation: {url: string, lineNumber: number, scriptId?: Protocol.Runtime.ScriptId, columnNumber?: number}|
       undefined,
       target: SDK.Target.Target|null|undefined): void {
     const sourceCodeLocation = document.createElement('td');
     sourceCodeLocation.classList.add('affected-source-location');
     if (sourceLocation) {
       const maxLengthForDisplayedURLs = 40;  // Same as console messages.
-      // TODO(crbug.com/1108503): Add some mechanism to be able to add telemetry to this element.
       const linkifier = new Components.Linkifier.Linkifier(maxLengthForDisplayedURLs);
       const sourceAnchor = linkifier.linkifyScriptLocation(
           target || null, sourceLocation.scriptId || null, sourceLocation.url as Platform.DevToolsPath.UrlString,
@@ -274,17 +274,25 @@ export abstract class AffectedResourcesView extends UI.TreeOutline.TreeElement {
     header.appendChild(info);
   }
 
-  protected createIssueDetailCell(textContent: string, additionalClass: string|null = null): HTMLTableDataCellElement {
+  protected createIssueDetailCell(textContent: string|HTMLElement, additionalClass: string|null = null):
+      HTMLTableDataCellElement {
     const cell = document.createElement('td');
-    cell.textContent = textContent;
+
+    if (typeof textContent === 'string') {
+      cell.textContent = textContent;
+    } else {
+      cell.appendChild(textContent);
+    }
+
     if (additionalClass) {
       cell.classList.add(additionalClass);
     }
     return cell;
   }
 
-  protected appendIssueDetailCell(element: HTMLElement, textContent: string, additionalClass: string|null = null):
-      HTMLTableDataCellElement {
+  protected appendIssueDetailCell(
+      element: HTMLElement, textContent: string|HTMLElement,
+      additionalClass: string|null = null): HTMLTableDataCellElement {
     const cell = this.createIssueDetailCell(textContent, additionalClass);
     element.appendChild(cell);
     return cell;

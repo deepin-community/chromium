@@ -11,8 +11,9 @@
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/html/forms/html_opt_group_element.h"
+#include "third_party/blink/renderer/core/html/html_div_element.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -173,7 +174,7 @@ TEST_F(SelectionModifierTest, PreviousLineWithDisplayNone) {
 TEST_F(SelectionModifierTest, PreviousSentenceWithNull) {
   InsertStyleElement("b {display:inline-block}");
   const SelectionInDOMTree selection =
-      SetSelectionTextToBody("<b><ruby><a>|</a></ruby></b>");
+      SetSelectionTextToBody("<b><b><a>|</a></b></b>");
   SelectionModifier modifier(GetFrame(), selection);
   // We call |PreviousSentence()| with null-position.
   EXPECT_FALSE(modifier.Modify(SelectionModifyAlteration::kMove,
@@ -185,7 +186,7 @@ TEST_F(SelectionModifierTest, PreviousSentenceWithNull) {
 TEST_F(SelectionModifierTest, StartOfSentenceWithNull) {
   InsertStyleElement("b {display:inline-block}");
   const SelectionInDOMTree selection =
-      SetSelectionTextToBody("|<b><ruby><a></a></ruby></b>");
+      SetSelectionTextToBody("|<b><b><a></a></b></b>");
   SelectionModifier modifier(GetFrame(), selection);
   // We call |StartOfSentence()| with null-position.
   EXPECT_FALSE(modifier.Modify(SelectionModifyAlteration::kMove,
@@ -211,8 +212,8 @@ TEST_F(SelectionModifierTest, MoveCaretWithShadow) {
   SetBodyContent(body_content);
   Element* host = GetDocument().getElementById(AtomicString("host"));
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML(shadow_content);
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(shadow_content);
   UpdateAllLifecyclePhasesForTest();
 
   Element* body = GetDocument().body();
@@ -428,10 +429,10 @@ TEST_F(SelectionModifierTest, OptgroupAndTable) {
       "<optgroup></optgroup><table><tbody><tr><td></td></tr></tbody></table>",
       GetSelectionTextFromBody(selection));
 
-  Element* optgroup = GetDocument().QuerySelector(AtomicString("optgroup"));
+  HTMLOptGroupElement* optgroup =
+      To<HTMLOptGroupElement>(QuerySelector("optgroup"));
   ShadowRoot* shadow_root = optgroup->GetShadowRoot();
-  Element* label =
-      shadow_root->getElementById(shadow_element_names::kIdOptGroupLabel);
+  HTMLDivElement* label = &optgroup->OptGroupLabelElement();
   EXPECT_EQ(Position(label, 0), selection.Anchor());
   EXPECT_EQ(Position(shadow_root, 1), selection.Focus());
 }

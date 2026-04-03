@@ -17,7 +17,6 @@ limitations under the License.
 #include <memory>
 
 #include "tensorflow/compiler/tf2xla/host_compute_metadata.pb.h"
-#include "tensorflow/core/distributed_runtime/rpc/grpc_util.h"
 #include "tensorflow/core/platform/casts.h"
 #if defined(LIBTPU_ON_GCE)
 #include "tensorflow/core/tpu/kernels/tpu_compilation_cache.pb.h"
@@ -67,7 +66,7 @@ Status DeserializeRpcResponseToCacheEntry<GetTpuProgramResponseExternal>(
   return OkStatus();
 }
 
-xla::StatusOr<std::vector<::grpc::Slice>> SerializeCacheEntryToBufferSlices(
+absl::StatusOr<std::vector<::grpc::Slice>> SerializeCacheEntryToBufferSlices(
     const TpuCompilationCacheEntry& cache_entry) {
   if (cache_entry.tpu_program_group() == nullptr) {
     // It's possible that the sharding/unsharding entry does not exist, but the

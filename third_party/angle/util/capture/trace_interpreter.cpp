@@ -7,6 +7,10 @@
 //   Parser and interpreter for the C-based replays.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "trace_interpreter.h"
 
 #include "anglebase/no_destructor.h"
@@ -516,6 +520,7 @@ class TraceInterpreter : angle::NonCopyable
     void replayFrame(uint32_t frameIndex);
     void setupReplay();
     void resetReplay();
+    void setupFirstFrame();
     const char *getSerializedContextState(uint32_t frameIndex);
 
   private:
@@ -633,9 +638,14 @@ void TraceInterpreter::resetReplay()
     runTraceFunction("ResetReplay");
 }
 
+void TraceInterpreter::setupFirstFrame()
+{
+    runTraceFunction("SetupFirstFrame");
+}
+
 const char *TraceInterpreter::getSerializedContextState(uint32_t frameIndex)
 {
-    // TODO: Necessary for complete self-testing. http://anglebug.com/7779
+    // TODO: Necessary for complete self-testing. http://anglebug.com/42266250
     UNREACHABLE();
     return nullptr;
 }
@@ -939,6 +949,22 @@ template <>
 void PackParameter<const uint64_t *>(ParamBuffer &params,
                                      const Token &token,
                                      const TraceStringMap &strings)
+{
+    UNREACHABLE();
+}
+
+template <>
+void PackParameter<GLGETBLOBPROCANGLE>(ParamBuffer &params,
+                                       const Token &token,
+                                       const TraceStringMap &strings)
+{
+    UNREACHABLE();
+}
+
+template <>
+void PackParameter<GLSETBLOBPROCANGLE>(ParamBuffer &params,
+                                       const Token &token,
+                                       const TraceStringMap &strings)
 {
     UNREACHABLE();
 }

@@ -2,10 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/chrome_elf/nt_registry/nt_registry.h"
 
 #include <assert.h>
 #include <ntstatus.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 #include <memory>
@@ -64,7 +70,7 @@ bool IsThisProcWow64() {
     return false;
   if (!is_wow64_process(::GetCurrentProcess(), &is_wow64))
     return false;
-  return is_wow64 ? true : false;
+  return !!is_wow64;
 }
 
 bool InitNativeRegApi() {

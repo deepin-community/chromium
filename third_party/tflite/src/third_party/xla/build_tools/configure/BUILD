@@ -13,13 +13,12 @@
 # limitations under the License.
 # ============================================================================
 
-load("//xla:pytype.default.bzl", "pytype_strict_library")
-
-# Placeholder: load py_test
 load("@local_config_cuda//cuda:build_defs.bzl", "cuda_library")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//xla:pytype.bzl", "pytype_strict_library")
 
 package(
-    default_visibility = ["//visibility:public"],
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     licenses = ["notice"],
 )
@@ -33,12 +32,19 @@ py_test(
     name = "configure_test",
     srcs = ["configure_test.py"],
     data = [
-        "testdata/clang.bazelrc",
+        "testdata/clang_local.bazelrc",
         "testdata/cuda_clang.bazelrc",
+        "testdata/cuda_clang_local.bazelrc",
+        "testdata/default_cuda_clang.bazelrc",
         "testdata/gcc.bazelrc",
         "testdata/nvcc_clang.bazelrc",
+        "testdata/nvcc_clang_local.bazelrc",
         "testdata/nvcc_gcc.bazelrc",
     ],
+    # After https://github.com/openxla/xla/commit/7d3043283, this test is no
+    # longer hermetic. This works in OSS tests because the docker container has
+    # clang-17 and gcc, but it's a little sketchy.
+    tags = ["notap"],
     deps = [
         ":configure",
         "//build_tools:test_utils",
@@ -52,14 +58,12 @@ cc_library(
     name = "assert_clang",
     srcs = ["assert_clang.cc"],
     tags = ["manual"],
-    visibility = ["//visibility:public"],
 )
 
 cc_library(
     name = "assert_gcc",
     srcs = ["assert_gcc.cc"],
     tags = ["manual"],
-    visibility = ["//visibility:public"],
 )
 
 cuda_library(
@@ -69,7 +73,6 @@ cuda_library(
         "gpu",
         "manual",
     ],
-    visibility = ["//visibility:public"],
     deps = ["@local_config_cuda//cuda:cuda_headers"],
 )
 
@@ -80,7 +83,6 @@ cuda_library(
         "gpu",
         "manual",
     ],
-    visibility = ["//visibility:public"],
     # Notably, this builds fine in OSS without this dependency. Apparently,
     # NVCC can give targets access to CUDA headers without letting Bazel know,
     # while CUDA clang cannot.

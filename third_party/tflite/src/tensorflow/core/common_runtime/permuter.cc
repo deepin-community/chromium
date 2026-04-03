@@ -40,17 +40,17 @@ Permuter::Permuter()
     : col_ctx_(nullptr), col_params_(nullptr), done_(nullptr), counter_(0) {}
 
 StatusCallback Permuter::CheckCounterAndCallDone() {
-  return [this](const Status& s) {
+  return [this](const absl::Status& s) {
     mu_.lock();
     status_.Update(s);
     int counter = ++counter_;
-    Status status = status_;
+    absl::Status status = status_;
     mu_.unlock();
     if (counter == 2) done_(status);
   };
 }
 
-Status Permuter::InitializeCollectiveContext(
+absl::Status Permuter::InitializeCollectiveContext(
     std::shared_ptr<CollectiveContext> col_ctx) {
   DCHECK(col_ctx->dev_mgr);
   col_ctx_ = col_ctx;
@@ -79,8 +79,8 @@ void Permuter::Run(StatusCallback done) {
 
 void Permuter::DispatchSend(int src_rank, int target_rank, const Tensor* tensor,
                             const StatusCallback& done) {
-  string send_buf_key =
-      strings::StrCat(col_ctx_->exec_key, src_rank, target_rank);
+  std::string send_buf_key =
+      absl::StrCat(col_ctx_->exec_key, src_rank, target_rank);
   VLOG(1) << "DispatchSend " << send_buf_key << " from_device "
           << col_ctx_->device_name << " to_device "
           << col_params_->instance.devices[target_rank]
@@ -95,8 +95,8 @@ void Permuter::DispatchSend(int src_rank, int target_rank, const Tensor* tensor,
 
 void Permuter::DispatchRecv(int src_rank, int target_rank, Tensor* tensor,
                             const StatusCallback& done) {
-  string recv_buf_key =
-      strings::StrCat(col_ctx_->exec_key, src_rank, target_rank);
+  std::string recv_buf_key =
+      absl::StrCat(col_ctx_->exec_key, src_rank, target_rank);
   VLOG(1) << "DispatchRecv " << recv_buf_key << " to_device "
           << col_ctx_->device_name << " from_device "
           << col_params_->instance.devices[src_rank]

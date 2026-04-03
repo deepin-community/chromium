@@ -8,7 +8,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
-#include "ash/focus_cycler.h"
+#include "ash/focus/focus_cycler.h"
 #include "ash/ime/ime_controller_impl.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/keyboard/ui/keyboard_util.h"
@@ -30,10 +30,13 @@
 #include "ash/system/overview/overview_button_tray.h"
 #include "ash/system/palette/palette_tray.h"
 #include "ash/system/session/logout_button_tray.h"
+#include "ash/system/status_area_widget_delegate.h"
 #include "ash/system/status_area_widget_test_helper.h"
+#include "ash/system/tray/imaged_tray_icon.h"
 #include "ash/system/tray/status_area_overflow_button_tray.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/system/tray/system_tray_observer.h"
+#include "ash/system/tray/tray_constants.h"
 #include "ash/system/unified/date_tray.h"
 #include "ash/system/unified/unified_system_tray.h"
 #include "ash/system/unified/unified_system_tray_bubble.h"
@@ -41,6 +44,7 @@
 #include "ash/test/ash_test_base.h"
 #include "ash/test/test_ash_web_view_factory.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
+#include "ash/wm/window_pin_util.h"
 #include "base/command_line.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -51,15 +55,35 @@
 #include "components/prefs/testing_pref_service.h"
 #include "components/proxy_config/pref_proxy_config_tracker_impl.h"
 #include "components/session_manager/session_manager_types.h"
+#include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/models/image_model.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image.h"
+#include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/image/image_unittest_util.h"
 
 using session_manager::SessionState;
+using testing::NotNull;
 
 namespace ash {
+namespace {
+
+gfx::ImageSkia CreateTextImage(const gfx::Size& size,
+                               SkColor color = SK_ColorBLACK) {
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(size.width(), size.height());
+  bitmap.eraseColor(color);
+  auto image = gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
+  image.MakeThreadSafe();
+  return image;
+}
+
+}  // namespace
 
 class StatusAreaWidgetTest : public AshTestBase {
  protected:
@@ -229,6 +253,35 @@ TEST_F(StatusAreaWidgetTest, DateTrayRoundedCornerBehavior) {
             TrayBackgroundView::RoundedCornerBehavior::kStartRounded);
 }
 
+class LockedFullscreenStatusAreaWidgetTest
+    : public AshTestBase,
+      public testing::WithParamInterface<bool> {
+ protected:
+  bool IsLocked() const { return GetParam(); }
+};
+
+TEST_P(LockedFullscreenStatusAreaWidgetTest,
+       TrayBubbleVisibilityWithPinnedWindow) {
+  // Create a window for testing purposes.
+  const std::unique_ptr<aura::Window> window = CreateTestWindow();
+
+  // Show the unified system tray bubble before pinning the window.
+  auto* const status_area_widget = GetPrimaryShelf()->GetStatusAreaWidget();
+  ASSERT_THAT(status_area_widget, NotNull());
+  auto* const unified_system_tray = status_area_widget->unified_system_tray();
+  ASSERT_THAT(unified_system_tray, NotNull());
+  unified_system_tray->ShowBubble();
+  ASSERT_TRUE(unified_system_tray->IsBubbleShown());
+
+  // Pin the window and verify tray bubble visibility.
+  PinWindow(window.get(), IsLocked());
+  EXPECT_EQ(unified_system_tray->IsBubbleShown(), !IsLocked());
+}
+
+INSTANTIATE_TEST_SUITE_P(LockedFullscreenStatusAreaWidgetTests,
+                         LockedFullscreenStatusAreaWidgetTest,
+                         testing::Bool());
+
 class SystemTrayFocusTestObserver : public SystemTrayObserver {
  public:
   SystemTrayFocusTestObserver() = default;
@@ -263,91 +316,12 @@ class StatusAreaWidgetFocusTest : public AshTestBase {
 
   ~StatusAreaWidgetFocusTest() override = default;
 
-  // AshTestBase:
-  void SetUp() override {
-    AshTestBase::SetUp();
-    test_observer_ = std::make_unique<SystemTrayFocusTestObserver>();
-    Shell::Get()->system_tray_notifier()->AddSystemTrayObserver(
-        test_observer_.get());
-  }
-
-  // AshTestBase:
-  void TearDown() override {
-    Shell::Get()->system_tray_notifier()->RemoveSystemTrayObserver(
-        test_observer_.get());
-    test_observer_.reset();
-    AshTestBase::TearDown();
-  }
-
   void GenerateTabEvent(bool reverse) {
-    ui::KeyEvent tab_pressed(ui::ET_KEY_PRESSED, ui::VKEY_TAB,
+    ui::KeyEvent tab_pressed(ui::EventType::kKeyPressed, ui::VKEY_TAB,
                              reverse ? ui::EF_SHIFT_DOWN : ui::EF_NONE);
     StatusAreaWidgetTestHelper::GetStatusAreaWidget()->OnKeyEvent(&tab_pressed);
   }
-
- protected:
-  std::unique_ptr<SystemTrayFocusTestObserver> test_observer_;
 };
-
-// Tests that tab traversal through status area widget in non-active session
-// could properly send FocusOut event.
-// TODO(crbug.com/934939): Failing on trybot.
-TEST_F(StatusAreaWidgetFocusTest, DISABLED_FocusOutObserverUnified) {
-  // Set session state to LOCKED.
-  SessionControllerImpl* session = Shell::Get()->session_controller();
-  ASSERT_TRUE(session->IsActiveUserSessionStarted());
-  TestSessionControllerClient* client = GetSessionControllerClient();
-  client->SetSessionState(SessionState::LOCKED);
-  ASSERT_TRUE(session->IsScreenLocked());
-
-  StatusAreaWidget* status = StatusAreaWidgetTestHelper::GetStatusAreaWidget();
-  // Default trays are constructed.
-  ASSERT_TRUE(status->overview_button_tray());
-  ASSERT_TRUE(status->unified_system_tray());
-  ASSERT_TRUE(status->logout_button_tray_for_testing());
-  ASSERT_TRUE(status->ime_menu_tray());
-  ASSERT_TRUE(status->virtual_keyboard_tray_for_testing());
-
-  // Default trays are visible.
-  ASSERT_FALSE(status->overview_button_tray()->GetVisible());
-  ASSERT_TRUE(status->unified_system_tray()->GetVisible());
-  ASSERT_FALSE(status->logout_button_tray_for_testing()->GetVisible());
-  ASSERT_FALSE(status->ime_menu_tray()->GetVisible());
-  ASSERT_FALSE(status->virtual_keyboard_tray_for_testing()->GetVisible());
-
-  // In Unified, we don't have notification tray, so ImeMenuTray is used for
-  // tab testing.
-  status->ime_menu_tray()->OnIMEMenuActivationChanged(true);
-  ASSERT_TRUE(status->ime_menu_tray()->GetVisible());
-
-  // Set focus to status area widget. The first focused view will be the IME
-  // tray.
-  ASSERT_TRUE(Shell::Get()->focus_cycler()->FocusWidget(status));
-  views::FocusManager* focus_manager = status->GetFocusManager();
-  EXPECT_EQ(status->ime_menu_tray(), focus_manager->GetFocusedView());
-
-  // A tab key event will move focus to the system tray.
-  GenerateTabEvent(false);
-  EXPECT_EQ(status->unified_system_tray(), focus_manager->GetFocusedView());
-  EXPECT_EQ(0, test_observer_->focus_out_count());
-  EXPECT_EQ(0, test_observer_->reverse_focus_out_count());
-
-  // Another tab key event will send FocusOut event, since we are not handling
-  // this event, focus will remain within the status widhet and will be
-  // moved to the IME tray.
-  GenerateTabEvent(false);
-  EXPECT_EQ(status->ime_menu_tray(), focus_manager->GetFocusedView());
-  EXPECT_EQ(1, test_observer_->focus_out_count());
-  EXPECT_EQ(0, test_observer_->reverse_focus_out_count());
-
-  // A reverse tab key event will send reverse FocusOut event, since we are not
-  // handling this event, focus will remain within the status widget and will
-  // be moved to the system tray.
-  GenerateTabEvent(true);
-  EXPECT_EQ(status->unified_system_tray(), focus_manager->GetFocusedView());
-  EXPECT_EQ(1, test_observer_->focus_out_count());
-  EXPECT_EQ(1, test_observer_->reverse_focus_out_count());
-}
 
 class StatusAreaWidgetPaletteTest : public AshTestBase {
  public:
@@ -390,11 +364,11 @@ class UnifiedStatusAreaWidgetTest : public AshTestBase {
     // Initializing NetworkHandler before ash is more like production.
     AshTestBase::SetUp();
     network_handler_test_helper_.RegisterPrefs(profile_prefs_.registry(),
-                                               local_state_.registry());
+                                               local_state()->registry());
     PrefProxyConfigTrackerImpl::RegisterPrefs(profile_prefs_.registry());
 
     network_handler_test_helper_.InitializePrefs(&profile_prefs_,
-                                                 &local_state_);
+                                                 local_state());
 
     // Networking stubs may have asynchronous initialization.
     base::RunLoop().RunUntilIdle();
@@ -447,7 +421,7 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest,
   status->ime_menu_tray()->SetVisiblePreferred(true);
 
   keyboard_ui_controller()->ShowKeyboard(false /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   // The keyboard should hide when clicked.
   ui::test::EventGenerator* generator = GetEventGenerator();
@@ -456,7 +430,7 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest,
           ->GetBoundsInScreen()
           .CenterPoint());
   generator->ClickLeftButton();
-  ASSERT_TRUE(keyboard::WaitUntilHidden());
+  ASSERT_TRUE(keyboard::test::WaitUntilHidden());
 }
 
 // See https://crbug.com/897672.
@@ -468,14 +442,14 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest,
   status->ime_menu_tray()->SetVisiblePreferred(true);
 
   keyboard_ui_controller()->ShowKeyboard(false /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   // The keyboard should hide when tapped.
   ui::test::EventGenerator* generator = GetEventGenerator();
   generator->GestureTapAt(status->virtual_keyboard_tray_for_testing()
                               ->GetBoundsInScreen()
                               .CenterPoint());
-  ASSERT_TRUE(keyboard::WaitUntilHidden());
+  ASSERT_TRUE(keyboard::test::WaitUntilHidden());
 }
 
 TEST_F(StatusAreaWidgetVirtualKeyboardTest, ClickingHidesVirtualKeyboard) {
@@ -490,12 +464,12 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest, ClickingHidesVirtualKeyboard) {
   generator->ClickLeftButton();
 
   // Times out if test fails.
-  ASSERT_TRUE(keyboard::WaitUntilHidden());
+  ASSERT_TRUE(keyboard::test::WaitUntilHidden());
 }
 
 TEST_F(StatusAreaWidgetVirtualKeyboardTest, TappingHidesVirtualKeyboard) {
   keyboard_ui_controller()->ShowKeyboard(false /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   ui::test::EventGenerator* generator = GetEventGenerator();
   generator->set_current_screen_location(
@@ -505,12 +479,12 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest, TappingHidesVirtualKeyboard) {
   generator->PressTouch();
 
   // Times out if test fails.
-  ASSERT_TRUE(keyboard::WaitUntilHidden());
+  ASSERT_TRUE(keyboard::test::WaitUntilHidden());
 }
 
 TEST_F(StatusAreaWidgetVirtualKeyboardTest, DoesNotHideLockedVirtualKeyboard) {
   keyboard_ui_controller()->ShowKeyboard(true /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   ui::test::EventGenerator* generator = GetEventGenerator();
   generator->set_current_screen_location(
@@ -519,10 +493,10 @@ TEST_F(StatusAreaWidgetVirtualKeyboardTest, DoesNotHideLockedVirtualKeyboard) {
           .CenterPoint());
 
   generator->ClickLeftButton();
-  EXPECT_FALSE(keyboard::IsKeyboardHiding());
+  EXPECT_FALSE(keyboard::test::IsKeyboardHiding());
 
   generator->PressTouch();
-  EXPECT_FALSE(keyboard::IsKeyboardHiding());
+  EXPECT_FALSE(keyboard::test::IsKeyboardHiding());
 }
 
 class StatusAreaWidgetCollapseStateTest : public AshTestBase {
@@ -545,6 +519,17 @@ class StatusAreaWidgetCollapseStateTest : public AshTestBase {
     select_to_speak_->SetVisiblePreferred(true);
   }
 
+  void TearDown() override {
+    select_to_speak_ = nullptr;
+    dictation_button_ = nullptr;
+    palette_ = nullptr;
+    ime_menu_ = nullptr;
+    virtual_keyboard_ = nullptr;
+    overflow_button_ = nullptr;
+    status_area_ = nullptr;
+    AshTestBase::TearDown();
+  }
+
   void SetCollapseState(StatusAreaWidget::CollapseState collapse_state) {
     status_area_->set_collapse_state_for_test(collapse_state);
 
@@ -559,13 +544,13 @@ class StatusAreaWidgetCollapseStateTest : public AshTestBase {
     return status_area_->collapse_state();
   }
 
-  raw_ptr<StatusAreaWidget, DanglingUntriaged> status_area_;
-  raw_ptr<StatusAreaOverflowButtonTray, DanglingUntriaged> overflow_button_;
-  raw_ptr<TrayBackgroundView, DanglingUntriaged> virtual_keyboard_;
-  raw_ptr<TrayBackgroundView, DanglingUntriaged> ime_menu_;
-  raw_ptr<TrayBackgroundView, DanglingUntriaged> palette_;
-  raw_ptr<TrayBackgroundView, DanglingUntriaged> dictation_button_;
-  raw_ptr<TrayBackgroundView, DanglingUntriaged> select_to_speak_;
+  raw_ptr<StatusAreaWidget> status_area_;
+  raw_ptr<StatusAreaOverflowButtonTray> overflow_button_;
+  raw_ptr<TrayBackgroundView> virtual_keyboard_;
+  raw_ptr<TrayBackgroundView> ime_menu_;
+  raw_ptr<TrayBackgroundView> palette_;
+  raw_ptr<TrayBackgroundView> dictation_button_;
+  raw_ptr<TrayBackgroundView> select_to_speak_;
 };
 
 TEST_F(StatusAreaWidgetCollapseStateTest, TrayVisibility) {
@@ -795,10 +780,7 @@ class StatusAreaWidgetEcheTest : public AshTestBase {
 TEST_F(StatusAreaWidgetEcheTest, EcheTrayShowHide) {
   StatusAreaWidget* status_area =
       StatusAreaWidgetTestHelper::GetStatusAreaWidget();
-  SkBitmap bitmap;
-  bitmap.allocN32Pixels(30, 30);
-  gfx::ImageSkia image_skia = gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
-  image_skia.MakeThreadSafe();
+  gfx::ImageSkia image_skia = CreateTextImage({30, 30});
   status_area->eche_tray()->LoadBubble(
       GURL("http://google.com"), gfx::Image(image_skia), u"app 1",
       u"your phone",
@@ -821,10 +803,7 @@ TEST_F(StatusAreaWidgetEcheTest, StatusAreaOpenTrayBubble) {
   StatusAreaWidget* status_area =
       StatusAreaWidgetTestHelper::GetStatusAreaWidget();
   auto* eche_tray = status_area->eche_tray();
-  SkBitmap bitmap;
-  bitmap.allocN32Pixels(30, 30);
-  gfx::ImageSkia image_skia = gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
-  image_skia.MakeThreadSafe();
+  gfx::ImageSkia image_skia = CreateTextImage({30, 30});
   eche_tray->LoadBubble(
       GURL("http://google.com"), gfx::Image(image_skia), u"app 1",
       u"your phone",
@@ -837,6 +816,269 @@ TEST_F(StatusAreaWidgetEcheTest, StatusAreaOpenTrayBubble) {
   eche_tray->HideBubble();
 
   EXPECT_EQ(nullptr, status_area->open_shelf_pod_bubble());
+}
+
+TEST_F(StatusAreaWidgetTest, AddCustomTrayIcons) {
+  StatusAreaWidget* status_area =
+      StatusAreaWidgetTestHelper::GetStatusAreaWidget();
+  {
+    TrayIconConfiguration configuration;
+    configuration.id = 1;
+    configuration.tool_tip = u"Hello World";
+    gfx::ImageSkia image_skia = CreateTextImage({30, 30});
+    configuration.image = image_skia;
+
+    EXPECT_TRUE(status_area->custom_tray_buttons_ids_for_test().empty());
+    status_area->AddTrayIcon(configuration, base::NullCallback());
+    EXPECT_EQ(status_area->custom_tray_buttons_ids_for_test().size(), 1u);
+
+    const int kExpectedViewId = 10000 + configuration.id;
+    ImagedTrayIcon* icon = static_cast<ImagedTrayIcon*>(
+        status_area->status_area_widget_delegate()->GetViewByID(
+            kExpectedViewId));
+    EXPECT_TRUE(icon);
+    EXPECT_EQ(icon->image_view()->GetTooltipText(), configuration.tool_tip);
+
+    ui::ImageModel actual_model = icon->image_view()->GetImageModel();
+    ASSERT_TRUE(actual_model.IsImage());
+    gfx::ImageSkia actual_image = actual_model.GetImage().AsImageSkia();
+    EXPECT_TRUE(gfx::test::AreBitmapsEqual(*actual_image.bitmap(),
+                                           *image_skia.bitmap()));
+  }
+  {
+    TrayIconConfiguration configuration;
+    configuration.id = 2;
+    configuration.tool_tip = u"Hello World";
+
+    EXPECT_EQ(status_area->custom_tray_buttons_ids_for_test().size(), 1u);
+    status_area->AddTrayIcon(configuration, base::NullCallback());
+    EXPECT_EQ(status_area->custom_tray_buttons_ids_for_test().size(), 2u);
+
+    const int kExpectedViewId = 10000 + configuration.id;
+    ImagedTrayIcon* icon = static_cast<ImagedTrayIcon*>(
+        status_area->status_area_widget_delegate()->GetViewByID(
+            kExpectedViewId));
+    EXPECT_TRUE(icon);
+    EXPECT_EQ(icon->image_view()->GetTooltipText(), configuration.tool_tip);
+
+    ui::ImageModel actual_model = icon->image_view()->GetImageModel();
+    ASSERT_TRUE(actual_model.IsEmpty());
+  }
+  {
+    TrayIconConfiguration configuration;
+    configuration.id = 3;
+    gfx::ImageSkia image_skia = CreateTextImage({30, 30});
+    configuration.image = image_skia;
+
+    EXPECT_EQ(status_area->custom_tray_buttons_ids_for_test().size(), 2u);
+    status_area->AddTrayIcon(configuration, base::NullCallback());
+    EXPECT_EQ(status_area->custom_tray_buttons_ids_for_test().size(), 3u);
+
+    const int kExpectedViewId = 10000 + configuration.id;
+    ImagedTrayIcon* icon = static_cast<ImagedTrayIcon*>(
+        status_area->status_area_widget_delegate()->GetViewByID(
+            kExpectedViewId));
+    EXPECT_TRUE(icon);
+    EXPECT_TRUE(icon->image_view()->GetTooltipText().empty());
+
+    ui::ImageModel actual_model = icon->image_view()->GetImageModel();
+    ASSERT_TRUE(actual_model.IsImage());
+    gfx::ImageSkia actual_image = actual_model.GetImage().AsImageSkia();
+    EXPECT_TRUE(gfx::test::AreBitmapsEqual(*actual_image.bitmap(),
+                                           *image_skia.bitmap()));
+  }
+}
+
+TEST_F(StatusAreaWidgetTest, UpdateCustomTrayIcon) {
+  StatusAreaWidget* status_area =
+      StatusAreaWidgetTestHelper::GetStatusAreaWidget();
+  {
+    // Add the initial icon.
+    TrayIconConfiguration configuration;
+    configuration.id = 1;
+    configuration.tool_tip = u"Hello World";
+
+    gfx::ImageSkia image_skia = CreateTextImage({30, 30});
+    configuration.image = image_skia;
+
+    status_area->AddTrayIcon(configuration, base::NullCallback());
+    EXPECT_EQ(status_area->custom_tray_buttons_ids_for_test().size(), 1u);
+
+    // Verify initial state
+    const int kExpectedViewId = 10000 + configuration.id;
+    ImagedTrayIcon* icon = static_cast<ImagedTrayIcon*>(
+        status_area->status_area_widget_delegate()->GetViewByID(
+            kExpectedViewId));
+    EXPECT_TRUE(icon);
+    EXPECT_EQ(icon->image_view()->GetTooltipText(), configuration.tool_tip);
+
+    ui::ImageModel actual_model = icon->image_view()->GetImageModel();
+    ASSERT_TRUE(actual_model.IsImage());
+    gfx::ImageSkia actual_image = actual_model.GetImage().AsImageSkia();
+    EXPECT_TRUE(gfx::test::AreBitmapsEqual(*actual_image.bitmap(),
+                                           *image_skia.bitmap()));
+  }
+  {
+    // Update the image and tooltip.
+    TrayIconConfiguration configuration;
+    configuration.id = 1;
+    configuration.tool_tip = u"Update Tooltip";
+    gfx::ImageSkia update_image = CreateTextImage({30, 30}, SK_ColorGREEN);
+    configuration.image = update_image;
+
+    status_area->UpdateTrayIcon(configuration);
+    const int kExpectedViewId = 10000 + configuration.id;
+    ImagedTrayIcon* icon = static_cast<ImagedTrayIcon*>(
+        status_area->status_area_widget_delegate()->GetViewByID(
+            kExpectedViewId));
+    EXPECT_TRUE(icon);
+    EXPECT_EQ(icon->image_view()->GetTooltipText(), configuration.tool_tip);
+
+    ui::ImageModel actual_model = icon->image_view()->GetImageModel();
+    ASSERT_TRUE(actual_model.IsImage());
+    gfx::ImageSkia actual_image = actual_model.GetImage().AsImageSkia();
+    EXPECT_TRUE(gfx::test::AreBitmapsEqual(*actual_image.bitmap(),
+                                           *update_image.bitmap()));
+  }
+}
+
+TEST_F(StatusAreaWidgetTest, RemoveCustomTrayIcon) {
+  StatusAreaWidget* status_area =
+      StatusAreaWidgetTestHelper::GetStatusAreaWidget();
+  TrayIconConfiguration configuration_1;
+  configuration_1.id = 1;
+  status_area->AddTrayIcon(configuration_1, base::NullCallback());
+
+  TrayIconConfiguration configuration_2;
+  configuration_2.id = 2;
+  status_area->AddTrayIcon(configuration_2, base::NullCallback());
+
+  EXPECT_EQ(status_area->custom_tray_buttons_ids_for_test().size(), 2u);
+
+  TrayIconConfiguration configuration_3;
+  configuration_3.id = 2;
+  status_area->RemoveTrayIcon(configuration_3);
+  EXPECT_EQ(status_area->custom_tray_buttons_ids_for_test().size(), 1u);
+
+  const int kExpectedViewId = 10000 + configuration_3.id;
+  ImagedTrayIcon* icon = static_cast<ImagedTrayIcon*>(
+      status_area->status_area_widget_delegate()->GetViewByID(kExpectedViewId));
+  EXPECT_FALSE(icon);
+}
+
+TEST_F(StatusAreaWidgetTest, AddingCustomIconsUpdatesCollapsableState) {
+  StatusAreaWidget* status_area =
+      StatusAreaWidgetTestHelper::GetStatusAreaWidget();
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      switches::kAshForceStatusAreaCollapsible);
+  EXPECT_EQ(StatusAreaWidget::CollapseState::NOT_COLLAPSIBLE,
+            status_area->collapse_state());
+
+  status_area->overflow_button_tray()->SetVisiblePreferred(true);
+  status_area->virtual_keyboard_tray_for_testing()->SetVisiblePreferred(true);
+  EXPECT_EQ(StatusAreaWidget::CollapseState::NOT_COLLAPSIBLE,
+            status_area->collapse_state());
+
+  // Adding custom icons should update collapsible state.
+  TrayIconConfiguration configuration_1;
+  configuration_1.id = 1;
+  status_area->AddTrayIcon(configuration_1, base::NullCallback());
+
+  EXPECT_EQ(StatusAreaWidget::CollapseState::NOT_COLLAPSIBLE,
+            status_area->collapse_state());
+
+  TrayIconConfiguration configuration_2;
+  configuration_2.id = 2;
+  status_area->AddTrayIcon(configuration_2, base::NullCallback());
+
+  EXPECT_EQ(StatusAreaWidget::CollapseState::COLLAPSED,
+            status_area->collapse_state());
+
+  status_area->RemoveTrayIcon(configuration_1);
+  EXPECT_EQ(StatusAreaWidget::CollapseState::NOT_COLLAPSIBLE,
+            status_area->collapse_state());
+}
+
+TEST_F(StatusAreaWidgetTest, AddingOrRemovingCustomIconUpdatesBounds) {
+  StatusAreaWidget* status_area =
+      StatusAreaWidgetTestHelper::GetStatusAreaWidget();
+  const gfx::Rect initial_bounds = status_area->GetWindowBoundsInScreen();
+  TrayIconConfiguration configuration;
+  configuration.id = 1;
+  status_area->AddTrayIcon(configuration, base::NullCallback());
+
+  const gfx::Rect new_bounds = status_area->GetWindowBoundsInScreen();
+
+  // The new bounds should be able to accommodate the new icon.
+  EXPECT_GE(new_bounds.width() - initial_bounds.width(), kTrayItemSize);
+  {
+    const int kExpectedViewId = 10000 + configuration.id;
+    views::View* icon = status_area->status_area_widget_delegate()->GetViewByID(
+        kExpectedViewId);
+    ASSERT_TRUE(icon);
+    EXPECT_TRUE(icon->GetVisible());
+  }
+
+  // After removing the icon, the status_area should restore to its original
+  // bounds.
+  TrayIconConfiguration remove_configuration;
+  remove_configuration.id = 1;
+  status_area->RemoveTrayIcon(remove_configuration);
+
+  EXPECT_EQ(status_area->GetWindowBoundsInScreen(), initial_bounds);
+}
+
+// Verifies that custom tray buttons are ordered correctly relative to other
+// items in the status area.
+// Expected order:
+// Contextual pods -> Configurable pods -> Custom pods -> Fixed pods.
+TEST_F(StatusAreaWidgetTest, CustomTrayButtonsOrder) {
+  StatusAreaWidget* status_area =
+      StatusAreaWidgetTestHelper::GetStatusAreaWidget();
+  auto* delegate = status_area->status_area_widget_delegate();
+
+  TrayIconConfiguration config1;
+  config1.id = 1;
+  status_area->AddTrayIcon(config1, base::DoNothing());
+  TrayIconConfiguration config2;
+  config2.id = 2;
+  status_area->AddTrayIcon(config2, base::DoNothing());
+
+  views::View* icon_1 = delegate->GetViewByID(10000 + config1.id);
+  views::View* icon_2 = delegate->GetViewByID(10000 + config2.id);
+  views::View* notification_tray = status_area->notification_center_tray();
+
+  // Custom Icons -> fixed pods (i.e Notification Center)
+  // Within Custom Icons: Insertion Order (Icon 1 -> Icon 2)
+  size_t icon_1_index = delegate->GetIndexOf(icon_1).value();
+  size_t icon_2_index = delegate->GetIndexOf(icon_2).value();
+  size_t notification_tray_index =
+      delegate->GetIndexOf(notification_tray).value();
+
+  EXPECT_LT(icon_1_index, icon_2_index);
+  EXPECT_LT(icon_2_index, notification_tray_index);
+
+  // Configurable pods -> Custom Icons -> fixed pods (i.e Notification Center)
+  // Within Custom Icons: Insertion Order (Icon 1 -> Icon 2 -> Icon 3)
+  TrayIconConfiguration config3;
+  config3.id = 3;
+  status_area->AddTrayIcon(config3, base::DoNothing());
+
+  TrayBackgroundView* dictation_button = status_area->dictation_button_tray();
+  dictation_button->SetVisiblePreferred(true);
+
+  views::View* icon_3 = delegate->GetViewByID(10000 + 3);
+  size_t icon_3_index = delegate->GetIndexOf(icon_3).value();
+  size_t dictation_button_index =
+      delegate->GetIndexOf(dictation_button).value();
+
+  // Re-fetch indices as they might have shifted
+  icon_2_index = delegate->GetIndexOf(icon_2).value();
+  notification_tray_index = delegate->GetIndexOf(notification_tray).value();
+
+  EXPECT_LT(icon_2_index, icon_3_index);
+  EXPECT_LT(icon_3_index, notification_tray_index);
+  EXPECT_LT(dictation_button_index, icon_1_index);
 }
 
 }  // namespace ash

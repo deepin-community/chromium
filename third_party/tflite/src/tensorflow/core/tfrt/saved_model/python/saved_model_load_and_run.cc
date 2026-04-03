@@ -14,17 +14,23 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/tfrt/saved_model/python/saved_model_load_and_run.h"
 
+#include <Python.h>
+
 #include <memory>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "tensorflow/c/eager/c_api.h"
 #include "tensorflow/c/eager/immediate_execution_tensor_handle.h"
 #include "tensorflow/c/eager/tfe_tensorhandle_internal.h"
 #include "tensorflow/compiler/mlir/tfrt/translate/tfrt_compile_options.h"
 #include "tensorflow/core/common_runtime/eager/tensor_handle.h"
+#include "tensorflow/core/platform/status.h"
 #include "tensorflow/core/platform/strcat.h"
 #include "tensorflow/core/platform/stringpiece.h"
 #include "tensorflow/core/tfrt/graph_executor/graph_execution_options.h"
@@ -40,7 +46,7 @@ limitations under the License.
 namespace tensorflow::tfrt_stub {
 using RefCountHandle = tsl::core::RefCountPtr<tensorflow::TensorHandle>;
 
-tensorflow::StatusOr<std::unique_ptr<SavedModel>> LoadSavedModel(
+absl::StatusOr<std::unique_ptr<SavedModel>> LoadSavedModel(
     absl::string_view saved_model_dir,
     const std::unordered_set<std::string>& tags) {
   auto runtime = tensorflow::tfrt_stub::Runtime::Create(
@@ -76,8 +82,8 @@ std::string PyObject_ToString(PyObject* o, int length = -1) {
   if (length < 0 || str.size() <= length) {
     return str;
   }
-  tensorflow::StringPiece str_piece(str);
-  return tensorflow::strings::StrCat(str_piece.substr(length), "...");
+  absl::string_view str_piece(str);
+  return absl::StrCat(str_piece.substr(length), "...");
 }
 
 // Assume inputs are name, inputs, outputs
@@ -109,7 +115,7 @@ std::vector<tensorflow::Tensor> RunConvertor(PyObject* args) {
   return input_run;
 }
 
-tensorflow::Status Run(
+absl::Status Run(
     SavedModel* saved_model,
     const tensorflow::tfrt_stub::GraphExecutionRunOptions& run_options,
     absl::string_view name, const std::vector<tensorflow::Tensor>& inputs,

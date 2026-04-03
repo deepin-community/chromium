@@ -37,7 +37,7 @@ class MEDIA_GPU_EXPORT VideoToolboxAV1Accelerator
   using OutputCB = base::RepeatingCallback<void(scoped_refptr<CodecPicture>)>;
 
   VideoToolboxAV1Accelerator(std::unique_ptr<MediaLog> media_log,
-                             std::optional<gfx::HDRMetadata> hdr_metadata,
+                             const gfx::HDRMetadata& hdr_metadata,
                              DecodeCB decode_cb,
                              OutputCB output_cb);
   ~VideoToolboxAV1Accelerator() override;
@@ -50,6 +50,8 @@ class MEDIA_GPU_EXPORT VideoToolboxAV1Accelerator
                       const libgav1::Vector<libgav1::TileBuffer>& tile_buffers,
                       base::span<const uint8_t> data) override;
   bool OutputPicture(const AV1Picture& pic) override;
+  Status SetStream(base::span<const uint8_t> stream,
+                   const DecryptConfig* decrypt_config) override;
 
  private:
   bool ProcessFormat(const AV1Picture& pic,
@@ -57,7 +59,7 @@ class MEDIA_GPU_EXPORT VideoToolboxAV1Accelerator
                      base::span<const uint8_t> data);
 
   std::unique_ptr<MediaLog> media_log_;
-  std::optional<gfx::HDRMetadata> hdr_metadata_;
+  gfx::HDRMetadata hdr_metadata_;
 
   // Callbacks are called synchronously, which is always re-entrant.
   DecodeCB decode_cb_;
@@ -66,13 +68,15 @@ class MEDIA_GPU_EXPORT VideoToolboxAV1Accelerator
   // Parameters of the active format.
   VideoColorSpace active_color_space_;
   VideoCodecProfile active_profile_ = VIDEO_CODEC_PROFILE_UNKNOWN;
-  std::optional<gfx::HDRMetadata> active_hdr_metadata_;
+  gfx::HDRMetadata active_hdr_metadata_;
   gfx::Size active_coded_size_;
 
   base::apple::ScopedCFTypeRef<CMFormatDescriptionRef> active_format_;
   VideoToolboxDecompressionSessionMetadata session_metadata_;
 
-  bool have_temporal_unit_ = false;
+  // Data for the current frame.
+  base::apple::ScopedCFTypeRef<CMBlockBufferRef> temporal_unit_data_;
+  bool format_processed_ = false;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

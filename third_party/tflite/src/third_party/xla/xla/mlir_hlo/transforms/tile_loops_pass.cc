@@ -116,7 +116,7 @@ void TileLoopsPass::runOnOperation() {
       int64_t difference = upper[i].value() - lower[i].value();
       if (difference % (step[i].value() * unrollFactor) != 0) continue;
       ploop.getUpperBoundMutable().slice(i, 1).assign(
-          builder.create<arith::ConstantIndexOp>(loc, unrollFactor));
+          arith::ConstantIndexOp::create(builder, loc, unrollFactor));
     }
   }
 
@@ -127,7 +127,7 @@ void TileLoopsPass::runOnOperation() {
   getContext()
       .getOrLoadDialect<arith::ArithDialect>()
       ->getCanonicalizationPatterns(patterns);
-  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
     return signalPassFailure();
 }
 

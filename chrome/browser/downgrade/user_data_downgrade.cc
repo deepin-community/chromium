@@ -27,7 +27,7 @@ base::Version GetVersionFromFileName(const base::FilePath& path) {
   // On Windows, for Unicode-aware applications, native pathnames are wchar_t
   // arrays encoded in UTF-16.
   return base::Version(base::WideToUTF8(path.BaseName().value()));
-#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX)
   // On most platforms, native pathnames are char arrays, and the encoding
   // may or may not be specified.  On Mac OS X, native pathnames are encoded
   // in UTF-8.
@@ -43,12 +43,12 @@ bool IsValidSnapshotDirectory(const base::FilePath& path) {
 
 }  // namespace
 
-const base::FilePath::StringPieceType kDowngradeLastVersionFile(
+const base::FilePath::StringViewType kDowngradeLastVersionFile(
     FILE_PATH_LITERAL("Last Version"));
-const base::FilePath::StringPieceType kDowngradeDeleteSuffix(
+const base::FilePath::StringViewType kDowngradeDeleteSuffix(
     FILE_PATH_LITERAL(".CHROME_DELETE"));
 
-const base::FilePath::StringPieceType kSnapshotsDir(
+const base::FilePath::StringViewType kSnapshotsDir(
     FILE_PATH_LITERAL("Snapshots"));
 
 base::FilePath GetLastVersionFile(const base::FilePath& user_data_dir) {

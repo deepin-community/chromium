@@ -6,9 +6,11 @@
 
 #include <utility>
 
+#include "base/notreached.h"
 #include "base/trace_event/interned_args_helper.h"
 #include "base/trace_event/traced_value.h"
-#include "third_party/perfetto/protos/perfetto/trace/track_event/chrome_compositor_scheduler_state.pbzero.h"
+#include "base/tracing/protos/chrome_track_event.pbzero.h"
+#include "build/build_config.h"
 #include "third_party/perfetto/protos/perfetto/trace/track_event/source_location.pbzero.h"
 
 namespace viz {
@@ -23,13 +25,12 @@ const char* BeginFrameArgs::TypeToString(BeginFrameArgsType type) {
       return "MISSED";
   }
   NOTREACHED();
-  return "???";
 }
 
 namespace {
-perfetto::protos::pbzero::BeginFrameArgs::BeginFrameArgsType
+perfetto::protos::pbzero::BeginFrameArgsV2::BeginFrameArgsType
 TypeToProtozeroEnum(BeginFrameArgs::BeginFrameArgsType type) {
-  using pbzeroType = perfetto::protos::pbzero::BeginFrameArgs;
+  using pbzeroType = perfetto::protos::pbzero::BeginFrameArgsV2;
   switch (type) {
     case BeginFrameArgs::INVALID:
       return pbzeroType::BEGIN_FRAME_ARGS_TYPE_INVALID;
@@ -39,7 +40,6 @@ TypeToProtozeroEnum(BeginFrameArgs::BeginFrameArgsType type) {
       return pbzeroType::BEGIN_FRAME_ARGS_TYPE_MISSED;
   }
   NOTREACHED();
-  return pbzeroType::BEGIN_FRAME_ARGS_TYPE_UNSPECIFIED;
 }
 }  // namespace
 
@@ -103,6 +103,7 @@ BeginFrameArgs::BeginFrameArgs()
     : frame_time(base::TimeTicks::Min()),
       deadline(base::TimeTicks::Min()),
       interval(base::Microseconds(-1)),
+      unthrottled_interval(base::Microseconds(-1)),
       frame_id(BeginFrameId(0, kInvalidFrameNumber)) {}
 
 BeginFrameArgs::~BeginFrameArgs() = default;
@@ -112,13 +113,30 @@ BeginFrameArgs::BeginFrameArgs(uint64_t source_id,
                                base::TimeTicks frame_time,
                                base::TimeTicks deadline,
                                base::TimeDelta interval,
-                               BeginFrameArgs::BeginFrameArgsType type)
+                               BeginFrameArgs::BeginFrameArgsType type,
+                               base::TimeDelta unthrottled_interval)
     : frame_time(frame_time),
       deadline(deadline),
       interval(interval),
+      unthrottled_interval(
+          unthrottled_interval.is_positive() ? unthrottled_interval : interval),
       frame_id(BeginFrameId(source_id, sequence_number)),
       type(type) {
   DCHECK_LE(kStartingFrameNumber, sequence_number);
+#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_ANDROID)
+  // TODO(crbug.com/477242770): Re-enable on Mac. Changing the system display
+  // refresh rate on macOS causes the unthrottled_interval state to go
+  // stale, which incorrectly trips this DCHECK.
+  //
+  // TODO(crbug.com/477617022): Re-enable on Android.
+  // ExternalBeginFrameSourceAndroid currently does not implement
+  // GetMinimumFrameInterval() causing unthrottled_interval to always be
+  // BeginFrameArgs::DefaultInterval()
+  if (type != BeginFrameArgs::INVALID && interval.is_positive()) {
+    DCHECK_LE(this->unthrottled_interval,
+              this->interval * kUnthrottledIntervalJitterMultiplier);
+  }
+#endif
 }
 
 BeginFrameArgs::BeginFrameArgs(const BeginFrameArgs& args) = default;
@@ -130,14 +148,16 @@ BeginFrameArgs BeginFrameArgs::Create(BeginFrameArgs::CreationLocation location,
                                       base::TimeTicks frame_time,
                                       base::TimeTicks deadline,
                                       base::TimeDelta interval,
-                                      BeginFrameArgs::BeginFrameArgsType type) {
+                                      BeginFrameArgs::BeginFrameArgsType type,
+                                      base::TimeDelta unthrottled_interval) {
   DCHECK_NE(type, BeginFrameArgs::INVALID);
 #ifdef NDEBUG
   return BeginFrameArgs(source_id, sequence_number, frame_time, deadline,
-                        interval, type);
+                        interval, type, unthrottled_interval);
 #else
-  BeginFrameArgs args = BeginFrameArgs(source_id, sequence_number, frame_time,
-                                       deadline, interval, type);
+  BeginFrameArgs args =
+      BeginFrameArgs(source_id, sequence_number, frame_time, deadline, interval,
+                     type, unthrottled_interval);
   args.created_from = location;
   return args;
 #endif
@@ -161,6 +181,8 @@ void BeginFrameArgs::AsValueInto(base::trace_event::TracedValue* state) const {
                    frame_time.since_origin().InMicrosecondsF());
   state->SetDouble("deadline_us", deadline.since_origin().InMicrosecondsF());
   state->SetDouble("interval_us", interval.InMicrosecondsF());
+  state->SetDouble("unthrottled_interval_us",
+                   unthrottled_interval.InMicrosecondsF());
 #ifndef NDEBUG
   state->SetString("created_from", created_from.ToString());
 #endif
@@ -171,16 +193,16 @@ void BeginFrameArgs::AsValueInto(base::trace_event::TracedValue* state) const {
 
 void BeginFrameArgs::AsProtozeroInto(
     perfetto::EventContext& ctx,
-    perfetto::protos::pbzero::BeginFrameArgs* state) const {
+    perfetto::protos::pbzero::BeginFrameArgsV2* state) const {
   state->set_type(TypeToProtozeroEnum(type));
   state->set_source_id(frame_id.source_id);
   state->set_sequence_number(frame_id.sequence_number);
-  // TODO(yjliu) add frames_throttled_since_last to third_party
-  // chrome_compositor_scheduler_state.proto
-  // state->set_frames_throttled_since_last(frames_throttled_since_last);
+  state->set_frames_throttled_since_last(frames_throttled_since_last);
   state->set_frame_time_us(frame_time.since_origin().InMicroseconds());
   state->set_deadline_us(deadline.since_origin().InMicroseconds());
   state->set_interval_delta_us(interval.InMicroseconds());
+  state->set_unthrottled_interval_delta_us(
+      unthrottled_interval.InMicroseconds());
   state->set_on_critical_path(on_critical_path);
   state->set_animate_only(animate_only);
 #ifndef NDEBUG
@@ -214,6 +236,14 @@ BeginFrameAck::BeginFrameAck(uint64_t source_id,
 BeginFrameAck BeginFrameAck::CreateManualAckWithDamage() {
   return BeginFrameAck(BeginFrameArgs::kManualSourceId,
                        BeginFrameArgs::kStartingFrameNumber, true);
+}
+
+void BeginFrameAck::AsValueInto(base::trace_event::TracedValue* dict) const {
+  dict->SetInteger("source_id", static_cast<int>(frame_id.source_id));
+  dict->SetInteger("sequence_number",
+                   static_cast<int>(frame_id.sequence_number));
+  dict->SetBoolean("has_damage", has_damage);
+  dict->SetInteger("trace_id", static_cast<int>(trace_id));
 }
 
 }  // namespace viz

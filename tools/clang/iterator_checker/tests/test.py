@@ -16,7 +16,7 @@ from clang import plugin_testing
 
 
 class IteratorCheckerPluginTest(plugin_testing.ClangPluginTest):
-  """Test harness for the Blink GC plugin."""
+  """Test harness for the Iterator Checker plugin."""
 
   def __init__(self, *args, **kwargs):
     super(IteratorCheckerPluginTest, self).__init__(*args, **kwargs)
@@ -36,13 +36,23 @@ def main():
       action='store_true',
       help='If specified, overwrites the expected results in place.')
   parser.add_argument('clang_path', help='The path to the clang binary.')
+  parser.add_argument('--quiet',
+                      action='store_true',
+                      help='If specified, suppresses printing the expected '
+                      'and actual output and only prints the diff.')
+  parser.add_argument('--filter',
+                      action='store',
+                      help='Filter to test files that match a regex')
   args = parser.parse_args()
 
   dir_name = os.path.dirname(os.path.realpath(__file__))
 
-  num_failures = IteratorCheckerPluginTest(dir_name, args.clang_path,
-                                           'iterator-checker',
-                                           args.reset_results).Run()
+  num_failures = IteratorCheckerPluginTest(dir_name,
+                                           args.clang_path,
+                                           ['iterator-checker'],
+                                           args.reset_results,
+                                           args.quiet,
+                                           filename_regex=args.filter).Run()
 
   return num_failures
 

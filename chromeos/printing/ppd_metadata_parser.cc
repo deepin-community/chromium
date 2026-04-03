@@ -6,13 +6,13 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_map.h"
 #include "base/json/json_reader.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 
 namespace chromeos {
@@ -27,15 +27,16 @@ namespace {
 // *  this function never returns empty Value objects and
 // *  |target_type| must appear in the switch statement below.
 std::optional<base::Value> ParseJsonAndUnnestKey(
-    base::StringPiece input,
-    base::StringPiece key,
+    std::string_view input,
+    std::string_view key,
     base::Value::Type target_type) {
-  std::optional<base::Value> parsed = base::JSONReader::Read(input);
-  if (!parsed || !parsed->is_dict()) {
+  std::optional<base::DictValue> parsed =
+      base::JSONReader::ReadDict(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!parsed) {
     return std::nullopt;
   }
 
-  std::optional<base::Value> unnested = parsed->GetDict().Extract(key);
+  std::optional<base::Value> unnested = parsed->Extract(key);
   if (!unnested || unnested->type() != target_type) {
     return std::nullopt;
   }
@@ -50,7 +51,6 @@ std::optional<base::Value> ParseJsonAndUnnestKey(
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   if (unnested_is_empty) {
@@ -60,7 +60,7 @@ std::optional<base::Value> ParseJsonAndUnnestKey(
 }
 
 // Returns a Restrictions struct from a dictionary `dict`.
-Restrictions ParseRestrictionsFromDict(const base::Value::Dict& dict) {
+Restrictions ParseRestrictionsFromDict(const base::DictValue& dict) {
   Restrictions restrictions;
   auto min_as_double = dict.FindDouble("minMilestone");
   auto max_as_double = dict.FindDouble("maxMilestone");
@@ -83,8 +83,7 @@ Restrictions ParseRestrictionsFromDict(const base::Value::Dict& dict) {
 }
 
 // Returns a ParsedPrinter from a leaf `dict` from Printers metadata.
-std::optional<ParsedPrinter> ParsePrinterFromDict(
-    const base::Value::Dict& dict) {
+std::optional<ParsedPrinter> ParsePrinterFromDict(const base::DictValue& dict) {
   const std::string* const effective_make_and_model = dict.FindString("emm");
   const std::string* const name = dict.FindString("name");
   if (!effective_make_and_model || effective_make_and_model->empty() || !name ||
@@ -95,8 +94,7 @@ std::optional<ParsedPrinter> ParsePrinterFromDict(
   printer.effective_make_and_model = *effective_make_and_model;
   printer.user_visible_printer_name = *name;
 
-  const base::Value::Dict* const restrictions_dict =
-      dict.FindDict("restriction");
+  const base::DictValue* const restrictions_dict = dict.FindDict("restriction");
   if (restrictions_dict) {
     printer.restrictions = ParseRestrictionsFromDict(*restrictions_dict);
   }
@@ -109,7 +107,7 @@ std::optional<ParsedIndexLeaf> ParsedIndexLeafFrom(const base::Value& value) {
     return std::nullopt;
   }
 
-  const base::Value::Dict& dict = value.GetDict();
+  const base::DictValue& dict = value.GetDict();
   ParsedIndexLeaf leaf;
 
   const std::string* const ppd_basename = dict.FindString("name");
@@ -118,8 +116,7 @@ std::optional<ParsedIndexLeaf> ParsedIndexLeafFrom(const base::Value& value) {
   }
   leaf.ppd_basename = *ppd_basename;
 
-  const base::Value::Dict* const restrictions_dict =
-      dict.FindDict("restriction");
+  const base::DictValue* const restrictions_dict = dict.FindDict("restriction");
   if (restrictions_dict) {
     leaf.restrictions = ParseRestrictionsFromDict(*restrictions_dict);
   }
@@ -138,7 +135,7 @@ std::optional<ParsedIndexValues> UnnestPpdMetadata(const base::Value& value) {
   if (!value.is_dict()) {
     return std::nullopt;
   }
-  const base::Value::List* const ppd_metadata_list =
+  const base::ListValue* const ppd_metadata_list =
       value.GetDict().FindList("ppdMetadata");
   if (!ppd_metadata_list || ppd_metadata_list->empty()) {
     return std::nullopt;
@@ -182,7 +179,7 @@ ParsedIndexValues& ParsedIndexValues::operator=(const ParsedIndexValues&) =
     default;
 
 std::optional<std::vector<std::string>> ParseLocales(
-    base::StringPiece locales_json) {
+    std::string_view locales_json) {
   const auto as_value =
       ParseJsonAndUnnestKey(locales_json, "locales", base::Value::Type::LIST);
   if (!as_value.has_value()) {
@@ -203,7 +200,7 @@ std::optional<std::vector<std::string>> ParseLocales(
 }
 
 std::optional<ParsedManufacturers> ParseManufacturers(
-    base::StringPiece manufacturers_json) {
+    std::string_view manufacturers_json) {
   const auto as_value = ParseJsonAndUnnestKey(manufacturers_json, "filesMap",
                                               base::Value::Type::DICT);
   if (!as_value.has_value()) {
@@ -221,7 +218,7 @@ std::optional<ParsedManufacturers> ParseManufacturers(
 }
 
 std::optional<ParsedIndex> ParseForwardIndex(
-    base::StringPiece forward_index_json) {
+    std::string_view forward_index_json) {
   // Firstly, we unnest the dictionary keyed by "ppdIndex."
   std::optional<base::Value> ppd_index = ParseJsonAndUnnestKey(
       forward_index_json, "ppdIndex", base::Value::Type::DICT);
@@ -246,7 +243,7 @@ std::optional<ParsedIndex> ParseForwardIndex(
   return parsed_index;
 }
 
-std::optional<ParsedUsbIndex> ParseUsbIndex(base::StringPiece usb_index_json) {
+std::optional<ParsedUsbIndex> ParseUsbIndex(std::string_view usb_index_json) {
   std::optional<base::Value> usb_index = ParseJsonAndUnnestKey(
       usb_index_json, "usbIndex", base::Value::Type::DICT);
   if (!usb_index.has_value()) {
@@ -278,7 +275,7 @@ std::optional<ParsedUsbIndex> ParseUsbIndex(base::StringPiece usb_index_json) {
 }
 
 std::optional<ParsedUsbVendorIdMap> ParseUsbVendorIdMap(
-    base::StringPiece usb_vendor_id_map_json) {
+    std::string_view usb_vendor_id_map_json) {
   std::optional<base::Value> as_value = ParseJsonAndUnnestKey(
       usb_vendor_id_map_json, "entries", base::Value::Type::LIST);
   if (!as_value.has_value()) {
@@ -307,7 +304,7 @@ std::optional<ParsedUsbVendorIdMap> ParseUsbVendorIdMap(
   return usb_vendor_ids;
 }
 
-std::optional<ParsedPrinters> ParsePrinters(base::StringPiece printers_json) {
+std::optional<ParsedPrinters> ParsePrinters(std::string_view printers_json) {
   const auto as_value =
       ParseJsonAndUnnestKey(printers_json, "printers", base::Value::Type::LIST);
   if (!as_value.has_value()) {
@@ -316,7 +313,7 @@ std::optional<ParsedPrinters> ParsePrinters(base::StringPiece printers_json) {
 
   ParsedPrinters printers;
   for (const auto& printer_value : as_value->GetList()) {
-    const base::Value::Dict* printer_dict = printer_value.GetIfDict();
+    const base::DictValue* printer_dict = printer_value.GetIfDict();
     if (!printer_dict) {
       continue;
     }
@@ -333,7 +330,7 @@ std::optional<ParsedPrinters> ParsePrinters(base::StringPiece printers_json) {
 }
 
 std::optional<ParsedReverseIndex> ParseReverseIndex(
-    base::StringPiece reverse_index_json) {
+    std::string_view reverse_index_json) {
   const std::optional<base::Value> makes_and_models = ParseJsonAndUnnestKey(
       reverse_index_json, "reverseIndex", base::Value::Type::DICT);
   if (!makes_and_models.has_value()) {
@@ -342,7 +339,7 @@ std::optional<ParsedReverseIndex> ParseReverseIndex(
 
   ParsedReverseIndex parsed;
   for (const auto [key, value] : makes_and_models->GetDict()) {
-    const base::Value::Dict* value_dict = value.GetIfDict();
+    const base::DictValue* value_dict = value.GetIfDict();
     if (!value_dict) {
       continue;
     }

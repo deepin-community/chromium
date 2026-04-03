@@ -27,22 +27,20 @@ class PageCaptureApiUnitTest : public ExtensionServiceTestBase {
     ExtensionServiceTestBase::SetUp();
     InitializeEmptyExtensionService();
 
-    browser_window_ = std::make_unique<TestBrowserWindow>();
+    auto browser_window = std::make_unique<TestBrowserWindow>();
     Browser::CreateParams params(profile(), true);
     params.type = Browser::TYPE_NORMAL;
-    params.window = browser_window_.get();
-    browser_ = std::unique_ptr<Browser>(Browser::Create(params));
+    params.window = browser_window.release();
+    browser_ = Browser::DeprecatedCreateOwnedForTesting(params);
   }
 
   void TearDown() override {
     browser_.reset();
-    browser_window_.reset();
     ExtensionServiceTestBase::TearDown();
   }
   Browser* browser() { return browser_.get(); }
 
  private:
-  std::unique_ptr<TestBrowserWindow> browser_window_;
   std::unique_ptr<Browser> browser_;
 };
 
@@ -50,7 +48,7 @@ class PageCaptureApiUnitTest : public ExtensionServiceTestBase {
 // API call will result in an error.
 TEST_F(PageCaptureApiUnitTest, PageNavigationDuringSaveAsMHTML) {
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("Page Capture").AddPermission("pageCapture").Build();
+      ExtensionBuilder("Page Capture").AddAPIPermission("pageCapture").Build();
   auto function = base::MakeRefCounted<PageCaptureSaveAsMHTMLFunction>();
   function->set_extension(extension.get());
 
@@ -77,17 +75,18 @@ TEST_F(PageCaptureApiUnitTest, PageNavigationDuringSaveAsMHTML) {
   // Regression test for crbug.com/1494490
   function->SetBrowserContextForTesting(profile());
   function->SetArgs(
-      base::Value::List().Append(base::Value::Dict().Set("tabId", tab_id)));
+      base::ListValue().Append(base::DictValue().Set("tabId", tab_id)));
   api_test_utils::SendResponseHelper response_helper(function.get());
   function->RunWithValidation().Execute();
 
   web_contents_tester->NavigateAndCommit(GURL("https://www.chromium.org"));
   response_helper.WaitForResponse();
-  const base::Value::List* results = function->GetResultListForTest();
+  const base::ListValue* results = function->GetResultListForTest();
   ASSERT_TRUE(results);
   EXPECT_TRUE(results->empty()) << "Did not expect a result";
   CHECK(function->response_type());
-  EXPECT_EQ(ExtensionFunction::FAILED, *function->response_type());
+  EXPECT_EQ(ExtensionFunction::ResponseType::kFailed,
+            *function->response_type());
   EXPECT_EQ("Tab navigated before capture could complete.",
             function->GetError());
 

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,24 @@ import * as BackgroundServiceModel from './BackgroundServiceModel.js';
 import * as BackgroundServiceView from './BackgroundServiceView.js';
 import * as BounceTrackingMitigationsTreeElement from './BounceTrackingMitigationsTreeElement.js';
 import * as CookieItemsView from './CookieItemsView.js';
-import * as DatabaseModel from './DatabaseModel.js';
-import * as DatabaseQueryView from './DatabaseQueryView.js';
-import * as DatabaseTableView from './DatabaseTableView.js';
+import * as DeviceBoundSessionsModel from './DeviceBoundSessionsModel.js';
+import * as DeviceBoundSessionsTreeElement from './DeviceBoundSessionsTreeElement.js';
+import * as DeviceBoundSessionsView from './DeviceBoundSessionsView.js';
 import * as DOMStorageItemsView from './DOMStorageItemsView.js';
 import * as DOMStorageModel from './DOMStorageModel.js';
+import * as ExtensionStorageItemsView from './ExtensionStorageItemsView.js';
+import * as ExtensionStorageModel from './ExtensionStorageModel.js';
+import * as FrameDetailsView from './FrameDetailsView.js';
 import * as IndexedDBModel from './IndexedDBModel.js';
 import * as IndexedDBViews from './IndexedDBViews.js';
 import * as InterestGroupStorageModel from './InterestGroupStorageModel.js';
 import * as InterestGroupStorageView from './InterestGroupStorageView.js';
 import * as InterestGroupTreeElement from './InterestGroupTreeElement.js';
+import * as KeyValueStorageItemsView from './KeyValueStorageItemsView.js';
 import * as OpenedWindowDetailsView from './OpenedWindowDetailsView.js';
+import * as OriginTrialTreeView from './OriginTrialTreeView.js';
 import * as PreloadingView from './preloading/PreloadingView.js';
 import * as PreloadingTreeElement from './PreloadingTreeElement.js';
-import * as ReportingApiReportsView from './ReportingApiReportsView.js';
 import * as ReportingApiView from './ReportingApiView.js';
 import * as ResourcesPanel from './ResourcesPanel.js';
 import * as ServiceWorkerCacheViews from './ServiceWorkerCacheViews.js';
@@ -33,7 +37,7 @@ import * as SharedStorageListTreeElement from './SharedStorageListTreeElement.js
 import * as SharedStorageModel from './SharedStorageModel.js';
 import * as SharedStorageTreeElement from './SharedStorageTreeElement.js';
 import * as StorageBucketsTreeElement from './StorageBucketsTreeElement.js';
-import * as StorageItemsView from './StorageItemsView.js';
+import * as StorageItemsToolbar from './StorageItemsToolbar.js';
 import * as StorageView from './StorageView.js';
 import * as TrustTokensTreeElement from './TrustTokensTreeElement.js';
 
@@ -44,20 +48,24 @@ export {
   BackgroundServiceView,
   BounceTrackingMitigationsTreeElement,
   CookieItemsView,
-  DatabaseModel,
-  DatabaseQueryView,
-  DatabaseTableView,
+  DeviceBoundSessionsModel,
+  DeviceBoundSessionsTreeElement,
+  DeviceBoundSessionsView,
   DOMStorageItemsView,
   DOMStorageModel,
+  ExtensionStorageItemsView,
+  ExtensionStorageModel,
+  FrameDetailsView,
   IndexedDBModel,
   IndexedDBViews,
   InterestGroupStorageModel,
   InterestGroupStorageView,
   InterestGroupTreeElement,
+  KeyValueStorageItemsView,
   OpenedWindowDetailsView,
+  OriginTrialTreeView,
   PreloadingTreeElement,
   PreloadingView,
-  ReportingApiReportsView,
   ReportingApiView,
   ResourcesPanel,
   ServiceWorkerCacheViews,
@@ -69,7 +77,7 @@ export {
   SharedStorageModel,
   SharedStorageTreeElement,
   StorageBucketsTreeElement,
-  StorageItemsView,
+  StorageItemsToolbar,
   StorageView,
   TrustTokensTreeElement,
 };

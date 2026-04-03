@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -709,15 +710,15 @@ TEST_F(ObfuscatedFileUtilMemoryDelegateTest, ComputeDirectorySize) {
             file_util()->CreateDirectory(dir_name2, false /* exclusive */,
                                          true /* recursive */));
 
-  ASSERT_EQ(base::File::FILE_OK,
-            file_util()->CreateFileForTesting(
-                file_name0, base::span<const char>(content, 10u)));
-  ASSERT_EQ(base::File::FILE_OK,
-            file_util()->CreateFileForTesting(
-                file_name1, base::span<const char>(content, 15u)));
-  ASSERT_EQ(base::File::FILE_OK,
-            file_util()->CreateFileForTesting(
-                file_name2, base::span<const char>(content, 20u)));
+  UNSAFE_TODO(ASSERT_EQ(base::File::FILE_OK,
+                        file_util()->CreateFileForTesting(
+                            file_name0, base::span<const char>(content, 10u))));
+  UNSAFE_TODO(ASSERT_EQ(base::File::FILE_OK,
+                        file_util()->CreateFileForTesting(
+                            file_name1, base::span<const char>(content, 15u))));
+  UNSAFE_TODO(ASSERT_EQ(base::File::FILE_OK,
+                        file_util()->CreateFileForTesting(
+                            file_name2, base::span<const char>(content, 20u))));
 
   ASSERT_EQ(20u, file_util()->ComputeDirectorySize(dir_name2));
   ASSERT_EQ(35u, file_util()->ComputeDirectorySize(dir_name1));

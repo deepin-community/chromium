@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2016, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -9,7 +9,7 @@
  * PATENTS file, you can obtain it at www.aomedia.org/license/patent.
  */
 
-#include "third_party/googletest/src/googletest/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include "config/aom_config.h"
 
@@ -62,6 +62,7 @@ int main(int argc, char **argv) {
   if (!(caps & HAS_NEON_DOTPROD)) append_negative_gtest_filter("NEON_DOTPROD");
   if (!(caps & HAS_NEON_I8MM)) append_negative_gtest_filter("NEON_I8MM");
   if (!(caps & HAS_SVE)) append_negative_gtest_filter("SVE");
+  if (!(caps & HAS_SVE2)) append_negative_gtest_filter("SVE2");
 #elif AOM_ARCH_ARM
   const int caps = aom_arm_cpu_caps();
   if (!(caps & HAS_NEON)) append_negative_gtest_filter("NEON");
@@ -78,6 +79,7 @@ int main(int argc, char **argv) {
   if (!(simd_caps & HAS_SSE4_2)) append_negative_gtest_filter("SSE4_2");
   if (!(simd_caps & HAS_AVX)) append_negative_gtest_filter("AVX");
   if (!(simd_caps & HAS_AVX2)) append_negative_gtest_filter("AVX2");
+  if (!(simd_caps & HAS_AVX512)) append_negative_gtest_filter("AVX512");
 #endif  // AOM_ARCH_X86 || AOM_ARCH_X86_64
 
   // Shared library builds don't support whitebox tests that exercise internal

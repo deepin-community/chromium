@@ -8,7 +8,6 @@
 #include "base/lazy_instance.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/wm_desks_private.h"
-#include "chromeos/lacros/lacros_service.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/event_router.h"
@@ -36,9 +35,7 @@ void WMDesksEventsRouter::OnDeskAdded(const base::Uuid& desk_id,
       from_undo ? events::DESK_EVENTS_ON_DESK_REMOVAL_UNDONE
                 : events::DESK_EVENTS_ON_DESK_ADDED,
       api::wm_desks_private::OnDeskAdded::kEventName,
-      base::Value::List()
-          .Append(desk_id.AsLowercaseString())
-          .Append(from_undo));
+      base::ListValue().Append(desk_id.AsLowercaseString()).Append(from_undo));
   event_router_->BroadcastEvent(std::move(event));
 }
 
@@ -51,7 +48,7 @@ void WMDesksEventsRouter::OnDeskRemoved(const base::Uuid& desk_id) {
   auto event = std::make_unique<Event>(
       events::DESK_EVENTS_ON_DESK_REMOVED,
       api::wm_desks_private::OnDeskRemoved::kEventName,
-      base::Value::List().Append(desk_id.AsLowercaseString()));
+      base::ListValue().Append(desk_id.AsLowercaseString()));
   event_router_->BroadcastEvent(std::move(event));
 }
 
@@ -65,7 +62,7 @@ void WMDesksEventsRouter::OnDeskSwitched(const base::Uuid& deactivated,
   auto event =
       std::make_unique<Event>(events::DESK_EVENTS_ON_DESK_SWITCHED,
                               api::wm_desks_private::OnDeskSwitched::kEventName,
-                              base::Value::List()
+                              base::ListValue()
                                   .Append(deactivated.AsLowercaseString())
                                   .Append(activated.AsLowercaseString()));
   event_router_->BroadcastEvent(std::move(event));
@@ -110,18 +107,6 @@ void WMDesksPrivateEventsAPI::OnListenerAdded(
     const EventListenerInfo& details) {
   if (!desk_events_router_ && HasDeskEventsListener()) {
     desk_events_router_ = std::make_unique<WMDesksEventsRouter>(profile_);
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    // Only register once
-    chromeos::LacrosService* service = chromeos::LacrosService::Get();
-    if (!service->IsAvailable<crosapi::mojom::Desk>() ||
-        service->GetInterfaceVersion<crosapi::mojom::Desk>() <
-            static_cast<int>(crosapi::mojom::Desk::MethodMinVersions::
-                                 kAddDeskEventObserverMinVersion)) {
-      return;
-    }
-    service->GetRemote<crosapi::mojom::Desk>()->AddDeskEventObserver(
-        desk_events_router_->BindDeskClient());
-#endif
   }
 }
 

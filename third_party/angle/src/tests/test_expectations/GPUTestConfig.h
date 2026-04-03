@@ -25,6 +25,8 @@ struct GPUTestConfig
         kAPIVulkan,
         kAPISwiftShader,
         kAPIMetal,
+        kAPIWgpu,
+        kAPINative,
     };
 
     enum Condition
@@ -55,6 +57,9 @@ struct GPUTestConfig
         kConditionIntel,
         kConditionVMWare,
         kConditionApple,
+        kConditionQualcomm,
+        kConditionARM,
+        kConditionSamsung,
         kConditionRelease,
         kConditionDebug,
         kConditionD3D9,
@@ -62,7 +67,9 @@ struct GPUTestConfig
         kConditionGLDesktop,
         kConditionGLES,
         kConditionVulkan,
+        kConditionNative,
         kConditionMetal,
+        kConditionWgpu,
         kConditionNexus5X,
         kConditionPixel2OrXL,
         kConditionPixel4OrXL,
@@ -73,11 +80,14 @@ struct GPUTestConfig
         kConditionGalaxyA23,
         kConditionGalaxyA34,
         kConditionGalaxyA54,
+        kConditionGalaxyS22,
         kConditionGalaxyS23,
-        kConditionGalaxyQualcomm,
+        kConditionGalaxyS24Exynos,
+        kConditionGalaxyS24Qualcomm,
         kConditionFindX6,
         kConditionNVIDIAQuadroP400,
         kConditionNVIDIAGTX1660,
+        kConditionPineapple,
         kConditionSwiftShader,
         kConditionPreRotation,
         kConditionPreRotation90,
@@ -87,6 +97,7 @@ struct GPUTestConfig
         kConditionASan,
         kConditionTSan,
         kConditionUBSan,
+        kConditionIR,
 
         kNumberOfConditions,
     };

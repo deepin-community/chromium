@@ -6,9 +6,11 @@
 #define CHROME_UPDATER_CLEANUP_TASK_H_
 
 #include "base/functional/callback_forward.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
+#include "build/build_config.h"
+#include "chrome/updater/configurator.h"
 #include "chrome/updater/updater_scope.h"
 
 namespace updater {
@@ -18,7 +20,7 @@ namespace updater {
 // setup ran but can be cleaned up now.
 class CleanupTask : public base::RefCountedThreadSafe<CleanupTask> {
  public:
-  explicit CleanupTask(UpdaterScope scope);
+  CleanupTask(UpdaterScope scope, scoped_refptr<Configurator> config);
   void Run(base::OnceClosure callback);
 
  private:
@@ -27,6 +29,7 @@ class CleanupTask : public base::RefCountedThreadSafe<CleanupTask> {
 
   SEQUENCE_CHECKER(sequence_checker_);
   UpdaterScope scope_;
+  scoped_refptr<Configurator> config_;
 };
 
 }  // namespace updater

@@ -4,7 +4,6 @@
       "vpython3",
       "RECIPE_REPO[depot_tools]/gerrit_client.py",
       "changes",
-      "--verbose",
       "--host",
       "https://chromium-review.googlesource.com",
       "--json_file",
@@ -16,7 +15,8 @@
       "-o",
       "ALL_REVISIONS",
       "-o",
-      "DOWNLOAD_COMMANDS"
+      "DOWNLOAD_COMMANDS",
+      "--verbose"
     ],
     "env": {
       "PATH": "<PATH>:RECIPE_REPO[depot_tools]"
@@ -81,6 +81,7 @@
       "refs/heads/main"
     ],
     "env": {
+      "CHROME_HEADLESS": "1",
       "DEPOT_TOOLS_REPORT_BUILD": "chromium/src/try/linux/8945511751514863184",
       "GIT_BACKENDINFO": "1",
       "GIT_DAPPER_TRACE": "1",
@@ -116,7 +117,7 @@
     "name": "bot_update",
     "~followup_annotations": [
       "@@@STEP_LOG_END@json.output (invalid)@@@",
-      "@@@STEP_LOG_LINE@json.output (exception)@No JSON object could be decoded@@@",
+      "@@@STEP_LOG_LINE@json.output (exception)@Expecting value: line 1 column 1 (char 0)@@@",
       "@@@STEP_LOG_END@json.output (exception)@@@",
       "@@@STEP_EXCEPTION@@@"
     ]

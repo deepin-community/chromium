@@ -15,22 +15,32 @@ limitations under the License.
 
 #include "tensorflow/core/grappler/clusters/virtual_cluster.h"
 
+#include <cstdint>
+#include <memory>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "absl/status/status.h"
 #include "tensorflow/core/framework/cost_graph.pb.h"
+#include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/tensor_shape.pb.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/grappler/clusters/utils.h"
 #include "tensorflow/core/grappler/costs/op_level_cost_estimator.h"
+#include "tensorflow/core/protobuf/config.pb.h"
+#include "tensorflow/core/protobuf/device_properties.pb.h"
 
 namespace tensorflow {
 namespace grappler {
 
 VirtualCluster::VirtualCluster(
-    const std::unordered_map<string, DeviceProperties>& devices)
+    const std::unordered_map<std::string, DeviceProperties>& devices)
     : VirtualCluster(devices, std::make_unique<OpLevelCostEstimator>(),
                      ReadyNodeManagerFactory("FirstReady")) {}
 
 VirtualCluster::VirtualCluster(
-    const std::unordered_map<string, DeviceProperties>& devices,
+    const std::unordered_map<std::string, DeviceProperties>& devices,
     std::unique_ptr<OpLevelCostEstimator> node_estimator,
     std::unique_ptr<ReadyNodeManager> node_manager)
     : Cluster(0) {
@@ -44,7 +54,7 @@ VirtualCluster::VirtualCluster(
 }
 
 VirtualCluster::VirtualCluster(const DeviceSet* device_set)
-    : VirtualCluster(std::unordered_map<string, DeviceProperties>()) {
+    : VirtualCluster(std::unordered_map<std::string, DeviceProperties>()) {
   device_set_ = device_set;
   for (const auto& device : device_set_->devices()) {
     DeviceProperties props = GetDeviceInfo(device->parsed_name());
@@ -57,16 +67,16 @@ VirtualCluster::VirtualCluster(const DeviceSet* device_set)
 
 VirtualCluster::~VirtualCluster() {}
 
-Status VirtualCluster::Provision() { return OkStatus(); }
+absl::Status VirtualCluster::Provision() { return absl::OkStatus(); }
 
-Status VirtualCluster::Initialize(const GrapplerItem& item) {
-  return OkStatus();
+absl::Status VirtualCluster::Initialize(const GrapplerItem& item) {
+  return absl::OkStatus();
 }
 
-Status VirtualCluster::Run(const GraphDef& graph,
-                           const std::vector<std::pair<string, Tensor>>& feed,
-                           const std::vector<string>& fetch,
-                           RunMetadata* metadata) {
+absl::Status VirtualCluster::Run(
+    const GraphDef& graph,
+    const std::vector<std::pair<std::string, Tensor>>& feed,
+    const std::vector<std::string>& fetch, RunMetadata* metadata) {
   GrapplerItem item;
   item.graph = graph;
   item.feed = feed;
@@ -74,7 +84,8 @@ Status VirtualCluster::Run(const GraphDef& graph,
   return Run(item, metadata);
 }
 
-Status VirtualCluster::Run(const GrapplerItem& item, RunMetadata* metadata) {
+absl::Status VirtualCluster::Run(const GrapplerItem& item,
+                                 RunMetadata* metadata) {
   // Initializes an analytical cost estimator to estimate the graph cost. Makes
   // sure to use static shape inference to prevent the virtual scheduler from
   // calling the Run method on the cluster and creating an infinite loop.
@@ -88,11 +99,12 @@ Status VirtualCluster::Run(const GrapplerItem& item, RunMetadata* metadata) {
   TF_RETURN_IF_ERROR(
       estimator_->PredictCosts(item.graph, metadata, /*cost=*/nullptr));
 
-  const std::unordered_map<string, DeviceProperties>& device = GetDevices();
-  std::unordered_map<string, int64_t> peak_mem_usage =
+  const std::unordered_map<std::string, DeviceProperties>& device =
+      GetDevices();
+  std::unordered_map<std::string, int64_t> peak_mem_usage =
       estimator_->GetScheduler()->GetPeakMemoryUsage();
   for (const auto& mem_usage : peak_mem_usage) {
-    const string& device_name = mem_usage.first;
+    const std::string& device_name = mem_usage.first;
     auto it = device.find(device_name);
     if (it == device.end()) {
       // It's probably the fake send/recv device. Eventually we'll need to
@@ -114,7 +126,7 @@ Status VirtualCluster::Run(const GrapplerItem& item, RunMetadata* metadata) {
     }
   }
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace grappler

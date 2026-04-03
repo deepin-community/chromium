@@ -1,16 +1,16 @@
-/* Copyright (c) 2014, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2014 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <openssl/base.h>
 
@@ -25,41 +25,52 @@
 #include "transport_common.h"
 
 
+BSSL_NAMESPACE_BEGIN
+
 static const struct argument kArguments[] = {
     {
-        "-accept", kRequiredArgument,
+        "-accept",
+        kRequiredArgument,
         "The port of the server to bind on; eg 45102",
     },
     {
-        "-cipher", kOptionalArgument,
+        "-cipher",
+        kOptionalArgument,
         "An OpenSSL-style cipher suite string that configures the offered "
         "ciphers",
     },
     {
-        "-curves", kOptionalArgument,
+        "-curves",
+        kOptionalArgument,
         "An OpenSSL-style ECDH curves list that configures the offered curves",
     },
     {
-        "-max-version", kOptionalArgument,
+        "-max-version",
+        kOptionalArgument,
         "The maximum acceptable protocol version",
     },
     {
-        "-min-version", kOptionalArgument,
+        "-min-version",
+        kOptionalArgument,
         "The minimum acceptable protocol version",
     },
     {
-        "-key", kOptionalArgument,
+        "-key",
+        kOptionalArgument,
         "PEM-encoded file containing the private key. A self-signed "
         "certificate is generated at runtime if this argument is not provided.",
     },
     {
-        "-cert", kOptionalArgument,
+        "-cert",
+        kOptionalArgument,
         "PEM-encoded file containing the leaf certificate and optional "
         "certificate chain. This is taken from the -key argument if this "
         "argument is not provided.",
     },
     {
-        "-ocsp-response", kOptionalArgument, "OCSP response file to send",
+        "-ocsp-response",
+        kOptionalArgument,
+        "OCSP response file to send",
     },
     {
         "-ech-key",
@@ -72,31 +83,40 @@ static const struct argument kArguments[] = {
         "File containing one ECHConfig.",
     },
     {
-        "-loop", kBooleanArgument,
+        "-loop",
+        kBooleanArgument,
         "The server will continue accepting new sequential connections.",
     },
     {
-        "-early-data", kBooleanArgument, "Allow early data",
+        "-early-data",
+        kBooleanArgument,
+        "Allow early data",
     },
     {
-        "-www", kBooleanArgument,
+        "-www",
+        kBooleanArgument,
         "The server will print connection information in response to a "
         "HTTP GET request.",
     },
     {
-        "-debug", kBooleanArgument,
+        "-debug",
+        kBooleanArgument,
         "Print debug information about the handshake",
     },
     {
-        "-require-any-client-cert", kBooleanArgument,
+        "-require-any-client-cert",
+        kBooleanArgument,
         "The server will require a client certificate.",
     },
     {
-        "-jdk11-workaround", kBooleanArgument,
+        "-jdk11-workaround",
+        kBooleanArgument,
         "Enable the JDK 11 workaround",
     },
     {
-        "", kOptionalArgument, "",
+        "",
+        kOptionalArgument,
+        "",
     },
 };
 
@@ -428,3 +448,5 @@ bool Server(const std::vector<std::string> &args) {
 
   return result;
 }
+
+BSSL_NAMESPACE_END

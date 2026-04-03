@@ -5,18 +5,38 @@
 #include "chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private_api.h"
 
 #include <cmath>
+#include <memory>
 
 #include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/glic/public/glic_enabling.h"
+#include "chrome/browser/glic/public/glic_keyed_service.h"
+#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/pdf/pdf_pref_names.h"
 #include "chrome/browser/pdf/pdf_viewer_stream_manager.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/api/pdf_viewer_private.h"
 #include "chrome/common/pref_names.h"
+#include "components/pdf/common/constants.h"
 #include "components/prefs/pref_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
+#include "pdf/buildflags.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "url/url_constants.h"
+
+#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+#include "chrome/browser/save_to_drive/content_reader.h"
+#include "chrome/browser/save_to_drive/pdf_content_reader.h"
+#include "chrome/browser/save_to_drive/save_to_drive_event_dispatcher.h"
+#include "chrome/browser/save_to_drive/save_to_drive_flow.h"
+#include "chrome/browser/ui/hats/hats_service_factory.h"  // nogncheck
+#include "chrome/browser/ui/save_to_drive/get_account.h"
+#endif  // BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
 
 namespace extensions {
 
@@ -25,15 +45,16 @@ namespace {
 namespace IsAllowedLocalFileAccess =
     api::pdf_viewer_private::IsAllowedLocalFileAccess;
 
-namespace SetPdfOcrPref = api::pdf_viewer_private::SetPdfOcrPref;
+namespace SaveToDrive = api::pdf_viewer_private::SaveToDrive;
 
 namespace SetPdfPluginAttributes =
     api::pdf_viewer_private::SetPdfPluginAttributes;
 
+namespace SetPdfDocumentTitle = api::pdf_viewer_private::SetPdfDocumentTitle;
+
 // Check if the current URL is allowed based on a list of allowlisted domains.
-bool IsUrlAllowedToEmbedLocalFiles(
-    const GURL& current_url,
-    const base::Value::List& allowlisted_domains) {
+bool IsUrlAllowedToEmbedLocalFiles(const GURL& current_url,
+                                   const base::ListValue& allowlisted_domains) {
   if (!current_url.is_valid() || !current_url.SchemeIs(url::kHttpsScheme)) {
     return false;
   }
@@ -67,6 +88,27 @@ base::WeakPtr<StreamContainer> GetStreamContainer(
 
   return pdf_viewer_stream_manager->GetStreamContainer(embedder_host);
 }
+
+#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+// Converts the `SaveRequestType` enum from the extension API to the mojom enum.
+pdf::mojom::SaveRequestType ToMojomSaveRequestType(
+    api::pdf_viewer_private::SaveRequestType request_type) {
+  switch (request_type) {
+    case api::pdf_viewer_private::SaveRequestType::kOriginal:
+      return pdf::mojom::SaveRequestType::kOriginal;
+    case api::pdf_viewer_private::SaveRequestType::kEdited:
+      return pdf::mojom::SaveRequestType::kEdited;
+    case api::pdf_viewer_private::SaveRequestType::kSearchified:
+      return pdf::mojom::SaveRequestType::kSearchified;
+    case api::pdf_viewer_private::SaveRequestType::kAnnotation:
+      return pdf::mojom::SaveRequestType::kAnnotation;
+    case api::pdf_viewer_private::SaveRequestType::kNone:
+      // It should not be called with `kNone`.
+      NOTREACHED();
+  }
+  NOTREACHED();
+}
+#endif  // BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
 
 }  // namespace
 
@@ -111,55 +153,96 @@ PdfViewerPrivateIsAllowedLocalFileAccessFunction::Run() {
       prefs->GetList(prefs::kPdfLocalFileAccessAllowedForDomains))));
 }
 
-PdfViewerPrivateIsPdfOcrAlwaysActiveFunction::
-    PdfViewerPrivateIsPdfOcrAlwaysActiveFunction() = default;
-
-PdfViewerPrivateIsPdfOcrAlwaysActiveFunction::
-    ~PdfViewerPrivateIsPdfOcrAlwaysActiveFunction() = default;
-
-ExtensionFunction::ResponseAction
-PdfViewerPrivateIsPdfOcrAlwaysActiveFunction::Run() {
-  PrefService* prefs =
-      Profile::FromBrowserContext(browser_context())->GetPrefs();
-  DCHECK(prefs);
-
-  const PrefService::Preference* pref =
-      prefs->FindPreference(prefs::kAccessibilityPdfOcrAlwaysActive);
-  if (!pref) {
-    return RespondNow(
-        Error("Pref not found: *", prefs::kAccessibilityPdfOcrAlwaysActive));
-  }
-
-  DCHECK(pref->GetValue()->is_bool());
-  bool value = pref->GetValue()->GetBool();
-  return RespondNow(WithArguments(value));
-}
-
-PdfViewerPrivateSetPdfOcrPrefFunction::PdfViewerPrivateSetPdfOcrPrefFunction() =
+PdfViewerPrivateSaveToDriveFunction::PdfViewerPrivateSaveToDriveFunction() =
     default;
 
-PdfViewerPrivateSetPdfOcrPrefFunction::
-    ~PdfViewerPrivateSetPdfOcrPrefFunction() = default;
+PdfViewerPrivateSaveToDriveFunction::~PdfViewerPrivateSaveToDriveFunction() =
+    default;
 
-ExtensionFunction::ResponseAction PdfViewerPrivateSetPdfOcrPrefFunction::Run() {
-  std::optional<SetPdfOcrPref::Params> params =
-      SetPdfOcrPref::Params::Create(args());
+ExtensionFunction::ResponseAction PdfViewerPrivateSaveToDriveFunction::Run() {
+#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+  std::optional<SaveToDrive::Params> params =
+      SaveToDrive::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
+  if (params->save_request_type !=
+      api::pdf_viewer_private::SaveRequestType::kNone) {
+    return RunSaveToDriveFlow(params->save_request_type);
+  }
+  return StopSaveToDriveFlow();
+#else
+  return RespondNow(Error("Not supported"));
+#endif  // BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+}
 
-  PrefService* prefs =
-      Profile::FromBrowserContext(browser_context())->GetPrefs();
-  DCHECK(prefs);
+#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+ExtensionFunction::ResponseAction
+PdfViewerPrivateSaveToDriveFunction::RunSaveToDriveFlow(
+    api::pdf_viewer_private::SaveRequestType request_type) {
+  using SaveToDriveFlow = save_to_drive::SaveToDriveFlow;
 
-  const PrefService::Preference* pref =
-      prefs->FindPreference(prefs::kAccessibilityPdfOcrAlwaysActive);
-  if (!pref) {
-    return RespondNow(
-        Error("Pref not found: *", prefs::kAccessibilityPdfOcrAlwaysActive));
+  if (SaveToDriveFlow::GetForCurrentDocument(render_frame_host())) {
+    return RespondNow(Error("An upload is already in progress"));
+  }
+  auto event_dispatcher =
+      save_to_drive::SaveToDriveEventDispatcher::Create(render_frame_host());
+  if (!event_dispatcher) {
+    return RespondNow(Error("Failed to create event dispatcher"));
+  }
+  auto content_reader = std::make_unique<save_to_drive::PDFContentReader>(
+      render_frame_host(), ToMojomSaveRequestType(request_type));
+  auto account_chooser = std::make_unique<save_to_drive::AccountChooser>();
+  HatsService* hats_service = HatsServiceFactory::GetForProfile(
+      Profile::FromBrowserContext(browser_context()),
+      /*create_if_necessary=*/true);
+  auto* flow = SaveToDriveFlow::Create(
+      render_frame_host(), std::move(event_dispatcher),
+      std::move(content_reader), std::move(account_chooser), hats_service);
+  flow->Run();
+  return RespondNow(NoArguments());
+}
+
+ExtensionFunction::ResponseAction
+PdfViewerPrivateSaveToDriveFunction::StopSaveToDriveFlow() {
+  using SaveToDriveFlow = save_to_drive::SaveToDriveFlow;
+
+  auto* flow = SaveToDriveFlow::GetForCurrentDocument(render_frame_host());
+  if (!flow) {
+    return RespondNow(Error("Failed to get SaveToDriveFlow"));
+  }
+  flow->Stop();
+  return RespondNow(NoArguments());
+}
+#endif  // BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+
+PdfViewerPrivateSetPdfDocumentTitleFunction::
+    PdfViewerPrivateSetPdfDocumentTitleFunction() = default;
+
+PdfViewerPrivateSetPdfDocumentTitleFunction::
+    ~PdfViewerPrivateSetPdfDocumentTitleFunction() = default;
+
+// This function is only called for full-page PDFs.
+ExtensionFunction::ResponseAction
+PdfViewerPrivateSetPdfDocumentTitleFunction::Run() {
+  content::WebContents* web_contents = GetSenderWebContents();
+  if (!web_contents) {
+    return RespondNow(Error("Could not find a valid web contents."));
   }
 
-  DCHECK(pref->GetValue()->is_bool());
-  prefs->SetBoolean(prefs::kAccessibilityPdfOcrAlwaysActive, params->value);
-  return RespondNow(WithArguments(true));
+  // Title should only be set for full-page PDFs.
+  // MIME type associated with sender `WebContents` must be `application/pdf`
+  // for a full-page PDF.
+  EXTENSION_FUNCTION_VALIDATE(web_contents->GetContentsMimeType() ==
+                              pdf::kPDFMimeType);
+
+  std::optional<SetPdfDocumentTitle::Params> params =
+      SetPdfDocumentTitle::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
+
+  web_contents->UpdateTitleForEntry(
+      web_contents->GetController().GetLastCommittedEntry(),
+      base::UTF8ToUTF16(params->title));
+
+  return RespondNow(NoArguments());
 }
 
 PdfViewerPrivateSetPdfPluginAttributesFunction::
@@ -197,6 +280,68 @@ PdfViewerPrivateSetPdfPluginAttributesFunction::Run() {
   stream->set_pdf_plugin_attributes(mime_handler::PdfPluginAttributes::New(
       /*background_color=*/attributes.background_color,
       /*allow_javascript=*/attributes.allow_javascript));
+  return RespondNow(NoArguments());
+}
+
+PdfViewerPrivateGlicSummarizeFunction::PdfViewerPrivateGlicSummarizeFunction() =
+    default;
+
+PdfViewerPrivateGlicSummarizeFunction::
+    ~PdfViewerPrivateGlicSummarizeFunction() = default;
+
+ExtensionFunction::ResponseAction PdfViewerPrivateGlicSummarizeFunction::Run() {
+  bool success = false;
+  auto cleanup = absl::MakeCleanup([&success] {
+    base::UmaHistogramBoolean("PDF.GlicSummarizeButtonClicked", success);
+  });
+
+  content::WebContents* contents = GetSenderWebContents();
+  if (!contents) {
+    return RespondNow(Error("No web contents."));
+  }
+
+  tabs::TabInterface* tab_interface =
+      tabs::TabInterface::MaybeGetFromContents(contents);
+  if (!tab_interface) {
+    return RespondNow(Error("No tab."));
+  }
+
+  if (!glic::GlicEnabling::IsEnabledForProfile(
+          Profile::FromBrowserContext(contents->GetBrowserContext()))) {
+    return RespondNow(Error("Glic is not enabled."));
+  }
+
+  glic::GlicKeyedService* glic_service =
+      glic::GlicKeyedServiceFactory::GetGlicKeyedService(
+          contents->GetBrowserContext());
+  CHECK(glic_service);
+
+  int arm = features::kPdfGlicSummarizeArm.Get();
+  bool has_consented = glic::GlicEnabling::HasConsentedForProfile(
+      Profile::FromBrowserContext(contents->GetBrowserContext()));
+
+  glic::GlicInvokeOptions options{
+      glic::mojom::InvocationSource::kPdfSummarizeButton};
+  options.prompts.push_back("summarize the pdf");
+  options.conversation = glic::NewConversation();
+
+  if (has_consented) {
+    glic_service->InvokeWithAutoSubmit(
+        glic::InvokeWithAutoSubmitPasskeyProvider::GetPassKey(), tab_interface,
+        std::move(options));
+  } else {
+    if (arm == 3) {
+      options.fre_override = glic::mojom::FreOverride::kTrustFirstInline;
+      glic_service->InvokeWithAutoSubmit(
+          glic::InvokeWithAutoSubmitPasskeyProvider::GetPassKey(),
+          tab_interface, std::move(options));
+    } else {
+      options.fre_override = glic::mojom::FreOverride::kTrustFirstText;
+      glic_service->Invoke(tab_interface, std::move(options));
+    }
+  }
+
+  success = true;
   return RespondNow(NoArguments());
 }
 

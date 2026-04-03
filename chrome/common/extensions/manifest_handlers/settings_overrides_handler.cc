@@ -20,8 +20,6 @@
 #include "extensions/common/permissions/manifest_permission.h"
 #include "extensions/common/permissions/permissions_info.h"
 #include "extensions/common/permissions/settings_override_permission.h"
-#include "ipc/ipc_message.h"
-#include "ipc/ipc_message_utils.h"
 #include "url/gurl.h"
 
 using extensions::api::manifest_types::ChromeSettingsOverrides;
@@ -116,14 +114,14 @@ std::optional<ChromeSettingsOverrides::SearchProvider> ParseSearchEngine(
 std::string FormatUrlForDisplay(const GURL& url) {
   // A www. prefix is not informative and thus not worth the limited real estate
   // in the permissions UI.
-  return url_formatter::StripWWW(url.host());
+  return url_formatter::StripWWW(url.GetHost());
 }
 
 }  // namespace
 
-SettingsOverrides::SettingsOverrides() {}
+SettingsOverrides::SettingsOverrides() = default;
 
-SettingsOverrides::~SettingsOverrides() {}
+SettingsOverrides::~SettingsOverrides() = default;
 
 // static
 const SettingsOverrides* SettingsOverrides::Get(
@@ -132,13 +130,13 @@ const SettingsOverrides* SettingsOverrides::Get(
       extension->GetManifestData(manifest_keys::kSettingsOverride));
 }
 
-SettingsOverridesHandler::SettingsOverridesHandler() {}
+SettingsOverridesHandler::SettingsOverridesHandler() = default;
 
-SettingsOverridesHandler::~SettingsOverridesHandler() {}
+SettingsOverridesHandler::~SettingsOverridesHandler() = default;
 
 bool SettingsOverridesHandler::Parse(Extension* extension,
                                      std::u16string* error) {
-  const base::Value::Dict* dict =
+  const base::DictValue* dict =
       extension->manifest()->FindDictPath(manifest_keys::kSettingsOverride);
   CHECK(dict != nullptr);
   auto settings = ChromeSettingsOverrides::FromValue(*dict);
@@ -147,7 +145,7 @@ bool SettingsOverridesHandler::Parse(Extension* extension,
     return false;
   }
 
-  // TODO(crbug.com/1101130): Any of {homepage, search_engine, startup_pages}'s
+  // TODO(crbug.com/40703390): Any of {homepage, search_engine, startup_pages}'s
   // parse failure should result in hard error. Currently, Parse fails only when
   // all of these fail to parse.
   auto info = std::make_unique<SettingsOverrides>();

@@ -55,8 +55,15 @@ TEST_F(RateLimiterSlideWindowTest, RandomizedEventsStream) {
     if (i >= kBucketCount) {
       ASSERT_FALSE(rate_limiter_.Acquire(1u));
     }
-    task_environment_.FastForwardBy(kBucket +
-                                    base::Milliseconds(base::RandInt(0, 100)));
+    task_environment_.FastForwardBy(
+        kBucket + base::Milliseconds(base::RandIntInclusive(0, 100)));
+  }
+}
+
+TEST_F(RateLimiterSlideWindowTest, SparseEventsStream) {
+  for (size_t i = 0; i < 2 * kBucketCount; ++i) {
+    ASSERT_TRUE(rate_limiter_.Acquire(1u));
+    task_environment_.FastForwardBy(kTimeWindow - base::Milliseconds(1));
   }
 }
 }  // namespace

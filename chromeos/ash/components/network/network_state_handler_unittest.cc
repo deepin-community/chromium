@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <optional>
@@ -14,7 +15,6 @@
 
 #include "ash/constants/ash_features.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -94,9 +94,9 @@ std::vector<std::string> GetNetworkPaths(
 // |eid|.
 base::Value GenerateSimSlotInfosWithEid(const std::string& eid) {
   auto sim_slot_infos =
-      base::Value::List().Append(base::Value::Dict()
-                                     .Set(shill::kSIMSlotInfoEID, eid)
-                                     .Set(shill::kSIMSlotInfoPrimary, true));
+      base::ListValue().Append(base::DictValue()
+                                   .Set(shill::kSIMSlotInfoEID, eid)
+                                   .Set(shill::kSIMSlotInfoPrimary, true));
   return base::Value(std::move(sim_slot_infos));
 }
 
@@ -447,11 +447,10 @@ class NetworkStateHandlerTest : public testing::Test {
               kShillManagerClientStubDefaultWifi);
   }
 
-  void SetProperties(NetworkState* network,
-                     const base::Value::Dict& properties) {
+  void SetProperties(NetworkState* network, const base::DictValue& properties) {
     // UpdateNetworkStateProperties expects 'Type' and 'WiFi.HexSSID' to always
     // be set.
-    base::Value::Dict properties_to_set = properties.Clone();
+    base::DictValue properties_to_set = properties.Clone();
     properties_to_set.Set(shill::kTypeProperty, network->type());
     properties_to_set.Set(shill::kWifiHexSsid, network->GetHexSsid());
     network_state_handler_->UpdateNetworkStateProperties(network,
@@ -1958,42 +1957,6 @@ TEST_F(NetworkStateHandlerTest, DefaultServiceChanged) {
   EXPECT_EQ(2u, test_observer_->default_network_change_count());
 }
 
-TEST_F(NetworkStateHandlerTest, SetNetworkChromePortalState) {
-  RemoveEthernet();
-
-  base::HistogramTester histogram_tester;
-  service_test_->SetServiceProperty(kShillManagerClientStubDefaultWifi,
-                                    shill::kStateProperty,
-                                    base::Value(shill::kStatePortalSuspected));
-  base::RunLoop().RunUntilIdle();
-
-  const NetworkState* network = network_state_handler_->GetNetworkState(
-      kShillManagerClientStubDefaultWifi);
-  EXPECT_EQ(NetworkState::PortalState::kPortalSuspected,
-            network->GetPortalState());
-
-  network_state_handler_->SetNetworkChromePortalState(
-      kShillManagerClientStubDefaultWifi, NetworkState::PortalState::kPortal);
-  base::RunLoop().RunUntilIdle();
-  network = network_state_handler_->GetNetworkState(
-      kShillManagerClientStubDefaultWifi);
-  EXPECT_EQ(NetworkState::PortalState::kPortal, network->GetPortalState());
-
-  // Setting the chrome portal state to 'unknown' should cause GetPortalState
-  // to return portal-suspected again.
-  network_state_handler_->SetNetworkChromePortalState(
-      kShillManagerClientStubDefaultWifi, NetworkState::PortalState::kUnknown);
-  base::RunLoop().RunUntilIdle();
-  network = network_state_handler_->GetNetworkState(
-      kShillManagerClientStubDefaultWifi);
-  EXPECT_EQ(NetworkState::PortalState::kPortalSuspected,
-            network->GetPortalState());
-
-  EXPECT_THAT(histogram_tester.GetAllSamples("Network.CaptivePortalResult"),
-              ElementsAre(base::Bucket(
-                  NetworkState::PortalState::kPortalSuspected, 1)));
-}
-
 TEST_F(NetworkStateHandlerTest, PortalStateChanged) {
   RemoveEthernet();
   test_observer_->reset_change_counts();
@@ -2268,8 +2231,8 @@ TEST_F(NetworkStateHandlerTest, IPConfigChanged) {
   ShillIPConfigClient::TestInterface* ip_config_test =
       ShillIPConfigClient::Get()->GetTestInterface();
   const std::string kIPConfigPath = "test_ip_config";
-  ip_config_test->AddIPConfig(kIPConfigPath, base::Value::Dict());
-  base::Value::List device_ip_configs;
+  ip_config_test->AddIPConfig(kIPConfigPath, base::DictValue());
+  base::ListValue device_ip_configs;
   device_ip_configs.Append(kIPConfigPath);
   device_test_->SetDeviceProperty(kShillManagerClientStubWifiDevice,
                                   shill::kIPConfigsProperty,
@@ -2505,7 +2468,7 @@ TEST_F(NetworkStateHandlerTest, BlockedWifiByPolicyBlocked) {
   // Emulate 'wifi1' being a managed network.
   std::unique_ptr<NetworkUIData> ui_data =
       NetworkUIData::CreateFromONC(::onc::ONCSource::ONC_SOURCE_USER_POLICY);
-  auto properties = base::Value::Dict()
+  auto properties = base::DictValue()
                         .Set(shill::kProfileProperty, kProfilePath)
                         .Set(shill::kUIDataProperty, ui_data->GetAsJson());
   SetProperties(wifi1, properties);
@@ -2539,7 +2502,7 @@ TEST_F(NetworkStateHandlerTest, BlockedWifiByPolicyOnlyManaged) {
   // Emulate 'wifi1' being a managed network.
   std::unique_ptr<NetworkUIData> ui_data =
       NetworkUIData::CreateFromONC(::onc::ONCSource::ONC_SOURCE_USER_POLICY);
-  auto properties = base::Value::Dict()
+  auto properties = base::DictValue()
                         .Set(shill::kProfileProperty, kProfilePath)
                         .Set(shill::kUIDataProperty, ui_data->GetAsJson());
   SetProperties(wifi1, properties);
@@ -2577,7 +2540,7 @@ TEST_F(NetworkStateHandlerTest, BlockedCellularByPolicyOnlyManaged) {
   // Emulate 'cellular1' being a managed network.
   std::unique_ptr<NetworkUIData> ui_data =
       NetworkUIData::CreateFromONC(::onc::ONCSource::ONC_SOURCE_DEVICE_POLICY);
-  auto properties = base::Value::Dict()
+  auto properties = base::DictValue()
                         .Set(shill::kProfileProperty, kProfilePath)
                         .Set(shill::kUIDataProperty, ui_data->GetAsJson());
   SetProperties(cellular1, properties);
@@ -2618,7 +2581,7 @@ TEST_F(NetworkStateHandlerTest,
   // Emulate 'cellular1' being a managed network.
   std::unique_ptr<NetworkUIData> ui_data =
       NetworkUIData::CreateFromONC(::onc::ONCSource::ONC_SOURCE_DEVICE_POLICY);
-  auto properties = base::Value::Dict()
+  auto properties = base::DictValue()
                         .Set(shill::kProfileProperty, kProfilePath)
                         .Set(shill::kUIDataProperty, ui_data->GetAsJson());
   SetProperties(cellular1, properties);
@@ -2651,7 +2614,7 @@ TEST_F(NetworkStateHandlerTest, BlockedWifiByPolicyOnlyManagedIfAvailable) {
   // Emulate 'wifi1' being a managed network.
   std::unique_ptr<NetworkUIData> ui_data =
       NetworkUIData::CreateFromONC(::onc::ONCSource::ONC_SOURCE_USER_POLICY);
-  auto properties = base::Value::Dict()
+  auto properties = base::DictValue()
                         .Set(shill::kProfileProperty, kProfilePath)
                         .Set(shill::kUIDataProperty, ui_data->GetAsJson());
   SetProperties(wifi1, properties);
@@ -2681,8 +2644,8 @@ TEST_F(NetworkStateHandlerTest, SetNetworkConnectRequested) {
   NetworkStateHandler::NetworkStateList active_networks;
   network_state_handler_->GetActiveNetworkListByType(
       NetworkTypePattern::Default(), &active_networks);
-  EXPECT_FALSE(base::Contains(active_networks, kShillManagerClientStubWifi2,
-                              &NetworkState::path));
+  EXPECT_FALSE(std::ranges::contains(
+      active_networks, kShillManagerClientStubWifi2, &NetworkState::path));
 
   // Set |connect_requested_| for wifi2 and verify that it is connecting and
   // in the active list.
@@ -2692,8 +2655,8 @@ TEST_F(NetworkStateHandlerTest, SetNetworkConnectRequested) {
   EXPECT_TRUE(wifi2->IsConnectingState());
   network_state_handler_->GetActiveNetworkListByType(
       NetworkTypePattern::Default(), &active_networks);
-  EXPECT_TRUE(base::Contains(active_networks, kShillManagerClientStubWifi2,
-                             &NetworkState::path));
+  EXPECT_TRUE(std::ranges::contains(
+      active_networks, kShillManagerClientStubWifi2, &NetworkState::path));
 
   // Clear |connect_requested_| for wifi2 and verify that it is not connecting
   // or in the active list.
@@ -2703,8 +2666,8 @@ TEST_F(NetworkStateHandlerTest, SetNetworkConnectRequested) {
   EXPECT_FALSE(wifi2->IsConnectingState());
   network_state_handler_->GetActiveNetworkListByType(
       NetworkTypePattern::Default(), &active_networks);
-  EXPECT_FALSE(base::Contains(active_networks, kShillManagerClientStubWifi2,
-                              &NetworkState::path));
+  EXPECT_FALSE(std::ranges::contains(
+      active_networks, kShillManagerClientStubWifi2, &NetworkState::path));
 }
 
 TEST_F(NetworkStateHandlerTest, Hostname) {
@@ -2795,17 +2758,17 @@ TEST_F(NetworkStateHandlerTest, GetNetworkListAfterUpdateManagedList) {
 
 TEST_F(NetworkStateHandlerTest, RequestTrafficCounters) {
   // Set up the traffic counters.
-  auto chrome_dict = base::Value::Dict()
+  auto chrome_dict = base::DictValue()
                          .Set("source", shill::kTrafficCounterSourceChrome)
                          .Set("rx_bytes", 12)
                          .Set("tx_bytes", 32);
 
-  auto user_dict = base::Value::Dict()
+  auto user_dict = base::DictValue()
                        .Set("source", shill::kTrafficCounterSourceUser)
                        .Set("rx_bytes", 90)
                        .Set("tx_bytes", 87);
 
-  auto traffic_counters = base::Value::List()
+  auto traffic_counters = base::ListValue()
                               .Append(std::move(chrome_dict))
                               .Append(std::move(user_dict));
 
@@ -2816,7 +2779,7 @@ TEST_F(NetworkStateHandlerTest, RequestTrafficCounters) {
   network_state_handler_->RequestTrafficCounters(
       kShillManagerClientStubDefaultWifi,
       base::BindOnce(
-          [](base::Value::List* expected_traffic_counters,
+          [](base::ListValue* expected_traffic_counters,
              base::OnceClosure quit_closure,
              std::optional<base::Value> actual_traffic_counters) {
             ASSERT_TRUE(actual_traffic_counters);
@@ -2831,7 +2794,7 @@ TEST_F(NetworkStateHandlerTest, RequestTrafficCounters) {
   network_state_handler_->RequestTrafficCounters(
       kWifiName1,
       base::BindOnce(
-          [](base::Value::List* expected_traffic_counters,
+          [](base::ListValue* expected_traffic_counters,
              base::OnceClosure quit_closure,
              std::optional<base::Value> actual_traffic_counters) {
             ASSERT_FALSE(actual_traffic_counters);
@@ -2845,12 +2808,17 @@ TEST_F(NetworkStateHandlerTest, RequestPortalDetection) {
   RemoveEthernet();
   NetworkState* wifi1 =
       GetModifiableNetworkState(kShillManagerClientStubDefaultWifi);
-  EXPECT_EQ(wifi1->connection_state(), shill::kStateOnline);
+  service_test_->SetServiceProperty(kShillManagerClientStubDefaultWifi,
+                                    shill::kStateProperty,
+                                    base::Value(shill::kStatePortalSuspected));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(wifi1->connection_state(), shill::kStatePortalSuspected);
 
   test_observer_->reset_change_counts();
   service_test_->SetRequestPortalState(shill::kStateRedirectFound);
   network_state_handler_->RequestPortalDetection();
   base::RunLoop().RunUntilIdle();
+
   wifi1 = GetModifiableNetworkState(kShillManagerClientStubDefaultWifi);
   EXPECT_EQ(wifi1->connection_state(), shill::kStateRedirectFound);
   EXPECT_EQ(test_observer_->default_network_portal_state(),

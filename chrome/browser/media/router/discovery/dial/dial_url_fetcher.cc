@@ -5,6 +5,7 @@
 #include "chrome/browser/media/router/discovery/dial/dial_url_fetcher.h"
 
 #include <optional>
+#include <string>
 
 #include "base/functional/bind.h"
 #include "base/strings/strcat.h"
@@ -133,11 +134,9 @@ void DialURLFetcher::Start(const GURL& url,
   // or XHR.  We set a fake Origin that is only used by the browser to satisfy
   // this requirement.  Rather than attempt to coerce this fake origin into a
   // url::Origin, set the header directly.
-  //
-  // TODO(crbug.com/1136284): Pass through an actual Origin, which improves
-  // compatibility with certain DIAL applications (e.g., Netflix).
-  if (set_origin_header)
+  if (set_origin_header) {
     request->headers.SetHeader("Origin", GetFakeOriginForDialLaunch());
+  }
 
   method_ = method;
 
@@ -167,8 +166,9 @@ void DialURLFetcher::Start(const GURL& url,
   loader_->SetOnRedirectCallback(base::BindRepeating(
       &DialURLFetcher::ReportRedirectError, base::Unretained(this)));
 
-  if (post_data)
+  if (post_data) {
     loader_->AttachStringForUpload(*post_data, "text/plain");
+  }
 
   StartDownload();
 }
@@ -212,7 +212,7 @@ void DialURLFetcher::StartDownload() {
       kMaxResponseSizeBytes);
 }
 
-void DialURLFetcher::ProcessResponse(std::unique_ptr<std::string> response) {
+void DialURLFetcher::ProcessResponse(std::optional<std::string> response) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   int response_code = loader_->NetError();
   if (response_code != net::Error::OK) {

@@ -23,15 +23,23 @@ declare_args() {
 config("libyuv_config") {
   include_dirs = [ "include" ]
   if (is_android) {
-    if (target_cpu == "arm" || target_cpu == "x86" || target_cpu == "mipsel") {
+    if (target_cpu == "arm" || target_cpu == "x86") {
       ldflags = [ "-Wl,--dynamic-linker,/system/bin/linker" ]
     } else {
       ldflags = [ "-Wl,--dynamic-linker,/system/bin/linker64" ]
     }
   }
-  defines = []
+
+  # Define CHROMIUM to tell cpu_id to avoid sandbox unsafe system calls.
+  defines = [ "CHROMIUM" ]
   if (!libyuv_use_neon) {
     defines += [ "LIBYUV_DISABLE_NEON" ]
+  }
+  if (!libyuv_use_sve) {
+    defines += [ "LIBYUV_DISABLE_SVE" ]
+  }
+  if (!libyuv_use_sme) {
+    defines += [ "LIBYUV_DISABLE_SME" ]
   }
   if (libyuv_disable_rvv) {
     defines += [ "LIBYUV_DISABLE_RVV" ]
@@ -76,8 +84,12 @@ group("libyuv") {
     deps += [ ":libyuv_neon" ]
   }
 
-  if (libyuv_use_msa) {
-    deps += [ ":libyuv_msa" ]
+  if (libyuv_use_sve) {
+    deps += [ ":libyuv_sve" ]
+  }
+
+  if (libyuv_use_sme) {
+    deps += [ ":libyuv_sme" ]
   }
 
   if (libyuv_use_lsx) {
@@ -104,11 +116,13 @@ static_library("libyuv_internal") {
     "include/libyuv.h",
     "include/libyuv/basic_types.h",
     "include/libyuv/compare.h",
+    "include/libyuv/compare_row.h",
     "include/libyuv/convert.h",
     "include/libyuv/convert_argb.h",
     "include/libyuv/convert_from.h",
     "include/libyuv/convert_from_argb.h",
     "include/libyuv/cpu_id.h",
+    "include/libyuv/loongson_intrinsics.h",
     "include/libyuv/mjpeg_decoder.h",
     "include/libyuv/planar_functions.h",
     "include/libyuv/rotate.h",
@@ -179,9 +193,7 @@ static_library("libyuv_internal") {
     deps += [ "//third_party:jpeg_includes" ]
   }
 
-  # Always enable optimization for Release and NaCl builds (to workaround
-  # crbug.com/538243).
-  if (!is_debug || is_nacl) {
+  if (!is_debug) {
     configs -= [ "//build/config/compiler:default_optimization" ]
 
     # Enable optimize for speed (-O2) over size (-Os).
@@ -217,36 +229,49 @@ if (libyuv_use_neon) {
 
     public_configs = [ ":libyuv_config" ]
 
-    # Always enable optimization for Release and NaCl builds (to workaround
-    # crbug.com/538243).
-    if (!is_debug) {
-      configs -= [ "//build/config/compiler:default_optimization" ]
+    if (current_cpu == "arm64") {
+      # The -march arguments below are incompatible with libc++ modules.
+      use_libcxx_modules = false
 
-      # Enable optimize for speed (-O2) over size (-Os).
-      # TODO(fbarchard): Consider optimize_speed which is O3.
-      configs += [ "//build/config/compiler:optimize_max" ]
-    }
-
-    if (current_cpu != "arm64") {
-      configs -= [ "//build/config/compiler:compiler_arm_fpu" ]
-      cflags = [ "-mfpu=neon" ]
+      # TODO(thakis): Do we get this from global flags already? Is this needed?
+      cflags = [ "-march=armv8-a+dotprod+i8mm" ]
     }
   }
 }
 
-if (libyuv_use_msa) {
-  static_library("libyuv_msa") {
+if (libyuv_use_sve) {
+  static_library("libyuv_sve") {
+    sources = [ "source/row_sve.cc" ]
+
+    deps = [ ":libyuv_internal" ]
+
+    public_configs = [ ":libyuv_config" ]
+
+    # The -march arguments below are incompatible with libc++ modules.
+    use_libcxx_modules = false
+
+    # SVE2 is an Armv9-A feature.
+    cflags = [ "-march=armv9-a+i8mm+sve2" ]
+  }
+}
+
+if (libyuv_use_sme) {
+  static_library("libyuv_sme") {
     sources = [
-      # MSA Source Files
-      "source/compare_msa.cc",
-      "source/rotate_msa.cc",
-      "source/row_msa.cc",
-      "source/scale_msa.cc",
+      "source/rotate_sme.cc",
+      "source/row_sme.cc",
+      "source/scale_sme.cc",
     ]
 
     deps = [ ":libyuv_internal" ]
 
     public_configs = [ ":libyuv_config" ]
+
+    # The -march arguments below are incompatible with libc++ modules.
+    use_libcxx_modules = false
+
+    # SME is an Armv9-A feature.
+    cflags = [ "-march=armv9-a+i8mm+sme" ]
   }
 }
 
@@ -354,6 +379,9 @@ if (libyuv_include_tests) {
 
     if (is_linux || is_chromeos) {
       cflags = [ "-fexceptions" ]
+
+      # For enabling ASLR.
+      ldflags = [ "-pie" ]
     }
     if (is_ios) {
       configs -= [ "//build/config/compiler:default_symbols" ]
@@ -363,15 +391,10 @@ if (libyuv_include_tests) {
     if (!is_ios && !libyuv_disable_jpeg) {
       defines += [ "HAVE_JPEG" ]
     }
-    if (is_android) {
-      deps += [ "//testing/android/native_test:native_test_native_code" ]
-    }
 
     # TODO(YangZhang): These lines can be removed when high accuracy
     # YUV to RGB to Neon is ported.
-    if ((target_cpu == "armv7" || target_cpu == "armv7s" ||
-         (target_cpu == "arm" && arm_version >= 7) || target_cpu == "arm64") &&
-        (arm_use_neon || arm_optionally_use_neon)) {
+    if (target_cpu == "arm" || target_cpu == "arm64") {
       defines += [ "LIBYUV_NEON" ]
     }
 
@@ -445,5 +468,20 @@ if (libyuv_include_tests) {
       "util/cpuid.c",
     ]
     deps = [ ":libyuv" ]
+  }
+}
+
+if (!build_with_chromium) {
+  # GN evaluates each .gn file once per toolchain, so restricting to default
+  # toolchain will ensure write_file() is called only once.
+  if (current_toolchain == default_toolchain) {
+    # Write debug logs to gn_logs.txt.
+    # This is also required for Siso builds.
+    import("//build/gn_logs.gni")
+    lines = [
+              "Generated during 'gn gen' by //BUILD.gn.",
+              "",
+            ] + build_gn_logs
+    write_file("$root_build_dir/gn_logs.txt", lines)
   }
 }

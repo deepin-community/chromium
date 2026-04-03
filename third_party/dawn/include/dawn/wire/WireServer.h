@@ -29,6 +29,7 @@
 #define INCLUDE_DAWN_WIRE_WIRESERVER_H_
 
 #include <memory>
+#include <span>
 
 #include "dawn/wire/Wire.h"
 
@@ -45,6 +46,7 @@ struct DAWN_WIRE_EXPORT WireServerDescriptor {
     const DawnProcTable* procs;
     CommandSerializer* serializer;
     server::MemoryTransferService* memoryTransferService = nullptr;
+    bool useSpontaneousCallbacks = false;
 };
 
 class DAWN_WIRE_EXPORT WireServer : public CommandHandler {
@@ -54,23 +56,10 @@ class DAWN_WIRE_EXPORT WireServer : public CommandHandler {
 
     const volatile char* HandleCommands(const volatile char* commands, size_t size) override;
 
-    bool InjectTexture(WGPUTexture texture,
-                       uint32_t id,
-                       uint32_t generation,
-                       uint32_t deviceId,
-                       uint32_t deviceGeneration);
-    bool InjectSwapChain(WGPUSwapChain swapchain,
-                         uint32_t id,
-                         uint32_t generation,
-                         uint32_t deviceId,
-                         uint32_t deviceGeneration);
-    bool InjectDevice(WGPUDevice device, uint32_t id, uint32_t generation);
-    bool InjectInstance(WGPUInstance instance, uint32_t id, uint32_t generation);
-
-    bool InjectTexture(WGPUTexture texture, const TextureReservation& reservation);
-    bool InjectSwapChain(WGPUSwapChain texture, const SwapChainReservation& reservation);
-    bool InjectDevice(WGPUDevice device, const DeviceReservation& reservation);
-    bool InjectInstance(WGPUInstance instance, const InstanceReservation& reservation);
+    bool InjectBuffer(WGPUBuffer buffer, const Handle& handle, const Handle& deviceHandle);
+    bool InjectTexture(WGPUTexture texture, const Handle& handle, const Handle& deviceHandle);
+    bool InjectSurface(WGPUSurface surface, const Handle& handle, const Handle& instanceHandle);
+    bool InjectInstance(WGPUInstance instance, const Handle& handle);
 
     // Look up a device by (id, generation) pair. Returns nullptr if the generation
     // has expired or the id is not found.
@@ -87,7 +76,7 @@ class DAWN_WIRE_EXPORT WireServer : public CommandHandler {
     bool IsDeviceKnown(WGPUDevice device) const;
 
   private:
-    std::unique_ptr<server::Server> mImpl;
+    std::shared_ptr<server::Server> mImpl;
 };
 
 namespace server {
@@ -149,14 +138,19 @@ class DAWN_WIRE_EXPORT MemoryTransferService {
                                            size_t deserializeSize,
                                            size_t offset,
                                            size_t size) = 0;
+        std::span<uint8_t> GetTarget() const;
 
-      protected:
-        void* mTargetData = nullptr;
-        size_t mDataLength = 0;
+        // Returns a direct pointer to the source data that will
+        // be copied into Target in DeserializeDataUpdate if accessible, nullptr
+        // otherwise.
+        virtual uint8_t* GetSourceData() const { return nullptr; }
 
       private:
         WriteHandle(const WriteHandle&) = delete;
         WriteHandle& operator=(const WriteHandle&) = delete;
+
+        uint8_t* mTargetData = nullptr;
+        size_t mDataLength = 0;
     };
 
   private:

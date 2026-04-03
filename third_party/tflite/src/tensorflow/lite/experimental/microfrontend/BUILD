@@ -1,5 +1,7 @@
 # TensorFlow ops for audio front-end processing.
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("//tensorflow:strict.default.bzl", "py_strict_library")
 load(
     "//tensorflow:tensorflow.bzl",
@@ -23,8 +25,11 @@ cc_library(
     hdrs = ["audio_microfrontend.h"],
     deps = [
         "//tensorflow/lite:framework",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/c:common",
         "//tensorflow/lite/experimental/microfrontend/lib:frontend",
         "//tensorflow/lite/kernels:kernel_util",
+        "//tensorflow/lite/kernels/internal:compatibility",
         "//tensorflow/lite/kernels/internal:reference",
         "@flatbuffers",
     ],
@@ -71,6 +76,7 @@ cc_test(
         "//tensorflow/lite:framework",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/kernels:test_util",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest_main",
         "@flatbuffers",
     ],
@@ -115,7 +121,6 @@ tf_custom_op_py_strict_library(
     kernels = [
         ":audio_microfrontend_op_op_lib",
     ],
-    srcs_version = "PY3",
     deps = [
         ":audio_microfrontend_op",
         "//tensorflow/python/framework:dtypes",

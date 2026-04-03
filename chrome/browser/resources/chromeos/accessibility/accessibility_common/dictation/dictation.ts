@@ -3,9 +3,12 @@
 // found in the LICENSE file.
 
 import {Context} from '/common/action_fulfillment/context_checker.js';
-import {Macro} from '/common/action_fulfillment/macros/macro.js';
+import type {Macro} from '/common/action_fulfillment/macros/macro.js';
 import {MacroName} from '/common/action_fulfillment/macros/macro_names.js';
 import {TestImportManager} from '/common/testing/test_import_manager.js';
+
+import {Messenger} from '../messenger.js';
+import {OffscreenCommandType} from '../offscreen_command_type.js';
 
 import {FocusHandler} from './focus_handler.js';
 import {InputControllerImpl} from './input_controller_impl.js';
@@ -33,12 +36,6 @@ export class Dictation {
   private speechParser_: SpeechParser|null = null;
   /** Whether or not Dictation is active. */
   private active_ = false;
-  private cancelTone_: HTMLAudioElement|null =
-      new Audio('dictation/earcons/null_selection.wav');
-  private startTone_: HTMLAudioElement|null =
-      new Audio('dictation/earcons/audio_initiate.wav');
-  private endTone_: HTMLAudioElement|null =
-      new Audio('dictation/earcons/audio_end.wav');
   private noSpeechTimeoutMs_: number = Dictation.Timeouts.NO_SPEECH_NETWORK_MS;
   private stopTimeoutId_: number|null = null;
   private interimText_ = '';
@@ -63,7 +60,7 @@ export class Dictation {
   }
 
   /** Sets up Dictation's speech recognizer and various listeners. */
-  private initialize_(): void {
+  private async initialize_(): Promise<void> {
     this.focusHandler_ = new FocusHandler();
     this.inputController_ = new InputControllerImpl(
         () => this.stopDictation_(/*notify=*/ true), this.focusHandler_);
@@ -107,10 +104,9 @@ export class Dictation {
     const contextCheckingFeature =
         chrome.accessibilityPrivate.AccessibilityFeature
             .DICTATION_CONTEXT_CHECKING;
-    chrome.accessibilityPrivate.isFeatureEnabled(
-        contextCheckingFeature, enabled => {
-          this.isContextCheckingFeatureEnabled_ = enabled;
-        });
+    this.isContextCheckingFeatureEnabled_ =
+        await chrome.accessibilityPrivate.isFeatureEnabled(
+            contextCheckingFeature);
   }
 
   /** Performs any destruction before dictation object is destroyed. */
@@ -139,19 +135,23 @@ export class Dictation {
     }
   }
 
+  isActive(): boolean {
+    return this.active_;
+  }
+
   /**
    * Called when Dictation is toggled.
    * @param activated Whether Dictation was just activated.
    */
-  private onToggleDictation_(activated: boolean): void {
+  private async onToggleDictation_(activated: boolean): Promise<void> {
     if (activated && !this.active_) {
-      this.startDictation_();
+      await this.startDictation_();
     } else {
       this.stopDictation_(/*notify=*/ false);
     }
   }
 
-  private startDictation_(): void {
+  private async startDictation_(): Promise<void> {
     this.active_ = true;
     if (this.chromeVoxEnabled_) {
       // Silence ChromeVox in case it was speaking. It can speak over the start
@@ -164,7 +164,8 @@ export class Dictation {
         Dictation.Timeouts.NO_FOCUSED_IME_MS,
         Dictation.StopReason.NO_FOCUSED_IME);
     // TODO(b/314203187): Determine if not null assertion is acceptable.
-    this.inputController_!.connect(() => this.verifyMicrophoneNotMuted_());
+    await this.inputController_!.connect(
+        () => this.verifyMicrophoneNotMuted_());
   }
 
   /**
@@ -227,13 +228,10 @@ export class Dictation {
     this.active_ = false;
     // Stop speech recognition.
     chrome.speechRecognitionPrivate.stop({}, () => {});
-    if (this.interimText_) {
-      // TODO(b/314203187): Determine if not null assertion is acceptable.
-      this.endTone_!.play();
-    } else {
-      // TODO(b/314203187): Determine if not null assertion is acceptable.
-      this.cancelTone_!.play();
-    }
+
+    this.sendToOffscreen_(
+        this.interimText_ ? OffscreenCommandType.DICTATION_PLAY_END :
+                            OffscreenCommandType.DICTATION_PLAY_CANCEL);
 
     // Clear any timeouts.
     this.clearStopTimeout_();
@@ -351,8 +349,7 @@ export class Dictation {
         Dictation.Timeouts.NO_SPEECH_ONDEVICE_MS;
     this.setStopTimeout_(this.noSpeechTimeoutMs_);
 
-    // TODO(b/314203187): Determine if not null assertion is acceptable.
-    this.startTone_!.play();
+    this.sendToOffscreen_(OffscreenCommandType.DICTATION_PLAY_START);
     this.clearInterimText_();
 
     // Record metrics.
@@ -416,7 +413,7 @@ export class Dictation {
 
   /** Shows the interim result in the UI. */
   private showInterimText_(text: string): void {
-    // TODO(crbug.com/1252037): Need to find a way to show interim text that is
+    // TODO(crbug.com/40792919): Need to find a way to show interim text that is
     // only whitespace. Google Cloud Speech can return a newline character
     // although SODA does not seem to do that. The newline character looks wrong
     // here.
@@ -458,7 +455,7 @@ export class Dictation {
 
   /**
    * Shows a message in the UI that a command failed to execute.
-   * TODO(crbug.com/1252037): Optionally use the MacroError to provide
+   * TODO(crbug.com/40792919): Optionally use the MacroError to provide
    * additional context.
    * @param transcript The user's spoken transcript, shown so they
    *     understand the final speech recognized which might be helpful in
@@ -533,6 +530,10 @@ export class Dictation {
 
     // Otherwise, return the previous macro.
     return this.prevMacro_;
+  }
+
+  private sendToOffscreen_(command: OffscreenCommandType): void {
+    Messenger.send(command);
   }
 
   /** Disables Pumpkin for tests that use regex-based command parsing. */

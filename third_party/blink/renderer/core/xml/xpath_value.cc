@@ -27,11 +27,13 @@
 #include "third_party/blink/renderer/core/xml/xpath_value.h"
 
 #include <limits>
+
 #include "third_party/blink/renderer/core/xml/xpath_expression_node.h"
 #include "third_party/blink/renderer/core/xml/xpath_util.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 namespace xpath {
@@ -82,7 +84,6 @@ bool Value::ToBoolean() const {
       return !data_->string_.empty();
   }
   NOTREACHED();
-  return false;
 }
 
 double Value::ToNumber() const {
@@ -103,17 +104,13 @@ double Value::ToNumber() const {
           return std::numeric_limits<double>::quiet_NaN();
       }
 
-      bool can_convert;
-      double value = str.ToDouble(&can_convert);
-      if (can_convert)
-        return value;
-      return std::numeric_limits<double>::quiet_NaN();
+      return StringToDouble(str).value_or(
+          std::numeric_limits<double>::quiet_NaN());
     }
     case kBooleanValue:
       return bool_;
   }
   NOTREACHED();
-  return 0.0;
 }
 
 String Value::ToString() const {
@@ -133,10 +130,9 @@ String Value::ToString() const {
         return std::signbit(number_) ? "-Infinity" : "Infinity";
       return String::Number(number_);
     case kBooleanValue:
-      return bool_ ? "true" : "false";
+      return String::Boolean(bool_);
   }
   NOTREACHED();
-  return String();
 }
 
 }  // namespace xpath

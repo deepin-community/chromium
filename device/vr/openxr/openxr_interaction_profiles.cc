@@ -84,6 +84,9 @@ GetOpenXrInputProfilesMap() {
             // Oculus says this will soon be the name OpenXR reports
             {"Oculus Quest2",
              {"oculus-touch-v3", "oculus-touch-v2", "oculus-touch",
+              "generic-trigger-squeeze-thumbstick"}},
+            {"Moohan",
+             {"samsung-galaxyxr", "oculus-touch",
               "generic-trigger-squeeze-thumbstick"}}}},
 
           // Valve Index
@@ -109,7 +112,12 @@ GetOpenXrInputProfilesMap() {
 
           // Microsoft Hand Interaction
           {OpenXrInteractionProfileType::kHandSelectGrasp,
-           {{"", {"generic-hand-select-grasp", "generic-hand-select"}}}},
+           {{"",
+             {"generic-hand-select-grasp", "generic-hand-select",
+              "generic-fixed-hand", "generic-trigger-squeeze"}},
+            {kOpenXrHandJointSystem,
+             {"generic-hand-select-grasp", "generic-hand-select",
+              "generic-hand", "generic-trigger-squeeze"}}}},
 
           // Vive Cosmos
           {OpenXrInteractionProfileType::kViveCosmos,
@@ -117,15 +125,21 @@ GetOpenXrInputProfilesMap() {
 
           // EXT Hand Interaction
           {OpenXrInteractionProfileType::kExtHand,
-           {{"", {"generic-hand-select-grasp", "generic-hand-select"}}}},
-
-          // XR_ANDROID_hand_gestures
-          {OpenXrInteractionProfileType::kAndroidHandGestures,
-           {{"", {"generic-hand-select", "generic-button"}}}},
+           {
+               {"",
+                {"generic-hand-select-grasp", "generic-hand-select",
+                 "generic-fixed-hand", "generic-trigger-squeeze"}},
+               {kOpenXrHandJointSystem,
+                {"generic-hand-select-grasp", "generic-hand-select",
+                 "generic-hand", "generic-trigger-squeeze"}},
+           }},
 
           // XR_FB_hand_tracking_aim
           {OpenXrInteractionProfileType::kMetaHandAim,
-           {{"", {"generic-hand-select", "generic-button"}}}},
+           {{"",
+             {"generic-hand-select", "generic-fixed-hand", "generic-button"}},
+            {kOpenXrHandJointSystem,
+             {"generic-hand-select", "generic-hand", "generic-button"}}}},
       });
   return *kInputProfilesMap;
 }

@@ -29,7 +29,7 @@ class TextLineDatasetParams : public DatasetParams {
  public:
   TextLineDatasetParams(std::vector<tstring> filenames,
                         CompressionType compression_type, int64_t buffer_size,
-                        string node_name)
+                        std::string node_name)
       : DatasetParams({DT_STRING}, {PartialTensorShape({})},
                       std::move(node_name)),
         filenames_(std::move(filenames)),
@@ -44,7 +44,8 @@ class TextLineDatasetParams : public DatasetParams {
         CreateTensor<int64_t>(TensorShape({}), {buffer_size_})};
   }
 
-  Status GetInputNames(std::vector<string>* input_names) const override {
+  absl::Status GetInputNames(
+      std::vector<std::string>* input_names) const override {
     input_names->clear();
     *input_names = {
         TextLineDatasetOp::kFileNames,
@@ -54,13 +55,13 @@ class TextLineDatasetParams : public DatasetParams {
     return absl::OkStatus();
   }
 
-  Status GetAttributes(AttributeVector* attr_vector) const override {
+  absl::Status GetAttributes(AttributeVector* attr_vector) const override {
     attr_vector->clear();
     attr_vector->emplace_back("metadata", "");
     return absl::OkStatus();
   }
 
-  string dataset_type() const override {
+  std::string dataset_type() const override {
     return TextLineDatasetOp::kDatasetType;
   }
 
@@ -72,9 +73,9 @@ class TextLineDatasetParams : public DatasetParams {
 
 class TextLineDatasetOpTest : public DatasetOpsTestBase {};
 
-Status CreateTestFiles(const std::vector<tstring>& filenames,
-                       const std::vector<tstring>& contents,
-                       CompressionType compression_type) {
+absl::Status CreateTestFiles(const std::vector<tstring>& filenames,
+                             const std::vector<tstring>& contents,
+                             CompressionType compression_type) {
   if (filenames.size() != contents.size()) {
     return tensorflow::errors::InvalidArgument(
         "The number of files does not match with the contents");
@@ -97,8 +98,8 @@ TextLineDatasetParams TextLineDatasetParams1() {
       absl::StrCat("abcd, EFgH\n", "           \n", "$%^&*()\n")};
   CompressionType compression_type = CompressionType::ZLIB;
   if (!CreateTestFiles(filenames, contents, compression_type).ok()) {
-    VLOG(WARNING) << "Failed to create the test files: "
-                  << absl::StrJoin(filenames, ", ");
+    LOG(WARNING) << "Failed to create the test files: "
+                 << absl::StrJoin(filenames, ", ");
   }
   return TextLineDatasetParams(filenames,
                                /*compression_type=*/compression_type,
@@ -114,8 +115,8 @@ TextLineDatasetParams TextLineDatasetParams2() {
       absl::StrCat("abcd, EFgH\n", "           \n", "$%^&*()\n")};
   CompressionType compression_type = CompressionType::GZIP;
   if (!CreateTestFiles(filenames, contents, compression_type).ok()) {
-    VLOG(WARNING) << "Failed to create the test files: "
-                  << absl::StrJoin(filenames, ", ");
+    LOG(WARNING) << "Failed to create the test files: "
+                 << absl::StrJoin(filenames, ", ");
   }
   return TextLineDatasetParams(filenames,
                                /*compression_type=*/compression_type,
@@ -131,8 +132,8 @@ TextLineDatasetParams TextLineDatasetParams3() {
       absl::StrCat("abcd, EFgH\n", "           \n", "$%^&*()\n")};
   CompressionType compression_type = CompressionType::UNCOMPRESSED;
   if (!CreateTestFiles(filenames, contents, compression_type).ok()) {
-    VLOG(WARNING) << "Failed to create the test files: "
-                  << absl::StrJoin(filenames, ", ");
+    LOG(WARNING) << "Failed to create the test files: "
+                 << absl::StrJoin(filenames, ", ");
   }
   return TextLineDatasetParams(filenames,
                                /*compression_type=*/compression_type,

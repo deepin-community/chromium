@@ -60,7 +60,8 @@ class MediaScrollView : public views::ScrollView,
   ~MediaScrollView() override = default;
 
   // views::ScrollView:
-  gfx::Size CalculatePreferredSize() const override {
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
     return gfx::Size(kMediaViewWidth, media_view_->GetMediaViewHeight());
   }
 
@@ -124,9 +125,6 @@ QuickSettingsMediaView::QuickSettingsMediaView(
   pagination_controller_ = std::make_unique<PaginationController>(
       &pagination_model_, PaginationController::SCROLL_AXIS_HORIZONTAL,
       base::BindRepeating([](ui::EventType) {}));
-
-  SetAccessibleName(l10n_util::GetStringUTF16(
-      IDS_ASH_QUICK_SETTINGS_BUBBLE_MEDIA_CONTROLS_SUB_MENU_ACCESSIBLE_DESCRIPTION));
 }
 
 QuickSettingsMediaView::~QuickSettingsMediaView() = default;
@@ -134,7 +132,8 @@ QuickSettingsMediaView::~QuickSettingsMediaView() = default;
 ///////////////////////////////////////////////////////////////////////////////
 // views::View implementations:
 
-gfx::Size QuickSettingsMediaView::CalculatePreferredSize() const {
+gfx::Size QuickSettingsMediaView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(kMediaViewWidth, GetMediaViewHeight());
 }
 
@@ -142,7 +141,7 @@ void QuickSettingsMediaView::Layout(PassKey) {
   media_scroll_view_->SetBounds(0, 0, kMediaViewWidth, GetMediaViewHeight());
 
   // Place the pagination dots view on top of the media view.
-  gfx::Size pagination_view_size = pagination_view_->CalculatePreferredSize();
+  gfx::Size pagination_view_size = pagination_view_->CalculatePreferredSize({});
   pagination_view_->SetBounds(
       (kMediaViewWidth - pagination_view_size.width()) / 2,
       kPaginationViewHeight, pagination_view_size.width(),
@@ -157,7 +156,7 @@ void QuickSettingsMediaView::OnGestureEvent(ui::GestureEvent* event) {
   // between media items.
   if (pagination_controller_->OnGestureEvent(*event, GetContentsBounds())) {
     event->SetHandled();
-  } else if (event->type() == ui::ET_GESTURE_TAP) {
+  } else if (event->type() == ui::EventType::kGestureTap) {
     // A tap gesture is handled in the same way as a mouse click event. The
     // controller does not need to know the item id for now so we do not need to
     // record it.
@@ -173,7 +172,7 @@ void QuickSettingsMediaView::OnGestureEvent(ui::GestureEvent* event) {
 void QuickSettingsMediaView::ShowItem(
     const std::string& id,
     std::unique_ptr<global_media_controls::MediaItemUIView> item) {
-  DCHECK(!base::Contains(items_, id));
+  DCHECK(!items_.contains(id));
   items_[id] = media_scroll_view_->contents()->AddChildView(std::move(item));
 
   // Set the updated size of the media item based on the number of media items.
@@ -186,7 +185,7 @@ void QuickSettingsMediaView::ShowItem(
 }
 
 void QuickSettingsMediaView::HideItem(const std::string& id) {
-  if (!base::Contains(items_, id)) {
+  if (!items_.contains(id)) {
     return;
   }
   media_scroll_view_->contents()->RemoveChildViewT(items_[id]);
@@ -202,20 +201,19 @@ void QuickSettingsMediaView::UpdateItemOrder(std::list<std::string> ids) {
     return;
   }
 
-  // Remove all the media views for re-ordering.
-  std::map<const std::string,
-           std::unique_ptr<global_media_controls::MediaItemUIView>>
-      media_items;
-  for (auto& item : items_) {
-    media_items[item.first] =
-        media_scroll_view_->contents()->RemoveChildViewT(item.second);
-  }
+  // Note that `items_` might contain entries that are not listed in `ids`.  For
+  // example, frozen entries are likely not included.  We should pretend that
+  // all items not in `ids` are at the end of the list in arbitrary order.
 
-  // Add back the media views given the new order.
+  // Remove each item that's in `ids`, and add it to the appropriate position in
+  // the container.
+  size_t position = 0;
   for (auto& id : ids) {
-    DCHECK(base::Contains(media_items, id));
-    items_[id] = media_scroll_view_->contents()->AddChildView(
-        std::move(media_items[id]));
+    auto item = items_.find(id);
+    CHECK(item != items_.end());
+    auto view = media_scroll_view_->contents()->RemoveChildViewT(item->second);
+    item->second = media_scroll_view_->contents()->AddChildViewAt(
+        std::move(view), position++);
   }
 }
 
@@ -223,6 +221,10 @@ int QuickSettingsMediaView::GetMediaViewHeight() const {
   return (items_.size() > 1)
              ? kMultipleMediaViewHeight
              : global_media_controls::kCrOSMediaItemUpdatedUISize.height();
+}
+
+base::WeakPtr<QuickSettingsMediaView> QuickSettingsMediaView::AsWeakPtr() {
+  return weak_factory_.GetWeakPtr();
 }
 
 BEGIN_METADATA(QuickSettingsMediaView)

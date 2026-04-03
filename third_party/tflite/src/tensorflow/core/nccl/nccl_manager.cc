@@ -28,18 +28,13 @@ limitations under the License.
 #include "tensorflow/core/profiler/lib/annotated_traceme.h"
 #include "tensorflow/core/profiler/lib/connected_traceme.h"
 #include "tensorflow/core/profiler/lib/traceme.h"
-#if GOOGLE_CUDA
-#include "xla/stream_executor/cuda/cuda_activation.h"
-#elif TENSORFLOW_USE_ROCM
+#if TENSORFLOW_USE_ROCM
 #include "tensorflow/core/platform/rocm.h"
 #endif
 
 namespace tensorflow {
 
-#if GOOGLE_CUDA
-using se::cuda::ScopedActivateExecutorContext;
-#elif TENSORFLOW_USE_ROCM
-using se::rocm::ScopedActivateExecutorContext;
+#if TENSORFLOW_USE_ROCM
 // Local hipify of cuda symbols
 #define cudaError_t hipError_t
 #define cudaStream_t hipStream_t
@@ -369,8 +364,8 @@ Status NcclManager::GetCommunicator(NcclManager::Collective* collective,
 #if TENSORFLOW_USE_ROCM
       nccl_stream->stream = collective->participants[i]->context->nccl_stream();
 #else
-      nccl_stream->stream.reset(new se::Stream(executor));
-      nccl_stream->stream->Init();
+      TF_ASSIGN_OR_RETURN(auto stream, executor->CreateStream());
+      nccl_stream->stream = std::move(stream);
 #endif
 
       streams.emplace_back(nccl_stream);
@@ -632,7 +627,7 @@ bool NcclManager::CheckReady(const string& collective_key,
 
 void NcclManager::RunCollective(Collective* collective) {
   // For TraceMeConsumer in Connection::RPCDone().
-  tensorflow::profiler::TraceMeProducer traceme("Schedule Collective");
+  tsl::profiler::TraceMeProducer traceme("Schedule Collective");
   collective->trace_context = traceme.GetContextId();
 
   static mutex collective_mu(LINKER_INITIALIZED);
@@ -652,7 +647,7 @@ void NcclManager::RunCollective(Collective* collective) {
       // Wait to ensure that the kernel that produces the data in the input
       // tensor has finished running before the nccl kernel runs on the
       // communication stream.
-      nccl_stream->stream->ThenWaitFor(p->tensor_stream);
+      status = nccl_stream->stream->WaitFor(p->tensor_stream);
     }
     if (p->root) {
       if (collective->root_rank == -1) {
@@ -721,7 +716,8 @@ void NcclManager::LoopKernelLaunches(NcclStream* nccl_stream) {
 #else
   se::Stream* comm_stream = nccl_stream->stream.get();
 #endif
-  ScopedActivateExecutorContext scoped_context(nccl_stream->executor);
+  std::unique_ptr<se::ActivateContext> scoped_context =
+      nccl_stream->executor->Activate();
   cudaStream_t cu_stream = reinterpret_cast<cudaStream_t>(
       comm_stream->platform_specific_handle().stream);
 
@@ -744,8 +740,8 @@ void NcclManager::LoopKernelLaunches(NcclStream* nccl_stream) {
 
     // Launch the nccl kernel.
     Collective* collective = next_launch.first;
-    tensorflow::profiler::TraceMeConsumer traceme("Run Collective",
-                                                  collective->trace_context);
+    tsl::profiler::TraceMeConsumer traceme("Run Collective",
+                                           collective->trace_context);
 
     ncclDataType_t data_type = ToNcclType(collective->data_type);
     int p_idx = next_launch.second;
@@ -764,7 +760,7 @@ void NcclManager::LoopKernelLaunches(NcclStream* nccl_stream) {
                 << " nccl_comm " << nccl_comm << " comm_stream " << comm_stream
                 << " cuda_stream " << cu_stream;
         profiler::AnnotatedTraceMe traceme([&] {
-          return profiler::TraceMeEncode(
+          return tsl::profiler::TraceMeEncode(
               "ncclAllReduce",
               {{"buffer_size", ComputeBufferSize(p, collective->data_type)},
                {"collective_type", "all_reduce"}});
@@ -801,7 +797,7 @@ void NcclManager::LoopKernelLaunches(NcclStream* nccl_stream) {
                 << " nccl_comm " << nccl_comm << " comm_stream " << comm_stream
                 << " cuda_stream " << cu_stream;
         profiler::AnnotatedTraceMe traceme([&] {
-          return profiler::TraceMeEncode(
+          return tsl::profiler::TraceMeEncode(
               "ncclBroadcast",
               {{"buffer_size", ComputeBufferSize(p, collective->data_type)},
                {"collective_type", "broadcast"}});
@@ -817,7 +813,7 @@ void NcclManager::LoopKernelLaunches(NcclStream* nccl_stream) {
             p->output ? const_cast<char*>(p->output->tensor_data().data())
                       : nullptr;
         profiler::AnnotatedTraceMe traceme([&] {
-          return profiler::TraceMeEncode(
+          return tsl::profiler::TraceMeEncode(
               "buffer_size",
               {{"output_size", ComputeBufferSize(p, collective->data_type)},
                {"collective_type", "reduce"}});
@@ -839,7 +835,7 @@ void NcclManager::LoopKernelLaunches(NcclStream* nccl_stream) {
                 << nccl_comm << " comm_stream " << comm_stream
                 << " cuda_stream " << cu_stream;
         profiler::AnnotatedTraceMe traceme([&] {
-          return profiler::TraceMeEncode(
+          return tsl::profiler::TraceMeEncode(
               "ncclAllGather",
               {{"buffer_size", ComputeBufferSize(p, collective->data_type)},
                {"collective_type", "all_gather"}});
@@ -859,7 +855,7 @@ void NcclManager::LoopKernelLaunches(NcclStream* nccl_stream) {
                 << " nccl_comm " << nccl_comm << " comm_stream " << comm_stream
                 << " cuda_stream " << cu_stream;
         profiler::AnnotatedTraceMe traceme([&] {
-          return profiler::TraceMeEncode(
+          return tsl::profiler::TraceMeEncode(
               "ncclReduceScatter",
               {{"buffer_size", ComputeBufferSize(p, collective->data_type)},
                {"collective_type", "reduce_scatter"}});
@@ -884,7 +880,7 @@ void NcclManager::LoopKernelLaunches(NcclStream* nccl_stream) {
                 << nccl_comm << " comm_stream " << comm_stream
                 << " cuda_stream " << cu_stream;
         profiler::AnnotatedTraceMe traceme([&] {
-          return profiler::TraceMeEncode(
+          return tsl::profiler::TraceMeEncode(
               "ncclAllToAll",
               {{"buffer_size", ComputeBufferSize(p, collective->data_type)},
                {"collective_type", "all_to_all"}});

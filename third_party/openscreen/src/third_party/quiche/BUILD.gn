@@ -13,7 +13,13 @@ if (build_with_chromium) {
   import("//third_party/quiche/src/build/source_list.gni")
 
   config("quiche_internal_config") {
-    cflags = [ "-Wno-sign-compare" ]
+    cflags = [
+      "-Wno-sign-compare",
+
+      # TODO(issuetracker.google.com/325102878): Remove once usage of the deprecated version of
+      # absl::HexStringToBytes have been removed.
+      "-Wno-deprecated-declarations",
+    ]
     cflags_cc = []
     if (is_clang) {
       cflags += [
@@ -27,6 +33,8 @@ if (build_with_chromium) {
       ]
 
       cflags_cc += [ "-Wno-exit-time-destructors" ]
+    } else {
+      cflags += [ "-Wno-return-type" ]
     }
 
     defines = [ "IS_QUICHE_IMPL" ]
@@ -55,7 +63,7 @@ if (build_with_chromium) {
     public_deps = [
       ":net_quic_proto",
       "//third_party/abseil",
-      "//third_party/abseil:abseil_quiche",
+      "//third_party/abseil:abseil_quiche_and_protobuf",
       "//third_party/boringssl",
       "//third_party/googleurl",
     ]

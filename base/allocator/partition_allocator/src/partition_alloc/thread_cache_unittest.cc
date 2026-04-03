@@ -8,15 +8,17 @@
 #include <atomic>
 #include <vector>
 
-#include "build/build_config.h"
+#include "partition_alloc/build_config.h"
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/extended_api.h"
 #include "partition_alloc/internal_allocator.h"
 #include "partition_alloc/partition_address_space.h"
+#include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/thread_annotations.h"
 #include "partition_alloc/partition_alloc_base/threading/platform_thread_for_testing.h"
-#include "partition_alloc/partition_alloc_buildflags.h"
 #include "partition_alloc/partition_alloc_config.h"
 #include "partition_alloc/partition_alloc_for_testing.h"
+#include "partition_alloc/partition_freelist_entry.h"
 #include "partition_alloc/partition_lock.h"
 #include "partition_alloc/partition_root.h"
 #include "partition_alloc/tagging.h"
@@ -31,7 +33,31 @@
 
 namespace partition_alloc {
 
+namespace internal::base {
+
+// For gtest-printers. This `operator<<` makes failures of EXPECT-s, which
+// compare TimeDelta values, human-readable.
+// E.g. Without the `operator<<`,
+//  NextInterval()
+//    Which is: 8-byte object <00-09 3D-00 00-00 00-00>
+// With the `operator<<`,
+//    Which is: 4 s
+std::ostream& operator<<(std::ostream& os, TimeDelta time_delta) {
+  return os << time_delta.InSecondsF() << " s";
+}
+
+}  // namespace internal::base
+
 using BucketDistribution = PartitionRoot::BucketDistribution;
+
+struct ThreadCacheTestParam {
+  BucketDistribution bucket_distribution;
+};
+
+const std::vector<ThreadCacheTestParam> params = {
+    {ThreadCacheTestParam{BucketDistribution::kNeutral}},
+    {ThreadCacheTestParam{BucketDistribution::kNeutral}}};
+
 namespace {
 
 constexpr size_t kSmallSize = 33;  // Must be large enough to fit extras.
@@ -62,21 +88,20 @@ class DeltaCounter {
 // Forbid extras, since they make finding out which bucket is used harder.
 std::unique_ptr<PartitionAllocatorForTesting> CreateAllocator() {
   PartitionOptions opts;
-#if !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
   opts.thread_cache = PartitionOptions::kEnabled;
-#endif  // BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
-  opts.star_scan_quarantine = PartitionOptions::kAllowed;
+  opts.thread_cache_index = internal::kDefaultRootThreadCacheIndex;
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
   std::unique_ptr<PartitionAllocatorForTesting> allocator =
       std::make_unique<PartitionAllocatorForTesting>(opts);
   allocator->root()->UncapEmptySlotSpanMemoryForTesting();
 
   return allocator;
 }
-
 }  // namespace
 
 class PartitionAllocThreadCacheTest
-    : public ::testing::TestWithParam<PartitionRoot::BucketDistribution> {
+    : public ::testing::TestWithParam<ThreadCacheTestParam> {
  public:
   PartitionAllocThreadCacheTest()
       : allocator_(CreateAllocator()), scope_(allocator_->root()) {}
@@ -85,7 +110,7 @@ class PartitionAllocThreadCacheTest
     ThreadCache::SetLargestCachedSize(ThreadCache::kDefaultSizeThreshold);
 
     // Cleanup the global state so next test can recreate ThreadCache.
-    if (ThreadCache::IsTombstone(ThreadCache::Get())) {
+    if (ThreadCache::IsTombstone()) {
       ThreadCache::RemoveTombstoneForTesting();
     }
   }
@@ -93,7 +118,7 @@ class PartitionAllocThreadCacheTest
  protected:
   void SetUp() override {
     PartitionRoot* root = allocator_->root();
-    switch (GetParam()) {
+    switch (GetParam().bucket_distribution) {
       case BucketDistribution::kNeutral:
         root->ResetBucketDistributionForTesting();
         break;
@@ -104,9 +129,6 @@ class PartitionAllocThreadCacheTest
 
     ThreadCacheRegistry::Instance().SetThreadCacheMultiplier(
         ThreadCache::kDefaultMultiplier);
-    ThreadCacheRegistry::Instance().SetPurgingConfiguration(
-        kMinPurgeInterval, kMaxPurgeInterval, kDefaultPurgeInterval,
-        kMinCachedMemoryForPurgingBytes);
     ThreadCache::SetLargestCachedSize(ThreadCache::kLargeSizeThreshold);
 
     // Make sure that enough slot spans have been touched, otherwise cache fill
@@ -136,14 +158,15 @@ class PartitionAllocThreadCacheTest
   // Returns the size of the smallest bucket fitting an allocation of
   // |sizeof(ThreadCache)| bytes.
   size_t GetBucketSizeForThreadCache() {
-    size_t tc_bucket_index = root()->SizeToBucketIndex(
+    size_t tc_bucket_index = PartitionRoot::SizeToBucketIndex(
         sizeof(ThreadCache), PartitionRoot::BucketDistribution::kNeutral);
-    auto* tc_bucket = &root()->buckets[tc_bucket_index];
+    auto* tc_bucket = &PA_UNSAFE_TODO(root()->buckets_[tc_bucket_index]);
     return tc_bucket->slot_size;
   }
 
   static size_t SizeToIndex(size_t size) {
-    return PartitionRoot::SizeToBucketIndex(size, GetParam());
+    return PartitionRoot::SizeToBucketIndex(size,
+                                            GetParam().bucket_distribution);
   }
 
   size_t FillThreadCacheAndReturnIndex(size_t raw_size, size_t count = 1) {
@@ -167,23 +190,24 @@ class PartitionAllocThreadCacheTest
            raw_size <= ThreadCache::kLargeSizeThreshold; raw_size++) {
         FillThreadCacheAndReturnIndex(raw_size, batch);
 
-        if (ThreadCache::Get()->CachedMemory() >= target_cached_memory) {
+        if (root()->thread_cache_for_testing()->CachedMemory() >=
+            target_cached_memory) {
           return;
         }
       }
     }
 
-    ASSERT_GE(ThreadCache::Get()->CachedMemory(), target_cached_memory);
+    ASSERT_GE(root()->thread_cache_for_testing()->CachedMemory(),
+              target_cached_memory);
   }
 
   std::unique_ptr<PartitionAllocatorForTesting> allocator_;
   internal::ThreadCacheProcessScopeForTesting scope_;
 };
 
-INSTANTIATE_TEST_SUITE_P(AlternateBucketDistribution,
+INSTANTIATE_TEST_SUITE_P(AlternateBucketDistributionAndPartitionFreeList,
                          PartitionAllocThreadCacheTest,
-                         ::testing::Values(BucketDistribution::kNeutral,
-                                           BucketDistribution::kDenser));
+                         testing::ValuesIn(params));
 
 TEST_P(PartitionAllocThreadCacheTest, Simple) {
   // There is a cache.
@@ -274,7 +298,6 @@ TEST_P(PartitionAllocThreadCacheTest, Purge) {
 
 TEST_P(PartitionAllocThreadCacheTest, NoCrossPartitionCache) {
   PartitionOptions opts;
-  opts.star_scan_quarantine = PartitionOptions::kAllowed;
   PartitionAllocatorForTesting allocator(opts);
 
   size_t bucket_index = FillThreadCacheAndReturnIndex(kSmallSize);
@@ -328,25 +351,29 @@ TEST_P(PartitionAllocThreadCacheTest, DirectMappedReallocMetrics) {
             root()->get_total_size_of_allocated_bytes());
   EXPECT_EQ(expected_allocated_size, root()->get_max_size_of_allocated_bytes());
 
-  void* ptr = root()->Alloc(
-      root()->AdjustSizeForExtrasSubtract(10 * internal::kMaxBucketed), "");
+  void* ptr = root()->Alloc(root()->AdjustSizeForExtrasSubtract(
+                                10 * BucketIndexLookup::kMaxBucketSize),
+                            "");
 
-  EXPECT_EQ(expected_allocated_size + 10 * internal::kMaxBucketed,
+  EXPECT_EQ(expected_allocated_size + 10 * BucketIndexLookup::kMaxBucketSize,
             root()->get_total_size_of_allocated_bytes());
 
-  void* ptr2 = root()->Realloc(
-      ptr, root()->AdjustSizeForExtrasSubtract(9 * internal::kMaxBucketed), "");
+  void* ptr2 = root()->Realloc(ptr,
+                               root()->AdjustSizeForExtrasSubtract(
+                                   9 * BucketIndexLookup::kMaxBucketSize),
+                               "");
 
   ASSERT_EQ(ptr, ptr2);
-  EXPECT_EQ(expected_allocated_size + 9 * internal::kMaxBucketed,
+  EXPECT_EQ(expected_allocated_size + 9 * BucketIndexLookup::kMaxBucketSize,
             root()->get_total_size_of_allocated_bytes());
 
-  ptr2 = root()->Realloc(
-      ptr, root()->AdjustSizeForExtrasSubtract(10 * internal::kMaxBucketed),
-      "");
+  ptr2 = root()->Realloc(ptr,
+                         root()->AdjustSizeForExtrasSubtract(
+                             10 * BucketIndexLookup::kMaxBucketSize),
+                         "");
 
   ASSERT_EQ(ptr, ptr2);
-  EXPECT_EQ(expected_allocated_size + 10 * internal::kMaxBucketed,
+  EXPECT_EQ(expected_allocated_size + 10 * BucketIndexLookup::kMaxBucketSize,
             root()->get_total_size_of_allocated_bytes());
 
   root()->Free(ptr);
@@ -373,7 +400,7 @@ size_t FillThreadCacheAndReturnIndex(PartitionRoot* root,
   return bucket_index;
 }
 
-// TODO(1151236): To remove callback from partition allocator's DEPS,
+// TODO(crbug.com/40158212): To remove callback from PartitionAlloc's DEPS,
 // rewrite the tests without BindLambdaForTesting and RepeatingClosure.
 // However this makes a little annoying to add more tests using their
 // own threads. Need to support an easier way to implement tests using
@@ -410,8 +437,8 @@ TEST_P(PartitionAllocThreadCacheTest, MultipleThreadCaches) {
   auto* parent_thread_tcache = root()->thread_cache_for_testing();
   ASSERT_TRUE(parent_thread_tcache);
 
-  ThreadDelegateForMultipleThreadCaches delegate(parent_thread_tcache, root(),
-                                                 GetParam());
+  ThreadDelegateForMultipleThreadCaches delegate(
+      parent_thread_tcache, root(), GetParam().bucket_distribution);
 
   internal::base::PlatformThreadHandle thread_handle;
   internal::base::PlatformThreadForTesting::Create(0, &delegate,
@@ -510,9 +537,9 @@ TEST_P(PartitionAllocThreadCacheTest, ThreadCacheRegistry) {
   auto* parent_thread_tcache = root()->thread_cache_for_testing();
   ASSERT_TRUE(parent_thread_tcache);
 
-#if !(BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_ANDROID) ||   \
-      BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)) && \
-    BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if !(PA_BUILDFLAG(IS_APPLE) || PA_BUILDFLAG(IS_ANDROID) ||   \
+      PA_BUILDFLAG(IS_CHROMEOS) || PA_BUILDFLAG(IS_LINUX)) && \
+    PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
   // iOS and MacOS 15 create worker threads internally(start_wqthread).
   // So thread caches are created for the worker threads, because the threads
   // allocate memory for initialization (_dispatch_calloc is invoked).
@@ -531,16 +558,16 @@ TEST_P(PartitionAllocThreadCacheTest, ThreadCacheRegistry) {
 #endif
 
   ThreadDelegateForThreadCacheRegistry delegate(parent_thread_tcache, root(),
-                                                GetParam());
+                                                GetParam().bucket_distribution);
 
   internal::base::PlatformThreadHandle thread_handle;
   internal::base::PlatformThreadForTesting::Create(0, &delegate,
                                                    &thread_handle);
   internal::base::PlatformThreadForTesting::Join(thread_handle);
 
-#if !(BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_ANDROID) ||   \
-      BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)) && \
-    BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if !(PA_BUILDFLAG(IS_APPLE) || PA_BUILDFLAG(IS_ANDROID) ||   \
+      PA_BUILDFLAG(IS_CHROMEOS) || PA_BUILDFLAG(IS_LINUX)) && \
+    PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
   internal::ScopedGuard lock(ThreadCacheRegistry::GetLock());
   EXPECT_EQ(parent_thread_tcache->prev_for_testing(), nullptr);
   EXPECT_EQ(parent_thread_tcache->next_for_testing(), nullptr);
@@ -588,15 +615,17 @@ TEST_P(PartitionAllocThreadCacheTest, RecordStats) {
 
   // Memory footprint.
   ThreadCacheStats stats;
-  ThreadCacheRegistry::Instance().DumpStats(true, &stats);
+  ThreadCacheRegistry::Instance().DumpStats(
+      true, &stats, root()->settings_.thread_cache_index);
   // Bucket was cleared (set to kDefaultCountForMediumBucket / 2) after going
   // above the limit (-1), then refilled by batches (1 + floor(allocations /
   // kFillCountForSmallBucket) times).
   size_t expected_count =
       kDefaultCountForMediumBucket / 2 - 1 +
       (1 + allocations / kFillCountForMediumBucket) * kFillCountForMediumBucket;
-  EXPECT_EQ(root()->buckets[bucket_index].slot_size * expected_count,
-            stats.bucket_total_memory);
+  EXPECT_EQ(
+      PA_UNSAFE_TODO(root()->buckets_[bucket_index]).slot_size * expected_count,
+      stats.bucket_total_memory);
   EXPECT_EQ(sizeof(ThreadCache), stats.metadata_overhead);
 }
 
@@ -621,11 +650,12 @@ class ThreadDelegateForMultipleThreadCachesAccounting
         FillThreadCacheAndReturnIndex(root_, kMediumSize, bucket_distribution_);
 
     ThreadCacheStats stats;
-    ThreadCacheRegistry::Instance().DumpStats(false, &stats);
+    ThreadCacheRegistry::Instance().DumpStats(
+        false, &stats, root_->settings_.thread_cache_index);
     // 2* for this thread and the parent one.
-    EXPECT_EQ(
-        2 * root_->buckets[bucket_index].slot_size * kFillCountForMediumBucket,
-        stats.bucket_total_memory - wqthread_stats_.bucket_total_memory);
+    EXPECT_EQ(2 * PA_UNSAFE_TODO(root_->buckets_[bucket_index]).slot_size *
+                  kFillCountForMediumBucket,
+              stats.bucket_total_memory - wqthread_stats_.bucket_total_memory);
     EXPECT_EQ(2 * sizeof(ThreadCache),
               stats.metadata_overhead - wqthread_stats_.metadata_overhead);
 
@@ -647,9 +677,9 @@ class ThreadDelegateForMultipleThreadCachesAccounting
 
 TEST_P(PartitionAllocThreadCacheTest, MultipleThreadCachesAccounting) {
   ThreadCacheStats wqthread_stats{0};
-#if (BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) || \
-     BUILDFLAG(IS_LINUX)) &&                                                   \
-    BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if (PA_BUILDFLAG(IS_APPLE) || PA_BUILDFLAG(IS_ANDROID) ||   \
+     PA_BUILDFLAG(IS_CHROMEOS) || PA_BUILDFLAG(IS_LINUX)) && \
+    PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
   {
     // iOS and MacOS 15 create worker threads internally(start_wqthread).
     // So thread caches are created for the worker threads, because the threads
@@ -661,11 +691,13 @@ TEST_P(PartitionAllocThreadCacheTest, MultipleThreadCachesAccounting) {
     // non-joinable thread at InotifyReader::StartThread(). The thread will
     // be still running after the tests are finished. We need to count
     // the joinable threads here.
-    ThreadCacheRegistry::Instance().DumpStats(false, &wqthread_stats);
+    ThreadCacheRegistry::Instance().DumpStats(
+        false, &wqthread_stats, root()->settings_.thread_cache_index);
 
     // Remove this thread's thread cache stats from wqthread_stats.
     ThreadCacheStats this_stats;
-    ThreadCacheRegistry::Instance().DumpStats(true, &this_stats);
+    ThreadCacheRegistry::Instance().DumpStats(
+        true, &this_stats, root()->settings_.thread_cache_index);
 
     wqthread_stats.alloc_count -= this_stats.alloc_count;
     wqthread_stats.metadata_overhead -= this_stats.metadata_overhead;
@@ -677,7 +709,7 @@ TEST_P(PartitionAllocThreadCacheTest, MultipleThreadCachesAccounting) {
       root()->thread_cache_for_testing()->stats_for_testing().alloc_count;
 
   ThreadDelegateForMultipleThreadCachesAccounting delegate(
-      root(), wqthread_stats, alloc_count, GetParam());
+      root(), wqthread_stats, alloc_count, GetParam().bucket_distribution);
 
   internal::base::PlatformThreadHandle thread_handle;
   internal::base::PlatformThreadForTesting::Create(0, &delegate,
@@ -686,13 +718,6 @@ TEST_P(PartitionAllocThreadCacheTest, MultipleThreadCachesAccounting) {
 }
 
 #endif  // PA_CONFIG(THREAD_CACHE_ENABLE_STATISTICS)
-
-// TODO(https://crbug.com/1287799): Flaky on IOS.
-#if BUILDFLAG(IS_IOS)
-#define MAYBE_PurgeAll DISABLED_PurgeAll
-#else
-#define MAYBE_PurgeAll PurgeAll
-#endif
 
 namespace {
 
@@ -745,7 +770,7 @@ class ThreadDelegateForPurgeAll
 
 }  // namespace
 
-TEST_P(PartitionAllocThreadCacheTest, MAYBE_PurgeAll)
+TEST_P(PartitionAllocThreadCacheTest, PurgeAll)
 PA_NO_THREAD_SAFETY_ANALYSIS {
   std::atomic<bool> other_thread_started{false};
   std::atomic<bool> purge_called{false};
@@ -754,9 +779,9 @@ PA_NO_THREAD_SAFETY_ANALYSIS {
   ThreadCache* this_thread_tcache = root()->thread_cache_for_testing();
   ThreadCache* other_thread_tcache = nullptr;
 
-  ThreadDelegateForPurgeAll delegate(root(), other_thread_tcache,
-                                     other_thread_started, purge_called,
-                                     bucket_index, GetParam());
+  ThreadDelegateForPurgeAll delegate(
+      root(), other_thread_tcache, other_thread_started, purge_called,
+      bucket_index, GetParam().bucket_distribution);
   internal::base::PlatformThreadHandle thread_handle;
   internal::base::PlatformThreadForTesting::Create(0, &delegate,
                                                    &thread_handle);
@@ -782,46 +807,48 @@ PA_NO_THREAD_SAFETY_ANALYSIS {
 
 TEST_P(PartitionAllocThreadCacheTest, PeriodicPurge) {
   auto& registry = ThreadCacheRegistry::Instance();
-  auto NextInterval = [&registry]() {
+  auto NextInterval = [&registry] {
     return internal::base::Microseconds(
         registry.GetPeriodicPurgeNextIntervalInMicroseconds());
   };
 
-  EXPECT_EQ(NextInterval(), registry.default_purge_interval());
+  EXPECT_EQ(NextInterval(), ThreadCacheRegistry::kDefaultPurgeInterval);
 
   // Small amount of memory, the period gets longer.
-  auto* tcache = ThreadCache::Get();
+  auto* tcache = allocator_->root()->thread_cache_for_testing();
   ASSERT_LT(tcache->CachedMemory(),
-            registry.min_cached_memory_for_purging_bytes());
+            ThreadCacheRegistry::kMinCachedMemoryForPurgingBytes);
   registry.RunPeriodicPurge();
-  EXPECT_EQ(NextInterval(), 2 * registry.default_purge_interval());
+  EXPECT_EQ(NextInterval(), 2 * ThreadCacheRegistry::kDefaultPurgeInterval);
   registry.RunPeriodicPurge();
-  EXPECT_EQ(NextInterval(), 4 * registry.default_purge_interval());
+  EXPECT_EQ(NextInterval(), 4 * ThreadCacheRegistry::kDefaultPurgeInterval);
 
   // Check that the purge interval is clamped at the maximum value.
-  while (NextInterval() < registry.max_purge_interval()) {
+  while (NextInterval() < ThreadCacheRegistry::kMaxPurgeInterval) {
     registry.RunPeriodicPurge();
   }
   registry.RunPeriodicPurge();
 
   // Not enough memory to decrease the interval.
-  FillThreadCacheWithMemory(registry.min_cached_memory_for_purging_bytes() + 1);
+  FillThreadCacheWithMemory(
+      ThreadCacheRegistry::kMinCachedMemoryForPurgingBytes + 1);
   registry.RunPeriodicPurge();
-  EXPECT_EQ(NextInterval(), registry.max_purge_interval());
+  EXPECT_EQ(NextInterval(), ThreadCacheRegistry::kMaxPurgeInterval);
 
-  FillThreadCacheWithMemory(2 * registry.min_cached_memory_for_purging_bytes() +
-                            1);
+  FillThreadCacheWithMemory(
+      2 * ThreadCacheRegistry::kMinCachedMemoryForPurgingBytes + 1);
   registry.RunPeriodicPurge();
-  EXPECT_EQ(NextInterval(), registry.max_purge_interval() / 2);
+  EXPECT_EQ(NextInterval(), ThreadCacheRegistry::kMaxPurgeInterval / 2);
 
   // Enough memory, interval doesn't change.
-  FillThreadCacheWithMemory(registry.min_cached_memory_for_purging_bytes());
+  FillThreadCacheWithMemory(
+      ThreadCacheRegistry::kMinCachedMemoryForPurgingBytes);
   registry.RunPeriodicPurge();
-  EXPECT_EQ(NextInterval(), registry.max_purge_interval() / 2);
+  EXPECT_EQ(NextInterval(), ThreadCacheRegistry::kMaxPurgeInterval / 2);
 
   // No cached memory, increase the interval.
   registry.RunPeriodicPurge();
-  EXPECT_EQ(NextInterval(), registry.max_purge_interval());
+  EXPECT_EQ(NextInterval(), ThreadCacheRegistry::kMaxPurgeInterval);
 
   // Cannot test the very large size with only one thread, this is tested below
   // in the multiple threads test.
@@ -840,13 +867,15 @@ void FillThreadCacheWithMemory(PartitionRoot* root,
           root, root->AdjustSizeForExtrasAdd(allocation_size),
           bucket_distribution, batch);
 
-      if (ThreadCache::Get()->CachedMemory() >= target_cached_memory) {
+      if (root->thread_cache_for_testing()->CachedMemory() >=
+          target_cached_memory) {
         return;
       }
     }
   }
 
-  ASSERT_GE(ThreadCache::Get()->CachedMemory(), target_cached_memory);
+  ASSERT_GE(root->thread_cache_for_testing()->CachedMemory(),
+            target_cached_memory);
 }
 
 class ThreadDelegateForPeriodicPurgeSumsOverAllThreads
@@ -863,10 +892,9 @@ class ThreadDelegateForPeriodicPurgeSumsOverAllThreads
         bucket_distribution_(bucket_distribution) {}
 
   void ThreadMain() override {
-    FillThreadCacheWithMemory(root_,
-                              5 * ThreadCacheRegistry::Instance()
-                                      .min_cached_memory_for_purging_bytes(),
-                              bucket_distribution_);
+    FillThreadCacheWithMemory(
+        root_, 5 * ThreadCacheRegistry::kMinCachedMemoryForPurgingBytes,
+        bucket_distribution_);
     allocations_done_.fetch_add(1, std::memory_order_release);
 
     // This thread needs to be alive when the next periodic purge task runs.
@@ -887,36 +915,37 @@ class ThreadDelegateForPeriodicPurgeSumsOverAllThreads
 TEST_P(PartitionAllocThreadCacheTest,
        DISABLED_PeriodicPurgeSumsOverAllThreads) {
   auto& registry = ThreadCacheRegistry::Instance();
-  auto NextInterval = [&registry]() {
+  auto NextInterval = [&registry] {
     return internal::base::Microseconds(
         registry.GetPeriodicPurgeNextIntervalInMicroseconds());
   };
-  EXPECT_EQ(NextInterval(), registry.default_purge_interval());
+  EXPECT_EQ(NextInterval(), ThreadCacheRegistry::kDefaultPurgeInterval);
 
   // Small amount of memory, the period gets longer.
-  auto* tcache = ThreadCache::Get();
+  auto* tcache = allocator_->root()->thread_cache_for_testing();
   ASSERT_LT(tcache->CachedMemory(),
-            registry.min_cached_memory_for_purging_bytes());
+            ThreadCacheRegistry::kMinCachedMemoryForPurgingBytes);
   registry.RunPeriodicPurge();
-  EXPECT_EQ(NextInterval(), 2 * registry.default_purge_interval());
+  EXPECT_EQ(NextInterval(), 2 * ThreadCacheRegistry::kDefaultPurgeInterval);
   registry.RunPeriodicPurge();
-  EXPECT_EQ(NextInterval(), 4 * registry.default_purge_interval());
+  EXPECT_EQ(NextInterval(), 4 * ThreadCacheRegistry::kDefaultPurgeInterval);
 
   // Check that the purge interval is clamped at the maximum value.
-  while (NextInterval() < registry.max_purge_interval()) {
+  while (NextInterval() < ThreadCacheRegistry::kMaxPurgeInterval) {
     registry.RunPeriodicPurge();
   }
   registry.RunPeriodicPurge();
 
   // Not enough memory on this thread to decrease the interval.
-  FillThreadCacheWithMemory(registry.min_cached_memory_for_purging_bytes() / 2);
+  FillThreadCacheWithMemory(
+      ThreadCacheRegistry::kMinCachedMemoryForPurgingBytes / 2);
   registry.RunPeriodicPurge();
-  EXPECT_EQ(NextInterval(), registry.max_purge_interval());
+  EXPECT_EQ(NextInterval(), ThreadCacheRegistry::kMaxPurgeInterval);
 
   std::atomic<int> allocations_done{0};
   std::atomic<bool> can_finish{false};
   ThreadDelegateForPeriodicPurgeSumsOverAllThreads delegate(
-      root(), allocations_done, can_finish, GetParam());
+      root(), allocations_done, can_finish, GetParam().bucket_distribution);
 
   internal::base::PlatformThreadHandle thread_handle;
   internal::base::PlatformThreadForTesting::Create(0, &delegate,
@@ -931,20 +960,14 @@ TEST_P(PartitionAllocThreadCacheTest,
 
   // Many allocations on the other thread.
   registry.RunPeriodicPurge();
-  EXPECT_EQ(NextInterval(), registry.default_purge_interval());
+  EXPECT_EQ(NextInterval(), ThreadCacheRegistry::kDefaultPurgeInterval);
 
   can_finish.store(true, std::memory_order_release);
   internal::base::PlatformThreadForTesting::Join(thread_handle);
   internal::base::PlatformThreadForTesting::Join(thread_handle_2);
 }
 
-// TODO(https://crbug.com/1287799): Flaky on IOS.
-#if BUILDFLAG(IS_IOS)
-#define MAYBE_DynamicCountPerBucket DISABLED_DynamicCountPerBucket
-#else
-#define MAYBE_DynamicCountPerBucket DynamicCountPerBucket
-#endif
-TEST_P(PartitionAllocThreadCacheTest, MAYBE_DynamicCountPerBucket) {
+TEST_P(PartitionAllocThreadCacheTest, DynamicCountPerBucket) {
   auto* tcache = root()->thread_cache_for_testing();
   size_t bucket_index =
       FillThreadCacheAndReturnIndex(kMediumSize, kDefaultCountForMediumBucket);
@@ -989,7 +1012,8 @@ TEST_P(PartitionAllocThreadCacheTest, DynamicCountPerBucketClamping) {
   for (size_t i = 0; i < ThreadCache::kBucketCount; i++) {
     // Invalid bucket.
     if (!tcache->bucket_for_testing(i).limit.load(std::memory_order_relaxed)) {
-      EXPECT_EQ(root()->buckets[i].active_slot_spans_head, nullptr);
+      EXPECT_EQ(PA_UNSAFE_TODO(root()->buckets_[i]).active_slot_spans_head,
+                nullptr);
       continue;
     }
     EXPECT_GE(
@@ -1002,7 +1026,8 @@ TEST_P(PartitionAllocThreadCacheTest, DynamicCountPerBucketClamping) {
   for (size_t i = 0; i < ThreadCache::kBucketCount; i++) {
     // Invalid bucket.
     if (!tcache->bucket_for_testing(i).limit.load(std::memory_order_relaxed)) {
-      EXPECT_EQ(root()->buckets[i].active_slot_spans_head, nullptr);
+      EXPECT_EQ(PA_UNSAFE_TODO(root()->buckets_[i]).active_slot_spans_head,
+                nullptr);
       continue;
     }
     EXPECT_LT(
@@ -1010,15 +1035,6 @@ TEST_P(PartitionAllocThreadCacheTest, DynamicCountPerBucketClamping) {
         0xff);
   }
 }
-
-// TODO(https://crbug.com/1287799): Flaky on IOS.
-#if BUILDFLAG(IS_IOS)
-#define MAYBE_DynamicCountPerBucketMultipleThreads \
-  DISABLED_DynamicCountPerBucketMultipleThreads
-#else
-#define MAYBE_DynamicCountPerBucketMultipleThreads \
-  DynamicCountPerBucketMultipleThreads
-#endif
 
 namespace {
 
@@ -1068,8 +1084,7 @@ class ThreadDelegateForDynamicCountPerBucketMultipleThreads
 
 }  // namespace
 
-TEST_P(PartitionAllocThreadCacheTest,
-       MAYBE_DynamicCountPerBucketMultipleThreads) {
+TEST_P(PartitionAllocThreadCacheTest, DynamicCountPerBucketMultipleThreads) {
   std::atomic<bool> other_thread_started{false};
   std::atomic<bool> threshold_changed{false};
 
@@ -1086,7 +1101,7 @@ TEST_P(PartitionAllocThreadCacheTest,
 
   ThreadDelegateForDynamicCountPerBucketMultipleThreads delegate(
       root(), other_thread_started, threshold_changed, bucket_index,
-      GetParam());
+      GetParam().bucket_distribution);
 
   internal::base::PlatformThreadHandle thread_handle;
   internal::base::PlatformThreadForTesting::Create(0, &delegate,
@@ -1173,7 +1188,7 @@ TEST_P(PartitionAllocThreadCacheTest, ClearFromTail) {
     uint8_t count = 0;
     auto* head = tcache->bucket_for_testing(index).freelist_head;
     while (head) {
-      head = head->GetNextForThreadCache<true>(
+      head = head->GetNextForThreadCache(
           tcache->bucket_for_testing(index).slot_size);
       count++;
     }
@@ -1196,13 +1211,7 @@ TEST_P(PartitionAllocThreadCacheTest, ClearFromTail) {
                          tcache->bucket_for_testing(index).freelist_head));
 }
 
-// TODO(https://crbug.com/1287799): Flaky on IOS.
-#if BUILDFLAG(IS_IOS)
-#define MAYBE_Bookkeeping DISABLED_Bookkeeping
-#else
-#define MAYBE_Bookkeeping Bookkeeping
-#endif
-TEST_P(PartitionAllocThreadCacheTest, MAYBE_Bookkeeping) {
+TEST_P(PartitionAllocThreadCacheTest, Bookkeeping) {
   void* arr[kFillCountForMediumBucket] = {};
   auto* tcache = root()->thread_cache_for_testing();
 
@@ -1213,8 +1222,8 @@ TEST_P(PartitionAllocThreadCacheTest, MAYBE_Bookkeeping) {
   size_t expected_allocated_size = 0;
   size_t expected_committed_size = 0;
 
-  EXPECT_EQ(expected_committed_size, root()->total_size_of_committed_pages);
-  EXPECT_EQ(expected_committed_size, root()->max_size_of_committed_pages);
+  EXPECT_EQ(expected_committed_size, root()->total_size_of_committed_pages_);
+  EXPECT_EQ(expected_committed_size, root()->max_size_of_committed_pages_);
   EXPECT_EQ(expected_allocated_size,
             root()->get_total_size_of_allocated_bytes());
   EXPECT_EQ(expected_allocated_size, root()->get_max_size_of_allocated_bytes());
@@ -1222,15 +1231,16 @@ TEST_P(PartitionAllocThreadCacheTest, MAYBE_Bookkeeping) {
   void* ptr =
       root()->Alloc(root()->AdjustSizeForExtrasSubtract(kMediumSize), "");
 
-  auto* medium_bucket = root()->buckets + SizeToIndex(kMediumSize);
+  auto* medium_bucket =
+      PA_UNSAFE_TODO(root()->buckets_ + SizeToIndex(kMediumSize));
   size_t medium_alloc_size = medium_bucket->slot_size;
   expected_allocated_size += medium_alloc_size;
   expected_committed_size += kUseLazyCommit
                                  ? internal::SystemPageSize()
                                  : medium_bucket->get_bytes_per_span();
 
-  EXPECT_EQ(expected_committed_size, root()->total_size_of_committed_pages);
-  EXPECT_EQ(expected_committed_size, root()->max_size_of_committed_pages);
+  EXPECT_EQ(expected_committed_size, root()->total_size_of_committed_pages_);
+  EXPECT_EQ(expected_committed_size, root()->max_size_of_committed_pages_);
   EXPECT_EQ(expected_allocated_size,
             root()->get_total_size_of_allocated_bytes());
   EXPECT_EQ(expected_allocated_size, root()->get_max_size_of_allocated_bytes());
@@ -1239,10 +1249,10 @@ TEST_P(PartitionAllocThreadCacheTest, MAYBE_Bookkeeping) {
 
   // These allocations all come from the thread-cache.
   for (size_t i = 0; i < kFillCountForMediumBucket; i++) {
-    arr[i] =
+    PA_UNSAFE_TODO(arr[i]) =
         root()->Alloc(root()->AdjustSizeForExtrasSubtract(kMediumSize), "");
-    EXPECT_EQ(expected_committed_size, root()->total_size_of_committed_pages);
-    EXPECT_EQ(expected_committed_size, root()->max_size_of_committed_pages);
+    EXPECT_EQ(expected_committed_size, root()->total_size_of_committed_pages_);
+    EXPECT_EQ(expected_committed_size, root()->max_size_of_committed_pages_);
     EXPECT_EQ(expected_allocated_size,
               root()->get_total_size_of_allocated_bytes());
     EXPECT_EQ(expected_allocated_size,
@@ -1261,90 +1271,6 @@ TEST_P(PartitionAllocThreadCacheTest, MAYBE_Bookkeeping) {
   EXPECT_EQ(root()->get_total_size_of_allocated_bytes(),
             expected_allocated_size);
   tcache->Purge();
-  EXPECT_EQ(
-      internal::InternalAllocatorRoot().get_total_size_of_allocated_bytes(),
-      GetBucketSizeForThreadCache());
-}
-
-TEST_P(PartitionAllocThreadCacheTest, TryPurgeNoAllocs) {
-  auto* tcache = root()->thread_cache_for_testing();
-  tcache->TryPurge();
-}
-
-TEST_P(PartitionAllocThreadCacheTest, TryPurgeMultipleCorrupted) {
-  auto* tcache = root()->thread_cache_for_testing();
-
-  void* ptr =
-      root()->Alloc(root()->AdjustSizeForExtrasSubtract(kMediumSize), "");
-
-  auto* medium_bucket = root()->buckets + SizeToIndex(kMediumSize);
-
-  auto* curr = medium_bucket->active_slot_spans_head->get_freelist_head();
-  curr = curr->GetNextForThreadCache<true>(kMediumSize);
-  curr->CorruptNextForTesting(0x12345678);
-  tcache->TryPurge();
-  curr->SetNext(nullptr);
-  root()->Free(ptr);
-}
-
-TEST(AlternateBucketDistributionTest, SizeToIndex) {
-  using internal::BucketIndexLookup;
-
-  // The first 12 buckets are the same as the default bucket index.
-  for (size_t i = 1 << 0; i < 1 << 8; i <<= 1) {
-    for (size_t offset = 0; offset < 4; offset++) {
-      size_t n = i * (4 + offset) / 4;
-      EXPECT_EQ(BucketIndexLookup::GetIndex(n),
-                BucketIndexLookup::GetIndexForNeutralBuckets(n));
-    }
-  }
-
-  // The alternate bucket distribution is different in the middle values.
-  //
-  // For each order, the top two buckets are removed compared with the default
-  // distribution. Values that would be allocated in those two buckets are
-  // instead allocated in the next power of two bucket.
-  //
-  // The first two buckets (each power of two and the next bucket up) remain
-  // the same between the two bucket distributions.
-  size_t expected_index = BucketIndexLookup::GetIndex(1 << 8);
-  for (size_t i = 1 << 8; i < internal::kHighThresholdForAlternateDistribution;
-       i <<= 1) {
-    // The first two buckets in the order should match up to the normal bucket
-    // distribution.
-    for (size_t offset = 0; offset < 2; offset++) {
-      size_t n = i * (4 + offset) / 4;
-      EXPECT_EQ(BucketIndexLookup::GetIndex(n),
-                BucketIndexLookup::GetIndexForNeutralBuckets(n));
-      EXPECT_EQ(BucketIndexLookup::GetIndex(n), expected_index);
-      expected_index += 2;
-    }
-    // The last two buckets in the order are "rounded up" to the same bucket
-    // as the next power of two.
-    expected_index += 4;
-    for (size_t offset = 2; offset < 4; offset++) {
-      size_t n = i * (4 + offset) / 4;
-      // These two are rounded up in the alternate distribution, so we expect
-      // the bucket index to be larger than the bucket index for the same
-      // allocation under the default distribution.
-      EXPECT_GT(BucketIndexLookup::GetIndex(n),
-                BucketIndexLookup::GetIndexForNeutralBuckets(n));
-      // We expect both allocations in this loop to be rounded up to the next
-      // power of two bucket.
-      EXPECT_EQ(BucketIndexLookup::GetIndex(n), expected_index);
-    }
-  }
-
-  // The rest of the buckets all match up exactly with the existing
-  // bucket distribution.
-  for (size_t i = internal::kHighThresholdForAlternateDistribution;
-       i < internal::kMaxBucketed; i <<= 1) {
-    for (size_t offset = 0; offset < 4; offset++) {
-      size_t n = i * (4 + offset) / 4;
-      EXPECT_EQ(BucketIndexLookup::GetIndex(n),
-                BucketIndexLookup::GetIndexForNeutralBuckets(n));
-    }
-  }
 }
 
 TEST_P(PartitionAllocThreadCacheTest, AllocationRecording) {
@@ -1362,19 +1288,19 @@ TEST_P(PartitionAllocThreadCacheTest, AllocationRecording) {
   void* ptr =
       root()->Alloc(root()->AdjustSizeForExtrasSubtract(kSmallSize), "");
   ASSERT_TRUE(ptr);
-  expected_total_size += root()->GetUsableSize(ptr);
+  expected_total_size += PartitionRoot::GetUsableSize(ptr);
   void* ptr2 = root()->Alloc(
       root()->AdjustSizeForExtrasSubtract(kBucketedNotCached), "");
   ASSERT_TRUE(ptr2);
-  expected_total_size += root()->GetUsableSize(ptr2);
+  expected_total_size += PartitionRoot::GetUsableSize(ptr2);
   void* ptr3 =
       root()->Alloc(root()->AdjustSizeForExtrasSubtract(kDirectMapped), "");
   ASSERT_TRUE(ptr3);
-  expected_total_size += root()->GetUsableSize(ptr3);
+  expected_total_size += PartitionRoot::GetUsableSize(ptr3);
   void* ptr4 =
       root()->Alloc(root()->AdjustSizeForExtrasSubtract(kSingleSlot), "");
   ASSERT_TRUE(ptr4);
-  expected_total_size += root()->GetUsableSize(ptr4);
+  expected_total_size += PartitionRoot::GetUsableSize(ptr4);
 
   EXPECT_EQ(4u, tcache->thread_alloc_stats().alloc_count);
   EXPECT_EQ(expected_total_size, tcache->thread_alloc_stats().alloc_total_size);
@@ -1423,7 +1349,7 @@ TEST_P(PartitionAllocThreadCacheTest, AllocationRecordingAligned) {
     void* ptr = root()->AlignedAlloc(alignment, requested_size);
     ASSERT_TRUE(ptr);
     alloc_count++;
-    total_size += root()->GetUsableSize(ptr);
+    total_size += PartitionRoot::GetUsableSize(ptr);
     EXPECT_EQ(alloc_count, tcache->thread_alloc_stats().alloc_count);
     EXPECT_EQ(total_size, tcache->thread_alloc_stats().alloc_total_size);
     root()->Free(ptr);
@@ -1462,14 +1388,14 @@ TEST_P(PartitionAllocThreadCacheTest, AllocationRecordingRealloc) {
     void* ptr = root()->Alloc(size);
     ASSERT_TRUE(ptr);
     alloc_count++;
-    size_t usable_size = root()->GetUsableSize(ptr);
+    size_t usable_size = PartitionRoot::GetUsableSize(ptr);
     total_alloc_size += usable_size;
 
     ptr = root()->Realloc(ptr, new_size, "");
     ASSERT_TRUE(ptr);
     total_dealloc_size += usable_size;
     dealloc_count++;
-    usable_size = root()->GetUsableSize(ptr);
+    usable_size = PartitionRoot::GetUsableSize(ptr);
     total_alloc_size += usable_size;
     alloc_count++;
 
@@ -1492,45 +1418,6 @@ TEST_P(PartitionAllocThreadCacheTest, AllocationRecordingRealloc) {
   }
   EXPECT_EQ(tcache->thread_alloc_stats().alloc_total_size,
             tcache->thread_alloc_stats().dealloc_total_size);
-}
-
-// This test makes sure it's safe to switch to the alternate bucket distribution
-// at runtime. This is intended to happen once, near the start of Chrome,
-// once we have enabled features.
-TEST(AlternateBucketDistributionTest, SwitchBeforeAlloc) {
-  std::unique_ptr<PartitionAllocatorForTesting> allocator(CreateAllocator());
-  PartitionRoot* root = allocator->root();
-
-  root->SwitchToDenserBucketDistribution();
-  constexpr size_t n = (1 << 12) * 3 / 2;
-  EXPECT_NE(internal::BucketIndexLookup::GetIndex(n),
-            internal::BucketIndexLookup::GetIndexForNeutralBuckets(n));
-
-  void* ptr = root->Alloc(n);
-
-  root->ResetBucketDistributionForTesting();
-
-  root->Free(ptr);
-}
-
-// This test makes sure it's safe to switch to the alternate bucket distribution
-// at runtime. This is intended to happen once, near the start of Chrome,
-// once we have enabled features.
-TEST(AlternateBucketDistributionTest, SwitchAfterAlloc) {
-  std::unique_ptr<PartitionAllocatorForTesting> allocator(CreateAllocator());
-  constexpr size_t n = (1 << 12) * 3 / 2;
-  EXPECT_NE(internal::BucketIndexLookup::GetIndex(n),
-            internal::BucketIndexLookup::GetIndexForNeutralBuckets(n));
-
-  PartitionRoot* root = allocator->root();
-  void* ptr = root->Alloc(n);
-
-  root->SwitchToDenserBucketDistribution();
-
-  void* ptr2 = root->Alloc(n);
-
-  root->Free(ptr2);
-  root->Free(ptr);
 }
 
 }  // namespace partition_alloc

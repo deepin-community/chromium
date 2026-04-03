@@ -9,13 +9,12 @@
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "chrome/browser/ash/file_system_provider/mount_path_util.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system_interface.h"
 #include "chrome/browser/ash/fileapi/fallback_copy_in_foreign_file.h"
@@ -109,7 +108,7 @@ void ReadDirectoryOnUIThread(
   util::FileSystemURLParser parser(url);
   if (!parser.Parse()) {
     callback.Run(base::File::FILE_ERROR_INVALID_OPERATION,
-                 storage::AsyncFileUtil::EntryList(), false /* has_more */);
+                 storage::AsyncFileUtil::EntryList(), /*has_more=*/false);
     return;
   }
 
@@ -124,10 +123,9 @@ void OnReadDirectory(storage::AsyncFileUtil::ReadDirectoryCallback callback,
   std::erase_if(entry_list, [](const filesystem::mojom::DirectoryEntry& entry) {
     return !filesystem::mojom::IsKnownEnumValue(entry.type) ||
            entry.name.empty() || entry.name.value() == "." ||
-           entry.name.value() == ".." ||
-           base::Contains(entry.name.value(), '\0') ||
-           base::Contains(entry.name.value(), '/') ||
-           base::Contains(entry.name.value(), '\\');
+           entry.name.value() == ".." || entry.name.value().contains('\0') ||
+           entry.name.value().contains('/') ||
+           entry.name.value().contains('\\');
   });
 
   content::GetIOThreadTaskRunner({})->PostTask(

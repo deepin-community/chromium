@@ -26,6 +26,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/memory/memory.h"
+#include "absl/status/status.h"
 #include "llvm/Support/ExtensibleRTTI.h"
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/OwningOpRef.h"  // from @llvm-project
@@ -69,7 +70,7 @@ using TensorHandlePtr = tensorflow::Safe_TFE_TensorHandlePtr;
     if (!return_if_not_ok_status.ok()) {                                  \
       RETURN_STATUS((c_status),                                           \
                     static_cast<TF_Code>(return_if_not_ok_status.code()), \
-                    tsl::NullTerminatedMessage(return_if_not_ok_status)); \
+                    absl::StatusMessageAsCStr(return_if_not_ok_status));  \
     }                                                                     \
   }
 
@@ -132,7 +133,7 @@ struct ExecutionFunctions {
 
   // Mesh fingerprint of function_list. Set only when ExecutionFunctions refers
   // to a function for performance reason, since an eager op doesn't use it.
-  uint64 function_mesh_fingerprint = 0;
+  uint64_t function_mesh_fingerprint = 0;
 };
 
 class TensorWithLayoutTf
@@ -299,7 +300,7 @@ class ResourceHandleWithLayout
   // Updates the element layouts for the tensors.
   absl::Status UpdateElementLayouts(const std::vector<Layout>& layouts) {
     dereferenced_element_layouts_.emplace(layouts);
-    return tsl::OkStatus();
+    return absl::OkStatus();
   }
 
   // Updates the local shape and dtype of the tensors.
@@ -307,7 +308,7 @@ class ResourceHandleWithLayout
                                    const DataType& dtype) {
     set_dereferenced_shape(shape);
     set_dereferenced_dtype(dtype);
-    return tsl::OkStatus();
+    return absl::OkStatus();
   }
 
   ConstValueNode* const_value_node() const override { return nullptr; }
@@ -442,8 +443,7 @@ StatusOr<std::unique_ptr<TensorWithLayoutTf>> CreateTensorWithLayout(
 
 template <typename T>
 std::string ShapeToDebugString(const std::vector<T> shape_vector) {
-  std::vector<tensorflow::int64> cast_shape(shape_vector.begin(),
-                                            shape_vector.end());
+  std::vector<int64_t> cast_shape(shape_vector.begin(), shape_vector.end());
   tensorflow::PartialTensorShape shape;
   if (!tensorflow::PartialTensorShape::MakePartialShape(
            cast_shape.data(), cast_shape.size(), &shape)
@@ -580,14 +580,14 @@ StatusOr<std::vector<int64_t>> GetTensorShapeAsVector(
 // Returns the shape of a given tensor.
 StatusOr<std::vector<int64_t>> GetTensorShapeAsVector(TFE_TensorHandle* tensor);
 
-Status InferOutputLayouts(const DTensorOperation& doperation,
-                          const NameAttrList& attributes,
-                          const std::optional<Layout>& default_layout,
-                          tensorflow::Graph* graph,
-                          std::vector<const Layout*>* output_layouts);
+absl::Status InferOutputLayouts(const DTensorOperation& doperation,
+                                const NameAttrList& attributes,
+                                const std::optional<Layout>& default_layout,
+                                tensorflow::Graph* graph,
+                                std::vector<const Layout*>* output_layouts);
 // Creates a Graph with _Arg and _Retval nodes surrounding an
 // `operation_name`-type node.
-Status PrepareGraphForMlir(
+absl::Status PrepareGraphForMlir(
     const ExecutableManager<mlir::OwningOpRef<mlir::ModuleOp>>& module_manager,
     const std::vector<TensorWithLayout*>& inputs,
     const DTensorOperation& doperation,
@@ -608,7 +608,8 @@ StatusOr<ExecutionFunctions> IdentifyAllFunctionsToExecute(
 // be dropped during MLIR lowering.
 // TODO(b/171265131): fix the underlying issue to avoid inserting identity
 // nodes.
-Status MaybeInsertIdentityNodes(const FunctionDef* function_def, Graph* graph);
+absl::Status MaybeInsertIdentityNodes(const FunctionDef* function_def,
+                                      Graph* graph);
 
 // Add DTensor specific function attributes to be compatible with eager runtime.
 void AddDTensorFunctionAttr(FunctionDef& function_def);

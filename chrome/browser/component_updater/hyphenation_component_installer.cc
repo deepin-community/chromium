@@ -4,14 +4,11 @@
 
 #include "chrome/browser/component_updater/hyphenation_component_installer.h"
 
-#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-
-using component_updater::ComponentUpdateService;
 
 namespace {
 
@@ -96,7 +93,7 @@ bool HyphenationComponentInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 HyphenationComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -106,7 +103,7 @@ void HyphenationComponentInstallerPolicy::OnCustomUninstall() {}
 void HyphenationComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   VLOG(1) << "Hyphenation Component ready, version " << version.GetString()
           << " in " << install_dir.value();
   HyphenationDirectory* hyphenation_directory = HyphenationDirectory::Get();
@@ -115,7 +112,7 @@ void HyphenationComponentInstallerPolicy::ComponentReady(
 
 // Called during startup and installation before ComponentReady().
 bool HyphenationComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   return true;
 }
@@ -127,9 +124,8 @@ base::FilePath HyphenationComponentInstallerPolicy::GetRelativeInstallDir()
 
 void HyphenationComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(
-      kHyphenationPublicKeySHA256,
-      kHyphenationPublicKeySHA256 + std::size(kHyphenationPublicKeySHA256));
+  hash->assign(std::begin(kHyphenationPublicKeySHA256),
+               std::end(kHyphenationPublicKeySHA256));
 }
 
 std::string HyphenationComponentInstallerPolicy::GetName() const {

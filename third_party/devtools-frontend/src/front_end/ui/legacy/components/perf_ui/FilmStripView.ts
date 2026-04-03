@@ -1,51 +1,52 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 import * as Common from '../../../../core/common/common.js';
 import * as Host from '../../../../core/host/host.js';
 import * as i18n from '../../../../core/i18n/i18n.js';
-import * as TraceEngine from '../../../../models/trace/trace.js';
+import * as Trace from '../../../../models/trace/trace.js';
 import * as VisualLogging from '../../../visual_logging/visual_logging.js';
 import * as UI from '../../legacy.js';
 
-import filmStripViewStyles from './filmStripView.css.legacy.js';
+import filmStripViewStyles from './filmStripView.css.js';
 
 const UIStrings = {
   /**
-   *@description Element title in Film Strip View of the Performance panel
+   * @description Element title in Film Strip View of the Performance panel
    */
   doubleclickToZoomImageClickTo: 'Doubleclick to zoom image. Click to view preceding requests.',
   /**
-   *@description Aria label for captured screenshots in network panel.
-   *@example {3ms} PH1
+   * @description Aria label for captured screenshots in network panel.
+   * @example {3ms} PH1
    */
   screenshotForSSelectToView: 'Screenshot for {PH1} - select to view preceding requests.',
   /**
-   *@description Text for one or a group of screenshots
+   * @description Text for one or a group of screenshots
    */
   screenshot: 'Screenshot',
   /**
-   *@description Prev button title in Film Strip View of the Performance panel
+   * @description Prev button title in Film Strip View of the Performance panel
    */
   previousFrame: 'Previous frame',
   /**
-   *@description Next button title in Film Strip View of the Performance panel
+   * @description Next button title in Film Strip View of the Performance panel
    */
   nextFrame: 'Next frame',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('ui/legacy/components/perf_ui/FilmStripView.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 export class FilmStripView extends Common.ObjectWrapper.eventMixin<EventTypes, typeof UI.Widget.HBox>(UI.Widget.HBox) {
   private statusLabel: HTMLElement;
-  private zeroTime: TraceEngine.Types.Timing.MilliSeconds = TraceEngine.Types.Timing.MilliSeconds(0);
-  #filmStrip: TraceEngine.Extras.FilmStrip.Data|null = null;
+  private zeroTime: Trace.Types.Timing.Milli = Trace.Types.Timing.Milli(0);
+  #filmStrip: Trace.Extras.FilmStrip.Data|null = null;
 
   constructor() {
-    super(true);
+    super({useShadowDom: true});
     this.registerRequiredCSS(filmStripViewStyles);
     this.contentElement.classList.add('film-strip-view');
-    this.statusLabel = this.contentElement.createChild('div', 'label');
+    this.statusLabel = this.contentElement.createChild('div', 'gray-info-message');
     this.reset();
   }
 
@@ -55,9 +56,9 @@ export class FilmStripView extends Common.ObjectWrapper.eventMixin<EventTypes, t
     }
   }
 
-  setModel(filmStrip: TraceEngine.Extras.FilmStrip.Data): void {
+  setModel(filmStrip: Trace.Extras.FilmStrip.Data): void {
     this.#filmStrip = filmStrip;
-    this.zeroTime = TraceEngine.Helpers.Timing.microSecondsToMilliseconds(filmStrip.zeroTime);
+    this.zeroTime = Trace.Helpers.Timing.microToMilli(filmStrip.zeroTime);
 
     if (!this.#filmStrip.frames.length) {
       this.reset();
@@ -66,10 +67,10 @@ export class FilmStripView extends Common.ObjectWrapper.eventMixin<EventTypes, t
     this.update();
   }
 
-  createFrameElement(frame: TraceEngine.Extras.FilmStrip.Frame): HTMLDivElement {
-    const time = TraceEngine.Helpers.Timing.microSecondsToMilliseconds(frame.screenshotEvent.ts);
+  createFrameElement(frame: Trace.Extras.FilmStrip.Frame): HTMLButtonElement {
+    const time = Trace.Helpers.Timing.microToMilli(frame.screenshotEvent.ts);
     const frameTime = i18n.TimeUtilities.millisToString(time - this.zeroTime);
-    const element = document.createElement('div');
+    const element = document.createElement('button');
     element.classList.add('frame');
     UI.Tooltip.Tooltip.install(element, i18nString(UIStrings.doubleclickToZoomImageClickTo));
     element.createChild('div', 'time').textContent = frameTime;
@@ -77,21 +78,17 @@ export class FilmStripView extends Common.ObjectWrapper.eventMixin<EventTypes, t
     element.setAttribute('jslog', `${VisualLogging.preview('film-strip').track({click: true, dblclick: true})}`);
     element.setAttribute('aria-label', i18nString(UIStrings.screenshotForSSelectToView, {PH1: frameTime}));
     UI.ARIAUtils.markAsButton(element);
-    const imageElement = (element.createChild('div', 'thumbnail').createChild('img') as HTMLImageElement);
+    const imageElement = element.createChild('div', 'thumbnail').createChild('img');
     imageElement.alt = i18nString(UIStrings.screenshot);
-    element.addEventListener('mousedown', this.onMouseEvent.bind(this, Events.FrameSelected, time), false);
-    element.addEventListener('mouseenter', this.onMouseEvent.bind(this, Events.FrameEnter, time), false);
-    element.addEventListener('mouseout', this.onMouseEvent.bind(this, Events.FrameExit, time), false);
+    element.addEventListener('mousedown', this.onMouseEvent.bind(this, Events.FRAME_SELECTED, time), false);
+    element.addEventListener('mouseenter', this.onMouseEvent.bind(this, Events.FRAME_ENTER, time), false);
+    element.addEventListener('mouseout', this.onMouseEvent.bind(this, Events.FRAME_EXIT, time), false);
     element.addEventListener('dblclick', this.onDoubleClick.bind(this, frame), false);
-    element.addEventListener('focusin', this.onMouseEvent.bind(this, Events.FrameEnter, time), false);
-    element.addEventListener('focusout', this.onMouseEvent.bind(this, Events.FrameExit, time), false);
-    element.addEventListener('keydown', event => {
-      if (event.code === 'Enter' || event.code === 'Space') {
-        this.onMouseEvent(Events.FrameSelected, time);
-      }
-    });
+    element.addEventListener('focusin', this.onMouseEvent.bind(this, Events.FRAME_ENTER, time), false);
+    element.addEventListener('focusout', this.onMouseEvent.bind(this, Events.FRAME_EXIT, time), false);
 
-    FilmStripView.setImageData(imageElement, frame.screenshotEvent.args.dataUri);
+    const imgData = Trace.Handlers.ModelHandlers.Screenshots.screenshotImageDataUri(frame.screenshotEvent);
+    FilmStripView.setImageData(imageElement, imgData);
     return element;
   }
 
@@ -114,7 +111,7 @@ export class FilmStripView extends Common.ObjectWrapper.eventMixin<EventTypes, t
     this.dispatchEventToListeners<any>(eventName, timestamp);
   }
 
-  private onDoubleClick(filmStripFrame: TraceEngine.Extras.FilmStrip.Frame): void {
+  private onDoubleClick(filmStripFrame: Trace.Extras.FilmStrip.Frame): void {
     if (!this.#filmStrip) {
       return;
     }
@@ -122,7 +119,7 @@ export class FilmStripView extends Common.ObjectWrapper.eventMixin<EventTypes, t
   }
 
   reset(): void {
-    this.zeroTime = TraceEngine.Types.Timing.MilliSeconds(0);
+    this.zeroTime = Trace.Types.Timing.Milli(0);
     this.contentElement.removeChildren();
     this.contentElement.appendChild(this.statusLabel);
   }
@@ -133,64 +130,74 @@ export class FilmStripView extends Common.ObjectWrapper.eventMixin<EventTypes, t
 }
 
 export const enum Events {
-  FrameSelected = 'FrameSelected',
-  FrameEnter = 'FrameEnter',
-  FrameExit = 'FrameExit',
+  FRAME_SELECTED = 'FrameSelected',
+  FRAME_ENTER = 'FrameEnter',
+  FRAME_EXIT = 'FrameExit',
 }
 
-export type EventTypes = {
-  [Events.FrameSelected]: number,
-  [Events.FrameEnter]: number,
-  [Events.FrameExit]: number,
-};
+export interface EventTypes {
+  [Events.FRAME_SELECTED]: number;
+  [Events.FRAME_ENTER]: number;
+  [Events.FRAME_EXIT]: number;
+}
 
-interface DialogTraceEngineData {
-  source: 'TraceEngine';
+interface DialogParsedTrace {
+  source: 'Trace';
   index: number;
-  zeroTime: TraceEngine.Types.Timing.MilliSeconds;
-  frames: readonly TraceEngine.Extras.FilmStrip.Frame[];
+  zeroTime: Trace.Types.Timing.Milli;
+  frames: readonly Trace.Extras.FilmStrip.Frame[];
 }
 
 export class Dialog {
-  private fragment: UI.Fragment.Fragment;
-  private readonly widget: UI.XWidget.XWidget;
+  private readonly widget: UI.Widget.Widget;
   private index: number;
   private dialog: UI.Dialog.Dialog|null = null;
 
-  #data: DialogTraceEngineData;
+  #data: DialogParsedTrace;
 
-  static fromFilmStrip(filmStrip: TraceEngine.Extras.FilmStrip.Data, selectedFrameIndex: number): Dialog {
-    const data: DialogTraceEngineData = {
-      source: 'TraceEngine',
+  static fromFilmStrip(filmStrip: Trace.Extras.FilmStrip.Data, selectedFrameIndex: number): Dialog {
+    const data: DialogParsedTrace = {
+      source: 'Trace',
       frames: filmStrip.frames,
       index: selectedFrameIndex,
-      zeroTime: TraceEngine.Helpers.Timing.microSecondsToMilliseconds(filmStrip.zeroTime),
+      zeroTime: Trace.Helpers.Timing.microToMilli(filmStrip.zeroTime),
     };
     return new Dialog(data);
   }
 
-  private constructor(data: DialogTraceEngineData) {
+  private constructor(data: DialogParsedTrace) {
     this.#data = data;
     this.index = data.index;
     const prevButton = UI.UIUtils.createTextButton('\u25C0', this.onPrevFrame.bind(this));
     UI.Tooltip.Tooltip.install(prevButton, i18nString(UIStrings.previousFrame));
     const nextButton = UI.UIUtils.createTextButton('\u25B6', this.onNextFrame.bind(this));
     UI.Tooltip.Tooltip.install(nextButton, i18nString(UIStrings.nextFrame));
-    this.fragment = UI.Fragment.Fragment.build`
-      <x-widget flex=none margin=12px>
-        <x-hbox overflow=auto border='1px solid #ddd'>
-          <img $='image' data-film-strip-dialog-img style="max-height: 80vh; max-width: 80vw;"></img>
-        </x-hbox>
-        <x-hbox x-center justify-content=center margin-top=10px>
-          ${prevButton}
-          <x-hbox $='time' margin=8px></x-hbox>
-          ${nextButton}
-        </x-hbox>
-      </x-widget>
-    `;
-    this.widget = (this.fragment.element() as UI.XWidget.XWidget);
-    (this.widget as HTMLElement).tabIndex = 0;
-    this.widget.addEventListener('keydown', this.keyDown.bind(this), false);
+    this.widget = new UI.Widget.Widget({classes: ['film-strip-image-dialog']});
+    this.widget.registerRequiredCSS(filmStripViewStyles);
+
+    const imageBox = document.createElement('div');
+    imageBox.classList.add('image-box');
+
+    const image = document.createElement('img');
+    image.setAttribute('data-film-strip-dialog-img', '');
+    imageBox.append(image);
+
+    const buttonBox = document.createElement('div');
+    buttonBox.classList.add('button-box');
+
+    const timeBox = document.createElement('div');
+    timeBox.classList.add('time-box');
+
+    buttonBox.append(prevButton);
+    buttonBox.append(timeBox);
+    buttonBox.append(nextButton);
+
+    this.widget.contentElement.append(imageBox);
+    this.widget.contentElement.append(buttonBox);
+
+    this.widget.element.tabIndex = 0;
+    this.widget.contentElement.append();
+    this.widget.contentElement.addEventListener('keydown', this.keyDown.bind(this), false);
     this.dialog = null;
 
     void this.render();
@@ -206,22 +213,22 @@ export class Dialog {
     return this.#data.frames.length;
   }
 
-  #zeroTime(): TraceEngine.Types.Timing.MilliSeconds {
+  #zeroTime(): Trace.Types.Timing.Milli {
     return this.#data.zeroTime;
   }
 
   private resize(): void {
     if (!this.dialog) {
       this.dialog = new UI.Dialog.Dialog();
-      this.dialog.contentElement.appendChild(this.widget);
-      this.dialog.setDefaultFocusedElement(this.widget);
+      this.widget.show(this.dialog.contentElement);
+      this.dialog.setDefaultFocusedElement(this.widget.element);
       this.dialog.show();
     }
-    this.dialog.setSizeBehavior(UI.GlassPane.SizeBehavior.MeasureContent);
+    this.dialog.setSizeBehavior(UI.GlassPane.SizeBehavior.MEASURE_CONTENT);
   }
 
-  private keyDown(event: Event): void {
-    const keyboardEvent = (event as KeyboardEvent);
+  private keyDown(event: KeyboardEvent): void {
+    const keyboardEvent = event;
     switch (keyboardEvent.key) {
       case 'ArrowLeft':
         if (Host.Platform.isMac() && keyboardEvent.metaKey) {
@@ -275,11 +282,19 @@ export class Dialog {
 
   private render(): void {
     const frame = this.#data.frames[this.index];
-    const timestamp = TraceEngine.Helpers.Timing.microSecondsToMilliseconds(frame.screenshotEvent.ts);
-    this.fragment.$('time').textContent = i18n.TimeUtilities.millisToString(timestamp - this.#zeroTime());
-    const image = (this.fragment.$('image') as HTMLImageElement);
+    const timestamp = Trace.Helpers.Timing.microToMilli(frame.screenshotEvent.ts);
+    const timeBox = this.widget.contentElement.querySelector('.time-box');
+    if (timeBox) {
+      timeBox.textContent = i18n.TimeUtilities.millisToString(timestamp - this.#zeroTime());
+    }
+
+    const image = this.widget.contentElement.querySelector('img');
+    if (!image) {
+      return;
+    }
     image.setAttribute('data-frame-index', this.index.toString());
-    FilmStripView.setImageData(image, frame.screenshotEvent.args.dataUri);
+    const imgData = Trace.Handlers.ModelHandlers.Screenshots.screenshotImageDataUri(frame.screenshotEvent);
+    FilmStripView.setImageData(image, imgData);
     this.resize();
   }
 }

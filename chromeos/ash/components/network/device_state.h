@@ -33,7 +33,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) DeviceState : public ManagedState {
   bool IsActive() const override;
 
   void IPConfigPropertiesChanged(const std::string& ip_config_path,
-                                 base::Value::Dict properties);
+                                 base::DictValue properties);
 
   // Accessors
   const std::string& mac_address() const { return mac_address_; }
@@ -57,13 +57,14 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) DeviceState : public ManagedState {
   const std::string& mdn() const { return mdn_; }
   const CellularScanResults& scan_results() const { return scan_results_; }
   bool inhibited() const { return inhibited_; }
+  bool flashing() const { return flashing_; }
 
   // |ip_configs_| is kept up to date by NetworkStateHandler.
-  const base::Value::Dict& ip_configs() const { return ip_configs_; }
+  const base::DictValue& ip_configs() const { return ip_configs_; }
 
   // Do not use this. It exists temporarily for internet_options_handler.cc
   // which is being deprecated.
-  const base::Value::Dict& properties() const { return properties_; }
+  const base::DictValue& properties() const { return properties_; }
 
   // Ethernet specific accessors
   bool eap_authentication_completed() const {
@@ -122,6 +123,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) DeviceState : public ManagedState {
   CellularScanResults scan_results_;
   CellularSIMSlotInfos sim_slot_infos_;
   bool inhibited_ = false;
+  bool flashing_ = false;
 
   // Ethernet specific properties
   bool eap_authentication_completed_ = false;
@@ -133,13 +135,13 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) DeviceState : public ManagedState {
   std::string available_managed_network_path_;
 
   // Keep all Device properties in a dictionary for now. See comment above.
-  base::Value::Dict properties_;
+  base::DictValue properties_;
 
   // List of APNs.
-  base::Value::List apn_list_;
+  base::ListValue apn_list_;
 
   // Dictionary of IPConfig properties, keyed by IpConfig path.
-  base::Value::Dict ip_configs_;
+  base::DictValue ip_configs_;
 };
 
 }  // namespace ash

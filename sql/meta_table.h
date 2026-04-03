@@ -7,14 +7,26 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 #include "base/component_export.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
 
 namespace sql {
 
 class Database;
+
+// Denotes the result of MetaTable::RazeIfIncompatible().
+enum class RazeIfIncompatibleResult {
+  // Razing wasn't required as the DB version was compatible with the code.
+  kCompatible = 0,
+
+  // Razing was required, and it completed successfully.
+  kRazedSuccessfully = 1,
+
+  // An error occurred.
+  kFailed = 2,
+};
 
 // Creates and manages a table to store generic metadata. The features provided
 // are:
@@ -52,20 +64,18 @@ class COMPONENT_EXPORT(SQL) MetaTable {
   // the latter, pass `kNoLowestSupportedVersion` for
   // `lowest_supported_version`.
   //
-  // Returns false if razing the database was necessary but failed or if
-  // determining the metadata version failed.
-  //
-  // TODO(crbug.com/1228463): At this time the database is razed IFF meta exists
-  // and contains a version row with the value not satisfying the constraints.
-  // It may make sense to also raze if meta exists but has no version row, or if
-  // meta doesn't exist. In those cases if the database is not already empty, it
-  // probably resulted from a broken initialization.
-  // TODO(crbug.com/1228463): Folding this into Init() would allow enforcing
+  // TODO(crbug.com/40777743): At this time the database is razed IFF meta
+  // exists and contains a version row with the value not satisfying the
+  // constraints. It may make sense to also raze if meta exists but has no
+  // version row, or if meta doesn't exist. In those cases if the database is
+  // not already empty, it probably resulted from a broken initialization.
+  // TODO(crbug.com/40777743): Folding this into Init() would allow enforcing
   // the version constraint, but Init() is often called in a transaction.
   static constexpr int kNoLowestSupportedVersion = 0;
-  [[nodiscard]] static bool RazeIfIncompatible(Database* db,
-                                               int lowest_supported_version,
-                                               int current_version);
+  [[nodiscard]] static RazeIfIncompatibleResult RazeIfIncompatible(
+      Database* db,
+      int lowest_supported_version,
+      int current_version);
 
   // Used to tuck some data into the meta table about mmap status. The value
   // represents how much data in bytes has successfully been read from the
@@ -113,20 +123,37 @@ class COMPONENT_EXPORT(SQL) MetaTable {
   int GetCompatibleVersionNumber();
 
   // Set the given arbitrary key with the given data. Returns true on success.
-  bool SetValue(base::StringPiece key, const std::string& value);
-  bool SetValue(base::StringPiece key, int64_t value);
+  bool SetValue(std::string_view key, const std::string& value);
+  bool SetValue(std::string_view key, int64_t value);
 
   // Retrieves the value associated with the given key. This will use sqlite's
   // type conversion rules. It will return true on success.
-  bool GetValue(base::StringPiece key, std::string* value);
-  bool GetValue(base::StringPiece key, int* value);
-  bool GetValue(base::StringPiece key, int64_t* value);
+  bool GetValue(std::string_view key, std::string* value);
+  bool GetValue(std::string_view key, int* value);
+  bool GetValue(std::string_view key, int64_t* value);
 
   // Deletes the key from the table.
-  bool DeleteKey(base::StringPiece key);
+  bool DeleteKey(std::string_view key);
+
+ protected:
+  explicit MetaTable(Database& db);
 
  private:
   raw_ptr<Database, DanglingUntriaged> db_ = nullptr;
+};
+
+// Version of `MetaTable` which assumes that the meta table already exists in
+// the database. If the meta table is missing, it won't be created. This is
+// useful, for instance, to validate the table's compatibility before actually
+// opening it with `MetaTable`.
+class InitializedMetaTable : public MetaTable {
+ public:
+  explicit InitializedMetaTable(Database& db) : MetaTable(db) {}
+
+ private:
+  // Make `Init` private, the `Database` passed to this class is assumed to be
+  // already initialized.
+  using MetaTable::Init;
 };
 
 }  // namespace sql

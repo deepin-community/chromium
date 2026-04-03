@@ -15,10 +15,20 @@ limitations under the License.
 
 #include "tensorflow/dtensor/mlir/expansions/replicated_spmd_expander.h"
 
-#include <algorithm>
 #include <vector>
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/Types.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/dtensor/cc/dstatus.h"
+#include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/collectives.h"
 #include "tensorflow/dtensor/mlir/layout_parsing.h"
 #include "tensorflow/dtensor/mlir/op_utils.h"
@@ -72,8 +82,8 @@ ReplicatedOpSPMDExpander::ReplicatedRelayoutOperandsAndOutputs(
   builder.setInsertionPointAfter(last_op_after_splitting);
 
   // Tie all outputs together with identity_n
-  auto identity_op = builder.create<mlir::TF::IdentityNOp>(
-      op->getLoc(), generated_types, generated_outputs);
+  auto identity_op = mlir::TF::IdentityNOp::create(
+      builder, op->getLoc(), generated_types, generated_outputs);
   newly_created_ops.insert(identity_op);
   for (int i = 0; i < output_layouts.size(); ++i) {
     op->getOpResult(i).replaceAllUsesExcept(identity_op.getResult(i),

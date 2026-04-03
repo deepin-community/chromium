@@ -4,16 +4,22 @@
 
 #include "chrome/test/chromedriver/net/pipe_connection_win.h"
 
+#include <windows.h>
+
 #include <io.h>
 #include <stdlib.h>
-#include <windows.h>
 
 #include <list>
 #include <memory>
 #include <string>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/numerics/checked_math.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/strings/string_view_util.h"
 #include "base/threading/thread.h"
 #include "base/values.h"
 #include "chrome/test/chromedriver/net/command_id.h"
@@ -31,7 +37,7 @@ void DetermineRecipient(const std::string& message,
                         bool* send_to_chromedriver) {
   std::optional<base::Value> message_value =
       base::JSONReader::Read(message, base::JSON_REPLACE_INVALID_CHARACTERS);
-  base::Value::Dict* message_dict =
+  base::DictValue* message_dict =
       message_value ? message_value->GetIfDict() : nullptr;
   if (!message_dict) {
     *send_to_chromedriver = true;
@@ -128,23 +134,27 @@ class PipeReader {
       if (!bytes_read) {
         break;
       }
-      read_buffer_->set_offset(read_buffer_->offset() + bytes_read);
+      const auto old_offset =
+          base::checked_cast<size_t>(read_buffer_->offset());
+      const size_t new_offset =
+          base::CheckAdd(old_offset, bytes_read).ValueOrDie();
+      read_buffer_->set_offset(base::checked_cast<int>(new_offset));
 
       // Go over the last read chunk, look for \0, extract messages.
-      int offset = 0;
-      for (int i = read_buffer_->offset() - bytes_read;
-           i < read_buffer_->offset(); ++i) {
-        if (read_buffer_->StartOfBuffer()[i] == '\0') {
+      size_t offset = 0;
+      for (size_t i = old_offset; i < new_offset; ++i) {
+        if (read_buffer_->everything()[i] == '\0') {
           OnMessageReceivedOnIOThread(
-              std::string(read_buffer_->StartOfBuffer() + offset,
-                          read_buffer_->StartOfBuffer() + i));
+              std::string(base::as_string_view(read_buffer_->everything())
+                              .substr(offset, i - offset)));
           offset = i + 1;
         }
       }
       if (offset) {
-        std::copy(read_buffer_->StartOfBuffer() + offset, read_buffer_->data(),
-                  read_buffer_->StartOfBuffer());
-        read_buffer_->set_offset(read_buffer_->offset() - offset);
+        base::span<const uint8_t> subspan =
+            read_buffer_->span_before_offset().subspan(offset);
+        read_buffer_->everything().copy_prefix_from(subspan);
+        read_buffer_->set_offset(subspan.size());
         int new_capacity = std::max(
             kMinReadBufferCapacity,
             std::min(read_buffer_->offset() * 2, read_buffer_->capacity()));
@@ -168,8 +178,8 @@ class PipeReader {
     }
     while (bytes_read < size) {
       DWORD size_read = 0;
-      bool had_error = !ReadFile(file, buffer + bytes_read, size - bytes_read,
-                                 &size_read, nullptr);
+      bool had_error = !ReadFile(file, UNSAFE_TODO(buffer + bytes_read),
+                                 size - bytes_read, &size_read, nullptr);
       if (had_error) {
         if (!shutting_down_.IsSet()) {
           VLOG(logging::LOGGING_ERROR)
@@ -199,7 +209,7 @@ class PipeReader {
     DetermineRecipient(message, &send_to_chromedriver);
     if (send_to_chromedriver) {
       notification_is_needed = received_queue_.empty();
-      received_queue_.push_back(message);
+      received_queue_.push_back(std::move(message));
     }
     on_update_event_.Signal();
 
@@ -351,8 +361,8 @@ class PipeWriter {
       }
       DWORD bytes_written = 0;
       bool had_error =
-          !WriteFile(file, bytes + total_written, static_cast<DWORD>(length),
-                     &bytes_written, nullptr);
+          !WriteFile(file, UNSAFE_TODO(bytes + total_written),
+                     static_cast<DWORD>(length), &bytes_written, nullptr);
       if (had_error) {
         if (!shutting_down_.IsSet()) {
           VLOG(logging::LOGGING_ERROR) << "Could not write into pipe";
@@ -408,6 +418,7 @@ PipeConnectionWin::PipeConnectionWin(base::ScopedPlatformFile read_file,
 }
 
 PipeConnectionWin::~PipeConnectionWin() {
+  notify_ = base::RepeatingClosure();
   Shutdown();
 }
 
@@ -477,6 +488,9 @@ void PipeConnectionWin::Shutdown() {
 
   PipeWriter::Shutdown(std::move(pipe_writer_));
   PipeReader::Shutdown(std::move(pipe_reader_));
+  if (notify_) {
+    notify_.Run();
+  }
 }
 
 bool PipeConnectionWin::IsNull() const {

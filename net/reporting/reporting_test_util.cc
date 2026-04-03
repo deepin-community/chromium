@@ -59,7 +59,7 @@ class PendingUploadImpl : public TestReportingUploader::PendingUpload {
   const GURL& url() const override { return url_; }
   const std::string& json() const override { return json_; }
   std::optional<base::Value> GetValue() const override {
-    return base::JSONReader::Read(json_);
+    return base::JSONReader::Read(json_, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   }
 
   void Complete(ReportingUploader::Outcome outcome) override {
@@ -208,9 +208,13 @@ void ReportingTestBase::UsePolicy(const ReportingPolicy& new_policy) {
 }
 
 void ReportingTestBase::UseStore(
-    ReportingCache::PersistentReportingStore* store) {
-  store_ = store;
-  CreateContext(policy(), clock()->Now(), tick_clock()->NowTicks());
+    std::unique_ptr<ReportingCache::PersistentReportingStore> store) {
+  // Must destroy old context, if there is one, before destroying old store.
+  // Need to copy policy first, since the context owns it.
+  ReportingPolicy policy_copy = policy();
+  context_.reset();
+  store_ = std::move(store);
+  CreateContext(policy_copy, clock()->Now(), tick_clock()->NowTicks());
 }
 
 const ReportingEndpoint ReportingTestBase::FindEndpointInCache(
@@ -239,6 +243,12 @@ void ReportingTestBase::SetV1EndpointInCache(
     const GURL& url) {
   cache()->SetV1EndpointForTesting(group_key, reporting_source, isolation_info,
                                    url);
+}
+
+void ReportingTestBase::SetEnterpriseEndpointInCache(
+    const ReportingEndpointGroupKey& group_key,
+    const GURL& url) {
+  cache()->SetEnterpriseEndpointForTesting(group_key, url);
 }
 
 bool ReportingTestBase::EndpointExistsInCache(
@@ -291,7 +301,7 @@ void ReportingTestBase::CreateContext(const ReportingPolicy& policy,
                                       base::Time now,
                                       base::TimeTicks now_ticks) {
   context_ = std::make_unique<TestReportingContext>(&clock_, &tick_clock_,
-                                                    policy, store_);
+                                                    policy, store_.get());
   clock()->SetNow(now);
   tick_clock()->SetNowTicks(now_ticks);
 }
@@ -341,8 +351,9 @@ void TestReportingService::QueueReport(
     const std::string& user_agent,
     const std::string& group,
     const std::string& type,
-    base::Value::Dict body,
-    int depth) {
+    base::DictValue body,
+    int depth,
+    ReportingTargetType target_type) {
   reports_.emplace_back(
       Report(url, network_anonymization_key, user_agent, group, type,
              std::make_unique<base::Value>(std::move(body)), depth));
@@ -369,24 +380,20 @@ void TestReportingService::OnShutdown() {}
 
 const ReportingPolicy& TestReportingService::GetPolicy() const {
   NOTREACHED();
-  return dummy_policy_;
 }
 
 ReportingContext* TestReportingService::GetContextForTesting() const {
   NOTREACHED();
-  return nullptr;
 }
 
 std::vector<raw_ptr<const ReportingReport, VectorExperimental>>
 TestReportingService::GetReports() const {
   NOTREACHED();
-  return std::vector<raw_ptr<const ReportingReport, VectorExperimental>>();
 }
 
 base::flat_map<url::Origin, std::vector<ReportingEndpoint>>
 TestReportingService::GetV1ReportingEndpointsByOrigin() const {
   NOTREACHED();
-  return base::flat_map<url::Origin, std::vector<ReportingEndpoint>>();
 }
 
 void TestReportingService::AddReportingCacheObserver(

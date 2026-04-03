@@ -31,7 +31,11 @@ namespace {
 // Compare to leveldb_proto::Enums::InitStatus. Using a separate enum so that
 // the values don't change.
 // These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
+// numeric values should never be reused. Keep in sync with the
+// NearbyShareCertificateStorageInitializationResult UMA enum defined in
+// //tools/metrics/histograms/metadata/nearby/enums.xml.
+//
+// LINT.IfChange(NearbyShareCertificateStorageInitializationResult)
 enum InitStatusMetric {
   kOK = 0,
   kNotInitialized = 1,
@@ -40,6 +44,7 @@ enum InitStatusMetric {
   kInvalidOperation = 4,
   kMaxValue = kInvalidOperation
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/nearby/enums.xml:NearbyShareCertificateStorageInitializationResult)
 
 void RecordInitializationSuccessRateMetric(bool success, size_t num_attempts) {
   base::UmaHistogramBoolean(
@@ -206,7 +211,6 @@ void NearbyShareCertificateStorageImpl::Initialize() {
       break;
     case InitStatus::kInitialized:
       NOTREACHED();
-      break;
   }
 }
 
@@ -368,7 +372,7 @@ NearbyShareCertificateStorageImpl::NextPublicCertificateExpirationTime() const {
 
 void NearbyShareCertificateStorageImpl::ReplacePrivateCertificates(
     const std::vector<NearbySharePrivateCertificate>& private_certificates) {
-  base::Value::List list;
+  base::ListValue list;
   for (const NearbySharePrivateCertificate& cert : private_certificates) {
     list.Append(cert.ToDictionary());
   }
@@ -469,7 +473,7 @@ void NearbyShareCertificateStorageImpl::RemoveExpiredPublicCertificates(
 }
 
 bool NearbyShareCertificateStorageImpl::FetchPublicCertificateExpirations() {
-  const base::Value::Dict& dict = pref_service_->GetDict(
+  const base::DictValue& dict = pref_service_->GetDict(
       prefs::kNearbySharingPublicCertificateExpirationDictPrefName);
   public_certificate_expirations_.clear();
 
@@ -489,7 +493,7 @@ bool NearbyShareCertificateStorageImpl::FetchPublicCertificateExpirations() {
 }
 
 void NearbyShareCertificateStorageImpl::SavePublicCertificateExpirations() {
-  base::Value::Dict dict;
+  base::DictValue dict;
 
   for (const std::pair<std::string, base::Time>& pair :
        public_certificate_expirations_) {

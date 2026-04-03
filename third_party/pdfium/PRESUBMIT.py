@@ -63,7 +63,7 @@ _BANNED_CPP_FUNCTIONS = (
         [_THIRD_PARTY],
     ),
     (
-        r'/v8::Isolate::(?:|Try)GetCurrent()',
+        r'/v8::Isolate::(?:|Try)GetCurrent\(\)',
         (
             'v8::Isolate::GetCurrent() and v8::Isolate::TryGetCurrent() are',
             'banned. Hold a pointer to the v8::Isolate that was entered. Use',
@@ -72,6 +72,45 @@ _BANNED_CPP_FUNCTIONS = (
         ),
         True,
         (),
+    ),
+    (
+        r'/\bmemcpy\(',
+        ('Use FXSYS_memcpy() in place of memcpy().',),
+        True,
+        [_THIRD_PARTY],
+    ),
+    (
+        r'/\bmemmove\(',
+        ('Use FXSYS_memmove() in place of memmove().',),
+        True,
+        [_THIRD_PARTY],
+    ),
+    (
+        r'/\bmemset\(',
+        ('Use FXSYS_memset() in place of memset().',),
+        True,
+        [_THIRD_PARTY],
+    ),
+    (
+        r'/\bmemclr\(',
+        ('Use FXSYS_memclr() in place of memclr().',),
+        True,
+        [_THIRD_PARTY],
+    ),
+    (
+        r'/absl::(bad_variant_access|get|holds_alternative|monostate|variant|'
+        r'visit)',
+        ('Abseil\'s variant library is banned, use std.',),
+        True,
+        [_THIRD_PARTY],
+    ),
+    (
+        r'/absl::(apply|exchange|forward|in_place|index_sequence|'
+        r'integer_sequence|make_from_tuple|make_index_sequence|'
+        r'make_integer_sequence|move)',
+        ('Abseil\'s util library is banned, use std.',),
+        True,
+        [_THIRD_PARTY],
     ),
 )
 
@@ -425,20 +464,30 @@ def _CheckTestDuplicates(input_api, output_api):
 
 
 def _CheckPngNames(input_api, output_api):
-  """Checks that .png files have the right file name format, which must be in
-  the form:
+  """Checks that .png files have the right file name format.
+
+  For most directories, including those used for pixel tests, they must be in
+  the form of:
 
   NAME_expected(_gdi)?(_(agg|skia))?(_(linux|mac|win))?.pdf.\d+.png
 
   This must be the same format as the one in testing/corpus's PRESUBMIT.py.
+
+  For testing/resources/embedder_tests, they must be in the form of:
+
+  NAME(_gdi)?(_(agg|skia))?(_(linux|mac|win))?.png
   """
   expected_pattern = input_api.re.compile(
       r'.+_expected(_gdi)?(_(agg|skia))?(_(linux|mac|win))?\.pdf\.\d+.png')
+  expected_embedder_tests_pattern = input_api.re.compile(
+      r'.+(_gdi)?(_(agg|skia))?(_(linux|mac|win))?.png')
   results = []
   for f in input_api.AffectedFiles(include_deletes=False):
     if not f.LocalPath().endswith('.png'):
       continue
-    if expected_pattern.match(f.LocalPath()):
+    pattern = expected_embedder_tests_pattern if f.LocalPath().startswith(
+        'testing/resources/embedder_tests/') else expected_pattern
+    if pattern.match(f.LocalPath()):
       continue
     results.append(
         output_api.PresubmitError(
@@ -513,6 +562,8 @@ def ChecksCommon(input_api, output_api):
           project_name='PDFium',
           source_file_filter=lambda x: input_api.FilterSourceFile(
               x, files_to_check=files_to_check)))
+  results.extend(
+      input_api.canned_checks.CheckInclusiveLanguage(input_api, output_api))
 
   return results
 

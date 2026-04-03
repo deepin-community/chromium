@@ -4,7 +4,6 @@
 
 #include "third_party/blink/renderer/platform/storage/blink_storage_key.h"
 
-#include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/test/gtest_util.h"
 #include "base/test/scoped_feature_list.h"
@@ -47,6 +46,26 @@ TEST(BlinkStorageKeyTest, EqualityWithNonce) {
 
   EXPECT_EQ(key1, key2);
   EXPECT_NE(key1, key3);
+}
+
+TEST(BlinkStorageKeyTest, NoncedKeyForbidsUnpartitionedAccess) {
+  scoped_refptr<const SecurityOrigin> origin =
+      SecurityOrigin::CreateFromString("https://example.com");
+  const BlinkSchemefulSite site(origin);
+  base::UnguessableToken nonce = base::UnguessableToken::Create();
+
+  for (const bool toggle : {false, true}) {
+    base::test::ScopedFeatureList scope_feature_list;
+    scope_feature_list.InitWithFeatureState(
+        net::features::kThirdPartyStoragePartitioning, toggle);
+
+    BlinkStorageKey key = BlinkStorageKey::Create(
+        origin, site, mojom::AncestorChainBit::kSameSite);
+    EXPECT_FALSE(key.ForbidsUnpartitionedStorageAccess());
+
+    key = BlinkStorageKey::CreateWithNonce(origin, nonce);
+    EXPECT_TRUE(key.ForbidsUnpartitionedStorageAccess());
+  }
 }
 
 TEST(BlinkStorageKeyTest, OpaqueOriginRetained) {
@@ -170,13 +189,12 @@ TEST(BlinkStorageKeyTest, StorageKeyRoundTripConversion) {
 
 // Test that string -> StorageKey test function performs as expected.
 TEST(BlinkStorageKeyTest, CreateFromStringForTesting) {
-  WTF::String example = "https://example.com/";
-  WTF::String wrong = "I'm not a valid URL.";
+  String example = "https://example.com/";
+  String wrong = "I'm not a valid URL.";
 
   BlinkStorageKey key1 = BlinkStorageKey::CreateFromStringForTesting(example);
   BlinkStorageKey key2 = BlinkStorageKey::CreateFromStringForTesting(wrong);
-  BlinkStorageKey key3 =
-      BlinkStorageKey::CreateFromStringForTesting(WTF::String());
+  BlinkStorageKey key3 = BlinkStorageKey::CreateFromStringForTesting(String());
 
   EXPECT_FALSE(key1.GetSecurityOrigin()->IsOpaque());
   EXPECT_EQ(key1, BlinkStorageKey::CreateFirstParty(
@@ -368,13 +386,9 @@ TEST(BlinkStorageKeyTest, FromWireReturnValue) {
 
   const struct TestCase {
     scoped_refptr<const SecurityOrigin> origin;
-    // These members are excluded from `raw_ptr` rewriting because
-    // they are test-only and add a ton of churn in the test case
-    // below.
-    RAW_PTR_EXCLUSION const BlinkSchemefulSite& top_level_site;
-    RAW_PTR_EXCLUSION const BlinkSchemefulSite&
-        top_level_site_if_third_party_enabled;
-    RAW_PTR_EXCLUSION const std::optional<base::UnguessableToken>& nonce;
+    const BlinkSchemefulSite top_level_site;
+    const BlinkSchemefulSite top_level_site_if_third_party_enabled;
+    const std::optional<base::UnguessableToken> nonce;
     AncestorChainBit ancestor_chain_bit;
     AncestorChainBit ancestor_chain_bit_if_third_party_enabled;
     bool result;

@@ -75,7 +75,7 @@ em::RemoteCommand GenerateCommandProto(
       em::RemoteCommand_Type_DEVICE_GET_DIAGNOSTIC_ROUTINE_UPDATE);
   command_proto.set_command_id(unique_id);
   command_proto.set_age_of_command(age_of_command.InMilliseconds());
-  base::Value::Dict root_dict;
+  base::DictValue root_dict;
   if (id.has_value()) {
     root_dict.Set(kIdFieldName, id.value());
   }
@@ -85,9 +85,7 @@ em::RemoteCommand GenerateCommandProto(
   if (include_output.has_value()) {
     root_dict.Set(kIncludeOutputFieldName, include_output.value());
   }
-  std::string payload;
-  base::JSONWriter::Write(root_dict, &payload);
-  command_proto.set_payload(payload);
+  command_proto.set_payload(base::WriteJson(root_dict).value_or(""));
   return command_proto;
 }
 
@@ -95,18 +93,15 @@ std::string CreateInteractivePayload(
     uint32_t progress_percent,
     std::optional<std::string> output,
     ash::cros_healthd::mojom::DiagnosticRoutineUserMessageEnum user_message) {
-  auto root_dict = base::Value::Dict().Set(kProgressPercentFieldName,
-                                           static_cast<int>(progress_percent));
+  auto root_dict = base::DictValue().Set(kProgressPercentFieldName,
+                                         static_cast<int>(progress_percent));
   if (output.has_value()) {
     root_dict.Set(kOutputFieldName, std::move(output.value()));
   }
-  auto interactive_dict = base::Value::Dict().Set(
-      kUserMessageFieldName, static_cast<int>(user_message));
+  auto interactive_dict = base::DictValue().Set(kUserMessageFieldName,
+                                                static_cast<int>(user_message));
   root_dict.Set(kInteractiveUpdateFieldName, std::move(interactive_dict));
-
-  std::string payload;
-  base::JSONWriter::Write(root_dict, &payload);
-  return payload;
+  return base::WriteJson(root_dict).value_or("");
 }
 
 std::string CreateNonInteractivePayload(
@@ -114,20 +109,18 @@ std::string CreateNonInteractivePayload(
     std::optional<std::string> output,
     ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum status,
     const std::string& status_message) {
-  auto root_dict = base::Value::Dict().Set(kProgressPercentFieldName,
-                                           static_cast<int>(progress_percent));
+  auto root_dict = base::DictValue().Set(kProgressPercentFieldName,
+                                         static_cast<int>(progress_percent));
   if (output.has_value()) {
     root_dict.Set(kOutputFieldName, std::move(output.value()));
   }
   auto noninteractive_dict =
-      base::Value::Dict()
+      base::DictValue()
           .Set(kStatusFieldName, static_cast<int>(status))
           .Set(kStatusMessageFieldName, status_message);
   root_dict.Set(kNonInteractiveUpdateFieldName, std::move(noninteractive_dict));
 
-  std::string payload;
-  base::JSONWriter::Write(root_dict, &payload);
-  return payload;
+  return base::WriteJson(root_dict).value_or("");
 }
 
 }  // namespace
@@ -271,8 +264,9 @@ TEST_F(DeviceCommandGetRoutineUpdateJobTest,
   ash::cros_healthd::mojom::InteractiveRoutineUpdate interactive_update(
       kUserMessage);
 
-  ash::cros_healthd::mojom::RoutineUpdateUnion update_union;
-  update_union.set_interactive_update(interactive_update.Clone());
+  ash::cros_healthd::mojom::RoutineUpdateUnionPtr update_union =
+      ash::cros_healthd::mojom::RoutineUpdateUnion::NewInteractiveUpdate(
+          interactive_update.Clone());
 
   auto response = ash::cros_healthd::mojom::RoutineUpdate::New(
       kProgressPercent,
@@ -304,8 +298,9 @@ TEST_F(DeviceCommandGetRoutineUpdateJobTest,
   ash::cros_healthd::mojom::NonInteractiveRoutineUpdate noninteractive_update(
       kStatus, kStatusMessage);
 
-  ash::cros_healthd::mojom::RoutineUpdateUnion update_union;
-  update_union.set_noninteractive_update(noninteractive_update.Clone());
+  ash::cros_healthd::mojom::RoutineUpdateUnionPtr update_union =
+      ash::cros_healthd::mojom::RoutineUpdateUnion::NewNoninteractiveUpdate(
+          noninteractive_update.Clone());
 
   auto response = ash::cros_healthd::mojom::RoutineUpdate::New(
       kProgressPercent,

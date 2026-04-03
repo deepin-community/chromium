@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/time/time.h"
 #include "cc/animation/animation_delegate.h"
 #include "cc/trees/layer_tree_host.h"
 #include "cc/trees/layer_tree_host_impl.h"
@@ -57,10 +58,9 @@ class TestHooks : public AnimationDelegate {
   virtual void InitializedRendererOnThread(LayerTreeHostImpl* host_impl,
                                            bool success) {}
   virtual void WillPrepareToDrawOnThread(LayerTreeHostImpl* host_impl) {}
-  virtual DrawResult PrepareToDrawOnThread(
-      LayerTreeHostImpl* host_impl,
-      LayerTreeHostImpl::FrameData* frame_data,
-      DrawResult draw_result);
+  virtual DrawResult PrepareToDrawOnThread(LayerTreeHostImpl* host_impl,
+                                           FrameData* frame_data,
+                                           DrawResult draw_result);
   virtual void DrawLayersOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void WillSubmitCompositorFrame(LayerTreeHostImpl* host_impl,
                                          const viz::CompositorFrame& frame) {}
@@ -70,11 +70,8 @@ class TestHooks : public AnimationDelegate {
   virtual void NotifyReadyToDrawOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void NotifyAllTileTasksCompleted(LayerTreeHostImpl* host_impl) {}
   virtual void NotifyTileStateChangedOnThread(LayerTreeHostImpl* host_impl,
-                                              const Tile* tile) {}
-  virtual void WillReceiveCompositorFrameAckOnThread(
-      LayerTreeHostImpl* host_impl) {}
-  virtual void DidReceiveCompositorFrameAckOnThread(
-      LayerTreeHostImpl* host_impl) {}
+                                              const Tile* tile,
+                                              bool update_damage) {}
   virtual void DidRunBeginMainFrame() {}
   virtual void DidReceivePresentationTimeOnThread(
       LayerTreeHostImpl* host_impl,
@@ -111,6 +108,7 @@ class TestHooks : public AnimationDelegate {
   // Main thread hooks.
   virtual void ApplyViewportChanges(const ApplyViewportChangesArgs& args) {}
   virtual void BeginMainFrameNotExpectedSoon() {}
+  virtual void BeginMainFrameNotExpectedUntil(base::TimeTicks when) {}
   virtual void WillApplyCompositorChanges() {}
   virtual void BeginMainFrame(const viz::BeginFrameArgs& args) {}
   virtual void WillBeginMainFrame() {}
@@ -119,13 +117,17 @@ class TestHooks : public AnimationDelegate {
   virtual void DidInitializeLayerTreeFrameSink() {}
   virtual void DidFailToInitializeLayerTreeFrameSink() {}
   virtual void DidAddAnimation() {}
+  virtual void OnCommitRequested() {}
   virtual void WillCommit(const CommitState&) {}
   virtual void DidCommit() {}
   virtual void DidCommitAndDrawFrame() {}
-  virtual void DidReceiveCompositorFrameAck() {}
   virtual void DidActivateSyncTree() {}
-  virtual void NotifyThroughputTrackerResults(CustomTrackerResults results) {}
+  virtual void NotifyCompositorMetricsTrackerResults(
+      CustomTrackerResults results) {}
   virtual std::unique_ptr<BeginMainFrameMetrics> GetBeginMainFrameMetrics();
+  virtual void DidPresentCompositorFrame(
+      uint32_t frame_token,
+      const viz::FrameTimingDetails& frame_timing_details) {}
 
   // AnimationDelegate implementation.
   void NotifyAnimationStarted(base::TimeTicks monotonic_time,

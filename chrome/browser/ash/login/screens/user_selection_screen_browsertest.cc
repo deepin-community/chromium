@@ -5,6 +5,7 @@
 #include <memory>
 #include <utility>
 
+#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_accelerators.h"
@@ -14,6 +15,7 @@
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/default_clock.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
@@ -23,10 +25,10 @@
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/test/test_predicate_waiter.h"
 #include "chrome/browser/ash/login/test/user_auth_config.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/user_creation_screen_handler.h"
@@ -35,19 +37,25 @@
 #include "chromeos/ash/components/dbus/userdataauth/fake_userdataauth_client.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/known_user.h"
+#include "components/user_manager/user_manager.h"
+#include "components/user_manager/user_type.h"
 #include "content/public/test/browser_test.h"
+#include "google_apis/gaia/gaia_id.h"
 
 namespace ash {
 namespace {
 
 constexpr char kUser1Email[] = "test-user1@gmail.com";
-constexpr char kGaia1ID[] = "111111";
+constexpr GaiaId::Literal kGaia1ID("111111");
 
 constexpr char kUser2Email[] = "test-user2@gmail.com";
-constexpr char kGaia2ID[] = "222222";
+constexpr GaiaId::Literal kGaia2ID("222222");
 
 constexpr char kUser3Email[] = "test-user3@gmail.com";
-constexpr char kGaia3ID[] = "333333";
+constexpr GaiaId::Literal kGaia3ID("333333");
+
+constexpr char kChildEmail[] = "child-user4@gmail.com";
+constexpr GaiaId::Literal kChildID("444444");
 
 constexpr base::TimeDelta kLoginOnlineShortDelay = base::Seconds(10);
 constexpr base::TimeDelta kLoginOnlineLongDelay = base::Seconds(20);
@@ -56,6 +64,12 @@ const test::UIPath kErrorMessageGuestSigninLink = {"error-message",
                                                    "error-guest-signin-link"};
 const test::UIPath kErrorMessageOfflineSigninLink = {
     "error-message", "error-offline-login-link"};
+
+constexpr char kTokenHandlePref[] = "PasswordTokenHandle";
+constexpr char kTokenHandleStatusPref[] = "TokenHandleStatus";
+constexpr char kTokenHandleStatusStale[] = "stale";
+
+constexpr char kTestTokenHandle[] = "test-token-handle";
 
 class UserSelectionScreenTest : public LoginManagerTest {
  public:
@@ -182,6 +196,59 @@ IN_PROC_BROWSER_TEST_F(UserSelectionScreenEnforceOnlineTest,
   EXPECT_TRUE(LoginScreenTestApi::IsOobeDialogVisible());
 }
 
+class UserSelectionScreenOldTokenHandlePathStaleTokenTest
+    : public LoginManagerTest {
+ public:
+  UserSelectionScreenOldTokenHandlePathStaleTokenTest() : LoginManagerTest() {
+    login_manager_mixin_.AppendManagedUsers(1);
+    // Disable the feature to test the old code path.
+    scoped_feature_list_.InitAndDisableFeature(
+        ash::features::kUseTokenHandleStore);
+  }
+
+  ~UserSelectionScreenOldTokenHandlePathStaleTokenTest() override = default;
+  UserSelectionScreenOldTokenHandlePathStaleTokenTest(
+      const UserSelectionScreenOldTokenHandlePathStaleTokenTest&) = delete;
+  UserSelectionScreenOldTokenHandlePathStaleTokenTest& operator=(
+      const UserSelectionScreenOldTokenHandlePathStaleTokenTest&) = delete;
+
+ protected:
+  LoginManagerMixin login_manager_mixin_{&mixin_host_};
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Test to check online login is enforced with the feature disabled.
+IN_PROC_BROWSER_TEST_F(UserSelectionScreenOldTokenHandlePathStaleTokenTest,
+                       PRE_IsOnlineLoginEnforcedWhenTokenStale) {
+  const auto& users = login_manager_mixin_.users();
+  user_manager::KnownUser known_user(g_browser_process->local_state());
+
+  known_user.SetStringPref(users[0].account_id, kTokenHandlePref,
+                           kTestTokenHandle);
+  known_user.SetStringPref(users[0].account_id, kTokenHandleStatusPref,
+                           kTokenHandleStatusStale);
+}
+
+// Test to check online login is enforced with the feature disabled.
+IN_PROC_BROWSER_TEST_F(UserSelectionScreenOldTokenHandlePathStaleTokenTest,
+                       IsOnlineLoginEnforcedWhenTokenStale) {
+  // kUseTokenHandleStore is DISABLED via the constructor.
+  const auto& users = login_manager_mixin_.users();
+
+  const AccountId user_id = users[0].account_id;
+
+  EXPECT_TRUE(ash::LoginScreenTestApi::FocusUser(user_id));
+
+  // Now, check if the UI reflects that online signin is required.
+  EXPECT_TRUE(ash::LoginScreenTestApi::IsForcedOnlineSignin(user_id));
+
+  // Since reauth is required, clicking the pod or attempting to log in
+  // should navigate to the Gaia screen. OobeScreenWaiter will wait for this
+  // transition.
+  ash::OobeScreenWaiter(ash::GaiaView::kScreenId).Wait();
+  EXPECT_TRUE(ash::LoginScreenTestApi::IsOobeDialogVisible());
+}
+
 class UserSelectionScreenBlockOfflineTest : public LoginManagerTest,
                                             public LocalStateMixin::Delegate {
  public:
@@ -225,10 +292,14 @@ class UserSelectionScreenBlockOfflineTest : public LoginManagerTest,
   const LoginManagerMixin::TestUserInfo test_user_limit_not_set_{
       AccountId::FromUserEmailGaiaId(kUser3Email, kGaia3ID),
       test::UserAuthConfig::Create(test::kDefaultAuthSetup).RequireReauth()};
+  const LoginManagerMixin::TestUserInfo test_child_user_{
+      AccountId::FromUserEmailGaiaId(kChildEmail, kChildID),
+      test::UserAuthConfig::Create(test::kDefaultAuthSetup).RequireReauth(),
+      user_manager::UserType::kChild};
   LoginManagerMixin login_mixin_{
       &mixin_host_,
       {test_user_over_the_limit_, test_user_under_the_limit_,
-       test_user_limit_not_set_}};
+       test_user_limit_not_set_, test_child_user_}};
   OfflineLoginTestMixin offline_login_test_mixin_{&mixin_host_};
   LocalStateMixin local_state_mixin_{&mixin_host_, this};
 };
@@ -263,15 +334,27 @@ IN_PROC_BROWSER_TEST_F(UserSelectionScreenBlockOfflineTest,
   test::OobeJS().ExpectVisiblePath(kErrorMessageOfflineSigninLink);
 }
 
-// Disabled due to high flake rate; see https://crbug.com/1406789.
-class DISABLED_DarkLightEnabledTest : public LoginManagerTest {
+// Offline login link is always hidden during reauth on a device owned by a
+// child.
+IN_PROC_BROWSER_TEST_F(UserSelectionScreenBlockOfflineTest,
+                       ChildDeviceOwnerReauthHideOfflineLink) {
+  user_manager::UserManager::Get()->SetOwnerId(test_child_user_.account_id);
+  offline_login_test_mixin_.GoOffline();
+  OpenGaiaDialog(test_child_user_.account_id);
+  OobeScreenWaiter(ErrorScreenView::kScreenId).Wait();
+  test::OobeJS().ExpectVisiblePath(kErrorMessageGuestSigninLink);
+  test::OobeJS().ExpectHiddenPath(kErrorMessageOfflineSigninLink);
+}
+
+class DarkLightEnabledTest : public LoginManagerTest {
  protected:
   void StartLogin(const AccountId& account_id) {
     LoginDisplayHost::default_host()
         ->GetWizardContext()
         ->defer_oobe_flow_finished_for_tests = true;
-    login_manager_mixin_.LoginWithDefaultContext(
+    UserContext user_context = LoginManagerMixin::CreateDefaultUserContext(
         LoginManagerMixin::TestUserInfo(account_id));
+    login_manager_mixin_.LoginAsNewRegularUser(user_context);
   }
   void FinishLogin() {
     LoginDisplayHost::default_host()
@@ -287,7 +370,7 @@ class DISABLED_DarkLightEnabledTest : public LoginManagerTest {
 };
 
 // OOBE + login of the first user.
-IN_PROC_BROWSER_TEST_F(DISABLED_DarkLightEnabledTest, PRE_PRE_OobeLogin) {
+IN_PROC_BROWSER_TEST_F(DarkLightEnabledTest, PRE_PRE_OobeLogin) {
   OobeScreenWaiter(UserCreationView::kScreenId).Wait();
   auto* dark_light_mode_controller = DarkLightModeControllerImpl::Get();
   EXPECT_FALSE(dark_light_mode_controller->IsDarkModeEnabled());
@@ -305,7 +388,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_DarkLightEnabledTest, PRE_PRE_OobeLogin) {
 }
 
 // "Add person" flow.
-IN_PROC_BROWSER_TEST_F(DISABLED_DarkLightEnabledTest, PRE_OobeLogin) {
+IN_PROC_BROWSER_TEST_F(DarkLightEnabledTest, PRE_OobeLogin) {
   // Oobe is hidden - prefs of the focused user are applied.
   EXPECT_FALSE(LoginScreenTestApi::IsOobeDialogVisible());
   auto* dark_light_mode_controller = DarkLightModeControllerImpl::Get();
@@ -343,7 +426,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_DarkLightEnabledTest, PRE_OobeLogin) {
 }
 
 // Test focusing different pods.
-IN_PROC_BROWSER_TEST_F(DISABLED_DarkLightEnabledTest, OobeLogin) {
+IN_PROC_BROWSER_TEST_F(DarkLightEnabledTest, OobeLogin) {
   ASSERT_EQ(LoginScreenTestApi::GetFocusedUser(), user2);
   auto* dark_light_mode_controller = DarkLightModeControllerImpl::Get();
   EXPECT_FALSE(dark_light_mode_controller->IsDarkModeEnabled());

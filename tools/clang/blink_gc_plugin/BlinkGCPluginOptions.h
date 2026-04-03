@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "clang/Basic/SourceLocation.h"
+
 struct BlinkGCPluginOptions {
   bool dump_graph = false;
 
@@ -41,7 +43,8 @@ struct BlinkGCPluginOptions {
   bool enable_extra_padding_check = false;
 
   // Enables checks for GCed objects, Members, and pointers or references to
-  // GCed objects and in stl and WTF collections.
+  // GCed objects and in stl and WTF collections. Do not remove this flag. It is
+  // needed for disabling the check for Pdfium builds.
   bool enable_off_heap_collections_of_gced_check = true;
 
   std::set<std::string> ignored_classes;

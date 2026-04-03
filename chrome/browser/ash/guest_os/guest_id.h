@@ -7,6 +7,7 @@
 
 #include <ostream>
 #include <string>
+#include <string_view>
 
 #include "base/containers/flat_map.h"
 #include "base/values.h"
@@ -25,7 +26,8 @@ struct GuestId {
   explicit GuestId(const base::Value&) noexcept;
 
   base::flat_map<std::string, std::string> ToMap() const;
-  base::Value::Dict ToDictValue() const;
+  base::DictValue ToDictValue() const;
+  std::string Serialize() const;
 
   VmType vm_type;
   std::string vm_name;
@@ -34,11 +36,10 @@ struct GuestId {
 
 bool operator<(const GuestId& lhs, const GuestId& rhs) noexcept;
 bool operator==(const GuestId& lhs, const GuestId& rhs) noexcept;
-inline bool operator!=(const GuestId& lhs, const GuestId& rhs) noexcept {
-  return !(lhs == rhs);
-}
 
 std::ostream& operator<<(std::ostream& ostream, const GuestId& container_id);
+
+std::optional<GuestId> Deserialize(std::string_view guest_id_string);
 
 // Returns a list of all containers in prefs.
 std::vector<GuestId> GetContainers(Profile* profile, VmType vm_type);
@@ -50,7 +51,7 @@ bool MatchContainerDict(const base::Value& dict, const GuestId& container_id);
 // Add a new container to the kGuestOsContainers pref
 void AddContainerToPrefs(Profile* profile,
                          const GuestId& container_id,
-                         base::Value::Dict properties);
+                         base::DictValue properties);
 
 // Remove a deleted container from the kGuestOsContainers pref.
 void RemoveContainerFromPrefs(Profile* profile, const GuestId& container_id);
@@ -75,7 +76,7 @@ void UpdateContainerPref(Profile* profile,
 void MergeContainerPref(Profile* profile,
                         const GuestId& container_id,
                         const std::string& key,
-                        base::Value::Dict dict);
+                        base::DictValue dict);
 
 // Get "vm_type" int from pref and convert to VmType using TERMINA(0) as default
 // if field is not present.

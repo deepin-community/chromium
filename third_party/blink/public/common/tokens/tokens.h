@@ -123,8 +123,15 @@ using ExecutionContextToken = MultiToken<LocalFrameToken,
                                          SharedStorageWorkletToken,
                                          ShadowRealmToken>;
 
+// Identifies the destination of a screenshot for a same-document navigation.
+using SameDocNavigationScreenshotDestinationToken = base::TokenType<
+    class SameDocNavigationScreenshotDestinationTokenTypeMarker>;
+
 // Identifies a v8::Context / blink::ScriptState.
 using V8ContextToken = base::TokenType<class V8ContextTokenTypeMarker>;
+
+using ViewTransitionToken =
+    base::TokenType<class ViewTransitionTokenTypeMarker>;
 
 // Identifies possible contexts used for WebGPU. Used in cross-process mojo
 // interfaces for isolation key coordination.
@@ -135,6 +142,13 @@ using WebGPUExecutionContextToken = MultiToken<DocumentToken,
                                                DedicatedWorkerToken,
                                                SharedWorkerToken,
                                                ServiceWorkerToken>;
+
+// Identify various WebNN types in a renderer process and the WebNN service.
+using WebNNContextToken = base::TokenType<class WebNNContextTokenTypeMarker>;
+using WebNNPendingConstantToken =
+    base::TokenType<class WebNNPendingConstantTokenTypeMarker>;
+using WebNNTensorToken = base::TokenType<class WebNNTensorTokenTypeMarker>;
+using WebNNGraphToken = base::TokenType<class WebNNGraphTokenTypeMarker>;
 
 }  // namespace blink
 

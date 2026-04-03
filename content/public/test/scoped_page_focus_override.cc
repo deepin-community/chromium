@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/containers/span.h"
 #include "base/functional/callback.h"
@@ -33,10 +34,10 @@ ScopedPageFocusOverride::~ScopedPageFocusOverride() {
 void ScopedPageFocusOverride::DispatchProtocolMessage(
     DevToolsAgentHost* agent_host,
     base::span<const uint8_t> message) {
-  base::StringPiece message_str(reinterpret_cast<const char*>(message.data()),
-                                message.size());
+  std::string_view message_str(reinterpret_cast<const char*>(message.data()),
+                               message.size());
   std::optional<base::Value> parsed_message =
-      base::JSONReader::Read(message_str);
+      base::JSONReader::Read(message_str, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(parsed_message.has_value());
 
   std::optional<int> id = parsed_message->GetDict().FindInt("id");
@@ -50,16 +51,14 @@ void ScopedPageFocusOverride::DispatchProtocolMessage(
 void ScopedPageFocusOverride::AgentHostClosed(DevToolsAgentHost* agent_host) {}
 
 void ScopedPageFocusOverride::SetFocusEmulationEnabled(bool enabled) {
-  base::Value::Dict command =
-      base::Value::Dict()
+  base::DictValue command =
+      base::DictValue()
           .Set("id", ++last_sent_id_)
           .Set("method", "Emulation.setFocusEmulationEnabled")
-          .Set("params", base::Value::Dict().Set("enabled", enabled));
+          .Set("params", base::DictValue().Set("enabled", enabled));
 
-  std::string json_command;
-  base::JSONWriter::Write(command, &json_command);
-  agent_host_->DispatchProtocolMessage(
-      this, base::as_bytes(base::make_span(json_command)));
+  std::string json_command = base::WriteJson(command).value_or("");
+  agent_host_->DispatchProtocolMessage(this, base::as_byte_span(json_command));
 
   base::RunLoop run_loop;
   EXPECT_FALSE(run_loop_quit_closure_);

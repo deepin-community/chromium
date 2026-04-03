@@ -5,10 +5,11 @@
 #include <wayland-server-protocol-core.h>
 
 #include "ash/shell.h"
-#include "ash/test/test_widget_builder.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/overview/overview_test_util.h"
 #include "base/memory/raw_ptr.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "components/exo/display.h"
 #include "components/exo/wayland/test/client_util.h"
 #include "components/exo/wayland/test/server_util.h"
@@ -17,7 +18,8 @@
 #include "components/exo/xdg_shell_surface.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/client/aura_constants.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
+#include "ui/views/test/test_widget_builder.h"
 
 namespace exo::wayland {
 namespace {
@@ -332,8 +334,10 @@ TEST_F(WaylandAuraShellServerTest, AckRotateFocus) {
   auto keys = SetupClientSurfaces();
   AttachBufferToSurfaces();
 
-  auto native_widget1 = ash::TestWidgetBuilder().BuildOwnsNativeWidget();
-  auto native_widget2 = ash::TestWidgetBuilder().BuildOwnsNativeWidget();
+  auto native_widget1 =
+      views::test::TestWidgetBuilder().BuildOwnsNativeWidget();
+  auto native_widget2 =
+      views::test::TestWidgetBuilder().BuildOwnsNativeWidget();
 
   std::unique_ptr<zaura_toplevel> zaura_toplevel;
 
@@ -403,10 +407,10 @@ TEST_F(WaylandAuraShellServerTest, OverviewMode) {
   auto observer = SetupShellObservation();
 
   // Need at least one window for overview animation.
-  auto native_widget = ash::TestWidgetBuilder().BuildOwnsNativeWidget();
+  auto native_widget = views::test::TestWidgetBuilder().BuildOwnsNativeWidget();
 
-  ui::ScopedAnimationDurationScaleMode non_zero(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode non_zero(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Test starting overview and letting the animation complete.
   overview_controller->StartOverview(start_action);
@@ -490,8 +494,8 @@ TEST_F(WaylandAuraShellServerTest, SetCanMaximizeAndFullscreen) {
   EXPECT_FALSE(widget->widget_delegate()->CanFullscreen());
 }
 
-// TODO(crbug.com/1490404): Re-enable this when flakiness is resolved.
-TEST_F(WaylandAuraShellServerTest, DISABLED_SetUnSetFloat) {
+// TODO(crbug.com/40284737): Re-enable this when flakiness is resolved.
+TEST_F(WaylandAuraShellServerTest, SetUnSetFloat) {
   UpdateDisplay("800x600");
 
   auto keys = SetupClientSurfaces();
@@ -512,8 +516,8 @@ TEST_F(WaylandAuraShellServerTest, DISABLED_SetUnSetFloat) {
 
   views::Widget* widget = xdg_surface->shell_surface->GetWidget();
   auto* window_state = ash::WindowState::Get(widget->GetNativeWindow());
-  window_state->window()->SetProperty(aura::client::kAppType,
-                                      static_cast<int>(ash::AppType::LACROS));
+  window_state->window()->SetProperty(chromeos::kAppTypeKey,
+                                      chromeos::AppType::BROWSER);
   ASSERT_FALSE(window_state->IsFloated());
 
   // Location 0 is bottom right. Test that the window is floated and in the
@@ -580,7 +584,7 @@ class WaylandAuraOutputServerTest : public test::WaylandServerTest {
 
 TEST_F(WaylandAuraOutputServerTest, ActiveDisplay) {
   UpdateDisplay("800x600,800x600");
-  const auto* screen = display::Screen::GetScreen();
+  const auto* screen = display::Screen::Get();
   ASSERT_EQ(2u, screen->GetAllDisplays().size());
   const int64_t primary_id = screen->GetAllDisplays()[0].id();
   const int64_t secondary_id = screen->GetAllDisplays()[1].id();
@@ -594,10 +598,10 @@ TEST_F(WaylandAuraOutputServerTest, ActiveDisplay) {
 
   // Create two widgets, one on the primary and the other on the secondary
   // display.
-  auto* primary_widget = ash::TestWidgetBuilder()
+  auto* primary_widget = views::test::TestWidgetBuilder()
                              .SetBounds({{100, 100}, {200, 200}})
                              .BuildOwnedByNativeWidget();
-  auto* secondary_widget = ash::TestWidgetBuilder()
+  auto* secondary_widget = views::test::TestWidgetBuilder()
                                .SetBounds({{900, 100}, {200, 200}})
                                .BuildOwnedByNativeWidget();
   ASSERT_EQ(

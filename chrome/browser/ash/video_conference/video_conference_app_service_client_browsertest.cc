@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/video_conference/video_conference_app_service_client.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <utility>
 #include <vector>
@@ -26,8 +27,6 @@
 #include "base/unguessable_token.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_ash.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/ash/crosapi/crosapi_ash.h"
-#include "chrome/browser/ash/crosapi/crosapi_manager.h"
 #include "chrome/browser/ash/video_conference/video_conference_manager_ash.h"
 #include "chrome/browser/chromeos/video_conference/video_conference_manager_client_common.h"
 #include "chrome/browser/chromeos/video_conference/video_conference_ukm_helper.h"
@@ -70,7 +69,7 @@ apps::AppPtr MakeApp(const AppIdString& app_id,
   if (app_id == kAppId2) {
     app->name = kAppName2;
   }
-  if (base::Contains(::video_conference::kSkipAppIds, app_id)) {
+  if (std::ranges::contains(::video_conference::kSkipAppIds, app_id)) {
     app->name = base::StrCat({"AppName-", app_id});
   }
 
@@ -146,11 +145,13 @@ class FakeAppInstance {
 
 class VideoConferenceAppServiceClientTest : public InProcessBrowserTest {
  public:
+  using AppState = VideoConferenceAppServiceClient::AppState;
+  using VideoConferencePermissions =
+      VideoConferenceAppServiceClient::VideoConferencePermissions;
+
   void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(
-        {ash::features::kVideoConference,
-         ash::features::kCameraEffectsSupportedByHardware},
-        {});
+    scoped_feature_list_.InitAndEnableFeature(
+        ash::features::kFeatureManagementVideoConference);
 
     InProcessBrowserTest::SetUp();
   }
@@ -190,7 +191,7 @@ class VideoConferenceAppServiceClientTest : public InProcessBrowserTest {
                           bool has_microphone_permission) {
     std::vector<apps::AppPtr> deltas;
     deltas.push_back(MakeApp(app_id, has_camera_permission,
-                             has_microphone_permission, GetAppType(app_id)));
+                             has_microphone_permission, apps::AppType::kArc));
     app_service_proxy_->OnApps(std::move(deltas), apps::AppType::kUnknown,
                                /*should_notify_initialized=*/false);
   }
@@ -210,8 +211,7 @@ class VideoConferenceAppServiceClientTest : public InProcessBrowserTest {
   }
 
   // Adds {id, state} pair to client_->id_to_app_state_.
-  void AddAppState(const AppIdString& app_id,
-                   const VideoConferenceAppServiceClient::AppState& state) {
+  void AddAppState(const AppIdString& app_id, const AppState& state) {
     (client_->id_to_app_state_)[app_id] = state;
   }
 
@@ -241,10 +241,7 @@ class VideoConferenceAppServiceClientTest : public InProcessBrowserTest {
 
   // Returns current VideoConferenceMediaState in the VideoConferenceManagerAsh
   VideoConferenceMediaState GetMediaStateInVideoConferenceManagerAsh() {
-    return crosapi::CrosapiManager::Get()
-        ->crosapi_ash()
-        ->video_conference_manager_ash()
-        ->GetAggregatedState();
+    return ash::VideoConferenceManagerAsh::Get()->GetAggregatedState();
   }
 
  protected:
@@ -283,8 +280,7 @@ IN_PROC_BROWSER_TEST_F(VideoConferenceAppServiceClientTest, GetAppType) {
 IN_PROC_BROWSER_TEST_F(VideoConferenceAppServiceClientTest, GetAppPermission) {
   InstallApp(kAppId1);
 
-  VideoConferenceAppServiceClient::VideoConferencePermissions permission =
-      GetAppPermission(kAppId1);
+  VideoConferencePermissions permission = GetAppPermission(kAppId1);
   EXPECT_FALSE(permission.has_camera_permission);
   EXPECT_FALSE(permission.has_microphone_permission);
 
@@ -316,14 +312,12 @@ IN_PROC_BROWSER_TEST_F(VideoConferenceAppServiceClientTest, GetAppPermission) {
 IN_PROC_BROWSER_TEST_F(VideoConferenceAppServiceClientTest, GetMediaApps) {
   // Add {kAppId1, state1} pair to the client_.
   const base::UnguessableToken token1 = base::UnguessableToken::Create();
-  const VideoConferenceAppServiceClient::AppState state1{
-      token1, base::Time::Now(), true, true};
+  const AppState state1{token1, base::Time::Now(), true, true};
   AddAppState(kAppId1, state1);
 
   // Add {kAppId2, state2} pair to the client_.
   const base::UnguessableToken token2 = base::UnguessableToken::Create();
-  const VideoConferenceAppServiceClient::AppState state2{
-      token2, base::Time::Now(), true, false};
+  const AppState state2{token2, base::Time::Now(), true, false};
   AddAppState(kAppId2, state2);
 
   std::vector<crosapi::mojom::VideoConferenceMediaAppInfoPtr> media_app_info =
@@ -380,8 +374,7 @@ IN_PROC_BROWSER_TEST_F(VideoConferenceAppServiceClientTest, ReturnToApp) {
   EXPECT_FALSE(window2->IsVisible());
 
   // Add pair {token1, state1} to client_->id_to_app_state_.
-  const VideoConferenceAppServiceClient::AppState state1{
-      token1, base::Time::Now(), true, true};
+  const AppState state1{token1, base::Time::Now(), true, true};
   AddAppState(kAppId1, state1);
 
   // Return to token1 should show all instances associated with kAppId1.
@@ -638,14 +631,11 @@ IN_PROC_BROWSER_TEST_F(VideoConferenceAppServiceClientTest,
 IN_PROC_BROWSER_TEST_F(VideoConferenceAppServiceClientTest,
                        OnlyCertainAppsAreTracked) {
   for (const auto type :
-       {apps::AppType::kUnknown, apps::AppType::kBuiltIn,
-        apps::AppType::kCrostini, apps::AppType::kChromeApp,
-        apps::AppType::kWeb, apps::AppType::kPluginVm,
-        apps::AppType::kStandaloneBrowser, apps::AppType::kRemote,
+       {apps::AppType::kUnknown, apps::AppType::kCrostini,
+        apps::AppType::kChromeApp, apps::AppType::kWeb,
+        apps::AppType::kPluginVm, apps::AppType::kRemote,
         apps::AppType::kBorealis, apps::AppType::kSystemWeb,
-        apps::AppType::kStandaloneBrowserChromeApp, apps::AppType::kExtension,
-        apps::AppType::kStandaloneBrowserExtension,
-        apps::AppType::kBruschetta}) {
+        apps::AppType::kExtension, apps::AppType::kBruschetta}) {
     // Create a fake id.
     const std::string app_id = base::NumberToString(static_cast<int>(type));
     // Install the app with given type.
@@ -667,18 +657,12 @@ IN_PROC_BROWSER_TEST_F(VideoConferenceAppServiceClientTest,
                        HandleDeviceUsedWhileDisabled) {
   // Notify disabling state of camera and microphone from
   // video_conference_manager_ash.
-  crosapi::CrosapiManager::Get()
-      ->crosapi_ash()
-      ->video_conference_manager_ash()
-      ->SetSystemMediaDeviceStatus(
-          crosapi::mojom::VideoConferenceMediaDevice::kCamera,
-          /*disabled=*/true);
-  crosapi::CrosapiManager::Get()
-      ->crosapi_ash()
-      ->video_conference_manager_ash()
-      ->SetSystemMediaDeviceStatus(
-          crosapi::mojom::VideoConferenceMediaDevice::kMicrophone,
-          /*disabled=*/true);
+  ash::VideoConferenceManagerAsh::Get()->SetSystemMediaDeviceStatus(
+      crosapi::mojom::VideoConferenceMediaDevice::kCamera,
+      /*enabled=*/false);
+  ash::VideoConferenceManagerAsh::Get()->SetSystemMediaDeviceStatus(
+      crosapi::mojom::VideoConferenceMediaDevice::kMicrophone,
+      /*enabled=*/false);
 
   FakeVideoConferenceTrayController* fake_try_controller =
       static_cast<FakeVideoConferenceTrayController*>(
@@ -720,18 +704,12 @@ IN_PROC_BROWSER_TEST_F(VideoConferenceAppServiceClientTest,
 
   // Notify enabling state of camera and microphone from
   // video_conference_manager_ash.
-  crosapi::CrosapiManager::Get()
-      ->crosapi_ash()
-      ->video_conference_manager_ash()
-      ->SetSystemMediaDeviceStatus(
-          crosapi::mojom::VideoConferenceMediaDevice::kCamera,
-          /*disabled=*/false);
-  crosapi::CrosapiManager::Get()
-      ->crosapi_ash()
-      ->video_conference_manager_ash()
-      ->SetSystemMediaDeviceStatus(
-          crosapi::mojom::VideoConferenceMediaDevice::kMicrophone,
-          /*disabled=*/false);
+  ash::VideoConferenceManagerAsh::Get()->SetSystemMediaDeviceStatus(
+      crosapi::mojom::VideoConferenceMediaDevice::kCamera,
+      /*enabled=*/true);
+  ash::VideoConferenceManagerAsh::Get()->SetSystemMediaDeviceStatus(
+      crosapi::mojom::VideoConferenceMediaDevice::kMicrophone,
+      /*enabled=*/true);
 
   // Accessing camera should not trigger NotifyDeviceUsedWhileDisabled because
   // camera is not disabled.

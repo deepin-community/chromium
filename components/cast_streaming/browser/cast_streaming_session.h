@@ -25,9 +25,9 @@
 #include "media/base/video_decoder_config.h"
 #include "media/mojo/mojom/media_types.mojom.h"
 #include "mojo/public/cpp/system/data_pipe.h"
-#include "third_party/openscreen/src/cast/streaming/receiver.h"
-#include "third_party/openscreen/src/cast/streaming/receiver_constraints.h"
-#include "third_party/openscreen/src/cast/streaming/receiver_session.h"
+#include "third_party/openscreen/src/cast/streaming/public/receiver.h"
+#include "third_party/openscreen/src/cast/streaming/public/receiver_constraints.h"
+#include "third_party/openscreen/src/cast/streaming/public/receiver_session.h"
 
 namespace cast_streaming {
 
@@ -188,10 +188,15 @@ class CastStreamingSession {
     void OnReceiversDestroying(const openscreen::cast::ReceiverSession* session,
                                ReceiversDestroyingReason reason) override;
     void OnError(const openscreen::cast::ReceiverSession* session,
-                 openscreen::Error error) override;
+                 const openscreen::Error& error) override;
 
     void OnDataTimeout();
     void OnCastChannelClosed();
+
+    // Ends the session by informing the client and setting the client to null
+    // (to prevent accessing the client later, at which point it may have
+    // already been destructed).
+    void EndSession();
 
     openscreen_platform::TaskRunner task_runner_;
     openscreen::cast::Environment environment_;
@@ -215,7 +220,7 @@ class CastStreamingSession {
     base::OnceCallback<void()> start_session_cb_;
 
     bool is_initialized_ = false;
-    const raw_ptr<CastStreamingSession::Client> client_;
+    raw_ptr<CastStreamingSession::Client> client_;
     std::unique_ptr<StreamConsumer> audio_consumer_;
     std::unique_ptr<StreamConsumer> video_consumer_;
 

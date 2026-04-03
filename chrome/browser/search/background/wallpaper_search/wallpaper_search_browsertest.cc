@@ -22,10 +22,10 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ui_base_features.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/ownership/owner_settings_service_ash.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 class WallpaperSearchBrowserTest : public InProcessBrowserTest {
  public:
@@ -38,7 +38,7 @@ class WallpaperSearchBrowserTest : public InProcessBrowserTest {
              kWallpaperSearchSettingsVisibility,
          ntp_features::kCustomizeChromeWallpaperSearch,
          optimization_guide::features::kOptimizationGuideModelExecution},
-        {});
+        {optimization_guide::features::internal::kWallpaperSearchGraduated});
     InProcessBrowserTest::SetUp();
   }
 
@@ -46,7 +46,7 @@ class WallpaperSearchBrowserTest : public InProcessBrowserTest {
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 // PRE_ simulates a browser restart.
 IN_PROC_BROWSER_TEST_F(WallpaperSearchBrowserTest,
                        PRE_EnablingWallpaperSearchEnables) {
@@ -57,8 +57,7 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchBrowserTest,
   // GM3 should enable itself when the browser restarts.
   browser()->profile()->GetPrefs()->SetInteger(
       optimization_guide::prefs::GetSettingEnabledPrefName(
-          optimization_guide::proto::ModelExecutionFeature::
-              MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH),
+          optimization_guide::UserVisibleFeatureKey::kWallpaperSearch),
       static_cast<int>(optimization_guide::prefs::FeatureOptInState::kEnabled));
 }
 
@@ -68,12 +67,11 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchBrowserTest,
   auto* keyed_service =
       OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile());
   EXPECT_TRUE(keyed_service->ShouldFeatureBeCurrentlyEnabledForUser(
-      optimization_guide::proto::ModelExecutionFeature::
-          MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH));
+      optimization_guide::UserVisibleFeatureKey::kWallpaperSearch));
 }
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 class WallpaperSearchServiceBrowserChromeAshTest
     : public WallpaperSearchBrowserTest,
       public ::testing::WithParamInterface<bool> {
@@ -95,8 +93,7 @@ IN_PROC_BROWSER_TEST_P(WallpaperSearchServiceBrowserChromeAshTest,
   // GM3 should enable itself when the browser restarts.
   browser()->profile()->GetPrefs()->SetInteger(
       optimization_guide::prefs::GetSettingEnabledPrefName(
-          optimization_guide::proto::ModelExecutionFeature::
-              MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH),
+          optimization_guide::UserVisibleFeatureKey::kWallpaperSearch),
       static_cast<int>(optimization_guide::prefs::FeatureOptInState::kEnabled));
 
   // Declare if the user is the device owner.
@@ -111,7 +108,6 @@ IN_PROC_BROWSER_TEST_P(WallpaperSearchServiceBrowserChromeAshTest,
   auto* keyed_service =
       OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile());
   EXPECT_TRUE(keyed_service->ShouldFeatureBeCurrentlyEnabledForUser(
-      optimization_guide::proto::ModelExecutionFeature::
-          MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH));
+      optimization_guide::UserVisibleFeatureKey::kWallpaperSearch));
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)

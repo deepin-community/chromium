@@ -113,6 +113,12 @@ size_t TimeToSampleFrame(double time,
   return static_cast<size_t>(frame);
 }
 
+base::TimeDelta FramesToTime(int64_t frames, float sample_rate) {
+  CHECK_GT(sample_rate, 0.f);
+  return base::Microseconds(static_cast<int64_t>(
+      frames * base::Time::kMicrosecondsPerSecond / sample_rate));
+}
+
 bool IsValidAudioBufferSampleRate(float sample_rate) {
   return sample_rate >= MinAudioBufferSampleRate() &&
          sample_rate <= MaxAudioBufferSampleRate();
@@ -127,6 +133,19 @@ float MaxAudioBufferSampleRate() {
   // <video> tags support sample rates up 768 kHz so audio context
   // should too.
   return 768000;
+}
+
+bool IsValidRenderQuantumSize(uint32_t render_quantum_size, float sample_rate) {
+  return render_quantum_size >= MinRenderQuantumSize() &&
+         render_quantum_size <= MaxRenderQuantumSize(sample_rate);
+}
+
+uint32_t MinRenderQuantumSize() {
+  return 1;
+}
+
+uint32_t MaxRenderQuantumSize(float sample_rate) {
+  return static_cast<uint32_t>(6 * sample_rate);
 }
 
 const std::string GetSinkIdForTracing(

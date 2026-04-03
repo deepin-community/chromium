@@ -10,7 +10,6 @@
 
 #include "components/attribution_reporting/filters.h"
 #include "components/attribution_reporting/source_type.mojom-forward.h"
-#include "components/attribution_reporting/trigger_config.h"
 
 namespace base {
 class TimeDelta;
@@ -18,17 +17,26 @@ class TimeDelta;
 
 namespace attribution_reporting {
 
+class AggregatableDebugReportingContribution;
+class AggregatableNamedBudgetDefs;
+class AggregatableNamedBudgetCandidate;
 class AggregatableTriggerConfig;
 class AggregatableTriggerData;
 class AggregatableValues;
 class AggregationKeys;
+class AttributionScopesData;
+class AttributionScopesSet;
 class DestinationSet;
 class EventReportWindows;
+class RandomizedResponseData;
+class SourceAggregatableDebugReportingConfig;
 class SuitableOrigin;
-class SummaryBuckets;
+class TriggerDataSet;
 
+struct AggregatableDebugReportingConfig;
 struct AggregatableDedupKey;
 struct EventTriggerData;
+struct FakeEventLevelReport;
 struct OsRegistrationItem;
 struct ParseError;
 struct SourceRegistration;
@@ -37,6 +45,10 @@ struct TriggerRegistration;
 FiltersDisjunction FiltersForSourceType(
     mojom::SourceType,
     std::optional<base::TimeDelta> lookback_window = std::nullopt);
+
+TriggerDataSet TriggerDataSetWithCardinality(int cardinality);
+
+EventReportWindows EventReportWindowsWithCount(int num_report_windows);
 
 std::ostream& operator<<(std::ostream&, const AggregationKeys&);
 
@@ -48,6 +60,12 @@ std::ostream& operator<<(std::ostream&, const DestinationSet&);
 
 std::ostream& operator<<(std::ostream&, const EventReportWindows&);
 
+std::ostream& operator<<(std::ostream&, const AttributionScopesSet&);
+
+std::ostream& operator<<(std::ostream&, const AttributionScopesData&);
+
+std::ostream& operator<<(std::ostream&, const AggregatableNamedBudgetDefs&);
+
 std::ostream& operator<<(std::ostream&, const SourceRegistration&);
 
 std::ostream& operator<<(std::ostream&, const AggregatableValues&);
@@ -55,6 +73,9 @@ std::ostream& operator<<(std::ostream&, const AggregatableValues&);
 std::ostream& operator<<(std::ostream&, const AggregatableTriggerData&);
 
 std::ostream& operator<<(std::ostream&, const EventTriggerData&);
+
+std::ostream& operator<<(std::ostream&,
+                         const AggregatableNamedBudgetCandidate&);
 
 std::ostream& operator<<(std::ostream&, const TriggerRegistration&);
 
@@ -64,17 +85,24 @@ std::ostream& operator<<(std::ostream&, const AggregatableDedupKey&);
 
 std::ostream& operator<<(std::ostream&, const OsRegistrationItem&);
 
-std::ostream& operator<<(std::ostream&, const SummaryBuckets&);
-
-std::ostream& operator<<(std::ostream&, const TriggerSpec&);
-
-std::ostream& operator<<(std::ostream&, const TriggerSpecs&);
-
-std::ostream& operator<<(std::ostream&, const TriggerSpecs::const_iterator&);
+std::ostream& operator<<(std::ostream&, const TriggerDataSet&);
 
 std::ostream& operator<<(std::ostream&, const AggregatableTriggerConfig&);
 
 std::ostream& operator<<(std::ostream&, const ParseError&);
+
+std::ostream& operator<<(std::ostream& out, const FakeEventLevelReport&);
+
+std::ostream& operator<<(std::ostream& out, const RandomizedResponseData&);
+
+std::ostream& operator<<(std::ostream& out,
+                         const AggregatableDebugReportingConfig&);
+
+std::ostream& operator<<(std::ostream& out,
+                         const SourceAggregatableDebugReportingConfig&);
+
+std::ostream& operator<<(std::ostream& out,
+                         const AggregatableDebugReportingContribution&);
 
 }  // namespace attribution_reporting
 

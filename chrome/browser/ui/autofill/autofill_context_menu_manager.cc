@@ -4,37 +4,63 @@
 
 #include "chrome/browser/ui/autofill/autofill_context_menu_manager.h"
 
+#include <algorithm>
 #include <string>
 
-#include "base/ranges/algorithm.h"
+#include "base/containers/fixed_flat_set.h"
+#include "base/feature_list.h"
+#include "base/metrics/user_metrics.h"
+#include "base/metrics/user_metrics_action.h"
+#include "base/notreached.h"
 #include "base/values.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/feedback/show_feedback_page.h"
+#include "chrome/browser/password_manager/chrome_password_manager_client.h"
+#include "chrome/browser/password_manager/factories/password_counter_factory.h"
+#include "chrome/browser/plus_addresses/plus_address_service_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/user_education/scoped_new_badge_tracker.h"
+#include "chrome/browser/ui/passwords/ui_utils.h"
+#include "chrome/browser/ui/webauthn/context_menu_helper.h"
+#include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/core/browser/autofill_feedback_data.h"
-#include "components/autofill/core/browser/browser_autofill_manager.h"
-#include "components/autofill/core/browser/data_model/autofill_profile.h"
-#include "components/autofill/core/browser/field_type_utils.h"
-#include "components/autofill/core/browser/form_types.h"
-#include "components/autofill/core/browser/metrics/fallback_autocomplete_unrecognized_metrics.h"
-#include "components/autofill/core/browser/personal_data_manager.h"
-#include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/unique_ids.h"
-#include "components/feature_engagement/public/feature_constants.h"
+#include "components/autofill/core/browser/foundations/autofill_driver.h"
+#include "components/autofill/core/browser/foundations/autofill_manager.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_manager.h"
+#include "components/autofill/core/common/aliases.h"
+#include "components/password_manager/content/browser/content_password_manager_driver.h"
+#include "components/password_manager/core/browser/password_autofill_manager.h"
+#include "components/password_manager/core/browser/password_counter.h"
+#include "components/password_manager/core/browser/password_manager_client.h"
+#include "components/password_manager/core/browser/password_manager_util.h"
+#include "components/password_manager/core/browser/password_manual_fallback_metrics_recorder.h"
+#include "components/password_manager/core/common/password_manager_pref_names.h"
+#include "components/plus_addresses/core/browser/grit/plus_addresses_strings.h"
+#include "components/plus_addresses/core/browser/plus_address_service.h"
+#include "components/plus_addresses/core/common/features.h"
+#include "components/prefs/pref_service.h"
+#include "components/renderer_context_menu/render_view_context_menu_base.h"
 #include "components/variations/service/variations_service.h"
 #include "components/vector_icons/vector_icons.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/models/menu_model.h"
+#include "ui/base/models/image_model.h"
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#include "components/plus_addresses/core/browser/resources/vector_icons.h"
+#endif
 
 namespace autofill {
 
 namespace {
+
+using ::password_manager::ContentPasswordManagerDriver;
 
 constexpr char kFeedbackPlaceholder[] =
     "What steps did you just take?\n"
@@ -45,6 +71,16 @@ constexpr char kFeedbackPlaceholder[] =
     "What was the expected result?\n"
     "\n"
     "What happened instead? (Please include the screenshot below)";
+
+// Constant determining the icon size in the context menu.
+constexpr int kContextMenuIconSize = 16;
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+const gfx::VectorIcon& kPlusAddressLogoIcon =
+    plus_addresses::kPlusAddressLogoSmallIcon;
+#else
+const gfx::VectorIcon& kPlusAddressLogoIcon = vector_icons::kEmailIcon;
+#endif
 
 bool ShouldShowAutofillContextMenu(const content::ContextMenuParams& params) {
   if (!params.form_control_type) {
@@ -57,7 +93,7 @@ bool ShouldShowAutofillContextMenu(const content::ContextMenuParams& params) {
   // `autofill::FormControlType::kContentEditable`, which is covered by the
   // above if-condition `!params.form_control_type`.
   //
-  // TODO(crbug.com/1492339): Unify with functions from form_autofill_util.cc.
+  // TODO(crbug.com/40285492): Unify with functions from form_autofill_util.cc.
   switch (*params.form_control_type) {
     case blink::mojom::FormControlType::kInputEmail:
     case blink::mojom::FormControlType::kInputMonth:
@@ -73,7 +109,6 @@ bool ShouldShowAutofillContextMenu(const content::ContextMenuParams& params) {
     case blink::mojom::FormControlType::kButtonSubmit:
     case blink::mojom::FormControlType::kButtonReset:
     case blink::mojom::FormControlType::kButtonPopover:
-    case blink::mojom::FormControlType::kButtonSelectList:
     case blink::mojom::FormControlType::kFieldset:
     case blink::mojom::FormControlType::kInputButton:
     case blink::mojom::FormControlType::kInputCheckbox:
@@ -92,41 +127,23 @@ bool ShouldShowAutofillContextMenu(const content::ContextMenuParams& params) {
     case blink::mojom::FormControlType::kOutput:
     case blink::mojom::FormControlType::kSelectOne:
     case blink::mojom::FormControlType::kSelectMultiple:
-    case blink::mojom::FormControlType::kSelectList:
       return false;
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
-base::Value::Dict LoadTriggerFormAndFieldLogs(
-    AutofillManager& manager,
-    const LocalFrameToken& frame_token,
-    const content::ContextMenuParams& params) {
-  if (!ShouldShowAutofillContextMenu(params)) {
-    return base::Value::Dict();
-  }
-
-  FormGlobalId form_global_id = {frame_token,
-                                 FormRendererId(params.form_renderer_id)};
-
-  base::Value::Dict trigger_form_logs;
-  if (FormStructure* form = manager.FindCachedFormById(form_global_id)) {
-    trigger_form_logs.Set("triggerFormSignature", form->FormSignatureAsStr());
-
-    if (params.form_control_type) {
-      FieldGlobalId field_global_id = {
-          frame_token, FieldRendererId(params.field_renderer_id)};
-      auto field =
-          base::ranges::find_if(*form, [&field_global_id](const auto& field) {
-            return field->global_id() == field_global_id;
-          });
-      if (field != form->end()) {
-        trigger_form_logs.Set("triggerFieldSignature",
-                              (*field)->FieldSignatureAsStr());
-      }
-    }
-  }
-  return trigger_form_logs;
+// Returns true if the given id is one generated for autofill context menu.
+bool IsAutofillCustomCommandId(
+    AutofillContextMenuManager::CommandId command_id) {
+  static constexpr auto kAutofillCommands = base::MakeFixedFlatSet<int>({
+      IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PLUS_ADDRESS,
+      IDC_CONTENT_CONTEXT_AUTOFILL_FEEDBACK,
+      IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_SELECT_PASSWORD,
+      IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_IMPORT_PASSWORDS,
+      IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_SUGGEST_PASSWORD,
+      IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_USE_PASSKEY_FROM_ANOTHER_DEVICE,
+  });
+  return kAutofillCommands.contains(command_id.value());
 }
 
 bool IsLikelyDogfoodClient() {
@@ -137,24 +154,49 @@ bool IsLikelyDogfoodClient() {
   return variations_service->IsLikelyDogfoodClient();
 }
 
-}  // namespace
-
-// static
-bool AutofillContextMenuManager::IsAutofillCustomCommandId(
-    CommandId command_id) {
-  const int id = command_id.value();
-  return id == IDC_CONTENT_CONTEXT_AUTOFILL_FEEDBACK ||
-         id == IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_ADDRESS ||
-         id == IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PAYMENTS;
+// Returns true if the field is a username or password field.
+bool IsPasswordFormField(ContentPasswordManagerDriver& password_manager_driver,
+                         const content::ContextMenuParams& params) {
+  const autofill::FieldRendererId current_field_renderer_id(
+      params.field_renderer_id);
+  return password_manager_driver.GetPasswordManager()
+      ->GetPasswordFormCache()
+      ->GetPasswordForm(&password_manager_driver, current_field_renderer_id);
 }
 
+base::DictValue LoadTriggerFormAndFieldLogs(
+    AutofillManager& manager,
+    const LocalFrameToken& frame_token,
+    const content::ContextMenuParams& params) {
+  if (!ShouldShowAutofillContextMenu(params)) {
+    return base::DictValue();
+  }
+
+  FormGlobalId form_global_id = {frame_token,
+                                 FormRendererId(params.form_renderer_id)};
+
+  base::DictValue trigger_form_logs;
+  if (const FormStructure* form = manager.FindCachedFormById(form_global_id)) {
+    trigger_form_logs.Set("triggerFormSignature", form->FormSignatureAsStr());
+
+    if (params.form_control_type) {
+      FieldGlobalId field_global_id = {
+          frame_token, FieldRendererId(params.field_renderer_id)};
+      if (const AutofillField* field = form->GetFieldById(field_global_id)) {
+        trigger_form_logs.Set("triggerFieldSignature",
+                              field->FieldSignatureAsStr());
+      }
+    }
+  }
+  return trigger_form_logs;
+}
+
+}  // namespace
+
 AutofillContextMenuManager::AutofillContextMenuManager(
-    PersonalDataManager* personal_data_manager,
     RenderViewContextMenuBase* delegate,
     ui::SimpleMenuModel* menu_model)
-    : personal_data_manager_(personal_data_manager),
-      menu_model_(menu_model),
-      delegate_(delegate) {
+    : menu_model_(menu_model), delegate_(delegate) {
   DCHECK(delegate_);
   params_ = delegate_->params();
 }
@@ -162,36 +204,8 @@ AutofillContextMenuManager::AutofillContextMenuManager(
 AutofillContextMenuManager::~AutofillContextMenuManager() = default;
 
 void AutofillContextMenuManager::AppendItems() {
-  content::RenderFrameHost* rfh = delegate_->GetRenderFrameHost();
-  if (!rfh)
-    return;
-
-  ContentAutofillDriver* driver =
-      ContentAutofillDriver::GetForRenderFrameHost(rfh);
-  // Do not show autofill context menu options for input fields that cannot be
-  // filled by the driver. See crbug.com/1367547.
-  if (!driver || !driver->CanShowAutofillUi())
-    return;
-
-  if (ShouldShowAutofillContextMenu(params_)) {
-    const LocalFrameToken frame_token = driver->GetFrameToken();
-    // Formless fields have default form renderer id.
-    driver->OnContextMenuShownInField(
-        {frame_token, FormRendererId(params_.form_renderer_id)},
-        {frame_token, FieldRendererId(params_.field_renderer_id)});
-  }
-
-  // Includes the option of submitting feedback on Autofill.
-  if (personal_data_manager_->IsAutofillEnabled() && IsLikelyDogfoodClient()) {
-    menu_model_->AddItemWithStringIdAndIcon(
-        IDC_CONTENT_CONTEXT_AUTOFILL_FEEDBACK,
-        IDS_CONTENT_CONTEXT_AUTOFILL_FEEDBACK,
-        ui::ImageModel::FromVectorIcon(vector_icons::kDogfoodIcon));
-
-    menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
-  }
-
-  MaybeAddAutofillManualFallbackItems(*driver);
+  MaybeAddAutofillManualFallbackItems();
+  MaybeAddAutofillFeedbackItem();
 }
 
 bool AutofillContextMenuManager::IsCommandIdSupported(int command_id) {
@@ -207,28 +221,242 @@ void AutofillContextMenuManager::ExecuteCommand(int command_id) {
   if (!rfh) {
     return;
   }
-  ContentAutofillDriver* driver =
-      ContentAutofillDriver::GetForRenderFrameHost(rfh);
-  if (!driver) {
+  if (command_id ==
+      IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_USE_PASSKEY_FROM_ANOTHER_DEVICE) {
+    webauthn::OnPasskeyFromAnotherDeviceContextMenuItemSelected(rfh);
     return;
   }
-  AutofillManager& manager = driver->GetAutofillManager();
-
+  ContentAutofillDriver* autofill_driver =
+      ContentAutofillDriver::GetForRenderFrameHost(rfh);
+  if (!autofill_driver) {
+    return;
+  }
   CHECK(IsAutofillCustomCommandId(CommandId(command_id)));
 
   if (command_id == IDC_CONTENT_CONTEXT_AUTOFILL_FEEDBACK) {
-    ExecuteAutofillFeedbackCommand(driver->GetFrameToken(), manager);
+    ExecuteAutofillFeedbackCommand(autofill_driver->GetFrameToken(),
+                                   autofill_driver->GetAutofillManager());
     return;
   }
 
-  if (command_id == IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_ADDRESS) {
-    ExecuteFallbackForAddressesCommand(manager);
+  if (command_id == IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PLUS_ADDRESS) {
+    ExecuteFallbackForPlusAddressesCommand(*autofill_driver);
     return;
   }
 
-  if (command_id == IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PAYMENTS) {
-    ExecuteFallbackForPaymentsCommand(manager);
+  if (command_id ==
+      IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_SELECT_PASSWORD) {
+    ExecuteFallbackForSelectPasswordCommand(*autofill_driver);
     return;
+  }
+
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(rfh);
+  if (command_id ==
+      IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_IMPORT_PASSWORDS) {
+    // This function also records metrics.
+    NavigateToManagePasswordsPage(
+        chrome::FindBrowserWithTab(web_contents),
+        password_manager::ManagePasswordsReferrer::kPasswordContextMenu);
+    return;
+  }
+
+  if (command_id ==
+      IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_SUGGEST_PASSWORD) {
+    // This function also records metrics.
+    password_manager_util::UserTriggeredManualGenerationFromContextMenu(
+        ChromePasswordManagerClient::FromWebContents(web_contents),
+        autofill::ContentAutofillClient::FromWebContents(web_contents));
+    return;
+  }
+}
+
+void AutofillContextMenuManager::MaybeAddAutofillFeedbackItem() {
+  content::RenderFrameHost* rfh = delegate_->GetRenderFrameHost();
+  if (!rfh) {
+    return;
+  }
+
+  ContentAutofillDriver* autofill_driver =
+      ContentAutofillDriver::GetForRenderFrameHost(rfh);
+  // Do not show autofill context menu options for input fields that cannot be
+  // filled by the driver. See crbug.com/1367547.
+  if (!autofill_driver || !autofill_driver->CanShowAutofillUi()) {
+    return;
+  }
+
+  // Includes the option of submitting feedback on Autofill.
+  if (autofill_driver->GetAutofillClient().IsAutofillEnabled() &&
+      IsLikelyDogfoodClient()) {
+    menu_model_->AddItemWithStringIdAndIcon(
+        IDC_CONTENT_CONTEXT_AUTOFILL_FEEDBACK,
+        IDS_CONTENT_CONTEXT_AUTOFILL_FEEDBACK,
+        ui::ImageModel::FromVectorIcon(vector_icons::kDogfoodIcon));
+
+    menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
+  }
+}
+
+void AutofillContextMenuManager::MaybeAddAutofillManualFallbackItems() {
+  if (!ShouldShowAutofillContextMenu(params_)) {
+    // Autofill entries are only available in input or text area fields
+    return;
+  }
+
+  content::RenderFrameHost* rfh = delegate_->GetRenderFrameHost();
+  if (!rfh) {
+    return;
+  }
+
+  ContentAutofillDriver* autofill_driver =
+      ContentAutofillDriver::GetForRenderFrameHost(rfh);
+  ContentPasswordManagerDriver* password_manager_driver =
+      ContentPasswordManagerDriver::GetForRenderFrameHost(rfh);
+
+  bool add_plus_address_fallback = false;
+  bool add_passwords_fallback = false;
+
+  // Do not show autofill context menu options for input fields that cannot be
+  // filled by the driver. See crbug.com/1367547.
+  if (autofill_driver && autofill_driver->CanShowAutofillUi()) {
+    add_plus_address_fallback =
+        ShouldAddPlusAddressManualFallbackItem(*autofill_driver);
+  }
+
+  // Do not show password manager context menu options for input fields that
+  // cannot be filled by the driver. See crbug.com/1367547.
+  if (password_manager_driver && password_manager_driver->CanShowAutofillUi()) {
+    add_passwords_fallback =
+        ShouldAddPasswordsManualFallbackItem(*password_manager_driver);
+  }
+
+  if (!add_plus_address_fallback && !add_passwords_fallback) {
+    return;
+  }
+
+  if (add_passwords_fallback) {
+    Profile* profile = Profile::FromBrowserContext(rfh->GetBrowserContext());
+    password_manager::PasswordCounter* counter =
+        PasswordCounterFactory::GetForProfile(profile);
+    const bool select_passwords_option_shown =
+        counter && counter->autofillable_passwords() > 0;
+    AddPasswordsManualFallbackItems(*password_manager_driver,
+                                    select_passwords_option_shown);
+
+    if (select_passwords_option_shown) {
+      LogSelectPasswordManualFallbackContextMenuEntryShown(
+          CHECK_DEREF(password_manager_driver));
+    }
+  }
+  if (add_plus_address_fallback) {
+    menu_model_->AddItemWithStringIdAndIcon(
+        IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PLUS_ADDRESS,
+        IDS_PLUS_ADDRESS_FALLBACK_LABEL_CONTEXT_MENU,
+        ui::ImageModel::FromVectorIcon(kPlusAddressLogoIcon, ui::kColorIcon,
+                                       kContextMenuIconSize));
+    MaybeMarkLastItemAsNewFeature(
+        plus_addresses::features::kPlusAddressFallbackFromContextMenu);
+    // TODO(crbug.com/327566698): Log metrics for plus address fallbacks, too.
+  }
+  menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
+}
+
+bool AutofillContextMenuManager::ShouldAddPlusAddressManualFallbackItem(
+    ContentAutofillDriver& autofill_driver) {
+  if (params_.form_control_type &&
+      params_.form_control_type.value() ==
+          blink::mojom::FormControlType::kInputPassword) {
+    return false;
+  }
+
+  auto* web_contents = content::WebContents::FromRenderFrameHost(
+      autofill_driver.render_frame_host());
+  const plus_addresses::PlusAddressService* plus_address_service =
+      PlusAddressServiceFactory::GetForBrowserContext(
+          web_contents->GetBrowserContext());
+  AutofillClient& client = autofill_driver.GetAutofillManager().client();
+  return plus_address_service &&
+         plus_address_service->ShouldShowManualFallback(
+             client.GetLastCommittedPrimaryMainFrameOrigin(),
+             client.IsOffTheRecord()) &&
+         base::FeatureList::IsEnabled(
+             plus_addresses::features::kPlusAddressFallbackFromContextMenu);
+}
+
+bool AutofillContextMenuManager::ShouldAddPasswordsManualFallbackItem(
+    ContentPasswordManagerDriver& password_manager_driver) {
+  // Password suggestions should not be triggered on text areas.
+  if (params_.form_control_type == blink::mojom::FormControlType::kTextArea) {
+    return false;
+  }
+
+  return password_manager_driver.GetPasswordManager()
+      ->GetClient()
+      ->IsFillingEnabled(password_manager_driver.GetLastCommittedURL());
+}
+
+void AutofillContextMenuManager::AddPasswordsManualFallbackItems(
+    ContentPasswordManagerDriver& password_manager_driver,
+    bool add_select_password_option) {
+  const bool add_password_generation_option =
+      password_manager_util::ManualPasswordGenerationEnabled(
+          &password_manager_driver) &&
+      password_manager_driver.IsPasswordFieldForPasswordManager(
+          autofill::FieldRendererId(params_.field_renderer_id),
+          params_.form_control_type);
+  const bool add_passkey_from_another_device_option =
+      webauthn::IsPasskeyFromAnotherDeviceContextMenuEnabled(
+          delegate_->GetRenderFrameHost(), params_.form_renderer_id,
+          params_.field_renderer_id) &&
+      base::FeatureList::IsEnabled(
+          password_manager::features::
+              kWebAuthnUsePasskeyFromAnotherDeviceInContextMenu);
+  const bool add_import_passwords_option = !add_select_password_option;
+
+  if (add_select_password_option) {
+    menu_model_->AddItemWithStringId(
+        IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_SELECT_PASSWORD,
+        IDS_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_SELECT_PASSWORD);
+  }
+  if (add_password_generation_option) {
+    menu_model_->AddItemWithStringId(
+        IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_SUGGEST_PASSWORD,
+        IDS_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_SUGGEST_PASSWORD);
+  }
+  if (add_passkey_from_another_device_option) {
+    menu_model_->AddItemWithStringId(
+        IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_USE_PASSKEY_FROM_ANOTHER_DEVICE,
+        IDS_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_USE_PASSKEY_FROM_ANOTHER_DEVICE);
+  }
+  if (add_import_passwords_option) {
+    menu_model_->AddItemWithStringId(
+        IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_IMPORT_PASSWORDS,
+        IDS_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_IMPORT_PASSWORDS);
+  }
+}
+
+void AutofillContextMenuManager::
+    LogSelectPasswordManualFallbackContextMenuEntryShown(
+        ContentPasswordManagerDriver& password_manager_driver) {
+  password_manager_driver.GetPasswordAutofillManager()
+      ->GetPasswordManualFallbackMetricsRecorder()
+      .ContextMenuEntryShown(
+          /*classified_as_target_filling_password=*/
+          IsPasswordFormField(password_manager_driver, params_));
+}
+
+void AutofillContextMenuManager::
+    LogSelectPasswordManualFallbackContextMenuEntryAccepted() {
+  content::RenderFrameHost* rfh = delegate_->GetRenderFrameHost();
+  ContentPasswordManagerDriver* password_manager_driver =
+      rfh ? ContentPasswordManagerDriver::GetForRenderFrameHost(rfh) : nullptr;
+
+  if (password_manager_driver) {
+    password_manager_driver->GetPasswordAutofillManager()
+        ->GetPasswordManualFallbackMetricsRecorder()
+        .ContextMenuEntryAccepted(/*classified_as_target_filling_password=*/
+                                  IsPasswordFormField(*password_manager_driver,
+                                                      params_));
   }
 }
 
@@ -239,7 +467,7 @@ void AutofillContextMenuManager::ExecuteAutofillFeedbackCommand(
   auto& client = static_cast<ContentAutofillClient&>(manager.client());
   Browser* browser = chrome::FindBrowserWithTab(&client.GetWebContents());
   chrome::ShowFeedbackPage(
-      browser, chrome::kFeedbackSourceAutofillContextMenu,
+      browser, feedback::kFeedbackSourceAutofillContextMenu,
       /*description_template=*/std::string(),
       /*description_placeholder_text=*/kFeedbackPlaceholder,
       /*category_tag=*/"dogfood_autofill_feedback",
@@ -250,175 +478,35 @@ void AutofillContextMenuManager::ExecuteAutofillFeedbackCommand(
           LoadTriggerFormAndFieldLogs(manager, frame_token, params_)));
 }
 
-void AutofillContextMenuManager::ExecuteFallbackForAddressesCommand(
-    AutofillManager& manager) {
-  auto& driver = static_cast<ContentAutofillDriver&>(manager.driver());
-  AutofillField* field = GetAutofillField(manager, driver.GetFrameToken());
-  if (!field && !base::FeatureList::IsEnabled(
-                    features::kAutofillForUnclassifiedFieldsAvailable)) {
-    // The field should generally exist, since the fallback option is only shown
-    // when the field can be retrieved. But if the website removed the field
-    // before the entry was select, it might not be available anymore.
-    //
-    // Note that, when `features::kAutofillForUnclassifiedFieldsAvailable` is
-    // enabled Autofill is always available, regardless of whether
-    // `AutofillField` exists or not.
-    return;
-  }
-  driver.browser_events().RendererShouldTriggerSuggestions(
-      /*field_id=*/{driver.GetFrameToken(),
+void AutofillContextMenuManager::ExecuteFallbackForPlusAddressesCommand(
+    AutofillDriver& autofill_driver) {
+  autofill_driver.RendererShouldTriggerSuggestions(
+      /*field_id=*/{autofill_driver.GetFrameToken(),
                     FieldRendererId(params_.field_renderer_id)},
-      AutofillSuggestionTriggerSource::kManualFallbackAddress);
-  LogManualFallbackContextMenuEntryAccepted(
-      static_cast<BrowserAutofillManager&>(manager), FillingProduct::kAddress);
+      AutofillSuggestionTriggerSource::kManualFallbackPlusAddresses);
+
+  base::RecordAction(base::UserMetricsAction(
+      "PlusAddresses.ManualFallbackDesktopContextManualFallbackSelected"));
+  UserEducationService::MaybeNotifyNewBadgeFeatureUsed(
+      delegate_->GetBrowserContext(),
+      plus_addresses::features::kPlusAddressFallbackFromContextMenu);
 }
 
-void AutofillContextMenuManager::ExecuteFallbackForPaymentsCommand(
-    AutofillManager& manager) {
-  auto& driver = static_cast<ContentAutofillDriver&>(manager.driver());
-  driver.browser_events().RendererShouldTriggerSuggestions(
-      FieldGlobalId(driver.GetFrameToken(),
-                    FieldRendererId(params_.field_renderer_id)),
-      AutofillSuggestionTriggerSource::kManualFallbackPayments);
-  LogManualFallbackContextMenuEntryAccepted(
-      static_cast<BrowserAutofillManager&>(manager),
-      FillingProduct::kCreditCard);
+void AutofillContextMenuManager::ExecuteFallbackForSelectPasswordCommand(
+    AutofillDriver& autofill_driver) {
+  autofill_driver.RendererShouldTriggerSuggestions(
+      /*field_id=*/{autofill_driver.GetFrameToken(),
+                    FieldRendererId(params_.field_renderer_id)},
+      AutofillSuggestionTriggerSource::kManualFallbackPasswords);
+
+  LogSelectPasswordManualFallbackContextMenuEntryAccepted();
 }
 
-void AutofillContextMenuManager::MaybeAddAutofillManualFallbackItems(
-    ContentAutofillDriver& driver) {
-  if (!ShouldShowAutofillContextMenu(params_)) {
-    // Autofill entries are only available in input or text area fields
-    return;
-  }
-  const bool add_address_fallback = ShouldAddAddressManualFallbackItem(driver);
-  const bool add_payments_fallback =
-      !personal_data_manager_->GetCreditCardsToSuggest().empty() &&
-      base::FeatureList::IsEnabled(
-          features::kAutofillForUnclassifiedFieldsAvailable);
-
-  if (!add_address_fallback && !add_payments_fallback) {
-    return;
-  }
-  menu_model_->AddTitle(
-      l10n_util::GetStringUTF16(IDS_CONTENT_CONTEXT_AUTOFILL_FALLBACK_TITLE));
-
-  if (add_address_fallback) {
-    menu_model_->AddItemWithStringId(
-        IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_ADDRESS,
-        IDS_CONTENT_CONTEXT_AUTOFILL_FALLBACK_ADDRESS);
-  }
-  if (add_payments_fallback) {
-    menu_model_->AddItemWithStringId(
-        IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PAYMENTS,
-        IDS_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PAYMENTS);
-  }
-  LogManualFallbackContextMenuEntryShown(driver, add_address_fallback,
-                                         add_payments_fallback);
-  menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
-}
-
-bool AutofillContextMenuManager::ShouldAddAddressManualFallbackItem(
-    ContentAutofillDriver& driver) {
-  if (personal_data_manager_->GetProfilesToSuggest().empty()) {
-    return false;
-  }
-
-  return ShouldAddAddressManualFallbackForAutocompleteUnrecognized(driver) ||
-         base::FeatureList::IsEnabled(
-             features::kAutofillForUnclassifiedFieldsAvailable);
-}
-
-bool AutofillContextMenuManager::
-    ShouldAddAddressManualFallbackForAutocompleteUnrecognized(
-        ContentAutofillDriver& driver) {
-  AutofillField* field =
-      GetAutofillField(driver.GetAutofillManager(), driver.GetFrameToken());
-
-  if (!field || FieldTypeGroupToFormType(field->Type().group()) !=
-                    FormType::kAddressForm) {
-    return false;
-  }
-
-  // Only show the context menu entry for address fields, which can be filled
-  // with at least one of the user's profiles.
-  CHECK(personal_data_manager_);
-  return base::ranges::any_of(
-      personal_data_manager_->GetProfiles(), [field](AutofillProfile* profile) {
-        return profile->HasInfo(field->Type().GetStorableType());
-      });
-}
-
-void AutofillContextMenuManager::LogManualFallbackContextMenuEntryAccepted(
-    BrowserAutofillManager& manager,
-    const FillingProduct filling_product) {
-  if (filling_product == FillingProduct::kAddress) {
-    auto& driver = static_cast<ContentAutofillDriver&>(manager.driver());
-    AutofillField* field = GetAutofillField(manager, driver.GetFrameToken());
-    const bool is_address_field =
-        field && IsAddressType(field->Type().GetStorableType());
-    if (is_address_field) {
-      // Address manual fallback was triggered from a classified address field.
-      manager.GetAutocompleteUnrecognizedFallbackEventLogger()
-          .ContextMenuEntryAccepted(
-              /*address_field_has_ac_unrecognized=*/field
-                  ->ShouldSuppressSuggestionsAndFillingByDefault());
-    } else {
-      manager.GetManualFallbackEventLogger().ContextMenuEntryAccepted(
-          FillingProduct::kAddress);
-    }
-  } else if (filling_product == FillingProduct::kCreditCard) {
-    // Only log payments manual fallback when triggered from a field that is
-    // not classified as payments.
-    manager.GetManualFallbackEventLogger().ContextMenuEntryAccepted(
-        FillingProduct::kCreditCard);
-  }
-}
-
-void AutofillContextMenuManager::LogManualFallbackContextMenuEntryShown(
-    ContentAutofillDriver& driver,
-    bool address_option_shown,
-    bool payments_option_shown) {
-  if (!address_option_shown && !payments_option_shown) {
-    return;
-  }
-  AutofillField* field =
-      GetAutofillField(driver.GetAutofillManager(), driver.GetFrameToken());
-  const bool address_option_shown_for_field_not_classified_as_address =
-      address_option_shown &&
-      !IsAddressType(field ? field->Type().GetStorableType() : UNKNOWN_TYPE);
-  const bool payments_option_shown_for_field_not_classified_as_payments =
-      payments_option_shown &&
-      (!field ||
-       (field && field->Type().group() != FieldTypeGroup::kCreditCard));
-
-  if (address_option_shown &&
-      !address_option_shown_for_field_not_classified_as_address) {
-    // Only use AutocompleteUnrecognizedFallbackEventLogger if the address
-    // option was shown on a field that WAS classified as an address.
-    static_cast<BrowserAutofillManager&>(driver.GetAutofillManager())
-        .GetAutocompleteUnrecognizedFallbackEventLogger()
-        .ContextMenuEntryShown(
-            /*address_field_has_ac_unrecognized=*/field
-                ->ShouldSuppressSuggestionsAndFillingByDefault());
-  }
-
-  static_cast<BrowserAutofillManager&>(driver.GetAutofillManager())
-      .GetManualFallbackEventLogger()
-      .ContextMenuEntryShown(
-          address_option_shown_for_field_not_classified_as_address,
-          payments_option_shown_for_field_not_classified_as_payments);
-}
-
-AutofillField* AutofillContextMenuManager::GetAutofillField(
-    AutofillManager& manager,
-    const LocalFrameToken& frame_token) const {
-  CHECK(ShouldShowAutofillContextMenu(params_));
-  FormStructure* form = manager.FindCachedFormById(
-      {frame_token, FormRendererId(params_.form_renderer_id)});
-  return form ? form->GetFieldById(
-                    {frame_token, FieldRendererId(params_.field_renderer_id)})
-              : nullptr;
+void AutofillContextMenuManager::MaybeMarkLastItemAsNewFeature(
+    const base::Feature& feature) {
+  menu_model_->SetIsNewFeatureAt(menu_model_->GetItemCount() - 1,
+                                 UserEducationService::MaybeShowNewBadge(
+                                     delegate_->GetBrowserContext(), feature));
 }
 
 }  // namespace autofill

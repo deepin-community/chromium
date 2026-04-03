@@ -26,37 +26,53 @@
 #include "include/core/SkTileMode.h"
 #include "include/core/SkTypeface.h"
 #include "include/core/SkTypes.h"
-#include "include/effects/SkGradientShader.h"
-#include "include/gpu/GrDirectContext.h"
-#include "include/gpu/GrRecordingContext.h"
-#include "include/gpu/ganesh/SkSurfaceGanesh.h"
+#include "include/effects/SkGradient.h"
 #include "include/utils/SkTextUtils.h"
 #include "tools/ToolUtils.h"
 #include "tools/fonts/FontToolUtils.h"
+
+#if defined(SK_GANESH)
+#include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/GrRecordingContext.h"
+#include "include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "tools/gpu/BackendSurfaceFactory.h"
+#endif
+
+#if defined(SK_GRAPHITE)
+#include "include/gpu/graphite/Surface.h"
+#include "tools/gpu/BackendSurfaceFactory.h"
+#endif
 
 #define W 800
 #define H 100
 
 static sk_sp<SkShader> make_shader() {
-    int a = 0x99;
-    int b = 0xBB;
+    constexpr float a = 0x99/255.f;
+    constexpr float b = 0xBB/255.f;
     SkPoint pts[] = { { 0, 0 }, { W, H } };
-    SkColor colors[] = { SkColorSetRGB(a, a, a), SkColorSetRGB(b, b, b) };
-    return SkGradientShader::MakeLinear(pts, colors, nullptr, 2, SkTileMode::kClamp);
+    const SkColor4f colors[] = { {a, a, a, 1}, {b, b, b, 1} };
+    return SkShaders::LinearGradient(pts, {{colors, {}, SkTileMode::kClamp}, {}});
 }
 
 static sk_sp<SkSurface> make_surface(GrRecordingContext* ctx,
+                                     skgpu::graphite::Recorder* recorder,
                                      const SkImageInfo& info,
+                                     uint32_t flags,
                                      SkPixelGeometry geo,
                                      SkScalar contrast,
                                      SkScalar gamma) {
-    SkSurfaceProps props(0, geo, contrast, gamma);
+    SkSurfaceProps props(flags, geo, contrast, gamma);
+#if defined(SK_GRAPHITE)
+    if (recorder) {
+        return SkSurfaces::RenderTarget(recorder, info, skgpu::Mipmapped::kNo, &props);
+    }
+#endif
+#if defined(SK_GANESH)
     if (ctx) {
         return SkSurfaces::RenderTarget(ctx, skgpu::Budgeted::kNo, info, 0, &props);
-    } else {
-        return SkSurfaces::Raster(info, &props);
     }
+#endif
+    return SkSurfaces::Raster(info, &props);
 }
 
 static void test_draw(SkCanvas* canvas, const char label[]) {
@@ -78,7 +94,7 @@ static void test_draw(SkCanvas* canvas, const char label[]) {
 
 class SurfacePropsGM : public skiagm::GM {
 public:
-    SurfacePropsGM() {
+    SurfacePropsGM(uint32_t flags) : fFlags(flags) {
         recs = {
                 {kUnknown_SkPixelGeometry,
                  "Unknown geometry, default contrast/gamma",
@@ -108,12 +124,16 @@ public:
     }
 
 protected:
-    SkString getName() const override { return SkString("surfaceprops"); }
+    SkString getName() const override {
+        return SkStringPrintf("surfaceprops%s",
+                              fFlags != 0 ? "_df" : "");
+    }
 
     SkISize getISize() override { return SkISize::Make(W, H * recs.size()); }
 
     void onDraw(SkCanvas* canvas) override {
         auto ctx = canvas->recordingContext();
+        auto recorder = canvas->recorder();
 
         // must be opaque to have a hope of testing LCD text
         const SkImageInfo info = SkImageInfo::MakeN32(W, H, kOpaque_SkAlphaType);
@@ -121,7 +141,8 @@ protected:
         SkScalar x = 0;
         SkScalar y = 0;
         for (const auto& rec : recs) {
-            auto surface(make_surface(ctx, info, rec.fGeo, rec.fContrast, rec.fGamma));
+            auto surface(make_surface(ctx, recorder, info, fFlags, rec.fGeo, rec.fContrast,
+                                      rec.fGamma));
             if (!surface) {
                 SkDebugf("failed to create surface! label: %s", rec.fLabel);
                 continue;
@@ -141,9 +162,12 @@ private:
     };
     std::vector<SurfacePropsInput> recs;
 
+    uint32_t fFlags;
+
     using INHERITED = GM;
 };
-DEF_GM( return new SurfacePropsGM )
+DEF_GM( return new SurfacePropsGM(0); )
+DEF_GM( return new SurfacePropsGM(SkSurfaceProps::kUseDeviceIndependentFonts_Flag); )
 
 #ifdef SK_DEBUG
 static bool equal(const SkSurfaceProps& a, const SkSurfaceProps& b) {
@@ -201,20 +225,49 @@ enum SurfaceType {
 }
 
 static sk_sp<SkSurface> make_surface(const SkImageInfo& ii, SkCanvas* canvas, SurfaceType type) {
+#if defined(SK_GANESH)
     GrDirectContext* direct = GrAsDirectContext(canvas->recordingContext());
+#endif
+#if defined(SK_GRAPHITE)
+    skgpu::graphite::Recorder* recorder = canvas->recorder();
+#endif
     switch (type) {
         case kManaged:
             return ToolUtils::makeSurface(canvas, ii);
         case kBackendTexture:
-            if (!direct) {
-                return nullptr;
+#if defined(SK_GRAPHITE)
+            if (recorder) {
+                return sk_gpu_test::MakeBackendTextureSurface(recorder, ii);
             }
-            return sk_gpu_test::MakeBackendTextureSurface(direct, ii, kTopLeft_GrSurfaceOrigin, 1);
+#endif
+#if defined(SK_GANESH)
+            if (direct) {
+                return sk_gpu_test::MakeBackendTextureSurface(direct,
+                                                              ii,
+                                                              kTopLeft_GrSurfaceOrigin,
+                                                              1);
+            }
+#endif
+            return nullptr;
+
         case kBackendRenderTarget:
-            return sk_gpu_test::MakeBackendRenderTargetSurface(direct,
-                                                               ii,
-                                                               kTopLeft_GrSurfaceOrigin,
-                                                               1);
+#if defined(SK_GRAPHITE)
+            if (recorder) {
+                return SkSurfaces::RenderTarget(recorder,
+                                                ii,
+                                                skgpu::Mipmapped::kNo,
+                                                /*surfaceProps=*/nullptr);
+            }
+#endif
+#if defined(SK_GANESH)
+            if (direct) {
+                return sk_gpu_test::MakeBackendRenderTargetSurface(direct,
+                                                                   ii,
+                                                                   kTopLeft_GrSurfaceOrigin,
+                                                                   1);
+            }
+#endif
+            return nullptr;
     }
     return nullptr;
 }
@@ -229,17 +282,22 @@ using MakeSurfaceFn = std::function<sk_sp<SkSurface>(const SkImageInfo&)>;
         main(canvas, MakeSurfaceFn(make));                          \
     }
 
+#if defined(SK_GANESH)
 #define DEF_BACKEND_SURFACE_TEST(name, canvas, main, type, W, H)                                \
     DEF_SIMPLE_GM_CAN_FAIL(name, canvas, err_msg, W, H) {                                       \
         GrDirectContext* direct = GrAsDirectContext(canvas->recordingContext());                \
-        if (!direct || direct->abandoned()) {                                                   \
-            *err_msg = "Requires non-abandoned GrDirectContext";                                \
+        skgpu::graphite::Recorder* recorder = canvas->recorder();                               \
+        if ((!direct || direct->abandoned()) && !recorder) {                                    \
+            *err_msg = "Requires non-abandoned GrDirectContext or Recorder";                    \
             return skiagm::DrawResult::kSkip;                                                   \
         }                                                                                       \
         auto make = [canvas](const SkImageInfo& ii) { return make_surface(ii, canvas, type); }; \
         main(canvas, MakeSurfaceFn(make));                                                      \
         return skiagm::DrawResult::kOk;                                                         \
     }
+#else
+#define DEF_BACKEND_SURFACE_TEST(...)
+#endif
 
 #define DEF_BET_SURFACE_TEST(name, canvas, main, W, H)                  \
     DEF_BACKEND_SURFACE_TEST(SK_MACRO_CONCAT(name, _bet), canvas, main, \
@@ -389,8 +447,8 @@ DEF_SURFACE_TESTS(surface_underdraw, canvas, 256, 256) {
     // noisy background
     {
         SkPoint pts[] = {{0, 0}, {40, 50}};
-        SkColor colors[] = {SK_ColorRED, SK_ColorBLUE};
-        auto sh = SkGradientShader::MakeLinear(pts, colors, nullptr, 2, SkTileMode::kRepeat);
+        SkColor4f colors[] = {SkColors::kRed, SkColors::kBlue};
+        auto sh = SkShaders::LinearGradient(pts, {{colors, {}, SkTileMode::kRepeat}, {}});
         SkPaint paint;
         paint.setShader(sh);
         surf->getCanvas()->drawPaint(paint);
@@ -418,8 +476,8 @@ DEF_SURFACE_TESTS(surface_underdraw, canvas, 256, 256) {
     // apply the "fade"
     {
         SkPoint pts[] = {{SkIntToScalar(subset.left()), 0}, {SkIntToScalar(subset.right()), 0}};
-        SkColor colors[] = {0xFF000000, 0};
-        auto sh = SkGradientShader::MakeLinear(pts, colors, nullptr, 2, SkTileMode::kClamp);
+        const SkColor4f colors[] = {{0,0,0,1}, {0,0,0,0}};
+        auto sh = SkShaders::LinearGradient(pts, {{colors, {}, SkTileMode::kClamp}, {}});
         SkPaint paint;
         paint.setShader(sh);
         paint.setBlendMode(SkBlendMode::kDstIn);

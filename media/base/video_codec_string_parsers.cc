@@ -4,6 +4,9 @@
 
 #include "media/base/video_codec_string_parsers.h"
 
+#include <array>
+#include <string_view>
+
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
@@ -27,6 +30,10 @@ bool IsDolbyVisionHEVCCodecId(std::string_view codec_id) {
 }  // namespace
 
 namespace media {
+
+// TODO(crbug.com/40232176): Remove after rollout.
+// Allow parsing HEVC range extension codec string.
+BASE_FEATURE(kHEVCRextCodecStringParsing, base::FEATURE_ENABLED_BY_DEFAULT);
 
 std::optional<VideoType> ParseNewStyleVp9CodecID(std::string_view codec_id) {
   // Initialize optional fields to their defaults.
@@ -456,7 +463,7 @@ std::optional<VideoType> ParseAVCCodecId(std::string_view codec_id) {
   }
   uint32_t elem = 0;
   if (codec_id.size() != 11 ||
-      !base::HexStringToUInt(base::StringPiece(codec_id).substr(5), &elem)) {
+      !base::HexStringToUInt(codec_id.substr(5), &elem)) {
     DVLOG(4) << __func__ << ": invalid avc codec id (" << codec_id << ")";
     return std::nullopt;
   }
@@ -666,14 +673,20 @@ std::optional<VideoType> ParseHEVCCodecId(std::string_view codec_id) {
     return std::nullopt;
   }
 
-  uint8_t constraint_flags[6];
-  memset(constraint_flags, 0, sizeof(constraint_flags));
+  std::array<uint8_t, 6> constraint_flags = {};
 
   if (elem.size() > 10) {
     DVLOG(4) << __func__ << ": unexpected number of trailing bytes in HEVC "
              << "codec id " << codec_id;
     return std::nullopt;
   }
+
+  // ISO/IEC 14496-15, section E.3:
+  // Each of the 6 bytes of the constraint flags from SPS profile-tier-level
+  // syntax, starting from the byte containing the
+  // general_progressive_source_flag, each encoded as a hex number, and the
+  // encoding of each byte is separated by a period; trailing bytes that are
+  // zero may be omitted.
   for (size_t i = 4; i < elem.size(); ++i) {
     unsigned constr_byte = 0;
     if (!base::HexStringToUInt(elem[i], &constr_byte) || constr_byte > 0xFF) {
@@ -683,164 +696,81 @@ std::optional<VideoType> ParseHEVCCodecId(std::string_view codec_id) {
     constraint_flags[i - 4] = constr_byte;
   }
 
+  std::optional<uint8_t> bit_depth;
+  std::optional<VideoChromaSampling> subsampling;
+
+  // HEVC spec 7.3.3:
+  // For range extension, low 4-bits of constraint_flags[0] contain the max
+  // bit constraint flags for 12b/10b/8b, followed by yuv422 chroma sampling
+  // constraint flag; constraint_flags[1] contains yuv420 chroma sampling, and
+  // monochrome constraint flags, which we use to determine the bit depth and
+  // chroma subsampling formats.
+  if (base::FeatureList::IsEnabled(kHEVCRextCodecStringParsing) &&
+      out_profile == HEVCPROFILE_REXT) {
+    uint8_t max_bits_flag = (constraint_flags[0] >> 1) & 0b111;
+    bool max_422_flag = constraint_flags[0] & 0b1;
+    bool max_420_flag = constraint_flags[1] >> 7;
+    bool max_monochrome_flag = (constraint_flags[1] >> 6) & 0b1;
+
+    // Spec Table A.2
+    switch (max_bits_flag) {
+      case 0b000:
+        bit_depth = 16;
+        break;
+      case 0b100:
+        bit_depth = 12;
+        break;
+      case 0b110:
+        bit_depth = 10;
+        break;
+      case 0b111:
+        bit_depth = 8;
+        break;
+      default:
+        DVLOG(4) << __func__ << "Invalid max_bits_flag=" << max_bits_flag;
+        return std::nullopt;
+    }
+
+    if (max_monochrome_flag && (!max_422_flag || !max_420_flag)) {
+      DVLOG(4) << __func__ << "When max_monochrome_flag is set, both "
+               << "max_422_flag and max_420_flag should be set.";
+      return std::nullopt;
+    }
+    if (max_420_flag && !max_422_flag) {
+      DVLOG(4) << __func__ << "When max_420_flag is set, max_422_flag must "
+               << "be set.";
+      return std::nullopt;
+    }
+
+    if (max_monochrome_flag) {
+      subsampling = VideoChromaSampling::k400;
+    } else if (max_420_flag) {
+      subsampling = VideoChromaSampling::k420;
+    } else if (max_422_flag) {
+      subsampling = VideoChromaSampling::k422;
+    } else {
+      subsampling = VideoChromaSampling::k444;
+    }
+  }
+
+  // We only configure bit depth and chroma subsampling for range extension, as
+  // it is only for range extension that we further check platform support on
+  // specific bit depth and chroma subsampling formats for decode/encode; and we
+  // don't support general_profile_idc > 4 with hardware encoders/decoders.
+  // TODO(crbug.com/413659852) HEVC has color space information that should be
+  // parsed. It's specified in the ISO 14496-15:2024 spec.
   VideoType result = {
       .codec = VideoCodec::kHEVC,
       .profile = out_profile,
       .level = general_level_idc,
+      .color_space = VideoColorSpace(VideoColorSpace::PrimaryID::UNSPECIFIED,
+                                     VideoColorSpace::TransferID::UNSPECIFIED,
+                                     VideoColorSpace::MatrixID::UNSPECIFIED,
+                                     gfx::ColorSpace::RangeID::DERIVED),
+      .subsampling = subsampling,
+      .bit_depth = bit_depth,
   };
-  return result;
-}
-// The specification for VVC codec id strings can be found in ISO/IEC 14496-15
-// 2022, annex E.6.
-// In detail it would be:
-// <sample entry FourCC>    ("vvi1: if config is inband, or "vvc1" otherwise.)
-// .<general_profile_idc>   (base10)
-// .<general_tier_flag>     ("L" or "H")
-// <op_level_idc>           (base10. <= general_level_idc in SPS)
-// .C<ptl_frame_only_constraint_flag><ptl_multi_layer_enabled_flag> (optional)
-// <general_constraint_info)  (base32 with "=" might be omitted.)
-// .S<general_sub_profile_idc1>  (Optional, base32 with "=" might be omitted.)
-// <+general_sub_profile_
-// .O<ols_idx>+<max_tid>   (Optional, base10 OlsIdx & MaxTid)
-std::optional<VideoType> ParseVVCCodecId(std::string_view codec_id) {
-  if (!base::StartsWith(codec_id, "vvc1.", base::CompareCase::SENSITIVE) &&
-      !base::StartsWith(codec_id, "vvi1.", base::CompareCase::SENSITIVE)) {
-    return std::nullopt;
-  }
 
-  std::vector<std::string> elem = base::SplitString(
-      codec_id, ".", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-  DCHECK(elem[0] == "vvc1" || elem[0] == "vvi1");
-
-  if (elem.size() < 3 || elem.size() > 6) {
-    DVLOG(4) << __func__ << ": invalid VVC codec id " << codec_id;
-    return std::nullopt;
-  }
-
-  for (auto& item : elem) {
-    if (item.size() < 1 ||
-        ((item[0] == 'C' || item[0] == 'S' || item[0] == 'O') &&
-         item.size() < 2)) {
-      DVLOG(4) << __func__ << ": subelement of VVC codec id invalid.";
-      return std::nullopt;
-    }
-    if (item[0] == 'O' && item.back() == '+') {
-      DVLOG(4) << __func__ << ": invalid OlxIdx and MaxTid string.";
-      return std::nullopt;
-    }
-  }
-
-  unsigned general_profile_idc = 0;
-  if (!base::StringToUint(elem[1], &general_profile_idc) ||
-      general_profile_idc > 0x63) {
-    DVLOG(4) << __func__ << ": invalid general_profile_idc=" << elem[1];
-    return std::nullopt;
-  }
-
-  VideoCodecProfile out_profile = VIDEO_CODEC_PROFILE_UNKNOWN;
-  switch (general_profile_idc) {
-    case 99:  // Spec A.3.5
-      out_profile = VVCPROFILE_MAIN16_444_STILL_PICTURE;
-      break;
-    case 98:  // Spec A.3.5
-      out_profile = VVCPROFILE_MAIN12_444_STILL_PICTURE;
-      break;
-    case 97:  // Spec A.3.2
-      out_profile = VVCPROFILE_MAIN10_444_STILL_PICTURE;
-      break;
-    case 66:  // Spec A.3.5
-      out_profile = VVCPROFILE_MAIN12_STILL_PICTURE;
-      break;
-    case 65:  // Spec A.3.1
-      out_profile = VVCPROFILE_MAIN10_STILL_PICTURE;
-      break;
-    case 49:  // Spec A.3.4
-      out_profile = VVCPROFILE_MULTILAYER_MAIN10_444;
-      break;
-    case 43:  // Spec A.3.5
-      out_profile = VVCPROFILE_MAIN16_444_INTRA;
-      break;
-    case 42:  // Spec A.3.5
-      out_profile = VVCPROFILE_MAIN12_444_INTRA;
-      break;
-    case 35:  // Spec A.3.5
-      out_profile = VVCPROFILE_MAIN16_444;
-      break;
-    case 34:  // Spec A.3.5
-      out_profile = VVCPROFILE_MAIN12_444;
-      break;
-    case 33:  // Spec A.3.2
-      out_profile = VVCPROFILE_MAIN10_444;
-      break;
-    case 17:  // Spec A.3.3
-      out_profile = VVCPROIFLE_MULTILAYER_MAIN10;
-      break;
-    case 10:  // Spec A.3.5
-      out_profile = VVCPROFILE_MAIN12_INTRA;
-      break;
-    case 2:  // Spec A.3.5
-      out_profile = VVCPROFILE_MAIN12;
-      break;
-    case 1:  // Spec A.3.1
-      out_profile = VVCPROFILE_MAIN10;
-      break;
-    default:
-      break;
-  }
-
-  if (out_profile == VIDEO_CODEC_PROFILE_UNKNOWN) {
-    DVLOG(1) << "Warning: unrecognized VVC/H.266 general_profile_idc: "
-             << general_profile_idc;
-    return std::nullopt;
-  }
-
-  uint8_t general_tier_flag;
-  if (elem[2][0] == 'L' || elem[2][0] == 'H') {
-    general_tier_flag = (elem[2][0] == 'L') ? 0 : 1;
-    elem[2].erase(0, 1);
-  } else {
-    DVLOG(4) << __func__ << ": invalid general_tier_flag=" << elem[2];
-    return std::nullopt;
-  }
-  DCHECK(general_tier_flag == 0 || general_tier_flag == 1);
-
-  unsigned general_level_idc = 0;
-  if (!base::StringToUint(elem[2], &general_level_idc) ||
-      general_level_idc > 0xff) {
-    DVLOG(4) << __func__ << ": invalid general_level_idc=" << elem[2];
-    return std::nullopt;
-  }
-
-  // C-string, if existing, should proceed S-string and O-string.
-  // Similarly, S-string should proceed O-string.
-  bool trailing_valid = true;
-  if (elem.size() == 4) {
-    if (elem[3][0] != 'C' && elem[3][0] != 'S' && elem[3][0] != 'O') {
-      trailing_valid = false;
-    }
-  } else if (elem.size() == 5) {
-    if (!((elem[3][0] == 'C' && elem[4][0] == 'S') ||
-          (elem[3][0] == 'C' && elem[4][0] == 'O') ||
-          (elem[3][0] == 'S' && elem[4][0] == 'O'))) {
-      trailing_valid = false;
-    }
-  } else if (elem.size() == 6) {
-    if (elem[3][0] != 'C' || elem[4][0] != 'S' || elem[5][0] != 'O') {
-      trailing_valid = false;
-    }
-  }
-
-  if (!trailing_valid) {
-    DVLOG(4) << __func__ << ": invalid traing codec string.";
-    return std::nullopt;
-  }
-
-  // TODO(crbug.com/1417910): Add VideoCodec::kVVC here when its ready.
-  VideoType result = {
-      .codec = VideoCodec::kUnknown,
-      .profile = out_profile,
-      .level = general_level_idc,
-  };
   return result;
 }
 

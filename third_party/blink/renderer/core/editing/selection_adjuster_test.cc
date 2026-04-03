@@ -24,8 +24,7 @@ TEST_F(SelectionAdjusterTest, AdjustShadowToCollpasedInDOMTree) {
 
 TEST_F(SelectionAdjusterTest, AdjustShadowToCollpasedInFlatTree) {
   SetBodyContent("<input value=abc>");
-  const auto& input =
-      ToTextControl(*GetDocument().QuerySelector(AtomicString("input")));
+  const auto& input = ToTextControl(*QuerySelector("input"));
   const SelectionInFlatTree& selection =
       SelectionInFlatTree::Builder()
           .Collapse(PositionInFlatTree::AfterNode(input))
@@ -246,8 +245,8 @@ TEST_F(SelectionAdjusterTest, ShadowDistributedNodesWithoutEditingBoundary) {
   SetBodyContent(body_content);
   Element* host = GetDocument().getElementById(AtomicString("host"));
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML(shadow_content);
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(shadow_content);
 
   Element* foo = GetDocument().getElementById(AtomicString("foo"));
   Element* s1 = shadow_root.QuerySelector(AtomicString("#s1"));
@@ -312,8 +311,8 @@ TEST_F(SelectionAdjusterTest, ShadowDistributedNodesWithEditingBoundary) {
   SetBodyContent(body_content);
   Element* host = GetDocument().getElementById(AtomicString("host"));
   ShadowRoot& shadow_root =
-      host->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML(shadow_content);
+      host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(shadow_content);
 
   Element* foo = GetDocument().getElementById(AtomicString("foo"));
   Element* bar = GetDocument().getElementById(AtomicString("bar"));

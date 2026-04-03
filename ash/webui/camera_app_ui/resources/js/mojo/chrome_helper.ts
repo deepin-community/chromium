@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {assert, assertNotReached} from '../assert.js';
+import {assert, assertInstanceof, assertNotReached} from '../assert.js';
 import {reportError} from '../error.js';
 import {Point} from '../geometry.js';
 import * as localDev from '../local_dev.js';
+import {getCanUseBigBuffer} from '../models/load_time_data.js';
 import {
   ErrorLevel,
   ErrorType,
@@ -14,19 +15,30 @@ import {
 import {windowController} from '../window_controller.js';
 
 import {
+  AspectRatio,
+  BigBuffer,
   CameraAppHelper,
   CameraAppHelperRemote,
   CameraIntentAction,
-  DocumentOutputFormat,
+  CaptureDestination,
+  CloudUpload,
+  EventsSenderRemote,
   ExternalScreenMonitorCallbackRouter,
   FileMonitorResult,
+  FileType,
+  LidState,
+  LidStateMonitorCallbackRouter,
+  LocalFile,
+  OcrResult,
+  PdfBuilderRemote,
   Rotation,
+  ScreenLockedMonitorCallbackRouter,
   ScreenState,
   ScreenStateMonitorCallbackRouter,
   StorageMonitorCallbackRouter,
   StorageMonitorStatus,
+  SWPrivacySwitchMonitorCallbackRouter,
   TabletModeMonitorCallbackRouter,
-  ToteMetricFormat,
   WifiConfig,
 } from './type.js';
 import {wrapEndpoint} from './util.js';
@@ -64,6 +76,72 @@ function castToMojoRotation(rotation: number): Rotation {
     default:
       assertNotReached(`Invalid rotation ${rotation}`);
   }
+}
+
+/**
+ * Creates a BigBuffer from `blob`.
+ */
+export async function createBigBufferFromBlob(blob: Blob): Promise<BigBuffer> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const size = bytes.byteLength;
+
+  const sharedBuffer = Mojo.createSharedBuffer(size);
+  assert(
+      sharedBuffer.result === Mojo.RESULT_OK,
+      'Failed to create shared buffer.');
+
+  const mapBuffer = sharedBuffer.handle.mapBuffer(0, size);
+  assert(mapBuffer.result === Mojo.RESULT_OK, 'Failed to map buffer.');
+
+  const uint8View = new Uint8Array(mapBuffer.buffer);
+  uint8View.set(bytes);
+
+  // BigBuffer type wants all properties but Mojo expects only one of them.
+  const bigBuffer: BigBuffer = {
+    sharedMemory: {
+      bufferHandle: sharedBuffer.handle,
+      size,
+    },
+    invalidBuffer: undefined,
+    bytes: undefined,
+  };
+  delete bigBuffer.invalidBuffer;
+  delete bigBuffer.bytes;
+
+  return bigBuffer;
+}
+
+/**
+ * Creates a number array from `blob` for Mojo's `array<uint8>`.
+ */
+export async function createNumArrayFromBlob(blob: Blob): Promise<number[]> {
+  const buffer = await blob.arrayBuffer();
+  return castToNumberArray(new Uint8Array(buffer));
+}
+
+/**
+ * When BigBuffer fails, set this flag to `true` and fallback to inline buffer
+ * for further calls.
+ */
+let bigBufferFailed = false;
+
+/**
+ * Returns if BigBuffer should be used.
+ */
+export function shouldUseBigBuffer(): boolean {
+  return getCanUseBigBuffer() && !bigBufferFailed;
+}
+
+/**
+ * Sets the `bigBufferFailed` flag and reports the error.
+ */
+export function handleBigBufferError(e: unknown): void {
+  bigBufferFailed = true;
+  reportError(
+      ErrorType.BIG_BUFFER_FAILURE,
+      ErrorLevel.WARNING,
+      assertInstanceof(e, Error),
+  );
 }
 
 export abstract class ChromeHelper {
@@ -160,15 +238,14 @@ export abstract class ChromeHelper {
   abstract isMetricsAndCrashReportingEnabled(): Promise<boolean>;
 
   /**
-   * Sends the broadcast to ARC to notify the new photo/video is captured.
+   * Notifies completion of capture.
+   * Also sends the broadcast to ARC to notify the new photo/video is captured.
    */
-  abstract sendNewCaptureBroadcast(args: {isVideo: boolean, name: string}):
-      void;
+  abstract processCapturedLocalFile(fileName: string, fileType: FileType):
+      Promise<boolean>;
 
-  /**
-   * Notifies Tote client when a photo/pdf/video/gif is captured.
-   */
-  abstract notifyTote(format: ToteMetricFormat, name: string): void;
+  abstract processCapturedFileForCloudUpload(
+      fileName: string, fileType: FileType, thumbnail: Blob): Promise<boolean>;
 
   /**
    * Monitors for the file deletion of the file given by its `name` and
@@ -202,16 +279,8 @@ export abstract class ChromeHelper {
    * target `corners` to crop. The output will be converted according to given
    * `mimeType`.
    */
-  abstract convertToDocument(
-      blob: Blob, corners: Point[], rotation: number,
-      mimeType: MimeType): Promise<Blob>;
-
-  /**
-   * Converts given `jpegBlobs` to PDF format.
-   *
-   * @return Blob in PDF format.
-   */
-  abstract convertToPdf(jpegBlobs: Blob[]): Promise<Blob>;
+  abstract convertToDocument(blob: Blob, corners: Point[], rotation: number):
+      Promise<Blob>;
 
   /**
    * Tries to trigger HaTS survey for CCA.
@@ -227,6 +296,25 @@ export abstract class ChromeHelper {
   abstract openStorageManagement(): void;
 
   abstract openWifiDialog(config: WifiConfig): void;
+
+  abstract initLidStateMonitor(onChange: (lidStatus: LidState) => void):
+      Promise<LidState>;
+
+  abstract initSwPrivacySwitchMonitor(
+      onChange: (is_sw_privacy_switch_on: boolean) => void): Promise<boolean>;
+
+  abstract getEventsSender(): Promise<EventsSenderRemote>;
+
+  abstract initScreenLockedMonitor(onChange: (isScreenLocked: boolean) => void):
+      Promise<boolean>;
+
+  abstract renderPdfAsImage(pdf: Blob): Promise<Blob>;
+
+  abstract performOcr(jpeg: Blob): Promise<OcrResult>;
+
+  abstract createPdfBuilder(): PdfBuilderRemote;
+
+  abstract getAspectRatioOrder(): Promise<AspectRatio[]>;
 
   /**
    * Creates a new instance of ChromeHelper if it is not set. Returns the
@@ -316,7 +404,7 @@ class ChromeHelperImpl extends ChromeHelper {
   }
 
   override openUrlInBrowser(url: string): void {
-    this.remote.openUrlInBrowser({url: url});
+    this.remote.openUrlInBrowser(url);
   }
 
   private async checkReturn(
@@ -352,14 +440,37 @@ class ChromeHelperImpl extends ChromeHelper {
     return isEnabled;
   }
 
-  override sendNewCaptureBroadcast({isVideo, name}:
-                                       {isVideo: boolean, name: string}): void {
-    this.remote.sendNewCaptureBroadcast(isVideo, name);
+  override async processCapturedLocalFile(fileName: string, fileType: FileType):
+      Promise<boolean> {
+    const localFile: LocalFile = {
+      fileName,
+    };
+    const captureDestination: CaptureDestination = {
+      localFile,
+    };
+    const {succeeded} =
+        await this.remote.processCapturedFile(fileType, captureDestination);
+    return succeeded;
   }
 
-  override notifyTote(format: ToteMetricFormat, name: string): void {
-    this.remote.notifyTote(format, name);
+  override async processCapturedFileForCloudUpload(
+      fileName: string,
+      fileType: FileType,
+      thumbnail: Blob,
+      ): Promise<boolean> {
+    const numArray = await createNumArrayFromBlob(thumbnail);
+    const cloudUpload: CloudUpload = {
+      fileName,
+      thumbnail: numArray,
+    };
+    const captureDestination: CaptureDestination = {
+      cloudUpload,
+    };
+    const {succeeded} =
+        await this.remote.processCapturedFile(fileType, captureDestination);
+    return succeeded;
   }
+
 
   override async monitorFileDeletion(name: string, callback: () => void):
       Promise<void> {
@@ -401,32 +512,12 @@ class ChromeHelperImpl extends ChromeHelper {
   }
 
   override async convertToDocument(
-      blob: Blob, corners: Point[], rotation: number,
-      mimeType: MimeType): Promise<Blob> {
+      blob: Blob, corners: Point[], rotation: number): Promise<Blob> {
     assert(corners.length === 4, 'Unexpected amount of corners');
     const buffer = new Uint8Array(await blob.arrayBuffer());
-    let outputFormat;
-    if (mimeType === MimeType.JPEG) {
-      outputFormat = DocumentOutputFormat.kJpeg;
-    } else if (mimeType === MimeType.PDF) {
-      outputFormat = DocumentOutputFormat.kPdf;
-    } else {
-      throw new Error(`Output mimetype unsupported: ${mimeType}`);
-    }
-
     const {docData} = await this.remote.convertToDocument(
-        castToNumberArray(buffer), corners, castToMojoRotation(rotation),
-        outputFormat);
-    return new Blob([new Uint8Array(docData)], {type: mimeType});
-  }
-
-  override async convertToPdf(jpegBlobs: Blob[]): Promise<Blob> {
-    const numArrays = await Promise.all(jpegBlobs.map(async (blob) => {
-      const buffer = new Uint8Array(await blob.arrayBuffer());
-      return castToNumberArray(buffer);
-    }));
-    const {pdfData} = await this.remote.convertToPdf(numArrays);
-    return new Blob([new Uint8Array(pdfData)], {type: MimeType.PDF});
+        castToNumberArray(buffer), corners, castToMojoRotation(rotation));
+    return new Blob([new Uint8Array(docData)], {type: MimeType.JPEG});
   }
 
   override maybeTriggerSurvey(): void {
@@ -467,5 +558,77 @@ class ChromeHelperImpl extends ChromeHelper {
 
   override openWifiDialog(config: WifiConfig): void {
     this.remote.openWifiDialog(config);
+  }
+
+  override async initLidStateMonitor(onChange: (lidStatus: LidState) => void):
+      Promise<LidState> {
+    const monitorCallbackRouter =
+        wrapEndpoint(new LidStateMonitorCallbackRouter());
+    monitorCallbackRouter.update.addListener(onChange);
+
+    const {lidStatus} = await this.remote.setLidStateMonitor(
+        monitorCallbackRouter.$.bindNewPipeAndPassRemote());
+    return lidStatus;
+  }
+
+  override async initSwPrivacySwitchMonitor(
+      onChange: (is_sw_privacy_switch_on: boolean) => void): Promise<boolean> {
+    const monitorCallbackRouter =
+        wrapEndpoint(new SWPrivacySwitchMonitorCallbackRouter());
+    monitorCallbackRouter.update.addListener(onChange);
+
+    const {isSwPrivacySwitchOn} = await this.remote.setSWPrivacySwitchMonitor(
+        monitorCallbackRouter.$.bindNewPipeAndPassRemote());
+    return isSwPrivacySwitchOn;
+  }
+
+  override async getEventsSender(): Promise<EventsSenderRemote> {
+    const {eventsSender} = await this.remote.getEventsSender();
+    return wrapEndpoint(eventsSender);
+  }
+
+  override async initScreenLockedMonitor(
+      onChange: (isScreenLocked: boolean) => void): Promise<boolean> {
+    const monitorCallbackRouter =
+        wrapEndpoint(new ScreenLockedMonitorCallbackRouter());
+    monitorCallbackRouter.update.addListener(onChange);
+
+    const {isScreenLocked} = await this.remote.setScreenLockedMonitor(
+        monitorCallbackRouter.$.bindNewPipeAndPassRemote());
+    return isScreenLocked;
+  }
+
+  override async renderPdfAsImage(pdf: Blob): Promise<Blob> {
+    const buffer = new Uint8Array(await pdf.arrayBuffer());
+    const numArray = castToNumberArray(buffer);
+    const {jpegData} = await this.remote.renderPdfAsJpeg(numArray);
+    return new Blob([new Uint8Array(jpegData)], {type: MimeType.JPEG});
+  }
+
+  override async performOcr(jpeg: Blob): Promise<OcrResult> {
+    try {
+      if (shouldUseBigBuffer()) {
+        const bigBuffer = await createBigBufferFromBlob(jpeg);
+        const {ocrResult} = await this.remote.performOcr(bigBuffer);
+        return ocrResult;
+      }
+    } catch (e) {
+      handleBigBufferError(e);
+    }
+    const numArray = await createNumArrayFromBlob(jpeg);
+    const {ocrResult} = await this.remote.performOcrInline(numArray);
+    return ocrResult;
+  }
+
+  override createPdfBuilder(): PdfBuilderRemote {
+    const pdfBuilderRemote = new PdfBuilderRemote();
+    const pdfBuilderReceiver = pdfBuilderRemote.$.bindNewPipeAndPassReceiver();
+    this.remote.createPdfBuilder(pdfBuilderReceiver);
+    return wrapEndpoint(pdfBuilderRemote);
+  }
+
+  override async getAspectRatioOrder(): Promise<AspectRatio[]> {
+    const {order} = await this.remote.getAspectRatioOrder();
+    return order;
   }
 }

@@ -15,6 +15,7 @@
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
@@ -31,9 +32,10 @@ class CookieStoreGetOptions;
 class ExceptionState;
 class ScriptState;
 
-class CookieStore final : public EventTarget,
-                          public ExecutionContextClient,
-                          public network::mojom::blink::CookieChangeListener {
+class MODULES_EXPORT CookieStore final
+    : public EventTarget,
+      public ExecutionContextClient,
+      public network::mojom::blink::CookieChangeListener {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -44,26 +46,31 @@ class CookieStore final : public EventTarget,
   // mojo::Remote<network::mojom::blink::RestrictedCookieManager>
   ~CookieStore() override;
 
-  ScriptPromiseTyped<IDLSequence<CookieListItem>> getAll(ScriptState*,
-                                                         const String& name,
-                                                         ExceptionState&);
-  ScriptPromiseTyped<IDLSequence<CookieListItem>>
+  ScriptPromise<IDLSequence<CookieListItem>> getAll(ScriptState*,
+                                                    const String& name,
+                                                    ExceptionState&);
+  ScriptPromise<IDLSequence<CookieListItem>>
   getAll(ScriptState*, const CookieStoreGetOptions*, ExceptionState&);
-  ScriptPromiseTyped<IDLNullable<CookieListItem>> get(ScriptState*,
-                                                      const String& name,
-                                                      ExceptionState&);
-  ScriptPromiseTyped<IDLNullable<CookieListItem>>
-  get(ScriptState*, const CookieStoreGetOptions*, ExceptionState&);
+  ScriptPromise<IDLNullable<CookieListItem>> get(ScriptState*,
+                                                 const String& name,
+                                                 ExceptionState&);
+  ScriptPromise<IDLNullable<CookieListItem>> get(ScriptState*,
+                                                 const CookieStoreGetOptions*,
+                                                 ExceptionState&);
 
-  ScriptPromise set(ScriptState*,
-                    const String& name,
-                    const String& value,
-                    ExceptionState&);
-  ScriptPromise set(ScriptState*, const CookieInit*, ExceptionState&);
-  ScriptPromise Delete(ScriptState*, const String& name, ExceptionState&);
-  ScriptPromise Delete(ScriptState*,
-                       const CookieStoreDeleteOptions*,
-                       ExceptionState&);
+  ScriptPromise<IDLUndefined> set(ScriptState*,
+                                  const String& name,
+                                  const String& value,
+                                  ExceptionState&);
+  ScriptPromise<IDLUndefined> set(ScriptState*,
+                                  const CookieInit*,
+                                  ExceptionState&);
+  ScriptPromise<IDLUndefined> Delete(ScriptState*,
+                                     const String& name,
+                                     ExceptionState&);
+  ScriptPromise<IDLUndefined> Delete(ScriptState*,
+                                     const CookieStoreDeleteOptions*,
+                                     ExceptionState&);
 
   // GarbageCollected
   void Trace(Visitor* visitor) const override;
@@ -102,21 +109,23 @@ class CookieStore final : public EventTarget,
   // Converts the result of a RestrictedCookieManager::GetAllForUrl mojo call to
   // the promise result expected by CookieStore.getAll.
   static void GetAllForUrlToGetAllResult(
-      ScriptPromiseResolverTyped<IDLSequence<CookieListItem>>*,
+      ScriptPromiseResolver<IDLSequence<CookieListItem>>*,
       const Vector<network::mojom::blink::CookieWithAccessResultPtr>
           backend_result);
 
   // Converts the result of a RestrictedCookieManager::GetAllForUrl mojo call to
   // the promise result expected by CookieStore.get.
   static void GetAllForUrlToGetResult(
-      ScriptPromiseResolverTyped<IDLNullable<CookieListItem>>*,
+      ScriptPromiseResolver<IDLNullable<CookieListItem>>*,
       const Vector<network::mojom::blink::CookieWithAccessResultPtr>
           backend_result);
 
   // Common code in CookieStore::delete and CookieStore::set.
-  ScriptPromise DoWrite(ScriptState*, const CookieInit*, ExceptionState&);
+  ScriptPromise<IDLUndefined> DoWrite(ScriptState*,
+                                      const CookieInit*,
+                                      ExceptionState&);
 
-  static void OnSetCanonicalCookieResult(ScriptPromiseResolver*,
+  static void OnSetCanonicalCookieResult(ScriptPromiseResolver<IDLUndefined>*,
                                          bool backend_result);
 
   // Called when a change event listener is added.

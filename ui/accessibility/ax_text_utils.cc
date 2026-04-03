@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string_view>
 
 #include "base/check_op.h"
 #include "base/i18n/break_iterator.h"
@@ -38,7 +39,6 @@ base::i18n::BreakIterator::BreakType ICUBreakTypeForBoundaryType(
       return base::i18n::BreakIterator::BREAK_NEWLINE;
     default:
       NOTREACHED() << boundary;
-      return base::i18n::BreakIterator::BREAK_NEWLINE;
   }
 }
 
@@ -47,7 +47,7 @@ base::i18n::BreakIterator::BreakType ICUBreakTypeForBoundaryType(
 // line_breaks is a Misnomer. Blink provides the start offsets of each line
 // not the line breaks.
 // TODO(nektar): Rename line_breaks a11y attribute and variable references.
-size_t FindAccessibleTextBoundary(const std::u16string& text,
+size_t FindAccessibleTextBoundary(const std::u16string_view text,
                                   const std::vector<int>& line_breaks,
                                   ax::mojom::TextBoundary boundary,
                                   size_t start_offset,
@@ -112,7 +112,6 @@ size_t FindAccessibleTextBoundary(const std::u16string& text,
     switch (boundary) {
       case ax::mojom::TextBoundary::kLineStart:
         NOTREACHED() << boundary;  // This is handled above.
-        return result;
       case ax::mojom::TextBoundary::kCharacter:
         if (break_iter.IsGraphemeBoundary(result)) {
           // If we are searching forward and we are still at the start offset,

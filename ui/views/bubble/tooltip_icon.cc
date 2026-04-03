@@ -13,12 +13,14 @@
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/bubble/info_bubble.h"
 #include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/mouse_watcher_view_host.h"
+#include "ui/views/property_effects.h"
 #include "ui/views/style/platform_style.h"
 
 namespace views {
@@ -35,24 +37,21 @@ TooltipIcon::TooltipIcon(const std::u16string& tooltip, int tooltip_icon_size)
       LayoutProvider::Get()->GetInsetsMetric(INSETS_VECTOR_IMAGE_BUTTON)));
   InstallCircleHighlightPathGenerator(this);
 
-  // The tooltip icon, despite visually being an icon with no text, actually
-  // opens a bubble whenever the user mouses over it or focuses it, so it's
-  // essentially a text control that hides itself when not in view without
-  // altering the bubble's layout when shown. As such, have it behave like
-  // static text for screenreader users, since that's the role it serves here
-  // anyway.
-  SetAccessibilityProperties(ax::mojom::Role::kStaticText, tooltip_);
+  // Setting the accessible role to kTooltip allows the tooltip icon to be
+  // announced by screen readers when it receives focus although it essentially
+  // acts as a static text label.
+  GetViewAccessibility().SetRole(ax::mojom::Role::kTooltip);
+  GetViewAccessibility().SetName(tooltip_);
 }
 
 TooltipIcon::~TooltipIcon() {
-  for (auto& observer : observers_)
-    observer.OnTooltipIconDestroying(this);
+  observers_.Notify(&Observer::OnTooltipIconDestroying, this);
   HideBubble();
 }
 
 void TooltipIcon::SetBubbleWidth(int preferred_width) {
   preferred_width_ = preferred_width;
-  OnPropertyChanged(&preferred_width_, kPropertyEffectsPreferredSizeChanged);
+  OnPropertyChanged(&preferred_width_, PropertyEffects::kPreferredSizeChanged);
 }
 
 int TooltipIcon::GetBubbleWidth() const {
@@ -61,7 +60,7 @@ int TooltipIcon::GetBubbleWidth() const {
 
 void TooltipIcon::SetAnchorPointArrow(BubbleBorder::Arrow arrow) {
   anchor_point_arrow_ = arrow;
-  OnPropertyChanged(&anchor_point_arrow_, kPropertyEffectsPaint);
+  OnPropertyChanged(&anchor_point_arrow_, PropertyEffects::kPaint);
 }
 
 BubbleBorder::Arrow TooltipIcon::GetAnchorPointArrow() const {
@@ -87,7 +86,7 @@ void TooltipIcon::OnFocus() {
   ShowBubble();
 #if BUILDFLAG(IS_WIN)
   // Tooltip text does not announce on Windows; crbug.com/1245470
-  NotifyAccessibilityEvent(ax::mojom::Event::kFocus, true);
+  NotifyAccessibilityEventDeprecated(ax::mojom::Event::kFocus, true);
 #endif
 }
 
@@ -96,7 +95,7 @@ void TooltipIcon::OnBlur() {
 }
 
 void TooltipIcon::OnGestureEvent(ui::GestureEvent* event) {
-  if (event->type() == ui::ET_GESTURE_TAP) {
+  if (event->type() == ui::EventType::kGestureTap) {
     ShowBubble();
     event->SetHandled();
   }
@@ -134,8 +133,9 @@ void TooltipIcon::SetDrawAsHovered(bool hovered) {
 }
 
 void TooltipIcon::ShowBubble() {
-  if (bubble_)
+  if (bubble_) {
     return;
+  }
 
   SetDrawAsHovered(true);
 
@@ -155,13 +155,13 @@ void TooltipIcon::ShowBubble() {
     mouse_watcher_->Start(GetWidget()->GetNativeWindow());
   }
 
-  for (auto& observer : observers_)
-    observer.OnTooltipBubbleShown(this);
+  observers_.Notify(&Observer::OnTooltipBubbleShown, this);
 }
 
 void TooltipIcon::HideBubble() {
-  if (bubble_)
+  if (bubble_) {
     bubble_->Hide();
+  }
 }
 
 void TooltipIcon::OnWidgetDestroyed(Widget* widget) {

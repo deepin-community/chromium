@@ -4,6 +4,7 @@
 
 #include "components/policy/core/common/android/policy_converter.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -14,16 +15,18 @@
 #include "base/check_op.h"
 #include "base/json/json_reader.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/values.h"
-#include "components/policy/android/jni_headers/PolicyConverter_jni.h"
 #include "components/policy/core/common/policy_bundle.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/core/common/schema.h"
+#include "components/policy/core/common/schema_registry.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/policy/android/jni_headers/PolicyConverter_jni.h"
 
 using base::android::ConvertJavaStringToUTF8;
 using base::android::JavaRef;
@@ -41,10 +44,10 @@ std::optional<base::Value> SplitCommaSeparatedList(
     const std::string& str_value) {
   DCHECK(!str_value.empty());
 
-  base::Value::List as_list;
+  base::ListValue as_list;
   std::vector<std::string> items_as_vector = base::SplitString(
       str_value, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-  base::ranges::for_each(items_as_vector, [&as_list](const std::string& item) {
+  std::ranges::for_each(items_as_vector, [&as_list](const std::string& item) {
     as_list.Append(base::Value(item));
   });
   return base::Value(std::move(as_list));
@@ -52,12 +55,11 @@ std::optional<base::Value> SplitCommaSeparatedList(
 
 }  // namespace
 
-PolicyConverter::PolicyConverter(const Schema* policy_schema)
-    : policy_schema_(policy_schema) {
+PolicyConverter::PolicyConverter(const SchemaRegistry* schema_registry)
+    : schema_registry_(schema_registry) {
   JNIEnv* env = base::android::AttachCurrentThread();
   java_obj_.Reset(
-      env,
-      Java_PolicyConverter_create(env, reinterpret_cast<intptr_t>(this)).obj());
+      env, Java_PolicyConverter_create(env, reinterpret_cast<intptr_t>(this)));
   DCHECK(!java_obj_.is_null());
 }
 
@@ -77,23 +79,19 @@ base::android::ScopedJavaLocalRef<jobject> PolicyConverter::GetJavaObject() {
 }
 
 void PolicyConverter::SetPolicyBoolean(JNIEnv* env,
-                                       const JavaRef<jobject>& obj,
                                        const JavaRef<jstring>& policyKey,
-                                       jboolean value) {
-  SetPolicyValue(ConvertJavaStringToUTF8(env, policyKey),
-                 base::Value(static_cast<bool>(value)));
+                                       bool value) {
+  SetPolicyValue(ConvertJavaStringToUTF8(env, policyKey), base::Value(value));
 }
 
 void PolicyConverter::SetPolicyInteger(JNIEnv* env,
-                                       const JavaRef<jobject>& obj,
                                        const JavaRef<jstring>& policyKey,
-                                       jint value) {
+                                       int32_t value) {
   SetPolicyValue(ConvertJavaStringToUTF8(env, policyKey),
                  base::Value(static_cast<int>(value)));
 }
 
 void PolicyConverter::SetPolicyString(JNIEnv* env,
-                                      const JavaRef<jobject>& obj,
                                       const JavaRef<jstring>& policyKey,
                                       const JavaRef<jstring>& value) {
   SetPolicyValue(ConvertJavaStringToUTF8(env, policyKey),
@@ -101,7 +99,6 @@ void PolicyConverter::SetPolicyString(JNIEnv* env,
 }
 
 void PolicyConverter::SetPolicyStringArray(JNIEnv* env,
-                                           const JavaRef<jobject>& obj,
                                            const JavaRef<jstring>& policyKey,
                                            const JavaRef<jobjectArray>& array) {
   SetPolicyValue(ConvertJavaStringToUTF8(env, policyKey),
@@ -109,7 +106,7 @@ void PolicyConverter::SetPolicyStringArray(JNIEnv* env,
 }
 
 // static
-base::Value::List PolicyConverter::ConvertJavaStringArrayToListValue(
+base::ListValue PolicyConverter::ConvertJavaStringArrayToListValue(
     JNIEnv* env,
     const JavaRef<jobjectArray>& array) {
   DCHECK(!array.is_null());
@@ -117,7 +114,7 @@ base::Value::List PolicyConverter::ConvertJavaStringArrayToListValue(
   DCHECK_GE(array_reader.size(), 0)
       << "Invalid array length: " << array_reader.size();
 
-  base::Value::List list_value;
+  base::ListValue list_value;
   for (auto j_str : array_reader)
     list_value.Append(ConvertJavaStringToUTF8(env, j_str));
 
@@ -180,7 +177,6 @@ std::optional<base::Value> PolicyConverter::ConvertValueToSchema(
     // Binary is not a valid schema type.
     case base::Value::Type::BINARY: {
       NOTREACHED();
-      return base::Value();
     }
 
     // Complex types have to be deserialized from JSON.
@@ -219,7 +215,6 @@ std::optional<base::Value> PolicyConverter::ConvertValueToSchema(
   }
 
   NOTREACHED();
-  return std::nullopt;
 }
 
 void PolicyConverter::SetPolicyValueForTesting(const std::string& key,
@@ -229,10 +224,14 @@ void PolicyConverter::SetPolicyValueForTesting(const std::string& key,
 
 void PolicyConverter::SetPolicyValue(const std::string& key,
                                      base::Value value) {
-  const Schema schema = policy_schema_->GetKnownProperty(key);
+  // When SchemaRegistry::(Un)RegisterComponents adds/remove a Schema, it always
+  // creates a new SchemaMap instance, so we choose to fetch the schema from
+  // SchemaRegistry to always get the latest version.
   const PolicyNamespace ns(POLICY_DOMAIN_CHROME, std::string());
-  std::optional<base::Value> converted_value =
-      ConvertValueToSchema(std::move(value), schema);
+  const Schema* policy_schema = schema_registry_->schema_map()->GetSchema(ns);
+  CHECK(policy_schema);
+  std::optional<base::Value> converted_value = ConvertValueToSchema(
+      std::move(value), policy_schema->GetKnownProperty(key));
   if (converted_value) {
     // Do not set list/dictionary policies that are sent as empty strings from
     // the UEM. This is common on Android when the UEM pushes the policy with
@@ -245,3 +244,5 @@ void PolicyConverter::SetPolicyValue(const std::string& key,
 
 }  // namespace android
 }  // namespace policy
+
+DEFINE_JNI(PolicyConverter)

@@ -10,10 +10,9 @@
 #include <utility>
 
 #include "base/feature_list.h"
-#include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/location.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
@@ -24,17 +23,16 @@
 #include "components/password_manager/core/browser/sync/password_store_sync.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "components/sync/base/client_tag_hash.h"
-#include "components/sync/base/features.h"
 #include "components/sync/model/data_batch.h"
 #include "components/sync/model/entity_change.h"
 #include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/sync_metadata_store_change_list.h"
+#include "components/sync/protocol/data_type_state.pb.h"
 #include "components/sync/protocol/entity_metadata.pb.h"
 #include "components/sync/protocol/entity_specifics.pb.h"
-#include "components/sync/protocol/model_type_state.pb.h"
 #include "components/sync/protocol/password_specifics.pb.h"
-#include "components/sync/test/mock_model_type_change_processor.h"
+#include "components/sync/test/mock_data_type_local_change_processor.h"
 #include "components/sync/test/test_matchers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -67,7 +65,7 @@ MATCHER_P(EntityDataHasSignonRealm, expected_signon_realm, "") {
 bool PasswordIssuesHasExpectedInsecureTypes(
     const sync_pb::PasswordIssues& issues,
     const std::vector<InsecureType>& expected_types) {
-  return base::ranges::all_of(expected_types, [&issues](auto type) {
+  return std::ranges::all_of(expected_types, [&issues](auto type) {
     switch (type) {
       case InsecureType::kLeaked:
         return issues.has_leaked_password_issue();
@@ -201,31 +199,6 @@ PasswordForm MakePasswordForm(const std::string& signon_realm,
                                     /*issue_types=*/{});
 }
 
-PasswordForm MakeBlocklistedForm(const std::string& signon_realm,
-                                 int primary_key = 1) {
-  PasswordForm form;
-  form.primary_key = FormPrimaryKey(primary_key);
-  form.url = GURL("http://www.origin.com");
-  form.signon_realm = signon_realm;
-  form.blocked_by_user = true;
-  return form;
-}
-
-void AddDeletedMetadata(syncer::MetadataBatch* metadata_batch,
-                        int64_t modification_time,
-                        bool include_version) {
-  static int key_counter = 0;
-  std::string key = base::NumberToString(key_counter++);
-  sync_pb::EntityMetadata metadata;
-  metadata.set_is_deleted(true);
-  metadata.set_modification_time(modification_time);
-  if (include_version) {
-    metadata.set_deleted_by_version("117.0.5875.1");
-  }
-  auto metadata_ptr = std::make_unique<sync_pb::EntityMetadata>(metadata);
-  metadata_batch->AddMetadata(key, std::move(metadata_ptr));
-}
-
 // A mini database class the supports Add/Update/Remove functionality. It also
 // supports an auto increment primary key that starts from 1. It will be used to
 // empower the MockPasswordStoreSync be forwarding all database calls to an
@@ -325,24 +298,24 @@ class MockSyncMetadataStore : public PasswordStoreSync::MetadataStore {
  public:
   MOCK_METHOD(std::unique_ptr<syncer::MetadataBatch>,
               GetAllSyncMetadata,
-              (syncer::ModelType),
+              (syncer::DataType),
               (override));
-  MOCK_METHOD(void, DeleteAllSyncMetadata, (syncer::ModelType), (override));
+  MOCK_METHOD(void, DeleteAllSyncMetadata, (syncer::DataType), (override));
   MOCK_METHOD(bool,
               UpdateEntityMetadata,
-              (syncer::ModelType,
+              (syncer::DataType,
                const std::string&,
                const sync_pb::EntityMetadata&),
               (override));
   MOCK_METHOD(bool,
               ClearEntityMetadata,
-              (syncer::ModelType, const std::string&),
+              (syncer::DataType, const std::string&),
               (override));
   MOCK_METHOD(bool,
-              UpdateModelTypeState,
-              (syncer::ModelType, const sync_pb::ModelTypeState&),
+              UpdateDataTypeState,
+              (syncer::DataType, const sync_pb::DataTypeState&),
               (override));
-  MOCK_METHOD(bool, ClearModelTypeState, (syncer::ModelType), (override));
+  MOCK_METHOD(bool, ClearDataTypeState, (syncer::DataType), (override));
   MOCK_METHOD(void,
               SetPasswordDeletionsHaveSyncedCallback,
               (base::RepeatingCallback<void(bool)>),
@@ -377,10 +350,6 @@ class MockPasswordStoreSync : public PasswordStoreSync {
               (const PasswordStoreChangeList&),
               (override));
   MOCK_METHOD(void, NotifyDeletionsHaveSynced, (bool), (override));
-  MOCK_METHOD(void,
-              NotifyUnsyncedCredentialsWillBeDeleted,
-              (std::vector<PasswordForm>),
-              (override));
   MOCK_METHOD(bool, BeginTransaction, (), (override));
   MOCK_METHOD(bool, CommitTransaction, (), (override));
   MOCK_METHOD(void, RollbackTransaction, (), (override));
@@ -390,6 +359,11 @@ class MockPasswordStoreSync : public PasswordStoreSync {
               (override));
   MOCK_METHOD(bool, IsAccountStore, (), (const override));
   MOCK_METHOD(bool, DeleteAndRecreateDatabaseFile, (), (override));
+  MOCK_METHOD(std::optional<bool>,
+              WereUndecryptableLoginsDeleted,
+              (),
+              (const override));
+  MOCK_METHOD(void, ClearWereUndecryptableLoginsDeleted, (), (override));
 };
 
 }  // namespace
@@ -411,31 +385,11 @@ class PasswordSyncBridgeTest : public testing::Test {
     ON_CALL(mock_password_store_sync_, RemoveCredentialByPrimaryKeySync)
         .WillByDefault(Invoke(&fake_db_, &FakeDatabase::RemoveCredential));
 
-    RecreateBridge(wipe_model_upon_sync_disabled_behavior);
-
-    ON_CALL(mock_sync_metadata_store_sync_, GetAllSyncMetadata)
-        .WillByDefault(
-            []() { return std::make_unique<syncer::MetadataBatch>(); });
-    ON_CALL(mock_sync_metadata_store_sync_, UpdateEntityMetadata)
-        .WillByDefault(testing::Return(true));
-    ON_CALL(mock_sync_metadata_store_sync_, ClearEntityMetadata)
-        .WillByDefault(testing::Return(true));
-    ON_CALL(mock_sync_metadata_store_sync_, UpdateModelTypeState)
-        .WillByDefault(testing::Return(true));
-    ON_CALL(mock_sync_metadata_store_sync_, ClearModelTypeState)
-        .WillByDefault(testing::Return(true));
-
-    ON_CALL(mock_processor_, GetPossiblyTrimmedRemoteSpecifics)
-        .WillByDefault(ReturnRef(sync_pb::EntitySpecifics::default_instance()));
-  }
-
-  void RecreateBridge(syncer::WipeModelUponSyncDisabledBehavior
-                          wipe_model_upon_sync_disabled_behavior) {
     bridge_ = std::make_unique<PasswordSyncBridge>(
-        mock_processor_.CreateForwardingProcessor(), &mock_password_store_sync_,
-        wipe_model_upon_sync_disabled_behavior,
-        sync_enabled_or_disabled_cb_.Get());
-
+        mock_processor_.CreateForwardingProcessor(),
+        wipe_model_upon_sync_disabled_behavior);
+    bridge_->Init(&mock_password_store_sync_,
+                  sync_enabled_or_disabled_cb_.Get());
     bool is_account_store = wipe_model_upon_sync_disabled_behavior ==
                             syncer::WipeModelUponSyncDisabledBehavior::kAlways;
     ON_CALL(mock_password_store_sync_, IsAccountStore())
@@ -446,8 +400,29 @@ class PasswordSyncBridgeTest : public testing::Test {
     // PasswordStoreSync about the new changes even if they are initiated by the
     // bridge itself.
     ON_CALL(mock_password_store_sync_, NotifyCredentialsChanged)
+        .WillByDefault([this](const PasswordStoreChangeList& changes) {
+          bridge()->ActOnPasswordStoreChanges(FROM_HERE, changes);
+        });
+
+    ON_CALL(mock_sync_metadata_store_sync_, GetAllSyncMetadata)
         .WillByDefault(
-            Invoke(bridge(), &PasswordSyncBridge::ActOnPasswordStoreChanges));
+            []() { return std::make_unique<syncer::MetadataBatch>(); });
+    ON_CALL(mock_sync_metadata_store_sync_, UpdateEntityMetadata)
+        .WillByDefault(testing::Return(true));
+    ON_CALL(mock_sync_metadata_store_sync_, ClearEntityMetadata)
+        .WillByDefault(testing::Return(true));
+    ON_CALL(mock_sync_metadata_store_sync_, UpdateDataTypeState)
+        .WillByDefault(testing::Return(true));
+    ON_CALL(mock_sync_metadata_store_sync_, ClearDataTypeState)
+        .WillByDefault(testing::Return(true));
+
+    ON_CALL(mock_processor_, GetPossiblyTrimmedRemoteSpecifics)
+        .WillByDefault(ReturnRef(sync_pb::EntitySpecifics::default_instance()));
+    ON_CALL(mock_processor_, ReportError)
+        .WillByDefault([this](const syncer::ModelError& error) {
+          ON_CALL(mock_processor_, GetError())
+              .WillByDefault(testing::Return(error));
+        });
   }
 
   // Creates an EntityData around a copy of the given specifics.
@@ -462,12 +437,8 @@ class PasswordSyncBridgeTest : public testing::Test {
 
   std::optional<sync_pb::PasswordSpecifics> GetDataFromBridge(
       const std::string& storage_key) {
-    std::unique_ptr<syncer::DataBatch> batch;
-    bridge_->GetData({storage_key},
-                     base::BindLambdaForTesting(
-                         [&](std::unique_ptr<syncer::DataBatch> in_batch) {
-                           batch = std::move(in_batch);
-                         }));
+    std::unique_ptr<syncer::DataBatch> batch =
+        bridge_->GetDataForCommit({storage_key});
     EXPECT_THAT(batch, NotNull());
     if (!batch || !batch->HasNext()) {
       return std::nullopt;
@@ -482,7 +453,7 @@ class PasswordSyncBridgeTest : public testing::Test {
 
   PasswordSyncBridge* bridge() { return bridge_.get(); }
 
-  syncer::MockModelTypeChangeProcessor& mock_processor() {
+  syncer::MockDataTypeLocalChangeProcessor& mock_processor() {
     return mock_processor_;
   }
 
@@ -500,7 +471,7 @@ class PasswordSyncBridgeTest : public testing::Test {
 
  private:
   FakeDatabase fake_db_;
-  testing::NiceMock<syncer::MockModelTypeChangeProcessor> mock_processor_;
+  testing::NiceMock<syncer::MockDataTypeLocalChangeProcessor> mock_processor_;
   testing::NiceMock<MockSyncMetadataStore> mock_sync_metadata_store_sync_;
   testing::NiceMock<MockPasswordStoreSync> mock_password_store_sync_;
   testing::NiceMock<base::MockRepeatingClosure> sync_enabled_or_disabled_cb_;
@@ -538,9 +509,9 @@ TEST_F(PasswordSyncBridgeTest, ShouldForwardLocalChangesToTheProcessor) {
               Put("2", EntityDataHasSignonRealm(kSignonRealm2),
                   IsSyncMetadataStoreChangeListWithStore(store)));
   EXPECT_CALL(mock_processor(),
-              Delete("3", IsSyncMetadataStoreChangeListWithStore(store)));
+              Delete("3", _, IsSyncMetadataStoreChangeListWithStore(store)));
 
-  bridge()->ActOnPasswordStoreChanges(changes);
+  bridge()->ActOnPasswordStoreChanges(FROM_HERE, changes);
 }
 
 TEST_F(PasswordSyncBridgeTest,
@@ -558,7 +529,7 @@ TEST_F(PasswordSyncBridgeTest,
   EXPECT_CALL(mock_processor(), Put).Times(0);
   EXPECT_CALL(mock_processor(), Delete).Times(0);
 
-  bridge()->ActOnPasswordStoreChanges(changes);
+  bridge()->ActOnPasswordStoreChanges(FROM_HERE, changes);
 }
 
 TEST_F(PasswordSyncBridgeTest, ShouldApplyEmptySyncChangesWithoutError) {
@@ -695,7 +666,8 @@ TEST_F(PasswordSyncBridgeTest, ShouldApplyRemoteDeletion) {
   EXPECT_CALL(mock_processor(), Delete).Times(0);
 
   syncer::EntityChangeList entity_change_list;
-  entity_change_list.push_back(syncer::EntityChange::CreateDelete(kStorageKey));
+  entity_change_list.push_back(
+      syncer::EntityChange::CreateDelete(kStorageKey, syncer::EntityData()));
   std::optional<syncer::ModelError> error =
       bridge()->ApplyIncrementalSyncChanges(
           bridge()->CreateMetadataChangeList(), std::move(entity_change_list));
@@ -892,8 +864,9 @@ TEST_F(
                                     /*state=*/syncer::HasNotInitialSyncDone(),
                                     /*entities=*/testing::SizeIs(0))));
   auto bridge = std::make_unique<PasswordSyncBridge>(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kNever, base::DoNothing());
+      mock_processor().CreateForwardingProcessor(),
+      syncer::WipeModelUponSyncDisabledBehavior::kNever);
+  bridge->Init(mock_password_store_sync(), base::DoNothing());
 }
 
 // This tests that if reading logins from the store fails,
@@ -915,42 +888,16 @@ TEST_F(PasswordSyncBridgeTest, ShouldNotDeleteSyncMetadataWhenDoesNotExist) {
               GetAllSyncMetadata(syncer::PASSWORDS));
   EXPECT_CALL(*mock_sync_metadata_store_sync(), DeleteAllSyncMetadata).Times(0);
 
-  auto bridge = PasswordSyncBridge(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kNever, base::DoNothing());
+  auto bridge =
+      PasswordSyncBridge(mock_processor().CreateForwardingProcessor(),
+                         syncer::WipeModelUponSyncDisabledBehavior::kAlways);
+  bridge.Init(mock_password_store_sync(), base::DoNothing());
 
   histogram_tester.ExpectUniqueSample("PasswordManager.SyncMetadataReadError2",
                                       /*kNone*/ 0, 1);
 }
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-TEST_F(PasswordSyncBridgeTest, ShouldRemoveSyncMetadataWhenReadAllLoginsFails) {
-  base::HistogramTester histogram_tester;
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {
-          features::kForceInitialSyncWhenDecryptionFails,
-      },
-      {});
-  ON_CALL(*mock_password_store_sync(), ReadAllCredentials)
-      .WillByDefault(
-          testing::Return(FormRetrievalResult::kEncryptionServiceFailure));
-
-  EXPECT_CALL(*mock_sync_metadata_store_sync(),
-              GetAllSyncMetadata(syncer::PASSWORDS));
-  EXPECT_CALL(*mock_password_store_sync(), ReadAllCredentials)
-      .WillOnce(Return(FormRetrievalResult::kEncryptionServiceFailure));
-  EXPECT_CALL(*mock_sync_metadata_store_sync(),
-              DeleteAllSyncMetadata(syncer::PASSWORDS));
-
-  auto bridge = PasswordSyncBridge(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kNever, base::DoNothing());
-
-  histogram_tester.ExpectUniqueSample("PasswordManager.SyncMetadataReadError2",
-                                      3, 1);
-}
-
 TEST_F(PasswordSyncBridgeTest,
        ShouldRemoveSyncMetadataWhenSpecificsCacheContainsSupportedFields) {
   base::HistogramTester histogram_tester;
@@ -980,9 +927,9 @@ TEST_F(PasswordSyncBridgeTest,
                                     /*entities=*/testing::SizeIs(0))));
 
   auto bridge = std::make_unique<PasswordSyncBridge>(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kNever, base::DoNothing());
-
+      mock_processor().CreateForwardingProcessor(),
+      syncer::WipeModelUponSyncDisabledBehavior::kNever);
+  bridge->Init(mock_password_store_sync(), base::DoNothing());
   histogram_tester.ExpectUniqueSample("PasswordManager.SyncMetadataReadError2",
                                       4, 1);
 }
@@ -1014,8 +961,9 @@ TEST_F(
   EXPECT_CALL(*mock_sync_metadata_store_sync(), DeleteAllSyncMetadata).Times(0);
 
   auto bridge = std::make_unique<PasswordSyncBridge>(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kNever, base::DoNothing());
+      mock_processor().CreateForwardingProcessor(),
+      syncer::WipeModelUponSyncDisabledBehavior::kNever);
+  bridge->Init(mock_password_store_sync(), base::DoNothing());
 }
 
 TEST_F(PasswordSyncBridgeTest,
@@ -1027,10 +975,10 @@ TEST_F(PasswordSyncBridgeTest,
         // Create entity without the flag that the password have been
         // redownloaded for notes already.
         auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
-        sync_pb::ModelTypeState model_type_state;
-        model_type_state.set_initial_sync_state(
-            sync_pb::ModelTypeState_InitialSyncState_INITIAL_SYNC_DONE);
-        metadata_batch->SetModelTypeState(model_type_state);
+        sync_pb::DataTypeState data_type_state;
+        data_type_state.set_initial_sync_state(
+            sync_pb::DataTypeState_InitialSyncState_INITIAL_SYNC_DONE);
+        metadata_batch->SetDataTypeState(data_type_state);
         return metadata_batch;
       });
 
@@ -1041,9 +989,9 @@ TEST_F(PasswordSyncBridgeTest,
                                     /*entities=*/testing::SizeIs(0))));
 
   auto bridge = std::make_unique<PasswordSyncBridge>(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kNever, base::DoNothing());
-
+      mock_processor().CreateForwardingProcessor(),
+      syncer::WipeModelUponSyncDisabledBehavior::kNever);
+  bridge->Init(mock_password_store_sync(), base::DoNothing());
   histogram_tester.ExpectUniqueSample("PasswordManager.SyncMetadataReadError2",
                                       5, 1);
 }
@@ -1058,12 +1006,12 @@ TEST_F(
         // Create entity with the flag that the password have been redownloaded
         // for notes already.
         auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
-        sync_pb::ModelTypeState model_type_state;
-        model_type_state.set_initial_sync_state(
-            sync_pb::ModelTypeState_InitialSyncState_INITIAL_SYNC_DONE);
-        model_type_state.set_notes_enabled_before_initial_sync_for_passwords(
+        sync_pb::DataTypeState data_type_state;
+        data_type_state.set_initial_sync_state(
+            sync_pb::DataTypeState_InitialSyncState_INITIAL_SYNC_DONE);
+        data_type_state.set_notes_enabled_before_initial_sync_for_passwords(
             true);
-        metadata_batch->SetModelTypeState(model_type_state);
+        metadata_batch->SetDataTypeState(data_type_state);
         return metadata_batch;
       });
 
@@ -1073,8 +1021,9 @@ TEST_F(
   EXPECT_CALL(*mock_sync_metadata_store_sync(), DeleteAllSyncMetadata).Times(0);
 
   auto bridge = std::make_unique<PasswordSyncBridge>(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kNever, base::DoNothing());
+      mock_processor().CreateForwardingProcessor(),
+      syncer::WipeModelUponSyncDisabledBehavior::kNever);
+  bridge->Init(mock_password_store_sync(), base::DoNothing());
 }
 
 TEST_F(PasswordSyncBridgeTest,
@@ -1096,30 +1045,263 @@ TEST_F(PasswordSyncBridgeTest,
   EXPECT_CALL(*mock_sync_metadata_store_sync(), DeleteAllSyncMetadata).Times(0);
 
   auto bridge = std::make_unique<PasswordSyncBridge>(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kNever, base::DoNothing());
+      mock_processor().CreateForwardingProcessor(),
+      syncer::WipeModelUponSyncDisabledBehavior::kNever);
+  bridge->Init(mock_password_store_sync(), base::DoNothing());
+}
+#endif
+
+TEST_F(PasswordSyncBridgeTest,
+       ShouldNotRemoveSyncMetadataWhenUndecryptablePasswordsWereNotDeleted) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list{};
+  feature_list.InitAndEnableFeature(features::kClearUndecryptablePasswords);
+
+  EXPECT_CALL(*mock_password_store_sync(), WereUndecryptableLoginsDeleted)
+      .WillOnce(Return(false));
+  EXPECT_CALL(*mock_sync_metadata_store_sync(),
+              GetAllSyncMetadata(syncer::PASSWORDS));
+  EXPECT_CALL(*mock_sync_metadata_store_sync(),
+              DeleteAllSyncMetadata(syncer::PASSWORDS))
+      .Times(0);
+
+  auto bridge =
+      PasswordSyncBridge(mock_processor().CreateForwardingProcessor(),
+                         syncer::WipeModelUponSyncDisabledBehavior::kAlways);
+  bridge.Init(mock_password_store_sync(), base::DoNothing());
+
+  histogram_tester.ExpectUniqueSample("PasswordManager.SyncMetadataReadError2",
+                                      0, 1);
 }
 
 TEST_F(PasswordSyncBridgeTest,
-       ShouldNotRemoveSyncMetadataWhenReadAllLoginsSucceeds) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {
-          features::kForceInitialSyncWhenDecryptionFails,
-      },
-      {});
+       ShouldRemoveSyncMetadataWhenUndecryptablePasswordsWereDeleted) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list{};
+  feature_list.InitAndEnableFeature(features::kClearUndecryptablePasswords);
 
+  EXPECT_CALL(*mock_password_store_sync(), WereUndecryptableLoginsDeleted)
+      .WillOnce(Return(std::optional<bool>()))
+      .WillOnce(Return(true));
   EXPECT_CALL(*mock_sync_metadata_store_sync(),
               GetAllSyncMetadata(syncer::PASSWORDS));
   EXPECT_CALL(*mock_password_store_sync(), ReadAllCredentials)
       .WillOnce(Return(FormRetrievalResult::kSuccess));
-  EXPECT_CALL(*mock_sync_metadata_store_sync(), DeleteAllSyncMetadata).Times(0);
+  EXPECT_CALL(*mock_sync_metadata_store_sync(),
+              DeleteAllSyncMetadata(syncer::PASSWORDS));
 
-  PasswordSyncBridge(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kNever, base::DoNothing());
+  auto bridge =
+      PasswordSyncBridge(mock_processor().CreateForwardingProcessor(),
+                         syncer::WipeModelUponSyncDisabledBehavior::kAlways);
+  bridge.Init(mock_password_store_sync(), base::DoNothing());
+
+  histogram_tester.ExpectUniqueSample("PasswordManager.SyncMetadataReadError2",
+                                      3, 1);
 }
-#endif
+
+TEST_F(PasswordSyncBridgeTest,
+       ShouldRemoveSyncMetadataWhenUndecryptablePasswordsWereDeletedEarlier) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list{};
+  feature_list.InitAndEnableFeature(features::kClearUndecryptablePasswords);
+
+  EXPECT_CALL(*mock_password_store_sync(), WereUndecryptableLoginsDeleted)
+      .WillOnce(Return(true));
+  EXPECT_CALL(*mock_sync_metadata_store_sync(),
+              GetAllSyncMetadata(syncer::PASSWORDS));
+  EXPECT_CALL(*mock_password_store_sync(), ReadAllCredentials).Times(0);
+  EXPECT_CALL(*mock_sync_metadata_store_sync(),
+              DeleteAllSyncMetadata(syncer::PASSWORDS));
+
+  auto bridge =
+      PasswordSyncBridge(mock_processor().CreateForwardingProcessor(),
+                         syncer::WipeModelUponSyncDisabledBehavior::kAlways);
+  bridge.Init(mock_password_store_sync(), base::DoNothing());
+
+  histogram_tester.ExpectUniqueSample("PasswordManager.SyncMetadataReadError2",
+                                      3, 1);
+}
+
+TEST_F(
+    PasswordSyncBridgeTest,
+    ShouldRemoveSyncMetadataWhenUndecryptablePasswordsDetectedAndFeatureEnabled) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {features::kClearUndecryptablePasswordsOnSync,
+       features::kTriggerPasswordResyncWhenUndecryptablePasswordsDetected},
+      /*disabled_features=*/{});
+
+  // 1. Mock GetAllSyncMetadata to return a valid batch that wouldn't trigger
+  //    other metadata clearing conditions.
+  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
+      .WillByDefault([&]() {
+        auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
+        sync_pb::DataTypeState data_type_state;
+        data_type_state.set_initial_sync_state(
+            sync_pb::DataTypeState_InitialSyncState_INITIAL_SYNC_DONE);
+        // Ensure notes_enabled flag is set to avoid triggering notes
+        // redownload.
+        data_type_state.set_notes_enabled_before_initial_sync_for_passwords(
+            true);
+        metadata_batch->SetDataTypeState(data_type_state);
+        // Add some metadata to ensure the batch isn't empty and to verify it
+        // gets cleared. This metadata should not trigger
+        // SyncMetadataCacheContainsSupportedFields or
+        // DoesPasswordStoreContainAccidentalBatchDeletions.
+        sync_pb::EntityMetadata dummy_entity_metadata;
+        metadata_batch->AddMetadata(
+            "some_storage_key",
+            std::make_unique<sync_pb::EntityMetadata>(dummy_entity_metadata));
+        return metadata_batch;
+      });
+
+  // 2. Mock ReadAllCredentials to simulate undecryptable passwords.
+  //    This will make DoesPasswordStoreContainUndecryptablePasswords() return
+  //    true. It will also make WereUndecryptablePasswordsDeleted() return false
+  //    if called, avoiding that specific metadata clearing path.
+  ON_CALL(*mock_password_store_sync(), ReadAllCredentials(_))
+      .WillByDefault(Return(FormRetrievalResult::kEncryptionServiceFailure));
+
+  // Expectations:
+  // - Metadata should be deleted.
+  EXPECT_CALL(*mock_sync_metadata_store_sync(),
+              DeleteAllSyncMetadata(syncer::PASSWORDS));
+  // - ModelReadyToSync should be called with an empty batch.
+  EXPECT_CALL(mock_processor(), ModelReadyToSync(MetadataBatchContains(
+                                    /*state=*/syncer::HasNotInitialSyncDone(),
+                                    /*entities=*/testing::SizeIs(0))));
+
+  // Re-initialize the bridge to trigger Init() with the new mock setups.
+  auto bridge = std::make_unique<PasswordSyncBridge>(
+      mock_processor().CreateForwardingProcessor(),
+      syncer::WipeModelUponSyncDisabledBehavior::kNever);
+  bridge->Init(mock_password_store_sync(), base::DoNothing());
+
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.SyncMetadataReadError2",
+      7,  // SyncMetadataReadError::
+          //   kReadSuccessButClearedDueToUndecryptablePasswords
+      1);
+}
+
+TEST_F(
+    PasswordSyncBridgeTest,
+    ShouldNotRemoveSyncMetadataWhenUndecryptablePasswordsDetectedAndFeatureDisabled) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {features::kClearUndecryptablePasswordsOnSync},
+      /*disabled_features=*/{
+          features::kTriggerPasswordResyncWhenUndecryptablePasswordsDetected});
+
+  // 1. Mock GetAllSyncMetadata to return a valid batch that wouldn't trigger
+  //    other metadata clearing conditions.
+  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
+      .WillByDefault([&]() {
+        auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
+        sync_pb::DataTypeState data_type_state;
+        data_type_state.set_initial_sync_state(
+            sync_pb::DataTypeState_InitialSyncState_INITIAL_SYNC_DONE);
+        // Ensure notes_enabled flag is set to avoid triggering notes
+        // redownload.
+        data_type_state.set_notes_enabled_before_initial_sync_for_passwords(
+            true);
+        metadata_batch->SetDataTypeState(data_type_state);
+        // Add some metadata to ensure the batch isn't empty and to verify it
+        // gets cleared. This metadata should not trigger
+        // SyncMetadataCacheContainsSupportedFields or
+        // DoesPasswordStoreContainAccidentalBatchDeletions.
+        sync_pb::EntityMetadata dummy_entity_metadata;
+        metadata_batch->AddMetadata(
+            "some_storage_key",
+            std::make_unique<sync_pb::EntityMetadata>(dummy_entity_metadata));
+        return metadata_batch;
+      });
+
+  // 2. Mock ReadAllCredentials to simulate undecryptable passwords.
+  //    This will make DoesPasswordStoreContainUndecryptablePasswords() return
+  //    true. It will also make WereUndecryptablePasswordsDeleted() return false
+  //    if called, avoiding that specific metadata clearing path.
+  ON_CALL(*mock_password_store_sync(), ReadAllCredentials(_))
+      .WillByDefault(Return(FormRetrievalResult::kEncryptionServiceFailure));
+
+  // Expectations:
+  // - Metadata should not be deleted.
+  EXPECT_CALL(*mock_sync_metadata_store_sync(),
+              DeleteAllSyncMetadata(syncer::PASSWORDS))
+      .Times(0);
+
+  // Re-initialize the bridge to trigger Init() with the new mock setups.
+  auto bridge = std::make_unique<PasswordSyncBridge>(
+      mock_processor().CreateForwardingProcessor(),
+      syncer::WipeModelUponSyncDisabledBehavior::kNever);
+  bridge->Init(mock_password_store_sync(), base::DoNothing());
+
+  histogram_tester.ExpectUniqueSample("PasswordManager.SyncMetadataReadError2",
+                                      0,  // SyncMetadataReadError::kNone
+                                      1);
+}
+
+TEST_F(
+    PasswordSyncBridgeTest,
+    ShouldNotRemoveSyncMetadataWhenUndecryptablePasswordsDetectedAndFeatureEnabledButShouldRecoverPasswordsDuringMergeIsFalse) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {features::kTriggerPasswordResyncWhenUndecryptablePasswordsDetected},
+      /*disabled_features=*/{features::kClearUndecryptablePasswordsOnSync});
+
+  // 1. Mock GetAllSyncMetadata to return a valid batch that wouldn't trigger
+  //    other metadata clearing conditions.
+  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
+      .WillByDefault([&]() {
+        auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
+        sync_pb::DataTypeState data_type_state;
+        data_type_state.set_initial_sync_state(
+            sync_pb::DataTypeState_InitialSyncState_INITIAL_SYNC_DONE);
+        // Ensure notes_enabled flag is set to avoid triggering notes
+        // redownload.
+        data_type_state.set_notes_enabled_before_initial_sync_for_passwords(
+            true);
+        metadata_batch->SetDataTypeState(data_type_state);
+        // Add some metadata to ensure the batch isn't empty and to verify it
+        // gets cleared. This metadata should not trigger
+        // SyncMetadataCacheContainsSupportedFields or
+        // DoesPasswordStoreContainAccidentalBatchDeletions.
+        sync_pb::EntityMetadata dummy_entity_metadata;
+        metadata_batch->AddMetadata(
+            "some_storage_key",
+            std::make_unique<sync_pb::EntityMetadata>(dummy_entity_metadata));
+        return metadata_batch;
+      });
+
+  // 2. Mock ReadAllCredentials to simulate undecryptable passwords.
+  //    This will make DoesPasswordStoreContainUndecryptablePasswords() return
+  //    true. It will also make WereUndecryptablePasswordsDeleted() return false
+  //    if called, avoiding that specific metadata clearing path.
+  ON_CALL(*mock_password_store_sync(), ReadAllCredentials(_))
+      .WillByDefault(Return(FormRetrievalResult::kEncryptionServiceFailure));
+
+  // Expectations:
+  // - Metadata should not be deleted.
+  EXPECT_CALL(*mock_sync_metadata_store_sync(),
+              DeleteAllSyncMetadata(syncer::PASSWORDS))
+      .Times(0);
+
+  // Re-initialize the bridge to trigger Init() with the new mock setups.
+  auto bridge = std::make_unique<PasswordSyncBridge>(
+      mock_processor().CreateForwardingProcessor(),
+      syncer::WipeModelUponSyncDisabledBehavior::kNever);
+  bridge->Init(mock_password_store_sync(), base::DoNothing());
+
+  histogram_tester.ExpectUniqueSample("PasswordManager.SyncMetadataReadError2",
+                                      0,  // SyncMetadataReadError::kNone
+                                      1);
+}
 
 // This tests that if adding logins to the store fails,
 // ShouldMergeSync() would return an error without crashing.
@@ -1138,22 +1320,22 @@ TEST_F(PasswordSyncBridgeTest,
   EXPECT_TRUE(error);
 }
 
-// This tests that if storing model type state fails,
+// This tests that if storing data type state fails,
 // ShouldMergeSync() would return an error without crashing.
 TEST_F(
     PasswordSyncBridgeTest,
-    ShouldMergeSyncRemoteAndLocalPasswordsWithErrorWhenStoreUpdateModelTypeStateFails) {
-  // Simulate failure in UpdateModelTypeState();
-  ON_CALL(*mock_sync_metadata_store_sync(), UpdateModelTypeState)
+    ShouldMergeSyncRemoteAndLocalPasswordsWithErrorWhenStoreUpdateDataTypeStateFails) {
+  // Simulate failure in UpdateDataTypeState();
+  ON_CALL(*mock_sync_metadata_store_sync(), UpdateDataTypeState)
       .WillByDefault(testing::Return(false));
 
-  sync_pb::ModelTypeState model_type_state;
-  model_type_state.set_initial_sync_state(
-      sync_pb::ModelTypeState_InitialSyncState_INITIAL_SYNC_DONE);
+  sync_pb::DataTypeState data_type_state;
+  data_type_state.set_initial_sync_state(
+      sync_pb::DataTypeState_InitialSyncState_INITIAL_SYNC_DONE);
 
   std::unique_ptr<syncer::MetadataChangeList> metadata_changes =
       bridge()->CreateMetadataChangeList();
-  metadata_changes->UpdateModelTypeState(model_type_state);
+  metadata_changes->UpdateDataTypeState(data_type_state);
 
   EXPECT_CALL(*mock_password_store_sync(), RollbackTransaction());
   std::optional<syncer::ModelError> error =
@@ -1190,12 +1372,7 @@ TEST_F(PasswordSyncBridgeTest,
   fake_db()->AddLoginWithPrimaryKey(form1);
   fake_db()->AddLoginWithPrimaryKey(form2);
 
-  std::unique_ptr<syncer::DataBatch> batch;
-
-  bridge()->GetAllDataForDebugging(base::BindLambdaForTesting(
-      [&](std::unique_ptr<syncer::DataBatch> in_batch) {
-        batch = std::move(in_batch);
-      }));
+  std::unique_ptr<syncer::DataBatch> batch = bridge()->GetAllDataForDebugging();
 
   ASSERT_THAT(batch, NotNull());
   EXPECT_TRUE(batch->HasNext());
@@ -1211,13 +1388,13 @@ TEST_F(PasswordSyncBridgeTest,
        ShouldCallModelReadyUponConstructionWithMetadata) {
   ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
       .WillByDefault([&]() {
-        sync_pb::ModelTypeState model_type_state;
-        model_type_state.set_initial_sync_state(
-            sync_pb::ModelTypeState_InitialSyncState_INITIAL_SYNC_DONE);
-        model_type_state.set_notes_enabled_before_initial_sync_for_passwords(
+        sync_pb::DataTypeState data_type_state;
+        data_type_state.set_initial_sync_state(
+            sync_pb::DataTypeState_InitialSyncState_INITIAL_SYNC_DONE);
+        data_type_state.set_notes_enabled_before_initial_sync_for_passwords(
             true);
         auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
-        metadata_batch->SetModelTypeState(model_type_state);
+        metadata_batch->SetDataTypeState(data_type_state);
         metadata_batch->AddMetadata(
             "storage_key", std::make_unique<sync_pb::EntityMetadata>());
         return metadata_batch;
@@ -1227,9 +1404,9 @@ TEST_F(PasswordSyncBridgeTest,
                                     /*state=*/syncer::HasInitialSyncDone(),
                                     /*entities=*/testing::SizeIs(1))));
 
-  PasswordSyncBridge bridge(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kNever, base::DoNothing());
+  PasswordSyncBridge bridge(mock_processor().CreateForwardingProcessor(),
+                            syncer::WipeModelUponSyncDisabledBehavior::kNever);
+  bridge.Init(mock_password_store_sync(), base::DoNothing());
 }
 
 // Tests that in case ReadAllCredentials() during initial merge returns
@@ -1334,158 +1511,6 @@ TEST_F(PasswordSyncBridgeTest, ShouldNotifyOnSyncDisableIfProfileStore) {
   bridge()->ApplyDisableSyncChanges(bridge()->CreateMetadataChangeList());
 }
 
-TEST_F(PasswordSyncBridgeAccountStoreTest,
-       ShouldNotifyUnsyncedCredentialsIfAccountStore) {
-  base::HistogramTester histogram_tester;
-
-  const std::string kPrimaryKeyUnsyncedCredentialStr = "1000";
-  const std::string kPrimaryKeySyncedCredentialStr = "1001";
-  const std::string kPrimaryKeyUnsyncedDeletionStr = "1002";
-  const std::string kPrimaryKeyUnsyncedBlocklistStr = "1003";
-  ON_CALL(mock_processor(), IsEntityUnsynced(kPrimaryKeyUnsyncedCredentialStr))
-      .WillByDefault(Return(true));
-  ON_CALL(mock_processor(), IsEntityUnsynced(kPrimaryKeySyncedCredentialStr))
-      .WillByDefault(Return(false));
-  ON_CALL(mock_processor(), IsEntityUnsynced(kPrimaryKeyUnsyncedDeletionStr))
-      .WillByDefault(Return(true));
-  ON_CALL(mock_processor(), IsEntityUnsynced(kPrimaryKeyUnsyncedBlocklistStr))
-      .WillByDefault(Return(true));
-
-  sync_pb::EntityMetadata is_deletion_metadata;
-  is_deletion_metadata.set_is_deleted(true);
-  sync_pb::EntityMetadata is_not_deletion_metadata;
-  is_not_deletion_metadata.set_is_deleted(false);
-  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
-      .WillByDefault([&]() {
-        auto batch = std::make_unique<syncer::MetadataBatch>();
-        batch->AddMetadata(kPrimaryKeyUnsyncedCredentialStr,
-                           std::make_unique<sync_pb::EntityMetadata>(
-                               is_not_deletion_metadata));
-        batch->AddMetadata(kPrimaryKeySyncedCredentialStr,
-                           std::make_unique<sync_pb::EntityMetadata>(
-                               is_not_deletion_metadata));
-        batch->AddMetadata(
-            kPrimaryKeyUnsyncedDeletionStr,
-            std::make_unique<sync_pb::EntityMetadata>(is_deletion_metadata));
-        batch->AddMetadata(kPrimaryKeyUnsyncedBlocklistStr,
-                           std::make_unique<sync_pb::EntityMetadata>(
-                               is_not_deletion_metadata));
-        return batch;
-      });
-
-  // No form is added to the database for the unsynced deletion primary key,
-  // because the deletion is supposed to have already removed such form.
-  const int kPrimaryKeyUnsyncedCredential = 1000;
-  const int kPrimaryKeySyncedCredential = 1001;
-  const int kPrimaryKeyUnsyncedBlocklist = 1003;
-  PasswordForm unsynced_credential =
-      MakePasswordForm(kSignonRealm1, kPrimaryKeyUnsyncedCredential);
-  unsynced_credential.in_store = PasswordForm::Store::kAccountStore;
-  PasswordForm synced_credential =
-      MakePasswordForm(kSignonRealm2, kPrimaryKeySyncedCredential);
-  synced_credential.in_store = PasswordForm::Store::kAccountStore;
-  PasswordForm unsynced_blocklist =
-      MakeBlocklistedForm(kSignonRealm3, kPrimaryKeyUnsyncedBlocklist);
-  unsynced_blocklist.in_store = PasswordForm::Store::kAccountStore;
-  fake_db()->AddLoginWithPrimaryKey(unsynced_credential);
-  fake_db()->AddLoginWithPrimaryKey(synced_credential);
-  fake_db()->AddLoginWithPrimaryKey(unsynced_blocklist);
-
-  // The notification should only contain new credentials that are unsynced,
-  // ignoring both synced ones, deletion entries and blocklists.
-  EXPECT_CALL(*mock_password_store_sync(),
-              NotifyUnsyncedCredentialsWillBeDeleted(
-                  UnorderedElementsAre(unsynced_credential)));
-
-  // The content of the metadata change list does not matter in this case.
-  bridge()->ApplyDisableSyncChanges(bridge()->CreateMetadataChangeList());
-
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.AccountStorage.UnsyncedPasswordsFoundDuringSignOut", 1,
-      1);
-}
-
-TEST_F(PasswordSyncBridgeTest,
-       ShouldNotNotifyUnsyncedCredentialsIfProfileStore) {
-  base::HistogramTester histogram_tester;
-
-  const int kPrimaryKeyUnsyncedCredential = 1000;
-  const std::string kPrimaryKeyUnsyncedCredentialStr = "1000";
-  ON_CALL(mock_processor(), IsEntityUnsynced(kPrimaryKeyUnsyncedCredentialStr))
-      .WillByDefault(Return(true));
-
-  sync_pb::EntityMetadata is_not_deletion_metadata;
-  is_not_deletion_metadata.set_is_deleted(false);
-  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
-      .WillByDefault([&]() {
-        auto batch = std::make_unique<syncer::MetadataBatch>();
-        batch->AddMetadata(kPrimaryKeyUnsyncedCredentialStr,
-                           std::make_unique<sync_pb::EntityMetadata>(
-                               is_not_deletion_metadata));
-        return batch;
-      });
-
-  PasswordForm unsynced_deletion = MakePasswordForm(kSignonRealm3);
-  fake_db()->AddLoginWithPrimaryKey(
-      MakePasswordForm(kSignonRealm1, kPrimaryKeyUnsyncedCredential));
-
-  EXPECT_CALL(*mock_password_store_sync(),
-              NotifyUnsyncedCredentialsWillBeDeleted)
-      .Times(0);
-
-  // The content of the metadata change list does not matter in this case.
-  bridge()->ApplyDisableSyncChanges(bridge()->CreateMetadataChangeList());
-
-  histogram_tester.ExpectTotalCount(
-      "PasswordManager.AccountStorage.UnsyncedPasswordsFoundDuringSignOut", 0);
-}
-
-TEST_F(PasswordSyncBridgeAccountStoreTest,
-       ShouldReportDownloadedPasswordsIfAccountStore) {
-  ON_CALL(mock_processor(), IsTrackingMetadata()).WillByDefault(Return(true));
-
-  syncer::EntityChangeList entity_change_list;
-  entity_change_list.push_back(syncer::EntityChange::CreateAdd(
-      /*storage_key=*/"",
-      SpecificsToEntity(CreateSpecificsWithSignonRealm(kSignonRealm1))));
-  entity_change_list.push_back(syncer::EntityChange::CreateAdd(
-      /*storage_key=*/"",
-      SpecificsToEntity(CreateSpecificsWithSignonRealm(kSignonRealm2))));
-
-  sync_pb::PasswordSpecifics blocklisted_specifics;
-  sync_pb::PasswordSpecificsData* password_data =
-      blocklisted_specifics.mutable_client_only_encrypted_data();
-  password_data->set_origin("http://www.origin.com");
-  password_data->set_signon_realm(kSignonRealm3);
-  password_data->set_blacklisted(true);
-
-  entity_change_list.push_back(syncer::EntityChange::CreateAdd(
-      /*storage_key=*/"", SpecificsToEntity(blocklisted_specifics)));
-
-  base::HistogramTester histogram_tester;
-  std::optional<syncer::ModelError> error = bridge()->MergeFullSyncData(
-      bridge()->CreateMetadataChangeList(), std::move(entity_change_list));
-  ASSERT_FALSE(error);
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.AccountStoreCredentialsAfterOptIn", 2, 1);
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.AccountStoreBlocklistedEntriesAfterOptIn", 1, 1);
-  histogram_tester.ExpectTotalCount(
-      "PasswordManager.ProfileStore.TotalAccountsBeforeInitialSync", 0);
-}
-
-TEST_F(PasswordSyncBridgeTest, ShouldReportStoredPasswordsIfProfileStore) {
-  fake_db()->AddLoginWithPrimaryKey(MakePasswordForm(kSignonRealm1, 100));
-  fake_db()->AddLoginWithPrimaryKey(MakePasswordForm(kSignonRealm2, 101));
-
-  base::HistogramTester histogram_tester;
-  std::optional<syncer::ModelError> error = bridge()->MergeFullSyncData(
-      bridge()->CreateMetadataChangeList(), syncer::EntityChangeList());
-  ASSERT_FALSE(error);
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.ProfileStore.TotalAccountsBeforeInitialSync", 2, 1);
-}
-
 TEST_F(PasswordSyncBridgeTest,
        ShouldAddRemoteInsecureCredentilasUponRemoteCreation) {
   ON_CALL(mock_processor(), IsTrackingMetadata()).WillByDefault(Return(true));
@@ -1562,7 +1587,7 @@ TEST_F(PasswordSyncBridgeTest, ShouldPutSecurityIssuesOnLoginChange) {
       mock_processor(),
       Put(kPrimaryKeyStr1, EntityDataHasSecurityIssueTypes(kIssuesTypes), _));
 
-  bridge()->ActOnPasswordStoreChanges(changes);
+  bridge()->ActOnPasswordStoreChanges(FROM_HERE, changes);
 }
 
 TEST_F(PasswordSyncBridgeTest, ShouldAddLocalSecurityIssuesDuringInitialMerge) {
@@ -1752,309 +1777,38 @@ TEST_F(PasswordSyncBridgeTest,
             0u);
 }
 
-TEST_F(PasswordSyncBridgeAccountStoreTest,
-       ShouldRemoveSyncMetadataForAccidentalBatchDeletionsIfFound) {
-  base::HistogramTester histogram_tester;
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      syncer::kSyncPasswordCleanUpAccidentalBatchDeletions);
+TEST_F(PasswordSyncBridgeTest, ShouldIgnoreDuplicateClientTagsInLocalStorage) {
+  const int kPrimaryKey1 = 1000;
+  const int kPrimaryKey2 = 1001;
+  const PasswordForm form1 = MakePasswordForm(kSignonRealm1, kPrimaryKey1);
+  const PasswordForm form2 = MakePasswordForm(kSignonRealm1, kPrimaryKey2);
 
-  // There are `count_threshold` deletions all with the same timestamp.
-  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
-      .WillByDefault([&]() {
-        auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
-        int count_threshold =
-            syncer::kSyncPasswordCleanUpAccidentalBatchDeletionsCountThreshold
-                .Get();
-        const int64_t kDeletionStartTime = 0;
-        for (int i = 0; i < count_threshold; ++i) {
-          AddDeletedMetadata(metadata_batch.get(), kDeletionStartTime, false);
-        }
+  fake_db()->AddLoginWithPrimaryKey(form1);
+  fake_db()->AddLoginWithPrimaryKey(form2);
 
-        return metadata_batch;
-      });
+  // The two local passwords share the same client tag hash.
+  ASSERT_EQ(SpecificsToEntity(
+                SpecificsFromPassword(form1, sync_pb::PasswordSpecificsData()))
+                .client_tag_hash,
+            SpecificsToEntity(
+                SpecificsFromPassword(form2, sync_pb::PasswordSpecificsData()))
+                .client_tag_hash);
 
-  // The accidental batch deletions should've been cleaned up.
-  EXPECT_CALL(*mock_sync_metadata_store_sync(),
-              DeleteAllSyncMetadata(syncer::PASSWORDS));
+  const sync_pb::PasswordSpecifics specifics =
+      CreateSpecificsWithSignonRealm(kSignonRealm1);
 
-  auto bridge = PasswordSyncBridge(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kAlways, base::DoNothing());
+  syncer::EntityChangeList entity_change_list;
+  entity_change_list.push_back(syncer::EntityChange::CreateAdd(
+      /*storage_key=*/"", SpecificsToEntity(specifics)));
 
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.SyncMetadataReadError2",
-      6,  // kPasswordsCleanupAccidentalBatchDeletions
-      1);
-}
+  // UpdateStorageKey() should be called for exactly one of them, but not the
+  // other.
+  EXPECT_CALL(mock_processor(), UpdateStorageKey(_, _, _));
+  EXPECT_CALL(mock_processor(), Put).Times(0);
 
-TEST_F(
-    PasswordSyncBridgeAccountStoreTest,
-    ShouldRemoveSyncMetadataForAccidentalBatchDeletionsIfMixedWithNonAccidentalDeletions) {
-  base::HistogramTester histogram_tester;
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      syncer::kSyncPasswordCleanUpAccidentalBatchDeletions);
-
-  // There are accidental deletions between non-accidental deletions.
-  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
-      .WillByDefault([&]() {
-        auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
-
-        int64_t time_threshold =
-            syncer::kSyncPasswordCleanUpAccidentalBatchDeletionsTimeThreshold
-                .Get()
-                .InMilliseconds();
-        const int64_t kDeletionStartTime = 0;
-        // Non accidental.
-        AddDeletedMetadata(metadata_batch.get(), kDeletionStartTime, false);
-        // Accidental deletions within `time_threshold`.
-        AddDeletedMetadata(metadata_batch.get(),
-                           kDeletionStartTime + time_threshold / 2, false);
-        AddDeletedMetadata(metadata_batch.get(),
-                           kDeletionStartTime + time_threshold, false);
-        AddDeletedMetadata(metadata_batch.get(),
-                           kDeletionStartTime + time_threshold, false);
-        // Non accidental.
-        AddDeletedMetadata(metadata_batch.get(),
-                           kDeletionStartTime + 2 * time_threshold, false);
-
-        return metadata_batch;
-      });
-
-  // Since there were accidental batch deletions, the metadata should've been
-  // cleaned up even if there were non-accidental deletions too.
-  EXPECT_CALL(*mock_sync_metadata_store_sync(),
-              DeleteAllSyncMetadata(syncer::PASSWORDS));
-
-  auto bridge = PasswordSyncBridge(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kAlways, base::DoNothing());
-
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.SyncMetadataReadError2",
-      6,  // kPasswordsCleanupAccidentalBatchDeletions
-      1);
-}
-
-TEST_F(
-    PasswordSyncBridgeAccountStoreTest,
-    ShouldNotRemoveSyncMetadataForAccidentalBatchDeletionsIfTooFewDeletions) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      syncer::kSyncPasswordCleanUpAccidentalBatchDeletions);
-
-  // Two batches of deletions where although the deletions are within
-  // `time_threshold`, the count is under `count_threshold`.
-  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
-      .WillByDefault([&]() {
-        auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
-
-        int count_threshold =
-            syncer::kSyncPasswordCleanUpAccidentalBatchDeletionsCountThreshold
-                .Get();
-        int64_t time_threshold =
-            syncer::kSyncPasswordCleanUpAccidentalBatchDeletionsTimeThreshold
-                .Get()
-                .InMilliseconds();
-        const int64_t kBatchOneDeletionStartTime = 0;
-        for (int i = 0; i < count_threshold - 1; ++i) {
-          AddDeletedMetadata(metadata_batch.get(), kBatchOneDeletionStartTime,
-                             false);
-        }
-
-        // Ensure the second batch is sufficiently far away fom the first batch
-        // time wise.
-        const int64_t kBatchTwoDeletionStartTime =
-            kBatchOneDeletionStartTime + 2 * time_threshold;
-        for (int i = 0; i < count_threshold - 1; ++i) {
-          AddDeletedMetadata(metadata_batch.get(), kBatchTwoDeletionStartTime,
-                             false);
-        }
-
-        return metadata_batch;
-      });
-
-  // Since the batch deletions contain fewer than `count_threshold` deletions,
-  // no clean up of the metadata should occur.
-  EXPECT_CALL(*mock_sync_metadata_store_sync(), DeleteAllSyncMetadata).Times(0);
-
-  auto bridge = std::make_unique<PasswordSyncBridge>(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kAlways, base::DoNothing());
-}
-
-TEST_F(
-    PasswordSyncBridgeAccountStoreTest,
-    ShouldNotRemoveSyncMetadataForAccidentalBatchDeletionsIfVersionIncluded) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      syncer::kSyncPasswordCleanUpAccidentalBatchDeletions);
-
-  // There are `count_threshold` deletions all with the same timestamp, but they
-  // include the version number.
-  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
-      .WillByDefault([&]() {
-        auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
-
-        int count_threshold =
-            syncer::kSyncPasswordCleanUpAccidentalBatchDeletionsCountThreshold
-                .Get();
-        const int64_t kDeletionTime = 0;
-        for (int i = 0; i < count_threshold; ++i) {
-          AddDeletedMetadata(metadata_batch.get(), kDeletionTime,
-                             /*include_version=*/true);
-        }
-
-        return metadata_batch;
-      });
-
-  // Since the batch deletions include the version number, they cannot be
-  // accidental since the bug was fixed since version nuumbers were introduced.
-  // No clean up of the metadata should occur.
-  EXPECT_CALL(*mock_sync_metadata_store_sync(), DeleteAllSyncMetadata).Times(0);
-
-  auto bridge = std::make_unique<PasswordSyncBridge>(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kAlways, base::DoNothing());
-}
-
-TEST_F(
-    PasswordSyncBridgeAccountStoreTest,
-    ShouldNotRemoveSyncMetadataForAccidentalBatchDeletionsIfFeatureIsDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
-      syncer::kSyncPasswordCleanUpAccidentalBatchDeletions);
-
-  // There are `count_threshold` deletions all with the same timestamp.
-  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
-      .WillByDefault([&]() {
-        auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
-
-        int count_threshold =
-            syncer::kSyncPasswordCleanUpAccidentalBatchDeletionsCountThreshold
-                .Get();
-        for (int i = 0; i < count_threshold; ++i) {
-          AddDeletedMetadata(metadata_batch.get(), 0, false);
-        }
-
-        return metadata_batch;
-      });
-
-  // Feature was disabled, so no clean up of metadata should occur.
-  EXPECT_CALL(*mock_sync_metadata_store_sync(), DeleteAllSyncMetadata).Times(0);
-
-  auto bridge = std::make_unique<PasswordSyncBridge>(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kAlways, base::DoNothing());
-}
-
-TEST_F(
-    PasswordSyncBridgeTest,
-    ShouldNotRemoveSyncMetadataForAccidentalBatchDeletionsIfInNonAccountStore) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      syncer::kSyncPasswordCleanUpAccidentalBatchDeletions);
-
-  // There are `count_threshold` deletions all with the same timestamp.
-  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
-      .WillByDefault([&]() {
-        auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
-        int count_threshold =
-            syncer::kSyncPasswordCleanUpAccidentalBatchDeletionsCountThreshold
-                .Get();
-        for (int i = 0; i < count_threshold; ++i) {
-          AddDeletedMetadata(metadata_batch.get(), 0, false);
-        }
-        return metadata_batch;
-      });
-
-  // Non account stores were unaffected by possible accidental deletions, so no
-  // metadata should be cleaned up.
-  EXPECT_CALL(*mock_sync_metadata_store_sync(), DeleteAllSyncMetadata).Times(0);
-
-  auto bridge = std::make_unique<PasswordSyncBridge>(
-      mock_processor().CreateForwardingProcessor(), mock_password_store_sync(),
-      syncer::WipeModelUponSyncDisabledBehavior::kNever, base::DoNothing());
-}
-
-TEST_F(PasswordSyncBridgeTest,
-       DisableSyncWithWipingBehaviorAndInitialSyncDone) {
-  // Add a credential to the DB.
-  const int kPrimaryKey = 1000;
-  const std::string kStorageKey = "1000";
-  fake_db()->AddLoginWithPrimaryKey(
-      MakePasswordForm(kSignonRealm1, kPrimaryKey));
-
-  // Set up sync metadata, with initial sync marked as done.
-  ON_CALL(*mock_sync_metadata_store_sync(), GetAllSyncMetadata)
-      .WillByDefault([&]() {
-        auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
-        sync_pb::ModelTypeState model_type_state;
-        model_type_state.set_initial_sync_state(
-            sync_pb::ModelTypeState_InitialSyncState_INITIAL_SYNC_DONE);
-        // Have to set "notes enabled" to true, otherwise the bridge will clear
-        // the metadata.
-        model_type_state.set_notes_enabled_before_initial_sync_for_passwords(
-            true);
-        metadata_batch->SetModelTypeState(model_type_state);
-        metadata_batch->AddMetadata(
-            kStorageKey, std::make_unique<sync_pb::EntityMetadata>());
-        return metadata_batch;
-      });
-
-  // Now create the bridge based on the above data+metadata, with wiping
-  // behavior `kOnceIfTrackingMetadata`.
-  ON_CALL(mock_processor(), IsTrackingMetadata()).WillByDefault(Return(true));
-  RecreateBridge(
-      syncer::WipeModelUponSyncDisabledBehavior::kOnceIfTrackingMetadata);
-
-  // An ApplyDisableSyncChanges() call should result in the database being wiped
-  // (of both data and metadata).
-  EXPECT_CALL(*mock_sync_metadata_store_sync(),
-              DeleteAllSyncMetadata(syncer::PASSWORDS));
-  EXPECT_CALL(*mock_password_store_sync(), DeleteAndRecreateDatabaseFile);
-  bridge()->ApplyDisableSyncChanges(bridge()->CreateMetadataChangeList());
-
-  // Another ApplyDisableSyncChanges() call should still clear metadata, but
-  // *not* data again (due to behavior `kOnceIfTrackingMetadata`).
-  EXPECT_CALL(*mock_sync_metadata_store_sync(),
-              DeleteAllSyncMetadata(syncer::PASSWORDS));
-  EXPECT_CALL(*mock_password_store_sync(), DeleteAndRecreateDatabaseFile)
-      .Times(0);
-  bridge()->ApplyDisableSyncChanges(bridge()->CreateMetadataChangeList());
-}
-
-TEST_F(PasswordSyncBridgeTest,
-       DisableSyncWithWipingBehaviorAndInitialSyncNotDone) {
-  // Add a credential to the DB.
-  const int kPrimaryKey = 1000;
-  const std::string kStorageKey = "1000";
-  fake_db()->AddLoginWithPrimaryKey(
-      MakePasswordForm(kSignonRealm1, kPrimaryKey));
-
-  // Do NOT set up sync metadata, so that initial sync is considered NOT done.
-  ASSERT_EQ(
-      mock_sync_metadata_store_sync()
-          ->GetAllSyncMetadata(syncer::PASSWORDS)
-          ->GetModelTypeState()
-          .initial_sync_state(),
-      sync_pb::ModelTypeState_InitialSyncState_INITIAL_SYNC_STATE_UNSPECIFIED);
-
-  // Now create the bridge based on the above data+metadata, with wiping
-  // behavior `kOnceIfTrackingMetadata`.
-  ON_CALL(mock_processor(), IsTrackingMetadata()).WillByDefault(Return(false));
-  RecreateBridge(
-      syncer::WipeModelUponSyncDisabledBehavior::kOnceIfTrackingMetadata);
-
-  // An ApplyDisableSyncChanges() call should in only the metadata being wiped.
-  // Data should remain, since metadata was not being tracked at the time of
-  // bridge creation.
-  EXPECT_CALL(*mock_sync_metadata_store_sync(),
-              DeleteAllSyncMetadata(syncer::PASSWORDS));
-  EXPECT_CALL(*mock_password_store_sync(), DeleteAndRecreateDatabaseFile)
-      .Times(0);
-  bridge()->ApplyDisableSyncChanges(bridge()->CreateMetadataChangeList());
+  std::optional<syncer::ModelError> error = bridge()->MergeFullSyncData(
+      bridge()->CreateMetadataChangeList(), std::move(entity_change_list));
+  EXPECT_FALSE(error);
 }
 
 }  // namespace password_manager

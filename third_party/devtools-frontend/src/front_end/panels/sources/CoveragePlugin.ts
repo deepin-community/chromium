@@ -1,15 +1,16 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 import * as i18n from '../../core/i18n/i18n.js';
 import type * as Platform from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as TextUtils from '../../models/text_utils/text_utils.js';
-import type * as Workspace from '../../models/workspace/workspace.js';
+import * as Workspace from '../../models/workspace/workspace.js';
 import * as CodeMirror from '../../third_party/codemirror.next/codemirror.next.js';
 import type * as TextEditor from '../../ui/components/text_editor/text_editor.js';
-import * as SourceFrame from '../../ui/legacy/components/source_frame/source_frame.js';
+import type * as SourceFrame from '../../ui/legacy/components/source_frame/source_frame.js';
 import * as UI from '../../ui/legacy/legacy.js';
 import * as Coverage from '../coverage/coverage.js';
 
@@ -19,23 +20,23 @@ import {Plugin} from './Plugin.js';
 
 const UIStrings = {
   /**
-   *@description Text for Coverage Status Bar Item in Sources Panel
+   * @description Text for Coverage Status Bar Item in Sources Panel
    */
   clickToShowCoveragePanel: 'Click to show Coverage Panel',
   /**
-   *@description Text for Coverage Status Bar Item in Sources Panel
+   * @description Text for Coverage Status Bar Item in Sources Panel
    */
   showDetails: 'Show Details',
   /**
-   *@description Text to show in the status bar if coverage data is available
-   *@example {12.3} PH1
+   * @description Text to show in the status bar if coverage data is available
+   * @example {12.3} PH1
    */
   coverageS: 'Coverage: {PH1}',
   /**
-   *@description Text to be shown in the status bar if no coverage data is available
+   * @description Text to be shown in the status bar if no coverage data is available
    */
   coverageNa: 'Coverage: n/a',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/sources/CoveragePlugin.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
@@ -54,7 +55,7 @@ export class CoveragePlugin extends Plugin {
     this.infoInToolbar = new UI.Toolbar.ToolbarButton(
         i18nString(UIStrings.clickToShowCoveragePanel), undefined, undefined, 'debugger.show-coverage');
     this.infoInToolbar.setSecondary();
-    this.infoInToolbar.addEventListener(UI.Toolbar.ToolbarButton.Events.Click, () => {
+    this.infoInToolbar.addEventListener(UI.Toolbar.ToolbarButton.Events.CLICK, () => {
       void UI.ViewManager.ViewManager.instance().showView('coverage');
     });
 
@@ -122,7 +123,7 @@ export class CoveragePlugin extends Plugin {
   }
 
   private getCoverageManager(): Coverage.CoverageDecorationManager.CoverageDecorationManager|undefined {
-    return this.uiSourceCode.getDecorationData(SourceFrame.SourceFrame.DecoratorType.COVERAGE);
+    return this.uiSourceCode.getDecorationData(Workspace.UISourceCode.DecoratorType.COVERAGE);
   }
 
   override editorInitialized(editor: TextEditor.TextEditor.TextEditor): void {
@@ -131,33 +132,34 @@ export class CoveragePlugin extends Plugin {
     }
   }
 
-  override decorationChanged(type: SourceFrame.SourceFrame.DecoratorType, editor: TextEditor.TextEditor.TextEditor): void {
-    if (type === SourceFrame.SourceFrame.DecoratorType.COVERAGE) {
+  override decorationChanged(type: Workspace.UISourceCode.DecoratorType, editor: TextEditor.TextEditor.TextEditor):
+      void {
+    if (type === Workspace.UISourceCode.DecoratorType.COVERAGE) {
       this.startDecoUpdate(editor);
     }
   }
 
   private startDecoUpdate(editor: TextEditor.TextEditor.TextEditor): void {
     const manager = this.getCoverageManager();
-    void (manager ? manager.usageByLine(this.uiSourceCode, this.#editorLines(editor)) : Promise.resolve([
-    ])).then(usageByLine => {
-      const enabled = Boolean(editor.state.field(coverageState, false));
-      if (!usageByLine.length) {
-        if (enabled) {
-          editor.dispatch({effects: coverageCompartment.reconfigure([])});
-        }
-      } else if (!enabled) {
-        editor.dispatch({
-          effects: coverageCompartment.reconfigure([
-            coverageState.init(state => markersFromCoverageData(usageByLine, state)),
-            coverageGutter(this.uiSourceCode.url()),
-            theme,
-          ]),
+    void (manager ? manager.usageByLine(this.uiSourceCode, this.#editorLines(editor)) : Promise.resolve([]))
+        .then(usageByLine => {
+          const enabled = Boolean(editor.state.field(coverageState, false));
+          if (!usageByLine.length) {
+            if (enabled) {
+              editor.dispatch({effects: coverageCompartment.reconfigure([])});
+            }
+          } else if (!enabled) {
+            editor.dispatch({
+              effects: coverageCompartment.reconfigure([
+                coverageState.init(state => markersFromCoverageData(usageByLine, state)),
+                coverageGutter(this.uiSourceCode.url()),
+                theme,
+              ]),
+            });
+          } else {
+            editor.dispatch({effects: setCoverageState.of(usageByLine)});
+          }
         });
-      } else {
-        editor.dispatch({effects: setCoverageState.of(usageByLine)});
-      }
-    });
   }
 
   /**
@@ -185,8 +187,8 @@ const notCoveredMarker = new (class extends CodeMirror.GutterMarker {
   override elementClass = 'cm-coverageUnused';
 })();
 
-function markersFromCoverageData(
-    usageByLine: (boolean|undefined)[], state: CodeMirror.EditorState): CodeMirror.RangeSet<CodeMirror.GutterMarker> {
+function markersFromCoverageData(usageByLine: Array<boolean|undefined>, state: CodeMirror.EditorState):
+    CodeMirror.RangeSet<CodeMirror.GutterMarker> {
   const builder = new CodeMirror.RangeSetBuilder<CodeMirror.GutterMarker>();
   for (let line = 0; line < usageByLine.length; line++) {
     const usage = usageByLine[line];
@@ -198,7 +200,7 @@ function markersFromCoverageData(
   return builder.finish();
 }
 
-const setCoverageState = CodeMirror.StateEffect.define<(boolean | undefined)[]>();
+const setCoverageState = CodeMirror.StateEffect.define<Array<boolean|undefined>>();
 
 const coverageState = CodeMirror.StateField.define<CodeMirror.RangeSet<CodeMirror.GutterMarker>>({
   create(): CodeMirror.RangeSet<CodeMirror.GutterMarker> {
@@ -221,11 +223,11 @@ function coverageGutter(url: Platform.DevToolsPath.UrlString): CodeMirror.Extens
             .showView('coverage')
             .then(() => {
               const view = UI.ViewManager.ViewManager.instance().view('coverage');
-              return view && view.widget();
+              return view?.widget();
             })
             .then(widget => {
               const matchFormattedSuffix = url.match(/(.*):formatted$/);
-              const urlWithoutFormattedSuffix = (matchFormattedSuffix && matchFormattedSuffix[1]) || url;
+              const urlWithoutFormattedSuffix = (matchFormattedSuffix?.[1]) || url;
               (widget as Coverage.CoverageView.CoverageView).selectCoverageItemByUrl(urlWithoutFormattedSuffix);
             });
         return true;
@@ -239,6 +241,10 @@ function coverageGutter(url: Platform.DevToolsPath.UrlString): CodeMirror.Extens
 const coverageCompartment = new CodeMirror.Compartment();
 
 const theme = CodeMirror.EditorView.baseTheme({
+  '.cm-line::selection': {
+    backgroundColor: 'transparent',
+    color: 'currentColor',
+  },
   '.cm-coverageGutter': {
     width: '5px',
     marginLeft: '3px',

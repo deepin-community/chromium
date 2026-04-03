@@ -19,30 +19,25 @@
 #include "extensions/browser/extension_registry_observer.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
-#include "url/gurl.h"
+#include "ui/views/widget/widget_observer.h"
 
-#if defined(USE_AURA)
-#include "ui/wm/public/activation_change_observer.h"
-#endif
-
+class Browser;
 class ExtensionViewViews;
 
 namespace content {
 class BrowserContext;
 class DevToolsAgentHost;
-}
+}  // namespace content
 
 namespace extensions {
 class Extension;
 class ExtensionViewHost;
 enum class UnloadedExtensionReason;
-}
+}  // namespace extensions
 
 // The bubble used for hosting a browser-action popup provided by an extension.
 class ExtensionPopup : public views::BubbleDialogDelegateView,
-#if defined(USE_AURA)
-                       public wm::ActivationChangeObserver,
-#endif
+                       public views::WidgetObserver,
                        public ExtensionViewViews::Container,
                        public extensions::ExtensionRegistryObserver,
                        public content::WebContentsObserver,
@@ -58,15 +53,16 @@ class ExtensionPopup : public views::BubbleDialogDelegateView,
   static constexpr gfx::Size kMaxSize = {800, 600};
 
   // Creates and shows a popup with the given |host| positioned adjacent to
-  // |anchor_view|.
+  // |anchor|.
   // The positioning of the pop-up is determined by |arrow| according to the
   // following logic: The popup is anchored so that the corner indicated by the
   // value of |arrow| remains fixed during popup resizes.  If |arrow| is
   // BOTTOM_*, then the popup 'pops up', otherwise the popup 'drops down'.
   // The actual display of the popup is delayed until the page contents
   // finish loading in order to minimize UI flashing and resizing.
-  static void ShowPopup(std::unique_ptr<extensions::ExtensionViewHost> host,
-                        views::View* anchor_view,
+  static void ShowPopup(Browser* browser,
+                        std::unique_ptr<extensions::ExtensionViewHost> host,
+                        views::BubbleAnchor anchor,
                         views::BubbleBorder::Arrow arrow,
                         PopupShowAction show_action,
                         ShowPopupCallback callback);
@@ -78,20 +74,16 @@ class ExtensionPopup : public views::BubbleDialogDelegateView,
   extensions::ExtensionViewHost* host() const { return host_.get(); }
 
   // views::BubbleDialogDelegateView:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void AddedToWidget() override;
-  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
-#if defined(USE_AURA)
-  void OnWidgetDestroying(views::Widget* widget) override;
 
-  // wm::ActivationChangeObserver:
-  void OnWindowActivated(wm::ActivationChangeObserver::ActivationReason reason,
-                         aura::Window* gained_active,
-                         aura::Window* lost_active) override;
-#endif
+  // views::WidgetObserver:
+  void OnWidgetDestroying(views::Widget* widget) override;
+  void OnWidgetTreeActivated(views::Widget* root_widget,
+                             views::Widget* active_widget) override;
 
   // ExtensionViewViews::Container:
-  void OnExtensionSizeChanged(ExtensionViewViews* view) override;
   gfx::Size GetMinBounds() override;
   gfx::Size GetMaxBounds() override;
 
@@ -127,8 +119,9 @@ class ExtensionPopup : public views::BubbleDialogDelegateView,
  private:
   class ScopedDevToolsAgentHostObservation;
 
-  ExtensionPopup(std::unique_ptr<extensions::ExtensionViewHost> host,
-                 views::View* anchor_view,
+  ExtensionPopup(Browser* browser,
+                 std::unique_ptr<extensions::ExtensionViewHost> host,
+                 views::BubbleAnchor anchor,
                  views::BubbleBorder::Arrow arrow,
                  PopupShowAction show_action,
                  ShowPopupCallback callback);
@@ -136,11 +129,15 @@ class ExtensionPopup : public views::BubbleDialogDelegateView,
   // Shows the bubble, focuses its content, and registers listeners.
   void ShowBubble();
 
-  // Closes the bubble if the devtools window is not attached.
-  void CloseUnlessUnderInspection();
+  // Closes the bubble unless if there is
+  //   1. an attached DevTools inspection window, or
+  //   2. an open web dialog, e.g. JS alert.
+  void CloseUnlessBlockedByInspectionOrJSDialog();
 
   // Handles a signal from the extension host to close.
   void HandleCloseExtensionHost(extensions::ExtensionHost* host);
+
+  raw_ptr<Browser> browser_;
 
   // The contained host for the view.
   std::unique_ptr<extensions::ExtensionViewHost> host_;
@@ -155,13 +152,8 @@ class ExtensionPopup : public views::BubbleDialogDelegateView,
 
   ShowPopupCallback shown_callback_;
 
-#if BUILDFLAG(IS_MAC)
-  class ScopedBrowserActivationObservation;
-  // The observation on the browser window.
-  // Closes the extension popup when the browser window gets activation.
-  std::unique_ptr<ScopedBrowserActivationObservation>
-      scoped_browser_activation_obvervation_;
-#endif
+  base::ScopedObservation<views::Widget, views::WidgetObserver>
+      anchor_widget_observation_{this};
 
   // Note: This must be reset *before* `host_`. See note in
   // OnExtensionUnloaded().

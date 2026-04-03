@@ -1,8 +1,4 @@
 {
-  "$build/chromium_orchestrator": {
-    "compilator": "win-arm64-rel-compilator",
-    "compilator_watcher_git_revision": "27c191f304c8d7329a393d8a69020fc14032c3c3"
-  },
   "$build/chromium_tests_builder_config": {
     "builder_config": {
       "additional_exclusions": [
@@ -14,10 +10,9 @@
             "builder_id": {
               "bucket": "ci",
               "builder": "win-arm64-rel",
-              "project": "chromium-m123"
+              "project": "chromium-m146"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-win-archive",
               "builder_group": "chromium.win",
               "execution_mode": "COMPILE_AND_TEST",
               "legacy_chromium_config": {
@@ -32,6 +27,7 @@
               },
               "legacy_gclient_config": {
                 "apply_configs": [
+                  "chromium_with_telemetry_dependencies",
                   "use_clang_coverage"
                 ],
                 "config": "chromium"
@@ -42,10 +38,9 @@
             "builder_id": {
               "bucket": "ci",
               "builder": "win11-arm64-rel-tests",
-              "project": "chromium-m123"
+              "project": "chromium-m146"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-win-archive",
               "builder_group": "chromium.win",
               "execution_mode": "TEST",
               "legacy_chromium_config": {
@@ -67,7 +62,7 @@
               "parent": {
                 "bucket": "ci",
                 "builder": "win-arm64-rel",
-                "project": "chromium-m123"
+                "project": "chromium-m146"
               }
             }
           }
@@ -77,33 +72,36 @@
         {
           "bucket": "ci",
           "builder": "win-arm64-rel",
-          "project": "chromium-m123"
+          "project": "chromium-m146"
         }
       ],
       "builder_ids_in_scope_for_testing": [
         {
           "bucket": "ci",
           "builder": "win11-arm64-rel-tests",
-          "project": "chromium-m123"
+          "project": "chromium-m146"
         }
-      ]
+      ],
+      "targets_spec_directory": "infra/config/generated/builders/try/win-arm64-rel/targets"
     }
   },
-  "$build/code_coverage": {
-    "coverage_test_types": [
-      "unit",
-      "overall"
-    ],
-    "use_clang_coverage": true
+  "$build/flakiness": {
+    "check_for_flakiness": true,
+    "check_for_flakiness_with_resultdb": true
   },
   "$build/siso": {
     "configs": [
-      "builder"
+      "builder",
+      "remote-link"
     ],
-    "enable_cloud_profiler": true,
+    "enable_cloud_monitoring": true,
     "enable_cloud_trace": true,
     "experiments": [],
-    "project": "rbe-chromium-untrusted"
+    "keep_going": 3,
+    "output_local_strategy": "greedy",
+    "profile_mode": "cloud",
+    "project": "rbe-chromium-untrusted",
+    "remote_jobs": -1
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],
@@ -113,5 +111,6 @@
     ]
   },
   "builder_group": "tryserver.chromium.win",
-  "recipe": "chromium/orchestrator"
+  "cq": "path-based",
+  "recipe": "chromium_trybot"
 }

@@ -16,14 +16,17 @@ limitations under the License.
 // XLA-specific Ops for broadcasting used in gradient
 // code.
 
+#include <cstdint>
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
 #include "absl/strings/str_join.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/value_inference.h"
+#include "xla/hlo/builder/value_inference.h"
 #include "xla/literal.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/util/bcast.h"
@@ -63,9 +66,11 @@ class BCastArgsOp : public XlaOpKernel {
     Tensor output(val_type, TensorShape({len}));
     for (int64_t i = 0; i < len; ++i) {
       if (val_type == DT_INT32) {
-        output.flat<int32>()(i) = static_cast<int32>(bcast.output_shape()[i]);
+        output.flat<int32_t>()(i) =
+            static_cast<int32_t>(bcast.output_shape()[i]);
       } else {
-        output.flat<int64>()(i) = static_cast<int64>(bcast.output_shape()[i]);
+        output.flat<int64_t>()(i) =
+            static_cast<int64_t>(bcast.output_shape()[i]);
       }
     }
     ctx->SetConstantOutput(0, output);
@@ -126,9 +131,9 @@ class BCastGradArgsOp : public XlaOpKernel {
     Tensor constant(val_type, TensorShape({len}));
     for (int64_t i = 0; i < len; ++i) {
       if (val_type == DT_INT32) {
-        constant.flat<int32>()(i) = static_cast<int32>(v[i]);
+        constant.flat<int32_t>()(i) = static_cast<int32_t>(v[i]);
       } else {
-        constant.flat<int64>()(i) = static_cast<int64>(v[i]);
+        constant.flat<int64_t>()(i) = static_cast<int64_t>(v[i]);
       }
     }
     ctx->SetConstantOutput(idx, constant);

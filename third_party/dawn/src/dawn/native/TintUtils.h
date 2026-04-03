@@ -29,9 +29,14 @@
 #define SRC_DAWN_NATIVE_TINTUTILS_H_
 
 #include <functional>
+#include <unordered_map>
 
 #include "dawn/common/NonCopyable.h"
+#include "dawn/native/BindGroupLayoutInternal.h"
+#include "dawn/native/BindingInfo.h"
 #include "dawn/native/IntegerTypes.h"
+#include "dawn/native/PipelineLayout.h"
+#include "dawn/native/ShaderModule.h"
 #include "dawn/native/stream/Stream.h"
 
 #include "tint/tint.h"
@@ -43,30 +48,22 @@ class PipelineLayoutBase;
 struct ProgrammableStage;
 class RenderPipelineBase;
 
-// Indicates that for the lifetime of this object tint internal compiler errors should be
-// reported to the given device.
-class ScopedTintICEHandler : public NonCopyable {
-  public:
-    explicit ScopedTintICEHandler(DeviceBase* device);
-    ~ScopedTintICEHandler();
-
-  private:
-    ScopedTintICEHandler(ScopedTintICEHandler&&) = delete;
-};
-
-tint::ExternalTextureOptions BuildExternalTextureTransformBindings(
-    const PipelineLayoutBase* layout);
-
-tint::ast::transform::VertexPulling::Config BuildVertexPullingTransformConfig(
+tint::VertexPullingConfig BuildVertexPullingTransformConfig(
     const RenderPipelineBase& renderPipeline,
     BindGroupIndex pullingBufferBindingSet);
 
-tint::ast::transform::SubstituteOverride::Config BuildSubstituteOverridesTransformConfig(
+std::unordered_map<tint::OverrideId, double> BuildSubstituteOverridesTransformConfig(
     const ProgrammableStage& stage);
 
+std::unordered_map<tint::OverrideId, double> BuildSubstituteOverridesTransformConfig(
+    const EntryPointMetadata& metadata,
+    const PipelineConstantEntries& constants);
+
+namespace stream {
 // Uses tint::ForeachField when available to implement the stream::Stream trait for types.
 template <typename T>
-class stream::Stream<T, std::enable_if_t<tint::HasReflection<T>>> {
+    requires(tint::HasReflection<T>)
+class Stream<T> {
   public:
     static void Write(Sink* s, const T& v) {
         tint::ForeachField(v, [&](const auto& f) { StreamIn(s, f); });
@@ -81,6 +78,105 @@ class stream::Stream<T, std::enable_if_t<tint::HasReflection<T>>> {
         return error;
     }
 };
+}  // namespace stream
+
+constexpr tint::BindingPoint ToTint(const BindingSlot& slot) {
+    return {static_cast<uint32_t>(slot.group), static_cast<uint32_t>(slot.binding)};
+}
+
+constexpr BindingSlot FromTint(const tint::BindingPoint& tintBindingPoint) {
+    return {{BindGroupIndex(tintBindingPoint.group), BindingNumber(tintBindingPoint.binding)}};
+}
+
+// Helper function to generate the binding remapping information for Tint compilation. Each backend
+// remaps the group + BindingIndex to a BindingPoint differently using the `BindingPointFor`
+// function passed as argument.
+template <typename F>
+concept ConvertsBindingIndexToBindingPoint = requires(F f, BindGroupIndex group, BindingIndex i) {
+    { f(group, i) } -> std::same_as<tint::BindingPoint>;
+};
+template <ConvertsBindingIndexToBindingPoint F>
+tint::Bindings GenerateBindingRemapping(const PipelineLayoutBase* layout,
+                                        SingleShaderStage stage,
+                                        F&& BindingPointFor) {
+    tint::Bindings bindings;
+
+    for (BindGroupIndex group : layout->GetBindGroupLayoutsMask()) {
+        const BindGroupLayoutInternalBase* bgl = layout->GetBindGroupLayout(group);
+
+        for (const auto& [bindingNumber, apiBindingIndex] : bgl->GetBindingMap()) {
+            if (!(bgl->GetAPIBindingInfo(apiBindingIndex).visibility & StageBit(stage))) {
+                continue;
+            }
+
+            tint::BindingPoint srcBindingPoint{
+                .group = uint32_t(group),
+                .binding = uint32_t(bindingNumber),
+            };
+
+            MatchVariant(
+                bgl->GetAPIBindingInfo(apiBindingIndex).bindingLayout,
+                [&](const BufferBindingInfo& bindingInfo) {
+                    tint::BindingPoint dstBindingPoint =
+                        BindingPointFor(group, bgl->AsBindingIndex(apiBindingIndex));
+                    switch (bindingInfo.type) {
+                        case wgpu::BufferBindingType::Uniform:
+                            bindings.uniform.emplace(srcBindingPoint, dstBindingPoint);
+                            break;
+                        case kInternalStorageBufferBinding:
+                        case wgpu::BufferBindingType::Storage:
+                        case wgpu::BufferBindingType::ReadOnlyStorage:
+                        case kInternalReadOnlyStorageBufferBinding:
+                            bindings.storage.emplace(srcBindingPoint, dstBindingPoint);
+                            break;
+                        case wgpu::BufferBindingType::BindingNotUsed:
+                        case wgpu::BufferBindingType::Undefined:
+                            DAWN_UNREACHABLE();
+                            break;
+                    }
+                },
+                [&](const SamplerBindingInfo& bindingInfo) {
+                    bindings.sampler.emplace(
+                        srcBindingPoint,
+                        BindingPointFor(group, bgl->AsBindingIndex(apiBindingIndex)));
+                },
+                [&](const StaticSamplerBindingInfo& bindingInfo) {
+                    bindings.sampler.emplace(
+                        srcBindingPoint,
+                        BindingPointFor(group, bgl->AsBindingIndex(apiBindingIndex)));
+                },
+                [&](const TextureBindingInfo& bindingInfo) {
+                    bindings.texture.emplace(
+                        srcBindingPoint,
+                        BindingPointFor(group, bgl->AsBindingIndex(apiBindingIndex)));
+                },
+                [&](const StorageTextureBindingInfo& bindingInfo) {
+                    bindings.storage_texture.emplace(
+                        srcBindingPoint,
+                        BindingPointFor(group, bgl->AsBindingIndex(apiBindingIndex)));
+                },
+                [&](const InputAttachmentBindingInfo&) {
+                    bindings.input_attachment.emplace(
+                        srcBindingPoint,
+                        BindingPointFor(group, bgl->AsBindingIndex(apiBindingIndex)));
+                },
+                [](const TexelBufferBindingInfo& bindingInfo) {
+                    // TODO(crbug/382544164): Prototype texel buffer feature
+                    DAWN_UNREACHABLE();
+                },
+                [&](const ExternalTextureBindingInfo& bindingInfo) {
+                    bindings.external_texture.emplace(
+                        srcBindingPoint,
+                        tint::ExternalTexture{
+                            .metadata = BindingPointFor(group, bindingInfo.metadata),
+                            .plane0 = BindingPointFor(group, bindingInfo.plane0),
+                            .plane1 = BindingPointFor(group, bindingInfo.plane1)});
+                });
+        }
+    }
+
+    return bindings;
+}
 
 }  // namespace dawn::native
 

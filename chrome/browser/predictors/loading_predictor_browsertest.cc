@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/predictors/loading_predictor.h"
+
+#include <array>
 #include <map>
 #include <memory>
 #include <set>
@@ -10,32 +13,33 @@
 
 #include "base/base64.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/escape.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_features.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor_features.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor_preconnect_client.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
+#include "chrome/browser/page_load_metrics/observers/lcp_critical_path_predictor_page_load_metrics_observer.h"
 #include "chrome/browser/predictors/lcp_critical_path_predictor/lcp_critical_path_predictor_util.h"
-#include "chrome/browser/predictors/loading_predictor.h"
 #include "chrome/browser/predictors/loading_predictor_factory.h"
 #include "chrome/browser/predictors/loading_test_util.h"
-#include "chrome/browser/predictors/preconnect_manager.h"
 #include "chrome/browser/predictors/predictors_enums.h"
 #include "chrome/browser/predictors/predictors_features.h"
 #include "chrome/browser/predictors/predictors_switches.h"
-#include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/common/chrome_features.h"
@@ -51,18 +55,26 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page_navigator.h"
+#include "content/public/browser/preconnect_manager.h"
+#include "content/public/browser/preconnect_request.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/referrer.h"
+#include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/fenced_frame_test_util.h"
+#include "content/public/test/preconnect_test_util.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/simple_url_loader_test_helper.h"
+#include "content/public/test/test_frame_navigation_observer.h"
 #include "net/base/features.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/connection_tracker.h"
+#include "net/test/embedded_test_server/controllable_http_response.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/embedded_test_server_connection_listener.h"
 #include "net/test/embedded_test_server/http_request.h"
@@ -71,6 +83,7 @@
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/cors/cors_error_status.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/cpp/network_quality_tracker.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/clear_data_filter.mojom.h"
@@ -80,10 +93,12 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/navigation/preloading_headers.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
 using content::BrowserThread;
+using content::PreconnectRequest;
 using testing::Optional;
 using testing::SizeIs;
 
@@ -153,10 +168,54 @@ class LcpElementLearnWaiter : public TestObserver {
   base::RunLoop run_loop_;
 };
 
-class TestPreconnectManagerObserver : public PreconnectManager::Observer {
+class LcpUpdatedWaiter : public TestObserver {
+ public:
+  explicit LcpUpdatedWaiter(ResourcePrefetchPredictor* predictor,
+                            size_t wait_lcp_count)
+      : TestObserver(predictor), wait_lcp_count_(wait_lcp_count) {}
+  const std::vector<std::optional<std::string>>& Wait() {
+    run_loop_.Run();
+    return element_locators_;
+  }
+
+ private:
+  void OnLcpUpdated(
+      const std::optional<std::string>& element_locator) override {
+    element_locators_.push_back(element_locator);
+    if (++lcp_count_ >= wait_lcp_count_) {
+      run_loop_.Quit();
+    }
+  }
+  base::RunLoop run_loop_;
+  const size_t wait_lcp_count_;
+  size_t lcp_count_ = 0u;
+  std::vector<std::optional<std::string>> element_locators_;
+};
+
+class LcpTimingPredictedWaiter : public TestObserver {
+ public:
+  explicit LcpTimingPredictedWaiter(ResourcePrefetchPredictor* predictor)
+      : TestObserver(predictor) {}
+  std::optional<std::string>& Wait() {
+    run_loop_.Run();
+    return lcp_element_locator_;
+  }
+
+ private:
+  void OnLcpTimingPredicted(
+      const std::optional<std::string>& lcp_element_locator) override {
+    lcp_element_locator_ = lcp_element_locator;
+    run_loop_.Quit();
+  }
+  base::RunLoop run_loop_;
+  std::optional<std::string> lcp_element_locator_;
+};
+
+class TestPreconnectManagerObserver
+    : public content::PreconnectManager::Observer {
  public:
   explicit TestPreconnectManagerObserver(
-      PreconnectManager* preconnect_manager) {
+      content::PreconnectManager* preconnect_manager) {
     preconnect_manager->SetObserverForTesting(this);
   }
 
@@ -164,13 +223,16 @@ class TestPreconnectManagerObserver : public PreconnectManager::Observer {
                        int num_sockets,
                        bool allow_credentials) override {
     preconnect_url_attempts_.insert(url.DeprecatedGetOriginAsURL());
+    preconnect_url_attempts_history_.push_back(url.DeprecatedGetOriginAsURL());
   }
 
   void OnPreresolveFinished(
       const GURL& url,
       const net::NetworkAnonymizationKey& network_anonymization_key,
+      mojo::PendingRemote<network::mojom::ConnectionChangeObserverClient>&
+          observer,
       bool success) override {
-    ResolveHostRequestInfo preconnect_info{url.host(),
+    ResolveHostRequestInfo preconnect_info{url.GetHost(),
                                            network_anonymization_key};
     if (success) {
       successful_dns_lookups_.insert(preconnect_info);
@@ -215,31 +277,33 @@ class TestPreconnectManagerObserver : public PreconnectManager::Observer {
 
   bool HasOriginAttemptedToPreconnect(const GURL& origin) {
     DCHECK_EQ(origin, origin.DeprecatedGetOriginAsURL());
-    return base::Contains(preconnect_url_attempts_, origin);
+    return preconnect_url_attempts_.contains(origin);
   }
 
   bool HasHostBeenLookedUp(
       const std::string& host,
       const net::NetworkAnonymizationKey& network_anonymization_key) {
     ResolveHostRequestInfo preconnect_info{host, network_anonymization_key};
-    return base::Contains(successful_dns_lookups_, preconnect_info) ||
-           base::Contains(unsuccessful_dns_lookups_, preconnect_info);
+    return successful_dns_lookups_.contains(preconnect_info) ||
+           unsuccessful_dns_lookups_.contains(preconnect_info);
   }
 
   bool HostFound(
       const std::string& host,
       const net::NetworkAnonymizationKey& network_anonymization_key) {
-    return base::Contains(
-        successful_dns_lookups_,
+    return successful_dns_lookups_.contains(
         ResolveHostRequestInfo{host, network_anonymization_key});
   }
 
   bool ProxyFound(
       const GURL& url,
       const net::NetworkAnonymizationKey& network_anonymization_key) {
-    return base::Contains(successful_proxy_lookups_,
-                          ResolveProxyRequestInfo{url::Origin::Create(url),
-                                                  network_anonymization_key});
+    return successful_proxy_lookups_.contains(ResolveProxyRequestInfo{
+        url::Origin::Create(url), network_anonymization_key});
+  }
+
+  const std::vector<GURL>& PreconnectUrlAttemptsHistory() const {
+    return preconnect_url_attempts_history_;
   }
 
  private:
@@ -284,8 +348,8 @@ class TestPreconnectManagerObserver : public PreconnectManager::Observer {
   };
 
   bool HasProxyBeenLookedUp(const ResolveProxyRequestInfo& resolve_proxy_info) {
-    return base::Contains(successful_proxy_lookups_, resolve_proxy_info) ||
-           base::Contains(unsuccessful_proxy_lookups_, resolve_proxy_info);
+    return successful_proxy_lookups_.contains(resolve_proxy_info) ||
+           unsuccessful_proxy_lookups_.contains(resolve_proxy_info);
   }
 
   void Wait() {
@@ -330,8 +394,8 @@ class TestPreconnectManagerObserver : public PreconnectManager::Observer {
   ResolveProxyRequestInfo waiting_on_proxy_;
   std::set<ResolveProxyRequestInfo> successful_proxy_lookups_;
   std::set<ResolveProxyRequestInfo> unsuccessful_proxy_lookups_;
-
   std::set<GURL> preconnect_url_attempts_;
+  std::vector<GURL> preconnect_url_attempts_history_;
 };
 
 struct PrefetchResult {
@@ -392,16 +456,19 @@ class LoadingPredictorBrowserTest : public InProcessBrowserTest {
         {features::kLoadingOnlyLearnHighPriorityResources,
          features::kLoadingPreconnectToRedirectTarget,
          features::kNavigationPredictorPreconnectHoldback},
-        // TODO(crbug.com/1394910): Use HTTPS URLs in tests to avoid having to
+        // TODO(crbug.com/40248833): Use HTTPS URLs in tests to avoid having to
         // disable this feature.
-        {features::kHttpsUpgrades});
+        {features::kHttpsUpgrades,
+         // TODO(crbug.com/354087603): Update tests when this feature has
+         // positive (or neutral) effect of loading performance.
+         features::kLoadingPredictorLimitPreconnectSocketCount});
   }
 
   LoadingPredictorBrowserTest(const LoadingPredictorBrowserTest&) = delete;
   LoadingPredictorBrowserTest& operator=(const LoadingPredictorBrowserTest&) =
       delete;
 
-  ~LoadingPredictorBrowserTest() override {}
+  ~LoadingPredictorBrowserTest() override = default;
 
   void SetUp() override {
     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
@@ -438,7 +505,9 @@ class LoadingPredictorBrowserTest : public InProcessBrowserTest {
     preconnect_manager_observer_ =
         std::make_unique<TestPreconnectManagerObserver>(
             loading_predictor_->preconnect_manager());
-    if (base::FeatureList::IsEnabled(features::kLoadingPredictorPrefetch)) {
+    if (base::FeatureList::IsEnabled(features::kLoadingPredictorPrefetch) ||
+        base::FeatureList::IsEnabled(
+            blink::features::kLCPPPrefetchSubresource)) {
       prefetch_manager_observer_ =
           std::make_unique<TestPrefetchManagerObserver>(
               *loading_predictor_->prefetch_manager());
@@ -448,7 +517,10 @@ class LoadingPredictorBrowserTest : public InProcessBrowserTest {
     initializer.EnsurePredictorInitialized();
   }
 
-  void TearDownOnMainThread() override { loading_predictor_ = nullptr; }
+  void TearDownOnMainThread() override {
+    ResetPredictorState();
+    loading_predictor_ = nullptr;
+  }
 
   // Navigates to an URL without blocking until the navigation finishes.
   // Returns an observer that can be used to wait for the navigation
@@ -538,8 +610,7 @@ class LoadingPredictorBrowserTest : public InProcessBrowserTest {
     }
 
     GURL request_url = request.GetURL();
-    std::string dest =
-        base::UnescapeBinaryURLComponent(request_url.query_piece());
+    std::string dest = base::UnescapeBinaryURLComponent(request_url.query());
 
     auto http_response =
         std::make_unique<net::test_server::BasicHttpResponse>();
@@ -656,7 +727,7 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTest,
   // preconnect.
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(preconnect_manager_observer()->HasHostBeenLookedUp(
-      url.host(), network_anonymization_key));
+      url.GetHost(), network_anonymization_key));
   EXPECT_FALSE(preconnect_manager_observer()->HasHostBeenLookedUp(
       "", network_anonymization_key));
   EXPECT_FALSE(preconnect_manager_observer()->HasOriginAttemptedToPreconnect(
@@ -678,9 +749,6 @@ class TestPrerenderStopObserver
       std::move(on_stop_closure_).Run();
     }
   }
-
-  void OnPrefetchNetworkBytesChanged(
-      prerender::NoStatePrefetchHandle* handle) override {}
 
  private:
   base::OnceClosure on_stop_closure_;
@@ -705,9 +773,9 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTest,
   auto observer = NavigateToURLAsync(url);
   EXPECT_TRUE(observer->WaitForRequestStart());
   preconnect_manager_observer()->WaitUntilHostLookedUp(
-      url.host(), network_anonymization_key);
+      url.GetHost(), network_anonymization_key);
   EXPECT_TRUE(preconnect_manager_observer()->HostFound(
-      url.host(), network_anonymization_key));
+      url.GetHost(), network_anonymization_key));
   // We should preconnect only 2 sockets for the main frame host.
   const size_t expected_connections = 2;
   connection_tracker()->WaitForAcceptedConnections(expected_connections);
@@ -735,7 +803,7 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTest, LearnFromNavigation) {
   auto prediction = GetPreconnectPrediction(url);
   ASSERT_TRUE(prediction);
   EXPECT_EQ(prediction->is_redirected, false);
-  EXPECT_EQ(prediction->host, url.host());
+  EXPECT_EQ(prediction->host, url.GetHost());
   EXPECT_THAT(prediction->requests,
               testing::UnorderedElementsAreArray(requests));
 }
@@ -778,7 +846,7 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTestLearnAllResources,
   auto prediction = GetPreconnectPrediction(url);
   ASSERT_TRUE(prediction);
   EXPECT_EQ(prediction->is_redirected, false);
-  EXPECT_EQ(prediction->host, url.host());
+  EXPECT_EQ(prediction->host, url.GetHost());
   EXPECT_THAT(prediction->requests,
               testing::UnorderedElementsAreArray(requests));
 }
@@ -807,7 +875,7 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTest,
   auto prediction = GetPreconnectPrediction(redirect_url);
   ASSERT_TRUE(prediction);
   EXPECT_EQ(prediction->is_redirected, false);
-  EXPECT_EQ(prediction->host, redirect_url.host());
+  EXPECT_EQ(prediction->host, redirect_url.GetHost());
   EXPECT_THAT(prediction->requests,
               testing::UnorderedElementsAreArray(expected_requests));
   // The predictor needs minimum two redirect hits to be confident in the
@@ -817,10 +885,10 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTest,
   prediction = GetPreconnectPrediction(original_url);
   ASSERT_TRUE(prediction);
   EXPECT_FALSE(prediction->is_redirected);
-  EXPECT_EQ(prediction->host, original_url.host());
+  EXPECT_EQ(prediction->host, original_url.GetHost());
   std::vector<PreconnectRequest> expected_requests_1;
   url::Origin redirect_origin = url::Origin::Create(
-      embedded_test_server()->GetURL(redirect_url.host(), "/"));
+      embedded_test_server()->GetURL(redirect_url.GetHost(), "/"));
   expected_requests_1.emplace_back(
       redirect_origin, 1, net::NetworkAnonymizationKey::CreateSameSite(site));
   EXPECT_THAT(prediction->requests,
@@ -834,7 +902,7 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTest,
       redirect_origin, 1, net::NetworkAnonymizationKey::CreateSameSite(site));
   ASSERT_TRUE(prediction);
   EXPECT_EQ(prediction->is_redirected, true);
-  EXPECT_EQ(prediction->host, redirect_url.host());
+  EXPECT_EQ(prediction->host, redirect_url.GetHost());
   EXPECT_THAT(prediction->requests,
               testing::UnorderedElementsAreArray(expected_requests));
 }
@@ -859,9 +927,9 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTest,
   for (auto* const host : kHtmlSubresourcesHosts) {
     GURL host_url(base::StringPrintf("http://%s", host));
     preconnect_manager_observer()->WaitUntilHostLookedUp(
-        host_url.host(), network_anonymization_key);
+        host_url.GetHost(), network_anonymization_key);
     EXPECT_TRUE(preconnect_manager_observer()->HostFound(
-        host_url.host(), network_anonymization_key));
+        host_url.GetHost(), network_anonymization_key));
   }
   // 2 connections to the main frame host + 1 connection per host for others.
   const size_t expected_connections = std::size(kHtmlSubresourcesHosts) + 1;
@@ -880,9 +948,9 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTest, DnsPrefetch) {
       net::NetworkAnonymizationKey::CreateSameSite(site);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   preconnect_manager_observer()->WaitUntilHostLookedUp(
-      GURL(kChromiumUrl).host(), network_anonymization_key);
+      GURL(kChromiumUrl).GetHost(), network_anonymization_key);
   EXPECT_TRUE(preconnect_manager_observer()->HostFound(
-      GURL(kChromiumUrl).host(), network_anonymization_key));
+      GURL(kChromiumUrl).GetHost(), network_anonymization_key));
 }
 
 // Tests that preconnect warms up a socket connection to a test server.
@@ -899,36 +967,11 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTest, PreconnectNonCors) {
   EXPECT_EQ(0u, connection_tracker()->GetReadSocketCount());
 }
 
-// TODO(crbug.com/1419756): isolate test per feature.  Currently, it has
-// test for script observer and fonts.
-class LCPCriticalPathPredictorBrowserTest : public LoadingPredictorBrowserTest {
+class LCPPBrowserTestBase : public LoadingPredictorBrowserTest {
  public:
-  LCPCriticalPathPredictorBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {blink::features::kLCPCriticalPathPredictor}, {});
-  }
-
-  std::vector<std::string> ExpectLcpElementLocatorsPrediction(
-      const base::Location& from_here,
+  void NavigateAndWaitForLcpElement(
       const GURL& url,
-      size_t expected_locator_count) {
-    auto lcpp_data =
-        loading_predictor()->resource_prefetch_predictor()->GetLcppData(url);
-    std::vector<std::string> locators;
-    if (lcpp_data) {
-      std::optional<blink::mojom::LCPCriticalPathPredictorNavigationTimeHint>
-          hint = ConvertLcppDataToLCPCriticalPathPredictorNavigationTimeHint(
-              *lcpp_data);
-      if (hint) {
-        locators = hint->lcp_element_locators;
-      }
-    }
-    EXPECT_EQ(expected_locator_count, locators.size()) << from_here.ToString();
-    return locators;
-  }
-
-  void NavigateAndWaitForLcpElement(const base::Location& from_here,
-                                    const GURL& url) {
+      const base::Location& from_here = FROM_HERE) {
     LcpElementLearnWaiter lcp_element_waiter(
         loading_predictor()->resource_prefetch_predictor());
     page_load_metrics::PageLoadMetricsTestWaiter waiter(
@@ -942,6 +985,55 @@ class LCPCriticalPathPredictorBrowserTest : public LoadingPredictorBrowserTest {
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")))
         << from_here.ToString();
     lcp_element_waiter.Wait();
+  }
+};
+
+// TODO(crbug.com/40063266): isolate test per feature.  Currently, it has
+// test for script observer and fonts.
+class LCPCriticalPathPredictorBrowserTest : public LCPPBrowserTestBase {
+ public:
+  LCPCriticalPathPredictorBrowserTest() {
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        {{blink::features::kLCPCriticalPathPredictor, {}},
+         {blink::features::kLCPPFontURLPredictor,
+          {{blink::features::kLCPPFontURLPredictorExcludedHosts.name,
+            "exclude.test,exclude2.test"}}}},
+        {});
+  }
+
+  std::vector<std::string> ExpectLcpElementLocatorsPrediction(
+      const base::Location& from_here,
+      const GURL& url,
+      size_t expected_locator_count) {
+    auto lcpp_stat =
+        loading_predictor()->resource_prefetch_predictor()->GetLcppStat(
+            /*initiator_origin=*/std::nullopt, url);
+    std::vector<std::string> locators;
+    if (lcpp_stat) {
+      std::optional<blink::mojom::LCPCriticalPathPredictorNavigationTimeHint>
+          hint = ConvertLcppStatToLCPCriticalPathPredictorNavigationTimeHint(
+              *lcpp_stat);
+      if (hint) {
+        locators = hint->lcp_element_locators;
+      }
+    }
+    EXPECT_EQ(expected_locator_count, locators.size()) << from_here.ToString();
+    return locators;
+  }
+
+
+  std::vector<std::string> GetLCPPFonts(const GURL& url) {
+    auto lcpp_stat =
+        loading_predictor()->resource_prefetch_predictor()->GetLcppStat(
+            /*initiator_origin=*/std::nullopt, url);
+    if (!lcpp_stat) {
+      return std::vector<std::string>();
+    }
+    std::vector<std::string> fonts;
+    for (const auto& it : lcpp_stat->fetched_font_url_stat().main_buckets()) {
+      fonts.push_back(it.first);
+    }
+    return fonts;
   }
 
  private:
@@ -970,7 +1062,7 @@ IN_PROC_BROWSER_TEST_F(LCPCriticalPathPredictorBrowserTest,
   ExpectLcpElementLocatorsPrediction(FROM_HERE, kUrlC,
                                      /*expected_locator_count=*/0);
 
-  NavigateAndWaitForLcpElement(FROM_HERE, kUrlA);
+  NavigateAndWaitForLcpElement(kUrlA);
   // The locators should contain [lcp_element_for_a].
   std::vector<std::string> locators_1 =
       ExpectLcpElementLocatorsPrediction(FROM_HERE, kUrlA,
@@ -985,7 +1077,7 @@ IN_PROC_BROWSER_TEST_F(LCPCriticalPathPredictorBrowserTest,
   ExpectLcpElementLocatorsPrediction(FROM_HERE, kUrlC,
                                      /*expected_locator_count=*/0);
 
-  NavigateAndWaitForLcpElement(FROM_HERE, kUrlB);
+  NavigateAndWaitForLcpElement(kUrlB);
   // The locators should contain [lcp_element_for_a, lcp_element_for_b].
   std::vector<std::string> locators_3 =
       ExpectLcpElementLocatorsPrediction(FROM_HERE, kUrlA,
@@ -997,7 +1089,7 @@ IN_PROC_BROWSER_TEST_F(LCPCriticalPathPredictorBrowserTest,
   ExpectLcpElementLocatorsPrediction(FROM_HERE, kUrlC,
                                      /*expected_locator_count=*/0);
 
-  NavigateAndWaitForLcpElement(FROM_HERE, kUrlB);
+  NavigateAndWaitForLcpElement(kUrlB);
   std::vector<std::string> locators_5 =
       ExpectLcpElementLocatorsPrediction(FROM_HERE, kUrlA,
                                          /*expected_locator_count=*/2);
@@ -1010,6 +1102,461 @@ IN_PROC_BROWSER_TEST_F(LCPCriticalPathPredictorBrowserTest,
   ExpectLcpElementLocatorsPrediction(FROM_HERE, kUrlC,
                                      /*expected_locator_count=*/0);
   EXPECT_EQ(locator_for_a, locators_6[1]);
+}
+
+IN_PROC_BROWSER_TEST_F(LCPCriticalPathPredictorBrowserTest, LearnLCPPFont) {
+  const GURL kUrlA =
+      embedded_test_server()->GetURL("p.com", "/predictors/lcpp_font.html");
+  const GURL kFontUrlA =
+      embedded_test_server()->GetURL("p.com", "/predictors/font.ttf");
+  const GURL kUrlB = embedded_test_server()->GetURL(
+      "exclude.test", "/predictors/lcpp_font.html");
+  const GURL kUrlC = embedded_test_server()->GetURL(
+      "exclude2.test", "/predictors/lcpp_font.html");
+
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlA));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlB));
+
+  std::vector<std::string> expected;
+  expected.push_back(kFontUrlA.spec());
+  NavigateAndWaitForLcpElement(kUrlA);
+  EXPECT_EQ(expected, GetLCPPFonts(kUrlA));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlB));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlC));
+
+  NavigateAndWaitForLcpElement(kUrlB);
+  EXPECT_EQ(expected, GetLCPPFonts(kUrlA));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlB));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlC));
+
+  NavigateAndWaitForLcpElement(kUrlC);
+  EXPECT_EQ(expected, GetLCPPFonts(kUrlA));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlB));
+  EXPECT_EQ(std::vector<std::string>(), GetLCPPFonts(kUrlC));
+}
+
+class LCPPPrefetchSubresourceTest : public LCPPBrowserTestBase {
+ public:
+  LCPPPrefetchSubresourceTest() {
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{blink::features::kLCPPPrefetchSubresource},
+        /*disabled_features=*/{features::kLoadingPredictorPrefetch,
+                               blink::features::kHttpDiskCachePrewarming});
+  }
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    LCPPBrowserTestBase::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(
+        switches::kLoadingPredictorAllowLocalRequestForTesting);
+  }
+
+  GURL GetURL(const std::string& path) {
+    return embedded_test_server()->GetURL("a.test", path);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Tests that prefetch uses LCP-learning subresources.
+IN_PROC_BROWSER_TEST_F(LCPPPrefetchSubresourceTest, Base) {
+  CHECK(
+      base::FeatureList::IsEnabled(blink::features::kLCPPPrefetchSubresource));
+  CHECK(!base::FeatureList::IsEnabled(features::kLoadingPredictorPrefetch));
+  CHECK(
+      !base::FeatureList::IsEnabled(blink::features::kHttpDiskCachePrewarming));
+  const GURL url = GetURL("/predictors/preload.html");
+  NavigateAndWaitForLcpElement(url);
+  EXPECT_TRUE(prefetch_manager_observer()->results().empty());
+  auto lcpp_stat =
+      loading_predictor()->resource_prefetch_predictor()->GetLcppStat(
+          /*initiator_origin=*/std::nullopt, url);
+  EXPECT_TRUE(lcpp_stat.has_value());
+  const auto& subresource_urls = PredictFetchedSubresourceUrls(*lcpp_stat);
+  // Check LCP has learnt the subresources.
+  EXPECT_EQ(std::set<GURL>({GetURL("/predictors/red_rectangle.png"),
+                            GetURL("/predictors/style.css"),
+                            GetURL("/predictors/script.js"),
+                            GetURL("/predictors/font.ttf")}),
+            std::set<GURL>(subresource_urls.begin(), subresource_urls.end()));
+
+  EXPECT_TRUE(prefetch_manager_observer()->results().empty());
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  prefetch_manager_observer()->WaitForPrefetchesForNavigation(url);
+  const auto results = prefetch_manager_observer()->results();
+  std::set<GURL> result_urls;
+  for (const auto& result : results) {
+    EXPECT_EQ(net::OK, result.status.error_code) << result.prefetch_url;
+    result_urls.insert(result.prefetch_url);
+  }
+  // font.tts prefetch is handled by kLCPPFontURLPredictor feature.
+  EXPECT_EQ(std::set<GURL>({GetURL("/predictors/style.css"),
+                            GetURL("/predictors/script.js")}),
+            result_urls);
+}
+
+IN_PROC_BROWSER_TEST_F(LCPPPrefetchSubresourceTest, UMA) {
+  NavigateAndWaitForLcpElement(GetURL("/predictors/preload.html"));
+
+  base::HistogramTester histogram_tester;
+  NavigateAndWaitForLcpElement(GetURL("/predictors/preload2.html"));
+  // predicted subresources:
+  //   style.css
+  //   script.js
+  //   font.ttf
+  //   red_rectangle.png
+  // actual subresources:
+  //   style.css
+  //   script.js
+  //   red_rectangle.png
+  //   red_rectangle2.png
+  //   red_rectangle3.png
+  // hit = 3
+  // precision = 3/4 = 75%
+  // recall    = 3/5 = 60%
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples(
+          ::internal::kHistogramLCPPSubresourceCountType),
+      base::BucketsAre(
+          base::Bucket(network::mojom::RequestDestination::kImage, 3),
+          base::Bucket(network::mojom::RequestDestination::kStyle, 1),
+          base::Bucket(network::mojom::RequestDestination::kScript, 1)));
+  histogram_tester.ExpectUniqueSample(
+      ::internal::kHistogramLCPPSubresourceCountPrecision, 75, 1);
+  histogram_tester.ExpectUniqueSample(
+      ::internal::kHistogramLCPPSubresourceCountRecall, 60, 1);
+  histogram_tester.ExpectUniqueSample(
+      ::internal::kHistogramLCPPSubresourceCountSameSiteRatio, 100, 1);
+}
+
+class LCPPTimingPredictorTestBase : public InProcessBrowserTest {
+ public:
+  ~LCPPTimingPredictorTestBase() override = default;
+
+  void SetUpOnMainThread() override {
+    host_resolver()->AddRule("*", "127.0.0.1");
+
+    slow_response_manager_ =
+        std::make_unique<net::test_server::ControllableHttpResponseManager>(
+            embedded_test_server(), "/image_slow.png");
+    ASSERT_TRUE(embedded_test_server()->Start());
+
+    loading_predictor_ =
+        LoadingPredictorFactory::GetForProfile(browser()->profile());
+    ASSERT_TRUE(loading_predictor_);
+    loading_predictor_->EnableLCPPTesting();
+    PredictorInitializer initializer(
+        loading_predictor_->resource_prefetch_predictor());
+    initializer.EnsurePredictorInitialized();
+  }
+
+  void TearDownOnMainThread() override { loading_predictor_ = nullptr; }
+
+  void NavigateAndWaitForLcpElement(
+      const GURL& url,
+      const std::string& expected_events,
+      size_t expected_lcp_count,
+      const std::optional<size_t>& expected_lcp_index,
+      const base::Location& from_here = FROM_HERE) {
+    content::WebContents* web_contents =
+        browser()->tab_strip_model()->GetActiveWebContents();
+
+    page_load_metrics::PageLoadMetricsTestWaiter onload_waiter(web_contents);
+    onload_waiter.AddPageExpectation(
+        page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
+
+    LcpTimingPredictedWaiter timing_predicted_waiter(
+        loading_predictor()->resource_prefetch_predictor());
+    LcpUpdatedWaiter lcp_updated_waiter(
+        loading_predictor()->resource_prefetch_predictor(), expected_lcp_count);
+
+    content::NavigationController::LoadURLParams params(url);
+    web_contents->GetController().LoadURLWithParams(params);
+
+    const std::vector<std::optional<std::string>>& lcp_element_locators =
+        lcp_updated_waiter.Wait();
+
+    std::unique_ptr<net::test_server::ControllableHttpResponse> slow_response =
+        slow_response_manager_->WaitForRequest();
+    slow_response->Send(net::HTTP_OK, "image/png", "image_body", /*cookies=*/{},
+                        {"Cache-Control: no-store"});
+    slow_response->Done();
+
+    onload_waiter.Wait();
+
+    const std::optional<std::string>& predicted_lcp_locator =
+        timing_predicted_waiter.Wait();
+    EXPECT_EQ(predicted_lcp_locator.has_value(),
+              expected_lcp_index.has_value());
+    if (expected_lcp_index) {
+      EXPECT_EQ(*lcp_element_locators[*expected_lcp_index],
+                *predicted_lcp_locator);
+    }
+
+    std::string actual_events = content::EvalJs(web_contents, R"(
+      globalThis.events.join(", ")
+    )")
+                                    .ExtractString();
+
+    std::vector<std::string> expected_vec = base::SplitString(
+        expected_events, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+    std::vector<std::string> actual_vec = base::SplitString(
+        actual_events, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+
+    EXPECT_THAT(actual_vec, testing::UnorderedElementsAreArray(expected_vec))
+        << "Expected events: " << expected_events
+        << "\nActual events: " << actual_events << "\nTimings: "
+        << content::EvalJs(web_contents, R"(
+      globalThis.timings.join(", ")
+    )")
+               .ExtractString();
+
+    LcpElementLearnWaiter lcp_element_waiter(
+        loading_predictor()->resource_prefetch_predictor());
+    EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")))
+        << from_here.ToString();
+    lcp_element_waiter.Wait();
+  }
+
+  LoadingPredictor* loading_predictor() { return loading_predictor_; }
+
+ private:
+  raw_ptr<LoadingPredictor> loading_predictor_ = nullptr;
+  std::unique_ptr<net::test_server::ControllableHttpResponseManager>
+      slow_response_manager_;
+};
+
+class LCPPTimingPredictorBrowserTest : public LCPPTimingPredictorTestBase {
+ public:
+  LCPPTimingPredictorBrowserTest() {
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/
+        {blink::features::kLCPTimingPredictorPrerender2},
+        /*disabled_features=*/{});
+  }
+
+  void TestPrediction(const base::Location& from_here = FROM_HERE) {
+    const GURL kUrl = embedded_test_server()->GetURL(
+        "a.test", "/predictors/lcp_occur_twice.html");
+
+    NavigateAndWaitForLcpElement(kUrl,
+                                 /*expected_events=*/"LCP@IMG, LCP@DIV, Onload",
+                                 /*expected_lcp_count=*/2u,
+                                 /*expected_lcp_index=*/std::nullopt,
+                                 from_here);
+    NavigateAndWaitForLcpElement(kUrl,
+                                 /*expected_events=*/"LCP@IMG, LCP@DIV, Onload",
+                                 /*expected_lcp_count=*/2u,
+                                 /*expected_lcp_index=*/1u,  // =DIV
+                                 from_here);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Confirm image element of the first LCP is predicted rather than div, or the
+// actual LCP(current implementation)
+// TODO(crbug.com/413192370): Flaky on win-rel.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_Base DISABLED_Base
+#else
+#define MAYBE_Base Base
+#endif
+IN_PROC_BROWSER_TEST_F(LCPPTimingPredictorBrowserTest, MAYBE_Base) {
+  TestPrediction();
+}
+
+class LCPPTimingPredictorBrowserFlagTest
+    : public LCPPTimingPredictorBrowserTest,
+      public ::testing::WithParamInterface<std::string> {
+ public:
+  LCPPTimingPredictorBrowserFlagTest() {
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        /*enabled_features=*/
+        {{blink::features::kLCPCriticalPathPredictor,
+          {{blink::features::kLCPCriticalPathPredictorRecordedLcpElementTypes
+                .name,
+            GetParam()}}}},
+        /*disabled_features=*/{});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// kLCPCriticalPathPredictorRecordedLcpElementTypes should not affect.
+// TODO(crbug.com/413192370): Flaky on win-rel.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_WithKCriticalPathFlag DISABLED_WithKCriticalPathFlag
+#else
+#define MAYBE_WithKCriticalPathFlag WithKCriticalPathFlag
+#endif
+IN_PROC_BROWSER_TEST_P(LCPPTimingPredictorBrowserFlagTest,
+                       MAYBE_WithKCriticalPathFlag) {
+  TestPrediction();
+}
+
+INSTANTIATE_TEST_SUITE_P(Flags,
+                         LCPPTimingPredictorBrowserFlagTest,
+                         ::testing::Values("all", "image_only"));
+
+class LCPPAutoPreconnectTest : public InProcessBrowserTest,
+                               public ::testing::WithParamInterface<bool> {
+ public:
+  LCPPAutoPreconnectTest() {
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        /*enabled_features=*/
+        {{blink::features::kLCPPAutoPreconnectLcpOrigin,
+          {{blink::features::kLCPPAutoPreconnectRecordAllOrigins.name,
+            GetParam() ? "true" : "false"}}}},
+        /*disabled_features=*/{});
+  }
+
+  ~LCPPAutoPreconnectTest() override = default;
+
+  void SetUpOnMainThread() override {
+    host_resolver()->AddRule("*", "127.0.0.1");
+
+    ASSERT_TRUE(embedded_test_server()->Start());
+
+    loading_predictor_ =
+        LoadingPredictorFactory::GetForProfile(browser()->profile());
+    ASSERT_TRUE(loading_predictor_);
+
+    PredictorInitializer initializer(
+        loading_predictor_->resource_prefetch_predictor());
+    initializer.EnsurePredictorInitialized();
+
+    preconnect_manager_observer_ =
+        std::make_unique<TestPreconnectManagerObserver>(
+            loading_predictor_->preconnect_manager());
+  }
+
+  void TearDownOnMainThread() override { loading_predictor_ = nullptr; }
+
+  void NavigateAndWaitForLcpElement(
+      const GURL& url,
+      const base::Location& from_here = FROM_HERE) {
+    content::WebContents* web_contents =
+        browser()->tab_strip_model()->GetActiveWebContents();
+
+    page_load_metrics::PageLoadMetricsTestWaiter waiter(web_contents);
+    waiter.AddMinimumLargestContentfulPaintImageExpectation(1);
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url))
+        << from_here.ToString();
+    waiter.Wait();
+
+    waiter.AddMinimumLargestContentfulPaintImageExpectation(1);
+    EXPECT_TRUE(content::ExecJs(
+        web_contents, base::StringPrintf(R"(
+    const img_bar = document.getElementById("bar");
+    img_bar.src = "http://bar.com:%d/predictors/lcp-100x50.png";
+        )",
+                                         embedded_test_server()->port())));
+    waiter.Wait();
+
+    // Navigate to about:blank to force recording a LCP element.
+    LcpElementLearnWaiter lcp_element_waiter(
+        loading_predictor()->resource_prefetch_predictor());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")))
+        << from_here.ToString();
+    lcp_element_waiter.Wait();
+  }
+
+  std::vector<std::string> GetPreconnectedHosts() const {
+    std::vector<std::string> hosts;
+    for (auto& url :
+         preconnect_manager_observer_->PreconnectUrlAttemptsHistory()) {
+      hosts.push_back(url.GetHost());
+    }
+    return hosts;
+  }
+
+  LoadingPredictor* loading_predictor() { return loading_predictor_; }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+  raw_ptr<LoadingPredictor> loading_predictor_ = nullptr;
+  std::unique_ptr<TestPreconnectManagerObserver> preconnect_manager_observer_;
+};
+
+// https://crbug.com/440185653: Test is flaky.
+IN_PROC_BROWSER_TEST_P(LCPPAutoPreconnectTest, DISABLED_EnabledAllOrigins) {
+  const bool kEnabledAllOrigins = GetParam();
+
+  const GURL kUrl = embedded_test_server()->GetURL(
+      "a.test", GetPathWithPortReplacement("/predictors/preconnect.html",
+                                           embedded_test_server()->port()));
+  base::HistogramTester histogram_tester;
+
+  NavigateAndWaitForLcpElement(kUrl);
+  EXPECT_EQ(std::vector<std::string>({"a.test"}), GetPreconnectedHosts());
+  histogram_tester.ExpectUniqueSample("Blink.LCPP.PreconnectCount",
+                                      kEnabledAllOrigins ? 2 : 1, 1);
+
+  NavigateAndWaitForLcpElement(kUrl);
+  EXPECT_EQ(
+      kEnabledAllOrigins
+          ? std::vector<std::string>({"a.test", "a.test", "foo.com", "bar.com"})
+          : std::vector<std::string>({"a.test", "a.test", "bar.com"}),
+      GetPreconnectedHosts());
+}
+
+INSTANTIATE_TEST_SUITE_P(Flags,
+                         LCPPAutoPreconnectTest,
+                         ::testing::Bool(),
+                         ::testing::PrintToStringParamName());
+
+class SuppressesLoadingPredictorOnSlowNetworkBrowserTest
+    : public LoadingPredictorBrowserTest {
+ public:
+  SuppressesLoadingPredictorOnSlowNetworkBrowserTest() {
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        {{features::kSuppressesLoadingPredictorOnSlowNetwork,
+          {{features::kSuppressesLoadingPredictorOnSlowNetworkThreshold.name,
+            "500ms"}}}},
+        {});
+  }
+
+  network::NetworkQualityTracker& GetNetworkQualityTracker() const {
+    return *g_browser_process->network_quality_tracker();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Tests that kSuppressesLoadingPredictorOnSlowNetwork feature suppresses
+// LoadingPredictor on slow network.
+IN_PROC_BROWSER_TEST_F(SuppressesLoadingPredictorOnSlowNetworkBrowserTest,
+                       SuppressesOnSlowNetwork) {
+  GURL url = embedded_test_server()->GetURL("/nocontent");
+  base::TimeDelta http_rtt = GetNetworkQualityTracker().GetHttpRTT();
+  int32_t downstream_throughput_kbps =
+      GetNetworkQualityTracker().GetDownstreamThroughputKbps();
+
+  {
+    // LoadingPredictor will be suppressed on slow networks.
+    GetNetworkQualityTracker().ReportRTTsAndThroughputForTesting(
+        base::Milliseconds(501), downstream_throughput_kbps);
+    auto observer = NavigateToURLAsync(url);
+    ASSERT_TRUE(observer->WaitForNavigationFinished());
+    EXPECT_EQ(0u, loading_predictor()->GetTotalHintsActivatedForTesting());
+  }
+
+  {
+    // LoadingPredictor will not be suppressed on fast networks.
+    GetNetworkQualityTracker().ReportRTTsAndThroughputForTesting(
+        base::Milliseconds(500), downstream_throughput_kbps);
+    auto observer = NavigateToURLAsync(url);
+    ASSERT_TRUE(observer->WaitForNavigationFinished());
+    EXPECT_EQ(1u, loading_predictor()->GetTotalHintsActivatedForTesting());
+  }
+
+  // Reset to the original values.
+  GetNetworkQualityTracker().ReportRTTsAndThroughputForTesting(
+      http_rtt, downstream_throughput_kbps);
 }
 
 enum class NetworkIsolationKeyMode {
@@ -1043,7 +1590,7 @@ class LoadingPredictorNetworkIsolationKeyBrowserTest
     }
   }
 
-  ~LoadingPredictorNetworkIsolationKeyBrowserTest() override {}
+  ~LoadingPredictorNetworkIsolationKeyBrowserTest() override = default;
 
   // One server is used to initiate preconnects, and one is preconnected to.
   // This makes tracking preconnected sockets much easier, and removes all
@@ -1078,7 +1625,7 @@ class LoadingPredictorNetworkIsolationKeyBrowserTest
                                          TRAFFIC_ANNOTATION_FOR_TESTS);
     simple_loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
         browser()->profile()->GetURLLoaderFactory().get(),
-        simple_loader_helper.GetCallbackDeprecated());
+        simple_loader_helper.GetCallback());
     simple_loader_helper.WaitForCallback();
     ASSERT_TRUE(simple_loader_helper.response_body());
     if (url.IntPort() == embedded_test_server()->port()) {
@@ -1097,10 +1644,10 @@ class LoadingPredictorNetworkIsolationKeyBrowserTest
 
   void RunCorsTest(bool use_cors_for_preconnect,
                    bool use_cors_for_resource_request) {
-    const char* kCrossOriginValue[]{
+    auto kCrossOriginValue = std::to_array<const char*>({
         "anonymous",
         "use-credentials",
-    };
+    });
 
     ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser(), preconnecting_test_server()->GetURL("/title1.html")));
@@ -1156,8 +1703,15 @@ INSTANTIATE_TEST_SUITE_P(All,
 
 // Make sure that the right NetworkAnonymizationKey is used by the
 // LoadingPredictor, both when the predictor is populated and when it isn't.
+//
+// TODO(crbug.com/448862629): Disable flaky test on mac
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_LoadingPredictorNoRedirects DISABLED_LoadingPredictorNoRedirects
+#else
+#define MAYBE_LoadingPredictorNoRedirects LoadingPredictorNoRedirects
+#endif
 IN_PROC_BROWSER_TEST_P(LoadingPredictorNetworkIsolationKeyBrowserTest,
-                       LoadingPredictorNoRedirects) {
+                       MAYBE_LoadingPredictorNoRedirects) {
   // Cache resources needed by navigations, so the only sockets created
   // during navigations should be for the two preconnects.
   CacheFavIcon();
@@ -1297,7 +1851,7 @@ IN_PROC_BROWSER_TEST_P(LoadingPredictorNetworkIsolationKeyBrowserTest,
                                          TRAFFIC_ANNOTATION_FOR_TESTS);
     simple_loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
         browser()->profile()->GetURLLoaderFactory().get(),
-        simple_loader_helper.GetCallbackDeprecated());
+        simple_loader_helper.GetCallback());
     simple_loader_helper.WaitForCallback();
     ASSERT_TRUE(simple_loader_helper.response_body());
     EXPECT_EQ(2u, connection_tracker()->GetAcceptedSocketCount());
@@ -1581,7 +2135,7 @@ class LoadingPredictorBrowserTestWithOptimizationGuide
     feature_list_.InitWithFeaturesAndParameters(
         {{features::kLoadingPredictorUseOptimizationGuide,
           {{"use_predictions",
-            ShouldUseOptimizationGuidePredictions() ? "true" : "false"},
+            base::ToString(ShouldUseOptimizationGuidePredictions())},
            {"always_retrieve_predictions", "true"}}},
          {optimization_guide::features::kOptimizationHints, {}}},
         {});
@@ -1693,7 +2247,7 @@ IN_PROC_BROWSER_TEST_P(LoadingPredictorBrowserTestWithOptimizationGuide,
   auto observer = NavigateToURLAsync(url);
   EXPECT_TRUE(observer->WaitForRequestStart());
   for (auto* const host : kHtmlSubresourcesHosts) {
-    if (!IsLocalPredictionEnabled() && host != url.host()) {
+    if (!IsLocalPredictionEnabled() && host != url.GetHost()) {
       // We don't expect local predictions to be preconnected to.
       continue;
     }
@@ -1742,9 +2296,9 @@ IN_PROC_BROWSER_TEST_P(LoadingPredictorBrowserTestWithOptimizationGuide,
 
   // The initial URL should be preconnected to.
   preconnect_manager_observer()->WaitUntilHostLookedUp(
-      url.host(), network_anonymization_key);
+      url.GetHost(), network_anonymization_key);
   EXPECT_TRUE(preconnect_manager_observer()->HostFound(
-      url.host(), network_anonymization_key));
+      url.GetHost(), network_anonymization_key));
   EXPECT_TRUE(preconnect_manager_observer()->HasOriginAttemptedToPreconnect(
       origin.GetURL()));
 
@@ -1795,9 +2349,9 @@ IN_PROC_BROWSER_TEST_P(LoadingPredictorBrowserTestWithOptimizationGuide,
 
   // The initial URL should be preconnected to.
   preconnect_manager_observer()->WaitUntilHostLookedUp(
-      url.host(), network_anonymization_key);
+      url.GetHost(), network_anonymization_key);
   EXPECT_TRUE(preconnect_manager_observer()->HostFound(
-      url.host(), network_anonymization_key));
+      url.GetHost(), network_anonymization_key));
   EXPECT_TRUE(preconnect_manager_observer()->HasOriginAttemptedToPreconnect(
       origin.GetURL()));
   for (auto* const host : {"subresource.com", "otherresource.com"}) {
@@ -1820,17 +2374,19 @@ IN_PROC_BROWSER_TEST_P(LoadingPredictorBrowserTestWithOptimizationGuide,
   content::AwaitDocumentOnLoadCompleted(observer->web_contents());
   ASSERT_TRUE(observer->WaitForNavigationFinished());
 
-  // Navigate to another URL - make sure optimization guide prediction is
-  // cleared.
+  // Navigate to another URL and wait until the previous RFH is destroyed (i.e.
+  // until the optimization guide prediction is cleared and metrics are
+  // recorded).
+  content::RenderFrameHostWrapper rfh(
+      observer->web_contents()->GetPrimaryMainFrame());
+  // Disable BFCache to ensure the navigation below unloads |rfh|.
+  content::DisableBackForwardCacheForTesting(
+      browser()->tab_strip_model()->GetActiveWebContents(),
+      content::BackForwardCache::DisableForTestingReason::
+          TEST_REQUIRES_NO_CACHING);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("nohints.com", "/")));
-
-  histogram_tester.ExpectUniqueSample(
-      "LoadingPredictor.PreconnectLearningRecall.OptimizationGuide", 0, 1);
-  histogram_tester.ExpectUniqueSample(
-      "LoadingPredictor.PreconnectLearningPrecision.OptimizationGuide", 0, 1);
-  histogram_tester.ExpectUniqueSample(
-      "LoadingPredictor.PreconnectLearningCount.OptimizationGuide", 2, 1);
+  ASSERT_TRUE(rfh.WaitUntilRenderFrameDeleted());
 }
 
 IN_PROC_BROWSER_TEST_P(
@@ -1947,9 +2503,9 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorBrowserTestWithNoLocalPredictions,
   EXPECT_TRUE(observer->WaitForRequestStart());
   // The initial URL should be preconnected to.
   preconnect_manager_observer()->WaitUntilHostLookedUp(
-      url.host(), network_anonymization_key);
+      url.GetHost(), network_anonymization_key);
   EXPECT_TRUE(preconnect_manager_observer()->HostFound(
-      url.host(), network_anonymization_key));
+      url.GetHost(), network_anonymization_key));
   EXPECT_TRUE(preconnect_manager_observer()->HasOriginAttemptedToPreconnect(
       origin.GetURL()));
   // 2 connections to the main frame host.
@@ -1999,8 +2555,10 @@ class LoadingPredictorPrefetchBrowserTest
  private:
   void MonitorRequest(const net::test_server::HttpRequest& request) {
     // Monitor only prefetches.
-    if (request.headers.find("Purpose") == request.headers.end() ||
-        (request.headers.at("Purpose") != "prefetch")) {
+    if (request.headers.find(blink::kSecPurposeHeaderName) ==
+            request.headers.end() ||
+        (request.headers.at(blink::kSecPurposeHeaderName) !=
+         blink::kSecPurposePrefetchHeaderValue)) {
       return;
     }
 
@@ -2197,9 +2755,8 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_EQ(status.error_code, net::ERR_FAILED);
   EXPECT_THAT(status.cors_error_status,
               Optional(network::CorsErrorStatus(
-                  network::mojom::CorsError::kInsecurePrivateNetwork,
-                  network::mojom::IPAddressSpace::kUnknown,
-                  network::mojom::IPAddressSpace::kLocal)));
+                  network::mojom::CorsError::kInsecureLocalNetwork,
+                  network::mojom::IPAddressSpace::kLoopback)));
 }
 
 // This fixture is for disabling prefetching via test suite instantiation to
@@ -2430,6 +2987,411 @@ IN_PROC_BROWSER_TEST_F(LoadingPredictorMultiplePageBrowserTest,
   ASSERT_TRUE(content::HistoryGoBack(GetWebContents()));
   ASSERT_EQ(GetWebContents()->GetPrimaryMainFrame(), rfh_1.get());
   EXPECT_EQ(2u, loading_predictor->GetTotalHintsActivatedForTesting());
+}
+
+// Test interaction with fenced frame `window.fence.disableUntrustedNetwork()`
+// API. See:
+// https://github.com/WICG/fenced-frame/blob/master/explainer/fenced_frames_with_local_unpartitioned_data_access.md#revoking-network-access
+class FencedFrameLoadingPredictorBrowserTest
+    : public LoadingPredictorBrowserTest {
+ public:
+  void SetUpOnMainThread() override {
+    LoadingPredictorBrowserTest::SetUpOnMainThread();
+
+    // Set up the embedded https test server for fenced frame which requires a
+    // secure context to load.
+    embedded_https_test_server().SetSSLConfig(
+        net::EmbeddedTestServer::CERT_TEST_NAMES);
+
+    // Add content/test/data for cross_site_iframe_factory.html.
+    embedded_https_test_server().ServeFilesFromSourceDirectory(
+        "content/test/data");
+    embedded_https_test_server().ServeFilesFromDirectory(
+        GetChromeTestDataDir());
+  }
+
+  content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
+    return fenced_frame_test_helper_;
+  }
+
+  content::WebContents* GetWebContents() {
+    return browser()->tab_strip_model()->GetActiveWebContents();
+  }
+
+ private:
+  content::test::FencedFrameTestHelper fenced_frame_test_helper_;
+};
+
+// Verify DNS prefetch is working in fenced frame.
+IN_PROC_BROWSER_TEST_F(FencedFrameLoadingPredictorBrowserTest, DnsPrefetch) {
+  ASSERT_TRUE(embedded_https_test_server().Start());
+
+  // Navigate to a page that contains a fenced frame.
+  const GURL main_url = embedded_https_test_server().GetURL(
+      "a.test", "/cross_site_iframe_factory.html?a.test(a.test{fenced})");
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          GetWebContents()->GetPrimaryMainFrame());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+
+  // Get fenced frame NetworkAnonymizationKey.
+  const net::NetworkAnonymizationKey& network_anonymization_key =
+      fenced_frame_rfh->GetIsolationInfoForSubresources()
+          .network_anonymization_key();
+
+  GURL dns_prefetch_url("https://chromium.org");
+
+  // Add a link element in fenced frame that does a DNS prefetch.
+  EXPECT_TRUE(ExecJs(fenced_frame_rfh, content::JsReplace(R"(
+                    var link_element = document.createElement('link');
+                    link_element.href = $1;
+                    link_element.rel = 'dns-prefetch';
+                    document.body.appendChild(link_element);
+          )",
+                                                          dns_prefetch_url)));
+
+  // The observer should observe a DNS prefetch which succeeds.
+  preconnect_manager_observer()->WaitUntilHostLookedUp(
+      dns_prefetch_url.GetHost(), network_anonymization_key);
+  EXPECT_TRUE(preconnect_manager_observer()->HasHostBeenLookedUp(
+      dns_prefetch_url.GetHost(), network_anonymization_key));
+  EXPECT_TRUE(preconnect_manager_observer()->HostFound(
+      dns_prefetch_url.GetHost(), network_anonymization_key));
+}
+
+// Verify DNS prefetch is disabled after fenced frame untrusted network cutoff.
+IN_PROC_BROWSER_TEST_F(FencedFrameLoadingPredictorBrowserTest,
+                       NetworkCutoffDisablesDnsPrefetch) {
+  ASSERT_TRUE(embedded_https_test_server().Start());
+
+  // Navigate to a page that contains a fenced frame.
+  const GURL main_url = embedded_https_test_server().GetURL(
+      "a.test", "/cross_site_iframe_factory.html?a.test(a.test{fenced})");
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          GetWebContents()->GetPrimaryMainFrame());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+
+  // Get fenced frame NetworkAnonymizationKey.
+  const net::NetworkAnonymizationKey& network_anonymization_key =
+      fenced_frame_rfh->GetIsolationInfoForSubresources()
+          .network_anonymization_key();
+
+  GURL dns_prefetch_url("https://chromium.org");
+
+  // Disable fenced frame untrusted network access, then add a link element
+  // that does a DNS prefetch.
+  EXPECT_TRUE(ExecJs(fenced_frame_rfh, content::JsReplace(R"(
+            (async () => {
+              await window.fence.disableUntrustedNetwork().then(
+                () => {
+                  var link_element = document.createElement('link');
+                  link_element.href = $1;
+                  link_element.rel = 'dns-prefetch';
+                  document.body.appendChild(link_element);
+                }
+              );
+            })();
+          )",
+                                                          dns_prefetch_url)));
+
+  // The observer should observe a DNS prefetch which is cancelled.
+  preconnect_manager_observer()->WaitUntilHostLookedUp(
+      dns_prefetch_url.GetHost(), network_anonymization_key);
+
+  // The host is looked up, but the lookup is eventually cancelled because the
+  // fenced frame untrusted network access has been disabled.
+  EXPECT_TRUE(preconnect_manager_observer()->HasHostBeenLookedUp(
+      dns_prefetch_url.GetHost(), network_anonymization_key));
+  EXPECT_FALSE(preconnect_manager_observer()->HostFound(
+      dns_prefetch_url.GetHost(), network_anonymization_key));
+}
+
+// Verify DNS prefetch triggered by link response header is working in fenced
+// frame.
+// TODO(crbug.com/360154073): Disabled for flakiness.
+IN_PROC_BROWSER_TEST_F(FencedFrameLoadingPredictorBrowserTest,
+                       DISABLED_DnsPrefetchFromLinkHeader) {
+  std::string relative_url = "/title1.html";
+  net::test_server::ControllableHttpResponse response(
+      &embedded_https_test_server(), relative_url);
+
+  ASSERT_TRUE(embedded_https_test_server().Start());
+
+  // Navigate to a page that contains a fenced frame.
+  const GURL main_url = embedded_https_test_server().GetURL(
+      "a.test", "/cross_site_iframe_factory.html?a.test(a.test{fenced})");
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          GetWebContents()->GetPrimaryMainFrame());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+
+  GURL dns_prefetch_url("https://chromium.org");
+  GURL navigation_url =
+      embedded_https_test_server().GetURL("a.test", relative_url);
+
+  // Navigate the fenced frame.
+  content::TestFrameNavigationObserver observer(fenced_frame_rfh);
+
+  EXPECT_TRUE(
+      ExecJs(GetWebContents()->GetPrimaryMainFrame(),
+             content::JsReplace(
+                 R"(document.getElementsByTagName('fencedframe')[0].config =
+                         new FencedFrameConfig($1);)",
+                 navigation_url)));
+
+  // Send a response header with link dns-prefetch field.
+  response.WaitForRequest();
+  ResetNetworkState();
+  ResetPredictorState();
+  response.Send(
+      base::StringPrintf("HTTP/1.1 200 OK\r\n"
+                         "Content-Type: text/html; charset=utf-8\r\n"
+                         "Supports-Loading-Mode: fenced-frame\r\n"
+                         "Link: <%s>; rel=dns-prefetch\r\n"
+                         "\r\n",
+                         dns_prefetch_url.spec().c_str()));
+  response.Done();
+
+  // Wait until navigation commits.
+  observer.WaitForCommit();
+
+  // Get the fenced frame render frame host again as it has changed after
+  // navigation.
+  child_frames = fenced_frame_test_helper().GetChildFencedFrameHosts(
+      GetWebContents()->GetPrimaryMainFrame());
+  ASSERT_EQ(child_frames.size(), 1u);
+  fenced_frame_rfh = child_frames[0];
+
+  // Get fenced frame NetworkAnonymizationKey after navigation commits. This
+  // is because DNS prefetch uses the NetworkAnonymizationKey from the
+  // IsolationInfo of the pending navigation. So the NetworkAnonymizationKey
+  // used for the checks below needs to be obtained from the new fenced frame
+  // render frame host.
+  const net::NetworkAnonymizationKey& network_anonymization_key =
+      fenced_frame_rfh->GetIsolationInfoForSubresources()
+          .network_anonymization_key();
+
+  // The observer should observe a DNS prefetch which succeeds.
+  preconnect_manager_observer()->WaitUntilHostLookedUp(
+      dns_prefetch_url.GetHost(), network_anonymization_key);
+  EXPECT_TRUE(preconnect_manager_observer()->HasHostBeenLookedUp(
+      dns_prefetch_url.GetHost(), network_anonymization_key));
+  EXPECT_TRUE(preconnect_manager_observer()->HostFound(
+      dns_prefetch_url.GetHost(), network_anonymization_key));
+}
+
+// Verify DNS prefetch triggered by link response header is disabled after
+// fenced frame untrusted network cutoff.
+IN_PROC_BROWSER_TEST_F(FencedFrameLoadingPredictorBrowserTest,
+                       NetworkCutoffDisablesDnsPrefetchFromLinkHeader) {
+  std::string relative_url = "/title1.html";
+  net::test_server::ControllableHttpResponse dns_prefetch_response(
+      &embedded_https_test_server(), relative_url);
+
+  ASSERT_TRUE(embedded_https_test_server().Start());
+
+  // Navigate to a page that contains a fenced frame and a nested iframe.
+  const GURL main_url = embedded_https_test_server().GetURL(
+      "a.test",
+      "/cross_site_iframe_factory.html?a.test(a.test{fenced}(a.test))");
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // Get fenced frame render frame host.
+  std::vector<content::RenderFrameHost*> child_frames =
+      fenced_frame_test_helper().GetChildFencedFrameHosts(
+          GetWebContents()->GetPrimaryMainFrame());
+  ASSERT_EQ(child_frames.size(), 1u);
+  content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
+
+  // Get nested iframe render frame host.
+  content::RenderFrameHost* nested_iframe_rfh =
+      content::ChildFrameAt(fenced_frame_rfh, 0);
+
+  // Get fenced frame NetworkAnonymizationKey.
+  const net::NetworkAnonymizationKey& network_anonymization_key =
+      fenced_frame_rfh->GetIsolationInfoForSubresources()
+          .network_anonymization_key();
+
+  GURL dns_prefetch_url("https://chromium.org");
+  GURL navigation_url =
+      embedded_https_test_server().GetURL("a.test", relative_url);
+
+  // Disable fenced frame untrusted network access.
+  EXPECT_TRUE(ExecJs(fenced_frame_rfh, R"(
+                    (async () => {
+                      await window.fence.disableUntrustedNetwork();
+                    })();
+          )"));
+
+  // Exempt `navigation_url` from fenced frame network revocation.
+  content::test::ExemptUrlsFromFencedFrameNetworkRevocation(fenced_frame_rfh,
+                                                            {navigation_url});
+
+  // Navigate the nested iframe. The navigation is allowed because the url has
+  // been exempted from network revocation.
+  content::TestFrameNavigationObserver observer(nested_iframe_rfh);
+
+  EXPECT_TRUE(ExecJs(
+      fenced_frame_rfh,
+      content::JsReplace("document.getElementsByTagName('iframe')[0].src = $1;",
+                         navigation_url)));
+
+  // Send a response header with link dns-prefetch field.
+  dns_prefetch_response.WaitForRequest();
+  ResetNetworkState();
+  ResetPredictorState();
+  dns_prefetch_response.Send(
+      base::StringPrintf("HTTP/1.1 200 OK\r\n"
+                         "Content-Type: text/html; charset=utf-8\r\n"
+                         "Supports-Loading-Mode: fenced-frame\r\n"
+                         "Link: <%s>; rel=dns-prefetch\r\n"
+                         "\r\n",
+                         dns_prefetch_url.spec().c_str()));
+  dns_prefetch_response.Done();
+
+  // Wait until navigation commits.
+  observer.WaitForCommit();
+  ASSERT_TRUE(WaitForLoadStop(GetWebContents()));
+
+  base::RunLoop().RunUntilIdle();
+
+  // In rare cases, the NetworkHintsHandler will not receive the dns prefetch
+  // IPC call. Then there is no dns prefetch request initiated at all.
+  // `HasHostBeenLookedUp()` is not checked here to avoid flakiness.
+  EXPECT_FALSE(preconnect_manager_observer()->HostFound(
+      dns_prefetch_url.GetHost(), network_anonymization_key));
+}
+
+class ConnectionAllowlistLoadingPredictorBrowserTest
+    : public LoadingPredictorBrowserTest {
+ public:
+  ConnectionAllowlistLoadingPredictorBrowserTest() {
+    feature_list_.InitAndEnableFeature(
+        network::features::kConnectionAllowlists);
+  }
+
+  void SetUp() override {
+    ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
+    embedded_test_server()->RegisterRequestHandler(
+        base::BindRepeating(&ConnectionAllowlistLoadingPredictorBrowserTest::
+                                HandleMainFrameRequest));
+    ASSERT_TRUE(preconnecting_test_server_.InitializeAndListen());
+
+    InProcessBrowserTest::SetUp();
+  }
+
+  static std::unique_ptr<net::test_server::HttpResponse> HandleMainFrameRequest(
+      const net::test_server::HttpRequest& request) {
+    if (request.relative_url != "/connection-allowlist") {
+      return nullptr;
+    }
+
+    auto http_response =
+        std::make_unique<net::test_server::BasicHttpResponse>();
+    http_response->set_code(net::HTTP_OK);
+    http_response->AddCustomHeader("Connection-Allowlist", "(http://a.test)");
+    return http_response;
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Verify that DNS prefetch fails when requests to the host are prevented by the
+// connection allowlist.
+// TODO(crbug.com/447954811): This test only applies to DNS prefetch initiated
+// by a <link>, and does not test HTTP 103 Early Hints headers. Once we
+// resolve how to handle them in
+// https://github.com/WICG/connection-allowlists/issues/3, we can add the
+// appropriate test as well.
+IN_PROC_BROWSER_TEST_F(ConnectionAllowlistLoadingPredictorBrowserTest,
+                       ConnectionAllowlistDnsPrefetchFails) {
+  // Navigate the main frame to a page with a connection allowlist.
+  const GURL main_url =
+      embedded_test_server()->GetURL("a.test", "/connection-allowlist");
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  GURL dns_prefetch_url("http://b.test");
+
+  content::RenderFrameHost* main_frame_rfh = browser()
+                                                 ->tab_strip_model()
+                                                 ->GetActiveWebContents()
+                                                 ->GetPrimaryMainFrame();
+  // Add a link element that does a DNS prefetch.
+  EXPECT_TRUE(ExecJs(main_frame_rfh, content::JsReplace(R"(
+            var link_element = document.createElement('link');
+            link_element.href = $1;
+            link_element.rel = 'dns-prefetch';
+            document.body.appendChild(link_element);
+          )",
+                                                        dns_prefetch_url)));
+
+  net::NetworkAnonymizationKey network_anonymization_key =
+      main_frame_rfh->GetIsolationInfoForSubresources()
+          .network_anonymization_key();
+  // The observer should observe a DNS prefetch which is cancelled.
+  preconnect_manager_observer()->WaitUntilHostLookedUp(
+      dns_prefetch_url.GetHost(), network_anonymization_key);
+
+  // The host is looked up, but the lookup is eventually cancelled because
+  // `dns_prefetch_url` does not match the allowlist.
+  EXPECT_TRUE(preconnect_manager_observer()->HasHostBeenLookedUp(
+      dns_prefetch_url.GetHost(), network_anonymization_key));
+  EXPECT_FALSE(preconnect_manager_observer()->HostFound(
+      dns_prefetch_url.GetHost(), network_anonymization_key));
+}
+
+// Verify that DNS prefetch succeeds when requests to the host are allowed by
+// connection allowlist.
+IN_PROC_BROWSER_TEST_F(ConnectionAllowlistLoadingPredictorBrowserTest,
+                       ConnectionAllowlistDnsPrefetchSucceeds) {
+  // Navigate the main frame to a page with a connection allowlist.
+  const GURL main_url =
+      embedded_test_server()->GetURL("a.test", "/connection-allowlist");
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
+
+  // This URL is allowed by the Connection-Allowlist header.
+  GURL dns_prefetch_url("http://a.test");
+
+  content::RenderFrameHost* main_frame_rfh = browser()
+                                                 ->tab_strip_model()
+                                                 ->GetActiveWebContents()
+                                                 ->GetPrimaryMainFrame();
+  // Add a link element that does a DNS prefetch.
+  EXPECT_TRUE(ExecJs(main_frame_rfh, content::JsReplace(R"(
+            var link_element = document.createElement('link');
+            link_element.href = $1;
+            link_element.rel = 'dns-prefetch';
+            document.body.appendChild(link_element);
+          )",
+                                                        dns_prefetch_url)));
+
+  net::NetworkAnonymizationKey network_anonymization_key =
+      main_frame_rfh->GetIsolationInfoForSubresources()
+          .network_anonymization_key();
+  // The observer should observe a DNS prefetch.
+  preconnect_manager_observer()->WaitUntilHostLookedUp(
+      dns_prefetch_url.GetHost(), network_anonymization_key);
+
+  // The host is looked up successfully because dns_prefetch_url is in the
+  // connection allowlist.
+  EXPECT_TRUE(preconnect_manager_observer()->HasHostBeenLookedUp(
+      dns_prefetch_url.GetHost(), network_anonymization_key));
+  EXPECT_TRUE(preconnect_manager_observer()->HostFound(
+      dns_prefetch_url.GetHost(), network_anonymization_key));
 }
 
 }  // namespace predictors

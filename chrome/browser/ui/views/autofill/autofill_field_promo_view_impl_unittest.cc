@@ -10,20 +10,23 @@
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/autofill/autofill_field_promo_view.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_view_views.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/test_with_browser_view.h"
+#include "chrome/common/webui_url_constants.h"
 #include "content/public/browser/picture_in_picture_window_controller.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
 #include "url/origin.h"
 
 namespace autofill {
-
 namespace {
 
 class TestPictureInPictureWindowController
@@ -38,7 +41,9 @@ class TestPictureInPictureWindowController
   content::WebContents* GetChildWebContents() override { return nullptr; }
   std::optional<url::Origin> GetOrigin() override { return std::nullopt; }
 
-  std::optional<gfx::Rect> GetWindowBounds() override { return bounds_; }
+  std::optional<gfx::Rect> GetWindowBoundsInScreen() override {
+    return bounds_;
+  }
   void SetWindowBounds(gfx::Rect bounds) { bounds_ = bounds; }
 
  private:
@@ -49,8 +54,6 @@ AutofillFieldPromoViewImpl* GetViewRawPtr(
     base::WeakPtr<AutofillFieldPromoView> view) {
   return static_cast<AutofillFieldPromoViewImpl*>(view.get());
 }
-
-}  // namespace
 
 class AutofillFieldPromoViewImplTest : public TestWithBrowserView {
  public:
@@ -69,6 +72,10 @@ class AutofillFieldPromoViewImplTest : public TestWithBrowserView {
 
   content::WebContents* web_contents() {
     return browser()->tab_strip_model()->GetActiveWebContents();
+  }
+
+  const ui::ElementIdentifier& element_identifier() {
+    return test_promo_element_identifier_;
   }
 
   base::WeakPtr<AutofillFieldPromoView> CreateView(
@@ -112,7 +119,7 @@ class AutofillFieldPromoViewImplTest : public TestWithBrowserView {
 
  private:
   const ui::ElementIdentifier test_promo_element_identifier_ =
-      kAutofillStandaloneCvcSuggestionElementId;
+      autofill::PopupViewViews::kAutofillStandaloneCvcSuggestionElementId;
   base::WeakPtr<AutofillFieldPromoView> view_;
 };
 
@@ -124,7 +131,7 @@ TEST_F(AutofillFieldPromoViewImplTest, BoundsAreCorrect) {
 #else
   web_contents()->GetNativeView()->SetBoundsInScreen(
       gfx::Rect(300, 300, 1000, 1000),
-      display::Screen::GetScreen()->GetDisplayForNewWindows());
+      display::Screen::Get()->GetDisplayForNewWindows());
 #endif  // BUILDFLAG(IS_MAC)
 
   // Element is within the boundaries of `web_contents()`.
@@ -171,4 +178,11 @@ TEST_F(AutofillFieldPromoViewImplTest, OverlapsWithPictureInPictureWindow) {
   EXPECT_TRUE(view->OverlapsWithPictureInPictureWindow());
 }
 
+TEST_F(AutofillFieldPromoViewImplTest, ElementIdForIphIsCorrect) {
+  EXPECT_EQ(
+      GetViewRawPtr(CreateView())->GetProperty(views::kElementIdentifierKey),
+      element_identifier());
+}
+
+}  // namespace
 }  // namespace autofill

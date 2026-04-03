@@ -1,9 +1,9 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-lit-render-outside-of-view */
 
-import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
-import * as LitHtml from '../../../ui/lit-html/lit-html.js';
+import {html, render} from '../../../ui/lit/lit.js';
 import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 
 import elementsPanelLinkStyles from './elementsPanelLink.css.js';
@@ -14,7 +14,6 @@ export interface ElementsPanelLinkData {
   onElementRevealIconMouseLeave: (event?: Event) => void;
 }
 export class ElementsPanelLink extends HTMLElement {
-  static readonly litTagName = LitHtml.literal`devtools-elements-panel-link`;
   readonly #shadow = this.attachShadow({mode: 'open'});
 
   #onElementRevealIconClick: ((event?: Event) => void) = () => {};
@@ -32,13 +31,10 @@ export class ElementsPanelLink extends HTMLElement {
     this.#render();
   }
 
-  connectedCallback(): void {
-    this.#shadow.adoptedStyleSheets = [elementsPanelLinkStyles];
-  }
-
   #render(): void {
     // clang-format off
-      LitHtml.render(LitHtml.html`
+    render(html`
+      <style>${elementsPanelLinkStyles}</style>
       <span
         class="element-reveal-icon"
         jslog=${VisualLogging.link('elements-panel').track({click: true})}
@@ -50,10 +46,9 @@ export class ElementsPanelLink extends HTMLElement {
   }
 }
 
-ComponentHelpers.CustomElements.defineComponent('devtools-elements-panel-link', ElementsPanelLink);
+customElements.define('devtools-elements-panel-link', ElementsPanelLink);
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface HTMLElementTagNameMap {
     'devtools-elements-panel-link': ElementsPanelLink;
   }

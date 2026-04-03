@@ -15,7 +15,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
@@ -28,6 +27,8 @@
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
 #include "components/user_education/common/user_education_class_properties.h"
+#include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkRRect.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/actions/actions.h"
@@ -35,6 +36,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/models/menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_provider.h"
 #include "ui/compositor/paint_recorder.h"
@@ -72,16 +74,17 @@ class ToolbarButtonHighlightPathGenerator
     gfx::Rect rect(view->size());
     rect.Inset(GetToolbarInkDropInsets(view));
 
-    SkPath path;
     const SkScalar left_radius =
         toolbar_button_->GetCornerRadiusFor(ToolbarButton::Edge::kLeft);
     const SkScalar right_radius =
         toolbar_button_->GetCornerRadiusFor(ToolbarButton::Edge::kRight);
-    const SkScalar radii[8] = {left_radius,  left_radius,  right_radius,
-                               right_radius, right_radius, right_radius,
-                               left_radius,  left_radius};
-    path.addRoundRect(gfx::RectToSkRect(rect), radii);
-    return path;
+    const SkVector radii[4] = {{left_radius,  left_radius},
+                               {right_radius, right_radius},
+                               {right_radius, right_radius},
+                               {left_radius,  left_radius}};
+
+    return SkPath::RRect(
+        SkRRect::MakeRectRadii(gfx::RectToSkRect(rect), radii));
   }
 
  private:
@@ -122,11 +125,6 @@ ToolbarButton::ToolbarButton(PressedCallback callback,
   // allocate the property once and modify the value.
   SetProperty(views::kInternalPaddingKey, gfx::Insets());
 
-  if (features::IsChromeRefresh2023() &&
-      base::FeatureList::IsEnabled(features::kChromeRefresh2023TopChromeFont)) {
-    label()->SetTextStyle(views::style::STYLE_BODY_4_EMPHASIS);
-  }
-
   SetFocusBehavior(FocusBehavior::ACCESSIBLE_ONLY);
   views::FocusRing::Get(this)->SetOutsetFocusRingDisabled(true);
 }
@@ -144,7 +142,7 @@ void ToolbarButton::SetHighlight(const std::u16string& highlight_text,
   SetText(highlight_text);
 }
 
-void ToolbarButton::SetText(const std::u16string& text) {
+void ToolbarButton::SetText(std::u16string_view text) {
   LabelButton::SetText(text);
   UpdateColorsAndInsets();
 }
@@ -180,8 +178,9 @@ void ToolbarButton::UpdateColorsAndInsets() {
   SetEnabledTextColors(highlight_color_animation_.GetTextColor());
 
   // ToolbarButton height is constrained by the height of the location bar.
-  const int extra_height = std::max(
-      0, target_size.height() - GetLayoutConstant(LOCATION_BAR_HEIGHT));
+  const int extra_height =
+      std::max(0, target_size.height() -
+                      GetLayoutConstant(LayoutConstant::kLocationBarHeight));
   const gfx::Insets paint_insets =
       gfx::Insets(extra_height / 2) + *GetProperty(views::kInternalPaddingKey);
 
@@ -195,33 +194,26 @@ void ToolbarButton::UpdateColorsAndInsets() {
   } else {
     SetBackground(nullptr);
     const auto* cp = GetColorProvider();
-    if (cp)
+    if (cp) {
       label()->SetBackgroundColor(cp->GetColor(kColorToolbar));
+    }
   }
 
   // Apply new border with target insets.
-
   std::optional<SkColor> border_color =
       highlight_color_animation_.GetBorderColor();
-  if (!GetBorder() || target_insets != GetInsets() ||
-      last_border_color_ != border_color ||
-      last_paint_insets_ != paint_insets) {
-    if (ShouldPaintBorder() && border_color) {
-      int border_thickness_dp = GetText().empty()
-                                    ? kBorderThicknessDpWithoutLabel
-                                    : kBorderThicknessDpWithLabel;
-      // Create a border with insets totalling |target_insets|, split into
-      // painted insets (matching the background) and internal padding to
-      // position child views correctly.
-      std::unique_ptr<views::Border> border = views::CreateRoundedRectBorder(
-          border_thickness_dp, highlight_radius, paint_insets, *border_color);
-      const gfx::Insets extra_insets = target_insets - border->GetInsets();
-      SetBorder(views::CreatePaddedBorder(std::move(border), extra_insets));
-    } else {
-      SetBorder(views::CreateEmptyBorder(target_insets));
-    }
-    last_border_color_ = border_color;
-    last_paint_insets_ = paint_insets;
+  if (ShouldPaintBorder() && border_color) {
+    int border_thickness_dp = GetText().empty() ? kBorderThicknessDpWithoutLabel
+                                                : kBorderThicknessDpWithLabel;
+    // Create a border with insets totalling |target_insets|, split into
+    // painted insets (matching the background) and internal padding to
+    // position child views correctly.
+    std::unique_ptr<views::Border> border = views::CreateRoundedRectBorder(
+        border_thickness_dp, highlight_radius, paint_insets, *border_color);
+    const gfx::Insets extra_insets = target_insets - border->GetInsets();
+    SetBorder(views::CreatePaddedBorder(std::move(border), extra_insets));
+  } else {
+    SetBorder(views::CreateEmptyBorder(target_insets));
   }
 
   // Update spacing on the outer-side of the label to match the current
@@ -231,8 +223,9 @@ void ToolbarButton::UpdateColorsAndInsets() {
 
 SkColor ToolbarButton::GetForegroundColor(ButtonState state) const {
   const auto* color_provider = GetColorProvider();
-  if (has_in_product_help_promo_)
+  if (has_in_product_help_promo_) {
     return color_provider->GetColor(kColorToolbarFeaturePromoHighlight);
+  }
   switch (state) {
     case ButtonState::STATE_HOVERED:
       return color_provider->GetColor(kColorToolbarButtonIconHovered);
@@ -243,7 +236,7 @@ SkColor ToolbarButton::GetForegroundColor(ButtonState state) const {
     case ButtonState::STATE_NORMAL:
       return color_provider->GetColor(kColorToolbarButtonIcon);
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 
@@ -263,13 +256,16 @@ void ToolbarButton::UpdateIconsWithColors(const gfx::VectorIcon& icon,
                                             icon, disabled_color, icon_size));
 }
 
+std::optional<SkColor> ToolbarButton::GetBackgroundColor() const {
+  return highlight_color_animation_.GetBackgroundColor();
+}
+
 int ToolbarButton::GetIconSize() const {
   if (ui::TouchUiController::Get()->touch_ui()) {
     return kDefaultTouchableIconSize;
   }
 
-  return features::IsChromeRefresh2023() ? kDefaultIconSizeChromeRefresh
-                                         : kDefaultIconSize;
+  return kDefaultIconSizeChromeRefresh;
 }
 
 bool ToolbarButton::ShouldPaintBorder() const {
@@ -277,7 +273,7 @@ bool ToolbarButton::ShouldPaintBorder() const {
 }
 
 bool ToolbarButton::ShouldBlendHighlightColor() const {
-  return !features::IsChromeRefresh2023();
+  return false;
 }
 
 bool ToolbarButton::ShouldDirectlyUseHighlightAsBackground() const {
@@ -299,8 +295,9 @@ void ToolbarButton::SetVectorIcon(const gfx::VectorIcon& icon) {
 void ToolbarButton::SetVectorIcons(const gfx::VectorIcon& icon,
                                    const gfx::VectorIcon& touch_icon) {
   vector_icons_.emplace(VectorIcons{icon, touch_icon});
-  if (GetThemeProvider())
+  if (GetThemeProvider()) {
     UpdateIcon();
+  }
 }
 
 void ToolbarButton::UpdateIcon() {
@@ -340,24 +337,27 @@ void ToolbarButton::SetLabelSideSpacing(int spacing) {
 }
 
 void ToolbarButton::SetLayoutInsetDelta(const gfx::Insets& inset_delta) {
-  if (layout_inset_delta_ == inset_delta)
+  if (layout_inset_delta_ == inset_delta) {
     return;
+  }
   layout_inset_delta_ = inset_delta;
   UpdateColorsAndInsets();
 }
 
 void ToolbarButton::SetLeadingMargin(int margin) {
   gfx::Insets* const internal_padding = GetProperty(views::kInternalPaddingKey);
-  if (internal_padding->left() == margin)
+  if (internal_padding->left() == margin) {
     return;
+  }
   internal_padding->set_left(margin);
   UpdateColorsAndInsets();
 }
 
 void ToolbarButton::SetTrailingMargin(int margin) {
   gfx::Insets* const internal_padding = GetProperty(views::kInternalPaddingKey);
-  if (internal_padding->right() == margin)
+  if (internal_padding->right() == margin) {
     return;
+  }
   internal_padding->set_right(margin);
   UpdateColorsAndInsets();
 }
@@ -375,8 +375,9 @@ std::optional<gfx::Insets> ToolbarButton::GetLayoutInsets() const {
 }
 
 void ToolbarButton::SetLayoutInsets(const std::optional<gfx::Insets>& insets) {
-  if (layout_insets_ == insets)
+  if (layout_insets_ == insets) {
     return;
+  }
   layout_insets_ = insets;
   UpdateColorsAndInsets();
 }
@@ -387,7 +388,7 @@ const gfx::Insets ToolbarButton::GetTargetInsets() const {
 }
 
 const gfx::Size ToolbarButton::GetTargetSize() const {
-  const gfx::Size current_preferred_size = CalculatePreferredSize();
+  const gfx::Size current_preferred_size = CalculatePreferredSize({});
   const gfx::Insets current_insets = GetInsets();
   const gfx::Size target_contents_size =
       current_preferred_size - current_insets.size();
@@ -397,8 +398,9 @@ const gfx::Size ToolbarButton::GetTargetSize() const {
 }
 
 void ToolbarButton::OnBoundsChanged(const gfx::Rect& previous_bounds) {
-  if (size() != previous_bounds.size())
+  if (size() != previous_bounds.size()) {
     UpdateColorsAndInsets();
+  }
   LabelButton::OnBoundsChanged(previous_bounds);
 }
 
@@ -467,8 +469,9 @@ void ToolbarButton::OnMouseReleased(const ui::MouseEvent& event) {
     LabelButton::OnMouseReleased(event);
   }
 
-  if (IsTriggerableEvent(event))
+  if (IsTriggerableEvent(event)) {
     show_menu_factory_.InvalidateWeakPtrs();
+  }
 }
 
 void ToolbarButton::OnMouseCaptureLost() {}
@@ -477,8 +480,10 @@ void ToolbarButton::OnMouseExited(const ui::MouseEvent& event) {
   // Starting a drag results in a MouseExited, we need to ignore it.
   // A right click release triggers an exit event. We want to
   // remain in a PUSHED state until the drop down menu closes.
-  if (GetState() != STATE_DISABLED && !InDrag() && GetState() != STATE_PRESSED)
+  if (GetState() != STATE_DISABLED && !InDrag() &&
+      GetState() != STATE_PRESSED) {
     SetState(STATE_NORMAL);
+  }
 }
 
 void ToolbarButton::OnGestureEvent(ui::GestureEvent* event) {
@@ -491,28 +496,24 @@ void ToolbarButton::OnGestureEvent(ui::GestureEvent* event) {
   LabelButton::OnGestureEvent(event);
 }
 
-void ToolbarButton::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  Button::GetAccessibleNodeData(node_data);
-  if (model_)
-    node_data->SetHasPopup(ax::mojom::HasPopup::kMenu);
-}
-
-std::u16string ToolbarButton::GetTooltipText(const gfx::Point& p) const {
-  // Suppress tooltip when IPH is showing.
-  // TODO(crbug.com/1419653): Investigate if we should suppress tooltip for all
-  // Buttons rather than just ToolbarButtons when IPH is on.
-  return has_in_product_help_promo_ ? std::u16string()
-                                    : views::LabelButton::GetTooltipText(p);
-}
-
-void ToolbarButton::ShowContextMenuForViewImpl(View* source,
-                                               const gfx::Point& point,
-                                               ui::MenuSourceType source_type) {
-  if (!GetEnabled())
+void ToolbarButton::ShowContextMenuForViewImpl(
+    View* source,
+    const gfx::Point& point,
+    ui::mojom::MenuSourceType source_type) {
+  if (!GetEnabled()) {
     return;
+  }
 
   show_menu_factory_.InvalidateWeakPtrs();
   ShowDropDownMenu(source_type);
+}
+
+std::u16string ToolbarButton::GetAlternativeAccessibleName() const {
+  if (!suppressed_tooltip_text_.empty()) {
+    return suppressed_tooltip_text_;
+  }
+
+  return Button::GetAlternativeAccessibleName();
 }
 
 void ToolbarButton::AfterPropertyChange(const void* key, int64_t old_value) {
@@ -520,6 +521,19 @@ void ToolbarButton::AfterPropertyChange(const void* key, int64_t old_value) {
   if (key == user_education::kHasInProductHelpPromoKey) {
     has_in_product_help_promo_ =
         GetProperty(user_education::kHasInProductHelpPromoKey);
+
+    // Suppress tooltip when IPH is showing.
+    // TODO(crbug.com/40258442): Investigate if we should suppress tooltip for
+    // all Buttons rather than just ToolbarButtons when IPH is on.
+    if (has_in_product_help_promo_) {
+      suppressed_tooltip_text_ = GetTooltipText();
+      SetTooltipText(std::u16string());
+    } else {
+      if (GetTooltipText().empty()) {
+        SetTooltipText(suppressed_tooltip_text_);
+      }
+      suppressed_tooltip_text_ = std::u16string();
+    }
     UpdateIcon();
   }
 }
@@ -532,30 +546,37 @@ bool ToolbarButton::ShouldShowInkdropAfterIphInteraction() {
   return true;
 }
 
-void ToolbarButton::ShowDropDownMenu(ui::MenuSourceType source_type) {
-  if (!ShouldShowMenu())
+void ToolbarButton::ShowDropDownMenu(ui::mojom::MenuSourceType source_type) {
+  if (!ShouldShowMenu()) {
     return;
+  }
 
+  ShowMenuForModel(source_type, model_.get());
+}
+
+void ToolbarButton::ShowMenuForModel(ui::mojom::MenuSourceType source_type,
+                                     ui::MenuModel* menu_model) {
   gfx::Rect menu_anchor_bounds = GetAnchorBoundsInScreen();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // A window won't overlap between displays on ChromeOS.
   // Use the left bound of the display on which
   // the menu button exists.
   gfx::NativeView view = GetWidget()->GetNativeView();
   display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestView(view);
+      display::Screen::Get()->GetDisplayNearestView(view);
   int left_bound = display.bounds().x();
 #else
   // The window might be positioned over the edge between two screens. We'll
   // want to position the dropdown on the screen the mouse cursor is on.
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   display::Display display =
       screen->GetDisplayNearestPoint(screen->GetCursorScreenPoint());
   int left_bound = display.bounds().x();
 #endif
-  if (menu_anchor_bounds.x() < left_bound)
+  if (menu_anchor_bounds.x() < left_bound) {
     menu_anchor_bounds.set_x(left_bound);
+  }
 
   // Make the button look depressed while the menu is open.
   SetState(STATE_PRESSED);
@@ -566,16 +587,18 @@ void ToolbarButton::ShowDropDownMenu(ui::MenuSourceType source_type) {
 
   // Exit if the model is null. Although ToolbarButton::ShouldShowMenu()
   // performs the same check, its overrides may not.
-  if (!model_)
+  if (!menu_model) {
     return;
+  }
 
-  if (tab_strip_model_ && !tab_strip_model_->GetActiveWebContents())
+  if (tab_strip_model_ && !tab_strip_model_->GetActiveWebContents()) {
     return;
+  }
 
   // Create and run menu.
   menu_model_adapter_ = std::make_unique<views::MenuModelAdapter>(
-      model_.get(), base::BindRepeating(&ToolbarButton::OnMenuClosed,
-                                        base::Unretained(this)));
+      menu_model, base::BindRepeating(&ToolbarButton::OnMenuClosed,
+                                      base::Unretained(this)));
   menu_model_adapter_->set_triggerable_event_flags(GetTriggerableEventFlags());
   std::unique_ptr<views::MenuItemView> root = menu_model_adapter_->CreateMenu();
   root->SetSubmenuId(menu_identifier_);
@@ -604,8 +627,8 @@ namespace {
 
 // The default duration does not work well for dark mode where the animation has
 // to make a big contrast difference.
-// TODO(crbug.com/967317): This needs to be consistent with the duration of the
-// border animation in ToolbarIconContainerView.
+// TODO(crbug.com/40629276): This needs to be consistent with the duration of
+// the border animation in ToolbarIconContainerView.
 constexpr base::TimeDelta kHighlightAnimationDuration = base::Milliseconds(300);
 
 SkColor FadeWithAnimation(SkColor color, const gfx::Animation& animation) {
@@ -645,8 +668,9 @@ void ToolbarButton::HighlightColorAnimation::Hide() {
 
 std::optional<SkColor> ToolbarButton::HighlightColorAnimation::GetTextColor()
     const {
-  if (!IsShown() || !parent_->GetColorProvider())
+  if (!IsShown() || !parent_->GetColorProvider()) {
     return std::nullopt;
+  }
 
   // Use the overridden value supplied by the button.
   const std::optional<SkColor> text_color_overridden =
@@ -688,8 +712,9 @@ std::optional<SkColor> ToolbarButton::HighlightColorAnimation::GetBorderColor()
 std::optional<SkColor>
 ToolbarButton::HighlightColorAnimation::GetBackgroundColor() const {
   const auto* const color_provider = parent_->GetColorProvider();
-  if (!IsShown() || !color_provider)
+  if (!IsShown() || !color_provider) {
     return std::nullopt;
+  }
   SkColor bg_color =
       color_provider->GetColor(kColorToolbarButtonBackgroundHighlightedDefault);
   if (highlight_color_.has_value()) {
@@ -705,8 +730,9 @@ ToolbarButton::HighlightColorAnimation::GetBackgroundColor() const {
 
 std::optional<SkColor>
 ToolbarButton::HighlightColorAnimation::GetInkDropBaseColor() const {
-  if (!highlight_color_)
+  if (!highlight_color_) {
     return std::nullopt;
+  }
   return *highlight_color_;
 }
 
@@ -714,8 +740,9 @@ void ToolbarButton::HighlightColorAnimation::AnimationEnded(
     const gfx::Animation* animation) {
   // Only reset the color after the animation slides _back_ and not when it
   // finishes sliding fully _open_.
-  if (highlight_color_animation_.GetCurrentValue() == 0.0f)
+  if (highlight_color_animation_.GetCurrentValue() == 0.0f) {
     ClearHighlightColor();
+  }
 }
 
 void ToolbarButton::HighlightColorAnimation::AnimationProgressed(

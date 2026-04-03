@@ -37,13 +37,14 @@ class OSSyncHandler : public content::WebUIMessageHandler,
 
   // syncer::SyncServiceObserver:
   void OnStateChanged(syncer::SyncService* service) override;
+  void OnSyncShutdown(syncer::SyncService* service) override;
 
   // Callbacks from the page. Visible for testing.
-  void HandleDidNavigateToOsSyncPage(const base::Value::List& args);
-  void HandleDidNavigateAwayFromOsSyncPage(const base::Value::List& args);
-  void HandleOsSyncPrefsDispatch(const base::Value::List& args);
-  void HandleSetOsSyncDatatypes(const base::Value::List& args);
-  void HandleOpenBrowserSyncSettings(const base::Value::List& args);
+  void HandleDidNavigateToOsSyncPage(const base::ListValue& args);
+  void HandleDidNavigateAwayFromOsSyncPage(const base::ListValue& args);
+  void HandleOsSyncPrefsDispatch(const base::ListValue& args);
+  void HandleSetOsSyncDatatypes(const base::ListValue& args);
+  void HandleOpenBrowserSyncSettings(const base::ListValue& args);
 
  private:
   // Pushes the updated sync prefs to JavaScript.

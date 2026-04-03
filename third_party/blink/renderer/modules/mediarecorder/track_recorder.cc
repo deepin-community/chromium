@@ -10,7 +10,7 @@ namespace blink {
 
 // static.
 MediaTrackContainerType GetMediaContainerTypeFromString(const String& type) {
-  if (!type.empty()) {
+  if (type.empty()) {
     return MediaTrackContainerType::kNone;
   }
 
@@ -18,12 +18,16 @@ MediaTrackContainerType GetMediaContainerTypeFromString(const String& type) {
     return MediaTrackContainerType::kVideoMp4;
   } else if (EqualIgnoringASCIICase(type, "video/webm")) {
     return MediaTrackContainerType::kVideoWebM;
-  } else if (EqualIgnoringASCIICase(type, "video/x-matroska")) {
-    return MediaTrackContainerType::kVidoMatroska;
+  } else if (EqualIgnoringASCIICase(type, "video/x-matroska") ||
+             EqualIgnoringASCIICase(type, "video/matroska")) {
+    return MediaTrackContainerType::kVideoMatroska;
   } else if (EqualIgnoringASCIICase(type, "audio/mp4")) {
     return MediaTrackContainerType::kAudioMp4;
   } else if (EqualIgnoringASCIICase(type, "audio/webm")) {
     return MediaTrackContainerType::kAudioWebM;
+  } else if (EqualIgnoringASCIICase(type, "audio/x-matroska") ||
+             EqualIgnoringASCIICase(type, "audio/matroska")) {
+    return MediaTrackContainerType::kAudioMatroska;
   }
 
   return MediaTrackContainerType::kNone;

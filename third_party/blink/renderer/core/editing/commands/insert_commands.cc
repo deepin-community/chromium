@@ -42,6 +42,7 @@
 #include "third_party/blink/renderer/core/editing/serializers/serialization.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
+#include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
 #include "third_party/blink/renderer/core/html/html_hr_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
@@ -53,7 +54,7 @@ namespace blink {
 LocalFrame& InsertCommands::TargetFrame(LocalFrame& frame, Event* event) {
   if (!event)
     return frame;
-  const Node* node = event->target()->ToNode();
+  const Node* node = event->RawTarget()->ToNode();
   if (!node)
     return frame;
   LocalFrame* local_frame = node->GetDocument().GetFrame();
@@ -67,6 +68,7 @@ bool InsertCommands::ExecuteInsertFragment(LocalFrame& frame,
   return MakeGarbageCollected<ReplaceSelectionCommand>(
              *frame.GetDocument(), fragment,
              ReplaceSelectionCommand::kPreventNesting,
+             EditCommand::PasswordEchoBehavior::kDoNotEcho,
              InputEvent::InputType::kNone)
       ->Apply();
 }
@@ -173,7 +175,6 @@ bool InsertCommands::ExecuteInsertLineBreak(LocalFrame& frame,
       return TypingCommand::InsertLineBreak(*frame.GetDocument());
   }
   NOTREACHED();
-  return false;
 }
 
 bool InsertCommands::ExecuteInsertNewline(LocalFrame& frame,
@@ -228,7 +229,8 @@ bool InsertCommands::ExecuteInsertText(LocalFrame& frame,
                                        EditorCommandSource,
                                        const String& value) {
   DCHECK(frame.GetDocument());
-  TypingCommand::InsertText(*frame.GetDocument(), value, 0);
+  TypingCommand::InsertText(*frame.GetDocument(), value, 0,
+                            EditCommand::PasswordEchoBehavior::kDoNotEcho);
   return true;
 }
 

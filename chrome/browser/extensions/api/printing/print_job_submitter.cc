@@ -4,11 +4,11 @@
 
 #include "chrome/browser/extensions/api/printing/print_job_submitter.h"
 
+#include <algorithm>
 #include <cstring>
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -16,31 +16,42 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/types/expected.h"
 #include "base/values.h"
+#include "chrome/browser/ash/printing/local_printer.h"
 #include "chrome/browser/extensions/api/printing/printing_api_utils.h"
 #include "chrome/browser/printing/pdf_blob_data_flattener.h"
 #include "chrome/browser/printing/print_job_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/extensions/extensions_dialogs.h"
 #include "chrome/common/pref_names.h"
-#include "chromeos/crosapi/mojom/local_printer.mojom.h"
 #include "components/prefs/pref_service.h"
+#include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
+#include "extensions/browser/blob_reader.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/image_loader.h"
 #include "extensions/common/extension.h"
 #include "printing/metafile_skia.h"
 #include "printing/print_settings.h"
 #include "printing/printing_utils.h"
+#include "third_party/skia/include/codec/SkCodec.h"
+#include "third_party/skia/include/codec/SkPngRustDecoder.h"
+#include "third_party/skia/include/core/SkCanvas.h"
+#include "third_party/skia/include/core/SkImage.h"
+#include "third_party/skia/include/core/SkRefCnt.h"
+#include "third_party/skia/include/core/SkStream.h"
+#include "third_party/skia/include/docs/SkPDFDocument.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/views/native_window_tracker.h"
+#include "ui/gfx/skia_span_util.h"
+#include "ui/native_window_tracker/native_window_tracker.h"
 
 namespace extensions {
 
 namespace {
 
 constexpr char kPdfMimeType[] = "application/pdf";
+constexpr char kPngMimeType[] = "image/png";
 
 constexpr char kUnsupportedContentType[] = "Unsupported content type";
 constexpr char kInvalidTicket[] = "Invalid ticket";
@@ -62,11 +73,11 @@ bool IsUserConfirmationRequired(content::BrowserContext* browser_context,
                                 const std::string& extension_id) {
   if (g_skip_confirmation_dialog_for_testing)
     return false;
-  const base::Value::List& list =
+  const base::ListValue& list =
       Profile::FromBrowserContext(browser_context)
           ->GetPrefs()
           ->GetList(prefs::kPrintingAPIExtensionsAllowlist);
-  return !base::Contains(list, base::Value(extension_id));
+  return !std::ranges::contains(list, base::Value(extension_id));
 }
 
 }  // namespace
@@ -78,7 +89,7 @@ PrintJobSubmitter::PrintJobSubmitter(
     printing::PdfBlobDataFlattener* pdf_blob_data_flattener,
     scoped_refptr<const extensions::Extension> extension,
     api::printing::SubmitJobRequest request,
-    crosapi::mojom::LocalPrinter* local_printer,
+    ash::LocalPrinter* local_printer,
     SubmitJobCallback callback)
     : native_window_(native_window),
       browser_context_(browser_context),
@@ -90,7 +101,7 @@ PrintJobSubmitter::PrintJobSubmitter(
       callback_(std::move(callback)) {
   DCHECK(extension);
   if (native_window)
-    native_window_tracker_ = views::NativeWindowTracker::Create(native_window);
+    native_window_tracker_ = ui::NativeWindowTracker::Create(native_window);
 }
 
 PrintJobSubmitter::~PrintJobSubmitter() = default;
@@ -119,7 +130,8 @@ void PrintJobSubmitter::Start() {
 }
 
 bool PrintJobSubmitter::CheckContentType() const {
-  return request_.job.content_type == kPdfMimeType;
+  return request_.job.content_type == kPdfMimeType ||
+         request_.job.content_type == kPngMimeType;
 }
 
 bool PrintJobSubmitter::CheckPrintTicket() {
@@ -134,24 +146,28 @@ bool PrintJobSubmitter::CheckPrintTicket() {
 void PrintJobSubmitter::CheckPrinter() {
   CHECK(local_printer_);
   local_printer_->GetCapability(
+      // TODO(crbug.com/354842935): Replace by ash::AnnotatedAccountId.
+      // TODO(crbug.com/479647640): Check if we should use current user than
+      // primary user.
+      user_manager::UserManager::Get()->GetPrimaryUser()->GetAccountId(),
       request_.job.printer_id,
       base::BindOnce(&PrintJobSubmitter::CheckCapabilitiesCompatibility,
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
 void PrintJobSubmitter::CheckCapabilitiesCompatibility(
-    crosapi::mojom::CapabilitiesResponsePtr caps) {
-  if (!caps) {
+    base::optional_ref<const chromeos::Printer> printer,
+    const std::optional<::printing::PrinterSemanticCapsAndDefaults>& caps) {
+  if (!printer.has_value()) {
     FireErrorCallback(kInvalidPrinterId);
     return;
   }
-  printer_name_ = base::UTF8ToUTF16(caps->basic_info->name);
-  if (!caps->capabilities) {
+  printer_name_ = base::UTF8ToUTF16(printer->display_name());
+  if (!caps.has_value()) {
     FireErrorCallback(kPrinterUnavailable);
     return;
   }
-  if (!CheckSettingsAndCapabilitiesCompatibility(*settings_,
-                                                 *caps->capabilities)) {
+  if (!CheckSettingsAndCapabilitiesCompatibility(*settings_, *caps)) {
     FireErrorCallback(kUnsupportedTicket);
     return;
   }
@@ -160,10 +176,17 @@ void PrintJobSubmitter::CheckCapabilitiesCompatibility(
 
 void PrintJobSubmitter::ReadDocumentData() {
   CHECK(request_.document_blob_uuid);
-  pdf_blob_data_flattener_->ReadAndFlattenPdf(
-      browser_context_->GetBlobRemote(*request_.document_blob_uuid),
-      base::BindOnce(&PrintJobSubmitter::OnPdfReadAndFlattened,
-                     weak_ptr_factory_.GetWeakPtr()));
+  if (request_.job.content_type == kPdfMimeType) {
+    pdf_blob_data_flattener_->ReadAndFlattenPdf(
+        browser_context_->GetBlobRemote(*request_.document_blob_uuid),
+        base::BindOnce(&PrintJobSubmitter::OnPdfReadAndFlattened,
+                       weak_ptr_factory_.GetWeakPtr()));
+  } else {
+    BlobReader::Read(
+        browser_context_->GetBlobRemote(*request_.document_blob_uuid),
+        base::BindOnce(&PrintJobSubmitter::OnImageDataRead,
+                       weak_ptr_factory_.GetWeakPtr()));
+  }
 }
 
 void PrintJobSubmitter::OnPdfReadAndFlattened(
@@ -185,6 +208,43 @@ void PrintJobSubmitter::OnPdfReadAndFlattened(
           extension_.get(), gfx::Size(kIconSize, kIconSize),
           base::BindOnce(&PrintJobSubmitter::ShowPrintJobConfirmationDialog,
                          weak_ptr_factory_.GetWeakPtr()));
+}
+
+// Handle PNG input by converting it to PDF, and then sending the resulting
+// PDF to the printer like we would if it had been submitted directly.
+void PrintJobSubmitter::OnImageDataRead(std::string data,
+                                        int64_t /*blob_total_size*/) {
+  // Note: `data` must outlive `image_data` and `codec`.
+  std::unique_ptr<SkMemoryStream> image_data = std::make_unique<SkMemoryStream>(
+      gfx::MakeSkDataFromSpanWithoutCopy(base::as_byte_span(data)));
+  std::unique_ptr<SkCodec> codec =
+      SkPngRustDecoder::Decode(std::move(image_data), nullptr);
+  if (!codec) {
+    LOG(WARNING) << "Failed to decode PNG";
+    FireErrorCallback(kInvalidData);
+    return;
+  }
+
+  auto img_tuple = codec->getImage();
+  CHECK_EQ(std::get<1>(img_tuple), SkCodec::Result::kSuccess);
+  sk_sp<SkImage> image = std::get<0>(img_tuple);
+
+  SkDynamicMemoryWStream buffer;
+  SkPDF::Metadata metadata;
+  auto pdf_document = SkPDF::MakeDocument(&buffer, metadata);
+  CHECK(pdf_document);
+  SkCanvas* canvas = pdf_document->beginPage(image->width(), image->height());
+  canvas->drawImage(image, 0, 0);
+  pdf_document->endPage();
+  pdf_document->close();
+
+  // The generated PDF consists of a single image and does not contain forms,
+  // JavaScript, etc. So it is already flattened, and can be treated as such.
+  sk_sp<SkData> pdf_data = buffer.detachAsData();
+  auto metafile = std::make_unique<printing::MetafileSkia>();
+  CHECK(metafile->InitFromData(gfx::SkDataToSpan(pdf_data)));
+  OnPdfReadAndFlattened(
+      std::make_unique<printing::FlattenPdfResult>(std::move(metafile), 1));
 }
 
 void PrintJobSubmitter::ShowPrintJobConfirmationDialog(

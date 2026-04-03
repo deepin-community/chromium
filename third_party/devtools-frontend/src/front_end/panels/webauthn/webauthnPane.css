@@ -1,176 +1,197 @@
 /*
- * Copyright (c) 2020 The Chromium Authors. All rights reserved.
+ * Copyright 2020 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
+@scope to (devtools-widget > *) {
+  .webauthn-pane {
+    overflow: auto;
+    min-width: 500px;
+  }
 
-.webauthn-pane {
-  overflow: auto;
-  min-width: 500px;
-}
+  .webauthn-toolbar-container {
+    display: flex;
+    background-color: var(--sys-color-cdt-base-container);
+    border-bottom: 1px solid var(--sys-color-divider);
+    flex: 0 0 auto;
+  }
 
-.webauthn-toolbar-container {
-  display: flex;
-  background-color: var(--sys-color-cdt-base-container);
-  border-bottom: 1px solid var(--sys-color-divider);
-  flex: 0 0 auto;
-}
+  .webauthn-toolbar {
+    display: inline-block;
+  }
 
-.webauthn-toolbar {
-  display: inline-block;
-}
+  .authenticators-view {
+    padding: 0 var(--sys-size-9);
+    min-height: auto;
+    display: none;
+  }
 
-.authenticators-view {
-  margin: 0 10px;
-  min-height: auto;
-  display: none;
-}
+  .webauthn-pane.enabled .authenticators-view {
+    display: block;
+  }
 
-.webauthn-pane.enabled .authenticators-view {
-  display: block;
-}
-/* New Authenticator Section */
-.new-authenticator-title {
-  line-height: 24px;
-  font-weight: bold;
-  display: block;
-}
+  /* New Authenticator Section */
+  .new-authenticator-title {
+    display: block;
+    padding: var(--sys-size-7) 0 var(--sys-size-5) 0;
+    font: var(--sys-typescale-headline5);
 
-.new-authenticator-container {
-  display: none;
-  margin: 10px;
-}
+    &:has(devtools-button) {
+      padding-top: var(--sys-size-4);
+    }
+  }
 
-.webauthn-pane.enabled .new-authenticator-container {
-  display: block;
-}
+  .new-authenticator-container {
+    display: none;
+    padding-left:  var(--sys-size-9);
+  }
 
-.new-authenticator-form {
-  border: none;
-  padding: 10px 0;
-  flex: 0 0 auto;
-  margin: 0;
-}
+  .authenticator-option {
+    > select {
+      margin: 0 var(--sys-size-9) var(--sys-size-3) var(--sys-size-9);
+    }
 
-.webauthn-pane .chrome-select {
-  width: 120px;
-}
-/* Active Authenticator Section */
-.authenticator-section {
-  display: block;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--sys-color-divider);
-}
+    > devtools-button {
+      margin: var(--sys-size-3) var(--sys-size-9);
+    }
 
-.authenticator-fields {
-  border: none;
-  padding: 10px 0;
-  flex: 0 0 auto;
-  margin: 0;
-}
+    > input[type="checkbox"] {
+      margin: var(--sys-size-5) var(--sys-size-9);
+    }
+  }
 
-.authenticator-field {
-  display: flex;
-  margin: auto;
-}
+  .webauthn-pane.enabled .new-authenticator-container {
+    display: block;
+  }
 
-.authenticator-section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-}
+  .new-authenticator-form {
+    border: none;
+    flex: 0 0 auto;
+    margin: 0;
+    padding-bottom: var(--sys-size-5);
+  }
 
-.authenticator-section-title {
-  line-height: 24px;
-  display: inline-block;
-}
+  .webauthn-pane select {
+    width: 120px;
+  }
+  /* Active Authenticator Section */
+  .authenticator-section {
+    display: block;
+  }
 
-.authenticator-section-title .authenticator-name-field {
-  display: inline-block;
-  font-weight: bold;
-  border: none;
-  animation: save-flash 0.2s;
-  text-overflow: ellipsis;
-}
+  .divider {
+    border-bottom: var(--sys-size-1) solid var(--sys-color-divider);
+    margin: 10px calc(var(--sys-size-9) * -1) 0;
+  }
 
-.authenticator-section-title.editing-name .authenticator-name-field {
-  border-bottom: 1px solid var(--sys-color-neutral-outline);
-  font-weight: normal;
-  animation: none;
-}
+  .authenticator-fields {
+    border: none;
+    flex: 0 0 auto;
+    margin-bottom: 10px;
+  }
 
-.authenticator-field-value {
-  padding: 5px 0;
-  display: inline-block;
-  font-family: monospace;
-}
+  .authenticator-section-header {
+    margin: var(--sys-size-4) 0 var(--sys-size-5) calc(var(--sys-size-5) * -1);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }
 
-.authenticator-option-checkbox {
-  position: relative;
-  top: 2px;
-}
+  .authenticator-section-title {
+    line-height: 24px;
+    display: inline-flex;
+  }
 
-.authenticator-option {
-  display: flex;
-  padding-bottom: 10px;
-  margin: auto;
-}
+  .authenticator-section-title .authenticator-name-field {
+    display: inline-block;
+    border: none;
+    animation: save-flash 0.2s;
+    text-overflow: ellipsis;
+    font: var(--sys-typescale-headline5);
+  }
 
-.authenticator-option-label {
-  text-align: right;
-  width: 200px;
-  display: inline-block;
-  padding: 5px 10px 0 0;
-}
+  .authenticator-section-title.editing-name .authenticator-name-field {
+    border-bottom: 1px solid var(--sys-color-neutral-outline);
+    font-weight: normal;
+    animation: none;
+  }
 
-td .text-button {
-  min-width: 20px;
-  margin: auto;
-}
+  .authenticator-field-value {
+    font: var(--sys-typescale-monospace-regular);
+    line-height: 18px;
+  }
 
-.active-button-container {
-  display: inline-block;
-  min-width: 28px;
-}
+  .authenticator-field {
+    margin: var(--sys-size-3) 0;
+  }
 
-.edit-name-toolbar {
-  display: inline-block;
-  vertical-align: middle;
-}
+  .authenticator-field,
+  .authenticator-option {
+    display: flex;
+    align-items: center;
+  }
 
-@keyframes save-flash {
-  from { opacity: 0%; }
-  to { opacity: 100%; }
-}
-/* Credentials Table */
+  .authenticator-option-label {
+    color: var(--sys-color-on-surface-subtle);
+    font: var(--sys-typescale-body5-medium);
+    padding-right: var(--sys-size-6);
+    text-align: left;
+    min-width: 152px;
+    line-height: 18px;
+  }
 
-.data-grid-data-grid-node.centered {
-  text-align: center;
-}
+  ::part(action-button) {
+    min-width: 20px;
+    margin: 4px;
+  }
 
-.data-grid td {
-  vertical-align: middle;
-}
+  .active-button-container {
+    display: inline-block;
+    min-width: 28px;
+  }
 
-.credentials-title {
-  display: block;
-  font-weight: bold;
-  margin: 8px 0;
-}
+  .edit-name-toolbar {
+    display: inline-block;
+    vertical-align: middle;
+  }
 
-.code {
-  font-family: monospace;
-}
+  @keyframes save-flash {
+    from { opacity: 0%; }
+    to { opacity: 100%; }
+  }
+  /* Credentials Table */
 
-.learn-more {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 100%;
-  text-align: center;
-  overflow: hidden;
-}
+  ::part(credentialId-column),
+  ::part(isResidentCredential-column),
+  ::part(rpId-column),
+  ::part(userHandle-column),
+  ::part(signCount-column),
+  ::part(actions-column) {
+    vertical-align: middle;
+  }
 
-.webauthn-pane.enabled .learn-more {
-  display: none;
+  .credentials-title {
+    display: block;
+    font: var(--sys-typescale-headline5);
+    padding: var(--sys-size-7) 0 var(--sys-size-5) 0;
+    border-top: var(--sys-size-1) solid var(--sys-color-divider);
+    margin-right: calc(var(--sys-size-9) * -1);
+  }
+
+  .code {
+    font-family: monospace;
+  }
+
+  .learn-more {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    text-align: center;
+    overflow: hidden;
+  }
+
+  .webauthn-pane.enabled .learn-more {
+    display: none;
+  }
 }

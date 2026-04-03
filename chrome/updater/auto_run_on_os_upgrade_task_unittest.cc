@@ -18,12 +18,13 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/bind.h"
+#include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
 #include "chrome/updater/activity.h"
 #include "chrome/updater/persisted_data.h"
-#include "chrome/updater/test_scope.h"
-#include "chrome/updater/util/unit_test_util.h"
-#include "chrome/updater/util/unit_test_util_win.h"
+#include "chrome/updater/test/test_scope.h"
+#include "chrome/updater/test/unit_test_util.h"
+#include "chrome/updater/test/unit_test_util_win.h"
 #include "chrome/updater/util/win_util.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
@@ -47,19 +48,19 @@ constexpr char kLastOSVersion[] = "last_os_version";
 
 class AutoRunOnOsUpgradeTaskTest : public testing::Test {
  protected:
-  AutoRunOnOsUpgradeTaskTest() = default;
-  ~AutoRunOnOsUpgradeTaskTest() override = default;
-
   void SetUp() override {
     pref_service_ = std::make_unique<TestingPrefServiceSimple>();
     update_client::RegisterPrefs(pref_service_->registry());
     RegisterPersistedDataPrefs(pref_service_->registry());
     persisted_data_ = base::MakeRefCounted<PersistedData>(
-        GetTestScope(), pref_service_.get(), nullptr);
-    SetupCmdExe(GetTestScope(), cmd_exe_command_line_, temp_programfiles_dir_);
+        GetUpdaterScopeForTesting(), pref_service_.get(), nullptr);
+    test::SetupCmdExe(GetUpdaterScopeForTesting(), cmd_exe_command_line_,
+                      temp_programfiles_dir_);
   }
 
-  void TearDown() override { DeleteAppClientKey(GetTestScope(), kAppId); }
+  void TearDown() override {
+    test::DeleteAppClientKey(GetUpdaterScopeForTesting(), kAppId);
+  }
 
   void SetLastOSVersion(const OSVERSIONINFOEX& os_version) {
     EXPECT_TRUE(pref_service_);
@@ -74,6 +75,7 @@ class AutoRunOnOsUpgradeTaskTest : public testing::Test {
   std::unique_ptr<TestingPrefServiceSimple> pref_service_;
   base::CommandLine cmd_exe_command_line_{base::CommandLine::NO_PROGRAM};
   base::ScopedTempDir temp_programfiles_dir_;
+  base::test::TaskEnvironment environment_;
 };
 
 TEST_F(AutoRunOnOsUpgradeTaskTest, RunOnOsUpgradeForApp) {
@@ -87,19 +89,19 @@ TEST_F(AutoRunOnOsUpgradeTaskTest, RunOnOsUpgradeForApp) {
   SetLastOSVersion(last_os_version);
 
   auto os_upgrade_task = base::MakeRefCounted<AutoRunOnOsUpgradeTask>(
-      GetTestScope(), persisted_data_);
+      GetUpdaterScopeForTesting(), persisted_data_);
   ASSERT_TRUE(os_upgrade_task->HasOSUpgraded());
 
-  CreateAppCommandOSUpgradeRegistry(
-      GetTestScope(), kAppId, kCmdId1,
+  test::CreateAppCommandOSUpgradeRegistry(
+      GetUpdaterScopeForTesting(), kAppId, kCmdId1,
       base::StrCat({cmd_exe_command_line_.GetCommandLineString(), L" ",
                     kCmdLineCreateOSVersionsFile}));
-  CreateAppCommandOSUpgradeRegistry(
-      GetTestScope(), kAppId, kCmdId2,
+  test::CreateAppCommandOSUpgradeRegistry(
+      GetUpdaterScopeForTesting(), kAppId, kCmdId2,
       base::StrCat({cmd_exe_command_line_.GetCommandLineString(), L" ",
                     kCmdLineCreateHardcodedFile}));
 
-  ASSERT_EQ(os_upgrade_task->RunOnOsUpgradeForApp(base::WideToASCII(kAppId)),
+  ASSERT_EQ(os_upgrade_task->RunOnOsUpgradeForApp(base::WideToUTF8(kAppId)),
             2U);
 
   const std::wstring os_upgrade_string = [&] {
@@ -110,7 +112,7 @@ TEST_F(AutoRunOnOsUpgradeTaskTest, RunOnOsUpgradeForApp) {
           version.dwBuildNumber, version.wServicePackMajor,
           version.wServicePackMinor, versions.empty() ? "-" : "");
     }
-    return base::ASCIIToWide(versions);
+    return base::UTF8ToWide(versions);
   }();
 
   base::FilePath current_directory;

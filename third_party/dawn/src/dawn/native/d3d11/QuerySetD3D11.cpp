@@ -60,7 +60,7 @@ MaybeError QuerySet::Initialize() {
     return {};
 }
 
-void QuerySet::DestroyImpl() {
+void QuerySet::DestroyImpl(DestroyReason reason) {
     // TODO(crbug.com/dawn/831): DestroyImpl is called from two places.
     // - It may be called if the query set is explicitly destroyed with APIDestroy.
     //   This case is NOT thread-safe and needs proper synchronization with other
@@ -68,7 +68,7 @@ void QuerySet::DestroyImpl() {
     // - It may be called when the last ref to the query set is dropped and it
     //   is implicitly destroyed. This case is thread-safe because there are no
     //   other threads using the query set since there are no other live refs.
-    QuerySetBase::DestroyImpl();
+    QuerySetBase::DestroyImpl(reason);
     mPredicates.clear();
 }
 
@@ -93,15 +93,12 @@ MaybeError QuerySet::Resolve(const ScopedSwapStateCommandRecordingContext* comma
                              uint64_t offset) {
     DAWN_TRY(destination->Clear(commandContext, 0, offset, queryCount * sizeof(uint64_t)));
     const auto& queryAvailability = GetQueryAvailability();
-    ID3D11DeviceContext* d3d11DeviceContext = commandContext->GetD3D11DeviceContext4();
     for (uint32_t i = 0; i < queryCount; ++i) {
         uint32_t queryIndex = i + firstQuery;
         if (queryAvailability[queryIndex]) {
             auto& predicate = mPredicates[queryIndex];
-            d3d11DeviceContext->SetPredication(predicate.Get(), false);
-            DAWN_TRY(destination->Clear(commandContext, 1, offset + i * sizeof(uint64_t),
-                                        sizeof(uint64_t)));
-            d3d11DeviceContext->SetPredication(nullptr, false);
+            DAWN_TRY(destination->PredicatedClear(commandContext, predicate.Get(), 1,
+                                                  offset + i * sizeof(uint64_t), sizeof(uint64_t)));
         }
     }
     return {};

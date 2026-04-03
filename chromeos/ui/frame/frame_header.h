@@ -8,16 +8,16 @@
 #include <string>
 
 #include "base/component_export.h"
-#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
-#include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
-#include "chromeos/ui/frame/caption_buttons/frame_center_button.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/layer_observer.h"
-#include "ui/views/window/frame_caption_button.h"
+#include "ui/compositor/layer_owner.h"
+#include "ui/views/view.h"
+#include "ui/views/view_observer.h"
 
 namespace ash {
 FORWARD_DECLARE_TEST(DefaultFrameHeaderTest, BackButtonAlignment);
@@ -38,14 +38,16 @@ class LayerTreeOwner;
 
 namespace views {
 enum class CaptionButtonLayoutSize;
-class NonClientFrameView;
-class View;
+class FrameCaptionButton;
+class FrameView;
 class Widget;
 }  // namespace views
 
 namespace chromeos {
 
 class CaptionButtonModel;
+class FrameCenterButton;
+class FrameCaptionButtonContainerView;
 
 // Helper class for managing the window header.
 class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameHeader
@@ -94,7 +96,7 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameHeader
   // frame animator view to still be at the bottom of the z-order while also
   // keeping the rest of the frame view's children on top of the client view.
   static views::View::Views GetAdjustedChildrenInZOrder(
-      views::NonClientFrameView* frame_view);
+      views::FrameView* frame_view);
 
   FrameHeader(const FrameHeader&) = delete;
   FrameHeader& operator=(const FrameHeader&) = delete;
@@ -134,7 +136,7 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameHeader
   virtual void SetPaintAsActive(bool paint_as_active);
 
   // Called when frame show state is changed.
-  void OnShowStateChanged(ui::WindowShowState show_state);
+  void OnShowStateChanged(ui::mojom::WindowShowState show_state);
 
   void OnFloatStateChanged();
 
@@ -152,9 +154,6 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameHeader
   // Updates the frame header painting to reflect a change in frame colors and a
   // change in mode.
   virtual void UpdateFrameColors() = 0;
-
-  // Returns window mask for the rounded corner of the frame header.
-  virtual SkPath GetWindowMaskForFrameHeader(const gfx::Size& size);
 
   // Sets text to display in place of the window's title. This will be shown
   // regardless of what ShouldShowWindowTitle() returns.
@@ -225,7 +224,7 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameHeader
 
   // The widget that the caption buttons act on. This can be different from
   // |view_|'s widget.
-  raw_ptr<views::Widget, DanglingUntriaged> target_widget_;
+  raw_ptr<views::Widget> target_widget_;
 
   // The view into which |this| paints.
   raw_ptr<views::View, DanglingUntriaged> view_;

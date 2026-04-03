@@ -20,6 +20,7 @@ package perfetto.protos;
 
 import "protos/perfetto/common/descriptor.proto";
 import "protos/perfetto/trace_processor/metatrace_categories.proto";
+import "protos/perfetto/trace_summary/file.proto";
 
 // This file defines the schema for {,un}marshalling arguments and return values
 // when interfacing to the trace processor binary interface.
@@ -38,9 +39,18 @@ import "protos/perfetto/trace_processor/metatrace_categories.proto";
 
 enum TraceProcessorApiVersion {
   // This variable has been introduced in v15 and is used to deal with API
-  // mismatches between UI and trace_processor_shell --httpd. Increment this
-  // every time a new feature that the UI depends on is being introduced (e.g.
-  // new tables, new SQL operators, metrics that are required by the UI).
+  // mismatches between UI and trace_processor_shell --httpd.
+  //
+  // Prior to API version 11 this was incremented every time a new
+  // feature that the UI depended on was introduced (e.g. new tables,
+  // new SQL operators, metrics that are required by the UI, etc).
+  // This:
+  // a. Tended to be forgotten
+  // b. Still led to issues when the TP dropped *backwards*
+  //    compatibility of a feature (since we checked TP >= UI
+  //    TRACE_PROCESSOR_CURRENT_API_VERSION).
+  // Now the UI attempts to redirect the user to the matched version
+  // of the UI if one exists.
   // See also StatusResult.api_version (below).
   // Changes:
   // 7. Introduce GUESS_CPU_SIZE
@@ -48,10 +58,14 @@ enum TraceProcessorApiVersion {
   // 9. Add get_thread_state_summary_for_interval.
   // 10. Add 'slice_is_ancestor' to stdlib.
   // 11. Removal of experimental module from stdlib.
-  TRACE_PROCESSOR_CURRENT_API_VERSION = 11;
+  // 12. Changed UI to be more aggresive about version matching.
+  //     Added version_code.
+  // 13. Added TPM_REGISTER_SQL_MODULE method.
+  // 14. Added parsing mode option to RESET method.
+  TRACE_PROCESSOR_CURRENT_API_VERSION = 14;
 }
 
-// At lowest level, the wire-format of the RPC procol is a linear sequence of
+// At lowest level, the wire-format of the RPC protocol is a linear sequence of
 // TraceProcessorRpc messages on each side of the byte pipe
 // Each message is prefixed by a tag (field = 1, type = length delimited) and a
 // varint encoding its size (this is so the whole stream can also be read /
@@ -76,13 +90,16 @@ message TraceProcessorRpc {
   optional string fatal_error = 5;
 
   enum TraceProcessorMethod {
+    reserved 4, 12, 14;
+    reserved "TPM_QUERY_RAW_DEPRECATED";
+    reserved "TPM_REGISTER_SQL_MODULE";
+    reserved "TPM_ANALYZE_STRUCTURED_QUERY";
+
     TPM_UNSPECIFIED = 0;
     TPM_APPEND_TRACE_DATA = 1;
     TPM_FINALIZE_TRACE_DATA = 2;
     TPM_QUERY_STREAMING = 3;
     // Previously: TPM_QUERY_RAW_DEPRECATED
-    reserved 4;
-    reserved "TPM_QUERY_RAW_DEPRECATED";
     TPM_COMPUTE_METRIC = 5;
     TPM_GET_METRIC_DESCRIPTORS = 6;
     TPM_RESTORE_INITIAL_TABLES = 7;
@@ -90,6 +107,13 @@ message TraceProcessorRpc {
     TPM_DISABLE_AND_READ_METATRACE = 9;
     TPM_GET_STATUS = 10;
     TPM_RESET_TRACE_PROCESSOR = 11;
+    TPM_REGISTER_SQL_PACKAGE = 13;
+    // Previously: TPM_ANALYZE_STRUCTURED_QUERY
+    TPM_SUMMARIZE_TRACE = 15;
+    TPM_CREATE_SUMMARIZER = 16;
+    TPM_UPDATE_SUMMARIZER_SPEC = 17;
+    TPM_QUERY_SUMMARIZER = 18;
+    TPM_DESTROY_SUMMARIZER = 19;
   }
 
   oneof type {
@@ -121,6 +145,18 @@ message TraceProcessorRpc {
     EnableMetatraceArgs enable_metatrace_args = 106;
     // For TPM_RESET_TRACE_PROCESSOR.
     ResetTraceProcessorArgs reset_trace_processor_args = 107;
+    // For TPM_REGISTER_SQL_PACKAGE.
+    RegisterSqlPackageArgs register_sql_package_args = 108;
+    // For TPM_SUMMARIZE_TRACE.
+    TraceSummaryArgs trace_summary_args = 110;
+    // For TPM_CREATE_SUMMARIZER.
+    CreateSummarizerArgs create_summarizer_args = 111;
+    // For TPM_UPDATE_SUMMARIZER_SPEC.
+    UpdateSummarizerSpecArgs update_summarizer_spec_args = 112;
+    // For TPM_QUERY_SUMMARIZER.
+    QuerySummarizerArgs query_summarizer_args = 113;
+    // For TPM_DESTROY_SUMMARIZER.
+    DestroySummarizerArgs destroy_summarizer_args = 114;
 
     // TraceProcessorMethod response args.
     // For TPM_APPEND_TRACE_DATA.
@@ -135,12 +171,30 @@ message TraceProcessorRpc {
     DisableAndReadMetatraceResult metatrace = 209;
     // For TPM_GET_STATUS.
     StatusResult status = 210;
+    // For TPM_REGISTER_SQL_PACKAGE.
+    RegisterSqlPackageResult register_sql_package_result = 211;
+    // For TPM_FINALIZE_TRACE_DATA.
+    FinalizeDataResult finalize_data_result = 212;
+    // For TPM_SUMMARIZE_TRACE.
+    TraceSummaryResult trace_summary_result = 214;
+    // For TPM_CREATE_SUMMARIZER.
+    CreateSummarizerResult create_summarizer_result = 215;
+    // For TPM_UPDATE_SUMMARIZER_SPEC.
+    UpdateSummarizerSpecResult update_summarizer_spec_result = 216;
+    // For TPM_QUERY_SUMMARIZER.
+    QuerySummarizerResult query_summarizer_result = 217;
+    // For TPM_DESTROY_SUMMARIZER.
+    DestroySummarizerResult destroy_summarizer_result = 218;
   }
 
   // Previously: RawQueryArgs for TPM_QUERY_RAW_DEPRECATED
   reserved 104;
   // Previously: RawQueryResult for TPM_QUERY_RAW_DEPRECATED
   reserved 204;
+  // Previously: AnalyzeStructuredQueryArgs for TPM_ANALYZE_STRUCTURED_QUERY
+  reserved 109;
+  // Previously: AnalyzeStructuredQueryResult for TPM_ANALYZE_STRUCTURED_QUERY
+  reserved 213;
 }
 
 message AppendTraceDataResult {
@@ -216,6 +270,11 @@ message QueryResult {
 
   // The last statement in the provided SQL.
   optional string last_statement_sql = 6;
+
+  // Time taken so far to execute the query and iterate the results in
+  // milliseconds. If this query is comprised of multiple messages, this field
+  // will contain the cumulative time taken so far.
+  optional double elapsed_time_ms = 7;
 }
 
 // Input for the /status endpoint.
@@ -236,6 +295,15 @@ message StatusResult {
   // The API version is incremented every time a change that the UI depends
   // on is introduced (e.g. adding a new table that the UI queries).
   optional int32 api_version = 3;
+
+  // Typically something like "v42.1-deadbeef0", but could be just
+  // "v42", "v0.0", or unset for binaries built from Bazel or other
+  // build configurations. This can be compared with equality to other
+  // version codes to detect matched builds (for example to see if
+  // trace_processor_shell and the UI were built at the same revision)
+  // but you should not attempt to parse it as the format may change
+  // without warning.
+  optional string version_code = 4;
 }
 
 // Input for the /compute_metric endpoint.
@@ -294,16 +362,136 @@ message DescriptorSet {
   repeated DescriptorProto descriptors = 1;
 }
 
-// Input for setting Trace Processor config. This method works only in the WASM
-// mode. trace_processor_shell supports configuration through command line
-// flags.
+// Input for setting Trace Processor config.
 message ResetTraceProcessorArgs {
   enum DropTrackEventDataBefore {
     NO_DROP = 0;
     TRACK_EVENT_RANGE_OF_INTEREST = 1;
   }
+  enum ParsingMode {
+    DEFAULT = 0;
+    TOKENIZE_ONLY = 1;
+    TOKENIZE_AND_SORT = 2;
+  }
+  enum SortingMode {
+    DEFAULT_HEURISTICS = 0;
+    FORCE_FULL_SORT = 1;
+  }
   // Mirror of the corresponding perfetto::trace_processor::Config fields.
   optional DropTrackEventDataBefore drop_track_event_data_before = 1;
   optional bool ingest_ftrace_in_raw_table = 2;
   optional bool analyze_trace_proto_content = 3;
+  optional bool ftrace_drop_until_all_cpus_valid = 4;
+  optional ParsingMode parsing_mode = 5;
+  optional SortingMode sorting_mode = 6;
+
+  // A list of serialized FileDescriptorSet protos.
+  repeated bytes extra_parsing_descriptors = 7;
+}
+
+message RegisterSqlPackageArgs {
+  message Module {
+    optional string name = 1;
+    optional string sql = 2;
+  }
+  optional string package_name = 1;
+  repeated Module modules = 2;
+  optional bool allow_override = 3;
+}
+
+message RegisterSqlPackageResult {
+  optional string error = 1;
+}
+
+message FinalizeDataResult {
+  optional string error = 1;
+}
+
+message TraceSummaryArgs {
+  message ComputationSpec {
+    repeated string metric_ids = 1;
+    optional bool run_all_metrics = 3;
+    optional string metadata_query_id = 2;
+  }
+  enum Format {
+    BINARY_PROTOBUF = 0;
+    TEXTPROTO = 1;
+  }
+  repeated TraceSummarySpec proto_specs = 1;
+  repeated string textproto_specs = 2;
+  optional ComputationSpec computation_spec = 3;
+  optional Format output_format = 4;
+}
+
+message TraceSummaryResult {
+  oneof summary {
+    bytes proto_summary = 1;
+    string textproto_summary = 2;
+  }
+  optional string error = 3;
+}
+
+// Input for TPM_CREATE_SUMMARIZER.
+message CreateSummarizerArgs {
+  // Client-specified summarizer ID. Must be unique per TraceProcessor instance.
+  optional string summarizer_id = 1;
+}
+
+// Output for TPM_CREATE_SUMMARIZER.
+message CreateSummarizerResult {
+  // The generated summarizer ID. Use this ID in subsequent calls.
+  optional string summarizer_id = 1;
+  optional string error = 2;
+}
+
+// Input for TPM_UPDATE_SUMMARIZER_SPEC.
+message UpdateSummarizerSpecArgs {
+  optional string summarizer_id = 1;
+  optional TraceSummarySpec spec = 2;
+}
+
+// Per-query sync info for Summarizer.
+message SummarizerQuerySyncInfo {
+  optional string query_id = 1;
+  optional string error = 2;
+  optional bool was_updated = 3;
+  optional bool was_dropped = 4;
+}
+
+// Output for TPM_UPDATE_SUMMARIZER_SPEC.
+message UpdateSummarizerSpecResult {
+  repeated SummarizerQuerySyncInfo queries = 1;
+  optional string error = 2;
+}
+
+// Input for TPM_QUERY_SUMMARIZER.
+message QuerySummarizerArgs {
+  optional string summarizer_id = 1;
+  optional string query_id = 2;
+}
+
+// Output for TPM_QUERY_SUMMARIZER.
+message QuerySummarizerResult {
+  optional bool exists = 1;
+  optional string table_name = 2;
+  optional int64 row_count = 3;
+  repeated string columns = 4;
+  optional double duration_ms = 5;
+  optional string error = 6;
+  // SQL used for execution (may reference materialized tables like _exp_mat_X).
+  optional string sql = 7;
+  optional string textproto = 8;
+  // Fully standalone SQL that can be copied and run anywhere.
+  // Does not reference any internal materialized tables.
+  optional string standalone_sql = 9;
+}
+
+// Input for TPM_DESTROY_SUMMARIZER.
+message DestroySummarizerArgs {
+  optional string summarizer_id = 1;
+}
+
+// Output for TPM_DESTROY_SUMMARIZER.
+message DestroySummarizerResult {
+  optional string error = 1;
 }

@@ -8,8 +8,9 @@
 #include <string>
 
 #include "base/files/scoped_temp_dir.h"
+#include "base/test/test_future.h"
 #include "base/time/time.h"
-#include "components/os_crypt/sync/os_crypt_mocker.h"
+#include "components/os_crypt/async/browser/test_utils.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_store/login_database.h"
 #include "sql/database.h"
@@ -33,36 +34,43 @@ using testing::IsEmpty;
 using testing::SizeIs;
 using testing::UnorderedElementsAre;
 
-// TODO(crbug.com/1326554): Update the tests in this file to cover
+// TODO(crbug.com/40225853): Update the tests in this file to cover
 // reading/writing of fields other than the note value.
 class PasswordNotesTableTest : public testing::Test {
  protected:
   void SetUp() override {
-    OSCryptMocker::SetUp();
-
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+    test_oscrypt_async_ = os_crypt_async::GetTestOSCryptAsyncForTesting(
+        /*is_sync_for_unittests=*/true);
     ReloadDatabase();
   }
 
   void TearDown() override {
     login_db_.reset();
-    OSCryptMocker::TearDown();
   }
 
   void ReloadDatabase() {
     base::FilePath file = temp_dir_.GetPath().AppendASCII("TestDatabase");
 
     login_db_ = std::make_unique<LoginDatabase>(file, IsAccountStore(false));
-    ASSERT_TRUE(login_db_->Init());
+    ASSERT_TRUE(login_db_->Init(base::NullCallback(), CreateEncryptor()));
   }
 
   PasswordNotesTable* table() { return &login_db_->password_notes_table(); }
 
   LoginDatabase* login_db() { return login_db_.get(); }
 
+  os_crypt_async::Encryptor CreateEncryptor() {
+    base::test::TestFuture<os_crypt_async::Encryptor> future;
+    test_oscrypt_async_->GetInstance(future.GetCallback(),
+                                     os_crypt_async::Encryptor::Option::kNone);
+    return future.Take();
+  }
+
  private:
   base::ScopedTempDir temp_dir_;
   std::unique_ptr<LoginDatabase> login_db_;
+  std::unique_ptr<os_crypt_async::OSCryptAsync> test_oscrypt_async_;
 };
 
 TEST_F(PasswordNotesTableTest,

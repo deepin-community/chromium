@@ -23,106 +23,6 @@
 
 namespace remoting {
 
-namespace {
-
-bool ShouldSuppressNotifications(
-    const mojom::SupportSessionParams& params,
-    const std::optional<ChromeOsEnterpriseParams>& enterprise_params) {
-  if (enterprise_params.has_value()) {
-    return enterprise_params->suppress_notifications;
-  }
-
-  // On non-debug builds, do not allow setting this value through the Mojom API.
-#if !defined(NDEBUG)
-  return params.suppress_notifications;
-#else
-  return false;
-#endif
-}
-
-bool ShouldSuppressUserDialog(
-    const mojom::SupportSessionParams& params,
-    const std::optional<ChromeOsEnterpriseParams>& enterprise_params) {
-  if (enterprise_params.has_value()) {
-    return enterprise_params->suppress_user_dialogs;
-  }
-
-  // On non-debug builds, do not allow setting this value through the Mojom API.
-#if !defined(NDEBUG)
-  return params.suppress_user_dialogs;
-#else
-  return false;
-#endif
-}
-
-bool ShouldTerminateUponInput(
-    const mojom::SupportSessionParams& params,
-    const std::optional<ChromeOsEnterpriseParams>& enterprise_params) {
-  if (enterprise_params.has_value()) {
-    return enterprise_params->terminate_upon_input;
-  }
-
-  // On non-debug builds, do not allow setting this value through the Mojom API.
-#if !defined(NDEBUG)
-  return params.terminate_upon_input;
-#else
-  return false;
-#endif
-}
-
-bool ShouldCurtainLocalUserSession(
-    const mojom::SupportSessionParams& params,
-    const std::optional<ChromeOsEnterpriseParams>& enterprise_params) {
-  if (!base::FeatureList::IsEnabled(features::kEnableCrdAdminRemoteAccess)) {
-    return false;
-  }
-
-  if (enterprise_params.has_value()) {
-    return enterprise_params->curtain_local_user_session;
-  }
-
-  // On non-debug builds, do not allow setting this value through the Mojom API.
-#if !defined(NDEBUG)
-  return params.curtain_local_user_session;
-#else
-  return false;
-#endif
-}
-
-bool ShouldShowTroubleshootingTools(
-    const std::optional<ChromeOsEnterpriseParams>& enterprise_params) {
-  if (enterprise_params.has_value()) {
-    return enterprise_params->show_troubleshooting_tools;
-  }
-  return false;
-}
-
-bool ShouldAllowTroubleshootingTools(
-    const std::optional<ChromeOsEnterpriseParams>& enterprise_params) {
-  if (enterprise_params.has_value()) {
-    return enterprise_params->allow_troubleshooting_tools;
-  }
-  return false;
-}
-
-bool ShouldAllowReconnections(
-    const std::optional<ChromeOsEnterpriseParams>& enterprise_params) {
-  if (enterprise_params.has_value()) {
-    return enterprise_params->allow_reconnections;
-  }
-  return false;
-}
-
-bool ShouldAllowFileTransfer(
-    const std::optional<ChromeOsEnterpriseParams>& enterprise_params) {
-  if (enterprise_params.has_value()) {
-    return enterprise_params->allow_file_transfer;
-  }
-  return false;
-}
-
-}  // namespace
-
 It2MeNativeMessageHostAsh::It2MeNativeMessageHostAsh(
     std::unique_ptr<It2MeHostFactory> host_factory)
     : host_factory_(std::move(host_factory)) {}
@@ -170,39 +70,16 @@ void It2MeNativeMessageHostAsh::Connect(
   host_state_disconnected_callback_ =
       std::move(host_state_disconnected_callback);
 
-  // The version of Lacros is guaranteed to be at least as new as the code
-  // running in ash so we can remove this shim in M124, however we need it until
-  // then as Lacros will continue sending the oauth2 prefix for back-compat
-  // until that milestone. Basically the shim code in Lacros and Ash can be
-  // removed in the same milestone but the Lacros code needs to stay in place
-  // until the back-compat behavior is no longer required.
-  std::string access_token = params.oauth_access_token;
-  const char kOAuth2ServicePrefix[] = "oauth2:";
-  // Strip the prefix off, if it exists.
-  if (access_token.starts_with(kOAuth2ServicePrefix)) {
-    access_token = access_token.substr(strlen(kOAuth2ServicePrefix));
-  }
-
   auto message =
-      base::Value::Dict()
+      base::DictValue()
           .Set(kMessageType, kConnectMessage)
           .Set(kUserName, params.user_name)
-          .Set(kAccessToken, access_token)
-          .Set(kSuppressUserDialogs,
-               ShouldSuppressUserDialog(params, enterprise_params))
-          .Set(kSuppressNotifications,
-               ShouldSuppressNotifications(params, enterprise_params))
-          .Set(kTerminateUponInput,
-               ShouldTerminateUponInput(params, enterprise_params))
-          .Set(kCurtainLocalUserSession,
-               ShouldCurtainLocalUserSession(params, enterprise_params))
-          .Set(kShowTroubleshootingTools,
-               ShouldShowTroubleshootingTools(enterprise_params))
-          .Set(kAllowTroubleshootingTools,
-               ShouldAllowTroubleshootingTools(enterprise_params))
-          .Set(kAllowReconnections, ShouldAllowReconnections(enterprise_params))
-          .Set(kAllowFileTransfer, ShouldAllowFileTransfer(enterprise_params))
+          .Set(kAccessToken, params.oauth_access_token)
           .Set(kIsEnterpriseAdminUser, enterprise_params.has_value());
+  if (enterprise_params.has_value()) {
+    message.Merge(enterprise_params->ToDict());
+  }
+
   if (params.authorized_helper.has_value()) {
     message.Set(kAuthorizedHelper, *params.authorized_helper);
   }
@@ -223,7 +100,7 @@ void It2MeNativeMessageHostAsh::Disconnect() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   native_message_host_->OnMessage(*base::WriteJson(
-      base::Value::Dict().Set(kMessageType, kDisconnectMessage)));
+      base::DictValue().Set(kMessageType, kDisconnectMessage)));
 
   // Notify the owner that the host has been disconnected.  This will result in
   // the destruction of this object so do not access member variables after this
@@ -235,7 +112,7 @@ void It2MeNativeMessageHostAsh::PostMessageFromNativeHost(
     const std::string& message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   std::string type;
-  base::Value::Dict contents;
+  base::DictValue contents;
   if (!ParseNativeMessageJson(message, type, contents)) {
     CloseChannel(std::string());
     return;
@@ -243,7 +120,7 @@ void It2MeNativeMessageHostAsh::PostMessageFromNativeHost(
 
   if (type.empty()) {
     LOG(ERROR) << "'type' not found in request.";
-    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
+    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INVALID_ARGUMENT));
     return;
   }
 
@@ -251,9 +128,6 @@ void It2MeNativeMessageHostAsh::PostMessageFromNativeHost(
     HandleConnectResponse();
   } else if (type == kDisconnectResponse) {
     HandleDisconnectResponse();
-  } else if (type == kIncomingIqResponse) {
-    // These responses do not need to be handled as the Lacros NMH sends a
-    // response when the request message is first received.
   } else if (type == kHostStateChangedMessage) {
     HandleHostStateChangeMessage(std::move(contents));
   } else if (type == kNatPolicyChangedMessage) {
@@ -286,12 +160,12 @@ void It2MeNativeMessageHostAsh::HandleDisconnectResponse() {
 }
 
 void It2MeNativeMessageHostAsh::HandleHostStateChangeMessage(
-    base::Value::Dict message) {
+    base::DictValue message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const std::string* new_state = message.FindString(kState);
   if (!new_state) {
     LOG(ERROR) << "Missing |" << kState << "| value in message.";
-    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
+    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INVALID_ARGUMENT));
     return;
   }
 
@@ -310,16 +184,14 @@ void It2MeNativeMessageHostAsh::HandleHostStateChangeMessage(
     const std::string* access_code = message.FindString(kAccessCode);
     if (!access_code) {
       LOG(ERROR) << "Missing |" << kAccessCode << "| value in message.";
-      CloseChannel(
-          ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
+      CloseChannel(ErrorCodeToString(protocol::ErrorCode::INVALID_ARGUMENT));
       return;
     }
     std::optional<int> access_code_lifetime =
         message.FindInt(kAccessCodeLifetime);
     if (!access_code_lifetime) {
       LOG(ERROR) << "Missing |" << kAccessCodeLifetime << "| value in message.";
-      CloseChannel(
-          ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
+      CloseChannel(ErrorCodeToString(protocol::ErrorCode::INVALID_ARGUMENT));
       return;
     }
     remote_->OnHostStateReceivedAccessCode(
@@ -330,8 +202,7 @@ void It2MeNativeMessageHostAsh::HandleHostStateChangeMessage(
     const std::string* remote_username = message.FindString(kClient);
     if (!remote_username) {
       LOG(ERROR) << "Missing |" << kClient << "| value in message.";
-      CloseChannel(
-          ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
+      CloseChannel(ErrorCodeToString(protocol::ErrorCode::INVALID_ARGUMENT));
       return;
     }
     remote_->OnHostStateConnected(*remote_username);
@@ -349,8 +220,7 @@ void It2MeNativeMessageHostAsh::HandleHostStateChangeMessage(
         message.FindString(kErrorMessageCode);
     if (!error_code_string) {
       LOG(ERROR) << "Missing |" << kErrorMessageCode << "| value in message.";
-      CloseChannel(
-          ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
+      CloseChannel(ErrorCodeToString(protocol::ErrorCode::INVALID_ARGUMENT));
       return;
     }
 
@@ -358,29 +228,26 @@ void It2MeNativeMessageHostAsh::HandleHostStateChangeMessage(
     if (!ParseErrorCode(*error_code_string, &error_code)) {
       LOG(ERROR) << "Invalid |" << kErrorMessageCode << "| value "
                  << *error_code_string << "in message.";
-      CloseChannel(
-          ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
+      CloseChannel(ErrorCodeToString(protocol::ErrorCode::INVALID_ARGUMENT));
       return;
     }
-    remote_->OnHostStateError(error_code);
+    remote_->OnHostStateError(static_cast<int64_t>(error_code));
   } else if (*new_state == kHostStateDomainError) {
     remote_->OnInvalidDomainError();
   } else {
     NOTREACHED() << "Unknown state: " << *new_state;
-    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
-    return;
   }
 }
 
 void It2MeNativeMessageHostAsh::HandleNatPolicyChangedMessage(
-    base::Value::Dict message) {
+    base::DictValue message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   std::optional<bool> nat_enabled =
       message.FindBool(kNatPolicyChangedMessageNatEnabled);
   if (!nat_enabled.has_value()) {
     LOG(ERROR) << "Missing |" << kNatPolicyChangedMessageNatEnabled
                << "| value in message.";
-    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
+    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INVALID_ARGUMENT));
     return;
   }
 
@@ -389,7 +256,7 @@ void It2MeNativeMessageHostAsh::HandleNatPolicyChangedMessage(
   if (!nat_enabled.has_value()) {
     LOG(ERROR) << "Missing |" << kNatPolicyChangedMessageRelayEnabled
                << "| value in message.";
-    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
+    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INVALID_ARGUMENT));
     return;
   }
 
@@ -400,17 +267,17 @@ void It2MeNativeMessageHostAsh::HandleNatPolicyChangedMessage(
 }
 
 void It2MeNativeMessageHostAsh::HandlePolicyErrorMessage(
-    base::Value::Dict message) {
+    base::DictValue message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   remote_->OnPolicyError();
 }
 
-void It2MeNativeMessageHostAsh::HandleErrorMessage(base::Value::Dict message) {
+void It2MeNativeMessageHostAsh::HandleErrorMessage(base::DictValue message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const std::string* error_code_string = message.FindString(kErrorMessageCode);
   if (!error_code_string) {
     LOG(ERROR) << "Missing |" << kErrorMessageCode << "| value in message.";
-    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
+    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INVALID_ARGUMENT));
     return;
   }
 
@@ -418,11 +285,11 @@ void It2MeNativeMessageHostAsh::HandleErrorMessage(base::Value::Dict message) {
   if (!ParseErrorCode(*error_code_string, &error_code)) {
     LOG(ERROR) << "Invalid |" << kErrorMessageCode << "| value "
                << *error_code_string << "in message.";
-    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INCOMPATIBLE_PROTOCOL));
+    CloseChannel(ErrorCodeToString(protocol::ErrorCode::INVALID_ARGUMENT));
     return;
   }
 
-  remote_->OnHostStateError(error_code);
+  remote_->OnHostStateError(static_cast<int64_t>(error_code));
 }
 
 }  // namespace remoting

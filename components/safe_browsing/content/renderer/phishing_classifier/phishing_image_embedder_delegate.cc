@@ -5,15 +5,18 @@
 #include "components/safe_browsing/content/renderer/phishing_classifier/phishing_image_embedder_delegate.h"
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <utility>
 
+#include "base/metrics/histogram_macros.h"
 #include "components/safe_browsing/content/common/safe_browsing.mojom-shared.h"
 #include "components/safe_browsing/content/renderer/phishing_classifier/phishing_image_embedder.h"
 #include "components/safe_browsing/content/renderer/phishing_classifier/scorer.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_thread.h"
+#include "mojo/public/cpp/base/proto_wrapper.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_local_frame.h"
@@ -66,17 +69,19 @@ void PhishingImageEmbedderDelegate::PhishingImageEmbedderReceiver(
 
 void PhishingImageEmbedderDelegate::StartImageEmbedding(
     const GURL& url,
+    bool can_extract_visual_features,
     StartImageEmbeddingCallback callback) {
   RecordEvent(SBPhishingImageEmbedderEvent::kPhishingImageEmbeddingRequested);
   if (image_embedding_callback_) {
     std::move(image_embedding_callback_)
-        .Run(mojom::PhishingImageEmbeddingResult::kCancelled, "");
+        .Run(mojom::PhishingImageEmbeddingResult::kCancelled, std::nullopt,
+             std::nullopt);
   }
   is_image_embedding_running_ = true;
   last_url_received_from_browser_ = StripRef(url);
   image_embedding_callback_ = std::move(callback);
 
-  MaybeStartImageEmbedding();
+  MaybeStartImageEmbedding(can_extract_visual_features);
 }
 
 void PhishingImageEmbedderDelegate::DidCommitProvisionalLoad(
@@ -97,7 +102,8 @@ bool PhishingImageEmbedderDelegate::is_ready() const {
   return image_embedder_->is_ready();
 }
 
-void PhishingImageEmbedderDelegate::MaybeStartImageEmbedding() {
+void PhishingImageEmbedderDelegate::MaybeStartImageEmbedding(
+    bool can_extract_visual_features) {
   // We can begin the image embedding process when the following conditions are
   // met:
   //  1. A Scorer has been created
@@ -109,7 +115,8 @@ void PhishingImageEmbedderDelegate::MaybeStartImageEmbedding() {
     is_image_embedding_running_ = false;
     if (!image_embedding_callback_.is_null()) {
       std::move(image_embedding_callback_)
-          .Run(mojom::PhishingImageEmbeddingResult::kImageEmbedderNotReady, "");
+          .Run(mojom::PhishingImageEmbeddingResult::kImageEmbedderNotReady,
+               std::nullopt, std::nullopt);
     }
     return;
   }
@@ -122,7 +129,8 @@ void PhishingImageEmbedderDelegate::MaybeStartImageEmbedding() {
     is_image_embedding_running_ = false;
     if (!image_embedding_callback_.is_null()) {
       std::move(image_embedding_callback_)
-          .Run(mojom::PhishingImageEmbeddingResult::kForwardBackTransition, "");
+          .Run(mojom::PhishingImageEmbeddingResult::kForwardBackTransition,
+               std::nullopt, std::nullopt);
     }
     return;
   }
@@ -142,6 +150,7 @@ void PhishingImageEmbedderDelegate::MaybeStartImageEmbedding() {
   last_url_sent_to_image_embedder_ = last_finished_load_url_;
   is_image_embedding_ = true;
   image_embedder_->BeginImageEmbedding(
+      can_extract_visual_features,
       base::BindOnce(&PhishingImageEmbedderDelegate::ImageEmbeddingDone,
                      base::Unretained(this)));
 }
@@ -182,7 +191,8 @@ void PhishingImageEmbedderDelegate::CancelPendingImageEmbedding(
 }
 
 void PhishingImageEmbedderDelegate::ImageEmbeddingDone(
-    const ImageFeatureEmbedding& image_feature_embedding) {
+    const ImageFeatureEmbedding& image_feature_embedding,
+    const VisualFeatures& visual_features) {
   is_image_embedding_running_ = false;
   if (image_embedding_callback_.is_null()) {
     return;
@@ -190,10 +200,12 @@ void PhishingImageEmbedderDelegate::ImageEmbeddingDone(
   if (image_feature_embedding.embedding_value_size()) {
     std::move(image_embedding_callback_)
         .Run(mojom::PhishingImageEmbeddingResult::kSuccess,
-             image_feature_embedding.SerializeAsString());
+             mojo_base::ProtoWrapper(image_feature_embedding),
+             mojo_base::ProtoWrapper(visual_features));
   } else {
     std::move(image_embedding_callback_)
-        .Run(mojom::PhishingImageEmbeddingResult::kFailed, "");
+        .Run(mojom::PhishingImageEmbeddingResult::kFailed, std::nullopt,
+             std::nullopt);
   }
 }
 

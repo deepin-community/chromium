@@ -5,20 +5,16 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_MENU_MAIN_PAGE_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_MENU_MAIN_PAGE_VIEW_H_
 
-#include "base/memory/raw_ptr_exclusion.h"
+#include <string_view>
+
+#include "base/memory/raw_ptr.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
-#include "chrome/browser/ui/views/extensions/extensions_menu_item_view.h"
-#include "ui/views/view.h"
-
+#include "chrome/browser/ui/views/extensions/extensions_menu_entry_view.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-
-namespace content {
-class WebContents;
-}
-
-namespace ui {
-class ImageModel;
-}  // namespace ui
+#include "ui/views/layout/flex_layout_view.h"
+#include "ui/views/metadata/view_factory.h"
+#include "ui/views/view.h"
 
 namespace views {
 class Label;
@@ -27,114 +23,124 @@ class ToggleButton;
 
 class Browser;
 class ExtensionsMenuHandler;
-class ToolbarActionsModel;
-class ExtensionMenuItemView;
-class ExtensionActionViewController;
-class MessageSection;
+class ExtensionActionViewModel;
 
 // The main view of the extensions menu.
 class ExtensionsMenuMainPageView : public views::View {
   METADATA_HEADER(ExtensionsMenuMainPageView, views::View)
 
  public:
-  enum class MessageSectionState {
-    // Site is restricted to all extensions.
-    kRestrictedAccess,
-    // Site is restricted all non-enterprise extensions by policy.
-    kPolicyBlockedAccess,
-    // User can customize each extension's access to the site.
-    kUserCustomizedAccess,
-    // User can customize each extension's access to the site, but a page
-    // reload is required to reflect changes.
-    kUserCustomizedAccessReload,
-    // User blocked all extensions access to the site.
-    kUserBlockedAccess,
-    // User blocked all extensions access to the site, but a page
-    // reload is required to reflect changes.
-    kUserBlockedAccessReload,
-  };
-
   explicit ExtensionsMenuMainPageView(Browser* browser,
                                       ExtensionsMenuHandler* menu_handler);
-  ~ExtensionsMenuMainPageView() override = default;
+  ~ExtensionsMenuMainPageView() override;
   ExtensionsMenuMainPageView(const ExtensionsMenuMainPageView&) = delete;
   const ExtensionsMenuMainPageView& operator=(
       const ExtensionsMenuMainPageView&) = delete;
 
-  // Creates and adds a menu item for `action_controller` at `index` for a
-  // newly-added extension.
-  void CreateAndInsertMenuItem(
-      std::unique_ptr<ExtensionActionViewController> action_controller,
-      extensions::ExtensionId extension_id,
-      bool is_enterprise,
-      ExtensionMenuItemView::SiteAccessToggleState site_access_toggle_state,
-      ExtensionMenuItemView::SitePermissionsButtonState
-          site_permissions_button_state,
-      ExtensionMenuItemView::SitePermissionsButtonAccess
-          site_permissions_button_access,
+  // Creates and adds a menu entry for `action_model` with `entry_state` at
+  // `index` for a newly-added extension.
+  void CreateAndInsertMenuEntry(
+      ExtensionActionViewModel* action_model,
+      ExtensionsMenuViewModel::MenuEntryState entry_state,
       int index);
 
-  // Removes the menu item corresponding to `action_id`.
-  void RemoveMenuItem(const ToolbarActionsModel::ActionId& action_id);
+  // Removes the menu entry at `index`.
+  void RemoveMenuEntry(int index);
 
-  // Returns the menu items.
-  std::vector<ExtensionMenuItemView*> GetMenuItems() const;
+  // Returns the menu entry views.
+  std::vector<ExtensionsMenuEntryView*> GetMenuEntries() const;
 
-  // Updates the subheader with the given parameters. Does not update the menu
-  // items (menu item updates are handled directly in such view).
-  void UpdateSubheader(const std::u16string& current_site,
-                       bool is_site_settings_toggle_visible,
-                       bool is_site_settings_toggle_on);
+  // Updates the site settings views with the given parameters.
+  void UpdateSiteSettings(
+      ExtensionsMenuViewModel::SiteSettingsState site_settings_state);
 
-  // Updates the message section given `state` and `has_enterprise_extensions`.
-  void UpdateMessageSection(MessageSectionState state,
-                            bool has_enterprise_extensions);
+  // Adds or updates the extension entry in the `requests_access_section_` at
+  // `index` with the given information. Doesn't update the requests section
+  // view visibility.
+  void AddExtensionRequestingAccess(
+      ExtensionsMenuViewModel::HostAccessRequest request,
+      int index);
 
-  // Adds or updates the extension entry in the `requests_access_section_` with
-  // the given information.
-  void AddOrUpdateExtensionRequestingAccess(const extensions::ExtensionId& id,
-                                            const std::u16string& name,
-                                            const ui::ImageModel& icon,
-                                            int index);
+  // Updates the extension entry in the `requests_access_section_` at `index`
+  // with the given information. Doesn't update the requests section view
+  // visibility.
+  void UpdateExtensionRequestingAccess(
+      ExtensionsMenuViewModel::HostAccessRequest request,
+      int index);
 
-  // Remove the entry in the `requests_access_section_` corresponding to `id`,
-  // if existent.
-  void RemoveExtensionRequestingAccess(const extensions::ExtensionId& id);
+  // Removes the entry in the `requests_access_section_` at `index`. Doesn't
+  // update the requests section view visibility.
+  void RemoveExtensionRequestingAccess(const extensions::ExtensionId& id,
+                                       int index);
+
+  // Clears the entries in the `request_access_section_`, if existent. Doesn't
+  // update the requests section view visibility.
+  void ClearExtensionsRequestingAccess();
+
+  // Shows/hides the optional section.
+  void SetOptionalSectionVisibility(
+      ExtensionsMenuViewModel::OptionalSection optional_section);
 
   // Accessors used by tests:
-  // Returns the currently-showing menu items.
-  const std::u16string& GetSubheaderSubtitleTextForTesting() const;
+  std::u16string_view GetSiteSettingLabelForTesting() const;
+  const views::View* site_settings_tooltip() const;
   views::ToggleButton* GetSiteSettingsToggleForTesting() {
     return site_settings_toggle_;
   }
-  views::View* GetTextContainerForTesting();
-  views::View* GetReloadContainerForTesting();
-  views::View* GetRequestsAccessContainerForTesting();
+  const views::View* reload_section() const;
+  const views::View* requests_section() const;
   std::vector<extensions::ExtensionId>
   GetExtensionsRequestingAccessForTesting();
   views::View* GetExtensionRequestingAccessEntryForTesting(
       const extensions::ExtensionId& extension_id);
 
  private:
-  content::WebContents* GetActiveWebContents() const;
+  // Returns the header builder, which contains information about the site.
+  [[nodiscard]] views::Builder<views::FlexLayoutView> CreateHeaderBuilder(
+      gfx::Insets margins,
+      views::FlexSpecification stretch_specification);
+
+  // Returns the site settings section builder, which contains information and
+  // access controls for the site.
+  [[nodiscard]] views::Builder<views::FlexLayoutView> CreateSiteSettingsBuilder(
+      gfx::Insets margins,
+      views::FlexSpecification);
+
+  // Returns the contents builder, which contains the reload section, the access
+  // requests section and the menu entries section on a scrollable view.
+  [[nodiscard]] views::Builder<views::ScrollView> CreateContentsBuilder(
+      gfx::Insets scroll_margins,
+      gfx::Insets contents_margins,
+      gfx::Insets reload_button_margins,
+      gfx::Insets menu_entries_margins);
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  // Returns the webstore button builder.
+  [[nodiscard]] views::Builder<HoverButton> CreateWebstoreButtonBuilder();
+#endif
+
+  // Returns the manage extensions button builder.
+  [[nodiscard]] views::Builder<HoverButton> CreateManageButtonBuilder();
 
   const raw_ptr<Browser> browser_;
   const raw_ptr<ExtensionsMenuHandler> menu_handler_;
 
-  // Subheader section.
-  raw_ptr<views::Label> subheader_subtitle_;
+  // Site settings section.
+  raw_ptr<views::Label> site_settings_label_;
+  raw_ptr<views::View> site_settings_tooltip_;
   raw_ptr<views::ToggleButton> site_settings_toggle_;
 
-  // Message section.
-  raw_ptr<MessageSection> message_section_;
+  // Reload section.
+  raw_ptr<views::View> reload_section_;
 
-  // Menu items section.
-  // The view containing the menu items. This is separated for easy insertion
-  // and iteration of menu items. The children are guaranteed to only be
-  // ExtensionMenuItemViews.
-  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
-  // #addr-of
-  RAW_PTR_EXCLUSION views::View* menu_items_ = nullptr;
+  // Site access requests section.
+  raw_ptr<views::View> requests_section_;
+  // View that holds the requests entries in `requests_section_`.
+  raw_ptr<views::View> requests_entries_view_;
+
+  // Menu entries section. The children are guaranteed to only be
+  // ExtensionsMenuEntryView.
+  raw_ptr<views::View> menu_entries_ = nullptr;
 };
 
 BEGIN_VIEW_BUILDER(/* no export */, ExtensionsMenuMainPageView, views::View)

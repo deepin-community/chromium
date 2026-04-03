@@ -1,118 +1,94 @@
-/*
- * Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL project
- * 2013.
- */
-/* ====================================================================
- * Copyright (c) 2013 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
- */
+// Copyright 2013-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-#ifndef OPENSSL_HEADER_X509_INTERNAL_H
-#define OPENSSL_HEADER_X509_INTERNAL_H
+#ifndef OPENSSL_HEADER_CRYPTO_X509_INTERNAL_H
+#define OPENSSL_HEADER_CRYPTO_X509_INTERNAL_H
 
 #include <openssl/base.h>
 #include <openssl/evp.h>
+#include <openssl/span.h>
 #include <openssl/x509.h>
 
 #include "../asn1/internal.h"
 #include "../internal.h"
 
-#if defined(__cplusplus)
-extern "C" {
-#endif
-
-
 // Internal structures.
 
-typedef struct X509_val_st {
-  ASN1_TIME *notBefore;
-  ASN1_TIME *notAfter;
-} X509_VAL;
-
-DECLARE_ASN1_FUNCTIONS_const(X509_VAL)
+DECLARE_OPAQUE_STRUCT(x509_st, X509Impl)
+DECLARE_OPAQUE_STRUCT(x509_store_st, X509Store)
+DECLARE_OPAQUE_STRUCT(X509_name_st, X509Name)
 
 struct X509_pubkey_st {
-  X509_ALGOR *algor;
-  ASN1_BIT_STRING *public_key;
+  X509_ALGOR algor;
+  ASN1_BIT_STRING public_key;
   EVP_PKEY *pkey;
 } /* X509_PUBKEY */;
 
+BSSL_NAMESPACE_BEGIN
+
+void x509_pubkey_init(X509_PUBKEY *key);
+void x509_pubkey_cleanup(X509_PUBKEY *key);
+
+int x509_parse_public_key(CBS *cbs, X509_PUBKEY *out,
+                          Span<const EVP_PKEY_ALG *const> algs);
+int x509_marshal_public_key(CBB *cbb, const X509_PUBKEY *in);
+int x509_pubkey_set1(X509_PUBKEY *key, EVP_PKEY *pkey);
+
 // X509_PUBKEY is an |ASN1_ITEM| whose ASN.1 type is SubjectPublicKeyInfo and C
 // type is |X509_PUBKEY*|.
+// TODO(crbug.com/42290417): Remove this when |X509| and |X509_REQ| no longer
+// depend on the tables.
 DECLARE_ASN1_ITEM(X509_PUBKEY)
+
+BSSL_NAMESPACE_END
 
 struct X509_name_entry_st {
   ASN1_OBJECT *object;
-  ASN1_STRING *value;
+  ASN1_STRING value;
   int set;
 } /* X509_NAME_ENTRY */;
+
+BSSL_NAMESPACE_BEGIN
 
 // X509_NAME_ENTRY is an |ASN1_ITEM| whose ASN.1 type is AttributeTypeAndValue
 // (RFC 5280) and C type is |X509_NAME_ENTRY*|.
 DECLARE_ASN1_ITEM(X509_NAME_ENTRY)
 
-// we always keep X509_NAMEs in 2 forms.
-struct X509_name_st {
+struct X509_NAME_CACHE {
+  // canon contains the DER-encoded canonicalized X.509 Name, not including the
+  // outermost TLV.
+  uint8_t *canon;
+  size_t canon_len;
+  // der contains the DER-encoded X.509 Name, including the outermost TLV.
+  uint8_t *der;
+  size_t der_len;
+};
+
+class X509Name : public X509_name_st {
+ public:
   STACK_OF(X509_NAME_ENTRY) *entries;
-  int modified;  // true if 'bytes' needs to be built
-  BUF_MEM *bytes;
-  unsigned char *canon_enc;
-  int canon_enclen;
+  mutable bssl::Atomic<bssl::X509_NAME_CACHE *> cache;
 } /* X509_NAME */;
+
+BSSL_NAMESPACE_END
 
 struct x509_attributes_st {
   ASN1_OBJECT *object;
   STACK_OF(ASN1_TYPE) *set;
 } /* X509_ATTRIBUTE */;
+
+BSSL_NAMESPACE_BEGIN
 
 // X509_ATTRIBUTE is an |ASN1_ITEM| whose ASN.1 type is Attribute (RFC 2986) and
 // C type is |X509_ATTRIBUTE*|.
@@ -127,6 +103,8 @@ typedef struct x509_cert_aux_st {
 
 DECLARE_ASN1_FUNCTIONS_const(X509_CERT_AUX)
 
+BSSL_NAMESPACE_END
+
 struct X509_extension_st {
   ASN1_OBJECT *object;
   ASN1_BOOLEAN critical;
@@ -137,33 +115,39 @@ struct X509_extension_st {
 // 5280) and C type is |X509_EXTENSION*|.
 DECLARE_ASN1_ITEM(X509_EXTENSION)
 
+BSSL_NAMESPACE_BEGIN
+
 // X509_EXTENSIONS is an |ASN1_ITEM| whose ASN.1 type is SEQUENCE of Extension
 // (RFC 5280) and C type is |STACK_OF(X509_EXTENSION)*|.
 DECLARE_ASN1_ITEM(X509_EXTENSIONS)
 
-typedef struct {
-  ASN1_INTEGER *version;  // [ 0 ] default of v1
-  ASN1_INTEGER *serialNumber;
-  X509_ALGOR *signature;
-  X509_NAME *issuer;
-  X509_VAL *validity;
-  X509_NAME *subject;
-  X509_PUBKEY *key;
+class X509Impl : public x509_st {
+ public:
+  static constexpr bool kAllowUniquePtr = true;
+
+  ~X509Impl();
+
+  // TBSCertificate fields:
+  uint8_t version;  // One of the |X509_VERSION_*| constants.
+  ASN1_INTEGER serialNumber;
+  X509_ALGOR tbs_sig_alg;
+  X509Name issuer;
+  ASN1_TIME notBefore;
+  ASN1_TIME notAfter;
+  X509Name subject;
+  X509_PUBKEY key;
   ASN1_BIT_STRING *issuerUID;            // [ 1 ] optional in v2
   ASN1_BIT_STRING *subjectUID;           // [ 2 ] optional in v2
   STACK_OF(X509_EXTENSION) *extensions;  // [ 3 ] optional in v3
-  ASN1_ENCODING enc;
-} X509_CINF;
-
-// TODO(https://crbug.com/boringssl/407): This is not const because it contains
-// an |X509_NAME|.
-DECLARE_ASN1_FUNCTIONS(X509_CINF)
-
-struct x509_st {
-  X509_CINF *cert_info;
-  X509_ALGOR *sig_alg;
-  ASN1_BIT_STRING *signature;
-  CRYPTO_refcount_t references;
+  // Certificate fields:
+  X509_ALGOR sig_alg;
+  ASN1_BIT_STRING signature;
+  // Other state:
+  // buf, if not nullptr, contains a copy of the serialized Certificate.
+  // TODO(davidben): Now every parsed |X509| has an underlying |CRYPTO_BUFFER|,
+  // but |X509|s created peacemeal do not. Can we make this more uniform?
+  CRYPTO_BUFFER *buf;
+  bssl::CRYPTO_refcount_t references;
   CRYPTO_EX_DATA ex_data;
   // These contain copies of various extension values
   long ex_pathlen;
@@ -176,16 +160,18 @@ struct x509_st {
   STACK_OF(GENERAL_NAME) *altname;
   NAME_CONSTRAINTS *nc;
   unsigned char cert_hash[SHA256_DIGEST_LENGTH];
-  X509_CERT_AUX *aux;
-  CRYPTO_MUTEX lock;
+  bssl::X509_CERT_AUX *aux;
+  bssl::CRYPTO_MUTEX lock;
 } /* X509 */;
+
+int x509_marshal_tbs_cert(CBB *cbb, const X509 *x509);
 
 // X509 is an |ASN1_ITEM| whose ASN.1 type is X.509 Certificate (RFC 5280) and C
 // type is |X509*|.
 DECLARE_ASN1_ITEM(X509)
 
 typedef struct {
-  ASN1_ENCODING enc;
+  bssl::ASN1_ENCODING enc;
   ASN1_INTEGER *version;
   X509_NAME *subject;
   X509_PUBKEY *pubkey;
@@ -193,19 +179,23 @@ typedef struct {
   STACK_OF(X509_ATTRIBUTE) *attributes;  // [ 0 ]
 } X509_REQ_INFO;
 
-// TODO(https://crbug.com/boringssl/407): This is not const because it contains
-// an |X509_NAME|.
-DECLARE_ASN1_FUNCTIONS(X509_REQ_INFO)
+DECLARE_ASN1_FUNCTIONS_const(X509_REQ_INFO)
+
+BSSL_NAMESPACE_END
 
 struct X509_req_st {
-  X509_REQ_INFO *req_info;
+  bssl::X509_REQ_INFO *req_info;
   X509_ALGOR *sig_alg;
   ASN1_BIT_STRING *signature;
 } /* X509_REQ */;
 
+BSSL_NAMESPACE_BEGIN
+
 // X509_REQ is an |ASN1_ITEM| whose ASN.1 type is CertificateRequest (RFC 2986)
 // and C type is |X509_REQ*|.
 DECLARE_ASN1_ITEM(X509_REQ)
+
+BSSL_NAMESPACE_END
 
 struct x509_revoked_st {
   ASN1_INTEGER *serialNumber;
@@ -214,6 +204,8 @@ struct x509_revoked_st {
   // Revocation reason
   int reason;
 } /* X509_REVOKED */;
+
+BSSL_NAMESPACE_BEGIN
 
 // X509_REVOKED is an |ASN1_ITEM| whose ASN.1 type is an element of the
 // revokedCertificates field of TBSCertList (RFC 5280) and C type is
@@ -228,12 +220,12 @@ typedef struct {
   ASN1_TIME *nextUpdate;
   STACK_OF(X509_REVOKED) *revoked;
   STACK_OF(X509_EXTENSION) /* [0] */ *extensions;
-  ASN1_ENCODING enc;
+  bssl::ASN1_ENCODING enc;
 } X509_CRL_INFO;
 
-// TODO(https://crbug.com/boringssl/407): This is not const because it contains
-// an |X509_NAME|.
-DECLARE_ASN1_FUNCTIONS(X509_CRL_INFO)
+DECLARE_ASN1_FUNCTIONS_const(X509_CRL_INFO)
+
+BSSL_NAMESPACE_END
 
 // Values in idp_flags field
 // IDP present
@@ -253,10 +245,10 @@ DECLARE_ASN1_FUNCTIONS(X509_CRL_INFO)
 
 struct X509_crl_st {
   // actual signature
-  X509_CRL_INFO *crl;
+  bssl::X509_CRL_INFO *crl;
   X509_ALGOR *sig_alg;
   ASN1_BIT_STRING *signature;
-  CRYPTO_refcount_t references;
+  bssl::CRYPTO_refcount_t references;
   int flags;
   // Copies of various extensions
   AUTHORITY_KEYID *akid;
@@ -265,6 +257,8 @@ struct X509_crl_st {
   int idp_flags;
   unsigned char crl_hash[SHA256_DIGEST_LENGTH];
 } /* X509_CRL */;
+
+BSSL_NAMESPACE_BEGIN
 
 // X509_CRL is an |ASN1_ITEM| whose ASN.1 type is X.509 CertificateList (RFC
 // 5280) and C type is |X509_CRL*|.
@@ -277,6 +271,8 @@ DECLARE_ASN1_ITEM(GENERAL_NAME)
 // GENERAL_NAMES is an |ASN1_ITEM| whose ASN.1 type is SEQUENCE OF GeneralName
 // and C type is |GENERAL_NAMES*|, aka |STACK_OF(GENERAL_NAME)*|.
 DECLARE_ASN1_ITEM(GENERAL_NAMES)
+
+BSSL_NAMESPACE_END
 
 struct X509_VERIFY_PARAM_st {
   int64_t check_time;               // POSIX time to use
@@ -306,6 +302,8 @@ struct x509_object_st {
   } data;
 } /* X509_OBJECT */;
 
+BSSL_NAMESPACE_BEGIN
+
 // NETSCAPE_SPKI is an |ASN1_ITEM| whose ASN.1 type is
 // SignedPublicKeyAndChallenge and C type is |NETSCAPE_SPKI*|.
 DECLARE_ASN1_ITEM(NETSCAPE_SPKI)
@@ -314,38 +312,47 @@ DECLARE_ASN1_ITEM(NETSCAPE_SPKI)
 // and C type is |NETSCAPE_SPKAC*|.
 DECLARE_ASN1_ITEM(NETSCAPE_SPKAC)
 
+BSSL_NAMESPACE_END
+
 // This is a static that defines the function interface
 struct x509_lookup_method_st {
   int (*new_item)(X509_LOOKUP *ctx);
   void (*free)(X509_LOOKUP *ctx);
   int (*ctrl)(X509_LOOKUP *ctx, int cmd, const char *argc, long argl,
               char **ret);
-  int (*get_by_subject)(X509_LOOKUP *ctx, int type, X509_NAME *name,
+  int (*get_by_subject)(X509_LOOKUP *ctx, int type, const X509_NAME *name,
                         X509_OBJECT *ret);
 } /* X509_LOOKUP_METHOD */;
 
-DEFINE_STACK_OF(X509_LOOKUP)
+BSSL_NAMESPACE_BEGIN
+
+DEFINE_NAMESPACED_STACK_OF(X509_LOOKUP)
+
+using StackOfX509Lookup = STACK_OF(X509_LOOKUP);
 
 // This is used to hold everything.  It is used for all certificate
 // validation.  Once we have a certificate chain, the 'verify'
 // function is then called to actually check the cert chain.
-struct x509_store_st {
+class X509Store : public x509_store_st {
+ public:
+  ~X509Store();
+
   // The following is a cache of trusted certs
   STACK_OF(X509_OBJECT) *objs;  // Cache of all objects
-  CRYPTO_MUTEX objs_lock;
+  bssl::CRYPTO_MUTEX objs_lock;
 
   // These are external lookup methods
-  STACK_OF(X509_LOOKUP) *get_cert_methods;
+  bssl::StackOfX509Lookup *get_cert_methods;
 
   X509_VERIFY_PARAM *param;
 
   // Callbacks for various operations
   X509_STORE_CTX_verify_cb verify_cb;       // error callback
-  X509_STORE_CTX_get_crl_fn get_crl;        // retrieve CRL
-  X509_STORE_CTX_check_crl_fn check_crl;    // Check CRL validity
 
-  CRYPTO_refcount_t references;
+  bssl::CRYPTO_refcount_t references;
 } /* X509_STORE */;
+
+BSSL_NAMESPACE_END
 
 // This is the functions plus an instance of the local variables.
 struct x509_lookup_st {
@@ -374,8 +381,6 @@ struct x509_store_ctx_st {
 
   // Callbacks for various operations
   X509_STORE_CTX_verify_cb verify_cb;       // error callback
-  X509_STORE_CTX_get_crl_fn get_crl;        // retrieve CRL
-  X509_STORE_CTX_check_crl_fn check_crl;    // Check CRL validity
 
   // The following is built up
   int last_untrusted;     // index of last untrusted cert
@@ -392,6 +397,8 @@ struct x509_store_ctx_st {
 
   CRYPTO_EX_DATA ex_data;
 } /* X509_STORE_CTX */;
+
+BSSL_NAMESPACE_BEGIN
 
 ASN1_TYPE *ASN1_generate_v3(const char *str, const X509V3_CTX *cnf);
 
@@ -422,7 +429,7 @@ int x509_print_rsa_pss_params(BIO *bp, const X509_ALGOR *sigalg, int indent,
 // Signature algorithm functions.
 
 // x509_digest_sign_algorithm encodes the signing parameters of |ctx| as an
-// AlgorithmIdentifer and saves the result in |algor|. It returns one on
+// AlgorithmIdentifier and saves the result in |algor|. It returns one on
 // success, or zero on error.
 int x509_digest_sign_algorithm(EVP_MD_CTX *ctx, X509_ALGOR *algor);
 
@@ -432,6 +439,17 @@ int x509_digest_sign_algorithm(EVP_MD_CTX *ctx, X509_ALGOR *algor);
 // zero on error.
 int x509_digest_verify_init(EVP_MD_CTX *ctx, const X509_ALGOR *sigalg,
                             EVP_PKEY *pkey);
+
+// x509_verify_signature verifies a |signature| using |sigalg| and |pkey| over
+// |in|. It returns one if the signature is valid and zero on error.
+int x509_verify_signature(const X509_ALGOR *sigalg,
+                          const ASN1_BIT_STRING *signature,
+                          Span<const uint8_t> in, EVP_PKEY *pkey);
+
+// x509_sign_to_bit_string signs |in| using |ctx| and saves the result in |out|.
+// It returns the length of the signature on success and zero on error.
+int x509_sign_to_bit_string(EVP_MD_CTX *ctx, ASN1_BIT_STRING *out,
+                            Span<const uint8_t> in);
 
 
 // Path-building functions.
@@ -454,7 +472,8 @@ int X509_policy_check(const STACK_OF(X509) *certs,
 // TODO(davidben): Reduce the scope of the verify callback and remove this. The
 // callback only runs with |X509_V_FLAG_CB_ISSUER_CHECK|, which is only used by
 // one internal project and rust-openssl, who use it by mistake.
-int x509_check_issued_with_callback(X509_STORE_CTX *ctx, X509 *x, X509 *issuer);
+int x509_check_issued_with_callback(X509_STORE_CTX *ctx, const X509 *x,
+                                    const X509 *issuer);
 
 // x509v3_bytes_to_hex encodes |len| bytes from |in| to hex and returns a
 // newly-allocated NUL-terminated string containing the result, or NULL on
@@ -584,9 +603,7 @@ GENERAL_NAMES *v2i_GENERAL_NAMES(const X509V3_EXT_METHOD *method,
                                  const X509V3_CTX *ctx,
                                  const STACK_OF(CONF_VALUE) *nval);
 
-// TODO(https://crbug.com/boringssl/407): Make |issuer| const once the
-// |X509_NAME| issue is resolved.
-int X509_check_akid(X509 *issuer, const AUTHORITY_KEYID *akid);
+int X509_check_akid(const X509 *issuer, const AUTHORITY_KEYID *akid);
 
 int X509_is_valid_trust_id(int trust);
 
@@ -595,9 +612,53 @@ int X509_PURPOSE_get_trust(const X509_PURPOSE *xp);
 // TODO(https://crbug.com/boringssl/695): Remove this.
 int DIST_POINT_set_dpname(DIST_POINT_NAME *dpn, X509_NAME *iname);
 
+void x509_name_init(X509_NAME *name);
+void x509_name_cleanup(X509_NAME *name);
 
-#if defined(__cplusplus)
-}  // extern C
-#endif
+// x509_parse_name parses a DER-encoded, X.509 Name from |cbs| and writes the
+// result to |*out|. It returns one on success and zero on error.
+int x509_parse_name(CBS *cbs, X509_NAME *out);
 
-#endif  // OPENSSL_HEADER_X509_INTERNAL_H
+// x509_marshal_name marshals |in| as a DER-encoded, X.509 Name and writes the
+// result to |out|. It returns one on success and zero on error.
+int x509_marshal_name(CBB *out, const X509_NAME *in);
+
+const X509_NAME_CACHE *x509_name_get_cache(const X509_NAME *name);
+void x509_name_invalidate_cache(X509_NAME *name);
+
+int x509_name_copy(X509_NAME *dst, const X509_NAME *src);
+
+void x509_algor_init(X509_ALGOR *alg);
+void x509_algor_cleanup(X509_ALGOR *alg);
+
+// x509_parse_algorithm parses a DER-encoded, AlgorithmIdentifier from |cbs| and
+// writes the result to |*out|. It returns one on success and zero on error.
+int x509_parse_algorithm(CBS *cbs, X509_ALGOR *out);
+
+// x509_marshal_algorithm marshals |in| as a DER-encoded, AlgorithmIdentifier
+// and writes the result to |out|. It returns one on success and zero on error.
+int x509_marshal_algorithm(CBB *out, const X509_ALGOR *in);
+
+
+// Standard extensions.
+
+extern const X509V3_EXT_METHOD v3_bcons, v3_nscert, v3_key_usage, v3_ext_ku;
+extern const X509V3_EXT_METHOD v3_info, v3_sinfo;
+extern const X509V3_EXT_METHOD v3_skey_id, v3_akey_id;
+extern const X509V3_EXT_METHOD v3_subject_alt_name, v3_issuer_alt_name,
+    v3_certificate_issuer;
+extern const X509V3_EXT_METHOD v3_netscape_base_url, v3_netscape_revocation_url,
+    v3_netscape_ca_revocation_url, v3_netscape_renewal_url,
+    v3_netscape_ca_policy_url, v3_netscape_ssl_server_name, v3_netscape_comment;
+extern const X509V3_EXT_METHOD v3_crl_num, v3_crl_reason, v3_crl_invdate;
+extern const X509V3_EXT_METHOD v3_delta_crl, v3_cpols, v3_crld, v3_freshest_crl;
+extern const X509V3_EXT_METHOD v3_ocsp_nocheck;
+extern const X509V3_EXT_METHOD v3_crl_hold;
+extern const X509V3_EXT_METHOD v3_policy_mappings, v3_policy_constraints;
+extern const X509V3_EXT_METHOD v3_name_constraints, v3_inhibit_anyp, v3_idp;
+extern const X509V3_EXT_METHOD v3_addr, v3_asid;
+
+BSSL_NAMESPACE_END
+
+
+#endif  // OPENSSL_HEADER_CRYPTO_X509_INTERNAL_H

@@ -6,6 +6,8 @@
 
 #include <stddef.h>
 
+#include <utility>
+
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
@@ -14,7 +16,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/types/cxx23_to_underlying.h"
 #include "build/build_config.h"
 #include "content/browser/media/session/media_session_impl.h"
 #include "content/public/browser/media_session_service.h"
@@ -59,7 +60,8 @@ class MediaInternalsTestBase {
     const std::string::size_type first_brace = utf8_update.find('{');
     const std::string::size_type last_brace = utf8_update.rfind('}');
     std::optional<base::Value> output_value = base::JSONReader::Read(
-        utf8_update.substr(first_brace, last_brace - first_brace + 1));
+        utf8_update.substr(first_brace, last_brace - first_brace + 1),
+        base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     ASSERT_TRUE(output_value);
     ASSERT_TRUE(output_value->is_dict());
 
@@ -84,8 +86,8 @@ class MediaInternalsTestBase {
   }
 
   void ExpectListOfStrings(const std::string& key,
-                           const base::Value::List& expected_list) const {
-    const base::Value::List* actual_list = update_data_.FindList(key);
+                           const base::ListValue& expected_list) const {
+    const base::ListValue* actual_list = update_data_.FindList(key);
     ASSERT_TRUE(actual_list);
     const size_t expected_size = expected_list.size();
     const size_t actual_size = actual_list->size();
@@ -99,7 +101,7 @@ class MediaInternalsTestBase {
     }
   }
 
-  base::Value::Dict update_data_;
+  base::DictValue update_data_;
 
   content::MediaInternals* media_internals() const {
     return content::MediaInternals::GetInstance();
@@ -194,7 +196,7 @@ TEST_F(MediaInternalsVideoCaptureDeviceTest,
   ExpectString("id", "dummy");
 #endif
   ExpectString("name", "dummy");
-  base::Value::List expected_list;
+  base::ListValue expected_list;
   expected_list.Append(media::VideoCaptureFormat::ToString(format_hd));
   ExpectListOfStrings("formats", expected_list);
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
@@ -257,7 +259,7 @@ TEST_P(MediaInternalsAudioLogTest, AudioLogCreateStartStopErrorClose) {
   ExpectString("effects", "ECHO_CANCELLER | DUCKING");
   ExpectString("device_id", kTestDeviceID);
   ExpectInt("component_id", kTestComponentID);
-  ExpectInt("component_type", base::to_underlying(test_component_));
+  ExpectInt("component_type", std::to_underlying(test_component_));
   ExpectStatus("created");
 
   // Verify OnStarted().
@@ -301,7 +303,7 @@ INSTANTIATE_TEST_SUITE_P(
         media::AudioLogFactory::AudioComponent::kAudioOuputController,
         media::AudioLogFactory::AudioComponent::kAudioOutputStream));
 
-// TODO(https://crbug.com/873320): AudioFocusManager is not available on
+// TODO(crbug.com/40589017): AudioFocusManager is not available on
 // Android.
 #if !BUILDFLAG(IS_ANDROID)
 
@@ -351,7 +353,7 @@ class MediaInternalsAudioFocusTest : public RenderViewHostTestHarness,
   base::Value GetSessionsFromValueAndReset() {
     base::AutoLock auto_lock(lock_);
 
-    const base::Value::List* session_list = update_data_.FindList("sessions");
+    const base::ListValue* session_list = update_data_.FindList("sessions");
     EXPECT_TRUE(session_list);
     base::Value session(session_list->Clone());
 
@@ -428,7 +430,7 @@ TEST_F(MediaInternalsAudioFocusTest, AudioFocusStateIsUpdated) {
     base::Value found_sessions = GetSessionsFromValueAndReset();
     EXPECT_EQ(1u, found_sessions.GetList().size());
 
-    const base::Value::Dict& session = found_sessions.GetList()[0].GetDict();
+    const base::DictValue& session = found_sessions.GetList()[0].GetDict();
     EXPECT_EQ(request_id1, *session.FindString("id"));
     EXPECT_NE(session.FindString("name"), nullptr);
     EXPECT_NE(session.FindString("owner"), nullptr);
@@ -452,13 +454,13 @@ TEST_F(MediaInternalsAudioFocusTest, AudioFocusStateIsUpdated) {
     base::Value found_sessions = GetSessionsFromValueAndReset();
     EXPECT_EQ(2u, found_sessions.GetList().size());
 
-    const base::Value::Dict& session1 = found_sessions.GetList()[0].GetDict();
+    const base::DictValue& session1 = found_sessions.GetList()[0].GetDict();
     EXPECT_EQ(request_id2, *session1.FindString("id"));
     EXPECT_NE(session1.FindString("name"), nullptr);
     EXPECT_NE(session1.FindString("owner"), nullptr);
     EXPECT_NE(session1.FindString("state"), nullptr);
 
-    const base::Value::Dict& session2 = found_sessions.GetList()[1].GetDict();
+    const base::DictValue& session2 = found_sessions.GetList()[1].GetDict();
     EXPECT_EQ(request_id1, *session2.FindString("id"));
     EXPECT_NE(session2.FindString("name"), nullptr);
     EXPECT_NE(session2.FindString("owner"), nullptr);
@@ -474,7 +476,7 @@ TEST_F(MediaInternalsAudioFocusTest, AudioFocusStateIsUpdated) {
     base::Value found_sessions = GetSessionsFromValueAndReset();
     EXPECT_EQ(1u, found_sessions.GetList().size());
 
-    const base::Value::Dict& session = found_sessions.GetList()[0].GetDict();
+    const base::DictValue& session = found_sessions.GetList()[0].GetDict();
     EXPECT_EQ(request_id1, *session.FindString("id"));
     EXPECT_NE(session.FindString("name"), nullptr);
     EXPECT_NE(session.FindString("owner"), nullptr);
@@ -484,7 +486,7 @@ TEST_F(MediaInternalsAudioFocusTest, AudioFocusStateIsUpdated) {
   // Abandon audio focus.
   RemoveAllPlayersForTest(media_session1);
 
-  // TODO(https://crbug.com/916177): This should wait on a more precise
+  // TODO(crbug.com/40606983): This should wait on a more precise
   // condition than RunLoop idling, but it's not clear exactly what that should
   // be.
   base::RunLoop().RunUntilIdle();

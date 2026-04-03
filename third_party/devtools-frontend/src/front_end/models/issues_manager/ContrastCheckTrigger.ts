@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,8 @@ import * as SDK from '../../core/sdk/sdk.js';
 let contrastCheckTriggerInstance: ContrastCheckTrigger|null = null;
 
 export class ContrastCheckTrigger {
-  #pageLoadListeners: WeakMap<SDK.ResourceTreeModel.ResourceTreeModel, Common.EventTarget.EventDescriptor> =
-      new WeakMap();
-  #frameAddedListeners: WeakMap<SDK.ResourceTreeModel.ResourceTreeModel, Common.EventTarget.EventDescriptor> =
-      new WeakMap();
+  #pageLoadListeners = new WeakMap<SDK.ResourceTreeModel.ResourceTreeModel, Common.EventTarget.EventDescriptor>();
+  #frameAddedListeners = new WeakMap<SDK.ResourceTreeModel.ResourceTreeModel, Common.EventTarget.EventDescriptor>();
 
   constructor() {
     SDK.TargetManager.TargetManager.instance().observeModels(SDK.ResourceTreeModel.ResourceTreeModel, this);
@@ -47,7 +45,7 @@ export class ContrastCheckTrigger {
   }
 
   #checkContrast(resourceTreeModel: SDK.ResourceTreeModel.ResourceTreeModel): void {
-    if (!Root.Runtime.experiments.isEnabled('contrastIssues')) {
+    if (!Root.Runtime.experiments.isEnabled(Root.ExperimentNames.ExperimentName.CONTRAST_ISSUES)) {
       return;
     }
     void resourceTreeModel.target().auditsAgent().invoke_checkContrast({});
@@ -62,7 +60,7 @@ export class ContrastCheckTrigger {
 
   async #frameAdded(event: Common.EventTarget.EventTargetEvent<SDK.ResourceTreeModel.ResourceTreeFrame>):
       Promise<void> {
-    if (!Root.Runtime.experiments.isEnabled('contrastIssues')) {
+    if (!Root.Runtime.experiments.isEnabled(Root.ExperimentNames.ExperimentName.CONTRAST_ISSUES)) {
       return;
     }
     const frame = event.data;
@@ -73,7 +71,7 @@ export class ContrastCheckTrigger {
     // Otherwise, it should be triggered when the page load event fires.
     const response = await frame.resourceTreeModel().target().runtimeAgent().invoke_evaluate(
         {expression: 'document.readyState', returnByValue: true});
-    if (response.result && response.result.value === 'complete') {
+    if (response.result?.value === 'complete') {
       this.#checkContrast(frame.resourceTreeModel());
     }
   }

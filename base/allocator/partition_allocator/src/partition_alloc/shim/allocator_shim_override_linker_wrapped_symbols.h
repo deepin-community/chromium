@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_LINKER_WRAPPED_SYMBOLS_H_
+#ifdef PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_LINKER_WRAPPED_SYMBOLS_H_
 #error This header is meant to be included only once by allocator_shim.cc
 #endif
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_LINKER_WRAPPED_SYMBOLS_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_LINKER_WRAPPED_SYMBOLS_H_
+#ifndef PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_LINKER_WRAPPED_SYMBOLS_H_
+#define PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_LINKER_WRAPPED_SYMBOLS_H_
 
 // This header overrides the __wrap_X symbols when using the link-time
 // -Wl,-wrap,malloc shim-layer approach (see README.md).
@@ -15,15 +15,22 @@
 // -wrap linker flags (e.g., libchrome.so) will be rewritten to the
 // linker as references to __wrap_malloc, __wrap_free, which are defined here.
 
-#include "partition_alloc/partition_alloc_buildflags.h"
+#include "partition_alloc/buildflags.h"
+#include "partition_alloc/partition_alloc_base/compiler_specific.h"
 
-#if BUILDFLAG(USE_ALLOCATOR_SHIM)
+#if PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
+#include <stdlib.h>
+
 #include <algorithm>
 #include <cstring>
 
 #include "partition_alloc/shim/allocator_shim_internals.h"
 
 extern "C" {
+
+SHIM_ALWAYS_EXPORT void* __wrap_aligned_alloc(size_t alignment, size_t size) {
+  return ShimMemalign(alignment, size, nullptr);
+}
 
 SHIM_ALWAYS_EXPORT void* __wrap_calloc(size_t n, size_t size) {
   return ShimCalloc(n, size, nullptr);
@@ -63,7 +70,7 @@ SHIM_ALWAYS_EXPORT size_t __wrap_malloc_usable_size(void* address) {
   return ShimGetSizeEstimate(address, nullptr);
 }
 
-const size_t kPathMaxSize = 8192;
+inline constexpr size_t kPathMaxSize = 8192;
 static_assert(kPathMaxSize >= PATH_MAX, "");
 
 extern char* __wrap_strdup(const char* str);
@@ -93,7 +100,8 @@ SHIM_ALWAYS_EXPORT char* __wrap_strdup(const char* str) {
   if (!buffer) {
     return nullptr;
   }
-  return reinterpret_cast<char*>(std::memcpy(buffer, str, length));
+  return reinterpret_cast<char*>(
+      PA_UNSAFE_TODO(std::memcpy(buffer, str, length)));
 }
 
 SHIM_ALWAYS_EXPORT char* __wrap_strndup(const char* str, size_t n) {
@@ -102,8 +110,8 @@ SHIM_ALWAYS_EXPORT char* __wrap_strndup(const char* str, size_t n) {
   if (!buffer) {
     return nullptr;
   }
-  std::memcpy(buffer, str, length);
-  buffer[length] = '\0';
+  PA_UNSAFE_TODO(std::memcpy(buffer, str, length));
+  PA_UNSAFE_TODO(buffer[length]) = '\0';
   return buffer;
 }
 
@@ -119,7 +127,7 @@ SHIM_ALWAYS_EXPORT char* __wrap_getcwd(char* buffer, size_t size) {
   if (!size) {
     size = kPathMaxSize;
   }
-  char local_buffer[size];
+  char local_buffer[kPathMaxSize];
   if (!__real_getcwd(local_buffer, size)) {
     return nullptr;
   }
@@ -143,7 +151,8 @@ SHIM_ALWAYS_EXPORT int __wrap_vasprintf(char** strp,
   *strp = static_cast<char*>(
       malloc(kInitialSize));  // Our malloc() doesn't return nullptr.
 
-  int actual_size = vsnprintf(*strp, kInitialSize, fmt, va_args);
+  int actual_size =
+      PA_UNSAFE_TODO(vsnprintf(*strp, kInitialSize, fmt, va_args));
   if (actual_size < 0) {
     va_end(va_args_copy);
     return actual_size;
@@ -158,8 +167,8 @@ SHIM_ALWAYS_EXPORT int __wrap_vasprintf(char** strp,
   // This is very lightly used in Chromium in practice, see crbug.com/116558 for
   // details.
   if (actual_size >= kInitialSize) {
-    int ret = vsnprintf(*strp, static_cast<size_t>(actual_size + 1), fmt,
-                        va_args_copy);
+    int ret = PA_UNSAFE_TODO(vsnprintf(
+        *strp, static_cast<size_t>(actual_size + 1), fmt, va_args_copy));
     va_end(va_args_copy);
     return ret;
   }
@@ -171,13 +180,13 @@ SHIM_ALWAYS_EXPORT int __wrap_vasprintf(char** strp,
 SHIM_ALWAYS_EXPORT int __wrap_asprintf(char** strp, const char* fmt, ...) {
   va_list va_args;
   va_start(va_args, fmt);
-  int retval = vasprintf(strp, fmt, va_args);
+  int retval = PA_UNSAFE_TODO(vasprintf(strp, fmt, va_args));
   va_end(va_args);
   return retval;
 }
 
 }  // extern "C"
 
-#endif  // BUILDFLAG(USE_ALLOCATOR_SHIM)
+#endif  // PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_LINKER_WRAPPED_SYMBOLS_H_
+#endif  // PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_LINKER_WRAPPED_SYMBOLS_H_

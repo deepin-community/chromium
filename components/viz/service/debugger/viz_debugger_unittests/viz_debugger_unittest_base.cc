@@ -8,15 +8,19 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/base64.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "components/viz/service/debugger/viz_debugger.h"
 #include "third_party/skia/include/codec/SkCodec.h"
-#include "third_party/skia/include/codec/SkPngDecoder.h"
+#include "third_party/skia/include/codec/SkPngRustDecoder.h"
+#include "third_party/skia/include/core/SkStream.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/skia_span_util.h"
 
 #if VIZ_DEBUGGER_IS_ON()
 
@@ -67,23 +71,23 @@ VisualDebuggerTestBase::VisualDebuggerTestBase() = default;
 VisualDebuggerTestBase::~VisualDebuggerTestBase() = default;
 
 void VisualDebuggerTestBase::SetFilter(std::vector<TestFilter> filters) {
-  base::Value::List filters_list;
+  base::ListValue filters_list;
   for (auto&& each : filters) {
-    auto selector = base::Value::Dict().Set("anno", each.anno);
+    auto selector = base::DictValue().Set("anno", each.anno);
     if (!each.file.empty())
       selector.Set("file", each.file);
 
     if (!each.func.empty())
       selector.Set("func", each.func);
 
-    filters_list.Append(base::Value::Dict()
+    filters_list.Append(base::DictValue()
                             .Set("selector", std::move(selector))
                             .Set("active", each.active)
                             .Set("enabled", each.enabled));
   }
 
   GetInternal()->FilterDebugStream(
-      base::Value::Dict().Set("filters", std::move(filters_list)));
+      base::DictValue().Set("filters", std::move(filters_list)));
   GetInternal()->GetRWLock()->WriteLock();
   GetInternal()->UpdateFilters();
   GetInternal()->GetRWLock()->WriteUnLock();
@@ -107,7 +111,7 @@ void VisualDebuggerTestBase::GetFrameData(bool clear_cache) {
       frame_counter_, gfx::Size(window_x_, window_y_), base::TimeTicks());
   EXPECT_TRUE(maybe_global_dict_val);
   EXPECT_TRUE(maybe_global_dict_val->is_dict());
-  const base::Value::Dict& global_dict = maybe_global_dict_val->GetDict();
+  const base::DictValue& global_dict = maybe_global_dict_val->GetDict();
 
   GetInternal()->GetRWLock()->WriteUnLock();
   frame_counter_++;
@@ -122,11 +126,11 @@ void VisualDebuggerTestBase::GetFrameData(bool clear_cache) {
   window_x_ = global_dict.FindInt("windowx").value_or(kNoVal);
   window_y_ = global_dict.FindInt("windowy").value_or(kNoVal);
 
-  const base::Value::List* list_source = global_dict.FindList("new_sources");
+  const base::ListValue* list_source = global_dict.FindList("new_sources");
   EXPECT_TRUE(list_source);
 
   for (const auto& local_dict_val : *list_source) {
-    const base::Value::Dict& local_dict = local_dict_val.GetDict();
+    const base::DictValue& local_dict = local_dict_val.GetDict();
     StaticSource ss;
     ss.file = *local_dict.FindString("file");
     ss.func = *local_dict.FindString("func");
@@ -136,33 +140,29 @@ void VisualDebuggerTestBase::GetFrameData(bool clear_cache) {
     sources_cache_.push_back(ss);
   }
 
-  const base::Value::List* draw_call_list = global_dict.FindList("drawcalls");
+  const base::ListValue* draw_call_list = global_dict.FindList("drawcalls");
   EXPECT_TRUE(draw_call_list);
 
-  auto func_common_call = [](const base::Value::Dict& dict, int* draw_index,
+  auto func_common_call = [](const base::DictValue& dict, int* draw_index,
                              int* source_index, int* thread_id,
                              VizDebugger::DrawOption* option) {
     *draw_index = dict.FindInt("drawindex").value_or(kNoVal);
     *source_index = dict.FindInt("source_index").value_or(kNoVal);
     *thread_id = dict.FindInt("thread_id").value_or(kNoVal);
 
-    const base::Value::Dict* option_dict = dict.FindDict("option");
+    const base::DictValue* option_dict = dict.FindDict("option");
 
-    uint32_t red;
-    uint32_t green;
-    uint32_t blue;
-    std::sscanf(option_dict->FindString("color")->c_str(), "#%x%x%x", &red,
-                &green, &blue);
-
-    option->color_r = red;
-    option->color_g = green;
-    option->color_b = blue;
+    SkColor color =
+        VizDebugger::HexStringToSkColor(*(option_dict->FindString("color")));
+    option->color_r = SkColorGetR(color);
+    option->color_g = SkColorGetG(color);
+    option->color_b = SkColorGetB(color);
     option->color_a =
         static_cast<uint8_t>(option_dict->FindInt("alpha").value_or(kNoVal));
   };
 
   for (size_t i = 0; i < kNumDrawCallSubmission; i++) {
-    const base::Value::Dict& local_dict = (*draw_call_list)[i].GetDict();
+    const base::DictValue& local_dict = (*draw_call_list)[i].GetDict();
     int draw_index;
     int source_index;
     int thread_id;
@@ -170,12 +170,12 @@ void VisualDebuggerTestBase::GetFrameData(bool clear_cache) {
     func_common_call(local_dict, &draw_index, &source_index, &thread_id,
                      &option);
 
-    const base::Value::List* list_size = local_dict.FindList("size");
+    const base::ListValue* list_size = local_dict.FindList("size");
     EXPECT_TRUE(list_size);
     float size_x = (*list_size)[0].GetIfDouble().value_or(kNoVal);
     float size_y = (*list_size)[1].GetIfDouble().value_or(kNoVal);
 
-    const base::Value::List* list_pos = local_dict.FindList("pos");
+    const base::ListValue* list_pos = local_dict.FindList("pos");
     EXPECT_TRUE(list_pos);
     float pos_x = (*list_pos)[0].GetIfDouble().value_or(kNoVal);
     float pos_y = (*list_pos)[1].GetIfDouble().value_or(kNoVal);
@@ -184,8 +184,8 @@ void VisualDebuggerTestBase::GetFrameData(bool clear_cache) {
     float uv_pos_y = 0.0;
     float uv_size_w = 1.0;
     float uv_size_h = 1.0;
-    const base::Value::List* list_uv_pos = local_dict.FindList("uv_pos");
-    const base::Value::List* list_uv_size = local_dict.FindList("uv_size");
+    const base::ListValue* list_uv_pos = local_dict.FindList("uv_pos");
+    const base::ListValue* list_uv_size = local_dict.FindList("uv_size");
     if (list_uv_pos && list_uv_size) {
       uv_pos_x = (*list_uv_pos)[0].GetIfDouble().value_or(0.0f);
       uv_pos_y = (*list_uv_pos)[1].GetIfDouble().value_or(0.0f);
@@ -205,9 +205,9 @@ void VisualDebuggerTestBase::GetFrameData(bool clear_cache) {
     draw_calls_cache_.push_back(draw_call);
   }
 
-  const base::Value::Dict* buffer_map_dict = global_dict.FindDict("buff_map");
+  const base::DictValue* buffer_map_dict = global_dict.FindDict("buff_map");
   if (buffer_map_dict) {
-    for (base::Value::Dict::const_iterator itr = buffer_map_dict->begin();
+    for (base::DictValue::const_iterator itr = buffer_map_dict->begin();
          itr != buffer_map_dict->end(); itr++) {
       EXPECT_TRUE(itr->second.is_string());
       const std::string& image_data_uri = itr->second.GetString();
@@ -217,19 +217,19 @@ void VisualDebuggerTestBase::GetFrameData(bool clear_cache) {
       // without extra metadata about the image.
       constexpr const char* kDataUriPrefix = "data:image/png;base64,";
       EXPECT_TRUE(image_data_uri.starts_with(kDataUriPrefix));
-      base::StringPiece image_base64_encoded =
-          base::StringPiece(image_data_uri).substr(strlen(kDataUriPrefix));
+      std::string_view image_base64_encoded =
+          std::string_view(image_data_uri).substr(strlen(kDataUriPrefix));
       const std::optional<std::vector<uint8_t>> image_bytes =
           base::Base64Decode(image_base64_encoded);
       EXPECT_TRUE(image_bytes.has_value());
 
-      // |MakeWithoutCopy| is safe because we expect to be done decoding |data|
-      // into |buff.bitmap| before we release |image_bytes|.
-      sk_sp<SkData> data =
-          SkData::MakeWithoutCopy(image_bytes->data(), image_bytes->size());
+      // Safe for `data` to be a span over `image_bytes` because this code will
+      // be done decoding `data` into `buff.bitmap` before releasing
+      // `image_bytes`.
+      sk_sp<SkData> data = gfx::MakeSkDataFromSpanWithoutCopy(*image_bytes);
       SkCodec::Result decode_result;
-      std::unique_ptr<SkCodec> codec =
-          SkPngDecoder::Decode(data, &decode_result);
+      std::unique_ptr<SkCodec> codec = SkPngRustDecoder::Decode(
+          std::make_unique<SkMemoryStream>(std::move(data)), &decode_result);
       EXPECT_EQ(SkCodec::Result::kSuccess, decode_result);
 
       VizDebuggerInternal::BufferInfo buff;
@@ -247,11 +247,11 @@ void VisualDebuggerTestBase::GetFrameData(bool clear_cache) {
     }
   }
 
-  const base::Value::List* log_call_list = global_dict.FindList("logs");
+  const base::ListValue* log_call_list = global_dict.FindList("logs");
   EXPECT_TRUE(log_call_list);
 
   for (size_t i = 0; i < kNumLogSubmission; i++) {
-    const base::Value::Dict& local_dict = (*log_call_list)[i].GetDict();
+    const base::DictValue& local_dict = (*log_call_list)[i].GetDict();
     int draw_index;
     int source_index;
     int thread_id;

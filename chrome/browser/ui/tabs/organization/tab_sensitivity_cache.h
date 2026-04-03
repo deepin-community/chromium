@@ -5,8 +5,9 @@
 #ifndef CHROME_BROWSER_UI_TABS_ORGANIZATION_TAB_SENSITIVITY_CACHE_H_
 #define CHROME_BROWSER_UI_TABS_ORGANIZATION_TAB_SENSITIVITY_CACHE_H_
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/optimization_guide/content/browser/page_content_annotations_service.h"
+#include "components/page_content_annotations/core/page_content_annotations_service.h"
 #include "url/gurl.h"
 
 // In order to have GURL as a key in a hashmap, GURL hashing mechanism is
@@ -21,7 +22,7 @@ struct GURLHash {
 // synchronously available form, for specifically the currently open tabs, by
 // caching scores emitted to PageContentAnnotationsObservers.
 class TabSensitivityCache final
-    : public optimization_guide::PageContentAnnotationsService::
+    : public page_content_annotations::PageContentAnnotationsService::
           PageContentAnnotationsObserver {
  public:
   explicit TabSensitivityCache(Profile* profile);
@@ -31,12 +32,13 @@ class TabSensitivityCache final
   // is a float from 0 to 1, where 1 is most likely to be sensitive.
   std::optional<float> GetScore(const GURL& url) const;
 
-  // optimization_guide
+  // page_content_annotations
   //     ::PageContentAnnotationsService
   //     ::PageContentAnnotationsObserver
   void OnPageContentAnnotated(
-      const GURL& url,
-      const optimization_guide::PageContentAnnotationsResult& result) override;
+      const page_content_annotations::HistoryVisit& visit,
+      const page_content_annotations::PageContentAnnotationsResult& result)
+      override;
 
  private:
   void MaybeTrimCacheKeys();

@@ -1,3 +1,6 @@
+load("@flatbuffers//:build_defs.bzl", "flatbuffer_cc_library")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("//tensorflow:tensorflow.default.bzl", "get_compatible_with_portable")
 load("//tensorflow/lite:build_def.bzl", "tflite_copts")
 load("//tensorflow/lite:special_rules.bzl", "internal_visibility_allowlist", "tflite_portable_test_suite_combined")
@@ -11,7 +14,6 @@ package(
 EMSCRIPTEN_LINKOPTS = [
     "-s ASSERTIONS=2",
     "-s ERROR_ON_UNDEFINED_SYMBOLS=1",
-    "-s DEMANGLE_SUPPORT=1",
     "-s EXIT_RUNTIME=1",
     "-s ALLOW_MEMORY_GROWTH=1",
     "-s TOTAL_MEMORY=134217728",
@@ -31,6 +33,18 @@ config_setting(
 config_setting(
     name = "xnnpack_use_latest_ops_explicit",
     define_values = {"xnnpack_use_latest_ops": "true"},
+)
+
+# Force XNNPACK to enable subgraph reshaping.
+config_setting(
+    name = "xnnpack_enable_subgraph_reshaping_explicit",
+    define_values = {"xnnpack_enable_subgraph_reshaping": "true"},
+)
+
+# Use transient indirection buffers.
+config_setting(
+    name = "xnnpack_use_transient_indirection_buffers_explicit",
+    define_values = {"xnnpack_use_transient_indirection_buffers": "true"},
 )
 
 # Enable offloading of quantized 8-bit signed operators to XNNPACK delegate
@@ -204,15 +218,6 @@ cc_library(
 )
 
 cc_library(
-    name = "xnnpack_delegate_test",
-    testonly = True,
-    hdrs = ["xnnpack_delegate_test.h"],
-    deps = [
-        ":xnnpack_delegate",
-    ],
-)
-
-cc_library(
     name = "xnnpack_delegate",
     srcs = ["xnnpack_delegate.cc"],
     hdrs = ["xnnpack_delegate.h"],
@@ -221,31 +226,50 @@ cc_library(
         ":xnnpack_force_float_precision_explicit_fp16": ["-DXNNPACK_DELEGATE_FORCE_PRECISION_FP16=1"],
         "//conditions:default": [],
     }) + select({
+        ":xnnpack_enable_subgraph_reshaping_explicit": ["-DXNNPACK_DELEGATE_ENABLE_SUBGRAPH_RESHAPING=1"],
+        # copybara:uncomment "//conditions:default": [],
+        "//conditions:default": ["-DXNNPACK_DELEGATE_ENABLE_SUBGRAPH_RESHAPING=1"],  # copybara:comment
+    }) + select({
         ":xnnpack_use_latest_ops_explicit": ["-DXNNPACK_DELEGATE_USE_LATEST_OPS=1"],
+        # copybara:uncomment "//conditions:default": [],
+        "//conditions:default": ["-DXNNPACK_DELEGATE_USE_LATEST_OPS=1"],  # copybara:comment
+    }) + select({
+        ":xnnpack_use_transient_indirection_buffers_explicit": ["-DXNNPACK_DELEGATE_USE_TRANSIENT_INDIRECTION_BUFFERS=1"],
         "//conditions:default": [],
-    }),
+    }) + ["-DFLATBUFFERS_LOCALE_INDEPENDENT=0"],
     linkstatic = True,
     deps = [
+        ":file_util",
+        ":flexbuffers_util",
         ":quantization_util",
-        ":tflite_with_xnnpack_dynamic_fully_connected",
-        ":tflite_with_xnnpack_logging",
-        ":tflite_with_xnnpack_qs8",
-        ":tflite_with_xnnpack_qu8",
-        ":tflite_with_xnnpack_transient_indirection_buffer",
+        ":tflite_with_xnnpack_dynamic_fully_connected",  # buildcleaner: keep
+        ":tflite_with_xnnpack_logging",  # buildcleaner: keep
+        ":tflite_with_xnnpack_qs8",  # buildcleaner: keep
+        ":tflite_with_xnnpack_qu8",  # buildcleaner: keep
+        ":tflite_with_xnnpack_transient_indirection_buffer",  # buildcleaner: keep
+        ":weight_cache",
+        "//tensorflow/compiler/mlir/lite/kernels/internal:compatibility_macros",
+        "//tensorflow/compiler/mlir/lite/tools/optimize:reduced_precision_metadata",
+        "//tensorflow/lite:array",
         "//tensorflow/lite:kernel_api",
         "//tensorflow/lite:minimal_logging",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/c:common",
+        "//tensorflow/lite/core:subgraph",
         "//tensorflow/lite/core/api",
         "//tensorflow/lite/core/c:common",
+        "//tensorflow/lite/experimental/resource",
         "//tensorflow/lite/kernels:cpu_backend_context",
         "//tensorflow/lite/kernels:kernel_util",
         "//tensorflow/lite/kernels:padding",
-        "//tensorflow/lite/kernels/internal:compatibility",
         "//tensorflow/lite/kernels/internal:tensor",
         "//tensorflow/lite/kernels/internal/utils:sparsity_format_converter",
         "//tensorflow/lite/schema:schema_fbs",
         "//tensorflow/lite/tools/optimize:reduced_precision_support",
         "@XNNPACK",
-        "@XNNPACK//:experiments_config",
+        "@eigen_archive//:eigen3",
+        "@flatbuffers//:runtime_cc",
+        "@pthreadpool",
     ],
 )
 
@@ -263,24 +287,35 @@ cc_library(
     name = "xnnpack_delegate_test_mode",
     srcs = ["xnnpack_delegate.cc"],
     hdrs = ["xnnpack_delegate.h"],
-    copts = tflite_copts() + ["-DXNNPACK_DELEGATE_TEST_MODE=1"],
+    copts = tflite_copts() + ["-DXNNPACK_DELEGATE_TEST_MODE=1"] + ["-DFLATBUFFERS_LOCALE_INDEPENDENT=0"],
     linkstatic = True,
     deps = [
+        ":file_util",
+        ":flexbuffers_util",
         ":quantization_util",
+        ":weight_cache",
+        "//tensorflow/compiler/mlir/lite/kernels/internal:compatibility_macros",
+        "//tensorflow/compiler/mlir/lite/tools/optimize:reduced_precision_metadata",
+        "//tensorflow/lite:array",
         "//tensorflow/lite:kernel_api",
         "//tensorflow/lite:minimal_logging",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/c:common",
+        "//tensorflow/lite/core:subgraph",
         "//tensorflow/lite/core/api",
         "//tensorflow/lite/core/c:common",
+        "//tensorflow/lite/experimental/resource",
         "//tensorflow/lite/kernels:cpu_backend_context",
         "//tensorflow/lite/kernels:kernel_util",
         "//tensorflow/lite/kernels:padding",
-        "//tensorflow/lite/kernels/internal:compatibility",
         "//tensorflow/lite/kernels/internal:tensor",
         "//tensorflow/lite/kernels/internal/utils:sparsity_format_converter",
         "//tensorflow/lite/schema:schema_fbs",
         "//tensorflow/lite/tools/optimize:reduced_precision_support",
-        "@XNNPACK//:XNNPACK_test_mode",
-        "@XNNPACK//:experiments_config",
+        "@XNNPACK",
+        "@eigen_archive//:eigen3",
+        "@flatbuffers//:runtime_cc",
+        "@pthreadpool",
     ],
 )
 
@@ -296,6 +331,125 @@ cc_library(
         "//tensorflow/lite/kernels/internal:types",
         "@FP16",
     ],
+)
+
+cc_library(
+    name = "macros",
+    hdrs = ["macros.h"],
+    compatible_with = get_compatible_with_portable(),
+    copts = tflite_copts(),
+    deps = [
+        "//tensorflow/lite:minimal_logging",
+    ],
+)
+
+flatbuffer_cc_library(
+    name = "weight_cache_schema",
+    srcs = ["weight_cache_schema.fbs"],
+    compatible_with = get_compatible_with_portable(),
+    flatc_args = [
+        "--gen-mutable",
+        "--gen-object-api",
+    ],
+)
+
+cc_library(
+    name = "weight_cache",
+    srcs = ["weight_cache.cc"],
+    hdrs = ["weight_cache.h"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [
+        ":file_util",
+        ":macros",
+        ":mmap_handle",
+        ":weight_cache_schema",
+        "//tensorflow/lite:logger",
+        "//tensorflow/lite:minimal_logging",
+        "//tensorflow/lite/c:common",
+        "@XNNPACK",
+        "@flatbuffers//:runtime_cc",
+    ],
+)
+
+cc_library(
+    name = "flexbuffers_util",
+    hdrs = ["flexbuffers_util.h"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [
+        "@flatbuffers//:runtime_cc",
+    ],
+)
+
+cc_library(
+    name = "weight_cache_test_helpers",
+    testonly = True,
+    hdrs = ["weight_cache_test_helpers.h"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [
+        ":file_util",
+        "//tensorflow/lite:minimal_logging",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+cc_library(
+    name = "fingerprint_test_helpers",
+    testonly = True,
+    hdrs = ["fingerprint_test_helpers.h"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [
+        ":weight_cache",
+        ":weight_cache_test_helpers",
+        ":xnnpack_delegate_hdrs_only",
+        "//tensorflow/lite/c:common",
+        "@XNNPACK",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+cc_library(
+    name = "mmap_handle",
+    srcs = ["mmap_handle.cc"],
+    hdrs = ["mmap_handle.h"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [
+        ":file_util",
+        ":macros",
+        ":windows_util",
+    ],
+)
+
+cc_test(
+    name = "mmap_handle_test",
+    srcs = ["mmap_handle_test.cc"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [
+        ":mmap_handle",
+        ":weight_cache_test_helpers",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "file_util",
+    srcs = ["file_util.cc"],
+    hdrs = ["file_util.h"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [
+        ":macros",
+        "//tensorflow/lite:minimal_logging",
+    ],
+)
+
+cc_library(
+    name = "windows_util",
+    srcs = ["windows_util.cc"],
+    hdrs = ["windows_util.h"],
+    compatible_with = get_compatible_with_portable(),
+    tags = [
+        "keep_dep",  # Build cleaner will want to remove this because it doesn't check for Windows builds.
+    ],
+    deps = [],
 )
 
 ################################ Tester classes ################################
@@ -318,12 +472,12 @@ cc_library(
     hdrs = ["binary_elementwise_tester.h"],
     deps = [
         ":test_util",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@FP16",
         "@com_google_googletest//:gtest",
@@ -337,14 +491,15 @@ cc_library(
     srcs = ["batch_matrix_multiply_tester.cc"],
     hdrs = ["batch_matrix_multiply_tester.h"],
     deps = [
+        ":test_util",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/c:c_api_types",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
         "@flatbuffers",
@@ -357,12 +512,12 @@ cc_library(
     srcs = ["concatenation_tester.cc"],
     hdrs = ["concatenation_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
         "@flatbuffers",
@@ -377,12 +532,12 @@ cc_library(
     deps = [
         ":test_util",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@FP16",
         "@com_google_googletest//:gtest",
@@ -396,12 +551,13 @@ cc_library(
     srcs = ["depth_to_space_tester.cc"],
     hdrs = ["depth_to_space_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/c:c_api_types",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
         "@flatbuffers",
@@ -416,12 +572,12 @@ cc_library(
     deps = [
         ":test_util",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@FP16",
         "@com_google_googletest//:gtest",
@@ -435,12 +591,12 @@ cc_library(
     srcs = ["dequantize_tester.cc"],
     hdrs = ["dequantize_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
         "@flatbuffers",
@@ -454,13 +610,13 @@ cc_library(
     hdrs = ["dynamically_quantized_fully_connected_tester.h"],
     deps = [
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/c:c_api_types",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
         "@flatbuffers",
@@ -474,16 +630,36 @@ cc_library(
     hdrs = ["dynamically_quantized_conv_2d_tester.h"],
     deps = [
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/c:c_api_types",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
         "@flatbuffers",
+    ],
+)
+
+cc_library(
+    name = "dynamically_quantized_transpose_conv_tester",
+    testonly = 1,
+    srcs = ["dynamically_quantized_transpose_conv_tester.cc"],
+    hdrs = ["dynamically_quantized_transpose_conv_tester.h"],
+    deps = [
+        ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
+        "//tensorflow/lite:framework",
+        "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/core:framework",
+        "//tensorflow/lite/core/c:common",
+        "//tensorflow/lite/core/kernels:builtin_ops",
+        "//tensorflow/lite/schema:schema_fbs",
+        "@com_google_googletest//:gtest",
+        "@flatbuffers//:runtime_cc",
     ],
 )
 
@@ -495,12 +671,12 @@ cc_library(
     deps = [
         ":test_util",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@FP16",
         "@com_google_googletest//:gtest",
@@ -514,12 +690,34 @@ cc_library(
     srcs = ["leaky_relu_tester.cc"],
     hdrs = ["leaky_relu_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
+        "//tensorflow/lite/schema:schema_fbs",
+        "@com_google_googletest//:gtest",
+        "@flatbuffers",
+    ],
+)
+
+cc_library(
+    name = "odml_sdpa_tester",
+    testonly = 1,
+    srcs = ["odml_sdpa_tester.cc"],
+    hdrs = ["odml_sdpa_tester.h"],
+    deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
+        "//tensorflow/compiler/mlir/lite/schema:schema_fbs",
+        "//tensorflow/lite:framework",
+        "//tensorflow/lite:version",
+        "//tensorflow/lite/c:common",
+        "//tensorflow/lite/core:framework",
+        "//tensorflow/lite/core/c:common",
+        "//tensorflow/lite/core/kernels:builtin_ops",
+        "//tensorflow/lite/experimental/genai:genai_ops",
+        "//tensorflow/lite/kernels:kernel_util",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
         "@flatbuffers",
@@ -532,12 +730,12 @@ cc_library(
     srcs = ["pad_tester.cc"],
     hdrs = ["pad_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
         "@flatbuffers",
@@ -550,12 +748,12 @@ cc_library(
     srcs = ["pool_2d_tester.cc"],
     hdrs = ["pool_2d_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
         "@flatbuffers",
@@ -570,12 +768,12 @@ cc_library(
     deps = [
         ":test_util",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@FP16",
         "@com_google_googletest//:gtest",
@@ -589,12 +787,12 @@ cc_library(
     srcs = ["quantize_tester.cc"],
     hdrs = ["quantize_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
         "@flatbuffers",
@@ -607,8 +805,10 @@ cc_library(
     srcs = ["quantized_binary_elementwise_tester.cc"],
     hdrs = ["quantized_binary_elementwise_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/c:c_api_types",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
@@ -626,8 +826,10 @@ cc_library(
     hdrs = ["quantized_conv_2d_tester.h"],
     deps = [
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/c:c_api_types",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
@@ -645,8 +847,10 @@ cc_library(
     hdrs = ["quantized_depthwise_conv_2d_tester.h"],
     deps = [
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/c:c_api_types",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
@@ -664,8 +868,10 @@ cc_library(
     hdrs = ["quantized_fully_connected_tester.h"],
     deps = [
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/c:c_api_types",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
@@ -682,6 +888,7 @@ cc_library(
     srcs = ["quantized_leaky_relu_tester.cc"],
     hdrs = ["quantized_leaky_relu_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
@@ -700,6 +907,7 @@ cc_library(
     srcs = ["quantized_pad_tester.cc"],
     hdrs = ["quantized_pad_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
@@ -718,26 +926,10 @@ cc_library(
     srcs = ["quantized_pool_2d_tester.cc"],
     hdrs = ["quantized_pool_2d_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
-        "//tensorflow/lite/core:framework",
-        "//tensorflow/lite/core/c:common",
-        "//tensorflow/lite/core/kernels:builtin_ops",
-        "//tensorflow/lite/schema:schema_conversion_utils",
-        "//tensorflow/lite/schema:schema_fbs",
-        "@com_google_googletest//:gtest",
-        "@flatbuffers",
-    ],
-)
-
-cc_library(
-    name = "quantized_reduce_tester",
-    testonly = 1,
-    srcs = ["quantized_reduce_tester.cc"],
-    hdrs = ["quantized_reduce_tester.h"],
-    deps = [
-        "//tensorflow/lite:framework",
-        "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/c:c_api_types",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
@@ -754,6 +946,7 @@ cc_library(
     srcs = ["quantized_resize_bilinear_tester.cc"],
     hdrs = ["quantized_resize_bilinear_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
@@ -772,6 +965,7 @@ cc_library(
     srcs = ["quantized_unary_elementwise_tester.cc"],
     hdrs = ["quantized_unary_elementwise_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
@@ -791,8 +985,10 @@ cc_library(
     hdrs = ["quantized_variable_ops_tester.h"],
     deps = [
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/core:cc_api_stable",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
         "//tensorflow/lite/schema:schema_conversion_utils",
@@ -813,8 +1009,10 @@ cc_library(
     hdrs = ["quantized_variable_ops_tester.h"],
     deps = [
         ":xnnpack_delegate",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/core:cc_api_stable",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
         "//tensorflow/lite/schema:schema_conversion_utils",
@@ -830,6 +1028,7 @@ cc_library(
     srcs = ["reduce_tester.cc"],
     hdrs = ["reduce_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
@@ -848,6 +1047,7 @@ cc_library(
     srcs = ["reshape_tester.cc"],
     hdrs = ["reshape_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
@@ -866,6 +1066,7 @@ cc_library(
     srcs = ["resize_bilinear_tester.cc"],
     hdrs = ["resize_bilinear_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
@@ -884,8 +1085,10 @@ cc_library(
     srcs = ["slice_tester.cc"],
     hdrs = ["slice_tester.h"],
     deps = [
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/core:cc_api_stable",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/core/kernels:builtin_ops",
         "//tensorflow/lite/schema:schema_conversion_utils",
@@ -1030,6 +1233,7 @@ cc_library(
     hdrs = ["quantized_transpose_conv_tester.h"],
     deps = [
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/compiler/mlir/lite/schema:schema_conversion_utils",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/core:framework",
@@ -1098,36 +1302,6 @@ cc_library(
 )
 
 cc_test(
-    name = "abs_test",
-    srcs = ["abs_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "add_test",
-    srcs = ["add_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":binary_elementwise_tester",
-        ":test_main",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
     name = "average_pool_2d_test",
     srcs = ["average_pool_2d_test.cc"],
     linkopts = select({
@@ -1138,6 +1312,8 @@ cc_test(
         ":pool_2d_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1159,16 +1335,21 @@ cc_test(
 )
 
 cc_test(
-    name = "ceil_test",
-    srcs = ["ceil_test.cc"],
+    name = "binary_elementwise_test",
+    srcs = [
+        "binary_elementwise_test.cc",
+    ],
     linkopts = select({
         "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
         "//conditions:default": [],
     }),
     deps = [
+        ":binary_elementwise_tester",
         ":test_main",
-        ":unary_elementwise_tester",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
+        "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1181,9 +1362,11 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":quantized_conv_2d_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1196,9 +1379,11 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":quantized_depthwise_conv_2d_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1214,6 +1399,8 @@ cc_test(
         ":concatenation_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1227,8 +1414,10 @@ cc_test(
     }),
     deps = [
         ":conv_2d_tester",
+        ":fingerprint_test_helpers",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1243,6 +1432,7 @@ cc_test(
     deps = [
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
         "@pthreadpool",
     ],
@@ -1259,6 +1449,8 @@ cc_test(
         ":depth_to_space_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1272,23 +1464,10 @@ cc_test(
     }),
     deps = [
         ":depthwise_conv_2d_tester",
+        ":fingerprint_test_helpers",
         ":test_main",
         ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "div_test",
-    srcs = ["div_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":binary_elementwise_tester",
-        ":test_main",
-        ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1300,8 +1479,12 @@ cc_test(
         "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
         "//conditions:default": [],
     }),
+    # TODO(b/360983009): This test are currently failing on TAP presubmit for
+    # android x86. We should re-enable it once we fix the failures.
+    tags = ["notap"],
     deps = [
         ":dynamically_quantized_fully_connected_tester",
+        ":fingerprint_test_helpers",
         ":test_main",
         ":xnnpack_delegate_test_mode",
         "//tensorflow/lite/c:c_api_types",
@@ -1318,6 +1501,7 @@ cc_test(
     }),
     deps = [
         ":dynamically_quantized_conv_2d_tester",
+        ":fingerprint_test_helpers",
         ":test_main",
         ":xnnpack_delegate_test_mode",
         "//tensorflow/lite/c:c_api_types",
@@ -1326,16 +1510,19 @@ cc_test(
 )
 
 cc_test(
-    name = "elu_test",
-    srcs = ["elu_test.cc"],
+    name = "dynamically_quantized_transpose_conv_test",
+    srcs = ["dynamically_quantized_transpose_conv_test.cc"],
     linkopts = select({
         "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
         "//conditions:default": [],
     }),
     deps = [
+        ":dynamically_quantized_transpose_conv_tester",
+        ":fingerprint_test_helpers",
         ":test_main",
-        ":unary_elementwise_tester",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/core/c:common",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1348,39 +1535,14 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":fully_connected_tester",
         ":test_main",
+        ":weight_cache",
+        ":weight_cache_test_helpers",
         ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "floor_test",
-    srcs = ["floor_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "hard_swish_test",
-    srcs = ["hard_swish_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
-        ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "@XNNPACK",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1396,21 +1558,7 @@ cc_test(
         ":leaky_relu_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "logistic_test",
-    srcs = ["logistic_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
-        ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1426,28 +1574,15 @@ cc_test(
         ":pool_2d_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
 
 cc_test(
-    name = "maximum_test",
-    srcs = ["maximum_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":binary_elementwise_tester",
-        ":test_main",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "mean_test",
-    srcs = ["mean_test.cc"],
+    name = "reduce_test",
+    srcs = ["reduce_test.cc"],
     linkopts = select({
         "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
         "//conditions:default": [],
@@ -1456,66 +1591,29 @@ cc_test(
         ":reduce_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
 
 cc_test(
-    name = "sum_test",
-    srcs = ["sum_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":reduce_tester",
-        ":test_main",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
+    name = "odml_sdpa_test",
+    srcs = ["odml_sdpa_test.cc"],
+    data = [
+        ":odml_sdpa_composite_gqa.tflite.bin",
+        ":odml_sdpa_composite_mha.tflite.bin",
+        ":odml_sdpa_composite_mqa.tflite.bin",
     ],
-)
-
-cc_test(
-    name = "minimum_test",
-    srcs = ["minimum_test.cc"],
     linkopts = select({
         "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
         "//conditions:default": [],
     }),
     deps = [
-        ":binary_elementwise_tester",
+        ":odml_sdpa_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "mul_test",
-    srcs = ["mul_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":binary_elementwise_tester",
-        ":test_main",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "neg_test",
-    srcs = ["neg_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
-        ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1531,6 +1629,7 @@ cc_test(
         ":pad_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1546,6 +1645,7 @@ cc_test(
         ":prelu_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1576,6 +1676,8 @@ cc_test(
         ":quantize_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1591,6 +1693,8 @@ cc_test(
         ":quantize_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1606,6 +1710,8 @@ cc_test(
         ":quantize_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1621,6 +1727,8 @@ cc_test(
         ":quantize_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1659,51 +1767,6 @@ cc_test(
 )
 
 cc_test(
-    name = "relu_test",
-    srcs = ["relu_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "relu6_test",
-    srcs = ["relu6_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "relu_n1_to_1_test",
-    srcs = ["relu_n1_to_1_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
     name = "reshape_test",
     srcs = ["reshape_test.cc"],
     linkopts = select({
@@ -1714,6 +1777,9 @@ cc_test(
         ":reshape_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
+        "@XNNPACK",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1729,6 +1795,8 @@ cc_test(
         ":reshape_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1759,21 +1827,7 @@ cc_test(
         ":resize_bilinear_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "round_test",
-    srcs = ["round_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
-        ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1789,6 +1843,7 @@ cc_test(
         ":dequantize_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1804,6 +1859,8 @@ cc_test(
         ":quantized_binary_elementwise_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1819,6 +1876,8 @@ cc_test(
         ":concatenation_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1831,9 +1890,11 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":quantized_conv_2d_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1846,9 +1907,11 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":quantized_depthwise_conv_2d_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1864,6 +1927,8 @@ cc_test(
         ":depth_to_space_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1879,6 +1944,8 @@ cc_test(
         ":quantized_unary_elementwise_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1891,9 +1958,11 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":quantized_fully_connected_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1909,6 +1978,7 @@ cc_test(
         ":quantized_leaky_relu_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1924,6 +1994,8 @@ cc_test(
         ":quantized_unary_elementwise_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1939,21 +2011,8 @@ cc_test(
         ":quantized_pool_2d_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "signed_quantized_mean_test",
-    srcs = ["signed_quantized_mean_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":quantized_reduce_tester",
-        ":test_main",
-        ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1969,6 +2028,8 @@ cc_test(
         ":quantized_binary_elementwise_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1984,6 +2045,7 @@ cc_test(
         ":quantized_pad_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -1999,6 +2061,7 @@ cc_test(
         ":quantized_resize_bilinear_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2014,6 +2077,8 @@ cc_test(
         ":slice_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2029,6 +2094,8 @@ cc_test(
         ":space_to_depth_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2044,6 +2111,8 @@ cc_test(
         ":split_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2059,6 +2128,7 @@ cc_test(
         ":strided_slice_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2074,6 +2144,8 @@ cc_test(
         ":quantized_binary_elementwise_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2089,6 +2161,8 @@ cc_test(
         ":quantized_unary_elementwise_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2104,6 +2178,8 @@ cc_test(
         ":test_main",
         ":transpose_tester",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2116,9 +2192,11 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":quantized_transpose_conv_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2138,6 +2216,7 @@ cc_test(
         ":xnnpack_delegate",
         ":quantized_variable_ops_tester_no_test_mode",
         "@com_google_googletest//:gtest",
+        "//tensorflow/lite/c:c_api_types",
     ],
 )
 
@@ -2152,6 +2231,7 @@ cc_test(
         ":quantized_variable_ops_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2167,6 +2247,8 @@ cc_test(
         ":slice_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2182,6 +2264,7 @@ cc_test(
         ":softmax_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:c_api_types",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2217,51 +2300,6 @@ cc_test(
 )
 
 cc_test(
-    name = "sqrt_test",
-    srcs = ["sqrt_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "square_test",
-    srcs = ["square_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "squared_difference_test",
-    srcs = ["squared_difference_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":binary_elementwise_tester",
-        ":test_main",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
     name = "strided_slice_test",
     srcs = ["strided_slice_test.cc"],
     linkopts = select({
@@ -2271,36 +2309,6 @@ cc_test(
     deps = [
         ":strided_slice_tester",
         ":test_main",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "sub_test",
-    srcs = ["sub_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":binary_elementwise_tester",
-        ":test_main",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "tanh_test",
-    srcs = ["tanh_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":test_main",
-        ":unary_elementwise_tester",
         ":xnnpack_delegate_test_mode",
         "@com_google_googletest//:gtest",
     ],
@@ -2329,10 +2337,30 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":test_main",
         ":transpose_conv_tester",
         ":xnnpack_delegate_test_mode",
         "@com_google_googletest//:gtest",
+    ],
+)
+
+cc_test(
+    name = "unary_elementwise_test",
+    srcs = ["unary_elementwise_test.cc"],
+    deps = [
+        ":unary_elementwise_tester",
+        ":xnnpack_delegate_hdrs_only",
+        "//tensorflow/lite:framework",
+        "//tensorflow/lite:schema_fbs_version",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/core:framework",
+        "//tensorflow/lite/core/c:common",
+        "//tensorflow/lite/core/kernels:builtin_ops",
+        "//tensorflow/lite/schema:schema_conversion_utils",
+        "//tensorflow/lite/schema:schema_fbs",
+        "@com_google_googletest//:gtest_main",
+        "@flatbuffers",
     ],
 )
 
@@ -2389,6 +2417,7 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":quantized_conv_2d_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
@@ -2404,6 +2433,7 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":quantized_depthwise_conv_2d_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
@@ -2434,6 +2464,7 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":quantized_fully_connected_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
@@ -2480,21 +2511,6 @@ cc_test(
     }),
     deps = [
         ":quantized_pool_2d_tester",
-        ":test_main",
-        ":xnnpack_delegate_test_mode",
-        "@com_google_googletest//:gtest",
-    ],
-)
-
-cc_test(
-    name = "unsigned_quantized_mean_test",
-    srcs = ["unsigned_quantized_mean_test.cc"],
-    linkopts = select({
-        "//tensorflow:emscripten": EMSCRIPTEN_LINKOPTS,
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":quantized_reduce_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
         "@com_google_googletest//:gtest",
@@ -2659,6 +2675,7 @@ cc_test(
         "//conditions:default": [],
     }),
     deps = [
+        ":fingerprint_test_helpers",
         ":quantized_transpose_conv_tester",
         ":test_main",
         ":xnnpack_delegate_test_mode",
@@ -2710,6 +2727,57 @@ cc_test(
         "//tensorflow/lite:mutable_op_resolver",
         "//tensorflow/lite/core:framework",
         "@com_google_googletest//:gtest",
+    ],
+)
+
+cc_test(
+    name = "weight_cache_test",
+    srcs = ["weight_cache_test.cc"],
+    deps = [
+        ":file_util",
+        ":mmap_handle",
+        ":test_main",
+        ":weight_cache",
+        ":weight_cache_schema",
+        ":weight_cache_test_helpers",
+        ":xnnpack_delegate_test_mode",
+        "//tensorflow/lite/c:common",
+        "@XNNPACK",
+        "@com_google_googletest//:gtest",
+        "@flatbuffers//:runtime_cc",
+    ],
+)
+
+cc_test(
+    name = "delegate_weight_cache_test",
+    srcs = ["delegate_weight_cache_test.cc"],
+    deps = [
+        ":weight_cache",
+        ":xnnpack_delegate_hdrs_only",
+        "//tensorflow/lite:framework_experimental",
+        "//tensorflow/lite/c:c_api_types",
+        "//tensorflow/lite/core:model_building",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "flexbuffers_util_test",
+    srcs = ["flexbuffers_util_test.cc"],
+    deps = [
+        ":flexbuffers_util",
+        "@com_google_googletest//:gtest_main",
+        "@flatbuffers//:runtime_cc",
+    ],
+)
+
+cc_test(
+    name = "file_util_test",
+    srcs = ["file_util_test.cc"],
+    deps = [
+        ":file_util",
+        "@com_google_googletest//:gtest_main",
+        "@flatbuffers//:runtime_cc",
     ],
 )
 

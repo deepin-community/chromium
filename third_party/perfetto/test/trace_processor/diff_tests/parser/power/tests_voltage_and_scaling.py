@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -64,7 +64,9 @@ class PowerVoltageAndScaling(TestSuite):
         """,
         out=Csv("""
         "ts","dur","action"
-        10000,5000,"suspend_enter(3)"
+        10000,2900,"suspend_enter(3)"
+        12000,1000,"freeze_processes(0)"
+        12500,400,"thaw_processes(0)"
         15000,5000,"suspend_enter(3)"
         30000,10000,"CPU(0)"
         50000,10000,"timekeeping_freeze(0)"

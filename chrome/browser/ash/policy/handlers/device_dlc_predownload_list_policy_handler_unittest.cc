@@ -5,6 +5,7 @@
 #include "device_dlc_predownload_list_policy_handler.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
@@ -51,7 +52,7 @@ class DeviceDlcPredownloadListPolicyHandlerTest : public testing::Test {
 
 void RecordGetExistingDlcsResult(std::string& out_err,
                                  dlcservice::DlcsWithContent& out_dlcs,
-                                 const std::string& err,
+                                 std::string_view err,
                                  const dlcservice::DlcsWithContent& dlcs) {
   out_dlcs = dlcs;
   out_err = err;
@@ -59,7 +60,7 @@ void RecordGetExistingDlcsResult(std::string& out_err,
 
 TEST_F(DeviceDlcPredownloadListPolicyHandlerTest, InstallSuccess) {
   SetDeviceDlcPredownloadPolicy(
-      base::Value(base::Value::List().Append("scanner_drivers")));
+      base::Value(base::ListValue().Append("scanner_drivers")));
 
   std::string err;
   dlcservice::DlcsWithContent dlcs;
@@ -76,11 +77,11 @@ TEST_F(DeviceDlcPredownloadListPolicyHandlerTest, InstallSuccess) {
 TEST(DecodeDeviceDlcPredownloadListPolicy, EmptyList) {
   std::string warning;
 
-  base::Value::List decoded_policies = DeviceDlcPredownloadListPolicyHandler::
+  base::ListValue decoded_policies = DeviceDlcPredownloadListPolicyHandler::
       DecodeDeviceDlcPredownloadListPolicy({}, warning);
 
   EXPECT_TRUE(warning.empty());
-  EXPECT_EQ(decoded_policies, base::Value::List());
+  EXPECT_EQ(decoded_policies, base::ListValue());
 }
 
 TEST(DecodeDeviceDlcPredownloadListPolicy, OnlyValidValues) {
@@ -88,12 +89,11 @@ TEST(DecodeDeviceDlcPredownloadListPolicy, OnlyValidValues) {
   RepeatedPtrField<std::string> policy;
   policy.Add("scanner_drivers");
 
-  base::Value::List decoded_policies = DeviceDlcPredownloadListPolicyHandler::
+  base::ListValue decoded_policies = DeviceDlcPredownloadListPolicyHandler::
       DecodeDeviceDlcPredownloadListPolicy(policy, warning);
 
   EXPECT_TRUE(warning.empty());
-  EXPECT_EQ(decoded_policies,
-            base::Value::List().Append("sane-backends-extras-dlc"));
+  EXPECT_EQ(decoded_policies, base::ListValue().Append("sane-backends-pfu"));
 }
 
 TEST(DecodeDeviceDlcPredownloadListPolicy, DuplicateValidValues) {
@@ -102,12 +102,11 @@ TEST(DecodeDeviceDlcPredownloadListPolicy, DuplicateValidValues) {
   policy.Add("scanner_drivers");
   policy.Add("scanner_drivers");
 
-  base::Value::List decoded_policies = DeviceDlcPredownloadListPolicyHandler::
+  base::ListValue decoded_policies = DeviceDlcPredownloadListPolicyHandler::
       DecodeDeviceDlcPredownloadListPolicy(policy, warning);
 
   EXPECT_TRUE(warning.empty());
-  EXPECT_EQ(decoded_policies,
-            base::Value::List().Append("sane-backends-extras-dlc"));
+  EXPECT_EQ(decoded_policies, base::ListValue().Append("sane-backends-pfu"));
 }
 
 TEST(DecodeDeviceDlcPredownloadListPolicy, InvalidAndValidValues) {
@@ -116,12 +115,11 @@ TEST(DecodeDeviceDlcPredownloadListPolicy, InvalidAndValidValues) {
   policy.Add("scanner_drivers");
   policy.Add("invalid_value");
 
-  base::Value::List decoded_policies = DeviceDlcPredownloadListPolicyHandler::
+  base::ListValue decoded_policies = DeviceDlcPredownloadListPolicyHandler::
       DecodeDeviceDlcPredownloadListPolicy(policy, warning);
 
   EXPECT_FALSE(warning.empty());
-  EXPECT_EQ(decoded_policies,
-            base::Value::List().Append("sane-backends-extras-dlc"));
+  EXPECT_EQ(decoded_policies, base::ListValue().Append("sane-backends-pfu"));
 }
 
 }  // namespace policy

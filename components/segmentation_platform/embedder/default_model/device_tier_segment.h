@@ -5,8 +5,6 @@
 #ifndef COMPONENTS_SEGMENTATION_PLATFORM_EMBEDDER_DEFAULT_MODEL_DEVICE_TIER_SEGMENT_H_
 #define COMPONENTS_SEGMENTATION_PLATFORM_EMBEDDER_DEFAULT_MODEL_DEVICE_TIER_SEGMENT_H_
 
-#include <optional>
-
 #include "components/segmentation_platform/public/model_provider.h"
 
 namespace segmentation_platform {
@@ -17,6 +15,20 @@ struct Config;
 // model and metadata for the device tier segment target.
 class DeviceTierSegment : public DefaultModelProvider {
  public:
+  enum Label {
+    kLabelNone = 0,
+    kLabelLow = 1,
+    kLabelMedium = 2,
+    kLabelHigh = 3,
+    kLabelCount
+  };
+  enum Feature {
+    kFeatureDeviceRamInMb,
+    kFeatureDeviceOsVersionNumber,
+    kFeatureDevicePpi,
+    kFeatureCount
+  };
+
   DeviceTierSegment();
   ~DeviceTierSegment() override = default;
 

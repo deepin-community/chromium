@@ -14,7 +14,7 @@
 #include "base/base64.h"
 #include "base/values.h"
 #include "chrome/common/pref_names.h"
-#include "chromeos/components/kcer/key_permissions.pb.h"
+#include "chromeos/ash/components/kcer/key_permissions.pb.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 
@@ -44,7 +44,7 @@ const base::Value* GetPrefsEntry(const std::string& public_key_spki_der_b64,
     return nullptr;
   }
 
-  const base::Value::Dict& platform_keys =
+  const base::DictValue& platform_keys =
       profile_prefs->GetDict(prefs::kPlatformKeys);
 
   return platform_keys.Find(public_key_spki_der_b64);
@@ -73,7 +73,7 @@ void MarkUserKeyCorporateInPref(const std::vector<uint8_t>& public_key_spki_der,
                                 PrefService* profile_prefs) {
   ScopedDictPrefUpdate update(profile_prefs, prefs::kPlatformKeys);
 
-  base::Value::Dict new_pref_entry;
+  base::DictValue new_pref_entry;
   new_pref_entry.Set(kPrefKeyUsage, kPrefKeyUsageCorporate);
 
   update->Set(base::Base64Encode(public_key_spki_der),

@@ -15,14 +15,21 @@ limitations under the License.
 
 #include "xla/pjrt/host_callback.h"
 
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <utility>
 
 #include <gtest/gtest.h>
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/synchronization/notification.h"
+#include "xla/future.h"
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/tests/literal_test_util.h"
-#include "tsl/lib/core/status_test_util.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace {
@@ -32,20 +39,21 @@ class TestPjRtHostMemoryForDeviceManager
  public:
   ~TestPjRtHostMemoryForDeviceManager() override = default;
 
-  StatusOr<PjRtChunk> ToDeviceLayout(const void* src_data, size_t src_size,
-                                     const Shape& host_shape,
-                                     const Shape& device_shape) override {
+  absl::StatusOr<PjRtChunk> ToDeviceLayout(const void* src_data,
+                                           size_t src_size,
+                                           const Shape& host_shape,
+                                           const Shape& device_shape) override {
     auto chunk = PjRtChunk::AllocateDefault(src_size);
     std::memcpy(chunk.data(), src_data, src_size);
     return chunk;
   }
 
-  Status ToHostLayout(const void* src_data, size_t src_size,
-                      const Shape& src_shape, void* dst_data, size_t dst_size,
-                      const Shape& dst_shape) override {
+  absl::Status ToHostLayout(const void* src_data, size_t src_size,
+                            const Shape& src_shape, void* dst_data,
+                            size_t dst_size, const Shape& dst_shape) override {
     CHECK_EQ(src_size, dst_size);
     std::memcpy(dst_data, src_data, src_size);
-    return OkStatus();
+    return absl::OkStatus();
   }
 };
 
@@ -57,11 +65,11 @@ class TestStream : public CopyToDeviceStream {
         chunk_(chunk),
         done_(done) {}
 
-  PjRtFuture<Status> AddChunk(PjRtChunk chunk) override {
+  Future<> AddChunk(PjRtChunk chunk) override {
     CHECK(!done_.HasBeenNotified());
     chunk_ = std::move(chunk);
     done_.Notify();
-    return PjRtFuture<Status>(OkStatus());
+    return Future<>(absl::OkStatus());
   }
 
  private:
@@ -79,7 +87,7 @@ TEST(HostCallbackTest, Basic) {
   host_callback.results = {HostCallbackArgInfo{/*channel_id=*/2, shape}};
   host_callback.callback = [byte_size](void** outputs, void** inputs) {
     std::memcpy(outputs[0], inputs[0], byte_size);
-    return OkStatus();
+    return absl::OkStatus();
   };
 
   HostCallbackStates states;
@@ -127,7 +135,7 @@ TEST(HostCallbackTest, NonBlockingRecv) {
   host_callback.results = {HostCallbackArgInfo{/*channel_id=*/2, shape}};
   host_callback.callback = [byte_size](void** outputs, void** inputs) {
     std::memcpy(outputs[0], inputs[0], byte_size);
-    return OkStatus();
+    return absl::OkStatus();
   };
 
   HostCallbackStates states;

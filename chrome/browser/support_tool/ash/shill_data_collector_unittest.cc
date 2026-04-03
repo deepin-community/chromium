@@ -4,6 +4,7 @@
 
 #include "chrome/browser/support_tool/ash/shill_data_collector.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <optional>
@@ -16,7 +17,6 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -130,12 +130,13 @@ const PIIMap kPIIInTestData = {
      {"100.0.0.1", "100.0.0.2", "0:0:0:0:100:0:0:1"}},
     {redaction::PIIType::kURL, {"http://wpad.com/wpad.dat"}},
     {redaction::PIIType::kSSID,
-     {"\"7769666931\"\n", "stub_wifi_device1", "wifi1"}}};
+     {"\"7769666931\"\n", "stub_wifi_device1", "wifi1"}},
+    {redaction::PIIType::kMACAddress, {"0123456789ab", "23456789abcd"}}};
 
 // Types of all PII data contained in the test data
 const std::set<redaction::PIIType> kAllPIITypesInData = {
     redaction::PIIType::kIPAddress, redaction::PIIType::kURL,
-    redaction::PIIType::kSSID};
+    redaction::PIIType::kSSID, redaction::PIIType::kMACAddress};
 
 class ShillDataCollectorTest : public ::testing::Test {
  public:
@@ -206,7 +207,7 @@ TEST_F(ShillDataCollectorTest, CollectAndExportUnmaskedData) {
   PIIMap detected_pii = data_collector.GetDetectedPII();
   // Get the types of all PII data detected
   std::set<redaction::PIIType> detected_pii_types;
-  base::ranges::transform(
+  std::ranges::transform(
       detected_pii, std::inserter(detected_pii_types, detected_pii_types.end()),
       &PIIMap::value_type::first);
   // If set A is a subset of set B, then A unioned with B equals B
@@ -264,7 +265,7 @@ TEST_F(ShillDataCollectorTest, CollectAndExportMaskedData) {
   PIIMap detected_pii = data_collector.GetDetectedPII();
   // Get the types of all PII data detected
   std::set<redaction::PIIType> detected_pii_types;
-  base::ranges::transform(
+  std::ranges::transform(
       detected_pii, std::inserter(detected_pii_types, detected_pii_types.end()),
       &PIIMap::value_type::first);
   // If set A is a subset of set B, then A unioned with B equals B

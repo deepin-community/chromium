@@ -36,7 +36,9 @@ void TruncateStringToSize(base::FilePath::StringType* string, size_t size) {
   for (size_t i = 0; i < string->size(); ++i) {
     base_icu::UChar32 codepoint;
     size_t original_i = i;
-    if (!base::ReadUnicodeCharacter(c_str, size, &i, &codepoint) || i >= size) {
+    if (!base::ReadUnicodeCharacter(std::u16string_view(c_str, size), &i,
+                                    &codepoint) ||
+        i >= size) {
       string->resize(original_i);
       return;
     }
@@ -51,15 +53,30 @@ void TruncateStringToSize(base::FilePath::StringType* string, size_t size) {
 namespace ui {
 
 void SelectFileDialog::Listener::MultiFilesSelected(
-    const std::vector<SelectedFileInfo>& files,
-    void* params) {
-  NOTREACHED_NORETURN();
+    const std::vector<SelectedFileInfo>& files) {
+  NOTREACHED();
 }
 
 SelectFileDialog::FileTypeInfo::FileTypeInfo() = default;
 
 SelectFileDialog::FileTypeInfo::FileTypeInfo(const FileTypeInfo& other) =
     default;
+
+SelectFileDialog::FileTypeInfo::FileTypeInfo(FileExtensionList in_extensions)
+    : extensions({std::move(in_extensions)}) {}
+
+SelectFileDialog::FileTypeInfo::FileTypeInfo(
+    std::vector<FileExtensionList> in_extensions)
+    : extensions(std::move(in_extensions)) {}
+
+SelectFileDialog::FileTypeInfo::FileTypeInfo(
+    std::vector<FileExtensionList> in_extensions,
+    std::vector<std::u16string> in_descriptions)
+    : extensions(std::move(in_extensions)),
+      extension_description_overrides(std::move(in_descriptions)) {
+  CHECK(extension_description_overrides.empty() ||
+        extension_description_overrides.size() == extensions.size());
+}
 
 SelectFileDialog::FileTypeInfo::~FileTypeInfo() = default;
 
@@ -101,6 +118,13 @@ base::FilePath SelectFileDialog::GetShortenedFilePath(
   return path.DirName().Append(file_string).AddExtension(extension);
 }
 
+#if BUILDFLAG(IS_ANDROID)
+// These are overridden by Android's SelectFileDialog subclass.
+void SelectFileDialog::SetAcceptTypes(std::vector<std::u16string> types) {}
+void SelectFileDialog::SetUseMediaCapture(bool use_media_capture) {}
+void SelectFileDialog::SetOpenWritable(bool open_writable) {}
+#endif
+
 void SelectFileDialog::SelectFile(
     Type type,
     const std::u16string& title,
@@ -109,7 +133,6 @@ void SelectFileDialog::SelectFile(
     int file_type_index,
     const base::FilePath::StringType& default_extension,
     gfx::NativeWindow owning_window,
-    void* params,
     const GURL* caller) {
   DCHECK(listener_);
 
@@ -122,7 +145,7 @@ void SelectFileDialog::SelectFile(
     // that the listener is called asynchronously.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
-        base::BindOnce(&SelectFileDialog::CancelFileSelection, this, params));
+        base::BindOnce(&SelectFileDialog::CancelFileSelection, this));
     return;
   }
 
@@ -130,7 +153,7 @@ void SelectFileDialog::SelectFile(
 
   // Call the platform specific implementation of the file selection dialog.
   SelectFileImpl(type, title, path, file_types, file_type_index,
-                 default_extension, owning_window, params, caller);
+                 default_extension, owning_window, caller);
 }
 
 bool SelectFileDialog::HasMultipleFileTypeChoices() {
@@ -145,9 +168,9 @@ SelectFileDialog::SelectFileDialog(Listener* listener,
 
 SelectFileDialog::~SelectFileDialog() {}
 
-void SelectFileDialog::CancelFileSelection(void* params) {
+void SelectFileDialog::CancelFileSelection() {
   if (listener_)
-    listener_->FileSelectionCanceled(params);
+    listener_->FileSelectionCanceled();
 }
 
 }  // namespace ui

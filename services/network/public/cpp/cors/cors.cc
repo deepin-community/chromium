@@ -2,23 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "services/network/public/cpp/cors/cors.h"
 
+#include <algorithm>
 #include <set>
 #include <string_view>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "net/base/mime_util.h"
 #include "net/http/http_byte_range.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_util.h"
 #include "services/network/public/cpp/client_hints.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "services/network/public/cpp/request_mode.h"
 #include "third_party/abseil-cpp/absl/strings/ascii.h"
@@ -95,8 +96,9 @@ bool IsCorsUnsafeRequestHeaderByte(char c) {
 // |value| should be lower case.
 bool IsCorsSafelistedLowerCaseContentType(const std::string& value) {
   DCHECK_EQ(value, base::ToLowerASCII(value));
-  if (base::ranges::any_of(value, IsCorsUnsafeRequestHeaderByte))
+  if (std::ranges::any_of(value, IsCorsUnsafeRequestHeaderByte)) {
     return false;
+  }
 
   std::optional<std::string> mime_type =
       net::ExtractMimeTypeFromMediaType(value,
@@ -106,7 +108,10 @@ bool IsCorsSafelistedLowerCaseContentType(const std::string& value) {
   }
 
   return *mime_type == "application/x-www-form-urlencoded" ||
-         *mime_type == "multipart/form-data" || *mime_type == "text/plain";
+         *mime_type == "multipart/form-data" || *mime_type == "text/plain" ||
+         (*mime_type == "message/ad-auction-trusted-signals-request" &&
+          base::FeatureList::IsEnabled(
+              features::kProtectedAudienceCorsSafelistKVv2Signals));
 }
 
 bool IsNoCorsSafelistedHeaderNameLowerCase(const std::string& lower_name) {
@@ -128,15 +133,9 @@ const char kAccessControlAllowCredentials[] =
 const char kAccessControlAllowHeaders[] = "Access-Control-Allow-Headers";
 const char kAccessControlAllowMethods[] = "Access-Control-Allow-Methods";
 const char kAccessControlAllowOrigin[] = "Access-Control-Allow-Origin";
-const char kAccessControlAllowPrivateNetwork[] =
-    "Access-Control-Allow-Private-Network";
 const char kAccessControlMaxAge[] = "Access-Control-Max-Age";
 const char kAccessControlRequestHeaders[] = "Access-Control-Request-Headers";
 const char kAccessControlRequestMethod[] = "Access-Control-Request-Method";
-const char kAccessControlRequestPrivateNetwork[] =
-    "Access-Control-Request-Private-Network";
-const char kPrivateNetworkDeviceId[] = "Private-Network-Access-ID";
-const char kPrivateNetworkDeviceName[] = "Private-Network-Access-Name";
 
 }  // namespace header_names
 
@@ -157,7 +156,7 @@ base::expected<void, CorsErrorStatus> CheckAccess(
     // Since the credential is a concept for network schemes, we perform the
     // wildcard check only for HTTP and HTTPS. This is a quick hack to allow
     // data URL (see https://crbug.com/315152).
-    // TODO(https://crbug.com/736308): Once the callers exist only in the
+    // TODO(crbug.com/40088171): Once the callers exist only in the
     // browser process or network service, this check won't be needed any more
     // because it is always for network requests there.
     if (response_url.SchemeIsHTTPOrHTTPS()) {
@@ -362,9 +361,9 @@ bool IsCorsSafelistedHeader(const std::string& name, const std::string& value) {
       // although there may be internal UI in the future.
       // https://wicg.github.io/user-preference-media-features-headers/#sec-ch-prefers-reduced-motion
       "sec-ch-prefers-reduced-motion",
-      // The `Sec-CH-UA-Form-Factor` header field provides information on the
-      // form factor of the user agent device.
-      "sec-ch-ua-form-factor",
+      // The `Sec-CH-UA-Form-Factors` header field provides information on the
+      // form factors of the user agent device.
+      "sec-ch-ua-form-factors",
       // The `Sec-CH-Prefers-Reduced-Transparency` header field is modeled after
       // the prefers-reduced-transparency user preference media feature. It
       // reflects the user’s desire that the page minimizes the amount of
@@ -375,16 +374,16 @@ bool IsCorsSafelistedHeader(const std::string& name, const std::string& value) {
   });
 
   // Check if the name of the header to send is safe.
-  if (!base::Contains(safe_names, lower_name))
+  if (!safe_names.contains(lower_name))
     return false;
 
   // Verify the values of all non-secure headers (except `intervention`).
   const std::string lower_value = base::ToLowerASCII(value);
   if (lower_name == "accept") {
-    return !base::ranges::any_of(value, IsCorsUnsafeRequestHeaderByte);
+    return !std::ranges::any_of(value, IsCorsUnsafeRequestHeaderByte);
   } else if (lower_name == "accept-language" ||
              lower_name == "content-language") {
-    return base::ranges::all_of(value, [](char c) {
+    return std::ranges::all_of(value, [](char c) {
       return (0x30 <= c && c <= 0x39) || (0x41 <= c && c <= 0x5a) ||
              (0x61 <= c && c <= 0x7a) || c == 0x20 || c == 0x2a || c == 0x2c ||
              c == 0x2d || c == 0x2e || c == 0x3b || c == 0x3d;
@@ -398,7 +397,7 @@ bool IsCorsSafelistedHeader(const std::string& name, const std::string& value) {
     // - Only one range is provided
     // - No suffix (bytes=-x) ranges
 
-    if (base::ranges::any_of(lower_value, [](char c) {
+    if (std::ranges::any_of(lower_value, [](char c) {
           return net::HttpUtil::IsLWS(c) || c == ',';
         })) {
       return false;
@@ -416,10 +415,10 @@ bool IsCorsSafelistedHeader(const std::string& name, const std::string& value) {
              lower_name == "rtt") {
     return IsSimilarToIntABNF(value);
   } else if (lower_name == "ect") {
-    auto* const* begin = network::kWebEffectiveConnectionTypeMapping;
-    auto* const* end = network::kWebEffectiveConnectionTypeMapping +
-                       network::kWebEffectiveConnectionTypeMappingCount;
-    return std::find(begin, end, value) != end;
+    return std::find(network::kWebEffectiveConnectionTypeMapping.begin(),
+                     network::kWebEffectiveConnectionTypeMapping.end(),
+                     value) !=
+           network::kWebEffectiveConnectionTypeMapping.end();
   } else if (lower_name == "save-data") {
     return lower_value == "on";
   }
@@ -518,12 +517,12 @@ bool CalculateCredentialsFlag(mojom::CredentialsMode credentials_mode,
   //    response tainting is "basic"
   // is true, and unset otherwise.
   switch (credentials_mode) {
-    case network::mojom::CredentialsMode::kOmit:
-    case network::mojom::CredentialsMode::kOmitBug_775438_Workaround:
+    case mojom::CredentialsMode::kOmit:
+    case mojom::CredentialsMode::kOmitBug_775438_Workaround:
       return false;
-    case network::mojom::CredentialsMode::kSameOrigin:
-      return response_tainting == network::mojom::FetchResponseType::kBasic;
-    case network::mojom::CredentialsMode::kInclude:
+    case mojom::CredentialsMode::kSameOrigin:
+      return response_tainting == mojom::FetchResponseType::kBasic;
+    case mojom::CredentialsMode::kInclude:
       return true;
   }
 }
@@ -532,14 +531,14 @@ mojom::FetchResponseType CalculateResponseType(
     mojom::RequestMode mode,
     bool is_request_considered_same_origin) {
   if (is_request_considered_same_origin ||
-      mode == network::mojom::RequestMode::kNavigate ||
-      mode == network::mojom::RequestMode::kSameOrigin) {
-    return network::mojom::FetchResponseType::kBasic;
-  } else if (mode == network::mojom::RequestMode::kNoCors) {
-    return network::mojom::FetchResponseType::kOpaque;
+      mode == mojom::RequestMode::kNavigate ||
+      mode == mojom::RequestMode::kSameOrigin) {
+    return mojom::FetchResponseType::kBasic;
+  } else if (mode == mojom::RequestMode::kNoCors) {
+    return mojom::FetchResponseType::kOpaque;
   } else {
-    DCHECK(network::cors::IsCorsEnabledRequestMode(mode)) << mode;
-    return network::mojom::FetchResponseType::kCors;
+    DCHECK(cors::IsCorsEnabledRequestMode(mode)) << mode;
+    return mojom::FetchResponseType::kCors;
   }
 }
 

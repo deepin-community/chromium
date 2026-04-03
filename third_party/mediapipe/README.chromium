@@ -1,9 +1,11 @@
 Name: MediaPipe
 Short Name: mediapipe
 URL: https://github.com/google/mediapipe
-Version: d3639a0b1a80f1fa294902e941f6de4158944db5
-Date: 2024-02-07
-License: Apache 2.0
+Version: baae143e4a5c7673cd70a5ef6a26b9d1679c2673
+Revision: baae143e4a5c7673cd70a5ef6a26b9d1679c2673
+Update Mechanism: Manual
+Date: 2026-01-27
+License: Apache-2.0, X11-Lucent
 License File: LICENSE
 Security Critical: Yes
 Shipped: yes
@@ -15,6 +17,9 @@ Solutions suite, including a set of libraries for deploying innovative ML
 solutions onto devices with a minimum of code. It supports multiple platforms,
 including Android, Web / JavaScript, Python, and support for iOS is coming soon.
 
+Note that this library includes some of its own third-party libraries (e.g.
+com_google_audio_tools).
+
 To update this library
 ======================
 
@@ -23,8 +28,7 @@ To update this library
 2) Run the `update.sh` script in this directory.
 
 3) Fix the build and get everything compiling and `components_unittests`
-  passing with the gn arg `build_with_mediapipe_lib = true` and optionally with
-  `mediapipe_build_with_gpu_support = true`.
+  passing with the gn arg `build_with_mediapipe_lib = true`.
 
 
 To make a new patch file
@@ -63,6 +67,19 @@ Chromium binary size requirements.
 
 * unnecessary-const.patch - Removes an unnecessary "const".
 
+* audio_tools_porting_nan.patch
+ On Windows, compiler throws "constexpr variable must be initialized by a
+ constant expression" in third_party/com_google_audio_tools/audio/dsp/porting.h,
+ This fixes the issue by using std::numeric_limits instead of NAN defined in
+ <cmath>.
+
+* type-map-fix-unused-variable-warning.patch - Replaces `MapName` in
+mediapipe/framework/type_map.h header to work around "unused variable" compiler
+warning (treated as error) when building.
+
+* compile-with-clang.patch - Fixes compilation errors related to clang,
+including deleting invalid move assignment operators, matching class/struct
+tags, disabling RTTI usage, and fixing implicit integer-to-float conversions.
 
 Patches which need to be upstreamed differently than they are patched
 =====================================================================
@@ -91,7 +108,8 @@ in Chromium, so it would potentially need to be a more complex change in
 MediaPipe (i.e. we need a replacement for `EnsureEglThreadRelease()` in
 gl_context_egl.cc).
 
-* no-consume.patch - MediaPipe still uses shared_ptr::unique() but only in code that Chrome does not exercise. This needs to actually be fixed properly upstream.
+* no-consume.patch - MediaPipe still uses shared_ptr::unique() but only in code
+that Chrome does not exercise. This needs to actually be fixed properly upstream.
 
 Other patches
 =============
@@ -120,9 +138,3 @@ Here's the set of functions that were added to the generated file:
                                        &(const_cast<AnyLite*>(this)->value_));
     return any_metadata.Is<T>();
   }
-
-* dont-use-dedicated-context-for-some-calculators.patch - temporary patch that
-is only needed when unit-testing with GPU support (not yet official). Will be
-removed after MediaPipe w/ GPU is taught how to use Chromium's GL thread and
-GL context instead of creating its own.
-TODO(https://crbug.com/1492217): remove this patch once it is no longer needed.

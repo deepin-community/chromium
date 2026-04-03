@@ -80,6 +80,8 @@ static const char* uarch_to_string(enum cpuinfo_uarch uarch) {
 			return "Palm Cove";
 		case cpuinfo_uarch_sunny_cove:
 			return "Sunny Cove";
+		case cpuinfo_uarch_willow_cove:
+			return "Willow Cove";
 		case cpuinfo_uarch_willamette:
 			return "Willamette";
 		case cpuinfo_uarch_prescott:
@@ -96,6 +98,14 @@ static const char* uarch_to_string(enum cpuinfo_uarch uarch) {
 			return "Goldmont";
 		case cpuinfo_uarch_goldmont_plus:
 			return "Goldmont Plus";
+		case cpuinfo_uarch_tremont:
+			return "Tremont";
+		case cpuinfo_uarch_gracemont:
+			return "Gracemont";
+		case cpuinfo_uarch_crestmont:
+			return "Crestmont";
+		case cpuinfo_uarch_darkmont:
+			return "Darkmont";
 		case cpuinfo_uarch_knights_ferry:
 			return "Knights Ferry";
 		case cpuinfo_uarch_knights_corner:
@@ -132,6 +142,10 @@ static const char* uarch_to_string(enum cpuinfo_uarch uarch) {
 			return "Zen 3";
 		case cpuinfo_uarch_zen4:
 			return "Zen 4";
+		case cpuinfo_uarch_zen5:
+			return "Zen 5";
+		case cpuinfo_uarch_zen6:
+			return "Zen 6";
 		case cpuinfo_uarch_geode:
 			return "Geode";
 		case cpuinfo_uarch_bobcat:
@@ -190,16 +204,34 @@ static const char* uarch_to_string(enum cpuinfo_uarch uarch) {
 			return "Cortex-A78";
 		case cpuinfo_uarch_cortex_a510:
 			return "Cortex-A510";
+		case cpuinfo_uarch_cortex_a520:
+			return "Cortex-A520";
 		case cpuinfo_uarch_cortex_a710:
 			return "Cortex-A710";
 		case cpuinfo_uarch_cortex_a715:
 			return "Cortex-A715";
+		case cpuinfo_uarch_cortex_a720:
+			return "Cortex-A720";
+		case cpuinfo_uarch_cortex_a725:
+			return "Cortex-A725";
 		case cpuinfo_uarch_cortex_x1:
 			return "Cortex-X1";
 		case cpuinfo_uarch_cortex_x2:
 			return "Cortex-X2";
 		case cpuinfo_uarch_cortex_x3:
 			return "Cortex-X3";
+		case cpuinfo_uarch_cortex_x4:
+			return "Cortex-X4";
+		case cpuinfo_uarch_cortex_x925:
+			return "Cortex-X925";
+		case cpuinfo_uarch_lumex_c1_ultra:
+			return "Lumex-C1-Ultra";
+		case cpuinfo_uarch_lumex_c1_premium:
+			return "Lumex-C1-Premium";
+		case cpuinfo_uarch_lumex_c1_pro:
+			return "Lumex-C1-Pro";
+		case cpuinfo_uarch_lumex_c1_nano:
+			return "Lumex-C1-Nano";
 		case cpuinfo_uarch_neoverse_n1:
 			return "Neoverse N1";
 		case cpuinfo_uarch_neoverse_e1:
@@ -220,6 +252,10 @@ static const char* uarch_to_string(enum cpuinfo_uarch uarch) {
 			return "Falkor";
 		case cpuinfo_uarch_saphira:
 			return "Saphira";
+		case cpuinfo_uarch_oryon:
+			return "Oryon";
+		case cpuinfo_uarch_oryon_v3:
+			return "Oryon V3";
 		case cpuinfo_uarch_denver:
 			return "Denver";
 		case cpuinfo_uarch_denver2:
@@ -266,6 +302,30 @@ static const char* uarch_to_string(enum cpuinfo_uarch uarch) {
 			return "Avalanche";
 		case cpuinfo_uarch_blizzard:
 			return "Blizzard";
+		case cpuinfo_uarch_everest:
+			return "Everest";
+		case cpuinfo_uarch_sawtooth:
+			return "Sawtooth";
+		case cpuinfo_uarch_coll_everest:
+			return "Coll_Everest";
+		case cpuinfo_uarch_coll_sawtooth:
+			return "Coll_Sawtooth";
+		case cpuinfo_uarch_tupai_everest:
+			return "Tupai_Everest";
+		case cpuinfo_uarch_tupai_sawtooth:
+			return "Tupai_Sawtooth";
+		case cpuinfo_uarch_tahiti_everest:
+			return "Tahiti_Everest";
+		case cpuinfo_uarch_tahiti_sawtooth:
+			return "Tahiti_Sawtooth";
+		case cpuinfo_uarch_tilos_everest:
+			return "Tilos_Everest";
+		case cpuinfo_uarch_tilos_sawtooth:
+			return "Tilos_Sawtooth";
+		case cpuinfo_uarch_donan_everest:
+			return "Donan Everest";
+		case cpuinfo_uarch_donan_sawtooth:
+			return "Donan Sawtooth";
 		case cpuinfo_uarch_thunderx:
 			return "ThunderX";
 		case cpuinfo_uarch_thunderx2:
@@ -332,6 +392,39 @@ int main(int argc, char** argv) {
 			       (uint32_t)core->uarch);
 		} else if (uarch_string == NULL) {
 			printf(", %s uarch 0x%08" PRIx32 "\n", vendor_string, (uint32_t)core->uarch);
+		} else {
+			printf(", %s %s\n", vendor_string, uarch_string);
+		}
+	}
+	printf("Clusters:\n");
+	for (uint32_t i = 0; i < cpuinfo_get_clusters_count(); i++) {
+		const struct cpuinfo_cluster* cluster = cpuinfo_get_cluster(i);
+		if (cluster->processor_count == 1) {
+			printf("\t%" PRIu32 ": 1 processor (%" PRIu32 ")", i, cluster->processor_start);
+		} else {
+			printf("\t%" PRIu32 ": %" PRIu32 " processors (%" PRIu32 "-%" PRIu32 ")",
+			       i,
+			       cluster->processor_count,
+			       cluster->processor_start,
+			       cluster->processor_start + cluster->processor_count - 1);
+		}
+		if (cluster->core_count == 1) {
+			printf(",\t%" PRIu32 ": 1 core (%" PRIu32 ")", i, cluster->core_start);
+		} else {
+			printf(",\t%" PRIu32 ": %" PRIu32 " cores (%" PRIu32 "-%" PRIu32 ")",
+			       i,
+			       cluster->core_count,
+			       cluster->core_start,
+			       cluster->core_start + cluster->core_count - 1);
+		}
+		const char* vendor_string = vendor_to_string(cluster->vendor);
+		const char* uarch_string = uarch_to_string(cluster->uarch);
+		if (vendor_string == NULL) {
+			printf(", vendor 0x%08" PRIx32 " uarch 0x%08" PRIx32 "\n",
+			       (uint32_t)cluster->vendor,
+			       (uint32_t)cluster->uarch);
+		} else if (uarch_string == NULL) {
+			printf(", %s uarch 0x%08" PRIx32 "\n", vendor_string, (uint32_t)cluster->uarch);
 		} else {
 			printf(", %s %s\n", vendor_string, uarch_string);
 		}

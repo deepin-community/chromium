@@ -9,8 +9,11 @@
 #define SkFontArguments_DEFINED
 
 #include "include/core/SkColor.h"
-#include "include/core/SkScalar.h"
+#include "include/core/SkFourByteTag.h"
 #include "include/core/SkTypes.h"
+
+#include <cstdint>
+#include <optional>
 
 /** Represents a set of actual arguments for a font. */
 struct SkFontArguments {
@@ -85,10 +88,24 @@ struct SkFontArguments {
 
     Palette getPalette() const { return fPalette; }
 
+    SkFontArguments& setSyntheticBold(std::optional<bool> bold) {
+        fSyntheticBold = bold;
+        return *this;
+    }
+    std::optional<bool> getSyntheticBold() const { return fSyntheticBold; }
+
+    SkFontArguments& setSyntheticOblique(std::optional<bool> oblique) {
+        fSyntheticOblique = oblique;
+        return *this;
+    }
+    std::optional<bool> getSyntheticOblique() const { return fSyntheticOblique; }
+
 private:
     int fCollectionIndex;
     VariationPosition fVariationDesignPosition;
     Palette fPalette;
+    std::optional<bool> fSyntheticBold;
+    std::optional<bool> fSyntheticOblique;
 };
 
 #endif

@@ -16,8 +16,10 @@ limitations under the License.
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "xla/hlo/experimental/auto_sharding/auto_sharding_cost_graph.h"
 #include "xla/hlo/experimental/auto_sharding/auto_sharding_option.h"
@@ -26,32 +28,26 @@ limitations under the License.
 #include "xla/hlo/experimental/auto_sharding/auto_sharding_wrapper.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_schedule.h"
+#include "xla/hlo/ir/hlo_sharding.h"
 #include "xla/hlo/utils/hlo_live_range.h"
 #include "xla/service/hlo_cost_analysis.h"
 
 namespace xla {
 namespace spmd {
 
-AutoShardingSolverResult Solve(
+absl::StatusOr<AutoShardingSolverOutput> Solve(
     const HloModule& hlo_module, const HloLiveRange& hlo_live_range,
-    const LivenessNodeSet& liveness_node_set,
-    const LivenessEdgeSet& liveness_edge_set, const StrategyMap& strategy_map,
-    const StrategyGroups& strategy_groups, const CostGraph& cost_graph,
-    const AliasSet& alias_set, const AutoShardingOption& option,
-    absl::string_view request_prefix,
-    const absl::flat_hash_map<std::string, const HloInstruction*>&
+    const StrategyMap& strategy_map, const StrategyGroups& strategy_groups,
+    const CostGraph& cost_graph, const AliasSet& alias_set,
+    const AutoShardingOption& option, absl::string_view request_prefix,
+    const absl::flat_hash_map<std::string, HloSharding>&
         sharding_propagation_solution) {
-  return CallSolver(
-      hlo_module, hlo_live_range, liveness_node_set, liveness_edge_set,
-      strategy_map, strategy_groups, cost_graph, alias_set, /*s_hint*/ {},
-      /*compute_iis*/ true, option.solver_timeout_in_seconds, option,
-      /*max_cost*/ std::nullopt, request_prefix, sharding_propagation_solution,
+  return CreateAutoShardingSolverRequestAndCallSolver(
+      hlo_module, hlo_live_range, strategy_map, strategy_groups, cost_graph,
+      alias_set, /*s_hint*/ {}, /*compute_iis*/ true,
+      option.solver_timeout_in_seconds, option, /*max_cost*/ std::nullopt,
+      request_prefix, sharding_propagation_solution,
       /*deterministic mode*/ true);
-}
-
-void PopulateTemporalValues(const CostGraph& cost_graph,
-                            AutoShardingSolverRequest& request) {
-  // TODO(moffitt): Implement this.
 }
 
 double GetDotConvReplicationPenalty(const HloInstruction* inst,

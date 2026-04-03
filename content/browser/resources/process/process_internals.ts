@@ -83,6 +83,12 @@ async function loadProcessCountInfo() {
   assert(processCountTotal);
   processCountTotal.innerText = String(info.rendererProcessCountTotal);
 
+  const liveProcessesCountTotal =
+      document.querySelector<HTMLElement>('#live-processes-count-total');
+  assert(liveProcessesCountTotal);
+  liveProcessesCountTotal.innerText =
+      String(info.liveRendererProcessesCountTotal);
+
   const processCountForLimit =
       document.querySelector<HTMLElement>('#process-count-for-limit');
   assert(processCountForLimit);
@@ -158,10 +164,10 @@ function frameToTreeItem(frame: FrameInfo, parentProcessId: number = -1):
     itemLabel += ', unlocked';
   }
   if (frame.siteInstance.siteUrl) {
-    itemLabel += `, site:${frame.siteInstance.siteUrl.url}`;
+    itemLabel += `, site:${frame.siteInstance.siteUrl}`;
   }
   if (frame.siteInstance.processLockUrl) {
-    itemLabel += `, lock:${frame.siteInstance.processLockUrl.url}`;
+    itemLabel += `, lock:${frame.siteInstance.processLockUrl}`;
   }
   if (frame.siteInstance.requiresOriginKeyedProcess) {
     itemLabel += ', origin-keyed';
@@ -175,11 +181,17 @@ function frameToTreeItem(frame: FrameInfo, parentProcessId: number = -1):
   if (frame.siteInstance.isPdf) {
     itemLabel += ', pdf';
   }
+  // TODO(crbug.com/398265332): only show the non-default case.
+  if (frame.siteInstance.areJavascriptOptimizersEnabled) {
+    itemLabel += ', js-opt-on';
+  } else {
+    itemLabel += ', js-opt-off';
+  }
   if (frame.siteInstance.storagePartition) {
     itemLabel += `, partition:${frame.siteInstance.storagePartition}`;
   }
   if (frame.lastCommittedUrl) {
-    itemLabel += ` | url: ${frame.lastCommittedUrl.url}`;
+    itemLabel += ` | url: ${frame.lastCommittedUrl}`;
   }
 
   const item = document.createElement('cr-tree-item');
@@ -410,6 +422,14 @@ document.addEventListener('DOMContentLoaded', function() {
       document.querySelector<HTMLElement>('#refresh-process-info');
   assert(refreshProcessInfoButton);
   refreshProcessInfoButton.addEventListener('click', loadProcessCountInfo);
+
+  // Get the ProcessPerSite mode and populate it.
+  pageHandler.getProcessPerSiteMode().then((response) => {
+    const sharingMode =
+        document.querySelector<HTMLElement>('#process-per-site-mode');
+    assert(sharingMode);
+    sharingMode.innerText = response.mode;
+  });
 
   // Get the Site Isolation mode and populate it.
   pageHandler.getIsolationMode().then((response) => {

@@ -9,7 +9,6 @@
 #include <tuple>
 #include <vector>
 
-#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
@@ -117,7 +116,7 @@ class HeadlessBrowserTestWithHeadlessModePolicy
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    HeadlessBrowserTestWithHeadlessModePolicy,
+    /* no prefix */,
     HeadlessBrowserTestWithHeadlessModePolicy,
     testing::Values(std::make_tuple(kHeadlessModePolicyEnabled, true),
                     std::make_tuple(kHeadlessModePolicyDisabled, false),
@@ -132,7 +131,7 @@ class HeadlessBrowserTestWithUrlBlockPolicy
     : public HeadlessBrowserTestWithPolicy {
  protected:
   void SetPolicy() override {
-    base::Value::List value;
+    base::ListValue value;
     value.Append("*/blocked.html");
 
     policy::PolicyMap policy;
@@ -187,7 +186,7 @@ class HeadlessBrowserTestWithRemoteDebuggingAllowedPolicy
   CaptureStdErr capture_stderr_;
 };
 
-INSTANTIATE_TEST_SUITE_P(HeadlessBrowserTestWithRemoteDebuggingAllowedPolicy,
+INSTANTIATE_TEST_SUITE_P(/* no prefix */,
                          HeadlessBrowserTestWithRemoteDebuggingAllowedPolicy,
                          testing::Values(true, false));
 

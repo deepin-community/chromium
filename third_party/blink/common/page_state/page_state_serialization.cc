@@ -8,6 +8,10 @@
 #include <limits>
 #include <utility>
 
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
 #include "base/pickle.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -37,9 +41,8 @@ float g_device_scale_factor_for_testing = 0.0;
 
 void AppendDataToRequestBody(
     const scoped_refptr<network::ResourceRequestBody>& request_body,
-    const char* data,
-    size_t data_length) {
-  request_body->AppendBytes(data, data_length);
+    base::span<const uint8_t> data) {
+  request_body->AppendCopyOfBytes(data);
 }
 
 void AppendFileRangeToRequestBody(
@@ -80,6 +83,9 @@ bool AppendReferencedFilesFromDocumentState(
   //
   // For reference, see FormController::formStatesFromStateVector in
   // third_party/WebKit/Source/core/html/forms/FormController.cpp.
+  //
+  // Support for PageState version 14 was added to allow validation of the file
+  // list.
 
   size_t index = 0;
 
@@ -114,11 +120,37 @@ bool AppendReferencedFilesFromDocumentState(
       return false;
 
     if (type && base::EqualsASCII(*type, "file")) {
-      if (value_size != 2)
+      // `value_size` is expected to be either:
+      // - 0 for an empty file form field
+      // - 2 for legacy PageState versions that only contain file path and
+      //   display name.
+      // - A multiple of 3 for modern PageStates, which contain a list of
+      //   (file path, name, relative path) triples within a single item.
+      //   (See File::AppendToControlState.)
+      //
+      // Extract the file path(s) for sizes 2 and 3, and continue with
+      // validation for the zero-size empty file case. Any other values of
+      // `value_size` should be considered invalid.
+      if (value_size == 2) {
+        // PageState version < 14.
+        referenced_files->emplace_back(document_state[index++]);
+        index++;  // Skip over display name.
+      } else if (value_size > 2 && value_size % 3 == 0) {
+        // PageState version >= 14.
+        // Add the file path from each group of three.
+        for (size_t i = 0; i < value_size / 3; ++i) {
+          // Double-check bounds for the 3 elements we will look at.
+          if (index + 2 >= document_state.size()) {
+            return false;
+          }
+          referenced_files->emplace_back(document_state[index++]);
+          index++;  // Skip over name.
+          index++;  // Skip over relative path.
+        }
+      } else if (value_size != 0) {
         return false;
-
-      referenced_files->emplace_back(document_state[index++]);
-      index++;  // Skip over display name.
+      }
+      // If value_size is 0, the file form field is empty, so continue.
     } else {
       index += value_size;
     }
@@ -151,21 +183,21 @@ bool RecursivelyAppendReferencedFiles(
 //----------------------------------------------------------------------------
 
 struct SerializeObject {
-  SerializeObject() : version(0), parse_error(false) {}
+  SerializeObject() = default;
 
-  SerializeObject(const char* data, int len)
-      : pickle(data, len), version(0), parse_error(false) {
-    iter = base::PickleIterator(pickle);
-  }
-
-  std::string GetAsString() {
-    return std::string(pickle.data_as_char(), pickle.size());
-  }
+  std::string GetAsString() { return std::string(pickle.AsStringView()); }
 
   base::Pickle pickle;
+  int version = 0;
+};
+
+struct DeserializeObject {
+  explicit DeserializeObject(base::span<const uint8_t> data)
+      : iter(base::PickleIterator::WithData(data)) {}
+
   base::PickleIterator iter;
-  int version;
-  bool parse_error;
+  int version = 0;
+  bool parse_error = false;
 };
 
 // IMPORTANT: When making updates to the PageState serialization code, be sure
@@ -207,33 +239,31 @@ const int kMinVersion = 11;
 // instructions on how to generate the new test case.
 const int kCurrentVersion = 33;
 
-// A bunch of convenience functions to write to/read from SerializeObjects.  The
-// de-serializers assume the input data will be in the correct format and fall
-// back to returning safe defaults when not. These are mostly used by
-// legacy(pre-mojo) serialization methods. If you're making changes to the
-// PageState serialization format you almost certainly want to add/remove fields
-// in page_state.mojom rather than using these methods.
+// A bunch of convenience functions to write to/read from
+// SerializeObject/DeserializeObject instances. The de-serializers assume the
+// input data will be in the correct format and fall back to returning safe
+// defaults when not. These are mostly used by legacy(pre-mojo) serialization
+// methods. If you're making changes to the PageState serialization format you
+// almost certainly want to add/remove fields in page_state.mojom rather than
+// using these methods.
 
-void WriteData(const void* data, size_t length, SerializeObject* obj) {
-  obj->pickle.WriteData(static_cast<const char*>(data), length);
+void WriteData(base::span<const uint8_t> data, SerializeObject* obj) {
+  obj->pickle.WriteData(data);
 }
 
-void ReadData(SerializeObject* obj, const void** data, size_t* length) {
-  const char* tmp;
-  if (obj->iter.ReadData(&tmp, length)) {
-    *data = tmp;
-  } else {
+std::optional<base::span<const uint8_t>> ReadData(DeserializeObject* obj) {
+  std::optional<base::span<const uint8_t>> result = obj->iter.ReadData();
+  if (!result) {
     obj->parse_error = true;
-    *data = nullptr;
-    *length = 0;
   }
+  return result;
 }
 
 void WriteInteger(int data, SerializeObject* obj) {
   obj->pickle.WriteInt(data);
 }
 
-int ReadInteger(SerializeObject* obj) {
+int ReadInteger(DeserializeObject* obj) {
   int tmp;
   if (obj->iter.ReadInt(&tmp))
     return tmp;
@@ -245,7 +275,7 @@ void WriteInteger64(int64_t data, SerializeObject* obj) {
   obj->pickle.WriteInt64(data);
 }
 
-int64_t ReadInteger64(SerializeObject* obj) {
+int64_t ReadInteger64(DeserializeObject* obj) {
   int64_t tmp = 0;
   if (obj->iter.ReadInt64(&tmp))
     return tmp;
@@ -254,28 +284,27 @@ int64_t ReadInteger64(SerializeObject* obj) {
 }
 
 void WriteReal(double data, SerializeObject* obj) {
-  WriteData(&data, sizeof(double), obj);
+  WriteData(base::byte_span_from_ref(base::allow_nonunique_obj, data), obj);
 }
 
-double ReadReal(SerializeObject* obj) {
-  const void* tmp = nullptr;
-  size_t length = 0;
-  double value = 0.0;
-  ReadData(obj, &tmp, &length);
-  if (length == sizeof(double)) {
-    // Use memcpy, as tmp may not be correctly aligned.
-    memcpy(&value, tmp, length);
-  } else {
-    obj->parse_error = true;
+double ReadReal(DeserializeObject* obj) {
+  std::optional<base::span<const uint8_t>> data = ReadData(obj);
+  if (data && data->size() == sizeof(double)) {
+    double value;
+    base::byte_span_from_ref(base::allow_nonunique_obj, value)
+        .copy_from(data.value().first<sizeof(double)>());
+    return value;
   }
-  return value;
+
+  obj->parse_error = true;
+  return 0.0;
 }
 
 void WriteBoolean(bool data, SerializeObject* obj) {
   obj->pickle.WriteInt(data ? 1 : 0);
 }
 
-bool ReadBoolean(SerializeObject* obj) {
+bool ReadBoolean(DeserializeObject* obj) {
   bool tmp;
   if (obj->iter.ReadBool(&tmp))
     return tmp;
@@ -283,7 +312,7 @@ bool ReadBoolean(SerializeObject* obj) {
   return false;
 }
 
-GURL ReadGURL(SerializeObject* obj) {
+GURL ReadGURL(DeserializeObject* obj) {
   std::string spec;
   if (obj->iter.ReadString(&spec))
     return GURL(spec);
@@ -291,7 +320,7 @@ GURL ReadGURL(SerializeObject* obj) {
   return GURL();
 }
 
-std::string ReadStdString(SerializeObject* obj) {
+std::string ReadStdString(DeserializeObject* obj) {
   std::string s;
   if (obj->iter.ReadString(&s))
     return s;
@@ -301,8 +330,13 @@ std::string ReadStdString(SerializeObject* obj) {
 
 // Pickles a std::u16string as <int length>:<char*16 data> tuple>.
 void WriteString(const std::u16string& str, SerializeObject* obj) {
-  obj->pickle.WriteData(reinterpret_cast<const char*>(str.data()),
-                        str.length() * sizeof(char16_t));
+  // IMPLEMENTATION WARNING: This is different from Pickle::WriteString16, as
+  // that writes the size in 16-bit characters, while this writes the string as
+  // data, which writes the size in bytes. This is due to an unfortunate
+  // bifurcation where the Pickle version originally wrote a Windows
+  // std::wstring, which then turned into std::u16string, while this code
+  // originally dealt with WebString(), which then turned into std::u16string.
+  obj->pickle.WriteData(base::as_byte_span(str));
 }
 
 // If str is a null optional, this simply pickles a length of -1. Otherwise,
@@ -318,7 +352,7 @@ void WriteString(const std::optional<std::u16string>& str,
 
 // This reads a serialized std::optional<std::u16string> from obj. If a string
 // can't be read, nullptr is returned.
-const char16_t* ReadStringNoCopy(SerializeObject* obj, int* num_chars) {
+const char16_t* ReadStringNoCopy(DeserializeObject* obj, int* num_chars) {
   int length_in_bytes;
   if (!obj->iter.ReadInt(&length_in_bytes)) {
     obj->parse_error = true;
@@ -339,7 +373,7 @@ const char16_t* ReadStringNoCopy(SerializeObject* obj, int* num_chars) {
   return reinterpret_cast<const char16_t*>(data);
 }
 
-std::optional<std::u16string> ReadString(SerializeObject* obj) {
+std::optional<std::u16string> ReadString(DeserializeObject* obj) {
   int num_chars;
   const char16_t* chars = ReadStringNoCopy(obj, &num_chars);
   std::optional<std::u16string> result;
@@ -354,7 +388,7 @@ void WriteAndValidateVectorSize(const std::vector<T>& v, SerializeObject* obj) {
   WriteInteger(static_cast<int>(v.size()), obj);
 }
 
-size_t ReadAndValidateVectorSize(SerializeObject* obj, size_t element_size) {
+size_t ReadAndValidateVectorSize(DeserializeObject* obj, size_t element_size) {
   size_t num_elements = static_cast<size_t>(ReadInteger(obj));
 
   // Ensure that resizing a vector to size num_elements makes sense.
@@ -364,8 +398,8 @@ size_t ReadAndValidateVectorSize(SerializeObject* obj, size_t element_size) {
   }
 
   // Ensure that it is plausible for the pickle to contain num_elements worth
-  // of data.
-  if (obj->pickle.payload_size() <= num_elements) {
+  // of data, accounting for at least one byte per element in serialized form.
+  if (obj->iter.RemainingBytes() < num_elements) {
     obj->parse_error = true;
     return 0;
   }
@@ -382,7 +416,7 @@ void WriteStringVector(const std::vector<std::optional<std::u16string>>& data,
   }
 }
 
-void ReadStringVector(SerializeObject* obj,
+void ReadStringVector(DeserializeObject* obj,
                       std::vector<std::optional<std::u16string>>* result) {
   size_t num_elements =
       ReadAndValidateVectorSize(obj, sizeof(std::optional<std::u16string>));
@@ -400,7 +434,7 @@ void WriteResourceRequestBody(const network::ResourceRequestBody& request_body,
       case network::DataElement::Tag::kBytes: {
         const auto& bytes = element.As<network::DataElementBytes>().bytes();
         WriteInteger(static_cast<int>(HTTPBodyElementType::kTypeData), obj);
-        WriteData(bytes.data(), bytes.size(), obj);
+        WriteData(bytes, obj);
         break;
       }
       case network::DataElement::Tag::kFile: {
@@ -415,26 +449,22 @@ void WriteResourceRequestBody(const network::ResourceRequestBody& request_body,
       }
       default:
         NOTREACHED();
-        continue;
     }
   }
   WriteInteger64(request_body.identifier(), obj);
 }
 
 void ReadResourceRequestBody(
-    SerializeObject* obj,
+    DeserializeObject* obj,
     const scoped_refptr<network::ResourceRequestBody>& request_body) {
   int num_elements = ReadInteger(obj);
   for (int i = 0; i < num_elements; ++i) {
     HTTPBodyElementType type =
         static_cast<HTTPBodyElementType>(ReadInteger(obj));
     if (type == HTTPBodyElementType::kTypeData) {
-      const void* data;
-      size_t length;
-      ReadData(obj, &data, &length);
-      if (!obj->parse_error) {
-        AppendDataToRequestBody(request_body, static_cast<const char*>(data),
-                                length);
+      std::optional<base::span<const uint8_t>> data = ReadData(obj);
+      if (data) {
+        AppendDataToRequestBody(request_body, *data);
       }
     } else if (type == HTTPBodyElementType::kTypeFile) {
       std::optional<std::u16string> file_path = ReadString(obj);
@@ -456,7 +486,7 @@ void ReadResourceRequestBody(
   request_body->set_identifier(ReadInteger64(obj));
 }
 
-void ReadHttpBody(SerializeObject* obj, ExplodedHttpBody* http_body) {
+void ReadHttpBody(DeserializeObject* obj, ExplodedHttpBody* http_body) {
   // An initial boolean indicates if we have an HTTP body.
   if (!ReadBoolean(obj))
     return;
@@ -480,7 +510,7 @@ void WriteHttpBody(const ExplodedHttpBody& http_body, SerializeObject* obj) {
 
 // This is only used for versions < 26. Later versions use ReadMojoFrameState.
 void ReadLegacyFrameState(
-    SerializeObject* obj,
+    DeserializeObject* obj,
     bool is_top,
     std::vector<UniqueNameHelper::Replacement>* unique_name_replacements,
     ExplodedFrameState* state) {
@@ -581,9 +611,8 @@ void ReadLegacyFrameState(
     if (state->page_scale_factor) {
       float device_scale_factor = g_device_scale_factor_for_testing;
       if (!device_scale_factor) {
-        device_scale_factor = display::Screen::GetScreen()
-                                  ->GetPrimaryDisplay()
-                                  .device_scale_factor();
+        device_scale_factor =
+            display::Screen::Get()->GetPrimaryDisplay().device_scale_factor();
       }
       state->scroll_offset =
           gfx::Point(state->scroll_offset.x() / state->page_scale_factor,
@@ -680,9 +709,7 @@ void WriteResourceRequestBody(const network::ResourceRequestBody& request_body,
     switch (element.type()) {
       case network::DataElement::Tag::kBytes: {
         const auto& bytes = element.As<network::DataElementBytes>().bytes();
-        const char* data = reinterpret_cast<const char*>(bytes.data());
-        data_element = mojom::Element::NewBytes(
-            std::vector<unsigned char>(data, data + bytes.size()));
+        data_element = mojom::Element::NewBytes(base::ToVector(bytes));
         break;
       }
       case network::DataElement::Tag::kFile: {
@@ -698,7 +725,6 @@ void WriteResourceRequestBody(const network::ResourceRequestBody& request_body,
         continue;
       case network::DataElement::Tag::kChunkedDataPipe:
         NOTREACHED();
-        continue;
     }
     mojo_body->elements.push_back(std::move(data_element));
   }
@@ -712,10 +738,7 @@ void ReadResourceRequestBody(
     mojom::Element::Tag tag = element->which();
     switch (tag) {
       case mojom::Element::Tag::kBytes:
-        AppendDataToRequestBody(
-            request_body,
-            reinterpret_cast<const char*>(element->get_bytes().data()),
-            element->get_bytes().size());
+        AppendDataToRequestBody(request_body, element->get_bytes());
         break;
       case mojom::Element::Tag::kFile: {
         mojom::File* file = element->get_file().get();
@@ -871,18 +894,18 @@ void ReadMojoFrameState(mojom::FrameState* frame, ExplodedFrameState* state) {
     ReadMojoFrameState(child.get(), &state->children[i++]);
 }
 
-void ReadMojoPageState(SerializeObject* obj, ExplodedPageState* state) {
-  const void* tmp = nullptr;
-  size_t length = 0;
-  ReadData(obj, &tmp, &length);
-  DCHECK_GT(length, 0u);
-  if (obj->parse_error)
+void ReadMojoPageState(DeserializeObject* obj, ExplodedPageState* state) {
+  std::optional<base::span<const uint8_t>> data = ReadData(obj);
+  if (obj->parse_error) {
     return;
+  }
 
   mojom::PageStatePtr page;
-  obj->parse_error = !(mojom::PageState::Deserialize(tmp, length, &page));
-  if (obj->parse_error)
+  obj->parse_error =
+      !(mojom::PageState::Deserialize(data->data(), data->size(), &page));
+  if (obj->parse_error) {
     return;
+  }
 
   for (const auto& referenced_file : page->referenced_files) {
     state->referenced_files.push_back(referenced_file);
@@ -907,11 +930,10 @@ void WriteMojoPageState(const ExplodedPageState& state, SerializeObject* obj) {
   WriteMojoFrameState(state.top, page->top.get());
 
   std::vector<uint8_t> page_bytes = mojom::PageState::Serialize(&page);
-  obj->pickle.WriteData(reinterpret_cast<char*>(page_bytes.data()),
-                        page_bytes.size());
+  obj->pickle.WriteData(page_bytes);
 }
 
-void ReadPageState(SerializeObject* obj, ExplodedPageState* state) {
+void ReadPageState(DeserializeObject* obj, ExplodedPageState* state) {
   obj->version = ReadInteger(obj);
 
   if (obj->version == -1) {
@@ -1004,8 +1026,15 @@ int DecodePageStateInternal(const std::string& encoded,
   if (encoded.empty())
     return true;
 
-  SerializeObject obj(encoded.data(), static_cast<int>(encoded.size()));
+  DeserializeObject obj(base::as_byte_span(encoded));
   ReadPageState(&obj, exploded);
+
+  if (obj.version < kCurrentVersion) {
+    // Record when a PageState with an earlier version number is decoded, to
+    // estimate how long older version support should be retained.
+    base::UmaHistogramSparse("SessionRestore.PageStateOldVersions",
+                             obj.version);
+  }
   return obj.parse_error ? -1 : obj.version;
 }
 
@@ -1035,6 +1064,37 @@ void LegacyEncodePageStateForTesting(const ExplodedPageState& exploded,
   *encoded = obj.GetAsString();
 }
 
+bool GetAllFilesInPageState(const std::string& encoded,
+                            std::vector<base::FilePath>* files) {
+  ExplodedPageState exploded;
+  if (!DecodePageState(encoded, &exploded)) {
+    // If the PageState can't be decoded at all, then there are no usable files
+    // in it and it is safe to leave the `files` set empty and return true.
+    return true;
+  }
+
+  // TODO(crbug.com/40241973): Refactor to avoid sending PageState objects to
+  // the browser process, so that this use of RecursivelyAppendReferencedFiles
+  // is not needed.
+  std::vector<std::optional<std::u16string>> referenced_files;
+  if (!RecursivelyAppendReferencedFiles(exploded.top, &referenced_files)) {
+    // If the PageState can be decoded but this function failed due to an issue
+    // parsing the DocumentState, it is important to return false to indicate
+    // that the PageState is not safe to use. Some files could otherwise be
+    // present and usable without showing up in the list.
+    return false;
+  }
+
+  // Copy all of the files found into the output parameter.
+  files->reserve(referenced_files.size());
+  for (const auto& file : referenced_files) {
+    if (file) {
+      files->push_back(base::FilePath::FromUTF16Unsafe(*file));
+    }
+  }
+  return true;
+}
+
 #if BUILDFLAG(IS_ANDROID)
 bool DecodePageStateWithDeviceScaleFactorForTesting(
     const std::string& encoded,
@@ -1047,11 +1107,10 @@ bool DecodePageStateWithDeviceScaleFactorForTesting(
 }
 
 scoped_refptr<network::ResourceRequestBody> DecodeResourceRequestBody(
-    const char* data,
-    size_t size) {
+    base::span<const uint8_t> data) {
   scoped_refptr<network::ResourceRequestBody> result =
       new network::ResourceRequestBody();
-  SerializeObject obj(data, static_cast<int>(size));
+  DeserializeObject obj(data);
   ReadResourceRequestBody(&obj, result);
   // Please see the EncodeResourceRequestBody() function below for information
   // about why the contains_sensitive_info() field is being explicitly

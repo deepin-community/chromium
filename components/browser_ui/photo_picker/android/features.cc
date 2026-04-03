@@ -4,6 +4,9 @@
 
 #include "components/browser_ui/photo_picker/android/features.h"
 
+#include "base/compiler_specific.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/browser_ui/photo_picker/android/photo_picker_jni_headers/PhotoPickerFeatures_jni.h"
 
 namespace photo_picker {
@@ -15,7 +18,7 @@ namespace {
 // this array may either refer to features defined in the header of this file or
 // in other locations in the code base (e.g. content_features.h), and must be
 // replicated in the same order in PhotoPickerFeatures.java.
-const base::Feature* kFeaturesExposedToJava[] = {
+const base::Feature* const kFeaturesExposedToJava[] = {
     &kAndroidMediaPickerAdoption,
 };
 
@@ -25,9 +28,13 @@ BASE_FEATURE(kAndroidMediaPickerAdoption,
              "MediaPickerAdoption",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-static jlong JNI_PhotoPickerFeatures_GetFeature(JNIEnv* env, jint ordinal) {
-  return reinterpret_cast<jlong>(kFeaturesExposedToJava[ordinal]);
+static int64_t JNI_PhotoPickerFeatures_GetFeature(JNIEnv* env,
+                                                  int32_t ordinal) {
+  return reinterpret_cast<int64_t>(
+      UNSAFE_TODO(kFeaturesExposedToJava[ordinal]));
 }
 
 }  // namespace features
 }  // namespace photo_picker
+
+DEFINE_JNI(PhotoPickerFeatures)

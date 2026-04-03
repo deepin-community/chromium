@@ -7,6 +7,7 @@ module cc.mojom;
 import "services/viz/public/mojom/compositing/local_surface_id.mojom";
 import "services/viz/public/mojom/compositing/selection.mojom";
 import "services/viz/public/mojom/compositing/vertical_scroll_direction.mojom";
+import "cc/mojom/tracked_element_bounds.mojom";
 import "skia/public/mojom/skcolor4f.mojom";
 import "ui/gfx/geometry/mojom/geometry.mojom";
 
@@ -80,40 +81,48 @@ struct RenderFrameMetadata {
 
   viz.mojom.VerticalScrollDirection new_vertical_scroll_direction;
 
+  // Indicates the `item_sequence_number` for the primary main frame's
+  // `content::FrameNavigationEntry`. This is only set if the primary main frame
+  // is rendering to this compositor.
+  int64 primary_main_frame_item_sequence_number;
+
+  // Screen-space bounds of 'tracked elements' attached to the document
+  cc.mojom.TrackedElementBounds tracked_element_bounds;
+
   // Used to position Android/iOS bottom bar, whose position is computed by the
   // renderer compositor.
-  [EnableIf=is_android_or_ios]
+  [EnableIf=is_android|is_ios]
   float bottom_controls_height;
 
-  [EnableIf=is_android_or_ios]
+  [EnableIf=is_android|is_ios]
   float bottom_controls_shown_ratio;
 
-  [EnableIf=is_android_or_ios]
+  [EnableIf=is_android|is_ios]
   float top_controls_min_height_offset;
 
-  [EnableIf=is_android_or_ios]
+  [EnableIf=is_android|is_ios]
   float bottom_controls_min_height_offset;
 
-  [EnableIf=is_android_or_ios]
+  [EnableIf=is_android|is_ios]
   float min_page_scale_factor;
 
-  [EnableIf=is_android_or_ios]
+  [EnableIf=is_android|is_ios]
   float max_page_scale_factor;
 
-  [EnableIf=is_android_or_ios]
+  [EnableIf=is_android|is_ios]
   bool root_overflow_y_hidden;
 
-  [EnableIf=is_android_or_ios]
+  [EnableIf=is_android|is_ios]
   gfx.mojom.SizeF scrollable_viewport_size;
 
-  [EnableIf=is_android_or_ios]
+  [EnableIf=is_android|is_ios]
   gfx.mojom.SizeF root_layer_size;
 
-  [EnableIf=is_android_or_ios]
+  [EnableIf=is_android|is_ios]
   bool has_transparent_background;
 };
 
-[EnableIf=is_android]
+[EnableIf=is_android|is_ios]
 enum RootScrollOffsetUpdateFrequency {
   // The client will only be notified of root scroll offsets via the regular
   // RenderFrameMetadata updates. This is the default behavior. See
@@ -146,7 +155,7 @@ interface RenderFrameMetadataObserver {
   // In other words, if this is sent, *only* the root-scroll-offset has changed
   // and the client is not sent a OnRenderFrameMetadataChanged() for the frame.
   // Used on Android for acessibility and GestureListenerManager.
-  [EnableIf=is_android]
+  [EnableIf=is_android|is_ios]
   UpdateRootScrollOffsetUpdateFrequency(
       RootScrollOffsetUpdateFrequency frequency);
 
@@ -163,13 +172,13 @@ interface RenderFrameMetadataObserver {
 // RenderFrameMetadataObserver::UpdateRootScrollOffsetUpdateFrequency.
 interface RenderFrameMetadataObserverClient {
   // Notified when RenderFrameMetadata has changed.
-  OnRenderFrameMetadataChanged(uint32 frame_token,
-                               RenderFrameMetadata metadata);
+  OnRenderFrameMetadataChanged(
+      uint32 frame_token, RenderFrameMetadata metadata);
 
   // Notified on all frame submissions.
   OnFrameSubmissionForTesting(uint32 frame_token);
 
   // Only called if UpdateRootScrollOffsetUpdateFrequency() has been called.
-  [EnableIf=is_android]
+  [EnableIf=is_android|is_ios]
   OnRootScrollOffsetChanged(gfx.mojom.PointF root_scroll_offset);
 };

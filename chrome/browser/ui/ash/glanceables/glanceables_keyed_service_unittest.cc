@@ -7,60 +7,50 @@
 #include <memory>
 #include <string>
 
-#include "ash/constants/ash_features.h"
-#include "ash/constants/ash_pref_names.h"
 #include "ash/glanceables/glanceables_controller.h"
-#include "ash/session/test_session_controller_client.h"
 #include "ash/shell.h"
-#include "base/test/scoped_feature_list.h"
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/prefs/browser_prefs.h"
-#include "chrome/browser/ui/browser_ui_prefs.h"
+#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
-#include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
-#include "components/account_id/account_id.h"
-#include "components/sync_preferences/testing_pref_service_syncable.h"
-#include "components/user_manager/scoped_user_manager.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/policy/policy_blocklist_service/ash_policy_blocklist_service_factory.h"
+#include "components/user_manager/user.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ash {
 namespace {
 
-const char kPrimaryProfileName[] = "primary_profile@example.com";
-const char kSecondaryProfileName[] = "secondary_profile@example.com";
+constexpr char kPrimaryProfileName[] = "primary_profile@example.com";
+constexpr char kSecondaryProfileName[] = "secondary_profile@example.com";
+constexpr GaiaId::Literal kFakeGaia2("fakegaia2");
+
+std::unique_ptr<GlanceablesKeyedService> BuildService(Profile* profile) {
+  return std::make_unique<GlanceablesKeyedService>(
+      BrowserContextHelper::Get()
+          ->GetUserByBrowserContext(profile)
+          ->GetAccountId(),
+      profile->GetPrefs(), apps::AppServiceProxyFactory::GetForProfile(profile),
+      AshPolicyBlocklistServiceFactory::GetForBrowserContext(profile),
+      profile->GetURLLoaderFactory(),
+      IdentityManagerFactory::GetForProfile(profile));
+}
 
 }  // namespace
 
 class GlanceablesKeyedServiceTest : public BrowserWithTestWindowTest {
  public:
   // BrowserWithTestWindowTest:
-  std::string GetDefaultProfileName() override { return kPrimaryProfileName; }
+  std::optional<std::string> GetDefaultProfileName() override {
+    return kPrimaryProfileName;
+  }
 
+  // BrowserWithTestWindowTest:
   TestingProfile* CreateProfile(const std::string& profile_name) override {
-    auto prefs =
-        std::make_unique<sync_preferences::TestingPrefServiceSyncable>();
-    RegisterUserProfilePrefs(prefs->registry());
-    profile_prefs_ = prefs.get();
-    auto* profile = profile_manager()->CreateTestingProfile(
-        profile_name, std::move(prefs), u"Test profile", /*avatar_id=*/0,
-        TestingProfile::TestingFactories(), /*is_supervised_profile=*/false,
-        /*is_new_profile=*/std::nullopt, /*policy_service=*/std::nullopt,
-        /*is_main_profile=*/true);
-    OnUserProfileCreated(profile_name, profile);
-    return profile;
+    EXPECT_EQ(kPrimaryProfileName, profile_name);
+    return profile_manager()->CreateTestingProfile(profile_name);
   }
-
-  TestSessionControllerClient* session_controller_client() {
-    return ash_test_helper()->test_session_controller_client();
-  }
-
- protected:
-  base::test::ScopedFeatureList feature_list_{features::kGlanceablesV2};
-  // Pointer to the primary profile (returned by |profile()|) prefs - owned by
-  // the profile.
-  raw_ptr<sync_preferences::TestingPrefServiceSyncable, DanglingUntriaged>
-      profile_prefs_ = nullptr;
 };
 
 TEST_F(GlanceablesKeyedServiceTest, RegistersClientsInAsh) {
@@ -68,7 +58,7 @@ TEST_F(GlanceablesKeyedServiceTest, RegistersClientsInAsh) {
   EXPECT_FALSE(controller->GetClassroomClient());
   EXPECT_FALSE(controller->GetTasksClient());
 
-  auto service = std::make_unique<GlanceablesKeyedService>(profile());
+  auto service = BuildService(profile());
   EXPECT_TRUE(controller->GetClassroomClient());
   EXPECT_TRUE(controller->GetTasksClient());
 
@@ -79,24 +69,18 @@ TEST_F(GlanceablesKeyedServiceTest, RegistersClientsInAsh) {
 
 TEST_F(GlanceablesKeyedServiceTest, RegisterClientsInAshForNonPrimaryUser) {
   auto* const controller = Shell::Get()->glanceables_controller();
-  auto service = std::make_unique<GlanceablesKeyedService>(profile());
+  auto service = BuildService(profile());
   auto* const classroom_client_primary = controller->GetClassroomClient();
   auto* const tasks_client_primary = controller->GetTasksClient();
   EXPECT_TRUE(classroom_client_primary);
   EXPECT_TRUE(tasks_client_primary);
 
-  const auto first_account_id = AccountId::FromUserEmail(kPrimaryProfileName);
-  const auto second_account_id =
-      AccountId::FromUserEmail(kSecondaryProfileName);
-  LogIn(kSecondaryProfileName);
+  LogIn(kSecondaryProfileName, kFakeGaia2);
   auto* secondary_profile =
-      profile_manager()->CreateTestingProfile(kSecondaryProfileName,
-                                              /*is_main_profile=*/false);
-  OnUserProfileCreated(kSecondaryProfileName, secondary_profile);
-
+      profile_manager()->CreateTestingProfile(kSecondaryProfileName);
   SwitchActiveUser(kSecondaryProfileName);
-  auto service_secondary =
-      std::make_unique<GlanceablesKeyedService>(secondary_profile);
+  auto service_secondary = BuildService(secondary_profile);
+  ;
 
   auto* const classroom_client_secondary = controller->GetClassroomClient();
   auto* const tasks_client_secondary = controller->GetTasksClient();
@@ -108,22 +92,6 @@ TEST_F(GlanceablesKeyedServiceTest, RegisterClientsInAshForNonPrimaryUser) {
   SwitchActiveUser(kPrimaryProfileName);
   EXPECT_EQ(classroom_client_primary, controller->GetClassroomClient());
   EXPECT_EQ(tasks_client_primary, controller->GetTasksClient());
-}
-
-TEST_F(GlanceablesKeyedServiceTest,
-       DoesNotRegisterClientsInAshForDisabledPref) {
-  auto* const controller = Shell::Get()->glanceables_controller();
-  EXPECT_FALSE(controller->GetClassroomClient());
-  EXPECT_FALSE(controller->GetTasksClient());
-
-  auto service = std::make_unique<GlanceablesKeyedService>(profile());
-  profile_prefs_->SetBoolean(prefs::kGlanceablesEnabled, false);
-  EXPECT_FALSE(controller->GetClassroomClient());
-  EXPECT_FALSE(controller->GetTasksClient());
-
-  service->Shutdown();
-  EXPECT_FALSE(controller->GetClassroomClient());
-  EXPECT_FALSE(controller->GetTasksClient());
 }
 
 }  // namespace ash

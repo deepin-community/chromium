@@ -7,6 +7,7 @@
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -55,14 +56,6 @@ ChildUserService::TimeLimitPolicyType GetTimeLimitPolicyType(
   return time_limit_policy;
 }
 }  // namespace
-
-// static
-const char ChildUserService::kFamilyLinkHelperAppPackageName[] =
-    "com.google.android.apps.kids.familylinkhelper";
-// static
-const char ChildUserService::kFamilyLinkHelperAppPlayStoreURL[] =
-    "https://play.google.com/store/apps/"
-    "details?id=com.google.android.apps.kids.familylinkhelper";
 
 ChildUserService::TestApi::TestApi(ChildUserService* service)
     : service_(service) {}
@@ -138,7 +131,7 @@ bool ChildUserService::AppTimeLimitAllowlistedApp(
 }
 
 void ChildUserService ::ReportTimeLimitPolicy() const {
-  const base::Value::Dict& time_limit_prefs =
+  const base::DictValue& time_limit_prefs =
       profile_->GetPrefs()->GetDict(prefs::kUsageTimeLimit);
 
   std::set<usage_time_limit::PolicyType> enabled_policies =

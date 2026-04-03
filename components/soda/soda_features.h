@@ -11,7 +11,9 @@
 namespace speech {
 #if BUILDFLAG(IS_CHROMEOS)
 COMPONENT_EXPORT(SODA_INSTALLER)
-BASE_DECLARE_FEATURE(kCrosExpandSodaLanguages);
+BASE_DECLARE_FEATURE(kFeatureManagementCrosSodaConchLanguages);
+COMPONENT_EXPORT(SODA_INSTALLER)
+BASE_DECLARE_FEATURE(kCrosSodaConchLanguages);
 #endif
 }  // namespace speech
 

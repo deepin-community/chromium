@@ -13,15 +13,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <memory>
+#include <utility>
+
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/Types.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 
 #define DEBUG_TYPE "tf-hoist-replicate-invariant-resource-writes"
 
@@ -42,9 +52,10 @@ struct HoistReplicateInvariantResourceWritesPass
 // TODO(prakalps): This is a common utility and other passes use something
 // similar. Move to common utils.
 bool IsResourceType(Type type) {
-  return type.isa<TF::ResourceType>() ||
-         (type.isa<TensorType>() &&
-          type.cast<TensorType>().getElementType().isa<TF::ResourceType>());
+  return llvm::isa<TF::ResourceType>(type) ||
+         (llvm::isa<TensorType>(type) &&
+          llvm::isa<TF::ResourceType>(
+              llvm::cast<TensorType>(type).getElementType()));
 }
 
 SmallVector<Value> GetAccessedResources(Operation& op) {
@@ -78,9 +89,9 @@ void MoveTailWritesAfterReplicate(
 
   OpBuilder builder(replicate_op);
   // Clone this old replicate op but with new result types.
-  auto new_replicate_op = builder.create<tf_device::ReplicateOp>(
-      replicate_op->getLoc(), new_result_types, replicate_op->getOperands(),
-      replicate_op->getAttrs());
+  auto new_replicate_op = tf_device::ReplicateOp::create(
+      builder, replicate_op->getLoc(), new_result_types,
+      replicate_op->getOperands(), replicate_op->getAttrs());
 
   // Move region to the new op.
   new_replicate_op.getRegion().takeBody(replicate_op.getRegion());

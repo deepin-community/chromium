@@ -6,6 +6,7 @@ import os
 import random
 
 import gerrit_util
+from gerrit_cache import GerritCache
 import git_common
 
 
@@ -116,6 +117,41 @@ class OwnersClient(object):
 
         return selected
 
+    def SuggestMinimalOwners(self,
+                             paths: list[str],
+                             exclude: list[str] = None) -> list[str]:
+        """
+        Suggest a set of owners for the given paths. Never return an owner in
+        the |exclude| list.
+
+        Aims to provide only one, but will provide more if it's unable to
+        find a common owner.
+        """
+        exclude = exclude or []
+
+        owners_by_path = self.BatchListOwners(paths)
+        if not owners_by_path:
+            return []
+
+        common_owners = set(owners_by_path.popitem()[1]) - set(exclude)
+        for _, owners in owners_by_path.items():
+            common_owners = common_owners.intersection(set(owners))
+
+        if not common_owners:
+            # This likely means some of the files had `noparent` set.
+            # Fall back to the default suggestion algorithm, which accounts
+            # for noparent but is liable to return many different owners
+            return self.SuggestOwners(paths, exclude)
+
+        # Return an arbitrary common owner, preferring those with a good score
+        sorted_common_owners = [
+            owner for owner in self.ScoreOwners(paths, exclude=exclude)
+            if owner in common_owners
+        ]
+
+        # Return a singleton list so this function has a consistent return type
+        return sorted_common_owners[:1]
+
 
 class GerritClient(OwnersClient):
     """Implement OwnersClient using OWNERS REST API."""
@@ -178,12 +214,22 @@ class GerritClient(OwnersClient):
                                     paths))
 
 
-def GetCodeOwnersClient(host, project, branch):
+def GetCodeOwnersClient(host, project, branch, cache=None):
     """Get a new OwnersClient.
 
     Uses GerritClient and raises an exception if code-owners plugin is not
     available."""
-    if gerrit_util.IsCodeOwnersEnabledOnHost(host):
+    key = GerritCache.get_host_code_owners_enabled_key(host)
+    is_enabled = None
+    if cache:
+        is_enabled = cache.getBoolean(key)
+
+    if is_enabled is None:
+        is_enabled = gerrit_util.IsCodeOwnersEnabledOnHost(host)
+        if cache:
+            cache.setBoolean(key, is_enabled)
+
+    if is_enabled:
         return GerritClient(host, project, branch)
     raise Exception(
         'code-owners plugin is not enabled. Ask your host admin to enable it '

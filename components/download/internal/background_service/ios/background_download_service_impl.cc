@@ -64,7 +64,6 @@ void BackgroundDownloadServiceImpl::Initialize(base::OnceClosure callback) {
 
 const ServiceConfig& BackgroundDownloadServiceImpl::GetConfig() {
   NOTREACHED() << " This function is not supported on iOS.";
-  return service_config_;
 }
 
 void BackgroundDownloadServiceImpl::OnStartScheduledTask(
@@ -76,7 +75,6 @@ void BackgroundDownloadServiceImpl::OnStartScheduledTask(
 bool BackgroundDownloadServiceImpl::OnStopScheduledTask(
     DownloadTaskType task_type) {
   NOTREACHED() << " This function is not supported on iOS.";
-  return true;
 }
 
 BackgroundDownloadService::ServiceStatus

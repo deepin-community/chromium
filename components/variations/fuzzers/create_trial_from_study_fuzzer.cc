@@ -17,34 +17,6 @@
 namespace variations {
 namespace {
 
-class TestOverrideStringCallback {
- public:
-  typedef std::map<uint32_t, std::u16string> OverrideMap;
-
-  TestOverrideStringCallback()
-      : callback_(base::BindRepeating(&TestOverrideStringCallback::Override,
-                                      base::Unretained(this))) {}
-  TestOverrideStringCallback(const TestOverrideStringCallback&) = delete;
-  TestOverrideStringCallback& operator=(const TestOverrideStringCallback&) =
-      delete;
-
-  virtual ~TestOverrideStringCallback() {}
-
-  const VariationsSeedProcessor::UIStringOverrideCallback& callback() const {
-    return callback_;
-  }
-
-  const OverrideMap& overrides() const { return overrides_; }
-
- private:
-  void Override(uint32_t hash, const std::u16string& string) {
-    overrides_[hash] = string;
-  }
-
-  VariationsSeedProcessor::UIStringOverrideCallback callback_;
-  OverrideMap overrides_;
-};
-
 struct Environment {
   Environment() { base::CommandLine::Init(0, nullptr); }
 
@@ -57,18 +29,17 @@ void CreateTrialFromStudyFuzzer(const Study& study) {
   base::FieldTrialList field_trial_list;
   base::FeatureList feature_list;
 
-  TestOverrideStringCallback override_callback;
-  // TODO(crbug.com/1518402): Support limited entropy randomization for the
-  // study fuzzer.
   EntropyProviders entropy_providers(
       "client_id", {7999, 8000},
-      /*limited_entropy_randomization_source=*/std::string_view());
+      // Test value for limited entropy randomization source.
+      "00000000000000000000000000000001");
   ProcessedStudy processed_study;
   VariationsLayers layers;
   if (processed_study.Init(&study)) {
-    VariationsSeedProcessor().CreateTrialFromStudy(
-        processed_study, override_callback.callback(), entropy_providers,
-        layers, &feature_list);
+    StickyActivationManager sticky_activation_manager(/*local_state=*/nullptr);
+    VariationsSeedProcessor(sticky_activation_manager)
+        .CreateTrialFromStudy(processed_study, entropy_providers, layers,
+                              &feature_list);
   }
 }
 

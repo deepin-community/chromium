@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,54 +13,54 @@ let loadedProfilerModule: (typeof Profiler|undefined);
 
 const UIStrings = {
   /**
-   *@description Title for the profiler tab
+   * @description Title for the profiler tab
    */
   memory: 'Memory',
   /**
-   *@description Title of the 'Live Heap Profile' tool in the bottom drawer
+   * @description Title of the 'Live Heap Profile' tool in the bottom drawer
    */
   liveHeapProfile: 'Live Heap Profile',
   /**
-   *@description Title of an action under the Performance category that can be invoked through the Command Menu
+   * @description Title of an action under the Performance category that can be invoked through the Command Menu
    */
   startRecordingHeapAllocations: 'Start recording heap allocations',
   /**
-   *@description Title of an action under the Performance category that can be invoked through the Command Menu
+   * @description Title of an action under the Performance category that can be invoked through the Command Menu
    */
   stopRecordingHeapAllocations: 'Stop recording heap allocations',
   /**
-   *@description Title of an action in the live heap profile tool to start with reload
+   * @description Title of an action in the live heap profile tool to start with reload
    */
   startRecordingHeapAllocationsAndReload: 'Start recording heap allocations and reload the page',
   /**
-   *@description Text in the Shortcuts page to explain a keyboard shortcut (start/stop recording performance)
+   * @description Text in the Shortcuts page to explain a keyboard shortcut (start/stop recording performance)
    */
   startStopRecording: 'Start/stop recording',
   /**
-   *@description Command for shwoing the profiler tab
+   * @description Command for showing the profiler tab
    */
   showMemory: 'Show Memory',
   /**
-   *@description Command for showing the 'Live Heap Profile' tool in the bottom drawer
+   * @description Command for showing the 'Live Heap Profile' tool in the bottom drawer
    */
   showLiveHeapProfile: 'Show Live Heap Profile',
   /**
-   *@description Tooltip text that appears when hovering over the largeicon clear button in the Profiles Panel of a profiler tool
+   * @description Tooltip text that appears when hovering over the largeicon clear button in the Profiles Panel of a profiler tool
    */
   clearAllProfiles: 'Clear all profiles',
   /**
-   *@description Tooltip text that appears when hovering over the largeicon download button
+   * @description Tooltip text that appears when hovering over the largeicon download button
    */
   saveProfile: 'Save profile…',
   /**
-   *@description Tooltip text that appears when hovering over the largeicon load button
+   * @description Tooltip text that appears when hovering over the largeicon load button
    */
   loadProfile: 'Load profile…',
   /**
-   *@description Command for deleting a profile in the Profiler panel
+   * @description Command for deleting a profile in the Profiler panel
    */
   deleteProfile: 'Delete profile',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/profiler/profiler-meta.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
 
@@ -101,7 +101,7 @@ UI.ViewManager.registerViewExtension({
     const Profiler = await loadProfilerModule();
     return Profiler.LiveHeapProfileView.LiveHeapProfileView.instance();
   },
-  experiment: Root.Runtime.ExperimentName.LIVE_HEAP_PROFILE,
+  experiment: Root.ExperimentNames.ExperimentName.LIVE_HEAP_PROFILE,
 });
 
 UI.ActionRegistration.registerActionExtension({
@@ -115,7 +115,7 @@ UI.ActionRegistration.registerActionExtension({
     return new Profiler.LiveHeapProfileView.ActionDelegate();
   },
   category: UI.ActionRegistration.ActionCategory.MEMORY,
-  experiment: Root.Runtime.ExperimentName.LIVE_HEAP_PROFILE,
+  experiment: Root.ExperimentNames.ExperimentName.LIVE_HEAP_PROFILE,
   options: [
     {
       value: true,
@@ -136,7 +136,7 @@ UI.ActionRegistration.registerActionExtension({
     return new Profiler.LiveHeapProfileView.ActionDelegate();
   },
   category: UI.ActionRegistration.ActionCategory.MEMORY,
-  experiment: Root.Runtime.ExperimentName.LIVE_HEAP_PROFILE,
+  experiment: Root.ExperimentNames.ExperimentName.LIVE_HEAP_PROFILE,
   title: i18nLazyString(UIStrings.startRecordingHeapAllocationsAndReload),
 });
 
@@ -157,11 +157,11 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+E',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+E',
     },
   ],
@@ -195,11 +195,11 @@ UI.ActionRegistration.registerActionExtension({
   title: i18nLazyString(UIStrings.loadProfile),
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+O',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+O',
     },
   ],
@@ -219,11 +219,11 @@ UI.ActionRegistration.registerActionExtension({
   title: i18nLazyString(UIStrings.saveProfile),
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+S',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+S',
     },
   ],

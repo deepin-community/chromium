@@ -5,7 +5,9 @@
 #ifndef COMPONENTS_PAGE_LOAD_METRICS_BROWSER_PAGE_LOAD_METRICS_UTIL_H_
 #define COMPONENTS_PAGE_LOAD_METRICS_BROWSER_PAGE_LOAD_METRICS_UTIL_H_
 
+#include <cstdint>
 #include <optional>
+#include <string_view>
 
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
@@ -13,10 +15,19 @@
 #include "components/page_load_metrics/common/page_load_metrics_util.h"
 #include "components/page_load_metrics/common/page_visit_final_status.h"
 #include "third_party/blink/public/common/loader/loading_behavior_flag.h"
+#include "url/gurl.h"
 
-// Up to 10 minutes, with 100 buckets.
+// 10 ms to 10 minutes, with 100 buckets.
 #define PAGE_LOAD_HISTOGRAM(name, sample)                             \
   base::UmaHistogramCustomTimes(name, sample, base::Milliseconds(10), \
+                                base::Minutes(10), 100)
+
+// 1 ms to 10 minutes, with 100 buckets.
+// Used for metrics where we want to avoid sub-10ms values being rounded
+// to zero (falling into the underflow bucket), which occurs in the
+// PAGE_LOAD_HISTOGRAM.
+#define PAGE_LOAD_HISTOGRAM2(name, sample)                           \
+  base::UmaHistogramCustomTimes(name, sample, base::Milliseconds(1), \
                                 base::Minutes(10), 100)
 
 // 1 ms to 1 minute, with 100 buckets.
@@ -29,10 +40,10 @@
   base::UmaHistogramCustomTimes(name, sample, base::Milliseconds(10), \
                                 base::Hours(1), 100)
 
-// Records |bytes| to |histogram_name| in kilobytes (i.e., bytes / 1024).
-#define PAGE_BYTES_HISTOGRAM(histogram_name, bytes) \
-  base::UmaHistogramCustomCounts(                   \
-      histogram_name, static_cast<int>((bytes) / 1024), 1, 500 * 1024, 50)
+// Records |bytes| to |histogram_name| in kilobytes.
+#define PAGE_BYTES_HISTOGRAM(histogram_name, bytes)                \
+  base::UmaHistogramCustomCounts(histogram_name, bytes.InKiB(), 1, \
+                                 base::MiB(500).InKiB(), 50)
 
 // Up to 1 minute with 50 buckets.
 #define INPUT_DELAY_HISTOGRAM(name, sample)                          \
@@ -206,28 +217,6 @@ std::optional<base::TimeDelta> GetInitialForegroundDuration(
     const PageLoadMetricsObserverDelegate& delegate,
     base::TimeTicks app_background_time);
 
-// Whether the given url has a Google Search hostname.
-// Examples:
-//   https://www.google.com -> true
-//   https://www.google.co.jp -> true
-//   https://www.google.example.com -> false
-//   https://docs.google.com -> false
-bool IsGoogleSearchHostname(const GURL& url);
-
-// Whether the given url is for a Google Search results page. See
-// https://docs.google.com/document/d/1jNPZ6Aeh0KV6umw1yZrrkfXRfxWNruwu7FELLx_cpOg/edit
-// for additional details.
-// Examples:
-//   https://www.google.com/#q=test -> true
-//   https://www.google.com/search?q=test -> true
-//   https://www.google.com/ -> false
-//   https://www.google.com/about/ -> false
-bool IsGoogleSearchResultUrl(const GURL& url);
-
-// Whether the given url is a Google Search redirector URL.
-bool IsGoogleSearchRedirectorUrl(const GURL& url);
-
-// Whether the given url has a domain from a known list that can serve
 // zstd content-coded responses.
 bool IsZstdUrl(const GURL& url);
 
@@ -245,10 +234,9 @@ bool IsZstdUrl(const GURL& url);
 // beginning of the query string if the component starts with a delimiter
 // character ('?' or '#'). For example, '?foo=bar' will match the query string
 // 'a=b&?foo=bar' but not the query string '?foo=bar&a=b'.
-bool QueryContainsComponent(const base::StringPiece query,
-                            const base::StringPiece component);
-bool QueryContainsComponentPrefix(const base::StringPiece query,
-                                  const base::StringPiece component);
+bool QueryContainsComponent(std::string_view query, std::string_view component);
+bool QueryContainsComponentPrefix(std::string_view query,
+                                  std::string_view component);
 
 // Adjusts the layout shift score for UKM.
 int64_t LayoutShiftUkmValue(float shift_score);
@@ -270,6 +258,34 @@ PageVisitFinalStatus RecordPageVisitFinalStatusForTiming(
     const page_load_metrics::mojom::PageLoadTiming& timing,
     const PageLoadMetricsObserverDelegate& delegate,
     ukm::SourceId source_id);
+
+// Returns the ID if `url` contains a URL param where the param name and value
+// matches the prefix pattern configured by Finch (the default param name is
+// "category" and the prefix pattern is an empty string / will match anything).
+// Returns std::nullopt if the param value is not recognized.
+//
+// For example, if the valid param name  is "cat" and the prefix pattern is
+// "pattern", this function may return an ID for (1) but not for (2):
+//
+// (1) http://a.com?cat=pattern1
+// (2) http://b.com?cat=invalid-pattern
+//
+// UKM Review:
+// https://docs.google.com/document/d/1TSbtp5I5Bc1pbAKrrEHfmZlAwgeh6AlgAH7GbDMNPRQ/edit?disco=AAABe5h90jQ
+std::optional<uint32_t> GetCategoryIdFromUrl(const GURL& url);
+
+// Returns true if the page is controlled by a service worker.
+bool IsServiceWorkerControlled(const PageLoadMetricsObserverDelegate& delegate);
+
+// Returns true if the page is returned by a service worker synthetic response.
+//
+// TODO(crbug.com/40240298): Remove this once `ControllerServiceWorkerMode` is
+// updated. Conceptually `IsServiceWorkerControlled()` should return true when
+// the synthetic response is used. We don't need a dedicated method.
+bool IsServiceWorkerSyntheticResponseEnabled(
+    const PageLoadMetricsObserverDelegate& delegate);
+bool IsServiceWorkerControlledOrSyntheticResponseEnabled(
+    const PageLoadMetricsObserverDelegate& delegate);
 
 }  // namespace page_load_metrics
 

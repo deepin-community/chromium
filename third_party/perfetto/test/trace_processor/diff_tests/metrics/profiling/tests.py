@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -72,6 +72,8 @@ class ProfilingMetrics(TestSuite):
               name: "system_server"
               uid: 1000
               pid: 2
+              android_user_id: 0
+              is_kernel_task: false
             }
             samples {
               ts: 10
@@ -83,16 +85,6 @@ class ProfilingMetrics(TestSuite):
               reachable_obj_count: 3
               anon_rss_and_swap_size: 4096000
               oom_score_adj: 0
-              roots {
-                root_type: "ROOT_JAVA_FRAME"
-                type_name: "DeobfuscatedA[]"
-                obj_count: 1
-              }
-              roots {
-                root_type: "ROOT_JAVA_FRAME"
-                type_name: "FactoryProducerDelegateImplActor"
-                obj_count: 1
-              }
             }
           }
         }
@@ -109,3 +101,18 @@ class ProfilingMetrics(TestSuite):
         trace=Path('heap_graph.textproto'),
         query=Metric('java_heap_histogram'),
         out=Path('java_heap_histogram.out'))
+
+  def test_java_heap_class_stats(self):
+    return DiffTestBlueprint(
+        trace=Path('heap_graph.textproto'),
+        query=Metric('java_heap_class_stats'),
+        out=Path('java_heap_class_stats.out'))
+
+  def test_java_heap_class_stats_no_heap_graph(self):
+    return DiffTestBlueprint(
+        trace=Path('heap_profile_no_symbols.textproto'),
+        query=Metric('java_heap_class_stats'),
+        out=TextProto(r"""
+        java_heap_class_stats {
+        }
+        """))

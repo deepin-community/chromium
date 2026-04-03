@@ -5,7 +5,12 @@
 #ifndef COMPONENTS_SAFE_BROWSING_CORE_BROWSER_HASHPREFIX_REALTIME_HASH_REALTIME_SERVICE_H_
 #define COMPONENTS_SAFE_BROWSING_CORE_BROWSER_HASHPREFIX_REALTIME_HASH_REALTIME_SERVICE_H_
 
+#include <limits>
+#include <memory>
 #include <optional>
+#include <set>
+#include <string>
+#include <vector>
 
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/gtest_prod_util.h"
@@ -18,7 +23,7 @@
 #include "components/safe_browsing/core/browser/utils/backoff_operator.h"
 #include "components/safe_browsing/core/common/proto/safebrowsingv5.pb.h"
 #include "mojo/public/cpp/bindings/unique_receiver_set.h"
-#include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/network_context.mojom-forward.h"
 #include "services/network/public/mojom/oblivious_http_request.mojom-forward.h"
 #include "url/gurl.h"
 
@@ -82,10 +87,7 @@ class HashRealTimeService : public KeyedService {
   ~HashRealTimeService() override;
 
   // Returns whether the |url| is eligible for hash-prefix real-time checks.
-  // It's never eligible if the |request_destination| is not mainframe.
-  static bool CanCheckUrl(
-      const GURL& url,
-      network::mojom::RequestDestination request_destination);
+  static bool CanCheckUrl(const GURL& url);
 
   // Start the lookup for |url|, and call |response_callback| on
   // |callback_task_runner| when response is received.
@@ -103,16 +105,11 @@ class HashRealTimeService : public KeyedService {
 
  private:
   friend class HashRealTimeServiceTest;
-  friend class HashRealTimeServiceDirectFetchTest;
   FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest,
                            TestLookupFailure_MissingOhttpKey);
   FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest, TestLookupFailure_NetError);
   FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest,
                            TestLookupFailure_RetriableNetError);
-  FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest,
-                           TestLookupFailure_NetErrorNameNotResolved);
-  FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest,
-                           TestLookupFailure_NetErrorConnectionClosed);
   FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest,
                            TestLookupFailure_NetErrorHttpCodeFailure);
   FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest,
@@ -129,15 +126,13 @@ class HashRealTimeService : public KeyedService {
   FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest,
                            TestBackoffModeSet_RetriableError);
   FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest,
-                           TestBackoffModeSet_MissingOhttpKey);
+                           TestBackoffModeNotSet_MissingOhttpKey);
   FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest,
                            TestBackoffModeRespected_FullyCached);
   FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest,
                            TestBackoffModeRespected_NotCached);
   FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceTest,
                            TestLookupFailure_OhttpClientDestructedEarly);
-  FRIEND_TEST_ALL_PREFIXES(HashRealTimeServiceDirectFetchTest,
-                           TestLookupFailure_RetriableNetError);
 
   constexpr static int kLeastSeverity = std::numeric_limits<int>::max();
 
@@ -167,16 +162,9 @@ class HashRealTimeService : public KeyedService {
     // Fetching the OHTTP key needed for the HPRT network request was
     // unsuccessful.
     kOhttpKeyFetchFailed = 10,
-    kMaxValue = kOhttpKeyFetchFailed,
-  };
-
-  // The reason why ReportError is called on backoff operator.
-  // These values are persisted to logs. Entries should not be renumbered and
-  // numeric values should never be reused.
-  enum class BackoffReportErrorReason {
-    kInvalidKey = 0,
-    kResponseError = 1,
-    kMaxValue = kResponseError,
+    // [Deprecated] There is no OHTTP key service.
+    kDeprecatedNoOhttpKeyService = 11,
+    kMaxValue = kDeprecatedNoOhttpKeyService,
   };
 
   // Used only for the return type of the function |DetermineSBThreatInfo|.
@@ -241,7 +229,8 @@ class HashRealTimeService : public KeyedService {
   void OnOhttpComplete(const GURL& url,
                        const std::vector<std::string>& hash_prefixes_in_request,
                        std::vector<V5::FullHash> result_full_hashes,
-                       base::TimeTicks request_start_time,
+                       base::TimeTicks key_request_start_time,
+                       base::TimeTicks hash_request_start_time,
                        std::unique_ptr<LookupCompleter> lookup_completer,
                        std::string ohttp_key,
                        std::optional<int> webui_delegate_token,
@@ -263,8 +252,10 @@ class HashRealTimeService : public KeyedService {
   //    This method mutates this parameter to include the results from the
   //    server response as well, and then uses the combined results to determine
   //    the most severe threat type.
-  //  - |request_start_time| represents when the request was sent, and is used
-  //    for logging.
+  //  - |key_request_start_time| represents when the key request was sent, and
+  //    is used for logging.
+  //  - |hash_request_start_time| represents when the hash request was sent,
+  //    and is used for logging.
   //  - |lookup_completer| will be called when the method completes and will
   //    respond to the lookup initiator.
   //  - |response_body| is the unparsed response from the server.
@@ -279,7 +270,8 @@ class HashRealTimeService : public KeyedService {
       const GURL& url,
       const std::vector<std::string>& hash_prefixes_in_request,
       std::vector<V5::FullHash> result_full_hashes,
-      base::TimeTicks request_start_time,
+      base::TimeTicks key_request_start_time,
+      base::TimeTicks hash_request_start_time,
       std::unique_ptr<LookupCompleter> lookup_completer,
       std::unique_ptr<std::string> response_body,
       int net_error,

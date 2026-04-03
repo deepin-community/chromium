@@ -5,6 +5,7 @@
 #include "cc/mojom/render_frame_metadata_mojom_traits.h"
 
 #include "build/build_config.h"
+#include "cc/mojom/tracked_element_bounds_mojom_traits.h"
 #include "services/viz/public/cpp/compositing/selection_mojom_traits.h"
 #include "services/viz/public/cpp/compositing/vertical_scroll_direction_mojom_traits.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -34,6 +35,8 @@ bool StructTraits<
   out->external_page_scale_factor = data.external_page_scale_factor();
   out->top_controls_height = data.top_controls_height();
   out->top_controls_shown_ratio = data.top_controls_shown_ratio();
+  out->primary_main_frame_item_sequence_number =
+      data.primary_main_frame_item_sequence_number();
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   out->bottom_controls_height = data.bottom_controls_height();
   out->bottom_controls_shown_ratio = data.bottom_controls_shown_ratio();
@@ -52,6 +55,7 @@ bool StructTraits<
          data.ReadScrollableViewportSize(&out->scrollable_viewport_size) &&
          data.ReadRootLayerSize(&out->root_layer_size) &&
 #endif
+         data.ReadTrackedElementBounds(&out->tracked_element_bounds) &&
          data.ReadViewportSizeInPixels(&out->viewport_size_in_pixels) &&
          data.ReadLocalSurfaceId(&out->local_surface_id) &&
          data.ReadNewVerticalScrollDirection(

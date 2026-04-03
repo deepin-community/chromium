@@ -8,9 +8,9 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
-#include "chrome/browser/ash/app_list/arc/arc_app_utils.h"  // kSettingsAppId
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/intent_util.h"
 #include "content/public/browser/web_contents.h"
@@ -24,7 +24,7 @@ AndroidAppsHandler::AndroidAppsHandler(Profile* profile,
                                        apps::AppServiceProxy* app_service_proxy)
     : profile_(profile), app_service_proxy_(app_service_proxy) {}
 
-AndroidAppsHandler::~AndroidAppsHandler() {}
+AndroidAppsHandler::~AndroidAppsHandler() = default;
 
 void AndroidAppsHandler::RegisterMessages() {
   // Note: requestAndroidAppsInfo must be called before observers will be added.
@@ -79,8 +79,8 @@ void AndroidAppsHandler::OnArcPlayStoreEnabledChanged(bool enabled) {
   SendAndroidAppsInfo();
 }
 
-base::Value::Dict AndroidAppsHandler::BuildAndroidAppsInfo() {
-  base::Value::Dict info;
+base::DictValue AndroidAppsHandler::BuildAndroidAppsInfo() {
+  base::DictValue info;
   info.Set("playStoreEnabled", arc::IsArcPlayStoreEnabledForProfile(profile_));
   const ArcAppListPrefs* arc_apps_pref = ArcAppListPrefs::Get(profile_);
   // TODO(khmel): Inverstigate why in some browser tests
@@ -91,7 +91,7 @@ base::Value::Dict AndroidAppsHandler::BuildAndroidAppsInfo() {
 }
 
 void AndroidAppsHandler::HandleRequestAndroidAppsInfo(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   SendAndroidAppsInfo();
 }
@@ -100,8 +100,7 @@ void AndroidAppsHandler::SendAndroidAppsInfo() {
   FireWebUIListener("android-apps-info-update", BuildAndroidAppsInfo());
 }
 
-void AndroidAppsHandler::ShowAndroidAppsSettings(
-    const base::Value::List& args) {
+void AndroidAppsHandler::ShowAndroidAppsSettings(const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
   bool activated_from_keyboard = false;
   if (args[0].is_bool()) {
@@ -117,7 +116,7 @@ void AndroidAppsHandler::ShowAndroidAppsSettings(
 int64_t AndroidAppsHandler::GetDisplayIdForCurrentProfile() {
   // Settings in secondary profile cannot access ARC.
   DCHECK(arc::IsArcAllowedForProfile(profile_));
-  return display::Screen::GetScreen()
+  return display::Screen::Get()
       ->GetDisplayNearestView(web_ui()->GetWebContents()->GetNativeView())
       .id();
 }

@@ -10,16 +10,13 @@
 #include "extensions/common/extension_id.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
 
-namespace blink {
-class WebGestureEvent;
-}
-
 namespace content {
 class BrowserContext;
 class RenderFrameHost;
 struct OpenURLParams;
 class WebContents;
-}
+class NavigationHandle;
+}  // namespace content
 
 namespace extensions {
 
@@ -38,12 +35,11 @@ class AppWebContentsHelper {
   AppWebContentsHelper(const AppWebContentsHelper&) = delete;
   AppWebContentsHelper& operator=(const AppWebContentsHelper&) = delete;
 
-  // Returns true if the given |event| should not be handled by the renderer.
-  static bool ShouldSuppressGestureEvent(const blink::WebGestureEvent& event);
-
   // Opens a new URL inside the passed in WebContents. See WebContentsDelegate.
   content::WebContents* OpenURLFromTab(
-      const content::OpenURLParams& params) const;
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback) const;
 
   // Requests to lock the mouse pointer. See WebContentsDelegate.
   void RequestPointerLock() const;

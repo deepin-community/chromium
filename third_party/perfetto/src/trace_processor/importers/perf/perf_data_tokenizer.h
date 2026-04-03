@@ -17,46 +17,38 @@
 #ifndef SRC_TRACE_PROCESSOR_IMPORTERS_PERF_PERF_DATA_TOKENIZER_H_
 #define SRC_TRACE_PROCESSOR_IMPORTERS_PERF_PERF_DATA_TOKENIZER_H_
 
-#include <stdint.h>
-#include "perfetto/base/status.h"
-#include "perfetto/ext/base/status_or.h"
-#include "perfetto/ext/base/string_utils.h"
-#include "perfetto/trace_processor/trace_blob_view.h"
-#include "src/trace_processor/importers/perf/perf_data_reader.h"
-#include "src/trace_processor/importers/perf/perf_data_tracker.h"
-#include "src/trace_processor/importers/perf/perf_event.h"
-
-#include <limits>
-#include <map>
-#include <string>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <utility>
 #include <vector>
 
+#include "perfetto/base/flat_set.h"
+#include "perfetto/base/status.h"
+#include "perfetto/ext/base/status_or.h"
+#include "perfetto/trace_processor/ref_counted.h"
+#include "perfetto/trace_processor/trace_blob_view.h"
 #include "src/trace_processor/importers/common/chunked_trace_reader.h"
+#include "src/trace_processor/importers/perf/aux_data_tokenizer.h"
+#include "src/trace_processor/importers/perf/aux_stream_manager.h"
+#include "src/trace_processor/importers/perf/auxtrace_info_record.h"
+#include "src/trace_processor/importers/perf/auxtrace_record.h"
+#include "src/trace_processor/importers/perf/perf_file.h"
+#include "src/trace_processor/importers/perf/perf_invocation.h"
+#include "src/trace_processor/importers/perf/perf_tracker.h"
+#include "src/trace_processor/sorter/trace_sorter.h"
+#include "src/trace_processor/util/trace_blob_view_reader.h"
 
-namespace perfetto {
-namespace trace_processor {
-namespace perf_importer {
+namespace perfetto::trace_processor::perf_importer {
 
-using Section = PerfDataTracker::PerfFileSection;
+class AuxDataTokenizer;
+class AuxDataTokenizerFactory;
+struct Record;
+class SampleId;
+struct AuxRecord;
 
 class PerfDataTokenizer : public ChunkedTraceReader {
  public:
-  struct PerfHeader {
-    static constexpr char PERF_MAGIC[] = "PERFILE2";
-
-    char magic[8];
-    uint64_t size;
-    // Size of PerfFileAttr struct and section pointing to ids.
-    uint64_t attr_size;
-    Section attrs;
-    Section data;
-    Section event_types;
-    uint64_t flags;
-    uint64_t flags1[3];
-
-    uint64_t num_attrs() const { return attrs.size / attr_size; }
-  };
-
   explicit PerfDataTokenizer(TraceProcessorContext*);
   ~PerfDataTokenizer() override;
   PerfDataTokenizer(const PerfDataTokenizer&) = delete;
@@ -64,47 +56,80 @@ class PerfDataTokenizer : public ChunkedTraceReader {
 
   // ChunkedTraceReader implementation
   base::Status Parse(TraceBlobView) override;
-  void NotifyEndOfFile() override;
+  base::Status OnPushDataToSorter() override;
+  void OnEventsFullyExtracted() override;
 
  private:
-  enum class ParsingState {
-    Header = 0,
-    AfterHeaderBuffer = 1,
-    Attrs = 2,
-    AttrIds = 3,
-    AttrIdsFromBuffer = 4,
-    Records = 5
+  enum class ParsingState : uint8_t {
+    kParseHeader,
+    kParseAttrs,
+    kSeekRecords,
+    kParseRecords,
+    kParseAuxtraceData,
+    kParseFeatureSections,
+    kParseFeatures,
+    kDone,
   };
-  enum class ParsingResult { NoSpace = 0, Success = 1 };
+  enum class ParsingResult : uint8_t { kMoreDataNeeded = 0, kSuccess = 1 };
 
   base::StatusOr<ParsingResult> ParseHeader();
-  base::StatusOr<ParsingResult> ParseAfterHeaderBuffer();
   base::StatusOr<ParsingResult> ParseAttrs();
-  base::StatusOr<ParsingResult> ParseAttrIds();
-  base::StatusOr<ParsingResult> ParseAttrIdsFromBuffer();
+  base::StatusOr<ParsingResult> SeekRecords();
+  base::StatusOr<ParsingResult> ParseRecords();
+  base::StatusOr<ParsingResult> ParseAuxtraceData();
+  base::StatusOr<ParsingResult> ParseFeatureSections();
+  base::StatusOr<ParsingResult> ParseFeatures();
 
-  base::StatusOr<PerfDataTracker::Mmap2Record> ParseMmap2Record(
-      uint64_t record_size);
+  base::StatusOr<PerfDataTokenizer::ParsingResult> ParseRecord(Record& record);
+  void MaybePushRecord(Record record);
+  base::Status ParseFeature(uint8_t feature_id, TraceBlobView payload);
 
-  bool ValidateSample(const PerfDataTracker::PerfSample&);
+  base::Status ProcessRecord(Record record);
+  base::Status ProcessAuxRecord(Record record);
+  base::Status ProcessAuxtraceInfoRecord(Record record);
+  base::Status ProcessTimeConvRecord(Record record);
+  base::Status ProcessItraceStartRecord(Record record);
+
+  std::optional<int64_t> ExtractTraceTimestamp(const Record& record);
 
   TraceProcessorContext* context_;
-  PerfDataTracker* tracker_;
+  PerfTracker perf_tracker_;
 
-  ParsingState parsing_state_ = ParsingState::Header;
+  std::unique_ptr<TraceSorter::Stream<Record>> stream_;
 
-  PerfHeader header_;
+  ParsingState parsing_state_ = ParsingState::kParseHeader;
 
-  std::vector<PerfDataTracker::PerfFileAttr> attrs_;
-  uint64_t ids_start_ = std::numeric_limits<uint64_t>::max();
-  uint64_t ids_end_ = 0;
-  std::vector<uint8_t> after_header_buffer_;
+  PerfFile::Header header_;
+  base::FlatSet<uint8_t> feature_ids_;
+  PerfFile::Section feature_headers_section_;
+  // Sections for the features present in the perf file sorted by descending
+  // section offset. This is done so that we can pop from the back as we process
+  // the sections.
+  std::vector<std::pair<uint8_t, PerfFile::Section>> feature_sections_;
 
-  perf_importer::Reader reader_;
+  RefPtr<PerfInvocation> perf_invocation_;
+
+  util::TraceBlobViewReader buffer_;
+
+  // Records without timestamps (e.g. MMAP, MMAP2) are buffered here
+  // until we see the first record with a valid timestamp. Then they are
+  // flushed with that timestamp.
+  std::vector<Record> pending_records_without_timestamp_;
+
+  // All COMM records are buffered and pushed in file order at NotifyEndOfFile.
+  struct BufferedCommRecord {
+    Record record;
+    std::optional<int64_t> timestamp;
+  };
+  std::vector<BufferedCommRecord> buffered_comm_records_;
+
+  // Minimum timestamp seen across all records (for records without timestamps)
+  std::optional<int64_t> min_timestamp_;
+
+  std::optional<AuxtraceRecord> current_auxtrace_;
+  AuxStreamManager aux_manager_;
 };
 
-}  // namespace perf_importer
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor::perf_importer
 
 #endif  // SRC_TRACE_PROCESSOR_IMPORTERS_PERF_PERF_DATA_TOKENIZER_H_

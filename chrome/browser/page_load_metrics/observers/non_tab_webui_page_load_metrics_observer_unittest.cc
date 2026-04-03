@@ -8,8 +8,6 @@
 #include "components/page_load_metrics/browser/page_load_tracker.h"
 #include "components/page_load_metrics/common/test/page_load_metrics_test_util.h"
 
-namespace chrome {
-
 class NonTabPageLoadMetricsObserverTest
     : public page_load_metrics::PageLoadMetricsObserverTestHarness {
  protected:
@@ -56,14 +54,8 @@ TEST_F(NonTabPageLoadMetricsObserverTest, RecordsHistogramsIfEmbedderIsWebUI) {
       "PageLoad.PaintTiming.NavigationToLargestContenfulPaint2", 0);
 }
 
-class NonTabPageLoadMetricsObserverNonWebUITest
-    : public NonTabPageLoadMetricsObserverTest {
- protected:
-  bool IsNonTabWebUI() const override { return false; }
-};
-
-TEST_F(NonTabPageLoadMetricsObserverNonWebUITest,
-       DoesntRecordHistogramsIfEmbedderIsNotWebUI) {
+TEST_F(NonTabPageLoadMetricsObserverTest,
+       DoesntRecordHistogramsIfEmbedderIsWebUIAndNonChromeScheme) {
   page_load_metrics::mojom::PageLoadTiming timing;
   page_load_metrics::InitPageLoadTimingForTest(&timing);
   timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
@@ -73,15 +65,9 @@ TEST_F(NonTabPageLoadMetricsObserverNonWebUITest,
       base::Milliseconds(100);
   timing.paint_timing->largest_contentful_paint->largest_text_paint_size = 20u;
   PopulateRequiredTimingFields(&timing);
-  NavigateAndCommit(GURL("chrome://version"));
+  NavigateAndCommit(GURL("data:text/html,Hello world"));
 
   tester()->SimulateTimingUpdate(timing);
-  tester()->histogram_tester().ExpectTotalCount(
-      "PageLoad.PaintTiming.NavigationToFirstContentfulPaint.NonTabWebUI."
-      "Test",
-      0);
-  tester()->histogram_tester().ExpectTotalCount(
-      "PageLoad.PaintTiming.NavigationToFirstContentfulPaint.NonTabWebUI", 0);
 
   // Navigate again to force logging.
   tester()->NavigateToUntrackedUrl();
@@ -96,5 +82,3 @@ TEST_F(NonTabPageLoadMetricsObserverNonWebUITest,
   tester()->histogram_tester().ExpectTotalCount(
       "PageLoad.PaintTiming.NavigationToLargestContenfulPaint2", 0);
 }
-
-}  // namespace chrome

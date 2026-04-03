@@ -79,15 +79,18 @@ class WifiHotspotConnector : public NetworkStateHandlerObserver {
   void UpdateWaitingForWifi();
   void InitiateConnectionToCurrentNetwork();
   void CompleteActiveConnectionAttempt(
-      absl::optional<WifiHotspotConnectionError> error);
+      std::optional<WifiHotspotConnectionError> error);
   void CreateWifiConfiguration();
   void RequestWifiScan();
-  base::Value::Dict CreateWifiPropertyDictionary(const std::string& ssid,
-                                                 const std::string& password);
+  base::DictValue CreateWifiPropertyDictionary(const std::string& ssid,
+                                               const std::string& password);
   void OnConnectionTimeout();
 
   void OnWifiConnectionSucceeded();
   void OnWifiConnectionFailed(const std::string& error_name);
+
+  void AssociateNetworks(std::string wifi_network_guid,
+                         std::string tether_network_guid);
 
   void SetTestDoubles(std::unique_ptr<base::OneShotTimer> test_timer,
                       base::Clock* test_clock,

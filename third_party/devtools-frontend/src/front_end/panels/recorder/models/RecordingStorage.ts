@@ -1,10 +1,10 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as Common from '../../../core/common/common.js';
 
-import {type UserFlow} from './Schema.js';
+import type {UserFlow} from './Schema.js';
 
 let instance: RecordingStorage|null = null;
 
@@ -14,7 +14,6 @@ interface IdGenerator {
 
 class UUIDGenerator implements IdGenerator {
   next(): string {
-    // @ts-ignore
     return crypto.randomUUID();
   }
 }

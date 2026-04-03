@@ -4,8 +4,14 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/ANGLETest.h"
+#include "test_utils/angle_test_configs.h"
 #include "test_utils/gl_raii.h"
+#include "util/gles_loader_autogen.h"
 
 using namespace angle;
 
@@ -52,14 +58,55 @@ class CubeMapTextureTest : public ANGLETest<>
     GLint mColorLocation;
 };
 
+// Verify that uploading to the faces of a cube map consecutively will correctly upload to each
+// face.
+TEST_P(CubeMapTextureTest, UploadToFacesConsecutively)
+{
+    const GLColor faceColors[] = {
+        GLColor::red,    GLColor::green,   GLColor::blue,
+        GLColor::yellow, GLColor::magenta, GLColor::cyan,
+    };
+
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, tex);
+    for (int face = 5; face >= 0; face--)
+    {
+        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA, 1, 1, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, faceColors[face].data());
+        EXPECT_GL_NO_ERROR();
+    }
+    EXPECT_GL_NO_ERROR();
+
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    EXPECT_GL_NO_ERROR();
+
+    for (GLenum face = 0; face < 6; face++)
+    {
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, tex, 0);
+        EXPECT_GL_NO_ERROR();
+
+        EXPECT_PIXEL_COLOR_EQ(0, 0, faceColors[face]);
+        EXPECT_GL_NO_ERROR();
+    }
+
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteTextures(1, &tex);
+
+    EXPECT_GL_NO_ERROR();
+}
+
 // Verify that rendering to the faces of a cube map consecutively will correctly render to each
 // face.
 TEST_P(CubeMapTextureTest, RenderToFacesConsecutively)
 {
-    // TODO: Diagnose and fix. http://anglebug.com/2954
+    // TODO: Diagnose and fix. http://anglebug.com/42261648
     ANGLE_SKIP_TEST_IF(IsVulkan() && IsIntel() && IsWindows());
 
-    // http://anglebug.com/3145
+    // http://anglebug.com/42261821
     ANGLE_SKIP_TEST_IF(IsVulkan() && IsIntel() && IsFuchsia());
 
     const GLfloat faceColors[] = {
@@ -95,6 +142,10 @@ TEST_P(CubeMapTextureTest, RenderToFacesConsecutively)
 
         drawQuad(mProgram, essl1_shaders::PositionAttrib(), 0.5f);
         EXPECT_GL_NO_ERROR();
+
+        EXPECT_PIXEL_EQ(0, 0, faceColor[0] * 255, faceColor[1] * 255, faceColor[2] * 255,
+                        faceColor[3] * 255);
+        EXPECT_GL_NO_ERROR();
     }
 
     for (GLenum face = 0; face < 6; face++)
@@ -117,7 +168,7 @@ TEST_P(CubeMapTextureTest, RenderToFacesConsecutively)
 
 void CubeMapTextureTest::runSampleCoordinateTransformTest(const char *shader, const bool useES3)
 {
-    // Fails to compile the shader.  anglebug.com/3776
+    // Fails to compile the shader.  anglebug.com/42262420
     ANGLE_SKIP_TEST_IF(IsOpenGL() && IsIntel() && IsWindows());
 
     constexpr GLsizei kCubeFaceCount            = 6;
@@ -232,7 +283,7 @@ void CubeMapTextureTest::runSampleCoordinateTransformTest(const char *shader, co
 // within each face.  See section 3.7.5 of GLES2.0 (Cube Map Texture Selection).
 TEST_P(CubeMapTextureTest, SampleCoordinateTransform)
 {
-    // http://anglebug.com/4092
+    // http://anglebug.com/40096654
     ANGLE_SKIP_TEST_IF(IsWindows() && IsD3D9());
     // Create a program that samples from 6x4 directions of the cubemap, draw and verify that the
     // colors match the right color from |faceColors|.
@@ -361,4 +412,4 @@ void main()
 
 // Use this to select which configurations (e.g. which renderer, which GLES major version) these
 // tests should be run against.
-ANGLE_INSTANTIATE_TEST_ES2_AND_ES3(CubeMapTextureTest);
+ANGLE_INSTANTIATE_TEST_ES2_AND_ES3_AND(CubeMapTextureTest);

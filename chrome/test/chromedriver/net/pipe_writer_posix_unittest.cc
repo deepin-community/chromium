@@ -2,14 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/test/chromedriver/net/pipe_writer_posix.h"
+
 #include <cmath>
+#include <optional>
 #include <string>
 
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/platform_file.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/json/json_reader.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -21,7 +23,6 @@
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
-#include "chrome/test/chromedriver/net/pipe_writer_posix.h"
 #include "chrome/test/chromedriver/net/timeout.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/io_buffer.h"
@@ -32,20 +33,24 @@
 
 namespace {
 
-std::pair<std::string, int> ReadAll(base::File read_pipe) {
+using ::testing::Optional;
+
+std::optional<std::string> ReadAll(base::File read_pipe) {
   std::string received_message;
   scoped_refptr<net::IOBufferWithSize> buffer =
       base::MakeRefCounted<net::IOBufferWithSize>(4096);
-  int rv = 0;
   while (true) {
-    rv = read_pipe.ReadAtCurrentPos(buffer->data(), buffer->size());
-    if (rv <= 0) {
+    std::optional<size_t> read_bytes =
+        read_pipe.ReadAtCurrentPos(buffer->span());
+    if (!read_bytes) {
+      return std::nullopt;
+    }
+    if (*read_bytes == 0) {
       break;
     }
-    received_message.insert(received_message.end(), buffer->data(),
-                            buffer->data() + rv);
+    received_message += base::as_string_view(buffer->span().first(*read_bytes));
   }
-  return std::make_pair(std::move(received_message), rv);
+  return received_message;
 }
 
 int WriteAll(std::unique_ptr<PipeWriterPosix> writer, std::string message) {
@@ -159,7 +164,6 @@ TEST_F(PipeWriterPosixTest, Write) {
   options.message_pump_type = base::MessagePumpType::IO;
   base::Thread thread("WriterThread");
   ASSERT_TRUE(thread.StartWithOptions(std::move(options)));
-  std::pair<std::string, int> received;
   base::RunLoop run_loop;
   std::string sent_message = "Hello, pipes!";
   writer->DetachFromThread();
@@ -171,10 +175,7 @@ TEST_F(PipeWriterPosixTest, Write) {
   WriteAll(thread.task_runner(), std::move(writer), sent_message,
            std::move(callback));
 
-  auto [received_message, code] = ReadAll(std::move(read_pipe));
-
-  EXPECT_EQ(sent_message, received_message);
-  EXPECT_EQ(0, code);
+  EXPECT_THAT(ReadAll(std::move(read_pipe)), Optional(sent_message));
 
   run_loop.Run();
   const int expected_message_size = static_cast<int>(sent_message.size());
@@ -207,7 +208,6 @@ TEST_F(PipeWriterPosixTest, WriteLarge) {
   options.message_pump_type = base::MessagePumpType::IO;
   base::Thread thread("WriterThread");
   ASSERT_TRUE(thread.StartWithOptions(std::move(options)));
-  std::pair<std::string, int> received;
   base::RunLoop run_loop;
   std::string sent_message(1 << 20, 'a');
   writer->DetachFromThread();
@@ -219,10 +219,7 @@ TEST_F(PipeWriterPosixTest, WriteLarge) {
   WriteAll(thread.task_runner(), std::move(writer), sent_message,
            std::move(callback));
 
-  auto [received_message, code] = ReadAll(std::move(read_pipe));
-
-  EXPECT_EQ(sent_message, received_message);
-  EXPECT_EQ(0, code);
+  EXPECT_THAT(ReadAll(std::move(read_pipe)), Optional(sent_message));
 
   run_loop.Run();
   const int expected_message_size = static_cast<int>(sent_message.size());

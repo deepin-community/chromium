@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "base/functional/callback_forward.h"
+#include "base/functional/callback.h"
 #include "base/values.h"
-#include "chromeos/crosapi/mojom/chrome_app_kiosk_service.mojom.h"
+#include "chrome/browser/ash/app_mode/kiosk_app_types.h"
 
 namespace chromeos {
 
@@ -22,7 +22,7 @@ namespace chromeos {
 class ChromeKioskExternalLoaderBroker {
  public:
   using InstallDataChangeCallback =
-      base::RepeatingCallback<void(base::Value::Dict)>;
+      base::RepeatingCallback<void(base::DictValue)>;
 
   static ChromeKioskExternalLoaderBroker* Get();
 
@@ -40,16 +40,18 @@ class ChromeKioskExternalLoaderBroker {
   void RegisterSecondaryAppInstallDataObserver(
       InstallDataChangeCallback callback);
 
-  void TriggerPrimaryAppInstall(
-      const crosapi::mojom::AppInstallParams& install_data);
-  void TriggerSecondaryAppInstall(
+  // Updates the primary app install data and notifies `primary_app_observer_`.
+  void TriggerPrimaryAppInstall(ash::KioskAppInstallParams install_data);
+
+  // Updates the list of secondary apps and notifies `secondary_apps_observer_`.
+  void UpdateSecondaryAppList(
       const std::vector<std::string>& secondary_app_ids);
 
  private:
   void CallPrimaryAppObserver();
   void CallSecondaryAppObserver();
 
-  std::optional<crosapi::mojom::AppInstallParams> primary_app_data_;
+  std::optional<ash::KioskAppInstallParams> primary_app_data_;
   std::optional<std::vector<std::string>> secondary_app_ids_;
 
   // Handle to the primary app external loader.

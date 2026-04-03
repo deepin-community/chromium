@@ -5,13 +5,13 @@
 #include "components/safe_search_api/safe_search/safe_search_url_checker_client.h"
 
 #include <optional>
+#include <string>
 #include <utility>
 
 #include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/escape.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
@@ -41,13 +41,14 @@ std::string BuildRequestData(const std::string& api_key, const GURL& url) {
 // Parses a SafeSearch API |response| and stores the result in |is_porn|,
 // returns true on success. Otherwise, returns false and doesn't set |is_porn|.
 bool ParseResponse(const std::string& response, bool* is_porn) {
-  std::optional<base::Value> optional_value = base::JSONReader::Read(response);
+  std::optional<base::Value> optional_value =
+      base::JSONReader::Read(response, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!optional_value || !optional_value.value().is_dict()) {
     DLOG(WARNING) << "ParseResponse failed to parse global dictionary";
     return false;
   }
-  const base::Value::Dict& dict = optional_value.value().GetDict();
-  const base::Value::List* classifications_list =
+  const base::DictValue& dict = optional_value.value().GetDict();
+  const base::ListValue* classifications_list =
       dict.FindList("classifications");
   if (!classifications_list) {
     DLOG(WARNING) << "ParseResponse failed to parse classifications list";
@@ -62,7 +63,7 @@ bool ParseResponse(const std::string& response, bool* is_porn) {
     DLOG(WARNING) << "ParseResponse failed to parse classification dict";
     return false;
   }
-  const base::Value::Dict& classification_dict = classification_value.GetDict();
+  const base::DictValue& classification_dict = classification_value.GetDict();
   std::optional<bool> is_porn_opt = classification_dict.FindBool("pornography");
   if (is_porn_opt.has_value())
     *is_porn = is_porn_opt.value();
@@ -128,7 +129,7 @@ void SafeSearchURLCheckerClient::CheckURL(const GURL& url,
 
 void SafeSearchURLCheckerClient::OnSimpleLoaderComplete(
     CheckList::iterator it,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   std::unique_ptr<Check> check = std::move(*it);
 
   checks_in_progress_.erase(it);

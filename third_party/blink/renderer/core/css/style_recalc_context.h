@@ -5,14 +5,17 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_STYLE_RECALC_CONTEXT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_STYLE_RECALC_CONTEXT_H_
 
+#include "base/gtest_prod_util.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 
 namespace blink {
 
+class AnchorEvaluator;
 class ComputedStyle;
+class CSSPropertyValueSet;
 class Element;
-class HTMLSlotElement;
 class StyleScopeFrame;
 
 // StyleRecalcContext is an object that is passed on the stack during
@@ -32,35 +35,56 @@ class CORE_EXPORT StyleRecalcContext {
   // the shadow-including parent of Element has a ComputedStyle.
   static StyleRecalcContext FromAncestors(Element&);
 
-  // If the passed in StyleRecalcContext is nullptr, build a StyleRecalcContext
-  // suitable for resolving the style for child elements of the passed in
-  // element. Otherwise return the passed in context as a value.
+  // To be used instead of FromAncestors() when we are computing styles for an
+  // element which might not yet exist. For instance for getComputedStyle() for
+  // pseudo elements that do not exist or pseudo elements not backed by a
+  // PseudoElement.
+  //
+  // The passed in PseudoId must not be kPseudoIdNone.
+  static StyleRecalcContext FromPseudoElementAncestors(
+      Element& originating_element,
+      PseudoId);
+
+  static StyleRecalcContext FromParentContext(
+      const StyleRecalcContext& parent_context,
+      Element& element);
+
+ private:
+  // Build a StyleRecalcContext suitable for resolving the style for child
+  // elements of the passed in element.
   //
   // It is invalid to pass an Element without a ComputedStyle. This means that
   // if the Element is in display:none, the ComputedStyle must be ensured
   // before calling this function.
-  static StyleRecalcContext FromInclusiveAncestors(Element&);
+  static StyleRecalcContext FromInclusiveAncestors(Element&, PseudoId);
 
-  // When traversing into slotted children, the container is in the shadow-
-  // including inclusive ancestry of the slotted element's host. Return a
-  // context with the container adjusted as necessary.
-  StyleRecalcContext ForSlotChildren(const HTMLSlotElement& slot) const;
+  FRIEND_TEST_ALL_PREFIXES(StyleRecalcContextTest, FromAncestors);
+  FRIEND_TEST_ALL_PREFIXES(StyleRecalcContextTest, FromAncestors_FlatTree);
 
-  // Called to update the context when matching ::slotted rules for shadow host
-  // children. ::slotted rules may query containers inside the slot's shadow
-  // tree as well.
-  StyleRecalcContext ForSlottedRules(HTMLSlotElement& slot) const;
-
-  // Called to update the context when matching ::part rules for shadow hosts.
-  StyleRecalcContext ForPartRules(Element& host) const;
-
+ public:
   // Set to the nearest container (for size container queries), if any.
   // This is used to evaluate container queries in ElementRuleCollector.
-  Element* container = nullptr;
+  Element* size_container = nullptr;
 
-  // Used to decide which is the the closest style() @container candidate for
-  // ::slotted() and ::part() rule matching. Otherwise nullptr.
-  Element* style_container = nullptr;
+  // Used to evaluate anchor() and anchor-size() queries.
+  //
+  // For normal (non-interleaved) style recalcs, this will be nullptr.
+  // For interleaved style updates from out-of-flow layout, this is
+  // an instance of AnchorEvaluatorImpl.
+  AnchorEvaluator* anchor_evaluator = nullptr;
+
+  // The declaration block from the current position option, if any.
+  // If present, this is added to the cascade at the "try layer"
+  // (CascadePriority::kIsTryStyleOffset).
+  //
+  // [1] https://drafts.csswg.org/css-anchor-position-1/#fallback
+  const CSSPropertyValueSet* try_set = nullptr;
+
+  // An internally generally declaration block, created from the "flips"
+  // specified by the current position option.
+  // If present, this is added to the cascade at the "try tactics layer"
+  // (CascadePriority::kIsTryTacticsStyleOffset).
+  const CSSPropertyValueSet* try_tactics_set = nullptr;
 
   StyleScopeFrame* style_scope_frame = nullptr;
 
@@ -68,6 +92,9 @@ class CORE_EXPORT StyleRecalcContext {
   // @starting-style styles for the second pass when transitioning from
   // display:none.
   const ComputedStyle* old_style = nullptr;
+
+  // The nearest ancestor overscroll container.
+  Element* overscroll_container = nullptr;
 
   // If false, something about the parent's style (e.g., that it has
   // modifications to one or more non-independent inherited properties)
@@ -97,12 +124,20 @@ class CORE_EXPORT StyleRecalcContext {
   // not have a style.
   bool is_outside_flat_tree = false;
 
-  // True when we're computing style interleaved from OOF-layout. This can
-  // happen when e.g. position-fallback is used.
+  // True if the ancestor of this element had a content-visibility: auto
+  // style and was locked, meaning that this is a forced update.
+  bool has_content_visibility_auto_locked_ancestor = false;
+
+  // Set to true if there is an ancestor element which has animations or
+  // transitions applied. Used to optimize after-change style computation.
+  bool has_animating_ancestor = false;
   //
-  // Note however that declarations from @try styles may still be included
-  // when this flag is false (see OutOfFlowData, "speculative @try styling").
-  bool is_interleaved_oof = false;
+  // True if any scroller ancestor of this element had a scroll-marker-group
+  // property set to "before" or "after".
+  bool has_scroller_ancestor_with_scroll_marker_group_property = false;
+
+  // True if this element has a container-type:anchored ancestor.
+  bool has_anchored_container = false;
 };
 
 }  // namespace blink

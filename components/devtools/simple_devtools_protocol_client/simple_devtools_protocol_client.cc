@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "base/functional/bind.h"
@@ -90,10 +91,11 @@ void SimpleDevToolsProtocolClient::DispatchProtocolMessage(
     base::span<const uint8_t> json_message) {
   DCHECK_EQ(agent_host, agent_host_);
 
-  base::StringPiece str_message(
+  std::string_view str_message(
       reinterpret_cast<const char*>(json_message.data()), json_message.size());
-  base::Value message_value = *base::JSONReader::Read(str_message);
-  base::Value::Dict& message = message_value.GetDict();
+  base::Value message_value = *base::JSONReader::Read(
+      str_message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  base::DictValue& message = message_value.GetDict();
 
   if (const std::string* session_id = message.FindString("sessionId")) {
     auto it = sessions_.find(*session_id);
@@ -122,7 +124,7 @@ void SimpleDevToolsProtocolClient::AgentHostClosed(
 }
 
 void SimpleDevToolsProtocolClient::DispatchProtocolMessageTask(
-    base::Value::Dict message) {
+    base::DictValue message) {
   VLOG(kVLogLevel) << "\n[CDP RECV] " << message.DebugString();
 
   // Handle response message shutting down the host if it's unexpected.
@@ -168,7 +170,7 @@ void SimpleDevToolsProtocolClient::DispatchProtocolMessageTask(
 }
 
 void SimpleDevToolsProtocolClient::SendProtocolMessage(
-    base::Value::Dict message) {
+    base::DictValue message) {
   if (parent_client_ && !agent_host_) {
     parent_client_->SendProtocolMessage(std::move(message));
     return;
@@ -176,19 +178,18 @@ void SimpleDevToolsProtocolClient::SendProtocolMessage(
 
   VLOG(kVLogLevel) << "\n[CDP SEND] " << message.DebugString();
 
-  std::string json_message;
-  base::JSONWriter::Write(base::Value(std::move(message)), &json_message);
-  agent_host_->DispatchProtocolMessage(
-      this, base::as_bytes(base::make_span(json_message)));
+  std::string json_message =
+      base::WriteJson(base::Value(std::move(message))).value_or("");
+  agent_host_->DispatchProtocolMessage(this, base::as_byte_span(json_message));
 }
 
 void SimpleDevToolsProtocolClient::SendCommand(
     const std::string& method,
-    base::Value::Dict params,
+    base::DictValue params,
     ResponseCallback response_callback) {
   int id = g_next_message_id++;
 
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set(kId, id);
   message.Set(kMethod, method);
   if (params.size())
@@ -204,16 +205,16 @@ void SimpleDevToolsProtocolClient::SendCommand(
 void SimpleDevToolsProtocolClient::SendCommand(
     const std::string& method,
     ResponseCallback response_callback) {
-  SendCommand(method, base::Value::Dict(), std::move(response_callback));
+  SendCommand(method, base::DictValue(), std::move(response_callback));
 }
 
 void SimpleDevToolsProtocolClient::SendCommand(const std::string& method,
-                                               base::Value::Dict params) {
+                                               base::DictValue params) {
   SendCommand(method, std::move(params), base::DoNothing());
 }
 
 void SimpleDevToolsProtocolClient::SendCommand(const std::string& method) {
-  SendCommand(method, base::Value::Dict(), base::DoNothing());
+  SendCommand(method, base::DictValue(), base::DoNothing());
 }
 
 void SimpleDevToolsProtocolClient::AddEventHandler(

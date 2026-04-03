@@ -14,15 +14,21 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/data/service/client/data_service_client.h"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include "absl/memory/memory.h"
 #include "absl/time/time.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/protobuf/error_codes.pb.h"
 #include "tensorflow/core/data/service/client/common.h"
 #include "tensorflow/core/data/service/common.h"
+#include "tensorflow/core/data/service/common.pb.h"
 #include "tensorflow/core/data/service/test_cluster.h"
 #include "tensorflow/core/data/service/test_util.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -33,7 +39,6 @@ limitations under the License.
 #include "tensorflow/core/protobuf/config.pb.h"
 #include "tensorflow/core/protobuf/data_service.pb.h"
 #include "tensorflow/core/protobuf/error_codes.pb.h"
-#include "tsl/lib/core/status_test_util.h"
 
 namespace tensorflow {
 namespace data {
@@ -77,7 +82,7 @@ class TestDataServiceContext : public DataServiceContext {
   TestDataServiceContext() = default;
   ~TestDataServiceContext() override = default;
 
-  std::unique_ptr<Thread> StartThread(const string& name,
+  std::unique_ptr<Thread> StartThread(const std::string& name,
                                       std::function<void()> fn) override {
     return absl::WrapUnique(
         Env::Default()->StartThread({}, name, std::move(fn)));
@@ -134,9 +139,10 @@ TEST(DataServiceClientTest, NoSharding) {
   DataServiceParams params = GetDataServiceParams(
       dataset_id, test_cluster.DispatcherAddress(), ProcessingModeDef::OFF);
   DataServiceClient client(params);
-  TF_ASSERT_OK(client.Initialize());
+  TF_ASSERT_OK(client.Initialize(/*accelerator_device_info=*/nullptr,
+                                 /*allocator=*/nullptr));
   EXPECT_THAT(GetResults<int64_t>(client),
-              IsOkAndHolds(ElementsAreArray(Range(10))));
+              absl_testing::IsOkAndHolds(ElementsAreArray(Range(10))));
   client.Cancel();
 }
 
@@ -150,9 +156,10 @@ TEST(DataServiceClientTest, DynamicSharding) {
   DataServiceParams params = GetDataServiceParams(
       dataset_id, test_cluster.DispatcherAddress(), ProcessingModeDef::DYNAMIC);
   DataServiceClient client(params);
-  TF_ASSERT_OK(client.Initialize());
+  TF_ASSERT_OK(client.Initialize(/*accelerator_device_info=*/nullptr,
+                                 /*allocator=*/nullptr));
   EXPECT_THAT(GetResults<int64_t>(client),
-              IsOkAndHolds(UnorderedElementsAreArray(Range(10))));
+              absl_testing::IsOkAndHolds(UnorderedElementsAreArray(Range(10))));
   client.Cancel();
 }
 
@@ -167,9 +174,10 @@ TEST(DataServiceClientTest, StaticSharding) {
       GetDataServiceParams(dataset_id, test_cluster.DispatcherAddress(),
                            ProcessingModeDef::FILE_OR_DATA);
   DataServiceClient client(params);
-  TF_ASSERT_OK(client.Initialize());
+  TF_ASSERT_OK(client.Initialize(/*accelerator_device_info=*/nullptr,
+                                 /*allocator=*/nullptr));
   EXPECT_THAT(GetResults<int64_t>(client),
-              IsOkAndHolds(UnorderedElementsAreArray(Range(10))));
+              absl_testing::IsOkAndHolds(UnorderedElementsAreArray(Range(10))));
   client.Cancel();
 }
 
@@ -183,7 +191,8 @@ TEST(DataServiceClientTest, RecordBufferEvents) {
   DataServiceParams params = GetDataServiceParams(
       dataset_id, test_cluster.DispatcherAddress(), ProcessingModeDef::OFF);
   DataServiceClient client(params);
-  TF_ASSERT_OK(client.Initialize());
+  TF_ASSERT_OK(client.Initialize(/*accelerator_device_info=*/nullptr,
+                                 /*allocator=*/nullptr));
 
   auto mock_context = std::make_unique<TestDataServiceContext>();
   TestDataServiceContext* ctx = mock_context.get();
@@ -206,10 +215,11 @@ TEST(DataServiceClientTest, Cancel) {
   DataServiceParams params = GetDataServiceParams(
       dataset_id, test_cluster.DispatcherAddress(), ProcessingModeDef::OFF);
   DataServiceClient client(params);
-  TF_ASSERT_OK(client.Initialize());
+  TF_ASSERT_OK(client.Initialize(/*accelerator_device_info=*/nullptr,
+                                 /*allocator=*/nullptr));
   client.Cancel();
   EXPECT_THAT(client.GetNext(GetTestDataServiceContext),
-              StatusIs(error::CANCELLED));
+              absl_testing::StatusIs(error::CANCELLED));
 }
 
 TEST(DataServiceClientTest, ValidationError) {
@@ -218,8 +228,9 @@ TEST(DataServiceClientTest, ValidationError) {
   params.target_workers = TARGET_WORKERS_LOCAL;
   DataServiceClient client(params);
   EXPECT_THAT(
-      client.Initialize(),
-      StatusIs(
+      client.Initialize(/*accelerator_device_info=*/nullptr,
+                        /*allocator=*/nullptr),
+      absl_testing::StatusIs(
           error::INVALID_ARGUMENT,
           HasSubstr(
               "Local reads require local tf.data workers, but no local worker "

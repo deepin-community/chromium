@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include <cstddef>
-#include <optional>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -35,7 +34,8 @@
 #include "third_party/libprotobuf-mutator/src/src/libfuzzer/libfuzzer_macro.h"
 #include "url/origin.h"
 
-const char* kCmdline[] = {"audio_context_manager_mojolpm_fuzzer", nullptr};
+constexpr const char* kCmdline[] = {"audio_context_manager_mojolpm_fuzzer",
+                                    nullptr};
 
 content::mojolpm::FuzzerEnvironment& GetEnvironment() {
   static base::NoDestructor<content::mojolpm::FuzzerEnvironment> environment(

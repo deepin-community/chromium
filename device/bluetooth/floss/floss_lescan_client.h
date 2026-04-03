@@ -9,7 +9,6 @@
 
 #include "base/containers/queue.h"
 #include "base/functional/callback.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -28,11 +27,7 @@ class ObjectPath;
 namespace floss {
 
 const char kScannerCallbackPath[] =
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    "/org/chromium/bluetooth/scanner/callback/lacros";
-#else
     "/org/chromium/bluetooth/scanner/callback";
-#endif
 const char kScannerCallbackInterfaceName[] =
     "org.chromium.bluetooth.ScannerCallback";
 const char kEmptyUuidStr[] = "00000000-0000-0000-0000-000000000000";
@@ -106,15 +101,15 @@ struct DEVICE_BLUETOOTH_EXPORT ScanFilter {
 struct DEVICE_BLUETOOTH_EXPORT ScanResult {
   std::string name;
   std::string address;
-  uint8_t addr_type;
-  uint16_t event_type;
-  uint8_t primary_phy;
-  uint8_t secondary_phy;
-  uint8_t advertising_sid;
-  int8_t tx_power;
-  int8_t rssi;
-  uint16_t periodic_adv_int;
-  uint8_t flags;
+  uint8_t addr_type = 0;
+  uint16_t event_type = 0;
+  uint8_t primary_phy = 0;
+  uint8_t secondary_phy = 0;
+  uint8_t advertising_sid = 0;
+  int8_t tx_power = 0;
+  int8_t rssi = 0;
+  uint16_t periodic_adv_int = 0;
+  uint8_t flags = 0;
   std::vector<device::BluetoothUUID> service_uuids;
   std::map<std::string, std::vector<uint8_t>> service_data;
   std::map<uint16_t, std::vector<uint8_t>> manufacturer_data;

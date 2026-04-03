@@ -2,17 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "sandbox/win/src/target_services.h"
 
 #include <windows.h>
 #include <winsock2.h>
 
-#include <new>
-
 #include <process.h>
 #include <stdint.h>
 
+#include <new>
 #include <optional>
+
 #include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/win/access_token.h"
@@ -78,7 +79,7 @@ bool WarmupWindowsLocales() {
   // warmup all of these functions, but let's not assume that.
   ::GetUserDefaultLangID();
   ::GetUserDefaultLCID();
-  wchar_t localeName[LOCALE_NAME_MAX_LENGTH] = {0};
+  wchar_t localeName[LOCALE_NAME_MAX_LENGTH] = {};
   return (0 != ::GetUserDefaultLocaleName(localeName, LOCALE_NAME_MAX_LENGTH));
 }
 
@@ -127,6 +128,9 @@ void TargetServicesBase::LowerToken() {
   if (!SetProcessIntegrityLevel(g_shared_delayed_integrity_level)) {
     ::TerminateProcess(::GetCurrentProcess(), SBOX_FATAL_INTEGRITY);
   }
+  // Note: this state must be set before calling RevertToSelf because the act of
+  // calling RevertToSelf calls intercepts that rely on this state having been
+  // set.
   process_state_.SetRevertedToSelf();
   // If the client code as called RegOpenKey, advapi32.dll has cached some
   // handles. The following code gets rid of them.
@@ -147,6 +151,7 @@ void TargetServicesBase::LowerToken() {
       !LockDownSecurityMitigations(g_shared_delayed_mitigations)) {
     ::TerminateProcess(::GetCurrentProcess(), SBOX_FATAL_MITIGATION);
   }
+  process_state_.SetInitCompleted();
 }
 
 ProcessState* TargetServicesBase::GetState() {
@@ -226,18 +231,30 @@ bool ProcessState::IsCsrssConnected() const {
   return csrss_connected_;
 }
 
+bool ProcessState::InitCompleted() const {
+  return process_state_ >= ProcessStateInternal::INIT_COMPLETED;
+}
+
 void ProcessState::SetInitCalled() {
-  if (process_state_ < ProcessStateInternal::INIT_CALLED)
+  if (process_state_ < ProcessStateInternal::INIT_CALLED) {
     process_state_ = ProcessStateInternal::INIT_CALLED;
+  }
 }
 
 void ProcessState::SetRevertedToSelf() {
-  if (process_state_ < ProcessStateInternal::REVERTED_TO_SELF)
+  if (process_state_ < ProcessStateInternal::REVERTED_TO_SELF) {
     process_state_ = ProcessStateInternal::REVERTED_TO_SELF;
+  }
 }
 
 void ProcessState::SetCsrssConnected(bool csrss_connected) {
   csrss_connected_ = csrss_connected;
+}
+
+void ProcessState::SetInitCompleted() {
+  if (process_state_ < ProcessStateInternal::INIT_COMPLETED) {
+    process_state_ = ProcessStateInternal::INIT_COMPLETED;
+  }
 }
 
 }  // namespace sandbox

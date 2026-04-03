@@ -13,8 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <gtest/gtest.h>
 #include "xla/service/gpu/tests/gpu_codegen_test.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/xla.pb.h"
 
 namespace xla {
 namespace gpu {
@@ -28,7 +29,7 @@ TEST_F(UnknownCustomCallFails, UnknownCustomCallFails) {
 
     ENTRY Test1 {
       a = f32[128] parameter(0)
-      ROOT r1 = f32[128] custom-call(a), custom_call_target="my_custom_call"
+      ROOT r1 = f32[128] custom-call(a), custom_call_target="my_custom_call", api_version=API_VERSION_TYPED_FFI
     }
   )";
 
@@ -36,7 +37,7 @@ TEST_F(UnknownCustomCallFails, UnknownCustomCallFails) {
 }
 
 class MockedCustomCall : public GpuCodegenTest {
-  DebugOptions GetDebugOptionsForTest() override {
+  DebugOptions GetDebugOptionsForTest() const override {
     DebugOptions opts;
     opts.set_xla_gpu_mock_custom_calls(true);
     return opts;
@@ -49,7 +50,7 @@ TEST_F(MockedCustomCall, CustomCallIgnored) {
 
     ENTRY Test1 {
       a = f32[128] parameter(0)
-      ROOT r1 = f32[128] custom-call(a), custom_call_target="my_custom_call"
+      ROOT r1 = f32[128] custom-call(a), custom_call_target="my_custom_call", api_version=API_VERSION_TYPED_FFI
     }
   )";
 

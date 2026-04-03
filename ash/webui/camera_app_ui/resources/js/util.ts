@@ -9,7 +9,13 @@ import {I18nString} from './i18n_string.js';
 import * as localDev from './local_dev.js';
 import * as loadTimeData from './models/load_time_data.js';
 import * as state from './state.js';
-import {AspectRatioSet, Facing, FpsRange, Resolution} from './type.js';
+import {
+  AspectRatioSet,
+  Facing,
+  FpsRange,
+  ImageFormat,
+  Resolution,
+} from './type.js';
 
 /**
  * Creates a canvas element for 2D drawing.
@@ -32,16 +38,24 @@ export function newDrawingCanvas(
 /**
  * Converts canvas content to a JPEG Blob.
  */
-export function canvasToJpegBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+export function canvasToImageBlob(
+    canvas: HTMLCanvasElement, format: ImageFormat): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob !== null) {
         resolve(blob);
       } else {
-        reject(new Error('Failed to convert canvas to jpeg blob.'));
+        reject(new Error(`Failed to convert canvas to ${format} blob.`));
       }
-    }, 'image/jpeg');
+    }, `image/${format}`);
   });
+}
+
+/**
+ * Converts canvas content to a JPEG Blob.
+ */
+export function canvasToJpegBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return canvasToImageBlob(canvas, ImageFormat.JPEG);
 }
 
 /**
@@ -198,10 +212,31 @@ export function blobToImage(blob: Blob): Promise<HTMLImageElement> {
 }
 
 /**
- * Gets default facing according to device mode.
+ * Gets the facing preference according to device mode and lid state. The lower
+ * the index, the more preferred.
  */
-export function getDefaultFacing(): Facing {
-  return state.get(state.State.TABLET) ? Facing.ENVIRONMENT : Facing.USER;
+export function getFacingPreference(): Facing[] {
+  if (isLidClosed()) {
+    return [Facing.EXTERNAL, Facing.ENVIRONMENT, Facing.USER];
+  }
+  if (state.get(state.State.TABLET)) {
+    return [Facing.ENVIRONMENT, Facing.USER, Facing.EXTERNAL];
+  }
+  return [Facing.USER, Facing.ENVIRONMENT, Facing.EXTERNAL];
+}
+
+/**
+ * Checks if the lid is closed or not.
+ */
+export function isLidClosed(): boolean {
+  return state.get(state.State.LID_CLOSED);
+}
+
+/**
+ * Checks if the sw privacy switch is on.
+ */
+export function isSWPrivacySwitchOn(): boolean {
+  return state.get(state.State.SW_PRIVACY_SWITCH_ON);
 }
 
 /**
@@ -349,8 +384,6 @@ export async function cropSquare(blob: Blob): Promise<Blob> {
     ctx.drawImage(
         img, Math.floor((img.width - side) / 2),
         Math.floor((img.height - side) / 2), side, side, 0, 0, side, side);
-    // TODO(b/174190121): Patch important exif entries from input blob to
-    // result blob.
     const croppedBlob = await canvasToJpegBlob(canvas);
     return croppedBlob;
   } finally {
@@ -384,7 +417,7 @@ export function extractBackgroundImageValueUrl(element: HTMLElement): string|
   if (imageValue === null || imageValue === undefined) {
     return null;
   }
-  const match = imageValue.toString().match(/url\(['"](.*)['"]\)/);
+  const match = /url\(['"](.*)['"]\)/.exec(imageValue.toString());
   return match?.[1] ?? null;
 }
 
@@ -411,7 +444,7 @@ export async function loadImage(
  * value and value to name, which most of the time isn't what we want.
  */
 export function getNumberEnumMapping<T extends number>(
-    enumType: {[key: string]: T|string}): {[key: string]: T} {
+    enumType: Record<string, T|string>): Record<string, T> {
   return Object.fromEntries(Object.entries(enumType).flatMap(([k, v]) => {
     if (typeof v === 'string') {
       return [];

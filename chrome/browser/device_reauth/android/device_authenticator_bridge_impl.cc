@@ -7,16 +7,27 @@
 #include "base/android/jni_android.h"
 #include "base/functional/callback.h"
 #include "chrome/browser/device_reauth/android/device_authenticator_android.h"
-#include "chrome/browser/device_reauth/android/jni_headers/DeviceAuthenticatorBridge_jni.h"
 #include "components/device_reauth/device_authenticator.h"
+#include "ui/android/window_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/device_reauth/android/jni_headers/DeviceAuthenticatorBridge_jni.h"
 
 using base::android::AttachCurrentThread;
 using device_reauth::BiometricsAvailability;
 using device_reauth::DeviceAuthUIResult;
 
-DeviceAuthenticatorBridgeImpl::DeviceAuthenticatorBridgeImpl() {
-  java_object_ = Java_DeviceAuthenticatorBridge_create(
-      AttachCurrentThread(), reinterpret_cast<intptr_t>(this));
+DeviceAuthenticatorBridgeImpl::DeviceAuthenticatorBridgeImpl(
+    const gfx::NativeWindow window) {
+  java_object_ = Java_DeviceAuthenticatorBridge_createForWindow(
+      AttachCurrentThread(), reinterpret_cast<intptr_t>(this),
+      window != nullptr ? window->GetJavaObject() : nullptr);
+}
+
+DeviceAuthenticatorBridgeImpl::DeviceAuthenticatorBridgeImpl(
+    const base::android::JavaRef<jobject>& activity) {
+  java_object_ = Java_DeviceAuthenticatorBridge_createForActivity(
+      AttachCurrentThread(), reinterpret_cast<intptr_t>(this), activity);
 }
 
 DeviceAuthenticatorBridgeImpl::~DeviceAuthenticatorBridgeImpl() {
@@ -48,9 +59,11 @@ void DeviceAuthenticatorBridgeImpl::Cancel() {
 }
 
 void DeviceAuthenticatorBridgeImpl::OnAuthenticationCompleted(JNIEnv* env,
-                                                              jint result) {
+                                                              int32_t result) {
   if (!response_callback_) {
     return;
   }
   std::move(response_callback_).Run(static_cast<DeviceAuthUIResult>(result));
 }
+
+DEFINE_JNI(DeviceAuthenticatorBridge)

@@ -25,6 +25,7 @@
 #include "printing/backend/print_backend.h"
 #include "printing/buildflags/buildflags.h"
 #include "printing/print_settings.h"
+#include "ui/gfx/native_ui_types.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/android/tab_android.h"
@@ -33,7 +34,7 @@
 #endif
 
 #if BUILDFLAG(ENABLE_OOP_PRINTING)
-#include "chrome/browser/printing/prefs_util.h"
+#include "chrome/browser/printing/oop_features.h"
 #include "chrome/browser/printing/printer_query_oop.h"
 #endif
 
@@ -45,13 +46,13 @@ namespace printing {
 
 namespace {
 
-PrintingContext::ProcessBehavior GetPrintingContextProcessBehavior() {
+PrintingContext::OutOfProcessBehavior GetPrintingContextOutOfProcessBehavior() {
 #if BUILDFLAG(ENABLE_OOP_PRINTING)
   if (ShouldPrintJobOop()) {
-    return PrintingContext::ProcessBehavior::kOopEnabledSkipSystemCalls;
+    return PrintingContext::OutOfProcessBehavior::kEnabledSkipSystemCalls;
   }
 #endif
-  return PrintingContext::ProcessBehavior::kOopDisabled;
+  return PrintingContext::OutOfProcessBehavior::kDisabled;
 }
 
 class PrintingContextDelegate : public PrintingContext::Delegate {
@@ -83,7 +84,7 @@ PrintingContextDelegate::~PrintingContextDelegate() = default;
 
 gfx::NativeView PrintingContextDelegate::GetParentView() {
   content::WebContents* wc = GetWebContents();
-  return wc ? wc->GetNativeView() : nullptr;
+  return wc ? wc->GetNativeView() : gfx::NativeView();
 }
 
 content::WebContents* PrintingContextDelegate::GetWebContents() {
@@ -120,7 +121,7 @@ PrinterQuery::PrinterQuery(content::GlobalRenderFrameHostId rfh_id)
           std::make_unique<PrintingContextDelegate>(rfh_id)),
       printing_context_(
           PrintingContext::Create(printing_context_delegate_.get(),
-                                  GetPrintingContextProcessBehavior())),
+                                  GetPrintingContextOutOfProcessBehavior())),
       rfh_id_(rfh_id),
       cookie_(PrintSettings::NewCookie()) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -231,7 +232,7 @@ void PrinterQuery::GetSettingsFromUser(uint32_t document_page_count,
                      std::move(callback), is_modifiable));
 }
 
-void PrinterQuery::SetSettings(base::Value::Dict new_settings,
+void PrinterQuery::SetSettings(base::DictValue new_settings,
                                base::OnceClosure callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   // `this` is owned by `callback`, so `base::Unretained()` is safe.
@@ -297,7 +298,7 @@ void PrinterQuery::ApplyDefaultPrintableAreaToVirtualPrinterPrintSettings(
   // so, it doesn't need a RFH, so just default initialize the RFH id.
   PrintingContextDelegate delegate((content::GlobalRenderFrameHostId()));
   std::unique_ptr<PrintingContext> print_context = PrintingContext::Create(
-      &delegate, PrintingContext::ProcessBehavior::kOopDisabled);
+      &delegate, PrintingContext::OutOfProcessBehavior::kDisabled);
   print_context->SetPrintSettings(print_settings);
   print_context->SetDefaultPrintableAreaForVirtualPrinters();
   print_settings = print_context->settings();
@@ -306,7 +307,7 @@ void PrinterQuery::ApplyDefaultPrintableAreaToVirtualPrinterPrintSettings(
 #if BUILDFLAG(ENABLE_OOP_PRINTING)
 void PrinterQuery::SetClientId(PrintBackendServiceManager::ClientId client_id) {
   // Only supposed to be called for `PrinterQueryOop` objects.
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 #endif
 
@@ -322,7 +323,7 @@ void PrinterQuery::InvokeSettingsCallback(SettingsCallback callback,
   std::move(callback).Run(printing_context_->TakeAndResetSettings(), result);
 }
 
-void PrinterQuery::UpdatePrintSettings(base::Value::Dict new_settings,
+void PrinterQuery::UpdatePrintSettings(base::DictValue new_settings,
                                        SettingsCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
@@ -345,7 +346,7 @@ void PrinterQuery::UpdatePrintSettings(base::Value::Dict new_settings,
     PrinterBasicInfo basic_info;
     if (print_backend->GetPrinterBasicInfo(printer_name, &basic_info) ==
         mojom::ResultCode::kSuccess) {
-      base::Value::Dict advanced_settings;
+      base::DictValue advanced_settings;
       for (const auto& pair : basic_info.options) {
         advanced_settings.Set(pair.first, pair.second);
       }
@@ -410,10 +411,11 @@ void PrinterQuery::GetSettingsWithUI(uint32_t document_page_count,
     if (tab) {
       auto* printing_context_delegate = static_cast<PrintingContextDelegate*>(
           printing_context_delegate_.get());
+      // TODO(crbug.com/379869738) Remove GetUnsafeValue.
       PrintingContextAndroid::SetPendingPrint(
           web_contents->GetTopLevelNativeWindow(),
           GetPrintableForTab(tab->GetJavaObject()),
-          printing_context_delegate->rfh_id().child_id,
+          printing_context_delegate->rfh_id().child_id.GetUnsafeValue(),
           printing_context_delegate->rfh_id().frame_routing_id);
     }
   }

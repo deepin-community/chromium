@@ -5,11 +5,11 @@
 #include "third_party/blink/renderer/core/layout/base_layout_algorithm_test.h"
 
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/layout/block_layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/constraint_space_builder.h"
 #include "third_party/blink/renderer/core/layout/forms/fieldset_layout_algorithm.h"
-#include "third_party/blink/renderer/core/layout/layout_ng_block_flow.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_result.h"
-#include "third_party/blink/renderer/core/layout/block_layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/length_utils.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/physical_fragment.h"
@@ -67,7 +67,7 @@ const PhysicalBoxFragment* BaseLayoutAlgorithmTest::RunFieldsetLayoutAlgorithm(
 const PhysicalBoxFragment* BaseLayoutAlgorithmTest::GetBoxFragmentByElementId(
     const char* id) {
   LayoutObject* layout_object = GetLayoutObjectByElementId(id);
-  CHECK(layout_object && layout_object->IsLayoutNGObject());
+  CHECK(layout_object);
   const PhysicalBoxFragment* fragment =
       To<LayoutBlockFlow>(layout_object)->GetPhysicalFragment(0);
   CHECK(fragment);
@@ -75,8 +75,35 @@ const PhysicalBoxFragment* BaseLayoutAlgorithmTest::GetBoxFragmentByElementId(
 }
 
 const PhysicalBoxFragment* BaseLayoutAlgorithmTest::CurrentFragmentFor(
-    const LayoutNGBlockFlow* block_flow) {
+    const LayoutBlockFlow* block_flow) {
   return block_flow->GetPhysicalFragment(0);
+}
+
+void BaseLayoutAlgorithmTest::VerifyMainGaps(
+    const Vector<MainGap>& expected_gaps,
+    const Vector<MainGap>& gaps) {
+  ASSERT_EQ(gaps.size(), expected_gaps.size()) << "Main gap count mismatch";
+  for (wtf_size_t i = 0; i < gaps.size(); ++i) {
+    const auto& expected = expected_gaps[i];
+    const auto& actual = gaps[i];
+    EXPECT_EQ(actual.GetGapOffset(), expected.GetGapOffset())
+        << "Main gap at index: " << i << " mismatch";
+  }
+}
+
+void BaseLayoutAlgorithmTest::VerifyCrossGaps(
+    const Vector<CrossGap>& expected_gaps,
+    const Vector<CrossGap>& gaps) {
+  ASSERT_EQ(gaps.size(), expected_gaps.size()) << "Cross gap count mismatch";
+  for (wtf_size_t i = 0; i < gaps.size(); ++i) {
+    const auto& expected = expected_gaps[i];
+    const auto& actual = gaps[i];
+    EXPECT_EQ(actual.GetGapOffset(), expected.GetGapOffset())
+        << "Cross gap at index: " << i << " mismatch";
+    EXPECT_EQ(actual.GetEdgeIntersectionState(),
+              expected.GetEdgeIntersectionState())
+        << "Cross gap at index: " << i << " edge state mismatch";
+  }
 }
 
 const PhysicalBoxFragment* FragmentChildIterator::NextChild(

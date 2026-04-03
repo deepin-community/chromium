@@ -20,11 +20,12 @@ limitations under the License.
 #include <memory>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/service/service_executable_run_options.h"
-#include "xla/status.h"
-#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/tpu/c_api_decl.h"
 #include "xla/stream_executor/tpu/tpu_executable_interface.h"
 #include "xla/stream_executor/tpu/tpu_ops_c_api.h"
@@ -33,7 +34,7 @@ limitations under the License.
 namespace tensorflow {
 
 // An executable capable of being fed to a TPU device via TpuExecutor.
-class TpuOpExecutable : public xla::TpuExecutableInterface {
+class TpuOpExecutable : public xla::legacy::TpuExecutableInterface {
  public:
   // Constructs an executable that holds a non-owning reference to an
   // XLA_TpuProgram.
@@ -49,11 +50,11 @@ class TpuOpExecutable : public xla::TpuExecutableInterface {
   absl::string_view fingerprint() const override;
 
  private:
-  xla::Status LoadProgramAndEnqueueToStream(
+  absl::Status LoadProgramAndEnqueueToStream(
       const xla::ServiceExecutableRunOptions& run_options,
-      absl::Span<const stream_executor::DeviceMemoryBase> arguments,
-      stream_executor::DeviceMemoryBase result,
-      const std::vector<stream_executor::DeviceMemoryBase>&
+      absl::Span<const stream_executor::DeviceAddressBase> arguments,
+      stream_executor::DeviceAddressBase result,
+      const std::vector<stream_executor::DeviceAddressBase>&
           cross_program_prefetch_addrs,
       const std::vector<uint32_t>& cross_program_prefetch_offsets) override;
 

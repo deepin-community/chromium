@@ -4,8 +4,13 @@
 
 #include "content/browser/preloading/prefetch/prefetch_data_pipe_tee.h"
 
+#include "base/containers/span.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
+#include "base/strings/string_view_util.h"
+#include "base/trace_event/trace_event.h"
 #include "mojo/public/cpp/system/string_data_source.h"
-#include "services/network/public/cpp/features.h"
+#include "services/network/public/cpp/loading_params.h"
 
 namespace content {
 
@@ -19,9 +24,8 @@ MojoResult CreateDataPipeForServingData(
   options.struct_size = sizeof(MojoCreateDataPipeOptions);
   options.flags = MOJO_CREATE_DATA_PIPE_FLAG_NONE;
   options.element_num_bytes = 1;
-  options.capacity_num_bytes =
-      network::features::GetDataPipeDefaultAllocationSize(
-          network::features::DataPipeAllocationSize::kLargerSizeIfPossible);
+  options.capacity_num_bytes = network::GetDataPipeDefaultAllocationSize(
+      network::DataPipeAllocationSize::kLargerSizeIfPossible);
 
   return mojo::CreateDataPipe(&options, producer_handle, consumer_handle);
 }
@@ -30,12 +34,14 @@ MojoResult CreateDataPipeForServingData(
 
 PrefetchDataPipeTee::PrefetchDataPipeTee(
     mojo::ScopedDataPipeConsumerHandle source,
-    size_t buffer_limit)
+    size_t buffer_limit,
+    perfetto::Flow flow)
     : source_(std::move(source)),
       source_watcher_(FROM_HERE,
                       mojo::SimpleWatcher::ArmingPolicy::MANUAL,
                       base::SequencedTaskRunner::GetCurrentDefault()),
       buffer_limit_(buffer_limit),
+      flow_(std::move(flow)),
       target_watcher_(FROM_HERE,
                       mojo::SimpleWatcher::ArmingPolicy::AUTOMATIC,
                       base::SequencedTaskRunner::GetCurrentDefault()) {
@@ -48,12 +54,22 @@ PrefetchDataPipeTee::PrefetchDataPipeTee(
 
 PrefetchDataPipeTee::~PrefetchDataPipeTee() {
   CHECK(!target_.first);
+
+  base::UmaHistogramEnumeration(
+      "Preloading.Prefetch.PrefetchDataPipeTeeDtorState", state_);
 }
 
 mojo::ScopedDataPipeConsumerHandle PrefetchDataPipeTee::Clone() {
+  TRACE_EVENT("loading", "PrefetchDataPipeTee::Clone", flow_);
+
+  ++count_clone_called_;
+
   switch (state_) {
     case State::kLoading:
       if (target_.first || pending_writes_) {
+        base::UmaHistogramCounts100(
+            "Preloading.Prefetch.PrefetchDataPipeTeeCloneFailed.Loading",
+            count_clone_called_);
         return {};
       }
       break;
@@ -63,6 +79,9 @@ mojo::ScopedDataPipeConsumerHandle PrefetchDataPipeTee::Clone() {
       state_ = State::kSizeExceeded;
       break;
     case State::kSizeExceeded:
+      base::UmaHistogramCounts100(
+          "Preloading.Prefetch.PrefetchDataPipeTeeCloneFailed.SizeExceeded",
+          count_clone_called_);
       return {};
     case State::kLoaded:
       break;
@@ -88,6 +107,8 @@ mojo::ScopedDataPipeConsumerHandle PrefetchDataPipeTee::Clone() {
 
 void PrefetchDataPipeTee::OnReadable(MojoResult result,
                                      const mojo::HandleSignalsState& state) {
+  TRACE_EVENT("loading", "PrefetchDataPipeTee::OnReadbable", flow_);
+
   if (pending_writes_) {
     // Reading is blocked while writing to a target is ongoing.
     return;
@@ -106,20 +127,18 @@ void PrefetchDataPipeTee::OnReadable(MojoResult result,
       return;
   }
 
-  const void* read_data = nullptr;
-  uint32_t num_bytes = 0;
-  MojoResult rv =
-      source_->BeginReadData(&read_data, &num_bytes, MOJO_READ_DATA_FLAG_NONE);
+  base::span<const uint8_t> read_data;
+  MojoResult rv = source_->BeginReadData(MOJO_READ_DATA_FLAG_NONE, read_data);
   if (rv == MOJO_RESULT_OK) {
     switch (state_) {
       case State::kLoading:
         CHECK_LE(buffer_.size(), buffer_limit_);
-        if (buffer_.size() + num_bytes <= buffer_limit_) {
-          buffer_.append(static_cast<const char*>(read_data), num_bytes);
+        if (buffer_.size() + read_data.size() <= buffer_limit_) {
+          buffer_.append(base::as_string_view(read_data));
           if (target_.first) {
-            WriteData(
-                ResetTarget({}),  //
-                std::string_view(buffer_).substr(buffer_.size() - num_bytes));
+            WriteData(ResetTarget({}),  //
+                      std::string_view(buffer_).substr(buffer_.size() -
+                                                       read_data.size()));
           }
           break;
         }
@@ -127,8 +146,8 @@ void PrefetchDataPipeTee::OnReadable(MojoResult result,
         // If there are no targets yet, stop reading and keep `buffer_` (== the
         // whole data read so far) until the first target is added.
         if (!target_.first) {
-          num_bytes = buffer_limit_ - buffer_.size();
-          buffer_.append(static_cast<const char*>(read_data), num_bytes);
+          read_data = read_data.first(buffer_limit_ - buffer_.size());
+          buffer_.append(base::as_string_view(read_data));
           state_ = State::kSizeExceededNoTarget;
           break;
         }
@@ -148,15 +167,14 @@ void PrefetchDataPipeTee::OnReadable(MojoResult result,
           break;
         }
 
-        buffer_.append(static_cast<const char*>(read_data), num_bytes);
+        buffer_.append(base::as_string_view(read_data));
         WriteData(ResetTarget({}), buffer_);
         break;
       case State::kSizeExceededNoTarget:
       case State::kLoaded:
         NOTREACHED();
-        break;
     }
-    source_->EndReadData(num_bytes);
+    source_->EndReadData(read_data.size());
     source_watcher_.ArmOrNotify();
   } else if (rv == MOJO_RESULT_FAILED_PRECONDITION) {
     switch (state_) {
@@ -172,15 +190,16 @@ void PrefetchDataPipeTee::OnReadable(MojoResult result,
       case State::kSizeExceededNoTarget:
       case State::kLoaded:
         NOTREACHED();
-        break;
     }
   } else if (rv != MOJO_RESULT_SHOULD_WAIT) {
-    CHECK(false) << "Unhandled MojoResult: " << rv;
+    NOTREACHED() << "Unhandled MojoResult: " << rv;
   }
 }
 
 PrefetchDataPipeTee::ProducerPair PrefetchDataPipeTee::ResetTarget(
     ProducerPair target) {
+  TRACE_EVENT("loading", "PrefetchDataPipeTee::ResetTarget", flow_);
+
   auto old_target = std::move(target_);
   target_ = std::move(target);
 
@@ -203,6 +222,8 @@ PrefetchDataPipeTee::ProducerPair PrefetchDataPipeTee::ResetTarget(
 void PrefetchDataPipeTee::OnWriteDataPipeClosed(
     MojoResult result,
     const mojo::HandleSignalsState& state) {
+  TRACE_EVENT("loading", "PrefetchDataPipeTee::OnWriteDataPipeClosed", flow_);
+
   CHECK(target_.first);
   if (state.peer_closed()) {
     ResetTarget({});
@@ -211,6 +232,8 @@ void PrefetchDataPipeTee::OnWriteDataPipeClosed(
 
 void PrefetchDataPipeTee::WriteData(ProducerPair target,
                                     base::span<const char> data) {
+  TRACE_EVENT("loading", "PrefetchDataPipeTee::WriteData", flow_);
+
   CHECK_EQ(target.second.get(), this);
   ++pending_writes_;
   auto* raw_target = target.first.get();
@@ -223,6 +246,8 @@ void PrefetchDataPipeTee::WriteData(ProducerPair target,
 
 void PrefetchDataPipeTee::OnDataWritten(ProducerPair target,
                                         MojoResult result) {
+  TRACE_EVENT("loading", "PrefetchDataPipeTee::OnDataWritten", flow_);
+
   CHECK_GT(pending_writes_, 0u);
   --pending_writes_;
 
@@ -251,7 +276,6 @@ void PrefetchDataPipeTee::OnDataWritten(ProducerPair target,
       break;
     case State::kSizeExceededNoTarget:
       NOTREACHED();
-      break;
   }
 }
 

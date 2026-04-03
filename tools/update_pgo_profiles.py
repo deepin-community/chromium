@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -10,8 +10,6 @@ This script has the following responsibilities:
 3. Removed stale profiles (2 days) to save disk spaces because profiles are
    large (~1GB) and updated frequently (~4 times a day).
 """
-
-from __future__ import print_function
 
 import argparse
 import os
@@ -30,8 +28,24 @@ import gn_helpers
 # specifcies which profile to update and use.
 _PGO_DIR = os.path.join(_SRC_ROOT, 'chrome', 'build')
 
+# Absolute path to android-specific pgo files.
+_ANDROID_ARM64_PROFILE_DIR = os.path.join(_SRC_ROOT, 'chrome', 'android',
+                                          'orderfiles', 'arm64')
+
 # Absolute path to the directory that stores pgo profiles.
 _PGO_PROFILE_DIR = os.path.join(_PGO_DIR, 'pgo_profiles')
+
+
+def _mark_profile_as_used(path):
+  """Updates the access time of a file to delay cleanup while preserving mtime.
+
+  The modified time is preserved because it is used by siso.
+
+  Args:
+    path(str): The file path.
+  """
+  stat_result = os.stat(path)
+  os.utime(path, ns=(time.time_ns(), stat_result.st_mtime_ns))
 
 
 def _read_profile_name(target):
@@ -60,7 +74,7 @@ def _remove_unused_profiles(current_profile_name):
       continue
 
     p = os.path.join(_PGO_PROFILE_DIR, f)
-    age = time.time() - os.path.getmtime(p)
+    age = time.time() - os.path.getatime(p)
     if age > expiration_duration:
       print('Removing profile %s as it hasn\'t been used in the past %d days' %
             (p, days))
@@ -76,10 +90,10 @@ def _update(args):
   Raises:
     RuntimeError: If failed to download profiles from gcs.
   """
-  profile_name = _read_profile_name(args.target)
+  profile_name = args.override_filename or _read_profile_name(args.target)
   profile_path = os.path.join(_PGO_PROFILE_DIR, profile_name)
   if os.path.isfile(profile_path):
-    os.utime(profile_path, None)
+    _mark_profile_as_used(profile_path)
     return
 
   gsutil = download_from_google_storage.Gsutil(
@@ -101,7 +115,17 @@ def _get_profile_path(args):
   Raises:
     RuntimeError: If the current profile is missing.
   """
-  profile_path = os.path.join(_PGO_PROFILE_DIR, _read_profile_name(args.target))
+  if args.override_filename:
+    profile_path = os.path.join(_PGO_PROFILE_DIR, args.override_filename)
+  elif args.target == 'android-arm64':
+    # By default on android for arm64 we use the PGO profile that is generated
+    # at the same commit as the orderfile. See https://crbug.com/372686816 for
+    # more context on why this is necessary.
+    profile_path = os.path.join(_ANDROID_ARM64_PROFILE_DIR,
+                                'pgo_profile.arm64.profdata')
+  else:
+    profile_path = os.path.join(_PGO_PROFILE_DIR,
+                                _read_profile_name(args.target))
   if not os.path.isfile(profile_path):
     raise RuntimeError(
         'requested profile "%s" doesn\'t exist, please make sure '
@@ -121,9 +145,8 @@ def _get_profile_path(args):
         'your GN arguments.'%
         profile_path)
 
-  os.utime(profile_path, None)
-  profile_path.rstrip(os.sep)
-  print(gn_helpers.ToGNString(profile_path))
+  _mark_profile_as_used(profile_path)
+  print(gn_helpers.ToGNString(profile_path.rstrip(os.sep)))
 
 
 def main():
@@ -139,13 +162,14 @@ def main():
           'mac',
           'mac-arm',
           'linux',
-          'lacros64',
-          'lacros-arm',
-          'lacros-arm64',
           'android-arm32',
           'android-arm64',
+          'android-desktop-arm64',
+          'android-desktop-x64',
       ],
       help='Identifier of a specific target platform + architecture.')
+  parser.add_argument('--override-filename',
+                      help='The filename to prefer instead of the sha1 file.')
   subparsers = parser.add_subparsers()
 
   parser_update = subparsers.add_parser('update')

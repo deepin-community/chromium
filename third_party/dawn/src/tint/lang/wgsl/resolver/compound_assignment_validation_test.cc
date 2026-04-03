@@ -86,7 +86,7 @@ TEST_F(ResolverCompoundAssignmentValidationTest, IncompatibleTypes) {
     ASSERT_FALSE(r()->Resolve());
 
     EXPECT_THAT(r()->error(),
-                HasSubstr("12:34 error: no matching overload for operator += (i32, f32)"));
+                HasSubstr("12:34 error: no matching overload for 'operator += (i32, f32)'"));
 }
 
 TEST_F(ResolverCompoundAssignmentValidationTest, IncompatibleOp) {
@@ -103,7 +103,7 @@ TEST_F(ResolverCompoundAssignmentValidationTest, IncompatibleOp) {
     ASSERT_FALSE(r()->Resolve());
 
     EXPECT_THAT(r()->error(),
-                HasSubstr("12:34 error: no matching overload for operator |= (f32, f32)"));
+                HasSubstr("12:34 error: no matching overload for 'operator |= (f32, f32)'"));
 }
 
 TEST_F(ResolverCompoundAssignmentValidationTest, VectorScalar_Pass) {
@@ -116,6 +116,18 @@ TEST_F(ResolverCompoundAssignmentValidationTest, VectorScalar_Pass) {
 
     auto* assign = CompoundAssign(Source{{12, 34}}, "a", 1_f, core::BinaryOp::kAdd);
     WrapInFunction(var, assign);
+
+    EXPECT_TRUE(r()->Resolve()) << r()->error();
+}
+
+TEST_F(ResolverCompoundAssignmentValidationTest, RhsSwizzleView_Pass) {
+    // var v : vec4<f32>;
+    // var w : vec2<f32>;
+    // v += w.xxyy;
+    auto* v = Var("v", ty.vec4<f32>());
+    auto* w = Var("w", ty.vec2<f32>());
+    auto* swizzle = MemberAccessor("v", "xxyy");
+    WrapInFunction(v, w, CompoundAssign("v", swizzle, core::BinaryOp::kAdd));
 
     EXPECT_TRUE(r()->Resolve()) << r()->error();
 }
@@ -198,7 +210,7 @@ TEST_F(ResolverCompoundAssignmentValidationTest, VectorMatrix_ColumnMismatch) {
 
     EXPECT_THAT(
         r()->error(),
-        HasSubstr("12:34 error: no matching overload for operator *= (vec4<f32>, mat4x2<f32>)"));
+        HasSubstr("12:34 error: no matching overload for 'operator *= (vec4<f32>, mat4x2<f32>)'"));
 }
 
 TEST_F(ResolverCompoundAssignmentValidationTest, VectorMatrix_ResultMismatch) {
@@ -242,7 +254,7 @@ TEST_F(ResolverCompoundAssignmentValidationTest, Phony) {
     WrapInFunction(CompoundAssign(Source{{56, 78}}, Phony(), 1_i, core::BinaryOp::kAdd));
     EXPECT_FALSE(r()->Resolve());
     EXPECT_THAT(r()->error(),
-                HasSubstr("56:78 error: no matching overload for operator += (void, i32)"));
+                HasSubstr("56:78 error: no matching overload for 'operator += (void, i32)'"));
 }
 
 TEST_F(ResolverCompoundAssignmentValidationTest, ReadOnlyBuffer) {
@@ -266,9 +278,9 @@ TEST_F(ResolverCompoundAssignmentValidationTest, LhsLet) {
     WrapInFunction(a, CompoundAssign(Expr(Source{{56, 78}}, "a"), 1_i, core::BinaryOp::kAdd));
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), R"(56:78 error: cannot assign to let 'a'
+    EXPECT_EQ(r()->error(), R"(56:78 error: cannot assign to 'let a'
 56:78 note: 'let' variables are immutable
-12:34 note: let 'a' declared here)");
+12:34 note: 'let a' declared here)");
 }
 
 TEST_F(ResolverCompoundAssignmentValidationTest, LhsLiteral) {
@@ -288,7 +300,7 @@ TEST_F(ResolverCompoundAssignmentValidationTest, LhsAtomic) {
     EXPECT_FALSE(r()->Resolve());
     EXPECT_THAT(
         r()->error(),
-        HasSubstr("error: no matching overload for operator += (atomic<i32>, atomic<i32>)"));
+        HasSubstr("error: no matching overload for 'operator += (atomic<i32>, atomic<i32>)'"));
 }
 
 }  // namespace

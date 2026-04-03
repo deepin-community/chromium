@@ -12,7 +12,6 @@
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/font_family_names.h"
-#include "third_party/blink/renderer/platform/fonts/font_cache.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/memory_pressure_listener.h"
 
@@ -29,11 +28,9 @@ const int defaultFontSize = 10;
 
 const ComputedStyle* CreateDefaultFontStyle(const Document& document) {
   const AtomicString& default_font_family = font_family_names::kSansSerif;
-  FontFamily font_family;
-  font_family.SetFamily(default_font_family,
-                        FontFamily::InferredTypeFor(default_font_family));
   FontDescription default_font_description;
-  default_font_description.SetFamily(font_family);
+  default_font_description.SetFamily(FontFamily(
+      default_font_family, FontFamily::InferredTypeFor(default_font_family)));
   default_font_description.SetSpecifiedSize(defaultFontSize);
   default_font_description.SetComputedSize(defaultFontSize);
   ComputedStyleBuilder builder =
@@ -51,8 +48,7 @@ CanvasFontCache::CanvasFontCache(Document& document)
       default_font_style_(CreateDefaultFontStyle(document)),
       pruning_scheduled_(false) {}
 
-CanvasFontCache::~CanvasFontCache() {
-}
+CanvasFontCache::~CanvasFontCache() {}
 
 unsigned CanvasFontCache::MaxFonts() {
   return MemoryPressureListenerRegistry::
@@ -70,28 +66,25 @@ unsigned CanvasFontCache::HardMaxFonts() {
                     : CanvasFontCacheHardMaxFonts);
 }
 
-bool CanvasFontCache::GetFontUsingDefaultStyle(HTMLCanvasElement& element,
-                                               const String& font_string,
-                                               Font& resolved_font) {
+const Font* CanvasFontCache::GetFontUsingDefaultStyle(
+    HTMLCanvasElement& element,
+    const String& font_string) {
   auto it = fonts_resolved_using_default_style_.find(font_string);
   if (it != fonts_resolved_using_default_style_.end()) {
     auto list_add_result = font_lru_list_.PrependOrMoveToFirst(font_string);
     DCHECK(!list_add_result.is_new_entry);
-    resolved_font = it->value->font;
-    return true;
+    return it->value;
   }
 
   // Addition to LRU list taken care of inside ParseFont.
   MutableCSSPropertyValueSet* parsed_style = ParseFont(font_string);
   if (!parsed_style)
-    return false;
+    return nullptr;
 
   auto add_result = fonts_resolved_using_default_style_.insert(
-      font_string,
-      MakeGarbageCollected<FontWrapper>(document_->GetStyleEngine().ComputeFont(
-          element, *default_font_style_, *parsed_style)));
-  resolved_font = add_result.stored_value->value->font;
-  return true;
+      font_string, document_->GetStyleEngine().ComputeFont(
+                       element, *default_font_style_, *parsed_style));
+  return add_result.stored_value->value;
 }
 
 MutableCSSPropertyValueSet* CanvasFontCache::ParseFont(
@@ -132,13 +125,11 @@ MutableCSSPropertyValueSet* CanvasFontCache::ParseFont(
 
 void CanvasFontCache::DidProcessTask(const base::PendingTask& pending_task) {
   DCHECK(pruning_scheduled_);
-  DCHECK(main_cache_purge_preventer_);
   while (fetched_fonts_.size() > std::min(MaxFonts(), HardMaxFonts())) {
     fetched_fonts_.erase(font_lru_list_.back());
     fonts_resolved_using_default_style_.erase(font_lru_list_.back());
     font_lru_list_.pop_back();
   }
-  main_cache_purge_preventer_.reset();
   Thread::Current()->RemoveTaskObserver(this);
   pruning_scheduled_ = false;
 }
@@ -146,8 +137,6 @@ void CanvasFontCache::DidProcessTask(const base::PendingTask& pending_task) {
 void CanvasFontCache::SchedulePruningIfNeeded() {
   if (pruning_scheduled_)
     return;
-  DCHECK(!main_cache_purge_preventer_);
-  main_cache_purge_preventer_ = std::make_unique<FontCachePurgePreventer>();
   Thread::Current()->AddTaskObserver(this);
   pruning_scheduled_ = true;
 }
@@ -174,7 +163,6 @@ void CanvasFontCache::Trace(Visitor* visitor) const {
 }
 
 void CanvasFontCache::Dispose() {
-  main_cache_purge_preventer_.reset();
   if (pruning_scheduled_) {
     Thread::Current()->RemoveTaskObserver(this);
   }

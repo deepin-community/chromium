@@ -16,6 +16,7 @@
 #include "chrome/browser/android/compositor/layer/content_layer.h"
 #include "chrome/browser/android/compositor/layer/toolbar_layer.h"
 #include "chrome/browser/android/compositor/tab_content_manager.h"
+#include "components/viz/common/quads/offset_tag.h"
 #include "ui/android/resources/nine_patch_resource.h"
 #include "ui/android/resources/resource_manager.h"
 #include "ui/base/l10n/l10n_util_android.h"
@@ -190,9 +191,10 @@ void TabLayer::SetProperties(int id,
   // TODO(kkimlabs): Tab switcher doesn't show the progress bar.
   toolbar_layer_->PushResource(
       toolbar_resource_id, toolbar_background_color, anonymize_toolbar,
-      toolbar_textbox_background_color, toolbar_textbox_resource_id, 0,
-      content_offset, false, false);
-  toolbar_layer_->UpdateProgressBar(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+      toolbar_textbox_background_color, toolbar_textbox_resource_id, 0, 0,
+      content_offset, false, false, viz::OffsetTag());
+  toolbar_layer_->UpdateProgressBar(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    false, false);
 
   float toolbar_impact_height = 0;
   if (show_toolbar)
@@ -295,7 +297,7 @@ void TabLayer::SetProperties(int id,
   front_border_inner_shadow_->SetBorder(border_inner_shadow_resource->Border(
       border_inner_shadow_size));
 
-  // TODO(crbug/1308932): Remove FromColor and make all SkColor4f.
+  // TODO(crbug.com/40219248): Remove FromColor and make all SkColor4f.
   side_padding_->SetBackgroundColor(
       SkColor4f::FromColor(default_background_color));
   bottom_padding_->SetBackgroundColor(
@@ -445,7 +447,6 @@ TabLayer::TabLayer(bool incognito,
   front_border_->SetFillCenter(false);
 }
 
-TabLayer::~TabLayer() {
-}
+TabLayer::~TabLayer() = default;
 
 }  //  namespace android

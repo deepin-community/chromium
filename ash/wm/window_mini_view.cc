@@ -7,60 +7,55 @@
 #include <memory>
 
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/wm/snap_group/snap_group.h"
 #include "ash/wm/snap_group/snap_group_controller.h"
 #include "ash/wm/window_mini_view_header_view.h"
 #include "ash/wm/window_preview_view.h"
 #include "ash/wm/window_util.h"
 #include "ash/wm/wm_constants.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/image/image_skia_operations.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/highlight_path_generator.h"
+#include "ui/views/property_effects.h"
 #include "ui/views/view_utils.h"
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
+
 namespace {
 
-constexpr int kFocusRingCornerRadius = 20;
+constexpr int kFocusRingCornerRadius = 14;
+constexpr float kFocusRingThickness = 3.0f;
 
 // Returns the rounded corners of the preview view scaled by the given value of
-// `scale` for the preview view with given source `window` if allowed to `show`.
-// If the preview view is completely inside the rounded bounds of `backdrop`, no
-// need to round its corners.
+// `scale` for the preview view with given source `window`. If the preview view
+// is completely inside the rounded bounds of `backdrop`, no need to round its
+// corners.
 gfx::RoundedCornersF GetRoundedCornersForPreviewView(
     aura::Window* window,
     views::View* backdrop,
     const gfx::Rect& preview_bounds_in_screen,
     float scale,
-    bool show,
     std::optional<gfx::RoundedCornersF> preview_view_rounded_corners) {
-  if (!show) {
-    return gfx::RoundedCornersF();
-  }
-
   if (!window_util::ShouldRoundThumbnailWindow(
           backdrop, gfx::RectF(preview_bounds_in_screen))) {
     return gfx::RoundedCornersF();
   }
 
   if (preview_view_rounded_corners.has_value()) {
-    // TODO(b/294294344): Return a different set of rounded corners if it is
-    // for vertical split view.
-    const auto raw_value = preview_view_rounded_corners.value();
-    return gfx::RoundedCornersF(raw_value.upper_left(), raw_value.upper_right(),
-                                raw_value.lower_right(),
-                                raw_value.lower_left());
+    return *preview_view_rounded_corners;
   }
 
   return gfx::RoundedCornersF(0, 0, kWindowMiniViewCornerRadius / scale,
@@ -71,27 +66,22 @@ gfx::RoundedCornersF GetRoundedCornersForPreviewView(
 
 WindowMiniViewBase::~WindowMiniViewBase() = default;
 
-void WindowMiniViewBase::SetRoundedCornersRadius(
-    const gfx::RoundedCornersF& exposed_rounded_corners) {
-  exposed_rounded_corners_ = exposed_rounded_corners;
-  header_view_rounded_corners_ =
-      gfx::RoundedCornersF(exposed_rounded_corners.upper_left(),
-                           exposed_rounded_corners.upper_right(),
-                           /*lower_right=*/0,
-                           /*lower_left=*/0);
-  preview_view_rounded_corners_ =
-      gfx::RoundedCornersF(/*upper_left=*/0, /*upper_right=*/0,
-                           exposed_rounded_corners.upper_right(),
-                           exposed_rounded_corners.lower_left());
-}
-
 void WindowMiniViewBase::UpdateFocusState(bool focus) {
   if (is_focused_ == focus) {
     return;
   }
 
   is_focused_ = focus;
+
+  // Notify all other subscriptions of the change.
+  OnPropertyChanged(&is_focused_, views::PropertyEffects::kPaint);
+
   views::FocusRing::Get(this)->SchedulePaint();
+}
+
+base::CallbackListSubscription WindowMiniViewBase::AddFocusedChangedCallback(
+    views::PropertyChangedCallback callback) {
+  return AddPropertyChangedCallback(&is_focused_, std::move(callback));
 }
 
 WindowMiniViewBase::WindowMiniViewBase() = default;
@@ -100,6 +90,29 @@ BEGIN_METADATA(WindowMiniViewBase)
 END_METADATA
 
 WindowMiniView::~WindowMiniView() = default;
+
+void WindowMiniView::SetRoundedCornersRadius(
+    const gfx::RoundedCornersF& exposed_rounded_corners) {
+  if (exposed_rounded_corners_ == exposed_rounded_corners) {
+    return;
+  }
+
+  exposed_rounded_corners_ = exposed_rounded_corners;
+  if (header_view_) {
+    gfx::RoundedCornersF header_rounded_corners =
+        gfx::RoundedCornersF(exposed_rounded_corners.upper_left(),
+                             exposed_rounded_corners.upper_right(),
+                             /*lower_right=*/0,
+                             /*lower_left=*/0);
+    header_view_->SetHeaderViewRoundedCornerRadius(header_rounded_corners);
+  }
+
+  preview_view_rounded_corners_ =
+      gfx::RoundedCornersF(/*upper_left=*/0, /*upper_right=*/0,
+                           exposed_rounded_corners.lower_right(),
+                           exposed_rounded_corners.lower_left());
+  OnRoundedCornersSet();
+}
 
 void WindowMiniView::SetSelectedWindowForFocus(aura::Window* window) {
   CHECK_EQ(window, source_window_);
@@ -118,15 +131,12 @@ void WindowMiniView::SetBackdropVisibility(bool visible) {
   if (!backdrop_view_) {
     // Always put the backdrop view under other children.
     backdrop_view_ = AddChildViewAt(std::make_unique<views::View>(), 0);
-    backdrop_view_->SetPaintToLayer();
-    backdrop_view_->SetBackground(
-        views::CreateThemedSolidBackground(cros_tokens::kCrosSysScrim));
-
-    ui::Layer* layer = backdrop_view_->layer();
-    layer->SetFillsBoundsOpaquely(false);
-    layer->SetRoundedCornerRadius(gfx::RoundedCornersF(
-        0.f, 0.f, kWindowMiniViewCornerRadius, kWindowMiniViewCornerRadius));
-    layer->SetIsFastRoundedCorner(true);
+    gfx::RoundedCornersF backdrop_radii(0.f, 0.f, kWindowMiniViewCornerRadius,
+                                        kWindowMiniViewCornerRadius);
+    backdrop_view_->SetBackground(views::CreateLayerBasedRoundedBackground(
+        cros_tokens::kCrosSysScrim, backdrop_radii));
+    backdrop_view_->background()->SetInternalName(
+        "WindowMiniView/BackdropView");
     backdrop_view_->SetCanProcessEventsWithinSubtree(false);
     DeprecatedLayoutImmediately();
   }
@@ -134,7 +144,7 @@ void WindowMiniView::SetBackdropVisibility(bool visible) {
   backdrop_view_->SetVisible(visible);
 }
 
-void WindowMiniView::RefreshPreviewRoundedCorners(bool show) {
+void WindowMiniView::RefreshPreviewRoundedCorners() {
   if (!preview_view_) {
     return;
   }
@@ -144,32 +154,14 @@ void WindowMiniView::RefreshPreviewRoundedCorners(bool show) {
 
   layer->SetRoundedCornerRadius(GetRoundedCornersForPreviewView(
       source_window_, backdrop_view_, preview_view_->GetBoundsInScreen(),
-      layer->transform().To2dScale().x(), show, preview_view_rounded_corners_));
-  if (!chromeos::features::IsRoundedWindowsEnabled()) {
-    layer->SetIsFastRoundedCorner(true);
-  }
+      layer->transform().To2dScale().x(), preview_view_rounded_corners_));
+  layer->SetIsFastRoundedCorner(true);
 }
 
 void WindowMiniView::RefreshHeaderViewRoundedCorners() {
-  if (!header_view_) {
-    return;
+  if (header_view_) {
+    header_view_->RefreshHeaderViewRoundedCorners();
   }
-
-  const auto header_rounded_corners =
-      header_view_->GetHeaderRoundedCorners(source_window_);
-  if (header_view_rounded_corners_.has_value()) {
-    if (header_rounded_corners == header_view_rounded_corners_.value()) {
-      return;
-    }
-    header_view_->SetHeaderViewRoundedCornerRadius(
-        header_view_rounded_corners_.value());
-  } else if (header_rounded_corners ==
-             gfx::RoundedCornersF(kWindowMiniViewHeaderCornerRadius,
-                                  kWindowMiniViewHeaderCornerRadius, 0, 0)) {
-    return;
-  }
-
-  header_view_->RefreshHeaderViewRoundedCorners();
 }
 
 void WindowMiniView::RefreshFocusRingVisuals() {
@@ -177,12 +169,13 @@ void WindowMiniView::RefreshFocusRingVisuals() {
 }
 
 void WindowMiniView::ResetRoundedCorners() {
-  if (header_view_rounded_corners_.has_value()) {
+  if (header_view_) {
     header_view_->ResetRoundedCorners();
   }
 
-  header_view_rounded_corners_.reset();
   preview_view_rounded_corners_.reset();
+  exposed_rounded_corners_.reset();
+  OnRoundedCornersSet();
 }
 
 bool WindowMiniView::Contains(aura::Window* window) const {
@@ -212,9 +205,11 @@ void WindowMiniView::SetShowPreview(bool show) {
   preview_view_ =
       AddChildView(std::make_unique<WindowPreviewView>(source_window_));
   preview_view_->SetPaintToLayer();
-  preview_view_->layer()->SetFillsBoundsOpaquely(false);
+  ui::Layer* preview_layer = preview_view_->layer();
+  preview_layer->SetName("PreviewView");
+  preview_layer->SetFillsBoundsOpaquely(false);
 
-  // TODO(crbug.com/1522471): Consider redesigning `WindowCycleItemView` to
+  // TODO(http://b/41495434): Consider redesigning `WindowCycleItemView` to
   // cancel Layer rounded corners.
   //
   // The derived class `WindowCycleItemView` of `WindowMiniView` will create
@@ -242,7 +237,7 @@ gfx::RoundedCornersF WindowMiniView::GetRoundedCorners() const {
   }
 
   const gfx::RoundedCornersF header_rounded_corners =
-      header_view_->GetHeaderRoundedCorners(source_window_);
+      header_view_->layer()->rounded_corner_radii();
   const gfx::RoundedCornersF preview_rounded_corners =
       preview_view_->layer()->rounded_corner_radii();
   return gfx::RoundedCornersF(header_rounded_corners.upper_left(),
@@ -262,11 +257,15 @@ gfx::Size WindowMiniView::GetPreviewViewSize() const {
   return preview_view_->GetPreferredSize();
 }
 
-WindowMiniView::WindowMiniView(aura::Window* source_window)
+WindowMiniView::WindowMiniView(aura::Window* source_window,
+                               bool use_custom_focus_predicate)
     : source_window_(source_window) {
-  InstallFocusRing();
+  InstallFocusRing(use_custom_focus_predicate);
   window_observation_.Observe(source_window);
   header_view_ = AddChildView(std::make_unique<WindowMiniViewHeaderView>(this));
+
+  GetViewAccessibility().SetRole(ax::mojom::Role::kWindow);
+  UpdateAccessibleName();
 }
 
 gfx::Rect WindowMiniView::GetContentAreaBounds() const {
@@ -291,19 +290,6 @@ void WindowMiniView::Layout(PassKey) {
   LayoutSuperclass<views::View>(this);
 }
 
-void WindowMiniView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  // This may be called after `OnWindowDestroying`. `this` should be destroyed
-  // shortly by the owner (OverviewItem/WindowCycleView) but there may be a
-  // small window where `source_window_` is null. Speculative fix for
-  // https://crbug.com/1274775.
-  if (!source_window_) {
-    return;
-  }
-
-  node_data->role = ax::mojom::Role::kWindow;
-  node_data->SetName(wm::GetTransientRoot(source_window_)->GetTitle());
-}
-
 void WindowMiniView::OnWindowPropertyChanged(aura::Window* window,
                                              const void* key,
                                              intptr_t old) {
@@ -324,24 +310,57 @@ void WindowMiniView::OnWindowDestroying(aura::Window* window) {
   window_observation_.Reset();
   source_window_ = nullptr;
   SetShowPreview(false);
+
+  UpdateAccessibleIgnoredState();
 }
 
 void WindowMiniView::OnWindowTitleChanged(aura::Window* window) {
   header_view_->UpdateTitleLabel(window);
+  UpdateAccessibleName();
 }
 
-void WindowMiniView::InstallFocusRing() {
+void WindowMiniView::OnRoundedCornersSet() {
+  RefreshHeaderViewRoundedCorners();
+  RefreshPreviewRoundedCorners();
+  RefreshFocusRingVisuals();
+}
+
+void WindowMiniView::InstallFocusRing(bool use_custom_predicate) {
   RefreshFocusRingVisuals();
   views::FocusRing::Install(this);
   views::FocusRing* focus_ring = views::FocusRing::Get(this);
   focus_ring->SetOutsetFocusRingDisabled(true);
-  focus_ring->SetColorId(ui::kColorAshFocusRing);
-  focus_ring->SetHasFocusPredicate(
-      base::BindRepeating([](const views::View* view) {
-        const auto* v = views::AsViewClass<WindowMiniView>(view);
-        CHECK(v);
-        return v->is_focused_;
-      }));
+  focus_ring->SetColorId(cros_tokens::kCrosSysTertiary);
+  focus_ring->SetHaloThickness(kFocusRingThickness);
+
+  if (use_custom_predicate) {
+    focus_ring->SetHasFocusPredicate(
+        base::BindRepeating([](const views::View* view) {
+          const auto* v = views::AsViewClass<WindowMiniView>(view);
+          CHECK(v);
+          return v->is_focused_;
+        }));
+  }
+}
+
+void WindowMiniView::UpdateAccessibleIgnoredState() {
+  if (source_window_) {
+    GetViewAccessibility().SetIsIgnored(false);
+  } else {
+    // Don't expose to accessibility when `source_window_` is null.
+    GetViewAccessibility().SetIsIgnored(true);
+  }
+}
+
+void WindowMiniView::UpdateAccessibleName() {
+  const std::u16string& accessible_name =
+      wm::GetTransientRoot(source_window_)->GetTitle();
+  if (accessible_name.empty()) {
+    GetViewAccessibility().SetName(
+        l10n_util::GetStringUTF16(IDS_WM_WINDOW_CYCLER_UNTITLED_WINDOW));
+  } else {
+    GetViewAccessibility().SetName(accessible_name);
+  }
 }
 
 std::unique_ptr<views::HighlightPathGenerator>
@@ -359,8 +378,35 @@ WindowMiniView::GenerateFocusRingPath() {
     const float lower_left = exposed_rounded_corners_->lower_left() == 0
                                  ? 0
                                  : kFocusRingCornerRadius;
+
+    gfx::Insets focus_ring_insets =
+        gfx::Insets(kWindowMiniViewFocusRingHaloInset);
+
+    // Apply reduced inset to internal edge to prevent focus ring occlusion.
+    // Internal edge corners will be sharp (90 degrees).
+    focus_ring_insets.set_right(
+        exposed_rounded_corners_->upper_right() == 0 &&
+                exposed_rounded_corners_->lower_right() == 0
+            ? kWindowMiniViewFocusRingHaloInternalInset
+            : kWindowMiniViewFocusRingHaloInset);
+    focus_ring_insets.set_left(exposed_rounded_corners_->upper_left() == 0 &&
+                                       exposed_rounded_corners_->lower_left() ==
+                                           0
+                                   ? kWindowMiniViewFocusRingHaloInternalInset
+                                   : kWindowMiniViewFocusRingHaloInset);
+    focus_ring_insets.set_bottom(
+        exposed_rounded_corners_->lower_left() == 0 &&
+                exposed_rounded_corners_->lower_right() == 0
+            ? kWindowMiniViewFocusRingHaloInternalInset
+            : kWindowMiniViewFocusRingHaloInset);
+    focus_ring_insets.set_top(exposed_rounded_corners_->upper_left() == 0 &&
+                                      exposed_rounded_corners_->upper_right() ==
+                                          0
+                                  ? kWindowMiniViewFocusRingHaloInternalInset
+                                  : kWindowMiniViewFocusRingHaloInset);
+
     return std::make_unique<views::RoundRectHighlightPathGenerator>(
-        gfx::Insets(kWindowMiniViewFocusRingHaloInset),
+        focus_ring_insets,
         gfx::RoundedCornersF(upper_left, upper_right, lower_right, lower_left));
   }
 

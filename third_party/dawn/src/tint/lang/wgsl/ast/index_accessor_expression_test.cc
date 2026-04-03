@@ -25,13 +25,13 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/wgsl/ast/helper_test.h"
 
 namespace tint::ast {
 namespace {
 
 using IndexAccessorExpressionTest = TestHelper;
+using IndexAccessorExpressionDeathTest = IndexAccessorExpressionTest;
 
 TEST_F(IndexAccessorExpressionTest, Create) {
     auto* obj = Expr("obj");
@@ -60,8 +60,8 @@ TEST_F(IndexAccessorExpressionTest, IsIndexAccessor) {
     EXPECT_TRUE(exp->Is<IndexAccessorExpression>());
 }
 
-TEST_F(IndexAccessorExpressionTest, Assert_Null_Array) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(IndexAccessorExpressionDeathTest, Assert_Null_Array) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder b;
             b.IndexAccessor(nullptr, b.Expr("idx"));
@@ -69,31 +69,11 @@ TEST_F(IndexAccessorExpressionTest, Assert_Null_Array) {
         "internal compiler error");
 }
 
-TEST_F(IndexAccessorExpressionTest, Assert_Null_Index) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(IndexAccessorExpressionDeathTest, Assert_Null_Index) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder b;
             b.IndexAccessor(b.Expr("arr"), nullptr);
-        },
-        "internal compiler error");
-}
-
-TEST_F(IndexAccessorExpressionTest, Assert_DifferentGenerationID_Array) {
-    EXPECT_FATAL_FAILURE(
-        {
-            ProgramBuilder b1;
-            ProgramBuilder b2;
-            b1.IndexAccessor(b2.Expr("arr"), b1.Expr("idx"));
-        },
-        "internal compiler error");
-}
-
-TEST_F(IndexAccessorExpressionTest, Assert_DifferentGenerationID_Index) {
-    EXPECT_FATAL_FAILURE(
-        {
-            ProgramBuilder b1;
-            ProgramBuilder b2;
-            b1.IndexAccessor(b1.Expr("arr"), b2.Expr("idx"));
         },
         "internal compiler error");
 }

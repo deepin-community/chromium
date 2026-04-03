@@ -4,7 +4,6 @@
 
 #include "media/gpu/android/ndk_media_codec_wrapper.h"
 
-#include "base/functional/callback_forward.h"
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
@@ -14,16 +13,15 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#pragma clang attribute push DEFAULT_REQUIRES_ANDROID_API( \
-    NDK_MEDIA_CODEC_MIN_API)
 namespace media {
 
 namespace {
 constexpr char kMimeType[] = "video/avc";
 }
 
-class NdkMediaCodecWrapperTest : public ::testing::Test,
-                                 public NdkMediaCodecWrapper::Client {
+class REQUIRES_ANDROID_API(NDK_MEDIA_CODEC_MIN_API) NdkMediaCodecWrapperTest
+    : public ::testing::Test,
+      public NdkMediaCodecWrapper::Client {
  public:
   NdkMediaCodecWrapperTest() = default;
   ~NdkMediaCodecWrapperTest() override = default;
@@ -106,6 +104,8 @@ class NdkMediaCodecWrapperTest : public ::testing::Test,
   std::unique_ptr<NdkMediaCodecWrapper> wrapper_;
 };
 
+#pragma clang attribute push DEFAULT_REQUIRES_ANDROID_API( \
+    NDK_MEDIA_CODEC_MIN_API)
 TEST_F(NdkMediaCodecWrapperTest, Create) {
   auto wrapper = NdkMediaCodecWrapper::CreateByMimeType(
       kMimeType, this, base::SequencedTaskRunner::GetCurrentDefault());
@@ -220,6 +220,6 @@ TEST_F(NdkMediaCodecWrapperTest, Errors) {
   SimulateError(kError);
   FlushMainThread();
 }
+#pragma clang attribute pop
 
 }  // namespace media
-#pragma clang attribute pop

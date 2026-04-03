@@ -5,7 +5,6 @@
 #include "chromeos/ash/services/ime/decoder/system_engine.h"
 
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "chromeos/ash/services/ime/constants.h"
@@ -35,8 +34,9 @@ SystemEngine::~SystemEngine() {
 
 bool SystemEngine::BindConnectionFactory(
     mojo::PendingReceiver<mojom::ConnectionFactory> receiver) {
-  if (!decoder_entry_points_)
+  if (!decoder_entry_points_) {
     return false;
+  }
   auto receiver_pipe_handle = receiver.PassPipe().release().value();
   return decoder_entry_points_->mojo_mode_initialize_connection_factory(
       receiver_pipe_handle);

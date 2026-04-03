@@ -25,8 +25,10 @@ limitations under the License.
 #include <climits>
 #include <complex>
 #include <cstdint>
+#include <memory>
 #include <utility>
 
+#include "absl/status/statusor.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/Hashing.h"
@@ -34,7 +36,7 @@ limitations under the License.
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
-#include "mlir/Dialect/Quant/QuantOps.h"  // from @llvm-project
+#include "mlir/Dialect/Quant/IR/Quant.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
@@ -49,10 +51,7 @@ limitations under the License.
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "mlir/Transforms/DialectConversion.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"
-#include "tensorflow/compiler/mlir/lite/quantization/ir/FakeQuantSupport.h"
 #include "tensorflow/compiler/mlir/lite/quantization/ir/QuantOps.h"
-#include "tensorflow/compiler/mlir/lite/quantization/ir/UniformSupport.h"
-#include "tensorflow/compiler/mlir/lite/quantization/quantization_utils.h"
 #include "tensorflow/compiler/mlir/lite/transforms/passes.h"
 #include "tensorflow/compiler/mlir/lite/utils/attribute_utils.h"
 #include "tensorflow/compiler/mlir/lite/utils/constant_utils.h"
@@ -61,8 +60,6 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops_a_m.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/lower_tf.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/mangling_util.h"
-#include "xla/status.h"
-#include "xla/statusor.h"
 #include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/framework/tensor_shape.pb.h"
 #include "tensorflow/core/framework/types.pb.h"
@@ -92,6 +89,11 @@ class LegalizeTFPass : public impl::LegalizeTFPassBase<LegalizeTFPass> {
     this->preserve_assert_op_ = preserve_assert_op;
   }
 
+  explicit LegalizeTFPass(const LegalizeTFPassOptions& options) {
+    this->run_tfl_runtime_verification_ = options.run_tfl_runtime_verification_;
+    this->preserve_assert_op_ = options.preserve_assert_op_;
+  }
+
   /// Performs the lowering to TFLite dialect.
   void runOnOperation() override;
 };
@@ -99,7 +101,7 @@ class LegalizeTFPass : public impl::LegalizeTFPassBase<LegalizeTFPass> {
 // Util that casts 'val' to Int32 by adding a cast Op.
 Value CreateCastToInt32(Value val, Location loc, PatternRewriter& rewriter) {
   IntegerType new_ele_type = rewriter.getIntegerType(32);
-  if (auto shaped_type = val.getType().dyn_cast<RankedTensorType>()) {
+  if (auto shaped_type = mlir::dyn_cast<RankedTensorType>(val.getType())) {
     ShapedType new_type =
         RankedTensorType::get(shaped_type.getShape(), new_ele_type);
     return rewriter.createOrFold<TF::CastOp>(loc, new_type, val,
@@ -117,7 +119,7 @@ Value CreateCastToInt32(Value val, Location loc, PatternRewriter& rewriter) {
 // 2. In the default case, cast the `Value` to an int32_t.
 Value CreateInt32ConstOrCast(Value val, Location loc,
                              PatternRewriter& rewriter) {
-  if (val.getType().cast<ShapedType>().hasStaticShape()) {
+  if (mlir::cast<ShapedType>(val.getType()).hasStaticShape()) {
     DenseElementsAttr shape_value_attr;
     if (matchPattern(val, m_Constant(&shape_value_attr))) {
       SmallVector<int32_t, 4> new_shape_array_i32;
@@ -127,11 +129,12 @@ Value CreateInt32ConstOrCast(Value val, Location loc,
         new_shape_array_i32.push_back(
             ShapedType::isDynamic(size) ? -1 : static_cast<int32_t>(size));
       }
-      return rewriter.create<arith::ConstantOp>(
-          loc, DenseIntElementsAttr::get(
-                   RankedTensorType::get(new_shape_array_i32.size(),
-                                         rewriter.getIntegerType(32)),
-                   new_shape_array_i32));
+      return arith::ConstantOp::create(
+          rewriter, loc,
+          DenseIntElementsAttr::get(
+              RankedTensorType::get(new_shape_array_i32.size(),
+                                    rewriter.getIntegerType(32)),
+              new_shape_array_i32));
     }
   }
 
@@ -140,21 +143,20 @@ Value CreateInt32ConstOrCast(Value val, Location loc,
 
 // Get shape of an operand or result, support both dynamic and static shape.
 Value GetShape(Value input, Location loc, PatternRewriter& rewriter) {
-  auto shaped_type = input.getType().cast<ShapedType>();
+  auto shaped_type = mlir::cast<ShapedType>(input.getType());
   if (shaped_type.hasStaticShape()) {
     auto static_shape = shaped_type.getShape();
     auto static_shape_type =
         RankedTensorType::get(static_shape.size(), rewriter.getIntegerType(64));
     auto static_shape_attr =
         mlir::DenseIntElementsAttr::get(static_shape_type, static_shape);
-    return rewriter.create<TF::ConstOp>(loc, static_shape_attr).getOutput();
+    return TF::ConstOp::create(rewriter, loc, static_shape_attr).getOutput();
   }
 
   // If the shape is not static, create a new ShapeOp.
   BoolAttr false_attr = rewriter.getBoolAttr(false);
-  return rewriter
-      .create<TF::ShapeOp>(loc, input,
-                           /*use_32bit=*/false_attr)
+  return TF::ShapeOp::create(rewriter, loc, input,
+                             /*use_32bit=*/false_attr)
       .getOutput();
 }
 
@@ -274,7 +276,7 @@ bool ConvertTFBatchMatMulOp2TFLFullyConnectedOp(Operation* bmm_op,
 
   // Create a tfl.transpose op that performs ZX transpose on `input`.
   auto create_z_x_transpose_op = [&](Value input) -> Value {
-    RankedTensorType input_type = input.getType().cast<RankedTensorType>();
+    RankedTensorType input_type = mlir::cast<RankedTensorType>(input.getType());
     const int input_rank = input_type.getRank();
 
     // Create a 1D I32 tensor for representing the dimension permutation.
@@ -290,8 +292,8 @@ bool ConvertTFBatchMatMulOp2TFLFullyConnectedOp(Operation* bmm_op,
     // to X and Z dimension.
     std::iter_swap(permute.begin() + input_rank - 1,
                    permute.begin() + input_rank - 2);
-    auto permutation_tensor_op = rewriter.create<arith::ConstantOp>(
-        op->getLoc(), permuation_tensor_type,
+    auto permutation_tensor_op = arith::ConstantOp::create(
+        rewriter, op->getLoc(), permuation_tensor_type,
         DenseElementsAttr::get(permuation_tensor_type, permute));
 
     auto input_shape = input_type.getShape();
@@ -300,8 +302,8 @@ bool ConvertTFBatchMatMulOp2TFLFullyConnectedOp(Operation* bmm_op,
     // Swaps z dimension and x dimension to get permuted shape.
     std::iter_swap(permuted_shape.begin() + input_rank - 1,
                    permuted_shape.begin() + input_rank - 2);
-    return rewriter.create<TFL::TransposeOp>(
-        op->getLoc(),
+    return TFL::TransposeOp::create(
+        rewriter, op->getLoc(),
         RankedTensorType::get(permuted_shape, input_type.getElementType()),
         input, permutation_tensor_op.getResult());
   };
@@ -322,10 +324,10 @@ bool ConvertTFBatchMatMulOp2TFLFullyConnectedOp(Operation* bmm_op,
       !op.getAdjY() ? create_z_x_transpose_op(input_rhs) : input_rhs;
 
   Type output_type = op.getResult().getType();
-  auto no_input = rewriter.create<TFL::NoValueOp>(
-      op->getLoc(), rewriter.getNoneType(), rewriter.getUnitAttr());
-  auto fc_op = rewriter.create<TFL::FullyConnectedOp>(
-      op->getLoc(), ArrayRef<Type>{output_type},
+  auto no_input = TFL::NoValueOp::create(
+      rewriter, op->getLoc(), rewriter.getNoneType(), rewriter.getUnitAttr());
+  auto fc_op = TFL::FullyConnectedOp::create(
+      rewriter, op->getLoc(), ArrayRef<Type>{output_type},
       /*input=*/legalized_lhs, /*filter=*/legalized_rhs, /*bias=*/no_input,
       /*fused_activation_function=*/rewriter.getStringAttr("NONE"),
       /*weights_format=*/rewriter.getStringAttr("DEFAULT"),
@@ -367,18 +369,19 @@ LogicalResult ConvertTFMatMulOp::matchAndRewrite(
   auto rhs = op->getOperand(1);
   auto transpose = [&](Value input) -> std::pair<LogicalResult, Value> {
     RankedTensorType type =
-        input.getType().dyn_cast_or_null<RankedTensorType>();
+        mlir::dyn_cast_or_null<RankedTensorType>(input.getType());
     if (!type || type.getRank() != 2) return {failure(), nullptr};
 
     auto permute_attr = DenseIntElementsAttr::get(
         RankedTensorType::get({2}, rewriter.getI32Type()), {1, 0});
-    auto permute = rewriter.create<arith::ConstantOp>(
-        op->getLoc(), permute_attr.getType(), permute_attr);
+    auto permute = arith::ConstantOp::create(
+        rewriter, op->getLoc(), permute_attr.getType(), permute_attr);
     llvm::SmallVector<int64_t, 2> new_shape{type.getShape()[1],
                                             type.getShape()[0]};
-    auto output = rewriter.create<TFL::TransposeOp>(
-        op->getLoc(), RankedTensorType::get(new_shape, type.getElementType()),
-        input, permute);
+    auto output = TFL::TransposeOp::create(
+        rewriter, op->getLoc(),
+        RankedTensorType::get(new_shape, type.getElementType()), input,
+        permute);
     return {success(), output};
   };
 
@@ -395,10 +398,10 @@ LogicalResult ConvertTFMatMulOp::matchAndRewrite(
   }
 
   Type output_type = tf_matmul_op.getResult().getType();
-  auto no_input = rewriter.create<TFL::NoValueOp>(
-      op->getLoc(), rewriter.getNoneType(), rewriter.getUnitAttr());
-  auto fc_op = rewriter.create<FullyConnectedOp>(
-      op->getLoc(), ArrayRef<Type>{output_type},
+  auto no_input = TFL::NoValueOp::create(
+      rewriter, op->getLoc(), rewriter.getNoneType(), rewriter.getUnitAttr());
+  auto fc_op = FullyConnectedOp::create(
+      rewriter, op->getLoc(), ArrayRef<Type>{output_type},
       /*input=*/lhs, /*filter=*/rhs, /*bias=*/no_input,
       /*fused_activation_function=*/rewriter.getStringAttr("NONE"),
       /*weights_format=*/rewriter.getStringAttr("DEFAULT"),
@@ -490,8 +493,8 @@ LogicalResult ConvertTFConv3DOp::matchAndRewrite(
 
   // TensorFlow Conv3D has no bias, optimization patterns will fuse Conv3D
   // with other ops can fill the bias.
-  Value none = rewriter.create<TFL::NoValueOp>(
-      op->getLoc(), rewriter.getNoneType(), rewriter.getUnitAttr());
+  Value none = TFL::NoValueOp::create(
+      rewriter, op->getLoc(), rewriter.getNoneType(), rewriter.getUnitAttr());
 
   rewriter.replaceOpWithNewOp<TFL::Conv3DOp>(
       op, tf_op.getType(), tf_op.getInput(), tf_op.getFilter(),
@@ -530,8 +533,8 @@ LogicalResult ConvertTFConv3DBackpropInputV2Op::matchAndRewrite(
 
   // TensorFlow Conv3D has no bias, optimization patterns will fuse Conv3D
   // with other ops can fill the bias.
-  Value none = rewriter.create<TFL::NoValueOp>(
-      op->getLoc(), rewriter.getNoneType(), rewriter.getUnitAttr());
+  Value none = TFL::NoValueOp::create(
+      rewriter, op->getLoc(), rewriter.getNoneType(), rewriter.getUnitAttr());
 
   Value output_shape =
       CreateCastToInt32(tf_op.getInputSizes(), op->getLoc(), rewriter);
@@ -586,15 +589,15 @@ bool ConvertTFMatrixDiagV2orV3(Operation* op, PatternRewriter* rewriter) {
   // Verify padding_value is a tensor with all 0s.
   mlir::Value padding_value = tf_matrix_diag_v2_or_v3_op.getPaddingValue();
   mlir::Type element_type =
-      padding_value.getType().cast<ShapedType>().getElementType();
-  if (element_type.isa<FloatType>()) {
+      mlir::cast<ShapedType>(padding_value.getType()).getElementType();
+  if (mlir::isa<FloatType>(element_type)) {
     DenseFPElementsAttr padding_attr;
     if (!matchPattern(padding_value, m_Constant(&padding_attr)) ||
         !padding_attr.isSplat() ||
         !padding_attr.getSplatValue<APFloat>().isZero()) {
       return false;
     }
-  } else if (element_type.isa<IntegerType>()) {
+  } else if (mlir::isa<IntegerType>(element_type)) {
     DenseIntElementsAttr padding_attr;
     if (!matchPattern(padding_value, m_Constant(&padding_attr)) ||
         !padding_attr.isSplat() ||
@@ -645,13 +648,13 @@ struct LegalizeUnidirectionalSequenceLstm : public RewritePattern {
 
     SmallVector<int64_t, 20> tflite_indices;
     for (auto index_attr : tflite_indices_attr.getValue()) {
-      IntegerAttr index = index_attr.cast<IntegerAttr>();
+      IntegerAttr index = mlir::cast<IntegerAttr>(index_attr);
       tflite_indices.push_back(index.getInt());
     }
 
     // Optional input placeholder.
-    Value none = rewriter.create<TFL::NoValueOp>(
-        op->getLoc(), rewriter.getNoneType(), rewriter.getUnitAttr());
+    Value none = TFL::NoValueOp::create(
+        rewriter, op->getLoc(), rewriter.getNoneType(), rewriter.getUnitAttr());
 
     // Populate inputs.
     // UnidirectionalSequenceLstm is expected to have 24 inputs.
@@ -690,8 +693,8 @@ struct LegalizeUnidirectionalSequenceLstm : public RewritePattern {
     attributes.push_back(
         rewriter.getNamedAttr("time_major", rewriter.getBoolAttr(true)));
 
-    Value lstm_result = rewriter.create<TFL::UnidirectionalSequenceLSTMOp>(
-        op->getLoc(), result_types, inputs, attributes);
+    Value lstm_result = TFL::UnidirectionalSequenceLSTMOp::create(
+        rewriter, op->getLoc(), result_types, inputs, attributes);
 
     // Rewire the output.
     rewriter.replaceOp(op, {nullptr, nullptr, lstm_result});
@@ -748,8 +751,8 @@ struct LegalizeUnidirectionalSequenceRnn : public RewritePattern {
     attributes.push_back(
         rewriter.getNamedAttr("time_major", rewriter.getBoolAttr(true)));
 
-    Value rnn_result = rewriter.create<TFL::UnidirectionalSequenceRNNOp>(
-        op->getLoc(), result_types, inputs, attributes);
+    Value rnn_result = TFL::UnidirectionalSequenceRNNOp::create(
+        rewriter, op->getLoc(), result_types, inputs, attributes);
 
     // Rewire the output.
     rewriter.replaceOp(op, {nullptr, rnn_result});
@@ -776,13 +779,13 @@ class ApplyExplicitBroadcasting : public OpRewritePattern<SourceOp> {
     SmallVector<int64_t, 4> symbolic_broadcast_shape;
     // Matches fail when lhs or rhs is unranked tensor.
     // TODO(b/176202543): Support unranked tensor.
-    if (!lhs.getType().cast<ShapedType>().hasRank() ||
-        !rhs.getType().cast<ShapedType>().hasRank()) {
+    if (!mlir::cast<ShapedType>(lhs.getType()).hasRank() ||
+        !mlir::cast<ShapedType>(rhs.getType()).hasRank()) {
       return failure();
     }
     if (!OpTrait::util::getBroadcastedShape(
-            lhs.getType().cast<ShapedType>().getShape(),
-            rhs.getType().cast<ShapedType>().getShape(),
+            mlir::cast<ShapedType>(lhs.getType()).getShape(),
+            mlir::cast<ShapedType>(rhs.getType()).getShape(),
             symbolic_broadcast_shape)) {
       return failure();
     }
@@ -791,26 +794,23 @@ class ApplyExplicitBroadcasting : public OpRewritePattern<SourceOp> {
     Value lhs_shape = GetShape(lhs, op->getLoc(), rewriter);
     Value rhs_shape = GetShape(rhs, op->getLoc(), rewriter);
     auto broadcast_shape =
-        rewriter
-            .create<TF::BroadcastArgsOp>(
-                op->getLoc(),
-                RankedTensorType::get(symbolic_broadcast_shape.size(),
-                                      rewriter.getIntegerType(64)),
-                lhs_shape, rhs_shape)
+        TF::BroadcastArgsOp::create(
+            rewriter, op->getLoc(),
+            RankedTensorType::get(symbolic_broadcast_shape.size(),
+                                  rewriter.getIntegerType(64)),
+            lhs_shape, rhs_shape)
             .getR0();
 
     // Broadcasts inputs using BroadcastTo op.
     auto broadcast_type = RankedTensorType::get(
         symbolic_broadcast_shape, getElementTypeOrSelf(lhs.getType()));
     auto broadcasted_lhs =
-        rewriter
-            .create<TF::BroadcastToOp>(op->getLoc(), broadcast_type, lhs,
-                                       broadcast_shape)
+        TF::BroadcastToOp::create(rewriter, op->getLoc(), broadcast_type, lhs,
+                                  broadcast_shape)
             .getOutput();
     auto broadcasted_rhs =
-        rewriter
-            .create<TF::BroadcastToOp>(op->getLoc(), broadcast_type, rhs,
-                                       broadcast_shape)
+        TF::BroadcastToOp::create(rewriter, op->getLoc(), broadcast_type, rhs,
+                                  broadcast_shape)
             .getOutput();
 
     // Recreate an op with the above BroadcastTo op results.
@@ -827,13 +827,13 @@ class ApplyExplicitBroadcasting : public OpRewritePattern<SourceOp> {
     auto lhs = op->getOperand(0);
     auto rhs = op->getOperand(1);
 
-    if (!lhs.getType().cast<ShapedType>().hasStaticShape() ||
-        !rhs.getType().cast<ShapedType>().hasStaticShape()) {
+    if (!mlir::cast<ShapedType>(lhs.getType()).hasStaticShape() ||
+        !mlir::cast<ShapedType>(rhs.getType()).hasStaticShape()) {
       return rewriteOpWithDynamicInput(op, rewriter);
     }
 
-    auto lhs_shape = lhs.getType().cast<ShapedType>().getShape();
-    auto rhs_shape = rhs.getType().cast<ShapedType>().getShape();
+    auto lhs_shape = mlir::cast<ShapedType>(lhs.getType()).getShape();
+    auto rhs_shape = mlir::cast<ShapedType>(rhs.getType()).getShape();
 
     if (lhs_shape == rhs_shape) {
       return failure();
@@ -853,22 +853,21 @@ class ApplyExplicitBroadcasting : public OpRewritePattern<SourceOp> {
     auto new_shape_attr = mlir::DenseIntElementsAttr::get(
         RankedTensorType::get(result_shape.size(), rewriter.getIntegerType(64)),
         result_shape);
-    auto new_shape = rewriter.create<TF::ConstOp>(op->getLoc(), new_shape_attr);
+    auto new_shape =
+        TF::ConstOp::create(rewriter, op->getLoc(), new_shape_attr);
 
     // Apply BroadcastTo ops to each input.
     auto broadcast_type = RankedTensorType::get(
         result_shape, getElementTypeOrSelf(lhs.getType()));
 
     if (result_type.getShape() != lhs_shape) {
-      lhs = rewriter
-                .create<TF::BroadcastToOp>(op->getLoc(), broadcast_type, lhs,
-                                           new_shape)
+      lhs = TF::BroadcastToOp::create(rewriter, op->getLoc(), broadcast_type,
+                                      lhs, new_shape)
                 .getOutput();
     }
     if (result_type.getShape() != rhs_shape) {
-      rhs = rewriter
-                .create<TF::BroadcastToOp>(op->getLoc(), broadcast_type, rhs,
-                                           new_shape)
+      rhs = TF::BroadcastToOp::create(rewriter, op->getLoc(), broadcast_type,
+                                      rhs, new_shape)
                 .getOutput();
     }
 
@@ -895,23 +894,23 @@ class ApplyExplicitBroadcasting<TF::SelectV2Op>
 
     // Matches fail when lhs|rhs|cond is unranked tensor.
     // TODO(b/176202543): Support unranked tensor.
-    if (!lhs.getType().cast<ShapedType>().hasRank() ||
-        !rhs.getType().cast<ShapedType>().hasRank() ||
-        !cond.getType().cast<ShapedType>().hasRank()) {
+    if (!mlir::cast<ShapedType>(lhs.getType()).hasRank() ||
+        !mlir::cast<ShapedType>(rhs.getType()).hasRank() ||
+        !mlir::cast<ShapedType>(cond.getType()).hasRank()) {
       return failure();
     }
 
     // Calculates symbolic broadcast shape that is only used in types.
     SmallVector<int64_t, 4> symbolic_broadcast_lhs_rhs_shape;
     if (!OpTrait::util::getBroadcastedShape(
-            lhs.getType().cast<ShapedType>().getShape(),
-            rhs.getType().cast<ShapedType>().getShape(),
+            mlir::cast<ShapedType>(lhs.getType()).getShape(),
+            mlir::cast<ShapedType>(rhs.getType()).getShape(),
             symbolic_broadcast_lhs_rhs_shape)) {
       return failure();
     }
     SmallVector<int64_t, 4> symbolic_broadcast_shape;
     if (!OpTrait::util::getBroadcastedShape(
-            cond.getType().cast<ShapedType>().getShape(),
+            mlir::cast<ShapedType>(cond.getType()).getShape(),
             symbolic_broadcast_lhs_rhs_shape, symbolic_broadcast_shape)) {
       return failure();
     }
@@ -921,36 +920,31 @@ class ApplyExplicitBroadcasting<TF::SelectV2Op>
     Value lhs_shape = GetShape(lhs, op->getLoc(), rewriter);
     Value rhs_shape = GetShape(rhs, op->getLoc(), rewriter);
     auto broadcast_shape_value =
-        rewriter
-            .create<TF::BroadcastArgsOp>(op->getLoc(), lhs_shape.getType(),
-                                         lhs_shape, rhs_shape)
+        TF::BroadcastArgsOp::create(rewriter, op->getLoc(), lhs_shape.getType(),
+                                    lhs_shape, rhs_shape)
             .getR0();
     broadcast_shape_value =
-        rewriter
-            .create<TF::BroadcastArgsOp>(op->getLoc(), lhs_shape.getType(),
-                                         broadcast_shape_value, cond_shape)
+        TF::BroadcastArgsOp::create(rewriter, op->getLoc(), lhs_shape.getType(),
+                                    broadcast_shape_value, cond_shape)
             .getR0();
 
     // Broadcasting inputs using BroadcastTo op.
     auto broadcast_type = RankedTensorType::get(
         symbolic_broadcast_shape, getElementTypeOrSelf(out.getType()));
     auto broadcasted_cond =
-        rewriter
-            .create<TF::BroadcastToOp>(
-                op->getLoc(),
-                RankedTensorType::get(symbolic_broadcast_shape,
-                                      rewriter.getIntegerType(1)),
-                cond, broadcast_shape_value)
+        TF::BroadcastToOp::create(
+            rewriter, op->getLoc(),
+            RankedTensorType::get(symbolic_broadcast_shape,
+                                  rewriter.getIntegerType(1)),
+            cond, broadcast_shape_value)
             .getOutput();
     auto broadcasted_lhs =
-        rewriter
-            .create<TF::BroadcastToOp>(op->getLoc(), broadcast_type, lhs,
-                                       broadcast_shape_value)
+        TF::BroadcastToOp::create(rewriter, op->getLoc(), broadcast_type, lhs,
+                                  broadcast_shape_value)
             .getOutput();
     auto broadcasted_rhs =
-        rewriter
-            .create<TF::BroadcastToOp>(op->getLoc(), broadcast_type, rhs,
-                                       broadcast_shape_value)
+        TF::BroadcastToOp::create(rewriter, op->getLoc(), broadcast_type, rhs,
+                                  broadcast_shape_value)
             .getOutput();
 
     // Recreate an op with the above BroadcastTo op results.
@@ -967,15 +961,15 @@ class ApplyExplicitBroadcasting<TF::SelectV2Op>
     auto rhs = op->getOperand(2);
 
     // Should have static shapes to calculate the broadcasted shape.
-    if (!lhs.getType().cast<ShapedType>().hasStaticShape() ||
-        !rhs.getType().cast<ShapedType>().hasStaticShape() ||
-        !cond.getType().cast<ShapedType>().hasStaticShape()) {
+    if (!mlir::cast<ShapedType>(lhs.getType()).hasStaticShape() ||
+        !mlir::cast<ShapedType>(rhs.getType()).hasStaticShape() ||
+        !mlir::cast<ShapedType>(cond.getType()).hasStaticShape()) {
       return rewriteOpWithDynamicInput(op, rewriter);
     }
 
-    auto lhs_shape = lhs.getType().cast<ShapedType>().getShape();
-    auto rhs_shape = rhs.getType().cast<ShapedType>().getShape();
-    auto cond_shape = cond.getType().cast<ShapedType>().getShape();
+    auto lhs_shape = mlir::cast<ShapedType>(lhs.getType()).getShape();
+    auto rhs_shape = mlir::cast<ShapedType>(rhs.getType()).getShape();
+    auto cond_shape = mlir::cast<ShapedType>(cond.getType()).getShape();
 
     if (lhs_shape == rhs_shape && cond_shape == lhs_shape) {
       return failure();
@@ -999,7 +993,8 @@ class ApplyExplicitBroadcasting<TF::SelectV2Op>
         RankedTensorType::get(result_shape.size(), rewriter.getIntegerType(64));
     auto new_shape_attr =
         mlir::DenseIntElementsAttr::get(shape_type, result_shape);
-    auto new_shape = rewriter.create<TF::ConstOp>(op->getLoc(), new_shape_attr);
+    auto new_shape =
+        TF::ConstOp::create(rewriter, op->getLoc(), new_shape_attr);
 
     // Apply BroadcastTo ops to each input.
     auto cond_result_type =
@@ -1008,21 +1003,18 @@ class ApplyExplicitBroadcasting<TF::SelectV2Op>
         result_shape, getElementTypeOrSelf(lhs.getType()));
 
     if (result_shape != cond_shape) {
-      cond = rewriter
-                 .create<TF::BroadcastToOp>(op->getLoc(), cond_result_type,
-                                            cond, new_shape)
+      cond = TF::BroadcastToOp::create(rewriter, op->getLoc(), cond_result_type,
+                                       cond, new_shape)
                  .getOutput();
     }
     if (result_shape != lhs_shape) {
-      lhs = rewriter
-                .create<TF::BroadcastToOp>(op->getLoc(), result_type, lhs,
-                                           new_shape)
+      lhs = TF::BroadcastToOp::create(rewriter, op->getLoc(), result_type, lhs,
+                                      new_shape)
                 .getOutput();
     }
     if (result_shape != rhs_shape) {
-      rhs = rewriter
-                .create<TF::BroadcastToOp>(op->getLoc(), result_type, rhs,
-                                           new_shape)
+      rhs = TF::BroadcastToOp::create(rewriter, op->getLoc(), result_type, rhs,
+                                      new_shape)
                 .getOutput();
     }
 
@@ -1098,10 +1090,10 @@ void LegalizeTFPass::runOnOperation() {
   addPatterns(context, stage1Patterns, this->preserve_assert_op_);
 
   FrozenRewritePatternSet stage1FrozenPatterns(std::move(stage1Patterns));
-  if (!applyPatterns(func, target, stage1FrozenPatterns))
+  if (!applyPatterns(func, target, stage1FrozenPatterns)) {
     return signalPassFailure();
-
-  // Explict BroadcastTo addition for left-over broadcast-able ops.
+  }
+  // Explicit BroadcastTo addition for left-over broadcast-able ops.
   // The following pattern matchings should be done after the other legalization
   // rules in order not to add unnecessary BroadcastTo ops.
   RewritePatternSet stage2Patterns(&getContext());
@@ -1129,8 +1121,9 @@ void LegalizeTFPass::runOnOperation() {
                      ApplyExplicitBroadcasting<TF::SelectV2Op>>(context);
 
   FrozenRewritePatternSet stage2FrozenPatterns(std::move(stage2Patterns));
-  if (!applyPatterns(func, target, stage2FrozenPatterns))
+  if (!applyPatterns(func, target, stage2FrozenPatterns)) {
     return signalPassFailure();
+  }
 }
 
 }  // namespace
@@ -1140,6 +1133,12 @@ std::unique_ptr<OperationPass<func::FuncOp>> CreateLegalizeTFPass(
     bool run_tfl_runtime_verification, bool preserve_assert_op) {
   return std::make_unique<LegalizeTFPass>(run_tfl_runtime_verification,
                                           preserve_assert_op);
+}
+
+// Creates an instance of the TensorFlow Lite dialect LegalizeTF pass.
+std::unique_ptr<OperationPass<func::FuncOp>> CreateLegalizeTFPass(
+    const LegalizeTFPassOptions& options) {
+  return std::make_unique<LegalizeTFPass>(options);
 }
 
 std::unique_ptr<OperationPass<func::FuncOp>> CreateLegalizeTFPass() {

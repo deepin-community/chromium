@@ -14,11 +14,6 @@
 #endif  // BUILDFLAG(IS_WIN)
 
 namespace aura {
-namespace {
-// Whether IsNativeWindowOcclusionTrackingAlwaysEnabled() should check for
-// CHROME_HEADLESS.
-bool g_headless_check_enabled = true;
-}  // namespace
 
 // static
 void NativeWindowOcclusionTracker::EnableNativeWindowOcclusionTracking(
@@ -47,22 +42,27 @@ void NativeWindowOcclusionTracker::DisableNativeWindowOcclusionTracking(
 // static
 bool NativeWindowOcclusionTracker::IsNativeWindowOcclusionTrackingAlwaysEnabled(
     WindowTreeHost* host) {
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS_LACROS)
-  // chromedriver uses the environment variable CHROME_HEADLESS. In this case
-  // it expected that native occlusion is not applied.
+#if BUILDFLAG(IS_WIN)
+  // chromedriver uses the environment variable CHROME_HEADLESS. In this case it
+  // expected that native occlusion is not applied. CHROME_HEADLESS is also used
+  // by tests, but often we want native occlusion enabled, e.g. in performance
+  // tests. So, we do not perform the headless check if
+  // kAlwaysTrackNativeWindowOcclusionForTest is specified.
+  // TODO(crbug.com/333426475): Remove kAlwaysTrackNativeWindowOcclusionForTest
+  // after removing usage of CHROME_HEADLESS from tests.
   static bool is_headless = getenv("CHROME_HEADLESS") != nullptr;
-  if ((is_headless && g_headless_check_enabled) ||
+  if ((is_headless &&
+       !base::FeatureList::IsEnabled(
+           features::kAlwaysTrackNativeWindowOcclusionForTest)) ||
       !host->IsNativeWindowOcclusionEnabled() ||
       !base::FeatureList::IsEnabled(
           features::kApplyNativeOcclusionToCompositor)) {
     return false;
   }
 
-#if BUILDFLAG(IS_WIN)
   if (!base::FeatureList::IsEnabled(features::kCalculateNativeWinOcclusion)) {
     return false;
   }
-#endif
 
   const std::string type =
       features::kApplyNativeOcclusionToCompositorType.Get();
@@ -72,12 +72,7 @@ bool NativeWindowOcclusionTracker::IsNativeWindowOcclusionTrackingAlwaysEnabled(
              features::kApplyNativeOcclusionToCompositorTypeThrottleAndRelease;
 #else
   return false;
-#endif
-}
-
-// static
-void NativeWindowOcclusionTracker::SetHeadlessCheckEnabled(bool enabled) {
-  g_headless_check_enabled = enabled;
+#endif  // BUILDFLAG(IS_WIN)
 }
 
 }  // namespace aura

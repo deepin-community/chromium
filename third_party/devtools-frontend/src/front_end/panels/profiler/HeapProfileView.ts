@@ -1,6 +1,7 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
@@ -13,105 +14,96 @@ import * as PerfUI from '../../ui/legacy/components/perf_ui/perf_ui.js';
 import * as Components from '../../ui/legacy/components/utils/utils.js';
 import * as UI from '../../ui/legacy/legacy.js';
 
-import {ProfileFlameChartDataProvider} from './CPUProfileFlameChart.js';
 import {Events, HeapTimelineOverview, type IdsRangeChangedEvent, type Samples} from './HeapTimelineOverview.js';
-import {type Formatter, type ProfileDataGridNode} from './ProfileDataGrid.js';
+import type {Formatter, ProfileDataGridNode} from './ProfileDataGrid.js';
+import {ProfileFlameChartDataProvider} from './ProfileFlameChartDataProvider.js';
 import {ProfileEvents, type ProfileHeader, ProfileType} from './ProfileHeader.js';
 import {ProfileView, WritableProfileHeader} from './ProfileView.js';
 
 const UIStrings = {
   /**
-   *@description The reported total size used in the selected time frame of the allocation sampling profile
-   *@example {3 MB} PH1
+   * @description The reported total size used in the selected time frame of the allocation sampling profile
+   * @example {3 MB} PH1
    */
   selectedSizeS: 'Selected size: {PH1}',
   /**
-   *@description Name of column header that reports the size (in terms of bytes) used for a particular part of the heap, excluding the size of the children nodes of this part of the heap
+   * @description Name of column header that reports the size (in terms of bytes) used for a particular part of the heap, excluding the size of the children nodes of this part of the heap
    */
-  selfSizeBytes: 'Self Size (bytes)',
+  selfSizeBytes: 'Self size',
   /**
-   *@description Name of column header that reports the total size (in terms of bytes) used for a particular part of the heap
+   * @description Name of column header that reports the total size (in terms of bytes) used for a particular part of the heap
    */
-  totalSizeBytes: 'Total Size (bytes)',
+  totalSizeBytes: 'Total size',
   /**
-   *@description Button text to stop profiling the heap
+   * @description Button text to stop profiling the heap
    */
   stopHeapProfiling: 'Stop heap profiling',
   /**
-   *@description Button text to start profiling the heap
+   * @description Button text to start profiling the heap
    */
   startHeapProfiling: 'Start heap profiling',
   /**
-   *@description Progress update that the profiler is recording the contents of the heap
+   * @description Progress update that the profiler is recording the contents of the heap
    */
   recording: 'Recording…',
   /**
-   *@description Icon title in Heap Profile View of a profiler tool
+   * @description Icon title in Heap Profile View of a profiler tool
    */
   heapProfilerIsRecording: 'Heap profiler is recording',
   /**
-   *@description Progress update that the profiler is in the process of stopping its recording of the heap
+   * @description Progress update that the profiler is in the process of stopping its recording of the heap
    */
   stopping: 'Stopping…',
   /**
-   *@description Sampling category to only profile allocations happening on the heap
+   * @description Sampling category to only profile allocations happening on the heap
    */
   allocationSampling: 'Allocation sampling',
   /**
-   *@description The title for the collection of profiles that are gathered from various snapshots of the heap, using a sampling (e.g. every 1/100) technique.
+   * @description The title for the collection of profiles that are gathered from various snapshots of the heap, using a sampling (e.g. every 1/100) technique.
    */
-  samplingProfiles: 'SAMPLING PROFILES',
+  samplingProfiles: 'Sampling profiles',
   /**
-   *@description Description (part 1) in Heap Profile View of a profiler tool
+   * @description Description in Heap Profile View of a profiler tool
    */
-  recordMemoryAllocations: 'Record memory allocations using sampling method.',
+  recordMemoryAllocations:
+      'Approximate memory allocations by sampling long operations with minimal overhead and get a breakdown by JavaScript execution stack',
   /**
-   *@description Description (part 2) in Heap Profile View of a profiler tool
-   */
-  thisProfileTypeHasMinimal:
-      'This profile type has minimal performance overhead and can be used for long running operations.',
-  /**
-   *@description Description (part 3) in Heap Profile View of a profiler tool
-   */
-  itProvidesGoodApproximation:
-      'It provides good approximation of allocations broken down by `JavaScript` execution stack.',
-  /**
-   *@description Name of a profile
-   *@example {2} PH1
+   * @description Name of a profile
+   * @example {2} PH1
    */
   profileD: 'Profile {PH1}',
   /**
-   *@description Accessible text for the value in bytes in memory allocation or coverage view.
-   *@example {12345} PH1
+   * @description Accessible text for the value in bytes in memory allocation or coverage view.
+   * @example {12345} PH1
    */
   sBytes: '{PH1} bytes',
   /**
-   *@description Text in CPUProfile View of a profiler tool
-   *@example {21.33} PH1
+   * @description Text in CPUProfile View of a profiler tool
+   * @example {21.33} PH1
    */
   formatPercent: '{PH1} %',
   /**
-   *@description The formatted size in kilobytes, abbreviated to kB
-   *@example {1,021} PH1
+   * @description The formatted size in kilobytes, abbreviated to kB
+   * @example {1,021} PH1
    */
   skb: '{PH1} kB',
   /**
-   *@description Text for the name of something
+   * @description Text for the name of something
    */
   name: 'Name',
   /**
-   *@description Tooltip of a cell that reports the size used for a particular part of the heap, excluding the size of the children nodes of this part of the heap
+   * @description Tooltip of a cell that reports the size used for a particular part of the heap, excluding the size of the children nodes of this part of the heap
    */
   selfSize: 'Self size',
   /**
-   *@description Tooltip of a cell that reports the total size used for a particular part of the heap
+   * @description Tooltip of a cell that reports the total size used for a particular part of the heap
    */
   totalSize: 'Total size',
   /**
-   *@description Text for web URLs
+   * @description Text for web URLs
    */
   url: 'URL',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/profiler/HeapProfileView.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 function convertToSamplingHeapProfile(profileHeader: SamplingHeapProfileHeader):
@@ -152,14 +144,14 @@ export class HeapProfileView extends ProfileView implements UI.SearchableView.Se
 
     this.timelineOverview = new HeapTimelineOverview();
 
-    if (Root.Runtime.experiments.isEnabled('samplingHeapProfilerTimeline')) {
-      this.timelineOverview.addEventListener(Events.IdsRangeChanged, this.onIdsRangeChanged.bind(this));
+    if (Root.Runtime.experiments.isEnabled(Root.ExperimentNames.ExperimentName.SAMPLING_HEAP_PROFILER_TIMELINE)) {
+      this.timelineOverview.addEventListener(Events.IDS_RANGE_CHANGED, this.onIdsRangeChanged.bind(this));
       this.timelineOverview.show(this.element, this.element.firstChild);
       this.timelineOverview.start();
 
-      this.profileType.addEventListener(SamplingHeapProfileType.Events.StatsUpdate, this.onStatsUpdate, this);
-      void this.profileType.once(ProfileEvents.ProfileComplete).then(() => {
-        this.profileType.removeEventListener(SamplingHeapProfileType.Events.StatsUpdate, this.onStatsUpdate, this);
+      this.profileType.addEventListener(SamplingHeapProfileType.Events.STATS_UPDATE, this.onStatsUpdate, this);
+      void this.profileType.once(ProfileEvents.PROFILE_COMPLETE).then(() => {
+        this.profileType.removeEventListener(SamplingHeapProfileType.Events.STATS_UPDATE, this.onStatsUpdate, this);
         this.timelineOverview.stop();
         this.timelineOverview.updateGrid();
       });
@@ -173,12 +165,12 @@ export class HeapProfileView extends ProfileView implements UI.SearchableView.Se
   onIdsRangeChanged(event: Common.EventTarget.EventTargetEvent<IdsRangeChangedEvent>): void {
     const {minId, maxId} = event.data;
     this.selectedSizeText.setText(
-        i18nString(UIStrings.selectedSizeS, {PH1: Platform.NumberUtilities.bytesToString(event.data.size)}));
+        i18nString(UIStrings.selectedSizeS, {PH1: i18n.ByteUtilities.bytesToString(event.data.size)}));
     this.setSelectionRange(minId, maxId);
   }
 
   setSelectionRange(minId: number, maxId: number): void {
-    const profileData = convertToSamplingHeapProfile((this.profileHeader as SamplingHeapProfileHeader));
+    const profileData = convertToSamplingHeapProfile((this.profileHeader));
     const profile = new SamplingHeapProfileModel(profileData, minId, maxId);
     this.adjustedTotal = profile.total;
     this.setProfile(profile);
@@ -272,12 +264,12 @@ export class SamplingHeapProfileTypeBase extends
     if (this.recording) {
       void this.stopRecordingProfile();
     } else {
-      this.startRecordingProfile();
+      void this.startRecordingProfile();
     }
     return this.recording;
   }
 
-  startRecordingProfile(): void {
+  async startRecordingProfile(): Promise<void> {
     const heapProfilerModel = UI.Context.Context.instance().flavor(SDK.HeapProfilerModel.HeapProfilerModel);
     if (this.profileBeingRecorded() || !heapProfilerModel) {
       return;
@@ -297,7 +289,7 @@ export class SamplingHeapProfileTypeBase extends
   async stopRecordingProfile(): Promise<void> {
     this.recording = false;
     const recordedProfile = this.profileBeingRecorded();
-    if (!recordedProfile || !recordedProfile.heapProfilerModel()) {
+    if (!recordedProfile?.heapProfilerModel()) {
       return;
     }
 
@@ -305,9 +297,7 @@ export class SamplingHeapProfileTypeBase extends
     const profile = await this.stopSampling();
     if (recordedProfile) {
       console.assert(profile !== undefined);
-      // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      recordedProfile.setProtocolProfile((profile as any));
+      recordedProfile.setProtocolProfile(profile as unknown as Protocol.Profiler.Profile);
       recordedProfile.updateStatus('');
       this.setProfileBeingRecorded(null);
     }
@@ -321,7 +311,7 @@ export class SamplingHeapProfileTypeBase extends
     if (wasClearedDuringRecording) {
       return;
     }
-    this.dispatchEventToListeners(ProfileEvents.ProfileComplete, recordedProfile);
+    this.dispatchEventToListeners(ProfileEvents.PROFILE_COMPLETE, recordedProfile);
   }
 
   override createProfileLoadedFromFile(title: string): ProfileHeader {
@@ -334,11 +324,11 @@ export class SamplingHeapProfileTypeBase extends
   }
 
   startSampling(): void {
-    throw 'Not implemented';
+    throw new Error('Not implemented');
   }
 
   stopSampling(): Promise<Protocol.HeapProfiler.SamplingHeapProfile> {
-    throw 'Not implemented';
+    throw new Error('Not implemented');
   }
 }
 
@@ -367,16 +357,12 @@ export class SamplingHeapProfileType extends SamplingHeapProfileTypeBase {
 
   override get description(): string {
     // TODO(l10n): Do not concatenate localized strings.
-    const formattedDescription = [
-      i18nString(UIStrings.recordMemoryAllocations),
-      i18nString(UIStrings.thisProfileTypeHasMinimal),
-      i18nString(UIStrings.itProvidesGoodApproximation),
-    ];
+    const formattedDescription = [i18nString(UIStrings.recordMemoryAllocations)];
     return formattedDescription.join('\n');
   }
 
   override hasTemporaryView(): boolean {
-    return Root.Runtime.experiments.isEnabled('samplingHeapProfilerTimeline');
+    return Root.Runtime.experiments.isEnabled(Root.ExperimentNames.ExperimentName.SAMPLING_HEAP_PROFILER_TIMELINE);
   }
 
   override startSampling(): void {
@@ -386,7 +372,7 @@ export class SamplingHeapProfileType extends SamplingHeapProfileTypeBase {
     }
 
     void heapProfilerModel.startSampling();
-    if (Root.Runtime.experiments.isEnabled('samplingHeapProfilerTimeline')) {
+    if (Root.Runtime.experiments.isEnabled(Root.ExperimentNames.ExperimentName.SAMPLING_HEAP_PROFILER_TIMELINE)) {
       this.updateTimer = window.setTimeout(() => {
         void this.updateStats();
       }, this.updateIntervalMs);
@@ -405,7 +391,7 @@ export class SamplingHeapProfileType extends SamplingHeapProfileTypeBase {
   override async stopSampling(): Promise<Protocol.HeapProfiler.SamplingHeapProfile> {
     window.clearTimeout(this.updateTimer);
     this.updateTimer = 0;
-    this.dispatchEventToListeners(SamplingHeapProfileType.Events.RecordingStopped);
+    this.dispatchEventToListeners(SamplingHeapProfileType.Events.RECORDING_STOPPED);
     const heapProfilerModel = this.obtainRecordingProfile();
     if (!heapProfilerModel) {
       throw new Error('No heap profiler model');
@@ -428,7 +414,7 @@ export class SamplingHeapProfileType extends SamplingHeapProfileTypeBase {
     if (!this.updateTimer) {
       return;
     }
-    this.dispatchEventToListeners(SamplingHeapProfileType.Events.StatsUpdate, profile);
+    this.dispatchEventToListeners(SamplingHeapProfileType.Events.STATS_UPDATE, profile);
     this.updateTimer = window.setTimeout(() => {
       void this.updateStats();
     }, this.updateIntervalMs);
@@ -440,14 +426,14 @@ export class SamplingHeapProfileType extends SamplingHeapProfileTypeBase {
 
 export namespace SamplingHeapProfileType {
   export const enum Events {
-    RecordingStopped = 'RecordingStopped',
-    StatsUpdate = 'StatsUpdate',
+    RECORDING_STOPPED = 'RecordingStopped',
+    STATS_UPDATE = 'StatsUpdate',
   }
 
-  export type EventTypes = {
-    [Events.RecordingStopped]: void,
-    [Events.StatsUpdate]: Protocol.HeapProfiler.SamplingHeapProfile|null,
-  };
+  export interface EventTypes {
+    [Events.RECORDING_STOPPED]: void;
+    [Events.STATS_UPDATE]: Protocol.HeapProfiler.SamplingHeapProfile|null;
+  }
 }
 
 export class SamplingHeapProfileHeader extends WritableProfileHeader {
@@ -474,7 +460,7 @@ export class SamplingHeapProfileHeader extends WritableProfileHeader {
       heapProfilerModel: SDK.HeapProfilerModel.HeapProfilerModel|null, type: SamplingHeapProfileTypeBase,
       title?: string) {
     super(
-        heapProfilerModel && heapProfilerModel.debuggerModel(), type,
+        heapProfilerModel?.debuggerModel() ?? null, type,
         title || i18nString(UIStrings.profileD, {PH1: type.nextProfileUid()}));
     this.heapProfilerModelInternal = heapProfilerModel;
     this.protocolProfileInternal = {
@@ -601,7 +587,7 @@ export class NodeFormatter implements Formatter {
   }
 
   formatValue(value: number): string {
-    return Platform.NumberUtilities.withThousandsSeparator(value);
+    return i18n.ByteUtilities.bytesToString(value);
   }
 
   formatValueAccessibleText(value: number): string {
@@ -626,7 +612,6 @@ export class NodeFormatter implements Formatter {
 export class HeapFlameChartDataProvider extends ProfileFlameChartDataProvider {
   readonly profile: CPUProfile.ProfileTreeModel.ProfileTreeModel;
   readonly heapProfilerModel: SDK.HeapProfilerModel.HeapProfilerModel|null;
-  timelineDataInternal?: PerfUI.FlameChart.FlameChartTimelineData;
 
   constructor(
       profile: CPUProfile.ProfileTreeModel.ProfileTreeModel,
@@ -689,28 +674,28 @@ export class HeapFlameChartDataProvider extends ProfileFlameChartDataProvider {
     return this.timelineDataInternal;
   }
 
-  override prepareHighlightedEntryInfo(entryIndex: number): Element|null {
+  override preparePopoverElement(entryIndex: number): Element|null {
     const node = this.entryNodes[entryIndex];
     if (!node) {
       return null;
     }
-    const entryInfo: {
+    const popoverInfo: Array<{
       title: string,
       value: string,
-    }[] = [];
-    function pushEntryInfoRow(title: string, value: string): void {
-      entryInfo.push({title: title, value: value});
+    }> = [];
+    function pushRow(title: string, value: string): void {
+      popoverInfo.push({title, value});
     }
-    pushEntryInfoRow(i18nString(UIStrings.name), UI.UIUtils.beautifyFunctionName(node.functionName));
-    pushEntryInfoRow(i18nString(UIStrings.selfSize), Platform.NumberUtilities.bytesToString(node.self));
-    pushEntryInfoRow(i18nString(UIStrings.totalSize), Platform.NumberUtilities.bytesToString(node.total));
+    pushRow(i18nString(UIStrings.name), UI.UIUtils.beautifyFunctionName(node.functionName));
+    pushRow(i18nString(UIStrings.selfSize), i18n.ByteUtilities.bytesToString(node.self));
+    pushRow(i18nString(UIStrings.totalSize), i18n.ByteUtilities.bytesToString(node.total));
     const linkifier = new Components.Linkifier.Linkifier();
     const link = linkifier.maybeLinkifyConsoleCallFrame(
         this.heapProfilerModel ? this.heapProfilerModel.target() : null, node.callFrame);
     if (link) {
-      pushEntryInfoRow(i18nString(UIStrings.url), (link.textContent as string));
+      pushRow(i18nString(UIStrings.url), link.textContent);
     }
     linkifier.dispose();
-    return ProfileView.buildPopoverTable(entryInfo);
+    return ProfileView.buildPopoverTable(popoverInfo);
   }
 }

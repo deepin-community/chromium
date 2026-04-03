@@ -28,7 +28,7 @@ BluetoothHandler::BluetoothHandler() {
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
-BluetoothHandler::~BluetoothHandler() {}
+BluetoothHandler::~BluetoothHandler() = default;
 
 void BluetoothHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
@@ -54,7 +54,7 @@ void BluetoothHandler::BluetoothDeviceAdapterReady(
 }
 
 void BluetoothHandler::HandleRequestFastPairDeviceSupport(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   base::Value is_supported(quick_pair::IsFastPairSupported(bluetooth_adapter_));
@@ -62,7 +62,7 @@ void BluetoothHandler::HandleRequestFastPairDeviceSupport(
 }
 
 void BluetoothHandler::HandleShowBluetoothRevampHatsSurvey(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   if (auto* hats_bluetooth_revamp_trigger = HatsBluetoothRevampTrigger::Get()) {

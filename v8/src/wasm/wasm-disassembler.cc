@@ -4,6 +4,8 @@
 
 #include "src/wasm/wasm-disassembler.h"
 
+#include <iomanip>
+
 #include "src/debug/debug-interface.h"
 #include "src/numbers/conversions.h"
 #include "src/wasm/module-decoder-impl.h"
@@ -33,7 +35,7 @@ void Disassemble(const WasmModule* module, ModuleWireBytes wire_bytes,
 void Disassemble(base::Vector<const uint8_t> wire_bytes,
                  v8::debug::DisassemblyCollector* collector,
                  std::vector<int>* function_body_offsets) {
-  std::unique_ptr<ITracer> offsets = AllocateOffsetsProvider();
+  std::unique_ptr<OffsetsProvider> offsets = AllocateOffsetsProvider();
   ModuleResult result =
       DecodeWasmModuleForDisassembler(wire_bytes, offsets.get());
   MultiLineStringBuilder out;
@@ -62,6 +64,51 @@ void MultiLineStringBuilder::ToDisassemblyCollector(
     // Don't include trailing '\n'.
     collector->AddLine(l.data, l.len - 1, l.bytecode_offset);
   }
+}
+
+void DisassembleFunctionImpl(const WasmModule* module, int func_index,
+                             base::Vector<const uint8_t> function_body,
+                             ModuleWireBytes module_bytes, NamesProvider* names,
+                             std::ostream& os, std::vector<uint32_t>* offsets) {
+  MultiLineStringBuilder sb;
+  const wasm::WasmFunction& func = module->functions[func_index];
+  AccountingAllocator allocator;
+  Zone zone(&allocator, "Wasm disassembler");
+  bool shared = module->type(func.sig_index).is_shared;
+  WasmDetectedFeatures detected;
+  FunctionBodyDisassembler d(&zone, module, func_index, shared, &detected,
+                             func.sig, function_body.begin(),
+                             function_body.end(), func.code.offset(),
+                             module_bytes, names);
+  d.DecodeAsWat(sb, {0, 2}, FunctionBodyDisassembler::kPrintHeader);
+  const bool print_offsets = false;
+  sb.WriteTo(os, print_offsets, offsets);
+}
+
+void DisassembleFunction(const WasmModule* module, int func_index,
+                         base::Vector<const uint8_t> wire_bytes,
+                         NamesProvider* names, std::ostream& os) {
+  DCHECK(func_index < static_cast<int>(module->functions.size()) &&
+         func_index >= static_cast<int>(module->num_imported_functions));
+  ModuleWireBytes module_bytes(wire_bytes);
+  base::Vector<const uint8_t> code =
+      module_bytes.GetFunctionBytes(&module->functions[func_index]);
+  std::vector<uint32_t>* collect_offsets = nullptr;
+  DisassembleFunctionImpl(module, func_index, code, module_bytes, names, os,
+                          collect_offsets);
+}
+
+void DisassembleFunction(const WasmModule* module, int func_index,
+                         base::Vector<const uint8_t> function_body,
+                         base::Vector<const uint8_t> maybe_wire_bytes,
+                         uint32_t function_body_offset, std::ostream& os,
+                         std::vector<uint32_t>* offsets) {
+  DCHECK(func_index < static_cast<int>(module->functions.size()) &&
+         func_index >= static_cast<int>(module->num_imported_functions));
+  NamesProvider fake_names(module, maybe_wire_bytes);
+  DisassembleFunctionImpl(module, func_index, function_body,
+                          ModuleWireBytes{nullptr, 0}, &fake_names, os,
+                          offsets);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -123,23 +170,6 @@ uint32_t GetDefaultAlignment(WasmOpcode opcode) {
     default:
       UNREACHABLE();
   }
-}
-
-StringBuilder& operator<<(StringBuilder& sb, uint64_t n) {
-  if (n == 0) {
-    *sb.allocate(1) = '0';
-    return sb;
-  }
-  static constexpr size_t kBufferSize = 20;  // Just enough for a uint64.
-  char buffer[kBufferSize];
-  char* end = buffer + kBufferSize;
-  char* out = end;
-  while (n != 0) {
-    *(--out) = '0' + (n % 10);
-    n /= 10;
-  }
-  sb.write(out, static_cast<size_t>(end - out));
-  return sb;
 }
 
 void PrintSignatureOneLine(StringBuilder& out, const FunctionSig* sig,
@@ -223,7 +253,7 @@ void FunctionBodyDisassembler::DecodeAsWat(MultiLineStringBuilder& out,
   if (first_instruction_offset) *first_instruction_offset = pc_offset();
 
   // Main loop.
-  while (pc_ < end_) {
+  while (pc_ < end_ && ok()) {
     WasmOpcode opcode = GetOpcode();
     current_opcode_ = opcode;  // Some immediates need to know this.
 
@@ -352,7 +382,7 @@ class ImmediatesPrinter {
     owner_->out_->PatchLabel(label_info, out_.start() + label_start_position);
   }
 
-  void PrintSignature(uint32_t sig_index) {
+  void PrintSignature(ModuleTypeIndex sig_index) {
     if (owner_->module_->has_signature(sig_index)) {
       const FunctionSig* sig = owner_->module_->signature(sig_index);
       PrintSignatureOneLine(out_, sig, 0 /* ignored */, names(), false);
@@ -372,15 +402,18 @@ class ImmediatesPrinter {
   void HeapType(HeapTypeImmediate& imm) {
     out_ << " ";
     names()->PrintHeapType(out_, imm.type);
-    if (imm.type.is_index()) use_type(imm.type.ref_index());
+    if (imm.type.has_index()) use_type(imm.type.ref_index());
   }
 
-  void ValueType(HeapTypeImmediate& imm, bool is_nullable) {
+  void ValueType(ValueType type) {
     out_ << " ";
-    names()->PrintValueType(
-        out_, ValueType::RefMaybeNull(imm.type,
-                                      is_nullable ? kNullable : kNonNullable));
-    if (imm.type.is_index()) use_type(imm.type.ref_index());
+    names()->PrintValueType(out_, type);
+    if (type.has_index()) use_type(type.ref_index());
+  }
+
+  void BrOnCastFlags(BrOnCastImmediate& flags) {
+    // Ignored here. For printing text format, we do all the work via the
+    // two calls to {ValueType()} that we get for a br_on_cast.
   }
 
   void BranchDepth(BranchDepthImmediate& imm) { PrintDepthAsLabel(imm.depth); }
@@ -427,6 +460,27 @@ class ImmediatesPrinter {
     }
   }
 
+  void EffectHandlerTable(EffectHandlerTableImmediate& imm) {
+    const uint8_t* pc = imm.table;
+    for (uint32_t i = 0; i < imm.table_count; i++) {
+      uint8_t kind = owner_->read_u8<ValidationTag>(pc);
+      pc += 1;
+      auto [tag, length] = owner_->read_u32v<ValidationTag>(pc);
+      out_ << "(on ";
+      names()->PrintTagName(out_, tag);
+      out_ << " ";
+      pc += length;
+      if (kind == kOnSuspend) {
+        auto [target, tlen] = owner_->read_u32v<ValidationTag>(pc);
+        PrintDepthAsLabel(target);
+        pc += tlen;
+        out_ << ")";
+      } else {
+        out_ << " switch)";
+      }
+    }
+  }
+
   void CallIndirect(CallIndirectImmediate& imm) {
     PrintSignature(imm.sig_imm.index);
     if (imm.table_imm.index != 0) TableIndex(imm.table_imm);
@@ -444,12 +498,25 @@ class ImmediatesPrinter {
     }
   }
 
+  void MemoryOrder(const MemoryOrderImmediate& memory_order) {
+    switch (memory_order.order) {
+      case AtomicMemoryOrder::kAcqRel:
+        out_ << " acqrel";
+        return;
+      case AtomicMemoryOrder::kSeqCst:
+        out_ << " seqcst";
+        return;
+    }
+    out_ << " INVALID(" << static_cast<int>(memory_order.order) << ')';
+  }
+
   void SimdLane(SimdLaneImmediate& imm) { out_ << " " << uint32_t{imm.lane}; }
 
   void Field(FieldImmediate& imm) {
     TypeIndex(imm.struct_imm);
     out_ << " ";
-    names()->PrintFieldName(out_, imm.struct_imm.index, imm.field_imm.index);
+    names()->PrintFieldName(out_, imm.struct_imm.index.index,
+                            imm.field_imm.index);
   }
 
   void Length(IndexImmediate& imm) {
@@ -466,7 +533,7 @@ class ImmediatesPrinter {
     names()->PrintFunctionName(out_, imm.index, NamesProvider::kDevTools);
   }
 
-  void TypeIndex(IndexImmediate& imm) {
+  void TypeIndex(TypeIndexImmediate& imm) {
     out_ << " ";
     names()->PrintTypeName(out_, imm.index);
     use_type(imm.index);
@@ -482,7 +549,7 @@ class ImmediatesPrinter {
     names()->PrintGlobalName(out_, imm.index);
   }
 
-  void TableIndex(IndexImmediate& imm) {
+  void TableIndex(TableIndexImmediate& imm) {
     out_ << " ";
     names()->PrintTableName(out_, imm.index);
   }
@@ -562,7 +629,8 @@ class ImmediatesPrinter {
       }
     } else {
       char buffer[100];
-      const char* str = DoubleToCString(d, base::VectorOf(buffer, 100u));
+      std::string_view str =
+          DoubleToStringView(d, base::VectorOf(buffer, 100u));
       out_ << " " << str;
     }
   }
@@ -589,6 +657,10 @@ class ImmediatesPrinter {
   void StringConst(StringConstImmediate& imm) {
     if (imm.index >= owner_->module_->stringref_literals.size()) {
       out_ << " " << imm.index << " INVALID";
+      return;
+    }
+    if (owner_->wire_bytes_.start() == nullptr) {
+      out_ << " " << imm.index;
       return;
     }
     out_ << " \"";
@@ -633,7 +705,7 @@ class ImmediatesPrinter {
     names()->PrintTableName(out_, imm.table_src.index);
   }
 
-  void ArrayCopy(IndexImmediate& dst, IndexImmediate& src) {
+  void ArrayCopy(TypeIndexImmediate& dst, TypeIndexImmediate& src) {
     out_ << " ";
     names()->PrintTypeName(out_, dst.index);
     out_ << " ";
@@ -643,7 +715,9 @@ class ImmediatesPrinter {
   }
 
  private:
-  void use_type(uint32_t type_index) { owner_->used_types_.insert(type_index); }
+  void use_type(ModuleTypeIndex type_index) {
+    owner_->used_types_.insert(type_index.index);
+  }
 
   NamesProvider* names() { return owner_->names_; }
 
@@ -663,156 +737,25 @@ uint32_t FunctionBodyDisassembler::PrintImmediatesAndGetLength(
 ////////////////////////////////////////////////////////////////////////////////
 // OffsetsProvider.
 
-class OffsetsProvider : public ITracer {
- public:
-  struct RecGroup {
-    uint32_t offset{kInvalid};
-    uint32_t start_type_index{kInvalid};
-    uint32_t end_type_index{kInvalid};  // Exclusive.
+void OffsetsProvider::CollectOffsets(const WasmModule* module,
+                                     base::Vector<const uint8_t> wire_bytes) {
+  num_imported_tables_ = module->num_imported_tables;
+  num_imported_globals_ = module->num_imported_globals;
+  num_imported_tags_ = module->num_imported_tags;
+  type_offsets_.reserve(module->types.size());
+  import_offsets_.reserve(module->import_table.size());
+  table_offsets_.reserve(module->tables.size() - num_imported_tables_);
+  tag_offsets_.reserve(module->tags.size() - num_imported_tags_);
+  global_offsets_.reserve(module->globals.size() - num_imported_globals_);
+  element_offsets_.reserve(module->elem_segments.size());
+  data_offsets_.reserve(module->data_segments.size());
+  recgroups_.reserve(4);  // We can't know, so this is just a guess.
 
-    // For convenience: built-in support for "maybe" values, useful at the
-    // end of iteration.
-    static constexpr uint32_t kInvalid = ~0u;
-    static constexpr RecGroup Invalid() { return {}; }
-    bool valid() { return start_type_index != kInvalid; }
-  };
-
-  OffsetsProvider() = default;
-
-  // All-in-one, expects to be called on a freshly constructed {OffsetsProvider}
-  // when the {WasmModule} already exists.
-  // The alternative is to pass an {OffsetsProvider} as a tracer to the initial
-  // decoding of the wire bytes, letting it record offsets on the fly.
-  void CollectOffsets(const WasmModule* module,
-                      base::Vector<const uint8_t> wire_bytes) {
-    num_imported_tables_ = module->num_imported_tables;
-    num_imported_globals_ = module->num_imported_globals;
-    num_imported_tags_ = module->num_imported_tags;
-    type_offsets_.reserve(module->types.size());
-    import_offsets_.reserve(module->import_table.size());
-    table_offsets_.reserve(module->tables.size() - num_imported_tables_);
-    tag_offsets_.reserve(module->tags.size() - num_imported_tags_);
-    global_offsets_.reserve(module->globals.size() - num_imported_globals_);
-    element_offsets_.reserve(module->elem_segments.size());
-    data_offsets_.reserve(module->data_segments.size());
-    recgroups_.reserve(4);  // We can't know, so this is just a guess.
-
-    ModuleDecoderImpl decoder{WasmFeatures::All(), wire_bytes, kWasmOrigin,
-                              kDoNotPopulateExplicitRecGroups, this};
-    constexpr bool kNoVerifyFunctions = false;
-    decoder.DecodeModule(kNoVerifyFunctions);
-  }
-
-  void TypeOffset(uint32_t offset) override { type_offsets_.push_back(offset); }
-
-  void ImportOffset(uint32_t offset) override {
-    import_offsets_.push_back(offset);
-  }
-
-  void TableOffset(uint32_t offset) override {
-    table_offsets_.push_back(offset);
-  }
-
-  void MemoryOffset(uint32_t offset) override { memory_offset_ = offset; }
-
-  void TagOffset(uint32_t offset) override { tag_offsets_.push_back(offset); }
-
-  void GlobalOffset(uint32_t offset) override {
-    global_offsets_.push_back(offset);
-  }
-
-  void StartOffset(uint32_t offset) override { start_offset_ = offset; }
-
-  void ElementOffset(uint32_t offset) override {
-    element_offsets_.push_back(offset);
-  }
-
-  void DataOffset(uint32_t offset) override { data_offsets_.push_back(offset); }
-
-  void StringOffset(uint32_t offset) override {
-    string_offsets_.push_back(offset);
-  }
-
-  void RecGroupOffset(uint32_t offset, uint32_t group_size) override {
-    uint32_t start_index = static_cast<uint32_t>(type_offsets_.size());
-    recgroups_.push_back({offset, start_index, start_index + group_size});
-  }
-
-  void ImportsDone(const WasmModule* module) override {
-    num_imported_tables_ = module->num_imported_tables;
-    num_imported_globals_ = module->num_imported_globals;
-    num_imported_tags_ = module->num_imported_tags;
-  }
-
-  // Unused by this tracer:
-  void Bytes(const uint8_t* start, uint32_t count) override {}
-  void Description(const char* desc) override {}
-  void Description(const char* desc, size_t length) override {}
-  void Description(uint32_t number) override {}
-  void Description(ValueType type) override {}
-  void Description(HeapType type) override {}
-  void Description(const FunctionSig* sig) override {}
-  void NextLine() override {}
-  void NextLineIfFull() override {}
-  void NextLineIfNonEmpty() override {}
-  void InitializerExpression(const uint8_t* start, const uint8_t* end,
-                             ValueType expected_type) override {}
-  void FunctionBody(const WasmFunction* func, const uint8_t* start) override {}
-  void FunctionName(uint32_t func_index) override {}
-  void NameSection(const uint8_t* start, const uint8_t* end,
-                   uint32_t offset) override {}
-
-#define GETTER(name)                        \
-  uint32_t name##_offset(uint32_t index) {  \
-    DCHECK(index < name##_offsets_.size()); \
-    return name##_offsets_[index];          \
-  }
-  GETTER(type)
-  GETTER(import)
-  GETTER(element)
-  GETTER(data)
-  GETTER(string)
-#undef GETTER
-
-#define IMPORT_ADJUSTED_GETTER(name)                                  \
-  uint32_t name##_offset(uint32_t index) {                            \
-    DCHECK(index >= num_imported_##name##s_ &&                        \
-           index - num_imported_##name##s_ < name##_offsets_.size()); \
-    return name##_offsets_[index - num_imported_##name##s_];          \
-  }
-  IMPORT_ADJUSTED_GETTER(table)
-  IMPORT_ADJUSTED_GETTER(tag)
-  IMPORT_ADJUSTED_GETTER(global)
-#undef IMPORT_ADJUSTED_GETTER
-
-  uint32_t memory_offset() { return memory_offset_; }
-
-  uint32_t start_offset() { return start_offset_; }
-
-  RecGroup recgroup(uint32_t index) {
-    if (index >= recgroups_.size()) return RecGroup::Invalid();
-    return recgroups_[index];
-  }
-
- private:
-  uint32_t num_imported_tables_{0};
-  uint32_t num_imported_globals_{0};
-  uint32_t num_imported_tags_{0};
-  std::vector<uint32_t> type_offsets_;
-  std::vector<uint32_t> import_offsets_;
-  std::vector<uint32_t> table_offsets_;
-  std::vector<uint32_t> tag_offsets_;
-  std::vector<uint32_t> global_offsets_;
-  std::vector<uint32_t> element_offsets_;
-  std::vector<uint32_t> data_offsets_;
-  std::vector<uint32_t> string_offsets_;
-  uint32_t memory_offset_{0};
-  uint32_t start_offset_{0};
-  std::vector<RecGroup> recgroups_;
-};
-
-std::unique_ptr<ITracer> AllocateOffsetsProvider() {
-  return std::make_unique<OffsetsProvider>();
+  WasmDetectedFeatures unused_detected_features;
+  ModuleDecoderImpl decoder{WasmEnabledFeatures::All(), wire_bytes, kWasmOrigin,
+                            &unused_detected_features, this};
+  constexpr bool kNoVerifyFunctions = false;
+  decoder.DecodeModule(kNoVerifyFunctions);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -821,7 +764,7 @@ std::unique_ptr<ITracer> AllocateOffsetsProvider() {
 ModuleDisassembler::ModuleDisassembler(
     MultiLineStringBuilder& out, const WasmModule* module, NamesProvider* names,
     const ModuleWireBytes wire_bytes, AccountingAllocator* allocator,
-    std::unique_ptr<ITracer> offsets_provider,
+    std::unique_ptr<OffsetsProvider> offsets_provider,
     std::vector<int>* function_body_offsets)
     : out_(out),
       module_(module),
@@ -829,7 +772,7 @@ ModuleDisassembler::ModuleDisassembler(
       wire_bytes_(wire_bytes),
       start_(wire_bytes_.start()),
       zone_(allocator, "disassembler zone"),
-      offsets_(static_cast<OffsetsProvider*>(offsets_provider.release())),
+      offsets_(offsets_provider.release()),
       function_body_offsets_(function_body_offsets) {
   if (!offsets_) {
     offsets_ = std::make_unique<OffsetsProvider>();
@@ -845,13 +788,24 @@ void ModuleDisassembler::PrintTypeDefinition(uint32_t type_index,
   uint32_t offset = offsets_->type_offset(type_index);
   out_.NextLine(offset);
   out_ << indentation << "(type ";
+  size_t num_closing_parens = 2;  // One for "(type", one for "(struct" etc.
   names_->PrintTypeName(out_, type_index, index_as_comment);
   const TypeDefinition& type = module_->types[type_index];
-  bool has_super = type.supertype != kNoSuperType;
-  if (has_super) {
+  if (type.supertype != kNoSuperType) {
     out_ << " (sub ";
+    num_closing_parens++;
     if (type.is_final) out_ << "final ";
-    names_->PrintHeapType(out_, HeapType(type.supertype));
+    names_->PrintTypeName(out_, type.supertype);
+  }
+  if (type.is_descriptor()) {
+    out_ << " (describes ";
+    names_->PrintTypeName(out_, type.describes);
+    out_ << ")";
+  }
+  if (type.has_descriptor()) {
+    out_ << " (descriptor ";
+    names_->PrintTypeName(out_, type.descriptor);
+    out_ << ")";
   }
   if (type.kind == TypeDefinition::kArray) {
     const ArrayType* atype = type.array_type;
@@ -859,7 +813,7 @@ void ModuleDisassembler::PrintTypeDefinition(uint32_t type_index,
     if (type.is_shared) out_ << " shared";
     out_ << " (field ";
     PrintMutableType(atype->mutability(), atype->element_type());
-    out_ << ")";  // Closes "(field ...".
+    num_closing_parens++;  // Closes "(field ...".
   } else if (type.kind == TypeDefinition::kStruct) {
     const StructType* stype = type.struct_type;
     out_ << " (struct";
@@ -893,8 +847,9 @@ void ModuleDisassembler::PrintTypeDefinition(uint32_t type_index,
       out_ << ")";
     }
   }
-  // Closes "(type", "(sub", and "(array" / "(struct" / "(func".
-  out_ << (has_super ? ")))" : "))");
+  constexpr const char* parens = ")))))";
+  DCHECK_LE(num_closing_parens, strlen(parens));
+  out_.write(parens, num_closing_parens);
 }
 
 void ModuleDisassembler::PrintModule(Indentation indentation, size_t max_mb) {
@@ -937,8 +892,8 @@ void ModuleDisassembler::PrintModule(Indentation indentation, size_t max_mb) {
         break;
       }
     }
-    if (kSkipFunctionTypesInTypeSection && module_->has_signature(i) &&
-        !in_explicit_recgroup) {
+    if (kSkipFunctionTypesInTypeSection &&
+        module_->has_signature(ModuleTypeIndex{i}) && !in_explicit_recgroup) {
       continue;
     }
     PrintTypeDefinition(i, indentation, kIndicesAsComments);
@@ -977,14 +932,19 @@ void ModuleDisassembler::PrintModule(Indentation indentation, size_t max_mb) {
         PrintTable(table);
         break;
       }
-      case kExternalFunction: {
+      case kExternalFunction:
+      case kExternalExactFunction: {
         out_ << "(func ";
         names_->PrintFunctionName(out_, import.index, NamesProvider::kDevTools,
                                   kIndicesAsComments);
         const WasmFunction& func = module_->functions[import.index];
+        // Exports always use non-exact kExternalFunction, because exact
+        // exports would provide no benefit.
         if (func.exported) PrintExportName(kExternalFunction, import.index);
         PrintImportName(import);
+        if (import.kind == kExternalExactFunction) out_ << "(exact ";
         PrintSignatureOneLine(out_, func.sig, import.index, names_, false);
+        if (import.kind == kExternalExactFunction) out_ << ")";
         break;
       }
       case kExternalGlobal: {
@@ -1107,12 +1067,15 @@ void ModuleDisassembler::PrintModule(Indentation indentation, size_t max_mb) {
       PrintInitExpression(elem.offset, kWasmI32);
     }
     out_ << " ";
+    if (elem.shared) out_ << "shared ";
     names_->PrintValueType(out_, elem.type);
 
-    ModuleDecoderImpl decoder(WasmFeatures::All(), wire_bytes_.module_bytes(),
-                              ModuleOrigin::kWasmOrigin);
+    WasmDetectedFeatures unused_detected_features;
+    ModuleDecoderImpl decoder(
+        WasmEnabledFeatures::All(), wire_bytes_.module_bytes(),
+        ModuleOrigin::kWasmOrigin, &unused_detected_features);
     decoder.consume_bytes(elem.elements_wire_bytes_offset);
-    for (size_t i = 0; i < elem.element_count; i++) {
+    for (size_t j = 0; j < elem.element_count; j++) {
       ConstantExpression entry = decoder.consume_element_segment_entry(
           const_cast<WasmModule*>(module_), elem);
       PrintInitExpression(entry, elem.type);
@@ -1140,9 +1103,10 @@ void ModuleDisassembler::PrintModule(Indentation indentation, size_t max_mb) {
     if (func->exported) PrintExportName(kExternalFunction, i);
     PrintSignatureOneLine(out_, func->sig, i, names_, true, kIndicesAsComments);
     out_.NextLine(func->code.offset());
-    WasmFeatures detected;
+    bool shared = module_->type(func->sig_index).is_shared;
+    WasmDetectedFeatures detected;
     base::Vector<const uint8_t> code = wire_bytes_.GetFunctionBytes(func);
-    FunctionBodyDisassembler d(&zone_, module_, i, &detected, func->sig,
+    FunctionBodyDisassembler d(&zone_, module_, i, shared, &detected, func->sig,
                                code.begin(), code.end(), func->code.offset(),
                                wire_bytes_, names_);
     uint32_t first_instruction_offset;
@@ -1167,8 +1131,9 @@ void ModuleDisassembler::PrintModule(Indentation indentation, size_t max_mb) {
       out_ << " ";
       names_->PrintDataSegmentName(out_, i, kIndicesAsComments);
     }
+    if (data.shared) out_ << " shared";
     if (data.active) {
-      ValueType type = module_->memories[data.memory_index].is_memory64
+      ValueType type = module_->memories[data.memory_index].is_memory64()
                            ? kWasmI64
                            : kWasmI32;
       PrintInitExpression(data.dest_addr, type);
@@ -1216,6 +1181,7 @@ void ModuleDisassembler::PrintMutableType(bool mutability, ValueType type) {
 }
 
 void ModuleDisassembler::PrintTable(const WasmTable& table) {
+  if (table.shared) out_ << " shared";
   out_ << " " << table.initial_size << " ";
   if (table.has_maximum_size) out_ << table.maximum_size << " ";
   names_->PrintValueType(out_, table.type);
@@ -1236,30 +1202,30 @@ void ModuleDisassembler::PrintGlobal(const WasmGlobal& global) {
 void ModuleDisassembler::PrintInitExpression(const ConstantExpression& init,
                                              ValueType expected_type) {
   switch (init.kind()) {
-    case ConstantExpression::kEmpty:
+    case ConstantExpression::Kind::kEmpty:
       break;
-    case ConstantExpression::kI32Const:
+    case ConstantExpression::Kind::kI32Const:
       out_ << " (i32.const " << init.i32_value() << ")";
       break;
-    case ConstantExpression::kRefNull:
+    case ConstantExpression::Kind::kRefNull:
       out_ << " (ref.null ";
-      names_->PrintHeapType(out_, HeapType(init.repr()));
+      names_->PrintHeapType(out_, init.type());
       out_ << ")";
       break;
-    case ConstantExpression::kRefFunc:
+    case ConstantExpression::Kind::kRefFunc:
       out_ << " (ref.func ";
       names_->PrintFunctionName(out_, init.index(), NamesProvider::kDevTools);
       out_ << ")";
       break;
-    case ConstantExpression::kWireBytesRef:
+    case ConstantExpression::Kind::kWireBytesRef:
       WireBytesRef ref = init.wire_bytes_ref();
       const uint8_t* start = start_ + ref.offset();
       const uint8_t* end = start_ + ref.end_offset();
 
       auto sig = FixedSizeSignature<ValueType>::Returns(expected_type);
-      WasmFeatures detected;
-      FunctionBodyDisassembler d(&zone_, module_, 0, &detected, &sig, start,
-                                 end, ref.offset(), wire_bytes_, names_);
+      WasmDetectedFeatures detected;
+      FunctionBodyDisassembler d(&zone_, module_, 0, false, &detected, &sig,
+                                 start, end, ref.offset(), wire_bytes_, names_);
       d.DecodeGlobalInitializer(out_);
       break;
   }
@@ -1280,31 +1246,36 @@ void ModuleDisassembler::PrintString(WireBytesRef ref) {
 // This mimics legacy wasmparser behavior. It might be a questionable choice,
 // but we'll follow suit for now.
 void ModuleDisassembler::PrintStringAsJSON(WireBytesRef ref) {
-  for (const uint8_t* ptr = start_ + ref.offset();
-       ptr < start_ + ref.end_offset(); ptr++) {
+  i::wasm::PrintStringAsJSON(out_, start_, ref);
+}
+
+void PrintStringAsJSON(StringBuilder& out, const uint8_t* start,
+                       WireBytesRef ref) {
+  for (const uint8_t* ptr = start + ref.offset();
+       ptr < start + ref.end_offset(); ptr++) {
     uint8_t b = *ptr;
     if (b <= 34) {
       switch (b) {
         // clang-format off
-        case '\b': out_ << "\\b";  break;
-        case '\t': out_ << "\\t";  break;
-        case '\n': out_ << "\\n";  break;
-        case '\f': out_ << "\\f";  break;
-        case '\r': out_ << "\\r";  break;
-        case ' ':  out_ << ' ';    break;
-        case '!':  out_ << '!';    break;
-        case '"':  out_ << "\\\""; break;
+        case '\b': out << "\\b";  break;
+        case '\t': out << "\\t";  break;
+        case '\n': out << "\\n";  break;
+        case '\f': out << "\\f";  break;
+        case '\r': out << "\\r";  break;
+        case ' ':  out << ' ';    break;
+        case '!':  out << '!';    break;
+        case '"':  out << "\\\""; break;
         // clang-format on
         default:
-          out_ << "\\u00" << kHexChars[b >> 4] << kHexChars[b & 0xF];
+          out << "\\u00" << kHexChars[b >> 4] << kHexChars[b & 0xF];
           break;
       }
     } else if (b != 127 && b != '\\') {
-      out_ << static_cast<char>(b);
+      out << static_cast<char>(b);
     } else if (b == '\\') {
-      out_ << "\\\\";
+      out << "\\\\";
     } else {
-      out_ << "\\x7F";
+      out << "\\x7F";
     }
   }
 }

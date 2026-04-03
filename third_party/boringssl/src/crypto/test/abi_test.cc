@@ -1,16 +1,16 @@
-/* Copyright (c) 2018, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2018 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "abi_test.h"
 
@@ -40,10 +40,8 @@
 #include <unistd.h>
 #elif defined(OPENSSL_WINDOWS)
 #define SUPPORTS_UNWIND_TEST
-OPENSSL_MSVC_PRAGMA(warning(push, 3))
 #include <windows.h>
 #include <dbghelp.h>
-OPENSSL_MSVC_PRAGMA(warning(pop))
 #endif
 #endif  // X86_64 && SUPPORTS_ABI_TEST
 
@@ -53,6 +51,7 @@ OPENSSL_MSVC_PRAGMA(warning(pop))
 #endif
 
 
+BSSL_NAMESPACE_BEGIN
 namespace abi_test {
 
 namespace internal {
@@ -92,7 +91,7 @@ static void ForEachMismatch(const CallerState &a, const CallerState &b,
 #if defined(SUPPORTS_UNWIND_TEST)
 // We test unwind metadata by running the function under test with the trap flag
 // set. This results in |SIGTRAP| and |EXCEPTION_SINGLE_STEP| on Linux and
-// Windows, respectively. We hande these and verify libunwind or the Windows
+// Windows, respectively. We handle these and verify libunwind or the Windows
 // unwind APIs unwind successfully.
 
 // IsAncestorStackFrame returns true if |a_sp| is an ancestor stack frame of
@@ -106,7 +105,7 @@ static bool IsAncestorStackFrame(crypto_word_t a_sp, crypto_word_t b_sp) {
 #endif
 }
 
-// Implement some string formatting utilties. Ideally we would use |snprintf|,
+// Implement some string formatting utilities. Ideally we would use |snprintf|,
 // but this is called in a signal handler and |snprintf| is not async-signal-
 // safe.
 
@@ -141,17 +140,17 @@ static std::array<char, sizeof(crypto_word_t) * 2 + 1> WordToHex(
   return ret;
 }
 
-static void StrCatSignalSafeImpl(bssl::Span<char> out) {}
+static void StrCatSignalSafeImpl(Span<char> out) {}
 
 template <typename... Args>
-static void StrCatSignalSafeImpl(bssl::Span<char> out, const char *str,
+static void StrCatSignalSafeImpl(Span<char> out, const char *str,
                                  Args... args) {
   OPENSSL_strlcat(out.data(), str, out.size());
   StrCatSignalSafeImpl(out, args...);
 }
 
 template <typename... Args>
-static void StrCatSignalSafe(bssl::Span<char> out, Args... args) {
+static void StrCatSignalSafe(Span<char> out, Args... args) {
   if (out.empty()) {
     return;
   }
@@ -376,7 +375,7 @@ class UnwindCursor {
     size_t len = strlen(starting_ip_buf_);
     // Print the offset in decimal, to match gdb's disassembly output and ease
     // debugging.
-    StrCatSignalSafe(bssl::Span<char>(starting_ip_buf_).subspan(len), "+",
+    StrCatSignalSafe(Span<char>(starting_ip_buf_).subspan(len), "+",
                      WordToDecimal(off).data(), " (0x",
                      WordToHex(starting_ip_).data(), ")");
     return starting_ip_buf_;
@@ -700,7 +699,7 @@ static void EnableUnwindTestsImpl() {
   sigemptyset(&trap_action.sa_mask);
   trap_action.sa_flags = SA_SIGINFO;
   trap_action.sa_sigaction = TrapHandler;
-  if (sigaction(SIGTRAP, &trap_action, NULL) != 0) {
+  if (sigaction(SIGTRAP, &trap_action, nullptr) != 0) {
     perror("sigaction");
     abort();
   }
@@ -767,3 +766,4 @@ void EnableUnwindTests() { internal::EnableUnwindTestsImpl(); }
 bool UnwindTestsEnabled() { return internal::g_unwind_tests_enabled; }
 
 }  // namespace abi_test
+BSSL_NAMESPACE_END

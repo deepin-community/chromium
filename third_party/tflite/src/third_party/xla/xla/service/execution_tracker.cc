@@ -37,11 +37,11 @@ AsyncExecution::AsyncExecution(Backend* backend,
   }
 }
 
-Status AsyncExecution::BlockUntilDone() const {
+absl::Status AsyncExecution::BlockUntilDone() const {
   for (auto& stream : streams_) {
     TF_RETURN_IF_ERROR(stream->BlockHostUntilDone());
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 ExecutionTracker::ExecutionTracker() : next_handle_(1) {}
@@ -50,7 +50,7 @@ ExecutionHandle ExecutionTracker::Register(Backend* backend,
                                            std::vector<StreamPool::Ptr> streams,
                                            const ExecutionProfile& profile,
                                            GlobalDataHandle result) {
-  absl::MutexLock lock(&execution_mutex_);
+  absl::MutexLock lock(execution_mutex_);
   int64_t handle = next_handle_++;
   auto inserted = handle_to_execution_.emplace(
       handle, std::make_unique<AsyncExecution>(backend, std::move(streams),
@@ -62,20 +62,20 @@ ExecutionHandle ExecutionTracker::Register(Backend* backend,
   return execution_handle;
 }
 
-Status ExecutionTracker::Unregister(const ExecutionHandle& handle) {
-  absl::MutexLock lock(&execution_mutex_);
+absl::Status ExecutionTracker::Unregister(const ExecutionHandle& handle) {
+  absl::MutexLock lock(execution_mutex_);
   auto it = handle_to_execution_.find(handle.handle());
   if (it == handle_to_execution_.end()) {
     return NotFound("no execution record for execution handle: %d",
                     handle.handle());
   }
   handle_to_execution_.erase(handle.handle());
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-StatusOr<const AsyncExecution*> ExecutionTracker::Resolve(
+absl::StatusOr<const AsyncExecution*> ExecutionTracker::Resolve(
     const ExecutionHandle& handle) {
-  absl::MutexLock lock(&execution_mutex_);
+  absl::MutexLock lock(execution_mutex_);
   auto it = handle_to_execution_.find(handle.handle());
   if (it == handle_to_execution_.end()) {
     return NotFound("no execution record for execution handle: %d",

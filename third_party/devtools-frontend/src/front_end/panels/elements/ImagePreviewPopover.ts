@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@ import * as UI from '../../ui/legacy/legacy.js';
 /**
  * ImagePreviewPopover sets listeners on the container element to display
  * an image preview if needed. The image URL comes from the event (mouseover) target
- * in a propery identified by HrefSymbol. To enable preview for any child element
+ * in a property identified by HrefSymbol. To enable preview for any child element
  * set the property HrefSymbol.
  */
 export class ImagePreviewPopover {
@@ -18,13 +18,12 @@ export class ImagePreviewPopover {
   private readonly getDOMNode: (arg0: Element) => SDK.DOMModel.DOMNode | null;
   private readonly popover: UI.PopoverHelper.PopoverHelper;
   constructor(
-      container: Element, getLinkElement: (arg0: Event) => Element | null,
+      container: HTMLElement, getLinkElement: (arg0: Event) => Element | null,
       getDOMNode: (arg0: Element) => SDK.DOMModel.DOMNode | null) {
     this.getLinkElement = getLinkElement;
     this.getDOMNode = getDOMNode;
     this.popover =
         new UI.PopoverHelper.PopoverHelper(container, this.handleRequest.bind(this), 'elements.image-preview');
-    this.popover.setHasPadding(true);
     this.popover.setTimeout(0, 100);
   }
 
@@ -41,14 +40,16 @@ export class ImagePreviewPopover {
       box: link.boxInWindow(),
       hide: undefined,
       show: async (popover: UI.GlassPane.GlassPane) => {
-        const node = this.getDOMNode((link as Element));
+        const node = this.getDOMNode((link));
         if (!node) {
           return false;
         }
         const precomputedFeatures = await Components.ImagePreview.ImagePreview.loadDimensionsForNode(node);
-        const preview = await Components.ImagePreview.ImagePreview.build(
-            node.domModel().target(), href as Platform.DevToolsPath.UrlString, true,
-            {imageAltText: undefined, precomputedFeatures});
+        const preview = await Components.ImagePreview.ImagePreview.build(href, true, {
+          imageAltText: undefined,
+          precomputedFeatures,
+          align: Components.ImagePreview.Align.CENTER,
+        });
         if (preview) {
           popover.contentElement.appendChild(preview);
         }

@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/memory/ref_counted.h"
 #include "base/notreached.h"
@@ -26,9 +27,7 @@ namespace {
 // A feature which enables a tentative fix for https://crbug.com/1468933, which
 // is caused by overly aggressive trap event suppression. Gated by a feature so
 // we can evaluate performance impact.
-BASE_FEATURE(kFixDataPipeTrapBug,
-             "FixDataPipeTrapBug",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kFixDataPipeTrapBug, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Translates Mojo signal conditions to equivalent IpczTrapConditions for any
 // portal used as a message pipe endpoint.
@@ -326,7 +325,7 @@ MojoResult MojoTrap::Arm(MojoTrapEvent* blocking_events,
   };
 
   TriggerMap::iterator next_trigger = next_trigger_;
-  DCHECK(next_trigger != triggers_.end());
+  CHECK(next_trigger != triggers_.end());
 
   // We iterate over all triggers, starting just beyond wherever we started last
   // time we were armed. This guards against any single trigger being starved.
@@ -344,7 +343,6 @@ MojoResult MojoTrap::Arm(MojoTrapEvent* blocking_events,
 
     if (result != IPCZ_RESULT_FAILED_PRECONDITION) {
       NOTREACHED();
-      return result;
     }
 
     // The ipcz trap failed to install, so this trigger's conditions are already
@@ -353,7 +351,7 @@ MojoResult MojoTrap::Arm(MojoTrapEvent* blocking_events,
       return MOJO_RESULT_FAILED_PRECONDITION;
     }
 
-    blocking_events[num_events_returned++] = event;
+    UNSAFE_TODO(blocking_events[num_events_returned++]) = event;
   } while (next_trigger != end_trigger &&
            (num_events_returned == 0 || num_events_returned < event_capacity));
 

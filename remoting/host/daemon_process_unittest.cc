@@ -60,7 +60,7 @@ class MockDaemonProcess : public DaemonProcess {
   std::unique_ptr<DesktopSession> DoCreateDesktopSession(
       int terminal_id,
       const ScreenResolution& resolution,
-      bool virtual_terminal) override;
+      bool is_curtained) override;
 
   MOCK_METHOD(bool,
               OnDesktopSessionAgentAttached,
@@ -96,7 +96,7 @@ MockDaemonProcess::~MockDaemonProcess() = default;
 std::unique_ptr<DesktopSession> MockDaemonProcess::DoCreateDesktopSession(
     int terminal_id,
     const ScreenResolution& resolution,
-    bool virtual_terminal) {
+    bool is_curtained) {
   return base::WrapUnique(DoCreateDesktopSessionPtr(terminal_id));
 }
 
@@ -127,8 +127,8 @@ class DaemonProcessTest : public testing::Test {
   }
 
  protected:
-  base::test::SingleThreadTaskEnvironment task_environment_{
-      base::test::SingleThreadTaskEnvironment::MainThreadType::IO};
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::MainThreadType::IO};
 
   std::unique_ptr<MockDaemonProcess> daemon_process_;
   int terminal_id_ = 0;

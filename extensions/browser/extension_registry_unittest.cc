@@ -21,8 +21,9 @@ typedef testing::Test ExtensionRegistryTest;
 testing::AssertionResult HasSingleExtension(
     const ExtensionList& list,
     const scoped_refptr<const Extension>& extension) {
-  if (list.empty())
+  if (list.empty()) {
     return testing::AssertionFailure() << "No extensions in list";
+  }
   if (list.size() > 1) {
     return testing::AssertionFailure() << list.size()
                                        << " extensions, expected 1";
@@ -264,7 +265,7 @@ TEST_F(ExtensionRegistryTest, TerminatedExtensionStoredVersion) {
   ExtensionRegistry registry(nullptr);
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "Test")
                            .Set("version", kVersionString)
                            .Set("manifest_version", 2))
@@ -272,8 +273,7 @@ TEST_F(ExtensionRegistryTest, TerminatedExtensionStoredVersion) {
   const ExtensionId extension_id = extension->id();
 
   EXPECT_TRUE(registry.AddEnabled(extension));
-  EXPECT_FALSE(
-      registry.GetExtensionById(extension_id, ExtensionRegistry::TERMINATED));
+  EXPECT_FALSE(registry.terminated_extensions().GetByID(extension_id));
   {
     base::Version version = registry.GetStoredVersion(extension_id);
     ASSERT_TRUE(version.IsValid());
@@ -284,8 +284,7 @@ TEST_F(ExtensionRegistryTest, TerminatedExtensionStoredVersion) {
   // Simulate terminating |extension|.
   EXPECT_TRUE(registry.RemoveEnabled(extension_id));
   EXPECT_TRUE(registry.AddTerminated(extension));
-  EXPECT_TRUE(
-      registry.GetExtensionById(extension_id, ExtensionRegistry::TERMINATED));
+  EXPECT_TRUE(registry.terminated_extensions().GetByID(extension_id));
   {
     base::Version version = registry.GetStoredVersion(extension_id);
     ASSERT_TRUE(version.IsValid());

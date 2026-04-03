@@ -15,48 +15,94 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/eye_dropper.h"
 #include "content/public/browser/fullscreen_types.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/media_stream_request.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/preloading.h"
+#include "content/public/browser/preloading_trigger_type.h"
 #include "content/public/browser/preview_cancel_reason.h"
+#include "content/public/browser/select_audio_output_request.h"
 #include "content/public/browser/serial_chooser.h"
-#include "content/public/browser/web_contents.h"
+#include "content/public/browser/storage_partition_config.h"
 #include "content/public/common/window_container_type.mojom-forward.h"
-#include "third_party/blink/public/common/mediastream/media_stream_request.h"
+#include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/page/drag_operation.h"
 #include "third_party/blink/public/mojom/choosers/color_chooser.mojom-forward.h"
 #include "third_party/blink/public/mojom/frame/blocked_navigation_types.mojom.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom-forward.h"
+#include "third_party/blink/public/mojom/installedapp/related_application.mojom.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
+#include "third_party/blink/public/mojom/page/draggable_region.mojom-forward.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
-#include "ui/gfx/geometry/rect_f.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/scoped_java_ref.h"
+#include "content/public/browser/back_forward_transition_animation_manager.h"
+
+namespace base {
+class ScopedClosureRunner;
+}  // namespace base
+
+namespace base::android {
+class ScopedHardwareBufferHandle;
+}  // namespace base::android
+
 #endif
 
 class GURL;
 
 namespace base {
 class FilePath;
-template <typename T>
-class WeakPtr;
-}
+}  // namespace base
 
 namespace blink {
 namespace mojom {
 class FileChooserParams;
 class WindowFeatures;
+}  // namespace mojom
+}  // namespace blink
+
+namespace device {
+namespace mojom {
+class GeolocationContext;
 }
+}  // namespace device
+
+namespace gfx {
+class Rect;
+class RectF;
+class Size;
+}  // namespace gfx
+
+namespace input {
+struct NativeWebKeyboardEvent;
+}  // namespace input
+
+namespace ui {
+class Event;
+}
+
+namespace url {
+class Origin;
+}
+
+namespace blink {
+class WebGestureEvent;
+enum class ProtocolHandlerSecurityLevel;
 }  // namespace blink
 
 namespace content {
+
+class AudioStreamBrokerFactory;
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_APPLE)
 class ColorChooser;
 #endif
@@ -67,37 +113,12 @@ class RenderFrameHost;
 class RenderWidgetHost;
 class SessionStorageNamespace;
 class SiteInstance;
+class WebContents;
 struct ContextMenuParams;
 struct DropData;
-struct MediaPlayerWatchTime;
-struct NativeWebKeyboardEvent;
-struct Referrer;
-}  // namespace content
-
-namespace device {
-namespace mojom {
-class GeolocationContext;
-}
-}  // namespace device
-
-namespace gfx {
-class Rect;
-class Size;
-}
-
-namespace url {
-class Origin;
-}
-
-namespace blink {
-class WebGestureEvent;
-enum class ProtocolHandlerSecurityLevel;
-}
-
-namespace content {
-
-class AudioStreamBrokerFactory;
+struct MediaStreamRequest;
 struct OpenURLParams;
+struct Referrer;
 
 enum class KeyboardEventProcessingResult;
 
@@ -109,6 +130,12 @@ enum class PictureInPictureResult {
   // Picture-in-Picture is not supported by the embedder.
   kNotSupported,
 };
+
+#if BUILDFLAG(IS_ANDROID)
+using HardwareBufferResultCallback =
+    base::OnceCallback<void(base::android::ScopedHardwareBufferHandle,
+                            base::ScopedClosureRunner)>;
+#endif  // BUILDFLAG(IS_ANDROID)
 
 // Objects implement this interface to get notified about changes in the
 // WebContents and to provide necessary functionality. If a method doesn't
@@ -126,12 +153,18 @@ class CONTENT_EXPORT WebContentsDelegate {
   //
   // A nullptr source indicates the current tab (callers should probably use
   // OpenURL() for these cases which does it for you).
-
+  // If a `navigation_handle_callback` function is provided, it should be called
+  // ith the pending navigation (if any) when the navigation handle become
+  // available. This allows callers to observe or attach their specific data.
+  // This function may not be called if the navigation fails for any reason.
+  //
   // Returns the WebContents the URL is opened in, or nullptr if the URL wasn't
   // opened immediately. Note that the URL might be opened in another context
   // when a nullptr is returned.
-  virtual WebContents* OpenURLFromTab(WebContents* source,
-                                      const OpenURLParams& params);
+  virtual WebContents* OpenURLFromTab(
+      WebContents* source,
+      const OpenURLParams& params,
+      base::OnceCallback<void(NavigationHandle&)> navigation_handle_callback);
 
   // Allows the delegate to optionally cancel navigations that attempt to
   // transfer to a different process between the start of the network load and
@@ -157,17 +190,31 @@ class CONTENT_EXPORT WebContentsDelegate {
   // properties of the window. If `was_blocked` is non-nullptr, then
   // `*was_blocked` will be set to true if the popup gets blocked, and left
   // unchanged otherwise.
-  virtual void AddNewContents(
+  //
+  // Returns a web contents instance where navigation will happen. If the
+  // navigation has been captured by a different web contents that will be
+  // returned. Otherwise, this function may return `new_contents` or `nullptr`.
+  // TODO: crbug.com/361717755: Always return the web contents instance
+  // navigation will happen in, or nullptr otherwise.
+  virtual WebContents* AddNewContents(
       WebContents* source,
       std::unique_ptr<WebContents> new_contents,
       const GURL& target_url,
       WindowOpenDisposition disposition,
       const blink::mojom::WindowFeatures& window_features,
       bool user_gesture,
-      bool* was_blocked) {}
+      bool* was_blocked);
 
   // Selects the specified contents, bringing its container to the front.
   virtual void ActivateContents(WebContents* contents) {}
+
+  // A WebContents within a browser is considered active if it is the "active"
+  // tab in the browser's tab strip. A non-active WebContents cannot have focus,
+  // but it is possible for an active WebContents to not be focused if focus is
+  // elsewhere in the browser.Just because a WebContents is visible, doesn't
+  // mean it is active due to the SplitView feature. WebContents outside a
+  // browser are always considered active.
+  virtual bool IsContentsActive(WebContents* contents);
 
   // Notifies the delegate that this contents is starting or is done loading
   // some resource. The delegate should use this notification to represent
@@ -192,15 +239,11 @@ class CONTENT_EXPORT WebContentsDelegate {
   }
 
   // Notification that the target URL has changed.
-  virtual void UpdateTargetURL(WebContents* source,
-                               const GURL& url) {}
+  virtual void UpdateTargetURL(WebContents* source, const GURL& url) {}
 
-  // Notification that there was a mouse event, along with the type of event.
-  // If |motion| is true, this is a normal motion event. If |exited| is true,
-  // the pointer left the contents area.
-  virtual void ContentsMouseEvent(WebContents* source,
-                                  bool motion,
-                                  bool exited) {}
+  // Notification that a mouse `event` was dispatched to the WebContents's view.
+  virtual void ContentsMouseEvent(WebContents* source, const ui::Event& event) {
+  }
 
   // Request the delegate to change the zoom level of the current tab.
   virtual void ContentsZoomChange(bool zoom_in) {}
@@ -263,8 +306,7 @@ class CONTENT_EXPORT WebContentsDelegate {
   // This is called when WebKit tells us that it is done tabbing through
   // controls on the page. Provides a way for WebContentsDelegates to handle
   // this. Returns true if the delegate successfully handled it.
-  virtual bool TakeFocus(WebContents* source,
-                         bool reverse);
+  virtual bool TakeFocus(WebContents* source, bool reverse);
 
   // Asks the delegate if the given tab can download.
   // Invoking the |callback| synchronously is OK.
@@ -282,27 +324,35 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual bool HandleContextMenu(RenderFrameHost& render_frame_host,
                                  const ContextMenuParams& params);
 
+  // Allows delegates to handle mouse drag events before sending to the
+  // renderer. Returns true if the event was handled, false otherwise. A true
+  // value means no more processing should happen on the event. The default
+  // return value is false.
+  virtual void PreHandleDragUpdate(const DropData& drop_data,
+                                   const gfx::PointF& client_pt) {}
+  virtual void PreHandleDragExit() {}
+  virtual void HandleDragEnded() {}
+
   // Allows delegates to handle keyboard events before sending to the renderer.
   // See enum for description of return values.
   virtual KeyboardEventProcessingResult PreHandleKeyboardEvent(
       WebContents* source,
-      const NativeWebKeyboardEvent& event);
+      const input::NativeWebKeyboardEvent& event);
 
   // Allows delegates to handle unhandled keyboard messages coming back from
   // the renderer. Returns true if the event was handled, false otherwise. A
   // true value means no more processing should happen on the event. The default
   // return value is false
   virtual bool HandleKeyboardEvent(WebContents* source,
-                                   const NativeWebKeyboardEvent& event);
+                                   const input::NativeWebKeyboardEvent& event);
 
   // Allows delegates to handle gesture events before sending to the renderer.
   // Returns true if the |event| was handled and thus shouldn't be processed
   // by the renderer's event handler. Note that the touch events that create
   // the gesture are always passed to the renderer since the gesture is created
   // and dispatched after the touches return without being "preventDefault()"ed.
-  virtual bool PreHandleGestureEvent(
-      WebContents* source,
-      const blink::WebGestureEvent& event);
+  virtual bool PreHandleGestureEvent(WebContents* source,
+                                     const blink::WebGestureEvent& event);
 
   // Called when an external drag event enters the web contents window. Return
   // true to allow dragging and dropping on the web contents window or false to
@@ -324,6 +374,7 @@ class CONTENT_EXPORT WebContentsDelegate {
   // If an delegate returns true, it can optionally also override
   // CreateCustomWebContents() below to provide their own WebContents.
   virtual bool IsWebContentsCreationOverridden(
+      RenderFrameHost* opener,
       SiteInstance* source_site_instance,
       mojom::WindowContainerType window_container_type,
       const GURL& opener_url,
@@ -400,7 +451,7 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual JavaScriptDialogManager* GetJavaScriptDialogManager(
       WebContents* source);
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_APPLE)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   // Called when color chooser should open. Returns the opened color chooser.
   // Returns nullptr if we failed to open the color chooser. The color chooser
   // is supported/required for Android or iOS.
@@ -425,6 +476,11 @@ class CONTENT_EXPORT WebContentsDelegate {
                               scoped_refptr<FileSelectListener> listener,
                               const blink::mojom::FileChooserParams& params);
 
+#if BUILDFLAG(IS_ANDROID)
+  // Set to true if RunFileChooser() should be used for FileSystemAccess APIs.
+  virtual bool UseFileChooserForFileSystemAccess() const;
+#endif
+
   // Request to enumerate a directory.  This is equivalent to running the file
   // chooser in directory-enumeration mode and having the user select the given
   // directory.
@@ -441,32 +497,30 @@ class CONTENT_EXPORT WebContentsDelegate {
                                base::OnceCallback<void()> on_confirm,
                                base::OnceCallback<void()> on_cancel);
 
-  // Returns whether the RFH can use Additional Windowing Controls (AWC) APIs.
-  // https://github.com/ivansandrk/additional-windowing-controls/blob/main/awc-explainer.md
-  virtual bool CanUseWindowingControls(RenderFrameHost* requesting_frame);
-
-  // Notifies `BrowserView` about the resizable boolean having been set vith
-  // `window.setResizable(bool)` API.
-  virtual void OnCanResizeFromWebAPIChanged() {}
   // Returns the overall resizability of the `BrowserView` when considering
   // both the value set by the AWC API and browser's "native" resizability.
   virtual bool GetCanResize();
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  // Returns whether the RFH can use Additional Windowing Controls (AWC) APIs.
+  // https://github.com/explainers-by-googlers/additional-windowing-controls/blob/main/README.md
+  virtual bool CanUseWindowingControls(RenderFrameHost* requesting_frame);
 
   // Additional Windowing Controls (AWC) APIs to change the state of the window
   // without the browser's min/max/restore buttons.
   virtual void MinimizeFromWebAPI() {}
   virtual void MaximizeFromWebAPI() {}
   virtual void RestoreFromWebAPI() {}
+  virtual void SetResizableFromWebAPI(bool resizable) {}
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
   // This returns the current state of the window, mappable to display-state
   // values: normal/minimized/maximized/fullscreen.
-  virtual ui::WindowShowState GetWindowShowState() const;
+  virtual ui::mojom::WindowShowState GetWindowShowState() const;
 
   // Returns whether entering fullscreen with |EnterFullscreenModeForTab()| is
   // allowed.
-  virtual bool CanEnterFullscreenModeForTab(
-      RenderFrameHost* requesting_frame,
-      const blink::mojom::FullscreenOptions& options);
+  virtual bool CanEnterFullscreenModeForTab(RenderFrameHost* requesting_frame);
 
   // Called when the renderer puts a tab into fullscreen mode.
   // |requesting_frame| is the specific content frame requesting fullscreen.
@@ -554,6 +608,10 @@ class CONTENT_EXPORT WebContentsDelegate {
   // Notification that the page has lost the pointer lock.
   virtual void LostPointerLock() {}
 
+  // Returns true if we are waiting for the user to make a selection on the
+  // pointer lock permission request dialog.
+  virtual bool IsWaitingForPointerLockPrompt(WebContents* web_contents);
+
   // Requests keyboard lock. Once the request is approved or rejected,
   // GotResponseToKeyboardLockRequest() will be called on |web_contents|.
   virtual void RequestKeyboardLock(WebContents* web_contents,
@@ -570,6 +628,13 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual void RequestMediaAccessPermission(WebContents* web_contents,
                                             const MediaStreamRequest& request,
                                             MediaResponseCallback callback);
+
+  // Handles a request to select an audio output device.
+  // If permission is granted, a call should be made to the provided |callback|
+  // with the result. If the operation is not supported, the callback should
+  // be invoked with an appropriate error.
+  virtual void ProcessSelectAudioOutput(const SelectAudioOutputRequest& request,
+                                        SelectAudioOutputCallback callback);
 
   // Checks if we have permission to access the microphone or camera. Note that
   // this does not query the user. |type| must be MEDIA_DEVICE_AUDIO_CAPTURE
@@ -609,10 +674,6 @@ class CONTENT_EXPORT WebContentsDelegate {
   // used.
   virtual gfx::Size GetSizeForNewRenderView(WebContents* web_contents);
 
-  // Returns true if the WebContents is never user-visible, thus the renderer
-  // never needs to produce pixels for display.
-  virtual bool IsNeverComposited(WebContents* web_contents);
-
   // Askss |guest_web_contents| to perform the same. If this returns true, the
   // default behavior is suppressed.
   virtual bool GuestSaveFrame(WebContents* guest_web_contents);
@@ -626,13 +687,11 @@ class CONTENT_EXPORT WebContentsDelegate {
   // Called when a suspicious navigation of the main frame has been blocked.
   // Allows the delegate to provide some UI to let the user know about the
   // blocked navigation and give them the option to recover from it.
-  // |blocked_url| is the blocked navigation target, |initiator_url| is the URL
-  // of the frame initiating the navigation, |reason| specifies why the
-  // navigation was blocked.
+  // |blocked_url| is the blocked navigation target, and |reason| specifies why
+  // the navigation was blocked.
   virtual void OnDidBlockNavigation(
       WebContents* web_contents,
       const GURL& blocked_url,
-      const GURL& initiator_url,
       blink::mojom::NavigationBlockedReason reason) {}
 
   // Reports that passive mixed content was found at the specified url.
@@ -699,6 +758,17 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual PictureInPictureResult EnterPictureInPicture(
       WebContents* web_contents);
 
+  // Returns the bounds of the window that this `WebContents` is contained
+  // within, if it exists, `std::nullopt` otherwise.
+  //
+  // The exact rectangle returned is operating system dependent. Implementations
+  // should return the bounds of the native window as reported by the OS. This
+  // may or may not include window decorations rendered by the OS compositor,
+  // such as shadows. For example, Linux includes shadows in the window rect,
+  // whereas macOS does not. Callers should not make bounds assumptions
+  // regarding such visual effects.
+  virtual std::optional<gfx::Rect> GetWindowBoundsInScreen();
+
   // Updates the Picture-in-Picture controller with a signal that
   // Picture-in-Picture mode has ended.
   virtual void ExitPictureInPicture() {}
@@ -716,46 +786,45 @@ class CONTENT_EXPORT WebContentsDelegate {
 
   // Return true if the back forward cache is supported. This is not an
   // indication that the cache will be used.
-  virtual bool IsBackForwardCacheSupported();
+  virtual bool IsBackForwardCacheSupported(WebContents& web_contents);
 
   // Returns PreloadingEligibility::kEligible if Prerender2 (see
   // content/browser/preloading/prerender/README.md for details) is supported.
   // If it is not supported, returns the reason.
   virtual PreloadingEligibility IsPrerender2Supported(
-      WebContents& web_contents);
+      WebContents& web_contents,
+      PreloadingTriggerType trigger_type);
 
-  // Returns whether to override user agent for prerendering navigation.
+  // Returns how many prerendering can be triggered by
+  // WebContents::StartPrerendering().
+  virtual int AllowedPrerenderingCount(WebContents& web_contents);
+
+  // Returns whether to override user agent for prerendering navigation. `url`
+  // is the target URL of the request. This function can be called repeatedly
+  // for each URL in the redirect chain.
   virtual NavigationController::UserAgentOverrideOption
-  ShouldOverrideUserAgentForPrerender2();
+  ShouldOverrideUserAgentForPreloading(const GURL& url);
 
-  // If |old_contents| is being inspected by a DevTools window, it updates the
-  // window to inspect |new_contents| instead and calls |callback| after it
-  // finishes asynchronously. If no window is present, or no update is
-  // necessary, |callback| is run synchronously (immediately on the same stack).
+  // Returns true if the embedder allows initiator and transition type mismatch
+  // for prerender activation navigations that are embedder-initiated and have
+  // no initiators.
   //
-  // TODO(crbug.com/1498140): This has no remaining call sites and can be
-  // removed.
-  virtual void UpdateInspectedWebContentsIfNecessary(
-      WebContents* old_contents,
-      WebContents* new_contents,
-      base::OnceCallback<void()> callback);
+  // This relaxation is mainly for Android WebView (speculationrules +
+  // `WebView.loadUrl`), as WebView is intended to host embedder-trusted
+  // contents.
+  virtual bool ShouldAllowPartialParamMismatchOfPrerender2(
+      NavigationHandle& navigation_handle);
 
   // Returns true if the widget's frame content needs to be stored before
   // eviction and displayed until a new frame is generated. If false, a white
   // solid color is displayed instead.
   virtual bool ShouldShowStaleContentOnEviction(WebContents* source);
 
-  // Invoked when media playback is interrupted or completed.
-  virtual void MediaWatchTimeChanged(const MediaPlayerWatchTime& watch_time) {}
-
   // Returns a  InstalledWebappGeolocationContext if this web content is running
   // in a installed webapp and geolocation should be deleagted from the
   // installed webapp; otherwise returns nullptr.
   virtual device::mojom::GeolocationContext*
   GetInstalledWebappGeolocationContext();
-
-  // Returns a weak ptr to the web contents delegate.
-  virtual base::WeakPtr<WebContentsDelegate> GetDelegateWeakPtr();
 
   // Whether the WebContents is privileged.
   // It's used to prevent drag and drop between privileged and non-privileged
@@ -773,17 +842,93 @@ class CONTENT_EXPORT WebContentsDelegate {
   // intercept.
   virtual void DidChangeCloseSignalInterceptStatus() {}
 
-  // Report that cancellation occurred in preview navigation.
+  // Reports that cancellation occurred in preview navigation.
   virtual void CancelPreview(PreviewCancelReason reason) {}
 
-  // Notify the previewed page is activated.
+  // Notifies the previewed page is activated.
   virtual void DidActivatePreviewedPage() {}
+
+  // Updates the draggable regions defined by the app-region CSS property.
+  virtual void DraggableRegionsChanged(
+      const std::vector<blink::mojom::DraggableRegionPtr>& regions,
+      WebContents* contents) {}
 
 #if !BUILDFLAG(IS_ANDROID)
   // Whether the WebContents should use per PWA instanced
   // system media controls.
   virtual bool ShouldUseInstancedSystemMediaControls() const;
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+  // Allow delegate to override how to take a bitmap snapshot of this
+  // WebContents. Return true if the delegate will execute callback with a
+  // captured bitmap of the committed navigation entry. The callback will ensure
+  // the bitmap is associated with the correct NavigationEntry and it must be
+  // dispatched asynchronously (with an empty bitmap if the capture fails) if
+  // and only if this returns true. And  If the embedder returns false, the
+  // caller within content/ will associate the currently committed entry with a
+  // bitmap of the rendered web page. Note that it's the embedder's
+  // responsibility for capturing the visible content at the time of this call,
+  // though it can invoke the callback with the bitmap asynchronously, at a
+  // later time.
+  virtual bool MaybeCopyContentAreaAsBitmap(
+      base::OnceCallback<void(const SkBitmap&)> callback);
+
+  // Gets the page content annotations for the given WebContents.
+  // The callback gets a serialized AnnotatedPageContent proto.
+  virtual void GetAIPageContent(
+      WebContents* web_contents,
+      bool include_actionable_elements,
+      base::OnceCallback<void(const std::string&)> callback);
+
+#if BUILDFLAG(IS_ANDROID)
+  // Allow delegate to override how to take a snapshot of this WebContents into
+  // a HardwareBuffer. Return true if the delegate will execute callback with a
+  // captured buffer of the committed navigation entry. The callback also
+  // receives a clean up callback that the invoker can call when it's done using
+  // the buffer. The callback will ensure the HardwareBuffer is associated with
+  // the correct NavigationEntry and it must be dispatched asynchronously (with
+  // an empty buffer if the capture fails) if and only if this returns true. And
+  // If the embedder returns false, the caller within content/ will associate
+  // the currently committed entry with a buffer of the rendered web page. Note
+  // that it's the embedder's responsibility for capturing the visible content
+  // at the time of this call, though it can invoke the callback with the buffer
+  // asynchronously, at a later time.
+  virtual bool MaybeCopyContentAreaAsHardwareBuffer(
+      HardwareBufferResultCallback callback);
+
+  // Synchronous version of |MaybeCopyContentAreaAsBitmap|. Return an
+  // empty bitmap if embedder is not showing any custom view.
+  virtual SkBitmap MaybeCopyContentAreaAsBitmapSync();
+
+  // Return an icon to use for privileged internal pages, if no screenshot of
+  // the page is available during back forward transition animations. An empty
+  // bitmap can be returned if the embedder wants to leave the preview empty.
+  virtual SkBitmap GetBackForwardTransitionFallbackUXInternalPageIcon();
+
+  // Notifies the delegate that the back forward transition animation state
+  // has changed. If necessary, the delegate should use this notification to
+  // hold on its animation until the back forward transition has completed.
+  virtual void DidBackForwardTransitionAnimationChange() {}
+
+  // Asks the embedder for the configuration used to compose a fallback UX, for
+  // navigation transitions.
+  virtual BackForwardTransitionAnimationManager::FallbackUXConfig
+  GetBackForwardTransitionFallbackUXConfig();
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  // Returns the saved related_applications web app manifest field associated
+  // with the given `web_contents`. The information is saved via the
+  // installation of a web app, where the url of the `web_contents` is in-scope
+  // of an installed web app. Returns an empty vector if `web_contents` is not
+  // associated with an installed web app or `related_applications` is empty.
+  // See:
+  // https://wicg.github.io/manifest-incubations/index.html#related_applications-member
+  virtual std::vector<blink::mojom::RelatedApplicationPtr>
+  GetSavedRelatedApplications(WebContents* web_contents);
+
+  // If this returns non-null, overrides the behavior of
+  // WebContents::GetResponsibleWebContents.
+  virtual WebContents* GetResponsibleWebContents(WebContents* web_contents);
 
  protected:
   virtual ~WebContentsDelegate();

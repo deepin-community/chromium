@@ -5,6 +5,7 @@
 #include "ash/ambient/ui/media_string_view.h"
 
 #include <string>
+#include <string_view>
 
 #include "ash/ambient/ambient_constants.h"
 #include "ash/ambient/test/ambient_ash_test_base.h"
@@ -15,7 +16,7 @@
 #include "services/media_session/public/mojom/media_session.mojom.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/test/views_test_utils.h"
 
@@ -37,7 +38,7 @@ class MediaStringViewTest : public AmbientAshTestBase {
     AmbientAshTestBase::TearDown();
   }
 
-  const std::u16string& GetText() {
+  std::u16string_view GetText() {
     return GetMediaStringViewTextLabel()->GetText();
   }
 };
@@ -66,9 +67,15 @@ TEST_F(MediaStringViewTest, TextContainerFitsWidthOfShortText) {
 
   SimulateMediaMetadataChanged(metadata);
 
-  EXPECT_LT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_LT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
-  EXPECT_EQ(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_EQ(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             GetMediaStringViewTextContainer()->GetPreferredSize().width());
 }
 
@@ -82,15 +89,18 @@ TEST_F(MediaStringViewTest, TextContainerHasMaxWidthWithLongText) {
 
   SimulateMediaMetadataChanged(metadata);
 
-  EXPECT_GT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_GT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
   EXPECT_EQ(kMediaStringMaxWidthDip,
             GetMediaStringViewTextContainer()->GetPreferredSize().width());
 }
 
 TEST_F(MediaStringViewTest, HasNoAnimationWithShortText) {
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
 
   SetAmbientShownAndWaitForWidgets();
 
@@ -103,7 +113,10 @@ TEST_F(MediaStringViewTest, HasNoAnimationWithShortText) {
       media_session::mojom::MediaPlaybackState::kPlaying);
   SimulateMediaMetadataChanged(metadata);
 
-  EXPECT_LT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_LT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
 
   EXPECT_FALSE(
@@ -114,8 +127,8 @@ TEST_F(MediaStringViewTest, HasNoAnimationWithShortText) {
 }
 
 TEST_F(MediaStringViewTest, HasAnimationWithLongText) {
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
 
   SetAmbientShownAndWaitForWidgets();
 
@@ -128,7 +141,10 @@ TEST_F(MediaStringViewTest, HasAnimationWithLongText) {
       media_session::mojom::MediaPlaybackState::kPlaying);
   SimulateMediaMetadataChanged(metadata);
 
-  EXPECT_GT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_GT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
 
   EXPECT_FALSE(
@@ -139,8 +155,8 @@ TEST_F(MediaStringViewTest, HasAnimationWithLongText) {
 }
 
 TEST_F(MediaStringViewTest, ShouldStopAndStartAnimationWhenTextChanges) {
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
 
   SetAmbientShownAndWaitForWidgets();
 
@@ -153,7 +169,10 @@ TEST_F(MediaStringViewTest, ShouldStopAndStartAnimationWhenTextChanges) {
       media_session::mojom::MediaPlaybackState::kPlaying);
   SimulateMediaMetadataChanged(metadata);
 
-  EXPECT_GT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_GT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
 
   EXPECT_FALSE(
@@ -167,7 +186,10 @@ TEST_F(MediaStringViewTest, ShouldStopAndStartAnimationWhenTextChanges) {
   metadata.artist = u"Another super duper long artist name";
   SimulateMediaMetadataChanged(metadata);
 
-  EXPECT_GT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_GT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
 
   EXPECT_FALSE(
@@ -178,8 +200,8 @@ TEST_F(MediaStringViewTest, ShouldStopAndStartAnimationWhenTextChanges) {
 }
 
 TEST_F(MediaStringViewTest, ShouldStartAndStopAnimationWhenTextChanges) {
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
 
   SetAmbientShownAndWaitForWidgets();
 
@@ -192,7 +214,10 @@ TEST_F(MediaStringViewTest, ShouldStartAndStopAnimationWhenTextChanges) {
       media_session::mojom::MediaPlaybackState::kPlaying);
   SimulateMediaMetadataChanged(metadata);
 
-  EXPECT_LT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_LT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
 
   EXPECT_FALSE(
@@ -206,7 +231,10 @@ TEST_F(MediaStringViewTest, ShouldStartAndStopAnimationWhenTextChanges) {
   metadata.artist = u"A super duper long artist name";
   SimulateMediaMetadataChanged(metadata);
 
-  EXPECT_GT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_GT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
 
   EXPECT_FALSE(
@@ -220,7 +248,10 @@ TEST_F(MediaStringViewTest, ShouldStartAndStopAnimationWhenTextChanges) {
   metadata.artist = u"name";
   SimulateMediaMetadataChanged(metadata);
 
-  EXPECT_LT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_LT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
 
   EXPECT_FALSE(
@@ -231,8 +262,8 @@ TEST_F(MediaStringViewTest, ShouldStartAndStopAnimationWhenTextChanges) {
 }
 
 TEST_F(MediaStringViewTest, PauseMediaWillNotStopAnimationWithLongText) {
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
 
   SetAmbientShownAndWaitForWidgets();
 
@@ -245,7 +276,10 @@ TEST_F(MediaStringViewTest, PauseMediaWillNotStopAnimationWithLongText) {
       media_session::mojom::MediaPlaybackState::kPlaying);
   SimulateMediaMetadataChanged(metadata);
 
-  EXPECT_GT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_GT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
 
   EXPECT_FALSE(
@@ -276,7 +310,10 @@ TEST_F(MediaStringViewTest, HasNoMaskLayerWithShortText) {
   for (auto* view : GetContainerViews())
     views::test::RunScheduledLayout(view);
 
-  EXPECT_LT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_LT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
   EXPECT_TRUE(
       GetMediaStringViewTextContainer()->layer()->gradient_mask().IsEmpty());
@@ -297,7 +334,10 @@ TEST_F(MediaStringViewTest, HasMaskLayerWithLongText) {
   for (auto* view : GetContainerViews())
     views::test::RunScheduledLayout(view);
 
-  EXPECT_GT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_GT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
   EXPECT_FALSE(
       GetMediaStringViewTextContainer()->layer()->gradient_mask().IsEmpty());
@@ -318,7 +358,10 @@ TEST_F(MediaStringViewTest, MaskLayerShouldUpdate) {
   for (auto* view : GetContainerViews())
     views::test::RunScheduledLayout(view);
 
-  EXPECT_LT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_LT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
   EXPECT_TRUE(
       GetMediaStringViewTextContainer()->layer()->gradient_mask().IsEmpty());
@@ -332,7 +375,10 @@ TEST_F(MediaStringViewTest, MaskLayerShouldUpdate) {
   for (auto* view : GetContainerViews())
     views::test::RunScheduledLayout(view);
 
-  EXPECT_GT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_GT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
   EXPECT_FALSE(
       GetMediaStringViewTextContainer()->layer()->gradient_mask().IsEmpty());
@@ -346,7 +392,10 @@ TEST_F(MediaStringViewTest, MaskLayerShouldUpdate) {
   for (auto* view : GetContainerViews())
     views::test::RunScheduledLayout(view);
 
-  EXPECT_LT(GetMediaStringViewTextLabel()->GetPreferredSize().width(),
+  EXPECT_LT(GetMediaStringViewTextLabel()
+                ->GetPreferredSize(views::SizeBounds(
+                    GetMediaStringViewTextLabel()->width(), {}))
+                .width(),
             kMediaStringMaxWidthDip);
   EXPECT_TRUE(
       GetMediaStringViewTextContainer()->layer()->gradient_mask().IsEmpty());

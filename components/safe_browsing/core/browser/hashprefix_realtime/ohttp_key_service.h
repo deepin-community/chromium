@@ -5,7 +5,9 @@
 #ifndef COMPONENTS_SAFE_BROWSING_CORE_BROWSER_HASHPREFIX_REALTIME_OHTTP_KEY_SERVICE_H_
 #define COMPONENTS_SAFE_BROWSING_CORE_BROWSER_HASHPREFIX_REALTIME_OHTTP_KEY_SERVICE_H_
 
+#include <list>
 #include <optional>
+#include <string>
 
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
@@ -64,7 +66,10 @@ class OhttpKeyService : public KeyedService {
 
   OhttpKeyService(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      PrefService* pref_service);
+      PrefService* pref_service,
+      PrefService* local_state,
+      base::RepeatingCallback<std::optional<std::string>()> country_getter,
+      bool are_background_lookups_allowed);
 
   OhttpKeyService(const OhttpKeyService&) = delete;
   OhttpKeyService& operator=(const OhttpKeyService&) = delete;
@@ -111,7 +116,7 @@ class OhttpKeyService : public KeyedService {
   // Called when the response from the Safe Browsing key hosting endpoint is
   // received.
   void OnURLLoaderComplete(base::TimeTicks request_start_time,
-                           std::unique_ptr<std::string> response_body);
+                           std::optional<std::string> response_body);
 
   // Async workflow:
   // Starts to fetch a new key if the current key is close to expiration.
@@ -140,14 +145,37 @@ class OhttpKeyService : public KeyedService {
   // |ohttp_key_|.
   void StoreKeyToPref();
 
+  // Calls all pending callbacks with |ohttp_key|.
+  void NotifyPendingCallbacks(std::optional<std::string> ohttp_key);
+  // Calls all pending callbacks whose |timeout_time| is in the past with
+  // |nullopt|.
+  void PendingCallbacksTimerFired();
+
   // The URLLoaderFactory we use to issue a network request.
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   // |url_loader_| is not null iff there is a network request in progress.
   std::unique_ptr<network::SimpleURLLoader> url_loader_;
 
+  // Represents a |GetOhttpKey| callback with an associated timeout.
+  struct PendingCallback {
+    Callback callback;
+    // If set, time at which the callback will be called with |nullopt| if no
+    // response has been received yet.
+    std::optional<base::TimeTicks> timeout_time;
+
+    PendingCallback();
+    ~PendingCallback();
+    PendingCallback(const PendingCallback&) = delete;
+    PendingCallback& operator=(const PendingCallback&) = delete;
+    PendingCallback(PendingCallback&& other);
+    PendingCallback& operator=(PendingCallback&& other) = delete;
+  };
+
   // All callbacks that have requested an OHTTP key but haven't received a
-  // response yet.
-  base::OnceCallbackList<Callback::RunType> pending_callbacks_;
+  // response yet. Ordered such that the front of the list will fire first.
+  std::list<PendingCallback> pending_callbacks_;
+  // Timer that will fire on the next pending callback timeout time.
+  base::DeadlineTimer pending_callbacks_timer_;
 
   // The key cached in memory.
   std::optional<OhttpKeyAndExpiration> ohttp_key_;
@@ -156,8 +184,13 @@ class OhttpKeyService : public KeyedService {
   // the OHTTP key service.
   raw_ptr<PrefService> pref_service_;
 
-  // Observes changes prefs that configure whether the service is enabled.
+  // Observes changes to profile prefs that configure whether the service is
+  // enabled.
   PrefChangeRegistrar pref_change_registrar_;
+
+  // Observes changes to local state prefs that configure whether the service is
+  // enabled.
+  PrefChangeRegistrar local_state_pref_change_registrar_;
 
   // Keeps track of the state of the service. It's enabled when standard
   // protection is on and the policy kHashPrefixRealTimeChecksAllowedByPolicy
@@ -173,6 +206,18 @@ class OhttpKeyService : public KeyedService {
 
   // Helper object that manages backoff state.
   std::unique_ptr<BackoffOperator> backoff_operator_;
+
+  // Callback used to help determine if the service should be enabled.
+  base::RepeatingCallback<std::optional<std::string>()> country_getter_;
+
+  // Indicates whether a lookup response has been received using the current
+  // |ohttp_key_|. Set to false when a new key is obtained. Set back to true
+  // when the first response is received using this key. Used for logging
+  // metrics.
+  bool has_received_lookup_response_from_current_key_ = true;
+
+  // Determines whether a background HPRT lookup can be sent.
+  bool are_background_lookups_allowed_;
 
   base::WeakPtrFactory<OhttpKeyService> weak_factory_{this};
 };

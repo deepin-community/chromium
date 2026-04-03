@@ -7,33 +7,50 @@
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/features.h"
+
 namespace mojo {
 
-bool StructTraits<
-    mojo_base::mojom::DictionaryValueDataView,
-    base::Value::Dict>::Read(mojo_base::mojom::DictionaryValueDataView data,
-                             base::Value::Dict* out) {
+bool StructTraits<mojo_base::mojom::DictionaryValueDataView, base::DictValue>::
+    Read(mojo_base::mojom::DictionaryValueDataView data, base::DictValue* out) {
   mojo::MapDataView<mojo::StringDataView, mojo_base::mojom::ValueDataView> view;
   data.GetStorageDataView(&view);
+
+  if (base::features::IsReducePPMsEnabled()) {
+    out->reserve(view.size());
+  }
+
   for (size_t i = 0; i < view.size(); ++i) {
     std::string_view key;
     base::Value value;
-    if (!view.keys().Read(i, &key) || !view.values().Read(i, &value))
+    if (!view.keys().Read(i, &key) || !view.values().Read(i, &value)) {
       return false;
-    out->Set(key, std::move(value));
+    }
+    if (base::features::IsReducePPMsEnabled()) {
+      out->Set_HintAtEnd(key, std::move(value));
+    } else {
+      out->Set(key, std::move(value));
+    }
   }
   return true;
 }
 
-bool StructTraits<mojo_base::mojom::ListValueDataView, base::Value::List>::Read(
+bool StructTraits<mojo_base::mojom::ListValueDataView, base::ListValue>::Read(
     mojo_base::mojom::ListValueDataView data,
-    base::Value::List* out) {
+    base::ListValue* out) {
   mojo::ArrayDataView<mojo_base::mojom::ValueDataView> view;
   data.GetStorageDataView(&view);
+
+  if (base::features::IsReducePPMsEnabled()) {
+    out->reserve(view.size());
+  }
+
   base::Value element;
   for (size_t i = 0; i < view.size(); ++i) {
-    if (!view.Read(i, &element))
+    if (!view.Read(i, &element)) {
       return false;
+    }
     out->Append(std::move(element));
   }
   return true;
@@ -61,8 +78,9 @@ bool UnionTraits<mojo_base::mojom::ValueDataView, base::Value>::Read(
     }
     case mojo_base::mojom::ValueDataView::Tag::kStringValue: {
       std::string_view string_piece;
-      if (!data.ReadStringValue(&string_piece))
+      if (!data.ReadStringValue(&string_piece)) {
         return false;
+      }
       *value_out = base::Value(string_piece);
       return true;
     }
@@ -72,21 +90,23 @@ bool UnionTraits<mojo_base::mojom::ValueDataView, base::Value>::Read(
       const char* data_pointer =
           reinterpret_cast<const char*>(binary_data_view.data());
       base::Value::BlobStorage blob_storage(
-          data_pointer, data_pointer + binary_data_view.size());
+          data_pointer, UNSAFE_TODO(data_pointer + binary_data_view.size()));
       *value_out = base::Value(std::move(blob_storage));
       return true;
     }
     case mojo_base::mojom::ValueDataView::Tag::kDictionaryValue: {
-      base::Value::Dict dict;
-      if (!data.ReadDictionaryValue(&dict))
+      base::DictValue dict;
+      if (!data.ReadDictionaryValue(&dict)) {
         return false;
+      }
       *value_out = base::Value(std::move(dict));
       return true;
     }
     case mojo_base::mojom::ValueDataView::Tag::kListValue: {
-      base::Value::List list;
-      if (!data.ReadListValue(&list))
+      base::ListValue list;
+      if (!data.ReadListValue(&list)) {
         return false;
+      }
       *value_out = base::Value(std::move(list));
       return true;
     }

@@ -15,13 +15,27 @@ limitations under the License.
 
 #include "tensorflow/compiler/tf2xla/resource_util.h"
 
+#include <optional>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "tensorflow/compiler/tf2xla/resource_operation_table.h"
 #include "xla/status_macros.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "tensorflow/core/common_runtime/function_body.h"
+#include "tensorflow/core/common_runtime/function_utils.h"
+#include "tensorflow/core/framework/function.h"
+#include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/graph/algorithm.h"
 #include "tensorflow/core/graph/graph.h"
 #include "tensorflow/core/lib/core/errors.h"
@@ -41,7 +55,7 @@ const char kRetvalOp[] = "_Retval";
 
 const int kMaxCallDepth = 100;
 
-Status AnalyzeResourceUsage(
+absl::Status AnalyzeResourceUsage(
     const Graph* graph, const std::optional<std::string>& function_name,
     const int call_depth, const absl::flat_hash_set<int>& resource_arg_indices,
     FunctionLibraryRuntime* lib_runtime,
@@ -55,8 +69,8 @@ bool IsControlFlowV1Node(const Node* n) {
 }
 
 // TODO(ycao): Add this as Tensorflow Node method.
-StatusOr<absl::InlinedVector<const Edge*, 1>> OutputEdgesByIndex(const Node& n,
-                                                                 int idx) {
+absl::StatusOr<absl::InlinedVector<const Edge*, 1>> OutputEdgesByIndex(
+    const Node& n, int idx) {
   absl::InlinedVector<const Edge*, 1> res;
   if (idx >= n.num_outputs()) {
     return errors::InvalidArgument("Invalid out_edge index: ", idx, ", Node ",
@@ -95,7 +109,7 @@ void PropagateFromStackOrTensorArraySourceOp(
   }
 }
 
-Status PropagateFromArgOp(
+absl::Status PropagateFromArgOp(
     const Node& n, const std::optional<std::string>& function_name,
     const absl::flat_hash_set<int>& resource_arg_indices,
     absl::flat_hash_map<const Edge*, ResourceUsageAnalysis::NodeInfo>*
@@ -125,7 +139,7 @@ Status PropagateFromArgOp(
   return absl::OkStatus();
 }
 
-Status UpdateResourceUsageFromFunctionBodyAnalysis(
+absl::Status UpdateResourceUsageFromFunctionBodyAnalysis(
     const Node& call_node,
     const std::optional<absl::string_view>& caller_function_name,
     const FunctionBody& fbody,
@@ -179,7 +193,7 @@ Status UpdateResourceUsageFromFunctionBodyAnalysis(
   return absl::OkStatus();
 }
 
-Status PropagateThroughCallOp(
+absl::Status PropagateThroughCallOp(
     const Node& n, const std::optional<std::string>& function_name,
     const int call_depth, FunctionLibraryRuntime* lib_runtime,
     absl::flat_hash_map<const Edge*, ResourceUsageAnalysis::NodeInfo>*
@@ -204,8 +218,8 @@ Status PropagateThroughCallOp(
   // Instantiate associated function to get function body.
   FunctionLibraryRuntime::Handle handle;
   TF_RETURN_IF_ERROR(InstantiateFunctionCall(n.def(), lib_runtime, &handle));
-  auto release_handle_on_return = gtl::MakeCleanup(
-      [&] { TF_CHECK_OK(lib_runtime->ReleaseHandle(handle)); });
+  auto release_handle_on_return =
+      gtl::MakeCleanup([&] { CHECK_OK(lib_runtime->ReleaseHandle(handle)); });
   const FunctionBody* fbody = lib_runtime->GetFunctionBody(handle);
 
   // Recursively analyze called function for resource sources and users.
@@ -223,7 +237,7 @@ Status PropagateThroughCallOp(
 }
 
 // Analyzes pass through values for Identity and IdentityN ops.
-Status PropagateThroughIdentityOp(
+absl::Status PropagateThroughIdentityOp(
     const Node& n,
     absl::flat_hash_map<const Edge*, ResourceUsageAnalysis::NodeInfo>*
         user_to_source) {
@@ -249,7 +263,7 @@ Status PropagateThroughIdentityOp(
   return absl::OkStatus();
 }
 
-Status AnalyzeResourceUsage(
+absl::Status AnalyzeResourceUsage(
     const Graph* graph, const std::optional<std::string>& function_name,
     const int call_depth, const absl::flat_hash_set<int>& resource_arg_indices,
     FunctionLibraryRuntime* lib_runtime,
@@ -318,7 +332,7 @@ Status AnalyzeResourceUsage(
 
 }  // anonymous namespace
 
-/*Static*/ Status ResourceUsageAnalysis::Analyze(
+/*Static*/ absl::Status ResourceUsageAnalysis::Analyze(
     const Graph* graph, FunctionLibraryRuntime* lib_runtime,
     absl::flat_hash_map<NodeInfo, absl::flat_hash_set<NodeInfo>>*
         source_to_path) {

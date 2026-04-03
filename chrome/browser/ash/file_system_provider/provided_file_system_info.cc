@@ -62,14 +62,6 @@ std::string ProviderId::ToString() const {
   }
 }
 
-bool ProviderId::operator==(const ProviderId& other) const {
-  return type_ == other.type_ && internal_id_ == other.internal_id_;
-}
-
-bool ProviderId::operator!=(const ProviderId& other) const {
-  return !operator==(other);
-}
-
 bool ProviderId::operator<(const ProviderId& other) const {
   return std::tie(type_, internal_id_) <
          std::tie(other.type_, other.internal_id_);
@@ -148,5 +140,19 @@ ProvidedFileSystemInfo::ProvidedFileSystemInfo(
     const ProvidedFileSystemInfo& other) = default;
 
 ProvidedFileSystemInfo::~ProvidedFileSystemInfo() = default;
+
+bool ProvidedFileSystemInfo::operator==(
+    const ProvidedFileSystemInfo& other) const {
+  return provider_id() == other.provider_id() &&
+         file_system_id() == other.file_system_id() &&
+         display_name() == other.display_name() &&
+         writable() == other.writable() &&
+         supports_notify_tag() == other.supports_notify_tag() &&
+         opened_files_limit() == other.opened_files_limit() &&
+         mount_path() == other.mount_path() &&
+         configurable() == other.configurable() &&
+         watchable() == other.watchable() && source() == other.source() &&
+         icon_set() == other.icon_set() && cache_type() == other.cache_type();
+}
 
 }  // namespace ash::file_system_provider

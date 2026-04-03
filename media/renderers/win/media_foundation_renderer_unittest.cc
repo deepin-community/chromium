@@ -122,8 +122,6 @@ class MediaFoundationRendererTest : public testing::Test {
     EXPECT_CALL(media_resource_, GetAllStreams())
         .WillRepeatedly(
             Invoke(this, &MediaFoundationRendererTest::GetAllStreams));
-    EXPECT_CALL(media_resource_, GetType())
-        .WillRepeatedly(Return(MediaResource::Type::kStream));
   }
 
   ~MediaFoundationRendererTest() override { mf_renderer_.reset(); }
@@ -132,8 +130,8 @@ class MediaFoundationRendererTest : public testing::Test {
     streams_.push_back(CreateMockDemuxerStream(type, encrypted));
   }
 
-  std::vector<raw_ptr<DemuxerStream, VectorExperimental>> GetAllStreams() {
-    std::vector<raw_ptr<DemuxerStream, VectorExperimental>> streams;
+  std::vector<DemuxerStream*> GetAllStreams() {
+    std::vector<DemuxerStream*> streams;
 
     for (auto& stream : streams_) {
       streams.push_back(stream.get());
@@ -229,30 +227,6 @@ TEST_F(MediaFoundationRendererTest, DirectCompositionHandle) {
   mf_renderer_->GetDCompSurface(get_dcomp_surface_cb.Get());
 
   task_environment_.RunUntilIdle();
-}
-
-TEST_F(MediaFoundationRendererTest, ClearStartsInFrameServer) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      media::kMediaFoundationClearRendering, {{"strategy", "dynamic"}});
-
-  AddStream(DemuxerStream::AUDIO, /*encrypted=*/false);
-  AddStream(DemuxerStream::VIDEO, /*encrypted=*/false);
-
-  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
-                           renderer_init_cb_.Get());
-
-  EXPECT_TRUE(mf_renderer_->InFrameServerMode());
-}
-
-TEST_F(MediaFoundationRendererTest, EncryptedStaysInDirectComposition) {
-  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
-  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
-
-  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
-                           renderer_init_cb_.Get());
-
-  EXPECT_FALSE(mf_renderer_->InFrameServerMode());
 }
 
 }  // namespace media

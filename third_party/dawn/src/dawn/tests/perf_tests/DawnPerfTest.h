@@ -106,7 +106,7 @@ class DawnPerfTestBase {
                      unsigned int value,
                      const std::string& units,
                      bool important) const;
-    void SetGPUTime(double GPUTime);
+    void AddGPUTime(double GPUTime);
 
   private:
     void DoRunLoop(double maxRunTime);
@@ -136,18 +136,25 @@ class DawnPerfTestWithParams : public DawnTestWithParams<Params>, public DawnPer
     DawnPerfTestWithParams(unsigned int iterationsPerStep, unsigned int maxStepsInFlight)
         : DawnTestWithParams<Params>(),
           DawnPerfTestBase(this, iterationsPerStep, maxStepsInFlight) {}
-    void SetUp() override {
+    ~DawnPerfTestWithParams() override = default;
+
+    // Since this function might fail but has no way to signal that it failed
+    // so it should not be called directly or overridden. Unforutnately there is
+    // no way to enforce that without a huge refactor. Marking it as `final`
+    // at least means derived classes can't incorrectly override it.
+    void SetUp() final {
         DawnTestWithParams<Params>::SetUp();
 
-        wgpu::AdapterProperties properties;
-        this->GetAdapter().GetProperties(&properties);
-        DAWN_TEST_UNSUPPORTED_IF(properties.adapterType == wgpu::AdapterType::CPU);
+        DAWN_TEST_UNSUPPORTED_IF(this->IsCPU());
 
         if (mSupportsTimestampQuery) {
             InitializeGPUTimer();
         }
+
+        SetUpPerfTest();
     }
-    ~DawnPerfTestWithParams() override = default;
+
+    virtual void SetUpPerfTest() {}
 
     std::vector<wgpu::FeatureName> GetRequiredFeatures() override {
         std::vector<wgpu::FeatureName> requiredFeatures = {wgpu::FeatureName::TimestampQuery};
@@ -166,6 +173,18 @@ class DawnPerfTestWithParams : public DawnTestWithParams<Params>, public DawnPer
 
     void RecordEndTimestampAndResolveQuerySet(wgpu::CommandEncoder encoder) {
         encoder.WriteTimestamp(mTimestampQuerySet, 1);
+        ResolveTimestamps(encoder);
+    }
+
+    wgpu::PassTimestampWrites GetPassTimestampWrites() const {
+        wgpu::PassTimestampWrites timestampWrites;
+        timestampWrites.querySet = mTimestampQuerySet;
+        timestampWrites.beginningOfPassWriteIndex = 0;
+        timestampWrites.endOfPassWriteIndex = 1;
+        return timestampWrites;
+    }
+
+    void ResolveTimestamps(wgpu::CommandEncoder encoder) {
         encoder.ResolveQuerySet(mTimestampQuerySet, 0, kTimestampQueryCount, mResolveBuffer, 0);
         encoder.CopyBufferToBuffer(mResolveBuffer, 0, mReadbackBuffer, 0,
                                    sizeof(uint64_t) * kTimestampQueryCount);
@@ -173,12 +192,9 @@ class DawnPerfTestWithParams : public DawnTestWithParams<Params>, public DawnPer
 
     void ComputeGPUElapsedTime() {
         bool done = false;
-        mReadbackBuffer.MapAsync(
-            wgpu::MapMode::Read, 0, sizeof(uint64_t) * kTimestampQueryCount,
-            [](WGPUBufferMapAsyncStatus status, void* userdata) {
-                *static_cast<bool*>(userdata) = true;
-            },
-            &done);
+        mReadbackBuffer.MapAsync(wgpu::MapMode::Read, 0, sizeof(uint64_t) * kTimestampQueryCount,
+                                 wgpu::CallbackMode::AllowProcessEvents,
+                                 [&done](wgpu::MapAsyncStatus, wgpu::StringView) { done = true; });
         while (!done) {
             DawnTestWithParams<Params>::WaitABit();
         }
@@ -186,7 +202,7 @@ class DawnPerfTestWithParams : public DawnTestWithParams<Params>, public DawnPer
             static_cast<const uint64_t*>(mReadbackBuffer.GetConstMappedRange());
         ASSERT_EQ(2u, kTimestampQueryCount);
         double gpuTimeElapsed = (readbackValues[1] - readbackValues[0]) / 1e9;
-        SetGPUTime(gpuTimeElapsed);
+        AddGPUTime(gpuTimeElapsed);
         mReadbackBuffer.Unmap();
     }
 

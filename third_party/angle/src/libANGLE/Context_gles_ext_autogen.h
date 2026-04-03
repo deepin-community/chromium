@@ -14,6 +14,7 @@
                                                                                                    \
     /* GLES1 Extensions */                                                                         \
                                                                                                    \
+    /* GL_OES_blend_subtract */                                                                    \
     /* GL_OES_draw_texture */                                                                      \
     void drawTexf(GLfloat x, GLfloat y, GLfloat z, GLfloat width, GLfloat height);                 \
     void drawTexfv(const GLfloat *coords);                                                         \
@@ -44,6 +45,7 @@
     void texGeniv(GLenum coord, GLenum pname, const GLint *params);                                \
     void texGenx(GLenum coord, GLenum pname, GLfixed param);                                       \
     void texGenxv(GLenum coord, GLenum pname, const GLfixed *params);                              \
+    /* GL_OES_texture_mirrored_repeat */                                                           \
                                                                                                    \
     /* GLES2+ Extensions */                                                                        \
                                                                                                    \
@@ -74,15 +76,16 @@
     void getTranslatedShaderSource(ShaderProgramID shaderPacked, GLsizei bufSize, GLsizei *length, \
                                    GLchar *source);                                                \
     /* GL_APPLE_clip_distance */                                                                   \
-    /* GL_ARB_sync */                                                                              \
+    /* GL_ARM_rgba8 */                                                                             \
     /* GL_ARM_shader_framebuffer_fetch */                                                          \
+    /* GL_ARM_shader_framebuffer_fetch_depth_stencil */                                            \
+    /* GL_ARM_texture_unnormalized_coordinates */                                                  \
     /* GL_EXT_EGL_image_array */                                                                   \
     /* GL_EXT_EGL_image_external_wrap_modes */                                                     \
     /* GL_EXT_EGL_image_storage */                                                                 \
     void eGLImageTargetTexStorage(GLenum target, egl::ImageID imagePacked,                         \
                                   const GLint *attrib_list);                                       \
-    void eGLImageTargetTextureStorage(GLuint texture, egl::ImageID imagePacked,                    \
-                                      const GLint *attrib_list);                                   \
+    /* GL_EXT_EGL_image_storage_compression */                                                     \
     /* GL_EXT_YUV_target */                                                                        \
     /* GL_EXT_base_instance */                                                                     \
     void drawArraysInstancedBaseInstance(PrimitiveMode modePacked, GLint first, GLsizei count,     \
@@ -104,6 +107,12 @@
     /* GL_EXT_buffer_storage */                                                                    \
     void bufferStorage(BufferBinding targetPacked, GLsizeiptr size, const void *data,              \
                        GLbitfield flags);                                                          \
+    /* GL_EXT_clear_texture */                                                                     \
+    void clearTexImage(TextureID texturePacked, GLint level, GLenum format, GLenum type,           \
+                       const void *data);                                                          \
+    void clearTexSubImage(TextureID texturePacked, GLint level, GLint xoffset, GLint yoffset,      \
+                          GLint zoffset, GLsizei width, GLsizei height, GLsizei depth,             \
+                          GLenum format, GLenum type, const void *data);                           \
     /* GL_EXT_clip_control */                                                                      \
     /* GL_EXT_clip_cull_distance */                                                                \
     /* GL_EXT_color_buffer_float */                                                                \
@@ -131,13 +140,19 @@
     void multiDrawElementsBaseVertex(PrimitiveMode modePacked, const GLsizei *count,               \
                                      DrawElementsType typePacked, const void *const *indices,      \
                                      GLsizei drawcount, const GLint *basevertex);                  \
+    /* GL_EXT_draw_instanced */                                                                    \
     /* GL_EXT_external_buffer */                                                                   \
     void bufferStorageExternal(BufferBinding targetPacked, GLintptr offset, GLsizeiptr size,       \
                                GLeglClientBufferEXT clientBuffer, GLbitfield flags);               \
-    void namedBufferStorageExternal(GLuint buffer, GLintptr offset, GLsizeiptr size,               \
-                                    GLeglClientBufferEXT clientBuffer, GLbitfield flags);          \
     /* GL_EXT_float_blend */                                                                       \
     /* GL_EXT_frag_depth */                                                                        \
+    /* GL_EXT_fragment_shading_rate */                                                             \
+    void framebufferShadingRate(GLenum target, GLenum attachment, GLuint texture, GLint baseLayer, \
+                                GLsizei numLayers, GLsizei texelWidth, GLsizei texelHeight);       \
+    void getFragmentShadingRates(GLsizei samples, GLsizei maxCount, GLsizei *count,                \
+                                 GLenum *shadingRates);                                            \
+    /* GL_EXT_fragment_shading_rate_attachment */                                                  \
+    /* GL_EXT_fragment_shading_rate_primitive */                                                   \
     /* GL_EXT_geometry_shader */                                                                   \
     /* GL_EXT_gpu_shader5 */                                                                       \
     /* GL_EXT_instanced_arrays */                                                                  \
@@ -171,6 +186,7 @@
     /* GL_EXT_memory_object_fd */                                                                  \
     void importMemoryFd(MemoryObjectID memoryPacked, GLuint64 size, HandleType handleTypePacked,   \
                         GLint fd);                                                                 \
+    /* GL_EXT_multi_draw_arrays */                                                                 \
     /* GL_EXT_multi_draw_indirect */                                                               \
     void multiDrawArraysIndirect(PrimitiveMode modePacked, const void *indirect,                   \
                                  GLsizei drawcount, GLsizei stride);                               \
@@ -209,6 +225,7 @@
                        const TextureID *texturesPacked, const GLenum *srcLayouts);                 \
     /* GL_EXT_semaphore_fd */                                                                      \
     void importSemaphoreFd(SemaphoreID semaphorePacked, HandleType handleTypePacked, GLint fd);    \
+    /* GL_EXT_separate_depth_stencil */                                                            \
     /* GL_EXT_separate_shader_objects */                                                           \
     /* GL_EXT_shader_framebuffer_fetch */                                                          \
     /* GL_EXT_shader_framebuffer_fetch_non_coherent */                                             \
@@ -216,6 +233,7 @@
     /* GL_EXT_shader_io_blocks */                                                                  \
     /* GL_EXT_shader_non_constant_global_initializers */                                           \
     /* GL_EXT_shader_texture_lod */                                                                \
+    /* GL_EXT_shader_texture_samples */                                                            \
     /* GL_EXT_shadow_samplers */                                                                   \
     /* GL_EXT_tessellation_shader */                                                               \
     /* GL_EXT_texture_border_clamp */                                                              \
@@ -234,22 +252,30 @@
     /* GL_EXT_texture_format_sRGB_override */                                                      \
     /* GL_EXT_texture_mirror_clamp_to_edge */                                                      \
     /* GL_EXT_texture_norm16 */                                                                    \
+    /* GL_EXT_texture_query_lod */                                                                 \
     /* GL_EXT_texture_rg */                                                                        \
     /* GL_EXT_texture_sRGB_R8 */                                                                   \
     /* GL_EXT_texture_sRGB_RG8 */                                                                  \
     /* GL_EXT_texture_sRGB_decode */                                                               \
+    /* GL_EXT_texture_shadow_lod */                                                                \
     /* GL_EXT_texture_storage */                                                                   \
-    void texStorage1D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width);        \
+    /* GL_EXT_texture_storage_compression */                                                       \
+    void texStorageAttribs2D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width,  \
+                             GLsizei height, const GLint *attrib_list);                            \
+    void texStorageAttribs3D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width,  \
+                             GLsizei height, GLsizei depth, const GLint *attrib_list);             \
     /* GL_EXT_texture_type_2_10_10_10_REV */                                                       \
     /* GL_EXT_unpack_subimage */                                                                   \
     /* GL_IMG_texture_compression_pvrtc */                                                         \
     /* GL_IMG_texture_compression_pvrtc2 */                                                        \
     /* GL_KHR_blend_equation_advanced */                                                           \
+    /* GL_KHR_blend_equation_advanced_coherent */                                                  \
     /* GL_KHR_debug */                                                                             \
     /* GL_KHR_no_error */                                                                          \
     /* GL_KHR_parallel_shader_compile */                                                           \
     void maxShaderCompilerThreads(GLuint count);                                                   \
     /* GL_KHR_robust_buffer_access_behavior */                                                     \
+    /* GL_KHR_robustness */                                                                        \
     /* GL_KHR_texture_compression_astc_hdr */                                                      \
     /* GL_KHR_texture_compression_astc_ldr */                                                      \
     /* GL_KHR_texture_compression_astc_sliced_3d */                                                \
@@ -306,10 +332,12 @@
     /* GL_OES_fbo_render_mipmap */                                                                 \
     /* GL_OES_geometry_shader */                                                                   \
     /* GL_OES_get_program_binary */                                                                \
+    /* GL_OES_gpu_shader5 */                                                                       \
     /* GL_OES_mapbuffer */                                                                         \
     void *mapBuffer(BufferBinding targetPacked, GLenum access);                                    \
     /* GL_OES_packed_depth_stencil */                                                              \
     /* GL_OES_primitive_bounding_box */                                                            \
+    /* GL_OES_required_internalformat */                                                           \
     /* GL_OES_rgb8_rgba8 */                                                                        \
     /* GL_OES_sample_shading */                                                                    \
     /* GL_OES_sample_variables */                                                                  \
@@ -318,6 +346,7 @@
     /* GL_OES_shader_multisample_interpolation */                                                  \
     /* GL_OES_standard_derivatives */                                                              \
     /* GL_OES_surfaceless_context */                                                               \
+    /* GL_OES_tessellation_shader */                                                               \
     /* GL_OES_texture_3D */                                                                        \
     void framebufferTexture3D(GLenum target, GLenum attachment, TextureTarget textargetPacked,     \
                               TextureID texturePacked, GLint level, GLint zoffset);                \
@@ -339,6 +368,10 @@
     void framebufferTextureMultiview(GLenum target, GLenum attachment, TextureID texturePacked,    \
                                      GLint level, GLint baseViewIndex, GLsizei numViews);          \
     /* GL_OVR_multiview2 */                                                                        \
+    /* GL_OVR_multiview_multisampled_render_to_texture */                                          \
+    void framebufferTextureMultisampleMultiview(                                                   \
+        GLenum target, GLenum attachment, TextureID texturePacked, GLint level, GLsizei samples,   \
+        GLint baseViewIndex, GLsizei numViews);                                                    \
     /* GL_QCOM_framebuffer_foveated */                                                             \
     void framebufferFoveationConfig(FramebufferID framebufferPacked, GLuint numLayers,             \
                                     GLuint focalPointsPerLayer, GLuint requestedFeatures,          \
@@ -352,6 +385,9 @@
     void textureFoveationParameters(TextureID texturePacked, GLuint layer, GLuint focalPoint,      \
                                     GLfloat focalX, GLfloat focalY, GLfloat gainX, GLfloat gainY,  \
                                     GLfloat foveaArea);                                            \
+    /* GL_QCOM_tiled_rendering */                                                                  \
+    void endTiling(GLbitfield preserveMask);                                                       \
+    void startTiling(GLuint x, GLuint y, GLuint width, GLuint height, GLbitfield preserveMask);    \
     /* GL_WEBGL_video_texture */                                                                   \
                                                                                                    \
     /* ANGLE Extensions */                                                                         \
@@ -371,6 +407,9 @@
         const void *const *indices, const GLsizei *instanceCounts, const GLint *baseVertices,      \
         const GLuint *baseInstances, GLsizei drawcount);                                           \
     /* GL_ANGLE_base_vertex_base_instance_shader_builtin */                                        \
+    /* GL_ANGLE_blob_cache */                                                                      \
+    void blobCacheCallbacks(GLSETBLOBPROCANGLE set, GLGETBLOBPROCANGLE get,                        \
+                            const void *userParam);                                                \
     /* GL_ANGLE_client_arrays */                                                                   \
     /* GL_ANGLE_clip_cull_distance */                                                              \
     /* GL_ANGLE_compressed_texture_etc */                                                          \
@@ -432,6 +471,7 @@
     /* GL_ANGLE_multiview_multisample */                                                           \
     /* GL_ANGLE_polygon_mode */                                                                    \
     /* GL_ANGLE_program_binary */                                                                  \
+    /* GL_ANGLE_program_binary_readiness_query */                                                  \
     /* GL_ANGLE_program_cache_control */                                                           \
     /* GL_ANGLE_provoking_vertex */                                                                \
     /* GL_ANGLE_read_only_depth_stencil_feedback_loops */                                          \
@@ -442,33 +482,33 @@
     void disableExtension(const GLchar *name);                                                     \
     /* GL_ANGLE_rgbx_internal_format */                                                            \
     /* GL_ANGLE_robust_client_memory */                                                            \
-    void getBooleanvRobust(GLenum pname, GLsizei bufSize, GLsizei *length, GLboolean *params);     \
-    void getBufferParameterivRobust(BufferBinding targetPacked, GLenum pname, GLsizei bufSize,     \
+    void getBooleanvRobust(GLenum pname, GLsizei paramCount, GLsizei *length, GLboolean *data);    \
+    void getBufferParameterivRobust(BufferBinding targetPacked, GLenum pname, GLsizei paramCount,  \
                                     GLsizei *length, GLint *params);                               \
-    void getFloatvRobust(GLenum pname, GLsizei bufSize, GLsizei *length, GLfloat *params);         \
+    void getFloatvRobust(GLenum pname, GLsizei paramCount, GLsizei *length, GLfloat *data);        \
     void getFramebufferAttachmentParameterivRobust(GLenum target, GLenum attachment, GLenum pname, \
-                                                   GLsizei bufSize, GLsizei *length,               \
+                                                   GLsizei paramCount, GLsizei *length,            \
                                                    GLint *params);                                 \
-    void getIntegervRobust(GLenum pname, GLsizei bufSize, GLsizei *length, GLint *data);           \
-    void getProgramivRobust(ShaderProgramID programPacked, GLenum pname, GLsizei bufSize,          \
+    void getIntegervRobust(GLenum pname, GLsizei paramCount, GLsizei *length, GLint *data);        \
+    void getProgramivRobust(ShaderProgramID programPacked, GLenum pname, GLsizei paramCount,       \
                             GLsizei *length, GLint *params);                                       \
-    void getRenderbufferParameterivRobust(GLenum target, GLenum pname, GLsizei bufSize,            \
+    void getRenderbufferParameterivRobust(GLenum target, GLenum pname, GLsizei paramCount,         \
                                           GLsizei *length, GLint *params);                         \
-    void getShaderivRobust(ShaderProgramID shaderPacked, GLenum pname, GLsizei bufSize,            \
+    void getShaderivRobust(ShaderProgramID shaderPacked, GLenum pname, GLsizei paramCount,         \
                            GLsizei *length, GLint *params);                                        \
-    void getTexParameterfvRobust(TextureType targetPacked, GLenum pname, GLsizei bufSize,          \
+    void getTexParameterfvRobust(TextureType targetPacked, GLenum pname, GLsizei paramCount,       \
                                  GLsizei *length, GLfloat *params);                                \
-    void getTexParameterivRobust(TextureType targetPacked, GLenum pname, GLsizei bufSize,          \
+    void getTexParameterivRobust(TextureType targetPacked, GLenum pname, GLsizei paramCount,       \
                                  GLsizei *length, GLint *params);                                  \
     void getUniformfvRobust(ShaderProgramID programPacked, UniformLocation locationPacked,         \
                             GLsizei bufSize, GLsizei *length, GLfloat *params);                    \
     void getUniformivRobust(ShaderProgramID programPacked, UniformLocation locationPacked,         \
                             GLsizei bufSize, GLsizei *length, GLint *params);                      \
-    void getVertexAttribfvRobust(GLuint index, GLenum pname, GLsizei bufSize, GLsizei *length,     \
+    void getVertexAttribfvRobust(GLuint index, GLenum pname, GLsizei paramCount, GLsizei *length,  \
                                  GLfloat *params);                                                 \
-    void getVertexAttribivRobust(GLuint index, GLenum pname, GLsizei bufSize, GLsizei *length,     \
+    void getVertexAttribivRobust(GLuint index, GLenum pname, GLsizei paramCount, GLsizei *length,  \
                                  GLint *params);                                                   \
-    void getVertexAttribPointervRobust(GLuint index, GLenum pname, GLsizei bufSize,                \
+    void getVertexAttribPointervRobust(GLuint index, GLenum pname, GLsizei paramCount,             \
                                        GLsizei *length, void **pointer);                           \
     void readPixelsRobust(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,          \
                           GLenum type, GLsizei bufSize, GLsizei *length, GLsizei *columns,         \
@@ -476,9 +516,9 @@
     void texImage2DRobust(TextureTarget targetPacked, GLint level, GLint internalformat,           \
                           GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, \
                           GLsizei bufSize, const void *pixels);                                    \
-    void texParameterfvRobust(TextureType targetPacked, GLenum pname, GLsizei bufSize,             \
+    void texParameterfvRobust(TextureType targetPacked, GLenum pname, GLsizei paramCount,          \
                               const GLfloat *params);                                              \
-    void texParameterivRobust(TextureType targetPacked, GLenum pname, GLsizei bufSize,             \
+    void texParameterivRobust(TextureType targetPacked, GLenum pname, GLsizei paramCount,          \
                               const GLint *params);                                                \
     void texSubImage2DRobust(TextureTarget targetPacked, GLint level, GLint xoffset,               \
                              GLint yoffset, GLsizei width, GLsizei height, GLenum format,          \
@@ -492,96 +532,66 @@
                              const void *pixels);                                                  \
     void compressedTexImage2DRobust(                                                               \
         TextureTarget targetPacked, GLint level, GLenum internalformat, GLsizei width,             \
-        GLsizei height, GLint border, GLsizei imageSize, GLsizei dataSize, const void *data);      \
+        GLsizei height, GLint border, GLsizei imageSize, GLsizei bufSize, const void *data);       \
     void compressedTexSubImage2DRobust(                                                            \
         TextureTarget targetPacked, GLint level, GLsizei xoffset, GLsizei yoffset, GLsizei width,  \
-        GLsizei height, GLenum format, GLsizei imageSize, GLsizei dataSize, const void *data);     \
+        GLsizei height, GLenum format, GLsizei imageSize, GLsizei bufSize, const void *data);      \
     void compressedTexImage3DRobust(TextureTarget targetPacked, GLint level,                       \
                                     GLenum internalformat, GLsizei width, GLsizei height,          \
                                     GLsizei depth, GLint border, GLsizei imageSize,                \
-                                    GLsizei dataSize, const void *data);                           \
+                                    GLsizei bufSize, const void *data);                            \
     void compressedTexSubImage3DRobust(TextureTarget targetPacked, GLint level, GLint xoffset,     \
                                        GLint yoffset, GLint zoffset, GLsizei width,                \
                                        GLsizei height, GLsizei depth, GLenum format,               \
-                                       GLsizei imageSize, GLsizei dataSize, const void *data);     \
-    void getQueryivRobust(QueryType targetPacked, GLenum pname, GLsizei bufSize, GLsizei *length,  \
-                          GLint *params);                                                          \
-    void getQueryObjectuivRobust(QueryID idPacked, GLenum pname, GLsizei bufSize, GLsizei *length, \
-                                 GLuint *params);                                                  \
-    void getBufferPointervRobust(BufferBinding targetPacked, GLenum pname, GLsizei bufSize,        \
+                                       GLsizei imageSize, GLsizei bufSize, const void *data);      \
+    void getQueryivRobust(QueryType targetPacked, GLenum pname, GLsizei paramCount,                \
+                          GLsizei *length, GLint *params);                                         \
+    void getQueryObjectuivRobust(QueryID idPacked, GLenum pname, GLsizei paramCount,               \
+                                 GLsizei *length, GLuint *params);                                 \
+    void getBufferPointervRobust(BufferBinding targetPacked, GLenum pname, GLsizei paramCount,     \
                                  GLsizei *length, void **params);                                  \
-    void getIntegeri_vRobust(GLenum target, GLuint index, GLsizei bufSize, GLsizei *length,        \
+    void getIntegeri_vRobust(GLenum target, GLuint index, GLsizei paramCount, GLsizei *length,     \
                              GLint *data);                                                         \
     void getInternalformativRobust(GLenum target, GLenum internalformat, GLenum pname,             \
-                                   GLsizei bufSize, GLsizei *length, GLint *params);               \
-    void getVertexAttribIivRobust(GLuint index, GLenum pname, GLsizei bufSize, GLsizei *length,    \
+                                   GLsizei paramCount, GLsizei *length, GLint *params);            \
+    void getVertexAttribIivRobust(GLuint index, GLenum pname, GLsizei paramCount, GLsizei *length, \
                                   GLint *params);                                                  \
-    void getVertexAttribIuivRobust(GLuint index, GLenum pname, GLsizei bufSize, GLsizei *length,   \
-                                   GLuint *params);                                                \
+    void getVertexAttribIuivRobust(GLuint index, GLenum pname, GLsizei paramCount,                 \
+                                   GLsizei *length, GLuint *params);                               \
     void getUniformuivRobust(ShaderProgramID programPacked, UniformLocation locationPacked,        \
                              GLsizei bufSize, GLsizei *length, GLuint *params);                    \
     void getActiveUniformBlockivRobust(ShaderProgramID programPacked,                              \
                                        UniformBlockIndex uniformBlockIndexPacked, GLenum pname,    \
-                                       GLsizei bufSize, GLsizei *length, GLint *params);           \
-    void getInteger64vRobust(GLenum pname, GLsizei bufSize, GLsizei *length, GLint64 *data);       \
-    void getInteger64i_vRobust(GLenum target, GLuint index, GLsizei bufSize, GLsizei *length,      \
+                                       GLsizei paramCount, GLsizei *length, GLint *params);        \
+    void getInteger64vRobust(GLenum pname, GLsizei paramCount, GLsizei *length, GLint64 *data);    \
+    void getInteger64i_vRobust(GLenum target, GLuint index, GLsizei paramCount, GLsizei *length,   \
                                GLint64 *data);                                                     \
-    void getBufferParameteri64vRobust(BufferBinding targetPacked, GLenum pname, GLsizei bufSize,   \
-                                      GLsizei *length, GLint64 *params);                           \
-    void samplerParameterivRobust(SamplerID samplerPacked, GLuint pname, GLsizei bufSize,          \
+    void getBufferParameteri64vRobust(BufferBinding targetPacked, GLenum pname,                    \
+                                      GLsizei paramCount, GLsizei *length, GLint64 *params);       \
+    void samplerParameterivRobust(SamplerID samplerPacked, GLuint pname, GLsizei paramCount,       \
                                   const GLint *param);                                             \
-    void samplerParameterfvRobust(SamplerID samplerPacked, GLenum pname, GLsizei bufSize,          \
+    void samplerParameterfvRobust(SamplerID samplerPacked, GLenum pname, GLsizei paramCount,       \
                                   const GLfloat *param);                                           \
-    void getSamplerParameterivRobust(SamplerID samplerPacked, GLenum pname, GLsizei bufSize,       \
+    void getSamplerParameterivRobust(SamplerID samplerPacked, GLenum pname, GLsizei paramCount,    \
                                      GLsizei *length, GLint *params);                              \
-    void getSamplerParameterfvRobust(SamplerID samplerPacked, GLenum pname, GLsizei bufSize,       \
+    void getSamplerParameterfvRobust(SamplerID samplerPacked, GLenum pname, GLsizei paramCount,    \
                                      GLsizei *length, GLfloat *params);                            \
-    void getFramebufferParameterivRobust(GLenum target, GLenum pname, GLsizei bufSize,             \
-                                         GLsizei *length, GLint *params);                          \
-    void getProgramInterfaceivRobust(ShaderProgramID programPacked, GLenum programInterface,       \
-                                     GLenum pname, GLsizei bufSize, GLsizei *length,               \
-                                     GLint *params);                                               \
-    void getBooleani_vRobust(GLenum target, GLuint index, GLsizei bufSize, GLsizei *length,        \
-                             GLboolean *data);                                                     \
-    void getMultisamplefvRobust(GLenum pname, GLuint index, GLsizei bufSize, GLsizei *length,      \
+    void getMultisamplefvRobust(GLenum pname, GLuint index, GLsizei paramCount, GLsizei *length,   \
                                 GLfloat *val);                                                     \
     void getTexLevelParameterivRobust(TextureTarget targetPacked, GLint level, GLenum pname,       \
-                                      GLsizei bufSize, GLsizei *length, GLint *params);            \
+                                      GLsizei paramCount, GLsizei *length, GLint *params);         \
     void getTexLevelParameterfvRobust(TextureTarget targetPacked, GLint level, GLenum pname,       \
-                                      GLsizei bufSize, GLsizei *length, GLfloat *params);          \
-    void getPointervRobustANGLERobust(GLenum pname, GLsizei bufSize, GLsizei *length,              \
-                                      void **params);                                              \
-    void readnPixelsRobust(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,         \
-                           GLenum type, GLsizei bufSize, GLsizei *length, GLsizei *columns,        \
-                           GLsizei *rows, void *data);                                             \
-    void getnUniformfvRobust(ShaderProgramID programPacked, UniformLocation locationPacked,        \
-                             GLsizei bufSize, GLsizei *length, GLfloat *params);                   \
-    void getnUniformivRobust(ShaderProgramID programPacked, UniformLocation locationPacked,        \
-                             GLsizei bufSize, GLsizei *length, GLint *params);                     \
-    void getnUniformuivRobust(ShaderProgramID programPacked, UniformLocation locationPacked,       \
-                              GLsizei bufSize, GLsizei *length, GLuint *params);                   \
-    void texParameterIivRobust(TextureType targetPacked, GLenum pname, GLsizei bufSize,            \
-                               const GLint *params);                                               \
-    void texParameterIuivRobust(TextureType targetPacked, GLenum pname, GLsizei bufSize,           \
-                                const GLuint *params);                                             \
-    void getTexParameterIivRobust(TextureType targetPacked, GLenum pname, GLsizei bufSize,         \
-                                  GLsizei *length, GLint *params);                                 \
-    void getTexParameterIuivRobust(TextureType targetPacked, GLenum pname, GLsizei bufSize,        \
-                                   GLsizei *length, GLuint *params);                               \
-    void samplerParameterIivRobust(SamplerID samplerPacked, GLenum pname, GLsizei bufSize,         \
-                                   const GLint *param);                                            \
-    void samplerParameterIuivRobust(SamplerID samplerPacked, GLenum pname, GLsizei bufSize,        \
-                                    const GLuint *param);                                          \
-    void getSamplerParameterIivRobust(SamplerID samplerPacked, GLenum pname, GLsizei bufSize,      \
-                                      GLsizei *length, GLint *params);                             \
-    void getSamplerParameterIuivRobust(SamplerID samplerPacked, GLenum pname, GLsizei bufSize,     \
-                                       GLsizei *length, GLuint *params);                           \
-    void getQueryObjectivRobust(QueryID idPacked, GLenum pname, GLsizei bufSize, GLsizei *length,  \
-                                GLint *params);                                                    \
-    void getQueryObjecti64vRobust(QueryID idPacked, GLenum pname, GLsizei bufSize,                 \
+                                      GLsizei paramCount, GLsizei *length, GLfloat *params);       \
+    void getQueryObjectivRobust(QueryID idPacked, GLenum pname, GLsizei paramCount,                \
+                                GLsizei *length, GLint *params);                                   \
+    void getQueryObjecti64vRobust(QueryID idPacked, GLenum pname, GLsizei paramCount,              \
                                   GLsizei *length, GLint64 *params);                               \
-    void getQueryObjectui64vRobust(QueryID idPacked, GLenum pname, GLsizei bufSize,                \
+    void getQueryObjectui64vRobust(QueryID idPacked, GLenum pname, GLsizei paramCount,             \
                                    GLsizei *length, GLuint64 *params);                             \
+    void getFramebufferPixelLocalStorageParameterfvRobust(                                         \
+        GLint plane, GLenum pname, GLsizei paramCount, GLsizei *length, GLfloat *params);          \
+    void getFramebufferPixelLocalStorageParameterivRobust(                                         \
+        GLint plane, GLenum pname, GLsizei paramCount, GLsizei *length, GLint *params);            \
     /* GL_ANGLE_robust_fragment_shader_output */                                                   \
     /* GL_ANGLE_robust_resource_initialization */                                                  \
     /* GL_ANGLE_semaphore_fuchsia */                                                               \
@@ -602,10 +612,6 @@
     void framebufferPixelLocalStorageRestore();                                                    \
     void getFramebufferPixelLocalStorageParameterfv(GLint plane, GLenum pname, GLfloat *params);   \
     void getFramebufferPixelLocalStorageParameteriv(GLint plane, GLenum pname, GLint *params);     \
-    void getFramebufferPixelLocalStorageParameterfvRobust(                                         \
-        GLint plane, GLenum pname, GLsizei bufSize, GLsizei *length, GLfloat *params);             \
-    void getFramebufferPixelLocalStorageParameterivRobust(                                         \
-        GLint plane, GLenum pname, GLsizei bufSize, GLsizei *length, GLint *params);               \
     /* GL_ANGLE_shader_pixel_local_storage_coherent */                                             \
     /* GL_ANGLE_stencil_texturing */                                                               \
     /* GL_ANGLE_texture_compression_dxt3 */                                                        \
@@ -643,7 +649,6 @@
                         GLboolean unpackUnmultiplyAlpha);                                          \
     /* GL_CHROMIUM_framebuffer_mixed_samples */                                                    \
     /* GL_CHROMIUM_lose_context */                                                                 \
-    void loseContext(GraphicsResetStatus currentPacked, GraphicsResetStatus otherPacked);          \
-    /* GL_CHROMIUM_sync_query */
+    void loseContext(GraphicsResetStatus currentPacked, GraphicsResetStatus otherPacked);
 
 #endif  // ANGLE_CONTEXT_API_EXT_AUTOGEN_H_

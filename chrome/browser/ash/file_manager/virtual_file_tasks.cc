@@ -4,14 +4,16 @@
 
 #include "chrome/browser/ash/file_manager/virtual_file_tasks.h"
 
+#include <algorithm>
 #include <initializer_list>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/no_destructor.h"
-#include "chrome/browser/ash/file_manager/app_id.h"
 #include "chrome/browser/ash/file_manager/file_tasks.h"
+#include "chrome/browser/ash/file_manager/virtual_tasks/drive_upload_virtual_task.h"
 #include "chrome/browser/ash/file_manager/virtual_tasks/install_isolated_web_app_virtual_task.h"
+#include "chrome/browser/ash/file_manager/virtual_tasks/ms365_virtual_task.h"
+#include "chromeos/ash/components/file_manager/app_id.h"
 #include "components/services/app_service/public/cpp/intent_util.h"
 
 namespace file_manager::file_tasks {
@@ -22,8 +24,13 @@ namespace {
 // on or off dynamically by implementing |IsEnabled()|.
 const std::vector<VirtualTask*>& GetVirtualTasks() {
   static const base::NoDestructor<std::vector<VirtualTask*>> virtual_tasks(
-      std::initializer_list<VirtualTask*>(
-          {new InstallIsolatedWebAppVirtualTask()}));
+      std::initializer_list<VirtualTask*>({
+          new InstallIsolatedWebAppVirtualTask(),
+          new Ms365VirtualTask(),
+          new DocsUploadVirtualTask(),
+          new SheetsUploadVirtualTask(),
+          new SlidesUploadVirtualTask(),
+      }));
   if (!GetTestVirtualTasks().empty()) {
     return GetTestVirtualTasks();
   }
@@ -35,27 +42,15 @@ bool LooksLikeVirtualTask(const TaskDescriptor& task) {
          task.task_type == TASK_TYPE_WEB_APP;
 }
 
-VirtualTask* FindVirtualTask(const TaskDescriptor& task) {
-  if (!LooksLikeVirtualTask(task)) {
-    return nullptr;
-  }
-  const auto& tasks = GetVirtualTasks();
-  auto itr = base::ranges::find(tasks, task.action_id, &VirtualTask::id);
-  if (itr == tasks.end()) {
-    return nullptr;
-  }
-  return *itr;
-}
-
 // Validates that each entry from `entries` matches any mime type from
 // `mime_types`.
 bool AllEntriesMatchAtLeastOneMimeType(
     const std::vector<extensions::EntryInfo>& entries,
     const std::vector<std::string>& mime_types) {
-  return base::ranges::all_of(
+  return std::ranges::all_of(
       entries,
       [&](const std::string& entry_mime_type) {
-        return base::ranges::any_of(
+        return std::ranges::any_of(
             mime_types, [&](const std::string& mime_type) {
               return apps_util::MimeTypeMatched(entry_mime_type, mime_type);
             });
@@ -68,10 +63,10 @@ bool AllEntriesMatchAtLeastOneMimeType(
 bool AllUrlsMatchAtLeastOneFileExtension(
     const std::vector<GURL>& file_urls,
     const std::vector<std::string>& file_extensions) {
-  return base::ranges::all_of(
+  return std::ranges::all_of(
       file_urls,
       [&](const std::string& file_name) {
-        return base::ranges::any_of(
+        return std::ranges::any_of(
             file_extensions, [&](const std::string& file_extension) {
               return apps_util::ExtensionMatched(file_name, file_extension);
             });
@@ -81,18 +76,18 @@ bool AllUrlsMatchAtLeastOneFileExtension(
 
 }  // namespace
 
-void FindVirtualTasks(Profile* profile,
-                      const std::vector<extensions::EntryInfo>& entries,
-                      const std::vector<GURL>& file_urls,
-                      const std::vector<std::string>& dlp_source_urls,
-                      std::vector<FullTaskDescriptor>* result_list) {
+void MatchVirtualTasks(Profile* profile,
+                       const std::vector<extensions::EntryInfo>& entries,
+                       const std::vector<GURL>& file_urls,
+                       const std::vector<std::string>& dlp_source_urls,
+                       std::vector<FullTaskDescriptor>* result_list) {
   DCHECK_EQ(entries.size(), file_urls.size());
   if (entries.empty()) {
     return;
   }
   for (const VirtualTask* virtual_task : GetVirtualTasks()) {
     if (virtual_task->IsEnabled(profile) &&
-        virtual_task->Matches(entries, file_urls, dlp_source_urls)) {
+        virtual_task->Matches(entries, file_urls)) {
       // TODO(b/284800493): Correct values below.
       result_list->emplace_back(
           TaskDescriptor{kFileManagerSwaAppId, TASK_TYPE_WEB_APP,
@@ -101,7 +96,7 @@ void FindVirtualTasks(Profile* profile,
           /* is_default=*/false,
           /* is_generic_file_handler=*/false,
           /* is_file_extension_match=*/false,
-          /* is_dlp_blocked=*/false);
+          virtual_task->IsDlpBlocked(dlp_source_urls));
     }
   }
 }
@@ -118,7 +113,20 @@ bool ExecuteVirtualTask(Profile* profile,
 
 bool IsVirtualTask(const TaskDescriptor& task) {
   return LooksLikeVirtualTask(task) &&
-         base::Contains(GetVirtualTasks(), task.action_id, &VirtualTask::id);
+         std::ranges::contains(GetVirtualTasks(), task.action_id,
+                               &VirtualTask::id);
+}
+
+VirtualTask* FindVirtualTask(const TaskDescriptor& task) {
+  if (!LooksLikeVirtualTask(task)) {
+    return nullptr;
+  }
+  const auto& tasks = GetVirtualTasks();
+  auto itr = std::ranges::find(tasks, task.action_id, &VirtualTask::id);
+  if (itr == tasks.end()) {
+    return nullptr;
+  }
+  return *itr;
 }
 
 std::vector<VirtualTask*>& GetTestVirtualTasks() {
@@ -129,10 +137,8 @@ std::vector<VirtualTask*>& GetTestVirtualTasks() {
 VirtualTask::VirtualTask() = default;
 VirtualTask::~VirtualTask() = default;
 
-bool VirtualTask::Matches(
-    const std::vector<extensions::EntryInfo>& entries,
-    const std::vector<GURL>& file_urls,
-    const std::vector<std::string>& dlp_source_urls) const {
+bool VirtualTask::Matches(const std::vector<extensions::EntryInfo>& entries,
+                          const std::vector<GURL>& file_urls) const {
   // Try to match mime types
   bool mime_types_matched =
       AllEntriesMatchAtLeastOneMimeType(entries, matcher_mime_types_);
@@ -140,8 +146,6 @@ bool VirtualTask::Matches(
   // Try to match extensions
   bool extensions_matched =
       AllUrlsMatchAtLeastOneFileExtension(file_urls, matcher_file_extensions_);
-
-  // TODO(b/284800493): Handle dlp_source_urls.
 
   // TODO(b/284800493): Should this be able to mix and match mimes and
   // extensions too?

@@ -8,37 +8,18 @@
 #include "ash/wm/window_restore/window_restore_util.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/common/pref_names.h"
-#include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 
 namespace ash::full_restore {
 
-void RegisterProfilePrefs(PrefRegistrySimple* registry) {
+void RegisterProfilePolicyPrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kRestoreAppsEnabled, true);
   registry->RegisterBooleanPref(kGhostWindowEnabled, true);
-
-  registry->RegisterIntegerPref(
-      prefs::kRestoreAppsAndPagesPrefName,
-      static_cast<int>(RestoreOption::kAskEveryTime),
-      user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
-}
-
-bool HasRestorePref(PrefService* prefs) {
-  return prefs->HasPrefPath(prefs::kRestoreAppsAndPagesPrefName);
 }
 
 bool HasSessionStartupPref(PrefService* prefs) {
   return prefs->HasPrefPath(::prefs::kRestoreOnStartup);
-}
-
-bool CanPerformRestore(PrefService* prefs) {
-  if (!HasRestorePref(prefs))
-    return true;
-
-  return static_cast<RestoreOption>(
-             prefs->GetInteger(prefs::kRestoreAppsAndPagesPrefName)) !=
-         RestoreOption::kDoNotRestore;
 }
 
 void SetDefaultRestorePrefIfNecessary(PrefService* prefs) {

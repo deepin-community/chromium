@@ -1,39 +1,15 @@
-/*
- * Copyright (C) 2012 Google Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// Copyright 2012 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as Platform from '../../core/platform/platform.js';
+import * as Root from '../../core/root/root.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as Protocol from '../../generated/protocol.js';
-import type * as TextUtils from '../text_utils/text_utils.js';
+import * as Formatter from '../formatter/formatter.js';
+import * as TextUtils from '../text_utils/text_utils.js';
 import * as Workspace from '../workspace/workspace.js';
 
 import {ContentProviderBasedProject} from './ContentProviderBasedProject.js';
@@ -43,18 +19,18 @@ import {metadataForURL} from './ResourceUtils.js';
 
 const UIStrings = {
   /**
-   *@description Error text displayed in the console when editing a live script fails. LiveEdit is
+   * @description Error text displayed in the console when editing a live script fails. LiveEdit is
    *the name of the feature for editing code that is already running.
-   *@example {warning} PH1
+   * @example {warning} PH1
    */
   liveEditFailed: '`LiveEdit` failed: {PH1}',
   /**
-   *@description Error text displayed in the console when compiling a live-edited script fails. LiveEdit is
+   * @description Error text displayed in the console when compiling a live-edited script fails. LiveEdit is
    *the name of the feature for editing code that is already running.
-   *@example {connection lost} PH1
+   * @example {connection lost} PH1
    */
   liveEditCompileFailed: '`LiveEdit` compile failed: {PH1}',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('models/bindings/ResourceScriptMapping.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
@@ -86,7 +62,7 @@ export class ResourceScriptMapping implements DebuggerSourceMapping {
       runtimeModel.addEventListener(
           SDK.RuntimeModel.Events.ExecutionContextDestroyed, this.executionContextDestroyed, this),
       runtimeModel.target().targetManager().addEventListener(
-          SDK.TargetManager.Events.InspectedURLChanged, this.inspectedURLChanged, this),
+          SDK.TargetManager.Events.INSPECTED_URL_CHANGED, this.inspectedURLChanged, this),
     ];
   }
 
@@ -181,6 +157,55 @@ export class ResourceScriptMapping implements DebuggerSourceMapping {
     }
   }
 
+  async functionBoundsAtRawLocation(rawLocation: SDK.DebuggerModel.Location):
+      Promise<Workspace.UISourceCode.UIFunctionBounds|null> {
+    const script = rawLocation.script();
+    if (!script) {
+      return null;
+    }
+
+    const uiSourceCode = this.#scriptToUISourceCode.get(script);
+    if (!uiSourceCode) {
+      return null;
+    }
+
+    const scopeTreeAndText = script ? await SDK.ScopeTreeCache.scopeTreeForScript(script) : null;
+    if (!scopeTreeAndText) {
+      return null;
+    }
+
+    // Find the inner-most scope that maps to the given position.
+
+    const offset = scopeTreeAndText.text.offsetFromPosition(rawLocation.lineNumber, rawLocation.columnNumber);
+
+    const results = [];
+    (function walk(nodes: Formatter.FormatterWorkerPool.ScopeTreeNode[]) {
+      for (const node of nodes) {
+        if (!(offset >= node.start && offset < node.end)) {
+          continue;
+        }
+        results.push(node);
+        walk(node.children);
+      }
+    })([scopeTreeAndText.scopeTree]);
+
+    const result = results.findLast(
+        node => node.kind === Formatter.FormatterWorkerPool.ScopeKind.FUNCTION ||
+            node.kind === Formatter.FormatterWorkerPool.ScopeKind.ARROW_FUNCTION);
+    if (!result) {
+      return null;
+    }
+
+    // Map back to positions.
+    const startPosition = scopeTreeAndText.text.positionFromOffset(result.start);
+    const endPosition = scopeTreeAndText.text.positionFromOffset(result.end);
+
+    const name = '';  // TODO(crbug.com/452333154): update ScopeVariableAnalysis to include function name.
+    const range = new TextUtils.TextRange.TextRange(
+        startPosition.lineNumber, startPosition.columnNumber, endPosition.lineNumber, endPosition.columnNumber);
+    return new Workspace.UISourceCode.UIFunctionBounds(uiSourceCode, range, name);
+  }
+
   private addScript(script: SDK.Script.Script): void {
     // Ignore live edit scripts here.
     if (script.isLiveEdit() || script.isBreakpointCondition) {
@@ -216,7 +241,7 @@ export class ResourceScriptMapping implements DebuggerSourceMapping {
     const oldUISourceCode = project.uiSourceCodeForURL(url);
     if (oldUISourceCode) {
       const oldScriptFile = this.#uiSourceCodeToScriptFile.get(oldUISourceCode);
-      if (oldScriptFile && oldScriptFile.script) {
+      if (oldScriptFile?.script) {
         this.removeScripts([oldScriptFile.script]);
       }
     }
@@ -304,41 +329,37 @@ export class ResourceScriptMapping implements DebuggerSourceMapping {
 
 export class ResourceScriptFile extends Common.ObjectWrapper.ObjectWrapper<ResourceScriptFile.EventTypes> {
   readonly #resourceScriptMapping: ResourceScriptMapping;
-  readonly #uiSourceCodeInternal: Workspace.UISourceCode.UISourceCode;
-  #script?: SDK.Script.Script;
+  readonly uiSourceCode: Workspace.UISourceCode.UISourceCode;
+  readonly script: SDK.Script.Script|null;
   #scriptSource?: string|null;
-  #isDivergingFromVMInternal?: boolean;
-  #hasDivergedFromVMInternal?: boolean;
-  #isMergingToVMInternal?: boolean;
+  #isDivergingFromVM?: boolean;
+  #hasDivergedFromVM?: boolean;
+  #isMergingToVM?: boolean;
   #updateMutex = new Common.Mutex.Mutex();
   constructor(
       resourceScriptMapping: ResourceScriptMapping, uiSourceCode: Workspace.UISourceCode.UISourceCode,
       script: SDK.Script.Script) {
     super();
     this.#resourceScriptMapping = resourceScriptMapping;
-    this.#uiSourceCodeInternal = uiSourceCode;
+    this.uiSourceCode = uiSourceCode;
+    this.script = this.uiSourceCode.contentType().isScript() ? script : null;
 
-    if (this.#uiSourceCodeInternal.contentType().isScript()) {
-      this.#script = script;
-    }
-
-    this.#uiSourceCodeInternal.addEventListener(
-        Workspace.UISourceCode.Events.WorkingCopyChanged, this.workingCopyChanged, this);
-    this.#uiSourceCodeInternal.addEventListener(
+    this.uiSourceCode.addEventListener(Workspace.UISourceCode.Events.WorkingCopyChanged, this.workingCopyChanged, this);
+    this.uiSourceCode.addEventListener(
         Workspace.UISourceCode.Events.WorkingCopyCommitted, this.workingCopyCommitted, this);
   }
 
   private isDiverged(): boolean {
-    if (this.#uiSourceCodeInternal.isDirty()) {
+    if (this.uiSourceCode.isDirty()) {
       return true;
     }
-    if (!this.#script) {
+    if (!this.script) {
       return false;
     }
     if (typeof this.#scriptSource === 'undefined' || this.#scriptSource === null) {
       return false;
     }
-    const workingCopy = this.#uiSourceCodeInternal.workingCopy();
+    const workingCopy = this.uiSourceCode.workingCopy();
     if (!workingCopy) {
       return false;
     }
@@ -347,7 +368,7 @@ export class ResourceScriptFile extends Common.ObjectWrapper.ObjectWrapper<Resou
     if (!workingCopy.startsWith(this.#scriptSource.trimEnd())) {
       return true;
     }
-    const suffix = this.#uiSourceCodeInternal.workingCopy().substr(this.#scriptSource.length);
+    const suffix = this.uiSourceCode.workingCopy().substr(this.#scriptSource.length);
     return Boolean(suffix.length) && !suffix.match(SDK.Script.sourceURLRegex);
   }
 
@@ -356,15 +377,20 @@ export class ResourceScriptFile extends Common.ObjectWrapper.ObjectWrapper<Resou
   }
 
   private workingCopyCommitted(): void {
-    if (this.#uiSourceCodeInternal.project().canSetFileContent()) {
-      return;
-    }
-    if (!this.#script) {
+    // This feature flag is for turning down live edit. If it's not present, we keep the feature enabled.
+    if (Root.Runtime.hostConfig.devToolsLiveEdit?.enabled === false) {
       return;
     }
 
-    const source = this.#uiSourceCodeInternal.workingCopy();
-    void this.#script.editSource(source).then(({status, exceptionDetails}) => {
+    if (this.uiSourceCode.project().canSetFileContent()) {
+      return;
+    }
+    if (!this.script) {
+      return;
+    }
+
+    const source = this.uiSourceCode.workingCopy();
+    void this.script.editSource(source).then(({status, exceptionDetails}) => {
       void this.scriptSourceWasSet(source, status, exceptionDetails);
     });
   }
@@ -385,12 +411,12 @@ export class ResourceScriptFile extends Common.ObjectWrapper.ObjectWrapper<Resou
       // TODO(crbug.com/1334484): Instead of to the console, report these errors in an "info bar" at the bottom
       //                          of the text editor, similar to e.g. source mapping errors.
       Common.Console.Console.instance().addMessage(
-          i18nString(UIStrings.liveEditFailed, {PH1: getErrorText(status)}), Common.Console.MessageLevel.Warning);
+          i18nString(UIStrings.liveEditFailed, {PH1: getErrorText(status)}), Common.Console.MessageLevel.WARNING);
       return;
     }
     const messageText = i18nString(UIStrings.liveEditCompileFailed, {PH1: exceptionDetails.text});
-    this.#uiSourceCodeInternal.addLineMessage(
-        Workspace.UISourceCode.Message.Level.Error, messageText, exceptionDetails.lineNumber,
+    this.uiSourceCode.addLineMessage(
+        Workspace.UISourceCode.Message.Level.ERROR, messageText, exceptionDetails.lineNumber,
         exceptionDetails.columnNumber);
 
     function getErrorText(status: Protocol.Debugger.SetScriptSourceResponseStatus): string {
@@ -411,53 +437,54 @@ export class ResourceScriptFile extends Common.ObjectWrapper.ObjectWrapper<Resou
   private async update(): Promise<void> {
     // Do not interleave "divergeFromVM" with "mergeToVM" calls.
     const release = await this.#updateMutex.acquire();
-    if (this.isDiverged() && !this.#hasDivergedFromVMInternal) {
+    const diverged = this.isDiverged();
+    if (diverged && !this.#hasDivergedFromVM) {
       await this.divergeFromVM();
-    } else if (!this.isDiverged() && this.#hasDivergedFromVMInternal) {
+    } else if (!diverged && this.#hasDivergedFromVM) {
       await this.mergeToVM();
     }
     release();
   }
 
   private async divergeFromVM(): Promise<void> {
-    if (this.#script) {
-      this.#isDivergingFromVMInternal = true;
-      await this.#resourceScriptMapping.debuggerWorkspaceBinding.updateLocations(this.#script);
-      this.#isDivergingFromVMInternal = undefined;
-      this.#hasDivergedFromVMInternal = true;
-      this.dispatchEventToListeners(ResourceScriptFile.Events.DidDivergeFromVM);
+    if (this.script) {
+      this.#isDivergingFromVM = true;
+      await this.#resourceScriptMapping.debuggerWorkspaceBinding.updateLocations(this.script);
+      this.#isDivergingFromVM = undefined;
+      this.#hasDivergedFromVM = true;
+      this.dispatchEventToListeners(ResourceScriptFile.Events.DID_DIVERGE_FROM_VM);
     }
   }
 
   private async mergeToVM(): Promise<void> {
-    if (this.#script) {
-      this.#hasDivergedFromVMInternal = undefined;
-      this.#isMergingToVMInternal = true;
-      await this.#resourceScriptMapping.debuggerWorkspaceBinding.updateLocations(this.#script);
-      this.#isMergingToVMInternal = undefined;
-      this.dispatchEventToListeners(ResourceScriptFile.Events.DidMergeToVM);
+    if (this.script) {
+      this.#hasDivergedFromVM = undefined;
+      this.#isMergingToVM = true;
+      await this.#resourceScriptMapping.debuggerWorkspaceBinding.updateLocations(this.script);
+      this.#isMergingToVM = undefined;
+      this.dispatchEventToListeners(ResourceScriptFile.Events.DID_MERGE_TO_VM);
     }
   }
 
   hasDivergedFromVM(): boolean {
-    return Boolean(this.#hasDivergedFromVMInternal);
+    return Boolean(this.#hasDivergedFromVM);
   }
 
   isDivergingFromVM(): boolean {
-    return Boolean(this.#isDivergingFromVMInternal);
+    return Boolean(this.#isDivergingFromVM);
   }
 
   isMergingToVM(): boolean {
-    return Boolean(this.#isMergingToVMInternal);
+    return Boolean(this.#isMergingToVM);
   }
 
   checkMapping(): void {
-    if (!this.#script || typeof this.#scriptSource !== 'undefined') {
+    if (!this.script || typeof this.#scriptSource !== 'undefined') {
       this.mappingCheckedForTest();
       return;
     }
-    void this.#script.requestContent().then(deferredContent => {
-      this.#scriptSource = deferredContent.content;
+    void this.script.requestContentData().then(content => {
+      this.#scriptSource = TextUtils.ContentData.ContentData.textOr(content, null);
       void this.update().then(() => this.mappingCheckedForTest());
     });
   }
@@ -466,57 +493,49 @@ export class ResourceScriptFile extends Common.ObjectWrapper.ObjectWrapper<Resou
   }
 
   dispose(): void {
-    this.#uiSourceCodeInternal.removeEventListener(
+    this.uiSourceCode.removeEventListener(
         Workspace.UISourceCode.Events.WorkingCopyChanged, this.workingCopyChanged, this);
-    this.#uiSourceCodeInternal.removeEventListener(
+    this.uiSourceCode.removeEventListener(
         Workspace.UISourceCode.Events.WorkingCopyCommitted, this.workingCopyCommitted, this);
   }
 
   addSourceMapURL(sourceMapURL: Platform.DevToolsPath.UrlString): void {
-    if (!this.#script) {
+    if (!this.script) {
       return;
     }
-    this.#script.debuggerModel.setSourceMapURL(this.#script, sourceMapURL);
+    this.script.debuggerModel.setSourceMapURL(this.script, sourceMapURL);
   }
 
   addDebugInfoURL(debugInfoURL: Platform.DevToolsPath.UrlString): void {
-    if (!this.#script) {
+    if (!this.script) {
       return;
     }
     const {pluginManager} = DebuggerWorkspaceBinding.instance();
-    pluginManager.setDebugInfoURL(this.#script, debugInfoURL);
+    pluginManager.setDebugInfoURL(this.script, debugInfoURL);
   }
 
   hasSourceMapURL(): boolean {
-    return this.#script !== undefined && Boolean(this.#script.sourceMapURL);
+    return Boolean(this.script?.sourceMapURL);
   }
 
-  async missingSymbolFiles(): Promise<string[]|null> {
-    if (!this.#script) {
+  async missingSymbolFiles(): Promise<SDK.DebuggerModel.MissingDebugFiles[]|null> {
+    if (!this.script) {
       return null;
     }
     const {pluginManager} = this.#resourceScriptMapping.debuggerWorkspaceBinding;
-    const sources = await pluginManager.getSourcesForScript(this.#script);
+    const sources = await pluginManager.getSourcesForScript(this.script);
     return sources && 'missingSymbolFiles' in sources ? sources.missingSymbolFiles : null;
-  }
-
-  get script(): SDK.Script.Script|null {
-    return this.#script || null;
-  }
-
-  get uiSourceCode(): Workspace.UISourceCode.UISourceCode {
-    return this.#uiSourceCodeInternal;
   }
 }
 
 export namespace ResourceScriptFile {
   export const enum Events {
-    DidMergeToVM = 'DidMergeToVM',
-    DidDivergeFromVM = 'DidDivergeFromVM',
+    DID_MERGE_TO_VM = 'DidMergeToVM',
+    DID_DIVERGE_FROM_VM = 'DidDivergeFromVM',
   }
 
-  export type EventTypes = {
-    [Events.DidMergeToVM]: void,
-    [Events.DidDivergeFromVM]: void,
-  };
+  export interface EventTypes {
+    [Events.DID_MERGE_TO_VM]: void;
+    [Events.DID_DIVERGE_FROM_VM]: void;
+  }
 }

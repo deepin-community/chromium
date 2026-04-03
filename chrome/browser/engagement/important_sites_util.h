@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "build/build_config.h"
@@ -50,7 +51,7 @@ class ImportantSitesUtil {
   // Do not change the values here, as they are used for UMA histograms.
   enum ImportantReason {
     ENGAGEMENT = 0,
-    DURABLE = 1,
+    PERSISTENT = 1,
     BOOKMARKS = 2,
     HOME_SCREEN = 3,
     NOTIFICATIONS = 4,
@@ -63,7 +64,7 @@ class ImportantSitesUtil {
 
   static std::string GetRegisterableDomainOrIP(const GURL& url);
 
-  static std::string GetRegisterableDomainOrIPFromHost(base::StringPiece host);
+  static std::string GetRegisterableDomainOrIPFromHost(std::string_view host);
 
   static bool IsDialogDisabled(Profile* profile);
 

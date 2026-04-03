@@ -34,14 +34,14 @@ void FileReader::ReadFilesOnFileSequence() {
   DCHECK(
       extensions::GetExtensionFileTaskRunner()->RunsTasksInCurrentSequence());
 
-  std::vector<std::unique_ptr<std::string>> data;
+  std::vector<std::string> data;
   data.reserve(resources_.size());
   std::optional<std::string> error;
 
   size_t remaining_length = max_resources_length_;
   for (const auto& resource : resources_) {
-    data.push_back(std::make_unique<std::string>());
-    std::string* file_data = data.back().get();
+    data.emplace_back();
+    std::string* file_data = &data.back();
     bool success = base::ReadFileToStringWithMaxSize(
         resource.GetFilePath(), file_data, remaining_length);
     if (!success) {
@@ -59,8 +59,9 @@ void FileReader::ReadFilesOnFileSequence() {
     }
 
     remaining_length -= file_data->size();
-    if (optional_file_sequence_task_)
+    if (optional_file_sequence_task_) {
       optional_file_sequence_task_.Run(file_data);
+    }
   }
 
   // Release any potentially-bound references from the file sequence task.

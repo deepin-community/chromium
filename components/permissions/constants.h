@@ -5,9 +5,15 @@
 #ifndef COMPONENTS_PERMISSIONS_CONSTANTS_H_
 #define COMPONENTS_PERMISSIONS_CONSTANTS_H_
 
+#include <string_view>
+
 #include "base/component_export.h"
 #include "base/time/clock.h"
 #include "build/build_config.h"
+
+namespace base {
+class TimeDelta;
+}  // namespace base
 
 namespace permissions {
 
@@ -61,7 +67,7 @@ extern const char kPermissionPromptSurveyUrlKey[];
 COMPONENT_EXPORT(PERMISSIONS_COMMON)
 extern const char kPermissionsPromptSurveyHadGestureKey[];
 
-// The key in `Product Specific Bits Data` under which the release channel on
+// The key in `Product Specific Strings Data` under which the release channel on
 // which the prompt was triggered is recorded in the prompt HaTS survey.
 // Note that a finch config typically defines a min_version to run the
 // experiment. When Version V is stable, Beta (V+1), Dev (V+2) and Canary (V+3)
@@ -71,7 +77,31 @@ extern const char kPermissionsPromptSurveyHadGestureKey[];
 COMPONENT_EXPORT(PERMISSIONS_COMMON)
 extern const char kPermissionsPromptSurveyReleaseChannelKey[];
 
-// TODO(crbug.com/1410489): Remove the code related to unused site permissions
+// The key in `Product Specific Strings Data` under which the prompt position is
+// recorded if relevant. The prompt position is only recorded for PEPC
+// permission prompts.
+COMPONENT_EXPORT(PERMISSIONS_COMMON)
+extern const char kPermissionPromptSurveyPepcPromptPositionKey[];
+
+// The key in `Product Specific Strings Data` under which the initial permission
+// status is recorded. The initial permission status refers to the permission
+// status before the prompt has been shown. For prompts other than PEPC
+// permission prompts, this will always be "ask".
+COMPONENT_EXPORT(PERMISSIONS_COMMON)
+extern const char kPermissionPromptSurveyInitialPermissionStatusKey[];
+
+// The key in `Product Specific Strings Data` under which the prompt options
+// (options selected by the user on the prompt) are recorded.
+COMPONENT_EXPORT(PERMISSIONS_COMMON)
+extern const char kPermissionPromptSurveyPromptOptionsKey[];
+
+// The key in `Product Specific Strings Data` under which the prompt display
+// duration (time to decision) in milliseconds is recorded, iff the
+// SurveyDisplayTime is OnPromptResolved.
+COMPONENT_EXPORT(PERMISSIONS_COMMON)
+extern const char kPermissionPromptSurveyPromptDisplayDurationKey[];
+
+// TODO(crbug.com/40254381): Remove the code related to unused site permissions
 // from Android builds.
 
 // The key used for marking permissions as revoked, as per the unused site
@@ -80,8 +110,8 @@ extern const char kPermissionsPromptSurveyReleaseChannelKey[];
 COMPONENT_EXPORT(PERMISSIONS_COMMON)
 extern const char kRevokedKey[];
 
-// The key for base::Value::Dict, holding the revoked chooser permission data.
-// The Dict has StringPiece of ContentSettingsType int as key,
+// The key for base::DictValue, holding the revoked chooser permission data.
+// The Dict has std::string_view of ContentSettingsType int as key,
 // and the corresponding revoked `base::Value` data as value.
 // For example, {"3": {"foo": "bar"}, "12": "baz", "24": ["item0", "item1"]}
 COMPONENT_EXPORT(PERMISSIONS_COMMON)

@@ -9,18 +9,14 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/deque.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
-
-namespace v8 {
-class Isolate;
-class MicrotaskQueue;
-}  // namespace v8
+#include "v8/include/v8-isolate.h"
+#include "v8/include/v8-microtask-queue.h"
 
 namespace blink {
 
@@ -58,7 +54,7 @@ namespace scheduler {
 // This is not correct in terms of the standards conformance, and we'll
 // eventually merge the queues so both Blink and V8 can use the microtask queue
 // allocated in the correct granularity.
-class PLATFORM_EXPORT EventLoop final : public WTF::RefCounted<EventLoop> {
+class PLATFORM_EXPORT EventLoop final : public RefCounted<EventLoop> {
   USING_FAST_MALLOC(EventLoop);
 
  public:
@@ -93,10 +89,6 @@ class PLATFORM_EXPORT EventLoop final : public WTF::RefCounted<EventLoop> {
   // empty.
   static void PerformIsolateGlobalMicrotasksCheckpoint(v8::Isolate* isolate);
 
-  // Disables or enables all controlled frames.
-  void Disable();
-  void Enable();
-
   void AttachScheduler(FrameOrWorkerScheduler*);
   void DetachScheduler(FrameOrWorkerScheduler*);
 
@@ -106,8 +98,24 @@ class PLATFORM_EXPORT EventLoop final : public WTF::RefCounted<EventLoop> {
 
   bool IsSchedulerAttachedForTest(FrameOrWorkerScheduler*);
 
+  class PauseMicrotasksHandle {
+   public:
+    ~PauseMicrotasksHandle() = default;
+
+   private:
+    friend class EventLoop;
+    PauseMicrotasksHandle(v8::Isolate* isolate, v8::MicrotaskQueue* queue);
+
+    v8::Isolate::SuppressMicrotaskExecutionScope scope_;
+  };
+
+  // Suppresses microtask execution for the lifetime of the returned handle.
+  // Pending microtasks would be executed as soon as all issued handles go
+  // out of scope.
+  [[nodiscard]] std::unique_ptr<PauseMicrotasksHandle> PauseMicrotasks();
+
  private:
-  friend class WTF::RefCounted<EventLoop>;
+  friend class RefCounted<EventLoop>;
   friend blink::Agent;
 
   EventLoop(Delegate* delegate,
@@ -119,7 +127,7 @@ class PLATFORM_EXPORT EventLoop final : public WTF::RefCounted<EventLoop> {
   static void RunEndOfCheckpointTasks(v8::Isolate* isolat, void* data);
 
   WeakPersistent<Delegate> delegate_;
-  raw_ptr<v8::Isolate, ExperimentalRenderer> isolate_;
+  raw_ptr<v8::Isolate> isolate_;
   bool loop_enabled_ = true;
   Deque<base::OnceClosure> pending_microtasks_;
   Vector<base::OnceClosure> end_of_checkpoint_tasks_;

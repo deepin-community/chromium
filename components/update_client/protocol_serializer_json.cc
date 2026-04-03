@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/command_line.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
 #include "build/branding_buildflags.h"
@@ -17,17 +18,29 @@
 
 namespace update_client {
 
+namespace switches {
+const char kComponentUpdaterCompatProtocols[] =
+    "component-updater-compat-protocols";
+}  // namespace switches
+
 std::string ProtocolSerializerJSON::Serialize(
     const protocol_request::Request& request) const {
-  base::Value::Dict root_node;
-  base::Value::Dict request_node;
+  base::DictValue root_node;
+  base::DictValue request_node;
   request_node.Set("protocol", request.protocol_version);
   request_node.Set("ismachine", request.is_machine);
   request_node.Set("dedup", "cr");
-  request_node.Set("acceptformat", "crx3,puff");
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kComponentUpdaterCompatProtocols)) {
+    // Don't change this string without consulting webview-leads. Add new
+    // protocols to the 'else' branch below instead.
+    request_node.Set("acceptformat", "crx3,download,puff,run");
+  } else {
+    request_node.Set("acceptformat", "crx3,download,puff,run,xz,zucc");
+  }
   if (!request.additional_attributes.empty()) {
-    for (const auto& attr : request.additional_attributes) {
-      request_node.Set(attr.first, attr.second);
+    for (const auto& [name, value] : request.additional_attributes) {
+      request_node.Set(name, value);
     }
   }
   request_node.Set("sessionid", request.session_id);
@@ -37,7 +50,6 @@ std::string ProtocolSerializerJSON::Serialize(
   request_node.Set("updaterversion", request.updaterversion);
   request_node.Set("@os", request.operating_system);
   request_node.Set("arch", request.arch);
-  request_node.Set("nacl_arch", request.nacl_arch);
 #if BUILDFLAG(IS_WIN)
   if (request.is_wow64) {
     request_node.Set("wow64", request.is_wow64);
@@ -57,7 +69,7 @@ std::string ProtocolSerializerJSON::Serialize(
   }
 
   // HW platform information.
-  base::Value::Dict hw_node;
+  base::DictValue hw_node;
   hw_node.Set("physmemory", static_cast<int>(request.hw.physmemory));
   hw_node.Set("sse", request.hw.sse);
   hw_node.Set("sse2", request.hw.sse2);
@@ -69,7 +81,7 @@ std::string ProtocolSerializerJSON::Serialize(
   request_node.Set("hw", std::move(hw_node));
 
   // OS version and platform information.
-  base::Value::Dict os_node;
+  base::DictValue os_node;
   os_node.Set("platform", request.os.platform);
   os_node.Set("arch", request.os.arch);
   if (!request.os.version.empty()) {
@@ -83,7 +95,7 @@ std::string ProtocolSerializerJSON::Serialize(
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   if (request.updater) {
     const auto& updater = *request.updater;
-    base::Value::Dict updater_node;
+    base::DictValue updater_node;
     updater_node.Set("name", updater.name);
     updater_node.Set("ismachine", updater.is_machine);
     updater_node.Set("autoupdatecheckenabled",
@@ -98,13 +110,13 @@ std::string ProtocolSerializerJSON::Serialize(
     if (updater.last_started) {
       updater_node.Set("laststarted", *updater.last_started);
     }
-    request_node.Set("updater", std::move(updater_node));
+    request_node.Set("updaters", std::move(updater_node));
   }
 #endif
 
-  base::Value::List app_nodes;
+  base::ListValue app_nodes;
   for (const auto& app : request.apps) {
-    base::Value::Dict app_node;
+    base::DictValue app_node;
     app_node.Set("appid", app.app_id);
     app_node.Set("version", app.version);
     if (!app.ap.empty()) {
@@ -119,14 +131,17 @@ std::string ProtocolSerializerJSON::Serialize(
     if (app.install_date != kDateUnknown) {
       app_node.Set("installdate", app.install_date);
     }
+    if (!app.install_id.empty()) {
+      app_node.Set("iid", app.install_id);
+    }
     if (!app.install_source.empty()) {
       app_node.Set("installsource", app.install_source);
     }
     if (!app.install_location.empty()) {
       app_node.Set("installedby", app.install_location);
     }
-    // TODO(crbug/1120685): Test that this is never sent to the server if the
-    // machine is not enterprise managed.
+    // TODO(crbug.com/40145897): Test that this is never sent to the server if
+    // the machine is not enterprise managed.
     if (!app.release_channel.empty()) {
       app_node.Set("release_channel", app.release_channel);
     }
@@ -143,22 +158,32 @@ std::string ProtocolSerializerJSON::Serialize(
       app_node.Set("enabled", *app.enabled);
     }
 
+    if (!app.cached_hashes.empty()) {
+      base::ListValue hash_list;
+      for (const auto& hash : app.cached_hashes) {
+        base::DictValue node;
+        node.Set("sha256", hash);
+        hash_list.Append(std::move(node));
+      }
+      app_node.Set("cached_items", std::move(hash_list));
+    }
+
     if (app.disabled_reasons && !app.disabled_reasons->empty()) {
-      base::Value::List disabled_nodes;
+      base::ListValue disabled_nodes;
       for (const int disabled_reason : *app.disabled_reasons) {
-        base::Value::Dict disabled_node;
+        base::DictValue disabled_node;
         disabled_node.Set("reason", disabled_reason);
         disabled_nodes.Append(std::move(disabled_node));
       }
       app_node.Set("disabled", std::move(disabled_nodes));
     }
 
-    for (const auto& attr : app.installer_attributes) {
-      app_node.Set(attr.first, attr.second);
+    for (const auto& [name, value] : app.installer_attributes) {
+      app_node.Set(name, value);
     }
 
     if (app.update_check) {
-      base::Value::Dict update_check_node;
+      base::DictValue update_check_node;
       if (app.update_check->is_update_disabled) {
         update_check_node.Set("updatedisabled", true);
       }
@@ -176,9 +201,9 @@ std::string ProtocolSerializerJSON::Serialize(
     }
 
     if (!app.data.empty()) {
-      base::Value::List data_nodes;
+      base::ListValue data_nodes;
       for (const auto& data : app.data) {
-        base::Value::Dict data_node;
+        base::DictValue data_node;
 
         data_node.Set("name", data.name);
         if (data.name == "install") {
@@ -197,7 +222,7 @@ std::string ProtocolSerializerJSON::Serialize(
 
     if (app.ping) {
       const auto& ping = *app.ping;
-      base::Value::Dict ping_node;
+      base::DictValue ping_node;
       if (!ping.ping_freshness.empty()) {
         ping_node.Set("ping_freshness", ping.ping_freshness);
       }
@@ -218,30 +243,20 @@ std::string ProtocolSerializerJSON::Serialize(
       app_node.Set("ping", std::move(ping_node));
     }
 
-    if (!app.fingerprint.empty()) {
-      base::Value::List package_nodes;
-      base::Value::Dict package;
-      package.Set("fp", app.fingerprint);
-      package_nodes.Append(std::move(package));
-      base::Value::Dict packages_node;
-      packages_node.Set("package", std::move(package_nodes));
-      app_node.Set("packages", std::move(packages_node));
-    }
-
     if (app.events) {
-      base::Value::List event_nodes;
+      base::ListValue event_nodes;
       for (const auto& event : *app.events) {
         CHECK(!event.empty());
         event_nodes.Append(event.Clone());
       }
-      app_node.Set("event", std::move(event_nodes));
+      app_node.Set("events", std::move(event_nodes));
     }
 
     app_nodes.Append(std::move(app_node));
   }
 
   if (!app_nodes.empty()) {
-    request_node.Set("app", std::move(app_nodes));
+    request_node.Set("apps", std::move(app_nodes));
   }
 
   root_node.Set("request", std::move(request_node));

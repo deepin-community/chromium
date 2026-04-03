@@ -67,7 +67,7 @@ int FindIOSurfaceFormatIndex(GLenum internalFormat, GLenum type)
 IOSurfaceSurfaceVkMac::IOSurfaceSurfaceVkMac(const egl::SurfaceState &state,
                                              EGLClientBuffer buffer,
                                              const egl::AttributeMap &attribs,
-                                             RendererVk *renderer)
+                                             vk::Renderer *renderer)
     : OffscreenSurfaceVk(state, renderer), mIOSurface(nullptr), mPlane(0), mFormatIndex(-1)
 {
     // Keep reference to the IOSurface so it doesn't get deleted while the pbuffer exists.
@@ -104,7 +104,7 @@ egl::Error IOSurfaceSurfaceVkMac::initialize(const egl::Display *display)
 
 angle::Result IOSurfaceSurfaceVkMac::initializeImpl(DisplayVk *displayVk)
 {
-    RendererVk *renderer      = displayVk->getRenderer();
+    vk::Renderer *renderer    = displayVk->getRenderer();
     const egl::Config *config = mState.config;
 
     // Should never be > 1
@@ -134,7 +134,7 @@ egl::Error IOSurfaceSurfaceVkMac::unMakeCurrent(const gl::Context *context)
     ASSERT(context != nullptr);
     ContextVk *contextVk = vk::GetImpl(context);
     angle::Result result =
-        contextVk->flushImpl(nullptr, nullptr, RenderPassClosureReason::ContextChange);
+        contextVk->flushAndSubmitCommands(nullptr, nullptr, QueueSubmitReason::ContextChange);
     return angle::ToEGL(result, EGL_BAD_SURFACE);
 }
 
@@ -160,8 +160,8 @@ egl::Error IOSurfaceSurfaceVkMac::bindTexImage(const gl::Context *context,
 {
     IOSurfaceLock(mIOSurface, 0, nullptr);
 
-    ContextVk *contextVk = vk::GetImpl(context);
-    RendererVk *renderer = contextVk->getRenderer();
+    ContextVk *contextVk   = vk::GetImpl(context);
+    vk::Renderer *renderer = contextVk->getRenderer();
 
     size_t width             = IOSurfaceGetWidthOfPlane(mIOSurface, mPlane);
     size_t height            = IOSurfaceGetHeightOfPlane(mIOSurface, mPlane);
@@ -185,7 +185,7 @@ egl::Error IOSurfaceSurfaceVkMac::bindTexImage(const gl::Context *context,
         contextVk, gl::ImageIndex::Make2D(0),
         gl::Extents(static_cast<int>(width), pixelUnpack.imageHeight, 1), gl::Offset(),
         internalFormatInfo, pixelUnpack, kIOSurfaceFormats[mFormatIndex].type,
-        reinterpret_cast<uint8_t *>(source), format, vk::ImageAccess::Renderable,
+        reinterpret_cast<uint8_t *>(source), format, vk::ImageFormatSupport::Renderable,
         vk::ApplyImageUpdate::Defer, &updateAppliedImmediately);
 
     IOSurfaceUnlock(mIOSurface, 0, nullptr);

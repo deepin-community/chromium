@@ -36,7 +36,7 @@ using testing::Property;
 namespace {
 
 void DummyCommand(const Status& status,
-                  const base::Value::Dict& params,
+                  const base::DictValue& params,
                   const std::string& session_id,
                   const CommandCallback& callback) {
   callback.Run(status, std::make_unique<base::Value>(1), "session_id", false);
@@ -60,7 +60,7 @@ testing::AssertionResult StatusOk(const Status& status) {
   return StatusCodeIs<kOk>(status);
 }
 
-std::string ToString(const base::Value::Dict& dict) {
+std::string ToString(const base::DictValue& dict) {
   std::string json;
   EXPECT_TRUE(base::JSONWriter::Write(dict, &json));
   return json;
@@ -121,7 +121,7 @@ TEST(HttpHandlerTest, HandleNewSession) {
   net::HttpServerResponseInfo response;
   handler.Handle(request, base::BindRepeating(&OnResponse, &response));
   ASSERT_EQ(net::HTTP_OK, response.status_code());
-  base::Value::Dict body;
+  base::DictValue body;
   body.Set("status", kOk);
   body.Set("value", 1);
   body.Set("sessionId", "session_id");
@@ -168,7 +168,7 @@ TEST(HttpHandlerTest, HandleCommand) {
   net::HttpServerResponseInfo response;
   handler.Handle(request, base::BindRepeating(&OnResponse, &response));
   ASSERT_EQ(net::HTTP_OK, response.status_code());
-  base::Value::Dict body;
+  base::DictValue body;
   body.Set("status", kOk);
   body.Set("value", 1);
   body.Set("sessionId", "session_id");
@@ -188,7 +188,7 @@ TEST(MatchesCommandTest, DiffMethod) {
   CommandMapping command(kPost, "path",
                          base::BindRepeating(&DummyCommand, Status(kOk)));
   std::string session_id;
-  base::Value::Dict params;
+  base::DictValue params;
   ASSERT_FALSE(internal::MatchesCommand(
       "get", "path", command, &session_id, &params));
   ASSERT_TRUE(session_id.empty());
@@ -199,7 +199,7 @@ TEST(MatchesCommandTest, DiffPathLength) {
   CommandMapping command(kPost, "path/path",
                          base::BindRepeating(&DummyCommand, Status(kOk)));
   std::string session_id;
-  base::Value::Dict params;
+  base::DictValue params;
   ASSERT_FALSE(internal::MatchesCommand(
       "post", "path", command, &session_id, &params));
   ASSERT_FALSE(internal::MatchesCommand(
@@ -214,7 +214,7 @@ TEST(MatchesCommandTest, DiffPaths) {
   CommandMapping command(kPost, "path/apath",
                          base::BindRepeating(&DummyCommand, Status(kOk)));
   std::string session_id;
-  base::Value::Dict params;
+  base::DictValue params;
   ASSERT_FALSE(internal::MatchesCommand(
       "post", "path/bpath", command, &session_id, &params));
 }
@@ -223,7 +223,7 @@ TEST(MatchesCommandTest, Substitution) {
   CommandMapping command(kPost, "path/:sessionId/space/:a/:b",
                          base::BindRepeating(&DummyCommand, Status(kOk)));
   std::string session_id;
-  base::Value::Dict params;
+  base::DictValue params;
   ASSERT_TRUE(internal::MatchesCommand(
       "post", "path/1/space/2/3", command, &session_id, &params));
   ASSERT_EQ("1", session_id);
@@ -240,7 +240,7 @@ TEST(MatchesCommandTest, DecodeEscape) {
   CommandMapping command(kPost, "path/:sessionId/attribute/:xyz",
                          base::BindRepeating(&DummyCommand, Status(kOk)));
   std::string session_id;
-  base::Value::Dict params;
+  base::DictValue params;
   ASSERT_TRUE(internal::MatchesCommand(
       "post", "path/123/attribute/xyz%2Furl%7Ce%3A%40v",
       command, &session_id, &params));
@@ -253,7 +253,7 @@ TEST(MatchesCommandTest, DecodePercent) {
   CommandMapping command(kPost, "path/:xyz",
                          base::BindRepeating(&DummyCommand, Status(kOk)));
   std::string session_id;
-  base::Value::Dict params;
+  base::DictValue params;
   ASSERT_TRUE(internal::MatchesCommand(
       "post", "path/%40a%%b%%c%%%%", command, &session_id, &params));
   const std::string* param = params.FindString("xyz");
@@ -264,11 +264,11 @@ TEST(MatchesCommandTest, DecodePercent) {
 TEST(ParseBidiCommandTest, WellFormed) {
   std::string data =
       "{\"id\": 12, \"method\": \"some\", \"params\":{\"one\": 2}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   EXPECT_TRUE(StatusOk(internal::ParseBidiCommand(data, parsed)));
-  EXPECT_THAT(parsed.FindDouble("id"), Optional(Eq(12)));
+  EXPECT_THAT(parsed.FindInt("id"), Optional(Eq(12)));
   EXPECT_THAT(parsed.FindString("method"), Pointee(Eq("some")));
-  base::Value::Dict* params = parsed.FindDict("params");
+  base::DictValue* params = parsed.FindDict("params");
   ASSERT_NE(nullptr, params);
   ASSERT_THAT(params->FindInt("one"), Optional(Eq(2)));
 }
@@ -276,7 +276,7 @@ TEST(ParseBidiCommandTest, WellFormed) {
 TEST(ParseBidiCommandTest, MaxId) {
   std::string data =
       "{\"id\": 9007199254740991, \"method\": \"some\", \"params\":{}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   EXPECT_TRUE(StatusOk(internal::ParseBidiCommand(data, parsed)));
   EXPECT_THAT(parsed.FindDouble("id"), Optional(Eq(9007199254740991L)));
   EXPECT_THAT(parsed.FindString("method"), Pointee(Eq("some")));
@@ -286,7 +286,7 @@ TEST(ParseBidiCommandTest, MaxId) {
 TEST(ParseBidiCommandTest, MalformedJson) {
   std::string data =
       "{\"id\": 9007199254740991, \"method\": \"some\", \"params\":{";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status status = internal::ParseBidiCommand(data, parsed);
   EXPECT_EQ(kInvalidArgument, status.code());
   EXPECT_THAT(status.message(), ContainsRegex("unable\\s+to\\s+parse"));
@@ -295,7 +295,7 @@ TEST(ParseBidiCommandTest, MalformedJson) {
 
 TEST(ParseBidiCommandTest, NotDictionary) {
   std::string data = "\"some string\"";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status status = internal::ParseBidiCommand(data, parsed);
   EXPECT_EQ(kInvalidArgument, status.code());
   EXPECT_THAT(status.message(), ContainsRegex("dictionary\\s+is\\s+expected"));
@@ -304,58 +304,58 @@ TEST(ParseBidiCommandTest, NotDictionary) {
 
 TEST(ParseBidiCommandTest, NoId) {
   std::string data = "{\"method\": \"some\", \"params\":{}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status status = internal::ParseBidiCommand(data, parsed);
   EXPECT_EQ(kInvalidArgument, status.code());
-  EXPECT_THAT(status.message(), ContainsRegex("no\\s+id"));
+  EXPECT_THAT(status.message(), ContainsRegex("no\\s+'id'"));
 }
 
 TEST(ParseBidiCommandTest, WrongIdType) {
   std::string data = "{\"id\": {}, \"method\": \"some\", \"params\":{}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status status = internal::ParseBidiCommand(data, parsed);
   EXPECT_EQ(kInvalidArgument, status.code());
-  EXPECT_THAT(status.message(), ContainsRegex("no\\s+id"));
+  EXPECT_THAT(status.message(), ContainsRegex("no\\s+'id'"));
 }
 
 TEST(ParseBidiCommandTest, NoMethod) {
   std::string data = "{\"id\": 625, \"params\":{}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status status = internal::ParseBidiCommand(data, parsed);
   EXPECT_EQ(kInvalidArgument, status.code());
-  EXPECT_THAT(status.message(), ContainsRegex("no\\s+method"));
+  EXPECT_THAT(status.message(), ContainsRegex("no\\s+'method'"));
 }
 
 TEST(ParseBidiCommandTest, WrongMethodType) {
   std::string data = "{\"id\": 4, \"method\": {}, \"params\":{}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status status = internal::ParseBidiCommand(data, parsed);
   EXPECT_EQ(kInvalidArgument, status.code());
-  EXPECT_THAT(status.message(), ContainsRegex("no\\s+method"));
+  EXPECT_THAT(status.message(), ContainsRegex("no\\s+'method'"));
 }
 
 TEST(ParseBidiCommandTest, NoParams) {
   std::string data = "{\"id\": 625, \"method\":\"some\"}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status status = internal::ParseBidiCommand(data, parsed);
   EXPECT_EQ(kInvalidArgument, status.code());
-  EXPECT_THAT(status.message(), ContainsRegex("no\\s+params"));
+  EXPECT_THAT(status.message(), ContainsRegex("no\\s+'params'"));
 }
 
 TEST(ParseBidiCommandTest, WrongParamsType) {
   std::string data = "{\"id\": 4, \"method\": \"some\", \"params\": 5}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status status = internal::ParseBidiCommand(data, parsed);
   EXPECT_EQ(kInvalidArgument, status.code());
-  EXPECT_THAT(status.message(), ContainsRegex("no\\s+params"));
+  EXPECT_THAT(status.message(), ContainsRegex("no\\s+'params'"));
 }
 
 TEST(CreateBidiErrorResponse, WithId) {
   Status error_status{kUnknownCommand, "this game has no name"};
-  base::Value::Dict response =
-      internal::CreateBidiErrorResponse(error_status, 121);
+  base::DictValue response =
+      internal::CreateBidiErrorResponse(error_status, base::Value(121));
   EXPECT_THAT(response.FindString("type"), Pointee(Eq("error")));
-  EXPECT_THAT(response.FindDouble("id"), Optional(Eq(121)));
+  EXPECT_THAT(response.FindInt("id"), Optional(Eq(121)));
   EXPECT_THAT(response.FindString("error"), Pointee(Eq("unknown command")));
   EXPECT_THAT(response.FindString("message"),
               Pointee(ContainsRegex("this game has no name")));
@@ -364,9 +364,9 @@ TEST(CreateBidiErrorResponse, WithId) {
 
 TEST(CreateBidiErrorResponse, NoId) {
   Status error_status{kUnknownCommand, "this game has no name"};
-  base::Value::Dict response = internal::CreateBidiErrorResponse(error_status);
+  base::DictValue response = internal::CreateBidiErrorResponse(error_status);
   EXPECT_THAT(response.FindString("type"), Pointee(Eq("error")));
-  EXPECT_THAT(response.FindDouble("id"), Eq(std::nullopt));
+  EXPECT_THAT(response.FindInt("id"), Eq(std::nullopt));
   EXPECT_THAT(response.FindString("error"), Pointee(Eq("unknown command")));
   EXPECT_THAT(response.FindString("message"),
               Pointee(ContainsRegex("this game has no name")));
@@ -374,10 +374,10 @@ TEST(CreateBidiErrorResponse, NoId) {
 
 class WebSocketMessageTest : public testing::Test {
  public:
-  void Echo(const base::Value::Dict& params,
+  void Echo(const base::DictValue& params,
             const std::string& session_id,
             const CommandCallback& callback) {
-    base::Value::Dict response = params.Clone();
+    base::DictValue response = params.Clone();
     response.Set("is_response", true);
     callback.Run(Status{kOk},
                  std::make_unique<base::Value>(std::move(response)), session_id,
@@ -391,16 +391,15 @@ class WebSocketMessageTest : public testing::Test {
 
   Command FailClosure(StatusCode code, const std::string& message) {
     return base::BindRepeating(
-        [](StatusCode code, std::string message,
-           const base::Value::Dict& params, const std::string& session_id,
-           const CommandCallback& callback) {
+        [](StatusCode code, std::string message, const base::DictValue& params,
+           const std::string& session_id, const CommandCallback& callback) {
           callback.Run(Status{code, message}, nullptr, session_id, true);
         },
         code, message);
   }
 
   Command SuccessNoResultClosure() {
-    return base::BindRepeating([](const base::Value::Dict& params,
+    return base::BindRepeating([](const base::DictValue& params,
                                   const std::string& session_id,
                                   const CommandCallback& callback) {
       callback.Run(Status{kOk}, nullptr, session_id, true);
@@ -408,7 +407,7 @@ class WebSocketMessageTest : public testing::Test {
   }
 
   Command SuccessEmptyResultClosure() {
-    return base::BindRepeating([](const base::Value::Dict& params,
+    return base::BindRepeating([](const base::DictValue& params,
                                   const std::string& session_id,
                                   const CommandCallback& callback) {
       callback.Run(Status{kOk},
@@ -419,7 +418,7 @@ class WebSocketMessageTest : public testing::Test {
 
   Command SessionCreatedClosure(std::string session_id) {
     return base::BindRepeating(
-        [](std::string created_session_id, const base::Value::Dict& params,
+        [](std::string created_session_id, const base::DictValue& params,
            const std::string& session_id, const CommandCallback& callback) {
           callback.Run(Status{kOk},
                        std::make_unique<base::Value>(base::Value::Type::DICT),
@@ -491,8 +490,8 @@ TEST_F(WebSocketMessageTest, UnknownSessionWithId) {
   base::RunLoop run_loop;
   MockHttpServer http_server;
   Status expected_error{kInvalidSessionId, "session not found"};
-  std::string expected_response =
-      ToString(internal::CreateBidiErrorResponse(expected_error, 15));
+  std::string expected_response = ToString(
+      internal::CreateBidiErrorResponse(expected_error, base::Value(15)));
   EXPECT_CALL(http_server, SendOverWebSocket(Eq(3), Eq(expected_response)));
   std::string incoming = "{\"method\": \"some\", \"id\": 15, \"params\": {}}";
   handler->OnWebSocketMessage(&http_server, 3, incoming);
@@ -516,8 +515,8 @@ TEST_F(WebSocketMessageTest, SessionCommandWithIdUnboundConnection) {
   base::RunLoop run_loop;
   MockHttpServer http_server;
   Status expected_error{kInvalidSessionId, "session not found"};
-  std::string expected_response =
-      ToString(internal::CreateBidiErrorResponse(expected_error, 15));
+  std::string expected_response = ToString(
+      internal::CreateBidiErrorResponse(expected_error, base::Value(15)));
   // The connection is unbound
   AddConnection(3);
   EXPECT_CALL(http_server, SendOverWebSocket(Eq(3), Eq(expected_response)));
@@ -546,7 +545,7 @@ TEST_F(WebSocketMessageTest, SessionCommandNoIdUnboundConnection) {
   base::RunLoop run_loop;
   MockHttpServer http_server;
   std::string incoming = "{\"method\": \"script.evaluate\", \"params\": {}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status expected_error = internal::ParseBidiCommand(incoming, parsed);
   // missing "id" is an "invalid argument" error
   EXPECT_EQ(kInvalidArgument, expected_error.code());
@@ -576,7 +575,7 @@ TEST_F(WebSocketMessageTest, SessionCommandNoIdBoundConnection) {
   MockHttpServer http_server;
   AddConnection(4, "some_session");
   std::string incoming = "{\"method\": \"script.evaluate\", \"params\": {}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status expected_error = internal::ParseBidiCommand(incoming, parsed);
   EXPECT_EQ(kInvalidArgument, expected_error.code());
   std::string expected_response =
@@ -604,11 +603,11 @@ TEST_F(WebSocketMessageTest, NoMethodUnboundConnection) {
   MockHttpServer http_server;
   AddConnection(5);
   std::string incoming = "{\"id\": 61, \"params\": {}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status expected_error = internal::ParseBidiCommand(incoming, parsed);
   EXPECT_EQ(kInvalidArgument, expected_error.code());
-  std::string expected_response =
-      ToString(internal::CreateBidiErrorResponse(expected_error, 61));
+  std::string expected_response = ToString(
+      internal::CreateBidiErrorResponse(expected_error, base::Value(61)));
   EXPECT_CALL(http_server, SendOverWebSocket(Eq(5), Eq(expected_response)));
   handler->OnWebSocketMessage(&http_server, 5, incoming);
   task_environment.GetMainThreadTaskRunner()->PostTask(FROM_HERE,
@@ -632,11 +631,11 @@ TEST_F(WebSocketMessageTest, NoMethodBoundConnection) {
   MockHttpServer http_server;
   AddConnection(5, "some_session");
   std::string incoming = "{\"id\": 61, \"params\": {}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status expected_error = internal::ParseBidiCommand(incoming, parsed);
   EXPECT_EQ(kInvalidArgument, expected_error.code());
-  std::string expected_response =
-      ToString(internal::CreateBidiErrorResponse(expected_error, 61));
+  std::string expected_response = ToString(
+      internal::CreateBidiErrorResponse(expected_error, base::Value(61)));
   EXPECT_CALL(http_server, SendOverWebSocket(Eq(5), Eq(expected_response)));
   handler->OnWebSocketMessage(&http_server, 5, incoming);
   task_environment.GetMainThreadTaskRunner()->PostTask(FROM_HERE,
@@ -660,11 +659,11 @@ TEST_F(WebSocketMessageTest, SessionCommandNoParamsUnboundConnection) {
   MockHttpServer http_server;
   AddConnection(6);
   std::string incoming = "{\"method\": \"script.evaluate\", \"id\": 18}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status expected_error = internal::ParseBidiCommand(incoming, parsed);
   EXPECT_EQ(kInvalidArgument, expected_error.code());
-  std::string expected_response =
-      ToString(internal::CreateBidiErrorResponse(expected_error, 18));
+  std::string expected_response = ToString(
+      internal::CreateBidiErrorResponse(expected_error, base::Value(18)));
   EXPECT_CALL(http_server, SendOverWebSocket(Eq(6), Eq(expected_response)));
   handler->OnWebSocketMessage(&http_server, 6, incoming);
   task_environment.GetMainThreadTaskRunner()->PostTask(FROM_HERE,
@@ -689,11 +688,11 @@ TEST_F(WebSocketMessageTest, SessionCommandNoParamsBoundConnection) {
   MockHttpServer http_server;
   AddConnection(6, "some_session");
   std::string incoming = "{\"method\": \"script.evaluate\", \"id\": 18}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status expected_error = internal::ParseBidiCommand(incoming, parsed);
   EXPECT_EQ(kInvalidArgument, expected_error.code());
-  std::string expected_response =
-      ToString(internal::CreateBidiErrorResponse(expected_error, 18));
+  std::string expected_response = ToString(
+      internal::CreateBidiErrorResponse(expected_error, base::Value(18)));
   EXPECT_CALL(http_server, SendOverWebSocket(Eq(6), Eq(expected_response)));
   handler->OnWebSocketMessage(&http_server, 6, incoming);
   task_environment.GetMainThreadTaskRunner()->PostTask(FROM_HERE,
@@ -717,7 +716,7 @@ TEST_F(WebSocketMessageTest, MalformedJson) {
   MockHttpServer http_server;
   AddConnection(6, "some_session");
   std::string incoming = "}{";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status expected_error = internal::ParseBidiCommand(incoming, parsed);
   EXPECT_TRUE(expected_error.IsError());
   std::string expected_response =
@@ -747,8 +746,8 @@ TEST_F(WebSocketMessageTest, UnknownCommandUnboundConnection) {
   std::string incoming =
       "{\"method\": \"abracadabra\", \"id\": 19, \"params\": {}}";
   Status expected_error = {kUnknownCommand, "abracadabra"};
-  std::string expected_response =
-      ToString(internal::CreateBidiErrorResponse(expected_error, 19));
+  std::string expected_response = ToString(
+      internal::CreateBidiErrorResponse(expected_error, base::Value(19)));
   EXPECT_CALL(http_server, SendOverWebSocket(Eq(7), Eq(expected_response)));
   handler->OnWebSocketMessage(&http_server, 7, incoming);
   task_environment.GetMainThreadTaskRunner()->PostTask(FROM_HERE,
@@ -777,7 +776,7 @@ TEST_F(WebSocketMessageTest, UnknownCommandBoundConnection) {
       "{\"method\": \"abracadabra\", \"id\": 19, \"params\": {}}";
   bool invoked = false;
   SetForwardingCommand(base::BindRepeating(
-      [](bool* invoked, const base::Value::Dict& params,
+      [](bool* invoked, const base::DictValue& params,
          const std::string& session_id, const CommandCallback&) {
         *invoked = true;
         EXPECT_EQ("some_session", session_id);
@@ -800,7 +799,7 @@ TEST_F(WebSocketMessageTest, StaticCommandNoIdUnboundConnection) {
   base::RunLoop run_loop;
   AddStaticCommand("echo", EchoClosure());
   std::string incoming = "{\"method\": \"echo\", \"params\": {}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status expected_error = internal::ParseBidiCommand(incoming, parsed);
   // missing "id" is an "invalid argument" error
   EXPECT_EQ(kInvalidArgument, expected_error.code());
@@ -831,7 +830,7 @@ TEST_F(WebSocketMessageTest, StaticCommandNoIdBoundConnection) {
   base::RunLoop run_loop;
   AddStaticCommand("echo", EchoClosure());
   std::string incoming = "{\"method\": \"echo\", \"params\": {}}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status expected_error = internal::ParseBidiCommand(incoming, parsed);
   // missing "id" is an "invalid argument" error
   EXPECT_EQ(kInvalidArgument, expected_error.code());
@@ -864,11 +863,11 @@ TEST_F(WebSocketMessageTest, StaticCommandNoParamsUnboundConnection) {
   AddConnection(6);
   AddStaticCommand("echo", EchoClosure());
   std::string incoming = "{\"method\": \"echo\", \"id\": 18}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status expected_error = internal::ParseBidiCommand(incoming, parsed);
   EXPECT_EQ(kInvalidArgument, expected_error.code());
-  std::string expected_response =
-      ToString(internal::CreateBidiErrorResponse(expected_error, 18));
+  std::string expected_response = ToString(
+      internal::CreateBidiErrorResponse(expected_error, base::Value(18)));
   EXPECT_CALL(http_server, SendOverWebSocket(Eq(6), Eq(expected_response)));
   handler->OnWebSocketMessage(&http_server, 6, incoming);
   task_environment.GetMainThreadTaskRunner()->PostTask(FROM_HERE,
@@ -895,11 +894,11 @@ TEST_F(WebSocketMessageTest, StaticCommandNoParamsBoundConnection) {
   AddConnection(6, "some_session");
   AddStaticCommand("echo", EchoClosure());
   std::string incoming = "{\"method\": \"echo\", \"id\": 18}";
-  base::Value::Dict parsed;
+  base::DictValue parsed;
   Status expected_error = internal::ParseBidiCommand(incoming, parsed);
   EXPECT_EQ(kInvalidArgument, expected_error.code());
-  std::string expected_response =
-      ToString(internal::CreateBidiErrorResponse(expected_error, 18));
+  std::string expected_response = ToString(
+      internal::CreateBidiErrorResponse(expected_error, base::Value(18)));
   EXPECT_CALL(http_server, SendOverWebSocket(Eq(6), Eq(expected_response)));
   handler->OnWebSocketMessage(&http_server, 6, incoming);
   task_environment.GetMainThreadTaskRunner()->PostTask(FROM_HERE,
@@ -928,12 +927,12 @@ TEST_F(WebSocketMessageTest, KnownStaticCommandReturnsSuccess) {
   AddStaticCommand("echo", EchoClosure());
   std::string incoming =
       "{\"method\": \"echo\", \"id\": 20, \"params\": {\"a\": 1}}";
-  base::Value::Dict expected_response;
-  base::Value::Dict parsed;
+  base::DictValue expected_response;
+  base::DictValue parsed;
   EXPECT_TRUE(StatusOk(internal::ParseBidiCommand(incoming, parsed)));
   parsed.Set("is_response", true);
   expected_response.Set("type", "success");
-  expected_response.Set("id", parsed.FindDouble("id").value_or(-1));
+  expected_response.Set("id", parsed.FindInt("id").value_or(-1));
   expected_response.Set("result", std::move(parsed));
   std::string expected_response_message = ToString(expected_response);
   EXPECT_CALL(http_server,
@@ -955,8 +954,8 @@ TEST_F(WebSocketMessageTest, KnownStaticCommandReturnsError) {
   std::string incoming =
       "{\"method\": \"fail\", \"id\": 21, \"params\": {\"a\": 1}}";
   Status expected_error = Status{kInvalidSelector, "this game has no name"};
-  std::string expected_response =
-      ToString(internal::CreateBidiErrorResponse(expected_error, 21));
+  std::string expected_response = ToString(
+      internal::CreateBidiErrorResponse(expected_error, base::Value(21)));
   EXPECT_CALL(http_server, SendOverWebSocket(Eq(9), Eq(expected_response)));
   handler->OnWebSocketMessage(&http_server, 9, incoming);
   task_environment.GetMainThreadTaskRunner()->PostTask(FROM_HERE,
@@ -1014,10 +1013,10 @@ TEST_F(WebSocketMessageTest, SessionCommandReturnsError) {
   base::RunLoop run_loop;
   MockHttpServer http_server;
   AddConnection(9, "some_session");
-  Command fail = base::BindRepeating([](const base::Value::Dict& params,
+  Command fail = base::BindRepeating([](const base::DictValue& params,
                                         const std::string& session_id,
                                         const CommandCallback& callback) {
-    base::Value::Dict response;
+    base::DictValue response;
     if (params.FindDoubleByDottedPath("bidiCommand.id")) {
       response.Set("id", *params.FindDoubleByDottedPath("bidiCommand.id"));
     }
@@ -1029,8 +1028,8 @@ TEST_F(WebSocketMessageTest, SessionCommandReturnsError) {
   std::string incoming =
       "{\"method\": \"fail\", \"id\": 21, \"params\": {\"a\": 1}}";
   Status expected_error = Status{kJavaScriptError, "this game has no name"};
-  std::string expected_response =
-      ToString(internal::CreateBidiErrorResponse(expected_error, 21));
+  std::string expected_response = ToString(
+      internal::CreateBidiErrorResponse(expected_error, base::Value(21)));
   EXPECT_CALL(http_server, SendOverWebSocket(Eq(9), Eq(expected_response)));
   handler->OnWebSocketMessage(&http_server, 9, incoming);
   task_environment.GetMainThreadTaskRunner()->PostTask(FROM_HERE,
@@ -1043,10 +1042,10 @@ TEST_F(WebSocketMessageTest, SessionCommandResponseIsPostedToIO) {
   base::RunLoop run_loop;
   MockHttpServer http_server;
   AddConnection(8);
-  Command echo = base::BindRepeating([](const base::Value::Dict& params,
+  Command echo = base::BindRepeating([](const base::DictValue& params,
                                         const std::string& session_id,
                                         const CommandCallback& callback) {
-    base::Value::Dict response;
+    base::DictValue response;
     if (params.FindDict("bidiCommand")) {
       response = params.FindDict("bidiCommand")->Clone();
     }
@@ -1068,7 +1067,7 @@ TEST_F(WebSocketMessageTest, StaticCommandOnSessionBoundConnection) {
   MockHttpServer http_server;
   AddConnection(9, "some_session");
   auto register_invocation = base::BindRepeating(
-      [](bool* invoked, const base::Value::Dict& params,
+      [](bool* invoked, const base::DictValue& params,
          const std::string& session_id, const CommandCallback& callback) {
         *invoked = true;
         callback.Run(Status{kOk}, std::make_unique<base::Value>(params.Clone()),
@@ -1101,8 +1100,8 @@ TEST_F(WebSocketMessageTest, SessionNew) {
   // Check that connection #8 is not open
   {
     Status expected_error{kInvalidSessionId, "session not found"};
-    std::string expected_response_str =
-        ToString(internal::CreateBidiErrorResponse(expected_error, 23));
+    std::string expected_response_str = ToString(
+        internal::CreateBidiErrorResponse(expected_error, base::Value(23)));
     EXPECT_CALL(http_server, SendOverWebSocket(8, expected_response_str));
     std::string incoming =
         "{\"method\": \"script.evaluate\", \"id\": 23, \"params\": {}}";
@@ -1113,10 +1112,10 @@ TEST_F(WebSocketMessageTest, SessionNew) {
     run_loop.Run();
   }
   {
-    base::Value::Dict expected_response;
-    expected_response.Set("id", 24.0);
+    base::DictValue expected_response;
+    expected_response.Set("id", 24);
     expected_response.Set("type", "success");
-    expected_response.Set("result", base::Value::Dict());
+    expected_response.Set("result", base::DictValue());
     std::string expected_response_str = ToString(expected_response);
     EXPECT_CALL(http_server, SendOverWebSocket(8, expected_response_str));
     std::string incoming =
@@ -1129,10 +1128,10 @@ TEST_F(WebSocketMessageTest, SessionNew) {
   }
   // Check that connection #8 is bound to a new session
   {
-    base::Value::Dict expected_response;
-    expected_response.Set("id", 25.0);
+    base::DictValue expected_response;
+    expected_response.Set("id", 25);
     expected_response.Set("type", "success");
-    expected_response.Set("result", base::Value::Dict());
+    expected_response.Set("result", base::DictValue());
     std::string expected_response_str = ToString(expected_response);
     EXPECT_CALL(http_server, SendOverWebSocket(8, expected_response_str));
     std::string incoming =
@@ -1152,10 +1151,10 @@ TEST_F(WebSocketMessageTest, SessionEnd) {
   AddSessionCommand("session.end", SuccessEmptyResultClosure());
   SetForwardingCommand(SuccessEmptyResultClosure());
   {
-    base::Value::Dict expected_response;
-    expected_response.Set("id", 21.0);
+    base::DictValue expected_response;
+    expected_response.Set("id", 21);
     expected_response.Set("type", "success");
-    expected_response.Set("result", base::Value::Dict());
+    expected_response.Set("result", base::DictValue());
     std::string expected_response_str = ToString(expected_response);
     EXPECT_CALL(http_server, SendOverWebSocket(10, expected_response_str));
     std::string incoming =
@@ -1275,7 +1274,7 @@ TEST_F(WebSocketRequestTest, CreateUnboundConnection) {
 
   bool invoked = false;
   Command cmd = base::BindRepeating(
-      [](bool* invoked, const base::Value::Dict& params,
+      [](bool* invoked, const base::DictValue& params,
          const std::string& session_id, const CommandCallback& callback) {
         *invoked = true;
         callback.Run(Status{kOk}, std::make_unique<base::Value>(params.Clone()),

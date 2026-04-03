@@ -15,12 +15,10 @@
 #include "ash/clipboard/clipboard_history_item.h"
 #include "ash/clipboard/clipboard_history_menu_model_adapter.h"
 #include "ash/clipboard/clipboard_history_resource_manager.h"
-#include "ash/clipboard/clipboard_history_url_title_fetcher.h"
 #include "ash/clipboard/clipboard_history_util.h"
 #include "ash/clipboard/clipboard_nudge_constants.h"
 #include "ash/clipboard/clipboard_nudge_controller.h"
 #include "ash/clipboard/scoped_clipboard_history_pause_impl.h"
-#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/display/display_util.h"
 #include "ash/public/cpp/clipboard_image_model_factory.h"
@@ -35,7 +33,6 @@
 #include "base/check_is_test.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/json/values_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -51,8 +48,7 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
-#include "chromeos/constants/chromeos_features.h"
-#include "chromeos/crosapi/mojom/clipboard_history.mojom.h"
+#include "chromeos/ui/clipboard_history/clipboard_history_types.h"
 #include "components/prefs/pref_service.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
@@ -65,7 +61,7 @@
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/color/color_provider_source.h"
 #include "ui/events/event.h"
@@ -73,6 +69,7 @@
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/menu/menu_controller.h"
 
 #if BUILDFLAG(USE_XKBCOMMON)
@@ -212,7 +209,8 @@ ui::KeyEvent SyntheticCtrlV(ui::EventType type) {
 }
 
 ui::KeyEvent SyntheticCtrl(ui::EventType type) {
-  int flags = type == ui::ET_KEY_PRESSED ? ui::EF_CONTROL_DOWN : ui::EF_NONE;
+  int flags =
+      type == ui::EventType::kKeyPressed ? ui::EF_CONTROL_DOWN : ui::EF_NONE;
   ui::DomCode dom_code = ui::DomCode::NONE;
 #if BUILDFLAG(USE_XKBCOMMON)
   dom_code = LookUpXkbDomCode(XKB_KEY_Control_L);
@@ -222,37 +220,21 @@ ui::KeyEvent SyntheticCtrl(ui::EventType type) {
              : ui::KeyEvent(type, ui::VKEY_CONTROL, dom_code, flags);
 }
 
-void SyntheticPaste(
-    crosapi::mojom::ClipboardHistoryControllerShowSource paste_source) {
+void SyntheticPaste(chromeos::clipboard_history::ShowSource paste_source) {
   auto* host = GetWindowTreeHostForDisplay(
-      display::Screen::GetScreen()->GetDisplayForNewWindows().id());
+      display::Screen::Get()->GetDisplayForNewWindows().id());
   CHECK(host);
 
-  // Because we do not require the user to release Ctrl+V before selecting a
-  // clipboard history item to paste, the Ctrl+V event we synthesize below may
-  // be discarded as a perceived continuation of the long press. Preempt this
-  // scenario by issuing a Ctrl+V release to ensure that the press and release
-  // below are handled as an independent paste.
-  // TODO(http://b/283533126): Replace this workaround with a long-term fix.
-  if (paste_source == crosapi::mojom::ClipboardHistoryControllerShowSource::
-                          kControlVLongpress) {
-    ui::KeyEvent v_release = SyntheticCtrlV(ui::ET_KEY_RELEASED);
-    host->DeliverEventToSink(&v_release);
-
-    ui::KeyEvent ctrl_release = SyntheticCtrl(ui::ET_KEY_RELEASED);
-    host->DeliverEventToSink(&ctrl_release);
-  }
-
-  ui::KeyEvent ctrl_press = SyntheticCtrl(ui::ET_KEY_PRESSED);
+  ui::KeyEvent ctrl_press = SyntheticCtrl(ui::EventType::kKeyPressed);
   host->DeliverEventToSink(&ctrl_press);
 
-  ui::KeyEvent v_press = SyntheticCtrlV(ui::ET_KEY_PRESSED);
+  ui::KeyEvent v_press = SyntheticCtrlV(ui::EventType::kKeyPressed);
   host->DeliverEventToSink(&v_press);
 
-  ui::KeyEvent v_release = SyntheticCtrlV(ui::ET_KEY_RELEASED);
+  ui::KeyEvent v_release = SyntheticCtrlV(ui::EventType::kKeyReleased);
   host->DeliverEventToSink(&v_release);
 
-  ui::KeyEvent ctrl_release = SyntheticCtrl(ui::ET_KEY_RELEASED);
+  ui::KeyEvent ctrl_release = SyntheticCtrl(ui::EventType::kKeyReleased);
   host->DeliverEventToSink(&ctrl_release);
 }
 
@@ -278,7 +260,7 @@ bool IsPlainTextPaste(ClipboardHistoryPasteType paste_type) {
 }
 
 ClipboardHistoryPasteType CalculatePasteType(
-    crosapi::mojom::ClipboardHistoryControllerShowSource paste_source,
+    chromeos::clipboard_history::ShowSource paste_source,
     int event_flags) {
   // There are no specific flags that indicate a paste triggered by a
   // keystroke, so assume by default that keystroke was the event source
@@ -289,7 +271,7 @@ ClipboardHistoryPasteType CalculatePasteType(
   const bool paste_plain_text = event_flags & ui::EF_SHIFT_DOWN;
 
   if (paste_source ==
-      crosapi::mojom::ClipboardHistoryControllerShowSource::kVirtualKeyboard) {
+      chromeos::clipboard_history::ShowSource::kVirtualKeyboard) {
     return paste_plain_text
                ? ClipboardHistoryPasteType::kPlainTextVirtualKeyboard
                : ClipboardHistoryPasteType::kRichTextVirtualKeyboard;
@@ -369,7 +351,6 @@ class ClipboardHistoryControllerImpl::AcceleratorTarget
       HandlePasteFirstItem(ClipboardHistoryPasteType::kPlainTextCtrlV);
     } else {
       NOTREACHED();
-      return false;
     }
 
     return true;
@@ -438,8 +419,6 @@ class ClipboardHistoryControllerImpl::MenuDelegate
 ClipboardHistoryControllerImpl::ClipboardHistoryControllerImpl(
     std::unique_ptr<ClipboardHistoryControllerDelegate> delegate)
     : delegate_(std::move(delegate)),
-      image_model_factory_(delegate_->CreateImageModelFactory()),
-      url_title_fetcher_(delegate_->CreateUrlTitleFetcher()),
       clipboard_history_(std::make_unique<ClipboardHistory>()),
       resource_manager_(std::make_unique<ClipboardHistoryResourceManager>(
           clipboard_history_.get())),
@@ -447,9 +426,6 @@ ClipboardHistoryControllerImpl::ClipboardHistoryControllerImpl(
       nudge_controller_(
           std::make_unique<ClipboardNudgeController>(clipboard_history_.get())),
       menu_delegate_(std::make_unique<MenuDelegate>(this)) {
-  if (!image_model_factory_ || !url_title_fetcher_) {
-    CHECK_IS_TEST();
-  }
   clipboard_history_->AddObserver(this);
   resource_manager_->AddObserver(this);
   SessionController::Get()->AddObserver(this);
@@ -502,8 +478,8 @@ void ClipboardHistoryControllerImpl::ToggleMenuShownByAccelerator(
     return;
   }
 
-  ShowMenu(CalculateAnchorRect(), ui::MENU_SOURCE_KEYBOARD,
-           crosapi::mojom::ClipboardHistoryControllerShowSource::kAccelerator);
+  ShowMenu(CalculateAnchorRect(), ui::mojom::MenuSourceType::kKeyboard,
+           chromeos::clipboard_history::ShowSource::kAccelerator);
 }
 
 void ClipboardHistoryControllerImpl::AddObserver(
@@ -518,16 +494,16 @@ void ClipboardHistoryControllerImpl::RemoveObserver(
 
 bool ClipboardHistoryControllerImpl::ShowMenu(
     const gfx::Rect& anchor_rect,
-    ui::MenuSourceType source_type,
-    crosapi::mojom::ClipboardHistoryControllerShowSource show_source) {
+    ui::mojom::MenuSourceType source_type,
+    chromeos::clipboard_history::ShowSource show_source) {
   return ShowMenu(anchor_rect, source_type, show_source,
                   OnMenuClosingCallback());
 }
 
 bool ClipboardHistoryControllerImpl::ShowMenu(
     const gfx::Rect& anchor_rect,
-    ui::MenuSourceType source_type,
-    crosapi::mojom::ClipboardHistoryControllerShowSource show_source,
+    ui::mojom::MenuSourceType source_type,
+    chromeos::clipboard_history::ShowSource show_source,
     OnMenuClosingCallback callback) {
   if (IsMenuShowing() || !HasAvailableHistoryItems()) {
     return false;
@@ -599,7 +575,7 @@ void ClipboardHistoryControllerImpl::GetHistoryValues(
   std::map<base::UnguessableToken, SkBitmap> bitmaps_to_be_encoded;
   for (auto& item : clipboard_history_->GetItems()) {
     if (item.display_format() ==
-        crosapi::mojom::ClipboardHistoryDisplayFormat::kPng) {
+        chromeos::clipboard_history::DisplayFormat::kPng) {
       const auto& maybe_png = item.data().maybe_png();
       if (!maybe_png.has_value()) {
         // The clipboard contains an image which has not yet been encoded to a
@@ -697,7 +673,7 @@ void ClipboardHistoryControllerImpl::GetHistoryValuesWithEncodedPNGs(
   bool all_images_encoded = true;
   for (auto& item : clipboard_history_->GetItems()) {
     if (item.display_format() ==
-            crosapi::mojom::ClipboardHistoryDisplayFormat::kPng &&
+            chromeos::clipboard_history::DisplayFormat::kPng &&
         !item.data().maybe_png().has_value()) {
       // The clipboard contains an image which has not yet been encoded to a
       // PNG. Hopefully we just finished encoding and the PNG can be found
@@ -740,7 +716,7 @@ std::vector<std::string> ClipboardHistoryControllerImpl::GetHistoryItemIds()
 bool ClipboardHistoryControllerImpl::PasteClipboardItemById(
     const std::string& item_id,
     int event_flags,
-    crosapi::mojom::ClipboardHistoryControllerShowSource paste_source) {
+    chromeos::clipboard_history::ShowSource paste_source) {
   const std::list<ClipboardHistoryItem>& history_items = history()->GetItems();
   auto iter_by_id = std::find_if(history_items.cbegin(), history_items.cend(),
                                  [&item_id](const ClipboardHistoryItem& item) {
@@ -919,7 +895,7 @@ void ClipboardHistoryControllerImpl::ExecuteCommand(int command_id,
       context_menu_->SelectMenuItemHoveredByMouse();
       return;
     case Action::kEmpty:
-      DUMP_WILL_BE_NOTREACHED_NORETURN();
+      DUMP_WILL_BE_NOTREACHED();
       return;
   }
 }
@@ -945,7 +921,7 @@ void ClipboardHistoryControllerImpl::PasteClipboardItemByCommandId(
 void ClipboardHistoryControllerImpl::MaybePostPasteTask(
     const ClipboardHistoryItem& item,
     ClipboardHistoryPasteType paste_type,
-    crosapi::mojom::ClipboardHistoryControllerShowSource paste_source) {
+    chromeos::clipboard_history::ShowSource paste_source) {
   // Deactivate ClipboardImageModelFactory prior to pasting to ensure that any
   // modifications to the clipboard for HTML rendering purposes are reversed.
   // This factory may be nullptr in tests.
@@ -968,7 +944,7 @@ void ClipboardHistoryControllerImpl::PasteClipboardHistoryItem(
     aura::Window* intended_window,
     ClipboardHistoryItem item,
     ClipboardHistoryPasteType paste_type,
-    crosapi::mojom::ClipboardHistoryControllerShowSource paste_source) {
+    chromeos::clipboard_history::ShowSource paste_source) {
   // Return early if any of these conditions occur:
   // 1. The original clipboard data has been replaced by an in-progress
   //    clipboard history paste.
@@ -1120,13 +1096,11 @@ void ClipboardHistoryControllerImpl::AdvancePseudoFocus(bool reverse) {
 }
 
 gfx::Rect ClipboardHistoryControllerImpl::CalculateAnchorRect() const {
-  display::Display display = display::Screen::GetScreen()->GetPrimaryDisplay();
+  display::Display display = display::Screen::Get()->GetPrimaryDisplay();
   auto* host = GetWindowTreeHostForDisplay(display.id());
 
   // Some web apps render the caret in an IFrame, and we will not get the
   // bounds in that case.
-  // TODO(https://crbug.com/1099930): Show the menu in the middle of the
-  // webview if the bounds are empty.
   ui::TextInputClient* text_input_client =
       host->GetInputMethod()->GetTextInputClient();
 
@@ -1147,8 +1121,7 @@ gfx::Rect ClipboardHistoryControllerImpl::CalculateAnchorRect() const {
   if (textfield_bounds_are_valid)
     return textfield_bounds;
 
-  return gfx::Rect(display::Screen::GetScreen()->GetCursorScreenPoint(),
-                   gfx::Size());
+  return gfx::Rect(display::Screen::Get()->GetCursorScreenPoint(), gfx::Size());
 }
 
 void ClipboardHistoryControllerImpl::OnMenuClosed() {

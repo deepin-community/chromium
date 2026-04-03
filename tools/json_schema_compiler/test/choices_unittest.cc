@@ -8,7 +8,6 @@
 
 #include <utility>
 
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "tools/json_schema_compiler/test/test_util.h"
@@ -86,9 +85,9 @@ TEST(JsonSchemaCompilerChoicesTest, ObjectWithChoicesParamsCreate) {
 
 TEST(JsonSchemaCompilerChoicesTest, ObjectWithChoicesParamsCreateFail) {
   {
-    base::Value::Dict object_param;
+    base::DictValue object_param;
     object_param.Set("strings", 5);
-    base::Value::List params_value;
+    base::ListValue params_value;
     params_value.Append(std::move(object_param));
     std::optional<choices::ObjectWithChoices::Params> params(
         choices::ObjectWithChoices::Params::Create(
@@ -96,10 +95,10 @@ TEST(JsonSchemaCompilerChoicesTest, ObjectWithChoicesParamsCreateFail) {
     EXPECT_FALSE(params.has_value());
   }
   {
-    base::Value::Dict object_param;
+    base::DictValue object_param;
     object_param.Set("strings", "asdf");
     object_param.Set("integers", "asdf");
-    base::Value::List params_value;
+    base::ListValue params_value;
     params_value.Append(std::move(object_param));
     std::optional<choices::ObjectWithChoices::Params> params(
         choices::ObjectWithChoices::Params::Create(
@@ -107,9 +106,9 @@ TEST(JsonSchemaCompilerChoicesTest, ObjectWithChoicesParamsCreateFail) {
     EXPECT_FALSE(params.has_value());
   }
   {
-    base::Value::Dict object_param;
+    base::DictValue object_param;
     object_param.Set("integers", 6);
-    base::Value::List params_value;
+    base::ListValue params_value;
     params_value.Append(std::move(object_param));
     std::optional<choices::ObjectWithChoices::Params> params(
         choices::ObjectWithChoices::Params::Create(
@@ -123,11 +122,11 @@ TEST(JsonSchemaCompilerChoicesTest, PopulateChoiceType) {
                                             std::string("of"),
                                             std::string("strings"));
 
-  base::Value::List strings_value;
+  base::ListValue strings_value;
   for (const auto& string : strings)
     strings_value.Append(string);
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("integers", 4);
   dict.Set("strings", std::move(strings_value));
 
@@ -149,12 +148,12 @@ TEST(JsonSchemaCompilerChoicesTest, PopulateChoiceType) {
 }
 
 TEST(JsonSchemaCompilerChoicesTest, ChoiceTypeToValue) {
-  base::Value::List strings_value;
+  base::ListValue strings_value;
   strings_value.Append("list");
   strings_value.Append("of");
   strings_value.Append("strings");
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("integers", 5);
   dict.Set("strings", std::move(strings_value));
 
@@ -171,7 +170,7 @@ TEST(JsonSchemaCompilerChoicesTest, ReturnChoices) {
 
     base::Value results_value(results.ToValue());
 
-    base::Value::List expected;
+    base::ListValue expected;
     expected.Append(1);
     expected.Append(2);
 

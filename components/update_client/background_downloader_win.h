@@ -5,12 +5,15 @@
 #ifndef COMPONENTS_UPDATE_CLIENT_BACKGROUND_DOWNLOADER_WIN_H_
 #define COMPONENTS_UPDATE_CLIENT_BACKGROUND_DOWNLOADER_WIN_H_
 
-#include <bits.h>
 #include <windows.h>
+
+#include <bits.h>
 #include <wrl/client.h>
 
 #include <memory>
+#include <string>
 
+#include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/function_ref.h"
 #include "base/gtest_prod_util.h"
@@ -21,7 +24,6 @@
 #include "components/update_client/crx_downloader.h"
 
 namespace base {
-class FilePath;
 class SequencedTaskRunner;
 }  // namespace base
 
@@ -39,7 +41,8 @@ namespace update_client {
 // interaction with the BITS service.
 class BackgroundDownloader : public CrxDownloader {
  public:
-  explicit BackgroundDownloader(scoped_refptr<CrxDownloader> successor);
+  explicit BackgroundDownloader(scoped_refptr<CrxDownloader> successor,
+                                const std::string& prod_id);
 
  private:
   friend class BackgroundDownloaderWinTest;
@@ -143,6 +146,9 @@ class BackgroundDownloader : public CrxDownloader {
 
   // Contains the path of the downloaded file if the download was successful.
   base::FilePath response_;
+
+  // Used as a prefix for temporary directories.
+  const base::FilePath::StringType prod_id_;
 };
 
 }  // namespace update_client

@@ -10,7 +10,8 @@
 #include <map>
 #include <set>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -27,7 +28,7 @@ namespace ash {
 
 namespace {
 
-const char* kSetParametersKeyList[] = {
+constexpr const char* kSetParametersKeyList[] = {
     shill::kAddressParameterThirdPartyVpn,
     shill::kBroadcastAddressParameterThirdPartyVpn,
     shill::kExclusionListParameterThirdPartyVpn,
@@ -62,7 +63,7 @@ class ShillThirdPartyVpnDriverClientImpl
       const std::string& object_path_value) override;
 
   void SetParameters(const std::string& object_path_value,
-                     const base::Value::Dict& parameters,
+                     const base::DictValue& parameters,
                      StringCallback callback,
                      ErrorCallback error_callback) override;
 
@@ -100,7 +101,7 @@ class ShillThirdPartyVpnDriverClientImpl
 
     base::WeakPtrFactory<HelperInfo> weak_ptr_factory_{this};
   };
-  using HelperMap = std::map<std::string, HelperInfo*>;
+  using HelperMap = std::map<std::string, raw_ptr<HelperInfo, CtnExperimental>>;
 
   static void OnPacketReceived(base::WeakPtr<HelperInfo> helper_info,
                                dbus::Signal* signal);
@@ -138,7 +139,7 @@ ShillThirdPartyVpnDriverClientImpl::ShillThirdPartyVpnDriverClientImpl(
     dbus::Bus* bus)
     : bus_(bus) {
   for (uint32_t i = 0; i < std::size(kSetParametersKeyList); ++i) {
-    valid_keys_.insert(kSetParametersKeyList[i]);
+    valid_keys_.insert(UNSAFE_TODO(kSetParametersKeyList[i]));
   }
 }
 
@@ -210,7 +211,7 @@ void ShillThirdPartyVpnDriverClientImpl::DeleteHelper(
 
 void ShillThirdPartyVpnDriverClientImpl::SetParameters(
     const std::string& object_path_value,
-    const base::Value::Dict& parameters,
+    const base::DictValue& parameters,
     StringCallback callback,
     ErrorCallback error_callback) {
   dbus::MethodCall method_call(shill::kFlimflamThirdPartyVpnInterface,
@@ -219,7 +220,7 @@ void ShillThirdPartyVpnDriverClientImpl::SetParameters(
   dbus::MessageWriter array_writer(nullptr);
   writer.OpenArray("{ss}", &array_writer);
   for (auto it : parameters) {
-    if (!base::Contains(valid_keys_, it.first)) {
+    if (!valid_keys_.contains(it.first)) {
       LOG(WARNING) << "Unknown key " << it.first;
       continue;
     }
@@ -277,11 +278,10 @@ void ShillThirdPartyVpnDriverClientImpl::OnPacketReceived(
     return;
 
   dbus::MessageReader reader(signal);
-  const uint8_t* data = nullptr;
-  size_t length = 0;
-  if (reader.PopArrayOfBytes(&data, &length)) {
+  base::span<const uint8_t> data;
+  if (reader.PopArrayOfBytes(&data)) {
     helper_info->observer()->OnPacketReceived(
-        std::vector<char>(data, data + length));
+        base::ToVector(data, [](uint8_t byte) -> char { return byte; }));
   }
 }
 

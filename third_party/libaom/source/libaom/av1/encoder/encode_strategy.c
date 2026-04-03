@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2019, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -44,7 +44,7 @@
 
 #define TEMPORAL_FILTER_KEY_FRAME (CONFIG_REALTIME_ONLY ? 0 : 1)
 
-static INLINE void set_refresh_frame_flags(
+static inline void set_refresh_frame_flags(
     RefreshFrameInfo *const refresh_frame, bool refresh_gf, bool refresh_bwdref,
     bool refresh_arf) {
   refresh_frame->golden_frame = refresh_gf;
@@ -237,16 +237,17 @@ static void adjust_frame_rate(AV1_COMP *cpi, int64_t ts_start, int64_t ts_end) {
 
   // Clear down mmx registers
 
-  if (cpi->ppi->use_svc && cpi->ppi->rtc_ref.set_ref_frame_config &&
-      cpi->svc.number_spatial_layers > 1) {
+  if (is_one_pass_rt_params(cpi) ||
+      (cpi->ppi->use_svc && cpi->ppi->rtc_ref.set_ref_frame_config &&
+       cpi->svc.number_spatial_layers > 1)) {
     // ts_start is the timestamp for the current frame and ts_end is the
     // expected next timestamp given the duration passed into codec_encode().
     // See the setting in encoder_encode() in av1_cx_iface.c:
     // ts_start = timebase_units_to_ticks(cpi_data.timestamp_ratio, ptsvol),
     // ts_end = timebase_units_to_ticks(cpi_data.timestamp_ratio, ptsvol +
     // duration). So the difference ts_end - ts_start is the duration passed
-    // in by the user. For spatial layers SVC set the framerate based directly
-    // on the duration, and bypass the adjustments below.
+    // in by the user. For RTC or spatial layers SVC set the framerate based
+    // directly on the duration, and bypass the adjustments below.
     this_duration = ts_end - ts_start;
     if (this_duration > 0) {
       cpi->new_framerate = 10000000.0 / this_duration;
@@ -712,27 +713,14 @@ int av1_get_refresh_frame_flags(
 }
 
 #if !CONFIG_REALTIME_ONLY
-void setup_mi(AV1_COMP *const cpi, YV12_BUFFER_CONFIG *src) {
-  AV1_COMMON *const cm = &cpi->common;
-  const int num_planes = av1_num_planes(cm);
-  MACROBLOCK *const x = &cpi->td.mb;
-  MACROBLOCKD *const xd = &x->e_mbd;
-
-  av1_setup_src_planes(x, src, 0, 0, num_planes, cm->seq_params->sb_size);
-
-  av1_setup_block_planes(xd, cm->seq_params->subsampling_x,
-                         cm->seq_params->subsampling_y, num_planes);
-
-  set_mi_offsets(&cm->mi_params, xd, 0, 0);
-}
-
 // Apply temporal filtering to source frames and encode the filtered frame.
 // If the current frame does not require filtering, this function is identical
 // to av1_encode() except that tpl is not performed.
 static int denoise_and_encode(AV1_COMP *const cpi, uint8_t *const dest,
+                              size_t dest_size,
                               EncodeFrameInput *const frame_input,
                               const EncodeFrameParams *const frame_params,
-                              EncodeFrameResults *const frame_results) {
+                              size_t *const frame_size) {
 #if CONFIG_COLLECT_COMPONENT_TIMING
   if (cpi->oxcf.pass == 2) start_timing(cpi, denoise_and_encode_time);
 #endif
@@ -914,7 +902,7 @@ static int denoise_and_encode(AV1_COMP *const cpi, uint8_t *const dest,
 #endif  // CONFIG_BITRATE_ACCURACY && CONFIG_THREE_PASS
   }
 
-  if (av1_encode(cpi, dest, frame_input, frame_params, frame_results) !=
+  if (av1_encode(cpi, dest, dest_size, frame_input, frame_params, frame_size) !=
       AOM_CODEC_OK) {
     return AOM_CODEC_ERROR;
   }
@@ -1006,6 +994,21 @@ void av1_get_ref_frames(RefFrameMapPair ref_frame_map_pairs[REF_FRAMES],
 
   // Initialize reference frame mappings.
   for (int i = 0; i < REF_FRAMES; ++i) remapped_ref_idx[i] = INVALID_IDX;
+
+  if (cpi->ppi->gf_group.use_ext_ref_frame_map[gf_index]) {
+    for (int rf = LAST_FRAME; rf < REF_FRAMES; ++rf) {
+      if (cpi->ppi->gf_group.ref_frame_list[gf_index][rf] != INVALID_IDX) {
+        remapped_ref_idx[rf - LAST_FRAME] =
+            (int)cpi->ppi->gf_group.ref_frame_list[gf_index][rf];
+      }
+    }
+    for (int i = 0; i < REF_FRAMES; ++i) {
+      if (remapped_ref_idx[i] == INVALID_IDX) {
+        remapped_ref_idx[i] = 0;
+      }
+    }
+    return;
+  }
 
 #if !CONFIG_REALTIME_ONLY
   if (cpi->use_ducky_encode &&
@@ -1154,8 +1157,8 @@ void av1_get_ref_frames(RefFrameMapPair ref_frame_map_pairs[REF_FRAMES],
     // Continue if the current ref slot is already full.
     if (remapped_ref_idx[frame - LAST_FRAME] != INVALID_IDX) continue;
     // Find the next unmapped reference buffer
-    // in decreasing ouptut order relative to current picture.
-    int next_buf_max = 0;
+    // in decreasing output order relative to current picture.
+    int next_buf_max = -1;
     int next_disp_order = INT_MIN;
     for (buf_map_idx = n_bufs - 1; buf_map_idx >= 0; buf_map_idx--) {
       if (!buffer_map[buf_map_idx].used &&
@@ -1176,8 +1179,8 @@ void av1_get_ref_frames(RefFrameMapPair ref_frame_map_pairs[REF_FRAMES],
     // Continue if the current ref slot is already full.
     if (remapped_ref_idx[frame - LAST_FRAME] != INVALID_IDX) continue;
     // Find the next unmapped reference buffer
-    // in increasing ouptut order relative to current picture.
-    int next_buf_max = 0;
+    // in increasing output order relative to current picture.
+    int next_buf_max = -1;
     int next_disp_order = INT_MAX;
     for (buf_map_idx = n_bufs - 1; buf_map_idx >= 0; buf_map_idx--) {
       if (!buffer_map[buf_map_idx].used &&
@@ -1227,8 +1230,9 @@ void av1_get_ref_frames(RefFrameMapPair ref_frame_map_pairs[REF_FRAMES],
 }
 
 int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
-                        uint8_t *const dest, unsigned int *frame_flags,
-                        int64_t *const time_stamp, int64_t *const time_end,
+                        uint8_t *const dest, size_t dest_size,
+                        unsigned int *frame_flags, int64_t *const time_stamp,
+                        int64_t *const time_end,
                         const aom_rational64_t *const timestamp_ratio,
                         int *const pop_lookahead, int flush) {
   AV1EncoderConfig *const oxcf = &cpi->oxcf;
@@ -1239,10 +1243,10 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
 
   EncodeFrameInput frame_input;
   EncodeFrameParams frame_params;
-  EncodeFrameResults frame_results;
+  size_t frame_size;
   memset(&frame_input, 0, sizeof(frame_input));
   memset(&frame_params, 0, sizeof(frame_params));
-  memset(&frame_results, 0, sizeof(frame_results));
+  frame_size = 0;
 
 #if CONFIG_BITRATE_ACCURACY && CONFIG_THREE_PASS
   VBR_RATECTRL_INFO *vbr_rc_info = &cpi->vbr_rc_info;
@@ -1313,8 +1317,7 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
     return -1;
   }
 
-  // TODO(sarahparker) finish bit allocation for one pass pyramid
-  if (has_no_stats_stage(cpi)) {
+  if (has_no_stats_stage(cpi) && !is_one_pass_rt_lag_params(cpi)) {
     gf_cfg->gf_max_pyr_height =
         AOMMIN(gf_cfg->gf_max_pyr_height, USE_ALTREF_FOR_ONE_PASS);
     gf_cfg->gf_min_pyr_height =
@@ -1474,6 +1477,7 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
     adjust_frame_rate(cpi, source->ts_start, source->ts_end);
 
   if (!frame_params.show_existing_frame) {
+#if !CONFIG_REALTIME_ONLY
     if (cpi->film_grain_table) {
       cm->cur_frame->film_grain_params_present = aom_film_grain_table_lookup(
           cpi->film_grain_table, *time_stamp, *time_end, 0 /* =erase */,
@@ -1482,6 +1486,7 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
       cm->cur_frame->film_grain_params_present =
           cm->seq_params->film_grain_params_present;
     }
+#endif
     // only one operating point supported now
     const int64_t pts64 = ticks_to_timebase_units(timestamp_ratio, *time_stamp);
     if (pts64 < 0 || pts64 > UINT32_MAX) return AOM_CODEC_ERROR;
@@ -1503,6 +1508,21 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
                                *frame_flags);
     if (use_rtc_reference_structure_one_layer(cpi))
       av1_set_rtc_reference_structure_one_layer(cpi, cpi->gf_frame_index == 0);
+  } else if (is_one_pass_rt_lag_params(cpi) && oxcf->rc_cfg.mode == AOM_CBR) {
+    // For realtime mode with lookahead in CBR: the current frame buffer_level
+    // is used to update the frame target_bandwidth, so we need to call
+    // av1_calc_i/pframe_target_size_one_pass_cbr() here for every frame.
+    int target;
+    const FRAME_UPDATE_TYPE cur_update_type =
+        gf_group->update_type[cpi->gf_frame_index];
+    if (cur_update_type == KF_UPDATE) {
+      target = av1_calc_iframe_target_size_one_pass_cbr(cpi);
+    } else {
+      target = av1_calc_pframe_target_size_one_pass_cbr(cpi, cur_update_type);
+    }
+    gf_group->bit_allocation[cpi->gf_frame_index] = target;
+    av1_rc_set_frame_target(cpi, target, cm->width, cm->height);
+    cpi->rc.base_frame_target = target;
   }
 #endif
 #if CONFIG_COLLECT_COMPONENT_TIMING
@@ -1683,19 +1703,19 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
   }
 
 #if CONFIG_REALTIME_ONLY
-  if (av1_encode(cpi, dest, &frame_input, &frame_params, &frame_results) !=
-      AOM_CODEC_OK) {
+  if (av1_encode(cpi, dest, dest_size, &frame_input, &frame_params,
+                 &frame_size) != AOM_CODEC_OK) {
     return AOM_CODEC_ERROR;
   }
 #else
   if (has_no_stats_stage(cpi) && oxcf->mode == REALTIME &&
       gf_cfg->lag_in_frames == 0) {
-    if (av1_encode(cpi, dest, &frame_input, &frame_params, &frame_results) !=
-        AOM_CODEC_OK) {
+    if (av1_encode(cpi, dest, dest_size, &frame_input, &frame_params,
+                   &frame_size) != AOM_CODEC_OK) {
       return AOM_CODEC_ERROR;
     }
-  } else if (denoise_and_encode(cpi, dest, &frame_input, &frame_params,
-                                &frame_results) != AOM_CODEC_OK) {
+  } else if (denoise_and_encode(cpi, dest, dest_size, &frame_input,
+                                &frame_params, &frame_size) != AOM_CODEC_OK) {
     return AOM_CODEC_ERROR;
   }
 #endif  // CONFIG_REALTIME_ONLY
@@ -1735,8 +1755,7 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
   }
 #endif
 
-  // Unpack frame_results:
-  *size = frame_results.size;
+  *size = frame_size;
 
   // Leave a signal for a higher level caller about if this frame is droppable
   if (*size > 0) {

@@ -4,12 +4,11 @@
 
 #include "ui/display/manager/content_protection_manager.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/check.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
 #include "ui/display/manager/apply_content_protection_task.h"
 #include "ui/display/manager/display_layout_manager.h"
 #include "ui/display/manager/query_content_protection_task.h"
@@ -182,8 +181,14 @@ void ContentProtectionManager::KillTasks() {
                   [this](const auto& pair) { return !GetDisplay(pair.first); });
   }
 
-  // Fire failure callbacks.
-  tasks_ = {};
+  // Move |tasks_| to new queue first before firing each task's failure
+  // callback. This avoids issues if a re-entrant call is made when tasks are
+  // being killed.
+  base::queue<std::unique_ptr<Task>> tasks;
+  tasks.swap(tasks_);
+  tasks = {};
+
+  CHECK(tasks_.empty());
 
   ToggleDisplaySecurityPolling();
 }
@@ -229,12 +234,12 @@ void ContentProtectionManager::OnContentProtectionApplied(
     DequeueTask();
 }
 
-void ContentProtectionManager::OnDisplayModeChanged(
+void ContentProtectionManager::OnDisplayConfigurationChanged(
     const DisplayConfigurator::DisplayStateList&) {
   KillTasks();
 }
 
-void ContentProtectionManager::OnDisplayModeChangeFailed(
+void ContentProtectionManager::OnDisplayConfigurationChangeFailed(
     const DisplayConfigurator::DisplayStateList&,
     MultipleDisplayState) {
   KillTasks();
@@ -243,14 +248,14 @@ void ContentProtectionManager::OnDisplayModeChangeFailed(
 bool ContentProtectionManager::HasExternalDisplaysWithContentProtection()
     const {
   const auto displays = layout_manager_->GetDisplayStates();
-  if (base::ranges::all_of(displays, [](const DisplaySnapshot* display) {
+  if (std::ranges::all_of(displays, [](const DisplaySnapshot* display) {
         return display->type() == DISPLAY_CONNECTION_TYPE_INTERNAL;
       })) {
     return false;
   }
 
   const auto protections = AggregateContentProtections();
-  return base::ranges::any_of(protections, [](const auto& pair) {
+  return std::ranges::any_of(protections, [](const auto& pair) {
     return pair.second != CONTENT_PROTECTION_METHOD_NONE;
   });
 }
@@ -307,7 +312,7 @@ void ContentProtectionManager::OnDisplaySecurityQueried(
                          connection_mask == DISPLAY_CONNECTION_TYPE_INTERNAL);
 
     for (Observer& observer : observers_)
-      observer.OnDisplaySecurityChanged(display_id, secure);
+      observer.OnDisplaySecurityMaybeChanged(display_id, secure);
   }
 
   if (status != Task::Status::KILLED)

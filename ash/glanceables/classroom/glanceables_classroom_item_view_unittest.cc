@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "ash/glanceables/classroom/glanceables_classroom_types.h"
@@ -17,8 +18,8 @@
 #include "base/functional/callback_helpers.h"
 #include "base/time/time.h"
 #include "base/time/time_override.h"
-#include "base/types/cxx23_to_underlying.h"
 #include "chromeos/ash/components/settings/scoped_timezone_settings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/view_utils.h"
@@ -31,33 +32,31 @@ class GlanceablesClassroomItemViewTest : public AshTestBase {
   const views::ImageView* GetIconView(
       const GlanceablesClassroomItemView& view) const {
     return views::AsViewClass<views::ImageView>(view.GetViewByID(
-        base::to_underlying(GlanceablesViewId::kClassroomItemIcon)));
+        std::to_underlying(GlanceablesViewId::kClassroomItemIcon)));
   }
 
   const views::Label* GetCourseWorkTitleLabel(
       const GlanceablesClassroomItemView& view) const {
-    return views::AsViewClass<views::Label>(
-        view.GetViewByID(base::to_underlying(
-            GlanceablesViewId::kClassroomItemCourseWorkTitleLabel)));
+    return views::AsViewClass<views::Label>(view.GetViewByID(std::to_underlying(
+        GlanceablesViewId::kClassroomItemCourseWorkTitleLabel)));
   }
 
   const views::Label* GetCourseTitleLabel(
       const GlanceablesClassroomItemView& view) const {
-    return views::AsViewClass<views::Label>(
-        view.GetViewByID(base::to_underlying(
-            GlanceablesViewId::kClassroomItemCourseTitleLabel)));
+    return views::AsViewClass<views::Label>(view.GetViewByID(
+        std::to_underlying(GlanceablesViewId::kClassroomItemCourseTitleLabel)));
   }
 
   const views::Label* GetDueDateLabel(
       const GlanceablesClassroomItemView& view) const {
     return views::AsViewClass<views::Label>(view.GetViewByID(
-        base::to_underlying(GlanceablesViewId::kClassroomItemDueDateLabel)));
+        std::to_underlying(GlanceablesViewId::kClassroomItemDueDateLabel)));
   }
 
   const views::Label* GetDueTimeLabel(
       const GlanceablesClassroomItemView& view) const {
     return views::AsViewClass<views::Label>(view.GetViewByID(
-        base::to_underlying(GlanceablesViewId::kClassroomItemDueTimeLabel)));
+        std::to_underlying(GlanceablesViewId::kClassroomItemDueTimeLabel)));
   }
 };
 
@@ -66,8 +65,8 @@ TEST_F(GlanceablesClassroomItemViewTest, RendersWithoutDueDateTime) {
       "Algebra", "Solve equation",
       GURL("https://classroom.google.com/test-link-1"), std::nullopt,
       base::Time(), std::nullopt);
-  const auto view = GlanceablesClassroomItemView(
-      &assignment, base::DoNothing(), /*item_index=*/0, /*last_item_index=*/0);
+  const auto view =
+      GlanceablesClassroomItemView(&assignment, base::DoNothing());
 
   const auto* const icon_view = GetIconView(view);
   const auto* const course_work_title_label = GetCourseWorkTitleLabel(view);
@@ -109,8 +108,7 @@ TEST_F(GlanceablesClassroomItemViewTest, RendersWithDueDateTime) {
         GURL("https://classroom.google.com/test-link-1"), due, base::Time(),
         std::nullopt);
     const auto view =
-        GlanceablesClassroomItemView(&assignment, base::DoNothing(),
-                                     /*item_index=*/0, /*last_item_index=*/0);
+        GlanceablesClassroomItemView(&assignment, base::DoNothing());
 
     const auto* const due_date_label = GetDueDateLabel(view);
     const auto* const due_time_label = GetDueTimeLabel(view);
@@ -133,8 +131,8 @@ TEST_F(GlanceablesClassroomItemViewTest, RendersDueTimeIn24HrFormat) {
       "Algebra", "Solve equation",
       GURL("https://classroom.google.com/test-link-1"), due, base::Time(),
       std::nullopt);
-  const auto view = GlanceablesClassroomItemView(
-      &assignment, base::DoNothing(), /*item_index=*/0, /*last_item_index=*/0);
+  const auto view =
+      GlanceablesClassroomItemView(&assignment, base::DoNothing());
   const auto* const due_time_label = GetDueTimeLabel(view);
 
   ASSERT_TRUE(due_time_label);
@@ -153,12 +151,30 @@ TEST_F(GlanceablesClassroomItemViewTest, DoesNotRenderDueTimeFor2359) {
       "Algebra", "Solve equation",
       GURL("https://classroom.google.com/test-link-1"), due, base::Time(),
       std::nullopt);
-  const auto view = GlanceablesClassroomItemView(
-      &assignment, base::DoNothing(), /*item_index=*/0, /*last_item_index=*/0);
+  const auto view =
+      GlanceablesClassroomItemView(&assignment, base::DoNothing());
   const auto* const due_time_label = GetDueTimeLabel(view);
 
   ASSERT_TRUE(due_time_label);
   EXPECT_TRUE(due_time_label->GetText().empty());
+}
+
+TEST_F(GlanceablesClassroomItemViewTest, AccessibleProperties) {
+  const auto assignment = GlanceablesClassroomAssignment(
+      "Algebra", "Solve equation",
+      GURL("https://classroom.google.com/test-link-1"), std::nullopt,
+      base::Time(), std::nullopt);
+  auto view = GlanceablesClassroomItemView(&assignment, base::DoNothing());
+  ui::AXNodeData data;
+
+  view.GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.role, ax::mojom::Role::kListItem);
+  EXPECT_EQ(data.GetDefaultActionVerb(), ax::mojom::DefaultActionVerb::kClick);
+
+  view.SetEnabled(false);
+  data = ui::AXNodeData();
+  view.GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetDefaultActionVerb(), ax::mojom::DefaultActionVerb::kClick);
 }
 
 }  // namespace ash

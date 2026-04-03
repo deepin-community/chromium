@@ -1,0 +1,140 @@
+// Copyright 2023 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import type * as Common from '../../core/common/common.js';
+import type * as Platform from '../../core/platform/platform.js';
+import * as SDK from '../../core/sdk/sdk.js';
+import * as Protocol from '../../generated/protocol.js';
+import {renderElementIntoDOM} from '../../testing/DOMHelpers.js';
+import {createTarget, stubNoopSettings} from '../../testing/EnvironmentHelpers.js';
+import {
+  describeWithMockConnection,
+  setMockConnectionResponseHandler,
+} from '../../testing/MockConnection.js';
+import {createViewFunctionStub} from '../../testing/ViewFunctionHelpers.js';
+import * as ObjectUI from '../../ui/legacy/components/object_ui/object_ui.js';
+import * as UI from '../../ui/legacy/legacy.js';
+
+import * as Elements from './elements.js';
+
+const NODE_ID = 1 as Protocol.DOM.NodeId;
+
+describeWithMockConnection('PropertiesWidget', () => {
+  let target: SDK.Target.Target;
+  let view: Elements.PropertiesWidget.PropertiesWidget;
+
+  beforeEach(() => {
+    stubNoopSettings();
+    target = createTarget();
+    setMockConnectionResponseHandler(
+        'DOM.getDocument', () => ({root: {nodeId: NODE_ID}} as Protocol.DOM.GetDocumentResponse));
+    setMockConnectionResponseHandler('DOM.getNodesForSubtreeByStyle', () => ({nodeIds: []}));
+  });
+
+  afterEach(() => {
+    view.detach();
+  });
+
+  const updatesUiOnEvent = <T extends keyof SDK.DOMModel.EventTypes>(
+      event: Platform.TypeScriptUtilities.NoUnion<T>, inScope: boolean) => async () => {
+    SDK.TargetManager.TargetManager.instance().setScopeTarget(inScope ? target : null);
+    const model = target.model(SDK.DOMModel.DOMModel);
+    assert.exists(model);
+
+    const node = new SDK.DOMModel.DOMNode(model);
+    sinon.stub(node, 'resolveToObject').withArgs('properties-sidebar-pane').resolves({
+      getAllProperties: () => ({}),
+      getOwnProperties: () => ({}),
+      arrayLength: () => 0,
+    } as unknown as SDK.RemoteObject.RemoteObject);
+    UI.Context.Context.instance().setFlavor(SDK.DOMModel.DOMNode, node);
+
+    view = new Elements.PropertiesWidget.PropertiesWidget();
+    renderElementIntoDOM(view);
+    await view.updateComplete;
+
+    const populateWithProperties =
+        sinon.spy(ObjectUI.ObjectPropertiesSection.ObjectPropertyTreeElement, 'populateWithProperties');
+    model.dispatchEventToListeners(
+        event, ...[node] as unknown as Common.EventTarget.EventPayloadToRestParameters<SDK.DOMModel.EventTypes, T>);
+    await view.updateComplete;
+    assert.strictEqual(populateWithProperties.called, inScope);
+  };
+
+  it('updates UI on in scope attribute modified event', updatesUiOnEvent(SDK.DOMModel.Events.AttrModified, true));
+  it('does not update UI on out of scope attribute modified event',
+     updatesUiOnEvent(SDK.DOMModel.Events.AttrModified, false));
+  it('updates UI on in scope attribute removed event', updatesUiOnEvent(SDK.DOMModel.Events.AttrRemoved, true));
+  it('does not update UI on out of scope attribute removed event',
+     updatesUiOnEvent(SDK.DOMModel.Events.AttrModified, false));
+  it('updates UI on in scope charachter data modified event',
+     updatesUiOnEvent(SDK.DOMModel.Events.CharacterDataModified, true));
+  it('does not update UI on out of scope charachter data modified event',
+     updatesUiOnEvent(SDK.DOMModel.Events.CharacterDataModified, false));
+  it('updates UI on in scope child node count updated event',
+     updatesUiOnEvent(SDK.DOMModel.Events.ChildNodeCountUpdated, true));
+  it('does not update UI on out of scope child node count updated event',
+     updatesUiOnEvent(SDK.DOMModel.Events.ChildNodeCountUpdated, false));
+
+  it('invokes a getter when clicking on the invoke button', async () => {
+    SDK.TargetManager.TargetManager.instance().setScopeTarget(target);
+    const model = target.model(SDK.DOMModel.DOMModel);
+    assert.exists(model);
+    const runtimeModel = target.model(SDK.RuntimeModel.RuntimeModel);
+    assert.exists(runtimeModel);
+
+    const node = new SDK.DOMModel.DOMNode(model);
+    const object = runtimeModel.createRemoteObject({
+      type: Protocol.Runtime.RemoteObjectType.Object,
+      subtype: Protocol.Runtime.RemoteObjectSubtype.Null,
+      objectId: '1' as Protocol.Runtime.RemoteObjectId,
+    });
+
+    setMockConnectionResponseHandler('Runtime.getProperties', () => ({
+                                                                result: [
+                                                                  {
+                                                                    name: 'myGetter',
+                                                                    isOwn: true,
+                                                                    enumerable: true,
+                                                                    configurable: true,
+                                                                    get: {
+                                                                      type: Protocol.Runtime.RemoteObjectType.Function,
+                                                                      objectId: '2' as Protocol.Runtime.RemoteObjectId,
+                                                                      className: 'Function',
+                                                                      description: 'get myGetter()',
+                                                                    },
+                                                                  },
+                                                                ],
+                                                              }));
+    const callFunctionOn = sinon.stub().resolves({
+      result: {
+        type: Protocol.Runtime.RemoteObjectType.Object,
+        subtype: Protocol.Runtime.RemoteObjectSubtype.Null,
+        value: null,
+      },
+    });
+    setMockConnectionResponseHandler('Runtime.callFunctionOn', callFunctionOn);
+
+    sinon.stub(node, 'resolveToObject').withArgs('properties-sidebar-pane').resolves(object);
+    UI.Context.Context.instance().setFlavor(SDK.DOMModel.DOMNode, node);
+
+    const viewFunction = createViewFunctionStub(Elements.PropertiesWidget.PropertiesWidget);
+    view = new Elements.PropertiesWidget.PropertiesWidget(viewFunction);
+    renderElementIntoDOM(view);
+    await viewFunction.nextInput;
+    // Wait for the property widgets to update
+    await UI.Widget.Widget.allUpdatesComplete;
+
+    const {treeOutlineElement} = viewFunction.input;
+    const treeShadowRoot = treeOutlineElement.shadowRoot;
+    assert.exists(treeShadowRoot);
+    const invokeButton = treeShadowRoot.querySelector('.object-value-calculate-value-button');
+    assert.exists(invokeButton);
+    (invokeButton as HTMLElement).click();
+    sinon.assert.calledWith(callFunctionOn, sinon.match({
+      objectId: '1',
+      arguments: sinon.match([{objectId: '2'}]),
+    }));
+  });
+});

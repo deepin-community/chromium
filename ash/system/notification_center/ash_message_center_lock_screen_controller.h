@@ -9,7 +9,6 @@
 
 #include "ash/ash_export.h"
 #include "ash/public/cpp/session/session_observer.h"
-#include "base/gtest_prod_util.h"
 #include "components/account_id/account_id.h"
 #include "ui/message_center/lock_screen/lock_screen_controller.h"
 
@@ -43,6 +42,7 @@ class AshMessageCenterLockScreenController
                                     base::OnceClosure cancel_callback,
                                     int message_id) override;
   bool IsScreenLocked() const override;
+  bool IsNotificationAllowedOnLockScreen(const std::string& id) const override;
 
  private:
   // Modes of the lock screen notification.

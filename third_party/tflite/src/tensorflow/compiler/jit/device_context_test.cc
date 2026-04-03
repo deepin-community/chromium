@@ -21,8 +21,8 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "tensorflow/compiler/jit/flags.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
+#include "xla/tsl/lib/core/status_test_util.h"
 #include "tensorflow/core/framework/tensor_testutil.h"
-#include "tsl/lib/core/status_test_util.h"
 
 namespace tensorflow {
 namespace {
@@ -38,7 +38,7 @@ static bool Initialized = [] {
 
 class DeviceContextTest : public ::testing::Test {
  public:
-  void SetDevice(const string& device_type) {
+  void SetDevice(const std::string& device_type) {
     auto& rollout_config = GetXlaOpsCommonFlags()->tf_xla_use_device_api;
     rollout_config.AllowForDeviceInXlaLaunch(DeviceType(device_type));
     rollout_config.AllowForDeviceInXlaCompileOnDemand(DeviceType(device_type));
@@ -46,7 +46,7 @@ class DeviceContextTest : public ::testing::Test {
     auto device_factory = DeviceFactory::GetFactory(device_type);
     SessionOptions options;
     std::vector<std::unique_ptr<Device>> devices;
-    Status s = device_factory->CreateDevices(
+    absl::Status s = device_factory->CreateDevices(
         options, "/job:worker/replica:0/task:0", &devices);
     device_ = std::move(devices[0]);
 

@@ -3,7 +3,8 @@
 // found in the LICENSE file.
 
 import {Menu} from './menu.js';
-import {MenuItem, type MenuItemActivationEvent} from './menu_item.js';
+import type {MenuItem} from './menu_item.js';
+import {type MenuItemActivationEvent} from './menu_item.js';
 
 /**
  * Creates a menu that supports sub-menus.
@@ -135,11 +136,15 @@ export class MultiMenu extends Menu {
               this.hideSubMenu_();
             }
             break;
+          default:
+            break;
         }
         break;
       case 'mouseover':
       case 'mouseout':
         this.manageSubMenu(e as MouseEvent);
+        break;
+      default:
         break;
     }
   }
@@ -297,6 +302,8 @@ export class MultiMenu extends Menu {
         subMenu.hide();
         this.subMenu = null;
         this.currentMenu = this;
+        break;
+      default:
         break;
     }
   }

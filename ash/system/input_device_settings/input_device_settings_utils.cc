@@ -7,8 +7,8 @@
 #include <string_view>
 
 #include "ash/public/cpp/accelerators_util.h"
-#include "ash/public/mojom/input_device_settings.mojom-shared.h"
 #include "ash/public/mojom/input_device_settings.mojom.h"
+#include "ash/shell.h"
 #include "ash/system/input_device_settings/input_device_settings_pref_names.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/containers/flat_set.h"
@@ -22,11 +22,14 @@
 #include "base/values.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/known_user.h"
+#include "ui/events/ash/keyboard_capability.h"
 #include "ui/events/ash/mojom/extended_fkeys_modifier.mojom-shared.h"
+#include "ui/events/ash/mojom/meta_key.mojom-shared.h"
 #include "ui/events/ash/mojom/modifier_key.mojom.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/dom/dom_code.h"
+#include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/events/ozone/evdev/keyboard_mouse_combo_device_metrics.h"
 #include "ui/events/types/event_type.h"
 
@@ -42,11 +45,11 @@ std::string HexEncode(uint16_t v) {
   uint8_t bytes[sizeof(uint16_t)];
   bytes[1] = v & 0xFF;
   bytes[0] = v >> 8;
-  return base::ToLowerASCII(base::HexEncode(bytes));
+  return base::HexEncodeLower(bytes);
 }
 
 bool ExistingSettingsHasValue(std::string_view setting_key,
-                              const base::Value::Dict* existing_settings_dict) {
+                              const base::DictValue* existing_settings_dict) {
   if (!existing_settings_dict) {
     return false;
   }
@@ -56,14 +59,14 @@ bool ExistingSettingsHasValue(std::string_view setting_key,
 
 bool IsAlphaKeyboardCode(ui::KeyboardCode key_code) {
   return GetKeyInputTypeFromKeyEvent(ui::KeyEvent(
-             ui::ET_KEY_PRESSED, key_code, ui::DomCode::NONE, ui::EF_NONE)) ==
-         AcceleratorKeyInputType::kAlpha;
+             ui::EventType::kKeyPressed, key_code, ui::DomCode::NONE,
+             ui::EF_NONE)) == AcceleratorKeyInputType::kAlpha;
 }
 
 bool IsNumberKeyboardCode(ui::KeyboardCode key_code) {
   return GetKeyInputTypeFromKeyEvent(ui::KeyEvent(
-             ui::ET_KEY_PRESSED, key_code, ui::DomCode::NONE, ui::EF_NONE)) ==
-         AcceleratorKeyInputType::kDigit;
+             ui::EventType::kKeyPressed, key_code, ui::DomCode::NONE,
+             ui::EF_NONE)) == AcceleratorKeyInputType::kDigit;
 }
 
 // Verify if the customization restriction blocks the button remapping.
@@ -119,8 +122,19 @@ bool RestrictionBlocksRemapping(
         return false;
       }
       return remapping.button->get_vkey() != ui::VKEY_TAB;
+    case mojom::CustomizationRestriction::kAllowFKeyRewrites:
+      if (remapping.button->is_customizable_button()) {
+        return false;
+      }
+      return !(remapping.button->get_vkey() >= ui::VKEY_F1 &&
+               remapping.button->get_vkey() <= ui::VKEY_F15);
   }
 }
+
+// "0111:185a" is from the list of supported device keys listed here:
+// google3/chrome/chromeos/apps_foundation/almanac/fondue/boq/
+// peripherals_service/manual_config/companion_apps.h
+constexpr char kWelcomeExperienceTestDeviceKey[] = "0111:185a";
 
 }  // namespace
 
@@ -136,8 +150,11 @@ bool IsValidModifier(int val) {
 }
 
 std::string BuildDeviceKey(const ui::InputDevice& device) {
-  return base::StrCat(
-      {HexEncode(device.vendor_id), ":", HexEncode(device.product_id)});
+  return BuildDeviceKey(device.vendor_id, device.product_id);
+}
+
+std::string BuildDeviceKey(uint16_t vendor_id, uint16_t product_id) {
+  return base::StrCat({HexEncode(vendor_id), ":", HexEncode(product_id)});
 }
 
 template <typename T>
@@ -145,7 +162,7 @@ bool ShouldPersistSetting(std::string_view setting_key,
                           T new_value,
                           T default_value,
                           bool force_persistence,
-                          const base::Value::Dict* existing_settings_dict) {
+                          const base::DictValue* existing_settings_dict) {
   return ExistingSettingsHasValue(setting_key, existing_settings_dict) ||
          new_value != default_value || force_persistence;
 }
@@ -155,7 +172,7 @@ bool ShouldPersistSetting(const mojom::InputDeviceSettingsPolicyPtr& policy,
                           bool new_value,
                           bool default_value,
                           bool force_persistence,
-                          const base::Value::Dict* existing_settings_dict) {
+                          const base::DictValue* existing_settings_dict) {
   if (force_persistence) {
     return true;
   }
@@ -179,7 +196,7 @@ bool ShouldPersistFkeySetting(
     std::string_view setting_key,
     std::optional<ui::mojom::ExtendedFkeysModifier> new_value,
     ui::mojom::ExtendedFkeysModifier default_value,
-    const base::Value::Dict* existing_settings_dict) {
+    const base::DictValue* existing_settings_dict) {
   if (!new_value.has_value()) {
     return false;
   }
@@ -204,16 +221,16 @@ template EXPORT_TEMPLATE_DEFINE(ASH_EXPORT) bool ShouldPersistSetting(
     bool new_value,
     bool default_value,
     bool force_persistence,
-    const base::Value::Dict* existing_settings_dict);
+    const base::DictValue* existing_settings_dict);
 
 template EXPORT_TEMPLATE_DEFINE(ASH_EXPORT) bool ShouldPersistSetting(
     std::string_view setting_key,
     int value,
     int default_value,
     bool force_persistence,
-    const base::Value::Dict* existing_settings_dict);
+    const base::DictValue* existing_settings_dict);
 
-const base::Value::Dict* GetLoginScreenSettingsDict(
+const base::DictValue* GetLoginScreenSettingsDict(
     PrefService* local_state,
     AccountId account_id,
     const std::string& pref_name) {
@@ -225,7 +242,7 @@ const base::Value::Dict* GetLoginScreenSettingsDict(
   return &dict_value->GetDict();
 }
 
-const base::Value::List* GetLoginScreenButtonRemappingList(
+const base::ListValue* GetLoginScreenButtonRemappingList(
     PrefService* local_state,
     AccountId account_id,
     const std::string& pref_name) {
@@ -237,74 +254,11 @@ const base::Value::List* GetLoginScreenButtonRemappingList(
   return &list_value->GetList();
 }
 
-bool IsKeyboardPretendingToBeMouse(const ui::InputDevice& device) {
-  static base::NoDestructor<base::flat_set<VendorProductId>> logged_devices;
-  static constexpr auto kKeyboardsPretendingToBeMice =
-      base::MakeFixedFlatSet<VendorProductId>({
-          {0x03f0, 0x1f41},  // HP OMEN Sequencer
-          {0x045e, 0x082c},  // Microsoft Ergonomic Keyboard
-          {0x046d, 0x4088},  // Logitech ERGO K860 (Bluetooth)
-          {0x046d, 0x408a},  // Logitech MX Keys (Universal Receiver)
-          {0x046d, 0xb350},  // Logitech Craft Keyboard
-          {0x046d, 0xb359},  // Logitech ERGO K860
-          {0x046d, 0xb35b},  // Logitech MX Keys (Bluetooth)
-          {0x046d, 0xb35f},  // Logitech G915 TKL (Bluetooth)
-          {0x046d, 0xb361},  // Logitech MX Keys for Mac (Bluetooth)
-          {0x046d, 0xb364},  // Logitech ERGO 860B
-          {0x046d, 0xc336},  // Logitech G213
-          {0x046d, 0xc33f},  // Logitech G815 RGB
-          {0x046d, 0xc343},  // Logitech G915 TKL (USB)
-          {0x05ac, 0x024f},  // EGA MGK2 (Bluetooth) + Keychron K2
-          {0x05ac, 0x0256},  // EGA MGK2 (USB)
-          {0x0951, 0x16e5},  // HyperX Alloy Origins
-          {0x0951, 0x16e6},  // HyperX Alloy Origins Core
-          {0x1038, 0x1612},  // SteelSeries Apex 7
-          {0x1065, 0x0002},  // SteelSeries Apex 3 TKL
-          {0x1532, 0x022a},  // Razer Cynosa Chroma
-          {0x1532, 0x025d},  // Razer Ornata V2
-          {0x1532, 0x025e},  // Razer Cynosa V2
-          {0x1532, 0x026b},  // Razer Huntsman V2 Tenkeyless
-          {0x1535, 0x0046},  // Razer Huntsman Elite
-          {0x1b1c, 0x1b2d},  // Corsair Gaming K95 RGB Platinum
-          {0x28da, 0x1101},  // G.Skill KM780
-          {0x29ea, 0x0102},  // Kinesis Freestyle Edge RGB
-          {0x2f68, 0x0082},  // Durgod Taurus K320
-          {0x320f, 0x5044},  // Glorious GMMK Pro
-          {0x3297, 0x1969},  // ZSA Moonlander Mark I
-          {0x3297, 0x4974},  // ErgoDox EZ
-          {0x3297, 0x4976},  // ErgoDox EZ Glow
-          {0x3434, 0x0121},  // Keychron Q3
-          {0x3434, 0x0151},  // Keychron Q5
-          {0x3434, 0x0163},  // Keychron Q6
-          {0x3434, 0x01a1},  // Keychron Q10
-          {0x3434, 0x0311},  // Keychron V1
-          {0x3496, 0x0006},  // Keyboardio Model 100
-          {0x4c44, 0x0040},  // LazyDesigners Dimple
-          {0x594d, 0x4409},  // YMDK YMD09
-          {0xfeed, 0x1307},  // ErgoDox EZ
-      });
-
-  if (kKeyboardsPretendingToBeMice.contains(
-          {device.vendor_id, device.product_id})) {
-    auto [iter, inserted] =
-        logged_devices->insert({device.vendor_id, device.product_id});
-    if (inserted) {
-      logged_devices->insert({device.vendor_id, device.product_id});
-      base::UmaHistogramEnumeration(
-          "ChromeOS.Inputs.ComboDeviceClassification",
-          ui::ComboDeviceClassification::kKnownMouseImposter);
-    }
-    return true;
-  }
-
-  return false;
-}
-
-base::Value::Dict ConvertButtonRemappingToDict(
+base::DictValue ConvertButtonRemappingToDict(
     const mojom::ButtonRemapping& remapping,
     mojom::CustomizationRestriction customization_restriction,
     bool redact_button_names) {
-  base::Value::Dict dict;
+  base::DictValue dict;
 
   if (RestrictionBlocksRemapping(remapping, customization_restriction)) {
     return dict;
@@ -324,7 +278,7 @@ base::Value::Dict ConvertButtonRemappingToDict(
     return dict;
   }
   if (remapping.remapping_action->is_key_event()) {
-    base::Value::Dict key_event;
+    base::DictValue key_event;
     key_event.Set(prefs::kButtonRemappingDomCode,
                   static_cast<int>(
                       remapping.remapping_action->get_key_event()->dom_code));
@@ -351,13 +305,13 @@ base::Value::Dict ConvertButtonRemappingToDict(
   return dict;
 }
 
-base::Value::List ConvertButtonRemappingArrayToList(
+base::ListValue ConvertButtonRemappingArrayToList(
     const std::vector<mojom::ButtonRemappingPtr>& remappings,
     mojom::CustomizationRestriction customization_restriction,
     bool redact_button_names) {
-  base::Value::List list;
+  base::ListValue list;
   for (const auto& remapping : remappings) {
-    base::Value::Dict dict = ConvertButtonRemappingToDict(
+    base::DictValue dict = ConvertButtonRemappingToDict(
         *remapping, customization_restriction, redact_button_names);
     // Remove empty dicts.
     if (dict.empty()) {
@@ -370,7 +324,7 @@ base::Value::List ConvertButtonRemappingArrayToList(
 }
 
 std::vector<mojom::ButtonRemappingPtr> ConvertListToButtonRemappingArray(
-    const base::Value::List& list,
+    const base::ListValue& list,
     mojom::CustomizationRestriction customization_restriction) {
   std::vector<mojom::ButtonRemappingPtr> array;
   for (const auto& element : list) {
@@ -388,7 +342,7 @@ std::vector<mojom::ButtonRemappingPtr> ConvertListToButtonRemappingArray(
 }
 
 mojom::ButtonRemappingPtr ConvertDictToButtonRemapping(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     mojom::CustomizationRestriction customization_restriction) {
   if (customization_restriction ==
       mojom::CustomizationRestriction::kDisallowCustomizations) {
@@ -423,6 +377,12 @@ mojom::ButtonRemappingPtr ConvertDictToButtonRemapping(
   } else if (key_code &&
              customization_restriction !=
                  mojom::CustomizationRestriction::kDisableKeyEventRewrites) {
+    // Do not allow the keycode to be an unknown key. This indicates an internal
+    // error in the implementation and should not be allowed.
+    if (*key_code == ui::VKEY_UNKNOWN) {
+      return nullptr;
+    }
+
     button = mojom::Button::NewVkey(static_cast<::ui::KeyboardCode>(*key_code));
   } else {
     return nullptr;
@@ -430,7 +390,7 @@ mojom::ButtonRemappingPtr ConvertDictToButtonRemapping(
 
   // remapping_action is an optional union.
   mojom::RemappingActionPtr remapping_action;
-  const base::Value::Dict* key_event =
+  const base::DictValue* key_event =
       dict.FindDict(prefs::kButtonRemappingKeyEvent);
   const std::optional<int> accelerator_action =
       dict.FindInt(prefs::kButtonRemappingAcceleratorAction);
@@ -473,8 +433,25 @@ mojom::ButtonRemappingPtr ConvertDictToButtonRemapping(
 }
 
 bool IsChromeOSKeyboard(const mojom::Keyboard& keyboard) {
-  return keyboard.meta_key == mojom::MetaKey::kLauncher ||
-         keyboard.meta_key == mojom::MetaKey::kSearch;
+  return keyboard.meta_key == ui::mojom::MetaKey::kLauncher ||
+         keyboard.meta_key == ui::mojom::MetaKey::kSearch;
+}
+
+bool IsSplitModifierKeyboard(const mojom::Keyboard& keyboard) {
+  return keyboard.meta_key == ui::mojom::MetaKey::kLauncherRefresh;
+}
+
+bool IsSplitModifierKeyboard(int device_id) {
+  return Shell::Get()->keyboard_capability()->HasFunctionKey(device_id) &&
+         Shell::Get()->keyboard_capability()->HasQuickInsertKey(device_id);
+}
+
+std::string GetDeviceKeyForMetadataRequest(const std::string& device_key) {
+  if (features::IsWelcomeExperienceTestUnsupportedDevicesEnabled()) {
+    return kWelcomeExperienceTestDeviceKey;
+  }
+
+  return device_key;
 }
 
 }  // namespace ash

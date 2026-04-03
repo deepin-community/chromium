@@ -11,10 +11,12 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "build/build_config.h"
 #include "core/fxcrt/span.h"
+#include "core/fxcrt/unowned_ptr.h"
 #include "public/cpp/fpdf_scopers.h"
 #include "public/fpdf_dataavail.h"
 #include "public/fpdf_ext.h"
@@ -88,8 +90,63 @@ class EmbedderTest : public ::testing::Test,
                                                  int modifiers) {}
   };
 
+  class ScopedSavedDoc {
+   public:
+    ScopedSavedDoc();
+    explicit ScopedSavedDoc(EmbedderTest* test);
+    ScopedSavedDoc(const ScopedSavedDoc&) = delete;
+    ScopedSavedDoc& operator=(const ScopedSavedDoc&) = delete;
+    ScopedSavedDoc(ScopedSavedDoc&&) noexcept;
+    ScopedSavedDoc& operator=(ScopedSavedDoc&&) noexcept;
+    ~ScopedSavedDoc();
+
+    FPDF_DOCUMENT get() { return doc_; }
+
+    explicit operator bool() const { return !!doc_; }
+
+   private:
+    UnownedPtr<EmbedderTest> test_;
+    FPDF_DOCUMENT doc_;
+  };
+
+  class ScopedPageBase {
+   public:
+    FPDF_PAGE get() { return page_; }
+
+    explicit operator bool() const { return !!page_; }
+
+   protected:
+    ScopedPageBase(EmbedderTest* test, FPDF_PAGE page);
+    ~ScopedPageBase();
+
+    UnownedPtr<EmbedderTest> test_;
+    FPDF_PAGE page_;
+  };
+
+  class ScopedPage : public ScopedPageBase {
+   public:
+    ScopedPage();
+    ScopedPage(EmbedderTest* test, int page_index);
+    ScopedPage(const ScopedPage&) = delete;
+    ScopedPage& operator=(const ScopedPage&) = delete;
+    ScopedPage(ScopedPage&&) noexcept;
+    ScopedPage& operator=(ScopedPage&&) noexcept;
+    ~ScopedPage();
+  };
+
+  class ScopedSavedPage : public ScopedPageBase {
+   public:
+    ScopedSavedPage();
+    ScopedSavedPage(EmbedderTest* test, int page_index);
+    ScopedSavedPage(const ScopedSavedPage&) = delete;
+    ScopedSavedPage& operator=(const ScopedSavedPage&) = delete;
+    ScopedSavedPage(ScopedSavedPage&&) noexcept;
+    ScopedSavedPage& operator=(ScopedSavedPage&&) noexcept;
+    ~ScopedSavedPage();
+  };
+
   EmbedderTest();
-  virtual ~EmbedderTest();
+  ~EmbedderTest() override;
 
   void SetUp() override;
   void TearDown() override;
@@ -119,10 +176,10 @@ class EmbedderTest : public ::testing::Test,
   // Create an empty document without a form fill environment.
   void CreateEmptyDocumentWithoutFormFillEnvironment();
 
-  // Open the document specified by |filename|, and create its form fill
-  // environment, or return false on failure. The |filename| is relative to
-  // the test data directory where we store all the test files. |password| can
-  // be nullptr if the file is not password protected. If |javascript_opts|
+  // Open the document specified by `filename`, and create its form fill
+  // environment, or return false on failure. The `filename` is relative to
+  // the test data directory where we store all the test files. `password` can
+  // be nullptr if the file is not password protected. If `javascript_opts`
   // is kDisableJavascript, then the document will be given stubs in place
   // of the real JS engine.
   virtual bool OpenDocumentWithOptions(const std::string& filename,
@@ -150,19 +207,31 @@ class EmbedderTest : public ::testing::Test,
   int GetPageCount();
 
   // Load a specific page of the open document with a given non-negative
-  // |page_number|. On success, fire form events for the page and return a page
+  // `page_index`. On success, fire form events for the page and return a
+  // ScopedPage with the page handle. On failure, return an empty ScopedPage.
+  // The caller needs to let the ScopedPage go out of scope to properly unload
+  // the page, and must do so before the page's document and `this` get
+  // destroyed.
+  // The caller cannot call this for a `page_index` if it already obtained and
+  // holds the page handle for that page.
+  ScopedPage LoadScopedPage(int page_index);
+
+  // Prefer LoadScopedPage() above.
+  //
+  // Load a specific page of the open document with a given non-negative
+  // `page_index`. On success, fire form events for the page and return a page
   // handle. On failure, return nullptr.
   // The caller does not own the returned page handle, but must call
   // UnloadPage() on it when done.
-  // The caller cannot call this for a |page_number| if it already obtained and
+  // The caller cannot call this for a `page_index` if it already obtained and
   // holds the page handle for that page.
-  FPDF_PAGE LoadPage(int page_number);
+  FPDF_PAGE LoadPage(int page_index);
 
   // Same as LoadPage(), but does not fire form events.
-  FPDF_PAGE LoadPageNoEvents(int page_number);
+  FPDF_PAGE LoadPageNoEvents(int page_index);
 
-  // Fire form unload events and release the resources for a |page| obtained
-  // from LoadPage(). Further use of |page| is prohibited after calling this.
+  // Fire form unload events and release the resources for a `page` obtained
+  // from LoadPage(). Further use of `page` is prohibited after calling this.
   void UnloadPage(FPDF_PAGE page);
 
   // Same as UnloadPage(), but does not fire form events.
@@ -174,8 +243,8 @@ class EmbedderTest : public ::testing::Test,
   // RenderLoadedPageWithFlags() with no flags.
   ScopedFPDFBitmap RenderLoadedPage(FPDF_PAGE page);
 
-  // Convert |page| loaded via LoadPage() into a bitmap with the specified page
-  // rendering |flags|.
+  // Convert `page` loaded via LoadPage() into a bitmap with the specified page
+  // rendering `flags`.
   //
   // See public/fpdfview.h for a list of page rendering flags.
   ScopedFPDFBitmap RenderLoadedPageWithFlags(FPDF_PAGE page, int flags);
@@ -183,15 +252,15 @@ class EmbedderTest : public ::testing::Test,
   // RenderSavedPageWithFlags() with no flags.
   ScopedFPDFBitmap RenderSavedPage(FPDF_PAGE page);
 
-  // Convert |page| loaded via LoadSavedPage() into a bitmap with the specified
-  // page rendering |flags|.
+  // Convert `page` loaded via LoadSavedPage() into a bitmap with the specified
+  // page rendering `flags`.
   //
   // See public/fpdfview.h for a list of page rendering flags.
   ScopedFPDFBitmap RenderSavedPageWithFlags(FPDF_PAGE page, int flags);
 
-  // Convert |page| into a bitmap with the specified page rendering |flags|.
-  // The form handle associated with |page| should be passed in via |handle|.
-  // If |handle| is nullptr, then forms on the page will not be rendered.
+  // Convert `page` into a bitmap with the specified page rendering `flags`.
+  // The form handle associated with `page` should be passed in via `handle`.
+  // If `handle` is nullptr, then forms on the page will not be rendered.
   //
   // See public/fpdfview.h for a list of page rendering flags.
   // If none of the above Render methods are appropriate, then use this one.
@@ -203,11 +272,11 @@ class EmbedderTest : public ::testing::Test,
   static ScopedFPDFBitmap RenderPage(FPDF_PAGE page);
 
 #if BUILDFLAG(IS_WIN)
-  // Convert |page| into EMF with the specified page rendering |flags|.
+  // Convert `page` into EMF with the specified page rendering `flags`.
   static std::vector<uint8_t> RenderPageWithFlagsToEmf(FPDF_PAGE page,
                                                        int flags);
 
-  // Get the PostScript data from |emf_data|.
+  // Get the PostScript data from `emf_data`.
   static std::string GetPostScriptFromEmf(pdfium::span<const uint8_t> emf_data);
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -228,15 +297,52 @@ class EmbedderTest : public ::testing::Test,
   FPDF_FORMHANDLE SetupFormFillEnvironment(FPDF_DOCUMENT doc,
                                            JavaScriptOption javascript_option);
 
-  // Return the hash of only the pixels in |bitmap|. i.e. Excluding the gap, if
+  // Return the hash of only the pixels in `bitmap`. i.e. Excluding the gap, if
   // any, at the end of a row where the stride is larger than width * bpp.
   static std::string HashBitmap(FPDF_BITMAP bitmap);
 
   // For debugging purposes.
-  // Write |bitmap| as a PNG to |filename|.
+  // Write `bitmap` as a PNG to `filename`.
   static void WriteBitmapToPng(FPDF_BITMAP bitmap, const std::string& filename);
 
-  // Check |bitmap| to make sure it has the right dimensions and content.
+  // Check `bitmap` matches `expectation_png_name`, where `expectation_png_name`
+  // is the name of testing/resources/embedder_tests/expectation_png_name.png.
+  static void CompareBitmapToPng(FPDF_BITMAP bitmap,
+                                 std::string_view expectation_png_name);
+
+  // Like CompareBitmap(), except instead of just adding ".png" to
+  // `expectation_png_name`, this method will look for the expectation PNG using
+  // several suffixes in order: "_$renderer_$os_$cpu.png", "_$renderer_$os.png",
+  // "_$renderer.png", "_$os_$cpu.png", "_$os.png".
+  //
+  // $cpu is for macOS x86 only and is used to differentiate from macOS ARM.
+  //
+  // For example, with "hello_world", using Skia on macOS, the list of
+  // expectation PNGs are:
+  // - hello_world_skia_mac_x86.png
+  // - hello_world_skia_mac.png
+  // - hello_world_skia.png
+  // - hello_world_mac_x86.png
+  // - hello_world_mac.png
+  // - hello_world.png
+  //
+  // This is similar to the behavior in testing/tools/pngdiffer.py.
+  //
+  // `max_pixel_per_channel_delta` can optionally be set to tolerate minor pixel
+  // discrepancies. The default is exact matching.
+  static void CompareBitmapToPngWithExpectationSuffix(
+      FPDF_BITMAP bitmap,
+      std::string_view expectation_png_name,
+      int max_pixel_per_channel_delta = 0);
+
+  // Same as `CompareBitmapToPngWithExpectationSuffix()`, but automatically
+  // applies platform-specific tolerance.
+  static void CompareBitmapToPngWithFuzzyExpectationSuffix(
+      FPDF_BITMAP bitmap,
+      std::string_view expectation_png_name);
+
+  // Check `bitmap` to make sure it has the right dimensions and content.
+  // TODO(crbug.com/468228360): Switch to the CompareBitmap() overload above.
   static void CompareBitmap(FPDF_BITMAP bitmap,
                             int expected_width,
                             int expected_height,
@@ -251,16 +357,28 @@ class EmbedderTest : public ::testing::Test,
                                 unsigned long size);
 
   // See comments in the respective non-Saved versions of these methods.
+  ScopedSavedDoc OpenScopedSavedDocument();
   FPDF_DOCUMENT OpenSavedDocument();
   FPDF_DOCUMENT OpenSavedDocumentWithPassword(const char* password);
   void CloseSavedDocument();
-  FPDF_PAGE LoadSavedPage(int page_number);
+  ScopedSavedPage LoadScopedSavedPage(int page_index);
+  FPDF_PAGE LoadSavedPage(int page_index);
   void CloseSavedPage(FPDF_PAGE page);
 
+  // See comments for CompareBitmap(), CompareBitmapToPng(), and
+  // CompareBitmapToPngWithExpectationSuffix() above.
+  void VerifySavedRenderingToPng(FPDF_PAGE page,
+                                 std::string_view expectation_png_name);
+  void VerifySavedRenderingToPngWithExpectationSuffix(
+      FPDF_PAGE page,
+      std::string_view expectation_png_name);
   void VerifySavedRendering(FPDF_PAGE page,
                             int width,
                             int height,
                             const char* md5);
+  void VerifySavedDocumentToPng(std::string_view expectation_png_name);
+  void VerifySavedDocumentToPngWithExpectationSuffix(
+      std::string_view expectation_png_name);
   void VerifySavedDocument(int width, int height, const char* md5);
 
   void SetWholeFileAvailable();
@@ -268,7 +386,7 @@ class EmbedderTest : public ::testing::Test,
 #ifndef NDEBUG
   // For debugging purposes.
   // While open, write any data that gets passed to WriteBlockCallback() to
-  // |filename|. This is typically used to capture data from FPDF_SaveAsCopy()
+  // `filename`. This is typically used to capture data from FPDF_SaveAsCopy()
   // calls.
   void OpenPDFFileForWrite(const std::string& filename);
   void ClosePDFFileForWrite();
@@ -282,15 +400,18 @@ class EmbedderTest : public ::testing::Test,
   // Helper method for the methods below.
   static int GetPageNumberForPage(const PageNumberToHandleMap& page_map,
                                   FPDF_PAGE page);
-  // Find |page| inside |page_map_| and return the associated page number, or -1
-  // if |page| cannot be found.
+  // Find `page` inside `page_map_` and return the associated page number, or -1
+  // if `page` cannot be found.
   int GetPageNumberForLoadedPage(FPDF_PAGE page) const;
 
-  // Same as GetPageNumberForLoadedPage(), but with |saved_page_map_|.
+  // Same as GetPageNumberForLoadedPage(), but with `saved_page_map_`.
   int GetPageNumberForSavedPage(FPDF_PAGE page) const;
 
   void UnloadPageCommon(FPDF_PAGE page, bool do_events);
-  FPDF_PAGE LoadPageCommon(int page_number, bool do_events);
+  FPDF_PAGE LoadPageCommon(int page_index, bool do_events);
+
+  ScopedFPDFBitmap VerifySavedRenderingCommon(FPDF_PAGE page);
+  ScopedFPDFBitmap VerifySavedDocumentCommon();
 
   std::unique_ptr<Delegate> default_delegate_;
   Delegate* delegate_;

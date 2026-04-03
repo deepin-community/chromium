@@ -10,7 +10,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "absl/base/thread_annotations.h"
 #include "platform/api/time.h"
 #include "platform/impl/socket_handle_waiter.h"
 #include "util/osp_logging.h"
@@ -36,7 +35,7 @@ class TlsDataRouterPosix : public SocketHandleWaiter::Subscriber {
  public:
   class SocketObserver {
    public:
-    virtual ~SocketObserver() = default;
+    virtual ~SocketObserver();
 
     // Socket creation shouldn't occur on the Networking thread, so pass the
     // socket to the observer and expect them to call socket->Accept() on the
@@ -49,6 +48,10 @@ class TlsDataRouterPosix : public SocketHandleWaiter::Subscriber {
   TlsDataRouterPosix(
       SocketHandleWaiter* waiter,
       std::function<Clock::time_point()> now_function = Clock::now);
+  TlsDataRouterPosix(const TlsDataRouterPosix&) = delete;
+  TlsDataRouterPosix(TlsDataRouterPosix&&) noexcept = delete;
+  TlsDataRouterPosix& operator=(const TlsDataRouterPosix&) = delete;
+  TlsDataRouterPosix& operator=(TlsDataRouterPosix&&) = delete;
   ~TlsDataRouterPosix() override;
 
   // Register a TlsConnection that should be watched for readable and writable
@@ -70,9 +73,7 @@ class TlsDataRouterPosix : public SocketHandleWaiter::Subscriber {
   // SocketHandleWaiter::Subscriber overrides.
   void ProcessReadyHandle(SocketHandleWaiter::SocketHandleRef handle,
                           uint32_t flags) override;
-
-  OSP_DISALLOW_COPY_AND_ASSIGN(TlsDataRouterPosix);
-
+  bool HasPendingWrite(SocketHandleWaiter::SocketHandleRef handle) override;
  protected:
   // Determines if the provided socket is currently being watched by this
   // instance.
@@ -91,7 +92,7 @@ class TlsDataRouterPosix : public SocketHandleWaiter::Subscriber {
   // Mutex guarding connections_ vector.
   mutable std::mutex connections_mutex_;
 
-  // Mutex guarding |accept_socket_mappings_|.
+  // Mutex guarding `accept_socket_mappings_`.
   mutable std::mutex accept_socket_mutex_;
 
   // Function to get the current time.

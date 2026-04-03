@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,23 +9,23 @@ import * as UI from '../../ui/legacy/legacy.js';
 
 const UIStrings = {
   /**
-   *@description Icon title in Network Panel Indicator of the Network panel
+   * @description Icon title in Network Panel Indicator of the Network panel
    */
   networkThrottlingIsEnabled: 'Network throttling is enabled',
   /**
-   *@description Icon title in Network Panel Indicator of the Network panel
+   * @description Icon title in Network Panel Indicator of the Network panel
    */
   requestsMayBeOverridden: 'Requests may be overridden locally, see the Sources panel',
   /**
-   *@description Icon title in Network Panel Indicator of the Network panel
+   * @description Icon title in Network Panel Indicator of the Network panel
    */
   requestsMayBeBlocked: 'Requests may be blocked, see the Network request blocking panel',
   /**
-   * @description Title of an icon in the Network panel that indicates that accepted content encodings have been overriden.
+   * @description Title of an icon in the Network panel that indicates that accepted content encodings have been overridden.
    */
   acceptedEncodingOverrideSet:
       'The set of accepted `Content-Encoding` headers has been modified by DevTools, see the Network conditions panel',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/mobile_throttling/NetworkPanelIndicator.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
@@ -36,12 +36,13 @@ export class NetworkPanelIndicator {
       return;
     }
     const manager = SDK.NetworkManager.MultitargetNetworkManager.instance();
-    manager.addEventListener(SDK.NetworkManager.MultitargetNetworkManager.Events.ConditionsChanged, updateVisibility);
+    manager.addEventListener(SDK.NetworkManager.MultitargetNetworkManager.Events.CONDITIONS_CHANGED, updateVisibility);
     manager.addEventListener(
-        SDK.NetworkManager.MultitargetNetworkManager.Events.BlockedPatternsChanged, updateVisibility);
-    manager.addEventListener(SDK.NetworkManager.MultitargetNetworkManager.Events.InterceptorsChanged, updateVisibility);
+        SDK.NetworkManager.MultitargetNetworkManager.Events.BLOCKED_PATTERNS_CHANGED, updateVisibility);
     manager.addEventListener(
-        SDK.NetworkManager.MultitargetNetworkManager.Events.AcceptedEncodingsChanged, updateVisibility);
+        SDK.NetworkManager.MultitargetNetworkManager.Events.INTERCEPTORS_CHANGED, updateVisibility);
+    manager.addEventListener(
+        SDK.NetworkManager.MultitargetNetworkManager.Events.ACCEPTED_ENCODINGS_CHANGED, updateVisibility);
     Common.Settings.Settings.instance().moduleSetting('cache-disabled').addChangeListener(updateVisibility, this);
 
     updateVisibility();

@@ -4,22 +4,15 @@
 
 #include "media/gpu/windows/d3d11_picture_buffer.h"
 
-#include <d3d11.h>
-#include <d3d11_1.h>
 #include <windows.h>
-#include <wrl/client.h>
-
-#include <memory>
 
 #include "base/metrics/histogram_functions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
-#include "gpu/command_buffer/service/mailbox_manager.h"
 #include "gpu/command_buffer/service/texture_manager.h"
 #include "media/base/media_log.h"
 #include "media/base/win/mf_helpers.h"
-#include "third_party/angle/include/EGL/egl.h"
-#include "third_party/angle/include/EGL/eglext.h"
+#include "media/gpu/windows/d3d12_video_decode_task.h"
 #include "ui/gfx/color_space.h"
 
 namespace media {
@@ -76,10 +69,8 @@ D3D11Status D3D11PictureBuffer::Init(
 
 D3D11Status D3D11PictureBuffer::ProcessTexture(
     const gfx::ColorSpace& input_color_space,
-    MailboxHolderArray* mailbox_dest,
-    gfx::ColorSpace* output_color_space) {
-  return texture_wrapper_->ProcessTexture(input_color_space, mailbox_dest,
-                                          output_color_space);
+    scoped_refptr<gpu::ClientSharedImage>& shared_image_dest) {
+  return texture_wrapper_->ProcessTexture(input_color_space, shared_image_dest);
 }
 
 ComD3D11Texture2D D3D11PictureBuffer::Texture() const {
@@ -100,11 +91,11 @@ D3D11PictureBuffer::AcquireOutputView() const {
   return output_view_.Get();
 }
 
-D3D11Status::Or<Microsoft::WRL::ComPtr<ID3D12Resource>>
-D3D11PictureBuffer::ToD3D12Resource(ID3D12Device* device) {
+D3D11Status::Or<ID3D12Resource*> D3D11PictureBuffer::ToD3D12Resource(
+    ID3D12Device* device) {
   HRESULT hr;
   if (!d3d12_resource_) {
-    Microsoft::WRL::ComPtr<IDXGIResource1> dxgi_resource;
+    ComDXGIResource1 dxgi_resource;
     CHECK_EQ(texture_.As(&dxgi_resource), S_OK);
 
     HANDLE handle;
@@ -118,18 +109,29 @@ D3D11PictureBuffer::ToD3D12Resource(ID3D12Device* device) {
     hr = device->OpenSharedHandle(handle_holder.get(),
                                   IID_PPV_ARGS(&d3d12_resource_));
     if (FAILED(hr)) {
-      LOG(ERROR) << "Open shared handle as D3D12 resource failed.";
+      MEDIA_LOG(ERROR, media_log_)
+          << "Open shared handle as D3D12 resource failed.";
       return {D3D11StatusCode::kCreateSharedHandleFailed, hr};
     }
   }
-  Microsoft::WRL::ComPtr<ID3D12Device> used_device;
-  hr = d3d12_resource_->GetDevice(IID_PPV_ARGS(&used_device));
-  if (FAILED(hr)) {
-    LOG(ERROR) << "ID3D12Resource::GetDevice failed.";
-    return {D3D11StatusCode::kGetDeviceFailed, hr};
-  }
-  CHECK_EQ(used_device.Get(), device);
-  return d3d12_resource_;
+#if DCHECK_IS_ON()
+  ComD3D12Device used_device;
+  CHECK_EQ(d3d12_resource_->GetDevice(IID_PPV_ARGS(&used_device)), S_OK);
+  DCHECK_EQ(used_device.Get(), device);
+#endif
+
+  return d3d12_resource_.Get();
+}
+
+void D3D11PictureBuffer::SetFenceAndValue(scoped_refptr<D3D12Fence> fence,
+                                          uint64_t value) {
+  fence_and_value_ = std::make_pair(std::move(fence), value);
+}
+
+D3D11Status D3D11PictureBuffer::WaitForDecodeCompleteGPU(
+    ID3D11DeviceContext* context) {
+  const auto& [fence, value] = fence_and_value_;
+  return !fence ? D3D11Status::Codes::kOk : fence->WaitGPU(*context, value);
 }
 
 }  // namespace media

@@ -3,11 +3,13 @@
 // found in the LICENSE file.
 #include "device/vr/openxr/openxr_platform_helper.h"
 
+#include <algorithm>
 #include <memory>
 #include <set>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/version.h"
@@ -19,6 +21,8 @@
 #include "device/vr/openxr/openxr_extension_helper.h"
 #include "device/vr/openxr/openxr_graphics_binding.h"
 #include "device/vr/openxr/openxr_interaction_profiles.h"
+#include "device/vr/openxr/openxr_util.h"
+#include "device/vr/public/cpp/features.h"
 
 namespace device {
 
@@ -94,29 +98,33 @@ XrResult OpenXrPlatformHelper::CreateInstance(XrInstance* instance,
   std::string application_name =
       base::StrCat({version_info::GetProductName(), " ",
                     version_info::GetMajorVersionNumber()});
-  size_t dest_size =
-      std::size(instance_create_info.applicationInfo.applicationName);
-  size_t src_size =
-      base::strlcpy(instance_create_info.applicationInfo.applicationName,
-                    application_name.c_str(), dest_size);
-  DCHECK_LT(src_size, dest_size);
+  base::span<char> dest_application_name(
+      instance_create_info.applicationInfo.applicationName);
+
+  // The application name is really for our own use, in the (unlikely) event
+  // that our application name is longer than the runtime allows, it'll just be
+  // truncated, but should still have the required trailing nul terminator, so
+  // no need to check the copied length here.
+  base::strlcpy(dest_application_name, application_name);
 
   base::Version version = version_info::GetVersion();
-  DCHECK_EQ(version.components().size(), 4uLL);
+  CHECK_EQ(version.components().size(), 4uLL);
   uint32_t build = version.components()[2];
 
   // application version will be the build number of each vendor
   instance_create_info.applicationInfo.applicationVersion = build;
 
-  dest_size = std::size(instance_create_info.applicationInfo.engineName);
-  src_size = base::strlcpy(instance_create_info.applicationInfo.engineName,
-                           "Chromium", dest_size);
-  DCHECK_LT(src_size, dest_size);
+  base::span<char> dest_engine_name(
+      instance_create_info.applicationInfo.engineName);
+
+  // Same as above, not checking the copied length here as this is mainly for
+  // our own usage. However, it seems unlikely this will ever be truncated.
+  base::strlcpy(dest_engine_name, "Chromium");
 
   // engine version should be the build number of chromium
   instance_create_info.applicationInfo.engineVersion = build;
 
-  instance_create_info.applicationInfo.apiVersion = XR_CURRENT_API_VERSION;
+  instance_create_info.applicationInfo.apiVersion = XR_API_VERSION_1_0;
 
   // xrCreateInstance validates the list of extensions and returns
   // XR_ERROR_EXTENSION_NOT_PRESENT if an extension is not supported,
@@ -143,6 +151,10 @@ XrResult OpenXrPlatformHelper::CreateInstance(XrInstance* instance,
                               factory_extensions.end());
   }
 
+  for (const auto& extension : OpenXrGraphicsBinding::GetOptionalExtensions()) {
+    handled_extensions.insert(extension);
+  }
+
   // Enable the required extensions for any controllers that both we and the
   // runtime support.
   for (const auto& interaction_profile :
@@ -151,6 +163,9 @@ XrResult OpenXrPlatformHelper::CreateInstance(XrInstance* instance,
       handled_extensions.insert(interaction_profile.required_extension);
     }
   }
+
+  EnableExtensionIfSupported(XR_EXT_FUTURE_EXTENSION_NAME);
+  EnableExtensionIfSupported(OpenXrVisibilityMaskHandler::GetExtension());
 
   for (const auto& extension : handled_extensions) {
     EnableExtensionIfSupported(extension.c_str());
@@ -163,10 +178,26 @@ XrResult OpenXrPlatformHelper::CreateInstance(XrInstance* instance,
     EnableExtensionIfSupported(XR_MSFT_FIRST_PERSON_OBSERVER_EXTENSION_NAME);
   }
 
+  const bool local_floor_ext_supported =
+      GetExtensionEnumeration()->ExtensionSupported(
+          XR_EXT_LOCAL_FLOOR_EXTENSION_NAME);
+  if (local_floor_ext_supported) {
+    extensions.push_back(XR_EXT_LOCAL_FLOOR_EXTENSION_NAME);
+  }
+  UMA_HISTOGRAM_BOOLEAN("XR.OpenXR.LocalFloorExtAvailable",
+                        local_floor_ext_supported);
+
   // Enable any other platform-specific extensions that we don't just enable or
   // try to enable across the board.
   for (const auto* extension : GetOptionalExtensions()) {
     EnableExtensionIfSupported(extension);
+  }
+
+  if (base::FeatureList::IsEnabled(features::kWebXRLayers)) {
+    for (const auto* extension :
+         OpenXrExtensionHelper::GetRequiredExtensionsForLayers()) {
+      EnableExtensionIfSupported(extension);
+    }
   }
 
   instance_create_info.enabledExtensionCount =
@@ -184,9 +215,29 @@ XrResult OpenXrPlatformHelper::CreateInstance(XrInstance* instance,
   XrResult result = xrCreateInstance(&instance_create_info, instance);
   if (XR_SUCCEEDED(result)) {
     xr_instance_ = *instance;
+    UpdateExtensionFactorySupport();
+  } else {
+    DLOG(ERROR) << __func__ << " Failed to create instance: " << result;
+    OnInstanceCreateFailure();
   }
 
   return result;
+}
+
+void OpenXrPlatformHelper::UpdateExtensionFactorySupport() {
+  CHECK(xr_instance_ != XR_NULL_HANDLE);
+  auto* extension_enumeration = GetExtensionEnumeration();
+
+  // If we can't get the System, then the worst case here is that any extensions
+  // that need XrSystemProperties will just stay disabled and that can be
+  // handled later.
+  XrSystemId system;
+  OpenXrApiWrapper::GetSystem(xr_instance_, &system);
+
+  for (auto* extension_factory : GetExtensionHandlerFactories()) {
+    extension_factory->CheckAndUpdateEnabledState(extension_enumeration,
+                                                  xr_instance_, system);
+  }
 }
 
 XrResult OpenXrPlatformHelper::DestroyInstance(XrInstance& instance) {
@@ -210,10 +261,10 @@ bool OpenXrPlatformHelper::IsArBlendModeSupported(XrInstance instance) {
   std::vector<XrEnvironmentBlendMode> environment_blend_modes =
       OpenXrApiWrapper::GetSupportedBlendModes(instance, system);
 
-  return base::Contains(environment_blend_modes,
-                        XR_ENVIRONMENT_BLEND_MODE_ADDITIVE) ||
-         base::Contains(environment_blend_modes,
-                        XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND);
+  return std::ranges::contains(environment_blend_modes,
+                               XR_ENVIRONMENT_BLEND_MODE_ADDITIVE) ||
+         std::ranges::contains(environment_blend_modes,
+                               XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND);
 }
 
 }  // namespace device

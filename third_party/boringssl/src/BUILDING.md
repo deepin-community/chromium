@@ -14,16 +14,7 @@ Unless otherwise noted, build tools must at most five years old, matching
 [Abseil guidelines](https://abseil.io/about/compatibility). If in doubt, use the
 most recent stable version of each tool.
 
-  * [CMake](https://cmake.org/download/) 3.12 or later is required.
-
-  * A recent version of Perl is required. On Windows,
-    [Active State Perl](http://www.activestate.com/activeperl/) has been
-    reported to work, as has MSYS Perl.
-    [Strawberry Perl](http://strawberryperl.com/) also works but it adds GCC
-    to `PATH`, which can confuse some build tools when identifying the compiler
-    (removing `C:\Strawberry\c\bin` from `PATH` should resolve any problems).
-    If Perl is not found by CMake, it may be configured explicitly by setting
-    `PERL_EXECUTABLE`.
+  * [CMake](https://cmake.org/download/) 3.22 or later is required.
 
   * Building with [Ninja](https://ninja-build.org/) instead of Make is
     recommended, because it makes builds faster. On Windows, CMake's Visual
@@ -34,19 +25,11 @@ most recent stable version of each tool.
     by CMake, it may be configured explicitly by setting
     `CMAKE_ASM_NASM_COMPILER`.
 
-  * Compilers for C11 and C++14, or later, are required. On Windows, MSVC from
-    Visual Studio 2019 or later with Windows 10 SDK 2104 or later are
+  * Compilers for C11 and C++17, or later, are required. On Windows, MSVC from
+    Visual Studio 2022 or later with Windows 10 SDK 2104 or later are
     supported, but using the latest versions is recommended. Recent versions of
     GCC (6.1+) and Clang should work on non-Windows platforms, and maybe on
     Windows too.
-
-  * The most recent stable version of [Go](https://golang.org/dl/) is required.
-    Note Go is exempt from the five year support window. If not found by CMake,
-    the go executable may be configured explicitly by setting `GO_EXECUTABLE`.
-
-  * On x86_64 Linux, the tests have an optional
-    [libunwind](https://www.nongnu.org/libunwind/) dependency to test the
-    assembly more thoroughly.
 
 ## Building
 
@@ -91,8 +74,8 @@ themselves automatically.
 ### Building for Android
 
 It's possible to build BoringSSL with the Android NDK using CMake. Recent
-versions of the NDK include a CMake toolchain file which works with CMake 3.6.0
-or later. This has been tested with version r16b of the NDK.
+versions of the NDK include a CMake toolchain file. This has been tested with
+version r16b of the NDK.
 
 Unpack the Android NDK somewhere and export `ANDROID_NDK` to point to the
 directory. Then run CMake like this:
@@ -139,21 +122,15 @@ all symbols. This can be useful when linking multiple versions of BoringSSL in
 the same project to avoid symbol conflicts.
 
 In order to build with prefixed symbols, the `BORINGSSL_PREFIX` CMake variable
-should specify the prefix to add to all symbols, and the
-`BORINGSSL_PREFIX_SYMBOLS` CMake variable should specify the path to a file
-which contains a list of symbols which should be prefixed (one per line;
-comments are supported with `#`). In other words, `cmake -B build
--DBORINGSSL_PREFIX=MY_CUSTOM_PREFIX
--DBORINGSSL_PREFIX_SYMBOLS=/path/to/symbols.txt` will configure the build to add
-the prefix `MY_CUSTOM_PREFIX` to all of the symbols listed in
-`/path/to/symbols.txt`.
+should specify the prefix to add to all symbols. In other words, `cmake -B build
+-DBORINGSSL_PREFIX=MY_CUSTOM_PREFIX` will configure the build to add
+the prefix `MY_CUSTOM_PREFIX` to all of the symbols defined by the library.
 
-It is currently the caller's responsibility to create and maintain the list of
-symbols to be prefixed. Alternatively, `util/read_symbols.go` reads the list of
-exported symbols from a `.a` file, and can be used in a build script to generate
-the symbol list on the fly (by building without prefixing, using
-`read_symbols.go` to construct a symbol list, and then building again with
-prefixing).
+In case you want to also build the Rust crate, run `export
+BORINGSSL_PREFIX=MY_CUSTOM_PREFIX` prior to running `cargo`.
+
+Note that symbol prefixing cannot be used with the combination of FIPS and
+static libraries.
 
 This mechanism is under development and may change over time. Please contact the
 BoringSSL maintainers if making use of it.
@@ -204,6 +181,16 @@ and performance. For instance, BoringSSL's fastest P-256 implementation uses a
 
 # Running Tests
 
+There are two additional dependencies for running tests:
+
+  * The most recent stable version of [Go](https://go.dev/) is required.
+    Note Go is exempt from the five year support window. If not found by CMake,
+    the go executable may be configured explicitly by setting `GO_EXECUTABLE`.
+
+  * On x86_64 Linux, the tests have an optional
+    [libunwind](https://www.nongnu.org/libunwind/) dependency to test the
+    assembly more thoroughly.
+
 There are two sets of tests: the C/C++ tests and the blackbox tests. For former
 are built by Ninja and can be run from the top-level directory with `go run
 util/all_tests.go`. The latter have to be run separately by running `go test`
@@ -211,3 +198,41 @@ from within `ssl/test/runner`.
 
 Both sets of tests may also be run with `ninja -C build run_tests`, but CMake
 3.2 or later is required to avoid Ninja's output buffering.
+
+# Running Benchmarks
+
+To invoke the benchmarks, execute the `bssl_bench` binary.
+You have the option to enumerate all of the benchmarks first by passing in
+`--benchmark_list_tests`.
+To run specific benchmarks, you may pass in `--benchmark_filter=$regex` where
+`$regex` is an [ECMAScript regular expression].
+
+You can specify a set of input sizes in bytes for relevant cipher suites
+with the repeatable flag `-i` or `--input-size`.
+You can let the benchmark run with a set of various thread counts with the
+repeatable flag `-t` or `--threads`.
+For more benchmark configuration options, you may read the manual by passing in
+`--help` flag on launch.
+For more information on `--benchmark_*` flags, we refer you to the
+[benchmark user guide].
+
+There are also [additional tools] at your disposal to interpret the benchmark
+results.
+
+[ECMAScript regular expression]: https://cppreference.com/w/cpp/regex/ecmascript.html
+[benchmark user guide]: https://google.github.io/benchmark/user_guide.html
+[additional tools]: https://google.github.io/benchmark/tools.html
+
+# Pre-generated Files
+
+If modifying perlasm files, or `util/pregenerate/build.json`, you will need to
+run `go run ./util/pregenerate` to refresh some pre-generated files. To do this,
+you will need a recent version of Perl.
+
+On Windows, [Active State Perl](http://www.activestate.com/activeperl/) has been
+reported to work, as has MSYS Perl.
+[Strawberry Perl](http://strawberryperl.com/) also works but it adds GCC
+to `PATH`, which can confuse some build tools when identifying the compiler
+(removing `C:\Strawberry\c\bin` from `PATH` should resolve any problems).
+
+See [gen/README.md](./gen/README.md) for more details.

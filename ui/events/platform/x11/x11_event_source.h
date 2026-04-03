@@ -10,8 +10,6 @@
 #include <memory>
 #include <optional>
 
-#include "base/auto_reset.h"
-#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "ui/events/events_export.h"
 #include "ui/events/platform/platform_event_source.h"
@@ -87,6 +85,8 @@ class EVENTS_EXPORT X11EventSource : public PlatformEventSource,
   void set_last_cursor_location(const gfx::Point& last_cursor_location) {
     last_cursor_location_ = last_cursor_location;
   }
+
+  void ClearLastCursorLocation();
 
  private:
   // x11::EventObserver:

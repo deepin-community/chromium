@@ -38,8 +38,8 @@ class CPWL_EditImpl {
     const CPVT_WordPlace& GetAt() const;
 
    private:
-    UnownedPtr<CPWL_EditImpl> m_pEdit;
-    UnownedPtr<CPVT_VariableText::Iterator> m_pVTIterator;
+    UnownedPtr<CPWL_EditImpl> edit_;
+    UnownedPtr<CPVT_VariableText::Iterator> vt_iterator_;
   };
 
   CPWL_EditImpl();
@@ -54,7 +54,7 @@ class CPWL_EditImpl {
                 IPWL_FillerNotify* pFillerNotify,
                 IPWL_FillerNotify::PerWindowData* pSystemData);
 
-  void SetFontMap(IPVT_FontMap* pFontMap);
+  void SetFontMap(IPVT_FontMap* font_map);
   void SetNotify(CPWL_Edit* pNotify);
 
   // Returns an iterator for the contents. Should not be released.
@@ -94,15 +94,17 @@ class CPWL_EditImpl {
   void OnVK_END(bool bShift, bool bCtrl);
   void SetText(const WideString& sText);
   bool InsertWord(uint16_t word, FX_Charset charset);
-  bool InsertReturn();
-  bool Backspace();
+  void InsertReturn();
+  void Backspace();
   bool Delete();
   bool ClearSelection();
-  bool InsertText(const WideString& sText, FX_Charset charset);
+  void InsertText(const WideString& sText, FX_Charset charset);
   void ReplaceAndKeepSelection(const WideString& text);
   void ReplaceSelection(const WideString& text);
+  void TypeChar(uint16_t word, FX_Charset charset);
   bool Redo();
   bool Undo();
+  void SetMaxUndoItemsForTest(size_t items);
   CPVT_WordPlace WordIndexToWordPlace(int32_t index) const;
   CPVT_WordPlace SearchWordPlace(const CFX_PointF& point) const;
   int32_t GetCaret() const;
@@ -150,17 +152,17 @@ class CPWL_EditImpl {
    private:
     struct LineRect {
       LineRect(const CPVT_WordRange& wrLine, const CFX_FloatRect& rcLine)
-          : m_wrLine(wrLine), m_rcLine(rcLine) {}
+          : line_word_range_(wrLine), line_rect_(rcLine) {}
 
-      CPVT_WordRange m_wrLine;
-      CFX_FloatRect m_rcLine;
+      CPVT_WordRange line_word_range_;
+      CFX_FloatRect line_rect_;
     };
 
     void Add(const CFX_FloatRect& new_rect);
 
-    std::vector<LineRect> m_NewLineRects;
-    std::vector<LineRect> m_OldLineRects;
-    std::vector<CFX_FloatRect> m_RefreshRects;
+    std::vector<LineRect> new_line_rects_;
+    std::vector<LineRect> old_line_rects_;
+    std::vector<CFX_FloatRect> refresh_rects_;
   };
 
   class SelectState {
@@ -183,26 +185,14 @@ class CPWL_EditImpl {
    public:
     virtual ~UndoItemIface() = default;
 
-    // Undo/Redo the current undo item and returns the number of additional
-    // items to be processed in |m_UndoItemStack| to fully undo/redo the action.
-    // (An example is UndoReplaceSelection::Undo(), if UndoReplaceSelection
-    // marks the end of a replace action, UndoReplaceSelection::Undo() returns
-    // |undo_remaining_|. The default value of |undo_remaining_| in
-    // UndoReplaceSelection is 3. because 3 more undo items need to be processed
-    // to revert the replace action: insert text, clear selection and the
-    // UndoReplaceSelection which marks the beginning of replace action. If
-    // CPWL_EditImpl::ClearSelection() returns false, the value of
-    // |undo_remaining_| in UndoReplaceSelection needs to be set to 2)
-    // Implementations should return 0 by default.
-    virtual int Undo() = 0;
-    virtual int Redo() = 0;
-    void set_undo_remaining(int undo_remaining) {
-      undo_remaining_ = undo_remaining;
-    }
-    int undo_remaining() const { return undo_remaining_; }
+    virtual void Undo() = 0;
+    virtual void Redo() = 0;
 
-   private:
-    int undo_remaining_ = 0;
+    // Return true if this is a sentinel undo item, the undo stack will continue
+    // performing undo/redo operations until the next sentinel undo item.
+    //
+    // Returns false by default. This is used by UndoReplaceSelection.
+    virtual bool IsSentinel();
   };
 
   class UndoStack {
@@ -215,17 +205,26 @@ class CPWL_EditImpl {
     void Redo();
     bool CanUndo() const;
     bool CanRedo() const;
-    // GetLastAddItem() will never return null, so it can only be called after
-    // calling AddItem().
-    UndoItemIface* GetLastAddItem();
+    // items must be at least `kMinEditUndoMaxItems` since
+    // CPWL_EditImpl::ReplaceSelection() inserts that many items into the queue
+    // and they need to all fit.
+    void SetMaxUndoItemsForTest(size_t items);
 
    private:
     void RemoveHeads();
     void RemoveTails();
 
-    std::deque<std::unique_ptr<UndoItemIface>> m_UndoItemStack;
-    size_t m_nCurUndoPos = 0;
-    bool m_bWorking = false;
+    static constexpr int kEditUndoMaxItems = 10000;
+    static constexpr int kMinEditUndoMaxItems = 4;
+    static_assert(
+        kEditUndoMaxItems >= kMinEditUndoMaxItems,
+        "CPWL_EditImpl::ReplaceSelection() inserts a group of several "
+        "undo items, which must fit in the queue.");
+
+    std::deque<std::unique_ptr<UndoItemIface>> undo_item_stack_;
+    size_t cur_undo_pos_ = 0;
+    bool working_ = false;
+    size_t max_undo_items_ = kEditUndoMaxItems;
   };
 
   class Provider;
@@ -247,10 +246,10 @@ class CPWL_EditImpl {
   void SetSelection(const CPVT_WordPlace& begin, const CPVT_WordPlace& end);
   bool Delete(bool bAddUndo);
   bool Clear(bool bAddUndo);
-  bool InsertText(const WideString& sText, FX_Charset charset, bool bAddUndo);
+  void InsertText(const WideString& sText, FX_Charset charset, bool bAddUndo);
   bool InsertWord(uint16_t word, FX_Charset charset, bool bAddUndo);
-  bool InsertReturn(bool bAddUndo);
-  bool Backspace(bool bAddUndo);
+  void InsertReturn(bool bAddUndo);
+  void Backspace(bool bAddUndo);
   void SetCaret(const CPVT_WordPlace& place);
 
   CFX_PointF VTToEdit(const CFX_PointF& point) const;
@@ -278,25 +277,25 @@ class CPWL_EditImpl {
 
   void AddEditUndoItem(std::unique_ptr<UndoItemIface> pEditUndoItem);
 
-  bool m_bEnableScroll = false;
-  bool m_bNotifyFlag = false;
-  bool m_bEnableOverflow = false;
-  bool m_bEnableRefresh = true;
-  bool m_bEnableUndo = true;
-  int32_t m_nAlignment = 0;
-  std::unique_ptr<Provider> m_pVTProvider;
-  std::unique_ptr<CPVT_VariableText> m_pVT;  // Must outlive |m_pVTProvider|.
-  UnownedPtr<CPWL_Edit> m_pNotify;
-  CPVT_WordPlace m_wpCaret;
-  CPVT_WordPlace m_wpOldCaret;
-  SelectState m_SelState;
-  CFX_PointF m_ptScrollPos;
-  CFX_PointF m_ptRefreshScrollPos;
-  std::unique_ptr<Iterator> m_pIterator;
-  RefreshState m_Refresh;
-  CFX_PointF m_ptCaret;
-  UndoStack m_Undo;
-  CFX_FloatRect m_rcOldContent;
+  bool enable_scroll_ = false;
+  bool notify_flag_ = false;
+  bool enable_overflow_ = false;
+  bool enable_refresh_ = true;
+  bool enable_undo_ = true;
+  int32_t alignment_ = 0;
+  std::unique_ptr<Provider> vt_provider_;
+  std::unique_ptr<CPVT_VariableText> vt_;  // Must outlive |vt_provider_|.
+  UnownedPtr<CPWL_Edit> notify_;
+  CPVT_WordPlace wp_caret_;
+  CPVT_WordPlace wp_old_caret_;
+  SelectState sel_state_;
+  CFX_PointF scroll_pos_point_;
+  CFX_PointF pt_refresh_scroll_pos_;
+  std::unique_ptr<Iterator> iterator_;
+  RefreshState refresh_;
+  CFX_PointF caret_point_;
+  UndoStack undo_;
+  CFX_FloatRect old_content_rect_;
 };
 
 #endif  // FPDFSDK_PWL_CPWL_EDIT_IMPL_H_

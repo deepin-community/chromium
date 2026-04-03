@@ -12,9 +12,16 @@
 #include <iostream>
 #include <sstream>
 
+#include "build/build_config.h"
 #include "platform/impl/logging.h"
 #include "platform/impl/logging_test.h"
 #include "util/trace_logging.h"
+
+#if OSP_DCHECK_IS_ON()
+#include <execinfo.h>
+
+#include <array>
+#endif
 
 namespace openscreen {
 namespace {
@@ -55,7 +62,7 @@ void SetLogFifoOrDie(const char* filename) {
   }
 
   // Note: The use of OSP_CHECK/OSP_LOG_* here will log to stderr.
-  struct stat st = {};
+  struct stat st {};
   int open_result = -1;
   if (stat(filename, &st) == -1 && errno == ENOENT) {
     if (mkfifo(filename, 0644) == 0) {
@@ -85,7 +92,7 @@ LogLevel GetLogLevel() {
   return g_log_level;
 }
 
-bool IsLoggingOn(LogLevel level, const char* file) {
+bool IsLoggingOn(LogLevel level, const std::string_view file) {
   // Possible future enhancement: Use glob patterns passed on the command-line
   // to use a different logging level for certain files, like in Chromium.
   return level >= g_log_level;
@@ -100,10 +107,31 @@ void LogWithLevel(LogLevel level,
 
   std::stringstream ss;
   ss << "[" << level << ":" << file << "(" << line << "):T" << std::hex
-     << TRACE_CURRENT_ID << "] " << message.rdbuf() << '\n';
+     << TRACE_CURRENT_ID << "] " << message.rdbuf() << std::endl;
+
+// NOTE: backtrace() is only supported in modern versions of Android (33+), so
+// it is just disabled here.
+#if OSP_DCHECK_IS_ON() && !BUILDFLAG(IS_ANDROID)
+  if (level == LogLevel::kFatal) {
+    constexpr size_t kMaxCallstackSize = 128;
+    std::array<void*, kMaxCallstackSize> callstack = {};
+
+    // Get the return addresses and attempt to symbolize them.
+    const int num_frames = backtrace(callstack.data(), callstack.size());
+    char** strs = backtrace_symbols(callstack.data(), num_frames);
+
+    if (num_frames > 0) {
+      ss << "Debug stack trace for fatal error:" << std::endl;
+      for (int i = 0; i < num_frames; ++i) {
+        ss << strs[i] << std::endl;
+      }
+    }
+    free(strs);
+  }
+#endif
   const auto ss_str = ss.str();
   const auto bytes_written = write(g_log_fd, ss_str.c_str(), ss_str.size());
-  OSP_DCHECK(bytes_written);
+  OSP_CHECK(bytes_written);
   if (g_log_messages_for_test) {
     g_log_messages_for_test->push_back(ss_str);
   }
@@ -112,12 +140,12 @@ void LogWithLevel(LogLevel level,
 void LogTraceMessage(const std::string& message) {
   const std::string to_write = message + '\n';
   const auto bytes_written = write(g_log_fd, to_write.c_str(), to_write.size());
-  OSP_DCHECK(bytes_written);
+  OSP_CHECK(bytes_written);
 }
 
 [[noreturn]] void Break() {
 // Generally this will just resolve to an abort anyways, but gives the
-// compiler a chance to peform a more appropriate, target specific trap
+// compiler a chance to perform a more appropriate, target specific trap
 // as appropriate.
 #if defined(_DEBUG)
   __builtin_trap();

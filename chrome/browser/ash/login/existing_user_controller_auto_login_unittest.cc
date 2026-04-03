@@ -7,20 +7,19 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/values.h"
-#include "chrome/browser/ash/app_mode/arc/arc_kiosk_app_manager.h"
 #include "chrome/browser/ash/login/existing_user_controller.h"
-#include "chrome/browser/ash/login/ui/mock_login_display_host.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/ash/policy/core/device_local_account.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
+#include "chrome/browser/ui/ash/login/mock_login_display_host.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/login/auth/auth_events_recorder.h"
+#include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/ownership/mock_owner_key_util.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/test/browser_task_environment.h"
@@ -45,13 +44,11 @@ const int kAutoLoginDelay2 = 180000;
 class ExistingUserControllerAutoLoginTest : public ::testing::Test {
  protected:
   ExistingUserControllerAutoLoginTest()
-      : local_state_(TestingBrowserProcess::GetGlobal()),
-        fake_user_manager_(std::make_unique<FakeChromeUserManager>()) {
+      : fake_user_manager_(std::make_unique<FakeChromeUserManager>()) {
     auth_events_recorder_ = ash::AuthEventsRecorder::CreateForTesting();
   }
 
   void SetUp() override {
-    arc_kiosk_app_manager_ = std::make_unique<ArcKioskAppManager>();
     existing_user_controller_ = std::make_unique<ExistingUserController>();
     mock_login_display_host_ = std::make_unique<MockLoginDisplayHost>();
 
@@ -62,15 +59,17 @@ class ExistingUserControllerAutoLoginTest : public ::testing::Test {
 
     settings_helper_.ReplaceDeviceSettingsProviderWithStub();
 
-    DeviceSettingsService::Get()->SetSessionManager(
+    DeviceSettingsService::Get()->StartProcessing(
+        TestingBrowserProcess::GetGlobal()->local_state(),
         FakeSessionManagerClient::Get(), new ownership::MockOwnerKeyUtil());
     DeviceSettingsService::Get()->Load();
 
-    base::Value::Dict account;
+    base::DictValue account;
     account.Set(kAccountsPrefDeviceLocalAccountsKeyId, auto_login_user_id_);
-    account.Set(kAccountsPrefDeviceLocalAccountsKeyType,
-                policy::DeviceLocalAccount::TYPE_PUBLIC_SESSION);
-    base::Value::List accounts;
+    account.Set(
+        kAccountsPrefDeviceLocalAccountsKeyType,
+        static_cast<int>(policy::DeviceLocalAccountType::kPublicSession));
+    base::ListValue accounts;
     accounts.Append(std::move(account));
     settings_helper_.Set(kAccountsPrefDeviceLocalAccounts,
                          base::Value(std::move(accounts)));
@@ -132,21 +131,20 @@ class ExistingUserControllerAutoLoginTest : public ::testing::Test {
   const AccountId auto_login_account_id_ =
       AccountId::FromUserEmail(policy::GenerateDeviceLocalAccountUserId(
           auto_login_user_id_,
-          policy::DeviceLocalAccount::TYPE_PUBLIC_SESSION));
+          policy::DeviceLocalAccountType::kPublicSession));
 
  private:
   std::unique_ptr<MockLoginDisplayHost> mock_login_display_host_;
   content::BrowserTaskEnvironment task_environment_;
-  ScopedTestingLocalState local_state_;
 
   // Required by ExistingUserController:
   FakeSessionManagerClient fake_session_manager_client_;
   ScopedCrosSettingsTestHelper settings_helper_;
   user_manager::TypedScopedUserManager<ash::FakeChromeUserManager>
       fake_user_manager_;
-  std::unique_ptr<ArcKioskAppManager> arc_kiosk_app_manager_;
 
-  session_manager::SessionManager session_manager_;
+  session_manager::SessionManager session_manager_{
+      std::make_unique<session_manager::FakeSessionManagerDelegate>()};
 
   // `existing_user_controller_` must be destroyed before
   // `device_settings_test_helper_`.

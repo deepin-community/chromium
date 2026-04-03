@@ -10,7 +10,8 @@
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/task/sequenced_task_runner.h"
-#include "device/fido/fido_transport_protocol.h"
+#include "device/fido/cable/pairing.h"
+#include "device/fido/public/fido_transport_protocol.h"
 #include "device/fido/virtual_fido_device_authenticator.h"
 #include "device/fido/virtual_u2f_device.h"
 
@@ -56,7 +57,7 @@ void VirtualFidoDeviceDiscovery::StartInternal() {
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&VirtualFidoDeviceDiscovery::NotifyDiscoveryStarted,
-                     AsWeakPtr(), true /* success */));
+                     weak_ptr_factory_.GetWeakPtr(), true /* success */));
 
   if (disconnect_events_) {
     // |disconnect_events_| is owned by this object therefore, when this object
@@ -71,7 +72,7 @@ void VirtualFidoDeviceDiscovery::AddVirtualDeviceAsync(
     std::unique_ptr<cablev2::Pairing> _) {
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&VirtualFidoDeviceDiscovery::AddVirtualDevice,
-                                AsWeakPtr()));
+                                weak_ptr_factory_.GetWeakPtr()));
 }
 
 void VirtualFidoDeviceDiscovery::AddVirtualDevice() {

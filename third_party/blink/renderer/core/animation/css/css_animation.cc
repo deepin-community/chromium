@@ -3,10 +3,12 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/animation/css/css_animation.h"
+
 #include "third_party/blink/renderer/core/animation/animation.h"
 #include "third_party/blink/renderer/core/animation/css/css_animations.h"
 #include "third_party/blink/renderer/core/animation/keyframe_effect.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/trigger_scoped_name.h"
 
 namespace blink {
 
@@ -27,12 +29,10 @@ CSSAnimation::CSSAnimation(ExecutionContext* execution_context,
 bool CSSAnimation::IsEventDispatchAllowed() const {
   // If there is no owning element, CSS animation events are not dispatched:
   // https://drafts.csswg.org/css-animations-2/#event-dispatch
-  return (!RuntimeEnabledFeatures::UnownedAnimationsSkipCSSEventsEnabled() ||
-          OwningElement()) &&
-         Animation::IsEventDispatchAllowed();
+  return OwningElement() && Animation::IsEventDispatchAllowed();
 }
 
-String CSSAnimation::playState() const {
+V8AnimationPlayState CSSAnimation::playState() const {
   FlushStyles();
   return Animation::playState();
 }
@@ -123,6 +123,19 @@ CSSAnimation::PlayStateTransitionScope::~PlayStateTransitionScope() {
   bool is_paused = animation_.Paused();
   if (was_paused_ != is_paused)
     animation_.ignore_css_play_state_ = true;
+}
+
+void CSSAnimation::SetNamedTriggerAttachment(
+    Member<const TriggerScopedName> scope,
+    AnimationTrigger* trigger) {
+  named_trigger_attachments_.Set(scope, trigger);
+}
+
+void CSSAnimation::Trace(blink::Visitor* visitor) const {
+  Animation::Trace(visitor);
+  visitor->Trace(owning_element_);
+  visitor->Trace(trigger_attachments_);
+  visitor->Trace(named_trigger_attachments_);
 }
 
 }  // namespace blink

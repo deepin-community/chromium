@@ -6,13 +6,13 @@
 
 #include <stdlib.h>
 
+#include <algorithm>
 #include <string_view>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/process/launch.h"
-#include "base/ranges/algorithm.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
@@ -33,7 +33,7 @@ using LaunchCallback = AlternativeBrowserDriver::LaunchCallback;
 
 const char kUrlVarName[] = "${url}";
 
-// TODO(crbug.com/1124758): add ${edge} on macOS/Linux once it's released on
+// TODO(crbug.com/40147515): add ${edge} on macOS/Linux once it's released on
 // those platforms.
 
 #if BUILDFLAG(IS_MAC)
@@ -97,7 +97,8 @@ void ExpandEnvironmentVariables(std::string* arg) {
   bool matched = false;
   while (re->Match(view, start, arg->size(), re2::RE2::Anchor::UNANCHORED,
                    submatch, std::size(submatch))) {
-    out.append(view, start, submatch[0].data() - (arg->data() + start));
+    out.append(view, start,
+               submatch[0].data() - (UNSAFE_TODO(arg->data() + start)));
     if (submatch[0] == kUrlVarName) {
       // Don't treat '${url}' as an environment variable, leave it as is.
       out.append(kUrlVarName);
@@ -112,13 +113,13 @@ void ExpandEnvironmentVariables(std::string* arg) {
   }
   if (!matched)
     return;
-  out.append(view.data() + start, view.size() - start);
+  out.append(UNSAFE_TODO(view.data() + start), view.size() - start);
   std::swap(out, *arg);
 }
 
 #if BUILDFLAG(IS_MAC)
 bool ContainsUrlVarName(const std::vector<std::string>& tokens) {
-  return base::ranges::any_of(tokens, [](const std::string& token) {
+  return std::ranges::any_of(tokens, [](const std::string& token) {
     return token.find(kUrlVarName) != std::string::npos;
   });
 }
@@ -141,7 +142,7 @@ void AppendCommandLineArguments(base::CommandLine* cmd_line,
     cmd_line->AppendArg(url.spec());
 }
 
-const BrowserVarMapping* FindBrowserMapping(base::StringPiece path) {
+const BrowserVarMapping* FindBrowserMapping(std::string_view path) {
 #if BUILDFLAG(IS_MAC)
   // Unlike most POSIX platforms, MacOS always has another browser than Chrome,
   // so admins don't have to explicitly configure one.

@@ -58,12 +58,14 @@ bool CheckNoTouchpadDeviceExist() {
 
 // static
 std::string TouchpadScrollScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::kNext:
       return "Next";
     case Result::kNotApplicable:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 TouchpadScrollScreen::TouchpadScrollScreen(
@@ -124,15 +126,13 @@ void TouchpadScrollScreen::OnScrollUpdate(bool is_reverse_scroll) {
   // The pref is true if touchpad reverse scroll is enabled.
   profile->GetPrefs()->SetBoolean(prefs::kNaturalScroll, is_reverse_scroll);
 
-  if (features::IsInputDeviceSettingsSplitEnabled()) {
-    const auto touchpads =
-        InputDeviceSettingsController::Get()->GetConnectedTouchpads();
-    for (const auto& touchpad : touchpads) {
-      const auto old_settings = std::move(touchpad->settings);
-      old_settings->reverse_scrolling = is_reverse_scroll;
-      InputDeviceSettingsController::Get()->SetTouchpadSettings(
-          touchpad->id, old_settings->Clone());
-    }
+  const auto touchpads =
+      InputDeviceSettingsController::Get()->GetConnectedTouchpads();
+  for (const auto& touchpad : touchpads) {
+    const auto old_settings = std::move(touchpad->settings);
+    old_settings->reverse_scrolling = is_reverse_scroll;
+    InputDeviceSettingsController::Get()->SetTouchpadSettings(
+        touchpad->id, old_settings->Clone());
   }
 }
 
@@ -155,7 +155,7 @@ void TouchpadScrollScreen::ShowImpl() {
   initial_pref_value_ = GetNaturalScrollPrefValue();
   view_->SetReverseScrolling(GetNaturalScrollPrefValue());
 
-  base::Value::Dict data;
+  base::DictValue data;
   data.Set(
       "shouldShowReturn",
       ShouldShowChoobeReturnButton(
@@ -165,7 +165,7 @@ void TouchpadScrollScreen::ShowImpl() {
 
 void TouchpadScrollScreen::HideImpl() {}
 
-void TouchpadScrollScreen::OnUserAction(const base::Value::List& args) {
+void TouchpadScrollScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
 
   if (action_id == kUserActionNext) {

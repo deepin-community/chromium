@@ -19,6 +19,7 @@
 #include "base/memory/memory_pressure_listener.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "base/trace_event/memory_dump_provider.h"
 #include "cc/paint/image_transfer_cache_entry.h"
 #include "cc/paint/transfer_cache_entry.h"
 #include "gpu/command_buffer/common/discardable_handle.h"
@@ -29,7 +30,6 @@
 #include "third_party/skia/include/core/SkYUVAInfo.h"
 
 class GrDirectContext;
-class SkImage;
 
 namespace gpu {
 
@@ -74,26 +74,7 @@ class GPU_GLES2_EXPORT ServiceTransferCache
   cc::ServiceTransferCacheEntry* GetEntry(const EntryKey& key);
   void DeleteAllEntriesForDecoder(int decoder_id);
 
-  // Creates an image transfer cache entry using |plane_images| (refer to
-  // ServiceImageTransferCacheEntry::BuildFromHardwareDecodedImage() for
-  // details). |decoder_id| and |entry_id| are used for creating the
-  // ServiceTransferCache::EntryKey (assuming cc::TransferCacheEntryType:kImage
-  // for the type). Returns true if the entry could be created and inserted;
-  // false otherwise.
-  bool CreateLockedHardwareDecodedImageEntry(
-      int decoder_id,
-      uint32_t entry_id,
-      ServiceDiscardableHandle handle,
-      GrDirectContext* context,
-      std::vector<sk_sp<SkImage>> plane_images,
-      SkYUVAInfo::PlaneConfig plane_config,
-      SkYUVAInfo::Subsampling subsampling,
-      SkYUVColorSpace yuv_color_space,
-      size_t buffer_byte_size,
-      bool needs_mips);
-
-  void PurgeMemory(
-      base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level);
+  void PurgeMemory(base::MemoryPressureLevel memory_pressure_level);
 
   // base::trace_event::MemoryDumpProvider implementation.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,

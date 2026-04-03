@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,23 +10,23 @@ import type * as MobileThrottling from './mobile_throttling.js';
 
 const UIStrings = {
   /**
-   *@description Text for throttling the network
+   * @description Text for throttling the network
    */
   throttling: 'Throttling',
   /**
-   *@description Command for showing the Mobile Throttling tool.
+   * @description Command for showing the Mobile Throttling tool.
    */
   showThrottling: 'Show Throttling',
   /**
-   *@description Title of an action in the network conditions tool to network offline
+   * @description Title of an action in the network conditions tool to network offline
    */
   goOffline: 'Go offline',
   /**
-   *@description A tag of Mobile related settings that can be searched in the command menu
+   * @description A tag of Mobile related settings that can be searched in the command menu
    */
   device: 'device',
   /**
-   *@description A tag of Network related actions that can be searched in the command menu
+   * @description A tag of Network related actions that can be searched in the command menu
    */
   throttlingTag: 'throttling',
   /**
@@ -40,10 +40,10 @@ const UIStrings = {
    */
   enableFastGThrottling: 'Enable fast `3G` throttling',
   /**
-   *@description Title of an action in the network conditions tool to network online
+   * @description Title of an action in the network conditions tool to network online
    */
   goOnline: 'Go online',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/mobile_throttling/mobile_throttling-meta.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
 
@@ -68,7 +68,9 @@ UI.ViewManager.registerViewExtension({
   },
   settings: [
     'custom-network-conditions',
+    'calibrated-cpu-throttling',
   ],
+  iconName: 'performance',
 });
 
 UI.ActionRegistration.registerActionExtension({
@@ -128,7 +130,7 @@ UI.ActionRegistration.registerActionExtension({
 });
 
 Common.Settings.registerSettingExtension({
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   settingName: 'custom-network-conditions',
   settingType: Common.Settings.SettingType.ARRAY,
   defaultValue: [],

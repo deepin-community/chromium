@@ -7,6 +7,10 @@
 //    Implements the class methods for DeviceVk.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/vulkan/DeviceVk.h"
 
 #include <stdint.h>
@@ -15,7 +19,7 @@
 #include "common/vulkan/vulkan_icd.h"
 #include "libANGLE/Display.h"
 #include "libANGLE/renderer/vulkan/DisplayVk.h"
-#include "libANGLE/renderer/vulkan/RendererVk.h"
+#include "libANGLE/renderer/vulkan/vk_renderer.h"
 
 namespace rx
 {
@@ -58,7 +62,7 @@ egl::Error DeviceVk::initialize()
 
 egl::Error DeviceVk::getAttribute(const egl::Display *display, EGLint attribute, void **outValue)
 {
-    RendererVk *renderer =
+    vk::Renderer *renderer =
         static_cast<rx::DisplayVk *>(display->getImplementation())->getRenderer();
     ASSERT(mRenderer == nullptr || mRenderer == renderer);
     mRenderer = renderer;
@@ -87,11 +91,6 @@ egl::Error DeviceVk::getAttribute(const egl::Display *display, EGLint attribute,
         }
         case EGL_VULKAN_QUEUE_ANGLE:
         {
-            // Usage of the Vulkan queue by the application is incompatible with the
-            // asyncCommandQueue feature; there is no way for the application to synchronize with
-            // the async thread's usage of the queue.
-            ASSERT(!mRenderer->getFeatures().asyncCommandQueue.enabled);
-
             // egl::ContextPriority::Medium is the default context priority.
             *outValue = mRenderer->getQueue(egl::ContextPriority::Medium);
             return egl::NoError();
@@ -129,13 +128,8 @@ egl::Error DeviceVk::getAttribute(const egl::Display *display, EGLint attribute,
             return egl::NoError();
         }
         default:
-            return egl::EglBadAccess();
+            return egl::Error(EGL_BAD_ACCESS);
     }
-}
-
-EGLint DeviceVk::getType()
-{
-    return EGL_VULKAN_DEVICE_ANGLE;
 }
 
 void DeviceVk::generateExtensions(egl::DeviceExtensions *outExtensions) const

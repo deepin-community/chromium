@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ash/webui/status_area_internals/status_area_internals_ui.h"
 
 #include <memory>
@@ -17,8 +18,8 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
 #include "ui/base/webui/resource_path.h"
-#include "ui/resources/grit/webui_resources.h"
 #include "ui/webui/mojo_web_ui_controller.h"
+#include "ui/webui/resources/grit/webui_resources.h"
 
 namespace ash {
 
@@ -40,7 +41,7 @@ void SetupWebUIDataSource(content::WebUIDataSource* source,
   source->AddResourcePath("test_loader.html", IDR_WEBUI_TEST_LOADER_HTML);
 
   source->AddResourcePaths(resources);
-  source->AddResourcePath("", default_resource);
+  source->SetDefaultResource(default_resource);
 }
 
 }  // namespace
@@ -54,9 +55,7 @@ StatusAreaInternalsUI::StatusAreaInternalsUI(content::WebUI* web_ui)
           kChromeUIStatusAreaInternalsHost);
 
   // Add required resources.
-  SetupWebUIDataSource(html_source,
-                       base::make_span(kAshStatusAreaInternalsResources,
-                                       kAshStatusAreaInternalsResourcesSize),
+  SetupWebUIDataSource(html_source, kAshStatusAreaInternalsResources,
                        IDR_ASH_STATUS_AREA_INTERNALS_MAIN_HTML);
 }
 

@@ -7,7 +7,6 @@
 
 #include "ash/ash_export.h"
 #include "ash/public/cpp/session/session_observer.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/services/network_config/public/cpp/cros_network_config_observer.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -23,6 +22,8 @@ class ASH_EXPORT ManagedSimLockNotifier
       public chromeos::network_config::CrosNetworkConfigObserver,
       public message_center::NotificationObserver {
  public:
+  static const char kManagedSimLockNotificationId[];
+
   ManagedSimLockNotifier();
   ManagedSimLockNotifier(const ManagedSimLockNotifier&) = delete;
   ManagedSimLockNotifier& operator=(const ManagedSimLockNotifier&) = delete;
@@ -56,8 +57,6 @@ class ASH_EXPORT ManagedSimLockNotifier
   void CheckGlobalNetworkConfiguration();
   void MaybeShowNotification();
   void ShowNotification();
-
-  static const char kManagedSimLockNotificationId[];
 
   std::string primary_iccid_ = std::string();
   mojo::Remote<chromeos::network_config::mojom::CrosNetworkConfig>

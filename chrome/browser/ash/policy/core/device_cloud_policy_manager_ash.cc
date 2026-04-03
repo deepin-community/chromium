@@ -12,6 +12,7 @@
 #include "ash/constants/ash_paths.h"
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -30,9 +31,11 @@
 #include "chrome/browser/ash/policy/networking/euicc_status_uploader.h"
 #include "chrome/browser/ash/policy/remote_commands/crd/crd_admin_session_controller.h"
 #include "chrome/browser/ash/policy/remote_commands/device_commands_factory_ash.h"
+#include "chrome/browser/ash/policy/reporting/event_based_logs/event_based_log_manager.h"
 #include "chrome/browser/ash/policy/reporting/metrics_reporting/metric_reporting_manager.h"
 #include "chrome/browser/ash/policy/reporting/os_updates/os_updates_reporter.h"
 #include "chrome/browser/ash/policy/reporting/user_added_removed/user_added_removed_reporter.h"
+#include "chrome/browser/ash/policy/reporting/user_session_activity/user_session_activity_reporter.h"
 #include "chrome/browser/ash/policy/rsu/lookup_key_uploader.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_state_keys_broker.h"
 #include "chrome/browser/ash/policy/status_collector/device_status_collector.h"
@@ -56,6 +59,7 @@
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "components/user_manager/user_manager.h"
 #include "content/public/browser/network_service_instance.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
@@ -63,22 +67,16 @@ namespace policy {
 
 namespace {
 
-// Zero-touch enrollment flag values.
-
-const char kZeroTouchEnrollmentForced[] = "forced";
-
 // Default frequency for uploading enterprise status reports. Can be overriden
 // by Device Policy.
 // Keep the default value in sync with device_status_frequency in
 // DeviceReportingProto in components/policy/proto/chrome_device_policy.proto.
 constexpr base::TimeDelta kDeviceStatusUploadFrequency = base::Hours(3);
 
-// Checks whether forced re-enrollment is enabled.
-bool IsForcedReEnrollmentEnabled() {
-  return AutoEnrollmentTypeChecker::IsFREEnabled();
-}
-
 }  // namespace
+
+BASE_FEATURE(kEnableUserSessionActivityReporting,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 DeviceCloudPolicyManagerAsh::DeviceCloudPolicyManagerAsh(
     std::unique_ptr<DeviceCloudPolicyStoreAsh> device_store,
@@ -90,6 +88,7 @@ DeviceCloudPolicyManagerAsh::DeviceCloudPolicyManagerAsh(
           dm_protocol::kChromeDevicePolicyType,
           std::string(),
           std::move(device_store),
+          /*extension_install_store=*/nullptr,
           task_runner,
           base::BindRepeating(&content::GetNetworkConnectionTracker)),
       device_store_(static_cast<DeviceCloudPolicyStoreAsh*>(store())),
@@ -121,9 +120,13 @@ void DeviceCloudPolicyManagerAsh::Initialize(PrefService* local_state) {
 
   local_state_ = local_state;
 
-  state_keys_update_subscription_ = state_keys_broker_->RegisterUpdateCallback(
-      base::BindRepeating(&DeviceCloudPolicyManagerAsh::OnStateKeysUpdated,
-                          base::Unretained(this)));
+  // If supported, we'll want to know about re-enrollment state keys.
+  if (AutoEnrollmentTypeChecker::AreFREStateKeysSupported()) {
+    state_keys_update_subscription_ =
+        state_keys_broker_->RegisterUpdateCallback(base::BindRepeating(
+            &DeviceCloudPolicyManagerAsh::OnStateKeysUpdated,
+            base::Unretained(this)));
+  }
 }
 
 void DeviceCloudPolicyManagerAsh::AddDeviceCloudPolicyManagerObserver(
@@ -138,8 +141,10 @@ void DeviceCloudPolicyManagerAsh::RemoveDeviceCloudPolicyManagerObserver(
 
 // Keep clean up order as the reversed creation order.
 void DeviceCloudPolicyManagerAsh::Shutdown() {
-  os_updates_reporter_.reset();
+  event_based_log_manager_.reset();
   metric_reporting_manager_.reset();
+  user_session_activity_reporter_.reset();
+  os_updates_reporter_.reset();
   lock_unlock_reporter_.reset();
   login_logout_reporter_.reset();
   user_added_removed_reporter_.reset();
@@ -156,6 +161,7 @@ void DeviceCloudPolicyManagerAsh::Shutdown() {
   state_keys_update_subscription_ = {};
   CloudPolicyManager::Shutdown();
   signin_profile_forwarding_schema_registry_.reset();
+  auth_screens_schema_registry_.reset();
 }
 
 // static
@@ -167,29 +173,8 @@ void DeviceCloudPolicyManagerAsh::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(::prefs::kLastRsuDeviceIdUploaded,
                                std::string());
   registry->RegisterListPref(prefs::kStoreLogStatesAcrossReboots);
-}
-
-// static
-ZeroTouchEnrollmentMode
-DeviceCloudPolicyManagerAsh::GetZeroTouchEnrollmentMode() {
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(
-          ash::switches::kEnterpriseEnableZeroTouchEnrollment)) {
-    return ZeroTouchEnrollmentMode::DISABLED;
-  }
-
-  std::string value = command_line->GetSwitchValueASCII(
-      ash::switches::kEnterpriseEnableZeroTouchEnrollment);
-  if (value == kZeroTouchEnrollmentForced) {
-    return ZeroTouchEnrollmentMode::FORCED;
-  }
-  if (value.empty()) {
-    return ZeroTouchEnrollmentMode::ENABLED;
-  }
-  LOG(WARNING) << "Malformed value \"" << value << "\" for switch --"
-               << ash::switches::kEnterpriseEnableZeroTouchEnrollment
-               << ". Ignoring switch.";
-  return ZeroTouchEnrollmentMode::DISABLED;
+  registry->RegisterDictionaryPref(
+      policy::prefs::kEventBasedLogLastUploadTimes);
 }
 
 void DeviceCloudPolicyManagerAsh::StartConnection(
@@ -197,8 +182,9 @@ void DeviceCloudPolicyManagerAsh::StartConnection(
     ash::InstallAttributes* install_attributes) {
   CHECK(!service());
 
-  // Set state keys here so the first policy fetch submits them to the server.
-  if (IsForcedReEnrollmentEnabled()) {
+  // If supported, set state keys here so the first policy fetch submits them to
+  // the server.
+  if (AutoEnrollmentTypeChecker::AreFREStateKeysSupported()) {
     client_to_connect->SetStateKeysToUpload(state_keys_broker_->state_keys());
   }
 
@@ -207,11 +193,19 @@ void DeviceCloudPolicyManagerAsh::StartConnection(
   if (!component_policy_disabled_for_testing_) {
     const base::FilePath component_policy_cache_dir =
         base::PathService::CheckedGet(ash::DIR_SIGNIN_PROFILE_COMPONENT_POLICY);
-    CHECK(signin_profile_forwarding_schema_registry_);
-    CreateComponentCloudPolicyService(
-        dm_protocol::kChromeSigninExtensionPolicyType,
-        component_policy_cache_dir, client_to_connect.get(),
-        signin_profile_forwarding_schema_registry_.get());
+    if (chromeos::features::IsLockScreenBadgeAuthEnabled()) {
+      CHECK(auth_screens_schema_registry_);
+      CreateComponentCloudPolicyService(
+          dm_protocol::kChromeSigninExtensionPolicyType,
+          component_policy_cache_dir, client_to_connect.get(),
+          auth_screens_schema_registry_.get());
+    } else {
+      CHECK(signin_profile_forwarding_schema_registry_);
+      CreateComponentCloudPolicyService(
+          dm_protocol::kChromeSigninExtensionPolicyType,
+          component_policy_cache_dir, client_to_connect.get(),
+          signin_profile_forwarding_schema_registry_.get());
+    }
   }
 
   core()->Connect(std::move(client_to_connect));
@@ -273,6 +267,7 @@ void DeviceCloudPolicyManagerAsh::StartConnection(
     metric_reporting_manager_ = reporting::MetricReportingManager::Create(
         managed_session_service_.get());
     os_updates_reporter_ = reporting::OsUpdatesReporter::Create();
+    event_based_log_manager_ = std::make_unique<EventBasedLogManager>();
   }
 
   NotifyConnected();
@@ -286,11 +281,37 @@ void DeviceCloudPolicyManagerAsh::OnPolicyStoreReady(
   CreateManagedSessionServiceAndReporters();
 }
 
+bool DeviceCloudPolicyManagerAsh::HasSchemaRegistry() const {
+  if (chromeos::features::IsLockScreenBadgeAuthEnabled()) {
+    return auth_screens_schema_registry_ != nullptr;
+  } else {
+    return signin_profile_forwarding_schema_registry_ != nullptr;
+  }
+}
+
 void DeviceCloudPolicyManagerAsh::SetSigninProfileSchemaRegistry(
     SchemaRegistry* schema_registry) {
-  DCHECK(!signin_profile_forwarding_schema_registry_);
-  signin_profile_forwarding_schema_registry_ =
-      std::make_unique<ForwardingSchemaRegistry>(schema_registry);
+  if (chromeos::features::IsLockScreenBadgeAuthEnabled()) {
+    if (!auth_screens_schema_registry_) {
+      auth_screens_schema_registry_ =
+          std::make_unique<CombinedSchemaRegistry>();
+    }
+    auth_screens_schema_registry_->Track(schema_registry);
+  } else {
+    DCHECK(!signin_profile_forwarding_schema_registry_);
+    signin_profile_forwarding_schema_registry_ =
+        std::make_unique<ForwardingSchemaRegistry>(schema_registry);
+  }
+  NotifyGotRegistry();
+}
+
+void DeviceCloudPolicyManagerAsh::SetLockProfileSchemaRegistry(
+    SchemaRegistry* schema_registry) {
+  DCHECK(chromeos::features::IsLockScreenBadgeAuthEnabled());
+  if (!auth_screens_schema_registry_) {
+    auth_screens_schema_registry_ = std::make_unique<CombinedSchemaRegistry>();
+  }
+  auth_screens_schema_registry_->Track(schema_registry);
   NotifyGotRegistry();
 }
 
@@ -301,8 +322,7 @@ void DeviceCloudPolicyManagerAsh::OnUserManagerCreated(
       std::make_unique<ReportingUserTracker>(user_manager);
 }
 
-void DeviceCloudPolicyManagerAsh::OnUserManagerWillBeDestroyed(
-    user_manager::UserManager* user_manager) {
+void DeviceCloudPolicyManagerAsh::OnUserManagerWillBeDestroyed() {
   // DeviceStatusCollector internally holds the reference to the
   // ReportingUserTracker instance, so should be released via Shutdown()
   // before this is reached.
@@ -355,9 +375,7 @@ void DeviceCloudPolicyManagerAsh::OnUserRemoved(
 }
 
 void DeviceCloudPolicyManagerAsh::OnStateKeysUpdated() {
-  // TODO(b/181140445): If we had a separate state keys upload request to DM
-  // Server we should call it here.
-  if (client() && IsForcedReEnrollmentEnabled()) {
+  if (client()) {
     client()->SetStateKeysToUpload(state_keys_broker_->state_keys());
   }
 }
@@ -391,7 +409,8 @@ void DeviceCloudPolicyManagerAsh::CreateManagedSessionServiceAndReporters() {
     return;
   }
 
-  if (auto* user_manager = user_manager::UserManager::Get()) {
+  auto* user_manager = user_manager::UserManager::Get();
+  if (user_manager) {
     user_manager->RemoveObserver(this);
   }
 
@@ -408,10 +427,27 @@ void DeviceCloudPolicyManagerAsh::CreateManagedSessionServiceAndReporters() {
 
   lock_unlock_reporter_ = ash::reporting::LockUnlockReporter::Create(
       managed_session_service_.get());
+
+  if (base::FeatureList::IsEnabled(kEnableUserSessionActivityReporting) &&
+      user_manager && managed_session_service_) {
+    user_session_activity_reporter_ =
+        reporting::UserSessionActivityReporter::Create(
+            managed_session_service_.get(), user_manager);
+  }
 }
 
 HeartbeatScheduler*
 DeviceCloudPolicyManagerAsh::GetHeartbeatSchedulerForTesting() const {
   return heartbeat_scheduler_.get();
+}
+
+reporting::OsUpdatesReporter*
+DeviceCloudPolicyManagerAsh::GetOsUpdatesReporter() const {
+  return os_updates_reporter_.get();
+}
+
+reporting::MetricReportingManager*
+DeviceCloudPolicyManagerAsh::GetMetricReportingManager() {
+  return metric_reporting_manager_.get();
 }
 }  // namespace policy

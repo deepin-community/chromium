@@ -12,15 +12,19 @@
 #include "chrome/browser/web_applications/commands/web_app_command.h"
 #include "chrome/browser/web_applications/external_install_options.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
-#include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
-#include "chrome/browser/web_applications/web_contents/web_app_url_loader.h"
+#include "components/webapps/browser/web_contents/web_app_url_loader.h"
 
 class Profile;
 
 namespace content {
 class WebContents;
 }
+
+namespace webapps {
+class WebAppUrlLoader;
+enum class WebAppUrlLoaderResult;
+}  // namespace webapps
 
 namespace web_app {
 
@@ -36,7 +40,7 @@ class InstallPlaceholderJob {
       base::OnceCallback<void(webapps::InstallResultCode code,
                               webapps::AppId app_id)>;
   InstallPlaceholderJob(Profile* profile,
-                        base::Value::Dict& debug_value,
+                        base::DictValue& debug_value,
                         const ExternalInstallOptions& install_options,
                         InstallAndReplaceCallback callback,
                         SharedWebContentsWithAppLock& lock);
@@ -46,12 +50,19 @@ class InstallPlaceholderJob {
 
   void SetDataRetrieverForTesting(
       std::unique_ptr<WebAppDataRetriever> data_retriever);
+  void SetUrlLoaderForTesting(
+      std::unique_ptr<webapps::WebAppUrlLoader> url_loader);
 
  private:
   void Abort(webapps::InstallResultCode code);
   void FetchCustomIcon(const GURL& url, int retries_left);
+  void MaybeRetryFetchCustomIcon(const GURL& url, int retries_left);
 
-  void OnUrlLoaded(WebAppUrlLoader::Result load_url_result);
+  void OnUrlLoaded(webapps::WebAppUrlLoaderResult load_url_result);
+  void OnIconNavigationCompleted(
+      const GURL& url,
+      int retries_left,
+      webapps::WebAppUrlLoaderResult load_url_result);
   void OnCustomIconFetched(const GURL& image_url,
                            int retries_left,
                            IconsDownloadedResult result,
@@ -63,11 +74,10 @@ class InstallPlaceholderJob {
           bitmaps);
 
   void OnInstallFinalized(const webapps::AppId& app_id,
-                          webapps::InstallResultCode code,
-                          OsHooksErrors os_hooks_errors);
+                          webapps::InstallResultCode code);
 
   const raw_ref<Profile> profile_;
-  const raw_ref<base::Value::Dict> debug_value_;
+  const raw_ref<base::DictValue> debug_value_;
   const webapps::AppId app_id_;
 
   // `this` must exist within the scope of a WebCommand's
@@ -78,7 +88,7 @@ class InstallPlaceholderJob {
   InstallAndReplaceCallback callback_;
 
   raw_ptr<content::WebContents> web_contents_;
-  std::unique_ptr<WebAppUrlLoader> url_loader_;
+  std::unique_ptr<webapps::WebAppUrlLoader> url_loader_;
   std::unique_ptr<WebAppDataRetriever> data_retriever_;
 
   base::WeakPtrFactory<InstallPlaceholderJob> weak_factory_{this};

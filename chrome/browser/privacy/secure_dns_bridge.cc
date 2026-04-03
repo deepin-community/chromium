@@ -4,6 +4,7 @@
 
 #include <jni.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -15,7 +16,6 @@
 #include "base/android/scoped_java_ref.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/browser_process.h"
@@ -24,7 +24,6 @@
 #include "chrome/browser/net/secure_dns_util.h"
 #include "chrome/browser/net/stub_resolver_config_reader.h"
 #include "chrome/browser/net/system_network_context_manager.h"
-#include "chrome/browser/privacy/jni_headers/SecureDnsBridge_jni.h"
 #include "chrome/common/pref_names.h"
 #include "components/country_codes/country_codes.h"
 #include "components/prefs/pref_service.h"
@@ -34,7 +33,10 @@
 #include "net/dns/public/doh_provider_entry.h"
 #include "net/dns/public/secure_dns_mode.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/privacy/jni_headers/SecureDnsBridge_jni.h"
+
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 using chrome_browser_net::DnsProbeRunner;
 
@@ -78,7 +80,7 @@ void RunProbe(base::WaitableEvent* waiter,
 
 }  // namespace
 
-static jint JNI_SecureDnsBridge_GetMode(JNIEnv* env) {
+static int32_t JNI_SecureDnsBridge_GetMode(JNIEnv* env) {
   return static_cast<int>(
       SystemNetworkContextManager::GetStubResolverConfigReader()
           ->GetSecureDnsConfiguration(
@@ -86,14 +88,14 @@ static jint JNI_SecureDnsBridge_GetMode(JNIEnv* env) {
           .mode());
 }
 
-static void JNI_SecureDnsBridge_SetMode(JNIEnv* env, jint mode) {
+static void JNI_SecureDnsBridge_SetMode(JNIEnv* env, int32_t mode) {
   PrefService* local_state = g_browser_process->local_state();
   local_state->SetString(
       prefs::kDnsOverHttpsMode,
       SecureDnsConfig::ModeToString(static_cast<net::SecureDnsMode>(mode)));
 }
 
-static jboolean JNI_SecureDnsBridge_IsModeManaged(JNIEnv* env) {
+static bool JNI_SecureDnsBridge_IsModeManaged(JNIEnv* env) {
   PrefService* local_state = g_browser_process->local_state();
   return local_state->IsManagedPreference(prefs::kDnsOverHttpsMode);
 }
@@ -103,7 +105,7 @@ static ScopedJavaLocalRef<jobjectArray> JNI_SecureDnsBridge_GetProviders(
   net::DohProviderEntry::List providers = GetFilteredProviders();
   std::vector<std::vector<std::u16string>> ret;
   ret.reserve(providers.size());
-  base::ranges::transform(
+  std::ranges::transform(
       providers, std::back_inserter(ret),
       [](const net::DohProviderEntry* entry) -> std::vector<std::u16string> {
         net::DnsOverHttpsConfig config({entry->doh_server_config});
@@ -120,9 +122,8 @@ static ScopedJavaLocalRef<jstring> JNI_SecureDnsBridge_GetConfig(JNIEnv* env) {
       env, local_state->GetString(prefs::kDnsOverHttpsTemplates));
 }
 
-static jboolean JNI_SecureDnsBridge_SetConfig(
-    JNIEnv* env,
-    const JavaParamRef<jstring>& jconfig) {
+static bool JNI_SecureDnsBridge_SetConfig(JNIEnv* env,
+                                          const JavaRef<jstring>& jconfig) {
   PrefService* local_state = g_browser_process->local_state();
   std::string config = base::android::ConvertJavaStringToUTF8(jconfig);
   if (config.empty()) {
@@ -138,7 +139,7 @@ static jboolean JNI_SecureDnsBridge_SetConfig(
   return false;
 }
 
-static jint JNI_SecureDnsBridge_GetManagementMode(JNIEnv* env) {
+static int32_t JNI_SecureDnsBridge_GetManagementMode(JNIEnv* env) {
   return static_cast<int>(
       SystemNetworkContextManager::GetStubResolverConfigReader()
           ->GetSecureDnsConfiguration(
@@ -147,13 +148,13 @@ static jint JNI_SecureDnsBridge_GetManagementMode(JNIEnv* env) {
 }
 
 static void JNI_SecureDnsBridge_UpdateValidationHistogram(JNIEnv* env,
-                                                          jboolean valid) {
+                                                          bool valid) {
   secure_dns::UpdateValidationHistogram(valid);
 }
 
-static jboolean JNI_SecureDnsBridge_ProbeConfig(
+static bool JNI_SecureDnsBridge_ProbeConfig(
     JNIEnv* env,
-    const JavaParamRef<jstring>& doh_config) {
+    const JavaRef<jstring>& doh_config) {
   // Android recommends converting async functions to blocking when using JNI:
   // https://developer.android.com/training/articles/perf-jni.
   // This function converts the DnsProbeRunner, which can only be created and
@@ -172,3 +173,5 @@ static jboolean JNI_SecureDnsBridge_ProbeConfig(
   secure_dns::UpdateProbeHistogram(success);
   return success;
 }
+
+DEFINE_JNI(SecureDnsBridge)

@@ -1,18 +1,16 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as Common from '../../core/common/common.js';
-import * as Root from '../../core/root/root.js';
+import * as Platform from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import type * as Protocol from '../../generated/protocol.js';
-import * as UI from '../../ui/legacy/legacy.js';
 
 let autofillManagerInstance: AutofillManager;
 
 export class AutofillManager extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
-  #autoOpenViewSetting: Common.Settings.Setting<boolean>;
-  #address: string = '';
+  #address = '';
   #filledFields: Protocol.Autofill.FilledField[] = [];
   #matches: Match[] = [];
   #autofillModel: SDK.AutofillModel.AutofillModel|null = null;
@@ -20,10 +18,8 @@ export class AutofillManager extends Common.ObjectWrapper.ObjectWrapper<EventTyp
   private constructor() {
     super();
     SDK.TargetManager.TargetManager.instance().addModelListener(
-        SDK.AutofillModel.AutofillModel, SDK.AutofillModel.Events.AddressFormFilled, this.#addressFormFilled, this,
+        SDK.AutofillModel.AutofillModel, SDK.AutofillModel.Events.ADDRESS_FORM_FILLED, this.#addressFormFilled, this,
         {scoped: true});
-    this.#autoOpenViewSetting =
-        Common.Settings.Settings.instance().createSetting('auto-open-autofill-view-on-event', true);
   }
 
   static instance(opts: {forceNew: boolean|null} = {forceNew: null}): AutofillManager {
@@ -34,21 +30,15 @@ export class AutofillManager extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     return autofillManagerInstance;
   }
 
-  async #addressFormFilled(
-      {data}: Common.EventTarget
-          .EventTargetEvent<SDK.AutofillModel.EventTypes[SDK.AutofillModel.Events.AddressFormFilled]>): Promise<void> {
-    if (Root.Runtime.experiments.isEnabled(Root.Runtime.ExperimentName.AUTOFILL_VIEW) &&
-        this.#autoOpenViewSetting.get()) {
-      await UI.ViewManager.ViewManager.instance().showView('autofill-view');
-    }
+  async #addressFormFilled({data}: Common.EventTarget.EventTargetEvent<
+                           SDK.AutofillModel.EventTypes[SDK.AutofillModel.Events.ADDRESS_FORM_FILLED]>): Promise<void> {
     this.#autofillModel = data.autofillModel;
     this.#processAddressFormFilledData(data.event);
     if (this.#address) {
-      this.dispatchEventToListeners(Events.AddressFormFilled, {
+      this.dispatchEventToListeners(Events.ADDRESS_FORM_FILLED, {
         address: this.#address,
         filledFields: this.#filledFields,
         matches: this.#matches,
-        autofillModel: this.#autofillModel,
       });
     }
   }
@@ -61,8 +51,23 @@ export class AutofillManager extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       address: this.#address,
       filledFields: this.#filledFields,
       matches: this.#matches,
-      autofillModel: this.#autofillModel,
     };
+  }
+
+  highlightFilledField(filledField: Protocol.Autofill.FilledField): void {
+    const backendNodeId = filledField.fieldId;
+    const target = SDK.FrameManager.FrameManager.instance().getFrame(filledField.frameId)?.resourceTreeModel().target();
+    if (target) {
+      const deferredNode = new SDK.DOMModel.DeferredDOMNode(target, backendNodeId);
+      const domModel = target.model(SDK.DOMModel.DOMModel);
+      if (deferredNode && domModel) {
+        domModel.overlayModel().highlightInOverlay({deferredNode}, 'all');
+      }
+    }
+  }
+
+  clearHighlightedFilledFields(): void {
+    SDK.OverlayModel.OverlayModel.hideDOMNodeHighlight();
   }
 
   #processAddressFormFilledData({addressUi, filledFields}: Protocol.Autofill.AddressFormFilledEvent): void {
@@ -82,8 +87,11 @@ export class AutofillManager extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       if (this.#filledFields[i].value === '') {
         continue;
       }
-      // Regex replaces whitespace or comma/dot followed by whitespace with a single space.
-      const needle = this.#filledFields[i].value.replaceAll(/[.,]*\s+/g, ' ');
+      // 1) Replace multiple whitespaces with a single space.
+      // 2) Escape special characters.
+      // 3) For ',' or '.' before whitespace, insert the '?' quantifier.
+      const needle = Platform.StringUtilities.escapeForRegExp(this.#filledFields[i].value.replaceAll(/\s/g, ' '))
+                         .replaceAll(/([.,]+)\s/g, '$1? ');
       const matches = this.#address.replaceAll(/\s/g, ' ').matchAll(new RegExp(needle, 'g'));
       for (const match of matches) {
         if (typeof match.index !== 'undefined') {
@@ -94,8 +102,10 @@ export class AutofillManager extends Common.ObjectWrapper.ObjectWrapper<EventTyp
   }
 }
 
-// A Match describes how the value of a filled field corresponds to a substring
-// of address from startIndex to endIndex.
+/**
+ * A Match describes how the value of a filled field corresponds to a substring
+ * of address from startIndex to endIndex.
+ **/
 export interface Match {
   startIndex: number;
   endIndex: number;
@@ -103,16 +113,15 @@ export interface Match {
 }
 
 export const enum Events {
-  AddressFormFilled = 'AddressFormFilled',
+  ADDRESS_FORM_FILLED = 'AddressFormFilled',
 }
 
 export interface AddressFormFilledEvent {
   address: string;
   filledFields: Protocol.Autofill.FilledField[];
   matches: Match[];
-  autofillModel: SDK.AutofillModel.AutofillModel;
 }
 
-export type EventTypes = {
-  [Events.AddressFormFilled]: AddressFormFilledEvent,
-};
+export interface EventTypes {
+  [Events.ADDRESS_FORM_FILLED]: AddressFormFilledEvent;
+}

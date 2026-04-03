@@ -16,9 +16,11 @@
 #include "third_party/blink/renderer/core/layout/flex/devtools_flex_info.h"
 #include "third_party/blink/renderer/core/layout/fragment_builder.h"
 #include "third_party/blink/renderer/core/layout/frame_set_layout_data.h"
+#include "third_party/blink/renderer/core/layout/gap/gap_geometry.h"
 #include "third_party/blink/renderer/core/layout/geometry/box_sides.h"
 #include "third_party/blink/renderer/core/layout/geometry/box_strut.h"
 #include "third_party/blink/renderer/core/layout/geometry/fragment_geometry.h"
+#include "third_party/blink/renderer/core/layout/geometry/logical_offset.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_items_builder.h"
 #include "third_party/blink/renderer/core/layout/layout_result.h"
@@ -42,8 +44,13 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   BoxFragmentBuilder(LayoutInputNode node,
                      const ComputedStyle* style,
                      const ConstraintSpace& space,
-                     WritingDirectionMode writing_direction)
-      : FragmentBuilder(node, style, space, writing_direction),
+                     WritingDirectionMode writing_direction,
+                     const BlockBreakToken* previous_break_token)
+      : FragmentBuilder(node,
+                        style,
+                        space,
+                        writing_direction,
+                        previous_break_token),
         is_inline_formatting_context_(node.IsInline()) {}
 
   // Build a fragment for LayoutObject without LayoutInputNode. LayoutInline
@@ -52,10 +59,11 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
                      const ComputedStyle* style,
                      const ConstraintSpace& space,
                      WritingDirectionMode writing_direction)
-      : FragmentBuilder(/* node */ nullptr,
+      : FragmentBuilder(/*node=*/nullptr,
                         std::move(style),
                         space,
-                        writing_direction),
+                        writing_direction,
+                        /*previous_break_token=*/nullptr),
         is_inline_formatting_context_(true) {
     layout_object_ = layout_object;
   }
@@ -68,28 +76,79 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
 
     border_padding_ =
         initial_fragment_geometry.border + initial_fragment_geometry.padding;
-    border_scrollbar_padding_ =
-        border_padding_ + initial_fragment_geometry.scrollbar;
+
+    // Box decorations don't take up layout space in table rows / sections.
+    if (!node_ || (!node_.IsTableSection() && !node_.IsTableRow())) {
+      border_scrollbar_padding_ = initial_fragment_geometry.border +
+                                  initial_fragment_geometry.scrollbar;
+      // Padding doesn't take up layout space in fieldset containers (that's
+      // done inside the anonymous child wrapper).
+      if (!node_ || !node_.IsFieldsetContainer()) {
+        border_scrollbar_padding_ += initial_fragment_geometry.padding;
+      }
+    }
     original_border_scrollbar_padding_block_start_ =
         border_scrollbar_padding_.block_start;
     if (node_) {
       child_available_size_ = CalculateChildAvailableSize(
-          space_, To<BlockNode>(node_), size_, border_scrollbar_padding_);
+          space_, To<BlockNode>(node_), size_,
+          border_padding_ + initial_fragment_geometry.scrollbar);
     }
-  }
-
-  void AdjustBorderScrollbarPaddingForFragmentation(
-      const BlockBreakToken* break_token) {
-    if (LIKELY(!break_token))
-      return;
-    if (break_token->IsBreakBefore())
-      return;
-    border_scrollbar_padding_.block_start = LayoutUnit();
   }
 
   const FragmentGeometry& InitialFragmentGeometry() const {
     DCHECK(initial_fragment_geometry_);
     return *initial_fragment_geometry_;
+  }
+
+  // Set up text box trimming state, based on the constraint space and computed
+  // style. To be called by all algorithms that implement text box trimming.
+  void SetInitialTextBoxTrim();
+
+  bool ShouldTextBoxTrimStart() const {
+    return should_text_box_trim_node_start_ ||
+           should_text_box_trim_fragmentainer_start_;
+  }
+
+  bool ShouldTextBoxTrimEnd() const {
+    return should_text_box_trim_node_end_ ||
+           should_text_box_trim_fragmentainer_end_;
+  }
+
+  bool ShouldTextBoxTrim() const {
+    return ShouldTextBoxTrimStart() || ShouldTextBoxTrimEnd();
+  }
+
+  void ClearShouldTextBoxTrimEnd() {
+    should_text_box_trim_node_end_ = false;
+    should_text_box_trim_fragmentainer_end_ = false;
+  }
+
+  void ClearShouldTextBoxTrimNodeStart() {
+    should_text_box_trim_node_start_ = false;
+  }
+  bool ShouldTextBoxTrimNodeStart() const {
+    return should_text_box_trim_node_start_;
+  }
+  void SetShouldTextBoxTrimNodeEnd(bool b) {
+    should_text_box_trim_node_end_ = b;
+  }
+  bool ShouldTextBoxTrimNodeEnd() const {
+    return should_text_box_trim_node_end_;
+  }
+
+  void ClearShouldTextBoxTrimFragmentainerStart() {
+    should_text_box_trim_fragmentainer_start_ = false;
+  }
+  bool ShouldTextBoxTrimFragmentainerStart() const {
+    return should_text_box_trim_fragmentainer_start_;
+  }
+  bool ShouldTextBoxTrimFragmentainerEnd() const {
+    return should_text_box_trim_fragmentainer_end_;
+  }
+
+  const BlockBreakToken* PreviousBreakToken() const {
+    return To<BlockBreakToken>(previous_break_token_);
   }
 
   // Use the block-size setters/getters further down instead of the inherited
@@ -114,8 +173,9 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   }
   LayoutUnit FragmentsTotalBlockSize() const {
 #if DCHECK_IS_ON()
-    if (has_block_fragmentation_)
+    if (space_.HasBlockFragmentation()) {
       DCHECK(block_size_is_for_all_fragments_);
+    }
     DCHECK(size_.block_size != kIndefiniteSize);
 #endif
     return size_.block_size;
@@ -134,11 +194,31 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
 
   LayoutUnit FragmentBlockSize() const {
 #if DCHECK_IS_ON()
-    DCHECK(!block_size_is_for_all_fragments_ || !has_block_fragmentation_ ||
-           IsInitialColumnBalancingPass());
+    DCHECK(!block_size_is_for_all_fragments_ ||
+           !space_.HasBlockFragmentation() ||
+           space_.IsInitialColumnBalancingPass());
     DCHECK(size_.block_size != kIndefiniteSize);
 #endif
     return size_.block_size;
+  }
+
+  LayoutUnit FragmentInlineSize() const {
+    DCHECK(size_.inline_size != kIndefiniteSize);
+    return size_.inline_size;
+  }
+
+  LogicalSize SizeForAnchorQueries() const {
+    // TODO(layout-dev): This isn't great. But sometimes anchor queries are
+    // evaluated in the middle of layout of an OOF container. This happens when
+    // the OOF container is a multicol container, and column layout gets
+    // interrupted by a column spanner. We should probably provide the multicol
+    // block size we have at the point of being interrupted by the spanner,
+    // rather than using 0.
+    LogicalSize logical_size(InlineSize(), LayoutUnit());
+    if (HasBlockSize()) {
+      logical_size.block_size = FragmentBlockSize();
+    }
+    return logical_size;
   }
 
   void SetIntrinsicBlockSize(LayoutUnit intrinsic_block_size) {
@@ -162,17 +242,75 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     DCHECK(initial_fragment_geometry_);
     return initial_fragment_geometry_->border_box_size;
   }
+
+  BoxStrut ExcludedSidesTruncated(const BoxStrut& strut) const {
+    // Note that this only truncates along the block axis for now. When it comes
+    // to the inline axis, BoxStrut has inline_start/inline_end, whereas
+    // LineLogicalBoxSides has line_left/line_right, so it's a bit more work.
+    //
+    // TODO(layout-dev): It's rather straight-forward to fix the above now, if
+    // we want to, since we have a "well-behaving" LogicalBoxSides struct.
+    return BoxStrut(
+        strut.inline_start, strut.inline_end,
+        sides_to_include_.block_start ? strut.block_start : LayoutUnit(),
+        sides_to_include_.block_end ? strut.block_end : LayoutUnit());
+  }
+
+  BoxStrut ApplicableBorders() const {
+    DCHECK(initial_fragment_geometry_);
+    return ExcludedSidesTruncated(initial_fragment_geometry_->border);
+  }
+  BoxStrut ApplicableScrollbar() const {
+    DCHECK(initial_fragment_geometry_);
+    return ExcludedSidesTruncated(initial_fragment_geometry_->scrollbar);
+  }
+  BoxStrut ApplicablePadding() const {
+    DCHECK(initial_fragment_geometry_);
+    return ExcludedSidesTruncated(initial_fragment_geometry_->padding);
+  }
+
+  // Get border+padding for each box side.
+  //
+  // This value is node-specific (not for an individual fragment), and is used
+  // to resolve the final box size, but is not used to position descendants.
+  // This distinction matters for block fragmentation. Resolving the final box
+  // size means the "stitched" box size (sum of the block-size of all
+  // fragments). If box decorations are to be cloned, it must be reflected in
+  // this value, meaning that computed border+padding is multiplied by the
+  // number of fragments (so that e.g. a <div style="padding:20px;
+  // height:100px;"> split into two fragments get a stitched border-box size of
+  // 180px).
   const BoxStrut& BorderPadding() const {
     DCHECK(initial_fragment_geometry_);
     return border_padding_;
   }
+
+  // Get border+padding+scrollbar for each box side.
+  //
+  // This value is fragment-specific, and is used to position descendants and to
+  // calculate the intrinsic block-size, but not to resolve the final box
+  // size. This distinction matters for block fragmentation. When box
+  // decorations are to be sliced (i.e. not cloned), the block-start
+  // border+padding size is truncated to 0 after fragmentation breaks, and this
+  // will be reflected here, so that we don't make room for block-start
+  // border+padding at the beginning of each fragment (only the first).
   const BoxStrut& BorderScrollbarPadding() const {
     DCHECK(initial_fragment_geometry_);
     return border_scrollbar_padding_;
   }
+
   LayoutUnit OriginalBorderScrollbarPaddingBlockStart() const {
     return original_border_scrollbar_padding_block_start_;
   }
+
+  void ClearBorderScrollbarPaddingBlockStart() {
+    border_scrollbar_padding_.block_start = LayoutUnit();
+  }
+  void ClearBorderScrollbarPaddingBlockEnd() {
+    border_scrollbar_padding_.block_end = LayoutUnit();
+  }
+  void UpdateBorderPaddingForClonedBoxDecorations();
+
   // The child available-size is subtly different from the content-box size of
   // an element. For an anonymous-block the child available-size is equal to
   // its non-anonymous parent (similar to percentages).
@@ -180,7 +318,7 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     DCHECK(initial_fragment_geometry_);
     return child_available_size_;
   }
-  const BlockNode& Node() {
+  const BlockNode& Node() const {
     DCHECK(node_);
     return To<BlockNode>(node_);
   }
@@ -198,9 +336,16 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   // always be provided for regular in-flow children. For other types of
   // children it may be omitted, if the break shouldn't affect the appeal of
   // breaking inside this container.
+  //
+  // An out-of-flow positioned node may need to skip one or more fragmentainers
+  // before creating a fragment, for instance due to a large block-start inset.
+  // `oof_start_offset` is used for this. The inline offset is also needed,
+  // since it may be based on the hypothetically static position, which cannot
+  // be recomputed when in a subsequent fragmentainer.
   void AddBreakBeforeChild(LayoutInputNode child,
                            std::optional<BreakAppeal> appeal,
-                           bool is_forced_break);
+                           bool is_forced_break,
+                           LogicalOffset oof_start_offset = {});
 
   // Add a layout result and propagate info from it. This involves appending the
   // fragment and its relative offset to the builder, but also keeping track of
@@ -269,26 +414,30 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   // Specify whether this will be the first fragment generated for the node.
   void SetIsFirstForNode(bool is_first) { is_first_for_node_ = is_first; }
 
+  bool ShouldCloneBoxEndDecorations() const {
+    return should_clone_box_end_decorations_;
+  }
+  void SetShouldCloneBoxEndDecorations(bool b) {
+    should_clone_box_end_decorations_ = b;
+  }
+
+  void SetShouldPreventBreakBeforeBlockEndDecorations(bool b) {
+    should_prevent_break_before_block_end_decorations_ = b;
+  }
+  bool ShouldPreventBreakBeforeBlockEndDecorations() const {
+    return should_prevent_break_before_block_end_decorations_;
+  }
+
   void SetIsMonolithic(bool b) { is_monolithic_ = b; }
 
   // Set how much of the block-size we've used so far for this box. This will be
   // the sum of the block-size of all previous fragments PLUS the one we're
   // building now.
-  void SetConsumedBlockSize(LayoutUnit size) {
-    EnsureBreakTokenData()->consumed_block_size = size;
-  }
-
-  // Set how much to adjust |consumed_block_size_| for legacy write-back. See
-  // BlockBreakToken::ConsumedBlockSizeForLegacy() for more details.
-  void SetConsumedBlockSizeLegacyAdjustment(LayoutUnit adjustment) {
-    EnsureBreakTokenData()->consumed_block_size_legacy_adjustment = adjustment;
-  }
+  void SetConsumedBlockSize(LayoutUnit size) { consumed_block_size_ = size; }
 
   void ReserveSpaceForMonolithicOverflow(LayoutUnit monolithic_overflow) {
     DCHECK(GetConstraintSpace().IsPaginated());
-    auto* data = EnsureBreakTokenData();
-    data->monolithic_overflow =
-        std::max(data->monolithic_overflow, monolithic_overflow);
+    monolithic_overflow_ = std::max(monolithic_overflow_, monolithic_overflow);
   }
 
   // Set how much of the column block-size we've used so far. This will be used
@@ -302,7 +451,7 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   }
 
   void SetSequenceNumber(unsigned sequence_number) {
-    EnsureBreakTokenData()->sequence_number = sequence_number;
+    sequence_number_ = sequence_number;
   }
 
   // During regular layout a break token is created at the end of layout, if
@@ -352,12 +501,15 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
       return true;
 
     // If overflowed by monolithic overflow, we need more pages.
-    if (break_token_data_ && break_token_data_->monolithic_overflow) {
+    if (monolithic_overflow_) {
       return true;
     }
 
     // Grid layout doesn't insert break before tokens, and instead set this bit
-    // to indicate there is content after the current break.
+    // to indicate there is content after the current break. Out-of-flow layout
+    // of fragmentainers also doesn't insert break-before tokens for OOFs that
+    // are to start in a later fragmentainer. But we still want the
+    // fragmentainer to create a break token, since there's going to be more.
     return has_subsequent_children_;
   }
 
@@ -423,6 +575,10 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     inflow_bounds_ = inflow_bounds;
   }
 
+  const std::optional<LogicalRect>& InflowBounds() const {
+    return inflow_bounds_;
+  }
+
   void SetEarlyBreak(const EarlyBreak* breakpoint) {
     early_break_ = breakpoint;
   }
@@ -458,8 +614,11 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     mathml_paint_info_ = mathml_paint_info;
   }
 
-  void SetSidesToInclude(LogicalBoxSides sides_to_include) {
+  void SetSidesToInclude(LineLogicalBoxSides sides_to_include) {
     sides_to_include_ = sides_to_include;
+  }
+  void SetSidesToInclude(LogicalBoxSides sides_to_include) {
+    sides_to_include_ = LineLogicalBoxSides(sides_to_include, Direction());
   }
 
   void SetCustomLayoutData(
@@ -480,6 +639,10 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     first_baseline_ = baseline;
     last_baseline_ = baseline;
   }
+  void ClearBaselines() {
+    first_baseline_ = std::nullopt;
+    last_baseline_ = std::nullopt;
+  }
 
   // Lets the parent layout algorithm know if it should use the first or last
   // baseline for the special inline-block baseline algorithm.
@@ -487,13 +650,18 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     use_last_baseline_for_inline_baseline_ = true;
   }
 
+  void SetGapGeometry(const GapGeometry* gap_geometry) {
+    gap_geometry_ = gap_geometry;
+  }
+
+  const GapGeometry* GetGapGeometry() const { return gap_geometry_; }
+
   void SetTableGridRect(const LogicalRect& table_grid_rect) {
     table_grid_rect_ = table_grid_rect;
   }
 
-  void SetTableColumnGeometries(
-      const TableFragmentData::ColumnGeometries& table_column_geometries) {
-    table_column_geometries_ = table_column_geometries;
+  void SetTableColumnGeometries(TableColumnGeometries table_column_geometries) {
+    table_column_geometries_ = std::move(table_column_geometries);
   }
 
   void SetTableCollapsedBorders(const TableBorders& table_collapsed_borders) {
@@ -501,7 +669,7 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   }
 
   void SetTableCollapsedBordersGeometry(
-      std::unique_ptr<TableFragmentData::CollapsedBordersGeometry>
+      std::unique_ptr<CollapsedTableBordersGeometry>
           table_collapsed_borders_geometry) {
     table_collapsed_borders_geometry_ =
         std::move(table_collapsed_borders_geometry);
@@ -533,23 +701,18 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   void TransferFrameSetLayoutData(std::unique_ptr<FrameSetLayoutData> data) {
     frame_set_layout_data_ = std::move(data);
   }
+  void SetReadingFlowNodes(HeapVector<Member<blink::Node>>&& nodes) {
+    reading_flow_nodes_ = std::move(nodes);
+  }
 
   const GridLayoutData& GetGridLayoutData() const {
     DCHECK(grid_layout_data_);
     return *grid_layout_data_.get();
   }
 
-  bool HasBreakTokenData() const { return break_token_data_; }
+  BreakTokenAlgorithmData* GetBreakTokenData() { return break_token_data_; }
 
-  BlockBreakTokenData* EnsureBreakTokenData() {
-    if (!HasBreakTokenData())
-      break_token_data_ = MakeGarbageCollected<BlockBreakTokenData>();
-    return break_token_data_;
-  }
-
-  BlockBreakTokenData* GetBreakTokenData() { return break_token_data_; }
-
-  void SetBreakTokenData(BlockBreakTokenData* break_token_data) {
+  void SetBreakTokenData(BreakTokenAlgorithmData* break_token_data) {
     break_token_data_ = break_token_data;
   }
 
@@ -559,9 +722,10 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   void CheckNoBlockFragmentation() const;
 #endif
 
-  // Moves all the children by |offset| in the block-direction. (Ensure that
-  // any baselines, OOFs, etc, are also moved by the appropriate amount).
-  void MoveChildrenInBlockDirection(LayoutUnit offset);
+  // Moves all the children by `offset` in the block or inline direction.
+  // (Ensure that any baselines, OOFs, etc, are also moved by the appropriate
+  // amount).
+  void MoveChildrenInDirection(LayoutUnit offset, bool is_block_direction);
 
   void SetMathItalicCorrection(LayoutUnit italic_correction) {
     math_italic_correction_ = italic_correction;
@@ -587,6 +751,21 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
 
   // Propagate the break-before/break-after of the child (if applicable).
   void PropagateChildBreakValues(const LayoutResult& child_layout_result);
+
+  bool ShouldCalculateScrollableOverflow() const {
+    // Most nodes should calculate scrollable overflow and store it on the
+    // resulting fragment, except for replaced content, and the root fragment
+    // when paginating (the size of the root fragment is the same as the initial
+    // containing block size, but page sizes may vary. Overflow calculation must
+    // be done per fragmentainer).
+    return node_ && !node_.IsReplaced() &&
+           (!node_.IsPaginatedRoot() || IsFragmentainerBoxType());
+  }
+
+  // Handle (lay out / propagate) out-of-flow positioned descendants and other
+  // special descendants. This function is to be called when an algorithm is
+  // done with regular in-flow descendants and has set up its final size.
+  void HandleOofsAndSpecialDescendants();
 
  private:
   // Propagate fragmentation details. This includes checking whether we have
@@ -615,6 +794,8 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   bool is_block_size_for_fragmentation_clamped_ = false;
   bool is_monolithic_ = true;
   bool is_first_for_node_ = true;
+  bool should_clone_box_end_decorations_ = false;
+  bool should_prevent_break_before_block_end_decorations_ = false;
   bool did_break_self_ = false;
   bool has_inflow_child_break_inside_ = false;
   bool has_forced_break_ = false;
@@ -625,9 +806,24 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   bool is_at_block_end_ = false;
   bool is_truncated_by_fragmentation_line = false;
   bool use_last_baseline_for_inline_baseline_ = false;
+  bool has_moved_children_ = false;
+
+  // Whether the `text-box-trim` is effective for block-start/end edges of a
+  // node.
+  bool should_text_box_trim_node_start_ = false;
+  bool should_text_box_trim_node_end_ = false;
+
+  // Whether the `text-box-trim` is effective for block-start/end edges of a
+  // fragmentainer.
+  bool should_text_box_trim_fragmentainer_start_ = false;
+  bool should_text_box_trim_fragmentainer_end_ = false;
+
   LayoutUnit block_offset_for_additional_columns_;
 
   LayoutUnit block_size_for_fragmentation_;
+  LayoutUnit consumed_block_size_;
+  LayoutUnit monolithic_overflow_;
+  unsigned sequence_number_ = 0;
 
   // The break-before value on the initial child we cannot honor. There's no
   // valid class A break point before a first child, only *between* siblings.
@@ -642,11 +838,13 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   std::optional<LayoutUnit> last_baseline_;
   LayoutUnit math_italic_correction_;
 
+  const GapGeometry* gap_geometry_ = nullptr;
+
   // Table specific types.
   std::optional<LogicalRect> table_grid_rect_;
-  TableFragmentData::ColumnGeometries table_column_geometries_;
+  TableColumnGeometries table_column_geometries_;
   const TableBorders* table_collapsed_borders_ = nullptr;
-  std::unique_ptr<TableFragmentData::CollapsedBordersGeometry>
+  std::unique_ptr<CollapsedTableBordersGeometry>
       table_collapsed_borders_geometry_;
   std::optional<wtf_size_t> table_column_count_;
 
@@ -655,7 +853,7 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   wtf_size_t table_section_start_row_index_;
   Vector<LayoutUnit> table_section_row_offsets_;
 
-  BlockBreakTokenData* break_token_data_ = nullptr;
+  BreakTokenAlgorithmData* break_token_data_ = nullptr;
 
   // Grid specific types.
   std::unique_ptr<GridLayoutData> grid_layout_data_;
@@ -663,7 +861,9 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   std::unique_ptr<DevtoolsFlexInfo> flex_layout_data_;
   std::unique_ptr<FrameSetLayoutData> frame_set_layout_data_;
 
-  LogicalBoxSides sides_to_include_;
+  HeapVector<Member<blink::Node>> reading_flow_nodes_;
+
+  LineLogicalBoxSides sides_to_include_;
 
   scoped_refptr<SerializedScriptValue> custom_layout_data_;
 

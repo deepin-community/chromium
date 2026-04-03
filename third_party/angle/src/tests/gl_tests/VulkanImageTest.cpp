@@ -6,6 +6,10 @@
 
 // VulkanImageTest.cpp : Tests of EGL_ANGLE_vulkan_image & GL_ANGLE_vulkan_image extensions.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/ANGLETest.h"
 
 #include "common/debug.h"
@@ -25,6 +29,27 @@ class VulkanImageTest : public ANGLETest<>
 {
   protected:
     VulkanImageTest() { setRobustResourceInit(true); }
+
+    GLenum expectedGLLayoutAfterTransfer(const VulkanHelper &helper)
+    {
+        return helper.useUnifiedImageLayouts() ? GL_LAYOUT_GENERAL_EXT : GL_LAYOUT_TRANSFER_DST_EXT;
+    }
+    VkImageLayout expectedVKLayoutAfterTransfer(const VulkanHelper &helper)
+    {
+        return helper.useUnifiedImageLayouts() ? VK_IMAGE_LAYOUT_GENERAL
+                                               : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    }
+
+    GLenum expectedGLLayoutAfterColorWrite(const VulkanHelper &helper)
+    {
+        return helper.useUnifiedImageLayouts() ? GL_LAYOUT_GENERAL_EXT
+                                               : GL_LAYOUT_COLOR_ATTACHMENT_EXT;
+    }
+    VkImageLayout expectedVKLayoutAfterColorWrite(const VulkanHelper &helper)
+    {
+        return helper.useUnifiedImageLayouts() ? VK_IMAGE_LAYOUT_GENERAL
+                                               : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
 };
 
 class VulkanMemoryTest : public ANGLETest<>
@@ -237,11 +262,11 @@ TEST_P(VulkanImageTest, PixelTestTexImage2D)
     GLuint textures[1] = {texture};
     GLenum layouts[1]  = {GL_NONE};
     glReleaseTexturesANGLE(1, textures, layouts);
-    EXPECT_EQ(layouts[0], static_cast<GLenum>(GL_LAYOUT_TRANSFER_DST_EXT));
+    EXPECT_EQ(layouts[0], expectedGLLayoutAfterTransfer(helper));
 
     {
         std::vector<GLuint> pixels(kWidth * kHeight);
-        helper.readPixels(vkImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, info.format, {},
+        helper.readPixels(vkImage, expectedVKLayoutAfterTransfer(helper), info.format, {},
                           info.extent, pixels.data(), pixels.size() * sizeof(GLuint));
         EXPECT_EQ(pixels, std::vector<GLuint>(kWidth * kHeight, kColor));
     }
@@ -293,10 +318,10 @@ TEST_P(VulkanImageTest, PixelTestClear)
     GLuint textures[1] = {texture};
     GLenum layouts[1]  = {GL_NONE};
     glReleaseTexturesANGLE(1, textures, layouts);
-    EXPECT_EQ(layouts[0], static_cast<GLenum>(GL_LAYOUT_TRANSFER_DST_EXT));
+    EXPECT_EQ(layouts[0], expectedGLLayoutAfterTransfer(helper));
 
     std::vector<GLuint> pixels(kWidth * kHeight);
-    helper.readPixels(vkImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, info.format, {}, info.extent,
+    helper.readPixels(vkImage, expectedVKLayoutAfterTransfer(helper), info.format, {}, info.extent,
                       pixels.data(), pixels.size() * sizeof(GLuint));
     EXPECT_EQ(pixels, std::vector<GLuint>(kWidth * kHeight, kWhite));
 
@@ -308,9 +333,9 @@ TEST_P(VulkanImageTest, PixelTestClear)
     glClear(GL_COLOR_BUFFER_BIT);
 
     glReleaseTexturesANGLE(1, textures, layouts);
-    EXPECT_EQ(layouts[0], static_cast<GLenum>(GL_LAYOUT_TRANSFER_DST_EXT));
+    EXPECT_EQ(layouts[0], expectedGLLayoutAfterTransfer(helper));
 
-    helper.readPixels(vkImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, info.format, {}, info.extent,
+    helper.readPixels(vkImage, expectedVKLayoutAfterTransfer(helper), info.format, {}, info.extent,
                       pixels.data(), pixels.size() * sizeof(GLuint));
     EXPECT_EQ(pixels, std::vector<GLuint>(kWidth * kHeight, kRed));
 
@@ -361,7 +386,7 @@ TEST_P(VulkanImageTest, PixelTestDrawQuad)
     GLuint textures[1] = {texture};
     GLenum layouts[1]  = {GL_NONE};
     glReleaseTexturesANGLE(1, textures, layouts);
-    EXPECT_EQ(layouts[0], static_cast<GLenum>(GL_LAYOUT_COLOR_ATTACHMENT_EXT));
+    EXPECT_EQ(layouts[0], expectedGLLayoutAfterColorWrite(helper));
 
     VkImage vkImage        = VK_NULL_HANDLE;
     VkImageCreateInfo info = {};
@@ -369,7 +394,7 @@ TEST_P(VulkanImageTest, PixelTestDrawQuad)
     EXPECT_NE(vkImage, static_cast<VkImage>(VK_NULL_HANDLE));
 
     std::vector<GLuint> pixels(kWidth * kHeight);
-    helper.readPixels(vkImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, info.format, {},
+    helper.readPixels(vkImage, expectedVKLayoutAfterColorWrite(helper), info.format, {},
                       info.extent, pixels.data(), pixels.size() * sizeof(GLuint));
     EXPECT_EQ(pixels, std::vector<GLuint>(kWidth * kHeight, kRed));
 
@@ -442,10 +467,10 @@ TEST_P(VulkanImageTest, ClientBuffer)
     textures[0] = texture;
     layouts[0]  = GL_NONE;
     glReleaseTexturesANGLE(1, textures, layouts);
-    EXPECT_EQ(layouts[0], static_cast<GLenum>(GL_LAYOUT_TRANSFER_DST_EXT));
+    EXPECT_EQ(layouts[0], expectedGLLayoutAfterTransfer(helper));
 
     std::vector<GLuint> pixels(kWidth * kHeight);
-    helper.readPixels(vkImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, imageCreateInfo.format, {},
+    helper.readPixels(vkImage, expectedVKLayoutAfterTransfer(helper), imageCreateInfo.format, {},
                       imageCreateInfo.extent, pixels.data(), pixels.size() * sizeof(GLuint));
     EXPECT_EQ(pixels, std::vector<GLuint>(kWidth * kHeight, kWhite));
 
@@ -457,9 +482,9 @@ TEST_P(VulkanImageTest, ClientBuffer)
     glClear(GL_COLOR_BUFFER_BIT);
 
     glReleaseTexturesANGLE(1, textures, layouts);
-    EXPECT_EQ(layouts[0], static_cast<GLenum>(GL_LAYOUT_TRANSFER_DST_EXT));
+    EXPECT_EQ(layouts[0], expectedGLLayoutAfterTransfer(helper));
 
-    helper.readPixels(vkImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, imageCreateInfo.format, {},
+    helper.readPixels(vkImage, expectedVKLayoutAfterTransfer(helper), imageCreateInfo.format, {},
                       imageCreateInfo.extent, pixels.data(), pixels.size() * sizeof(GLuint));
     EXPECT_EQ(pixels, std::vector<GLuint>(kWidth * kHeight, kRed));
 
@@ -550,6 +575,9 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageWhenDeviceOOM)
 {
     ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseVmaForImageSuballocation));
 
+    GLPerfMonitor monitor;
+    glBeginPerfMonitorAMD(monitor);
+
     VulkanHelper helper;
     helper.initializeFromANGLE();
     uint64_t expectedAllocationFallbacks =
@@ -579,7 +607,7 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageWhenDeviceOOM)
         EXPECT_GL_NO_ERROR();
 
         // This process only needs to continue until the allocation is no longer on the device.
-        if (getPerfCounters().deviceMemoryImageAllocationFallbacks == expectedAllocationFallbacks)
+        if (getPerfCounters().deviceMemoryImageAllocationFallbacks >= expectedAllocationFallbacks)
         {
             break;
         }
@@ -596,6 +624,8 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageWhenDeviceOOM)
     EXPECT_EQ(getPerfCounters().deviceMemoryImageAllocationFallbacks,
               expectedAllocationFallbacksAfterLastTexture);
 
+    glEndPerfMonitorAMD(monitor);
+
     GLFramebuffer fbo;
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
@@ -608,6 +638,9 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageWhenDeviceOOM)
 TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeing2DArrayGarbageWhenDeviceOOM)
 {
     ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseVmaForImageSuballocation));
+
+    GLPerfMonitor monitor;
+    glBeginPerfMonitorAMD(monitor);
 
     VulkanHelper helper;
     helper.initializeFromANGLE();
@@ -663,7 +696,7 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeing2DArrayGarbageWhenDeviceOOM
         EXPECT_GL_NO_ERROR();
 
         // This process only needs to continue until the allocation is no longer on the device.
-        if (getPerfCounters().deviceMemoryImageAllocationFallbacks == expectedAllocationFallbacks)
+        if (getPerfCounters().deviceMemoryImageAllocationFallbacks >= expectedAllocationFallbacks)
         {
             break;
         }
@@ -689,6 +722,8 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeing2DArrayGarbageWhenDeviceOOM
                     GL_UNSIGNED_BYTE, lastTextureColor.data());
     EXPECT_EQ(getPerfCounters().deviceMemoryImageAllocationFallbacks, expectedAllocationFallbacks);
 
+    glEndPerfMonitorAMD(monitor);
+
     GLFramebuffer fbo;
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, lastTexture, 0);
@@ -701,6 +736,9 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeing2DArrayGarbageWhenDeviceOOM
 TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeingFinished2DGarbageWhenDeviceOOM)
 {
     ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseVmaForImageSuballocation));
+
+    GLPerfMonitor monitor;
+    glBeginPerfMonitorAMD(monitor);
 
     VulkanHelper helper;
     helper.initializeFromANGLE();
@@ -748,7 +786,7 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeingFinished2DGarbageWhenDevice
         EXPECT_GL_NO_ERROR();
 
         // This process only needs to continue until the allocation is no longer on the device.
-        if (getPerfCounters().deviceMemoryImageAllocationFallbacks == expectedAllocationFallbacks)
+        if (getPerfCounters().deviceMemoryImageAllocationFallbacks >= expectedAllocationFallbacks)
         {
             break;
         }
@@ -797,6 +835,8 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeingFinished2DGarbageWhenDevice
     EXPECT_EQ(getPerfCounters().deviceMemoryImageAllocationFallbacks, expectedAllocationFallbacks);
     EXPECT_EQ(getPerfCounters().commandQueueSubmitCallsTotal, expectedSubmitCalls);
 
+    glEndPerfMonitorAMD(monitor);
+
     GLFramebuffer fbo;
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, lastTexture, 0);
@@ -809,6 +849,9 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeingFinished2DGarbageWhenDevice
 TEST_P(VulkanMemoryTest, AllocateBufferAfterFreeing2DGarbageWhenDeviceOOM)
 {
     ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseVmaForImageSuballocation));
+
+    GLPerfMonitor monitor;
+    glBeginPerfMonitorAMD(monitor);
 
     VulkanHelper helper;
     helper.initializeFromANGLE();
@@ -860,12 +903,14 @@ TEST_P(VulkanMemoryTest, AllocateBufferAfterFreeing2DGarbageWhenDeviceOOM)
         EXPECT_GL_NO_ERROR();
 
         // This process only needs to continue until the allocation is no longer on the device.
-        if (getPerfCounters().deviceMemoryImageAllocationFallbacks == expectedAllocationFallbacks)
+        if (getPerfCounters().deviceMemoryImageAllocationFallbacks >= expectedAllocationFallbacks)
         {
             break;
         }
     }
     EXPECT_EQ(getPerfCounters().deviceMemoryImageAllocationFallbacks, expectedAllocationFallbacks);
+
+    glEndPerfMonitorAMD(monitor);
 
     // Wait until GPU finishes execution.
     GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);

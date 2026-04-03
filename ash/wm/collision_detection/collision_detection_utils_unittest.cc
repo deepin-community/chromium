@@ -36,7 +36,7 @@ namespace ash {
 namespace {
 
 display::Display GetDisplayForWindow(aura::Window* window) {
-  return display::Screen::GetScreen()->GetDisplayNearestWindow(window);
+  return display::Screen::Get()->GetDisplayNearestWindow(window);
 }
 
 gfx::Rect ConvertToScreenForWindow(aura::Window* window,
@@ -87,7 +87,8 @@ TEST_F(CollisionDetectionUtilsTest, AvoidObstaclesAvoidsUnifiedSystemTray) {
 
 TEST_F(CollisionDetectionUtilsTest, AvoidObstaclesAvoidsPopupNotification) {
   UpdateDisplay("1000x900");
-  auto* window = CreateTestWindowInShellWithId(kShellWindowId_ShelfContainer);
+  auto* window =
+      CreateTestWindowInShell({.window_id = kShellWindowId_ShelfContainer});
   window->SetName(AshMessagePopupCollection::kMessagePopupWidgetName);
   window->Show();
 
@@ -209,7 +210,7 @@ TEST_P(CollisionDetectionUtilsDisplayTest,
        MovementAreaIncludesKeyboardIfKeyboardIsShown) {
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboardInDisplay(GetDisplay());
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
 
   constexpr int keyboard_height = 100;
@@ -304,7 +305,7 @@ TEST_P(CollisionDetectionUtilsDisplayTest,
   keyboard_controller->SetContainerType(keyboard::ContainerType::kFloating,
                                         gfx::Rect(), base::DoNothing());
   keyboard_controller->ShowKeyboardInDisplay(display);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
   keyboard_window->SetBounds(gfx::Rect(0, 0, 100, 100));
 
@@ -406,7 +407,7 @@ TEST_P(CollisionDetectionUtilsDisplayTest, GetRestingPositionAvoidsKeyboard) {
 
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboardInDisplay(display);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
 
   constexpr int keyboard_height = 100;

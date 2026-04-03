@@ -27,13 +27,16 @@ int SkColorTypeBytesPerPixel(SkColorType ct) {
         case kBGRA_1010102_SkColorType:       return 4;
         case kBGR_101010x_SkColorType:        return 4;
         case kBGR_101010x_XR_SkColorType:     return 4;
+        case kBGRA_10101010_XR_SkColorType:   return 8;
         case kRGBA_10x6_SkColorType:          return 8;
         case kGray_8_SkColorType:             return 1;
         case kRGBA_F16Norm_SkColorType:       return 8;
         case kRGBA_F16_SkColorType:           return 8;
+        case kRGB_F16F16F16x_SkColorType:     return 8;
         case kRGBA_F32_SkColorType:           return 16;
         case kR8G8_unorm_SkColorType:         return 2;
         case kA16_unorm_SkColorType:          return 2;
+        case kR16_unorm_SkColorType:          return 2;
         case kR16G16_unorm_SkColorType:       return 4;
         case kA16_float_SkColorType:          return 2;
         case kR16G16_float_SkColorType:       return 4;
@@ -46,6 +49,48 @@ int SkColorTypeBytesPerPixel(SkColorType ct) {
 
 bool SkColorTypeIsAlwaysOpaque(SkColorType ct) {
     return !(SkColorTypeChannelFlags(ct) & kAlpha_SkColorChannelFlag);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+bool SkYUVColorSpaceIsLimitedRange(SkYUVColorSpace cs) {
+    switch (cs) {
+        case kRec601_Limited_SkYUVColorSpace:
+        case kRec709_Limited_SkYUVColorSpace:
+        case kBT2020_8bit_Limited_SkYUVColorSpace:
+        case kBT2020_10bit_Limited_SkYUVColorSpace:
+        case kBT2020_12bit_Limited_SkYUVColorSpace:
+        case kBT2020_16bit_Limited_SkYUVColorSpace:
+        case kFCC_Limited_SkYUVColorSpace:
+        case kSMPTE240_Limited_SkYUVColorSpace:
+        case kYDZDX_Limited_SkYUVColorSpace:
+        case kGBR_Limited_SkYUVColorSpace:
+        case kYCgCo_8bit_Limited_SkYUVColorSpace:
+        case kYCgCo_10bit_Limited_SkYUVColorSpace:
+        case kYCgCo_12bit_Limited_SkYUVColorSpace:
+        case kYCgCo_16bit_Limited_SkYUVColorSpace:
+            return true;
+
+        case kJPEG_Full_SkYUVColorSpace:
+        case kRec709_Full_SkYUVColorSpace:
+        case kBT2020_8bit_Full_SkYUVColorSpace:
+        case kBT2020_10bit_Full_SkYUVColorSpace:
+        case kBT2020_12bit_Full_SkYUVColorSpace:
+        case kBT2020_16bit_Full_SkYUVColorSpace:
+        case kFCC_Full_SkYUVColorSpace:
+        case kSMPTE240_Full_SkYUVColorSpace:
+        case kYDZDX_Full_SkYUVColorSpace:
+        case kGBR_Full_SkYUVColorSpace:
+        case kYCgCo_8bit_Full_SkYUVColorSpace:
+        case kYCgCo_10bit_Full_SkYUVColorSpace:
+        case kYCgCo_12bit_Full_SkYUVColorSpace:
+        case kYCgCo_16bit_Full_SkYUVColorSpace:
+        case kIdentity_SkYUVColorSpace:
+            return false;
+
+        default:
+            SkUNREACHABLE;
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -95,8 +140,8 @@ int SkColorInfo::shiftPerPixel() const { return SkColorTypeShiftPerPixel(fColorT
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 size_t SkImageInfo::computeOffset(int x, int y, size_t rowBytes) const {
-    SkASSERT((unsigned)x < (unsigned)this->width());
-    SkASSERT((unsigned)y < (unsigned)this->height());
+    SkASSERTF(x >= 0 && x < this->width(), "x=%d; width=%d\n", x, this->width());
+    SkASSERTF(y >= 0 && y < this->height(), "y=%d; height=%d\n", y, this->height());
     return SkColorTypeComputeOffset(this->colorType(), x, y, rowBytes);
 }
 
@@ -213,6 +258,7 @@ bool SkColorTypeValidateAlphaType(SkColorType colorType, SkAlphaType alphaType,
         case kRGBA_F16Norm_SkColorType:
         case kRGBA_F16_SkColorType:
         case kRGBA_F32_SkColorType:
+        case kBGRA_10101010_XR_SkColorType:
         case kR16G16B16A16_unorm_SkColorType:
             if (kUnknown_SkAlphaType == alphaType) {
                 return false;
@@ -220,6 +266,7 @@ bool SkColorTypeValidateAlphaType(SkColorType colorType, SkAlphaType alphaType,
             break;
         case kGray_8_SkColorType:
         case kR8G8_unorm_SkColorType:
+        case kR16_unorm_SkColorType:
         case kR16G16_unorm_SkColorType:
         case kR16G16_float_SkColorType:
         case kRGB_565_SkColorType:
@@ -227,6 +274,7 @@ bool SkColorTypeValidateAlphaType(SkColorType colorType, SkAlphaType alphaType,
         case kRGB_101010x_SkColorType:
         case kBGR_101010x_SkColorType:
         case kBGR_101010x_XR_SkColorType:
+        case kRGB_F16F16F16x_SkColorType:
         case kR8_unorm_SkColorType:
             alphaType = kOpaque_SkAlphaType;
             break;

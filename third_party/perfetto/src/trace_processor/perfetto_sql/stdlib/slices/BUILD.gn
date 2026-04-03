@@ -16,8 +16,13 @@ import("../../../../../gn/perfetto_sql.gni")
 
 perfetto_sql_source_set("slices") {
   sources = [
+    "cpu_time.sql",
     "flat_slices.sql",
-    "slices.sql",
+    "flow.sql",
+    "hierarchy.sql",
+    "self_dur.sql",
+    "stack.sql",
+    "time_in_state.sql",
     "with_context.sql",
   ]
 }

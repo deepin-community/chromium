@@ -12,6 +12,8 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/notreached.h"
+#include "base/strings/strcat.h"
+#include "base/strings/to_string.h"
 #include "base/values.h"
 #include "chrome/browser/ash/arc/extensions/arc_support_message_host.h"
 #include "chrome/browser/profiles/profile.h"
@@ -19,12 +21,11 @@
 namespace {
 
 void SerializeAndSend(extensions::NativeMessageHost* native_message_host,
-                      const base::Value::Dict& message) {
+                      const base::DictValue& message) {
   DCHECK(native_message_host);
   std::string message_string;
   if (!base::JSONWriter::Write(message, &message_string)) {
     NOTREACHED();
-    return;
   }
   native_message_host->OnMessage(message_string);
 }
@@ -63,7 +64,7 @@ void FakeArcSupport::Close() {
 
 void FakeArcSupport::ClickAgreeButton() {
   DCHECK_EQ(ui_page_, ArcSupportHost::UIPage::TERMS);
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set("event", "onAgreed");
   message.Set("tosContent", tos_content_);
   message.Set("tosShown", tos_shown_);
@@ -77,7 +78,7 @@ void FakeArcSupport::ClickAgreeButton() {
 
 void FakeArcSupport::ClickCancelButton() {
   DCHECK_EQ(ui_page_, ArcSupportHost::UIPage::TERMS);
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set("event", "onCanceled");
   message.Set("tosContent", tos_content_);
   message.Set("tosShown", tos_shown_);
@@ -113,7 +114,7 @@ void FakeArcSupport::TosLoadResult(bool success) {
   DCHECK(native_message_host_);
   native_message_host_->OnMessage(
       base::StrCat({"{\"event\": \"onTosLoadResult\", \"success\": ",
-                    success ? "true" : "false", "}"}));
+                    base::ToString(success), "}"}));
 }
 
 void FakeArcSupport::AddObserver(Observer* observer) {
@@ -136,15 +137,14 @@ void FakeArcSupport::UnsetMessageHost() {
 
 void FakeArcSupport::PostMessageFromNativeHost(
     const std::string& message_string) {
-  std::optional<base::Value> parsed_json =
-      base::JSONReader::Read(message_string);
+  std::optional<base::Value> parsed_json = base::JSONReader::Read(
+      message_string, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   DCHECK(parsed_json);
 
-  const base::Value::Dict& message = parsed_json->GetDict();
+  const base::DictValue& message = parsed_json->GetDict();
   const std::string* action = message.FindString("action");
   if (!action) {
     NOTREACHED() << message_string;
-    return;
   }
 
   ArcSupportHost::UIPage prev_ui_page = ui_page_;
@@ -154,7 +154,6 @@ void FakeArcSupport::PostMessageFromNativeHost(
     const std::string* page = message.FindString("page");
     if (!page) {
       NOTREACHED() << message_string;
-      return;
     }
     if (*page == "terms") {
       ui_page_ = ArcSupportHost::UIPage::TERMS;
@@ -175,21 +174,18 @@ void FakeArcSupport::PostMessageFromNativeHost(
     std::optional<bool> opt = message.FindBool("enabled");
     if (!opt) {
       NOTREACHED() << message_string;
-      return;
     }
     metrics_mode_ = opt.value();
   } else if (*action == "setBackupAndRestoreMode") {
     std::optional<bool> opt = message.FindBool("enabled");
     if (!opt) {
       NOTREACHED() << message_string;
-      return;
     }
     backup_and_restore_mode_ = opt.value();
   } else if (*action == "setLocationServiceMode") {
     std::optional<bool> opt = message.FindBool("enabled");
     if (!opt) {
       NOTREACHED() << message_string;
-      return;
     }
     location_service_mode_ = opt.value();
   } else if (*action == "closeWindow") {

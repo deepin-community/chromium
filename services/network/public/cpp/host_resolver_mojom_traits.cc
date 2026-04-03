@@ -179,6 +179,10 @@ bool StructTraits<DnsConfigOverridesDataView, net::DnsConfigOverrides>::Read(
   out->allow_dns_over_https_upgrade =
       FromTristate(data.allow_dns_over_https_upgrade());
 
+  if (!data.ReadFallbackDohNameservers(&out->fallback_doh_nameservers)) {
+    return false;
+  }
+
   out->clear_hosts = data.clear_hosts();
 
   return true;
@@ -349,7 +353,6 @@ EnumTraits<network::mojom::SecureDnsPolicy, net::SecureDnsPolicy>::ToMojom(
     case net::SecureDnsPolicy::kBootstrap:
       NOTREACHED();  // The bootstrap policy is only for use within the net
                      // component.
-      return network::mojom::SecureDnsPolicy::DISABLE;
   }
 }
 

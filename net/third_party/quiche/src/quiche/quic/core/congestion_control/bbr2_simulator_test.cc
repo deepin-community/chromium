@@ -2,10 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+#include <array>
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/strings/str_cat.h"
 #include "quiche/quic/core/congestion_control/bbr2_misc.h"
@@ -447,7 +451,6 @@ TEST_F(Bbr2DefaultTopologyTest, NormalStartupB207andB205) {
 
 // Add extra_acked to CWND in STARTUP and exit STARTUP on a persistent queue.
 TEST_F(Bbr2DefaultTopologyTest, NormalStartupBB2S) {
-  SetQuicReloadableFlag(quic_bbr2_probe_two_rounds, true);
   SetConnectionOption(kBB2S);
   DefaultTopologyParams params;
   CreateNetwork(params);
@@ -1024,7 +1027,6 @@ TEST_F(Bbr2DefaultTopologyTest, QUIC_SLOW_TEST(BandwidthIncreaseAggregation)) {
 
 // Test Bbr2's reaction to a 100x bandwidth increase during a transfer with BBHI
 TEST_F(Bbr2DefaultTopologyTest, QUIC_SLOW_TEST(BandwidthIncreaseBBHI)) {
-  SetQuicReloadableFlag(quic_bbr2_simplify_inflight_hi, true);
   SetConnectionOption(kBBHI);
   DefaultTopologyParams params;
   params.local_link.bandwidth = QuicBandwidth::FromKBitsPerSecond(15000);
@@ -1058,7 +1060,6 @@ TEST_F(Bbr2DefaultTopologyTest, QUIC_SLOW_TEST(BandwidthIncreaseBBHI)) {
 // in the presence of ACK aggregation.
 TEST_F(Bbr2DefaultTopologyTest,
        QUIC_SLOW_TEST(BandwidthIncreaseBBHIAggregation)) {
-  SetQuicReloadableFlag(quic_bbr2_simplify_inflight_hi, true);
   SetConnectionOption(kBBHI);
   DefaultTopologyParams params;
   params.local_link.bandwidth = QuicBandwidth::FromKBitsPerSecond(15000);
@@ -1099,7 +1100,6 @@ TEST_F(Bbr2DefaultTopologyTest,
 // min_bytes_in_flight_in_round, in the presence of ACK aggregation.
 TEST_F(Bbr2DefaultTopologyTest,
        QUIC_SLOW_TEST(BandwidthIncreaseBBHI_B202Aggregation)) {
-  SetQuicReloadableFlag(quic_bbr2_simplify_inflight_hi, true);
   SetConnectionOption(kBBHI);
   SetConnectionOption(kB202);
   DefaultTopologyParams params;
@@ -1281,7 +1281,6 @@ TEST_F(Bbr2DefaultTopologyTest,
 
 // Test Bbr2's reaction to a 100x bandwidth increase during a transfer with BB2U
 TEST_F(Bbr2DefaultTopologyTest, QUIC_SLOW_TEST(BandwidthIncreaseBB2U)) {
-  SetQuicReloadableFlag(quic_bbr2_probe_two_rounds, true);
   SetConnectionOption(kBB2U);
   DefaultTopologyParams params;
   params.local_link.bandwidth = QuicBandwidth::FromKBitsPerSecond(15000);
@@ -1315,7 +1314,6 @@ TEST_F(Bbr2DefaultTopologyTest, QUIC_SLOW_TEST(BandwidthIncreaseBB2U)) {
 // in the presence of ACK aggregation.
 TEST_F(Bbr2DefaultTopologyTest,
        QUIC_SLOW_TEST(BandwidthIncreaseBB2UAggregation)) {
-  SetQuicReloadableFlag(quic_bbr2_probe_two_rounds, true);
   SetConnectionOption(kBB2U);
   DefaultTopologyParams params;
   params.local_link.bandwidth = QuicBandwidth::FromKBitsPerSecond(15000);
@@ -1355,9 +1353,7 @@ TEST_F(Bbr2DefaultTopologyTest,
 // and BBHI in the presence of ACK aggregation.
 TEST_F(Bbr2DefaultTopologyTest,
        QUIC_SLOW_TEST(BandwidthIncreaseBB2UandBBHIAggregation)) {
-  SetQuicReloadableFlag(quic_bbr2_probe_two_rounds, true);
   SetConnectionOption(kBB2U);
-  SetQuicReloadableFlag(quic_bbr2_simplify_inflight_hi, true);
   SetConnectionOption(kBBHI);
   DefaultTopologyParams params;
   params.local_link.bandwidth = QuicBandwidth::FromKBitsPerSecond(15000);
@@ -1888,16 +1884,9 @@ TEST_F(Bbr2DefaultTopologyTest, SpuriousLossEvent) {
   sender_->OnCongestionEvent(false, sender_unacked_map()->bytes_in_flight(),
                              now, acked_packets, {}, 0, 0);
 
-  if (GetQuicReloadableFlag(quic_bbr2_fix_spurious_loss_bytes_counting)) {
-    EXPECT_EQ(sender_->GetNetworkModel().total_bytes_sent(),
-              sender_->GetNetworkModel().total_bytes_acked() +
-                  sender_->GetNetworkModel().total_bytes_lost());
-  } else {
-    // This is the bug fixed by the flag.
-    EXPECT_LT(sender_->GetNetworkModel().total_bytes_sent(),
-              sender_->GetNetworkModel().total_bytes_acked() +
-                  sender_->GetNetworkModel().total_bytes_lost());
-  }
+  EXPECT_EQ(sender_->GetNetworkModel().total_bytes_sent(),
+            sender_->GetNetworkModel().total_bytes_acked() +
+                sender_->GetNetworkModel().total_bytes_lost());
 }
 
 // After quiescence, if the sender is in PROBE_RTT, it should transition to
@@ -2360,39 +2349,6 @@ class Bbr2MultiSenderTest : public Bbr2SimulatorTest {
 
 TEST_F(Bbr2MultiSenderTest, Bbr2VsBbr2) {
   SetupBbr2Sender(sender_endpoints_[1].get());
-
-  MultiSenderTopologyParams params;
-  CreateNetwork(params);
-
-  const QuicByteCount transfer_size = 10 * 1024 * 1024;
-  const QuicTime::Delta transfer_time =
-      params.BottleneckBandwidth().TransferTime(transfer_size);
-  QUIC_LOG(INFO) << "Single flow transfer time: " << transfer_time;
-
-  // Transfer 10% of data in first transfer.
-  sender_endpoints_[0]->AddBytesToTransfer(transfer_size);
-  bool simulator_result = simulator_.RunUntilOrTimeout(
-      [this]() {
-        return receiver_endpoints_[0]->bytes_received() >= 0.1 * transfer_size;
-      },
-      transfer_time);
-  ASSERT_TRUE(simulator_result);
-
-  // Start the second transfer and wait until both finish.
-  sender_endpoints_[1]->AddBytesToTransfer(transfer_size);
-  simulator_result = simulator_.RunUntilOrTimeout(
-      [this]() {
-        return receiver_endpoints_[0]->bytes_received() == transfer_size &&
-               receiver_endpoints_[1]->bytes_received() == transfer_size;
-      },
-      3 * transfer_time);
-  ASSERT_TRUE(simulator_result);
-}
-
-TEST_F(Bbr2MultiSenderTest, Bbr2VsBbr2BBPD) {
-  SetConnectionOption(sender_0_, kBBPD);
-  Bbr2Sender* sender_1 = SetupBbr2Sender(sender_endpoints_[1].get());
-  SetConnectionOption(sender_1, kBBPD);
 
   MultiSenderTopologyParams params;
   CreateNetwork(params);

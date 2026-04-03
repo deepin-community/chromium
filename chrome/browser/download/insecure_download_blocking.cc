@@ -12,6 +12,7 @@
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -23,7 +24,9 @@
 #include "components/download/public/common/download_stats.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/download_item_utils.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/url_constants.h"
 #include "net/base/url_util.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
@@ -144,7 +147,6 @@ std::string GetDownloadBlockingExtensionMetricName(
           kInsecureDownloadHistogramTargetInsecure);
     case InsecureDownloadSecurityStatus::kDownloadIgnored:
       NOTREACHED();
-      break;
     case InsecureDownloadSecurityStatus::kInitiatorInsecureNonUniqueFileSecure:
       return GetDLBlockingHistogramName(
           kInsecureDownloadExtensionInitiatorInsecureNonUnique,
@@ -156,7 +158,6 @@ std::string GetDownloadBlockingExtensionMetricName(
           kInsecureDownloadHistogramTargetInsecure);
   }
   NOTREACHED();
-  return std::string();
 }
 
 // Get appropriate enum value for the initiator/download security state combo
@@ -227,6 +228,14 @@ struct InsecureDownloadData {
     // Extract extension.
 #if BUILDFLAG(IS_WIN)
     extension_ = base::WideToUTF8(path.FinalExtension());
+#elif BUILDFLAG(IS_ANDROID)
+    // If the file path is a content URI, extension should come from the file
+    // name.
+    if (path.IsContentUri()) {
+      extension_ = item->GetFileNameToReportUser().FinalExtension();
+    } else {
+      extension_ = path.FinalExtension();
+    }
 #else
     extension_ = path.FinalExtension();
 #endif
@@ -262,7 +271,7 @@ struct InsecureDownloadData {
     bool insecure_nonunique = false;
     if (initiator_.has_value() &&
         !network::IsUrlPotentiallyTrustworthy(initiator_->GetURL()) &&
-        net::IsHostnameNonUnique(initiator_->GetURL().host())) {
+        net::IsHostnameNonUnique(initiator_->GetURL().GetHost())) {
       insecure_nonunique = true;
     }
 
@@ -277,9 +286,9 @@ struct InsecureDownloadData {
     //  - anything extension related,
     //  - etc.
     //
-    // TODO(1029062): INTERNAL_API is also used for background fetch. That
-    // probably isn't the correct behavior, since INTERNAL_API is otherwise used
-    // for Chrome stuff. Background fetch should probably be HTTPS-only.
+    // TODO(crbug.com/40661154): INTERNAL_API is also used for background fetch.
+    // That probably isn't the correct behavior, since INTERNAL_API is otherwise
+    // used for Chrome stuff. Background fetch should probably be HTTPS-only.
     auto download_source = item->GetDownloadSource();
     auto transition_type = item->GetTransitionType();
     if (download_source == DownloadSource::RETRY ||
@@ -303,9 +312,10 @@ struct InsecureDownloadData {
       auto security_status =
           GetDownloadBlockingEnum(initiator_, download_delivered_securely,
                                   initiator_inferred, insecure_nonunique);
-      base::UmaHistogramEnumeration(
-          GetDownloadBlockingExtensionMetricName(security_status),
-          GetExtensionEnumFromString(extension_));
+      std::string metric_name =
+          GetDownloadBlockingExtensionMetricName(security_status);
+      base::UmaHistogramEnumeration(metric_name,
+                                    GetExtensionEnumFromString(extension_));
       base::UmaHistogramEnumeration(kInsecureDownloadHistogramName,
                                     security_status);
       download::RecordDownloadValidationMetrics(
@@ -335,7 +345,7 @@ struct InsecureDownloadData {
         download_source == DownloadSource::EXTENSION_INSTALLER) {
       is_insecure_download_ = false;
     } else {  // Not ignorable download.
-      // TODO(crbug.com/1352598): Add blocking metrics.
+      // TODO(crbug.com/40857867): Add blocking metrics.
       // insecure downloads are either delivered insecurely, or we can't trust
       // who told us to download them (i.e. have an insecure initiator).
       is_insecure_download_ =
@@ -345,6 +355,23 @@ struct InsecureDownloadData {
            !download_delivered_securely) &&
           !net::IsLocalhost(dl_url);
     }
+
+    // A download is considered initiated from a trusted WebUI (e.g. chrome://)
+    // if either:
+    // 1. The download's Tab URL is a trusted WebUI scheme. This covers cases
+    //    where the user clicked a link on a WebUI page. This URL persists even
+    //    if the user navigates away or closes the tab (in which case the
+    //    RenderFrameHost might be null or point to a different page).
+    // 2. The RenderFrameHost's last committed URL is a trusted WebUI scheme.
+    //    This covers top-level navigations (e.g. typing a file URL in the
+    //    Omnibox on the NTP). In this case, the download's Tab URL reflects the
+    //    pending file URL (not the NTP), so we must rely on the RenderFrameHost
+    //    to identify the initiating context.
+    content::RenderFrameHost* rfh =
+        content::DownloadItemUtils::GetRenderFrameHost(item);
+    is_initiated_from_trusted_webui_ =
+        item->GetTabUrl().SchemeIs(content::kChromeUIScheme) ||
+        (rfh && rfh->GetLastCommittedURL().SchemeIs(content::kChromeUIScheme));
   }
 
   std::optional<url::Origin> initiator_;
@@ -357,6 +384,14 @@ struct InsecureDownloadData {
   bool is_mixed_content_;
   // Was the download initiated by an insecure origin or delivered insecurely?
   bool is_insecure_download_;
+  // Was the download initiated from a trusted WebUI page (chrome://...)?
+  // This can happen in the following cases:
+  // 1) Clicking on a HTTP downloadable link on a WebUI page (e.g. NTP or
+  //    chrome://history).
+  // 2) Right clicking "Save Link As..." to a HTTP link on a WebUI page.
+  // 3) Top-level navigation to a downloadable HTTP URL initiated from a WebUI
+  //    page (e.g. typing a file URL in the Omnibox on NTP).
+  bool is_initiated_from_trusted_webui_;
 };
 
 // Check if |extension| is contained in the comma separated |extension_list|.
@@ -376,14 +411,14 @@ bool ContainsExtension(const std::string& extension_list,
 // Just print a descriptive message to the console about the blocked download.
 // |is_blocked| indicates whether this download will be blocked now.
 void PrintConsoleMessage(const InsecureDownloadData& data) {
-  content::WebContents* web_contents =
-      content::DownloadItemUtils::GetWebContents(data.item_);
-  if (!web_contents) {
+  content::RenderFrameHost* rfh =
+      content::DownloadItemUtils::GetRenderFrameHost(data.item_);
+  if (!rfh) {
     return;
   }
 
   if (data.is_mixed_content_) {
-    web_contents->GetPrimaryMainFrame()->AddMessageToConsole(
+    rfh->AddMessageToConsole(
         blink::mojom::ConsoleMessageLevel::kError,
         base::StringPrintf(
             "Mixed Content: The site at '%s' was loaded over a secure "
@@ -398,7 +433,15 @@ void PrintConsoleMessage(const InsecureDownloadData& data) {
     return;
   }
 
-  web_contents->GetPrimaryMainFrame()->AddMessageToConsole(
+  // The user saved a HTTP resource from a chrome:// WebUI page
+  // (e.g. NTP or history). This is arguably a valid use case unless we
+  // completely ban users from visiting HTTP sites, so don't warn. Otherwise,
+  // an error will be generated and uploaded to the crash server.
+  if (data.is_initiated_from_trusted_webui_) {
+    return;
+  }
+
+  rfh->AddMessageToConsole(
       blink::mojom::ConsoleMessageLevel::kError,
       base::StringPrintf(
           "The file at '%s' was %s an insecure connection. "
@@ -411,9 +454,11 @@ void PrintConsoleMessage(const InsecureDownloadData& data) {
 bool IsDownloadPermittedByContentSettings(
     Profile* profile,
     const std::optional<url::Origin>& initiator) {
-  // TODO(crbug.com/1048957): Checking content settings crashes unit tests on
+  // TODO(crbug.com/40117459): Checking content settings crashes unit tests on
   // Android. It shouldn't.
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+  return false;
+#else
   HostContentSettingsMap* host_content_settings_map =
       HostContentSettingsMapFactory::GetForProfile(profile);
   ContentSettingsForOneType settings =
@@ -434,8 +479,6 @@ bool IsDownloadPermittedByContentSettings(
   }
   NOTREACHED();
 #endif
-
-  return false;
 }
 
 bool IsHttpsFirstModeEnabled(Profile* profile) {
@@ -463,11 +506,10 @@ InsecureDownloadStatus GetInsecureDownloadStatusForDownload(
     return InsecureDownloadStatus::SAFE;
   }
 
-  // When enabled, show a visible (bypassable) warning on insecure downloads.
+  // Show a visible (bypassable) warning on insecure downloads.
   // Since mixed download blocking is more severe, exclude mixed downloads from
   // this early-return to let the mixed download logic below apply.
-  if (base::FeatureList::IsEnabled(features::kInsecureDownloadWarnings) &&
-      data.is_insecure_download_ && !data.is_mixed_content_) {
+  if (data.is_insecure_download_ && !data.is_mixed_content_) {
     // Except when using HFM, don't warn on files that are likely to be safe.
     if (!IsHttpsFirstModeEnabled(profile) &&
         ContainsExtension(kSafeExtensions, data.extension_)) {

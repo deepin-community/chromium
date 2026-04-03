@@ -39,14 +39,14 @@ class AuraTestHelper;
 }
 }  // namespace aura
 
-namespace blink {
+namespace network {
 struct ParsedPermissionsPolicyDeclaration;
 using ParsedPermissionsPolicy = std::vector<ParsedPermissionsPolicyDeclaration>;
+}  // namespace network
 
-namespace web_pref {
+namespace blink::web_pref {
 struct WebPreferences;
-}
-}  // namespace blink
+}  // namespace blink::web_pref
 
 namespace display {
 #if BUILDFLAG(IS_ANDROID)
@@ -98,11 +98,6 @@ class RenderFrameHostTester {
   // RenderViewHostTestEnabler instance (see below) to do this.
   static RenderFrameHostTester* For(RenderFrameHost* host);
 
-  // Calls the RenderFrameHost's private OnMessageReceived function with the
-  // given message.
-  static bool TestOnMessageReceived(RenderFrameHost* rfh,
-                                    const IPC::Message& msg);
-
   // Commit the load pending in the given |controller| if any.
   static void CommitPendingLoad(NavigationController* controller);
 
@@ -121,7 +116,7 @@ class RenderFrameHostTester {
   // used as the container policy.
   virtual RenderFrameHost* AppendChildWithPolicy(
       const std::string& frame_name,
-      const blink::ParsedPermissionsPolicy& allow) = 0;
+      const network::ParsedPermissionsPolicy& allow) = 0;
 
   // Same as AppendChild above, but simulates the `credentialless` attribute
   // being added.
@@ -168,6 +163,11 @@ class RenderFrameHostTester {
   // Creates the WebUsbService and binds `receiver`.
   virtual void CreateWebUsbServiceForTesting(
       mojo::PendingReceiver<blink::mojom::WebUsbService> receiver) = 0;
+
+  // Detaches the LocalFrame mojo connection to the renderer. This is useful
+  // when tests override the creation logic for the LocalFrame and need the
+  // connection to be re-initialized.
+  virtual void ResetLocalFrame() = 0;
 };
 
 // An interface and utility for driving tests of RenderViewHost.
@@ -338,7 +338,7 @@ class RenderViewHostTestHarness : public ::testing::Test {
 
   std::unique_ptr<ContentBrowserConsistencyChecker> consistency_checker_;
 
-  // TODO(crbug.com/1011275): This is a temporary work around to fix flakiness
+  // TODO(crbug.com/40101830): This is a temporary work around to fix flakiness
   // on tests. The default behavior of the network stack is to allocate a
   // leaking SystemDnsConfigChangeNotifier. This holds on to a set of
   // FilePathWatchers on Posix and ObjectWatchers on Windows that outlive
@@ -357,7 +357,7 @@ class RenderViewHostTestHarness : public ::testing::Test {
 #if BUILDFLAG(IS_WIN)
   std::unique_ptr<ui::ScopedOleInitializer> ole_initializer_;
 #endif
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_APPLE)
   std::unique_ptr<display::ScopedNativeScreen> screen_;
 #endif
 #if defined(USE_AURA)

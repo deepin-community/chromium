@@ -27,6 +27,10 @@
 #include <sys/un.h>
 #endif
 
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD)
+#include <sys/wait.h> /* For waitpid() */
+#endif
+
 #include "perfetto/base/build_config.h"
 #include "perfetto/base/logging.h"
 #include "perfetto/ext/base/file_utils.h"
@@ -43,8 +47,9 @@
      PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID))
 #define SKIP_IF_VSOCK_LOOPBACK_NOT_SUPPORTED()                                 \
   do {                                                                         \
-    if (!UnixSocketRaw::CreateMayFail(SockFamily::kVsock, SockType::kStream)   \
-             .Bind("vsock://1:10000")) {                                       \
+    auto raw_sock =                                                            \
+        UnixSocketRaw::CreateMayFail(SockFamily::kVsock, SockType::kStream);   \
+    if (!raw_sock || !raw_sock.Bind("vsock://1:10000")) {                      \
       GTEST_SKIP() << "vsock testing skipped: loopback address unsupported.\n" \
                    << "Please run sudo modprobe vsock-loopback";               \
     }                                                                          \
@@ -57,7 +62,6 @@ namespace {
 
 using ::testing::_;
 using ::testing::AtLeast;
-using ::testing::Invoke;
 using ::testing::InvokeWithoutArgs;
 using ::testing::Mock;
 
@@ -122,12 +126,11 @@ TEST_F(UnixSocketTest, ConnectionImmediatelyDroppedByServer) {
   // OnNewIncomingConnection().
   auto srv_did_shutdown = task_runner_.CreateCheckpoint("srv_did_shutdown");
   EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
-      .WillOnce(
-          Invoke([this, srv_did_shutdown](UnixSocket*, UnixSocket* new_conn) {
-            EXPECT_CALL(event_listener_, OnDisconnect(new_conn));
-            new_conn->Shutdown(true);
-            srv_did_shutdown();
-          }));
+      .WillOnce([this, srv_did_shutdown](UnixSocket*, UnixSocket* new_conn) {
+        EXPECT_CALL(event_listener_, OnDisconnect(new_conn));
+        new_conn->Shutdown(true);
+        srv_did_shutdown();
+      });
 
   auto checkpoint = task_runner_.CreateCheckpoint("cli_connected");
   auto cli =
@@ -165,12 +168,12 @@ TEST_F(UnixSocketTest, ClientAndServerExchangeData) {
   auto srv_conn_seen = task_runner_.CreateCheckpoint("srv_conn_seen");
   auto srv_disconnected = task_runner_.CreateCheckpoint("srv_disconnected");
   EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
-      .WillOnce(Invoke([this, srv_conn_seen, srv_disconnected](
-                           UnixSocket*, UnixSocket* srv_conn) {
+      .WillOnce([this, srv_conn_seen, srv_disconnected](UnixSocket*,
+                                                        UnixSocket* srv_conn) {
         EXPECT_CALL(event_listener_, OnDisconnect(srv_conn))
             .WillOnce(InvokeWithoutArgs(srv_disconnected));
         srv_conn_seen();
-      }));
+      });
   task_runner_.RunUntilCheckpoint("srv_conn_seen");
   task_runner_.RunUntilCheckpoint("cli_connected");
 
@@ -180,17 +183,17 @@ TEST_F(UnixSocketTest, ClientAndServerExchangeData) {
 
   auto cli_did_recv = task_runner_.CreateCheckpoint("cli_did_recv");
   EXPECT_CALL(event_listener_, OnDataAvailable(cli.get()))
-      .WillOnce(Invoke([cli_did_recv](UnixSocket* s) {
+      .WillOnce([cli_did_recv](UnixSocket* s) {
         ASSERT_EQ("srv>cli", s->ReceiveString());
         cli_did_recv();
-      }));
+      });
 
   auto srv_did_recv = task_runner_.CreateCheckpoint("srv_did_recv");
   EXPECT_CALL(event_listener_, OnDataAvailable(srv_conn.get()))
-      .WillOnce(Invoke([srv_did_recv](UnixSocket* s) {
+      .WillOnce([srv_did_recv](UnixSocket* s) {
         ASSERT_EQ("cli>srv", s->ReceiveString());
         srv_did_recv();
-      }));
+      });
   ASSERT_TRUE(cli->SendStr("cli>srv"));
   ASSERT_TRUE(srv_conn->SendStr("srv>cli"));
   task_runner_.RunUntilCheckpoint("cli_did_recv");
@@ -231,8 +234,8 @@ TEST_F(UnixSocketTest, ListenWithPassedSocketHandle) {
   auto srv_connected = task_runner_.CreateCheckpoint("srv_connected");
   auto srv_disconnected = task_runner_.CreateCheckpoint("srv_disconnected");
   EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
-      .WillOnce(Invoke([this, srv_connected, srv_disconnected](
-                           UnixSocket*, UnixSocket* srv_conn) {
+      .WillOnce([this, srv_connected, srv_disconnected](UnixSocket*,
+                                                        UnixSocket* srv_conn) {
         // An empty OnDataAvailable might be raised to signal the EOF state.
         EXPECT_CALL(event_listener_, OnDataAvailable(srv_conn))
             .WillRepeatedly(
@@ -240,7 +243,7 @@ TEST_F(UnixSocketTest, ListenWithPassedSocketHandle) {
         EXPECT_CALL(event_listener_, OnDisconnect(srv_conn))
             .WillOnce(InvokeWithoutArgs(srv_disconnected));
         srv_connected();
-      }));
+      });
   task_runner_.RunUntilCheckpoint("srv_connected");
   task_runner_.RunUntilCheckpoint("cli_connected");
   ASSERT_TRUE(cli->is_connected());
@@ -260,30 +263,30 @@ TEST_F(UnixSocketTest, SeveralClients) {
 
   EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
       .Times(kNumClients)
-      .WillRepeatedly(Invoke([this](UnixSocket*, UnixSocket* s) {
+      .WillRepeatedly([this](UnixSocket*, UnixSocket* s) {
         EXPECT_CALL(event_listener_, OnDataAvailable(s))
-            .WillOnce(Invoke([](UnixSocket* t) {
+            .WillOnce([](UnixSocket* t) {
               ASSERT_EQ("PING", t->ReceiveString());
               ASSERT_TRUE(t->SendStr("PONG"));
-            }));
-      }));
+            });
+      });
 
   for (size_t i = 0; i < kNumClients; i++) {
     cli[i] =
         UnixSocket::Connect(kTestSocket.name(), &event_listener_, &task_runner_,
                             kTestSocket.family(), SockType::kStream);
     EXPECT_CALL(event_listener_, OnConnect(cli[i].get(), true))
-        .WillOnce(Invoke([](UnixSocket* s, bool success) {
+        .WillOnce([](UnixSocket* s, bool success) {
           ASSERT_TRUE(success);
           ASSERT_TRUE(s->SendStr("PING"));
-        }));
+        });
 
     auto checkpoint = task_runner_.CreateCheckpoint(std::to_string(i));
     EXPECT_CALL(event_listener_, OnDataAvailable(cli[i].get()))
-        .WillOnce(Invoke([checkpoint](UnixSocket* s) {
+        .WillOnce([checkpoint](UnixSocket* s) {
           ASSERT_EQ("PONG", s->ReceiveString());
           checkpoint();
-        }));
+        });
   }
 
   for (size_t i = 0; i < kNumClients; i++) {
@@ -302,18 +305,18 @@ TEST_F(UnixSocketTest, BlockingSend) {
   size_t total_bytes_received = 0;
   static constexpr size_t kTotalBytes = 1024 * 1024 * 4;
   EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
-      .WillOnce(Invoke([this, &total_bytes_received, all_frames_done](
-                           UnixSocket*, UnixSocket* srv_conn) {
+      .WillOnce([this, &total_bytes_received, all_frames_done](
+                    UnixSocket*, UnixSocket* srv_conn) {
         EXPECT_CALL(event_listener_, OnDataAvailable(srv_conn))
             .WillRepeatedly(
-                Invoke([&total_bytes_received, all_frames_done](UnixSocket* s) {
+                [&total_bytes_received, all_frames_done](UnixSocket* s) {
                   char buf[1024];
                   size_t res = s->Receive(buf, sizeof(buf));
                   total_bytes_received += res;
                   if (total_bytes_received == kTotalBytes)
                     all_frames_done();
-                }));
-      }));
+                });
+      });
 
   // Override default timeout as this test can take time on the emulator.
   static constexpr int kTimeoutMs = 60000 * 3;
@@ -357,16 +360,16 @@ TEST_F(UnixSocketTest, ReceiverDisconnectsDuringSend) {
 
   auto receive_done = task_runner_.CreateCheckpoint("receive_done");
   EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
-      .WillOnce(Invoke([this, receive_done](UnixSocket*, UnixSocket* srv_conn) {
+      .WillOnce([this, receive_done](UnixSocket*, UnixSocket* srv_conn) {
         EXPECT_CALL(event_listener_, OnDataAvailable(srv_conn))
-            .WillOnce(Invoke([receive_done](UnixSocket* s) {
+            .WillOnce([receive_done](UnixSocket* s) {
               char buf[1024];
               size_t res = s->Receive(buf, sizeof(buf));
               ASSERT_EQ(1024u, res);
               s->Shutdown(false /*notify*/);
               receive_done();
-            }));
-      }));
+            });
+      });
 
   // Perform the blocking send form another thread.
   std::thread tx_thread([] {
@@ -403,11 +406,10 @@ TEST_F(UnixSocketTest, ReleaseSocket) {
   auto srv_connected = task_runner_.CreateCheckpoint("srv_connected");
   UnixSocket* peer = nullptr;
   EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
-      .WillOnce(
-          Invoke([srv_connected, &peer](UnixSocket*, UnixSocket* new_conn) {
-            peer = new_conn;
-            srv_connected();
-          }));
+      .WillOnce([srv_connected, &peer](UnixSocket*, UnixSocket* new_conn) {
+        peer = new_conn;
+        srv_connected();
+      });
 
   auto cli =
       UnixSocket::Connect(kTestSocket.name(), &event_listener_, &task_runner_,
@@ -535,15 +537,15 @@ TEST_F(UnixSocketTest, TcpStream) {
   std::unique_ptr<UnixSocket> cli[kNumClients];
   EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
       .Times(kNumClients)
-      .WillRepeatedly(Invoke([&](UnixSocket*, UnixSocket* s) {
+      .WillRepeatedly([&](UnixSocket*, UnixSocket* s) {
         // OnDisconnect() might spuriously happen depending on the dtor order.
         EXPECT_CALL(event_listener_, OnDisconnect(s)).Times(AtLeast(0));
         EXPECT_CALL(event_listener_, OnDataAvailable(s))
-            .WillRepeatedly(Invoke([](UnixSocket* cli_sock) {
+            .WillRepeatedly([](UnixSocket* cli_sock) {
               cli_sock->ReceiveString();  // Read connection EOF;
-            }));
+            });
         ASSERT_TRUE(s->SendStr("welcome"));
-      }));
+      });
 
   for (size_t i = 0; i < kNumClients; i++) {
     cli[i] = UnixSocket::Connect(host_and_port, &event_listener_, &task_runner_,
@@ -552,13 +554,13 @@ TEST_F(UnixSocketTest, TcpStream) {
     EXPECT_CALL(event_listener_, OnDisconnect(cli[i].get())).Times(AtLeast(0));
     EXPECT_CALL(event_listener_, OnConnect(cli[i].get(), true));
     EXPECT_CALL(event_listener_, OnDataAvailable(cli[i].get()))
-        .WillRepeatedly(Invoke([checkpoint](UnixSocket* s) {
+        .WillRepeatedly([checkpoint](UnixSocket* s) {
           auto str = s->ReceiveString();
           if (str == "")
             return;  // Connection EOF.
           ASSERT_EQ("welcome", str);
           checkpoint();
-        }));
+        });
   }
 
   for (size_t i = 0; i < kNumClients; i++) {
@@ -616,8 +618,8 @@ TEST_F(UnixSocketTest, PeerCredentialsRetainedAfterDisconnect) {
   UnixSocket* srv_client_conn = nullptr;
   auto srv_connected = task_runner_.CreateCheckpoint("srv_connected");
   EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
-      .WillOnce(Invoke([&srv_client_conn, srv_connected](UnixSocket*,
-                                                         UnixSocket* srv_conn) {
+      .WillOnce([&srv_client_conn, srv_connected](UnixSocket*,
+                                                  UnixSocket* srv_conn) {
         srv_client_conn = srv_conn;
         EXPECT_EQ(geteuid(), static_cast<uint32_t>(srv_conn->peer_uid_posix()));
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) || \
@@ -625,7 +627,7 @@ TEST_F(UnixSocketTest, PeerCredentialsRetainedAfterDisconnect) {
         EXPECT_EQ(getpid(), static_cast<pid_t>(srv_conn->peer_pid_linux()));
 #endif
         srv_connected();
-      }));
+      });
   auto cli_connected = task_runner_.CreateCheckpoint("cli_connected");
   auto cli =
       UnixSocket::Connect(kTestSocket.name(), &event_listener_, &task_runner_,
@@ -646,7 +648,7 @@ TEST_F(UnixSocketTest, PeerCredentialsRetainedAfterDisconnect) {
   // spurious OnDataAvailable() that needs to be acked with a Receive() to read
   // the EOF. See b/69536434.
   EXPECT_CALL(event_listener_, OnDataAvailable(srv_client_conn))
-      .WillOnce(Invoke([](UnixSocket* sock) { sock->ReceiveString(); }));
+      .WillOnce([](UnixSocket* sock) { sock->ReceiveString(); });
 
   cli.reset();
   task_runner_.RunUntilCheckpoint("cli_disconnected");
@@ -674,12 +676,12 @@ TEST_F(UnixSocketTest, ClientAndServerExchangeFDs) {
   auto cli_connected = task_runner_.CreateCheckpoint("cli_connected");
   auto srv_disconnected = task_runner_.CreateCheckpoint("srv_disconnected");
   EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
-      .WillOnce(Invoke([this, cli_connected, srv_disconnected](
-                           UnixSocket*, UnixSocket* srv_conn) {
+      .WillOnce([this, cli_connected, srv_disconnected](UnixSocket*,
+                                                        UnixSocket* srv_conn) {
         EXPECT_CALL(event_listener_, OnDisconnect(srv_conn))
             .WillOnce(InvokeWithoutArgs(srv_disconnected));
         cli_connected();
-      }));
+      });
   task_runner_.RunUntilCheckpoint("cli_connected");
 
   auto srv_conn = event_listener_.GetIncomingConnection();
@@ -691,7 +693,7 @@ TEST_F(UnixSocketTest, ClientAndServerExchangeFDs) {
 
   auto cli_did_recv = task_runner_.CreateCheckpoint("cli_did_recv");
   EXPECT_CALL(event_listener_, OnDataAvailable(cli.get()))
-      .WillRepeatedly(Invoke([cli_did_recv](UnixSocket* s) {
+      .WillRepeatedly([cli_did_recv](UnixSocket* s) {
         ScopedFile fd_buf[3];
         char buf[sizeof(cli_str)];
         if (!s->Receive(buf, sizeof(buf), fd_buf, ArraySize(fd_buf)))
@@ -707,11 +709,11 @@ TEST_F(UnixSocketTest, ClientAndServerExchangeFDs) {
         // /dev/zero
         ASSERT_EQ(read(*fd_buf[1], rd_buf, sizeof(rd_buf)), 1);
         cli_did_recv();
-      }));
+      });
 
   auto srv_did_recv = task_runner_.CreateCheckpoint("srv_did_recv");
   EXPECT_CALL(event_listener_, OnDataAvailable(srv_conn.get()))
-      .WillRepeatedly(Invoke([srv_did_recv](UnixSocket* s) {
+      .WillRepeatedly([srv_did_recv](UnixSocket* s) {
         ScopedFile fd_buf[3];
         char buf[sizeof(srv_str)];
         if (!s->Receive(buf, sizeof(buf), fd_buf, ArraySize(fd_buf)))
@@ -727,7 +729,7 @@ TEST_F(UnixSocketTest, ClientAndServerExchangeFDs) {
         // /dev/zero
         ASSERT_EQ(read(*fd_buf[1], rd_buf, sizeof(rd_buf)), 1);
         srv_did_recv();
-      }));
+      });
 
   int buf_fd[2] = {null_fd.get(), zero_fd.get()};
 
@@ -774,19 +776,19 @@ TEST_F(UnixSocketTest, SharedMemory) {
     ASSERT_EQ(1, base::WriteAll(*pipe.wr, ".", 1));
     auto checkpoint = task_runner_.CreateCheckpoint("change_seen_by_server");
     EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
-        .WillOnce(Invoke(
+        .WillOnce(
             [this, tmp_fd, checkpoint, mem](UnixSocket*, UnixSocket* new_conn) {
               ASSERT_EQ(geteuid(),
                         static_cast<uint32_t>(new_conn->peer_uid_posix()));
               ASSERT_TRUE(new_conn->Send("txfd", 5, tmp_fd));
               // Wait for the client to change this again.
               EXPECT_CALL(event_listener_, OnDataAvailable(new_conn))
-                  .WillOnce(Invoke([checkpoint, mem](UnixSocket* s) {
+                  .WillOnce([checkpoint, mem](UnixSocket* s) {
                     ASSERT_EQ("change notify", s->ReceiveString());
                     ASSERT_STREQ("rock more", mem);
                     checkpoint();
-                  }));
-            }));
+                  });
+            });
     task_runner_.RunUntilCheckpoint("change_seen_by_server");
     ASSERT_TRUE(Mock::VerifyAndClearExpectations(&event_listener_));
     _exit(0);
@@ -800,7 +802,7 @@ TEST_F(UnixSocketTest, SharedMemory) {
     EXPECT_CALL(event_listener_, OnConnect(cli.get(), true));
     auto checkpoint = task_runner_.CreateCheckpoint("change_seen_by_client");
     EXPECT_CALL(event_listener_, OnDataAvailable(cli.get()))
-        .WillOnce(Invoke([checkpoint](UnixSocket* s) {
+        .WillOnce([checkpoint](UnixSocket* s) {
           char msg[32];
           ScopedFile fd;
           ASSERT_EQ(5u, s->Receive(msg, sizeof(msg), &fd));
@@ -816,7 +818,7 @@ TEST_F(UnixSocketTest, SharedMemory) {
           memcpy(mem, "rock more", 10);
           ASSERT_TRUE(s->SendStr("change notify"));
           checkpoint();
-        }));
+        });
     task_runner_.RunUntilCheckpoint("change_seen_by_client");
     int st = 0;
     PERFETTO_EINTR(waitpid(pid, &st, 0));
@@ -1077,7 +1079,7 @@ TEST_F(UnixSocketTest, Sockaddr_FilesystemLinked) {
   // Create a raw socket and manually connect to that (to avoid getting affected
   // by accidental future bugs in the logic that populates struct sockaddr_un).
   auto cli = UnixSocketRaw::CreateMayFail(SockFamily::kUnix, SockType::kStream);
-  struct sockaddr_un addr {};
+  struct sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
   StringCopy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path));
   ASSERT_EQ(0, connect(cli.fd(), reinterpret_cast<struct sockaddr*>(&addr),
@@ -1099,7 +1101,7 @@ TEST_F(UnixSocketTest, Sockaddr_AbstractUnix) {
   ASSERT_TRUE(srv && srv->is_listening());
 
   auto cli = UnixSocketRaw::CreateMayFail(SockFamily::kUnix, SockType::kStream);
-  struct sockaddr_un addr {};
+  struct sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
   StringCopy(addr.sun_path, sock_name.c_str(), sizeof(addr.sun_path));
   addr.sun_path[0] = '\0';
@@ -1119,15 +1121,15 @@ TEST_F(UnixSocketTest, VSockStream) {
 
   std::unique_ptr<UnixSocket> prod;
   EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
-      .WillOnce(Invoke([&](UnixSocket*, UnixSocket* s) {
+      .WillOnce([&](UnixSocket*, UnixSocket* s) {
         // OnDisconnect() might spuriously happen depending on the dtor order.
         EXPECT_CALL(event_listener_, OnDisconnect(s)).Times(AtLeast(0));
         EXPECT_CALL(event_listener_, OnDataAvailable(s))
-            .WillRepeatedly(Invoke([](UnixSocket* prod_sock) {
+            .WillRepeatedly([](UnixSocket* prod_sock) {
               prod_sock->ReceiveString();  // Read connection EOF;
-            }));
+            });
         ASSERT_TRUE(s->SendStr("welcome"));
-      }));
+      });
 
   // Set up the client.
   prod =
@@ -1137,13 +1139,13 @@ TEST_F(UnixSocketTest, VSockStream) {
   EXPECT_CALL(event_listener_, OnDisconnect(prod.get())).Times(AtLeast(0));
   EXPECT_CALL(event_listener_, OnConnect(prod.get(), true));
   EXPECT_CALL(event_listener_, OnDataAvailable(prod.get()))
-      .WillRepeatedly(Invoke([checkpoint](UnixSocket* s) {
+      .WillRepeatedly([checkpoint](UnixSocket* s) {
         auto str = s->ReceiveString();
         if (str.empty())
           return;  // Connection EOF.
         ASSERT_EQ("welcome", str);
         checkpoint();
-      }));
+      });
 
   task_runner_.RunUntilCheckpoint("prod_connected");
   ASSERT_TRUE(Mock::VerifyAndClearExpectations(prod.get()));
@@ -1166,6 +1168,9 @@ TEST_F(UnixSocketTest, GetSockFamily) {
 }
 
 TEST_F(UnixSocketTest, ShmemSupported) {
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+  ASSERT_EQ(SockShmemSupported(""), true);
+#else  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
   ASSERT_EQ(SockShmemSupported(""), false);
   ASSERT_EQ(SockShmemSupported("/path/to/sock"), true);
   ASSERT_EQ(SockShmemSupported("local_dir_sock"), true);
@@ -1178,7 +1183,105 @@ TEST_F(UnixSocketTest, ShmemSupported) {
     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
   ASSERT_EQ(SockShmemSupported("vsock://-1:10000"), false);
 #endif
+#endif  // !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
 }
+
+// Test UnixSocketWatch functionality on platforms that support inotify
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX_BUT_NOT_QNX) || \
+    PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
+TEST_F(UnixSocketTest, UnixSocketWatch) {
+  TempDir tmp_dir = TempDir::Create();
+  std::string sock_path = tmp_dir.path() + "/test_watch.sock";
+
+  bool callback_called = false;
+  auto callback_checkpoint = task_runner_.CreateCheckpoint("callback_called");
+
+  // Create a UnixSocketWatch to monitor socket creation
+  auto watch =
+      WatchUnixSocketCreation(&task_runner_, sock_path.c_str(),
+                              [&callback_called, callback_checkpoint]() {
+                                callback_called = true;
+                                callback_checkpoint();
+                              });
+
+  // The watch should be created successfully for filesystem-linked sockets
+  ASSERT_NE(watch, nullptr);
+
+  // Initially, callback should not have been called
+  ASSERT_FALSE(callback_called);
+
+  // Create the socket file by creating and binding a Unix socket to it
+  auto srv = UnixSocket::Listen(sock_path, &event_listener_, &task_runner_,
+                                SockFamily::kUnix, SockType::kStream);
+  ASSERT_TRUE(srv && srv->is_listening());
+
+  // Wait for the callback to be triggered
+  task_runner_.RunUntilCheckpoint("callback_called");
+
+  // Verify that the callback was called
+  ASSERT_TRUE(callback_called);
+
+  // Clean up
+  srv.reset();
+  remove(sock_path.c_str());
+}
+
+TEST_F(UnixSocketTest, UnixSocketWatchAbstractSocket) {
+  // UnixSocketWatch should return nullptr for abstract sockets
+  auto watch =
+      WatchUnixSocketCreation(&task_runner_, "@abstract_socket", []() {});
+
+  ASSERT_EQ(watch, nullptr);
+}
+
+TEST_F(UnixSocketTest, UnixSocketWatchInvalidPath) {
+  // UnixSocketWatch should return nullptr for non-Unix socket paths
+  auto watch1 =
+      WatchUnixSocketCreation(&task_runner_, "127.0.0.1:8080", []() {});
+
+  auto watch2 =
+      WatchUnixSocketCreation(&task_runner_, "vsock://1:1000", []() {});
+
+  ASSERT_EQ(watch1, nullptr);
+  ASSERT_EQ(watch2, nullptr);
+}
+#endif  // LINUX_BUT_NOT_QNX || OS_ANDROID
+
+#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+// Regression test for macOS behavior where SetTxTimeout/SetRxTimeout fail with
+// EINVAL when called on a server socket immediately after the client has
+// disconnected. On Linux this should just work.
+TEST_F(UnixSocketTest, SetTimeoutAfterClientDisconnect) {
+  auto srv =
+      UnixSocket::Listen(kTestSocket.name(), &event_listener_, &task_runner_,
+                         kTestSocket.family(), SockType::kStream);
+  ASSERT_TRUE(srv->is_listening());
+
+  auto conn_received = task_runner_.CreateCheckpoint("conn_received");
+  EXPECT_CALL(event_listener_, OnNewIncomingConnection(srv.get(), _))
+      .WillOnce([conn_received](UnixSocket*, UnixSocket* new_conn) {
+        // Client will disconnect right away. Release the socket and try to set
+        // timeouts. On macOS, this used to crash because setsockopt() fails
+        // with EINVAL when the peer has disconnected.
+        auto raw = new_conn->ReleaseSocket();
+        ASSERT_TRUE(raw.SetTxTimeout(1000));
+        ASSERT_TRUE(raw.SetRxTimeout(1000));
+        conn_received();
+      });
+
+  // Client connects and immediately disconnects.
+  std::thread client([&] {
+    auto cli =
+        UnixSocketRaw::CreateMayFail(kTestSocket.family(), SockType::kStream);
+    ASSERT_TRUE(cli);
+    ASSERT_TRUE(cli.Connect(kTestSocket.name()));
+    // Socket closes when cli goes out of scope.
+  });
+
+  task_runner_.RunUntilCheckpoint("conn_received");
+  client.join();
+}
+#endif  // !OS_WIN
 
 }  // namespace
 }  // namespace base

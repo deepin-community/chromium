@@ -83,7 +83,7 @@ class MockOfflinePageModel : public StubOfflinePageModel {
   MockOfflinePageModel(const MockOfflinePageModel&) = delete;
   MockOfflinePageModel& operator=(const MockOfflinePageModel&) = delete;
 
-  ~MockOfflinePageModel() override {}
+  ~MockOfflinePageModel() override = default;
 
   void SavePage(const SavePageParams& save_page_params,
                 std::unique_ptr<OfflinePageArchiver> archiver,
@@ -187,7 +187,7 @@ TestBackgroundLoaderOffliner::TestBackgroundLoaderOffliner(
                                offline_page_model,
                                std::move(load_termination_listener)) {}
 
-TestBackgroundLoaderOffliner::~TestBackgroundLoaderOffliner() {}
+TestBackgroundLoaderOffliner::~TestBackgroundLoaderOffliner() = default;
 
 void TestBackgroundLoaderOffliner::ResetLoader() {
   stub_ = new background_loader::BackgroundLoaderContentsStub(browser_context_);
@@ -316,7 +316,7 @@ BackgroundLoaderOfflinerTest::BackgroundLoaderOfflinerTest()
       progress_(0LL),
       request_status_(Offliner::RequestStatus::UNKNOWN) {}
 
-BackgroundLoaderOfflinerTest::~BackgroundLoaderOfflinerTest() {}
+BackgroundLoaderOfflinerTest::~BackgroundLoaderOfflinerTest() = default;
 
 void BackgroundLoaderOfflinerTest::SetUp() {
   // Set the snapshot controller delay command line switch to short delays.
@@ -455,6 +455,36 @@ TEST_F(BackgroundLoaderOfflinerTest, CancelWhenLoadTerminated) {
   EXPECT_TRUE(completion_callback_called());
   EXPECT_FALSE(offliner()->is_loading());  // Offliner reset.
   EXPECT_EQ(Offliner::RequestStatus::FOREGROUND_CANCELED, request_status());
+}
+
+// Regression test for https://crbug.com/468011398.
+// This test ensures that if the load is terminated immediately after the
+// completion callback is invoked, the offliner does not crash attempting to
+// invoke the cancel callback.
+TEST_F(BackgroundLoaderOfflinerTest, TerminateLoadAfterCanDownload) {
+  base::Time creation_time = base::Time::Now();
+  ClientId browser_actions("browser_actions", "123");
+  SavePageRequest request(kRequestId, GURL(kHttpUrl), browser_actions,
+                          creation_time, kUserRequested);
+
+  EXPECT_TRUE(offliner()->LoadAndSave(request, completion_callback(),
+                                      progress_callback()));
+
+  // Simulate a download starting, this will trigger the completion callback.
+  offliner()->stub()->CanDownload(GURL(kHttpUrl), "foo",
+                                  can_download_callback());
+  // Immediately trigger load termination.
+  load_termination_listener()->TerminateLoad();
+  PumpLoop();
+
+  EXPECT_TRUE(can_download_callback_called());
+  EXPECT_TRUE(can_download());
+  EXPECT_TRUE(completion_callback_called());
+  EXPECT_EQ(Offliner::RequestStatus::DOWNLOAD_THROTTLED, request_status());
+  // With the fix, TerminateLoadIfInProgress will see a null
+  // completion_callback_ and should not proceed to call Cancel(). So
+  // cancel_callback_ should not be called.
+  EXPECT_FALSE(cancel_callback_called());
 }
 
 TEST_F(BackgroundLoaderOfflinerTest, CancelWhenLoaded) {

@@ -26,7 +26,7 @@
 #include <mutex>
 #include <tuple>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include "perfetto/base/logging.h"
 #include "perfetto/base/time.h"
@@ -170,7 +170,7 @@ void Subprocess::Start() {
 }
 
 // static
-void Subprocess::StdinThread(MovableState* s, std::string input) {
+void Subprocess::StdinThread(MovableState* s, const std::string& input) {
   size_t input_written = 0;
   while (input_written < input.size()) {
     DWORD wsize = 0;

@@ -10,11 +10,13 @@
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/check_op.h"
-#include "components/cronet/android/cronet_tests_jni_headers/CronetUrlRequestContextTest_jni.h"
 #include "components/cronet/url_request_context_config.h"
 #include "components/cronet/version.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/cronet/android/cronet_tests_jni_headers/CronetUrlRequestContextTest_jni.h"
+
+using base::android::JavaRef;
 
 namespace cronet {
 
@@ -23,8 +25,8 @@ namespace cronet {
 // made it from the CronetEngine.Builder to the URLRequestContextConfig.
 static void JNI_CronetUrlRequestContextTest_VerifyUrlRequestContextConfig(
     JNIEnv* env,
-    jlong jurl_request_context_config,
-    const JavaParamRef<jstring>& jstorage_path) {
+    int64_t jurl_request_context_config,
+    const JavaRef<jstring>& jstorage_path) {
   URLRequestContextConfig* config =
       reinterpret_cast<URLRequestContextConfig*>(jurl_request_context_config);
   CHECK_EQ(config->enable_spdy, false);
@@ -49,8 +51,8 @@ static void JNI_CronetUrlRequestContextTest_VerifyUrlRequestContextConfig(
 static void
 JNI_CronetUrlRequestContextTest_VerifyUrlRequestContextQuicOffConfig(
     JNIEnv* env,
-    jlong jurl_request_context_config,
-    const JavaParamRef<jstring>& jstorage_path) {
+    int64_t jurl_request_context_config,
+    const JavaRef<jstring>& jstorage_path) {
   URLRequestContextConfig* config =
       reinterpret_cast<URLRequestContextConfig*>(jurl_request_context_config);
   CHECK_EQ(config->enable_spdy, false);
@@ -66,3 +68,5 @@ JNI_CronetUrlRequestContextTest_VerifyUrlRequestContextQuicOffConfig(
 }
 
 }  // namespace cronet
+
+DEFINE_JNI(CronetUrlRequestContextTest)

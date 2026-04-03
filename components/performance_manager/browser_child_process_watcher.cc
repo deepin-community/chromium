@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/process/process.h"
@@ -65,15 +64,13 @@ ProcessNodeImpl* BrowserChildProcessWatcher::GetChildProcessNode(
 
 void BrowserChildProcessWatcher::CreateChildProcessNodeForTesting(
     const content::ChildProcessData& data) {
-  CHECK(!base::Contains(tracked_process_nodes_,
-                        BrowserChildProcessHostId(data.id)));
+  CHECK(!tracked_process_nodes_.contains(BrowserChildProcessHostId(data.id)));
   BrowserChildProcessLaunchedAndConnected(data);
 }
 
 void BrowserChildProcessWatcher::DeleteChildProcessNodeForTesting(
     const content::ChildProcessData& data) {
-  CHECK(base::Contains(tracked_process_nodes_,
-                       BrowserChildProcessHostId(data.id)));
+  CHECK(tracked_process_nodes_.contains(BrowserChildProcessHostId(data.id)));
   BrowserChildProcessHostDisconnected(data);
 }
 
@@ -140,10 +137,7 @@ void BrowserChildProcessWatcher::TrackedProcessExited(
   // specifically on crash.
   ProcessNodeImpl* process_node = GetChildProcessNode(id);
   if (process_node) {
-    DCHECK(PerformanceManagerImpl::IsAvailable());
-    PerformanceManagerImpl::CallOnGraphImpl(
-        FROM_HERE, base::BindOnce(&ProcessNodeImpl::SetProcessExitStatus,
-                                  base::Unretained(process_node), exit_code));
+    process_node->SetProcessExitStatus(exit_code);
   }
 }
 
@@ -154,16 +148,8 @@ void BrowserChildProcessWatcher::OnProcessLaunched(
     ProcessNodeImpl* process_node) {
   DCHECK(PerformanceManagerImpl::IsAvailable());
 
-  PerformanceManagerImpl::CallOnGraphImpl(
-      FROM_HERE,
-      base::BindOnce(
-          [](ProcessNodeImpl* process_node, base::Process process,
-             base::TimeTicks launch_time, const std::string& metrics_name) {
-            process_node->SetProcessMetricsName(metrics_name);
-            process_node->SetProcess(std::move(process), launch_time);
-          },
-          base::Unretained(process_node), process.Duplicate(),
-          base::TimeTicks::Now(), metrics_name));
+  process_node->SetProcessMetricsName(metrics_name);
+  process_node->SetProcess(process.Duplicate(), base::TimeTicks::Now());
 }
 
 }  // namespace performance_manager

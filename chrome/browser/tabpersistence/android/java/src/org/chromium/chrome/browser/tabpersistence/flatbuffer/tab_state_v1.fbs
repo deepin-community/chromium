@@ -45,5 +45,14 @@ table TabStateFlatBufferV1 {
 
     // Tab group ID.
     tab_group_id:TabGroupIdToken;
+
+    // Tab has sensitive content.
+    tab_has_sensitive_content:bool;
+
+    // Tab is in pinned state.
+    is_pinned:bool;
+
+    // Represents the current URL of the tab.
+    url:string;
 }
 

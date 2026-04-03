@@ -4,6 +4,7 @@
 
 #include "components/services/storage/shared_storage/shared_storage_test_utils.h"
 
+#include <algorithm>
 #include <deque>
 #include <iterator>
 #include <queue>
@@ -11,15 +12,16 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/services/storage/public/mojom/storage_usage_info.mojom.h"
+#include "content/public/test/shared_storage_test_utils.h"
 #include "sql/database.h"
 #include "sql/test/test_helpers.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -79,15 +81,33 @@ TestDatabaseOperationReceiver::DBOperation::DBOperation(
          type == Type::DB_PURGE_MATCHING);
 }
 
+TestDatabaseOperationReceiver::DBOperation::DBOperation(
+    Type type,
+    url::Origin origin,
+    std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+        batch_update_methods)
+    : type(type),
+      origin(std::move(origin)),
+      batch_update_methods(std::move(batch_update_methods)) {
+  DCHECK_EQ(type, Type::DB_BATCH_UPDATE);
+}
+
 TestDatabaseOperationReceiver::DBOperation::~DBOperation() = default;
 
-TestDatabaseOperationReceiver::DBOperation::DBOperation(const DBOperation&) =
-    default;
+TestDatabaseOperationReceiver::DBOperation::DBOperation(
+    const DBOperation& operation)
+    : type(operation.type),
+      origin(operation.origin),
+      params(operation.params),
+      batch_update_methods(
+          content::CloneSharedStorageMethods(operation.batch_update_methods)) {}
 
 bool TestDatabaseOperationReceiver::DBOperation::operator==(
     const DBOperation& operation) const {
-  if (type != operation.type || params != operation.params)
+  if (type != operation.type || params != operation.params ||
+      batch_update_methods != operation.batch_update_methods) {
     return false;
+  }
 
   if (origin.opaque() && operation.origin.opaque())
     return true;
@@ -97,8 +117,10 @@ bool TestDatabaseOperationReceiver::DBOperation::operator==(
 
 bool TestDatabaseOperationReceiver::DBOperation::operator!=(
     const DBOperation& operation) const {
-  if (type != operation.type || params != operation.params)
+  if (type != operation.type || params != operation.params ||
+      batch_update_methods != operation.batch_update_methods) {
     return true;
+  }
 
   if (origin.opaque() && operation.origin.opaque())
     return false;
@@ -118,6 +140,11 @@ std::string TestDatabaseOperationReceiver::DBOperation::Serialize() const {
                       ? base::StrCat({serialization, "}"})
                       : base::StrCat({serialization,
                                       base::UTF16ToUTF8(params.back()), "}"});
+
+  serialization = base::StrCat(
+      {serialization, "; batch_update_methods: ",
+       content::SerializeSharedStorageMethods(batch_update_methods)});
+
   return serialization;
 }
 
@@ -139,7 +166,7 @@ std::u16string TestDatabaseOperationReceiver::SerializeTimeDelta(
 
 // static
 std::u16string TestDatabaseOperationReceiver::SerializeBool(bool b) {
-  return b ? u"true" : u"false";
+  return base::UTF8ToUTF16(base::ToString(b));
 }
 
 // static
@@ -150,7 +177,7 @@ std::u16string TestDatabaseOperationReceiver::SerializeSetBehavior(
 
 // static
 std::u16string TestDatabaseOperationReceiver::SerializeMemoryPressureLevel(
-    MemoryPressureLevel level) {
+    base::MemoryPressureLevel level) {
   return base::NumberToString16(static_cast<int>(level));
 }
 
@@ -236,6 +263,27 @@ TestDatabaseOperationReceiver::MakeOperationResultCallback(
     OperationResult* out_result) {
   return base::BindOnce(
       &TestDatabaseOperationReceiver::OperationResultCallbackBase,
+      base::Unretained(this), current_operation, out_result);
+}
+
+void TestDatabaseOperationReceiver::BatchUpdateResultCallbackBase(
+    const DBOperation& current_operation,
+    BatchUpdateResult* out_result,
+    BatchUpdateResult result) {
+  DCHECK(out_result);
+  *out_result = std::move(result);
+
+  if (ExpectationsMet(current_operation) && loop_.running()) {
+    Finish();
+  }
+}
+
+base::OnceCallback<void(BatchUpdateResult)>
+TestDatabaseOperationReceiver::MakeBatchUpdateResultCallback(
+    const DBOperation& current_operation,
+    BatchUpdateResult* out_result) {
+  return base::BindOnce(
+      &TestDatabaseOperationReceiver::BatchUpdateResultCallbackBase,
       base::Unretained(this), current_operation, out_result);
 }
 
@@ -378,7 +426,7 @@ StorageKeyPolicyMatcherFunctionUtility::MakeMatcherFunction(
   return base::BindRepeating(
       [](std::vector<url::Origin> origins_to_match,
          const blink::StorageKey& storage_key, SpecialStoragePolicy* policy) {
-        return base::Contains(origins_to_match, storage_key.origin());
+        return std::ranges::contains(origins_to_match, storage_key.origin());
       },
       origins_to_match);
 }
@@ -559,8 +607,8 @@ void VerifySharedStorageTablesAndColumns(sql::Database& db) {
   // `context_origin`, `key`, `value`, and `last_used_time`.
   EXPECT_EQ(4u, sql::test::CountTableColumns(&db, "values_mapping"));
 
-  // `context_origin`, `creation_time`, `length`, and `num_bytes`.
-  EXPECT_EQ(4u, sql::test::CountTableColumns(&db, "per_origin_mapping"));
+  // `context_origin`, `creation_time`, and `num_bytes`.
+  EXPECT_EQ(3u, sql::test::CountTableColumns(&db, "per_origin_mapping"));
 
   // `id`, `context_site`, `time_stamp`, and `bits_debit`.
   EXPECT_EQ(4u, sql::test::CountTableColumns(&db, "budget_mapping"));

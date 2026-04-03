@@ -224,13 +224,13 @@ extern void yyerror(YYLTYPE* yylloc, TParseContext* context, void *scanner, cons
 %type <interm.intermNode> iteration_statement jump_statement statement_no_new_scope statement_with_scope
 %type <interm> single_declaration init_declarator_list
 
-%type <interm.param> parameter_declaration parameter_declarator parameter_type_specifier
+%type <interm.param> parameter_declaration parameter_declarator
 %type <interm.layoutQualifier> layout_qualifier_id_list layout_qualifier_id
 
 // Note: array_specifier guaranteed to be non-null.
 %type <interm.arraySizes> array_specifier
 
-%type <interm.type> fully_specified_type type_specifier
+%type <interm.type> fully_specified_type type_specifier parameter_type_specifier
 
 %type <interm.precision> precision_qualifier
 %type <interm.layoutQualifier> layout_qualifier
@@ -513,8 +513,10 @@ inclusive_or_expression
 
 logical_and_expression
     : inclusive_or_expression { $$ = $1; }
-    | logical_and_expression AND_OP inclusive_or_expression {
-        $$ = context->addBinaryMathBooleanResult(EOpLogicalAnd, $1, $3, @2);
+    | logical_and_expression AND_OP {
+        context->onShortCircuitAndBegin($1, @2);
+    } inclusive_or_expression {
+        $$ = context->addBinaryMathBooleanResult(EOpLogicalAnd, $1, $4, @2);
     }
     ;
 
@@ -527,15 +529,21 @@ logical_xor_expression
 
 logical_or_expression
     : logical_xor_expression { $$ = $1; }
-    | logical_or_expression OR_OP logical_xor_expression  {
-        $$ = context->addBinaryMathBooleanResult(EOpLogicalOr, $1, $3, @2);
+    | logical_or_expression OR_OP {
+        context->onShortCircuitOrBegin($1, @2);
+    } logical_xor_expression  {
+        $$ = context->addBinaryMathBooleanResult(EOpLogicalOr, $1, $4, @2);
     }
     ;
 
 conditional_expression
     : logical_or_expression { $$ = $1; }
-    | logical_or_expression QUESTION expression COLON assignment_expression {
-        $$ = context->addTernarySelection($1, $3, $5, @2);
+    | logical_or_expression QUESTION {
+        context->onTernaryConditionParsed($1, @2);
+    } expression COLON {
+        context->onTernaryTrueExpressionParsed($4, @2);
+    } assignment_expression {
+        $$ = context->addTernarySelection($1, $4, $7, @2);
     }
     ;
 
@@ -582,8 +590,10 @@ expression
     : assignment_expression {
         $$ = $1;
     }
-    | expression COMMA assignment_expression {
-        $$ = context->addComma($1, $3, @2);
+    | expression COMMA {
+        context->onCommaLeftHandSideParsed($1);
+    } assignment_expression {
+        $$ = context->addComma($1, $4, @2);
     }
     ;
 
@@ -655,9 +665,9 @@ function_header_with_parameters
     : function_header parameter_declaration {
         // Add the parameter
         $$ = $1;
-        if ($2.type->getBasicType() != EbtVoid)
+        if ($2.type.getBasicType() != EbtVoid)
         {
-            $1->addParameter($2.createVariable(&context->symbolTable));
+            context->addParameter($1, &$2);
         }
         else
         {
@@ -669,7 +679,7 @@ function_header_with_parameters
         $$ = $1;
         // Only first parameter of one-parameter functions can be void
         // The check for named parameters not being void is done in parameter_declarator
-        if ($3.type->getBasicType() == EbtVoid)
+        if ($3.type.getBasicType() == EbtVoid)
         {
             // This parameter > first is void
             context->error(@2, "cannot be a parameter type except for '(void)'", "void");
@@ -682,7 +692,7 @@ function_header_with_parameters
                 // (void, non_void) parameters.
                 context->error(@2, "cannot be a parameter type except for '(void)'", "void");
             }
-            $1->addParameter($3.createVariable(&context->symbolTable));
+            context->addParameter($1, &$3);
         }
     }
     ;
@@ -702,33 +712,32 @@ parameter_declarator
         $$ = context->parseParameterDeclarator($1, ImmutableString($2.string), @2);
     }
     | type_specifier identifier array_specifier {
-        $$ = context->parseParameterArrayDeclarator(ImmutableString($2.string), @2, *($3), @3, &$1);
+        $$ = context->parseParameterArrayDeclarator($1, ImmutableString($2.string), @2, $3, @3);
     }
     ;
 
 parameter_declaration
     : type_qualifier parameter_declarator {
         $$ = $2;
-        context->checkIsParameterQualifierValid(@2, *$1, $2.type);
+        context->parseParameterQualifier(@2, *$1, $$.type);
     }
     | parameter_declarator {
         $$ = $1;
-        $$.type->setQualifier(EvqParamIn);
+        $$.type.setQualifier(EvqParamIn);
     }
     | type_qualifier parameter_type_specifier {
-        $$ = $2;
-        context->checkIsParameterQualifierValid(@2, *$1, $2.type);
+        $$ = context->parseParameterDeclarator($2, kEmptyImmutableString, @2);
+        context->parseParameterQualifier(@2, *$1, $$.type);
     }
     | parameter_type_specifier {
-        $$ = $1;
-        $$.type->setQualifier(EvqParamIn);
+        $$ = context->parseParameterDeclarator($1, kEmptyImmutableString, @1);
+        $$.type.setQualifier(EvqParamIn);
     }
     ;
 
 parameter_type_specifier
     : type_specifier {
-        TParameter param = { 0, new TType($1) };
-        $$ = param;
+        $$ = $1;
     }
     ;
 
@@ -881,8 +890,10 @@ storage_qualifier
         $$ = new TStorageQualifierWrapper(EvqCentroid, @1);
     }
     | PATCH {
-        if (context->getShaderVersion() < 320 &&
-            !context->checkCanUseExtension(@1, TExtension::EXT_tessellation_shader))
+        constexpr std::array<TExtension, 2u> extensions{ { TExtension::OES_tessellation_shader,
+                                                           TExtension::EXT_tessellation_shader } };
+        if (context->getShaderVersion() < 320
+        && !context->checkCanUseOneOfExtensions(@1, extensions))
         {
             context->error(@1, "unsupported storage qualifier", "patch");
         }
@@ -997,6 +1008,9 @@ array_specifier
         ES3_1_OR_NEWER("[]", @2, "arrays of arrays");
         $$ = $1;
         $$->insert($$->begin(), 0u);
+        if (!context->checkIsValidArrayDimension(@2, $$)) {
+            YYABORT;
+        }
     }
     | array_specifier LEFT_BRACKET constant_expression RIGHT_BRACKET {
         ES3_1_OR_NEWER("[]", @2, "arrays of arrays");
@@ -1005,6 +1019,9 @@ array_specifier
         // Make the type an array even if size check failed.
         // This ensures useless error messages regarding a variable's non-arrayness won't follow.
         $$->insert($$->begin(), size);
+        if (!context->checkIsValidArrayDimension(@2, $$)) {
+            YYABORT;
+        }
     }
     ;
 
@@ -1447,6 +1464,8 @@ type_specifier_nonarray
     | TYPE_NAME {
         // This is for user defined type names. The lexical phase looked up the type.
         const TStructure *structure = static_cast<const TStructure*>($1.symbol);
+        // Temporary check until VK and Metal backends support type name like gl_DepthRangeParameters.
+        context->checkIsNotReserved(@1, ImmutableString($1.string));
         $$.initializeStruct(structure, false, @1);
     }
     ;
@@ -1528,7 +1547,7 @@ compound_statement_with_scope
         $$ = new TIntermBlock();
         $$->setLine(@$);
     }
-    | LEFT_BRACE { context->symbolTable.push(); } statement_list { context->symbolTable.pop(); } RIGHT_BRACE {
+    | LEFT_BRACE { context->beginNestedScope(); } statement_list { context->endNestedScope(); } RIGHT_BRACE {
         $3->setLine(@$);
         $$ = $3;
     }
@@ -1536,12 +1555,19 @@ compound_statement_with_scope
 
 statement_no_new_scope
     : compound_statement_no_new_scope { $$ = $1; }
-    | simple_statement                { $$ = $1; }
+    | simple_statement                {
+        context->endStatementWithValue($1);
+        $$ = $1;
+    }
     ;
 
 statement_with_scope
-    : { context->symbolTable.push(); } compound_statement_no_new_scope { context->symbolTable.pop(); $$ = $2; }
-    | { context->symbolTable.push(); } simple_statement                { context->symbolTable.pop(); $$ = $2; }
+    : { context->beginNestedScope(); } compound_statement_no_new_scope { context->endNestedScope(); $$ = $2; }
+    | { context->beginNestedScope(); } simple_statement                {
+        context->endStatementWithValue($2);
+        context->endNestedScope();
+        $$ = $2;
+    }
     ;
 
 compound_statement_no_new_scope
@@ -1569,21 +1595,31 @@ statement_list
 
 expression_statement
     : SEMICOLON  { $$ = context->addEmptyStatement(@$); }
-    | expression SEMICOLON  { $$ = $1; }
+    | expression SEMICOLON  {
+        context->checkIsValidExpressionStatement(@$, $1);
+        $$ = $1;
+    }
     ;
 
 selection_statement
-    : IF LEFT_PAREN expression RIGHT_PAREN selection_rest_statement {
-        $$ = context->addIfElse($3, $5, @1);
+    : IF LEFT_PAREN expression RIGHT_PAREN {
+        context->onIfTrueBlockBegin($3, @1);
+    } selection_rest_statement {
+        $$ = context->addIfElse($3, $6, @1);
     }
     ;
 
 selection_rest_statement
-    : statement_with_scope ELSE statement_with_scope {
+    : statement_with_scope ELSE {
+        context->onIfTrueBlockEnd();
+        context->onIfFalseBlockBegin();
+    } statement_with_scope {
+        context->onIfFalseBlockEnd();
         $$.node1 = $1;
-        $$.node2 = $3;
+        $$.node2 = $4;
     }
     | statement_with_scope {
+        context->onIfTrueBlockEnd();
         $$.node1 = $1;
         $$.node2 = nullptr;
     }
@@ -1592,9 +1628,8 @@ selection_rest_statement
 // Note that we've diverged from the spec grammar here a bit for the sake of simplicity.
 // We're reusing compound_statement_with_scope instead of having separate rules for switch.
 switch_statement
-    : SWITCH LEFT_PAREN expression RIGHT_PAREN { context->incrSwitchNestingLevel(); } compound_statement_with_scope {
+    : SWITCH LEFT_PAREN expression RIGHT_PAREN { context->beginSwitch(@1, $3); } compound_statement_no_new_scope {
         $$ = context->addSwitch($3, $6, @1);
-        context->decrSwitchNestingLevel();
     }
     ;
 
@@ -1618,24 +1653,34 @@ condition
     ;
 
 iteration_statement
-    : WHILE LEFT_PAREN { context->symbolTable.push(); context->incrLoopNestingLevel(); } condition RIGHT_PAREN statement_no_new_scope {
+    : WHILE LEFT_PAREN {
+        context->symbolTable.push(); context->beginLoop(ELoopWhile, @1);
+        context->onLoopConditionBegin(nullptr, @1);
+    } condition {
+        context->onLoopConditionEnd($4, @4);
+    } RIGHT_PAREN statement_no_new_scope {
         context->symbolTable.pop();
-        $$ = context->addLoop(ELoopWhile, 0, $4, 0, $6, @1);
-        context->decrLoopNestingLevel();
+        $$ = context->addLoop(ELoopWhile, 0, $4, 0, $7, @1);
     }
-    | DO { context->incrLoopNestingLevel(); } statement_with_scope WHILE LEFT_PAREN expression RIGHT_PAREN SEMICOLON {
-        $$ = context->addLoop(ELoopDoWhile, 0, $6, 0, $3, @4);
-        context->decrLoopNestingLevel();
+    | DO {
+        context->beginLoop(ELoopDoWhile, @1);
+        context->onDoLoopBegin();
+    } statement_with_scope WHILE LEFT_PAREN {
+        context->onDoLoopConditionBegin();
+    } expression RIGHT_PAREN SEMICOLON {
+        $$ = context->addLoop(ELoopDoWhile, 0, $7, 0, $3, @4);
     }
-    | FOR LEFT_PAREN { context->symbolTable.push(); context->incrLoopNestingLevel(); } for_init_statement for_rest_statement RIGHT_PAREN statement_no_new_scope {
+    | FOR LEFT_PAREN { context->symbolTable.push(); context->beginLoop(ELoopFor, @1); } for_init_statement {
+        context->onLoopConditionBegin($4, @4);
+    } for_rest_statement RIGHT_PAREN statement_no_new_scope {
         context->symbolTable.pop();
-        $$ = context->addLoop(ELoopFor, $4, $5.node1, reinterpret_cast<TIntermTyped*>($5.node2), $7, @1);
-        context->decrLoopNestingLevel();
+        $$ = context->addLoop(ELoopFor, $4, $6.node1, reinterpret_cast<TIntermTyped*>($6.node2), $8, @1);
     }
     ;
 
 for_init_statement
     : expression_statement {
+        context->endStatementWithValue($1);
         $$ = $1;
     }
     | declaration_statement {
@@ -1654,12 +1699,17 @@ conditionopt
 
 for_rest_statement
     : conditionopt SEMICOLON {
+        context->onLoopConditionEnd($1, @1);
+        context->onLoopContinueEnd(nullptr, @1);
         $$.node1 = $1;
         $$.node2 = 0;
     }
-    | conditionopt SEMICOLON expression  {
+    | conditionopt SEMICOLON {
+        context->onLoopConditionEnd($1, @1);
+    } expression {
+        context->onLoopContinueEnd($4, @4);
         $$.node1 = $1;
-        $$.node2 = $3;
+        $$.node2 = $4;
     }
     ;
 

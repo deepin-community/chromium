@@ -6,6 +6,8 @@
 
 #include "base/base64.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/environment.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
@@ -128,9 +130,8 @@ class WebRtcVideoQualityBrowserTest : public WebRtcTestBase,
     ASSERT_TRUE(base::Base64Decode(base64_encoded_video, &recorded_video));
     base::File video_file(webm_video_filename,
                           base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-    size_t written =
-        video_file.Write(0, recorded_video.c_str(), recorded_video.length());
-    ASSERT_EQ(recorded_video.length(), written);
+    ASSERT_TRUE(
+        video_file.WriteAndCheck(0, base::as_byte_span(recorded_video)));
   }
 
   // Runs ffmpeg on the captured webm video and writes it to a yuv video file.
@@ -343,7 +344,7 @@ IN_PROC_BROWSER_TEST_P(WebRtcVideoQualityBrowserTest,
 
 // Flaky on windows and WebRTC's frame_analyzer doesn't build from a Chromium's
 // component build.
-// TODO(crbug.com/1008766): re-enable when flakiness is investigated, diagnosed
+// TODO(crbug.com/40100787): re-enable when flakiness is investigated, diagnosed
 // and resolved.
 #if BUILDFLAG(IS_WIN) || defined(COMPONENT_BUILD)
 #define MAYBE_MANUAL_TestVideoQualityVp9 DISABLED_MANUAL_TestVideoQualityVp9
@@ -370,11 +371,11 @@ IN_PROC_BROWSER_TEST_P(WebRtcVideoQualityBrowserTest,
                        MAYBE_MANUAL_TestVideoQualityH264) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   // Only run test if run-time feature corresponding to |rtc_use_h264| is on.
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kWebRtcH264WithOpenH264FFmpeg)) {
-    LOG(WARNING) << "Run-time feature WebRTC-H264WithOpenH264FFmpeg disabled. "
-        "Skipping WebRtcVideoQualityBrowserTest.MANUAL_TestVideoQualityH264 "
-        "(test \"OK\")";
+  if (!base::FeatureList::IsEnabled(media::kOpenH264SoftwareEncoder)) {
+    LOG(WARNING)
+        << "Run-time feature OpenH264SoftwareEncoder disabled. "
+           "Skipping WebRtcVideoQualityBrowserTest.MANUAL_TestVideoQualityH264 "
+           "(test \"OK\")";
     return;
   }
   TestVideoQuality("H264", true /* prefer_hw_video_codec */);

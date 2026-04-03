@@ -11,9 +11,11 @@
 #include <vector>
 
 #include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/safe_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "base/types/pass_key.h"
 #include "components/performance_manager/public/resource_attribution/cpu_measurement_delegate.h"
 #include "components/performance_manager/public/resource_attribution/memory_measurement_delegate.h"
@@ -100,7 +102,7 @@ class SimulatedCPUMeasurementDelegateFactory final
   // The delegates are owned by `pending_cpu_delegates_` when they're created,
   // then ownership is passed to the caller of TakeDelegate().
   std::map<const performance_manager::ProcessNode*,
-           SimulatedCPUMeasurementDelegate*>
+           raw_ptr<SimulatedCPUMeasurementDelegate, CtnExperimental>>
       simulated_cpu_delegates_;
 
   // CPUMeasurementDelegates that have been created but not passed to the caller
@@ -136,14 +138,17 @@ class SimulatedCPUMeasurementDelegate final : public CPUMeasurementDelegate {
   void SetCPUUsage(SimulatedCPUUsage usage,
                    base::TimeTicks start_time = base::TimeTicks::Now());
 
-  // Sets whether the process will report an error from GetCumulativeCPUUsage().
-  void SetError(bool has_error) { has_error_ = has_error; }
+  // Sets an error to report from GetCumulativeCPUUsage(). If `error` is
+  // nullopt, GetCumulativeCPUUsage() will instead return a value accumulated
+  // by calls to SetCPUUsage().
+  void SetError(std::optional<ProcessCPUUsageError> error) { error_ = error; }
 
   // CPUMeasurementDelegate:
 
   // Returns the simulated CPU usage of the process by summing
-  // `cpu_usage_periods`, or nullopt if SetError(true) was called.
-  std::optional<base::TimeDelta> GetCumulativeCPUUsage() final;
+  // `cpu_usage_periods`, or an error code if SetError() was called.
+  base::expected<base::TimeDelta, ProcessCPUUsageError> GetCumulativeCPUUsage()
+      final;
 
  private:
   struct CPUUsagePeriod {
@@ -159,9 +164,9 @@ class SimulatedCPUMeasurementDelegate final : public CPUMeasurementDelegate {
   // List of periods of varying CPU usage.
   std::vector<CPUUsagePeriod> cpu_usage_periods_;
 
-  // If true, GetCumulativeCPUUsage() will ignore `cpu_usage_periods` and
-  // return nullopt to simulate an error.
-  bool has_error_ = false;
+  // If this is not nullopt, GetCumulativeCPUUsage() will ignore
+  // `cpu_usage_periods` and return it as an error instead.
+  std::optional<ProcessCPUUsageError> error_;
 };
 
 // A factory that manages FakeMemoryMeasurementDelegate instances. Embed an
@@ -196,7 +201,7 @@ class FakeMemoryMeasurementDelegateFactory final
 
  private:
   // The MemorySummary results returned by delegates created by this factory.
-  MemoryMeasurementDelegate::MemorySummaryMap memory_summaries_;
+  MemoryMeasurementDelegate::MemorySummaryMap memory_summaries_{PassKey()};
 
   base::WeakPtrFactory<FakeMemoryMeasurementDelegateFactory> weak_factory_{
       this};

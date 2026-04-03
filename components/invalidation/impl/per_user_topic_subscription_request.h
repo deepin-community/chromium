@@ -6,6 +6,7 @@
 #define COMPONENTS_INVALIDATION_IMPL_PER_USER_TOPIC_SUBSCRIPTION_REQUEST_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -92,10 +93,10 @@ class PerUserTopicSubscriptionRequest {
   // which potentially lead to destroying |this|. Hence, |this| object must
   // assume that it is dead after invoking any of these methods and must not
   // run any more code.
-  void OnURLFetchComplete(std::unique_ptr<std::string> response_body);
+  void OnURLFetchComplete(std::optional<std::string> response_body);
   void OnURLFetchCompleteInternal(int net_error,
                                   int response_code,
-                                  std::unique_ptr<std::string> response_body);
+                                  std::optional<std::string> response_body);
   void OnJsonParse(data_decoder::DataDecoder::ValueOrError result);
 
   // Invokes |request_completed_callback_| with (|status|, |topic_name|). Per
@@ -115,7 +116,7 @@ class PerUserTopicSubscriptionRequest {
   // Note: This callback should only be invoked from
   // RunCompletedCallbackAndMaybeDie(), as invoking it has the potential to
   // destroy this object per this class's contract.
-  // TODO(crbug.com/1054759): find a way to avoid this fragile logic.
+  // TODO(crbug.com/40675891): find a way to avoid this fragile logic.
   CompletedCallback request_completed_callback_;
 
   // Full URL. Used in tests only.

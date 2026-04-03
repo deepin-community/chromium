@@ -7,9 +7,9 @@
 #include "base/base64.h"
 #include "base/memory/ptr_util.h"
 #include "base/rand_util.h"
-#include "chrome/browser/ash/secure_channel/util/histogram_util.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/nearby_connector.mojom.h"
+#include "chromeos/ash/services/secure_channel/util/histogram_util.h"
 
 namespace ash {
 namespace secure_channel {
@@ -100,7 +100,8 @@ void NearbyEndpointFinderImpl::PerformFindEndpoint() {
                             MediumSelection::New(/*bluetooth=*/true,
                                                  /*ble=*/false,
                                                  /*webrtc=*/false,
-                                                 /*wifi_lan=*/false),
+                                                 /*wifi_lan=*/false,
+                                                 /*wifi_direct=*/false),
                             /*fast_advertisement_service_uuid=*/std::nullopt,
                             /*is_out_of_band_connection=*/true),
       endpoint_discovery_listener_receiver_.BindNewPipeAndPassRemote(),

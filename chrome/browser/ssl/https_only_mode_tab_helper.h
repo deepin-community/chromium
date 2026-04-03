@@ -5,7 +5,6 @@
 #ifndef CHROME_BROWSER_SSL_HTTPS_ONLY_MODE_TAB_HELPER_H_
 #define CHROME_BROWSER_SSL_HTTPS_ONLY_MODE_TAB_HELPER_H_
 
-#include "base/containers/contains.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 
@@ -27,6 +26,8 @@ class HttpsOnlyModeTabHelper
   // content::WebContentsObserver:
   void DidStartNavigation(
       content::NavigationHandle* navigation_handle) override;
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
 
   // HTTPS-Only Mode metadata getters and setters:
   void set_is_navigation_upgraded(bool upgraded) {
@@ -44,21 +45,21 @@ class HttpsOnlyModeTabHelper
   }
   GURL fallback_url() const { return fallback_url_; }
 
-  bool has_failed_upgrade(const GURL& url) {
-    return base::Contains(failed_upgrade_urls_, url);
+  bool has_failed_upgrade(const GURL& url) const {
+    return failed_upgrade_urls_.contains(url);
   }
   void add_failed_upgrade(const GURL& url) { failed_upgrade_urls_.insert(url); }
 
   void set_is_exempt_error(bool is_exempt_error) {
     is_exempt_error_ = is_exempt_error;
   }
-  bool is_exempt_error() { return is_exempt_error_; }
+  bool is_exempt_error() const { return is_exempt_error_; }
 
  private:
   explicit HttpsOnlyModeTabHelper(content::WebContents* web_contents);
   friend class content::WebContentsUserData<HttpsOnlyModeTabHelper>;
 
-  // TODO(crbug.com/1218526): Track upgrade status per-navigation rather than
+  // TODO(crbug.com/40771668): Track upgrade status per-navigation rather than
   // per-WebContents, in case multiple navigations occur in the WebContents and
   // the metadata is not cleared. This may be tricky however as the Interceptor
   // and the Throttle have slightly different views of the navigation -- the

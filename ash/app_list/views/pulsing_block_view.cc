@@ -18,11 +18,13 @@
 #include "ui/compositor/layer_animation_element.h"
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/animation/animation_builder.h"
 #include "ui/views/animation/animation_sequence_block.h"
 #include "ui/views/background.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/metadata/view_factory.h"
 
 namespace {
 
@@ -92,6 +94,14 @@ PulsingBlockView::PulsingBlockView(const gfx::Size& size,
 PulsingBlockView::~PulsingBlockView() {}
 
 void PulsingBlockView::OnStartDelayTimer() {
+  // Restart the timer to schedule the animation if animations are disabled.
+  // NOTE: `ScreenRotationAnimator` can set animations to ZERO_DURATION.
+  if (gfx::ScopedAnimationDurationScaleMode::is_zero()) {
+    start_delay_timer_.Start(FROM_HERE, base::Seconds(1), this,
+                             &PulsingBlockView::OnStartDelayTimer);
+    return;
+  }
+
   background_color_view_->SetPaintToLayer();
   background_color_view_->layer()->SetFillsBoundsOpaquely(false);
 

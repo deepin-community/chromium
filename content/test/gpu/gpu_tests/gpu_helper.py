@@ -2,30 +2,52 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import enum
+import functools
 import os
 import re
-import sys
-from typing import Dict, FrozenSet, List, Match, Optional, Tuple, Union
-import unittest.mock as mock
+from unittest import mock
 
 from telemetry.internal.platform import gpu_info as tgi
 
-# This set must be the union of the driver tags used in WebGL and WebGL2
-# expectations files.
+from gpu_tests import constants
+from gpu_tests.util import host_information
+
+# These sets must be the union of the driver tags used in GPU test
+# expectation files.
 # Examples:
 #   intel_lt_25.20.100.6577
 #   mesa_ge_20.1
-EXPECTATIONS_DRIVER_TAGS = frozenset([
+_MESA_DRIVER_TAGS = frozenset([
     'mesa_lt_19.1',
     'mesa_ge_21.0',
+    'mesa_ge_23.2',
+    'mesa_ge_24.2',
+])
+# Most Android devices do not report a driver version, but some do such as
+# Android Desktop devices.
+_ANDROID_DRIVER_TAGS = frozenset([]) | _MESA_DRIVER_TAGS
+_CROS_DRIVER_TAGS = frozenset([]) | _MESA_DRIVER_TAGS
+_LINUX_DRIVER_TAGS = frozenset([
+    'nvidia_ge_535.183.01',
+    'nvidia_lt_535.183.01',
+]) | _MESA_DRIVER_TAGS
+_WINDOWS_DRIVER_TAGS = frozenset([
     'nvidia_ge_31.0.15.4601',
     'nvidia_lt_31.0.15.4601',
+    'nvidia_ge_32.0.15.8180',
+    'nvidia_lt_32.0.15.8180',
 ])
+_DRIVER_TAGS_BY_OS = {
+    'android': _ANDROID_DRIVER_TAGS,
+    'linux': _LINUX_DRIVER_TAGS,
+    'chromeos': _CROS_DRIVER_TAGS,
+    # Mac does not report driver versions.
+    'win': _WINDOWS_DRIVER_TAGS
+}
 
 # Driver tag format: VENDOR_OPERATION_VERSION
 DRIVER_TAG_MATCHER = re.compile(
-    r'^([a-z\d]+)_(eq|ne|ge|gt|le|lt)_([a-z\d\.]+)$')
+    r'^(amd|intel|mesa|nvidia)_(eq|ne|ge|gt|le|lt)_([a-z\d\.]+)$')
 
 REMOTE_BROWSER_TYPES = [
     'android-chromium',
@@ -48,20 +70,12 @@ ENTIRE_TAG_REPLACEMENTS = {
 }
 
 
-class GpuVendors(enum.IntEnum):
-  AMD = 0x1002
-  INTEL = 0x8086
-  NVIDIA = 0x10DE
-  # ACPI ID as opposed to a PCI-E ID like other vendors.
-  QUALCOMM = 0x4D4F4351
-
-
 INTEL_DEVICE_ID_MASK = 0xFF00
 INTEL_GEN_9 = {0x1900, 0x3100, 0x3E00, 0x5900, 0x5A00, 0x9B00}
 INTEL_GEN_12 = {0x4C00, 0x9A00, 0x4900, 0x4600, 0x4F00, 0x5600, 0xA700, 0x7D00}
 
 
-def _ParseANGLEGpuVendorString(device_string: str) -> Optional[str]:
+def _ParseANGLEGpuVendorString(device_string: str) -> str | None:
   if not device_string:
     return None
   # ANGLE's device (renderer) string is of the form:
@@ -73,7 +87,7 @@ def _ParseANGLEGpuVendorString(device_string: str) -> Optional[str]:
   return None
 
 
-def GetANGLEGpuDeviceId(device_string: str) -> Optional[str]:
+def GetANGLEGpuDeviceId(device_string: str) -> str | None:
   if not device_string:
     return None
   # ANGLE's device (renderer) string is of the form:
@@ -85,7 +99,7 @@ def GetANGLEGpuDeviceId(device_string: str) -> Optional[str]:
   return None
 
 
-def GetGpuVendorString(gpu_info: Optional[tgi.GPUInfo], index: int) -> str:
+def GetGpuVendorString(gpu_info: tgi.GPUInfo | None, index: int) -> str:
   if gpu_info:
     primary_gpu = gpu_info.devices[index]
     if primary_gpu:
@@ -94,7 +108,7 @@ def GetGpuVendorString(gpu_info: Optional[tgi.GPUInfo], index: int) -> str:
           primary_gpu.device_string)
       vendor_id = primary_gpu.vendor_id
       try:
-        vendor_id = GpuVendors(vendor_id)
+        vendor_id = constants.GpuVendor(vendor_id)
         return vendor_id.name.lower()
       except ValueError:
         # Hit if vendor_id is not a known vendor.
@@ -106,8 +120,7 @@ def GetGpuVendorString(gpu_info: Optional[tgi.GPUInfo], index: int) -> str:
   return 'unknown_gpu'
 
 
-def GetGpuDeviceId(gpu_info: Optional[tgi.GPUInfo],
-                   index: int) -> Union[int, str]:
+def GetGpuDeviceId(gpu_info: tgi.GPUInfo | None, index: int) -> int | str:
   if gpu_info:
     primary_gpu = gpu_info.devices[index]
     if primary_gpu:
@@ -118,7 +131,7 @@ def GetGpuDeviceId(gpu_info: Optional[tgi.GPUInfo],
 
 
 def IsIntel(vendor_id: int) -> bool:
-  return vendor_id == GpuVendors.INTEL
+  return vendor_id == constants.GpuVendor.INTEL
 
 
 # Intel GPU architectures
@@ -130,7 +143,7 @@ def IsIntelGen12(gpu_device_id: int) -> bool:
   return gpu_device_id & INTEL_DEVICE_ID_MASK in INTEL_GEN_12
 
 
-def GetGpuDriverVendor(gpu_info: Optional[tgi.GPUInfo]) -> Optional[str]:
+def GetGpuDriverVendor(gpu_info: tgi.GPUInfo | None) -> str | None:
   if gpu_info:
     primary_gpu = gpu_info.devices[0]
     if primary_gpu:
@@ -138,7 +151,7 @@ def GetGpuDriverVendor(gpu_info: Optional[tgi.GPUInfo]) -> Optional[str]:
   return None
 
 
-def GetGpuDriverVersion(gpu_info: Optional[tgi.GPUInfo]) -> Optional[str]:
+def GetGpuDriverVersion(gpu_info: tgi.GPUInfo | None) -> str | None:
   if gpu_info:
     primary_gpu = gpu_info.devices[0]
     if primary_gpu:
@@ -146,7 +159,7 @@ def GetGpuDriverVersion(gpu_info: Optional[tgi.GPUInfo]) -> Optional[str]:
   return None
 
 
-def GetANGLERenderer(gpu_info: Optional[tgi.GPUInfo]) -> str:
+def GetANGLERenderer(gpu_info: tgi.GPUInfo | None) -> str:
   retval = 'angle-disabled'
   if gpu_info and gpu_info.aux_attributes:
     gl_renderer = gpu_info.aux_attributes.get('gl_renderer')
@@ -169,22 +182,21 @@ def GetANGLERenderer(gpu_info: Optional[tgi.GPUInfo]) -> str:
   return retval
 
 
-def GetCommandDecoder(gpu_info: Optional[tgi.GPUInfo]) -> str:
+def GetCommandDecoder(gpu_info: tgi.GPUInfo | None) -> str:
   if gpu_info and gpu_info.aux_attributes and \
       gpu_info.aux_attributes.get('passthrough_cmd_decoder', False):
     return 'passthrough'
   return 'no_passthrough'
 
 
-def GetSkiaGraphiteStatus(gpu_info: Optional[tgi.GPUInfo]) -> str:
+def GetSkiaGraphiteStatus(gpu_info: tgi.GPUInfo | None) -> str:
   if gpu_info and gpu_info.feature_status and gpu_info.feature_status.get(
       'skia_graphite') == 'enabled_on':
     return 'graphite-enabled'
   return 'graphite-disabled'
 
 
-def GetSkiaRenderer(gpu_info: Optional[tgi.GPUInfo],
-                    extra_browser_args: List[str]) -> str:
+def GetSkiaRenderer(gpu_info: tgi.GPUInfo | None) -> str:
   retval = 'renderer-software'
   if gpu_info:
     gpu_feature_status = gpu_info.feature_status
@@ -192,9 +204,7 @@ def GetSkiaRenderer(gpu_info: Optional[tgi.GPUInfo],
         gpu_feature_status
         and gpu_feature_status.get('gpu_compositing') == 'enabled')
     if skia_renderer_enabled:
-      if HasDawnSkiaRenderer(extra_browser_args):
-        retval = 'renderer-skia-dawn'
-      elif HasVulkanSkiaRenderer(gpu_feature_status):
+      if HasVulkanSkiaRenderer(gpu_feature_status):
         retval = 'renderer-skia-vulkan'
       # The check for GL must come after Vulkan since the 'opengl' feature can
       # be enabled for WebGL and interop even if SkiaRenderer is using Vulkan.
@@ -203,65 +213,49 @@ def GetSkiaRenderer(gpu_info: Optional[tgi.GPUInfo],
   return retval
 
 
-def GetDisplayServer(browser_type: str) -> Optional[str]:
+def GetDisplayServer(browser_type: str) -> str | None:
   # Browser types run on a remote device aren't Linux, but the host running
   # this code uses Linux, so return early to avoid erroneously reporting a
   # display server.
   if browser_type in REMOTE_BROWSER_TYPES:
     return None
-  if sys.platform.startswith('linux'):
+  if host_information.IsLinux():
     if 'WAYLAND_DISPLAY' in os.environ:
       return 'display-server-wayland'
     return 'display-server-x'
   return None
 
 
-def GetOOPCanvasStatus(gpu_info: Optional[tgi.GPUInfo]) -> str:
-  if gpu_info and gpu_info.feature_status and gpu_info.feature_status.get(
-      'canvas_oop_rasterization') == 'enabled_on':
-    return 'oop-c'
-  return 'no-oop-c'
-
-
-def GetAsanStatus(gpu_info: Optional[tgi.GPUInfo]) -> str:
+def GetAsanStatus(gpu_info: tgi.GPUInfo | None) -> str:
   if gpu_info and gpu_info.aux_attributes.get('is_asan', False):
     return 'asan'
   return 'no-asan'
 
 
-def GetTargetCpuStatus(gpu_info: Optional[tgi.GPUInfo]) -> str:
+def GetTargetCpuStatus(gpu_info: tgi.GPUInfo | None) -> str:
   suffix = 'unknown'
   if gpu_info:
     suffix = gpu_info.aux_attributes.get('target_cpu_bits', 'unknown')
-  return 'target-cpu-%s' % suffix
+  return f'target-cpu-{suffix}'
 
 
-def GetClangCoverage(gpu_info: Optional[tgi.GPUInfo]) -> str:
+def GetClangCoverage(gpu_info: tgi.GPUInfo | None) -> str:
   if gpu_info and gpu_info.aux_attributes.get('is_clang_coverage', False):
     return 'clang-coverage'
   return 'no-clang-coverage'
 
 
-# TODO(rivr): Use GPU feature status for Dawn instead of command line.
-def HasDawnSkiaRenderer(extra_browser_args: List[str]) -> bool:
-  if extra_browser_args:
-    for arg in extra_browser_args:
-      if arg.startswith('--enable-features') and 'SkiaDawn' in arg:
-        return True
-  return False
-
-
-def HasGlSkiaRenderer(gpu_feature_status: Dict[str, str]) -> bool:
+def HasGlSkiaRenderer(gpu_feature_status: dict[str, str]) -> bool:
   return (bool(gpu_feature_status)
           and gpu_feature_status.get('opengl') == 'enabled_on')
 
 
-def HasVulkanSkiaRenderer(gpu_feature_status: Dict[str, str]) -> bool:
+def HasVulkanSkiaRenderer(gpu_feature_status: dict[str, str]) -> bool:
   return (bool(gpu_feature_status)
           and gpu_feature_status.get('vulkan') == 'enabled_on')
 
 
-def ReplaceTags(tags: List[str]) -> List[str]:
+def ReplaceTags(tags: list[str]) -> list[str]:
   """Replaces certain strings in tags to make them consistent across platforms.
 
   Args:
@@ -313,12 +307,12 @@ def GetMockArgs(webgl_version: str = '1.0.0') -> mock.MagicMock:
   args.expected_vendor_id = 0
   args.expected_device_id = 0
   args.browser_options = []
+  args.use_worker = 'none'
   return args
 
 
-def MatchDriverTag(tag: str) -> Match[str]:
+def MatchDriverTag(tag: str) -> re.Match[str] | None:
   return DRIVER_TAG_MATCHER.match(tag.lower())
-
 
 # No good way to reduce the number of local variables, particularly since each
 # argument is also considered a local. Also no good way to reduce the number of
@@ -327,9 +321,10 @@ def MatchDriverTag(tag: str) -> Match[str]:
 def EvaluateVersionComparison(version: str,
                               operation: str,
                               ref_version: str,
-                              os_name: Optional[str] = None,
-                              driver_vendor: Optional[str] = None) -> bool:
-  def parse_version(ver: str) -> Union[Tuple[int, str], Tuple[None, None]]:
+                              os_name: str | None = None,
+                              driver_vendor: str | None = None) -> bool:
+
+  def parse_version(ver: str) -> tuple[int, str] | tuple[None, None]:
     if ver.isdigit():
       return int(ver), ''
     for i, digit in enumerate(ver):
@@ -365,7 +360,7 @@ def EvaluateVersionComparison(version: str,
     if num1 is None:
       continue
 
-    # This comes from EXPECTATIONS_DRIVER_TAGS, so we should never fail to
+    # This comes from _DRIVER_TAGS_BY_OS, so we should never fail to
     # parse a version.
     assert num2 is not None
 
@@ -400,11 +395,13 @@ def IsDriverTagDuplicated(driver_tag1: str, driver_tag2: str) -> bool:
     return True
 
   match = MatchDriverTag(driver_tag1)
+  assert match is not None
   vendor1 = match.group(1)
   operation1 = match.group(2)
   version1 = match.group(3)
 
   match = MatchDriverTag(driver_tag2)
+  assert match is not None
   vendor2 = match.group(1)
   operation2 = match.group(2)
   version2 = match.group(3)
@@ -447,5 +444,13 @@ def IsDriverTagDuplicated(driver_tag1: str, driver_tag2: str) -> bool:
 # pylint: enable=too-many-return-statements,too-many-branches
 
 
-def ExpectationsDriverTags() -> FrozenSet[str]:
-  return EXPECTATIONS_DRIVER_TAGS
+def GetExpectationFileDriverTagsForOs(target_os: str) -> frozenset[str]:
+  return _DRIVER_TAGS_BY_OS.get(target_os, frozenset())
+
+
+@functools.cache
+def GetAllExpectationFileDriverTags() -> frozenset[str]:
+  all_tags = frozenset()
+  for driver_tags in _DRIVER_TAGS_BY_OS.values():
+    all_tags |= driver_tags
+  return all_tags

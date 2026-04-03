@@ -40,6 +40,7 @@ namespace skeleton {
 // targets to co-exist in the same translation unit. Required when using dynamic
 // dispatch, otherwise optional.
 namespace HWY_NAMESPACE {
+namespace {
 
 // Highway ops reside here; ADL does not find templates nor builtins.
 namespace hn = hwy::HWY_NAMESPACE;
@@ -87,6 +88,7 @@ void FloorLog2(const uint8_t* HWY_RESTRICT values, size_t count,
   }
 }
 
+}  // namespace
 // NOLINTNEXTLINE(google-readability-namespace-comments)
 }  // namespace HWY_NAMESPACE
 }  // namespace skeleton
@@ -113,6 +115,13 @@ HWY_DLLEXPORT void CallFloorLog2(const uint8_t* HWY_RESTRICT in,
   // appropriate one from) the per-target implementations there.
   // For static dispatch, use HWY_STATIC_DISPATCH.
   return HWY_DYNAMIC_DISPATCH(FloorLog2)(in, count, out);
+}
+
+HWY_DLLEXPORT void SavedCallFloorLog2(const uint8_t* HWY_RESTRICT in,
+                                      const size_t count,
+                                      uint8_t* HWY_RESTRICT out) {
+  const auto ptr = HWY_DYNAMIC_POINTER(FloorLog2);
+  return ptr(in, count, out);
 }
 
 // Optional: anything to compile only once, e.g. non-SIMD implementations of

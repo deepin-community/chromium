@@ -20,11 +20,18 @@ limitations under the License.
 #include <set>
 #include <utility>
 
-#include "xla/service/backend.h"
+#include "absl/log/check.h"
+#include "absl/status/statusor.h"
+#include "absl/synchronization/mutex.h"
+#include "xla/client/compile_only_client.h"
+#include "xla/client/local_client.h"
+#include "xla/service/compile_only_service.h"
+#include "xla/service/local_service.h"
 #include "xla/service/platform_util.h"
-#include "xla/status_macros.h"
-#include "xla/util.h"
-#include "tsl/platform/logging.h"
+#include "xla/service/service.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/tsl/platform/logging.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -83,7 +90,7 @@ const std::optional<std::set<int>>& LocalClientOptions::allowed_devices()
 ClientLibrary::ClientLibrary() = default;
 ClientLibrary::~ClientLibrary() = default;
 
-/* static */ StatusOr<LocalClient*> ClientLibrary::GetOrCreateLocalClient(
+/* static */ absl::StatusOr<LocalClient*> ClientLibrary::GetOrCreateLocalClient(
     se::Platform* platform, const std::optional<std::set<int>>& device_set) {
   LocalClientOptions default_options;
   default_options.set_platform(platform);
@@ -91,12 +98,12 @@ ClientLibrary::~ClientLibrary() = default;
   return GetOrCreateLocalClient(default_options);
 }
 
-/* static */ StatusOr<LocalClient*> ClientLibrary::GetOrCreateLocalClient(
+/* static */ absl::StatusOr<LocalClient*> ClientLibrary::GetOrCreateLocalClient(
     const LocalClientOptions& options) {
   se::Platform* platform = options.platform();
   int replica_count = options.number_of_replicas();
   ClientLibrary& client_library = Singleton();
-  absl::MutexLock lock(&client_library.service_mutex_);
+  absl::MutexLock lock(client_library.service_mutex_);
 
   if (platform == nullptr) {
     TF_ASSIGN_OR_RETURN(platform, PlatformUtil::GetDefaultPlatform());
@@ -126,23 +133,23 @@ ClientLibrary::~ClientLibrary() = default;
 
 /* static */ LocalClient* ClientLibrary::LocalClientOrDie() {
   auto client_status = GetOrCreateLocalClient();
-  TF_CHECK_OK(client_status.status());
+  CHECK_OK(client_status.status());
   return client_status.value();
 }
 
 /* static */ LocalService* ClientLibrary::GetXlaService(
     se::Platform* platform) {
   ClientLibrary& client_library = Singleton();
-  absl::MutexLock lock(&client_library.service_mutex_);
+  absl::MutexLock lock(client_library.service_mutex_);
   auto it = client_library.local_instances_.find(platform->id());
   CHECK(it != client_library.local_instances_.end());
   return it->second->service.get();
 }
 
-/* static */ StatusOr<CompileOnlyClient*>
+/* static */ absl::StatusOr<CompileOnlyClient*>
 ClientLibrary::GetOrCreateCompileOnlyClient(se::Platform* platform) {
   ClientLibrary& client_library = Singleton();
-  absl::MutexLock lock(&client_library.service_mutex_);
+  absl::MutexLock lock(client_library.service_mutex_);
 
   if (platform == nullptr) {
     TF_ASSIGN_OR_RETURN(platform, PlatformUtil::GetDefaultPlatform());
@@ -167,7 +174,7 @@ ClientLibrary::GetOrCreateCompileOnlyClient(se::Platform* platform) {
 
 /* static */ void ClientLibrary::DestroyLocalInstances() {
   ClientLibrary& client_library = Singleton();
-  absl::MutexLock lock(&client_library.service_mutex_);
+  absl::MutexLock lock(client_library.service_mutex_);
 
   client_library.local_instances_.clear();
   client_library.compile_only_instances_.clear();

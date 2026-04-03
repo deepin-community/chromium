@@ -4,6 +4,7 @@
 
 #include "components/performance_manager/execution_context_priority/boosting_vote_aggregator.h"
 
+#include "base/notreached.h"
 #include "components/performance_manager/public/execution_context/execution_context.h"
 #include "components/performance_manager/test_support/voting.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -28,6 +29,7 @@ class DummyExecutionContext : public ExecutionContext {
     return blink::ExecutionContextToken();
   }
   Graph* GetGraph() const override { return nullptr; }
+  NodeState GetNodeState() const override { NOTREACHED(); }
   const GURL& GetUrl() const override { return url_; }
   const ProcessNode* GetProcessNode() const override { return nullptr; }
   const PriorityAndReason& GetPriorityAndReason() const override {
@@ -43,17 +45,19 @@ class DummyExecutionContext : public ExecutionContext {
 
 static const char kReasonBoost[] = "boosted!";
 
-static const Vote kLowPriorityVote0(base::TaskPriority::LOWEST, "low reason 0");
-static const Vote kLowPriorityVote1(base::TaskPriority::LOWEST, "low reason 1");
+static const Vote kLowPriorityVote0(base::Process::Priority::kMinValue,
+                                    "low reason 0");
+static const Vote kLowPriorityVote1(base::Process::Priority::kMinValue,
+                                    "low reason 1");
 
-static const Vote kMediumPriorityVote0(base::TaskPriority::USER_VISIBLE,
+static const Vote kMediumPriorityVote0(base::Process::Priority::kUserVisible,
                                        "medium reason 0");
-static const Vote kMediumPriorityVote1(base::TaskPriority::USER_VISIBLE,
+static const Vote kMediumPriorityVote1(base::Process::Priority::kUserVisible,
                                        "medium reason 1");
 
-static const Vote kHighPriorityVote0(base::TaskPriority::HIGHEST,
+static const Vote kHighPriorityVote0(base::Process::Priority::kMaxValue,
                                      "high reason 0");
-static const Vote kHighPriorityVote1(base::TaskPriority::HIGHEST,
+static const Vote kHighPriorityVote1(base::Process::Priority::kMaxValue,
                                      "high reason 1");
 
 class TestBoostingVoteAggregator : public BoostingVoteAggregator {

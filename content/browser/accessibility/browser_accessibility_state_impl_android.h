@@ -5,6 +5,7 @@
 #ifndef CONTENT_BROWSER_ACCESSIBILITY_BROWSER_ACCESSIBILITY_STATE_IMPL_ANDROID_H_
 #define CONTENT_BROWSER_ACCESSIBILITY_BROWSER_ACCESSIBILITY_STATE_IMPL_ANDROID_H_
 
+#include "base/scoped_observation.h"
 #include "content/browser/accessibility/browser_accessibility_state_impl.h"
 #include "ui/accessibility/android/accessibility_state.h"
 
@@ -12,27 +13,35 @@ namespace content {
 
 class BrowserAccessibilityStateImplAndroid
     : public BrowserAccessibilityStateImpl,
-      public ui::AccessibilityState::AccessibilityStateDelegate {
+      public ui::AccessibilityState::AccessibilityStateObserver {
  public:
   BrowserAccessibilityStateImplAndroid();
   ~BrowserAccessibilityStateImplAndroid() override;
 
-  // ui::AccessibilityState::AccessibilityStateDelegate overrides
+  // ui::AccessibilityState::AccessibilityStateObserver:
   void OnAnimatorDurationScaleChanged() override;
-  void OnDisplayInversionEnabledChanged(bool enabled) override;
-  void OnContrastLevelChanged(bool highContrastEnabled) override;
   void RecordAccessibilityServiceInfoHistograms() override;
 
+  // BrowserAccessibilityStateImpl implementation.
+  void RefreshAssistiveTech() override;
+
  protected:
-  void UpdateHistogramsOnOtherThread() override;
-  void UpdateUniqueUserHistograms() override;
   void RecordAccessibilityServiceStatsHistogram(int event_type_mask,
                                                 int feedback_type_mask,
                                                 int flags_mask,
                                                 int capabilities_mask,
                                                 std::string histogram);
+
+ private:
+  base::ScopedObservation<ui::AccessibilityState,
+                          ui::AccessibilityState::AccessibilityStateObserver>
+      accessibility_state_observation_{this};
 };
 
+// This free function makes testing a lot easier.
+// It should return true if the service_hash belongs to an assistive tech
+// service.
+CONTENT_EXPORT bool RecordAssistiveTechHistogram(uint32_t service_hash);
 }  // namespace content
 
 #endif  // CONTENT_BROWSER_ACCESSIBILITY_BROWSER_ACCESSIBILITY_STATE_IMPL_ANDROID_H_

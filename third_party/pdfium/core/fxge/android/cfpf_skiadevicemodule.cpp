@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "core/fxge/android/cfpf_skiafontmgr.h"
+#include "core/fxge/cfx_gemodule.h"
 
 namespace {
 
@@ -17,8 +18,9 @@ CFPF_SkiaDeviceModule* gs_pPFModule = nullptr;
 }  // namespace
 
 CFPF_SkiaDeviceModule* CFPF_GetSkiaDeviceModule() {
-  if (!gs_pPFModule)
+  if (!gs_pPFModule) {
     gs_pPFModule = new CFPF_SkiaDeviceModule;
+  }
   return gs_pPFModule;
 }
 
@@ -32,11 +34,9 @@ void CFPF_SkiaDeviceModule::Destroy() {
 }
 
 CFPF_SkiaFontMgr* CFPF_SkiaDeviceModule::GetFontMgr() {
-  if (!m_pFontMgr) {
-    auto pNewMgr = std::make_unique<CFPF_SkiaFontMgr>();
-    if (!pNewMgr->InitFTLibrary())
-      return nullptr;
-    m_pFontMgr = std::move(pNewMgr);
+  if (!font_mgr_) {
+    font_mgr_ =
+        std::make_unique<CFPF_SkiaFontMgr>(CFX_GEModule::Get()->GetFontMgr());
   }
-  return m_pFontMgr.get();
+  return font_mgr_.get();
 }

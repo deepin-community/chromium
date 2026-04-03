@@ -6,12 +6,18 @@
 
 #include <Security/Security.h>
 
+#include <algorithm>
+#include <atomic>
+#include <map>
+#include <string_view>
+#include <vector>
+
 #include "base/apple/foundation_util.h"
 #include "base/apple/osstatus_logging.h"
-#include "base/atomicops.h"
+#include "base/apple/scoped_cftyperef.h"
 #include "base/callback_list.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -20,11 +26,12 @@
 #include "base/strings/strcat.h"
 #include "base/synchronization/lock.h"
 #include "base/timer/elapsed_timer.h"
-#include "crypto/mac_security_services_lock.h"
+#include "crypto/apple/security_framework_lock.h"
+#include "crypto/hash.h"
 #include "net/base/features.h"
 #include "net/base/hash_value.h"
 #include "net/base/network_notification_thread_mac.h"
-#include "net/cert/internal/trust_store_features.h"
+#include "net/cert/internal/platform_trust_store.h"
 #include "net/cert/test_keychain_search_list_mac.h"
 #include "net/cert/x509_util.h"
 #include "net/cert/x509_util_apple.h"
@@ -56,13 +63,39 @@ enum class TrustStatus {
   DISTRUSTED
 };
 
+bssl::CertificateTrust TrustStatusToCertificateTrust(TrustStatus trust_status) {
+  switch (trust_status) {
+    case TrustStatus::TRUSTED: {
+      // Mac trust settings don't distinguish between trusted anchors and
+      // trusted leafs, return a trust record valid for both, which will
+      // depend on the context the certificate is encountered in.
+      bssl::CertificateTrust trust =
+          bssl::CertificateTrust::ForTrustAnchorOrLeaf()
+              .WithEnforceAnchorExpiry()
+              .WithEnforceAnchorConstraints()
+              .WithRequireAnchorBasicConstraints();
+      return trust;
+    }
+    case TrustStatus::DISTRUSTED:
+      return bssl::CertificateTrust::ForDistrusted();
+    case TrustStatus::UNSPECIFIED:
+      return bssl::CertificateTrust::ForUnspecified();
+    case TrustStatus::UNKNOWN:
+      // UNKNOWN is an implementation detail of TrustImpl and should never be
+      // returned.
+      NOTREACHED();
+  }
+
+  return bssl::CertificateTrust::ForUnspecified();
+}
+
 // Returns trust status of usage constraints dictionary |trust_dict| for a
 // certificate that |is_self_issued|.
 TrustStatus IsTrustDictionaryTrustedForPolicy(
     CFDictionaryRef trust_dict,
     bool is_self_issued,
     const CFStringRef target_policy_oid) {
-  crypto::GetMacSecurityServicesLock().AssertAcquired();
+  crypto::apple::GetSecurityFrameworkLock().AssertAcquired();
 
   // An empty trust dict should be interpreted as
   // kSecTrustSettingsResultTrustRoot. This is handled by falling through all
@@ -180,7 +213,7 @@ TrustStatus IsSecCertificateTrustedForPolicyInDomain(
     const bool is_self_issued,
     const CFStringRef policy_oid,
     SecTrustSettingsDomain trust_domain) {
-  crypto::GetMacSecurityServicesLock().AssertAcquired();
+  crypto::apple::GetSecurityFrameworkLock().AssertAcquired();
 
   base::apple::ScopedCFTypeRef<CFArrayRef> trust_settings;
   OSStatus err = SecTrustSettingsCopyTrustSettings(
@@ -228,7 +261,7 @@ TrustStatus IsCertificateTrustedForPolicyInDomain(
 TrustStatus IsCertificateTrustedForPolicy(const bssl::ParsedCertificate* cert,
                                           SecCertificateRef cert_handle,
                                           const CFStringRef policy_oid) {
-  crypto::GetMacSecurityServicesLock().AssertAcquired();
+  crypto::apple::GetSecurityFrameworkLock().AssertAcquired();
 
   const bool is_self_issued =
       cert->normalized_subject() == cert->normalized_issuer();
@@ -260,17 +293,6 @@ TrustStatus IsCertificateTrustedForPolicy(const bssl::ParsedCertificate* cert,
   return TrustStatus::UNSPECIFIED;
 }
 
-TrustStatus IsCertificateTrustedForPolicy(const bssl::ParsedCertificate* cert,
-                                          const CFStringRef policy_oid) {
-  base::apple::ScopedCFTypeRef<SecCertificateRef> cert_handle =
-      x509_util::CreateSecCertificateFromBytes(cert->der_cert());
-
-  if (!cert_handle)
-    return TrustStatus::UNSPECIFIED;
-
-  return IsCertificateTrustedForPolicy(cert, cert_handle.get(), policy_oid);
-}
-
 // Returns true if |cert| would never be a valid intermediate. (A return
 // value of false does not imply that it is valid.) This is an optimization
 // to avoid using memory for caching certs that would never lead to a valid
@@ -287,10 +309,10 @@ bool IsNotAcceptableIntermediate(const bssl::ParsedCertificate* cert,
   // actually care about.
   if (cert->has_extended_key_usage() &&
       CFEqual(policy_oid, kSecPolicyAppleSSL) &&
-      !base::Contains(cert->extended_key_usage(),
-                      bssl::der::Input(bssl::kAnyEKU)) &&
-      !base::Contains(cert->extended_key_usage(),
-                      bssl::der::Input(bssl::kServerAuth))) {
+      !std::ranges::contains(cert->extended_key_usage(),
+                             bssl::der::Input(bssl::kAnyEKU)) &&
+      !std::ranges::contains(cert->extended_key_usage(),
+                             bssl::der::Input(bssl::kServerAuth))) {
     return true;
   }
 
@@ -325,7 +347,7 @@ class TrustDomainCacheFullCerts {
     base::apple::ScopedCFTypeRef<CFArrayRef> cert_array;
     OSStatus rv;
     {
-      base::AutoLock lock(crypto::GetMacSecurityServicesLock());
+      base::AutoLock lock(crypto::apple::GetSecurityFrameworkLock());
       rv = SecTrustSettingsCopyCertificates(domain_,
                                             cert_array.InitializeInto());
     }
@@ -347,9 +369,8 @@ class TrustDomainCacheFullCerts {
         LOG(ERROR) << "SecCertificateCopyData error";
         continue;
       }
-      auto buffer = x509_util::CreateCryptoBuffer(base::make_span(
-          CFDataGetBytePtr(der_data.get()),
-          base::checked_cast<size_t>(CFDataGetLength(der_data.get()))));
+      auto buffer = x509_util::CreateCryptoBuffer(
+          base::apple::CFDataToSpan(der_data.get()));
       bssl::CertErrors errors;
       bssl::ParseCertificateOptions options;
       options.allow_invalid_serial_numbers = true;
@@ -383,7 +404,7 @@ class TrustDomainCacheFullCerts {
       return cache_iter->second.trust_status;
     }
 
-    base::AutoLock lock(crypto::GetMacSecurityServicesLock());
+    base::AutoLock lock(crypto::apple::GetSecurityFrameworkLock());
 
     // Cert has trust settings but trust has not been calculated yet.
     // Calculate it now, insert into cache, and return.
@@ -400,11 +421,13 @@ class TrustDomainCacheFullCerts {
 
   // Returns a bssl::CertIssuerSource containing all the certificates that are
   // present in |domain_|.
-  bssl::CertIssuerSource& cert_issuer_source() { return cert_issuer_source_; }
+  bssl::CertIssuerSourceStatic& cert_issuer_source() {
+    return cert_issuer_source_;
+  }
 
  private:
   void HistogramTrustDomainCertCount(size_t count) const {
-    base::StringPiece domain_name;
+    std::string_view domain_name;
     switch (domain_) {
       case kSecTrustSettingsDomainUser:
         domain_name = "User";
@@ -414,7 +437,6 @@ class TrustDomainCacheFullCerts {
         break;
       case kSecTrustSettingsDomainSystem:
         NOTREACHED();
-        break;
     }
     base::UmaHistogramCounts1000(
         base::StrCat(
@@ -427,12 +449,6 @@ class TrustDomainCacheFullCerts {
   base::flat_map<SHA256HashValue, TrustStatusDetails> trust_status_cache_;
   bssl::CertIssuerSourceStatic cert_issuer_source_;
 };
-
-SHA256HashValue CalculateFingerprint256(const bssl::der::Input& buffer) {
-  SHA256HashValue sha256;
-  SHA256(buffer.data(), buffer.size(), sha256.data);
-  return sha256;
-}
 
 // Watches macOS keychain for |event_mask| notifications, and notifies any
 // registered callbacks. This is necessary as the keychain callback API is
@@ -521,7 +537,7 @@ class KeychainObserver {
 
   // Returns the current iteration count, which is incremented every time
   // keychain trust settings change. This may be called from any thread.
-  int64_t Iteration() const { return base::subtle::Acquire_Load(&iteration_); }
+  int64_t Iteration() const { return iteration_.load(std::memory_order_acquire); }
 
  private:
   void RegisterCallbackOnNotificationThread() {
@@ -531,12 +547,12 @@ class KeychainObserver {
             &KeychainObserver::Increment, base::Unretained(this)));
   }
 
-  void Increment() { base::subtle::Barrier_AtomicIncrement(&iteration_, 1); }
+  void Increment() { iteration_.fetch_add(1); }
 
   // Only accessed on the notification thread.
   base::CallbackListSubscription subscription_;
 
-  base::subtle::Atomic64 iteration_ = 0;
+  std::atomic<int64_t> iteration_{0};
 };
 
 using KeychainTrustObserver =
@@ -566,10 +582,11 @@ class TrustStoreMac::TrustImpl {
   virtual ~TrustImpl() = default;
 
   virtual TrustStatus IsCertTrusted(const bssl::ParsedCertificate* cert) = 0;
-  virtual bool ImplementsSyncGetIssuersOf() const { return false; }
   virtual void SyncGetIssuersOf(const bssl::ParsedCertificate* cert,
                                 bssl::ParsedCertificateList* issuers) {}
   virtual void InitializeTrustCache() = 0;
+  virtual std::vector<PlatformTrustStore::CertWithTrust>
+  GetAllUserAddedCerts() = 0;
 };
 
 // TrustImplDomainCacheFullCerts uses SecTrustSettingsCopyCertificates to get
@@ -599,11 +616,17 @@ class TrustStoreMac::TrustImplDomainCacheFullCerts
 
   // Returns the trust status for |cert|.
   TrustStatus IsCertTrusted(const bssl::ParsedCertificate* cert) override {
-    SHA256HashValue cert_hash = CalculateFingerprint256(cert->der_cert());
+    SHA256HashValue cert_hash = crypto::hash::Sha256(cert->der_cert());
 
     base::AutoLock lock(cache_lock_);
     MaybeInitializeCache();
 
+    return IsCertTrustedImpl(cert, cert_hash);
+  }
+
+  TrustStatus IsCertTrustedImpl(const bssl::ParsedCertificate* cert,
+                                const SHA256HashValue& cert_hash)
+      EXCLUSIVE_LOCKS_REQUIRED(cache_lock_) {
     // Evaluate user trust domain, then admin. User settings can override
     // admin (and both override the system domain, but we don't check that).
     for (TrustDomainCacheFullCerts* trust_domain_cache :
@@ -616,8 +639,6 @@ class TrustStoreMac::TrustImplDomainCacheFullCerts
     // Cert did not have trust settings in any domain.
     return TrustStatus::UNSPECIFIED;
   }
-
-  bool ImplementsSyncGetIssuersOf() const override { return true; }
 
   void SyncGetIssuersOf(const bssl::ParsedCertificate* cert,
                         bssl::ParsedCertificateList* issuers) override {
@@ -632,6 +653,43 @@ class TrustStoreMac::TrustImplDomainCacheFullCerts
   void InitializeTrustCache() override {
     base::AutoLock lock(cache_lock_);
     MaybeInitializeCache();
+  }
+
+  std::vector<PlatformTrustStore::CertWithTrust> GetAllUserAddedCerts()
+      override {
+    base::AutoLock lock(cache_lock_);
+    MaybeInitializeCache();
+
+    std::vector<net::PlatformTrustStore::CertWithTrust> results;
+
+    // The same cert might be present in both user_domain_cache_ and
+    // admin_domain_cache_ so we need to dedupe and only include each cert in
+    // the results once.
+    std::map<base::span<const uint8_t>,
+             std::shared_ptr<const bssl::ParsedCertificate>>
+        all_trusted_certs;
+    for (auto& cert : user_domain_cache_.cert_issuer_source().Certs()) {
+      all_trusted_certs[cert->der_cert()] = std::move(cert);
+    }
+    for (auto& cert : admin_domain_cache_.cert_issuer_source().Certs()) {
+      all_trusted_certs[cert->der_cert()] = std::move(cert);
+    }
+    for (const auto& [key, cert] : all_trusted_certs) {
+      SHA256HashValue cert_hash = crypto::hash::Sha256(cert->der_cert());
+      results.emplace_back(base::ToVector(cert->der_cert()),
+                           TrustStatusToCertificateTrust(
+                               IsCertTrustedImpl(cert.get(), cert_hash)));
+    }
+
+    // InitializeIntermediatesCache already ensures that certs in the domain
+    // caches are not duplicated in the intemediate cert source, so we don't
+    // need to check for duplicates here.
+    for (const auto& cert : intermediates_cert_issuer_source_.Certs()) {
+      results.emplace_back(base::ToVector(cert->der_cert()),
+                           bssl::CertificateTrust::ForUnspecified());
+    }
+
+    return results;
   }
 
  private:
@@ -660,7 +718,7 @@ class TrustStoreMac::TrustImplDomainCacheFullCerts
     // intermediates cache is exclusive of any certs in trust domain caches.
     if (trust_changed || certs_changed) {
       certs_iteration_ = keychain_certs_iteration;
-      IntializeIntermediatesCache();
+      InitializeIntermediatesCache();
     }
     if (trust_changed) {
       // Histogram of total init time for the case where both the trust cache
@@ -671,7 +729,7 @@ class TrustStoreMac::TrustImplDomainCacheFullCerts
     }
   }
 
-  void IntializeIntermediatesCache() EXCLUSIVE_LOCKS_REQUIRED(cache_lock_) {
+  void InitializeIntermediatesCache() EXCLUSIVE_LOCKS_REQUIRED(cache_lock_) {
     cache_lock_.AssertAcquired();
 
     base::ElapsedTimer timer;
@@ -686,7 +744,7 @@ class TrustStoreMac::TrustImplDomainCacheFullCerts
     CFDictionarySetValue(query.get(), kSecReturnRef, kCFBooleanTrue);
     CFDictionarySetValue(query.get(), kSecMatchLimit, kSecMatchLimitAll);
 
-    base::AutoLock lock(crypto::GetMacSecurityServicesLock());
+    base::AutoLock lock(crypto::apple::GetSecurityFrameworkLock());
 
     base::apple::ScopedCFTypeRef<CFArrayRef>
         scoped_alternate_keychain_search_list;
@@ -738,9 +796,8 @@ class TrustStoreMac::TrustImplDomainCacheFullCerts
         LOG(ERROR) << "SecCertificateCopyData error";
         continue;
       }
-      auto buffer = x509_util::CreateCryptoBuffer(base::make_span(
-          CFDataGetBytePtr(der_data.get()),
-          base::checked_cast<size_t>(CFDataGetLength(der_data.get()))));
+      auto buffer = x509_util::CreateCryptoBuffer(
+          base::apple::CFDataToSpan(der_data.get()));
       bssl::CertErrors errors;
       bssl::ParseCertificateOptions options;
       options.allow_invalid_serial_numbers = true;
@@ -812,18 +869,21 @@ class TrustStoreMac::TrustImplKeychainCacheFullCerts
       const TrustImplKeychainCacheFullCerts&) = delete;
 
   TrustStatus IsCertTrusted(const bssl::ParsedCertificate* cert) override {
-    SHA256HashValue cert_hash = CalculateFingerprint256(cert->der_cert());
+    SHA256HashValue cert_hash = crypto::hash::Sha256(cert->der_cert());
 
     base::AutoLock lock(cache_lock_);
     MaybeInitializeCache();
 
+    return IsCertTrustedImpl(cert_hash);
+  }
+
+  TrustStatus IsCertTrustedImpl(const SHA256HashValue& cert_hash)
+      EXCLUSIVE_LOCKS_REQUIRED(cache_lock_) {
     auto cache_iter = trust_status_cache_.find(cert_hash);
     if (cache_iter == trust_status_cache_.end())
       return TrustStatus::UNSPECIFIED;
     return cache_iter->second;
   }
-
-  bool ImplementsSyncGetIssuersOf() const override { return true; }
 
   void SyncGetIssuersOf(const bssl::ParsedCertificate* cert,
                         bssl::ParsedCertificateList* issuers) override {
@@ -836,6 +896,21 @@ class TrustStoreMac::TrustImplKeychainCacheFullCerts
   void InitializeTrustCache() override {
     base::AutoLock lock(cache_lock_);
     MaybeInitializeCache();
+  }
+
+  std::vector<PlatformTrustStore::CertWithTrust> GetAllUserAddedCerts()
+      override {
+    base::AutoLock lock(cache_lock_);
+    MaybeInitializeCache();
+
+    std::vector<net::PlatformTrustStore::CertWithTrust> results;
+    for (const auto& cert : cert_issuer_source_.Certs()) {
+      SHA256HashValue cert_hash = crypto::hash::Sha256(cert->der_cert());
+      results.emplace_back(
+          base::ToVector(cert->der_cert()),
+          TrustStatusToCertificateTrust(IsCertTrustedImpl(cert_hash)));
+    }
+    return results;
   }
 
  private:
@@ -863,7 +938,7 @@ class TrustStoreMac::TrustImplKeychainCacheFullCerts
     CFDictionarySetValue(query.get(), kSecReturnRef, kCFBooleanTrue);
     CFDictionarySetValue(query.get(), kSecMatchLimit, kSecMatchLimitAll);
 
-    base::AutoLock lock(crypto::GetMacSecurityServicesLock());
+    base::AutoLock lock(crypto::apple::GetSecurityFrameworkLock());
 
     base::apple::ScopedCFTypeRef<CFArrayRef>
         scoped_alternate_keychain_search_list;
@@ -906,9 +981,8 @@ class TrustStoreMac::TrustImplKeychainCacheFullCerts
         LOG(ERROR) << "SecCertificateCopyData error";
         continue;
       }
-      auto buffer = x509_util::CreateCryptoBuffer(base::make_span(
-          CFDataGetBytePtr(der_data.get()),
-          base::checked_cast<size_t>(CFDataGetLength(der_data.get()))));
+      auto buffer = x509_util::CreateCryptoBuffer(
+          base::apple::CFDataToSpan(der_data.get()));
       bssl::CertErrors errors;
       bssl::ParseCertificateOptions options;
       options.allow_invalid_serial_numbers = true;
@@ -969,39 +1043,10 @@ class TrustStoreMac::TrustImplKeychainCacheFullCerts
   bssl::CertIssuerSourceStatic cert_issuer_source_ GUARDED_BY(cache_lock_);
 };
 
-// TrustImplNoCache is the simplest approach which calls
-// SecTrustSettingsCopyTrustSettings on every cert checked, with no caching.
-class TrustStoreMac::TrustImplNoCache : public TrustStoreMac::TrustImpl {
- public:
-  explicit TrustImplNoCache(CFStringRef policy_oid) : policy_oid_(policy_oid) {}
-
-  TrustImplNoCache(const TrustImplNoCache&) = delete;
-  TrustImplNoCache& operator=(const TrustImplNoCache&) = delete;
-
-  ~TrustImplNoCache() override = default;
-
-  // Returns the trust status for |cert|.
-  TrustStatus IsCertTrusted(const bssl::ParsedCertificate* cert) override {
-    base::AutoLock lock(crypto::GetMacSecurityServicesLock());
-    TrustStatus result = IsCertificateTrustedForPolicy(cert, policy_oid_);
-    return result;
-  }
-
-  void InitializeTrustCache() override {
-    // No-op for this impl.
-  }
-
- private:
-  const CFStringRef policy_oid_;
-};
-
 TrustStoreMac::TrustStoreMac(CFStringRef policy_oid, TrustImplType impl) {
   switch (impl) {
     case TrustImplType::kUnknown:
       DCHECK(false);
-      break;
-    case TrustImplType::kSimple:
-      trust_cache_ = std::make_unique<TrustImplNoCache>(policy_oid);
       break;
     case TrustImplType::kDomainCacheFullCerts:
       trust_cache_ =
@@ -1022,157 +1067,22 @@ void TrustStoreMac::InitializeTrustCache() const {
 
 void TrustStoreMac::SyncGetIssuersOf(const bssl::ParsedCertificate* cert,
                                      bssl::ParsedCertificateList* issuers) {
-  if (trust_cache_->ImplementsSyncGetIssuersOf()) {
-    trust_cache_->SyncGetIssuersOf(cert, issuers);
-    return;
-  }
-
-  base::apple::ScopedCFTypeRef<CFDataRef> name_data =
-      GetMacNormalizedIssuer(cert);
-  if (!name_data)
-    return;
-
-  std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> matching_cert_buffers =
-      FindMatchingCertificatesForMacNormalizedSubject(name_data.get());
-
-  // Convert to bssl::ParsedCertificate.
-  for (auto& buffer : matching_cert_buffers) {
-    bssl::CertErrors errors;
-    bssl::ParseCertificateOptions options;
-    options.allow_invalid_serial_numbers = true;
-    std::shared_ptr<const bssl::ParsedCertificate> anchor_cert =
-        bssl::ParsedCertificate::Create(std::move(buffer), options, &errors);
-    if (!anchor_cert) {
-      // TODO(crbug.com/634443): return errors better.
-      LOG(ERROR) << "Error parsing issuer certificate:\n"
-                 << errors.ToDebugString();
-      continue;
-    }
-
-    issuers->push_back(std::move(anchor_cert));
-  }
+  trust_cache_->SyncGetIssuersOf(cert, issuers);
 }
 
 bssl::CertificateTrust TrustStoreMac::GetTrust(
     const bssl::ParsedCertificate* cert) {
-  TrustStatus trust_status = trust_cache_->IsCertTrusted(cert);
-  switch (trust_status) {
-    case TrustStatus::TRUSTED: {
-      bssl::CertificateTrust trust;
-      if (base::FeatureList::IsEnabled(
-              features::kTrustStoreTrustedLeafSupport)) {
-        // Mac trust settings don't distinguish between trusted anchors and
-        // trusted leafs, return a trust record valid for both, which will
-        // depend on the context the certificate is encountered in.
-        trust = bssl::CertificateTrust::ForTrustAnchorOrLeaf()
-                    .WithEnforceAnchorExpiry();
-      } else {
-        trust =
-            bssl::CertificateTrust::ForTrustAnchor().WithEnforceAnchorExpiry();
-      }
-      if (IsLocalAnchorConstraintsEnforcementEnabled()) {
-        trust = trust.WithEnforceAnchorConstraints()
-                    .WithRequireAnchorBasicConstraints();
-      }
-      return trust;
-    }
-    case TrustStatus::DISTRUSTED:
-      return bssl::CertificateTrust::ForDistrusted();
-    case TrustStatus::UNSPECIFIED:
-      return bssl::CertificateTrust::ForUnspecified();
-    case TrustStatus::UNKNOWN:
-      // UNKNOWN is an implementation detail of TrustImpl and should never be
-      // returned.
-      NOTREACHED();
-      break;
-  }
-
-  return bssl::CertificateTrust::ForUnspecified();
+  return TrustStatusToCertificateTrust(trust_cache_->IsCertTrusted(cert));
 }
 
-// static
-std::vector<bssl::UniquePtr<CRYPTO_BUFFER>>
-TrustStoreMac::FindMatchingCertificatesForMacNormalizedSubject(
-    CFDataRef name_data) {
-  std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> matching_cert_buffers;
-  base::apple::ScopedCFTypeRef<CFMutableDictionaryRef> query(
-      CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks,
-                                &kCFTypeDictionaryValueCallBacks));
-
-  CFDictionarySetValue(query.get(), kSecClass, kSecClassCertificate);
-  CFDictionarySetValue(query.get(), kSecReturnRef, kCFBooleanTrue);
-  CFDictionarySetValue(query.get(), kSecMatchLimit, kSecMatchLimitAll);
-  CFDictionarySetValue(query.get(), kSecAttrSubject, name_data);
-
-  base::AutoLock lock(crypto::GetMacSecurityServicesLock());
-
-  base::apple::ScopedCFTypeRef<CFArrayRef>
-      scoped_alternate_keychain_search_list;
-  if (TestKeychainSearchList::HasInstance()) {
-    OSStatus status = TestKeychainSearchList::GetInstance()->CopySearchList(
-        scoped_alternate_keychain_search_list.InitializeInto());
-    if (status) {
-      OSSTATUS_LOG(ERROR, status)
-          << "TestKeychainSearchList::CopySearchList error";
-      return matching_cert_buffers;
-    }
-  }
-
-  if (scoped_alternate_keychain_search_list) {
-    CFDictionarySetValue(query.get(), kSecMatchSearchList,
-                         scoped_alternate_keychain_search_list.get());
-  }
-
-  base::apple::ScopedCFTypeRef<CFArrayRef> matching_items;
-  OSStatus err = SecItemCopyMatching(
-      query.get(),
-      reinterpret_cast<CFTypeRef*>(matching_items.InitializeInto()));
-  if (err == errSecItemNotFound) {
-    // No matches found.
-    return matching_cert_buffers;
-  }
-  if (err) {
-    OSSTATUS_LOG(ERROR, err) << "SecItemCopyMatching error";
-    return matching_cert_buffers;
-  }
-
-  for (CFIndex i = 0, item_count = CFArrayGetCount(matching_items.get());
-       i < item_count; ++i) {
-    SecCertificateRef match_cert_handle = reinterpret_cast<SecCertificateRef>(
-        const_cast<void*>(CFArrayGetValueAtIndex(matching_items.get(), i)));
-
-    base::apple::ScopedCFTypeRef<CFDataRef> der_data(
-        SecCertificateCopyData(match_cert_handle));
-    if (!der_data) {
-      LOG(ERROR) << "SecCertificateCopyData error";
-      continue;
-    }
-    matching_cert_buffers.push_back(
-        x509_util::CreateCryptoBuffer(base::make_span(
-            CFDataGetBytePtr(der_data.get()),
-            base::checked_cast<size_t>(CFDataGetLength(der_data.get())))));
-  }
-  return matching_cert_buffers;
-}
-
-// static
-base::apple::ScopedCFTypeRef<CFDataRef> TrustStoreMac::GetMacNormalizedIssuer(
+std::shared_ptr<const bssl::MTCAnchor> TrustStoreMac::GetTrustedMTCIssuerOf(
     const bssl::ParsedCertificate* cert) {
-  base::apple::ScopedCFTypeRef<CFDataRef> name_data;
-  base::AutoLock lock(crypto::GetMacSecurityServicesLock());
-  // There does not appear to be any public API to get the normalized version
-  // of a Name without creating a SecCertificate.
-  base::apple::ScopedCFTypeRef<SecCertificateRef> cert_handle(
-      x509_util::CreateSecCertificateFromBytes(cert->der_cert()));
-  if (!cert_handle) {
-    LOG(ERROR) << "CreateCertBufferFromBytes";
-    return name_data;
-  }
-  name_data.reset(
-      SecCertificateCopyNormalizedIssuerSequence(cert_handle.get()));
-  if (!name_data)
-    LOG(ERROR) << "SecCertificateCopyNormalizedIssuerContent";
-  return name_data;
+  return nullptr;
+}
+
+std::vector<PlatformTrustStore::CertWithTrust>
+TrustStoreMac::GetAllUserAddedCerts() {
+  return trust_cache_->GetAllUserAddedCerts();
 }
 
 }  // namespace net

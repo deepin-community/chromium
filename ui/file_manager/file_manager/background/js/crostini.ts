@@ -8,6 +8,7 @@
 
 import {assert} from 'chrome://resources/ash/common/assert.js';
 import {loadTimeData} from 'chrome://resources/ash/common/load_time_data.m.js';
+import {assertNotReachedCase} from 'chrome://resources/js/assert.js';
 
 import type {VolumeManager} from '../../background/js/volume_manager.js';
 import type {FilesAppEntry} from '../../common/js//files_app_entry_types.js';
@@ -174,6 +175,10 @@ export class Crostini {
           this.unregisterSharedPath(event.vmName, assert(entry));
         }
         break;
+      case CrostiniEventType.DROP_FAILED_PLUGIN_VM_DIRECTORY_NOT_SHARED:
+        break;
+      default:
+        assertNotReachedCase(event.eventType);
     }
   }
 
@@ -216,14 +221,14 @@ export class Crostini {
 
     const root = this.getRoot_(entry);
 
-    // TODO(crbug.com/917920): Remove when DriveFS enforces allowed write paths.
+    // TODO(crbug.com/40607763): Remove when DriveFS enforces allowed write paths.
     // Disallow Computers Grand Root, and Computer Root.
     if (root === RootType.COMPUTERS_GRAND_ROOT ||
         (root === RootType.COMPUTER && entry.fullPath.split('/').length <= 3)) {
       return false;
     }
 
-    // TODO(crbug.com/958840): Sharing Play files root is disallowed until
+    // TODO(crbug.com/41456343): Sharing Play files root is disallowed until
     // we can ensure it will not also share Downloads.
     if (root === RootType.ANDROID_FILES && entry.fullPath === '/') {
       return false;

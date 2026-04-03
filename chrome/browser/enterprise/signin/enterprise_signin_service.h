@@ -7,23 +7,35 @@
 
 #include <string>
 
+#include "build/build_config.h"
+
+#if !(BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN))
+#error EnterpriseSigninService should only be built on desktop platforms.
+#endif  // !(BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN))
+
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_service_observer.h"
 
 class Profile;
+class ProfileBrowserCollection;
 
 namespace enterprise_signin {
 
-class EnterpriseSigninService : public KeyedService,
+class EnterpriseSigninService : public BrowserCollectionObserver,
+                                public KeyedService,
                                 public syncer::SyncServiceObserver {
  public:
   explicit EnterpriseSigninService(Profile* profile);
 
   ~EnterpriseSigninService() override;
+
+  // BrowserCollectionObserver:
+  void OnBrowserActivated(BrowserWindowInterface* browser) override;
 
   // syncer::SyncServiceObserver:
   void OnStateChanged(syncer::SyncService* sync) override;
@@ -35,8 +47,10 @@ class EnterpriseSigninService : public KeyedService,
   void OpenOrActivateGaiaReauthTab();
 
   raw_ptr<Profile> profile_;
+  base::ScopedObservation<ProfileBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
   base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver>
-      observation_{this};
+      sync_service_observation_{this};
 
   PrefChangeRegistrar pref_change_registrar_;
 

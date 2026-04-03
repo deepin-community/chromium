@@ -31,10 +31,6 @@ namespace ash {
 
 class HoldingSpaceImage;
 
-namespace holding_space_metrics {
-enum class EventSource;
-}  // namespace holding_space_metrics
-
 // Contains data needed to display a single item in the holding space UI.
 class ASH_PUBLIC_EXPORT HoldingSpaceItem {
  public:
@@ -43,10 +39,9 @@ class ASH_PUBLIC_EXPORT HoldingSpaceItem {
   // secondary actions on the item's view itself.
   struct InProgressCommand {
    public:
-    using Handler = base::RepeatingCallback<void(
-        const HoldingSpaceItem* item,
-        HoldingSpaceCommandId command_id,
-        holding_space_metrics::EventSource event_source)>;
+    using Handler =
+        base::RepeatingCallback<void(const HoldingSpaceItem* item,
+                                     HoldingSpaceCommandId command_id)>;
 
     InProgressCommand(HoldingSpaceCommandId command_id,
                       int label_id,
@@ -86,17 +81,17 @@ class ASH_PUBLIC_EXPORT HoldingSpaceItem {
     kArcDownload = 5,
     kPrintedPdf = 6,
     kDiagnosticsLog = 7,
-    kLacrosDownload = 8,
+    // kLacrosDownload = 8, Deprecated.
     kScan = 9,
     kPhoneHubCameraRoll = 10,
     kDriveSuggestion = 11,
     kLocalSuggestion = 12,
     kScreenRecordingGif = 13,
-    kCameraAppPhoto = 14,
-    kCameraAppScanJpg = 15,
-    kCameraAppScanPdf = 16,
-    kCameraAppVideoGif = 17,
-    kCameraAppVideoMp4 = 18,
+    // kCameraAppPhoto = 14, Deprecated.
+    // kCameraAppScanJpg = 15, Deprecated.
+    // kCameraAppScanPdf = 16, Deprecated.
+    // kCameraAppVideoGif = 17, Deprecated.
+    // kCameraAppVideoMp4 = 18, Deprecated.
     kPhotoshopWeb = 19,
     kMaxValue = kPhotoshopWeb,
   };
@@ -126,9 +121,6 @@ class ASH_PUBLIC_EXPORT HoldingSpaceItem {
       const HoldingSpaceProgress& progress,
       ImageResolver image_resolver);
 
-  // Returns `true` if `type` is a Camera app type, `false` otherwise.
-  static bool IsCameraAppType(HoldingSpaceItem::Type type);
-
   // Returns `true` if `type` is a download type, `false` otherwise.
   static bool IsDownloadType(HoldingSpaceItem::Type type);
 
@@ -139,24 +131,24 @@ class ASH_PUBLIC_EXPORT HoldingSpaceItem {
   static bool IsSuggestionType(HoldingSpaceItem::Type type);
 
   // TODO(http://b/288471183): Update comment after removing file system URL.
-  // Deserializes from `base::Value::Dict` to `HoldingSpaceItem`.
+  // Deserializes from `base::DictValue` to `HoldingSpaceItem`.
   // This creates a partially initialized item with an empty file system URL.
   // The item should be fully initialized using `Initialize()`.
   static std::unique_ptr<HoldingSpaceItem> Deserialize(
-      const base::Value::Dict& dict,
+      const base::DictValue& dict,
       ImageResolver image_resolver);
 
   // Deserializes `id_` from a serialized `HoldingSpaceItem`.
-  static const std::string& DeserializeId(const base::Value::Dict& dict);
+  static const std::string& DeserializeId(const base::DictValue& dict);
 
   // Deserializes file path from a serialized `HoldingSpaceItem`.
-  static base::FilePath DeserializeFilePath(const base::Value::Dict& dict);
+  static base::FilePath DeserializeFilePath(const base::DictValue& dict);
 
   // Deserializes `type_` from a serialized `HoldingSpaceItem`.
-  static Type DeserializeType(const base::Value::Dict& dict);
+  static Type DeserializeType(const base::DictValue& dict);
 
-  // Serializes from `HoldingSpaceItem` to `base::Value::Dict`.
-  base::Value::Dict Serialize() const;
+  // Serializes from `HoldingSpaceItem` to `base::DictValue`.
+  base::DictValue Serialize() const;
 
   // Adds `callback` to be notified when `this` gets deleted.
   base::CallbackListSubscription AddDeletionCallback(
@@ -251,6 +243,7 @@ class ASH_PUBLIC_EXPORT HoldingSpaceItem {
   }
 
   HoldingSpaceImage& image_for_testing() { return *image_; }
+  const HoldingSpaceImage& image_for_testing() const { return *image_; }
 
  private:
   // Constructor for file backed items.

@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_features.h"
@@ -45,7 +46,7 @@ class ExternalProtocolHandlerSandboxBrowserTest
   // additional security check and ask the user, without displaying a message in
   // the console. Adopt Linux's behavior for the purpose of this test suite.
   void AllowCustomProtocol() {
-    base::Value::List allow_list;
+    base::ListValue allow_list;
     allow_list.Append("custom:*");
     browser()->profile()->GetPrefs()->Set(policy::policy_prefs::kUrlAllowlist,
                                           base::Value(std::move(allow_list)));
@@ -268,7 +269,6 @@ class AlwaysBlockedExternalProtocolHandlerDelegate
   scoped_refptr<shell_integration::DefaultSchemeClientWorker> CreateShellWorker(
       const GURL& url) override {
     NOTREACHED();
-    return nullptr;
   }
   ExternalProtocolHandler::BlockState GetBlockState(const std::string& scheme,
                                                     Profile* profile) override {

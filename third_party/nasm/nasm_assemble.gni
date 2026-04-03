@@ -44,6 +44,7 @@
 import("//build/compiled_action.gni")
 import("//build/config/ios/config.gni")
 import("//build/config/ios/ios_sdk_overrides.gni")
+import("//build/config/sanitizers/sanitizers.gni")
 if (is_mac) {
   import("//build/config/mac/mac_sdk.gni")
 }
@@ -113,11 +114,24 @@ template("nasm_assemble") {
                              "deps",
                            ])
 
+    if (!defined(deps)) {
+      deps = []
+    }
+    if (host_toolchain_is_msan) {
+      deps += [ "//third_party/instrumented_libs:ld-linux($host_toolchain)" ]
+      configs = [
+        "//third_party/instrumented_libs:msan_runtime_libs($host_toolchain)",
+      ]
+    }
+
     # Flags.
     args = _nasm_flags
     if (defined(invoker.nasm_flags)) {
       args += invoker.nasm_flags
     }
+
+    # Avoids writing time-of-compile timestamps into built objects.
+    args += [ "--reproducible" ]
 
     # User defined include dirs go first.
     if (defined(invoker.include_dirs)) {
@@ -149,9 +163,7 @@ template("nasm_assemble") {
     }
 
     # Output file.
-    outputs = [
-      "$target_out_dir/$source_set_name/{{source_name_part}}.o",
-    ]
+    outputs = [ "$target_out_dir/$source_set_name/{{source_name_part}}.o" ]
     args += [
       "-MD",
       rebase_path(outputs[0] + ".d", root_build_dir),
@@ -180,8 +192,6 @@ template("nasm_assemble") {
     # Do not publicize any header to remove build dependency.
     public = []
 
-    deps = [
-      ":$action_name",
-    ]
+    deps = [ ":$action_name" ]
   }
 }

@@ -71,10 +71,7 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
                                const std::string& value) override;
   void OnAddStandardStats(GlobalRenderFrameHostId frame_id,
                           int lid,
-                          base::Value::List value) override;
-  void OnAddLegacyStats(GlobalRenderFrameHostId frame_id,
-                        int lid,
-                        base::Value::List value) override;
+                          base::ListValue value) override;
   void OnGetUserMedia(GlobalRenderFrameHostId frame_id,
                       base::ProcessId pid,
                       int request_id,
@@ -137,8 +134,13 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
   void EnableLocalEventLogRecordings(content::WebContents* web_contents);
   void DisableLocalEventLogRecordings();
 
+  void EnableDataChannelRecordings(content::WebContents* web_contents);
+  void DisableDataChannelRecordings();
+
   bool IsEventLogRecordingsEnabled() const;
   bool CanToggleEventLogRecordings() const;
+
+  bool IsDataChannelRecordingsEnabled() const;
 
   int num_connected_connections() const { return num_connected_connections_; }
 
@@ -164,18 +166,24 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
 
   static WebRTCInternals* g_webrtc_internals;
 
+  enum class SelectionType {
+    kRtcEventLogs,
+    kAudioDebugRecordings,
+    kDataChannelRecordings,
+  };
+
   void SendUpdate(const std::string& event_name, base::Value event_data);
-  void SendUpdate(const std::string& event_name, base::Value::Dict event_data);
+  void SendUpdate(const std::string& event_name, base::DictValue event_data);
 
   // RenderProcessHostObserver implementation.
   void RenderProcessExited(RenderProcessHost* host,
                            const ChildProcessTerminationInfo& info) override;
 
+  void MaybeShowSelectFileDialog(content::WebContents* web_contents,
+                                 SelectionType log_type);
   // ui::SelectFileDialog::Listener implementation.
-  void FileSelected(const ui::SelectedFileInfo& file,
-                    int index,
-                    void* unused_params) override;
-  void FileSelectionCanceled(void* params) override;
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
+  void FileSelectionCanceled() override;
 
   // Called when a renderer exits (including crashes).
   void OnRendererExit(int render_process_id);
@@ -183,6 +191,8 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
   // Enables diagnostic audio recordings on all render process hosts using
   // |audio_debug_recordings_file_path_|.
   void EnableAudioDebugRecordingsOnAllRenderProcessHosts();
+
+  void EnableDataChannelRecordingsOnAllRenderProcessHosts();
 
   // Updates the number of open PeerConnections. Called when a PeerConnection
   // is stopped or removed.
@@ -196,8 +206,8 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
   // saving.
   void UpdateWakeLock();
 
-  // Convenient method to access `peer_connection_data_` as a Value::List.
-  base::Value::List& peer_connection_data() {
+  // Convenient method to access `peer_connection_data_` as a base::ListValue.
+  base::ListValue& peer_connection_data() {
     return peer_connection_data_.GetList();
   }
 
@@ -211,8 +221,8 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
 
   // Returns an iterator for peer_connection_data_.GetList (an end() iterator
   // if not found).
-  base::Value::List::iterator FindRecord(GlobalRenderFrameHostId frame_id,
-                                         int lid);
+  base::ListValue::iterator FindRecord(GlobalRenderFrameHostId frame_id,
+                                       int lid);
 
   base::ObserverList<WebRTCInternalsUIObserver>::Unchecked observers_;
 
@@ -249,14 +259,11 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
   // "stream_id" -- the resulting stream id.
   // "audio_track_info" -- the serialized audio track (track id and label).
   // "video_track_info" -- the serialized video track (track id and label).
-  base::Value::List get_user_media_requests_;
+  base::ListValue get_user_media_requests_;
 
   // For managing select file dialog.
   scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
-  enum class SelectionType {
-    kRtcEventLogs,
-    kAudioDebugRecordings
-  } selection_type_;
+  SelectionType selection_type_;
 
   // Diagnostic audio recording state.
   base::FilePath audio_debug_recordings_file_path_;
@@ -272,6 +279,13 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
   bool event_log_recordings_;
   base::FilePath event_log_recordings_file_path_;
 
+  bool data_channel_recording_active_ = false;
+  // If `data_channel_recording_active_` is `true`, the following path indicates
+  // where logs are stored. If `data_channel_recording_active_` is `false`, then
+  // should it ever be turned on, a path picker will be shown to the user, and
+  // the following path indicates the initial path suggested by that picker.
+  base::FilePath data_channel_recordings_file_path_;
+
   // While |num_connected_connections_| is greater than zero, request a wake
   // lock service. This prevents the application from being suspended while
   // remoting.
@@ -279,7 +293,7 @@ class CONTENT_EXPORT WebRTCInternals : public PeerConnectionTrackerHostObserver,
   const bool should_block_power_saving_;
 
   // Set of render process hosts that |this| is registered as an observer on.
-  std::unordered_set<int> render_process_id_set_;
+  std::unordered_set<ChildProcessId> render_process_id_set_;
 
   // Used to bulk up updates that we send to javascript.
   // The class owns the value/dictionary and command name of an update.

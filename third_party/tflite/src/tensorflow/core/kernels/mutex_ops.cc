@@ -36,18 +36,18 @@ namespace {
 
 class Mutex : public ResourceBase {
  public:
-  explicit Mutex(OpKernelContext* c, const string& name)
+  explicit Mutex(OpKernelContext* c, const std::string& name)
       : locked_(false),
         thread_pool_(new thread::ThreadPool(
             c->env(), ThreadOptions(),
-            strings::StrCat("mutex_lock_thread_", SanitizeThreadSuffix(name)),
+            absl::StrCat("mutex_lock_thread_", SanitizeThreadSuffix(name)),
             1 /* num_threads */, false /* low_latency_hint */)),
         name_(name) {
     VLOG(2) << "Creating mutex with name " << name << ": " << this;
   }
 
-  string DebugString() const override {
-    return strings::StrCat("Mutex ", name_);
+  std::string DebugString() const override {
+    return absl::StrCat("Mutex ", name_);
   }
 
   class LockReleaser {
@@ -76,7 +76,7 @@ class Mutex : public ResourceBase {
 
   void AcquireAsync(
       OpKernelContext* c,
-      std::function<void(const Status& s, SharedLockReleaser lock)> fn) {
+      std::function<void(const absl::Status& s, SharedLockReleaser lock)> fn) {
     CancellationManager* cm = c->cancellation_manager();
     CancellationToken token{};
     bool* cancelled = nullptr;
@@ -98,7 +98,8 @@ class Mutex : public ResourceBase {
     }
     thread_pool_->Schedule(std::bind(
         [this, cm, cancelled,
-         token](std::function<void(const Status& s, SharedLockReleaser&& lock)>
+         token](std::function<void(const absl::Status& s,
+                                   SharedLockReleaser&& lock)>
                     fn_) {
           bool local_locked;
           {
@@ -128,7 +129,7 @@ class Mutex : public ResourceBase {
   condition_variable cv_ TF_GUARDED_BY(mu_);
   bool locked_ TF_GUARDED_BY(mu_);
   std::unique_ptr<thread::ThreadPool> thread_pool_;
-  string name_;
+  std::string name_;
 };
 
 }  // namespace
@@ -158,7 +159,7 @@ class MutexLockOp : public AsyncOpKernel {
         c, std::bind(
                [c, variant, mutex](DoneCallback done_,
                                    // End of bound arguments.
-                                   const Status& s,
+                                   const absl::Status& s,
                                    Mutex::SharedLockReleaser&& lock) {
                  VLOG(2) << "Finished locking mutex " << mutex
                          << " with lock: " << lock.shared_ptr.get()

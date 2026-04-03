@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,14 @@ import type * as Emulation from './emulation.js';
 
 const UIStrings = {
   /**
-   *@description Title of the Devices tab/tool. Devices refers to e.g. phones/tablets.
+   * @description Title of the Devices tab/tool. Devices refers to e.g. phones/tablets.
    */
   devices: 'Devices',
   /**
-   *@description Command that opens the device emulation view.
+   * @description Command that opens the device emulation view.
    */
   showDevices: 'Show Devices',
-};
+} as const;
 
 const str_ = i18n.i18n.registerUIStrings('panels/settings/emulation/emulation-meta.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
@@ -44,4 +44,5 @@ UI.ViewManager.registerViewExtension({
     'standard-emulated-device-list',
     'custom-emulated-device-list',
   ],
+  iconName: 'devices',
 });

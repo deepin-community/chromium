@@ -12,10 +12,10 @@
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/process/process.h"
 #include "base/time/time.h"
-#include "ipc/ipc_message.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 #include "mojo/public/cpp/system/message_pipe.h"
@@ -44,7 +44,8 @@ class DaemonProcess : public ConfigWatcher::Delegate,
                       public HostStatusObserver,
                       public mojom::DesktopSessionManager {
  public:
-  typedef std::list<DesktopSession*> DesktopSessionList;
+  typedef std::list<raw_ptr<DesktopSession, CtnExperimental>>
+      DesktopSessionList;
 
   DaemonProcess(const DaemonProcess&) = delete;
   DaemonProcess& operator=(const DaemonProcess&) = delete;
@@ -77,7 +78,7 @@ class DaemonProcess : public ConfigWatcher::Delegate,
   // mojom::DesktopSessionManager implementation.
   void CreateDesktopSession(int terminal_id,
                             const ScreenResolution& resolution,
-                            bool virtual_terminal) override;
+                            bool is_curtained) override;
   void CloseDesktopSession(int terminal_id) override;
   void SetScreenResolution(int terminal_id,
                            const ScreenResolution& resolution) override;
@@ -125,7 +126,7 @@ class DaemonProcess : public ConfigWatcher::Delegate,
   virtual std::unique_ptr<DesktopSession> DoCreateDesktopSession(
       int terminal_id,
       const ScreenResolution& resolution,
-      bool virtual_terminal) = 0;
+      bool is_curtained) = 0;
 
   // Requests the network process to crash.
   virtual void DoCrashNetworkProcess(const base::Location& location) = 0;

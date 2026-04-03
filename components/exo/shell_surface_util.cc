@@ -38,7 +38,7 @@ namespace {
 DEFINE_UI_CLASS_PROPERTY_KEY(Surface*, kRootSurfaceKey, nullptr)
 
 // Startup Id set by the client.
-DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(std::string, kStartupIdKey, nullptr)
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(std::string, kStartupIdKey)
 
 // A property key containing the client controlled shell surface.
 DEFINE_UI_CLASS_PROPERTY_KEY(ClientControlledShellSurface*,
@@ -48,6 +48,10 @@ DEFINE_UI_CLASS_PROPERTY_KEY(ClientControlledShellSurface*,
 // Returns true if the component for a located event should be taken care of
 // by the window system.
 bool ShouldHTComponentBlocked(int component) {
+  if (ui::IsResizingComponent(component)) {
+    return true;
+  }
+
   switch (component) {
     case HTCAPTION:
     case HTCLOSE:

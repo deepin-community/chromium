@@ -23,16 +23,15 @@
 #include <utility>
 
 #include "perfetto/base/task_runner.h"
+#include "perfetto/ext/base/file_utils.h"
 #include "perfetto/ext/base/watchdog.h"
 #include "perfetto/ext/base/weak_ptr.h"
 #include "perfetto/ext/tracing/core/producer.h"
-#include "perfetto/ext/tracing/core/trace_writer.h"
 #include "perfetto/ext/tracing/core/tracing_service.h"
-#include "src/traced/probes/filesystem/inode_file_data_source.h"
+#include "src/traced/probes/filesystem/lru_inode_cache.h"
 #include "src/traced/probes/ftrace/ftrace_controller.h"
 #include "src/traced/probes/ftrace/ftrace_metadata.h"
-
-#include "protos/perfetto/trace/filesystem/inode_file_map.pbzero.h"
+#include "src/traced/probes/probes_data_source.h"
 
 namespace perfetto {
 
@@ -44,6 +43,9 @@ class ProbesProducer : public Producer, public FtraceController::Observer {
  public:
   ProbesProducer();
   ~ProbesProducer() override;
+
+  ProbesProducer(const ProbesProducer&) = delete;
+  ProbesProducer& operator=(const ProbesProducer&) = delete;
 
   static ProbesProducer* GetInstance();
 
@@ -78,7 +80,7 @@ class ProbesProducer : public Producer, public FtraceController::Observer {
 
   // Calls `cb` when all data sources have been registered.
   void SetAllDataSourcesRegisteredCb(std::function<void()> cb) {
-    all_data_sources_registered_cb_ = cb;
+    all_data_sources_registered_cb_ = std::move(cb);
   }
 
  private:
@@ -91,9 +93,6 @@ class ProbesProducer : public Producer, public FtraceController::Observer {
     kConnected,
   };
 
-  ProbesProducer(const ProbesProducer&) = delete;
-  ProbesProducer& operator=(const ProbesProducer&) = delete;
-
   void Connect();
   void Restart();
   void ResetConnectionBackoff();
@@ -104,7 +103,7 @@ class ProbesProducer : public Producer, public FtraceController::Observer {
   State state_ = kNotStarted;
   base::TaskRunner* task_runner_ = nullptr;
   std::unique_ptr<TracingService::ProducerEndpoint> endpoint_;
-  std::unique_ptr<FtraceController> ftrace_;
+  std::unique_ptr<FtraceController> ftrace_controller_;
   bool ftrace_creation_failed_ = false;
   uint32_t connection_backoff_ms_ = 0;
   const char* socket_name_ = nullptr;
@@ -136,6 +135,7 @@ class ProbesProducer : public Producer, public FtraceController::Observer {
   std::map<BlockDeviceID, std::unordered_map<Inode, InodeMapValue>>
       system_inodes_;
 
+  std::unique_ptr<base::LinuxFileWatch> sock_inotify_;
   base::WeakPtrFactory<ProbesProducer> weak_factory_;  // Keep last.
 };
 

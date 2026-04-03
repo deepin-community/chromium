@@ -15,19 +15,25 @@ limitations under the License.
 
 #include "tensorflow/compiler/tf2xla/kernels/case_op.h"
 
+#include <cstdint>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
 
+#include "absl/log/log.h"
+#include "absl/types/span.h"
 #include "tensorflow/compiler/tf2xla/kernels/if_while_utils.h"
 #include "tensorflow/compiler/tf2xla/shape_util.h"
 #include "tensorflow/compiler/tf2xla/side_effect_util.h"
 #include "tensorflow/compiler/tf2xla/xla_context.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/dynamic_shaped_ops.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/dynamic_shaped_ops.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "tensorflow/core/framework/attr_value.pb.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/core/errors.h"
 
 namespace tensorflow {
@@ -61,7 +67,7 @@ XlaCaseOp::GetPrunedBranchesAndIndex(XlaOpKernelContext* ctx) {
     return {unpruned_branches_, ctx->Input(0)};
   }
 
-  int32_t branch_index = branch_index_literal.Get<int32>({});
+  int32_t branch_index = branch_index_literal.Get<int32_t>({});
   if (branch_index < 0 || branch_index >= unpruned_branches_.size()) {
     branch_index = unpruned_branches_.size() - 1;
   }
@@ -182,7 +188,8 @@ void XlaCaseOp::Compile(XlaOpKernelContext* ctx) {
 
       // Add any TensorArray gradients touched by the then/else computation to
       // the enclosing graph.
-      for (const string& grad_source : update.tensor_array_gradients_accessed) {
+      for (const std::string& grad_source :
+           update.tensor_array_gradients_accessed) {
         VLOG(5) << "TensorArray " << resource->name() << " accessed gradient "
                 << grad_source;
         XlaResource* gradient;
@@ -284,7 +291,7 @@ void XlaCaseOp::Compile(XlaOpKernelContext* ctx) {
       // Set token input for this "case" op.
       std::vector<xla::XlaOp> token_inputs;
       token_inputs.reserve(token_input_nodes_.size());
-      for (const string& node_name : token_input_nodes_) {
+      for (const std::string& node_name : token_input_nodes_) {
         auto token_or = compiler->GetNodeToken(node_name);
         OP_REQUIRES_OK(ctx, token_or.status());
         token_inputs.push_back(token_or.value());

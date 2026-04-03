@@ -4,7 +4,7 @@
 
 namespace {
 #if defined(__GNUC__)
-std::int64_t double_up(const std::int64_t x) __attribute__((const));
+std::int64_t double_up(std::int64_t x) __attribute__((const));
 #endif
 std::int64_t double_up(const std::int64_t x) { return x * 2; }
 }  // namespace
@@ -26,7 +26,9 @@ struct BitRef {
   BitRef(int i, unsigned char& b) : index(i), byte(b) {}
 };
 
-int main(int, char*[]) {
+int main(int argc, char* argv[]) {
+  benchmark::MaybeReenterWithoutASLR(argc, argv);
+
   // this test verifies compilation of DoNotOptimize() for some types
 
   char buffer1[1] = "";
@@ -61,4 +63,7 @@ int main(int, char*[]) {
   // These tests are to e
   BitRef lval = BitRef::Make();
   benchmark::DoNotOptimize(lval);
+
+  // Check that accept rvalue.
+  benchmark::DoNotOptimize(BitRef::Make());
 }

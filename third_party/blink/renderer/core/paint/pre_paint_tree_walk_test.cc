@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/paint/pre_paint_tree_walk.h"
-#include "base/test/scoped_feature_list.h"
+
 #include "cc/base/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
@@ -15,10 +15,12 @@
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_property_tree_printer.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
+#include "third_party/blink/renderer/core/timing/soft_navigation_context.h"
+#include "third_party/blink/renderer/core/timing/soft_navigation_heuristics.h"
+#include "third_party/blink/renderer/core/timing/soft_navigation_paint_attribution_tracker.h"
 #include "third_party/blink/renderer/platform/graphics/paint/geometry_mapper.h"
 #include "third_party/blink/renderer/platform/graphics/paint/scroll_paint_property_node.h"
 #include "third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 
@@ -89,7 +91,7 @@ TEST_P(PrePaintTreeWalkTest, PropertyTreesRebuiltWithFrameScroll) {
   EXPECT_TRUE(FrameScrollTranslation()->IsIdentity());
 
   // Cause a scroll invalidation and ensure the translation is updated.
-  GetDocument().domWindow()->scrollTo(0, 100);
+  GetDocument().domWindow()->scrollToForTesting(0, 100);
   UpdateAllLifecyclePhasesForTest();
 
   EXPECT_EQ(gfx::Vector2dF(0, -100),
@@ -503,6 +505,117 @@ TEST_P(PrePaintTreeWalkTest, InlineOutlineWithContinuationPaintInvalidation) {
       .getElementById(AtomicString("child-span"))
       ->setAttribute(html_names::kStyleAttr, AtomicString("color: blue"));
   UpdateAllLifecyclePhasesForTest();
+}
+
+TEST_P(PrePaintTreeWalkTest, ScrollTranslationNodeForNonZeroScrollPosition) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="div" style="overflow:hidden;max-width:5ch;direction:rtl">
+      loremipsumdolorsitamet
+    </div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* scroller = GetDocument().getElementById(AtomicString("div"));
+  auto* object = To<LayoutBoxModelObject>(scroller->GetLayoutObject());
+  auto* scrollable_area = object->GetScrollableArea();
+
+  ASSERT_EQ(ScrollOffset(), scrollable_area->GetScrollOffset());
+  ASSERT_NE(gfx::PointF(), scrollable_area->ScrollPosition());
+  EXPECT_TRUE(object->FirstFragment().PaintProperties()->ScrollTranslation());
+
+  // When the scroll is scrolled all the way to the end of content it should
+  // still get a scroll node.
+  scroller->scrollByForTesting(-10000, 0);
+  UpdateAllLifecyclePhasesForTest();
+  ASSERT_NE(ScrollOffset(), scrollable_area->GetScrollOffset());
+  ASSERT_EQ(gfx::PointF(), scrollable_area->ScrollPosition());
+  EXPECT_TRUE(object->FirstFragment().PaintProperties()->ScrollTranslation());
+}
+
+class SoftNavigationPrePaintTreeWalkTest : public RenderingTest {
+ public:
+  SoftNavigationPrePaintTreeWalkTest() = default;
+  ~SoftNavigationPrePaintTreeWalkTest() override = default;
+
+ private:
+  void SetUp() override {
+    EnableCompositing();
+    RenderingTest::SetUp();
+  }
+};
+
+TEST_F(SoftNavigationPrePaintTreeWalkTest,
+       ShouldInheritSoftNavigationContextUpdate) {
+  SetBodyInnerHTML(R"HTML(
+    <div id='ancestor' style='width: 100px; height: 100px;'>
+      <div id='target' style='width: 100px; height: 100px;'>
+        <div id='descendant' style='width: 100px; height: 100px;'>
+          <div id='content' style='width: 100px; height: 100px;'>
+            Content
+          </div>
+        </div>
+      </div>
+    </div>
+  )HTML");
+
+  UpdateAllLifecyclePhasesForTest();
+  auto& ancestor = *GetLayoutObjectByElementId("ancestor");
+  auto& target = *GetLayoutObjectByElementId("target");
+  auto& descendant = *GetLayoutObjectByElementId("descendant");
+  auto& content = *GetLayoutObjectByElementId("content");
+
+  EXPECT_FALSE(ancestor.SoftNavigationContextChanged());
+  EXPECT_FALSE(target.SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant.SoftNavigationContextChanged());
+  EXPECT_FALSE(content.SoftNavigationContextChanged());
+
+  EXPECT_FALSE(ancestor.DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target.DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(descendant.DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(content.DescendantSoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor.ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(target.ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(descendant.ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(content.ShouldInheritSoftNavigationContext());
+
+  auto* context =
+      MakeGarbageCollected<SoftNavigationContext>(*GetDocument().domWindow());
+  SoftNavigationHeuristics* heuristics =
+      GetDocument().domWindow()->GetSoftNavigationHeuristics();
+  ASSERT_TRUE(heuristics);
+  SoftNavigationPaintAttributionTracker* tracker =
+      heuristics->GetPaintAttributionTracker();
+  ASSERT_TRUE(tracker);
+  tracker->MarkNodeAsDirectlyModified(target.GetNode(), context);
+
+  EXPECT_FALSE(ancestor.SoftNavigationContextChanged());
+  EXPECT_TRUE(target.SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant.SoftNavigationContextChanged());
+  EXPECT_FALSE(content.SoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor.DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target.DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(descendant.DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(content.DescendantSoftNavigationContextChanged());
+
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(ancestor.SoftNavigationContextChanged());
+  EXPECT_FALSE(target.SoftNavigationContextChanged());
+  EXPECT_FALSE(descendant.SoftNavigationContextChanged());
+  EXPECT_FALSE(content.SoftNavigationContextChanged());
+
+  EXPECT_FALSE(ancestor.DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(target.DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(descendant.DescendantSoftNavigationContextChanged());
+  EXPECT_FALSE(content.DescendantSoftNavigationContextChanged());
+
+  EXPECT_TRUE(ancestor.ShouldInheritSoftNavigationContext());
+  EXPECT_FALSE(target.ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(descendant.ShouldInheritSoftNavigationContext());
+  EXPECT_TRUE(content.ShouldInheritSoftNavigationContext());
+
+  EXPECT_TRUE(tracker->IsAttributable(content.GetNode(), context));
 }
 
 }  // namespace blink

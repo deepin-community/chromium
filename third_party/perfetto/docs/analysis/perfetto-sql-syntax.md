@@ -31,6 +31,7 @@ in the module become available in the global namespace without being qualified
 by the module name.
 
 Example:
+
 ```sql
 -- Include all tables/views/functions from the android.startup.startups module
 -- in the standard library.
@@ -53,19 +54,43 @@ INCLUDE PERFETTO MODULE *;
 -- However, note, that both patterns are not allowed in stdlib.
 ```
 
+## Types
+
+PerfettoSQL supports the following types, which can be used in table and view
+schemas, function arguments and return types:
+
+| Type | Description |
+|------|-------------|
+| `LONG` | 64-bit signed integer |
+| `DOUBLE` | Double precision floating-point number |
+| `BOOLEAN` | Boolean value (true/false) |
+| `STRING` | Text string |
+| `BYTES` | Binary data |
+| `TIMESTAMP` | Absolute timestamp in nanoseconds |
+| `DURATION` | Time duration in nanoseconds |
+| `ARGSETID` | An identifier for a set of arguments. This set can be obtained by joining with an `args` table on `arg_set_id` column. |
+| `ID` | An ID column for this table. Each table can have only one ID column, whose values should be unique and fit into `uint32`. |
+| `JOINID(table.column)` | A foreign key reference into a given table. `table` should exist, should have column named `column` of type `ID`. |
+| `ID(table.column)` | A variant of the `ID` type, which is both primary key for this table and simultaneusly is a foreign key reference into another table. Useful when a given table is based on a subset of rows from another table (e.g. `slice`). |
+
 ## Defining functions
-`CREATE PEFETTO FUNCTION` allows functions to be defined in SQL. The syntax is
-similar to the syntax in PostgreSQL or GoogleSQL.
+`CREATE PEFETTO FUNCTION` allows functions to be defined in SQL, which can be
+either scalar (returning a single value) or table-value (returning a set of rows).
+The syntax is similar to the syntax in PostgreSQL or GoogleSQL:
+- Scalar: `CREATE PERFETTO FUNCTION function_name(arg_list) RETURNS return_type AS sql_select_statement;`
+- Table-valued: `CREATE PERFETTO FUNCTION function_name(arg_list) RETURNS TABLE(column_list) AS sql_select_statement;`
 
-<!-- TODO(b/290185551): talk about different possible argument/return types. -->
+`arg_list` and `column_list` is a comma-separated list of an arbitrary number `argument_name argument_type` pairs.
 
-Example:
+`sql_select_statement` should be a valid SQL statement, which can use `$argument_name` syntax to refer to the argument values.
+
+Examples:
 ```sql
 -- Create a scalar function with no arguments.
-CREATE PERFETTO FUNCTION constant_fn() RETURNS INT AS SELECT 1;
+CREATE PERFETTO FUNCTION constant_fn() RETURNS LONG AS SELECT 1;
 
 -- Create a scalar function taking two arguments.
-CREATE PERFETTO FUNCTION add(x INT, y INT) RETURNS INT AS SELECT $x + $y;
+CREATE PERFETTO FUNCTION add(x LONG, y LONG) RETURNS LONG AS SELECT $x + $y;
 
 -- Create a table function with no arguments
 CREATE PERFETTO FUNCTION constant_tab_fn()
@@ -78,8 +103,8 @@ FROM (
 );
 
 -- Create a table function with one argument
-CREATE PERFETTO FUNCTION sched_by_utid(utid INT)
-RETURNS TABLE(ts LONG, dur LONG, utid INT) AS
+CREATE PERFETTO FUNCTION sched_by_utid(utid LONG)
+RETURNS TABLE(ts LONG, dur LONG, utid LONG) AS
 SELECT ts, dur, utid
 FROM sched
 WHERE utid = $utid;
@@ -96,6 +121,7 @@ Note however the full feature set of `CREATE TABLE` is not supported:
   They cannot be defined by column names and types.
 
 Example:
+
 ```sql
 -- Create a Perfetto table with constant values.
 CREATE PERFETTO TABLE constant_table AS
@@ -117,13 +143,67 @@ WHERE name = 'foo';
 
 Perfetto tables can have an optional explicit schema. The schema syntax is the
 same as the function argument or returned-from-a-function table,
-i.e. a comma-separated list of (column name, colum type) pairs in parenthesis
+i.e. a comma-separated list of (column name, column type) pairs in parenthesis
 after table or view name.
 
 ```sql
-CREATE PERFETTO TABLE foo(x INT, y STRING) AS
+CREATE PERFETTO TABLE foo(x LONG, y STRING) AS
 SELECT 1 as x, 'test' as y
 ```
+
+### Index
+
+`CREATE PERFETTO INDEX` lets you create indexes on Perfetto tables, similar to
+how you create indexes in SQLite databases. These indexes are built on specific
+columns, and Perfetto internally maintains these columns in a sorted order.
+This means operations benefiting from sorting on an indexed column (or group of
+columns) will be significantly faster, as if you were operating on a column
+that's already sorted.
+
+NOTE: Indexes have non-trivial memory cost, so it's important to only use them
+when there is a need for performance improvement.
+
+NOTE: Indexes will be used by views created on the indexed table, but they will
+not be inherited by any child tables, as shown in the below SQL.
+
+NOTE: If the query filters/joins on `id` column of the table (one that is a
+primary key of the table) there is no need to add a Perfetto index, as Perfetto
+tables already have special performance optimizations for operations that can
+benefit from sorting.
+
+Example of usage:
+```sql
+CREATE PERFETTO TABLE foo AS
+SELECT * FROM slice;
+
+-- Creates and stores an index `foo_track` on column `track_id` of table foo.
+CREATE PERFETTO INDEX foo_track ON foo(track_id);
+-- Creates or replaces an index created on two columns. It will be used for
+-- operations on `track_id` and can be used on operations on `name` only if
+-- there has been an equality constraint on `track_id` too.
+CREATE OR REPLACE PERFETTO INDEX foo_track_and_name ON foo(track_id, name);
+```
+
+The performance of those two queries should be very different now:
+```sql
+-- This doesn't have an index so it will have to linearily scan whole column.
+SELECT * FROM slice WHERE track_id = 10 AND name > "b";
+
+-- This has an index and can use binary search.
+SELECT * FROM foo WHERE track_id = 10 AND name > "b";
+
+-- The biggest difference should be noticeable on joins:
+-- This join:
+SELECT * FROM slice JOIN track WHERE slice.track_id = track.id;
+-- will be noticeably slower than this:
+SELECT * FROM foo JOIN track WHERE slice.track_id = track.id;
+```
+
+Indexes can be dropped:
+```sql
+DROP PERFETTO INDEX foo_track ON foo;
+```
+
 
 ## Creating views with a schema
 
@@ -135,7 +215,7 @@ NOTE: the use of `CREATE PERFETTO VIEW` instead of `CREATE VIEW` is required in
 the standard library where each column must be documented.
 
 ```sql
-CREATE PERFETTO VIEW foo(x INT, y STRING) AS
+CREATE PERFETTO VIEW foo(x LONG, y STRING) AS
 SELECT 1 as x, 'test' as y
 ```
 
@@ -145,12 +225,17 @@ is inspired by the macros in Rust.
 
 The following are recommended uses of macros:
 - Passing tables as arguments to a "function-like" snippet of SQL.
+- Defining simple constants for performance-sensitive queries.
 
 Macros are powerful but also dangerous if used incorrectly, making debugging
 extremely difficult. For this reason, it's recommended that they are used
 sparingly when they are needed and only for the recommended uses described
-above. If only passing around scalar SQL values, use functions as discussed
 above.
+
+If only passing around scalar SQL values, functions are generally preferred
+for their clarity. However, for simple constants used many times in a
+performance-sensitive query, a macro can be more efficient as it avoids the
+potential overhead of function calls in a large number.
 
 NOTE: Macros are expanded with a pre-processing step *before* any execution
 happens. Expansion is a purely syntatic operation involves replacing the macro
@@ -167,6 +252,7 @@ parse tree. The following are the supported types:
 | `ColumnName`      | Corresponds to a column name of a table           |
 
 Example:
+
 ```sql
 -- Create a macro taking no arguments. Note how the returned SQL fragment needs
 -- to be wrapped in brackets to make it a valid SQL expression.

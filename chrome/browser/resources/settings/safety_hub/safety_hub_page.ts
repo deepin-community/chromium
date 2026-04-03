@@ -9,9 +9,17 @@
  */
 
 import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
+// <if expr="not is_chromeos">
+import '../relaunch_confirmation_dialog.js';
+// </if>
+import '../settings_page/settings_subpage.js';
 import './safety_hub_card.js';
 import './safety_hub_module.js';
+import './extensions_module.js';
+import './notification_permissions_module.js';
+import './unused_site_permissions_module.js';
 
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
 import {assertNotReached} from 'chrome://resources/js/assert.js';
@@ -23,6 +31,8 @@ import {MetricsBrowserProxyImpl, SafetyHubModuleType, SafetyHubSurfaces} from '.
 import {RelaunchMixin, RestartType} from '../relaunch_mixin.js';
 import {routes} from '../route.js';
 import {RouteObserverMixin, Router} from '../router.js';
+import type {Route} from '../router.js';
+import {SettingsViewMixin} from '../settings_page/settings_view_mixin.js';
 
 import type {CardInfo, NotificationPermission, SafetyHubBrowserProxy, UnusedSitePermissions} from './safety_hub_browser_proxy.js';
 import {CardState, SafetyHubBrowserProxyImpl, SafetyHubEvent} from './safety_hub_browser_proxy.js';
@@ -37,8 +47,8 @@ export interface SettingsSafetyHubPageElement {
   };
 }
 
-const SettingsSafetyHubPageElementBase = RouteObserverMixin(
-    RelaunchMixin(WebUiListenerMixin(I18nMixin(PolymerElement))));
+const SettingsSafetyHubPageElementBase = RouteObserverMixin(SettingsViewMixin(
+    RelaunchMixin(PrefsMixin(WebUiListenerMixin(I18nMixin(PolymerElement))))));
 
 export class SettingsSafetyHubPageElement extends
     SettingsSafetyHubPageElementBase {
@@ -95,27 +105,45 @@ export class SettingsSafetyHubPageElement extends
 
       // Whether the data for extensions is ready.
       hasDataForExtensions_: Boolean,
+
+      // String that identifies version card's role announced by accessibility
+      // voiceover.
+      versionCardRole_: {
+        type: String,
+        computed: 'computeVersionCardRole_(versionCardData_)',
+      },
+
+      // String that identifies version card's description announced by
+      // accessibility voiceover.
+      versionCardAriaDescription_: {
+        type: String,
+        computed: 'computeVersionCardAriaDescription_(versionCardData_)',
+      },
+
     };
   }
 
   static get observers() {
     return [
       'onAllModulesLoaded_(passwordCardData_, versionCardData_, safeBrowsingCardData_, hasDataForUnusedPermissions_, hasDataForNotificationPermissions_, hasDataForExtensions_)',
+      'onSafeBrowsingPrefChanged_(prefs.generated.safe_browsing)',
     ];
   }
 
-  private passwordCardData_: CardInfo;
-  private versionCardData_: CardInfo;
-  private safeBrowsingCardData_: CardInfo;
-  private showNotificationPermissions_: boolean;
-  private hasDataForNotificationPermissions_: boolean;
-  private showUnusedSitePermissions_: boolean;
-  private hasDataForUnusedPermissions_: boolean;
-  private showNoRecommendationsState_: boolean;
-  private showExtensions_: boolean;
-  private hasDataForExtensions_: boolean;
+  declare private passwordCardData_: CardInfo;
+  declare private versionCardData_: CardInfo;
+  declare private safeBrowsingCardData_: CardInfo;
+  declare private showNotificationPermissions_: boolean;
+  declare private hasDataForNotificationPermissions_: boolean;
+  declare private showUnusedSitePermissions_: boolean;
+  declare private hasDataForUnusedPermissions_: boolean;
+  declare private showNoRecommendationsState_: boolean;
+  declare private showExtensions_: boolean;
+  declare private hasDataForExtensions_: boolean;
   private shouldRecordMetric_: boolean = false;
-  private userEducationItemList_: SiteInfo[];
+  declare private userEducationItemList_: SiteInfo[];
+  declare private versionCardRole_: string;
+  declare private versionCardAriaDescription_: string;
   private browserProxy_: SafetyHubBrowserProxy =
       SafetyHubBrowserProxyImpl.getInstance();
   private metricsBrowserProxy_: MetricsBrowserProxy =
@@ -129,13 +157,23 @@ export class SettingsSafetyHubPageElement extends
     super.connectedCallback();
   }
 
-  override currentRouteChanged() {
+  override currentRouteChanged(newRoute: Route, oldRoute?: Route) {
+    super.currentRouteChanged(newRoute, oldRoute);
+
     if (Router.getInstance().getCurrentRoute() !== routes.SAFETY_HUB) {
       return;
     }
     // When the user navigates to the Safety Hub page, any active menu
     // notification is dismissed.
     this.browserProxy_.dismissActiveMenuNotification();
+
+    // Record a visit to Safety Hub page if the user is still on the SH page
+    // after 20 seconds.
+    setTimeout(() => {
+      if (Router.getInstance().getCurrentRoute() === routes.SAFETY_HUB) {
+        this.browserProxy_.recordSafetyHubPageVisit();
+      }
+    }, 20000);
 
     this.metricsBrowserProxy_.recordSafetyHubImpression(
         SafetyHubSurfaces.SAFETY_HUB_PAGE);
@@ -148,7 +186,7 @@ export class SettingsSafetyHubPageElement extends
   }
 
   private initializeCards_() {
-    // TODO(crbug.com/1443466): Add listeners for cards.
+    // TODO(crbug.com/40267370): Add listeners for Password and Version cards.
     this.browserProxy_.getPasswordCardData().then((data: CardInfo) => {
       this.passwordCardData_ = data;
     });
@@ -213,6 +251,7 @@ export class SettingsSafetyHubPageElement extends
     this.metricsBrowserProxy_.recordSafetyHubCardStateClicked(
         'Settings.SafetyHub.PasswordsCard.StatusOnClick',
         this.passwordCardData_.state as unknown as SafetyHubCardState);
+    this.browserProxy_.recordSafetyHubInteraction();
 
     PasswordManagerImpl.getInstance().showPasswordManager(
         PasswordManagerPage.CHECKUP);
@@ -229,9 +268,12 @@ export class SettingsSafetyHubPageElement extends
     this.metricsBrowserProxy_.recordSafetyHubCardStateClicked(
         'Settings.SafetyHub.VersionCard.StatusOnClick',
         this.versionCardData_.state as unknown as SafetyHubCardState);
+    this.browserProxy_.recordSafetyHubInteraction();
 
     if (this.versionCardData_.state === CardState.WARNING) {
-      this.performRestart(RestartType.RELAUNCH);
+      // Optional parameter alwaysShowDialog is set to true to always show the
+      // confirmation dialog regardless of the incognito windows open.
+      this.performRestart(RestartType.RELAUNCH, true);
     } else {
       Router.getInstance().navigateTo(
           routes.ABOUT, /* dynamicParams= */ undefined,
@@ -240,6 +282,7 @@ export class SettingsSafetyHubPageElement extends
   }
 
   private onEducationLinkClick_(event: CustomEvent<HTMLAnchorElement>) {
+    this.browserProxy_.recordSafetyHubInteraction();
     const headerString =
         event.detail.querySelector('.site-representation')!.textContent;
 
@@ -268,10 +311,17 @@ export class SettingsSafetyHubPageElement extends
     }
   }
 
+  private onSafeBrowsingPrefChanged_() {
+    this.browserProxy_.getSafeBrowsingCardData().then((data: CardInfo) => {
+      this.safeBrowsingCardData_ = data;
+    });
+  }
+
   private onSafeBrowsingClick_() {
     this.metricsBrowserProxy_.recordSafetyHubCardStateClicked(
         'Settings.SafetyHub.SafeBrowsingCard.StatusOnClick',
         this.safeBrowsingCardData_.state as unknown as SafetyHubCardState);
+    this.browserProxy_.recordSafetyHubInteraction();
 
     Router.getInstance().navigateTo(
         routes.SECURITY, /* dynamicParams= */ undefined,
@@ -314,6 +364,16 @@ export class SettingsSafetyHubPageElement extends
     this.hasDataForExtensions_ = true;
   }
 
+  private computeVersionCardRole_(): string {
+    return this.versionCardData_.state === CardState.WARNING ? 'button' : 'link';
+  }
+
+  private computeVersionCardAriaDescription_(): string {
+    return this.versionCardData_.state === CardState.WARNING ?
+        this.i18n('safetyHubVersionRelaunchAriaLabel') :
+        this.i18n('safetyHubVersionNavigationAriaLabel');
+  }
+
   private isEnterOrSpaceClicked_(e: KeyboardEvent): boolean {
     return e.key === 'Enter' || e.key === ' ';
   }
@@ -339,7 +399,7 @@ export class SettingsSafetyHubPageElement extends
 
     this.shouldRecordMetric_ = false;
     let hasAnyWarning: boolean = false;
-    // TODO(crbug.com/1443466): Iterate over the cards/modules with for loop.
+    // TODO(crbug.com/40267370): Iterate over the cards/modules with for loop.
     if (this.passwordCardData_.state !== CardState.SAFE) {
       this.metricsBrowserProxy_.recordSafetyHubModuleWarningImpression(
           SafetyHubModuleType.PASSWORDS);
@@ -377,6 +437,11 @@ export class SettingsSafetyHubPageElement extends
     }
 
     this.metricsBrowserProxy_.recordSafetyHubDashboardAnyWarning(hasAnyWarning);
+  }
+
+  // SettingsViewMixin implementation.
+  override focusBackButton() {
+    this.shadowRoot!.querySelector('settings-subpage')!.focusBackButton();
   }
 }
 

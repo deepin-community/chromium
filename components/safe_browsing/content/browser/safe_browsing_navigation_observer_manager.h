@@ -9,7 +9,6 @@
 #include <unordered_map>
 
 #include "base/containers/circular_deque.h"
-#include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/supports_user_data.h"
 #include "base/time/time.h"
@@ -32,6 +31,10 @@ class NavigationHandle;
 struct GlobalRenderFrameHostId;
 }
 
+namespace enterprise_data_protection {
+class DataProtectionNavigationControllerTest;
+}
+
 namespace safe_browsing {
 
 class SafeBrowsingNavigationObserver;
@@ -41,11 +44,15 @@ struct ResolvedIPAddress;
 // User data stored in DownloadItem for referrer chain information.
 class ReferrerChainData : public base::SupportsUserData::Data {
  public:
-  ReferrerChainData(std::unique_ptr<ReferrerChain> referrer_chain,
+  ReferrerChainData(ReferrerChainProvider::AttributionResult attribution_result,
+                    std::unique_ptr<ReferrerChain> referrer_chain,
                     size_t referrer_chain_length,
                     size_t recent_navigation_to_collect);
   ~ReferrerChainData() override;
-  ReferrerChain* GetReferrerChain();
+  ReferrerChainProvider::AttributionResult attribution_result() const {
+    return attribution_result_;
+  }
+  ReferrerChain* GetReferrerChain() const;
   size_t referrer_chain_length() { return referrer_chain_length_; }
   size_t recent_navigations_to_collect() {
     return recent_navigations_to_collect_;
@@ -56,6 +63,11 @@ class ReferrerChainData : public base::SupportsUserData::Data {
   static const char kDownloadReferrerChainDataKey[];
 
  private:
+  // Result of trying to get the referrer chain. Referrer chains are
+  // fetched once per download, at the beginning of downloading to disk.
+  ReferrerChainProvider::AttributionResult attribution_result_ =
+      ReferrerChainProvider::AttributionResult::NAVIGATION_EVENT_NOT_FOUND;
+  // The referrer chain itself
   std::unique_ptr<ReferrerChain> referrer_chain_;
   // This is the actual referrer chain length before appending recent navigation
   // events;
@@ -269,6 +281,15 @@ class SafeBrowsingNavigationObserverManager
       int user_gesture_count_limit,
       ReferrerChain* out_referrer_chain) override;
 
+  // Helper function to |IdentifyReferrerChainByEventURL| above in cases where
+  // |event_outermost_main_frame_id| is not available. That value will default
+  // to |content::GlobalRenderFrameHostId()|.
+  AttributionResult IdentifyReferrerChainByEventURL(
+      const GURL& event_url,
+      SessionID event_tab_id,  // Invalid if tab id is unknown or not available.
+      int user_gesture_count_limit,
+      ReferrerChain* out_referrer_chain) override;
+
   // Based on the |event_url|, traces back the observed PendingNavigationEvents
   // and NavigationEvents in navigation_event_list_ to identify the sequence of
   // navigations leading to the |event_url|, with the coverage limited to
@@ -353,6 +374,8 @@ class SafeBrowsingNavigationObserverManager
   friend class SBNavigationObserverBrowserTest;
   friend class SBNavigationObserverTest;
   friend class ChromeClientSideDetectionHostDelegateTest;
+  friend class enterprise_data_protection::
+      DataProtectionNavigationControllerTest;
 
   struct GurlHash {
     std::size_t operator()(const GURL& url) const {

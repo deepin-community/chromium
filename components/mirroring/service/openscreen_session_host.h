@@ -5,17 +5,24 @@
 #ifndef COMPONENTS_MIRRORING_SERVICE_OPENSCREEN_SESSION_HOST_H_
 #define COMPONENTS_MIRRORING_SERVICE_OPENSCREEN_SESSION_HOST_H_
 
+#include <vector>
+
 #include "base/component_export.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/unguessable_token.h"
 #include "components/mirroring/mojom/cast_message_channel.mojom.h"
 #include "components/mirroring/mojom/resource_provider.mojom.h"
 #include "components/mirroring/mojom/session_observer.mojom.h"
 #include "components/mirroring/mojom/session_parameters.mojom.h"
 #include "components/mirroring/service/media_remoter.h"
 #include "components/mirroring/service/mirror_settings.h"
+#include "components/mirroring/service/mirroring_gpu_factories_factory.h"
+#include "components/mirroring/service/mirroring_logger.h"
 #include "components/mirroring/service/openscreen_message_port.h"
 #include "components/mirroring/service/openscreen_stats_client.h"
 #include "components/mirroring/service/rpc_dispatcher.h"
@@ -25,13 +32,12 @@
 #include "gpu/config/gpu_info.h"
 #include "media/capture/video/video_capture_feedback.h"
 #include "media/cast/cast_environment.h"
-#include "media/cast/net/cast_transport_defines.h"
 #include "media/mojo/mojom/video_encode_accelerator.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "third_party/openscreen/src/cast/streaming/sender_session.h"
+#include "third_party/openscreen/src/cast/streaming/public/sender_session.h"
 
 using openscreen::cast::capture_recommendations::Recommendations;
 
@@ -41,7 +47,6 @@ class OneShotTimer;
 
 namespace media {
 class AudioInputDevice;
-
 }  // namespace media
 
 namespace viz {
@@ -94,7 +99,8 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
       mojo::PendingRemote<mojom::ResourceProvider> resource_provider,
       mojo::PendingRemote<mojom::CastMessageChannel> outbound_channel,
       mojo::PendingReceiver<mojom::CastMessageChannel> inbound_channel,
-      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner);
+      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
+      base::OnceClosure deletion_cb);
 
   ~OpenscreenSessionHost() override;
 
@@ -112,7 +118,7 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
       const openscreen::cast::SenderSession* session,
       openscreen::cast::RemotingCapabilities capabilities) override;
   void OnError(const openscreen::cast::SenderSession* session,
-               openscreen::Error error) override;
+               const openscreen::Error& error) override;
 
   // RtpStreamClient overrides.
   void OnError(const std::string& message) override;
@@ -133,17 +139,13 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
   // Callback by media::cast::VideoSender to set a new target playout delay.
   void SetTargetPlayoutDelay(base::TimeDelta playout_delay);
 
-  base::Value::Dict GetMirroringStats() const;
+  base::DictValue GetMirroringStats() const;
   void SetSenderStatsForTest(const openscreen::cast::SenderStats& test_stats);
 
  private:
   friend class OpenscreenSessionHostTest;
   FRIEND_TEST_ALL_PREFIXES(OpenscreenSessionHostTest, ChangeTargetPlayoutDelay);
   FRIEND_TEST_ALL_PREFIXES(OpenscreenSessionHostTest, UpdateBandwidthEstimate);
-  FRIEND_TEST_ALL_PREFIXES(OpenscreenSessionHostTest,
-                           ShouldEnableHardwareVp8EncodingIfSupported);
-  FRIEND_TEST_ALL_PREFIXES(OpenscreenSessionHostTest,
-                           ShouldEnableHardwareH264EncodingIfSupported);
   class AudioCapturingCallback;
   using SupportedProfiles = media::VideoEncodeAccelerator::SupportedProfiles;
 
@@ -151,11 +153,17 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
   // to software rendering being used.
   void OnAsyncInitialized(const SupportedProfiles& profiles);
 
-  // Notify `observer_` of a relevant logging message.
-  void LogInfoMessage(const std::string& message);
+  // Called when the MirroringGpuFactoriesFactory has fully initialized and
+  // the GPU channel token and route ID are available.
+  void OnGpuFactoriesConfigured(const base::UnguessableToken& channel_token,
+                                int32_t route_id);
 
   // Notify `observer_` that error occurred and close the session.
-  void ReportAndLogError(mojom::SessionError error, const std::string& message);
+  //
+  // NOTE: since this method is used with base::Callback, it takes ownership
+  // of the `message` to avoid lifetime issues, especially when posted to a task
+  // runner.
+  void ReportAndLogError(mojom::SessionError error, std::string message);
 
   // Stops the current streaming session. If not called from StopSession(), a
   // new streaming session will start later after exchanging OFFER/ANSWER
@@ -183,13 +191,20 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
       uint32_t shared_memory_count);
 
   // Callback by Audio/VideoSender to indicate encoder status change.
-  void OnEncoderStatusChange(media::cast::OperationalStatus status);
+  void OnAudioEncoderStatus(const media::cast::FrameSenderConfig& config,
+                            media::cast::OperationalStatus status);
+  void OnVideoEncoderStatus(const media::cast::FrameSenderConfig& config,
+                            media::cast::OperationalStatus status);
+
+  // Callback by MirroringGpuFactoriesFactory to indicate that the
+  // GPU factory was lost (and must be replaced).
+  void OnGpuFactoryContextLost(const media::cast::FrameSenderConfig& config);
 
   // Callback by media::cast::VideoSender to report resource utilization.
   void ProcessFeedback(const media::VideoCaptureFeedback& feedback);
 
-  // Called by OpenscreenFrameSender to determine bitrate.
-  int GetSuggestedVideoBitrate(int min_bitrate, int max_bitrate) const;
+  // Called by media::cast::VideoSender to help determine the video bitrate.
+  int GetVideoNetworkBandwidth() const;
 
   // Called periodically to update the `bandwidth_estimate_`.
   void UpdateBandwidthEstimate();
@@ -208,8 +223,27 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
   // started when it's called.
   void OnRemotingStartTimeout();
 
+  // Manage audio capture. Note the media::AudioInputDevice class does not
+  // support pausing and resuming.
+  void StartCapturingAudio();
+  void StopCapturingAudio();
+
+  // Manage video capture. Note that while pause and resume are supported,
+  // stopping video capture is accomplished by destroying the
+  // `video_capture_client_` instance.
+  void StartCapturingVideo();
+  void PauseCapturingVideo();
+
+  // Returns `true` if successfully restarted video capture, otherwise it
+  // may need to be started again.
+  bool TryResumeCapturingVideo();
+
   // Called to provide Open Screen with access to this host's network proxy.
   network::mojom::NetworkContext* GetNetworkContext();
+
+  // Called to disable the given hardware codec for the remainder of the
+  // session, if it has not already been disabled.
+  void MaybeDenylistHardwareCodecAndRenegotiate(media::VideoCodec codec);
 
   // Provided by client.
   const mojom::SessionParameters session_params_;
@@ -249,6 +283,9 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
   // channels.
   OpenscreenMessagePort message_port_;
 
+  // Utility object for logging.
+  MirroringLogger logger_;
+
   // Used to initialize video and audio capture clients.
   MirrorSettings mirror_settings_;
 
@@ -283,13 +320,17 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
   // Connects to the video capture host and launches the video capture device.
   std::unique_ptr<VideoCaptureClient> video_capture_client_;
 
+  // True if the video encoder has been initialized. This means that any further
+  // calls to change encoder status to true are reinitializations, for which
+  // capture should be resumed.
+  bool has_video_encoder_been_initialized_ = false;
+
   // Manages the clock and thread proxies for the audio sender, video sender,
   // and media remoter.
+  //
+  // NOTE: this is lazy initialized on the first session negotiation, and then
+  // destructed only on the destruction of this class.
   scoped_refptr<media::cast::CastEnvironment> cast_environment_;
-
-  // Task runners used specifically for audio, video encoding.
-  scoped_refptr<base::SingleThreadTaskRunner> audio_encode_thread_;
-  scoped_refptr<base::SingleThreadTaskRunner> video_encode_thread_;
 
   // Called when audio is successfully captured by `audio_input_device_`.
   std::unique_ptr<AudioCapturingCallback> audio_capturing_callback_;
@@ -310,6 +351,11 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
   std::unique_ptr<viz::Gpu> gpu_;
   SupportedProfiles supported_profiles_;
   mojo::Remote<media::mojom::VideoEncodeAcceleratorProvider> vea_provider_;
+  std::unique_ptr<MirroringGpuFactoriesFactory> gpu_factories_factory_;
+  std::vector<media::cast::ReceiveVideoEncodeAcceleratorCallback>
+      pending_vea_requests_;
+  base::UnguessableToken channel_token_;
+  int32_t route_id_ = 0;
 
   // Called when the session host has fully initialized.
   AsyncInitializedCallback initialized_cb_;
@@ -340,8 +386,14 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
   // casting session.
   std::unique_ptr<OpenscreenStatsClient> stats_client_;
 
+  // Callback invoked once this instance and all of its resources are released.
+  base::OnceClosure deletion_cb_;
+
+  // Ensures that this class is accessed on a single sequence.
+  SEQUENCE_CHECKER(sequence_checker_);
+
   // Used in callbacks executed on task runners, such as by RtpStream.
-  // TODO(https://crbug.com/1363503): determine if weak pointers can be removed.
+  // TODO(crbug.com/40238714): determine if weak pointers can be removed.
   base::WeakPtrFactory<OpenscreenSessionHost> weak_factory_{this};
 };
 

@@ -7,7 +7,7 @@ syntax = "proto2";
 option optimize_for = LITE_RUNTIME;
 
 package power_manager;
-option go_package = "chromiumos/system_api/power_manager_proto";
+option go_package = "go.chromium.org/chromiumos/system_api/power_manager_proto";
 
 // Power supply status sent from powerd to Chrome.
 message PowerSupplyProperties {
@@ -26,7 +26,12 @@ message PowerSupplyProperties {
     // No external power source is connected.
     DISCONNECTED = 2;
 
-    // Next value to use: 4
+    // A low voltage source is connected, but the system is unable to draw
+    // power from this source because the voltage is low.
+    // This only happens on systems without a buck-boost charger topology.
+    LOW_VOLTAGE_NO_CHARGE = 4;
+
+    // Next value to use: 5
   }
 
   enum BatteryState {

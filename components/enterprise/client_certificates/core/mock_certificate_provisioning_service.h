@@ -5,6 +5,9 @@
 #ifndef COMPONENTS_ENTERPRISE_CLIENT_CERTIFICATES_CORE_MOCK_CERTIFICATE_PROVISIONING_SERVICE_H_
 #define COMPONENTS_ENTERPRISE_CLIENT_CERTIFICATES_CORE_MOCK_CERTIFICATE_PROVISIONING_SERVICE_H_
 
+#include <memory>
+
+#include "base/functional/callback.h"
 #include "components/enterprise/client_certificates/core/certificate_provisioning_service.h"
 #include "components/enterprise/client_certificates/core/certificate_store.h"
 #include "components/enterprise/client_certificates/core/key_upload_client.h"
@@ -18,11 +21,16 @@ class MockCertificateProvisioningService
   MockCertificateProvisioningService();
   ~MockCertificateProvisioningService() override;
 
-  MOCK_METHOD(std::optional<ClientIdentity>,
+  MOCK_METHOD(void,
               GetManagedIdentity,
-              (),
-              (const, override));
+              (GetManagedIdentityCallback),
+              (override));
+  MOCK_METHOD(void,
+              DeleteManagedIdentities,
+              (base::OnceCallback<void(bool)> callback),
+              (override));
   MOCK_METHOD(Status, GetCurrentStatus, (), (const, override));
+
 };
 
 }  // namespace client_certificates

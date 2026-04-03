@@ -4,6 +4,8 @@
 
 #include "third_party/blink/renderer/core/html/html_iframe_element_sandbox.h"
 
+#include <algorithm>
+
 #include "third_party/blink/renderer/core/html/fenced_frame/html_fenced_frame_element.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/html/html_iframe_element.h"
@@ -17,6 +19,7 @@ namespace {
 // only available behind a runtime flag, it should be checked separately in
 // IsTokenSupported below.
 const char* const kSupportedSandboxTokens[] = {
+    "allow-downloads",
     "allow-forms",
     "allow-modals",
     "allow-orientation-lock",
@@ -26,22 +29,21 @@ const char* const kSupportedSandboxTokens[] = {
     "allow-presentation",
     "allow-same-origin",
     "allow-scripts",
+    "allow-storage-access-by-user-activation",
     "allow-top-navigation",
-    "allow-top-navigation-by-user-activation",
-    "allow-downloads"};
+    "allow-top-navigation-by-user-activation"};
 
-// TODO (http://crbug.com/989663) move this into |kSupportedSandboxTokens| when
-// feature flag is enabled by default.
-constexpr char kStorageAccessAPISandboxToken[] =
-    "allow-storage-access-by-user-activation";
+// TODO (https://crbug.com/372894175) move this into |kSupportedSandboxTokens|
+// when feature is enabled by default.
+constexpr char kAllowSameSiteNoneCookiesSandboxToken[] =
+    "allow-same-site-none-cookies";
 
 bool IsTokenSupported(const AtomicString& token) {
-  for (const char* supported_token : kSupportedSandboxTokens) {
-    if (token == supported_token)
-      return true;
+  if (std::ranges::contains(kSupportedSandboxTokens, token)) {
+    return true;
   }
-
-  return token == kStorageAccessAPISandboxToken;
+  return token == kAllowSameSiteNoneCookiesSandboxToken &&
+         RuntimeEnabledFeatures::AllowSameSiteNoneCookiesInSandboxEnabled();
 }
 
 }  // namespace

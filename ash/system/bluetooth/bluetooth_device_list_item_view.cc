@@ -17,6 +17,7 @@
 #include "base/check.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "chromeos/ash/services/bluetooth_config/public/cpp/cros_bluetooth_config_util.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "chromeos/ui/vector_icons/vector_icons.h"
@@ -29,6 +30,7 @@
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/vector_icon_types.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/label.h"
 
 namespace ash {
@@ -197,7 +199,7 @@ void BluetoothDeviceListItemView::UpdateDeviceProperties(
                       GetDeviceIcon(device_type),
                       static_cast<ui::ColorId>(cros_tokens::kCrosSysOnSurface)),
                   GetPairedDeviceName(device_properties_));
-  text_label()->SetEnabledColorId(cros_tokens::kCrosSysOnSurface);
+  text_label()->SetEnabledColor(cros_tokens::kCrosSysOnSurface);
   TypographyProvider::Get()->StyleLabel(ash::TypographyToken::kCrosButton2,
                                         *text_label());
 
@@ -259,7 +261,7 @@ void BluetoothDeviceListItemView::UpdateAccessibleName(
     a11y_text = base::StrCat({a11y_text, u" ", battery_text});
   }
 
-  SetAccessibleName(a11y_text);
+  GetViewAccessibility().SetName(a11y_text);
 }
 
 void BluetoothDeviceListItemView::UpdateBatteryInfo(
@@ -283,9 +285,8 @@ void BluetoothDeviceListItemView::UpdateMultipleBatteryView(
   // Remove battery view if it is not a multiple battery view.
   if (!sub_row()->children().empty()) {
     DCHECK(sub_row()->children().size() == 1);
-    if (std::string_view(sub_row()->children().at(0)->GetClassName()) !=
-        std::string_view(
-            BluetoothDeviceListItemMultipleBatteryView::kViewClassName)) {
+    if (sub_row()->children().at(0)->GetClassName() !=
+        BluetoothDeviceListItemMultipleBatteryView::kViewClassName) {
       sub_row()->RemoveAllChildViews();
     }
   }
@@ -311,8 +312,8 @@ void BluetoothDeviceListItemView::UpdateSingleBatteryView(
   // Remove battery view if it is not a single battery view.
   if (!sub_row()->children().empty()) {
     DCHECK(sub_row()->children().size() == 1);
-    if (std::string_view(sub_row()->children().at(0)->GetClassName()) !=
-        std::string_view(BluetoothDeviceListItemBatteryView::kViewClassName)) {
+    if (sub_row()->children().at(0)->GetClassName() !=
+        BluetoothDeviceListItemBatteryView::kViewClassName) {
       sub_row()->RemoveAllChildViews();
     }
   }

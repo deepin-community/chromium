@@ -48,10 +48,6 @@ char kLSanDefaultSuppressions[] =
     // xrandr leak. http://crbug.com/119677
     "leak:XRRFindDisplay\n"
 
-    // http://crbug.com/431213, http://crbug.com/416665
-    "leak:gin/object_template_builder.h\n"
-    "leak:gin/function_template.h\n"
-
     // Leaks in swrast_dri.so. http://crbug.com/540042
     "leak:swrast_dri.so\n"
 
@@ -108,7 +104,7 @@ char kLSanDefaultSuppressions[] =
 #if BUILDFLAG(IS_MAC)
     // These are caused by the system, but not yet clear if they are false
     // positives or bugs in the Mac LSAN runtime. Suppress while investigating.
-    // TODO(https://crbug.com/1320449): Remove these if/when fixed in macOS
+    // TODO(crbug.com/40223516): Remove these if/when fixed in macOS
     // or the runtime.
     "leak:_ensureAuxServiceAwareOfHostApp\n"
     "leak:cssmErrorString\n"

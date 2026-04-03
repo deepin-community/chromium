@@ -17,6 +17,7 @@
 #include "src/core/SkMD5.h"
 
 #include "include/private/base/SkFeatures.h"
+#include "include/private/base/SkMalloc.h"
 
 /** MD5 basic transformation. Transforms state based on block. */
 static void transform(uint32_t state[4], const uint8_t block[64]);
@@ -25,7 +26,7 @@ static void transform(uint32_t state[4], const uint8_t block[64]);
 static void encode(uint8_t output[16], const uint32_t input[4]);
 
 /** Encodes input into output (little endian 64 bit value). */
-static void encode(uint8_t output[8], const uint64_t input);
+static void encode(uint8_t output[8], uint64_t input);
 
 /** Decodes input (4 little endian 32 bit values) into storage, if required. */
 static const uint32_t* decode(uint32_t storage[16], const uint8_t input[64]);
@@ -46,7 +47,7 @@ bool SkMD5::write(const void* buf, size_t inputLength) {
     unsigned int inputIndex;
     if (inputLength >= bufferAvailable) {
         if (bufferIndex) {
-            memcpy(&this->buffer[bufferIndex], input, bufferAvailable);
+            sk_careful_memcpy(&this->buffer[bufferIndex], input, bufferAvailable);
             transform(this->state, this->buffer);
             inputIndex = bufferAvailable;
         } else {
@@ -62,7 +63,7 @@ bool SkMD5::write(const void* buf, size_t inputLength) {
         inputIndex = 0;
     }
 
-    memcpy(&this->buffer[bufferIndex], &input[inputIndex], inputLength - inputIndex);
+    sk_careful_memcpy(&this->buffer[bufferIndex], &input[inputIndex], inputLength - inputIndex);
 
     this->byteCount += inputLength;
     return true;
@@ -245,7 +246,7 @@ static void encode(uint8_t output[16], const uint32_t input[4]) {
     }
 }
 
-static void encode(uint8_t output[8], const uint64_t input) {
+static void encode(uint8_t output[8], uint64_t input) {
     output[0] = (uint8_t) (input        & 0xff);
     output[1] = (uint8_t)((input >>  8) & 0xff);
     output[2] = (uint8_t)((input >> 16) & 0xff);

@@ -8,18 +8,18 @@
 #include <string>
 #include <utility>
 
-#include "ash/components/arc/session/arc_service_manager.h"
 #include "ash/public/cpp/app_list/app_list_metrics.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
+#include "base/byte_size.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_running_on_chromeos.h"
 #include "base/timer/mock_timer.h"
-#include "chrome/browser/ash/app_list/search/system_info/system_info_util.h"
 #include "chrome/browser/ash/app_list/search/test/test_search_controller.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/storage/device_storage_util.h"
@@ -29,9 +29,13 @@
 #include "chromeos/ash/components/dbus/spaced/spaced_client.h"
 #include "chromeos/ash/components/disks/disk_mount_manager.h"
 #include "chromeos/ash/components/disks/fake_disk_mount_manager.h"
+#include "chromeos/ash/components/launcher_search/system_info/launcher_util.h"
 #include "chromeos/ash/components/mojo_service_manager/fake_mojo_service_manager.h"
+#include "chromeos/ash/components/system_info/cpu_data.h"
+#include "chromeos/ash/components/system_info/cpu_usage_data.h"
+#include "chromeos/ash/components/system_info/system_info_util.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "chromeos/ash/services/cros_healthd/public/cpp/fake_cros_healthd.h"
-#include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom-forward.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power_manager/power_supply_properties.pb.h"
@@ -80,7 +84,7 @@ void SetProbeTelemetryInfoResponse(healthd_mojom::BatteryInfoPtr battery_info,
 }
 
 void SetCrosHealthdCpuResponse(
-    const std::vector<CpuUsageData>& usage_data,
+    const std::vector<system_info::CpuUsageData>& usage_data,
     const std::vector<int32_t>& cpu_temps,
     const std::vector<uint32_t>& scaled_cpu_clock_speed) {
   auto cpu_info_ptr = healthd_mojom::CpuInfo::New();
@@ -238,7 +242,7 @@ void AddFile(const std::string& file_name,
       << " failed.";
   // Verify file size.
   base::stat_wrapper_t stat;
-  const int res = base::File::Lstat(target_path.value().c_str(), &stat);
+  const int res = base::File::Lstat(target_path, &stat);
   ASSERT_FALSE(res < 0) << "Couldn't stat" << target_path.value();
   ASSERT_EQ(expected_size, stat.st_size);
 }
@@ -278,12 +282,14 @@ void VerifyBatteryDataErrorBucketCounts(
     size_t expected_no_data_error,
     size_t expected_not_a_number_error,
     size_t expected_expectation_not_met_error) {
-  tester.ExpectBucketCount(kBatteryDataError, BatteryDataError::kNoData,
+  tester.ExpectBucketCount(kBatteryDataError,
+                           system_info::BatteryDataError::kNoData,
                            expected_no_data_error);
-  tester.ExpectBucketCount(kBatteryDataError, BatteryDataError::kNotANumber,
+  tester.ExpectBucketCount(kBatteryDataError,
+                           system_info::BatteryDataError::kNotANumber,
                            expected_not_a_number_error);
   tester.ExpectBucketCount(kBatteryDataError,
-                           BatteryDataError::kExpectationNotMet,
+                           system_info::BatteryDataError::kExpectationNotMet,
                            expected_expectation_not_met_error);
 }
 
@@ -315,7 +321,7 @@ class SystemInfoCardProviderTest : public testing::Test {
     provider_ = provider.get();
     search_controller_->AddProvider(std::move(provider));
 
-    // Create and register My files directory.
+    // Create and register MyFiles directory.
     // By emulating chromeos running, GetMyFilesFolderForProfile will return the
     // profile's temporary location instead of $HOME/Downloads.
     base::test::ScopedRunningOnChromeOS running_on_chromeos;
@@ -408,8 +414,8 @@ TEST_F(SystemInfoCardProviderTest, PreventTriggeringOfTooShortQueries) {
   int temp_3 = 15;
   uint32_t core_1_speed = 4000000;
   uint32_t core_2_speed = 2000000;
-  CpuUsageData core_1(1000, 1000, 1000);
-  CpuUsageData core_2(2000, 2000, 2000);
+  system_info::CpuUsageData core_1(1000, 1000, 1000);
+  system_info::CpuUsageData core_2(2000, 2000, 2000);
 
   SetCrosHealthdCpuResponse({core_1, core_2}, {temp_1, temp_2, temp_3},
                             {core_1_speed, core_2_speed});
@@ -437,8 +443,8 @@ TEST_F(SystemInfoCardProviderTest, Cpu) {
   int temp_3 = 15;
   uint32_t core_1_speed = 4000000;
   uint32_t core_2_speed = 2000000;
-  CpuUsageData core_1(1000, 1000, 1000);
-  CpuUsageData core_2(2000, 2000, 2000);
+  system_info::CpuUsageData core_1(1000, 1000, 1000);
+  system_info::CpuUsageData core_2(2000, 2000, 2000);
 
   SetCrosHealthdCpuResponse({core_1, core_2}, {temp_1, temp_2, temp_3},
                             {core_1_speed, core_2_speed});
@@ -474,8 +480,8 @@ TEST_F(SystemInfoCardProviderTest, Cpu) {
   core_1_speed = 5000000;
   core_2_speed = 6000000;
 
-  CpuUsageData core_1_delta(3000, 2500, 4500);
-  CpuUsageData core_2_delta(1000, 5500, 3500);
+  system_info::CpuUsageData core_1_delta(3000, 2500, 4500);
+  system_info::CpuUsageData core_2_delta(1000, 5500, 3500);
 
   SetCrosHealthdCpuResponse({core_1 + core_1_delta, core_2 + core_2_delta},
                             {new_temp_1, new_temp_2, new_temp_3},
@@ -848,20 +854,24 @@ TEST_F(SystemInfoCardProviderTest, Storage) {
   const int kAndroidPathBytes = 15271;
   const int kDownloadsPathBytes = 56758;
 
-  // Add files in My files and android files.
+  // Add files in MyFiles and Android files.
   AddFile("random.bin", kMountPathBytes, mount_path);          // ~7.9 KB
   AddFile("tall.pdf", kAndroidPathBytes, android_files_path);  // ~14.9 KB
   // Add file in Downloads and simulate bind mount with
   // [android files]/Download.
   AddFile("video.ogv", kDownloadsPathBytes, downloads_path);  // ~55.4 KB
 
-  int64_t total_bytes = base::SysInfo::AmountOfTotalDiskSpace(mount_path);
-  int64_t available_bytes = base::SysInfo::AmountOfFreeDiskSpace(mount_path);
+  int64_t total_bytes =
+      base::SysInfo::AmountOfTotalDiskSpace(mount_path).value_or(-1);
+  int64_t available_bytes =
+      base::SysInfo::AmountOfFreeDiskSpace(mount_path).value_or(-1);
   int64_t rounded_total_size = ash::settings::RoundByteSize(total_bytes);
 
   int64_t in_use_bytes = rounded_total_size - available_bytes;
-  std::u16string in_use_size = ui::FormatBytes(in_use_bytes);
-  std::u16string total_size = ui::FormatBytes(rounded_total_size);
+  std::u16string in_use_size = ui::FormatBytes(
+      base::ByteSize(base::checked_cast<uint64_t>(in_use_bytes)));
+  std::u16string total_size = ui::FormatBytes(
+      base::ByteSize(base::checked_cast<uint64_t>(rounded_total_size)));
   std::u16string result_description = base::StrCat(
       {u"Storage ", in_use_size, u" in use | ", total_size, u" total"});
 

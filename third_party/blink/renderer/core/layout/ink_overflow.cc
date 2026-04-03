@@ -4,13 +4,16 @@
 
 #include "third_party/blink/renderer/core/layout/ink_overflow.h"
 
-#include "build/chromeos_buildflags.h"
+#include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/markers/custom_highlight_marker.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker_controller.h"
+#include "third_party/blink/renderer/core/editing/visible_selection.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/highlight/highlight_style_utils.h"
 #include "third_party/blink/renderer/core/layout/geometry/logical_rect.h"
 #include "third_party/blink/renderer/core/layout/geometry/writing_mode_converter.h"
+#include "third_party/blink/renderer/core/layout/inline/caret_rect.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
 #include "third_party/blink/renderer/core/layout/text_decoration_offset.h"
 #include "third_party/blink/renderer/core/paint/highlight_painter.h"
@@ -75,10 +78,7 @@ InkOverflow::InkOverflow(Type source_type, const InkOverflow& source) {
       static_assert(sizeof(outsets_) == sizeof(single_),
                     "outsets should be the size of a pointer");
       single_ = source.single_;
-#if DCHECK_IS_ON()
-      for (wtf_size_t i = 0; i < std::size(outsets_); ++i)
-        DCHECK_EQ(outsets_[i], source.outsets_[i]);
-#endif
+      DCHECK(base::span(outsets_) == base::span(source.outsets_));
       break;
     case Type::kSelf:
     case Type::kContents:
@@ -104,10 +104,7 @@ InkOverflow::InkOverflow(Type source_type, InkOverflow&& source) {
       static_assert(sizeof(outsets_) == sizeof(single_),
                     "outsets should be the size of a pointer");
       single_ = source.single_;
-#if DCHECK_IS_ON()
-      for (wtf_size_t i = 0; i < std::size(outsets_); ++i)
-        DCHECK_EQ(outsets_[i], source.outsets_[i]);
-#endif
+      DCHECK(base::span(outsets_) == base::span(source.outsets_));
       break;
     case Type::kSelf:
     case Type::kContents:
@@ -174,7 +171,6 @@ PhysicalRect InkOverflow::Self(Type type, const PhysicalSize& size) const {
       return single_->ink_overflow;
   }
   NOTREACHED();
-  return {PhysicalOffset(), size};
 }
 
 PhysicalRect InkOverflow::Contents(Type type, const PhysicalSize& size) const {
@@ -185,7 +181,6 @@ PhysicalRect InkOverflow::Contents(Type type, const PhysicalSize& size) const {
 #if defined(DISALLOW_READING_UNSET)
       if (!read_unset_as_none_)
         NOTREACHED();
-      [[fallthrough]];
 #endif
     case Type::kNone:
     case Type::kSmallSelf:
@@ -201,7 +196,6 @@ PhysicalRect InkOverflow::Contents(Type type, const PhysicalSize& size) const {
       return container_->contents_ink_overflow;
   }
   NOTREACHED();
-  return PhysicalRect();
 }
 
 PhysicalRect InkOverflow::SelfAndContents(Type type,
@@ -213,7 +207,6 @@ PhysicalRect InkOverflow::SelfAndContents(Type type,
 #if defined(DISALLOW_READING_UNSET)
       if (!read_unset_as_none_)
         NOTREACHED();
-      [[fallthrough]];
 #endif
     case Type::kNone:
       return {PhysicalOffset(), size};
@@ -229,7 +222,6 @@ PhysicalRect InkOverflow::SelfAndContents(Type type,
       return container_->SelfAndContentsInkOverflow();
   }
   NOTREACHED();
-  return {PhysicalOffset(), size};
 }
 
 // Store |ink_overflow| as |SmallRawValue| if possible and returns |true|.
@@ -366,7 +358,7 @@ InkOverflow::Type InkOverflow::SetTextInkOverflow(
   CheckType(type);
   DCHECK(type == Type::kNotSet || type == Type::kInvalidated);
   std::optional<PhysicalRect> ink_overflow =
-      ComputeTextInkOverflow(cursor, text_info, style, style.GetFont(),
+      ComputeTextInkOverflow(cursor, text_info, style, *style.GetFont(),
                              rect_in_container, inline_context);
   if (!ink_overflow) {
     *ink_overflow_out = {PhysicalOffset(), rect_in_container.size};
@@ -456,6 +448,7 @@ std::optional<PhysicalRect> InkOverflow::ComputeTextInkOverflow(
   // Glyph bounds is in logical coordinate, origin at the alphabetic baseline.
   const gfx::RectF text_ink_bounds = scaled_font.TextInkBounds(text_info);
   LogicalRect ink_overflow = LogicalRect::EnclosingRect(text_ink_bounds);
+  const WritingMode writing_mode = style.GetWritingMode();
 
   // Make the origin at the logical top of this fragment.
   if (const SimpleFontData* font_data = scaled_font.PrimaryFont()) {
@@ -471,7 +464,7 @@ std::optional<PhysicalRect> InkOverflow::ComputeTextInkOverflow(
   // so compute text decoration overflow first.
   LogicalRect decoration_rect = ComputeDecorationOverflow(
       cursor, style, scaled_font, rect_in_container.offset, ink_overflow,
-      inline_context);
+      inline_context, writing_mode);
   ink_overflow.Unite(decoration_rect);
 
   if (style.GetTextEmphasisMark() != TextEmphasisMark::kNone) {
@@ -479,16 +472,12 @@ std::optional<PhysicalRect> InkOverflow::ComputeTextInkOverflow(
                                                ink_overflow);
   }
 
-  const WritingMode writing_mode = style.GetWritingMode();
-  if (ShadowList* text_shadow = style.TextShadow()) {
-    LineBoxStrut text_shadow_logical_outsets =
-        PhysicalBoxStrut::Enclosing(text_shadow->RectOutsetsIncludingOriginal())
-            .ConvertToLineLogical({writing_mode, TextDirection::kLtr});
-    ink_overflow.ExpandEdges(
-        text_shadow_logical_outsets.line_over.ClampNegativeToZero(),
-        text_shadow_logical_outsets.inline_end.ClampNegativeToZero(),
-        text_shadow_logical_outsets.line_under.ClampNegativeToZero(),
-        text_shadow_logical_outsets.inline_start.ClampNegativeToZero());
+  if (const ShadowList* text_shadow = style.TextShadow()) {
+    ExpandForShadowOverflow(ink_overflow, *text_shadow, writing_mode);
+  }
+
+  if (RuntimeEnabledFeatures::CSSCaretShapeEnabled()) {
+    ink_overflow = ComputeCaretOverflow(cursor, style, ink_overflow);
   }
 
   PhysicalRect local_ink_overflow =
@@ -506,6 +495,32 @@ std::optional<PhysicalRect> InkOverflow::ComputeTextInkOverflow(
 }
 
 // static
+LogicalRect InkOverflow::ComputeCaretOverflow(
+    const InlineCursor& cursor,
+    const ComputedStyle& style,
+    const LogicalRect& ink_overflow_in) {
+  LogicalRect ink_overflow = ink_overflow_in;
+  CaretShape caret_shape = GetCaretShapeFromComputedStyle(style);
+
+  // Care-shape applies to text or elements that accept text input.
+  const LayoutObject* layout_object = cursor.Current().GetLayoutObject();
+  const Node* node = layout_object->GetNode();
+  const PhysicalBoxFragment* box_fragment = cursor.Current().BoxFragment();
+  const LocalFrame* frame = layout_object->GetFrame();
+  // Keep the behaviour of bar shape as it is.
+  if (caret_shape != CaretShape::kBar && node && IsEditable(*node) && frame &&
+      box_fragment && frame->Selection().ShouldPaintCaret(*box_fragment))
+      [[unlikely]] {
+    unsigned offset = cursor.Current().TextEndOffset();
+    LogicalRect caret_rect =
+        GetCaretRectAtTextOffset(cursor, offset, caret_shape);
+    ink_overflow.Unite(caret_rect);
+  }
+
+  return ink_overflow;
+}
+
+// static
 LogicalRect InkOverflow::ComputeEmphasisMarkOverflow(
     const ComputedStyle& style,
     const PhysicalSize& size,
@@ -513,7 +528,7 @@ LogicalRect InkOverflow::ComputeEmphasisMarkOverflow(
   DCHECK(style.GetTextEmphasisMark() != TextEmphasisMark::kNone);
 
   LayoutUnit emphasis_mark_height = LayoutUnit(
-      style.GetFont().EmphasisMarkHeight(style.TextEmphasisMarkString()));
+      style.GetFont()->EmphasisMarkHeight(style.TextEmphasisMarkString()));
   DCHECK_GE(emphasis_mark_height, LayoutUnit());
 
   LogicalRect ink_overflow = ink_overflow_in;
@@ -530,14 +545,29 @@ LogicalRect InkOverflow::ComputeEmphasisMarkOverflow(
 }
 
 // static
+void InkOverflow::ExpandForShadowOverflow(LogicalRect& ink_overflow,
+                                          const ShadowList& text_shadow,
+                                          const WritingMode writing_mode) {
+  LineBoxStrut text_shadow_logical_outsets =
+      PhysicalBoxStrut::Enclosing(text_shadow.RectOutsetsIncludingOriginal())
+          .ConvertToLineLogical({writing_mode, TextDirection::kLtr});
+  ink_overflow.ExpandEdges(
+      text_shadow_logical_outsets.line_over.ClampNegativeToZero(),
+      text_shadow_logical_outsets.inline_end.ClampNegativeToZero(),
+      text_shadow_logical_outsets.line_under.ClampNegativeToZero(),
+      text_shadow_logical_outsets.inline_start.ClampNegativeToZero());
+}
+
+// static
 LogicalRect InkOverflow::ComputeDecorationOverflow(
     const InlineCursor& cursor,
     const ComputedStyle& style,
     const Font& scaled_font,
     const PhysicalOffset& container_offset,
     const LogicalRect& ink_overflow,
-    const InlinePaintContext* inline_context) {
-  LogicalRect accumulated_bound;
+    const InlinePaintContext* inline_context,
+    const WritingMode writing_mode) {
+  LogicalRect accumulated_bound = ink_overflow;
   if (!scaled_font.PrimaryFont()) {
     return accumulated_bound;
   }
@@ -548,13 +578,18 @@ LogicalRect InkOverflow::ComputeDecorationOverflow(
   }
 
   // Text decorations due to selection
-  if (UNLIKELY(cursor.Current().GetLayoutObject()->IsSelected())) {
+  if (cursor.Current().GetLayoutObject()->IsSelected()) [[unlikely]] {
     const ComputedStyle* selection_style = style.HighlightData().Selection();
-    if (selection_style && selection_style->HasAppliedTextDecorations()) {
-      LogicalRect selection_bound = ComputeAppliedDecorationOverflow(
-          *selection_style, scaled_font, container_offset, ink_overflow,
-          inline_context);
-      accumulated_bound.Unite(selection_bound);
+    if (selection_style) {
+      if (selection_style->HasAppliedTextDecorations()) {
+        LogicalRect selection_bound = ComputeAppliedDecorationOverflow(
+            *selection_style, scaled_font, container_offset, ink_overflow,
+            inline_context);
+        accumulated_bound.Unite(selection_bound);
+      }
+      if (const ShadowList* text_shadow = selection_style->TextShadow()) {
+        ExpandForShadowOverflow(accumulated_bound, *text_shadow, writing_mode);
+      }
     }
   }
 
@@ -563,10 +598,11 @@ LogicalRect InkOverflow::ComputeDecorationOverflow(
   // and the style functions we need to access pseudo styles take non-const
   // nodes.
   const FragmentItem* fragment_item = cursor.CurrentItem();
-  if (!fragment_item->IsText() || fragment_item->IsGeneratedText()) {
+  if (!fragment_item->IsText() || fragment_item->IsSvgText() ||
+      fragment_item->IsGeneratedText()) {
     return accumulated_bound;
   }
-  const LayoutObject* layout_object = cursor.CurrentMutableLayoutObject();
+  const LayoutObject* layout_object = cursor.Current().GetLayoutObject();
   DCHECK(layout_object);
   Text* text_node = DynamicTo<Text>(layout_object->GetNode());
   // ::first-letter passes the IsGeneratedText check but has no text node.
@@ -575,41 +611,55 @@ LogicalRect InkOverflow::ComputeDecorationOverflow(
   }
 
   DocumentMarkerController& controller = text_node->GetDocument().Markers();
+  if (!controller.HasAnyMarkersForText(*text_node)) {
+    return accumulated_bound;
+  }
+  TextOffsetRange fragment_dom_offsets =
+      HighlightPainter::GetFragmentDOMOffsets(
+          *text_node, fragment_item->StartOffset(), fragment_item->EndOffset());
 
   DocumentMarkerVector target_markers = controller.MarkersFor(
-      *text_node, DocumentMarker::MarkerTypes::TextFragment());
+      *text_node, DocumentMarker::kTextFragment, fragment_dom_offsets.start,
+      fragment_dom_offsets.end);
   if (!target_markers.empty()) {
     LogicalRect target_bound = ComputeMarkerOverflow(
-        target_markers, DocumentMarker::kTextFragment, fragment_item, text_node,
-        style, scaled_font, container_offset, ink_overflow, inline_context);
+        target_markers, DocumentMarker::kTextFragment, fragment_item,
+        fragment_dom_offsets, text_node, *layout_object, style, scaled_font,
+        container_offset, ink_overflow, inline_context, writing_mode);
     accumulated_bound.Unite(target_bound);
   }
+
   DocumentMarkerVector custom_markers = controller.MarkersFor(
-      *text_node, DocumentMarker::MarkerTypes::CustomHighlight());
+      *text_node, DocumentMarker::kCustomHighlight, fragment_dom_offsets.start,
+      fragment_dom_offsets.end);
   if (!custom_markers.empty()) {
     LogicalRect custom_bound = ComputeCustomHighlightOverflow(
-        custom_markers, fragment_item, text_node, style, scaled_font,
-        container_offset, ink_overflow, inline_context);
+        custom_markers, fragment_item, fragment_dom_offsets, text_node,
+        *layout_object, style, scaled_font, container_offset, ink_overflow,
+        inline_context);
     accumulated_bound.Unite(custom_bound);
   }
-  if (RuntimeEnabledFeatures::CSSSpellingGrammarErrorsEnabled()) {
-    DocumentMarkerVector spelling_markers = controller.MarkersFor(
-        *text_node, DocumentMarker::MarkerTypes::Spelling());
-    if (!spelling_markers.empty()) {
-      LogicalRect spelling_bound = ComputeMarkerOverflow(
-          spelling_markers, DocumentMarker::kSpelling, fragment_item, text_node,
-          style, scaled_font, container_offset, ink_overflow, inline_context);
-      accumulated_bound.Unite(spelling_bound);
-    }
 
-    DocumentMarkerVector grammar_markers = controller.MarkersFor(
-        *text_node, DocumentMarker::MarkerTypes::Grammar());
-    if (!grammar_markers.empty()) {
-      LogicalRect grammar_bound = ComputeMarkerOverflow(
-          grammar_markers, DocumentMarker::kGrammar, fragment_item, text_node,
-          style, scaled_font, container_offset, ink_overflow, inline_context);
-      accumulated_bound.Unite(grammar_bound);
-    }
+  DocumentMarkerVector spelling_markers = controller.MarkersFor(
+      *text_node, DocumentMarker::kSpelling, fragment_dom_offsets.start,
+      fragment_dom_offsets.end);
+  if (!spelling_markers.empty()) {
+    LogicalRect spelling_bound = ComputeMarkerOverflow(
+        spelling_markers, DocumentMarker::kSpelling, fragment_item,
+        fragment_dom_offsets, text_node, *layout_object, style, scaled_font,
+        container_offset, ink_overflow, inline_context, writing_mode);
+    accumulated_bound.Unite(spelling_bound);
+  }
+
+  DocumentMarkerVector grammar_markers = controller.MarkersFor(
+      *text_node, DocumentMarker::kGrammar, fragment_dom_offsets.start,
+      fragment_dom_offsets.end);
+  if (!grammar_markers.empty()) {
+    LogicalRect grammar_bound = ComputeMarkerOverflow(
+        grammar_markers, DocumentMarker::kGrammar, fragment_item,
+        fragment_dom_offsets, text_node, *layout_object, style, scaled_font,
+        container_offset, ink_overflow, inline_context, writing_mode);
+    accumulated_bound.Unite(grammar_bound);
   }
   return accumulated_bound;
 }
@@ -628,28 +678,32 @@ LogicalRect InkOverflow::ComputeAppliedDecorationOverflow(
   TextDecorationInfo decoration_info(
       LineRelativeOffset::CreateFromBoxOrigin(offset_in_container),
       ink_overflow.size.inline_size, style, inline_context,
-      /* selection_text_decoration */ std::nullopt, decoration_override,
-      &scaled_font, kMinimumThicknessIsOne);
+      TextDecorationLine::kNone, Color(), decoration_override, &scaled_font,
+      kMinimumThicknessIsOne);
   TextDecorationOffset decoration_offset(style);
   gfx::RectF accumulated_bound;
   for (wtf_size_t i = 0; i < decoration_info.AppliedDecorationCount(); i++) {
     decoration_info.SetDecorationIndex(i);
+    if (!decoration_info.FontData()) {
+      continue;
+    }
     if (decoration_info.HasUnderline()) {
-      decoration_info.SetUnderlineLineData(decoration_offset);
-      accumulated_bound.Union(decoration_info.Bounds());
+      accumulated_bound.Union(DecorationLinePainter::Bounds(
+          decoration_info.ComputeUnderlineLineData(decoration_offset)));
     }
     if (decoration_info.HasOverline()) {
-      decoration_info.SetOverlineLineData(decoration_offset);
-      accumulated_bound.Union(decoration_info.Bounds());
+      accumulated_bound.Union(DecorationLinePainter::Bounds(
+          decoration_info.ComputeOverlineLineData(decoration_offset)));
     }
     if (decoration_info.HasLineThrough()) {
-      decoration_info.SetLineThroughLineData();
-      accumulated_bound.Union(decoration_info.Bounds());
+      accumulated_bound.Union(DecorationLinePainter::Bounds(
+          decoration_info.ComputeLineThroughLineData()));
     }
     if (decoration_info.HasSpellingError() ||
         decoration_info.HasGrammarError()) {
-      decoration_info.SetSpellingOrGrammarErrorLineData(decoration_offset);
-      accumulated_bound.Union(decoration_info.Bounds());
+      accumulated_bound.Union(DecorationLinePainter::Bounds(
+          decoration_info.ComputeSpellingOrGrammarErrorLineData(
+              decoration_offset)));
     }
   }
   // Adjust the container coordinate system to the local coordinate system.
@@ -661,45 +715,55 @@ LogicalRect InkOverflow::ComputeMarkerOverflow(
     const DocumentMarkerVector& markers,
     const DocumentMarker::MarkerType type,
     const FragmentItem* fragment_item,
+    const TextOffsetRange& fragment_dom_offsets,
     Text* text_node,
+    const LayoutObject& layout_object,
     const ComputedStyle& style,
     const Font& scaled_font,
     const PhysicalOffset& offset_in_container,
     const LogicalRect& ink_overflow,
-    const InlinePaintContext* inline_context) {
-  LogicalRect accumulated_bound;
-  auto* pseudo_style =
-      fragment_item->IsSvgText()
-          ? nullptr
-          : HighlightStyleUtils::HighlightPseudoStyle(
-                text_node, style, HighlightPainter::PseudoFor(type));
-  const TextOffsetRange fragment_dom_offsets =
-      HighlightPainter::GetFragmentDOMOffsets(
-          *text_node, fragment_item->StartOffset(), fragment_item->EndOffset());
-  MarkerRangeMappingContext mapping_context(*text_node, fragment_dom_offsets);
-  for (auto marker : markers) {
-    std::optional<TextOffsetRange> marker_offsets =
-        mapping_context.GetTextContentOffsets(*marker);
-    if (!marker_offsets) {
-      continue;
+    const InlinePaintContext* inline_context,
+    const WritingMode writing_mode) {
+  DCHECK(!fragment_item->IsSvgText());
+  LogicalRect accumulated_bound = ink_overflow;
+  auto* pseudo_style = HighlightStyleUtils::HighlightPseudoStyle(
+      style, HighlightPainter::PseudoFor(type));
+  const ShadowList* text_shadow =
+      pseudo_style ? pseudo_style->TextShadow() : nullptr;
+  bool has_pseudo_decorations =
+      pseudo_style && pseudo_style->HasAppliedTextDecorations();
+  bool is_spelling_or_grammar =
+      type == DocumentMarker::kSpelling || type == DocumentMarker::kGrammar;
+  if (has_pseudo_decorations || is_spelling_or_grammar || text_shadow) {
+    MarkerRangeMappingContext mapping_context(*text_node, layout_object,
+                                              fragment_dom_offsets);
+    for (const auto& marker : markers) {
+      std::optional<TextOffsetRange> marker_offsets =
+          mapping_context.GetTextContentOffsets(*marker);
+      if (!marker_offsets) {
+        continue;
+      }
+      LogicalRect decoration_bound;
+      if (has_pseudo_decorations) {
+        decoration_bound = ComputeAppliedDecorationOverflow(
+            *pseudo_style, scaled_font, offset_in_container, ink_overflow,
+            inline_context);
+      } else if (is_spelling_or_grammar) {
+        const AppliedTextDecoration synthesised{
+            HighlightPainter::LineFor(type),
+            {},
+            HighlightPainter::ColorFor(type),
+            {},
+            {}};
+        decoration_bound = ComputeAppliedDecorationOverflow(
+            style, scaled_font, offset_in_container, ink_overflow,
+            inline_context, &synthesised);
+      }
+      accumulated_bound.Unite(decoration_bound);
+      if (text_shadow) [[unlikely]] {
+        ExpandForShadowOverflow(accumulated_bound, *text_shadow, writing_mode);
+      }
     }
-    LogicalRect decoration_bound;
-    if (pseudo_style && pseudo_style->HasAppliedTextDecorations()) {
-      decoration_bound = ComputeAppliedDecorationOverflow(
-          *pseudo_style, scaled_font, offset_in_container, ink_overflow,
-          inline_context);
-    } else if (type == DocumentMarker::kSpelling ||
-               type == DocumentMarker::kGrammar) {
-      const AppliedTextDecoration synthesised{HighlightPainter::LineFor(type),
-                                              {},
-                                              HighlightPainter::ColorFor(type),
-                                              {},
-                                              {}};
-      decoration_bound = ComputeAppliedDecorationOverflow(
-          style, scaled_font, offset_in_container, ink_overflow, inline_context,
-          &synthesised);
-    }
-    accumulated_bound.Unite(decoration_bound);
   }
   return accumulated_bound;
 }
@@ -707,18 +771,20 @@ LogicalRect InkOverflow::ComputeMarkerOverflow(
 LogicalRect InkOverflow::ComputeCustomHighlightOverflow(
     const DocumentMarkerVector& markers,
     const FragmentItem* fragment_item,
+    const TextOffsetRange& fragment_dom_offsets,
     Text* text_node,
+    const LayoutObject& layout_object,
     const ComputedStyle& style,
     const Font& scaled_font,
     const PhysicalOffset& offset_in_container,
     const LogicalRect& ink_overflow,
     const InlinePaintContext* inline_context) {
+  DCHECK(!fragment_item->IsSvgText());
   LogicalRect accumulated_bound;
-  const TextOffsetRange fragment_dom_offsets =
-      HighlightPainter::GetFragmentDOMOffsets(
-          *text_node, fragment_item->StartOffset(), fragment_item->EndOffset());
-  MarkerRangeMappingContext mapping_context(*text_node, fragment_dom_offsets);
-  for (auto marker : markers) {
+
+  MarkerRangeMappingContext mapping_context(*text_node, layout_object,
+                                            fragment_dom_offsets);
+  for (const auto& marker : markers) {
     std::optional<TextOffsetRange> marker_offsets =
         mapping_context.GetTextContentOffsets(*marker);
     if (!marker_offsets) {
@@ -727,11 +793,8 @@ LogicalRect InkOverflow::ComputeCustomHighlightOverflow(
 
     const CustomHighlightMarker& highlight_marker =
         To<CustomHighlightMarker>(*marker);
-    const auto* pseudo_style = fragment_item->IsSvgText()
-                                   ? nullptr
-                                   : HighlightStyleUtils::HighlightPseudoStyle(
-                                         text_node, style, kPseudoIdHighlight,
-                                         highlight_marker.GetHighlightName());
+    const auto* pseudo_style = HighlightStyleUtils::HighlightPseudoStyle(
+        style, kPseudoIdHighlight, highlight_marker.GetHighlightName());
 
     LogicalRect decoration_bound;
     if (pseudo_style && pseudo_style->HasAppliedTextDecorations()) {

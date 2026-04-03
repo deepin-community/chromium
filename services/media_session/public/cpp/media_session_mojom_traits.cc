@@ -4,6 +4,7 @@
 
 #include "services/media_session/public/cpp/media_session_mojom_traits.h"
 
+#include "base/compiler_specific.h"
 #include "mojo/public/cpp/base/string16_mojom_traits.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 #include "services/media_session/public/cpp/chapter_information.h"
@@ -55,8 +56,8 @@ bool StructTraits<media_session::mojom::MediaMetadataDataView,
 const base::span<const uint8_t>
 StructTraits<media_session::mojom::MediaImageBitmapDataView,
              SkBitmap>::pixel_data(const SkBitmap& r) {
-  return base::make_span(static_cast<uint8_t*>(r.getPixels()),
-                         r.computeByteSize());
+  return UNSAFE_TODO(
+      base::span(static_cast<uint8_t*>(r.getPixels()), r.computeByteSize()));
 }
 
 // static
@@ -70,7 +71,6 @@ StructTraits<media_session::mojom::MediaImageBitmapDataView,
       return media_session::mojom::MediaImageBitmapColorType::kBGRA_8888;
     default:
       NOTREACHED();
-      return media_session::mojom::MediaImageBitmapColorType::kRGBA_8888;
   }
 }
 

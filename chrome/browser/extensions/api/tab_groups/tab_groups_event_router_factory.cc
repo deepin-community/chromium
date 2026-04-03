@@ -9,6 +9,8 @@
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/event_router_factory.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace extensions {
 
 // static
@@ -29,9 +31,10 @@ TabGroupsEventRouterFactory::TabGroupsEventRouterFactory()
           "TabGroupsEventRouter",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kOwnInstance)
-              // TODO(crbug.com/1418376): Check if this service is needed in
-              // Guest mode.
               .WithGuest(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOwnInstance)
               .Build()) {
   DependsOn(EventRouterFactory::GetInstance());
 }
@@ -43,6 +46,12 @@ TabGroupsEventRouterFactory::BuildServiceInstanceForBrowserContext(
 }
 
 bool TabGroupsEventRouterFactory::ServiceIsCreatedWithBrowserContext() const {
+  return true;
+}
+
+bool TabGroupsEventRouterFactory::ServiceIsNULLWhileTesting() const {
+  // The event router adds tab strip observers on construction, which some
+  // tests cannot tolerate.
   return true;
 }
 

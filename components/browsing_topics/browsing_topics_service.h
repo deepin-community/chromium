@@ -6,7 +6,6 @@
 #define COMPONENTS_BROWSING_TOPICS_BROWSING_TOPICS_SERVICE_H_
 
 #include "components/browsing_topics/annotator.h"
-#include "components/browsing_topics/mojom/browsing_topics_internals.mojom-forward.h"
 #include "components/browsing_topics/mojom/browsing_topics_internals.mojom.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/privacy_sandbox/canonical_topic.h"
@@ -54,6 +53,16 @@ class BrowsingTopicsService : public KeyedService {
   // the browser. Padded top topics won't be returned.
   virtual std::vector<privacy_sandbox::CanonicalTopic> GetTopTopicsForDisplay()
       const = 0;
+
+  // Validates if the scheduled topics calculation ran on time, logging failure
+  // metrics if not.
+  //
+  // Validation is skipped under the following conditions:
+  //   - The topics data is not yet fully loaded.
+  //   - A calculation is currently in progress.
+  //   - The browser is in the process of shutting down.
+  //   - Failure metrics for the current session have already been logged.
+  virtual void ValidateCalculationSchedule() = 0;
 
   virtual Annotator* GetAnnotator() = 0;
 

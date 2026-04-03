@@ -13,9 +13,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
+#include "xla/service/computation_placer.h"
+#include "xla/service/stream_pool.h"
+#include "xla/service/transfer_manager.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/tsl/platform/statusor.h"
+#include "tsl/platform/statusor.h"
 #define EIGEN_USE_THREADS
-
-#include "xla/service/backend.h"
 
 #include <memory>
 #include <optional>
@@ -24,12 +32,14 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
+#include "absl/status/statusor.h"
+#include "unsupported/Eigen/CXX11/Tensor"
+#include "xla/service/backend.h"
 #include "xla/service/compiler.h"
 #include "xla/service/platform_util.h"
-#include "xla/statusor.h"
 #include "xla/stream_executor/host/host_platform_id.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/stream_executor/stream_executor_memory_allocator.h"
 #include "xla/util.h"
 #include "tsl/platform/cpu_info.h"
 #include "tsl/platform/env.h"
@@ -78,10 +88,10 @@ struct Backend::IntraOpThreadPool {
   std::unique_ptr<Eigen::ThreadPoolDevice> device;
 };
 
-/* static */ StatusOr<std::unique_ptr<Backend>> Backend::CreateBackend(
+/* static */ absl::StatusOr<std::unique_ptr<Backend>> Backend::CreateBackend(
     const BackendOptions& options) {
   se::Platform* platform = options.platform();
-  TF_ASSIGN_OR_RETURN(auto compiler, Compiler::GetForPlatform(platform));
+  TF_ASSIGN_OR_RETURN(auto compiler, Compiler::GetForPlatform(platform->id()));
   TF_ASSIGN_OR_RETURN(
       auto stream_executors,
       PlatformUtil::GetStreamExecutors(platform, options.allowed_devices()));
@@ -89,13 +99,13 @@ struct Backend::IntraOpThreadPool {
                       TransferManager::GetForPlatform(platform));
   TF_ASSIGN_OR_RETURN(auto computation_placer,
                       ComputationPlacer::GetForPlatform(platform));
-  std::unique_ptr<Backend> backend(
-      new Backend(platform, compiler, stream_executors, transfer_manager,
-                  computation_placer, options.intra_op_parallelism_threads()));
+  std::unique_ptr<Backend> backend(new Backend(
+      platform, std::move(compiler), stream_executors, transfer_manager,
+      computation_placer, options.intra_op_parallelism_threads()));
   return std::move(backend);
 }
 
-/* static */ StatusOr<std::unique_ptr<Backend>>
+/* static */ absl::StatusOr<std::unique_ptr<Backend>>
 Backend::CreateDefaultBackend() {
   TF_ASSIGN_OR_RETURN(se::Platform * platform,
                       PlatformUtil::GetDefaultPlatform());
@@ -104,45 +114,44 @@ Backend::CreateDefaultBackend() {
   return CreateBackend(backend_options);
 }
 
-StatusOr<StreamPool::Ptr> Backend::BorrowStream(int device_ordinal,
-                                                se::StreamPriority priority) {
+absl::StatusOr<StreamPool::Ptr> Backend::BorrowStream(
+    int device_ordinal, se::StreamPriority priority) {
   TF_ASSIGN_OR_RETURN(auto executor, stream_executor(device_ordinal));
   return BorrowStream(executor, priority);
 }
 
-StatusOr<StreamPool::Ptr> Backend::BorrowStream(se::StreamExecutor* executor,
-                                                se::StreamPriority priority) {
-  absl::MutexLock l(&mu_);
+absl::StatusOr<StreamPool::Ptr> Backend::BorrowStream(
+    se::StreamExecutor* executor, se::StreamPriority priority) {
+  absl::MutexLock l(mu_);
   if (!stream_pools_.contains(executor)) {
-    stream_pools_.emplace(executor, std::make_unique<StreamPool>());
+    stream_pools_.emplace(executor, std::make_unique<StreamPool>(executor));
   }
-  return stream_pools_.at(executor)->BorrowStream(executor, priority);
+  return stream_pools_.at(executor)->BorrowStream(priority);
 }
 
-StatusOr<std::vector<StreamPool::Ptr>> Backend::BorrowStreams(
+absl::StatusOr<std::vector<StreamPool::Ptr>> Backend::BorrowStreams(
     int device_ordinal, int num_streams, se::StreamPriority priority) {
-  absl::MutexLock l(&mu_);
+  absl::MutexLock l(mu_);
   TF_ASSIGN_OR_RETURN(auto executor, stream_executor(device_ordinal));
   if (!stream_pools_.contains(executor)) {
-    stream_pools_.emplace(executor, std::make_unique<StreamPool>());
+    stream_pools_.emplace(executor, std::make_unique<StreamPool>(executor));
   }
 
   std::vector<StreamPool::Ptr> ptrs;
   for (int i = 0; i < num_streams; i++) {
-    StreamPool::Ptr ptr =
-        stream_pools_.at(executor)->BorrowStream(executor, priority);
+    StreamPool::Ptr ptr = stream_pools_.at(executor)->BorrowStream(priority);
     ptrs.push_back(std::move(ptr));
   }
   return ptrs;
 }
 
-Backend::Backend(se::Platform* platform, Compiler* compiler,
+Backend::Backend(se::Platform* platform, std::unique_ptr<Compiler> compiler,
                  absl::Span<se::StreamExecutor* const> stream_executors,
                  TransferManager* transfer_manager,
                  ComputationPlacer* computation_placer,
                  int intra_op_parallelism_threads)
     : platform_(platform),
-      compiler_(compiler),
+      compiler_(std::move(compiler)),
       transfer_manager_(transfer_manager),
       computation_placer_(computation_placer),
       stream_executors_(stream_executors.begin(), stream_executors.end()) {
@@ -181,7 +190,7 @@ tsl::thread::ThreadPool* Backend::eigen_intra_op_thread_pool() const {
   return intra_op_thread_pool_->pool.get();
 }
 
-StatusOr<se::StreamExecutor*> Backend::stream_executor(
+absl::StatusOr<se::StreamExecutor*> Backend::stream_executor(
     int device_ordinal) const {
   if (device_ordinal < 0 ||
       device_ordinal > stream_executors_.back()->device_ordinal()) {
@@ -198,8 +207,8 @@ StatusOr<se::StreamExecutor*> Backend::stream_executor(
                          device_name(device_ordinal));
 }
 
-StatusOr<bool> Backend::devices_equivalent(int device_ordinal_a,
-                                           int device_ordinal_b) {
+absl::StatusOr<bool> Backend::devices_equivalent(int device_ordinal_a,
+                                                 int device_ordinal_b) const {
   // Use the name from device description to determine equivalence. This is a
   // bit crude but works for GPUs which is the important case where we compile
   // an executable for one GPU and want to know if it will run (well) on
@@ -212,7 +221,7 @@ StatusOr<bool> Backend::devices_equivalent(int device_ordinal_a,
           executor_b->GetDeviceDescription().name());
 }
 
-Status Backend::ResetDevices() {
+absl::Status Backend::ResetDevices() {
   return transfer_manager_->ResetDevices(stream_executors_);
 }
 

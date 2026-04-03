@@ -15,13 +15,10 @@
 #include "base/test/task_environment.h"
 #include "chrome/common/extensions/api/file_manager_private.h"
 #include "chromeos/ash/components/drivefs/drivefs_host.h"
-#include "chromeos/ash/components/drivefs/mojom/drivefs.mojom-forward.h"
-#include "chromeos/ash/components/drivefs/mojom/drivefs.mojom-shared.h"
 #include "chromeos/ash/components/drivefs/mojom/drivefs.mojom.h"
 #include "extensions/common/extension.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/utility/utility.h"
 #include "url/gurl.h"
 
 namespace file_manager {
@@ -103,7 +100,7 @@ class TestDriveFsEventRouter : public DriveFsEventRouter {
 
   void BroadcastEvent(extensions::events::HistogramValue histogram_value,
                       const std::string& event_name,
-                      base::Value::List event_args,
+                      base::ListValue event_args,
                       bool dispatch_to_system_notification = true) override {
     if (dispatch_to_system_notification) {
       BroadcastEventImpl(event_name, base::Value(std::move(event_args)));
@@ -118,12 +115,12 @@ class TestDriveFsEventRouter : public DriveFsEventRouter {
               (const std::string& name, const base::Value& event));
   MOCK_METHOD(void,
               BroadcastEventForIndividualFilesImpl,
-              (const std::string& name, const base::Value::List& event));
+              (const std::string& name, const base::ListValue& event));
   MOCK_METHOD(bool, IsPathWatched, (const base::FilePath&));
 
   GURL ConvertDrivePathToFileSystemUrl(const base::FilePath& file_path,
                                        const GURL& listener_url) override {
-    return GURL(base::StrCat({listener_url.host(), ":", file_path.value()}));
+    return GURL(base::StrCat({listener_url.GetHost(), ":", file_path.value()}));
   }
 
   std::vector<GURL> ConvertPathsToFileSystemUrls(
@@ -132,7 +129,7 @@ class TestDriveFsEventRouter : public DriveFsEventRouter {
     std::vector<GURL> urls;
     for (const auto& path : paths) {
       const GURL url =
-          GURL(base::StrCat({listener_url.host(), ":", path.value()}));
+          GURL(base::StrCat({listener_url.GetHost(), ":", path.value()}));
       urls.push_back(url);
     }
     return urls;

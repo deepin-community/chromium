@@ -147,7 +147,6 @@ LoadState TransportConnectSubJob::GetLoadState() const {
       return LOAD_STATE_IDLE;
   }
   NOTREACHED();
-  return LOAD_STATE_IDLE;
 }
 
 const IPEndPoint& TransportConnectSubJob::CurrentAddress() const {
@@ -182,8 +181,6 @@ int TransportConnectSubJob::DoLoop(int result) {
         break;
       default:
         NOTREACHED();
-        rv = ERR_FAILED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && next_state_ != STATE_NONE &&
            next_state_ != STATE_DONE);
@@ -221,7 +218,7 @@ int TransportConnectSubJob::DoEndpointLockComplete() {
           net_log.source());
 
   net_log.AddEvent(NetLogEventType::TRANSPORT_CONNECT_JOB_CONNECT_ATTEMPT, [&] {
-    auto dict = base::Value::Dict().Set("address", CurrentAddress().ToString());
+    auto dict = base::DictValue().Set("address", CurrentAddress().ToString());
     transport_socket_->NetLog().source().AddToEventParameters(dict);
     return dict;
   });
@@ -250,8 +247,7 @@ int TransportConnectSubJob::DoTransportConnectComplete(int result) {
     // Drop the socket to release the endpoint lock, if any.
     transport_socket_.reset();
 
-    parent_job_->connection_attempts_.push_back(
-        ConnectionAttempt(CurrentAddress(), result));
+    parent_job_->connection_attempts_.emplace_back(CurrentAddress(), result);
 
     // Don't try the next address if entering suspend mode.
     if (result != ERR_NETWORK_IO_SUSPENDED &&

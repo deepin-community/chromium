@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -55,7 +56,8 @@ TEST_P(AeadTest, SealOpenSpan) {
       aead.Open(ciphertext, nonce, kAdditionalData);
   ASSERT_TRUE(decrypted);
   ASSERT_EQ(decrypted->size(), sizeof(kPlaintext));
-  ASSERT_EQ(0, memcmp(decrypted->data(), kPlaintext, sizeof(kPlaintext)));
+  UNSAFE_TODO(
+      ASSERT_EQ(0, memcmp(decrypted->data(), kPlaintext, sizeof(kPlaintext))));
 
   std::vector<uint8_t> wrong_key(aead.KeyLength(), 1u);
   crypto::Aead aead_wrong_key(alg);
@@ -83,6 +85,18 @@ TEST_P(AeadTest, SealOpenWrongKey) {
   std::string decrypted;
   EXPECT_FALSE(aead_wrong_key.Open(ciphertext, nonce, ad, &decrypted));
   EXPECT_EQ(0U, decrypted.size());
+}
+
+TEST_P(AeadTest, SealOpenTooShortKey) {
+  crypto::Aead aead(GetParam());
+  std::array<uint8_t, 1> key;
+  aead.Init(key);
+
+  std::string nonce(aead.NonceLength(), 0);
+  std::string plaintext("this is the plaintext");
+  std::string ad("this is the additional data");
+  std::string ciphertext;
+  EXPECT_FALSE(aead.Seal(plaintext, nonce, ad, &ciphertext));
 }
 
 }  // namespace

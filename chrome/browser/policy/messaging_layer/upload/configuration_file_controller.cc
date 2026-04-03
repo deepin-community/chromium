@@ -11,10 +11,12 @@
 #include <string_view>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/sys_byteorder.h"
+#include "base/numerics/byte_conversions.h"
+#include "base/strings/string_view_util.h"
 #include "chrome/browser/policy/messaging_layer/upload/record_upload_request_builder.h"
 #include "components/reporting/encryption/primitives.h"
 #include "components/reporting/encryption/verification.h"
@@ -38,7 +40,6 @@ bool DestinationListsEqual(ListOfBlockedDestinations list_a,
 // Only used in testing. Feature for testing the configuration file in our
 // automated tests. Not exposed on the UI.
 BASE_FEATURE(kReportingConfigurationFileTestSignature,
-             "ReportingConfigurationFileTestSignature",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 ConfigurationFileController::~ConfigurationFileController() = default;
@@ -113,10 +114,8 @@ Status ConfigurationFileController::VerifySignature(ConfigFile config_file) {
 
   // Verify the value signed on the server using the big-endian representation
   // of the configuration file version.
-  const int32_t version_to_verify = base::HostToNet32(config_file.version());
   return verifier_.Verify(
-      std::string_view(reinterpret_cast<const char*>(&version_to_verify),
-                       sizeof(int32_t)),
+      base::as_string_view(base::U32ToBigEndian(config_file.version())),
       config_file.config_file_signature());
 }
 

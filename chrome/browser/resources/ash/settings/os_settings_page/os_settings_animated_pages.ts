@@ -17,16 +17,17 @@
 import 'chrome://resources/polymer/v3_0/iron-pages/iron-pages.js';
 
 import {assert} from 'chrome://resources/js/assert.js';
-import {IronPagesElement} from 'chrome://resources/polymer/v3_0/iron-pages/iron-pages.js';
+import type {IronPagesElement} from 'chrome://resources/polymer/v3_0/iron-pages/iron-pages.js';
 import {DomIf, FlattenedNodesObserver, microTask, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {getSettingIdParameter} from '../common/setting_id_param_util.js';
 import {Section} from '../mojom-webui/routes.mojom-webui.js';
-import {Route, Router} from '../router.js';
+import type {Route} from '../router.js';
+import {Router} from '../router.js';
 
 import {getTemplate} from './os_settings_animated_pages.html.js';
-import {OsSettingsSubpageElement} from './os_settings_subpage.js';
+import type {OsSettingsSubpageElement} from './os_settings_subpage.js';
 
 interface OsSettingsAnimatedPagesElement {
   $: {
@@ -67,7 +68,6 @@ class OsSettingsAnimatedPagesElement extends
   private previousRoute_: Route|null;
   private lightDomReady_: boolean = false;
   private queuedRouteChange_: {oldRoute?: Route, newRoute: Route}|null = null;
-
   private lightDomObserver_: FlattenedNodesObserver|null;
 
   constructor() {
@@ -106,8 +106,13 @@ class OsSettingsAnimatedPagesElement extends
     //  1) Not a direct navigation (such that the search box stays focused), and
     //  2) Not a "back" navigation, in which case the anchor element should be
     //     focused (further below in this function).
-    if (this.previousRoute_ &&
-        !Router.getInstance().lastRouteChangeWasPopstate()) {
+    //  OR
+    //  If the anchor element doesn't exist anymore
+    const lastRouteChangeWasPopstate =
+        Router.getInstance().lastRouteChangeWasPopstate();
+    if ((lastRouteChangeWasPopstate &&
+         document.activeElement instanceof HTMLBodyElement) ||
+        (this.previousRoute_ && !lastRouteChangeWasPopstate)) {
       const subpage = this.querySelector<OsSettingsSubpageElement>(
           'os-settings-subpage.iron-selected');
       if (subpage) {
@@ -148,7 +153,14 @@ class OsSettingsAnimatedPagesElement extends
   override currentRouteChanged(newRoute: Route, oldRoute?: Route): void {
     this.previousRoute_ = oldRoute || null;
 
-    if (newRoute.section === this.section && newRoute.isSubpage()) {
+    // Given only one section shows at a time, avoid unnecessarily
+    // changing the active page for this section if the active route belongs
+    // to a different section.
+    if (newRoute.section !== null && newRoute.section !== this.section) {
+      return;
+    }
+
+    if (newRoute.isSubpage()) {
       this.switchToSubpage_(newRoute, oldRoute);
     } else {
       this.$.animatedPages.selected = 'default';

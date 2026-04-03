@@ -3,7 +3,10 @@
 // found in the LICENSE file.
 
 #include "extensions/common/extension_features.h"
+
 #include "base/feature_list.h"
+#include "build/branding_buildflags.h"
+#include "build/build_config.h"
 
 namespace extensions_features {
 
@@ -11,29 +14,32 @@ namespace extensions_features {
 // API Features
 ///////////////////////////////////////////////////////////////////////////////
 
-BASE_FEATURE(kApiContentSettingsClipboard,
-             "ApiContentSettingsClipboard",
+BASE_FEATURE(kApiActionOpenPopup, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kApiContentSettingsClipboard, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kApiEnterpriseKioskInput, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kApiRuntimeActionData, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kApiPermissionsHostAccessRequests,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kApiEnterpriseKioskInput,
-             "ApiEnterpriseKioskInput",
+BASE_FEATURE(kApiUserScriptsExecute, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kApiUserScriptsMultipleWorlds, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kApiOdfsConfigPrivate, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kApiEnterpriseReportingPrivateOnDataMaskingRulesTriggered,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kApiReadingList,
-             "ApiReadingList",
+BASE_FEATURE(kApiProxyOverrideRulesPrivate, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kApiRuntimeGetPlatformInfoNaClArch,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kApiUserScripts,
-             "ApiUserScripts",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kApiOdfsConfigPrivate,
-             "ApiOdfsConfigPrivate",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kRestrictFileURLNavigation,
-             "RestrictFileURLNavigation",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kWebRequestSecurityInfo, base::FEATURE_DISABLED_BY_DEFAULT);
 
 ///////////////////////////////////////////////////////////////////////////////
 // Other Features
@@ -41,121 +47,174 @@ BASE_FEATURE(kRestrictFileURLNavigation,
 
 // For historical reasons, this includes some APIs. Please don't add more.
 
-BASE_FEATURE(kAllowSharedArrayBuffersUnconditionally,
-             "AllowSharedArrayBuffersUnconditionally",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kAllowWithholdingExtensionPermissionsOnInstall,
-             "AllowWithholdingExtensionPermissionsOnInstall",
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kAvoidEarlyExtensionScriptContextCreation,
-             "AvoidEarlyExtensionScriptContextCreation",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kCheckingNoExtensionIdInExtensionIpcs,
              "EMF_NO_EXTENSION_ID_FOR_EXTENSION_SOURCE",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kEnableWebHidInWebView,
-             "EnableWebHidInWebView",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kExtensionDynamicURLRedirection,
-             "ExtensionDynamicURLRedirection",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kExtensionSidePanelIntegration,
-             "ExtensionSidePanelIntegration",
+BASE_FEATURE(kSkipResetServiceWorkerURLLoaderFactories,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kExtensionSourceUrlEnforcement,
-             "ExtensionSourceUrlEnforcement",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kEnableWebHidInWebView, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kExtensionWebFileHandlers,
-             "ExtensionWebFileHandlers",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kExtensionsManifestV3Only,
-             "ExtensionsManifestV3Only",
+#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+// Disabled by default because on first-run we don't have a Finch seed yet, so
+// we want to default to the safe behavior of no extensions.
+BASE_FEATURE(kEnableExtensionsForCorpDesktopAndroid,
              base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+
+BASE_FEATURE(kExtensionDisableUnsupportedDeveloper,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionLocalizationGuid, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionIconVariants, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionManifestV2Unsupported, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionManifestV2ExceptionList,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionManifestV2Disabled, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionsBackgroundCompilation,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE_PARAM(base::TimeDelta,
+                   kBackgroundCompilationTimeout,
+                   &kExtensionsBackgroundCompilation,
+                   "timeout",
+                   base::Milliseconds(0));
+
+// Default to the same value v8 uses to code cache scripts.
+BASE_FEATURE_PARAM(size_t,
+                   kMinScriptSizeForBackgroundCompilation,
+                   &kExtensionsBackgroundCompilation,
+                   "min_script_size",
+                   1024);
+BASE_FEATURE_PARAM(size_t,
+                   kMaxScriptSizeForBackgroundCompilation,
+                   &kExtensionsBackgroundCompilation,
+                   "max_script_size",
+                   0);
+
+const base::FeatureParam<std::string> kExtensionManifestV2ExceptionListParam(
+    &kExtensionManifestV2ExceptionList,
+    /*name=*/"mv2_exception_list",
+    /*default_value=*/"");
+
+BASE_FEATURE(kAllowLegacyMV2Extensions, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionProtocolHandlers, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionsManifestV3Only, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kExtensionsMenuAccessControl,
-             "ExtensionsMenuAccessControl",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+#if BUILDFLAG(IS_ANDROID)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
 
 BASE_FEATURE(kExtensionsMenuAccessControlWithPermittedSites,
              "ExtensionsMenuAccessControlWithPermittedSitesName",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kForceWebRequestProxyForTest,
-             "ForceWebRequestProxyForTest",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kExtensionsServiceWorkerStartRetry,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionsToolbarZeroState, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kForceWebRequestProxyForTest, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kLaunchWindowsNativeHostsDirectly,
-             "LaunchWindowsNativeHostsDirectly",
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kNewExtensionFaviconHandling,
-             "ExtensionsNewFaviconHandling",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kNewWebstoreDomain,
-             "NewWebstoreDomain",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// To investigate signal beacon loss in crrev.com/c/2262402.
-BASE_FEATURE(kReportKeepaliveUkm,
-             "ReportKeepaliveUkm",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kRestrictDeveloperModeAPIs,
-             "RestrictDeveloperModeAPIs",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSafeBrowsingCrxAllowlistAutoDisable,
-             "SafeBrowsingCrxAllowlistAutoDisable",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kSafeBrowsingCrxAllowlistShowWarnings,
-             "SafeBrowsingCrxAllowlistShowWarnings",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kStructuredCloningForMV3Messaging,
-             "StructuredCloningForMV3Messaging",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kStructuredCloningForMessaging, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kTelemetryExtensionPendingApprovalApi,
-             "TelemetryExtensionPendingApprovalApi",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kUsePerBrowserContextWebRequestEventRouter,
-             "kUsePerBrowserContextWebRequestEventRouter",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kWebviewTagMPArchBehavior,
-             "WebviewTagMPArchBehavior",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kExtensionsZipFileInstalledInProfileDir,
-             "ExtensionsZipFileInstalledInProfileDir",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kExtensionsServiceWorkerOptimizedEventDispatch,
-             "ExtensionsServiceWorkerOptimizedEventDispatch",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kNewWebstoreURL,
-             "NewWebstoreURL",
+// TODO(crbug.com/399447642): Clean up this feature after confirming the fix is
+// sufficient.
+BASE_FEATURE(kWebstoreInstallerUserGestureKillSwitch,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kDeclarativeNetRequestSafeRuleLimits,
              "DeclarativeNetRequestSafeDynamicRules",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kExperimentalOmniboxLabs, base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kDeclarativeNetRequestResponseHeaderMatching,
-             "DeclarativeNetRequestResponseHeaderMatching",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kIncludeJSCallStackInExtensionApiRequest,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUseNewServiceWorkerTaskQueue, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kDeclarativeNetRequestHeaderSubstitution,
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kDisableDisableExtensionsExceptCommandLineSwitch,
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+);
+
+BASE_FEATURE(kDisableExtensionsOnChromeUrlsSwitch,
+// TODO (crbug.com/426554244): Determine if this switch should be
+// removed for desktop-android builds as well.
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS) && \
+    !BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
+
+BASE_FEATURE(kUserScriptUserExtensionToggle, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kDebuggerAPIRestrictedToDevMode,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionBrowserNamespaceAndPolyfillSupport,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kOptimizeServiceWorkerStartRequests,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAvoidCloneArgsOnExtensionFunctionDispatch,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kExtensionContentVerificationUsesExtensionRoot,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kContentVerifyJobUseJobVersionForHashing,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kEnableShouldShowPromotion, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSearchEngineExplicitChoiceDialog,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSearchEngineUnconditionalDialog,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kWebRequestPersistFilteredEvents,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kWebRequestAlternativeAddListener,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace extensions_features

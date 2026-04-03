@@ -12,6 +12,17 @@
 
 namespace content {
 
+// An enum for UMA reporting of why site isolation is disabled.
+enum class SiteIsolationDisabledReason {
+  kNotDisabled = 0,
+  kDisabledBySwitch = 1,
+  kDisabledByPolicy = 2,  // Android only.
+  kDisabledByEmbedder = 3,
+  kNotEnabledByDefault = 4,
+  kUnknownReason = 5,
+  kMaxValue = kUnknownReason,
+};
+
 class BrowserContext;
 
 // A centralized place for making policy decisions about out-of-process iframes,
@@ -60,6 +71,12 @@ class CONTENT_EXPORT SiteIsolationPolicy {
   // Returns true if the OriginAgentCluster header will be respected.
   static bool IsOriginAgentClusterEnabled();
 
+  // Returns true if the feature OriginKeyedProcessesByDefault is enabled, and
+  // StrictSiteIsolation is also enabled (the latter will default to false on
+  // Android).
+  static bool AreOriginKeyedProcessesEnabledByDefault(
+      BrowserContext* browser_context);
+
   // Returns whether defaulting to origin-keyed agent cluster (without
   // necessarily an origin-keyed process) is enabled.
   // OriginAgentClusters are enabled by default if kOriginIsolationHeader and
@@ -94,9 +111,21 @@ class CONTENT_EXPORT SiteIsolationPolicy {
   // their cached value.
   static void DisableFlagCachingForTesting();
 
+  // Forces AreOriginKeyedProcessesEnabledByDefault() to not let command line or
+  // enterprise overrides bypass the memory checks.
+  static void IgnoreOriginKeyedProcessOverridesForTesting();
+
   // Returns true when process-isolation of fenced frames from their embedders
   // is enabled.
   static bool IsProcessIsolationForFencedFramesEnabled();
+
+  // Returns true if site isolation is enabled and is at least as strict as
+  // site-per-process.
+  static bool IsSitePerProcessOrStricter();
+
+  // Returns a reason why site isolation is not enabled to the extent of
+  // site-per-process or stricter. For UMA logging.
+  static SiteIsolationDisabledReason GetSiteIsolationDisabledReason();
 
  private:
   SiteIsolationPolicy();  // Not instantiable.

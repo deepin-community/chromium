@@ -1,6 +1,6 @@
 #!/usr/bin/env vpython3
 #
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -65,6 +65,8 @@ def update_gn_var(file, variable, files):
 
 
 def update_tsconfig(file, files):
+    if not files:
+        return
     files.sort()
     with open(file, 'w') as f:
         f.write("""{
@@ -81,22 +83,28 @@ def update_tsconfig(file, files):
 """)
 
 
-def update_readme_version(file, ver):
+def update_readme_chromium(file, **kwargs):
+    """ Update the README file with the given key-value pairs. The key is
+    searched in the file and the value is updated.
+    """
     content = None
     with open(file) as f:
         content = f.readlines()
 
-    # Find the `Version` line.
+    updates = []
     for i, line in enumerate(content):
-        if line.startswith("Version:"):
-            lineIndex = i
-            break
-    if lineIndex is None:
+        key = line.split(":")[0]
+        if key and key.lower() in kwargs.keys():
+            updates.append((i, f"{key}: {kwargs[key.lower()]}\n"))
+
+    if not updates:
         return
 
+    for line_index, line_update in updates:
+        content[line_index] = line_update
+
     with open(file, 'w') as f:
-        f.write(''.join(content[:lineIndex] + [f"Version: {ver}\n"] +
-                        content[lineIndex + 1:]))
+        f.write(''.join(content))
 
 
 def main():
@@ -104,6 +112,7 @@ def main():
     parser.add_argument('package_name')
     parser.add_argument('output_dir')
     parser.add_argument('library_dir')
+    parser.add_argument('version', default='latest', nargs='?')
 
     args = parser.parse_args()
 
@@ -117,7 +126,7 @@ def main():
     old_package_json = json.load(open(f'{package_path}/package.json'))
     package_json = json.load(
         urllib.request.urlopen(
-            f'https://registry.npmjs.org/{package_name}/latest'))
+            f'https://registry.npmjs.org/{package_name}/{args.version}'))
 
     # Version check
     version = parse_version(package_json['version'])
@@ -160,25 +169,39 @@ def main():
             name
             for name in members if name.startswith(f'package/{library_dir}/')
             and name not in excluded_sources and
-            (name.endswith('.js') or name.endswith('.js.map')
-             or name.endswith('.d.ts') or name.endswith('.d.ts.map'))
+            (name.endswith('.js') or name.endswith('.d.ts'))
         ])
 
     # Update devtools_grd_files.gni
     update_gn_var(
-        './config/gni/devtools_grd_files.gni', 'grd_files_debug_sources', [
+        './config/gni/devtools_grd_files.gni', 'grd_files_unbundled_sources', [
             f'front_end/third_party/{output_dir}/' + name
             for name in members if name.startswith(f'package/{library_dir}/')
             and name not in excluded_sources and name.endswith('.js')
         ] + [
             name for name in read_gn_var('./config/gni/devtools_grd_files.gni',
-                                         'grd_files_debug_sources')
+                                         'grd_files_unbundled_sources')
             if not name.startswith(f'front_end/third_party/{output_dir}/')
         ])
 
-    # Update README.chromium
-    update_readme_version(
-        f'./front_end/third_party/{output_dir}/README.chromium', version)
+    update_readme_chromium(
+        f'./front_end/third_party/{output_dir}/README.chromium',
+        version=package_json['version'],
+        revision=package_json['gitHead'],
+    )
+
+    # Update README.chromium for puppeteer-core transitive dependencies.
+    if package_name == 'puppeteer-core':
+        dependencies = package_json.get('devDependencies', {})
+        for dep_name in ['mitt', 'parsel-js', 'rxjs']:
+            if dep_name in dependencies:
+                version = dependencies[dep_name].lstrip('^~')
+                # parsel-js has a different folder in devtools tree.
+                if dep_name == 'parsel-js':
+                    dep_name = 'parsel'
+                update_readme_chromium(
+                    f'./front_end/third_party/puppeteer/third_party/{dep_name}/README.chromium',
+                    version=version)
 
     tar.close()
 

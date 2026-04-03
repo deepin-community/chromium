@@ -7,6 +7,8 @@
 #ifndef SkMacros_DEFINED
 #define SkMacros_DEFINED
 
+#include "include/private/base/SkTo.h" // IWYU pragma: keep
+
 /*
  *  Usage:  SK_MACRO_CONCAT(a, b)   to construct the symbol ab
  *
@@ -25,6 +27,15 @@
 #define SK_MACRO_APPEND_LINE(name)  SK_MACRO_CONCAT(name, __LINE__)
 
 #define SK_MACRO_APPEND_COUNTER(name) SK_MACRO_CONCAT(name, __COUNTER__)
+
+/*
+ *  Makes a string of X, where X is expanded before conversion to a string if X itself contains
+ *  macros.
+ *
+ *  Usage: SK_MACRO_STRINGIFY(__LINE__)    to make "123", where 123 is the current line number.
+ */
+#define SK_MACRO_STRINGIFY(X) SK_MACRO_STRINGIFY_IMPL_PRIV(X)
+#define SK_MACRO_STRINGIFY_IMPL_PRIV(X) #X
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -90,5 +101,70 @@ extern "C" {
     \
     friend X operator &(X a, X b); \
     friend X& operator &=(X& a, X b);
+
+/**
+ * Wraps a C++11 enum that we use as a bitfield, and enables a limited amount of
+ * masking with type safety. Instantiated with the ~ operator.
+ */
+template<typename TFlags> class SkTFlagsMask {
+public:
+    constexpr explicit SkTFlagsMask(TFlags value) : SkTFlagsMask(static_cast<int>(value)) {}
+    constexpr explicit SkTFlagsMask(int value) : fValue(value) {}
+    constexpr int value() const { return fValue; }
+private:
+    const int fValue;
+};
+
+/**
+ * Defines bitwise operators that make it possible to use an enum class as a
+ * basic bitfield.
+ */
+#define SK_MAKE_BITFIELD_CLASS_OPS(X) \
+    [[maybe_unused]] constexpr SkTFlagsMask<X> operator~(X a) { \
+        return SkTFlagsMask<X>(~static_cast<int>(a)); \
+    } \
+    [[maybe_unused]] constexpr X operator|(X a, X b) { \
+        return static_cast<X>(static_cast<int>(a) | static_cast<int>(b)); \
+    } \
+    [[maybe_unused]] inline X& operator|=(X& a, X b) { \
+        return (a = a | b); \
+    } \
+    [[maybe_unused]] constexpr bool operator&(X a, X b) { \
+        return SkToBool(static_cast<int>(a) & static_cast<int>(b)); \
+    } \
+    [[maybe_unused]] constexpr SkTFlagsMask<X> operator|(SkTFlagsMask<X> a, SkTFlagsMask<X> b) { \
+        return SkTFlagsMask<X>(a.value() | b.value()); \
+    } \
+    [[maybe_unused]] constexpr SkTFlagsMask<X> operator|(SkTFlagsMask<X> a, X b) { \
+        return SkTFlagsMask<X>(a.value() | static_cast<int>(b)); \
+    } \
+    [[maybe_unused]] constexpr SkTFlagsMask<X> operator|(X a, SkTFlagsMask<X> b) { \
+        return SkTFlagsMask<X>(static_cast<int>(a) | b.value()); \
+    } \
+    [[maybe_unused]] constexpr X operator&(SkTFlagsMask<X> a, SkTFlagsMask<X> b) { \
+        return static_cast<X>(a.value() & b.value()); \
+    } \
+    [[maybe_unused]] constexpr X operator&(SkTFlagsMask<X> a, X b) { \
+        return static_cast<X>(a.value() & static_cast<int>(b)); \
+    } \
+    [[maybe_unused]] constexpr X operator&(X a, SkTFlagsMask<X> b) { \
+        return static_cast<X>(static_cast<int>(a) & b.value()); \
+    } \
+    [[maybe_unused]] inline X& operator&=(X& a, SkTFlagsMask<X> b) { \
+        return (a = a & b); \
+    } \
+
+#define SK_DECL_BITFIELD_CLASS_OPS_FRIENDS(X) \
+    friend constexpr SkTFlagsMask<X> operator ~(X); \
+    friend constexpr X operator |(X, X); \
+    friend X& operator |=(X&, X); \
+    friend constexpr bool operator &(X, X); \
+    friend constexpr SkTFlagsMask<X> operator|(SkTFlagsMask<X>, SkTFlagsMask<X>); \
+    friend constexpr SkTFlagsMask<X> operator|(SkTFlagsMask<X>, X); \
+    friend constexpr SkTFlagsMask<X> operator|(X, SkTFlagsMask<X>); \
+    friend constexpr X operator&(SkTFlagsMask<X>, SkTFlagsMask<X>); \
+    friend constexpr X operator&(SkTFlagsMask<X>, X); \
+    friend constexpr X operator&(X, SkTFlagsMask<X>); \
+    friend X& operator &=(X&, SkTFlagsMask<X>)
 
 #endif  // SkMacros_DEFINED

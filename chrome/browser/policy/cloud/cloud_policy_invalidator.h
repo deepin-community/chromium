@@ -13,11 +13,11 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
-#include "components/invalidation/public/invalidation.h"
-#include "components/invalidation/public/invalidation_handler.h"
-#include "components/invalidation/public/invalidation_util.h"
+#include "chrome/browser/policy/cloud/policy_invalidator.h"
+#include "components/invalidation/invalidation_listener.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/core/common/cloud/policy_invalidation_scope.h"
@@ -27,30 +27,11 @@ class Clock;
 class SequencedTaskRunner;
 }
 
-namespace invalidation {
-class InvalidationService;
-}
-
 namespace policy {
 
-// Listens for and provides policy invalidations.
-class CloudPolicyInvalidator : public invalidation::InvalidationHandler,
-                               public CloudPolicyCore::Observer,
-                               public CloudPolicyStore::Observer {
+// PolicyInvalidator for Chrome browser policies.
+class CloudPolicyInvalidator : public PolicyInvalidator {
  public:
-  // The number of minutes to delay a policy refresh after receiving an
-  // invalidation with no payload.
-  static const int kMissingPayloadDelay;
-
-  // The default, min and max values for max_fetch_delay_.
-  static const int kMaxFetchDelayDefault;
-  static const int kMaxFetchDelayMin;
-  static const int kMaxFetchDelayMax;
-
-  // The grace period, in seconds, to allow for invalidations to be received
-  // once the invalidation service starts up.
-  static const int kInvalidationGracePeriod;
-
   // Returns a name of a refresh metric associated with the given scope.
   static const char* GetPolicyRefreshMetricName(PolicyInvalidationScope scope);
   // Returns a name of an invalidation metric associated with the given scope.
@@ -59,6 +40,9 @@ class CloudPolicyInvalidator : public invalidation::InvalidationHandler,
 
   // |scope| indicates the invalidation scope that this invalidator
   // is responsible for.
+  // |invalidation_listener| provides invalidations and is observed during the
+  // whole invaldiator's lifetime. Must remain valid until the invalidator is
+  // destroyed.
   // |core| is the cloud policy core which connects the various policy objects.
   // It must remain valid until Shutdown is called.
   // |task_runner| is used for scheduling delayed tasks. It must post tasks to
@@ -71,171 +55,36 @@ class CloudPolicyInvalidator : public invalidation::InvalidationHandler,
   // if scope is not DeviceLocalAccount.
   CloudPolicyInvalidator(
       PolicyInvalidationScope scope,
+      invalidation::InvalidationListener* invalidation_listener,
       CloudPolicyCore* core,
       const scoped_refptr<base::SequencedTaskRunner>& task_runner,
-      base::Clock* clock,
-      int64_t highest_handled_invalidation_version,
-      const std::string& device_local_account_id);
-  CloudPolicyInvalidator(
-      PolicyInvalidationScope scope,
-      CloudPolicyCore* core,
-      const scoped_refptr<base::SequencedTaskRunner>& task_runner,
-      base::Clock* clock,
-      int64_t highest_handled_invalidation_version);
+      const base::Clock* clock,
+      const std::string& device_local_account_id = std::string());
   CloudPolicyInvalidator(const CloudPolicyInvalidator&) = delete;
   CloudPolicyInvalidator& operator=(const CloudPolicyInvalidator&) = delete;
   ~CloudPolicyInvalidator() override;
 
-  // Initializes the invalidator. No invalidations will be generated before this
-  // method is called. This method must only be called once.
-  // |invalidation_service| is the invalidation service to use and must remain
-  // valid until Shutdown is called.
-  void Initialize(invalidation::InvalidationService* invalidation_service);
+  // InvalidationListener::Observer:
+  std::string GetType() const override;
 
-  // Shuts down and disables invalidations. It must be called before the object
-  // is destroyed.
-  void Shutdown();
+ protected:
+  // Handles policy refresh depending on invalidations availability and incoming
+  // invalidations.
+  class CloudPolicyInvalidationHandler
+      : public PolicyInvalidator::PolicyInvalidationHandler {
+   public:
+    CloudPolicyInvalidationHandler(
+        PolicyInvalidationScope scope,
+        CloudPolicyCore* core,
+        const base::Clock* clock,
+        scoped_refptr<base::SequencedTaskRunner> task_runner);
 
-  // The highest invalidation version that was handled already.
-  int64_t highest_handled_invalidation_version() const {
-    return highest_handled_invalidation_version_;
-  }
-
-  invalidation::InvalidationService* invalidation_service_for_test() const {
-    return invalidation_service_;
-  }
-
-  // invalidation::InvalidationHandler:
-  void OnInvalidatorStateChange(invalidation::InvalidatorState state) override;
-  void OnIncomingInvalidation(
-      const invalidation::Invalidation& invalidation) override;
-  std::string GetOwnerName() const override;
-  bool IsPublicTopic(const invalidation::Topic& topic) const override;
-
-  // CloudPolicyCore::Observer:
-  void OnCoreConnected(CloudPolicyCore* core) override;
-  void OnRefreshSchedulerStarted(CloudPolicyCore* core) override;
-  void OnCoreDisconnecting(CloudPolicyCore* core) override;
-
-  // CloudPolicyStore::Observer:
-  void OnStoreLoaded(CloudPolicyStore* store) override;
-  void OnStoreError(CloudPolicyStore* store) override;
-
- private:
-  // Returns true if `this` is observing `invalidation_service_`.
-  bool IsRegistered() const;
-
-  // Returns true if `IsRegistered()` and `invalidation_service_` is enabled.
-  bool AreInvalidationsEnabled() const;
-
-  // Handle an invalidation to the policy.
-  void HandleInvalidation(const invalidation::Invalidation& invalidation);
-
-  // Update topic subscription with the invalidation service based on the
-  // given policy data.
-  void UpdateSubscription(const enterprise_management::PolicyData* policy);
-
-  // Registers this handler with |invalidation_service_| if needed and
-  // subscribes to the given |topic| with the invalidation service.
-  void Register(const invalidation::Topic& topic);
-
-  // Unregisters this handler and unsubscribes from the current topic with
-  // the invalidation service.
-  // TODO(crbug.com/1056114): Topic subscriptions remain active after browser
-  // restart, so explicit unsubscription here causes redundant (un)subscription
-  // traffic (and potentially leaking subscriptions).
-  void Unregister();
-
-  // Update |max_fetch_delay_| based on the given policy map.
-  void UpdateMaxFetchDelay(const PolicyMap& policy_map);
-  void set_max_fetch_delay(int delay);
-
-  // Informs the core's refresh scheduler about whether invalidations are
-  // enabled.
-  void UpdateInvalidationsEnabled();
-
-  // Refresh the policy.
-  // |is_missing_payload| is set to true if the callback is being invoked in
-  // response to an invalidation with a missing payload.
-  void RefreshPolicy(bool is_missing_payload);
-
-  // Acknowledge the latest invalidation.
-  void AcknowledgeInvalidation();
-
-  // Determines if the given policy is different from the policy passed in the
-  // previous call.
-  bool IsPolicyChanged(const enterprise_management::PolicyData* policy);
-
-  // Determine if invalidations have been enabled longer than the grace period.
-  // This is a heuristic attempt to avoid counting initial policy fetches as
-  // invalidation-triggered.
-  // See https://codereview.chromium.org/213743014 for more details.
-  bool HaveInvalidationsBeenEnabledForAWhileForMetricsRecording();
-
-  // The state of the object.
-  enum State {
-    UNINITIALIZED,
-    STOPPED,
-    STARTED,
-    SHUT_DOWN
+    ~CloudPolicyInvalidationHandler() override;
+    const char* GetPolicyRefreshMetricName(
+        PolicyInvalidationScope scope) override;
+    const char* GetPolicyInvalidationMetricName(
+        PolicyInvalidationScope scope) override;
   };
-  State state_;
-
-  // The invalidation scope this invalidator is responsible for.
-  const PolicyInvalidationScope scope_;
-
-  // The unique name to be returned with by GetOwnerName().
-  const std::string owner_name_;
-
-  // The cloud policy core.
-  raw_ptr<CloudPolicyCore> core_;
-
-  // Schedules delayed tasks.
-  const scoped_refptr<base::SequencedTaskRunner> task_runner_;
-
-  // The clock.
-  raw_ptr<base::Clock> clock_;
-
-  // The invalidation service.
-  raw_ptr<invalidation::InvalidationService, AcrossTasksDanglingUntriaged>
-      invalidation_service_;
-
-  // The time that invalidations became enabled.
-  std::optional<base::Time> invalidations_enabled_time_;
-
-  // The topic representing the policy in the invalidation service.
-  invalidation::Topic topic_;
-
-  // Whether the policy is current invalid. This is set to true when an
-  // invalidation is received and reset when the policy fetched due to the
-  // invalidation is stored.
-  bool invalid_;
-
-  // The version of the latest invalidation received. This is compared to
-  // the invalidation version of policy stored to determine when the
-  // invalidated policy is up to date.
-  int64_t invalidation_version_;
-
-  // The highest invalidation version that was handled already.
-  int64_t highest_handled_invalidation_version_;
-
-  // The most up to date invalidation.
-  std::unique_ptr<invalidation::Invalidation> invalidation_;
-
-  // The maximum random delay, in ms, between receiving an invalidation and
-  // fetching the new policy.
-  int max_fetch_delay_;
-
-  // The hash value of the current policy. This is used to determine if a new
-  // policy is different from the current one.
-  uint32_t policy_hash_value_;
-
-  // A thread checker to make sure that callbacks are invoked on the correct
-  // thread.
-  base::ThreadChecker thread_checker_;
-
-  // WeakPtrFactory used to create callbacks to this object.
-  base::WeakPtrFactory<CloudPolicyInvalidator> weak_factory_{this};
 };
 
 }  // namespace policy

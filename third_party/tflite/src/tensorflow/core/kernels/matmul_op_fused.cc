@@ -53,11 +53,10 @@ limitations under the License.
 #include "tensorflow/core/util/tensor_format.h"
 
 #if defined(TENSORFLOW_USE_CUSTOM_CONTRACTION_KERNEL)
-#include "tsl/framework/contraction/eigen_contraction_kernel.h"
+#include "xla/tsl/framework/contraction/eigen_contraction_kernel.h"
 #endif
 
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
-#include "xla/stream_executor/gpu/gpu_asm_opts.h"
 #include "xla/stream_executor/gpu/redzone_allocator.h"
 #include "xla/stream_executor/integrations/tf_allocator_adapter.h"
 #include "tensorflow/core/kernels/conv_ops_gpu.h"
@@ -200,7 +199,7 @@ struct LaunchFusedMatMulOp<CPUDevice, T> {
 namespace {
 
 #if GOOGLE_CUDA || TF_HIPBLASLT
-StatusOr<se::gpu::BlasLt::Epilogue> GetBlasLtEpilogOp(
+absl::StatusOr<stream_executor::gpu::BlasLt::Epilogue> GetBlasLtEpilogOp(
     FusedComputationType fusion) {
   if (fusion == FusedComputationType::kBiasAdd) {
     return se::gpu::BlasLt::Epilogue::kBias;
@@ -236,7 +235,7 @@ se::blas::AlgorithmConfig AutotuneMatmul(
       // scratch space is deallocated between runs.
       BlasScratchAllocator scratch_allocator(context);
 
-      Status cublaslt_launch =
+      absl::Status cublaslt_launch =
           launch_func(scratch_allocator, i, &profile_result);
 
       VLOG(4) << "  Autotune algorithm " << i
@@ -266,7 +265,7 @@ se::blas::AlgorithmConfig AutotuneMatmul(
 #endif
 
 template <typename LaunchFunc, typename Sig>
-StatusOr<std::vector<xla::AutotuneResult>> AutotuneMatMulImpl(
+absl::StatusOr<std::vector<xla::AutotuneResult>> AutotuneMatMulImpl(
     OpKernelContext* ctx,
     std::vector<std::unique_ptr<const se::dnn::OpRunner<Sig>>>& runners,
     bool actually_do_autotune, const LaunchFunc& launch_func,
@@ -283,7 +282,7 @@ StatusOr<std::vector<xla::AutotuneResult>> AutotuneMatMulImpl(
     // TODO(zhengxq): profile each algorithm multiple times to better
     // accuracy.
     se::RedzoneAllocator rz_scratch_allocator(
-        stream, &tf_allocator_adapter, se::GpuAsmOpts(),
+        stream, &tf_allocator_adapter,
         /*memory_limit=*/scratch_size_limit);
     BlasScratchAllocator scratch_allocator(ctx, scratch_size_limit);
     se::ScratchAllocator* allocator_used =
@@ -293,10 +292,10 @@ StatusOr<std::vector<xla::AutotuneResult>> AutotuneMatMulImpl(
 
     TF_ASSIGN_OR_RETURN(auto desc, runner->ToAlgorithmDesc());
     se::dnn::ProfileResult profile_result;
-    Status cudnn_launch_status =
+    absl::Status cudnn_launch_status =
         actually_do_autotune
             ? launch_func(allocator_used, runner, &profile_result)
-            : OkStatus();
+            : absl::OkStatus();
     if (!actually_do_autotune) {
       // Make the result valid according to `is_valid`.
       profile_result.set_algorithm(desc);
@@ -330,7 +329,7 @@ StatusOr<std::vector<xla::AutotuneResult>> AutotuneMatMulImpl(
 }
 
 struct FusedMatmulAutotuneGroup {
-  static string name() { return "FusedMatmul"; }
+  static std::string name() { return "FusedMatmul"; }
 };
 
 typedef AutotuneSingleton<FusedMatmulAutotuneGroup, MatmulParameters,
@@ -338,7 +337,8 @@ typedef AutotuneSingleton<FusedMatmulAutotuneGroup, MatmulParameters,
     FusedMatmulAutotuneMap;
 
 template <typename T>
-StatusOr<AutotuneEntry<se::dnn::FusedMatmulOp>> AutotuneFusedMatmul(
+absl::StatusOr<AutotuneEntry<stream_executor::dnn::FusedMatmulOp>>
+AutotuneFusedMatmul(
     bool cudnn_use_autotune,
     AutotuneMap<MatmulParameters, AutotuneEntry<se::dnn::FusedMatmulOp>>*
         autotune_map,
@@ -351,12 +351,11 @@ StatusOr<AutotuneEntry<se::dnn::FusedMatmulOp>> AutotuneFusedMatmul(
   AutotuneEntry<se::dnn::FusedMatmulOp> autotune_entry;
   auto* stream = ctx->op_device_context()->stream();
   if (!autotune_map->Find(params, &autotune_entry)) {
-    profiler::ScopedAnnotation trace("cudnn_autotuning");
+    tsl::profiler::ScopedAnnotation trace("cudnn_autotuning");
 
     se::TfAllocatorAdapter tf_allocator_adapter(ctx->device()->GetAllocator({}),
                                                 stream);
-    se::RedzoneAllocator rz_allocator(stream, &tf_allocator_adapter,
-                                      se::GpuAsmOpts());
+    se::RedzoneAllocator rz_allocator(stream, &tf_allocator_adapter);
     se::DeviceMemory<T> c_ptr_rz(WrapRedzoneBestEffort(&rz_allocator, c_ptr));
 
     std::vector<std::unique_ptr<const se::dnn::FusedMatmulRunner>> runners;
@@ -366,14 +365,14 @@ StatusOr<AutotuneEntry<se::dnn::FusedMatmulOp>> AutotuneFusedMatmul(
       return errors::Internal("No DNN in stream executor.");
     }
     TF_RETURN_IF_ERROR(dnn->GetFusedMatmulRunners(
-        CudnnUseFrontend(), element_type, element_type, element_type, stream,
-        trans_a, trans_b, m, n, k, lda, ldb, ldc, activation_mode,
-        /*use_fallback=*/false, GetNumericOptions(), &runners));
+        element_type, element_type, element_type, stream, trans_a, trans_b, m,
+        n, k, lda, ldb, ldc, activation_mode,
+        /*use_fallback=*/false, GetNumericOptionsForCuDnn(), &runners));
 
     auto launch_func =
         [&](se::ScratchAllocator* allocator_used,
             const std::unique_ptr<const se::dnn::FusedMatmulRunner>& runner,
-            se::dnn::ProfileResult* profile_result) -> Status {
+            se::dnn::ProfileResult* profile_result) -> absl::Status {
       TF_ASSIGN_OR_RETURN(auto scratch, allocator_used->AllocateBytes(
                                             runner->GetWorkspaceSize()));
       return (*runner)(stream, profile_result, scratch, a_ptr, b_ptr, bias_ptr,
@@ -410,9 +409,10 @@ StatusOr<AutotuneEntry<se::dnn::FusedMatmulOp>> AutotuneFusedMatmul(
       std::vector<std::unique_ptr<const se::dnn::FusedMatmulRunner>>
           fallback_runners;
       TF_RETURN_IF_ERROR(dnn->GetFusedMatmulRunners(
-          CudnnUseFrontend(), element_type, element_type, element_type, stream,
-          trans_a, trans_b, m, n, k, lda, ldb, ldc, activation_mode,
-          /*use_fallback=*/true, GetNumericOptions(), &fallback_runners));
+          element_type, element_type, element_type, stream, trans_a, trans_b, m,
+          n, k, lda, ldb, ldc, activation_mode,
+          /*use_fallback=*/true, GetNumericOptionsForCuDnn(),
+          &fallback_runners));
 
       TF_ASSIGN_OR_RETURN(
           auto fallback_results,
@@ -515,12 +515,11 @@ struct LaunchFusedMatMulOp<GPUDevice, T> {
     use_cudnn = true;
 #endif
 
-#if TF_HIPBLASLT
-    auto cap = stream->GetRocmComputeCapability();
-    // as of ROCm 5.5, hipblaslt only supports MI200.
-    if (cap.gcn_arch_name().substr(0, 6) != "gfx90a") use_cudnn = true;
-#endif
-
+    const auto& cc =
+        stream->parent()->GetDeviceDescription().gpu_compute_capability();
+    if (auto* procm = cc.rocm_compute_capability()) {
+      use_cudnn = !procm->gfx9_mi200_or_later();
+    }
     BlasScratchAllocator scratch_allocator(context);
 
     // The Gelu exact fusion is supported by the cuDNN.
@@ -564,8 +563,9 @@ struct LaunchFusedMatMulOp<GPUDevice, T> {
       auto runner_and_scratch = std::move(runner_and_scratch_or).value();
       auto& runner =
           *std::get<const se::dnn::FusedMatmulRunner*>(runner_and_scratch);
-      Status cudnn_launch_status = runner(
-          stream, nullptr, std::get<se::DeviceMemoryBase>(runner_and_scratch),
+      absl::Status cudnn_launch_status = runner(
+          stream, nullptr,
+          std::get<stream_executor::DeviceAddressBase>(runner_and_scratch),
           a_ptr, b_ptr, bias_ptr, c_ptr);
       OP_REQUIRES_OK(context, cudnn_launch_status);
       return;
@@ -590,9 +590,9 @@ struct LaunchFusedMatMulOp<GPUDevice, T> {
                                          epilog_op};
     absl::Mutex* pmu;
     auto plan_and_algorithms_or =
-        GetPlanAndAlgorithms(stream, matmul_params, &pmu);
+        PlanAndAlgorithms::GetOrCreate(stream, matmul_params, &pmu);
     OP_REQUIRES_OK(context, plan_and_algorithms_or.status());
-    absl::MutexLock lock(pmu);
+    absl::MutexLock lock(*pmu);
     const auto* plan_and_algorithms = std::move(plan_and_algorithms_or).value();
     const auto& algorithms = plan_and_algorithms->algorithms;
     OP_REQUIRES(context, algorithms.size() > 0,
@@ -601,9 +601,9 @@ struct LaunchFusedMatMulOp<GPUDevice, T> {
     auto launch_func = [&](BlasScratchAllocator& scratch_allocator,
                            size_t alg_idx,
                            se::blas::ProfileResult* profile_result) {
-      return DoBlasLtMatmul(stream, *plan_and_algorithms, a_ptr, b_ptr, c_ptr,
-                            alg_idx, scratch_allocator, bias_ptr,
-                            profile_result);
+      return plan_and_algorithms->ExecuteOnStream(stream, a_ptr, b_ptr, c_ptr,
+                                                  alg_idx, scratch_allocator,
+                                                  bias_ptr, profile_result);
     };
 
     size_t alg_idx = 0;
@@ -739,6 +739,7 @@ class FusedMatMulOp : public OpKernel {
 
 TF_CALL_float(REGISTER_FUSED_CPU_MATMUL);
 TF_CALL_half(REGISTER_FUSED_CPU_MATMUL);
+TF_CALL_bfloat16(REGISTER_FUSED_CPU_MATMUL);
 
 #undef REGISTER_FUSED_CPU_MATMUL
 
@@ -752,6 +753,7 @@ TF_CALL_half(REGISTER_FUSED_CPU_MATMUL);
 
 TF_CALL_float(REGISTER_FUSED_GPU_MATMUL);
 TF_CALL_half(REGISTER_FUSED_GPU_MATMUL);
+TF_CALL_bfloat16(REGISTER_FUSED_GPU_MATMUL);
 
 #undef REGISTER_FUSED_GPU_MATMUL
 

@@ -90,7 +90,7 @@ const string CheckpointReader::DebugString() const {
 void CheckpointReader::GetTensor(
     const string& name, std::unique_ptr<tensorflow::Tensor>* out_tensor,
     TF_Status* out_status) const {
-  Status status;
+  absl::Status status;
   if (reader_ != nullptr) {
     status = reader_->GetTensor(name, out_tensor);
   } else {
@@ -119,8 +119,7 @@ CheckpointReader::BuildV2VarMaps() {
   BundleEntryProto entry;
   v2_reader_->Seek(kHeaderEntryKey);
   for (v2_reader_->Next(); v2_reader_->Valid(); v2_reader_->Next()) {
-    CHECK(entry.ParseFromArray(v2_reader_->value().data(),
-                               v2_reader_->value().size()))
+    CHECK(entry.ParseFromString(v2_reader_->value()))
         << entry.InitializationErrorString();
     for (int i = 0; i < entry.slices_size(); ++i) {
       const auto& slice_proto = entry.slices(i);
@@ -140,8 +139,7 @@ CheckpointReader::BuildV2VarMaps() {
   v2_reader_->Seek(kHeaderEntryKey);
   for (v2_reader_->Next(); v2_reader_->Valid(); v2_reader_->Next()) {
     if (filtered_keys.count(string(v2_reader_->key())) > 0) continue;
-    CHECK(entry.ParseFromArray(v2_reader_->value().data(),
-                               v2_reader_->value().size()))
+    CHECK(entry.ParseFromString(v2_reader_->value()))
         << entry.InitializationErrorString();
     string key(v2_reader_->key());
     (*var_to_shape_map)[key] = TensorShape(entry.shape());

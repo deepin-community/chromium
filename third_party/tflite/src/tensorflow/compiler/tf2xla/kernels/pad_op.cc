@@ -13,16 +13,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "tensorflow/compiler/tf2xla/type_util.h"
+#include <cstdint>
+
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/value_inference.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/value_inference.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/literal.h"
 #include "xla/xla_data.pb.h"
-#include "tensorflow/core/framework/kernel_def_builder.h"
-#include "tensorflow/core/framework/register_types.h"
+#include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/op_requires.h"
 #include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
 namespace {
@@ -109,7 +113,7 @@ class PadOp : public XlaOpKernel {
         high_pad_size = xla::Reshape(high_pad_size, {});
         high_pad_size = xla::ConvertElementType(high_pad_size, xla::S32);
         // Low pad has to be static.
-        xla::XlaOp low_pad_size = xla::ConstantR0<int32>(
+        xla::XlaOp low_pad_size = xla::ConstantR0<int32_t>(
             ctx->builder(), pad_literal.Get<int64_t>({i, 0}));
         xla::XlaOp input_size = xla::GetDimensionSize(input, i);
         xla::XlaOp total_size = low_pad_size + input_size + high_pad_size;
@@ -118,7 +122,7 @@ class PadOp : public XlaOpKernel {
                 total_size, xla::ValueInferenceMode::kUpperBound);
         OP_REQUIRES_OK(ctx, size_upper_bound_status_or.status());
         auto size_upper_bound =
-            size_upper_bound_status_or.value().Get<int32>({});
+            size_upper_bound_status_or.value().Get<int32_t>({});
         OP_REQUIRES(
             ctx, size_upper_bound.has_value(),
             errors::InvalidArgument(

@@ -1,3 +1,5 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("//tensorflow/lite/delegates/gpu:build_defs.bzl", "gtest_main_no_heapcheck_deps")
 
 package(
@@ -86,13 +88,21 @@ cc_binary(
 cc_binary(
     name = "performance_profiling",
     srcs = ["performance_profiling.cc"],
+    copts = [
+        "-DGOOGLE_COMMANDLINEFLAGS_FULL_API=1",
+    ],
     deps = [
         "//tensorflow/lite/core/kernels:builtin_ops",
+        "//tensorflow/lite/delegates/gpu/cl:cl_command_buffer",
         "//tensorflow/lite/delegates/gpu/cl:environment",
         "//tensorflow/lite/delegates/gpu/cl:inference_context",
+        "//tensorflow/lite/delegates/gpu/cl:opencl_wrapper",
         "//tensorflow/lite/delegates/gpu/common:model",
         "//tensorflow/lite/delegates/gpu/common:model_builder",
         "//tensorflow/lite/delegates/gpu/common:status",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/time",
+        "@opencl_headers",
     ],
 )

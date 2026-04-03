@@ -28,7 +28,6 @@
 #include "third_party/blink/renderer/core/svg/svg_length.h"
 #include "third_party/blink/renderer/core/svg/svg_length_context.h"
 #include "third_party/blink/renderer/core/svg/svg_length_functions.h"
-#include "third_party/blink/renderer/platform/graphics/gradient.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
@@ -40,7 +39,7 @@ namespace {
 gfx::SizeF MakeViewport(const SVGViewportResolver& viewport_resolver,
                         const LengthPoint& point,
                         SVGUnitTypes::SVGUnitType type) {
-  if (!point.X().IsPercentOrCalc() && !point.Y().IsPercentOrCalc()) {
+  if (!point.X().HasPercent() && !point.Y().HasPercent()) {
     return gfx::SizeF(0, 0);
   }
   if (type == SVGUnitTypes::kSvgUnitTypeObjectboundingbox) {
@@ -52,7 +51,7 @@ gfx::SizeF MakeViewport(const SVGViewportResolver& viewport_resolver,
 float MakeViewportDimension(const SVGViewportResolver& viewport_resolver,
                             const Length& radius,
                             SVGUnitTypes::SVGUnitType type) {
-  if (!radius.IsPercentOrCalc()) {
+  if (!radius.HasPercent()) {
     return 0;
   }
   if (type == SVGUnitTypes::kSvgUnitTypeObjectboundingbox) {
@@ -67,7 +66,7 @@ struct GradientData {
   USING_FAST_MALLOC(GradientData);
 
  public:
-  scoped_refptr<Gradient> gradient;
+  std::unique_ptr<Gradient> gradient;
   AffineTransform userspace_transform;
 };
 
@@ -131,6 +130,11 @@ std::unique_ptr<GradientData> LayoutSVGResourceGradient::BuildGradientData(
 
   // Create gradient object
   gradient_data->gradient = BuildGradient();
+  gradient_data->gradient->SetColorInterpolationSpace(
+      StyleRef().ColorInterpolation() == EColorInterpolation::kLinearrgb
+          ? Color::ColorSpace::kSRGBLinear
+          : Color::ColorSpace::kNone,
+      Color::HueInterpolationMethod::kShorter);
   gradient_data->gradient->AddColorStops(attributes.Stops());
 
   gradient_data->userspace_transform *= attributes.GradientTransform();
@@ -161,8 +165,8 @@ bool LayoutSVGResourceGradient::ApplyShader(
   ImageDrawOptions draw_options;
   draw_options.apply_dark_mode =
       auto_dark_mode.enabled && StyleRef().ForceDark();
-  gradient_data->gradient->ApplyToFlags(
-      flags, AffineTransformToSkMatrix(transform), draw_options);
+  gradient_data->gradient->ApplyToFlags(flags, transform.ToSkMatrix(),
+                                        draw_options);
   return true;
 }
 
@@ -198,20 +202,20 @@ float LayoutSVGResourceGradient::ResolveRadius(SVGUnitTypes::SVGUnitType type,
       radius, MakeViewportDimension(viewport_resolver, radius, type));
 }
 
-GradientSpreadMethod LayoutSVGResourceGradient::PlatformSpreadMethodFromSVGType(
+Gradient::SpreadMethod
+LayoutSVGResourceGradient::PlatformSpreadMethodFromSVGType(
     SVGSpreadMethodType method) {
   switch (method) {
     case kSVGSpreadMethodUnknown:
     case kSVGSpreadMethodPad:
-      return kSpreadMethodPad;
+      return Gradient::SpreadMethod::kPad;
     case kSVGSpreadMethodReflect:
-      return kSpreadMethodReflect;
+      return Gradient::SpreadMethod::kReflect;
     case kSVGSpreadMethodRepeat:
-      return kSpreadMethodRepeat;
+      return Gradient::SpreadMethod::kRepeat;
   }
 
   NOTREACHED();
-  return kSpreadMethodPad;
 }
 
 }  // namespace blink

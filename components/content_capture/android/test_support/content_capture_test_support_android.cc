@@ -10,12 +10,14 @@
 #include "base/json/json_reader.h"
 #include "base/notreached.h"
 #include "base/values.h"
-#include "components/content_capture/android/test_support/jni_headers/ContentCaptureTestSupport_jni.h"
 #include "components/content_capture/browser/content_capture_receiver.h"
 #include "components/content_capture/browser/onscreen_content_provider.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #include "ui/gfx/geometry/size.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/content_capture/android/test_support/jni_headers/ContentCaptureTestSupport_jni.h"
 
 namespace content_capture {
 
@@ -28,7 +30,6 @@ blink::mojom::FaviconIconType ToType(std::string type) {
   else if (type == "touch precomposed icon")
     return blink::mojom::FaviconIconType::kTouchPrecomposedIcon;
   NOTREACHED();
-  return blink::mojom::FaviconIconType::kInvalid;
 }
 
 }  // namespace
@@ -40,8 +41,8 @@ static void JNI_ContentCaptureTestSupport_DisableGetFaviconFromWebContents(
 
 static void JNI_ContentCaptureTestSupport_SimulateDidUpdateFaviconURL(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jwebContents,
-    const base::android::JavaParamRef<jstring>& jfaviconJson) {
+    const base::android::JavaRef<jobject>& jwebContents,
+    const base::android::JavaRef<jstring>& jfaviconJson) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(jwebContents);
   CHECK(web_contents);
@@ -50,17 +51,18 @@ static void JNI_ContentCaptureTestSupport_SimulateDidUpdateFaviconURL(
   CHECK(provider);
 
   std::string json = base::android::ConvertJavaStringToUTF8(env, jfaviconJson);
-  std::optional<base::Value> root = base::JSONReader::Read(json);
+  std::optional<base::Value> root =
+      base::JSONReader::Read(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   CHECK(root);
   CHECK(root->is_list());
   std::vector<blink::mojom::FaviconURLPtr> favicon_urls;
   for (const base::Value& icon_val : root->GetList()) {
-    const base::Value::Dict& icon = icon_val.GetDict();
+    const base::DictValue& icon = icon_val.GetDict();
     std::vector<gfx::Size> sizes;
     // The sizes is optional.
-    if (const base::Value::List* icon_sizes = icon.FindList("sizes")) {
+    if (const base::ListValue* icon_sizes = icon.FindList("sizes")) {
       for (const base::Value& size_val : CHECK_DEREF(icon_sizes)) {
-        const base::Value::Dict& size = size_val.GetDict();
+        const base::DictValue& size = size_val.GetDict();
 
         const std::optional<int> width = size.FindInt("width");
         const std::optional<int> height = size.FindInt("height");
@@ -83,3 +85,5 @@ static void JNI_ContentCaptureTestSupport_SimulateDidUpdateFaviconURL(
 }
 
 }  // namespace content_capture
+
+DEFINE_JNI(ContentCaptureTestSupport)

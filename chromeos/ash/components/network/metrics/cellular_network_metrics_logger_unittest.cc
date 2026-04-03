@@ -171,8 +171,8 @@ TEST_F(CellularNetworkMetricsLoggerTest, AutoStatusTransitionsRevampEnabled) {
       /*sample=*/0, /*expected_count=*/1);
 
   // Add an APN to the network.
-  auto custom_apn_list = base::Value::List().Append(
-      base::Value::Dict()
+  auto custom_apn_list = base::ListValue().Append(
+      base::DictValue()
           .Set(::onc::cellular_apn::kAccessPointName, "apn1")
           .Set(::onc::cellular_apn::kState,
                ::onc::cellular_apn::kStateEnabled));
@@ -199,7 +199,7 @@ TEST_F(CellularNetworkMetricsLoggerTest, AutoStatusTransitionsRevampEnabled) {
       /*sample=*/0,
       /*expected_count=*/1);
 
-  custom_apn_list.Append(base::Value::Dict()
+  custom_apn_list.Append(base::DictValue()
                              .Set(::onc::cellular_apn::kAccessPointName, "apn2")
                              .Set(::onc::cellular_apn::kState,
                                   ::onc::cellular_apn::kStateDisabled));
@@ -230,7 +230,7 @@ TEST_F(CellularNetworkMetricsLoggerTest, AutoStatusTransitionsRevampEnabled) {
   // Fail to connect from disconnecting to disconnected.
   SetShillState(kCellularServicePath, shill::kStateAssociation);
   AssertHistogramsTotalCount(counts);
-  SetShillState(kCellularServicePath, shill::kStateDisconnect);
+  SetShillState(kCellularServicePath, shill::kStateDisconnecting);
   AssertHistogramsTotalCount(counts);
   // Fail to connect from disconnecting to disconnected.
   SetShillError(kCellularServicePath, shill::kErrorConnectFailed);
@@ -245,6 +245,8 @@ TEST_F(CellularNetworkMetricsLoggerTest, AutoStatusTransitionsRevampEnabled) {
 }
 
 TEST_F(CellularNetworkMetricsLoggerTest, AutoStatusTransitionsRevampDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(features::kApnRevamp);
   SetUpGenericCellularNetwork();
   ApnHistogramCounts counts;
   // Successful connect from disconnected to connected.
@@ -261,8 +263,8 @@ TEST_F(CellularNetworkMetricsLoggerTest, AutoStatusTransitionsRevampDisabled) {
       CellularNetworkMetricsLogger::kCustomApnsCountHistogram, 0, 1);
 
   // Add an APN to the network.
-  auto custom_apn_list = base::Value::List().Append(
-      base::Value::Dict()
+  auto custom_apn_list = base::ListValue().Append(
+      base::DictValue()
           .Set(::onc::cellular_apn::kAccessPointName, "apn1")
           .Set(::onc::cellular_apn::kState,
                ::onc::cellular_apn::kStateEnabled));
@@ -301,7 +303,7 @@ TEST_F(CellularNetworkMetricsLoggerTest, AutoStatusTransitionsRevampDisabled) {
   // Fail to connect from connecting to disconnecting, no valid shill error.
   SetShillState(kCellularServicePath, shill::kStateAssociation);
   AssertHistogramsTotalCount(counts);
-  SetShillState(kCellularServicePath, shill::kStateDisconnect);
+  SetShillState(kCellularServicePath, shill::kStateDisconnecting);
   AssertHistogramsTotalCount(counts);
 
   // Fail to connect from disconnecting to disconnected.

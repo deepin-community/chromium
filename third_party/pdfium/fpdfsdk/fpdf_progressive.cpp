@@ -49,38 +49,69 @@ FPDF_RenderPageBitmapWithColorScheme_Start(FPDF_BITMAP bitmap,
                                            int flags,
                                            const FPDF_COLORSCHEME* color_scheme,
                                            IFSDK_PAUSE* pause) {
-  if (!bitmap || !pause || pause->version != 1)
+  if (!pause || pause->version != 1) {
     return FPDF_RENDER_FAILED;
+  }
 
   CPDF_Page* pPage = CPDFPageFromFPDFPage(page);
-  if (!pPage)
+  if (!pPage) {
     return FPDF_RENDER_FAILED;
+  }
+
+  RetainPtr<CFX_DIBitmap> pBitmap(CFXDIBitmapFromFPDFBitmap(bitmap));
+  if (!pBitmap) {
+    return FPDF_RENDER_FAILED;
+  }
+  ValidateBitmapPremultiplyState(pBitmap);
 
   auto owned_context = std::make_unique<CPDF_PageRenderContext>();
   CPDF_PageRenderContext* context = owned_context.get();
   pPage->SetRenderContext(std::move(owned_context));
+  context->return_premultiplied_ = pBitmap->IsPremultiplied();
 
-  RetainPtr<CFX_DIBitmap> pBitmap(CFXDIBitmapFromFPDFBitmap(bitmap));
+#if defined(PDF_USE_SKIA)
+  if (CFX_DefaultRenderDevice::UseSkiaRenderer()) {
+    pBitmap->PreMultiply();
+  }
+#endif
+
   auto device = std::make_unique<CFX_DefaultRenderDevice>();
   device->AttachWithRgbByteOrder(pBitmap, !!(flags & FPDF_REVERSE_BYTE_ORDER));
-  context->m_pDevice = std::move(device);
+  context->device_ = std::move(device);
 
   CPDFSDK_PauseAdapter pause_adapter(pause);
   CPDFSDK_RenderPageWithContext(context, pPage, start_x, start_y, size_x,
                                 size_y, rotate, flags, color_scheme,
                                 /*need_to_restore=*/false, &pause_adapter);
 
+  if (!context->renderer_) {
 #if defined(PDF_USE_SKIA)
-  if (CFX_DefaultRenderDevice::UseSkiaRenderer()) {
-    pBitmap->UnPreMultiply();
-  }
+    if (CFX_DefaultRenderDevice::UseSkiaRenderer() &&
+        !context->return_premultiplied_) {
+      pBitmap->UnPreMultiply();
+    }
 #endif  // defined(PDF_USE_SKIA)
 
-  if (!context->m_pRenderer) {
     return FPDF_RENDER_FAILED;
   }
 
-  return ToFPDFStatus(context->m_pRenderer->GetStatus());
+  int status = ToFPDFStatus(context->renderer_->GetStatus());
+  if (status == FPDF_RENDER_TOBECONTINUED) {
+    // Note that `pBitmap` is always pre-multiplied here, even if a straight
+    // alpha bitmap was passed in, as the caller is expected to pass it to
+    // FPDF_RenderPage_Continue(). Then FPDF_RenderPage_Continue() can continue
+    // rendering into it without doing another round of (un)pre-multiplication.
+    // FPDF_RenderPage_Continue() will call UnPreMultiply() if needed when done.
+    return FPDF_RENDER_TOBECONTINUED;
+  }
+
+#if defined(PDF_USE_SKIA)
+  if (CFX_DefaultRenderDevice::UseSkiaRenderer() &&
+      !context->return_premultiplied_) {
+    pBitmap->UnPreMultiply();
+  }
+#endif  // defined(PDF_USE_SKIA)
+  return status;
 }
 
 FPDF_EXPORT int FPDF_CALLCONV FPDF_RenderPageBitmap_Start(FPDF_BITMAP bitmap,
@@ -99,31 +130,41 @@ FPDF_EXPORT int FPDF_CALLCONV FPDF_RenderPageBitmap_Start(FPDF_BITMAP bitmap,
 
 FPDF_EXPORT int FPDF_CALLCONV FPDF_RenderPage_Continue(FPDF_PAGE page,
                                                        IFSDK_PAUSE* pause) {
-  if (!pause || pause->version != 1)
+  if (!pause || pause->version != 1) {
     return FPDF_RENDER_FAILED;
+  }
 
   CPDF_Page* pPage = CPDFPageFromFPDFPage(page);
-  if (!pPage)
+  if (!pPage) {
     return FPDF_RENDER_FAILED;
+  }
 
-  auto* pContext =
+  auto* context =
       static_cast<CPDF_PageRenderContext*>(pPage->GetRenderContext());
-  if (!pContext || !pContext->m_pRenderer)
+  if (!context || !context->renderer_) {
     return FPDF_RENDER_FAILED;
+  }
 
   CPDFSDK_PauseAdapter pause_adapter(pause);
-  pContext->m_pRenderer->Continue(&pause_adapter);
+  context->renderer_->Continue(&pause_adapter);
+
+  int status = ToFPDFStatus(context->renderer_->GetStatus());
+  if (status == FPDF_RENDER_TOBECONTINUED) {
+    return FPDF_RENDER_TOBECONTINUED;
+  }
 
 #if defined(PDF_USE_SKIA)
-  if (CFX_DefaultRenderDevice::UseSkiaRenderer()) {
-    pContext->m_pDevice->GetBitmap()->UnPreMultiply();
+  if (CFX_DefaultRenderDevice::UseSkiaRenderer() &&
+      !context->return_premultiplied_) {
+    context->device_->GetBitmap()->UnPreMultiply();
   }
 #endif  // defined(PDF_USE_SKIA)
-  return ToFPDFStatus(pContext->m_pRenderer->GetStatus());
+  return status;
 }
 
 FPDF_EXPORT void FPDF_CALLCONV FPDF_RenderPage_Close(FPDF_PAGE page) {
   CPDF_Page* pPage = CPDFPageFromFPDFPage(page);
-  if (pPage)
+  if (pPage) {
     pPage->ClearRenderContext();
+  }
 }

@@ -56,11 +56,11 @@ enum class SubjectMessage
     // to prevent having to flush pending commands and waiting for the GPU to become idle.
     InternalMemoryAllocationChanged,
 
+    // Indicate VkImage gets reallocated due to tile memory fallback. Only used by vulkan backend
+    VkImageChanged,
+
     // Indicates an external change to the default framebuffer.
     SurfaceChanged,
-    // Indicates the system framebuffer's swapchain changed, i.e. color buffer changed but no
-    // depth/stencil buffer change.
-    SwapchainImageChanged,
 
     // Indicates a separable program's textures or images changed in the ProgramExecutable.
     ProgramTextureOrImageBindingChanged,
@@ -71,8 +71,6 @@ enum class SubjectMessage
     ProgramRelinked,
     // Indicates a separable program's sampler uniforms were updated.
     SamplerUniformsUpdated,
-    // Other types of uniform change.
-    ProgramUniformUpdated,
     // Indicates a program's uniform block binding has changed (one message per binding)
     ProgramUniformBlockBindingZeroUpdated,
     ProgramUniformBlockBindingLastUpdated = ProgramUniformBlockBindingZeroUpdated +

@@ -18,16 +18,17 @@
 
 using testing::_;
 using testing::Exactly;
-using testing::Invoke;
 using testing::InvokeWithoutArgs;
 
 namespace video_capture {
+using GetSourceInfosResult =
+    video_capture::mojom::VideoSourceProvider::GetSourceInfosResult;
 
 // Tests that an answer arrives from the service when calling
 // GetSourceInfos().
 TEST_F(VideoCaptureServiceTest, GetSourceInfosCallbackArrives) {
   base::RunLoop wait_loop;
-  EXPECT_CALL(device_info_receiver_, Run(_))
+  EXPECT_CALL(device_info_receiver_, Run)
       .Times(Exactly(1))
       .WillOnce(InvokeWithoutArgs([&wait_loop]() { wait_loop.Quit(); }));
 
@@ -38,14 +39,15 @@ TEST_F(VideoCaptureServiceTest, GetSourceInfosCallbackArrives) {
 TEST_F(VideoCaptureServiceTest, FakeDeviceFactoryEnumeratesThreeDevices) {
   base::RunLoop wait_loop;
   size_t num_devices_enumerated = 0;
-  EXPECT_CALL(device_info_receiver_, Run(_))
+  EXPECT_CALL(device_info_receiver_, Run)
       .Times(Exactly(1))
-      .WillOnce(
-          Invoke([&wait_loop, &num_devices_enumerated](
-                     const std::vector<media::VideoCaptureDeviceInfo>& infos) {
-            num_devices_enumerated = infos.size();
-            wait_loop.Quit();
-          }));
+      .WillOnce([&wait_loop, &num_devices_enumerated](
+                    GetSourceInfosResult result,
+                    const std::vector<media::VideoCaptureDeviceInfo>& infos) {
+        EXPECT_EQ(result, GetSourceInfosResult::kSuccess);
+        num_devices_enumerated = infos.size();
+        wait_loop.Quit();
+      });
 
   video_source_provider_->GetSourceInfos(device_info_receiver_.Get());
   wait_loop.Run();
@@ -59,21 +61,22 @@ TEST_F(VideoCaptureServiceTest, VirtualDeviceEnumeratedAfterAdd) {
   auto device_context = AddSharedMemoryVirtualDevice(virtual_device_id);
 
   base::RunLoop wait_loop;
-  EXPECT_CALL(device_info_receiver_, Run(_))
+  EXPECT_CALL(device_info_receiver_, Run)
       .Times(Exactly(1))
-      .WillOnce(
-          Invoke([&wait_loop, virtual_device_id](
-                     const std::vector<media::VideoCaptureDeviceInfo>& infos) {
-            bool virtual_device_enumerated = false;
-            for (const auto& info : infos) {
-              if (info.descriptor.device_id == virtual_device_id) {
-                virtual_device_enumerated = true;
-                break;
-              }
-            }
-            EXPECT_TRUE(virtual_device_enumerated);
-            wait_loop.Quit();
-          }));
+      .WillOnce([&wait_loop, virtual_device_id](
+                    GetSourceInfosResult result,
+                    const std::vector<media::VideoCaptureDeviceInfo>& infos) {
+        EXPECT_EQ(result, GetSourceInfosResult::kSuccess);
+        bool virtual_device_enumerated = false;
+        for (const auto& info : infos) {
+          if (info.descriptor.device_id == virtual_device_id) {
+            virtual_device_enumerated = true;
+            break;
+          }
+        }
+        EXPECT_TRUE(virtual_device_enumerated);
+        wait_loop.Quit();
+      });
   video_source_provider_->GetSourceInfos(device_info_receiver_.Get());
   wait_loop.Run();
 }
@@ -91,8 +94,9 @@ TEST_F(VideoCaptureServiceTest,
   std::unique_ptr<SharedMemoryVirtualDeviceContext> device_context_1;
   {
     base::RunLoop run_loop;
-    EXPECT_CALL(mock_observer, OnDevicesChanged())
-        .WillOnce(Invoke([&run_loop]() { run_loop.Quit(); }));
+    EXPECT_CALL(mock_observer, OnDevicesChanged()).WillOnce([&run_loop]() {
+      run_loop.Quit();
+    });
     device_context_1 = AddSharedMemoryVirtualDevice("TestDevice1");
     run_loop.Run();
   }
@@ -100,24 +104,27 @@ TEST_F(VideoCaptureServiceTest,
   mojo::PendingRemote<mojom::TextureVirtualDevice> device_context_2;
   {
     base::RunLoop run_loop;
-    EXPECT_CALL(mock_observer, OnDevicesChanged())
-        .WillOnce(Invoke([&run_loop]() { run_loop.Quit(); }));
+    EXPECT_CALL(mock_observer, OnDevicesChanged()).WillOnce([&run_loop]() {
+      run_loop.Quit();
+    });
     device_context_2 = AddTextureVirtualDevice("TestDevice2");
     run_loop.Run();
   }
 
   {
     base::RunLoop run_loop;
-    EXPECT_CALL(mock_observer, OnDevicesChanged())
-        .WillOnce(Invoke([&run_loop]() { run_loop.Quit(); }));
+    EXPECT_CALL(mock_observer, OnDevicesChanged()).WillOnce([&run_loop]() {
+      run_loop.Quit();
+    });
     device_context_1.reset();
     run_loop.Run();
   }
 
   {
     base::RunLoop run_loop;
-    EXPECT_CALL(mock_observer, OnDevicesChanged())
-        .WillOnce(Invoke([&run_loop]() { run_loop.Quit(); }));
+    EXPECT_CALL(mock_observer, OnDevicesChanged()).WillOnce([&run_loop]() {
+      run_loop.Quit();
+    });
     device_context_2.reset();
     run_loop.Run();
   }
@@ -160,9 +167,9 @@ TEST_F(VideoCaptureServiceTest,
   base::MockCallback<mojom::VideoSource::CreatePushSubscriptionCallback>
       create_push_subscription_remote_callback;
 
-  EXPECT_CALL(create_push_subscription_remote_callback, Run(_, _))
+  EXPECT_CALL(create_push_subscription_remote_callback, Run)
       .Times(1)
-      .WillOnce(Invoke(
+      .WillOnce(
           [&wait_loop](mojom::CreatePushSubscriptionResultCodePtr result_code,
                        const media::VideoCaptureParams& param) {
             ASSERT_TRUE(result_code->is_error_code());
@@ -170,7 +177,7 @@ TEST_F(VideoCaptureServiceTest,
                 result_code->get_error_code(),
                 media::VideoCaptureError::kVideoCaptureSystemDeviceIdNotFound);
             wait_loop.Quit();
-          }));
+          });
   video_source_provider_->GetSourceInfos(device_info_receiver_.Get());
 
   video_source_provider_->GetVideoSource(
@@ -203,14 +210,14 @@ TEST_F(VideoCaptureServiceTest, CreateDeviceSuccessForVirtualDevice) {
   base::MockCallback<mojom::VideoSource::CreatePushSubscriptionCallback>
       create_push_subscription_remote_callback;
 
-  EXPECT_CALL(create_push_subscription_remote_callback, Run(_, _))
+  EXPECT_CALL(create_push_subscription_remote_callback, Run)
       .Times(1)
-      .WillOnce(Invoke(
+      .WillOnce(
           [&wait_loop](mojom::CreatePushSubscriptionResultCodePtr result_code,
                        const media::VideoCaptureParams& param) {
             EXPECT_TRUE(result_code->is_success_code());
             wait_loop.Quit();
-          }));
+          });
 
   video_source_provider_->GetVideoSource(
       virtual_device_id, video_source_remote.BindNewPipeAndPassReceiver());

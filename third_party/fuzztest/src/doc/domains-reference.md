@@ -24,7 +24,6 @@ protocol buffers. Specifically, for the following types:
 -   Integral types: `short`, `int`, `unsigned`, `int8_t`, `uint32_t`, `long
     long`, etc.
 -   Floating types: `float`, `double`, etc.
--   Enumeration types: `enum`, `enum class` (TBD: b/183016365).
 -   Simple user defined structs.
 -   Tuple types: `std::pair<T1,T2>`, `std::tuple<T,...>`.
 -   Smart pointers: `std::unique_ptr<T>`, `std::shared_ptr<T>`.
@@ -39,6 +38,7 @@ protocol buffers. Specifically, for the following types:
     `absl::flat_hash_map`, `absl::node_hash_map`, etc.
 -   Ordered associative container types: `std::set<K>`, `std::map<K,T>`,
     `std::multiset<K>`, `std::multimap<K,T>`, etc.
+-   Uniform Random Bit Generator types: `absl::BitGenRef`
 -   Protocol buffer types: `MyProtoMessage`, etc.
 -   [Abseil time library types](https://abseil.io/docs/cpp/guides/time):
     `absl::Duration`, `absl::Time`.
@@ -126,6 +126,7 @@ You can use the following basic string domains:
 -   `String()` is an alias for `Arbitrary<std::string>()`.
 -   `AsciiString()` represents strings of ASCII characters.
 -   `PrintableAsciiString()` represents printable strings.
+-   `Utf8String()` represents valid UTF-8 strings.
 
 You also define your string domains with custom character domains using the
 [StringOf()](#string-combinator) domain combinator.
@@ -211,364 +212,6 @@ only for arithmetic types, enums, strings (`std::string` and
 `std::string_view`), and Abseil time library types (`absl::Duration` and
 `absl::Time`).
 
-### `BitFlagCombinationOf` Domains
-
-The `BitFlagCombinationOf` domain takes a list of binary flags and yields a
-random combination of them made through bitwise operations (`&`, `^`, etc.).
-Consider we have the following bitflag values:
-
-```c++
-enum Options {
-  kFirst  = 1 << 0,
-  kSecond = 1 << 1,
-  kThird  = 1 << 2,
-};
-```
-
-The domain `BitFlagCombinationOf({kFirst, kThird})` will include `{0, kFirst,
-kThird, kFirst | kThird}`.
-
-### Protocol Buffer Domains
-
-You can use the `Arbitrary<T>()` domain with any proto message type or bare
-proto enum, e.g.:
-
-```c++
-void DoingStuffDoesNotCrashWithAnyProto(const ProtoA& msg_a, const ProtoB msg_b) {
-  DoStuff(msg_a, msg_b);
-}
-FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithAnyProto);
-
-void DoingStuffDoesNotCrashWithEnumValue(Proto::Enum e) {
-  switch(e) {
-    case Proto::ENUM_ABC:
-      // etc...
-  }
-}
-FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithEnumValue);
-```
-
-By default, all fields will use `Arbitrary<U>()` for their values. The
-exceptions are:
-
-*   `string` fields which will guarantee UTF8 values.
-*   `enum` fields will select only valid labels.
-
-Alternatively, you can use `ProtobufOf` to define a domain for
-`unique_ptr<Message>` using a protobuf prototype (the default protobuf message).
-Note that `ProtobufOf` doesn't take `const Message*` (the prototype) directly.
-It takes a *function pointer* that returns a `const Message*`. This delays
-getting the prototype until the first use:
-
-```c++
-const Message* GetMessagePrototype() {
-  const std::string name = GetPrototypeNameFromFlags();
-  const Descriptor* descriptor =
-      DescriptorPool::generated_pool()->FindMessageTypeByName(name);
-  return MessageFactory::generated_factory()->GetPrototype(descriptor);
-}
-
-void DoStuffDoesNotCrashWithMyProto(const std::unique_ptr<Message>& my_proto){
-  DoStuff(my_proto);
-}
-FUZZ_TEST(MySuite, DoStuffDoesNotCrashWithMyProto)
-  .WithDomains(ProtobufOf(GetMessagePrototype));
-```
-
-#### Customizing Individual Fields
-
-Each proto field has a type (i.e., int32/string) and a rule
-(optional/repeated/required). You can customize the subdomains for type, rule,
-or both.
-
-**Customizing the field type:** You can customize the subdomains for type used
-on individual fields by calling `With<Type>Field` method. Consider the following
-proto:
-
-```proto
-message Address {
-  string number = 0;
-  string street = 1;
-  string unit = 2;
-  string city = 3;
-  string state = 4;
-  int zipcode = 5;
-}
-
-message Person {
-  optional string ldap = 2;
-  enum Gender {
-    UNKNOWN = 0
-    FEMALE = 1,
-    MALE = 2,
-    OTHER = 3,
-  }
-  optional Gender gender = 3;
-  optional Address address = 4;
-}
-```
-
-You can customize the domain for each field like the following:
-
-```c++
-FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithCustomProto).
-  WithDomains(Arbitrary<Person>()
-      .WithStringField("ldap", StringOf(AlphaChar()))
-      .WithEnumField("gender", ElementOf<int>({FEMALE, MALE, OTHER}))
-      .WithProtobufField("address",
-                         Arbitrary<Address>()
-                             .WithInt32Field("zipcode", InRange(10000, 99999))
-                             .WithStringField("state", String().WithSize(2)))
-      .WithInt32Field("my.pkg.PersonExtender.id", InRange(100000, 999999)));
-```
-
-The inner domain is as follows:
-
-*   For `int32`, `int64`, `uint32`, `uint64`, `bool`, `float`, `double`, and
-    `string` fields the inner domain can be any `Domain<T>` of C++ type
-    `int32_t`, `int64_t`, `uint32_t`, `uint64_t`, `bool`, `float`, `double`, and
-    `std::string` respectively.
-*   For `enum` fields the inner domain is a `Domain<int>`. Note that values that
-    are not valid enums would be stored in the unknown fields set if the field
-    is a closed enum. Open enums would accept any value. The default domain for
-    enum fields only chooses between valid labels.
-*   For `message` fields the inner domain is a
-    `Domain<std::unique_ptr<Message>>`. The domain returned by
-    `Arbitrary<MyProto>()` qualifies. Note that even though it uses
-    `unique_ptr`, a null value is not allowed and will trigger undefined
-    behavior or a runtime assertion of some kind.
-
-The field domains are indexed by field name and will be verified at startup. A
-mismatch between the field names and the inner domains will cause a runtime
-failure. For extension fields, the full name should be used.
-
-IMPORTANT: Note that *optional* fields are not always set by the fuzzer.
-
-**Customizing the field rule:** You can customize the field rule for optional or
-repeated fields:
-
-*   `WithFieldUnset` will keep the field empty.
-*   `WithFieldAlwaysSet` will keep the field non-empty.
-
-```c++
-FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithCustomProto).
-  WithDomains(Arbitrary<MyProto>()
-      .WithFieldUnset("optional_no_val")
-      .WithFieldUnset("repeated_empty")
-      .WithFieldAlwaysSet("optional_has_val")
-      .WithFieldAlwaysSet("repeated_field_non_empty"));
-```
-
-In addition, for repeated fields, you can customize its size with
-`WithRepeatedField[Min|Max]Size`.
-
-```c++
-FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithCustomProto).
-  WithDomains(Arbitrary<MyProto>()
-      .WithRepeatedFieldSize("size1", 1)
-      .WithRepeatedFieldMinSize("size_ge_2", 2)
-      .WithRepeatedFieldMaxSize("size_le_3", 3));
-```
-
-**Customizing the field rule and type:** You can also customize both the rule
-and type at the same time with `With[Optional|Repeated]<Type>Field`:
-
-```c++
-FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithCustomProto).
-  WithDomains(Arbitrary<MyProto>()
-      // Could be set or unset.
-      .WithOptionalInt64Field("int", OptionalOf(InRange(1l, 10l)))
-      // Is always unset.
-      .WithOptionalUInt32Field("uint32", NullOpt<int32_t>())
-      // Is always set.
-      .WithOptionalInt32Field("int32", NonNull(OptionalOf(InRange(1, 10))))
-      // Is non-empty.
-      .WithRepeatedInt32Field("rep_int", VectorOf(InRange(1, 10)).WithMinSize(1))
-      // Is vector of unique elements.
-      .WithRepeatedInt64Field("rep_int64", UniqueElementsVectorOf(InRange(1l, 10l))));
-```
-
-For *optional* fields the domain is of the form `Domain<std::optional<Type>>`
-and for *repeated* fields the domain is of the form `Domain<std::vector<Type>>`.
-
-Also, `With<Type>FieldAlwaysSet` is a shorter alternative when one wants to
-customize non-empty fields:
-
-```c++
-// Short form for .WithOptionalIntField("optional_int", NonNull(InRange(1, 10)))
-.WithIntFieldAlwaysSet("optional_int", InRange(1, 10))
-
-// Short form for .WithRepeatedIntField("repeated_int", VectorOf(InRange(1, 10)).WithMinSize(1))
-.WithIntFieldAlwaysSet("repeated_int", InRange(1, 10))
-```
-
-#### Customizing a Subset of Fields
-
-You can customize the domain for a subset of fields, for example all fields with
-message type `Date`, or all fields with "amount" in the field's name.
-
-IMPORTANT: Note that customization options can conflict each other. In case of
-conflicts the latter customization always overrides the former. Moreover,
-individual field customization discussed in the previous section cannot precede
-customizations in this section.
-
-**Customizing Multiple Fields With Same Type:** You can set the domain for a
-subset of fields with the same type using `With<Type>Fields`. By default this
-applies to all fields of Type. You can also provide a filter function to select
-a subset of fields. Consider the `Moving` proto:
-
-```proto
-message Address{
-  optional string line1 = 1;
-  optional string line2 = 2;
-  optional string city = 3;
-  optional State state = 4;
-  optional int32 zipcode = 5;
-}
-
-message Moving{
-  optional Address from_address = 1;
-  optional Address to_address = 2;
-  optional google.protobuf.Timestamp start_ts = 3;
-  optional google.protobuf.Timestamp deadline_ts = 4;
-  optional google.protobuf.Timestamp finish_ts = 5;
-  optional int32 customer_id = 6;
-  optional int32 distance = 7;
-  optional int32 cost_estimate = 8;
-  optional int32 balance = 9;
-}
-```
-
-Most integer fields should be positive and there are multiple
-`Timestamp`/`zipcode` fields which require special domains:
-
-```c++
-
-bool IsZipCode(const FieldDescriptor* field) {
-  return field->name() == "zipcode";
-}
-bool IsTimestamp(const FieldDescriptor* field){
-  return field->message_type()->full_name() == "google.protobuf.Timestamp";
-}
-FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithCustomProto)
-    .WithDomains(Arbitrary<Moving>()
-    // All int fields should be positive
-    .WithInt32Fields(Positive<int>())
-    // except balance field which can be negative
-    .WithInt32Field("balance", Arbitrary<int>())
-    // and except all zipcode fields which should have 5 digits
-    .WithInt32Fields(IsZipcode, InRange(10000, 99999))
-    // All Timestamp fields should have "nanos" field unset.
-    .WithProtobufFields(IsTimestamp, Arbitrary<Timestamp>().WithFieldUnset("nanos")));
-```
-
-Notice that these filters apply recursively to nested protos as well. You can
-restrict the filter to optional or repeated fields by using
-`WithOptional<Type>Fields` or `WithRepeated<Type>Fields`, respectively.
-
-**Customizing Rules of Multiple Fields:** You can customize the nullness for a
-subset of fields using `WithFieldsAlwaysSet`, `WithFieldsUnset`, and filters:
-
-```c++
-bool IsProtoType(const FieldDescriptor* field){
-  return field->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE;
-}
-FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithCustomProto).
-  WithDomains(Arbitrary<MyProto>()
-      // Always set optional fields, and repeated fields have size > 0,
-      .WithFieldsAlwaysSet()
-      // except fields that contain nested protos,
-      .WithFieldsUnset(IsProtoType)
-      // and except "foo" field. We override the nullness by using the
-      // WithOptionalInt32Filed, which will allow the fuzzer to set and unset
-      // this field.
-      .WithOptionalInt32Field("foo", OptionalOf(Arbitrary<int>()))
-  );
-```
-
-You can restrict the filter to optional or repeated fields by using
-`WithOptionalFields[Unset|AlwaysSet]` or `WithRepeatedFields[Unset|AlwaysSet]`,
-respectively.
-
-Furthermore, you can customize repeated fields size using
-`WithRepeatedFields[Min|Max]?Size`:
-
-```c++
-bool IsChildrenOfBinaryTree(const FieldDescriptor* field){
-  return field->containing_type()->full_name() == "my_package.Node"
-      && field->name() == "children";
-}
-FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithCustomProto).
-  WithDomains(Arbitrary<MyProto>()
-    // Repeated fields should have size in range 1-10
-    .WithRepeatedFieldsMinSize(1)
-    .WithRepeatedFieldsMaxSize(10)
-    // except children of the inner nodes of a binary tree (has exactly two children).
-    .WithRepeatedFieldsSize(IsChildrenOfBinaryTree, 2)
-    // and except "additional_info" field which can be empty or arbitrary large
-    .WithInt32Field("additional_info", VectorOf(String()))
-  );
-```
-
-Warning: `With[Repeated]Fields[Unset|AlwaysSet]` will overwrite previous
-`WithRepeatedFields[Min|Max]?Size` for a given field. For example, in the
-following code, the repeated fields can have any size other than zero:
-`Arbitrary<MyProto>().WithRepeatedFieldsMinSize(2).WithRepeatedFieldsSize(2).WithFieldsAlwaysSet()`
-
-Notice that `With[Optional|Repeated]Fields[Unset|AlwaysSet]` and
-`WithRepeatedFields[Min|Max]?Size` work recursively and apply to subprotos as
-well, unless subproto domains are explicitly defined. Also, calling
-`With[Optional|Repeated]FieldsAlwaysSet` or `WithRepeatedFields[Min]?Size(X)`
-with `X > 0` on recursively defined protos causes a failure.
-
-#### Customizing Oneof Fields
-
-You can customize oneof fields similarly as other optional fields. However, the
-oneof could be unset even if you always set one of its field. Consider the
-following example:
-
-```proto
-message Algorithm{
-  oneof strategy {
-    string strategy_id = 1;
-    int64 legacy_strategy_id = 2;
-  }
-}
-```
-
-Then, you wish to customize the domain and test different non-legacy strategies.
-The following would not work because the `legacy_strategy_id` could still have
-values.
-
-```c++
-FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithCustomProto).
-  WithDomains(Arbitrary<Algorithm>()
-    .WithFieldAlwaysSet("strategy_id"));
-```
-
-For oneof to always have a value, at least one of its field should be marked as
-`AlwaysSet` and the rest should be marked `Unset` (for example, when you use
-`WithFieldsAlwaysSet`). Otherwise, you need to explicitly set it by
-`WithOneofAlwaysSet`:
-
-```c++
-FUZZ_TEST(MySuite, DoingStuffDoesNotCrashWithCustomProto).
-  WithDomains(Arbitrary<Algorithm>()
-    .WithOneofAlwaysSet("strategy")
-    .WithFieldUnset("legacy_strategy_id"));
-```
-
-## What Domains Should You Use for View Types?
-
-If your property function takes "view types", such as `std::string_view` or
-`std::span<T>`, you have multiple options.
-
-For a `std::string_view` parameter you can use `std::string` domains, such as
-`Arbitrary<std::string>()` or `InRegexp("[ab]+")`. The `string`-s created by the
-domain get implicitly converted to `string_view`-s. Alternatively, you can use
-`Arbitrary<std::string_view>()` which creates `string_view`-s in the first
-place, automatically backed by `string` values. This means that in regular
-value-parameterized unit tests,
 `.WithDomains()` can be omitted:
 
 ```c++
@@ -600,8 +243,7 @@ that are composed only of specific characters, you can use
 StringOf(OneOf(InRange('a', 'z'), ElementOf({'.', '!', '?'})))
 ```
 
-(See [OneOf](#oneof) combinator and [ElementOf](#element-of)
-domain.)
+(See [OneOf](#oneof) combinator and [ElementOf](#element-of) domain.)
 
 Another example is the `AsciiString()`, whose implementation is
 `StringOf(AsciiChar())`.
@@ -883,6 +525,22 @@ necessary in this case, as OneOf only takes domains as arguments.
 Note that the list of domains must be known at compile time; unlike `ElementOf`,
 you can't use a vector of domains.
 
+### OverlapOf
+
+With the `OverlapOf` combinator, we can use multiple domains to constrain a
+single type. The generated values satisfy all of the provided domains. For
+example:
+
+```c++
+auto ConstrainedNonZero() {
+  return OverlapOf(NonZero<int64_t>(), InRange<int64_t>(-355, 355));
+}
+```
+
+`ConstrainedNonZero()` produces integers between -355 and 355, but never 0.
+This may be useful in cases where 0 is silently interpreted as a sentinel value
+(e.g., "not set").
+
 ### Map
 
 Often the best way to define a domain is using a mapping function. The `Map()`
@@ -1015,8 +673,8 @@ auto AnyVectorOfEqualSizedStrings() {
 ```
 
 If `AnyVectorOfFixedLengthStrings()` had been passed to `Map()`, it would have
-generated a `Domain<Domain<std::string>>`. `FlatMap()` "flattens" this to a
-`Domain<std::string>`. Thus the name FlatMap.
+generated a `Domain<Domain<std::vector<std::string>>>`. `FlatMap()` "flattens"
+this to a `Domain<std::vector<std::string>>`. Thus the name FlatMap.
 
 Another example is a pair of numbers `(a, b)`, where `b > 2 * a`:
 
@@ -1080,6 +738,13 @@ This leads to more efficient fuzzing, as no values will be dropped and no cycles
 will be wasted.
 
 ### Recursive Domains
+
+**WARNING**: Recursion limit for recursive domains is not implemented yet
+. If the probability of recursion is high in the domain, the initial input
+generation might "blow up", leading to resource exhaustion. Note that this is
+not an issue in case of protobuf domains (when there's recursion in the protobuf
+definition), because recursion is avoided during the initial input generation
+and only happens during mutating the inputs.
 
 Recursive data structures need recursive domains. We can use the `DomainBuilder`
 to build such domains. Here are some examples:
@@ -1216,3 +881,59 @@ Note: Some domains don't support seeds. `ElementOf` and `Just` support seeds
 only for certain types (see [`ElementOf`](#element-of)). Complex domains
 constructed using combinators `ConstructorOf`, `Map`, and `FlatMap` don't
 support seeds.
+
+## Customizing Value Printers
+
+FuzzTest provides a mechanism to display the values that cause a test to fail.
+By default, it knows how to print standard C++ types, but you can extend this
+system to support your own custom types. This is especially useful for making
+test failure reports clear and actionable. There are two ways FuzzTest prints
+values, and you can customize the output for each:
+
+-   Human-readable mode: This mode is designed to be easily read and understood
+    by a developer. The goal is clarity, not necessarily compilable code.
+-   Source code mode: This mode generates a string that is a valid C++
+    expression. This is used in the auto-generated regression tests to recreate
+    the exact value that caused the failure. This mode is purely best-effort.
+
+### Customizing the human-readable printer:
+
+The simplest and most recommended way to implement custom printing for your
+types is to implement `AbslStringify`. This hooks into Abseil's string
+formatting library, which FuzzTest uses internally. For example:
+
+```c++
+struct MyObject {
+  int id;
+  std::string name;
+
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, const MyObject& obj) {
+    absl::Format(&sink, "MyObject[%d](name=\"%s\")", obj.id, obj.name);
+  }
+};
+```
+
+### Customizing the source code printer:
+
+To provide a custom source code printer, you can implement the
+`FuzzTestPrintSourceCode` function for your type:
+
+```c++
+void FuzzTestPrintSourceCode(const YourValueType& v, std::ostream* os) {
+  // Write a valid C++ expression that recreates `v` into the output stream.
+  *os << "my_namespace::CreateMyObject(" << v.GetId() << ").WithName(\"" << v.name << "\")";
+}
+```
+
+FuzzTest will call this function to generate the reproduction code for a test
+failure.
+
+NOTE: FuzzTest does not validate the output. You are responsible for ensuring
+the function prints a valid C++ expression that correctly recreates the original
+value.
+
+NOTE: FuzzTest uses C++ name resolution to find `FuzzTestPrintSourceCode` (and
+`AbslStringify` for that matter). This function should generally be declared
+either at the same place as the printed struct/class or in the same translation
+unit as the fuzz test.

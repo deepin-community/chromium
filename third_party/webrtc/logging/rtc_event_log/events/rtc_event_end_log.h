@@ -11,7 +11,7 @@
 #ifndef LOGGING_RTC_EVENT_LOG_EVENTS_RTC_EVENT_END_LOG_H_
 #define LOGGING_RTC_EVENT_LOG_EVENTS_RTC_EVENT_END_LOG_H_
 
-#include <memory>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -20,8 +20,7 @@
 #include "api/rtc_event_log/rtc_event.h"
 #include "api/units/timestamp.h"
 #include "logging/rtc_event_log/events/rtc_event_field_encoding.h"
-#include "logging/rtc_event_log/events/rtc_event_field_encoding_parser.h"
-#include "logging/rtc_event_log/events/rtc_event_field_extraction.h"
+#include "logging/rtc_event_log/events/rtc_event_log_parse_status.h"
 
 namespace webrtc {
 
@@ -47,17 +46,17 @@ class RtcEventEndLog final : public RtcEvent {
   Type GetType() const override { return kType; }
   bool IsConfigEvent() const override { return false; }
 
-  static std::string Encode(rtc::ArrayView<const RtcEvent*> batch);
+  static std::string Encode(ArrayView<const RtcEvent*> batch);
 
   static RtcEventLogParseStatus Parse(absl::string_view encoded_bytes,
                                       bool batched,
                                       std::vector<LoggedStopEvent>& output);
 
  private:
-  RtcEventEndLog(const RtcEventEndLog& other);
+  RtcEventEndLog(const RtcEventEndLog&) = default;
 
-  static constexpr EventParameters event_params_{"EndLog",
-                                                 RtcEventEndLog::kType};
+  static constexpr EventParameters event_params_{.name = "EndLog",
+                                                 .id = RtcEventEndLog::kType};
 };
 
 }  // namespace webrtc

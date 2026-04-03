@@ -7,44 +7,46 @@
 #ifndef CORE_FXCODEC_JPEG_JPEG_PROGRESSIVE_DECODER_H_
 #define CORE_FXCODEC_JPEG_JPEG_PROGRESSIVE_DECODER_H_
 
-#include <setjmp.h>
+#include <stdint.h>
 
 #include <memory>
 
-#include "core/fxcodec/progressive_decoder_iface.h"
+#include "core/fxcodec/cfx_codec_memory.h"
+#include "core/fxcrt/fx_types.h"
 
 namespace fxcodec {
 
 class CFX_DIBAttribute;
+class ProgressiveDecoderContext;
 
-class JpegProgressiveDecoder final : public ProgressiveDecoderIface {
+class JpegProgressiveDecoder {
  public:
-  static void InitializeGlobals();
-  static void DestroyGlobals();
+  static std::unique_ptr<ProgressiveDecoderContext> Start();
 
-  static JpegProgressiveDecoder* GetInstance();
+  // Result codes for ReadHeader()/ReadScanline():
+  static constexpr int kFatal = -1;
+  static constexpr int kOk = 0;
+  static constexpr int kError = 1;
+  static constexpr int kNeedsMoreInput = 2;
 
-  static std::unique_ptr<Context> Start();
-
-  static jmp_buf& GetJumpMark(Context* pContext);
-
-  static int ReadHeader(Context* pContext,
+  static int ReadHeader(ProgressiveDecoderContext* context,
                         int* width,
                         int* height,
                         int* nComps,
                         CFX_DIBAttribute* pAttribute);
 
-  static bool StartScanline(Context* pContext, int down_scale);
-  static bool ReadScanline(Context* pContext, uint8_t* dest_buf);
+  static bool StartScanline(ProgressiveDecoderContext* context);
+  static int ReadScanline(ProgressiveDecoderContext* context,
+                          uint8_t* dest_buf);
 
-  // ProgressiveDecoderIface:
-  FX_FILESIZE GetAvailInput(Context* pContext) const override;
-  bool Input(Context* pContext,
-             RetainPtr<CFX_CodecMemory> codec_memory) override;
+  static FX_FILESIZE GetAvailInput(ProgressiveDecoderContext* context);
+  static bool Input(ProgressiveDecoderContext* context,
+                    RetainPtr<CFX_CodecMemory> codec_memory);
 
- private:
-  JpegProgressiveDecoder();
-  ~JpegProgressiveDecoder() override;
+  // Only `static` methods.
+  JpegProgressiveDecoder() = delete;
+  JpegProgressiveDecoder(const JpegProgressiveDecoder&) = delete;
+  JpegProgressiveDecoder& operator=(const JpegProgressiveDecoder&) = delete;
 };
 
 }  // namespace fxcodec

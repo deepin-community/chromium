@@ -9,6 +9,7 @@
 #define SkImage_GaneshYUVA_DEFINED
 
 #include "include/core/SkColorSpace.h"
+#include "include/core/SkColorType.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkRefCnt.h"
 #include "include/core/SkSamplingOptions.h"
@@ -25,9 +26,9 @@ class GrDirectContext;
 class GrFragmentProcessor;
 class GrImageContext;
 class GrRecordingContext;
+class GrRenderTargetProxy;
 class GrSurfaceProxyView;
 class SkMatrix;
-enum SkColorType : int;
 enum class GrColorType;
 enum class GrImageTexGenPolicy : int;
 enum class GrSemaphoresSubmitted : bool;
@@ -39,6 +40,7 @@ struct SkRect;
 namespace skgpu {
 enum class Mipmapped : bool;
 }
+namespace skgpu::ganesh { class SurfaceDrawContext; }
 
 // Wraps the 1 to 4 planes of a YUVA image for consumption by the GPU.
 // Initially any direct rendering will be done by passing the individual planes to a shader.
@@ -46,6 +48,8 @@ enum class Mipmapped : bool;
 // proxy will be stored and used for any future rendering.
 class SkImage_GaneshYUVA final : public SkImage_GaneshBase {
 public:
+    static constexpr auto kAssumedColorType = kRGBA_8888_SkColorType;
+
     SkImage_GaneshYUVA(sk_sp<GrImageContext>,
                        uint32_t uniqueID,
                        GrYUVATextureProxies proxies,
@@ -59,10 +63,9 @@ public:
     bool onHasMipmaps() const override;
     bool onIsProtected() const override;
 
-    using SkImage_GaneshBase::onMakeColorTypeAndColorSpace;
-    sk_sp<SkImage> onMakeColorTypeAndColorSpace(SkColorType,
-                                                sk_sp<SkColorSpace>,
-                                                GrDirectContext*) const final;
+    sk_sp<SkImage> onMakeColorTypeAndColorSpace(GrDirectContext*,
+                                                SkColorType,
+                                                sk_sp<SkColorSpace>) const final;
 
     sk_sp<SkImage> onReinterpretColorSpace(sk_sp<SkColorSpace>) const final;
 
@@ -70,10 +73,11 @@ public:
     GrSemaphoresSubmitted flush(GrDirectContext*, const GrFlushInfo&) const override;
 
    std::tuple<GrSurfaceProxyView, GrColorType> asView(GrRecordingContext*,
-                                                       skgpu::Mipmapped,
-                                                       GrImageTexGenPolicy) const override;
+                                                      skgpu::Mipmapped,
+                                                      GrImageTexGenPolicy,
+                                                      GrRenderTargetProxy*) const override;
 
-    std::unique_ptr<GrFragmentProcessor> asFragmentProcessor(GrRecordingContext*,
+    std::unique_ptr<GrFragmentProcessor> asFragmentProcessor(skgpu::ganesh::SurfaceDrawContext*,
                                                              SkSamplingOptions,
                                                              const SkTileMode[2],
                                                              const SkMatrix&,

@@ -5,8 +5,10 @@
 #include "chrome/browser/content_index/content_index_provider_impl.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/barrier_closure.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/task/single_thread_task_runner.h"
@@ -74,7 +76,7 @@ EntryKeyComponents GetEntryKeyComponents(const std::string& key) {
   DCHECK_NE(pos2, std::string::npos);
 
   int64_t service_worker_registration_id = -1;
-  base::StringToInt64(base::StringPiece(key.data(), pos1),
+  base::StringToInt64(std::string_view(key.data(), pos1),
                       &service_worker_registration_id);
 
   GURL origin(key.substr(pos1 + 1, pos2 - pos1 - 1));
@@ -238,6 +240,10 @@ void ContentIndexProviderImpl::PauseDownload(const ContentId& id) {
 }
 
 void ContentIndexProviderImpl::ResumeDownload(const ContentId& id) {
+  NOTREACHED();
+}
+
+void ContentIndexProviderImpl::ValidateDangerousDownload(const ContentId& id) {
   NOTREACHED();
 }
 

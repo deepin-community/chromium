@@ -4,6 +4,9 @@
 
 #include "chrome/browser/ash/app_list/search/essential_search/socs_cookie_fetcher.h"
 
+#include <optional>
+#include <string>
+
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/json_writer.h"
 #include "components/version_info/version_info.h"
@@ -51,8 +54,8 @@ SocsCookieFetcher::Consumer::Consumer() = default;
 SocsCookieFetcher::Consumer::~Consumer() = default;
 
 void SocsCookieFetcher::StartFetching() {
-  auto request_data = base::Value::Dict().Set(kChromeVersionKey,
-                                              version_info::GetVersionNumber());
+  auto request_data = base::DictValue().Set(kChromeVersionKey,
+                                            version_info::GetVersionNumber());
   std::string request_string;
   if (!base::JSONWriter::Write(request_data, &request_string)) {
     LOG(ERROR) << "Not able to serialize token request body.";
@@ -115,7 +118,7 @@ void SocsCookieFetcher::StartFetching() {
 }
 
 void SocsCookieFetcher::OnSimpleLoaderComplete(
-    std::unique_ptr<std::string> json_response) {
+    std::optional<std::string> json_response) {
   const int net_error = simple_url_loader_->NetError();
   if (net_error != net::OK) {
     consumer_->OnApiCallFailed(Status::kServerError);
@@ -149,7 +152,7 @@ void SocsCookieFetcher::OnJsonParsed(
 }
 
 void SocsCookieFetcher::ProcessValidTokenResponse(
-    base::Value::Dict json_response) {
+    base::DictValue json_response) {
   const std::string* cookie_header =
       json_response.FindString(kCookieHeaderEntry);
   if (!cookie_header) {

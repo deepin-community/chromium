@@ -4,6 +4,8 @@
 
 #include "net/quic/web_transport_client.h"
 
+#include <string_view>
+
 #include "base/memory/raw_ptr.h"
 #include "net/quic/dedicated_web_transport_http3_client.h"
 
@@ -22,6 +24,9 @@ class FailedWebTransportClient : public WebTransportClient {
         visitor_(visitor) {}
   void Connect() override { visitor_->OnConnectionFailed(error_); }
   void Close(const std::optional<WebTransportCloseInfo>& close_info) override {
+    NOTREACHED();
+  }
+  void CloseIfNonceMatches(base::UnguessableToken nonce) override {
     NOTREACHED();
   }
 
@@ -57,7 +62,7 @@ const char* WebTransportStateString(WebTransportState state) {
 
 WebTransportCloseInfo::WebTransportCloseInfo() = default;
 WebTransportCloseInfo::WebTransportCloseInfo(uint32_t code,
-                                             base::StringPiece reason)
+                                             std::string_view reason)
     : code(code), reason(reason) {}
 WebTransportCloseInfo::~WebTransportCloseInfo() = default;
 bool WebTransportCloseInfo::operator==(
@@ -81,7 +86,7 @@ std::unique_ptr<WebTransportClient> CreateWebTransportClient(
     const NetworkAnonymizationKey& anonymization_key,
     URLRequestContext* context,
     const WebTransportParameters& parameters) {
-  if (url.scheme() == url::kHttpsScheme) {
+  if (url.GetScheme() == url::kHttpsScheme) {
     if (!parameters.enable_web_transport_http3) {
       return std::make_unique<FailedWebTransportClient>(
           ERR_DISALLOWED_URL_SCHEME, visitor);

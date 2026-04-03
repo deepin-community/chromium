@@ -1,5 +1,7 @@
 // Copyright 2019 Google LLC.
 
+#include "modules/skparagraph/src/TextLine.h"
+
 #include "include/core/SkBlurTypes.h"
 #include "include/core/SkFont.h"
 #include "include/core/SkFontMetrics.h"
@@ -20,8 +22,9 @@
 #include "modules/skparagraph/src/Decorations.h"
 #include "modules/skparagraph/src/ParagraphImpl.h"
 #include "modules/skparagraph/src/ParagraphPainterImpl.h"
-#include "modules/skparagraph/src/TextLine.h"
 #include "modules/skshaper/include/SkShaper.h"
+#include "modules/skshaper/include/SkShaper_harfbuzz.h"
+#include "modules/skshaper/include/SkShaper_skunicode.h"
 
 #include <algorithm>
 #include <iterator>
@@ -174,7 +177,7 @@ TextLine::TextLine(ParagraphImpl* owner,
 
     // TODO: This is the fix for flutter. Must be removed...
     for (auto cluster = &start; cluster <= &end; ++cluster) {
-        if (!cluster->run().isPlaceholder()) {
+        if (!cluster->run().isPlaceholder() && !cluster->run().isCursiveScript()) {
             fShift += cluster->getHalfLetterSpacing();
             break;
         }
@@ -681,17 +684,41 @@ std::unique_ptr<Run> TextLine::shapeEllipsis(const SkString& ellipsis, const Clu
     auto shaped = [&](sk_sp<SkTypeface> typeface, sk_sp<SkFontMgr> fallback) -> std::unique_ptr<Run> {
         ShapeHandler handler(run.heightMultiplier(), run.useHalfLeading(), run.baselineShift(), ellipsis);
         SkFont font(std::move(typeface), textStyle.getFontSize());
-        font.setEdging(SkFont::Edging::kAntiAlias);
-        font.setHinting(SkFontHinting::kSlight);
-        font.setSubpixel(true);
+        font.setEdging(textStyle.getFontEdging());
+        font.setHinting(textStyle.getFontHinting());
+        font.setSubpixel(textStyle.getSubpixel());
 
-        std::unique_ptr<SkShaper> shaper = SkShaper::MakeShapeDontWrapOrReorder(
-                            fOwner->getUnicode()->copy(),
-                            fallback ? fallback : SkFontMgr::RefEmpty());
-        shaper->shape(ellipsis.c_str(),
-                      ellipsis.size(),
-                      font,
-                      true,
+        std::unique_ptr<SkShaper> shaper = SkShapers::HB::ShapeDontWrapOrReorder(
+                fOwner->getUnicode(), fallback ? fallback : SkFontMgr::RefEmpty());
+
+        const SkBidiIterator::Level defaultLevel = SkBidiIterator::kLTR;
+        const char* utf8 = ellipsis.c_str();
+        size_t utf8Bytes = ellipsis.size();
+
+        std::unique_ptr<SkShaper::BiDiRunIterator> bidi = SkShapers::unicode::BidiRunIterator(
+                fOwner->getUnicode(), utf8, utf8Bytes, defaultLevel);
+        SkASSERT(bidi);
+
+        std::unique_ptr<SkShaper::LanguageRunIterator> language =
+                SkShaper::MakeStdLanguageRunIterator(utf8, utf8Bytes);
+        SkASSERT(language);
+
+        std::unique_ptr<SkShaper::ScriptRunIterator> script =
+                SkShapers::HB::ScriptRunIterator(utf8, utf8Bytes);
+        SkASSERT(script);
+
+        std::unique_ptr<SkShaper::FontRunIterator> fontRuns = SkShaper::MakeFontMgrRunIterator(
+                utf8, utf8Bytes, font, fallback ? fallback : SkFontMgr::RefEmpty());
+        SkASSERT(fontRuns);
+
+        shaper->shape(utf8,
+                      utf8Bytes,
+                      *fontRuns,
+                      *bidi,
+                      *script,
+                      *language,
+                      nullptr,
+                      0,
                       std::numeric_limits<SkScalar>::max(),
                       &handler);
         auto ellipsisRun = handler.run();
@@ -726,8 +753,10 @@ std::unique_ptr<Run> TextLine::shapeEllipsis(const SkString& ellipsis, const Clu
         // they will not be resolved with the pretiest color emoji font
         auto typeface = fOwner->fontCollection()->defaultFallback(
                                             unicode,
+                                            textStyle.getFontFamilies(),
                                             textStyle.getFontStyle(),
-                                            textStyle.getLocale());
+                                            textStyle.getLocale(),
+                                            textStyle.getFontArguments());
         if (typeface) {
             ellipsisRun = shaped(typeface, fOwner->fontCollection()->getFallbackManager());
             if (ellipsisRun->isResolved()) {
@@ -756,7 +785,7 @@ TextLine::ClipContext TextLine::measureTextInsideOneRun(TextRange textRange,
         return result;
     } else if (run->isPlaceholder()) {
         result.fTextShift = runOffsetInLine;
-        if (SkScalarIsFinite(run->fFontMetrics.fAscent)) {
+        if (SkIsFinite(run->fFontMetrics.fAscent)) {
           result.clip = SkRect::MakeXYWH(runOffsetInLine,
                                          sizes().runTop(run, this->fAscentStyle),
                                          run->advance().fX,
@@ -901,7 +930,7 @@ void TextLine::iterateThroughClustersInGlyphsOrder(bool reversed,
         auto trimmed = fOwner->clusters(trimmedRange);
         directional_for_each(trailed, reversed != run.leftToRight(), [&](Cluster& cluster) {
             if (ignore) return;
-            bool ghost =  &cluster >= trimmed.end();
+            bool ghost =  &cluster >= trimmed.data() + trimmed.size();
             if (!includeGhosts && ghost) {
                 return;
             }
@@ -1106,7 +1135,7 @@ LineMetrics TextLine::getMetrics() const {
     result.fLeft = this->offset().fX;
     // This is Flutter definition of a baseline
     result.fBaseline = this->offset().fY + this->height() - this->sizes().descent();
-    result.fLineNumber = this - fOwner->lines().begin();
+    result.fLineNumber = this - fOwner->lines().data();
 
     // Fill out the style parts
     this->iterateThroughVisualRuns(false,
@@ -1364,6 +1393,12 @@ PositionWithAffinity TextLine::getGlyphPositionAtCoordinate(SkScalar dx) {
     this->iterateThroughVisualRuns(true,
         [this, dx, &result]
         (const Run* run, SkScalar runOffsetInLine, TextRange textRange, SkScalar* runWidthInLine) {
+            if (run->isEllipsis()) {
+                auto utf16Index = fOwner->getUTF16Index(this->fText.end);
+                result = { SkToS32(utf16Index) , kDownstream };
+                return false;
+            }
+
             bool keepLooking = true;
             *runWidthInLine = this->iterateThroughSingleRunByStyles(
             TextAdjustment::GraphemeGluster, run, runOffsetInLine, textRange, StyleType::kNone,

@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/test/simple_test_clock.h"
 #include "base/time/time.h"
@@ -288,7 +287,7 @@ const char kSampleThirdPartyTokenUsageEmptyJSON[] =
     "\"usage\": \"\", \"feature\": \"Frobulate\", \"expiry\": 1458766277}";
 
 // Various ill-formed trial tokens. These should all fail to parse.
-const char* kInvalidTokens[] = {
+constexpr const char* kInvalidTokens[] = {
     // Empty String
     "",
     // Invalid - Not JSON at all
@@ -324,7 +323,7 @@ const char* kInvalidTokens[] = {
     "1458766277}",
 };
 
-const char* kInvalidTokensVersion3[] = {
+constexpr const char* kInvalidTokensVersion3[] = {
     // Incorrect types
     "{\"origin\": \"https://a.a\", \"isThirdParty\": \"true\", \"feature\": "
     "\"a\", \"expiry\": 1458766277}",

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@ export async function setup(): Promise<void> {
     get() {
       return 'default';
     },
-  } as Common.Settings.Setting<string>;
+    addChangeListener: () => {},
+  } as unknown as Common.Settings.Setting<string>;
   ThemeSupport.ThemeSupport.instance({forceNew: true, setting});
 }

@@ -50,10 +50,10 @@ class LengthUtilsTest : public testing::Test {
       ConstraintSpace constraint_space = ConstructConstraintSpace(200, 300)) {
     return ::blink::ResolveMainInlineLength(
         constraint_space, *initial_style_, /* border_padding */ BoxStrut(),
-        [&](MinMaxSizesType) -> MinMaxSizesResult {
+        [&](SizeType) -> MinMaxSizesResult {
           return {*sizes, /* depends_on_block_constraints */ false};
         },
-        length);
+        length, /* auto_length */ nullptr);
   }
 
   LayoutUnit ResolveMinInlineLength(
@@ -62,7 +62,7 @@ class LengthUtilsTest : public testing::Test {
       ConstraintSpace constraint_space = ConstructConstraintSpace(200, 300)) {
     return ::blink::ResolveMinInlineLength(
         constraint_space, *initial_style_, /* border_padding */ BoxStrut(),
-        [&](MinMaxSizesType) -> MinMaxSizesResult {
+        [&](SizeType) -> MinMaxSizesResult {
           return {*sizes, /* depends_on_block_constraints */ false};
         },
         length);
@@ -74,7 +74,7 @@ class LengthUtilsTest : public testing::Test {
       ConstraintSpace constraint_space = ConstructConstraintSpace(200, 300)) {
     return ::blink::ResolveMaxInlineLength(
         constraint_space, *initial_style_, /* border_padding */ BoxStrut(),
-        [&](MinMaxSizesType) -> MinMaxSizesResult {
+        [&](SizeType) -> MinMaxSizesResult {
           return {*sizes, /* depends_on_block_constraints */ false};
         },
         length);
@@ -85,7 +85,8 @@ class LengthUtilsTest : public testing::Test {
     ConstraintSpace constraint_space = ConstructConstraintSpace(200, 300);
     return ::blink::ResolveMainBlockLength(constraint_space, *initial_style_,
                                            /* border_padding */ BoxStrut(),
-                                           length, content_size);
+                                           length, /* auto_length */ nullptr,
+                                           content_size);
   }
 
   Persistent<const ComputedStyle> initial_style_;
@@ -108,19 +109,18 @@ class LengthUtilsTestWithNode : public RenderingTest {
       const BlockNode& node,
       ConstraintSpace constraint_space = ConstructConstraintSpace(200, 300),
       LayoutUnit content_size = LayoutUnit(),
-      std::optional<LayoutUnit> inline_size = std::nullopt) {
-    const auto& style = node.Style();
+      LayoutUnit inline_size = kIndefiniteSize) {
     BoxStrut border_padding = ComputeBorders(constraint_space, node) +
-                              ComputePadding(constraint_space, style);
+                              ComputePadding(constraint_space, node.Style());
     return ::blink::ComputeBlockSizeForFragment(
-        constraint_space, style, border_padding, content_size, inline_size);
+        constraint_space, node, border_padding, content_size, inline_size);
   }
 };
 
 TEST_F(LengthUtilsTest, TestResolveInlineLength) {
   EXPECT_EQ(LayoutUnit(60), ResolveMainInlineLength(Length::Percent(30)));
   EXPECT_EQ(LayoutUnit(150), ResolveMainInlineLength(Length::Fixed(150)));
-  EXPECT_EQ(LayoutUnit(200), ResolveMainInlineLength(Length::FillAvailable()));
+  EXPECT_EQ(LayoutUnit(200), ResolveMainInlineLength(Length::Stretch()));
 
   MinMaxSizes sizes;
   sizes.min_size = LayoutUnit(30);
@@ -148,14 +148,14 @@ TEST_F(LengthUtilsTest, TestIndefiniteResolveInlineLength) {
             ResolveMinInlineLength(Length::Auto(), std::nullopt, space));
   EXPECT_EQ(LayoutUnit::Max(),
             ResolveMaxInlineLength(Length::Percent(30), std::nullopt, space));
-  EXPECT_EQ(LayoutUnit::Max(), ResolveMaxInlineLength(Length::FillAvailable(),
-                                                      std::nullopt, space));
+  EXPECT_EQ(LayoutUnit::Max(),
+            ResolveMaxInlineLength(Length::Stretch(), std::nullopt, space));
 }
 
 TEST_F(LengthUtilsTest, TestResolveBlockLength) {
   EXPECT_EQ(LayoutUnit(90), ResolveMainBlockLength(Length::Percent(30)));
   EXPECT_EQ(LayoutUnit(150), ResolveMainBlockLength(Length::Fixed(150)));
-  EXPECT_EQ(LayoutUnit(300), ResolveMainBlockLength(Length::FillAvailable()));
+  EXPECT_EQ(LayoutUnit(300), ResolveMainBlockLength(Length::Stretch()));
 }
 
 TEST_F(LengthUtilsTestWithNode, TestComputeContentContribution) {
@@ -336,20 +336,20 @@ TEST_F(LengthUtilsTestWithNode, TestComputeInlineSizeForFragment) {
   node = BlockNode(To<LayoutBox>(GetLayoutObjectByElementId("test13")));
   EXPECT_EQ(LayoutUnit(400), ComputeInlineSizeForFragment(node));
 
-  constraint_space = ConstructConstraintSpace(120, 140);
+  ConstraintSpace unconstrained_space = ConstructConstraintSpace(120, 140);
   node = BlockNode(To<LayoutBox>(GetLayoutObjectByElementId("test14")));
   EXPECT_EQ(LayoutUnit(430), ComputeInlineSizeForFragment(
-                                 node, constraint_space, sizes_padding400));
+                                 node, unconstrained_space, sizes_padding400));
 
   //  Due to padding and box-sizing, width computes to 400px and max-width to
   //  440px, so the result is 400.
   node = BlockNode(To<LayoutBox>(GetLayoutObjectByElementId("test15")));
   EXPECT_EQ(LayoutUnit(400), ComputeInlineSizeForFragment(
-                                 node, constraint_space, sizes_padding400));
+                                 node, unconstrained_space, sizes_padding400));
 
   node = BlockNode(To<LayoutBox>(GetLayoutObjectByElementId("test16")));
   EXPECT_EQ(LayoutUnit(40),
-            ComputeInlineSizeForFragment(node, constraint_space, sizes));
+            ComputeInlineSizeForFragment(node, unconstrained_space, sizes));
 }
 
 TEST_F(LengthUtilsTestWithNode, TestComputeBlockSizeForFragment) {
@@ -384,17 +384,17 @@ TEST_F(LengthUtilsTestWithNode, TestComputeBlockSizeForFragment) {
   node = BlockNode(To<LayoutBox>(GetLayoutObjectByElementId("test4")));
   EXPECT_EQ(LayoutUnit(0), ComputeBlockSizeForFragment(node));
 
-  ConstraintSpace constraint_space = ConstructConstraintSpace(200, 300);
-  EXPECT_EQ(LayoutUnit(120), ComputeBlockSizeForFragment(node, constraint_space,
-                                                         LayoutUnit(120)));
+  EXPECT_EQ(LayoutUnit(120),
+            ComputeBlockSizeForFragment(
+                node, ConstructConstraintSpace(200, 300), LayoutUnit(120)));
 
   node = BlockNode(To<LayoutBox>(GetLayoutObjectByElementId("test5")));
   EXPECT_EQ(LayoutUnit(70), ComputeBlockSizeForFragment(node));
 
-  constraint_space = ConstructConstraintSpace(200, 200, true, true);
   node = BlockNode(To<LayoutBox>(GetLayoutObjectByElementId("test6")));
   EXPECT_EQ(LayoutUnit(200),
-            ComputeBlockSizeForFragment(node, constraint_space));
+            ComputeBlockSizeForFragment(
+                node, ConstructConstraintSpace(200, 200, true, true)));
 
   node = BlockNode(To<LayoutBox>(GetLayoutObjectByElementId("test7")));
   EXPECT_EQ(LayoutUnit(240), ComputeBlockSizeForFragment(node));
@@ -492,10 +492,10 @@ TEST_F(LengthUtilsTest, TestMargins) {
 
 TEST_F(LengthUtilsTest, TestBorders) {
   ComputedStyleBuilder builder(*initial_style_);
-  builder.SetBorderTopWidth(LayoutUnit(1));
-  builder.SetBorderRightWidth(LayoutUnit(2));
-  builder.SetBorderBottomWidth(LayoutUnit(3));
-  builder.SetBorderLeftWidth(LayoutUnit(4));
+  builder.SetBorderTopWidth(1);
+  builder.SetBorderRightWidth(2);
+  builder.SetBorderBottomWidth(3);
+  builder.SetBorderLeftWidth(4);
   builder.SetBorderTopStyle(EBorderStyle::kSolid);
   builder.SetBorderRightStyle(EBorderStyle::kSolid);
   builder.SetBorderBottomStyle(EBorderStyle::kSolid);

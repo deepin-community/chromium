@@ -25,8 +25,16 @@ const char kEnableNativeGpuMemoryBuffers[] = "enable-native-gpu-memory-buffers";
 // settings.
 const char kForcePrefersReducedMotion[] = "force-prefers-reduced-motion";
 
+// Forces whether the user desires no reduced motion, regardless of system
+// settings.
+const char kForcePrefersNoReducedMotion[] = "force-prefers-no-reduced-motion";
+
 // Run in headless mode, i.e., without a UI or display server dependencies.
 const char kHeadless[] = "headless";
+
+// Headless screen info in the format: {0,0 800x600}{800,0 600x800}.
+// See //components/headless/screen_info/README.md for more details.
+const char kScreenInfo[] = "screen-info";
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 // Which X11 display to connect to. Emulates the GTK+ "--display=" command line
@@ -34,42 +42,34 @@ const char kHeadless[] = "headless";
 const char kX11Display[] = "display";
 // Disables MIT-SHM extension. In use only with Ozone/X11.
 const char kNoXshm[] = "no-xshm";
-#endif
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace switches
 
 namespace features {
-BASE_FEATURE(kOddHeightMultiPlanarBuffers,
-             "OddHeightMultiPlanarBuffers",
-#if BUILDFLAG(IS_APPLE)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT
-#endif
-);
+BASE_FEATURE(kUseSmartRefForGPUFenceHandle, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kOddWidthMultiPlanarBuffers,
-             "OddWidthMultiPlanarBuffers",
-#if BUILDFLAG(IS_APPLE)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT
-#endif
-);
+// Enables using rounding instead of flooring for coordinate conversions.
+//
+// Using `round()` instead of `floor()` prevents the systematic downward bias
+// that causes layout drift.
+//
+// Assume we have value d in DIP and scale factor p > 1.
+// Let d' = screen_to_dip(dip_to_screen(d)), then
+//     d' == screen_to_dip(round(d*p))
+//        == screen_to_dip(d*p + eps), where |eps| <= 0.5. Then,
+//     d' == round( (d*p+eps) / p)
+//        == round(d + eps/p).
+// Since |eps / p < 0.5| and d is an integer, round(d + eps/p) == d,
+// therefore d' == d. QED.
+BASE_FEATURE(kUseRoundedPointConversion, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kUseSmartRefForGPUFenceHandle,
-             "UseSmartRefForGPUFenceHandle",
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT
-#endif
-);
+BASE_FEATURE(kHdrAgtm, base::FEATURE_DISABLED_BY_DEFAULT);
 
-#if BUILDFLAG(IS_CHROMEOS)
-BASE_FEATURE(kEnableIntelMediaCompression,
-             "EnableIntelMediaCompression",
+BASE_FEATURE(kTransparentIconWorkaround,
+#if BUILDFLAG(IS_WIN)
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#else
              base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
+#endif  // BUILDFLAG(IS_WIN)
 }  // namespace features

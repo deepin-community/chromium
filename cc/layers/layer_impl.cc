@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/atomic_sequence_num.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/notreached.h"
@@ -36,6 +37,7 @@
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
 #include "components/viz/common/quads/debug_border_draw_quad.h"
+#include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/traced_value.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/quad_f.h"
@@ -44,6 +46,8 @@
 #include "ui/gfx/geometry/transform_util.h"
 #include "ui/gfx/geometry/vector2d_conversions.h"
 
+namespace cc {
+
 namespace {
 
 template <typename T>
@@ -51,26 +55,69 @@ std::unique_ptr<T> ClonePtr(const std::unique_ptr<T>& value) {
   return value ? std::make_unique<T>(*value) : nullptr;
 }
 
+const char* LayerTypeAsString(mojom::LayerType type) {
+  switch (type) {
+    case mojom::LayerType::kLayer:
+      return "cc::LayerImpl";
+    case mojom::LayerType::kSolidColor:
+      return "cc::SolidColorLayerImpl";
+    case mojom::LayerType::kTexture:
+      return "cc::TextureLayerImpl";
+    case mojom::LayerType::kSurface:
+      return "cc::SurfaceLayerImpl";
+    case mojom::LayerType::kPicture:
+      return "cc::PictureLayerImpl";
+    case mojom::LayerType::kTileDisplay:
+      return "cc::TileDisplayLayerImpl";
+    case mojom::LayerType::kMirror:
+      return "cc::MirrorLayerImpl";
+    case mojom::LayerType::kHeadsUpDisplay:
+      return "cc::HeadsUpDisplayLayerImpl";
+    case mojom::LayerType::kUIResource:
+      return "cc::UIResourceLayerImpl";
+    case mojom::LayerType::kNinePatch:
+      return "cc::NinePatchLayerImpl";
+    case mojom::LayerType::kSolidColorScrollbar:
+      return "cc::SolidColorScrollbarLayerImpl";
+    case mojom::LayerType::kPaintedScrollbar:
+      return "cc::PaintedScrollbarLayerImpl";
+    case mojom::LayerType::kNinePatchThumbScrollbar:
+      return "cc::NinePatchThumbScrollbarLayerImpl";
+    case mojom::LayerType::kVideo:
+      return "cc::VideoLayerImpl";
+    case mojom::LayerType::kViewTransitionContent:
+      return "cc::ViewTransitionContentLayerImpl";
+  }
+}
+
+base::AtomicSequenceNumber g_next_stable_id_for_shared_quad_state;
+
 }  // namespace
 
-namespace cc {
-LayerImpl::LayerImpl(LayerTreeImpl* tree_impl,
-                     int id,
-                     bool will_always_push_properties)
+LayerImpl::RareProperties::RareProperties() = default;
+LayerImpl::RareProperties::RareProperties(const RareProperties&) = default;
+LayerImpl::RareProperties::~RareProperties() = default;
+
+int LayerImpl::GetNextStableIdForSharedQuadState() {
+  // Stable IDs start from 1.
+  return g_next_stable_id_for_shared_quad_state.GetNext() + 1;
+}
+
+LayerImpl::LayerImpl(LayerTreeImpl* tree_impl, int id)
     : layer_id_(id),
       layer_tree_impl_(tree_impl),
-      will_always_push_properties_(will_always_push_properties),
+      stable_id_for_shared_quad_state_(GetNextStableIdForSharedQuadState()),
       transform_tree_index_(kInvalidPropertyNodeId),
       effect_tree_index_(kInvalidPropertyNodeId),
       clip_tree_index_(kInvalidPropertyNodeId),
-      scroll_tree_index_(kInvalidPropertyNodeId),
-      current_draw_mode_(DRAW_MODE_NONE) {
+      scroll_tree_index_(kInvalidPropertyNodeId) {
   DCHECK_GT(layer_id_, 0);
+  DCHECK_GT(stable_id_for_shared_quad_state_, 0);
 
   DCHECK(layer_tree_impl_);
   layer_tree_impl_->RegisterLayer(this);
 
-  SetNeedsPushProperties();
+  SetNeedsPushProperties(LayerImpl::kChangedAllProperties);
 }
 
 LayerImpl::~LayerImpl() {
@@ -79,11 +126,17 @@ LayerImpl::~LayerImpl() {
       TRACE_DISABLED_BY_DEFAULT("cc.debug"), "cc::LayerImpl", this);
 }
 
+mojom::LayerType LayerImpl::GetLayerType() const {
+  return mojom::LayerType::kLayer;
+}
+
 ElementListType LayerImpl::GetElementTypeForAnimation() const {
   return IsActive() ? ElementListType::ACTIVE : ElementListType::PENDING;
 }
 
 void LayerImpl::UpdateDebugInfo(LayerDebugInfo* debug_info) {
+  SetNeedsPushProperties();
+
   // nullptr means we have stopped collecting debug info.
   if (!debug_info) {
     debug_info_.reset();
@@ -103,16 +156,40 @@ void LayerImpl::UpdateDebugInfo(LayerDebugInfo* debug_info) {
                                     existing_invalidations.end());
 }
 
+void LayerImpl::SetHasTransformNode(bool val) {
+  if (has_transform_node_ == val) {
+    return;
+  }
+
+  has_transform_node_ = val;
+  SetNeedsPushProperties(LayerImpl::kChangedPropertyTreeIndex);
+}
+
 void LayerImpl::SetTransformTreeIndex(int index) {
+  if (transform_tree_index_ == index) {
+    return;
+  }
+
   transform_tree_index_ = index;
+  SetNeedsPushProperties(LayerImpl::kChangedPropertyTreeIndex);
 }
 
 void LayerImpl::SetClipTreeIndex(int index) {
+  if (clip_tree_index_ == index) {
+    return;
+  }
+
   clip_tree_index_ = index;
+  SetNeedsPushProperties(LayerImpl::kChangedPropertyTreeIndex);
 }
 
 void LayerImpl::SetEffectTreeIndex(int index) {
+  if (effect_tree_index_ == index) {
+    return;
+  }
+
   effect_tree_index_ = index;
+  SetNeedsPushProperties(LayerImpl::kChangedPropertyTreeIndex);
 }
 
 int LayerImpl::render_target_effect_tree_index() const {
@@ -124,7 +201,21 @@ int LayerImpl::render_target_effect_tree_index() const {
 }
 
 void LayerImpl::SetScrollTreeIndex(int index) {
+  if (scroll_tree_index_ == index) {
+    return;
+  }
+
   scroll_tree_index_ = index;
+  SetNeedsPushProperties(LayerImpl::kChangedPropertyTreeIndex);
+}
+
+void LayerImpl::SetOffsetToTransformParent(const gfx::Vector2dF& offset) {
+  if (offset_to_transform_parent_ == offset) {
+    return;
+  }
+
+  offset_to_transform_parent_ = offset;
+  SetNeedsPushProperties();
 }
 
 void LayerImpl::PopulateSharedQuadState(viz::SharedQuadState* state,
@@ -140,7 +231,8 @@ void LayerImpl::PopulateSharedQuadState(viz::SharedQuadState* state,
                 draw_properties_.opacity,
                 effect_node->HasRenderSurface() ? SkBlendMode::kSrcOver
                                                 : effect_node->blend_mode,
-                GetSortingContextId(), static_cast<uint32_t>(id()),
+                GetSortingContextId(),
+                static_cast<uint32_t>(stable_id_for_shared_quad_state()),
                 draw_properties_.is_fast_rounded_corner);
 }
 
@@ -177,7 +269,8 @@ void LayerImpl::PopulateScaledSharedQuadStateWithContentRects(
                 draw_properties().opacity,
                 effect_node->HasRenderSurface() ? SkBlendMode::kSrcOver
                                                 : effect_node->blend_mode,
-                GetSortingContextId(), static_cast<uint32_t>(id()),
+                GetSortingContextId(),
+                static_cast<uint32_t>(stable_id_for_shared_quad_state()),
                 draw_properties().is_fast_rounded_corner);
 }
 
@@ -199,12 +292,7 @@ bool LayerImpl::WillDraw(DrawMode draw_mode,
       return false;
   }
 
-  current_draw_mode_ = draw_mode;
   return true;
-}
-
-void LayerImpl::DidDraw(viz::ClientResourceProvider* resource_provider) {
-  current_draw_mode_ = DRAW_MODE_NONE;
 }
 
 bool LayerImpl::ShowDebugBorders(DebugBorderType type) const {
@@ -282,7 +370,6 @@ void LayerImpl::GetContentsResourceId(viz::ResourceId* resource_id,
                                       gfx::Size* resource_size,
                                       gfx::SizeF* resource_uv_size) const {
   NOTREACHED();
-  *resource_id = viz::kInvalidResourceId;
 }
 
 gfx::Vector2dF LayerImpl::ScrollBy(const gfx::Vector2dF& scroll) {
@@ -292,52 +379,13 @@ gfx::Vector2dF LayerImpl::ScrollBy(const gfx::Vector2dF& scroll) {
   return scroll_tree.ScrollBy(*scroll_node, scroll, layer_tree_impl());
 }
 
-void LayerImpl::UpdateScrollable() {
-  if (!element_id()) {
-    scrollable_ = false;
-    return;
-  }
-
-  const auto* scroll_node = GetScrollTree().FindNodeFromElementId(element_id());
-  bool was_scrollable = scrollable_;
-  scrollable_ = scroll_node && scroll_node->scrollable;
-  if (was_scrollable == scrollable_) {
-    if (!scrollable_)
-      return;
-    if (scroll_container_bounds_ == scroll_node->container_bounds &&
-        scroll_contents_bounds_ == scroll_node->bounds)
-      return;
-  }
-
-  const bool container_bounds_changed =
-      scrollable_ && scroll_node->container_bounds != scroll_container_bounds_;
-  scroll_container_bounds_ =
-      scrollable_ ? scroll_node->container_bounds : gfx::Size();
-  scroll_contents_bounds_ = scrollable_ ? scroll_node->bounds : gfx::Size();
-
-  // Scrollbar positions depend on the bounds.
-  layer_tree_impl()->SetScrollbarGeometriesNeedUpdate();
-
-  if (layer_tree_impl()->settings().scrollbar_animator ==
-      LayerTreeSettings::AURA_OVERLAY) {
-    if (layer_tree_impl()->settings().enable_fluent_overlay_scrollbar) {
-      // Show scrollbars when resizing scrollable areas and
-      // not when the inside content gets expanded.
-      set_needs_show_scrollbars(scrollable_ && container_bounds_changed);
-    } else {
-      set_needs_show_scrollbars(scrollable_);
-    }
-  }
-
-  NoteLayerPropertyChanged();
-}
-
 void LayerImpl::SetTouchActionRegion(TouchActionRegion region) {
   // Avoid recalculating the cached |all_touch_action_regions_| value.
   if (touch_action_region_ == region)
     return;
   touch_action_region_ = std::move(region);
   all_touch_action_regions_ = nullptr;
+  SetNeedsPushProperties();
 }
 
 const Region& LayerImpl::GetAllTouchActionRegions() const {
@@ -352,8 +400,17 @@ const Region& LayerImpl::GetAllTouchActionRegions() const {
 }
 
 void LayerImpl::SetCaptureBounds(viz::RegionCaptureBounds bounds) {
-  if (rare_properties_ || !bounds.IsEmpty())
+  if (rare_properties_ || !bounds.IsEmpty()) {
     EnsureRareProperties().capture_bounds = std::move(bounds);
+    SetNeedsPushProperties();
+  }
+}
+
+void LayerImpl::SetTrackedElementBounds(TrackedElementBounds bounds) {
+  if (rare_properties_ || !bounds.empty()) {
+    EnsureRareProperties().tracked_element_bounds = std::move(bounds);
+    SetNeedsPushProperties();
+  }
 }
 
 std::unique_ptr<LayerImpl> LayerImpl::CreateLayerImpl(
@@ -368,54 +425,63 @@ bool LayerImpl::IsSnappedToPixelGridInTarget() {
 void LayerImpl::PushPropertiesTo(LayerImpl* layer) {
   DCHECK(layer->IsActive());
 
-  // The element id should be set first because other setters may
-  // depend on it. Referencing element id on a layer is
-  // deprecated. http://crbug.com/709137
-  layer->SetElementId(element_id_);
+  if (GetChangeFlag(kChangedPropertyTreeIndex)) {
+    layer->transform_tree_index_ = transform_tree_index_;
+    layer->has_transform_node_ = has_transform_node_;
+    layer->effect_tree_index_ = effect_tree_index_;
+    layer->clip_tree_index_ = clip_tree_index_;
+    layer->scroll_tree_index_ = scroll_tree_index_;
+  }
 
-  layer->has_transform_node_ = has_transform_node_;
-  layer->offset_to_transform_parent_ = offset_to_transform_parent_;
-  layer->contents_opaque_ = contents_opaque_;
-  layer->contents_opaque_for_text_ = contents_opaque_for_text_;
-  layer->may_contain_video_ = may_contain_video_;
-  layer->should_check_backface_visibility_ = should_check_backface_visibility_;
-  layer->draws_content_ = draws_content_;
-  layer->hit_test_opaqueness_ = hit_test_opaqueness_;
-  layer->touch_action_region_ = touch_action_region_;
-  layer->all_touch_action_regions_ = ClonePtr(all_touch_action_regions_);
-  layer->background_color_ = background_color_;
-  layer->safe_opaque_background_color_ = safe_opaque_background_color_;
-  layer->transform_tree_index_ = transform_tree_index_;
-  layer->effect_tree_index_ = effect_tree_index_;
-  layer->clip_tree_index_ = clip_tree_index_;
-  layer->scroll_tree_index_ = scroll_tree_index_;
-  if (needs_show_scrollbars_)
-    layer->needs_show_scrollbars_ = needs_show_scrollbars_;
+  if (GetChangeFlag(kChangedGeneralProperty)) {
+    // The element id should be set first because other setters may
+    // depend on it. Referencing element id on a layer is
+    // deprecated. http://crbug.com/709137
+    layer->SetElementId(element_id_);
 
-  if (layer_property_changed_not_from_property_trees_ ||
-      layer_property_changed_from_property_trees_)
-    layer->layer_tree_impl()->set_needs_update_draw_properties();
-  if (layer_property_changed_not_from_property_trees_)
-    layer->layer_property_changed_not_from_property_trees_ = true;
-  if (layer_property_changed_from_property_trees_)
-    layer->layer_property_changed_from_property_trees_ = true;
+    layer->offset_to_transform_parent_ = offset_to_transform_parent_;
+    layer->contents_opaque_ = contents_opaque_;
+    layer->contents_opaque_for_text_ = contents_opaque_for_text_;
+    layer->should_check_backface_visibility_ =
+        should_check_backface_visibility_;
+    layer->draws_content_ = draws_content_;
+    layer->hit_test_opaqueness_ = hit_test_opaqueness_;
+    layer->touch_action_region_ = touch_action_region_;
+    layer->all_touch_action_regions_ = ClonePtr(all_touch_action_regions_);
+    layer->background_color_ = background_color_;
+    layer->safe_opaque_background_color_ = safe_opaque_background_color_;
 
-  layer->SetBounds(bounds_);
-  layer->UpdateScrollable();
+    if (layer_property_changed_not_from_property_trees_ ||
+        layer_property_changed_from_property_trees_) {
+      layer->layer_tree_impl()->set_needs_update_draw_properties();
+    }
+    if (layer_property_changed_not_from_property_trees_) {
+      layer->layer_property_changed_not_from_property_trees_ = true;
+    }
+    if (layer_property_changed_from_property_trees_) {
+      layer->layer_property_changed_from_property_trees_ = true;
+    }
 
-  layer->UnionUpdateRect(update_rect_);
+    layer->SetBounds(bounds_);
 
-  layer->UpdateDebugInfo(debug_info_.get());
+    layer->UnionUpdateRect(update_rect_);
 
-  if (rare_properties_) {
-    layer->rare_properties_ =
-        std::make_unique<RareProperties>(*rare_properties_);
-  } else {
-    layer->rare_properties_.reset();
+    layer->UpdateDebugInfo(debug_info_.get());
+
+    if (rare_properties_) {
+      layer->rare_properties_ =
+          std::make_unique<RareProperties>(*rare_properties_);
+    } else {
+      layer->rare_properties_.reset();
+    }
+  }
+
+  if (layer_tree_impl()->settings().TreesInVizInClientProcess()) {
+    // Ensure updates also propagate to the display tree on its next update.
+    layer->SetNeedsPushProperties(changed_properties_);
   }
 
   // Reset any state that should be cleared for the next update.
-  needs_show_scrollbars_ = false;
   ResetChangeTracking();
 }
 
@@ -423,6 +489,27 @@ bool LayerImpl::IsAffectedByPageScale() const {
   TransformTree& transform_tree = GetTransformTree();
   return transform_tree.Node(transform_tree_index())
       ->in_subtree_of_page_scale_layer;
+}
+
+DamageReasonSet LayerImpl::GetDamageReasonsFromLayerPropertyChange() const {
+  DamageReasonSet reasons;
+  if (layer_property_changed_not_from_property_trees_ ||
+      layer_property_changed_from_property_trees_ ||
+      GetPropertyTrees()->full_tree_damaged()) {
+    reasons.Put(DamageReason::kUntracked);
+  }
+  if (transform_tree_index() != kInvalidPropertyNodeId) {
+    TransformNode* transform_node =
+        GetTransformTree().Node(transform_tree_index());
+    reasons.PutAll(transform_node->damage_reasons());
+  }
+  if (effect_tree_index() != kInvalidPropertyNodeId) {
+    EffectNode* effect_node = GetEffectTree().Node(effect_tree_index());
+    if (effect_node && effect_node->effect_changed) {
+      reasons.Put(DamageReason::kUntracked);
+    }
+  }
+  return reasons;
 }
 
 bool LayerImpl::LayerPropertyChanged() const {
@@ -438,8 +525,9 @@ bool LayerImpl::LayerPropertyChangedFromPropertyTrees() const {
     return false;
   TransformNode* transform_node =
       GetTransformTree().Node(transform_tree_index());
-  if (transform_node && transform_node->transform_changed)
+  if (transform_node && transform_node->transform_changed()) {
     return true;
+  }
   if (effect_tree_index() == kInvalidPropertyNodeId)
     return false;
   EffectNode* effect_node = GetEffectTree().Node(effect_tree_index());
@@ -454,11 +542,13 @@ bool LayerImpl::LayerPropertyChangedNotFromPropertyTrees() const {
 
 void LayerImpl::NoteLayerPropertyChanged() {
   layer_property_changed_not_from_property_trees_ = true;
+  SetNeedsPushProperties();
   layer_tree_impl()->set_needs_update_draw_properties();
 }
 
 void LayerImpl::NoteLayerPropertyChangedFromPropertyTrees() {
   layer_property_changed_from_property_trees_ = true;
+  SetNeedsPushProperties();
   layer_tree_impl()->set_needs_update_draw_properties();
 }
 
@@ -466,8 +556,9 @@ void LayerImpl::ValidateQuadResourcesInternal(viz::DrawQuad* quad) const {
 #if DCHECK_IS_ON()
   const viz::ClientResourceProvider* resource_provider =
       layer_tree_impl_->resource_provider();
-  for (viz::ResourceId resource_id : quad->resources)
-    resource_provider->ValidateResource(resource_id);
+  if (quad->resource_id != viz::kInvalidResourceId) {
+    resource_provider->ValidateResource(quad->resource_id);
+  }
 #endif
 }
 
@@ -480,14 +571,11 @@ gfx::Transform LayerImpl::GetScaledDrawTransform(
   return scaled_draw_transform;
 }
 
-const char* LayerImpl::LayerTypeAsString() const {
-  return "cc::LayerImpl";
-}
-
 void LayerImpl::ResetChangeTracking() {
   layer_property_changed_not_from_property_trees_ = false;
   layer_property_changed_from_property_trees_ = false;
   needs_push_properties_ = false;
+  changed_properties_ = 0;
 
   update_rect_.SetRect(0, 0, 0, 0);
   if (debug_info_)
@@ -513,12 +601,8 @@ void LayerImpl::SetBounds(const gfx::Size& bounds) {
     return;
 
   bounds_ = bounds;
-
-  // Scrollbar positions depend on the scrolling layer bounds.
-  if (scrollable_)
-    layer_tree_impl()->SetScrollbarGeometriesNeedUpdate();
-
   NoteLayerPropertyChanged();
+  SetNeedsPushProperties();
 }
 
 bool LayerImpl::IsScrollbarLayer() const {
@@ -526,6 +610,7 @@ bool LayerImpl::IsScrollbarLayer() const {
 }
 
 bool LayerImpl::IsScrollerOrScrollbar() const {
+  DCHECK(!layer_tree_impl()->settings().enable_hit_test_opaqueness);
   return IsScrollbarLayer() ||
          GetScrollTree().FindNodeFromElementId(element_id());
 }
@@ -536,6 +621,7 @@ void LayerImpl::SetDrawsContent(bool draws_content) {
 
   draws_content_ = draws_content;
   NoteLayerPropertyChanged();
+  SetNeedsPushProperties();
 }
 
 void LayerImpl::SetHitTestOpaqueness(HitTestOpaqueness opaqueness) {
@@ -545,6 +631,7 @@ void LayerImpl::SetHitTestOpaqueness(HitTestOpaqueness opaqueness) {
 
   hit_test_opaqueness_ = opaqueness;
   NoteLayerPropertyChanged();
+  SetNeedsPushProperties();
 }
 
 bool LayerImpl::HitTestable() const {
@@ -563,7 +650,10 @@ bool LayerImpl::HitTestable() const {
 }
 
 bool LayerImpl::OpaqueToHitTest() const {
-  return HitTestable() && hit_test_opaqueness_ == HitTestOpaqueness::kOpaque;
+  return HitTestable() && hit_test_opaqueness_ == HitTestOpaqueness::kOpaque &&
+         !GetEffectTree()
+              .Node(effect_tree_index())
+              ->node_or_ancestor_has_fast_rounded_corner;
 }
 
 void LayerImpl::SetBackgroundColor(SkColor4f background_color) {
@@ -572,20 +662,37 @@ void LayerImpl::SetBackgroundColor(SkColor4f background_color) {
 
   background_color_ = background_color;
   NoteLayerPropertyChanged();
+  SetNeedsPushProperties();
 }
 
 void LayerImpl::SetSafeOpaqueBackgroundColor(SkColor4f background_color) {
+  if (safe_opaque_background_color_ == background_color) {
+    return;
+  }
+
   safe_opaque_background_color_ = background_color;
+  SetNeedsPushProperties();
 }
 
 void LayerImpl::SetContentsOpaque(bool opaque) {
+  if (contents_opaque_ == opaque && contents_opaque_for_text_ == opaque) {
+    return;
+  }
+
   contents_opaque_ = opaque;
   contents_opaque_for_text_ = opaque;
+  SetNeedsPushProperties();
 }
 
 void LayerImpl::SetContentsOpaqueForText(bool opaque) {
   DCHECK(!contents_opaque_ || opaque);
+
+  if (contents_opaque_for_text_ == opaque) {
+    return;
+  }
+
   contents_opaque_for_text_ = opaque;
+  SetNeedsPushProperties();
 }
 
 float LayerImpl::Opacity() const {
@@ -602,20 +709,46 @@ void LayerImpl::SetElementId(ElementId element_id) {
   TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("cc.debug"), "LayerImpl::SetElementId",
                "element", element_id.ToString());
   element_id_ = element_id;
+  SetNeedsPushProperties();
+}
+
+void LayerImpl::SetShouldCheckBackfaceVisibility(
+    bool should_check_backface_visibility) {
+  if (should_check_backface_visibility_ == should_check_backface_visibility) {
+    return;
+  }
+
+  should_check_backface_visibility_ = should_check_backface_visibility;
+  SetNeedsPushProperties();
 }
 
 void LayerImpl::UnionUpdateRect(const gfx::Rect& update_rect) {
+  if (update_rect_ == update_rect) {
+    return;
+  }
+
   update_rect_.Union(update_rect);
+  SetNeedsPushProperties();
 }
 
 gfx::Rect LayerImpl::GetDamageRect() const {
   return gfx::Rect();
 }
 
+DamageReasonSet LayerImpl::GetDamageReasons() const {
+  DamageReasonSet reasons = GetDamageReasonsFromLayerPropertyChange();
+  if (!update_rect_.IsEmpty() || !GetDamageRect().IsEmpty()) {
+    reasons.Put(DamageReason::kUntracked);
+  }
+  return reasons;
+}
+
 void LayerImpl::SetCurrentScrollOffset(const gfx::PointF& scroll_offset) {
   DCHECK(IsActive());
-  if (GetScrollTree().SetScrollOffset(element_id(), scroll_offset))
-    layer_tree_impl()->DidUpdateScrollOffset(element_id());
+  if (GetScrollTree().SetScrollOffset(element_id(), scroll_offset)) {
+    layer_tree_impl()->DidUpdateScrollOffset(
+        element_id(), /*pushed_from_main_or_pending_tree=*/false);
+  }
 }
 
 SimpleEnclosedRegion LayerImpl::VisibleOpaqueRegion() const {
@@ -636,11 +769,18 @@ void LayerImpl::ReleaseTileResources() {}
 
 void LayerImpl::RecreateTileResources() {}
 
-void LayerImpl::SetNeedsPushProperties() {
-  // There's no need to push layer properties on the active tree, or when
-  // |will_always_push_properties_| is true.
-  if (will_always_push_properties_ || layer_tree_impl()->IsActiveTree())
+void LayerImpl::SetNeedsPushProperties(uint8_t changed_props) {
+  // We never push properties from the active tree unless using a LayerContext.
+  if (layer_tree_impl()->IsActiveTree() &&
+      !layer_tree_impl()->settings().TreesInVizInClientProcess()) {
     return;
+  }
+
+  if (::features::IsCCSlimmingEnabled()) {
+    changed_properties_ |= changed_props;
+  } else {
+    changed_properties_ = LayerImpl::kChangedAllProperties;
+  }
   if (!needs_push_properties_) {
     needs_push_properties_ = true;
     layer_tree_impl()->AddLayerShouldPushProperties(this);
@@ -666,7 +806,7 @@ void LayerImpl::AsValueInto(base::trace_event::TracedValue* state) const {
   // consumers.
   viz::TracedValue::MakeDictIntoImplicitSnapshotWithCategory(
       TRACE_DISABLED_BY_DEFAULT("cc.debug"), state, "cc::LayerImpl",
-      LayerTypeAsString(), this);
+      LayerTypeAsString(GetLayerType()), viz::TracedValue::Id(this));
   state->SetInteger("layer_id", id());
   MathUtil::AddToTracedValue("bounds", bounds_, state);
 
@@ -708,8 +848,10 @@ void LayerImpl::AsValueInto(base::trace_event::TracedValue* state) const {
   wheel_event_handler_region().AsValueInto(state);
   state->EndArray();
 
+  // TODO(crbug.com/358408565): At least DevTools reads from trace using this
+  // name.
   state->BeginArray("non_fast_scrollable_region");
-  non_fast_scrollable_region().AsValueInto(state);
+  main_thread_scroll_hit_test_region().AsValueInto(state);
   state->EndArray();
 
   state->SetBoolean("hit_testable", HitTestable());
@@ -827,7 +969,7 @@ gfx::Vector2dF LayerImpl::GetIdealContentsScale() const {
   std::optional<gfx::Vector2dF> transform_scales =
       gfx::TryComputeTransform2dScaleComponents(transform);
   if (transform_scales) {
-    // TODO(crbug.com/1196414): Remove this scale cap.
+    // TODO(crbug.com/40176440): Remove this scale cap.
     float scale_cap = GetPreferredRasterScale(*transform_scales);
     transform_scales->SetToMin(gfx::Vector2dF(scale_cap, scale_cap));
     return *transform_scales;
@@ -843,7 +985,7 @@ gfx::Vector2dF LayerImpl::GetIdealContentsScale() const {
 
   float default_scale = page_scale * device_scale;
 
-  // TODO(crbug.com/1196414): This function should return a 2D scale.
+  // TODO(crbug.com/40176440): This function should return a 2D scale.
   float scale = gfx::ComputeApproximateMaxScale(transform);
 
   const int kMaxTilesToCoverLayerDimension = 5;
@@ -887,6 +1029,24 @@ float LayerImpl::GetPreferredRasterScale(
   return std::min(kMaxScaleRatio * lower_scale, higher_scale);
 }
 
+void LayerImpl::SetFilterQuality(PaintFlags::FilterQuality filter_quality) {
+  if (GetFilterQuality() == filter_quality) {
+    return;
+  }
+  EnsureRareProperties().filter_quality = filter_quality;
+  SetNeedsPushProperties();
+}
+
+void LayerImpl::SetDynamicRangeLimit(
+    PaintFlags::DynamicRangeLimitMixture dynamic_range_limit) {
+  if (GetDynamicRangeLimit() == dynamic_range_limit) {
+    return;
+  }
+  EnsureRareProperties().dynamic_range_limit = dynamic_range_limit;
+  NoteLayerPropertyChanged();
+  SetNeedsPushProperties();
+}
+
 PropertyTrees* LayerImpl::GetPropertyTrees() const {
   return layer_tree_impl_->property_trees();
 }
@@ -916,64 +1076,6 @@ void LayerImpl::EnsureValidPropertyTreeIndices() const {
 
 bool LayerImpl::is_surface_layer() const {
   return false;
-}
-
-static float TranslationFromActiveTreeLayerScreenSpaceTransform(
-    LayerImpl* pending_tree_layer) {
-  LayerTreeImpl* layer_tree_impl = pending_tree_layer->layer_tree_impl();
-  if (layer_tree_impl) {
-    LayerImpl* active_tree_layer =
-        layer_tree_impl->FindActiveTreeLayerById(pending_tree_layer->id());
-    if (active_tree_layer) {
-      gfx::Transform active_tree_screen_space_transform =
-          active_tree_layer->draw_properties().screen_space_transform;
-      if (active_tree_screen_space_transform.IsIdentity())
-        return 0.f;
-      if (active_tree_screen_space_transform.ApproximatelyEqual(
-              pending_tree_layer->draw_properties().screen_space_transform))
-        return 0.f;
-      return (active_tree_layer->draw_properties()
-                  .screen_space_transform.To2dTranslation() -
-              pending_tree_layer->draw_properties()
-                  .screen_space_transform.To2dTranslation())
-          .Length();
-    }
-  }
-  return 0.f;
-}
-
-// A layer jitters if its screen space transform is same on two successive
-// commits, but has changed in between the commits. CalculateLayerJitter
-// computes the jitter for the layer.
-int LayerImpl::CalculateJitter() {
-  float jitter = 0.f;
-  performance_properties().translation_from_last_frame = 0.f;
-  performance_properties().last_commit_screen_space_transform =
-      draw_properties().screen_space_transform;
-
-  if (!visible_layer_rect().IsEmpty()) {
-    if (draw_properties().screen_space_transform.ApproximatelyEqual(
-            performance_properties().last_commit_screen_space_transform)) {
-      float translation_from_last_commit =
-          TranslationFromActiveTreeLayerScreenSpaceTransform(this);
-      if (translation_from_last_commit > 0.f) {
-        performance_properties().num_fixed_point_hits++;
-        performance_properties().translation_from_last_frame =
-            translation_from_last_commit;
-        if (performance_properties().num_fixed_point_hits >
-            LayerTreeImpl::kFixedPointHitsThreshold) {
-          // Jitter = Translation from fixed point * sqrt(Area of the layer).
-          // The square root of the area is used instead of the area to match
-          // the dimensions of both terms on the rhs.
-          jitter += translation_from_last_commit *
-                    sqrt(visible_layer_rect().size().GetArea());
-        }
-      } else {
-        performance_properties().num_fixed_point_hits = 0;
-      }
-    }
-  }
-  return jitter;
 }
 
 std::string LayerImpl::DebugName() const {

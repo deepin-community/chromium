@@ -6,13 +6,11 @@
 
 #include "ash/constants/ash_features.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_mock_time_task_runner.h"
@@ -137,7 +135,7 @@ class FakeTrainer : public Trainer {
 
 class TestObserver : public Modeller::Observer {
  public:
-  TestObserver() {}
+  TestObserver() = default;
 
   TestObserver(const TestObserver&) = delete;
   TestObserver& operator=(const TestObserver&) = delete;
@@ -208,7 +206,7 @@ class ModellerImplTest : public testing::Test {
                      double curve_error) {
     modeller_ = ModellerImpl::CreateForTesting(
         profile_.get(), als_reader_.get(), &fake_brightness_monitor_,
-        &fake_model_config_loader_, &user_activity_detector_,
+        &fake_model_config_loader_, /*user_activity_detector=*/nullptr,
         std::make_unique<FakeTrainer>(is_trainer_configured,
                                       is_personal_curve_valid, return_new_curve,
                                       curve_error),
@@ -272,9 +270,6 @@ class ModellerImplTest : public testing::Test {
   }
 
   content::BrowserTaskEnvironment task_environment_;
-  base::HistogramTester histogram_tester_;
-
-  ui::UserActivityDetector user_activity_detector_;
 
   base::ScopedTempDir temp_dir_;
   std::unique_ptr<TestingProfile> profile_;
@@ -431,8 +426,6 @@ TEST_F(ModellerImplTest, ModelLoadedFromProfilePath) {
   task_environment_.RunUntilIdle();
 
   test_observer_->CheckStatus(true /* is_model_initialized */, model);
-  histogram_tester_.ExpectUniqueSample(
-      "AutoScreenBrightness.PersonalCurveValid", true, 1);
 }
 
 // A model is loaded from disk, this is a personal curve, and the saved global
@@ -456,9 +449,6 @@ TEST_F(ModellerImplTest, ModelLoadedFromProfilePathWithReset) {
 
   const Model expected_model(test_initial_global_curve_, std::nullopt, 0);
   test_observer_->CheckStatus(true /* is_model_initialized */, expected_model);
-
-  histogram_tester_.ExpectUniqueSample(
-      "AutoScreenBrightness.PersonalCurveValid", true, 1);
 }
 
 // A model is loaded from disk but the personal curve doesn't satisfy Trainer
@@ -474,9 +464,6 @@ TEST_F(ModellerImplTest, PersonalCurveError) {
 
   const Model expected_model(test_initial_global_curve_, std::nullopt, 0);
   test_observer_->CheckStatus(true /* is_model_initialized */, expected_model);
-
-  histogram_tester_.ExpectUniqueSample(
-      "AutoScreenBrightness.PersonalCurveValid", false, 1);
 }
 
 // Ambient light values are received. We check average ambient light has been
@@ -610,8 +597,9 @@ TEST_F(ModellerImplTest, MultipleUserActivities) {
 
   task_environment_.FastForwardBy(modeller_->GetTrainingDelayForTesting() / 2);
   // A user activity is received, timer should be reset.
-  const ui::MouseEvent mouse_event(ui::ET_MOUSE_EXITED, gfx::Point(0, 0),
-                                   gfx::Point(0, 0), base::TimeTicks(), 0, 0);
+  const ui::MouseEvent mouse_event(ui::EventType::kMouseExited,
+                                   gfx::Point(0, 0), gfx::Point(0, 0),
+                                   base::TimeTicks(), 0, 0);
   modeller_->OnUserActivity(&mouse_event);
 
   task_environment_.FastForwardBy(modeller_->GetTrainingDelayForTesting() / 3);
@@ -654,8 +642,9 @@ TEST_F(ModellerImplTest, ZeroTrainingDelay) {
   test_observer_->CheckStatus(true /* is_model_initialized */, expected_model);
 
   fake_light_provider_->ReportAmbientLightUpdate(30);
-  const ui::MouseEvent mouse_event(ui::ET_MOUSE_EXITED, gfx::Point(0, 0),
-                                   gfx::Point(0, 0), base::TimeTicks(), 0, 0);
+  const ui::MouseEvent mouse_event(ui::EventType::kMouseExited,
+                                   gfx::Point(0, 0), gfx::Point(0, 0),
+                                   base::TimeTicks(), 0, 0);
   modeller_->OnUserActivity(&mouse_event);
 
   modeller_->OnUserBrightnessChanged(10, 20);

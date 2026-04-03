@@ -4,14 +4,19 @@
 
 import {LitElement, PropertyValues} from 'lit/index.js';
 
-type ElementCache = Record<string, HTMLElement>;
+type ElementCache = Record<string, HTMLElement|SVGElement>;
 
 // Converts a 'nameLikeThis' to 'name-like-this'.
 function toDashCase(name: string): string {
-  return name.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+  return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
 }
 
 export class CrLitElement extends LitElement {
+  // Change default ShadowRoot|null type to ShadowRoot to avoid forcing all
+  // client code having to use `this.shadowRoot!` given that CrLitElement is
+  // used with a ShadowRoot in the vast majority of cases (possibly all).
+  declare readonly shadowRoot: ShadowRoot;
+
   $: ElementCache;
   private willUpdatePending_: boolean = false;
 
@@ -32,10 +37,11 @@ export class CrLitElement extends LitElement {
     // element (never removed).
     const self = this;
     this.$ = new Proxy({}, {
-      get(cache: ElementCache, id: string): HTMLElement {
+      get(cache: ElementCache, id: string): HTMLElement|SVGElement {
         if (!self.hasUpdated && !self.isConnected) {
-          throw new Error(`CrLitElement ${
-              self.tagName} $ dictionary accessed before element is connected at least once.`);
+          const description = self.tagName + (self.id ? `#${self.id}` : '');
+          throw new Error(`CrLitElement ${description} accessed '$.${
+              id}' before connected at least once.`);
         }
 
         if (!self.hasUpdated) {
@@ -43,20 +49,12 @@ export class CrLitElement extends LitElement {
           // performUpdate() call below will cause an endless recursion. Local
           // DOM nodes should not be accessed within willUpdate() anyway.
           if (self.willUpdatePending_) {
-            throw new Error(`CrLitElement ${
-                self.tagName} tried to access this.$ within willUpdate().`);
+            const description = self.tagName + (self.id ? `#${self.id}` : '');
+            throw new Error(`CrLitElement ${description} accessed '$.${
+                id}' within willUpdate().`);
           }
 
-          // Force-render in case the $ helper dictionary is used before the
-          // connectedCallback() has fired. This can happen in some cases, for
-          // example when the following pattern is encountered:
-          // dom-if > parent element -> child element
-          // When the dom-if is stamped, and the parent element's
-          // connectedCallback() is called, the child element's
-          // connectedCallback() has not fired yet, which is problematic when
-          // the parent element calls a synchronous API method on the child that
-          // accesses its Shadow DOM (like <cr-dialog>'s showModal() accessing
-          // the underlying <dialog> element).
+          // See Case3 in `ensureInitialRender` docs.
           self.performUpdate();
         }
 
@@ -66,7 +64,7 @@ export class CrLitElement extends LitElement {
         }
 
         // Otherwise query the shadow DOM and cache the reference for later use.
-        const element = self.shadowRoot!.querySelector<HTMLElement>(`#${id}`);
+        const element = self.shadowRoot.querySelector<HTMLElement>(`#${id}`);
         if (element === null) {
           throw new Error(`CrLitElement ${
               self.tagName}: Failed to find child with id ${id}`);
@@ -78,19 +76,47 @@ export class CrLitElement extends LitElement {
     });
   }
 
-  override connectedCallback() {
-    super.connectedCallback();
-
+  // In a few cases it is necessary to force-render the initial state
+  // synchronously instead of waiting for Lit's asynchronous initial render, to
+  // make the initial render behavior similar to Polymer, and consequently make
+  // migrating from Polymer to Lit easier. Documented known such cases below.
+  //
+  // Case1: Calling synchronous APIs that access the ShadowDOM.
+  // Addressed by the call in connectedCallback().
+  //
+  // For example CrActionMenuElement provides synchronous APIs showAt(),
+  // showAtPosition(), close(), getDialog(), and client code should be able to
+  // call these immediately after attaching this element to the DOM, without
+  // having to wait for `updateComplete`.
+  //
+  // Case2: Calling focus() right after a parent dom-if template is stamped.
+  // Addressed by CrLitElement's focus() override.
+  //
+  // This can happen when the following hierarchy is encountered:
+  // <dom-if> grandparent > Polymer parent element > Lit child element
+  // When the dom-if is stamped, and the parent's connectedCallback() is called,
+  // the Lit child's connectedCallback() has not fired yet (unlike Polymer
+  // children, which use `_enqueueClient` from [1]), which is problematic
+  // when the parent element calls a synchronous API method on the Lit child
+  // that assumes that the ShadowDOM is rendered, for example cr-icon-button's
+  // focus().
+  //
+  // [1] https://github.com/Polymer/polymer/blob/1e8b246d01ea99adba305ea04c45d26da31f68f1/lib/mixins/property-effects.js#L1762
+  //
+  // Case3: Referring to child nodes right after a parent dom-if is stamped.
+  // Addressed by the effectively identical logic in the this.$ Proxy above.
+  //
+  // This happens when the same pattern as Case 2 above is encountered.
+  ensureInitialRender() {
     if (!this.hasUpdated) {
-      // Force-render the initial state synchronously instead of waiting for
-      // Lit's asynchronous initial render, to make the initial render behavior
-      // similar to Polymer, and consequently make migrating from Polymer to Lit
-      // easier. Example (one of many): CrActionMenuElement provides synchronous
-      // APIs showAt(), showAtPosition(), close(), getDialog(), and client code
-      // should be able to call these immediately after attaching this element
-      // to the DOM, without having to wait for `updateComplete`.
       this.performUpdate();
     }
+  }
+
+  override connectedCallback() {
+    super.connectedCallback();
+    // See Case1 in `ensureInitialRender` docs.
+    this.ensureInitialRender();
   }
 
   override willUpdate(_changedProperties: PropertyValues<this>) {
@@ -102,27 +128,44 @@ export class CrLitElement extends LitElement {
 
     const notifyProps = (this.constructor as typeof CrLitElement).notifyProps_;
     if (notifyProps !== null) {
+      const indexableThis = this as Record<PropertyKey, any>;
       for (const key of changedProperties.keys()) {
         if (notifyProps.has(key)) {
-          this.fire(
+          if (changedProperties.get(key as keyof CrLitElement) === undefined &&
+              indexableThis[key] === undefined) {
+            // Don't fire events if the property was changed back to 'undefined'
+            // before the element was connected. Lit still reports such
+            // properties in `changedProperties` as going from 'undefined' to
+            // 'undefined'.
+            continue;
+          }
+          this.dispatchEvent(new CustomEvent(
               `${toDashCase(key.toString())}-changed`,
-              {value: (this as Record<PropertyKey, any>)[key]});
+              {detail: {value: indexableThis[key]}}));
         }
       }
     }
   }
 
-  fire(eventName: string, detail?: any) {
+  override focus(
+      options?: {preventScroll?: boolean, focusVisible?: boolean}) {
+    // See Case2 in `ensureInitialRender` docs.
+    this.ensureInitialRender();
+    super.focus(options);
+  }
+
+  fire<T=any>(eventName: string, detail?: T) {
     this.dispatchEvent(
         new CustomEvent(eventName, {bubbles: true, composed: true, detail}));
   }
 
-  // Modifies the 'properties' object by automatically specifying
-  // "attribute: <attr_name>" for each reactive property where attr_name is a
-  // dash-case equivalent of the property's name. For example a 'fooBar'
-  // property will be mapped to a 'foo-bar' attribute, matching Polymer's
-  // behavior, instead of Lit's default behavior (which would map to 'foobar').
-  // This is done to make it easier to migrate Polymer elements to Lit.
+  // Modifies the 'properties' object by:
+  //  -  automatically specifying "attribute: <attr_name>" for each reactive
+  //     property where attr_name is a dash-case equivalent of the property's
+  //     name. For example a 'fooBar' property will be mapped to a 'foo-bar'
+  //     attribute, matching Polymer's behavior, instead of Lit's default
+  //     behavior (which would map to 'foobar'). This is done to make it easier
+  //     to migrate Polymer elements to Lit.
   private static patchPropertiesObject() {
     if (!this.hasOwnProperty('properties')) {
       // Return early if there's no `properties` block on the element.
@@ -133,16 +176,13 @@ export class CrLitElement extends LitElement {
 
     const properties = this.properties;
     for (const [key, value] of Object.entries(properties)) {
-      // Skip properties that explicitly specify the attribute name.
-      if (value.attribute != null) {
-        continue;
+      // Skip properties that explicitly specify 'attribute'.
+      if (value.attribute == null) {
+        type Mutable<T> = { -readonly[P in keyof T]: T[P]; };
+        // Specify a dash-case attribute name, derived from the property name,
+        // similar to what Polymer did.
+        (value as Mutable<typeof value>).attribute = toDashCase(key);
       }
-
-      type Mutable<T> = { -readonly[P in keyof T]: T[P]; };
-
-      // Specify a dash-case attribute name, derived from the property name,
-      // similar to what Polymer did.
-      (value as Mutable<typeof value>).attribute = toDashCase(key);
     }
 
     // Mutating the properties object alone isn't enough, in the case where

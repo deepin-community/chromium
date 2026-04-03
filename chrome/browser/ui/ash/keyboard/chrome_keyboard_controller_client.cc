@@ -13,7 +13,6 @@
 #include "ash/keyboard/ui/resources/keyboard_resource_util.h"
 #include "ash/public/cpp/keyboard/keyboard_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
@@ -120,8 +119,9 @@ void ChromeKeyboardControllerClient::Shutdown() {
     keyboard_controller_ = nullptr;
   }
 
-  if (session_manager::SessionManager::Get())
+  if (session_manager::SessionManager::Get()) {
     session_manager::SessionManager::Get()->RemoveObserver(this);
+  }
   pref_change_registrar_.reset();
 
   if (keyboard::KeyboardUIController::HasInstance()) {
@@ -143,8 +143,9 @@ void ChromeKeyboardControllerClient::RemoveObserver(Observer* observer) {
 void ChromeKeyboardControllerClient::NotifyKeyboardLoaded() {
   DVLOG(1) << "NotifyKeyboardLoaded: " << is_keyboard_loaded_;
   is_keyboard_loaded_ = true;
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.OnKeyboardLoaded();
+  }
 }
 
 keyboard::KeyboardConfig ChromeKeyboardControllerClient::GetKeyboardConfig() {
@@ -182,13 +183,14 @@ void ChromeKeyboardControllerClient::ClearEnableFlag(
 
 bool ChromeKeyboardControllerClient::IsEnableFlagSet(
     const keyboard::KeyboardEnableFlag& flag) {
-  return base::Contains(keyboard_enable_flags_, flag);
+  return keyboard_enable_flags_.contains(flag);
 }
 
 void ChromeKeyboardControllerClient::ReloadKeyboardIfNeeded() {
   // |keyboard_controller_| may be null if the keyboard reloads during shutdown.
-  if (keyboard_controller_)
+  if (keyboard_controller_) {
     keyboard_controller_->ReloadKeyboardIfNeeded();
+  }
 }
 
 void ChromeKeyboardControllerClient::RebuildKeyboardIfEnabled() {
@@ -248,17 +250,20 @@ bool ChromeKeyboardControllerClient::IsKeyboardOverscrollEnabled() {
 }
 
 GURL ChromeKeyboardControllerClient::GetVirtualKeyboardUrl() {
-  if (!virtual_keyboard_url_for_test_.is_empty())
+  if (!virtual_keyboard_url_for_test_.is_empty()) {
     return virtual_keyboard_url_for_test_;
+  }
 
   auto* ime_manager = ash::input_method::InputMethodManager::Get();
-  if (!ime_manager || !ime_manager->GetActiveIMEState())
+  if (!ime_manager || !ime_manager->GetActiveIMEState()) {
     return GURL(keyboard::kKeyboardURL);
+  }
 
   const GURL& input_view_url =
       ime_manager->GetActiveIMEState()->GetInputViewUrl();
-  if (!input_view_url.is_valid())
+  if (!input_view_url.is_valid()) {
     return GURL(keyboard::kKeyboardURL);
+  }
 
   return input_view_url;
 }
@@ -278,11 +283,13 @@ void ChromeKeyboardControllerClient::OnKeyboardEnabledChanged(bool enabled) {
   bool was_enabled = is_keyboard_enabled_;
   is_keyboard_enabled_ = enabled;
 
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.OnKeyboardEnabledChanged(is_keyboard_enabled_);
+  }
 
-  if (enabled || !was_enabled)
+  if (enabled || !was_enabled) {
     return;
+  }
 
   // When the keyboard becomes disabled, send the onKeyboardClosed event.
 
@@ -296,8 +303,8 @@ void ChromeKeyboardControllerClient::OnKeyboardEnabledChanged(bool enabled) {
 
   auto event = std::make_unique<extensions::Event>(
       extensions::events::VIRTUAL_KEYBOARD_PRIVATE_ON_KEYBOARD_CLOSED,
-      virtual_keyboard_private::OnKeyboardClosed::kEventName,
-      base::Value::List(), profile);
+      virtual_keyboard_private::OnKeyboardClosed::kEventName, base::ListValue(),
+      profile);
   router->BroadcastEvent(std::move(event));
 }
 
@@ -306,8 +313,9 @@ void ChromeKeyboardControllerClient::OnKeyboardConfigChanged(
   // Only notify extensions after the initial config is received.
   bool notify = !!cached_keyboard_config_;
   cached_keyboard_config_ = std::move(config);
-  if (!notify)
+  if (!notify) {
     return;
+  }
   extensions::VirtualKeyboardAPI* api =
       extensions::BrowserContextKeyedAPIFactory<
           extensions::VirtualKeyboardAPI>::Get(GetProfile());
@@ -316,22 +324,25 @@ void ChromeKeyboardControllerClient::OnKeyboardConfigChanged(
 
 void ChromeKeyboardControllerClient::OnKeyboardVisibilityChanged(bool visible) {
   is_keyboard_visible_ = visible;
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.OnKeyboardVisibilityChanged(visible);
+  }
 }
 
 void ChromeKeyboardControllerClient::OnKeyboardVisibleBoundsChanged(
     const gfx::Rect& screen_bounds) {
   DVLOG(1) << "OnKeyboardVisibleBoundsChanged: " << screen_bounds.ToString();
-  if (keyboard_contents_)
+  if (keyboard_contents_) {
     keyboard_contents_->SetInitialContentsSize(screen_bounds.size());
+  }
 
   for (auto& observer : observers_) {
     observer.OnKeyboardVisibleBoundsChanged(screen_bounds);
   }
 
-  if (!GetKeyboardWindow())
+  if (!GetKeyboardWindow()) {
     return;
+  }
 
   Profile* profile = GetProfile();
   extensions::EventRouter* router = extensions::EventRouter::Get(profile);
@@ -343,8 +354,8 @@ void ChromeKeyboardControllerClient::OnKeyboardVisibleBoundsChanged(
 
   // Convert screen bounds to the frame of reference of the keyboard window.
   gfx::Rect bounds = BoundsFromScreen(screen_bounds);
-  base::Value::List event_args;
-  base::Value::Dict new_bounds;
+  base::ListValue event_args;
+  base::DictValue new_bounds;
   new_bounds.Set("left", bounds.x());
   new_bounds.Set("top", bounds.y());
   new_bounds.Set("width", bounds.width());
@@ -360,11 +371,13 @@ void ChromeKeyboardControllerClient::OnKeyboardVisibleBoundsChanged(
 
 void ChromeKeyboardControllerClient::OnKeyboardOccludedBoundsChanged(
     const gfx::Rect& screen_bounds) {
-  if (!GetKeyboardWindow())
+  if (!GetKeyboardWindow()) {
     return;
+  }
   DVLOG(1) << "OnKeyboardOccludedBoundsChanged: " << screen_bounds.ToString();
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.OnKeyboardOccludedBoundsChanged(screen_bounds);
+  }
 }
 
 void ChromeKeyboardControllerClient::OnLoadKeyboardContentsRequested() {
@@ -399,21 +412,9 @@ void ChromeKeyboardControllerClient::OnKeyboardContentsLoaded() {
 void ChromeKeyboardControllerClient::OnSessionStateChanged() {
   TRACE_EVENT0("login",
                "ChromeKeyboardControllerClient::OnSessionStateChanged");
-  if (base::FeatureList::IsEnabled(
-          ash::features::kTouchVirtualKeyboardPolicyListenPrefsAtLogin)) {
-    // We need to listen for pref changes even in login screen to control the
-    // virtual keyboard behavior on the login screen.
-    pref_change_registrar_.reset();
-  } else {
-    if (!session_manager::SessionManager::Get()->IsSessionStarted()) {
-      // Reset the registrar so that prefs are re-registered after a crash.
-      pref_change_registrar_.reset();
-      return;
-    }
-    if (pref_change_registrar_) {
-      return;
-    }
-  }
+  // We need to listen for pref changes even in login screen to control the
+  // virtual keyboard behavior on the login screen.
+  pref_change_registrar_.reset();
 
   Profile* profile = ProfileManager::GetPrimaryUserProfile();
   pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
@@ -456,8 +457,9 @@ void ChromeKeyboardControllerClient::SetSmartVisibilityFromPrefs() {
 }
 
 Profile* ChromeKeyboardControllerClient::GetProfile() {
-  if (profile_for_test_)
+  if (profile_for_test_) {
     return profile_for_test_;
+  }
 
   // Always use the active profile for generating keyboard events so that any
   // virtual keyboard extensions associated with the active user are notified.

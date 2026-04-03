@@ -6,7 +6,6 @@
 
 #include "base/command_line.h"
 #include "base/time/time.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/network/network_handler.h"
@@ -101,7 +100,7 @@ void ArcAppInstallEventLogCollector::SuspendDone(
 }
 
 void ArcAppInstallEventLogCollector::OnConnectionStateChanged(
-    network::mojom::ConnectionType type) {
+    net::NetworkChangeNotifier::ConnectionType type) {
   std::unique_ptr<em::AppInstallReportLogEvent> event =
       std::make_unique<em::AppInstallReportLogEvent>();
   event->set_event_type(em::AppInstallReportLogEvent::CONNECTIVITY_CHANGE);

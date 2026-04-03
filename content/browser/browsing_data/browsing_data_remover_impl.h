@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 
@@ -125,9 +126,7 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
 
   // For debugging purposes. Please add new deletion tasks at the end.
   // This enum is recorded in a histogram, so don't change or reuse ids.
-  // Entries must also be added to BrowsingDataRemoverTasks in enums.xml and
-  // History.ClearBrowsingData.Duration.Task.{Task} in
-  // histograms/metadata/history/histograms.xml.
+  // LINT.IfChange(TracingDataType)
   enum class TracingDataType {
     kSynchronous = 1,
     kEmbedderData = 2,
@@ -142,12 +141,15 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
     kNetworkErrorLogging = 11,
     kTrustTokens = 12,
     kConversions = 13,
-    kDeferredCookies = 14,
+    // Deprecated: kDeferredCookies = 14,
     kSharedStorage = 15,
     kPreflightCache = 16,
     kSharedDictionary = 17,
-    kMaxValue = kSharedDictionary,
+    kPrefetchCache = 18,
+    kPrerenderCache = 19,
+    kMaxValue = kPrerenderCache,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/history/enums.xml:BrowsingDataRemoverTasks)
 
   // Returns the suffix for the History.ClearBrowsingData.Duration.Task.{Task}
   // histogram
@@ -194,7 +196,7 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
   // should be removed (protected, unprotected, or both).
   // TODO(ttr314): Remove "(where implemented yet)" constraint above once
   // crbug.com/113621 is done.
-  // TODO(crbug.com/589586): Support all backends w/ origin filter.
+  // TODO(crbug.com/40458377): Support all backends w/ origin filter.
   void RemoveImpl(const base::Time& delete_begin,
                   const base::Time& delete_end,
                   uint64_t remove_mask,
@@ -262,8 +264,6 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
   // if absent.
   std::optional<StoragePartitionConfig> storage_partition_config_ =
       std::nullopt;
-
-  std::vector<std::string> domains_for_deferred_cookie_deletion_;
 
   // True if Remove has been invoked.
   bool is_removing_;

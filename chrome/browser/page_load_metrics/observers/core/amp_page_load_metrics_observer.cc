@@ -7,10 +7,10 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "components/page_load_metrics/browser/observers/core/largest_contentful_paint_handler.h"
@@ -35,8 +35,6 @@ const char kHistogramAMPSubframeNavigationToInput[] =
     "Experimental.PageTiming.NavigationToInput.Subframe";
 const char kHistogramAMPSubframeInputToNavigation[] =
     "Experimental.PageTiming.InputToNavigation.Subframe";
-const char kHistogramAMPSubframeMainFrameToSubFrameNavigation[] =
-    "Experimental.PageTiming.MainFrameToSubFrameNavigationDelta.Subframe";
 const char kHistogramAMPSubframeFirstContentfulPaint[] =
     "PaintTiming.InputToFirstContentfulPaint.Subframe";
 const char kHistogramAMPSubframeFirstContentfulPaintFullNavigation[] =
@@ -47,8 +45,6 @@ const char kHistogramAMPSubframeLargestContentfulPaintFullNavigation[] =
     "PaintTiming.InputToLargestContentfulPaint.Subframe.FullNavigation";
 const char kHistogramAMPSubframeFirstInputDelay[] =
     "InteractiveTiming.FirstInputDelay4.Subframe";
-const char kHistogramAMPSubframeFirstInputDelayFullNavigation[] =
-    "InteractiveTiming.FirstInputDelay4.Subframe.FullNavigation";
 
 const char kHistogramAMPSubframeNumInteractions[] =
     "InteractiveTiming.NumInteractions.Subframe";
@@ -87,7 +83,7 @@ GURL GetViewerUrlFromCacheUrl(const GURL& url) {
   // (&viewerURL=<URL>). net::QueryIterator only operates on the query string,
   // so we copy the fragment into the query string, then iterate over the
   // parameters below.
-  base::StringPiece ref = url.ref_piece();
+  std::string_view ref = url.ref();
   GURL::Replacements replacements;
   replacements.SetQueryStr(ref);
   GURL modified_url = url.ReplaceComponents(replacements);
@@ -110,9 +106,9 @@ bool IsInPrerenderingBeforeActivation(
          page_load_metrics::PrerenderingState::kInPrerendering;
 }
 
-AMPPageLoadMetricsObserver::AMPPageLoadMetricsObserver() {}
+AMPPageLoadMetricsObserver::AMPPageLoadMetricsObserver() = default;
 
-AMPPageLoadMetricsObserver::~AMPPageLoadMetricsObserver() {}
+AMPPageLoadMetricsObserver::~AMPPageLoadMetricsObserver() = default;
 
 AMPPageLoadMetricsObserver::SubFrameInfo::SubFrameInfo() = default;
 AMPPageLoadMetricsObserver::SubFrameInfo::~SubFrameInfo() = default;
@@ -254,9 +250,10 @@ void AMPPageLoadMetricsObserver::OnTimingUpdate(
   it->second.timing = timing.Clone();
 }
 
-void AMPPageLoadMetricsObserver::OnInputTimingUpdate(
+void AMPPageLoadMetricsObserver::OnEventTimingUpdate(
     content::RenderFrameHost* subframe_rfh,
-    const page_load_metrics::mojom::InputTiming& input_timing_delta) {
+    const std::vector<page_load_metrics::mojom::EventTimingPtr>&
+        event_timings) {
   if (subframe_rfh == nullptr)
     return;
 
@@ -264,12 +261,8 @@ void AMPPageLoadMetricsObserver::OnInputTimingUpdate(
   if (it == amp_subframe_info_.end())
     return;
 
-  if (input_timing_delta.num_interactions) {
-    it->second.responsiveness_metrics_normalization
-        .AddNewUserInteractionLatencies(
-            input_timing_delta.num_interactions,
-            *(input_timing_delta.max_event_durations));
-  }
+  it->second.interaction_to_next_paint_calculator.AddNewEventTimings(
+      *subframe_rfh, event_timings);
 }
 
 void AMPPageLoadMetricsObserver::OnSubFrameRenderDataUpdate(
@@ -282,13 +275,16 @@ void AMPPageLoadMetricsObserver::OnSubFrameRenderDataUpdate(
   if (it == amp_subframe_info_.end())
     return;
 
-  it->second.render_data.layout_shift_score += render_data.layout_shift_delta;
-  it->second.render_data.layout_shift_score_before_input_or_scroll +=
-      render_data.layout_shift_delta_before_input_or_scroll;
+  for (const auto& entry : render_data.new_layout_shifts) {
+    it->second.render_data.layout_shift_score += entry->layout_shift_score;
+    if (!entry->after_input_or_scroll) {
+      it->second.render_data.layout_shift_score_before_input_or_scroll +=
+          entry->layout_shift_score;
+    }
+  }
 
   it->second.layout_shift_normalization.AddNewLayoutShifts(
-      render_data.new_layout_shifts, base::TimeTicks::Now(),
-      it->second.render_data.layout_shift_score);
+      render_data.new_layout_shifts, base::TimeTicks::Now());
 }
 
 void AMPPageLoadMetricsObserver::OnComplete(
@@ -431,15 +427,7 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
   builder.SetSubFrame_MainFrameToSubFrameNavigationDelta(
       -navigation_input_delta.InMilliseconds());
 
-  if (!current_main_frame_nav_info_->is_same_document_navigation) {
-    // For non same document navigations, we expect the main frame navigation
-    // to be before the subframe navigation. This measures the time from main
-    // frame navigation to the time the AMP subframe is added to the document.
-    PAGE_LOAD_HISTOGRAM(
-        std::string(kHistogramPrefix)
-            .append(kHistogramAMPSubframeMainFrameToSubFrameNavigation),
-        -navigation_input_delta);
-  } else {
+  if (current_main_frame_nav_info_->is_same_document_navigation) {
     if (navigation_input_delta >= base::TimeDelta()) {
       // Prerender case: subframe navigation happens before main frame
       // navigation.
@@ -531,12 +519,6 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
                 .append(kHistogramAMPSubframeFirstInputDelay),
             subframe_info.timing->interactive_timing->first_input_delay.value(),
             base::Milliseconds(1), base::Seconds(60), 50);
-      } else {
-        base::UmaHistogramCustomTimes(
-            std::string(kHistogramPrefix)
-                .append(kHistogramAMPSubframeFirstInputDelayFullNavigation),
-            subframe_info.timing->interactive_timing->first_input_delay.value(),
-            base::Milliseconds(1), base::Seconds(60), 50);
       }
     }
   }
@@ -590,17 +572,17 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
   }
 
   RecordNormalizedResponsivenessMetrics(
-      subframe_info.responsiveness_metrics_normalization, builder);
+      subframe_info.interaction_to_next_paint_calculator, builder);
   builder.Record(ukm::UkmRecorder::Get());
 }
 
 void AMPPageLoadMetricsObserver::RecordNormalizedResponsivenessMetrics(
-    const page_load_metrics::ResponsivenessMetricsNormalization&
-        responsiveness_metrics_normalization,
+    const page_load_metrics::InteractionToNextPaintCalculator&
+        interaction_to_next_paint_calculator,
     ukm::builders::AmpPageLoad& builder) {
   DCHECK(!GetDelegate().IsInPrerenderingBeforeActivationStart());
 
-  if (!responsiveness_metrics_normalization.num_user_interactions()) {
+  if (!interaction_to_next_paint_calculator.num_user_interactions()) {
     return;
   }
 
@@ -611,23 +593,21 @@ void AMPPageLoadMetricsObserver::RecordNormalizedResponsivenessMetrics(
 
   builder
       .SetSubFrame_InteractiveTiming_WorstUserInteractionLatency_MaxEventDuration2(
-          responsiveness_metrics_normalization.worst_latency()
+          interaction_to_next_paint_calculator.worst_latency()
               .value()
-              .interaction_latency.InMilliseconds());
+              .duration.InMilliseconds());
   base::UmaHistogramCustomTimes(
       std::string(kHistogramPrefix)
           .append(
               kHistogramAMPSubframeWorstUserInteractionLatencyMaxEventDuration)
           .append(histogram_suffix),
-      responsiveness_metrics_normalization.worst_latency()
-          .value()
-          .interaction_latency,
+      interaction_to_next_paint_calculator.worst_latency().value().duration,
       base::Milliseconds(1), base::Seconds(60), 50);
 
   base::TimeDelta high_percentile2_max_event_duration =
-      responsiveness_metrics_normalization.ApproximateHighPercentile()
+      interaction_to_next_paint_calculator.ApproximateHighPercentile()
           .value()
-          .interaction_latency;
+          .duration;
 
   builder
       .SetSubFrame_InteractiveTiming_UserInteractionLatency_HighPercentile2_MaxEventDuration(
@@ -635,7 +615,7 @@ void AMPPageLoadMetricsObserver::RecordNormalizedResponsivenessMetrics(
 
   builder.SetSubFrame_InteractiveTiming_NumInteractions(
       ukm::GetExponentialBucketMinForCounts1000(
-          responsiveness_metrics_normalization.num_user_interactions()));
+          interaction_to_next_paint_calculator.num_user_interactions()));
 
   base::UmaHistogramCustomTimes(
       std::string(kHistogramPrefix)
@@ -647,5 +627,5 @@ void AMPPageLoadMetricsObserver::RecordNormalizedResponsivenessMetrics(
   base::UmaHistogramCounts1000(
       std::string(kHistogramPrefix)
           .append(kHistogramAMPSubframeNumInteractions),
-      responsiveness_metrics_normalization.num_user_interactions());
+      interaction_to_next_paint_calculator.num_user_interactions());
 }

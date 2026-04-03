@@ -38,9 +38,9 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
   void RemovePropertyChangedObserver(
       ShillPropertyChangedObserver* observer) override;
   void GetProperties(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) override;
+      chromeos::DBusMethodCallback<base::DictValue> callback) override;
   void GetNetworksForGeolocation(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) override;
+      chromeos::DBusMethodCallback<base::DictValue> callback) override;
   void SetProperty(const std::string& name,
                    const base::Value& value,
                    base::OnceClosure callback,
@@ -54,14 +54,14 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
   void DisableTechnology(const std::string& type,
                          base::OnceClosure callback,
                          ErrorCallback error_callback) override;
-  void ConfigureService(const base::Value::Dict& properties,
+  void ConfigureService(const base::DictValue& properties,
                         chromeos::ObjectPathCallback callback,
                         ErrorCallback error_callback) override;
   void ConfigureServiceForProfile(const dbus::ObjectPath& profile_path,
-                                  const base::Value::Dict& properties,
+                                  const base::DictValue& properties,
                                   chromeos::ObjectPathCallback callback,
                                   ErrorCallback error_callback) override;
-  void GetService(const base::Value::Dict& properties,
+  void GetService(const base::DictValue& properties,
                   chromeos::ObjectPathCallback callback,
                   ErrorCallback error_callback) override;
   void ScanAndConnectToBestServices(base::OnceClosure callback,
@@ -70,21 +70,46 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
                                   base::OnceClosure callback,
                                   ErrorCallback error_callback) override;
   void AddPasspointCredentials(const dbus::ObjectPath& profile_path,
-                               const base::Value::Dict& properties,
+                               const base::DictValue& properties,
                                base::OnceClosure callback,
                                ErrorCallback error_callback) override;
   void RemovePasspointCredentials(const dbus::ObjectPath& profile_path,
-                                  const base::Value::Dict& properties,
+                                  const base::DictValue& properties,
                                   base::OnceClosure callback,
                                   ErrorCallback error_callback) override;
   void SetTetheringEnabled(bool enabled,
                            StringCallback callback,
                            ErrorCallback error_callback) override;
+  void EnableTethering(const shill::WiFiInterfacePriority& priority,
+                       StringCallback callback,
+                       ErrorCallback error_callback) override;
+  void DisableTethering(StringCallback callback,
+                        ErrorCallback error_callback) override;
+  void OnDisableTetheringSuccess(const std::string& result);
   void CheckTetheringReadiness(StringCallback callback,
                                ErrorCallback error_callback) override;
   void SetLOHSEnabled(bool enabled,
                       base::OnceClosure callback,
                       ErrorCallback error_callback) override;
+
+  void CreateP2PGroup(const CreateP2PGroupParameter& create_group_argument,
+                      base::OnceCallback<void(base::DictValue result)> callback,
+                      ErrorCallback error_callback) override;
+
+  void ConnectToP2PGroup(
+      const ConnectP2PGroupParameter& connect_group_argument,
+      base::OnceCallback<void(base::DictValue result)> callback,
+      ErrorCallback error_callback) override;
+
+  void DestroyP2PGroup(
+      const int shill_id,
+      base::OnceCallback<void(base::DictValue result)> callback,
+      ErrorCallback error_callback) override;
+
+  void DisconnectFromP2PGroup(
+      const int shill_id,
+      base::OnceCallback<void(base::DictValue result)> callback,
+      ErrorCallback error_callback) override;
 
   ShillManagerClient::TestInterface* GetTestInterface() override;
 
@@ -102,14 +127,16 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
                             base::OnceClosure callback,
                             bool enabled) override;
   void AddGeoNetwork(const std::string& technology,
-                     const base::Value::Dict& network) override;
+                     const base::DictValue& network) override;
   void AddProfile(const std::string& profile_path) override;
   void ClearProperties() override;
   void SetManagerProperty(const std::string& key,
                           const base::Value& value) override;
+  base::DictValue GetStubProperties() override;
   void AddManagerService(const std::string& service_path,
                          bool notify_observers) override;
   void RemoveManagerService(const std::string& service_path) override;
+  void RestartTethering() override;
   void ClearManagerServices() override;
   void ServiceStateChanged(const std::string& service_path,
                            const std::string& state) override;
@@ -122,37 +149,60 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
   bool GetFastTransitionStatus() override;
   void SetSimulateConfigurationResult(
       FakeShillSimulatedResult configuration_result) override;
+  void SetSimulateConfigurationError(std::string_view error_name,
+                                     std::string_view error_message) override;
   void SetSimulateTetheringEnableResult(
       FakeShillSimulatedResult tethering_enable_result,
       const std::string& result_string) override;
   void SetSimulateCheckTetheringReadinessResult(
       FakeShillSimulatedResult tethering_readiness_result,
       const std::string& readiness_status) override;
-  base::Value::List GetEnabledServiceList() const override;
+  void SetSimulateCreateP2PGroupResult(
+      FakeShillSimulatedResult operation_result,
+      const std::string& result_code) override;
+  void SetSimulateDestroyP2PGroupResult(
+      FakeShillSimulatedResult operation_result,
+      const std::string& result_code) override;
+  void SetSimulateConnectToP2PGroupResult(
+      FakeShillSimulatedResult operation_result,
+      const std::string& result_code) override;
+  void SetSimulateDisconnectFromP2PGroupResult(
+      FakeShillSimulatedResult operation_result,
+      const std::string& result_code) override;
+  base::ListValue GetEnabledServiceList() const override;
   void ClearProfiles() override;
   void SetShouldReturnNullProperties(bool value) override;
   void SetWifiServicesVisibleByDefault(
       bool wifi_services_visible_by_default) override;
+  int GetRecentlyDestroyedP2PGroupId() override;
+  int GetRecentlyDisconnectedP2PGroupId() override;
+  void SetAutoCompleteScan(bool auto_complete_scan) override;
+  void TriggerScanCompleted(const std::string& device_path) override;
 
   // Constants used for testing.
   static const char kFakeEthernetNetworkGuid[];
 
  private:
+  // Error message for configure service failure.
+  struct ConfigurationError {
+    std::string name;
+    std::string message;
+  };
+
   using ConnectToBestServicesCallbacks =
       std::tuple<base::OnceClosure, ErrorCallback>;
 
   void SetDefaultProperties();
   void PassNullopt(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) const;
+      chromeos::DBusMethodCallback<base::DictValue> callback) const;
   void PassStubProperties(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) const;
+      chromeos::DBusMethodCallback<base::DictValue> callback) const;
   void PassStubGeoNetworks(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) const;
+      chromeos::DBusMethodCallback<base::DictValue> callback) const;
   void CallNotifyObserversPropertyChanged(const std::string& property);
   void NotifyObserversPropertyChanged(const std::string& property);
-  base::Value::List& GetListProperty(const std::string& property);
+  base::ListValue& GetListProperty(const std::string& property);
   bool TechnologyEnabled(const std::string& type) const;
-  void ScanCompleted(const std::string& device_path);
 
   // Parses the command line for Shill stub switches and sets initial states.
   // Uses comma-separated name-value pairs (see SplitStringIntoKeyValuePairs):
@@ -168,10 +218,10 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
       ConnectToBestServicesCallbacks connect_to_best_services_callbacks);
 
   // Dictionary of property name -> property value
-  base::Value::Dict stub_properties_;
+  base::DictValue stub_properties_;
 
   // Dictionary of technology -> list of property dictionaries
-  base::Value::Dict stub_geo_networks_;
+  base::DictValue stub_geo_networks_;
 
   // Delay for interactive actions
   base::TimeDelta interactive_delay_;
@@ -205,12 +255,28 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
 
   FakeShillSimulatedResult simulate_configuration_result_ =
       FakeShillSimulatedResult::kSuccess;
+  ConfigurationError simulate_configuration_error_ = {"Error",
+                                                      "Simulated failure"};
   FakeShillSimulatedResult simulate_tethering_enable_result_ =
       FakeShillSimulatedResult::kSuccess;
   std::string simulate_enable_tethering_result_string_;
   FakeShillSimulatedResult simulate_check_tethering_readiness_result_ =
       FakeShillSimulatedResult::kSuccess;
   std::string simulate_tethering_readiness_status_;
+  FakeShillSimulatedResult simulate_create_p2p_group_result_ =
+      FakeShillSimulatedResult::kSuccess;
+  std::string simulate_create_p2p_group_result_code_;
+  FakeShillSimulatedResult simulate_destroy_p2p_group_result_ =
+      FakeShillSimulatedResult::kSuccess;
+  std::string simulate_destroy_p2p_group_result_code_;
+  int recent_destroyed_group_id = -1;
+  FakeShillSimulatedResult simulate_connect_p2p_group_result_ =
+      FakeShillSimulatedResult::kSuccess;
+  std::string simulate_connect_p2p_group_result_code_;
+  int recent_disconnected_group_id = -1;
+  FakeShillSimulatedResult simulate_disconnect_p2p_group_result_ =
+      FakeShillSimulatedResult::kSuccess;
+  std::string simulate_disconnect_p2p_group_result_code_;
 
   bool return_null_properties_ = false;
   bool wifi_services_visible_by_default_ = true;
@@ -220,6 +286,9 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
 
   // For testing dynamic WEP networks (uses wifi2).
   bool dynamic_wep_ = false;
+
+  // Automatically complete a scan after RequestScan().
+  bool auto_complete_scan_ = true;
 
   // Caches the last-passed callbacks for ScanAndConnectToBestServices.
   std::optional<ConnectToBestServicesCallbacks>

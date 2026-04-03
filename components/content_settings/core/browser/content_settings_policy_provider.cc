@@ -6,23 +6,31 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+#include <optional>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/content_settings_info.h"
 #include "components/content_settings/core/browser/content_settings_origin_value_map.h"
 #include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/content_settings_rule.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
+#include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/browser/website_settings_info.h"
 #include "components/content_settings/core/browser/website_settings_registry.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
+#include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
+#include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
@@ -36,8 +44,17 @@ struct PrefsForManagedContentSettingsMapEntry {
   ContentSetting setting;
 };
 
+// The order of prefs here matter! Namely in cases where different prefs refer
+// to the same content type the  last entry for given origin wins. The order
+// should always be from the least to the most restrictive policy -
+// ALLOW < ASK < BLOCK. When adding new types consider adding a test that
+// verifies this invariant or documents any necessary deviation.
 constexpr PrefsForManagedContentSettingsMapEntry
     kPrefsForManagedContentSettingsMap[] = {
+        {prefs::kManagedAutomaticFullscreenAllowedForUrls,
+         ContentSettingsType::AUTOMATIC_FULLSCREEN, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedAutomaticFullscreenBlockedForUrls,
+         ContentSettingsType::AUTOMATIC_FULLSCREEN, CONTENT_SETTING_BLOCK},
         {prefs::kManagedCookiesAllowedForUrls, ContentSettingsType::COOKIES,
          CONTENT_SETTING_ALLOW},
         {prefs::kManagedCookiesBlockedForUrls, ContentSettingsType::COOKIES,
@@ -62,6 +79,10 @@ constexpr PrefsForManagedContentSettingsMapEntry
          ContentSettingsType::CLIPBOARD_READ_WRITE, CONTENT_SETTING_ALLOW},
         {prefs::kManagedClipboardBlockedForUrls,
          ContentSettingsType::CLIPBOARD_READ_WRITE, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedPreciseGeolocationAllowedForUrls,
+         ContentSettingsType::GEOLOCATION, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedGeolocationBlockedForUrls,
+         ContentSettingsType::GEOLOCATION, CONTENT_SETTING_BLOCK},
         {prefs::kManagedNotificationsAllowedForUrls,
          ContentSettingsType::NOTIFICATIONS, CONTENT_SETTING_ALLOW},
         {prefs::kManagedNotificationsBlockedForUrls,
@@ -84,6 +105,10 @@ constexpr PrefsForManagedContentSettingsMapEntry
          ContentSettingsType::FILE_SYSTEM_WRITE_GUARD, CONTENT_SETTING_BLOCK},
         {prefs::kManagedLegacyCookieAccessAllowedForDomains,
          ContentSettingsType::LEGACY_COOKIE_ACCESS, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedDefaultLegacyCookieScope,
+         ContentSettingsType::LEGACY_COOKIE_SCOPE, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedLegacyCookieScopeForDomains,
+         ContentSettingsType::LEGACY_COOKIE_SCOPE, CONTENT_SETTING_ALLOW},
         {prefs::kManagedSerialAskForUrls, ContentSettingsType::SERIAL_GUARD,
          CONTENT_SETTING_ASK},
         {prefs::kManagedSerialBlockedForUrls, ContentSettingsType::SERIAL_GUARD,
@@ -92,12 +117,14 @@ constexpr PrefsForManagedContentSettingsMapEntry
          CONTENT_SETTING_ALLOW},
         {prefs::kManagedSensorsBlockedForUrls, ContentSettingsType::SENSORS,
          CONTENT_SETTING_BLOCK},
-        {prefs::kManagedInsecurePrivateNetworkAllowedForUrls,
-         ContentSettingsType::INSECURE_PRIVATE_NETWORK, CONTENT_SETTING_ALLOW},
         {prefs::kManagedJavaScriptJitAllowedForSites,
          ContentSettingsType::JAVASCRIPT_JIT, CONTENT_SETTING_ALLOW},
         {prefs::kManagedJavaScriptJitBlockedForSites,
          ContentSettingsType::JAVASCRIPT_JIT, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedJavaScriptOptimizerAllowedForSites,
+         ContentSettingsType::JAVASCRIPT_OPTIMIZER, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedJavaScriptOptimizerBlockedForSites,
+         ContentSettingsType::JAVASCRIPT_OPTIMIZER, CONTENT_SETTING_BLOCK},
         {prefs::kManagedWebHidAskForUrls, ContentSettingsType::HID_GUARD,
          CONTENT_SETTING_ASK},
         {prefs::kManagedWebHidBlockedForUrls, ContentSettingsType::HID_GUARD,
@@ -110,16 +137,70 @@ constexpr PrefsForManagedContentSettingsMapEntry
          ContentSettingsType::LOCAL_FONTS, CONTENT_SETTING_ALLOW},
         {prefs::kManagedLocalFontsBlockedForUrls,
          ContentSettingsType::LOCAL_FONTS, CONTENT_SETTING_BLOCK},
-        {prefs::kManagedThirdPartyStoragePartitioningBlockedForOrigins,
-         ContentSettingsType::THIRD_PARTY_STORAGE_PARTITIONING,
-         CONTENT_SETTING_BLOCK},
         {prefs::kManagedWebPrintingAllowedForUrls,
          ContentSettingsType::WEB_PRINTING, CONTENT_SETTING_ALLOW},
         {prefs::kManagedWebPrintingBlockedForUrls,
          ContentSettingsType::WEB_PRINTING, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedDirectSocketsAllowedForUrls,
+         ContentSettingsType::DIRECT_SOCKETS, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedDirectSocketsBlockedForUrls,
+         ContentSettingsType::DIRECT_SOCKETS, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedDirectSocketsPrivateNetworkAccessAllowedForUrls,
+         ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS,
+         CONTENT_SETTING_ALLOW},
+        {prefs::kManagedDirectSocketsPrivateNetworkAccessBlockedForUrls,
+         ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS,
+         CONTENT_SETTING_BLOCK},
+#if BUILDFLAG(IS_CHROMEOS)
+        {prefs::kManagedSmartCardConnectAllowedForUrls,
+         ContentSettingsType::SMART_CARD_GUARD, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedSmartCardConnectBlockedForUrls,
+         ContentSettingsType::SMART_CARD_GUARD, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedDeviceAttributesAllowedForOrigins,
+         ContentSettingsType::DEVICE_ATTRIBUTES, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedDeviceAttributesBlockedForOrigins,
+         ContentSettingsType::DEVICE_ATTRIBUTES, CONTENT_SETTING_BLOCK},
+#endif
+        {prefs::kManagedControlledFrameAllowedForUrls,
+         ContentSettingsType::CONTROLLED_FRAME, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedControlledFrameBlockedForUrls,
+         ContentSettingsType::CONTROLLED_FRAME, CONTENT_SETTING_BLOCK},
+        // LocalNetworkAccess:
+        // * Block takes precedence over Allow
+        // * LocalNetworkAccessAllowed/Blocked apply to all 3 LNA permissions
+        // * More specific permission (LocalNetworkAllowed/Blocked and
+        //   LoopbackNetworkAllowed/Blocked) take precedence over the more
+        //   general LocalNetworkAccessAllowed/Blocked policies
+        {prefs::kManagedLocalNetworkAccessAllowedForUrls,
+         ContentSettingsType::LOCAL_NETWORK_ACCESS, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedLocalNetworkAccessBlockedForUrls,
+         ContentSettingsType::LOCAL_NETWORK_ACCESS, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedLocalNetworkAccessAllowedForUrls,
+         ContentSettingsType::LOCAL_NETWORK, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedLocalNetworkAccessBlockedForUrls,
+         ContentSettingsType::LOCAL_NETWORK, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedLocalNetworkAccessAllowedForUrls,
+         ContentSettingsType::LOOPBACK_NETWORK, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedLocalNetworkAccessBlockedForUrls,
+         ContentSettingsType::LOOPBACK_NETWORK, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedLocalNetworkAllowedForUrls,
+         ContentSettingsType::LOCAL_NETWORK, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedLocalNetworkBlockedForUrls,
+         ContentSettingsType::LOCAL_NETWORK, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedLoopbackNetworkAllowedForUrls,
+         ContentSettingsType::LOOPBACK_NETWORK, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedLoopbackNetworkBlockedForUrls,
+         ContentSettingsType::LOOPBACK_NETWORK, CONTENT_SETTING_BLOCK},
+
+        {prefs::kManagedIdleDetectionAllowedForUrls,
+         ContentSettingsType::IDLE_DETECTION, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedIdleDetectionBlockedForUrls,
+         ContentSettingsType::IDLE_DETECTION, CONTENT_SETTING_BLOCK},
 };
 
 constexpr const char* kManagedPrefs[] = {
+    prefs::kManagedAutomaticFullscreenAllowedForUrls,
+    prefs::kManagedAutomaticFullscreenBlockedForUrls,
     prefs::kManagedAutoSelectCertificateForUrls,
     prefs::kManagedClipboardAllowedForUrls,
     prefs::kManagedClipboardBlockedForUrls,
@@ -130,17 +211,29 @@ constexpr const char* kManagedPrefs[] = {
     prefs::kManagedFileSystemReadBlockedForUrls,
     prefs::kManagedFileSystemWriteAskForUrls,
     prefs::kManagedFileSystemWriteBlockedForUrls,
+    prefs::kManagedPreciseGeolocationAllowedForUrls,
+    prefs::kManagedGeolocationBlockedForUrls,
     prefs::kManagedAccessToGetAllScreensMediaInSessionAllowedForUrls,
     prefs::kManagedImagesAllowedForUrls,
     prefs::kManagedImagesBlockedForUrls,
     prefs::kManagedInsecureContentAllowedForUrls,
     prefs::kManagedInsecureContentBlockedForUrls,
-    prefs::kManagedInsecurePrivateNetworkAllowedForUrls,
+    prefs::kManagedIdleDetectionAllowedForUrls,
+    prefs::kManagedIdleDetectionBlockedForUrls,
     prefs::kManagedJavaScriptAllowedForUrls,
     prefs::kManagedJavaScriptBlockedForUrls,
     prefs::kManagedJavaScriptJitAllowedForSites,
     prefs::kManagedJavaScriptJitBlockedForSites,
+    prefs::kManagedJavaScriptOptimizerAllowedForSites,
+    prefs::kManagedJavaScriptOptimizerBlockedForSites,
     prefs::kManagedLegacyCookieAccessAllowedForDomains,
+    prefs::kManagedLegacyCookieScopeForDomains,
+    prefs::kManagedLocalNetworkAccessAllowedForUrls,
+    prefs::kManagedLocalNetworkAccessBlockedForUrls,
+    prefs::kManagedLocalNetworkAllowedForUrls,
+    prefs::kManagedLocalNetworkBlockedForUrls,
+    prefs::kManagedLoopbackNetworkAllowedForUrls,
+    prefs::kManagedLoopbackNetworkBlockedForUrls,
     prefs::kManagedNotificationsAllowedForUrls,
     prefs::kManagedNotificationsBlockedForUrls,
     prefs::kManagedPopupsAllowedForUrls,
@@ -158,9 +251,20 @@ constexpr const char* kManagedPrefs[] = {
     prefs::kManagedWindowManagementBlockedForUrls,
     prefs::kManagedLocalFontsAllowedForUrls,
     prefs::kManagedLocalFontsBlockedForUrls,
-    prefs::kManagedThirdPartyStoragePartitioningBlockedForOrigins,
     prefs::kManagedWebPrintingAllowedForUrls,
     prefs::kManagedWebPrintingBlockedForUrls,
+    prefs::kManagedDirectSocketsAllowedForUrls,
+    prefs::kManagedDirectSocketsBlockedForUrls,
+    prefs::kManagedDirectSocketsPrivateNetworkAccessAllowedForUrls,
+    prefs::kManagedDirectSocketsPrivateNetworkAccessBlockedForUrls,
+#if BUILDFLAG(IS_CHROMEOS)
+    prefs::kManagedSmartCardConnectAllowedForUrls,
+    prefs::kManagedSmartCardConnectBlockedForUrls,
+    prefs::kManagedDeviceAttributesAllowedForOrigins,
+    prefs::kManagedDeviceAttributesBlockedForOrigins,
+#endif
+    prefs::kManagedControlledFrameAllowedForUrls,
+    prefs::kManagedControlledFrameBlockedForUrls,
 };
 
 // The following preferences are only used to indicate if a default content
@@ -176,23 +280,31 @@ constexpr const char* kManagedDefaultPrefs[] = {
     prefs::kManagedDefaultFileSystemReadGuardSetting,
     prefs::kManagedDefaultFileSystemWriteGuardSetting,
     prefs::kManagedDefaultGeolocationSetting,
+    prefs::kManagedDefaultIdleDetectionSetting,
     prefs::kManagedDefaultImagesSetting,
     prefs::kManagedDefaultInsecureContentSetting,
-    prefs::kManagedDefaultInsecurePrivateNetworkSetting,
     prefs::kManagedDefaultJavaScriptSetting,
     prefs::kManagedDefaultMediaStreamSetting,
     prefs::kManagedDefaultNotificationsSetting,
     prefs::kManagedDefaultPopupsSetting,
+    prefs::kManagedDefaultLegacyCookieScope,
     prefs::kManagedDefaultSensorsSetting,
     prefs::kManagedDefaultSerialGuardSetting,
     prefs::kManagedDefaultWebBluetoothGuardSetting,
     prefs::kManagedDefaultWebUsbGuardSetting,
     prefs::kManagedDefaultJavaScriptJitSetting,
+    prefs::kManagedDefaultJavaScriptOptimizerSetting,
     prefs::kManagedDefaultWebHidGuardSetting,
     prefs::kManagedDefaultWindowManagementSetting,
     prefs::kManagedDefaultLocalFontsSetting,
-    prefs::kManagedDefaultThirdPartyStoragePartitioningSetting,
     prefs::kManagedDefaultWebPrintingSetting,
+    prefs::kManagedDefaultDirectSocketsSetting,
+    prefs::kManagedDefaultDirectSocketsPrivateNetworkAccessSetting,
+    prefs::kManagedDefaultControlledFrameSetting,
+#if BUILDFLAG(IS_CHROMEOS)
+    prefs::kManagedDefaultSmartCardConnectSetting,
+    prefs::kManagedDefaultDeviceAttributesSetting,
+#endif  // BUILDFLAG(IS_CHROMEOS)
 };
 
 void ReportCookiesAllowedForUrlsUsage(
@@ -264,6 +376,10 @@ const PolicyProvider::PrefsForManagedDefaultMapEntry
         {ContentSettingsType::IMAGES, prefs::kManagedDefaultImagesSetting},
         {ContentSettingsType::GEOLOCATION,
          prefs::kManagedDefaultGeolocationSetting},
+        {ContentSettingsType::IDLE_DETECTION,
+         prefs::kManagedDefaultIdleDetectionSetting},
+        {ContentSettingsType::LEGACY_COOKIE_SCOPE,
+         prefs::kManagedDefaultLegacyCookieScope},
         {ContentSettingsType::JAVASCRIPT,
          prefs::kManagedDefaultJavaScriptSetting},
         {ContentSettingsType::MEDIASTREAM_CAMERA,
@@ -286,20 +402,30 @@ const PolicyProvider::PrefsForManagedDefaultMapEntry
         {ContentSettingsType::SERIAL_GUARD,
          prefs::kManagedDefaultSerialGuardSetting},
         {ContentSettingsType::SENSORS, prefs::kManagedDefaultSensorsSetting},
-        {ContentSettingsType::INSECURE_PRIVATE_NETWORK,
-         prefs::kManagedDefaultInsecurePrivateNetworkSetting},
         {ContentSettingsType::JAVASCRIPT_JIT,
          prefs::kManagedDefaultJavaScriptJitSetting},
+        {ContentSettingsType::JAVASCRIPT_OPTIMIZER,
+         prefs::kManagedDefaultJavaScriptOptimizerSetting},
         {ContentSettingsType::HID_GUARD,
          prefs::kManagedDefaultWebHidGuardSetting},
         {ContentSettingsType::WINDOW_MANAGEMENT,
          prefs::kManagedDefaultWindowManagementSetting},
         {ContentSettingsType::LOCAL_FONTS,
          prefs::kManagedDefaultLocalFontsSetting},
-        {ContentSettingsType::THIRD_PARTY_STORAGE_PARTITIONING,
-         prefs::kManagedDefaultThirdPartyStoragePartitioningSetting},
         {ContentSettingsType::WEB_PRINTING,
          prefs::kManagedDefaultWebPrintingSetting},
+        {ContentSettingsType::DIRECT_SOCKETS,
+         prefs::kManagedDefaultDirectSocketsSetting},
+        {ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS,
+         prefs::kManagedDefaultDirectSocketsPrivateNetworkAccessSetting},
+        {ContentSettingsType::CONTROLLED_FRAME,
+         prefs::kManagedDefaultControlledFrameSetting},
+#if BUILDFLAG(IS_CHROMEOS)
+        {ContentSettingsType::SMART_CARD_GUARD,
+         prefs::kManagedDefaultSmartCardConnectSetting},
+        {ContentSettingsType::DEVICE_ATTRIBUTES,
+         prefs::kManagedDefaultDeviceAttributesSetting},
+#endif  // BUILDFLAG(IS_CHROMEOS)
 };
 
 // static
@@ -315,6 +441,7 @@ void PolicyProvider::RegisterProfilePrefs(
 }
 
 PolicyProvider::PolicyProvider(PrefService* prefs) : prefs_(prefs) {
+  TRACE_EVENT_BEGIN("startup", "PolicyProvider::PolicyProvider");
   ReadManagedDefaultSettings();
   ReadManagedContentSettings(false);
 
@@ -328,6 +455,7 @@ PolicyProvider::PolicyProvider(PrefService* prefs) : prefs_(prefs) {
     pref_change_registrar_.Add(pref, callback);
 
   ReportCookiesAllowedForUrlsUsage(value_map_);
+  TRACE_EVENT_END("startup");
 }
 
 PolicyProvider::~PolicyProvider() {
@@ -336,8 +464,7 @@ PolicyProvider::~PolicyProvider() {
 
 std::unique_ptr<RuleIterator> PolicyProvider::GetRuleIterator(
     ContentSettingsType content_type,
-    bool incognito,
-    const PartitionKey& partition_key) const {
+    bool incognito) const {
   return value_map_.GetRuleIterator(content_type);
 }
 
@@ -345,8 +472,7 @@ std::unique_ptr<content_settings::Rule> PolicyProvider::GetRule(
     const GURL& primary_url,
     const GURL& secondary_url,
     ContentSettingsType content_type,
-    bool off_the_record,
-    const content_settings::PartitionKey& partition_key) const {
+    bool off_the_record) const {
   base::AutoLock auto_lock(value_map_.GetLock());
   return value_map_.GetRule(primary_url, secondary_url, content_type);
 }
@@ -373,15 +499,13 @@ void PolicyProvider::GetContentSettingsFromPreferences() {
 
     if (!pref->GetValue()->is_list()) {
       NOTREACHED() << "Could not read patterns from " << entry.pref_name;
-      return;
     }
 
-    const base::Value::List& pattern_str_list = pref->GetValue()->GetList();
+    const base::ListValue& pattern_str_list = pref->GetValue()->GetList();
     for (size_t i = 0; i < pattern_str_list.size(); ++i) {
       if (!pattern_str_list[i].is_string()) {
         NOTREACHED() << "Could not read content settings pattern #" << i
                      << " from " << entry.pref_name;
-        continue;
       }
 
       const std::string& original_pattern_str = pattern_str_list[i].GetString();
@@ -395,6 +519,16 @@ void PolicyProvider::GetContentSettingsFromPreferences() {
                 << original_pattern_str;
         continue;
       }
+
+#if BUILDFLAG(IS_CHROMEOS)
+      if (entry.content_type == ContentSettingsType::SMART_CARD_GUARD &&
+          !pattern_pair.first.MatchesSingleOrigin()) {
+        VLOG(1) << "Smart card reader access cannot be allowed or blocked by "
+                   "wildcard, skipping pattern."
+                << original_pattern_str;
+        continue;
+      }
+#endif
 
       DCHECK_NE(entry.content_type,
                 ContentSettingsType::AUTO_SELECT_CERTIFICATE);
@@ -418,6 +552,19 @@ void PolicyProvider::GetContentSettingsFromPreferences() {
       // Don't set a timestamp for policy settings.
       value_map_.SetValue(pattern_pair.first, secondary_pattern,
                           entry.content_type, base::Value(entry.setting), {});
+
+      if (entry.content_type == ContentSettingsType::GEOLOCATION &&
+          base::FeatureList::IsEnabled(
+              features::kApproximateGeolocationPermission)) {
+        auto* info = PermissionSettingsRegistry::GetInstance()->Get(
+            ContentSettingsType::GEOLOCATION_WITH_OPTIONS);
+        value_map_.SetValue(pattern_pair.first, secondary_pattern,
+                            ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+                            info->delegate().ToValue(GeolocationSetting{
+                                ToPermissionOption(entry.setting),
+                                ToPermissionOption(entry.setting)}),
+                            {});
+      }
     }
   }
 }
@@ -436,7 +583,6 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences() {
 
   if (!pref->GetValue()->is_list()) {
     NOTREACHED();
-    return;
   }
 
   // Parse the list of pattern filter strings. A pattern filter string has
@@ -456,24 +602,22 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences() {
   //      }
   //   }
   // }
-  std::unordered_map<std::string, base::Value::Dict> filters_map;
+  std::unordered_map<std::string, base::DictValue> filters_map;
   for (const auto& pattern_filter_str : pref->GetValue()->GetList()) {
     if (!pattern_filter_str.is_string()) {
       NOTREACHED();
-      continue;
     }
 
-    std::optional<base::Value> pattern_filter = base::JSONReader::Read(
+    std::optional<base::DictValue> pattern_filter = base::JSONReader::ReadDict(
         pattern_filter_str.GetString(), base::JSON_ALLOW_TRAILING_COMMAS);
-    if (!pattern_filter || !pattern_filter->is_dict()) {
+    if (!pattern_filter) {
       VLOG(1) << "Ignoring invalid certificate auto select setting. Reason:"
               << " Invalid JSON object: " << pattern_filter_str.GetString();
       continue;
     }
 
-    const base::Value::Dict& pattern_filter_dict = pattern_filter->GetDict();
-    const std::string* pattern = pattern_filter_dict.FindString("pattern");
-    const base::Value* filter = pattern_filter_dict.Find("filter");
+    const std::string* pattern = pattern_filter->FindString("pattern");
+    const base::Value* filter = pattern_filter->Find("filter");
     if (!pattern || !filter) {
       VLOG(1) << "Ignoring invalid certificate auto select setting. Reason:"
               << " Missing pattern or filter.";
@@ -484,7 +628,7 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences() {
     // This adds a `pattern_str` entry to `filters_map` if not already present,
     // and gets a pointer to its `filters` list, inserting an entry into the
     // dictionary if needed.
-    base::Value::List* filter_list =
+    base::ListValue* filter_list =
         filters_map[pattern_str].EnsureList("filters");
 
     // Don't pass removed values from `pattern_filter`, because base::Values
@@ -494,7 +638,7 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences() {
 
   for (const auto& it : filters_map) {
     const std::string& pattern_str = it.first;
-    const base::Value::Dict& setting = it.second;
+    const base::DictValue& setting = it.second;
 
     ContentSettingsPattern pattern =
         ContentSettingsPattern::FromString(pattern_str);
@@ -534,16 +678,37 @@ void PolicyProvider::UpdateManagedDefaultSetting(
   DCHECK(!prefs_->HasPrefPath(entry.pref_name) ||
          prefs_->IsManagedPreference(entry.pref_name));
   int setting = prefs_->GetInteger(entry.pref_name);
+  ContentSetting content_setting = IntToContentSetting(setting);
+
   base::AutoLock lock(value_map_.GetLock());
-  if (setting == CONTENT_SETTING_DEFAULT) {
+  SetDefaultValue(entry.content_type,
+                  content_setting == CONTENT_SETTING_DEFAULT
+                      ? std::nullopt
+                      : std::make_optional(content_setting));
+  if (entry.content_type == ContentSettingsType::GEOLOCATION &&
+      base::FeatureList::IsEnabled(
+          features::kApproximateGeolocationPermission)) {
+    SetDefaultValue(ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+                    content_setting == CONTENT_SETTING_DEFAULT
+                        ? std::nullopt
+                        : std::make_optional(GeolocationSetting{
+                              ToPermissionOption(content_setting),
+                              ToPermissionOption(content_setting)}));
+  }
+}
+
+void PolicyProvider::SetDefaultValue(ContentSettingsType type,
+                                     std::optional<PermissionSetting> setting) {
+  auto* info = PermissionSettingsRegistry::GetInstance()->Get(type);
+
+  if (!setting) {
     value_map_.DeleteValue(ContentSettingsPattern::Wildcard(),
-                           ContentSettingsPattern::Wildcard(),
-                           entry.content_type);
-  } else if (info->IsSettingValid(IntToContentSetting(setting))) {
+                           ContentSettingsPattern::Wildcard(), type);
+  } else if (info->delegate().IsValid(*setting)) {
     // Don't set a timestamp for policy settings.
     value_map_.SetValue(ContentSettingsPattern::Wildcard(),
-                        ContentSettingsPattern::Wildcard(), entry.content_type,
-                        base::Value(setting), {});
+                        ContentSettingsPattern::Wildcard(), type,
+                        info->delegate().ToValue(*setting), {});
   }
 }
 
@@ -562,14 +727,12 @@ bool PolicyProvider::SetWebsiteSetting(
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType content_type,
     base::Value&& value,
-    const ContentSettingConstraints& constraints,
-    const PartitionKey& partition_key) {
+    const ContentSettingConstraints& constraints) {
   return false;
 }
 
 void PolicyProvider::ClearAllContentSettingsRules(
-    ContentSettingsType content_type,
-    const PartitionKey& partition_key) {}
+    ContentSettingsType content_type) {}
 
 void PolicyProvider::ShutdownOnUIThread() {
   DCHECK(CalledOnValidThread());
@@ -584,18 +747,19 @@ void PolicyProvider::OnPreferenceChanged(const std::string& name) {
   DCHECK(CalledOnValidThread());
 
   for (const PrefsForManagedDefaultMapEntry& entry : kPrefsForManagedDefault) {
-    if (entry.pref_name == name)
+    if (entry.pref_name == name) {
       UpdateManagedDefaultSetting(entry);
+    }
   }
 
-  if (base::Contains(kManagedPrefs, name)) {
+  if (std::ranges::contains(kManagedPrefs, name)) {
     ReadManagedContentSettings(true);
     ReadManagedDefaultSettings();
   }
 
   NotifyObservers(ContentSettingsPattern::Wildcard(),
                   ContentSettingsPattern::Wildcard(),
-                  ContentSettingsType::DEFAULT, /*partition_key=*/nullptr);
+                  ContentSettingsType::DEFAULT);
 }
 
 }  // namespace content_settings

@@ -40,7 +40,6 @@
 #include "base/unguessable_token.h"
 #include "net/base/request_priority.h"
 #include "third_party/blink/public/platform/web_common.h"
-#include "ui/base/page_transition_types.h"
 
 // TODO(crbug.com/922875): Need foo.mojom.shared-forward.h.
 namespace network {
@@ -210,10 +209,6 @@ class BLINK_PLATFORM_EXPORT WebURLRequest {
   // The redirect mode which is used in Fetch API.
   network::mojom::RedirectMode GetRedirectMode() const;
   void SetRedirectMode(network::mojom::RedirectMode);
-
-  // The integrity which is used in Fetch API.
-  WebString GetFetchIntegrity() const;
-  void SetFetchIntegrity(const WebString&);
 
   // Extra data associated with the underlying resource request. Resource
   // requests can be copied. If non-null, each copy of a resource requests

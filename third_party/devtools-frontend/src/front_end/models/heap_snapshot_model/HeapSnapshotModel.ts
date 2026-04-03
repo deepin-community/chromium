@@ -1,32 +1,6 @@
-/*
- * Copyright (C) 2014 Google Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// Copyright 2014 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 export const HeapSnapshotProgressEvent = {
   Update: 'ProgressUpdate',
@@ -34,6 +8,7 @@ export const HeapSnapshotProgressEvent = {
 };
 
 export const baseSystemDistance = 100000000;
+export const baseUnreachableDistance = baseSystemDistance * 2;
 
 export class AllocationNodeCallers {
   nodesWithSingleCaller: SerializedAllocationNode[];
@@ -99,6 +74,7 @@ export class Node {
   canBeQueried: boolean;
   detachedDOMTreeNode: boolean;
   isAddedNotRemoved: boolean|null;
+  ignored: boolean;
   constructor(
       id: number, name: string, distance: number, nodeIndex: number, retainedSize: number, selfSize: number,
       type: string) {
@@ -113,6 +89,7 @@ export class Node {
     this.canBeQueried = false;
     this.detachedDOMTreeNode = false;
     this.isAddedNotRemoved = null;
+    this.ignored = false;
   }
 }
 
@@ -136,18 +113,17 @@ export class Aggregate {
   distance!: number;
   self!: number;
   maxRet!: number;
-  type!: number;
   name!: string;
   idxs!: number[];
-  constructor() {
-  }
 }
 
 export class AggregateForDiff {
+  name: string;
   indexes: number[];
   ids: number[];
   selfSizes: number[];
   constructor() {
+    this.name = '';
     this.indexes = [];
     this.ids = [];
     this.selfSizes = [];
@@ -155,6 +131,7 @@ export class AggregateForDiff {
 }
 
 export class Diff {
+  name: string;
   addedCount: number;
   removedCount: number;
   addedSize: number;
@@ -163,7 +140,8 @@ export class Diff {
   addedIndexes: number[];
   countDelta!: number;
   sizeDelta!: number;
-  constructor() {
+  constructor(name: string) {
+    this.name = name;
     this.addedCount = 0;
     this.removedCount = 0;
     this.addedSize = 0;
@@ -174,6 +152,7 @@ export class Diff {
 }
 
 export class DiffForClass {
+  name!: string;
   addedCount!: number;
   removedCount!: number;
   addedSize!: number;
@@ -182,8 +161,6 @@ export class DiffForClass {
   addedIndexes!: number[];
   countDelta!: number;
   sizeDelta!: number;
-  constructor() {
-  }
 }
 
 export class ComparatorConfig {
@@ -209,16 +186,14 @@ export class WorkerCommand {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   methodArguments!: any[];
   source!: string;
-  constructor() {
-  }
 }
 
 export class ItemsRange {
   startPosition: number;
   endPosition: number;
   totalLength: number;
-  items: (Node|Edge)[];
-  constructor(startPosition: number, endPosition: number, totalLength: number, items: (Node|Edge)[]) {
+  items: Array<Node|Edge>;
+  constructor(startPosition: number, endPosition: number, totalLength: number, items: Array<Node|Edge>) {
     this.startPosition = startPosition;
     this.endPosition = endPosition;
     this.totalLength = totalLength;
@@ -239,22 +214,17 @@ export class StaticData {
   }
 }
 
-export class Statistics {
-  total!: number;
-  v8heap!: number;
-  native!: number;
-  code!: number;
-  jsArrays!: number;
-  strings!: number;
-  system!: number;
-  constructor() {
-  }
+export interface Statistics {
+  total: number;
+  native: {total: number, typedArrays: number};
+  v8heap: {total: number, code: number, jsArrays: number, strings: number, system: number};
 }
 
 export class NodeFilter {
   minNodeId: number|undefined;
   maxNodeId: number|undefined;
   allocationNodeId!: number|undefined;
+  filterName: string|undefined;
   constructor(minNodeId?: number, maxNodeId?: number) {
     this.minNodeId = minNodeId;
     this.maxNodeId = maxNodeId;
@@ -262,19 +232,23 @@ export class NodeFilter {
 
   equals(o: NodeFilter): boolean {
     return this.minNodeId === o.minNodeId && this.maxNodeId === o.maxNodeId &&
-        this.allocationNodeId === o.allocationNodeId;
+        this.allocationNodeId === o.allocationNodeId && this.filterName === o.filterName;
   }
 }
 
 export class SearchConfig {
   query: string;
   caseSensitive: boolean;
+  wholeWord: boolean;
   isRegex: boolean;
   shouldJump: boolean;
   jumpBackward: boolean;
-  constructor(query: string, caseSensitive: boolean, isRegex: boolean, shouldJump: boolean, jumpBackward: boolean) {
+  constructor(
+      query: string, caseSensitive: boolean, wholeWord: boolean, isRegex: boolean, shouldJump: boolean,
+      jumpBackward: boolean) {
     this.query = query;
     this.caseSensitive = caseSensitive;
+    this.wholeWord = wholeWord;
     this.isRegex = isRegex;
     this.shouldJump = shouldJump;
     this.jumpBackward = jumpBackward;
@@ -305,8 +279,4 @@ export class Location {
     this.lineNumber = lineNumber;
     this.columnNumber = columnNumber;
   }
-}
-
-export interface HeapSnapshotOptions {
-  heapSnapshotTreatBackingStoreAsContainingObject: boolean;
 }

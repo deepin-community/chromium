@@ -15,8 +15,8 @@
 #include "components/ukm/test_ukm_recorder.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/link_to_text/link_to_text.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
 #include "third_party/blink/renderer/core/fragment_directive/text_fragment_handler.h"
@@ -97,7 +97,7 @@ class TextFragmentSelectorGeneratorTest : public SimTest {
       callback_called = true;
     };
     auto callback =
-        WTF::BindOnce(lambda, std::ref(callback_called), std::ref(selector));
+        BindOnce(lambda, std::ref(callback_called), std::ref(selector));
     CreateGenerator()->Generate(*MakeGarbageCollected<RangeInFlatTree>(
                                     ToPositionInFlatTree(selected_start),
                                     ToPositionInFlatTree(selected_end)),
@@ -1377,7 +1377,7 @@ TEST_F(TextFragmentSelectorGeneratorTest, RangeBeginsOnShadowHost) {
   )HTML");
 
   Element* host = GetDocument().getElementById(AtomicString("host"));
-  ShadowRoot& root = host->AttachShadowRootForTesting(ShadowRootType::kOpen);
+  ShadowRoot& root = host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
   root.appendChild(MakeGarbageCollected<HTMLDivElement>(root.GetDocument()));
   root.appendChild(MakeGarbageCollected<HTMLDivElement>(root.GetDocument()));
 
@@ -1833,8 +1833,8 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   )HTML");
   ShadowRoot& shadow1 = GetDocument()
                             .getElementById(AtomicString("host1"))
-                            ->AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow1.setInnerHTML(R"HTML(
+                            ->AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow1.SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <p id='p'>Right click the link below to experience a crash:</p>
     <style>
           :host {display: contents;}
@@ -1888,7 +1888,7 @@ TEST_F(TextFragmentSelectorGeneratorTest, RemoveLayoutObjectAsync) {
     selector = generated_selector.ToString();
     callback_called = true;
   };
-  auto callback = WTF::BindOnce(lambda, std::ref(finished), std::ref(selector));
+  auto callback = BindOnce(lambda, std::ref(finished), std::ref(selector));
 
   TextFragmentSelectorGenerator* generator = CreateGenerator();
   generator->Generate(*MakeGarbageCollected<RangeInFlatTree>(
@@ -1909,7 +1909,7 @@ TEST_F(TextFragmentSelectorGeneratorTest, RemoveLayoutObjectAsync) {
   EXPECT_EQ(generator->state_,
             TextFragmentSelectorGenerator::SelectorState::kTestCandidate);
 
-  generator->did_find_match_callback_for_testing_ = WTF::BindOnce(
+  generator->did_find_match_callback_for_testing_ = BindOnce(
       [](Element* target, bool is_unique) {
         EXPECT_FALSE(is_unique);
 

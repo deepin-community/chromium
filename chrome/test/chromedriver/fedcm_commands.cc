@@ -12,7 +12,7 @@
 
 Status ExecuteCancelDialog(Session* session,
                            WebView* web_view,
-                           const base::Value::Dict& params,
+                           const base::DictValue& params,
                            std::unique_ptr<base::Value>* value,
                            Timeout* timeout) {
   FedCmTracker* tracker = nullptr;
@@ -24,7 +24,7 @@ Status ExecuteCancelDialog(Session* session,
     return Status(kNoSuchAlert);
   }
 
-  base::Value::Dict command_params;
+  base::DictValue command_params;
   command_params.Set("dialogId", tracker->GetLastDialogId());
 
   std::unique_ptr<base::Value> result;
@@ -36,7 +36,7 @@ Status ExecuteCancelDialog(Session* session,
 
 Status ExecuteSelectAccount(Session* session,
                             WebView* web_view,
-                            const base::Value::Dict& params,
+                            const base::DictValue& params,
                             std::unique_ptr<base::Value>* value,
                             Timeout* timeout) {
   FedCmTracker* tracker = nullptr;
@@ -51,20 +51,26 @@ Status ExecuteSelectAccount(Session* session,
     return Status(kInvalidArgument, "accountIndex must be specified");
   }
 
-  base::Value::Dict command_params;
+  base::DictValue command_params;
   command_params.Set("dialogId", tracker->GetLastDialogId());
   command_params.Set("accountIndex", *params.FindInt("accountIndex"));
 
   std::unique_ptr<base::Value> result;
   status = web_view->SendCommandAndGetResult("FedCm.selectAccount",
                                              command_params, &result);
-  tracker->DialogClosed();
+  // Only mark the dialog as closed if the command succeeded. For example,
+  // if there is a dialog up but it is not an account chooser, selectAccount
+  // will fail but the dialog is still up and a later canceldialog command
+  // should succeed.
+  if (status.IsOk()) {
+    tracker->DialogClosed();
+  }
   return status;
 }
 
 Status ExecuteClickDialogButton(Session* session,
                                 WebView* web_view,
-                                const base::Value::Dict& params,
+                                const base::DictValue& params,
                                 std::unique_ptr<base::Value>* value,
                                 Timeout* timeout) {
   FedCmTracker* tracker = nullptr;
@@ -79,12 +85,12 @@ Status ExecuteClickDialogButton(Session* session,
     return Status(kInvalidArgument, "dialogButton must be specified");
   }
 
-  base::Value::Dict command_params;
+  base::DictValue command_params;
   command_params.Set("dialogId", tracker->GetLastDialogId());
 
   std::string button = *params.FindString("dialogButton");
   if (button == "TermsOfService" || button == "PrivacyPolicy") {
-    absl::optional<int> index = params.FindInt("index");
+    std::optional<int> index = params.FindInt("index");
     if (!index) {
       return Status(kInvalidArgument, "index must be specified");
     }
@@ -106,7 +112,7 @@ Status ExecuteClickDialogButton(Session* session,
 
 Status ExecuteGetAccounts(Session* session,
                           WebView* web_view,
-                          const base::Value::Dict& params,
+                          const base::DictValue& params,
                           std::unique_ptr<base::Value>* value,
                           Timeout* timeout) {
   FedCmTracker* tracker = nullptr;
@@ -123,7 +129,7 @@ Status ExecuteGetAccounts(Session* session,
 
 Status ExecuteGetDialogType(Session* session,
                             WebView* web_view,
-                            const base::Value::Dict& params,
+                            const base::DictValue& params,
                             std::unique_ptr<base::Value>* value,
                             Timeout* timeout) {
   FedCmTracker* tracker = nullptr;
@@ -140,7 +146,7 @@ Status ExecuteGetDialogType(Session* session,
 
 Status ExecuteGetFedCmTitle(Session* session,
                             WebView* web_view,
-                            const base::Value::Dict& params,
+                            const base::DictValue& params,
                             std::unique_ptr<base::Value>* value,
                             Timeout* timeout) {
   FedCmTracker* tracker = nullptr;
@@ -151,7 +157,7 @@ Status ExecuteGetFedCmTitle(Session* session,
   if (!tracker->HasDialog()) {
     return Status(kNoSuchAlert);
   }
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("title", tracker->GetLastTitle());
   std::optional<std::string> subtitle = tracker->GetLastSubtitle();
   if (subtitle) {
@@ -163,7 +169,7 @@ Status ExecuteGetFedCmTitle(Session* session,
 
 Status ExecuteSetDelayEnabled(Session* session,
                               WebView* web_view,
-                              const base::Value::Dict& params,
+                              const base::DictValue& params,
                               std::unique_ptr<base::Value>* value,
                               Timeout* timeout) {
   // We don't technically need the tracker to implement this command. However,
@@ -180,7 +186,7 @@ Status ExecuteSetDelayEnabled(Session* session,
     return Status(kInvalidArgument, "enabled must be specified");
   }
 
-  base::Value::Dict command_params;
+  base::DictValue command_params;
   command_params.Set("disableRejectionDelay", !*params.FindBool("enabled"));
 
   std::unique_ptr<base::Value> result;
@@ -191,11 +197,11 @@ Status ExecuteSetDelayEnabled(Session* session,
 
 Status ExecuteResetCooldown(Session* session,
                             WebView* web_view,
-                            const base::Value::Dict& params,
+                            const base::DictValue& params,
                             std::unique_ptr<base::Value>* value,
                             Timeout* timeout) {
   std::unique_ptr<base::Value> result;
-  Status status = web_view->SendCommandAndGetResult(
-      "FedCm.resetCooldown", base::Value::Dict(), &result);
+  Status status = web_view->SendCommandAndGetResult("FedCm.resetCooldown",
+                                                    base::DictValue(), &result);
   return status;
 }

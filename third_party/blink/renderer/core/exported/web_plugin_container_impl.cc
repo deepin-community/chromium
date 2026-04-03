@@ -96,14 +96,12 @@
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme.h"
 #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
 #include "third_party/blink/renderer/platform/exported/wrapped_resource_response.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/graphics/paint/cull_rect.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/foreign_layer_display_item.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/keyboard_codes.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-blink.h"
@@ -186,6 +184,12 @@ void WebPluginContainerImpl::Paint(GraphicsContext& context,
     context.GetPaintController().RecordRegionCaptureData(
         *GetLayoutEmbeddedContent(), *(element_->GetRegionCaptureCropId()),
         visual_rect);
+  }
+
+  if (element_->GetTrackedElementRect()) {
+    const auto* tracked_element_rect = element_->GetTrackedElementRect();
+    context.GetPaintController().RecordTrackedElementData(
+        *GetLayoutEmbeddedContent(), *tracked_element_rect, visual_rect);
   }
 
   if (layer_) {
@@ -348,11 +352,11 @@ float WebPluginContainerImpl::PageScaleFactor() {
   return page->PageScaleFactor();
 }
 
-float WebPluginContainerImpl::PageZoomFactor() {
+float WebPluginContainerImpl::LayoutZoomFactor() {
   LocalFrame* frame = element_->GetDocument().GetFrame();
   if (!frame)
     return 1.0;
-  return frame->PageZoomFactor();
+  return frame->LayoutZoomFactor();
 }
 
 void WebPluginContainerImpl::SetCcLayer(cc::Layer* new_layer) {
@@ -382,8 +386,8 @@ bool WebPluginContainerImpl::IsMouseLocked() {
 bool WebPluginContainerImpl::LockMouse(bool request_unadjusted_movement) {
   if (Page* page = element_->GetDocument().GetPage()) {
     bool res = page->GetPointerLockController().RequestPointerLock(
-        element_, WTF::BindOnce(&WebPluginContainerImpl::HandleLockMouseResult,
-                                WrapWeakPersistent(this)));
+        element_, BindOnce(&WebPluginContainerImpl::HandleLockMouseResult,
+                           WrapWeakPersistent(this)));
     if (res) {
       mouse_lock_lost_listener_ =
           MakeGarbageCollected<MouseLockLostListener>(this);
@@ -433,7 +437,7 @@ int WebPluginContainerImpl::PrintBegin(
   return web_plugin_->PrintBegin(print_params);
 }
 
-void WebPluginContainerImpl::PrintPage(int page_number, GraphicsContext& gc) {
+void WebPluginContainerImpl::PrintPage(int page_index, GraphicsContext& gc) {
   if (DrawingRecorder::UseCachedDrawingIfPossible(
           gc, *element_->GetLayoutObject(), DisplayItem::kWebPlugin))
     return;
@@ -443,7 +447,7 @@ void WebPluginContainerImpl::PrintPage(int page_number, GraphicsContext& gc) {
   gc.Save();
 
   cc::PaintCanvas* canvas = gc.Canvas();
-  web_plugin_->PrintPage(page_number, canvas);
+  web_plugin_->PrintPage(page_index, canvas);
   gc.Restore();
 }
 
@@ -459,10 +463,7 @@ void WebPluginContainerImpl::Copy() {
     return;
 
   LocalFrame* frame = element_->GetDocument().GetFrame();
-  String html = web_plugin_->SelectionAsMarkup();
-  // On Mac, add a meta charset tag for compatibility with native apps.
-  // See comments in AddMetaCharsetTagToHtmlOnMac for more details.
-  frame->GetSystemClipboard()->WriteHTML(AddMetaCharsetTagToHtmlOnMac(html),
+  frame->GetSystemClipboard()->WriteHTML(web_plugin_->SelectionAsMarkup(),
                                          KURL());
   String text = web_plugin_->SelectionAsText();
   ReplaceNBSPWithSpace(text);
@@ -705,9 +706,8 @@ void WebPluginContainerImpl::DidReceiveResponse(
   web_plugin_->DidReceiveResponse(url_response);
 }
 
-void WebPluginContainerImpl::DidReceiveData(const char* data,
-                                            size_t data_length) {
-  web_plugin_->DidReceiveData(data, data_length);
+void WebPluginContainerImpl::DidReceiveData(base::span<const char> data) {
+  web_plugin_->DidReceiveData(data);
 }
 
 void WebPluginContainerImpl::DidFinishLoading() {
@@ -864,7 +864,7 @@ void WebPluginContainerImpl::HandleDragEvent(MouseEvent& event) {
   if (drag_status == kWebDragStatusUnknown)
     return;
 
-  DataTransfer* data_transfer = event.getDataTransfer();
+  DataTransfer* data_transfer = event.dataTransfer();
   WebDragData drag_data = data_transfer->GetDataObject()->ToWebDragData();
   DragOperationsMask drag_operation_mask = data_transfer->SourceOperation();
   gfx::PointF drag_screen_location(event.screenX(), event.screenY());

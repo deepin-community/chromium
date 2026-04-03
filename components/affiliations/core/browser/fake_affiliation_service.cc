@@ -16,16 +16,14 @@ FakeAffiliationService::FakeAffiliationService() = default;
 
 FakeAffiliationService::~FakeAffiliationService() = default;
 
-void FakeAffiliationService::PrefetchChangePasswordURLs(
-    const std::vector<GURL>& urls,
+void FakeAffiliationService::PrefetchChangePasswordURL(
+    const GURL& url,
     base::OnceClosure callback) {}
-void FakeAffiliationService::Clear() {}
 GURL FakeAffiliationService::GetChangePasswordURL(const GURL& url) const {
   return GURL();
 }
 void FakeAffiliationService::GetAffiliationsAndBranding(
     const FacetURI& facet_uri,
-    AffiliationService::StrategyOnCacheMiss cache_miss_strategy,
     ResultCallback result_callback) {
   AffiliatedFacets affiliations;
   affiliations.push_back(Facet(facet_uri, FacetBrandingInfo(), GURL()));
@@ -38,7 +36,6 @@ void FakeAffiliationService::CancelPrefetch(
     const base::Time& keep_fresh_until) {}
 void FakeAffiliationService::KeepPrefetchForFacets(
     std::vector<FacetURI> facet_uris) {}
-void FakeAffiliationService::TrimCacheForFacetURI(const FacetURI& facet_uri) {}
 void FakeAffiliationService::TrimUnusedCache(std::vector<FacetURI> facet_uris) {
 }
 void FakeAffiliationService::GetGroupingInfo(std::vector<FacetURI> facet_uris,
@@ -53,13 +50,19 @@ void FakeAffiliationService::GetGroupingInfo(std::vector<FacetURI> facet_uris,
   std::move(callback).Run(std::move(result));
 }
 void FakeAffiliationService::GetPSLExtensions(
-    base::OnceCallback<void(std::vector<std::string>)> callback) const {
+    base::OnceCallback<void(std::vector<std::string>)> callback) {
   std::move(callback).Run({});
 }
 void FakeAffiliationService::UpdateAffiliationsAndBranding(
     const std::vector<FacetURI>& facets,
     base::OnceClosure callback) {
   std::move(callback).Run();
+}
+void FakeAffiliationService::RegisterSource(
+    std::unique_ptr<AffiliationSource> source) {}
+
+base::WeakPtr<AffiliationService> FakeAffiliationService::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 }  // namespace affiliations

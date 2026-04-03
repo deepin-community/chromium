@@ -5,12 +5,13 @@
 #include "third_party/blink/renderer/modules/serial/serial.h"
 
 #include <inttypes.h>
+
 #include <utility>
 
 #include "base/unguessable_token.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
 #include "third_party/blink/public/mojom/serial/serial.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_serial_port_filter.h"
@@ -69,7 +70,7 @@ bool ShouldBlockSerialServiceCall(LocalDOMWindow* window,
     security_origin = static_cast<WorkerGlobalScope*>(context)
                           ->top_level_frame_security_origin();
   } else {
-    NOTREACHED_NORETURN();
+    NOTREACHED();
   }
 
   if (security_origin->IsOpaque()) {
@@ -82,7 +83,7 @@ bool ShouldBlockSerialServiceCall(LocalDOMWindow* window,
   }
 
   if (!context->IsFeatureEnabled(
-          mojom::blink::PermissionsPolicyFeature::kSerial,
+          network::mojom::PermissionsPolicyFeature::kSerial,
           ReportOptions::kReportOnFailure)) {
     if (exception_state) {
       exception_state->ThrowSecurityError(kFeaturePolicyBlocked);
@@ -125,32 +126,34 @@ void Serial::ContextDestroyed() {
     entry.value->ContextDestroyed();
 }
 
-void Serial::OnPortAdded(mojom::blink::SerialPortInfoPtr port_info) {
+void Serial::OnPortConnectedStateChanged(
+    mojom::blink::SerialPortInfoPtr port_info) {
+  bool connected = port_info->connected;
   SerialPort* port = GetOrCreatePort(std::move(port_info));
-  port->DispatchEvent(*Event::CreateBubble(event_type_names::kConnect));
+  port->set_connected(connected);
+  if (connected) {
+    port->DispatchEvent(*Event::CreateBubble(event_type_names::kConnect));
+  } else {
+    port->DispatchEvent(*Event::CreateBubble(event_type_names::kDisconnect));
+  }
 }
 
-void Serial::OnPortRemoved(mojom::blink::SerialPortInfoPtr port_info) {
-  SerialPort* port = GetOrCreatePort(std::move(port_info));
-  port->DispatchEvent(*Event::CreateBubble(event_type_names::kDisconnect));
-}
-
-ScriptPromiseTyped<IDLSequence<SerialPort>> Serial::getPorts(
+ScriptPromise<IDLSequence<SerialPort>> Serial::getPorts(
     ScriptState* script_state,
     ExceptionState& exception_state) {
   if (ShouldBlockSerialServiceCall(GetSupplementable()->DomWindow(),
                                    GetExecutionContext(), &exception_state)) {
-    return ScriptPromiseTyped<IDLSequence<SerialPort>>();
+    return ScriptPromise<IDLSequence<SerialPort>>();
   }
 
   auto* resolver =
-      MakeGarbageCollected<ScriptPromiseResolverTyped<IDLSequence<SerialPort>>>(
+      MakeGarbageCollected<ScriptPromiseResolver<IDLSequence<SerialPort>>>(
           script_state, exception_state.GetContext());
   get_ports_promises_.insert(resolver);
 
   EnsureServiceConnection();
-  service_->GetPorts(WTF::BindOnce(&Serial::OnGetPorts, WrapPersistent(this),
-                                   WrapPersistent(resolver)));
+  service_->GetPorts(BindOnce(&Serial::OnGetPorts, WrapPersistent(this),
+                              WrapPersistent(resolver)));
 
   return resolver->Promise();
 }
@@ -169,9 +172,8 @@ mojom::blink::SerialPortFilterPtr Serial::CreateMojoFilter(
       return nullptr;
     }
     mojo_filter->bluetooth_service_class_id =
-        ::bluetooth::mojom::blink::UUID::New(
-            GetBluetoothUUIDFromV8Value(filter->bluetoothServiceClassId()));
-    if (mojo_filter->bluetooth_service_class_id->uuid.empty()) {
+        GetBluetoothUUIDFromV8Value(filter->bluetoothServiceClassId());
+    if (mojo_filter->bluetooth_service_class_id.empty()) {
       exception_state.ThrowTypeError(
           "Invalid Bluetooth service class ID filter value.");
       return nullptr;
@@ -202,18 +204,19 @@ mojom::blink::SerialPortFilterPtr Serial::CreateMojoFilter(
   return mojo_filter;
 }
 
-ScriptPromise Serial::requestPort(ScriptState* script_state,
-                                  const SerialPortRequestOptions* options,
-                                  ExceptionState& exception_state) {
+ScriptPromise<SerialPort> Serial::requestPort(
+    ScriptState* script_state,
+    const SerialPortRequestOptions* options,
+    ExceptionState& exception_state) {
   if (ShouldBlockSerialServiceCall(GetSupplementable()->DomWindow(),
                                    GetExecutionContext(), &exception_state)) {
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   if (!LocalFrame::HasTransientUserActivation(DomWindow()->GetFrame())) {
     exception_state.ThrowSecurityError(
         "Must be handling a user gesture to show a permission request.");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   Vector<mojom::blink::SerialPortFilterPtr> filters;
@@ -222,7 +225,7 @@ ScriptPromise Serial::requestPort(ScriptState* script_state,
       auto mojo_filter = CreateMojoFilter(filter, exception_state);
       if (!mojo_filter) {
         CHECK(exception_state.HadException());
-        return ScriptPromise();
+        return EmptyPromise();
       }
 
       CHECK(!exception_state.HadException());
@@ -230,24 +233,22 @@ ScriptPromise Serial::requestPort(ScriptState* script_state,
     }
   }
 
-  Vector<::bluetooth::mojom::blink::UUIDPtr>
-      allowed_bluetooth_service_class_ids;
+  Vector<String> allowed_bluetooth_service_class_ids;
   if (options && options->hasAllowedBluetoothServiceClassIds()) {
     for (const auto& id : options->allowedBluetoothServiceClassIds()) {
       allowed_bluetooth_service_class_ids.push_back(
-          ::bluetooth::mojom::blink::UUID::New(
-              GetBluetoothUUIDFromV8Value(id)));
+          GetBluetoothUUIDFromV8Value(id));
     }
   }
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<SerialPort>>(
       script_state, exception_state.GetContext());
   request_port_promises_.insert(resolver);
 
   EnsureServiceConnection();
   service_->RequestPort(std::move(filters),
                         std::move(allowed_bluetooth_service_class_ids),
-                        resolver->WrapCallbackInScriptScope(WTF::BindOnce(
+                        resolver->WrapCallbackInScriptScope(BindOnce(
                             &Serial::OnRequestPort, WrapPersistent(this))));
 
   return resolver->Promise();
@@ -308,8 +309,8 @@ void Serial::EnsureServiceConnection() {
       GetExecutionContext()->GetTaskRunner(TaskType::kMiscPlatformAPI);
   GetExecutionContext()->GetBrowserInterfaceBroker().GetInterface(
       service_.BindNewPipeAndPassReceiver(task_runner));
-  service_.set_disconnect_handler(WTF::BindOnce(
-      &Serial::OnServiceConnectionError, WrapWeakPersistent(this)));
+  service_.set_disconnect_handler(
+      BindOnce(&Serial::OnServiceConnectionError, WrapWeakPersistent(this)));
 
   service_->SetClient(receiver_.BindNewPipeAndPassRemote(task_runner));
 }
@@ -320,16 +321,16 @@ void Serial::OnServiceConnectionError() {
 
   // Script may execute during a call to Resolve(). Swap these sets to prevent
   // concurrent modification.
-  HeapHashSet<Member<ScriptPromiseResolverTyped<IDLSequence<SerialPort>>>>
+  HeapHashSet<Member<ScriptPromiseResolver<IDLSequence<SerialPort>>>>
       get_ports_promises;
   get_ports_promises_.swap(get_ports_promises);
   for (auto& resolver : get_ports_promises) {
     resolver->Resolve(HeapVector<Member<SerialPort>>());
   }
 
-  HeapHashSet<Member<ScriptPromiseResolver>> request_port_promises;
+  HeapHashSet<Member<ScriptPromiseResolverBase>> request_port_promises;
   request_port_promises_.swap(request_port_promises);
-  for (ScriptPromiseResolver* resolver : request_port_promises) {
+  for (ScriptPromiseResolverBase* resolver : request_port_promises) {
     ScriptState* resolver_script_state = resolver->GetScriptState();
     if (!IsInParallelAlgorithmRunnable(resolver->GetExecutionContext(),
                                        resolver_script_state)) {
@@ -353,7 +354,7 @@ SerialPort* Serial::GetOrCreatePort(mojom::blink::SerialPortInfoPtr info) {
 }
 
 void Serial::OnGetPorts(
-    ScriptPromiseResolverTyped<IDLSequence<SerialPort>>* resolver,
+    ScriptPromiseResolver<IDLSequence<SerialPort>>* resolver,
     Vector<mojom::blink::SerialPortInfoPtr> port_infos) {
   DCHECK(get_ports_promises_.Contains(resolver));
   get_ports_promises_.erase(resolver);
@@ -365,7 +366,7 @@ void Serial::OnGetPorts(
   resolver->Resolve(ports);
 }
 
-void Serial::OnRequestPort(ScriptPromiseResolver* resolver,
+void Serial::OnRequestPort(ScriptPromiseResolver<SerialPort>* resolver,
                            mojom::blink::SerialPortInfoPtr port_info) {
   DCHECK(request_port_promises_.Contains(resolver));
   request_port_promises_.erase(resolver);

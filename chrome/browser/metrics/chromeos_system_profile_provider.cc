@@ -4,6 +4,8 @@
 
 #include "chrome/browser/metrics/chromeos_system_profile_provider.h"
 
+#include <string_view>
+
 #include "base/barrier_closure.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -15,6 +17,7 @@
 #include "chrome/browser/ash/login/users/chrome_user_manager_util.h"
 #include "chrome/browser/ash/multidevice_setup/multidevice_setup_client_factory.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
 #include "chromeos/ash/services/multidevice_setup/public/cpp/multidevice_setup_client.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager_client.h"
@@ -59,7 +62,7 @@ ChromeOSSystemProfileProvider::~ChromeOSSystemProfileProvider() = default;
 
 void ChromeOSSystemProfileProvider::AsyncInit(base::OnceClosure callback) {
   base::RepeatingClosure barrier = base::BarrierClosure(4, std::move(callback));
-  InitTaskGetFullHardwareClass(barrier);
+  InitTaskWaitForMachineStatisticsLoaded(barrier);
   InitTaskGetArcFeatures(barrier);
   InitTaskGetTpmFirmwareVersion(barrier);
   InitTaskGetCellularDeviceVariant(barrier);
@@ -83,6 +86,15 @@ void ChromeOSSystemProfileProvider::ProvideSystemProfileMetrics(
   metrics::SystemProfileProto::Hardware* hardware =
       system_profile_proto->mutable_hardware();
   hardware->set_full_hardware_class(full_hardware_class_);
+
+  // Updated hardware class might be updated after machine statistics are
+  // loaded, so get it here to ensure the latest value is retrieved.
+  const auto updated_hardware_class =
+      ash::system::StatisticsProvider::GetInstance()->GetUpdatedHardwareClass();
+  if (updated_hardware_class.has_value()) {
+    hardware->set_updated_hardware_class(*updated_hardware_class);
+  }
+
   display::Display::TouchSupport has_touch =
       ui::GetInternalDisplayTouchSupport();
   if (has_touch == display::Display::TouchSupport::AVAILABLE)
@@ -153,7 +165,7 @@ void ChromeOSSystemProfileProvider::UpdateMultiProfileUserCount(
 
 void ChromeOSSystemProfileProvider::WriteDemoModeDimensionMetrics(
     metrics::SystemProfileProto* system_profile_proto) {
-  if (!ash::DemoSession::IsDeviceInDemoMode()) {
+  if (!ash::demo_mode::IsDeviceInDemoMode()) {
     return;
   }
   metrics::SystemProfileProto::DemoModeDimensions* demo_mode_dimensions =
@@ -182,7 +194,7 @@ void ChromeOSSystemProfileProvider::WriteDemoModeDimensionMetrics(
       ash::demo_mode::ResourcesVersion().GetString());
 }
 
-void ChromeOSSystemProfileProvider::InitTaskGetFullHardwareClass(
+void ChromeOSSystemProfileProvider::InitTaskWaitForMachineStatisticsLoaded(
     base::OnceClosure callback) {
   ash::system::StatisticsProvider::GetInstance()
       ->ScheduleOnMachineStatisticsLoaded(base::BindOnce(
@@ -222,11 +234,14 @@ void ChromeOSSystemProfileProvider::InitTaskGetCellularDeviceVariant(
 
 void ChromeOSSystemProfileProvider::OnMachineStatisticsLoaded(
     base::OnceClosure callback) {
-  if (const std::optional<base::StringPiece> full_hardware_class =
+  if (const std::optional<std::string_view> full_hardware_class =
           ash::system::StatisticsProvider::GetInstance()->GetMachineStatistic(
               "hardware_class")) {
     full_hardware_class_ = std::string(full_hardware_class.value());
   }
+  // Calling ash::system::StatisticsProvider::GetUpdatedHardwareClass() is valid
+  // now since the initialization of updated hardware class is completed in the
+  // loading of machine statistics.
   std::move(callback).Run();
 }
 

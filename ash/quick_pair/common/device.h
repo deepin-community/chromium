@@ -15,8 +15,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 enum class DeviceFastPairVersion {
   kV1,
@@ -68,8 +67,16 @@ class COMPONENT_EXPORT(QUICK_PAIR_COMMON) Device
     return account_key_;
   }
 
-  void set_account_key(std::vector<uint8_t> account_key) {
+  void set_account_key(const std::vector<uint8_t>& account_key) {
     account_key_ = account_key;
+  }
+
+  const std::optional<uint8_t> key_based_pairing_flags() const {
+    return key_based_pairing_flags_;
+  }
+
+  void set_key_based_pairing_flags(uint8_t key_based_pairing_flags) {
+    key_based_pairing_flags_ = key_based_pairing_flags;
   }
 
   const std::string& metadata_id() const { return metadata_id_; }
@@ -112,6 +119,9 @@ class COMPONENT_EXPORT(QUICK_PAIR_COMMON) Device
   // for eligible devices (V2 or higher) and used for detecting subsequent
   // pairing scenarios.
   std::optional<std::vector<uint8_t>> account_key_;
+
+  // Flags received during a Key-based Pairing Extended Response.
+  std::optional<uint8_t> key_based_pairing_flags_;
 };
 
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
@@ -120,7 +130,6 @@ std::ostream& operator<<(std::ostream& stream, const Device& device);
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
 std::ostream& operator<<(std::ostream& stream, scoped_refptr<Device> device);
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair
 
 #endif  // ASH_QUICK_PAIR_COMMON_DEVICE_H_

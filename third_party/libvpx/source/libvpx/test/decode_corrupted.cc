@@ -10,12 +10,13 @@
 
 #include <tuple>
 
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include "test/codec_factory.h"
 #include "test/encode_test_driver.h"
 #include "test/util.h"
 #include "test/i420_video_source.h"
+#include "vpx_config.h"
 #include "vpx_mem/vpx_mem.h"
 
 namespace {
@@ -58,7 +59,7 @@ class DecodeCorruptedFrameTest
     if (pkt->data.frame.flags & VPX_FRAME_IS_KEY) return pkt;
     if (pkt->kind != VPX_CODEC_CX_FRAME_PKT) return pkt;
 
-    memcpy(&modified_pkt_, pkt, sizeof(*pkt));
+    modified_pkt_ = *pkt;
 
     // Halve the size so it's corrupted to decoder.
     modified_pkt_.data.frame.sz = modified_pkt_.data.frame.sz / 2;

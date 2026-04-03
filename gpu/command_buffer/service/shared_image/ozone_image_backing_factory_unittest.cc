@@ -5,6 +5,7 @@
 #include "gpu/command_buffer/service/shared_image/ozone_image_backing_factory.h"
 
 #include "components/viz/common/resources/shared_image_format.h"
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_image/gl_ozone_image_representation.h"
 #include "gpu/command_buffer/service/shared_image/ozone_image_backing.h"
@@ -18,6 +19,7 @@
 #include "ui/gl/gl_surface_egl.h"
 #include "ui/gl/gl_utils.h"
 #include "ui/gl/init/gl_factory.h"
+#include "ui/ozone/public/ozone_platform.h"
 
 namespace gpu {
 
@@ -33,7 +35,7 @@ class FakeOnScreenSurface : public gl::SurfacelessEGL {
   bool IsSurfaceless() const override { return false; }
 
  protected:
-  ~FakeOnScreenSurface() override = default;
+  ~FakeOnScreenSurface() override { InvalidateWeakPtrs(); }
 };
 
 }  // namespace
@@ -44,11 +46,6 @@ class OzoneImageBackingFactoryTest : public SharedImageTestBase {
   ~OzoneImageBackingFactoryTest() override = default;
 
   void SetUp() override {
-    if (!base::FeatureList::IsEnabled(
-            features::kEnablePerContextGLTextureCache)) {
-      GTEST_SKIP();
-    }
-
     ASSERT_NO_FATAL_FAILURE(InitializeContext(GrContextType::kGL));
 
     backing_factory_ = std::make_unique<OzoneImageBackingFactory>(
@@ -91,7 +88,7 @@ TEST_F(OzoneImageBackingFactoryTest, UsesCacheForTextureHolders) {
   EXPECT_TRUE(context_state_->MakeCurrent(context_state_->surface(),
                                           true /* needs_gl*/));
 
-  const Mailbox mailbox = Mailbox::GenerateForSharedImage();
+  const Mailbox mailbox = Mailbox::Generate();
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, viz::SinglePlaneFormat::kRGBA_8888, gpu::kNullSurfaceHandle,
       {100, 100}, gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
@@ -172,7 +169,7 @@ TEST_F(OzoneImageBackingFactoryTest, UsesCacheForTextureHolders2) {
   EXPECT_TRUE(context_state_->MakeCurrent(context_state_->surface(),
                                           true /* needs_gl*/));
 
-  const Mailbox mailbox = Mailbox::GenerateForSharedImage();
+  const Mailbox mailbox = Mailbox::Generate();
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, viz::SinglePlaneFormat::kRGBA_8888, gpu::kNullSurfaceHandle,
       {100, 100}, gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
@@ -229,7 +226,7 @@ TEST_F(OzoneImageBackingFactoryTest, MarksContextLostOnContextLost) {
   EXPECT_TRUE(context_state_->MakeCurrent(context_state_->surface(),
                                           true /* needs_gl*/));
 
-  const Mailbox mailbox = Mailbox::GenerateForSharedImage();
+  const Mailbox mailbox = Mailbox::Generate();
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, viz::SinglePlaneFormat::kRGBA_8888, gpu::kNullSurfaceHandle,
       {100, 100}, gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
@@ -291,7 +288,7 @@ TEST_F(OzoneImageBackingFactoryTest, MarksContextLostOnContextLost2) {
   EXPECT_TRUE(context_state_->MakeCurrent(context_state_->surface(),
                                           true /* needs_gl*/));
 
-  const Mailbox mailbox = Mailbox::GenerateForSharedImage();
+  const Mailbox mailbox = Mailbox::Generate();
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, viz::SinglePlaneFormat::kRGBA_8888, gpu::kNullSurfaceHandle,
       {100, 100}, gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
@@ -350,7 +347,7 @@ TEST_F(OzoneImageBackingFactoryTest, RemovesTextureHoldersOnContextDestroy) {
   EXPECT_TRUE(context_state_->MakeCurrent(context_state_->surface(),
                                           true /* needs_gl*/));
 
-  const Mailbox mailbox = Mailbox::GenerateForSharedImage();
+  const Mailbox mailbox = Mailbox::Generate();
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, viz::SinglePlaneFormat::kRGBA_8888, gpu::kNullSurfaceHandle,
       {100, 100}, gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
@@ -393,7 +390,7 @@ TEST_F(OzoneImageBackingFactoryTest, RestoresContextOnAnotherContextDestroy) {
   EXPECT_TRUE(context_state_->MakeCurrent(context_state_->surface(),
                                           true /* needs_gl*/));
 
-  const Mailbox mailbox = Mailbox::GenerateForSharedImage();
+  const Mailbox mailbox = Mailbox::Generate();
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, viz::SinglePlaneFormat::kRGBA_8888, gpu::kNullSurfaceHandle,
       {100, 100}, gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
@@ -442,7 +439,7 @@ TEST_F(OzoneImageBackingFactoryTest, FindsCompatibleContextAndReusesTexture) {
   EXPECT_TRUE(context_state_->MakeCurrent(context_state_->surface(),
                                           true /* needs_gl*/));
 
-  const Mailbox mailbox = Mailbox::GenerateForSharedImage();
+  const Mailbox mailbox = Mailbox::Generate();
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, viz::SinglePlaneFormat::kRGBA_8888, gpu::kNullSurfaceHandle,
       {100, 100}, gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
@@ -544,7 +541,7 @@ TEST_F(OzoneImageBackingFactoryTest, CorrectlyDestroysAndMarksContextLost) {
   EXPECT_TRUE(context_state_->MakeCurrent(context_state_->surface(),
                                           true /* needs_gl*/));
 
-  const Mailbox mailbox = Mailbox::GenerateForSharedImage();
+  const Mailbox mailbox = Mailbox::Generate();
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, viz::SinglePlaneFormat::kRGBA_8888, gpu::kNullSurfaceHandle,
       {100, 100}, gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
@@ -605,6 +602,37 @@ TEST_F(OzoneImageBackingFactoryTest, CorrectlyDestroysAndMarksContextLost) {
   gl_context.reset();
   EXPECT_EQ(0u, backing_ptr->per_context_cached_textures_holders_.size());
   EXPECT_EQ(0u, holder_ref1->GetNumberOfTextures());
+}
+
+TEST_F(OzoneImageBackingFactoryTest, CreateGpuMemoryBufferHandle) {
+  for (auto format : viz::GetMappableSharedImageFormatForTesting()) {
+    gfx::BufferUsage usages[] = {
+        gfx::BufferUsage::GPU_READ,
+        gfx::BufferUsage::SCANOUT,
+        gfx::BufferUsage::SCANOUT_CAMERA_READ_WRITE,
+        gfx::BufferUsage::CAMERA_AND_CPU_READ_WRITE,
+        gfx::BufferUsage::SCANOUT_CPU_READ_WRITE,
+        gfx::BufferUsage::SCANOUT_VDA_WRITE,
+        gfx::BufferUsage::PROTECTED_SCANOUT,
+        gfx::BufferUsage::PROTECTED_SCANOUT_VDA_WRITE,
+        gfx::BufferUsage::GPU_READ_CPU_READ_WRITE,
+        gfx::BufferUsage::SCANOUT_VEA_CPU_READ,
+        gfx::BufferUsage::VEA_READ_CAMERA_AND_CPU_READ_WRITE,
+        gfx::BufferUsage::SCANOUT_FRONT_RENDERING,
+    };
+    for (auto usage : usages) {
+      if (!ui::OzonePlatform::GetInstance()->IsNativePixmapConfigSupported(
+              format, usage)) {
+        continue;
+      }
+
+      gfx::GpuMemoryBufferHandle handle =
+          OzoneImageBackingFactory::CreateGpuMemoryBufferHandle(
+              /*vulkan_context_provider=*/nullptr, gfx::Size(2, 2), format,
+              usage);
+      EXPECT_EQ(handle.type, gfx::NATIVE_PIXMAP);
+    }
+  }
 }
 
 }  // namespace gpu

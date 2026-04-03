@@ -14,6 +14,7 @@
 #include "base/time/time.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_service_observer.h"
+#include "components/history/core/browser/history_types.h"
 #include "components/segmentation_platform/public/proto/segmentation_platform.pb.h"
 
 namespace segmentation_platform {
@@ -38,10 +39,9 @@ class HistoryServiceObserver : public history::HistoryServiceObserver {
 
   // history::HistoryServiceObserver impl:
   void OnURLVisited(history::HistoryService* history_service,
-                    const history::URLRow& url_row,
-                    const history::VisitRow& new_visit) override;
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+                    const history::VisitedURLInfo& visited_url_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
 
   // Sets the list of segment IDs that are based on history data.
   virtual void SetHistoryBasedSegments(

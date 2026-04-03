@@ -38,10 +38,10 @@ class TestOverlayStrategy : public OverlayProcessorStrategy {
       const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
       const OverlayProcessorInterface::FilterOperationsMap&
           render_pass_backdrop_filters,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_pass_list,
       SurfaceDamageRectList* surface_damage_rect_list,
-      const PrimaryPlane* primary_plane,
+      const std::optional<OverlayCandidate>& primary_plane,
       std::vector<OverlayProposedCandidate>* candidates,
       std::vector<gfx::Rect>* content_bounds) override {}
 
@@ -50,10 +50,10 @@ class TestOverlayStrategy : public OverlayProcessorStrategy {
       const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
       const OverlayProcessorInterface::FilterOperationsMap&
           render_pass_backdrop_filters,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_pass_list,
       SurfaceDamageRectList* surface_damage_rect_list,
-      const PrimaryPlane* primary_plane,
+      const std::optional<OverlayCandidate>& primary_plane,
       OverlayCandidateList* candidates,
       std::vector<gfx::Rect>* content_bounds,
       const OverlayProposedCandidate& proposed_candidate) override {
@@ -87,13 +87,13 @@ class OverlayProposedCandidateTest
   }
 
   ResourceId CreateResource(bool is_overlay_candidate) {
-    scoped_refptr<ContextProvider> child_context_provider =
-        TestContextProvider::Create();
+    scoped_refptr<RasterContextProvider> child_context_provider =
+        TestContextProvider::CreateGLES();
 
     child_context_provider->BindToCurrentSequence();
 
     auto resource = TransferableResource::MakeGpu(
-        gpu::Mailbox::GenerateForSharedImage(), GL_TEXTURE_2D, gpu::SyncToken(),
+        gpu::Mailbox::Generate(), GL_TEXTURE_2D, gpu::SyncToken(),
         gfx::Size(1, 1), SinglePlaneFormat::kRGBA_8888, is_overlay_candidate);
 
     ResourceId resource_id =
@@ -106,8 +106,11 @@ class OverlayProposedCandidateTest
     std::vector<ResourceId> resource_ids_to_transfer;
     resource_ids_to_transfer.push_back(resource_id);
     std::vector<TransferableResource> list;
+
+    CHECK(child_context_provider);
     child_resource_provider_.PrepareSendToParent(
-        resource_ids_to_transfer, &list, child_context_provider.get());
+        resource_ids_to_transfer, &list,
+        child_context_provider->SharedImageInterface());
     resource_provider_.ReceiveFromChild(child_id, list);
 
     // Delete it in the child so it won't be leaked, and will be released once
@@ -176,11 +179,11 @@ TEST_P(OverlayProposedCandidateTest, CorrectRoundedDisplayMaskBounds) {
                                  /*is_overlay_candidate=*/true, identity,
                                  mask_info_, &render_pass);
 
+  OverlayCandidateFactory::OverlayContext context;
+  context.supports_rounded_display_masks = true;
   OverlayCandidateFactory factory = OverlayCandidateFactory(
       &render_pass, &resource_provider_, &surface_damage_list_, &identity_,
-      gfx::RectF(render_pass.output_rect), &render_pass_filters_,
-      OverlayCandidateFactory::OverlayContext{.supports_rounded_display_masks =
-                                                  true});
+      gfx::RectF(render_pass.output_rect), &render_pass_filters_, context);
 
   OverlayCandidate candidate;
   OverlayCandidateFactory::CandidateStatus status =

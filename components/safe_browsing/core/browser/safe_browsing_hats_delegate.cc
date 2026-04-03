@@ -15,12 +15,12 @@ namespace safe_browsing {
 
 namespace {
 
-bool MatchFound(const std::string& report_value,
-                const std::string& filter_values) {
-  std::vector<std::string> filter_values_list = base::SplitString(
+bool MatchFound(const std::string_view report_value,
+                const std::string_view filter_values) {
+  auto filter_values_list = base::SplitStringPiece(
       filter_values, ",", base::WhitespaceHandling::TRIM_WHITESPACE,
       base::SplitResult::SPLIT_WANT_NONEMPTY);
-  for (const std::string& filter_value : filter_values_list) {
+  for (const auto& filter_value : filter_values_list) {
     if (base::EqualsCaseInsensitiveASCII(report_value, filter_value)) {
       return true;
     }
@@ -30,15 +30,15 @@ bool MatchFound(const std::string& report_value,
 
 // Return the CSBRR report type for |threat_type|. We are only
 // concerned with report types that HaTS will target.
-std::string ThreatTypeToReportType(SBThreatType threat_type) {
+std::string_view ThreatTypeToReportType(SBThreatType threat_type) {
   switch (threat_type) {
-    case SB_THREAT_TYPE_URL_PHISHING:
+    case SBThreatType::SB_THREAT_TYPE_URL_PHISHING:
       return "URL_PHISHING";
-    case SB_THREAT_TYPE_URL_MALWARE:
+    case SBThreatType::SB_THREAT_TYPE_URL_MALWARE:
       return "URL_MALWARE";
-    case SB_THREAT_TYPE_URL_UNWANTED:
+    case SBThreatType::SB_THREAT_TYPE_URL_UNWANTED:
       return "URL_UNWANTED";
-    case SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING:
+    case SBThreatType::SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING:
       return "URL_CLIENT_SIDE_PHISHING";
     default:
       return "UNSUPPORTED_THREAT_TYPE";

@@ -4,7 +4,7 @@
 
 import './private_aggregation_internals_table.js';
 
-import {assert} from 'chrome://resources/js/assert.js';
+import {assert, assertNotReachedCase} from 'chrome://resources/js/assert.js';
 
 import type {AggregatableReportRequestID, ObserverInterface, WebUIAggregatableReport} from './private_aggregation_internals.mojom-webui.js';
 import {Factory as PrivateAggregationInternalsFactory, HandlerRemote as PrivateAggregationInternalsHandlerRemote, ObserverReceiver, ReportStatus} from './private_aggregation_internals.mojom-webui.js';
@@ -16,8 +16,13 @@ function compareDefault<T>(a: T, b: T): number {
   return (a < b) ? -1 : ((a > b) ? 1 : 0);
 }
 
-function bigintReplacer(_key: string, value: any): any {
-  return typeof value === 'bigint' ? value.toString() : value;
+// Converts the mojo_base.mojom.Uint128 to a string
+function bucketReplacer(_key: string, value: any): any {
+  if (_key === 'bucket') {
+    return (value['high'] * 2n ** 64n + value['low']).toString();
+  } else {
+    return value;
+  }
 }
 
 class ValueColumn<T, V> implements Column<T> {
@@ -165,7 +170,7 @@ class SelectionColumn<T extends Selectable> implements Column<T> {
   }
 }
 
-function reportStatusToText(status: ReportStatus) {
+function reportStatusToText(status: ReportStatus): string {
   switch (status) {
     case ReportStatus.kPending:
       return 'Pending';
@@ -175,12 +180,14 @@ function reportStatusToText(status: ReportStatus) {
       return 'Failed to assemble';
     case ReportStatus.kFailedToSend:
       return 'Failed to send';
+    default:
+      assertNotReachedCase(status);
   }
 }
 
 class Report extends Selectable {
-  // `undefined` indicates a report that wasn't stored/scheduled.
-  id: AggregatableReportRequestID|undefined;
+  // `null` indicates a report that wasn't stored/scheduled.
+  id: AggregatableReportRequestID|null;
   reportBody: string;
   reportUrl: string;
   reportTime: Date;
@@ -194,7 +201,7 @@ class Report extends Selectable {
 
     this.id = mojo.id;
     this.reportBody = mojo.reportBody;
-    this.reportUrl = mojo.reportUrl.url;
+    this.reportUrl = mojo.reportUrl;
     this.reportTime = new Date(mojo.reportTime);
     this.apiIdentifier = mojo.apiIdentifier;
     this.apiVersion = mojo.apiVersion;
@@ -207,7 +214,7 @@ class Report extends Selectable {
     this.status = reportStatusToText(mojo.status);
 
     this.contributions =
-        JSON.stringify(mojo.contributions, bigintReplacer, ' ');
+        JSON.stringify(mojo.contributions, bucketReplacer, ' ');
   }
 }
 
@@ -233,8 +240,7 @@ class ReportTableModel extends TableModel<Report> {
       new ValueColumn<Report, string>(
           'API identifier', (e) => e.apiIdentifier, '90px'),
       new ValueColumn<Report, string>('API version', (e) => e.apiVersion),
-      new CodeColumn<Report>(
-          'Contributions', (e) => (e as Report).contributions),
+      new CodeColumn<Report>('Contributions', (e) => (e).contributions),
       new CodeColumn<Report>('Report Body', (e) => e.reportBody),
     ];
 
@@ -360,7 +366,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const reportTable =
       document.querySelector<PrivateAggregationInternalsTableElement<Report>>(
           '#reportTable');
-  reportTable!.setModel(reportTableModel!);
+  reportTable!.setModel(reportTableModel);
 
   PrivateAggregationInternalsFactory.getRemote().create(
     new ObserverReceiver(new Observer()).$.bindNewPipeAndPassRemote(),

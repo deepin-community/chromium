@@ -4,8 +4,9 @@
 
 #include "components/variations/synthetic_trial_registry.h"
 
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
+#include <algorithm>
+
+#include "base/check_is_test.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
 #include "base/strings/string_number_conversions.h"
@@ -16,28 +17,21 @@
 namespace variations {
 namespace internal {
 
-BASE_FEATURE(kExternalExperimentAllowlist,
-             "ExternalExperimentAllowlist",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+// Used to deliver the allowlist via a feature param. If disabled, the
+// allowlist is treated as empty (nothing allowed).
+BASE_FEATURE(kExternalExperimentAllowlist, base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace internal
-
-namespace {
-
-bool IsExternalExperimentAllowlistEnabled() {
-  return base::FeatureList::IsEnabled(internal::kExternalExperimentAllowlist);
-}
-
-}  // namespace
 
 SyntheticTrialRegistry::SyntheticTrialRegistry() = default;
 SyntheticTrialRegistry::~SyntheticTrialRegistry() = default;
 
 void SyntheticTrialRegistry::AddObserver(SyntheticTrialObserver* observer) {
   synthetic_trial_observer_list_.AddObserver(observer);
-  if (!synthetic_trial_groups_.empty())
+  if (!synthetic_trial_groups_.empty()) {
     observer->OnSyntheticTrialsChanged(synthetic_trial_groups_, {},
                                        synthetic_trial_groups_);
+  }
 }
 
 void SyntheticTrialRegistry::RemoveObserver(SyntheticTrialObserver* observer) {
@@ -45,15 +39,41 @@ void SyntheticTrialRegistry::RemoveObserver(SyntheticTrialObserver* observer) {
 }
 
 void SyntheticTrialRegistry::RegisterExternalExperiments(
-    const std::string& fallback_study_name,
+    base::PassKey<UmaSessionStatsExternalExperimentRegistrar> pass_key,
     const std::vector<int>& experiment_ids,
     SyntheticTrialRegistry::OverrideMode mode) {
-  DCHECK(!fallback_study_name.empty());
+  RegisterExternalExperimentsInternal(experiment_ids, mode);
+}
 
+void SyntheticTrialRegistry::RegisterExternalExperiments(
+    base::PassKey<android_webview::AwMetricsServiceAccessor> pass_key,
+    const std::vector<int>& experiment_ids,
+    SyntheticTrialRegistry::OverrideMode mode) {
+  RegisterExternalExperimentsInternal(experiment_ids, mode);
+}
+
+void SyntheticTrialRegistry::RegisterExternalExperimentsForTesting(
+    const std::vector<int>& experiment_ids,
+    SyntheticTrialRegistry::OverrideMode mode) {
+  RegisterExternalExperimentsInternal(experiment_ids, mode);
+}
+
+std::vector<ActiveGroupId>
+SyntheticTrialRegistry::GetCurrentSyntheticFieldTrialsForTest() const {
+  CHECK_IS_TEST();
+  std::vector<ActiveGroupId> synthetic_trials;
+  GetSyntheticFieldTrialsOlderThan(base::TimeTicks::Now(), &synthetic_trials);
+  return synthetic_trials;
+}
+
+void SyntheticTrialRegistry::RegisterExternalExperimentsInternal(
+    const std::vector<int>& experiment_ids,
+    SyntheticTrialRegistry::OverrideMode mode) {
   base::FieldTrialParams params;
-  if (IsExternalExperimentAllowlistEnabled() &&
-      !GetFieldTrialParamsByFeature(internal::kExternalExperimentAllowlist,
-                                    &params)) {
+  GetFieldTrialParamsByFeature(internal::kExternalExperimentAllowlist, &params);
+  // If no params (empty allowlist or feature disabled), no external experiments
+  // are allowed.
+  if (params.empty()) {
     return;
   }
 
@@ -77,33 +97,35 @@ void SyntheticTrialRegistry::RegisterExternalExperiments(
   const base::TimeTicks start_time = base::TimeTicks::Now();
   for (int experiment_id : experiment_ids) {
     const std::string experiment_id_str = base::NumberToString(experiment_id);
-    const base::StringPiece study_name =
-        GetStudyNameForExpId(fallback_study_name, params, experiment_id_str);
-    if (study_name.empty())
+    const ExternalExperiment experiment =
+        GetExternalExperiment(params, experiment_id_str);
+    if (experiment.study_name.empty()) {
       continue;
+    }
 
-    const uint32_t trial_hash = HashName(study_name);
+    const uint32_t trial_hash = HashName(experiment.study_name);
     // If existing ids shouldn't be overridden, skip entries whose study names
     // are already registered.
     if (mode == kDoNotOverrideExistingIds) {
-      if (base::Contains(synthetic_trial_groups_, trial_hash,
-                         [](const SyntheticTrialGroup& group) {
-                           return group.id().name;
-                         })) {
+      if (std::ranges::contains(synthetic_trial_groups_, trial_hash,
+                                [](const SyntheticTrialGroup& group) {
+                                  return group.id().name;
+                                })) {
         continue;
       }
     }
+    const uint32_t group_hash = HashName(experiment.group_name);
 
-    const uint32_t group_hash = HashName(experiment_id_str);
-
-    // Since external experiments are not based on Chrome's low entropy source,
-    // they are only sent to Google web properties for signed-in users to make
-    // sure they couldn't be used to identify a user that's not signed-in.
-    AssociateGoogleVariationIDForceHashes(
+    // Since external experiments are not based on Chrome's low or limited
+    // entropy sources, they are sent to Google web properties only for
+    // signed-in users to make sure they couldn't be used to identify a user
+    // that's not signed-in.
+    AssociateGoogleVariationID(
+        base::PassKey<SyntheticTrialRegistry>(),
         GOOGLE_WEB_PROPERTIES_SIGNED_IN, {trial_hash, group_hash},
-        static_cast<VariationID>(experiment_id));
+        static_cast<VariationID>(experiment_id), variations::TimeWindow());
     SyntheticTrialGroup entry(
-        study_name, experiment_id_str,
+        experiment.study_name, experiment.group_name,
         variations::SyntheticTrialAnnotationMode::kNextLog);
     entry.SetStartTime(start_time);
     entry.SetIsExternal(true);
@@ -123,14 +145,13 @@ void SyntheticTrialRegistry::RegisterSyntheticFieldTrial(
     const SyntheticTrialGroup& trial) {
   for (auto& entry : synthetic_trial_groups_) {
     if (entry.id().name == trial.id().name) {
-      entry.SetAnnotationMode(trial.annotation_mode());
-      if (entry.id().group != trial.id().group) {
+      if (entry.id().group != trial.id().group ||
+          entry.annotation_mode() != trial.annotation_mode()) {
+        entry.SetAnnotationMode(trial.annotation_mode());
         entry.SetGroupName(trial.group_name());
         entry.SetStartTime(base::TimeTicks::Now());
+        NotifySyntheticTrialObservers({entry}, {});
       }
-      // Always notify the observers since some observers like persistent system
-      // profile need to be updated when annotation mode is changed.
-      NotifySyntheticTrialObservers({entry}, {});
       return;
     }
   }
@@ -141,27 +162,40 @@ void SyntheticTrialRegistry::RegisterSyntheticFieldTrial(
   NotifySyntheticTrialObservers({trial_group}, {});
 }
 
-base::StringPiece SyntheticTrialRegistry::GetStudyNameForExpId(
-    const std::string& fallback_study_name,
+SyntheticTrialRegistry::ExternalExperiment
+SyntheticTrialRegistry::GetExternalExperiment(
     const base::FieldTrialParams& params,
     const std::string& experiment_id) {
-  if (!IsExternalExperimentAllowlistEnabled()) {
-    return fallback_study_name;
+  const auto it = params.find(experiment_id);
+  if (it == params.end()) {
+    return SyntheticTrialRegistry::ExternalExperiment();
+  }
+  const std::string_view full_value(it->second);
+
+  // The config format is "StudyName" or "StudyName,GroupName".
+  // The study name is everything before the first comma.
+  const size_t first_comma_pos = full_value.find(',');
+  const std::string_view study_name(full_value.data(),
+                                    first_comma_pos == std::string::npos
+                                        ? it->second.length()
+                                        : first_comma_pos);
+
+  if (first_comma_pos == std::string::npos) {
+    return {study_name, experiment_id};
   }
 
-  const auto it = params.find(experiment_id);
-  if (it == params.end())
-    return base::StringPiece();
-
-  // To support additional parameters being passed, besides the study name,
-  // truncate the study name at the first ',' character.
-  // For example, for an entry like {"1234": "StudyName,FOO"}, we only want the
-  // "StudyName" part. This allows adding support for additional things like FOO
-  // in the future without backwards compatibility problems.
-  const size_t comma_pos = it->second.find(',');
-  const size_t truncate_pos =
-      (comma_pos == std::string::npos ? it->second.length() : comma_pos);
-  return base::StringPiece(it->second.data(), truncate_pos);
+  // The group name is the part between the first and second comma.
+  // If there is a second comma, anything after it is ignored.
+  const size_t group_name_start = first_comma_pos + 1;
+  const size_t second_comma_pos = full_value.find(',', group_name_start);
+  std::string_view group_name;
+  if (second_comma_pos == std::string::npos) {
+    group_name = full_value.substr(group_name_start);
+  } else {
+    group_name = full_value.substr(group_name_start,
+                                   second_comma_pos - group_name_start);
+  }
+  return {study_name, group_name.empty() ? experiment_id : group_name};
 }
 
 void SyntheticTrialRegistry::NotifySyntheticTrialObservers(
@@ -176,14 +210,15 @@ void SyntheticTrialRegistry::NotifySyntheticTrialObservers(
 void SyntheticTrialRegistry::GetSyntheticFieldTrialsOlderThan(
     base::TimeTicks time,
     std::vector<ActiveGroupId>* synthetic_trials,
-    base::StringPiece suffix) const {
+    std::string_view suffix) const {
   DCHECK(synthetic_trials);
   synthetic_trials->clear();
   base::FieldTrial::ActiveGroups active_groups;
   for (const auto& entry : synthetic_trial_groups_) {
     if (entry.start_time() <= time ||
-        entry.annotation_mode() == SyntheticTrialAnnotationMode::kCurrentLog)
+        entry.annotation_mode() == SyntheticTrialAnnotationMode::kCurrentLog) {
       active_groups.push_back(entry.active_group());
+    }
   }
 
   GetFieldTrialActiveGroupIdsForActiveGroups(suffix, active_groups,

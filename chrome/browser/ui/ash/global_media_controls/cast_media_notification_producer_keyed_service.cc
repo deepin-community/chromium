@@ -21,7 +21,7 @@ CastMediaNotificationProducerKeyedService::
 void CastMediaNotificationProducerKeyedService::AddMediaItemManager(
     global_media_controls::MediaItemManager* media_item_manager) {
   CHECK(media_item_manager);
-  CHECK(!base::Contains(managers_and_producers_, media_item_manager));
+  RemoveMediaItemManager(media_item_manager);
   managers_and_producers_[media_item_manager] =
       std::make_unique<CastMediaNotificationProducer>(profile_,
                                                       media_item_manager);
@@ -32,7 +32,7 @@ void CastMediaNotificationProducerKeyedService::AddMediaItemManager(
 void CastMediaNotificationProducerKeyedService::RemoveMediaItemManager(
     global_media_controls::MediaItemManager* media_item_manager) {
   // Reset() may have already removed it.
-  if (base::Contains(managers_and_producers_, media_item_manager)) {
+  if (managers_and_producers_.contains(media_item_manager)) {
     media_item_manager->RemoveItemProducer(
         managers_and_producers_[media_item_manager].get());
     managers_and_producers_.erase(media_item_manager);

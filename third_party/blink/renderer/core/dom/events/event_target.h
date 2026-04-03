@@ -43,10 +43,14 @@
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
+namespace scheduler {
+class TaskAttributionInfo;
+}  // namespace scheduler
 
 class AddEventListenerOptionsResolved;
 class DOMWindow;
 class Event;
+class EventListenerOptions;
 class ExceptionState;
 class ExecutionContext;
 class LocalDOMWindow;
@@ -54,7 +58,6 @@ class MessagePort;
 class Node;
 class Observable;
 class ObservableEventListenerOptions;
-class PortalHost;
 class ScriptState;
 class ServiceWorker;
 class V8EventListener;
@@ -145,15 +148,18 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   virtual LocalDOMWindow* ToLocalDOMWindow();
   virtual MessagePort* ToMessagePort();
   virtual ServiceWorker* ToServiceWorker();
-  virtual PortalHost* ToPortalHost();
+
+  // This method is called when the enqueued event is dispatched.
+  // The input is the event type of the current dispatched event.
+  virtual void ResetEventQueueStatus(const AtomicString& event_type);
 
   static EventTarget* Create(ScriptState*);
 
   // Returns an Observable whose native subscription algorithm adds an event
   // listener of type `event_type` to `this`. See
   // https://wicg.github.io/observable/.
-  Observable* on(const AtomicString& event_type,
-                 const ObservableEventListenerOptions*);
+  Observable* when(const AtomicString& event_type,
+                   const ObservableEventListenerOptions*);
 
   bool addEventListener(const AtomicString& event_type, V8EventListener*);
   bool addEventListener(
@@ -224,6 +230,7 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   // but they will only actually be web-exposed for interfaces that include
   // GlobalEventHandlers as a mixin in the idl.
   DEFINE_ATTRIBUTE_EVENT_LISTENER(abort, kAbort)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(animationcancel, kAnimationcancel)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(animationend, kAnimationend)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(animationiteration, kAnimationiteration)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(animationstart, kAnimationstart)
@@ -238,6 +245,7 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   DEFINE_ATTRIBUTE_EVENT_LISTENER(change, kChange)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(click, kClick)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(close, kClose)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(command, kCommand)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(contentvisibilityautostatechange,
                                   kContentvisibilityautostatechange)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(contextmenu, kContextmenu)
@@ -256,6 +264,7 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   DEFINE_ATTRIBUTE_EVENT_LISTENER(emptied, kEmptied)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(ended, kEnded)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(error, kError)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(fencedtreeclick, kFencedtreeclick)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(focus, kFocus)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(formdata, kFormdata)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(gotpointercapture, kGotpointercapture)
@@ -306,8 +315,8 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   DEFINE_ATTRIBUTE_EVENT_LISTENER(selectionchange, kSelectionchange)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(selectstart, kSelectstart)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(slotchange, kSlotchange)
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(snapchanged, kSnapchanged)
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(snapchanging, kSnapchanging)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(scrollsnapchange, kScrollsnapchange)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(scrollsnapchanging, kScrollsnapchanging)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(stalled, kStalled)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(submit, kSubmit)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(suspend, kSuspend)
@@ -338,9 +347,10 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   virtual bool AddEventListenerInternal(const AtomicString& event_type,
                                         EventListener*,
                                         const AddEventListenerOptionsResolved*);
-  bool RemoveEventListenerInternal(const AtomicString& event_type,
-                                   const EventListener*,
-                                   const EventListenerOptions*);
+  bool RemoveEventListenerInternal(
+      const AtomicString& event_type,
+      const EventListener*,
+      const RegisteredEventListener::OptionsForMatching&);
 
   // Called when an event listener has been successfully added.
   virtual void AddedEventListener(const AtomicString& event_type,
@@ -369,12 +379,18 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   // The spec snapshots the array at the beginning of a dispatch so that
   // listeners adding or removing other event listeners during dispatch is
   // done in a consistent way.
-  bool FireEventListeners(Event&, EventTargetData*, EventListenerVector);
+  using EventListenerVectorSnapshot =
+      HeapVector<Member<RegisteredEventListener>, 1>;
+  bool FireEventListeners(Event&,
+                          EventTargetData*,
+                          EventListenerVectorSnapshot);
   void CountLegacyEvents(const AtomicString& legacy_type_name,
                          EventListenerVector*,
                          EventListenerVector*);
 
-  void DispatchEnqueuedEvent(Event*, ExecutionContext*);
+  void DispatchEnqueuedEvent(Event*,
+                             ExecutionContext*,
+                             scheduler::TaskAttributionInfo*);
 
   Member<EventTargetData> data_;
 

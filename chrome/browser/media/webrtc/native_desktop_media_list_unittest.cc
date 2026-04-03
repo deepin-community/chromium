@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
@@ -42,6 +43,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
 #include "base/strings/string_util_win.h"
 #endif
 
@@ -132,12 +134,12 @@ class MockObserver : public DesktopMediaListObserver {
 
 class FakeScreenCapturer : public ThumbnailCapturer {
  public:
-  FakeScreenCapturer() {}
+  FakeScreenCapturer() = default;
 
   FakeScreenCapturer(const FakeScreenCapturer&) = delete;
   FakeScreenCapturer& operator=(const FakeScreenCapturer&) = delete;
 
-  ~FakeScreenCapturer() override {}
+  ~FakeScreenCapturer() override = default;
 
   // ThumbnailCapturer implementation.
   void Start(Consumer* consumer) override { consumer_ = consumer; }
@@ -148,8 +150,8 @@ class FakeScreenCapturer : public ThumbnailCapturer {
 
   void CaptureFrame() override {
     DCHECK(consumer_);
-    std::unique_ptr<webrtc::DesktopFrame> frame(
-        new webrtc::BasicDesktopFrame(webrtc::DesktopSize(10, 10)));
+    auto frame = std::make_unique<webrtc::BasicDesktopFrame>(
+        webrtc::DesktopSize(10, 10), webrtc::FOURCC_ARGB);
     consumer_->OnCaptureResult(webrtc::DesktopCapturer::Result::SUCCESS,
                                std::move(frame));
   }
@@ -177,7 +179,7 @@ class FakeWindowCapturer : public ThumbnailCapturer {
   FakeWindowCapturer(const FakeWindowCapturer&) = delete;
   FakeWindowCapturer& operator=(const FakeWindowCapturer&) = delete;
 
-  ~FakeWindowCapturer() override {}
+  ~FakeWindowCapturer() override = default;
 
   void SetWindowList(const SourceList& list) {
     base::AutoLock lock(window_list_lock_);
@@ -205,9 +207,10 @@ class FakeWindowCapturer : public ThumbnailCapturer {
 
     auto it = frame_values_.find(selected_window_id_);
     int8_t value = (it != frame_values_.end()) ? it->second : 0;
-    std::unique_ptr<webrtc::DesktopFrame> frame(
-        new webrtc::BasicDesktopFrame(webrtc::DesktopSize(10, 10)));
-    memset(frame->data(), value, frame->stride() * frame->size().height());
+    auto frame = std::make_unique<webrtc::BasicDesktopFrame>(
+        webrtc::DesktopSize(10, 10), webrtc::FOURCC_ARGB);
+    UNSAFE_TODO(
+        memset(frame->data(), value, frame->stride() * frame->size().height()));
     consumer_->OnCaptureResult(webrtc::DesktopCapturer::Result::SUCCESS,
                                std::move(frame));
   }
@@ -293,8 +296,9 @@ class NativeDesktopMediaListTest : public ChromeViewsTestBase {
 #if defined(USE_AURA)
   views::UniqueWidgetPtr CreateDesktopWidget() {
     views::UniqueWidgetPtr widget(std::make_unique<views::Widget>());
-    views::Widget::InitParams params;
-    params.type = views::Widget::InitParams::TYPE_WINDOW_FRAMELESS;
+    views::Widget::InitParams params(
+        views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+        views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
     params.accept_events = false;
     params.native_widget = new views::DesktopNativeWidgetAura(widget.get());
     params.bounds = gfx::Rect(0, 0, 20, 20);
@@ -376,7 +380,8 @@ class NativeDesktopMediaListTest : public ChromeViewsTestBase {
 #endif  // BUILDFLAG(IS_WIN)
     model_ = std::make_unique<NativeDesktopMediaList>(
         DesktopMediaList::Type::kWindow,
-        base::WrapUnique(window_capturer_.get()), add_current_process_windows);
+        base::WrapUnique(window_capturer_.get()), add_current_process_windows,
+        /*auto_show_delegated_source_list=*/true);
   }
 
   void UpdateModel() {

@@ -8,19 +8,16 @@
 #include <map>
 #include <memory>
 #include <set>
-#include <unordered_set>
+#include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/installable/installable_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/web_applications/web_app_utils.h"
+#include "chrome/browser/webapps/installable/installable_utils.h"
 #include "chrome/common/pref_names.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/url_and_title.h"
@@ -35,16 +32,11 @@
 #include "components/site_engagement/core/mojom/site_engagement_details.mojom.h"
 #include "components/webapps/browser/banners/app_banner_settings_helper.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/blink/public/mojom/site_engagement/site_engagement.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "url/url_util.h"
-
-#if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/web_applications/web_app_provider.h"
-#include "chrome/browser/web_applications/web_app_registrar.h"
-#include "components/webapps/common/web_app_id.h"
-#endif
 
 namespace site_engagement {
 
@@ -89,28 +81,14 @@ static const int kMaxBookmarks = 5;
         static_cast<int>(ImportantReason::REASON_BOUNDARY));                   \
   } while (0)
 
-// Do not change the values here, as they are used for UMA histograms and
-// testing in important_sites_util_unittest.
-enum CrossedReason {
-  CROSSED_DURABLE = 0,
-  CROSSED_NOTIFICATIONS = 1,
-  CROSSED_ENGAGEMENT = 2,
-  CROSSED_NOTIFICATIONS_AND_ENGAGEMENT = 3,
-  CROSSED_DURABLE_AND_ENGAGEMENT = 4,
-  CROSSED_NOTIFICATIONS_AND_DURABLE = 5,
-  CROSSED_NOTIFICATIONS_AND_DURABLE_AND_ENGAGEMENT = 6,
-  CROSSED_REASON_UNKNOWN = 7,
-  CROSSED_REASON_BOUNDARY
-};
-
-void RecordIgnore(base::Value::Dict& dict) {
+void RecordIgnore(base::DictValue& dict) {
   int times_ignored = dict.FindInt(kNumTimesIgnoredName).value_or(0);
   dict.Set(kNumTimesIgnoredName, ++times_ignored);
   dict.Set(kTimeLastIgnored, base::Time::Now().InSecondsFSinceUnixEpoch());
 }
 
 // If we should suppress the item with the given dictionary ignored record.
-bool ShouldSuppressItem(base::Value::Dict& dict) {
+bool ShouldSuppressItem(base::DictValue& dict) {
   std::optional<double> last_ignored_time = dict.FindDouble(kTimeLastIgnored);
   if (last_ignored_time) {
     base::TimeDelta diff =
@@ -125,28 +103,6 @@ bool ShouldSuppressItem(base::Value::Dict& dict) {
 
   std::optional<int> times_ignored = dict.FindInt(kNumTimesIgnoredName);
   return times_ignored && *times_ignored >= kTimesIgnoredForSuppression;
-}
-
-CrossedReason GetCrossedReasonFromBitfield(int32_t reason_bitfield) {
-  bool durable = (reason_bitfield & (1 << ImportantReason::DURABLE)) != 0;
-  bool notifications =
-      (reason_bitfield & (1 << ImportantReason::NOTIFICATIONS)) != 0;
-  bool engagement = (reason_bitfield & (1 << ImportantReason::ENGAGEMENT)) != 0;
-  if (durable && notifications && engagement)
-    return CROSSED_NOTIFICATIONS_AND_DURABLE_AND_ENGAGEMENT;
-  else if (notifications && durable)
-    return CROSSED_NOTIFICATIONS_AND_DURABLE;
-  else if (notifications && engagement)
-    return CROSSED_NOTIFICATIONS_AND_ENGAGEMENT;
-  else if (durable && engagement)
-    return CROSSED_DURABLE_AND_ENGAGEMENT;
-  else if (notifications)
-    return CROSSED_NOTIFICATIONS;
-  else if (durable)
-    return CROSSED_DURABLE;
-  else if (engagement)
-    return CROSSED_ENGAGEMENT;
-  return CROSSED_REASON_UNKNOWN;
 }
 
 void MaybePopulateImportantInfoForReason(
@@ -179,7 +135,7 @@ int GetScoreForReason(ImportantReason reason) {
   switch (reason) {
     case ImportantReason::ENGAGEMENT:
       return 1 << 0;
-    case ImportantReason::DURABLE:
+    case ImportantReason::PERSISTENT:
       return 1 << 1;
     case ImportantReason::BOOKMARKS:
       return 1 << 2;
@@ -216,15 +172,15 @@ bool CompareDescendingImportantInfo(
   return a.second.engagement_score > b.second.engagement_score;
 }
 
-std::unordered_set<std::string> GetSuppressedImportantDomains(
+absl::flat_hash_set<std::string> GetSuppressedImportantDomains(
     Profile* profile) {
   HostContentSettingsMap* map =
       HostContentSettingsMapFactory::GetForProfile(profile);
-  std::unordered_set<std::string> ignoring_domains;
+  absl::flat_hash_set<std::string> ignoring_domains;
   for (ContentSettingPatternSource& site :
        map->GetSettingsForOneType(ContentSettingsType::IMPORTANT_SITE_INFO)) {
     GURL origin(site.primary_pattern.ToString());
-    if (!origin.is_valid() || base::Contains(ignoring_domains, origin.host())) {
+    if (!origin.is_valid() || ignoring_domains.contains(origin.GetHost())) {
       continue;
     }
 
@@ -232,7 +188,7 @@ std::unordered_set<std::string> GetSuppressedImportantDomains(
       continue;
 
     if (ShouldSuppressItem(site.setting_value.GetDict())) {
-      ignoring_domains.insert(origin.host());
+      ignoring_domains.insert(origin.GetHost());
     }
   }
   return ignoring_domains;
@@ -316,7 +272,7 @@ void PopulateInfoMapWithBookmarks(
   // Process the bookmarks and optionally trim them if we have too many.
   std::vector<UrlAndTitle> result_bookmarks;
   if (untrimmed_bookmarks.size() > kMaxBookmarks) {
-    base::ranges::copy_if(
+    std::ranges::copy_if(
         untrimmed_bookmarks, std::back_inserter(result_bookmarks),
         [&engagement_map](const UrlAndTitle& entry) {
           auto it = engagement_map.find(entry.url.DeprecatedGetOriginAsURL());
@@ -359,11 +315,11 @@ ImportantDomainInfo& ImportantDomainInfo::operator=(ImportantDomainInfo&&) =
     default;
 
 std::string ImportantSitesUtil::GetRegisterableDomainOrIP(const GURL& url) {
-  return GetRegisterableDomainOrIPFromHost(url.host_piece());
+  return GetRegisterableDomainOrIPFromHost(url.host());
 }
 
 std::string ImportantSitesUtil::GetRegisterableDomainOrIPFromHost(
-    base::StringPiece host) {
+    std::string_view host) {
   std::string registerable_domain =
       net::registry_controlled_domains::GetDomainAndRegistry(
           host, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
@@ -412,31 +368,33 @@ ImportantSitesUtil::GetImportantRegisterableDomains(Profile* profile,
       ImportantReason::NOTIFICATIONS, &important_info);
 
   PopulateInfoMapWithContentTypeAllowed(
-      profile, ContentSettingsType::DURABLE_STORAGE, ImportantReason::DURABLE,
-      &important_info);
+      profile, ContentSettingsType::PERSISTENT_STORAGE,
+      ImportantReason::PERSISTENT, &important_info);
 
   PopulateInfoMapWithBookmarks(profile, engagement_map, &important_info);
 
-  std::unordered_set<std::string> suppressed_domains =
+  absl::flat_hash_set<std::string> suppressed_domains =
       GetSuppressedImportantDomains(profile);
 
-  std::vector<std::pair<std::string, ImportantDomainInfo>> items;
-  for (auto& item : important_info)
-    items.emplace_back(std::move(item));
+  std::vector<std::pair<std::string, ImportantDomainInfo>> items = {
+      std::make_move_iterator(important_info.begin()),
+      std::make_move_iterator(important_info.end())};
   std::sort(items.begin(), items.end(), &CompareDescendingImportantInfo);
 
   std::vector<ImportantDomainInfo> final_list;
-  for (std::pair<std::string, ImportantDomainInfo>& domain_info : items) {
+  final_list.reserve(std::max(max_results, items.size()));
+  for (auto& [domain, domain_info] : items) {
     if (final_list.size() >= max_results)
       return final_list;
-    if (suppressed_domains.find(domain_info.first) != suppressed_domains.end())
+    if (suppressed_domains.contains(domain)) {
       continue;
+    }
 
-    final_list.push_back(std::move(domain_info.second));
+    int32_t reason_bitfield = domain_info.reason_bitfield;
+    final_list.push_back(std::move(domain_info));
     RECORD_UMA_FOR_IMPORTANT_REASON(
         "Storage.ImportantSites.GeneratedReason",
-        "Storage.ImportantSites.GeneratedReasonCount",
-        domain_info.second.reason_bitfield);
+        "Storage.ImportantSites.GeneratedReasonCount", reason_bitfield);
   }
 
   return final_list;
@@ -490,21 +448,12 @@ void ImportantSitesUtil::RecordExcludedAndIgnoredImportantSites(
   // We clear our ignore counter for sites that the user chose.
   for (const std::string& excluded_site : excluded_sites) {
     GURL origin("http://" + excluded_site);
-    base::Value::Dict dict;
+    base::DictValue dict;
     dict.Set(kNumTimesIgnoredName, 0);
     dict.Remove(kTimeLastIgnored);
     map->SetWebsiteSettingDefaultScope(origin, origin,
                                        ContentSettingsType::IMPORTANT_SITE_INFO,
                                        base::Value(std::move(dict)));
-  }
-
-  // Finally, record our old crossed-stats.
-  // Note: we don't plan on adding new metrics here, this is just for the finch
-  // experiment to give us initial data on what signals actually mattered.
-  for (int32_t reason_bitfield : excluded_sites_reason_bitfield) {
-    UMA_HISTOGRAM_ENUMERATION("Storage.BlacklistedImportantSites.Reason",
-                              GetCrossedReasonFromBitfield(reason_bitfield),
-                              CROSSED_REASON_BOUNDARY);
   }
 }
 

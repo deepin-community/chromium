@@ -26,6 +26,12 @@ class ExtensionDownloadsEventRouter;
 // DownloadCoreServiceImpl for implementation.
 class DownloadCoreService : public KeyedService {
  public:
+  // This enum represents when `CancelDownloads` is called.
+  enum class CancelDownloadsTrigger {
+    kShutdown = 0,
+    kProfileDeletion = 1,
+  };
+
   DownloadCoreService();
 
   DownloadCoreService(const DownloadCoreService&) = delete;
@@ -44,7 +50,7 @@ class DownloadCoreService : public KeyedService {
   // no HistoryService for profile. Virtual for testing.
   virtual DownloadHistory* GetDownloadHistory() = 0;
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   virtual extensions::ExtensionDownloadsEventRouter*
   GetExtensionEventRouter() = 0;
 #endif
@@ -57,13 +63,13 @@ class DownloadCoreService : public KeyedService {
   virtual int BlockingShutdownCount() const = 0;
 
   // Cancels all in-progress downloads for this profile.
-  virtual void CancelDownloads() = 0;
+  virtual void CancelDownloads(CancelDownloadsTrigger trigger) = 0;
 
   // Number of downloads blocking shutdown associated with all profiles.
   static int BlockingShutdownCountAllProfiles();
 
   // Cancels all in-progress downloads for all profiles.
-  static void CancelAllDownloads();
+  static void CancelAllDownloads(CancelDownloadsTrigger trigger);
 
   // Sets the DownloadManagerDelegate associated with this object and
   // its DownloadManager.  Takes ownership of |delegate|, and destroys
@@ -80,6 +86,12 @@ class DownloadCoreService : public KeyedService {
   // Returns false if at least one extension has disabled the UI, true
   // otherwise.
   virtual bool IsDownloadUiEnabled() = 0;
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // Simulates an extension using chrome.download.setUiOptions() to enable or
+  // disable the downloads UI.
+  virtual void SetDownloadUiEnabledForTest(bool enabled) {}
+#endif
 };
 
 #endif  // CHROME_BROWSER_DOWNLOAD_DOWNLOAD_CORE_SERVICE_H_

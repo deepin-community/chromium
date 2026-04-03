@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 
-#include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/metrics/perf/profile_provider_chromeos.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager.pb.h"
@@ -56,7 +56,6 @@ class ChromeOSMetricsProvider : public metrics::MetricsProvider {
   void ProvideCurrentSessionUKMData() override;
 
  private:
-  void ProvideAccessibilityMetrics();
   void ProvideSuggestedContentMetrics();
   void ProvideMetrics(metrics::SystemProfileProto* system_profile_proto,
                       bool should_include_arc_metrics);
@@ -77,7 +76,7 @@ class ChromeOSMetricsProvider : public metrics::MetricsProvider {
 
 // Provides *histograms* to UMA. Due to the below bug, this cannot be part of
 // |ChromeOSMetricsProvider|.
-// TODO(crbug/1427219): Allow this to be part of the above class.
+// TODO(crbug.com/40899764): Allow this to be part of the above class.
 class ChromeOSHistogramMetricsProvider : public metrics::MetricsProvider {
  public:
   ChromeOSHistogramMetricsProvider();

@@ -13,7 +13,6 @@
 #include "net/url_request/referrer_policy.h"
 #include "services/network/public/cpp/devtools_observer_util.h"
 #include "services/network/public/cpp/resource_request.h"
-#include "services/network/public/mojom/service_worker_router_info.mojom-shared.h"
 #include "services/network/public/mojom/service_worker_router_info.mojom.h"
 #include "services/network/public/mojom/trust_tokens.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -40,7 +39,9 @@ TEST(DevToolsObserverUtilTest, ExtractURLResponseHead) {
   head.was_fetched_via_spdy = true;
   head.service_worker_response_source = mojom::FetchResponseSource::kHttpCache;
   head.service_worker_router_info = mojom::ServiceWorkerRouterInfo::New(
-      /*rule_id_matched*/ 1, mojom::ServiceWorkerRouterSourceType::kNetwork);
+      /*rule_id_matched*/ 1, mojom::ServiceWorkerRouterSourceType::kNetwork,
+      mojom::ServiceWorkerRouterSourceType::kNetwork, 1, base::TimeDelta::Min(),
+      base::TimeDelta::Min(), mojom::ServiceWorkerStatus::kRunning);
   head.ssl_info = net::SSLInfo();
   head.remote_endpoint = net::IPEndPoint(net::IPAddress(1, 2, 3, 4), 99);
 

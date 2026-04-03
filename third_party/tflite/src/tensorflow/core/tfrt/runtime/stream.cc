@@ -27,10 +27,11 @@ limitations under the License.
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
-#include "absl/utility/utility.h"
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
@@ -82,7 +83,7 @@ absl::StatusOr<std::optional<StreamCallbackId>> CreateStreamCallbackId(
 absl::Status StreamCallbackRegistry::CallbackState::Invoke(
     tsl::thread::ThreadPoolInterface* thread_pool, StreamedResult result) {
   {
-    absl::MutexLock lock(&mu_);
+    absl::MutexLock lock(mu_);
     if (closed_) {
       return absl::InternalError(
           "Failed to invole the callback that is closed.");
@@ -92,7 +93,7 @@ absl::Status StreamCallbackRegistry::CallbackState::Invoke(
   thread_pool->Schedule([this, result = std::move(result)]() mutable {
     InvokeCallback(std::move(result));
 
-    absl::MutexLock lock(&mu_);
+    absl::MutexLock lock(mu_);
     --num_outstanding_;
   });
   return absl::OkStatus();
@@ -100,7 +101,7 @@ absl::Status StreamCallbackRegistry::CallbackState::Invoke(
 
 void StreamCallbackRegistry::CallbackState::Close() {
   {
-    absl::MutexLock lock(&mu_);
+    absl::MutexLock lock(mu_);
     closed_ = true;
 
     auto not_running = [this]() ABSL_SHARED_LOCKS_REQUIRED(mu_) {
@@ -133,7 +134,7 @@ absl::StatusOr<ScopedStreamCallback> StreamCallbackRegistry::Register(
     absl::AnyInvocable<
         void(absl::flat_hash_map<std::string, tensorflow::Tensor>)>
         callback) {
-  absl::MutexLock l(&mu_);
+  absl::MutexLock l(mu_);
 
   const auto [it, inserted] =
       stream_callbacks_.insert({std::make_pair(callback_id, step_id), nullptr});
@@ -150,7 +151,7 @@ absl::StatusOr<ScopedStreamCallback> StreamCallbackRegistry::Register(
 absl::Status StreamCallbackRegistry::Invoke(
     tsl::thread::ThreadPoolInterface* thread_pool, StreamCallbackId callback_id,
     StepId step_id, StreamedResult result) {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   auto iter = stream_callbacks_.find({callback_id, step_id});
   if (iter == stream_callbacks_.end()) {
     return absl::NotFoundError(absl::StrCat(
@@ -167,7 +168,7 @@ absl::Status StreamCallbackRegistry::Invoke(
 std::unique_ptr<StreamCallbackRegistry::CallbackState>
 StreamCallbackRegistry::Unregister(StreamCallbackId callback_id,
                                    StepId step_id) {
-  absl::MutexLock l(&mu_);
+  absl::MutexLock l(mu_);
   const auto it = stream_callbacks_.find({callback_id, step_id});
   if (it == stream_callbacks_.end()) {
     return nullptr;

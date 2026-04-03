@@ -8,6 +8,7 @@
 
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
@@ -73,8 +74,10 @@ bool IsFileSystemProviderLocalPath(const base::FilePath& local_path) {
   if (components[0] != FILE_PATH_LITERAL("/"))
     return false;
 
-  if (components[1] != kProvidedMountPointRoot + 1 /* no leading slash */)
+  if (components[1] !=
+      UNSAFE_TODO(kProvidedMountPointRoot + 1 /* no leading slash */)) {
     return false;
+  }
 
   return true;
 }

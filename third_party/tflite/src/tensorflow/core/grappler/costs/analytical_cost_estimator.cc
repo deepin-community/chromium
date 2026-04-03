@@ -37,12 +37,12 @@ namespace grappler {
 namespace {
 
 // Helper function in PredictCosts() to add cost node to cost_graph.
-Status AddCostNode(ReadyNodeManager* node_manager, const OpContext& op_context,
-                   int node_id, const Costs& node_costs,
-                   gtl::FlatMap<string, CostGraphDef::Node*>* name_to_cost_node,
-                   gtl::FlatMap<string, int>* name_to_id,
-                   CostGraphDef* cost_graph) {
-  const string& op_name = op_context.name;
+absl::Status AddCostNode(
+    ReadyNodeManager* node_manager, const OpContext& op_context, int node_id,
+    const Costs& node_costs,
+    gtl::FlatMap<std::string, CostGraphDef::Node*>* name_to_cost_node,
+    gtl::FlatMap<std::string, int>* name_to_id, CostGraphDef* cost_graph) {
+  const std::string& op_name = op_context.name;
   auto it = name_to_cost_node->find(op_name);
   CostGraphDef::Node* node;
   if (it != name_to_cost_node->end()) {
@@ -66,9 +66,9 @@ Status AddCostNode(ReadyNodeManager* node_manager, const OpContext& op_context,
   node->set_persistent_memory_size(node_costs.persistent_memory);
   node->set_inaccurate(node_costs.inaccurate);
 
-  for (const string& input : node_manager->GetCurrNode()->input()) {
+  for (const std::string& input : node_manager->GetCurrNode()->input()) {
     int input_port;
-    string input_name = ParseNodeName(input, &input_port);
+    std::string input_name = ParseNodeName(input, &input_port);
 
     // All inputs should have been seen already unless this is a Merge node.
     if (name_to_id->find(input_name) == name_to_id->end()) {
@@ -149,14 +149,14 @@ AnalyticalCostEstimator::AnalyticalCostEstimator(
       node_manager_.get(), std::move(placer));
 }
 
-Status AnalyticalCostEstimator::Initialize(const GrapplerItem& item) {
+absl::Status AnalyticalCostEstimator::Initialize(const GrapplerItem& item) {
   item_ = &item;
   return absl::OkStatus();
 }
 
-Status AnalyticalCostEstimator::PredictCosts(const GraphDef& optimized_graph,
-                                             RunMetadata* run_metadata,
-                                             Costs* costs) const {
+absl::Status AnalyticalCostEstimator::PredictCosts(
+    const GraphDef& optimized_graph, RunMetadata* run_metadata,
+    Costs* costs) const {
   std::unique_ptr<GrapplerItem> item_storage;
   const GrapplerItem* item;
   // Many callers to PredictCosts() pass the same optimized_graph as was used
@@ -178,7 +178,7 @@ Status AnalyticalCostEstimator::PredictCosts(const GraphDef& optimized_graph,
     return status;
   }
 
-  gtl::FlatMap<string, CostGraphDef::Node*> name_to_cost_node;
+  gtl::FlatMap<std::string, CostGraphDef::Node*> name_to_cost_node;
   CostGraphDef* cost_graph = nullptr;
   if (run_metadata) {
     cost_graph = run_metadata->mutable_cost_graph();
@@ -189,10 +189,10 @@ Status AnalyticalCostEstimator::PredictCosts(const GraphDef& optimized_graph,
       name_to_cost_node[node.name()] = &node;
     }
   }
-  std::vector<string> inaccurate_nodes;
+  std::vector<std::string> inaccurate_nodes;
   int nodes_executed = 0;
   int node_id = 0;
-  gtl::FlatMap<string, int> name_to_id;
+  gtl::FlatMap<std::string, int> name_to_id;
 
   Costs node_costs;
   do {
@@ -209,7 +209,7 @@ Status AnalyticalCostEstimator::PredictCosts(const GraphDef& optimized_graph,
 
     // TODO(pcma): Add unit tests for generating CostGraphDef.
     if (cost_graph) {
-      Status s =
+      absl::Status s =
           AddCostNode(node_manager_.get(), op_context, node_id++, node_costs,
                       &name_to_cost_node, &name_to_id, cost_graph);
       if (!s.ok()) {

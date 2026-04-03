@@ -4,6 +4,7 @@
 
 #include "chrome/test/base/chromeos/crosier/upstart.h"
 
+#include "base/notreached.h"
 #include "base/process/launch.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -288,11 +289,10 @@ bool StopJob(const std::string& job,
     // The ui job needs special handling because it is restarted out-of-band by
     // the ui-respawn job when session_manager exits. To work around this, when
     // job is "ui", we would first need to waits for the job to reach a stable
-    // state. See https://crbug.com/891594.
+    // state. See https://crbug.com/187785476.
     //
     // If this is needed, the necessary logic should be added here.
-    CHECK(false) << "StopJob unimplemented for the 'ui' job.";
-    return false;
+    NOTREACHED() << "StopJob unimplemented for the 'ui' job.";
   }
 
   std::vector<std::string> args{"initctl", "stop", job};

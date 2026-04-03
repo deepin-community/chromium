@@ -6,14 +6,18 @@
 
 namespace ui {
 
+std::string_view NoKeyboardLayoutEngine::GetLayoutName() const {
+  return std::string_view();
+}
+
 bool NoKeyboardLayoutEngine::CanSetCurrentLayout() const {
   return false;
 }
 
 void NoKeyboardLayoutEngine::SetCurrentLayoutByName(
     const std::string& layout_name,
-    base::OnceCallback<void(bool)> callback) {
-  std::move(callback).Run(false);
+    base::OnceCallback<void(bool success)> callback) {
+  std::move(callback).Run(/*success=*/false);
 }
 
 bool NoKeyboardLayoutEngine::SetCurrentLayoutFromBuffer(const char* keymap_str,

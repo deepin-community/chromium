@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 
-#include <ostream>  // NOLINT
+#include <ostream>
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
@@ -42,12 +42,6 @@ bool SelectionTemplate<Strategy>::operator==(
       << *this << ' ' << other;
   return anchor_ == other.anchor_ && focus_ == other.focus_ &&
          affinity_ == other.affinity_;
-}
-
-template <typename Strategy>
-bool SelectionTemplate<Strategy>::operator!=(
-    const SelectionTemplate& other) const {
-  return !operator==(other);
 }
 
 template <typename Strategy>
@@ -429,12 +423,6 @@ SelectionInFlatTree ConvertToSelectionInFlatTree(
   }
   builder.SetAffinity(selection.Affinity());
   return builder.Build();
-}
-
-template <typename Strategy>
-void SelectionTemplate<Strategy>::InvalidSelectionResetter::Trace(
-    blink::Visitor* visitor) const {
-  visitor->Trace(document_);
 }
 
 template class CORE_TEMPLATE_EXPORT SelectionTemplate<EditingStrategy>;

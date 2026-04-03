@@ -14,6 +14,8 @@
 #include "base/command_line.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/rtl.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/views/accessibility/view_accessibility.h"
 
 namespace ash {
 
@@ -34,7 +36,7 @@ const int kScrollViewBoundsRectBuffer = 18;
 
 ui::GestureEvent CreateTapEvent() {
   return ui::GestureEvent(0, 0, 0, base::TimeTicks(),
-                          ui::GestureEventDetails(ui::ET_GESTURE_TAP));
+                          ui::GestureEventDetails(ui::EventType::kGestureTap));
 }
 
 }  // namespace
@@ -65,6 +67,10 @@ class AutoclickMenuBubbleControllerTest : public AshTestBase {
   AutoclickMenuView* GetMenuView() {
     return GetBubbleController() ? GetBubbleController()->menu_view_.get()
                                  : nullptr;
+  }
+
+  TrayBubbleView* GetBubbleView() {
+    return GetBubbleController()->bubble_view_.get();
   }
 
   views::View* GetMenuButton(AutoclickMenuView::ButtonId view_id) {
@@ -511,6 +517,50 @@ TEST_F(AutoclickMenuBubbleControllerTest,
       EXPECT_GT(GetScrollViewBounds().y() - scroll_bounds.bottom(), -1);
     }
   }
+}
+
+TEST_F(AutoclickMenuBubbleControllerTest, BubbleViewAccessibleName) {
+  TrayBubbleView* bubble_view = GetBubbleView();
+  ui::AXNodeData node_data;
+  bubble_view->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_EQ(node_data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            GetBubbleController()->GetAccessibleNameForBubble());
+}
+
+TEST_F(AutoclickMenuBubbleControllerTest, BubbleFollowsCursor) {
+  UpdateDisplay("800x600,600x400");
+
+  const gfx::Rect bounds1(800, 600);
+  EXPECT_TRUE(gfx::Rect(bounds1).Contains(
+      GetBubbleView()->GetBoundsInScreen().CenterPoint()));
+
+  const gfx::Rect bounds2(800, 0, 600, 400);
+  auto* event_generator = GetEventGenerator();
+  event_generator->MoveMouseTo(bounds2.CenterPoint());
+  EXPECT_TRUE(
+      bounds2.Contains(GetBubbleView()->GetBoundsInScreen().CenterPoint()));
+
+  event_generator->MoveMouseTo(bounds1.CenterPoint());
+  EXPECT_TRUE(
+      bounds1.Contains(GetBubbleView()->GetBoundsInScreen().CenterPoint()));
+}
+
+TEST_F(AutoclickMenuBubbleControllerTest, BubbleRecreatedAfterDisplayRemoval) {
+  UpdateDisplay("800x600,600x400");
+
+  const gfx::Rect bounds2(800, 0, 600, 400);
+  auto* event_generator = GetEventGenerator();
+  event_generator->MoveMouseTo(bounds2.CenterPoint());
+  EXPECT_TRUE(
+      bounds2.Contains(GetBubbleView()->GetBoundsInScreen().CenterPoint()));
+
+  UpdateDisplay("800x600");
+  EXPECT_FALSE(GetBubbleController()->bubble_widget());
+
+  const gfx::Rect bounds1(800, 600);
+  event_generator->MoveMouseTo(bounds1.CenterPoint());
+  EXPECT_TRUE(
+      bounds1.Contains(GetBubbleView()->GetBoundsInScreen().CenterPoint()));
 }
 
 }  // namespace ash

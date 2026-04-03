@@ -37,8 +37,10 @@
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/visible_selection.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
+#include "third_party/blink/renderer/core/html/forms/html_form_element.h"
 #include "third_party/blink/renderer/core/html/html_br_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/html/html_hr_element.h"
 #include "third_party/blink/renderer/core/html/html_quote_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
@@ -98,6 +100,11 @@ bool IsEditableRootPhrasingContent(const Position& position) {
   }
   return EnclosingNodeOfType(FirstPositionInOrBeforeNode(*editable_root),
                              IsPhrasingContent);
+}
+
+bool IsDisplayInlineType(const HTMLElement* element) {
+  const ComputedStyle* style = element ? element->GetComputedStyle() : nullptr;
+  return style && style->IsDisplayInlineType();
 }
 
 }  // namespace
@@ -273,13 +280,15 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
   if (!start_block || !start_block->NonShadowBoundaryParentNode() ||
       (RuntimeEnabledFeatures::InsertLineBreakIfPhrasingContentEnabled() &&
        IsEditableRootPhrasingContent(insertion_position)) ||
-      IsTableCell(start_block) ||
-      IsA<HTMLFormElement>(*start_block)
+      IsDisplayInlineType(list_child) || IsTableCell(start_block) ||
+      IsA<HTMLFormElement>(*start_block) ||
+      (RuntimeEnabledFeatures::FixLinebreakForPreTagEnabled() &&
+       start_block->HasTagName(html_names::kPreTag)) ||
       // FIXME: If the node is hidden, we don't have a canonical position so we
       // will do the wrong thing for tables and <hr>.
       // https://bugs.webkit.org/show_bug.cgi?id=40342
-      || (!canonical_pos.IsNull() &&
-          IsDisplayInsideTable(canonical_pos.AnchorNode())) ||
+      (!canonical_pos.IsNull() &&
+       IsDisplayInsideTable(canonical_pos.AnchorNode())) ||
       (!canonical_pos.IsNull() &&
        IsA<HTMLHRElement>(*canonical_pos.AnchorNode()))) {
     ApplyCommandToComposite(
@@ -550,7 +559,8 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
           << text_node;
       ReplaceTextInNode(text_node,
                         leading_whitespace.ComputeOffsetInContainerNode(), 1,
-                        NonBreakingSpaceString());
+                        NonBreakingSpaceString(),
+                        EditCommand::PasswordEchoBehavior::kDoNotEcho);
       GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
     }
   }
@@ -573,7 +583,7 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
     }
   }
 
-  // If we got detached due to mutation events, just bail out.
+  // If we got detached due to synchronous events, just bail out.
   if (!start_block->parentNode())
     return;
 
@@ -655,7 +665,7 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
       if (position_after_split.AnchorNode()->IsTextNode()) {
         InsertTextIntoNode(
             To<Text>(position_after_split.ComputeContainerNode()), 0,
-            NonBreakingSpaceString());
+            NonBreakingSpaceString(), PasswordEchoBehavior::kDoNotEcho);
       }
     }
   }

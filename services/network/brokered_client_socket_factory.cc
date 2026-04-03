@@ -5,6 +5,7 @@
 #include "services/network/brokered_client_socket_factory.h"
 
 #include "build/build_config.h"
+#include "net/base/address_list.h"
 #include "net/socket/datagram_client_socket.h"
 #include "net/socket/tcp_client_socket.h"
 #include "net/socket/udp_client_socket.h"
@@ -14,7 +15,6 @@
 
 namespace net {
 
-class AddressList;
 class HostPortPair;
 class NetLog;
 struct NetLogSource;
@@ -29,7 +29,7 @@ namespace network {
 
 BrokeredClientSocketFactory::BrokeredClientSocketFactory(
     mojo::PendingRemote<mojom::SocketBroker> pending_remote)
-    : socket_broker_(std::move(pending_remote)) {}
+    : socket_broker_client_(std::move(pending_remote)) {}
 BrokeredClientSocketFactory::~BrokeredClientSocketFactory() = default;
 
 std::unique_ptr<net::DatagramClientSocket>
@@ -73,20 +73,26 @@ BrokeredClientSocketFactory::CreateSSLClientSocket(
 void BrokeredClientSocketFactory::BrokerCreateTcpSocket(
     net::AddressFamily address_family,
     mojom::SocketBroker::CreateTcpSocketCallback callback) {
-  socket_broker_->CreateTcpSocket(address_family, std::move(callback));
+  socket_broker_client_.CreateTcpSocket(address_family, std::move(callback));
 }
 
 void BrokeredClientSocketFactory::BrokerCreateUdpSocket(
     net::AddressFamily address_family,
     mojom::SocketBroker::CreateUdpSocketCallback callback) {
-  socket_broker_->CreateUdpSocket(address_family, std::move(callback));
+  socket_broker_client_.CreateUdpSocket(address_family, std::move(callback));
+}
+
+bool BrokeredClientSocketFactory::ShouldBroker(
+    const net::IPAddress& address) const {
+  return broker_helper_.ShouldBroker(address);
 }
 
 bool BrokeredClientSocketFactory::ShouldBroker(
     const net::AddressList& addresses) const {
   for (const auto& address : addresses) {
-    if (broker_helper_.ShouldBroker(address.address()))
+    if (ShouldBroker(address.address())) {
       return true;
+    }
   }
   return false;
 }

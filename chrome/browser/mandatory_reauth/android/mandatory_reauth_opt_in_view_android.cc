@@ -6,9 +6,12 @@
 
 #include <jni.h>
 
-#include "chrome/browser/mandatory_reauth/android/internal/jni/MandatoryReauthOptInBottomSheetViewBridge_jni.h"
+#include "base/notreached.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/mandatory_reauth/android/internal/jni/MandatoryReauthOptInBottomSheetViewBridge_jni.h"
 
 namespace autofill {
 
@@ -60,4 +63,11 @@ void MandatoryReauthOptInViewAndroid::Hide() {
   }
 }
 
+bool MandatoryReauthOptInViewAndroid::IsMouseHovered() const {
+  // This bubble is not managed by `autofill::BubbleManager`.
+  NOTREACHED();
+}
+
 }  // namespace autofill
+
+DEFINE_JNI(MandatoryReauthOptInBottomSheetViewBridge)

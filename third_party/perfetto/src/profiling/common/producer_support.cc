@@ -16,6 +16,7 @@
 
 #include "src/profiling/common/producer_support.h"
 
+#include <algorithm>
 #include <optional>
 
 #include "perfetto/ext/base/android_utils.h"
@@ -44,7 +45,7 @@ std::optional<Package> FindInPackagesList(
     }
 
     if (pkg.uid == lookup_uid) {
-      return std::move(pkg);  // -Wreturn-std-move-in-c++11
+      return pkg;
     }
   }
   return std::nullopt;

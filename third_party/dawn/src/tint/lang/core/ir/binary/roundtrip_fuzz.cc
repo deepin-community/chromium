@@ -29,41 +29,41 @@
 #include "src/tint/lang/core/ir/binary/decode.h"
 #include "src/tint/lang/core/ir/binary/encode.h"
 #include "src/tint/lang/core/ir/disassembler.h"
+#include "src/tint/lang/core/ir/validator.h"
 
 namespace tint::core::ir::binary {
 namespace {
 
-void IRBinaryRoundtripFuzzer(core::ir::Module& module) {
-    auto encoded = Encode(module);
+Result<SuccessType> IRBinaryRoundtripFuzzer(core::ir::Module& module, const fuzz::ir::Context&) {
+    auto encoded = EncodeToBinary(module);
     if (encoded != Success) {
-        TINT_ICE() << "Encode() failed\n" << encoded.Failure();
-        return;
+        // Failing to encode, not ICE'ing, indicates that an internal limit to the IR binary
+        // encoding/decoding logic was hit. Due to differences between the AST and IR
+        // implementations, there exist corner cases where these internal limits are hit for IR,
+        // but not AST.
+        return Failure{"Failed to encode module to binary"};
     }
 
-    auto decoded = Decode(encoded->Slice());
-    if (decoded != Success) {
-        TINT_ICE() << "Decode() failed\n" << decoded.Failure();
-        return;
-    }
+    auto decoded = Decode(encoded->AsSpan());
+    TINT_ASSERT(decoded == Success) << "Decode() failed\n" << decoded.Failure();
 
-    auto in = Disassemble(module);
-    auto out = Disassemble(decoded.Get());
-    if (in != out) {
-        TINT_ICE() << "Roundtrip produced different disassembly\n"
-                   << "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n"
-                   << "-=                     In                      =-\n"
-                   << "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n"
-                   << in << "\n"
-                   << "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n"
-                   << "-=                     Out                     =-\n"
-                   << "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n"
-                   << out << "\n"
-                   << "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n";
-        return;
-    }
+    auto in = Disassembler(module).Plain();
+    auto out = Disassembler(decoded.Get()).Plain();
+    TINT_ASSERT(in == out) << "Roundtrip produced different disassembly\n"
+                           << "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n"
+                           << "-=                     In                      =-\n"
+                           << "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n"
+                           << in << "\n"
+                           << "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n"
+                           << "-=                     Out                     =-\n"
+                           << "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n"
+                           << out << "\n"
+                           << "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n";
+    return Success;
 }
 
 }  // namespace
 }  // namespace tint::core::ir::binary
 
-TINT_IR_MODULE_FUZZER(tint::core::ir::binary::IRBinaryRoundtripFuzzer);
+TINT_IR_MODULE_FUZZER(tint::core::ir::binary::IRBinaryRoundtripFuzzer,
+                      tint::core::ir::Capabilities{});

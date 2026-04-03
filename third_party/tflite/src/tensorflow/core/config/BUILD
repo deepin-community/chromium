@@ -21,7 +21,10 @@ cc_library(
         "flags.h",
     ],
     visibility = ["//tensorflow:internal"],
-    deps = ["//tensorflow/core/platform:stringpiece"],
+    deps = [
+        "//tensorflow/core/platform:stringpiece",
+        "@com_google_absl//absl/strings:string_view",
+    ],
 )
 
 filegroup(
@@ -63,6 +66,7 @@ cc_library(
         "//tensorflow/core/platform:stringpiece",
         "//tensorflow/core/util:env_var",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 
@@ -80,7 +84,6 @@ tf_cc_test(
 pytype_strict_library(
     name = "flags_py",
     srcs = ["flags.py"],
-    srcs_version = "PY3",
     visibility = ["//tensorflow:internal"],
     deps = [
         "//tensorflow/python:flags_pybind",
@@ -93,7 +96,6 @@ py_strict_test(
     size = "small",
     srcs = ["flags_test.py"],
     main = "flags_test.py",
-    python_version = "PY3",
     deps = [
         ":flags_py",
         #internal proto upb dep

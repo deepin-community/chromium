@@ -5,7 +5,7 @@
 // https://gpuweb.github.io/gpuweb/
 
 [
-    Exposed(Window WebGPU, DedicatedWorker WebGPU, SharedWorker WebGPUExperimentalFeatures, ServiceWorker WebGPUExperimentalFeatures),
+    Exposed=(Window, Worker),
     SecureContext
 ] interface GPUTexture {
     [RaisesException] GPUTextureView createView(optional GPUTextureViewDescriptor descriptor = {});
@@ -19,5 +19,6 @@
     readonly attribute GPUTextureDimension dimension;
     readonly attribute GPUTextureFormat format;
     readonly attribute GPUFlagsConstant usage;
+    [RuntimeEnabled=WebGPUCompatibilityMode] readonly attribute (GPUTextureViewDimension or undefined) textureBindingViewDimension;
 };
 GPUTexture includes GPUObjectBase;

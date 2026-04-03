@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -32,6 +32,7 @@ copy_to_gen("sources") {
     "dynamic-loading-css.html",
     "dynamic-loading-javascript.html",
     "dynamic.css",
+    "error-with-cause.html",
     "error-with-sourcemap.html",
     "error-with-sourcemap.js",
     "error-with-sourcemap.js.map",
@@ -42,6 +43,8 @@ copy_to_gen("sources") {
     "infinity-loop.html",
     "inline-css.html",
     "inline-scripts.html",
+    "inline-variable-frames.html",
+    "inline-variable-frames.js",
     "inline-variable.html",
     "inline-variable.js",
     "live-edit-moving-breakpoint.html",
@@ -55,6 +58,8 @@ copy_to_gen("sources") {
     "minified-errors.js",
     "minified-sourcecode-1.html",
     "minified-sourcecode-1.min.js",
+    "minified-sourcecode-2.html",
+    "minified-sourcecode-2.min.js",
     "minified-sourcecode.html",
     "minified-sourcecode.js",
     "multi-files-mycode.js",
@@ -130,6 +135,7 @@ copy_to_gen("sources") {
     "sourcemap-stepping.map",
     "sourcemap-without-mappings.map",
     "sourceurl.html",
+    "stylesheet-source-url-comment.html",
     "wasm/add.wasm",
     "wasm/call-to-add-wasm.html",
     "wasm/callstack-wasm-to-js.html",

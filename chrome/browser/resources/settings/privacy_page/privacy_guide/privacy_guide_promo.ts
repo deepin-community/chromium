@@ -7,7 +7,9 @@
  * 'settings-privacy-guide-promo' is an element representing a promo for the
  * privacy guide feature.
  */
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
+import 'chrome://resources/cr_elements/cr_button/cr_button.js';
+
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import type {MetricsBrowserProxy} from '../../metrics_browser_proxy.js';
@@ -26,18 +28,6 @@ export class PrivacyGuidePromoElement extends PrivacyGuidePromoElementBase {
 
   static get template() {
     return getTemplate();
-  }
-
-  static get properties() {
-    return {
-      /**
-       * Preferences state.
-       */
-      prefs: {
-        type: Object,
-        notify: true,
-      },
-    };
   }
 
   private metricsBrowserProxy_: MetricsBrowserProxy =

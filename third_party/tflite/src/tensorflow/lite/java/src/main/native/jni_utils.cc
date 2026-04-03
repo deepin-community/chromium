@@ -19,6 +19,8 @@ limitations under the License.
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <vector>
+
 #include "tensorflow/lite/c/jni/jni_utils.h"
 
 namespace tflite {
@@ -40,9 +42,7 @@ void ThrowException(JNIEnv* env, const char* clazz, const char* fmt, ...) {
   } else {
     env->ThrowNew(env->FindClass(clazz), "");
   }
-  if (message) {
-    free(message);
-  }
+  free(message);
   va_end(args);
 }
 

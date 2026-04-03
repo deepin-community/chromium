@@ -5,6 +5,7 @@
 #include "components/exo/display.h"
 
 #include <GLES2/gl2extchromium.h>
+
 #include <iterator>
 #include <memory>
 #include <utility>
@@ -31,8 +32,6 @@
 #include "components/exo/toast_surface.h"
 #include "components/exo/toast_surface_manager.h"
 #include "components/exo/xdg_shell_surface.h"
-#include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
-#include "gpu/ipc/common/gpu_memory_buffer_impl_native_pixmap.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "third_party/khronos/GLES2/gl2ext.h"
 #include "ui/gfx/linux/client_native_pixmap_factory_dmabuf.h"
@@ -93,36 +92,25 @@ std::unique_ptr<SharedMemory> Display::CreateSharedMemory(
 
 std::unique_ptr<Buffer> Display::CreateLinuxDMABufBuffer(
     const gfx::Size& size,
-    gfx::BufferFormat format,
+    viz::SharedImageFormat format,
     gfx::NativePixmapHandle handle,
     bool y_invert) {
   TRACE_EVENT1("exo", "Display::CreateLinuxDMABufBuffer", "size",
                size.ToString());
 
-  gfx::GpuMemoryBufferHandle gmb_handle;
-  gmb_handle.type = gfx::NATIVE_PIXMAP;
-  gmb_handle.native_pixmap_handle = std::move(handle);
-  std::unique_ptr<gfx::GpuMemoryBuffer> gpu_memory_buffer =
-      gpu::GpuMemoryBufferImplNativePixmap::CreateFromHandle(
-          client_native_pixmap_factory_.get(), std::move(gmb_handle), size,
-          format, gfx::BufferUsage::GPU_READ,
-          gpu::GpuMemoryBufferImpl::DestructionCallback());
-  if (!gpu_memory_buffer) {
-    LOG(ERROR) << "Failed to create GpuMemoryBuffer from handle";
-    return nullptr;
-  }
+  gfx::GpuMemoryBufferHandle gmb_handle(std::move(handle));
 
+  const gfx::BufferUsage buffer_usage = gfx::BufferUsage::GPU_READ;
+
+  // Using readlock fence instead of query for zero-copy.
+  const unsigned query_type = 0;
   // Using zero-copy for optimal performance.
-  bool use_zero_copy = true;
+  const bool use_zero_copy = true;
+  const bool is_overlay_candidate = true;
 
-  return std::make_unique<Buffer>(
-      std::move(gpu_memory_buffer),
-      gpu::NativeBufferNeedsPlatformSpecificTextureTarget(format)
-          ? gpu::GetPlatformSpecificTextureTarget()
-          : GL_TEXTURE_2D,
-      // COMMANDS_COMPLETED queries are required by native pixmaps.
-      GL_COMMANDS_COMPLETED_CHROMIUM, use_zero_copy,
-      /*is_overlay_candidate=*/true, y_invert);
+  return Buffer::CreateBufferFromGMBHandle(
+      std::move(gmb_handle), size, format, buffer_usage, query_type,
+      use_zero_copy, is_overlay_candidate, y_invert);
 }
 
 std::unique_ptr<ShellSurface> Display::CreateShellSurface(Surface* surface) {

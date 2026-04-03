@@ -8,18 +8,22 @@
 #include <memory>
 #include <string>
 
+#include "base/byte_count.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer_delegate.h"
 #include "components/page_load_metrics/common/page_load_metrics.mojom.h"
+#include "content/public/browser/auction_result.h"
+#include "content/public/browser/error_navigation_trigger.h"
+#include "content/public/browser/frame_tree_node_id.h"
+#include "content/public/browser/navigation_discard_reason.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
 #include "net/cookies/canonical_cookie.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/use_counter/use_counter_feature.h"
-#include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
-
 #include "url/gurl.h"
 
 namespace blink {
@@ -52,10 +56,10 @@ struct ExtraRequestCompleteInfo {
   ExtraRequestCompleteInfo(
       const url::SchemeHostPort& final_url,
       const net::IPEndPoint& remote_endpoint,
-      int frame_tree_node_id,
+      content::FrameTreeNodeId frame_tree_node_id,
       bool was_cached,
-      int64_t raw_body_bytes,
-      int64_t original_network_content_length,
+      base::ByteCount raw_body_bytes,
+      base::ByteCount original_network_content_length,
       network::mojom::RequestDestination request_destination,
       int net_error,
       std::unique_ptr<net::LoadTimingInfo> load_timing_info);
@@ -75,17 +79,17 @@ struct ExtraRequestCompleteInfo {
   const net::IPEndPoint remote_endpoint;
 
   // The frame tree node id that initiated the request.
-  const int frame_tree_node_id;
+  const content::FrameTreeNodeId frame_tree_node_id;
 
   // True if the resource was loaded from cache.
   const bool was_cached;
 
   // The number of body (not header) prefilter bytes.
-  const int64_t raw_body_bytes;
+  const base::ByteCount raw_body_bytes;
 
   // The number of body (not header) bytes that the data reduction proxy saw
   // before it compressed the requests.
-  const int64_t original_network_content_length;
+  const base::ByteCount original_network_content_length;
 
   // The type of the request as gleaned from the mime type.  This may
   // be more accurate than the type in the ExtraRequestStartInfo since we can
@@ -104,18 +108,19 @@ struct ExtraRequestCompleteInfo {
 
 // Information related to failed provisional loads.
 struct FailedProvisionalLoadInfo {
-  FailedProvisionalLoadInfo(base::TimeDelta interval, net::Error error);
+  FailedProvisionalLoadInfo(
+      base::TimeDelta interval,
+      net::Error error,
+      int net_extended_error_code,
+      std::optional<content::ErrorNavigationTrigger> error_navigation_trigger,
+      content::NavigationDiscardReason discard_reason);
   ~FailedProvisionalLoadInfo();
 
   base::TimeDelta time_to_failed_provisional_load;
   net::Error error;
-};
-
-// Struct for storing per-frame memory update data.
-struct MemoryUpdate {
-  content::GlobalRenderFrameHostId routing_id;
-  int64_t delta_bytes;
-  MemoryUpdate(content::GlobalRenderFrameHostId id, int64_t delta);
+  int net_extended_error_code;
+  std::optional<content::ErrorNavigationTrigger> error_navigation_trigger;
+  content::NavigationDiscardReason discard_reason;
 };
 
 // Interface for PageLoadMetrics observers. Only PageLoadMetricsForwardObserver
@@ -134,7 +139,7 @@ class PageLoadMetricsObserverInterface {
   // FORWARD_OBSERVING may be deleted. If the observer in the parent page
   // receives forward metrics via FORWARD_OBSERVING, and returns STOP_OBSERVING,
   // It just stop observing forward metrics, and still see other callbacks for
-  // the orinally bound page.
+  // the originally bound page.
   // Most events requiring preprocesses, such as lifecycle events, are forwarded
   // to the outer page at the PageLoadTracker layer, and only events that are
   // directly delivered to the observers need FORWARD_OBSERVING. See
@@ -160,8 +165,6 @@ class PageLoadMetricsObserverInterface {
     FORWARD_OBSERVING,  // Deprecated. See the detailed comments above.
   };
 
-  using FrameTreeNodeId = int;
-
   PageLoadMetricsObserverInterface();
   virtual ~PageLoadMetricsObserverInterface();
 
@@ -178,7 +181,7 @@ class PageLoadMetricsObserverInterface {
   // Returns the observer name. It should points a fixed address that is bound
   // to the class as we use the pointer as a key in a map at PageLoadTracker.
   // Should be implemented when the class needs to return FORWARD_OBSERVING.
-  // TODO(https://crbug.com/1301880): Make all inheritances override this method
+  // TODO(crbug.com/40216775): Make all inheritances override this method
   // and make it pure virtual method.
   virtual const char* GetObserverName() const = 0;
 
@@ -213,7 +216,7 @@ class PageLoadMetricsObserverInterface {
   //   affect per-outermost page lifecycle events that are preprocessed in the
   //   PageLoadTracker
   //
-  // TODO(crbug.com/1317494): FencedFrames support is still in progress. Update
+  // TODO(crbug.com/40222513): FencedFrames support is still in progress. Update
   // the above description once we fixed all subclasses.
   virtual ObservePolicy OnFencedFramesStart(
       content::NavigationHandle* navigation_handle,
@@ -230,6 +233,13 @@ class PageLoadMetricsObserverInterface {
   virtual ObservePolicy OnPreviewStart(
       content::NavigationHandle* navigation_handle,
       const GURL& currently_committed_url) = 0;
+
+  // Called when the NavigationHandleTiming associated with `navigation_handle`
+  // has been updated. This is called only for main frame navigations. See the
+  // comment at `WebContentsObserver::DidUpdateNavigationHandleTiming()` for
+  // more details.
+  virtual ObservePolicy OnNavigationHandleTimingUpdated(
+      content::NavigationHandle* navigation_handle) = 0;
 
   // OnRedirect is triggered when a page load redirects to another URL.
   // The navigation handle holds relevant data for the navigation, but will
@@ -293,7 +303,7 @@ class PageLoadMetricsObserverInterface {
   // back-forward cache can be evicted at any moment, and in this case
   // OnComplete will be called.
   //
-  // At the moment, the default implementtion of OnEnterBackForwardCache()
+  // At the moment, the default implementation of OnEnterBackForwardCache()
   // invokes OnComplete and returns STOP_OBSERVING, so the page will not be
   // tracked after it is stored in the back-forward cache and after it is
   // restored. Return CONTINUE_OBSERVING explicitly to ensure that you cover the
@@ -314,11 +324,16 @@ class PageLoadMetricsObserverInterface {
       content::NavigationHandle* navigation_handle) = 0;
 
   // Called before OnCommit. The observer should return whether it wishes to
-  // observe navigations whose main resource has MIME type |mine_type|. The
+  // observe navigations whose main resource has MIME type |mime_type|. The
   // default is to observe HTML and XHTML only. Note that PageLoadTrackers only
   // track XHTML, HTML, and MHTML (related/multipart).
   virtual ObservePolicy ShouldObserveMimeType(
       const std::string& mime_type) const = 0;
+
+  // Called before OnCommit. The observer should return whether it wishes to
+  // observe navigations for |url|'s scheme. The default is to observe http and
+  // https only.
+  virtual ObservePolicy ShouldObserveScheme(const GURL& url) const = 0;
 
   // The callbacks below are only invoked after a navigation commits, for
   // tracked page loads. Page loads that don't meet the criteria for being
@@ -345,13 +360,13 @@ class PageLoadMetricsObserverInterface {
   // OnInputTimingUpdate is triggered when an updated InputTiming is available
   // at the subframe level. This method may be called multiple times over the
   // course of the page load.
-  virtual void OnInputTimingUpdate(
+  virtual void OnEventTimingUpdate(
       content::RenderFrameHost* subframe_rfh,
-      const mojom::InputTiming& input_timing_delta) = 0;
+      const std::vector<mojom::EventTimingPtr>& event_timings) = 0;
 
-  // OnPageInputTimingUpdate is triggered when an updated InputTiming is
+  // OnPageEventTimingUpdate is triggered when an updated InputTiming is
   // available at the page level.
-  virtual void OnPageInputTimingUpdate(uint64_t num_interactions) = 0;
+  virtual void OnPageEventTimingUpdate(uint64_t num_interactions) = 0;
 
   // OnPageRenderDataChanged is triggered when an updated PageRenderData is
   // available at the page level. This method may be called multiple times over
@@ -385,12 +400,20 @@ class PageLoadMetricsObserverInterface {
   virtual void OnLoadEventStart(const mojom::PageLoadTiming& timing) = 0;
   virtual void OnParseStart(const mojom::PageLoadTiming& timing) = 0;
   virtual void OnParseStop(const mojom::PageLoadTiming& timing) = 0;
+  virtual void OnConnectStart(const mojom::PageLoadTiming& timing) = 0;
+  virtual void OnConnectEnd(const mojom::PageLoadTiming& timing) = 0;
+  virtual void OnDomainLookupStart(const mojom::PageLoadTiming& timing) = 0;
+  virtual void OnDomainLookupEnd(const mojom::PageLoadTiming& timing) = 0;
 
   // On*PaintInPage(...) are invoked when the first relevant paint in the
   // page, across all frames, is observed.
   virtual void OnFirstPaintInPage(const mojom::PageLoadTiming& timing) = 0;
   virtual void OnFirstImagePaintInPage(const mojom::PageLoadTiming& timing) = 0;
   virtual void OnFirstContentfulPaintInPage(
+      const mojom::PageLoadTiming& timing) = 0;
+  virtual void OnMonotonicFirstPaintInPage(
+      const mojom::PageLoadTiming& timing) = 0;
+  virtual void OnMonotonicFirstContentfulPaintInPage(
       const mojom::PageLoadTiming& timing) = 0;
 
   // These are called once every time when the page is restored from the
@@ -417,6 +440,21 @@ class PageLoadMetricsObserverInterface {
 
   virtual void OnFirstInputInPage(const mojom::PageLoadTiming& timing) = 0;
 
+  // Called when the standard UserTiming mark
+  // `performance.mark("mark_fully_loaded")` occurs in the main frame.
+  virtual void OnUserTimingMarkFullyLoaded(
+      const mojom::PageLoadTiming& timing) = 0;
+
+  // Called when the standard UserTiming mark
+  // `performance.mark("mark_fully_visible")` occurs in the main frame.
+  virtual void OnUserTimingMarkFullyVisible(
+      const mojom::PageLoadTiming& timing) = 0;
+
+  // Called when the standard UserTiming mark
+  // `performance.mark("mark_interactive")` occurs in the main frame.
+  virtual void OnUserTimingMarkInteractive(
+      const mojom::PageLoadTiming& timing) = 0;
+
   // Invoked when there is an update to the loading behavior_flags in the given
   // frame.
   virtual void OnLoadingBehaviorObserved(content::RenderFrameHost* rfh,
@@ -431,11 +469,11 @@ class PageLoadMetricsObserverInterface {
       content::RenderFrameHost* rfh,
       const std::vector<blink::UseCounterFeature>& features) = 0;
 
-  // The smoothness metrics is shared over shared-memory. The observer should
-  // create a mapping (by calling |shared_memory.Map()|) so that they are able
-  // to read from the shared memory.
-  virtual void SetUpSharedMemoryForSmoothness(
-      const base::ReadOnlySharedMemoryRegion& shared_memory) = 0;
+  // The dropped frame count metrics are shared over shared-memory. The observer
+  // should create a mapping (by calling |shared_memory.Map()|) so that they are
+  // able to read from the shared memory.
+  virtual void SetUpSharedMemoryForDroppedFrames(
+      const base::ReadOnlySharedMemoryRegion& dropped_frames_memory) = 0;
 
   // Invoked when there is data use for loading a resource on the page
   // for a given RenderFrameHost. This only contains resources that have had
@@ -460,8 +498,8 @@ class PageLoadMetricsObserverInterface {
   // and the subframe has changed, e.g. the subframe is initially added; the
   // subframe's position is updated explicitly or inherently (e.g. sticky
   // position while the page is being scrolled).
-  //
-  // TODO(crbug/1048175): Expose intersections to observers via shared delegate.
+  // Exposing intersections via a shared delegate was considered but not pursued
+  // due to lack of a use case. See crbug.com/40117157 for context.
   virtual void OnMainFrameIntersectionRectChanged(
       content::RenderFrameHost* rfh,
       const gfx::Rect& main_frame_intersection_rect) = 0;
@@ -472,10 +510,11 @@ class PageLoadMetricsObserverInterface {
   virtual void OnMainFrameViewportRectChanged(
       const gfx::Rect& main_frame_viewport_rect) = 0;
 
-  // Called when an image ad rectangle changed. An empty `image_ad_rect` is used
-  // to signal the removal of the rectangle. Only invoked on the main frame.
-  virtual void OnMainFrameImageAdRectsChanged(
-      const base::flat_map<int, gfx::Rect>& main_frame_image_ad_rects) = 0;
+  // Called when the geometry of ad elements changed. The key of
+  // `main_frame_ad_rects` is the element's node ID. Only invoked on the main
+  // frame.
+  virtual void OnMainFrameAdRectsChanged(
+      const base::flat_map<int, gfx::Rect>& main_frame_ad_rects) = 0;
 
   // Invoked when the UMA metrics subsystem is persisting metrics as the
   // application goes into the background, on platforms where the browser
@@ -496,9 +535,9 @@ class PageLoadMetricsObserverInterface {
   // A destructor of observer is invoked in the following mutually exclusive
   // paths:
   //
-  // - (If an ovserver doesn't override OnEnterBackForwardCache) When
+  // - (If an observer doesn't override OnEnterBackForwardCache) When
   //   OnEnterBackForwardCache is invoked, it calls OnComplete and returns
-  //   STOP_OBSERVING, then the ovserver is pruned.
+  //   STOP_OBSERVING, then the observer is pruned.
   // - When some callback returned STOP_OBSERVING, the observer is pruned with
   //   no more callback.
   // - When PageLoadTracker destructed, OnComplete is invoked just before
@@ -547,7 +586,8 @@ class PageLoadMetricsObserverInterface {
   // to observe deletion of node, OnSubFrameDeleted is more relevant.
   virtual void OnRenderFrameDeleted(
       content::RenderFrameHost* render_frame_host) = 0;
-  virtual void OnSubFrameDeleted(int frame_tree_node_id) = 0;
+  virtual void OnSubFrameDeleted(
+      content::FrameTreeNodeId frame_tree_node_id) = 0;
 
   // Called when a cookie is read for a resource request or by document.cookie.
   virtual void OnCookiesRead(
@@ -587,14 +627,27 @@ class PageLoadMetricsObserverInterface {
   // Called when the previewed page is activated for the tab promotion.
   virtual void DidActivatePreviewedPage(base::TimeTicks activation_time) = 0;
 
-  // Called when V8 per-frame memory usage updates are available. Each
-  // MemoryUpdate consists of a GlobalRenderFrameHostId and a nonzero int64_t
-  // change in bytes used.
-  virtual void OnV8MemoryChanged(
-      const std::vector<MemoryUpdate>& memory_updates) = 0;
-
   // Called when a `SharedStorageWorkletHost` is created.
   virtual void OnSharedStorageWorkletHostCreated() = 0;
+
+  // Called when `sharedStorage.selectURL()` is called for some frame on the
+  // page tracked.
+  virtual void OnSharedStorageSelectURLCalled() = 0;
+
+  // Called when `performance.mark()` is emitted in the main frame except for
+  // the standard UserTiming marks `mark_fully_loaded`, `mark_fully_visible`,
+  // and `mark_interactive` occur. Those are managed in PageLoadTiming
+  // separately and tracked in in a different timing.
+  virtual void OnCustomUserTimingMarkObserved(
+      const std::vector<mojom::CustomUserTimingMarkPtr>& timings) = 0;
+
+  // Called when a Fledge auction completes.
+  virtual void OnAdAuctionComplete(bool is_server_auction,
+                                   bool is_on_device_auction,
+                                   content::AuctionResult result) = 0;
+
+  // Called when the renderer process for the primary main frame is gone.
+  virtual void OnPrimaryPageRenderProcessGone() = 0;
 
  private:
   base::WeakPtrFactory<PageLoadMetricsObserverInterface> weak_factory_{this};

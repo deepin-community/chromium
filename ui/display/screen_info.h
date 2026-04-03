@@ -29,16 +29,16 @@ struct DISPLAY_EXPORT ScreenInfo {
   // The screen depth in bits per pixel.
   int depth = 0;
 
+  // The area around an editable region where handwriting should still be
+  // possible.
+  int handwriting_radius = 0;
+
   // The bits per colour component. This assumes that the colours are balanced
   // equally.
   int depth_per_component = 0;
 
   // This can be true for black and white printers
   bool is_monochrome = false;
-
-  // The display frequency in Hz of the monitor. Set to 0 if it fails in the
-  // monitor frequency query.
-  float display_frequency = 0;
 
   // This is set from the rcMonitor member of MONITORINFOEX, to whit:
   //   "A RECT structure that specifies the display monitor rectangle,
@@ -65,7 +65,7 @@ struct DISPLAY_EXPORT ScreenInfo {
 
   // This is the orientation angle of the displayed content in degrees.
   // It is the opposite of the physical rotation.
-  // TODO(crbug.com/840189): we should use an enum rather than a number here.
+  // TODO(crbug.com/41387359): we should use an enum rather than a number here.
   uint16_t orientation_angle = 0;
 
   // Whether this Screen is part of a multi-screen extended visual workspace.
@@ -92,8 +92,8 @@ struct DISPLAY_EXPORT ScreenInfo {
   ScreenInfo(const ScreenInfo& other);
   ~ScreenInfo();
   ScreenInfo& operator=(const ScreenInfo& other);
-  bool operator==(const ScreenInfo& other) const;
-  bool operator!=(const ScreenInfo& other) const;
+
+  friend bool operator==(const ScreenInfo&, const ScreenInfo&) = default;
 
   // Returns a string representation of the screen.
   std::string ToString() const;

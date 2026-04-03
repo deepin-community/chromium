@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -20,42 +21,42 @@ namespace content {
 
 class TestDevToolsProtocolClient : public DevToolsAgentHostClient {
  public:
-  typedef base::RepeatingCallback<bool(const base::Value::Dict&)>
+  typedef base::RepeatingCallback<bool(const base::DictValue&)>
       NotificationMatcher;
 
   TestDevToolsProtocolClient();
   ~TestDevToolsProtocolClient() override;
 
- protected:
-  const base::Value::Dict* SendCommand(std::string method,
-                                       base::Value::Dict params,
-                                       bool wait = true) {
-    return SendSessionCommand(method, std::move(params), std::string(), wait);
-  }
-
-  const base::Value::Dict* SendCommandSync(std::string method) {
-    return SendCommand(std::move(method), base::Value::Dict(), true);
-  }
-  const base::Value::Dict* SendCommandSync(std::string method,
-                                           base::Value::Dict params) {
-    return SendCommand(std::move(method), std::move(params), true);
-  }
-  const base::Value::Dict* SendCommandAsync(std::string method) {
-    return SendCommand(std::move(method), base::Value::Dict(), false);
-  }
-  const base::Value::Dict* SendCommandAsync(std::string method,
-                                            base::Value::Dict params) {
-    return SendCommand(std::move(method), std::move(params), false);
-  }
-
-  const base::Value::Dict* SendSessionCommand(const std::string method,
-                                              base::Value::Dict params,
-                                              const std::string session_id,
-                                              bool wait);
-
+  void AttachToFrameTreeHost(RenderFrameHost* frame);
   void AttachToWebContents(WebContents* web_contents);
   void AttachToTabTarget(WebContents* web_contents);
   void AttachToBrowserTarget();
+
+  const base::DictValue* SendCommand(std::string method,
+                                     base::DictValue params,
+                                     bool wait = true) {
+    return SendSessionCommand(method, std::move(params), std::string(), wait);
+  }
+
+  const base::DictValue* SendCommandSync(std::string method) {
+    return SendCommand(std::move(method), base::DictValue(), true);
+  }
+  const base::DictValue* SendCommandSync(std::string method,
+                                         base::DictValue params) {
+    return SendCommand(std::move(method), std::move(params), true);
+  }
+  const base::DictValue* SendCommandAsync(std::string method) {
+    return SendCommand(std::move(method), base::DictValue(), false);
+  }
+  const base::DictValue* SendCommandAsync(std::string method,
+                                          base::DictValue params) {
+    return SendCommand(std::move(method), std::move(params), false);
+  }
+
+  const base::DictValue* SendSessionCommand(const std::string method,
+                                            base::DictValue params,
+                                            const std::string session_id,
+                                            bool wait);
 
   void DetachProtocolClient() {
     if (agent_host_) {
@@ -64,25 +65,29 @@ class TestDevToolsProtocolClient : public DevToolsAgentHostClient {
     }
   }
 
-  bool HasExistingNotification() const { return !notifications_.empty(); }
-  bool HasExistingNotification(const std::string& notification) const;
-  bool HasExistingNotificationMatching(
-      base::FunctionRef<bool(const base::Value::Dict&)> pred) const;
-
-  base::Value::Dict WaitForNotification(const std::string& notification,
-                                        bool allow_existing);
-
-  base::Value::Dict WaitForNotification(const std::string& notification) {
-    return WaitForNotification(notification, false);
-  }
+  void ClearNotifications() { notifications_.clear(); }
 
   // Waits for a notification whose params, when passed to |matcher|, returns
   // true. Existing notifications are allowed.
-  base::Value::Dict WaitForMatchingNotification(
+  base::DictValue WaitForMatchingNotification(
       const std::string& notification,
       const NotificationMatcher& matcher);
 
-  void ClearNotifications() { notifications_.clear(); }
+  base::DictValue WaitForNotification(const std::string& notification,
+                                      bool allow_existing);
+
+ protected:
+  void DispatchProtocolMessage(DevToolsAgentHost* agent_host,
+                               base::span<const uint8_t> message) override;
+
+  bool HasExistingNotification() const { return !notifications_.empty(); }
+  bool HasExistingNotification(const std::string& notification) const;
+  bool HasExistingNotificationMatching(
+      base::FunctionRef<bool(const base::DictValue&)> pred) const;
+
+  base::DictValue WaitForNotification(const std::string& notification) {
+    return WaitForNotification(notification, false);
+  }
 
   void set_agent_host_can_close() { agent_host_can_close_ = true; }
 
@@ -103,8 +108,13 @@ class TestDevToolsProtocolClient : public DevToolsAgentHostClient {
     may_write_local_files_ = may_write_local_files;
   }
 
-  const base::Value::Dict* result() const;
-  const base::Value::Dict* error() const;
+  void SetNotAttachableHosts(
+      const std::set<std::string>& not_attachable_hosts) {
+    not_attachable_hosts_ = not_attachable_hosts;
+  }
+
+  const base::DictValue* result() const;
+  const base::DictValue* error() const;
   int received_responses_count() const { return received_responses_count_; }
 
   scoped_refptr<DevToolsAgentHost> agent_host_;
@@ -115,14 +125,13 @@ class TestDevToolsProtocolClient : public DevToolsAgentHostClient {
   void WaitForResponse();
   void RunLoopUpdatingQuitClosure();
 
-  void DispatchProtocolMessage(DevToolsAgentHost* agent_host,
-                               base::span<const uint8_t> message) override;
   void AgentHostClosed(DevToolsAgentHost* agent_host) override;
   std::optional<url::Origin> GetNavigationInitiatorOrigin() override;
   bool AllowUnsafeOperations() override;
   bool IsTrusted() override;
   bool MayReadLocalFiles() override;
   bool MayWriteLocalFiles() override;
+  bool MayAttachToURL(const GURL& url, bool is_webui) override;
 
   int last_sent_id_ = 0;
   int waiting_for_command_result_id_ = 0;
@@ -130,9 +139,9 @@ class TestDevToolsProtocolClient : public DevToolsAgentHostClient {
   NotificationMatcher waiting_for_notification_matcher_;
 
   int received_responses_count_ = 0;
-  base::Value::Dict response_;
-  base::Value::Dict received_notification_params_;
-  std::vector<base::Value::Dict> notifications_;
+  base::DictValue response_;
+  base::DictValue received_notification_params_;
+  std::vector<base::DictValue> notifications_;
 
   bool in_dispatch_ = false;
   bool agent_host_can_close_ = false;
@@ -143,6 +152,7 @@ class TestDevToolsProtocolClient : public DevToolsAgentHostClient {
   std::optional<url::Origin> navigation_initiator_origin_;
   bool may_read_local_files_ = true;
   bool may_write_local_files_ = true;
+  std::set<std::string> not_attachable_hosts_;
 };
 
 }  // namespace content

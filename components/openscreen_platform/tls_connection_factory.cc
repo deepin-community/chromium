@@ -5,9 +5,12 @@
 #include "components/openscreen_platform/tls_connection_factory.h"
 
 #include <openssl/pool.h>
+
 #include <utility>
 
-#include "base/notreached.h"
+#include "base/containers/auto_spanification_helper.h"
+#include "base/containers/span.h"
+#include "base/notimplemented.h"
 #include "components/openscreen_platform/network_context.h"
 #include "components/openscreen_platform/network_util.h"
 #include "components/openscreen_platform/tls_client_connection.h"
@@ -26,7 +29,7 @@ namespace openscreen {
 class TaskRunner;
 
 std::unique_ptr<TlsConnectionFactory> TlsConnectionFactory::CreateFactory(
-    Client* client,
+    Client& client,
     TaskRunner& task_runner) {
   return std::make_unique<openscreen_platform::TlsConnectionFactory>(client);
 }
@@ -109,7 +112,7 @@ void TlsConnectionFactory::Listen(const IPEndpoint& local_address,
 }
 
 TlsConnectionFactory::TlsConnectionFactory(
-    openscreen::TlsConnectionFactory::Client* client)
+    openscreen::TlsConnectionFactory::Client& client)
     : client_(client) {}
 
 TlsConnectionFactory::TcpConnectRequest::TcpConnectRequest(
@@ -206,9 +209,8 @@ void TlsConnectionFactory::OnTlsUpgrade(
       std::move(request.tls_socket));
 
   CRYPTO_BUFFER* der_buffer = ssl_info.value().unverified_cert->cert_buffer();
-  const uint8_t* data = CRYPTO_BUFFER_data(der_buffer);
-  std::vector<uint8_t> der_x509_certificate(
-      data, data + CRYPTO_BUFFER_len(der_buffer));
+  base::span<const uint8_t> data = UNSAFE_CRYPTO_BUFFER_DATA(der_buffer);
+  std::vector<uint8_t> der_x509_certificate(data.begin(), data.end());
   client_->OnConnected(this, std::move(der_x509_certificate),
                        std::move(tls_connection));
 }

@@ -54,9 +54,9 @@ void ProcessState::Clear() {
   crash_address_ = 0;
   assertion_.clear();
   requesting_thread_ = -1;
-  for (vector<CallStack*>::const_iterator iterator = threads_.begin();
-       iterator != threads_.end();
-       ++iterator) {
+  original_thread_count_ = 0;
+  for (std::vector<CallStack*>::const_iterator iterator = threads_.begin();
+       iterator != threads_.end(); ++iterator) {
     delete *iterator;
   }
   threads_.clear();
@@ -67,9 +67,9 @@ void ProcessState::Clear() {
   modules_without_symbols_.clear();
   modules_with_corrupt_symbols_.clear();
   delete modules_;
-  modules_ = NULL;
+  modules_ = nullptr;
   delete unloaded_modules_;
-  unloaded_modules_ = NULL;
+  unloaded_modules_ = nullptr;
 }
 
 }  // namespace google_breakpad

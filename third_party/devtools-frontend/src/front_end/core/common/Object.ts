@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,13 +29,8 @@
 
 import type * as Platform from '../platform/platform.js';
 
-import {
-  type EventDescriptor,
-  type EventListener,
-  type EventPayloadToRestParameters,
-  type EventTarget,
-  type EventTargetEvent,
-} from './EventTarget.js';
+import type {
+  EventDescriptor, EventListener, EventPayloadToRestParameters, EventTarget, EventTargetEvent} from './EventTarget.js';
 
 export interface ListenerCallbackTuple<Events, T extends keyof Events> {
   thisObject?: Object;
@@ -90,7 +85,7 @@ export class ObjectWrapper<Events> implements EventTarget<Events> {
   }
 
   hasEventListeners(eventType: keyof Events): boolean {
-    return Boolean(this.listeners && this.listeners.has(eventType));
+    return Boolean(this.listeners?.has(eventType));
   }
 
   dispatchEventToListeners<T extends keyof Events>(
@@ -110,16 +105,19 @@ export class ObjectWrapper<Events> implements EventTarget<Events> {
     // new listeners.
     for (const listener of [...listeners]) {
       if (!listener.disposed) {
-        listener.listener.call(listener.thisObject, event);
+        try {
+          listener.listener.call(listener.thisObject, event);
+        } catch (err) {
+          console.error(`Event listener for ${String(eventType)} throw an error:`, err);
+        }
       }
     }
   }
 }
 
-type Constructor = new (...args: any[]) => {};
-
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
-export function eventMixin<Events, Base extends Constructor>(base: Base) {
+export function eventMixin<Events, Base extends Platform.Constructor.Constructor<object>>(base: Base) {
+  console.assert(base !== HTMLElement);
   return class EventHandling extends base implements EventTarget<Events> {
     #events = new ObjectWrapper<Events>();
 

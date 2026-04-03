@@ -8,8 +8,7 @@
 #include "chromeos/ash/components/phonehub/app_stream_launcher_data_model.h"
 #include "chromeos/ash/components/phonehub/phone_hub_structured_metrics_logger.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 FakePhoneHubManager::FakePhoneHubManager() = default;
 
@@ -87,8 +86,7 @@ UserActionRecorder* FakePhoneHubManager::GetUserActionRecorder() {
 }
 
 FakePingManager* FakePhoneHubManager::GetPingManager() {
-  return features::IsPhoneHubPingOnBubbleOpenEnabled() ? &fake_ping_manager_
-                                                       : nullptr;
+  return &fake_ping_manager_;
 }
 
 void FakePhoneHubManager::GetHostLastSeenTimestamp(
@@ -133,5 +131,4 @@ FakePhoneHubManager::GetPhoneHubStructuredMetricsLogger() {
   return phone_hub_structured_metrics_logger_;
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

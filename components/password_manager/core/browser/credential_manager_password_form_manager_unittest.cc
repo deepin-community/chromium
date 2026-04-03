@@ -18,13 +18,8 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-#include "components/os_crypt/sync/os_crypt_mocker.h"
-#endif
-
 using base::ASCIIToUTF16;
 using testing::_;
-using testing::Invoke;
 
 namespace password_manager {
 
@@ -55,6 +50,7 @@ class MockFormSaver : public StubFormSaver {
            const std::vector<raw_ptr<const PasswordForm, VectorExperimental>>&
                matches,
            const std::u16string& old_password));
+  MOCK_METHOD1(UpdateWithoutPostProcessing, void(PasswordForm pending));
 
   // Convenience downcasting method.
   static MockFormSaver& Get(PasswordFormManager* form_manager) {
@@ -82,10 +78,6 @@ class CredentialManagerPasswordFormManagerTest : public testing::Test {
     form_to_save_.scheme = PasswordForm::Scheme::kHtml;
     form_to_save_.type = PasswordForm::Type::kApi;
     form_to_save_.in_store = PasswordForm::Store::kProfileStore;
-
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-    OSCryptMocker::SetUp();
-#endif
   }
   CredentialManagerPasswordFormManagerTest(
       const CredentialManagerPasswordFormManagerTest&) = delete;
@@ -104,10 +96,10 @@ class CredentialManagerPasswordFormManagerTest : public testing::Test {
 
   void SetNonFederatedAndNotifyFetchCompleted(
       FormFetcher* fetcher,
-      const std::vector<raw_ptr<const PasswordForm, VectorExperimental>>&
-          non_federated) {
+      const std::vector<PasswordForm>& non_federated) {
     auto* fake_fetcher = static_cast<FakeFormFetcher*>(fetcher);
     fake_fetcher->SetNonFederated(non_federated);
+    fake_fetcher->SetBestMatches(non_federated);
     fake_fetcher->NotifyFetchCompleted();
     // It is required because of PostTask in
     // CredentialManagerPasswordFormManager::OnFetchCompleted
@@ -160,7 +152,7 @@ TEST_F(CredentialManagerPasswordFormManagerTest,
 
   EXPECT_CALL(delegate_, OnProvisionalSaveComplete());
   SetNonFederatedAndNotifyFetchCompleted(form_manager->GetFormFetcher(),
-                                         {&saved_match});
+                                         {saved_match});
   EXPECT_TRUE(form_manager->IsNewLogin());
   EXPECT_TRUE(form_manager->is_submitted());
   EXPECT_EQ(form_to_save_.url, form_manager->GetURL());
@@ -182,7 +174,7 @@ TEST_F(CredentialManagerPasswordFormManagerTest, UpdatePasswordCredentialAPI) {
 
   EXPECT_CALL(delegate_, OnProvisionalSaveComplete());
   SetNonFederatedAndNotifyFetchCompleted(form_manager->GetFormFetcher(),
-                                         {&saved_match});
+                                         {saved_match});
   EXPECT_FALSE(form_manager->IsNewLogin());
   EXPECT_TRUE(form_manager->is_submitted());
 

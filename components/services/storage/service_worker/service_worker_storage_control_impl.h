@@ -16,6 +16,7 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "net/base/hash_value.h"
 
 namespace blink {
 class StorageKey;
@@ -27,16 +28,9 @@ class ServiceWorkerLiveVersionRefImpl;
 
 // This class wraps ServiceWorkerStorage to implement mojo interface defined by
 // the storage service, i.e., ServiceWorkerStorageControl.
-// If kServiceWorkerStorageControlOnThreadPool is enabled,
 // ServiceWorkerStorageControlImpl is created on database_task_runner (thread
-// pool) and retained by mojo::SelfOwnedReceiver. If
-// kServiceWorkerStorageControlOnIOThread is enabled on Android,
-// ServiceWorkerStorageControlImpl is created on the IO thread and owned by
-// PartitionImpl. Otherwise, this is created on the UI thread and owned by
-// ServiceWorkerContextWrapper. In the near future,
-// kServiceWorkerStorageControlOnThreadPool will be the default for all
-// platforms.
-// TODO(crbug.com/1055677): Merge this implementation into ServiceWorkerStorage
+// pool) and retained by mojo::SelfOwnedReceiver.
+// TODO(crbug.com/40120038): Merge this implementation into ServiceWorkerStorage
 // and move the merged class to components/services/storage.
 class ServiceWorkerStorageControlImpl
     : public mojom::ServiceWorkerStorageControl {
@@ -44,10 +38,12 @@ class ServiceWorkerStorageControlImpl
   static mojo::SelfOwnedReceiverRef<mojom::ServiceWorkerStorageControl> Create(
       mojo::PendingReceiver<mojom::ServiceWorkerStorageControl> receiver,
       const base::FilePath& user_data_directory,
-      scoped_refptr<base::SequencedTaskRunner> database_task_runner);
+      scoped_refptr<storage::ServiceWorkerStorage::StorageSharedBuffer>
+          storage_shared_buffer);
   ServiceWorkerStorageControlImpl(
       const base::FilePath& user_data_directory,
-      scoped_refptr<base::SequencedTaskRunner> database_task_runner,
+      scoped_refptr<storage::ServiceWorkerStorage::StorageSharedBuffer>
+          storage_shared_buffer,
       mojo::PendingReceiver<mojom::ServiceWorkerStorageControl> receiver);
 
   ServiceWorkerStorageControlImpl(const ServiceWorkerStorageControlImpl&) =
@@ -64,7 +60,8 @@ class ServiceWorkerStorageControlImpl
  private:
   ServiceWorkerStorageControlImpl(
       const base::FilePath& user_data_directory,
-      scoped_refptr<base::SequencedTaskRunner> database_task_runner);
+      scoped_refptr<storage::ServiceWorkerStorage::StorageSharedBuffer>
+          storage_shared_buffer);
   // mojom::ServiceWorkerStorageControl implementations:
   void Disable(DisableCallback callback) override;
   void Delete(DeleteCallback callback) override;
@@ -130,6 +127,7 @@ class ServiceWorkerStorageControlImpl
   void GetNewResourceId(GetNewResourceIdCallback callback) override;
   void CreateResourceReader(
       int64_t resource_id,
+      const std::optional<net::SHA256HashValue>& sha256_checksum,
       mojo::PendingReceiver<mojom::ServiceWorkerResourceReader> reader)
       override;
   void CreateResourceWriter(
@@ -196,6 +194,8 @@ class ServiceWorkerStorageControlImpl
 
   // Callbacks for ServiceWorkerStorage methods.
   void DidFindRegistrationForClientUrl(
+      GURL client_url,
+      blink::StorageKey key,
       FindRegistrationForClientUrlCallback callback,
       mojom::ServiceWorkerRegistrationDataPtr data,
       std::unique_ptr<ResourceList> resources,

@@ -15,11 +15,24 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
-#include "mlir/Dialect/Quant/QuantOps.h"  // from @llvm-project
+#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/Dialect/Quant/IR/Quant.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
+#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
+#include "mlir/IR/MLIRContext.h"  // from @llvm-project
+#include "mlir/IR/Matchers.h"  // from @llvm-project
+#include "mlir/IR/PatternMatch.h"  // from @llvm-project
+#include "mlir/IR/Types.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/Support/TypeID.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/lite/quantization/common/quantization_lib/quantization_utils.h"
 #include "tensorflow/compiler/mlir/lite/quantization/ir/QuantOps.h"
-#include "tensorflow/compiler/mlir/lite/quantization/quantization_utils.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 
 namespace mlir {
@@ -42,7 +55,7 @@ struct LegalizeTFToQuant
   void runOnOperation() override;
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<quant::QuantizationDialect,
+    registry.insert<quant::QuantDialect,
                     quantfork::QuantizationForkDialect>();
   }
 
@@ -120,7 +133,7 @@ struct InsertQuantOpsAfterTFFakeQuantOp
     if (PerAxis) {
       // This is a special case that the quant_dim is the last dimensions
       // according to the tf.FakeQuantWithMinMaxPerChannel.
-      quant_dim = res.getType().template cast<ShapedType>().getRank() - 1;
+      quant_dim = mlir::cast<ShapedType>(res.getType()).getRank() - 1;
     }
     // Use the min/max from the operands and the num_bits and narrow_range
     // attribute to create the quantization parameter for the new quantize op.
@@ -128,7 +141,7 @@ struct InsertQuantOpsAfterTFFakeQuantOp
     IntegerAttr num_bits = rewriter.getI64IntegerAttr(tf_op.getNumBits());
     BoolAttr narrow_range = rewriter.getBoolAttr(tf_op.getNarrowRange());
     Type res_type = tf_op.getType();
-    TypeAttr qtype = quant::GetQuantizedTypeAttr(
+    TypeAttr qtype = TFL::GetQuantizedTypeAttr(
         rewriter, res_type, min_value, max_value, quant_dim, num_bits,
         narrow_range, /*is_signed=*/true);
     if (!qtype) return failure();
@@ -137,10 +150,10 @@ struct InsertQuantOpsAfterTFFakeQuantOp
     // dequantize ops, and insert them between the tf.FakeQuantWithMinMaxVarsOp
     // and its users.
     Value value = tf_op.getOutputs();
-    auto quantize = rewriter.create<quantfork::QuantizeCastOp>(
-        tf_op.getLoc(), qtype.getValue(), value);
-    auto dequantize = rewriter.create<quantfork::DequantizeCastOp>(
-        tf_op.getLoc(), res_type, quantize.getResult());
+    auto quantize = quantfork::QuantizeCastOp::create(rewriter, tf_op.getLoc(),
+                                                      qtype.getValue(), value);
+    auto dequantize = quantfork::DequantizeCastOp::create(
+        rewriter, tf_op.getLoc(), res_type, quantize.getResult());
     value.replaceAllUsesWith(dequantize);
     quantize.getOperation()->replaceUsesOfWith(dequantize, value);
 
@@ -163,7 +176,7 @@ void LegalizeTFToQuant::runOnOperation() {
   auto func = getOperation();
   auto *ctx = func.getContext();
   patterns.add<PreparePerTensorFakeQuant, PreparePerChannelFakeQuant>(ctx);
-  (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
+  (void)applyPatternsGreedily(func, std::move(patterns));
 }
 }  // namespace
 

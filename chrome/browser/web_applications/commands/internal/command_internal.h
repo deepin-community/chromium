@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_WEB_APPLICATIONS_COMMANDS_INTERNAL_COMMAND_INTERNAL_H_
 
 #include <memory>
+#include <string>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -13,8 +14,12 @@
 #include "base/sequence_checker.h"
 #include "base/types/pass_key.h"
 #include "base/values.h"
-#include "chrome/browser/web_applications/commands/command_result.h"
-#include "components/webapps/common/web_app_id.h"
+
+enum class CommandResult;
+
+namespace base {
+class Location;
+}
 
 namespace content {
 class WebContents;
@@ -22,7 +27,6 @@ class WebContents;
 
 namespace web_app {
 
-class LockDescription;
 class WebAppCommandManager;
 class WebAppLockManager;
 
@@ -57,12 +61,14 @@ class CommandBase {
 
   // Debug value used for chrome://web-app-internals. This should not be read
   // from or relied upon for any business logic under any circumstances.
-  const base::Value::Dict& GetDebugValue() const;
+  const base::DictValue& GetDebugValue() const;
 
   base::WeakPtr<CommandBase> GetBaseCommandWeakPtr();
 
   void SetScheduledLocation(base::PassKey<WebAppCommandManager>,
                             const base::Location& location);
+
+  void SetScheduledAt(base::PassKey<WebAppCommandManager>);
 
   // Sets the command manager, allowing `CompleteAndSelfDestruct` to
   // work correctly.
@@ -96,7 +102,7 @@ class CommandBase {
   // of a command's run. This should not be read from or relied upon for any
   // business logic under any circumstances.
   // Note that
-  base::Value::Dict& GetMutableDebugValue();
+  base::DictValue& GetMutableDebugValue();
 
   void SetStarted();
 
@@ -109,7 +115,7 @@ class CommandBase {
   const Id id_;
   const std::string name_;
 
-  base::Value::Dict debug_value_;
+  base::DictValue debug_value_;
   bool started_ = false;
   raw_ptr<WebAppCommandManager> command_manager_ = nullptr;
 
@@ -149,10 +155,10 @@ class CommandWithLock : public CommandBase {
   virtual void StartWithLock(std::unique_ptr<LockType> lock) = 0;
 
  private:
-  void PrepareForStart(LockAcquiredCallback on_lock_acquired,
-                       std::unique_ptr<LockType> lock);
+  void PrepareForStart(LockAcquiredCallback on_lock_acquired);
 
   const LockDescription initial_lock_request_;
+  std::unique_ptr<LockType> initial_lock_;
   base::WeakPtrFactory<CommandWithLock<LockType>> weak_factory_{this};
 };
 

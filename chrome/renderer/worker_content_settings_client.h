@@ -10,7 +10,6 @@
 #include "net/cookies/site_for_cookies.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/platform/web_content_settings_client.h"
-#include "url/gurl.h"
 #include "url/origin.h"
 
 namespace content {
@@ -38,8 +37,6 @@ class WorkerContentSettingsClient : public blink::WebContentSettingsClient {
   bool AllowStorageAccessSync(StorageType storage_type) override;
   bool AllowRunningInsecureContent(bool allowed_per_settings,
                                    const blink::WebURL& url) override;
-  bool AllowScriptFromSource(bool enabled_per_settings,
-                             const blink::WebURL& script_url) override;
   bool ShouldAutoupgradeMixedContent() override;
 
  private:
@@ -52,7 +49,7 @@ class WorkerContentSettingsClient : public blink::WebContentSettingsClient {
   url::Origin document_origin_;
   net::SiteForCookies site_for_cookies_;
   url::Origin top_frame_origin_;
-  bool allow_running_insecure_content_;
+  bool allow_running_insecure_content_ = false;
   const blink::LocalFrameToken frame_token_;
   std::unique_ptr<RendererContentSettingRules> content_setting_rules_;
 

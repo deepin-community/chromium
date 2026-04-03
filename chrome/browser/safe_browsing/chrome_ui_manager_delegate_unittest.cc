@@ -5,6 +5,7 @@
 #include "chrome/browser/safe_browsing/chrome_ui_manager_delegate.h"
 
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -33,12 +34,12 @@ TEST_F(ChromeSafeBrowsingUIManagerDelegateTest, IsHostingExtension) {
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   // Create a WebContents instance that *is* hosting an extension.
-  base::Value::Dict manifest;
+  base::DictValue manifest;
   manifest.Set(extensions::manifest_keys::kName, "TestComponentApp");
   manifest.Set(extensions::manifest_keys::kVersion, "0.0.0.0");
   manifest.SetByDottedPath(
-      extensions::manifest_keys::kPlatformAppBackgroundPage, std::string());
-  std::string error;
+      extensions::manifest_keys::kPlatformAppBackgroundPage, "background.html");
+  std::u16string error;
   scoped_refptr<extensions::Extension> app;
   app = extensions::Extension::Create(
       base::FilePath(), extensions::mojom::ManifestLocation::kComponent,

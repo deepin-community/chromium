@@ -16,7 +16,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::_;
-using testing::Invoke;
 using testing::Return;
 using testing::SaveArg;
 
@@ -49,8 +48,7 @@ proto::OutputConfig GetTestOutputConfigForMultiClassClassifier() {
   MetadataWriter writer(&model_metadata);
 
   writer.AddOutputConfigForMultiClassClassifier(
-      kMultiClassLabels.begin(),
-      /*class_labels_length=*/kMultiClassLabels.size(),
+      kMultiClassLabels,
       /*top_k_outputs=*/kMultiClassLabels.size(), /*threshold=*/0.1);
 
   return model_metadata.output_config();

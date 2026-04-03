@@ -1,9 +1,9 @@
 // Test to verify loop outlining.
 
-// RUN: tf-opt --split-input-file --tfl-while-loop-outline %s | FileCheck %s
+// RUN: litert-opt --split-input-file --tfl-while-loop-outline %s | FileCheck %s
 // Check that while loop outlining is nop if re-ran.
-// RUN: tf-opt --tfl-while-loop-outline %s -o %t1
-// RUN: tf-opt --tfl-while-loop-outline %t1 -o %t2
+// RUN: litert-opt --tfl-while-loop-outline %s -o %t1
+// RUN: litert-opt --tfl-while-loop-outline %t1 -o %t2
 // RUN: diff %t1 %t2
 
 // CHECK-LABEL: func @while
@@ -204,7 +204,7 @@ func.func @whileSinkConstant(%arg0: tensor<1x256xf32>) -> tensor<1x256xf32> attr
       "tfl.yield"(%3) : (tensor<i1>) -> ()
     }, {
     ^bb0(%arg1: tensor<i32>, %arg2: tensor<1x256xf32>):
-     // CHECK: %[[QCONST:.*]] = "tfl.pseudo_qconst"() {qtype = tensor<256x256x!quant.uniform<i8:f32, 1.000000e+00>>, value = dense<1> : tensor<256x256xi8>} : () -> tensor<256x256x!quant.uniform<i8:f32, 1.000000e+00>>
+     // CHECK: %[[QCONST:.*]] = "tfl.pseudo_qconst"() <{qtype = tensor<256x256x!quant.uniform<i8:f32, 1.000000e+00>>, value = dense<1> : tensor<256x256xi8>}> : () -> tensor<256x256x!quant.uniform<i8:f32, 1.000000e+00>>
      // CHECK: %[[CONST:.*]] = arith.constant dense<1> : tensor<256x256xi8>
      %4 = "tfl.batch_matmul"(%arg2, %cst_0) {adj_x = false, adj_y = false} : (tensor<1x256xf32>, tensor<256x256xi8>) -> tensor<1x256xf32>
      // CHECK-NEXT: %[[BMM_0:.*]] = "tfl.batch_matmul"(%arg1, %[[CONST]])

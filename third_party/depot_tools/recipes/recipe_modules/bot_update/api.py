@@ -4,20 +4,284 @@
 
 """Recipe module to ensure a checkout is consistent on a bot."""
 
-from recipe_engine import recipe_api
+import abc
+import collections.abc
+import dataclasses
+import typing
+
+from recipe_engine import recipe_api, turboci
+from recipe_engine.config_types import Path
 
 from PB.go.chromium.org.luci.buildbucket.proto import common as common_pb2
+from PB.turboci.data.chrome.depot_tools.v1.bot_update_results import (
+    BotUpdateResults)
+from PB.turboci.data.gerrit.v1.gob_source_check_options import (
+    GobSourceCheckOptions)
+from PB.turboci.data.gerrit.v1.gob_source_check_results import (
+    GobSourceCheckResults)
 
+@dataclasses.dataclass(kw_only=True, frozen=True)
+class RelativeRoot:
+  """A root that is relative to the checkout root.
+
+  Attributes:
+    name: The name of the root/the path to the root relative to the checkout
+      directory.
+    path: The absolute path to the root.
+  """
+  name: str
+  path: Path
+
+  @classmethod
+  def create(cls, checkout_dir: Path, name: str) -> typing.Self:
+    return cls(name=name, path=checkout_dir / name)
+
+
+class ManifestRepo(typing.TypedDict):
+  repository: str
+  revision: str
+
+
+@dataclasses.dataclass(kw_only=True, frozen=True)
+class Result:
+  """The noteworthy paths for a source checkout.
+
+  Attributes:
+    checkout_dir: The directory where the checkout was performed.
+    source_root: The root for the repo identified by the first gclient solution.
+    patch_root: The root for the repo that was patched, if a patch was applied.
+      Otherwise, None.
+    properties: The properties set by the bot_update execution.
+    manifest: The manifest mapping the checkout_dir-relative path to the
+      repository and revision that was checked out.
+    fixed_revisions: The explicitly requested revisions; a mapping from the
+      checkout_dir-relative path to the requested revision.
+    out_commit: Gitiles output commit derived from got_revision.
+  """
+  # Directories relevant to the checkout
+  checkout_dir: Path
+  source_root: RelativeRoot
+  patch_root: RelativeRoot | None = None
+
+  # Details about the revisions that were checked out
+  properties: dict[str, str]
+  manifest: dict[str, ManifestRepo]
+  fixed_revisions: dict[str, str]
+
+  out_commit: common_pb2.GitilesCommit | None
+
+
+class _TurboCICheckHandler(abc.ABC):
+  """Handler for creating and updating a TurboCI source check.
+
+  Getting a handler should be done by calling
+  _TurboCICheckHandler.create with the ID to use for the check. An empty
+  check ID will result in a no-op handler.
+
+  Before performing the checkout, set_revisions should be called to
+  provide information about the known revisions being checked out and if
+  a patch is being applied, set_gerrit_change should be called to
+  provide information about the change. After those calls are made,
+  create_check should be called to create the check in TurboCI.
+
+  After performing the checkout, set_result should be called to write
+  results into the check and finalize it.
+  """
+
+  @staticmethod
+  def create(api, check_id: str):
+    """Create a _TurboCiCheckHandler.
+
+    Args:
+      check_id: The ID of the TurboCI check that the handler should
+        create. If empty, a no-op handler will be returned.
+    """
+    if not check_id:
+      return _DisabledTurboCICheckHandler()
+
+    return _EnabledTurboCiCheckHandler(api, check_id)
+
+  @abc.abstractmethod
+  def set_gerrit_change(self, gerrit_change: common_pb2.GerritChange,
+                        patch_root: str) -> None:
+    """Sets the gerrit change that is being checked out.
+
+    Information about the change will be added to the check that is
+    created.
+
+    Args:
+      gerrit_change: The gerrit change that is being checked out.
+      patch_root: The path to the repository that is being patched,
+        relative to the directory where the checkout is performed.
+    """
+    raise NotImplementedError()  # pragma: no cover
+
+  @abc.abstractmethod
+  def set_revisions(
+      self,
+      revisions: collections.abc.Mapping[str, str],
+      refs: collections.abc.Mapping[str, str],
+  ) -> None:
+    """Set the revisions to be checked out.
+
+    Information about the revisions will be added to the check that is
+    created.
+
+    Args:
+      revisions: Mapping from the solution name/checkout-relative path
+        of a repo to the revision that the repo will be checked out
+        from.
+      refs: Mapping from the solution name/checkout-relative path of a
+        repo to the ref that the repo will be checked out from.
+    """
+    raise NotImplementedError()  # pragma: no cover
+
+  @abc.abstractmethod
+  def create_check(self) -> None:
+    """Create the TurboCI check.
+
+    A check will be created with kind SOURCE and state PLANNED. The
+    check will contain a GobSourceCheckOptions option that contains the
+    revision information specified by set_revisions and the change
+    information specified by set_gerrit_change.
+    """
+    raise NotImplementedError()  # pragma: no cover
+
+  @abc.abstractmethod
+  def set_result(self, result: Result) -> None:
+    """Set the results on the TurboCI check.
+
+    The check will have a GobSourceCheckResults result added that
+    contains details about the change that was applied (if any) and be
+    moved to the FINAL state.
+    """
+    raise NotImplementedError()  # pragma: no cover
+
+
+class _DisabledTurboCICheckHandler(_TurboCICheckHandler):
+  """A no-op implementation of _TurboCICheckHandler."""
+
+  def set_gerrit_change(self, gerrit_change: common_pb2.GerritChange,
+                        patch_root: str) -> None:
+    pass
+
+  def set_revisions(
+      self,
+      revisions: collections.abc.Mapping[str, str],
+      refs: collections.abc.Mapping[str, str],
+  ) -> None:
+    pass
+
+  def create_check(self):
+    pass
+
+  def set_result(self, result: Result) -> None:
+    pass
+
+
+class _EnabledTurboCiCheckHandler(_TurboCICheckHandler):
+  """_TurboCICheckHandler that actually creates a check in TurboCI."""
+
+  def __init__(self, api, check_id: str):
+    self._api = api
+    self._check_id = check_id
+    self._gerrit_change: common_pb2.GerritChange | None = None
+    self._source_check_options = GobSourceCheckOptions()
+
+  def set_gerrit_change(self, gerrit_change: common_pb2.GerritChange,
+                        patch_root: str) -> None:
+    self._gerrit_change = gerrit_change
+    self._source_check_options.gerrit_changes.add(
+        # TurboCI uses the HOST name
+        # https://source.chromium.org/chromium/infra/infra_superproject/+/main:recipes-py/recipe_proto/turboci/data/gerrit/v1/gob_source_check_options.proto;l=22-25;drc=d0c1eac8c3953c26af1b01aa9ab8fe988cb92bc3
+        hostname=gerrit_change.host.removesuffix('-review.googlesource.com'),
+        change_number=gerrit_change.change,
+        patchset=gerrit_change.patchset,
+        mounts_to_apply=[patch_root],
+    )
+
+  def set_revisions(
+      self,
+      revisions: collections.abc.Mapping[str, str],
+      refs: collections.abc.Mapping[str, str],
+  ) -> None:
+    pinned_repo_mounts = self._source_check_options.base_pinned_repos
+    for name, revision in sorted(revisions.items()):
+      # Handle the "ref:revision" syntax, e.g. refs/branch-heads/4.2:deadbeef
+      if ':' in revision:
+        ref, commit_id = revision.split(':', 1)
+      elif revision.startswith('refs'):
+        ref = revision
+        commit_id = None
+      else:
+        commit_id = revision
+        ref = refs.get(name)
+      pinned_repo_mounts.mount_overrides.add(
+          mount=name,
+          override=GobSourceCheckOptions.PinnedRepoMounts.GitCommit(
+              # TODO: crbug.com/443496677 - set host and project
+              id=commit_id,
+              ref=ref,
+          ),
+      )
+
+  def create_check(self) -> None:
+    turboci.write_nodes(
+        # TODO: crbug.com/443496677 - Add some structured data to the reason
+        turboci.reason('executing bot_update'),
+        turboci.check(
+            self._check_id,
+            kind='CHECK_KIND_SOURCE',
+            options=[self._source_check_options],
+            state='CHECK_STATE_PLANNED',
+        ),
+    )
+
+  def set_result(self, result: Result) -> None:
+    gob_source_check_results = GobSourceCheckResults()
+    if self._gerrit_change:
+      gob_source_check_results.changes.add(
+          # TurboCI uses the HOST name
+          # https://source.chromium.org/chromium/infra/infra_superproject/+/main:recipes-py/recipe_proto/turboci/data/gerrit/v1/gerrit_change_info.proto;l=26-32;drc=48b620356e842ea19ec908f3cb18b1a0cb555d26
+          host=self._gerrit_change.host.removesuffix(
+              '-review.googlesource.com'),
+          project=self._gerrit_change.project,
+          branch=self._api.m.tryserver.gerrit_change_target_ref.removeprefix(
+              'refs/heads/'),
+          full_branch=self._api.m.tryserver.gerrit_change_target_ref,
+          change_number=self._gerrit_change.change,
+          patchset=self._gerrit_change.patchset,
+          # TODO: crbug.com/443496677 - Fill in status, creation_time,
+          # last_modification_time, submitted_time, current_revision, revisions,
+          # owner, reviewers, labels, messages, change_id, topic, is_owner_bot?
+      )
+    bot_update_check_results = BotUpdateResults()
+    for path, manifest_commit in result.manifest.items():
+      host, project = self._api.m.gitiles.parse_repo_url(
+          manifest_commit['repository'])
+      commit = bot_update_check_results.manifest[path]
+      commit.host = host.removesuffix('.googlesource.com')
+      commit.project = project
+      commit.id = manifest_commit['revision']
+
+    # TODO: crbug.com/443496677 - Add a result type to expose the bot_update
+    # manifest
+    turboci.write_nodes(
+        turboci.reason('bot_update completed'),
+        turboci.check(
+            self._check_id,
+            results=[gob_source_check_results, bot_update_check_results],
+            state='CHECK_STATE_FINAL',
+        ))
 
 class BotUpdateApi(recipe_api.RecipeApi):
 
-  def __init__(self, properties, deps_revision_overrides, fail_patch, *args,
-               **kwargs):
+  def __init__(self, properties, deps_revision_overrides, *args, **kwargs):
     self._deps_revision_overrides = deps_revision_overrides
-    self._fail_patch = fail_patch
 
     self._last_returned_properties = {}
     super(BotUpdateApi, self).__init__(*args, **kwargs)
+    self._bot_update_properties = properties
 
   def __call__(self, name, cmd, **kwargs):
     """Wrapper for easy calling of bot_update."""
@@ -72,12 +336,16 @@ class BotUpdateApi(recipe_api.RecipeApi):
 
   def _get_bot_update_env(self):
     # TODO(gavinmak): Use mkdtemp when crbug.com/1457059 is fixed.
-    self._trace_dir = self.m.path['cleanup']
+    self._trace_dir = self.m.path.cleanup_dir
 
     # If a Git HTTP request is constantly below GIT_HTTP_LOW_SPEED_LIMIT
     # bytes/second for GIT_HTTP_LOW_SPEED_TIME seconds then such request will be
     # aborted. Otherwise, it would wait for global timeout to be reached.
     env = {
+        # CHROME_HEADLESS makes it so we don't create gclient's _bad_scm dir
+        # and instead just remove/restart checkout from scratch.
+        'CHROME_HEADLESS':
+        '1',
         'GIT_HTTP_LOW_SPEED_LIMIT':
         '102400',  # in bytes
         'GIT_HTTP_LOW_SPEED_TIME':
@@ -106,6 +374,9 @@ class BotUpdateApi(recipe_api.RecipeApi):
           self.m.buildbucket.build.builder.bucket,
           self.m.buildbucket.build.builder.builder, self.m.buildbucket.build.id)
 
+    if 'stale_process_duration_override' in self._bot_update_properties:
+      env['STALE_PROCESS_DURATION'] = self._bot_update_properties[
+          'stale_process_duration_override']
     return env
 
   def _upload_traces(self):
@@ -114,9 +385,9 @@ class BotUpdateApi(recipe_api.RecipeApi):
                or self.m.led.run_id.replace('/', '_'))
       dest = self.m.path.join(self._trace_dir, '%s.zip' % id)
       zip_path = self.m.archive.package(self._trace_dir) \
-                  .with_file(self._trace_dir.join('trace2-event')) \
-                  .with_file(self._trace_dir.join('trace-curl')) \
-                  .with_file(self._trace_dir.join('trace-packet')) \
+                  .with_file(self._trace_dir / 'trace2-event') \
+                  .with_file(self._trace_dir / 'trace-curl') \
+                  .with_file(self._trace_dir / 'trace-packet') \
                   .archive('compress traces', dest, 'zip')
       try:
         # Don't upload with a destination path, otherwise we have to grant bots
@@ -129,6 +400,7 @@ class BotUpdateApi(recipe_api.RecipeApi):
 
   def ensure_checkout(self,
                       gclient_config=None,
+                      *,
                       suffix=None,
                       patch=True,
                       update_presentation=True,
@@ -150,6 +422,9 @@ class BotUpdateApi(recipe_api.RecipeApi):
                       enforce_fetch=False,
                       download_topics=False,
                       recipe_revision_overrides=None,
+                      step_tags=None,
+                      clean_ignored=False,
+                      turboci_check_id: str = '',
                       **kwargs):
     """
     Args:
@@ -185,6 +460,13 @@ class BotUpdateApi(recipe_api.RecipeApi):
         to each particular build/recipe run. e.g. the recipe might parse a gerrit
         change's commit message to get this revision override requested by the
         author.
+      * step_tags: a dict {tag name: tag value} of tags to add to the step
+      * clean_ignored: If True, also clean ignored files from the checkout.
+      * turboci_check_id: If non-empty, a turboci source check will be created
+        representing the checkout that will be performed with results set to
+        indicate the code that was checked out. An InfraFailure will be raised
+        if a non-empty value is provided and the gclient config doesn't have
+        exactly 1 solution.
     """
     assert not (ignore_input_commit and set_output_commit)
     if assert_one_gerrit_change:
@@ -198,6 +480,8 @@ class BotUpdateApi(recipe_api.RecipeApi):
     cfg = gclient_config or self.m.gclient.c
     assert cfg is not None, (
         'missing gclient_config or forgot api.gclient.set_config(...) before?')
+
+    check_handler = _TurboCICheckHandler.create(self, turboci_check_id)
 
     # Construct our bot_update command.  This basically be inclusive of
     # everything required for bot_update to know:
@@ -218,7 +502,7 @@ class BotUpdateApi(recipe_api.RecipeApi):
         ['--patch_root', patch_root],
         ['--revision_mapping_file', self.m.json.input(reverse_rev_map)],
         ['--git-cache-dir', cfg.cache_dir],
-        ['--cleanup-dir', self.m.path['cleanup'].join('bot_update')],
+        ['--cleanup-dir', self.m.path.cleanup_dir / 'bot_update'],
 
         # Hookups to JSON output back into recipes.
         ['--output_json', self.m.json.output()],
@@ -226,6 +510,10 @@ class BotUpdateApi(recipe_api.RecipeApi):
 
     # How to find the patch, if any
     if patch:
+      if self.m.tryserver.gerrit_change:
+        check_handler.set_gerrit_change(self.m.tryserver.gerrit_change,
+                                        patch_root)
+
       repo_url = self.m.tryserver.gerrit_change_repo_url
       fetch_ref = self.m.tryserver.gerrit_change_fetch_ref
       target_ref = self.m.tryserver.gerrit_change_target_ref
@@ -249,6 +537,7 @@ class BotUpdateApi(recipe_api.RecipeApi):
     # parameters. Existing semantics is too opiniated.
     in_commit = self.m.buildbucket.gitiles_commit
     in_commit_rev = in_commit.id or in_commit.ref
+    in_commit_repo_path = None
     if not ignore_input_commit and in_commit_rev:
       # Note: this is not entirely correct. build.input.gitiles_commit
       # definition says "The Gitiles commit to run against.".
@@ -270,8 +559,8 @@ class BotUpdateApi(recipe_api.RecipeApi):
     # Guarantee that first solution has a revision.
     # TODO(machenbach): We should explicitly pass HEAD for ALL solutions
     # that don't specify anything else.
-    first_sol = cfg.solutions[0].name
-    revisions[first_sol] = revisions.get(first_sol) or 'HEAD'
+    first_sln = cfg.solutions[0].name
+    revisions[first_sln] = revisions.get(first_sln) or 'HEAD'
 
     if cfg.revisions:
       # Only update with non-empty values. Some recipe might otherwise
@@ -279,7 +568,7 @@ class BotUpdateApi(recipe_api.RecipeApi):
       revisions.update(
           (k, v) for k, v in cfg.revisions.items() if v)
     if cfg.solutions and root_solution_revision:
-      revisions[first_sol] = root_solution_revision
+      revisions[first_sln] = root_solution_revision
     # Allow for overrides required to bisect into rolls.
     revisions.update(self._deps_revision_overrides)
 
@@ -295,10 +584,10 @@ class BotUpdateApi(recipe_api.RecipeApi):
     for name, revision in sorted(revisions.items()):
       fixed_revision = self.m.gclient.resolve_revision(revision)
       if fixed_revision:
-        fixed_revisions[name] = fixed_revision
         if fixed_revision.upper() == 'HEAD' and patch:
           # Sync to correct destination ref
           fixed_revision = self._destination_ref(cfg, name)
+        fixed_revisions[name] = fixed_revision
         # If we're syncing to a ref, we want to make sure it exists before
         # trying to check it out.
         if (fixed_revision.startswith('refs/') and
@@ -311,6 +600,12 @@ class BotUpdateApi(recipe_api.RecipeApi):
           # refs/branch-heads/4.2:deadbeef
           refs.append(fixed_revision.split(':')[0])
         flags.append(['--revision', '%s@%s' % (name, fixed_revision)])
+
+    turboci_refs = {}
+    if (in_commit_repo_path and in_commit.ref
+        and revisions.get(in_commit_repo_path) == in_commit.id):
+      turboci_refs[in_commit_repo_path] = in_commit.ref
+    check_handler.set_revisions(fixed_revisions, turboci_refs)
 
     for ref in refs:
       assert not ref.startswith('refs/remotes/'), (
@@ -347,18 +642,25 @@ class BotUpdateApi(recipe_api.RecipeApi):
     if self.m.properties.get('bot_update_experiments'):
       cmd.append('--experiments=%s' %
           ','.join(self.m.properties['bot_update_experiments']))
+    if clean_ignored:
+      cmd.append('--clean-ignored')
 
     # Inject Json output for testing.
-    first_sln = cfg.solutions[0].name
     step_test_data = step_test_data or (lambda: self.test_api.output_json(
-        patch_root, first_sln, reverse_rev_map, self._fail_patch,
-        fixed_revisions=fixed_revisions))
+        first_sln=first_sln,
+        revisions=self._test_data.get('revisions', {}),
+        fixed_revisions=fixed_revisions,
+        got_revision_mapping=reverse_rev_map,
+        patch_root=patch_root,
+        repo_urls=self._test_data.get('repo_urls', None),
+        fail_checkout=self._test_data.get('fail_checkout', False),
+        fail_patch=self._test_data.get('fail_patch', False),
+        commit_positions=self._test_data.get('commit_positions', True),
+    ))
 
-    name = 'bot_update'
-    if not patch:
-      name += ' (without patch)'
-    if suffix:
-      name += ' - %s' % suffix
+    check_handler.create_check()
+
+    name = self.step_name(patch, suffix)
 
     # Ah hah! Now that everything is in place, lets run bot_update!
     step_result = None
@@ -372,6 +674,10 @@ class BotUpdateApi(recipe_api.RecipeApi):
                          **kwargs)
     finally:
       step_result = self.m.step.active_result
+
+      if step_tags:
+        for tag, value in step_tags.items():
+          step_result.presentation.tags[tag] = value
 
       # The step_result can be missing the json attribute if the build
       # is shutting down and the bot_update script is not able to finish
@@ -411,7 +717,7 @@ class BotUpdateApi(recipe_api.RecipeApi):
             step_result.presentation.status = 'FAILURE'
             # This is actual patch failure.
             self.m.tryserver.set_patch_failure_tryjob_result()
-            self.m.cq.set_do_not_retry_build()
+            self.m.cv.set_do_not_retry_build()
             self._upload_traces()
             raise self.m.step.StepFailure(
                 'Patch failure: See patch error log attached to bot_update. '
@@ -432,10 +738,10 @@ class BotUpdateApi(recipe_api.RecipeApi):
             blamelist_pins.append(pin)
           self.m.milo.show_blamelist_for(blamelist_pins)
 
-        # Set output commit of the build.
-        if (set_output_commit and
-            'got_revision' in self._last_returned_properties and
-            'got_revision' in reverse_rev_map):
+        out_commit = None
+
+        if ('got_revision' in self._last_returned_properties
+            and 'got_revision' in reverse_rev_map):
           # As of April 2019, got_revision describes the output commit,
           # the same commit that Build.output.gitiles_commit describes.
           # In particular, users tend to set got_revision to make Milo display
@@ -472,12 +778,13 @@ class BotUpdateApi(recipe_api.RecipeApi):
           elif out_commit.id == in_commit.id and in_commit.ref:
             # Derive output ref from the input ref.
             out_commit.ref = in_commit.ref
-          else: # pragma: no cover
-            assert False, (
+
+          if set_output_commit:
+            assert out_commit.ref, (
                 'Unsupported case. '
-                'Call buildbucket.set_output_gitiles_commit directly.'
-            )
-          self.m.buildbucket.set_output_gitiles_commit(out_commit)
+                'Call buildbucket.set_output_gitiles_commit directly.')
+
+            self.m.buildbucket.set_output_gitiles_commit(out_commit)
 
         # Set the "checkout" path for the main solution.
         # This is used by the Chromium module to figure out where to look for
@@ -488,10 +795,23 @@ class BotUpdateApi(recipe_api.RecipeApi):
             and 'checkout' not in self.m.path
             and 'root' in result):
           co_root = result['root']
-          cwd = self.m.context.cwd or self.m.path['start_dir']
-          self.m.path['checkout'] = cwd.join(*co_root.split(self.m.path.sep))
+          cwd = self.m.context.cwd or self.m.path.start_dir
+          self.m.path.checkout_dir = cwd / co_root
 
-    return step_result
+    assert result.get('did_run') and result.get('root')
+    checkout_dir = self.m.context.cwd or self.m.path.start_dir
+    ret = Result(
+        checkout_dir=checkout_dir,
+        source_root=RelativeRoot.create(checkout_dir, result['root']),
+        patch_root=(RelativeRoot.create(checkout_dir, result['patch_root'])
+                    if result['patch_root'] is not None else None),
+        properties=result.get('properties', {}),
+        manifest=result.get('manifest', {}),
+        fixed_revisions=result.get('fixed_revisions', {}),
+        out_commit=out_commit,
+    )
+    check_handler.set_result(ret)
+    return ret
 
   def _destination_ref(self, cfg, path):
     """Returns the ref branch of a CL for the matching project if available or
@@ -520,16 +840,16 @@ class BotUpdateApi(recipe_api.RecipeApi):
 
     return self.m.tryserver.gerrit_change_target_ref
 
-  def resolve_fixed_revision(self, bot_update_json, name):
+  def resolve_fixed_revision(self, bot_update_result, name):
     """Sets a fixed revision for a single dependency using project revision
     properties.
     """
     rev_properties = self.get_project_revision_properties(name)
     self.m.gclient.c.revisions = {
-      name: bot_update_json['properties'][rev_properties[0]]
+        name: bot_update_result.properties[rev_properties[0]]
     }
 
-  def _resolve_fixed_revisions(self, bot_update_json):
+  def _resolve_fixed_revisions(self, bot_update_result):
     """Sets all fixed revisions from the first sync to their respective
     got_X_revision values.
 
@@ -560,12 +880,12 @@ class BotUpdateApi(recipe_api.RecipeApi):
     bot_update.py --revision src@abc
     When deapplying the patch, v8 will be synced to v8_before.
     """
-    for name in bot_update_json.get('fixed_revisions', {}):
+    for name in bot_update_result.fixed_revisions:
       rev_properties = self.get_project_revision_properties(name)
-      if (rev_properties and
-          bot_update_json['properties'].get(rev_properties[0])):
+      if (rev_properties
+          and bot_update_result.properties.get(rev_properties[0])):
         self.m.gclient.c.revisions[name] = str(
-            bot_update_json['properties'][rev_properties[0]])
+            bot_update_result.properties[rev_properties[0]])
 
   # TODO(machenbach): Replace usages of this method eventually by direct calls
   # to the manifest output.
@@ -592,10 +912,19 @@ class BotUpdateApi(recipe_api.RecipeApi):
         if project == project_name
     )
 
-  def deapply_patch(self, bot_update_step):
+  def deapply_patch(
+      self,
+      bot_update_result,
+      *,
+      turboci_check_id: str = '',
+  ):
     """Deapplies a patch, taking care of DEPS and solution revisions properly.
+
+    Args:
+      turboci_check_id: The ID of the source check to create for checking out
+        the unpatched code. See documentation of the turboci_check_id parameter
+        of ensure_checkout for more information.
     """
-    bot_update_json = bot_update_step.json.output
     # We only override first solution here to make sure that we correctly revert
     # changes to DEPS file, which is particularly important for auto-rolls. It
     # is also imporant that we do not assume that corresponding revision is
@@ -604,8 +933,18 @@ class BotUpdateApi(recipe_api.RecipeApi):
     first_solution_name = self.m.gclient.c.solutions[0].name
     rev_property = self.get_project_revision_properties(first_solution_name)[0]
     self.m.gclient.c.revisions[first_solution_name] = str(
-        bot_update_json['properties'][rev_property])
-    self._resolve_fixed_revisions(bot_update_json)
+        bot_update_result.properties[rev_property])
+    self._resolve_fixed_revisions(bot_update_result)
 
-    self.ensure_checkout(
-        patch=False, no_fetch_tags=True, update_presentation=False)
+    self.ensure_checkout(patch=False,
+                         no_fetch_tags=True,
+                         update_presentation=False,
+                         turboci_check_id=turboci_check_id)
+
+  def step_name(self, patch, suffix):
+    name = 'bot_update'
+    if not patch:
+      name += ' (without patch)'
+    if suffix:
+      name += f' - {suffix}'
+    return name

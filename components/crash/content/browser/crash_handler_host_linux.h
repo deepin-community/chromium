@@ -11,6 +11,7 @@
 #include <set>
 #include <string>
 
+#include "base/containers/heap_array.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_file.h"
 #include "base/memory/raw_ptr.h"
@@ -20,7 +21,6 @@
 #include "base/synchronization/lock.h"
 #include "base/task/current_thread.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "components/crash/core/app/breakpad_linux_impl.h"
@@ -81,7 +81,7 @@ class CrashHandlerHostLinux : public base::MessagePumpForIO::FdWatcher,
 
   // Do work on |blocking_task_runner_| for OnFileCanReadWithoutBlocking().
   void WriteDumpFile(BreakpadInfo* info,
-                     std::unique_ptr<char[]> crash_context,
+                     base::HeapArray<char> crash_context,
                      pid_t crashing_pid);
 
   // Continue OnFileCanReadWithoutBlocking()'s work on the IO thread.
@@ -91,11 +91,11 @@ class CrashHandlerHostLinux : public base::MessagePumpForIO::FdWatcher,
   void FindCrashingThreadAndDump(
       pid_t crashing_pid,
       const std::string& expected_syscall_data,
-      std::unique_ptr<char[]> crash_context,
+      base::HeapArray<char> crash_context,
       std::unique_ptr<crash_reporter::internal::TransitionalCrashKeyStorage>
           crash_keys,
 #if defined(ADDRESS_SANITIZER)
-      std::unique_ptr<char[]> asan_report,
+      base::HeapArray<char> asan_report,
 #endif
       uint64_t uptime,
       size_t oom_size,
@@ -122,7 +122,7 @@ class CrashHandlerHostLinux : public base::MessagePumpForIO::FdWatcher,
 
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 
 namespace crashpad {
 
@@ -182,6 +182,6 @@ class CrashHandlerHost : public base::MessagePumpForIO::FdWatcher,
 
 }  // namespace crashpad
 
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 #endif  // COMPONENTS_CRASH_CONTENT_BROWSER_CRASH_HANDLER_HOST_LINUX_H_

@@ -4,10 +4,9 @@
 
 #include "chromeos/ash/services/bluetooth_config/bluetooth_device_status_notifier_impl.h"
 
+#include <algorithm>
 #include <vector>
 
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
 #include "base/time/time.h"
 #include "chromeos/ash/services/bluetooth_config/device_cache.h"
 #include "chromeos/ash/services/bluetooth_config/public/cpp/cros_bluetooth_config_util.h"
@@ -150,7 +149,7 @@ void BluetoothDeviceStatusNotifierImpl::CheckForDeviceStateChange() {
   // devices list which were connected that are now missing (b/282640314).
   for (const auto& [previous_device_id, previous_device] :
        previous_devices_id_to_properties_map) {
-    if (base::Contains(devices_id_to_properties_map_, previous_device_id)) {
+    if (devices_id_to_properties_map_.contains(previous_device_id)) {
       continue;
     }
 
@@ -175,8 +174,8 @@ bool BluetoothDeviceStatusNotifierImpl::IsNearbyConnectionsDevice(
   // NOTE(http://b/215024088): If the newly paired device is connected via a
   // Nearby Connections client (e.g., Nearby Share), do not display this
   // notification.
-  return base::ranges::any_of(device.GetUUIDs(),
-                              ash::nearby::IsNearbyClientUuid);
+  return std::ranges::any_of(device.GetUUIDs(),
+                             ash::nearby::IsNearbyClientUuid);
 }
 
 device::BluetoothDevice* BluetoothDeviceStatusNotifierImpl::FindDevice(

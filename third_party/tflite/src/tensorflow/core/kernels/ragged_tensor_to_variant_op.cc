@@ -36,7 +36,7 @@ namespace tensorflow {
 namespace {
 
 template <typename VALUE_TYPE>
-Status UnbatchDenseZerothDim(
+absl::Status UnbatchDenseZerothDim(
     const RaggedTensorVariant& batched_ragged,
     std::vector<RaggedTensorVariant>* ragged_components) {
   Tensor batched_values = batched_ragged.values();
@@ -65,7 +65,7 @@ Status UnbatchDenseZerothDim(
 }
 
 template <typename VALUE_TYPE, typename SPLIT_TYPE>
-Status UnbatchRaggedZerothDim(
+absl::Status UnbatchRaggedZerothDim(
     const RaggedTensorVariant& batched_ragged,
     std::vector<RaggedTensorVariant>* ragged_components) {
   // Set up the component Ragged Tensors.
@@ -256,7 +256,7 @@ class RaggedTensorToVariantGradientOp : public OpKernel {
     auto flat_row_splits = row_splits.flat<SPLIT_TYPE>();
     TensorShape dense_values_shape;
     OP_REQUIRES_OK(context,
-                   TensorShapeUtils::MakeShape(context->input(2).vec<int32>(),
+                   TensorShapeUtils::MakeShape(context->input(2).vec<int32_t>(),
                                                &dense_values_shape));
 
     // Validate row_splits.

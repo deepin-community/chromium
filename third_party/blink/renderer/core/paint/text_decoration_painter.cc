@@ -7,25 +7,13 @@
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_inline_text.h"
 #include "third_party/blink/renderer/core/layout/text_decoration_offset.h"
+#include "third_party/blink/renderer/core/paint/paint_auto_dark_mode.h"
 #include "third_party/blink/renderer/core/paint/paint_info.h"
 #include "third_party/blink/renderer/core/paint/text_painter.h"
-#include "third_party/blink/renderer/core/paint/text_shadow_painter.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context_state_saver.h"
 
 namespace blink {
-
-namespace {
-
-Color LineColorForPhase(TextDecorationInfo& decoration_info,
-                        TextShadowPaintPhase phase) {
-  if (phase == TextShadowPaintPhase::kShadow) {
-    return Color::kBlack;
-  }
-  return decoration_info.LineColor();
-}
-
-}  // namespace
 
 TextDecorationPainter::TextDecorationPainter(
     TextPainter& text_painter,
@@ -64,18 +52,22 @@ void TextDecorationPainter::UpdateDecorationInfo(
     return;
   }
 
-  std::optional<AppliedTextDecoration> effective_selection_decoration =
-      UNLIKELY(phase_ == kSelection)
-          ? selection_->GetSelectionStyle().selection_text_decoration
-          : std::nullopt;
+  TextDecorationLine effective_selection_decoration_lines =
+      TextDecorationLine::kNone;
+  Color effective_selection_decoration_color;
+  if (phase_ == kSelection) [[unlikely]] {
+    effective_selection_decoration_lines =
+        selection_->GetSelectionStyle().selection_decoration_lines;
+    effective_selection_decoration_color =
+        selection_->GetSelectionStyle().selection_decoration_color;
+  }
 
   if (text_item.IsSvgText() && paint_info_.IsRenderingResourceSubtree()) {
     // Need to recompute a scaled font and a scaling factor because they
     // depend on the scaling factor of an element referring to the text.
     float scaling_factor = 1;
-    Font scaled_font;
-    LayoutSVGInlineText::ComputeNewScaledFontForStyle(
-        *text_item.GetLayoutObject(), scaling_factor, scaled_font);
+    const Font* scaled_font = LayoutSVGInlineText::ComputeNewScaledFontForStyle(
+        *text_item.GetLayoutObject(), scaling_factor);
     DCHECK(scaling_factor);
     // Adjust the origin of the decoration because
     // TextPainter::PaintDecorationsExceptLineThrough() will change the
@@ -86,18 +78,20 @@ void TextDecorationPainter::UpdateDecorationInfo(
     // adjust the baseline position, then shift it for scaled_font.
     top += text_item.ScaledFont().PrimaryFont()->GetFontMetrics().FixedAscent();
     top *= scaling_factor / text_item.SvgScalingFactor();
-    top -= scaled_font.PrimaryFont()->GetFontMetrics().FixedAscent();
+    top -= scaled_font->PrimaryFont()->GetFontMetrics().FixedAscent();
     result.emplace(LineRelativeOffset{decoration_rect_.offset.line_left, top},
                    decoration_rect_.InlineSize(), style, inline_context_,
-                   effective_selection_decoration, decoration_override,
-                   &scaled_font, MinimumThickness1(false),
+                   effective_selection_decoration_lines,
+                   effective_selection_decoration_color, decoration_override,
+                   scaled_font, MinimumThickness1(false),
                    text_item.SvgScalingFactor() / scaling_factor);
   } else {
     LineRelativeRect decoration_rect =
         decoration_rect_override.value_or(decoration_rect_);
     result.emplace(decoration_rect.offset, decoration_rect.InlineSize(), style,
-                   inline_context_, effective_selection_decoration,
-                   decoration_override, &text_item.ScaledFont(),
+                   inline_context_, effective_selection_decoration_lines,
+                   effective_selection_decoration_color, decoration_override,
+                   &text_item.ScaledFont(),
                    MinimumThickness1(!text_item.IsSvgText()));
   }
 }
@@ -118,8 +112,8 @@ void TextDecorationPainter::Begin(const FragmentItem& text_item, Phase phase) {
   UpdateDecorationInfo(decoration_info_, text_item, style_);
   clip_rect_.reset();
 
-  if (decoration_info_ && UNLIKELY(selection_)) {
-    if (UNLIKELY(text_item.IsSvgText())) {
+  if (decoration_info_ && selection_) [[unlikely]] {
+    if (text_item.IsSvgText()) [[unlikely]] {
       clip_rect_.emplace(
           ExpandRectForSVGDecorations(selection_->LineRelativeSelectionRect()));
     } else {
@@ -135,6 +129,17 @@ void TextDecorationPainter::Begin(const FragmentItem& text_item, Phase phase) {
   step_ = kExcept;
 }
 
+Color TextDecorationPainter::LineColorForPhase(
+    TextDecorationInfo& decoration_info,
+    TextShadowPaintPhase text_shadow_paint_phase) const {
+  if (text_shadow_paint_phase == TextShadowPaintPhase::kShadow ||
+      (RuntimeEnabledFeatures::BackgroundClipTextDecorationEnabled() &&
+       paint_info_.phase == PaintPhase::kTextClip)) {
+    return Color::kBlack;
+  }
+  return decoration_info.LineColor();
+}
+
 void TextDecorationPainter::PaintUnderOrOverLineDecorations(
     TextDecorationInfo& decoration_info,
     const TextFragmentPaintInfo& fragment_paint_info,
@@ -143,44 +148,58 @@ void TextDecorationPainter::PaintUnderOrOverLineDecorations(
   if (paint_info_.IsRenderingResourceSubtree()) {
     paint_info_.context.Scale(1, decoration_info.ScalingFactor());
   }
+  const AutoDarkMode auto_dark_mode(PaintAutoDarkMode(
+      decoration_info.TargetStyle(), DarkModeFilter::ElementRole::kForeground));
   const TextDecorationOffset decoration_offset(style_);
-
   PaintWithTextShadow(
       [&](TextShadowPaintPhase phase) {
         for (wtf_size_t i = 0; i < decoration_info.AppliedDecorationCount();
              i++) {
           decoration_info.SetDecorationIndex(i);
-          paint_info_.context.SetStrokeThickness(
-              decoration_info.ResolvedThickness());
 
-          if (decoration_info.HasSpellingOrGrammerError() &&
+          if (decoration_info.HasSpellingOrGrammarError() &&
               EnumHasFlags(lines_to_paint,
                            TextDecorationLine::kSpellingError |
                                TextDecorationLine::kGrammarError)) {
-            decoration_info.SetSpellingOrGrammarErrorLineData(
-                decoration_offset);
+            DecorationGeometry geometry =
+                decoration_info.ComputeSpellingOrGrammarErrorLineData(
+                    decoration_offset);
             // We ignore "text-decoration-skip-ink: auto" for spelling and
             // grammar error markers.
             text_painter_.PaintDecorationLine(
-                decoration_info, LineColorForPhase(decoration_info, phase),
-                nullptr);
+                geometry, decoration_info.HasDecorationOverride(),
+                LineColorForPhase(decoration_info, phase), auto_dark_mode);
             continue;
           }
 
           if (decoration_info.HasUnderline() && decoration_info.FontData() &&
               EnumHasFlags(lines_to_paint, TextDecorationLine::kUnderline)) {
-            decoration_info.SetUnderlineLineData(decoration_offset);
+            DecorationGeometry geometry =
+                decoration_info.ComputeUnderlineLineData(decoration_offset);
+            if (decoration_info.TargetStyle().TextDecorationSkipInk() ==
+                ETextDecorationSkipInk::kAuto) {
+              text_painter_.ClipDecorationLine(
+                  geometry, decoration_info.BaselineForInkSkip(),
+                  fragment_paint_info);
+            }
             text_painter_.PaintDecorationLine(
-                decoration_info, LineColorForPhase(decoration_info, phase),
-                &fragment_paint_info);
+                geometry, decoration_info.HasDecorationOverride(),
+                LineColorForPhase(decoration_info, phase), auto_dark_mode);
           }
 
           if (decoration_info.HasOverline() && decoration_info.FontData() &&
               EnumHasFlags(lines_to_paint, TextDecorationLine::kOverline)) {
-            decoration_info.SetOverlineLineData(decoration_offset);
+            DecorationGeometry geometry =
+                decoration_info.ComputeOverlineLineData(decoration_offset);
+            if (decoration_info.TargetStyle().TextDecorationSkipInk() ==
+                ETextDecorationSkipInk::kAuto) {
+              text_painter_.ClipDecorationLine(
+                  geometry, decoration_info.BaselineForInkSkip(),
+                  fragment_paint_info);
+            }
             text_painter_.PaintDecorationLine(
-                decoration_info, LineColorForPhase(decoration_info, phase),
-                &fragment_paint_info);
+                geometry, decoration_info.HasDecorationOverride(),
+                LineColorForPhase(decoration_info, phase), auto_dark_mode);
           }
         }
       },
@@ -194,6 +213,8 @@ void TextDecorationPainter::PaintLineThroughDecorations(
     paint_info_.context.Scale(1, decoration_info.ScalingFactor());
   }
 
+  const AutoDarkMode auto_dark_mode(PaintAutoDarkMode(
+      decoration_info.TargetStyle(), DarkModeFilter::ElementRole::kForeground));
   PaintWithTextShadow(
       [&](TextShadowPaintPhase phase) {
         for (wtf_size_t applied_decoration_index = 0;
@@ -205,16 +226,15 @@ void TextDecorationPainter::PaintLineThroughDecorations(
           TextDecorationLine lines = decoration.Lines();
           if (EnumHasFlags(lines, TextDecorationLine::kLineThrough)) {
             decoration_info.SetDecorationIndex(applied_decoration_index);
-            paint_info_.context.SetStrokeThickness(
-                decoration_info.ResolvedThickness());
 
-            decoration_info.SetLineThroughLineData();
+            DecorationGeometry geometry =
+                decoration_info.ComputeLineThroughLineData();
 
             // No skip: ink for line-through,
             // compare https://github.com/w3c/csswg-drafts/issues/711
             text_painter_.PaintDecorationLine(
-                decoration_info, LineColorForPhase(decoration_info, phase),
-                nullptr);
+                geometry, decoration_info.HasDecorationOverride(),
+                LineColorForPhase(decoration_info, phase), auto_dark_mode);
           }
         }
       },

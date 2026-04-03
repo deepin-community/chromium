@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/webui/ash/settings/pages/a11y/accessibility_handler.h"
 
 #include <set>
+#include <string_view>
 
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/new_window_delegate.h"
@@ -14,13 +15,13 @@
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/dictation.h"
-#include "chrome/browser/ash/crosapi/browser_util.h"
-#include "chrome/browser/ash/os_url_handler.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
@@ -93,28 +94,34 @@ void AccessibilityHandler::RegisterMessages() {
       "getStartupSoundEnabled",
       base::BindRepeating(&AccessibilityHandler::HandleGetStartupSoundEnabled,
                           base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "previewFlashNotification",
+      base::BindRepeating(&AccessibilityHandler::HandlePreviewFlashNotification,
+                          base::Unretained(this)));
 }
 
 void AccessibilityHandler::HandleShowBrowserAppearanceSettings(
-    const base::Value::List& args) {
-  ash::NewWindowDelegate::GetPrimary()->OpenUrl(
+    const base::ListValue& args) {
+  ash::NewWindowDelegate::GetInstance()->OpenUrl(
       GURL(chrome::kChromeUISettingsURL).Resolve(chrome::kAppearanceSubPage),
       ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       ash::NewWindowDelegate::Disposition::kSwitchToTab);
 }
 
 void AccessibilityHandler::HandleSetStartupSoundEnabled(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK_EQ(1U, args.size());
   bool enabled = false;
   if (args[0].is_bool()) {
     enabled = args[0].GetBool();
   }
   AccessibilityManager::Get()->SetStartupSoundEnabled(enabled);
+  base::UmaHistogramBoolean(
+      "ChromeOS.Settings.Accessibility.OOBEStartupSound.Enabled", enabled);
 }
 
 void AccessibilityHandler::HandleRecordSelectedShowShelfNavigationButtonsValue(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK_EQ(1U, args.size());
   bool enabled = false;
   if (args[0].is_bool()) {
@@ -127,7 +134,7 @@ void AccessibilityHandler::HandleRecordSelectedShowShelfNavigationButtonsValue(
 }
 
 void AccessibilityHandler::HandleManageA11yPageReady(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 }
 
@@ -146,48 +153,45 @@ void AccessibilityHandler::OnJavascriptDisallowed() {
 }
 
 void AccessibilityHandler::HandleShowChromeVoxTutorial(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AccessibilityManager::Get()->ShowChromeVoxTutorial();
 }
 
 void AccessibilityHandler::HandleUpdateBluetoothBrailleDisplayAddress(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
   const std::string address = args[0].GetString();
   AccessibilityManager::Get()->UpdateBluetoothBrailleDisplayAddress(address);
 }
 
 void AccessibilityHandler::HandleGetStartupSoundEnabled(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   FireWebUIListener(
       "startup-sound-setting-retrieved",
       base::Value(AccessibilityManager::Get()->GetStartupSoundEnabled()));
 }
 
+void AccessibilityHandler::HandlePreviewFlashNotification(
+    const base::ListValue& args) {
+  AccessibilityManager::Get()->PreviewFlashNotification();
+}
+
 void AccessibilityHandler::OpenExtensionOptionsPage(const char extension_id[]) {
   const extensions::Extension* extension =
-      extensions::ExtensionRegistry::Get(profile_)->GetExtensionById(
-          extension_id, extensions::ExtensionRegistry::ENABLED);
+      extensions::ExtensionRegistry::Get(profile_)
+          ->enabled_extensions()
+          .GetByID(extension_id);
   if (!extension) {
     return;
   }
 
-  // If Lacros is the only browser, we need to open the options page in an Ash
-  // app window instead of a regular Ash browser window so that the user can't
-  // navigate in Ash. We do so using the OsUrlHandler SWA. Exception: Kiosk mode
-  // doesn't support SWA but already hide the navigation bar.
-  bool open_with_os_url_handler =
-      !crosapi::browser_util::IsAshWebBrowserEnabled() &&
-      !chromeos::IsKioskSession();
-  if (open_with_os_url_handler) {
-    DCHECK(extensions::OptionsPageInfo::ShouldOpenInTab(extension));
-    GURL url = extensions::OptionsPageInfo::GetOptionsPage(extension);
-    bool launched = ash::TryLaunchOsUrlHandler(url);
-    DCHECK(launched);
-  } else {
-    extensions::ExtensionTabUtil::OpenOptionsPage(
-        extension, chrome::FindBrowserWithTab(web_ui()->GetWebContents()));
+  ash::BrowserDelegate* browser =
+      ash::BrowserController::GetInstance()->GetBrowserForTab(
+          web_ui()->GetWebContents());
+  if (browser) {
+    extensions::ExtensionTabUtil::OpenOptionsPage(extension,
+                                                  &browser->GetBrowser());
   }
 }
 
@@ -258,7 +262,7 @@ void AccessibilityHandler::MaybeAddDictationLocales() {
 
   // Get application locale.
   std::string application_locale = g_browser_process->GetApplicationLocale();
-  std::pair<base::StringPiece, base::StringPiece> application_lang_and_locale =
+  std::pair<std::string_view, std::string_view> application_lang_and_locale =
       language::SplitIntoMainAndTail(application_locale);
 
   // Get IME locales
@@ -273,12 +277,12 @@ void AccessibilityHandler::MaybeAddDictationLocales() {
   // Get enabled preferred UI languages.
   std::string preferred_languages =
       profile_->GetPrefs()->GetString(language::prefs::kPreferredLanguages);
-  std::vector<base::StringPiece> enabled_languages =
+  std::vector<std::string_view> enabled_languages =
       base::SplitStringPiece(preferred_languages, ",", base::TRIM_WHITESPACE,
                              base::SPLIT_WANT_NONEMPTY);
 
   // Combine these into one set for recommending Dication languages.
-  std::set<base::StringPiece> ui_languages;
+  std::set<std::string_view> ui_languages;
   ui_languages.insert(application_lang_and_locale.first);
   for (auto& ime_language : ime_languages) {
     ui_languages.insert(language::SplitIntoMainAndTail(ime_language).first);
@@ -287,9 +291,9 @@ void AccessibilityHandler::MaybeAddDictationLocales() {
     ui_languages.insert(language::SplitIntoMainAndTail(enabled_language).first);
   }
 
-  base::Value::List locales_list;
+  base::ListValue locales_list;
   for (auto& locale : locales) {
-    base::Value::Dict option;
+    base::DictValue option;
     option.Set("value", locale.first);
     option.Set("name",
                l10n_util::GetDisplayNameForLocale(
@@ -299,9 +303,9 @@ void AccessibilityHandler::MaybeAddDictationLocales() {
 
     // We can recommend languages that match the current application
     // locale, IME languages or enabled preferred languages.
-    std::pair<base::StringPiece, base::StringPiece> lang_and_locale =
+    std::pair<std::string_view, std::string_view> lang_and_locale =
         language::SplitIntoMainAndTail(locale.first);
-    bool is_recommended = base::Contains(ui_languages, lang_and_locale.first);
+    bool is_recommended = ui_languages.contains(lang_and_locale.first);
 
     option.Set("recommended", is_recommended);
     locales_list.Append(std::move(option));

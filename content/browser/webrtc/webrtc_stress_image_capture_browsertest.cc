@@ -18,9 +18,6 @@
 #include "media/capture/video/fake_video_capture_device_factory.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "base/android/build_info.h"
-#endif
 
 namespace content {
 
@@ -66,8 +63,8 @@ class WebRtcImageCaptureStressBrowserTest
   void SetUpCommandLine(base::CommandLine* command_line) override {
     UsingRealWebcam_WebRtcWebcamBrowserTest::SetUpCommandLine(command_line);
 
-    ASSERT_FALSE(base::CommandLine::ForCurrentProcess()->HasSwitch(
-        switches::kUseFakeDeviceForMediaStream));
+    ASSERT_FALSE(
+        command_line->HasSwitch(switches::kUseFakeDeviceForMediaStream));
   }
 
   void SetUp() override {

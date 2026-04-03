@@ -6,11 +6,12 @@
 
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "content/public/browser/console_message.h"
 #include "content/public/browser/service_worker_context_observer.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/messaging/transferable_message.h"
@@ -39,13 +40,13 @@ void FakeServiceWorkerContext::RegisterServiceWorker(
 void FakeServiceWorkerContext::UnregisterServiceWorker(
     const GURL& scope,
     const blink::StorageKey& key,
-    ResultCallback callback) {
+    StatusCodeCallback callback) {
   NOTREACHED();
 }
 void FakeServiceWorkerContext::UnregisterServiceWorkerImmediately(
     const GURL& scope,
     const blink::StorageKey& key,
-    ResultCallback callback) {
+    StatusCodeCallback callback) {
   NOTREACHED();
 }
 ServiceWorkerExternalRequestResult
@@ -54,30 +55,26 @@ FakeServiceWorkerContext::StartingExternalRequest(
     ServiceWorkerExternalRequestTimeoutType timeout_type,
     const base::Uuid& request_uuid) {
   NOTREACHED();
-  return ServiceWorkerExternalRequestResult::kWorkerNotFound;
 }
 ServiceWorkerExternalRequestResult
 FakeServiceWorkerContext::FinishedExternalRequest(
     int64_t service_worker_version_id,
     const base::Uuid& request_uuid) {
   NOTREACHED();
-  return ServiceWorkerExternalRequestResult::kWorkerNotFound;
 }
 size_t FakeServiceWorkerContext::CountExternalRequestsForTest(
     const blink::StorageKey& key) {
   NOTREACHED();
-  return 0u;
 }
 bool FakeServiceWorkerContext::ExecuteScriptForTest(
     const std::string& script,
     int64_t version_id,
     ServiceWorkerScriptExecutionCallback callback) {
   NOTREACHED();
-  return false;
 }
 bool FakeServiceWorkerContext::MaybeHasRegistrationForStorageKey(
     const blink::StorageKey& key) {
-  return base::Contains(registered_storage_keys_, key);
+  return registered_storage_keys_.contains(key);
 }
 void FakeServiceWorkerContext::GetAllStorageKeysInfo(
     GetUsageInfoCallback callback) {
@@ -93,12 +90,6 @@ void FakeServiceWorkerContext::CheckHasServiceWorker(
     CheckHasServiceWorkerCallback callback) {
   NOTREACHED();
 }
-void FakeServiceWorkerContext::CheckOfflineCapability(
-    const GURL& url,
-    const blink::StorageKey& key,
-    const ServiceWorkerContext::CheckOfflineCapabilityCallback callback) {
-  NOTREACHED();
-}
 void FakeServiceWorkerContext::ClearAllServiceWorkersForTest(
     base::OnceClosure) {
   NOTREACHED();
@@ -107,32 +98,35 @@ void FakeServiceWorkerContext::StartWorkerForScope(
     const GURL& scope,
     const blink::StorageKey& key,
     ServiceWorkerContext::StartWorkerCallback info_callback,
-    ServiceWorkerContext::StatusCodeCallback failure_callback) {
+    ServiceWorkerContext::StatusCodeResponseCallback failure_callback) {
   NOTREACHED();
 }
 
 bool FakeServiceWorkerContext::IsLiveStartingServiceWorker(
     int64_t service_worker_version_id) {
   NOTREACHED();
-  return false;
 }
 
 bool FakeServiceWorkerContext::IsLiveRunningServiceWorker(
     int64_t service_worker_version_id) {
   NOTREACHED();
-  return false;
 }
 
 service_manager::InterfaceProvider&
 FakeServiceWorkerContext::GetRemoteInterfaces(
     int64_t service_worker_version_id) {
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 blink::AssociatedInterfaceProvider&
 FakeServiceWorkerContext::GetRemoteAssociatedInterfaces(
     int64_t service_worker_version_id) {
-  NOTREACHED_NORETURN();
+  NOTREACHED();
+}
+
+void FakeServiceWorkerContext::SetForceUpdateOnPageLoadForTesting(
+    bool force_update_on_page_load) {
+  NOTREACHED();
 }
 
 void FakeServiceWorkerContext::StartServiceWorkerForNavigationHint(
@@ -170,10 +164,18 @@ void FakeServiceWorkerContext::StopAllServiceWorkers(base::OnceClosure) {
 const base::flat_map<int64_t, ServiceWorkerRunningInfo>&
 FakeServiceWorkerContext::GetRunningServiceWorkerInfos() {
   NOTREACHED();
-  static const base::NoDestructor<
-      base::flat_map<int64_t, ServiceWorkerRunningInfo>>
-      empty_running_workers;
-  return *empty_running_workers;
+}
+
+void FakeServiceWorkerContext::AddMessageToConsole(
+    int64_t service_worker_version_id,
+    blink::mojom::ConsoleMessageLevel level,
+    const std::string& message) {
+  for (auto& observer : observers_) {
+    observer.OnReportConsoleMessage(
+        service_worker_version_id, GURL(),
+        content::ConsoleMessage(blink::mojom::ConsoleMessageSource::kOther,
+                                level, base::UTF8ToUTF16(message), -1, GURL()));
+  }
 }
 
 void FakeServiceWorkerContext::NotifyObserversOnVersionActivated(
@@ -195,6 +197,15 @@ void FakeServiceWorkerContext::NotifyObserversOnNoControllees(
     const GURL& scope) {
   for (auto& observer : observers_)
     observer.OnNoControllees(version_id, scope);
+}
+
+void FakeServiceWorkerContext::NotifyObserversOnReportConsoleMessage(
+    int64_t version_id,
+    const GURL& scope,
+    const content::ConsoleMessage& message) {
+  for (auto& observer : observers_) {
+    observer.OnReportConsoleMessage(version_id, scope, message);
+  }
 }
 
 void FakeServiceWorkerContext::AddRegistrationToRegisteredStorageKeys(

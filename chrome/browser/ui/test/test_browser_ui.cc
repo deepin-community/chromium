@@ -4,11 +4,12 @@
 
 #include "chrome/browser/ui/test/test_browser_ui.h"
 
+#include <optional>
+
 #include "base/command_line.h"
 #include "base/test/gtest_util.h"
 #include "base/test/test_switches.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_switches.h"
 
@@ -20,10 +21,7 @@
 #include "ui/views/widget/widget.h"
 #endif
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || \
-    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 #include "content/public/common/content_switches.h"
 #include "ui/base/test/skia_gold_matching_algorithm.h"
 #include "ui/compositor/compositor.h"
@@ -32,24 +30,16 @@
 #include "ui/views/widget/widget.h"
 #endif
 
-// TODO(https://crbug.com/958242) support Mac for pixel tests.
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
+#if BUILDFLAG(IS_WIN)
+#include "ui/events/platform/platform_event_source.h"
+#endif
+
+// TODO(crbug.com/40625383) support Mac for pixel tests.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 #define SUPPORTS_PIXEL_TEST
 #endif
 
 namespace {
-
-// Extracts the |name| argument for ShowUi() from the current test case name.
-// E.g. for InvokeUi_name (or DISABLED_InvokeUi_name) returns "name".
-std::string NameFromTestCase() {
-  const std::string name = base::TestNameWithoutDisabledPrefix(
-      testing::UnitTest::GetInstance()->current_test_info()->name());
-  size_t underscore = name.find('_');
-  return underscore == std::string::npos ? std::string()
-                                         : name.substr(underscore + 1);
-}
 
 #if defined(USE_AURA)
 class ScopedMouseDisabler {
@@ -64,10 +54,26 @@ class ScopedMouseDisabler {
         view->GetWidget()->GetNativeWindow()->GetRootWindow());
     generator.MoveMouseTo({0, 0});
     cursor_client_->DisableMouseEvents();
+    cursor_client_->LockCursor();
+#if BUILDFLAG(IS_WIN)
+    // On Windows, cursor client disable isn't consistently respected, and it's
+    // also used to handle touch -> mouse event translation, so use this
+    // instead. See crbug.com/333846475 for an example of the problem this
+    // solves.
+    ui::PlatformEventSource::SetIgnoreNativePlatformEvents(true);
+#endif
   }
+
   ScopedMouseDisabler(const ScopedMouseDisabler&) = delete;
   const ScopedMouseDisabler operator=(const ScopedMouseDisabler&) = delete;
-  ~ScopedMouseDisabler() { cursor_client_->EnableMouseEvents(); }
+
+  ~ScopedMouseDisabler() {
+#if BUILDFLAG(IS_WIN)
+    ui::PlatformEventSource::SetIgnoreNativePlatformEvents(false);
+#endif
+    cursor_client_->UnlockCursor();
+    cursor_client_->EnableMouseEvents();
+  }
 
  private:
   raw_ptr<aura::client::CursorClient> cursor_client_;
@@ -77,10 +83,8 @@ class ScopedMouseDisabler {
 }  // namespace
 
 TestBrowserUi::TestBrowserUi() {
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
 #if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64)
-  // TODO(1429079): Make these pass with x64 win magic numbers.
+  // TODO(crbug.com/40262522): Make these pass with x64 win magic numbers.
   SetPixelMatchAlgorithm(
       std::make_unique<ui::test::FuzzySkiaGoldMatchingAlgorithm>(
           /*max_different_pixels=*/1000, /*pixel_delta_threshold=*/255 * 3));
@@ -106,13 +110,21 @@ ui::test::ActionResult TestBrowserUi::VerifyPixelUi(
     views::View* view,
     const std::string& screenshot_prefix,
     const std::string& screenshot_name) {
+  return VerifyPixelUi(view, {}, screenshot_prefix, screenshot_name);
+}
+
+ui::test::ActionResult TestBrowserUi::VerifyPixelUi(
+    views::View* view,
+    const ScreenshotOptions& options,
+    const std::string& screenshot_prefix,
+    const std::string& screenshot_name) {
 #ifdef SUPPORTS_PIXEL_TEST
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kVerifyPixels)) {
     return ui::test::ActionResult::kNotAttempted;
   }
 
-  // Disable and hide cursor to prvent any interference with the
+  // Disable and hide cursor to prevent any interference with the
   // screenshots.
   ScopedMouseDisabler disable(view);
 
@@ -121,6 +133,7 @@ ui::test::ActionResult TestBrowserUi::VerifyPixelUi(
   // do this unless necessary, since it will close transient UI like menus,
   // which interferes with tests attempting to verify such UI.
   if (auto* const focus_manager = view->GetWidget()->GetFocusManager();
+      options.focus == ScreenshotFocusMode::kClearFocus &&
       focus_manager->GetFocusedView()) {
     focus_manager->ClearFocus();
   }
@@ -132,15 +145,35 @@ ui::test::ActionResult TestBrowserUi::VerifyPixelUi(
   compositor->ScheduleFullRedraw();
   ui::DrawWaiterForTest::WaitForCompositingEnded(compositor);
 
-  views::ViewSkiaGoldPixelDiff pixel_diff(
-      // For the CR2023 screenshots add a "CR2023" prefix so that they are
-      // compared exclusively with previous CR2023 screenshots. We would like
-      // Skia Gold to catch regressions in both CR2023 and non-CR2023.
-      // TODO(crbug.com/1444466): remove this after CR2023 launch.
-      features::IsChromeRefresh2023() ? "CR2023_" + screenshot_prefix
-                                      : screenshot_prefix);
-  bool success = pixel_diff.CompareViewScreenshot(screenshot_name, view,
-                                                  GetPixelMatchAlgorithm());
+  views::ViewSkiaGoldPixelDiff pixel_diff(screenshot_prefix);
+
+  // Calculate the snapshot bounds in the widget's coordinates.
+  gfx::Rect window_rect = view->GetBoundsInScreen();
+  const views::Widget* widget = view->GetWidget();
+  gfx::Rect bounds_in_screen = widget->GetRootView()->GetBoundsInScreen();
+  gfx::Rect bounds = widget->GetRootView()->bounds();
+  window_rect.Offset(bounds.x() - bounds_in_screen.x(),
+                     bounds.y() - bounds_in_screen.y());
+
+  if (options.region) {
+    const gfx::Rect& region = options.region.value();
+    // Further narrow the rectangle to the targeted region.
+    auto region_rect = window_rect;
+    region_rect.Offset(region.OffsetFromOrigin());
+    region_rect.set_size(region.size());
+    region_rect.Intersect(window_rect);
+    if (region_rect.IsEmpty()) {
+      LOG(ERROR) << "Specified screenshot region (" << region.ToString()
+                 << ") is outside targeted view size ("
+                 << window_rect.size().ToString() << ")";
+      return ui::test::ActionResult::kFailed;
+    }
+    window_rect = region_rect;
+  }
+
+  const bool success = pixel_diff.CompareNativeWindowScreenshot(
+      screenshot_name, widget->GetNativeWindow(), window_rect,
+      GetPixelMatchAlgorithm());
   return success ? ui::test::ActionResult::kSucceeded
                  : ui::test::ActionResult::kFailed;
 #else
@@ -161,19 +194,36 @@ void TestBrowserUi::ShowAndVerifyUi() {
   if (!IsInteractiveUi() &&
       !base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kForceDarkMode) &&
-      ui::NativeTheme::GetInstanceForNativeUi()->ShouldUseDarkColors()) {
+      ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==
+          ui::NativeTheme::PreferredColorScheme::kDark) {
     GTEST_SKIP() << "Host is in dark mode; skipping test";
   }
 #endif  // BUILDFLAG(IS_WIN)
   ShowUi(NameFromTestCase());
   ASSERT_TRUE(VerifyUi());
-  if (IsInteractiveUi())
+  if (IsInteractiveUi()) {
     WaitForUserDismissal();
-  else
+  } else {
     DismissUi();
+  }
 }
 
 bool TestBrowserUi::IsInteractiveUi() const {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kTestLauncherInteractive);
+}
+
+std::string TestBrowserUi::NameFromTestCase() {
+  const std::string name = base::TestNameWithoutDisabledPrefix(
+      testing::UnitTest::GetInstance()->current_test_info()->name());
+  size_t underscore = name.find('_');
+  size_t slash = name.find('/');
+
+  if (underscore == std::string::npos) {
+    return std::string();
+  }
+  if (slash == std::string::npos) {
+    return name.substr(underscore + 1);
+  }
+  return name.substr(underscore + 1, slash - underscore - 1);
 }

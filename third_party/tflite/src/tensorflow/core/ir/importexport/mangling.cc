@@ -47,7 +47,7 @@ const char kTensorPrefix[] = "tftensor$";
 
 std::string PrintShortTextProto(
     const ::tensorflow::protobuf::MessageLite& message) {
-  // proto2::TextFormat::Printer::PrintToString does not have
+  // google::protobuf::TextFormat::Printer::PrintToString does not have
   // a overload for MessageLite so here to be consistent with the existing
   // behavior we use MessageLite::ShortDebugString().
   return message.ShortDebugString();
@@ -122,7 +122,7 @@ Status DemangleDataType(absl::string_view str, DataType* proto) {
   if (!DataType_Parse(std::string(pbtxt), proto)) {
     return FailedPrecondition("Could not parse TFDataType mangled proto");
   }
-  return ::tensorflow::OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace mangling_util

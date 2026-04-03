@@ -9,7 +9,6 @@
 
 #include "apps/launcher.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "components/value_store/value_store_factory_impl.h"
 #include "content/public/browser/browser_context.h"
@@ -22,6 +21,7 @@
 #include "extensions/browser/service_worker_manager.h"
 #include "extensions/browser/user_script_manager.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/file_util.h"
 #include "extensions/shell/browser/shell_extension_loader.h"
 
@@ -137,26 +137,18 @@ std::unique_ptr<ExtensionSet> ShellExtensionSystem::GetDependentExtensions(
 }
 
 void ShellExtensionSystem::InstallUpdate(
-    const std::string& extension_id,
+    const ExtensionId& extension_id,
     const std::string& public_key,
     const base::FilePath& temp_dir,
     bool install_immediately,
     InstallUpdateCallback install_update_callback) {
   NOTREACHED();
-  base::DeletePathRecursively(temp_dir);
 }
 
 void ShellExtensionSystem::PerformActionBasedOnOmahaAttributes(
-    const std::string& extension_id,
-    const base::Value::Dict& attributes) {
+    const ExtensionId& extension_id,
+    const base::DictValue& attributes) {
   NOTREACHED();
-}
-
-bool ShellExtensionSystem::FinishDelayedInstallationIfReady(
-    const std::string& extension_id,
-    bool install_immediately) {
-  NOTREACHED();
-  return false;
 }
 
 }  // namespace extensions

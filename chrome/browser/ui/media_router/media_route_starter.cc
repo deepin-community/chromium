@@ -4,8 +4,8 @@
 
 #include "chrome/browser/ui/media_router/media_route_starter.h"
 
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -46,10 +46,12 @@ void RunRouteResponseCallbacks(
     std::vector<MediaRouteResultCallback> route_result_callbacks,
     mojom::RoutePresentationConnectionPtr connection,
     const RouteRequestResult& result) {
-  if (presentation_callback)
+  if (presentation_callback) {
     std::move(presentation_callback).Run(std::move(connection), result);
-  for (auto& callback : route_result_callbacks)
+  }
+  for (auto& callback : route_result_callbacks) {
     std::move(callback).Run(result);
+  }
 }
 
 // Gets the profile to use for the `MediaRouteStarter` when there is no
@@ -76,8 +78,9 @@ MediaRouteStarter::MediaRouteStarter(MediaRouterUIParameters params)
               : nullptr),
       query_result_manager_(
           std::make_unique<QueryResultManager>(GetMediaRouter())) {
-  if (presentation_manager_)
+  if (presentation_manager_) {
     presentation_manager_->AddObserver(this);
+  }
   InitPresentationSources(params.initial_modes);
   InitMirroringSources(params.initial_modes);
   InitRemotePlaybackSources(params.initial_modes, params.video_codec,
@@ -86,18 +89,18 @@ MediaRouteStarter::MediaRouteStarter(MediaRouterUIParameters params)
 
 MediaRouteStarter::~MediaRouteStarter() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (presentation_manager_)
+  if (presentation_manager_) {
     presentation_manager_->RemoveObserver(this);
+  }
 
   // If |start_presentation_context_| still exists, then it means presentation
   // route request was never attempted.
   if (start_presentation_context_) {
-    bool presentation_sinks_available = base::ranges::any_of(
+    bool presentation_sinks_available = std::ranges::any_of(
         GetQueryResultManager()->GetSinksWithCastModes(),
         [](const MediaSinkWithCastModes& sink) {
-          return base::Contains(sink.cast_modes, MediaCastMode::PRESENTATION) ||
-                 base::Contains(sink.cast_modes,
-                                MediaCastMode::REMOTE_PLAYBACK);
+          return sink.cast_modes.contains(MediaCastMode::PRESENTATION) ||
+                 sink.cast_modes.contains(MediaCastMode::REMOTE_PLAYBACK);
         });
     if (presentation_sinks_available) {
       start_presentation_context_->InvokeErrorCallback(
@@ -182,8 +185,9 @@ std::unique_ptr<RouteParameters> MediaRouteStarter::CreateRouteParameters(
 }
 
 bool MediaRouteStarter::GetScreenCapturePermission(MediaCastMode cast_mode) {
-  if (!RequiresScreenCapturePermission(cast_mode))
+  if (!RequiresScreenCapturePermission(cast_mode)) {
     return true;
+  }
 
   return media_router::GetScreenCapturePermission();
 }
@@ -361,7 +365,7 @@ url::Origin MediaRouteStarter::GetFrameOrigin() const {
 
 bool MediaRouteStarter::IsCastModeAvailable(const CastModeSet& modes,
                                             MediaCastMode mode) {
-  return base::Contains(modes, mode);
+  return modes.contains(mode);
 }
 
 }  // namespace media_router

@@ -8,11 +8,12 @@
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/layout/forms/layout_text_control.h"
+#include "third_party/blink/renderer/core/layout/hit_test_result.h"
 
 namespace blink {
 
 LayoutTextControlSingleLine::LayoutTextControlSingleLine(Element* element)
-    : LayoutNGBlockFlow(element) {}
+    : LayoutBlockFlow(element) {}
 
 HTMLElement* LayoutTextControlSingleLine::InnerEditorElement() const {
   return To<TextControlElement>(GetNode())->InnerEditorElement();
@@ -26,8 +27,9 @@ Element* LayoutTextControlSingleLine::ContainerElement() const {
 
 void LayoutTextControlSingleLine::StyleDidChange(
     StyleDifference style_diff,
-    const ComputedStyle* old_style) {
-  LayoutNGBlockFlow::StyleDidChange(style_diff, old_style);
+    const ComputedStyle* old_style,
+    const StyleChangeContext& style_change_context) {
+  LayoutBlockFlow::StyleDidChange(style_diff, old_style, style_change_context);
   layout_text_control::StyleDidChange(InnerEditorElement(), old_style,
                                       StyleRef());
 }
@@ -38,7 +40,7 @@ bool LayoutTextControlSingleLine::NodeAtPoint(
     const PhysicalOffset& accumulated_offset,
     HitTestPhase phase) {
   NOT_DESTROYED();
-  bool stop_hit_testing = LayoutNGBlockFlow::NodeAtPoint(
+  bool stop_hit_testing = LayoutBlockFlow::NodeAtPoint(
       result, hit_test_location, accumulated_offset, phase);
 
   const LayoutObject* stop_node = result.GetHitTestRequest().GetStopNode();

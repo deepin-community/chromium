@@ -9,7 +9,6 @@
 #include "base/apple/bridging.h"
 #include "base/apple/foundation_util.h"
 #include "base/apple/scoped_cftyperef.h"
-#include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #import "base/mac/scoped_sending_event.h"
 #import "base/message_loop/message_pump_apple.h"
@@ -20,7 +19,11 @@
 #include "content/app_shim_remote_cocoa/render_widget_host_ns_view_host_helper.h"
 #import "content/app_shim_remote_cocoa/web_menu_runner_mac.h"
 #include "content/common/mac/attributed_string_type_converters.h"
+#import "content/public/browser/render_widget_host_view_mac_delegate.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "net/base/apple/url_conversions.h"
 #import "skia/ext/skia_utils_mac.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "third_party/blink/public/common/input/web_gesture_event.h"
 #include "ui/accelerated_widget_mac/window_resize_helper_mac.h"
 #import "ui/base/cocoa/animation_utils.h"
@@ -43,6 +46,9 @@ RenderWidgetHostNSViewBridge::RenderWidgetHostNSViewBridge(
     : destroy_callback_(std::move(destroy_callback)) {
   cocoa_view_ = [[RenderWidgetHostViewCocoa alloc] initWithHost:host
                                                  withHostHelper:host_helper];
+  // Make the initial view visibility state in sync with that of
+  // `RenderWidgetHostViewMac::is_visible_`, which is false.
+  cocoa_view_.hidden = true;
 
   background_layer_ = [[CALayer alloc] init];
   display_ca_layer_tree_ =
@@ -180,9 +186,19 @@ void RenderWidgetHostNSViewBridge::SetTooltipText(
   // Called from the renderer to tell us what the tooltip text should be. It
   // calls us frequently so we need to cache the value to prevent doing a lot
   // of repeat work.
-  if (tooltip_text == tooltip_text_ || !cocoa_view_.window.keyWindow) {
+  if (tooltip_text == tooltip_text_) {
     return;
   }
+
+  AcceptTooltipEvents accept_option = [cocoa_view_ acceptsTooltipEvents];
+  bool accept_events = (accept_option == AcceptTooltipEvents::kWhenInActiveApp)
+                           ? NSApp.isActive
+                           : cocoa_view_.window.keyWindow;
+
+  if (!accept_events) {
+    return;
+  }
+
   tooltip_text_ = tooltip_text;
 
   // Maximum number of characters we allow in a tooltip.
@@ -237,7 +253,7 @@ void RenderWidgetHostNSViewBridge::OnDisplayAdded(const display::Display&) {
   [cocoa_view_ updateScreenProperties];
 }
 
-void RenderWidgetHostNSViewBridge::OnDisplayRemoved(const display::Display&) {
+void RenderWidgetHostNSViewBridge::OnDisplaysRemoved(const display::Displays&) {
   [cocoa_view_ updateScreenProperties];
 }
 
@@ -303,14 +319,30 @@ void RenderWidgetHostNSViewBridge::UnlockKeyboard() {
 void RenderWidgetHostNSViewBridge::ShowSharingServicePicker(
     const std::string& title,
     const std::string& text,
-    const std::string& url,
+    const GURL& url,
     const std::vector<std::string>& file_paths,
     ShowSharingServicePickerCallback callback) {
-  NSString* ns_title = base::SysUTF8ToNSString(title);
-  NSString* ns_url = base::SysUTF8ToNSString(url);
-  NSString* ns_text = base::SysUTF8ToNSString(text);
-
-  NSMutableArray* items = [@[ ns_title, ns_url, ns_text ] mutableCopy];
+  NSMutableArray* items = [[NSMutableArray alloc] init];
+  if (url.is_valid()) {
+    if (@available(macOS 13.0, *)) {
+      NSString* ns_title =
+          base::SysUTF8ToNSString(title.empty() ? url.spec() : title);
+      NSURL* ns_url = net::NSURLWithGURL(url);
+      [items addObject:[[NSPreviewRepresentingActivityItem alloc]
+                           initWithItem:ns_url
+                                  title:ns_title
+                                  image:nil
+                                   icon:nil]];
+    } else {
+      [items addObject:base::SysUTF8ToNSString(url.spec())];
+      [items addObject:base::SysUTF8ToNSString(title)];
+    }
+  } else if (!title.empty()) {
+    [items addObject:base::SysUTF8ToNSString(title)];
+  }
+  if (!text.empty()) {
+    [items addObject:base::SysUTF8ToNSString(text)];
+  }
 
   for (const auto& file_path : file_paths) {
     NSString* ns_file_path = base::SysUTF8ToNSString(file_path);
@@ -394,24 +426,25 @@ void RenderWidgetHostNSViewBridge::DisplayPopupMenu(
     // menu to finish showing to get the nested run loop of the stack.
     // Attempting to show a new menu while the old menu is still visible or
     // fading out confuses AppKit, since we're still in the nested event loop of
-    // DisplayPopupMenu(). See https://crbug.com/812260.
+    // DisplayPopupMenu(). See https://crbug.com/41370640.
     pending_menus_.emplace_back(std::move(menu), std::move(callback));
     return;
   }
 
   // Check if the underlying native window is headless and if so, return early
-  // to avoid showing the popup menu.
+  // to avoid showing the popup menu. In content_shell, the window is not a
+  // `NativeWidgetMacNSWindow`, so this doesn't use a strict cast.
   NativeWidgetMacNSWindow* ns_window =
-      base::apple::ObjCCastStrict<NativeWidgetMacNSWindow>(cocoa_view_.window);
+      base::apple::ObjCCast<NativeWidgetMacNSWindow>(cocoa_view_.window);
   if (ns_window && ns_window.isHeadless) {
     std::move(callback).Run(std::nullopt);
     return;
   }
 
   // Retain the Cocoa view for the duration of the pop-up so that it can't be
-  // dealloced if the widget is destroyed while the pop-up's up (which
-  // would in turn delete me, causing a crash once the -runMenuInView
-  // call returns. That's what was happening in <http://crbug.com/33250>).
+  // dealloced if the widget is destroyed while the pop-up's up (which would in
+  // turn delete me, causing a crash once the -runMenuInView call returns.
+  // That's what was happening in <https://crbug.com/40346793>).
   RenderWidgetHostViewCocoa* cocoa_view = cocoa_view_;
 
   // Get a weak pointer to `this`, so we can detect if we get destroyed while
@@ -424,7 +457,14 @@ void RenderWidgetHostNSViewBridge::DisplayPopupMenu(
                               rightAligned:menu->right_aligned];
 
   {
-    base::AutoReset<bool> running(&showing_popup_menu_, true);
+    // We can't use base::AutoReset to set and reset `showing_popup_menu_` as
+    // `this` might be destroyed by the time showing the menu finishes.
+    showing_popup_menu_ = true;
+    absl::Cleanup running([weak_self]() {
+      if (weak_self) {
+        weak_self->showing_popup_menu_ = false;
+      }
+    });
 
     PopupMenuRunner mojo_host(std::move(menu->receiver), runner);
 
@@ -455,16 +495,7 @@ void RenderWidgetHostNSViewBridge::DisplayPopupMenu(
     return;
   }
 
-  if (runner.menuItemWasChosen) {
-    int index = runner.indexOfSelectedItem;
-    if (index < 0) {
-      std::move(callback).Run(std::nullopt);
-    } else {
-      std::move(callback).Run(index);
-    }
-  } else {
-    std::move(callback).Run(std::nullopt);
-  }
+  std::move(callback).Run(runner.selectedMenuItemIndex);
 
   std::vector<PendingPopupMenu> next_menus = std::exchange(pending_menus_, {});
   if (!next_menus.empty()) {

@@ -27,6 +27,7 @@
 
 #include "dawn/native/CommandBufferStateTracker.h"
 
+#include <bit>
 #include <limits>
 #include <optional>
 #include <type_traits>
@@ -34,9 +35,9 @@
 #include <variant>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/inlined_vector.h"
 #include "dawn/common/Assert.h"
-#include "dawn/common/BitSetIterator.h"
-#include "dawn/common/StackContainer.h"
+#include "dawn/common/Math.h"
 #include "dawn/native/BindGroup.h"
 #include "dawn/native/ComputePassEncoder.h"
 #include "dawn/native/ComputePipeline.h"
@@ -52,6 +53,7 @@
 namespace dawn::native {
 
 namespace {
+
 // Returns nullopt if all buffers in unverifiedBufferSizes are at least large enough to satisfy the
 // minimum listed in pipelineMinBufferSizes, or the index of the first detected failing buffer
 // otherwise.
@@ -109,23 +111,22 @@ Return FindStorageBufferBindingAliasing(const PipelineLayoutBase* pipelineLayout
     // Reduce the bindings array first to only preserve storage buffer bindings that could
     // potentially have ranges overlap.
     // There can at most be 8 storage buffer bindings (in default limits) per shader stage.
-    StackVector<BufferBinding, 8> storageBufferBindingsToCheck;
-    StackVector<std::pair<BindGroupIndex, BindingIndex>, 8> bufferBindingIndices;
+    absl::InlinedVector<BufferBinding, 8> storageBufferBindingsToCheck;
+    absl::InlinedVector<std::pair<BindGroupIndex, BindingIndex>, 8> bufferBindingIndices;
 
     // Reduce the bindings array first to only preserve writable storage texture bindings that could
     // potentially have ranges overlap.
     // There can at most be 8 storage texture bindings (in default limits) per shader stage.
-    StackVector<const TextureViewBase*, 8> storageTextureViewsToCheck;
-    StackVector<std::pair<BindGroupIndex, BindingIndex>, 8> textureBindingIndices;
+    absl::InlinedVector<const TextureViewBase*, 8> storageTextureViewsToCheck;
+    absl::InlinedVector<std::pair<BindGroupIndex, BindingIndex>, 8> textureBindingIndices;
 
-    for (BindGroupIndex groupIndex : IterateBitSet(pipelineLayout->GetBindGroupLayoutsMask())) {
+    for (BindGroupIndex groupIndex : pipelineLayout->GetBindGroupLayoutsMask()) {
         BindGroupLayoutInternalBase* bgl = bindGroups[groupIndex]->GetLayout();
 
-        for (BindingIndex bindingIndex{0}; bindingIndex < bgl->GetBufferCount(); ++bindingIndex) {
+        for (BindingIndex bindingIndex : bgl->GetBufferIndices()) {
             const BindingInfo& bindingInfo = bgl->GetBindingInfo(bindingIndex);
-            // Buffer bindings are sorted to have smallest of bindingIndex.
-            const BufferBindingLayout& layout =
-                std::get<BufferBindingLayout>(bindingInfo.bindingLayout);
+            const BufferBindingInfo& layout =
+                std::get<BufferBindingInfo>(bindingInfo.bindingLayout);
 
             // BindGroup validation already guarantees the buffer usage includes
             // wgpu::BufferUsage::Storage
@@ -147,34 +148,29 @@ Return FindStorageBufferBindingAliasing(const PipelineLayoutBase* pipelineLayout
                 adjustedOffset += dynamicOffsets[groupIndex][static_cast<uint32_t>(bindingIndex)];
             }
 
-            storageBufferBindingsToCheck->push_back(BufferBinding{
+            storageBufferBindingsToCheck.push_back(BufferBinding{
                 bufferBinding.buffer,
                 adjustedOffset,
                 bufferBinding.size,
             });
 
             if constexpr (kProduceDetails) {
-                bufferBindingIndices->emplace_back(groupIndex, bindingIndex);
+                bufferBindingIndices.emplace_back(groupIndex, bindingIndex);
             }
         }
 
         // TODO(dawn:1642): optimize: precompute start/end range of storage textures bindings.
-        for (BindingIndex bindingIndex{bgl->GetBufferCount()};
-             bindingIndex < bgl->GetBindingCount(); ++bindingIndex) {
+        for (BindingIndex bindingIndex : bgl->GetStorageTextureIndices()) {
             const BindingInfo& bindingInfo = bgl->GetBindingInfo(bindingIndex);
+            const auto& layout = std::get<StorageTextureBindingInfo>(bindingInfo.bindingLayout);
 
-            const auto* layout =
-                std::get_if<StorageTextureBindingLayout>(&bindingInfo.bindingLayout);
-            if (layout == nullptr) {
-                continue;
-            }
-
-            switch (layout->access) {
+            switch (layout.access) {
                 case wgpu::StorageTextureAccess::WriteOnly:
                 case wgpu::StorageTextureAccess::ReadWrite:
                     break;
                 case wgpu::StorageTextureAccess::ReadOnly:
                     continue;
+                case wgpu::StorageTextureAccess::BindingNotUsed:
                 case wgpu::StorageTextureAccess::Undefined:
                 default:
                     DAWN_UNREACHABLE();
@@ -183,10 +179,10 @@ Return FindStorageBufferBindingAliasing(const PipelineLayoutBase* pipelineLayout
             const TextureViewBase* textureView =
                 bindGroups[groupIndex]->GetBindingAsTextureView(bindingIndex);
 
-            storageTextureViewsToCheck->push_back(textureView);
+            storageTextureViewsToCheck.push_back(textureView);
 
             if constexpr (kProduceDetails) {
-                textureBindingIndices->emplace_back(groupIndex, bindingIndex);
+                textureBindingIndices.emplace_back(groupIndex, bindingIndex);
             }
         }
     }
@@ -195,10 +191,10 @@ Return FindStorageBufferBindingAliasing(const PipelineLayoutBase* pipelineLayout
     // exists. Given that maxStorageBuffersPerShaderStage is 8, it doesn't seem too bad to do a
     // nested loop check.
     // TODO(dawn:1642): Maybe do algorithm optimization from O(N^2) to O(N*logN).
-    for (size_t i = 0; i < storageBufferBindingsToCheck->size(); i++) {
+    for (size_t i = 0; i < storageBufferBindingsToCheck.size(); i++) {
         const auto& bufferBinding0 = storageBufferBindingsToCheck[i];
 
-        for (size_t j = i + 1; j < storageBufferBindingsToCheck->size(); j++) {
+        for (size_t j = i + 1; j < storageBufferBindingsToCheck.size(); j++) {
             const auto& bufferBinding1 = storageBufferBindingsToCheck[j];
 
             if (bufferBinding0.buffer != bufferBinding1.buffer) {
@@ -226,7 +222,7 @@ Return FindStorageBufferBindingAliasing(const PipelineLayoutBase* pipelineLayout
     // Given that maxStorageTexturesPerShaderStage is 8,
     // it doesn't seem too bad to do a nested loop check.
     // TODO(dawn:1642): Maybe do algorithm optimization from O(N^2) to O(N*logN).
-    for (size_t i = 0; i < storageTextureViewsToCheck->size(); i++) {
+    for (size_t i = 0; i < storageTextureViewsToCheck.size(); i++) {
         const TextureViewBase* textureView0 = storageTextureViewsToCheck[i];
 
         DAWN_ASSERT(textureView0->GetAspects() == Aspect::Color);
@@ -236,7 +232,7 @@ Return FindStorageBufferBindingAliasing(const PipelineLayoutBase* pipelineLayout
         uint32_t baseArrayLayer0 = textureView0->GetBaseArrayLayer();
         uint32_t arrayLayerCount0 = textureView0->GetLayerCount();
 
-        for (size_t j = i + 1; j < storageTextureViewsToCheck->size(); j++) {
+        for (size_t j = i + 1; j < storageTextureViewsToCheck.size(); j++) {
             const TextureViewBase* textureView1 = storageTextureViewsToCheck[j];
 
             if (textureView0->GetTexture() != textureView1->GetTexture()) {
@@ -277,20 +273,27 @@ Return FindStorageBufferBindingAliasing(const PipelineLayoutBase* pipelineLayout
 
 bool TextureViewsMatch(const TextureViewBase* a, const TextureViewBase* b) {
     DAWN_ASSERT(a->GetTexture() == b->GetTexture());
-    return a->GetFormat().GetIndex() == b->GetFormat().GetIndex() &&
+    // If the texture format is multiplanar, the view formats are permitted to differ (e.g., R8
+    // and RG8), referring to different planes of the same YUV texture. This cannot happen in
+    // OpenGL that actually needs the validation of texture views matching so it's safe for
+    // backends to ignore this here. We don't allow creating multiplanar texture views directly in
+    // WebGPU so this code cannot be triggered in JavaScript and only occurs hit when Chromium
+    // creates a YUV texture internally.
+    return (a->GetFormat().GetIndex() == b->GetFormat().GetIndex() ||
+            a->GetTexture()->GetFormat().IsMultiPlanar()) &&
            a->GetDimension() == b->GetDimension() && a->GetBaseMipLevel() == b->GetBaseMipLevel() &&
            a->GetLevelCount() == b->GetLevelCount() &&
            a->GetBaseArrayLayer() == b->GetBaseArrayLayer() &&
-           a->GetLayerCount() == b->GetLayerCount();
+           a->GetLayerCount() == b->GetLayerCount() && a->GetSwizzle() == b->GetSwizzle();
 }
 
-using VectorOfTextureViews = StackVector<const TextureViewBase*, 8>;
+using VectorOfTextureViews = absl::InlinedVector<const TextureViewBase*, 8>;
 
 bool TextureViewsAllMatch(const VectorOfTextureViews& views) {
-    DAWN_ASSERT(!views->empty());
+    DAWN_ASSERT(!views.empty());
 
     const TextureViewBase* first = views[0];
-    for (size_t i = 1; i < views->size(); ++i) {
+    for (size_t i = 1; i < views.size(); ++i) {
         if (!TextureViewsMatch(first, views[i])) {
             return false;
         }
@@ -303,27 +306,33 @@ bool TextureViewsAllMatch(const VectorOfTextureViews& views) {
 enum ValidationAspect {
     VALIDATION_ASPECT_PIPELINE,
     VALIDATION_ASPECT_BIND_GROUPS,
+    VALIDATION_ASPECT_RESOURCE_TABLES,
     VALIDATION_ASPECT_VERTEX_BUFFERS,
     VALIDATION_ASPECT_INDEX_BUFFER,
+    VALIDATION_ASPECT_IMMEDIATE_DATA,
 
     VALIDATION_ASPECT_COUNT
 };
 static_assert(VALIDATION_ASPECT_COUNT == CommandBufferStateTracker::kNumAspects);
 
 static constexpr CommandBufferStateTracker::ValidationAspects kDispatchAspects =
-    1 << VALIDATION_ASPECT_PIPELINE | 1 << VALIDATION_ASPECT_BIND_GROUPS;
+    1 << VALIDATION_ASPECT_PIPELINE | 1 << VALIDATION_ASPECT_BIND_GROUPS |
+    1 << VALIDATION_ASPECT_RESOURCE_TABLES | 1 << VALIDATION_ASPECT_IMMEDIATE_DATA;
 
 static constexpr CommandBufferStateTracker::ValidationAspects kDrawAspects =
     1 << VALIDATION_ASPECT_PIPELINE | 1 << VALIDATION_ASPECT_BIND_GROUPS |
-    1 << VALIDATION_ASPECT_VERTEX_BUFFERS;
+    1 << VALIDATION_ASPECT_RESOURCE_TABLES | 1 << VALIDATION_ASPECT_VERTEX_BUFFERS |
+    1 << VALIDATION_ASPECT_IMMEDIATE_DATA;
 
 static constexpr CommandBufferStateTracker::ValidationAspects kDrawIndexedAspects =
     1 << VALIDATION_ASPECT_PIPELINE | 1 << VALIDATION_ASPECT_BIND_GROUPS |
-    1 << VALIDATION_ASPECT_VERTEX_BUFFERS | 1 << VALIDATION_ASPECT_INDEX_BUFFER;
+    1 << VALIDATION_ASPECT_RESOURCE_TABLES | 1 << VALIDATION_ASPECT_VERTEX_BUFFERS |
+    1 << VALIDATION_ASPECT_INDEX_BUFFER | 1 << VALIDATION_ASPECT_IMMEDIATE_DATA;
 
 static constexpr CommandBufferStateTracker::ValidationAspects kLazyAspects =
-    1 << VALIDATION_ASPECT_BIND_GROUPS | 1 << VALIDATION_ASPECT_VERTEX_BUFFERS |
-    1 << VALIDATION_ASPECT_INDEX_BUFFER;
+    1 << VALIDATION_ASPECT_BIND_GROUPS | 1 << VALIDATION_ASPECT_RESOURCE_TABLES |
+    1 << VALIDATION_ASPECT_VERTEX_BUFFERS | 1 << VALIDATION_ASPECT_INDEX_BUFFER |
+    1 << VALIDATION_ASPECT_IMMEDIATE_DATA;
 
 CommandBufferStateTracker::CommandBufferStateTracker() = default;
 
@@ -355,22 +364,21 @@ MaybeError CommandBufferStateTracker::ValidateNoDifferentTextureViewsOnSameTextu
     // TODO(dawn:1855): Look into optimizations as flat_hash_map does many allocations
     absl::flat_hash_map<const TextureBase*, VectorOfTextureViews> textureToViews;
 
-    for (BindGroupIndex groupIndex :
-         IterateBitSet(mLastPipelineLayout->GetBindGroupLayoutsMask())) {
+    for (BindGroupIndex groupIndex : mLastPipelineLayout->GetBindGroupLayoutsMask()) {
         BindGroupBase* bindGroup = mBindgroups[groupIndex];
         BindGroupLayoutInternalBase* bgl = bindGroup->GetLayout();
 
         for (BindingIndex bindingIndex{0}; bindingIndex < bgl->GetBindingCount(); ++bindingIndex) {
             const BindingInfo& bindingInfo = bgl->GetBindingInfo(bindingIndex);
-            if (!std::holds_alternative<TextureBindingLayout>(bindingInfo.bindingLayout) &&
-                !std::holds_alternative<StorageTextureBindingLayout>(bindingInfo.bindingLayout)) {
+            if (!std::holds_alternative<TextureBindingInfo>(bindingInfo.bindingLayout) &&
+                !std::holds_alternative<StorageTextureBindingInfo>(bindingInfo.bindingLayout)) {
                 continue;
             }
 
             const TextureViewBase* textureViewBase =
                 bindGroup->GetBindingAsTextureView(bindingIndex);
 
-            textureToViews[textureViewBase->GetTexture()]->push_back(textureViewBase);
+            textureToViews[textureViewBase->GetTexture()].push_back(textureViewBase);
         }
     }
 
@@ -381,8 +389,7 @@ MaybeError CommandBufferStateTracker::ValidateNoDifferentTextureViewsOnSameTextu
             !TextureViewsAllMatch(views),
             "In compatibility mode, %s must not have different views in a single draw/dispatch "
             "command. texture views: %s",
-            texture,
-            ityp::span<size_t, const TextureViewBase* const>(views->data(), views->size()));
+            texture, ityp::span<size_t, const TextureViewBase* const>(views.data(), views.size()));
     }
 
     return {};
@@ -402,7 +409,7 @@ MaybeError CommandBufferStateTracker::ValidateBufferInRangeForVertexBuffer(uint3
     const auto& vertexBuffersUsedAsVertexBuffer =
         lastRenderPipeline->GetVertexBuffersUsedAsVertexBuffer();
 
-    for (auto usedSlotVertex : IterateBitSet(vertexBuffersUsedAsVertexBuffer)) {
+    for (auto usedSlotVertex : vertexBuffersUsedAsVertexBuffer) {
         const VertexBufferInfo& vertexBuffer = lastRenderPipeline->GetVertexBuffer(usedSlotVertex);
         uint64_t arrayStride = vertexBuffer.arrayStride;
         uint64_t bufferSize = mVertexBufferSizes[usedSlotVertex];
@@ -448,7 +455,7 @@ MaybeError CommandBufferStateTracker::ValidateBufferInRangeForInstanceBuffer(
     const auto& vertexBuffersUsedAsInstanceBuffer =
         lastRenderPipeline->GetVertexBuffersUsedAsInstanceBuffer();
 
-    for (auto usedSlotInstance : IterateBitSet(vertexBuffersUsedAsInstanceBuffer)) {
+    for (auto usedSlotInstance : vertexBuffersUsedAsInstanceBuffer) {
         const VertexBufferInfo& vertexBuffer =
             lastRenderPipeline->GetVertexBuffer(usedSlotInstance);
         uint64_t arrayStride = vertexBuffer.arrayStride;
@@ -523,9 +530,10 @@ void CommandBufferStateTracker::RecomputeLazyAspects(ValidationAspects aspects) 
     if (aspects[VALIDATION_ASPECT_BIND_GROUPS]) {
         bool matches = true;
 
-        for (BindGroupIndex i : IterateBitSet(mLastPipelineLayout->GetBindGroupLayoutsMask())) {
+        for (BindGroupIndex i : mLastPipelineLayout->GetBindGroupLayoutsMask()) {
             if (mBindgroups[i] == nullptr ||
-                mLastPipelineLayout->GetBindGroupLayout(i) != mBindgroups[i]->GetLayout() ||
+                !mLastPipelineLayout->GetFrontendBindGroupLayout(i)->IsLayoutEqual(
+                    mBindgroups[i]->GetFrontendLayout()) ||
                 FindFirstUndersizedBuffer(mBindgroups[i]->GetUnverifiedBufferSizes(),
                                           (*mMinBufferSizes)[i])
                     .has_value()) {
@@ -547,6 +555,14 @@ void CommandBufferStateTracker::RecomputeLazyAspects(ValidationAspects aspects) 
         }
     }
 
+    if (aspects[VALIDATION_ASPECT_RESOURCE_TABLES]) {
+        // If current pipeline uses a resource table, make sure one has been set on the command
+        // encoder
+        if (!mLastPipelineLayout->UsesResourceTable() || mResourceTable) {
+            mAspects.set(VALIDATION_ASPECT_RESOURCE_TABLES);
+        }
+    }
+
     if (aspects[VALIDATION_ASPECT_VERTEX_BUFFERS]) {
         RenderPipelineBase* lastRenderPipeline = GetRenderPipeline();
 
@@ -556,11 +572,18 @@ void CommandBufferStateTracker::RecomputeLazyAspects(ValidationAspects aspects) 
         }
     }
 
-    if (aspects[VALIDATION_ASPECT_INDEX_BUFFER] && mIndexBufferSet) {
+    if (aspects[VALIDATION_ASPECT_INDEX_BUFFER] && IndexBufferSet()) {
         RenderPipelineBase* lastRenderPipeline = GetRenderPipeline();
         if (!IsStripPrimitiveTopology(lastRenderPipeline->GetPrimitiveTopology()) ||
             mIndexFormat == lastRenderPipeline->GetStripIndexFormat()) {
             mAspects.set(VALIDATION_ASPECT_INDEX_BUFFER);
+        }
+    }
+
+    if (aspects[VALIDATION_ASPECT_IMMEDIATE_DATA]) {
+        ImmediateConstantMask requiredMask = mLastPipeline->GetUserImmediateSlots();
+        if (IsSubset(requiredMask, mImmediateDataMask)) {
+            mAspects.set(VALIDATION_ASPECT_IMMEDIATE_DATA);
         }
     }
 }
@@ -573,7 +596,7 @@ MaybeError CommandBufferStateTracker::CheckMissingAspects(ValidationAspects aspe
     DAWN_INVALID_IF(aspects[VALIDATION_ASPECT_PIPELINE], "No pipeline set.");
 
     if (aspects[VALIDATION_ASPECT_INDEX_BUFFER]) {
-        DAWN_INVALID_IF(!mIndexBufferSet, "Index buffer was not set.");
+        DAWN_INVALID_IF(!IndexBufferSet(), "Index buffer was not set.");
 
         RenderPipelineBase* lastRenderPipeline = GetRenderPipeline();
         wgpu::IndexFormat pipelineIndexFormat = lastRenderPipeline->GetStripIndexFormat();
@@ -600,6 +623,13 @@ MaybeError CommandBufferStateTracker::CheckMissingAspects(ValidationAspects aspe
         return DAWN_VALIDATION_ERROR("Index buffer is invalid.");
     }
 
+    if (aspects[VALIDATION_ASPECT_RESOURCE_TABLES]) {
+        return DAWN_VALIDATION_ERROR(
+            "The current pipeline (%s) was created with `usesResourceTable` but no resource table "
+            "was set on the command encoder.",
+            mLastPipeline);
+    }
+
     if (aspects[VALIDATION_ASPECT_VERTEX_BUFFERS]) {
         // Try to be helpful by finding one missing vertex buffer to surface in the error message.
         const auto missingVertexBuffers =
@@ -612,8 +642,20 @@ MaybeError CommandBufferStateTracker::CheckMissingAspects(ValidationAspects aspe
                                      uint8_t(firstMissing), GetRenderPipeline());
     }
 
+    if (aspects[VALIDATION_ASPECT_IMMEDIATE_DATA]) {
+        ImmediateConstantMask requiredMask = mLastPipeline->GetUserImmediateSlots();
+        if (!IsSubset(requiredMask, mImmediateDataMask)) {
+            ImmediateConstantMask missing = requiredMask & ~mImmediateDataMask;
+            size_t firstMissing = std::countr_zero(static_cast<uint64_t>(missing.to_ullong()));
+            return DAWN_VALIDATION_ERROR("Required immediate data at offset %u was not set.",
+                                         firstMissing * kImmediateConstantElementByteSize);
+        }
+    }
+
     if (aspects[VALIDATION_ASPECT_BIND_GROUPS]) {
-        for (BindGroupIndex i : IterateBitSet(mLastPipelineLayout->GetBindGroupLayoutsMask())) {
+        // TODO(crbug.com/dawn/2476): Validate TextureViewDescriptor YCbCrInfo matches with that in
+        // SamplerDescriptor.
+        for (BindGroupIndex i : mLastPipelineLayout->GetBindGroupLayoutsMask()) {
             DAWN_ASSERT(HasPipeline());
 
             DAWN_INVALID_IF(mBindgroups[i] == nullptr, "No bind group set at group index %u.", i);
@@ -622,7 +664,7 @@ MaybeError CommandBufferStateTracker::CheckMissingAspects(ValidationAspects aspe
             BindGroupLayoutBase* currentBGL = mBindgroups[i]->GetFrontendLayout();
 
             DAWN_INVALID_IF(
-                requiredBGL->GetPipelineCompatibilityToken() != PipelineCompatibilityToken(0) &&
+                requiredBGL->GetPipelineCompatibilityToken() != kExplicitPCT &&
                     currentBGL->GetPipelineCompatibilityToken() !=
                         requiredBGL->GetPipelineCompatibilityToken(),
                 "The current pipeline (%s) was created with a default layout, and is not "
@@ -633,8 +675,8 @@ MaybeError CommandBufferStateTracker::CheckMissingAspects(ValidationAspects aspe
                 mLastPipeline, mBindgroups[i], i, currentBGL, i);
 
             DAWN_INVALID_IF(
-                requiredBGL->GetPipelineCompatibilityToken() == PipelineCompatibilityToken(0) &&
-                    currentBGL->GetPipelineCompatibilityToken() != PipelineCompatibilityToken(0),
+                requiredBGL->GetPipelineCompatibilityToken() == kExplicitPCT &&
+                    currentBGL->GetPipelineCompatibilityToken() != kExplicitPCT,
                 "%s set at group index %u uses a %s which was created as part of the default "
                 "layout "
                 "for a different pipeline than the current one (%s), and as a result is not "
@@ -665,17 +707,15 @@ MaybeError CommandBufferStateTracker::CheckMissingAspects(ValidationAspects aspe
                             std::numeric_limits<uint32_t>::max());
 
                 const auto& bindingInfo = mBindgroups[i]->GetLayout()->GetBindingInfo(bindingIndex);
-                const BufferBinding& bufferBinding =
-                    mBindgroups[i]->GetBindingAsBufferBinding(bindingIndex);
+                const BufferBase* buffer = mBindgroups[i]->GetBindingAsBuffer(bindingIndex);
 
                 BindingNumber bindingNumber = bindingInfo.binding;
-                const BufferBase* buffer = bufferBinding.buffer;
 
                 uint64_t bufferSize =
                     mBindgroups[i]->GetUnverifiedBufferSizes()[packedIndex.value()];
                 uint64_t minBufferSize = (*mMinBufferSizes)[i][packedIndex.value()];
 
-                const auto& layout = std::get<BufferBindingLayout>(bindingInfo.bindingLayout);
+                const auto& layout = std::get<BufferBindingInfo>(bindingInfo.bindingLayout);
                 return DAWN_VALIDATION_ERROR(
                     "%s bound with size %u at group %u, binding %u is too small. The pipeline (%s) "
                     "requires a buffer binding which is at least %u bytes.%s",
@@ -700,9 +740,7 @@ MaybeError CommandBufferStateTracker::CheckMissingAspects(ValidationAspects aspe
                 mBindgroups[a.e0.bindGroupIndex], a.e0.bindGroupIndex, a.e0.bindingIndex,
                 mBindgroups[a.e1.bindGroupIndex], a.e1.bindGroupIndex, a.e1.bindingIndex,
                 a.e0.offset, a.e0.size, a.e1.offset, a.e1.size,
-                mBindgroups[a.e0.bindGroupIndex]
-                    ->GetBindingAsBufferBinding(a.e0.bindingIndex)
-                    .buffer);
+                mBindgroups[a.e0.bindGroupIndex]->GetBindingAsBuffer(a.e0.bindingIndex));
         } else {
             DAWN_ASSERT(std::holds_alternative<TextureAliasing>(result));
             const auto& a = std::get<TextureAliasing>(result);
@@ -753,10 +791,19 @@ void CommandBufferStateTracker::SetBindGroup(BindGroupIndex index,
     mAspects.reset(VALIDATION_ASPECT_BIND_GROUPS);
 }
 
-void CommandBufferStateTracker::SetIndexBuffer(wgpu::IndexFormat format, uint64_t size) {
-    mIndexBufferSet = true;
+void CommandBufferStateTracker::SetResourceTable(ResourceTableBase* resourceTable) {
+    mResourceTable = resourceTable;
+    mAspects.reset(VALIDATION_ASPECT_RESOURCE_TABLES);
+}
+
+void CommandBufferStateTracker::SetIndexBuffer(BufferBase* buffer,
+                                               wgpu::IndexFormat format,
+                                               uint64_t offset,
+                                               uint64_t size) {
+    mIndexBuffer = buffer;
     mIndexFormat = format;
     mIndexBufferSize = size;
+    mIndexBufferOffset = offset;
 }
 
 void CommandBufferStateTracker::UnsetVertexBuffer(VertexBufferSlot slot) {
@@ -768,6 +815,14 @@ void CommandBufferStateTracker::UnsetVertexBuffer(VertexBufferSlot slot) {
 void CommandBufferStateTracker::SetVertexBuffer(VertexBufferSlot slot, uint64_t size) {
     mVertexBuffersUsed.set(slot);
     mVertexBufferSizes[slot] = size;
+}
+
+void CommandBufferStateTracker::SetImmediateData(uint32_t offset, uint32_t size) {
+    static_assert(ImmediateConstantMask{}.size() <= 64);
+    uint64_t startSlot = offset / kImmediateConstantElementByteSize;
+    uint64_t slotCount = size / kImmediateConstantElementByteSize;
+
+    mImmediateDataMask |= ImmediateConstantMask(((1u << slotCount) - 1u) << startSlot);
 }
 
 void CommandBufferStateTracker::SetPipelineCommon(PipelineBase* pipeline) {
@@ -794,6 +849,10 @@ bool CommandBufferStateTracker::HasPipeline() const {
     return mLastPipeline != nullptr;
 }
 
+bool CommandBufferStateTracker::IndexBufferSet() const {
+    return mIndexBuffer != nullptr;
+}
+
 RenderPipelineBase* CommandBufferStateTracker::GetRenderPipeline() const {
     DAWN_ASSERT(HasPipeline() && mLastPipeline->GetType() == ObjectType::RenderPipeline);
     return static_cast<RenderPipelineBase*>(mLastPipeline);
@@ -808,12 +867,28 @@ PipelineLayoutBase* CommandBufferStateTracker::GetPipelineLayout() const {
     return mLastPipelineLayout;
 }
 
+BufferBase* CommandBufferStateTracker::GetIndexBuffer() const {
+    return mIndexBuffer;
+}
+
 wgpu::IndexFormat CommandBufferStateTracker::GetIndexFormat() const {
     return mIndexFormat;
 }
 
 uint64_t CommandBufferStateTracker::GetIndexBufferSize() const {
     return mIndexBufferSize;
+}
+
+uint64_t CommandBufferStateTracker::GetIndexBufferOffset() const {
+    return mIndexBufferOffset;
+}
+
+void CommandBufferStateTracker::End() {
+    mLastPipelineLayout = nullptr;
+    mLastPipeline = nullptr;
+    mMinBufferSizes = nullptr;
+    mBindgroups.fill(nullptr);
+    mResourceTable = nullptr;
 }
 
 }  // namespace dawn::native

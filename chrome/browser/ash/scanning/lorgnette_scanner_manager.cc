@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/map_util.h"
 #include "base/functional/bind.h"
@@ -24,9 +23,12 @@
 #include "base/strings/stringprintf.h"
 #include "base/unguessable_token.h"
 #include "base/uuid.h"
+#include "chrome/browser/ash/scanning/lorgnette_notification_controller.h"
 #include "chrome/browser/ash/scanning/lorgnette_scanner_manager_util.h"
 #include "chrome/browser/ash/scanning/zeroconf_scanner_detector.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
+#include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
 #include "chromeos/ash/components/dbus/lorgnette/lorgnette_service.pb.h"
 #include "chromeos/ash/components/dbus/lorgnette_manager/lorgnette_manager_client.h"
 #include "chromeos/ash/components/scanning/scanner.h"
@@ -47,14 +49,24 @@ constexpr char kVerifyScannerClientId[] = "ZeroconfScannerChecker";
 // to be excluded in IsRotateAlternate().
 constexpr char kEpsonNoFlipModels[] =
     "\\b("
-    "AM-C4000"
+    "AM-C400"
+    "|AM-C4000"
     "|AM-C5000"
+    "|AM-C550"
+    "|AM-C550z"
     "|AM-C6000"
     "|DS-790WN"
+    "|DS-800WN"
+    "|DS-900WN"
     "|DS-C420W"
     "|DS-C480W"
+    "|EM-C7100"
+    "|EM-C800"
+    "|EM-C8100"
+    "|EM-C8101"
     "|ES-C320W"
     "|ES-C380W"
+    "|LM-C400"
     "|LM-C4000"
     "|LM-C5000"
     "|LM-C6000"
@@ -71,8 +83,13 @@ constexpr char kEpsonNoFlipModels[] =
     "|PX-M7090FX"
     "|PX-M7110F"
     "|PX-M7110FP"
+    "|PX-M7120F"
+    "|PX-M7120FP"
+    "|PX-M8000FX"
+    "|PX-M8010FX"
     "|PX-M860F"
     "|PX-M880FX"
+    "|PX-M890FX"
     "|RR-400W"
     "|WF-6530"
     "|WF-6590"
@@ -88,6 +105,7 @@ constexpr char kEpsonNoFlipModels[] =
     "|WF-C21000c"
     "|WF-C579R"
     "|WF-C579Ra"
+    "|WF-C5891"
     "|WF-C8610"
     "|WF-C8690"
     "|WF-C8690a"
@@ -180,12 +198,15 @@ std::string CreateScannerId(std::string_view uuid,
 class LorgnetteScannerManagerImpl final : public LorgnetteScannerManager {
  public:
   LorgnetteScannerManagerImpl(
-      std::unique_ptr<ZeroconfScannerDetector> zeroconf_scanner_detector)
+      std::unique_ptr<ZeroconfScannerDetector> zeroconf_scanner_detector,
+      Profile* profile)
       : zeroconf_scanner_detector_(std::move(zeroconf_scanner_detector)) {
     zeroconf_scanner_detector_->RegisterScannersDetectedCallback(
         base::BindRepeating(&LorgnetteScannerManagerImpl::OnScannersDetected,
                             weak_ptr_factory_.GetWeakPtr()));
     OnScannersDetected(zeroconf_scanner_detector_->GetScanners());
+    lorgnette_notification_controller_ =
+        std::make_unique<LorgnetteNotificationController>(profile);
   }
 
   ~LorgnetteScannerManagerImpl() override = default;
@@ -199,6 +220,7 @@ class LorgnetteScannerManagerImpl final : public LorgnetteScannerManager {
     GetLorgnetteManagerClient()->ListScanners(
         kListScannersDiscoveryClientId,
         /*local_only=*/false,
+        /*preferred_only=*/true,
         base::BindOnce(&LorgnetteScannerManagerImpl::OnListScannerNamesResponse,
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
   }
@@ -211,6 +233,7 @@ class LorgnetteScannerManagerImpl final : public LorgnetteScannerManager {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_);
     GetLorgnetteManagerClient()->ListScanners(
         client_id, (local_only == LocalScannerFilter::kLocalScannersOnly),
+        /*preferred_only=*/false,
         base::BindOnce(&LorgnetteScannerManagerImpl::OnListScannerInfoResponse,
                        weak_ptr_factory_.GetWeakPtr(), std::move(client_id),
                        std::move(callback), local_only, secure_only));
@@ -523,7 +546,7 @@ class LorgnetteScannerManagerImpl final : public LorgnetteScannerManager {
   // `list_response` based on `open_response` and will call `VerifyScanners`
   // once that has happened to verify any remaining scanners.
   void OnVerifyScanner(
-      const std::string client_id,
+      std::string client_id,
       std::vector<lorgnette::ScannerInfo> scanners_to_verify,
       lorgnette::ListScannersResponse list_response,
       GetScannerInfoListCallback callback,
@@ -624,7 +647,7 @@ class LorgnetteScannerManagerImpl final : public LorgnetteScannerManager {
     // Create tombstones for any previously-returned tokens that are no longer
     // part of the response.
     for (const auto& [token, id] : old_tokens) {
-      if (!base::Contains(new_tokens, token)) {
+      if (!new_tokens.contains(token)) {
         new_tokens.emplace(token, std::nullopt);
       }
     }
@@ -1042,6 +1065,10 @@ class LorgnetteScannerManagerImpl final : public LorgnetteScannerManager {
   // device.
   std::map<std::string, TokenToScannerId> client_tokens_;
 
+  // Controls scanner notifications.
+  std::unique_ptr<LorgnetteNotificationController>
+      lorgnette_notification_controller_;
+
   SEQUENCE_CHECKER(sequence_);
 
   base::WeakPtrFactory<LorgnetteScannerManagerImpl> weak_ptr_factory_{this};
@@ -1051,10 +1078,11 @@ class LorgnetteScannerManagerImpl final : public LorgnetteScannerManager {
 
 // static
 std::unique_ptr<LorgnetteScannerManager> LorgnetteScannerManager::Create(
-    std::unique_ptr<ZeroconfScannerDetector> zeroconf_scanner_detector) {
+    std::unique_ptr<ZeroconfScannerDetector> zeroconf_scanner_detector,
+    Profile* profile) {
   PRINTER_LOG(EVENT) << "LorgnetteScannerManager::Create";
   return std::make_unique<LorgnetteScannerManagerImpl>(
-      std::move(zeroconf_scanner_detector));
+      std::move(zeroconf_scanner_detector), profile);
 }
 
 }  // namespace ash

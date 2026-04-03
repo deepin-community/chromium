@@ -10,16 +10,17 @@
 #include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
 #include "components/permissions/permission_util.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 
-// TODO(crbug.com/1011533): Re-define this temporary value in layout provider
+// TODO(crbug.com/40101962): Re-define this temporary value in layout provider
 // once the spec is ready. Make the style GM3-compatible.
 constexpr int DISTANCE_BUTTON_VERTICAL = 8;
 
 // Bubble dialog that prompts user to restore the permission for
 // files/directories previously granted to.
 //
-// TODO(crbug.com/1011533): This UI is still in progress and missing correct
+// TODO(crbug.com/40101962): This UI is still in progress and missing correct
 // styles, accessibility support, etc.
 class FileSystemAccessRestorePermissionBubbleView
     : public LocationBarBubbleDelegateView {
@@ -27,12 +28,14 @@ class FileSystemAccessRestorePermissionBubbleView
                   LocationBarBubbleDelegateView)
 
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(
+      kFileSystemAccessBubbleElementIdentifier);
   FileSystemAccessRestorePermissionBubbleView(
       const std::u16string window_title,
       const std::vector<
           FileSystemAccessPermissionRequestManager::FileRequestData>& file_data,
       base::OnceCallback<void(permissions::PermissionAction)> callback,
-      views::View* anchor_view,
+      views::BubbleAnchor anchor,
       content::WebContents* web_content);
   FileSystemAccessRestorePermissionBubbleView(
       const FileSystemAccessRestorePermissionBubbleView&) = delete;

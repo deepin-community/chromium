@@ -15,6 +15,9 @@ limitations under the License.
 #ifndef TENSORFLOW_LITE_C_COMMON_INTERNAL_H_
 #define TENSORFLOW_LITE_C_COMMON_INTERNAL_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "tensorflow/lite/core/c/c_api_types.h"
 #include "tensorflow/lite/core/c/common.h"
 
@@ -24,11 +27,11 @@ limitations under the License.
 // NOTE: This header does not follow C conventions and does not define a C API.
 // It is effectively an (internal) implementation detail of the C API.
 
-// `TfLiteRegistrationExternal` is an external version of `TfLiteRegistration`
+// `TfLiteOperator` is an external version of `TfLiteRegistration`
 // for C API which doesn't use internal types (such as `TfLiteContext`) but only
 // uses stable API types (such as `TfLiteOpaqueContext`). The purpose of each
 // field is the exactly the same as with `TfLiteRegistration`.
-typedef struct TfLiteRegistrationExternal {
+typedef struct TfLiteOperator {
   // Custom op name.  This should be non-null iff the op is a custom op,
   // i.e. iff builtin_code is kTfLiteBuiltinCustom.
   const char* custom_name;
@@ -81,31 +84,37 @@ typedef struct TfLiteRegistrationExternal {
   // Indicates if an operator's output can safely overwrite its input.
   // See the comments in `TfLiteInPlaceOp`.
   uint64_t inplace_operator;
-} TfLiteRegistrationExternal;
 
-// Returns true iff it's safe to dereference
-// 'delegate->opaque_delegate_builder'.
-inline bool TfLiteDelegateHasValidOpaqueDelegateBuilder(
-    const TfLiteDelegate* delegate) {
-  // We want to give precedence to the delegate's `opaque_delegate_builder`
-  // field when it is available.  In an ideal setting, where all client code
-  // properly initializes the delegate, we could simply check if the
-  // `opaque_delegate_builder` contains a non-zero address.  However, in
-  // practice this breaks code that doesn't adhere to these best practices.
+  // Data supplied by the user in the `TfLiteOperatorCreate` call and then
+  // returned back to the user in the `TfLiteOperator` callbacks listed below.
+  // The user is expected to manage the memory pointed by this field and the
+  // lifetime of that memory should extend at least from the call to
+  // `TfLiteOperatorCreate` to the invocation of the callback set with
+  // `TfLiteOperatorSetFreeWithData`.
+  void* user_data;
+  // The following callbacks can be set with the `TfLiteOperatorSetXXXWithData`
+  // functions and if, so set, will pass back the value of the user_data field
+  // above as first argument.
   //
-  // We can avoid this problem by checking the `Prepare` field contained in the
-  // `TfliteDelegate` (not to be confused with the `Prepare` field contained in
-  // `TfLiteOpaqueDelegateBuilder` struct). In order to tell if we should use
-  // the `opaque_delegate_builder` field we check that the `TfLiteDelegate`'s
-  // `Prepare` member is null.  This should be true for every delegate that
-  // adopts the `TfLiteOpaqueDelegateBuilder` interface and should not be true
-  // for any delegate implementation that is using `TfLiteDelegate` directly.
-  //
-  // TODO(b/245730811): Consider signalling to clients if the delegate is not
-  // initialized cleanly.
-  return delegate != nullptr && delegate->Prepare == nullptr &&
-         delegate->opaque_delegate_builder != nullptr;
-}
+  // TODO(b/339641079): Remove the legacy callbacks listed above and rename
+  // these below without the `_with_data` suffix.
+  void* (*init_with_data)(void* user_data, TfLiteOpaqueContext* context,
+                          const char* buffer, size_t length);
+  void (*free_with_data)(void* user_data, TfLiteOpaqueContext* context,
+                         void* buffer);
+  TfLiteStatus (*prepare_with_data)(void* user_data,
+                                    TfLiteOpaqueContext* context,
+                                    TfLiteOpaqueNode* node);
+  TfLiteStatus (*invoke_with_data)(void* user_data,
+                                   TfLiteOpaqueContext* context,
+                                   TfLiteOpaqueNode* node);
+  struct TfLiteAsyncKernel* (*async_kernel_with_data)(
+      void* user_data, TfLiteOpaqueContext* context, TfLiteOpaqueNode* node);
+} TfLiteOperator;
+
+// Returns true iff the delegate is a well-formed opaque delegate, i.e. none of
+// the fields that are part of the legacy 'TfLiteDelegate' interface are set.
+bool TfLiteDelegateIsOpaque(const TfLiteDelegate* delegate);
 
 // Invokes 'Prepare' on the provided 'delegate', giving the 'delegate' a view
 // of the current graph through the provided 'context'.  Returns the delegate's

@@ -13,6 +13,7 @@
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_share_path.h"
+#include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -20,20 +21,21 @@ namespace ash::settings {
 
 namespace {
 
-base::Value::List GetSharableUsbDevices(CrosUsbDetector* detector) {
-  base::Value::List usb_devices_list;
+base::ListValue GetSharableUsbDevices(CrosUsbDetector* detector) {
+  base::ListValue usb_devices_list;
   for (const auto& device : detector->GetShareableDevices()) {
-    base::Value::Dict device_info;
+    base::DictValue device_info;
     device_info.Set("guid", device.guid);
     device_info.Set("label", device.label);
     if (device.shared_guest_id.has_value()) {
-      base::Value::Dict guest_id;
+      base::DictValue guest_id;
       guest_id.Set("vm_name", device.shared_guest_id->vm_name);
       guest_id.Set("container_name", device.shared_guest_id->container_name);
       device_info.Set("guestId", std::move(guest_id));
     }
     device_info.Set("vendorId", base::StringPrintf("%04x", device.vendor_id));
     device_info.Set("productId", base::StringPrintf("%04x", device.product_id));
+    device_info.Set("serialNumber", device.serial_number);
     device_info.Set("promptBeforeSharing", device.prompt_before_sharing);
     usb_devices_list.Append(std::move(device_info));
   }
@@ -78,12 +80,12 @@ void GuestOsHandler::OnJavascriptDisallowed() {
 }
 
 void GuestOsHandler::HandleGetGuestOsSharedPathsDisplayText(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   CHECK_EQ(2U, args.size());
-  std::string callback_id = args[0].GetString();
+  const std::string& callback_id = args[0].GetString();
 
-  base::Value::List texts;
+  base::ListValue texts;
   for (const auto& path : args[1].GetList()) {
     texts.Append(file_manager::util::GetPathDisplayTextForSettings(
         profile_, path.GetString()));
@@ -92,13 +94,13 @@ void GuestOsHandler::HandleGetGuestOsSharedPathsDisplayText(
 }
 
 void GuestOsHandler::HandleRemoveGuestOsSharedPath(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(3U, args.size());
-  std::string callback_id = args[0].GetString();
-  std::string vm_name = args[1].GetString();
-  std::string path = args[2].GetString();
+  const std::string& callback_id = args[0].GetString();
+  const std::string& vm_name = args[1].GetString();
+  const std::string& path = args[2].GetString();
 
-  guest_os::GuestOsSharePath::GetForProfile(profile_)->UnsharePath(
+  guest_os::GuestOsSharePathFactory::GetForProfile(profile_)->UnsharePath(
       vm_name, base::FilePath(path),
       /*unpersist=*/true,
       base::BindOnce(&GuestOsHandler::OnGuestOsSharedPathRemoved,
@@ -117,13 +119,13 @@ void GuestOsHandler::OnGuestOsSharedPathRemoved(
 }
 
 void GuestOsHandler::HandleNotifyGuestOsSharedUsbDevicesPageReady(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   OnUsbDevicesChanged();
 }
 
 void GuestOsHandler::HandleSetGuestOsUsbDeviceShared(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(4U, args.size());
   CrosUsbDetector* detector = CrosUsbDetector::Get();
   if (!detector) {

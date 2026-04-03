@@ -25,6 +25,7 @@ limitations under the License.
 
 #include "Eigen/Core"  // from @eigen_archive
 #include "tensorflow/lite/string_type.h"
+#include "tensorflow/lite/types/half.h"
 
 namespace tflite {
 namespace testing {
@@ -199,11 +200,20 @@ inline std::vector<std::complex<double>> Split(const string& s,
 }
 
 template <>
-inline std::vector<Eigen::half> Split(const string& s,
-                                      const string& delimiter) {
-  std::vector<Eigen::half> fields;
+inline std::vector<half> Split(const string& s, const string& delimiter) {
+  std::vector<half> fields;
   for (const auto& p : SplitToPos(s, delimiter)) {
-    fields.push_back(Eigen::half_impl::float_to_half_rtne(
+    fields.push_back(static_cast<half>(strtof(s.data() + p.first, nullptr)));
+  }
+  return fields;
+}
+
+template <>
+inline std::vector<Eigen::bfloat16> Split(const string& s,
+                                          const string& delimiter) {
+  std::vector<Eigen::bfloat16> fields;
+  for (const auto& p : SplitToPos(s, delimiter)) {
+    fields.push_back(Eigen::bfloat16_impl::float_to_bfloat16_rtne<false>(
         strtof(s.data() + p.first, nullptr)));
   }
   return fields;

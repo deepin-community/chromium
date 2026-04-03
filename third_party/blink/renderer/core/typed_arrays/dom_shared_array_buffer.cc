@@ -19,15 +19,18 @@ namespace blink {
 #endif
 
 const WrapperTypeInfo DOMSharedArrayBuffer::wrapper_type_info_body_{
-    gin::kEmbedderBlink,
+    {gin::kEmbedderBlink},
     nullptr,
     nullptr,
     "SharedArrayBuffer",
     nullptr,
+    static_cast<v8::CppHeapPointerTag>(
+        ScriptWrappableArrayTag::kDOMSharedArrayBufferTag),
+    static_cast<v8::CppHeapPointerTag>(
+        ScriptWrappableArrayTag::kDOMSharedArrayBufferTag),
     WrapperTypeInfo::kWrapperTypeObjectPrototype,
     WrapperTypeInfo::kObjectClassId,
-    WrapperTypeInfo::kNotInheritFromActiveScriptWrappable,
-    WrapperTypeInfo::kIdlBufferSourceType,
+    WrapperTypeInfo::kIdlOtherType,
 };
 
 const WrapperTypeInfo& DOMSharedArrayBuffer::wrapper_type_info_ =

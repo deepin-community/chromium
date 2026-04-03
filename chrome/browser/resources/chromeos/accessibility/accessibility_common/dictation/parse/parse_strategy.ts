@@ -7,8 +7,8 @@
  * text and converting it into a macro.
  */
 
-import {InputController} from '/common/action_fulfillment/input_controller.js';
-import {Macro} from '/common/action_fulfillment/macros/macro.js';
+import type {InputController} from '/common/action_fulfillment/input_controller.js';
+import type {Macro} from '/common/action_fulfillment/macros/macro.js';
 
 /**
  * Represents a strategy for parsing speech input and converting it into a
@@ -38,6 +38,8 @@ export class ParseStrategy {
 
   /** Accepts text, parses it, and returns a Macro. */
   async parse(text: string): Promise<Macro|null> {
-    throw new Error(`The parse() function must be implemented by each subclass. Trying to parse text: ${text}`);
+    throw new Error(
+        `The parse() function must be implemented by each subclass. Trying to parse text: ${
+            text}`);
   }
 }

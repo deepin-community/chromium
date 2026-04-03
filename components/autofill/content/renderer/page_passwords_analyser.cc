@@ -4,22 +4,20 @@
 
 #include "components/autofill/content/renderer/page_passwords_analyser.h"
 
+#include <algorithm>
 #include <map>
 #include <stack>
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/lazy_instance.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/content/renderer/form_autofill_util.h"
 #include "components/autofill/content/renderer/page_form_analyser_logger.h"
 #include "components/autofill/content/renderer/password_form_conversion_utils.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_element_collection.h"
@@ -38,17 +36,16 @@ using blink::WebLabelElement;
 using blink::WebLocalFrame;
 using blink::WebNode;
 using blink::WebString;
-using blink::WebVector;
 
 namespace autofill {
 
 namespace {
 
-const char kDocumentationUrl[] = "https://goo.gl/9p2vKq";
-const char* kTypeAttributes[] = {"text", "email", "tel", "password"};
-const char* kTypeTextAttributes[] = {"text", "email", "tel"};
-char kTextFieldSignature = 'T';
-char kPasswordFieldSignature = 'P';
+constexpr const char kDocumentationUrl[] = "https://goo.gl/9p2vKq";
+constexpr const char* kTypeAttributes[] = {"text", "email", "tel", "password"};
+constexpr const char* kTypeTextAttributes[] = {"text", "email", "tel"};
+constexpr char kTextFieldSignature = 'T';
+constexpr char kPasswordFieldSignature = 'P';
 
 // Produce a relevant link to developer documentation regarding the warning or
 // error. If no particular reference is given, the default URL will be provided.
@@ -128,7 +125,7 @@ DECLARE_LAZY_MATCHER(telephone_matcher, R"((mobile)?(telephone)?(number|no))");
 // something of the purpose of an element (for example: that it is a username
 // field).
 struct InputHint {
-  raw_ptr<const re2::RE2, ExperimentalRenderer> regex;
+  raw_ptr<const re2::RE2> regex;
   size_t match;
 
   explicit InputHint(const re2::RE2* regex)
@@ -199,11 +196,7 @@ std::vector<FormInputCollection> ExtractFormsForAnalysis(
   std::set<WebFormControlElement> inputs_with_forms;
   std::map<std::string, std::vector<WebNode>> nodes_for_id;
 
-  for (const WebFormElement& form :
-       base::FeatureList::IsEnabled(
-           blink::features::kAutofillIncludeFormElementsInShadowDom)
-           ? document.GetTopLevelForms()
-           : document.Forms()) {
+  for (const WebFormElement& form : document.GetTopLevelForms()) {
     form_input_collections.push_back(FormInputCollection{form});
     // Collect all the inputs in the form.
     for (const WebFormControlElement& input : form.GetFormControlElements()) {
@@ -216,8 +209,8 @@ std::vector<FormInputCollection> ExtractFormsForAnalysis(
       // to be username or password fields.
       if (input.TagName() == "INPUT" &&
           (!input.HasAttribute("type") ||
-           base::Contains(kTypeAttributes,
-                          input.GetAttribute("type").Utf8()))) {
+           std::ranges::contains(kTypeAttributes,
+                                 input.GetAttribute("type").Utf8()))) {
         form_input_collections.back().AddInput(input);
         inputs_with_forms.insert(input);
       }
@@ -231,8 +224,9 @@ std::vector<FormInputCollection> ExtractFormsForAnalysis(
   for (const WebElement& password_input : password_inputs) {
     const WebInputElement input_element =
         password_input.DynamicTo<WebInputElement>();
-    if (input_element.IsNull())
+    if (!input_element) {
       continue;
+    }
     if (TrackElementByRendererIdIfUntracked(
             password_input, form_util::GetFieldRendererId(input_element),
             skip_control_ids, &nodes_for_id)) {
@@ -254,25 +248,12 @@ std::vector<FormInputCollection> ExtractFormsForAnalysis(
   for (const WebElement& text_input : text_inputs) {
     const WebInputElement input_element =
         text_input.DynamicTo<WebInputElement>();
-    if (input_element.IsNull())
+    if (!input_element) {
       continue;
+    }
     TrackElementByRendererIdIfUntracked(
         text_input, form_util::GetFieldRendererId(input_element),
         skip_control_ids, &nodes_for_id);
-  }
-  // Warn against elements sharing an id attribute. Duplicate id attributes both
-  // are against the HTML specification and can cause issues with password
-  // saving/filling, as the Password Manager makes the assumption that ids may
-  // be used as a unique identifier for nodes.
-  for (const auto& pair : nodes_for_id) {
-    const std::string& id_attr = pair.first;
-    const std::vector<WebNode>& nodes = pair.second;
-    if (nodes.size() <= 1)
-      continue;
-    logger->Send(LinkDocumentation(base::StringPrintf(
-                     "Found %zu elements with non-unique id #%s:", nodes.size(),
-                     id_attr.c_str())),
-                 PageFormAnalyserLogger::kWarning, nodes);
   }
 
   return form_input_collections;
@@ -291,7 +272,7 @@ void InferUsernameField(
     size_t username_field_guess,
     std::map<size_t, std::string>* autocomplete_suggestions) {
   WebElementCollection labels(form.GetElementsByHTMLTagName("label"));
-  DCHECK(!labels.IsNull());
+  DCHECK(labels);
 
   std::vector<InputHint> input_hints;
 
@@ -299,13 +280,12 @@ void InferUsernameField(
   input_hints.emplace_back(email_matcher.Pointer());
   input_hints.emplace_back(telephone_matcher.Pointer());
 
-  for (WebElement item = labels.FirstItem(); !item.IsNull();
-       item = labels.NextItem()) {
+  for (WebElement item = labels.FirstItem(); item; item = labels.NextItem()) {
     WebLabelElement label(item.To<WebLabelElement>());
     WebElement control(label.CorrespondingControl());
-    if (!control.IsNull() && control.IsFormControlElement()) {
+    if (control && control.IsFormControlElement()) {
       WebFormControlElement form_control(control.To<WebFormControlElement>());
-      auto found = base::ranges::find(inputs, form_control);
+      auto found = std::ranges::find(inputs, form_control);
       if (found != inputs.end()) {
         std::string label_content(
             base::UTF16ToUTF8(form_util::FindChildText(label)));

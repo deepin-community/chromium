@@ -16,12 +16,12 @@
 #include "extensions/common/manifest.h"
 #include "url/gurl.h"
 
-CoreAppLauncherHandler::CoreAppLauncherHandler() {}
+CoreAppLauncherHandler::CoreAppLauncherHandler() = default;
 
-CoreAppLauncherHandler::~CoreAppLauncherHandler() {}
+CoreAppLauncherHandler::~CoreAppLauncherHandler() = default;
 
 void CoreAppLauncherHandler::HandleRecordAppLaunchByUrl(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   const std::string& url = args[0].GetString();
   double source = args[1].GetDouble();
   int source_int = static_cast<int>(source);

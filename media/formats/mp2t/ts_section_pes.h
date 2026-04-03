@@ -32,8 +32,7 @@ class TsSectionPes : public TsSection {
 
   // TsSection implementation.
   bool Parse(bool payload_unit_start_indicator,
-             const uint8_t* buf,
-             int size) override;
+             base::span<const uint8_t> buf) override;
   void Flush() override;
   void Reset() override;
 
@@ -45,7 +44,7 @@ class TsSectionPes : public TsSection {
   bool Emit(bool emit_for_unknown_size);
 
   // Parse a PES packet, return true if successful.
-  bool ParseInternal(const uint8_t* raw_pes, int raw_pes_size);
+  bool ParseInternal(base::span<const uint8_t> pes);
 
   void ResetPesState();
 

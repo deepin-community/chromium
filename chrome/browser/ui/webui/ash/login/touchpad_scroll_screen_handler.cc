@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/webui/ash/login/touchpad_scroll_screen_handler.h"
 
 #include "base/logging.h"
-
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ui/webui/ash/login/base_screen_handler.h"
@@ -42,8 +41,13 @@ void TouchpadScrollScreenHandler::SetReverseScrolling(bool value) {
   CallExternalAPI("setReverseScrolling", value);
 }
 
-void TouchpadScrollScreenHandler::Show(base::Value::Dict data) {
+void TouchpadScrollScreenHandler::Show(base::DictValue data) {
   ShowInWebUI(std::move(data));
+}
+
+base::WeakPtr<TouchpadScrollScreenView>
+TouchpadScrollScreenHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 }  // namespace ash

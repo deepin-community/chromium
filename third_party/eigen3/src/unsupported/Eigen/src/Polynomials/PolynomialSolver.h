@@ -35,7 +35,7 @@ class PolynomialSolverBase {
 
   typedef Scalar_ Scalar;
   typedef typename NumTraits<Scalar>::Real RealScalar;
-  typedef std::complex<RealScalar> RootType;
+  typedef internal::make_complex_t<Scalar> RootType;
   typedef Matrix<RootType, Deg_, 1> RootsType;
 
   typedef DenseIndex Index;
@@ -82,8 +82,8 @@ class PolynomialSolverBase {
   }
 
  protected:
-  template <typename squaredNormBinaryPredicate>
-  inline const RootType& selectComplexRoot_withRespectToNorm(squaredNormBinaryPredicate& pred) const {
+  template <typename Predicate>
+  inline const RootType& selectComplexRoot_withRespectToNorm(Predicate& pred) const {
     Index res = 0;
     RealScalar norm2 = numext::abs2(m_roots[0]);
     for (Index i = 1; i < m_roots.size(); ++i) {
@@ -114,25 +114,25 @@ class PolynomialSolverBase {
   }
 
  protected:
-  template <typename squaredRealPartBinaryPredicate>
+  template <typename Predicate>
   inline const RealScalar& selectRealRoot_withRespectToAbsRealPart(
-      squaredRealPartBinaryPredicate& pred, bool& hasArealRoot,
+      Predicate& pred, bool& hasArealRoot,
       const RealScalar& absImaginaryThreshold = NumTraits<Scalar>::dummy_precision()) const {
     using std::abs;
     hasArealRoot = false;
     Index res = 0;
-    RealScalar abs2(0);
+    RealScalar val(0);
 
     for (Index i = 0; i < m_roots.size(); ++i) {
       if (abs(m_roots[i].imag()) <= absImaginaryThreshold) {
         if (!hasArealRoot) {
           hasArealRoot = true;
           res = i;
-          abs2 = m_roots[i].real() * m_roots[i].real();
+          val = abs(m_roots[i].real());
         } else {
-          const RealScalar currAbs2 = m_roots[i].real() * m_roots[i].real();
-          if (pred(currAbs2, abs2)) {
-            abs2 = currAbs2;
+          const RealScalar curr = abs(m_roots[i].real());
+          if (pred(curr, val)) {
+            val = curr;
             res = i;
           }
         }
@@ -145,9 +145,9 @@ class PolynomialSolverBase {
     return numext::real_ref(m_roots[res]);
   }
 
-  template <typename RealPartBinaryPredicate>
+  template <typename Predicate>
   inline const RealScalar& selectRealRoot_withRespectToRealPart(
-      RealPartBinaryPredicate& pred, bool& hasArealRoot,
+      Predicate& pred, bool& hasArealRoot,
       const RealScalar& absImaginaryThreshold = NumTraits<Scalar>::dummy_precision()) const {
     using std::abs;
     hasArealRoot = false;
@@ -308,7 +308,7 @@ class PolynomialSolver : public PolynomialSolverBase<Scalar_, Deg_> {
   typedef std::conditional_t<NumTraits<Scalar>::IsComplex, ComplexEigenSolver<CompanionMatrixType>,
                              EigenSolver<CompanionMatrixType> >
       EigenSolverType;
-  typedef std::conditional_t<NumTraits<Scalar>::IsComplex, Scalar, std::complex<Scalar> > ComplexScalar;
+  typedef internal::make_complex_t<Scalar_> ComplexScalar;
 
  public:
   /** Computes the complex roots of a new polynomial. */
@@ -320,6 +320,7 @@ class PolynomialSolver : public PolynomialSolverBase<Scalar_, Deg_> {
       internal::companion<Scalar, Deg_> companion(poly);
       companion.balance();
       m_eigenSolver.compute(companion.denseMatrix());
+      eigen_assert(m_eigenSolver.info() == Eigen::Success);
       m_roots = m_eigenSolver.eigenvalues();
       // cleanup noise in imaginary part of real roots:
       // if the imaginary part is rather small compared to the real part

@@ -15,22 +15,46 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/cupti_collector.h"
 
+#include <algorithm>
+#include <climits>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <list>
+#include <memory>
+#include <optional>
+#include <queue>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/container/fixed_array.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
-#include "absl/hash/hash.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti.h"
 #include "third_party/gpus/cuda/extras/CUPTI/include/cupti_activity.h"
 #include "third_party/gpus/cuda/include/cuda.h"
 #include "third_party/gpus/cuda/include/cuda_occupancy.h"
+#include "xla/backends/profiler/gpu/cupti_buffer_events.h"
+#include "xla/tsl/profiler/utils/math_utils.h"
+#include "xla/tsl/profiler/utils/parse_annotation.h"
+#include "xla/tsl/profiler/utils/timespan.h"
+#include "xla/tsl/profiler/utils/trace_utils.h"
+#include "xla/tsl/profiler/utils/xplane_builder.h"
+#include "xla/tsl/profiler/utils/xplane_schema.h"
+#include "xla/tsl/profiler/utils/xplane_utils.h"
 #include "tsl/platform/abi.h"
 #include "tsl/platform/host_info.h"
-#include "tsl/platform/mutex.h"
-#include "tsl/profiler/utils/parse_annotation.h"
-#include "tsl/profiler/utils/trace_utils.h"
-#include "tsl/profiler/utils/xplane_builder.h"
-#include "tsl/profiler/utils/xplane_schema.h"
-#include "tsl/profiler/utils/xplane_utils.h"
+#include "tsl/platform/thread_annotations.h"
+#include "tsl/profiler/protobuf/xplane.pb.h"
 
 namespace xla {
 namespace profiler {
@@ -39,13 +63,14 @@ namespace {
 
 using tensorflow::profiler::XEventMetadata;
 using tensorflow::profiler::XSpace;
-using tsl::mutex;
-using tsl::mutex_lock;
+using tensorflow::profiler::XStatMetadata;
 using tsl::profiler::Annotation;
 using tsl::profiler::FindOrAddMutablePlaneWithName;
 using tsl::profiler::GpuPlaneName;
+using tsl::profiler::kCuptiActivityNvtxPlaneName;
 using tsl::profiler::kCuptiDriverApiPlaneName;
 using tsl::profiler::kDeviceVendorNvidia;
+using tsl::profiler::kScopeRangeIdTreePlaneName;
 using tsl::profiler::kThreadIdOverhead;
 using tsl::profiler::ParseAnnotationStack;
 using tsl::profiler::StatType;
@@ -53,13 +78,29 @@ using tsl::profiler::XEventBuilder;
 using tsl::profiler::XLineBuilder;
 using tsl::profiler::XPlaneBuilder;
 
+bool IsNvtxActivityEvent(const CuptiTracerEvent& event) {
+  return event.source == CuptiTracerEventSource::Activity &&
+         event.type == CuptiTracerEventType::ThreadMarkerRange;
+}
+
+// Returns true if the event originates from the host or false if it originates
+// from the device. Sets line_id to thread_id for host events and stream_id
+// for device events.
+// NOTE: This function is not called for Environment events, which are handled
+// separately as counters in PerDeviceCollector::Flush.
 bool IsHostEvent(const CuptiTracerEvent& event, int64_t* line_id) {
   // DriverCallback(i.e. kernel launching) events are host events.
   if (event.source == CuptiTracerEventSource::DriverCallback) {
     *line_id = event.thread_id;
     return true;
   }
-  // Non-overhead activity events are device events.
+  // nvtx marker events from activity source are host events. Just put those
+  // events on the original host thread line.
+  if (IsNvtxActivityEvent(event)) {
+    *line_id = event.thread_id;
+    return true;
+  }
+  // Other non-overhead activity events are device events.
   if (event.type != CuptiTracerEventType::Overhead) {
     *line_id = event.stream_id;
     return false;
@@ -78,6 +119,13 @@ bool IsHostEvent(const CuptiTracerEvent& event, int64_t* line_id) {
     *line_id = kThreadIdOverhead;
     return false;
   }
+}
+
+int64_t GetNextAvailableLineId(absl::flat_hash_set<int64_t>& occupied_line_ids,
+                               int64_t next_line_id) {
+  while (occupied_line_ids.contains(next_line_id)) ++next_line_id;
+  occupied_line_ids.insert(next_line_id);
+  return next_line_id;
 }
 
 struct DeviceOccupancyParams {
@@ -139,7 +187,7 @@ class PerDeviceCollector {
     return stats;
   }
 
-  void CreateXEvent(const CuptiTracerEvent& event, XPlaneBuilder* plane,
+  void CreateXEvent(CuptiTracerEvent& event, XPlaneBuilder* plane,
                     uint64_t start_gpu_ns, uint64_t end_gpu_ns,
                     XLineBuilder* line) {
     if (event.start_time_ns < start_gpu_ns || event.end_time_ns > end_gpu_ns ||
@@ -152,6 +200,17 @@ class PerDeviceCollector {
     std::string kernel_name = tsl::port::MaybeAbiDemangle(event.name.c_str());
     if (kernel_name.empty()) {
       kernel_name = GetTraceEventTypeName(event.type);
+    }
+    // For CPU events like cuGraphLaunch(), add the graph id to the name.
+    if (event.graph_id != 0 && event.type == CuptiTracerEventType::CudaGraph &&
+        event.source == CuptiTracerEventSource::DriverCallback) {
+      absl::StrAppend(&kernel_name, " (CudaGraph:", event.graph_id, ")");
+    } else if (event.type == CuptiTracerEventType::ThreadMarkerRange) {
+      kernel_name =
+          event.nvtx_range.empty()
+              ? absl::StrCat("NVTX:", kernel_name)
+              : absl::StrCat("NVTX:", event.nvtx_range, ":", kernel_name);
+      event.nvtx_range = "";
     }
     XEventMetadata* event_metadata =
         plane->GetOrCreateEventMetadata(std::move(kernel_name));
@@ -169,6 +228,11 @@ class PerDeviceCollector {
                               GetStatTypeStr(StatType::kCorrelationId)),
                           event.correlation_id);
     }
+    if (event.scope_range_id) {
+      xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+                              GetStatTypeStr(StatType::kScopeRangeId)),
+                          event.scope_range_id);
+    }
     if (!event.nvtx_range.empty()) {
       xevent.AddStatValue(
           *plane->GetOrCreateStatMetadata(GetStatTypeStr(StatType::kNVTXRange)),
@@ -179,7 +243,16 @@ class PerDeviceCollector {
           *plane->GetOrCreateStatMetadata(GetStatTypeStr(StatType::kContextId)),
           absl::StrCat("$$", static_cast<uint64_t>(event.context_id)));
     }
-
+    if (event.graph_id != 0) {
+      xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+                              GetStatTypeStr(StatType::kCudaGraphId)),
+                          event.graph_id);
+    }
+    if (event.graph_node_id != 0) {
+      xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+                              GetStatTypeStr(StatType::kCudaGraphNodeId)),
+                          event.graph_node_id);
+    }
     if (event.type == CuptiTracerEventType::Kernel &&
         event.source == CuptiTracerEventSource::Activity) {
       DeviceOccupancyParams params{};
@@ -189,13 +262,25 @@ class PerDeviceCollector {
       params.attributes.sharedSizeBytes =
           event.kernel_info.static_shared_memory_usage;
       params.attributes.partitionedGCConfig = PARTITIONED_GC_OFF;
-      params.attributes.shmemLimitConfig = FUNC_SHMEM_LIMIT_DEFAULT;
       params.attributes.maxDynamicSharedSizeBytes = 0;
       params.block_size = static_cast<int>(event.kernel_info.block_x *
                                            event.kernel_info.block_y *
                                            event.kernel_info.block_z);
 
       params.dynamic_smem_size = event.kernel_info.dynamic_shared_memory_usage;
+      // For GPUs with compute capability 7.0+, kernel functions can use dynamic
+      // shared memory sizes larger than the default shared memory per block
+      // (48KB). FUNC_SHMEM_LIMIT_OPTIN should be enabled to reflect this
+      // extended configuration. See NVIDIA bug
+      // https://partners.nvidia.com/Bug/ViewBug/5400719.
+      params.attributes.shmemLimitConfig =
+          params.dynamic_smem_size > device_properties_.sharedMemPerBlock
+              ? FUNC_SHMEM_LIMIT_OPTIN
+              : FUNC_SHMEM_LIMIT_DEFAULT;
+      if (params.attributes.shmemLimitConfig != FUNC_SHMEM_LIMIT_DEFAULT) {
+        params.attributes.maxDynamicSharedSizeBytes =
+            device_properties_.sharedMemPerBlockOptin;
+      }
 
       OccupancyStats& occ_stats = occupancy_cache_[params];
       if (occ_stats.occupancy_pct == 0.0) {
@@ -206,11 +291,10 @@ class PerDeviceCollector {
                           occ_stats.occupancy_pct);
       xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
                               GetStatTypeStr(StatType::kOccupancyMinGridSize)),
-                          static_cast<tsl::int32>(occ_stats.min_grid_size));
-      xevent.AddStatValue(
-          *plane->GetOrCreateStatMetadata(
-              GetStatTypeStr(StatType::kOccupancySuggestedBlockSize)),
-          static_cast<tsl::int32>(occ_stats.suggested_block_size));
+                          static_cast<int32_t>(occ_stats.min_grid_size));
+      xevent.AddStatValue(*plane->GetOrCreateStatMetadata(GetStatTypeStr(
+                              StatType::kOccupancySuggestedBlockSize)),
+                          static_cast<int32_t>(occ_stats.suggested_block_size));
       xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
                               GetStatTypeStr(StatType::kKernelDetails)),
                           *plane->GetOrCreateStatMetadata(ToXStat(
@@ -264,6 +348,24 @@ class PerDeviceCollector {
       xevent.AddStatValue(*plane->GetOrCreateStatMetadata(GetStatTypeStr(
                               StatType::kMemoryResidencyDetails)),
                           *plane->GetOrCreateStatMetadata(std::move(value)));
+    } else if (event.type == CuptiTracerEventType::CudaGraph) {
+      if (event.source == CuptiTracerEventSource::Activity) {
+        xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+                                GetStatTypeStr(StatType::kCudaGraphExecId)),
+                            event.graph_id);
+      } else {
+        if (event.cuda_graph_info.orig_graph_id) {
+          xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+                                  GetStatTypeStr(StatType::kCudaGraphOrigId)),
+                              event.cuda_graph_info.orig_graph_id);
+        }
+      }
+    } else if (event.type == CuptiTracerEventType::ThreadMarkerRange) {
+      if (!event.marker_data_info.marker_string.empty()) {
+        xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+                                GetStatTypeStr(StatType::kMarkerPayloadString)),
+                            event.marker_data_info.marker_string);
+      }
     }
 
     std::vector<Annotation> annotation_stack =
@@ -297,6 +399,15 @@ class PerDeviceCollector {
     return ret_val;
   }
 
+  std::optional<std::string> GetDeviceName(CUdevice device) {
+    char device_name[512];
+    if (cuDeviceGetName(device_name, sizeof(device_name), device) !=
+        CUDA_SUCCESS) {
+      return std::nullopt;
+    }
+    return std::string(device_name);
+  }
+
   std::string GetDeviceXLineName(
       int64_t stream_id,
       absl::flat_hash_set<CuptiTracerEventType>& event_types) {
@@ -316,17 +427,24 @@ class PerDeviceCollector {
   PerDeviceCollector() = default;
 
   void AddEvent(CuptiTracerEvent&& event) {
-    mutex_lock l(m_);
+    absl::MutexLock l(m_);
     events_.emplace_back(std::move(event));
   }
 
   size_t Flush(uint64_t start_gpu_ns, uint64_t end_gpu_ns,
-               XPlaneBuilder* device_plane, XPlaneBuilder* host_plane) {
-    mutex_lock l(m_);
+               XPlaneBuilder* device_plane, XPlaneBuilder* host_plane,
+               XPlaneBuilder* nvtx_plane) {
+    absl::MutexLock l(m_);
     // Tracking event types per line.
     absl::flat_hash_map<int64_t, absl::flat_hash_set<CuptiTracerEventType>>
         events_types_per_line;
     for (auto& event : events_) {
+      // Environment events are counter-like metrics and handled separately on
+      // counter lines. All other events are processed as trace events on
+      // regular host/device lines.
+      if (event.type == CuptiTracerEventType::Environment) {
+        continue;
+      }
       int64_t line_id = CuptiTracerEvent::kInvalidThreadId;
       bool is_host_event = IsHostEvent(event, &line_id);
       if (line_id == CuptiTracerEvent::kInvalidThreadId ||
@@ -334,9 +452,11 @@ class PerDeviceCollector {
         VLOG(9) << "Ignoring event, type=" << static_cast<int>(event.type);
         continue;
       }
-      auto* plane = is_host_event ? host_plane : device_plane;
-      VLOG(9) << "Event"
-              << " type=" << static_cast<int>(event.type)
+      auto* plane = is_host_event ? ((nvtx_plane && IsNvtxActivityEvent(event))
+                                         ? nvtx_plane
+                                         : host_plane)
+                                  : device_plane;
+      VLOG(9) << "Event" << " type=" << static_cast<int>(event.type)
               << " line_id=" << line_id
               << (is_host_event ? " host plane=" : " device plane=")
               << plane->Name();
@@ -345,13 +465,51 @@ class PerDeviceCollector {
       CreateXEvent(event, plane, start_gpu_ns, end_gpu_ns, &line);
       events_types_per_line[line_id].emplace(event.type);
     }
+
+    // Handle Environment events separately to create counter lines.
+    auto first_env_event = std::partition(
+        events_.begin(), events_.end(), [](const CuptiTracerEvent& event) {
+          return event.type != CuptiTracerEventType::Environment;
+        });
+
+    if (first_env_event != events_.end()) {
+      VLOG(1) << "Processing " << events_.end() - first_env_event
+              << " environment events";
+      XLineBuilder counter_line = device_plane->GetOrCreateCounterLine();
+      for (auto it = first_env_event; it != events_.end(); ++it) {
+        const auto& event = *it;
+        VLOG(3) << "Environment event: " << event.name << " "
+                << event.start_time_ns << " "
+                << event.environment_info.metric_value;
+        // Create a metadata for each metric (e.g., "power_mw", "gpu_temp_c").
+        XEventMetadata* event_metadata =
+            device_plane->GetOrCreateEventMetadata(event.name);
+
+        // Create an event on the counter line.
+        XEventBuilder xevent = counter_line.AddEvent(
+            tsl::profiler::Timespan(
+                tsl::profiler::NanoToPico(event.start_time_ns - start_gpu_ns),
+                0),
+            *event_metadata);
+        xevent.AddStatValue(
+            *device_plane->GetOrCreateStatMetadata(event.name),
+            static_cast<double>(event.environment_info.metric_value));
+      }
+    }
+
     device_plane->ForEachLine([&](XLineBuilder line) {
-      line.SetName(
+      // If the line name is already set, we should not override it.
+      line.SetNameIfEmpty(
           GetDeviceXLineName(line.Id(), events_types_per_line[line.Id()]));
     });
     host_plane->ForEachLine([&](XLineBuilder line) {
       line.SetName(absl::StrCat("Host Threads/", line.Id()));
     });
+    if (nvtx_plane) {
+      nvtx_plane->ForEachLine([&](XLineBuilder line) {
+        line.SetName(absl::StrCat("Host Threads/", line.Id(), "/NVTX"));
+      });
+    }
     size_t num_events = events_.size();
     events_.clear();
     return num_events;
@@ -365,6 +523,13 @@ class PerDeviceCollector {
 
     CUdevice device;
     if (cuDeviceGet(&device, device_ordinal) != CUDA_SUCCESS) return;
+
+    std::optional<std::string> device_name = GetDeviceName(device);
+    if (device_name.has_value()) {
+      device_plane->AddStatValue(*device_plane->GetOrCreateStatMetadata(
+                                     GetStatTypeStr(StatType::kGpuDeviceName)),
+                                 *device_name);
+    }
 
     auto clock_rate_in_khz =
         GetDeviceAttribute(device, CU_DEVICE_ATTRIBUTE_CLOCK_RATE);
@@ -461,45 +626,195 @@ class PerDeviceCollector {
   }
 
  private:
-  mutex m_;
+  absl::Mutex m_;
   std::vector<CuptiTracerEvent> events_ TF_GUARDED_BY(m_);
   cudaOccDeviceProp device_properties_;
   absl::flat_hash_map<DeviceOccupancyParams, OccupancyStats> occupancy_cache_;
 };
 
+// Using two iterator of the CuptiTracerEvent queue to mark the current and
+// last event in the queue. It will be used in multi-way merge sort by
+// event's end time as the original per-thread queue is already sort by
+// that.
+class EventInQueue {
+  using Iterator = CallbackAnnotationsAndEvents::EventQueue::Iterator;
+
+ public:
+  explicit EventInQueue(CallbackAnnotationsAndEvents::EventQueue& queue)
+      : curr_(queue.begin()), last_(queue.end()) {}
+
+  bool IsLast() const { return curr_ == last_; }
+
+  EventInQueue& operator++() {
+    ++curr_;
+    return *this;
+  }
+
+  CuptiTracerEvent& Event() const {
+    // Directly use *curr_ after base Iterator operator*() with const
+    // modifier in seperate CL.
+    auto it = curr_;
+    return *it;
+  }
+
+  bool operator<(const EventInQueue& other) const {
+    // Require this and other all not ends, i.e. curr_ != last_
+    // for using in min heap
+    return Event().end_time_ns > other.Event().end_time_ns;
+  }
+
+ private:
+  CallbackAnnotationsAndEvents::EventQueue::Iterator curr_;
+  CallbackAnnotationsAndEvents::EventQueue::Iterator last_;
+};
+
 }  // namespace
 
-void AnnotationMap::Add(uint32_t device_id, uint32_t correlation_id,
-                        const absl::string_view annotation,
-                        const absl::string_view nvtx_range) {
-  if (annotation.empty() && nvtx_range.empty()) return;
-  VLOG(3) << "Add annotation: device_id: " << device_id
-          << " correlation_id: " << correlation_id
-          << " annotation: " << annotation;
-  if (device_id >= per_device_map_.size()) return;
-  auto& per_device_map = per_device_map_[device_id];
-  absl::MutexLock lock(&per_device_map.mutex);
-  if (per_device_map.annotations.size() < max_size_) {
-    AnnotationInfo info;
-    info.annotation = *per_device_map.annotations.emplace(annotation).first;
-    if (!nvtx_range.empty())
-      info.nvtx_range = *per_device_map.nvtx_ranges.emplace(nvtx_range).first;
-    per_device_map.correlation_map.emplace(correlation_id, info);
+void PmSamples::PopulateCounterLine(XPlaneBuilder* plane,
+                                    uint64_t start_gpu_time_ns) {
+  absl::flat_hash_map<std::string, int> skipped_nan_count_per_metric;
+  XLineBuilder line = plane->GetOrCreateCounterLine();
+  std::vector<std::pair<XEventMetadata*, XStatMetadata*>> counter_metadata;
+  counter_metadata.reserve(metrics_.size());
+  for (auto& metric : metrics_) {
+    counter_metadata.emplace_back(plane->GetOrCreateEventMetadata(metric),
+                                  plane->GetOrCreateStatMetadata(metric));
+  }
+  for (auto& sampler_range : sampler_ranges_) {
+    DCHECK_EQ(metrics_.size(), sampler_range.metric_values.size());
+    for (int i = 0; i < sampler_range.metric_values.size(); ++i) {
+      if (std::isnan(sampler_range.metric_values[i])) {
+        ++skipped_nan_count_per_metric[counter_metadata[i].first->name()];
+        continue;
+      }
+      XEventBuilder event = line.AddEvent(
+          tsl::profiler::Timespan(
+              tsl::profiler::NanoToPico(sampler_range.start_timestamp_ns -
+                                        start_gpu_time_ns),
+              0),
+          *counter_metadata[i].first);
+      event.AddStatValue(*counter_metadata[i].second,
+                         sampler_range.metric_values[i]);
+    }
+  }
+  for (const auto& [metric, count] : skipped_nan_count_per_metric) {
+    plane->AddStatValue(
+        *plane->GetOrCreateStatMetadata(tsl::profiler::GetStatTypeStr(
+            tsl::profiler::StatType::kNanCounterEvents)),
+        absl::StrFormat("Skipped %d NaN counter events for %s: ", count,
+                        metric));
   }
 }
 
-AnnotationMap::AnnotationInfo AnnotationMap::LookUp(uint32_t device_id,
-                                                    uint32_t correlation_id) {
-  if (device_id >= per_device_map_.size()) return AnnotationInfo();
-  auto& per_device_map = per_device_map_[device_id];
-  absl::MutexLock lock(&per_device_map.mutex);
-  auto it = per_device_map.correlation_map.find(correlation_id);
-  return it != per_device_map.correlation_map.end() ? it->second
-                                                    : AnnotationInfo();
+size_t PmSamples::GetNumSamples() const { return sampler_ranges_.size(); }
+
+const std::vector<std::string>& PmSamples::GetMetrics() const {
+  return metrics_;
+}
+
+const std::vector<SamplerRange>& PmSamples::GetSamplerRanges() const {
+  return sampler_ranges_;
+}
+
+int64_t PmSamples::GetDeviceId() const { return device_id_; }
+
+void CuptiTraceCollector::OnTracerCollectedCallbackData(
+    std::vector<CallbackAnnotationsAndEvents> callback_annotations_and_events,
+    bool need_callback_events) {
+  // Merge per-thread scope range id tree.
+  for (auto& annotations_and_events : callback_annotations_and_events) {
+    auto& per_thread_scope_range_id_tree =
+        annotations_and_events.scope_range_id_tree();
+    for (const auto [child_id, parent_id] : per_thread_scope_range_id_tree) {
+      scope_range_id_tree_.insert({child_id, parent_id});
+    }
+    // Free resources earlier although it will be freed later if not here.
+    per_thread_scope_range_id_tree.clear();
+  }
+
+  // Build merged annotation.
+  std::priority_queue<EventInQueue> min_heap;
+  for (auto& annotations_and_events : callback_annotations_and_events) {
+    EventInQueue event_in_queue(annotations_and_events.event_queue());
+    if (!event_in_queue.IsLast()) {
+      min_heap.emplace(std::move(event_in_queue));
+    }
+  }
+  while (!min_heap.empty()) {
+    auto event_in_queue = min_heap.top();
+    min_heap.pop();
+    auto& event = event_in_queue.Event();
+    absl::string_view deduped_annotation{};
+    if (event.type == CuptiTracerEventType::Generic &&
+        event.generic_info.cbid ==
+            CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice) {
+      for (uint32_t device = 0; device < options_.num_gpus; ++device) {
+        deduped_annotation =
+            annotation_map_.Add(device, event.correlation_id, event.annotation,
+                                event.nvtx_range, event.scope_range_id);
+      }
+    } else {
+      deduped_annotation = annotation_map_.Add(
+          event.device_id, event.correlation_id, event.annotation,
+          event.nvtx_range, event.scope_range_id);
+    }
+    if (event.type == CuptiTracerEventType::CudaGraph && event.graph_id != 0 &&
+        event.graph_node_id != 0) {
+      if (!deduped_annotation.empty()) {
+        graph_node_annotations_.insert(
+            {{event.graph_id, event.graph_node_id}, deduped_annotation});
+      }
+    }
+    // Clear the annotation and nvtx_range of the Callback API events, as they
+    // are now in the combined AnnotationMap which will be used by the
+    // Activity API events. Also those real string they referenced now will
+    // soon be released in the below by annotations_and_events.Clear().
+    event.annotation = "";
+    event.nvtx_range = "";
+
+    ++event_in_queue;
+    if (!event_in_queue.IsLast()) {
+      min_heap.emplace(std::move(event_in_queue));
+    }
+  }
+
+  // If we are not collecting CPU events from Callback API, we can return now.
+  if (!need_callback_events) return;
+
+  size_t total_dropped_callback_event_count = 0;
+  for (auto& annotations_and_events : callback_annotations_and_events) {
+    for (auto& event : annotations_and_events.event_queue()) {
+      AddEvent(std::move(event));
+    }
+    total_dropped_callback_event_count +=
+        annotations_and_events.NumDroppedEvents();
+    annotations_and_events.Clear();
+  }
+  if (total_dropped_callback_event_count > 0) {
+    OnEventsDropped("total driver(callback) events reaches max",
+                    total_dropped_callback_event_count);
+  }
+}
+
+void CuptiTraceCollector::OnTracerCachedActivityBuffers(
+    std::list<CuptiActivityBufferManager::ActivityBufferAndSize>
+        activity_buffers) {
+  size_t dropped_activity_event_count = 0;
+  CuptiEventCollectorDelegate collector(
+      *annotation_map(),
+      [this](CuptiTracerEvent&& ev) { this->AddEvent(std::move(ev)); });
+  AddActivityBufferListEventsTo(collector, activity_buffers,
+                                options_.max_activity_api_events,
+                                dropped_activity_event_count);
+  if (dropped_activity_event_count > 0) {
+    OnEventsDropped("total device(activity) events reaches max",
+                    dropped_activity_event_count);
+  }
 }
 
 // CuptiTraceCollectorImpl store the CuptiTracerEvents from CuptiTracer and
 // eventually convert and filter them to XSpace.
+// It also add support to handle cupti activity events for nvtx thread markers.
 class CuptiTraceCollectorImpl : public CuptiTraceCollector {
  public:
   CuptiTraceCollectorImpl(const CuptiTracerCollectorOptions& option,
@@ -515,47 +830,100 @@ class CuptiTraceCollectorImpl : public CuptiTraceCollector {
   void AddEvent(CuptiTracerEvent&& event) override {
     if (event.device_id >= num_gpus_) return;
     if (event.source == CuptiTracerEventSource::DriverCallback) {
-      if (num_callback_events_ > options_.max_callback_api_events) {
-        OnEventsDropped("total driver(callback) events reaches max", 1);
-        return;
-      }
       num_callback_events_++;
     } else {
-      if (num_activity_events_ > options_.max_activity_api_events) {
-        OnEventsDropped("total device(activity) events reaches max", 1);
-        return;
-      }
       num_activity_events_++;
+    }
+    if (event.type == CuptiTracerEventType::ThreadMarkerStart ||
+        event.type == CuptiTracerEventType::ThreadMarkerEnd ||
+        event.type == CuptiTracerEventType::MarkerData) {
+      // Process the nvtx marker, merge thread range start/end if appropriate.
+      // If merged, the event will contains the merged content, and be used for
+      // followed AddEvent() processing.
+      if (!AddNvtxMarker(event)) return;
+    }
+
+    // If this is a CudaGraphNodeMap event, we need to record the mapping from
+    // graph_id/graph_node_id to orig_graph_id/orig_graph_node_id.
+    if (event.type == CuptiTracerEventType::CudaGraphNodeMap) {
+      cuda_graph_id_map_[event.graph_id] = event.cuda_graph_info.orig_graph_id;
+      cuda_graph_node_id_map_[event.graph_id][event.graph_node_id] =
+          event.cuda_graph_info.orig_graph_node_id;
+      return;
+    }
+
+    // For activity events with graph_id and graph_node_id, we need to rewrite
+    // the annotation to reflect the detail framework information which are got
+    // during the callback for cuda graph creation and nodes insertion.
+    if (event.source == CuptiTracerEventSource::Activity &&
+        (event.graph_id != 0 && event.graph_node_id != 0)) {
+      // We need to rewrite the annotation of this inner node event in cuda
+      // graph device plane.
+      auto orig_graph_id_it = cuda_graph_id_map_.find(event.graph_id);
+      if (orig_graph_id_it != cuda_graph_id_map_.end()) {
+        uint32_t orig_graph_id = orig_graph_id_it->second;
+        const auto& node_id_2_orig = cuda_graph_node_id_map_[event.graph_id];
+        auto orig_node_id_it = node_id_2_orig.find(event.graph_node_id);
+        if (orig_node_id_it != node_id_2_orig.end()) {
+          uint64_t orig_node_id = orig_node_id_it->second;
+          auto annotation_it =
+              graph_node_annotations_.find({orig_graph_id, orig_node_id});
+          if (annotation_it != graph_node_annotations_.end()) {
+            event.annotation = annotation_it->second;
+          }
+        }
+      }
     }
     per_device_collector_[event.device_id].AddEvent(std::move(event));
   }
   void OnEventsDropped(const std::string& reason,
                        uint32_t num_events) override {
-    absl::MutexLock lock(&mutex_);
     dropped_events_[reason] += num_events;
   }
+
   void Flush() override {}
+  void ExportScopeRangeIdTree(XSpace* space) {
+    XPlaneBuilder plane(
+        FindOrAddMutablePlaneWithName(space, kScopeRangeIdTreePlaneName));
+    // No metadata is used for this plane, we just use the XStat to
+    // transfer the map without break any existing proto.
+    tensorflow::profiler::XStatMetadata metadata;
+    for (const auto& [child_id, parent_id] : scope_range_id_tree_) {
+      metadata.set_id(child_id);
+      plane.AddStatValue(metadata, parent_id);
+    }
+  }
   // Returns true if some GPU events are captured.
   bool Export(XSpace* space, uint64_t end_gpu_ns) override {
     LOG(INFO) << " GpuTracer has collected " << num_callback_events_
               << " callback api events and " << num_activity_events_
               << " activity events. " << ReportDroppedEvents();
+    LOG(INFO) << " GpuTracer max callback_events: "
+              << options_.max_callback_api_events
+              << ", max activity events: " << options_.max_activity_api_events;
+    if (std::string num_events_dropped_message = ReportNumEventsIfDropped();
+        !num_events_dropped_message.empty()) {
+      space->add_warnings(num_events_dropped_message);
+    }
+    ExportScopeRangeIdTree(space);
     size_t num_events = 0;
     XPlaneBuilder host_plane(
         FindOrAddMutablePlaneWithName(space, kCuptiDriverApiPlaneName));
+    XPlaneBuilder nvtx_plane(
+        FindOrAddMutablePlaneWithName(space, kCuptiActivityNvtxPlaneName));
     for (int device_ordinal = 0; device_ordinal < num_gpus_; ++device_ordinal) {
       std::string name = GpuPlaneName(device_ordinal);
       XPlaneBuilder device_plane(FindOrAddMutablePlaneWithName(space, name));
       device_plane.SetId(device_ordinal);
-      VLOG(4) << "Creating plane for"
-              << " name=" << name << " ordinal=" << device_ordinal;
+      VLOG(4) << "Creating plane for" << " name=" << name
+              << " ordinal=" << device_ordinal;
 
       // Calculate device capabilities before flushing, so that device
       // properties are available to the occupancy calculator in Flush().
       per_device_collector_[device_ordinal].GetDeviceCapabilities(
           device_ordinal, &device_plane);
       num_events += per_device_collector_[device_ordinal].Flush(
-          start_gpu_ns_, end_gpu_ns, &device_plane, &host_plane);
+          start_gpu_ns_, end_gpu_ns, &device_plane, &host_plane, &nvtx_plane);
       NormalizeTimeStamps(&device_plane, start_walltime_ns_);
     }
     NormalizeTimeStamps(&host_plane, start_walltime_ns_);
@@ -563,7 +931,6 @@ class CuptiTraceCollectorImpl : public CuptiTraceCollector {
   }
 
   std::string ReportDroppedEvents() {
-    absl::MutexLock lock(&mutex_);
     std::string result;
     for (const auto& dropped : dropped_events_) {
       absl::StrAppend(&result, " ", dropped.second, " events dropped because ",
@@ -577,20 +944,73 @@ class CuptiTraceCollectorImpl : public CuptiTraceCollector {
     if (events_dropped.empty()) return "";
     return absl::StrCat("Detected GPU events dropped on ",
                         tsl::port::Hostname(), ": Profiler has collected ",
-                        num_callback_events_.load(), " driver events and ",
-                        num_activity_events_.load(), " device events.",
+                        num_callback_events_, " driver events and ",
+                        num_activity_events_, " device events.",
                         events_dropped);
   }
+  uint64_t GetProfileStartTimeNs() const override { return start_gpu_ns_; }
 
  private:
-  std::atomic<int> num_callback_events_;
-  std::atomic<int> num_activity_events_;
-  absl::Mutex mutex_;
-  absl::flat_hash_map<std::string, uint64_t> dropped_events_
-      ABSL_GUARDED_BY(mutex_);
+  size_t num_callback_events_ = 0;
+  size_t num_activity_events_ = 0;
+  absl::flat_hash_map<std::string, uint64_t> dropped_events_;
   uint64_t start_walltime_ns_;
   uint64_t start_gpu_ns_;
   int num_gpus_;
+  uint32_t num_duplicate_nvtx_marker_start_ = 0;
+  uint32_t num_unmatched_nvtx_marker_end_ = 0;
+  // Map from graph_id to a map from graph_node_id to orig_graph_node_id
+  absl::flat_hash_map<uint32_t, absl::flat_hash_map<uint64_t, uint64_t>>
+      cuda_graph_node_id_map_;
+  // Map from graph_id to original graph_id
+  absl::flat_hash_map<uint32_t, uint32_t> cuda_graph_id_map_;
+  // For marker data strings.
+  StringDeduper string_deduper_;
+
+  // process the nvtx marker, a)cache range start event, or b)merge range end
+  // with its corresponding start event. If merged, the event be updated with
+  // the merged content and return true. If not merged, return false.
+  bool AddNvtxMarker(CuptiTracerEvent& event) {
+    const uint32_t marker_id = event.graph_id;
+    auto it = nvtx_markers_.find(marker_id);
+    if (event.type == CuptiTracerEventType::ThreadMarkerStart) {
+      if (it == nvtx_markers_.end()) {
+        // clear the marker data string.
+        event.marker_data_info.marker_string = "";
+        nvtx_markers_[marker_id] =
+            std::make_unique<CuptiTracerEvent>(std::move(event));
+      } else {
+        LOG_IF(ERROR, ++num_duplicate_nvtx_marker_start_ < 100)
+            << "Duplicate nvtx thread range start marker id: " << marker_id;
+      }
+    } else if (event.type == CuptiTracerEventType::ThreadMarkerEnd) {
+      if (it != nvtx_markers_.end()) {
+        it->second->type = CuptiTracerEventType::ThreadMarkerRange;
+        it->second->end_time_ns = event.end_time_ns;
+        it->second->graph_id = 0;
+        event = std::move(*it->second);
+        event.marker_data_info.marker_string =
+            it->second->marker_data_info.marker_string;
+        nvtx_markers_.erase(it);
+        return true;  // The event is merged for further processing.
+      } else {
+        LOG_IF(ERROR, ++num_unmatched_nvtx_marker_end_ < 100)
+            << "Unmatched nvtx thread range end marker id: " << marker_id;
+      }
+    } else if (event.type == CuptiTracerEventType::MarkerData) {
+      if (it == nvtx_markers_.end()) {
+        LOG_IF(ERROR, ++num_unmatched_nvtx_marker_end_ < 100)
+            << "Unmatched marker data for marker id: " << marker_id;
+      } else {
+        if (!event.name.empty()) {
+          it->second->marker_data_info.marker_string =
+              string_deduper_.Dedup(event.name);
+        }
+      }
+    }
+    // No merged event is generated, return false.
+    return false;
+  }
 
   // Set the all XLines of specified XPlane to starting walltime.
   // Events time in both host and device planes are CUTPI timestamps.
@@ -604,6 +1024,8 @@ class CuptiTraceCollectorImpl : public CuptiTraceCollector {
   }
 
   absl::FixedArray<PerDeviceCollector> per_device_collector_;
+  absl::flat_hash_map<uint32_t, std::unique_ptr<CuptiTracerEvent>>
+      nvtx_markers_;
 
   CuptiTraceCollectorImpl(const CuptiTraceCollectorImpl&) = delete;
   void operator=(const CuptiTraceCollectorImpl&) = delete;
@@ -614,29 +1036,6 @@ std::unique_ptr<CuptiTraceCollector> CreateCuptiCollector(
     uint64_t start_gputime_ns) {
   return std::make_unique<CuptiTraceCollectorImpl>(options, start_walltime_ns,
                                                    start_gputime_ns);
-}
-
-// The strings are parser friendly and have no whitespaces in them.
-absl::string_view GetMemoryKindName(int8_t memory_kind) {
-  switch (memory_kind) {
-    case CUPTI_ACTIVITY_MEMORY_KIND_ARRAY:
-      return "array";
-    case CUPTI_ACTIVITY_MEMORY_KIND_DEVICE:
-      return "device";
-    case CUPTI_ACTIVITY_MEMORY_KIND_DEVICE_STATIC:
-      return "device_static";
-    case CUPTI_ACTIVITY_MEMORY_KIND_MANAGED:
-      return "managed";
-    case CUPTI_ACTIVITY_MEMORY_KIND_MANAGED_STATIC:
-      return "managed_static";
-    case CUPTI_ACTIVITY_MEMORY_KIND_PAGEABLE:
-      return "pageable";
-    case CUPTI_ACTIVITY_MEMORY_KIND_PINNED:
-      return "pinned";
-    case CUPTI_ACTIVITY_MEMORY_KIND_UNKNOWN:
-    default:
-      return "unknown";
-  }
 }
 
 }  // namespace profiler

@@ -10,6 +10,7 @@ class Value;
 }
 
 namespace sync_pb {
+class AccountSettingSpecifics;
 class AppListSpecifics;
 class AppSettingSpecifics;
 class AppSpecifics;
@@ -17,6 +18,7 @@ class ArcPackageSpecifics;
 class AutofillProfileSpecifics;
 class AutofillSpecifics;
 class AutofillOfferSpecifics;
+class AutofillValuableMetadataSpecifics;
 class AutofillWalletCredentialSpecifics;
 class AutofillWalletSpecifics;
 class AutofillWalletUsageSpecifics;
@@ -27,16 +29,21 @@ class ClientToServerMessage;
 class ClientToServerResponse;
 class CollaborationGroupSpecifics;
 class ContactInfoSpecifics;
+class CookieSpecifics;
 class CrossUserSharingPublicKey;
 class DebugEventInfo;
 class DebugInfo;
+class DesktopToMobilePromoMessage;
+class DeviceDetails;
 class DeviceInfoSpecifics;
 class DictionarySpecifics;
 class EncryptedData;
 class EntityMetadata;
 class EntitySpecifics;
+class EwalletDetails;
 class ExtensionSettingSpecifics;
 class ExtensionSpecifics;
+class GeminiThreadSpecifics;
 class HistoryDeleteDirectiveSpecifics;
 class HistorySpecifics;
 class IncomingPasswordSharingInvitationSpecifics;
@@ -51,17 +58,21 @@ class PasswordSpecifics;
 class PasswordSpecificsData;
 class PaymentInstrument;
 class PaymentsCustomerData;
+class PlusAddressSettingSpecifics;
+class PlusAddressSpecifics;
 class PowerBookmarkSpecifics;
 class PreferenceSpecifics;
 class PrinterPPDReference;
 class PrinterSpecifics;
 class PrintersAuthorizationServerSpecifics;
 class PriorityPreferenceSpecifics;
+class ProductComparisonSpecifics;
+class PushNotificationMessage;
 class ReadingListSpecifics;
 class SavedTabGroupSpecifics;
 class SearchEngineSpecifics;
 class SecurityEventSpecifics;
-class SegmentationSpecifics;
+class SendTabToSelfPush;
 class SendTabToSelfSpecifics;
 class SessionHeader;
 class SessionSpecifics;
@@ -74,6 +85,7 @@ class TabNavigation;
 class ThemeSpecifics;
 class TimeRangeDirective;
 class TypedUrlSpecifics;
+class UnencryptedSharingMessage;
 class UrlDirective;
 class UserConsentSpecifics;
 class UserEventSpecifics;
@@ -97,6 +109,9 @@ class WorkspaceDeskSpecifics;
 
 namespace syncer {
 
+base::Value AccountSettingSpecificsToValue(
+    const sync_pb::AccountSettingSpecifics& proto);
+
 base::Value AppListSpecificsToValue(const sync_pb::AppListSpecifics& proto);
 
 base::Value AppSettingSpecificsToValue(
@@ -115,6 +130,9 @@ base::Value AutofillProfileSpecificsToValue(
 
 base::Value AutofillSpecificsToValue(
     const sync_pb::AutofillSpecifics& autofill_specifics);
+
+base::Value AccountValuableMetadataSpecificsToValue(
+    const sync_pb::AutofillValuableMetadataSpecifics& proto);
 
 base::Value AutofillWalletCredentialSpecificsToValue(
     const sync_pb::AutofillWalletCredentialSpecifics&
@@ -141,9 +159,17 @@ base::Value CollaborationGroupSpecificsToValue(
 base::Value ContactInfoSpecificsToValue(
     const sync_pb::ContactInfoSpecifics& proto);
 
+base::Value CookieSpecificsToValue(const sync_pb::CookieSpecifics& proto);
+
 base::Value DebugEventInfoToValue(const sync_pb::DebugEventInfo& proto);
 
 base::Value DebugInfoToValue(const sync_pb::DebugInfo& proto);
+
+base::Value DesktopToMobilePromoMessageToValue(
+    const sync_pb::DesktopToMobilePromoMessage&
+        desktop_to_mobile_promo_message);
+
+base::Value DeviceDetailsToValue(const sync_pb::DeviceDetails& device_details);
 
 base::Value DeviceInfoSpecificsToValue(
     const sync_pb::DeviceInfoSpecifics& device_info_specifics);
@@ -157,11 +183,17 @@ base::Value EntityMetadataToValue(const sync_pb::EntityMetadata& metadata);
 
 base::Value EntitySpecificsToValue(const sync_pb::EntitySpecifics& specifics);
 
+base::Value EwalletDetailsToValue(
+    const sync_pb::EwalletDetails& ewallet_details);
+
 base::Value ExtensionSettingSpecificsToValue(
     const sync_pb::ExtensionSettingSpecifics& extension_setting_specifics);
 
 base::Value ExtensionSpecificsToValue(
     const sync_pb::ExtensionSpecifics& extension_specifics);
+
+base::Value GeminiThreadSpecificsToValue(
+    const sync_pb::GeminiThreadSpecifics& gemini_specifics);
 
 base::Value HistoryDeleteDirectiveSpecificsToValue(
     const sync_pb::HistoryDeleteDirectiveSpecifics&
@@ -200,14 +232,20 @@ base::Value PasswordSpecificsToValue(
 base::Value PasswordSpecificsDataToValue(
     const sync_pb::PasswordSpecificsData& password_specifics_data);
 
-base::Value PowerBookmarkSpecificsToValue(
-    const sync_pb::PowerBookmarkSpecifics& power_bookmark_specifics);
-
 base::Value PaymentInstrumentToValue(
     const sync_pb::PaymentInstrument& payment_instrument);
 
 base::Value PaymentsCustomerDataToValue(
     const sync_pb::PaymentsCustomerData& payments_customer_data);
+
+base::Value PlusAddressSettingSpecificsToValue(
+    const sync_pb::PlusAddressSettingSpecifics& plus_address_setting_specifics);
+
+base::Value PlusAddressSpecificsToValue(
+    const sync_pb::PlusAddressSpecifics& plus_address_specifics);
+
+base::Value PowerBookmarkSpecificsToValue(
+    const sync_pb::PowerBookmarkSpecifics& power_bookmark_specifics);
 
 base::Value PreferenceSpecificsToValue(
     const sync_pb::PreferenceSpecifics& password_specifics);
@@ -225,6 +263,12 @@ base::Value PrintersAuthorizationServerSpecificsToValue(
 base::Value PriorityPreferenceSpecificsToValue(
     const sync_pb::PriorityPreferenceSpecifics& proto);
 
+base::Value ProductComparisonSpecificsToValue(
+    const sync_pb::ProductComparisonSpecifics& product_comparison_specifics);
+
+base::Value PushNotificationMessageToValue(
+    const sync_pb::PushNotificationMessage& push_notification_message);
+
 base::Value CrossUserSharingPublicKeyToValue(
     const sync_pb::CrossUserSharingPublicKey& proto);
 
@@ -237,8 +281,8 @@ base::Value SavedTabGroupSpecificsToValue(
 base::Value SearchEngineSpecificsToValue(
     const sync_pb::SearchEngineSpecifics& search_engine_specifics);
 
-base::Value SegmentationSpecificsToValue(
-    const sync_pb::SegmentationSpecifics& segmentation_specifics);
+base::Value SendTabToSelfPushToValue(
+    const sync_pb::SendTabToSelfPush& send_tab_push);
 
 base::Value SendTabToSelfSpecificsToValue(
     const sync_pb::SendTabToSelfSpecifics& send_tab_specifics);
@@ -271,6 +315,9 @@ base::Value TimeRangeDirectiveToValue(
 
 base::Value TypedUrlSpecificsToValue(
     const sync_pb::TypedUrlSpecifics& typed_url_specifics);
+
+base::Value UnencryptedSharingMessageToValue(
+    const sync_pb::UnencryptedSharingMessage& proto);
 
 base::Value UrlDirectiveToValue(
     const sync_pb::UrlDirective& time_range_directive);

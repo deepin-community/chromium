@@ -17,20 +17,18 @@ class CORE_EXPORT StyleRuleViewTransition : public StyleRuleBase {
   ~StyleRuleViewTransition();
 
   const CSSValue* GetNavigation() const;
-  void SetNavigation(const CSSValue* new_value);
+
+  const Vector<String>& GetTypes() const { return types_; }
 
   StyleRuleViewTransition* Copy() const {
     return MakeGarbageCollected<StyleRuleViewTransition>(*this);
   }
 
-  void SetCascadeLayer(const CascadeLayer* layer) { layer_ = layer; }
-  const CascadeLayer* GetCascadeLayer() const { return layer_.Get(); }
-
   void TraceAfterDispatch(blink::Visitor*) const;
 
  private:
-  Member<const CascadeLayer> layer_;
   Member<const CSSValue> navigation_;
+  Vector<String> types_;
 };
 
 template <>

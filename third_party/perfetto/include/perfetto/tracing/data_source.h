@@ -21,21 +21,27 @@
 // override in order to create a custom data source that gets tracing Start/Stop
 // notifications and emits tracing data.
 
-#include <assert.h>
-#include <stddef.h>
-#include <stdint.h>
-
 #include <array>
 #include <atomic>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <type_traits>
+#include <utility>
 
+#include "perfetto/base/build_config.h"
+#include "perfetto/base/compiler.h"
+#include "perfetto/base/export.h"
+#include "perfetto/base/logging.h"
 #include "perfetto/protozero/message_handle.h"
+#include "perfetto/public/compiler.h"
+#include "perfetto/tracing/backend_type.h"
 #include "perfetto/tracing/buffer_exhausted_policy.h"
 #include "perfetto/tracing/core/flush_flags.h"
 #include "perfetto/tracing/core/forward_decls.h"
-#include "perfetto/tracing/internal/basic_types.h"
 #include "perfetto/tracing/internal/data_source_internal.h"
 #include "perfetto/tracing/internal/data_source_type.h"
 #include "perfetto/tracing/internal/tracing_muxer.h"
@@ -67,8 +73,8 @@ namespace perfetto {
 namespace internal {
 class TracingMuxerImpl;
 class TrackEventCategoryRegistry;
-template <typename, const internal::TrackEventCategoryRegistry*>
-class TrackEventDataSource;
+template <const internal::TrackEventCategoryRegistry*>
+class TrackEvent;
 }  // namespace internal
 
 namespace shlib {
@@ -92,6 +98,8 @@ class PERFETTO_EXPORT_COMPONENT DataSourceBase {
   // OnSetup() is invoked when tracing is configured. In most cases this happens
   // just before starting the trace. In the case of deferred start (see
   // deferred_start in trace_config.proto) start might happen later.
+  //
+  // Can be called from any thread.
   class SetupArgs {
    public:
     // This is valid only within the scope of the OnSetup() call and must not
@@ -111,6 +119,9 @@ class PERFETTO_EXPORT_COMPONENT DataSourceBase {
     // The index of this data source instance (0..kMaxDataSourceInstances - 1).
     uint32_t internal_instance_index = 0;
   };
+  // Invoked after tracing is actually started.
+  //
+  // Can be called from any thread.
   virtual void OnStart(const StartArgs&);
 
   class PERFETTO_EXPORT_COMPONENT StopArgs {
@@ -140,6 +151,11 @@ class PERFETTO_EXPORT_COMPONENT DataSourceBase {
     // The index of this data source instance (0..kMaxDataSourceInstances - 1).
     uint32_t internal_instance_index = 0;
   };
+  // Invoked before tracing is stopped.
+  //
+  // Can be called from any thread. Blocking this for too long it's not a good
+  // idea and can cause deadlocks. Use HandleAsynchronously() to postpone
+  // disabling the data source instance.
   virtual void OnStop(const StopArgs&);
 
   class ClearIncrementalStateArgs {
@@ -147,6 +163,10 @@ class PERFETTO_EXPORT_COMPONENT DataSourceBase {
     // The index of this data source instance (0..kMaxDataSourceInstances - 1).
     uint32_t internal_instance_index = 0;
   };
+  // Invoked before marking the thread local per-instance incremental state
+  // outdated.
+  //
+  // Can be called from any thread.
   virtual void WillClearIncrementalState(const ClearIncrementalStateArgs&);
 
   class FlushArgs {
@@ -168,6 +188,10 @@ class PERFETTO_EXPORT_COMPONENT DataSourceBase {
   // Called when the tracing service requests a Flush. Users can override this
   // to tell other threads to flush their TraceContext for this data source
   // (the library cannot execute code on all the threads on its own).
+  //
+  // Can be called from any thread. Blocking this for too long it's not a good
+  // idea and can cause deadlocks. Use HandleAsynchronously() to postpone
+  // sending the flush acknowledgement to the service.
   virtual void OnFlush(const FlushArgs&);
 
   // Determines whether a startup session can be adopted by a service-initiated
@@ -204,6 +228,13 @@ struct DefaultDataSourceTraits {
     // static_state.
     return ds_tls;
   }
+
+  // Allows clearing incremental state without destroying and recreating it.
+  // This is useful for data sources that use large data structures (e.g., hash
+  // maps) which are expensive to reallocate. Return true if clearing was
+  // successful. If the method is not defined or returns false, the incremental
+  // state will be destroyed and recreated.
+  static bool ClearIncrementalState(IncrementalStateType*) { return false; }
 };
 
 // Holds the type for a DataSource. Accessed by the static Trace() method
@@ -240,6 +271,9 @@ class DataSource : public DataSourceBase {
   // drop data on shared memory overruns.
   constexpr static BufferExhaustedPolicy kBufferExhaustedPolicy =
       BufferExhaustedPolicy::kDrop;
+
+  // Whether the kBufferExhaustedPolicy policy above is overridable via config.
+  constexpr static bool kBufferExhaustedPolicyConfigurable = false;
 
   // When this flag is false, we cannot have multiple instances of this data
   // source. When a data source is already active and if we attempt
@@ -341,10 +375,12 @@ class DataSource : public DataSourceBase {
           Helper::type().GetIncrementalState(tls_inst_, instance_index_));
     }
 
+    uint32_t instance_index() const { return instance_index_; }
+
    private:
     friend class DataSource;
-    template <typename, const internal::TrackEventCategoryRegistry*>
-    friend class internal::TrackEventDataSource;
+    template <const internal::TrackEventCategoryRegistry*>
+    friend class internal::TrackEvent;
     TraceContext(internal::DataSourceInstanceThreadLocalState* tls_inst,
                  uint32_t instance_index)
         : tls_inst_(tls_inst), instance_index_(instance_index) {}
@@ -456,15 +492,23 @@ class DataSource : public DataSourceBase {
     constexpr bool no_flush =
         std::is_same_v<decltype(&DerivedDataSource::OnFlush),
                        decltype(&DataSourceBase::OnFlush)>;
-    internal::DataSourceParams params{
-        DerivedDataSource::kSupportsMultipleInstances,
-        DerivedDataSource::kRequiresCallbacksUnderLock};
+    internal::DataSourceParams params;
+    params.requires_callbacks_under_lock =
+        DerivedDataSource::kRequiresCallbacksUnderLock;
+    params.supports_multiple_instances =
+        DerivedDataSource::kSupportsMultipleInstances;
+    params.default_buffer_exhausted_policy =
+        DerivedDataSource::kBufferExhaustedPolicy;
+    params.buffer_exhausted_policy_configurable =
+        DerivedDataSource::kBufferExhaustedPolicyConfigurable;
     return Helper::type().Register(
-        descriptor, factory, params, DerivedDataSource::kBufferExhaustedPolicy,
-        no_flush,
+        descriptor, factory, params, no_flush,
         GetCreateTlsFn(
             static_cast<typename DataSourceTraits::TlsStateType*>(nullptr)),
         GetCreateIncrementalStateFn(
+            static_cast<typename DataSourceTraits::IncrementalStateType*>(
+                nullptr)),
+        GetClearIncrementalStateFn(
             static_cast<typename DataSourceTraits::IncrementalStateType*>(
                 nullptr)),
         nullptr);
@@ -521,6 +565,44 @@ class DataSource : public DataSourceBase {
     return nullptr;
   }
 
+  // Detection idiom for checking if DataSourceTraits::ClearIncrementalState(T*)
+  // exists. Supports traits that don't inherit from DefaultDataSourceTraits.
+  template <typename Traits, typename T, typename = void>
+  struct HasClearIncrementalState : std::false_type {};
+
+  template <typename Traits, typename T>
+  struct HasClearIncrementalState<
+      Traits,
+      T,
+      std::void_t<decltype(Traits::ClearIncrementalState(std::declval<T*>()))>>
+      : std::true_type {};
+
+  // Wrapper that calls DataSourceTraits::ClearIncrementalState if it exists.
+  // Returns false if the method is not defined in the traits.
+  template <typename T>
+  static bool ClearIncrementalStateWrapper(void* incremental_state, void*) {
+    if constexpr (HasClearIncrementalState<DataSourceTraits, T>::value) {
+      return DataSourceTraits::ClearIncrementalState(
+          reinterpret_cast<T*>(incremental_state));
+    } else {
+      base::ignore_result(incremental_state);
+      return false;
+    }
+  }
+
+  // The second parameter here is used to specialize the case where there is no
+  // incremental state type.
+  template <typename T>
+  static internal::DataSourceType::ClearIncrementalStateFn
+  GetClearIncrementalStateFn(const T*) {
+    return &ClearIncrementalStateWrapper<T>;
+  }
+
+  static internal::DataSourceType::ClearIncrementalStateFn
+  GetClearIncrementalStateFn(const void*) {
+    return nullptr;
+  }
+
   template <typename T>
   static internal::DataSourceInstanceThreadLocalState::ObjectWithDeleter
   CreateDataSourceCustomTls(
@@ -564,7 +646,7 @@ thread_local internal::DataSourceThreadLocalState* DataSource<T, D>::tls_state_;
 // the macro invocation (e.g., "MACRO(...);") to avoid warnings about extra
 // semicolons.
 #define PERFETTO_INTERNAL_SWALLOW_SEMICOLON() \
-  extern int perfetto_internal_unused
+  [[maybe_unused]] extern int perfetto_internal_unused
 
 // This macro must be used once for each data source next to the data source's
 // declaration.

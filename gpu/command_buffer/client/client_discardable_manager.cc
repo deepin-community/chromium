@@ -5,7 +5,6 @@
 #include "gpu/command_buffer/client/client_discardable_manager.h"
 
 #include "base/atomic_sequence_num.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info.h"
@@ -113,12 +112,7 @@ void FreeOffsetSet::ReturnFreeOffset(uint32_t offset) {
 // sub-allocate from. This should be at least as big as the minimum shared
 // memory allocation size.
 size_t AllocationSize() {
-#if BUILDFLAG(IS_NACL)
-  // base::SysInfo isn't available under NaCl.
-  size_t system_allocation_size = getpagesize();
-#else
   size_t system_allocation_size = base::SysInfo::VMAllocationGranularity();
-#endif
 
   // If the allocation is small (less than 2K), round it up to at least 2K.
   return std::max(size_t{2048}, system_allocation_size);
@@ -184,7 +178,7 @@ void ClientDiscardableManager::FreeHandle(
 
 bool ClientDiscardableManager::HandleIsValid(
     ClientDiscardableHandle::Id handle_id) const {
-  return base::Contains(handles_, handle_id);
+  return handles_.contains(handle_id);
 }
 
 ClientDiscardableHandle ClientDiscardableManager::GetHandle(
@@ -207,14 +201,6 @@ bool ClientDiscardableManager::HandleIsDeleted(
   }
 
   return false;
-}
-
-bool ClientDiscardableManager::HandleIsDeletedForTracing(
-    ClientDiscardableHandle::Id handle_id) const {
-  auto found = handles_.find(handle_id);
-  if (found == handles_.end())
-    return true;
-  return found->second.IsDeletedForTracing();
 }
 
 bool ClientDiscardableManager::FindAllocation(CommandBuffer* command_buffer,

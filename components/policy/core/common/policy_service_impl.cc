@@ -7,20 +7,23 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <string>
 #include <utility>
+#include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
+#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/policy/core/common/policy_bundle.h"
 #include "components/policy/core/common/policy_logger.h"
 #include "components/policy/core/common/policy_map.h"
@@ -50,9 +53,9 @@ void DowngradeMetricsReportingToRecommendedPolicy(PolicyMap* policies) {
   // Capture both the Chrome-only and device-level policies on Chrome OS.
   const std::vector<const char*> metrics_keys = {
 #if BUILDFLAG(IS_CHROMEOS)
-    policy::key::kDeviceMetricsReportingEnabled,
+      policy::key::kDeviceMetricsReportingEnabled,
 #else
-    policy::key::kMetricsReportingEnabled,
+      policy::key::kMetricsReportingEnabled,
 #endif
   };
   for (const char* policy_key : metrics_keys) {
@@ -92,8 +95,9 @@ void AddPolicyMessages(PolicyMap& policies) {
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_IOS)
   // Add warning to inform users that these policies are ignored when the user
   // is unaffiliated.
-  if (policies.IsUserAffiliated())
+  if (policies.IsUserAffiliated()) {
     return;
+  }
 
   auto* cloud_user_precedence_entry =
       policies.GetMutable(key::kCloudUserPolicyOverridesCloudMachinePolicy);
@@ -113,21 +117,67 @@ void AddPolicyMessages(PolicyMap& policies) {
 #endif  // !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_IOS)
 }
 
+// Returns the list of histogram names to record depending on scope and number
+// of policies.
+std::vector<std::string> InitTimeHistogramsToRecord(
+    PolicyServiceImpl::ScopeForMetrics scope_for_metrics,
+    size_t policy_count) {
+  CHECK_NE(scope_for_metrics, PolicyServiceImpl::ScopeForMetrics::kUnspecified);
+
+  std::string name_with_scope =
+      scope_for_metrics == PolicyServiceImpl::ScopeForMetrics::kMachine
+          ? base::StrCat({PolicyServiceImpl::kInitTimeHistogramPrefix,
+                          PolicyServiceImpl::kMachineHistogramSuffix})
+          : base::StrCat({PolicyServiceImpl::kInitTimeHistogramPrefix,
+                          PolicyServiceImpl::kUserHistogramSuffix});
+
+  std::vector<std::string> histogram_names{name_with_scope};
+
+  if (policy_count == 0) {
+    histogram_names.push_back(base::StrCat(
+        {name_with_scope, PolicyServiceImpl::kWithoutPoliciesHistogramSuffix}));
+  } else {
+    histogram_names.push_back(base::StrCat(
+        {name_with_scope, PolicyServiceImpl::kWithPoliciesHistogramSuffix}));
+    if (policy_count <= 50u) {
+      histogram_names.push_back(
+          base::StrCat({name_with_scope,
+                        PolicyServiceImpl::kWith1to50PoliciesHistogramSuffix}));
+    } else if (policy_count <= 100u) {
+      histogram_names.push_back(base::StrCat(
+          {name_with_scope,
+           PolicyServiceImpl::kWith51to100PoliciesHistogramSuffix}));
+    } else {
+      histogram_names.push_back(base::StrCat(
+          {name_with_scope,
+           PolicyServiceImpl::kWith101PlusPoliciesHistogramSuffix}));
+    }
+  }
+
+  return histogram_names;
+}
+
 }  // namespace
 
-PolicyServiceImpl::PolicyServiceImpl(Providers providers, Migrators migrators)
+PolicyServiceImpl::PolicyServiceImpl(Providers providers,
+                                     ScopeForMetrics scope_for_metrics,
+                                     Migrators migrators)
     : PolicyServiceImpl(std::move(providers),
+                        scope_for_metrics,
                         std::move(migrators),
                         /*initialization_throttled=*/false) {}
 
 PolicyServiceImpl::PolicyServiceImpl(Providers providers,
+                                     ScopeForMetrics scope_for_metrics,
                                      Migrators migrators,
                                      bool initialization_throttled)
     : providers_(std::move(providers)),
       migrators_(std::move(migrators)),
-      initialization_throttled_(initialization_throttled) {
-  for (int domain = 0; domain < POLICY_DOMAIN_SIZE; ++domain)
+      initialization_throttled_(initialization_throttled),
+      scope_for_metrics_(scope_for_metrics) {
+  for (int domain = 0; domain < POLICY_DOMAIN_SIZE; ++domain) {
     policy_domain_status_[domain] = PolicyDomainStatus::kUninitialized;
+  }
 
   for (policy::ConfigurationPolicyProvider* provider : providers_) {
     provider->AddObserver(this);
@@ -139,11 +189,13 @@ PolicyServiceImpl::PolicyServiceImpl(Providers providers,
 
 // static
 std::unique_ptr<PolicyServiceImpl>
-PolicyServiceImpl::CreateWithThrottledInitialization(Providers providers,
-                                                     Migrators migrators) {
-  return base::WrapUnique(
-      new PolicyServiceImpl(std::move(providers), std::move(migrators),
-                            /*initialization_throttled=*/true));
+PolicyServiceImpl::CreateWithThrottledInitialization(
+    Providers providers,
+    ScopeForMetrics scope_for_metrics,
+    Migrators migrators) {
+  return base::WrapUnique(new PolicyServiceImpl(
+      std::move(providers), scope_for_metrics, std::move(migrators),
+      /*initialization_throttled=*/true));
 }
 
 PolicyServiceImpl::~PolicyServiceImpl() {
@@ -163,8 +215,9 @@ void PolicyServiceImpl::RemoveObserver(PolicyDomain domain,
                                        PolicyService::Observer* observer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto it = observers_.find(domain);
-  if (it == observers_.end())
+  if (it == observers_.end()) {
     return;
+  }
   it->second.RemoveObserver(observer);
   if (it->second.empty()) {
     observers_.erase(it);
@@ -186,7 +239,7 @@ void PolicyServiceImpl::RemoveProviderUpdateObserver(
 bool PolicyServiceImpl::HasProvider(
     ConfigurationPolicyProvider* provider) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return base::Contains(providers_, provider);
+  return std::ranges::contains(providers_, provider);
 }
 
 const PolicyMap& PolicyServiceImpl::GetPolicies(
@@ -215,8 +268,9 @@ void PolicyServiceImpl::RefreshPolicies(base::OnceClosure callback,
 
   VLOG_POLICY(2, POLICY_PROCESSING) << "Policy refresh starting";
 
-  if (!callback.is_null())
+  if (!callback.is_null()) {
     refresh_callbacks_.push_back(std::move(callback));
+  }
 
   if (providers_.empty()) {
     // Refresh is immediately complete if there are no providers. See the note
@@ -241,22 +295,25 @@ void PolicyServiceImpl::RefreshPolicies(base::OnceClosure callback,
 
 #if BUILDFLAG(IS_ANDROID)
 android::PolicyServiceAndroid* PolicyServiceImpl::GetPolicyServiceAndroid() {
-  if (!policy_service_android_)
+  if (!policy_service_android_) {
     policy_service_android_ =
         std::make_unique<android::PolicyServiceAndroid>(this);
+  }
   return policy_service_android_.get();
 }
 #endif
 
 void PolicyServiceImpl::UnthrottleInitialization() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!initialization_throttled_)
+  if (!initialization_throttled_) {
     return;
+  }
 
   initialization_throttled_ = false;
   std::vector<PolicyDomain> updated_domains;
-  for (int domain = 0; domain < POLICY_DOMAIN_SIZE; ++domain)
+  for (int domain = 0; domain < POLICY_DOMAIN_SIZE; ++domain) {
     updated_domains.push_back(static_cast<PolicyDomain>(domain));
+  }
   MaybeNotifyPolicyDomainStatusChange(updated_domains);
 }
 
@@ -266,7 +323,7 @@ void PolicyServiceImpl::UseLocalTestPolicyProvider(
 }
 
 void PolicyServiceImpl::OnUpdatePolicy(ConfigurationPolicyProvider* provider) {
-  DCHECK_EQ(1, base::ranges::count(providers_, provider));
+  DCHECK_EQ(1, std::ranges::count(providers_, provider));
   refresh_pending_.erase(provider);
   provider_update_pending_.insert(provider);
 
@@ -290,14 +347,16 @@ void PolicyServiceImpl::NotifyNamespaceUpdated(const PolicyNamespace& ns,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto iterator = observers_.find(ns.domain);
   if (iterator != observers_.end()) {
-    for (auto& observer : iterator->second)
+    for (auto& observer : iterator->second) {
       observer.OnPolicyUpdated(ns, previous, current);
+    }
   }
 }
 
 void PolicyServiceImpl::NotifyProviderUpdatesPropagated() {
-  if (provider_update_pending_.empty())
+  if (provider_update_pending_.empty()) {
     return;
+  }
 
   for (auto& provider_update_observer : provider_update_observers_) {
     for (ConfigurationPolicyProvider* provider : provider_update_pending_) {
@@ -436,11 +495,13 @@ PolicyBundle PolicyServiceImpl::MergePolicyBundles(
                                      &policy_dictionary_merger};
 
   PolicyGroupMerger policy_group_merger;
-  if (atomic_policy_group_enabled)
+  if (atomic_policy_group_enabled) {
     mergers.push_back(&policy_group_merger);
+  }
 
-  for (auto& entry : bundle)
+  for (auto& entry : bundle) {
     entry.second.MergeValues(mergers);
+  }
 
   for (auto& migrator : migrators) {
     migrator->Migrate(&bundle);
@@ -459,8 +520,9 @@ std::vector<PolicyDomain> PolicyServiceImpl::UpdatePolicyDomainStatus() {
   // their first policies loaded.
   for (int domain = 0; domain < POLICY_DOMAIN_SIZE; ++domain) {
     PolicyDomain policy_domain = static_cast<PolicyDomain>(domain);
-    if (policy_domain_status_[domain] == PolicyDomainStatus::kPolicyReady)
+    if (policy_domain_status_[domain] == PolicyDomainStatus::kPolicyReady) {
       continue;
+    }
 
     PolicyDomainStatus new_status = PolicyDomainStatus::kPolicyReady;
 
@@ -473,8 +535,9 @@ std::vector<PolicyDomain> PolicyServiceImpl::UpdatePolicyDomainStatus() {
       }
     }
 
-    if (new_status == policy_domain_status_[domain])
+    if (new_status == policy_domain_status_[domain]) {
       continue;
+    }
 
     policy_domain_status_[domain] = new_status;
     updated_domains.push_back(static_cast<PolicyDomain>(domain));
@@ -484,8 +547,9 @@ std::vector<PolicyDomain> PolicyServiceImpl::UpdatePolicyDomainStatus() {
 
 void PolicyServiceImpl::MaybeNotifyPolicyDomainStatusChange(
     const std::vector<PolicyDomain>& updated_domains) {
-  if (initialization_throttled_)
+  if (initialization_throttled_) {
     return;
+  }
 
   for (const auto policy_domain : updated_domains) {
     if (policy_domain_status_[policy_domain] ==
@@ -494,8 +558,9 @@ void PolicyServiceImpl::MaybeNotifyPolicyDomainStatusChange(
     }
 
     auto iter = observers_.find(policy_domain);
-    if (iter == observers_.end())
+    if (iter == observers_.end()) {
       continue;
+    }
 
     // If and when crbug.com/1221454 gets fixed, we should drop the WeakPtr
     // construction and checks here.
@@ -520,19 +585,33 @@ void PolicyServiceImpl::MaybeNotifyPolicyDomainStatusChange(
       }
     }
   }
+
+  // Record the initialization time for the policy service once the Chrome
+  // domain status changes to ready. Ignore if scope is unspecified.
+  if (policy_domain_status_[POLICY_DOMAIN_CHROME] ==
+          PolicyDomainStatus::kPolicyReady &&
+      std::ranges::find(updated_domains, POLICY_DOMAIN_CHROME) !=
+          updated_domains.end()) {
+    RecordInitializationTime(
+        scope_for_metrics_,
+        GetPolicies(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
+            .size(),
+        base::Time::Now() - creation_time_);
+  }
 }
 
 void PolicyServiceImpl::CheckRefreshComplete() {
   if (refresh_pending_.empty()) {
-    VLOG(2) << "Policy refresh complete";
+    VLOG_POLICY(2, POLICY_PROCESSING) << "Policy refresh complete";
   }
 
   // Invoke all the callbacks if a refresh has just fully completed.
   if (refresh_pending_.empty() && !refresh_callbacks_.empty()) {
     std::vector<base::OnceClosure> callbacks;
     callbacks.swap(refresh_callbacks_);
-    for (auto& callback : callbacks)
+    for (auto& callback : callbacks) {
       std::move(callback).Run();
+    }
   }
 }
 
@@ -548,6 +627,21 @@ void PolicyServiceImpl::IgnoreUserCloudPrecedencePolicies(PolicyMap* policies) {
       policy_entry_mutable->AddMessage(PolicyMap::MessageType::kError,
                                        IDS_POLICY_IGNORED_CHROME_PROFILE);
     }
+  }
+}
+
+// static
+void PolicyServiceImpl::RecordInitializationTime(
+    PolicyServiceImpl::ScopeForMetrics scope_for_metrics,
+    size_t policy_count,
+    base::TimeDelta initialization_time) {
+  if (scope_for_metrics == ScopeForMetrics::kUnspecified) {
+    return;
+  }
+
+  for (const std::string& histogram_name :
+       InitTimeHistogramsToRecord(scope_for_metrics, policy_count)) {
+    base::UmaHistogramLongTimes(histogram_name, initialization_time);
   }
 }
 

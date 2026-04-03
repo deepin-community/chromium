@@ -7,6 +7,10 @@
 // Image9.cpp: Implements the rx::Image9 class, which acts as the interface to
 // the actual underlying surfaces of a Texture.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/d3d/d3d9/Image9.h"
 
 #include "common/utilities.h"
@@ -647,6 +651,19 @@ angle::Result Image9::copyFromRTInternal(Context9 *context9,
                         destPixels += destLock.Pitch;
                     }
                     break;
+                case D3DFMT_A4L4:
+                    for (int y = 0; y < height; y++)
+                    {
+                        for (int x = 0; x < width; x++)
+                        {
+                            unsigned char r = sourcePixels[x * 4 + 2];
+                            unsigned char a = sourcePixels[x * 4 + 3];
+                            destPixels[x]   = ((a >> 4) << 4) | (r >> 4);
+                        }
+                        sourcePixels += sourceLock.Pitch;
+                        destPixels += destLock.Pitch;
+                    }
+                    break;
                 default:
                     UNREACHABLE();
             }
@@ -753,6 +770,19 @@ angle::Result Image9::copyFromRTInternal(Context9 *context9,
                         destPixels += destLock.Pitch;
                     }
                     break;
+                case D3DFMT_A4L4:
+                    for (int y = 0; y < height; y++)
+                    {
+                        for (int x = 0; x < width; x++)
+                        {
+                            unsigned char r = (sourcePixels[x * 2 + 1] & 0x7C) >> 3;
+                            unsigned char a = (sourcePixels[x * 2 + 1] >> 7) ? 0xF : 0x0;
+                            destPixels[x]   = (a << 4) | (r >> 3);
+                        }
+                        sourcePixels += sourceLock.Pitch;
+                        destPixels += destLock.Pitch;
+                    }
+                    break;
                 default:
                     UNREACHABLE();
             }
@@ -806,6 +836,22 @@ angle::Result Image9::copyFromRTInternal(Context9 *context9,
                             float a = gl::float16ToFloat32(sourcePixels16F[x * 4 + 3]);
                             destPixels[x * 2 + 0] = gl::floatToNormalized<uint8_t>(r);
                             destPixels[x * 2 + 1] = gl::floatToNormalized<uint8_t>(a);
+                        }
+                        sourcePixels += sourceLock.Pitch;
+                        destPixels += destLock.Pitch;
+                    }
+                    break;
+                case D3DFMT_A4L4:
+                    for (int y = 0; y < height; y++)
+                    {
+                        const uint16_t *sourcePixels16F =
+                            reinterpret_cast<uint16_t *>(sourcePixels);
+                        for (int x = 0; x < width; x++)
+                        {
+                            float r       = gl::float16ToFloat32(sourcePixels16F[x * 4 + 0]);
+                            float a       = gl::float16ToFloat32(sourcePixels16F[x * 4 + 3]);
+                            destPixels[x] = gl::floatToNormalized<4, uint8_t>(r) |
+                                            (gl::floatToNormalized<4, uint8_t>(a) << 4);
                         }
                         sourcePixels += sourceLock.Pitch;
                         destPixels += destLock.Pitch;
@@ -866,6 +912,21 @@ angle::Result Image9::copyFromRTInternal(Context9 *context9,
                         destPixels += destLock.Pitch;
                     }
                     break;
+                case D3DFMT_A4L4:
+                    for (int y = 0; y < height; y++)
+                    {
+                        const float *sourcePixels32F = reinterpret_cast<float *>(sourcePixels);
+                        for (int x = 0; x < width; x++)
+                        {
+                            float r       = sourcePixels32F[x * 4 + 0];
+                            float a       = sourcePixels32F[x * 4 + 3];
+                            destPixels[x] = gl::floatToNormalized<4, uint8_t>(r) |
+                                            (gl::floatToNormalized<4, uint8_t>(a) << 4);
+                        }
+                        sourcePixels += sourceLock.Pitch;
+                        destPixels += destLock.Pitch;
+                    }
+                    break;
                 default:
                     UNREACHABLE();
             }
@@ -886,7 +947,7 @@ angle::Result Image9::copyFromTexStorage(const gl::Context *context,
                                          TextureStorage *source)
 {
     RenderTargetD3D *renderTarget = nullptr;
-    ANGLE_TRY(source->getRenderTarget(context, imageIndex, 0, &renderTarget));
+    ANGLE_TRY(source->getRenderTarget(context, imageIndex, &renderTarget));
 
     gl::Rectangle sourceArea(0, 0, mWidth, mHeight);
     return copyFromRTInternal(GetImplAs<Context9>(context), gl::Offset(), sourceArea, renderTarget);

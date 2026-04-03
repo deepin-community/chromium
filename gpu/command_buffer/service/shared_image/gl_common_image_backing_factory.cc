@@ -11,7 +11,7 @@
 #include "base/feature_list.h"
 #include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/command_buffer/common/mailbox.h"
-#include "gpu/command_buffer/service/service_utils.h"
+#include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_image/gl_texture_holder.h"
 #include "gpu/config/gpu_preferences.h"
 #include "ui/gfx/color_space.h"
@@ -25,17 +25,15 @@ namespace gpu {
 
 namespace {
 // Kill switch for allowing using core ES3 format types for half float format.
-BASE_FEATURE(kAllowEs3F16CoreTypeForGlSi,
-             "AllowEs3F16CoreTypeForGlSi",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kAllowEs3F16CoreTypeForGlSi, base::FEATURE_ENABLED_BY_DEFAULT);
 
 std::optional<viz::SharedImageFormat> GetFallbackFormatIfNotSupported(
     viz::SharedImageFormat plane_format,
     const GLFormatCaps& caps) {
   if (plane_format == viz::SinglePlaneFormat::kR_8 &&
       (!caps.ext_texture_rg() || caps.disable_r8_shared_images())) {
-    // Fallback to LUMINANCE_8 for R_8 format.
-    return viz::SinglePlaneFormat::kLUMINANCE_8;
+    // Fallback to ALPHA_8 for R_8 format.
+    return viz::SinglePlaneFormat::kALPHA_8;
   }
   if (plane_format == viz::SinglePlaneFormat::kRG_88 &&
       !caps.ext_texture_rg()) {
@@ -94,17 +92,18 @@ std::vector<GLCommonImageBackingFactory::FormatInfo> GetMultiPlaneFormatInfo(
 }  // namespace
 
 GLCommonImageBackingFactory::GLCommonImageBackingFactory(
-    uint32_t supported_usages,
+    SharedImageUsageSet supported_usages,
     const GpuPreferences& gpu_preferences,
     const GpuDriverBugWorkarounds& workarounds,
     const gles2::FeatureInfo* feature_info,
     gl::ProgressReporter* progress_reporter)
     : SharedImageBackingFactory(supported_usages),
-      use_passthrough_(gpu_preferences.use_passthrough_cmd_decoder &&
-                       gles2::PassthroughCommandDecoderSupported()),
+      use_passthrough_(gpu_preferences.use_passthrough_cmd_decoder),
       workarounds_(workarounds),
       gl_format_caps_(GLFormatCaps(feature_info)),
       use_webgpu_adapter_(gpu_preferences.use_webgpu_adapter),
+      enable_webgpu_on_vk_via_gl_interop_(
+          gpu_preferences.enable_webgpu_on_vk_via_gl_interop),
       progress_reporter_(progress_reporter) {
   gl::GLApi* api = gl::g_current_gl_context;
   api->glGetIntegervFn(GL_MAX_TEXTURE_SIZE, &max_texture_size_);
@@ -167,10 +166,10 @@ GLCommonImageBackingFactory::GLCommonImageBackingFactory(
     if (enable_texture_storage && !info.is_compressed &&
         validators->texture_internal_format_storage.IsValid(
             info.storage_internal_format)) {
-      // GL_ALPHA8 requires EXT_texture_storage even with ES3. We should not
+      // GL_ALPHA8_EXT requires EXT_texture_storage even with ES3. We should not
       // rely on validating command decoder logic that allows GL_ALPHA8, but
       // working around here for now until proper fix.
-      if (info.storage_internal_format == GL_ALPHA8 && use_passthrough_) {
+      if (info.storage_internal_format == GL_ALPHA8_EXT && use_passthrough_) {
         continue;
       }
 

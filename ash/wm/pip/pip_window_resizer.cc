@@ -17,11 +17,13 @@
 #include "ash/wm/toplevel_window_event_handler.h"
 #include "ash/wm/window_util.h"
 #include "ash/wm/wm_event.h"
+#include "base/check.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_delegate.h"
+#include "ui/base/hit_test.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/screen.h"
@@ -50,12 +52,6 @@ const int kPipMovementFlingThresholdSquared = 1000 * 1000;
 // Threshold for considering a swipe off the side of the screen a dismissal
 // even if less than |kPipDismissFraction| of the PIP window is off-screen.
 const int kPipSwipeToDismissFlingThresholdSquared = 800 * 800;
-// The maximum angle of tilt allowed for the PiP window during pinch
-// gesture in degrees.
-constexpr float kPipTiltMaximumAngle = 10.f;
-// The speed of the tilt. The bigger the value, the faster the PiP
-// window tilts.
-constexpr float kPipTiltSpeed = 8.f;
 
 bool IsAtTopOrBottomEdge(const gfx::Rect& bounds, const gfx::Rect& area) {
   return (bounds.y() < area.y() + kPipDismissSlop && bounds.y() >= area.y()) ||
@@ -79,9 +75,14 @@ bool IsPastLeftOrRightEdge(const gfx::Rect& bounds, const gfx::Rect& area) {
 
 }  // namespace
 
-PipWindowResizer::PipWindowResizer(WindowState* window_state)
+PipWindowResizer::PipWindowResizer(WindowState* window_state, bool for_pinch)
     : WindowResizer(window_state) {
-  window_state->OnDragStarted(details().window_component);
+  // The window component should be valid component for drag/resize operation,
+  // but pinch zoom can happen with any component, such as HTCLIENT.
+  // Use HTCAPTION as a value default value for pinch-zoom. It will not
+  // affect the actual behavior.
+  window_state->OnDragStarted(for_pinch ? HTCAPTION
+                                        : details().window_component);
 
   // TODO(b/301232629): `DragDetails::bounds_change` should be
   // `kBoundsChange_Resizes` during pinch resizing.
@@ -179,7 +180,7 @@ void PipWindowResizer::Drag(const gfx::PointF& location_in_parent,
     float in_screen_area = in_screen_bounds.width() * in_screen_bounds.height();
     if (bounds_area != 0.f) {
       in_screen_fraction_ = in_screen_area / bounds_area;
-      if (may_dismiss_horizontally_ && features::IsPipTuckEnabled()) {
+      if (may_dismiss_horizontally_) {
         if (bounds_area != 0.f) {
           Shell::Get()->pip_controller()->SetDimOpacity(
               fmin(0.5f, 1 - in_screen_fraction_));
@@ -208,20 +209,11 @@ void PipWindowResizer::Drag(const gfx::PointF& location_in_parent,
 }
 
 void PipWindowResizer::Pinch(const gfx::PointF& location_in_parent,
-                             const float scale,
-                             const float angle) {
+                             const float scale) {
   accumulated_scale_ *= scale;
-  accumulated_angle_ += angle;
 
   last_location_in_screen_ = location_in_parent;
   last_event_was_pinch_ = true;
-
-  // If the user is trying to enlarge the window further than the limit,
-  // we use `gfx::Transform` to visually scale the window to up to 115%
-  // of the limit size. The window size will return to the limit size
-  // with `CompleteDrag()`. The same goes for when the user tries to
-  // shrink the window.
-  SetTransformDuringResize(CalculateTransformForPinch());
 
   gfx::Rect new_bounds = CalculateBoundsForPinch(location_in_parent);
 
@@ -254,9 +246,12 @@ gfx::Rect PipWindowResizer::CalculateBoundsForPinch(
   gfx::Size size =
       gfx::ScaleToRoundedSize(initial_bounds.size(), accumulated_scale_);
 
-  gfx::Size max_size = GetTarget()->delegate()->GetMaximumSize();
+  std::optional<gfx::Size> max_size = GetTarget()->delegate()->GetMaximumSize();
+  CHECK(!(max_size.has_value() && max_size->IsZero()));
   gfx::Size min_size = GetTarget()->delegate()->GetMinimumSize();
-  size.SetToMin(max_size);
+  if (max_size.has_value()) {
+    size.SetToMin(*max_size);
+  }
   size.SetToMax(min_size);
 
   gfx::SizeF* aspect_ratio_size =
@@ -279,44 +274,14 @@ gfx::Rect PipWindowResizer::CalculateBoundsForPinch(
   const float top_ratio =
       (initial_location.y() - initial_bounds.y()) / initial_bounds.height();
 
-  // Calculate bounds correction to center the scale transform.
-  gfx::Vector2dF scale_offset(
-      left_ratio * new_bounds.width() *
-          (GetTarget()->transform().To2dScale().x() - 1.f),
-      top_ratio * new_bounds.height() *
-          (GetTarget()->transform().To2dScale().y() - 1.f));
-
-  // Calculate bounds correction to center the rotate transform.
-  gfx::Vector2dF tilt_offset(0.f, 0.f);
-  if (features::IsPipTiltEnabled()) {
-    tilt_offset = ComputeTiltOffset();
-  }
-
-  gfx::Point new_origin(location_in_parent.x() - scale_offset.x() -
-                            tilt_offset.x() - new_bounds.width() * left_ratio,
-                        location_in_parent.y() - scale_offset.y() -
-                            tilt_offset.y() - new_bounds.height() * top_ratio);
-  new_bounds.set_origin(new_origin);
+  new_bounds.set_x(location_in_parent.x() -
+                   new_bounds.width() *
+                       GetTarget()->transform().To2dScale().x() * left_ratio);
+  new_bounds.set_y(location_in_parent.y() -
+                   new_bounds.height() *
+                       GetTarget()->transform().To2dScale().y() * top_ratio);
 
   return new_bounds;
-}
-
-gfx::Transform PipWindowResizer::CalculateTransformForPinch() const {
-  gfx::Transform transform;
-  if (features::IsPipTiltEnabled()) {
-    float rotate_angle;
-    if (accumulated_angle_ > 0) {
-      rotate_angle =
-          -1.f / (accumulated_angle_ / 360.f * kPipTiltSpeed + 1.f) + 1.f;
-    } else {
-      rotate_angle =
-          -1.f / (accumulated_angle_ / 360.f * kPipTiltSpeed - 1.f) - 1.f;
-    }
-    rotate_angle *= kPipTiltMaximumAngle;
-    transform.Rotate(rotate_angle);
-  }
-
-  return transform;
 }
 
 void PipWindowResizer::CompleteDrag() {
@@ -335,8 +300,7 @@ void PipWindowResizer::CompleteDrag() {
       in_screen_fraction_ < kPipDismissFraction ||
       (in_screen_fraction_ != 1.f &&
        fling_amount >= kPipSwipeToDismissFlingThresholdSquared);
-  bool should_tuck = should_dismiss_or_tuck && may_dismiss_horizontally_ &&
-                     features::IsPipTuckEnabled();
+  bool should_tuck = should_dismiss_or_tuck && may_dismiss_horizontally_;
   bool should_dismiss = should_dismiss_or_tuck && !should_tuck;
 
   if (should_dismiss) {
@@ -345,7 +309,7 @@ void PipWindowResizer::CompleteDrag() {
     window_util::CloseWidgetForWindow(window_state()->window());
   } else if (should_tuck) {
     const gfx::Point display_bounds_center =
-        display::Screen::GetScreen()
+        display::Screen::Get()
             ->GetDisplayMatching(GetTarget()->bounds())
             .bounds()
             .CenterPoint();
@@ -377,12 +341,6 @@ void PipWindowResizer::CompleteDrag() {
       }
       // Reset the dimmer for tucking.
       Shell::Get()->pip_controller()->SetDimOpacity(0.f);
-    }
-
-    // Undo the offset translation for the tilt effect.
-    if (features::IsPipTiltEnabled()) {
-      const gfx::Vector2dF tilt_offset = ComputeTiltOffset();
-      intended_bounds.Offset(gfx::Vector2d(tilt_offset.x(), tilt_offset.y()));
     }
 
     // Compute resting position even if it was a fling to avoid obstacles.
@@ -428,8 +386,8 @@ void PipWindowResizer::RevertDrag() {
 }
 
 void PipWindowResizer::FlingOrSwipe(ui::GestureEvent* event) {
-  if (event->type() != ui::ET_SCROLL_FLING_START &&
-      event->type() != ui::ET_GESTURE_SWIPE) {
+  if (event->type() != ui::EventType::kScrollFlingStart &&
+      event->type() != ui::EventType::kGestureSwipe) {
     return;
   }
 
@@ -470,31 +428,6 @@ gfx::Rect PipWindowResizer::ComputeFlungPosition() {
   }
 
   return bounds;
-}
-
-gfx::Vector2dF PipWindowResizer::ComputeTiltOffset() const {
-  // `gfx::Transfomr`'s rotation is anchored on the top left, but we
-  // want the window to tilt around the window center. If we think of
-  // the window center being the center of the rotation, the top-left
-  // (origin) of the window should move on a circle with the radius of
-  // half the diagonal.
-  float tilt_angle = std::atan2(GetTarget()->transform().rc(1, 0),
-                                GetTarget()->transform().rc(0, 0));
-  float diagonal_angle =
-      std::atan2(GetTarget()->bounds().height(), GetTarget()->bounds().width());
-  float half_diagonal =
-      std::sqrt(GetTarget()->bounds().height() *
-                    GetTarget()->bounds().height() +
-                GetTarget()->bounds().width() * GetTarget()->bounds().width()) /
-      2.f;
-
-  gfx::Vector2dF tilt_offset(
-      half_diagonal *
-          (std::cos(diagonal_angle + tilt_angle) - std::cos(diagonal_angle)),
-      half_diagonal *
-          (std::sin(diagonal_angle + tilt_angle) - std::sin(diagonal_angle)));
-
-  return tilt_offset;
 }
 
 }  // namespace ash

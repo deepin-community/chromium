@@ -6,7 +6,6 @@
 
 #include <stdint.h>
 
-#include <set>
 #include <string>
 #include <vector>
 
@@ -14,6 +13,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/sequence_checker.h"
 #include "base/strings/stringprintf.h"
@@ -23,6 +23,7 @@
 #include "content/services/auction_worklet/debug_command_queue.h"
 #include "content/services/auction_worklet/protocol/event_breakpoints.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/inspector_protocol/crdtp/cbor.h"
 #include "third_party/inspector_protocol/crdtp/dispatch.h"
 #include "third_party/inspector_protocol/crdtp/frontend_channel.h"
@@ -51,8 +52,7 @@ class AuctionV8DevToolsSession::BreakpointHandler
 
   void MaybeTriggerInstrumentationBreakpoint(const std::string& name) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(v8_sequence_checker_);
-    if (instrumentation_breakpoints_.find(name) !=
-        instrumentation_breakpoints_.end()) {
+    if (instrumentation_breakpoints_.contains(name)) {
       std::string category("EventListener");
       std::string aux_json = base::StringPrintf(
           R"({"eventName":"instrumentation:%s"})", name.c_str());
@@ -79,7 +79,7 @@ class AuctionV8DevToolsSession::BreakpointHandler
   }
 
   raw_ptr<v8_inspector::V8InspectorSession> v8_session_;
-  std::set<std::string> instrumentation_breakpoints_;
+  absl::flat_hash_set<std::string> instrumentation_breakpoints_;
   SEQUENCE_CHECKER(v8_sequence_checker_);
 };
 
@@ -128,6 +128,8 @@ class AuctionV8DevToolsSession::IOSession
         base::BindOnce(v8_thread_dispatch_, call_id, method,
                        std::vector<uint8_t>(message.begin(), message.end())));
   }
+
+  void UnpauseAndTerminate() override { NOTREACHED(); }
 
  private:
   IOSession(scoped_refptr<DebugCommandQueue> debug_command_queue,
@@ -255,6 +257,11 @@ void AuctionV8DevToolsSession::DispatchProtocolCommand(
   }
 }
 
+void AuctionV8DevToolsSession::UnpauseAndTerminate() {
+  // This is currently only invoked for frame targets.
+  NOTREACHED();
+}
+
 void AuctionV8DevToolsSession::sendResponse(
     int call_id,
     std::unique_ptr<v8_inspector::StringBuffer> message) {
@@ -345,7 +352,7 @@ blink::mojom::DevToolsMessagePtr AuctionV8DevToolsSession::FinalizeMessage(
     message_to_send = std::move(json);
   }
   auto mojo_msg = blink::mojom::DevToolsMessage::New();
-  mojo_msg->data = std::move(message_to_send);
+  mojo_msg->data = {message_to_send};
   return mojo_msg;
 }
 

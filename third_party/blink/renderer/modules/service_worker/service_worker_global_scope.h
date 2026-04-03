@@ -34,7 +34,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
-#include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -73,7 +72,6 @@ class ExceptionState;
 class FetchEvent;
 class RespondWithObserver;
 class RequestInit;
-class ScriptPromise;
 class ScriptState;
 class ServiceWorker;
 class ServiceWorkerClients;
@@ -120,6 +118,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   // ExecutionContext overrides:
   bool IsServiceWorkerGlobalScope() const override { return true; }
   bool ShouldInstallV8Extensions() const final;
+  void MaybeRecordNetworkRequestUrlForPushEvents(const KURL& url) override;
   bool IsInFencedFrame() const override;
   void NotifyWebSocketActivity() override;
 
@@ -148,8 +147,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       std::unique_ptr<PolicyContainer> policy_container,
       const FetchClientSettingsObjectSnapshot& outside_settings_object,
       WorkerResourceTimingNotifier& outside_resource_timing_notifier,
-      network::mojom::CredentialsMode,
-      RejectCoepUnsafeNone reject_coep_unsafe_none) override;
+      network::mojom::CredentialsMode) override;
   void Dispose() override;
   InstalledScriptsManager* GetInstalledScriptsManager() override;
 
@@ -169,7 +167,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   ServiceWorkerRegistration* registration();
   ::blink::ServiceWorker* serviceWorker();
 
-  ScriptPromise skipWaiting(ScriptState*);
+  ScriptPromise<IDLUndefined> skipWaiting(ScriptState*);
 
   void BindServiceWorker(mojo::PendingReceiver<mojom::blink::ServiceWorker>);
   void BindControllerServiceWorker(
@@ -191,6 +189,12 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   // Resumes the toplevel script evaluation. Must be called only after
   // PauseEvaluation() is called.
   void ResumeEvaluation();
+
+  // Defers `PrepareForEvaluation()` until `RunDeferredPrepareForEvaluation` is
+  // called.
+  void DeferPrepareForEvaluation();
+  // Run deferred preparing for worker script evaluation.
+  void RunDeferredPrepareForEvaluation();
 
   // Creates a ServiceWorkerEventQueue::StayAwakeToken to ensure that the idle
   // timer won't be triggered while any of these are alive.
@@ -240,11 +244,14 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   // native fetch.
   void RespondToFetchEventWithNoResponse(
       int fetch_event_id,
+      FetchEvent* fetch_event,
       const KURL& request_url,
       bool range_request,
       std::optional<network::DataElementChunkedDataPipe> request_body,
       base::TimeTicks event_dispatch_time,
       base::TimeTicks respond_with_settled_time);
+  void OnStreamingUploadCompletion(int fetch_event_id);
+
   // Responds to the fetch event with |response|.
   void RespondToFetchEvent(int fetch_event_id,
                            const KURL& request_url,
@@ -380,7 +387,9 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       const override;
 
  private:
-  void importScripts(const Vector<String>& urls) override;
+  void importScripts(
+      const HeapVector<Member<V8UnionTrustedScriptURLOrUSVString>>& urls,
+      ExceptionState&) override;
   CachedMetadataHandler* CreateWorkerScriptCachedMetadataHandler(
       const KURL& script_url,
       std::unique_ptr<Vector<uint8_t>> meta_data) override;
@@ -409,9 +418,6 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   // Counts the |script_size| and |cached_metadata_size| for UMA to measure the
   // number of scripts and the total bytes of scripts.
   void CountScriptInternal(size_t script_size, size_t cached_metadata_size);
-
-  // Called by ServiceWorkerEventQueue just before they start an event.
-  void OnBeforeStartEvent(bool is_offline_event);
 
   // Called by ServiceWorkerEventQueue when a certain time has passed since
   // the last task finished.
@@ -448,7 +454,11 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       const network::CrossOriginEmbedderPolicy& cross_origin_embedder_policy,
       mojo::PendingRemote<
           network::mojom::blink::CrossOriginEmbedderPolicyReporter>
-          coep_reporter) override;
+          coep_reporter,
+      const network::DocumentIsolationPolicy& document_isolation_policy,
+      mojo::PendingRemote<
+          network::mojom::blink::DocumentIsolationPolicyReporter> dip_reporter)
+      override;
 
   // Implements mojom::blink::ServiceWorker.
   void InitializeGlobalScope(
@@ -461,7 +471,6 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       mojom::blink::ServiceWorkerRegistrationObjectInfoPtr registration_info,
       mojom::blink::ServiceWorkerObjectInfoPtr service_worker_info,
       mojom::blink::FetchHandlerExistence fetch_handler_existence,
-      mojo::PendingReceiver<mojom::blink::ReportingObserver>,
       mojom::blink::AncestorFrameType ancestor_frame_type,
       const blink::BlinkStorageKey& storage_key) override;
   void DispatchInstallEvent(DispatchInstallEventCallback callback) override;
@@ -500,6 +509,9 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       DispatchNotificationCloseEventCallback callback) override;
   void DispatchPushEvent(const String& payload,
                          DispatchPushEventCallback callback) override;
+  void DispatchPushEventRecordingNetworkRequests(
+      const String& payload,
+      DispatchPushEventRecordingNetworkRequestsCallback callback) override;
   void DispatchPushSubscriptionChangeEvent(
       mojom::blink::PushSubscriptionPtr old_subscription,
       mojom::blink::PushSubscriptionPtr new_subscription,
@@ -557,7 +569,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   void StartFetchEvent(
       mojom::blink::DispatchFetchEventParamsPtr params,
       base::WeakPtr<CrossOriginResourcePolicyChecker> corp_checker,
-      std::optional<base::TimeTicks> created_time,
+      base::TimeTicks created_time,
       int event_id);
   void StartInstallEvent(int event_id);
   void StartActivateEvent(int event_id);
@@ -636,7 +648,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   Member<::blink::ServiceWorker> service_worker_;
 
   // Registry of interfaces exposed to the browser from Service Workers.
-  const raw_ptr<InterfaceRegistry, ExperimentalRenderer> interface_registry_;
+  const raw_ptr<InterfaceRegistry> interface_registry_;
 
   // Map from service worker version id to JavaScript ServiceWorker object in
   // current execution context.
@@ -698,6 +710,8 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   HashMap<int, DispatchNotificationCloseEventCallback>
       notification_close_event_callbacks_;
   HashMap<int, DispatchPushEventCallback> push_event_callbacks_;
+  HashMap<int, DispatchPushEventRecordingNetworkRequestsCallback>
+      push_event_recording_network_requests_callback_;
   HashMap<int, DispatchPushSubscriptionChangeEventCallback>
       push_subscription_change_event_callbacks_;
   HashMap<int, DispatchFetchEventInternalCallback> fetch_event_callbacks_;
@@ -723,6 +737,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       fetch_response_callbacks_;
 
   HeapHashMap<int, Member<FetchEvent>> pending_preload_fetch_events_;
+  HeapHashMap<int, Member<FetchEvent>> pending_streaming_upload_fetch_events_;
 
   // Track outstanding FetchEvent objects still waiting for a response by
   // request URL.  This information can be used as a hint that cache_storage
@@ -748,6 +763,22 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   bool pause_evaluation_ = false;
   // ResumeEvaluation() evaluates the top level script when this flag is true.
   bool global_scope_initialized_ = false;
+
+  // Whether `PrepareForEvaluation` should be deferred.
+  bool defer_prepare_for_evaluation_ = false;
+
+  // Whether network requests made during a push event should be recorded for
+  // later forwarding to the browser process.
+  enum class RecordNetworkRequestsDuringPushEvent {
+    kDoNotRecord,
+    kRecord,
+  };
+  RecordNetworkRequestsDuringPushEvent should_record_network_requests_ =
+      RecordNetworkRequestsDuringPushEvent::kDoNotRecord;
+
+  // The collection of network request urls contacted during the life of a push
+  // event.
+  Vector<KURL> push_event_network_request_urls_;
 
   // Connected by the ServiceWorkerHost in the browser process and by the
   // controllees. |controller_bindings_| should be destroyed before
@@ -782,8 +813,8 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
     mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
         url_loader_factory;
   };
-  // TODO(crbug.com/918702) WTF::HashMap cannot use base::UnguessableToken as a
-  // key. As a workaround uses WTF::String as a key instead.
+  // TODO(crbug.com/918702) HashMap cannot use base::UnguessableToken as a
+  // key. As a workaround uses String as a key instead.
   HashMap<String, std::unique_ptr<RaceNetworkRequestInfo>>
       race_network_requests_;
   HashMap<int, RaceNetworkRequestInfo*> race_network_request_fetch_event_ids_;

@@ -6,9 +6,10 @@
 
 #include <utility>
 
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom-blink.h"
+#include "services/device/public/cpp/device_features.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_hid_device_filter.h"
@@ -19,6 +20,7 @@
 #include "third_party/blink/renderer/core/execution_context/navigator_base.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/modules/event_target_modules.h"
 #include "third_party/blink/renderer/modules/hid/hid_connection_event.h"
 #include "third_party/blink/renderer/modules/hid/hid_device.h"
@@ -48,14 +50,21 @@ bool ShouldBlockHidServiceCall(LocalDOMWindow* window,
     return true;
   }
 
-  // The security origin must match the one checked by the browser process.
-  // Service Workers do not use delegated permissions so we use their security
-  // origin directly.
-  DCHECK(context->IsWindow() || context->IsServiceWorkerGlobalScope());
-  auto* security_origin =
-      window
-          ? window->GetFrame()->Top()->GetSecurityContext()->GetSecurityOrigin()
-          : context->GetSecurityOrigin();
+  // For window and dedicated workers, reject the request if the top-level frame
+  // has an opaque origin. For Service Workers, we use their security origin
+  // directly as they do not use delegated permissions.
+  const SecurityOrigin* security_origin = nullptr;
+  if (context->IsWindow()) {
+    security_origin =
+        window->GetFrame()->Top()->GetSecurityContext()->GetSecurityOrigin();
+  } else if (context->IsDedicatedWorkerGlobalScope()) {
+    security_origin = static_cast<WorkerGlobalScope*>(context)
+                          ->top_level_frame_security_origin();
+  } else if (context->IsServiceWorkerGlobalScope()) {
+    security_origin = context->GetSecurityOrigin();
+  } else {
+    NOTREACHED();
+  }
   if (security_origin->IsOpaque()) {
     if (exception_state) {
       exception_state->ThrowSecurityError(
@@ -66,7 +75,7 @@ bool ShouldBlockHidServiceCall(LocalDOMWindow* window,
     return true;
   }
 
-  if (!context->IsFeatureEnabled(mojom::blink::PermissionsPolicyFeature::kHid,
+  if (!context->IsFeatureEnabled(network::mojom::PermissionsPolicyFeature::kHid,
                                  ReportOptions::kReportOnFailure)) {
     if (exception_state) {
       exception_state->ThrowSecurityError(kFeaturePolicyBlocked);
@@ -78,7 +87,7 @@ bool ShouldBlockHidServiceCall(LocalDOMWindow* window,
 }
 
 void RejectWithTypeError(const String& message,
-                         ScriptPromiseResolver* resolver) {
+                         ScriptPromiseResolverBase* resolver) {
   ScriptState::Scope scope(resolver->GetScriptState());
   v8::Isolate* isolate = resolver->GetScriptState()->GetIsolate();
   resolver->Reject(V8ThrowException::CreateTypeError(isolate, message));
@@ -101,11 +110,14 @@ HID::HID(NavigatorBase& navigator)
     : Supplement<NavigatorBase>(navigator),
       service_(navigator.GetExecutionContext()),
       receiver_(this, navigator.GetExecutionContext()) {
-  auto* context = GetExecutionContext();
-  if (context) {
-    feature_handle_for_scheduler_ = context->GetScheduler()->RegisterFeature(
-        SchedulingPolicy::Feature::kWebHID,
-        {SchedulingPolicy::DisableBackForwardCache()});
+  if (!base::FeatureList::IsEnabled(
+          features::kWebHidAttributeAllowsBackForwardCache)) {
+    auto* context = GetExecutionContext();
+    if (context) {
+      feature_handle_for_scheduler_ = context->GetScheduler()->RegisterFeature(
+          SchedulingPolicy::Feature::kWebHID,
+          {SchedulingPolicy::DisableBackForwardCache()});
+    }
   }
 }
 
@@ -182,12 +194,12 @@ void HID::DeviceChanged(device::mojom::blink::HidDeviceInfoPtr device_info) {
   DeviceAdded(std::move(device_info));
 }
 
-ScriptPromiseTyped<IDLSequence<HIDDevice>> HID::getDevices(
+ScriptPromise<IDLSequence<HIDDevice>> HID::getDevices(
     ScriptState* script_state,
     ExceptionState& exception_state) {
   if (ShouldBlockHidServiceCall(GetSupplementable()->DomWindow(),
                                 GetExecutionContext(), &exception_state)) {
-    return ScriptPromiseTyped<IDLSequence<HIDDevice>>();
+    return ScriptPromise<IDLSequence<HIDDevice>>();
   }
 
   auto* resolver = MakeGarbageCollected<HIDDeviceResolver>(
@@ -195,12 +207,12 @@ ScriptPromiseTyped<IDLSequence<HIDDevice>> HID::getDevices(
   get_devices_promises_.insert(resolver);
 
   EnsureServiceConnection();
-  service_->GetDevices(WTF::BindOnce(
-      &HID::FinishGetDevices, WrapPersistent(this), WrapPersistent(resolver)));
+  service_->GetDevices(BindOnce(&HID::FinishGetDevices, WrapPersistent(this),
+                                WrapPersistent(resolver)));
   return resolver->Promise();
 }
 
-ScriptPromiseTyped<IDLSequence<HIDDevice>> HID::requestDevice(
+ScriptPromise<IDLSequence<HIDDevice>> HID::requestDevice(
     ScriptState* script_state,
     const HIDDeviceRequestOptions* options,
     ExceptionState& exception_state) {
@@ -210,18 +222,18 @@ ScriptPromiseTyped<IDLSequence<HIDDevice>> HID::requestDevice(
   if (!window) {
     exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                       kContextGone);
-    return ScriptPromiseTyped<IDLSequence<HIDDevice>>();
+    return ScriptPromise<IDLSequence<HIDDevice>>();
   }
 
   if (ShouldBlockHidServiceCall(window, GetExecutionContext(),
                                 &exception_state)) {
-    return ScriptPromiseTyped<IDLSequence<HIDDevice>>();
+    return ScriptPromise<IDLSequence<HIDDevice>>();
   }
 
   if (!LocalFrame::HasTransientUserActivation(window->GetFrame())) {
     exception_state.ThrowSecurityError(
         "Must be handling a user gesture to show a permission request.");
-    return ScriptPromiseTyped<IDLSequence<HIDDevice>>();
+    return ScriptPromise<IDLSequence<HIDDevice>>();
   }
 
   auto* resolver = MakeGarbageCollected<HIDDeviceResolver>(
@@ -248,7 +260,7 @@ ScriptPromiseTyped<IDLSequence<HIDDevice>> HID::requestDevice(
     if (options->exclusionFilters().size() == 0) {
       exception_state.ThrowTypeError(
           "'exclusionFilters', if present, must contain at least one filter.");
-      return ScriptPromiseTyped<IDLSequence<HIDDevice>>();
+      return ScriptPromise<IDLSequence<HIDDevice>>();
     }
     mojo_exclusion_filters.reserve(options->exclusionFilters().size());
     for (const auto& exclusion_filter : options->exclusionFilters()) {
@@ -266,8 +278,8 @@ ScriptPromiseTyped<IDLSequence<HIDDevice>> HID::requestDevice(
   EnsureServiceConnection();
   service_->RequestDevice(
       std::move(mojo_filters), std::move(mojo_exclusion_filters),
-      WTF::BindOnce(&HID::FinishRequestDevice, WrapPersistent(this),
-                    WrapPersistent(resolver)));
+      BindOnce(&HID::FinishRequestDevice, WrapPersistent(this),
+               WrapPersistent(resolver)));
   return promise;
 }
 
@@ -338,7 +350,7 @@ void HID::EnsureServiceConnection() {
   GetExecutionContext()->GetBrowserInterfaceBroker().GetInterface(
       service_.BindNewPipeAndPassReceiver(task_runner));
   service_.set_disconnect_handler(
-      WTF::BindOnce(&HID::CloseServiceConnection, WrapWeakPersistent(this)));
+      BindOnce(&HID::CloseServiceConnection, WrapWeakPersistent(this)));
   DCHECK(!receiver_.is_bound());
   service_->RegisterClient(receiver_.BindNewEndpointAndPassRemote(task_runner));
 }

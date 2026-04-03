@@ -18,6 +18,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/history/core/browser/history_service_observer.h"
+#include "components/history/core/browser/history_types.h"
 
 class TemplateURLService;
 
@@ -95,10 +96,9 @@ class ContextClustererHistoryServiceObserver
 
   // history::HistoryServiceObserver:
   void OnURLVisited(history::HistoryService* history_service,
-                    const history::URLRow& url_row,
-                    const history::VisitRow& visit_row) override;
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+                    const history::VisitedURLInfo& visited_url_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
 
  private:
   friend class ContextClustererHistoryServiceObserverTest;

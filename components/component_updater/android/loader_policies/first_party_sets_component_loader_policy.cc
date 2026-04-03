@@ -5,13 +5,11 @@
 #include "components/component_updater/android/loader_policies/first_party_sets_component_loader_policy.h"
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
 #include "base/task/thread_pool.h"
@@ -38,7 +36,7 @@ FirstPartySetComponentLoaderPolicy::~FirstPartySetComponentLoaderPolicy() =
 void FirstPartySetComponentLoaderPolicy::ComponentLoaded(
     const base::Version& version,
     base::flat_map<std::string, base::ScopedFD>& fd_map,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   auto keys_fd_iterator = fd_map.find(kFpsMetadataComponentFileName);
   if (keys_fd_iterator == fd_map.end()) {
     VLOG(1) << "FirstPartySetComponentLoaderPolicy#ComponentLoaded "

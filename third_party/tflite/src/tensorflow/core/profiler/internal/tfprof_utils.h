@@ -25,38 +25,38 @@ limitations under the License.
 
 namespace tensorflow {
 namespace tfprof {
-string FormatNumber(int64_t n);
+std::string FormatNumber(int64_t n);
 
-string FormatTime(int64_t micros);
+std::string FormatTime(int64_t micros);
 
-string FormatMemory(int64_t bytes);
+std::string FormatMemory(int64_t bytes);
 
-string FormatShapes(const std::vector<int64_t>& shapes);
+std::string FormatShapes(const std::vector<int64_t>& shapes);
 
-tensorflow::Status ParseCmdLine(const string& line, string* cmd,
-                                tensorflow::tfprof::Options* opts);
+absl::Status ParseCmdLine(const std::string& line, std::string* cmd,
+                          tensorflow::tfprof::Options* opts);
 
-string StringReplace(const string& str, const string& oldsub,
-                     const string& newsub);
+std::string StringReplace(const std::string& str, const std::string& oldsub,
+                          const std::string& newsub);
 
 template <typename T>
-Status ReadProtoFile(Env* env, const string& fname, T* proto,
-                     bool binary_first) {
-  string out;
-  Status s = ReadFileToString(env, fname, &out);
+absl::Status ReadProtoFile(Env* env, const std::string& fname, T* proto,
+                           bool binary_first) {
+  std::string out;
+  absl::Status s = ReadFileToString(env, fname, &out);
   if (!s.ok()) return s;
 
   if (binary_first) {
     if (ReadBinaryProto(tensorflow::Env::Default(), fname, proto).ok()) {
-      return Status();
+      return absl::Status();
     } else if (protobuf::TextFormat::ParseFromString(out, proto)) {
-      return Status();
+      return absl::Status();
     }
   } else {
     if (protobuf::TextFormat::ParseFromString(out, proto)) {
-      return Status();
+      return absl::Status();
     } else if (ReadBinaryProto(tensorflow::Env::Default(), fname, proto).ok()) {
-      return Status();
+      return absl::Status();
     }
   }
   return errors::InvalidArgument("Cannot parse proto file.");
@@ -65,7 +65,7 @@ Status ReadProtoFile(Env* env, const string& fname, T* proto,
 void PrintHelp();
 
 // Generate helper message based on the command and options.
-string QueryDoc(const string& cmd, const Options& opts);
+std::string QueryDoc(const std::string& cmd, const Options& opts);
 
 }  // namespace tfprof
 }  // namespace tensorflow

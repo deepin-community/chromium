@@ -18,25 +18,23 @@ limitations under the License.
 #include <optional>
 #include <utility>
 
+#include "absl/status/status.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/LogicalResult.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
+#include "mlir/IR/Block.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/Diagnostics.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/Types.h"  // from @llvm-project
 #include "mlir/IR/ValueRange.h"  // from @llvm-project
+#include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
-#include "mlir/Transforms/Passes.h"  // from @llvm-project
-#include "mlir/Transforms/RegionUtils.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/dtensor/cc/constants.h"
-#include "tensorflow/dtensor/cc/tensor_layout.h"
-#include "tensorflow/dtensor/mlir/dtensor_mlir_passes.h"
-#include "tensorflow/dtensor/mlir/ir/tf_dtensor.h"
 #include "tensorflow/dtensor/mlir/layout_parsing.h"
 
 namespace tensorflow {
@@ -62,12 +60,12 @@ mlir::LogicalResult ShouldMergeClusters(mlir::tf_device::ClusterOp cluster_a,
   auto mesh_a_or_status = ExtractDeviceMeshFromOp(cluster_a.getOperation());
   if (!mesh_a_or_status.ok())
     return cluster_a.emitOpError(
-        tsl::NullTerminatedMessage(mesh_a_or_status.status()));
+        absl::StatusMessageAsCStr(mesh_a_or_status.status()));
 
   auto mesh_b_or_status = ExtractDeviceMeshFromOp(cluster_b.getOperation());
   if (!mesh_b_or_status.ok())
     return cluster_b.emitOpError(
-        tsl::NullTerminatedMessage(mesh_b_or_status.status()));
+        absl::StatusMessageAsCStr(mesh_b_or_status.status()));
 
   auto mesh_a = mesh_a_or_status.value();
   auto mesh_b = mesh_b_or_status.value();
@@ -196,8 +194,8 @@ mlir::LogicalResult CreateMergedMeshCluster(
     output_values_to_replace.emplace_back(std::get<1>(cluster_return_value));
   }
 
-  *merged_cluster = builder->create<mlir::tf_device::ClusterOp>(
-      current_cluster.getLoc(), merged_cluster_output_types);
+  *merged_cluster = mlir::tf_device::ClusterOp::create(
+      *builder, current_cluster.getLoc(), merged_cluster_output_types);
   auto mesh_attr = current_cluster->getAttrOfType<mlir::StringAttr>(kMeshAttr);
   if (!mesh_attr)
     return current_cluster.emitOpError(kMissingMeshAttributeErrorMessage);
@@ -208,8 +206,8 @@ mlir::LogicalResult CreateMergedMeshCluster(
   // `current_cluster` and `merging_cluster`.
   merged_cluster->getBody().push_back(new mlir::Block);
   builder->setInsertionPointToEnd(&merged_cluster->GetBody());
-  builder->create<mlir::tf_device::ReturnOp>(merged_cluster->getLoc(),
-                                             merged_cluster_output_values);
+  mlir::tf_device::ReturnOp::create(*builder, merged_cluster->getLoc(),
+                                    merged_cluster_output_values);
 
   // Make sure to replace usages of tf_device.cluster ops to be merged-away with
   // newly created tf_device.cluster op.

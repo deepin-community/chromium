@@ -49,9 +49,12 @@ class MockProducer : public Producer {
                const std::string& producer_name,
                uid_t uid = 42,
                pid_t pid = 1025,
+               MachineID machine_id = kDefaultMachineID,
+               const std::string& machine_name = {},
                size_t shared_memory_size_hint_bytes = 0,
                size_t shared_memory_page_size_hint_bytes = 0,
-               std::unique_ptr<SharedMemory> shm = nullptr);
+               std::unique_ptr<SharedMemory> shm = nullptr,
+               bool in_process = true);
   void RegisterDataSource(const std::string& name,
                           bool ack_stop = false,
                           bool ack_start = false,
@@ -73,7 +76,9 @@ class MockProducer : public Producer {
   DataSourceInstanceID GetDataSourceInstanceId(const std::string& name);
   const EnabledDataSource* GetDataSourceInstance(const std::string& name);
   std::unique_ptr<TraceWriter> CreateTraceWriter(
-      const std::string& data_source_name);
+      const std::string& data_source_name,
+      BufferExhaustedPolicy buffer_exhausted_policy =
+          BufferExhaustedPolicy::kStall);
 
   // Expect a flush. Flushes |writer_to_flush| if non-null. If |reply| is true,
   // replies to the flush request, otherwise ignores it and doesn't reply.

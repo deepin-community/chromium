@@ -4,14 +4,18 @@
 
 #include "content/browser/websockets/websocket_connector_impl.h"
 
+#include <algorithm>
+
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/common/child_process_id_util.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
+#include "net/storage_access_api/status.h"
 #include "services/network/public/cpp/features.h"
 #include "url/gurl.h"
 
@@ -20,7 +24,7 @@ namespace content {
 namespace {
 
 url::Origin MaybeTreatLocalOriginAsOpaque(const url::Origin& origin) {
-  if (base::Contains(url::GetLocalSchemes(), origin.scheme()) &&
+  if (std::ranges::contains(url::GetLocalSchemes(), origin.scheme()) &&
       !base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kAllowFileAccessFromFiles)) {
     // For local origins we should use an opaque origin unless
@@ -42,8 +46,8 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
             "and a consenting server for bi-directional communication."
           trigger:
             "A handshake is performed every time a new connection is "
-            "established via the Javascript or PPAPI WebSocket API. Any web "
-            "page or extension can create a WebSocket connection."
+            "established via the Javascript. Any web page or extension can "
+            "create a WebSocket connection."
           data: "The path and sub-protocols requested when the WebSocket was "
                 "created, plus the origin of the creating page."
           destination: OTHER
@@ -58,14 +62,14 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 }
 
 WebSocketConnectorImpl::WebSocketConnectorImpl(
-    int process_id,
-    int frame_id,
+    const content::GlobalRenderFrameHostId& frame_id,
     const url::Origin& origin,
-    const net::IsolationInfo& isolation_info)
-    : process_id_(process_id),
-      frame_id_(frame_id),
+    const net::IsolationInfo& isolation_info,
+    network::mojom::ClientSecurityStatePtr client_security_state)
+    : frame_id_(frame_id),
       origin_(MaybeTreatLocalOriginAsOpaque(origin)),
-      isolation_info_(isolation_info) {}
+      isolation_info_(isolation_info),
+      client_security_state_(std::move(client_security_state)) {}
 
 WebSocketConnectorImpl::~WebSocketConnectorImpl() = default;
 
@@ -74,17 +78,17 @@ void WebSocketConnectorImpl::Connect(
     const std::vector<std::string>& requested_protocols,
     const net::SiteForCookies& site_for_cookies,
     const std::optional<std::string>& user_agent,
-    bool has_storage_access,
+    net::StorageAccessApiStatus storage_access_api_status,
     mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
         handshake_client,
     const std::optional<base::UnguessableToken>& throttling_profile_id) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  RenderProcessHost* process = RenderProcessHost::FromID(process_id_);
+  RenderProcessHost* process = RenderProcessHost::FromID(frame_id_.child_id);
   if (!process) {
     return;
   }
 
-  RenderFrameHost* frame = RenderFrameHost::FromID(process_id_, frame_id_);
+  RenderFrameHost* frame = RenderFrameHost::FromID(frame_id_);
   const uint32_t options =
       GetContentClient()->browser()->GetWebSocketOptions(frame);
 
@@ -92,8 +96,9 @@ void WebSocketConnectorImpl::Connect(
     GetContentClient()->browser()->CreateWebSocket(
         frame,
         base::BindOnce(ConnectCalledByContentBrowserClient, requested_protocols,
-                       site_for_cookies, has_storage_access, isolation_info_,
-                       process_id_, frame_id_, origin_, options,
+                       site_for_cookies, storage_access_api_status,
+                       isolation_info_, frame_id_, origin_,
+                       client_security_state_->Clone(), options,
                        std::move(throttling_profile_id)),
         url, site_for_cookies, user_agent, std::move(handshake_client));
     return;
@@ -103,24 +108,37 @@ void WebSocketConnectorImpl::Connect(
     headers.push_back(network::mojom::HttpHeader::New(
         net::HttpRequestHeaders::kUserAgent, *user_agent));
   }
-  process->GetStoragePartition()->GetNetworkContext()->CreateWebSocket(
-      url, requested_protocols, site_for_cookies, has_storage_access,
-      isolation_info_, std::move(headers), process_id_, origin_, options,
+
+  content::StoragePartition* storage_partition = process->GetStoragePartition();
+
+  mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
+      url_loader_network_service_observer =
+          frame_id_.frame_routing_id == IPC::mojom::kRoutingIdNone
+              ? static_cast<StoragePartitionImpl*>(storage_partition)
+                    ->CreateURLLoaderNetworkObserverForServiceOrSharedWorker(
+                        ToOriginatingProcess(frame_id_.child_id), origin_)
+              : storage_partition->CreateURLLoaderNetworkObserverForFrame(
+                    frame_id_);
+
+  storage_partition->GetNetworkContext()->CreateWebSocket(
+      url, requested_protocols, site_for_cookies, storage_access_api_status,
+      isolation_info_, std::move(headers),
+      ToOriginatingProcess(frame_id_.child_id), origin_,
+      client_security_state_->Clone(), options,
       net::MutableNetworkTrafficAnnotationTag(kTrafficAnnotation),
       std::move(handshake_client),
-      process->GetStoragePartition()->CreateURLLoaderNetworkObserverForFrame(
-          process_id_, frame_id_),
-      mojo::NullRemote(), mojo::NullRemote(), std::move(throttling_profile_id));
+      std::move(url_loader_network_service_observer), mojo::NullRemote(),
+      mojo::NullRemote(), std::move(throttling_profile_id));
 }
 
 void WebSocketConnectorImpl::ConnectCalledByContentBrowserClient(
     const std::vector<std::string>& requested_protocols,
     const net::SiteForCookies& site_for_cookies,
-    bool has_storage_access,
+    net::StorageAccessApiStatus storage_access_api_status,
     const net::IsolationInfo& isolation_info,
-    int process_id,
-    int frame_id,
+    const content::GlobalRenderFrameHostId& frame_id,
     const url::Origin& origin,
+    network::mojom::ClientSecurityStatePtr client_security_state,
     uint32_t options,
     std::optional<base::UnguessableToken> throttling_profile_id,
     const GURL& url,
@@ -132,17 +150,19 @@ void WebSocketConnectorImpl::ConnectCalledByContentBrowserClient(
     mojo::PendingRemote<network::mojom::TrustedHeaderClient>
         trusted_header_client) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  RenderProcessHost* process = RenderProcessHost::FromID(process_id);
+  RenderProcessHost* process = RenderProcessHost::FromID(frame_id.child_id);
   if (!process) {
     return;
   }
   process->GetStoragePartition()->GetNetworkContext()->CreateWebSocket(
-      url, requested_protocols, site_for_cookies, has_storage_access,
-      isolation_info, std::move(additional_headers), process_id, origin,
-      options, net::MutableNetworkTrafficAnnotationTag(kTrafficAnnotation),
+      url, requested_protocols, site_for_cookies, storage_access_api_status,
+      isolation_info, std::move(additional_headers),
+      ToOriginatingProcess(frame_id.child_id), origin,
+      std::move(client_security_state), options,
+      net::MutableNetworkTrafficAnnotationTag(kTrafficAnnotation),
       std::move(handshake_client),
       process->GetStoragePartition()->CreateURLLoaderNetworkObserverForFrame(
-          process_id, frame_id),
+          frame_id),
       std::move(auth_handler), std::move(trusted_header_client),
       std::move(throttling_profile_id));
 }

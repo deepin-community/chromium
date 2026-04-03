@@ -21,15 +21,22 @@
 #include "base/metrics/user_metrics.h"
 #include "base/strings/strcat.h"
 #include "base/task/single_thread_task_runner.h"
+#include "components/crx_file/id_util.h"
 #include "content/public/browser/histogram_fetcher.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/metrics_private/metrics_private_delegate.h"
 #include "extensions/common/api/metrics_private.h"
+#include "extensions/common/extension.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
+#include "url/gurl.h"
 
 namespace extensions {
 
 namespace GetVariationParams = api::metrics_private::GetVariationParams;
 namespace RecordUserAction = api::metrics_private::RecordUserAction;
+namespace RecordExtensionUsageUkm =
+    api::metrics_private::RecordExtensionUsageUkm;
 namespace RecordValue = api::metrics_private::RecordValue;
 namespace RecordBoolean = api::metrics_private::RecordBoolean;
 namespace RecordEnumerationValue = api::metrics_private::RecordEnumerationValue;
@@ -97,6 +104,25 @@ MetricsPrivateRecordUserActionFunction::Run() {
   return RespondNow(NoArguments());
 }
 
+ExtensionFunction::ResponseAction
+MetricsPrivateRecordExtensionUsageUkmFunction::Run() {
+  std::optional<RecordExtensionUsageUkm::Params> params =
+      RecordExtensionUsageUkm::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
+  if (!crx_file::id_util::IdIsValid(params->extension_id)) {
+    return RespondNow(Error("Invalid extension ID: " + params->extension_id));
+  }
+
+  ukm::builders::Extensions_ExtensionUsage(
+      ukm::UkmRecorder::GetSourceIdForExtensionUrl(
+          base::PassKey<MetricsPrivateRecordExtensionUsageUkmFunction>(),
+          extensions::Extension::GetBaseURLFromExtensionId(
+              params->extension_id)))
+      .SetAction(static_cast<int64_t>(params->action))
+      .Record(ukm::UkmRecorder::Get());
+  return RespondNow(NoArguments());
+}
+
 void MetricsHistogramHelperFunction::RecordValue(const std::string& name,
                                                  base::HistogramType type,
                                                  int min,
@@ -113,8 +139,9 @@ void MetricsHistogramHelperFunction::RecordValue(const std::string& name,
   max = std::max(max, min + 1);
   buckets = std::max(buckets, static_cast<size_t>(3));
   // Trim buckets down to a maximum of the given range + over/underflow buckets
-  if (buckets > static_cast<size_t>(max - min + 2))
+  if (buckets > static_cast<size_t>(max - min + 2)) {
     buckets = max - min + 2;
+  }
 
   base::HistogramBase* counter;
   if (type == base::LINEAR_HISTOGRAM) {
@@ -129,8 +156,9 @@ void MetricsHistogramHelperFunction::RecordValue(const std::string& name,
 
   // The histogram can be NULL if it is constructed with bad arguments.  Ignore
   // that data for this API.  An error message will be logged.
-  if (counter)
+  if (counter) {
     counter->Add(sample);
+  }
 }
 
 ExtensionFunction::ResponseAction MetricsPrivateRecordValueFunction::Run() {
@@ -293,8 +321,9 @@ ExtensionFunction::ResponseValue
 MetricsPrivateGetHistogramFunction::GetHistogram(const std::string& name) {
   const base::HistogramBase* histogram =
       base::StatisticsRecorder::FindHistogram(name);
-  if (!histogram)
+  if (!histogram) {
     return Error(base::StrCat({"Histogram ", name, " not found"}));
+  }
 
   std::unique_ptr<base::HistogramSamples> samples =
       histogram->SnapshotSamples();
@@ -303,9 +332,9 @@ MetricsPrivateGetHistogramFunction::GetHistogram(const std::string& name) {
 
   for (std::unique_ptr<base::SampleCountIterator> it = samples->Iterator();
        !it->Done(); it->Next()) {
-    base::HistogramBase::Sample min = 0;
+    base::HistogramBase::Sample32 min = 0;
     int64_t max = 0;
-    base::HistogramBase::Count count = 0;
+    base::HistogramBase::Count32 count = 0;
     it->Get(&min, &max, &count);
 
     api::metrics_private::HistogramBucket bucket;

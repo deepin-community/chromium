@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/memory/ref_counted.h"
+#include "base/byte_size.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
@@ -39,7 +39,7 @@ class UserPerformanceTuningManager {
   class MemorySaverModeDelegate {
    public:
     virtual void ToggleMemorySaverMode(prefs::MemorySaverModeState state) = 0;
-    virtual void SetTimeBeforeDiscard(base::TimeDelta time_before_discard) = 0;
+    virtual void SetMode(prefs::MemorySaverModeAggressiveness mode) = 0;
     virtual ~MemorySaverModeDelegate() = default;
   };
 
@@ -66,33 +66,33 @@ class UserPerformanceTuningManager {
       : public content::WebContentsUserData<PreDiscardResourceUsage> {
    public:
     PreDiscardResourceUsage(content::WebContents* contents,
-                            uint64_t memory_footprint_estimate,
+                            base::ByteSize memory_footprint_estimate,
                             ::mojom::LifecycleUnitDiscardReason discard_reason);
     ~PreDiscardResourceUsage() override;
 
-    // Returns the resource usage estimate in kilobytes.
-    uint64_t memory_footprint_estimate_kb() const {
-      return memory_footprint_estimate_;
-    }
+    void UpdateDiscardInfo(
+        base::ByteSize memory_footprint_estimate,
+        ::mojom::LifecycleUnitDiscardReason discard_reason,
+        base::LiveTicks discard_live_ticks = base::LiveTicks::Now());
 
-    void SetMemoryFootprintEstimateKbForTesting(
-        uint64_t memory_footprint_estimate) {
-      memory_footprint_estimate_ = memory_footprint_estimate;
+    // Returns the resource usage estimate.
+    base::ByteSize memory_footprint_estimate() const {
+      return memory_footprint_estimate_;
     }
 
     ::mojom::LifecycleUnitDiscardReason discard_reason() const {
       return discard_reason_;
     }
 
-    base::LiveTicks discard_liveticks() const { return discard_liveticks_; }
+    base::LiveTicks discard_live_ticks() const { return discard_live_ticks_; }
 
    private:
     friend WebContentsUserData;
     WEB_CONTENTS_USER_DATA_KEY_DECL();
 
-    uint64_t memory_footprint_estimate_ = 0;
+    base::ByteSize memory_footprint_estimate_;
     ::mojom::LifecycleUnitDiscardReason discard_reason_;
-    base::LiveTicks discard_liveticks_;
+    base::LiveTicks discard_live_ticks_;
   };
 
   // Returns whether a UserPerformanceTuningManager was created and installed.
@@ -151,7 +151,7 @@ class UserPerformanceTuningManager {
 
   void UpdateMemorySaverModeState();
   void OnMemorySaverModePrefChanged();
-  void OnMemorySaverModeTimeBeforeDiscardChanged();
+  void OnMemorySaverAggressivenessPrefChanged();
 
   void NotifyTabCountThresholdReached();
   void NotifyMemoryThresholdReached();

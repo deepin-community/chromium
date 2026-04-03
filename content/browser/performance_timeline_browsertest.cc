@@ -2,19 +2,31 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string_view>
+
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/path_service.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/test/bind.h"
+#include "base/test/test_future.h"
+#include "base/test/trace_event_analyzer.h"
+#include "base/trace_event/trace_config.h"
+#include "build/build_config.h"
+#include "components/ukm/test_ukm_recorder.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/content_navigation_policy.h"
+#include "content/public/browser/tracing_controller.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/hit_test_region_observer.h"
 #include "content/shell/browser/shell.h"
 #include "content/shell/common/shell_switches.h"
 #include "content/test/content_browser_test_utils_internal.h"
 #include "net/dns/mock_host_resolver.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
 
 namespace content {
 
@@ -23,14 +35,11 @@ class PerformanceTimelineBrowserTest : public ContentBrowserTest {
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
     ContentBrowserTest::SetUpOnMainThread();
+    ukm_recorder_ = std::make_unique<ukm::TestAutoSetUkmRecorder>();
   }
 
   WebContentsImpl* web_contents() const {
     return static_cast<WebContentsImpl*>(shell()->web_contents());
-  }
-
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
   }
 
   RenderFrameHostImpl* current_frame_host() {
@@ -45,6 +54,67 @@ class PerformanceTimelineBrowserTest : public ContentBrowserTest {
     std::string script = JsReplace(kGetPerformanceEntryTemplate, name);
     return EvalJs(shell(), script);
   }
+
+  void WaitForFrameReady() {
+    // We should wait for the main frame's hit-test data to be ready before
+    // sending the click event below to avoid flakiness.
+    content::WaitForHitTestData(web_contents()->GetPrimaryMainFrame());
+    // Ensure the compositor thread is aware of the mouse events.
+    content::MainThreadFrameObserver frame_observer(GetRenderWidgetHost());
+    frame_observer.Wait();
+  }
+
+  void StartTracing() {
+    base::RunLoop wait_for_tracing;
+    content::TracingController::GetInstance()->StartTracing(
+        base::trace_event::TraceConfig(
+            "{\"included_categories\": [\"devtools.timeline\"]}"),
+        wait_for_tracing.QuitClosure());
+    wait_for_tracing.Run();
+  }
+
+  std::string StopTracing() {
+    base::RunLoop wait_for_tracing;
+    std::string trace_output;
+    content::TracingController::GetInstance()->StopTracing(
+        content::TracingController::CreateStringEndpoint(
+            base::BindLambdaForTesting(
+                [&](std::unique_ptr<std::string> trace_str) {
+                  trace_output = std::move(*trace_str);
+                  wait_for_tracing.Quit();
+                })));
+    wait_for_tracing.Run();
+    return trace_output;
+  }
+
+  trace_analyzer::TraceEventVector ExtractTraceEventsByName(
+      const std::string& trace_str,
+      const std::string& event_name) {
+    std::unique_ptr<trace_analyzer::TraceAnalyzer> analyzer(
+        trace_analyzer::TraceAnalyzer::Create(trace_str));
+    trace_analyzer::TraceEventVector events;
+    auto query = trace_analyzer::Query::EventNameIs(event_name);
+    analyzer->FindEvents(query, &events);
+    return events;
+  }
+
+  content::RenderWidgetHost* GetRenderWidgetHost() {
+    EXPECT_TRUE(web_contents());
+    return web_contents()->GetRenderWidgetHostView()->GetRenderWidgetHost();
+  }
+
+  // This method is to get the first UKM entry of a repeated event.
+  ukm::mojom::UkmEntryPtr GetFirstEntryValue(std::string_view entry_name) {
+    auto merged_entries = ukm_recorder()->GetMergedEntriesByName(entry_name);
+    EXPECT_EQ(1ul, merged_entries.size());
+    const auto& kv = merged_entries.begin();
+    return std::move(kv->second);
+  }
+
+  ukm::TestAutoSetUkmRecorder* ukm_recorder() { return ukm_recorder_.get(); }
+
+ private:
+  std::unique_ptr<ukm::TestAutoSetUkmRecorder> ukm_recorder_;
 };
 
 IN_PROC_BROWSER_TEST_F(PerformanceTimelineBrowserTest,
@@ -120,13 +190,8 @@ class PerformanceTimelineLCPStartTimePrecisionBrowserTest
   int32_t precision_ = 10;
 };
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#define MAYBE_LCPStartTimePrecision DISABLED_LCPStartTimePrecision
-#else
-#define MAYBE_LCPStartTimePrecision LCPStartTimePrecision
-#endif
 IN_PROC_BROWSER_TEST_F(PerformanceTimelineLCPStartTimePrecisionBrowserTest,
-                       MAYBE_LCPStartTimePrecision) {
+                       LCPStartTimePrecision) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url1(embedded_test_server()->GetURL(
       "a.com", "/performance_timeline/lcp-start-time-precision.html"));
@@ -140,9 +205,8 @@ class PerformanceTimelineNavigationIdBrowserTest
     : public PerformanceTimelineBrowserTest {
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
-    base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        "--enable-blink-test-features");
+    PerformanceTimelineBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch("--enable-blink-test-features");
   }
 };
 
@@ -156,14 +220,13 @@ IN_PROC_BROWSER_TEST_F(PerformanceTimelineNavigationIdBrowserTest,
 
   EXPECT_TRUE(NavigateToURL(shell(), url1));
 
-  const std::string initial_navigation_id =
-      GetNavigationId("first_nav").ExtractString();
+  const int initial_navigation_id = GetNavigationId("first_nav").ExtractInt();
   // Navigate away and back 3 times. The 1st time is to verify the
   // navigation id is incremented. The 2nd time is to verify that the id is
   // incremented on the same restored document. The 3rd time is to
   // verify the increment does not stop at 2.
   RenderFrameHostImplWrapper rfh_a(current_frame_host());
-  std::string prev_navigation_id = initial_navigation_id;
+  int prev_navigation_id = initial_navigation_id;
 
   for (int i = 1; i <= 3; i++) {
     // Navigate away
@@ -171,9 +234,9 @@ IN_PROC_BROWSER_TEST_F(PerformanceTimelineNavigationIdBrowserTest,
 
     // Verify `rfh_a` is stored in back/forward cache in case back/forward cache
     // feature is enabled.
-    if (IsBackForwardCacheEnabled())
+    if (IsBackForwardCacheEnabled()) {
       ASSERT_TRUE(rfh_a->IsInBackForwardCache());
-    else {
+    } else {
       // Verify `rfh_a` is deleted in case back/forward cache feature is
       // disabled.
       ASSERT_TRUE(rfh_a.WaitUntilRenderFrameDeleted());
@@ -185,9 +248,9 @@ IN_PROC_BROWSER_TEST_F(PerformanceTimelineNavigationIdBrowserTest,
     // Verify navigation id is re-generated each time in case back/forward
     // cache feature is enabled. Verify navigation id is not changed in case
     // back/forward cache feature is not enabled.
-    std::string curr_navigation_id =
+    int curr_navigation_id =
         GetNavigationId("subsequent_nav" + base::NumberToString(i))
-            .ExtractString();
+            .ExtractInt();
     EXPECT_NE(curr_navigation_id, prev_navigation_id);
     EXPECT_NE(curr_navigation_id, initial_navigation_id);
 
@@ -221,15 +284,15 @@ IN_PROC_BROWSER_TEST_F(PerformanceTimelinePrefetchTransferSizeBrowserTest,
   ASSERT_TRUE(embedded_test_server()->Start());
 
   const GURL prefetch_url(
-      embedded_test_server()->GetURL("a.com", "/title1.html"));
+      embedded_test_server()->GetURL("a.com", "/cacheable.html"));
   const GURL landing_url(embedded_test_server()->GetURL(
       "a.com", "/performance_timeline/prefetch.html"));
 
   EXPECT_TRUE(NavigateToURL(shell(), landing_url));
   Prefetch();
   EXPECT_TRUE(NavigateToURL(shell(), prefetch_url));
-  // Navigate to a prefetched url should result in a navigation timing entry
-  // with 0 transfer size.
+  // Navigate to a HTTP-cached prefetched url should result in a navigation
+  // timing entry with 0 transfer size since the HTTP cache gets used.
   EXPECT_EQ(0, GetTransferSize());
 }
 
@@ -238,8 +301,8 @@ class PerformanceTimelineBackForwardCacheRestorationBrowserTest
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
     ContentBrowserTest::SetUpCommandLine(command_line);
-    base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-        switches::kEnableBlinkTestFeatures, "NavigationId");
+    command_line->AppendSwitchASCII(switches::kEnableBlinkTestFeatures,
+                                    "NavigationId");
     command_line->AppendSwitch(switches::kExposeInternalsForTesting);
   }
 
@@ -316,9 +379,9 @@ class PerformanceTimelineBackForwardCacheRestorationBrowserTest
   // This method checks a list of performance entries of the
   // back-forward-cache-restoration type. Each entry is created when there is
   // a back/forward cache restoration.
-  void CheckEntries(const base::Value::List lst,
-                    const std::string& initial_navigation_id) const {
-    std::string prev_navigation_id = initial_navigation_id;
+  void CheckEntries(const base::ListValue lst,
+                    int initial_navigation_id) const {
+    int prev_navigation_id = initial_navigation_id;
 
     for (const auto& i : lst) {
       auto* dict = i.GetIfDict();
@@ -327,7 +390,7 @@ class PerformanceTimelineBackForwardCacheRestorationBrowserTest
       EXPECT_EQ("back-forward-cache-restoration",
                 *dict->FindString("entryType"));
 
-      const std::string* curr_navigation_id = dict->FindString("navigationId");
+      std::optional<int> curr_navigation_id = dict->FindInt("navigationId");
       // This verifies the navigation id changes each time a back/forward
       // restoration happens.
       EXPECT_NE(prev_navigation_id, *curr_navigation_id);
@@ -359,8 +422,8 @@ IN_PROC_BROWSER_TEST_F(
   SetBackForwardCacheRestorationBufferSize(buffer_size);
   RegisterPerformanceObservers(num_of_loops);
 
-  std::string initial_navigation_id =
-      GetNavigationId("initial_navigation_id").ExtractString();
+  int initial_navigation_id =
+      GetNavigationId("initial_navigation_id").ExtractInt();
   for (int i = 0; i < num_of_loops; i++) {
     // Navigate away
     ASSERT_TRUE(NavigateToURL(shell(), url2));
@@ -371,9 +434,8 @@ IN_PROC_BROWSER_TEST_F(
     // Navigate back.
     ASSERT_TRUE(HistoryGoBack(web_contents()));
   }
-  auto result = std::move(GetBackForwardCacheRestorationEntriesByObserver()
-                              .ExtractList()
-                              .GetList());
+  auto result =
+      GetBackForwardCacheRestorationEntriesByObserver().TakeValue().TakeList();
   CheckEntries(std::move(result[0]).TakeList(), initial_navigation_id);
   CheckEntries(std::move(result[1]).TakeList(), initial_navigation_id);
 
@@ -381,6 +443,411 @@ IN_PROC_BROWSER_TEST_F(
   // forward restoration instances expected by 2. Therefore the
   // droppedEntriesCount is expected to be 2.
   EXPECT_EQ(2, GetDroppedEntriesCount().ExtractInt());
+}
+
+class PerformanceEventTimingBrowserTest
+    : public PerformanceTimelineBrowserTest {
+ protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    PerformanceTimelineBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch("--enable-blink-test-features");
+    command_line->AppendSwitch(switches::kExposeInternalsForTesting);
+  }
+
+  content::EvalJsResult setEventTimingBufferSize(int size) const {
+    std::string script = R"(
+        internals.setEventTimingBufferSize($1);
+        internals.stopResponsivenessMetricsUkmSampling();
+    )";
+    script = content::JsReplace(script, size);
+    return EvalJs(web_contents()->GetPrimaryMainFrame(), script);
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(PerformanceEventTimingBrowserTest,
+                       RecordingContinuesWhenBufferIsFull) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url(embedded_test_server()->GetURL(
+      "a.com", "/performance_timeline/event_timing.html"));
+
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  WaitForFrameReady();
+
+  int buffer_size = 2;
+  setEventTimingBufferSize(buffer_size);
+
+  StartTracing();
+
+  // Expect UKM entry Responsiveness_UserInteraction be recorded.
+  base::RunLoop ukm_loop1;
+  ukm_recorder()->SetOnAddEntryCallback(
+      ukm::builders::Responsiveness_UserInteraction::kEntryName,
+      ukm_loop1.QuitClosure());
+
+  // Registers 3 listeners for mouseup, pointerup, click respectively. All the 3
+  // listener callbacks have to be invoked for the test to proceed. In this way,
+  // we know at least 3 events occurred. The buffer size is set to 2.
+  ASSERT_TRUE(EvalJs(web_contents(), "registerEventListeners()").ExtractBool());
+
+  // Simulate a click which will trigger multiple events, pointerenter,
+  // pointerover, mouseover,pointerdown, mousedown, mouseup, pointerup, click.
+  content::SimulateMouseClick(web_contents(), 0,
+                              blink::WebMouseEvent::Button::kLeft);
+
+  // Wait for the listener callbacks to be invoked.
+  ASSERT_TRUE(EvalJs(web_contents(), "waitForEvent()").ExtractBool());
+
+  ukm_loop1.Run();
+
+  // Retrieve the number of entries and the number of dropped entries with a
+  // performance observer with the init option buffer being true. The number of
+  // entries should be the size of the buffer.
+  auto entry_cnt_and_dropped_entry_cnt =
+      EvalJs(web_contents(), " getEntriesCntAndDroppedEntriesCnt()")
+          .TakeValue()
+          .TakeList();
+
+  int num_event_entres = entry_cnt_and_dropped_entry_cnt[0].GetInt();
+  EXPECT_EQ(num_event_entres, buffer_size);
+
+  int num_dropped_entries = entry_cnt_and_dropped_entry_cnt[1].GetInt();
+  EXPECT_GE(num_dropped_entries, 1);
+
+  // Verify that at least buffer_size+1 events are emitted to tracing.
+  auto trace_str = StopTracing();
+
+  auto events = ExtractTraceEventsByName(trace_str, "EventTiming");
+  EXPECT_GE(events.size(), 3ul);
+
+  // Verify UKM entry Responsiveness_UserInteraction is recorded. This is a
+  // repeated event but as there is only 1 interacton we expect only 1 record.
+  auto ukm_entry = GetFirstEntryValue(
+      ukm::builders::Responsiveness_UserInteraction::kEntryName);
+
+  // Verify the event type is TapOrClick, the integer representation of which
+  // is 1.
+  ukm::TestUkmRecorder::ExpectEntryMetric(
+      ukm_entry.get(),
+      ukm::builders::Responsiveness_UserInteraction::kInteractionTypeName, 1);
+
+  // The max duration and total duration is non-determinstic. We only verify
+  // they exist.
+  ukm::TestUkmRecorder::EntryHasMetric(
+      ukm_entry.get(),
+      ukm::builders::Responsiveness_UserInteraction::kMaxEventDurationName);
+  ukm::TestUkmRecorder::EntryHasMetric(
+      ukm_entry.get(),
+      ukm::builders::Responsiveness_UserInteraction::kTotalEventDurationName);
+}
+
+class LongAnimationFrameStyleDurationBrowserTest
+    : public PerformanceTimelineBrowserTest {
+ protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    PerformanceTimelineBrowserTest::SetUpCommandLine(command_line);
+    // Enable the experimental style duration feature
+    command_line->AppendSwitchASCII("enable-blink-features",
+                                    "LongAnimationFrameStyleDuration");
+  }
+
+  void StartStyleTracing() {
+    base::test::TestFuture<void> future;
+    TracingController::GetInstance()->StartTracing(
+        base::trace_event::TraceConfig(
+            "{\"included_categories\": [\"blink\", \"blink_style\", "
+            "\"devtools.timeline\"]}"),
+        future.GetCallback());
+    ASSERT_TRUE(future.Wait());
+  }
+
+  std::string StopStyleTracing() {
+    base::test::TestFuture<std::unique_ptr<std::string>> future;
+    TracingController::GetInstance()->StopTracing(
+        TracingController::CreateStringEndpoint(future.GetCallback()));
+    return std::move(*future.Get());
+  }
+
+  struct TraceStyleResult {
+    double total_duration_ms = 0.0;
+    size_t event_count = 0;
+  };
+
+  // Sum up durations of all Document::updateStyle events in the trace.
+  // This gives us the ground truth for style recalculation time.
+  TraceStyleResult GetStyleDurationFromTrace(const std::string& trace_str) {
+    TraceStyleResult result;
+    std::unique_ptr<trace_analyzer::TraceAnalyzer> analyzer(
+        trace_analyzer::TraceAnalyzer::Create(trace_str));
+    if (!analyzer) {
+      result.total_duration_ms = -1.0;
+      return result;
+    }
+
+    // Associate begin and end events to get durations.
+    analyzer->AssociateBeginEndEvents();
+
+    trace_analyzer::TraceEventVector events;
+    trace_analyzer::Query query =
+        trace_analyzer::Query::EventNameIs("Document::updateStyle");
+    analyzer->FindEvents(query, &events);
+
+    double total_duration_us = 0.0;
+    for (const trace_analyzer::TraceEvent* event : events) {
+      total_duration_us += event->duration;
+    }
+    // Convert microseconds to milliseconds.
+    result.total_duration_ms = total_duration_us / 1000.0;
+    result.event_count = events.size();
+    return result;
+  }
+};
+
+// Test that styleDuration is properly captured during ResizeObserver callbacks.
+IN_PROC_BROWSER_TEST_F(LongAnimationFrameStyleDurationBrowserTest,
+                       ResizeObserverStyleDuration) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url(embedded_test_server()->GetURL(
+      "a.com",
+      "/performance_timeline/long_animation_frame_style_duration.html"));
+
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  // Phase 1: test setup before starting tracing.
+  auto prepare_result = EvalJs(shell(), "prepareResizeObserverTest()");
+  ASSERT_TRUE(prepare_result.is_ok());
+  ASSERT_TRUE(prepare_result.is_dict());
+
+  const base::DictValue& prepare_dict = prepare_result.ExtractDict();
+  ASSERT_TRUE(prepare_dict.FindBool("ready").value());
+
+  // Phase 2: Start tracing and run the actual test.
+  StartStyleTracing();
+
+  auto result = EvalJs(shell(), "runResizeObserverTest()");
+
+  // Phase 3: Stop tracing and get the trace data.
+  [[maybe_unused]] std::string trace_str = StopStyleTracing();
+
+  ASSERT_TRUE(result.is_ok());
+  ASSERT_TRUE(result.is_dict());
+
+  const base::DictValue& dict = result.ExtractDict();
+
+  ASSERT_TRUE(dict.FindBool("resizeObserverFired").value());
+
+  const std::string* error = dict.FindString("error");
+#if BUILDFLAG(IS_ANDROID)
+  // On slow Android emulators, LoAF entries may not be captured reliably.
+  // Skip the test rather than fail flakily.
+  if (error) {
+    return;
+  }
+#else
+  ASSERT_FALSE(error) << "Test failed: " << *error;
+#endif
+
+  EXPECT_TRUE(dict.FindBool("hasStyleDuration").value());
+
+  double style_duration = dict.FindDouble("styleDuration").value();
+  double total_forced_style_duration =
+      dict.FindDouble("totalForcedStyleDuration").value();
+  double duration = dict.FindDouble("duration").value();
+
+  EXPECT_GE(style_duration, 0.0);
+  EXPECT_GE(total_forced_style_duration, 0.0);
+  EXPECT_GT(duration, 0.0);
+  EXPECT_LE(style_duration, duration);
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+  // On Android emulators and ChromeOS, timing discrepancies between the LoAF
+  // API and tracing may be too large to reliably compare. Skip the
+  // tolerance-based assertions on these platforms.
+  TraceStyleResult trace_result = GetStyleDurationFromTrace(trace_str);
+  double trace_style_duration = trace_result.total_duration_ms;
+  double api_total_style = style_duration + total_forced_style_duration;
+
+  double max_value = std::max(api_total_style, trace_style_duration);
+  // Use 20% tolerance to account for timing measurement differences.
+  double tolerance_ms = std::max(15.0, max_value * 0.2);
+
+  // For the lower bound, LoAF may report less than trace due to the 5ms script
+  // threshold.
+  constexpr double kLoafThresholdMs = 5.0;
+  double lower_tolerance_ms =
+      tolerance_ms +
+      (kLoafThresholdMs * static_cast<double>(trace_result.event_count));
+
+  EXPECT_LE(api_total_style, trace_style_duration + tolerance_ms);
+  EXPECT_GE(api_total_style, trace_style_duration - lower_tolerance_ms);
+#endif
+}
+
+// Test that styleDuration is properly captured across multiple ResizeObserver
+// iterations.
+IN_PROC_BROWSER_TEST_F(LongAnimationFrameStyleDurationBrowserTest,
+                       MultipleStyleIterations) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url(embedded_test_server()->GetURL(
+      "a.com",
+      "/performance_timeline/long_animation_frame_style_duration.html"));
+
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  // Phase 1: test setup before starting tracing.
+  auto prepare_result = EvalJs(shell(), "prepareMultipleIterationsTest()");
+  ASSERT_TRUE(prepare_result.is_ok());
+  ASSERT_TRUE(prepare_result.is_dict());
+
+  const base::DictValue& prepare_dict = prepare_result.ExtractDict();
+  ASSERT_TRUE(prepare_dict.FindBool("ready").value());
+
+  // Phase 2: Start tracing and run the actual test.
+  StartStyleTracing();
+
+  auto result = EvalJs(shell(), "runMultipleIterationsTest()");
+
+  // Phase 3: Stop tracing and get the trace data.
+  [[maybe_unused]] std::string trace_str = StopStyleTracing();
+
+  ASSERT_TRUE(result.is_ok());
+  ASSERT_TRUE(result.is_dict());
+
+  const base::DictValue& dict = result.ExtractDict();
+
+  int iteration_count = dict.FindInt("iterationCount").value();
+  ASSERT_GE(iteration_count, 1);
+
+  const std::string* error = dict.FindString("error");
+#if BUILDFLAG(IS_ANDROID)
+  // On slow Android emulators, LoAF entries may not be captured reliably.
+  // Skip the test rather than fail flakily.
+  if (error) {
+    return;
+  }
+#else
+  ASSERT_FALSE(error) << "Test failed: " << *error;
+#endif
+
+  EXPECT_TRUE(dict.FindBool("hasStyleDuration").value());
+
+  double style_duration = dict.FindDouble("styleDuration").value();
+  double total_forced_style_duration =
+      dict.FindDouble("totalForcedStyleDuration").value();
+  double duration = dict.FindDouble("duration").value();
+
+  EXPECT_GE(style_duration, 0.0);
+  EXPECT_GE(total_forced_style_duration, 0.0);
+  EXPECT_GT(duration, 0.0);
+  EXPECT_LE(style_duration, duration);
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+  // On Android emulators and ChromeOS, timing discrepancies between the LoAF
+  // API and tracing may be too large to reliably compare. Skip the
+  // tolerance-based assertions on these platforms.
+  TraceStyleResult trace_result = GetStyleDurationFromTrace(trace_str);
+  double trace_style_duration = trace_result.total_duration_ms;
+  double api_total_style = style_duration + total_forced_style_duration;
+
+  double max_value = std::max(api_total_style, trace_style_duration);
+  // Use 20% tolerance to account for timing measurement differences.
+  double tolerance_ms = std::max(15.0, max_value * 0.2);
+
+  // For the lower bound, LoAF may report less than trace due to the 5ms script
+  // threshold.
+  constexpr double kLoafThresholdMs = 5.0;
+  double lower_tolerance_ms =
+      tolerance_ms +
+      (kLoafThresholdMs * static_cast<double>(trace_result.event_count));
+
+  EXPECT_LE(api_total_style, trace_style_duration + tolerance_ms);
+  EXPECT_GE(api_total_style, trace_style_duration - lower_tolerance_ms);
+#endif
+}
+
+// Test that forced style during script execution is properly captured in
+// forcedStyleDuration, separate from the entry's styleDuration.
+IN_PROC_BROWSER_TEST_F(LongAnimationFrameStyleDurationBrowserTest,
+                       ForcedStyleSeparation) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url(embedded_test_server()->GetURL(
+      "a.com",
+      "/performance_timeline/long_animation_frame_style_duration.html"));
+
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  // Phase 1: test setup before starting tracing.
+  auto prepare_result = EvalJs(shell(), "prepareForcedStyleTest()");
+  ASSERT_TRUE(prepare_result.is_ok());
+  ASSERT_TRUE(prepare_result.is_dict());
+
+  const base::DictValue& prepare_dict = prepare_result.ExtractDict();
+  ASSERT_TRUE(prepare_dict.FindBool("ready").value());
+
+  // Phase 2: Start tracing and run the actual test.
+  StartStyleTracing();
+
+  auto result = EvalJs(shell(), "runForcedStyleTest()");
+
+  // Phase 3: Stop tracing and get the trace data.
+  [[maybe_unused]] std::string trace_str = StopStyleTracing();
+
+  ASSERT_TRUE(result.is_ok());
+  ASSERT_TRUE(result.is_dict());
+
+  const base::DictValue& dict = result.ExtractDict();
+
+  const std::string* error = dict.FindString("error");
+#if BUILDFLAG(IS_ANDROID)
+  // On slow Android emulators, LoAF entries may not be captured reliably.
+  // Skip the test rather than fail flakily.
+  if (error) {
+    return;
+  }
+#else
+  ASSERT_FALSE(error) << "Test failed: " << *error << ", hasLoafEntry: "
+                      << dict.FindBool("hasLoafEntry").value_or(false)
+                      << ", scriptCount: "
+                      << dict.FindInt("scriptCount").value_or(-1);
+#endif
+
+  EXPECT_TRUE(dict.FindBool("hasStyleDuration").value());
+  EXPECT_TRUE(dict.FindBool("hasForcedStyleDuration").value());
+
+  double entry_style_duration = dict.FindDouble("entryStyleDuration").value();
+  EXPECT_GE(entry_style_duration, 0.0);
+
+  double script_forced_style_duration =
+      dict.FindDouble("scriptForcedStyleDuration").value();
+  EXPECT_GE(script_forced_style_duration, 0.0);
+
+  double script_forced_style_and_layout_duration =
+      dict.FindDouble("scriptForcedStyleAndLayoutDuration").value();
+  EXPECT_GE(script_forced_style_and_layout_duration,
+            script_forced_style_duration);
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+  // On Android emulators and ChromeOS, timing discrepancies between the LoAF
+  // API and tracing may be too large to reliably compare. Skip the
+  // tolerance-based assertions on these platforms.
+  TraceStyleResult trace_result = GetStyleDurationFromTrace(trace_str);
+  double trace_style_duration = trace_result.total_duration_ms;
+  double api_total_style = script_forced_style_duration + entry_style_duration;
+
+  double max_value = std::max(api_total_style, trace_style_duration);
+  // Use 20% tolerance to account for timing measurement differences.
+  double tolerance_ms = std::max(15.0, max_value * 0.2);
+
+  // For the lower bound, LoAF may report less than trace due to the 5ms script
+  // threshold.
+  constexpr double kLoafThresholdMs = 5.0;
+  double lower_tolerance_ms =
+      tolerance_ms +
+      (kLoafThresholdMs * static_cast<double>(trace_result.event_count));
+
+  EXPECT_LE(api_total_style, trace_style_duration + tolerance_ms);
+  EXPECT_GE(api_total_style, trace_style_duration - lower_tolerance_ms);
+#endif
 }
 
 }  // namespace content

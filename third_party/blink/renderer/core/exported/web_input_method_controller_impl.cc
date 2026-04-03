@@ -4,8 +4,9 @@
 
 #include "third_party/blink/renderer/core/exported/web_input_method_controller_impl.h"
 
+#include <vector>
+
 #include "third_party/blink/public/platform/web_string.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_plugin.h"
 #include "third_party/blink/public/web/web_range.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -53,14 +54,15 @@ void WebInputMethodControllerImpl::SetVirtualKeyboardVisibilityRequest(
 
 bool WebInputMethodControllerImpl::SetComposition(
     const WebString& text,
-    const WebVector<ui::ImeTextSpan>& ime_text_spans,
+    const std::vector<ui::ImeTextSpan>& ime_text_spans,
     const WebRange& replacement_range,
     int selection_start,
-    int selection_end) {
+    int selection_end,
+    mojom::blink::ImeState ime_state) {
   if (IsEditContextActive()) {
     return GetInputMethodController().GetActiveEditContext()->SetComposition(
-        text, ime_text_spans, replacement_range, selection_start,
-        selection_end);
+        text, ime_text_spans, replacement_range, selection_start, selection_end,
+        ime_state);
   }
 
   if (WebPlugin* plugin = FocusedPluginIfInputMethodSupported()) {
@@ -100,10 +102,21 @@ bool WebInputMethodControllerImpl::SetComposition(
 
   GetInputMethodController().SetComposition(
       String(text), ImeTextSpanVectorBuilder::Build(ime_text_spans),
-      selection_start, selection_end);
+      selection_start, selection_end, ime_state);
 
   return text.IsEmpty() ||
          (GetFrame() && GetInputMethodController().HasComposition());
+}
+
+bool WebInputMethodControllerImpl::SetComposition(
+    const WebString& text,
+    const std::vector<ui::ImeTextSpan>& ime_text_spans,
+    const WebRange& replacement_range,
+    int selection_start,
+    int selection_end) {
+  return SetComposition(text, ime_text_spans, replacement_range,
+                        selection_start, selection_end,
+                        mojom::blink::ImeState::kNone);
 }
 
 bool WebInputMethodControllerImpl::FinishComposingText(
@@ -136,7 +149,7 @@ bool WebInputMethodControllerImpl::FinishComposingText(
 
 bool WebInputMethodControllerImpl::CommitText(
     const WebString& text,
-    const WebVector<ui::ImeTextSpan>& ime_text_spans,
+    const std::vector<ui::ImeTextSpan>& ime_text_spans,
     const WebRange& replacement_range,
     int relative_caret_position) {
   LocalFrame::NotifyUserActivation(
@@ -157,11 +170,9 @@ bool WebInputMethodControllerImpl::CommitText(
   GetFrame()->GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kInput);
 
   if (!replacement_range.IsNull()) {
-    return GetInputMethodController().ReplaceTextAndMoveCaret(
-        text,
-        PlainTextRange(replacement_range.StartOffset(),
-                       replacement_range.EndOffset()),
-        InputMethodController::MoveCaretBehavior::kDoNotMove);
+    return GetInputMethodController().ReplaceTextAndKeepSelection(
+        text, PlainTextRange(replacement_range.StartOffset(),
+                             replacement_range.EndOffset()));
   }
 
   return GetInputMethodController().CommitText(
@@ -217,7 +228,7 @@ WebRange WebInputMethodControllerImpl::CompositionRange() const {
 }
 
 bool WebInputMethodControllerImpl::GetCompositionCharacterBounds(
-    WebVector<gfx::Rect>& bounds) {
+    std::vector<gfx::Rect>& bounds) {
   if (IsEditContextActive()) {
     return GetInputMethodController()
         .GetActiveEditContext()
@@ -230,7 +241,7 @@ bool WebInputMethodControllerImpl::GetCompositionCharacterBounds(
 
   int character_count = range.length();
   int offset = range.StartOffset();
-  WebVector<gfx::Rect> result(static_cast<size_t>(character_count));
+  std::vector<gfx::Rect> result(static_cast<size_t>(character_count));
   gfx::Rect rect;
   for (int i = 0; i < character_count; ++i) {
     if (!web_frame_->FirstRectForCharacterRange(offset + i, 1, rect)) {

@@ -4,13 +4,16 @@
 
 #include "chrome/browser/apps/app_discovery_service/recommended_arc_apps/recommend_apps_fetcher_impl.h"
 
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+
 #include "base/base64url.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/task/thread_pool.h"
@@ -78,7 +81,7 @@ bool HasHardKeyboard() {
 }
 
 gfx::Size GetScreenSize() {
-  return display::Screen::GetScreen()->GetPrimaryDisplay().GetSizeInPixel();
+  return display::Screen::Get()->GetPrimaryDisplay().GetSizeInPixel();
 }
 
 // TODO(rsgingerrs): This function is copied from Play. We need to find a way to
@@ -299,7 +302,7 @@ void RecommendAppsFetcherImpl::PopulateDeviceConfig() {
   const gpu::GPUInfo gpu_info = GetGPUInfo();
   device_config_.set_gl_es_version(GetGLVersionInfo(gpu_info));
 
-  for (const base::StringPiece& gl_extension : GetGLExtensions(gpu_info)) {
+  for (std::string_view gl_extension : GetGLExtensions(gpu_info)) {
     if (!gl_extension.empty()) {
       device_config_.add_gl_extension(std::string(gl_extension));
     }
@@ -453,7 +456,7 @@ void RecommendAppsFetcherImpl::OnDownloadTimeout() {
 }
 
 void RecommendAppsFetcherImpl::OnDownloaded(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   download_timer_.Stop();
 
   RecordUmaDownloadTime(base::TimeTicks::Now() - start_time_);
@@ -480,7 +483,7 @@ void RecommendAppsFetcherImpl::OnDownloaded(
   // The response starts with a prefix ")]}'". This needs to be removed before
   // further parsing.
   const std::string json_xss_prevention_prefix = ")]}'";
-  std::string response_body_json = *response_body;
+  std::string response_body_json = *std::move(response_body);
   if (base::StartsWith(response_body_json, json_xss_prevention_prefix)) {
     response_body_json =
         response_body_json.substr(json_xss_prevention_prefix.length());

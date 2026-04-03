@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/run_loop.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/snapshot/snapshot.h"
 #include "ui/views/examples/examples_window.h"
@@ -31,7 +32,8 @@ ExamplesExitCode ExamplesSkiaGoldPixelDiff::CompareScreenshot(
     const std::string& screenshot_name,
     const views::Widget* widget) const {
   // If host is in dark mode skip the pixel comparison.
-  if (ui::NativeTheme::GetInstanceForNativeUi()->ShouldUseDarkColors()) {
+  if (ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==
+      ui::NativeTheme::PreferredColorScheme::kDark) {
     return ExamplesExitCode::kNone;
   }
 
@@ -53,8 +55,9 @@ ExamplesExitCode ExamplesSkiaGoldPixelDiff::CompareScreenshot(
           },
           &screenshot_, run_loop.QuitClosure()));
   run_loop.Run();
-  if (screenshot_.IsEmpty())
+  if (screenshot_.IsEmpty()) {
     return ExamplesExitCode::kImageEmpty;
+  }
   return pixel_diff_->CompareScreenshot(
              ui::test::SkiaGoldPixelDiff::GetGoldenImageName(
                  screenshot_prefix_, screenshot_name,
@@ -65,7 +68,10 @@ ExamplesExitCode ExamplesSkiaGoldPixelDiff::CompareScreenshot(
 }
 
 void ExamplesSkiaGoldPixelDiff::DoScreenshot(views::Widget* widget) {
-  result_ = CompareScreenshot("ExampleWindow", widget);
+  const auto* const test_info =
+      testing::UnitTest::GetInstance()->current_test_info();
+  result_ = CompareScreenshot(test_info ? test_info->name() : "ExampleWindow",
+                              widget);
   widget->Close();
 }
 

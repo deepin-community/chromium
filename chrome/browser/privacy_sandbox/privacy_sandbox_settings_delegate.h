@@ -11,8 +11,8 @@
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
+#include "chrome/browser/privacy_sandbox/privacy_sandbox_countries.h"
 #include "components/privacy_sandbox/privacy_sandbox_settings.h"
-#include "components/privacy_sandbox/tpcd_experiment_eligibility.h"
 
 class Profile;
 
@@ -20,30 +20,21 @@ class Profile;
 class WebappRegistry;
 #endif
 
-namespace tpcd::experiment {
-class ExperimentManager;
-}  // namespace tpcd::experiment
-
 class PrivacySandboxSettingsDelegate
     : public privacy_sandbox::PrivacySandboxSettings::Delegate {
  public:
   PrivacySandboxSettingsDelegate(
       Profile* profile,
-      tpcd::experiment::ExperimentManager* experiment_manager);
+      PrivacySandboxCountries* privacy_sandbox_countries);
   ~PrivacySandboxSettingsDelegate() override;
 
   // PrivacySandboxSettings::Delegate:
+  bool IsRestrictedNoticeEnabled() const override;
   bool IsPrivacySandboxRestricted() const override;
   bool IsPrivacySandboxCurrentlyUnrestricted() const override;
   bool IsIncognitoProfile() const override;
   bool HasAppropriateTopicsConsent() const override;
   bool IsSubjectToM1NoticeRestricted() const override;
-  bool IsCookieDeprecationExperimentEligible() const override;
-  privacy_sandbox::TpcdExperimentEligibility
-  GetCookieDeprecationExperimentCurrentEligibility() const override;
-  bool IsCookieDeprecationLabelAllowed() const override;
-  bool AreThirdPartyCookiesBlockedByCookieDeprecationExperiment()
-      const override;
 
 #if BUILDFLAG(IS_ANDROID)
   void OverrideWebappRegistryForTesting(
@@ -52,14 +43,10 @@ class PrivacySandboxSettingsDelegate
 
  private:
   bool PrivacySandboxRestrictedNoticeRequired() const;
-  bool IsSubjectToEnterprisePolicies() const;
+  bool IsSubjectToEnterpriseFeatures() const;
   raw_ptr<Profile> profile_;
-  // TODO(linnan): Remove this field when
-  // `IsCookieDeprecationExperimentEligible()` consults `ExperimentManager`.
-  mutable std::optional<bool> is_cookie_deprecation_experiment_eligible_;
 
-  // The experiment manager is a singleton and lives forever.
-  raw_ptr<tpcd::experiment::ExperimentManager> experiment_manager_;
+  raw_ptr<PrivacySandboxCountries> privacy_sandbox_countries_;
 
 #if BUILDFLAG(IS_ANDROID)
   std::unique_ptr<WebappRegistry> webapp_registry_;

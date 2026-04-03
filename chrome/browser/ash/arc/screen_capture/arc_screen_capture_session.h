@@ -9,13 +9,16 @@
 #include <queue>
 #include <string>
 
-#include "ash/components/arc/mojom/screen_capture.mojom.h"
 #include "base/memory/raw_ptr.h"
+#include "chromeos/ash/experiences/arc/mojom/screen_capture.mojom.h"
 #include "components/viz/common/gpu/context_lost_observer.h"
+#include "gpu/command_buffer/common/sync_token.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "ui/compositor/compositor_animation_observer.h"
+#include "ui/display/display_observer.h"
+#include "ui/display/types/display_constants.h"
 
 class ScreenCaptureNotificationUI;
 
@@ -38,7 +41,8 @@ class CopyOutputResult;
 
 namespace arc {
 
-class ArcScreenCaptureSession : public mojom::ScreenCaptureSession,
+class ArcScreenCaptureSession : public display::DisplayObserver,
+                                public mojom::ScreenCaptureSession,
                                 public ui::CompositorAnimationObserver,
                                 public viz::ContextLostObserver {
  public:
@@ -61,7 +65,7 @@ class ArcScreenCaptureSession : public mojom::ScreenCaptureSession,
       uint32_t stride,
       SetOutputBufferDeprecatedCallback callback) override;
   void SetOutputBuffer(mojo::ScopedHandle graphics_buffer,
-                       gfx::BufferFormat buffer_format,
+                       mojom::BufferFormat buffer_format,
                        uint64_t buffer_format_modifier,
                        uint32_t stride,
                        SetOutputBufferCallback callback) override;
@@ -72,6 +76,9 @@ class ArcScreenCaptureSession : public mojom::ScreenCaptureSession,
 
   // Implements viz::ContextLostObserver
   void OnContextLost() override;
+
+  // Implements display::DisplayObserver
+  void OnWillRemoveDisplays(const display::Displays& removed_displays) override;
 
  private:
   struct DesktopTexture;
@@ -100,7 +107,8 @@ class ArcScreenCaptureSession : public mojom::ScreenCaptureSession,
   // Callback for completion of GL commands.
   void QueryCompleted(uint32_t query_id,
                       std::unique_ptr<DesktopTexture> desktop_texture,
-                      std::unique_ptr<PendingBuffer> pending_buffer);
+                      std::unique_ptr<PendingBuffer> pending_buffer,
+                      gpu::SyncToken sync_token);
   // Callback for a user clicking Stop on the notification for screen capture.
   void NotificationStop();
 
@@ -110,6 +118,9 @@ class ArcScreenCaptureSession : public mojom::ScreenCaptureSession,
   // aura::Window of the display being captured. This corresponds to one of
   // Ash's root windows.
   raw_ptr<aura::Window> display_root_window_ = nullptr;
+  // ID of the display being captured.
+  int64_t display_id_ = display::kInvalidDisplayId;
+  display::ScopedDisplayObserver display_observer_{this};
 
   // We have 2 separate queues for handling incoming GPU buffers from Android
   // and also textures for the desktop we have captured already. Due to the

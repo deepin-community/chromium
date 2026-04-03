@@ -22,7 +22,7 @@ limitations under the License.
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/Dialect/Quant/QuantTypes.h"  // from @llvm-project
+#include "mlir/Dialect/Quant/IR/QuantTypes.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
@@ -38,7 +38,6 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/lite/experimental/tac/common/targets.h"
 #include "tensorflow/compiler/mlir/lite/experimental/tac/common/utils.h"
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"
-#include "tensorflow/compiler/mlir/lite/quantization/quantization_traits.h"
 #include "tensorflow/compiler/mlir/lite/utils/attribute_utils.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/verification_utils.h"
@@ -86,22 +85,22 @@ TFL::ReshapeOp InsertReshapeOp(Location loc, Value input, Type element_type,
   auto new_shape_attr =
       mlir::DenseIntElementsAttr::get(reshape_shape_type, new_shape_array_i32);
 
-  auto new_shape = builder->create<TFL::ConstOp>(loc, new_shape_attr);
+  auto new_shape = TFL::ConstOp::create(*builder, loc, new_shape_attr);
 
   auto reshape_out_type = RankedTensorType::get(new_shape_array, element_type);
-  return builder->create<TFL::ReshapeOp>(loc, reshape_out_type, input,
-                                         new_shape);
+  return TFL::ReshapeOp::create(*builder, loc, reshape_out_type, input,
+                                new_shape);
 }
 
 LogicalResult EnsureBias(Operation* op, int bias_idx,
                          PatternRewriter& rewriter) {
   auto bias = op->getOperand(bias_idx);
 
-  if (!bias.getType().isa<NoneType>()) return failure();
+  if (!mlir::isa<NoneType>(bias.getType())) return failure();
 
   // Proceed to create a zero bias.
   auto output = op->getResult(0);
-  auto output_type = output.getType().dyn_cast_or_null<RankedTensorType>();
+  auto output_type = mlir::dyn_cast_or_null<RankedTensorType>(output.getType());
   if (!output_type) return failure();
 
   // bias should be a vector sized of the last output dim.
@@ -119,7 +118,7 @@ LogicalResult EnsureBias(Operation* op, int bias_idx,
     return failure();
   }
 
-  auto zero_bias = rewriter.create<TFL::ConstOp>(op->getLoc(), bias_attr);
+  auto zero_bias = TFL::ConstOp::create(rewriter, op->getLoc(), bias_attr);
   op->setOperand(bias_idx, zero_bias);
 
   return success();
@@ -149,7 +148,7 @@ TF::ConstOp PadConstValues(Operation* input_op, int value_to_pad,
   auto new_value_i32_attr =
       mlir::DenseIntElementsAttr::get(value_shape_type, value_i32);
 
-  return builder->create<TF::ConstOp>(loc, new_value_i32_attr);
+  return TF::ConstOp::create(*builder, loc, new_value_i32_attr);
 }
 
 SmallVector<Value, 4> SliceOutputs(Operation* split_op, Value input,
@@ -164,7 +163,7 @@ SmallVector<Value, 4> SliceOutputs(Operation* split_op, Value input,
     SmallVector<int32_t, 4> slice_size;
     auto current_output = split_op->getResult(i);
     auto current_output_type =
-        current_output.getType().cast<RankedTensorType>();
+        mlir::cast<RankedTensorType>(current_output.getType());
     for (int d = 0; d < input_type.getRank(); ++d) {
       if (d == split_dim) {
         // Split dimension.
@@ -187,13 +186,13 @@ SmallVector<Value, 4> SliceOutputs(Operation* split_op, Value input,
         mlir::DenseIntElementsAttr::get(slice_type, slice_size);
 
     auto slice_begin_const =
-        rewriter->create<TFL::ConstOp>(split_op->getLoc(), slice_begin_attr);
+        TFL::ConstOp::create(*rewriter, split_op->getLoc(), slice_begin_attr);
     auto slice_size_const =
-        rewriter->create<TFL::ConstOp>(split_op->getLoc(), slice_size_attr);
+        TFL::ConstOp::create(*rewriter, split_op->getLoc(), slice_size_attr);
 
-    auto slice_op = rewriter->create<TFL::SliceOp>(
-        split_op->getLoc(), current_output_type, input, slice_begin_const,
-        slice_size_const);
+    auto slice_op =
+        TFL::SliceOp::create(*rewriter, split_op->getLoc(), current_output_type,
+                             input, slice_begin_const, slice_size_const);
 
     // Rewire output.
     slice_outputs.push_back(slice_op.getResult());
@@ -209,7 +208,7 @@ LogicalResult LowerPackIntoConcatReshape::matchAndRewrite(
     TFL::PackOp pack_op, PatternRewriter& rewriter) const {
   // Pack op should have same shape type.
   SmallVector<Value, 5> pack_inputs(pack_op.getValues());
-  auto input_type = pack_inputs[0].getType().dyn_cast<RankedTensorType>();
+  auto input_type = mlir::dyn_cast<RankedTensorType>(pack_inputs[0].getType());
   if (!input_type) return failure();
 
   // Figure out output shapes.
@@ -248,9 +247,9 @@ LogicalResult LowerPackIntoConcatReshape::matchAndRewrite(
   // Insert the concat op.
   auto concat_out_type =
       RankedTensorType::get(concat_out_shape, input_type.getElementType());
-  auto concat_op = rewriter.create<TFL::ConcatenationOp>(
-      pack_op.getLoc(), concat_out_type, pack_inputs, pack_op.getAxis(),
-      "NONE");
+  auto concat_op =
+      TFL::ConcatenationOp::create(rewriter, pack_op.getLoc(), concat_out_type,
+                                   pack_inputs, pack_op.getAxis(), "NONE");
 
   auto reshape_op =
       InsertReshapeOp(pack_op.getLoc(), concat_op, input_type.getElementType(),
@@ -267,8 +266,8 @@ LogicalResult SquaredDifference::matchAndRewrite(
     TFL::SquaredDifferenceOp squared_diff_op, PatternRewriter& rewriter) const {
   auto x = squared_diff_op.getLhs();
   auto y = squared_diff_op.getRhs();
-  auto x_type = x.getType().dyn_cast<RankedTensorType>();
-  auto y_type = y.getType().dyn_cast<RankedTensorType>();
+  auto x_type = mlir::dyn_cast<RankedTensorType>(x.getType());
+  auto y_type = mlir::dyn_cast<RankedTensorType>(y.getType());
   if (!x_type || !y_type) return failure();
   if (x_type.getShape() != y_type.getShape()) return failure();
 
@@ -276,10 +275,10 @@ LogicalResult SquaredDifference::matchAndRewrite(
   if (!result_type) return failure();
 
   auto sub_op =
-      rewriter.create<TF::SubOp>(squared_diff_op.getLoc(), result_type, x, y);
+      TF::SubOp::create(rewriter, squared_diff_op.getLoc(), result_type, x, y);
   auto mul_op =
-      rewriter.create<TF::MulOp>(squared_diff_op.getLoc(), result_type,
-                                 sub_op.getResult(), sub_op.getResult());
+      TF::MulOp::create(rewriter, squared_diff_op.getLoc(), result_type,
+                        sub_op.getResult(), sub_op.getResult());
   rewriter.replaceOp(squared_diff_op, mul_op.getResult());
 
   return success();
@@ -291,16 +290,16 @@ LogicalResult UnrollSplit::matchAndRewrite(TFL::SplitOp split_op,
                                            PatternRewriter& rewriter) const {
   auto num_splits = split_op.getNumSplits();
   auto input = split_op.getValue();
-  auto input_type = input.getType().dyn_cast<RankedTensorType>();
+  auto input_type = mlir::dyn_cast<RankedTensorType>(input.getType());
   if (input_type == nullptr || !input_type.hasStaticShape()) return failure();
 
   for (auto result : split_op.getResults()) {
-    auto result_type = result.getType().dyn_cast<RankedTensorType>();
+    auto result_type = mlir::dyn_cast<RankedTensorType>(result.getType());
     if (result_type == nullptr) return failure();
   }
 
   auto output = split_op.getResult(0);
-  auto output_type = output.getType().cast<RankedTensorType>();
+  auto output_type = mlir::cast<RankedTensorType>(output.getType());
 
   // TODO(renjieliu): change to use split_dim when we raise the constants
   // as well.
@@ -331,11 +330,11 @@ LogicalResult UnrollSplitV::matchAndRewrite(TFL::SplitVOp splitv_op,
     return failure();
 
   auto input = splitv_op.getValue();
-  auto input_type = input.getType().dyn_cast_or_null<RankedTensorType>();
+  auto input_type = mlir::dyn_cast_or_null<RankedTensorType>(input.getType());
   if (!input_type || !input_type.hasRank()) return failure();
 
   for (auto result : splitv_op.getResults()) {
-    auto result_type = result.getType().dyn_cast<RankedTensorType>();
+    auto result_type = mlir::dyn_cast<RankedTensorType>(result.getType());
     if (result_type == nullptr) return failure();
   }
 
@@ -372,20 +371,21 @@ LogicalResult PadSlice::matchAndRewrite(TFL::SliceOp slice_op,
   // We have to know the shape of the input, as well as the begin/size.
   // also, begin and size have to be constants.
   auto input = slice_op.getInput();
-  auto input_type = input.getType().dyn_cast_or_null<RankedTensorType>();
+  auto input_type = mlir::dyn_cast_or_null<RankedTensorType>(input.getType());
   if (!input_type || !input_type.hasStaticShape()) return failure();
 
   if (input_type.getRank() >= 4) return failure();
 
   auto begin = slice_op.getBegin();
-  auto begin_type = begin.getType().dyn_cast_or_null<RankedTensorType>();
+  auto begin_type = mlir::dyn_cast_or_null<RankedTensorType>(begin.getType());
   if (!begin_type || !begin_type.hasStaticShape()) return failure();
 
   auto size = slice_op.getSize();
-  auto size_type = size.getType().dyn_cast_or_null<RankedTensorType>();
+  auto size_type = mlir::dyn_cast_or_null<RankedTensorType>(size.getType());
   if (!size_type || !size_type.hasStaticShape()) return failure();
 
-  auto output_type = slice_op.getType().dyn_cast_or_null<RankedTensorType>();
+  auto output_type =
+      mlir::dyn_cast_or_null<RankedTensorType>(slice_op.getType());
   if (!output_type || !output_type.hasStaticShape()) return failure();
 
   // Pad 0s in front of the begin.
@@ -424,8 +424,9 @@ LogicalResult PadSlice::matchAndRewrite(TFL::SliceOp slice_op,
   RankedTensorType new_output_type =
       RankedTensorType::get(new_output_shape, output_type.getElementType());
 
-  auto new_slice = rewriter.create<TFL::SliceOp>(
-      slice_op.getLoc(), new_output_type, reshape_op, new_begin, new_size);
+  auto new_slice =
+      TFL::SliceOp::create(rewriter, slice_op.getLoc(), new_output_type,
+                           reshape_op, new_begin, new_size);
 
   // Append a reshape at the bottom.
   auto output_reshape_op = InsertReshapeOp(slice_op.getLoc(), new_slice,
@@ -473,17 +474,17 @@ LogicalResult FullyConnectedToConv::matchAndRewrite(
     TFL::FullyConnectedOp fc_op, PatternRewriter& rewriter) const {
   // We have to know the shape of the input.
   auto input = fc_op.getInput();
-  auto input_type = input.getType().dyn_cast_or_null<RankedTensorType>();
+  auto input_type = mlir::dyn_cast_or_null<RankedTensorType>(input.getType());
   if (!input_type || !input_type.hasStaticShape()) return failure();
 
   // We have to know the shape of the weight.
   auto weight = fc_op.getFilter();
-  auto weight_type = weight.getType().dyn_cast_or_null<RankedTensorType>();
+  auto weight_type = mlir::dyn_cast_or_null<RankedTensorType>(weight.getType());
   if (!weight_type || !weight_type.hasStaticShape()) return failure();
 
   // We have to know the shape of the output as well.
   auto output = fc_op.getResult(0);
-  auto output_type = output.getType().dyn_cast_or_null<RankedTensorType>();
+  auto output_type = mlir::dyn_cast_or_null<RankedTensorType>(output.getType());
   if (!output_type || !output_type.hasStaticShape()) return failure();
 
   // Insert a reshape after the input.
@@ -509,9 +510,9 @@ LogicalResult FullyConnectedToConv::matchAndRewrite(
   // The output would be [1, 1, width, output].
   auto conv_output_type = RankedTensorType::get({1, 1, width, output_size},
                                                 output_type.getElementType());
-  auto conv = rewriter.create<TFL::Conv2DOp>(
-      fc_op.getLoc(), conv_output_type, reshaped_input, reshaped_weight,
-      fc_op.getBias(), rewriter.getI32IntegerAttr(1),
+  auto conv = TFL::Conv2DOp::create(
+      rewriter, fc_op.getLoc(), conv_output_type, reshaped_input,
+      reshaped_weight, fc_op.getBias(), rewriter.getI32IntegerAttr(1),
       rewriter.getI32IntegerAttr(1), fc_op.getFusedActivationFunctionAttr(),
       rewriter.getStringAttr("VALID"), rewriter.getI32IntegerAttr(1),
       rewriter.getI32IntegerAttr(1));
@@ -533,13 +534,14 @@ LogicalResult PadConcat::matchAndRewrite(TFL::ConcatenationOp concat_op,
                                          PatternRewriter& rewriter) const {
   int rank = -1;
   for (auto input : concat_op.getValues()) {
-    auto input_type = input.getType().dyn_cast_or_null<RankedTensorType>();
+    auto input_type = mlir::dyn_cast_or_null<RankedTensorType>(input.getType());
     if (!input_type || !input_type.hasStaticShape()) return failure();
 
     rank = input_type.getRank();
   }
 
-  auto output_type = concat_op.getType().dyn_cast_or_null<RankedTensorType>();
+  auto output_type =
+      mlir::dyn_cast_or_null<RankedTensorType>(concat_op.getType());
   if (!output_type || !output_type.hasStaticShape()) return failure();
 
   if (rank >= 4) return failure();
@@ -548,7 +550,7 @@ LogicalResult PadConcat::matchAndRewrite(TFL::ConcatenationOp concat_op,
   // We will insert a reshape op after every input.
   SmallVector<Value, 4> reshape_ops;
   for (auto input : concat_op.getValues()) {
-    auto input_type = input.getType().cast<RankedTensorType>();
+    auto input_type = mlir::cast<RankedTensorType>(input.getType());
     // Get the new shape.
     SmallVector<int64_t, 4> new_shape;
     for (int i = 0; i < 4 - rank; ++i) {
@@ -583,8 +585,8 @@ LogicalResult PadConcat::matchAndRewrite(TFL::ConcatenationOp concat_op,
   RankedTensorType new_output_type =
       RankedTensorType::get(new_output_shape, output_type.getElementType());
 
-  auto new_concat = rewriter.create<TFL::ConcatenationOp>(
-      concat_op.getLoc(), new_output_type, reshape_ops, axis,
+  auto new_concat = TFL::ConcatenationOp::create(
+      rewriter, concat_op.getLoc(), new_output_type, reshape_ops, axis,
       concat_op.getFusedActivationFunction());
 
   // Append a reshape at the bottom.
@@ -604,7 +606,7 @@ LogicalResult PadConcat::matchAndRewrite(TFL::ConcatenationOp concat_op,
 LogicalResult ReduceMeanToAvgPool::matchAndRewrite(
     TFL::MeanOp mean_op, PatternRewriter& rewriter) const {
   auto input = mean_op.getInput();
-  auto input_type = input.getType().dyn_cast_or_null<RankedTensorType>();
+  auto input_type = mlir::dyn_cast_or_null<RankedTensorType>(input.getType());
   // Only 4d is supported here.
   if (!input_type || input_type.getRank() != 4) return failure();
 
@@ -620,7 +622,7 @@ LogicalResult ReduceMeanToAvgPool::matchAndRewrite(
   }
 
   auto output = mean_op.getOutput();
-  auto output_type = output.getType().dyn_cast_or_null<RankedTensorType>();
+  auto output_type = mlir::dyn_cast_or_null<RankedTensorType>(output.getType());
   if (!output_type) return failure();
 
   auto input_quantized_type =
@@ -640,8 +642,8 @@ LogicalResult ReduceMeanToAvgPool::matchAndRewrite(
 
   auto avg_pool_output_type = RankedTensorType::get(
       {batch, 1, 1, channel}, input_type.getElementType());
-  auto avg_pool = rewriter.create<TFL::AveragePool2DOp>(
-      mean_op.getLoc(), avg_pool_output_type, input,
+  auto avg_pool = TFL::AveragePool2DOp::create(
+      rewriter, mean_op.getLoc(), avg_pool_output_type, input,
       rewriter.getI32IntegerAttr(height), rewriter.getI32IntegerAttr(width),
       rewriter.getStringAttr("VALID"), rewriter.getI32IntegerAttr(1),
       rewriter.getI32IntegerAttr(1), rewriter.getStringAttr("NONE"));
@@ -670,7 +672,7 @@ LogicalResult ReduceMeanToAvgPool::matchAndRewrite(
 LogicalResult InsertRequantForReduceMean::matchAndRewrite(
     TFL::MeanOp mean_op, PatternRewriter& rewriter) const {
   auto input = mean_op.getInput();
-  auto input_type = input.getType().dyn_cast_or_null<ShapedType>();
+  auto input_type = mlir::dyn_cast_or_null<ShapedType>(input.getType());
   if (!input_type) return failure();
 
   // Only need to do this for quantized input.
@@ -679,7 +681,7 @@ LogicalResult InsertRequantForReduceMean::matchAndRewrite(
   if (!input_quantized_type) return failure();
 
   auto output = mean_op.getOutput();
-  auto output_type = output.getType().dyn_cast_or_null<ShapedType>();
+  auto output_type = mlir::dyn_cast_or_null<ShapedType>(output.getType());
   if (!output_type) return failure();
   auto output_quantized_type =
       quant::QuantizedType::getQuantizedElementType(output_type);
@@ -690,8 +692,8 @@ LogicalResult InsertRequantForReduceMean::matchAndRewrite(
   auto new_output_type =
       RankedTensorType::get(output_type.getShape(), input_quantized_type);
   auto new_mean_op =
-      rewriter.create<TFL::MeanOp>(mean_op->getLoc(), new_output_type, input,
-                                   mean_op.getAxis(), mean_op.getKeepDims());
+      TFL::MeanOp::create(rewriter, mean_op->getLoc(), new_output_type, input,
+                          mean_op.getAxis(), mean_op.getKeepDims());
 
   // Insert a requant op.
   rewriter.replaceOpWithNewOp<TFL::QuantizeOp>(

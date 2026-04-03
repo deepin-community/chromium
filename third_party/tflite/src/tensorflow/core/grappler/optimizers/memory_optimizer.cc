@@ -359,7 +359,7 @@ AddRecomputeControlDependencyNodes(
     new_trigger_node->set_device(original_recomputed_node->device());
     if (current_trigger_node != nullptr) {
       *new_trigger_node->add_input() =
-          strings::StrCat("^", current_trigger_node->name());
+          absl::StrCat("^", current_trigger_node->name());
     }
     current_trigger_node = new_trigger_node;
     triggers[original_recomputed_node] = current_trigger_node;
@@ -370,7 +370,7 @@ AddRecomputeControlDependencyNodes(
                  ->second;
          ++target_input_iterator) {
       *current_trigger_node->add_input() =
-          strings::StrCat("^", (*target_input_iterator)->name());
+          absl::StrCat("^", (*target_input_iterator)->name());
       VLOG(2) << "  Recomputation trigger " << current_trigger_node->name()
               << " depends on " << (*target_input_iterator)->name();
     }
@@ -428,7 +428,7 @@ void RecomputeSubgraph(
     // Each recomputed node gets a control dependency to prevent it from being
     // recomputed immediately.
     *copied_node->add_input() =
-        strings::StrCat("^", triggers[original_node]->name());
+        absl::StrCat("^", triggers[original_node]->name());
   }
   // Set the inputs of nodes in the target subgraph to the recomputed nodes
   // where applicable.
@@ -529,7 +529,7 @@ bool SchedulingPass(Cluster* cluster, std::unique_ptr<GraphMemory>* memory_ptr,
     for (const auto& input : view.GetFanins(node, false)) {
       if (input.node->device() == node.device()) {
         string tensor_name =
-            strings::StrCat(input.node->name(), ":", input.port_id);
+            absl::StrCat(input.node->name(), ":", input.port_id);
         addn_list[tensor_name].insert(&node);
       }
     }
@@ -541,7 +541,7 @@ bool SchedulingPass(Cluster* cluster, std::unique_ptr<GraphMemory>* memory_ptr,
 
   if ((*memory_ptr) == nullptr) {
     memory_ptr->reset(new GraphMemory(*item));
-    Status s = (*memory_ptr)->InferStatically(cluster->GetDevices());
+    absl::Status s = (*memory_ptr)->InferStatically(cluster->GetDevices());
     if (!s.ok()) {
       memory_ptr->reset();
       VLOG(1) << "Failed to infer memory usage: " << s.message();
@@ -565,7 +565,7 @@ bool SchedulingPass(Cluster* cluster, std::unique_ptr<GraphMemory>* memory_ptr,
     }
 
     for (const auto& live : mem_usage.live_tensors) {
-      string tensor_name = strings::StrCat(live.node, ":", live.output_id);
+      string tensor_name = absl::StrCat(live.node, ":", live.output_id);
       auto it = addn_list.find(tensor_name);
       if (it != addn_list.end()) {
         addn_to_rewrite.insert(it->second.begin(), it->second.end());
@@ -577,9 +577,10 @@ bool SchedulingPass(Cluster* cluster, std::unique_ptr<GraphMemory>* memory_ptr,
     return false;
   }
   GraphProperties properties(*item);
-  Status s = properties.InferStatically(/*assume_valid_feeds=*/false,
-                                        /*aggressive_shape_inference=*/false,
-                                        /*include_tensor_values=*/false);
+  absl::Status s =
+      properties.InferStatically(/*assume_valid_feeds=*/false,
+                                 /*aggressive_shape_inference=*/false,
+                                 /*include_tensor_values=*/false);
   if (!s.ok()) {
     VLOG(1) << "Failed to infer shapes: " << s.message();
     return false;
@@ -588,7 +589,8 @@ bool SchedulingPass(Cluster* cluster, std::unique_ptr<GraphMemory>* memory_ptr,
   // It's ok to use immutable GraphTopologyView here, because we do not destroy
   // any of the nodes in the underlying graph, we only add new nodes.
   GraphTopologyView graph_topology;
-  Status initialized_topology = graph_topology.InitializeFromGraph(item->graph);
+  absl::Status initialized_topology =
+      graph_topology.InitializeFromGraph(item->graph);
   if (!initialized_topology.ok()) {
     VLOG(1) << "Failed to initialize graph topology view: "
             << initialized_topology.message();
@@ -663,7 +665,7 @@ bool SchedulingPass(Cluster* cluster, std::unique_ptr<GraphMemory>* memory_ptr,
     }
 
     const string& device = node->device();
-    const string tmp_var_name = strings::StrCat(node->name(), "/tmp_var");
+    const string tmp_var_name = absl::StrCat(node->name(), "/tmp_var");
     if (view.GetNode(tmp_var_name) != nullptr) {
       VLOG(1) << "Temporary variable already exists " << tmp_var_name;
       return false;
@@ -686,14 +688,14 @@ bool SchedulingPass(Cluster* cluster, std::unique_ptr<GraphMemory>* memory_ptr,
 
     // Initialize it to zero
     NodeDef* zeros = item->graph.add_node();
-    zeros->set_name(strings::StrCat(node->name(), "/tmp_var_zeros"));
+    zeros->set_name(absl::StrCat(node->name(), "/tmp_var_zeros"));
     zeros->set_op("ZerosLike");
     zeros->set_device(device);
     (*zeros->mutable_attr())["T"].set_type(dtype);
     *zeros->add_input() = node->input(min_input_id);
 
     NodeDef* initialize = item->graph.add_node();
-    initialize->set_name(strings::StrCat(node->name(), "/tmp_var_initializer"));
+    initialize->set_name(absl::StrCat(node->name(), "/tmp_var_initializer"));
     initialize->set_op("Assign");
     initialize->set_device(device);
     (*initialize->mutable_attr())["T"].set_type(dtype);
@@ -708,8 +710,7 @@ bool SchedulingPass(Cluster* cluster, std::unique_ptr<GraphMemory>* memory_ptr,
       const string& input = node->input(i);
       if (!IsControlInput(input)) {
         NodeDef* accumulate = item->graph.add_node();
-        accumulate->set_name(
-            strings::StrCat(node->name(), "/tmp_var_accum_", i));
+        accumulate->set_name(absl::StrCat(node->name(), "/tmp_var_accum_", i));
         accumulate->set_op("AssignAdd");
         accumulate->set_device(device);
         (*accumulate->mutable_attr())["T"].set_type(dtype);
@@ -740,10 +741,10 @@ bool SchedulingPass(Cluster* cluster, std::unique_ptr<GraphMemory>* memory_ptr,
   return updated_graph;
 }
 
-Status BuildSwapPair(NodeDef* node, int input_to_swap,
-                     const std::unordered_map<string, const NodeDef*>& name_map,
-                     GraphDef* graph,
-                     std::pair<NodeDef*, NodeDef*>* swap_pair) {
+absl::Status BuildSwapPair(
+    NodeDef* node, int input_to_swap,
+    const std::unordered_map<string, const NodeDef*>& name_map, GraphDef* graph,
+    std::pair<NodeDef*, NodeDef*>* swap_pair) {
   string task, device;
   if (!DeviceNameUtils::SplitDeviceName(node->device(), &task, &device) ||
       !absl::StrContains(device, DEVICE_GPU)) {
@@ -762,9 +763,9 @@ Status BuildSwapPair(NodeDef* node, int input_to_swap,
                                    " since it expects a reference");
   }
 
-  string tensor_to_swap = strings::StrCat(node->name(), "_", input_to_swap);
-  string swap_out_name = strings::StrCat("swap_out_", tensor_to_swap);
-  string swap_in_name = strings::StrCat("swap_in_", tensor_to_swap);
+  string tensor_to_swap = absl::StrCat(node->name(), "_", input_to_swap);
+  string swap_out_name = absl::StrCat("swap_out_", tensor_to_swap);
+  string swap_in_name = absl::StrCat("swap_in_", tensor_to_swap);
   if (name_map.find(swap_out_name) != name_map.end() ||
       name_map.find(swap_in_name) != name_map.end()) {
     return errors::InvalidArgument("Input ", input_to_swap, " of node ",
@@ -785,7 +786,7 @@ Status BuildSwapPair(NodeDef* node, int input_to_swap,
   // Colocate the swap_out_ and swap_in_ nodes with the node itself.
   swap_out_node->set_device(node->device());
   swap_in_node->set_device(node->device());
-  string coloc_group = strings::StrCat("loc@", tensor_to_swap);
+  string coloc_group = absl::StrCat("loc@", tensor_to_swap);
   (*swap_out_node->mutable_attr())["_class"].mutable_list()->add_s(coloc_group);
   (*swap_in_node->mutable_attr())["_class"].mutable_list()->add_s(coloc_group);
   (*node->mutable_attr())["_class"].mutable_list()->add_s(coloc_group);
@@ -794,7 +795,7 @@ Status BuildSwapPair(NodeDef* node, int input_to_swap,
   (*swap_out_node->mutable_attr())["T"].set_type(input_type);
   *swap_pair = std::make_pair(swap_out_node, swap_in_node);
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 struct SwapInfo {
@@ -984,7 +985,7 @@ static bool IdentifySwappingCandidates(
     std::unordered_map<NodeDef*, SwapInfo>* nodes_to_swap) {
   if ((*memory_ptr) == nullptr) {
     memory_ptr->reset(new GraphMemory(*item));
-    Status s = (*memory_ptr)->InferStatically(cluster->GetDevices());
+    absl::Status s = (*memory_ptr)->InferStatically(cluster->GetDevices());
     if (!s.ok()) {
       memory_ptr->reset();
       VLOG(1) << "Failed to infer memory usage: " << s.message();
@@ -1021,7 +1022,8 @@ static bool IdentifySwappingCandidates(
         return false;
       }
       RunMetadata metadata;
-      Status s = vcluster.Run(item->graph, item->feed, item->fetch, &metadata);
+      absl::Status s =
+          vcluster.Run(item->graph, item->feed, item->fetch, &metadata);
       if (!s.ok() && s.code() != error::RESOURCE_EXHAUSTED) {
         return false;
       }
@@ -1089,7 +1091,7 @@ static bool IdentifySwappingCandidates(
           break;
         }
         string input_name =
-            strings::StrCat(input.node->name(), ":", input.port_id);
+            absl::StrCat(input.node->name(), ":", input.port_id);
         if (skip_list->find(input_name) != skip_list->end()) {
           valid = false;
           break;
@@ -1233,7 +1235,7 @@ bool SwappingPass(RewriterConfig::MemOptType optimization_level,
 
     // Swap all the tensors that are marked with the 'swap_to_host' attribute.
     for (int input_id : swap_info.inputs_to_swap) {
-      string input_name = strings::StrCat(node->name(), ":", input_id);
+      string input_name = absl::StrCat(node->name(), ":", input_id);
       if (skip_list->find(input_name) != skip_list->end()) {
         continue;
       } else {
@@ -1259,8 +1261,8 @@ bool SwappingPass(RewriterConfig::MemOptType optimization_level,
       *node->mutable_input(input_id) = swap_nodes.second->name();
 
       // Add the control dependencies needed to delay the execution of the swap.
-      out_trigger->add_input(strings::StrCat("^", swap_nodes.first->name()));
-      swap_nodes.second->add_input(strings::StrCat("^", in_trigger->name()));
+      out_trigger->add_input(absl::StrCat("^", swap_nodes.first->name()));
+      swap_nodes.second->add_input(absl::StrCat("^", in_trigger->name()));
 
       // Make sure we won't try to swap the swap nodes in subsequent passes.
       skip_list->insert(swap_nodes.first->name());
@@ -1295,8 +1297,8 @@ void RelaxAssignNodes(const std::set<int>& nodes_to_relax,
 }
 
 // TODO(rmlarsen): Add distributed TF test.
-Status FindAssignNodesToRelax(const GraphDef& graph,
-                              std::set<int>* nodes_to_relax) {
+absl::Status FindAssignNodesToRelax(const GraphDef& graph,
+                                    std::set<int>* nodes_to_relax) {
   std::unordered_set<string> devices;
   std::vector<int> assign_nodes;
   bool found_send = false;
@@ -1313,7 +1315,7 @@ Status FindAssignNodesToRelax(const GraphDef& graph,
   }
   if (!found_send && devices.size() == 1) {
     nodes_to_relax->insert(assign_nodes.begin(), assign_nodes.end());
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   GraphTopologyView graph_view;
@@ -1373,13 +1375,14 @@ Status FindAssignNodesToRelax(const GraphDef& graph,
       }
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace
 
-Status MemoryOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
-                                 GraphDef* optimized_graph) {
+absl::Status MemoryOptimizer::Optimize(Cluster* cluster,
+                                       const GrapplerItem& item,
+                                       GraphDef* optimized_graph) {
   std::set<int> nodes_to_relax;
   TF_RETURN_IF_ERROR(FindAssignNodesToRelax(item.graph, &nodes_to_relax));
 
@@ -1439,7 +1442,7 @@ Status MemoryOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
   }
 
   optimized_graph->Swap(&optimized_item.graph);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // end namespace grappler

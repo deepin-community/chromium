@@ -4,8 +4,10 @@
 
 #include "extensions/browser/api/sockets_tcp/tcp_socket_event_dispatcher.h"
 
+#include <memory>
 #include <utility>
 
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "content/public/browser/browser_thread.h"
@@ -17,7 +19,7 @@
 #include "net/base/net_errors.h"
 
 namespace {
-int kDefaultBufferSize = 4096;
+constexpr int kDefaultBufferSize = 4096;
 }
 
 namespace extensions {
@@ -107,12 +109,14 @@ void TCPSocketEventDispatcher::StartRead(const ReadParams& params) {
       << "Socket has wrong owner.";
 
   // Don't start another read if the socket has been paused.
-  if (socket->paused())
+  if (socket->paused()) {
     return;
+  }
 
   int buffer_size = socket->buffer_size();
-  if (buffer_size <= 0)
+  if (buffer_size <= 0) {
     buffer_size = kDefaultBufferSize;
+  }
   socket->Read(buffer_size,
                base::BindOnce(&TCPSocketEventDispatcher::ReadCallback, params));
 }
@@ -137,11 +141,12 @@ void TCPSocketEventDispatcher::ReadCallback(
     // Dispatch "onReceive" event.
     sockets_tcp::ReceiveInfo receive_info;
     receive_info.socket_id = params.socket_id;
-    receive_info.data.assign(io_buffer->data(), io_buffer->data() + bytes_read);
+    receive_info.data =
+        base::ToVector(io_buffer->first(static_cast<size_t>(bytes_read)));
     auto args = sockets_tcp::OnReceive::Create(receive_info);
-    std::unique_ptr<Event> event(new Event(events::SOCKETS_TCP_ON_RECEIVE,
-                                           sockets_tcp::OnReceive::kEventName,
-                                           std::move(args)));
+    auto event = std::make_unique<Event>(events::SOCKETS_TCP_ON_RECEIVE,
+                                         sockets_tcp::OnReceive::kEventName,
+                                         std::move(args));
     PostEvent(params, std::move(event));
 
     // Post a task to delay the read until the socket is available, as
@@ -171,8 +176,9 @@ void TCPSocketEventDispatcher::ReadCallback(
       // "resumes" it.
       ResumableTCPSocket* socket =
           params.sockets->Get(params.extension_id, params.socket_id);
-      if (socket)
+      if (socket) {
         socket->set_paused(true);
+      }
     }
   }
 }
@@ -195,13 +201,15 @@ void TCPSocketEventDispatcher::DispatchEvent(void* browser_context_id,
                                              std::unique_ptr<Event> event) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
+  if (!ExtensionsBrowserClient::Get()->IsValidContext(browser_context_id)) {
+    return;
+  }
+
   content::BrowserContext* context =
       reinterpret_cast<content::BrowserContext*>(browser_context_id);
-  if (!extensions::ExtensionsBrowserClient::Get()->IsValidContext(context))
-    return;
   EventRouter* router = EventRouter::Get(context);
   if (router) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     // Terminal app is the only non-extension to use sockets
     // (crbug.com/1350479).
     if (extension_id == kCrOSTerminal) {

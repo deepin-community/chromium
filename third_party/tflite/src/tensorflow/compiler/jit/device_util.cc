@@ -44,10 +44,10 @@ void DeviceSet::UnionWith(const DeviceSet& other) {
 }
 
 bool DeviceSet::IsEmpty() const {
-  return absl::c_all_of(storage_, [&](uint64 val) { return val == 0; });
+  return absl::c_all_of(storage_, [&](uint64_t val) { return val == 0; });
 }
 
-StatusOr<DeviceId> DeviceInfoCache::GetIdFor(absl::string_view name) {
+absl::StatusOr<DeviceId> DeviceInfoCache::GetIdFor(absl::string_view name) {
   TF_RET_CHECK(!name.empty());
 
   auto it = name_to_id_.find(name);
@@ -56,7 +56,7 @@ StatusOr<DeviceId> DeviceInfoCache::GetIdFor(absl::string_view name) {
   }
 
   int new_id = names_.size();
-  names_.push_back(string(name));
+  names_.push_back(std::string(name));
   id_to_device_type_.push_back(std::make_unique<DeviceType>(""));
   DeviceType* device_type = id_to_device_type_.back().get();
   TF_RETURN_IF_ERROR(DeviceNameToDeviceType(names_.back(), device_type));
@@ -64,7 +64,7 @@ StatusOr<DeviceId> DeviceInfoCache::GetIdFor(absl::string_view name) {
   is_cpu_.push_back(device_type->type_string() == DEVICE_CPU);
   is_gpu_.push_back(device_type->type_string() == DEVICE_GPU);
 
-  name_to_id_.emplace(string(name), DeviceId(new_id));
+  name_to_id_.emplace(std::string(name), DeviceId(new_id));
 
   const XlaOpRegistry::DeviceRegistration* compilation_device;
   if (!XlaOpRegistry::GetCompilationDevice(device_type->type(),
@@ -76,10 +76,10 @@ StatusOr<DeviceId> DeviceInfoCache::GetIdFor(absl::string_view name) {
   return DeviceId(new_id);
 }
 
-string DeviceInfoCache::DebugString(const DeviceSet& device_set) const {
-  std::vector<string> names;
+std::string DeviceInfoCache::DebugString(const DeviceSet& device_set) const {
+  std::vector<std::string> names;
   device_set.ForEach([&](DeviceId device_id) {
-    names.push_back(string(GetNameFor(device_id)));
+    names.push_back(std::string(GetNameFor(device_id)));
     return true;
   });
 
@@ -87,16 +87,17 @@ string DeviceInfoCache::DebugString(const DeviceSet& device_set) const {
 }
 }  // namespace jit
 
-Status DeviceNameToDeviceType(const string& device, DeviceType* device_type) {
+absl::Status DeviceNameToDeviceType(const std::string& device,
+                                    DeviceType* device_type) {
   DeviceNameUtils::ParsedName parsed;
   if (!DeviceNameUtils::ParseFullName(device, &parsed)) {
     return errors::Internal("Malformed assigned device '", device, "'");
   }
   *device_type = DeviceType(parsed.type);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-StatusOr<std::optional<jit::DeviceId>> PickDeviceForXlaImpl(
+absl::StatusOr<std::optional<jit::DeviceId>> PickDeviceForXlaImpl(
     const jit::DeviceInfoCache& device_info_cache,
     const jit::DeviceSet& devices, bool allow_mixing_unknown_and_cpu,
     bool failure_to_pick_is_error) {
@@ -214,7 +215,7 @@ StatusOr<std::optional<jit::DeviceId>> PickDeviceForXlaImpl(
 #undef FAILED_TO_PICK_DEVICE
 }
 
-StatusOr<jit::DeviceId> PickDeviceForXla(
+absl::StatusOr<jit::DeviceId> PickDeviceForXla(
     const jit::DeviceInfoCache& device_info_cache,
     const jit::DeviceSet& devices, bool allow_mixing_unknown_and_cpu) {
   TF_ASSIGN_OR_RETURN(std::optional<jit::DeviceId> device_id,
@@ -224,7 +225,7 @@ StatusOr<jit::DeviceId> PickDeviceForXla(
   return *device_id;
 }
 
-StatusOr<std::optional<jit::DeviceId>> MaybePickDeviceForXla(
+absl::StatusOr<std::optional<jit::DeviceId>> MaybePickDeviceForXla(
     const jit::DeviceInfoCache& device_info_cache,
     const jit::DeviceSet& devices, bool allow_mixing_unknown_and_cpu) {
   return PickDeviceForXlaImpl(device_info_cache, devices,

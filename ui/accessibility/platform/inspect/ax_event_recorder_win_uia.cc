@@ -4,13 +4,13 @@
 
 #include "ui/accessibility/platform/inspect/ax_event_recorder_win_uia.h"
 
+#include <psapi.h>
+
+#include <algorithm>
 #include <numeric>
 #include <utility>
 
-#include <psapi.h>
-
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -30,7 +30,7 @@ namespace {
 
 #if defined(COMPILER_MSVC)
 #define RETURN_ADDRESS() _ReturnAddress()
-#elif defined(COMPILER_GCC) && !BUILDFLAG(IS_NACL)
+#elif defined(COMPILER_GCC)
 #define RETURN_ADDRESS() \
   __builtin_extract_return_addr(__builtin_return_address(0))
 #else
@@ -50,12 +50,15 @@ static std::pair<uintptr_t, uintptr_t> GetModuleAddressRange(
 std::string UiaIdentifierToStringPretty(int32_t id) {
   auto str = base::WideToUTF8(UiaIdentifierToString(id));
   // Remove UIA_ prefix, and EventId/PropertyId suffixes
-  if (base::StartsWith(str, "UIA_", base::CompareCase::SENSITIVE))
+  if (str.starts_with("UIA_")) {
     str = str.substr(std::size("UIA_") - 1);
-  if (base::EndsWith(str, "EventId", base::CompareCase::SENSITIVE))
+  }
+  if (str.ends_with("EventId")) {
     str = str.substr(0, str.size() - std::size("EventId") + 1);
-  if (base::EndsWith(str, "PropertyId", base::CompareCase::SENSITIVE))
+  }
+  if (str.ends_with("PropertyId")) {
     str = str.substr(0, str.size() - std::size("PropertyId") + 1);
+  }
   return str;
 }
 
@@ -81,18 +84,40 @@ AXEventRecorderWinUia::AXEventRecorderWinUia(const AXTreeSelector& selector) {
 }
 
 AXEventRecorderWinUia::~AXEventRecorderWinUia() {
+  // Signal the thread to shut down and wait for it to finish. This is
+  // necessary to ensure the thread is properly cleaned up even if the test
+  // didn't complete normally via WaitForDoneRecording(). Without this, the
+  // thread may continue running after this object is destroyed, leading to
+  // dangling pointer crashes when UIA fires events (e.g., StructureChanged)
+  // that try to access the destroyed Thread object.
+  //
+  // SendShutdownSignal() is safe to call even if already signaled.
+  // WaitForDoneRecording() is idempotent due to wait_for_done_recording_called_
+  // guard, and Join() is guarded by thread_joined_.
+  thread_.SendShutdownSignal();
+  WaitForDoneRecording();
+
   base::subtle::NoBarrier_AtomicExchange(&instantiated_, 0);
 }
 
 void AXEventRecorderWinUia::WaitForDoneRecording() {
-  // Pump messages via |shutdown_loop_| until the thread is complete.
-  shutdown_loop_.Run();
-  base::PlatformThread::Join(thread_handle_);
+  // Only run the shutdown loop once. The RunLoop cannot be run multiple times
+  // as it tracks run state internally. The test calls this method, then the
+  // destructor may call it again during cleanup.
+  if (!wait_for_done_recording_called_) {
+    wait_for_done_recording_called_ = true;
+    // Pump messages via |shutdown_loop_| until the thread is complete.
+    shutdown_loop_.Run();
+  }
+  if (!thread_joined_) {
+    base::PlatformThread::Join(thread_handle_);
+    thread_joined_ = true;
+  }
 }
 
-AXEventRecorderWinUia::Thread::Thread() {}
+AXEventRecorderWinUia::Thread::Thread() = default;
 
-AXEventRecorderWinUia::Thread::~Thread() {}
+AXEventRecorderWinUia::Thread::~Thread() = default;
 
 void AXEventRecorderWinUia::Thread::Init(AXEventRecorderWinUia* owner,
                                          HWND hwnd,
@@ -219,7 +244,7 @@ AXEventRecorderWinUia::Thread::EventHandler::EventHandler() {
           : L"RPCRT4.dll");
 }
 
-AXEventRecorderWinUia::Thread::EventHandler::~EventHandler() {}
+AXEventRecorderWinUia::Thread::EventHandler::~EventHandler() = default;
 
 void AXEventRecorderWinUia::Thread::EventHandler::Init(
     AXEventRecorderWinUia::Thread* owner,
@@ -236,8 +261,18 @@ void AXEventRecorderWinUia::Thread::EventHandler::CleanUp() {
 IFACEMETHODIMP
 AXEventRecorderWinUia::Thread::EventHandler::HandleFocusChangedEvent(
     IUIAutomationElement* sender) {
-  if (!owner_ || !IsCallerFromAllowedModule(RETURN_ADDRESS()))
+  if (!owner_ || !IsCallerFromAllowedModule(RETURN_ADDRESS())) {
     return S_OK;
+  }
+
+  // Prevent races with CleanUp() by taking local references to objects we need.
+  // CleanUp() resets root_ and nulls owner_, so we must capture these before
+  // any use that could race with cleanup on another thread.
+  Microsoft::WRL::ComPtr<IUIAutomationElement> root = root_;
+  Microsoft::WRL::ComPtr<IUIAutomation> uia = owner_->uia_;
+  if (!root || !uia) {
+    return S_OK;
+  }
 
   base::win::ScopedSafearray id;
   sender->GetRuntimeId(id.Receive());
@@ -246,28 +281,27 @@ AXEventRecorderWinUia::Thread::EventHandler::HandleFocusChangedEvent(
   Microsoft::WRL::ComPtr<IUIAutomationElement> element_found;
   Microsoft::WRL::ComPtr<IUIAutomationCondition> condition;
 
-  owner_->uia_->CreatePropertyCondition(UIA_RuntimeIdPropertyId, id_variant,
-                                        &condition);
+  uia->CreatePropertyCondition(UIA_RuntimeIdPropertyId, id_variant, &condition);
   CHECK(condition);
-  root_->FindFirst(TreeScope::TreeScope_Subtree, condition.Get(),
-                   &element_found);
+  root->FindFirst(TreeScope::TreeScope_Subtree, condition.Get(),
+                  &element_found);
   if (!element_found) {
     VLOG(1) << "Ignoring UIA focus event outside our frame";
     return S_OK;
   }
 
-  // Transfer ownership of the RuntimeId SAFEARRAY back into |id| then debounce
-  // focus events that are consecutively received for the same |sender|. This
-  // needs to happen after determining the |sender| is within the |root_| frame,
+  // Transfer ownership of the RuntimeId SAFEARRAY back into `id` then debounce
+  // focus events that are consecutively received for the same `sender`. This
+  // needs to happen after determining the `sender` is within the `root` frame,
   // otherwise a RuntimeId outside the frame may be cached. For example, when
-  // receiving a global focus event not related to the |root_| frame.
+  // receiving a global focus event not related to the `root` frame.
   {
     VARIANT tmp = id_variant.Release();
     id.Reset(V_ARRAY(&tmp));
   }
   if (auto lock_scope = id.CreateLockScope<VT_I4>()) {
-    // Debounce focus events received from the same |sender|.
-    if (base::ranges::equal(*lock_scope, last_focused_runtime_id_)) {
+    // Debounce focus events received from the same `sender`.
+    if (std::ranges::equal(*lock_scope, last_focused_runtime_id_)) {
       return S_OK;
     }
 

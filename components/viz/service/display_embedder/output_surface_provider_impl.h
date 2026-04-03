@@ -9,7 +9,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
@@ -20,6 +20,10 @@
 #if BUILDFLAG(IS_WIN)
 #include "components/viz/service/display_embedder/output_device_backing.h"
 #endif
+
+namespace gpu {
+class Scheduler;
+}  // namespace gpu
 
 namespace viz {
 class GpuServiceImpl;
@@ -54,6 +58,7 @@ class VIZ_SERVICE_EXPORT OutputSurfaceProviderImpl
 
   gpu::SharedImageManager* GetSharedImageManager() override;
   gpu::SyncPointManager* GetSyncPointManager() override;
+  gpu::Scheduler* GetGpuScheduler() override;
 
  private:
   std::unique_ptr<SoftwareOutputDevice> CreateSoftwareOutputDeviceForPlatform(

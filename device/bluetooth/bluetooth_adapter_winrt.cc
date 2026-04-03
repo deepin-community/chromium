@@ -9,12 +9,11 @@
 #include <windows.storage.streams.h>
 #include <wrl/event.h>
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -22,9 +21,9 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/notimplemented.h"
 #include "base/scoped_native_library.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -107,7 +106,7 @@ using Microsoft::WRL::ComPtr;
 
 // Query string for powered Bluetooth radios. GUID Reference:
 // https://docs.microsoft.com/en-us/windows-hardware/drivers/install/guid-bthport-device-interface
-// TODO(https://crbug.com/821766): Consider adding WindowsCreateStringReference
+// TODO(crbug.com/40567018): Consider adding WindowsCreateStringReference
 // to base::win::ScopedHString to avoid allocating memory for this string.
 constexpr wchar_t kPoweredRadiosAqsFilter[] =
     L"System.Devices.InterfaceClassGuid:=\"{0850302A-B344-4fda-9BE9-"
@@ -128,7 +127,6 @@ constexpr const char* ToCString(RadioAccessStatus access_status) {
   }
 
   NOTREACHED();
-  return "";
 }
 
 template <typename VectorView, typename T>
@@ -266,7 +264,7 @@ void PopulateServiceData(
     if (!bytes)
       continue;
 
-    auto bytes_span = base::make_span(*bytes);
+    auto bytes_span = base::span(*bytes);
     if (bytes_span.size() < num_bytes_uuid) {
       BLUETOOTH_LOG(ERROR) << "Buffer Length is too small: "
                            << bytes_span.size() << " vs. " << num_bytes_uuid;
@@ -768,12 +766,24 @@ BluetoothAdapterWinrt::GetAgileReferencesForStatics(
                            std::move(radio_statics_agileref));
 }
 
+// static
+void BluetoothAdapterWinrt::DestroyAgileStaticsOnMTA(
+    StaticsInterfaces /* agile_statics */) {
+  base::win::AssertComApartmentType(base::win::ComApartmentType::MTA);
+}
+
 void BluetoothAdapterWinrt::CompleteInitAgile(base::OnceClosure init_callback,
                                               StaticsInterfaces agile_statics) {
   if (!agile_statics.adapter_statics ||
       !agile_statics.device_information_statics ||
       !agile_statics.radio_statics) {
     CompleteInit(std::move(init_callback), nullptr, nullptr, nullptr);
+    base::ThreadPool::PostTask(
+        FROM_HERE,
+        {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+         base::ThreadPolicy::MUST_USE_FOREGROUND},
+        base::BindOnce(&BluetoothAdapterWinrt::DestroyAgileStaticsOnMTA,
+                       std::move(agile_statics)));
     return;
   }
   ComPtr<IBluetoothAdapterStatics> bluetooth_adapter_statics;
@@ -790,6 +800,12 @@ void BluetoothAdapterWinrt::CompleteInitAgile(base::OnceClosure init_callback,
 
   CompleteInit(std::move(init_callback), std::move(bluetooth_adapter_statics),
                std::move(device_information_statics), std::move(radio_statics));
+  base::ThreadPool::PostTask(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+       base::ThreadPolicy::MUST_USE_FOREGROUND},
+      base::BindOnce(&BluetoothAdapterWinrt::DestroyAgileStaticsOnMTA,
+                     std::move(agile_statics)));
 }
 
 void BluetoothAdapterWinrt::CompleteInit(
@@ -1367,9 +1383,9 @@ void BluetoothAdapterWinrt::OnAdvertisementWatcherStopped(
 void BluetoothAdapterWinrt::OnRegisterAdvertisement(
     BluetoothAdvertisement* advertisement,
     CreateAdvertisementCallback callback) {
-  DCHECK(base::Contains(pending_advertisements_, advertisement));
+  DCHECK(std::ranges::contains(pending_advertisements_, advertisement));
   auto wrapped_advertisement = base::WrapRefCounted(advertisement);
-  base::Erase(pending_advertisements_, advertisement);
+  std::erase(pending_advertisements_, advertisement);
   std::move(callback).Run(std::move(wrapped_advertisement));
 }
 
@@ -1379,7 +1395,7 @@ void BluetoothAdapterWinrt::OnRegisterAdvertisementError(
     BluetoothAdvertisement::ErrorCode error_code) {
   // Note: We are not DCHECKing that |pending_advertisements_| contains
   // |advertisement|, as this method might be invoked during destruction.
-  base::Erase(pending_advertisements_, advertisement);
+  std::erase(pending_advertisements_, advertisement);
   std::move(error_callback).Run(error_code);
 }
 

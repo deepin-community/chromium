@@ -13,7 +13,6 @@
 // Since cc is used from the render process, anything that goes here also needs
 // to be added to render_process_host_impl.cc.
 
-namespace cc {
 namespace switches {
 
 // Switches for the renderer compositor only.
@@ -50,21 +49,19 @@ CC_BASE_EXPORT extern const char kShowSurfaceDamageRects[];
 CC_BASE_EXPORT extern const char kUIShowSurfaceDamageRects[];
 CC_BASE_EXPORT extern const char kShowScreenSpaceRects[];
 CC_BASE_EXPORT extern const char kUIShowScreenSpaceRects[];
-CC_BASE_EXPORT extern const char kHighlightNonLCDTextLayers[];
 #if DCHECK_IS_ON()
 CC_BASE_EXPORT extern const char kLogOnUIDoubleBackgroundBlur[];
 #endif
+
+// Debug data dump.
+CC_BASE_EXPORT extern const char kDumpCompositorFrame[];
 
 // Parameters for kUIShowCompositedLayerBorders.
 CC_BASE_EXPORT extern const char kCompositedRenderPassBorders[];
 CC_BASE_EXPORT extern const char kCompositedSurfaceBorders[];
 CC_BASE_EXPORT extern const char kCompositedLayerBorders[];
 
-CC_BASE_EXPORT extern const char kUIEnableLayerLists[];
-
 CC_BASE_EXPORT extern const char kEnableClippedImageScaling[];
-
-CC_BASE_EXPORT extern const char kAnimatedImageResume[];
 
 // Test related.
 CC_BASE_EXPORT extern const char kCCLayerTreeTestNoTimeout[];
@@ -72,6 +69,5 @@ CC_BASE_EXPORT extern const char kCCLayerTreeTestLongTimeout[];
 CC_BASE_EXPORT extern const char kCCScrollAnimationDurationForTesting[];
 
 }  // namespace switches
-}  // namespace cc
 
 #endif  // CC_BASE_SWITCHES_H_

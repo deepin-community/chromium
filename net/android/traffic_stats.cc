@@ -4,6 +4,7 @@
 
 #include "net/android/traffic_stats.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "net/net_jni_headers/AndroidTrafficStats_jni.h"
 
 namespace net::android::traffic_stats {
@@ -40,3 +41,5 @@ bool GetCurrentUidRxBytes(int64_t* bytes) {
 }
 
 }  // namespace net::android::traffic_stats
+
+DEFINE_JNI(AndroidTrafficStats)

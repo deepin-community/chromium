@@ -1,3 +1,4 @@
+// clang-format off
 // Auto-generated file. Do not edit!
 //   Template: src/qs8-igemm/MRx16c8-avx512skx.c.in
 //   Generator: tools/xngen
@@ -8,12 +9,16 @@
 // LICENSE file in the root directory of this source tree.
 
 #include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include <immintrin.h>
 
-#include <xnnpack/igemm.h>
-#include <xnnpack/intrinsics-polyfill.h>
-#include <xnnpack/math.h>
+#include "src/xnnpack/common.h"
+#include "src/xnnpack/igemm.h"
+#include "src/xnnpack/intrinsics-polyfill.h"
+#include "src/xnnpack/math.h"
+#include "src/xnnpack/microparams.h"
 
 
 void xnn_qu8_igemm_minmax_fp32_ukernel_1x16c8__avx512skx(
@@ -28,7 +33,7 @@ void xnn_qu8_igemm_minmax_fp32_ukernel_1x16c8__avx512skx(
     size_t cn_stride,
     size_t a_offset,
     const uint8_t* zero,
-    const union xnn_qu8_conv_minmax_params params[restrict XNN_MIN_ELEMENTS(1)]) XNN_OOB_READS
+    const union xnn_qu8_conv_minmax_params* restrict params) XNN_OOB_READS
 {
   assert(mr != 0);
   assert(mr <= 1);
@@ -43,16 +48,21 @@ void xnn_qu8_igemm_minmax_fp32_ukernel_1x16c8__avx512skx(
   uint8_t* c0 = c;
 
   const __mmask16 vbias_mask = _cvtu32_mask16(0x1111);
-  const __m512 vscale = _mm512_load_ps(params->fp32_avx512.scale);
-  const __m512 voutput_max_less_zero_point = _mm512_set1_ps(params->fp32_avx512.output_max_less_zero_point);
-  const __m512i voutput_zero_point = _mm512_set1_epi32(params->fp32_avx512.output_zero_point);
-  const __m128i voutput_min = _mm_load_si128((const __m128i*) params->fp32_avx512.output_min);
-  const __m512i vb_zero_point = _mm512_load_si512(params->fp32_avx512.kernel_zero_point);
+  const __m512 vscale = _mm512_set1_ps(params->fp32_scalar.scale);
+  // XNN_FORCE_REALIZATION(vscale);
+  const __m512 voutput_max_less_zero_point = _mm512_set1_ps((int32_t) params->fp32_scalar.output_max - (int32_t) params->fp32_scalar.output_zero_point);
+  const __m512i voutput_zero_point = _mm512_set1_epi32(params->fp32_scalar.output_zero_point);
+  const __m128i voutput_min = _mm_set1_epi8(params->fp32_scalar.output_min);
+  // XNN_FORCE_REALIZATION(voutput_max_less_zero_point);
+  // XNN_FORCE_REALIZATION(voutput_zero_point);
+  // XNN_FORCE_REALIZATION(voutput_min);
+  const __m512i vb_zero_point = _mm512_set1_epi16(params->fp32_scalar.kernel_zero_point);
+  XNN_FORCE_REALIZATION(vb_zero_point);
   do {
-    __m512i vacc0x0123 = _mm512_maskz_expandloadu_epi32(vbias_mask, w);
-    __m512i vacc0x4567 = _mm512_maskz_expandloadu_epi32(vbias_mask, (const int32_t*) w + 4);
-    __m512i vacc0x89AB = _mm512_maskz_expandloadu_epi32(vbias_mask, (const int32_t*) w + 8);
-    __m512i vacc0xCDEF = _mm512_maskz_expandloadu_epi32(vbias_mask, (const int32_t*) w + 12);
+    __m512i vacc0x0 = _mm512_maskz_expandloadu_epi32(vbias_mask, (const int32_t*) w + 0);
+    __m512i vacc0x1 = _mm512_maskz_expandloadu_epi32(vbias_mask, (const int32_t*) w + 4);
+    __m512i vacc0x2 = _mm512_maskz_expandloadu_epi32(vbias_mask, (const int32_t*) w + 8);
+    __m512i vacc0x3 = _mm512_maskz_expandloadu_epi32(vbias_mask, (const int32_t*) w + 12);
     w = (const int32_t*) w + 16;
 
     size_t p = ks;
@@ -69,18 +79,18 @@ void xnn_qu8_igemm_minmax_fp32_ukernel_1x16c8__avx512skx(
         const __m512i va0 = _mm512_broadcast_i32x4(_mm_cvtepu8_epi16(_mm_loadl_epi64((const __m128i*) a0)));
         a0 += 8;
 
-        const __m512i vb0123 = _mm512_sub_epi16(_mm512_cvtepu8_epi16(_mm256_load_si256((const __m256i*) w)), vb_zero_point);
+        const __m512i vb0 = _mm512_sub_epi16(_mm512_cvtepu8_epi16(_mm256_load_si256((const __m256i*) w)), vb_zero_point);
 
-        vacc0x0123 = _mm512_add_epi32(vacc0x0123, _mm512_madd_epi16(va0, vb0123));
-        const __m512i vb4567 = _mm512_sub_epi16(_mm512_cvtepu8_epi16(_mm256_load_si256((const __m256i*) ((const uint8_t*) w + 32))), vb_zero_point);
+        vacc0x0 = _mm512_add_epi32(vacc0x0, _mm512_madd_epi16(va0, vb0));
+        const __m512i vb1 = _mm512_sub_epi16(_mm512_cvtepu8_epi16(_mm256_load_si256((const __m256i*) ((const uint8_t*) w + 32))), vb_zero_point);
 
-        vacc0x4567 = _mm512_add_epi32(vacc0x4567, _mm512_madd_epi16(va0, vb4567));
-        const __m512i vb89AB = _mm512_sub_epi16(_mm512_cvtepu8_epi16(_mm256_load_si256((const __m256i*) ((const uint8_t*) w + 64))), vb_zero_point);
+        vacc0x1 = _mm512_add_epi32(vacc0x1, _mm512_madd_epi16(va0, vb1));
+        const __m512i vb2 = _mm512_sub_epi16(_mm512_cvtepu8_epi16(_mm256_load_si256((const __m256i*) ((const uint8_t*) w + 64))), vb_zero_point);
 
-        vacc0x89AB = _mm512_add_epi32(vacc0x89AB, _mm512_madd_epi16(va0, vb89AB));
-        const __m512i vbCDEF = _mm512_sub_epi16(_mm512_cvtepu8_epi16(_mm256_load_si256((const __m256i*) ((const uint8_t*) w + 96))), vb_zero_point);
+        vacc0x2 = _mm512_add_epi32(vacc0x2, _mm512_madd_epi16(va0, vb2));
+        const __m512i vb3 = _mm512_sub_epi16(_mm512_cvtepu8_epi16(_mm256_load_si256((const __m256i*) ((const uint8_t*) w + 96))), vb_zero_point);
 
-        vacc0xCDEF = _mm512_add_epi32(vacc0xCDEF, _mm512_madd_epi16(va0, vbCDEF));
+        vacc0x3 = _mm512_add_epi32(vacc0x3, _mm512_madd_epi16(va0, vb3));
 
         w = (const uint8_t*) w + 128;
         k -= 8 * sizeof(uint8_t);
@@ -89,8 +99,8 @@ void xnn_qu8_igemm_minmax_fp32_ukernel_1x16c8__avx512skx(
     } while (p != 0);
 
     // Add 4 adjacent sums
-    const __m512i vacc0x04152637 = _mm512_add_epi32(_mm512_unpacklo_epi32(vacc0x0123, vacc0x4567), _mm512_unpackhi_epi32(vacc0x0123, vacc0x4567));
-    const __m512i vacc0x8C9DAEBF = _mm512_add_epi32(_mm512_unpacklo_epi32(vacc0x89AB, vacc0xCDEF), _mm512_unpackhi_epi32(vacc0x89AB, vacc0xCDEF));
+    const __m512i vacc0x04152637 = _mm512_add_epi32(_mm512_unpacklo_epi32(vacc0x0, vacc0x1), _mm512_unpackhi_epi32(vacc0x0, vacc0x1));
+    const __m512i vacc0x8C9DAEBF = _mm512_add_epi32(_mm512_unpacklo_epi32(vacc0x2, vacc0x3), _mm512_unpackhi_epi32(vacc0x2, vacc0x3));
     const __m512i vacc0x084C195D2A6E3B7F = _mm512_add_epi32(_mm512_unpacklo_epi32(vacc0x04152637, vacc0x8C9DAEBF), _mm512_unpackhi_epi32(vacc0x04152637, vacc0x8C9DAEBF));
     const __m512i vidx = _mm512_set_epi32(15, 11, 7, 3, 13, 9, 5, 1, 14, 10, 6, 2, 12, 8, 4, 0);
     __m512i vacc0x0123456789ABCDEF = _mm512_permutexvar_epi32(vidx, vacc0x084C195D2A6E3B7F);

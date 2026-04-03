@@ -19,11 +19,13 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "absl/random/bit_gen_ref.h"
 #include "absl/random/distributions.h"
 #include "absl/time/time.h"
+#include "./common/logging.h"
 #include "./fuzztest/internal/domains/domain_base.h"
 #include "./fuzztest/internal/logging.h"
 #include "./fuzztest/internal/serialization.h"
@@ -35,14 +37,15 @@ enum class ElementOfImplCorpusType : size_t;
 
 template <typename T>
 class ElementOfImpl
-    : public DomainBase<ElementOfImpl<T>, T, ElementOfImplCorpusType> {
+    : public domain_implementor::DomainBase<ElementOfImpl<T>, T,
+                                            ElementOfImplCorpusType> {
  public:
   using typename ElementOfImpl::DomainBase::corpus_type;
   using typename ElementOfImpl::DomainBase::value_type;
 
-  explicit ElementOfImpl(std::vector<T> values) : values_(values) {
-    FUZZTEST_INTERNAL_CHECK_PRECONDITION(
-        !values.empty(), "ElementOf requires a non empty list.");
+  explicit ElementOfImpl(std::vector<T> values) : values_(std::move(values)) {
+    FUZZTEST_PRECONDITION(!values_.empty())
+        << "ElementOf requires a non empty list.";
   }
 
   corpus_type Init(absl::BitGenRef prng) {
@@ -50,7 +53,8 @@ class ElementOfImpl
     return corpus_type{absl::Uniform<size_t>(prng, 0, values_.size())};
   }
 
-  void Mutate(corpus_type& val, absl::BitGenRef prng, bool only_shrink) {
+  void Mutate(corpus_type& val, absl::BitGenRef prng,
+              const domain_implementor::MutationMetadata&, bool only_shrink) {
     if (values_.size() <= 1) return;
     if (only_shrink) {
       size_t index = static_cast<size_t>(val);

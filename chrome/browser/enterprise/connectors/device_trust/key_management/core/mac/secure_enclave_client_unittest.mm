@@ -21,9 +21,12 @@
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/mac/mock_secure_enclave_helper.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/mac/secure_enclave_helper.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/shared_command_constants.h"
+#include "crypto/keypair.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using base::apple::CFToNSPtrCast;
+using base::apple::NSToCFPtrCast;
 using testing::_;
 
 namespace enterprise_connectors {
@@ -65,26 +68,17 @@ class SecureEnclaveClientTest : public testing::Test {
 
   // Creates a test key.
   void CreateAndSetTestKey() {
-    base::apple::ScopedCFTypeRef<CFMutableDictionaryRef> test_attributes(
-        CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
-                                  &kCFTypeDictionaryKeyCallBacks,
-                                  &kCFTypeDictionaryValueCallBacks));
-    CFDictionarySetValue(test_attributes.get(), kSecAttrLabel,
-                         CFSTR("fake-label"));
-    CFDictionarySetValue(test_attributes.get(), kSecAttrKeyType,
-                         kSecAttrKeyTypeECSECPrimeRandom);
-    CFDictionarySetValue(test_attributes.get(), kSecAttrKeySizeInBits,
-                         base::apple::NSToCFPtrCast(@256));
-    base::apple::ScopedCFTypeRef<CFMutableDictionaryRef> private_key_params(
-        CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
-                                  &kCFTypeDictionaryKeyCallBacks,
-                                  &kCFTypeDictionaryValueCallBacks));
-    CFDictionarySetValue(private_key_params.get(), kSecAttrIsPermanent,
-                         kCFBooleanFalse);
-    CFDictionarySetValue(test_attributes.get(), kSecPrivateKeyAttrs,
-                         private_key_params.get());
-    test_key_ = base::apple::ScopedCFTypeRef<SecKeyRef>(
-        SecKeyCreateRandomKey(test_attributes.get(), nullptr));
+    NSDictionary* test_attributes = @{
+      CFToNSPtrCast(kSecAttrLabel) : @"fake-label",
+      CFToNSPtrCast(kSecAttrKeyType) :
+          CFToNSPtrCast(kSecAttrKeyTypeECSECPrimeRandom),
+      CFToNSPtrCast(kSecAttrKeySizeInBits) : @256,
+      CFToNSPtrCast(kSecPrivateKeyAttrs) :
+          @{CFToNSPtrCast(kSecAttrIsPermanent) : @NO}
+    };
+
+    test_key_.reset(
+        SecKeyCreateRandomKey(NSToCFPtrCast(test_attributes), nullptr));
   }
 
   void VerifyQuery(CFDictionaryRef query, CFStringRef label) {
@@ -491,6 +485,12 @@ TEST_F(SecureEnclaveClientTest, ExportPublicKey) {
   EXPECT_TRUE(
       secure_enclave_client_->ExportPublicKey(test_key_.get(), output, &error));
   EXPECT_TRUE(output.size() > 0);
+
+  // Check that the generated result is a valid SubjectPublicKeyInfo containing
+  // an EC P-256 key.
+  auto imported = crypto::keypair::PublicKey::FromSubjectPublicKeyInfo(output);
+  ASSERT_TRUE(imported);
+  EXPECT_TRUE(imported->IsEcP256());
 }
 
 // Tests that the SignDataWithKey method successfully creates a signature
@@ -500,7 +500,7 @@ TEST_F(SecureEnclaveClientTest, SignDataWithKey) {
   std::string data = "test_string";
   OSStatus error;
   EXPECT_TRUE(secure_enclave_client_->SignDataWithKey(
-      test_key_.get(), base::as_bytes(base::make_span(data)), output, &error));
+      test_key_.get(), base::as_byte_span(data), output, &error));
   EXPECT_TRUE(output.size() > 0);
 }
 

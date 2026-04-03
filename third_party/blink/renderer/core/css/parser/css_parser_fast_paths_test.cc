@@ -108,6 +108,52 @@ TEST(CSSParserFastPathsTest, ParseRevertLayer) {
   }
 }
 
+TEST(CSSParserFastPathsTest, ParseRevertRule) {
+  auto* context = MakeGarbageCollected<CSSParserContext>(
+      kHTMLStandardMode, SecureContextMode::kInsecureContext);
+  // 'revert-rule' enabled, IsHandledByKeywordFastPath=false
+  {
+    ScopedCSSRevertRuleForTest scoped_feature(true);
+    DCHECK(!CSSParserFastPaths::IsHandledByKeywordFastPath(
+        CSSPropertyID::kMarginTop));
+    CSSValue* value = CSSParserFastPaths::MaybeParseValue(
+        CSSPropertyID::kMarginTop, "revert-rule", context);
+    ASSERT_TRUE(value);
+    EXPECT_TRUE(value->IsRevertRuleValue());
+  }
+
+  // 'revert-rule' enabled, IsHandledByKeywordFastPath=true
+  {
+    ScopedCSSRevertRuleForTest scoped_feature(true);
+    DCHECK(CSSParserFastPaths::IsHandledByKeywordFastPath(
+        CSSPropertyID::kDirection));
+    CSSValue* value = CSSParserFastPaths::MaybeParseValue(
+        CSSPropertyID::kDirection, "revert-rule", context);
+    ASSERT_TRUE(value);
+    EXPECT_TRUE(value->IsRevertRuleValue());
+  }
+
+  // 'revert-rule' enabled, IsHandledByKeywordFastPath=false
+  {
+    ScopedCSSRevertRuleForTest scoped_feature(false);
+    DCHECK(!CSSParserFastPaths::IsHandledByKeywordFastPath(
+        CSSPropertyID::kMarginTop));
+    CSSValue* value = CSSParserFastPaths::MaybeParseValue(
+        CSSPropertyID::kMarginTop, "revert-rule", context);
+    EXPECT_FALSE(value);
+  }
+
+  // 'revert-rule' enabled, IsHandledByKeywordFastPath=true
+  {
+    ScopedCSSRevertRuleForTest scoped_feature(false);
+    DCHECK(CSSParserFastPaths::IsHandledByKeywordFastPath(
+        CSSPropertyID::kDirection));
+    CSSValue* value = CSSParserFastPaths::MaybeParseValue(
+        CSSPropertyID::kDirection, "revert-rule", context);
+    EXPECT_FALSE(value);
+  }
+}
+
 TEST(CSSParserFastPathsTest, ParseSimpleLength) {
   auto* context = MakeGarbageCollected<CSSParserContext>(
       kHTMLStandardMode, SecureContextMode::kInsecureContext);
@@ -431,12 +477,14 @@ TEST(CSSParserFastPathsTest, IsValidKeywordPropertyAndValueOverflowClip) {
 
 TEST(CSSParserFastPathsTest, InternalColorsOnlyAllowedInUaMode) {
   Color color;
+
   EXPECT_EQ(ParseColorResult::kKeyword,
             CSSParserFastPaths::ParseColor("blue", kHTMLStandardMode, color));
   EXPECT_EQ(ParseColorResult::kKeyword,
             CSSParserFastPaths::ParseColor("blue", kHTMLQuirksMode, color));
   EXPECT_EQ(ParseColorResult::kKeyword,
             CSSParserFastPaths::ParseColor("blue", kUASheetMode, color));
+
   EXPECT_EQ(ParseColorResult::kFailure,
             CSSParserFastPaths::ParseColor("-internal-spelling-error-color",
                                            kHTMLStandardMode, color));
@@ -456,6 +504,47 @@ TEST(CSSParserFastPathsTest, InternalColorsOnlyAllowedInUaMode) {
   EXPECT_EQ(ParseColorResult::kKeyword,
             CSSParserFastPaths::ParseColor("-internal-grammar-error-color",
                                            kUASheetMode, color));
+
+  EXPECT_EQ(ParseColorResult::kFailure,
+            CSSParserFastPaths::ParseColor("-internal-search-color",
+                                           kHTMLStandardMode, color));
+  EXPECT_EQ(ParseColorResult::kFailure,
+            CSSParserFastPaths::ParseColor("-internal-search-color",
+                                           kHTMLQuirksMode, color));
+  EXPECT_EQ(ParseColorResult::kKeyword,
+            CSSParserFastPaths::ParseColor("-internal-search-color",
+                                           kUASheetMode, color));
+
+  EXPECT_EQ(ParseColorResult::kFailure,
+            CSSParserFastPaths::ParseColor("-internal-search-text-color",
+                                           kHTMLStandardMode, color));
+  EXPECT_EQ(ParseColorResult::kFailure,
+            CSSParserFastPaths::ParseColor("-internal-search-text-color",
+                                           kHTMLQuirksMode, color));
+  EXPECT_EQ(ParseColorResult::kKeyword,
+            CSSParserFastPaths::ParseColor("-internal-search-text-color",
+                                           kUASheetMode, color));
+
+  EXPECT_EQ(ParseColorResult::kFailure,
+            CSSParserFastPaths::ParseColor("-internal-current-search-color",
+                                           kHTMLStandardMode, color));
+  EXPECT_EQ(ParseColorResult::kFailure,
+            CSSParserFastPaths::ParseColor("-internal-current-search-color",
+                                           kHTMLQuirksMode, color));
+  EXPECT_EQ(ParseColorResult::kKeyword,
+            CSSParserFastPaths::ParseColor("-internal-current-search-color",
+                                           kUASheetMode, color));
+
+  EXPECT_EQ(
+      ParseColorResult::kFailure,
+      CSSParserFastPaths::ParseColor("-internal-current-search-text-color",
+                                     kHTMLStandardMode, color));
+  EXPECT_EQ(ParseColorResult::kFailure,
+            CSSParserFastPaths::ParseColor(
+                "-internal-current-search-text-color", kHTMLQuirksMode, color));
+  EXPECT_EQ(ParseColorResult::kKeyword,
+            CSSParserFastPaths::ParseColor(
+                "-internal-current-search-text-color", kUASheetMode, color));
 }
 
 }  // namespace blink

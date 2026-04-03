@@ -9,7 +9,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/media/router/discovery/access_code/discovery_resources.pb.h"
@@ -57,33 +56,25 @@ class AccessCodeCastDiscoveryInterface {
   // AddSinkResultCode::OK is returned.
   void ValidateDiscoveryAccessCode(DiscoveryDeviceCallback callback);
 
+  // Testing methods, do not use these outside of tests.
   void SetCallbackForTesting(DiscoveryDeviceCallback callback) {
     callback_ = std::move(callback);
   }
 
+  void SetEndpointFetcherForTesting(
+      std::unique_ptr<endpoint_fetcher::EndpointFetcher> endpoint_fetcher) {
+    endpoint_fetcher_ = std::move(endpoint_fetcher);
+  }
+
+  std::unique_ptr<endpoint_fetcher::EndpointFetcher>
+  CreateEndpointFetcherForTesting(const std::string& access_code);
+
+  void HandleServerErrorForTesting(
+      std::unique_ptr<endpoint_fetcher::EndpointResponse> endpoint_response);
+
  private:
-  friend class AccessCodeCastDiscoveryInterfaceTest;
-  FRIEND_TEST_ALL_PREFIXES(AccessCodeCastDiscoveryInterfaceTest,
-                           CommandLineSwitch);
-  FRIEND_TEST_ALL_PREFIXES(AccessCodeCastDiscoveryInterfaceTest,
-                           HandleServerErrorProfileSyncError);
-  FRIEND_TEST_ALL_PREFIXES(AccessCodeCastDiscoveryInterfaceTest,
-                           HandleServerErrorAuthError);
-  FRIEND_TEST_ALL_PREFIXES(AccessCodeCastDiscoveryInterfaceTest,
-                           HandleServerErrorServerError);
-  FRIEND_TEST_ALL_PREFIXES(AccessCodeCastDiscoveryInterfaceTest,
-                           HandleServerErrorResponseMalformedError);
-
-  std::unique_ptr<EndpointFetcher> CreateEndpointFetcher(
+  std::unique_ptr<endpoint_fetcher::EndpointFetcher> CreateEndpointFetcher(
       const std::string& access_code);
-
-  // Used for tests. Can be used if caller constructs their own EndpointFetcher.
-  AccessCodeCastDiscoveryInterface(
-      Profile* profile,
-      const std::string& access_code,
-      LoggerImpl* logger,
-      signin::IdentityManager* identity_manager,
-      std::unique_ptr<EndpointFetcher> endpoint_fetcher);
 
   void SetDeviceCapabilitiesField(
       chrome_browser_media::proto::DeviceCapabilities* device_proto,
@@ -94,18 +85,21 @@ class AccessCodeCastDiscoveryInterface {
       const std::string& value,
       const std::string& key);
   std::pair<std::optional<DiscoveryDevice>, AddSinkResultCode>
-  ConstructDiscoveryDeviceFromJson(base::Value json_response);
+  ConstructDiscoveryDeviceFromJson(base::DictValue json_response);
   void HandleDiscoveryDeviceJsonError(const std::string& field_missing);
-  void HandleServerResponse(std::unique_ptr<EndpointResponse> response);
+  void HandleServerResponse(
+      std::unique_ptr<endpoint_fetcher::EndpointResponse> response);
 
   // Should only be called if the response has a error_type set in the struct.
-  void HandleServerError(std::unique_ptr<EndpointResponse> response);
+  void HandleServerError(
+      std::unique_ptr<endpoint_fetcher::EndpointResponse> response);
 
   // Function that runs the member variable callback with the given error.
   void ReportErrorViaCallback(AddSinkResultCode error);
 
-  AddSinkResultCode GetErrorFromResponse(const base::Value& response);
-  AddSinkResultCode IsResponseValid(const std::optional<base::Value>& response);
+  AddSinkResultCode GetErrorFromResponse(const base::DictValue& response);
+  AddSinkResultCode IsResponseValid(
+      const std::optional<base::DictValue>& response);
 
   const raw_ptr<Profile, DanglingUntriaged> profile_;
   // Access code passed down from the WebUI and used in the construction of the
@@ -116,7 +110,7 @@ class AccessCodeCastDiscoveryInterface {
 
   const raw_ptr<signin::IdentityManager> identity_manager_;
 
-  std::unique_ptr<EndpointFetcher> endpoint_fetcher_;
+  std::unique_ptr<endpoint_fetcher::EndpointFetcher> endpoint_fetcher_;
 
   DiscoveryDeviceCallback callback_;
 

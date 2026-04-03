@@ -20,6 +20,7 @@
       "refs/heads/main"
     ],
     "env": {
+      "CHROME_HEADLESS": "1",
       "DEPOT_TOOLS_REPORT_BUILD": "chromium/src/ci/linux/8945511751514863184",
       "GIT_BACKENDINFO": "1",
       "GIT_DAPPER_TRACE": "1",
@@ -63,7 +64,6 @@
       "@@@STEP_LOG_LINE@json.output@      \"revision\": \"f27fede2220bcd326aee3e86ddfd4ebd0fe58cb9\"@@@",
       "@@@STEP_LOG_LINE@json.output@    }@@@",
       "@@@STEP_LOG_LINE@json.output@  },@@@",
-      "@@@STEP_LOG_LINE@json.output@  \"patch_failure\": false,@@@",
       "@@@STEP_LOG_LINE@json.output@  \"patch_root\": \"src\",@@@",
       "@@@STEP_LOG_LINE@json.output@  \"properties\": {@@@",
       "@@@STEP_LOG_LINE@json.output@    \"got_revision\": \"f27fede2220bcd326aee3e86ddfd4ebd0fe58cb9\"@@@",

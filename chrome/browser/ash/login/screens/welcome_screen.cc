@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/login/screens/welcome_screen.h"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -11,7 +12,6 @@
 #include "ash/constants/ash_switches.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -26,21 +26,24 @@
 #include "chrome/browser/ash/login/demo_mode/demo_setup_controller.h"
 #include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
-#include "chrome/browser/ash/login/ui/input_events_blocker.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_requisition_manager.h"
 #include "chrome/browser/ash/system/timezone_resolver_manager.h"
 #include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/ash/login_screen_client_impl.h"
+#include "chrome/browser/ui/ash/login/input_events_blocker.h"
+#include "chrome/browser/ui/ash/login/login_screen_client_impl.h"
 #include "chrome/browser/ui/webui/ash/login/l10n_util.h"
 #include "chrome/browser/ui/webui/ash/login/welcome_screen_handler.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/quick_start/quick_start_metrics.h"
 #include "chromeos/dbus/constants/dbus_switches.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
@@ -157,13 +160,18 @@ void RecordA11yUserAction(const std::string& action_id) {
 // Returns true if is a Meet Device or the remora requisition bit has been set
 // for testing. Note: Can be overridden with the command line switch
 // --enable-requisition-edits.
-bool IsRemoraRequisitionConfigurable() {
+bool IsMeetDeviceConfigurable() {
   return policy::EnrollmentRequisitionManager::IsMeetDevice() ||
          switches::IsDeviceRequisitionConfigurable();
 }
 
+ApplicationLocaleStorage* GetApplicationLocaleStorage() {
+  // TODO(crbug.com/404133029): Avoid g_browser_process usage.
+  return g_browser_process->GetFeatures()->application_locale_storage();
+}
+
 std::string GetApplicationLocale() {
-  return g_browser_process->GetApplicationLocale();
+  return GetApplicationLocaleStorage()->Get();
 }
 
 }  // namespace
@@ -173,6 +181,7 @@ std::string GetApplicationLocale() {
 
 // static
 std::string WelcomeScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::kNext:
       return "Next";
@@ -185,6 +194,7 @@ std::string WelcomeScreen::GetResultString(Result result) {
     case Result::kQuickStart:
       return "QuickStart";
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 WelcomeScreen::WelcomeScreen(base::WeakPtr<WelcomeView> view,
@@ -241,9 +251,9 @@ void WelcomeScreen::SetApplicationLocaleAndInputMethod(
       base::BindOnce(&WelcomeScreen::OnLanguageChangedCallback,
                      language_weak_ptr_factory_.GetWeakPtr(),
                      base::Owned(new InputEventsBlocker), input_method));
-  locale_util::SwitchLanguage(locale, true /* enableLocaleKeyboardLayouts */,
-                              true /* login_layouts_only */,
-                              std::move(callback),
+  locale_util::SwitchLanguage(GetApplicationLocaleStorage(), locale,
+                              /*enable_locale_keyboard_layouts=*/true,
+                              /*login_layouts_only=*/false, std::move(callback),
                               ProfileManager::GetActiveUserProfile());
 }
 
@@ -269,9 +279,9 @@ void WelcomeScreen::SetApplicationLocale(const std::string& locale,
       base::BindOnce(&WelcomeScreen::OnLanguageChangedCallback,
                      language_weak_ptr_factory_.GetWeakPtr(),
                      base::Owned(new InputEventsBlocker), std::string()));
-  locale_util::SwitchLanguage(locale, true /* enableLocaleKeyboardLayouts */,
-                              true /* login_layouts_only */,
-                              std::move(callback),
+  locale_util::SwitchLanguage(GetApplicationLocaleStorage(), locale,
+                              /*enable_locale_keyboard_layouts=*/true,
+                              /*login_layouts_only=*/false, std::move(callback),
                               ProfileManager::GetActiveUserProfile());
   if (is_from_ui) {
     // Write into the local state to save data about locale changes in case of
@@ -286,7 +296,8 @@ void WelcomeScreen::SetInputMethod(const std::string& input_method) {
       input_method::InputMethodManager::Get()
           ->GetActiveIMEState()
           ->GetEnabledInputMethodIds();
-  if (input_method.empty() || !base::Contains(input_methods, input_method)) {
+  if (input_method.empty() ||
+      !std::ranges::contains(input_methods, input_method)) {
     LOG(WARNING) << "The input method is empty or ineligible!";
     return;
   }
@@ -314,7 +325,7 @@ std::string WelcomeScreen::GetTimezone() const {
 
 void WelcomeScreen::SetDeviceRequisition(const std::string& requisition) {
   if (requisition == kRemoraRequisitionIdentifier) {
-    if (!IsRemoraRequisitionConfigurable())
+    if (!IsMeetDeviceConfigurable())
       return;
   } else {
     if (!switches::IsDeviceRequisitionConfigurable())
@@ -325,7 +336,7 @@ void WelcomeScreen::SetDeviceRequisition(const std::string& requisition) {
       policy::EnrollmentRequisitionManager::GetDeviceRequisition();
   policy::EnrollmentRequisitionManager::SetDeviceRequisition(requisition);
 
-  if (policy::EnrollmentRequisitionManager::IsRemoraRequisition()) {
+  if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
     // CfM devices default to static timezone.
     g_browser_process->local_state()->SetInteger(
         ::prefs::kResolveDeviceTimezoneByGeolocationMethod,
@@ -388,8 +399,8 @@ void WelcomeScreen::ShowImpl() {
   WizardController::default_controller()
       ->quick_start_controller()
       ->DetermineEntryPointVisibility(
-          base::BindOnce(&WelcomeScreen::SetQuickStartButtonVisibility,
-                         weak_ptr_factory_.GetWeakPtr()));
+          base::BindRepeating(&WelcomeScreen::SetQuickStartButtonVisibility,
+                              weak_ptr_factory_.GetWeakPtr()));
 
   if (LoginScreenClientImpl::HasInstance()) {
     LoginScreenClientImpl::Get()->AddSystemTrayObserver(this);
@@ -400,7 +411,7 @@ void WelcomeScreen::HideImpl() {
   CancelChromeVoxHintIdleDetection();
 }
 
-void WelcomeScreen::OnUserAction(const base::Value::List& args) {
+void WelcomeScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionQuickStartClicked) {
     OnQuickStartClicked();
@@ -540,7 +551,7 @@ bool WelcomeScreen::HandleAccelerator(LoginAcceleratorAction action) {
           policy::EnrollmentRequisitionManager::GetDeviceRequisition());
     return true;
   } else if (action == LoginAcceleratorAction::kDeviceRequisitionRemora &&
-             IsRemoraRequisitionConfigurable()) {
+             IsMeetDeviceConfigurable()) {
     if (view_)
       view_->ShowRemoraRequisitionDialog();
     return true;
@@ -556,8 +567,8 @@ bool WelcomeScreen::HandleAccelerator(LoginAcceleratorAction action) {
     WizardController::default_controller()
         ->quick_start_controller()
         ->DetermineEntryPointVisibility(
-            base::BindOnce(&WelcomeScreen::SetQuickStartButtonVisibility,
-                           weak_ptr_factory_.GetWeakPtr()));
+            base::BindRepeating(&WelcomeScreen::SetQuickStartButtonVisibility,
+                                weak_ptr_factory_.GetWeakPtr()));
     return true;
   }
 
@@ -578,8 +589,19 @@ void WelcomeScreen::InputMethodChanged(
 }
 
 void WelcomeScreen::SetQuickStartButtonVisibility(bool visible) {
-  if (visible && view_) {
+  if (!view_) {
+    return;
+  }
+
+  if (visible) {
     view_->SetQuickStartEnabled();
+    base::UmaHistogramBoolean(
+        "QuickStart.WelcomeScreen.QuickStartButtonVisible", visible);
+    if (!has_emitted_quick_start_visible) {
+      has_emitted_quick_start_visible = true;
+      quick_start::QuickStartMetrics::RecordEntryPointVisible(
+          quick_start::QuickStartMetrics::EntryPoint::WELCOME_SCREEN);
+    }
   }
 }
 
@@ -633,7 +655,7 @@ void WelcomeScreen::ScheduleResolveLanguageList(
 }
 
 void WelcomeScreen::OnLanguageListResolved(
-    base::Value::List new_language_list,
+    base::ListValue new_language_list,
     const std::string& new_language_list_locale,
     const std::string& new_selected_language) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -715,6 +737,7 @@ void WelcomeScreen::UpdateA11yState() {
 
 void WelcomeScreen::OnQuickStartClicked() {
   CHECK(context()->quick_start_enabled);
+  CHECK(!context()->quick_start_setup_ongoing);
   Exit(Result::kQuickStart);
 }
 

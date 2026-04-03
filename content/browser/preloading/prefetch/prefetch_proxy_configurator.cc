@@ -8,11 +8,12 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/rand_util.h"
 #include "base/time/default_clock.h"
-#include "content/browser/preloading/prefetch/prefetch_features.h"
 #include "content/browser/preloading/prefetch/prefetch_params.h"
+#include "content/public/common/content_features.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/proxy_chain.h"
 #include "net/base/proxy_string_util.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/http/http_util.h"
 #include "net/proxy_resolution/proxy_config.h"
@@ -29,15 +30,16 @@ PrefetchProxyConfigurator::MaybeCreatePrefetchProxyConfigurator(
     return nullptr;
   }
 
-  if (!proxy_url.is_valid())
+  if (!proxy_url.is_valid()) {
     return nullptr;
+  }
 
   return std::make_unique<PrefetchProxyConfigurator>(proxy_url, api_key);
 }
 
 PrefetchProxyConfigurator::PrefetchProxyConfigurator(const GURL& proxy_url,
-                                                     const std::string api_key)
-    : prefetch_proxy_chain_(net::GetSchemeFromUriScheme(proxy_url.scheme()),
+                                                     const std::string& api_key)
+    : prefetch_proxy_chain_(net::GetSchemeFromUriScheme(proxy_url.GetScheme()),
                             net::HostPortPair::FromURL(proxy_url)),
       clock_(base::DefaultClock::GetInstance()) {
   DCHECK(proxy_url.is_valid());
@@ -167,7 +169,7 @@ void PrefetchProxyConfigurator::OnTunnelProxyConnectionError(
     // Pick a random value between 1-5 mins if the proxy didn't give us a
     // Retry-After value. The randomness will help ensure there is no sudden
     // wave of requests following a proxy error.
-    retry_proxy_at = clock_->Now() + base::Seconds(base::RandInt(
+    retry_proxy_at = clock_->Now() + base::Seconds(base::RandIntInclusive(
                                          base::Time::kSecondsPerMinute,
                                          5 * base::Time::kSecondsPerMinute));
   }
@@ -183,7 +185,7 @@ void PrefetchProxyConfigurator::OnTunnelProxyConnectionError(
   }
   DCHECK(prefetch_proxy_not_available_until_);
 
-  // TODO(crbug/1136114): Consider persisting to prefs.
+  // TODO(crbug.com/40152136): Consider persisting to prefs.
 }
 
 }  // namespace content

@@ -8,16 +8,20 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/test/scoped_feature_list.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/site_info.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/browser/storage_partition_impl.h"
+#include "content/common/url_schemes.h"
 #include "content/public/browser/child_process_host.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_browser_context.h"
+#include "content/public/test/test_utils.h"
+#include "content/test/test_content_client.h"
 #include "services/network/public/mojom/cross_origin_embedder_policy.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -69,7 +73,21 @@ class SiteInstanceRenderProcessHostFactory : public RenderProcessHostFactory {
 
 class ServiceWorkerProcessManagerTest : public testing::Test {
  public:
-  ServiceWorkerProcessManagerTest() = default;
+  ServiceWorkerProcessManagerTest() {
+    // These tests manually simulate site removal on MockRenderProcessHosts that
+    // have zero registered frames. The kTrackEmptyRendererProcessesForReuse
+    // feature enforces a safety check that the frame count is non-zero during
+    // removal, which these tests violate. We disable the feature to bypass this
+    // check.
+    //
+    // TODO(crbug.com/479203591): Refactor these tests to work with
+    // kTrackEmptyRendererProcessesForReuse. This likely involves setting up a
+    // proper process that the ServiceWorker can reuse (e.g. using
+    // NavigationSimulator) instead of manually calling
+    // RenderProcessHostImpl::AddFrameWithSite without a corresponding frame.
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kTrackEmptyRendererProcessesForReuse);
+  }
 
   ServiceWorkerProcessManagerTest(const ServiceWorkerProcessManagerTest&) =
       delete;
@@ -110,6 +128,9 @@ class ServiceWorkerProcessManagerTest : public testing::Test {
   GURL script_url_;
   std::unique_ptr<SiteInstanceRenderProcessHostFactory>
       render_process_host_factory_;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(ServiceWorkerProcessManagerTest,
@@ -140,7 +161,7 @@ TEST_F(ServiceWorkerProcessManagerTest,
 
   // An existing process should be allocated to the worker.
   EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, status);
-  EXPECT_EQ(host->GetID(), process_info.process_id);
+  EXPECT_EQ(host->GetDeprecatedID(), process_info.process_id);
   EXPECT_EQ(ServiceWorkerMetrics::StartSituation::EXISTING_UNREADY_PROCESS,
             process_info.start_situation);
   EXPECT_EQ(1u, host->GetWorkerRefCount());
@@ -185,7 +206,7 @@ TEST_F(ServiceWorkerProcessManagerTest,
 
   // A new process should be allocated to the worker.
   EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, status);
-  EXPECT_NE(host->GetID(), process_info.process_id);
+  EXPECT_NE(host->GetDeprecatedID(), process_info.process_id);
   EXPECT_EQ(ServiceWorkerMetrics::StartSituation::NEW_PROCESS,
             process_info.start_situation);
   EXPECT_EQ(0u, host->GetWorkerRefCount());
@@ -293,6 +314,125 @@ TEST_F(ServiceWorkerProcessManagerTest,
     // Release the process.
     process_manager_->ReleaseWorkerProcess(kEmbeddedWorkerId);
   }
+}
+
+class CustomSchemeContentClient : public TestContentClient {
+ public:
+  explicit CustomSchemeContentClient(std::string_view custom_scheme)
+      : custom_scheme_(custom_scheme) {}
+
+  void AddAdditionalSchemes(ContentClient::Schemes* schemes) override {
+    schemes->standard_schemes.push_back(custom_scheme_);
+    schemes->service_worker_schemes.push_back(custom_scheme_);
+  }
+
+ private:
+  const std::string custom_scheme_;
+};
+
+class ScopedCustomSchemeContentBrowserClient : public ContentBrowserClient {
+ public:
+  explicit ScopedCustomSchemeContentBrowserClient(
+      std::string_view custom_scheme)
+      : custom_scheme_(custom_scheme) {
+    old_client_ = SetBrowserClientForTesting(this);
+  }
+
+  ~ScopedCustomSchemeContentBrowserClient() override {
+    SetBrowserClientForTesting(old_client_);
+  }
+
+  // `ContentBrowserClient`:
+  bool IsHandledURL(const GURL& url) override { return true; }
+  void GrantAdditionalRequestPrivilegesToWorkerProcess(
+      int child_id,
+      const GURL& script_url) override {
+    if (script_url.SchemeIs(custom_scheme_)) {
+      ChildProcessSecurityPolicy::GetInstance()->GrantRequestOrigin(
+          child_id, url::Origin::Create(script_url));
+    }
+  }
+
+ private:
+  const std::string custom_scheme_;
+  raw_ptr<ContentBrowserClient> old_client_ = nullptr;
+};
+
+class ServiceWorkerProcessManagerNonWebSchemeTest
+    : public ServiceWorkerProcessManagerTest {
+ public:
+  ServiceWorkerProcessManagerNonWebSchemeTest() {
+    ContentClient* old_content_client = GetContentClientForTesting();
+    SetContentClient(&content_client_);
+    ReRegisterContentSchemesForTests();
+    SetContentClient(old_content_client);
+  }
+
+ private:
+  url::ScopedSchemeRegistryForTests scheme_registry_;
+  CustomSchemeContentClient content_client_{"non-web-scheme"};
+  ScopedCustomSchemeContentBrowserClient browser_client_{"non-web-scheme"};
+};
+
+// Verifies that by default a Service Worker on a non-web scheme does not
+// automatically have request permissions to its origin.
+TEST_F(ServiceWorkerProcessManagerNonWebSchemeTest,
+       NonWebSchemeWorkerCannotRequestOriginByDefault) {
+  const int kEmbeddedWorkerId = 100;
+  const GURL kUnknownNonWebSchemeUrl{"unknown-non-web-scheme://hostname"};
+
+  ServiceWorkerProcessManager::AllocatedProcessInfo process_info;
+  blink::ServiceWorkerStatusCode status =
+      process_manager_->AllocateWorkerProcess(
+          kEmbeddedWorkerId, kUnknownNonWebSchemeUrl,
+          network::mojom::CrossOriginEmbedderPolicyValue::kNone,
+          /*can_use_existing_process=*/true, AncestorFrameType::kNormalFrame,
+          &process_info);
+
+  // A new process should be allocated to the worker.
+  EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, status);
+  EXPECT_EQ(ServiceWorkerMetrics::StartSituation::NEW_PROCESS,
+            process_info.start_situation);
+
+  // The process should not have access to its script's origin by default.
+  EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->CanRequestURL(
+      process_info.process_id, kUnknownNonWebSchemeUrl));
+
+  // Release the process.
+  process_manager_->ReleaseWorkerProcess(kEmbeddedWorkerId);
+}
+
+// Verifies that ContentBrowserClient can grant a new worker process access to
+// origins.
+TEST_F(ServiceWorkerProcessManagerNonWebSchemeTest,
+       WorkerCanBeGrantedAccessToScriptOrigin) {
+  if (!AreAllSitesIsolatedForTesting()) {
+    GTEST_SKIP();
+  }
+
+  const int kEmbeddedWorkerId = 100;
+  const GURL kNonWebSchemeUrl{"non-web-scheme://hostname"};
+
+  ServiceWorkerProcessManager::AllocatedProcessInfo process_info;
+  blink::ServiceWorkerStatusCode status =
+      process_manager_->AllocateWorkerProcess(
+          kEmbeddedWorkerId, kNonWebSchemeUrl,
+          network::mojom::CrossOriginEmbedderPolicyValue::kNone,
+          /*can_use_existing_process=*/true, AncestorFrameType::kNormalFrame,
+          &process_info);
+
+  // A new process should be allocated to the worker.
+  EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, status);
+  EXPECT_EQ(ServiceWorkerMetrics::StartSituation::NEW_PROCESS,
+            process_info.start_situation);
+
+  // ScopedCustomSchemeContentBrowserClient should have granted the new
+  // process access to the script's origin.
+  EXPECT_TRUE(ChildProcessSecurityPolicyImpl::GetInstance()->CanRequestURL(
+      process_info.process_id, kNonWebSchemeUrl));
+
+  // Release the process.
+  process_manager_->ReleaseWorkerProcess(kEmbeddedWorkerId);
 }
 
 }  // namespace content

@@ -60,9 +60,7 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) FileSystemUsageCache {
   void CloseCacheFiles();
 
   static const base::FilePath::CharType kUsageFileName[];
-  static const char kUsageFileHeader[];
   static const int kUsageFileSize;
-  static const size_t kUsageFileHeaderSize;
 
  private:
   // Read the size, validity and the "dirty" entry described in the .usage file.
@@ -95,7 +93,7 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) FileSystemUsageCache {
 
   // Incognito usages are kept in memory and are not written to disk.
   bool is_incognito_;
-  // TODO(https://crbug.com/955905): Stop using base::FilePath as the key in
+  // TODO(crbug.com/41454722): Stop using base::FilePath as the key in
   // this API as the paths are not necessarily actual on-disk locations.
   std::map<base::FilePath, std::vector<uint8_t>> incognito_usages_;
 

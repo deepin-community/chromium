@@ -5,6 +5,8 @@
 #include "chrome/browser/ui/cocoa/history_menu_cocoa_controller.h"
 
 #include <memory>
+#include <set>
+#include <utility>
 
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
@@ -18,14 +20,14 @@
 @interface FakeHistoryMenuController : HistoryMenuCocoaController {
  @public
   // ivars are initialized to zero, so these all start out as NO.
-  BOOL _opened[3];
+  std::set<SessionID::id_type> _opened;
 }
 @end
 
 @implementation FakeHistoryMenuController
 
 - (void)openURLForItem:(const HistoryMenuBridge::HistoryItem*)item {
-  _opened[item->session_id.id()] = YES;
+  _opened.insert(item->session_id.id());
 }
 
 @end  // FakeHistoryMenuController
@@ -82,8 +84,8 @@ TEST_F(HistoryMenuCocoaControllerTest, OpenURLForItem) {
       items = menu_item_map();
   for (const auto& pair : items) {
     HistoryMenuBridge::HistoryItem* item = pair.second.get();
-    EXPECT_FALSE(controller()->_opened[item->session_id.id()]);
+    EXPECT_FALSE(controller()->_opened.count(item->session_id.id()));
     [controller() openHistoryMenuItem:pair.first];
-    EXPECT_TRUE(controller()->_opened[item->session_id.id()]);
+    EXPECT_TRUE(controller()->_opened.count(item->session_id.id()));
   }
 }

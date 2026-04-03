@@ -9,8 +9,9 @@
 #include <optional>
 #include <string_view>
 
+#include "base/functional/callback_forward.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "chrome/browser/apps/app_service/app_install/app_install_types.h"
 #include "content/public/browser/navigation_throttle.h"
 
 static_assert(BUILDFLAG(IS_CHROMEOS));
@@ -19,20 +20,39 @@ namespace apps {
 
 class PackageId;
 
+// Matches URIs of the form almanac://install-app?package_id=<package id> and
+// triggers an installation using app metadata from Almanac.
+// Design doc: go/app-install-service-uri
 class AppInstallNavigationThrottle : public content::NavigationThrottle {
  public:
   using ThrottleCheckResult = content::NavigationThrottle::ThrottleCheckResult;
 
+  static base::OnceCallback<void(bool created)>&
+  MaybeCreateCallbackForTesting();
+
   // Possibly creates a navigation throttle that handles special instructions to
   // install an app on Chrome OS.
-  static std::unique_ptr<content::NavigationThrottle> MaybeCreate(
-      content::NavigationHandle* handle);
+  static void MaybeCreateAndAdd(content::NavigationThrottleRegistry& registry);
 
   // Exposed for testing.
-  static std::optional<PackageId> ExtractPackageId(std::string_view query);
+  struct QueryParams {
+    QueryParams();
+    QueryParams(std::optional<std::string> serialized_package_id,
+                AppInstallSurface source);
+    QueryParams(QueryParams&&);
+    ~QueryParams();
+    bool operator==(const QueryParams& other) const;
+
+    // This is a std::string instead of a PackageId because Chrome should still
+    // attempt to handle PackageIds it does not yet understand and fallback to
+    // install URL behavior.
+    std::optional<std::string> serialized_package_id;
+    AppInstallSurface source = AppInstallSurface::kAppInstallUriUnknown;
+  };
+  static QueryParams ExtractQueryParams(std::string_view query);
 
   explicit AppInstallNavigationThrottle(
-      content::NavigationHandle* navigation_handle);
+      content::NavigationThrottleRegistry& registry);
   AppInstallNavigationThrottle(const AppInstallNavigationThrottle&) = delete;
   AppInstallNavigationThrottle& operator=(const AppInstallNavigationThrottle&) =
       delete;

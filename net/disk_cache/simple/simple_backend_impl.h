@@ -23,9 +23,13 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "net/base/cache_type.h"
+#include "net/base/net_errors.h"
 #include "net/base/net_export.h"
+#include "net/disk_cache/cache_encryption_delegate.h"
+#include "net/disk_cache/cache_entry_hasher.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/simple/post_operation_waiter.h"
 #include "net/disk_cache/simple/simple_entry_impl.h"
@@ -56,9 +60,8 @@ class SimpleEntryImpl;
 class SimpleFileTracker;
 class SimpleIndex;
 
-class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
-    public SimpleIndexDelegate,
-    public base::SupportsWeakPtr<SimpleBackendImpl> {
+class NET_EXPORT_PRIVATE SimpleBackendImpl final : public Backend,
+                                                   public SimpleIndexDelegate {
  public:
   // Note: only pass non-nullptr for |file_tracker| if you don't want the global
   // one (which things other than tests would want). |file_tracker| must outlive
@@ -71,6 +74,7 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
       SimpleFileTracker* file_tracker,
       int64_t max_bytes,
       net::CacheType cache_type,
+      std::unique_ptr<CacheEntryHasher> entry_hasher,
       net::NetLog* net_log);
 
   ~SimpleBackendImpl() override;
@@ -82,9 +86,6 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
 
   // Finishes initialization. Always asynchronous.
   void Init(CompletionOnceCallback completion_callback);
-
-  // Sets the maximum size for the total amount of data stored by this instance.
-  bool SetMaxSize(int64_t max_bytes);
 
   // Returns the maximum file size permitted in this backend.
   int64_t MaxFileSize() const override;
@@ -101,7 +102,8 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
                    CompletionOnceCallback callback) override;
 
   // Backend:
-  int32_t GetEntryCount() const override;
+  base::expected<int32_t, net::Error> GetEntryCount(
+      GetEntryCountCallback callback) const override;
   EntryResult OpenEntry(const std::string& key,
                         net::RequestPriority request_priority,
                         EntryResultCallback callback) override;
@@ -130,7 +132,6 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
   void GetStats(base::StringPairs* stats) override;
   void OnExternalCacheHit(const std::string& key) override;
   uint8_t GetEntryInMemoryData(const std::string& key) override;
-  void SetEntryInMemoryData(const std::string& key, uint8_t data) override;
 
   net::PrioritizedTaskRunner* prioritized_task_runner() const {
     return prioritized_task_runner_.get();
@@ -151,11 +152,16 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
   }
 #endif
 
+  base::WeakPtr<SimpleBackendImpl> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  private:
   class SimpleIterator;
   friend class SimpleIterator;
 
-  using EntryMap = std::unordered_map<uint64_t, SimpleEntryImpl*>;
+  using EntryMap =
+      std::unordered_map<uint64_t, raw_ptr<SimpleEntryImpl, CtnExperimental>>;
 
   class ActiveEntryProxy;
   friend class ActiveEntryProxy;
@@ -256,6 +262,7 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
   // Calculates and returns a new entry's worker pool priority.
   uint32_t GetNewEntryPriority(net::RequestPriority request_priority);
 
+  std::unique_ptr<CacheEntryHasher> entry_hasher_;
   scoped_refptr<BackendFileOperationsFactory> file_operations_factory_;
 
   // We want this destroyed after every other field.
@@ -287,12 +294,13 @@ class NET_EXPORT_PRIVATE SimpleBackendImpl : public Backend,
   scoped_refptr<SimplePostOperationWaiterTable> post_open_by_hash_waiting_;
 
   const raw_ptr<net::NetLog> net_log_;
-
   uint32_t entry_count_ = 0;
 
 #if BUILDFLAG(IS_ANDROID)
   ApplicationStatusListenerGetter app_status_listener_getter_;
 #endif
+
+  base::WeakPtrFactory<SimpleBackendImpl> weak_ptr_factory_{this};
 };
 
 }  // namespace disk_cache

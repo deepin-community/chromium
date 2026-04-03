@@ -13,15 +13,22 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <memory>
 #include <string>
 
 #include <gtest/gtest.h>
+#include "absl/types/span.h"
 #include "xla/client/client_library.h"
+#include "xla/client/executable_build_options.h"
 #include "xla/client/local_client.h"
 #include "xla/executable_run_options.h"
+#include "xla/literal.h"
 #include "xla/literal_util.h"
+#include "xla/service/cpu/cpu_aot_compilation_result.h"
+#include "xla/service/cpu/cpu_aot_loader.h"
 #include "xla/service/platform_util.h"
-#include "tsl/lib/core/status_test_util.h"
+#include "xla/service/shaped_buffer.h"
+#include "xla/tsl/lib/core/status_test_util.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/path.h"
 #include "tsl/platform/statusor.h"
@@ -69,12 +76,32 @@ TEST(XlaCompileTest, LoadCpuExecutable) {
   executable_run_options.set_allocator(client->backend().memory_allocator());
   TF_ASSERT_OK_AND_ASSIGN(
       ScopedShapedBuffer result,
-      local_executable->Run({&array1, &array2}, executable_run_options));
+      local_executable->Run(
+          absl::Span<const ShapedBuffer* const>{&array1, &array2},
+          executable_run_options));
 
   TF_ASSERT_OK_AND_ASSIGN(Literal output,
                           client->ShapedBufferToLiteral(result));
   Literal expected = LiteralUtil::CreateR1<double>({1.0f, 3.0f, 6.0f});
   EXPECT_EQ(expected, output);
+}
+
+TEST(XlaCompileTest, LoadAotResultWithDefinedTargetFeatures) {
+  std::string path = tsl::io::JoinPath(
+      tsl::testing::XlaSrcRoot(), "service",
+      "xla_aot_compile_test_cpu_executable_with_target_config");
+  std::string serialized_aot_result;
+  TF_ASSERT_OK(
+      tsl::ReadFileToString(tsl::Env::Default(), path, &serialized_aot_result));
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto result,
+      cpu::CpuAotLoader::LoadAotCompilationResult(serialized_aot_result));
+  const auto& opts = static_cast<cpu::CpuAotCompilationResult*>(result.get())
+                         ->proto()
+                         .target_machine_options();
+
+  EXPECT_EQ(opts.features(), "+avx2,+fma");
 }
 
 }  // namespace

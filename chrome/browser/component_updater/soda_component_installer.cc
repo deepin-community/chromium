@@ -30,18 +30,18 @@
 #include "crypto/sha2.h"
 
 #if BUILDFLAG(IS_WIN)
-#include <aclapi.h>
 #include <windows.h>
+
+#include <aclapi.h>
 
 #include "base/win/scoped_localalloc.h"
 #include "base/win/sid.h"
 #endif
 
-using content::BrowserThread;
-
 namespace component_updater {
-
 namespace {
+
+using ::content::BrowserThread;
 
 // The SHA256 of the SubjectPublicKeyInfo used to sign the component.
 // The component id is: icnkogojpkfjeajonkmlplionaamopkf
@@ -50,8 +50,7 @@ constexpr uint8_t kSodaPublicKeySHA256[32] = {
     0x8e, 0xd0, 0x0c, 0xef, 0xa5, 0xc0, 0x97, 0x00, 0x84, 0x1c, 0x21,
     0xa6, 0xae, 0xc8, 0x1b, 0x87, 0xfb, 0x12, 0x27, 0x28, 0xb1};
 
-static_assert(std::size(kSodaPublicKeySHA256) == crypto::kSHA256Length,
-              "Wrong hash length");
+static_assert(std::size(kSodaPublicKeySHA256) == crypto::kSHA256Length);
 
 constexpr char kSodaManifestName[] = "SODA Library";
 
@@ -155,7 +154,7 @@ bool SodaComponentInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 SodaComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return SodaComponentInstallerPolicy::SetComponentDirectoryPermission(
       install_dir);
@@ -164,7 +163,7 @@ SodaComponentInstallerPolicy::OnCustomInstall(
 void SodaComponentInstallerPolicy::OnCustomUninstall() {}
 
 bool SodaComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
   bool missing_indicator_file =
@@ -185,7 +184,7 @@ bool SodaComponentInstallerPolicy::VerifyInstallation(
 void SodaComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   VLOG(1) << "Component ready, version " << version.GetString() << " in "
           << install_dir.value();
   if (on_installed_callback_) {
@@ -202,8 +201,8 @@ base::FilePath SodaComponentInstallerPolicy::GetRelativeInstallDir() const {
 }
 
 void SodaComponentInstallerPolicy::GetHash(std::vector<uint8_t>* hash) const {
-  hash->assign(kSodaPublicKeySHA256,
-               kSodaPublicKeySHA256 + std::size(kSodaPublicKeySHA256));
+  hash->assign(std::begin(kSodaPublicKeySHA256),
+               std::end(kSodaPublicKeySHA256));
 }
 
 std::string SodaComponentInstallerPolicy::GetName() const {
@@ -250,8 +249,7 @@ void RegisterSodaComponent(ComponentUpdateService* cus,
 
 void RegisterSodaLanguageComponent(
     ComponentUpdateService* cus,
-    const std::string& language,
-    PrefService* global_prefs,
+    std::string_view language,
     OnSodaLanguagePackComponentReadyCallback on_ready_callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
@@ -259,7 +257,7 @@ void RegisterSodaLanguageComponent(
     std::optional<speech::SodaLanguagePackComponentConfig> config =
         speech::GetLanguageComponentConfig(language);
     if (config) {
-      RegisterSodaLanguagePackComponent(config.value(), cus, global_prefs,
+      RegisterSodaLanguagePackComponent(config.value(), cus,
                                         std::move(on_ready_callback));
     }
   }

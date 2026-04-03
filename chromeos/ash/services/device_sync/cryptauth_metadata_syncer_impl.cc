@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
@@ -310,7 +309,6 @@ void CryptAuthMetadataSyncerImpl::AttemptNextStep() {
           return;
         default:
           NOTREACHED();
-          return;
       }
     }
 
@@ -346,7 +344,6 @@ void CryptAuthMetadataSyncerImpl::AttemptNextStep() {
           return;
         default:
           NOTREACHED();
-          return;
       }
     }
 
@@ -371,7 +368,6 @@ void CryptAuthMetadataSyncerImpl::AttemptNextStep() {
     // Each CryptAuthMetadataSyncer object can only be used once.
     case State::kFinished:
       NOTREACHED();
-      return;
   }
 }
 
@@ -509,7 +505,6 @@ void CryptAuthMetadataSyncerImpl::MakeSyncMetadataCall() {
     default:
       // AttemptNextStep() ensures that no more than two calls are made.
       NOTREACHED();
-      return;
   }
 
   cryptauth_client_ = client_factory_->CreateInstance();
@@ -525,14 +520,15 @@ void CryptAuthMetadataSyncerImpl::OnSyncMetadataSuccess(
     const cryptauthv2::SyncMetadataResponse& response) {
   base::TimeDelta execution_time =
       base::TimeTicks::Now() - last_state_change_timestamp_;
-  if (state_ == State::kWaitingForFirstSyncMetadataResponse)
+  if (state_ == State::kWaitingForFirstSyncMetadataResponse) {
     RecordFirstSyncMetadataMetrics(execution_time,
                                    CryptAuthApiCallResult::kSuccess);
-  else if (state_ == State::kWaitingForSecondSyncMetadataResponse)
+  } else if (state_ == State::kWaitingForSecondSyncMetadataResponse) {
     RecordSecondSyncMetadataMetrics(execution_time,
                                     CryptAuthApiCallResult::kSuccess);
-  else
+  } else {
     NOTREACHED();
+  }
 
   PA_LOG(VERBOSE) << "SyncMetadata response:\n" << response;
 
@@ -558,14 +554,15 @@ void CryptAuthMetadataSyncerImpl::OnSyncMetadataFailure(
     NetworkRequestError error) {
   base::TimeDelta execution_time =
       base::TimeTicks::Now() - last_state_change_timestamp_;
-  if (state_ == State::kWaitingForFirstSyncMetadataResponse)
+  if (state_ == State::kWaitingForFirstSyncMetadataResponse) {
     RecordFirstSyncMetadataMetrics(
         execution_time, CryptAuthApiCallResultFromNetworkRequestError(error));
-  else if (state_ == State::kWaitingForSecondSyncMetadataResponse)
+  } else if (state_ == State::kWaitingForSecondSyncMetadataResponse) {
     RecordSecondSyncMetadataMetrics(
         execution_time, CryptAuthApiCallResultFromNetworkRequestError(error));
-  else
+  } else {
     NOTREACHED();
+  }
 
   FinishAttempt(SyncMetadataNetworkRequestErrorToResultCode(error));
 }
@@ -602,7 +599,7 @@ void CryptAuthMetadataSyncerImpl::FilterMetadataAndFinishAttempt() {
     }
 
     bool is_duplicate_id =
-        base::Contains(id_to_device_metadata_packet_map_, metadata.device_id());
+        id_to_device_metadata_packet_map_.contains(metadata.device_id());
     base::UmaHistogramBoolean(
         "CryptAuth.DeviceSyncV2.MetadataSyncer.IsDuplicateDeviceId",
         is_duplicate_id);
@@ -624,8 +621,8 @@ void CryptAuthMetadataSyncerImpl::FilterMetadataAndFinishAttempt() {
   }
 
   // We require that the local device's metadata is returned in the response.
-  if (!base::Contains(id_to_device_metadata_packet_map_,
-                      request_context_.device_id())) {
+  if (!id_to_device_metadata_packet_map_.contains(
+          request_context_.device_id())) {
     PA_LOG(ERROR) << "Metadata for local device (Instance ID: "
                   << request_context_.device_id()
                   << ") not in SyncMetadata response.";

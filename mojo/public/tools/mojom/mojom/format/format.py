@@ -32,13 +32,15 @@ INDENT_SHIFT = 2
 CONTINUATION_SHIFT = 4
 
 
-def mojom_format(filename):
-    """Reads the contents of the Mojom file at `filename` and returns the
-    formatted output.
+def mojom_format(filename, contents=None):
+    """Formats the Mojom file at `filename` and returns the formatted output.
+    If `contents` is provided, then it is used instead of reading the file.
     """
-    with open(filename) as f:
-        tree = parser.Parse(f.read(), filename, with_comments=True)
-    output = StringIO()
+    if contents is None:
+        with open(filename, newline='\n', encoding='utf-8') as f:
+            contents = f.read()
+    tree = parser.Parse(contents, filename, with_comments=True)
+    output = StringIO(newline='\n')
     state = FormatState(output)
     _write_mojom(tree, state)
     return output.getvalue()
@@ -143,6 +145,10 @@ def _format_attribute_list(node, indent, newline=True):
                 lw.write('"')
                 lw.write(attr.value.replace('"', '\\"'))
                 lw.write('"')
+            elif isinstance(attr.value, ast.AttributeValueOrList):
+                lw.write('|'.join(x.name for x in attr.value))
+            elif isinstance(attr.value, ast.AttributeValueAndList):
+                lw.write('&'.join(x.name for x in attr.value))
             else:
                 raise ValueError(
                     f'Unxpected value type {type(attr.value)} for {attr}')
@@ -338,10 +344,28 @@ def _write_method(node, state):
         lw.write(f'@{node.ordinal.value}')
     lw.write('(')
     state.write(lw.finish())
+    lw = LineWrapper(base_indent=state.get_indent())
 
     _write_parameter_list(node.parameter_list, state, '')
     if node.response_parameter_list:
         _write_parameter_list(node.response_parameter_list, state, '=> (')
+
+    if node.result_response:
+        # This doesn't break result<T,E> if the whole expression is too long.
+        w = StringIO()
+        w.write('=> result<')
+        _write_typename(node.result_response.success_type, w)
+        w.write(', ')
+        _write_typename(node.result_response.failure_type, w)
+        w.write('>')
+        expr = w.getvalue()
+        if (state.col + len(' ') + len(expr)) < LINE_LENGTH:
+            state.write(' ')
+            state.write(expr)
+        else:
+            state.write_line()
+            state.write(' ' * (state.get_indent() + CONTINUATION_SHIFT))
+            state.write(expr)
     state.write(';')
     _write_eol(node, state)
 

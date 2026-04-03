@@ -46,9 +46,6 @@ class MEDIA_EXPORT MediaPlaylist final : public Playlist {
   MediaPlaylist& operator=(const MediaPlaylist&) = delete;
   MediaPlaylist& operator=(MediaPlaylist&&) = delete;
 
-  // `Playlist` implementation
-  Kind GetKind() const override;
-
   // Returns all segments in this playlist, in chronological order. This vector
   // may be copied independently of this Playlist.
   const std::vector<scoped_refptr<MediaSegment>>& GetSegments() const {
@@ -139,8 +136,9 @@ class MEDIA_EXPORT MediaPlaylist final : public Playlist {
   // order to support persistent properties and imported variables. Otherwise,
   // it should be `nullptr`. If `source` is invalid, this returns an error.
   // Otherwise, the parsed playlist is returned.
+  // `tag_recorder` is an optional metrics collection helper.
   static ParseStatus::Or<scoped_refptr<MediaPlaylist>> Parse(
-      base::StringPiece source,
+      std::string_view source,
       GURL uri,
       types::DecimalInteger version,
       const MultivariantPlaylist* parent_playlist);

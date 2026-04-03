@@ -61,8 +61,9 @@ LayoutUnit TableNode::ComputeCaptionBlockSize(
 }
 
 bool TableNode::AllowColumnPercentages(bool is_layout_pass) const {
-  if (Style().LogicalWidth().IsMaxContent())
+  if (Style().LogicalWidth().HasMaxContent()) {
     return false;
+  }
   if (is_layout_pass)
     return true;
   // TODO(layout-dev): This function breaks the rule of "no tree-walks".
@@ -73,7 +74,7 @@ bool TableNode::AllowColumnPercentages(bool is_layout_pass) const {
   const LayoutBlock* block = box_->ContainingBlock();
   while (!block->IsLayoutView()) {
     if (block->IsTableCell() || block->IsFlexibleBox() ||
-        block->IsLayoutGrid()) {
+        block->IsLayoutGridOrGridLanes()) {
       return false;
     }
 

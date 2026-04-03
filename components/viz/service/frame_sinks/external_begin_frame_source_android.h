@@ -35,16 +35,8 @@ class VIZ_SERVICE_EXPORT ExternalBeginFrameSourceAndroid
 
   ~ExternalBeginFrameSourceAndroid() override;
 
-  void OnVSync(JNIEnv* env,
-               const base::android::JavaParamRef<jobject>& obj,
-               jlong time_micros,
-               jlong period_micros);
+  void OnVSync(JNIEnv* env, int64_t time_micros, int64_t period_micros);
   void UpdateRefreshRate(float refresh_rate) override;
-
-  // BeginFrameSource:
-  void SetDynamicBeginFrameDeadlineOffsetSource(
-      DynamicBeginFrameDeadlineOffsetSource*
-          dynamic_begin_frame_deadline_offset_source) override;
 
  private:
   class AChoreographerImpl;
@@ -54,7 +46,6 @@ class VIZ_SERVICE_EXPORT ExternalBeginFrameSourceAndroid
 
   void SetEnabled(bool enabled);
   void OnVSyncImpl(int64_t time_nanos,
-                   int64_t deadline_nanos,
                    base::TimeDelta vsync_period,
                    std::optional<PossibleDeadlines> possible_deadlines);
 

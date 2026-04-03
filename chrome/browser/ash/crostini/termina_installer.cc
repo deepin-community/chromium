@@ -6,9 +6,12 @@
 
 #include <algorithm>
 #include <memory>
+#include <string_view>
+#include <utility>
 
 #include "base/barrier_closure.h"
-#include "base/containers/contains.h"
+#include "base/check.h"
+#include "base/check_is_test.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -18,16 +21,21 @@
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_dlc_helper.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part_ash.h"
-#include "chrome/browser/component_updater/cros_component_manager.h"
+#include "components/component_updater/ash/component_manager_ash.h"
 #include "content/public/browser/network_service_instance.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace crostini {
 
-TerminaInstaller::TerminaInstaller() = default;
+TerminaInstaller::TerminaInstaller(
+    scoped_refptr<component_updater::ComponentManagerAsh> component_manager_ash)
+    : component_manager_ash_(std::move(component_manager_ash)) {
+  if (!component_manager_ash_) {
+    CHECK_IS_TEST();
+  }
+}
+
 TerminaInstaller::~TerminaInstaller() = default;
 
 void TerminaInstaller::CancelInstall() {
@@ -124,28 +132,26 @@ void TerminaInstaller::RemoveComponentIfPresent(
     base::OnceCallback<void()> callback,
     UninstallResult* result) {
   VLOG(1) << "Removing component";
-  scoped_refptr<component_updater::CrOSComponentManager> component_manager =
-      g_browser_process->platform_part()->cros_component_manager();
 
+  CHECK(component_manager_ash_);
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock()},
       base::BindOnce(
-          [](scoped_refptr<component_updater::CrOSComponentManager>
-                 component_manager) {
-            return component_manager->IsRegisteredMayBlock(
+          [](scoped_refptr<component_updater::ComponentManagerAsh>
+                 component_manager_ash) {
+            return component_manager_ash->IsRegisteredMayBlock(
                 imageloader::kTerminaComponentName);
           },
-          std::move(component_manager)),
+          component_manager_ash_),
       base::BindOnce(
-          [](base::OnceCallback<void()> callback, UninstallResult* result,
+          [](scoped_refptr<component_updater::ComponentManagerAsh>
+                 component_manager_ash,
+             base::OnceCallback<void()> callback, UninstallResult* result,
              bool is_present) {
-            scoped_refptr<component_updater::CrOSComponentManager>
-                component_manager = g_browser_process->platform_part()
-                                        ->cros_component_manager();
             if (is_present) {
               VLOG(1) << "Component present, unloading";
-              *result =
-                  component_manager->Unload(imageloader::kTerminaComponentName);
+              *result = component_manager_ash->Unload(
+                  imageloader::kTerminaComponentName);
               if (!*result) {
                 LOG(ERROR) << "Failed to remove cros-termina component";
               }
@@ -155,7 +161,7 @@ void TerminaInstaller::RemoveComponentIfPresent(
             }
             std::move(callback).Run();
           },
-          std::move(callback), result));
+          component_manager_ash_, std::move(callback), result));
 }
 
 void TerminaInstaller::RemoveDlcIfPresent(base::OnceCallback<void()> callback,
@@ -163,7 +169,7 @@ void TerminaInstaller::RemoveDlcIfPresent(base::OnceCallback<void()> callback,
   ash::DlcserviceClient::Get()->GetExistingDlcs(base::BindOnce(
       [](base::WeakPtr<TerminaInstaller> weak_this,
          base::OnceCallback<void()> callback, UninstallResult* result,
-         const std::string& err,
+         std::string_view err,
          const dlcservice::DlcsWithContent& dlcs_with_content) {
         if (!weak_this) {
           return;
@@ -192,26 +198,26 @@ void TerminaInstaller::RemoveDlcIfPresent(base::OnceCallback<void()> callback,
 void TerminaInstaller::RemoveDlc(base::OnceCallback<void()> callback,
                                  UninstallResult* result) {
   ash::DlcserviceClient::Get()->Uninstall(
-      kCrostiniDlcName,
-      base::BindOnce(
-          [](base::OnceCallback<void()> callback, UninstallResult* result,
-             const std::string& err) {
-            if (err == dlcservice::kErrorNone) {
-              VLOG(1) << "Removed DLC";
-              *result = true;
-            } else {
-              LOG(ERROR) << "Failed to remove termina-dlc: " << err;
-              *result = false;
-            }
-            std::move(callback).Run();
-          },
-          std::move(callback), result));
+      kCrostiniDlcName, base::BindOnce(
+                            [](base::OnceCallback<void()> callback,
+                               UninstallResult* result, std::string_view err) {
+                              if (err == dlcservice::kErrorNone) {
+                                VLOG(1) << "Removed DLC";
+                                *result = true;
+                              } else {
+                                LOG(ERROR)
+                                    << "Failed to remove termina-dlc: " << err;
+                                *result = false;
+                              }
+                              std::move(callback).Run();
+                            },
+                            std::move(callback), result));
 }
 
 void TerminaInstaller::OnUninstallFinished(
     base::OnceCallback<void(bool)> callback,
     std::vector<UninstallResult> partial_results) {
-  std::move(callback).Run(!base::Contains(partial_results, 0));
+  std::move(callback).Run(!std::ranges::contains(partial_results, 0));
 }
 
 base::FilePath TerminaInstaller::GetInstallLocation() {

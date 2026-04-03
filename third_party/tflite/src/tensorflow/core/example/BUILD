@@ -1,20 +1,16 @@
-load("//tensorflow:tensorflow.default.bzl", "filegroup")
-load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
-load(
-    "@io_bazel_rules_closure//closure:defs.bzl",
-    "closure_proto_library",
-)
 load(
     "//tensorflow:tensorflow.bzl",
     "tf_cc_test",
     "tf_copts",
 )
+load("//tensorflow:tensorflow.default.bzl", "filegroup")
 load(
     "//tensorflow/core/platform:build_config.bzl",
     "tf_jspb_proto_library",
     "tf_proto_library",
     "tf_pyclif_proto_library",
 )
+load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -109,7 +105,6 @@ tf_proto_library(
         "example.proto",
         "feature.proto",
     ],
-    cc_api_version = 2,
     make_default_target_header_only = True,
     tags = ["alt_dep=//third_party/tensorflow/core:protos_all"],
 )
@@ -117,7 +112,6 @@ tf_proto_library(
 tf_proto_library(
     name = "example_parser_configuration_proto",
     srcs = ["example_parser_configuration.proto"],
-    cc_api_version = 2,
     make_default_target_header_only = True,
     protodeps = [
         "//tensorflow/core/framework:tensor_shape_proto",
@@ -128,7 +122,6 @@ tf_proto_library(
 
 tf_proto_library(
     name = "protos_all",
-    cc_api_version = 2,
     make_default_target_header_only = True,
     protodeps = [
         ":example_protos",
@@ -153,11 +146,6 @@ tf_pyclif_proto_library(
 
 tf_jspb_proto_library(
     name = "example_jspb_proto",
-    deps = [":example_protos"],
-)
-
-closure_proto_library(
-    name = "example_protos_closure",
     deps = [":example_protos"],
 )
 

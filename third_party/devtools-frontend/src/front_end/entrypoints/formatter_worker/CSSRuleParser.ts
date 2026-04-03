@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -62,7 +62,7 @@ export function parseCSS(text: string, chunkCallback: ChunkCallback): void {
         if (tokenType.has('qualifier') || tokenType.has('builtin') || tokenType.has('tag')) {
           rule = {
             selectorText: tokenValue,
-            lineNumber: lineNumber,
+            lineNumber,
             columnNumber: column,
             properties: [],
           };
@@ -70,7 +70,7 @@ export function parseCSS(text: string, chunkCallback: ChunkCallback): void {
         } else if (tokenType.has('def')) {
           rule = {
             atRule: tokenValue,
-            lineNumber: lineNumber,
+            lineNumber,
             columnNumber: column,
           };
           state = CSSParserStates.AtRule;

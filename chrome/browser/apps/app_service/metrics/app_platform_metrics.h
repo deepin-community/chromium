@@ -8,13 +8,13 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "base/values.h"
@@ -70,8 +70,6 @@ extern const char kUsageTimeDurationKey[];
 extern const char kReportingUsageTimeDurationKey[];
 
 std::string GetAppTypeHistogramNameV2(apps::AppTypeNameV2 app_type_name);
-
-const std::set<apps::AppTypeName>& GetAppTypeNameSet();
 
 ApplicationInstallTime ConvertInstallTimeToProtoApplicationInstallTime(
     InstallTime install_time);
@@ -153,14 +151,14 @@ class AppPlatformMetrics : public apps::AppRegistryCache::Observer,
     // reset, ideally after the corresponding snapshot has been reported.
     base::TimeDelta reporting_usage_time;
 
-    // Converts the struct UsageTime to base::Value::Dict, e.g.:
+    // Converts the struct UsageTime to base::DictValue, e.g.:
     // {
     //    "app_id": "hhsosodfjlsjdflkjsdlfksdf",
     //    "app_type": "SystemWebApp",
     //    "time": 3600,
     //    "reporting_usage_time": 1800,
     // }
-    base::Value::Dict ConvertToDict() const;
+    base::DictValue ConvertToDict() const;
   };
 
   explicit AppPlatformMetrics(Profile* profile,
@@ -343,7 +341,7 @@ class AppPlatformMetrics : public apps::AppRegistryCache::Observer,
   // Clears UKM usage tracked for a given app instance in the pref store.
   // Normally triggered after corresponding usage snapshot has been reported to
   // UKM for the app instance.
-  void ClearAppsUsageTimeForInstance(const base::StringPiece& instance_id);
+  void ClearAppsUsageTimeForInstance(std::string_view instance_id);
 
   void UpdateMetricsBeforeShutdown();
 

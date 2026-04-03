@@ -17,6 +17,8 @@
 #include "base/containers/adapters.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
+#include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window_delegate.h"
 #include "ui/base/hit_test.h"
@@ -49,11 +51,12 @@ constexpr int kShortSide = 52;
 // Returns the widget init params needed to create the resize widget.
 views::Widget::InitParams CreateWidgetParams(aura::Window* parent_window,
                                              const std::string& widget_name) {
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
   params.parent = parent_window;
   params.name = widget_name;
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   return params;
 }
 
@@ -113,7 +116,6 @@ bool PointOnWindowEdge(aura::Window* window,
       return ContainsX(window, p.x()) && p.y() == window->bounds().height();
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -138,7 +140,8 @@ class MultiWindowResizeController::ResizeView : public views::View {
   ~ResizeView() override = default;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override {
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
     const bool vert = direction_ == Direction::kLeftRight;
     return gfx::Size(vert ? kLongSide : kShortSide,
                      vert ? kShortSide : kLongSide);
@@ -235,7 +238,7 @@ class MultiWindowResizeController::ResizeView : public views::View {
     // need to manually generate the path for the quarter and then flip twice;
     const gfx::RectF quarter_bounds(bounds.x(), bounds.y(), bounds.width() / 2,
                                     bounds.height() / 2);
-    SkPath path;
+    SkPathBuilder path;
     if (direction_ == Direction::kLeftRight) {
       //           /|
       //      ----  |
@@ -245,29 +248,34 @@ class MultiWindowResizeController::ResizeView : public views::View {
       // the shape above, starting from left bottom to the right top and then
       // back to the left bottom.
       path.moveTo(quarter_bounds.x(), quarter_bounds.bottom());
-      path.arcTo(
-          quarter_bounds.x(), quarter_bounds.bottom() - kLargeCurveRadius,
-          quarter_bounds.x() + kLargeCurveRadius,
-          quarter_bounds.bottom() - kLargeCurveRadius, kLargeCurveRadius);
+      path.arcTo(SkPoint{quarter_bounds.x(),
+                         quarter_bounds.bottom() - kLargeCurveRadius},
+                 SkPoint{quarter_bounds.x() + kLargeCurveRadius,
+                         quarter_bounds.bottom() - kLargeCurveRadius},
+                 kLargeCurveRadius);
       path.lineTo(quarter_bounds.right() - kSmallCurveRadius,
                   quarter_bounds.bottom() - kLargeCurveRadius);
-      path.arcTo(quarter_bounds.right(),
-                 quarter_bounds.bottom() - kLargeCurveRadius,
-                 quarter_bounds.right(), quarter_bounds.y(), kSmallCurveRadius);
+      path.arcTo(SkPoint{quarter_bounds.right(),
+                         quarter_bounds.bottom() - kLargeCurveRadius},
+                 SkPoint{quarter_bounds.right(), quarter_bounds.y()},
+                 kSmallCurveRadius);
       path.lineTo(quarter_bounds.right(), quarter_bounds.bottom());
     } else {
       // Similar to the way when `direction_` is `Direction::kLeftRight`,
       // starting from the right top to the left bottom and then back to the
       // right top.
       path.moveTo(quarter_bounds.right(), quarter_bounds.y());
-      path.arcTo(quarter_bounds.right() - kLargeCurveRadius, quarter_bounds.y(),
-                 quarter_bounds.right() - kLargeCurveRadius,
-                 quarter_bounds.y() + kLargeCurveRadius, kLargeCurveRadius);
+      path.arcTo(SkPoint{quarter_bounds.right() - kLargeCurveRadius,
+                         quarter_bounds.y()},
+                 SkPoint{quarter_bounds.right() - kLargeCurveRadius,
+                         quarter_bounds.y() + kLargeCurveRadius},
+                 kLargeCurveRadius);
       path.lineTo(quarter_bounds.right() - kLargeCurveRadius,
                   quarter_bounds.bottom() - kSmallCurveRadius);
-      path.arcTo(quarter_bounds.right() - kLargeCurveRadius,
-                 quarter_bounds.bottom(), quarter_bounds.x(),
-                 quarter_bounds.bottom(), kSmallCurveRadius);
+      path.arcTo(SkPoint{quarter_bounds.right() - kLargeCurveRadius,
+                         quarter_bounds.bottom()},
+                 SkPoint{quarter_bounds.x(), quarter_bounds.bottom()},
+                 kSmallCurveRadius);
       path.lineTo(quarter_bounds.right(), quarter_bounds.bottom());
     }
     path.close();
@@ -275,11 +283,11 @@ class MultiWindowResizeController::ResizeView : public views::View {
     // Flip vertically and horizontally and vertically to get the full path.
     SkMatrix flip;
     flip.setScale(1, -1, quarter_bounds.width(), quarter_bounds.height());
-    path.addPath(path, flip);
+    path.addPath(path.snapshot(), flip);
     flip.setScale(-1, 1, quarter_bounds.width(), quarter_bounds.height());
-    path.addPath(path, flip);
+    path.addPath(path.snapshot(), flip);
 
-    return path;
+    return path.detach();
   }
 };
 
@@ -426,8 +434,7 @@ void MultiWindowResizeController::OnOverviewModeEndingAnimationComplete(
 MultiWindowResizeController::ResizeWindows
 MultiWindowResizeController::DetermineWindowsFromScreenPoint(
     aura::Window* window) const {
-  gfx::Point mouse_location(
-      display::Screen::GetScreen()->GetCursorScreenPoint());
+  gfx::Point mouse_location(display::Screen::Get()->GetCursorScreenPoint());
   wm::ConvertPointFromScreen(window, &mouse_location);
   const int component =
       window_util::GetNonClientComponent(window, mouse_location);
@@ -729,7 +736,7 @@ void MultiWindowResizeController::CompleteResize() {
   window_resizer_.reset();
 
   // Mouse may still be over resizer, if not hide.
-  gfx::Point screen_loc = display::Screen::GetScreen()->GetCursorScreenPoint();
+  gfx::Point screen_loc = display::Screen::Get()->GetCursorScreenPoint();
   if (!resize_widget_->GetWindowBoundsInScreen().Contains(screen_loc)) {
     Hide();
   } else {

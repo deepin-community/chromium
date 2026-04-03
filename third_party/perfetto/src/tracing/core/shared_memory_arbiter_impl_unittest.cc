@@ -24,7 +24,7 @@
 #include "perfetto/ext/tracing/core/trace_packet.h"
 #include "perfetto/ext/tracing/core/trace_writer.h"
 #include "perfetto/ext/tracing/core/tracing_service.h"
-#include "src/base/test/gtest_test_suite.h"
+#include "perfetto/tracing/buffer_exhausted_policy.h"
 #include "src/base/test/test_task_runner.h"
 #include "src/tracing/core/in_process_shared_memory.h"
 #include "src/tracing/core/patch_list.h"
@@ -39,7 +39,6 @@ namespace perfetto {
 
 using testing::_;
 using testing::Between;
-using testing::Invoke;
 using testing::Mock;
 using testing::NiceMock;
 using testing::UnorderedElementsAreArray;
@@ -97,8 +96,8 @@ TEST_P(SharedMemoryArbiterImplTest, GetAndReturnChunks) {
   // Check that the notification callback is posted and order is consistent.
   auto on_commit_1 = task_runner_->CreateCheckpoint("on_commit_1");
   EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _))
-      .WillOnce(Invoke([on_commit_1](const CommitDataRequest& req,
-                                     MockProducerEndpoint::CommitDataCallback) {
+      .WillOnce([on_commit_1](const CommitDataRequest& req,
+                              MockProducerEndpoint::CommitDataCallback) {
         ASSERT_EQ(14 * 2 + 1, req.chunks_to_move_size());
         for (size_t i = 0; i < 14 * 2; i++) {
           ASSERT_EQ(i / 14, req.chunks_to_move()[i].page());
@@ -109,7 +108,7 @@ TEST_P(SharedMemoryArbiterImplTest, GetAndReturnChunks) {
         ASSERT_EQ(1u, req.chunks_to_move()[28].chunk());
         ASSERT_EQ(42u, req.chunks_to_move()[28].target_buffer());
         on_commit_1();
-      }));
+      });
   PatchList ignored;
   for (size_t i = 0; i < 14 * 2; i++) {
     arbiter_->ReturnCompletedChunk(std::move(chunks[i ^ 1]), i % 5 + 1,
@@ -122,14 +121,14 @@ TEST_P(SharedMemoryArbiterImplTest, GetAndReturnChunks) {
   // notification for that as well.
   auto on_commit_2 = task_runner_->CreateCheckpoint("on_commit_2");
   EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _))
-      .WillOnce(Invoke([on_commit_2](const CommitDataRequest& req,
-                                     MockProducerEndpoint::CommitDataCallback) {
+      .WillOnce([on_commit_2](const CommitDataRequest& req,
+                              MockProducerEndpoint::CommitDataCallback) {
         ASSERT_EQ(1, req.chunks_to_move_size());
         ASSERT_EQ(2u, req.chunks_to_move()[0].page());
         ASSERT_EQ(0u, req.chunks_to_move()[0].chunk());
         ASSERT_EQ(43u, req.chunks_to_move()[0].target_buffer());
         on_commit_2();
-      }));
+      });
   arbiter_->ReturnCompletedChunk(std::move(chunks[28]), 43, &ignored);
   task_runner_->RunUntilCheckpoint("on_commit_2");
 }
@@ -141,7 +140,7 @@ TEST_P(SharedMemoryArbiterImplTest, BatchCommits) {
   // Batching period is 0s - chunks are being committed as soon as they are
   // returned.
   SharedMemoryABI::Chunk chunk =
-      arbiter_->GetNewChunk({}, BufferExhaustedPolicy::kDefault);
+      arbiter_->GetNewChunk({}, BufferExhaustedPolicy::kStall);
   ASSERT_TRUE(chunk.is_valid());
   EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _)).Times(1);
   PatchList ignored;
@@ -159,7 +158,7 @@ TEST_P(SharedMemoryArbiterImplTest, BatchCommits) {
 
   // First chunk that will be batched. CommitData should not be called
   // immediately this time.
-  chunk = arbiter_->GetNewChunk({}, BufferExhaustedPolicy::kDefault);
+  chunk = arbiter_->GetNewChunk({}, BufferExhaustedPolicy::kStall);
   ASSERT_TRUE(chunk.is_valid());
   EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _)).Times(0);
   // We'll pretend that the chunk needs patching. This is done in order to
@@ -175,7 +174,7 @@ TEST_P(SharedMemoryArbiterImplTest, BatchCommits) {
 
   // Add a second chunk to the batch. This should also not trigger an immediate
   // call to CommitData.
-  chunk = arbiter_->GetNewChunk({}, BufferExhaustedPolicy::kDefault);
+  chunk = arbiter_->GetNewChunk({}, BufferExhaustedPolicy::kStall);
   ASSERT_TRUE(chunk.is_valid());
   EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _)).Times(0);
   arbiter_->ReturnCompletedChunk(std::move(chunk), 2, &ignored);
@@ -190,8 +189,8 @@ TEST_P(SharedMemoryArbiterImplTest, BatchCommits) {
   // Make sure that CommitData gets called once (should happen at the end
   // of the batching period), with the two chunks in the batch.
   EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _))
-      .WillOnce(Invoke([](const CommitDataRequest& req,
-                          MockProducerEndpoint::CommitDataCallback) {
+      .WillOnce([](const CommitDataRequest& req,
+                   MockProducerEndpoint::CommitDataCallback) {
         ASSERT_EQ(2, req.chunks_to_move_size());
 
         // Verify that this is the first chunk that we expect to have been
@@ -205,7 +204,7 @@ TEST_P(SharedMemoryArbiterImplTest, BatchCommits) {
         ASSERT_EQ(2u, req.chunks_to_move()[1].page());
         ASSERT_EQ(0u, req.chunks_to_move()[1].chunk());
         ASSERT_EQ(2u, req.chunks_to_move()[1].target_buffer());
-      }));
+      });
 
   // Pretend we've reached the end of the batching period.
   arbiter_->FlushPendingCommitDataRequests();
@@ -225,7 +224,7 @@ TEST_P(SharedMemoryArbiterImplTest, UseShmemEmulation) {
 
   // Test returning a completed chunk.
   SharedMemoryABI::Chunk chunk =
-      arbiter_->GetNewChunk({}, BufferExhaustedPolicy::kDefault);
+      arbiter_->GetNewChunk({}, BufferExhaustedPolicy::kStall);
   std::tie(page_idx, chunk_idx) = abi->GetPageAndChunkIndex(chunk);
   ASSERT_TRUE(chunk.is_valid());
   EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _)).Times(1);
@@ -243,12 +242,12 @@ TEST_P(SharedMemoryArbiterImplTest, UseShmemEmulation) {
   arbiter_->SetDirectSMBPatchingSupportedByService();
   ASSERT_TRUE(arbiter_->EnableDirectSMBPatching());
 
-  chunk = arbiter_->GetNewChunk({}, BufferExhaustedPolicy::kDefault);
+  chunk = arbiter_->GetNewChunk({}, BufferExhaustedPolicy::kStall);
   std::tie(page_idx, chunk_idx) = abi->GetPageAndChunkIndex(chunk);
   ASSERT_TRUE(chunk.is_valid());
   EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _))
-      .WillOnce(Invoke([&](const CommitDataRequest& req,
-                           MockProducerEndpoint::CommitDataCallback) {
+      .WillOnce([&](const CommitDataRequest& req,
+                    MockProducerEndpoint::CommitDataCallback) {
         ASSERT_EQ(1, req.chunks_to_move_size());
 
         ASSERT_EQ(page_idx, req.chunks_to_move()[0].page());
@@ -257,7 +256,7 @@ TEST_P(SharedMemoryArbiterImplTest, UseShmemEmulation) {
 
         // The request should contain chunk data.
         ASSERT_TRUE(req.chunks_to_move()[0].has_data());
-      }));
+      });
   chunk.SetFlag(SharedMemoryABI::ChunkHeader::kChunkNeedsPatching);
   arbiter_->ReturnCompletedChunk(std::move(chunk), 1, &ignored);
   task_runner_->RunUntilIdle();
@@ -268,8 +267,10 @@ TEST_P(SharedMemoryArbiterImplTest, UseShmemEmulation) {
       arbiter_->shmem_abi_for_testing()->GetChunkState(page_idx, chunk_idx));
 }
 
-// Check that we can actually create up to kMaxWriterID TraceWriter(s).
+// Check that we can create up to many TraceWriter(s).
 TEST_P(SharedMemoryArbiterImplTest, WriterIDsAllocation) {
+  constexpr size_t kBigWriterCount = (1 << 12);
+  static_assert(kBigWriterCount < kMaxWriterID);
   auto checkpoint = task_runner_->CreateCheckpoint("last_unregistered");
 
   std::vector<uint32_t> registered_ids;
@@ -281,44 +282,43 @@ TEST_P(SharedMemoryArbiterImplTest, WriterIDsAllocation) {
   ON_CALL(mock_producer_endpoint_, UnregisterTraceWriter)
       .WillByDefault([&](uint32_t id) {
         unregistered_ids.push_back(id);
-        if (unregistered_ids.size() == kMaxWriterID) {
+        if (unregistered_ids.size() == kBigWriterCount) {
           checkpoint();
         }
       });
   {
     std::map<WriterID, std::unique_ptr<TraceWriter>> writers;
 
-    for (size_t i = 0; i < kMaxWriterID; i++) {
-      std::unique_ptr<TraceWriter> writer = arbiter_->CreateTraceWriter(1);
+    for (size_t i = 0; i < kBigWriterCount; i++) {
+      std::unique_ptr<TraceWriter> writer =
+          arbiter_->CreateTraceWriter(1, BufferExhaustedPolicy::kStall);
       ASSERT_TRUE(writer);
       WriterID writer_id = writer->writer_id();
       ASSERT_TRUE(writers.emplace(writer_id, std::move(writer)).second);
     }
-
-    // A further call should return a null impl of trace writer as we exhausted
-    // writer IDs.
-    ASSERT_EQ(arbiter_->CreateTraceWriter(1)->writer_id(), 0);
   }
 
   // This should run the Register/UnregisterTraceWriter tasks enqueued by the
   // memory arbiter.
   task_runner_->RunUntilCheckpoint("last_unregistered", 15000);
 
-  std::vector<uint32_t> expected_ids;  // 1..kMaxWriterID
-  for (uint32_t i = 1; i <= kMaxWriterID; i++)
+  std::vector<uint32_t> expected_ids;  // 1..max_writer
+  for (uint32_t i = 1; i <= kBigWriterCount; i++)
     expected_ids.push_back(i);
   EXPECT_THAT(registered_ids, UnorderedElementsAreArray(expected_ids));
   EXPECT_THAT(unregistered_ids, UnorderedElementsAreArray(expected_ids));
 }
 
 TEST_P(SharedMemoryArbiterImplTest, Shutdown) {
-  std::unique_ptr<TraceWriter> writer = arbiter_->CreateTraceWriter(1);
+  std::unique_ptr<TraceWriter> writer =
+      arbiter_->CreateTraceWriter(1, BufferExhaustedPolicy::kStall);
   EXPECT_TRUE(writer);
   EXPECT_FALSE(arbiter_->TryShutdown());
 
   // We still get a valid trace writer after shutdown, but it's a null one
   // that's not connected to the arbiter.
-  std::unique_ptr<TraceWriter> writer2 = arbiter_->CreateTraceWriter(2);
+  std::unique_ptr<TraceWriter> writer2 =
+      arbiter_->CreateTraceWriter(2, BufferExhaustedPolicy::kStall);
   EXPECT_TRUE(writer2);
   EXPECT_EQ(writer2->writer_id(), 0);
 
@@ -456,14 +456,14 @@ class SharedMemoryArbiterImplStartupTracingTest
     // registered and queued commits flushed.
     EXPECT_CALL(mock_producer_endpoint_, RegisterTraceWriter(_, 42));
     EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _))
-        .WillOnce(Invoke([](const CommitDataRequest& req,
-                            MockProducerEndpoint::CommitDataCallback callback) {
+        .WillOnce([](const CommitDataRequest& req,
+                     MockProducerEndpoint::CommitDataCallback callback) {
           ASSERT_EQ(3, req.chunks_to_move_size());
           EXPECT_EQ(42u, req.chunks_to_move()[0].target_buffer());
           EXPECT_EQ(42u, req.chunks_to_move()[1].target_buffer());
           EXPECT_EQ(42u, req.chunks_to_move()[2].target_buffer());
           callback();
-        }));
+        });
 
     arbiter_->BindStartupTargetBuffer(kTargetBufferReservationId1, 42);
     EXPECT_TRUE(IsArbiterFullyBound());
@@ -484,12 +484,12 @@ class SharedMemoryArbiterImplStartupTracingTest
     // And a commit on this new writer should be flushed to the right buffer,
     // too.
     EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _))
-        .WillOnce(Invoke([](const CommitDataRequest& req,
-                            MockProducerEndpoint::CommitDataCallback callback) {
+        .WillOnce([](const CommitDataRequest& req,
+                     MockProducerEndpoint::CommitDataCallback callback) {
           ASSERT_EQ(1, req.chunks_to_move_size());
           EXPECT_EQ(42u, req.chunks_to_move()[0].target_buffer());
           callback();
-        }));
+        });
     {
       auto packet = writer1b->NewTracePacket();
       packet->set_for_testing()->set_str("foo");
@@ -534,13 +534,13 @@ class SharedMemoryArbiterImplStartupTracingTest
     // should be registered and queued commits flushed.
     EXPECT_CALL(mock_producer_endpoint_, RegisterTraceWriter(_, 23));
     EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _))
-        .WillOnce(Invoke([](const CommitDataRequest& req,
-                            MockProducerEndpoint::CommitDataCallback callback) {
+        .WillOnce([](const CommitDataRequest& req,
+                     MockProducerEndpoint::CommitDataCallback callback) {
           ASSERT_EQ(2, req.chunks_to_move_size());
           EXPECT_EQ(42u, req.chunks_to_move()[0].target_buffer());
           EXPECT_EQ(23u, req.chunks_to_move()[1].target_buffer());
           callback();
-        }));
+        });
 
     arbiter_->BindStartupTargetBuffer(kTargetBufferReservationId2, 23);
     EXPECT_TRUE(IsArbiterFullyBound());
@@ -578,8 +578,8 @@ class SharedMemoryArbiterImplStartupTracingTest
     // Expectations for the below calls.
     EXPECT_CALL(mock_producer_endpoint_, RegisterTraceWriter(_, _)).Times(0);
     EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _))
-        .WillOnce(Invoke([shmem_abi](const CommitDataRequest& req,
-                                     MockProducerEndpoint::CommitDataCallback) {
+        .WillOnce([shmem_abi](const CommitDataRequest& req,
+                              MockProducerEndpoint::CommitDataCallback) {
           ASSERT_EQ(2, req.chunks_to_move_size());
           for (size_t i = 0; i < 2; i++) {
             EXPECT_EQ(0u, req.chunks_to_move()[i].target_buffer());
@@ -588,7 +588,7 @@ class SharedMemoryArbiterImplStartupTracingTest
                 req.chunks_to_move()[i].chunk());
             shmem_abi->ReleaseChunkAsFree(std::move(chunk));
           }
-        }));
+        });
 
     // Abort the first session. This should resolve the two chunks committed up
     // to this point to an invalid target buffer (ID 0). They will remain
@@ -620,18 +620,16 @@ class SharedMemoryArbiterImplStartupTracingTest
       packet->set_for_testing()->set_str("foo");
     }
     EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _))
-        .WillOnce(Invoke(
-            [shmem_abi](const CommitDataRequest& req,
-                        MockProducerEndpoint::CommitDataCallback callback) {
-              ASSERT_EQ(1, req.chunks_to_move_size());
-              EXPECT_EQ(0u, req.chunks_to_move()[0].target_buffer());
-              SharedMemoryABI::Chunk chunk =
-                  shmem_abi->TryAcquireChunkForReading(
-                      req.chunks_to_move()[0].page(),
-                      req.chunks_to_move()[0].chunk());
-              shmem_abi->ReleaseChunkAsFree(std::move(chunk));
-              callback();
-            }));
+        .WillOnce([shmem_abi](
+                      const CommitDataRequest& req,
+                      MockProducerEndpoint::CommitDataCallback callback) {
+          ASSERT_EQ(1, req.chunks_to_move_size());
+          EXPECT_EQ(0u, req.chunks_to_move()[0].target_buffer());
+          SharedMemoryABI::Chunk chunk = shmem_abi->TryAcquireChunkForReading(
+              req.chunks_to_move()[0].page(), req.chunks_to_move()[0].chunk());
+          shmem_abi->ReleaseChunkAsFree(std::move(chunk));
+          callback();
+        });
     bool flush_completed = false;
     writer->Flush([&flush_completed] { flush_completed = true; });
     EXPECT_TRUE(flush_completed);
@@ -649,18 +647,16 @@ class SharedMemoryArbiterImplStartupTracingTest
       packet->set_for_testing()->set_str("foo");
     }
     EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _))
-        .WillOnce(Invoke(
-            [shmem_abi](const CommitDataRequest& req,
-                        MockProducerEndpoint::CommitDataCallback callback) {
-              ASSERT_EQ(1, req.chunks_to_move_size());
-              EXPECT_EQ(0u, req.chunks_to_move()[0].target_buffer());
-              SharedMemoryABI::Chunk chunk =
-                  shmem_abi->TryAcquireChunkForReading(
-                      req.chunks_to_move()[0].page(),
-                      req.chunks_to_move()[0].chunk());
-              shmem_abi->ReleaseChunkAsFree(std::move(chunk));
-              callback();
-            }));
+        .WillOnce([shmem_abi](
+                      const CommitDataRequest& req,
+                      MockProducerEndpoint::CommitDataCallback callback) {
+          ASSERT_EQ(1, req.chunks_to_move_size());
+          EXPECT_EQ(0u, req.chunks_to_move()[0].target_buffer());
+          SharedMemoryABI::Chunk chunk = shmem_abi->TryAcquireChunkForReading(
+              req.chunks_to_move()[0].page(), req.chunks_to_move()[0].chunk());
+          shmem_abi->ReleaseChunkAsFree(std::move(chunk));
+          callback();
+        });
     flush_completed = false;
     writer1b->Flush([&flush_completed] { flush_completed = true; });
     EXPECT_TRUE(flush_completed);
@@ -699,20 +695,19 @@ class SharedMemoryArbiterImplStartupTracingTest
     // target buffer 0, and both writers' commits flushed.
     EXPECT_CALL(mock_producer_endpoint_, RegisterTraceWriter(_, _)).Times(0);
     EXPECT_CALL(mock_producer_endpoint_, CommitData(_, _))
-        .WillOnce(Invoke(
-            [shmem_abi](const CommitDataRequest& req,
-                        MockProducerEndpoint::CommitDataCallback callback) {
-              ASSERT_EQ(2, req.chunks_to_move_size());
-              for (size_t i = 0; i < 2; i++) {
-                EXPECT_EQ(0u, req.chunks_to_move()[i].target_buffer());
-                SharedMemoryABI::Chunk chunk =
-                    shmem_abi->TryAcquireChunkForReading(
-                        req.chunks_to_move()[i].page(),
-                        req.chunks_to_move()[i].chunk());
-                shmem_abi->ReleaseChunkAsFree(std::move(chunk));
-              }
-              callback();
-            }));
+        .WillOnce([shmem_abi](
+                      const CommitDataRequest& req,
+                      MockProducerEndpoint::CommitDataCallback callback) {
+          ASSERT_EQ(2, req.chunks_to_move_size());
+          for (size_t i = 0; i < 2; i++) {
+            EXPECT_EQ(0u, req.chunks_to_move()[i].target_buffer());
+            SharedMemoryABI::Chunk chunk = shmem_abi->TryAcquireChunkForReading(
+                req.chunks_to_move()[i].page(),
+                req.chunks_to_move()[i].chunk());
+            shmem_abi->ReleaseChunkAsFree(std::move(chunk));
+          }
+          callback();
+        });
 
     arbiter_->AbortStartupTracingForReservation(kTargetBufferReservationId2);
     EXPECT_TRUE(IsArbiterFullyBound());

@@ -1,97 +1,115 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import * as i18n from '../../../../core/i18n/i18n.js';
+import * as SDK from '../../../../core/sdk/sdk.js';
 import type * as Protocol from '../../../../generated/protocol.js';
+import * as Formatter from '../../../../models/formatter/formatter.js';
 import * as CodeMirror from '../../../../third_party/codemirror.next/codemirror.next.js';
 import * as CodeHighlighter from '../../../../ui/components/code_highlighter/code_highlighter.js';
-import * as ComponentHelpers from '../../../../ui/components/helpers/helpers.js';
-import * as LegacyWrapper from '../../../../ui/components/legacy_wrapper/legacy_wrapper.js';
-import * as Coordinator from '../../../../ui/components/render_coordinator/render_coordinator.js';
 import * as TextEditor from '../../../../ui/components/text_editor/text_editor.js';
-import * as LitHtml from '../../../../ui/lit-html/lit-html.js';
-import * as IconButton from '../../../../ui/components/icon_button/icon_button.js';
-import {assertNotNullOrUndefined} from '../../../../core/platform/platform.js';
-import * as SDK from '../../../../core/sdk/sdk.js';
-
-import type * as UI from '../../../../ui/legacy/legacy.js';
+import * as UI from '../../../../ui/legacy/legacy.js';
+import {html, nothing, render} from '../../../../ui/lit/lit.js';
 
 import ruleSetDetailsViewStyles from './RuleSetDetailsView.css.js';
 
+const UIStrings = {
+  /**
+   * @description Text in RuleSetDetailsView of the Application panel if no element is selected. An element here is an item in a
+   *             table of speculation rules. Speculation rules define the rules when and which urls should be prefetched.
+   *             https://developer.chrome.com/docs/devtools/application/debugging-speculation-rules
+   */
+  noElementSelected: 'No element selected',
+  /**
+   * @description Text in RuleSetDetailsView of the Application panel if no element is selected. An element here is an item in a
+   *             table of speculation rules. Speculation rules define the rules when and which urls should be prefetched.
+   *             https://developer.chrome.com/docs/devtools/application/debugging-speculation-rules
+   */
+  selectAnElementForMoreDetails: 'Select an element for more details',
+} as const;
+const str_ = i18n.i18n.registerUIStrings('panels/application/preloading/components/RuleSetDetailsView.ts', UIStrings);
+const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
+
 type RuleSet = Protocol.Preload.RuleSet;
 
-const coordinator = Coordinator.RenderCoordinator.RenderCoordinator.instance();
 const codeMirrorJsonType = await CodeHighlighter.CodeHighlighter.languageFromMIME('application/json');
 
-export type RuleSetDetailsViewData = RuleSet|null;
+export interface ViewInput {
+  url: string;
+  errorMessage?: string;
+  editorState: CodeMirror.EditorState;
+  sourceText: string;
+}
 
-export class RuleSetDetailsView extends LegacyWrapper.LegacyWrapper.WrappableComponent<UI.Widget.VBox> {
-  readonly #shadow = this.attachShadow({mode: 'open'});
-  #data: RuleSetDetailsViewData = null;
-  #editorState?: CodeMirror.EditorState;
-
-  connectedCallback(): void {
-    this.#shadow.adoptedStyleSheets = [ruleSetDetailsViewStyles];
-  }
-
-  set data(data: RuleSetDetailsViewData) {
-    this.#data = data;
-    void this.#render();
-  }
-
-  async #render(): Promise<void> {
-    await coordinator.write('RuleSetDetailsView render', () => {
-      if (this.#data === null) {
-        LitHtml.render(LitHtml.nothing, this.#shadow, {host: this});
-        return;
-      }
-
-      // Disabled until https://crbug.com/1079231 is fixed.
-      // clang-format off
-      LitHtml.render(LitHtml.html`
+export const DEFAULT_VIEW = (input: ViewInput|null, _output: object, target: HTMLElement): void => {
+  // clang-format off
+  render(html`
+    <style>${ruleSetDetailsViewStyles}</style>
+    <style>${UI.inspectorCommonStyles}</style>
+    ${input
+      ? html`
         <div class="content">
-          <div class="ruleset-header" id="ruleset-url">${this.#data?.url || SDK.TargetManager.TargetManager.instance().inspectedURL()}</div>
-          ${this.#maybeError()}
+          <div class="ruleset-header" id="ruleset-url">${input.url}</div>
+          ${input.errorMessage ? html`
+            <div class="ruleset-header">
+              <devtools-icon name="cross-circle" class="medium">
+              </devtools-icon>
+              <span id="error-message-text">${input.errorMessage}</span>
+            </div>
+          ` : nothing}
         </div>
         <div class="text-ellipsis">
-          ${this.#renderSource()}
-        </div>
-      `, this.#shadow, {host: this});
-      // clang-format on
-    });
+          <devtools-text-editor .style.flexGrow=${'1'} .state=${input.editorState}></devtools-text-editor>
+        </div>`
+      : html`
+          <div class="placeholder">
+            <div class="empty-state">
+              <span class="empty-state-header">${i18nString(UIStrings.noElementSelected)}</span>
+              <span class="empty-state-description">${i18nString(UIStrings.selectAnElementForMoreDetails)}</span>
+            </div>
+          </div>`
+    }
+    `, target);
+  // clang-format on
+};
+
+export class RuleSetDetailsView extends UI.Widget.VBox {
+  readonly #view: typeof DEFAULT_VIEW;
+  #ruleSet: RuleSet|null = null;
+  #shouldPrettyPrint = true;
+
+  constructor(element?: HTMLElement, view = DEFAULT_VIEW) {
+    super(element, {useShadowDom: true});
+    this.#view = view;
   }
 
-  // TODO(https://crbug.com/1425354): Support i18n.
-  #maybeError(): LitHtml.LitTemplate {
-    assertNotNullOrUndefined(this.#data);
+  override wasShown(): void {
+    super.wasShown();
+    this.requestUpdate();
+  }
 
-    if (this.#data.errorMessage === undefined) {
-      return LitHtml.nothing;
+  set ruleSet(ruleSet: RuleSet|null) {
+    this.#ruleSet = ruleSet;
+    this.requestUpdate();
+  }
+
+  set shouldPrettyPrint(shouldPrettyPrint: boolean) {
+    this.#shouldPrettyPrint = shouldPrettyPrint;
+    this.requestUpdate();
+  }
+
+  override async performUpdate(): Promise<void> {
+    if (!this.#ruleSet) {
+      this.#view(null, {}, this.contentElement);
+      return;
     }
 
-    // Disabled until https://crbug.com/1079231 is fixed.
-    // clang-format off
-    return LitHtml.html`
-      <div class="ruleset-header">
-        <${IconButton.Icon.Icon.litTagName}
-          .data=${{
-            iconName: 'cross-circle',
-            color: 'var(--icon-error)',
-            width: '16px',
-            height: '16px',
-          } as IconButton.Icon.IconData}>
-        </${IconButton.Icon.Icon.litTagName}>
-        <span id="error-message-text">${this.#data.errorMessage}</span>
-      </div>
-    `;
-    // clang-format on
-  }
-
-  #renderSource(): LitHtml.LitTemplate {
-    this.#editorState = CodeMirror.EditorState.create({
-      doc: this.#data?.sourceText,
+    const sourceText = await this.#getSourceText();
+    const editorState = CodeMirror.EditorState.create({
+      doc: sourceText,
       extensions: [
-        TextEditor.Config.baseConfiguration(this.#data?.sourceText || ''),
+        TextEditor.Config.baseConfiguration(sourceText),
         CodeMirror.lineNumbers(),
         CodeMirror.EditorState.readOnly.of(true),
         codeMirrorJsonType as CodeMirror.Extension,
@@ -99,23 +117,23 @@ export class RuleSetDetailsView extends LegacyWrapper.LegacyWrapper.WrappableCom
       ],
     });
 
-    // Disabled until https://crbug.com/1079231 is fixed.
-    // clang-format off
-    // TODO(https://crbug.com/1425354): Add Raw button.
-      return LitHtml.html`
-        <${TextEditor.TextEditor.TextEditor.litTagName} .style.flexGrow = '1' .state=${
-          this.#editorState
-        }></${TextEditor.TextEditor.TextEditor.litTagName}>
-      `;
-    // clang-format on
+    this.#view(
+        {
+          url: this.#ruleSet.url || SDK.TargetManager.TargetManager.instance().inspectedURL(),
+          errorMessage: this.#ruleSet.errorMessage,
+          editorState,
+          sourceText,
+        },
+        {}, this.contentElement);
   }
-}
 
-ComponentHelpers.CustomElements.defineComponent('devtools-resources-rulesets-details-view', RuleSetDetailsView);
+  async #getSourceText(): Promise<string> {
+    if (this.#shouldPrettyPrint && this.#ruleSet?.sourceText !== undefined) {
+      const formattedResult =
+          await Formatter.ScriptFormatter.formatScriptContent('application/json', this.#ruleSet.sourceText);
+      return formattedResult.formattedContent;
+    }
 
-declare global {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  interface HTMLElementTagNameMap {
-    'devtools-resources-rulesets-details-view': RuleSetDetailsView;
+    return this.#ruleSet?.sourceText || '';
   }
 }

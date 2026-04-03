@@ -61,10 +61,8 @@ class SessionLogHandler : public content::WebUIMessageHandler,
   void RegisterMessages() override;
 
   // SelectFileDialog::Listener:
-  void FileSelected(const ui::SelectedFileInfo& file,
-                    int index,
-                    void* params) override;
-  void FileSelectionCanceled(void* params) override;
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
+  void FileSelectionCanceled() override;
 
   void OnSessionLogCreated(const base::FilePath& path, bool success);
 
@@ -83,10 +81,10 @@ class SessionLogHandler : public content::WebUIMessageHandler,
 
  private:
   // Opens the select dialog.
-  void HandleSaveSessionLogRequest(const base::Value::List& args);
+  void HandleSaveSessionLogRequest(const base::ListValue& args);
 
   // Initializes Javascript.
-  void HandleInitialize(const base::Value::List& args);
+  void HandleInitialize(const base::ListValue& args);
 
   SelectFilePolicyCreator select_file_policy_creator_;
   std::unique_ptr<TelemetryLog> telemetry_log_;

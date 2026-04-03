@@ -11,7 +11,7 @@
 #include "base/supports_user_data.h"
 #include "components/data_sharing/public/data_sharing_service.h"
 
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
 
@@ -26,12 +26,60 @@ class DataSharingServiceAndroid : public base::SupportsUserData::Data {
   explicit DataSharingServiceAndroid(DataSharingService* service);
   ~DataSharingServiceAndroid() override;
 
-  bool IsEmptyService(JNIEnv* env, const JavaParamRef<jobject>& j_caller);
+  // DataSharingService Java API methods, implemented by native service:
+  void ReadGroup(JNIEnv* env,
+                 const JavaRef<jstring>& group_id,
+                 const JavaRef<jobject>& j_callback);
+  void CreateGroup(JNIEnv* env,
+                   const JavaRef<jstring>& group_name,
+                   const JavaRef<jobject>& j_callback);
+  void InviteMember(JNIEnv* env,
+                    const JavaRef<jstring>& group_id,
+                    const JavaRef<jstring>& invitee_email,
+                    const JavaRef<jobject>& j_callback);
+  void AddMember(JNIEnv* env,
+                 const JavaRef<jstring>& group_id,
+                 const JavaRef<jstring>& access_token,
+                 const JavaRef<jobject>& j_callback);
+  void RemoveMember(JNIEnv* env,
+                    const JavaRef<jstring>& group_id,
+                    const JavaRef<jstring>& member_email,
+                    const JavaRef<jobject>& j_callback);
+  bool IsEmptyService(JNIEnv* env);
   ScopedJavaLocalRef<jobject> GetNetworkLoader(JNIEnv* env);
+  ScopedJavaLocalRef<jobject> GetDataSharingUrl(
+      JNIEnv* env,
+      const JavaRef<jstring>& group_id,
+      const JavaRef<jstring>& access_token);
+  ScopedJavaLocalRef<jobject> ParseDataSharingUrl(
+      JNIEnv* env,
+      const JavaRef<jobject>& j_url);
+  void EnsureGroupVisibility(JNIEnv* env,
+                             const JavaRef<jstring>& group_id,
+                             const JavaRef<jobject>& j_callback);
+  void GetSharedEntitiesPreview(JNIEnv* env,
+                                const JavaRef<jstring>& group_id,
+                                const JavaRef<jstring>& access_token,
+                                const JavaRef<jobject>& j_callback);
+  ScopedJavaLocalRef<jobject> GetUiDelegate(JNIEnv* env);
+  void Log(JNIEnv* env,
+           /*logger_common::mojom::LogSource*/ int32_t source,
+           const JavaRef<jstring>& message);
 
+  void SetSharedEntitiesPreviewForTesting(JNIEnv* env,
+                                          const JavaRef<jstring>& j_group_id);
+
+  // Returns the DataSharingServiceImpl java object.
   ScopedJavaLocalRef<jobject> GetJavaObject();
 
+  // Returns the observer that routes the notifications to Java observers. The
+  // returned object is of type:
+  // org.chromium.components.data_sharing.ObserverBridge.
+  ScopedJavaLocalRef<jobject> GetJavaObserverBridge();
+
  private:
+  class GroupDataObserverBridge;
+
   // A reference to the Java counterpart of this class.  See
   // DataSharingServiceImpl.java.
   ScopedJavaGlobalRef<jobject> java_obj_;
@@ -40,6 +88,8 @@ class DataSharingServiceAndroid : public base::SupportsUserData::Data {
   raw_ptr<DataSharingService> data_sharing_service_;
 
   std::unique_ptr<DataSharingNetworkLoaderAndroid> network_loader_;
+
+  std::unique_ptr<GroupDataObserverBridge> observer_bridge_;
 };
 
 }  // namespace data_sharing

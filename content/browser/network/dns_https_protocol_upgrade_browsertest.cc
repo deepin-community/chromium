@@ -29,7 +29,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
-// TODO(https://crbug.com/1295770) Add tests that query a test Do53 server.
+// TODO(crbug.com/40214469) Add tests that query a test Do53 server.
 
 class DohHttpsProtocolUpgradeBrowserTest : public content::ContentBrowserTest {
  public:
@@ -80,7 +80,7 @@ class DohHttpsProtocolUpgradeBrowserTest : public content::ContentBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(DohHttpsProtocolUpgradeBrowserTest,
-                       HttpsProtocolUpgrade) {
+                       DISABLED_HttpsProtocolUpgrade) {
   net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
   https_server.SetSSLConfig(net::EmbeddedTestServer::CERT_TEST_NAMES);
   RegisterDefaultHandlers(&https_server);

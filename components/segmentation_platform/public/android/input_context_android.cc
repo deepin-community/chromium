@@ -18,12 +18,14 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "components/segmentation_platform/public/input_context.h"
-#include "components/segmentation_platform/public/jni_headers/InputContext_jni.h"
 #include "components/segmentation_platform/public/types/processed_value.h"
 #include "url/android/gurl_android.h"
 #include "url/gurl.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/segmentation_platform/public/jni_headers/InputContext_jni.h"
+
+using base::android::JavaRef;
 
 namespace segmentation_platform {
 
@@ -59,6 +61,13 @@ void ConvertAndAddToInputContext(
   }
 }
 
+void JavaGURLArrayToGURLVector(
+    JNIEnv* env,
+    const base::android::JavaRef<jobjectArray>& j_gurls,
+    std::vector<GURL>* ret) {
+  *ret = jni_zero::FromJniArray<std::vector<GURL>>(env, j_gurls);
+}
+
 static void JavaLongArrayToBaseTimeVector(
     JNIEnv* env,
     const base::android::JavaRef<jlongArray>& java_values,
@@ -90,7 +99,7 @@ scoped_refptr<InputContext> InputContextAndroid::ToNativeInputContext(
 
 void InputContextAndroid::FromJavaParams(
     JNIEnv* env,
-    const jlong input_context_ptr,
+    const int64_t input_context_ptr,
     const base::android::JavaRef<jobjectArray>& jboolean_keys,
     const base::android::JavaRef<jbooleanArray>& jboolean_values,
     const base::android::JavaRef<jobjectArray>& jint_keys,
@@ -127,28 +136,28 @@ void InputContextAndroid::FromJavaParams(
   ConvertAndAddToInputContext(env, input_context, jint64_keys, jint64_values,
                               base::android::JavaLongArrayToInt64Vector);
   ConvertAndAddToInputContext(env, input_context, jurl_keys, jurl_values,
-                              url::GURLAndroid::JavaGURLArrayToGURLVector);
+                              JavaGURLArrayToGURLVector);
 }
 
 static void JNI_InputContext_FillNative(
     JNIEnv* env,
-    const jlong input_context_ptr,
-    const JavaParamRef<jobjectArray>& jboolean_keys,
-    const JavaParamRef<jbooleanArray>& jboolean_values,
-    const JavaParamRef<jobjectArray>& jint_keys,
-    const JavaParamRef<jintArray>& jint_values,
-    const JavaParamRef<jobjectArray>& jfloat_keys,
-    const JavaParamRef<jfloatArray>& jfloat_values,
-    const JavaParamRef<jobjectArray>& jdouble_keys,
-    const JavaParamRef<jdoubleArray>& jdouble_values,
-    const JavaParamRef<jobjectArray>& jstring_keys,
-    const JavaParamRef<jobjectArray>& jstring_values,
-    const JavaParamRef<jobjectArray>& jtime_keys,
-    const JavaParamRef<jlongArray>& jtime_values,
-    const JavaParamRef<jobjectArray>& jint64_keys,
-    const JavaParamRef<jlongArray>& jint64_values,
-    const JavaParamRef<jobjectArray>& jurl_keys,
-    const JavaParamRef<jobjectArray>& jurl_values) {
+    const int64_t input_context_ptr,
+    const JavaRef<jobjectArray>& jboolean_keys,
+    const JavaRef<jbooleanArray>& jboolean_values,
+    const JavaRef<jobjectArray>& jint_keys,
+    const JavaRef<jintArray>& jint_values,
+    const JavaRef<jobjectArray>& jfloat_keys,
+    const JavaRef<jfloatArray>& jfloat_values,
+    const JavaRef<jobjectArray>& jdouble_keys,
+    const JavaRef<jdoubleArray>& jdouble_values,
+    const JavaRef<jobjectArray>& jstring_keys,
+    const JavaRef<jobjectArray>& jstring_values,
+    const JavaRef<jobjectArray>& jtime_keys,
+    const JavaRef<jlongArray>& jtime_values,
+    const JavaRef<jobjectArray>& jint64_keys,
+    const JavaRef<jlongArray>& jint64_values,
+    const JavaRef<jobjectArray>& jurl_keys,
+    const JavaRef<jobjectArray>& jurl_values) {
   segmentation_platform::InputContextAndroid::FromJavaParams(
       env, input_context_ptr, jboolean_keys, jboolean_values, jint_keys,
       jint_values, jfloat_keys, jfloat_values, jdouble_keys, jdouble_values,
@@ -157,3 +166,5 @@ static void JNI_InputContext_FillNative(
 }
 
 }  // namespace segmentation_platform
+
+DEFINE_JNI(InputContext)

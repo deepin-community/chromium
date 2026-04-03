@@ -9,9 +9,11 @@
 #include <optional>
 #include <vector>
 
+#include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "chrome/browser/net/cert_verifier_service_time_updater.h"
 #include "chrome/browser/net/proxy_config_monitor.h"
 #include "chrome/browser/net/stub_resolver_config_reader.h"
 #include "chrome/browser/ssl/ssl_config_service_manager.h"
@@ -21,15 +23,12 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom-forward.h"
+#include "services/network/public/cpp/cookie_encryption_provider_impl.h"
 #include "services/network/public/mojom/host_resolver.mojom-forward.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/ssl_config.mojom-forward.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
-
-#if BUILDFLAG(IS_WIN)
-#include "chrome/browser/net/cookie_encryption_provider_impl.h"
-#endif  // BUILDFLAG(IS_WIN)
 
 class NetworkAnnotationMonitor;
 class PrefRegistrySimple;
@@ -46,6 +45,10 @@ namespace net_log {
 class NetExportFileWriter;
 class NetLogProxySource;
 }
+
+namespace features {
+BASE_DECLARE_FEATURE(kPersistFailedLaunchState);
+}  // namespace features
 
 // Responsible for creating and managing access to the system NetworkContext.
 // Lives on the UI thread. The NetworkContext this owns is intended for requests
@@ -121,12 +124,10 @@ class SystemNetworkContextManager {
   mojo::PendingReceiver<network::mojom::SSLConfigClient>
   GetSSLConfigClientReceiver();
 
-#if BUILDFLAG(IS_WIN)
   // Adds a CookieEncryptionManager mojo remote to the specified
   // `network_context_params`.
   void AddCookieEncryptionManagerToNetworkContextParams(
       network::mojom::NetworkContextParams* network_context_params);
-#endif  // BUILDFLAG(IS_WIN)
 
   // Populates |initial_ssl_config| and |ssl_config_client_receiver| members of
   // |network_context_params|. As long as the SystemNetworkContextManager
@@ -152,6 +153,14 @@ class SystemNetworkContextManager {
   // or destroyed, and so that it's destroyed before Mojo is shut down.
   net_log::NetExportFileWriter* GetNetExportFileWriter();
 
+  // Updates the network service with the given list of |trust_anchor_ids|
+  // and |mtc_trust_anchor_ids| (lists of TLS Trust Anchor IDs in binary
+  // representation).
+  void UpdateTrustAnchorIDs(
+      std::vector<std::vector<uint8_t>> trust_anchor_ids,
+      std::vector<std::vector<uint8_t>> mtc_trust_anchor_ids,
+      int64_t mtc_update_time_seconds);
+
   // Returns whether the network sandbox is enabled. This depends on policy but
   // also feature status from sandbox. Called before there is an instance of
   // SystemNetworkContextManager.
@@ -167,8 +176,10 @@ class SystemNetworkContextManager {
   // use only.
   void FlushNetworkInterfaceForTesting();
 
+#if BUILDFLAG(IS_CHROMEOS)
   // Call |FlushForTesting()| on NetworkAnnotationMonitor. For test use only.
   void FlushNetworkAnnotationMonitorForTesting();
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   static network::mojom::HttpAuthStaticParamsPtr
   GetHttpAuthStaticParamsForTesting();
@@ -192,9 +203,10 @@ class SystemNetworkContextManager {
     stub_resolver_config_reader_for_testing_ = reader;
   }
 
-#if BUILDFLAG(CHROME_ROOT_STORE_OPTIONAL)
-  static bool IsUsingChromeRootStore();
-#endif  // BUILDFLAG(CHROME_ROOT_STORE_OPTIONAL)
+  // Returns true if a previous launch of the network service with the current
+  // major version (milestone) has failed to fully reach mojo and IPC startup
+  // successfully.
+  bool HasFailedPreviousRecentLaunch();
 
  private:
   FRIEND_TEST_ALL_PREFIXES(
@@ -239,14 +251,9 @@ class SystemNetworkContextManager {
   // the network process.
   void UpdateExplicitlyAllowedNetworkPorts();
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
-  // Applies the current value of the kEnforceLocalAnchorConstraintsEnabled
-  // pref to the enforcement state.
-  void UpdateEnforceLocalAnchorConstraintsEnabled();
-#endif
-
   void UpdateIPv6ReachabilityOverrideEnabled();
+
+  void UpdateTLS13EarlyDataEnabled();
 
   // The PrefService to retrieve all the pref values.
   raw_ptr<PrefService> local_state_;
@@ -288,15 +295,17 @@ class SystemNetworkContextManager {
 
   static std::optional<bool> certificate_transparency_enabled_for_testing_;
 
+#if BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<NetworkAnnotationMonitor> network_annotation_monitor_;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_LINUX)
   GssapiLibraryLoadObserver gssapi_library_loader_observer_{this};
 #endif  // BUILDFLAG(IS_LINUX)
 
-#if BUILDFLAG(IS_WIN)
-  CookieEncryptionProviderImpl cookie_encryption_provider_;
-#endif  // BUILDFLAG(IS_WIN)
+  std::unique_ptr<CookieEncryptionProviderImpl> cookie_encryption_provider_;
+
+  std::unique_ptr<CertVerifierServiceTimeUpdater> cert_verifier_time_updater_;
 };
 
 #endif  // CHROME_BROWSER_NET_SYSTEM_NETWORK_CONTEXT_MANAGER_H_

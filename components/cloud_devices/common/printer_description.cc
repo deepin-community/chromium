@@ -17,11 +17,9 @@
 #include "base/json/json_writer.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/cloud_devices/common/cloud_device_description_consts.h"
 #include "components/cloud_devices/common/description_items_inl.h"
 #include "ui/gfx/geometry/rect.h"
@@ -130,17 +128,13 @@ constexpr char kTypeDuplexLongEdge[] = "LONG_EDGE";
 constexpr char kTypeDuplexNoDuplex[] = "NO_DUPLEX";
 constexpr char kTypeDuplexShortEdge[] = "SHORT_EDGE";
 
-constexpr char kTypeFitToPageFillPage[] = "FILL_PAGE";
-constexpr char kTypeFitToPageFitToPage[] = "FIT_TO_PAGE";
-constexpr char kTypeFitToPageGrowToPage[] = "GROW_TO_PAGE";
-constexpr char kTypeFitToPageNoFitting[] = "NO_FITTING";
-constexpr char kTypeFitToPageShrinkToPage[] = "SHRINK_TO_PAGE";
+constexpr char kTypeFitToPageAuto[] = "AUTO";
+constexpr char kTypeFitToPageAutoFit[] = "AUTO_FIT";
+constexpr char kTypeFitToPageFill[] = "FILL";
+constexpr char kTypeFitToPageFit[] = "FIT";
+constexpr char kTypeFitToPageNone[] = "NONE";
 
-constexpr char kTypeMarginsBorderless[] = "BORDERLESS";
-constexpr char kTypeMarginsCustom[] = "CUSTOM";
-constexpr char kTypeMarginsStandard[] = "STANDARD";
 constexpr char kTypeOrientationAuto[] = "AUTO";
-
 constexpr char kTypeOrientationLandscape[] = "LANDSCAPE";
 constexpr char kTypeOrientationPortrait[] = "PORTRAIT";
 
@@ -213,24 +207,15 @@ constexpr struct OrientationNames {
     {OrientationType::AUTO_ORIENTATION, kTypeOrientationAuto},
 };
 
-constexpr struct MarginsNames {
-  MarginsType id;
-  const char* const json_name;
-} kMarginsNames[] = {
-    {MarginsType::NO_MARGINS, kTypeMarginsBorderless},
-    {MarginsType::STANDARD_MARGINS, kTypeMarginsStandard},
-    {MarginsType::CUSTOM_MARGINS, kTypeMarginsCustom},
-};
-
 constexpr struct FitToPageNames {
   FitToPageType id;
   const char* const json_name;
 } kFitToPageNames[] = {
-    {FitToPageType::NO_FITTING, kTypeFitToPageNoFitting},
-    {FitToPageType::FIT_TO_PAGE, kTypeFitToPageFitToPage},
-    {FitToPageType::GROW_TO_PAGE, kTypeFitToPageGrowToPage},
-    {FitToPageType::SHRINK_TO_PAGE, kTypeFitToPageShrinkToPage},
-    {FitToPageType::FILL_PAGE, kTypeFitToPageFillPage},
+    {FitToPageType::AUTO, kTypeFitToPageAuto},
+    {FitToPageType::AUTO_FIT, kTypeFitToPageAutoFit},
+    {FitToPageType::FILL, kTypeFitToPageFill},
+    {FitToPageType::FIT, kTypeFitToPageFit},
+    {FitToPageType::NONE, kTypeFitToPageNone},
 };
 
 constexpr struct DocumentSheetBackNames {
@@ -454,7 +439,6 @@ const gfx::Size& FindMediaSizeByType(MediaSize size_name) {
     }
   }
   NOTREACHED();
-  return kMediaDefinitions[0].size_um;
 }
 
 const MediaDefinition* FindMediaBySize(const gfx::Size& size_um) {
@@ -476,7 +460,6 @@ std::string TypeToString(const T& names, IdType id) {
       return name.json_name;
   }
   NOTREACHED();
-  return std::string();
 }
 
 template <class T, class IdType>
@@ -497,7 +480,7 @@ PwgRasterConfig::PwgRasterConfig()
       reverse_order_streaming(false),
       rotate_all_pages(false) {}
 
-PwgRasterConfig::~PwgRasterConfig() {}
+PwgRasterConfig::~PwgRasterConfig() = default;
 
 RangeVendorCapability::RangeVendorCapability() = default;
 
@@ -525,13 +508,6 @@ RangeVendorCapability::~RangeVendorCapability() = default;
 
 RangeVendorCapability& RangeVendorCapability::operator=(
     RangeVendorCapability&& other) = default;
-
-bool RangeVendorCapability::operator==(
-    const RangeVendorCapability& other) const {
-  return value_type_ == other.value_type_ && min_value_ == other.min_value_ &&
-         max_value_ == other.max_value_ &&
-         default_value_ == other.default_value_;
-}
 
 bool RangeVendorCapability::IsValid() const {
   if (min_value_.empty() || max_value_.empty())
@@ -572,10 +548,9 @@ bool RangeVendorCapability::IsValid() const {
     }
   }
   NOTREACHED() << "Bad range capability value type";
-  return false;
 }
 
-bool RangeVendorCapability::LoadFrom(const base::Value::Dict& dict) {
+bool RangeVendorCapability::LoadFrom(const base::DictValue& dict) {
   const std::string* value_type_str = dict.FindString(kKeyValueType);
   if (!value_type_str || !TypeFromString(kRangeVendorCapabilityTypeNames,
                                          *value_type_str, &value_type_)) {
@@ -595,7 +570,7 @@ bool RangeVendorCapability::LoadFrom(const base::Value::Dict& dict) {
   return IsValid();
 }
 
-void RangeVendorCapability::SaveTo(base::Value::Dict* dict) const {
+void RangeVendorCapability::SaveTo(base::DictValue* dict) const {
   DCHECK(IsValid());
   dict->Set(kKeyValueType,
             TypeToString(kRangeVendorCapabilityTypeNames, value_type_));
@@ -613,11 +588,6 @@ SelectVendorCapabilityOption::SelectVendorCapabilityOption(
     : value(value), display_name(display_name) {}
 
 SelectVendorCapabilityOption::~SelectVendorCapabilityOption() = default;
-
-bool SelectVendorCapabilityOption::operator==(
-    const SelectVendorCapabilityOption& other) const {
-  return value == other.value && display_name == other.display_name;
-}
 
 bool SelectVendorCapabilityOption::IsValid() const {
   return !value.empty() && !display_name.empty();
@@ -641,12 +611,6 @@ TypedValueVendorCapability::~TypedValueVendorCapability() = default;
 TypedValueVendorCapability& TypedValueVendorCapability::operator=(
     TypedValueVendorCapability&& other) = default;
 
-bool TypedValueVendorCapability::operator==(
-    const TypedValueVendorCapability& other) const {
-  return value_type_ == other.value_type_ &&
-         default_value_ == other.default_value_;
-}
-
 bool TypedValueVendorCapability::IsValid() const {
   if (default_value_.empty())
     return true;
@@ -665,10 +629,9 @@ bool TypedValueVendorCapability::IsValid() const {
       return true;
   }
   NOTREACHED() << "Bad typed value capability value type";
-  return false;
 }
 
-bool TypedValueVendorCapability::LoadFrom(const base::Value::Dict& dict) {
+bool TypedValueVendorCapability::LoadFrom(const base::DictValue& dict) {
   const std::string* value_type_str = dict.FindString(kKeyValueType);
   if (!value_type_str || !TypeFromString(kTypedValueVendorCapabilityTypeNames,
                                          *value_type_str, &value_type_)) {
@@ -680,7 +643,7 @@ bool TypedValueVendorCapability::LoadFrom(const base::Value::Dict& dict) {
   return IsValid();
 }
 
-void TypedValueVendorCapability::SaveTo(base::Value::Dict* dict) const {
+void TypedValueVendorCapability::SaveTo(base::DictValue* dict) const {
   DCHECK(IsValid());
   dict->Set(kKeyValueType,
             TypeToString(kTypedValueVendorCapabilityTypeNames, value_type_));
@@ -793,10 +756,9 @@ bool VendorCapability::IsValid() const {
       return typed_value_capability_.IsValid();
   }
   NOTREACHED() << "Bad vendor capability type";
-  return false;
 }
 
-bool VendorCapability::LoadFrom(const base::Value::Dict& dict) {
+bool VendorCapability::LoadFrom(const base::DictValue& dict) {
   InternalCleanup();
   const std::string* type_str = dict.FindString(kKeyType);
   Type type;
@@ -815,17 +777,17 @@ bool VendorCapability::LoadFrom(const base::Value::Dict& dict) {
     return false;
 
   display_name_ = *display_name_str;
-  const base::Value::Dict* range_capability_value =
+  const base::DictValue* range_capability_value =
       dict.FindDict(kOptionRangeCapability);
   if (!range_capability_value == (type == Type::RANGE))
     return false;
 
-  const base::Value::Dict* select_capability_value =
+  const base::DictValue* select_capability_value =
       dict.FindDict(kOptionSelectCapability);
   if (!select_capability_value == (type == Type::SELECT))
     return false;
 
-  const base::Value::Dict* typed_value_capability_value =
+  const base::DictValue* typed_value_capability_value =
       dict.FindDict(kOptionTypedValueCapability);
   if (!typed_value_capability_value == (type == Type::TYPED_VALUE))
     return false;
@@ -835,7 +797,6 @@ bool VendorCapability::LoadFrom(const base::Value::Dict& dict) {
     case Type::NONE:
     default:
       NOTREACHED();
-      break;
     case Type::RANGE:
       new (&range_capability_) RangeVendorCapability();
       return range_capability_.LoadFrom(*range_capability_value);
@@ -846,11 +807,9 @@ bool VendorCapability::LoadFrom(const base::Value::Dict& dict) {
       new (&typed_value_capability_) TypedValueVendorCapability();
       return typed_value_capability_.LoadFrom(*typed_value_capability_value);
   }
-
-  return false;
 }
 
-void VendorCapability::SaveTo(base::Value::Dict* dict) const {
+void VendorCapability::SaveTo(base::DictValue* dict) const {
   DCHECK(IsValid());
   dict->Set(kKeyType, TypeToString(kVendorCapabilityTypeNames, type_));
   dict->Set(kKeyId, id_);
@@ -859,21 +818,20 @@ void VendorCapability::SaveTo(base::Value::Dict* dict) const {
   switch (type_) {
     case Type::NONE:
       NOTREACHED();
-      break;
     case Type::RANGE: {
-      base::Value::Dict range_capability_value;
+      base::DictValue range_capability_value;
       range_capability_.SaveTo(&range_capability_value);
       dict->Set(kOptionRangeCapability, std::move(range_capability_value));
       break;
     }
     case Type::SELECT: {
-      base::Value::Dict select_capability_value;
+      base::DictValue select_capability_value;
       select_capability_.SaveTo(&select_capability_value);
       dict->Set(kOptionSelectCapability, std::move(select_capability_value));
       break;
     }
     case Type::TYPED_VALUE: {
-      base::Value::Dict typed_value_capability_value;
+      base::DictValue typed_value_capability_value;
       typed_value_capability_.SaveTo(&typed_value_capability_value);
       dict->Set(kOptionTypedValueCapability,
                 std::move(typed_value_capability_value));
@@ -885,11 +843,6 @@ void VendorCapability::SaveTo(base::Value::Dict* dict) const {
 Color::Color() : type(ColorType::AUTO_COLOR) {}
 
 Color::Color(ColorType type) : type(type) {
-}
-
-bool Color::operator==(const Color& other) const {
-  return type == other.type && vendor_id == other.vendor_id &&
-         custom_display_name == other.custom_display_name;
 }
 
 bool Color::IsValid() const {
@@ -907,31 +860,20 @@ bool VendorItem::IsValid() const {
   return !id.empty() && !value.empty();
 }
 
-bool VendorItem::operator==(const VendorItem& other) const {
-  return id == other.id && value == other.value;
-}
+Margins::Margins() : top_um(0), right_um(0), bottom_um(0), left_um(0) {}
 
-Margins::Margins()
-    : type(MarginsType::STANDARD_MARGINS),
-      top_um(0),
-      right_um(0),
-      bottom_um(0),
-      left_um(0) {}
-
-Margins::Margins(MarginsType type,
-                 int32_t top_um,
+Margins::Margins(int32_t top_um,
                  int32_t right_um,
                  int32_t bottom_um,
                  int32_t left_um)
-    : type(type),
-      top_um(top_um),
+    : top_um(top_um),
       right_um(right_um),
       bottom_um(bottom_um),
       left_um(left_um) {}
 
 bool Margins::operator==(const Margins& other) const {
-  return type == other.type && top_um == other.top_um &&
-         right_um == other.right_um && bottom_um == other.bottom_um;
+  return top_um == other.top_um && right_um == other.right_um &&
+         bottom_um == other.bottom_um;
 }
 
 Dpi::Dpi() : horizontal(0), vertical(0) {
@@ -942,10 +884,6 @@ Dpi::Dpi(int32_t horizontal, int32_t vertical)
 
 bool Dpi::IsValid() const {
   return horizontal > 0 && vertical > 0;
-}
-
-bool Dpi::operator==(const Dpi& other) const {
-  return horizontal == other.horizontal && vertical == other.vertical;
 }
 
 Media::Media()
@@ -1063,17 +1001,11 @@ Interval::Interval(int32_t start, int32_t end) : start(start), end(end) {}
 
 Interval::Interval(int32_t start) : start(start), end(kMaxPageNumber) {}
 
-bool Interval::operator==(const Interval& other) const {
-  return start == other.start && end == other.end;
-}
-
 MediaType::MediaType() = default;
 
 MediaType::MediaType(const std::string& vendor_id,
                      const std::string& custom_display_name)
     : vendor_id(vendor_id), custom_display_name(custom_display_name) {}
-
-bool MediaType::operator==(const MediaType& other) const = default;
 
 bool MediaType::IsValid() const {
   return !vendor_id.empty();
@@ -1102,7 +1034,7 @@ class NoValueValidation {
 class ContentTypeTraits : public NoValueValidation,
                           public ItemsTraits<kOptionContentType> {
  public:
-  static bool Load(const base::Value::Dict& dict, ContentType* option) {
+  static bool Load(const base::DictValue& dict, ContentType* option) {
     const std::string* content_type = dict.FindString(kKeyContentType);
     if (!content_type)
       return false;
@@ -1110,7 +1042,7 @@ class ContentTypeTraits : public NoValueValidation,
     return true;
   }
 
-  static void Save(ContentType option, base::Value::Dict* dict) {
+  static void Save(ContentType option, base::DictValue* dict) {
     dict->Set(kKeyContentType, option);
   }
 };
@@ -1118,7 +1050,7 @@ class ContentTypeTraits : public NoValueValidation,
 class PwgRasterConfigTraits : public NoValueValidation,
                               public ItemsTraits<kOptionPwgRasterConfig> {
  public:
-  static bool Load(const base::Value::Dict& dict, PwgRasterConfig* option) {
+  static bool Load(const base::DictValue& dict, PwgRasterConfig* option) {
     PwgRasterConfig option_out;
     const base::Value* document_sheet_back =
         dict.Find(kPwgRasterDocumentSheetBack);
@@ -1159,13 +1091,13 @@ class PwgRasterConfigTraits : public NoValueValidation,
     return true;
   }
 
-  static void Save(const PwgRasterConfig& option, base::Value::Dict* dict) {
+  static void Save(const PwgRasterConfig& option, base::DictValue* dict) {
     dict->Set(
         kPwgRasterDocumentSheetBack,
         TypeToString(kDocumentSheetBackNames, option.document_sheet_back));
 
     if (!option.document_types_supported.empty()) {
-      base::Value::List supported_list;
+      base::ListValue supported_list;
       for (const auto& type : option.document_types_supported) {
         switch (type) {
           case PwgDocumentTypeSupported::SRGB_8:
@@ -1196,11 +1128,11 @@ class VendorCapabilityTraits : public ItemsTraits<kOptionVendorCapability> {
     return option.IsValid();
   }
 
-  static bool Load(const base::Value::Dict& dict, VendorCapability* option) {
+  static bool Load(const base::DictValue& dict, VendorCapability* option) {
     return option->LoadFrom(dict);
   }
 
-  static void Save(const VendorCapability& option, base::Value::Dict* dict) {
+  static void Save(const VendorCapability& option, base::DictValue* dict) {
     option.SaveTo(dict);
   }
 };
@@ -1212,7 +1144,7 @@ class SelectVendorCapabilityTraits
     return option.IsValid();
   }
 
-  static bool Load(const base::Value::Dict& dict,
+  static bool Load(const base::DictValue& dict,
                    SelectVendorCapabilityOption* option) {
     const std::string* value = dict.FindString(kKeyValue);
     if (!value)
@@ -1226,7 +1158,7 @@ class SelectVendorCapabilityTraits
   }
 
   static void Save(const SelectVendorCapabilityOption& option,
-                   base::Value::Dict* dict) {
+                   base::DictValue* dict) {
     dict->Set(kKeyValue, option.value);
     dict->Set(kKeyDisplayName, option.display_name);
   }
@@ -1236,7 +1168,7 @@ class ColorTraits : public ItemsTraits<kOptionColor> {
  public:
   static bool IsValid(const Color& option) { return option.IsValid(); }
 
-  static bool Load(const base::Value::Dict& dict, Color* option) {
+  static bool Load(const base::DictValue& dict, Color* option) {
     const std::string* type = dict.FindString(kKeyType);
     if (!type || !TypeFromString(kColorNames, *type, &option->type))
       return false;
@@ -1250,7 +1182,7 @@ class ColorTraits : public ItemsTraits<kOptionColor> {
     return true;
   }
 
-  static void Save(const Color& option, base::Value::Dict* dict) {
+  static void Save(const Color& option, base::DictValue* dict) {
     dict->Set(kKeyType, TypeToString(kColorNames, option.type));
     if (!option.vendor_id.empty())
       dict->Set(kKeyVendorId, option.vendor_id);
@@ -1263,12 +1195,12 @@ class ColorTraits : public ItemsTraits<kOptionColor> {
 class DuplexTraits : public NoValueValidation,
                      public ItemsTraits<kOptionDuplex> {
  public:
-  static bool Load(const base::Value::Dict& dict, DuplexType* option) {
+  static bool Load(const base::DictValue& dict, DuplexType* option) {
     const std::string* type = dict.FindString(kKeyType);
     return type && TypeFromString(kDuplexNames, *type, option);
   }
 
-  static void Save(DuplexType option, base::Value::Dict* dict) {
+  static void Save(DuplexType option, base::DictValue* dict) {
     dict->Set(kKeyType, TypeToString(kDuplexNames, option));
   }
 };
@@ -1276,12 +1208,12 @@ class DuplexTraits : public NoValueValidation,
 class OrientationTraits : public NoValueValidation,
                           public ItemsTraits<kOptionPageOrientation> {
  public:
-  static bool Load(const base::Value::Dict& dict, OrientationType* option) {
+  static bool Load(const base::DictValue& dict, OrientationType* option) {
     const std::string* type = dict.FindString(kKeyType);
     return type && TypeFromString(kOrientationNames, *type, option);
   }
 
-  static void Save(OrientationType option, base::Value::Dict* dict) {
+  static void Save(OrientationType option, base::DictValue* dict) {
     dict->Set(kKeyType, TypeToString(kOrientationNames, option));
   }
 };
@@ -1289,7 +1221,7 @@ class OrientationTraits : public NoValueValidation,
 class CopiesTicketItemTraits : public NoValueValidation,
                                public ItemsTraits<kOptionCopies> {
  public:
-  static bool Load(const base::Value::Dict& dict, int32_t* option) {
+  static bool Load(const base::DictValue& dict, int32_t* option) {
     std::optional<int> copies = dict.FindInt(kOptionCopies);
     if (!copies)
       return false;
@@ -1298,7 +1230,7 @@ class CopiesTicketItemTraits : public NoValueValidation,
     return true;
   }
 
-  static void Save(int32_t option, base::Value::Dict* dict) {
+  static void Save(int32_t option, base::DictValue* dict) {
     dict->Set(kOptionCopies, option);
   }
 };
@@ -1306,7 +1238,7 @@ class CopiesTicketItemTraits : public NoValueValidation,
 class CopiesCapabilityTraits : public NoValueValidation,
                                public ItemsTraits<kOptionCopies> {
  public:
-  static bool Load(const base::Value::Dict& dict, Copies* option) {
+  static bool Load(const base::DictValue& dict, Copies* option) {
     std::optional<int> default_copies = dict.FindInt(kDefaultValue);
     if (!default_copies)
       return false;
@@ -1320,7 +1252,7 @@ class CopiesCapabilityTraits : public NoValueValidation,
     return true;
   }
 
-  static void Save(const Copies& option, base::Value::Dict* dict) {
+  static void Save(const Copies& option, base::DictValue* dict) {
     dict->Set(kDefaultValue, option.default_value);
     dict->Set(kMaxValue, option.max_value);
   }
@@ -1329,10 +1261,7 @@ class CopiesCapabilityTraits : public NoValueValidation,
 class MarginsTraits : public NoValueValidation,
                       public ItemsTraits<kOptionMargins> {
  public:
-  static bool Load(const base::Value::Dict& dict, Margins* option) {
-    const std::string* type = dict.FindString(kKeyType);
-    if (!type || !TypeFromString(kMarginsNames, *type, &option->type))
-      return false;
+  static bool Load(const base::DictValue& dict, Margins* option) {
     std::optional<int> top_um = dict.FindInt(kMarginTop);
     std::optional<int> right_um = dict.FindInt(kMarginRight);
     std::optional<int> bottom_um = dict.FindInt(kMarginBottom);
@@ -1346,8 +1275,7 @@ class MarginsTraits : public NoValueValidation,
     return true;
   }
 
-  static void Save(const Margins& option, base::Value::Dict* dict) {
-    dict->Set(kKeyType, TypeToString(kMarginsNames, option.type));
+  static void Save(const Margins& option, base::DictValue* dict) {
     dict->Set(kMarginTop, option.top_um);
     dict->Set(kMarginRight, option.right_um);
     dict->Set(kMarginBottom, option.bottom_um);
@@ -1359,7 +1287,7 @@ class DpiTraits : public ItemsTraits<kOptionDpi> {
  public:
   static bool IsValid(const Dpi& option) { return option.IsValid(); }
 
-  static bool Load(const base::Value::Dict& dict, Dpi* option) {
+  static bool Load(const base::DictValue& dict, Dpi* option) {
     std::optional<int> horizontal = dict.FindInt(kDpiHorizontal);
     std::optional<int> vertical = dict.FindInt(kDpiVertical);
     if (!horizontal || !vertical)
@@ -1369,7 +1297,7 @@ class DpiTraits : public ItemsTraits<kOptionDpi> {
     return true;
   }
 
-  static void Save(const Dpi& option, base::Value::Dict* dict) {
+  static void Save(const Dpi& option, base::DictValue* dict) {
     dict->Set(kDpiHorizontal, option.horizontal);
     dict->Set(kDpiVertical, option.vertical);
   }
@@ -1378,12 +1306,12 @@ class DpiTraits : public ItemsTraits<kOptionDpi> {
 class FitToPageTraits : public NoValueValidation,
                         public ItemsTraits<kOptionFitToPage> {
  public:
-  static bool Load(const base::Value::Dict& dict, FitToPageType* option) {
+  static bool Load(const base::DictValue& dict, FitToPageType* option) {
     const std::string* type = dict.FindString(kKeyType);
     return type && TypeFromString(kFitToPageNames, *type, option);
   }
 
-  static void Save(FitToPageType option, base::Value::Dict* dict) {
+  static void Save(FitToPageType option, base::DictValue* dict) {
     dict->Set(kKeyType, TypeToString(kFitToPageNames, option));
   }
 };
@@ -1399,8 +1327,8 @@ class PageRangeTraits : public ItemsTraits<kOptionPageRange> {
     return true;
   }
 
-  static bool Load(const base::Value::Dict& dict, PageRange* option) {
-    const base::Value::List* list_value = dict.FindList(kPageRangeInterval);
+  static bool Load(const base::DictValue& dict, PageRange* option) {
+    const base::ListValue* list_value = dict.FindList(kPageRangeInterval);
     if (!list_value)
       return false;
     for (const base::Value& interval : *list_value) {
@@ -1413,11 +1341,11 @@ class PageRangeTraits : public ItemsTraits<kOptionPageRange> {
     return true;
   }
 
-  static void Save(const PageRange& option, base::Value::Dict* dict) {
+  static void Save(const PageRange& option, base::DictValue* dict) {
     if (!option.empty()) {
-      base::Value::List list;
+      base::ListValue list;
       for (const auto& item : option) {
-        base::Value::Dict interval;
+        base::DictValue interval;
         interval.Set(kPageRangeStart, item.start);
         if (item.end < kMaxPageNumber)
           interval.Set(kPageRangeEnd, item.end);
@@ -1432,7 +1360,7 @@ class MediaTraits : public ItemsTraits<kOptionMediaSize> {
  public:
   static bool IsValid(const Media& option) { return option.IsValid(); }
 
-  static bool Load(const base::Value::Dict& dict, Media* option) {
+  static bool Load(const base::DictValue& dict, Media* option) {
     const std::string* type = dict.FindString(kKeyName);
     if (type && !TypeFromString(kMediaDefinitions, *type, &option->size_name)) {
       return false;
@@ -1500,7 +1428,7 @@ class MediaTraits : public ItemsTraits<kOptionMediaSize> {
     return true;
   }
 
-  static void Save(const Media& option, base::Value::Dict* dict) {
+  static void Save(const Media& option, base::DictValue* dict) {
     if (option.size_name != MediaSize::CUSTOM_MEDIA) {
       dict->Set(kKeyName, TypeToString(kMediaDefinitions, option.size_name));
     }
@@ -1540,7 +1468,7 @@ class MediaTypeTraits : public ItemsTraits<kOptionMediaType> {
  public:
   static bool IsValid(const MediaType& option) { return option.IsValid(); }
 
-  static bool Load(const base::Value::Dict& dict, MediaType* option) {
+  static bool Load(const base::DictValue& dict, MediaType* option) {
     const std::string* vendor_id = dict.FindString(kKeyVendorId);
     if (!vendor_id) {
       return false;
@@ -1554,7 +1482,7 @@ class MediaTypeTraits : public ItemsTraits<kOptionMediaType> {
     return true;
   }
 
-  static void Save(const MediaType& option, base::Value::Dict* dict) {
+  static void Save(const MediaType& option, base::DictValue* dict) {
     dict->Set(kKeyVendorId, option.vendor_id);
     if (!option.custom_display_name.empty()) {
       dict->Set(kKeyCustomDisplayName, option.custom_display_name);
@@ -1567,7 +1495,7 @@ class CollateTraits : public NoValueValidation,
  public:
   static const bool kDefault = true;
 
-  static bool Load(const base::Value::Dict& dict, bool* option) {
+  static bool Load(const base::DictValue& dict, bool* option) {
     std::optional<bool> collate = dict.FindBool(kOptionCollate);
     if (!collate)
       return false;
@@ -1575,7 +1503,7 @@ class CollateTraits : public NoValueValidation,
     return true;
   }
 
-  static void Save(bool option, base::Value::Dict* dict) {
+  static void Save(bool option, base::DictValue* dict) {
     dict->Set(kOptionCollate, option);
   }
 };
@@ -1585,7 +1513,7 @@ class ReverseTraits : public NoValueValidation,
  public:
   static const bool kDefault = false;
 
-  static bool Load(const base::Value::Dict& dict, bool* option) {
+  static bool Load(const base::DictValue& dict, bool* option) {
     std::optional<bool> reverse = dict.FindBool(kOptionReverse);
     if (!reverse)
       return false;
@@ -1593,7 +1521,7 @@ class ReverseTraits : public NoValueValidation,
     return true;
   }
 
-  static void Save(bool option, base::Value::Dict* dict) {
+  static void Save(bool option, base::DictValue* dict) {
     dict->Set(kOptionReverse, option);
   }
 };
@@ -1602,7 +1530,7 @@ class VendorItemTraits : public ItemsTraits<kOptionVendorItem> {
  public:
   static bool IsValid(const VendorItem& option) { return option.IsValid(); }
 
-  static bool Load(const base::Value::Dict& dict, VendorItem* option) {
+  static bool Load(const base::DictValue& dict, VendorItem* option) {
     const std::string* id = dict.FindString(kKeyId);
     if (!id) {
       return false;
@@ -1616,7 +1544,7 @@ class VendorItemTraits : public ItemsTraits<kOptionVendorItem> {
     return true;
   }
 
-  static void Save(const VendorItem& option, base::Value::Dict* dict) {
+  static void Save(const VendorItem& option, base::DictValue* dict) {
     dict->Set(kKeyId, option.id);
     dict->Set(kKeyValue, option.value);
   }
@@ -1625,7 +1553,7 @@ class VendorItemTraits : public ItemsTraits<kOptionVendorItem> {
 #if BUILDFLAG(IS_CHROMEOS)
 class PinTraits : public NoValueValidation, public ItemsTraits<kOptionPin> {
  public:
-  static bool Load(const base::Value::Dict& dict, bool* option) {
+  static bool Load(const base::DictValue& dict, bool* option) {
     std::optional<bool> supported = dict.FindBool(kPinSupported);
     if (!supported)
       return false;
@@ -1633,7 +1561,7 @@ class PinTraits : public NoValueValidation, public ItemsTraits<kOptionPin> {
     return true;
   }
 
-  static void Save(bool option, base::Value::Dict* dict) {
+  static void Save(bool option, base::DictValue* dict) {
     dict->Set(kPinSupported, option);
   }
 };

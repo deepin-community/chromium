@@ -10,26 +10,25 @@
 
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/ui_base_types.h"
 #include "url/gurl.h"
 
 namespace {
 
 using ::content::GlobalRenderFrameHostId;
-using ::testing::SizeIs;
 using ::testing::UnorderedElementsAre;
 using ::testing::UnorderedElementsAreArray;
 
 constexpr std::string_view kUrl1 = "https://www.foo.com";
 constexpr std::string_view kUrl2 = "https://www.bar.com";
 constexpr std::string_view kUrl3 = "https://www.doe.com";
-
-}  // namespace
 
 class CustomCursorSuppressorTest : public BrowserWithTestWindowTest {
  public:
@@ -191,10 +190,10 @@ TEST_F(CustomCursorSuppressorTest, MultipleBrowsers) {
 
   // Set up a second browser window.
   Browser::CreateParams native_params(profile(), true);
-  native_params.initial_show_state = ui::SHOW_STATE_NORMAL;
+  native_params.initial_show_state = ui::mojom::WindowShowState::kNormal;
   std::unique_ptr<Browser> browser2(
       CreateBrowserWithTestWindowForParams(native_params));
-  ASSERT_THAT(*BrowserList::GetInstance(), SizeIs(2));
+  ASSERT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 2u);
   AddTab(browser2.get(), GURL(kUrl3));
 
   CustomCursorSuppressor suppressor;
@@ -221,10 +220,10 @@ TEST_F(CustomCursorSuppressorTest, BrowserAddition) {
 
   // Open a second browser window while the suppression is already on.
   Browser::CreateParams native_params(profile(), true);
-  native_params.initial_show_state = ui::SHOW_STATE_NORMAL;
+  native_params.initial_show_state = ui::mojom::WindowShowState::kNormal;
   std::unique_ptr<Browser> browser2(
       CreateBrowserWithTestWindowForParams(native_params));
-  ASSERT_THAT(*BrowserList::GetInstance(), SizeIs(2));
+  ASSERT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 2u);
   AddTab(browser2.get(), GURL(kUrl2));
   EXPECT_THAT(suppressor.SuppressedRenderFrameHostIdsForTesting(),
               UnorderedElementsAre(GetRfhIdOfActiveWebContents(*browser()),
@@ -235,3 +234,5 @@ TEST_F(CustomCursorSuppressorTest, BrowserAddition) {
   // All tabs must be closed prior to browser destruction.
   browser2->tab_strip_model()->CloseAllTabs();
 }
+
+}  // namespace

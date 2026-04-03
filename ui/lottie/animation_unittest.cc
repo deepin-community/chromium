@@ -7,8 +7,10 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
@@ -32,6 +34,7 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkRect.h"
 #include "third_party/skia/include/core/SkStream.h"
+#include "ui/gfx/animation/animation.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/lottie/animation_observer.h"
@@ -190,7 +193,7 @@ class TestSkottieFrameDataProvider : public cc::SkottieFrameDataProvider {
   ~TestSkottieFrameDataProvider() override = default;
 
   scoped_refptr<ImageAsset> LoadImageAsset(
-      base::StringPiece resource_id,
+      std::string_view resource_id,
       const base::FilePath& resource_path,
       const std::optional<gfx::Size>& size) override {
     auto new_asset = base::MakeRefCounted<ImageAssetImpl>();
@@ -207,6 +210,20 @@ class TestSkottieFrameDataProvider : public cc::SkottieFrameDataProvider {
   std::map<std::string, scoped_refptr<ImageAssetImpl>> current_assets_;
 };
 
+class ScopedPrefersReducedMotion {
+ public:
+  ScopedPrefersReducedMotion() {
+    gfx::Animation::SetPrefersReducedMotionForTesting(true);
+  }
+
+  ~ScopedPrefersReducedMotion() {
+    gfx::Animation::SetPrefersReducedMotionForTesting(previous_);
+  }
+
+ private:
+  bool previous_ = gfx::Animation::PrefersReducedMotion();
+};
+
 }  // namespace
 
 class AnimationTest : public testing::Test {
@@ -219,8 +236,8 @@ class AnimationTest : public testing::Test {
   void SetUp() override {
     canvas_ = std::make_unique<gfx::Canvas>(
         gfx::Size(kAnimationWidth, kAnimationHeight), 1.f, false);
-    skottie_ = cc::SkottieWrapper::CreateNonSerializable(
-        base::as_bytes(base::make_span(kData, std::strlen(kData))));
+    skottie_ = cc::SkottieWrapper::UnsafeCreateNonSerializable(
+        base::byte_span_from_cstring(kData));
     animation_ = std::make_unique<Animation>(skottie_);
   }
 
@@ -295,7 +312,7 @@ class AnimationTest : public testing::Test {
       const SkColor* pixels = reinterpret_cast<SkColor*>(bitmap.getPixels());
       const int num_pixels = bitmap.width() * bitmap.height();
       for (int i = 0; i < num_pixels; i++)
-        EXPECT_EQ(pixels[i], color);
+        UNSAFE_TODO(EXPECT_EQ(pixels[i], color));
     } else {
       for (int x = 0; x < bitmap.width(); x++)
         for (int y = 0; y < bitmap.height(); y++)
@@ -338,16 +355,16 @@ class AnimationWithImageAssetsTest : public AnimationTest {
 };
 
 TEST_F(AnimationTest, InitializationAndLoadingData) {
-  skottie_ = cc::SkottieWrapper::CreateNonSerializable(
-      base::as_bytes(base::make_span(kData, std::strlen(kData))));
+  skottie_ = cc::SkottieWrapper::UnsafeCreateNonSerializable(
+      base::byte_span_from_cstring(kData));
   animation_ = std::make_unique<Animation>(skottie_);
   EXPECT_FLOAT_EQ(animation_->GetOriginalSize().width(), kAnimationWidth);
   EXPECT_FLOAT_EQ(animation_->GetOriginalSize().height(), kAnimationHeight);
   EXPECT_EQ(animation_->GetAnimationDuration(), kAnimationDuration);
   EXPECT_TRUE(IsStopped());
 
-  skottie_ = cc::SkottieWrapper::CreateNonSerializable(
-      base::as_bytes(base::make_span(kData, std::strlen(kData))));
+  skottie_ = cc::SkottieWrapper::UnsafeCreateNonSerializable(
+      base::byte_span_from_cstring(kData));
   animation_ = std::make_unique<Animation>(skottie_);
   EXPECT_FLOAT_EQ(animation_->GetOriginalSize().width(), kAnimationWidth);
   EXPECT_FLOAT_EQ(animation_->GetOriginalSize().height(), kAnimationHeight);
@@ -401,6 +418,34 @@ TEST_F(AnimationTest, PlayLinearAnimation) {
   EXPECT_TRUE(HasAnimationEnded());
   EXPECT_TRUE(observer.animation_cycle_ended());
   IsAllSameColor(SK_ColorBLUE, canvas()->GetBitmap());
+}
+
+TEST_F(AnimationTest, ReducedAnimations) {
+  // This test ensures that reduced animations only affects the rendering of the
+  // animation, and has no side effects on the events or reporting of progress.
+  TestAnimationObserver observer(animation_.get());
+  ScopedPrefersReducedMotion prefers_reduced_motion;
+
+  AdvanceClock(base::Milliseconds(300));
+
+  EXPECT_TRUE(IsStopped());
+  animation_->Start(Animation::PlaybackConfig::CreateWithStyle(
+      Animation::Style::kLinear, *animation_));
+  animation_->Paint(canvas(), NowTicks(), animation_->GetOriginalSize());
+  IsAllSameColor(SK_ColorGREEN, canvas()->GetBitmap());
+  constexpr auto kAdvance = base::Milliseconds(50);
+  AdvanceClock(kAdvance);
+
+  animation_->Paint(canvas(), NowTicks(), animation_->GetOriginalSize());
+  IsAllSameColor(SK_ColorGREEN, canvas()->GetBitmap());
+
+  // Advance the clock to the end of the animation.
+  constexpr auto kAdvanceToEnd =
+      kAnimationDuration - kAdvance + base::Milliseconds(1);
+  AdvanceClock(kAdvanceToEnd);
+  animation_->Paint(canvas(), NowTicks(), animation_->GetOriginalSize());
+  // The frame should not change.
+  IsAllSameColor(SK_ColorGREEN, canvas()->GetBitmap());
 }
 
 TEST_F(AnimationTest, StopLinearAnimation) {
@@ -1533,29 +1578,31 @@ TEST_F(AnimationTest, GetPlaybackConfig) {
       {{/*start_offset=*/kAnimationDuration / 4,
         /*end_offset=*/kAnimationDuration * 3 / 4}},
       /*initial_offset=*/kAnimationDuration / 2,
-      /*initial_completed_cycles=*/2, Animation::Style::kThrobbing);
+      /*initial_completed_cycles=*/2,
+      /*style=*/Animation::Style::kThrobbing,
+      /*ignore_reduced_motion=*/false);
   animation_->Start(test_config);
   ASSERT_TRUE(animation_->GetPlaybackConfig());
-  EXPECT_THAT(
-      *animation_->GetPlaybackConfig(),
-      FieldsAre(ElementsAre(
-                    FieldsAre(test_config.scheduled_cycles.front().start_offset,
-                              test_config.scheduled_cycles.front().end_offset)),
-                test_config.initial_offset,
-                test_config.initial_completed_cycles, test_config.style));
+  EXPECT_THAT(*animation_->GetPlaybackConfig(),
+              FieldsAre(ElementsAre(FieldsAre(
+                            test_config.scheduled_cycles.front().start_offset,
+                            test_config.scheduled_cycles.front().end_offset)),
+                        test_config.initial_offset,
+                        test_config.initial_completed_cycles, test_config.style,
+                        test_config.ignore_reduced_motion));
   animation_->Stop();
   EXPECT_FALSE(animation_->GetPlaybackConfig());
   test_config.scheduled_cycles.front().start_offset = kAnimationDuration / 2;
   test_config.style = Animation::Style::kLoop;
   animation_->Start(test_config);
   ASSERT_TRUE(animation_->GetPlaybackConfig());
-  EXPECT_THAT(
-      *animation_->GetPlaybackConfig(),
-      FieldsAre(ElementsAre(
-                    FieldsAre(test_config.scheduled_cycles.front().start_offset,
-                              test_config.scheduled_cycles.front().end_offset)),
-                test_config.initial_offset,
-                test_config.initial_completed_cycles, test_config.style));
+  EXPECT_THAT(*animation_->GetPlaybackConfig(),
+              FieldsAre(ElementsAre(FieldsAre(
+                            test_config.scheduled_cycles.front().start_offset,
+                            test_config.scheduled_cycles.front().end_offset)),
+                        test_config.initial_offset,
+                        test_config.initial_completed_cycles, test_config.style,
+                        test_config.ignore_reduced_motion));
 }
 
 TEST_F(AnimationTest, GetNumCompletedCycles) {

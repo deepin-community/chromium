@@ -5,7 +5,6 @@
 import {AutomationPredicate} from '/common/automation_predicate.js';
 import {AutomationUtil} from '/common/automation_util.js';
 import {constants} from '/common/constants.js';
-import {FlagName, Flags} from '/common/flags.js';
 import {NodeNavigationUtils} from '/common/node_navigation_utils.js';
 import {NodeUtils} from '/common/node_utils.js';
 import {ParagraphUtils} from '/common/paragraph_utils.js';
@@ -17,7 +16,8 @@ import {MetricsUtils} from './metrics_utils.js';
 import {PrefsManager} from './prefs_manager.js';
 import {SelectToSpeakConstants} from './select_to_speak_constants.js';
 import {TtsManager} from './tts_manager.js';
-import {SelectToSpeakUiListener, UiManager} from './ui_manager.js';
+import type {SelectToSpeakUiListener} from './ui_manager.js';
+import {UiManager} from './ui_manager.js';
 
 type AutomationNode = chrome.automation.AutomationNode;
 import AutomationEvent = chrome.automation.AutomationEvent;
@@ -39,8 +39,8 @@ const GSUITE_APP_REGEXP =
  * @param node The node to check
  * @return The root node of the GSuite app, or null if none is found.
  */
-export function getGSuiteAppRoot(node: AutomationNode|
-                                 undefined): AutomationNode|null {
+export function getGSuiteAppRoot(node: AutomationNode|undefined):
+    AutomationNode|null {
   while (node !== undefined && node.root !== undefined) {
     if (node.root.url !== undefined && GSUITE_APP_REGEXP.exec(node.root.url)) {
       return node.root;
@@ -62,10 +62,10 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
   private currentNodeGroupItemIndex_: number;
   private currentNodeGroups_: ParagraphUtils.NodeGroup[];
   private currentNodeWord_: {start: number, end: number}|null;
+  private createdOffscreenDocument_: Promise<void>|null = null;
   private desktop_: AutomationNode|undefined;
   private inputHandler_: InputHandler|null;
   private intervalId_: number|undefined;
-  private nullSelectionTone_: HTMLAudioElement;
   private onStateChangeRequestedCallbackForTest_: (() => void)|null;
   private prefsManager_: PrefsManager;
   private scrollToSpokenNode_: boolean;
@@ -75,6 +75,9 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
   private ttsManager_: TtsManager;
   private uiManager_: UiManager;
   private onLoadDesktopCallbackForTest_: (() => void)|null;
+  declare private readyForTestingCallback_?: VoidFunction;
+  readyForTestingPromise: Promise<void> =
+      new Promise(resolve => this.readyForTestingCallback_ = resolve);
 
   /** Please keep fields in alphabetical order. */
   constructor() {
@@ -132,8 +135,6 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
      */
     this.intervalId_;
 
-    this.nullSelectionTone_ = new Audio('earcons/null_selection.ogg');
-
     /**
      * Function to be called when a state change request is received from the
      * accessibilityPrivate API.
@@ -177,6 +178,11 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
       desktop.addEventListener(
           EventType.MOUSE_RELEASED, evt => this.onAutomationHitTest_(evt),
           true);
+      // Chrome PDF Viewer with PDF OCR sends a layout complete event when
+      // finishing extracting text from inaccessible PDF pages. The same for
+      // Backlight (AKA Gallery on ChromeOS).
+      desktop.addEventListener(
+          EventType.LAYOUT_COMPLETE, evt => this.onLayoutComplete_(evt), true);
 
       if (this.onLoadDesktopCallbackForTest_) {
         this.onLoadDesktopCallbackForTest_();
@@ -187,32 +193,27 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
     this.prefsManager_.initPreferences();
 
     this.runContentScripts_();
-    this.setUpEventListeners_();
-
-    await Flags.init();
+    await this.setUpEventListeners_();
     const createArgs: chrome.contextMenus.CreateProperties = {
       title: chrome.i18n.getMessage(
           'select_to_speak_listen_context_menu_option_text'),
       contexts: [chrome.contextMenus.ContextType.SELECTION],
       id: 'select_to_speak',
     };
-    if (Flags.isEnabled(FlagName.MANIFEST_V3)) {
-      chrome.contextMenus.onClicked.addListener(() => {
-        this.getFocusedNodeAndSpeakSelectedText_();
-      });
-    } else {
-      createArgs['onclick'] = () => {
-        this.getFocusedNodeAndSpeakSelectedText_();
-      };
-    }
+    chrome.contextMenus.onClicked.addListener(() => {
+      this.getFocusedNodeAndSpeakSelectedText_();
+    });
+
     // Install the context menu in the Ash browser.
     await chrome.contextMenus.create(createArgs);
 
-    // Listen for context menu clicks from other contexts (like Lacros).
+    // Listen for context menu clicks from other contexts.
     chrome.accessibilityPrivate.onSelectToSpeakContextMenuClicked.addListener(
         () => {
           this.getFocusedNodeAndSpeakSelectedText_();
         });
+
+    this.readyForTestingCallback_!();
   }
 
   /**
@@ -236,28 +237,99 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
   }
 
   /**
+   * Read the status message under the status node in a PDF accessibility tree
+   * if PDF content is still being loaded. In the loading phase, the PDF a11y
+   * tree will have one child node with the banner role, which contains the
+   * loading status message as follows:
+   * pdfRoot
+   * - banner
+   * -- status
+   * --- staticText: "Loading PDF"
+   */
+  private readPdfStatusNodeIfStillLoading_(pdfRoot: AutomationNode): boolean {
+    if (pdfRoot.role === RoleType.PDF_ROOT && pdfRoot.children.length === 1 &&
+        pdfRoot.firstChild!.role === RoleType.BANNER &&
+        pdfRoot.firstChild!.children.length === 1 &&
+        pdfRoot.firstChild!.firstChild!.role === RoleType.STATUS &&
+        pdfRoot.firstChild!.firstChild!.children.length === 1 &&
+        pdfRoot.firstChild!.firstChild!.firstChild!.role ===
+            RoleType.STATIC_TEXT) {
+      this.startSpeechQueue_([pdfRoot.firstChild!.firstChild!.firstChild!], {
+        clearFocusRing: true,
+      });
+      return true;
+    }
+    return false;
+  }
+
+  private onLayoutComplete_(evt: AutomationEvent): void {
+    const root: AutomationNode = evt.target;
+    if (!root.url || !root.url.endsWith('.pdf')) {
+      return;
+    }
+
+    // Check if it's a PDF being viewed in Backlight (AKA the Gallery App on
+    // ChromeOS), or the Chrome PDF Viewer with PDF OCR in the full-page view.
+    const pdfRoot: AutomationNode|null = root.find({role: RoleType.PDF_ROOT});
+    if (!pdfRoot) {
+      return;
+    }
+
+    this.recordOcredPagesInPdf_(pdfRoot);
+  }
+
+  /**
+   * Record the number of OCRed pages in the PDF accessibility tree.
+   */
+  private recordOcredPagesInPdf_(pdfRoot: AutomationNode): void {
+    // When PDF OCR successfully extracts text from inaccessible PDF pages, PDF
+    // pages with OCRed content will have the "ocred_page" class name.
+    const orcedPages = pdfRoot.findAll({attributes: {className: 'ocred_page'}});
+    MetricsUtils.recordNumPdfPagesOcred(orcedPages.length);
+  }
+
+  /**
    * Called in response to our hit test after the mouse is released,
    * when the user is in a mode where Select-to-speak is capturing
    * mouse events (for example holding down Search).
    * @param evt The automation event from the hit test.
    */
   private onAutomationHitTest_(evt: AutomationEvent): void {
-    // Walk up to the nearest window, web area, toolbar, or dialog that the
-    // hit node is contained inside. Only speak objects within that
-    // container. In the future we might include other container-like
-    // roles here.
-    var root = evt.target;
+    // Walk up to the nearest window, web area, document, graphics document,
+    // toolbar, or dialog that the hit node is contained inside. Only speak
+    // objects within that container. In the future we might include other
+    // root-like roles here. (Consider harmonizing with the `ui::IsRootLike`
+    // method.)
+    let root = evt.target;
+
+    // In Chrome PDF Viewer, PDF content for a large PDF might still be loading
+    // into a PDF accessibility tree when the user selects text on a PDF page.
+    // In this case, the PDF root has only one child node, which is the status
+    // node that contains a loading status message. Read this status message if
+    // the user tries selecting text during this loading phase. The same should
+    // happen in the Gallery App (AKA Backlight). Backlight uses a different
+    // role for its PDF container: `ax::mojom::Role::kGraphicsDocument`.
+    if ((root.role === RoleType.EMBEDDED_OBJECT ||
+         root.role === RoleType.GRAPHICS_DOCUMENT) &&
+        root.children.length === 1 &&
+        root.firstChild!.role === RoleType.PDF_ROOT &&
+        root.firstChild!.children.length === 1 &&
+        this.readPdfStatusNodeIfStillLoading_(root.firstChild!)) {
+      return;
+    }
+
     // TODO: Use AutomationPredicate.root instead?
     while (root.parent && root.role !== RoleType.WINDOW &&
            root.role !== RoleType.ROOT_WEB_AREA &&
            root.role !== RoleType.DESKTOP && root.role !== RoleType.DIALOG &&
            root.role !== RoleType.ALERT_DIALOG &&
-           root.role !== RoleType.TOOLBAR) {
+           root.role !== RoleType.TOOLBAR && root.role !== RoleType.DOCUMENT &&
+           root.role !== RoleType.GRAPHICS_DOCUMENT) {
       root = root.parent;
     }
 
-    var rect = this.inputHandler_!.getMouseRect();
-    var nodes: AutomationNode[] = [];
+    const rect = this.inputHandler_!.getMouseRect();
+    let nodes: AutomationNode[] = [];
     chrome.automation.getFocus(focusedNode => {
       // In some cases, e.g. ARC++, the window received in the hit test request,
       // which is computed based on which window is the event handler for the
@@ -268,8 +340,8 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
       // that a node is in ARC++.
       if (!NodeUtils.findAllMatching(root, rect, nodes) && focusedNode &&
           focusedNode.root!.role !== RoleType.DESKTOP) {
-        // TODO(b/314203187): Determine if not null assertion is appropriate
-        // here.
+        // TODO(crbug.com/314203187): Determine if not null assertion is
+        // appropriate here.
         NodeUtils.findAllMatching(focusedNode.root!, rect, nodes);
       }
       if (nodes.length === 1 && UiManager.isTrayButton(nodes[0])) {
@@ -365,7 +437,8 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
         NodeUtils.getDeepEquivalentForSelection(endObject!, endOffset, false);
 
     // TODO(katie): We go into these blocks but they feel redundant. Can
-    // there be another way to do this?
+    // there be another way to do this? (E.g. by using the `SelIsBackward` field
+    // in `AXTreeData`?)
     let firstPosition;
     let lastPosition;
     if (startPosition.node === endPosition.node) {
@@ -400,7 +473,7 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
    * @param firstPosition The first position at which to start reading.
    * @param lastPosition The last position at which to stop reading.
    * @param method the method used to
-   *     activate the speech, null if not actived by user.
+   *     activate the speech, null if not activated by user.
    * @param focusedNode The node with user focus.
    */
   private readNodesBetweenPositions_(
@@ -408,7 +481,7 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
       method: MetricsUtils.StartSpeechMethod|null,
       focusedNode: AutomationNode|undefined): void {
     const nodes = [];
-    // TODO(b/314204374): AutomationUtil.findNextNode may return null.
+    // TODO(crbug.com/314204374): AutomationUtil.findNextNode may return null.
     let selectedNode: AutomationNode|null = firstPosition.node;
     // If the method is set, a user requested the speech.
     const userRequested = method !== null;
@@ -497,19 +570,18 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
         this.inputHandler_!.onRequestReadClipboardData();
         this.currentNodeGroupItem_ =
             new ParagraphUtils.NodeGroupItem(gsuiteAppRootNode, 0, false);
-        if (tabs.length > 0 && tabs[0].url === gsuiteAppRootNode.url) {
-          const tab = tabs[0];
-          chrome.tabs.executeScript(tab.id, {
-            allFrames: true,
-            matchAboutBlank: true,
-            code: 'document.execCommand("copy");',
-          });
-        } else {
-          // In Lacros because chrome.tabs didn't return a tab or it
-          // was a tab with a different URL.
-          chrome.accessibilityPrivate.clipboardCopyInActiveLacrosGoogleDoc(
-              gsuiteAppRootNode.url);
+        if (tabs.length === 0 || tabs[0].url !== gsuiteAppRootNode.url) {
+          return;
         }
+        const tab = tabs[0];
+        chrome.scripting.executeScript({
+          target: {
+            tabId: tab.id!,
+            allFrames: true,
+          },
+          func: () => document.execCommand('copy'),
+        });
+
         if (userRequested) {
           MetricsUtils.recordStartEvent(methodNumber, this.prefsManager_);
         }
@@ -522,8 +594,8 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
    * a user-initiated scroll is done.
    * @param root The root node to listen for events on.
    */
-  private initializeScrollingToOffscreenNodes_(root: AutomationNode|
-                                               undefined): void {
+  private initializeScrollingToOffscreenNodes_(root: AutomationNode|undefined):
+      void {
     if (!root) {
       return;
     }
@@ -557,8 +629,10 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
    * keystroke but nothing was selected.
    */
   private onNullSelection_(): void {
+    this.maybeCreateOffscreenDocument_();
+
     if (!this.shouldShowNavigationControls_()) {
-      this.nullSelectionTone_.play();
+      chrome.runtime.sendMessage(undefined, {command: 'playNullSelectionTone'});
       return;
     }
 
@@ -728,7 +802,11 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
         },
         tabs => {
           tabs.forEach(tab => {
-            chrome.tabs.executeScript(tab.id, {file: script});
+            chrome.scripting.executeScript({
+              target: {tabId: tab.id!},
+              files: [script],
+              world: chrome.scripting.ExecutionWorld.MAIN,
+            });
           });
         });
   }
@@ -736,7 +814,10 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
   /**
    * Set up event listeners user input.
    */
-  private setUpEventListeners_(): void {
+  private async setUpEventListeners_(): Promise<void> {
+    // Offscreen documented necessary for InputHandler.
+    await this.maybeCreateOffscreenDocument_();
+
     this.inputHandler_ = new InputHandler({
       // canStartSelecting: Whether mouse selection can begin.
       canStartSelecting: () => {
@@ -1133,7 +1214,7 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
 
     MetricsUtils.recordTtsEngineUsed(voiceName, this.prefsManager_);
     this.ttsManager_.speak(
-        // TODO(b/314203187): Options may be undefined.
+        // TODO(crbug.com/314203187): Options may be undefined.
         nodeGroup.text, options!, this.prefsManager_.isNetworkVoice(voiceName),
         fallbackVoiceName);
   }
@@ -1366,7 +1447,7 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
   }
 
   /**
-   * Uses the 'word' speech event to determine which node is currently beings
+   * Uses the 'word' speech event to determine which node is currently being
    * spoken, and prepares for highlight if enabled.
    * @param event The event to use for updates.
    * @param nodeGroup The node group for this
@@ -1377,7 +1458,7 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
     if (event.charIndex === undefined) {
       return;
     }
-    // Not all speech engines include length in the ttsEvent object. .
+    // Not all speech engines include length in the ttsEvent object.
     const hasLength = event.length !== undefined && event.length >= 0;
     const length = event.length || 0;
     // Only update the |this.currentCharIndex_| if event has a higher charIndex.
@@ -1740,6 +1821,43 @@ export class SelectToSpeak implements SelectToSpeakUiListener {
     }
     // Desktop already loaded.
     callback();
+  }
+
+  /**
+   * Creates an offscreen document if it does not yet exist.
+   * The offscreen document is used to play sounds (the null tone)
+   * and listen to copy/paste document events in InputHandler.
+   */
+  async maybeCreateOffscreenDocument_() {
+    const offscreenUrl =
+        chrome.runtime.getURL('select_to_speak/offscreen.html');
+
+    const existingContexts = await chrome.runtime.getContexts({
+      contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+      documentUrls: [offscreenUrl]
+    });
+
+    if (existingContexts.length > 0) {
+      return;
+    }
+
+    if (!this.createdOffscreenDocument_) {
+      this.createdOffscreenDocument_ = chrome.offscreen.createDocument({
+        url: offscreenUrl,
+        reasons: [
+          chrome.offscreen.Reason.AUDIO_PLAYBACK,
+          chrome.offscreen.Reason.DOM_PARSER
+        ],
+        justification: 'Use the audio element and monitor clipboard',
+      });
+    }
+    try {
+      await this.createdOffscreenDocument_;
+    } catch (error) {
+      console.error('Failed to create offscreen document: ', error);
+      throw error;
+    }
+    this.createdOffscreenDocument_ = null;
   }
 }
 

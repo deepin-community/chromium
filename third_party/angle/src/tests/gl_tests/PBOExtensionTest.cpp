@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/ANGLETest.h"
 
 using namespace angle;
@@ -68,9 +72,9 @@ class PBOExtensionTest : public ANGLETest<>
         glDeleteProgram(mProgram);
     }
 
-    GLuint mPBO;
-    GLuint mProgram;
-    GLuint mPositionVBO;
+    GLuint mPBO         = 0;
+    GLuint mProgram     = 0;
+    GLuint mPositionVBO = 0;
 };
 
 TEST_P(PBOExtensionTest, PBOWithOtherTarget)

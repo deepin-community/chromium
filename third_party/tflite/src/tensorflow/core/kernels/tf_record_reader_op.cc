@@ -29,43 +29,43 @@ namespace tensorflow {
 
 class TFRecordReader : public ReaderBase {
  public:
-  TFRecordReader(const string& node_name, const string& compression_type,
-                 Env* env)
-      : ReaderBase(strings::StrCat("TFRecordReader '", node_name, "'")),
+  TFRecordReader(const std::string& node_name,
+                 const std::string& compression_type, Env* env)
+      : ReaderBase(absl::StrCat("TFRecordReader '", node_name, "'")),
         env_(env),
         offset_(0),
         compression_type_(compression_type) {}
 
-  Status OnWorkStartedLocked() override {
+  absl::Status OnWorkStartedLocked() override {
     offset_ = 0;
     TF_RETURN_IF_ERROR(env_->NewRandomAccessFile(current_work(), &file_));
 
     io::RecordReaderOptions options =
         io::RecordReaderOptions::CreateRecordReaderOptions(compression_type_);
     reader_.reset(new io::RecordReader(file_.get(), options));
-    return OkStatus();
+    return absl::OkStatus();
   }
 
-  Status OnWorkFinishedLocked() override {
+  absl::Status OnWorkFinishedLocked() override {
     reader_.reset(nullptr);
     file_.reset(nullptr);
-    return OkStatus();
+    return absl::OkStatus();
   }
 
-  Status ReadLocked(tstring* key, tstring* value, bool* produced,
-                    bool* at_end) override {
-    *key = strings::StrCat(current_work(), ":", offset_);
-    Status status = reader_->ReadRecord(&offset_, value);
+  absl::Status ReadLocked(tstring* key, tstring* value, bool* produced,
+                          bool* at_end) override {
+    *key = absl::StrCat(current_work(), ":", offset_);
+    absl::Status status = reader_->ReadRecord(&offset_, value);
     if (absl::IsOutOfRange(status)) {
       *at_end = true;
-      return OkStatus();
+      return absl::OkStatus();
     }
     if (!status.ok()) return status;
     *produced = true;
-    return OkStatus();
+    return absl::OkStatus();
   }
 
-  Status ResetLocked() override {
+  absl::Status ResetLocked() override {
     offset_ = 0;
     reader_.reset(nullptr);
     file_.reset(nullptr);
@@ -76,10 +76,10 @@ class TFRecordReader : public ReaderBase {
 
  private:
   Env* const env_;
-  uint64 offset_;
+  uint64_t offset_;
   std::unique_ptr<RandomAccessFile> file_;
   std::unique_ptr<io::RecordReader> reader_;
-  string compression_type_ = "";
+  std::string compression_type_ = "";
 };
 
 class TFRecordReaderOp : public ReaderOpKernel {
@@ -88,7 +88,7 @@ class TFRecordReaderOp : public ReaderOpKernel {
       : ReaderOpKernel(context) {
     Env* env = context->env();
 
-    string compression_type;
+    std::string compression_type;
     OP_REQUIRES_OK(context,
                    context->GetAttr("compression_type", &compression_type));
 

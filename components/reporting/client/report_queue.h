@@ -6,7 +6,6 @@
 #define COMPONENTS_REPORTING_CLIENT_REPORT_QUEUE_H_
 
 #include <memory>
-#include <queue>
 #include <string>
 #include <utility>
 
@@ -151,7 +150,7 @@ class ReportQueue {
 
   // |record| as a dictionary (owned) will be converted to a JSON string with
   // base::JsonWriter::Write.
-  void Enqueue(base::Value::Dict record,
+  void Enqueue(base::DictValue record,
                Priority priority,
                EnqueueCallback callback) const;
 

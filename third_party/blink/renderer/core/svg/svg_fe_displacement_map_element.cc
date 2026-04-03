@@ -19,23 +19,26 @@
 
 #include "third_party/blink/renderer/core/svg/svg_fe_displacement_map_element.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_number.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_string.h"
 #include "third_party/blink/renderer/core/svg/svg_enumeration_map.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
 template <>
 const SVGEnumerationMap& GetEnumerationMap<ChannelSelectorType>() {
-  static const SVGEnumerationMap::Entry enum_items[] = {
-      {CHANNEL_R, "R"},
-      {CHANNEL_G, "G"},
-      {CHANNEL_B, "B"},
-      {CHANNEL_A, "A"},
-  };
+  static constexpr auto enum_items = std::to_array<const char* const>({
+      "R",
+      "G",
+      "B",
+      "A",
+  });
   static const SVGEnumerationMap entries(enum_items);
   return entries;
 }
@@ -93,13 +96,11 @@ void SVGFEDisplacementMapElement::SvgAttributeChanged(
   if (attr_name == svg_names::kXChannelSelectorAttr ||
       attr_name == svg_names::kYChannelSelectorAttr ||
       attr_name == svg_names::kScaleAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     PrimitiveAttributeChanged(attr_name);
     return;
   }
 
   if (attr_name == svg_names::kInAttr || attr_name == svg_names::kIn2Attr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
@@ -110,6 +111,7 @@ void SVGFEDisplacementMapElement::SvgAttributeChanged(
 FilterEffect* SVGFEDisplacementMapElement::Build(
     SVGFilterBuilder* filter_builder,
     Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFEDisplacementMapElement);
   FilterEffect* input1 = filter_builder->GetEffectById(
       AtomicString(in1_->CurrentValue()->Value()));
   FilterEffect* input2 = filter_builder->GetEffectById(

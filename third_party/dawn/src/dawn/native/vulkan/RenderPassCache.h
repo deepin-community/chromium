@@ -29,6 +29,7 @@
 #define SRC_DAWN_NATIVE_VULKAN_RENDERPASSCACHE_H_
 
 #include <array>
+#include <atomic>
 #include <bitset>
 #include <mutex>
 
@@ -56,7 +57,8 @@ struct RenderPassCacheQuery {
                   wgpu::TextureFormat format,
                   wgpu::LoadOp loadOp,
                   wgpu::StoreOp storeOp,
-                  bool hasResolveTarget);
+                  bool hasResolveTarget,
+                  bool renderToSingleSampled);
     void SetDepthStencil(wgpu::TextureFormat format,
                          wgpu::LoadOp depthLoadOp,
                          wgpu::StoreOp depthStoreOp,
@@ -71,6 +73,8 @@ struct RenderPassCacheQuery {
     PerColorAttachment<wgpu::TextureFormat> colorFormats;
     PerColorAttachment<wgpu::LoadOp> colorLoadOp;
     PerColorAttachment<wgpu::StoreOp> colorStoreOp;
+    ColorAttachmentMask expandResolveMask;
+    ColorAttachmentMask renderToSingleSampleMask;
 
     bool hasDepthStencil = false;
     wgpu::TextureFormat depthStencilFormat;
@@ -95,11 +99,17 @@ class RenderPassCache {
     explicit RenderPassCache(Device* device);
     ~RenderPassCache();
 
-    ResultOrError<VkRenderPass> GetRenderPass(const RenderPassCacheQuery& query);
+    struct RenderPassInfo {
+        VkRenderPass renderPass = VK_NULL_HANDLE;
+        uint32_t mainSubpass = 0;
+        uint64_t uniqueId;
+    };
+
+    ResultOrError<RenderPassInfo> GetRenderPass(const RenderPassCacheQuery& query);
 
   private:
     // Does the actual VkRenderPass creation on a cache miss.
-    ResultOrError<VkRenderPass> CreateRenderPassForQuery(const RenderPassCacheQuery& query) const;
+    ResultOrError<RenderPassInfo> CreateRenderPassForQuery(const RenderPassCacheQuery& query);
 
     // Implements the functors necessary for to use RenderPassCacheQueries as absl::flat_hash_map
     // keys.
@@ -107,9 +117,11 @@ class RenderPassCache {
         size_t operator()(const RenderPassCacheQuery& query) const;
         bool operator()(const RenderPassCacheQuery& a, const RenderPassCacheQuery& b) const;
     };
-    using Cache = absl::flat_hash_map<RenderPassCacheQuery, VkRenderPass, CacheFuncs, CacheFuncs>;
+    using Cache = absl::flat_hash_map<RenderPassCacheQuery, RenderPassInfo, CacheFuncs, CacheFuncs>;
 
     raw_ptr<Device> mDevice = nullptr;
+
+    std::atomic<uint64_t> nextRenderPassId = 1;
 
     std::mutex mMutex;
     Cache mCache;

@@ -19,15 +19,22 @@
 #include "content/public/test/test_utils.h"
 #include "content/public/test/web_contents_tester.h"
 #include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/extension_registrar.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/login/users/chrome_user_manager_impl.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/login/users/user_manager_delegate_impl.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/browser/browser_process.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/user_manager_impl.h"
 #endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -35,31 +42,29 @@ using content::BrowserThread;
 
 namespace {
 
-base::Value::Dict MakeExtensionManifest(
-    const base::Value::Dict& manifest_extra) {
-  base::Value::Dict manifest = base::Value::Dict()
-                                   .Set("name", "Extension")
-                                   .Set("version", "1.0")
-                                   .Set("manifest_version", 2);
+base::DictValue MakeExtensionManifest(const base::DictValue& manifest_extra) {
+  base::DictValue manifest = base::DictValue()
+                                 .Set("name", "Extension")
+                                 .Set("version", "1.0")
+                                 .Set("manifest_version", 2);
   manifest.Merge(manifest_extra.Clone());
   return manifest;
 }
 
-base::Value::Dict MakePackagedAppManifest() {
-  return base::Value::Dict()
+base::DictValue MakePackagedAppManifest() {
+  return base::DictValue()
       .Set("name", "Test App Name")
       .Set("version", "2.0")
       .Set("manifest_version", 2)
-      .Set("app",
-           base::Value::Dict().Set(
-               "background",
-               base::Value::Dict().Set(
-                   "scripts", base::Value::List().Append("background.js"))));
+      .Set("app", base::DictValue().Set(
+                      "background",
+                      base::DictValue().Set("scripts", base::ListValue().Append(
+                                                           "background.js"))));
 }
 
 }  // namespace
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // Extra environment state required for ChromeOS.
 class TestExtensionEnvironment::ChromeOSEnv {
  public:
@@ -69,10 +74,13 @@ class TestExtensionEnvironment::ChromeOSEnv {
 
  private:
   ash::ScopedCrosSettingsTestHelper cros_settings_test_helper_;
-  user_manager::ScopedUserManager test_user_manager_{
-      ash::ChromeUserManagerImpl::CreateChromeUserManager()};
+  user_manager::ScopedUserManager user_manager_{
+      std::make_unique<user_manager::UserManagerImpl>(
+          std::make_unique<ash::UserManagerDelegateImpl>(),
+          g_browser_process->local_state(),
+          ash::CrosSettings::Get())};
 };
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // static
 ExtensionService* TestExtensionEnvironment::CreateExtensionServiceForProfile(
@@ -86,7 +94,7 @@ ExtensionService* TestExtensionEnvironment::CreateExtensionServiceForProfile(
 TestExtensionEnvironment::TestExtensionEnvironment(
     Type type,
     ProfileCreationType profile_creation_mode
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     ,
     OSSetupType os_setup_mode
 #endif
@@ -95,7 +103,7 @@ TestExtensionEnvironment::TestExtensionEnvironment(
           type == Type::kWithTaskEnvironment
               ? std::make_unique<content::BrowserTaskEnvironment>()
               : nullptr),
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       chromeos_env_(ash::DeviceSettingsService::IsInitialized() &&
                             os_setup_mode != OSSetupType::kSetUp
                         ? nullptr
@@ -122,8 +130,9 @@ TestExtensionSystem* TestExtensionEnvironment::GetExtensionSystem() {
 }
 
 ExtensionService* TestExtensionEnvironment::GetExtensionService() {
-  if (!extension_service_)
+  if (!extension_service_) {
     extension_service_ = CreateExtensionServiceForProfile(profile());
+  }
   return extension_service_;
 }
 
@@ -131,22 +140,30 @@ ExtensionPrefs* TestExtensionEnvironment::GetExtensionPrefs() {
   return ExtensionPrefs::Get(profile());
 }
 
+ExtensionRegistrar* TestExtensionEnvironment::GetExtensionRegistrar() {
+  // TODO(crbug.com/40355585): This is necessary to set up ExtensionService,
+  // due to dependencies it initializes. Revisit this once that's no longer
+  // the case.
+  GetExtensionService();
+  return ExtensionRegistrar::Get(profile());
+}
+
 const Extension* TestExtensionEnvironment::MakeExtension(
-    const base::Value::Dict& manifest_extra) {
-  base::Value::Dict manifest = MakeExtensionManifest(manifest_extra);
+    const base::DictValue& manifest_extra) {
+  base::DictValue manifest = MakeExtensionManifest(manifest_extra);
   scoped_refptr<const Extension> result =
       ExtensionBuilder().SetManifest(std::move(manifest)).Build();
-  GetExtensionService()->AddExtension(result.get());
+  GetExtensionRegistrar()->AddExtension(result.get());
   return result.get();
 }
 
 const Extension* TestExtensionEnvironment::MakeExtension(
-    const base::Value::Dict& manifest_extra,
+    const base::DictValue& manifest_extra,
     const std::string& id) {
-  base::Value::Dict manifest = MakeExtensionManifest(manifest_extra);
+  base::DictValue manifest = MakeExtensionManifest(manifest_extra);
   scoped_refptr<const Extension> result =
       ExtensionBuilder().SetManifest(std::move(manifest)).SetID(id).Build();
-  GetExtensionService()->AddExtension(result.get());
+  GetExtensionRegistrar()->AddExtension(result.get());
   return result.get();
 }
 
@@ -159,8 +176,9 @@ scoped_refptr<const Extension> TestExtensionEnvironment::MakePackagedApp(
           .AddFlags(Extension::FROM_WEBSTORE)
           .SetID(id)
           .Build();
-  if (install)
-    GetExtensionService()->AddExtension(result.get());
+  if (install) {
+    GetExtensionRegistrar()->AddExtension(result.get());
+  }
   return result;
 }
 
@@ -177,6 +195,10 @@ void TestExtensionEnvironment::DeleteProfile() {
   profile_ptr_ = nullptr;
   profile_.reset();
   extension_service_ = nullptr;
+}
+
+void TestExtensionEnvironment::ProfileMarkedForPermanentDeletionForTest() {
+  GetExtensionService()->ProfileMarkedForPermanentDeletionForTest();
 }
 
 }  // namespace extensions

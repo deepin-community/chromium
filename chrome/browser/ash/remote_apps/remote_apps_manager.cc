@@ -21,12 +21,12 @@
 #include "chrome/browser/ash/app_list/app_list_model_updater.h"
 #include "chrome/browser/ash/app_list/app_list_syncable_service.h"
 #include "chrome/browser/ash/app_list/app_list_syncable_service_factory.h"
+#include "chrome/browser/ash/app_list/app_list_util.h"
 #include "chrome/browser/ash/app_list/chrome_app_list_item.h"
 #include "chrome/browser/ash/app_list/chrome_app_list_model_updater.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/remote_apps/remote_apps_impl.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/app_list/app_list_util.h"
 #include "chrome/common/apps/platform_apps/api/enterprise_remote_apps.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/account_id/account_id.h"
@@ -318,12 +318,6 @@ void RemoteAppsManager::BindFactoryInterface(
   factory_receivers_.Add(this, std::move(pending_remote_apps_factory));
 }
 
-void RemoteAppsManager::BindLacrosBridgeInterface(
-    mojo::PendingReceiver<chromeos::remote_apps::mojom::RemoteAppsLacrosBridge>
-        pending_remote_apps_lacros_bridge) {
-  bridge_receivers_.Add(this, std::move(pending_remote_apps_lacros_bridge));
-}
-
 void RemoteAppsManager::Shutdown() {}
 
 void RemoteAppsManager::BindRemoteAppsAndAppLaunchObserver(
@@ -334,16 +328,6 @@ void RemoteAppsManager::BindRemoteAppsAndAppLaunchObserver(
         pending_observer) {
   remote_apps_impl_.BindRemoteAppsAndAppLaunchObserver(
       source_id, std::move(pending_remote_apps), std::move(pending_observer));
-}
-
-void RemoteAppsManager::BindRemoteAppsAndAppLaunchObserverForLacros(
-    mojo::PendingReceiver<chromeos::remote_apps::mojom::RemoteApps>
-        pending_remote_apps,
-    mojo::PendingRemote<chromeos::remote_apps::mojom::RemoteAppLaunchObserver>
-        pending_observer) {
-  remote_apps_impl_.BindRemoteAppsAndAppLaunchObserver(
-      std::nullopt, std::move(pending_remote_apps),
-      std::move(pending_observer));
 }
 
 const std::map<std::string, RemoteAppsModel::AppInfo>&

@@ -1,36 +1,9 @@
-/*
- * Copyright (C) 2011 Google Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// Copyright 2011 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 import * as Common from '../../core/common/common.js';
-import * as Host from '../../core/host/host.js';
-import * as Platform from '../../core/platform/platform.js';
+import type * as Platform from '../../core/platform/platform.js';
 import {assertNotNullOrUndefined} from '../../core/platform/platform.js';
 import * as Root from '../../core/root/root.js';
 import * as SDK from '../../core/sdk/sdk.js';
@@ -60,7 +33,7 @@ export class BreakpointManager extends Common.ObjectWrapper.ObjectWrapper<EventT
   readonly #breakpointsForUISourceCode =
       new Map<Workspace.UISourceCode.UISourceCode, Map<string, BreakpointLocation>>();
   readonly #breakpointByStorageId = new Map<string, Breakpoint>();
-  #updateBindingsCallbacks: ((uiSourceCode: Workspace.UISourceCode.UISourceCode) => Promise<void>)[] = [];
+  #updateBindingsCallbacks: Array<(uiSourceCode: Workspace.UISourceCode.UISourceCode) => Promise<void>> = [];
 
   private constructor(
       targetManager: SDK.TargetManager.TargetManager, workspace: Workspace.Workspace.WorkspaceImpl,
@@ -71,11 +44,9 @@ export class BreakpointManager extends Common.ObjectWrapper.ObjectWrapper<EventT
     this.targetManager = targetManager;
     this.debuggerWorkspaceBinding = debuggerWorkspaceBinding;
 
-    if (Root.Runtime.experiments.isEnabled(Root.Runtime.ExperimentName.SET_ALL_BREAKPOINTS_EAGERLY)) {
-      this.storage.mute();
-      this.#setInitialBreakpoints(restoreInitialBreakpointCount ?? INITIAL_RESTORE_BREAKPOINT_COUNT);
-      this.storage.unmute();
-    }
+    this.storage.mute();
+    this.#setInitialBreakpoints(restoreInitialBreakpointCount ?? INITIAL_RESTORE_BREAKPOINT_COUNT);
+    this.storage.unmute();
 
     this.#workspace.addEventListener(Workspace.Workspace.Events.UISourceCodeAdded, this.uiSourceCodeAdded, this);
     this.#workspace.addEventListener(Workspace.Workspace.Events.UISourceCodeRemoved, this.uiSourceCodeRemoved, this);
@@ -120,7 +91,7 @@ export class BreakpointManager extends Common.ObjectWrapper.ObjectWrapper<EventT
   }
 
   modelAdded(debuggerModel: SDK.DebuggerModel.DebuggerModel): void {
-    if (Root.Runtime.experiments.isEnabled(Root.Runtime.ExperimentName.INSTRUMENTATION_BREAKPOINTS)) {
+    if (Root.Runtime.experiments.isEnabled(Root.ExperimentNames.ExperimentName.INSTRUMENTATION_BREAKPOINTS)) {
       debuggerModel.setSynchronizeBreakpointsCallback(this.restoreBreakpointsForScript.bind(this));
     }
   }
@@ -157,7 +128,7 @@ export class BreakpointManager extends Common.ObjectWrapper.ObjectWrapper<EventT
   // This method explicitly awaits the source map (if necessary) and the uiSourceCodes
   // required to set all breakpoints that are related to this script.
   async restoreBreakpointsForScript(script: SDK.Script.Script): Promise<void> {
-    if (!Root.Runtime.experiments.isEnabled(Root.Runtime.ExperimentName.INSTRUMENTATION_BREAKPOINTS)) {
+    if (!Root.Runtime.experiments.isEnabled(Root.ExperimentNames.ExperimentName.INSTRUMENTATION_BREAKPOINTS)) {
       return;
     }
     if (!script.sourceURL) {
@@ -301,7 +272,7 @@ export class BreakpointManager extends Common.ObjectWrapper.ObjectWrapper<EventT
       if (!BreakpointManager.isValidPositionInScript(lineNumber, columnNumber, script)) {
         continue;
       }
-      this.innerSetBreakpoint(
+      this.#setBreakpoint(
           uiSourceCode, lineNumber, columnNumber, breakpoint.condition, breakpoint.enabled, breakpoint.isLogpoint,
           BreakpointOrigin.OTHER);
     }
@@ -345,7 +316,7 @@ export class BreakpointManager extends Common.ObjectWrapper.ObjectWrapper<EventT
       const normalizedLocation = await this.debuggerWorkspaceBinding.normalizeUILocation(uiLocation);
       const breakpointLocation = BreakpointManager.breakpointLocationFromUiLocation(normalizedLocation);
 
-      const breakpoint = this.innerSetBreakpoint(
+      const breakpoint = this.#setBreakpoint(
           normalizedLocation.uiSourceCode, breakpointLocation.lineNumber, breakpointLocation.columnNumber, condition,
           enabled, isLogpoint, origin);
 
@@ -362,7 +333,7 @@ export class BreakpointManager extends Common.ObjectWrapper.ObjectWrapper<EventT
     return primaryBreakpoint;
   }
 
-  private innerSetBreakpoint(
+  #setBreakpoint(
       uiSourceCode: Workspace.UISourceCode.UISourceCode, lineNumber: number, columnNumber: number|undefined,
       condition: UserCondition, enabled: boolean, isLogpoint: boolean, origin: BreakpointOrigin): Breakpoint {
     const url = BreakpointManager.getScriptForInlineUiSourceCode(uiSourceCode)?.sourceURL ?? uiSourceCode.url();
@@ -475,7 +446,7 @@ export class BreakpointManager extends Common.ObjectWrapper.ObjectWrapper<EventT
     this.dispatchEventToListeners(Events.BreakpointAdded, breakpointLocation);
   }
 
-  uiLocationRemoved(breakpoint: Breakpoint, uiLocation: Workspace.UISourceCode.UILocation): void {
+  uiLocationRemoved(uiLocation: Workspace.UISourceCode.UILocation): void {
     const breakpoints = this.#breakpointsForUISourceCode.get(uiLocation.uiSourceCode);
     if (!breakpoints) {
       return;
@@ -497,14 +468,16 @@ export class BreakpointManager extends Common.ObjectWrapper.ObjectWrapper<EventT
 }
 
 export enum Events {
+  /* eslint-disable @typescript-eslint/naming-convention -- Used by web_tests. */
   BreakpointAdded = 'breakpoint-added',
   BreakpointRemoved = 'breakpoint-removed',
+  /* eslint-enable @typescript-eslint/naming-convention */
 }
 
-export type EventTypes = {
-  [Events.BreakpointAdded]: BreakpointLocation,
-  [Events.BreakpointRemoved]: BreakpointLocation,
-};
+export interface EventTypes {
+  [Events.BreakpointAdded]: BreakpointLocation;
+  [Events.BreakpointRemoved]: BreakpointLocation;
+}
 
 export const enum DebuggerUpdateResult {
   OK = 'OK',
@@ -591,10 +564,6 @@ export class Breakpoint implements SDK.TargetManager.SDKModelObserver<SDK.Debugg
   updateLastResolvedState(locations: Position[]|null): void {
     this.#lastResolvedState = locations;
 
-    if (!Root.Runtime.experiments.isEnabled(Root.Runtime.ExperimentName.SET_ALL_BREAKPOINTS_EAGERLY)) {
-      return;
-    }
-
     let locationsOrUndefined: ScriptBreakpointLocation[]|undefined = undefined;
     if (locations) {
       locationsOrUndefined = locations.map(
@@ -617,7 +586,7 @@ export class Breakpoint implements SDK.TargetManager.SDKModelObserver<SDK.Debugg
       const modelBreakpoints = Array.from(this.#modelBreakpoints.values());
       await Promise.all(modelBreakpoints.map(async modelBreakpoint => {
         await modelBreakpoint.resetBreakpoint();
-        return this.#updateModel(modelBreakpoint);
+        return await this.#updateModel(modelBreakpoint);
       }));
     }
   }
@@ -712,7 +681,7 @@ export class Breakpoint implements SDK.TargetManager.SDKModelObserver<SDK.Debugg
       this.uiSourceCodes.delete(uiSourceCode);
       this.breakpointManager.removeHomeUISourceCode(uiSourceCode, this);
       if (!this.bound()) {
-        this.breakpointManager.uiLocationRemoved(this, this.defaultUILocation(uiSourceCode));
+        this.breakpointManager.uiLocationRemoved(this.defaultUILocation(uiSourceCode));
       }
     }
 
@@ -721,7 +690,7 @@ export class Breakpoint implements SDK.TargetManager.SDKModelObserver<SDK.Debugg
       for (const uiLocation of this.#uiLocations) {
         if (uiLocation.uiSourceCode === uiSourceCode) {
           this.#uiLocations.delete(uiLocation);
-          this.breakpointManager.uiLocationRemoved(this, uiLocation);
+          this.breakpointManager.uiLocationRemoved(uiLocation);
         }
       }
 
@@ -759,7 +728,7 @@ export class Breakpoint implements SDK.TargetManager.SDKModelObserver<SDK.Debugg
   uiLocationRemoved(uiLocation: Workspace.UISourceCode.UILocation): void {
     if (this.#uiLocations.has(uiLocation)) {
       this.#uiLocations.delete(uiLocation);
-      this.breakpointManager.uiLocationRemoved(this, uiLocation);
+      this.breakpointManager.uiLocationRemoved(uiLocation);
       if (!this.bound() && !this.isRemoved) {
         this.addAllUnboundLocations();
       }
@@ -772,15 +741,6 @@ export class Breakpoint implements SDK.TargetManager.SDKModelObserver<SDK.Debugg
 
   bound(): boolean {
     return this.#uiLocations.size !== 0;
-  }
-
-  hasBoundScript(): boolean {
-    for (const uiSourceCode of this.uiSourceCodes) {
-      if (uiSourceCode.project().type() === Workspace.Workspace.projectTypes.Network) {
-        return true;
-      }
-    }
-    return false;
   }
 
   setEnabled(enabled: boolean): void {
@@ -815,12 +775,10 @@ export class Breakpoint implements SDK.TargetManager.SDKModelObserver<SDK.Debugg
       return `${condition}\n\n//# sourceURL=${sourceUrl}` as SDK.DebuggerModel.BackendCondition;
     };
 
-    if (Root.Runtime.experiments.isEnabled('evaluateExpressionsWithSourceMaps') && location) {
+    if (location) {
       return SourceMapScopes.NamesResolver.allVariablesAtPosition(location)
-          .then(
-              nameMap => nameMap.size > 0 ?
-                  Formatter.FormatterWorkerPool.formatterWorkerPool().javaScriptSubstitute(condition, nameMap) :
-                  condition)
+          .then(nameMap => Formatter.FormatterWorkerPool.formatterWorkerPool().javaScriptSubstitute(condition, nameMap))
+          .catch(() => condition)
           .then(subsitutedCondition => addSourceUrl(subsitutedCondition), () => addSourceUrl(condition));
     }
     return addSourceUrl(condition);
@@ -840,10 +798,11 @@ export class Breakpoint implements SDK.TargetManager.SDKModelObserver<SDK.Debugg
 
   updateState(newState: BreakpointStorageState): void {
     // Only 'enabled', 'condition' and 'isLogpoint' can change (except during initialization).
-    Platform.DCHECK(
-        () => !this.#storageState ||
-            (this.#storageState.url === newState.url && this.#storageState.lineNumber === newState.lineNumber &&
-             this.#storageState.columnNumber === newState.columnNumber));
+    if (this.#storageState &&
+        (this.#storageState.url !== newState.url || this.#storageState.lineNumber !== newState.lineNumber ||
+         this.#storageState.columnNumber !== newState.columnNumber)) {
+      throw new Error('Invalid breakpoint state update');
+    }
     if (this.#storageState?.enabled === newState.enabled && this.#storageState?.condition === newState.condition &&
         this.#storageState?.isLogpoint === newState.isLogpoint) {
       return;
@@ -860,7 +819,7 @@ export class Breakpoint implements SDK.TargetManager.SDKModelObserver<SDK.Debugg
         this.addAllUnboundLocations();
       }
     }
-    return this.#updateModels();
+    return await this.#updateModels();
   }
 
   async remove(keepInStorage: boolean): Promise<void> {
@@ -891,7 +850,7 @@ export class Breakpoint implements SDK.TargetManager.SDKModelObserver<SDK.Debugg
 
   private removeAllUnboundLocations(): void {
     for (const uiSourceCode of this.uiSourceCodes) {
-      this.breakpointManager.uiLocationRemoved(this, this.defaultUILocation(uiSourceCode));
+      this.breakpointManager.uiLocationRemoved(this.defaultUILocation(uiSourceCode));
     }
   }
 
@@ -982,6 +941,19 @@ export class ModelBreakpoint {
     let result = DebuggerUpdateResult.PENDING;
     while (result === DebuggerUpdateResult.PENDING) {
       result = await this.#updateInDebugger();
+
+      // TODO(crbug.com/1229541): This is a mirror to the quickfix
+      // in #updateInDebugger. If the model didn't enable yet, instead of
+      // spamming the "setBreakpoint" call to the backend, we'll wait for
+      // it to finish enabling.
+      if (this.#debuggerModel.debuggerEnabled() && !this.#debuggerModel.isReadyToPause()) {
+        await this.#debuggerModel.once(SDK.DebuggerModel.Events.DebuggerIsReadyToPause);
+        if (!this.#debuggerModel.debuggerEnabled()) {
+          // If the model failed to enable, we won't try to set the breakpoint.
+          result = DebuggerUpdateResult.OK;
+          break;
+        }
+      }
     }
     release();
     return result;
@@ -990,7 +962,7 @@ export class ModelBreakpoint {
   private scriptDiverged(): boolean {
     for (const uiSourceCode of this.#breakpoint.getUiSourceCodes()) {
       const scriptFile = this.#debuggerWorkspaceBinding.scriptFile(uiSourceCode, this.#debuggerModel);
-      if (scriptFile && scriptFile.hasDivergedFromVM()) {
+      if (scriptFile?.hasDivergedFromVM()) {
         return true;
       }
     }
@@ -1034,7 +1006,7 @@ export class ModelBreakpoint {
           };
         }));
         newState = positions.slice(0);  // Create a copy
-      } else if (!Root.Runtime.experiments.isEnabled(Root.Runtime.ExperimentName.INSTRUMENTATION_BREAKPOINTS)) {
+      } else if (!Root.Runtime.experiments.isEnabled(Root.ExperimentNames.ExperimentName.INSTRUMENTATION_BREAKPOINTS)) {
         // Use this fallback if we do not have instrumentation breakpoints enabled yet. This currently makes
         // sure that v8 knows about the breakpoint and is able to restore it whenever the script is parsed.
         const lastResolvedState = this.#breakpoint.getLastResolvedState();
@@ -1130,7 +1102,7 @@ export class ModelBreakpoint {
         return this.#debuggerModel.setBreakpointByURL(pos.url, pos.lineNumber, pos.columnNumber, pos.condition);
       }
       return this.#debuggerModel.setBreakpointInAnonymousScript(
-          pos.scriptHash as string, pos.lineNumber, pos.columnNumber, pos.condition);
+          pos.scriptHash, pos.lineNumber, pos.columnNumber, pos.condition);
     }));
     const breakpointIds: Protocol.Debugger.BreakpointId[] = [];
     let locations: SDK.DebuggerModel.Location[] = [];
@@ -1283,7 +1255,6 @@ class Storage {
     for (const breakpoint of this.setting.get()) {
       this.breakpoints.set(Storage.computeId(breakpoint), breakpoint);
     }
-    Host.userMetrics.breakpointsRestoredFromStorage(this.breakpoints.size);
   }
 
   mute(): void {

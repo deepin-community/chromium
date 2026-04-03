@@ -9,17 +9,19 @@ import type {VolumeInfo} from '../../background/js/volume_info.js';
 import type {VolumeManager} from '../../background/js/volume_manager.js';
 import {getDriveQuotaMetadata, getSizeStats} from '../../common/js/api.js';
 import {RateLimiter} from '../../common/js/async_util.js';
-import {getTeamDriveName} from '../../common/js/entry_utils.js';
-import {FakeEntry, FilesAppDirEntry} from '../../common/js/files_app_entry_types.js';
-import {isGoogleOneOfferFilesBannerEligibleAndEnabled} from '../../common/js/flags.js';
+import {getTeamDriveName, isFakeEntry, isOneDrive} from '../../common/js/entry_utils.js';
+import type {FakeEntry, FilesAppDirEntry} from '../../common/js/files_app_entry_types.js';
+import {isGoogleOneOfferFilesBannerEligibleAndEnabled, isSkyvaultV2Enabled} from '../../common/js/flags.js';
 import {storage} from '../../common/js/storage.js';
 import {isNullOrUndefined} from '../../common/js/util.js';
-import {RootType, VolumeType} from '../../common/js/volume_manager_types.js';
+import type {RootType} from '../../common/js/volume_manager_types.js';
+import {VolumeType} from '../../common/js/volume_manager_types.js';
+import {deviceSlice} from '../../state/ducks/device.js';
 import {DialogType, type State} from '../../state/state.js';
 import {getStore, type Store} from '../../state/store.js';
 
 import {DEFAULT_CROSTINI_VM, PLUGIN_VM} from './constants.js';
-import {DirectoryModel} from './directory_model.js';
+import type {DirectoryModel} from './directory_model.js';
 import {TAG_NAME as DlpRestrictedBannerName} from './ui/banners/dlp_restricted_banner.js';
 import {TAG_NAME as DriveBulkPinningBannerTagName} from './ui/banners/drive_bulk_pinning_banner.js';
 import {TAG_NAME as DriveLowIndividualSpaceBanner} from './ui/banners/drive_low_individual_space_banner.js';
@@ -29,14 +31,17 @@ import {TAG_NAME as DriveOutOfIndividualSpaceBanner} from './ui/banners/drive_ou
 import {TAG_NAME as DriveOutOfOrganizationSpaceBanner} from './ui/banners/drive_out_of_organization_space_banner.js';
 import {TAG_NAME as DriveOutOfSharedDriveSpaceBanner} from './ui/banners/drive_out_of_shared_drive_space_banner.js';
 import {TAG_NAME as DriveWelcomeBannerTagName} from './ui/banners/drive_welcome_banner.js';
+import {TAG_NAME as FilesMigratingToCloudBannerTagName} from './ui/banners/files_migrating_to_cloud_banner.js';
 import {TAG_NAME as GoogleOneOfferBannerTagName} from './ui/banners/google_one_offer_banner.js';
 import {TAG_NAME as HoldingSpaceWelcomeBannerTagName} from './ui/banners/holding_space_welcome_banner.js';
 import {TAG_NAME as InvalidUsbFileSystemBannerTagName} from './ui/banners/invalid_usb_filesystem_banner.js';
 import {TAG_NAME as LocalDiskLowSpaceBannerTagName} from './ui/banners/local_disk_low_space_banner.js';
+import {TAG_NAME as OdfsOfflineBannerTagName} from './ui/banners/odfs_offline_banner.js';
 import {TAG_NAME as PhotosWelcomeBannerTagName} from './ui/banners/photos_welcome_banner.js';
 import {TAG_NAME as SharedWithCrostiniPluginVmBanner} from './ui/banners/shared_with_crostini_pluginvm_banner.js';
 import {TAG_NAME as TrashBannerTagName} from './ui/banners/trash_banner.js';
-import {type AllowedVolumeOrType, Banner, BANNER_INFINITE_TIME, BannerEvent, type MinDiskThreshold} from './ui/banners/types.js';
+import type {Banner} from './ui/banners/types.js';
+import {type AllowedVolumeOrType, BANNER_INFINITE_TIME, BannerEvent, type MinDiskThreshold} from './ui/banners/types.js';
 
 /**
  * Local storage key suffix for how many times a banner was shown.
@@ -169,8 +174,8 @@ export class BannerController extends EventTarget {
   /**
    * The container where all the banners will be appended to.
    */
-  private container_: HTMLDivElement =
-      document.querySelector<HTMLDivElement>('#banners')!;
+  private container_: HTMLElement =
+      document.querySelector<HTMLElement>('#banners')!;
 
   /**
    * Whether banners should be loaded or not during for unit tests.
@@ -250,6 +255,19 @@ export class BannerController extends EventTarget {
    */
   private bulkPinningEnabled_ = false;
 
+  /**
+   * SkyVault migration destination. If set, one of {Google Drive, OneDrive,
+   * Delete}.
+   */
+  private migrationDestination_:
+      chrome.fileManagerPrivate.MigrationDestination =
+      chrome.fileManagerPrivate.MigrationDestination.NOT_SPECIFIED;
+
+  /**
+   * SkyVault migration or deletion start time.
+   */
+  private migrationStartTime_: string|undefined = undefined;
+
   constructor(
       private directoryModel_: DirectoryModel,
       private volumeManager_: VolumeManager, private crostini_: Crostini,
@@ -270,14 +288,20 @@ export class BannerController extends EventTarget {
     chrome.fileManagerPrivate.onPreferencesChanged.addListener(
         this.onPreferencesChanged_.bind(this));
     this.onPreferencesChanged_();
+
+    deviceSlice.selector.subscribe(this.reconcile.bind(this));
   }
 
   private onPreferencesChanged_() {
     chrome.fileManagerPrivate.getPreferences(pref => {
       if (this.bulkPinningAvailable_ !== pref.driveFsBulkPinningAvailable ||
-          this.bulkPinningEnabled_ !== pref.driveFsBulkPinningEnabled) {
+          this.bulkPinningEnabled_ !== pref.driveFsBulkPinningEnabled ||
+          this.migrationDestination_ !== pref.skyVaultMigrationDestination ||
+          this.migrationStartTime_ !== pref.skyVaultMigrationStartTime) {
         this.bulkPinningAvailable_ = pref.driveFsBulkPinningAvailable;
         this.bulkPinningEnabled_ = pref.driveFsBulkPinningEnabled;
+        this.migrationDestination_ = pref.skyVaultMigrationDestination;
+        this.migrationStartTime_ = pref.skyVaultMigrationStartTime;
         this.reconcile();
       }
     });
@@ -309,6 +333,8 @@ export class BannerController extends EventTarget {
       // Banners are initialized in their priority order. The order of the array
       // denotes the priority of the banner, 0th index is highest priority.
       this.setWarningBannersInOrder([
+        FilesMigratingToCloudBannerTagName,
+        OdfsOfflineBannerTagName,
         LocalDiskLowSpaceBannerTagName,
         DriveOutOfOrganizationSpaceBanner,
         DriveOutOfSharedDriveSpaceBanner,
@@ -418,6 +444,30 @@ export class BannerController extends EventTarget {
             (this.volumeManager_.hasDisabledVolumes() ||
              this.hasDlpDisabledFiles_),
         context: () => ({type: this.dialogType_}),
+      });
+
+      this.registerCustomBannerFilter(FilesMigratingToCloudBannerTagName, {
+        shouldShow: () => this.migrationDestination_ !==
+            chrome.fileManagerPrivate.MigrationDestination.NOT_SPECIFIED,
+        context: () => ({
+          migrationDestination: this.migrationDestination_,
+          migrationStartTime: this.migrationStartTime_,
+        }),
+      });
+
+      this.registerCustomBannerFilter(OdfsOfflineBannerTagName, {
+        shouldShow: () => {
+          if (!isSkyvaultV2Enabled()) {
+            return false;
+          }
+          if (!this.currentVolume_) {
+            return false;
+          }
+          return isOneDrive(this.currentVolume_!) &&
+              (this.store_.getState().device.connection ===
+               chrome.fileManagerPrivate.DeviceConnectionState.OFFLINE);
+        },
+        context: () => ({}),
       });
     }
 
@@ -913,7 +963,7 @@ export class BannerController extends EventTarget {
     for (const {volumeType, volumeId} of this.pendingVolumeSizeUpdates_) {
       if (volumeType === VolumeType.DRIVE) {
         try {
-          if (!this.currentEntry_) {
+          if (!this.currentEntry_ || isFakeEntry(this.currentEntry_)) {
             continue;
           }
           this.driveQuotaMetadata_ =

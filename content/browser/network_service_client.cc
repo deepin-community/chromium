@@ -33,10 +33,12 @@
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "net/base/features.h"
 #include "net/base/network_change_notifier.h"
 #include "services/network/public/cpp/network_switches.h"
 #include "services/network/public/mojom/network_change_manager.mojom-forward.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/shared_storage.mojom.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -122,9 +124,6 @@ NetworkServiceClient::NetworkServiceClient()
 
   if (IsOutOfProcessNetworkService()) {
     net::CertDatabase::GetInstance()->AddObserver(this);
-    memory_pressure_listener_ = std::make_unique<base::MemoryPressureListener>(
-        FROM_HERE, base::BindRepeating(&NetworkServiceClient::OnMemoryPressure,
-                                       base::Unretained(this)));
   }
 
   webrtc_connections_observer_ =
@@ -159,11 +158,6 @@ void NetworkServiceClient::OnClientCertStoreChanged() {
   GetNetworkService()->OnClientCertStoreChanged();
 }
 
-void NetworkServiceClient::OnMemoryPressure(
-    base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level) {
-  GetNetworkService()->OnMemoryPressure(memory_pressure_level);
-}
-
 void NetworkServiceClient::OnPeerToPeerConnectionsCountChange(uint32_t count) {
   GetNetworkService()->OnPeerToPeerConnectionsCountChange(count);
 }
@@ -179,8 +173,9 @@ void NetworkServiceClient::OnApplicationStateChange(
 void NetworkServiceClient::OnConnectionTypeChanged(
     net::NetworkChangeNotifier::ConnectionType type) {
   network_change_manager_->OnNetworkChanged(
-      false /* dns_changed */, false /* ip_address_changed */,
-      true /* connection_type_changed */, network::mojom::ConnectionType(type),
+      false /* dns_changed */,
+      network::mojom::IPAddressChangeType::IP_ADDRESS_CHANGE_NONE,
+      true /* connection_type_changed */, type,
       false /* connection_subtype_changed */,
       network::mojom::ConnectionSubtype(
           net::NetworkChangeNotifier::GetConnectionSubtype()));
@@ -192,19 +187,20 @@ void NetworkServiceClient::OnMaxBandwidthChanged(
   // The connection subtype change will trigger a max bandwidth change in the
   // network service notifier.
   network_change_manager_->OnNetworkChanged(
-      false /* dns_changed */, false /* ip_address_changed */,
-      false /* connection_type_changed */, network::mojom::ConnectionType(type),
+      false /* dns_changed */,
+      network::mojom::IPAddressChangeType::IP_ADDRESS_CHANGE_NONE,
+      false /* connection_type_changed */, type,
       true /* connection_subtype_changed */,
       network::mojom::ConnectionSubtype(
           net::NetworkChangeNotifier::GetConnectionSubtype()));
 }
 
-void NetworkServiceClient::OnIPAddressChanged() {
+void NetworkServiceClient::OnIPAddressChanged(
+    net::NetworkChangeNotifier::IPAddressChangeType change_type) {
   network_change_manager_->OnNetworkChanged(
-      false /* dns_changed */, true /* ip_address_changed */,
+      false /* dns_changed */, network::mojom::IPAddressChangeType(change_type),
       false /* connection_type_changed */,
-      network::mojom::ConnectionType(
-          net::NetworkChangeNotifier::GetConnectionType()),
+      net::NetworkChangeNotifier::GetConnectionType(),
       false /* connection_subtype_changed */,
       network::mojom::ConnectionSubtype(
           net::NetworkChangeNotifier::GetConnectionSubtype()));
@@ -286,7 +282,7 @@ void NetworkServiceClient::OnCertificateRequested(
 
 void NetworkServiceClient::OnAuthRequired(
     const std::optional<base::UnguessableToken>& window_id,
-    uint32_t request_id,
+    int32_t request_id,
     const GURL& url,
     bool first_auth_attempt,
     const net::AuthChallengeInfo& auth_info,
@@ -298,13 +294,11 @@ void NetworkServiceClient::OnAuthRequired(
   auth_challenge_responder_remote->OnAuthCredentials(std::nullopt);
 }
 
-void NetworkServiceClient::OnPrivateNetworkAccessPermissionRequired(
-    const GURL& url,
-    const net::IPAddress& ip_address,
-    const std::optional<std::string>& private_network_device_id,
-    const std::optional<std::string>& private_network_device_name,
-    OnPrivateNetworkAccessPermissionRequiredCallback callback) {
-  std::move(callback).Run(false);
+void NetworkServiceClient::OnLocalNetworkAccessPermissionRequired(
+    network::mojom::TransportType type,
+    network::mojom::IPAddressSpace ip_address_space,
+    OnLocalNetworkAccessPermissionRequiredCallback callback) {
+  std::move(callback).Run(network::mojom::LocalNetworkAccessResult::kDenied);
 }
 
 void NetworkServiceClient::OnClearSiteData(
@@ -325,8 +319,8 @@ void NetworkServiceClient::OnLoadingStateUpdate(
 
 void NetworkServiceClient::OnDataUseUpdate(
     int32_t network_traffic_annotation_id_hash,
-    int64_t recv_bytes,
-    int64_t sent_bytes) {
+    base::ByteSize recv_bytes,
+    base::ByteSize sent_bytes) {
   GetContentClient()->browser()->OnNetworkServiceDataUseUpdate(
       GlobalRenderFrameHostId(), network_traffic_annotation_id_hash, recv_bytes,
       sent_bytes);
@@ -334,15 +328,31 @@ void NetworkServiceClient::OnDataUseUpdate(
 
 void NetworkServiceClient::OnSharedStorageHeaderReceived(
     const url::Origin& request_origin,
-    std::vector<network::mojom::SharedStorageOperationPtr> operations,
+    std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+        methods_with_options,
+    const std::optional<std::string>& with_lock,
     OnSharedStorageHeaderReceivedCallback callback) {
   std::move(callback).Run();
 }
+
+void NetworkServiceClient::OnAdAuctionEventRecordHeaderReceived(
+    network::AdAuctionEventRecord event_record,
+    const std::optional<url::Origin>& top_frame_origin) {}
 
 void NetworkServiceClient::Clone(
     mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>
         observer) {
   url_loader_network_service_observers_.Add(this, std::move(observer));
 }
+
+void NetworkServiceClient::OnWebSocketConnectedToLocalNetwork(
+    const GURL& request_url,
+    network::mojom::IPAddressSpace ip_address_space) {}
+
+void NetworkServiceClient::OnUrlLoaderConnectedToLocalNetwork(
+    const GURL& request_url,
+    network::mojom::IPAddressSpace response_address_space,
+    network::mojom::IPAddressSpace client_address_space,
+    network::mojom::IPAddressSpace target_address_space) {}
 
 }  // namespace content

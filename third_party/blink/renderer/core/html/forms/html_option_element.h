@@ -28,6 +28,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/events/simulated_click_options.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cancellable_task.h"
 
 namespace blink {
 
@@ -78,8 +79,10 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
   void setSelectedForBinding(bool);
 
   HTMLDataListElement* OwnerDataListElement() const;
-  HTMLSelectElement* OwnerSelectElement() const;
-  HTMLSelectListElement* OwnerSelectList() const;
+
+  HTMLSelectElement* OwnerSelectElement() const {
+    return nearest_ancestor_select_;
+  }
 
   String label() const;
   void setLabel(const AtomicString&);
@@ -93,36 +96,43 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
   String TextIndentedToRespectGroupLabel() const;
 
   // Update 'selectedness'.
-  void SetSelectedState(bool);
+  // Setting skip_mutation_observer_update to true prevents this method from
+  // calling UpdateMutationObserver.
+  void SetSelectedState(bool selected,
+                        bool skip_mutation_observer_update = false);
   // Update 'dirtiness'.
   void SetDirty(bool);
 
-  HTMLFormElement* form() const;
+  HTMLElement* formForBinding() const override;
   bool SpatialNavigationFocused() const;
 
-  bool IsDisplayNone() const;
+  bool IsDisplayNone(bool ensure_style);
 
   int ListIndex() const;
 
   void SetMultiSelectFocusedState(bool);
   bool IsMultiSelectFocused() const;
 
-  void SetWasOptionInsertedCalled(bool flag) {
-    was_option_inserted_called_ = flag;
-  }
-  bool WasOptionInsertedCalled() const { return was_option_inserted_called_; }
+  Node::InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+  void RemovedFrom(ContainerNode&) override;
 
-  void OptionInsertedIntoSelectListElement();
-  void OptionRemovedFromSelectListElement();
+  void FinishParsingChildren() override;
 
   // Callback for OptionTextObserver.
   void DidChangeTextContent();
 
   bool IsRichlyEditableForAccessibility() const override { return false; }
 
+  // This method returns true if the provided element is the label_container_ of
+  // an HTMLOptionElement.
+  static bool IsLabelContainerElement(const Element& element);
+
+  void UpdateMutationObserver(bool in_style_recalc);
+  bool HasMutationObserver() const { return text_observer_; }
+
  private:
-  bool SupportsFocus(UpdateBehavior update_behavior =
-                         UpdateBehavior::kStyleAndLayout) const override;
+  FocusableState SupportsFocus(UpdateBehavior update_behavior) const override;
+  bool IsKeyboardFocusableSlow(UpdateBehavior update_behavior) const override;
   bool MatchesDefaultPseudoClass() const override;
   bool MatchesEnabledPseudoClass() const override;
   void ParseAttribute(const AttributeModificationParams&) override;
@@ -134,8 +144,58 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
   String CollectOptionInnerText() const;
 
   void UpdateLabel();
+  void UpdateAncestors();
+
+  void DefaultEventHandlerInternal(Event&);
+
+  void RecalcOwnerSelectElement() const;
+
+  // Helper to choose the option for customizable select event handling in
+  // DefaultEventHandler. Depending on the state of OwnerSelectElement, it may
+  // toggle selectedness and dirtiness, deselect other options, close the
+  // select's picker, and set default handled on the event.
+  void ChooseOption(Event&);
+
+  bool IsVisibleInViewport();
+  bool NeedsMutationObserver();
 
   Member<OptionTextObserver> text_observer_;
+
+  // The closest ancestor <select> in the DOM tree, without crossing any shadow
+  // boundaries. This is cached as a performance optimization for
+  // OwnerSelectElement(), and is kept up to date in InsertedInto() and
+  // RemovedFrom(). Because it is only updated in InsertedInto and RemovedFrom,
+  // there may be times where it isn't up to date with the actual nearest
+  // ancestor select in the DOM, such as in HTMLOptionElement::ChildrenChanged
+  // before InsertedInto gets called.
+  // TODO(crbug.com/1511354): Consider using a flat tree traversal here
+  // instead of a node traversal. That would probably also require changing
+  // HTMLOptionsCollection to support flat tree traversals as well.
+  Member<HTMLSelectElement> nearest_ancestor_select_;
+
+  // The closest ancestor <optgroup> in the DOM tree. This is created and
+  // maintained just like nearest_ancestor_select_, but doesn't account for any
+  // <optgroup> element ancestor above nearest_ancestor_select_.
+  Member<HTMLOptGroupElement> nearest_ancestor_optgroup_;
+
+  // Just like nearest_ancestor_select_ and nearest_ancestor_optgroup_, but for
+  // an ancestor <datalist> if present. Only one of nearest_ancestor_select_ and
+  // nearest_ancestor_datalist_ can be non-null.
+  Member<HTMLDataListElement> nearest_ancestor_datalist_;
+
+  // label_container_ contains the text content of DisplayLabel(). Based on UA
+  // style rules, it is rendered when this option is not inside of a select
+  // element with appearance:base-select.
+  Member<HTMLElement> label_container_;
+
+  // DidChangeTextContent and UpdateLabel may update copies of the text content
+  // of this element into the UA ShadowRoot of this element and the nearest
+  // ancestor select element. This may be triggered as the result of the
+  // appearance of the nearest ancestor select element switching from base
+  // appearance to auto appearance, in which case we can't update the DOM yet
+  // because we are in style recalc. In this case, update_label_task_ holds a
+  // task to call DidChangeTextContent after style recalc is done.
+  TaskHandle update_label_task_;
 
   // Represents 'selectedness'.
   // https://html.spec.whatwg.org/C/#concept-option-selectedness
@@ -146,15 +206,11 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
   // Represents the option being focused on in a multi-select non-contiguous
   // traversal via the keyboard.
   bool is_multi_select_focused_ = false;
+  // Gets set to true when a child element is inserted into this option
+  // element. Never gets set back to false once set to true.
+  bool was_element_inserted_ = false;
 
-  // True while HTMLSelectElement::OptionInserted(this) and OptionRemoved(this);
-  // This flag is necessary to detect a state where DOM tree is updated and
-  // OptionInserted() is not called yet.
-  bool was_option_inserted_called_ = false;
-
-  // This flag is necessary to detect when an option is a descendant of
-  // <selectlist> in order to be able to render arbitrary content.
-  bool is_descendant_of_select_list_ = false;
+  friend class HTMLOptionElementTest;
 };
 
 }  // namespace blink

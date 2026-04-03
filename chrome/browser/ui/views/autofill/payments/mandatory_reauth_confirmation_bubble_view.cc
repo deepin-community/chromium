@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/autofill/payments/mandatory_reauth_confirmation_bubble_view.h"
+
 #include "chrome/browser/ui/autofill/payments/mandatory_reauth_bubble_controller.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/chrome_pages.h"
@@ -16,6 +17,7 @@
 #include "components/autofill/core/browser/metrics/payments/mandatory_reauth_metrics.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/vector_icon_utils.h"
@@ -23,17 +25,17 @@
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/flex_layout_types.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/view_class_properties.h"
 
 namespace autofill {
 
 MandatoryReauthConfirmationBubbleView::MandatoryReauthConfirmationBubbleView(
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     content::WebContents* web_contents,
     MandatoryReauthBubbleController* controller)
-    : LocationBarBubbleDelegateView(anchor_view, web_contents),
-      controller_(controller) {
-  SetButtons(ui::DIALOG_BUTTON_NONE);
+    : AutofillLocationBarBubble(anchor, web_contents), controller_(controller) {
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   SetShowCloseButton(true);
   set_fixed_width(views::LayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_BUBBLE_PREFERRED_WIDTH));
@@ -56,7 +58,7 @@ void MandatoryReauthConfirmationBubbleView::AddedToWidget() {
   GetBubbleFrameView()->SetHeaderView(
       std::make_unique<ThemeTrackingNonAccessibleImageView>(
           *mandatory_reauth_opt_in_banner, *mandatory_reauth_opt_in_banner,
-          base::BindRepeating(&views::BubbleDialogDelegate::GetBackgroundColor,
+          base::BindRepeating(&views::BubbleDialogDelegate::background_color,
                               base::Unretained(this))));
 }
 
@@ -67,7 +69,7 @@ std::u16string MandatoryReauthConfirmationBubbleView::GetWindowTitle() const {
 void MandatoryReauthConfirmationBubbleView::WindowClosing() {
   if (controller_) {
     controller_->OnBubbleClosed(
-        GetPaymentsBubbleClosedReasonFromWidget(GetWidget()));
+        GetPaymentsUiClosedReasonFromWidget(GetWidget()));
     controller_ = nullptr;
   }
 }

@@ -4,6 +4,7 @@
 
 #include "vp9_video_rate_control_wrapper.h"
 
+#include "base/compiler_specific.h"
 #include "third_party/libvpx/source/libvpx/vp9/ratectrl_rtc.h"
 
 namespace {
@@ -53,6 +54,8 @@ template <>
 libvpx::VP9RateControlRtcConfig VP9RateControl::ConvertControlConfig(
     const RateControlConfig& config) {
   libvpx::VP9RateControlRtcConfig rc_config;
+  rc_config.is_screen = config.content_type ==
+                        VideoEncodeAccelerator::Config::ContentType::kDisplay;
   rc_config.width = config.width;
   rc_config.height = config.height;
   rc_config.target_bandwidth = config.target_bandwidth;
@@ -74,16 +77,20 @@ libvpx::VP9RateControlRtcConfig VP9RateControl::ConvertControlConfig(
   rc_config.ss_number_layers = config.ss_number_layers;
   rc_config.ts_number_layers = config.ts_number_layers;
   for (int tid = 0; tid < config.ts_number_layers; ++tid) {
-    rc_config.ts_rate_decimator[tid] = config.ts_rate_decimator[tid];
+    UNSAFE_TODO(rc_config.ts_rate_decimator[tid]) =
+        config.ts_rate_decimator[tid];
   }
   for (int sid = 0; sid < config.ss_number_layers; ++sid) {
-    rc_config.scaling_factor_num[sid] = config.scaling_factor_num[sid];
-    rc_config.scaling_factor_den[sid] = config.scaling_factor_den[sid];
+    UNSAFE_TODO(rc_config.scaling_factor_num[sid]) =
+        config.scaling_factor_num[sid];
+    UNSAFE_TODO(rc_config.scaling_factor_den[sid]) =
+        config.scaling_factor_den[sid];
     for (int tid = 0; tid < config.ts_number_layers; ++tid) {
       const int i = sid * config.ts_number_layers + tid;
-      rc_config.max_quantizers[i] = config.max_quantizers[i];
-      rc_config.min_quantizers[i] = config.min_quantizers[i];
-      rc_config.layer_target_bitrate[i] = config.layer_target_bitrate[i];
+      UNSAFE_TODO(rc_config.max_quantizers[i]) = config.max_quantizers[i];
+      UNSAFE_TODO(rc_config.min_quantizers[i]) = config.min_quantizers[i];
+      UNSAFE_TODO(rc_config.layer_target_bitrate[i]) =
+          config.layer_target_bitrate[i];
     }
   }
   return rc_config;

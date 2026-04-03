@@ -15,7 +15,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>  // memset
+#include <stdio.h>
 
 #include <array>  // IWYU pragma: keep
 
@@ -28,6 +28,7 @@
 HWY_BEFORE_NAMESPACE();
 namespace hwy {
 namespace HWY_NAMESPACE {
+namespace {
 
 // Regenerate tables used in the implementation, instead of testing.
 #define HWY_PRINT_TABLES 0
@@ -63,6 +64,7 @@ struct TestExpand {
     using TI = MakeSigned<T>;  // Used for mask > 0 comparison.
     const Rebind<TI, D> di;
     const size_t N = Lanes(d);
+    const size_t bits_size = RoundUpTo((N + 7) / 8, 8);
 
     for (int frac : {0, 2, 3}) {
       // For LoadExpand
@@ -72,17 +74,15 @@ struct TestExpand {
       auto mask_lanes = AllocateAligned<TI>(N);
       auto expected = AllocateAligned<T>(N);
       auto actual_a = AllocateAligned<T>(misalign + N);
-      T* actual_u = actual_a.get() + misalign;
-
-      const size_t bits_size = RoundUpTo((N + 7) / 8, 8);
       auto bits = AllocateAligned<uint8_t>(bits_size);
-      memset(bits.get(), 0, bits_size);  // Prevents MSAN error.
+      HWY_ASSERT(in_lanes && mask_lanes && expected && actual_a && bits);
+
+      T* actual_u = actual_a.get() + misalign;
+      ZeroBytes(bits.get(), bits_size);  // Prevents MSAN error.
 
       // Random input vector, used in all iterations.
       for (size_t i = 0; i < N; ++i) {
-        const uint64_t r = Random32(&rng);
-        in_lanes[i] = T();  // Zero, but also works for float16_t.
-        CopyBytes<sizeof(T)>(&r, &in_lanes[i]);  // Note: not the same size.
+        in_lanes[i] = RandomFiniteValue<T>(&rng);
       }
 
       // Each lane should have a chance of having mask=true.
@@ -93,7 +93,7 @@ struct TestExpand {
           if (mask_lanes[i] > 0) {
             expected[i] = in_lanes[in_pos++];
           } else {
-            expected[i] = T();  // Zero, but also works for float16_t.
+            expected[i] = ConvertScalarTo<T>(0);
           }
         }
 
@@ -103,13 +103,13 @@ struct TestExpand {
         StoreMaskBits(d, mask, bits.get());
 
         // Expand
-        memset(actual_u, 0, N * sizeof(T));
+        ZeroBytes(actual_u, N * sizeof(T));
         StoreU(Expand(in, mask), d, actual_u);
         CheckExpanded(d, di, "Expand", in_lanes, mask_lanes, expected, actual_u,
                       __LINE__);
 
         // LoadExpand
-        memset(actual_u, 0, N * sizeof(T));
+        ZeroBytes(actual_u, N * sizeof(T));
         StoreU(LoadExpand(mask, d, in_lanes.get()), d, actual_u);
         CheckExpanded(d, di, "LoadExpand", in_lanes, mask_lanes, expected,
                       actual_u, __LINE__);
@@ -125,8 +125,6 @@ HWY_NOINLINE void TestAllExpand() {
 #endif  // !HWY_PRINT_TABLES
 
 #if HWY_PRINT_TABLES || HWY_IDE
-namespace detail {  // For code folding.
-
 void PrintExpand8x8Tables() {
   printf("// %s\n", __FUNCTION__);
   constexpr size_t N = 8;
@@ -257,29 +255,28 @@ void PrintExpand64x4NibbleTables() {
   printf("\n");
 }
 
-}  // namespace detail
-
 HWY_NOINLINE void PrintTables() {
   // Only print once.
 #if HWY_TARGET == HWY_STATIC_TARGET
-  detail::PrintExpand32x8NibbleTables();
-  detail::PrintExpand64x4NibbleTables();
-  detail::PrintExpand16x8LaneTables();
-  detail::PrintExpand16x8ByteTables();
-  detail::PrintExpand8x8Tables();
+  PrintExpand32x8NibbleTables();
+  PrintExpand64x4NibbleTables();
+  PrintExpand16x8LaneTables();
+  PrintExpand16x8ByteTables();
+  PrintExpand8x8Tables();
 #endif
 }
 
 #endif  // HWY_PRINT_TABLES
 
+}  // namespace
 // NOLINTNEXTLINE(google-readability-namespace-comments)
 }  // namespace HWY_NAMESPACE
 }  // namespace hwy
 HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
-
 namespace hwy {
+namespace {
 HWY_BEFORE_TEST(HwyExpandTest);
 #if HWY_PRINT_TABLES
 // Only print instead of running tests; this will be visible in the log.
@@ -287,6 +284,8 @@ HWY_EXPORT_AND_TEST_P(HwyExpandTest, PrintTables);
 #else
 HWY_EXPORT_AND_TEST_P(HwyExpandTest, TestAllExpand);
 #endif
+HWY_AFTER_TEST();
+}  // namespace
 }  // namespace hwy
-
-#endif
+HWY_TEST_MAIN();
+#endif  // HWY_ONCE

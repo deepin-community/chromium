@@ -29,7 +29,7 @@ enum class SystemWebAppType;
 class SystemWebAppManager;
 
 class SystemWebAppBrowserTestBase
-    : public InteractiveBrowserTestT<MixinBasedInProcessBrowserTest> {
+    : public InteractiveBrowserTestMixin<MixinBasedInProcessBrowserTest> {
  public:
   // Subclasses should call |SetSystemWebAppInstallation| in their constructor
   // to specify a test system web app to install.
@@ -108,8 +108,6 @@ class SystemWebAppBrowserTestBase
   content::WebContents* LaunchApp(apps::AppLaunchParams&& params,
                                   bool wait_for_load,
                                   Browser** out_browser);
-
-  web_app::OsIntegrationManager::ScopedSuppressForTesting os_hooks_suppress_;
 
   std::unique_ptr<TestSystemWebAppInstallation> installation_ = nullptr;
 };

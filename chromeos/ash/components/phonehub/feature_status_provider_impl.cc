@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "ash/constants/ash_features.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/task_traits.h"
@@ -144,12 +143,15 @@ FeatureStatusProviderImpl::FeatureStatusProviderImpl(
     multidevice_setup::MultiDeviceSetupClient* multidevice_setup_client,
     secure_channel::ConnectionManager* connection_manager,
     session_manager::SessionManager* session_manager,
-    chromeos::PowerManagerClient* power_manager_client)
+    chromeos::PowerManagerClient* power_manager_client,
+    PhoneHubStructuredMetricsLogger* phone_hub_structured_metrics_logger)
     : device_sync_client_(device_sync_client),
       multidevice_setup_client_(multidevice_setup_client),
       connection_manager_(connection_manager),
       session_manager_(session_manager),
-      power_manager_client_(power_manager_client) {
+      power_manager_client_(power_manager_client),
+      phone_hub_structured_metrics_logger_(
+          phone_hub_structured_metrics_logger) {
   DCHECK(session_manager_);
   DCHECK(power_manager_client_);
   device_sync_client_->AddObserver(this);
@@ -186,8 +188,7 @@ void FeatureStatusProviderImpl::OnReady() {
 }
 
 void FeatureStatusProviderImpl::OnNewDevicesSynced() {
-  if (features::IsPhoneHubOnboardingNotifierRevampEnabled() &&
-      ComputeStatus() == FeatureStatus::kEligiblePhoneButNotSetUp) {
+  if (ComputeStatus() == FeatureStatus::kEligiblePhoneButNotSetUp) {
     CheckEligibleDevicesForNudge();
   }
   UpdateStatus();
@@ -250,6 +251,22 @@ void FeatureStatusProviderImpl::UpdateStatus() {
   PA_LOG(INFO) << "Phone Hub feature status: " << *status_ << " => "
                << computed_status;
   *status_ = computed_status;
+  switch (status_.value()) {
+    case FeatureStatus::kDisabled:
+    case FeatureStatus::kLockOrSuspended:
+      phone_hub_structured_metrics_logger_->ResetSessionId();
+      break;
+    case FeatureStatus::kEligiblePhoneButNotSetUp:
+    case FeatureStatus::kNotEligibleForFeature:
+    case FeatureStatus::kPhoneSelectedAndPendingSetup:
+      phone_hub_structured_metrics_logger_->ResetCachedInformation();
+      break;
+    case FeatureStatus::kEnabledAndConnecting:
+    case FeatureStatus::kEnabledAndConnected:
+    case FeatureStatus::kUnavailableBluetoothOff:
+    case FeatureStatus::kEnabledButDisconnected:
+      break;
+  }
   NotifyStatusChanged();
 
   UMA_HISTOGRAM_ENUMERATION("PhoneHub.Adoption.FeatureStatusChangesSinceLogin",

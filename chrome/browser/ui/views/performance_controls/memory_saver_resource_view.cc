@@ -3,11 +3,23 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/performance_controls/memory_saver_resource_view.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <memory>
 #include <string>
 
-#include "base/numerics/math_constants.h"
+#include "base/byte_size.h"
+#include "base/numerics/angle_conversions.h"
+#include "cc/paint/paint_flags.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/performance_manager/public/features.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
+#include "third_party/skia/include/core/SkRect.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -18,9 +30,12 @@
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/vector2d_f.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/flex_layout_view.h"
 #include "ui/views/layout/layout_types.h"
+#include "ui/views/style/typography.h"
+#include "ui/views/view_class_properties.h"
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(
     MemorySaverResourceView,
@@ -38,10 +53,10 @@ constexpr int kTickStrokeWidth = 2;
 constexpr int kBucketCount = 4;
 constexpr double kBucketWidthDegrees = 180 / kBucketCount;
 
-constexpr int kMemorySaverChartPmf25PercentileBytes = 62 * 1024 * 1024;
-constexpr int kMemorySaverChartPmf50PercentileBytes = 112 * 1024 * 1024;
-constexpr int kMemorySaverChartPmf75PercentileBytes = 197 * 1024 * 1024;
-constexpr int kMemorySaverChartPmf99PercentileBytes = 800 * 1024 * 1024;
+constexpr base::ByteSize kMemorySaverChartPmf25Percentile = base::MiBU(62);
+constexpr base::ByteSize kMemorySaverChartPmf50Percentile = base::MiBU(112);
+constexpr base::ByteSize kMemorySaverChartPmf75Percentile = base::MiBU(197);
+constexpr base::ByteSize kMemorySaverChartPmf99Percentile = base::MiBU(800);
 
 // Enum to represent memory savings quartiles.
 enum MemorySavingsQuartile {
@@ -56,24 +71,24 @@ enum MemorySavingsQuartile {
 // Each element represents the label for the chart when memory savings are in
 // the quartile represented by `MemorySavingsQuartile`. The last "quartile"
 // instead represents the 99th percentile (or a full chart).
-constexpr int kQuartilesLabels[] = {
-    IDS_MEMORY_SAVER_DIALOG_SMALL_SAVINGS_LABEL,
-    IDS_MEMORY_SAVER_DIALOG_MEDIUM_SAVINGS_LABEL,
-    IDS_MEMORY_SAVER_DIALOG_MEDIUM_SAVINGS_LABEL,
-    IDS_MEMORY_SAVER_DIALOG_LARGE_SAVINGS_LABEL,
-    IDS_MEMORY_SAVER_DIALOG_VERY_LARGE_SAVINGS_LABEL};
+constexpr auto kQuartilesLabels =
+    std::to_array<int>({IDS_MEMORY_SAVER_DIALOG_SMALL_SAVINGS_LABEL,
+                        IDS_MEMORY_SAVER_DIALOG_MEDIUM_SAVINGS_LABEL,
+                        IDS_MEMORY_SAVER_DIALOG_MEDIUM_SAVINGS_LABEL,
+                        IDS_MEMORY_SAVER_DIALOG_LARGE_SAVINGS_LABEL,
+                        IDS_MEMORY_SAVER_DIALOG_VERY_LARGE_SAVINGS_LABEL});
 
 // Returns which of the four quartiles of memory savings this number falls into.
 // The lowest memory usage quartile (0-24th percentile) returns 0 and the
 // highest quartile (75-99 percentile) returns 3.
-int GetMemorySavingsQuartile(const int memory_savings_bytes) {
-  if (memory_savings_bytes < kMemorySaverChartPmf25PercentileBytes) {
+int GetMemorySavingsQuartile(base::ByteSize memory_savings) {
+  if (memory_savings < kMemorySaverChartPmf25Percentile) {
     return MemorySavingsQuartile::kLow;
-  } else if (memory_savings_bytes < kMemorySaverChartPmf50PercentileBytes) {
+  } else if (memory_savings < kMemorySaverChartPmf50Percentile) {
     return MemorySavingsQuartile::kMedium;
-  } else if (memory_savings_bytes < kMemorySaverChartPmf75PercentileBytes) {
+  } else if (memory_savings < kMemorySaverChartPmf75Percentile) {
     return MemorySavingsQuartile::kHigh;
-  } else if (memory_savings_bytes < kMemorySaverChartPmf99PercentileBytes) {
+  } else if (memory_savings < kMemorySaverChartPmf99Percentile) {
     return MemorySavingsQuartile::kVeryHigh;
   } else {
     return MemorySavingsQuartile::kHuge;
@@ -84,8 +99,8 @@ class GaugeView : public views::FlexLayoutView {
   METADATA_HEADER(GaugeView, views::FlexLayoutView)
 
  public:
-  explicit GaugeView(const int memory_savings_bytes)
-      : memory_savings_bytes_(memory_savings_bytes) {
+  explicit GaugeView(base::ByteSize memory_savings)
+      : memory_savings_(memory_savings) {
     SetOrientation(views::LayoutOrientation::kVertical);
     SetMainAxisAlignment(views::LayoutAlignment::kEnd);
     SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
@@ -93,7 +108,8 @@ class GaugeView : public views::FlexLayoutView {
 
   ~GaugeView() override = default;
 
-  gfx::Size CalculatePreferredSize() const override {
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
     return gfx::Size((kGaugeRadius + kStrokeWidth) * 2,
                      kGaugeRadius + kStrokeWidth);
   }
@@ -107,10 +123,9 @@ class GaugeView : public views::FlexLayoutView {
     // Map the memory savings to which of the 4 buckets it falls into and then
     // draw an arc to the middle of the corresponding bucket. This is why the
     // 0.5 parts of the multipliers are needed.
-    const int memory_angle =
-        std::min((GetMemorySavingsQuartile(memory_savings_bytes_) + 0.5) *
-                     kBucketWidthDegrees,
-                 180.0);
+    const int memory_angle = std::min(
+        (GetMemorySavingsQuartile(memory_savings_) + 0.5) * kBucketWidthDegrees,
+        180.0);
 
     DrawArc(canvas, center, memory_angle,
             GetColorProvider()->GetColor(ui::kColorButtonBackgroundProminent));
@@ -124,7 +139,7 @@ class GaugeView : public views::FlexLayoutView {
   }
 
  private:
-  const int memory_savings_bytes_;
+  const base::ByteSize memory_savings_;
 
   // Draws an arc starting at the far left, with the specified center point and
   // angle (in degrees).
@@ -132,11 +147,13 @@ class GaugeView : public views::FlexLayoutView {
                const gfx::PointF center,
                const int angle_degrees,
                const SkColor color) {
-    SkPath arc_path;
-    arc_path.addArc(
-        SkRect::MakeXYWH(center.x() - kGaugeRadius, center.y() - kGaugeRadius,
-                         2 * kGaugeRadius, 2 * kGaugeRadius),
-        180, angle_degrees);
+    const SkPath arc_path =
+        SkPathBuilder()
+            .addArc(SkRect::MakeXYWH(center.x() - kGaugeRadius,
+                                     center.y() - kGaugeRadius,
+                                     2 * kGaugeRadius, 2 * kGaugeRadius),
+                    180, angle_degrees)
+            .detach();
 
     cc::PaintFlags flags;
     flags.setStyle(cc::PaintFlags::kStroke_Style);
@@ -159,9 +176,9 @@ class GaugeView : public views::FlexLayoutView {
     flags.setAntiAlias(true);
 
     // Vector of length 1 in the direction of the tick mark.
-    gfx::Vector2dF unit_vector(
-        std::cos(-angle_degrees * base::kPiDouble / 180),
-        std::sin(-angle_degrees * base::kPiDouble / 180));
+    const double angle_radians = base::DegToRad(angle_degrees);
+    const gfx::Vector2dF unit_vector(std::cos(-angle_radians),
+                                     std::sin(-angle_radians));
 
     // Draw a line from the inner edge of the arc to the outer edge of the arc.
     canvas->DrawLine(
@@ -177,7 +194,7 @@ END_METADATA
 }  // namespace
 
 MemorySaverResourceView::MemorySaverResourceView(
-    const int memory_savings_bytes) {
+    base::ByteSize memory_savings_bytes) {
   SetOrientation(views::LayoutOrientation::kVertical);
 
   auto* gauge_view =
@@ -190,7 +207,7 @@ MemorySaverResourceView::MemorySaverResourceView(
                               kMemorySaverResourceViewMemorySavingsElementId);
   memory_savings->SetFontList(
       memory_savings->font_list().DeriveWithSizeDelta(kMemoryLabelSizeDelta));
-  memory_savings->SetAccessibleName(l10n_util::GetStringFUTF16(
+  memory_savings->GetViewAccessibility().SetName(l10n_util::GetStringFUTF16(
       IDS_MEMORY_SAVER_DIALOG_SAVINGS_ACCNAME, {formatted_savings}));
 
   auto* memory_label = AddChildView(std::make_unique<views::Label>(

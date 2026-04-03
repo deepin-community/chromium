@@ -31,6 +31,7 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
@@ -98,7 +99,7 @@ bool IsTpuUsed(int64_t pid) {
     int64_t fd;
     if (!absl::SimpleAtoi(ent->d_name, &fd)) continue;
     path = absl::StrCat("/proc/", pid, "/fd/", fd);
-    if (!readlink(path.c_str(), &line[0], line.size())) continue;
+    if (!readlink(path.c_str(), line.data(), line.size())) continue;
     if (line != tpu_dev_path) continue;
     return true;
   }
@@ -133,8 +134,8 @@ absl::StatusOr<int64_t> FindLibtpuProcess() {
 }  // namespace
 
 absl::Status TryAcquireTpuLock() {
-  static absl::Mutex* mu = new absl::Mutex();
-  absl::MutexLock l(mu);
+  static absl::Mutex* const mu = new absl::Mutex();
+  absl::MutexLock l(*mu);
 
   std::string load_library_override = absl::StrCat(getenv("TPU_LOAD_LIBRARY"));
 

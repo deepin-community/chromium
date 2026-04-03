@@ -21,7 +21,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
@@ -156,8 +156,8 @@ TEST_F(DragHandleContextualNudgeTest,
   EXPECT_EQ(ShelfBackgroundType::kInApp,
             GetShelfLayoutManager()->shelf_background_type());
 
-  ui::ScopedAnimationDurationScaleMode normal_animation_duration(
-      ui::ScopedAnimationDurationScaleMode::SLOW_DURATION);
+  gfx::ScopedAnimationDurationScaleMode normal_animation_duration(
+      gfx::ScopedAnimationDurationScaleMode::SLOW_DURATION);
   GetShelfWidget()->GetDragHandle()->MaybeShowDragHandleNudge();
   EXPECT_TRUE(GetShelfWidget()->GetDragHandle()->GetVisible());
   EXPECT_TRUE(
@@ -596,7 +596,7 @@ TEST_F(DragHandleContextualNudgeTest,
               EXPECT_FALSE(
                   drag_handle->has_hide_drag_handle_timer_for_testing());
             }
-            const bool scroll_end = type == ui::ET_GESTURE_SCROLL_END;
+            const bool scroll_end = type == ui::EventType::kGestureScrollEnd;
             EXPECT_EQ(!scroll_end,
                       drag_handle->gesture_nudge_target_visibility());
           },
@@ -640,7 +640,7 @@ TEST_F(DragHandleContextualNudgeTest,
                   drag_handle->has_show_drag_handle_timer_for_testing());
 
               // Attempt to schedule the nudge should fail.
-              if (type != ui::ET_GESTURE_SCROLL_END) {
+              if (type != ui::EventType::kGestureScrollEnd) {
                 drag_handle->ScheduleShowDragHandleNudge();
                 EXPECT_FALSE(
                     drag_handle->has_show_drag_handle_timer_for_testing());
@@ -708,7 +708,7 @@ TEST_F(DragHandleContextualNudgeTest, FlingFromShelfToHomeHidesTheNudge) {
       base::BindRepeating(
           [](DragHandle* drag_handle, ui::EventType type,
              const gfx::Vector2dF& offset) {
-            const bool scroll_end = type == ui::ET_GESTURE_SCROLL_END;
+            const bool scroll_end = type == ui::EventType::kGestureScrollEnd;
             EXPECT_EQ(!scroll_end,
                       drag_handle->gesture_nudge_target_visibility());
           },
@@ -752,7 +752,7 @@ TEST_F(DragHandleContextualNudgeTest, DragFromShelfToHomeHidesTheNudge) {
               DragWindowFromShelfControllerTestApi().WaitUntilOverviewIsShown(
                   window_drag_controller);
             }
-            const bool scroll_end = type == ui::ET_GESTURE_SCROLL_END;
+            const bool scroll_end = type == ui::EventType::kGestureScrollEnd;
             EXPECT_EQ(!scroll_end,
                       drag_handle->gesture_nudge_target_visibility());
           },

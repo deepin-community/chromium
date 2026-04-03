@@ -2,16 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <memory>
 #include <type_traits>
 
-#include "base/auto_reset.h"
 #include "base/logging.h"
 #include "base/memory/free_deleter.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
-#include "build/chromeos_buildflags.h"
+#include "base/numerics/safe_conversions.h"
 #include "ui/events/devices/x11/device_data_manager_x11.h"
 #include "ui/events/devices/x11/touch_factory_x11.h"
 #include "ui/events/event_utils.h"
@@ -34,7 +33,7 @@
 #include "ui/events/platform/x11/x11_event_watcher_fdwatch.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ui/events/ozone/chromeos/cursor_controller.h"
 #endif
 
@@ -203,14 +202,14 @@ x11::Time X11EventSource::GetCurrentServerTime() {
   }
 
   // Make a no-op property change on |dummy_window_|.
-  std::vector<uint8_t> data{0};
+  std::vector<uint8_t> data({0});
   connection_->ChangeProperty(x11::ChangePropertyRequest{
       .window = static_cast<x11::Window>(dummy_window_),
       .property = dummy_atom_,
       .type = x11::Atom::STRING,
       .format = CHAR_BIT,
-      .data_len = 1,
-      .data = base::RefCountedBytes::TakeVector(&data),
+      .data_len = base::checked_cast<uint32_t>(data.size()),
+      .data = base::MakeRefCounted<base::RefCountedBytes>(std::move(data)),
   });
 
   // Observe the resulting PropertyNotify event to obtain the timestamp.
@@ -228,7 +227,7 @@ x11::Time X11EventSource::GetCurrentServerTime() {
   };
 
   auto& events = connection_->events();
-  auto it = base::ranges::find_if(events, pred);
+  auto it = std::ranges::find_if(events, pred);
   if (it != events.end()) {
     *it = x11::Event();
   }
@@ -244,6 +243,10 @@ x11::Time X11EventSource::GetTimestamp() {
   }
   DVLOG(1) << "Making a round trip to get a recent server timestamp.";
   return GetCurrentServerTime();
+}
+
+void X11EventSource::ClearLastCursorLocation() {
+  last_cursor_location_.reset();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -273,10 +276,10 @@ void X11EventSource::OnEvent(const x11::Event& x11_event) {
     hotplug_event_handler_->OnHotplugEvent();
   }
 
-  auto* crossing = x11_event.As<x11::CrossingEvent>();
-  if (crossing && crossing->opcode == x11::CrossingEvent::EnterNotify &&
-      crossing->detail != x11::NotifyDetail::Inferior &&
-      crossing->mode != x11::NotifyMode::Ungrab) {
+  auto* crossing = x11_event.As<x11::Input::CrossingEvent>();
+  if (crossing && crossing->opcode == x11::Input::CrossingEvent::Enter &&
+      crossing->detail != x11::Input::NotifyDetail::Inferior &&
+      crossing->mode != x11::Input::NotifyMode::PassiveUngrab) {
     // Clear stored scroll data
     ui::DeviceDataManagerX11::GetInstance()->InvalidateScrollClasses(
         DeviceDataManagerX11::kAllDevices);
@@ -294,13 +297,7 @@ void X11EventSource::OnEvent(const x11::Event& x11_event) {
       translated_event && translated_event->IsMouseEvent()) {
     return;
   }
-  if (translated_event && translated_event->type() != ET_UNKNOWN) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    if (translated_event->IsLocatedEvent()) {
-      ui::CursorController::GetInstance()->SetCursorLocation(
-          translated_event->AsLocatedEvent()->location_f());
-    }
-#endif
+  if (translated_event && translated_event->type() != EventType::kUnknown) {
     DispatchEvent(translated_event.get());
   }
 }

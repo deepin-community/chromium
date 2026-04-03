@@ -8,7 +8,9 @@
 #include <set>
 #include <utility>
 
+#include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/app_list/internal_app_id_constants.h"
+#include "base/compiler_specific.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/clock.h"
@@ -20,13 +22,14 @@
 #include "chrome/browser/ash/app_list/search/app_service_app_result.h"
 #include "chrome/browser/ash/extensions/gfx_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/web_applications/web_app_id_constants.h"
 #include "chromeos/ash/components/string_matching/fuzzy_tokenized_string_match.h"
 #include "chromeos/ash/components/string_matching/tokenized_string.h"
 #include "chromeos/ash/components/string_matching/tokenized_string_match.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/app_update.h"
 #include "components/services/app_service/public/cpp/types_util.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 using ::ash::string_matching::FuzzyTokenizedStringMatch;
 using ::ash::string_matching::TokenizedString;
@@ -48,8 +51,8 @@ constexpr double kRelevanceThreshold = 0.64;
 
 // Default recommended apps in descending order of priority.
 constexpr const char* const ranked_default_app_ids[] = {
-    web_app::kOsSettingsAppId, web_app::kHelpAppId, arc::kPlayStoreAppId,
-    web_app::kCanvasAppId, web_app::kCameraAppId};
+    ash::kOsSettingsAppId, ash::kHelpAppId, arc::kPlayStoreAppId,
+    ash::kCanvasAppId, ash::kCameraAppId};
 
 // Flag to enable/disable diacritics stripping
 constexpr bool kStripDiacritics = true;
@@ -61,9 +64,9 @@ constexpr bool kStripDiacritics = true;
 // Returns:
 //    The priority rank 0, 1, ... if the app is a default app.
 //    -1 if the app is not a default app.
-int GetDefaultAppRank(const std::string app_id) {
+int GetDefaultAppRank(const std::string& app_id) {
   for (size_t i = 0; i < std::size(ranked_default_app_ids); ++i) {
-    if (app_id == ranked_default_app_ids[i]) {
+    if (app_id == UNSAFE_TODO(ranked_default_app_ids[i])) {
       return i;
     }
   }
@@ -82,7 +85,7 @@ void MaybeAddResult(SearchProvider::Results* results,
 
   seen_or_filtered_apps->insert(app_result->app_id());
 
-  std::unordered_set<std::string> duplicate_app_ids;
+  absl::flat_hash_set<std::string> duplicate_app_ids;
   if (!extensions::util::GetEquivalentInstalledArcApps(
           app_result->profile(), app_result->app_id(), &duplicate_app_ids)) {
     results->emplace_back(std::move(app_result));
@@ -90,7 +93,7 @@ void MaybeAddResult(SearchProvider::Results* results,
   }
 
   for (const auto& duplicate_app_id : duplicate_app_ids) {
-    if (seen_or_filtered_apps->count(duplicate_app_id)) {
+    if (seen_or_filtered_apps->contains(duplicate_app_id)) {
       return;
     }
   }
@@ -99,8 +102,9 @@ void MaybeAddResult(SearchProvider::Results* results,
 
   // Add duplicate ids in order to filter them if they appear down the
   // list.
-  seen_or_filtered_apps->insert(duplicate_app_ids.begin(),
-                                duplicate_app_ids.end());
+  seen_or_filtered_apps->insert(
+      std::make_move_iterator(duplicate_app_ids.begin()),
+      std::make_move_iterator(duplicate_app_ids.end()));
 }
 
 // Linearly maps |score| to the range [min, max].
@@ -409,13 +413,11 @@ void AppSearchDataSource::Refresh() {
       ->AppRegistryCache()
       .ForEachApp([this](const apps::AppUpdate& update) {
         if (!apps_util::IsInstalled(update.Readiness()) ||
-            (!update.ShowInSearch().value_or(false) &&
-             !(update.Recommendable().value_or(false) &&
-               update.AppType() == apps::AppType::kBuiltIn))) {
+            !update.ShowInSearch().value_or(false)) {
           return;
         }
 
-        // TODO(crbug.com/826982): add the "can load in incognito" concept to
+        // TODO(crbug.com/40569217): add the "can load in incognito" concept to
         // the App Service and use it here, similar to ExtensionDataSource.
         const std::string name = update.Name();
 
@@ -426,7 +428,7 @@ void AppSearchDataSource::Refresh() {
         apps_.back()->set_recommendable(
             update.Recommendable().value_or(false) &&
             !update.Paused().value_or(false) &&
-            update.Readiness() != apps::Readiness::kDisabledByPolicy &&
+            !apps_util::IsDisabled(update.Readiness()) &&
             update.ShowInLauncher());
         apps_.back()->set_searchable(update.Searchable().value_or(false));
 

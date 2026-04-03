@@ -8,7 +8,7 @@
 #include "base/functional/bind.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/content/browser/content_autofill_driver_test_api.h"
-#include "components/autofill/core/browser/test_browser_autofill_manager.h"
+#include "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
 
 namespace autofill {
 
@@ -21,39 +21,54 @@ ContentAutofillDriverFactoryTestApi::Create(content::WebContents* web_contents,
 
 ContentAutofillDriverFactoryTestApi::ContentAutofillDriverFactoryTestApi(
     ContentAutofillDriverFactory* factory)
-    : factory_(*factory) {}
+    : AutofillDriverFactoryTestApi(factory) {}
 
 std::unique_ptr<ContentAutofillDriver>
 ContentAutofillDriverFactoryTestApi::ExchangeDriver(
     content::RenderFrameHost* rfh,
     std::unique_ptr<ContentAutofillDriver> new_driver) {
-  auto it = factory_->driver_map_.find(rfh);
-  CHECK(it != factory_->driver_map_.end());
-  return std::exchange(it->second, std::move(new_driver));
+  auto it = factory().driver_map_.find(rfh);
+  CHECK(it != factory().driver_map_.end());
+  std::unique_ptr<ContentAutofillDriver> old_driver =
+      std::exchange(it->second, std::move(new_driver));
+
+  // Make sure that `old_driver` is in `LifecycleState::kPendingDeletion` to
+  // avoid hitting a CHECK in ~AutofillDriver().
+  // To prevent firing events, we create a fresh AutofillDriverFactory that has
+  // no observers.
+  class : public AutofillDriverFactory {
+   public:
+    using AutofillDriverFactory::SetLifecycleStateAndNotifyObservers;
+    std::vector<AutofillDriver*> GetExistingDrivers() override { return {}; }
+  } helper;
+  helper.SetLifecycleStateAndNotifyObservers(
+      *old_driver, AutofillDriver::LifecycleState::kPendingDeletion);
+  return old_driver;
+}
+
+ContentAutofillDriver* ContentAutofillDriverFactoryTestApi::DriverForFrame(
+    content::RenderFrameHost* rfh) {
+  return factory().DriverForFrame(rfh);
 }
 
 ContentAutofillDriver* ContentAutofillDriverFactoryTestApi::GetDriver(
     content::RenderFrameHost* rfh) {
-  auto it = factory_->driver_map_.find(rfh);
-  return it != factory_->driver_map_.end() ? it->second.get() : nullptr;
+  auto it = factory().driver_map_.find(rfh);
+  return it != factory().driver_map_.end() ? it->second.get() : nullptr;
 }
 
-void ContentAutofillDriverFactoryTestApi::AddObserverAtIndex(
-    ContentAutofillDriverFactory::Observer* new_observer,
-    size_t index) {
-  std::vector<ContentAutofillDriverFactory::Observer*> observers;
-  auto it = factory_->observers_.begin();
-  for (; it != factory_->observers_.end() && index-- > 0; ++it) {
-    observers.push_back(&*it);
-  }
-  observers.push_back(new_observer);
-  for (; it != factory_->observers_.end(); ++it) {
-    observers.push_back(&*it);
-  }
-  factory_->observers_.Clear();
-  for (auto* observer : observers) {
-    factory_->observers_.AddObserver(observer);
-  }
+void ContentAutofillDriverFactoryTestApi::Reset(ContentAutofillDriver& driver) {
+  using enum AutofillDriver::LifecycleState;
+  AutofillDriver::LifecycleState original_state = driver.GetLifecycleState();
+  CHECK(original_state == kActive || original_state == kInactive);
+  factory().SetLifecycleStateAndNotifyObservers(driver, kPendingReset);
+  factory().SetLifecycleStateAndNotifyObservers(driver, original_state);
+}
+
+void ContentAutofillDriverFactoryTestApi::SetLifecycleStateAndNotifyObservers(
+    ContentAutofillDriver& driver,
+    AutofillDriver::LifecycleState new_state) {
+  factory().SetLifecycleStateAndNotifyObservers(driver, new_state);
 }
 
 }  // namespace autofill

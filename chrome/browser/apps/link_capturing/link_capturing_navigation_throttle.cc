@@ -9,23 +9,24 @@
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/types/cxx23_to_underlying.h"
 #include "chrome/browser/apps/link_capturing/link_capturing_tab_data.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"  // nogncheck https://crbug.com/1474116
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"  // nogncheck https://crbug.com/1474116
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"  // nogncheck https://crbug.com/1474116
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_finder.h"  // nogncheck https://crbug.com/1474984
-#include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/ui/web_applications/navigation_capturing_process.h"  // nogncheck https://crbug.com/377760841
+#include "chrome/browser/web_applications/link_capturing_features.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
-#include "components/page_load_metrics/browser/page_load_metrics_util.h"
+#include "components/page_load_metrics/google/browser/google_url_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/common/constants.h"
+#include "third_party/blink/public/mojom/loader/referrer.mojom.h"
 #include "url/origin.h"
 
 namespace apps {
@@ -107,7 +108,7 @@ bool LinkCapturingNavigationThrottle::IsCapturableLinkNavigation(
     return false;
   }
 
-  if (base::to_underlying(ui::PageTransitionGetQualifier(page_transition)) !=
+  if (std::to_underlying(ui::PageTransitionGetQualifier(page_transition)) !=
       0) {
     // Qualifiers indicate that this navigation was the result of a click on a
     // forward/back button, or typing in the URL bar. Don't handle any of those
@@ -124,41 +125,59 @@ ui::PageTransition LinkCapturingNavigationThrottle::MaskOutPageTransition(
   return ui::PageTransitionFromInt(page_transition & ~mask);
 }
 
+// static
+bool LinkCapturingNavigationThrottle::
+    IsEmptyDanglingWebContentsAfterLinkCapture(
+        content::NavigationHandle* handle) {
+  const GURL& last_committed_url =
+      handle->GetWebContents()->GetLastCommittedURL();
+  return !last_committed_url.is_valid() || last_committed_url.IsAboutBlank() ||
+         // Some navigations are via JavaScript `location.href = url;`.
+         // This can be used for user clicked buttons as well as redirects.
+         // Check whether the action was in the context of a user activation to
+         // distinguish redirects from click event handlers.
+         !handle->StartedWithTransientActivation();
+}
+
 LinkCapturingNavigationThrottle::Delegate::~Delegate() = default;
 
 // static
-std::unique_ptr<content::NavigationThrottle>
-LinkCapturingNavigationThrottle::MaybeCreate(
-    content::NavigationHandle* handle,
+bool LinkCapturingNavigationThrottle::MaybeCreateAndAdd(
+    content::NavigationThrottleRegistry& registry,
     std::unique_ptr<Delegate> delegate) {
+  // If the reimplementation params of the link capturing feature flag is
+  // enabled for all navigations, turn off the "old" link capturing behavior.
+  if (features::IsNavigationCapturingReimplEnabled()) {
+    return false;
+  }
+
   // Don't handle navigations in subframes or main frames that are in a nested
-  // frame tree (e.g. portals, fenced-frame). We specifically allow
+  // frame tree (e.g. fenced-frame). We specifically allow
   // prerendering navigations so that we can destroy the prerender. Opening an
   // app must only happen when the user intentionally navigates; however, for a
   // prerender, the prerender-activating navigation doesn't run throttles so we
   // must cancel it during initial loading to get a standard (non-prerendering)
   // navigation at link-click-time.
-  if (!handle->IsInPrimaryMainFrame() && !handle->IsInPrerenderedMainFrame()) {
-    return nullptr;
+  content::NavigationHandle& handle = registry.GetNavigationHandle();
+  if (!handle.IsInOutermostMainFrame()) {
+    return false;
   }
 
-  content::WebContents* web_contents = handle->GetWebContents();
+  content::WebContents* web_contents = handle.GetWebContents();
   if (prerender::ChromeNoStatePrefetchContentsDelegate::FromWebContents(
           web_contents) != nullptr) {
-    return nullptr;
+    return false;
   }
 
-  Profile* profile =
-      Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  if (!web_app::AreWebAppsUserInstallable(profile)) {
-    return nullptr;
+  if (delegate->ShouldCancelThrottleCreation(registry)) {
+    return false;
   }
 
   // If there is no browser attached to this web-contents yet, this was a
   // middle-mouse-click action, which should not be captured.
-  // TODO(crbug.com/1474984): Find a better way to detect middle-clicks.
+  // TODO(crbug.com/40279479): Find a better way to detect middle-clicks.
   if (chrome::FindBrowserWithTab(web_contents) == nullptr) {
-    return nullptr;
+    return false;
   }
 
   // Never link capture links that open in a popup window. Popups are closely
@@ -168,16 +187,17 @@ LinkCapturingNavigationThrottle::MaybeCreate(
       GetLinkCapturingSourceDisposition(web_contents);
   if (disposition == WindowOpenDisposition::NEW_POPUP &&
       !web_contents->GetLastCommittedURL().is_valid()) {
-    return nullptr;
+    return false;
   }
 
-  return base::WrapUnique(
-      new LinkCapturingNavigationThrottle(handle, std::move(delegate)));
+  registry.AddThrottle(base::WrapUnique(
+      new LinkCapturingNavigationThrottle(registry, std::move(delegate))));
+  return true;
 }
 
-base::OnceClosure&
+LinkCapturingNavigationThrottle::LaunchCallbackForTesting&
 LinkCapturingNavigationThrottle::GetLinkCaptureLaunchCallbackForTesting() {
-  static base::NoDestructor<base::OnceClosure> callback;
+  static base::NoDestructor<LaunchCallbackForTesting> callback;
   return *callback;
 }
 
@@ -207,7 +227,7 @@ bool LinkCapturingNavigationThrottle::IsGoogleRedirectorUrl(const GURL& url) {
     return false;
   }
 
-  return url.path_piece() == "/url" && url.has_query();
+  return url.path() == "/url" && url.has_query();
 }
 
 // If the previous url and current url are not the same (AKA a redirection),
@@ -237,6 +257,13 @@ bool LinkCapturingNavigationThrottle::ShouldOverrideUrlIfRedirected(
 ThrottleCheckResult LinkCapturingNavigationThrottle::HandleRequest() {
   content::NavigationHandle* handle = navigation_handle();
 
+  // Exit early if the reimplementation data is attached, to avoid running two
+  // different throttles simultaneously. Note: this cannot be checked in
+  // `MaybeCreate()` since the data might get attached after it's executed.
+  if (web_app::NavigationCapturingProcess::GetForNavigationHandle(*handle)) {
+    return content::NavigationThrottle::PROCEED;
+  }
+
   // If the navigation will update the same document, don't consider as a
   // capturable link.
   if (handle->IsSameDocument()) {
@@ -265,8 +292,9 @@ ThrottleCheckResult LinkCapturingNavigationThrottle::HandleRequest() {
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
   std::optional<LaunchCallback> launch_link_capture =
-      delegate_->CreateLinkCaptureLaunchClosure(profile, web_contents, url,
-                                                is_navigation_from_link);
+      delegate_->CreateLinkCaptureLaunchClosure(
+          profile, web_contents, url, is_navigation_from_link,
+          handle->GetRedirectChain().size());
   if (!launch_link_capture.has_value()) {
     return content::NavigationThrottle::PROCEED;
   }
@@ -289,15 +317,10 @@ ThrottleCheckResult LinkCapturingNavigationThrottle::HandleRequest() {
   // if we wait until after the launch completes to close the tab, then it will
   // cause the old window to come to the front hiding the newly launched app
   // window.
+  bool closed_web_contents = false;
   std::unique_ptr<ScopedKeepAlive> browser_keep_alive;
   std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive;
-  const GURL& last_committed_url = web_contents->GetLastCommittedURL();
-  if (!last_committed_url.is_valid() || last_committed_url.IsAboutBlank() ||
-      // After clicking a link in various apps (eg gchat), a blank redirect
-      // page is left behind. Remove it to clean up.
-      // WasInitiatedByLinkClick()
-      // returns false for links clicked from apps.
-      !handle->WasInitiatedByLinkClick()) {
+  if (IsEmptyDanglingWebContentsAfterLinkCapture(handle)) {
     browser_keep_alive = std::make_unique<ScopedKeepAlive>(
         KeepAliveOrigin::APP_LAUNCH, KeepAliveRestartOption::ENABLED);
     if (!profile->IsOffTheRecord()) {
@@ -305,18 +328,22 @@ ThrottleCheckResult LinkCapturingNavigationThrottle::HandleRequest() {
           profile, ProfileKeepAliveOrigin::kAppWindow);
     }
     web_contents->ClosePage();
+    closed_web_contents = true;
   }
 
+  // Note: This callback currently serves to own the "keep alive" objects
+  // until the launch is complete.
   base::OnceClosure launch_callback = base::BindOnce(
       [](std::unique_ptr<ScopedKeepAlive> browser_keep_alive,
-         std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive) {
-        // Note: This callback currently serves to own the "keep alive" objects
-        // until the launch is complete.
-        if (GetLinkCaptureLaunchCallbackForTesting()) {               // IN-TEST
-          std::move(GetLinkCaptureLaunchCallbackForTesting()).Run();  // IN-TEST
+         std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive,
+         bool closed_web_contents) {
+        if (GetLinkCaptureLaunchCallbackForTesting()) {        // IN-TEST
+          std::move(GetLinkCaptureLaunchCallbackForTesting())  // IN-TEST
+              .Run(closed_web_contents);                       // IN-TEST
         }
       },
-      std::move(browser_keep_alive), std::move(profile_keep_alive));
+      std::move(browser_keep_alive), std::move(profile_keep_alive),
+      closed_web_contents);
 
   // The tab may have been closed, which runs async and causes the browser
   // window to be refocused. Post a task to launch the app to ensure launching
@@ -329,9 +356,8 @@ ThrottleCheckResult LinkCapturingNavigationThrottle::HandleRequest() {
 }
 
 LinkCapturingNavigationThrottle::LinkCapturingNavigationThrottle(
-    content::NavigationHandle* navigation_handle,
+    content::NavigationThrottleRegistry& registry,
     std::unique_ptr<Delegate> delegate)
-    : content::NavigationThrottle(navigation_handle),
-      delegate_(std::move(delegate)) {}
+    : content::NavigationThrottle(registry), delegate_(std::move(delegate)) {}
 
 }  // namespace apps

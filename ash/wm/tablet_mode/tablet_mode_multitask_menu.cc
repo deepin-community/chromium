@@ -63,7 +63,7 @@ class TabletModeMultitaskMenuView : public views::View {
   TabletModeMultitaskMenuView(aura::Window* window,
                               base::RepeatingClosure close_callback,
                               base::RepeatingClosure dismiss_callback) {
-    SetBackground(views::CreateThemedRoundedRectBackground(
+    SetBackground(views::CreateRoundedRectBackground(
         kColorAshShieldAndBaseOpaque, kCornerRadius));
     SetBorder(std::make_unique<views::HighlightBorder>(
         kCornerRadius, views::HighlightBorder::Type::kHighlightBorderOnShadow));
@@ -94,8 +94,6 @@ class TabletModeMultitaskMenuView : public views::View {
       buttons |= chromeos::MultitaskMenuView::kFloat;
     }
 
-    // TODO(sophiewen): Ensure that there is always 2 buttons or more if this
-    // view is created.
     DCHECK_GE(std::bitset<4 + 1>(buttons).count(), 1u);
 
     menu_view_base_ =
@@ -127,7 +125,8 @@ class TabletModeMultitaskMenuView : public views::View {
     layer()->SetFillsBoundsOpaquely(false);
 
     shadow_ = SystemShadow::CreateShadowOnNinePatchLayer(
-        SystemShadow::Type::kElevation12);
+        SystemShadow::Type::kElevation12,
+        SystemShadow::LayerRecreatedCallback());
     shadow_->SetRoundedCornerRadius(kCornerRadius);
     layer()->Add(shadow_->GetLayer());
   }
@@ -156,7 +155,9 @@ TabletModeMultitaskMenu::TabletModeMultitaskMenu(
     : controller_(controller) {
   CHECK(window);
 
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.activatable = views::Widget::InitParams::Activatable::kYes;
   // Use an activatable container that's guaranteed to be on top of the desk
@@ -220,11 +221,11 @@ TabletModeMultitaskMenu::TabletModeMultitaskMenu(
 
   // Showing the widget can change native focus (which would result in an
   // immediate closing of the menu). Only start observing after shown.
-  views::WidgetFocusManager::GetInstance()->AddFocusChangeListener(this);
+  views::NativeViewFocusManager::GetInstance()->AddFocusChangeListener(this);
 }
 
 TabletModeMultitaskMenu::~TabletModeMultitaskMenu() {
-  views::WidgetFocusManager::GetInstance()->RemoveFocusChangeListener(this);
+  views::NativeViewFocusManager::GetInstance()->RemoveFocusChangeListener(this);
 }
 
 void TabletModeMultitaskMenu::Animate(bool show) {
@@ -384,7 +385,7 @@ void TabletModeMultitaskMenu::OnDisplayMetricsChanged(
     return;
 
   // Ignore changes to displays that aren't showing the menu.
-  if (display.id() != display::Screen::GetScreen()
+  if (display.id() != display::Screen::Get()
                           ->GetDisplayNearestView(widget_->GetNativeWindow())
                           .id()) {
     return;

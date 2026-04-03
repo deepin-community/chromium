@@ -18,6 +18,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/time_format.h"
@@ -30,8 +31,6 @@
 
 namespace ash {
 namespace {
-
-static PowerStatus* g_power_status = nullptr;
 
 std::u16string GetBatteryTimeAccessibilityString(int hour, int min) {
   DCHECK(hour || min);
@@ -80,7 +79,6 @@ int PowerSourceToMessageID(
       return IDS_ASH_POWER_SOURCE_PORT_BACK_RIGHT;
   }
   NOTREACHED();
-  return 0;
 }
 
 SkColor GetDefaultAlertColor(const ui::ColorProvider* color_provider) {
@@ -125,28 +123,30 @@ const int PowerStatus::kMaxBatteryTimeToDisplaySec = 24 * 60 * 60;
 
 const double PowerStatus::kCriticalBatteryChargePercentage = 5;
 
+PowerStatus* PowerStatus::g_power_status_ = nullptr;
+
 // static
 void PowerStatus::Initialize() {
-  CHECK(!g_power_status);
-  g_power_status = new PowerStatus();
+  CHECK(!g_power_status_);
+  g_power_status_ = new PowerStatus();
 }
 
 // static
 void PowerStatus::Shutdown() {
-  CHECK(g_power_status);
-  delete g_power_status;
-  g_power_status = nullptr;
+  CHECK(g_power_status_);
+  delete g_power_status_;
+  g_power_status_ = nullptr;
 }
 
 // static
 bool PowerStatus::IsInitialized() {
-  return g_power_status != nullptr;
+  return g_power_status_ != nullptr;
 }
 
 // static
 PowerStatus* PowerStatus::Get() {
-  CHECK(g_power_status) << "PowerStatus::Get() called before Initialize().";
-  return g_power_status;
+  CHECK(g_power_status_) << "PowerStatus::Get() called before Initialize().";
+  return g_power_status_;
 }
 
 void PowerStatus::AddObserver(Observer* observer) {
@@ -168,9 +168,19 @@ bool PowerStatus::IsBatteryPresent() const {
          power_manager::PowerSupplyProperties_BatteryState_NOT_PRESENT;
 }
 
+bool PowerStatus::IsBatteryChargeLimited() const {
+  return proto_.charge_limited();
+}
+
 bool PowerStatus::IsBatteryFull() const {
+  // In a special scenario, the battery can be reported as full when a battery
+  // charge limit is enabled, but the percentage is significantly lowered than
+  // 100% (i.e., FULL = 80%). Therefore, a battery should only be considered
+  // "full" in the UI if the battery percentage is close to total battery
+  // capacity (percent >= 99).
   return proto_.battery_state() ==
-         power_manager::PowerSupplyProperties_BatteryState_FULL;
+             power_manager::PowerSupplyProperties_BatteryState_FULL &&
+         GetRoundedBatteryPercent() >= 99;
 }
 
 bool PowerStatus::IsBatteryCharging() const {
@@ -218,7 +228,14 @@ std::optional<base::TimeDelta> PowerStatus::GetBatteryTimeToFull() const {
 
 bool PowerStatus::IsLinePowerConnected() const {
   return proto_.external_power() !=
-         power_manager::PowerSupplyProperties_ExternalPower_DISCONNECTED;
+             power_manager::PowerSupplyProperties_ExternalPower_DISCONNECTED &&
+         !IsIncompatibleChargerConnected();
+}
+
+bool PowerStatus::IsIncompatibleChargerConnected() const {
+  return proto_.external_power() ==
+         power_manager::
+             PowerSupplyProperties_ExternalPower_LOW_VOLTAGE_NO_CHARGE;
 }
 
 bool PowerStatus::IsMainsChargerConnected() const {
@@ -273,6 +290,17 @@ PowerStatus::BatteryImageInfo PowerStatus::GenerateBatteryImageInfo(
 }
 
 void PowerStatus::CalculateBatteryImageInfo(BatteryImageInfo* info) const {
+  if (!proto_initialized_) {
+    info->icon_badge = chromeos::features::IsBatteryBadgeIconEnabled()
+                           ? &kUnifiedMenuBatteryUnreliableIcon
+                           : &kUnifiedMenuBatteryUnreliableLegacyIcon;
+    info->badge_outline =
+        chromeos::features::IsBatteryBadgeIconEnabled()
+            ? &kUnifiedMenuBatteryUnreliableOutlineMaskIcon
+            : &kUnifiedMenuBatteryUnreliableOutlineMaskLegacyIcon;
+    return;
+  }
+
   // We only alert if we are on battery, and battery saver mode is disabled.
   if (features::IsBatterySaverAvailable()) {
     info->alert_if_low = !IsLinePowerConnected() && !IsBatterySaverActive();
@@ -281,21 +309,43 @@ void PowerStatus::CalculateBatteryImageInfo(BatteryImageInfo* info) const {
   }
 
   if (!IsUsbChargerConnected() && !IsBatteryPresent()) {
-    info->icon_badge = &kUnifiedMenuBatteryXIcon;
-    info->badge_outline = &kUnifiedMenuBatteryXOutlineMaskIcon;
+    info->icon_badge = chromeos::features::IsBatteryBadgeIconEnabled()
+                           ? &kUnifiedMenuBatteryXIcon
+                           : &kUnifiedMenuBatteryXLegacyIcon;
+    info->badge_outline = chromeos::features::IsBatteryBadgeIconEnabled()
+                              ? &kUnifiedMenuBatteryXOutlineMaskIcon
+                              : &kUnifiedMenuBatteryXOutlineMaskLegacyIcon;
     info->charge_percent = 0;
     return;
   }
 
   if (IsUsbChargerConnected()) {
-    info->icon_badge = &kUnifiedMenuBatteryUnreliableIcon;
-    info->badge_outline = &kUnifiedMenuBatteryUnreliableOutlineMaskIcon;
+    info->icon_badge = chromeos::features::IsBatteryBadgeIconEnabled()
+                           ? &kUnifiedMenuBatteryUnreliableIcon
+                           : &kUnifiedMenuBatteryUnreliableLegacyIcon;
+    info->badge_outline =
+        chromeos::features::IsBatteryBadgeIconEnabled()
+            ? &kUnifiedMenuBatteryUnreliableOutlineMaskIcon
+            : &kUnifiedMenuBatteryUnreliableOutlineMaskLegacyIcon;
+  } else if (IsLinePowerConnected() &&
+             features::IsBatteryChargeLimitAvailable() &&
+             IsBatteryChargeLimited()) {
+    info->icon_badge = &kChargeLimitShieldIcon;
+    info->badge_outline = &kChargeLimitShieldOutlineMaskIcon;
   } else if (IsLinePowerConnected()) {
-    info->icon_badge = &kUnifiedMenuBatteryBoltIcon;
-    info->badge_outline = &kUnifiedMenuBatteryBoltOutlineMaskIcon;
+    info->icon_badge = chromeos::features::IsBatteryBadgeIconEnabled()
+                           ? &kUnifiedMenuBatteryBoltIcon
+                           : &kUnifiedMenuBatteryBoltLegacyIcon;
+    info->badge_outline = chromeos::features::IsBatteryBadgeIconEnabled()
+                              ? &kUnifiedMenuBatteryBoltOutlineMaskIcon
+                              : &kUnifiedMenuBatteryBoltOutlineMaskLegacyIcon;
   } else if (IsBatterySaverActive()) {
-    info->icon_badge = &kBatterySaverPlusIcon;
-    info->badge_outline = &kBatterySaverPlusOutlineIcon;
+    info->icon_badge = chromeos::features::IsBatteryBadgeIconEnabled()
+                           ? &kBatterySaverPlusIcon
+                           : &kBatterySaverPlusLegacyIcon;
+    info->badge_outline = chromeos::features::IsBatteryBadgeIconEnabled()
+                              ? &kBatterySaverPlusOutlineIcon
+                              : &kBatterySaverPlusOutlineLegacyIcon;
   } else {
     info->icon_badge = nullptr;
     info->badge_outline = nullptr;
@@ -307,8 +357,12 @@ void PowerStatus::CalculateBatteryImageInfo(BatteryImageInfo* info) const {
   // have a badge assigned.
   if (GetBatteryPercent() < kCriticalBatteryChargePercentage &&
       !info->icon_badge) {
-    info->icon_badge = &kUnifiedMenuBatteryAlertIcon;
-    info->badge_outline = &kUnifiedMenuBatteryAlertOutlineMaskIcon;
+    info->icon_badge = chromeos::features::IsBatteryBadgeIconEnabled()
+                           ? &kUnifiedMenuBatteryAlertIcon
+                           : &kUnifiedMenuBatteryAlertLegacyIcon;
+    info->badge_outline = chromeos::features::IsBatteryBadgeIconEnabled()
+                              ? &kUnifiedMenuBatteryAlertOutlineMaskIcon
+                              : &kUnifiedMenuBatteryAlertOutlineMaskLegacyIcon;
   }
 }
 
@@ -333,42 +387,53 @@ gfx::ImageSkia PowerStatus::GetBatteryImage(
 
 std::u16string PowerStatus::GetAccessibleNameString(
     bool full_description) const {
+  if (!proto_initialized_) {
+    return l10n_util::GetStringUTF16(
+        IDS_ASH_STATUS_TRAY_BATTERY_CALCULATING_CHARGE_LEVEL_ACCESSIBLE);
+  }
+
   if (IsBatteryFull()) {
     return l10n_util::GetStringUTF16(
         IDS_ASH_STATUS_TRAY_BATTERY_FULL_CHARGE_ACCESSIBLE);
   }
 
   int percentage_accessibility_token = -1;
-  if (features::IsBatterySaverAvailable()) {
-    if (IsBatteryCharging()) {
-      percentage_accessibility_token =
-          IsBatterySaverActive()
-              ? IDS_ASH_STATUS_TRAY_BATTERY_PERCENT_CHARGING_BSM_ON_ACCESSIBLE
-              : IDS_ASH_STATUS_TRAY_BATTERY_PERCENT_CHARGING_ACCESSIBLE;
-    } else {
-      percentage_accessibility_token =
-          IsBatterySaverActive()
-              ? IDS_ASH_STATUS_TRAY_BATTERY_PERCENT_BSM_ON_ACCESSIBLE
-              : IDS_ASH_STATUS_TRAY_BATTERY_PERCENT_ACCESSIBLE;
-    }
-  } else {  // Backwards compatibility with battery saver feature flag disabled.
+  if (ash::features::IsBatteryChargeLimitAvailable() &&
+      IsBatteryChargeLimited()) {
     percentage_accessibility_token =
-        IsBatteryCharging()
-            ? IDS_ASH_STATUS_TRAY_BATTERY_PERCENT_CHARGING_ACCESSIBLE
+        IDS_ASH_STATUS_TRAY_BATTERY_PERCENT_CHARGING_ON_HOLD_ACCESSIBLE;
+  } else if (IsBatteryCharging()) {
+    percentage_accessibility_token =
+        IsBatterySaverActive()
+            ? IDS_ASH_STATUS_TRAY_BATTERY_PERCENT_CHARGING_BSM_ON_ACCESSIBLE
+            : IDS_ASH_STATUS_TRAY_BATTERY_PERCENT_CHARGING_ACCESSIBLE;
+  } else {
+    percentage_accessibility_token =
+        IsBatterySaverActive()
+            ? IDS_ASH_STATUS_TRAY_BATTERY_PERCENT_BSM_ON_ACCESSIBLE
             : IDS_ASH_STATUS_TRAY_BATTERY_PERCENT_ACCESSIBLE;
   }
 
   std::u16string battery_percentage_accessible = l10n_util::GetStringFUTF16(
       percentage_accessibility_token,
       base::NumberToString16(GetRoundedBatteryPercent()));
-  if (!full_description)
+  // When Charge limit is enabled, the full description is simply the battery
+  // percentage and that charging is on hold. We don't show calculating,
+  // unreliable, or time to empty/full.
+  if (!full_description || (ash::features::IsBatteryChargeLimitAvailable() &&
+                            IsBatteryChargeLimited())) {
     return battery_percentage_accessible;
+  }
 
   std::u16string battery_time_accessible = std::u16string();
   const std::optional<base::TimeDelta> time =
       IsBatteryCharging() ? GetBatteryTimeToFull() : GetBatteryTimeToEmpty();
 
-  if (IsUsbChargerConnected()) {
+  if (ash::features::IsHybridChargerNotificationsEnabled() &&
+      IsIncompatibleChargerConnected()) {
+    battery_time_accessible = l10n_util::GetStringUTF16(
+        IDS_ASH_STATUS_TRAY_BATTERY_INCOMPATIBLE_CHARGER_ACCESSIBLE);
+  } else if (IsUsbChargerConnected()) {
     battery_time_accessible = l10n_util::GetStringUTF16(
         IDS_ASH_STATUS_TRAY_BATTERY_CHARGING_UNRELIABLE_ACCESSIBLE);
   } else if (IsBatteryTimeBeingCalculated()) {
@@ -395,13 +460,20 @@ std::pair<std::u16string, std::u16string> PowerStatus::GetStatusStrings()
     const {
   std::u16string percentage;
   std::u16string status;
-  if (IsBatteryFull()) {
+  if (!proto_initialized_) {
+    status = l10n_util::GetStringUTF16(
+        IDS_ASH_STATUS_TRAY_BATTERY_CALCULATING_CHARGE_LEVEL);
+  } else if (IsBatteryFull()) {
     status = l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_BATTERY_FULL);
   } else {
     percentage = base::FormatPercent(GetRoundedBatteryPercent());
     if (IsUsbChargerConnected()) {
       status = l10n_util::GetStringUTF16(
           IDS_ASH_STATUS_TRAY_BATTERY_CHARGING_UNRELIABLE);
+    } else if (features::IsBatteryChargeLimitAvailable() &&
+               IsBatteryChargeLimited()) {
+      status = l10n_util::GetStringUTF16(
+          IDS_ASH_STATUS_TRAY_BATTERY_CHARGING_ON_HOLD);
     } else if (IsBatteryTimeBeingCalculated()) {
       status =
           l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_BATTERY_CALCULATING);
@@ -449,6 +521,10 @@ double PowerStatus::GetPreferredMinimumPower() const {
 
 bool PowerStatus::IsBatterySaverActive() const {
   return battery_saver_active_;
+}
+
+base::WeakPtr<PowerStatus> PowerStatus::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 PowerStatus::PowerStatus() {

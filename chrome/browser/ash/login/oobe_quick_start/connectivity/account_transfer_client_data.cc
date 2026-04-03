@@ -14,14 +14,14 @@ AccountTransferClientData::AccountTransferClientData(
     Base64UrlString challenge_b64url)
     : challenge_b64url_(challenge_b64url) {}
 
-AccountTransferClientData::~AccountTransferClientData() {}
+AccountTransferClientData::~AccountTransferClientData() = default;
 
 Base64UrlString AccountTransferClientData::GetChallengeBase64URLString() {
   return challenge_b64url_;
 }
 
 std::string AccountTransferClientData::CreateJson() {
-  base::Value::Dict fido_collected_client_data;
+  base::DictValue fido_collected_client_data;
   url::Origin origin = url::Origin::Create(GURL(kOrigin));
   fido_collected_client_data.Set(kClientDataOriginKey, origin.Serialize());
   fido_collected_client_data.Set(kClientDataTypeKey, kCtapRequestType);
@@ -29,19 +29,12 @@ std::string AccountTransferClientData::CreateJson() {
       kClientDataChallengeKey,
       std::string(challenge_b64url_->begin(), challenge_b64url_->end()));
   fido_collected_client_data.Set(kClientDataCrossOriginKey, false);
-  std::string fido_client_data_json;
-  base::JSONWriter::Write(fido_collected_client_data, &fido_client_data_json);
-  return fido_client_data_json;
+  return base::WriteJson(fido_collected_client_data).value_or("");
 }
 
-std::array<uint8_t, crypto::kSHA256Length>
+std::array<uint8_t, crypto::hash::kSha256Size>
 AccountTransferClientData::CreateHash() {
-  std::string json = CreateJson();
-  std::array<uint8_t, crypto::kSHA256Length> client_data_hash;
-  crypto::SHA256HashString(json, client_data_hash.data(),
-                           client_data_hash.size());
-
-  return client_data_hash;
+  return crypto::hash::Sha256(base::as_byte_span(CreateJson()));
 }
 
 }  // namespace ash::quick_start

@@ -12,19 +12,20 @@
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
-#include "chrome/browser/ash/login/ui/user_adding_screen.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
 #include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
-#include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
-#include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
+#include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/ash/login/user_adding_screen.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/ash/components/policy/device_policy/cached_device_policy_updater.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/components/settings/cros_settings_waiter.h"
 #include "components/account_id/account_id.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "components/prefs/pref_service.h"
@@ -139,9 +140,6 @@ class TimeZoneResolverManagerTestBase : public LoginManagerTest {
 
   ash::EmbeddedPolicyTestServerMixin policy_test_server_mixin_{&mixin_host_};
   LoginManagerMixin login_manager_{&mixin_host_};
-
-  ScopedTestingCrosSettings cros_settings_;
-  policy::DevicePolicyBuilder device_policy_builder_;
 };
 
 class TimeZoneResolverManagerEnrolledDeviceTest
@@ -153,18 +151,12 @@ class TimeZoneResolverManagerEnrolledDeviceTest
       em::SystemTimezoneProto::AutomaticTimezoneDetectionType detection_type) {
     // Override the cloud policy for automatic time zone detection to the given
     // value.
-    device_policy_builder_.SetDefaultSigningKey();
-    device_policy_builder_.payload()
-        .mutable_system_timezone()
-        ->set_timezone_detection_type(detection_type);
-    device_policy_builder_.Build();
+    policy::CachedDevicePolicyUpdater updater;
+    updater.payload().mutable_system_timezone()->set_timezone_detection_type(
+        detection_type);
+    updater.Commit();
     policy_test_server_mixin_.UpdateDevicePolicy(
-        device_policy_builder_.payload());
-
-    // Simulating a policy fetch.
-    ash::FakeSessionManagerClient::Get()->set_device_policy(
-        device_policy_builder_.GetBlob());
-    ash::FakeSessionManagerClient::Get()->OnPropertyChangeComplete(true);
+        std::cref(updater).get().payload());
 
     // Wait for the policy value to get propagated.
     policy::LocalStateValueWaiter(
@@ -175,7 +167,11 @@ class TimeZoneResolverManagerEnrolledDeviceTest
 
   // Static policy overrides automatic detection policy
   void SetDeviceTimeZoneStaticPolicy(const std::string& value) {
-    cros_settings_.device_settings()->SetString(kSystemTimezonePolicy, value);
+    ash::CrosSettingsWaiter waiter({ash::kSystemTimezonePolicy});
+    policy::CachedDevicePolicyUpdater updater;
+    updater.payload().mutable_system_timezone()->set_timezone(value);
+    updater.Commit();
+    waiter.Wait();
   }
 
  private:
@@ -188,8 +184,7 @@ class TimeZoneResolverManagerUnenrolledDeviceTest
  protected:
   TimeZoneResolverManagerUnenrolledDeviceTest() {
     // Enabling Privacy Hub with location switch
-    scoped_feature_list_.InitWithFeatures(
-        {ash::features::kCrosPrivacyHubV0, ash::features::kCrosPrivacyHub}, {});
+    scoped_feature_list_.InitWithFeatures({ash::features::kCrosPrivacyHub}, {});
   }
 
  private:
@@ -376,6 +371,63 @@ IN_PROC_BROWSER_TEST_F(TimeZoneResolverManagerEnrolledDeviceTest,
 }
 
 IN_PROC_BROWSER_TEST_F(TimeZoneResolverManagerEnrolledDeviceTest,
+                       CheckIsTimezonePrefManaged) {
+  // Log in a user.
+  LoginUser(regular_primary_user_id_);
+  base::RunLoop().RunUntilIdle();
+
+  // Without any policy applied, the timezone pref should be not managed by
+  // default.
+  EXPECT_FALSE(system::IsTimezonePrefsManaged(kSystemTimezone));
+  EXPECT_FALSE(system::IsTimezonePrefsManaged(::prefs::kUserTimezone));
+  EXPECT_FALSE(system::IsTimezonePrefsManaged(
+      ::prefs::kResolveTimezoneByGeolocationMethod));
+
+  // Apply device timezone automatic detection policy. kSystemTimezone is only
+  // managed if kSystemTimezonePolicy is applied. Since kSystemTimezonePolicy is
+  // not applied yet, kSystemTimezone should not be managed.
+  for (auto tz_policy : kTimeZoneAutomaticDetectionCloudPolicies) {
+    SetDeviceTimeZoneAutomaticDetectionPolicy(tz_policy);
+    EXPECT_FALSE(system::IsTimezonePrefsManaged(kSystemTimezone));
+    if (tz_policy ==
+        enterprise_management::
+            SystemTimezoneProto_AutomaticTimezoneDetectionType_USERS_DECIDE) {
+      EXPECT_FALSE(system::IsTimezonePrefsManaged(::prefs::kUserTimezone));
+      EXPECT_FALSE(system::IsTimezonePrefsManaged(
+          ::prefs::kResolveTimezoneByGeolocationMethod));
+    } else if (
+        tz_policy ==
+        enterprise_management::
+            SystemTimezoneProto_AutomaticTimezoneDetectionType_DISABLED) {
+      EXPECT_FALSE(system::IsTimezonePrefsManaged(::prefs::kUserTimezone));
+      EXPECT_TRUE(system::IsTimezonePrefsManaged(
+          ::prefs::kResolveTimezoneByGeolocationMethod));
+    } else {
+      EXPECT_TRUE(system::IsTimezonePrefsManaged(::prefs::kUserTimezone));
+      EXPECT_TRUE(system::IsTimezonePrefsManaged(
+          ::prefs::kResolveTimezoneByGeolocationMethod));
+    }
+  }
+
+  // Apply user decided device timezone automatic detection policy, the timezone
+  // pref should be not managed.
+  SetDeviceTimeZoneAutomaticDetectionPolicy(
+      enterprise_management::
+          SystemTimezoneProto_AutomaticTimezoneDetectionType_USERS_DECIDE);
+  EXPECT_FALSE(system::IsTimezonePrefsManaged(kSystemTimezone));
+  EXPECT_FALSE(system::IsTimezonePrefsManaged(::prefs::kUserTimezone));
+  EXPECT_FALSE(system::IsTimezonePrefsManaged(
+      ::prefs::kResolveTimezoneByGeolocationMethod));
+
+  // Apply device timezone static policy, all timezone prefs should be managed.
+  SetDeviceTimeZoneStaticPolicy("Europe/Berlin");
+  EXPECT_TRUE(system::IsTimezonePrefsManaged(kSystemTimezone));
+  EXPECT_TRUE(system::IsTimezonePrefsManaged(::prefs::kUserTimezone));
+  EXPECT_TRUE(system::IsTimezonePrefsManaged(
+      ::prefs::kResolveTimezoneByGeolocationMethod));
+}
+
+IN_PROC_BROWSER_TEST_F(TimeZoneResolverManagerEnrolledDeviceTest,
                        CheckSystemGeolocationPermissionOnLogInScreen) {
   ash::system::TimeZoneResolverManager* tz_resolver_manager =
       g_browser_process->platform_part()->GetTimezoneResolverManager();
@@ -413,8 +465,7 @@ IN_PROC_BROWSER_TEST_F(TimeZoneResolverManagerUnenrolledDeviceTest,
   ash::system::TimeZoneResolverManager* tz_resolver_manager =
       g_browser_process->platform_part()->GetTimezoneResolverManager();
 
-  TimeZoneResolver* tz_resolver =
-      g_browser_process->platform_part()->GetTimezoneResolver();
+  TimeZoneResolver* tz_resolver = tz_resolver_manager->GetResolver();
   ASSERT_NE(tz_resolver_manager, nullptr);
   ASSERT_NE(tz_resolver, nullptr);
 
@@ -437,9 +488,8 @@ IN_PROC_BROWSER_TEST_F(TimeZoneResolverManagerUnenrolledDeviceTest,
       system::TimeZoneResolverManager::TimeZoneResolveMethod::IP_ONLY);
 
   // Check the permission is granted and timezone resolver is actually running.
-  EXPECT_EQ(
-      SimpleGeolocationProvider::GetInstance()->GetGeolocationAccessLevel(),
-      GeolocationAccessLevel::kAllowed);
+  EXPECT_EQ(SystemLocationProvider::GetInstance()->GetGeolocationAccessLevel(),
+            GeolocationAccessLevel::kAllowed);
   EXPECT_TRUE(tz_resolver_manager->TimeZoneResolverShouldBeRunning());
   EXPECT_TRUE(tz_resolver->IsRunning());
 

@@ -41,7 +41,7 @@ std::string ToHexChars(uint8_t val) {
 
 }  // namespace
 
-TracingSession TracingSession::Builder::Build() {
+std::vector<uint8_t> TracingSession::Builder::BuildProtoConfig() {
   struct PerfettoPbMsgWriter writer;
   struct PerfettoHeapBuffer* hb = PerfettoHeapBufferCreate(&writer.writer);
 
@@ -68,7 +68,7 @@ TracingSession TracingSession::Builder::Build() {
 
       perfetto_protos_DataSourceConfig_set_cstr_name(&ds_cfg,
                                                      data_source_name_.c_str());
-      if (!enabled_categories_.empty() && !disabled_categories_.empty()) {
+      if (!enabled_categories_.empty() || !disabled_categories_.empty()) {
         perfetto_protos_TrackEventConfig te_cfg;
         perfetto_protos_DataSourceConfig_begin_track_event_config(&ds_cfg,
                                                                   &te_cfg);
@@ -89,15 +89,29 @@ TracingSession TracingSession::Builder::Build() {
 
     perfetto_protos_TraceConfig_end_data_sources(&cfg, &data_sources);
   }
+
+  if (clear_period_ms_ > 0) {
+    struct perfetto_protos_TraceConfig_IncrementalStateConfig is_cfg;
+    perfetto_protos_TraceConfig_begin_incremental_state_config(&cfg, &is_cfg);
+    perfetto_protos_TraceConfig_IncrementalStateConfig_set_clear_period_ms(
+        &is_cfg, clear_period_ms_);
+    perfetto_protos_TraceConfig_end_incremental_state_config(&cfg, &is_cfg);
+  }
+
   size_t cfg_size = PerfettoStreamWriterGetWrittenSize(&writer.writer);
-  std::unique_ptr<uint8_t[]> ser(new uint8_t[cfg_size]);
-  PerfettoHeapBufferCopyInto(hb, &writer.writer, ser.get(), cfg_size);
+  std::vector<uint8_t> cfg_buf(cfg_size);
+  PerfettoHeapBufferCopyInto(hb, &writer.writer, cfg_buf.data(), cfg_size);
   PerfettoHeapBufferDestroy(hb, &writer.writer);
+  return cfg_buf;
+}
+
+TracingSession TracingSession::Builder::Build() {
+  std::vector<uint8_t> config = BuildProtoConfig();
 
   struct PerfettoTracingSessionImpl* ts =
       PerfettoTracingSessionCreate(PERFETTO_BACKEND_IN_PROCESS);
 
-  PerfettoTracingSessionSetup(ts, ser.get(), cfg_size);
+  PerfettoTracingSessionSetup(ts, config.data(), config.size());
 
   PerfettoTracingSessionStartBlocking(ts);
 
@@ -157,6 +171,10 @@ bool TracingSession::FlushBlocking(uint32_t timeout_ms) {
 
 void TracingSession::WaitForStopped() {
   stopped_->WaitForNotification();
+}
+
+void TracingSession::StopAsync() {
+  PerfettoTracingSessionStopAsync(session_);
 }
 
 void TracingSession::StopBlocking() {

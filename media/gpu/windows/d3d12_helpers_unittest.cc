@@ -4,17 +4,20 @@
 
 #include "media/gpu/windows/d3d12_helpers.h"
 
-#include <d3d11.h>
+#include <dxva.h>
+
 #include <numeric>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/rand_util.h"
+#include "media/base/video_codecs.h"
 #include "media/base/win/d3d12_mocks.h"
+#include "media/gpu/windows/format_utils.h"
 #include "media/gpu/windows/supported_profile_helpers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::_;
-using ::testing::Invoke;
 using ::testing::NiceMock;
 using ::testing::Return;
 
@@ -25,7 +28,7 @@ class D3D12Helpers : public ::testing::Test {
   void SetUp() override {
     device_ = MakeComPtr<NiceMock<D3D12DeviceMock>>();
     ON_CALL(*device_.Get(), OpenSharedHandle(_, _, _))
-        .WillByDefault(Invoke([this](HANDLE handle, REFIID riid, void** ppv) {
+        .WillByDefault([this](HANDLE handle, REFIID riid, void** ppv) {
           Microsoft::WRL::ComPtr<D3D12ResourceMock> d3d12_resource =
               MakeComPtr<NiceMock<D3D12ResourceMock>>();
           ON_CALL(*d3d12_resource.Get(), GetDesc())
@@ -40,12 +43,12 @@ class D3D12Helpers : public ::testing::Test {
               }));
           *ppv = d3d12_resource.Detach();
           return S_OK;
-        }));
+        });
   }
 
-  Microsoft::WRL::ComPtr<ID3D12Resource> CreateD3D12Resource() {
+  ComD3D12Resource CreateD3D12Resource() {
     // D3D12DeviceMock can open an empty handle
-    Microsoft::WRL::ComPtr<ID3D12Resource> d3d12_resource;
+    ComD3D12Resource d3d12_resource;
     HRESULT hr =
         device_->OpenSharedHandle(nullptr, IID_PPV_ARGS(&d3d12_resource));
     EXPECT_EQ(hr, S_OK);
@@ -72,23 +75,24 @@ TEST_F(D3D12Helpers, D3D12ReferenceFrameList) {
   std::iota(indices.begin(), indices.end(), 0);
   base::RandomShuffle(indices.begin() + 1, indices.end());
   for (size_t index : indices) {
-    Microsoft::WRL::ComPtr<ID3D12Resource> resource = CreateD3D12Resource();
+    ComD3D12Resource resource = CreateD3D12Resource();
     reference_frame_list.emplace(index, resource.Get(), 0);
     D3D12_VIDEO_DECODE_REFERENCE_FRAMES reference_frames;
     reference_frame_list.WriteTo(&reference_frames);
     EXPECT_GT(reference_frames.NumTexture2Ds, index);
-    EXPECT_EQ(reference_frames.ppTexture2Ds[index], resource.Get());
+    EXPECT_EQ(UNSAFE_TODO(reference_frames.ppTexture2Ds[index]),
+              resource.Get());
   }
 }
 
 TEST_F(D3D12Helpers, CreateD3D12TransitionBarriersForAllPlanes) {
-  Microsoft::WRL::ComPtr<ID3D12Resource> resource = CreateD3D12Resource();
-  const uint8_t num_planes = 2;
+  ComD3D12Resource resource = CreateD3D12Resource();
+  const size_t num_planes = GetFormatPlaneCount(format_);
   auto barriers = CreateD3D12TransitionBarriersForAllPlanes(
-      resource.Get(), 0, num_planes, D3D12_RESOURCE_STATE_COMMON,
+      resource.Get(), 0, D3D12_RESOURCE_STATE_COMMON,
       D3D12_RESOURCE_STATE_VIDEO_DECODE_READ);
   EXPECT_EQ(barriers.size(), num_planes);
-  for (uint8_t i = 0; i < num_planes; i++) {
+  for (size_t i = 0; i < num_planes; i++) {
     D3D12_RESOURCE_BARRIER barrier = barriers[i];
     EXPECT_EQ(barrier.Type, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION);
     EXPECT_EQ(barrier.Transition.pResource, resource.Get());
@@ -119,15 +123,19 @@ TEST_F(D3D12Helpers, GetD3D12VideoDecodeGUID) {
   EXPECT_EQ(GetD3D12VideoDecodeGUID(HEVCPROFILE_MAIN10, 10,
                                     VideoChromaSampling::k420),
             D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN10);
+  EXPECT_EQ(GetD3D12VideoDecodeGUID(HEVCPROFILE_MAIN_STILL_PICTURE, 8,
+                                    VideoChromaSampling::k420),
+            D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN);
+  // D3D12 does not support private device GUID.
   EXPECT_EQ(
       GetD3D12VideoDecodeGUID(HEVCPROFILE_REXT, 8, VideoChromaSampling::k422),
-      DXVA_ModeHEVC_VLD_Main422_10_Intel);
+      DXVA_ModeHEVC_VLD_Main10_422);
   EXPECT_EQ(
       GetD3D12VideoDecodeGUID(HEVCPROFILE_REXT, 10, VideoChromaSampling::k444),
-      DXVA_ModeHEVC_VLD_Main444_10_Intel);
+      DXVA_ModeHEVC_VLD_Main10_444);
   EXPECT_EQ(
       GetD3D12VideoDecodeGUID(HEVCPROFILE_REXT, 12, VideoChromaSampling::k420),
-      DXVA_ModeHEVC_VLD_Main12_Intel);
+      DXVA_ModeHEVC_VLD_Main12);
 #endif  // BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
 }
 

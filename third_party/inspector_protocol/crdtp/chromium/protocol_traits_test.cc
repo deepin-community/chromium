@@ -57,7 +57,7 @@ TEST(ProtocolTraits, BinaryBasic) {
   constexpr uint8_t data[] = {'H', 'e', 'l', 'l', 'o', ',', 0,
                               'w', 'o', 'r', 'l', 'd', '!', 0x80};
   const std::vector<uint8_t> data_vec(std::cbegin(data), std::cend(data));
-  Binary binary = Binary::fromSpan(data, sizeof data);
+  Binary binary = Binary::fromSpan(data);
   EXPECT_THAT(binary.toBase64(), Eq("SGVsbG8sAHdvcmxkIYA="));
   EXPECT_THAT(MakeVector(binary), Eq(data_vec));
   EXPECT_THAT(MakeVector(Binary::fromVector(data_vec)), Eq(data_vec));
@@ -74,7 +74,7 @@ TEST(ProtocolTraits, BinaryBasic) {
 TEST(ProtocolTraits, BinarySerialization) {
   constexpr uint8_t data[] = {'H', 'e', 'l', 'l', 'o', ',', 0,
                               'w', 'o', 'r', 'l', 'd', '!', 0x80};
-  Binary binary = Binary::fromSpan(data, sizeof data);
+  Binary binary = Binary::fromSpan(data);
 
   EXPECT_THAT(MakeVector(RoundTrip(binary)), Eq(MakeVector(binary)));
 }
@@ -114,19 +114,19 @@ TEST(ProtocolTraits, PrimitiveValueSerialization) {
 }
 
 template <typename... Args>
-base::Value::List MakeList(Args&&... args) {
-  base::Value::List res;
+base::ListValue MakeList(Args&&... args) {
+  base::ListValue res;
   (res.Append(std::forward<Args>(args)), ...);
   return res;
 }
 
 TEST(ProtocolTraits, ListValueSerialization) {
-  EXPECT_THAT(ConvertTo<std::vector<int>>(base::Value(base::Value::List())),
+  EXPECT_THAT(ConvertTo<std::vector<int>>(base::Value(base::ListValue())),
               Eq(std::vector<int>()));
-  EXPECT_THAT(RoundTrip(base::Value(base::Value::List())),
-              IsJson(base::Value(base::Value::List())));
+  EXPECT_THAT(RoundTrip(base::Value(base::ListValue())),
+              IsJson(base::Value(base::ListValue())));
 
-  base::Value::List list = MakeList(2, 3, 5);
+  base::ListValue list = MakeList(2, 3, 5);
   base::Value list_value = base::Value(list.Clone());
   EXPECT_THAT(ConvertTo<std::vector<int>>(list_value),
               Eq(std::vector<int>{2, 3, 5}));
@@ -140,7 +140,7 @@ TEST(ProtocolTraits, ListValueSerialization) {
 }
 
 TEST(ProtocolTraits, DictValueSerialization) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   EXPECT_THAT(RoundTrip(base::Value(dict.Clone())),
               IsJson(base::Value(base::Value::Type::DICT)));
   dict.Set("int", 42);
@@ -156,7 +156,7 @@ TEST(ProtocolTraits, DictValueSerialization) {
 }
 
 TEST(ProtocolTraits, DictValueJSONConversion) {
-  base::Value::Dict dict;
+  base::DictValue dict;
 
   dict.Set("int", 42);
   dict.Set("double", 2.718281828459045);
@@ -166,14 +166,13 @@ TEST(ProtocolTraits, DictValueJSONConversion) {
   dict.Set("dict", dict.Clone());
 
   std::vector<uint8_t> bytes;
-  ProtocolTypeTraits<base::Value::Dict>::Serialize(dict, &bytes);
+  ProtocolTypeTraits<base::DictValue>::Serialize(dict, &bytes);
 
   std::string json;
   json::ConvertCBORToJSON(SpanFrom(bytes), &json);
 
-  auto result = base::JSONReader::ReadDict(json);
-  ASSERT_TRUE(result.has_value());
-  EXPECT_THAT(*result, base::test::DictionaryHasValues(dict));
+  EXPECT_THAT(base::JSONReader::ReadDict(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS),
+              testing::Optional(base::test::DictionaryHasValues(dict)));
 }
 
 }  // namespace

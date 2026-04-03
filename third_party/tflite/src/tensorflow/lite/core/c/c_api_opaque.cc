@@ -46,6 +46,13 @@ TfLiteTensor* Convert(TfLiteOpaqueTensor* opaque_tensor) {
   return reinterpret_cast<TfLiteTensor*>(opaque_tensor);
 }
 
+TfLiteNode* Convert(TfLiteOpaqueNode* opaque_node) {
+  // The following cast is safe only because this code is part of the
+  // TF Lite runtime implementation.  Apps using TF Lite should not rely on
+  // TfLiteOpaqueNode and TfLiteNode being equivalent.
+  return reinterpret_cast<TfLiteNode*>(opaque_node);
+}
+
 const TfLiteNode* Convert(const TfLiteOpaqueNode* opaque_node) {
   // The following cast is safe only because this code is part of the
   // TF Lite runtime implementation.  Apps using TF Lite should not rely on
@@ -129,12 +136,8 @@ TfLiteStatus TfLiteOpaqueTensorGetDimSignature(
     const TfLiteOpaqueTensor* opaque_tensor, int32_t dim_index,
     int32_t* dim_length) {
   const TfLiteTensor* tensor = Convert(opaque_tensor);
-  // `dims_signature` is not defined when no unknown dimensions are present.
-  if (tensor->dims_signature != nullptr && tensor->dims_signature->size != 0) {
-    *dim_length = tensor->dims_signature->data[dim_index];
-  } else {
-    *dim_length = tensor->dims->data[dim_index];
-  }
+  const TfLiteIntArray* dims_signature = TfLiteTensorGetDimsSignature(tensor);
+  *dim_length = dims_signature->data[dim_index];
   return kTfLiteOk;
 }
 
@@ -285,6 +288,10 @@ void TfLiteOpaqueTensorSetAllocationTypeToDynamic(TfLiteOpaqueTensor* tensor) {
   tflite::SetTensorToDynamic(Convert(tensor));
 }
 
+void TfLiteOpaqueTensorSetNonCpuAllocation(TfLiteOpaqueTensor* opaque_tensor) {
+  Convert(opaque_tensor)->allocation_type = kTfLiteNonCpu;
+}
+
 const TfLiteOpaqueTensor* TfLiteOpaqueNodeGetInput(
     const TfLiteOpaqueContext* opaque_context,
     const TfLiteOpaqueNode* opaque_node, int index) {
@@ -351,6 +358,21 @@ TfLiteStatus TfLiteOpaqueNodeTemporaries(const TfLiteOpaqueNode* opaque_node,
   return kTfLiteOk;
 }
 
+TfLiteStatus TfLiteOpaqueNodeSetTemporaries(TfLiteOpaqueNode* opaque_node,
+                                            const int* temporaries,
+                                            int num_temporaries) {
+  if (num_temporaries < 0) {
+    return kTfLiteError;
+  }
+  TfLiteNode* node = Convert(opaque_node);
+  TfLiteIntArrayFree(node->temporaries);
+  node->temporaries = TfLiteIntArrayCreate(num_temporaries);
+  for (int i = 0; i < num_temporaries; ++i) {
+    node->temporaries->data[i] = temporaries[i];
+  }
+  return kTfLiteOk;
+}
+
 int TfLiteOpaqueNodeGetInputTensorIndex(const TfLiteOpaqueNode* opaque_node,
                                         int index_of_input) {
   auto* node = Convert(opaque_node);
@@ -378,10 +400,17 @@ TfLiteStatus TfLiteOpaqueContextGetExecutionPlan(
   return context->GetExecutionPlan(context, execution_plan);
 }
 
+TfLiteStatus TfLiteOpaqueContextGetExternalContext(
+    TfLiteOpaqueContext* opaque_context, void** external_context,
+    TfLiteExternalContextType type) {
+  auto context = reinterpret_cast<TfLiteContext*>(opaque_context);
+  *external_context = context->GetExternalContext(context, type);
+  return kTfLiteOk;
+}
+
 TfLiteStatus TfLiteOpaqueContextGetNodeAndRegistration(
     struct TfLiteOpaqueContext* opaque_context, int node_index,
-    TfLiteOpaqueNode** node,
-    TfLiteRegistrationExternal** registration_external) {
+    TfLiteOpaqueNode** node, TfLiteOperator** registration_external) {
   // The following casts are safe only because this code is part of the
   // TF Lite runtime implementation.  Apps using TF Lite should not rely on
   // TfLiteOpaqueContext and TfLiteContext being equivalent, or on
@@ -394,21 +423,21 @@ TfLiteStatus TfLiteOpaqueContextGetNodeAndRegistration(
       context, node_index, &local_node, &registration);
   if (status != kTfLiteOk) return status;
 
-  // When the 'registration' object obtained via 'GetNodeAndRegistration'
-  // has its 'registration_external' field set then we can load that into the
-  // caller's 'registration_external' pointer and return early.
+  // When the `registration` object obtained via `GetNodeAndRegistration`
+  // has its `registration_external` field set then we can load that into the
+  // caller's `registration_external` pointer and return early.
   *node = reinterpret_cast<TfLiteOpaqueNode*>(local_node);
   if (registration->registration_external) {
     *registration_external = registration->registration_external;
     return kTfLiteOk;
   }
 
-  // When the 'registration' object obtained via 'GetNodeAndRegistration'
-  // does *not* have its 'registration_external' field set then we need to
-  // create a TfLiteRegistrationExternal on the fly, and set its field according
-  // to the 'TfLiteRegistration' object.
+  // When the `registration` object obtained via `GetNodeAndRegistration`
+  // does *not* have its `registration_external` field set then we need to
+  // create a TfLiteOperator on the fly, and set its field according
+  // to the `TfLiteRegistration` object.
   auto derived_registration =
-      tflite::internal::CommonOpaqueConversionUtil::ObtainRegistrationExternal(
+      tflite::internal::CommonOpaqueConversionUtil::ObtainOperator(
           context, registration, node_index);
 
   if (derived_registration == nullptr) return kTfLiteError;
@@ -419,7 +448,7 @@ TfLiteStatus TfLiteOpaqueContextGetNodeAndRegistration(
 
 TfLiteStatus TfLiteOpaqueContextReplaceNodeSubsetsWithDelegateKernels(
     struct TfLiteOpaqueContext* opaque_context,
-    TfLiteRegistrationExternal* registration_external,
+    TfLiteOperator* registration_external,
     const TfLiteIntArray* nodes_to_replace,
     TfLiteOpaqueDelegate* opaque_delegate) {
   // The following casts are safe only because this code is part of the
@@ -430,12 +459,12 @@ TfLiteStatus TfLiteOpaqueContextReplaceNodeSubsetsWithDelegateKernels(
   TfLiteContext* context = reinterpret_cast<TfLiteContext*>(opaque_context);
   TfLiteDelegate* delegate = reinterpret_cast<TfLiteDelegate*>(opaque_delegate);
 
-  // Wrap the provided 'registration_external' as a regular 'TfLiteRegistration'
+  // Wrap the provided `registration_external` as a regular `TfLiteRegistration`
   // object to reduce the places in the TF Lite runtime that need to be aware
-  // of 'TfLiteRegistrationExternal's.  Note that it is important to
-  // brace-initialize the 'TfLiteRegistration' so that we pass a registration to
-  // 'ReplaceNodeSubsetsWithDelegateKernels' that has all of its fields set to
-  // null, except the 'registration_external' one.
+  // of `TfLiteOperator`s.  Note that it is important to
+  // brace-initialize the `TfLiteRegistration` so that we pass a registration to
+  // `ReplaceNodeSubsetsWithDelegateKernels` that has all of its fields set to
+  // null, except the `registration_external` one.
   TfLiteRegistration registration{};
   registration.registration_external = registration_external;
 
@@ -604,6 +633,13 @@ TfLiteStatus TfLiteOpaqueContextGetSizeOfType(TfLiteOpaqueContext* context,
                                               const TfLiteType type,
                                               size_t* bytes) {
   return tflite::GetSizeOfType(Convert(context), type, bytes);
+}
+
+TfLiteStatus TfLiteOpaqueContextGetMetadata(TfLiteOpaqueContext* context,
+                                            const char* name, const char** ptr,
+                                            size_t* bytes) {
+  auto* tflite_context = Convert(context);
+  return tflite_context->GetModelMetadata(tflite_context, name, ptr, bytes);
 }
 
 void TfLiteOpaqueContextReportError(struct TfLiteOpaqueContext* opaque_context,

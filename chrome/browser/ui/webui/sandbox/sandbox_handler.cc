@@ -26,16 +26,17 @@ using content::RenderProcessHost;
 namespace sandbox_handler {
 namespace {
 
-base::Value::List FetchBrowserChildProcesses() {
+base::ListValue FetchBrowserChildProcesses() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  base::Value::List browser_processes;
+  base::ListValue browser_processes;
 
   for (BrowserChildProcessHostIterator itr; !itr.Done(); ++itr) {
     const ChildProcessData& process_data = itr.GetData();
     // Only add processes that have already started, i.e. with valid handles.
-    if (!process_data.GetProcess().IsValid())
+    if (!process_data.GetProcess().IsValid()) {
       continue;
-    base::Value::Dict proc;
+    }
+    base::DictValue proc;
     proc.Set("processId",
              base::strict_cast<double>(process_data.GetProcess().Pid()));
     proc.Set("processType",
@@ -51,18 +52,19 @@ base::Value::List FetchBrowserChildProcesses() {
   return browser_processes;
 }
 
-base::Value::List FetchRenderHostProcesses() {
+base::ListValue FetchRenderHostProcesses() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  base::Value::List renderer_processes;
+  base::ListValue renderer_processes;
 
   for (RenderProcessHost::iterator it(RenderProcessHost::AllHostsIterator());
        !it.IsAtEnd(); it.Advance()) {
     RenderProcessHost* host = it.GetCurrentValue();
     // Skip processes that might not have started yet.
-    if (!host->GetProcess().IsValid())
+    if (!host->GetProcess().IsValid()) {
       continue;
+    }
 
-    base::Value::Dict proc;
+    base::DictValue proc;
     proc.Set("processId", base::strict_cast<double>(host->GetProcess().Pid()));
     renderer_processes.Append(std::move(proc));
   }
@@ -70,17 +72,15 @@ base::Value::List FetchRenderHostProcesses() {
   return renderer_processes;
 }
 
-base::Value::Dict FeatureToValue(const base::Feature& feature) {
-  base::Value::Dict feature_info;
+base::DictValue FeatureToValue(const base::Feature& feature) {
+  base::DictValue feature_info;
   feature_info.Set("name", feature.name);
   feature_info.Set("enabled", base::FeatureList::IsEnabled(feature));
   return feature_info;
 }
 
-base::Value::List FetchSandboxFeatures() {
-  base::Value::List features;
-  features.Append(FeatureToValue(sandbox::policy::features::kGpuAppContainer));
-  features.Append(FeatureToValue(sandbox::policy::features::kGpuLPAC));
+base::ListValue FetchSandboxFeatures() {
+  base::ListValue features;
   features.Append(
       FeatureToValue(sandbox::policy::features::kNetworkServiceSandbox));
   features.Append(
@@ -89,6 +89,12 @@ base::Value::List FetchSandboxFeatures() {
       sandbox::policy::features::kWinSboxDisableExtensionPoints));
   features.Append(
       FeatureToValue(sandbox::policy::features::kWinSboxZeroAppShim));
+  features.Append(
+      FeatureToValue(sandbox::policy::features::kWinSboxNoFakeGdiInit));
+  features.Append(FeatureToValue(
+      sandbox::policy::features::kWinSboxRestrictCoreSharingOnRenderer));
+  features.Append(
+      FeatureToValue(sandbox::policy::features::kEnableCsrssLockdown));
   return features;
 }
 
@@ -107,7 +113,7 @@ void SandboxHandler::RegisterMessages() {
 }
 
 void SandboxHandler::HandleRequestSandboxDiagnostics(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   CHECK_EQ(1U, args.size());
@@ -135,7 +141,7 @@ void SandboxHandler::GetRendererProcessesAndFinish() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   auto renderer_processes = FetchRenderHostProcesses();
-  base::Value::Dict results;
+  base::DictValue results;
   results.Set("browser", std::move(browser_processes_));
   results.Set("policies", std::move(sandbox_policies_));
   results.Set("renderer", std::move(renderer_processes));

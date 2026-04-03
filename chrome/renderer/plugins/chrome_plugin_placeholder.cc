@@ -22,15 +22,13 @@
 #include "chrome/grit/renderer_resources.h"
 #include "chrome/renderer/chrome_content_renderer_client.h"
 #include "chrome/renderer/custom_menu_commands.h"
-#include "chrome/renderer/plugins/plugin_uma.h"
 #include "components/content_settings/renderer/content_settings_agent_impl.h"
-#include "components/no_state_prefetch/renderer/prerender_observer_list.h"
+#include "components/no_state_prefetch/renderer/no_state_prefetch_observer_list.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_thread.h"
 #include "gin/object_template_builder.h"
-#include "ipc/ipc_sync_channel.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
@@ -51,6 +49,8 @@
 #include "ui/gfx/geometry/size.h"
 #include "url/origin.h"
 #include "url/url_util.h"
+#include "v8/include/cppgc/allocation.h"
+#include "v8/include/v8-cppgc.h"
 
 using base::UserMetricsAction;
 using content::RenderThread;
@@ -91,9 +91,6 @@ class PlaceholderSet : public base::SupportsUserData::Data {
 
 }  // namespace
 
-gin::WrapperInfo ChromePluginPlaceholder::kWrapperInfo = {
-    gin::kEmbedderNativeGin};
-
 ChromePluginPlaceholder::ChromePluginPlaceholder(
     content::RenderFrame* render_frame,
     const blink::WebPluginParams& params,
@@ -102,10 +99,12 @@ ChromePluginPlaceholder::ChromePluginPlaceholder(
       status_(chrome::mojom::PluginStatus::kAllowed),
       title_(title) {
   RenderThread::Get()->AddObserver(this);
-  prerender::PrerenderObserverList::AddObserverForFrame(render_frame, this);
+  prerender::NoStatePrefetchObserverList::AddObserverForFrame(render_frame,
+                                                              this);
 
   // Keep track of all placeholders associated with |render_frame|.
   PlaceholderSet::GetOrCreate(render_frame)->placeholders().insert(this);
+  self_ = this;
 }
 
 ChromePluginPlaceholder::~ChromePluginPlaceholder() {
@@ -117,8 +116,8 @@ ChromePluginPlaceholder::~ChromePluginPlaceholder() {
     if (set)
       set->placeholders().erase(this);
 
-    prerender::PrerenderObserverList::RemoveObserverForFrame(render_frame(),
-                                                             this);
+    prerender::NoStatePrefetchObserverList::RemoveObserverForFrame(
+        render_frame(), this);
   }
 }
 
@@ -131,15 +130,16 @@ ChromePluginPlaceholder* ChromePluginPlaceholder::CreateLoadableMissingPlugin(
       ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
           IDR_BLOCKED_PLUGIN_HTML);
 
-  base::Value::Dict values;
+  base::DictValue values;
   values.Set("name", "");
   values.Set("message", l10n_util::GetStringUTF8(IDS_PLUGIN_NOT_SUPPORTED));
 
   std::string html_data = webui::GetI18nTemplateHtml(template_html, values);
-
-  // Will destroy itself when its WebViewPlugin is going away.
-  auto* placeholder = new ChromePluginPlaceholder(render_frame, params,
-                                                  params.mime_type.Utf16());
+  v8::Isolate* isolate = render_frame->GetAgentGroupScheduler().Isolate();
+  // Will be garbage collected when its WebViewPlugin is going away.
+  auto* placeholder = cppgc::MakeGarbageCollected<ChromePluginPlaceholder>(
+      isolate->GetCppHeap()->GetAllocationHandle(), render_frame, params,
+      params.mime_type.Utf16());
   placeholder->Init(html_data);
   return placeholder;
 }
@@ -153,7 +153,7 @@ ChromePluginPlaceholder* ChromePluginPlaceholder::CreateBlockedPlugin(
     const std::u16string& name,
     int template_id,
     const std::u16string& message) {
-  base::Value::Dict values;
+  base::DictValue values;
   values.Set("message", message);
   values.Set("name", name);
   values.Set("hide", l10n_util::GetStringUTF8(IDS_PLUGIN_HIDE));
@@ -172,9 +172,16 @@ ChromePluginPlaceholder* ChromePluginPlaceholder::CreateBlockedPlugin(
                                  << template_id;
   std::string html_data = webui::GetI18nTemplateHtml(template_html, values);
 
-  // |blocked_plugin| will destroy itself when its WebViewPlugin is going away.
+  // |blocked_plugin| will be garbage collected when its WebViewPlugin is going
+  // away.
   ChromePluginPlaceholder* blocked_plugin =
-      new ChromePluginPlaceholder(render_frame, params, name);
+      cppgc::MakeGarbageCollected<ChromePluginPlaceholder>(
+          render_frame->GetWebFrame()
+              ->GetAgentGroupScheduler()
+              ->Isolate()
+              ->GetCppHeap()
+              ->GetAllocationHandle(),
+          render_frame, params, name);
   blocked_plugin->Init(html_data);
   blocked_plugin->SetPluginInfo(info);
   blocked_plugin->SetIdentifier(identifier);
@@ -198,8 +205,13 @@ void ChromePluginPlaceholder::SetStatus(chrome::mojom::PluginStatus status) {
   status_ = status;
 }
 
-void ChromePluginPlaceholder::SetIsPrerendering(bool is_prerendering) {
-  OnSetIsPrerendering(is_prerendering);
+void ChromePluginPlaceholder::OnDestruct() {
+  self_.Clear();
+}
+
+void ChromePluginPlaceholder::SetIsNoStatePrefetching(
+    bool is_no_state_prefetching) {
+  OnSetIsNoStatePrefetching(is_no_state_prefetching);
 }
 
 void ChromePluginPlaceholder::PluginListChanged() {
@@ -221,15 +233,11 @@ void ChromePluginPlaceholder::PluginListChanged() {
   blink::WebPlugin* new_plugin = ChromeContentRendererClient::CreatePlugin(
       render_frame(), GetPluginParams(), *plugin_info);
   ReplacePlugin(new_plugin);
-  if (!new_plugin) {
-    PluginUMAReporter::GetInstance()->ReportPluginMissing(
-        GetPluginParams().mime_type.Utf8(), GetPluginParams().url);
-  }
 }
 
 v8::Local<v8::Value> ChromePluginPlaceholder::GetV8Handle(
     v8::Isolate* isolate) {
-  return gin::CreateHandle(isolate, this).ToV8();
+  return GetWrapper(isolate).ToLocalChecked();
 }
 
 void ChromePluginPlaceholder::ShowContextMenu(
@@ -275,7 +283,7 @@ void ChromePluginPlaceholder::ShowContextMenu(
   if (plugin() && plugin()->Container())
     point = plugin()->Container()->LocalToRootFramePoint(point);
 
-  // TODO(crbug.com/1093904): This essentially is a floor of the coordinates.
+  // TODO(crbug.com/40699157): This essentially is a floor of the coordinates.
   // Determine if rounding is more appropriate.
   gfx::Rect position_in_dips =
       render_frame()
@@ -312,13 +320,19 @@ void ChromePluginPlaceholder::CustomContextMenuAction(uint32_t action) {
   }
 }
 
-void ChromePluginPlaceholder::ContextMenuClosed(const GURL&) {
+void ChromePluginPlaceholder::ContextMenuClosed(
+    const GURL&,
+    const std::optional<blink::Impression>&) {
   context_menu_client_receiver_.reset();
   render_frame()->GetWebFrame()->View()->DidCloseContextMenu();
 }
 
 blink::WebPlugin* ChromePluginPlaceholder::CreatePlugin() {
-  return render_frame()->CreatePlugin(GetPluginInfo(), GetPluginParams());
+  return nullptr;
+}
+
+const gin::WrapperInfo* ChromePluginPlaceholder::wrapper_info() const {
+  return &kWrapperInfo;
 }
 
 gin::ObjectTemplateBuilder ChromePluginPlaceholder::GetObjectTemplateBuilder(

@@ -11,6 +11,7 @@
 
 #include "common/debug.h"
 #include "libANGLE/Context.h"
+#include "libANGLE/renderer/vulkan/ShareGroupVk.h"
 #include "libANGLE/renderer/vulkan/vk_utils.h"
 
 namespace rx
@@ -29,8 +30,7 @@ angle::Result SamplerVk::syncState(const gl::Context *context, const bool dirty)
 {
     ContextVk *contextVk = vk::GetImpl(context);
 
-    RendererVk *renderer = contextVk->getRenderer();
-    if (mSampler.valid())
+    if (mSampler)
     {
         if (!dirty)
         {
@@ -40,7 +40,7 @@ angle::Result SamplerVk::syncState(const gl::Context *context, const bool dirty)
     }
 
     vk::SamplerDesc desc(contextVk, mState, false, nullptr, static_cast<angle::FormatID>(0));
-    ANGLE_TRY(renderer->getSamplerCache().getSampler(contextVk, desc, &mSampler));
+    ANGLE_TRY(contextVk->getShareGroup()->getSamplerCache().getSampler(contextVk, desc, &mSampler));
 
     return angle::Result::Continue;
 }

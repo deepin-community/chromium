@@ -7,7 +7,6 @@
 #include <string_view>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/values.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/account_id/account_id.h"
@@ -47,8 +46,9 @@ bool SupervisedUserCrosSettingsProvider::HandlesSetting(
   if (!user_manager::UserManager::IsInitialized())
     return false;
   auto* user_manager = user_manager::UserManager::Get();
-  if (user_manager->GetUsers().empty())
+  if (user_manager->GetPersistedUsers().empty()) {
     return false;
+  }
 
   const AccountId owner_account_id = user_manager->GetOwnerAccountId();
   if (!owner_account_id.is_valid()) {
@@ -58,7 +58,7 @@ bool SupervisedUserCrosSettingsProvider::HandlesSetting(
   auto* device_owner = user_manager->FindUser(owner_account_id);
 
   if (device_owner && device_owner->IsChild()) {
-    return base::Contains(child_user_restrictions_, path);
+    return child_user_restrictions_.contains(path);
   }
 
   return false;

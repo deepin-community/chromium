@@ -1,11 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as Platform from '../../core/platform/platform.js';
 
 import {CSSFormatter} from './CSSFormatter.js';
-import {type FormattedContentBuilder} from './FormattedContentBuilder.js';
+import type {FormattedContentBuilder} from './FormattedContentBuilder.js';
 import {AbortTokenization, createTokenizer} from './FormatterWorker.js';
 import {JavaScriptFormatter} from './JavaScriptFormatter.js';
 import {JSONFormatter} from './JSONFormatter.js';
@@ -228,34 +228,26 @@ function hasTokenInSet(tokenTypes: Set<string>, type: string): boolean {
 }
 
 export class HTMLModel {
-  #state: ParseState;
-  readonly #documentInternal: FormatterElement;
+  #state: ParseState = ParseState.INITIAL;
+  readonly #document: FormatterElement;
   #stack: FormatterElement[];
-  readonly #tokens: Token[];
-  #tokenIndex: number;
-  #attributes: Map<string, string>;
-  #attributeName: string;
-  #tagName: string;
-  #isOpenTag: boolean;
+  readonly #tokens: Token[] = [];
+  #tokenIndex = 0;
+  #attributes = new Map<string, string>();
+  #attributeName = '';
+  #tagName = '';
+  #isOpenTag = false;
   #tagStartOffset?: number|null;
   #tagEndOffset?: number|null;
 
   constructor(text: string) {
-    this.#state = ParseState.Initial;
-    this.#documentInternal = new FormatterElement('document');
-    this.#documentInternal.openTag = new Tag('document', 0, 0, new Map(), true, false);
-    this.#documentInternal.closeTag = new Tag('document', text.length, text.length, new Map(), false, false);
+    this.#document = new FormatterElement('document');
+    this.#document.openTag = new Tag('document', 0, 0, new Map(), true, false);
+    this.#document.closeTag = new Tag('document', text.length, text.length, new Map(), false, false);
 
-    this.#stack = [this.#documentInternal];
+    this.#stack = [this.#document];
 
-    this.#tokens = [];
-    this.#tokenIndex = 0;
     this.#build(text);
-
-    this.#attributes = new Map();
-    this.#attributeName = '';
-    this.#tagName = '';
-    this.#isOpenTag = false;
   }
 
   #build(text: string): void {
@@ -268,8 +260,8 @@ export class HTMLModel {
       this.#updateDOM(token);
 
       const element = this.#stack[this.#stack.length - 1];
-      if (element && (element.name === 'script' || element.name === 'style') && element.openTag &&
-          element.openTag.endOffset === lastOffset) {
+      if (element && (element.name === 'script' || element.name === 'style') &&
+          element.openTag?.endOffset === lastOffset) {
         return AbortTokenization;
       }
 
@@ -379,39 +371,39 @@ export class HTMLModel {
     const value = token.value;
     const type = token.type;
     switch (this.#state) {
-      case ParseState.Initial:
+      case ParseState.INITIAL:
         if (hasTokenInSet(type, 'bracket') && (value === '<' || value === '</')) {
           this.#onStartTag(token);
-          this.#state = ParseState.Tag;
+          this.#state = ParseState.TAG;
         }
         return;
-      case ParseState.Tag:
+      case ParseState.TAG:
         if (hasTokenInSet(type, 'tag') && !hasTokenInSet(type, 'bracket')) {
           this.#tagName = value.trim().toLowerCase();
         } else if (hasTokenInSet(type, 'attribute')) {
           this.#attributeName = value.trim().toLowerCase();
           this.#attributes.set(this.#attributeName, '');
-          this.#state = ParseState.AttributeName;
+          this.#state = ParseState.ATTRIBUTE_NAME;
         } else if (hasTokenInSet(type, 'bracket') && (value === '>' || value === '/>')) {
           this.#onEndTag(token);
-          this.#state = ParseState.Initial;
+          this.#state = ParseState.INITIAL;
         }
         return;
-      case ParseState.AttributeName:
+      case ParseState.ATTRIBUTE_NAME:
         if (!type.size && value === '=') {
-          this.#state = ParseState.AttributeValue;
+          this.#state = ParseState.ATTRIBUTE_VALUE;
         } else if (hasTokenInSet(type, 'bracket') && (value === '>' || value === '/>')) {
           this.#onEndTag(token);
-          this.#state = ParseState.Initial;
+          this.#state = ParseState.INITIAL;
         }
         return;
-      case ParseState.AttributeValue:
+      case ParseState.ATTRIBUTE_VALUE:
         if (hasTokenInSet(type, 'string')) {
           this.#attributes.set(this.#attributeName, value);
-          this.#state = ParseState.Tag;
+          this.#state = ParseState.TAG;
         } else if (hasTokenInSet(type, 'bracket') && (value === '>' || value === '/>')) {
           this.#onEndTag(token);
-          this.#state = ParseState.Initial;
+          this.#state = ParseState.INITIAL;
         }
         return;
     }
@@ -440,9 +432,9 @@ export class HTMLModel {
       const topElement = this.#stack[this.#stack.length - 1];
       if (topElement) {
         const tagSet = AutoClosingTags.get(topElement.name);
-        if (topElement !== this.#documentInternal && topElement.openTag && topElement.openTag.selfClosingTag) {
+        if (topElement !== this.#document && topElement.openTag?.selfClosingTag) {
           this.#popElement(autocloseTag(topElement, topElement.openTag.endOffset));
-        } else if (tagSet && tagSet.has(tag.name)) {
+        } else if (tagSet?.has(tag.name)) {
           this.#popElement(autocloseTag(topElement, tag.startOffset));
         }
         this.#pushElement(tag);
@@ -493,7 +485,7 @@ export class HTMLModel {
   }
 
   document(): FormatterElement {
-    return this.#documentInternal;
+    return this.#document;
   }
 }
 
@@ -546,10 +538,10 @@ const AutoClosingTags = new Map([
 ]);
 
 const enum ParseState {
-  Initial = 'Initial',
-  Tag = 'Tag',
-  AttributeName = 'AttributeName',
-  AttributeValue = 'AttributeValue',
+  INITIAL = 'Initial',
+  TAG = 'Tag',
+  ATTRIBUTE_NAME = 'AttributeName',
+  ATTRIBUTE_VALUE = 'AttributeValue',
 }
 
 class Token {

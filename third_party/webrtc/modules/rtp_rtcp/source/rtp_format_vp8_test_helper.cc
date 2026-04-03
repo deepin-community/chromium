@@ -10,7 +10,15 @@
 
 #include "modules/rtp_rtcp/source/rtp_format_vp8_test_helper.h"
 
+#include <cstddef>
+#include <cstdint>
+
+#include "api/array_view.h"
+#include "modules/rtp_rtcp/source/rtp_format_vp8.h"
 #include "modules/rtp_rtcp/source/rtp_packet_to_send.h"
+#include "modules/video_coding/codecs/interface/common_constants.h"
+#include "modules/video_coding/codecs/vp8/include/vp8_globals.h"
+#include "rtc_base/buffer.h"
 #include "test/gmock.h"
 #include "test/gtest.h"
 
@@ -47,17 +55,20 @@ int Bit(uint8_t byte, int position) {
 
 RtpFormatVp8TestHelper::RtpFormatVp8TestHelper(const RTPVideoHeaderVP8* hdr,
                                                size_t payload_len)
-    : hdr_info_(hdr), payload_(payload_len) {
-  for (size_t i = 0; i < payload_.size(); ++i) {
-    payload_[i] = i;
-  }
+    : hdr_info_(hdr), payload_(Buffer::CreateWithCapacity(payload_len)) {
+  payload_.AppendData(payload_len, [](ArrayView<uint8_t> payload_view) {
+    for (size_t i = 0; i < payload_view.size(); ++i) {
+      payload_view[i] = i;
+    }
+    return payload_view.size();
+  });
 }
 
 RtpFormatVp8TestHelper::~RtpFormatVp8TestHelper() = default;
 
 void RtpFormatVp8TestHelper::GetAllPacketsAndCheck(
     RtpPacketizerVp8* packetizer,
-    rtc::ArrayView<const size_t> expected_sizes) {
+    ArrayView<const size_t> expected_sizes) {
   EXPECT_EQ(packetizer->NumPackets(), expected_sizes.size());
   const uint8_t* data_ptr = payload_.begin();
   RtpPacketToSend packet(kNoExtensions);
@@ -69,7 +80,7 @@ void RtpFormatVp8TestHelper::GetAllPacketsAndCheck(
     int payload_offset = CheckHeader(rtp_payload, /*first=*/i == 0);
     // Verify that the payload (i.e., after the headers) of the packet is
     // identical to the expected (as found in data_ptr).
-    auto vp8_payload = rtp_payload.subview(payload_offset);
+    auto vp8_payload = rtp_payload.subspan(payload_offset);
     ASSERT_GE(payload_.end() - data_ptr, static_cast<int>(vp8_payload.size()));
     EXPECT_THAT(vp8_payload, ElementsAreArray(data_ptr, vp8_payload.size()));
     data_ptr += vp8_payload.size();
@@ -77,7 +88,7 @@ void RtpFormatVp8TestHelper::GetAllPacketsAndCheck(
   EXPECT_EQ(payload_.end() - data_ptr, 0);
 }
 
-int RtpFormatVp8TestHelper::CheckHeader(rtc::ArrayView<const uint8_t> buffer,
+int RtpFormatVp8TestHelper::CheckHeader(ArrayView<const uint8_t> buffer,
                                         bool first) {
   int x_bit = Bit(buffer[0], 7);
   EXPECT_EQ(Bit(buffer[0], 6), 0);  // Reserved.
@@ -104,9 +115,8 @@ int RtpFormatVp8TestHelper::CheckHeader(rtc::ArrayView<const uint8_t> buffer,
 
 // Verify that the I bit and the PictureID field are both set in accordance
 // with the information in hdr_info_->pictureId.
-void RtpFormatVp8TestHelper::CheckPictureID(
-    rtc::ArrayView<const uint8_t> buffer,
-    int* offset) {
+void RtpFormatVp8TestHelper::CheckPictureID(ArrayView<const uint8_t> buffer,
+                                            int* offset) {
   int i_bit = Bit(buffer[1], 7);
   if (hdr_info_->pictureId != kNoPictureId) {
     EXPECT_EQ(i_bit, 1);
@@ -122,9 +132,8 @@ void RtpFormatVp8TestHelper::CheckPictureID(
 
 // Verify that the L bit and the TL0PICIDX field are both set in accordance
 // with the information in hdr_info_->tl0PicIdx.
-void RtpFormatVp8TestHelper::CheckTl0PicIdx(
-    rtc::ArrayView<const uint8_t> buffer,
-    int* offset) {
+void RtpFormatVp8TestHelper::CheckTl0PicIdx(ArrayView<const uint8_t> buffer,
+                                            int* offset) {
   int l_bit = Bit(buffer[1], 6);
   if (hdr_info_->tl0PicIdx != kNoTl0PicIdx) {
     EXPECT_EQ(l_bit, 1);
@@ -138,9 +147,8 @@ void RtpFormatVp8TestHelper::CheckTl0PicIdx(
 // Verify that the T bit and the TL0PICIDX field, and the K bit and KEYIDX
 // field are all set in accordance with the information in
 // hdr_info_->temporalIdx and hdr_info_->keyIdx, respectively.
-void RtpFormatVp8TestHelper::CheckTIDAndKeyIdx(
-    rtc::ArrayView<const uint8_t> buffer,
-    int* offset) {
+void RtpFormatVp8TestHelper::CheckTIDAndKeyIdx(ArrayView<const uint8_t> buffer,
+                                               int* offset) {
   int t_bit = Bit(buffer[1], 5);
   int k_bit = Bit(buffer[1], 4);
   if (hdr_info_->temporalIdx == kNoTemporalIdx &&

@@ -20,7 +20,7 @@ limitations under the License.
 #include "tensorflow/compiler/tf2xla/tf2xla.pb.h"
 #include "xla/client/client_library.h"
 #include "xla/client/local_client.h"
-#include "xla/client/xla_computation.h"
+#include "xla/hlo/builder/xla_computation.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
@@ -55,7 +55,7 @@ AttrValue TypeAttrValue(DataType type) {
   return attr_value;
 }
 
-AttrValue StringAttrValue(StringPiece str) {
+AttrValue StringAttrValue(absl::string_view str) {
   AttrValue attr_value;
   SetAttrValue(str, &attr_value);
   return attr_value;
@@ -118,8 +118,8 @@ TEST(ConvertGraphDefToXla, Sum) {
   TF_EXPECT_OK(ConvertGraphDefToXla(graph_def, config, client, &computation));
 
   // Set up arguments.
-  auto x_literal = xla::LiteralUtil::CreateR0<int32>(10);
-  auto y_literal = xla::LiteralUtil::CreateR0<int32>(32);
+  auto x_literal = xla::LiteralUtil::CreateR0<int32_t>(10);
+  auto y_literal = xla::LiteralUtil::CreateR0<int32_t>(32);
   auto x_global_or = client->TransferToServer(x_literal);
   auto y_global_or = client->TransferToServer(y_literal);
   TF_EXPECT_OK(x_global_or.status());
@@ -136,27 +136,27 @@ TEST(ConvertGraphDefToXla, Sum) {
 
   config.mutable_feed(0)->mutable_id()->set_output_index(
       123); /* invalid output_index */
-  EXPECT_TRUE(errors::IsInvalidArgument(
+  EXPECT_TRUE(absl::IsInvalidArgument(
       ConvertGraphDefToXla(graph_def, config, client, &computation)));
 }
 
-GraphDef EinsumGraph() {
+GraphDef EinsumGraph(DataType dtype = DT_FLOAT) {
   GraphDef graph_def;
   NodeDef* x = graph_def.add_node();
   x->set_name("x");
   x->set_op("Placeholder");
-  (*x->mutable_attr())["dtype"] = TypeAttrValue(DT_FLOAT);
+  (*x->mutable_attr())["dtype"] = TypeAttrValue(dtype);
   NodeDef* y = graph_def.add_node();
   y->set_name("y");
   y->set_op("Placeholder");
-  (*y->mutable_attr())["dtype"] = TypeAttrValue(DT_FLOAT);
+  (*y->mutable_attr())["dtype"] = TypeAttrValue(dtype);
   NodeDef* einsum = graph_def.add_node();
   einsum->set_name("einsum");
   einsum->set_op("Einsum");
   einsum->add_input("x");
   einsum->add_input("y");
   (*einsum->mutable_attr())["equation"] = StringAttrValue("ij,jk->ik");
-  (*einsum->mutable_attr())["T"] = TypeAttrValue(DT_FLOAT);
+  (*einsum->mutable_attr())["T"] = TypeAttrValue(dtype);
   (*einsum->mutable_attr())["N"] = IntAttrValue(2);
   return graph_def;
 }
@@ -227,6 +227,35 @@ TEST_F(ConvertGraphDefToXlaWithTF32Disabled,
                   xla::PrecisionConfig::HIGHEST);
         EXPECT_EQ(instruction_proto.precision_config().operand_precision(1),
                   xla::PrecisionConfig::HIGHEST);
+      }
+    }
+  }
+  EXPECT_EQ(num_dots, 1);
+}
+
+TEST_F(ConvertGraphDefToXlaWithTF32Disabled,
+       EinsumIsConvertedToDotWithDefaultPrecisionIfNotF32) {
+  GraphDef graph_def = EinsumGraph(DT_BFLOAT16);
+  tf2xla::Config config = EinsumConfig();
+
+  xla::LocalClient* client = xla::ClientLibrary::LocalClientOrDie();
+  xla::XlaComputation computation;
+  TF_EXPECT_OK(ConvertGraphDefToXla(graph_def, config, client, &computation));
+
+  int num_dots = 0;
+  const xla::HloModuleProto& module_proto = computation.proto();
+  for (const xla::HloComputationProto& computation_proto :
+       module_proto.computations()) {
+    for (const xla::HloInstructionProto& instruction_proto :
+         computation_proto.instructions()) {
+      if (instruction_proto.opcode() == "dot") {
+        num_dots++;
+        ASSERT_EQ(instruction_proto.precision_config().operand_precision_size(),
+                  2);
+        EXPECT_EQ(instruction_proto.precision_config().operand_precision(0),
+                  xla::PrecisionConfig::DEFAULT);
+        EXPECT_EQ(instruction_proto.precision_config().operand_precision(1),
+                  xla::PrecisionConfig::DEFAULT);
       }
     }
   }
@@ -338,8 +367,8 @@ TEST(ConvertGraphDefToXla, SumWithUnusedArgument) {
   TF_EXPECT_OK(ConvertGraphDefToXla(graph_def, config, client, &computation));
 
   // Set up arguments.
-  auto x_literal = xla::LiteralUtil::CreateR0<int32>(10);
-  auto y_literal = xla::LiteralUtil::CreateR0<int32>(32);
+  auto x_literal = xla::LiteralUtil::CreateR0<int32_t>(10);
+  auto y_literal = xla::LiteralUtil::CreateR0<int32_t>(32);
   auto x_global_or = client->TransferToServer(x_literal);
   auto y_global_or = client->TransferToServer(y_literal);
   auto unused_global_or = client->TransferToServer(y_literal);

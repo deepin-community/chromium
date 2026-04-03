@@ -17,20 +17,22 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
-#include "xla/client/global_data.h"
 #include "xla/client/local_client.h"
-#include "xla/client/xla_builder.h"
-#include "xla/client/xla_computation.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
 #include "xla/literal.h"
+#include "xla/literal_util.h"
+#include "xla/service/service.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
 #include "xla/tests/client_library_test_base.h"
-#include "xla/tests/test_macros.h"
+#include "xla/tests/literal_test_util.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 namespace {
@@ -47,7 +49,7 @@ class DeconstructTupleTest : public ClientLibraryTestBase {
     XlaComputation computation = builder->Build().value();
     auto global_data =
         client_->Execute(computation, arguments, &execution_options_).value();
-    TF_CHECK_OK(client_->Transfer(*global_data).status());
+    CHECK_OK(client_->Transfer(*global_data).status());
     return global_data;
   }
 };
@@ -101,7 +103,7 @@ TEST_F(DeconstructTupleTest, DeconstructTupleTwice) {
   LiteralTestUtil::ExpectR1Equal<float>({2.0, 4.0, 6.0, 8.0}, literal);
 }
 
-XLA_TEST_F(DeconstructTupleTest, DeconstructTupleRepeatedElement) {
+TEST_F(DeconstructTupleTest, DeconstructTupleRepeatedElement) {
   XlaBuilder builder(TestName());
   auto const1 = ConstantR1<float>(&builder, {1.0, 2.0, 3.0, 4.0});
   auto const2 = ConstantR1<float>(&builder, {2.0, 4.0, 6.0, 8.0});
@@ -168,7 +170,7 @@ TEST_F(DeconstructTupleTest, DeconstructNonTuple) {
               ContainsRegex("global data handle .* is not a tuple"));
 }
 
-XLA_TEST_F(DeconstructTupleTest, DeconstructTupleFromParam) {
+TEST_F(DeconstructTupleTest, DeconstructTupleFromParam) {
   XlaBuilder builder(TestName());
   Literal param0_literal = LiteralUtil::CreateR1<float>({3.14f, -100.25f});
   std::unique_ptr<GlobalData> param0_data =
@@ -183,7 +185,7 @@ XLA_TEST_F(DeconstructTupleTest, DeconstructTupleFromParam) {
   EXPECT_NE(handles[0]->handle().handle(), param0_data->handle().handle());
 }
 
-XLA_TEST_F(DeconstructTupleTest, DeconstructNestedTuple) {
+TEST_F(DeconstructTupleTest, DeconstructNestedTuple) {
   XlaBuilder builder(TestName());
   auto const1 = ConstantR1<float>(&builder, {1.0, 2.0, 3.0, 4.0});
   auto const2 = ConstantR1<float>(&builder, {2.0, 4.0, 6.0, 8.0});

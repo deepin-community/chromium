@@ -222,13 +222,75 @@ TEST_P(DXT1CompressedTextureTest, CompressedTexStorage)
     EXPECT_GL_NO_ERROR();
 }
 
+// Test to verify that reinitializing an image with incompatible mip levels but non-mipmap filtering
+// does not cause a crash.
+TEST_P(DXT1CompressedTextureTest, ReinitImageWithIncompatibleLevels)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_compression_dxt1"));
+
+    // Blue color.
+    const std::vector<uint16_t> kSingleLevelData(pixel_0_width * pixel_0_height, 0x001f);
+
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    // Use GL_LINEAR filtering so that mipmap is not used.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // Store a compressed image data with a level count of 10.
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RGB_S3TC_DXT1_EXT, pixel_0_width,
+                           pixel_0_height, 0, pixel_0_size, pixel_0_data);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 1, GL_COMPRESSED_RGB_S3TC_DXT1_EXT, pixel_1_width,
+                           pixel_1_height, 0, pixel_1_size, pixel_1_data);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 2, GL_COMPRESSED_RGB_S3TC_DXT1_EXT, pixel_2_width,
+                           pixel_2_height, 0, pixel_2_size, pixel_2_data);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 3, GL_COMPRESSED_RGB_S3TC_DXT1_EXT, pixel_3_width,
+                           pixel_3_height, 0, pixel_3_size, pixel_3_data);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 4, GL_COMPRESSED_RGB_S3TC_DXT1_EXT, pixel_4_width,
+                           pixel_4_height, 0, pixel_4_size, pixel_4_data);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 5, GL_COMPRESSED_RGB_S3TC_DXT1_EXT, pixel_5_width,
+                           pixel_5_height, 0, pixel_5_size, pixel_5_data);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 6, GL_COMPRESSED_RGB_S3TC_DXT1_EXT, pixel_6_width,
+                           pixel_6_height, 0, pixel_6_size, pixel_6_data);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 7, GL_COMPRESSED_RGB_S3TC_DXT1_EXT, pixel_7_width,
+                           pixel_7_height, 0, pixel_7_size, pixel_7_data);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 8, GL_COMPRESSED_RGB_S3TC_DXT1_EXT, pixel_8_width,
+                           pixel_8_height, 0, pixel_8_size, pixel_8_data);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 9, GL_COMPRESSED_RGB_S3TC_DXT1_EXT, pixel_9_width,
+                           pixel_9_height, 0, pixel_9_size, pixel_9_data);
+    EXPECT_GL_NO_ERROR();
+
+    glUseProgram(mTextureProgram);
+    glUniform1i(mTextureUniformLocation, 0);
+
+    // Verify draw with level 10.
+    drawQuad(mTextureProgram, "position", 0.5f);
+    EXPECT_GL_NO_ERROR();
+
+    // Reinit image with a different sized internal format with a level count of 1. This will
+    // redefine the texture level.
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, pixel_0_width, pixel_0_height, 0, GL_RGB,
+                 GL_UNSIGNED_SHORT_5_6_5, kSingleLevelData.data());
+    EXPECT_GL_NO_ERROR();
+
+    // Verify that the image with level 0 is successfully redefined, and expect no crash.
+    drawQuad(mTextureProgram, "position", 0.5f);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::blue);
+    ASSERT_GL_NO_ERROR();
+}
+
 // Test validation of non block sizes, width 672 and height 114 and multiple mip levels
 TEST_P(DXT1CompressedTextureTest, NonBlockSizesMipLevels)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_compression_dxt1"));
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_2D, texture.get());
+    glBindTexture(GL_TEXTURE_2D, texture);
 
     constexpr GLuint kWidth  = 674;
     constexpr GLuint kHeight = 114;
@@ -261,7 +323,7 @@ TEST_P(DXT1CompressedTextureTest, CompressedTexSubImageValidation)
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_compression_dxt1"));
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_2D, texture.get());
+    glBindTexture(GL_TEXTURE_2D, texture);
 
     // Size mip 0 to a large size
     glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, pixel_0_width,
@@ -289,7 +351,7 @@ TEST_P(DXT1CompressedTextureTest, CopyTexSubImage2DDisallowed)
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_compression_dxt1"));
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_2D, texture.get());
+    glBindTexture(GL_TEXTURE_2D, texture);
 
     glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, pixel_0_width,
                            pixel_0_height, 0, pixel_0_size, nullptr);
@@ -454,7 +516,7 @@ TEST_P(DXT1CompressedTextureTestES3, CompressedTexSubImageValidation)
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_compression_dxt1"));
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_2D_ARRAY, texture.get());
+    glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
 
     // Size mip 0 to a large size
     glCompressedTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, pixel_0_width,
@@ -481,7 +543,7 @@ TEST_P(DXT1CompressedTextureTestES3, CompressedTexSubImage3DValidationPerSlice)
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_compression_dxt1"));
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_2D_ARRAY, texture.get());
+    glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
     const GLenum format = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
 
     // 8x8x2, 4x4x2, 2x2x2, 1x1x2
@@ -516,7 +578,7 @@ TEST_P(DXT1CompressedTextureTestES3, CompressedTexSubImage3DValidationPerLevel)
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_compression_dxt1"));
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_2D_ARRAY, texture.get());
+    glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
     const GLenum format = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
 
     // 8x8x2, 4x4x2, 2x2x2, 1x1x2
@@ -543,7 +605,7 @@ TEST_P(DXT1CompressedTextureTestES3, CopyTexSubImage3DDisallowed)
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_compression_dxt1"));
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_2D_ARRAY, texture.get());
+    glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
 
     GLsizei depth = 4;
     glCompressedTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, pixel_0_width,

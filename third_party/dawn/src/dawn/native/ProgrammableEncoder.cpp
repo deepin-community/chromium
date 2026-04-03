@@ -29,35 +29,43 @@
 
 #include <cstring>
 
-#include "dawn/common/BitSetIterator.h"
 #include "dawn/common/ityp_array.h"
 #include "dawn/native/BindGroup.h"
 #include "dawn/native/Buffer.h"
 #include "dawn/native/CommandBuffer.h"
 #include "dawn/native/Commands.h"
 #include "dawn/native/Device.h"
+#include "dawn/native/Instance.h"
 #include "dawn/native/ObjectType_autogen.h"
+#include "dawn/native/PhysicalDevice.h"
 #include "dawn/native/ValidationUtils_autogen.h"
+#include "dawn/native/utils/WGPUHelpers.h"
 
 namespace dawn::native {
 
 ProgrammableEncoder::ProgrammableEncoder(DeviceBase* device,
-                                         const char* label,
+                                         StringView label,
                                          EncodingContext* encodingContext)
     : ApiObjectBase(device, label),
       mEncodingContext(encodingContext),
-      mValidationEnabled(device->IsValidationEnabled()) {}
+      mValidationEnabled(device->IsValidationEnabled()),
+      mNeedsIndirectGPUValidation(device->NeedsIndirectGPUValidation()) {}
 
 ProgrammableEncoder::ProgrammableEncoder(DeviceBase* device,
                                          EncodingContext* encodingContext,
                                          ErrorTag errorTag,
-                                         const char* label)
+                                         StringView label)
     : ApiObjectBase(device, errorTag, label),
       mEncodingContext(encodingContext),
-      mValidationEnabled(device->IsValidationEnabled()) {}
+      mValidationEnabled(device->IsValidationEnabled()),
+      mNeedsIndirectGPUValidation(device->NeedsIndirectGPUValidation()) {}
 
 bool ProgrammableEncoder::IsValidationEnabled() const {
     return mValidationEnabled;
+}
+
+bool ProgrammableEncoder::NeedsIndirectGPUValidation() const {
+    return mNeedsIndirectGPUValidation;
 }
 
 MaybeError ProgrammableEncoder::ValidateProgrammableEncoderEnd() const {
@@ -67,20 +75,18 @@ MaybeError ProgrammableEncoder::ValidateProgrammableEncoderEnd() const {
     return {};
 }
 
-void ProgrammableEncoder::APIInsertDebugMarker(const char* groupLabel) {
+void ProgrammableEncoder::APIInsertDebugMarker(StringView markerIn) {
+    std::string_view marker = utils::NormalizeMessageString(markerIn);
     mEncodingContext->TryEncode(
         this,
         [&](CommandAllocator* allocator) -> MaybeError {
             InsertDebugMarkerCmd* cmd =
                 allocator->Allocate<InsertDebugMarkerCmd>(Command::InsertDebugMarker);
-            cmd->length = strlen(groupLabel);
-
-            char* label = allocator->AllocateData<char>(cmd->length + 1);
-            memcpy(label, groupLabel, cmd->length + 1);
+            AddNullTerminatedString(allocator, marker, &cmd->length);
 
             return {};
         },
-        "encoding %s.InsertDebugMarker(\"%s\").", this, groupLabel);
+        "encoding %s.InsertDebugMarker(%s).", this, marker);
 }
 
 void ProgrammableEncoder::APIPopDebugGroup() {
@@ -100,23 +106,41 @@ void ProgrammableEncoder::APIPopDebugGroup() {
         "encoding %s.PopDebugGroup().", this);
 }
 
-void ProgrammableEncoder::APIPushDebugGroup(const char* groupLabel) {
+void ProgrammableEncoder::APIPushDebugGroup(StringView groupLabelIn) {
+    std::string_view groupLabel = utils::NormalizeMessageString(groupLabelIn);
     mEncodingContext->TryEncode(
         this,
         [&](CommandAllocator* allocator) -> MaybeError {
             PushDebugGroupCmd* cmd =
                 allocator->Allocate<PushDebugGroupCmd>(Command::PushDebugGroup);
-            cmd->length = strlen(groupLabel);
-
-            char* label = allocator->AllocateData<char>(cmd->length + 1);
-            memcpy(label, groupLabel, cmd->length + 1);
+            const char* label = AddNullTerminatedString(allocator, groupLabel, &cmd->length);
 
             mDebugGroupStackSize++;
-            mEncodingContext->PushDebugGroupLabel(groupLabel);
+            mEncodingContext->PushDebugGroupLabel(std::string_view(label, cmd->length));
 
             return {};
         },
-        "encoding %s.PushDebugGroup(\"%s\").", this, groupLabel);
+        "encoding %s.PushDebugGroup(%s).", this, groupLabel);
+}
+
+MaybeError ProgrammableEncoder::ValidateSetImmediates(uint32_t offset, size_t size) const {
+    DAWN_INVALID_IF(!GetDevice()->GetInstance()->HasFeature(
+                        wgpu::WGSLLanguageFeatureName::ImmediateAddressSpace),
+                    "ImmediateAddressSpace feature is not enabled");
+
+    // Validate offset and size are aligned to 4 bytes.
+    DAWN_INVALID_IF(offset % 4 != 0, "offset (%u) is not a multiple of 4", offset);
+    DAWN_INVALID_IF(size % 4 != 0, "size (%u) is not a multiple of 4", size);
+
+    // Validate OOB
+    uint32_t maxImmediateSize = GetDevice()->GetLimits().v1.maxImmediateSize;
+    DAWN_INVALID_IF(offset > maxImmediateSize, "offset (%u) is larger than maxImmediateSize (%u).",
+                    offset, maxImmediateSize);
+    DAWN_INVALID_IF(size > maxImmediateSize - offset,
+                    "offset (%u) + size (%u): is larger than maxImmediateSize (%u).", offset, size,
+                    maxImmediateSize);
+
+    return {};
 }
 
 MaybeError ProgrammableEncoder::ValidateSetBindGroup(BindGroupIndex index,
@@ -149,8 +173,8 @@ MaybeError ProgrammableEncoder::ValidateSetBindGroup(BindGroupIndex index,
         const BindingInfo& bindingInfo = layout->GetBindingInfo(i);
 
         // BGL creation sorts bindings such that the dynamic buffer bindings are first.
-        const BufferBindingLayout& bindingLayout =
-            std::get<BufferBindingLayout>(bindingInfo.bindingLayout);
+        const BufferBindingInfo& bindingLayout =
+            std::get<BufferBindingInfo>(bindingInfo.bindingLayout);
         DAWN_ASSERT(bindingLayout.hasDynamicOffset);
 
         uint64_t requiredAlignment;
@@ -161,8 +185,10 @@ MaybeError ProgrammableEncoder::ValidateSetBindGroup(BindGroupIndex index,
             case wgpu::BufferBindingType::Storage:
             case wgpu::BufferBindingType::ReadOnlyStorage:
             case kInternalStorageBufferBinding:
+            case kInternalReadOnlyStorageBufferBinding:
                 requiredAlignment = GetDevice()->GetLimits().v1.minStorageBufferOffsetAlignment;
                 break;
+            case wgpu::BufferBindingType::BindingNotUsed:
             case wgpu::BufferBindingType::Undefined:
                 DAWN_UNREACHABLE();
         }

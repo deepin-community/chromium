@@ -19,6 +19,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/ip_endpoint.h"
+#include "url/url_constants.h"
 
 using content::WebContents;
 
@@ -153,7 +154,7 @@ void SafeBrowsingNavigationObserver::DidFinishNavigation(
   if ((navigation_handle->HasCommitted() || navigation_handle->IsDownload()) &&
       !navigation_handle->GetSocketAddress().address().empty()) {
     GetObserverManager()->RecordHostToIpMapping(
-        navigation_handle->GetURL().host(),
+        navigation_handle->GetURL().GetHost(),
         navigation_handle->GetSocketAddress().ToStringWithoutPort());
   }
 

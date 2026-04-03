@@ -4,7 +4,7 @@
 
 #include "components/messages/android/test/messages_test_helper.h"
 
-#include "base/functional/callback_forward.h"
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/messages/android/test/jni_headers/MessagesTestHelper_jni.h"
 
 namespace messages {
@@ -53,3 +53,5 @@ void MessagesTestHelper::OnMessageEnqueued(JNIEnv* env) {
 }
 
 }  // namespace messages
+
+DEFINE_JNI(MessagesTestHelper)

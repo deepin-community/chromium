@@ -7,7 +7,9 @@
 
 #import <Foundation/Foundation.h>
 
-#include "components/autofill/core/browser/personal_data_manager_observer.h"
+#import "base/scoped_observation.h"
+#import "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#import "components/autofill/core/browser/data_manager/personal_data_manager_observer.h"
 
 // PersonalDataManagerObserver is used by PersonalDataManager to informs its
 // client implemented in Objective-C when it has finished loading personal data
@@ -25,8 +27,8 @@ namespace autofill {
 // to an Objective-C delegate.
 class PersonalDataManagerObserverBridge : public PersonalDataManagerObserver {
  public:
-  explicit PersonalDataManagerObserverBridge(
-      id<PersonalDataManagerObserver> delegate);
+  PersonalDataManagerObserverBridge(PersonalDataManager* personal_data_manager,
+                                    id<PersonalDataManagerObserver> delegate);
 
   PersonalDataManagerObserverBridge(const PersonalDataManagerObserverBridge&) =
       delete;
@@ -40,6 +42,8 @@ class PersonalDataManagerObserverBridge : public PersonalDataManagerObserver {
 
  private:
   __weak id<PersonalDataManagerObserver> delegate_;
+  base::ScopedObservation<PersonalDataManager, PersonalDataManagerObserver>
+      scoped_observation_{this};
 };
 
 }  // namespace autofill

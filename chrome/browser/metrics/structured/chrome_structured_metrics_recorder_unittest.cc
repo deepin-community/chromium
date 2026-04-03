@@ -7,9 +7,9 @@
 #include <utility>
 
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
@@ -92,7 +92,7 @@ class ChromeStructuredMetricsRecorderTest : public testing::Test {
     key.set_last_rotation(today);
     key.set_rotation_period(90);
 
-    base::Value::Dict dict =
+    base::DictValue dict =
         prefs_.GetDict(prefs::kDeviceKeyDataPrefName).Clone();
     const validator::Validators* validators = validator::Validators::Get();
     auto project_name = validators->GetProjectName(kProjectFourHash);
@@ -105,8 +105,19 @@ class ChromeStructuredMetricsRecorderTest : public testing::Test {
 
   ChromeUserMetricsExtension GetUmaProto() {
     ChromeUserMetricsExtension uma_proto;
-    recorder_->ProvideEventMetrics(uma_proto);
+
+    std::optional<StructuredDataProto> events_proto;
+    recorder_->ProvideEventMetrics(base::BindOnce(
+        [](std::optional<StructuredDataProto>* out_proto,
+           StructuredDataProto proto) { *out_proto = std::move(proto); },
+        &events_proto));
+
     Wait();
+
+    if (events_proto.has_value()) {
+      uma_proto.mutable_structured_data()->MergeFrom(events_proto.value());
+    }
+
     return uma_proto;
   }
 

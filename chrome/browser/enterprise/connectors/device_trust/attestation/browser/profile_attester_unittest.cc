@@ -10,6 +10,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/enterprise/browser/identifiers/profile_id_service.h"
+#include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_store.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,7 +22,7 @@ namespace {
 constexpr char kFakeProfileId[] = "fake-profile-id";
 constexpr char kFakeChallengeResponse[] = "fake_challenge_response";
 constexpr char kFakeCustomerId[] = "fake_obfuscated_customer_id";
-constexpr char kFakeGaiaId[] = "fake_obfuscated_gaia_id";
+constexpr GaiaId::Literal kFakeGaiaId("fake_obfuscated_gaia_id");
 
 std::unique_ptr<KeyedService> CreateProfileIDService(
     content::BrowserContext* context) {
@@ -58,7 +59,7 @@ class ProfileAttesterTest
       policy_data->set_obfuscated_customer_id(kFakeCustomerId);
     }
     if (has_gaia_id()) {
-      policy_data->set_gaia_id(kFakeGaiaId);
+      policy_data->set_gaia_id(kFakeGaiaId.ToString());
     }
 
     mock_profile_cloud_policy_store_.set_policy_data_for_testing(
@@ -71,7 +72,8 @@ class ProfileAttesterTest
   SignedData signed_data_;
   TestingProfileManager profile_manager_;
   raw_ptr<TestingProfile> profile_;
-  policy::MockCloudPolicyStore mock_profile_cloud_policy_store_;
+  policy::MockCloudPolicyStore mock_profile_cloud_policy_store_{
+      policy::dm_protocol::GetChromeUserPolicyType()};
   std::unique_ptr<ProfileAttester> profile_attester_;
   std::set<DTCPolicyLevel> levels_;
 };
@@ -88,7 +90,8 @@ TEST_P(ProfileAttesterTest, DecorateKeyInfo_Success) {
   EXPECT_EQ(key_info_.profile_id(), kFakeProfileId);
   EXPECT_EQ(key_info_.user_customer_id(),
             has_customer_id() ? kFakeCustomerId : "");
-  EXPECT_EQ(key_info_.obfuscated_gaia_id(), has_gaia_id() ? kFakeGaiaId : "");
+  EXPECT_EQ(key_info_.obfuscated_gaia_id(),
+            has_gaia_id() ? kFakeGaiaId.ToString() : "");
 }
 
 // Tests that no policy data is added when the user cloud policy store is

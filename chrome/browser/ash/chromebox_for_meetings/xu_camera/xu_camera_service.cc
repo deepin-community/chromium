@@ -15,12 +15,13 @@
 #include <cstdint>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_util.h"
+#include "base/types/fixed_array.h"
 #include "chrome/browser/media/webrtc/media_device_salt_service_factory.h"
 #include "chromeos/ash/components/dbus/chromebox_for_meetings/cfm_hotline_client.h"
-#include "chromeos/ash/services/chromebox_for_meetings/public/cpp/service_connection.h"
 #include "components/media_device_salt/media_device_salt_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -261,7 +262,6 @@ void XuCameraService::GetUnitIdWithDevicePath(
       std::move(callback).Run(0, 0);
       return;
     }
-    // TODO(b/260593636): Leverage WebRTC and GetDevicePath() once implemented
     auto unitId = guid_unitid_map_.find(guid_le);
     if (unitId != guid_unitid_map_.end()) {
       VLOG(4) << __func__ << ": UnitId found: "
@@ -271,8 +271,10 @@ void XuCameraService::GetUnitIdWithDevicePath(
     }
   }
 
-  content::GetDeviceService().BindUsbDeviceManager(
-      usb_manager_.BindNewPipeAndPassReceiver());
+  if(!usb_manager_) {
+    content::GetDeviceService().BindUsbDeviceManager(
+        usb_manager_.BindNewPipeAndPassReceiver());
+  }
   device::mojom::UsbEnumerationOptionsPtr options =
       device::mojom::UsbEnumerationOptions::New();
   usb_manager_->GetDevices(
@@ -298,17 +300,18 @@ void XuCameraService::OnGetDevices(
             int cur = 0;
             kXuInterface curXuInterface;
             while ((cur + kSubtypeOffset) < end) {
-              if (static_cast<int>(data_ptr[cur + kSubtypeOffset]) ==
-                      kXUSubtype &&
+              if (static_cast<int>(UNSAFE_TODO(
+                      data_ptr[cur + kSubtypeOffset])) == kXUSubtype &&
                   (cur + (int)sizeof(curXuInterface)) < end) {
-                std::memcpy(&curXuInterface, &data_ptr[cur],
-                            sizeof(curXuInterface));
+                UNSAFE_TODO(std::memcpy(&curXuInterface, &data_ptr[cur],
+                                        sizeof(curXuInterface)));
                 std::vector<uint8_t> curXuInterface_guid_le(
-                    curXuInterface.kGuidLe, curXuInterface.kGuidLe + kGuidSize);
+                    curXuInterface.kGuidLe,
+                    UNSAFE_TODO(curXuInterface.kGuidLe + kGuidSize));
                 guid_unitid_map_.insert(
                     {curXuInterface_guid_le, curXuInterface.kUnitId});
               }
-              cur += static_cast<int>(data_ptr[cur]);
+              cur += static_cast<int>(UNSAFE_TODO(data_ptr[cur]));
             }
           }
         }
@@ -362,7 +365,7 @@ void XuCameraService::MapCtrlWithDevicePath(
     return;
   }
 
-  struct uvc_menu_info uvc_menus[mapping_ctrl->menu_entries->menu_info.size()];
+  base::FixedArray<struct uvc_menu_info> uvc_menus(mapping_ctrl->menu_entries->menu_info.size());
 
   int index = 0;
   for (auto menu_info = mapping_ctrl->menu_entries->menu_info.begin();
@@ -384,7 +387,7 @@ void XuCameraService::MapCtrlWithDevicePath(
       .offset = mapping_ctrl->offset,
       .v4l2_type = mapping_ctrl->v4l2_type,
       .data_type = mapping_ctrl->data_type,
-      .menu_info = uvc_menus,
+      .menu_info = uvc_menus.data(),
       .menu_count = static_cast<uint32_t>(index),
   };
 
@@ -540,7 +543,8 @@ uint8_t XuCameraService::QueryXuControl(const base::ScopedFD& file_descriptor,
 
   if (error < 0) {
     logging::SystemErrorCode err = logging::GetLastSystemErrorCode();
-    LOG(ERROR) << "ioctl call failed. error: " << logging::SystemErrorCodeToString(err);
+    LOG(ERROR) << "ioctl call failed. error: "
+               << logging::SystemErrorCodeToString(err);
     return err;
   }
   return error;
@@ -558,7 +562,6 @@ void XuCameraService::GetDevicePath(
     return;
   }
 
-  // TODO(b/295912291): Check get_device_id is in a map
   auto hashed_device_id = id->get_device_id();
 
   if (!host_id || hashed_device_id.empty()) {
@@ -755,7 +758,7 @@ void XuCameraService::CopyToData(T* value,
   uint8_t* valueAsUint8 = reinterpret_cast<uint8_t*>(value);
   for (size_t i = 0; i < size; ++i) {
     data.push_back(*valueAsUint8);
-    valueAsUint8++;
+    UNSAFE_TODO(valueAsUint8++);
   }
 }
 

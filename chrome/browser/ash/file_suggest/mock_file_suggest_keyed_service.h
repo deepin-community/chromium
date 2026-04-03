@@ -25,21 +25,28 @@ namespace ash {
 // relying on real suggestion providers.
 class MockFileSuggestKeyedService : public FileSuggestKeyedService {
  public:
+  // `application_locale_storage` must be non-null and must outlive the returned
+  // KeyedService.
   static std::unique_ptr<KeyedService> BuildMockFileSuggestKeyedService(
+      const ApplicationLocaleStorage* application_locale_storage,
       const base::FilePath& proto_path,
       content::BrowserContext* context);
 
+  // `application_locale_storage` must be non-null and must outlive `this`.
   MockFileSuggestKeyedService(
+      const ApplicationLocaleStorage* application_locale_storage,
       Profile* profile,
-      app_list::PersistentProto<app_list::RemovedResultsProto> proto);
+      PersistentProto<app_list::RemovedResultsProto> proto);
   MockFileSuggestKeyedService(const MockFileSuggestKeyedService&) = delete;
   MockFileSuggestKeyedService& operator=(const MockFileSuggestKeyedService&) =
       delete;
   ~MockFileSuggestKeyedService() override;
 
   // FileSuggestKeyedService:
-  void GetSuggestFileData(FileSuggestionType type,
-                          GetSuggestFileDataCallback callback) override;
+  MOCK_METHOD(void,
+              GetSuggestFileData,
+              (FileSuggestionType type, GetSuggestFileDataCallback callback),
+              (override));
   MOCK_METHOD(void,
               RemoveSuggestionsAndNotify,
               (const std::vector<base::FilePath>& suggested_file_paths),

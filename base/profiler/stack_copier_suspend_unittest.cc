@@ -2,16 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/profiler/stack_copier_suspend.h"
+
 #include <algorithm>
 #include <cstring>
 #include <memory>
 #include <numeric>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
+#include "base/profiler/register_context_registers.h"
 #include "base/profiler/stack_buffer.h"
-#include "base/profiler/stack_copier_suspend.h"
 #include "base/profiler/suspendable_thread_delegate.h"
 #include "build/build_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -43,10 +46,11 @@ class TestSuspendableThreadDelegate : public SuspendableThreadDelegate {
     bool WasSuccessful() const override { return true; }
   };
 
-  TestSuspendableThreadDelegate(const std::vector<uintptr_t>& fake_stack,
-                                // The register context will be initialized to
-                                // *|thread_context| if non-null.
-                                RegisterContext* thread_context = nullptr)
+  explicit TestSuspendableThreadDelegate(
+      const std::vector<uintptr_t>& fake_stack,
+      // The register context will be initialized to
+      // *|thread_context| if non-null.
+      RegisterContext* thread_context = nullptr)
       : fake_stack_(fake_stack), thread_context_(thread_context) {}
 
   TestSuspendableThreadDelegate(const TestSuspendableThreadDelegate&) = delete;
@@ -58,8 +62,9 @@ class TestSuspendableThreadDelegate : public SuspendableThreadDelegate {
   }
 
   bool GetThreadContext(RegisterContext* thread_context) override {
-    if (thread_context_)
+    if (thread_context_) {
       *thread_context = *thread_context_;
+    }
     // Set the stack pointer to be consistent with the provided fake stack.
     RegisterContextStackPointer(thread_context) =
         reinterpret_cast<uintptr_t>(&(*fake_stack_)[0]);
@@ -71,8 +76,8 @@ class TestSuspendableThreadDelegate : public SuspendableThreadDelegate {
   PlatformThreadId GetThreadId() const override { return PlatformThreadId(); }
 
   uintptr_t GetStackBaseAddress() const override {
-    return reinterpret_cast<uintptr_t>(&(*fake_stack_)[0] +
-                                       fake_stack_->size());
+    return reinterpret_cast<uintptr_t>(
+        UNSAFE_TODO(&(*fake_stack_)[0] + fake_stack_->size()));
   }
 
   bool CanCopyStack(uintptr_t stack_pointer) override { return true; }
@@ -91,9 +96,7 @@ class TestSuspendableThreadDelegate : public SuspendableThreadDelegate {
 
 class TestStackCopierDelegate : public StackCopier::Delegate {
  public:
-  void OnStackCopy() override {
-    on_stack_copy_was_invoked_ = true;
-  }
+  void OnStackCopy() override { on_stack_copy_was_invoked_ = true; }
 
   bool on_stack_copy_was_invoked() const { return on_stack_copy_was_invoked_; }
 
@@ -119,8 +122,8 @@ TEST(StackCopierSuspendTest, CopyStack) {
 
   uintptr_t* stack_copy_bottom =
       reinterpret_cast<uintptr_t*>(stack_buffer.get()->buffer());
-  std::vector<uintptr_t> stack_copy(stack_copy_bottom,
-                                    stack_copy_bottom + stack.size());
+  std::vector<uintptr_t> stack_copy(
+      stack_copy_bottom, UNSAFE_TODO(stack_copy_bottom + stack.size()));
   EXPECT_EQ(stack, stack_copy);
 }
 
@@ -158,8 +161,9 @@ TEST(StackCopierSuspendTest, CopyStackBufferTooSmall) {
 
   uintptr_t* stack_copy_bottom =
       reinterpret_cast<uintptr_t*>(stack_buffer.get()->buffer());
-  std::vector<uintptr_t> stack_copy(stack_copy_bottom,
-                                    stack_copy_bottom + stack_buffer_elements);
+  std::vector<uintptr_t> stack_copy(
+      stack_copy_bottom,
+      UNSAFE_TODO(stack_copy_bottom + stack_buffer_elements));
   // Use the buffer not being overwritten as a proxy for the unwind being
   // aborted.
   EXPECT_THAT(stack_copy, Each(kBufferInitializer));
@@ -184,8 +188,8 @@ TEST(StackCopierSuspendTest, CopyStackAndRewritePointers) {
 
   uintptr_t* stack_copy_bottom =
       reinterpret_cast<uintptr_t*>(stack_buffer.get()->buffer());
-  std::vector<uintptr_t> stack_copy(stack_copy_bottom,
-                                    stack_copy_bottom + stack.size());
+  std::vector<uintptr_t> stack_copy(
+      stack_copy_bottom, UNSAFE_TODO(stack_copy_bottom + stack.size()));
   EXPECT_THAT(stack_copy,
               ElementsAre(reinterpret_cast<uintptr_t>(stack_copy_bottom),
                           reinterpret_cast<uintptr_t>(stack_copy_bottom) +

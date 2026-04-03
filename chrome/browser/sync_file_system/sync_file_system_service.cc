@@ -10,6 +10,8 @@
 #include <string>
 #include <utility>
 
+#include "base/barrier_closure.h"
+#include "base/check_deref.h"
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
@@ -18,15 +20,13 @@
 #include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
 #include "base/task/single_thread_task_runner.h"
-#include "chrome/browser/apps/platform_apps/api/sync_file_system/extension_sync_event_observer.h"
-#include "chrome/browser/apps/platform_apps/api/sync_file_system/sync_file_system_api_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/sync_file_system/local/local_file_sync_service.h"
 #include "chrome/browser/sync_file_system/logger.h"
 #include "chrome/browser/sync_file_system/sync_direction.h"
-#include "chrome/browser/sync_file_system/sync_event_observer.h"
 #include "chrome/browser/sync_file_system/sync_file_metadata.h"
+#include "chrome/browser/sync_file_system/sync_file_status.h"
 #include "chrome/browser/sync_file_system/sync_process_runner.h"
 #include "chrome/browser/sync_file_system/sync_status_code.h"
 #include "chrome/browser/sync_file_system/syncable_file_system_util.h"
@@ -74,7 +74,6 @@ SyncServiceState RemoteStateToSyncServiceState(
       NOTREACHED();
   }
   NOTREACHED() << "Unknown remote service state: " << state;
-  return SYNC_SERVICE_DISABLED;
 }
 
 void DidHandleUninstalledEvent(const GURL& origin, SyncStatusCode code) {
@@ -101,35 +100,6 @@ void DidHandleLoadEvent(
               "Failed to enable origin for load event: %s",
               origin.spec().c_str());
   }
-}
-
-std::string SyncFileStatusToString(SyncFileStatus sync_file_status) {
-  return chrome_apps::api::sync_file_system::ToString(
-      chrome_apps::api::SyncFileStatusToExtensionEnum(sync_file_status));
-}
-
-// Gets called repeatedly until every SyncFileStatus has been mapped.
-void DidGetFileSyncStatusForDump(
-    const base::Value::List& files,
-    size_t* num_results,
-    SyncFileSystemService::DumpFilesCallback& callback,
-    base::Value::Dict* file,
-    SyncStatusCode sync_status_code,
-    SyncFileStatus sync_file_status) {
-  DCHECK(num_results);
-
-  if (file)
-    file->Set("status", SyncFileStatusToString(sync_file_status));
-
-  // Once all results have been received, run the callback to signal end.
-  DCHECK_LE(*num_results, files.size());
-  if (++*num_results < files.size())
-    return;
-
-  // `callback` is a DumpFilesCallback, which should only be called
-  // once. The callback will only be called a single time, even though
-  // `DidGetFileSyncStatusForDump()` is called more than once.
-  std::move(callback).Run(files.Clone());
 }
 
 // We need this indirection because WeakPtr can only be bound to methods
@@ -180,10 +150,10 @@ class LocalSyncRunner : public SyncProcessRunner,
   void DidProcessLocalChange(SyncStatusCallback callback,
                              SyncStatusCode status,
                              const FileSystemURL& url) {
-    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
-              "ProcessLocalChange finished with status=%d (%s) for url=%s",
-              status, SyncStatusCodeToString(status),
-              url.DebugString().c_str());
+    UNSAFE_TODO(util::Log(
+        logging::LOGGING_VERBOSE, FROM_HERE,
+        "ProcessLocalChange finished with status=%d (%s) for url=%s", status,
+        SyncStatusCodeToString(status), url.DebugString().c_str()));
     std::move(callback).Run(status);
   }
 
@@ -238,10 +208,10 @@ class RemoteSyncRunner : public SyncProcessRunner,
   void DidProcessRemoteChange(SyncStatusCallback callback,
                               SyncStatusCode status,
                               const FileSystemURL& url) {
-    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
-              "ProcessRemoteChange finished with status=%d (%s) for url=%s",
-              status, SyncStatusCodeToString(status),
-              url.DebugString().c_str());
+    UNSAFE_TODO(util::Log(
+        logging::LOGGING_VERBOSE, FROM_HERE,
+        "ProcessRemoteChange finished with status=%d (%s) for url=%s", status,
+        SyncStatusCodeToString(status), url.DebugString().c_str()));
 
     if (status == SYNC_STATUS_FILE_BUSY) {
       GetSyncService()->local_service_->RegisterURLForWaitingSync(
@@ -303,34 +273,6 @@ void SyncFileSystemService::InitializeForApp(
                      std::move(callback)));
 }
 
-void SyncFileSystemService::GetExtensionStatusMap(
-    ExtensionStatusMapCallback callback) {
-  remote_service_->GetOriginStatusMap(
-      base::BindOnce(&SyncFileSystemService::DidGetExtensionStatusMap,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-}
-
-void SyncFileSystemService::DumpFiles(
-    content::StoragePartition* storage_partition,
-    const GURL& origin,
-    DumpFilesCallback callback) {
-  DCHECK(!origin.is_empty());
-
-  storage::FileSystemContext* file_system_context =
-      storage_partition->GetFileSystemContext();
-  local_service_->MaybeInitializeFileSystemContext(
-      origin, file_system_context,
-      base::BindOnce(&SyncFileSystemService::DidInitializeFileSystemForDump,
-                     weak_ptr_factory_.GetWeakPtr(), origin,
-                     std::move(callback)));
-}
-
-void SyncFileSystemService::DumpDatabase(DumpFilesCallback callback) {
-  remote_service_->DumpDatabase(
-      base::BindOnce(&SyncFileSystemService::DidDumpDatabase,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-}
-
 void SyncFileSystemService::GetFileSyncStatus(const FileSystemURL& url,
                                               SyncFileStatusCallback callback) {
   DCHECK(local_service_);
@@ -348,15 +290,6 @@ void SyncFileSystemService::GetFileSyncStatus(const FileSystemURL& url,
   local_service_->HasPendingLocalChanges(
       url, base::BindOnce(&SyncFileSystemService::DidGetLocalChangeStatus,
                           weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-}
-
-void SyncFileSystemService::AddSyncEventObserver(SyncEventObserver* observer) {
-  observers_.AddObserver(observer);
-}
-
-void SyncFileSystemService::RemoveSyncEventObserver(
-    SyncEventObserver* observer) {
-  observers_.RemoveObserver(observer);
 }
 
 LocalChangeProcessor* SyncFileSystemService::GetLocalChangeProcessor(
@@ -445,9 +378,8 @@ void SyncFileSystemService::CallOnIdleForTesting(base::OnceClosure callback) {
 
 SyncFileSystemService::SyncFileSystemService(Profile* profile)
     : profile_(profile),
-      sync_enabled_(true),
-      promoting_demoted_changes_(false) {
-}
+      sync_enabled_(false),
+      promoting_demoted_changes_(false) {}
 
 void SyncFileSystemService::Initialize(
     std::unique_ptr<LocalFileSyncService> local_service,
@@ -469,7 +401,6 @@ void SyncFileSystemService::Initialize(
       &GetLocalChangeProcessorAdapter, weak_ptr_factory_.GetWeakPtr()));
 
   remote_service_->AddServiceObserver(remote_syncer.get());
-  remote_service_->AddFileStatusObserver(this);
   remote_service_->SetRemoteChangeProcessor(local_service_.get());
 
   local_sync_runners_.push_back(std::move(local_syncer));
@@ -483,6 +414,10 @@ void SyncFileSystemService::Initialize(
   }
 
   ExtensionRegistry::Get(profile_)->AddObserver(this);
+
+  // Don't enable file sync.
+  // TODO(crbug.com/396460818): Cleanup file syncing.
+  remote_service_->SetSyncEnabled(false);
 }
 
 void SyncFileSystemService::DidInitializeFileSystem(const GURL& app_origin,
@@ -512,9 +447,10 @@ void SyncFileSystemService::DidInitializeFileSystem(const GURL& app_origin,
 void SyncFileSystemService::DidRegisterOrigin(const GURL& app_origin,
                                               SyncStatusCallback callback,
                                               SyncStatusCode status) {
-  util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
-            "DidInitializeForApp (registered the origin): %s: %s",
-            app_origin.spec().c_str(), SyncStatusCodeToString(status));
+  UNSAFE_TODO(util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
+                        "DidInitializeForApp (registered the origin): %s: %s",
+                        app_origin.spec().c_str(),
+                        SyncStatusCodeToString(status)));
 
   if (!remote_service_) {
     std::move(callback).Run(SYNC_STATUS_ABORT);
@@ -538,73 +474,6 @@ void SyncFileSystemService::DidRegisterOrigin(const GURL& app_origin,
   std::move(callback).Run(status);
 }
 
-void SyncFileSystemService::DidInitializeFileSystemForDump(
-    const GURL& origin,
-    DumpFilesCallback callback,
-    SyncStatusCode status) {
-  DCHECK(!origin.is_empty());
-
-  if (status != SYNC_STATUS_OK || !remote_service_) {
-    std::move(callback).Run(base::Value::List());
-    return;
-  }
-
-  remote_service_->DumpFiles(
-      origin, base::BindOnce(&SyncFileSystemService::DidDumpFiles,
-                             weak_ptr_factory_.GetWeakPtr(), origin,
-                             std::move(callback)));
-}
-
-void SyncFileSystemService::DidDumpFiles(const GURL& origin,
-                                         DumpFilesCallback callback,
-                                         base::Value::List dump_files) {
-  if (dump_files.empty() || !local_service_ || !remote_service_) {
-    std::move(callback).Run(base::Value::List());
-    return;
-  }
-
-  base::Value::List& files = dump_files;
-
-  using AccumulateFileSyncStatusCallback = base::RepeatingCallback<void(
-      base::Value::Dict*, SyncStatusCode, SyncFileStatus)>;
-
-  // |accumulate_callback| should only call |callback| once.
-  AccumulateFileSyncStatusCallback accumulate_callback =
-      base::BindRepeating(&DidGetFileSyncStatusForDump, std::move(dump_files),
-                          base::Owned(std::make_unique<size_t>(0)),
-                          base::OwnedRef(std::move(callback)));
-
-  // After all metadata loaded, sync status can be added to each entry.
-  for (base::Value& file : files) {
-    const base::Value::Dict* file_dict = file.GetIfDict();
-    const std::string* path_string =
-        file_dict ? file_dict->FindString("path") : nullptr;
-    if (!path_string) {
-      NOTREACHED();
-      accumulate_callback.Run(nullptr, SYNC_FILE_ERROR_FAILED,
-                              SYNC_FILE_STATUS_UNKNOWN);
-      continue;
-    }
-    base::FilePath file_path = base::FilePath::FromUTF8Unsafe(*path_string);
-    FileSystemURL url = CreateSyncableFileSystemURL(origin, file_path);
-    GetFileSyncStatus(url,
-                      base::BindOnce(accumulate_callback, &file.GetDict()));
-  }
-}
-
-void SyncFileSystemService::DidDumpDatabase(DumpFilesCallback callback,
-                                            base::Value::List list) {
-  std::move(callback).Run(std::move(list));
-}
-
-void SyncFileSystemService::DidGetExtensionStatusMap(
-    ExtensionStatusMapCallback callback,
-    std::unique_ptr<RemoteFileSyncService::OriginStatusMap> status_map) {
-  if (!status_map)
-    status_map = std::make_unique<RemoteFileSyncService::OriginStatusMap>();
-  std::move(callback).Run(*status_map);
-}
-
 void SyncFileSystemService::SetSyncEnabledForTesting(bool enabled) {
   sync_enabled_ = enabled;
   remote_service_->SetSyncEnabled(sync_enabled_);
@@ -625,11 +494,7 @@ void SyncFileSystemService::OnRemoteServiceStateUpdated(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
             "OnRemoteServiceStateChanged: %d %s", state, description.c_str());
-
-  for (auto& observer : observers_) {
-    observer.OnSyncStateUpdated(GURL(), RemoteStateToSyncServiceState(state),
-                                description);
-  }
+  // TODO(crbug.com/396460818): Cleanup, file syncing is deprecated.
 
   RunForEachSyncRunners(&SyncProcessRunner::Schedule);
 }
@@ -653,9 +518,9 @@ void SyncFileSystemService::OnExtensionUnloaded(
     return;
 
   GURL app_origin = Extension::GetBaseURLFromExtensionId(extension->id());
-  int disable_reasons =
+  extensions::DisableReasonSet disable_reasons =
       ExtensionPrefs::Get(profile_)->GetDisableReasons(extension->id());
-  if (disable_reasons & extensions::disable_reason::DISABLE_RELOAD) {
+  if (disable_reasons.contains(extensions::disable_reason::DISABLE_RELOAD)) {
     // Bypass disabling the origin since the app will be re-enabled soon.
     // NOTE: If re-enabling the app fails, the app is disabled while it is
     // handled as enabled origin in the SyncFS. This should be safe and will be
@@ -709,14 +574,9 @@ void SyncFileSystemService::OnStateChanged(syncer::SyncService* sync) {
   UpdateSyncEnabledStatus(sync);
 }
 
-void SyncFileSystemService::OnFileStatusChanged(
-    const FileSystemURL& url,
-    SyncFileType file_type,
-    SyncFileStatus sync_status,
-    SyncAction action_taken,
-    SyncDirection direction) {
-  for (auto& observer : observers_)
-    observer.OnFileSynced(url, file_type, sync_status, action_taken, direction);
+void SyncFileSystemService::OnSyncShutdown(syncer::SyncService*) {
+  // Unreachable, since this service is Shutdown() before the SyncService.
+  NOTREACHED();
 }
 
 void SyncFileSystemService::UpdateSyncEnabledStatus(

@@ -7,10 +7,12 @@
 #include <va/va.h>
 #include <va/va_enc_vp8.h>
 
+#include <algorithm>
+#include <array>
 #include <bit>
 
 #include "base/bits.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
@@ -46,12 +48,12 @@ constexpr uint8_t kScreenMaxQP = 106;
 // libvpx vp8 rate control, whose range is 0-63.
 // Cited from //third_party/libvpx/source/libvpx/vp8/vp8_ratectrl_rtc.cc
 uint8_t QindexToQuantizer(uint8_t q_index) {
-  constexpr uint8_t kQuantizerToQindex[] = {
+  constexpr auto kQuantizerToQindex = std::to_array<uint8_t>({
       0,  1,  2,  3,  4,  5,  7,   8,   9,   10,  12,  13,  15,  17,  18,  19,
       20, 21, 23, 24, 25, 26, 27,  28,  29,  30,  31,  33,  35,  37,  39,  41,
       43, 45, 47, 49, 51, 53, 55,  57,  59,  61,  64,  67,  70,  73,  76,  79,
       82, 85, 88, 91, 94, 97, 100, 103, 106, 109, 112, 115, 118, 121, 124, 127,
-  };
+  });
 
   for (size_t q = 0; q < std::size(kQuantizerToQindex); ++q) {
     if (kQuantizerToQindex[q] >= q_index)
@@ -111,8 +113,9 @@ libvpx::VP8RateControlRtcConfig CreateRateControlConfig(
   int bitrate_sum = 0;
   for (size_t tid = 0; tid < num_temporal_layers; ++tid) {
     bitrate_sum += bitrate_allocation.GetBitrateBps(0u, tid) / 1000;
-    rc_cfg.layer_target_bitrate[tid] = bitrate_sum;
-    rc_cfg.ts_rate_decimator[tid] = 1u << (num_temporal_layers - tid - 1);
+    UNSAFE_TODO(rc_cfg.layer_target_bitrate[tid]) = bitrate_sum;
+    UNSAFE_TODO(rc_cfg.ts_rate_decimator[tid]) =
+        1u << (num_temporal_layers - tid - 1);
   }
 
   rc_cfg.frame_drop_thresh = encode_params.drop_frame_thresh;
@@ -213,8 +216,8 @@ bool UpdateFrameHeaderForTemporalLayerEncoding(
         };
 
     std::tie(metadata, buffer_flags) =
-        kFrameConfigs[num_layers - kMinSupportedVP8TemporalLayers]
-                     [frame_num % kTemporalLayerCycle];
+        UNSAFE_TODO(kFrameConfigs[num_layers - kMinSupportedVP8TemporalLayers]
+                                 [frame_num % kTemporalLayerCycle]);
   }
 
   frame_hdr.frame_type =
@@ -243,14 +246,11 @@ size_t GetActiveTemporalLayers(
 }
 
 bool VP8TLEncodingIsEnabled() {
-  // TODO(b/202926617): Remove once VP8 TL encoding is enabled by default.
-  const static bool enable_vp8_tl_encoding =
 #if defined(ARCH_CPU_X86_FAMILY) && BUILDFLAG(IS_CHROMEOS)
-      base::FeatureList::IsEnabled(kVaapiVp8TemporalLayerHWEncoding);
+  return true;
 #else
-      false;
-#endif
-  return enable_vp8_tl_encoding;
+  return false;
+#endif  // defined(ARCH_CPU_X86_FAMILY) && BUILDFLAG(IS_CHROMEOS)
 }
 
 }  // namespace
@@ -284,7 +284,7 @@ bool VP8VaapiVideoEncoderDelegate::Initialize(
   }
 
   if (config.bitrate.mode() == Bitrate::Mode::kVariable) {
-    DVLOGF(1) << "Invalid configuraiton. VBR is not supported for VP8.";
+    DVLOGF(1) << "Invalid configuration. VBR is not supported for VP8.";
     return false;
   }
 
@@ -344,9 +344,7 @@ bool VP8VaapiVideoEncoderDelegate::Initialize(
       return false;
   }
 
-  return UpdateRates(initial_bitrate_allocation,
-                     config.initial_framerate.value_or(
-                         VideoEncodeAccelerator::kDefaultFramerate));
+  return UpdateRates(initial_bitrate_allocation, config.framerate);
 }
 
 gfx::Size VP8VaapiVideoEncoderDelegate::GetCodedSize() const {
@@ -390,7 +388,7 @@ VP8VaapiVideoEncoderDelegate::PrepareEncodeJob(EncodeJob& encode_job) {
   }
 
   DCHECK(!picture->frame_hdr->IsKeyframe() ||
-         !base::Contains(ref_frames_used, true));
+         !std::ranges::contains(ref_frames_used, true));
 
   if (!SubmitFrameParameters(encode_job, current_params_, picture,
                              reference_frames_, ref_frames_used)) {
@@ -409,15 +407,11 @@ BitstreamBufferMetadata VP8VaapiVideoEncoderDelegate::GetMetadata(
     const EncodeJob& encode_job,
     size_t payload_size) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  auto metadata =
-      VaapiVideoEncoderDelegate::GetMetadata(encode_job, payload_size);
-  CHECK(metadata.end_of_picture);
-  if (metadata.dropped_frame()) {
-    // BitstreamBufferMetadata should not have a codec specific metadata,
-    // when a frame is dropped.
-    return metadata;
-  }
-
+  CHECK(!encode_job.IsFrameDropped());
+  CHECK_NE(payload_size, 0u);
+  BitstreamBufferMetadata metadata(
+      payload_size, encode_job.IsKeyframeRequested(), encode_job.timestamp());
+  CHECK(metadata.end_of_picture());
   auto picture = GetVP8Picture(encode_job);
   DCHECK(picture);
   metadata.vp8 = picture->metadata_for_encoding;
@@ -535,11 +529,22 @@ VP8VaapiVideoEncoderDelegate::SetFrameHeader(
     DVLOGF(3) << "Drop frame";
     return PrepareEncodeJobResult::kDrop;
   }
-  picture.frame_hdr->quantization_hdr.y_ac_qi = rate_ctrl_->GetQP();
+  picture.frame_hdr->quantization_hdr.y_ac_qi =
+      base::checked_cast<uint8_t>(rate_ctrl_->GetQP());
+  libvpx::UVDeltaQP uv_delta_qp = rate_ctrl_->GetUVDeltaQP();
+  picture.frame_hdr->quantization_hdr.uv_dc_delta =
+      base::checked_cast<int8_t>(uv_delta_qp.uvdc_delta_q);
+  picture.frame_hdr->quantization_hdr.uv_ac_delta =
+      base::checked_cast<int8_t>(uv_delta_qp.uvac_delta_q);
   picture.frame_hdr->loopfilter_hdr.level =
       base::checked_cast<uint8_t>(rate_ctrl_->GetLoopfilterLevel());
+
   DVLOGF(4) << "qp="
             << static_cast<int>(picture.frame_hdr->quantization_hdr.y_ac_qi)
+            << ", uv_dc_delta="
+            << static_cast<int>(picture.frame_hdr->quantization_hdr.uv_dc_delta)
+            << ", uv_ac_delta="
+            << static_cast<int>(picture.frame_hdr->quantization_hdr.uv_ac_delta)
             << ", filter_level="
             << static_cast<int>(picture.frame_hdr->loopfilter_hdr.level)
             << (keyframe ? " (keyframe)" : "")
@@ -578,20 +583,20 @@ bool VP8VaapiVideoEncoderDelegate::SubmitFrameParameters(
 
   VAEncPictureParameterBufferVP8 pic_param = {};
 
-  pic_param.reconstructed_frame = pic->AsVaapiVP8Picture()->GetVASurfaceID();
+  pic_param.reconstructed_frame = pic->AsVaapiVP8Picture()->va_surface_id();
   DCHECK_NE(pic_param.reconstructed_frame, VA_INVALID_ID);
 
   auto last_frame = ref_frames.GetFrame(Vp8RefType::VP8_FRAME_LAST);
   pic_param.ref_last_frame =
-      last_frame ? last_frame->AsVaapiVP8Picture()->GetVASurfaceID()
+      last_frame ? last_frame->AsVaapiVP8Picture()->va_surface_id()
                  : VA_INVALID_ID;
   auto golden_frame = ref_frames.GetFrame(Vp8RefType::VP8_FRAME_GOLDEN);
   pic_param.ref_gf_frame =
-      golden_frame ? golden_frame->AsVaapiVP8Picture()->GetVASurfaceID()
+      golden_frame ? golden_frame->AsVaapiVP8Picture()->va_surface_id()
                    : VA_INVALID_ID;
   auto alt_frame = ref_frames.GetFrame(Vp8RefType::VP8_FRAME_ALTREF);
   pic_param.ref_arf_frame =
-      alt_frame ? alt_frame->AsVaapiVP8Picture()->GetVASurfaceID()
+      alt_frame ? alt_frame->AsVaapiVP8Picture()->va_surface_id()
                 : VA_INVALID_ID;
   pic_param.coded_buf = job.coded_buffer_id();
   DCHECK_NE(pic_param.coded_buf, VA_INVALID_ID);
@@ -653,9 +658,12 @@ bool VP8VaapiVideoEncoderDelegate::SubmitFrameParameters(
                 "Invalid loop filter array sizes");
 
   for (size_t i = 0; i < std::size(pic_param.loop_filter_level); ++i) {
-    pic_param.loop_filter_level[i] = frame_header->loopfilter_hdr.level;
-    pic_param.ref_lf_delta[i] = frame_header->loopfilter_hdr.ref_frame_delta[i];
-    pic_param.mode_lf_delta[i] = frame_header->loopfilter_hdr.mb_mode_delta[i];
+    UNSAFE_TODO(pic_param.loop_filter_level[i]) =
+        frame_header->loopfilter_hdr.level;
+    UNSAFE_TODO(pic_param.ref_lf_delta[i]) =
+        UNSAFE_TODO(frame_header->loopfilter_hdr.ref_frame_delta[i]);
+    UNSAFE_TODO(pic_param.mode_lf_delta[i]) =
+        UNSAFE_TODO(frame_header->loopfilter_hdr.mb_mode_delta[i]);
   }
 
   pic_param.sharpness_level = frame_header->loopfilter_hdr.sharpness_level;

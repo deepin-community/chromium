@@ -72,8 +72,9 @@ import tempfile
 # this is helpful.
 
 PATCHES = [
-    'undo-sax-deprecation.patch',
     'remove-getentropy.patch',
+    'xml-attr-extra.patch',
+    'widen-extra-field-in-_xmlNode-to-an-int.patch',
 ]
 
 
@@ -84,14 +85,12 @@ PATCHES = [
 # These two sets of options should be in sync. You can check the
 # generated #defines in (win32|mac|linux)/include/libxml/xmlversion.h to confirm
 # this.
-# We would like to disable python but it introduces a host of build errors
 SHARED_XML_CONFIGURE_OPTIONS = [
     # These options are turned ON
     ('--with-html', 'html=yes'),
     ('--with-icu', 'icu=yes'),
     ('--with-output', 'output=yes'),
     ('--with-push', 'push=yes'),
-    ('--with-python', 'python=yes'),
     ('--with-reader', 'reader=yes'),
     ('--with-sax1', 'sax1=yes'),
     ('--with-threads', 'threads=yes'),
@@ -102,23 +101,22 @@ SHARED_XML_CONFIGURE_OPTIONS = [
     ('--without-c14n', 'c14n=no'),
     ('--without-catalog', 'catalog=no'),
     ('--without-debug', 'xml_debug=no'),
-    ('--without-ftp', 'ftp=no'),
     ('--without-http', 'http=no'),
     ('--without-iconv', 'iconv=no'),
     ('--without-iso8859x', 'iso8859x=no'),
     ('--without-legacy', 'legacy=no'),
     ('--without-lzma', 'lzma=no'),
-    ('--without-mem-debug', 'mem_debug=no'),
     ('--without-modules', 'modules=no'),
     ('--without-pattern', 'pattern=no'),
+    ('--without-python', 'python=no'),
     ('--without-regexps', 'regexps=no'),
     ('--without-schemas', 'schemas=no'),
     ('--without-schematron', 'schematron=no'),
     ('--without-valid', 'valid=no'),
     ('--without-xinclude', 'xinclude=no'),
     ('--without-xptr', 'xptr=no'),
-    ('--without-xptr-locs', 'xptr_locs=no'),
     ('--without-zlib', 'zlib=no'),
+    ('--without-relaxng', 'relaxng=no'),
 ]
 
 
@@ -181,10 +179,12 @@ FILES_TO_REMOVE = [
     'src/genChRanges.py',
     'src/global.data',
     'src/include/libxml/Makefile.in',
+    'src/include/libxml/meson.build',
     'src/include/libxml/xmlversion.h',
     'src/include/libxml/xmlwin32version.h',
     'src/include/libxml/xmlwin32version.h.in',
     'src/include/Makefile.in',
+    'src/include/meson.build',
     'src/install-sh',
     'src/legacy.c',
     'src/libxml2.doap',
@@ -192,6 +192,8 @@ FILES_TO_REMOVE = [
     'src/ltmain.sh',
     'src/m4',
     'src/macos/libxml2.mcp.xml.sit.hqx',
+    'src/meson.build',
+    'src/meson_options.txt',
     'src/missing',
     'src/optim',
     'src/os400',
@@ -380,7 +382,11 @@ def roll_libxml_linux(src_path, libxml2_repo_path, fast):
             shutil.rmtree(temp_dir)
 
         with WorkingDir(THIRD_PARTY_LIBXML_SRC):
-            # Put the version number is the README file
+            # Put the version and revision IDs in the README file
+            sed_in_place('../README.chromium',
+                         's/Revision: .*$/Revision: %s/' % commit)
+            # TODO(crbug.com/349530088): Read version from VERSION file when we
+            # roll libxml to that point and use it instead of the commit hash.
             sed_in_place('../README.chromium',
                          's/Version: .*$/Version: %s/' % commit)
 

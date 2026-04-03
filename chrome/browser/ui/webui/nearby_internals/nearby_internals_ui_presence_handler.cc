@@ -4,11 +4,13 @@
 
 #include "chrome/browser/ui/webui/nearby_internals/nearby_internals_ui_presence_handler.h"
 
+#include "chrome/browser/ash/nearby/nearby_process_manager_factory.h"
 #include "chrome/browser/ash/nearby/presence/nearby_presence_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/push_notification/push_notification_service_factory.h"
 #include "chromeos/ash/components/nearby/presence/credentials/prefs.h"
 #include "chromeos/ash/components/nearby/presence/nearby_presence_service.h"
+#include "chromeos/ash/services/nearby/public/mojom/nearby_share_settings.mojom.h"
 #include "components/cross_device/logging/logging.h"
 #include "components/prefs/pref_service.h"
 #include "components/push_notification/push_notification_service.h"
@@ -17,12 +19,12 @@ namespace {
 
 // Keys in the JSON representation of a device.
 const char kDeviceNameKey[] = "name";
-const char kDeviceIdKey[] = "id";
 const char kTypeKey[] = "type";
 const char kEndpointKey[] = "endpoint_id";
 const char kActionsKey[] = "actions";
 
 // ActionType strings representations.
+const char kCallTransferAction[] = "Call Transfer";
 const char kActiveUnlockAction[] = "Active Unlock";
 const char kNearbyShareAction[] = "Nearby Share";
 const char kInstantTetheringAction[] = "Instant Tethering";
@@ -38,45 +40,42 @@ const char kNotificationTypeIdKey[] = "type_id";
 const char kNotificationClientIdKey[] = "client_id";
 const char kNotificationClientIdValue[] = "nearby";
 
-std::string PresenceActionToString(
-    ash::nearby::presence::NearbyPresenceService::Action action_enum) {
-  switch (action_enum) {
-    case ash::nearby::presence::NearbyPresenceService::Action::kActiveUnlock:
+std::string PresenceActionToString(nearby::presence::PresenceAction action) {
+  switch (nearby::presence::ActionBit(action.GetActionIdentifier())) {
+    case nearby::presence::ActionBit::kCallTransferAction:
+      return kCallTransferAction;
+    case nearby::presence::ActionBit::kActiveUnlockAction:
       return kActiveUnlockAction;
-    case ash::nearby::presence::NearbyPresenceService::Action::kNearbyShare:
+    case nearby::presence::ActionBit::kNearbyShareAction:
       return kNearbyShareAction;
-    case ash::nearby::presence::NearbyPresenceService::Action::
-        kInstantTethering:
+    case nearby::presence::ActionBit::kInstantTetheringAction:
       return kInstantTetheringAction;
-    case ash::nearby::presence::NearbyPresenceService::Action::kPhoneHub:
+    case nearby::presence::ActionBit::kPhoneHubAction:
       return kPhoneHubAction;
-    case ash::nearby::presence::NearbyPresenceService::Action::kPresenceManager:
+    case nearby::presence::ActionBit::kPresenceManagerAction:
       return kPresenceManagerAction;
-    case ash::nearby::presence::NearbyPresenceService::Action::kFinder:
+    case nearby::presence::ActionBit::kFinderAction:
       return kFinderAction;
-    case ash::nearby::presence::NearbyPresenceService::Action::kFastPairSass:
+    case nearby::presence::ActionBit::kFastPairSassAction:
       return kFastPairSassAction;
-    case ash::nearby::presence::NearbyPresenceService::Action::kTapToTransfer:
+    case nearby::presence::ActionBit::kTapToTransferAction:
       return kTapToTransferAction;
-    case ash::nearby::presence::NearbyPresenceService::Action::kLast:
+    case nearby::presence::ActionBit::kLastAction:
       return kLastAction;
   }
 }
 
 // Converts |presence_device| to a raw dictionary value used as a JSON argument
 // to JavaScript functions.
-base::Value::Dict PresenceDeviceToDictionary(
-    ash::nearby::presence::NearbyPresenceService::PresenceDevice
-        presence_device) {
-  base::Value::Dict dictionary;
-  dictionary.Set(kDeviceNameKey, presence_device.GetName());
+base::DictValue PresenceDeviceToDictionary(
+    nearby::presence::PresenceDevice presence_device) {
+  base::DictValue dictionary;
+  dictionary.Set(kDeviceNameKey,
+                 presence_device.GetDeviceIdentityMetadata().device_name());
   // TODO(b/277820435): add other device type options.
-  if (presence_device.GetType() ==
+  if (presence_device.GetDeviceIdentityMetadata().device_type() ==
       nearby::internal::DeviceType::DEVICE_TYPE_PHONE) {
     dictionary.Set(kTypeKey, "DEVICE_TYPE_PHONE");
-  }
-  if (presence_device.GetStableId().has_value()) {
-    dictionary.Set(kDeviceIdKey, presence_device.GetStableId().value());
   }
 
   dictionary.Set(kEndpointKey, presence_device.GetEndpointId());
@@ -143,20 +142,20 @@ void NearbyInternalsPresenceHandler::OnJavascriptAllowed() {}
 
 void NearbyInternalsPresenceHandler::OnJavascriptDisallowed() {}
 
-void NearbyInternalsPresenceHandler::Initialize(const base::Value::List& args) {
+void NearbyInternalsPresenceHandler::Initialize(const base::ListValue& args) {
   AllowJavascript();
 }
 
 void NearbyInternalsPresenceHandler::HandleStartPresenceScan(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   ash::nearby::presence::NearbyPresenceService* service =
       ash::nearby::presence::NearbyPresenceServiceFactory::GetForBrowserContext(
           context_);
   if (service) {
-    CD_LOG(VERBOSE, Feature::NP)
+    CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
         << __func__ << ": NearbyPresenceService was retrieved successfully";
     ash::nearby::presence::NearbyPresenceService::ScanFilter filter(
-        ash::nearby::presence::NearbyPresenceService::IdentityType::kPublic,
+        nearby::internal::IdentityType::IDENTITY_TYPE_PRIVATE_GROUP,
         /*actions=*/{});
     service->StartScan(
         filter, /*scan_delegate=*/this,
@@ -166,29 +165,29 @@ void NearbyInternalsPresenceHandler::HandleStartPresenceScan(
 }
 
 void NearbyInternalsPresenceHandler::HandleStopPresenceScan(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   scan_session_.reset();
 }
 
 void NearbyInternalsPresenceHandler::HandleSyncPresenceCredentials(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   ash::nearby::presence::NearbyPresenceService* service =
       ash::nearby::presence::NearbyPresenceServiceFactory::GetForBrowserContext(
           context_);
   if (service) {
-    CD_LOG(VERBOSE, Feature::NP)
+    CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
         << __func__ << ": NearbyPresenceService was retrieved successfully";
     service->UpdateCredentials();
   }
 }
 
 void NearbyInternalsPresenceHandler::HandleFirstTimePresenceFlow(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   ash::nearby::presence::NearbyPresenceService* service =
       ash::nearby::presence::NearbyPresenceServiceFactory::GetForBrowserContext(
           context_);
   if (service) {
-    CD_LOG(VERBOSE, Feature::NP)
+    CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
         << __func__ << ": NearbyPresenceService was retrieved successfully";
     auto* pref_service = Profile::FromBrowserContext(context_)->GetPrefs();
 
@@ -209,11 +208,10 @@ void NearbyInternalsPresenceHandler::HandleFirstTimePresenceFlow(
 void NearbyInternalsPresenceHandler::OnScanStarted(
     std::unique_ptr<ash::nearby::presence::NearbyPresenceService::ScanSession>
         scan_session,
-    ash::nearby::presence::NearbyPresenceService::StatusCode status) {
-  if (status ==
-      ash::nearby::presence::NearbyPresenceService::StatusCode::kAbslOk) {
+    ash::nearby::presence::enums::StatusCode status) {
+  if (status == ash::nearby::presence::enums::StatusCode::kAbslOk) {
     scan_session_ = std::move(scan_session);
-    CD_LOG(VERBOSE, Feature::NP)
+    CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
         << __func__ << ": ScanSession remote successfully returned and bound.";
   } else {
     // TODO(b/276307539): Pass error status back to WebUI.
@@ -223,26 +221,32 @@ void NearbyInternalsPresenceHandler::OnScanStarted(
 
 void NearbyInternalsPresenceHandler::
     OnNearbyPresenceCredentialManagerInitialized() {
-  CD_LOG(VERBOSE, Feature::NP) << __func__;
+  CD_LOG(VERBOSE, Feature::NEARBY_INFRA) << __func__;
 }
 
 void NearbyInternalsPresenceHandler::OnPresenceDeviceFound(
-    ash::nearby::presence::NearbyPresenceService::PresenceDevice
-        presence_device) {
-  FireWebUIListener("presence-device-found",
-                    PresenceDeviceToDictionary(presence_device));
+    nearby::presence::PresenceDevice presence_device) {
+  const std::string& endpoint_id = presence_device.GetEndpointId();
+  endpoint_id_to_presence_device_map_.emplace(
+      endpoint_id, std::make_unique<nearby::presence::PresenceDevice>(
+                       std::move(presence_device)));
+
+  FireWebUIListener(
+      "presence-device-found",
+      PresenceDeviceToDictionary(
+          *endpoint_id_to_presence_device_map_.at(endpoint_id).get()));
 }
 
 void NearbyInternalsPresenceHandler::OnPresenceDeviceChanged(
-    ash::nearby::presence::NearbyPresenceService::PresenceDevice
-        presence_device) {
+    nearby::presence::PresenceDevice presence_device) {
   FireWebUIListener("presence-device-changed",
                     PresenceDeviceToDictionary(presence_device));
 }
 
 void NearbyInternalsPresenceHandler::OnPresenceDeviceLost(
-    ash::nearby::presence::NearbyPresenceService::PresenceDevice
-        presence_device) {
+    nearby::presence::PresenceDevice presence_device) {
+  endpoint_id_to_presence_device_map_.erase(presence_device.GetEndpointId());
+
   FireWebUIListener("presence-device-lost",
                     PresenceDeviceToDictionary(presence_device));
 }
@@ -253,15 +257,44 @@ void NearbyInternalsPresenceHandler::OnScanSessionInvalidated() {
 }
 
 void NearbyInternalsPresenceHandler::HandleConnectToPresenceDevice(
-    const base::Value::List& args) {
-  // TODO(b/276642472): Add connect functionality.
-  CD_LOG(VERBOSE, Feature::NP)
-      << __func__ << ": Connection attempt for device with endpoint id: "
-      << args[0].GetString();
+    const base::ListValue& args) {
+  const std::string& endpoint_id = args[0].GetString();
+  CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
+      << __func__
+      << ": Connection attempt for device with endpoint id: " << endpoint_id;
+
+  if (!endpoint_id_to_presence_device_map_.contains(endpoint_id)) {
+    CD_LOG(WARNING, Feature::NEARBY_INFRA)
+        << __func__ << ": Received endpoint_id for device no longer in map.";
+    return;
+  }
+
+  auto* presence_connections_manager = GetNearbyPresenceConnectionsManager();
+  if (presence_connections_manager) {
+    presence_connections_manager->ConnectV3(
+        *endpoint_id_to_presence_device_map_.at(endpoint_id).get(),
+        nearby_share::mojom::DataUsage::kOffline,
+        base::BindOnce(&NearbyInternalsPresenceHandler::OnConnection,
+                       weak_ptr_factory_.GetWeakPtr(), endpoint_id));
+  }
+}
+
+void NearbyInternalsPresenceHandler::OnConnection(
+    const std::string& endpoint_id,
+    NearbyConnection* connection) {
+  // TODO(b/339674618): Add `Connected` / `Failed to Connect` label on device
+  // cell in the WebUI.
+  if (connection) {
+    CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
+        << "Successfully connected to endpoint_id=" << endpoint_id;
+  } else {
+    CD_LOG(WARNING, Feature::NEARBY_INFRA)
+        << "Failed to connect to to endpoint_id=" << endpoint_id;
+  }
 }
 
 void NearbyInternalsPresenceHandler::HandleSendUpdateCredentialsMessage(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   push_notification::PushNotificationService* service =
       push_notification::PushNotificationServiceFactory::GetForBrowserContext(
           context_);
@@ -275,4 +308,20 @@ void NearbyInternalsPresenceHandler::HandleSendUpdateCredentialsMessage(
 
   service->GetPushNotificationClientManager()
       ->NotifyPushNotificationClientOfMessage(std::move(message));
+}
+
+ash::nearby::presence::NearbyPresenceConnectionsManager*
+NearbyInternalsPresenceHandler::GetNearbyPresenceConnectionsManager() {
+  if (!nearby_presence_connections_manager_) {
+    ash::nearby::presence::NearbyPresenceService* service = ash::nearby::
+        presence::NearbyPresenceServiceFactory::GetForBrowserContext(context_);
+    if (service) {
+      CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
+          << __func__ << ": NearbyPresenceService was retrieved successfully";
+      nearby_presence_connections_manager_ =
+          service->CreateNearbyPresenceConnectionsManager();
+    }
+  }
+
+  return nearby_presence_connections_manager_.get();
 }

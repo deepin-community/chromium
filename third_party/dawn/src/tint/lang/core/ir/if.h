@@ -31,7 +31,6 @@
 #include <string>
 
 #include "src/tint/lang/core/ir/control_instruction.h"
-#include "src/tint/utils/containers/const_propagating_ptr.h"
 
 // Forward declarations
 namespace tint::core::ir {
@@ -56,19 +55,23 @@ namespace tint::core::ir {
 ///                    ▼
 ///                   out
 /// ```
-class If final : public Castable<If, ControlInstruction> {
+class If : public Castable<If, ControlInstruction> {
   public:
+    /// The number of supported operands
+    static constexpr size_t kNumOperands = 1;
     /// The index of the condition operand
     static constexpr size_t kConditionOperandOffset = 0;
 
     /// Constructor (no results, no operands, no blocks)
-    If();
+    /// @param id the instruction id
+    explicit If(Id id);
 
     /// Constructor
     /// @param cond the if condition
     /// @param t the true block
     /// @param f the false block
-    If(Value* cond, ir::Block* t, ir::Block* f);
+    If(Id id, Value* cond, ir::Block* t, ir::Block* f);
+
     ~If() override;
 
     /// @copydoc Instruction::Clone()
@@ -77,11 +80,14 @@ class If final : public Castable<If, ControlInstruction> {
     /// @copydoc ControlInstruction::ForeachBlock
     void ForeachBlock(const std::function<void(ir::Block*)>& cb) override;
 
-    /// @returns the if condition
-    Value* Condition() { return operands_[kConditionOperandOffset]; }
+    /// @copydoc ControlInstruction::ForeachBlock
+    void ForeachBlock(const std::function<void(const ir::Block*)>& cb) const override;
 
     /// @returns the if condition
-    const Value* Condition() const { return operands_[kConditionOperandOffset]; }
+    Value* Condition() { return Operand(kConditionOperandOffset); }
+
+    /// @returns the if condition
+    const Value* Condition() const { return Operand(kConditionOperandOffset); }
 
     /// @returns the true block
     ir::Block* True() { return true_; }
@@ -105,8 +111,8 @@ class If final : public Castable<If, ControlInstruction> {
     std::string FriendlyName() const override { return "if"; }
 
   private:
-    ConstPropagatingPtr<ir::Block> true_;
-    ConstPropagatingPtr<ir::Block> false_;
+    ir::Block* true_ = nullptr;
+    ir::Block* false_ = nullptr;
 };
 
 }  // namespace tint::core::ir

@@ -12,8 +12,11 @@
 #include "chrome/common/pref_names.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "extensions/browser/api_test_utils.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -66,7 +69,7 @@ TEST_F(EnterpriseHardwarePlatformAPITest, GetHardwarePlatformInfoAllowed) {
                                                        browser_context());
   ASSERT_TRUE(result);
   ASSERT_TRUE(result->is_dict());
-  const base::Value::Dict& result_dict = result->GetDict();
+  const base::DictValue& result_dict = result->GetDict();
   ASSERT_EQ(result_dict.size(), 2u);
 
   const std::string* manufacturer = result_dict.FindString("manufacturer");

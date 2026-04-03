@@ -14,6 +14,7 @@ constexpr const char kUserActionBackClicked[] = "os-trial-back";
 
 // static
 std::string OsTrialScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::kNextTry:
       return "NextTry";
@@ -22,6 +23,7 @@ std::string OsTrialScreen::GetResultString(Result result) {
     case Result::kBack:
       return "Back";
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 OsTrialScreen::OsTrialScreen(base::WeakPtr<OsTrialScreenView> view,
@@ -41,7 +43,7 @@ void OsTrialScreen::ShowImpl() {
 
 void OsTrialScreen::HideImpl() {}
 
-void OsTrialScreen::OnUserAction(const base::Value::List& args) {
+void OsTrialScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionTryNextClicked) {
     exit_callback_.Run(Result::kNextTry);

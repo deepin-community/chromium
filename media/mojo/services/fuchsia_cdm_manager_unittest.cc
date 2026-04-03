@@ -10,6 +10,7 @@
 #include <lib/fidl/cpp/interface_request.h>
 #include <lib/fpromise/promise.h>
 #include <map>
+#include <string_view>
 
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -30,7 +31,6 @@ namespace drm = ::fuchsia::media::drm;
 
 using ::testing::_;
 using ::testing::Eq;
-using ::testing::Invoke;
 using ::testing::SaveArg;
 using ::testing::WithArgs;
 
@@ -52,10 +52,10 @@ class MockProvisionFetcher : public ProvisionFetcher {
 std::unique_ptr<ProvisionFetcher> CreateMockProvisionFetcher() {
   auto mock_provision_fetcher = std::make_unique<MockProvisionFetcher>();
   ON_CALL(*mock_provision_fetcher, Retrieve(_, _, _))
-      .WillByDefault(WithArgs<2>(
-          Invoke([](ProvisionFetcher::ResponseCB response_callback) {
+      .WillByDefault(
+          WithArgs<2>([](ProvisionFetcher::ResponseCB response_callback) {
             std::move(response_callback).Run(true, "response");
-          })));
+          }));
   return mock_provision_fetcher;
 }
 
@@ -91,11 +91,11 @@ class FuchsiaCdmManagerTest : public ::testing::Test {
   FuchsiaCdmManagerTest() { EXPECT_TRUE(temp_dir_.CreateUniqueTempDir()); }
 
   std::unique_ptr<FuchsiaCdmManager> CreateFuchsiaCdmManager(
-      std::vector<base::StringPiece> key_systems,
+      std::vector<std::string_view> key_systems,
       std::optional<uint64_t> cdm_data_quota_bytes = std::nullopt) {
     FuchsiaCdmManager::CreateKeySystemCallbackMap create_key_system_callbacks;
 
-    for (const base::StringPiece& name : key_systems) {
+    for (const std::string_view& name : key_systems) {
       MockKeySystem& key_system = mock_key_systems_[name];
       create_key_system_callbacks.emplace(
           name, base::BindRepeating(&MockKeySystem::AddBinding,
@@ -107,9 +107,9 @@ class FuchsiaCdmManagerTest : public ::testing::Test {
   }
 
  protected:
-  using MockKeySystemMap = std::map<base::StringPiece, MockKeySystem>;
+  using MockKeySystemMap = std::map<std::string_view, MockKeySystem>;
 
-  MockKeySystem& mock_key_system(const base::StringPiece& key_system_name) {
+  MockKeySystem& mock_key_system(const std::string_view& key_system_name) {
     return mock_key_systems_[key_system_name];
   }
 
@@ -148,12 +148,12 @@ TEST_F(FuchsiaCdmManagerTest, CreateAndProvision) {
   uint32_t added_data_store_id = 0;
   uint32_t cdm_data_store_id = 0;
   EXPECT_CALL(mock_key_system(kKeySystem), AddDataStore(_, _, _))
-      .WillOnce(WithArgs<0, 2>(
-          Invoke([&](uint32_t data_store_id,
-                     drm::KeySystem::AddDataStoreCallback callback) {
+      .WillOnce(
+          WithArgs<0, 2>([&](uint32_t data_store_id,
+                             drm::KeySystem::AddDataStoreCallback callback) {
             added_data_store_id = data_store_id;
             callback(fpromise::ok());
-          })));
+          }));
 
   EXPECT_CALL(mock_key_system(kKeySystem), CreateContentDecryptionModule2(_, _))
       .WillOnce(SaveArg<0>(&cdm_data_store_id));
@@ -174,12 +174,12 @@ TEST_F(FuchsiaCdmManagerTest, RecreateAfterDisconnect) {
 
   uint32_t added_data_store_id = 0;
   EXPECT_CALL(mock_key_system(kKeySystem), AddDataStore(_, _, _))
-      .WillOnce(WithArgs<0, 2>(
-          Invoke([&](uint32_t data_store_id,
-                     drm::KeySystem::AddDataStoreCallback callback) {
+      .WillOnce(
+          WithArgs<0, 2>([&](uint32_t data_store_id,
+                             drm::KeySystem::AddDataStoreCallback callback) {
             added_data_store_id = data_store_id;
             callback(fpromise::ok());
-          })));
+          }));
 
   // Create a CDM to force a KeySystem binding
   base::RunLoop create_run_loop;
@@ -206,10 +206,9 @@ TEST_F(FuchsiaCdmManagerTest, RecreateAfterDisconnect) {
 
   EXPECT_CALL(mock_key_system(kKeySystem),
               AddDataStore(Eq(added_data_store_id), _, _))
-      .WillOnce(
-          WithArgs<2>(Invoke([](drm::KeySystem::AddDataStoreCallback callback) {
-            callback(fpromise::ok());
-          })));
+      .WillOnce(WithArgs<2>([](drm::KeySystem::AddDataStoreCallback callback) {
+        callback(fpromise::ok());
+      }));
 
   base::RunLoop recreate_run_loop;
   cdm_ptr.set_error_handler(
@@ -238,10 +237,9 @@ TEST_F(FuchsiaCdmManagerTest, SameOriginShareDataStore) {
   cdm2.set_error_handler(error_handler);
 
   EXPECT_CALL(mock_key_system(kKeySystem), AddDataStore(Eq(1u), _, _))
-      .WillOnce(
-          WithArgs<2>(Invoke([](drm::KeySystem::AddDataStoreCallback callback) {
-            callback(fpromise::ok());
-          })));
+      .WillOnce(WithArgs<2>([](drm::KeySystem::AddDataStoreCallback callback) {
+        callback(fpromise::ok());
+      }));
   EXPECT_CALL(mock_key_system(kKeySystem),
               CreateContentDecryptionModule2(Eq(1u), _))
       .Times(2);
@@ -274,15 +272,13 @@ TEST_F(FuchsiaCdmManagerTest, DifferentOriginDoNotShareDataStore) {
   cdm2.set_error_handler(error_handler);
 
   EXPECT_CALL(mock_key_system(kKeySystem), AddDataStore(Eq(1u), _, _))
-      .WillOnce(
-          WithArgs<2>(Invoke([](drm::KeySystem::AddDataStoreCallback callback) {
-            callback(fpromise::ok());
-          })));
+      .WillOnce(WithArgs<2>([](drm::KeySystem::AddDataStoreCallback callback) {
+        callback(fpromise::ok());
+      }));
   EXPECT_CALL(mock_key_system(kKeySystem), AddDataStore(Eq(2u), _, _))
-      .WillOnce(
-          WithArgs<2>(Invoke([](drm::KeySystem::AddDataStoreCallback callback) {
-            callback(fpromise::ok());
-          })));
+      .WillOnce(WithArgs<2>([](drm::KeySystem::AddDataStoreCallback callback) {
+        callback(fpromise::ok());
+      }));
   EXPECT_CALL(mock_key_system(kKeySystem),
               CreateContentDecryptionModule2(Eq(1u), _))
       .Times(1);
@@ -303,8 +299,8 @@ TEST_F(FuchsiaCdmManagerTest, DifferentOriginDoNotShareDataStore) {
 }
 
 void CreateDummyCdmDirectory(const base::FilePath& cdm_data_path,
-                             base::StringPiece origin,
-                             base::StringPiece key_system,
+                             std::string_view origin,
+                             std::string_view key_system,
                              uint64_t size) {
   const base::FilePath path = cdm_data_path.Append(origin).Append(key_system);
   CHECK(base::CreateDirectory(path));

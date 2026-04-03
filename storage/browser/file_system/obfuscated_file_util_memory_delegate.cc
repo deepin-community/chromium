@@ -7,16 +7,16 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/ranges/algorithm.h"
 #include "base/system/sys_info.h"
 #include "build/build_config.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "partition_alloc/partition_alloc_constants.h"
 
 namespace {
 
@@ -35,7 +35,7 @@ bool IsMemoryAvailable(size_t required_memory) {
   return true;
 #else
   uint64_t max_allocatable =
-      std::min(base::SysInfo::AmountOfAvailablePhysicalMemory(),
+      std::min(base::SysInfo::AmountOfAvailablePhysicalMemory().InBytes(),
                static_cast<uint64_t>(partition_alloc::MaxDirectMapped()));
 
   return max_allocatable >= required_memory;
@@ -503,20 +503,23 @@ int ObfuscatedFileUtilMemoryDelegate::ReadFile(const base::FilePath& path,
   if (!dp || dp->entry->type != Entry::kFile)
     return net::ERR_FILE_NOT_FOUND;
 
-  int64_t remaining = dp->entry->file_content.size() - offset;
-  if (offset < 0)
+  if (offset < 0 || buf_len < 0) {
     return net::ERR_INVALID_ARGUMENT;
+  }
 
   // Seeking past the end of the file is ok, but returns nothing.
   // This matches FileStream::Context behavior.
-  if (remaining < 0)
+  int64_t remaining = dp->entry->file_content.size() - offset;
+  if (remaining < 0) {
     return 0;
+  }
 
   if (buf_len > remaining)
     buf_len = static_cast<int>(remaining);
 
-  base::ranges::copy(
-      base::span(dp->entry->file_content).subspan(offset, buf_len),
+  std::ranges::copy(
+      base::span(dp->entry->file_content)
+          .subspan(static_cast<size_t>(offset), static_cast<size_t>(buf_len)),
       buf->data());
 
   return buf_len;
@@ -556,7 +559,7 @@ int ObfuscatedFileUtilMemoryDelegate::WriteFile(
 // (crbug.com/986608)
 #if !BUILDFLAG(IS_FUCHSIA)
     if (last_position >= partition_alloc::MaxDirectMapped() / 2) {
-      // TODO(https://crbug.com/1043914): Allocated memory is rounded up to
+      // TODO(crbug.com/40669351): Allocated memory is rounded up to
       // 100MB blocks to reduce memory allocation delays. Switch to a more
       // proper container to remove this dependency.
       const size_t round_up_size = 100 * 1024 * 1024;
@@ -570,14 +573,15 @@ int ObfuscatedFileUtilMemoryDelegate::WriteFile(
 
   if (offset_u == dp->entry->file_content.size()) {
     dp->entry->file_content.insert(dp->entry->file_content.end(), buf->data(),
-                                   buf->data() + buf_len);
+                                   UNSAFE_TODO(buf->data() + buf_len));
   } else {
     if (last_position > dp->entry->file_content.size())
       dp->entry->file_content.resize(last_position);
 
     // if |offset_u| is larger than the original file size, there will be null
     // bytes between the end of the file and |offset_u|.
-    memcpy(dp->entry->file_content.data() + offset, buf->data(), buf_len);
+    UNSAFE_TODO(
+        memcpy(dp->entry->file_content.data() + offset, buf->data(), buf_len));
   }
   return buf_len;
 }

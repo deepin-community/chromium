@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
@@ -20,9 +21,11 @@
 #include "cc/paint/display_item_list.h"
 #include "cc/raster/playback_image_provider.h"
 #include "cc/raster/raster_buffer_provider.h"
+#include "cc/tiles/tile_priority.h"
 #include "cc/trees/layer_tree_host_impl.h"
 #include "cc/trees/layer_tree_impl.h"
 #include "skia/ext/legacy_display_globals.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/axis_transform2d.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -30,14 +33,14 @@ namespace cc {
 
 namespace {
 
-
-void RunBenchmark(RasterSource* raster_source,
+void RunBenchmark(const PictureLayerTiling& tiling,
                   ImageDecodeCache* image_decode_cache,
                   const gfx::Rect& content_rect,
                   const gfx::Vector2dF& contents_scale,
                   size_t repeat_count,
                   base::TimeDelta* min_time,
                   bool* is_solid_color) {
+  RasterSource* raster_source = tiling.raster_source().get();
   // Parameters for base::LapTimer.
   const int kTimeLimitMillis = 1;
   const int kWarmupRuns = 0;
@@ -71,7 +74,10 @@ void RunBenchmark(RasterSource* raster_source,
       PlaybackImageProvider image_provider(
           image_decode_cache, TargetColorParams(), std::move(image_settings));
       RasterSource::PlaybackSettings settings;
+      ScrollOffsetMap raster_inducing_scroll_offsets =
+          tiling.client()->GetRasterInducingScrollOffsets();
       settings.image_provider = &image_provider;
+      settings.raster_inducing_scroll_offsets = &raster_inducing_scroll_offsets;
 
       raster_source->PlaybackToCanvas(
           &canvas, raster_source->GetContentSize(contents_scale), content_rect,
@@ -125,12 +131,17 @@ class FixedInvalidationPictureLayerTilingClient
     return base_client_->GetPaintWorkletRecords();
   }
 
-  bool ScrollInteractionInProgress() const override {
-    return base_client_->ScrollInteractionInProgress();
+  std::vector<const DrawImage*> GetDiscardableImagesInRect(
+      const gfx::Rect& rect) const override {
+    return base_client_->GetDiscardableImagesInRect(rect);
   }
 
-  bool CurrentScrollCheckerboardsDueToNoRecording() const override {
-    return base_client_->CurrentScrollCheckerboardsDueToNoRecording();
+  ScrollOffsetMap GetRasterInducingScrollOffsets() const override {
+    return base_client_->GetRasterInducingScrollOffsets();
+  }
+
+  const GlobalStateThatImpactsTilePriority& global_tile_state() const override {
+    return base_client_->global_tile_state();
   }
 
  private:
@@ -156,7 +167,7 @@ void RasterizeAndRecordBenchmarkImpl::DidCompleteCommit(
     layer->RunMicroBenchmark(this);
   }
 
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set("rasterize_time_ms",
              rasterize_results_.total_best_time.InMillisecondsF());
   result.Set("pixels_rasterized", rasterize_results_.pixels_rasterized);
@@ -171,7 +182,7 @@ void RasterizeAndRecordBenchmarkImpl::DidCompleteCommit(
   result.Set("total_picture_layers_off_screen",
              rasterize_results_.total_picture_layers_off_screen);
 
-  base::Value::Dict lcd_text_pixels;
+  base::DictValue lcd_text_pixels;
   for (size_t i = 0; i < kLCDTextDisallowedReasonCount; i++) {
     lcd_text_pixels.Set(
         LCDTextDisallowedReasonToString(
@@ -226,7 +237,6 @@ void RasterizeAndRecordBenchmarkImpl::RunOnLayer(PictureLayerImpl* layer) {
       layer->GetRasterSource());
   tiling->set_resolution(HIGH_RESOLUTION);
   tiling->CreateAllTilesForTesting();
-  RasterSource* raster_source = tiling->raster_source().get();
   for (PictureLayerTiling::CoverageIterator it(
            tiling, tiling->contents_scale_key(), layer->visible_layer_rect());
        it; ++it) {
@@ -237,7 +247,7 @@ void RasterizeAndRecordBenchmarkImpl::RunOnLayer(PictureLayerImpl* layer) {
 
     base::TimeDelta min_time;
     bool is_solid_color = false;
-    RunBenchmark(raster_source, layer->layer_tree_impl()->image_decode_cache(),
+    RunBenchmark(*tiling, layer->layer_tree_impl()->image_decode_cache(),
                  content_rect, contents_scale, rasterize_repeat_count_,
                  &min_time, &is_solid_color);
 

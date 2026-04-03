@@ -31,12 +31,14 @@
 #include "third_party/blink/renderer/platform/wtf/decimal.h"
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 
 #include "base/notreached.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 
@@ -151,13 +153,13 @@ UInt128& UInt128::operator/=(const uint32_t divisor) {
     return *this;
   }
 
-  uint32_t dividend[4];
+  std::array<uint32_t, 4> dividend;
   dividend[0] = LowUInt32(low_);
   dividend[1] = HighUInt32(low_);
   dividend[2] = LowUInt32(high_);
   dividend[3] = HighUInt32(high_);
 
-  uint32_t quotient[4];
+  std::array<uint32_t, 4> quotient;
   uint32_t remainder = 0;
   for (int i = 3; i >= 0; --i) {
     const uint64_t work = MakeUInt64(dividend[i], remainder);
@@ -410,7 +412,6 @@ Decimal Decimal::operator*(const Decimal& rhs) const {
   }
 
   NOTREACHED();
-  return Nan();
 }
 
 Decimal Decimal::operator/(const Decimal& rhs) const {
@@ -612,7 +613,6 @@ Decimal Decimal::CompareTo(const Decimal& rhs) const {
 
     default:
       NOTREACHED();
-      return Nan();
   }
 }
 
@@ -814,7 +814,6 @@ Decimal Decimal::FromString(const String& str) {
 
       default:
         NOTREACHED();
-        return Nan();
     }
   }
 
@@ -881,9 +880,8 @@ Decimal Decimal::Round() const {
 
 double Decimal::ToDouble() const {
   if (IsFinite()) {
-    bool valid;
-    const double double_value = ToString().ToDouble(&valid);
-    return valid ? double_value : std::numeric_limits<double>::quiet_NaN();
+    return StringToDouble(ToString())
+        .value_or(std::numeric_limits<double>::quiet_NaN());
   }
 
   if (IsInfinity())
@@ -907,7 +905,6 @@ String Decimal::ToString() const {
 
     default:
       NOTREACHED();
-      return "";
   }
 
   StringBuilder builder;

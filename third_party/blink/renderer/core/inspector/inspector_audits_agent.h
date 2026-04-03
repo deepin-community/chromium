@@ -12,13 +12,11 @@
 #include "third_party/blink/renderer/core/inspector/inspector_contrast.h"
 #include "third_party/blink/renderer/core/inspector/protocol/audits.h"
 
-namespace protocol {
-namespace Audits {
-class InspectorIssue;
-}  // namespace Audits
-}  // namespace protocol
-
 namespace blink {
+
+namespace protocol::Audits {
+class InspectorIssue;
+}  // namespace protocol::Audits
 
 class InspectorIssueStorage;
 class WebAutofillClient;
@@ -41,7 +39,7 @@ class CORE_EXPORT InspectorAuditsAgent final
   // Protocol methods.
   protocol::Response enable() override;
   protocol::Response disable() override;
-  protocol::Response checkContrast(protocol::Maybe<bool> report_aaa) override;
+  protocol::Response checkContrast(std::optional<bool> report_aaa) override;
   protocol::Response checkFormsIssues(
       std::unique_ptr<protocol::Array<protocol::Audits::GenericIssueDetails>>*
           out_formIssues) override;
@@ -51,9 +49,9 @@ class CORE_EXPORT InspectorAuditsAgent final
   protocol::Response getEncodedResponse(
       const String& request_id,
       const String& encoding,
-      protocol::Maybe<double> quality,
-      protocol::Maybe<bool> size_only,
-      protocol::Maybe<protocol::Binary>* out_body,
+      std::optional<double> quality,
+      std::optional<bool> size_only,
+      std::optional<protocol::Binary>* out_body,
       int* out_original_size,
       int* out_encoded_size) override;
 

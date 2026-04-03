@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_BASE_BLOCKING_PAGE_H_
 #define COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_BASE_BLOCKING_PAGE_H_
 
-#include <map>
 #include <string>
 #include <vector>
 
@@ -44,11 +43,8 @@ class BaseBlockingPage
 
   // Returns true if the passed |unsafe_resources| is blocking the load of
   // the main page.
-  static bool IsMainPageLoadPending(const UnsafeResourceList& unsafe_resources);
-
-  // Returns true if one of the resources in |unsafe_resources| is from
-  // subresource.
-  static bool IsSubresource(const UnsafeResourceList& unsafe_resources);
+  static bool IsMainPageResourceLoadPending(
+      const UnsafeResourceList& unsafe_resources);
 
   // SecurityInterstitialPage method:
   void CommandReceived(const std::string& command) override;
@@ -89,7 +85,7 @@ class BaseBlockingPage
       const BaseSafeBrowsingErrorUI::SBErrorDisplayOptions& display_options);
 
   // SecurityInterstitialPage methods:
-  void PopulateInterstitialStrings(base::Value::Dict& load_time_data) override;
+  void PopulateInterstitialStrings(base::DictValue& load_time_data) override;
   void OnInterstitialClosing() override {}
 
   // Called when the interstitial is going away. Intentionally do nothing in
@@ -103,12 +99,9 @@ class BaseBlockingPage
   // interstitial at a time.
   static UnsafeResourceMap* GetUnsafeResourcesMap();
 
-  static std::string GetMetricPrefix(
+  static std::string_view GetMetricPrefix(
       const UnsafeResourceList& unsafe_resources,
       BaseSafeBrowsingErrorUI::SBInterstitialReason interstitial_reason);
-
-  static std::string GetExtraMetricsSuffix(
-      const UnsafeResourceList& unsafe_resources);
 
   // Return the most severe interstitial reason from a list of unsafe resources.
   // Severity ranking: malware > UwS (harmful) > phishing.

@@ -13,74 +13,11 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- Create the base table (`android_jank_cuj`) containing all completed CUJs
--- found in the trace.
-SELECT RUN_METRIC('android/jank/cujs.sql');
+-- Initialize relevant thread, frames and CUJ tables for computing this metric.
+SELECT RUN_METRIC('android/jank/android_jank_cuj_init.sql');
 
--- Creates tables that store constant parameters for each CUJ - e.g. parameter
--- that describes whether Choreographer callbacks run on a dedicated thread.
-SELECT RUN_METRIC('android/jank/params.sql');
-
--- Create tables to store each CUJs main, render, HWC release,
--- and GPU completion threads.
--- Also stores the (not CUJ-specific) threads of SF: main, render engine,
--- and GPU completion threads.
-SELECT RUN_METRIC('android/jank/relevant_threads.sql');
-
--- Create tables to store the main slices on each of the relevant threads
--- * `Choreographer#doFrame` on the main thread
--- * `DrawFrames on the render` thread
--- * `waiting for HWC release` on the HWC release thread
--- * `Waiting for GPU completion` on the GPU completion thread
--- * `commit` and `composite` on SF main thread.
--- * `REThreaded::drawLayers` on SF RenderEngine thread.
--- Also extracts vsync ids and GPU completion fence ids that allow us to match
--- slices to concrete vsync IDs.
--- Slices and vsyncs are matched between the app and SF processes by looking
--- at the actual frame timeline data.
--- We only store the slices that were produced for the vsyncs within the
--- CUJ markers.
-SELECT RUN_METRIC('android/jank/relevant_slices.sql');
-
--- Computes the boundaries of specific frames and overall CUJ boundaries
--- on specific important threads since each thread will work on a frame at a
--- slightly different time.
--- We also compute the corrected CUJ ts boundaries. This is necessary because
--- the instrumentation logs begin/end CUJ markers *during* the first frame and
--- typically *right at the start* of the last CUJ frame. The ts boundaries in
--- `android_jank_cuj` table are based on these markers so do not actually
--- contain the whole CUJ, but instead overlap with all Choreographer#doFrame
--- slices that belong to a CUJ.
-SELECT RUN_METRIC('android/jank/cujs_boundaries.sql');
-
--- With relevant slices and corrected boundaries we can now estimate the ts
--- boundaries of each frame within the CUJ.
--- We also match with the data from the actual timeline to check which frames
--- missed the deadline and whether this was due to the app or SF.
-SELECT RUN_METRIC('android/jank/frames.sql');
-
--- Creates tables with slices from various relevant threads that are within
--- the CUJ boundaries. Used as data sources for further processing and
--- jank cause analysis of traces.
-SELECT RUN_METRIC('android/jank/slices.sql');
-
--- Creates tables and functions to be used for manual investigations and
--- jank cause analysis of traces.
-SELECT RUN_METRIC('android/jank/internal/query_base.sql');
-SELECT RUN_METRIC('android/jank/query_functions.sql');
-
--- Creates a table that matches CUJ counters with the correct CUJs.
--- After the CUJ ends FrameTracker emits counters with the number of total
--- frames, missed frames, longest frame duration, etc.
--- The same numbers are also reported by FrameTracker to statsd.
-SELECT RUN_METRIC('android/jank/internal/counters.sql');
-
--- Creates derived events to visualize a few of the created tables.
--- Used only for debugging so by default not used and not displayed in the UI.
--- See https://perfetto.dev/docs/contributing/common-tasks#adding-new-derived-events
--- for instructions on how to add these events to the UI.
-SELECT RUN_METRIC('android/jank/internal/derived_events.sql');
-
+INCLUDE PERFETTO MODULE android.cujs.base;
+INCLUDE PERFETTO MODULE android.cujs.cuj_frame_counters;
 
 DROP VIEW IF EXISTS android_jank_cuj_output;
 CREATE PERFETTO VIEW android_jank_cuj_output AS
@@ -91,7 +28,7 @@ SELECT
         AndroidJankCujMetric_Cuj(
           'id', cuj_id,
           'name', cuj_name,
-          'process', process_metadata,
+          'process', process_metadata_proto(cuj.upid),
           'layer_name', layer_name,
           'ts', COALESCE(boundary.ts, cuj.ts),
           'dur', COALESCE(boundary.dur, cuj.dur),
@@ -102,9 +39,14 @@ SELECT
               'missed_app_frames', missed_app_frames,
               'missed_sf_frames', missed_sf_frames,
               'missed_frames_max_successive', missed_frames_max_successive,
+              -- convert from jank per second to total janks.
+              'weighted_missed_app_frames', weighted_missed_app_frames * anim_duration_ms / 1000,
+              'weighted_missed_sf_frames', weighted_missed_sf_frames * anim_duration_ms / 1000,
               'sf_callback_missed_frames', sf_callback_missed_frames,
               'hwui_callback_missed_frames', hwui_callback_missed_frames,
-              'frame_dur_max', frame_dur_max)
+              'frame_dur_max', frame_dur_max,
+              -- convert from ms to ns.
+              'anim_duration', anim_duration_ms * 1000000)
             FROM android_jank_cuj_counter_metrics cm
             WHERE cm.cuj_id = cuj.cuj_id),
           'trace_metrics', (
@@ -113,6 +55,8 @@ SELECT
               'missed_frames', SUM(app_missed OR sf_missed),
               'missed_app_frames', SUM(app_missed),
               'missed_sf_frames', SUM(sf_missed),
+              'weighted_missed_app_frames', SUM(app_missed * jank_score),
+              'weighted_missed_sf_frames', SUM(sf_missed * jank_score),
               'sf_callback_missed_frames', SUM(sf_callback_missed),
               'hwui_callback_missed_frames', SUM(hwui_callback_missed),
               'frame_dur_max', MAX(f.dur),
@@ -133,6 +77,8 @@ SELECT
               'missed_frames', SUM(app_missed OR sf_missed),
               'missed_app_frames', SUM(app_missed),
               'missed_sf_frames', SUM(sf_missed),
+              'weighted_missed_app_frames', SUM(app_missed * jank_score),
+              'weighted_missed_sf_frames', SUM(sf_missed * jank_score),
               'sf_callback_missed_frames', SUM(sf_callback_missed),
               'hwui_callback_missed_frames', SUM(hwui_callback_missed),
               'frame_dur_max', MAX(f.dur),
@@ -157,6 +103,7 @@ SELECT
                 'dur_expected', f.dur_expected,
                 'app_missed', f.app_missed,
                 'sf_missed', f.sf_missed,
+                'jank_score', f.jank_score,
                 'sf_callback_missed', f.sf_callback_missed,
                 'hwui_callback_missed', f.hwui_callback_missed))
             FROM android_jank_cuj_frame f
@@ -170,7 +117,8 @@ SELECT
                 'ts', f.ts,
                 'dur', f.dur,
                 'dur_expected', f.dur_expected,
-                'sf_missed', f.sf_missed))
+                'sf_missed', f.sf_missed,
+                'jank_score', f.jank_score))
             FROM android_jank_cuj_sf_frame f
             WHERE f.cuj_id = cuj.cuj_id
             ORDER BY frame_number ASC)

@@ -23,8 +23,10 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "perfetto/base/build_config.h"
+#include "perfetto/base/compiler.h"
 #include "perfetto/base/export.h"
 #include "perfetto/base/logging.h"
 #include "perfetto/base/platform_handle.h"
@@ -40,13 +42,14 @@ namespace base {
 // Define the ScopedSocketHandle type.
 
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
-int CloseSocket(SocketHandle);   // A wrapper around ::closesocket().
+int CloseSocket(SocketHandle);  // A wrapper around ::closesocket().
 using ScopedSocketHandle =
     ScopedResource<SocketHandle, CloseSocket, static_cast<SocketHandle>(-1)>;
 #else
 using ScopedSocketHandle = ScopedFile;
 #endif
 
+class LinuxFileWatch;
 class TaskRunner;
 
 // Use arbitrarily high values to avoid that some code accidentally ends up
@@ -73,7 +76,7 @@ enum class SockPeerCredMode {
 #endif
 };
 
-// Returns the socket family from the full addres that perfetto uses.
+// Returns the socket family from the full address that perfetto uses.
 // Addr can be:
 // - /path/to/socket : for linked AF_UNIX sockets.
 // - @abstract_name  : for abstract AF_UNIX sockets.
@@ -82,11 +85,31 @@ enum class SockPeerCredMode {
 // - vsock://-1:3000 : for VM sockets.
 SockFamily GetSockFamily(const char* addr);
 
+// NetAddrInfo is a wrapper for a full address and it's family
+// and type.
+struct NetAddrInfo {
+  NetAddrInfo(std::string _ip_port, SockFamily _family, SockType _type)
+      : ip_port(std::move(_ip_port)), family(_family), type(_type) {}
+  std::string ip_port;  // full address with ip and port
+  SockFamily family;    // socket family
+  SockType type;        // socket type
+};
+
+// Returns a list of NetAddrInfo from ip and port which
+// ip can be an ipv4 or an ipv6 or a domain.
+// 127.0.0.1    : ipv4 address
+// localhost    : domain
+// ::1          : ipv6 address
+// port is a normal tcp port as string.
+std::vector<NetAddrInfo> GetNetAddrInfo(const std::string& ip,
+                                        const std::string& port);
+
 // Returns whether inter-process shared memory is supported for the socket.
 inline bool SockShmemSupported(SockFamily sock_family) {
 #if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
   return sock_family == SockFamily::kUnix;
 #else
+  base::ignore_result(sock_family);
   // On Windows shm is negotiated by sharing an unguessable token
   // over TCP sockets. In theory works on any socket type, in practice
   // we need to tell the difference between a local and a remote
@@ -398,7 +421,7 @@ class PERFETTO_EXPORT_COMPONENT UnixSocket {
   }
 #endif
 
-#if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) || \
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX_BUT_NOT_QNX) || \
     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
   // Process ID of the peer, as returned by the kernel. If the client
   // disconnects and the socket goes into the kDisconnected state, it
@@ -455,6 +478,19 @@ class PERFETTO_EXPORT_COMPONENT UnixSocket {
   TaskRunner* const task_runner_;
   WeakPtrFactory<UnixSocket> weak_ptr_factory_;  // Keep last.
 };
+
+// Creates a LinuxFileWatch for the given unix socket.
+// Returns nullptr if:
+// - flags::use_unix_socket_inotify == false
+// - `sock_name` is not a file-system linked unix socket.
+// - The underlying filesystem doesn't support inotify (or other errors occur).
+// - Any platform other than Linux/Android.
+// When successful, the LinuxFileWatch is an opaque RAII handle that will remove
+// the watch on destruction.
+std::unique_ptr<LinuxFileWatch> WatchUnixSocketCreation(
+    TaskRunner* task_runner,
+    const char* sock_name,
+    std::function<void()> callback);
 
 }  // namespace base
 }  // namespace perfetto

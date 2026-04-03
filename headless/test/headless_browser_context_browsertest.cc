@@ -54,19 +54,19 @@ class HeadlessBrowserContextIsolationTest
     EXPECT_TRUE(embedded_test_server()->Start());
   }
 
-  // HeadlessWebContentsObserver implementation:
-  void DevToolsTargetReady() override {
+  // content::WebContentsObserver implementation:
+  void RenderViewReady() override {
     if (!web_contents2_) {
       browser_context_ = browser()->CreateBrowserContextBuilder().Build();
       web_contents2_ = browser_context_->CreateWebContentsBuilder().Build();
-      web_contents2_->AddObserver(this);
+      Observe(HeadlessWebContentsImpl::From(web_contents2_)->web_contents());
       return;
     }
 
     devtools_client2_.AttachToWebContents(
         HeadlessWebContentsImpl::From(web_contents2_)->web_contents());
 
-    HeadlessDevTooledBrowserTest::DevToolsTargetReady();
+    HeadlessDevTooledBrowserTest::RenderViewReady();
   }
 
   void RunDevTooledTest() override {
@@ -82,7 +82,7 @@ class HeadlessBrowserContextIsolationTest
         Param("url", embedded_test_server()->GetURL("/hello.html").spec()));
   }
 
-  void OnFirstLoadEventFired(const base::Value::Dict&) {
+  void OnFirstLoadEventFired(const base::DictValue&) {
     devtools_client2_.AddEventHandler(
         "Page.loadEventFired",
         base::BindRepeating(
@@ -95,7 +95,7 @@ class HeadlessBrowserContextIsolationTest
         Param("url", embedded_test_server()->GetURL("/hello.html").spec()));
   }
 
-  void OnSecondLoadEventFired(const base::Value::Dict&) {
+  void OnSecondLoadEventFired(const base::DictValue&) {
     // Set cookies on both pages.
     EXPECT_THAT(EvaluateScript(web_contents_,
                                base::StringPrintf("document.cookie = '%s'",
@@ -114,7 +114,6 @@ class HeadlessBrowserContextIsolationTest
     EXPECT_THAT(EvaluateScript(web_contents2_, "document.cookie"),
                 DictHasValue("result.result.value", kIsolatedPageCookie));
 
-    web_contents2_->RemoveObserver(this);
     web_contents2_->Close();
     browser_context_->Close();
 

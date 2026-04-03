@@ -17,9 +17,11 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/trace_event/trace_event.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -36,8 +38,8 @@
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/encoded_body_length.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
-#include "services/network/public/mojom/url_response_head.mojom-forward.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "third_party/blink/public/common/loader/mime_sniffing_throttle.h"
 #include "third_party/blink/public/common/loader/referrer_utils.h"
 #include "third_party/blink/public/common/loader/url_loader_throttle.h"
@@ -55,12 +57,14 @@
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/loader/fetch/back_forward_cache_loader_helper.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_utils.h"
+#include "third_party/blink/renderer/platform/loader/fetch/url_loader/background_response_processor.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/resource_request_client.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/resource_request_sender.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/sync_load_response.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/url_loader_client.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 using base::Time;
 using base::TimeTicks;
@@ -128,7 +132,7 @@ class URLLoader::Context : public ResourceRequestClient {
  private:
   ~Context() override;
 
-  raw_ptr<URLLoader, ExperimentalRenderer> loader_;
+  raw_ptr<URLLoader> loader_;
 
   KURL url_;
   // This is set in Start() and is used by SetSecurityStyleAndDetails() to
@@ -139,7 +143,7 @@ class URLLoader::Context : public ResourceRequestClient {
   // DevTools request id to that new request, and it will propagate here.
   bool has_devtools_request_id_;
 
-  raw_ptr<URLLoaderClient, ExperimentalRenderer> client_;
+  raw_ptr<URLLoaderClient> client_;
   // TODO(https://crbug.com/1137682): Remove |freezable_task_runner_|, migrating
   // the current usage to use |unfreezable_task_runner_| instead. Also, rename
   // |unfreezable_task_runner_| to |maybe_unfreezable_task_runner_| here and
@@ -152,7 +156,7 @@ class URLLoader::Context : public ResourceRequestClient {
   mojo::PendingRemote<mojom::blink::KeepAliveHandle> keep_alive_handle_;
   LoaderFreezeMode freeze_mode_ = LoaderFreezeMode::kNone;
   const Vector<String> cors_exempt_header_list_;
-  raw_ptr<base::WaitableEvent, ExperimentalRenderer> terminate_sync_load_event_;
+  raw_ptr<base::WaitableEvent> terminate_sync_load_event_;
 
   int request_id_;
 
@@ -199,8 +203,8 @@ URLLoader::Context::GetMaybeUnfreezableTaskRunner() {
 }
 
 void URLLoader::Context::Cancel() {
-  TRACE_EVENT_WITH_FLOW0("loading", "URLLoader::Context::Cancel", this,
-                         TRACE_EVENT_FLAG_FLOW_IN);
+  TRACE_EVENT("loading", "URLLoader::Context::Cancel",
+              perfetto::TerminatingFlow::FromPointer(this));
   if (request_id_ != -1) {
     // TODO(https://crbug.com/1137682): Change this to use
     // |unfreezable_task_runner_| instead?
@@ -285,8 +289,8 @@ void URLLoader::Context::Start(
     return;
   }
 
-  TRACE_EVENT_WITH_FLOW0("loading", "URLLoader::Context::Start", this,
-                         TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("loading", "URLLoader::Context::Start",
+              perfetto::Flow::FromPointer(this));
   net::NetworkTrafficAnnotationTag tag =
       FetchUtils::GetTrafficAnnotationTag(*request);
   request_id_ = resource_request_sender_->SendAsync(
@@ -320,9 +324,8 @@ void URLLoader::Context::OnReceivedRedirect(
     return;
   }
 
-  TRACE_EVENT_WITH_FLOW0("loading", "URLLoader::Context::OnReceivedRedirect",
-                         this,
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("loading", "URLLoader::Context::OnReceivedRedirect",
+              perfetto::Flow::FromPointer(this));
 
   WebURLResponse response = WebURLResponse::Create(
       url_, *head, has_devtools_request_id_, request_id_);
@@ -351,9 +354,8 @@ void URLLoader::Context::OnReceivedResponse(
     return;
   }
 
-  TRACE_EVENT_WITH_FLOW0("loading", "URLLoader::Context::OnReceivedResponse",
-                         this,
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("loading", "URLLoader::Context::OnReceivedResponse",
+              perfetto::Flow::FromPointer(this));
 
   // These headers must be stripped off before entering into the renderer
   // (see also https://crbug.com/1019732).
@@ -377,8 +379,8 @@ void URLLoader::Context::OnCompletedRequest(
   int64_t encoded_body_size = status.encoded_body_length;
 
   if (client_) {
-    TRACE_EVENT_WITH_FLOW0("loading", "URLLoader::Context::OnCompletedRequest",
-                           this, TRACE_EVENT_FLAG_FLOW_IN);
+    TRACE_EVENT("loading", "URLLoader::Context::OnCompletedRequest",
+                perfetto::TerminatingFlow::FromPointer(this));
 
     if (status.error_code != net::OK) {
       client_->DidFail(WebURLError::Create(status, url_),
@@ -441,6 +443,12 @@ void URLLoader::LoadSynchronously(
   if (!context_) {
     return;
   }
+
+  base::ElapsedTimer timer;
+  absl::Cleanup record_time = [&]() {
+    base::UmaHistogramMediumTimes("Blink.LoadURLSynchronouslyDuration",
+                                  timer.Elapsed());
+  };
 
   TRACE_EVENT0("loading", "URLLoader::loadSynchronously");
   SyncLoadResponse sync_load_response;
@@ -514,8 +522,8 @@ void URLLoader::LoadAsynchronously(
     return;
   }
 
-  TRACE_EVENT_WITH_FLOW0("loading", "URLLoader::loadAsynchronously", this,
-                         TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("loading", "URLLoader::loadAsynchronously",
+              perfetto::Flow::FromPointer(this));
   DCHECK(!context_->client());
 
   context_->set_client(client);
@@ -562,6 +570,12 @@ void URLLoader::SetResourceRequestSenderForTesting(
 void URLLoader::Context::SetResourceRequestSenderForTesting(
     std::unique_ptr<blink::ResourceRequestSender> resource_request_sender) {
   resource_request_sender_ = std::move(resource_request_sender);
+}
+
+void URLLoader::SetBackgroundResponseProcessorFactory(
+    std::unique_ptr<BackgroundResponseProcessorFactory>
+        background_response_processor_factory) {
+  NOTREACHED();
 }
 
 }  // namespace blink

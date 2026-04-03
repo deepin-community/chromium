@@ -18,16 +18,18 @@
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <ostream>
 #include <string>
 
 #include "./centipede/control_flow.h"
 #include "./centipede/feature.h"
 #include "./centipede/util.h"
+#include "./common/logging.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
-// Set of features with their frequencies.
+// Set of features with their frequencies and scores (for CMP score features).
 // Features that have a frequency >= frequency_threshold
 // are considered too frequent and thus less interesting for further fuzzing.
 // All features must be in [0, feature_domains::kLastDomain.begin()).
@@ -53,9 +55,8 @@ class FeatureSet {
   // Effectively a subset of PruneFeaturesAndCountUnseen.
   void PruneDiscardedDomains(FeatureVec &features) const;
 
-  // For every feature in `features` increment its frequency.
-  // If a feature wasn't seen before, it is added to `this`.
-  void IncrementFrequencies(const FeatureVec &features);
+  // Merge `features` into the set.
+  void MergeFeatures(const FeatureVec& features);
 
   // How many different features are in the set.
   size_t size() const { return num_features_; }
@@ -65,14 +66,38 @@ class FeatureSet {
 
   // Returns the number of features in `this` from the given feature domain.
   size_t CountFeatures(feature_domains::Domain domain) const;
+  // Returns the number of features in `this` from the given feature domains.
+  template <typename DomainListT>
+  size_t CountFeatures(const DomainListT &domains) const {
+    size_t count = 0;
+    for (auto domain : domains) {
+      count += features_per_domain_[domain.domain_id()];
+    }
+    return count;
+  }
+  // The same for an `initializer_list`, to enable usages like
+  // `CountFeatures({kPCs, kCMP})`.
+  size_t CountFeatures(
+      std::initializer_list<feature_domains::Domain> domains) const {
+    return CountFeatures<>(domains);
+  }
 
   // Returns the frequency associated with `feature`.
-  size_t Frequency(feature_t feature) const { return frequencies_[feature]; }
+  size_t Frequency(feature_t feature) const {
+    if (feature_domains::IsComparisonScoreFeature(feature)) {
+      if ((feature & feature_domains::kCMPScoreBitmask) !=
+          cmp_scores_[feature_domains::CMPScoreFeatureIndex(feature)]) {
+        return 0;
+      }
+      feature &= ~feature_domains::kCMPScoreBitmask;
+    }
+    return frequencies_[feature];
+  }
 
   // Computes combined weight of `features`.
   // The less frequent the feature is, the bigger its weight.
   // The weight of a FeatureVec is a sum of individual feature weights.
-  uint64_t ComputeWeight(const FeatureVec &features) const;
+  double ComputeRarityWeight(const FeatureVec& features) const;
 
   // Returns a debug string representing the state of *this.
   std::string DebugString() const;
@@ -92,6 +117,11 @@ class FeatureSet {
   // feature.
   bool ShouldDiscardFeature(feature_t feature) const {
     size_t domain_id = feature_domains::Domain::FeatureToDomainId(feature);
+    // TODO(b/385774476): Remove this check once the root cause is fixed.
+    if (domain_id >= feature_domains::kNumDomains) {
+      FUZZTEST_LOG(ERROR) << "Unexpected feature with id: " << feature;
+      return true;
+    }
     return should_discard_domain_.test(domain_id);
   }
 
@@ -105,6 +135,14 @@ class FeatureSet {
   // Unused parts of MmapNoReserveArray don't actually reserve memory.
   MmapNoReserveArray<kSize> frequencies_;
 
+  static constexpr size_t kScoresSize =
+      (feature_domains::kCMPScoreDomains.back().end() -
+       feature_domains::kCMPScoreDomains.front().begin()) >>
+      feature_domains::kCMPScoreBits;
+
+  // Map each CMP feature to the highest score seen.
+  MmapNoReserveArray<kScoresSize> cmp_scores_;
+
   // Counts all unique features added to this.
   size_t num_features_ = 0;
 
@@ -117,6 +155,6 @@ class FeatureSet {
 // Stream out description and count of features in feature set.
 std::ostream &operator<<(std::ostream &out, const FeatureSet &fs);
 
-}  // namespace centipede
+}  // namespace fuzztest::internal
 
 #endif  // THIRD_PARTY_CENTIPEDE_FEATURE_SET_H_

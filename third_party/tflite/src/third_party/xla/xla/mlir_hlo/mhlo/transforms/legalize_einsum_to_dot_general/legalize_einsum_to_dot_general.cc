@@ -14,17 +14,21 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
-#include <cctype>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <utility>
 
+#include "llvm/ADT/StringExtras.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mhlo/transforms/passes.h"
 #include "mhlo/transforms/rewriters.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
@@ -47,7 +51,7 @@ struct EinsumToDotGeneralPattern : public OpRewritePattern<EinsumOp> {
     enum EquationVariable { kIsLhs, kIsRhs, kIsResult };
     EquationVariable currentVariable = kIsLhs;
     while (index < equation.size()) {
-      if (std::isalpha(equation[index])) {
+      if (llvm::isAlpha(equation[index])) {
         if (currentVariable == kIsLhs) {
           lhsTokens.push_back(equation[index]);
         } else if (currentVariable == kIsRhs) {
@@ -68,8 +72,8 @@ struct EinsumToDotGeneralPattern : public OpRewritePattern<EinsumOp> {
       index++;
     }
 
-    auto lhsType = einsum.getLhs().getType().cast<RankedTensorType>();
-    auto rhsType = einsum.getRhs().getType().cast<RankedTensorType>();
+    auto lhsType = mlir::cast<RankedTensorType>(einsum.getLhs().getType());
+    auto rhsType = mlir::cast<RankedTensorType>(einsum.getRhs().getType());
     assert(static_cast<int64_t>(lhsTokens.size()) == lhsType.getRank());
     assert(static_cast<int64_t>(rhsTokens.size()) == rhsType.getRank());
 
@@ -155,10 +159,10 @@ struct EinsumToDotGeneralPattern : public OpRewritePattern<EinsumOp> {
     auto dimNumbers = mhlo::DotDimensionNumbersAttr::get(
         rewriter.getContext(), lhsBatchingDims, rhsBatchingDims,
         lhsContractingDims, rhsContractingDims);
-    auto dotGeneralOp = rewriter.create<DotGeneralOp>(
-        einsum.getLoc(), dotGeneralResultType, einsum.getLhs(), einsum.getRhs(),
-        dimNumbers,
-        /*precision_config=*/ArrayAttr{});
+    auto dotGeneralOp = DotGeneralOp::create(
+        rewriter, einsum.getLoc(), dotGeneralResultType, einsum.getLhs(),
+        einsum.getRhs(), dimNumbers,
+        /*precision_config=*/ArrayAttr{}, /*algorithm=*/DotAlgorithmAttr{});
 
     if (isNaturalOrder) {
       // The dot_general is already in an appropriate result order.
@@ -178,8 +182,7 @@ struct LegalizeEinsumToDotGeneralPass
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     populateEinsumToDotGeneralPatterns(&getContext(), &patterns);
-    if (failed(applyPatternsAndFoldGreedily(getOperation(),
-                                            std::move(patterns)))) {
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       return signalPassFailure();
     }
   }

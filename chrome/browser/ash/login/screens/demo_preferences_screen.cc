@@ -28,12 +28,14 @@ constexpr char kUserActionSetDemoModeCountry[] = "set-demo-mode-country";
 
 // static
 std::string DemoPreferencesScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::COMPLETED:
       return "Completed";
     case Result::CANCELED:
       return "Canceled";
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 DemoPreferencesScreen::DemoPreferencesScreen(
@@ -53,7 +55,7 @@ void DemoPreferencesScreen::ShowImpl() {
 
 void DemoPreferencesScreen::HideImpl() {}
 
-void DemoPreferencesScreen::OnUserAction(const base::Value::List& args) {
+void DemoPreferencesScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionContinue) {
     CHECK_EQ(args.size(), 3u);

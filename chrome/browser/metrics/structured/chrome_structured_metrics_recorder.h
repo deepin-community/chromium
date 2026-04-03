@@ -23,13 +23,12 @@ namespace metrics::structured {
 class ChromeStructuredMetricsRecorder final : public StructuredMetricsRecorder {
  public:
   explicit ChromeStructuredMetricsRecorder(PrefService* local_state);
+  ~ChromeStructuredMetricsRecorder() override = default;
 
   ChromeStructuredMetricsRecorder(const ChromeStructuredMetricsRecorder&) =
       delete;
   ChromeStructuredMetricsRecorder& operator=(
       const ChromeStructuredMetricsRecorder&) = delete;
-
-  ~ChromeStructuredMetricsRecorder() override = default;
 
   static void RegisterLocalState(PrefRegistrySimple* registry);
 };

@@ -42,7 +42,7 @@ class VirtualCardEnrollBubbleControllerImpl
   // Displays both the virtual card enroll bubble and its associated omnibox
   // icon. Sets virtual card enrollment fields as well as the closure for the
   // accept and decline bubble events.
-  void ShowBubble(
+  void SetupAndShowBubble(
       const VirtualCardEnrollmentFields& virtual_card_enrollment_fields,
       base::OnceClosure accept_virtual_card_callback,
       base::OnceClosure decline_virtual_card_callback);
@@ -50,28 +50,40 @@ class VirtualCardEnrollBubbleControllerImpl
   // Shows the bubble again if the users clicks the omnibox icon.
   void ReshowBubble();
 
+  // Shows the confirmation bubble view after the virtual card enrollment
+  // process has completed.
+  virtual void ShowConfirmationBubbleView(
+      payments::PaymentsAutofillClient::PaymentsRpcResult result);
+
   // VirtualCardEnrollBubbleController:
   const VirtualCardEnrollUiModel& GetUiModel() const override;
   VirtualCardEnrollmentBubbleSource GetVirtualCardEnrollmentBubbleSource()
       const override;
-  AutofillBubbleBase* GetVirtualCardEnrollBubbleView() const override;
+  AutofillBubbleBase* GetVirtualCardBubbleView() const override;
 
 #if !BUILDFLAG(IS_ANDROID)
   void HideIconAndBubble() override;
   bool IsEnrollmentInProgress() const override;
-  virtual void ShowConfirmationBubbleView(bool is_vcn_enrolled);
+  bool IsEnrollmentComplete() const override;
 #endif
 
-  void OnAcceptButton(bool did_switch_to_loading_state = false) override;
+  void OnAcceptButton(bool did_switch_to_loading_state) override;
   void OnDeclineButton() override;
   void OnLinkClicked(VirtualCardEnrollmentLinkType link_type,
                      const GURL& url) override;
-  void OnBubbleClosed(PaymentsBubbleClosedReason closed_reason) override;
-  base::OnceCallback<void(PaymentsBubbleClosedReason)>
-  GetOnBubbleClosedCallback() override;
-  const SaveCardAndVirtualCardEnrollConfirmationUiParams&
+  void OnBubbleClosed(PaymentsUiClosedReason closed_reason) override;
+  base::OnceCallback<void(PaymentsUiClosedReason)> GetOnBubbleClosedCallback()
+      override;
+  const SavePaymentMethodAndVirtualCardEnrollConfirmationUiParams&
   GetConfirmationUiParams() const override;
   bool IsIconVisible() const override;
+
+  // BubbleControllerBase:
+  void OnBubbleDiscarded() override;
+  bool CanBeReshown() const override;
+  bool ShouldReshowOnTabVisible() const override;
+  BubbleType GetBubbleType() const override;
+  base::WeakPtr<BubbleControllerBase> GetBubbleControllerBaseWeakPtr() override;
 
  protected:
   explicit VirtualCardEnrollBubbleControllerImpl(
@@ -79,8 +91,11 @@ class VirtualCardEnrollBubbleControllerImpl
 
   // AutofillBubbleControllerBase::
   void OnVisibilityChanged(content::Visibility visibility) override;
-  PageActionIconType GetPageActionIconType() override;
   void DoShowBubble() override;
+#if !BUILDFLAG(IS_ANDROID)
+  bool ShouldShowPageAction() override;
+  std::optional<actions::ActionId> GetActionIdForPageAction() override;
+#endif  // !BUILDFLAG(IS_ANDROID)
 
  private:
   friend class VirtualCardEnrollBubbleControllerImplTestApi;
@@ -88,8 +103,18 @@ class VirtualCardEnrollBubbleControllerImpl
   friend class content::WebContentsUserData<
       VirtualCardEnrollBubbleControllerImpl>;
 
+  // Initializes the controller for showing the virtual card enrollment bubble.
+  // Sets up the UI model with enrollment fields and stores the callbacks for
+  // user acceptance or declination.
+  void SetupBubble(VirtualCardEnrollmentFields virtual_card_enrollment_fields,
+                   base::OnceClosure accept_virtual_card_callback,
+                   base::OnceClosure decline_virtual_card_callback);
+
+  // Log metrics when the bubble is closed.
+  void LogBubbleCloseMetrics(PaymentsUiClosedReason closed_reason);
+
   // Contains the UI assets shown in the virtual card enrollment view.
-  VirtualCardEnrollUiModel ui_model_;
+  std::unique_ptr<VirtualCardEnrollUiModel> ui_model_;
 
   // Whether we should re-show the dialog when users return to the tab.
   bool reprompt_required_ = false;
@@ -102,6 +127,9 @@ class VirtualCardEnrollBubbleControllerImpl
 #else
   // Returns whether the web content associated with this controller is active.
   virtual bool IsWebContentsActive();
+
+  // Resets bubble to its initial state.
+  void ResetBubble();
 
   // Represents the current status of virtual card enrollment.
   EnrollmentStatus enrollment_status_ = EnrollmentStatus::kNone;
@@ -126,7 +154,7 @@ class VirtualCardEnrollBubbleControllerImpl
 
   // UI parameters needed to display the virtual card enrollment confirmation
   // view.
-  std::optional<SaveCardAndVirtualCardEnrollConfirmationUiParams>
+  std::optional<SavePaymentMethodAndVirtualCardEnrollConfirmationUiParams>
       confirmation_ui_params_;
 
   base::WeakPtrFactory<VirtualCardEnrollBubbleControllerImpl> weak_ptr_factory_{

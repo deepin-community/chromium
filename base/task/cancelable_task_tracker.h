@@ -45,7 +45,6 @@
 #include "base/containers/small_map.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
@@ -154,7 +153,7 @@ class BASE_EXPORT CancelableTaskTracker {
   TaskId next_id_ = 1;
   SEQUENCE_CHECKER(sequence_checker_);
 
-  // TODO(https://crbug.com/1009795): Remove once crasher is resolved.
+  // TODO(crbug.com/40050290): Remove once crasher is resolved.
   base::WeakPtr<CancelableTaskTracker> weak_this_;
   base::WeakPtrFactory<CancelableTaskTracker> weak_factory_{this};
 };

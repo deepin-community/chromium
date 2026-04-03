@@ -18,10 +18,6 @@ namespace segmentation_platform {
 const char kAdaptiveToolbarSegmentationKey[] = "adaptive_toolbar";
 const char kAdaptiveToolbarUmaName[] = "AdaptiveToolbar";
 
-// The key is used to decide how long to wait before showing Chrome Start.
-const char kChromeStartAndroidV2SegmentationKey[] = "chrome_start_android_v2";
-const char kChromeStartAndroidV2UmaName[] = "ChromeStartAndroidV2";
-
 // The key is used to decide whether a user has low user engagement with chrome.
 // This is a generic model that can be used by multiple features targeting
 // low-engaged users. Typically low engaged users are active in chrome below a
@@ -92,6 +88,11 @@ const char kDeviceTierUmaName[] = "DeviceTier";
 const char kTabResumptionClassifierKey[] = "tab_resupmtion_classifier";
 const char kTabResumptionClassifierUmaName[] = "TabResumptionClassifier";
 
+// The key is used to rank `URLVisitAggregate` objects leveraged by UI tab
+// resumption features.
+const char kURLVisitResumptionRankerKey[] = "url_visit_resumption_ranker";
+const char kURLVisitResumptionRankerUmaName[] = "URLVisitResumptionRanker";
+
 const char kIosModuleRankerKey[] = "ios_module_ranker";
 const char kIosModuleRankerUmaName[] = "IosModuleRanker";
 
@@ -105,6 +106,22 @@ const char kDesktopNtpModuleUmaName[] = "DesktopNtpModule";
 
 const char kOptimizationTargetSegmentationDummyKey[] = "segmentation_dummy";
 const char kOptimizationTargetSegmentationDummyUmaName[] = "SegmentationDummy";
+
+const char kComposePromotionKey[] = "compose_promotion";
+const char kComposePromotionUmaName[] = "ComposePromotion";
+
+const char kEphemeralHomeModuleBackendKey[] = "ephemeral_home_module_backend";
+
+const char kIosDefaultBrowserPromoKey[] = "ios_default_browser_promo";
+const char kIosDefaultBrowserPromoUmaName[] = "IosDefaultBrowserPromo";
+const char kIosDefaultBrowserPromoShowLabel[] = "ShowIosDefaultBrowserPromo";
+
+// The key is used to decide whether the user would use FedCM.
+const char kFedCmUserKey[] = "fedcm_user";
+const char kFedCmUserUmaName[] = "FedCmUser";
+
+const char kTipsNotificationsRankerKey[] = "tips_notifications_ranker";
+const char kTipsNotificationsRankerUmaName[] = "TipsNotificationsRanker";
 
 // SEGMENTATION_CLIENT_KEYS_END
 
@@ -150,10 +167,14 @@ const char kAdaptiveToolbarModelLabelVoice[] = "Voice";
 const char kAdaptiveToolbarModelLabelTranslate[] = "Translate";
 const char kAdaptiveToolbarModelLabelAddToBookmarks[] = "AddToBookmarks";
 const char kAdaptiveToolbarModelLabelReadAloud[] = "ReadAloud";
+const char kAdaptiveToolbarModelLabelOpenInBrowser[] = "OpenInBrowser";
 
 // Labels for contextual page actions model.
+const char kContextualPageActionModelLabelDiscounts[] = "discounts";
 const char kContextualPageActionModelLabelPriceTracking[] = "price_tracking";
 const char kContextualPageActionModelLabelReaderMode[] = "reader_mode";
+const char kContextualPageActionModelLabelPriceInsights[] = "price_insights";
+const char kContextualPageActionModelLabelTabGrouping[] = "tab_grouping";
 
 // Labels for cross device segment.
 const char kNoCrossDeviceUsage[] = "NoCrossDeviceUsage";
@@ -174,15 +195,6 @@ const char kSearchUserModelLabelLow[] = "Low";
 const char kSearchUserModelLabelMedium[] = "Medium";
 const char kSearchUserModelLabelHigh[] = "High";
 
-// Labels for  user ChromeStartAndroidV2 model.
-// Any updates to these strings need to also update the field trials allowlist
-// in go/segmentation-field-trials-map.
-const char kChromeStartAndroidV2Label1HourInMs[] = "3600";
-const char kChromeStartAndroidV2Label2HourInMs[] = "7200";
-const char kChromeStartAndroidV2Label4HourInMs[] = "14400";
-const char kChromeStartAndroidV2Label8HourInMs[] = "28800";
-const char kChromeStartAndroidV2LabelNone[] = "0";
-
 // Labels for device tier model.
 // Any updates to these strings need to also update the field trials allowlist
 // in go/segmentation-field-trials-map.
@@ -201,7 +213,14 @@ const char kTabletProductivityUserModelLabelHigh[] = "High";
 // Labels for Android Home modules for ranking.
 const char kSingleTab[] = "SingleTab";
 const char kPriceChange[] = "PriceChange";
-const char kTabResumptionForAndroidHome[] = "TabResumption";
+const char kSafetyHub[] = "SafetyHub";
+const char kAuxiliarySearch[] = "AuxiliarySearch";
+
+// Input Context keys for freshness for Android Home modules.
+const char kSingleTabFreshness[] = "single_tab_freshness";
+const char kPriceChangeFreshness[] = "price_change_freshness";
+const char kSafetyHubFreshness[] = "safety_hub_freshness";
+const char kAuxiliarySearchFreshness[] = "auxiliary_search_freshness";
 
 // Labels for IOS modules for ranking.
 const char kMostVisitedTiles[] = "MostVisitedTiles";
@@ -209,6 +228,7 @@ const char kShortcuts[] = "Shortcuts";
 const char kSafetyCheck[] = "SafetyCheck";
 const char kTabResumption[] = "TabResumption";
 const char kParcelTracking[] = "ParcelTracking";
+const char kShopCard[] = "ShopCard";
 
 // Input Context keys for freshness for IOS modules.
 const char kMostVisitedTilesFreshness[] = "most_visited_tiles_freshness";
@@ -216,6 +236,17 @@ const char kShortcutsFreshness[] = "shortcuts_freshness";
 const char kSafetyCheckFreshness[] = "safety_check_freshness";
 const char kTabResumptionFreshness[] = "tab_resumption_freshness";
 const char kParcelTrackingFreshness[] = "parcel_tracking_freshness";
+const char kIsShowingStartSurface[] = "is_showing_start_surface";
+const char kShopCardFreshness[] = "shop_card_freshness";
+
+// Input Context keys for inputs for IOS default browser model.
+const char kClientAgeWeeks[] = "client_age_weeks";
+const char kIsPhone[] = "is_phone";
+const char kCountryBRIIM[] = "is_country_BRIIM";
+const char kSegmentationAndroidPhone[] = "is_segmentation_android_phone_input";
+const char kSegmentationIOSPhoneChrome[] = "is_segmentation_ios_chrome_phone";
+const char kSegmentationSyncedAndFirstDevice[] =
+    "is_segmentation_synced_first_device";
 
 // Labels for desktop new tab page drive module model.
 // Any updates to these strings need to also update the field trials allowlist
@@ -226,14 +257,45 @@ const char kDesktopNtpDriveModuleLabelDontShow[] = "dont_show_drive";
 // Custom inputs for contextual page actions model.
 const char kContextualPageActionModelInputPriceTracking[] = "can_track_price";
 const char kContextualPageActionModelInputReaderMode[] = "has_reader_mode";
+const char kContextualPageActionModelInputPriceInsights[] =
+    "has_price_insights";
+const char kContextualPageActionModelInputDiscounts[] = "has_discounts";
+const char kContextualPageActionModelInputTabGrouping[] =
+    "has_tab_grouping_suggestion";
+
+const char kComposePrmotionLabelShow[] = "Show";
+const char kComposePrmotionLabelDontShow[] = "DontShow";
 
 // Finch parameter key for sampling rate of the model execution results.
 constexpr char kModelExecutionSamplingRateKey[] =
     "model_execution_sampling_rate";
 
-// Finch parameter key for introducing delay(in ms) in model initialization at
-// startup.
-constexpr char kModelInitializationDelay[] = "model_initialization_delay";
+// Input Context keys for FedCM.
+const char kFedCmHost[] = "host";
+const char kFedCmUrl[] = "url";
+const char kFedCmPerPageLoadClickthroughRate[] =
+    "per_page_load_clickthrough_rate";
+const char kFedCmPerClientClickthroughRate[] = "per_client_clickthrough_rate";
+const char kFedCmPerImpressionClickthroughRate[] =
+    "per_impression_clickthrough_rate";
+const char kFedCmLikelyToSignin[] = "likely_to_signin";
+const char kFedCmLikelyInsufficientData[] = "likely_insufficient_data";
+
+// Labels for tips notifications ranker.
+const char kEnhancedSafeBrowsing[] = "EnhancedSafeBrowsing";
+const char kQuickDelete[] = "QuickDelete";
+const char kGoogleLens[] = "GoogleLens";
+const char kBottomOmnibox[] = "BottomOmnibox";
+
+// Input Context keys for tips notifications ranker.
+const char kEnhancedSafeBrowsingStatus[] = "enhanced_safe_browsing_status";
+const char kQuickDeleteUsage[] = "quick_delete_usage";
+const char kBottomOmniboxStatus[] = "bottom_omnibox_status";
+const char kBottomOmniboxUsage[] = "bottom_omnibox_usage";
+const char kEnhancedSafeBrowsingTipShown[] = "enhanced_safe_browsing_tip_shown";
+const char kQuickDeleteTipShown[] = "quick_delete_tip_shown";
+const char kGoogleLensTipShown[] = "google_lens_tip_shown";
+const char kBottomOmniboxTipShown[] = "bottom_omnibox_tip_shown";
 
 }  // namespace segmentation_platform
 

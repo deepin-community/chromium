@@ -9,14 +9,16 @@
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/cocoa/test/cocoa_test_helper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/test_browser_window.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "components/prefs/testing_pref_service.h"
 #include "testing/gtest_mac.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
@@ -243,10 +245,7 @@ TEST_F(ProfileMenuControllerTest, SetActiveAndRemove) {
   std::unique_ptr<Browser> browser = release_browser();
   browser->tab_strip_model()->CloseAllTabs();
   browser.reset();
-  std::unique_ptr<BrowserWindow> browser_window = release_browser_window();
-  browser_window->Close();
-  browser_window.reset();
-  EXPECT_TRUE(BrowserList::GetInstance()->empty());
+  EXPECT_TRUE(GlobalBrowserCollection::GetInstance()->IsEmpty());
 
   [controller() activeBrowserChangedTo:nil];
   VerifyProfileNamedIsActive(base::SysUTF16ToNSString(kDefaultProfileName),
@@ -265,8 +264,9 @@ TEST_F(ProfileMenuControllerTest, DeleteActiveProfile) {
 
   // Simulate an unloaded profile by setting the "last used" local state pref
   // the profile that was just deleted.
-  ScopedTestingLocalState* local_state = manager->local_state();
-  local_state->Get()->SetUserPref(
+  TestingPrefServiceSimple* local_state =
+      TestingBrowserProcess::GetGlobal()->GetTestingLocalState();
+  local_state->SetUserPref(
       prefs::kProfileLastUsed,
       base::Value(profile3_path.BaseName().MaybeAsASCII()));
   EXPECT_FALSE(ProfileManager::GetLastUsedProfileIfLoaded());
@@ -286,9 +286,9 @@ TEST_F(ProfileMenuControllerTest, DeleteActiveProfile) {
 }
 
 TEST_F(ProfileMenuControllerTest, AddProfileDisabled) {
-  ScopedTestingLocalState* local_state = profile_manager()->local_state();
-  local_state->Get()->SetUserPref(prefs::kBrowserAddPersonEnabled,
-                                  base::Value(false));
+  TestingPrefServiceSimple* local_state =
+      TestingBrowserProcess::GetGlobal()->GetTestingLocalState();
+  local_state->SetUserPref(prefs::kBrowserAddPersonEnabled, base::Value(false));
 
   RebuildController();
 

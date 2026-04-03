@@ -9,13 +9,13 @@
 
 #include "base/json/values_util.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "chrome/browser/ui/safety_hub/extensions_result.h"
 #include "chrome/browser/ui/safety_hub/notification_permission_review_service.h"
 #include "chrome/browser/ui/safety_hub/password_status_check_result.h"
 #include "chrome/browser/ui/safety_hub/safe_browsing_result.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_constants.h"
-#include "chrome/browser/ui/safety_hub/safety_hub_service.h"
-#include "chrome/browser/ui/safety_hub/unused_site_permissions_service.h"
+#include "chrome/browser/ui/safety_hub/safety_hub_result.h"
 
 SafetyHubMenuNotification::SafetyHubMenuNotification(
     safety_hub::SafetyHubModuleType type)
@@ -27,7 +27,7 @@ SafetyHubMenuNotification::SafetyHubMenuNotification(
 SafetyHubMenuNotification::~SafetyHubMenuNotification() = default;
 
 SafetyHubMenuNotification::SafetyHubMenuNotification(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     safety_hub::SafetyHubModuleType type)
     : module_type_(type) {
   is_currently_active_ =
@@ -45,13 +45,13 @@ SafetyHubMenuNotification::SafetyHubMenuNotification(
   show_only_after_ = base::ValueToTime(
       dict.Find(safety_hub::kSafetyHubMenuNotificationShowAfterTimeKey));
   if (dict.contains(safety_hub::kSafetyHubMenuNotificationResultKey)) {
-    result_ = GetResultFromDict(
-        *dict.FindDict(safety_hub::kSafetyHubMenuNotificationResultKey), type);
+    prev_stored_result_ =
+        dict.FindDict(safety_hub::kSafetyHubMenuNotificationResultKey)->Clone();
   }
 }
 
-base::Value::Dict SafetyHubMenuNotification::ToDictValue() const {
-  base::Value::Dict result;
+base::DictValue SafetyHubMenuNotification::ToDictValue() const {
+  base::DictValue result;
   result.Set(safety_hub::kSafetyHubMenuNotificationActiveKey,
              is_currently_active_);
   if (impression_count_ != 0) {
@@ -74,9 +74,9 @@ base::Value::Dict SafetyHubMenuNotification::ToDictValue() const {
     result.Set(safety_hub::kSafetyHubMenuNotificationShowAfterTimeKey,
                base::TimeToValue(show_only_after_.value()));
   }
-  if (result_ != nullptr) {
+  if (current_result_ != nullptr) {
     result.Set(safety_hub::kSafetyHubMenuNotificationResultKey,
-               result_->ToDictValue());
+               current_result_->ToDictValue());
   }
   return result;
 }
@@ -114,7 +114,7 @@ bool SafetyHubMenuNotification::ShouldBeShown(
 
   // There is no associated result, or the result does not meet the bar for menu
   // notifications.
-  if (!result_ || !result_->IsTriggerForMenuNotification()) {
+  if (!current_result_ || !current_result_->IsTriggerForMenuNotification()) {
     return false;
   }
 
@@ -176,53 +176,36 @@ bool SafetyHubMenuNotification::HasAnyNotificationBeenShown() const {
 }
 
 void SafetyHubMenuNotification::UpdateResult(
-    std::unique_ptr<SafetyHubService::Result> result) {
-  if (!is_currently_active_ && result_ &&
-      result_->WarrantsNewMenuNotification(*result.get())) {
+    std::unique_ptr<SafetyHubResult> new_result) {
+  // Use the latest available result. This is either the current result when a
+  // new result was received, or, if it is unavailble, the result that was
+  // stored on the disk.
+  base::DictValue previous_result_dict = current_result_
+                                             ? current_result_->ToDictValue()
+                                             : prev_stored_result_.Clone();
+  // For notifications that are not currently active yet, and have a previous
+  // result, we have to determine whether the notification should be shown after
+  // the interval by comparing the old (stored) data with the new data to check
+  // whether it warrants a new notification.
+  if (!is_currently_active_ && !previous_result_dict.empty() &&
+      new_result->WarrantsNewMenuNotification(previous_result_dict)) {
     should_be_shown_after_interval_ = true;
   }
-  result_ = std::move(result);
+  current_result_ = std::move(new_result);
 }
 
 std::u16string SafetyHubMenuNotification::GetNotificationString() const {
-  CHECK(result_);
-  return result_->GetNotificationString();
+  CHECK(current_result_);
+  return current_result_->GetNotificationString();
 }
 
 int SafetyHubMenuNotification::GetNotificationCommandId() const {
-  CHECK(result_);
-  return result_->GetNotificationCommandId();
+  CHECK(current_result_);
+  return current_result_->GetNotificationCommandId();
 }
 
-SafetyHubService::Result* SafetyHubMenuNotification::GetResultForTesting()
-    const {
-  return result_.get();
-}
-
-// static
-std::unique_ptr<SafetyHubService::Result>
-SafetyHubMenuNotification::GetResultFromDict(
-    const base::Value::Dict& dict,
-    safety_hub::SafetyHubModuleType type) {
-  switch (type) {
-    case safety_hub::SafetyHubModuleType::UNUSED_SITE_PERMISSIONS:
-      return std::make_unique<
-          UnusedSitePermissionsService::UnusedSitePermissionsResult>(dict);
-    case safety_hub::SafetyHubModuleType::NOTIFICATION_PERMISSIONS:
-      return std::make_unique<
-          NotificationPermissionsReviewService::NotificationPermissionsResult>(
-          dict);
-    case safety_hub::SafetyHubModuleType::SAFE_BROWSING:
-      return std::make_unique<SafetyHubSafeBrowsingResult>(dict);
-    case safety_hub::SafetyHubModuleType::EXTENSIONS:
-      return std::make_unique<SafetyHubExtensionsResult>(dict);
-    case safety_hub::SafetyHubModuleType::PASSWORDS:
-      return std::make_unique<PasswordStatusCheckResult>(dict);
-    // No result class for version.
-    case safety_hub::SafetyHubModuleType::VERSION:
-      NOTREACHED();
-      return nullptr;
-  }
+SafetyHubResult* SafetyHubMenuNotification::GetResultForTesting() const {
+  return current_result_.get();
 }
 
 void SafetyHubMenuNotification::SetOnlyShowAfter(base::Time time) {

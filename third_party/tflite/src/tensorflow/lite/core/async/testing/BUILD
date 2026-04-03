@@ -1,3 +1,5 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 # Test utilities for TFLite async execution.
 load("//tensorflow/lite/core/shims:cc_library_with_tflite.bzl", "cc_library_with_tflite")
 
@@ -15,9 +17,10 @@ cc_library(
     srcs = ["test_backend.cc"],
     hdrs = ["test_backend.h"],
     deps = [
+        "//tensorflow/lite:array",
         "//tensorflow/lite:builtin_ops",
-        "//tensorflow/lite:util",
         "//tensorflow/lite/core/async:async_kernel_internal",
+        "//tensorflow/lite/core/async/c:types",
         "//tensorflow/lite/core/c:c_api_types",
         "//tensorflow/lite/core/c:common",
         "//tensorflow/lite/delegates:utils",

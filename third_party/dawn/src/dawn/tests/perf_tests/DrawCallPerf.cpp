@@ -128,11 +128,10 @@ DrawCallParam MakeParam(Ts... args) {
     DrawCallParamTuple paramTuple{Pipeline::Static, VertexBuffer::NoChange, BindGroup::NoChange,
                                   UniformData::Static, RenderBundle::No};
 
-    unsigned int unused[] = {
+    [[maybe_unused]] unsigned int unused[] = {
         0,  // Avoid making a 0-sized array.
         AssignParam(std::get<Ts>(paramTuple), args)...,
     };
-    DAWN_UNUSED(unused);
 
     return DrawCallParam{
         std::get<Pipeline>(paramTuple),     std::get<VertexBuffer>(paramTuple),
@@ -228,10 +227,9 @@ class DrawCallPerf : public DawnPerfTestWithParams<DrawCallParamForTest> {
     DrawCallPerf() : DawnPerfTestWithParams(kNumDraws, 3) {}
     ~DrawCallPerf() override = default;
 
-    void SetUp() override;
-
   protected:
     DrawCallParam GetParam() const { return DawnPerfTestWithParams::GetParam().param; }
+    void SetUpPerfTest() override;
 
     template <typename Encoder>
     void RecordRenderCommands(Encoder encoder);
@@ -266,12 +264,9 @@ class DrawCallPerf : public DawnPerfTestWithParams<DrawCallParamForTest> {
     wgpu::RenderBundle mRenderBundle;
 };
 
-void DrawCallPerf::SetUp() {
-    DawnPerfTestWithParams::SetUp();
-
+void DrawCallPerf::SetUpPerfTest() {
     // Compute aligned uniform / vertex data sizes.
-    mAlignedUniformSize =
-        Align(kUniformSize, GetSupportedLimits().limits.minUniformBufferOffsetAlignment);
+    mAlignedUniformSize = Align(kUniformSize, GetSupportedLimits().minUniformBufferOffsetAlignment);
     mAlignedVertexDataSize = Align(sizeof(kVertexData), 4);
 
     // Initialize uniform buffer data.

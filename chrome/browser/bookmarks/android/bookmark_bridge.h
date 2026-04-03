@@ -12,18 +12,17 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/containers/flat_map.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/supports_user_data.h"
-#include "chrome/browser/android/bookmarks/partner_bookmarks_shim.h"
-#include "chrome/browser/image_service/image_service_factory.h"
+#include "chrome/browser/partnerbookmarks/partner_bookmarks_shim.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/reading_list/android/reading_list_manager.h"
+#include "chrome/browser/reading_list/android/reading_list_manager_impl.h"
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/scoped_group_bookmark_actions.h"
@@ -31,9 +30,40 @@
 #include "components/bookmarks/managed/managed_bookmark_service.h"
 #include "components/power_bookmarks/core/power_bookmark_utils.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "components/reading_list/core/dual_reading_list_model.h"
+#include "components/reading_list/core/reading_list_model.h"
+#include "components/reading_list/core/reading_list_model_observer.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "url/android/gurl_android.h"
 
 class BookmarkBridgeTest;
+
+// Values for a bitmask used to refer to a collection of bookmark nodes.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.bookmarks
+// GENERATED_JAVA_IS_FLAG: true
+enum BookmarkNodeMaskBit {
+  NONE = 0,
+
+  // LINT.IfChange(IndividualBits)
+  ACCOUNT_BOOKMARK_BAR = 1,
+  ACCOUNT_MOBILE = 1 << 1,
+  ACCOUNT_OTHER = 1 << 2,
+  ACCOUNT_READING_LIST = 1 << 3,
+  BOOKMARK_BAR = 1 << 4,
+  MANAGED = 1 << 5,
+  MOBILE = 1 << 6,
+  OTHER = 1 << 7,
+  READING_LIST = 1 << 8,
+  // LINT.ThenChange(:AllBits)
+
+  // LINT.IfChange(AllBits)
+  ALL = ACCOUNT_BOOKMARK_BAR | ACCOUNT_MOBILE | ACCOUNT_OTHER |
+        ACCOUNT_READING_LIST | BOOKMARK_BAR | MANAGED | MOBILE | OTHER |
+        READING_LIST,
+  // LINT.ThenChange(:IndividualBits)
+
+  ACCOUNT_AND_LOCAL_BOOKMARK_BAR = ACCOUNT_BOOKMARK_BAR | BOOKMARK_BAR,
+};
 
 // The delegate to fetch bookmarks information for the Android native
 // bookmark page. This fetches the bookmarks, title, urls, folder
@@ -43,17 +73,18 @@ class BookmarkBridgeTest;
 class BookmarkBridge : public ProfileObserver,
                        public bookmarks::BaseBookmarkModelObserver,
                        public PartnerBookmarksShim::Observer,
-                       public ReadingListManager::Observer,
+                       public reading_list::ReadingListManager::Observer,
+                       public ReadingListModelObserver,
+                       public signin::IdentityManager::Observer,
                        public base::SupportsUserData::Data {
  public:
-  BookmarkBridge(
-      Profile* profile,
-      bookmarks::BookmarkModel* model,
-      bookmarks::ManagedBookmarkService* managed_bookmark_service,
-      PartnerBookmarksShim* partner_bookmarks_shim,
-      std::unique_ptr<ReadingListManager> local_or_synable_reading_list_manager,
-      std::unique_ptr<ReadingListManager> account_reading_list_manager,
-      page_image_service::ImageService* image_service);
+  // All of the injected pointers must be non-null and must outlive `this`.
+  BookmarkBridge(Profile* profile,
+                 bookmarks::BookmarkModel* model,
+                 bookmarks::ManagedBookmarkService* managed_bookmark_service,
+                 reading_list::DualReadingListModel* dual_reading_list_model,
+                 PartnerBookmarksShim* partner_bookmarks_shim,
+                 signin::IdentityManager* identity_manager);
 
   BookmarkBridge(const BookmarkBridge&) = delete;
   BookmarkBridge& operator=(const BookmarkBridge&) = delete;
@@ -67,21 +98,16 @@ class BookmarkBridge : public ProfileObserver,
   const bookmarks::BookmarkNode* GetParentNode(
       const bookmarks::BookmarkNode* node);
 
-  void GetImageUrlForBookmark(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& j_url,
-      const base::android::JavaParamRef<jobject>& j_callback);
+  bool AreAccountBookmarkFoldersActive(JNIEnv* env);
 
   base::android::ScopedJavaLocalRef<jobject>
-  GetMostRecentlyAddedUserBookmarkIdForUrl(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& j_url);
+  GetMostRecentlyAddedUserBookmarkIdForUrl(JNIEnv* env, const GURL& url);
   const bookmarks::BookmarkNode* GetMostRecentlyAddedUserBookmarkIdForUrlImpl(
       const GURL& url);
 
   bool IsDoingExtensiveChanges(JNIEnv* env);
 
-  jboolean IsEditBookmarksEnabled(JNIEnv* env);
+  bool IsEditBookmarksEnabled(JNIEnv* env);
 
   void LoadEmptyPartnerBookmarkShimForTesting(JNIEnv* env);
 
@@ -90,20 +116,20 @@ class BookmarkBridge : public ProfileObserver,
   void LoadFakePartnerBookmarkShimForTesting(JNIEnv* env);
 
   base::android::ScopedJavaLocalRef<jobject> GetBookmarkById(JNIEnv* env,
-                                                             jlong id,
-                                                             jint type);
+                                                             int64_t id,
+                                                             int32_t type);
 
   void GetAllFoldersWithDepths(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& j_folders_obj,
-      const base::android::JavaParamRef<jobject>& j_depths_obj);
+      const base::android::JavaRef<jobject>& j_folders_obj,
+      const base::android::JavaRef<jobject>& j_depths_obj);
 
   void GetTopLevelFolderIds(
       JNIEnv* env,
-      jboolean j_ignore_visibility,
-      const base::android::JavaParamRef<jobject>& j_result_obj);
+      int32_t j_force_visible_mask,
+      const base::android::JavaRef<jobject>& j_result_obj);
   std::vector<const bookmarks::BookmarkNode*> GetTopLevelFolderIdsImpl(
-      bool ignore_visibility);
+      BookmarkNodeMaskBit force_visible_mask);
   base::android::ScopedJavaLocalRef<jobject> GetRootFolderId(JNIEnv* env);
   base::android::ScopedJavaLocalRef<jobject> GetMobileFolderId(JNIEnv* env);
   base::android::ScopedJavaLocalRef<jobject> GetOtherFolderId(JNIEnv* env);
@@ -121,111 +147,87 @@ class BookmarkBridge : public ProfileObserver,
       JNIEnv* env);
   base::android::ScopedJavaLocalRef<jobject> GetDefaultReadingListFolder(
       JNIEnv* env);
+  base::android::ScopedJavaLocalRef<jobject> GetDefaultBookmarkFolder(
+      JNIEnv* env);
 
-  base::android::ScopedJavaLocalRef<jstring> GetBookmarkGuidByIdForTesting(
-      JNIEnv* env,
-      jlong id,
-      jint type);
+  std::string GetBookmarkGuidByIdForTesting(JNIEnv* env,
+                                            int64_t id,
+                                            int32_t type);
 
   void GetChildIds(JNIEnv* env,
-                   jlong id,
-                   jint type,
-                   const base::android::JavaParamRef<jobject>& j_result_obj);
+                   int64_t id,
+                   int32_t type,
+                   const base::android::JavaRef<jobject>& j_result_obj);
   std::vector<const bookmarks::BookmarkNode*> GetChildIdsImpl(
       const bookmarks::BookmarkNode* parent);
 
-  jint GetChildCount(JNIEnv* env,
-                     jlong id,
-                     jint type);
+  int32_t GetChildCount(JNIEnv* env, int64_t id, int32_t type);
 
   base::android::ScopedJavaLocalRef<jobject> GetChildAt(JNIEnv* env,
-                                                        jlong id,
-                                                        jint type,
-                                                        jint index);
+                                                        int64_t id,
+                                                        int32_t type,
+                                                        int32_t index);
 
-  void ReorderChildren(
-      JNIEnv* env,
-
-      const base::android::JavaParamRef<jobject>& j_bookmark_id_obj,
-      jlongArray arr);
+  void ReorderChildren(JNIEnv* env,
+                       const base::android::JavaRef<jobject>& j_bookmark_id_obj,
+                       const base::android::JavaRef<jlongArray>& arr);
 
   // Get the number of bookmarks in the sub tree of the specified bookmark node.
   // The specified node must be of folder type.
-  jint GetTotalBookmarkCount(JNIEnv* env,
-                             jlong id,
-                             jint type);
+  int32_t GetTotalBookmarkCount(JNIEnv* env, int64_t id, int32_t type);
 
   void SetBookmarkTitle(JNIEnv* env,
-                        jlong id,
-                        jint type,
-                        const base::android::JavaParamRef<jstring>& title);
+                        int64_t id,
+                        int32_t type,
+                        const std::u16string& title);
 
-  void SetBookmarkUrl(JNIEnv* env,
-                      jlong id,
-                      jint type,
-                      const base::android::JavaParamRef<jobject>& url);
+  void SetBookmarkUrl(JNIEnv* env, int64_t id, int32_t type, const GURL& url);
 
-  void SetPowerBookmarkMeta(
-      JNIEnv* env,
-      jlong id,
-      jint type,
-      const base::android::JavaParamRef<jbyteArray>& bytes);
+  void SetPowerBookmarkMeta(JNIEnv* env,
+                            int64_t id,
+                            int32_t type,
+                            const base::android::JavaRef<jbyteArray>& bytes);
 
-  base::android::ScopedJavaLocalRef<jbyteArray> GetPowerBookmarkMeta(
-      JNIEnv* env,
-      jlong id,
-      jint type);
+  base::android::ScopedJavaLocalRef<jbyteArray>
+  GetPowerBookmarkMeta(JNIEnv* env, int64_t id, int32_t type);
 
-  void DeletePowerBookmarkMeta(JNIEnv* env,
-                               jlong id,
-                               jint type);
+  void DeletePowerBookmarkMeta(JNIEnv* env, int64_t id, int32_t type);
 
-  bool DoesBookmarkExist(JNIEnv* env,
-                         jlong id,
-                         jint type);
+  bool DoesBookmarkExist(JNIEnv* env, int64_t id, int32_t type);
 
-  void GetBookmarksForFolder(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& j_folder_id_obj,
-      const base::android::JavaParamRef<jobject>& j_result_obj);
-
-  jboolean IsFolderVisible(JNIEnv* env,
-                           jlong id,
-                           jint type);
+  bool IsFolderVisible(JNIEnv* env, int64_t id, int32_t type);
 
   void SearchBookmarks(JNIEnv* env,
-                       const base::android::JavaParamRef<jobject>& j_list,
-                       const base::android::JavaParamRef<jstring>& j_query,
-                       const base::android::JavaParamRef<jobjectArray>& j_tags,
-                       jint type,
-                       jint max_results);
+                       const base::android::JavaRef<jobject>& j_list,
+                       const std::u16string& query,
+                       const base::android::JavaRef<jobjectArray>& j_tags,
+                       int32_t type,
+                       int32_t max_results);
   std::vector<const bookmarks::BookmarkNode*> SearchBookmarksImpl(
       power_bookmarks::PowerBookmarkQueryFields& query,
       int max_results);
 
   void GetBookmarksOfType(JNIEnv* env,
-                          const base::android::JavaParamRef<jobject>& j_list,
-                          jint type);
+                          const base::android::JavaRef<jobject>& j_list,
+                          int32_t type);
 
   base::android::ScopedJavaLocalRef<jobject> AddFolder(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& j_parent_id_obj,
-      jint index,
-      const base::android::JavaParamRef<jstring>& j_title);
+      const base::android::JavaRef<jobject>& j_parent_id_obj,
+      int32_t index,
+      const std::u16string& title);
 
-  void DeleteBookmark(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& j_bookmark_id_obj);
+  void DeleteBookmark(JNIEnv* env,
+                      const base::android::JavaRef<jobject>& j_bookmark_id_obj);
 
   void DeleteBookmarkImpl(const bookmarks::BookmarkNode* node, int type);
 
   void RemoveAllUserBookmarks(JNIEnv* env);
 
-  void MoveBookmark(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& j_bookmark_id_obj,
-      const base::android::JavaParamRef<jobject>& j_parent_id_obj,
-      jint j_index);
+  void MoveBookmark(JNIEnv* env,
+                    const base::android::JavaRef<jobject>& j_bookmark_id_obj,
+                    const base::android::JavaRef<jobject>& j_parent_id_obj,
+                    int32_t j_index);
 
   void MoveBookmarkImpl(const bookmarks::BookmarkNode* node,
                         int type,
@@ -235,26 +237,27 @@ class BookmarkBridge : public ProfileObserver,
 
   base::android::ScopedJavaLocalRef<jobject> AddBookmark(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& j_parent_id_obj,
-      jint index,
-      const base::android::JavaParamRef<jstring>& j_title,
-      const base::android::JavaParamRef<jobject>& j_url);
+      const base::android::JavaRef<jobject>& j_parent_id_obj,
+      int32_t index,
+      const std::u16string& title,
+      const GURL& url);
 
   base::android::ScopedJavaLocalRef<jobject> AddToReadingList(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& j_parent_id_obj,
-      const base::android::JavaParamRef<jstring>& j_title,
-      const base::android::JavaParamRef<jobject>& j_url);
+      const base::android::JavaRef<jobject>& j_parent_id_obj,
+      const std::string& title,
+      const GURL& url);
 
   void SetReadStatus(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& j_id,
-                     jboolean j_read);
+                     const base::android::JavaRef<jobject>& j_id,
+                     bool j_read);
+  void SetReadStatusImpl(const GURL& url, bool read);
 
-  jint GetUnreadCount(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& j_id);
+  int32_t GetUnreadCount(JNIEnv* env,
+                         const base::android::JavaRef<jobject>& j_id);
 
-  jboolean IsAccountBookmark(JNIEnv* env,
-                             const base::android::JavaParamRef<jobject>& j_id);
+  bool IsAccountBookmark(JNIEnv* env,
+                         const base::android::JavaRef<jobject>& j_id);
   bool IsAccountBookmarkImpl(const bookmarks::BookmarkNode* node);
 
   void Undo(JNIEnv* env);
@@ -263,13 +266,17 @@ class BookmarkBridge : public ProfileObserver,
 
   void EndGroupingUndos(JNIEnv* env);
 
-  bool IsBookmarked(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& j_url);
+  bool IsBookmarked(JNIEnv* env, const GURL& url);
 
   std::u16string GetTitle(const bookmarks::BookmarkNode* node) const;
 
   // ProfileObserver override
   void OnProfileWillBeDestroyed(Profile* profile) override;
+
+  reading_list::ReadingListManager*
+  GetLocalOrSyncableReadingListManagerForTesting();
+  reading_list::ReadingListManager*
+  GetAccountReadingListManagerIfAvailableForTesting();
 
  private:
   base::android::ScopedJavaLocalRef<jobject> CreateJavaBookmark(
@@ -294,13 +301,13 @@ class BookmarkBridge : public ProfileObserver,
   // `j_result_obj`.
   void AddBookmarkNodesToBookmarkIdList(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& j_result_obj,
+      const base::android::JavaRef<jobject>& j_result_obj,
       const std::vector<const bookmarks::BookmarkNode*>& nodes);
   void FilterUnreachableBookmarks(
       std::vector<const bookmarks::BookmarkNode*>* nodes);
   // Returns the correct `ReadingListManager` given the corresponding `node`
   // which is the root.
-  ReadingListManager* GetReadingListManagerFromParentNode(
+  reading_list::ReadingListManager* GetReadingListManagerFromParentNode(
       const bookmarks::BookmarkNode* node);
   // Moves `node` to be a child of `new_parent_node` which may require swapping
   // to/from ReadingListManager.
@@ -310,39 +317,38 @@ class BookmarkBridge : public ProfileObserver,
       const bookmarks::BookmarkNode* new_parent_node,
       int parent_type,
       int index);
+  bool IsPermanentFolderVisible(bool ignore_visibility,
+                                const bookmarks::BookmarkNode* folder);
+  const bookmarks::BookmarkNode* GetCorrespondingAccountFolder(
+      const bookmarks::BookmarkNode* folder);
 
   // Override bookmarks::BaseBookmarkModelObserver.
   // Called when there are changes to the bookmark model that don't trigger
   // any of the other callback methods. For example, this is called when
   // partner bookmarks change.
   void BookmarkModelChanged() override;
-  void BookmarkModelLoaded(bookmarks::BookmarkModel* model,
-                           bool ids_reassigned) override;
-  void BookmarkModelBeingDeleted(bookmarks::BookmarkModel* model) override;
-  void BookmarkNodeMoved(bookmarks::BookmarkModel* model,
-                         const bookmarks::BookmarkNode* old_parent,
+  void BookmarkModelLoaded(bool ids_reassigned) override;
+  void BookmarkModelBeingDeleted() override;
+  void BookmarkNodeMoved(const bookmarks::BookmarkNode* old_parent,
                          size_t old_index,
                          const bookmarks::BookmarkNode* new_parent,
                          size_t new_index) override;
-  void BookmarkNodeAdded(bookmarks::BookmarkModel* model,
-                         const bookmarks::BookmarkNode* parent,
+  void BookmarkNodeAdded(const bookmarks::BookmarkNode* parent,
                          size_t index,
                          bool added_by_user) override;
-  void BookmarkNodeRemoved(bookmarks::BookmarkModel* model,
-                           const bookmarks::BookmarkNode* parent,
+  void BookmarkNodeRemoved(const bookmarks::BookmarkNode* parent,
                            size_t old_index,
                            const bookmarks::BookmarkNode* node,
-                           const std::set<GURL>& removed_urls) override;
-  void BookmarkAllUserNodesRemoved(bookmarks::BookmarkModel* model,
-                                   const std::set<GURL>& removed_urls) override;
-  void BookmarkNodeChanged(bookmarks::BookmarkModel* model,
-                           const bookmarks::BookmarkNode* node) override;
+                           const std::set<GURL>& removed_urls,
+                           const base::Location& location) override;
+  void BookmarkAllUserNodesRemoved(const std::set<GURL>& removed_urls,
+                                   const base::Location& location) override;
+  void BookmarkNodeChanged(const bookmarks::BookmarkNode* node) override;
+  void BookmarkNodeFaviconChanged(const bookmarks::BookmarkNode* node) override;
   void BookmarkNodeChildrenReordered(
-      bookmarks::BookmarkModel* model,
       const bookmarks::BookmarkNode* node) override;
-  void ExtensiveBookmarkChangesBeginning(
-      bookmarks::BookmarkModel* model) override;
-  void ExtensiveBookmarkChangesEnded(bookmarks::BookmarkModel* model) override;
+  void ExtensiveBookmarkChangesBeginning() override;
+  void ExtensiveBookmarkChangesEnded() override;
 
   // Override PartnerBookmarksShim::Observer
   void PartnerShimChanged(PartnerBookmarksShim* shim) override;
@@ -353,12 +359,30 @@ class BookmarkBridge : public ProfileObserver,
   void ReadingListLoaded() override;
   void ReadingListChanged() override;
 
-  void DestroyJavaObject();
+  // Override ReadingListModelObserver
+  void ReadingListModelLoaded(const ReadingListModel* model) override;
+  void ReadingListModelCompletedBatchUpdates(
+      const ReadingListModel* model) override;
 
-  raw_ptr<Profile> profile_;  // weak
+  // signin::IdentityManager::Observer implementation:
+  void OnPrimaryAccountChanged(
+      const signin::PrimaryAccountChangeEvent& event_details) override;
+
+  void DestroyJavaObject();
+  void CreateOrDestroyAccountReadingListManagerIfNeeded();
+
+  const raw_ptr<Profile> profile_;  // weak
   base::android::ScopedJavaGlobalRef<jobject> java_bookmark_model_;
-  raw_ptr<bookmarks::BookmarkModel> bookmark_model_;                     // weak
-  raw_ptr<bookmarks::ManagedBookmarkService> managed_bookmark_service_;  // weak
+  const raw_ptr<bookmarks::BookmarkModel> bookmark_model_;  // weak
+  const raw_ptr<bookmarks::ManagedBookmarkService>
+      managed_bookmark_service_;  // weak
+  const raw_ptr<reading_list::DualReadingListModel>
+      dual_reading_list_model_;  // weak
+  const reading_list::ReadingListManagerImpl::IdGenerationFunction id_gen_func_;
+  // Holds reading list data as an in-memory BookmarkNode tree.
+  const std::unique_ptr<reading_list::ReadingListManager>
+      local_or_syncable_reading_list_manager_;
+
   std::unique_ptr<bookmarks::ScopedGroupBookmarkActions>
       grouped_bookmark_actions_;
   PrefChangeRegistrar pref_change_registrar_;
@@ -367,14 +391,13 @@ class BookmarkBridge : public ProfileObserver,
   // This is owned by profile.
   raw_ptr<PartnerBookmarksShim> partner_bookmarks_shim_;
 
-  // Holds reading list data as an in-memory BookmarkNode tree.
-  const std::unique_ptr<ReadingListManager>
-      local_or_syncable_reading_list_manager_;
   // Holds account reading list data, similar to above. Only non-null if the
   // account reading list is available.
-  const std::unique_ptr<ReadingListManager> account_reading_list_manager_;
+  std::unique_ptr<reading_list::ReadingListManager>
+      account_reading_list_manager_;
 
-  raw_ptr<page_image_service::ImageService> image_service_;  // weak
+  raw_ptr<ReadingListModel> account_reading_list_model_;  // weak
+  raw_ptr<signin::IdentityManager> identity_manager_;  // weak
 
   // Observes the profile destruction and creation.
   base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
@@ -383,11 +406,19 @@ class BookmarkBridge : public ProfileObserver,
       bookmark_model_observation_{this};
   base::ScopedObservation<PartnerBookmarksShim, PartnerBookmarksShim::Observer>
       partner_bookmarks_shim_observation_{this};
-  base::ScopedMultiSourceObservation<ReadingListManager,
-                                     ReadingListManager::Observer>
+  base::ScopedMultiSourceObservation<reading_list::ReadingListManager,
+                                     reading_list::ReadingListManager::Observer>
       reading_list_manager_observations_{this};
+  base::ScopedObservation<reading_list::DualReadingListModel,
+                          ReadingListModelObserver>
+      dual_reading_list_model_observation_{this};
+  base::ScopedObservation<signin::IdentityManager,
+                          signin::IdentityManager::Observer>
+      identity_manager_observation_{this};
 
   bool suppress_observer_notifications_ = false;
+  base::TimeTicks load_start_time_;
+  bool loading_notification_sent_ = false;
 
   // Weak pointers for creating callbacks that won't call into a destroyed
   // object.

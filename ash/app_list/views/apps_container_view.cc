@@ -35,6 +35,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/time/time.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
@@ -372,7 +373,7 @@ void AppsContainerView::UpdateAppListConfig(const gfx::Rect& contents_bounds) {
 
   std::unique_ptr<AppListConfig> new_config =
       AppListConfigProvider::Get().CreateForTabletAppList(
-          display::Screen::GetScreen()
+          display::Screen::Get()
               ->GetDisplayNearestView(GetWidget()->GetNativeView())
               .work_area()
               .size(),
@@ -484,13 +485,6 @@ void AppsContainerView::ResetForShowApps() {
   }
 }
 
-void AppsContainerView::SetDragAndDropHostOfCurrentAppList(
-    ApplicationDragAndDropHost* drag_and_drop_host) {
-  apps_grid_view()->SetDragAndDropHostOfCurrentAppList(drag_and_drop_host);
-  app_list_folder_view()->items_grid_view()->SetDragAndDropHostOfCurrentAppList(
-      drag_and_drop_host);
-}
-
 void AppsContainerView::ReparentFolderItemTransit(
     AppListFolderItem* folder_item) {
   if (app_list_folder_view_->IsAnimationRunning())
@@ -562,6 +556,12 @@ void AppsContainerView::SelectedPageChanged(int old_selected,
   separator_->layer()->SetTransform(transform);
   if (toast_container_)
     toast_container_->layer()->SetTransform(transform);
+
+  if (new_selected == apps_grid_view_->pagination_model()->total_pages() - 1) {
+    RecordLauncherWorkflowMetrics(
+        AppListUserAction::kNavigatedToBottomOfAppList,
+        /*is_tablet_mode = */ true, std::nullopt);
+  }
 }
 
 void AppsContainerView::TransitionChanged() {
@@ -600,9 +600,6 @@ void AppsContainerView::TransitionStarted() {
 }
 
 void AppsContainerView::TransitionEnded() {
-  // TODO(crbug.com/1285184): Sometimes gradient mask is not removed because
-  // this function does not get called in some cases.
-
   // Gradient mask is no longer necessary once transition is finished.
   MaybeRemoveGradientMask();
 }
@@ -644,8 +641,9 @@ bool AppsContainerView::IsPointWithinBottomDragBuffer(
 }
 
 void AppsContainerView::MaybeCreateGradientMask() {
-  if (!features::IsBackgroundBlurEnabled())
+  if (!chromeos::features::IsSystemBlurEnabled()) {
     return;
+  }
 
   if (!scrollable_container_->layer()->HasGradientMask())
     UpdateGradientMaskBounds();
@@ -1030,13 +1028,13 @@ void AppsContainerView::OnDidChangeFocus(View* focused_before,
 
 void AppsContainerView::OnGestureEvent(ui::GestureEvent* event) {
   // Ignore tap/long-press, allow those to pass to the ancestor view.
-  if (event->type() == ui::ET_GESTURE_TAP ||
-      event->type() == ui::ET_GESTURE_LONG_PRESS) {
+  if (event->type() == ui::EventType::kGestureTap ||
+      event->type() == ui::EventType::kGestureLongPress) {
     return;
   }
 
   // Will forward events to |apps_grid_view_| if they occur in the same y-region
-  if (event->type() == ui::ET_GESTURE_SCROLL_BEGIN &&
+  if (event->type() == ui::EventType::kGestureScrollBegin &&
       event->location().y() <= apps_grid_view_->bounds().y()) {
     return;
   }
@@ -1069,7 +1067,7 @@ void AppsContainerView::OnShown() {
   if (keyboard::KeyboardUIController::HasInstance())
     keyboard::KeyboardUIController::Get()->HideKeyboardExplicitlyBySystem();
 
-  GetViewAccessibility().OverrideIsLeaf(false);
+  GetViewAccessibility().SetIsLeaf(false);
   is_active_page_ = true;
 
   // Update the continue section.
@@ -1097,7 +1095,7 @@ void AppsContainerView::OnHidden() {
   // Apps container view is shown faded behind the search results UI - hide its
   // contents from the screen reader as the apps grid is not normally
   // actionable in this state.
-  GetViewAccessibility().OverrideIsLeaf(true);
+  GetViewAccessibility().SetIsLeaf(true);
 
   is_active_page_ = false;
 
@@ -1180,7 +1178,7 @@ int AppsContainerView::GetMinTopMarginForAppsGrid(
 
 int AppsContainerView::GetIdealVerticalMargin() const {
   const int screen_height =
-      display::Screen::GetScreen()
+      display::Screen::Get()
           ->GetDisplayNearestView(GetWidget()->GetNativeView())
           .bounds()
           .height();
@@ -1341,7 +1339,7 @@ AppsContainerView::GridLayout AppsContainerView::CalculateGridLayout() const {
 
   // Adapt columns and rows based on the display/root window size.
   const gfx::Size size =
-      display::Screen::GetScreen()
+      display::Screen::Get()
           ->GetDisplayNearestView(GetWidget()->GetNativeView())
           .work_area()
           .size();

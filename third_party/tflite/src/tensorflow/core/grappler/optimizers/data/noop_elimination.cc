@@ -64,21 +64,15 @@ bool IsRepeatOne(const NodeDef& repeat_node, const MutableGraphView& graph) {
   return IsConstNodeWithValue(*graph.GetNode(repeat_node.input(1)), 1);
 }
 
-bool IsPrefetchZero(const NodeDef& prefetch_node,
-                    const MutableGraphView& graph) {
-  if (prefetch_node.op() != "PrefetchDataset") return false;
-  // We are looking only for prefetch(0) nodes.
-  return IsConstNodeWithValue(*graph.GetNode(prefetch_node.input(1)), 0);
-}
-
 bool IsShardOne(const NodeDef& shard_node, const MutableGraphView& graph) {
   if (shard_node.op() != "ShardDataset") return false;
   // We are looking only for shard(0) nodes.
   return IsConstNodeWithValue(*graph.GetNode(shard_node.input(1)), 1);
 }
 
-bool IsOutputIdentityOfInput(const FunctionDef& fdef, const string& output_arg,
-                             const string& input_arg) {
+bool IsOutputIdentityOfInput(const FunctionDef& fdef,
+                             const std::string& output_arg,
+                             const std::string& input_arg) {
   if (!fdef.ret().contains(output_arg)) {
     LOG(WARNING)
         << "Malformed FunctionDef: ret dict does not contain output arg key.";
@@ -142,20 +136,18 @@ bool IsMapIdentity(const NodeDef& map_node, const MutableGraphView& graph,
 bool IsNoOp(const NodeDef& node, const MutableGraphView& graph,
             const FunctionLibraryDefinition& function_library) {
   return IsTakeAll(node, graph) || IsSkipNone(node, graph) ||
-         IsRepeatOne(node, graph) || IsPrefetchZero(node, graph) ||
-         IsShardOne(node, graph) ||
+         IsRepeatOne(node, graph) || IsShardOne(node, graph) ||
          IsMapIdentity(node, graph, function_library);
 }
 
 }  // namespace
 
-Status NoOpElimination::OptimizeAndCollectStats(Cluster* cluster,
-                                                const GrapplerItem& item,
-                                                GraphDef* output,
-                                                OptimizationStats* stats) {
+absl::Status NoOpElimination::OptimizeAndCollectStats(
+    Cluster* cluster, const GrapplerItem& item, GraphDef* output,
+    OptimizationStats* stats) {
   *output = item.graph;
   MutableGraphView graph(output);
-  absl::flat_hash_set<string> nodes_to_delete;
+  absl::flat_hash_set<std::string> nodes_to_delete;
   FunctionLibraryDefinition function_library(OpRegistry::Global(),
                                              graph.graph()->library());
   for (const NodeDef& node : item.graph.node()) {

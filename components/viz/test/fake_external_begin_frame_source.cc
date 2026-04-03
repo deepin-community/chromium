@@ -74,13 +74,6 @@ void FakeExternalBeginFrameSource::DidFinishFrame(BeginFrameObserver* obs) {
   pending_frames_[obs]--;
 }
 
-void FakeExternalBeginFrameSource::SetDynamicBeginFrameDeadlineOffsetSource(
-    DynamicBeginFrameDeadlineOffsetSource*
-        dynamic_begin_frame_deadline_offset_source) {
-  begin_frame_args_generator_.set_dynamic_begin_frame_deadline_offset_source(
-      dynamic_begin_frame_deadline_offset_source);
-}
-
 BeginFrameArgs FakeExternalBeginFrameSource::CreateBeginFrameArgs(
     BeginFrameArgs::CreationLocation location,
     const base::TickClock* now_src) {
@@ -97,20 +90,24 @@ BeginFrameArgs FakeExternalBeginFrameSource::CreateBeginFrameArgs(
 BeginFrameArgs FakeExternalBeginFrameSource::CreateBeginFrameArgsWithGenerator(
     base::TimeTicks frame_time,
     base::TimeTicks next_frame_time,
-    base::TimeDelta vsync_interval) {
+    base::TimeDelta vsync_interval,
+    base::TimeDelta unthrottled_interval) {
   return begin_frame_args_generator_.GenerateBeginFrameArgs(
-      source_id(), frame_time, next_frame_time, vsync_interval);
+      source_id(), frame_time, next_frame_time, vsync_interval,
+      unthrottled_interval);
 }
 
 void FakeExternalBeginFrameSource::TestOnBeginFrame(
     const BeginFrameArgs& args) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   current_args_ = args;
+  IssueBeginFrameToInputClient(args);
   std::set<raw_ptr<BeginFrameObserver, SetExperimental>> observers(observers_);
   for (BeginFrameObserver* obs : observers) {
     pending_frames_[obs]++;
     obs->OnBeginFrame(current_args_);
   }
+  IssueBeginFrameToSchedulerClient(args);
   if (tick_automatically_)
     PostTestOnBeginFrame();
 }

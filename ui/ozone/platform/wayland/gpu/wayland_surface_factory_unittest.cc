@@ -2,7 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ui/ozone/platform/wayland/gpu/wayland_surface_factory.h"
+
 #include <drm_fourcc.h>
+#include <wayland-util.h>
 
 #include <cstdint>
 #include <memory>
@@ -14,9 +17,11 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/test/mock_callback.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkSurface.h"
 #include "ui/gfx/buffer_types.h"
+#include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/linux/gbm_buffer.h"
 #include "ui/gfx/linux/gbm_device.h"
 #include "ui/gfx/linux/test/mock_gbm_device.h"
@@ -26,7 +31,6 @@
 #include "ui/gl/gl_utils.h"
 #include "ui/ozone/platform/wayland/gpu/gbm_surfaceless_wayland.h"
 #include "ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.h"
-#include "ui/ozone/platform/wayland/gpu/wayland_surface_factory.h"
 #include "ui/ozone/platform/wayland/host/wayland_buffer_manager_host.h"
 #include "ui/ozone/platform/wayland/host/wayland_subsurface.h"
 #include "ui/ozone/platform/wayland/host/wayland_window.h"
@@ -46,8 +50,6 @@ using ::testing::Values;
 namespace ui {
 
 namespace {
-
-constexpr uint32_t kAugmentedSurfaceNotSupportedVersion = 0;
 
 // Holds a NativePixmap used for scheduling overlay planes. It must become busy
 // when scheduled and be associated with the swap id to track correct order of
@@ -190,21 +192,20 @@ class WaylandSurfaceFactoryTest : public WaylandTest {
   ~WaylandSurfaceFactoryTest() override = default;
 
   void SetUp() override {
-    const base::flat_map<gfx::BufferFormat, std::vector<uint64_t>>
+    const base::flat_map<viz::SharedImageFormat, std::vector<uint64_t>>
         kSupportedFormatsWithModifiers{
-            {gfx::BufferFormat::BGRA_8888, {DRM_FORMAT_MOD_LINEAR}}};
+            {viz::SinglePlaneFormat::kBGRA_8888, {DRM_FORMAT_MOD_LINEAR}}};
 
     WaylandTest::SetUp();
 
     auto manager_ptr = connection_->buffer_manager_host()->BindInterface();
-    buffer_manager_gpu_->Initialize(
-        std::move(manager_ptr), kSupportedFormatsWithModifiers,
-        /*supports_dma_buf=*/false,
-        /*supports_viewporter=*/true,
-        /*supports_acquire_fence=*/false,
-        /*supports_overlays=*/true, kAugmentedSurfaceNotSupportedVersion,
-        /*supports_single_pixel_buffer=*/true,
-        /*server_version=*/{});
+    buffer_manager_gpu_->Initialize(std::move(manager_ptr),
+                                    kSupportedFormatsWithModifiers,
+                                    /*supports_dma_buf=*/false,
+                                    /*supports_viewporter=*/true,
+                                    /*supports_acquire_fence=*/false,
+                                    /*supports_overlays=*/true,
+                                    /*supports_single_pixel_buffer=*/true);
 
     // Wait until initialization and mojo calls go through.
     base::RunLoop().RunUntilIdle();
@@ -241,11 +242,16 @@ class WaylandSurfaceFactoryTest : public WaylandTest {
             gfx::ColorSpace::CreateSRGB(), std::nullopt));
   }
 
+  SurfaceFactoryOzone* surface_factory() { return surface_factory_.get(); }
+
   uint32_t surface_id_ = 0;
 };
 
 TEST_P(WaylandSurfaceFactoryTest,
        GbmSurfacelessWaylandCommitOverlaysCallbacksTest) {
+  if (!connection_->ShouldUseOverlayDelegation()) {
+    GTEST_SKIP();
+  }
   // This tests multiple buffers per-frame and order of SwapCompletionCallbacks.
   // Even when all OnSubmission from later frames are called, their
   // SwapCompletionCallbacks should not run until previous frames'
@@ -274,8 +280,8 @@ TEST_P(WaylandSurfaceFactoryTest,
   std::vector<scoped_refptr<OverlayImageHolder>> fake_overlay_image;
   for (int i = 0; i < 4; ++i) {
     auto size_px = window_->applied_state().size_px;
-    auto native_pixmap = surface_factory_->CreateNativePixmap(
-        widget_, nullptr, size_px, gfx::BufferFormat::BGRA_8888,
+    auto native_pixmap = surface_factory()->CreateNativePixmap(
+        widget_, nullptr, size_px, viz::SinglePlaneFormat::kBGRA_8888,
         gfx::BufferUsage::SCANOUT);
     fake_overlay_image.push_back(
         base::MakeRefCounted<OverlayImageHolder>(native_pixmap, size_px));
@@ -602,6 +608,9 @@ TEST_P(WaylandSurfaceFactoryTest,
 
 TEST_P(WaylandSurfaceFactoryTest,
        GbmSurfacelessWaylandGroupOnSubmissionCallbacksTest) {
+  if (!connection_->ShouldUseOverlayDelegation()) {
+    GTEST_SKIP();
+  }
   // This tests multiple buffers per-frame. GbmSurfacelessWayland receive 1
   // OnSubmission call per frame before running in submission order.
   gl::SetGLImplementation(gl::kGLImplementationEGLGLES2);
@@ -623,8 +632,8 @@ TEST_P(WaylandSurfaceFactoryTest,
   std::vector<scoped_refptr<OverlayImageHolder>> fake_overlay_image;
   for (int i = 0; i < 5; ++i) {
     auto size_px = window_->applied_state().size_px;
-    auto native_pixmap = surface_factory_->CreateNativePixmap(
-        widget_, nullptr, size_px, gfx::BufferFormat::BGRA_8888,
+    auto native_pixmap = surface_factory()->CreateNativePixmap(
+        widget_, nullptr, size_px, viz::SinglePlaneFormat::kBGRA_8888,
         gfx::BufferUsage::SCANOUT);
     fake_overlay_image.push_back(
         base::MakeRefCounted<OverlayImageHolder>(native_pixmap, size_px));
@@ -922,13 +931,20 @@ TEST_P(WaylandSurfaceFactoryTest, Canvas) {
 
     const gfx::Rect damage(5, 10, 20, 15);
     // Surface damage will be affected by the scale, which must be an integer.
-    const gfx::Rect expected_damage = ScaleToEnclosingRect(
-        gfx::Rect(5, 10, 20, 15), 1.f / std::ceil(scale_factor));
-
+    const gfx::Rect expected_damage =
+        GetParam().supports_viewporter_surface_scaling
+            ? ScaleToEnclosingRect(
+                  gfx::Rect(5, 10, 20, 15),
+                  1.f / (static_cast<int>(scale_factor * 120) / 120.f))
+            : ScaleToEnclosingRect(gfx::Rect(5, 10, 20, 15),
+                                   1.f / std::ceil(scale_factor));
     const uint32_t surface_id = window_->root_surface()->get_surface_id();
-    PostToServerAndWait([surface_id,
-                         expected_damage](wl::TestWaylandServerThread* server) {
+    PostToServerAndWait([surface_id, expected_damage,
+                         scale_factor](wl::TestWaylandServerThread* server) {
       auto* mock_surface = server->GetObject<wl::MockSurface>(surface_id);
+      if (mock_surface->fractional_scale()) {
+        mock_surface->fractional_scale()->SendPreferredScale(scale_factor);
+      }
       ASSERT_FALSE(mock_surface->attached_buffer());
       Expectation damage =
           EXPECT_CALL(*mock_surface,
@@ -957,7 +973,7 @@ TEST_P(WaylandSurfaceFactoryTest, Canvas) {
 
           // Release the buffer immediately as the test always attaches the same
           // buffer.
-          mock_surface->ReleaseBufferFenced(buffer_resource, {});
+          mock_surface->ReleaseBuffer(buffer_resource);
 
           mock_surface->SendFrameCallback();
         });
@@ -1075,7 +1091,7 @@ TEST_P(WaylandSurfaceFactoryTest, CanvasBufferSwapAck) {
       auto* mock_surface = server->GetObject<wl::MockSurface>(surface_id);
       auto* buffer_resource = mock_surface->prev_attached_buffer();
       ASSERT_TRUE(buffer_resource);
-      mock_surface->ReleaseBufferFenced(buffer_resource, {});
+      mock_surface->ReleaseBuffer(buffer_resource);
     });
 
     base::RunLoop().RunUntilIdle();
@@ -1176,7 +1192,7 @@ TEST_P(WaylandSurfaceFactoryTest, CanvasBufferSwapAck2) {
       auto* mock_surface = server->GetObject<wl::MockSurface>(surface_id);
       auto* buffer_resource = mock_surface->prev_attached_buffer();
       ASSERT_TRUE(buffer_resource);
-      mock_surface->ReleaseBufferFenced(buffer_resource, {});
+      mock_surface->ReleaseBuffer(buffer_resource);
     });
 
     base::RunLoop().RunUntilIdle();
@@ -1341,7 +1357,7 @@ TEST_P(WaylandSurfaceFactoryCompositorV3, SurfaceDamageTest) {
   });
 
   gfx::Size test_buffer_size = {300, 100};
-  gfx::RectF crop_uv = {0.1f, 0.2f, 0.5, 0.5f};
+  gfx::RectF crop_uv = {0.1f, 0.2f, 0.5f, 0.5f};
   gfx::Rect expected_src = gfx::ToEnclosingRect(
       gfx::ScaleRect({0.2f, 0.4f, 0.5f, 0.5f}, test_buffer_size.height(),
                      test_buffer_size.width()));
@@ -1349,8 +1365,8 @@ TEST_P(WaylandSurfaceFactoryCompositorV3, SurfaceDamageTest) {
 
   // Create buffer and FakeGlImageNativePixmap.
   std::vector<scoped_refptr<OverlayImageHolder>> fake_overlay_image;
-  auto native_pixmap = surface_factory_->CreateNativePixmap(
-      widget_, nullptr, test_buffer_size, gfx::BufferFormat::BGRA_8888,
+  auto native_pixmap = surface_factory()->CreateNativePixmap(
+      widget_, nullptr, test_buffer_size, viz::SinglePlaneFormat::kBGRA_8888,
       gfx::BufferUsage::SCANOUT);
   ASSERT_TRUE(native_pixmap);
   fake_overlay_image.push_back(base::MakeRefCounted<OverlayImageHolder>(

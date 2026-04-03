@@ -13,13 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef __STDC_FORMAT_MACROS
-#define __STDC_FORMAT_MACROS  // before inttypes.h
-#endif
-#include <inttypes.h>
-#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>  // abort
 
 #include <cmath>  // std::abs
 #include <memory>
@@ -37,6 +33,7 @@
 HWY_BEFORE_NAMESPACE();
 namespace hwy {
 namespace HWY_NAMESPACE {
+namespace {
 
 // These templates are not found via ADL.
 #if HWY_TARGET != HWY_SCALAR
@@ -80,7 +77,7 @@ void RunBenchmark(const char* caption) {
       [&benchmark](const FuncInput input) { return benchmark(input); }, inputs,
       kNumInputs, results, p);
   if (num_results != kNumInputs) {
-    fprintf(stderr, "MeasureClosure failed.\n");
+    HWY_WARN("MeasureClosure failed.\n");
   }
 
   benchmark.Verify(num_items);
@@ -89,8 +86,8 @@ void RunBenchmark(const char* caption) {
     const double cycles_per_item =
         results[i].ticks / static_cast<double>(results[i].input);
     const double mad = results[i].variability * cycles_per_item;
-    printf("%6" PRIu64 ": %6.3f (+/- %5.3f)\n",
-           static_cast<uint64_t>(results[i].input), cycles_per_item, mad);
+    printf("%6d: %6.3f (+/- %5.3f)\n", static_cast<int>(results[i].input),
+           cycles_per_item, mad);
   }
 }
 
@@ -145,24 +142,21 @@ class BenchmarkDot : public TwoArray {
     sum2 = Add(sum2, sum3);
     sum0 = Add(sum0, sum2);
     // Remember to store the result in `dot_` for verification; see `Verify`.
-    dot_ = GetLane(SumOfLanes(d, sum0));
+    dot_ = ReduceSum(d, sum0);
     // Return the result so that the benchmarking framework can ensure that the
     // computation is not elided by the compiler.
     return static_cast<FuncOutput>(dot_);
   }
   void Verify(size_t num_items) {
     if (dot_ == -1.0f) {
-      fprintf(stderr, "Dot: must call Verify after benchmark");
-      abort();
+      HWY_ABORT("Dot: must call Verify after benchmark");
     }
 
     const float expected =
         std::inner_product(a_.get(), a_.get() + num_items, b_, 0.0f);
     const float rel_err = std::abs(expected - dot_) / expected;
     if (rel_err > 1.1E-6f) {
-      fprintf(stderr, "Dot: expected %e actual %e (%e)\n", expected, dot_,
-              rel_err);
-      abort();
+      HWY_ABORT("Dot: expected %e actual %e (%e)\n", expected, dot_, rel_err);
     }
   }
 
@@ -219,7 +213,7 @@ struct BenchmarkDelta : public TwoArray {
       const float expected = (i == 0) ? a_[0] : a_[i] - a_[i - 1];
       const float err = std::abs(expected - b_[i]);
       if (err > 1E-6f) {
-        fprintf(stderr, "Delta: expected %e, actual %e\n", expected, b_[i]);
+        HWY_WARN("Delta: expected %e, actual %e\n", expected, b_[i]);
       }
     }
   }
@@ -232,6 +226,7 @@ void RunBenchmarks() {
   RunBenchmark<BenchmarkDelta>("delta");
 }
 
+}  // namespace
 // NOLINTNEXTLINE(google-readability-namespace-comments)
 }  // namespace HWY_NAMESPACE
 }  // namespace hwy
@@ -239,6 +234,7 @@ HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
 namespace hwy {
+namespace {
 HWY_EXPORT(RunBenchmarks);
 
 void Run() {
@@ -249,6 +245,7 @@ void Run() {
   SetSupportedTargetsForTest(0);  // Reset the mask afterwards.
 }
 
+}  // namespace
 }  // namespace hwy
 
 int main(int /*argc*/, char** /*argv*/) {

@@ -6,6 +6,10 @@
 
 // matrix_utils.cpp: Contains implementations for Mat4 methods.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "common/matrix_utils.h"
 
 namespace angle
@@ -76,6 +80,11 @@ Mat4::Mat4(float m00,
 // static
 Mat4 Mat4::Rotate(float angle, const Vector3 &axis)
 {
+    if (axis.length() == 0.0f)
+    {
+        return Mat4();
+    }
+
     auto axis_normalized = axis.normalized();
     float angle_radians  = angle * (3.14159265358979323f / 180.0f);
     float c              = cos(angle_radians);

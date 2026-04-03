@@ -8,23 +8,33 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/style_variant.h"
 #include "third_party/blink/renderer/core/paint/line_relative_rect.h"
-#include "third_party/blink/renderer/core/paint/text_painter_base.h"
-#include "third_party/blink/renderer/platform/fonts/text_fragment_paint_info.h"
+#include "third_party/blink/renderer/core/paint/paint_flags.h"
+#include "third_party/blink/renderer/core/style/computed_style_constants.h"
+#include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
+class ComputedStyle;
+class Document;
+class Font;
+class GraphicsContext;
 class LayoutObject;
 class LayoutSVGInlineText;
+enum class TextEmphasisPosition : unsigned;
 struct AutoDarkMode;
+struct DecorationGeometry;
+struct PaintInfo;
+struct SvgContextPaints;
 struct TextFragmentPaintInfo;
+struct TextPaintStyle;
 
-// Text painter for LayoutNG, logic shared between legacy layout and LayoutNG
-// is implemented in the TextPainterBase base class.
-// Operates on PhysicalTextFragments and only paints text and decorations.
-// Border painting etc is handled by the TextFragmentPainter class.
+// Base class for text painting. Operates on PhysicalTextFragments and only
+// paints text and decorations. Border painting etc is handled by the
+// TextFragmentPainter class.
 // TODO(layout-dev): Does this distinction make sense?
-class CORE_EXPORT TextPainter : public TextPainterBase {
+class CORE_EXPORT TextPainter {
   STACK_ALLOCATED();
 
  public:
@@ -62,17 +72,22 @@ class CORE_EXPORT TextPainter : public TextPainterBase {
     PaintFlags paint_flags_ = PaintFlag::kNoFlag;
     bool is_painting_selection_ = false;
     friend class TextPainter;
+    friend class HighlightPainter;
   };
 
   TextPainter(GraphicsContext& context,
+              const SvgContextPaints* svg_context_paints,
               const Font& font,
               const gfx::Rect& visual_rect,
-              const LineRelativeOffset& text_origin,
-              bool horizontal)
-      : TextPainterBase(context, font, text_origin, horizontal),
-        visual_rect_(visual_rect) {}
+              const LineRelativeOffset& text_origin)
+      : graphics_context_(context),
+        svg_context_paints_(svg_context_paints),
+        font_(font),
+        visual_rect_(visual_rect),
+        text_origin_(text_origin) {}
   ~TextPainter() = default;
 
+  enum ShadowMode { kBothShadowsAndTextProper, kShadowsOnly, kTextProperOnly };
   void Paint(const TextFragmentPaintInfo& fragment_paint_info,
              const TextPaintStyle&,
              DOMNodeId,
@@ -88,9 +103,13 @@ class CORE_EXPORT TextPainter : public TextPainterBase {
                          DOMNodeId node_id,
                          const AutoDarkMode& auto_dark_mode);
 
-  void PaintDecorationLine(const TextDecorationInfo& decoration_info,
+  virtual void ClipDecorationLine(const DecorationGeometry&,
+                                  float text_baseline,
+                                  const TextFragmentPaintInfo&);
+  void PaintDecorationLine(const DecorationGeometry& geometry,
+                           bool has_decoration_override,
                            const Color& line_color,
-                           const TextFragmentPaintInfo* fragment_paint_info);
+                           const AutoDarkMode& auto_dark_mode);
 
   SvgTextPaintState& SetSvgState(const LayoutSVGInlineText&,
                                  const ComputedStyle&,
@@ -101,19 +120,36 @@ class CORE_EXPORT TextPainter : public TextPainterBase {
                                  Color text_match_color);
   SvgTextPaintState* GetSvgState();
 
+  static Color TextColorForWhiteBackground(Color);
+
+  static TextPaintStyle TextPaintingStyle(const Document&,
+                                          const ComputedStyle&,
+                                          const PaintInfo&);
+
+  void SetEmphasisMark(const AtomicString&,
+                       LineLogicalSide,
+                       const FragmentItem* text_item = nullptr);
+
  protected:
-  void ClipDecorationsStripe(const TextFragmentPaintInfo&,
-                             float upper,
-                             float stripe_width,
-                             float dilation) override;
+  const Font& font() const { return font_; }
+  const LineRelativeOffset& text_origin() const { return text_origin_; }
+  const AtomicString& emphasis_mark() const { return emphasis_mark_; }
+  int emphasis_mark_offset() const { return emphasis_mark_offset_; }
+  GraphicsContext& graphics_context() const { return graphics_context_; }
 
  private:
   void PaintSvgTextFragment(const TextFragmentPaintInfo&,
                             DOMNodeId node_id,
                             const AutoDarkMode& auto_dark_mode);
 
+  GraphicsContext& graphics_context_;
+  const SvgContextPaints* svg_context_paints_;
+  const Font& font_;
   const gfx::Rect visual_rect_;
+  const LineRelativeOffset text_origin_;
   std::optional<SvgTextPaintState> svg_text_paint_state_;
+  AtomicString emphasis_mark_;
+  int emphasis_mark_offset_ = 0;
 };
 
 }  // namespace blink

@@ -7,7 +7,7 @@
  * controller. When loading it, it will populate data such as localized strings
  * into |loadTimeData| that is imported below.
  */
-import '../../strings.m.js';
+import '/strings.m.js';
 
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
@@ -74,10 +74,39 @@ export function isLocalDev(): boolean {
 }
 
 /**
- * Returns if the video capture capability is disallowed by the policy.
+ * Returns if the CCA capability is disallowed by the policy.
  */
-export function isVideoCaptureDisallowed(): boolean {
-  return loadTimeData.getBoolean('video_capture_disallowed');
+export function isCCADisallowed(): boolean {
+  return loadTimeData.getBoolean('cca_disallowed');
+}
+
+/**
+ * Returns the path relative to the root folder where files will be saved.
+ */
+export function getPathRelativeToRoot(): string {
+  return loadTimeData.getString('path_relative_to_root');
+}
+
+/**
+ * Returns the cloud destination where the camera app saves files or empty
+ * string if it saves files locally.
+ */
+export function getCloudDestination(): string {
+  return loadTimeData.getString('cloud_destination');
+}
+
+/**
+ * Returns whether the camera app saves files on cloud.
+ */
+export function isCloudDestination(): boolean {
+  return getCloudDestination() !== '';
+}
+
+/**
+ * Returns whether the camera app saves files on Microsoft OneDrive.
+ */
+export function isCloudDestinationOnedrive(): boolean {
+  return getCloudDestination() === 'microsoft_onedrive';
 }
 
 /**
@@ -85,4 +114,11 @@ export function isVideoCaptureDisallowed(): boolean {
  */
 export function getOsVersion(): string {
   return loadTimeData.getString('os_version');
+}
+
+/**
+ * Returns if BigBuffer can be used.
+ */
+export function getCanUseBigBuffer(): boolean {
+  return loadTimeData.getBoolean('can_use_big_buffer');
 }

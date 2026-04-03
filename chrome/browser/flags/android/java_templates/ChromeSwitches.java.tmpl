@@ -30,11 +30,17 @@ public abstract class ChromeSwitches {{
     /** Don't restore persistent state from saved files on startup. */
     public static final String NO_RESTORE_STATE = "no-restore-state";
 
+    /** Prevents all IPHs from showing. */
+    public static final String DISABLE_ALL_IPH = "propagate-iph-for-testing";
+
     /** Disable the First Run Experience. */
     public static final String DISABLE_FIRST_RUN_EXPERIENCE = "disable-fre";
 
     /** Disable promos shown on startup. */
     public static final String DISABLE_STARTUP_PROMOS = "disable-startup-promos-for-testing";
+
+    /** Sets the test type (e.g. "browser" or "ui"). Used to enable appropriate testing features. */
+    public static final String TEST_TYPE = "test-type";
 
     /** Force the crash dump to be uploaded regardless of preferences. */
     public static final String FORCE_CRASH_DUMP_UPLOAD = "force-dump-upload";
@@ -76,6 +82,21 @@ public abstract class ChromeSwitches {{
      * Disable native initialization for testing.
      */
     public static final String DISABLE_NATIVE_INITIALIZATION = "disable-native-initialization";
+
+    /**
+     * Force the feature list to be initialized early for testing.
+     */
+    public static final String FORCE_INIT_FEATURE_LIST_EARLY = "force-init-feature-list-early";
+
+    /**
+     * Force the app to turn off windowOptOutEdgeToEdgeEnforcement.
+     */
+    public static final String DISABLE_OPT_OUT_EDGE_TO_EDGE = "disable-opt-out-edge-to-edge";
+
+    /**
+     * Override the tab strip height transition threshold in DP.
+     */
+    public static final String TAB_STRIP_HEIGHT_TRANSITION_THRESHOLD = "tab-strip-height-transition-threshold";
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
     // Native Switches
@@ -159,10 +180,6 @@ public abstract class ChromeSwitches {{
     /** Set the configuration to trigger the feed header menu IPH. */
     public static final String FEED_HEADER_MENU_IPH_TRIGGER_CONFIG =
             "feed-header-menu-iph-trigger-config";
-
-    /** Disable the default browser promo. */
-    public static final String DISABLE_DEFAULT_BROWSER_PROMO =
-            "disable-default-browser-promo";
 
     /** Debug Chime notifications. */
     public static final String DEBUG_CHIME_NOTIFICATION =

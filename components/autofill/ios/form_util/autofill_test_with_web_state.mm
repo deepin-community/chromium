@@ -6,47 +6,32 @@
 
 #import "base/test/ios/wait_util.h"
 #import "components/autofill/ios/form_util/form_handlers_java_script_feature.h"
-#import "components/autofill/ios/form_util/form_util_java_script_feature.h"
-#include "ios/web/public/js_messaging/web_frame.h"
+#import "ios/web/public/js_messaging/web_frame.h"
 #import "ios/web/public/test/js_test_util.h"
 #import "ios/web/public/test/web_test_with_web_state.h"
 #import "ios/web/public/web_client.h"
 
+using autofill::test::kTrackFormMutationsDelayInMs;
 using base::test::ios::kWaitForJSCompletionTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
-
-namespace {
-const int kTrackFormMutationsDelayInMs = 10;
-}
 
 AutofillTestWithWebState::AutofillTestWithWebState(
     std::unique_ptr<web::WebClient> web_client)
     : web::WebTestWithWebState(std::move(web_client)) {}
-
-void AutofillTestWithWebState::SetUpForUniqueIds(web::WebFrame* frame) {
-  uint32_t next_available_id = 1;
-  autofill::FormUtilJavaScriptFeature::GetInstance()
-      ->SetUpForUniqueIDsWithInitialState(frame, next_available_id);
-
-  // Wait for |SetUpForUniqueIDsWithInitialState| to complete.
-  EXPECT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^bool {
-    return [ExecuteJavaScript(@"document[__gCrWeb.fill.ID_SYMBOL]") intValue] ==
-           static_cast<int>(next_available_id);
-  }));
-}
 
 void AutofillTestWithWebState::TrackFormMutations(web::WebFrame* frame) {
   // Override |__gCrWeb.formHandlers.trackFormMutations| to set a boolean
   // trackFormMutationsComplete after the function is called.
   ExecuteJavaScript(
       @"var trackFormMutationsComplete = false;"
+      @"const formHandlersApi = __gCrWeb.getRegisteredApi('formHandlers');"
       @"var originalTrackFormMutations = "
-      @"__gCrWeb.formHandlers.trackFormMutations;"
-      @"__gCrWeb.formHandlers.trackFormMutations = function() {"
+      @"formHandlersApi.getFunction('trackFormMutations');"
+      @"formHandlersApi.addFunction('trackFormMutations', function() {"
       @"  var result = originalTrackFormMutations.apply(this, arguments);"
       @"  trackFormMutationsComplete = true;"
       @"  return result;"
-      @"};");
+      @"});");
 
   autofill::FormHandlersJavaScriptFeature::GetInstance()->TrackFormMutations(
       frame, kTrackFormMutationsDelayInMs);
@@ -62,7 +47,7 @@ id AutofillTestWithWebState::ExecuteJavaScript(NSString* script) {
   // although `FormHandlersJavaScriptFeature` is specified, all autofill
   // features must live in the same content world so any one of them could be
   // used here.
-  return web::test::ExecuteJavaScriptForFeature(
+  return web::test::ExecuteJavaScriptForFeatureAndReturnResult(
       web_state(), script,
       autofill::FormHandlersJavaScriptFeature::GetInstance());
 }

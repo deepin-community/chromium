@@ -6,12 +6,12 @@ import {getTrustedHTML} from 'chrome://resources/js/static_types.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
 
 import {queryDecoratedElement, queryRequiredElement} from '../../../common/js/dom_utils.js';
-import {ActionsModel} from '../actions_model.js';
+import type {ActionsModel} from '../actions_model.js';
 import {MockActionModel, MockActionsModel} from '../mock_actions_model.js';
 
 import {ActionsSubmenu} from './actions_submenu.js';
 import {Menu} from './menu.js';
-import {MenuItem} from './menu_item.js';
+import type {MenuItem} from './menu_item.js';
 
 let menu: Menu;
 let submenu: ActionsSubmenu;
@@ -61,7 +61,7 @@ export function testCustomActionRendering() {
   submenu.setActionsModel(
       new MockActionsModel({id: new MockActionModel('title')}) as unknown as
       ActionsModel);
-  const item = menu.querySelector('cr-menu-item') as MenuItem;
+  const item = menu.querySelector<MenuItem>('cr-menu-item')!;
   assertTrue(!!item);
   assertEquals('title', item.textContent);
   assertEquals(null, item.command);
@@ -72,7 +72,7 @@ export function testCommandActionRendering() {
       new MockActionsModel(
           {SAVE_FOR_OFFLINE: new MockActionModel('save for offline!')}) as
       unknown as ActionsModel);
-  const item = menu.querySelector('cr-menu-item') as MenuItem;
+  const item = menu.querySelector<MenuItem>('cr-menu-item')!;
   assertTrue(!!item);
   assertEquals('Toggle pinned', item.textContent);
   assertEquals('toggle-pinned', item.command?.id);

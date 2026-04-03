@@ -5,12 +5,16 @@
 #ifndef CHROME_BROWSER_FEED_ANDROID_FEED_SURFACE_RENDERER_BRIDGE_H_
 #define CHROME_BROWSER_FEED_ANDROID_FEED_SURFACE_RENDERER_BRIDGE_H_
 
+#include <string_view>
+
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/feed/android/feed_reliability_logging_bridge.h"
 #include "components/feed/core/v2/public/feed_api.h"
 #include "components/feed/core/v2/public/surface_renderer.h"
+
+class Profile;
 
 namespace feedui {
 class StreamUpdate;
@@ -25,10 +29,11 @@ class FeedSurfaceRendererBridge : public ::feed::SurfaceRenderer {
  public:
   explicit FeedSurfaceRendererBridge(
       const base::android::JavaRef<jobject>& j_this,
-      jint stream_kind,
+      Profile* profile,
+      int32_t stream_kind,
       std::string web_feed_id,
       FeedReliabilityLoggingBridge* reliability_logging_bridge,
-      jint feed_entry_point);
+      int32_t feed_entry_point);
   FeedSurfaceRendererBridge(const FeedSurfaceRendererBridge&) = delete;
   FeedSurfaceRendererBridge& operator=(const FeedSurfaceRendererBridge&) =
       delete;
@@ -39,19 +44,17 @@ class FeedSurfaceRendererBridge : public ::feed::SurfaceRenderer {
 
   // SurfaceRenderer implementation.
   void StreamUpdate(const feedui::StreamUpdate& update) override;
-  void ReplaceDataStoreEntry(base::StringPiece key,
-                             base::StringPiece data) override;
-  void RemoveDataStoreEntry(base::StringPiece key) override;
+  void ReplaceDataStoreEntry(std::string_view key,
+                             std::string_view data) override;
+  void RemoveDataStoreEntry(std::string_view key) override;
 
   ReliabilityLoggingBridge& GetReliabilityLoggingBridge() override;
 
   void OnStreamUpdated(const feedui::StreamUpdate& stream_update);
 
-  void LoadMore(JNIEnv* env,
-                const base::android::JavaParamRef<jobject>& callback_obj);
+  void LoadMore(base::OnceCallback<void(bool)> callback);
 
-  void ManualRefresh(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& callback_obj);
+  void ManualRefresh(base::OnceCallback<void(bool)> callback);
 
   void SurfaceOpened(JNIEnv* env);
   void SurfaceClosed(JNIEnv* env);

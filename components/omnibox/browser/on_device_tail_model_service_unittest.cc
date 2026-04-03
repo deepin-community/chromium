@@ -6,13 +6,15 @@
 
 #include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/memory/memory_pressure_listener_registry.h"
 #include "base/path_service.h"
+#include "base/strings/string_util.h"
 #include "base/test/task_environment.h"
+#include "components/memory_pressure/fake_memory_pressure_monitor.h"
 #include "components/omnibox/browser/on_device_tail_model_executor.h"
-#include "components/optimization_guide/core/test_model_info_builder.h"
-#include "components/optimization_guide/core/test_optimization_guide_model_provider.h"
+#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
+#include "components/optimization_guide/core/delivery/test_optimization_guide_model_provider.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -26,6 +28,8 @@ static const char kVocabFilename[] = "vocab_test.txt";
 constexpr int kNumLayer = 1;
 constexpr int kStateSize = 512;
 constexpr int kEmbeddingDim = 64;
+constexpr int kMaxNumSteps = 20;
+constexpr float kProbabilityThreshold = 0.01;
 
 }  // namespace
 
@@ -53,6 +57,9 @@ class OnDeviceTailModelServiceTest : public ::testing::Test {
     metadata.mutable_lstm_model_params()->set_state_size(kStateSize);
     metadata.mutable_lstm_model_params()->set_embedding_dimension(
         kEmbeddingDim);
+    metadata.mutable_lstm_model_params()->set_max_num_steps(kMaxNumSteps);
+    metadata.mutable_lstm_model_params()->set_probability_threshold(
+        kProbabilityThreshold);
     metadata.SerializeToString(any_metadata.mutable_value());
 
     model_info_ =
@@ -75,6 +82,7 @@ class OnDeviceTailModelServiceTest : public ::testing::Test {
     return service_->tail_model_executor_->IsReady();
   }
 
+  base::MemoryPressureListenerRegistry memory_pressure_listener_registry_;
   base::test::TaskEnvironment task_environment_;
   std::unique_ptr<OnDeviceTailModelService> service_;
   std::unique_ptr<optimization_guide::TestOptimizationGuideModelProvider>
@@ -95,7 +103,7 @@ TEST_F(OnDeviceTailModelServiceTest, OnModelUpdated) {
 TEST_F(OnDeviceTailModelServiceTest, GetPredictionsForInput) {
   std::vector<OnDeviceTailModelExecutor::Prediction> results;
 
-  OnDeviceTailModelExecutor::ModelInput input("faceb", "", 5, 20, 0.05);
+  OnDeviceTailModelExecutor::ModelInput input("faceb", "", 5);
   OnDeviceTailModelService::ResultCallback callback = base::BindOnce(
       [](std::vector<OnDeviceTailModelExecutor::Prediction>* results,
          std::vector<OnDeviceTailModelExecutor::Prediction> predictions) {
@@ -124,11 +132,55 @@ TEST_F(OnDeviceTailModelServiceTest, NullModelUpdate) {
   task_environment_.RunUntilIdle();
   EXPECT_TRUE(IsExecutorReady());
 
-  // Null model update shoud disable the executor.
+  // Null model update should disable the executor.
   service_->OnModelUpdated(
       optimization_guide::proto::OptimizationTarget::
           OPTIMIZATION_TARGET_OMNIBOX_ON_DEVICE_TAIL_SUGGEST,
       std::nullopt);
   task_environment_.RunUntilIdle();
   EXPECT_FALSE(IsExecutorReady());
+}
+
+TEST_F(OnDeviceTailModelServiceTest, MemoryPressureLevel) {
+  service_->OnModelUpdated(
+      optimization_guide::proto::OptimizationTarget::
+          OPTIMIZATION_TARGET_OMNIBOX_ON_DEVICE_TAIL_SUGGEST,
+      *model_info_);
+  task_environment_.RunUntilIdle();
+  EXPECT_TRUE(IsExecutorReady());
+
+  OnDeviceTailModelExecutor::ModelInput input("faceb", "", 5);
+  std::vector<OnDeviceTailModelExecutor::Prediction> results;
+  memory_pressure::test::FakeMemoryPressureMonitor mem_pressure_monitor;
+
+  // The executor should be unloaded from memory when memory pressure level is
+  // critical.
+  std::vector<OnDeviceTailModelExecutor::Prediction> results_1;
+  OnDeviceTailModelService::ResultCallback callback_1 = base::BindOnce(
+      [](std::vector<OnDeviceTailModelExecutor::Prediction>* results,
+         std::vector<OnDeviceTailModelExecutor::Prediction> predictions) {
+        *results = std::move(predictions);
+      },
+      &results_1);
+  mem_pressure_monitor.SetAndNotifyMemoryPressure(
+      base::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  service_->GetPredictionsForInput(input, std::move(callback_1));
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(IsExecutorReady());
+  EXPECT_TRUE(results_1.empty());
+
+  // The executor should then be re-initialized once pressure level drops.
+  std::vector<OnDeviceTailModelExecutor::Prediction> results_2;
+  OnDeviceTailModelService::ResultCallback callback_2 = base::BindOnce(
+      [](std::vector<OnDeviceTailModelExecutor::Prediction>* results,
+         std::vector<OnDeviceTailModelExecutor::Prediction> predictions) {
+        *results = std::move(predictions);
+      },
+      &results_2);
+  mem_pressure_monitor.SetAndNotifyMemoryPressure(
+      base::MEMORY_PRESSURE_LEVEL_MODERATE);
+  service_->GetPredictionsForInput(input, std::move(callback_2));
+  task_environment_.RunUntilIdle();
+  EXPECT_TRUE(IsExecutorReady());
+  EXPECT_FALSE(results_2.empty());
 }

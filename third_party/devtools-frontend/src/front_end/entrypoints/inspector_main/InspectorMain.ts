@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,11 @@ import type * as Protocol from '../../generated/protocol.js';
 import * as MobileThrottling from '../../panels/mobile_throttling/mobile_throttling.js';
 import * as Components from '../../ui/legacy/components/utils/utils.js';
 import * as UI from '../../ui/legacy/legacy.js';
+import * as Lit from '../../ui/lit/lit.js';
 
 import nodeIconStyles from './nodeIcon.css.js';
+
+const {html} = Lit;
 
 const UIStrings = {
   /**
@@ -27,6 +30,7 @@ const UIStrings = {
    * DevTools is connected to. This text is used in various places in the UI as a label/name to inform
    * the user which target they are currently connected to, as DevTools may connect to multiple
    * targets at the same time in some scenarios.
+   * @meaning Tab target that's different than the "Tab" of Chrome. (See b/343009012)
    */
   tab: 'Tab',
   /**
@@ -38,33 +42,23 @@ const UIStrings = {
    * @description A message that prompts the user to open devtools for a specific environment (Node.js)
    */
   openDedicatedTools: 'Open dedicated DevTools for `Node.js`',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('entrypoints/inspector_main/InspectorMain.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
-let inspectorMainImplInstance: InspectorMainImpl;
 
 export class InspectorMainImpl implements Common.Runnable.Runnable {
-  static instance(opts: {
-    forceNew: boolean|null,
-  } = {forceNew: null}): InspectorMainImpl {
-    const {forceNew} = opts;
-    if (!inspectorMainImplInstance || forceNew) {
-      inspectorMainImplInstance = new InspectorMainImpl();
-    }
-
-    return inspectorMainImplInstance;
-  }
-
   async run(): Promise<void> {
     let firstCall = true;
     await SDK.Connections.initMainConnection(async () => {
       const type = Root.Runtime.Runtime.queryParam('v8only') ?
-          SDK.Target.Type.Node :
-          (Root.Runtime.Runtime.queryParam('targetType') === 'tab' ? SDK.Target.Type.Tab : SDK.Target.Type.Frame);
+          SDK.Target.Type.NODE :
+          (Root.Runtime.Runtime.queryParam('targetType') === 'tab' || Root.Runtime.Runtime.isTraceApp() ?
+               SDK.Target.Type.TAB :
+               SDK.Target.Type.FRAME);
       // TODO(crbug.com/1348385): support waiting for debugger with tab target.
       const waitForDebuggerInPage =
-          type === SDK.Target.Type.Frame && Root.Runtime.Runtime.queryParam('panel') === 'sources';
-      const name = type === SDK.Target.Type.Frame ? i18nString(UIStrings.main) : i18nString(UIStrings.tab);
+          type === SDK.Target.Type.FRAME && Root.Runtime.Runtime.queryParam('panel') === 'sources';
+      const name = type === SDK.Target.Type.FRAME ? i18nString(UIStrings.main) : i18nString(UIStrings.tab);
       const target = SDK.TargetManager.TargetManager.instance().createTarget(
           'main', name, type, null, undefined, waitForDebuggerInPage);
 
@@ -102,10 +96,10 @@ export class InspectorMainImpl implements Common.Runnable.Runnable {
         }
       }
 
-      if (type !== SDK.Target.Type.Tab) {
+      if (type !== SDK.Target.Type.TAB) {
         void target.runtimeAgent().invoke_runIfWaitingForDebugger();
       }
-    }, Components.TargetDetachedDialog.TargetDetachedDialog.webSocketConnectionLost);
+    }, Components.TargetDetachedDialog.TargetDetachedDialog.connectionLost);
 
     new SourcesPanelIndicator();
     new BackendSettingsSync();
@@ -118,7 +112,7 @@ export class InspectorMainImpl implements Common.Runnable.Runnable {
   }
 }
 
-Common.Runnable.registerEarlyInitializationRunnable(InspectorMainImpl.instance);
+Common.Runnable.registerEarlyInitializationRunnable(() => new InspectorMainImpl());
 
 export class ReloadActionDelegate implements UI.ActionRegistration.ActionDelegate {
   handleAction(_context: UI.Context.Context, actionId: string): boolean {
@@ -145,46 +139,98 @@ export class FocusDebuggeeActionDelegate implements UI.ActionRegistration.Action
   }
 }
 
-let nodeIndicatorInstance: NodeIndicator;
+interface ViewInput {
+  nodeProcessRunning: Boolean;
+}
 
-export class NodeIndicator implements UI.Toolbar.Provider {
-  readonly #element: Element;
-  readonly #button: UI.Toolbar.ToolbarItem;
-  private constructor() {
-    const element = document.createElement('div');
-    const shadowRoot =
-        UI.Utils.createShadowRootWithCoreStyles(element, {cssFile: [nodeIconStyles], delegatesFocus: undefined});
-    this.#element = shadowRoot.createChild('div', 'node-icon');
-    element.addEventListener(
-        'click', () => Host.InspectorFrontendHost.InspectorFrontendHostInstance.openNodeFrontend(), false);
-    this.#button = new UI.Toolbar.ToolbarItem(element);
-    this.#button.setTitle(i18nString(UIStrings.openDedicatedTools));
+type View = (input: ViewInput, _output: object, target: HTMLElement) => void;
+
+const isNodeProcessRunning = (targetInfos: Protocol.Target.TargetInfo[]): Boolean => {
+  return Boolean(targetInfos.find(target => target.type === 'node' && !target.attached));
+};
+
+export const DEFAULT_VIEW: View = (input, output, target) => {
+  const {
+    nodeProcessRunning,
+  } = input;
+
+  // clang-format off
+  Lit.render(html`
+    <style>${nodeIconStyles}</style>
+    <div
+        class="node-icon ${!nodeProcessRunning ? 'inactive' : ''}"
+        title=${i18nString(UIStrings.openDedicatedTools)}
+        @click=${
+            () => Host.InspectorFrontendHost.InspectorFrontendHostInstance.openNodeFrontend()}>
+    </div>
+    `, target);
+  // clang-format on
+};
+
+export class NodeIndicator extends UI.Widget.Widget {
+  readonly #view: View;
+  #targetInfos: Protocol.Target.TargetInfo[] = [];
+  #wasShown = false;
+
+  constructor(element?: HTMLElement, view = DEFAULT_VIEW) {
+    super(element, {useShadowDom: true});
+    this.#view = view;
+
     SDK.TargetManager.TargetManager.instance().addEventListener(
-        SDK.TargetManager.Events.AvailableTargetsChanged, event => this.#update(event.data));
-    this.#button.setVisible(false);
-    this.#update([]);
-  }
-  static instance(opts: {
-    forceNew: boolean|null,
-  } = {forceNew: null}): NodeIndicator {
-    const {forceNew} = opts;
-    if (!nodeIndicatorInstance || forceNew) {
-      nodeIndicatorInstance = new NodeIndicator();
-    }
-
-    return nodeIndicatorInstance;
+        SDK.TargetManager.Events.AVAILABLE_TARGETS_CHANGED, event => {
+          this.#targetInfos = event.data;
+          this.requestUpdate();
+        });
   }
 
-  #update(targetInfos: Protocol.Target.TargetInfo[]): void {
-    const hasNode = Boolean(targetInfos.find(target => target.type === 'node' && !target.attached));
-    this.#element.classList.toggle('inactive', !hasNode);
-    if (hasNode) {
-      this.#button.setVisible(true);
+  override performUpdate(): void {
+    // Disable when we are testing, as debugging e2e
+    // attaches a debug process and this changes some view sizes
+    if (Host.InspectorFrontendHost.isUnderTest()) {
+      return;
     }
+
+    const nodeProcessRunning: Boolean = isNodeProcessRunning(this.#targetInfos);
+
+    if (!this.#wasShown && !nodeProcessRunning) {
+      // This widget is designed to be hidden until the first debuggable Node process is detected. Therefore
+      // we don't construct the view if there's no data. After we've shown it once, it remains on-sreen and
+      // indicates via its disabled state whether Node debugging is available.
+      return;
+    }
+    this.#wasShown = true;
+
+    const input: ViewInput = {
+      nodeProcessRunning,
+    };
+    this.#view(input, {}, this.contentElement);
+  }
+}
+
+let nodeIndicatorProviderInstance: NodeIndicatorProvider;
+export class NodeIndicatorProvider implements UI.Toolbar.Provider {
+  #toolbarItem: UI.Toolbar.ToolbarItem;
+  #widgetElement: UI.Widget.WidgetElement<NodeIndicator>;
+
+  private constructor() {
+    this.#widgetElement = document.createElement('devtools-widget') as UI.Widget.WidgetElement<NodeIndicator>;
+    this.#widgetElement.widgetConfig = UI.Widget.widgetConfig(NodeIndicator);
+
+    this.#toolbarItem = new UI.Toolbar.ToolbarItem(this.#widgetElement);
+    this.#toolbarItem.setVisible(false);
   }
 
   item(): UI.Toolbar.ToolbarItem|null {
-    return this.#button;
+    return this.#toolbarItem;
+  }
+
+  static instance(opts: {forceNew: boolean|null} = {forceNew: null}): NodeIndicatorProvider {
+    const {forceNew} = opts;
+    if (!nodeIndicatorProviderInstance || forceNew) {
+      nodeIndicatorProviderInstance = new NodeIndicatorProvider();
+    }
+
+    return nodeIndicatorProviderInstance;
   }
 }
 
@@ -220,12 +266,15 @@ export class BackendSettingsSync implements SDK.TargetManager.Observer {
 
     this.#emulatePageFocusSetting = Common.Settings.Settings.instance().moduleSetting('emulate-page-focus');
     this.#emulatePageFocusSetting.addChangeListener(this.#update, this);
+    SDK.TargetManager.TargetManager.instance().addModelListener(
+        SDK.ChildTargetManager.ChildTargetManager, SDK.ChildTargetManager.Events.TARGET_INFO_CHANGED,
+        this.#targetInfoChanged, this);
 
     SDK.TargetManager.TargetManager.instance().observeTargets(this);
   }
 
   #updateTarget(target: SDK.Target.Target): void {
-    if (target.type() !== SDK.Target.Type.Frame || target.parentTarget()?.type() === SDK.Target.Type.Frame) {
+    if (target.type() !== SDK.Target.Type.FRAME || target.parentTarget()?.type() === SDK.Target.Type.FRAME) {
       return;
     }
     void target.pageAgent().invoke_setAdBlockingEnabled({enabled: this.#adBlockEnabledSetting.get()});
@@ -240,6 +289,15 @@ export class BackendSettingsSync implements SDK.TargetManager.Observer {
     for (const target of SDK.TargetManager.TargetManager.instance().targets()) {
       this.#updateTarget(target);
     }
+  }
+
+  #targetInfoChanged(event: Common.EventTarget.EventTargetEvent<Protocol.Target.TargetInfo>): void {
+    const targetManager = SDK.TargetManager.TargetManager.instance();
+    const target = targetManager.targetById(event.data.targetId);
+    if (!target || target.outermostTarget() !== target) {
+      return;
+    }
+    this.#updateTarget(target);
   }
 
   targetAdded(target: SDK.Target.Target): void {

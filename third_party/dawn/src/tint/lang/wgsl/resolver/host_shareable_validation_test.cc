@@ -50,7 +50,7 @@ TEST_F(ResolverHostShareableValidationTest, BoolMember) {
 
     EXPECT_EQ(
         r()->error(),
-        R"(12:34 error: Type 'bool' cannot be used in address space 'storage' as it is non-host-shareable
+        R"(12:34 error: type 'bool' cannot be used in address space 'storage' as it is non-host-shareable
 56:78 note: while analyzing structure member S.x
 90:12 note: while instantiating 'var' g)");
 }
@@ -66,14 +66,15 @@ TEST_F(ResolverHostShareableValidationTest, BoolVectorMember) {
 
     EXPECT_EQ(
         r()->error(),
-        R"(12:34 error: Type 'vec3<bool>' cannot be used in address space 'storage' as it is non-host-shareable
+        R"(12:34 error: type 'vec3<bool>' cannot be used in address space 'storage' as it is non-host-shareable
 56:78 note: while analyzing structure member S.x
 90:12 note: while instantiating 'var' g)");
 }
 
 TEST_F(ResolverHostShareableValidationTest, Aliases) {
     Alias("a1", ty.bool_());
-    auto* s = Structure("S", Vector{Member(Source{{56, 78}}, "x", ty(Source{{12, 34}}, "a1"))});
+    auto* s =
+        Structure("S", Vector{Member(Source{{56, 78}}, "x", ty.AsType(Source{{12, 34}}, "a1"))});
     auto* a2 = Alias("a2", ty.Of(s));
     GlobalVar(Source{{90, 12}}, "g", ty.Of(a2), core::AddressSpace::kStorage, core::Access::kRead,
               Binding(0_a), Group(0_a));
@@ -82,7 +83,7 @@ TEST_F(ResolverHostShareableValidationTest, Aliases) {
 
     EXPECT_EQ(
         r()->error(),
-        R"(12:34 error: Type 'bool' cannot be used in address space 'storage' as it is non-host-shareable
+        R"(12:34 error: type 'bool' cannot be used in address space 'storage' as it is non-host-shareable
 56:78 note: while analyzing structure member S.x
 90:12 note: while instantiating 'var' g)");
 }
@@ -101,7 +102,7 @@ TEST_F(ResolverHostShareableValidationTest, NestedStructures) {
 
     EXPECT_EQ(
         r()->error(),
-        R"(error: Type 'bool' cannot be used in address space 'storage' as it is non-host-shareable
+        R"(error: type 'bool' cannot be used in address space 'storage' as it is non-host-shareable
 1:2 note: while analyzing structure member I1.x
 3:4 note: while analyzing structure member I2.y
 5:6 note: while analyzing structure member I3.z

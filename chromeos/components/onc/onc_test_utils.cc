@@ -11,11 +11,13 @@
 #include "base/files/file_util.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
+#include "components/onc/onc_constants.h"
 
 namespace chromeos::onc::test_utils {
 
@@ -75,7 +77,7 @@ base::Value ReadTestJson(const std::string& filename) {
 
 }  // namespace
 
-base::Value::Dict ReadTestDictionary(const std::string& filename) {
+base::DictValue ReadTestDictionary(const std::string& filename) {
   base::Value content = ReadTestJson(filename);
   CHECK(content.is_dict())
       << "File '" << filename
@@ -84,7 +86,7 @@ base::Value::Dict ReadTestDictionary(const std::string& filename) {
   return std::move(content.GetDict());
 }
 
-base::Value::List ReadTestList(const std::string& filename) {
+base::ListValue ReadTestList(const std::string& filename) {
   base::Value content = ReadTestJson(filename);
   CHECK(content.is_list()) << "File '" << filename
                            << "' does not contain a list as expected, but type "
@@ -92,8 +94,8 @@ base::Value::List ReadTestList(const std::string& filename) {
   return std::move(content.GetList());
 }
 
-::testing::AssertionResult Equals(const base::Value::Dict* expected,
-                                  const base::Value::Dict* actual) {
+::testing::AssertionResult Equals(const base::DictValue* expected,
+                                  const base::DictValue* actual) {
   CHECK(expected != nullptr);
   if (actual == nullptr) {
     return ::testing::AssertionFailure() << "Actual value pointer is nullptr";
@@ -107,6 +109,126 @@ base::Value::List ReadTestList(const std::string& filename) {
                                        << "Expected value:\n"
                                        << *expected << "Actual value:\n"
                                        << *actual;
+}
+
+namespace {
+
+base::ListValue ConvertToBaseValueList(
+    const std::vector<std::string>& string_vector) {
+  base::ListValue result;
+  for (const std::string& str : string_vector) {
+    result.Append(str);
+  }
+  return result;
+}
+
+}  // namespace
+
+TestToplevelApnData::TestToplevelApnData(
+    std::optional<std::string> id,
+    std::optional<std::string> access_point_name,
+    std::optional<std::string> ip_type,
+    std::optional<std::vector<std::string>> apn_types,
+    std::optional<std::vector<std::string>> admin_apn_list_ids,
+    std::optional<std::vector<std::string>> psim_admin_assigned_apn_ids,
+    std::optional<std::vector<std::string>> admin_assigned_apn_ids)
+    : id(id),
+      access_point_name(access_point_name),
+      ip_type(ip_type),
+      apn_types(apn_types),
+      admin_apn_list_ids(admin_apn_list_ids),
+      psim_admin_assigned_apn_ids(psim_admin_assigned_apn_ids),
+      admin_assigned_apn_ids(admin_assigned_apn_ids) {}
+
+TestToplevelApnData::~TestToplevelApnData() = default;
+
+TestToplevelApnData::TestToplevelApnData(const TestToplevelApnData& other)
+    : id(other.id),
+      access_point_name(other.access_point_name),
+      ip_type(other.ip_type),
+      apn_types(other.apn_types),
+      admin_apn_list_ids(other.admin_apn_list_ids),
+      psim_admin_assigned_apn_ids(other.psim_admin_assigned_apn_ids),
+      admin_assigned_apn_ids(other.admin_assigned_apn_ids) {}
+
+// Helper function to build an individual APN dictionary
+base::DictValue BuildApnDict(TestToplevelApnData apn_data) {
+  base::DictValue apn_dict;
+
+  auto maybe_set_string = [&](const char* key,
+                              const std::optional<std::string>& value) {
+    if (value.has_value()) {
+      apn_dict.Set(key, *value);
+    }
+  };
+
+  maybe_set_string(::onc::cellular_apn::kId, apn_data.id);
+  maybe_set_string(::onc::cellular_apn::kAccessPointName,
+                   apn_data.access_point_name);
+  maybe_set_string(::onc::cellular_apn::kIpType, apn_data.ip_type);
+
+  if (apn_data.apn_types) {
+    apn_dict.Set(::onc::cellular_apn::kApnTypes,
+                 ConvertToBaseValueList(apn_data.apn_types.value()));
+  }
+
+  return apn_dict;
+}
+
+const std::string GenerateTopLevelWithCellularWithAPNAsJSON(
+    TestToplevelApnData apn_data) {
+  base::DictValue top_level_dict =
+      test_utils::ReadTestDictionary("toplevel_cellular_no_apn.onc");
+
+  // Locate the Cellular config within the top-level dictionary
+  base::ListValue* network_configs =
+      top_level_dict.FindList(::onc::toplevel_config::kNetworkConfigurations);
+  DCHECK(network_configs);
+  base::DictValue* cellular_network_config_dict =
+      network_configs->front().GetIfDict();
+  DCHECK(cellular_network_config_dict);
+  base::DictValue* cellular_dict =
+      cellular_network_config_dict->FindDict(::onc::network_config::kCellular);
+  DCHECK(cellular_dict);
+  cellular_dict->Set(::onc::cellular::kAPN, BuildApnDict(apn_data));
+  if (apn_data.admin_assigned_apn_ids.has_value()) {
+    cellular_dict->Set(
+        ::onc::cellular::kAdminAssignedAPNIds,
+        ConvertToBaseValueList(apn_data.admin_assigned_apn_ids.value()));
+  }
+
+  if (apn_data.admin_apn_list_ids.has_value()) {
+    base::ListValue admin_apn_list;
+
+    for (const std::string& apn_id : apn_data.admin_apn_list_ids.value()) {
+      // Use BuildApnDict with the apn_id and optional values as null
+      TestToplevelApnData admin_apn_data;
+      admin_apn_data.id = apn_id;
+      admin_apn_data.access_point_name = "test-access-point-name";
+      admin_apn_list.Append(BuildApnDict(admin_apn_data));
+    }
+    top_level_dict.Set(::onc::toplevel_config::kAdminAPNList,
+                       std::move(admin_apn_list));
+  }
+
+  if (apn_data.psim_admin_assigned_apn_ids.has_value()) {
+    // Locate the Global network config within the top-level dictionary
+    base::DictValue* global_network_config = top_level_dict.FindDict(
+        ::onc::toplevel_config::kGlobalNetworkConfiguration);
+    DCHECK(global_network_config);
+    global_network_config->Set(
+        ::onc::global_network_config::kPSIMAdminAssignedAPNIds,
+        ConvertToBaseValueList(apn_data.psim_admin_assigned_apn_ids.value()));
+  }
+
+  // Serialize to JSON string
+  std::string json_output;
+  if (!base::JSONWriter::WriteWithOptions(
+          top_level_dict, base::JSONWriter::OPTIONS_PRETTY_PRINT,
+          &json_output)) {
+    LOG(ERROR) << "JSON serialization failed";
+  }
+  return json_output;
 }
 
 }  // namespace chromeos::onc::test_utils

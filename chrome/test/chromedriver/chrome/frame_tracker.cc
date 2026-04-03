@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "chrome/test/chromedriver/chrome/devtools_client.h"
 #include "chrome/test/chromedriver/chrome/status.h"
@@ -79,7 +80,7 @@ Status FrameTracker::OnConnected(DevToolsClient* client) {
   frame_to_target_map_.clear();
   attached_frames_.clear();
   // Enable target events to allow tracking iframe targets creation.
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("autoAttach", true);
   params.Set("flatten", true);
   params.Set("waitForDebuggerOnStart", false);
@@ -93,9 +94,9 @@ Status FrameTracker::OnConnected(DevToolsClient* client) {
 
 Status FrameTracker::OnEvent(DevToolsClient* client,
                              const std::string& method,
-                             const base::Value::Dict& params) {
+                             const base::DictValue& params) {
   if (method == "Runtime.executionContextCreated") {
-    const base::Value::Dict* context = params.FindDict("context");
+    const base::DictValue* context = params.FindDict("context");
     if (!context) {
       return Status(kUnknownError,
                     "Runtime.executionContextCreated missing dict 'context'");
@@ -103,8 +104,7 @@ Status FrameTracker::OnEvent(DevToolsClient* client,
 
     const std::string* context_id = context->FindString("uniqueId");
     if (!context_id) {
-      std::string json;
-      base::JSONWriter::Write(*context, &json);
+      std::string json = base::WriteJson(*context).value_or("");
       return Status(kUnknownError, method + " has invalid 'context': " + json);
     }
 
@@ -211,4 +211,10 @@ Status FrameTracker::OnEvent(DevToolsClient* client,
       frame_to_target_map_.erase(*target_id);
   }
   return Status(kOk);
+}
+
+void FrameTracker::ForEachTarget(base::RepeatingCallback<void(WebView&)> func) {
+  for (auto& pair : frame_to_target_map_) {
+    func.Run(*pair.second);
+  }
 }

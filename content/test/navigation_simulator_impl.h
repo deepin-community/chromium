@@ -25,6 +25,7 @@
 #include "net/base/load_flags.h"
 #include "net/dns/public/resolve_error_info.h"
 #include "net/http/http_connection_info.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/common/navigation/impression.h"
 #include "third_party/blink/public/mojom/loader/mixed_content.mojom.h"
 #include "third_party/blink/public/mojom/loader/referrer.mojom-forward.h"
@@ -46,7 +47,7 @@ class NavigationSimulatorImpl : public NavigationSimulator,
  public:
   ~NavigationSimulatorImpl() override;
 
-  // TODO(https://crbug.com/1131832): Remove `original_url` as it's not used.
+  // TODO(crbug.com/40150370): Remove `original_url` as it's not used.
   static std::unique_ptr<NavigationSimulatorImpl> CreateBrowserInitiated(
       const GURL& original_url,
       WebContents* contents);
@@ -56,7 +57,7 @@ class NavigationSimulatorImpl : public NavigationSimulator,
       WebContents* web_contents,
       bool is_renderer_initiated);
 
-  // TODO(https://crbug.com/1131832): Remove `original_url` as it's not used.
+  // TODO(crbug.com/40150370): Remove `original_url` as it's not used.
   static std::unique_ptr<NavigationSimulatorImpl> CreateRendererInitiated(
       const GURL& original_url,
       RenderFrameHost* render_frame_host);
@@ -97,7 +98,7 @@ class NavigationSimulatorImpl : public NavigationSimulator,
   void SetIsSignedExchangeInnerResponse(
       bool is_signed_exchange_inner_response) override;
   void SetPermissionsPolicyHeader(
-      blink::ParsedPermissionsPolicy permissions_policy_header) override;
+      network::ParsedPermissionsPolicy permissions_policy_header) override;
   void SetContentsMimeType(const std::string& contents_mime_type) override;
   void SetRedirectHeaders(
       scoped_refptr<net::HttpResponseHeaders> redirect_headers) override;
@@ -114,6 +115,7 @@ class NavigationSimulatorImpl : public NavigationSimulator,
 
   NavigationThrottle::ThrottleCheckResult GetLastThrottleCheckResult() override;
   NavigationRequest* GetNavigationHandle() override;
+  NavigationThrottleRegistry& GetNavigationThrottleRegistry() override;
   content::GlobalRequestID GetGlobalRequestID() override;
 
   void SetKeepLoading(bool keep_loading) override;
@@ -383,7 +385,7 @@ class NavigationSimulatorImpl : public NavigationSimulator,
   std::string contents_mime_type_;
   scoped_refptr<net::HttpResponseHeaders> redirect_headers_;
   scoped_refptr<net::HttpResponseHeaders> response_headers_;
-  blink::ParsedPermissionsPolicy permissions_policy_header_;
+  network::ParsedPermissionsPolicy permissions_policy_header_;
   mojo::ScopedDataPipeConsumerHandle response_body_;
   network::mojom::CSPDisposition should_check_main_world_csp_ =
       network::mojom::CSPDisposition::CHECK;

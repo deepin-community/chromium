@@ -4,7 +4,6 @@
 
 #include "chromeos/ash/services/secure_channel/ble_scanner.h"
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
@@ -17,10 +16,9 @@ BleScanner::BleScanner() = default;
 BleScanner::~BleScanner() = default;
 
 void BleScanner::AddScanRequest(const ConnectionAttemptDetails& scan_request) {
-  if (base::Contains(scan_requests_, scan_request)) {
-    PA_LOG(ERROR) << "BleScanner::AddScanRequest(): Tried to add a scan "
-                  << "request which already existed: " << scan_request;
-    NOTREACHED();
+  if (scan_requests_.contains(scan_request)) {
+    NOTREACHED() << "BleScanner::AddScanRequest(): Tried to add a scan "
+                 << "request which already existed: " << scan_request;
   }
 
   scan_requests_.insert(scan_request);
@@ -29,10 +27,9 @@ void BleScanner::AddScanRequest(const ConnectionAttemptDetails& scan_request) {
 
 void BleScanner::RemoveScanRequest(
     const ConnectionAttemptDetails& scan_request) {
-  if (!base::Contains(scan_requests_, scan_request)) {
-    PA_LOG(ERROR) << "BleScanner::RemoveScanRequest(): Tried to remove a scan "
-                  << "request which was not present: " << scan_request;
-    NOTREACHED();
+  if (!scan_requests_.contains(scan_request)) {
+    NOTREACHED() << "BleScanner::RemoveScanRequest(): Tried to remove a scan "
+                 << "request which was not present: " << scan_request;
   }
 
   scan_requests_.erase(scan_request);
@@ -40,7 +37,7 @@ void BleScanner::RemoveScanRequest(
 }
 
 bool BleScanner::HasScanRequest(const ConnectionAttemptDetails& scan_request) {
-  return base::Contains(scan_requests_, scan_request);
+  return scan_requests_.contains(scan_request);
 }
 
 void BleScanner::AddObserver(Observer* observer) {
@@ -76,7 +73,7 @@ void BleScanner::NotifyReceivedAdvertisementFromDevice(
 void BleScanner::NotifyBleDiscoverySessionFailed(
     const DeviceIdPair& device_id_pair,
     mojom::DiscoveryResult discovery_result,
-    absl::optional<mojom::DiscoveryErrorCode> error_code) {
+    std::optional<mojom::DiscoveryErrorCode> error_code) {
   for (auto& observer : observer_list_) {
     observer.OnDiscoveryFailed(device_id_pair, discovery_result, error_code);
   }

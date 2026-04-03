@@ -19,6 +19,7 @@
 #include "chrome/browser/web_applications/jobs/uninstall/uninstall_job.h"
 #include "chrome/browser/web_applications/locks/all_apps_lock.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
+#include "chrome/browser/web_applications/web_app_management_type.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/browser/uninstall_result_code.h"
 
@@ -79,7 +80,10 @@ WebAppUninstallCommand::WebAppUninstallCommand(
           *GetMutableDebugValue().EnsureDict("remove_install_url_job"),
           app_id,
           install_source,
-          install_url)) {}
+          install_url)) {
+  // Track an uninstallation event, regardless of whether it succeeded or not.
+  webapps::InstallableMetrics::TrackUninstallEvent(uninstall_source);
+}
 
 WebAppUninstallCommand::WebAppUninstallCommand(
     webapps::WebappUninstallSource uninstall_source,
@@ -97,7 +101,10 @@ WebAppUninstallCommand::WebAppUninstallCommand(
           profile,
           *GetMutableDebugValue().EnsureDict("remove_install_source_job"),
           app_id,
-          install_managements)) {}
+          install_managements)) {
+  // Track an uninstallation event, regardless of whether it succeeded or not.
+  webapps::InstallableMetrics::TrackUninstallEvent(uninstall_source);
+}
 
 WebAppUninstallCommand::WebAppUninstallCommand(
     webapps::WebappUninstallSource uninstall_source,
@@ -119,6 +126,8 @@ WebAppUninstallCommand::WebAppUninstallCommand(
       << "The uninstall source for removing all user-installable install "
          "management types must be a user uninstall source. Source:"
       << uninstall_source;
+  // Track an uninstallation event, regardless of whether it succeeded or not.
+  webapps::InstallableMetrics::TrackUninstallEvent(uninstall_source);
 }
 
 WebAppUninstallCommand::~WebAppUninstallCommand() = default;
@@ -140,14 +149,16 @@ void WebAppUninstallCommand::OnCompletion(webapps::UninstallResultCode code) {
   CompleteAndSelfDestruct(
       [code]() {
         switch (code) {
-          case webapps::UninstallResultCode::kSuccess:
+          case webapps::UninstallResultCode::kAppRemoved:
+          case webapps::UninstallResultCode::kInstallSourceRemoved:
+          case webapps::UninstallResultCode::kInstallUrlRemoved:
           case webapps::UninstallResultCode::kNoAppToUninstall:
             return CommandResult::kSuccess;
           case webapps::UninstallResultCode::kCancelled:
           case webapps::UninstallResultCode::kError:
             return CommandResult::kFailure;
           case webapps::UninstallResultCode::kShutdown:
-            NOTREACHED_NORETURN();
+            NOTREACHED();
         }
       }(),
       code);

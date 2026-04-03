@@ -11,23 +11,26 @@
 #include "core/fxcrt/fx_system.h"
 #include "core/fxcrt/span.h"
 
-CPSOutput::CPSOutput(HDC hDC, OutputMode mode) : m_hDC(hDC), m_mode(mode) {}
+CPSOutput::CPSOutput(HDC hDC, OutputMode mode) : dc_handle_(hDC), mode_(mode) {}
 
 CPSOutput::~CPSOutput() = default;
 
 bool CPSOutput::WriteBlock(pdfium::span<const uint8_t> input) {
+  uint8_t buffer[1026];
+  auto [header_span, buffer_span] = pdfium::span(buffer).split_at<2>();
+  auto header_span16 = fxcrt::reinterpret_span<uint16_t>(header_span);
+
   while (!input.empty()) {
-    uint8_t buffer[1026];
     size_t send_len = std::min<size_t>(input.size(), 1024);
-    *(reinterpret_cast<uint16_t*>(buffer)) = static_cast<uint16_t>(send_len);
-    memcpy(buffer + 2, input.data(), send_len);
-    switch (m_mode) {
+    header_span16[0] = static_cast<uint16_t>(send_len);
+    buffer_span.copy_prefix_from(input.first(send_len));
+    switch (mode_) {
       case OutputMode::kExtEscape:
-        ExtEscape(m_hDC, PASSTHROUGH, static_cast<int>(send_len + 2),
+        ExtEscape(dc_handle_, PASSTHROUGH, static_cast<int>(send_len + 2),
                   reinterpret_cast<const char*>(buffer), 0, nullptr);
         break;
       case OutputMode::kGdiComment:
-        GdiComment(m_hDC, static_cast<UINT>(send_len + 2), buffer);
+        GdiComment(dc_handle_, static_cast<UINT>(send_len + 2), buffer);
         break;
     }
     input = input.subspan(send_len);

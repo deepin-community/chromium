@@ -4,6 +4,10 @@
 
 #include "quiche/quic/core/qpack/qpack_send_stream.h"
 
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "quiche/quic/core/crypto/null_encrypter.h"
@@ -49,7 +53,7 @@ std::vector<TestParams> GetTestParams() {
   std::vector<TestParams> params;
   ParsedQuicVersionVector all_supported_versions = AllSupportedVersions();
   for (const auto& version : AllSupportedVersions()) {
-    if (!VersionUsesHttp3(version.transport_version)) {
+    if (!VersionIsIetfQuic(version.transport_version)) {
       continue;
     }
     for (Perspective p : {Perspective::IS_SERVER, Perspective::IS_CLIENT}) {
@@ -71,7 +75,7 @@ class QpackSendStreamTest : public QuicTestWithParam<TestParams> {
     connection_->SetEncrypter(
         ENCRYPTION_FORWARD_SECURE,
         std::make_unique<NullEncrypter>(connection_->perspective()));
-    if (connection_->version().SupportsAntiAmplificationLimit()) {
+    if (connection_->version().IsIetfQuic()) {
       QuicConnectionPeer::SetAddressValidated(connection_);
     }
     QuicConfigPeer::SetReceivedInitialSessionFlowControlWindow(
@@ -126,6 +130,11 @@ TEST_P(QpackSendStreamTest, ReceiveDataOnSendStream) {
       *connection_,
       CloseConnection(QUIC_DATA_RECEIVED_ON_WRITE_UNIDIRECTIONAL_STREAM, _, _));
   qpack_send_stream_->OnStreamFrame(frame);
+}
+
+TEST_P(QpackSendStreamTest, GetSendWindowSizeFromSession) {
+  EXPECT_NE(session_.GetFlowControlSendWindowSize(qpack_send_stream_->id()),
+            std::numeric_limits<QuicByteCount>::max());
 }
 
 }  // namespace

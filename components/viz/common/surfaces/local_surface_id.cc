@@ -9,6 +9,8 @@
 #include "base/hash/hash.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
+#include "base/tracing/protos/chrome_track_event.pbzero.h"
+#include "third_party/perfetto/include/perfetto/tracing/traced_proto.h"
 
 namespace viz {
 
@@ -43,10 +45,15 @@ std::ostream& operator<<(std::ostream& out,
 }
 
 bool LocalSurfaceId::IsNewerThan(const LocalSurfaceId& other) const {
+  return embed_token_ == other.embed_token_ &&
+         IsNewerThanIgnoringEmbedToken(other);
+}
+
+bool LocalSurfaceId::IsNewerThanIgnoringEmbedToken(
+    const LocalSurfaceId& other) const {
   // Sequence numbers can wrap around so look at their difference instead of
   // their absolute values.
-  return embed_token_ == other.embed_token_ &&
-         (child_sequence_number_ - other.child_sequence_number_ < (1u << 31)) &&
+  return (child_sequence_number_ - other.child_sequence_number_ < (1u << 31)) &&
          (parent_sequence_number_ - other.parent_sequence_number_ <
           (1u << 31)) &&
          (child_sequence_number_ != other.child_sequence_number_ ||

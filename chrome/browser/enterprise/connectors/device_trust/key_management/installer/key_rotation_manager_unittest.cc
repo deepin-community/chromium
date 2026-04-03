@@ -23,7 +23,7 @@
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/installer/key_rotation_types.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/installer/metrics_util.h"
 #include "components/policy/proto/device_management_backend.pb.h"
-#include "crypto/scoped_mock_unexportable_key_provider.h"
+#include "crypto/scoped_fake_unexportable_key_provider.h"
 #include "crypto/unexportable_key.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -34,7 +34,6 @@ using testing::_;
 using testing::ByMove;
 using testing::ElementsAre;
 using testing::InSequence;
-using testing::Invoke;
 using testing::Not;
 using testing::Pair;
 using testing::Return;
@@ -98,7 +97,7 @@ constexpr std::array<
 class KeyRotationManagerTest : public testing::Test {
  protected:
   KeyRotationManagerTest()
-      : key_provider_(crypto::GetUnexportableKeyProvider()) {
+      : key_provider_(crypto::GetUnexportableKeyProvider(/*config=*/{})) {
     ResetHistograms();
     auto mock_network_delegate =
         std::make_unique<StrictMock<MockKeyNetworkDelegate>>();
@@ -120,13 +119,13 @@ class KeyRotationManagerTest : public testing::Test {
   void SetUploadCode(HttpResponseCode response_code) {
     EXPECT_CALL(*mock_network_delegate_,
                 SendPublicKeyToDmServer(GURL(kDmServerUrl), kDmToken, _, _))
-        .WillOnce(Invoke(
-            [&, response_code](const GURL& url, const std::string& dm_token,
-                               const std::string& body,
-                               base::OnceCallback<void(int)> callback) {
-              captured_upload_body_ = body;
-              std::move(callback).Run(response_code);
-            }));
+        .WillOnce([&, response_code](const GURL& url,
+                                     const std::string& dm_token,
+                                     const std::string& body,
+                                     base::OnceCallback<void(int)> callback) {
+          captured_upload_body_ = body;
+          std::move(callback).Run(response_code);
+        });
   }
 
   void SetUpOldKey(bool exists = true) {
@@ -140,7 +139,7 @@ class KeyRotationManagerTest : public testing::Test {
       old_key_pair_.reset();
       EXPECT_CALL(*mock_persistence_delegate_,
                   LoadKeyPair(KeyStorageType::kPermanent, _))
-          .WillOnce(Invoke([]() { return nullptr; }));
+          .WillOnce([]() { return nullptr; });
     }
   }
 
@@ -156,8 +155,9 @@ class KeyRotationManagerTest : public testing::Test {
       EXPECT_CALL(*mock_persistence_delegate_, CreateKeyPair())
           .WillOnce(Return(new_key_pair_));
     } else {
-      EXPECT_CALL(*mock_persistence_delegate_, CreateKeyPair())
-          .WillOnce(Invoke([]() { return nullptr; }));
+      EXPECT_CALL(*mock_persistence_delegate_, CreateKeyPair()).WillOnce([]() {
+        return nullptr;
+      });
     }
   }
 
@@ -202,9 +202,8 @@ class KeyRotationManagerTest : public testing::Test {
     histogram_tester_ = std::make_unique<base::HistogramTester>();
   }
 
-  //   test::ScopedKeyPersistenceDelegateFactory scoped_factory_;
   base::test::TaskEnvironment task_environment_;
-  crypto::ScopedMockUnexportableKeyProvider scoped_key_provider_;
+  crypto::ScopedFakeUnexportableKeyProvider scoped_key_provider_;
   std::unique_ptr<base::HistogramTester> histogram_tester_;
   std::unique_ptr<crypto::UnexportableKeyProvider> key_provider_;
 

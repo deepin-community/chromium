@@ -37,7 +37,8 @@ class StaticSizedView : public View {
   }
 
   // View overrides:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& /*available_size*/) const override;
   gfx::Size GetMinimumSize() const override;
   gfx::Size GetMaximumSize() const override;
 
@@ -61,8 +62,8 @@ class ProportionallySizedView : public View {
 
   void SetPreferredWidth(int width);
 
-  int GetHeightForWidth(int w) const override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& available_size) const override;
 
  private:
   // The multiplicative factor between width and height, i.e.
@@ -99,7 +100,7 @@ class EventCountView : public View {
   // Whether to call SetHandled() on events as they are received. For some event
   // types, this will allow EventCountView to receives future events in the
   // event sequence, such as a drag.
-  enum HandleMode { PROPAGATE_EVENTS, CONSUME_EVENTS };
+  enum class HandleMode { kPropagateEvents, kConsumeEvents };
 
   EventCountView();
 
@@ -130,7 +131,7 @@ class EventCountView : public View {
 
   std::map<ui::EventType, int> event_count_;
   int last_flags_ = 0;
-  HandleMode handle_mode_ = PROPAGATE_EVENTS;
+  HandleMode handle_mode_ = HandleMode::kPropagateEvents;
 };
 
 // A view which reacts to PreferredSizeChanged() from its children by doing

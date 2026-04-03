@@ -51,8 +51,15 @@ class FakeShortcutInputObserver : public common::mojom::ShortcutInputObserver {
 };
 
 ui::KeyEvent CreateKeyEvent(bool pressed) {
-  return ui::KeyEvent(pressed ? ui::ET_KEY_PRESSED : ui::ET_KEY_RELEASED,
-                      ui::VKEY_A, ui::EF_NONE);
+  return ui::KeyEvent(
+      pressed ? ui::EventType::kKeyPressed : ui::EventType::kKeyReleased,
+      ui::VKEY_A, ui::EF_NONE);
+}
+
+ui::KeyEvent CreateFnKeyEvent(bool pressed) {
+  return ui::KeyEvent(
+      pressed ? ui::EventType::kKeyPressed : ui::EventType::kKeyReleased,
+      ui::VKEY_FUNCTION, ui::EF_NONE);
 }
 
 }  // namespace
@@ -60,8 +67,7 @@ ui::KeyEvent CreateKeyEvent(bool pressed) {
 class ShortcutInputProviderTest : public AshTestBase {
  public:
   ShortcutInputProviderTest() {
-    scoped_feature_list_.InitWithFeatures({features::kPeripheralCustomization,
-                                           features::kInputDeviceSettingsSplit},
+    scoped_feature_list_.InitWithFeatures({features::kPeripheralCustomization},
                                           {});
   }
 
@@ -76,7 +82,8 @@ class ShortcutInputProviderTest : public AshTestBase {
     shortcut_input_provider_->StartObservingShortcutInput(
         observer_->receiver.BindNewPipeAndPassRemote());
 
-    widget_ = CreateTestWidget();
+    widget_ =
+        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
     widget_->Show();
     widget_->Activate();
   }
@@ -119,7 +126,7 @@ TEST_F(ShortcutInputProviderTest, NoWidget) {
       Shell::Get()->shortcut_input_handler()->should_consume_key_events());
 }
 
-TEST_F(ShortcutInputProviderTest, NoObservedEventWithoutprewrittenEvent) {
+TEST_F(ShortcutInputProviderTest, ObservedEventWithoutprewrittenEvent) {
   ui::KeyEvent pressed_event = CreateKeyEvent(/*pressed=*/true);
   ui::KeyEvent released_event = CreateKeyEvent(/*pressed=*/false);
   shortcut_input_provider_->TieProviderToWidget(widget_.get());
@@ -128,8 +135,8 @@ TEST_F(ShortcutInputProviderTest, NoObservedEventWithoutprewrittenEvent) {
   shortcut_input_handler_->OnKeyEvent(&released_event);
   shortcut_input_provider_->FlushMojoForTesting();
 
-  EXPECT_EQ(0, observer_->num_input_events_pressed());
-  EXPECT_EQ(0, observer_->num_input_events_released());
+  EXPECT_EQ(1, observer_->num_input_events_pressed());
+  EXPECT_EQ(1, observer_->num_input_events_released());
   EXPECT_TRUE(Shell::Get()
                   ->accelerator_controller()
                   ->ShouldPreventProcessingAccelerators());
@@ -151,6 +158,29 @@ TEST_F(ShortcutInputProviderTest, PrewrittenEventOnlyDoesNotTriggerObserver) {
   EXPECT_TRUE(Shell::Get()
                   ->accelerator_controller()
                   ->ShouldPreventProcessingAccelerators());
+}
+
+TEST_F(ShortcutInputProviderTest, SimpleEventFixFnInShortCutApp) {
+  ui::KeyEvent prerewritten_pressed_event = CreateFnKeyEvent(/*pressed=*/true);
+  ui::KeyEvent prerewritten_released_event =
+      CreateFnKeyEvent(/*pressed=*/false);
+  ui::KeyEvent pressed_event = CreateFnKeyEvent(/*pressed=*/true);
+  ui::KeyEvent released_event = CreateFnKeyEvent(/*pressed=*/false);
+  shortcut_input_provider_->TieProviderToWidget(widget_.get());
+
+  shortcut_input_handler_->OnPrerewriteKeyInputEvent(
+      prerewritten_pressed_event);
+  shortcut_input_handler_->OnPrerewriteKeyInputEvent(
+      prerewritten_released_event);
+  shortcut_input_provider_->FlushMojoForTesting();
+
+  EXPECT_EQ(1, observer_->num_input_events_pressed());
+  EXPECT_EQ(1, observer_->num_input_events_released());
+  EXPECT_TRUE(Shell::Get()
+                  ->accelerator_controller()
+                  ->ShouldPreventProcessingAccelerators());
+  EXPECT_TRUE(
+      Shell::Get()->shortcut_input_handler()->should_consume_key_events());
 }
 
 TEST_F(ShortcutInputProviderTest, SimpleEvent) {

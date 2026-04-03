@@ -13,28 +13,41 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Casting.h"
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
+#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/Support/TypeID.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_op_interfaces.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tfrt/transforms/passes.h"
+#include "tensorflow/core/ir/types/dialect.h"
 
 namespace tensorflow {
 namespace tfrt_compiler {
 namespace {
 
-struct RewriteStatefulPartitionedCallToXlaLaunchOnCpu
-    : public mlir::OpRewritePattern<mlir::TF::StatefulPartitionedCallOp> {
-  using OpRewritePattern::OpRewritePattern;
+template <typename OpType>
+struct RewriteFunctionCallToXlaLaunchOnCpu
+    : public mlir::OpRewritePattern<OpType> {
+ public:
+  using mlir::OpRewritePattern<OpType>::OpRewritePattern;
 
   mlir::LogicalResult matchAndRewrite(
-      mlir::TF::StatefulPartitionedCallOp op,
-      mlir::PatternRewriter& rewriter) const override {
+      OpType op, mlir::PatternRewriter& rewriter) const override {
     if (auto xla_must_compile =
-            op->getAttrOfType<mlir::BoolAttr>("_XlaMustCompile");
+            op->template getAttrOfType<mlir::BoolAttr>("_XlaMustCompile");
         !xla_must_compile || !xla_must_compile.getValue()) {
       return mlir::failure();
     }
@@ -48,10 +61,8 @@ struct RewriteStatefulPartitionedCallToXlaLaunchOnCpu
 
     for (int i = 0; i < op.getNumOperands(); ++i) {
       auto value = op.getOperand(i);
-      if (value.getType()
-              .cast<mlir::TensorType>()
-              .getElementType()
-              .isa<mlir::tf_type::ResourceType>()) {
+      if (llvm::isa<mlir::tf_type::ResourceType>(
+              llvm::cast<mlir::TensorType>(value.getType()).getElementType())) {
         resources.push_back(i);
       } else if (auto* def = value.getDefiningOp();
                  def && llvm::isa<mlir::TF::ConstOp>(def)) {
@@ -82,10 +93,14 @@ struct TfrtXlaRewritePass
   void runOnOperation() override {
     mlir::RewritePatternSet patterns(&getContext());
 
-    patterns.add<RewriteStatefulPartitionedCallToXlaLaunchOnCpu>(&getContext());
+    patterns
+        .add<RewriteFunctionCallToXlaLaunchOnCpu<mlir::TF::PartitionedCallOp>>(
+            &getContext());
+    patterns.add<RewriteFunctionCallToXlaLaunchOnCpu<
+        mlir::TF::StatefulPartitionedCallOp>>(&getContext());
 
-    if (mlir::failed(mlir::applyPatternsAndFoldGreedily(getOperation(),
-                                                        std::move(patterns)))) {
+    if (mlir::failed(
+            mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
       return;
     }

@@ -14,6 +14,8 @@ limitations under the License.
 ==============================================================================*/
 
 #include <memory>
+#include <string>
+#include <system_error>
 
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/FileSystem.h"
@@ -44,7 +46,7 @@ class InitTextFileToImportTestPass
     : public impl::InitTextFileToImportTestPassBase<
           InitTextFileToImportTestPass> {
  public:
-  explicit InitTextFileToImportTestPass() {}
+  explicit InitTextFileToImportTestPass() = default;
 
   StringRef getArgument() const final {
     return "tf-init-text-file-to-import-test";
@@ -113,7 +115,7 @@ class InitTextFileToImportSavedModelTestPass
     : public impl::InitTextFileToImportSavedModelTestPassBase<
           InitTextFileToImportSavedModelTestPass> {
  public:
-  explicit InitTextFileToImportSavedModelTestPass() {}
+  explicit InitTextFileToImportSavedModelTestPass() = default;
 
  private:
   void runOnOperation() override;

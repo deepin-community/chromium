@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ref.h"
 #include "base/strings/string_util.h"
@@ -16,19 +18,12 @@
 #include "net/filter/gzip_header.h"
 #include "net/filter/gzip_source_stream.h"
 #include "net/filter/source_stream.h"
+#include "net/filter/source_stream_type.h"
 
 namespace chromeos {
 namespace {
 
 constexpr char kPPDMagicNumberString[] = "*PPD-Adobe:";
-
-// Return true if contents has a valid Gzip header.
-bool IsGZipped(const std::string& contents) {
-  const char* unused;
-  return net::GZipHeader().ReadMore(contents.data(), contents.size(),
-                                    &unused) ==
-         net::GZipHeader::COMPLETE_HEADER;
-}
 
 // Return true if c is a newline in the ppd sense, that is, either newline or
 // carriage return.
@@ -42,7 +37,7 @@ bool IsNewline(char c) {
 class StringSourceStream : public net::SourceStream {
  public:
   explicit StringSourceStream(const std::string& src)
-      : SourceStream(TYPE_UNKNOWN), src_(src) {}
+      : SourceStream(net::SourceStreamType::kUnknown), src_(src) {}
 
   // This source always reads sychronously, so never uses the callback.
   int Read(net::IOBuffer* dest_buffer,
@@ -54,7 +49,8 @@ class StringSourceStream : public net::SourceStream {
       return net::OK;
     const size_t read_size =
         std::min(src_->size() - read_ofs_, static_cast<size_t>(buffer_size));
-    memcpy(dest_buffer->data(), src_->data() + read_ofs_, read_size);
+    UNSAFE_TODO(
+        memcpy(dest_buffer->data(), src_->data() + read_ofs_, read_size));
     read_ofs_ += read_size;
     return read_size;
   }
@@ -73,9 +69,9 @@ class PpdLineReaderImpl : public PpdLineReader {
         read_buf_(
             base::MakeRefCounted<net::IOBufferWithSize>(kReadBufCapacity)) {
     input_ = std::make_unique<StringSourceStream>(ppd_contents);
-    if (IsGZipped(ppd_contents)) {
+    if (net::GZipHeader::HasGZipHeader(base::as_byte_span(ppd_contents))) {
       input_ = net::GzipSourceStream::Create(std::move(input_),
-                                             net::SourceStream::TYPE_GZIP);
+                                             net::SourceStreamType::kGzip);
     }
   }
   ~PpdLineReaderImpl() override = default;
@@ -105,11 +101,20 @@ class PpdLineReaderImpl : public PpdLineReader {
     }
   }
 
+  std::string RemainingContent() override {
+    std::string content(UNSAFE_TODO(read_buf_->data() + read_ofs_),
+                        UNSAFE_TODO(read_buf_->data() + read_buf_size_));
+    for (ReadNextChunk(); read_buf_size_ > 0; ReadNextChunk()) {
+      content.append(read_buf_->data(), read_buf_size_);
+    }
+    return content;
+  }
+
   bool Error() const override { return error_; }
 
  private:
   // Chunk size of reads to the underlying source stream.
-  static constexpr int kReadBufCapacity = 500;
+  static constexpr int kReadBufCapacity = 1024;
 
   // Skip input until we hit a newline (which is discarded).  If
   // we encounter eof before a newline, false is returned.
@@ -125,30 +130,40 @@ class PpdLineReaderImpl : public PpdLineReader {
     }
   }
 
+  void ReadNextChunk() {
+    // Just ignore if we already reach EOF.
+    if (eof_) {
+      return;
+    }
+    read_ofs_ = 0;
+
+    // Since StringSourceStream never uses the callback, and filter streams
+    // are only supposed to use the callback if the underlying source stream
+    // uses it, we should never see the callback used.
+    int result = input_->Read(
+        read_buf_.get(), kReadBufCapacity,
+        base::BindOnce([](int) { LOG(FATAL) << "Unexpected async read"; }));
+    if (result <= 0) {
+      eof_ = true;
+      error_ = (result < 0);
+      read_buf_size_ = 0;
+    } else {
+      read_buf_size_ = result;
+    }
+  }
+
   // Consume and return the next char from the source stream.  If there is no
   // more data to be had, set eof.  Eof() should be checked before the returned
   // value is used.
   char NextChar() {
     if (read_ofs_ == read_buf_size_) {
       // Grab more data from the underlying stream.
-      read_ofs_ = 0;
-
-      // Since StringSourceStream never uses the callback, and filter streams
-      // are only supposed to use the callback if the underlying source stream
-      // uses it, we should never see the callback used.
-      int result = input_->Read(
-          read_buf_.get(), kReadBufCapacity,
-          base::BindOnce([](int) { LOG(FATAL) << "Unexpected async read"; }));
-      if (result == 0) {
-        eof_ = true;
+      ReadNextChunk();
+      if (read_buf_size_ == 0) {
         return '\0';
-      } else if (result < 0) {
-        eof_ = true;
-        error_ = true;
       }
-      read_buf_size_ = result;
     }
-    return read_buf_->data()[read_ofs_++];
+    return UNSAFE_TODO(read_buf_->data()[read_ofs_++]);
   }
 
   bool Eof() const { return eof_; }

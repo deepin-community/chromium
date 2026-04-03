@@ -8,6 +8,7 @@
 
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/logging.h"
 #include "build/build_config.h"
@@ -54,8 +55,7 @@ status::Code GenerateCommon(base::File old_file,
                             base::File patch_file,
                             const FileNames& names,
                             bool force_keep,
-                            bool is_raw,
-                            std::string imposed_matches) {
+                            const GenerateOptions& options) {
   MappedFileReader mapped_old(std::move(old_file));
   if (mapped_old.HasError()) {
     LOG(ERROR) << "Error with file " << names.old_name.value() << ": "
@@ -70,15 +70,10 @@ status::Code GenerateCommon(base::File old_file,
     return status::kStatusFileReadError;
   }
 
-  status::Code result = status::kStatusSuccess;
   EnsemblePatchWriter patch_writer(mapped_old.region(), mapped_new.region());
-  if (is_raw) {
-    result = GenerateBufferRaw(mapped_old.region(), mapped_new.region(),
-                               &patch_writer);
-  } else {
-    result = GenerateBufferImposed(mapped_old.region(), mapped_new.region(),
-                                   std::move(imposed_matches), &patch_writer);
-  }
+  status::Code result = GenerateBuffer(mapped_old.region(), mapped_new.region(),
+                                       options, &patch_writer);
+
   if (result != status::kStatusSuccess) {
     LOG(ERROR) << "Fatal error encountered when generating patch.";
     return result;
@@ -122,7 +117,7 @@ status::Code ApplyCommon(base::File old_file,
     }
 #if BUILDFLAG(IS_WIN)
     exception_filter_helper.AddRange(
-        {mapped_patch.data(), mapped_patch.length()});
+        UNSAFE_TODO({mapped_patch.data(), mapped_patch.length()}));
 #endif
 
     auto patch_reader = EnsemblePatchReader::Create(mapped_patch.region());
@@ -138,7 +133,8 @@ status::Code ApplyCommon(base::File old_file,
       return status::kStatusFileReadError;
     }
 #if BUILDFLAG(IS_WIN)
-    exception_filter_helper.AddRange({mapped_old.data(), mapped_old.length()});
+    exception_filter_helper.AddRange(
+        UNSAFE_TODO({mapped_old.data(), mapped_old.length()}));
 #endif
 
     PatchHeader header = patch_reader->header();
@@ -155,7 +151,8 @@ status::Code ApplyCommon(base::File old_file,
       mapped_new.Keep();
     }
 #if BUILDFLAG(IS_WIN)
-    exception_filter_helper.AddRange({mapped_new.data(), mapped_new.length()});
+    exception_filter_helper.AddRange(
+        UNSAFE_TODO({mapped_new.data(), mapped_new.length()}));
 #endif
 
     status::Code result =
@@ -204,21 +201,18 @@ status::Code VerifyPatchCommon(base::File patch_file,
 status::Code Generate(base::File old_file,
                       base::File new_file,
                       base::File patch_file,
-                      bool force_keep,
-                      bool is_raw,
-                      std::string imposed_matches) {
+                      const GenerateOptions& options,
+                      bool force_keep) {
   const FileNames file_names;
   return GenerateCommon(std::move(old_file), std::move(new_file),
-                        std::move(patch_file), file_names, force_keep, is_raw,
-                        std::move(imposed_matches));
+                        std::move(patch_file), file_names, force_keep, options);
 }
 
 status::Code Generate(const base::FilePath& old_path,
                       const base::FilePath& new_path,
                       const base::FilePath& patch_path,
-                      bool force_keep,
-                      bool is_raw,
-                      std::string imposed_matches) {
+                      const GenerateOptions& options,
+                      bool force_keep) {
   using base::File;
   File old_file(old_path, File::FLAG_OPEN | File::FLAG_READ |
                               base::File::FLAG_WIN_SHARE_DELETE);
@@ -230,8 +224,7 @@ status::Code Generate(const base::FilePath& old_path,
                                   File::FLAG_CAN_DELETE_ON_CLOSE);
   const FileNames file_names(old_path, new_path, patch_path);
   return GenerateCommon(std::move(old_file), std::move(new_file),
-                        std::move(patch_file), file_names, force_keep, is_raw,
-                        std::move(imposed_matches));
+                        std::move(patch_file), file_names, force_keep, options);
 }
 
 status::Code Apply(base::File old_file,

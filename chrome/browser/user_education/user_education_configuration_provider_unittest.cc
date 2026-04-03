@@ -18,9 +18,9 @@
 #include "components/feature_engagement/public/group_list.h"
 #include "components/feature_engagement/public/tracker.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/user_education/common/feature_promo_handle.h"
-#include "components/user_education/common/feature_promo_registry.h"
-#include "components/user_education/common/feature_promo_specification.h"
+#include "components/user_education/common/feature_promo/feature_promo_handle.h"
+#include "components/user_education/common/feature_promo/feature_promo_registry.h"
+#include "components/user_education/common/feature_promo/feature_promo_specification.h"
 #include "components/user_education/common/user_education_features.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -38,8 +38,8 @@ constexpr char kAdditionalConditionName[] = "AdditionalCondition";
 constexpr char kAdditionalCondition2Name[] = "AdditionalCondition2";
 constexpr uint32_t kAdditionalConditionCount = 3;
 constexpr uint32_t kAdditionalConditionDays = 14;
-constexpr char kPerAppTrigger[] = "PerAppIphFeature_trigger";
-constexpr char kPerAppUsed[] = "PerAppIphFeature_used";
+constexpr char kKeyedNoticeTrigger[] = "KeyedNoticeIphFeature_trigger";
+constexpr char kKeyedNoticeUsed[] = "KeyedNoticeIphFeature_used";
 constexpr char kLegalNoticeTrigger[] = "LegalNoticeIphFeature_trigger";
 constexpr char kLegalNoticeUsed[] = "LegalNoticeIphFeature_used";
 constexpr char kActionableAlertTrigger[] = "ActionableAlertFeature_trigger";
@@ -53,8 +53,8 @@ BASE_FEATURE(kSnoozeIphFeature,
 BASE_FEATURE(kIphWithConditionFeature,
              "IPH_kIphWithConditionFeature",
              base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE(kPerAppIphFeature,
-             "IPH_PerAppIphFeature",
+BASE_FEATURE(kKeyedNoticeIphFeature,
+             "IPH_KeyedNoticeIphFeature",
              base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kLegalNoticeIphFeature,
              "IPH_LegalNoticeIphFeature",
@@ -63,8 +63,9 @@ BASE_FEATURE(kActionableAlertFeature,
              "IPH_ActionableAlertFeature",
              base::FEATURE_ENABLED_BY_DEFAULT);
 const std::initializer_list<const base::Feature*> kKnownFeatures{
-    &kToastIphFeature,  &kSnoozeIphFeature,       &kIphWithConditionFeature,
-    &kPerAppIphFeature, &kActionableAlertFeature, &kLegalNoticeIphFeature};
+    &kToastIphFeature,         &kSnoozeIphFeature,
+    &kIphWithConditionFeature, &kKeyedNoticeIphFeature,
+    &kActionableAlertFeature,  &kLegalNoticeIphFeature};
 const std::initializer_list<const base::Feature*> kKnownGroups{};
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestElementId);
@@ -89,9 +90,10 @@ std::unique_ptr<UserEducationConfigurationProvider> CreateProvider(
           kSnoozeIphFeature, kTestElementId, IDS_CLOSE));
 
   auto spec = user_education::FeaturePromoSpecification::CreateForCustomAction(
-      kPerAppIphFeature, kTestElementId, IDS_CANCEL, IDS_OK, base::DoNothing());
+      kKeyedNoticeIphFeature, kTestElementId, IDS_CANCEL, IDS_OK,
+      base::DoNothing());
   spec.set_promo_subtype_for_testing(
-      user_education::FeaturePromoSpecification::PromoSubtype::kPerApp);
+      user_education::FeaturePromoSpecification::PromoSubtype::kKeyedNotice);
   registry.RegisterFeature(std::move(spec));
 
   spec = user_education::FeaturePromoSpecification::CreateForCustomAction(
@@ -127,24 +129,9 @@ class UserEducationConfigurationProviderTest : public testing::Test {
   }
   ~UserEducationConfigurationProviderTest() override = default;
 
-  void SetEnableV2(bool enable_v2) {
-    if (enable_v2) {
-      feature_list_.InitAndEnableFeature(
-          user_education::features::kUserEducationExperienceVersion2);
-    } else {
-      feature_list_.InitAndDisableFeature(
-          user_education::features::kUserEducationExperienceVersion2);
-    }
-  }
-
   auto GetDefaultTrigger(const char* name) {
-    const auto trigger =
-        base::FeatureList::IsEnabled(
-            user_education::features::kUserEducationExperienceVersion2)
-            ? kAny
-            : kLessThan5;
     return feature_engagement::EventConfig(
-        name, trigger, feature_engagement::kMaxStoragePeriod,
+        name, kAny, feature_engagement::kMaxStoragePeriod,
         feature_engagement::kMaxStoragePeriod);
   }
 
@@ -222,7 +209,7 @@ TEST_F(UserEducationConfigurationProviderTest, ProvidesSnoozeConfiguration) {
 
   EXPECT_TRUE(config.event_configs.empty());
 
-  EXPECT_EQ(kEqualsZero, config.session_rate);
+  EXPECT_EQ(kAny, config.session_rate);
 
   EXPECT_EQ(kSessionRateImpactAll, config.session_rate_impact);
 
@@ -239,17 +226,18 @@ TEST_F(UserEducationConfigurationProviderTest, ProvidesSnoozeConfiguration) {
   EXPECT_TRUE(config.groups.empty());
 }
 
-TEST_F(UserEducationConfigurationProviderTest, ProvidesPerAppConfiguration) {
+TEST_F(UserEducationConfigurationProviderTest,
+       ProvidesKeyedNoticeConfiguration) {
   feature_engagement::FeatureConfig config;
 
   EXPECT_TRUE(CreateProvider()->MaybeProvideFeatureConfiguration(
-      kPerAppIphFeature, config, kKnownFeatures, kKnownGroups));
+      kKeyedNoticeIphFeature, config, kKnownFeatures, kKnownGroups));
 
   EXPECT_TRUE(config.valid);
 
-  EXPECT_EQ(GetDefaultUsed(kPerAppUsed), config.used);
+  EXPECT_EQ(GetDefaultUsed(kKeyedNoticeUsed), config.used);
 
-  EXPECT_EQ(GetAnyTrigger(kPerAppTrigger), config.trigger);
+  EXPECT_EQ(GetAnyTrigger(kKeyedNoticeTrigger), config.trigger);
 
   EXPECT_TRUE(config.event_configs.empty());
 
@@ -360,28 +348,7 @@ TEST_F(UserEducationConfigurationProviderTest, DoesntOverwriteNames) {
   EXPECT_EQ(GetDefaultUsed("bar"), config.used);
 }
 
-TEST_F(UserEducationConfigurationProviderTest, v1_DoesntOverwriteValid) {
-  SetEnableV2(false);
-  feature_engagement::FeatureConfig config;
-  const feature_engagement::EventConfig trigger(
-      "foo", feature_engagement::Comparator(feature_engagement::LESS_THAN, 10),
-      100, 99);
-  const feature_engagement::EventConfig used(
-      "bar", feature_engagement::Comparator(feature_engagement::LESS_THAN, 8),
-      97, 98);
-  config.trigger = trigger;
-  config.used = used;
-  config.valid = true;
-  EXPECT_FALSE(CreateProvider()->MaybeProvideFeatureConfiguration(
-      kSnoozeIphFeature, config, kKnownFeatures, kKnownGroups));
-
-  EXPECT_EQ(trigger, config.trigger);
-  EXPECT_EQ(used, config.used);
-}
-
-TEST_F(UserEducationConfigurationProviderTest,
-       v2_DoesOverwriteValid_SpecifiesUsed) {
-  SetEnableV2(true);
+TEST_F(UserEducationConfigurationProviderTest, OverwritesValid_SpecifiesUsed) {
   feature_engagement::FeatureConfig config;
   const feature_engagement::EventConfig trigger(
       "foo", feature_engagement::Comparator(feature_engagement::LESS_THAN, 10),
@@ -399,9 +366,7 @@ TEST_F(UserEducationConfigurationProviderTest,
   EXPECT_EQ(used, config.used);
 }
 
-TEST_F(UserEducationConfigurationProviderTest,
-       v2_DoesOverwriteValid_NoUsedEvent) {
-  SetEnableV2(true);
+TEST_F(UserEducationConfigurationProviderTest, OverwritesValid_NoUsedEvent) {
   feature_engagement::FeatureConfig config;
   const feature_engagement::EventConfig trigger(
       "foo", feature_engagement::Comparator(feature_engagement::LESS_THAN, 10),
@@ -417,7 +382,6 @@ TEST_F(UserEducationConfigurationProviderTest,
 
 TEST_F(UserEducationConfigurationProviderTest,
        AdditionalConditions_OriginalAvailabilityPreserved) {
-  SetEnableV2(true);
   feature_engagement::FeatureConfig config;
   const feature_engagement::Comparator availability = {
       feature_engagement::GREATER_THAN, 4};
@@ -431,7 +395,6 @@ TEST_F(UserEducationConfigurationProviderTest,
 
 TEST_F(UserEducationConfigurationProviderTest,
        AdditionalConditions_DefaultAvailability) {
-  SetEnableV2(true);
   feature_engagement::FeatureConfig config;
   EXPECT_TRUE(CreateProvider()->MaybeProvideFeatureConfiguration(
       kSnoozeIphFeature, config, kKnownFeatures, kKnownGroups));
@@ -441,7 +404,6 @@ TEST_F(UserEducationConfigurationProviderTest,
 
 TEST_F(UserEducationConfigurationProviderTest,
        AdditionalConditions_AvailabilityFromSpec) {
-  SetEnableV2(true);
   auto spec = user_education::FeaturePromoSpecification::CreateForToastPromo(
       kIphWithConditionFeature, kTestElementId, IDS_CLOSE, IDS_CANCEL, {});
   AdditionalConditions additional_conditions;
@@ -460,29 +422,7 @@ TEST_F(UserEducationConfigurationProviderTest,
 }
 
 TEST_F(UserEducationConfigurationProviderTest,
-       AdditionalConditions_UsedLimitDefaultAvailability) {
-  SetEnableV2(true);
-  auto spec = user_education::FeaturePromoSpecification::CreateForToastPromo(
-      kIphWithConditionFeature, kTestElementId, IDS_CLOSE, IDS_CANCEL, {});
-  AdditionalConditions additional_conditions;
-  additional_conditions.set_used_limit(kAdditionalConditionUsedLimit);
-  spec.SetAdditionalConditions(std::move(additional_conditions));
-
-  feature_engagement::FeatureConfig config;
-  EXPECT_TRUE(CreateProvider(std::move(spec))
-                  ->MaybeProvideFeatureConfiguration(kIphWithConditionFeature,
-                                                     config, kKnownFeatures,
-                                                     kKnownGroups));
-
-  const feature_engagement::Comparator comparator{
-      feature_engagement::LESS_THAN_OR_EQUAL, kAdditionalConditionUsedLimit};
-  EXPECT_EQ(comparator, config.used.comparator);
-  EXPECT_EQ(kAtLeast7, config.availability);
-}
-
-TEST_F(UserEducationConfigurationProviderTest,
        AdditionalConditions_UsedLimitCustomAvailability) {
-  SetEnableV2(true);
   auto spec = user_education::FeaturePromoSpecification::CreateForToastPromo(
       kIphWithConditionFeature, kTestElementId, IDS_CLOSE, IDS_CANCEL, {});
   AdditionalConditions additional_conditions;
@@ -505,8 +445,99 @@ TEST_F(UserEducationConfigurationProviderTest,
 }
 
 TEST_F(UserEducationConfigurationProviderTest,
-       AdditionalConditions_AddedConditionDefaultAvailability) {
-  SetEnableV2(true);
+       AdditionalConditions_AddedConditionUpperBoundDefaultAvailability) {
+  auto spec = user_education::FeaturePromoSpecification::CreateForToastPromo(
+      kIphWithConditionFeature, kTestElementId, IDS_CLOSE, IDS_CANCEL, {});
+  AdditionalConditions additional_conditions;
+  additional_conditions.AddAdditionalCondition(
+      kAdditionalConditionName, AdditionalConditions::Constraint::kAtMost,
+      kAdditionalConditionCount, kAdditionalConditionDays);
+  spec.SetAdditionalConditions(std::move(additional_conditions));
+
+  feature_engagement::FeatureConfig config;
+  EXPECT_TRUE(CreateProvider(std::move(spec))
+                  ->MaybeProvideFeatureConfiguration(kIphWithConditionFeature,
+                                                     config, kKnownFeatures,
+                                                     kKnownGroups));
+
+  EXPECT_EQ(1U, config.event_configs.size());
+  auto& event_config = *config.event_configs.begin();
+  EXPECT_EQ(kAdditionalConditionName, event_config.name);
+  EXPECT_EQ(kAdditionalConditionCount, event_config.comparator.value);
+  EXPECT_EQ(feature_engagement::LESS_THAN_OR_EQUAL,
+            event_config.comparator.type);
+  EXPECT_EQ(kAdditionalConditionDays, event_config.window);
+  EXPECT_LE(kAdditionalConditionDays, event_config.storage);
+  EXPECT_EQ(kAtLeast7, config.availability);
+}
+
+TEST_F(UserEducationConfigurationProviderTest,
+       AdditionalConditions_AddedConditionUpperBoundCustomAvailability) {
+  auto spec = user_education::FeaturePromoSpecification::CreateForToastPromo(
+      kIphWithConditionFeature, kTestElementId, IDS_CLOSE, IDS_CANCEL, {});
+  AdditionalConditions additional_conditions;
+  additional_conditions.set_initial_delay_days(kAdditionalConditionDelayDays);
+  additional_conditions.AddAdditionalCondition(
+      kAdditionalConditionName, AdditionalConditions::Constraint::kAtMost,
+      kAdditionalConditionCount, kAdditionalConditionDays);
+  spec.SetAdditionalConditions(std::move(additional_conditions));
+
+  feature_engagement::FeatureConfig config;
+  EXPECT_TRUE(CreateProvider(std::move(spec))
+                  ->MaybeProvideFeatureConfiguration(kIphWithConditionFeature,
+                                                     config, kKnownFeatures,
+                                                     kKnownGroups));
+
+  EXPECT_EQ(1U, config.event_configs.size());
+  auto& event_config = *config.event_configs.begin();
+  EXPECT_EQ(kAdditionalConditionName, event_config.name);
+  EXPECT_EQ(kAdditionalConditionCount, event_config.comparator.value);
+  EXPECT_EQ(feature_engagement::LESS_THAN_OR_EQUAL,
+            event_config.comparator.type);
+  EXPECT_EQ(kAdditionalConditionDays, event_config.window);
+  EXPECT_LE(kAdditionalConditionDays, event_config.storage);
+  const feature_engagement::Comparator expected_availability{
+      feature_engagement::GREATER_THAN_OR_EQUAL, kAdditionalConditionDelayDays};
+  EXPECT_EQ(expected_availability, config.availability);
+}
+
+TEST_F(UserEducationConfigurationProviderTest,
+       AdditionalConditions_AddedConditionUpperBoundInAddition) {
+  auto spec = user_education::FeaturePromoSpecification::CreateForToastPromo(
+      kIphWithConditionFeature, kTestElementId, IDS_CLOSE, IDS_CANCEL, {});
+  AdditionalConditions additional_conditions;
+  additional_conditions.AddAdditionalCondition(
+      kAdditionalConditionName, AdditionalConditions::Constraint::kAtMost,
+      kAdditionalConditionCount, kAdditionalConditionDays);
+  spec.SetAdditionalConditions(std::move(additional_conditions));
+
+  feature_engagement::FeatureConfig config;
+  feature_engagement::EventConfig event_config;
+  event_config.name = kAdditionalCondition2Name;
+  event_config.comparator = {feature_engagement::LESS_THAN_OR_EQUAL, 1};
+  config.event_configs.insert(event_config);
+  EXPECT_TRUE(CreateProvider(std::move(spec))
+                  ->MaybeProvideFeatureConfiguration(kIphWithConditionFeature,
+                                                     config, kKnownFeatures,
+                                                     kKnownGroups));
+
+  EXPECT_EQ(2U, config.event_configs.size());
+  for (const auto& cur_config : config.event_configs) {
+    if (cur_config.name == event_config.name) {
+      EXPECT_EQ(event_config.comparator, cur_config.comparator);
+    } else {
+      EXPECT_EQ(kAdditionalConditionName, cur_config.name);
+      EXPECT_EQ(kAdditionalConditionCount, cur_config.comparator.value);
+      EXPECT_EQ(feature_engagement::LESS_THAN_OR_EQUAL,
+                cur_config.comparator.type);
+      EXPECT_EQ(kAdditionalConditionDays, cur_config.window);
+      EXPECT_LE(kAdditionalConditionDays, cur_config.storage);
+    }
+  }
+}
+
+TEST_F(UserEducationConfigurationProviderTest,
+       AdditionalConditions_AddedConditionLowerBoundDefaultAvailability) {
   auto spec = user_education::FeaturePromoSpecification::CreateForToastPromo(
       kIphWithConditionFeature, kTestElementId, IDS_CLOSE, IDS_CANCEL, {});
   AdditionalConditions additional_conditions;
@@ -529,12 +560,11 @@ TEST_F(UserEducationConfigurationProviderTest,
             event_config.comparator.type);
   EXPECT_EQ(kAdditionalConditionDays, event_config.window);
   EXPECT_LE(kAdditionalConditionDays, event_config.storage);
-  EXPECT_EQ(kAtLeast7, config.availability);
+  EXPECT_EQ(kAny, config.availability);
 }
 
 TEST_F(UserEducationConfigurationProviderTest,
-       AdditionalConditions_AddedConditionCustomAvailability) {
-  SetEnableV2(true);
+       AdditionalConditions_AddedConditionLowerBoundCustomAvailability) {
   auto spec = user_education::FeaturePromoSpecification::CreateForToastPromo(
       kIphWithConditionFeature, kTestElementId, IDS_CLOSE, IDS_CANCEL, {});
   AdditionalConditions additional_conditions;
@@ -564,8 +594,7 @@ TEST_F(UserEducationConfigurationProviderTest,
 }
 
 TEST_F(UserEducationConfigurationProviderTest,
-       AdditionalConditions_AddedConditionInAddition) {
-  SetEnableV2(true);
+       AdditionalConditions_AddedConditionLowerBoundInAddition) {
   auto spec = user_education::FeaturePromoSpecification::CreateForToastPromo(
       kIphWithConditionFeature, kTestElementId, IDS_CLOSE, IDS_CANCEL, {});
   AdditionalConditions additional_conditions;
@@ -601,7 +630,6 @@ TEST_F(UserEducationConfigurationProviderTest,
 
 TEST_F(UserEducationConfigurationProviderTest,
        AdditionalConditions_AddedConditionNotOverridden) {
-  SetEnableV2(true);
   auto spec = user_education::FeaturePromoSpecification::CreateForToastPromo(
       kIphWithConditionFeature, kTestElementId, IDS_CLOSE, IDS_CANCEL, {});
   AdditionalConditions additional_conditions;
@@ -630,20 +658,7 @@ TEST_F(UserEducationConfigurationProviderTest,
   EXPECT_LE(event_config.storage, new_config.storage);
 }
 
-TEST_F(UserEducationConfigurationProviderTest, v1_SessionRate) {
-  SetEnableV2(false);
-  feature_engagement::FeatureConfig config;
-  EXPECT_TRUE(CreateProvider()->MaybeProvideFeatureConfiguration(
-      kSnoozeIphFeature, config, kKnownFeatures, kKnownGroups));
-
-  EXPECT_EQ(feature_engagement::EQUAL, config.session_rate.type);
-  EXPECT_EQ(0U, config.session_rate.value);
-  EXPECT_EQ(feature_engagement::SessionRateImpact::Type::ALL,
-            config.session_rate_impact.type);
-}
-
-TEST_F(UserEducationConfigurationProviderTest, v2_SessionRate) {
-  SetEnableV2(true);
+TEST_F(UserEducationConfigurationProviderTest, SessionRate) {
   feature_engagement::FeatureConfig config;
   EXPECT_TRUE(CreateProvider()->MaybeProvideFeatureConfiguration(
       kSnoozeIphFeature, config, kKnownFeatures, kKnownGroups));
@@ -654,20 +669,7 @@ TEST_F(UserEducationConfigurationProviderTest, v2_SessionRate) {
             config.session_rate_impact.type);
 }
 
-TEST_F(UserEducationConfigurationProviderTest, V1AllowsDuplicateTrigger) {
-  SetEnableV2(false);
-  feature_engagement::FeatureConfig config;
-  config.trigger.name = kToastTrigger;
-  config.used.name = kToastUsed;
-  config.event_configs.emplace(kToastTrigger, kLessThan5, 10, 10);
-  config.event_configs.emplace(kToastUsed, kAtLeast7, 10, 10);
-  EXPECT_TRUE(CreateProvider()->MaybeProvideFeatureConfiguration(
-      kToastIphFeature, config, kKnownFeatures, kKnownGroups));
-  EXPECT_EQ(2U, config.event_configs.size());
-}
-
-TEST_F(UserEducationConfigurationProviderTest, V2RemovesDuplicateTrigger) {
-  SetEnableV2(true);
+TEST_F(UserEducationConfigurationProviderTest, RemovesDuplicateTrigger) {
   feature_engagement::FeatureConfig config;
   config.trigger.name = kToastTrigger;
   config.used.name = kToastUsed;

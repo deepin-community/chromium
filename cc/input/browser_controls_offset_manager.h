@@ -6,14 +6,18 @@
 #define CC_INPUT_BROWSER_CONTROLS_OFFSET_MANAGER_H_
 
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include <optional>
+#include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
+#include "base/types/optional_ref.h"
+#include "cc/input/browser_controls_offset_tag_modifications.h"
 #include "cc/input/browser_controls_state.h"
 #include "cc/layers/layer_impl.h"
 #include "cc/trees/browser_controls_params.h"
+#include "components/viz/common/quads/offset_tag.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
@@ -43,39 +47,56 @@ class CC_EXPORT BrowserControlsOffsetManager {
   // The offset from the window top to the top edge of the controls. Runs from 0
   // (controls fully shown) to negative values (down is positive).
   float ControlsTopOffset() const;
+
   // The amount of offset of the web content area. Same as the current shown
   // height of the browser controls.
   float ContentTopOffset() const;
+
   float TopControlsShownRatio() const;
   float TopControlsHeight() const;
   float TopControlsMinHeight() const;
+  int TopControlsAdditionalHeight() const;
+
   // The minimum shown ratio top controls can have.
   float TopControlsMinShownRatio() const;
+
   // The current top controls min-height. If the min-height is changing with an
   // animation, this will return a value between the old min-height and the new
   // min-height, which is equal to the current visible min-height. Otherwise,
   // this will return the same value as |TopControlsMinHeight()|.
   float TopControlsMinHeightOffset() const;
 
+  viz::OffsetTag ContentOffsetTag() const;
+  viz::OffsetTag TopControlsOffsetTag() const;
+
   // The amount of offset of the web content area, calculating from the bottom.
   // Same as the current shown height of the bottom controls.
   float ContentBottomOffset() const;
+
   // Similar to TopControlsHeight(), this method should return a static value.
   // The current animated height should be acquired from ContentBottomOffset().
   float BottomControlsHeight() const;
   float BottomControlsMinHeight() const;
   float BottomControlsShownRatio() const;
+  int BottomControlsAdditionalHeight() const;
+
   // The minimum shown ratio bottom controls can have.
   float BottomControlsMinShownRatio() const;
+
   // The current bottom controls min-height. If the min-height is changing with
   // an animation, this will return a value between the old min-height and the
   // new min-height, which is equal to the current visible min-height.
   // Otherwise, this will return the same value as |BottomControlsMinHeight()|.
   float BottomControlsMinHeightOffset() const;
 
+  viz::OffsetTag BottomControlsOffsetTag() const;
+
+  bool HasOffsetTag() const;
+
   // Valid shown ratio range for the top controls. The values will be (0, 1) if
   // there is no animation running.
   std::pair<float, float> TopControlsShownRatioRange();
+
   // Valid shown ratio range for the bottom controls. The values will be (0, 1)
   // if there is no animation running.
   std::pair<float, float> BottomControlsShownRatioRange();
@@ -87,9 +108,27 @@ class CC_EXPORT BrowserControlsOffsetManager {
                AnimationDirection::kShowingControls;
   }
 
-  void UpdateBrowserControlsState(BrowserControlsState constraints,
-                                  BrowserControlsState current,
-                                  bool animate);
+  // See UpdateBrowserControlsState in
+  // third_party/blink/public/mojom/frame/frame.mojom
+  void UpdateBrowserControlsState(
+      BrowserControlsState constraints,
+      BrowserControlsState current,
+      bool animate,
+      base::optional_ref<const BrowserControlsOffsetTagModifications>
+          offset_tag_modifications);
+
+  // Directly set the current offset tag modifications.
+  // This is used to set the offset tag modifications from the viz process.
+  void SetOffsetTagModifications(
+      const BrowserControlsOffsetTagModifications& offset_tag_modifications) {
+    offset_tag_modifications_ = offset_tag_modifications;
+  }
+
+  // Returns the current offset tag modifications.
+  const BrowserControlsOffsetTagModifications& GetOffsetTagModifications()
+      const {
+    return offset_tag_modifications_;
+  }
 
   // Return the browser control constraint that must be synced to the
   // main renderer thread (to trigger viewport and related changes).
@@ -120,6 +159,10 @@ class CC_EXPORT BrowserControlsOffsetManager {
   double PredictViewportBoundsDelta(double current_bounds_delta,
                                     gfx::Vector2dF scroll_distance);
 
+  void ResetAnimations();
+
+  float MaximumShownRatioDeltaPerFrame(float min_ratio) const;
+
  protected:
   BrowserControlsOffsetManager(BrowserControlsOffsetManagerClient* client,
                                float controls_show_threshold,
@@ -128,7 +171,6 @@ class CC_EXPORT BrowserControlsOffsetManager {
  private:
   class Animation;
 
-  void ResetAnimations();
   void SetupAnimation(AnimationDirection direction);
   void StartAnimationIfNecessary();
   void ResetBaseline();
@@ -140,6 +182,7 @@ class CC_EXPORT BrowserControlsOffsetManager {
                                     float stop_ratio);
   void SetTopMinHeightOffsetAnimationRange(float from, float to);
   void SetBottomMinHeightOffsetAnimationRange(float from, float to);
+  bool IsAnimatingHeightChange();
 
   // The client manages the lifecycle of this.
   raw_ptr<BrowserControlsOffsetManagerClient> client_;
@@ -148,6 +191,11 @@ class CC_EXPORT BrowserControlsOffsetManager {
 
   // Accumulated scroll delta since last baseline reset
   float accumulated_scroll_delta_;
+
+  // When the amount by which the browser controls can scroll is limited by
+  // the BrowserControlsSmoothScroll feature, this tracks the remaining delta
+  // that has been accumulated but not applied.
+  float unapplied_scroll_delta_;
 
   // Content offset when last baseline reset occurred.
   float baseline_top_content_offset_;
@@ -196,6 +244,8 @@ class CC_EXPORT BrowserControlsOffsetManager {
   // gesture, then we reorder the animation until after the scroll.
   bool show_controls_when_scroll_completes_ = false;
 
+  BrowserControlsOffsetTagModifications offset_tag_modifications_;
+
   // Class that holds and manages the state of the controls animations.
   class Animation {
    public:
@@ -227,6 +277,8 @@ class CC_EXPORT BrowserControlsOffsetManager {
     // Return the bounds.
     float min_value() { return min_value_; }
     float max_value() { return max_value_; }
+
+    bool jump_to_end_on_reset() { return jump_to_end_on_reset_; }
 
    private:
     bool IsComplete(float value);

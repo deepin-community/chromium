@@ -18,8 +18,8 @@
 
 namespace media {
 
-// Interface used by Renderer, AudioRenderer, VideoRenderer and
-// MediaPlayerRenderer implementations to notify their clients.
+// Interface used by Renderer, AudioRenderer and VideoRenderer implementations
+// to notify their clients.
 class MEDIA_EXPORT RendererClient {
  public:
   // Executed if any error was encountered after Renderer initialization.
@@ -58,7 +58,7 @@ class MEDIA_EXPORT RendererClient {
   virtual void OnVideoOpacityChange(bool opaque) = 0;
 
   // Returns true if video stream is available in the media resource.
-  // TODO(crbug.com/988535): Used by AudioRendererImpl.  This can be removed
+  // TODO(crbug.com/40638012): Used by AudioRendererImpl.  This can be removed
   // when the bug is resolved.
   virtual bool IsVideoStreamAvailable();
 

@@ -7,10 +7,10 @@
 #include <memory>
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "media/capture/video/shared_image_buffer_tracker.h"
 #include "media/capture/video/shared_memory_buffer_tracker.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "media/capture/video/chromeos/gpu_memory_buffer_tracker_cros.h"
 #elif BUILDFLAG(IS_APPLE)
 #include "media/capture/video/apple/gpu_memory_buffer_tracker_apple.h"
@@ -38,7 +38,7 @@ VideoCaptureBufferTrackerFactoryImpl::CreateTracker(
     VideoCaptureBufferType buffer_type) {
   switch (buffer_type) {
     case VideoCaptureBufferType::kGpuMemoryBuffer:
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       return std::make_unique<GpuMemoryBufferTrackerCros>();
 #elif BUILDFLAG(IS_APPLE)
       return std::make_unique<GpuMemoryBufferTrackerApple>();
@@ -52,6 +52,8 @@ VideoCaptureBufferTrackerFactoryImpl::CreateTracker(
 #else
       return nullptr;
 #endif
+    case VideoCaptureBufferType::kSharedImage:
+      return nullptr;
     default:
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
       // Since Windows and macOS capturer outputs NV12 only for GMBs and I420
@@ -67,10 +69,15 @@ VideoCaptureBufferTrackerFactoryImpl::CreateTracker(
 }
 
 std::unique_ptr<VideoCaptureBufferTracker>
-VideoCaptureBufferTrackerFactoryImpl::CreateTrackerForExternalGpuMemoryBuffer(
-    gfx::GpuMemoryBufferHandle handle) {
+VideoCaptureBufferTrackerFactoryImpl::CreateTrackerForExternalBuffer(
+    CapturedExternalVideoBuffer buffer) {
+  if (buffer.client_shared_image) {
+    return std::make_unique<SharedImageBufferTracker>(
+        std::move(buffer.client_shared_image));
+  }
+  gfx::GpuMemoryBufferHandle handle = std::move(buffer.handle);
 #if BUILDFLAG(IS_APPLE)
-  return std::make_unique<GpuMemoryBufferTrackerApple>(handle.io_surface);
+  return std::make_unique<GpuMemoryBufferTrackerApple>(handle.io_surface());
 #elif BUILDFLAG(IS_WIN)
   if (handle.type != gfx::DXGI_SHARED_HANDLE) {
     return nullptr;

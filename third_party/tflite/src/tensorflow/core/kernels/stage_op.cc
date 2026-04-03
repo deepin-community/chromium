@@ -38,14 +38,14 @@ class Buffer : public ResourceBase {
       : capacity_(capacity), memory_limit_(memory_limit), current_bytes_(0) {}
 
   // the Buffer takes ownership of the Tuple
-  Status Put(Tuple* tuple) {
+  absl::Status Put(Tuple* tuple) {
     std::unique_lock<std::mutex> lock(mu_);
 
     std::size_t tuple_bytes = GetTupleBytes(*tuple);
 
     // Sanity check so that we don't block for ever below
     if (memory_limit_ > 0 && tuple_bytes > memory_limit_) {
-      return Status(
+      return absl::Status(
           errors::ResourceExhausted("Attempted to insert "
                                     "tensors with combined size of '",
                                     tuple_bytes,
@@ -82,7 +82,7 @@ class Buffer : public ResourceBase {
     // we should wake them all.
     non_empty_cond_var_.notify_all();
 
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   // Get tuple at front of the buffer
@@ -103,7 +103,7 @@ class Buffer : public ResourceBase {
   }
 
   // Return tuple at index
-  Status Peek(std::size_t index, Tuple* tuple) {
+  absl::Status Peek(std::size_t index, Tuple* tuple) {
     std::unique_lock<std::mutex> lock(mu_);
 
     // Wait if the requested index is not available
@@ -115,7 +115,7 @@ class Buffer : public ResourceBase {
       tuple->push_back(tensor);
     }
 
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   // Buffer size
@@ -132,9 +132,9 @@ class Buffer : public ResourceBase {
     notify_inserters_if_bounded(&lock);
   }
 
-  string DebugString() const override {
+  std::string DebugString() const override {
     std::unique_lock<std::mutex> lock(mu_);
-    return strings::StrCat("Staging size: ", buf_.size());
+    return absl::StrCat("Staging size: ", buf_.size());
   }
 
  private:
@@ -176,24 +176,25 @@ class Buffer : public ResourceBase {
   std::deque<Tuple> buf_;
 };
 
-Status GetBuffer(OpKernelContext* ctx, const NodeDef& ndef, Buffer** buf) {
+absl::Status GetBuffer(OpKernelContext* ctx, const NodeDef& ndef,
+                       Buffer** buf) {
   auto rm = ctx->resource_manager();
   ContainerInfo cinfo;
 
   // Lambda for creating the Staging Area
-  auto create_fn = [&ndef](Buffer** ret) -> Status {
+  auto create_fn = [&ndef](Buffer** ret) -> absl::Status {
     int64_t capacity;
     int64_t memory_limit;
     TF_RETURN_IF_ERROR(GetNodeAttr(ndef, "capacity", &capacity));
     TF_RETURN_IF_ERROR(GetNodeAttr(ndef, "memory_limit", &memory_limit));
     *ret = new Buffer(capacity, memory_limit);
-    return OkStatus();
+    return absl::OkStatus();
   };
 
   TF_RETURN_IF_ERROR(cinfo.Init(rm, ndef, true /* use name() */));
   TF_RETURN_IF_ERROR(rm->LookupOrCreate<Buffer>(cinfo.container(), cinfo.name(),
                                                 buf, create_fn));
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -295,7 +296,7 @@ class StageSizeOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &size));
 
     // Set it to the actual size
-    size->scalar<int32>().setConstant(buf->Size());
+    size->scalar<int32_t>().setConstant(buf->Size());
   }
 };
 

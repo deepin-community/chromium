@@ -4,10 +4,11 @@
 
 #include "components/autofill/core/browser/ui/payments/card_unmask_authentication_selection_dialog_controller_impl.h"
 
+#include "base/functional/callback_helpers.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 
 namespace autofill {
 
@@ -23,8 +24,13 @@ class CardUnmaskAuthenticationSelectionDialogControllerImplTest
       delete;
 
   void SetUp() override {
-    card_unmask_authentication_selection_dialog_controller_ = std::make_unique<
-        CardUnmaskAuthenticationSelectionDialogControllerImpl>();
+    card_unmask_authentication_selection_dialog_controller_ =
+        std::make_unique<CardUnmaskAuthenticationSelectionDialogControllerImpl>(
+            /*challenge_options=*/test::GetCardUnmaskChallengeOptions(
+                {CardUnmaskChallengeOptionType::
+                     kSmsOtp}),  // `challenge_options` must not be empty.
+            /*confirm_unmasking_method_callback=*/base::DoNothing(),
+            /*cancel_unmasking_callback=*/base::DoNothing());
   }
 
   CardUnmaskAuthenticationSelectionDialogControllerImpl* controller() {

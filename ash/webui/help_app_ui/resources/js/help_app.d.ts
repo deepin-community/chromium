@@ -139,6 +139,8 @@ declare interface ClientApiDelegate {
    *     message. Resolves with undefined otherwise.
    */
   openFeedbackDialog: () => Promise<string|undefined>;
+  /** Opens the on device app controls section of OS settings. */
+  showOnDeviceAppControls: () => Promise<void>;
   /** Opens up the parental controls section of OS settings. */
   showParentalControls: () => Promise<void>;
   /** Triggers the call-to-action associated with the given action type id. */
@@ -164,12 +166,6 @@ declare interface ClientApiDelegate {
    */
   launchMicrosoft365Setup: () => Promise<void>;
   /**
-   * Request for the discover page notification to be shown to the user. The
-   * notification will only be shown if the relevant heuristics are true, i.e.
-   * user is a child, is using a supported language etc.
-   */
-  maybeShowDiscoverNotification: () => Promise<void>;
-  /**
    * Request for the release notes notification to be shown to the user. The
    * notification will only be shown if a notification for the help app has not
    * yet been shown in the current milestone.
@@ -182,6 +178,11 @@ declare interface ClientApiDelegate {
    */
   getDeviceInfo: () => Promise<DeviceInfo>;
   /**
+   * Opens OS Settings at the specified settings path. Valid path numbers:
+   * go/help-app-open-settings-paths
+   */
+  openSettings: (path: number) => undefined;
+  /**
    * Opens a valid https:// URL in a new browser tab without getting intercepted
    * by URL capturing logic. If the "HelpAppAutoTriggerInstallDialog" feature
    * flag is enabled, this will automatically trigger the install dialog.
@@ -189,6 +190,20 @@ declare interface ClientApiDelegate {
    * process to crash.
    */
   openUrlInBrowserAndTriggerInstallDialog: (url: string) => Promise<void>;
+  /**
+   * Sets the HasCompletedNewDeviceChecklist pref to true. Call this after the
+   * user completes the checklist.
+   */
+  setHasCompletedNewDeviceChecklist: () => undefined;
+  /**
+   * Sets the HasVisitedHowToPage pref to true. Call this after the user visits
+   * the how to page.
+   */
+  setHasVisitedHowToPage: () => undefined;
+  /**
+   * Opens the App Mall app at the specified path.
+   */
+  openAppMallPath: (path: string) => undefined;
 }
 
 /** Launch data that can be read by the app when it first loads. */

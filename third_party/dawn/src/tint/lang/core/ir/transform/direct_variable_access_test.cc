@@ -31,8 +31,11 @@
 
 #include "src/tint/lang/core/ir/transform/helper_test.h"
 #include "src/tint/lang/core/type/array.h"
+#include "src/tint/lang/core/type/binding_array.h"
 #include "src/tint/lang/core/type/matrix.h"
 #include "src/tint/lang/core/type/pointer.h"
+#include "src/tint/lang/core/type/sampled_texture.h"
+#include "src/tint/lang/core/type/sampler.h"
 #include "src/tint/lang/core/type/struct.h"
 
 namespace tint::core::ir::transform {
@@ -43,14 +46,22 @@ using namespace tint::core::number_suffixes;  // NOLINT
 
 namespace {
 
+static constexpr DirectVariableAccessOptions kTransformHandle = {
+    /* transform_private */ false,
+    /* transform_function */ false,
+    /* transform_handle */ true,
+};
+
 static constexpr DirectVariableAccessOptions kTransformPrivate = {
     /* transform_private */ true,
     /* transform_function */ false,
+    /* transform_handle */ false,
 };
 
 static constexpr DirectVariableAccessOptions kTransformFunction = {
     /* transform_private */ false,
     /* transform_function */ true,
+    /* transform_handle */ false,
 };
 
 }  // namespace
@@ -75,12 +86,12 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrUniform) {
     b.Append(u->Block(), [&] { b.Return(u, b.Load(p)); });
 
     auto* src = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
-%u = func(%pre:i32, %p:ptr<uniform, i32, read>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%u = func(%pre:i32, %p:ptr<uniform, i32, read>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
@@ -90,8 +101,8 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrUniform) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
 )";
@@ -114,12 +125,12 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrStorage) {
     b.Append(s->Block(), [&] { b.Return(s, b.Load(p)); });
 
     auto* src = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
-%s = func(%pre:i32, %p:ptr<storage, i32, read>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%s = func(%pre:i32, %p:ptr<storage, i32, read>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
@@ -129,8 +140,8 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrStorage) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
 )";
@@ -153,12 +164,12 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrWorkgroup) {
     b.Append(w->Block(), [&] { b.Return(w, b.Load(p)); });
 
     auto* src = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
-%w = func(%pre:i32, %p:ptr<workgroup, i32, read_write>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%w = func(%pre:i32, %p:ptr<workgroup, i32, read_write>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
@@ -168,8 +179,47 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrWorkgroup) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
+}
+
+)";
+
+    Run(DirectVariableAccess, DirectVariableAccessOptions{});
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrImmediate) {
+    b.Append(b.ir.root_block, [&] { b.Var<private_>("keep_me", 42_i); });
+
+    auto* u = b.Function("u", ty.i32());
+    auto* p = b.FunctionParam("p", ty.ptr<immediate, i32>());
+    u->SetParams({
+        b.FunctionParam("pre", ty.i32()),
+        p,
+        b.FunctionParam("post", ty.i32()),
+    });
+    b.Append(u->Block(), [&] { b.Return(u, b.Load(p)); });
+
+    auto* src = R"(
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
+}
+
+%u = func(%pre:i32, %p:ptr<immediate, i32, read>, %post:i32):i32 {
+  $B2: {
+    %6:i32 = load %p
+    ret %6
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
 )";
@@ -192,12 +242,12 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrPrivate_Disabled) {
     b.Append(f->Block(), [&] { b.Return(f, b.Load(p)); });
 
     auto* src = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
-%f = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%f = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
@@ -226,12 +276,12 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrPrivate_Enabled) {
     b.Append(f->Block(), [&] { b.Return(f, b.Load(p)); });
 
     auto* src = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
-%f = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%f = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
@@ -241,8 +291,8 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrPrivate_Enabled) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
 )";
@@ -264,12 +314,12 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrFunction_Disabled) {
     b.Append(f->Block(), [&] { b.Return(f, b.Load(p)); });
 
     auto* src = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
-%f = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%f = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
@@ -298,12 +348,12 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrFunction_Enabled) {
     b.Append(f->Block(), [&] { b.Return(f, b.Load(p)); });
 
     auto* src = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
-%f = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%f = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
@@ -312,13 +362,85 @@ TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, PtrFunction_Enabled) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %keep_me:ptr<private, i32, read_write> = var, 42i
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
 }
 
 )";
 
     Run(DirectVariableAccess, kTransformFunction);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, HandleTexture_Disabled) {
+    b.Append(b.ir.root_block, [&] { b.Var<private_>("keep_me", 42_i); });
+
+    auto* f = b.Function("f", ty.i32());
+    auto* p = b.FunctionParam("p", ty.sampled_texture(core::type::TextureDimension::k1d, ty.f32()));
+    f->SetParams({
+        b.FunctionParam("pre", ty.i32()),
+        p,
+        b.FunctionParam("post", ty.i32()),
+    });
+    b.Append(f->Block(), [&] { b.Return(f, b.Constant(2_i)); });
+
+    auto* src = R"(
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
+}
+
+%f = func(%pre:i32, %p:texture_1d<f32>, %post:i32):i32 {
+  $B2: {
+    ret 2i
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = src;
+
+    Run(DirectVariableAccess, DirectVariableAccessOptions{});
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_RemoveUncalled, HandleTexture_Enabled) {
+    b.Append(b.ir.root_block, [&] { b.Var<private_>("keep_me", 42_i); });
+
+    auto* f = b.Function("f", ty.u32());
+    auto* p = b.FunctionParam("p", ty.sampled_texture(core::type::TextureDimension::k1d, ty.f32()));
+    f->SetParams({
+        b.FunctionParam("pre", ty.i32()),
+        p,
+        b.FunctionParam("post", ty.i32()),
+    });
+    b.Append(f->Block(),
+             [&] { b.Return(f, b.Call(ty.u32(), core::BuiltinFn::kTextureDimensions, p, 0_u)); });
+
+    auto* src = R"(
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
+}
+
+%f = func(%pre:i32, %p:texture_1d<f32>, %post:i32):u32 {
+  $B2: {
+    %6:u32 = textureDimensions %p, 0u
+    ret %6
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %keep_me:ptr<private, i32, read_write> = var 42i
+}
+
+)";
+    Run(DirectVariableAccess, kTransformHandle);
 
     EXPECT_EQ(expect, str());
 }
@@ -340,7 +462,7 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, ConstantIndices) {
                  U->SetBindingPoint(0, 0);
              });
 
-    auto* fn_a = b.Function("a", ty.vec4<i32>());
+    auto* fn_a = b.Function("a", ty.vec4i());
     auto* fn_a_p = b.FunctionParam("p", ty.ptr<uniform, vec4<i32>>());
     fn_a->SetParams({
         b.FunctionParam("pre", ty.i32()),
@@ -358,7 +480,7 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, ConstantIndices) {
         b.ir.SetName(p2, "p2");
         auto* p3 = b.Access(ty.ptr<uniform, vec4<i32>>(), p2, 3_i);
         b.ir.SetName(p3, "p3");
-        b.Call(ty.vec4<i32>(), fn_a, 10_i, p3, 20_i);
+        b.Call(ty.vec4i(), fn_a, 10_i, p3, 20_i);
         b.Return(fn_b);
     });
 
@@ -373,7 +495,7 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, ConstantIndices) {
         b.ir.SetName(p2, "p2");
         auto* p3 = b.Access(ty.ptr<uniform, vec4<i32>>(), p2, 3_i);
         b.ir.SetName(p3, "p3");
-        b.Call(ty.vec4<i32>(), fn_a, 10_i, p3, 20_i);
+        b.Call(ty.vec4i(), fn_a, 10_i, p3, 20_i);
         b.Return(fn_c);
     });
 
@@ -384,18 +506,18 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, ConstantIndices) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %U:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %p:ptr<uniform, vec4<i32>, read>, %post:i32):vec4<i32> -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<uniform, vec4<i32>, read>, %post:i32):vec4<i32> {
+  $B2: {
     %6:vec4<i32> = load %p
     ret %6
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %p0:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = let %U
     %p1:ptr<uniform, array<array<vec4<i32>, 8>, 8>, read> = access %p0, 1i
     %p2:ptr<uniform, array<vec4<i32>, 8>, read> = access %p1, 2i
@@ -404,8 +526,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, ConstantIndices) {
     ret
   }
 }
-%c = func(%p_1:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read>):void -> %b4 {  # %p_1: 'p'
-  %b4 = block {
+%c = func(%p_1:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read>):void {  # %p_1: 'p'
+  $B4: {
     %p0_1:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = let %p_1  # %p0_1: 'p0'
     %p1_1:ptr<uniform, array<array<vec4<i32>, 8>, 8>, read> = access %p0_1, 1i  # %p1_1: 'p1'
     %p2_1:ptr<uniform, array<vec4<i32>, 8>, read> = access %p1_1, 2i  # %p2_1: 'p2'
@@ -414,8 +536,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, ConstantIndices) {
     ret
   }
 }
-%d = func():void -> %b5 {
-  %b5 = block {
+%d = func():void {
+  $B5: {
     %21:void = call %c, %U
     ret
   }
@@ -426,12 +548,12 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, ConstantIndices) {
 
     auto* expect =
         R"(
-%b1 = block {  # root
-  %U:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %p_indices:array<u32, 3>, %post:i32):vec4<i32> -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p_indices:array<u32, 3>, %post:i32):vec4<i32> {
+  $B2: {
     %6:u32 = access %p_indices, 0u
     %7:u32 = access %p_indices, 1u
     %8:u32 = access %p_indices, 2u
@@ -440,8 +562,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, ConstantIndices) {
     ret %10
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %12:u32 = convert 3i
     %13:u32 = convert 2i
     %14:u32 = convert 1i
@@ -450,8 +572,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, ConstantIndices) {
     ret
   }
 }
-%c = func():void -> %b4 {
-  %b4 = block {
+%c = func():void {
+  $B4: {
     %18:u32 = convert 3i
     %19:u32 = convert 2i
     %20:u32 = convert 1i
@@ -460,8 +582,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, ConstantIndices) {
     ret
   }
 }
-%d = func():void -> %b5 {
-  %b5 = block {
+%d = func():void {
+  $B5: {
     %24:void = call %c
     ret
   }
@@ -488,12 +610,12 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     auto* fn_third = b.Function("third", ty.i32());
     for (auto fn : {fn_first, fn_second, fn_third}) {
         b.Append(fn->Block(), [&] {
-            b.Store(i, b.Add(ty.i32(), b.Load(i), 1_i));
+            b.Store(i, b.Add(b.Load(i), 1_i));
             b.Return(fn, b.Load(i));
         });
     }
 
-    auto* fn_a = b.Function("a", ty.vec4<i32>());
+    auto* fn_a = b.Function("a", ty.vec4i());
     auto* fn_a_p = b.FunctionParam("p", ty.ptr<uniform, vec4<i32>>());
     fn_a->SetParams({
         b.FunctionParam("pre", ty.i32()),
@@ -512,7 +634,7 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
         auto* third = b.Call(fn_third);
         auto* p2 = b.Access(ty.ptr<uniform, vec4<i32>>(), p1, second, third);
         b.ir.SetName(p2, "p2");
-        b.Call(ty.vec4<i32>(), fn_a, 10_i, p2, 20_i);
+        b.Call(ty.vec4i(), fn_a, 10_i, p2, 20_i);
         b.Return(fn_b);
     });
 
@@ -528,7 +650,7 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
         auto* third = b.Call(fn_third);
         auto* p2 = b.Access(ty.ptr<uniform, vec4<i32>>(), p1, second, third);
         b.ir.SetName(p2, "p2");
-        b.Call(ty.vec4<i32>(), fn_a, 10_i, p2, 20_i);
+        b.Call(ty.vec4i(), fn_a, 10_i, p2, 20_i);
         b.Return(fn_c);
     });
 
@@ -539,13 +661,13 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %U:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = var @binding_point(0, 0)
-  %i:ptr<private, i32, read_write> = var
+$B1: {  # root
+  %U:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = var undef @binding_point(0, 0)
+  %i:ptr<private, i32, read_write> = var undef
 }
 
-%first = func():i32 -> %b2 {
-  %b2 = block {
+%first = func():i32 {
+  $B2: {
     %4:i32 = load %i
     %5:i32 = add %4, 1i
     store %i, %5
@@ -553,8 +675,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     ret %6
   }
 }
-%second = func():i32 -> %b3 {
-  %b3 = block {
+%second = func():i32 {
+  $B3: {
     %8:i32 = load %i
     %9:i32 = add %8, 1i
     store %i, %9
@@ -562,8 +684,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     ret %10
   }
 }
-%third = func():i32 -> %b4 {
-  %b4 = block {
+%third = func():i32 {
+  $B4: {
     %12:i32 = load %i
     %13:i32 = add %12, 1i
     store %i, %13
@@ -571,14 +693,14 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     ret %14
   }
 }
-%a = func(%pre:i32, %p:ptr<uniform, vec4<i32>, read>, %post:i32):vec4<i32> -> %b5 {
-  %b5 = block {
+%a = func(%pre:i32, %p:ptr<uniform, vec4<i32>, read>, %post:i32):vec4<i32> {
+  $B5: {
     %19:vec4<i32> = load %p
     ret %19
   }
 }
-%b = func():void -> %b6 {
-  %b6 = block {
+%b = func():void {
+  $B6: {
     %p0:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = let %U
     %22:i32 = call %first
     %p1:ptr<uniform, array<array<vec4<i32>, 8>, 8>, read> = access %p0, %22
@@ -589,8 +711,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     ret
   }
 }
-%c = func(%p_1:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read>):void -> %b7 {  # %p_1: 'p'
-  %b7 = block {
+%c = func(%p_1:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read>):void {  # %p_1: 'p'
+  $B7: {
     %p0_1:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = let %p_1  # %p0_1: 'p0'
     %31:i32 = call %first
     %p1_1:ptr<uniform, array<array<vec4<i32>, 8>, 8>, read> = access %p0_1, %31  # %p1_1: 'p1'
@@ -601,8 +723,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     ret
   }
 }
-%d = func():void -> %b8 {
-  %b8 = block {
+%d = func():void {
+  $B8: {
     %38:void = call %c, %U
     ret
   }
@@ -612,13 +734,13 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %U:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = var @binding_point(0, 0)
-  %i:ptr<private, i32, read_write> = var
+$B1: {  # root
+  %U:ptr<uniform, array<array<array<vec4<i32>, 8>, 8>, 8>, read> = var undef @binding_point(0, 0)
+  %i:ptr<private, i32, read_write> = var undef
 }
 
-%first = func():i32 -> %b2 {
-  %b2 = block {
+%first = func():i32 {
+  $B2: {
     %4:i32 = load %i
     %5:i32 = add %4, 1i
     store %i, %5
@@ -626,8 +748,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     ret %6
   }
 }
-%second = func():i32 -> %b3 {
-  %b3 = block {
+%second = func():i32 {
+  $B3: {
     %8:i32 = load %i
     %9:i32 = add %8, 1i
     store %i, %9
@@ -635,8 +757,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     ret %10
   }
 }
-%third = func():i32 -> %b4 {
-  %b4 = block {
+%third = func():i32 {
+  $B4: {
     %12:i32 = load %i
     %13:i32 = add %12, 1i
     store %i, %13
@@ -644,8 +766,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     ret %14
   }
 }
-%a = func(%pre:i32, %p_indices:array<u32, 3>, %post:i32):vec4<i32> -> %b5 {
-  %b5 = block {
+%a = func(%pre:i32, %p_indices:array<u32, 3>, %post:i32):vec4<i32> {
+  $B5: {
     %19:u32 = access %p_indices, 0u
     %20:u32 = access %p_indices, 1u
     %21:u32 = access %p_indices, 2u
@@ -654,8 +776,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     ret %23
   }
 }
-%b = func():void -> %b6 {
-  %b6 = block {
+%b = func():void {
+  $B6: {
     %25:i32 = call %first
     %26:i32 = call %second
     %27:i32 = call %third
@@ -667,8 +789,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     ret
   }
 }
-%c = func():void -> %b7 {
-  %b7 = block {
+%c = func():void {
+  $B7: {
     %34:i32 = call %first
     %35:i32 = call %second
     %36:i32 = call %third
@@ -680,8 +802,8 @@ TEST_F(IR_DirectVariableAccessTest_PtrChains, DynamicIndices) {
     ret
   }
 }
-%d = func():void -> %b8 {
-  %b8 = block {
+%d = func():void {
+  $B8: {
     %43:void = call %c
     ret
   }
@@ -726,18 +848,18 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, Param_ptr_i32_read) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %U:ptr<uniform, i32, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<uniform, i32, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %p:ptr<uniform, i32, read>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<uniform, i32, read>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %8:i32 = call %a, 10i, %U, 20i
     ret
   }
@@ -747,20 +869,19 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, Param_ptr_i32_read) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %U:ptr<uniform, i32, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<uniform, i32, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %post:i32):i32 -> %b2 {
-  %b2 = block {
-    %5:ptr<uniform, i32, read> = access %U
-    %6:i32 = load %5
-    ret %6
+%a = func(%pre:i32, %post:i32):i32 {
+  $B2: {
+    %5:i32 = load %U
+    ret %5
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
-    %8:i32 = call %a, 10i, 20i
+%b = func():void {
+  $B3: {
+    %7:i32 = call %a, 10i, 20i
     ret
   }
 }
@@ -779,7 +900,7 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, Param_ptr_vec4i32_Via_array_Dynami
                  U->SetBindingPoint(0, 0);
              });
 
-    auto* fn_a = b.Function("a", ty.vec4<i32>());
+    auto* fn_a = b.Function("a", ty.vec4i());
     auto* fn_a_p = b.FunctionParam("p", ty.ptr<uniform, vec4<i32>>());
     fn_a->SetParams({
         b.FunctionParam("pre", ty.i32()),
@@ -797,18 +918,18 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, Param_ptr_vec4i32_Via_array_Dynami
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %U:ptr<uniform, array<vec4<i32>, 8>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<uniform, array<vec4<i32>, 8>, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %p:ptr<uniform, vec4<i32>, read>, %post:i32):vec4<i32> -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<uniform, vec4<i32>, read>, %post:i32):vec4<i32> {
+  $B2: {
     %6:vec4<i32> = load %p
     ret %6
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %I:i32 = let 3i
     %9:ptr<uniform, vec4<i32>, read> = access %U, %I
     %10:vec4<i32> = call %a, 10i, %9, 20i
@@ -820,20 +941,20 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, Param_ptr_vec4i32_Via_array_Dynami
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %U:ptr<uniform, array<vec4<i32>, 8>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<uniform, array<vec4<i32>, 8>, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %p_indices:array<u32, 1>, %post:i32):vec4<i32> -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p_indices:array<u32, 1>, %post:i32):vec4<i32> {
+  $B2: {
     %6:u32 = access %p_indices, 0u
     %7:ptr<uniform, vec4<i32>, read> = access %U, %6
     %8:vec4<i32> = load %7
     ret %8
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %I:i32 = let 3i
     %11:u32 = convert %I
     %12:array<u32, 1> = construct %11
@@ -878,7 +999,7 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, CallChaining) {
         {
             // res += f0(&(*p)[1]);
             auto* call_0 = b.Call(fn_0, b.Access(ty.ptr<uniform, vec4<f32>>(), fn_1_p, 1_i));
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // let p_vec = &(*p)[1];
@@ -886,13 +1007,13 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, CallChaining) {
             auto* p_vec = b.Access(ty.ptr<uniform, vec4<f32>>(), fn_1_p, 1_i);
             b.ir.SetName(p_vec, "p_vec");
             auto* call_0 = b.Call(fn_0, p_vec);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // res += f0(&U.arr[2].mat[1]);
             auto* access = b.Access(ty.ptr<uniform, vec4<f32>>(), U, 0_u, 2_i, 0_u, 1_i);
             auto* call_0 = b.Call(fn_0, access);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // let p_vec = &U.arr[2].mat[1];
@@ -900,7 +1021,7 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, CallChaining) {
             auto* p_vec = b.Access(ty.ptr<uniform, vec4<f32>>(), U, 0_u, 2_i, 0_u, 1_i);
             b.ir.SetName(p_vec, "p_vec");
             auto* call_0 = b.Call(fn_0, p_vec);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
 
         b.Return(fn_1, b.Load(res));
@@ -924,7 +1045,7 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, CallChaining) {
         b.ir.SetName(p0_inner, "p0_inner");
         auto* call_0 = b.Call(ty.f32(), fn_2, p0_inner);
         auto* call_1 = b.Call(ty.f32(), fn_1, fn_3_p1);
-        b.Return(fn_3, b.Add(ty.f32(), call_0, call_1));
+        b.Return(fn_3, b.Add(call_0, call_1));
     });
 
     auto* fn_4 = b.Function("f4", ty.f32());
@@ -952,19 +1073,19 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%b1 = block {  # root
-  %U:ptr<uniform, Outer, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<uniform, Outer, read> = var undef @binding_point(0, 0)
 }
 
-%f0 = func(%p:ptr<uniform, vec4<f32>, read>):f32 -> %b2 {
-  %b2 = block {
+%f0 = func(%p:ptr<uniform, vec4<f32>, read>):f32 {
+  $B2: {
     %4:f32 = load_vector_element %p, 0u
     ret %4
   }
 }
-%f1 = func(%p_1:ptr<uniform, mat3x4<f32>, read>):f32 -> %b3 {  # %p_1: 'p'
-  %b3 = block {
-    %res:ptr<function, f32, read_write> = var
+%f1 = func(%p_1:ptr<uniform, mat3x4<f32>, read>):f32 {  # %p_1: 'p'
+  $B3: {
+    %res:ptr<function, f32, read_write> = var undef
     %8:ptr<uniform, vec4<f32>, read> = access %p_1, 1i
     %9:f32 = call %f0, %8
     %10:f32 = load %res
@@ -989,15 +1110,15 @@ Outer = struct @align(16) {
     ret %24
   }
 }
-%f2 = func(%p_2:ptr<uniform, Inner, read>):f32 -> %b4 {  # %p_2: 'p'
-  %b4 = block {
+%f2 = func(%p_2:ptr<uniform, Inner, read>):f32 {  # %p_2: 'p'
+  $B4: {
     %p_mat:ptr<uniform, mat3x4<f32>, read> = access %p_2, 0u
     %28:f32 = call %f1, %p_mat
     ret %28
   }
 }
-%f3 = func(%p0:ptr<uniform, array<Inner, 4>, read>, %p1:ptr<uniform, mat3x4<f32>, read>):f32 -> %b5 {
-  %b5 = block {
+%f3 = func(%p0:ptr<uniform, array<Inner, 4>, read>, %p1:ptr<uniform, mat3x4<f32>, read>):f32 {
+  $B5: {
     %p0_inner:ptr<uniform, Inner, read> = access %p0, 3i
     %33:f32 = call %f2, %p0_inner
     %34:f32 = call %f1, %p1
@@ -1005,16 +1126,16 @@ Outer = struct @align(16) {
     ret %35
   }
 }
-%f4 = func(%p_3:ptr<uniform, Outer, read>):f32 -> %b6 {  # %p_3: 'p'
-  %b6 = block {
+%f4 = func(%p_3:ptr<uniform, Outer, read>):f32 {  # %p_3: 'p'
+  $B6: {
     %38:ptr<uniform, array<Inner, 4>, read> = access %p_3, 0u
     %39:ptr<uniform, mat3x4<f32>, read> = access %U, 1u
     %40:f32 = call %f3, %38, %39
     ret %40
   }
 }
-%b = func():void -> %b7 {
-  %b7 = block {
+%b = func():void {
+  $B7: {
     %42:f32 = call %f4, %U
     ret
   }
@@ -1033,20 +1154,20 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%b1 = block {  # root
-  %U:ptr<uniform, Outer, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<uniform, Outer, read> = var undef @binding_point(0, 0)
 }
 
-%f0 = func(%p_indices:array<u32, 1>):f32 -> %b2 {
-  %b2 = block {
+%f0 = func(%p_indices:array<u32, 1>):f32 {
+  $B2: {
     %4:u32 = access %p_indices, 0u
     %5:ptr<uniform, vec4<f32>, read> = access %U, 1u, %4
     %6:f32 = load_vector_element %5, 0u
     ret %6
   }
 }
-%f0_1 = func(%p_indices_1:array<u32, 2>):f32 -> %b3 {  # %f0_1: 'f0', %p_indices_1: 'p_indices'
-  %b3 = block {
+%f0_1 = func(%p_indices_1:array<u32, 2>):f32 {  # %f0_1: 'f0', %p_indices_1: 'p_indices'
+  $B3: {
     %9:u32 = access %p_indices_1, 0u
     %10:u32 = access %p_indices_1, 1u
     %11:ptr<uniform, vec4<f32>, read> = access %U, 0u, %9, 0u, %10
@@ -1054,9 +1175,9 @@ Outer = struct @align(16) {
     ret %12
   }
 }
-%f1 = func():f32 -> %b4 {
-  %b4 = block {
-    %res:ptr<function, f32, read_write> = var
+%f1 = func():f32 {
+  $B4: {
+    %res:ptr<function, f32, read_write> = var undef
     %15:u32 = convert 1i
     %16:array<u32, 1> = construct %15
     %17:f32 = call %f0, %16
@@ -1087,10 +1208,10 @@ Outer = struct @align(16) {
     ret %37
   }
 }
-%f1_1 = func(%p_indices_2:array<u32, 1>):f32 -> %b5 {  # %f1_1: 'f1', %p_indices_2: 'p_indices'
-  %b5 = block {
+%f1_1 = func(%p_indices_2:array<u32, 1>):f32 {  # %f1_1: 'f1', %p_indices_2: 'p_indices'
+  $B5: {
     %40:u32 = access %p_indices_2, 0u
-    %res_1:ptr<function, f32, read_write> = var  # %res_1: 'res'
+    %res_1:ptr<function, f32, read_write> = var undef  # %res_1: 'res'
     %42:u32 = convert 1i
     %43:array<u32, 2> = construct %40, %42
     %44:f32 = call %f0_1, %43
@@ -1121,16 +1242,16 @@ Outer = struct @align(16) {
     ret %64
   }
 }
-%f2 = func(%p_indices_3:array<u32, 1>):f32 -> %b6 {  # %p_indices_3: 'p_indices'
-  %b6 = block {
+%f2 = func(%p_indices_3:array<u32, 1>):f32 {  # %p_indices_3: 'p_indices'
+  $B6: {
     %67:u32 = access %p_indices_3, 0u
     %68:array<u32, 1> = construct %67
     %69:f32 = call %f1_1, %68
     ret %69
   }
 }
-%f3 = func():f32 -> %b7 {
-  %b7 = block {
+%f3 = func():f32 {
+  $B7: {
     %71:u32 = convert 3i
     %72:array<u32, 1> = construct %71
     %73:f32 = call %f2, %72
@@ -1139,14 +1260,14 @@ Outer = struct @align(16) {
     ret %75
   }
 }
-%f4 = func():f32 -> %b8 {
-  %b8 = block {
+%f4 = func():f32 {
+  $B8: {
     %77:f32 = call %f3
     ret %77
   }
 }
-%b = func():void -> %b9 {
-  %b9 = block {
+%b = func():void {
+  $B9: {
     %79:f32 = call %f4
     ret
   }
@@ -1159,7 +1280,7 @@ Outer = struct @align(16) {
 }
 
 TEST_F(IR_DirectVariableAccessTest_UniformAS, CallChaining2) {
-    auto* T3 = ty.vec4<i32>();
+    auto* T3 = ty.vec4i();
     auto* T2 = ty.array(T3, 5);
     auto* T1 = ty.array(T2, 5);
     auto* T = ty.array(T1, 5);
@@ -1202,33 +1323,33 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, CallChaining2) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %U:ptr<uniform, array<array<array<vec4<i32>, 5>, 5>, 5>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<uniform, array<array<array<vec4<i32>, 5>, 5>, 5>, read> = var undef @binding_point(0, 0)
 }
 
-%f2 = func(%p:ptr<uniform, array<vec4<i32>, 5>, read>):vec4<i32> -> %b2 {
-  %b2 = block {
+%f2 = func(%p:ptr<uniform, array<vec4<i32>, 5>, read>):vec4<i32> {
+  $B2: {
     %4:ptr<uniform, vec4<i32>, read> = access %p, 3u
     %5:vec4<i32> = load %4
     ret %5
   }
 }
-%f1 = func(%p_1:ptr<uniform, array<array<vec4<i32>, 5>, 5>, read>):vec4<i32> -> %b3 {  # %p_1: 'p'
-  %b3 = block {
+%f1 = func(%p_1:ptr<uniform, array<array<vec4<i32>, 5>, 5>, read>):vec4<i32> {  # %p_1: 'p'
+  $B3: {
     %8:ptr<uniform, array<vec4<i32>, 5>, read> = access %p_1, 2u
     %9:vec4<i32> = call %f2, %8
     ret %9
   }
 }
-%f0 = func(%p_2:ptr<uniform, array<array<array<vec4<i32>, 5>, 5>, 5>, read>):vec4<i32> -> %b4 {  # %p_2: 'p'
-  %b4 = block {
+%f0 = func(%p_2:ptr<uniform, array<array<array<vec4<i32>, 5>, 5>, 5>, read>):vec4<i32> {  # %p_2: 'p'
+  $B4: {
     %12:ptr<uniform, array<array<vec4<i32>, 5>, 5>, read> = access %p_2, 1u
     %13:vec4<i32> = call %f1, %12
     ret %13
   }
 }
-%main = func():void -> %b5 {
-  %b5 = block {
+%main = func():void {
+  $B5: {
     %15:vec4<i32> = call %f0, %U
     ret
   }
@@ -1238,12 +1359,12 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, CallChaining2) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %U:ptr<uniform, array<array<array<vec4<i32>, 5>, 5>, 5>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<uniform, array<array<array<vec4<i32>, 5>, 5>, 5>, read> = var undef @binding_point(0, 0)
 }
 
-%f2 = func(%p_indices:array<u32, 2>):vec4<i32> -> %b2 {
-  %b2 = block {
+%f2 = func(%p_indices:array<u32, 2>):vec4<i32> {
+  $B2: {
     %4:u32 = access %p_indices, 0u
     %5:u32 = access %p_indices, 1u
     %6:ptr<uniform, array<vec4<i32>, 5>, read> = access %U, %4, %5
@@ -1252,23 +1373,23 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, CallChaining2) {
     ret %8
   }
 }
-%f1 = func(%p_indices_1:array<u32, 1>):vec4<i32> -> %b3 {  # %p_indices_1: 'p_indices'
-  %b3 = block {
+%f1 = func(%p_indices_1:array<u32, 1>):vec4<i32> {  # %p_indices_1: 'p_indices'
+  $B3: {
     %11:u32 = access %p_indices_1, 0u
     %12:array<u32, 2> = construct %11, 2u
     %13:vec4<i32> = call %f2, %12
     ret %13
   }
 }
-%f0 = func():vec4<i32> -> %b4 {
-  %b4 = block {
+%f0 = func():vec4<i32> {
+  $B4: {
     %15:array<u32, 1> = construct 1u
     %16:vec4<i32> = call %f1, %15
     ret %16
   }
 }
-%main = func():void -> %b5 {
-  %b5 = block {
+%main = func():void {
+  $B5: {
     %18:vec4<i32> = call %f0
     ret
   }
@@ -1281,6 +1402,588 @@ TEST_F(IR_DirectVariableAccessTest_UniformAS, CallChaining2) {
 }
 
 }  // namespace uniform_as_tests
+
+////////////////////////////////////////////////////////////////////////////////
+// 'immediate' address space
+////////////////////////////////////////////////////////////////////////////////
+namespace immediate_as_tests {
+
+using IR_DirectVariableAccessTest_ImmediateAS = TransformTest;
+
+TEST_F(IR_DirectVariableAccessTest_ImmediateAS, Param_ptr_i32_read) {
+    Var* U = nullptr;
+    b.Append(b.ir.root_block,
+             [&] {  //
+                 U = b.Var<immediate, i32>("U");
+             });
+
+    auto* fn_a = b.Function("a", ty.i32());
+    auto* fn_a_p = b.FunctionParam("p", ty.ptr<immediate, i32>());
+    fn_a->SetParams({
+        b.FunctionParam("pre", ty.i32()),
+        fn_a_p,
+        b.FunctionParam("post", ty.i32()),
+    });
+    b.Append(fn_a->Block(), [&] { b.Return(fn_a, b.Load(fn_a_p)); });
+
+    auto* fn_b = b.Function("b", ty.void_());
+    b.Append(fn_b->Block(), [&] {
+        b.Call(fn_a, 10_i, U, 20_i);
+        b.Return(fn_b);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %U:ptr<immediate, i32, read> = var undef
+}
+
+%a = func(%pre:i32, %p:ptr<immediate, i32, read>, %post:i32):i32 {
+  $B2: {
+    %6:i32 = load %p
+    ret %6
+  }
+}
+%b = func():void {
+  $B3: {
+    %8:i32 = call %a, 10i, %U, 20i
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %U:ptr<immediate, i32, read> = var undef
+}
+
+%a = func(%pre:i32, %post:i32):i32 {
+  $B2: {
+    %5:i32 = load %U
+    ret %5
+  }
+}
+%b = func():void {
+  $B3: {
+    %7:i32 = call %a, 10i, 20i
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, DirectVariableAccessOptions{});
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_ImmediateAS, Param_ptr_vec4i32_Via_array_DynamicRead) {
+    Var* U = nullptr;
+    b.Append(b.ir.root_block,
+             [&] {  //
+                 U = b.Var<immediate, array<vec4<i32>, 8>>("U");
+             });
+
+    auto* fn_a = b.Function("a", ty.vec4i());
+    auto* fn_a_p = b.FunctionParam("p", ty.ptr<immediate, vec4<i32>>());
+    fn_a->SetParams({
+        b.FunctionParam("pre", ty.i32()),
+        fn_a_p,
+        b.FunctionParam("post", ty.i32()),
+    });
+    b.Append(fn_a->Block(), [&] { b.Return(fn_a, b.Load(fn_a_p)); });
+
+    auto* fn_b = b.Function("b", ty.void_());
+    b.Append(fn_b->Block(), [&] {
+        auto* I = b.Let("I", 3_i);
+        auto* access = b.Access(ty.ptr<immediate, vec4<i32>>(), U, I);
+        b.Call(fn_a, 10_i, access, 20_i);
+        b.Return(fn_b);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %U:ptr<immediate, array<vec4<i32>, 8>, read> = var undef
+}
+
+%a = func(%pre:i32, %p:ptr<immediate, vec4<i32>, read>, %post:i32):vec4<i32> {
+  $B2: {
+    %6:vec4<i32> = load %p
+    ret %6
+  }
+}
+%b = func():void {
+  $B3: {
+    %I:i32 = let 3i
+    %9:ptr<immediate, vec4<i32>, read> = access %U, %I
+    %10:vec4<i32> = call %a, 10i, %9, 20i
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %U:ptr<immediate, array<vec4<i32>, 8>, read> = var undef
+}
+
+%a = func(%pre:i32, %p_indices:array<u32, 1>, %post:i32):vec4<i32> {
+  $B2: {
+    %6:u32 = access %p_indices, 0u
+    %7:ptr<immediate, vec4<i32>, read> = access %U, %6
+    %8:vec4<i32> = load %7
+    ret %8
+  }
+}
+%b = func():void {
+  $B3: {
+    %I:i32 = let 3i
+    %11:u32 = convert %I
+    %12:array<u32, 1> = construct %11
+    %13:vec4<i32> = call %a, 10i, %12, 20i
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, DirectVariableAccessOptions{});
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_ImmediateAS, CallChaining) {
+    auto* Inner =
+        ty.Struct(mod.symbols.New("Inner"), {
+                                                {mod.symbols.Register("mat"), ty.mat3x4<f32>()},
+                                            });
+    auto* Outer =
+        ty.Struct(mod.symbols.New("Outer"), {
+                                                {mod.symbols.Register("arr"), ty.array(Inner, 4)},
+                                                {mod.symbols.Register("mat"), ty.mat3x4<f32>()},
+                                            });
+    Var* U = nullptr;
+    b.Append(b.ir.root_block,
+             [&] {  //
+                 U = b.Var("U", ty.ptr<immediate>(Outer));
+             });
+
+    auto* fn_0 = b.Function("f0", ty.f32());
+    auto* fn_0_p = b.FunctionParam("p", ty.ptr<immediate, vec4<f32>>());
+    fn_0->SetParams({fn_0_p});
+    b.Append(fn_0->Block(), [&] { b.Return(fn_0, b.LoadVectorElement(fn_0_p, 0_u)); });
+
+    auto* fn_1 = b.Function("f1", ty.f32());
+    auto* fn_1_p = b.FunctionParam("p", ty.ptr<immediate, mat3x4<f32>>());
+    fn_1->SetParams({fn_1_p});
+    b.Append(fn_1->Block(), [&] {
+        auto* res = b.Var<function, f32>("res");
+        {
+            // res += f0(&(*p)[1]);
+            auto* call_0 = b.Call(fn_0, b.Access(ty.ptr<immediate, vec4<f32>>(), fn_1_p, 1_i));
+            b.Store(res, b.Add(b.Load(res), call_0));
+        }
+        {
+            // let p_vec = &(*p)[1];
+            // res += f0(p_vec);
+            auto* p_vec = b.Access(ty.ptr<immediate, vec4<f32>>(), fn_1_p, 1_i);
+            b.ir.SetName(p_vec, "p_vec");
+            auto* call_0 = b.Call(fn_0, p_vec);
+            b.Store(res, b.Add(b.Load(res), call_0));
+        }
+        {
+            // res += f0(&U.arr[2].mat[1]);
+            auto* access = b.Access(ty.ptr<immediate, vec4<f32>>(), U, 0_u, 2_i, 0_u, 1_i);
+            auto* call_0 = b.Call(fn_0, access);
+            b.Store(res, b.Add(b.Load(res), call_0));
+        }
+        {
+            // let p_vec = &U.arr[2].mat[1];
+            // res += f0(p_vec);
+            auto* p_vec = b.Access(ty.ptr<immediate, vec4<f32>>(), U, 0_u, 2_i, 0_u, 1_i);
+            b.ir.SetName(p_vec, "p_vec");
+            auto* call_0 = b.Call(fn_0, p_vec);
+            b.Store(res, b.Add(b.Load(res), call_0));
+        }
+
+        b.Return(fn_1, b.Load(res));
+    });
+
+    auto* fn_2 = b.Function("f2", ty.f32());
+    auto* fn_2_p = b.FunctionParam("p", ty.ptr<immediate>(Inner));
+    fn_2->SetParams({fn_2_p});
+    b.Append(fn_2->Block(), [&] {
+        auto* p_mat = b.Access(ty.ptr<immediate, mat3x4<f32>>(), fn_2_p, 0_u);
+        b.ir.SetName(p_mat, "p_mat");
+        b.Return(fn_2, b.Call(fn_1, p_mat));
+    });
+
+    auto* fn_3 = b.Function("f3", ty.f32());
+    auto* fn_3_p0 = b.FunctionParam("p0", ty.ptr<immediate>(ty.array(Inner, 4)));
+    auto* fn_3_p1 = b.FunctionParam("p1", ty.ptr<immediate, mat3x4<f32>>());
+    fn_3->SetParams({fn_3_p0, fn_3_p1});
+    b.Append(fn_3->Block(), [&] {
+        auto* p0_inner = b.Access(ty.ptr<immediate>(Inner), fn_3_p0, 3_i);
+        b.ir.SetName(p0_inner, "p0_inner");
+        auto* call_0 = b.Call(ty.f32(), fn_2, p0_inner);
+        auto* call_1 = b.Call(ty.f32(), fn_1, fn_3_p1);
+        b.Return(fn_3, b.Add(call_0, call_1));
+    });
+
+    auto* fn_4 = b.Function("f4", ty.f32());
+    auto* fn_4_p = b.FunctionParam("p", ty.ptr<immediate>(Outer));
+    fn_4->SetParams({fn_4_p});
+    b.Append(fn_4->Block(), [&] {
+        auto* access_0 = b.Access(ty.ptr<immediate>(ty.array(Inner, 4)), fn_4_p, 0_u);
+        auto* access_1 = b.Access(ty.ptr<immediate, mat3x4<f32>>(), U, 1_u);
+        b.Return(fn_4, b.Call(ty.f32(), fn_3, access_0, access_1));
+    });
+
+    auto* fn_b = b.Function("b", ty.void_());
+    b.Append(fn_b->Block(), [&] {
+        b.Call(ty.f32(), fn_4, U);
+        b.Return(fn_b);
+    });
+
+    auto* src = R"(
+Inner = struct @align(16) {
+  mat:mat3x4<f32> @offset(0)
+}
+
+Outer = struct @align(16) {
+  arr:array<Inner, 4> @offset(0)
+  mat:mat3x4<f32> @offset(192)
+}
+
+$B1: {  # root
+  %U:ptr<immediate, Outer, read> = var undef
+}
+
+%f0 = func(%p:ptr<immediate, vec4<f32>, read>):f32 {
+  $B2: {
+    %4:f32 = load_vector_element %p, 0u
+    ret %4
+  }
+}
+%f1 = func(%p_1:ptr<immediate, mat3x4<f32>, read>):f32 {  # %p_1: 'p'
+  $B3: {
+    %res:ptr<function, f32, read_write> = var undef
+    %8:ptr<immediate, vec4<f32>, read> = access %p_1, 1i
+    %9:f32 = call %f0, %8
+    %10:f32 = load %res
+    %11:f32 = add %10, %9
+    store %res, %11
+    %p_vec:ptr<immediate, vec4<f32>, read> = access %p_1, 1i
+    %13:f32 = call %f0, %p_vec
+    %14:f32 = load %res
+    %15:f32 = add %14, %13
+    store %res, %15
+    %16:ptr<immediate, vec4<f32>, read> = access %U, 0u, 2i, 0u, 1i
+    %17:f32 = call %f0, %16
+    %18:f32 = load %res
+    %19:f32 = add %18, %17
+    store %res, %19
+    %p_vec_1:ptr<immediate, vec4<f32>, read> = access %U, 0u, 2i, 0u, 1i  # %p_vec_1: 'p_vec'
+    %21:f32 = call %f0, %p_vec_1
+    %22:f32 = load %res
+    %23:f32 = add %22, %21
+    store %res, %23
+    %24:f32 = load %res
+    ret %24
+  }
+}
+%f2 = func(%p_2:ptr<immediate, Inner, read>):f32 {  # %p_2: 'p'
+  $B4: {
+    %p_mat:ptr<immediate, mat3x4<f32>, read> = access %p_2, 0u
+    %28:f32 = call %f1, %p_mat
+    ret %28
+  }
+}
+%f3 = func(%p0:ptr<immediate, array<Inner, 4>, read>, %p1:ptr<immediate, mat3x4<f32>, read>):f32 {
+  $B5: {
+    %p0_inner:ptr<immediate, Inner, read> = access %p0, 3i
+    %33:f32 = call %f2, %p0_inner
+    %34:f32 = call %f1, %p1
+    %35:f32 = add %33, %34
+    ret %35
+  }
+}
+%f4 = func(%p_3:ptr<immediate, Outer, read>):f32 {  # %p_3: 'p'
+  $B6: {
+    %38:ptr<immediate, array<Inner, 4>, read> = access %p_3, 0u
+    %39:ptr<immediate, mat3x4<f32>, read> = access %U, 1u
+    %40:f32 = call %f3, %38, %39
+    ret %40
+  }
+}
+%b = func():void {
+  $B7: {
+    %42:f32 = call %f4, %U
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+Inner = struct @align(16) {
+  mat:mat3x4<f32> @offset(0)
+}
+
+Outer = struct @align(16) {
+  arr:array<Inner, 4> @offset(0)
+  mat:mat3x4<f32> @offset(192)
+}
+
+$B1: {  # root
+  %U:ptr<immediate, Outer, read> = var undef
+}
+
+%f0 = func(%p_indices:array<u32, 1>):f32 {
+  $B2: {
+    %4:u32 = access %p_indices, 0u
+    %5:ptr<immediate, vec4<f32>, read> = access %U, 1u, %4
+    %6:f32 = load_vector_element %5, 0u
+    ret %6
+  }
+}
+%f0_1 = func(%p_indices_1:array<u32, 2>):f32 {  # %f0_1: 'f0', %p_indices_1: 'p_indices'
+  $B3: {
+    %9:u32 = access %p_indices_1, 0u
+    %10:u32 = access %p_indices_1, 1u
+    %11:ptr<immediate, vec4<f32>, read> = access %U, 0u, %9, 0u, %10
+    %12:f32 = load_vector_element %11, 0u
+    ret %12
+  }
+}
+%f1 = func():f32 {
+  $B4: {
+    %res:ptr<function, f32, read_write> = var undef
+    %15:u32 = convert 1i
+    %16:array<u32, 1> = construct %15
+    %17:f32 = call %f0, %16
+    %18:f32 = load %res
+    %19:f32 = add %18, %17
+    store %res, %19
+    %20:u32 = convert 1i
+    %21:array<u32, 1> = construct %20
+    %22:f32 = call %f0, %21
+    %23:f32 = load %res
+    %24:f32 = add %23, %22
+    store %res, %24
+    %25:u32 = convert 2i
+    %26:u32 = convert 1i
+    %27:array<u32, 2> = construct %25, %26
+    %28:f32 = call %f0_1, %27
+    %29:f32 = load %res
+    %30:f32 = add %29, %28
+    store %res, %30
+    %31:u32 = convert 2i
+    %32:u32 = convert 1i
+    %33:array<u32, 2> = construct %31, %32
+    %34:f32 = call %f0_1, %33
+    %35:f32 = load %res
+    %36:f32 = add %35, %34
+    store %res, %36
+    %37:f32 = load %res
+    ret %37
+  }
+}
+%f1_1 = func(%p_indices_2:array<u32, 1>):f32 {  # %f1_1: 'f1', %p_indices_2: 'p_indices'
+  $B5: {
+    %40:u32 = access %p_indices_2, 0u
+    %res_1:ptr<function, f32, read_write> = var undef  # %res_1: 'res'
+    %42:u32 = convert 1i
+    %43:array<u32, 2> = construct %40, %42
+    %44:f32 = call %f0_1, %43
+    %45:f32 = load %res_1
+    %46:f32 = add %45, %44
+    store %res_1, %46
+    %47:u32 = convert 1i
+    %48:array<u32, 2> = construct %40, %47
+    %49:f32 = call %f0_1, %48
+    %50:f32 = load %res_1
+    %51:f32 = add %50, %49
+    store %res_1, %51
+    %52:u32 = convert 2i
+    %53:u32 = convert 1i
+    %54:array<u32, 2> = construct %52, %53
+    %55:f32 = call %f0_1, %54
+    %56:f32 = load %res_1
+    %57:f32 = add %56, %55
+    store %res_1, %57
+    %58:u32 = convert 2i
+    %59:u32 = convert 1i
+    %60:array<u32, 2> = construct %58, %59
+    %61:f32 = call %f0_1, %60
+    %62:f32 = load %res_1
+    %63:f32 = add %62, %61
+    store %res_1, %63
+    %64:f32 = load %res_1
+    ret %64
+  }
+}
+%f2 = func(%p_indices_3:array<u32, 1>):f32 {  # %p_indices_3: 'p_indices'
+  $B6: {
+    %67:u32 = access %p_indices_3, 0u
+    %68:array<u32, 1> = construct %67
+    %69:f32 = call %f1_1, %68
+    ret %69
+  }
+}
+%f3 = func():f32 {
+  $B7: {
+    %71:u32 = convert 3i
+    %72:array<u32, 1> = construct %71
+    %73:f32 = call %f2, %72
+    %74:f32 = call %f1
+    %75:f32 = add %73, %74
+    ret %75
+  }
+}
+%f4 = func():f32 {
+  $B8: {
+    %77:f32 = call %f3
+    ret %77
+  }
+}
+%b = func():void {
+  $B9: {
+    %79:f32 = call %f4
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, DirectVariableAccessOptions{});
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_ImmediateAS, CallChaining2) {
+    auto* T3 = ty.vec4i();
+    auto* T2 = ty.array(T3, 5);
+    auto* T1 = ty.array(T2, 5);
+    auto* T = ty.array(T1, 5);
+
+    Var* input = nullptr;
+    b.Append(b.ir.root_block,
+             [&] {  //
+                 input = b.Var("U", ty.ptr<immediate>(T));
+             });
+
+    auto* f2 = b.Function("f2", T3);
+    {
+        auto* p = b.FunctionParam("p", ty.ptr<immediate>(T2));
+        f2->SetParams({p});
+        b.Append(f2->Block(),
+                 [&] { b.Return(f2, b.Load(b.Access<ptr<immediate, vec4<i32>>>(p, 3_u))); });
+    }
+
+    auto* f1 = b.Function("f1", T3);
+    {
+        auto* p = b.FunctionParam("p", ty.ptr<immediate>(T1));
+        f1->SetParams({p});
+        b.Append(f1->Block(),
+                 [&] { b.Return(f1, b.Call(f2, b.Access(ty.ptr<immediate>(T2), p, 2_u))); });
+    }
+
+    auto* f0 = b.Function("f0", T3);
+    {
+        auto* p = b.FunctionParam("p", ty.ptr<immediate>(T));
+        f0->SetParams({p});
+        b.Append(f0->Block(),
+                 [&] { b.Return(f0, b.Call(f1, b.Access(ty.ptr<immediate>(T1), p, 1_u))); });
+    }
+
+    auto* main = b.Function("main", ty.void_());
+    b.Append(main->Block(), [&] {
+        b.Call(f0, input);
+        b.Return(main);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %U:ptr<immediate, array<array<array<vec4<i32>, 5>, 5>, 5>, read> = var undef
+}
+
+%f2 = func(%p:ptr<immediate, array<vec4<i32>, 5>, read>):vec4<i32> {
+  $B2: {
+    %4:ptr<immediate, vec4<i32>, read> = access %p, 3u
+    %5:vec4<i32> = load %4
+    ret %5
+  }
+}
+%f1 = func(%p_1:ptr<immediate, array<array<vec4<i32>, 5>, 5>, read>):vec4<i32> {  # %p_1: 'p'
+  $B3: {
+    %8:ptr<immediate, array<vec4<i32>, 5>, read> = access %p_1, 2u
+    %9:vec4<i32> = call %f2, %8
+    ret %9
+  }
+}
+%f0 = func(%p_2:ptr<immediate, array<array<array<vec4<i32>, 5>, 5>, 5>, read>):vec4<i32> {  # %p_2: 'p'
+  $B4: {
+    %12:ptr<immediate, array<array<vec4<i32>, 5>, 5>, read> = access %p_2, 1u
+    %13:vec4<i32> = call %f1, %12
+    ret %13
+  }
+}
+%main = func():void {
+  $B5: {
+    %15:vec4<i32> = call %f0, %U
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %U:ptr<immediate, array<array<array<vec4<i32>, 5>, 5>, 5>, read> = var undef
+}
+
+%f2 = func(%p_indices:array<u32, 2>):vec4<i32> {
+  $B2: {
+    %4:u32 = access %p_indices, 0u
+    %5:u32 = access %p_indices, 1u
+    %6:ptr<immediate, array<vec4<i32>, 5>, read> = access %U, %4, %5
+    %7:ptr<immediate, vec4<i32>, read> = access %6, 3u
+    %8:vec4<i32> = load %7
+    ret %8
+  }
+}
+%f1 = func(%p_indices_1:array<u32, 1>):vec4<i32> {  # %p_indices_1: 'p_indices'
+  $B3: {
+    %11:u32 = access %p_indices_1, 0u
+    %12:array<u32, 2> = construct %11, 2u
+    %13:vec4<i32> = call %f2, %12
+    ret %13
+  }
+}
+%f0 = func():vec4<i32> {
+  $B4: {
+    %15:array<u32, 1> = construct 1u
+    %16:vec4<i32> = call %f1, %15
+    ret %16
+  }
+}
+%main = func():void {
+  $B5: {
+    %18:vec4<i32> = call %f0
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, DirectVariableAccessOptions{});
+
+    EXPECT_EQ(expect, str());
+}
+
+}  // namespace immediate_as_tests
 
 ////////////////////////////////////////////////////////////////////////////////
 // 'storage' address space
@@ -1322,18 +2025,18 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%b1 = block {  # root
-  %S:ptr<storage, str, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, str, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %p:ptr<storage, i32, read>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<storage, i32, read>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %8:ptr<storage, i32, read> = access %S, 0u
     %9:i32 = call %a, 10i, %8, 20i
     ret
@@ -1348,19 +2051,19 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%b1 = block {  # root
-  %S:ptr<storage, str, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, str, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %post:i32):i32 {
+  $B2: {
     %5:ptr<storage, i32, read> = access %S, 0u
     %6:i32 = load %5
     ret %6
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %8:i32 = call %a, 10i, 20i
     ret
   }
@@ -1393,7 +2096,7 @@ TEST_F(IR_DirectVariableAccessTest_StorageAS, Param_ptr_arr_i32_Via_struct_write
         b.FunctionParam("post", ty.i32()),
     });
     b.Append(fn_a->Block(), [&] {
-        b.Store(fn_a_p, b.Splat(ty.array<i32, 4>(), 0_i, 4));
+        b.Store(fn_a_p, b.Splat<array<i32, 4>>(0_i));
         b.Return(fn_a);
     });
 
@@ -1409,18 +2112,18 @@ str = struct @align(4) {
   arr:array<i32, 4> @offset(0)
 }
 
-%b1 = block {  # root
-  %S:ptr<storage, str, read_write> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, str, read_write> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %p:ptr<storage, array<i32, 4>, read_write>, %post:i32):void -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<storage, array<i32, 4>, read_write>, %post:i32):void {
+  $B2: {
     store %p, array<i32, 4>(0i)
     ret
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %7:ptr<storage, array<i32, 4>, read_write> = access %S, 0u
     %8:void = call %a, 10i, %7, 20i
     ret
@@ -1435,19 +2138,19 @@ str = struct @align(4) {
   arr:array<i32, 4> @offset(0)
 }
 
-%b1 = block {  # root
-  %S:ptr<storage, str, read_write> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, str, read_write> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %post:i32):void -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %post:i32):void {
+  $B2: {
     %5:ptr<storage, array<i32, 4>, read_write> = access %S, 0u
     store %5, array<i32, 4>(0i)
     ret
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %7:void = call %a, 10i, 20i
     ret
   }
@@ -1475,7 +2178,7 @@ TEST_F(IR_DirectVariableAccessTest_StorageAS, Param_ptr_vec4i32_Via_array_Dynami
         b.FunctionParam("post", ty.i32()),
     });
     b.Append(fn_a->Block(), [&] {
-        b.Store(fn_a_p, b.Splat(ty.vec4<i32>(), 0_i, 4));
+        b.Store(fn_a_p, b.Splat<vec4<i32>>(0_i));
         b.Return(fn_a);
     });
 
@@ -1488,18 +2191,18 @@ TEST_F(IR_DirectVariableAccessTest_StorageAS, Param_ptr_vec4i32_Via_array_Dynami
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %S:ptr<storage, array<vec4<i32>, 8>, read_write> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, array<vec4<i32>, 8>, read_write> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %p:ptr<storage, vec4<i32>, read_write>, %post:i32):void -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<storage, vec4<i32>, read_write>, %post:i32):void {
+  $B2: {
     store %p, vec4<i32>(0i)
     ret
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %I:i32 = let 3i
     %8:ptr<storage, vec4<i32>, read_write> = access %S, %I
     %9:void = call %a, 10i, %8, 20i
@@ -1511,20 +2214,20 @@ TEST_F(IR_DirectVariableAccessTest_StorageAS, Param_ptr_vec4i32_Via_array_Dynami
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %S:ptr<storage, array<vec4<i32>, 8>, read_write> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, array<vec4<i32>, 8>, read_write> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %p_indices:array<u32, 1>, %post:i32):void -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p_indices:array<u32, 1>, %post:i32):void {
+  $B2: {
     %6:u32 = access %p_indices, 0u
     %7:ptr<storage, vec4<i32>, read_write> = access %S, %6
     store %7, vec4<i32>(0i)
     ret
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %I:i32 = let 3i
     %10:u32 = convert %I
     %11:array<u32, 1> = construct %10
@@ -1569,7 +2272,7 @@ TEST_F(IR_DirectVariableAccessTest_StorageAS, CallChaining) {
         {
             // res += f0(&(*p)[1]);
             auto* call_0 = b.Call(fn_0, b.Access(ty.ptr<storage, vec4<f32>, read>(), fn_1_p, 1_i));
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // let p_vec = &(*p)[1];
@@ -1577,13 +2280,13 @@ TEST_F(IR_DirectVariableAccessTest_StorageAS, CallChaining) {
             auto* p_vec = b.Access(ty.ptr<storage, vec4<f32>, read>(), fn_1_p, 1_i);
             b.ir.SetName(p_vec, "p_vec");
             auto* call_0 = b.Call(fn_0, p_vec);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // res += f0(&U.arr[2].mat[1]);
             auto* access = b.Access(ty.ptr<storage, vec4<f32>, read>(), S, 0_u, 2_i, 0_u, 1_i);
             auto* call_0 = b.Call(fn_0, access);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // let p_vec = &U.arr[2].mat[1];
@@ -1591,7 +2294,7 @@ TEST_F(IR_DirectVariableAccessTest_StorageAS, CallChaining) {
             auto* p_vec = b.Access(ty.ptr<storage, vec4<f32>, read>(), S, 0_u, 2_i, 0_u, 1_i);
             b.ir.SetName(p_vec, "p_vec");
             auto* call_0 = b.Call(fn_0, p_vec);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
 
         b.Return(fn_1, b.Load(res));
@@ -1615,7 +2318,7 @@ TEST_F(IR_DirectVariableAccessTest_StorageAS, CallChaining) {
         b.ir.SetName(p0_inner, "p0_inner");
         auto* call_0 = b.Call(ty.f32(), fn_2, p0_inner);
         auto* call_1 = b.Call(ty.f32(), fn_1, fn_3_p1);
-        b.Return(fn_3, b.Add(ty.f32(), call_0, call_1));
+        b.Return(fn_3, b.Add(call_0, call_1));
     });
 
     auto* fn_4 = b.Function("f4", ty.f32());
@@ -1643,19 +2346,19 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%b1 = block {  # root
-  %S:ptr<storage, Outer, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, Outer, read> = var undef @binding_point(0, 0)
 }
 
-%f0 = func(%p:ptr<storage, vec4<f32>, read>):f32 -> %b2 {
-  %b2 = block {
+%f0 = func(%p:ptr<storage, vec4<f32>, read>):f32 {
+  $B2: {
     %4:f32 = load_vector_element %p, 0u
     ret %4
   }
 }
-%f1 = func(%p_1:ptr<storage, mat3x4<f32>, read>):f32 -> %b3 {  # %p_1: 'p'
-  %b3 = block {
-    %res:ptr<function, f32, read_write> = var
+%f1 = func(%p_1:ptr<storage, mat3x4<f32>, read>):f32 {  # %p_1: 'p'
+  $B3: {
+    %res:ptr<function, f32, read_write> = var undef
     %8:ptr<storage, vec4<f32>, read> = access %p_1, 1i
     %9:f32 = call %f0, %8
     %10:f32 = load %res
@@ -1680,15 +2383,15 @@ Outer = struct @align(16) {
     ret %24
   }
 }
-%f2 = func(%p_2:ptr<storage, Inner, read>):f32 -> %b4 {  # %p_2: 'p'
-  %b4 = block {
+%f2 = func(%p_2:ptr<storage, Inner, read>):f32 {  # %p_2: 'p'
+  $B4: {
     %p_mat:ptr<storage, mat3x4<f32>, read> = access %p_2, 0u
     %28:f32 = call %f1, %p_mat
     ret %28
   }
 }
-%f3 = func(%p0:ptr<storage, array<Inner, 4>, read>, %p1:ptr<storage, mat3x4<f32>, read>):f32 -> %b5 {
-  %b5 = block {
+%f3 = func(%p0:ptr<storage, array<Inner, 4>, read>, %p1:ptr<storage, mat3x4<f32>, read>):f32 {
+  $B5: {
     %p0_inner:ptr<storage, Inner, read> = access %p0, 3i
     %33:f32 = call %f2, %p0_inner
     %34:f32 = call %f1, %p1
@@ -1696,16 +2399,16 @@ Outer = struct @align(16) {
     ret %35
   }
 }
-%f4 = func(%p_3:ptr<storage, Outer, read>):f32 -> %b6 {  # %p_3: 'p'
-  %b6 = block {
+%f4 = func(%p_3:ptr<storage, Outer, read>):f32 {  # %p_3: 'p'
+  $B6: {
     %38:ptr<storage, array<Inner, 4>, read> = access %p_3, 0u
     %39:ptr<storage, mat3x4<f32>, read> = access %S, 1u
     %40:f32 = call %f3, %38, %39
     ret %40
   }
 }
-%b = func():void -> %b7 {
-  %b7 = block {
+%b = func():void {
+  $B7: {
     %42:f32 = call %f4, %S
     ret
   }
@@ -1724,20 +2427,20 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%b1 = block {  # root
-  %S:ptr<storage, Outer, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, Outer, read> = var undef @binding_point(0, 0)
 }
 
-%f0 = func(%p_indices:array<u32, 1>):f32 -> %b2 {
-  %b2 = block {
+%f0 = func(%p_indices:array<u32, 1>):f32 {
+  $B2: {
     %4:u32 = access %p_indices, 0u
     %5:ptr<storage, vec4<f32>, read> = access %S, 1u, %4
     %6:f32 = load_vector_element %5, 0u
     ret %6
   }
 }
-%f0_1 = func(%p_indices_1:array<u32, 2>):f32 -> %b3 {  # %f0_1: 'f0', %p_indices_1: 'p_indices'
-  %b3 = block {
+%f0_1 = func(%p_indices_1:array<u32, 2>):f32 {  # %f0_1: 'f0', %p_indices_1: 'p_indices'
+  $B3: {
     %9:u32 = access %p_indices_1, 0u
     %10:u32 = access %p_indices_1, 1u
     %11:ptr<storage, vec4<f32>, read> = access %S, 0u, %9, 0u, %10
@@ -1745,9 +2448,9 @@ Outer = struct @align(16) {
     ret %12
   }
 }
-%f1 = func():f32 -> %b4 {
-  %b4 = block {
-    %res:ptr<function, f32, read_write> = var
+%f1 = func():f32 {
+  $B4: {
+    %res:ptr<function, f32, read_write> = var undef
     %15:u32 = convert 1i
     %16:array<u32, 1> = construct %15
     %17:f32 = call %f0, %16
@@ -1778,10 +2481,10 @@ Outer = struct @align(16) {
     ret %37
   }
 }
-%f1_1 = func(%p_indices_2:array<u32, 1>):f32 -> %b5 {  # %f1_1: 'f1', %p_indices_2: 'p_indices'
-  %b5 = block {
+%f1_1 = func(%p_indices_2:array<u32, 1>):f32 {  # %f1_1: 'f1', %p_indices_2: 'p_indices'
+  $B5: {
     %40:u32 = access %p_indices_2, 0u
-    %res_1:ptr<function, f32, read_write> = var  # %res_1: 'res'
+    %res_1:ptr<function, f32, read_write> = var undef  # %res_1: 'res'
     %42:u32 = convert 1i
     %43:array<u32, 2> = construct %40, %42
     %44:f32 = call %f0_1, %43
@@ -1812,16 +2515,16 @@ Outer = struct @align(16) {
     ret %64
   }
 }
-%f2 = func(%p_indices_3:array<u32, 1>):f32 -> %b6 {  # %p_indices_3: 'p_indices'
-  %b6 = block {
+%f2 = func(%p_indices_3:array<u32, 1>):f32 {  # %p_indices_3: 'p_indices'
+  $B6: {
     %67:u32 = access %p_indices_3, 0u
     %68:array<u32, 1> = construct %67
     %69:f32 = call %f1_1, %68
     ret %69
   }
 }
-%f3 = func():f32 -> %b7 {
-  %b7 = block {
+%f3 = func():f32 {
+  $B7: {
     %71:u32 = convert 3i
     %72:array<u32, 1> = construct %71
     %73:f32 = call %f2, %72
@@ -1830,14 +2533,14 @@ Outer = struct @align(16) {
     ret %75
   }
 }
-%f4 = func():f32 -> %b8 {
-  %b8 = block {
+%f4 = func():f32 {
+  $B8: {
     %77:f32 = call %f3
     ret %77
   }
 }
-%b = func():void -> %b9 {
-  %b9 = block {
+%b = func():void {
+  $B9: {
     %79:f32 = call %f4
     ret
   }
@@ -1850,7 +2553,7 @@ Outer = struct @align(16) {
 }
 
 TEST_F(IR_DirectVariableAccessTest_StorageAS, CallChaining2) {
-    auto* T3 = ty.vec4<i32>();
+    auto* T3 = ty.vec4i();
     auto* T2 = ty.array(T3, 5);
     auto* T1 = ty.array(T2, 5);
     auto* T = ty.array(T1, 5);
@@ -1893,33 +2596,33 @@ TEST_F(IR_DirectVariableAccessTest_StorageAS, CallChaining2) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %U:ptr<storage, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<storage, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var undef @binding_point(0, 0)
 }
 
-%f2 = func(%p:ptr<storage, array<vec4<i32>, 5>, read_write>):vec4<i32> -> %b2 {
-  %b2 = block {
+%f2 = func(%p:ptr<storage, array<vec4<i32>, 5>, read_write>):vec4<i32> {
+  $B2: {
     %4:ptr<storage, vec4<i32>, read_write> = access %p, 3u
     %5:vec4<i32> = load %4
     ret %5
   }
 }
-%f1 = func(%p_1:ptr<storage, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> -> %b3 {  # %p_1: 'p'
-  %b3 = block {
+%f1 = func(%p_1:ptr<storage, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> {  # %p_1: 'p'
+  $B3: {
     %8:ptr<storage, array<vec4<i32>, 5>, read_write> = access %p_1, 2u
     %9:vec4<i32> = call %f2, %8
     ret %9
   }
 }
-%f0 = func(%p_2:ptr<storage, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> -> %b4 {  # %p_2: 'p'
-  %b4 = block {
+%f0 = func(%p_2:ptr<storage, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> {  # %p_2: 'p'
+  $B4: {
     %12:ptr<storage, array<array<vec4<i32>, 5>, 5>, read_write> = access %p_2, 1u
     %13:vec4<i32> = call %f1, %12
     ret %13
   }
 }
-%main = func():void -> %b5 {
-  %b5 = block {
+%main = func():void {
+  $B5: {
     %15:vec4<i32> = call %f0, %U
     ret
   }
@@ -1929,12 +2632,12 @@ TEST_F(IR_DirectVariableAccessTest_StorageAS, CallChaining2) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %U:ptr<storage, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<storage, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var undef @binding_point(0, 0)
 }
 
-%f2 = func(%p_indices:array<u32, 2>):vec4<i32> -> %b2 {
-  %b2 = block {
+%f2 = func(%p_indices:array<u32, 2>):vec4<i32> {
+  $B2: {
     %4:u32 = access %p_indices, 0u
     %5:u32 = access %p_indices, 1u
     %6:ptr<storage, array<vec4<i32>, 5>, read_write> = access %U, %4, %5
@@ -1943,23 +2646,23 @@ TEST_F(IR_DirectVariableAccessTest_StorageAS, CallChaining2) {
     ret %8
   }
 }
-%f1 = func(%p_indices_1:array<u32, 1>):vec4<i32> -> %b3 {  # %p_indices_1: 'p_indices'
-  %b3 = block {
+%f1 = func(%p_indices_1:array<u32, 1>):vec4<i32> {  # %p_indices_1: 'p_indices'
+  $B3: {
     %11:u32 = access %p_indices_1, 0u
     %12:array<u32, 2> = construct %11, 2u
     %13:vec4<i32> = call %f2, %12
     ret %13
   }
 }
-%f0 = func():vec4<i32> -> %b4 {
-  %b4 = block {
+%f0 = func():vec4<i32> {
+  $B4: {
     %15:array<u32, 1> = construct 1u
     %16:vec4<i32> = call %f1, %15
     ret %16
   }
 }
-%main = func():void -> %b5 {
-  %b5 = block {
+%main = func():void {
+  $B5: {
     %18:vec4<i32> = call %f0
     ret
   }
@@ -1987,7 +2690,7 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, Param_ptr_vec4i32_Via_array_Stat
                  W = b.Var("W", ty.ptr<workgroup, array<vec4<i32>, 8>>());
              });
 
-    auto* fn_a = b.Function("a", ty.vec4<i32>());
+    auto* fn_a = b.Function("a", ty.vec4i());
     auto* fn_a_p = b.FunctionParam("p", ty.ptr<workgroup, vec4<i32>>());
     fn_a->SetParams({
         b.FunctionParam("pre", ty.i32()),
@@ -2004,18 +2707,18 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, Param_ptr_vec4i32_Via_array_Stat
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %W:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var
+$B1: {  # root
+  %W:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p:ptr<workgroup, vec4<i32>, read_write>, %post:i32):vec4<i32> -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<workgroup, vec4<i32>, read_write>, %post:i32):vec4<i32> {
+  $B2: {
     %6:vec4<i32> = load %p
     ret %6
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %8:ptr<workgroup, vec4<i32>, read_write> = access %W, 3i
     %9:vec4<i32> = call %a, 10i, %8, 20i
     ret
@@ -2026,20 +2729,20 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, Param_ptr_vec4i32_Via_array_Stat
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %W:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var
+$B1: {  # root
+  %W:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p_indices:array<u32, 1>, %post:i32):vec4<i32> -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p_indices:array<u32, 1>, %post:i32):vec4<i32> {
+  $B2: {
     %6:u32 = access %p_indices, 0u
     %7:ptr<workgroup, vec4<i32>, read_write> = access %W, %6
     %8:vec4<i32> = load %7
     ret %8
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %10:u32 = convert 3i
     %11:array<u32, 1> = construct %10
     %12:vec4<i32> = call %a, 10i, %11, 20i
@@ -2068,7 +2771,7 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, Param_ptr_vec4i32_Via_array_Stat
         b.FunctionParam("post", ty.i32()),
     });
     b.Append(fn_a->Block(), [&] {
-        b.Store(fn_a_p, b.Splat(ty.vec4<i32>(), 0_i, 4));
+        b.Store(fn_a_p, b.Splat<vec4<i32>>(0_i));
         b.Return(fn_a);
     });
 
@@ -2080,18 +2783,18 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, Param_ptr_vec4i32_Via_array_Stat
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %W:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var
+$B1: {  # root
+  %W:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p:ptr<workgroup, vec4<i32>, read_write>, %post:i32):void -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<workgroup, vec4<i32>, read_write>, %post:i32):void {
+  $B2: {
     store %p, vec4<i32>(0i)
     ret
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %7:ptr<workgroup, vec4<i32>, read_write> = access %W, 3i
     %8:void = call %a, 10i, %7, 20i
     ret
@@ -2102,20 +2805,20 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, Param_ptr_vec4i32_Via_array_Stat
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %W:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var
+$B1: {  # root
+  %W:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p_indices:array<u32, 1>, %post:i32):void -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p_indices:array<u32, 1>, %post:i32):void {
+  $B2: {
     %6:u32 = access %p_indices, 0u
     %7:ptr<workgroup, vec4<i32>, read_write> = access %W, %6
     store %7, vec4<i32>(0i)
     ret
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %9:u32 = convert 3i
     %10:array<u32, 1> = construct %9
     %11:void = call %a, 10i, %10, 20i
@@ -2158,7 +2861,7 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, CallChaining) {
         {
             // res += f0(&(*p)[1]);
             auto* call_0 = b.Call(fn_0, b.Access(ty.ptr<workgroup, vec4<f32>>(), fn_1_p, 1_i));
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // let p_vec = &(*p)[1];
@@ -2166,13 +2869,13 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, CallChaining) {
             auto* p_vec = b.Access(ty.ptr<workgroup, vec4<f32>>(), fn_1_p, 1_i);
             b.ir.SetName(p_vec, "p_vec");
             auto* call_0 = b.Call(fn_0, p_vec);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // res += f0(&U.arr[2].mat[1]);
             auto* access = b.Access(ty.ptr<workgroup, vec4<f32>>(), W, 0_u, 2_i, 0_u, 1_i);
             auto* call_0 = b.Call(fn_0, access);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // let p_vec = &U.arr[2].mat[1];
@@ -2180,7 +2883,7 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, CallChaining) {
             auto* p_vec = b.Access(ty.ptr<workgroup, vec4<f32>>(), W, 0_u, 2_i, 0_u, 1_i);
             b.ir.SetName(p_vec, "p_vec");
             auto* call_0 = b.Call(fn_0, p_vec);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
 
         b.Return(fn_1, b.Load(res));
@@ -2204,7 +2907,7 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, CallChaining) {
         b.ir.SetName(p0_inner, "p0_inner");
         auto* call_0 = b.Call(ty.f32(), fn_2, p0_inner);
         auto* call_1 = b.Call(ty.f32(), fn_1, fn_3_p1);
-        b.Return(fn_3, b.Add(ty.f32(), call_0, call_1));
+        b.Return(fn_3, b.Add(call_0, call_1));
     });
 
     auto* fn_4 = b.Function("f4", ty.f32());
@@ -2232,19 +2935,19 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%b1 = block {  # root
-  %W:ptr<workgroup, Outer, read_write> = var
+$B1: {  # root
+  %W:ptr<workgroup, Outer, read_write> = var undef
 }
 
-%f0 = func(%p:ptr<workgroup, vec4<f32>, read_write>):f32 -> %b2 {
-  %b2 = block {
+%f0 = func(%p:ptr<workgroup, vec4<f32>, read_write>):f32 {
+  $B2: {
     %4:f32 = load_vector_element %p, 0u
     ret %4
   }
 }
-%f1 = func(%p_1:ptr<workgroup, mat3x4<f32>, read_write>):f32 -> %b3 {  # %p_1: 'p'
-  %b3 = block {
-    %res:ptr<function, f32, read_write> = var
+%f1 = func(%p_1:ptr<workgroup, mat3x4<f32>, read_write>):f32 {  # %p_1: 'p'
+  $B3: {
+    %res:ptr<function, f32, read_write> = var undef
     %8:ptr<workgroup, vec4<f32>, read_write> = access %p_1, 1i
     %9:f32 = call %f0, %8
     %10:f32 = load %res
@@ -2269,15 +2972,15 @@ Outer = struct @align(16) {
     ret %24
   }
 }
-%f2 = func(%p_2:ptr<workgroup, Inner, read_write>):f32 -> %b4 {  # %p_2: 'p'
-  %b4 = block {
+%f2 = func(%p_2:ptr<workgroup, Inner, read_write>):f32 {  # %p_2: 'p'
+  $B4: {
     %p_mat:ptr<workgroup, mat3x4<f32>, read_write> = access %p_2, 0u
     %28:f32 = call %f1, %p_mat
     ret %28
   }
 }
-%f3 = func(%p0:ptr<workgroup, array<Inner, 4>, read_write>, %p1:ptr<workgroup, mat3x4<f32>, read_write>):f32 -> %b5 {
-  %b5 = block {
+%f3 = func(%p0:ptr<workgroup, array<Inner, 4>, read_write>, %p1:ptr<workgroup, mat3x4<f32>, read_write>):f32 {
+  $B5: {
     %p0_inner:ptr<workgroup, Inner, read_write> = access %p0, 3i
     %33:f32 = call %f2, %p0_inner
     %34:f32 = call %f1, %p1
@@ -2285,16 +2988,16 @@ Outer = struct @align(16) {
     ret %35
   }
 }
-%f4 = func(%p_3:ptr<workgroup, Outer, read_write>):f32 -> %b6 {  # %p_3: 'p'
-  %b6 = block {
+%f4 = func(%p_3:ptr<workgroup, Outer, read_write>):f32 {  # %p_3: 'p'
+  $B6: {
     %38:ptr<workgroup, array<Inner, 4>, read_write> = access %p_3, 0u
     %39:ptr<workgroup, mat3x4<f32>, read_write> = access %W, 1u
     %40:f32 = call %f3, %38, %39
     ret %40
   }
 }
-%b = func():void -> %b7 {
-  %b7 = block {
+%b = func():void {
+  $B7: {
     %42:f32 = call %f4, %W
     ret
   }
@@ -2313,20 +3016,20 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%b1 = block {  # root
-  %W:ptr<workgroup, Outer, read_write> = var
+$B1: {  # root
+  %W:ptr<workgroup, Outer, read_write> = var undef
 }
 
-%f0 = func(%p_indices:array<u32, 1>):f32 -> %b2 {
-  %b2 = block {
+%f0 = func(%p_indices:array<u32, 1>):f32 {
+  $B2: {
     %4:u32 = access %p_indices, 0u
     %5:ptr<workgroup, vec4<f32>, read_write> = access %W, 1u, %4
     %6:f32 = load_vector_element %5, 0u
     ret %6
   }
 }
-%f0_1 = func(%p_indices_1:array<u32, 2>):f32 -> %b3 {  # %f0_1: 'f0', %p_indices_1: 'p_indices'
-  %b3 = block {
+%f0_1 = func(%p_indices_1:array<u32, 2>):f32 {  # %f0_1: 'f0', %p_indices_1: 'p_indices'
+  $B3: {
     %9:u32 = access %p_indices_1, 0u
     %10:u32 = access %p_indices_1, 1u
     %11:ptr<workgroup, vec4<f32>, read_write> = access %W, 0u, %9, 0u, %10
@@ -2334,9 +3037,9 @@ Outer = struct @align(16) {
     ret %12
   }
 }
-%f1 = func():f32 -> %b4 {
-  %b4 = block {
-    %res:ptr<function, f32, read_write> = var
+%f1 = func():f32 {
+  $B4: {
+    %res:ptr<function, f32, read_write> = var undef
     %15:u32 = convert 1i
     %16:array<u32, 1> = construct %15
     %17:f32 = call %f0, %16
@@ -2367,10 +3070,10 @@ Outer = struct @align(16) {
     ret %37
   }
 }
-%f1_1 = func(%p_indices_2:array<u32, 1>):f32 -> %b5 {  # %f1_1: 'f1', %p_indices_2: 'p_indices'
-  %b5 = block {
+%f1_1 = func(%p_indices_2:array<u32, 1>):f32 {  # %f1_1: 'f1', %p_indices_2: 'p_indices'
+  $B5: {
     %40:u32 = access %p_indices_2, 0u
-    %res_1:ptr<function, f32, read_write> = var  # %res_1: 'res'
+    %res_1:ptr<function, f32, read_write> = var undef  # %res_1: 'res'
     %42:u32 = convert 1i
     %43:array<u32, 2> = construct %40, %42
     %44:f32 = call %f0_1, %43
@@ -2401,16 +3104,16 @@ Outer = struct @align(16) {
     ret %64
   }
 }
-%f2 = func(%p_indices_3:array<u32, 1>):f32 -> %b6 {  # %p_indices_3: 'p_indices'
-  %b6 = block {
+%f2 = func(%p_indices_3:array<u32, 1>):f32 {  # %p_indices_3: 'p_indices'
+  $B6: {
     %67:u32 = access %p_indices_3, 0u
     %68:array<u32, 1> = construct %67
     %69:f32 = call %f1_1, %68
     ret %69
   }
 }
-%f3 = func():f32 -> %b7 {
-  %b7 = block {
+%f3 = func():f32 {
+  $B7: {
     %71:u32 = convert 3i
     %72:array<u32, 1> = construct %71
     %73:f32 = call %f2, %72
@@ -2419,14 +3122,14 @@ Outer = struct @align(16) {
     ret %75
   }
 }
-%f4 = func():f32 -> %b8 {
-  %b8 = block {
+%f4 = func():f32 {
+  $B8: {
     %77:f32 = call %f3
     ret %77
   }
 }
-%b = func():void -> %b9 {
-  %b9 = block {
+%b = func():void {
+  $B9: {
     %79:f32 = call %f4
     ret
   }
@@ -2439,7 +3142,7 @@ Outer = struct @align(16) {
 }
 
 TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, CallChaining2) {
-    auto* T3 = ty.vec4<i32>();
+    auto* T3 = ty.vec4i();
     auto* T2 = ty.array(T3, 5);
     auto* T1 = ty.array(T2, 5);
     auto* T = ty.array(T1, 5);
@@ -2448,7 +3151,6 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, CallChaining2) {
     b.Append(b.ir.root_block,
              [&] {  //
                  input = b.Var("U", ty.ptr<workgroup>(T));
-                 input->SetBindingPoint(0, 0);
              });
 
     auto* f2 = b.Function("f2", T3);
@@ -2482,33 +3184,33 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, CallChaining2) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %U:ptr<workgroup, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<workgroup, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var undef
 }
 
-%f2 = func(%p:ptr<workgroup, array<vec4<i32>, 5>, read_write>):vec4<i32> -> %b2 {
-  %b2 = block {
+%f2 = func(%p:ptr<workgroup, array<vec4<i32>, 5>, read_write>):vec4<i32> {
+  $B2: {
     %4:ptr<workgroup, vec4<i32>, read_write> = access %p, 3u
     %5:vec4<i32> = load %4
     ret %5
   }
 }
-%f1 = func(%p_1:ptr<workgroup, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> -> %b3 {  # %p_1: 'p'
-  %b3 = block {
+%f1 = func(%p_1:ptr<workgroup, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> {  # %p_1: 'p'
+  $B3: {
     %8:ptr<workgroup, array<vec4<i32>, 5>, read_write> = access %p_1, 2u
     %9:vec4<i32> = call %f2, %8
     ret %9
   }
 }
-%f0 = func(%p_2:ptr<workgroup, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> -> %b4 {  # %p_2: 'p'
-  %b4 = block {
+%f0 = func(%p_2:ptr<workgroup, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> {  # %p_2: 'p'
+  $B4: {
     %12:ptr<workgroup, array<array<vec4<i32>, 5>, 5>, read_write> = access %p_2, 1u
     %13:vec4<i32> = call %f1, %12
     ret %13
   }
 }
-%main = func():void -> %b5 {
-  %b5 = block {
+%main = func():void {
+  $B5: {
     %15:vec4<i32> = call %f0, %U
     ret
   }
@@ -2518,12 +3220,12 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, CallChaining2) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %U:ptr<workgroup, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var @binding_point(0, 0)
+$B1: {  # root
+  %U:ptr<workgroup, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var undef
 }
 
-%f2 = func(%p_indices:array<u32, 2>):vec4<i32> -> %b2 {
-  %b2 = block {
+%f2 = func(%p_indices:array<u32, 2>):vec4<i32> {
+  $B2: {
     %4:u32 = access %p_indices, 0u
     %5:u32 = access %p_indices, 1u
     %6:ptr<workgroup, array<vec4<i32>, 5>, read_write> = access %U, %4, %5
@@ -2532,23 +3234,23 @@ TEST_F(IR_DirectVariableAccessTest_WorkgroupAS, CallChaining2) {
     ret %8
   }
 }
-%f1 = func(%p_indices_1:array<u32, 1>):vec4<i32> -> %b3 {  # %p_indices_1: 'p_indices'
-  %b3 = block {
+%f1 = func(%p_indices_1:array<u32, 1>):vec4<i32> {  # %p_indices_1: 'p_indices'
+  $B3: {
     %11:u32 = access %p_indices_1, 0u
     %12:array<u32, 2> = construct %11, 2u
     %13:vec4<i32> = call %f2, %12
     ret %13
   }
 }
-%f0 = func():vec4<i32> -> %b4 {
-  %b4 = block {
+%f0 = func():vec4<i32> {
+  $B4: {
     %15:array<u32, 1> = construct 1u
     %16:vec4<i32> = call %f1, %15
     ret %16
   }
 }
-%main = func():void -> %b5 {
-  %b5 = block {
+%main = func():void {
+  $B5: {
     %18:vec4<i32> = call %f0
     ret
   }
@@ -2592,18 +3294,18 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_Param_ptr_i32_read) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %P:ptr<private, i32, read_write> = var
+$B1: {  # root
+  %P:ptr<private, i32, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %8:i32 = call %a, 10i, %P, 20i
     ret
   }
@@ -2613,20 +3315,19 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_Param_ptr_i32_read) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %P:ptr<private, i32, read_write> = var
+$B1: {  # root
+  %P:ptr<private, i32, read_write> = var undef
 }
 
-%a = func(%pre:i32, %post:i32):i32 -> %b2 {
-  %b2 = block {
-    %5:ptr<private, i32, read_write> = access %P
-    %6:i32 = load %5
-    ret %6
+%a = func(%pre:i32, %post:i32):i32 {
+  $B2: {
+    %5:i32 = load %P
+    ret %5
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
-    %8:i32 = call %a, 10i, 20i
+%b = func():void {
+  $B3: {
+    %7:i32 = call %a, 10i, 20i
     ret
   }
 }
@@ -2663,18 +3364,18 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_Param_ptr_i32_write) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %P:ptr<private, i32, read_write> = var
+$B1: {  # root
+  %P:ptr<private, i32, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):void -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):void {
+  $B2: {
     store %p, 42i
     ret
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %7:void = call %a, 10i, %P, 20i
     ret
   }
@@ -2684,20 +3385,19 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_Param_ptr_i32_write) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %P:ptr<private, i32, read_write> = var
+$B1: {  # root
+  %P:ptr<private, i32, read_write> = var undef
 }
 
-%a = func(%pre:i32, %post:i32):void -> %b2 {
-  %b2 = block {
-    %5:ptr<private, i32, read_write> = access %P
-    store %5, 42i
+%a = func(%pre:i32, %post:i32):void {
+  $B2: {
+    store %P, 42i
     ret
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
-    %7:void = call %a, 10i, 20i
+%b = func():void {
+  $B3: {
+    %6:void = call %a, 10i, 20i
     ret
   }
 }
@@ -2740,18 +3440,18 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%b1 = block {  # root
-  %P:ptr<private, str, read_write> = var
+$B1: {  # root
+  %P:ptr<private, str, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %8:ptr<private, i32, read_write> = access %P, 0u
     %9:i32 = call %a, 10i, %8, 20i
     ret
@@ -2766,19 +3466,19 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%b1 = block {  # root
-  %P:ptr<private, str, read_write> = var
+$B1: {  # root
+  %P:ptr<private, str, read_write> = var undef
 }
 
-%a = func(%pre:i32, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %post:i32):i32 {
+  $B2: {
     %5:ptr<private, i32, read_write> = access %P, 0u
     %6:i32 = load %5
     ret %6
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %8:i32 = call %a, 10i, 20i
     ret
   }
@@ -2822,18 +3522,18 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%b1 = block {  # root
-  %P:ptr<private, str, read_write> = var
+$B1: {  # root
+  %P:ptr<private, str, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %p
     ret %6
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %8:ptr<private, i32, read_write> = access %P, 0u
     %9:i32 = call %a, 10i, %8, 20i
     ret
@@ -2870,7 +3570,7 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_Param_ptr_arr_i32_Via_stru
         b.FunctionParam("post", ty.i32()),
     });
     b.Append(fn_a->Block(), [&] {
-        b.Store(fn_a_p, b.Splat(ty.array<i32, 4>(), 0_i, 4));
+        b.Store(fn_a_p, b.Splat<array<i32, 4>>(0_i));
         b.Return(fn_a);
     });
 
@@ -2886,18 +3586,18 @@ str = struct @align(4) {
   arr:array<i32, 4> @offset(0)
 }
 
-%b1 = block {  # root
-  %P:ptr<private, str, read_write> = var
+$B1: {  # root
+  %P:ptr<private, str, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p:ptr<private, array<i32, 4>, read_write>, %post:i32):void -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<private, array<i32, 4>, read_write>, %post:i32):void {
+  $B2: {
     store %p, array<i32, 4>(0i)
     ret
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %7:ptr<private, array<i32, 4>, read_write> = access %P, 0u
     %8:void = call %a, 10i, %7, 20i
     ret
@@ -2912,19 +3612,19 @@ str = struct @align(4) {
   arr:array<i32, 4> @offset(0)
 }
 
-%b1 = block {  # root
-  %P:ptr<private, str, read_write> = var
+$B1: {  # root
+  %P:ptr<private, str, read_write> = var undef
 }
 
-%a = func(%pre:i32, %post:i32):void -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %post:i32):void {
+  $B2: {
     %5:ptr<private, array<i32, 4>, read_write> = access %P, 0u
     store %5, array<i32, 4>(0i)
     ret
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %7:void = call %a, 10i, 20i
     ret
   }
@@ -2956,7 +3656,7 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Disabled_Param_ptr_arr_i32_Via_str
         b.FunctionParam("post", ty.i32()),
     });
     b.Append(fn_a->Block(), [&] {
-        b.Store(fn_a_p, b.Splat(ty.array<i32, 4>(), 0_i, 4));
+        b.Store(fn_a_p, b.Splat<array<i32, 4>>(0_i));
         b.Return(fn_a);
     });
 
@@ -2972,18 +3672,18 @@ str = struct @align(4) {
   arr:array<i32, 4> @offset(0)
 }
 
-%b1 = block {  # root
-  %P:ptr<private, str, read_write> = var
+$B1: {  # root
+  %P:ptr<private, str, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p:ptr<private, array<i32, 4>, read_write>, %post:i32):void -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<private, array<i32, 4>, read_write>, %post:i32):void {
+  $B2: {
     store %p, array<i32, 4>(0i)
     ret
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %7:ptr<private, array<i32, 4>, read_write> = access %P, 0u
     %8:void = call %a, 10i, %7, 20i
     ret
@@ -3045,20 +3745,20 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%b1 = block {  # root
-  %Pi:ptr<private, i32, read_write> = var
-  %Ps:ptr<private, str, read_write> = var
-  %Pa:ptr<private, array<i32, 4>, read_write> = var
+$B1: {  # root
+  %Pi:ptr<private, i32, read_write> = var undef
+  %Ps:ptr<private, str, read_write> = var undef
+  %Pa:ptr<private, array<i32, 4>, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 {
+  $B2: {
     %8:i32 = load %p
     ret %8
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %10:i32 = call %a, 10i, %Pi, 20i
     %11:ptr<private, i32, read_write> = access %Ps, 0u
     %12:i32 = call %a, 30i, %11, 40i
@@ -3076,41 +3776,40 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%b1 = block {  # root
-  %Pi:ptr<private, i32, read_write> = var
-  %Ps:ptr<private, str, read_write> = var
-  %Pa:ptr<private, array<i32, 4>, read_write> = var
+$B1: {  # root
+  %Pi:ptr<private, i32, read_write> = var undef
+  %Ps:ptr<private, str, read_write> = var undef
+  %Pa:ptr<private, array<i32, 4>, read_write> = var undef
 }
 
-%a = func(%pre:i32, %post:i32):i32 -> %b2 {
-  %b2 = block {
-    %7:ptr<private, i32, read_write> = access %Pi
-    %8:i32 = load %7
-    ret %8
+%a = func(%pre:i32, %post:i32):i32 {
+  $B2: {
+    %7:i32 = load %Pi
+    ret %7
   }
 }
-%a_1 = func(%pre_1:i32, %post_1:i32):i32 -> %b3 {  # %a_1: 'a', %pre_1: 'pre', %post_1: 'post'
-  %b3 = block {
-    %12:ptr<private, i32, read_write> = access %Ps, 0u
-    %13:i32 = load %12
-    ret %13
+%a_1 = func(%pre_1:i32, %post_1:i32):i32 {  # %a_1: 'a', %pre_1: 'pre', %post_1: 'post'
+  $B3: {
+    %11:ptr<private, i32, read_write> = access %Ps, 0u
+    %12:i32 = load %11
+    ret %12
   }
 }
-%a_2 = func(%pre_2:i32, %p_indices:array<u32, 1>, %post_2:i32):i32 -> %b4 {  # %a_2: 'a', %pre_2: 'pre', %post_2: 'post'
-  %b4 = block {
-    %18:u32 = access %p_indices, 0u
-    %19:ptr<private, i32, read_write> = access %Pa, %18
-    %20:i32 = load %19
-    ret %20
+%a_2 = func(%pre_2:i32, %p_indices:array<u32, 1>, %post_2:i32):i32 {  # %a_2: 'a', %pre_2: 'pre', %post_2: 'post'
+  $B4: {
+    %17:u32 = access %p_indices, 0u
+    %18:ptr<private, i32, read_write> = access %Pa, %17
+    %19:i32 = load %18
+    ret %19
   }
 }
-%b = func():void -> %b5 {
-  %b5 = block {
-    %22:i32 = call %a, 10i, 20i
-    %23:i32 = call %a_1, 30i, 40i
-    %24:u32 = convert 2i
-    %25:array<u32, 1> = construct %24
-    %26:i32 = call %a_2, 50i, %25, 60i
+%b = func():void {
+  $B5: {
+    %21:i32 = call %a, 10i, 20i
+    %22:i32 = call %a_1, 30i, 40i
+    %23:u32 = convert 2i
+    %24:array<u32, 1> = construct %23
+    %25:i32 = call %a_2, 50i, %24, 60i
     ret
   }
 }
@@ -3166,20 +3865,20 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%b1 = block {  # root
-  %Pi:ptr<private, i32, read_write> = var
-  %Ps:ptr<private, str, read_write> = var
-  %Pa:ptr<private, array<i32, 4>, read_write> = var
+$B1: {  # root
+  %Pi:ptr<private, i32, read_write> = var undef
+  %Ps:ptr<private, str, read_write> = var undef
+  %Pa:ptr<private, array<i32, 4>, read_write> = var undef
 }
 
-%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %p:ptr<private, i32, read_write>, %post:i32):i32 {
+  $B2: {
     %8:i32 = load %p
     ret %8
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %10:i32 = call %a, 10i, %Pi, 20i
     %11:ptr<private, i32, read_write> = access %Ps, 0u
     %12:i32 = call %a, 30i, %11, 40i
@@ -3228,7 +3927,7 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_CallChaining) {
         {
             // res += f0(&(*p)[1]);
             auto* call_0 = b.Call(fn_0, b.Access(ty.ptr<private_, vec4<f32>>(), fn_1_p, 1_i));
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // let p_vec = &(*p)[1];
@@ -3236,13 +3935,13 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_CallChaining) {
             auto* p_vec = b.Access(ty.ptr<private_, vec4<f32>>(), fn_1_p, 1_i);
             b.ir.SetName(p_vec, "p_vec");
             auto* call_0 = b.Call(fn_0, p_vec);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // res += f0(&U.arr[2].mat[1]);
             auto* access = b.Access(ty.ptr<private_, vec4<f32>>(), P, 0_u, 2_i, 0_u, 1_i);
             auto* call_0 = b.Call(fn_0, access);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // let p_vec = &U.arr[2].mat[1];
@@ -3250,7 +3949,7 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_CallChaining) {
             auto* p_vec = b.Access(ty.ptr<private_, vec4<f32>>(), P, 0_u, 2_i, 0_u, 1_i);
             b.ir.SetName(p_vec, "p_vec");
             auto* call_0 = b.Call(fn_0, p_vec);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
 
         b.Return(fn_1, b.Load(res));
@@ -3274,7 +3973,7 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_CallChaining) {
         b.ir.SetName(p0_inner, "p0_inner");
         auto* call_0 = b.Call(ty.f32(), fn_2, p0_inner);
         auto* call_1 = b.Call(ty.f32(), fn_1, fn_3_p1);
-        b.Return(fn_3, b.Add(ty.f32(), call_0, call_1));
+        b.Return(fn_3, b.Add(call_0, call_1));
     });
 
     auto* fn_4 = b.Function("f4", ty.f32());
@@ -3302,19 +4001,19 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%b1 = block {  # root
-  %P:ptr<private, Outer, read_write> = var
+$B1: {  # root
+  %P:ptr<private, Outer, read_write> = var undef
 }
 
-%f0 = func(%p:ptr<private, vec4<f32>, read_write>):f32 -> %b2 {
-  %b2 = block {
+%f0 = func(%p:ptr<private, vec4<f32>, read_write>):f32 {
+  $B2: {
     %4:f32 = load_vector_element %p, 0u
     ret %4
   }
 }
-%f1 = func(%p_1:ptr<private, mat3x4<f32>, read_write>):f32 -> %b3 {  # %p_1: 'p'
-  %b3 = block {
-    %res:ptr<function, f32, read_write> = var
+%f1 = func(%p_1:ptr<private, mat3x4<f32>, read_write>):f32 {  # %p_1: 'p'
+  $B3: {
+    %res:ptr<function, f32, read_write> = var undef
     %8:ptr<private, vec4<f32>, read_write> = access %p_1, 1i
     %9:f32 = call %f0, %8
     %10:f32 = load %res
@@ -3339,15 +4038,15 @@ Outer = struct @align(16) {
     ret %24
   }
 }
-%f2 = func(%p_2:ptr<private, Inner, read_write>):f32 -> %b4 {  # %p_2: 'p'
-  %b4 = block {
+%f2 = func(%p_2:ptr<private, Inner, read_write>):f32 {  # %p_2: 'p'
+  $B4: {
     %p_mat:ptr<private, mat3x4<f32>, read_write> = access %p_2, 0u
     %28:f32 = call %f1, %p_mat
     ret %28
   }
 }
-%f3 = func(%p0:ptr<private, array<Inner, 4>, read_write>, %p1:ptr<private, mat3x4<f32>, read_write>):f32 -> %b5 {
-  %b5 = block {
+%f3 = func(%p0:ptr<private, array<Inner, 4>, read_write>, %p1:ptr<private, mat3x4<f32>, read_write>):f32 {
+  $B5: {
     %p0_inner:ptr<private, Inner, read_write> = access %p0, 3i
     %33:f32 = call %f2, %p0_inner
     %34:f32 = call %f1, %p1
@@ -3355,16 +4054,16 @@ Outer = struct @align(16) {
     ret %35
   }
 }
-%f4 = func(%p_3:ptr<private, Outer, read_write>):f32 -> %b6 {  # %p_3: 'p'
-  %b6 = block {
+%f4 = func(%p_3:ptr<private, Outer, read_write>):f32 {  # %p_3: 'p'
+  $B6: {
     %38:ptr<private, array<Inner, 4>, read_write> = access %p_3, 0u
     %39:ptr<private, mat3x4<f32>, read_write> = access %P, 1u
     %40:f32 = call %f3, %38, %39
     ret %40
   }
 }
-%b = func():void -> %b7 {
-  %b7 = block {
+%b = func():void {
+  $B7: {
     %42:f32 = call %f4, %P
     ret
   }
@@ -3383,20 +4082,20 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%b1 = block {  # root
-  %P:ptr<private, Outer, read_write> = var
+$B1: {  # root
+  %P:ptr<private, Outer, read_write> = var undef
 }
 
-%f0 = func(%p_indices:array<u32, 1>):f32 -> %b2 {
-  %b2 = block {
+%f0 = func(%p_indices:array<u32, 1>):f32 {
+  $B2: {
     %4:u32 = access %p_indices, 0u
     %5:ptr<private, vec4<f32>, read_write> = access %P, 1u, %4
     %6:f32 = load_vector_element %5, 0u
     ret %6
   }
 }
-%f0_1 = func(%p_indices_1:array<u32, 2>):f32 -> %b3 {  # %f0_1: 'f0', %p_indices_1: 'p_indices'
-  %b3 = block {
+%f0_1 = func(%p_indices_1:array<u32, 2>):f32 {  # %f0_1: 'f0', %p_indices_1: 'p_indices'
+  $B3: {
     %9:u32 = access %p_indices_1, 0u
     %10:u32 = access %p_indices_1, 1u
     %11:ptr<private, vec4<f32>, read_write> = access %P, 0u, %9, 0u, %10
@@ -3404,9 +4103,9 @@ Outer = struct @align(16) {
     ret %12
   }
 }
-%f1 = func():f32 -> %b4 {
-  %b4 = block {
-    %res:ptr<function, f32, read_write> = var
+%f1 = func():f32 {
+  $B4: {
+    %res:ptr<function, f32, read_write> = var undef
     %15:u32 = convert 1i
     %16:array<u32, 1> = construct %15
     %17:f32 = call %f0, %16
@@ -3437,10 +4136,10 @@ Outer = struct @align(16) {
     ret %37
   }
 }
-%f1_1 = func(%p_indices_2:array<u32, 1>):f32 -> %b5 {  # %f1_1: 'f1', %p_indices_2: 'p_indices'
-  %b5 = block {
+%f1_1 = func(%p_indices_2:array<u32, 1>):f32 {  # %f1_1: 'f1', %p_indices_2: 'p_indices'
+  $B5: {
     %40:u32 = access %p_indices_2, 0u
-    %res_1:ptr<function, f32, read_write> = var  # %res_1: 'res'
+    %res_1:ptr<function, f32, read_write> = var undef  # %res_1: 'res'
     %42:u32 = convert 1i
     %43:array<u32, 2> = construct %40, %42
     %44:f32 = call %f0_1, %43
@@ -3471,16 +4170,16 @@ Outer = struct @align(16) {
     ret %64
   }
 }
-%f2 = func(%p_indices_3:array<u32, 1>):f32 -> %b6 {  # %p_indices_3: 'p_indices'
-  %b6 = block {
+%f2 = func(%p_indices_3:array<u32, 1>):f32 {  # %p_indices_3: 'p_indices'
+  $B6: {
     %67:u32 = access %p_indices_3, 0u
     %68:array<u32, 1> = construct %67
     %69:f32 = call %f1_1, %68
     ret %69
   }
 }
-%f3 = func():f32 -> %b7 {
-  %b7 = block {
+%f3 = func():f32 {
+  $B7: {
     %71:u32 = convert 3i
     %72:array<u32, 1> = construct %71
     %73:f32 = call %f2, %72
@@ -3489,14 +4188,14 @@ Outer = struct @align(16) {
     ret %75
   }
 }
-%f4 = func():f32 -> %b8 {
-  %b8 = block {
+%f4 = func():f32 {
+  $B8: {
     %77:f32 = call %f3
     ret %77
   }
 }
-%b = func():void -> %b9 {
-  %b9 = block {
+%b = func():void {
+  $B9: {
     %79:f32 = call %f4
     ret
   }
@@ -3537,7 +4236,7 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Disabled_CallChaining) {
         {
             // res += f0(&(*p)[1]);
             auto* call_0 = b.Call(fn_0, b.Access(ty.ptr<private_, vec4<f32>>(), fn_1_p, 1_i));
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // let p_vec = &(*p)[1];
@@ -3545,13 +4244,13 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Disabled_CallChaining) {
             auto* p_vec = b.Access(ty.ptr<private_, vec4<f32>>(), fn_1_p, 1_i);
             b.ir.SetName(p_vec, "p_vec");
             auto* call_0 = b.Call(fn_0, p_vec);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // res += f0(&U.arr[2].mat[1]);
             auto* access = b.Access(ty.ptr<private_, vec4<f32>>(), P, 0_u, 2_i, 0_u, 1_i);
             auto* call_0 = b.Call(fn_0, access);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
         {
             // let p_vec = &U.arr[2].mat[1];
@@ -3559,7 +4258,7 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Disabled_CallChaining) {
             auto* p_vec = b.Access(ty.ptr<private_, vec4<f32>>(), P, 0_u, 2_i, 0_u, 1_i);
             b.ir.SetName(p_vec, "p_vec");
             auto* call_0 = b.Call(fn_0, p_vec);
-            b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+            b.Store(res, b.Add(b.Load(res), call_0));
         }
 
         b.Return(fn_1, b.Load(res));
@@ -3583,7 +4282,7 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Disabled_CallChaining) {
         b.ir.SetName(p0_inner, "p0_inner");
         auto* call_0 = b.Call(ty.f32(), fn_2, p0_inner);
         auto* call_1 = b.Call(ty.f32(), fn_1, fn_3_p1);
-        b.Return(fn_3, b.Add(ty.f32(), call_0, call_1));
+        b.Return(fn_3, b.Add(call_0, call_1));
     });
 
     auto* fn_4 = b.Function("f4", ty.f32());
@@ -3611,19 +4310,19 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%b1 = block {  # root
-  %P:ptr<private, Outer, read_write> = var
+$B1: {  # root
+  %P:ptr<private, Outer, read_write> = var undef
 }
 
-%f0 = func(%p:ptr<private, vec4<f32>, read_write>):f32 -> %b2 {
-  %b2 = block {
+%f0 = func(%p:ptr<private, vec4<f32>, read_write>):f32 {
+  $B2: {
     %4:f32 = load_vector_element %p, 0u
     ret %4
   }
 }
-%f1 = func(%p_1:ptr<private, mat3x4<f32>, read_write>):f32 -> %b3 {  # %p_1: 'p'
-  %b3 = block {
-    %res:ptr<function, f32, read_write> = var
+%f1 = func(%p_1:ptr<private, mat3x4<f32>, read_write>):f32 {  # %p_1: 'p'
+  $B3: {
+    %res:ptr<function, f32, read_write> = var undef
     %8:ptr<private, vec4<f32>, read_write> = access %p_1, 1i
     %9:f32 = call %f0, %8
     %10:f32 = load %res
@@ -3648,15 +4347,15 @@ Outer = struct @align(16) {
     ret %24
   }
 }
-%f2 = func(%p_2:ptr<private, Inner, read_write>):f32 -> %b4 {  # %p_2: 'p'
-  %b4 = block {
+%f2 = func(%p_2:ptr<private, Inner, read_write>):f32 {  # %p_2: 'p'
+  $B4: {
     %p_mat:ptr<private, mat3x4<f32>, read_write> = access %p_2, 0u
     %28:f32 = call %f1, %p_mat
     ret %28
   }
 }
-%f3 = func(%p0:ptr<private, array<Inner, 4>, read_write>, %p1:ptr<private, mat3x4<f32>, read_write>):f32 -> %b5 {
-  %b5 = block {
+%f3 = func(%p0:ptr<private, array<Inner, 4>, read_write>, %p1:ptr<private, mat3x4<f32>, read_write>):f32 {
+  $B5: {
     %p0_inner:ptr<private, Inner, read_write> = access %p0, 3i
     %33:f32 = call %f2, %p0_inner
     %34:f32 = call %f1, %p1
@@ -3664,16 +4363,16 @@ Outer = struct @align(16) {
     ret %35
   }
 }
-%f4 = func(%p_3:ptr<private, Outer, read_write>):f32 -> %b6 {  # %p_3: 'p'
-  %b6 = block {
+%f4 = func(%p_3:ptr<private, Outer, read_write>):f32 {  # %p_3: 'p'
+  $B6: {
     %38:ptr<private, array<Inner, 4>, read_write> = access %p_3, 0u
     %39:ptr<private, mat3x4<f32>, read_write> = access %P, 1u
     %40:f32 = call %f3, %38, %39
     ret %40
   }
 }
-%b = func():void -> %b7 {
-  %b7 = block {
+%b = func():void {
+  $B7: {
     %42:f32 = call %f4, %P
     ret
   }
@@ -3690,7 +4389,7 @@ Outer = struct @align(16) {
 }
 
 TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_CallChaining2) {
-    auto* T3 = ty.vec4<i32>();
+    auto* T3 = ty.vec4i();
     auto* T2 = ty.array(T3, 5);
     auto* T1 = ty.array(T2, 5);
     auto* T = ty.array(T1, 5);
@@ -3733,33 +4432,33 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_CallChaining2) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %P:ptr<private, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var
+$B1: {  # root
+  %P:ptr<private, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var undef
 }
 
-%f2 = func(%p:ptr<private, array<vec4<i32>, 5>, read_write>):vec4<i32> -> %b2 {
-  %b2 = block {
+%f2 = func(%p:ptr<private, array<vec4<i32>, 5>, read_write>):vec4<i32> {
+  $B2: {
     %4:ptr<private, vec4<i32>, read_write> = access %p, 3u
     %5:vec4<i32> = load %4
     ret %5
   }
 }
-%f1 = func(%p_1:ptr<private, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> -> %b3 {  # %p_1: 'p'
-  %b3 = block {
+%f1 = func(%p_1:ptr<private, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> {  # %p_1: 'p'
+  $B3: {
     %8:ptr<private, array<vec4<i32>, 5>, read_write> = access %p_1, 2u
     %9:vec4<i32> = call %f2, %8
     ret %9
   }
 }
-%f0 = func(%p_2:ptr<private, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> -> %b4 {  # %p_2: 'p'
-  %b4 = block {
+%f0 = func(%p_2:ptr<private, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> {  # %p_2: 'p'
+  $B4: {
     %12:ptr<private, array<array<vec4<i32>, 5>, 5>, read_write> = access %p_2, 1u
     %13:vec4<i32> = call %f1, %12
     ret %13
   }
 }
-%main = func():void -> %b5 {
-  %b5 = block {
+%main = func():void {
+  $B5: {
     %15:vec4<i32> = call %f0, %P
     ret
   }
@@ -3769,12 +4468,12 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_CallChaining2) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %P:ptr<private, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var
+$B1: {  # root
+  %P:ptr<private, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var undef
 }
 
-%f2 = func(%p_indices:array<u32, 2>):vec4<i32> -> %b2 {
-  %b2 = block {
+%f2 = func(%p_indices:array<u32, 2>):vec4<i32> {
+  $B2: {
     %4:u32 = access %p_indices, 0u
     %5:u32 = access %p_indices, 1u
     %6:ptr<private, array<vec4<i32>, 5>, read_write> = access %P, %4, %5
@@ -3783,23 +4482,23 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_CallChaining2) {
     ret %8
   }
 }
-%f1 = func(%p_indices_1:array<u32, 1>):vec4<i32> -> %b3 {  # %p_indices_1: 'p_indices'
-  %b3 = block {
+%f1 = func(%p_indices_1:array<u32, 1>):vec4<i32> {  # %p_indices_1: 'p_indices'
+  $B3: {
     %11:u32 = access %p_indices_1, 0u
     %12:array<u32, 2> = construct %11, 2u
     %13:vec4<i32> = call %f2, %12
     ret %13
   }
 }
-%f0 = func():vec4<i32> -> %b4 {
-  %b4 = block {
+%f0 = func():vec4<i32> {
+  $B4: {
     %15:array<u32, 1> = construct 1u
     %16:vec4<i32> = call %f1, %15
     ret %16
   }
 }
-%main = func():void -> %b5 {
-  %b5 = block {
+%main = func():void {
+  $B5: {
     %18:vec4<i32> = call %f0
     ret
   }
@@ -3812,7 +4511,7 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Enabled_CallChaining2) {
 }
 
 TEST_F(IR_DirectVariableAccessTest_PrivateAS, Disabled_CallChaining2) {
-    auto* T3 = ty.vec4<i32>();
+    auto* T3 = ty.vec4i();
     auto* T2 = ty.array(T3, 5);
     auto* T1 = ty.array(T2, 5);
     auto* T = ty.array(T1, 5);
@@ -3855,33 +4554,33 @@ TEST_F(IR_DirectVariableAccessTest_PrivateAS, Disabled_CallChaining2) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %P:ptr<private, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var
+$B1: {  # root
+  %P:ptr<private, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var undef
 }
 
-%f2 = func(%p:ptr<private, array<vec4<i32>, 5>, read_write>):vec4<i32> -> %b2 {
-  %b2 = block {
+%f2 = func(%p:ptr<private, array<vec4<i32>, 5>, read_write>):vec4<i32> {
+  $B2: {
     %4:ptr<private, vec4<i32>, read_write> = access %p, 3u
     %5:vec4<i32> = load %4
     ret %5
   }
 }
-%f1 = func(%p_1:ptr<private, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> -> %b3 {  # %p_1: 'p'
-  %b3 = block {
+%f1 = func(%p_1:ptr<private, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> {  # %p_1: 'p'
+  $B3: {
     %8:ptr<private, array<vec4<i32>, 5>, read_write> = access %p_1, 2u
     %9:vec4<i32> = call %f2, %8
     ret %9
   }
 }
-%f0 = func(%p_2:ptr<private, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> -> %b4 {  # %p_2: 'p'
-  %b4 = block {
+%f0 = func(%p_2:ptr<private, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> {  # %p_2: 'p'
+  $B4: {
     %12:ptr<private, array<array<vec4<i32>, 5>, 5>, read_write> = access %p_2, 1u
     %13:vec4<i32> = call %f1, %12
     ret %13
   }
 }
-%main = func():void -> %b5 {
-  %b5 = block {
+%main = func():void {
+  $B5: {
     %15:vec4<i32> = call %f0, %P
     ret
   }
@@ -3916,12 +4615,12 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_LocalPtr) {
     });
 
     auto* src = R"(
-%f = func():void -> %b1 {
-  %b1 = block {
-    %v:ptr<function, i32, read_write> = var
+%f = func():void {
+  $B1: {
+    %v:ptr<function, i32, read_write> = var undef
     %p:ptr<function, i32, read_write> = let %v
     %4:i32 = load %p
-    %x:ptr<function, i32, read_write> = var, %4
+    %x:ptr<function, i32, read_write> = var %4
     ret
   }
 }
@@ -3954,15 +4653,15 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_Param_ptr_i32_read) {
     });
 
     auto* src = R"(
-%a = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 -> %b1 {
-  %b1 = block {
+%a = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 {
+  $B1: {
     %5:i32 = load %p
     ret %5
   }
 }
-%b = func():void -> %b2 {
-  %b2 = block {
-    %F:ptr<function, i32, read_write> = var
+%b = func():void {
+  $B2: {
+    %F:ptr<function, i32, read_write> = var undef
     %8:i32 = call %a, 10i, %F, 20i
     ret
   }
@@ -3972,17 +4671,16 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_Param_ptr_i32_read) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%a = func(%pre:i32, %p_root:ptr<function, i32, read_write>, %post:i32):i32 -> %b1 {
-  %b1 = block {
-    %5:ptr<function, i32, read_write> = access %p_root
-    %6:i32 = load %5
-    ret %6
+%a = func(%pre:i32, %p_root:ptr<function, i32, read_write>, %post:i32):i32 {
+  $B1: {
+    %5:i32 = load %p_root
+    ret %5
   }
 }
-%b = func():void -> %b2 {
-  %b2 = block {
-    %F:ptr<function, i32, read_write> = var
-    %9:i32 = call %a, 10i, %F, 20i
+%b = func():void {
+  $B2: {
+    %F:ptr<function, i32, read_write> = var undef
+    %8:i32 = call %a, 10i, %F, 20i
     ret
   }
 }
@@ -4014,15 +4712,15 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_Param_ptr_i32_write) {
     });
 
     auto* src = R"(
-%a = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):void -> %b1 {
-  %b1 = block {
+%a = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):void {
+  $B1: {
     store %p, 42i
     ret
   }
 }
-%b = func():void -> %b2 {
-  %b2 = block {
-    %F:ptr<function, i32, read_write> = var
+%b = func():void {
+  $B2: {
+    %F:ptr<function, i32, read_write> = var undef
     %7:void = call %a, 10i, %F, 20i
     ret
   }
@@ -4032,17 +4730,16 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_Param_ptr_i32_write) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%a = func(%pre:i32, %p_root:ptr<function, i32, read_write>, %post:i32):void -> %b1 {
-  %b1 = block {
-    %5:ptr<function, i32, read_write> = access %p_root
-    store %5, 42i
+%a = func(%pre:i32, %p_root:ptr<function, i32, read_write>, %post:i32):void {
+  $B1: {
+    store %p_root, 42i
     ret
   }
 }
-%b = func():void -> %b2 {
-  %b2 = block {
-    %F:ptr<function, i32, read_write> = var
-    %8:void = call %a, 10i, %F, 20i
+%b = func():void {
+  $B2: {
+    %F:ptr<function, i32, read_write> = var undef
+    %7:void = call %a, 10i, %F, 20i
     ret
   }
 }
@@ -4080,15 +4777,15 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%a = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 -> %b1 {
-  %b1 = block {
+%a = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 {
+  $B1: {
     %5:i32 = load %p
     ret %5
   }
 }
-%b = func():void -> %b2 {
-  %b2 = block {
-    %F:ptr<function, str, read_write> = var
+%b = func():void {
+  $B2: {
+    %F:ptr<function, str, read_write> = var undef
     %8:ptr<function, i32, read_write> = access %F, 0u
     %9:i32 = call %a, 10i, %8, 20i
     ret
@@ -4103,16 +4800,16 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%a = func(%pre:i32, %p_root:ptr<function, str, read_write>, %post:i32):i32 -> %b1 {
-  %b1 = block {
+%a = func(%pre:i32, %p_root:ptr<function, str, read_write>, %post:i32):i32 {
+  $B1: {
     %5:ptr<function, i32, read_write> = access %p_root, 0u
     %6:i32 = load %5
     ret %6
   }
 }
-%b = func():void -> %b2 {
-  %b2 = block {
-    %F:ptr<function, str, read_write> = var
+%b = func():void {
+  $B2: {
+    %F:ptr<function, str, read_write> = var undef
     %9:i32 = call %a, 10i, %F, 20i
     ret
   }
@@ -4138,7 +4835,7 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_Param_ptr_arr_i32_Via_str
         b.FunctionParam("post", ty.i32()),
     });
     b.Append(fn_a->Block(), [&] {
-        b.Store(fn_a_p, b.Splat(ty.array<i32, 4>(), 0_i, 4));
+        b.Store(fn_a_p, b.Splat<array<i32, 4>>(0_i));
         b.Return(fn_a);
     });
 
@@ -4155,15 +4852,15 @@ str = struct @align(4) {
   arr:array<i32, 4> @offset(0)
 }
 
-%a = func(%pre:i32, %p:ptr<function, array<i32, 4>, read_write>, %post:i32):void -> %b1 {
-  %b1 = block {
+%a = func(%pre:i32, %p:ptr<function, array<i32, 4>, read_write>, %post:i32):void {
+  $B1: {
     store %p, array<i32, 4>(0i)
     ret
   }
 }
-%b = func():void -> %b2 {
-  %b2 = block {
-    %F:ptr<function, str, read_write> = var
+%b = func():void {
+  $B2: {
+    %F:ptr<function, str, read_write> = var undef
     %7:ptr<function, array<i32, 4>, read_write> = access %F, 0u
     %8:void = call %a, 10i, %7, 20i
     ret
@@ -4178,16 +4875,16 @@ str = struct @align(4) {
   arr:array<i32, 4> @offset(0)
 }
 
-%a = func(%pre:i32, %p_root:ptr<function, str, read_write>, %post:i32):void -> %b1 {
-  %b1 = block {
+%a = func(%pre:i32, %p_root:ptr<function, str, read_write>, %post:i32):void {
+  $B1: {
     %5:ptr<function, array<i32, 4>, read_write> = access %p_root, 0u
     store %5, array<i32, 4>(0i)
     ret
   }
 }
-%b = func():void -> %b2 {
-  %b2 = block {
-    %F:ptr<function, str, read_write> = var
+%b = func():void {
+  $B2: {
+    %F:ptr<function, str, read_write> = var undef
     %8:void = call %a, 10i, %F, 20i
     ret
   }
@@ -4237,17 +4934,17 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%a = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 -> %b1 {
-  %b1 = block {
+%a = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 {
+  $B1: {
     %5:i32 = load %p
     ret %5
   }
 }
-%b = func():void -> %b2 {
-  %b2 = block {
-    %Fi:ptr<function, i32, read_write> = var
-    %Fs:ptr<function, str, read_write> = var
-    %Fa:ptr<function, array<i32, 4>, read_write> = var
+%b = func():void {
+  $B2: {
+    %Fi:ptr<function, i32, read_write> = var undef
+    %Fs:ptr<function, str, read_write> = var undef
+    %Fa:ptr<function, array<i32, 4>, read_write> = var undef
     %10:i32 = call %a, 10i, %Fi, 20i
     %11:ptr<function, i32, read_write> = access %Fs, 0u
     %12:i32 = call %a, 30i, %11, 40i
@@ -4265,38 +4962,37 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%a = func(%pre:i32, %p_root:ptr<function, i32, read_write>, %post:i32):i32 -> %b1 {
-  %b1 = block {
-    %5:ptr<function, i32, read_write> = access %p_root
-    %6:i32 = load %5
-    ret %6
+%a = func(%pre:i32, %p_root:ptr<function, i32, read_write>, %post:i32):i32 {
+  $B1: {
+    %5:i32 = load %p_root
+    ret %5
   }
 }
-%a_1 = func(%pre_1:i32, %p_root_1:ptr<function, str, read_write>, %post_1:i32):i32 -> %b2 {  # %a_1: 'a', %pre_1: 'pre', %p_root_1: 'p_root', %post_1: 'post'
-  %b2 = block {
-    %11:ptr<function, i32, read_write> = access %p_root_1, 0u
-    %12:i32 = load %11
-    ret %12
+%a_1 = func(%pre_1:i32, %p_root_1:ptr<function, str, read_write>, %post_1:i32):i32 {  # %a_1: 'a', %pre_1: 'pre', %p_root_1: 'p_root', %post_1: 'post'
+  $B2: {
+    %10:ptr<function, i32, read_write> = access %p_root_1, 0u
+    %11:i32 = load %10
+    ret %11
   }
 }
-%a_2 = func(%pre_2:i32, %p_root_2:ptr<function, array<i32, 4>, read_write>, %p_indices:array<u32, 1>, %post_2:i32):i32 -> %b3 {  # %a_2: 'a', %pre_2: 'pre', %p_root_2: 'p_root', %post_2: 'post'
-  %b3 = block {
-    %18:u32 = access %p_indices, 0u
-    %19:ptr<function, i32, read_write> = access %p_root_2, %18
-    %20:i32 = load %19
-    ret %20
+%a_2 = func(%pre_2:i32, %p_root_2:ptr<function, array<i32, 4>, read_write>, %p_indices:array<u32, 1>, %post_2:i32):i32 {  # %a_2: 'a', %pre_2: 'pre', %p_root_2: 'p_root', %post_2: 'post'
+  $B3: {
+    %17:u32 = access %p_indices, 0u
+    %18:ptr<function, i32, read_write> = access %p_root_2, %17
+    %19:i32 = load %18
+    ret %19
   }
 }
-%b = func():void -> %b4 {
-  %b4 = block {
-    %Fi:ptr<function, i32, read_write> = var
-    %Fs:ptr<function, str, read_write> = var
-    %Fa:ptr<function, array<i32, 4>, read_write> = var
-    %25:i32 = call %a, 10i, %Fi, 20i
-    %26:i32 = call %a_1, 30i, %Fs, 40i
-    %27:u32 = convert 2i
-    %28:array<u32, 1> = construct %27
-    %29:i32 = call %a_2, 50i, %Fa, %28, 60i
+%b = func():void {
+  $B4: {
+    %Fi:ptr<function, i32, read_write> = var undef
+    %Fs:ptr<function, str, read_write> = var undef
+    %Fa:ptr<function, array<i32, 4>, read_write> = var undef
+    %24:i32 = call %a, 10i, %Fi, 20i
+    %25:i32 = call %a_1, 30i, %Fs, 40i
+    %26:u32 = convert 2i
+    %27:array<u32, 1> = construct %26
+    %28:i32 = call %a_2, 50i, %Fa, %27, 60i
     ret
   }
 }
@@ -4334,15 +5030,15 @@ str = struct @align(4) {
   i:i32 @offset(0)
 }
 
-%a = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 -> %b1 {
-  %b1 = block {
+%a = func(%pre:i32, %p:ptr<function, i32, read_write>, %post:i32):i32 {
+  $B1: {
     %5:i32 = load %p
     ret %5
   }
 }
-%b = func():void -> %b2 {
-  %b2 = block {
-    %F:ptr<function, str, read_write> = var
+%b = func():void {
+  $B2: {
+    %F:ptr<function, str, read_write> = var undef
     %8:ptr<function, i32, read_write> = access %F, 0u
     %9:i32 = call %a, 10i, %8, 20i
     ret
@@ -4373,7 +5069,7 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Disabled_Param_ptr_arr_i32_Via_st
         b.FunctionParam("post", ty.i32()),
     });
     b.Append(fn_a->Block(), [&] {
-        b.Store(fn_a_p, b.Splat(ty.array<i32, 4>(), 0_i, 4));
+        b.Store(fn_a_p, b.Splat<array<i32, 4>>(0_i));
         b.Return(fn_a);
     });
 
@@ -4390,15 +5086,15 @@ str = struct @align(4) {
   arr:array<i32, 4> @offset(0)
 }
 
-%a = func(%pre:i32, %p:ptr<function, array<i32, 4>, read_write>, %post:i32):void -> %b1 {
-  %b1 = block {
+%a = func(%pre:i32, %p:ptr<function, array<i32, 4>, read_write>, %post:i32):void {
+  $B1: {
     store %p, array<i32, 4>(0i)
     ret
   }
 }
-%b = func():void -> %b2 {
-  %b2 = block {
-    %F:ptr<function, str, read_write> = var
+%b = func():void {
+  $B2: {
+    %F:ptr<function, str, read_write> = var undef
     %7:ptr<function, array<i32, 4>, read_write> = access %F, 0u
     %8:void = call %a, 10i, %7, 20i
     ret
@@ -4442,7 +5138,7 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_CallChaining) {
             {
                 // res += f0(&(*p)[1]);
                 auto* call_0 = b.Call(f0, b.Access(ty.ptr<function, vec4<f32>>(), p, 1_i));
-                b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+                b.Store(res, b.Add(b.Load(res), call_0));
             }
             {
                 // let p_vec = &(*p)[1];
@@ -4450,7 +5146,7 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_CallChaining) {
                 auto* p_vec = b.Access(ty.ptr<function, vec4<f32>>(), p, 1_i);
                 b.ir.SetName(p_vec, "p_vec");
                 auto* call_0 = b.Call(f0, p_vec);
-                b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+                b.Store(res, b.Add(b.Load(res), call_0));
             }
             b.Return(f1, b.Load(res));
         });
@@ -4505,15 +5201,15 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%f0 = func(%p:ptr<function, vec4<f32>, read_write>):f32 -> %b1 {
-  %b1 = block {
+%f0 = func(%p:ptr<function, vec4<f32>, read_write>):f32 {
+  $B1: {
     %3:f32 = load_vector_element %p, 0u
     ret %3
   }
 }
-%f1 = func(%p_1:ptr<function, mat3x4<f32>, read_write>):f32 -> %b2 {  # %p_1: 'p'
-  %b2 = block {
-    %res:ptr<function, f32, read_write> = var
+%f1 = func(%p_1:ptr<function, mat3x4<f32>, read_write>):f32 {  # %p_1: 'p'
+  $B2: {
+    %res:ptr<function, f32, read_write> = var undef
     %7:ptr<function, vec4<f32>, read_write> = access %p_1, 1i
     %8:f32 = call %f0, %7
     %9:f32 = load %res
@@ -4528,30 +5224,30 @@ Outer = struct @align(16) {
     ret %15
   }
 }
-%f2 = func(%p_2:ptr<function, Inner, read_write>):f32 -> %b3 {  # %p_2: 'p'
-  %b3 = block {
+%f2 = func(%p_2:ptr<function, Inner, read_write>):f32 {  # %p_2: 'p'
+  $B3: {
     %p_mat:ptr<function, mat3x4<f32>, read_write> = access %p_2, 0u
     %19:f32 = call %f1, %p_mat
     ret %19
   }
 }
-%f3 = func(%p_3:ptr<function, array<Inner, 4>, read_write>):f32 -> %b4 {  # %p_3: 'p'
-  %b4 = block {
+%f3 = func(%p_3:ptr<function, array<Inner, 4>, read_write>):f32 {  # %p_3: 'p'
+  $B4: {
     %p_inner:ptr<function, Inner, read_write> = access %p_3, 3i
     %23:f32 = call %f2, %p_inner
     ret %23
   }
 }
-%f4 = func(%p_4:ptr<function, Outer, read_write>):f32 -> %b5 {  # %p_4: 'p'
-  %b5 = block {
+%f4 = func(%p_4:ptr<function, Outer, read_write>):f32 {  # %p_4: 'p'
+  $B5: {
     %26:ptr<function, array<Inner, 4>, read_write> = access %p_4, 0u
     %27:f32 = call %f3, %26
     ret %27
   }
 }
-%b = func():void -> %b6 {
-  %b6 = block {
-    %F:ptr<function, Outer, read_write> = var
+%b = func():void {
+  $B6: {
+    %F:ptr<function, Outer, read_write> = var undef
     %30:f32 = call %f4, %F
     ret
   }
@@ -4570,8 +5266,8 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%f0 = func(%p_root:ptr<function, Outer, read_write>, %p_indices:array<u32, 2>):f32 -> %b1 {
-  %b1 = block {
+%f0 = func(%p_root:ptr<function, Outer, read_write>, %p_indices:array<u32, 2>):f32 {
+  $B1: {
     %4:u32 = access %p_indices, 0u
     %5:u32 = access %p_indices, 1u
     %6:ptr<function, vec4<f32>, read_write> = access %p_root, 0u, %4, 0u, %5
@@ -4579,10 +5275,10 @@ Outer = struct @align(16) {
     ret %7
   }
 }
-%f1 = func(%p_root_1:ptr<function, Outer, read_write>, %p_indices_1:array<u32, 1>):f32 -> %b2 {  # %p_root_1: 'p_root', %p_indices_1: 'p_indices'
-  %b2 = block {
+%f1 = func(%p_root_1:ptr<function, Outer, read_write>, %p_indices_1:array<u32, 1>):f32 {  # %p_root_1: 'p_root', %p_indices_1: 'p_indices'
+  $B2: {
     %11:u32 = access %p_indices_1, 0u
-    %res:ptr<function, f32, read_write> = var
+    %res:ptr<function, f32, read_write> = var undef
     %13:u32 = convert 1i
     %14:array<u32, 2> = construct %11, %13
     %15:f32 = call %f0, %p_root_1, %14
@@ -4599,31 +5295,31 @@ Outer = struct @align(16) {
     ret %23
   }
 }
-%f2 = func(%p_root_2:ptr<function, Outer, read_write>, %p_indices_2:array<u32, 1>):f32 -> %b3 {  # %p_root_2: 'p_root', %p_indices_2: 'p_indices'
-  %b3 = block {
+%f2 = func(%p_root_2:ptr<function, Outer, read_write>, %p_indices_2:array<u32, 1>):f32 {  # %p_root_2: 'p_root', %p_indices_2: 'p_indices'
+  $B3: {
     %27:u32 = access %p_indices_2, 0u
     %28:array<u32, 1> = construct %27
     %29:f32 = call %f1, %p_root_2, %28
     ret %29
   }
 }
-%f3 = func(%p_root_3:ptr<function, Outer, read_write>):f32 -> %b4 {  # %p_root_3: 'p_root'
-  %b4 = block {
+%f3 = func(%p_root_3:ptr<function, Outer, read_write>):f32 {  # %p_root_3: 'p_root'
+  $B4: {
     %32:u32 = convert 3i
     %33:array<u32, 1> = construct %32
     %34:f32 = call %f2, %p_root_3, %33
     ret %34
   }
 }
-%f4 = func(%p_root_4:ptr<function, Outer, read_write>):f32 -> %b5 {  # %p_root_4: 'p_root'
-  %b5 = block {
+%f4 = func(%p_root_4:ptr<function, Outer, read_write>):f32 {  # %p_root_4: 'p_root'
+  $B5: {
     %37:f32 = call %f3, %p_root_4
     ret %37
   }
 }
-%b = func():void -> %b6 {
-  %b6 = block {
-    %F:ptr<function, Outer, read_write> = var
+%b = func():void {
+  $B6: {
+    %F:ptr<function, Outer, read_write> = var undef
     %40:f32 = call %f4, %F
     ret
   }
@@ -4662,7 +5358,7 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Disabled_CallChaining) {
             {
                 // res += f0(&(*p)[1]);
                 auto* call_0 = b.Call(f0, b.Access(ty.ptr<function, vec4<f32>>(), p, 1_i));
-                b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+                b.Store(res, b.Add(b.Load(res), call_0));
             }
             {
                 // let p_vec = &(*p)[1];
@@ -4670,7 +5366,7 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Disabled_CallChaining) {
                 auto* p_vec = b.Access(ty.ptr<function, vec4<f32>>(), p, 1_i);
                 b.ir.SetName(p_vec, "p_vec");
                 auto* call_0 = b.Call(f0, p_vec);
-                b.Store(res, b.Add(ty.f32(), b.Load(res), call_0));
+                b.Store(res, b.Add(b.Load(res), call_0));
             }
             b.Return(f1, b.Load(res));
         });
@@ -4725,15 +5421,15 @@ Outer = struct @align(16) {
   mat:mat3x4<f32> @offset(192)
 }
 
-%f0 = func(%p:ptr<function, vec4<f32>, read_write>):f32 -> %b1 {
-  %b1 = block {
+%f0 = func(%p:ptr<function, vec4<f32>, read_write>):f32 {
+  $B1: {
     %3:f32 = load_vector_element %p, 0u
     ret %3
   }
 }
-%f1 = func(%p_1:ptr<function, mat3x4<f32>, read_write>):f32 -> %b2 {  # %p_1: 'p'
-  %b2 = block {
-    %res:ptr<function, f32, read_write> = var
+%f1 = func(%p_1:ptr<function, mat3x4<f32>, read_write>):f32 {  # %p_1: 'p'
+  $B2: {
+    %res:ptr<function, f32, read_write> = var undef
     %7:ptr<function, vec4<f32>, read_write> = access %p_1, 1i
     %8:f32 = call %f0, %7
     %9:f32 = load %res
@@ -4748,30 +5444,30 @@ Outer = struct @align(16) {
     ret %15
   }
 }
-%f2 = func(%p_2:ptr<function, Inner, read_write>):f32 -> %b3 {  # %p_2: 'p'
-  %b3 = block {
+%f2 = func(%p_2:ptr<function, Inner, read_write>):f32 {  # %p_2: 'p'
+  $B3: {
     %p_mat:ptr<function, mat3x4<f32>, read_write> = access %p_2, 0u
     %19:f32 = call %f1, %p_mat
     ret %19
   }
 }
-%f3 = func(%p_3:ptr<function, array<Inner, 4>, read_write>):f32 -> %b4 {  # %p_3: 'p'
-  %b4 = block {
+%f3 = func(%p_3:ptr<function, array<Inner, 4>, read_write>):f32 {  # %p_3: 'p'
+  $B4: {
     %p_inner:ptr<function, Inner, read_write> = access %p_3, 3i
     %23:f32 = call %f2, %p_inner
     ret %23
   }
 }
-%f4 = func(%p_4:ptr<function, Outer, read_write>):f32 -> %b5 {  # %p_4: 'p'
-  %b5 = block {
+%f4 = func(%p_4:ptr<function, Outer, read_write>):f32 {  # %p_4: 'p'
+  $B5: {
     %26:ptr<function, array<Inner, 4>, read_write> = access %p_4, 0u
     %27:f32 = call %f3, %26
     ret %27
   }
 }
-%b = func():void -> %b6 {
-  %b6 = block {
-    %F:ptr<function, Outer, read_write> = var
+%b = func():void {
+  $B6: {
+    %F:ptr<function, Outer, read_write> = var undef
     %30:f32 = call %f4, %F
     ret
   }
@@ -4788,7 +5484,7 @@ Outer = struct @align(16) {
 }
 
 TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_CallChaining2) {
-    auto* T3 = ty.vec4<i32>();
+    auto* T3 = ty.vec4i();
     auto* T2 = ty.array(T3, 5);
     auto* T1 = ty.array(T2, 5);
     auto* T = ty.array(T1, 5);
@@ -4826,30 +5522,30 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_CallChaining2) {
     });
 
     auto* src = R"(
-%f2 = func(%p:ptr<function, array<vec4<i32>, 5>, read_write>):vec4<i32> -> %b1 {
-  %b1 = block {
+%f2 = func(%p:ptr<function, array<vec4<i32>, 5>, read_write>):vec4<i32> {
+  $B1: {
     %3:ptr<function, vec4<i32>, read_write> = access %p, 3u
     %4:vec4<i32> = load %3
     ret %4
   }
 }
-%f1 = func(%p_1:ptr<function, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> -> %b2 {  # %p_1: 'p'
-  %b2 = block {
+%f1 = func(%p_1:ptr<function, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> {  # %p_1: 'p'
+  $B2: {
     %7:ptr<function, array<vec4<i32>, 5>, read_write> = access %p_1, 2u
     %8:vec4<i32> = call %f2, %7
     ret %8
   }
 }
-%f0 = func(%p_2:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> -> %b3 {  # %p_2: 'p'
-  %b3 = block {
+%f0 = func(%p_2:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> {  # %p_2: 'p'
+  $B3: {
     %11:ptr<function, array<array<vec4<i32>, 5>, 5>, read_write> = access %p_2, 1u
     %12:vec4<i32> = call %f1, %11
     ret %12
   }
 }
-%main = func():void -> %b4 {
-  %b4 = block {
-    %F:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var
+%main = func():void {
+  $B4: {
+    %F:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var undef
     %15:vec4<i32> = call %f0, %F
     ret
   }
@@ -4859,8 +5555,8 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_CallChaining2) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%f2 = func(%p_root:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>, %p_indices:array<u32, 2>):vec4<i32> -> %b1 {
-  %b1 = block {
+%f2 = func(%p_root:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>, %p_indices:array<u32, 2>):vec4<i32> {
+  $B1: {
     %4:u32 = access %p_indices, 0u
     %5:u32 = access %p_indices, 1u
     %6:ptr<function, array<vec4<i32>, 5>, read_write> = access %p_root, %4, %5
@@ -4869,24 +5565,24 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_CallChaining2) {
     ret %8
   }
 }
-%f1 = func(%p_root_1:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>, %p_indices_1:array<u32, 1>):vec4<i32> -> %b2 {  # %p_root_1: 'p_root', %p_indices_1: 'p_indices'
-  %b2 = block {
+%f1 = func(%p_root_1:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>, %p_indices_1:array<u32, 1>):vec4<i32> {  # %p_root_1: 'p_root', %p_indices_1: 'p_indices'
+  $B2: {
     %12:u32 = access %p_indices_1, 0u
     %13:array<u32, 2> = construct %12, 2u
     %14:vec4<i32> = call %f2, %p_root_1, %13
     ret %14
   }
 }
-%f0 = func(%p_root_2:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> -> %b3 {  # %p_root_2: 'p_root'
-  %b3 = block {
+%f0 = func(%p_root_2:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> {  # %p_root_2: 'p_root'
+  $B3: {
     %17:array<u32, 1> = construct 1u
     %18:vec4<i32> = call %f1, %p_root_2, %17
     ret %18
   }
 }
-%main = func():void -> %b4 {
-  %b4 = block {
-    %F:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var
+%main = func():void {
+  $B4: {
+    %F:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var undef
     %21:vec4<i32> = call %f0, %F
     ret
   }
@@ -4899,7 +5595,7 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Enabled_CallChaining2) {
 }
 
 TEST_F(IR_DirectVariableAccessTest_FunctionAS, Disabled_CallChaining2) {
-    auto* T3 = ty.vec4<i32>();
+    auto* T3 = ty.vec4i();
     auto* T2 = ty.array(T3, 5);
     auto* T1 = ty.array(T2, 5);
     auto* T = ty.array(T1, 5);
@@ -4937,30 +5633,30 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Disabled_CallChaining2) {
     });
 
     auto* src = R"(
-%f2 = func(%p:ptr<function, array<vec4<i32>, 5>, read_write>):vec4<i32> -> %b1 {
-  %b1 = block {
+%f2 = func(%p:ptr<function, array<vec4<i32>, 5>, read_write>):vec4<i32> {
+  $B1: {
     %3:ptr<function, vec4<i32>, read_write> = access %p, 3u
     %4:vec4<i32> = load %3
     ret %4
   }
 }
-%f1 = func(%p_1:ptr<function, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> -> %b2 {  # %p_1: 'p'
-  %b2 = block {
+%f1 = func(%p_1:ptr<function, array<array<vec4<i32>, 5>, 5>, read_write>):vec4<i32> {  # %p_1: 'p'
+  $B2: {
     %7:ptr<function, array<vec4<i32>, 5>, read_write> = access %p_1, 2u
     %8:vec4<i32> = call %f2, %7
     ret %8
   }
 }
-%f0 = func(%p_2:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> -> %b3 {  # %p_2: 'p'
-  %b3 = block {
+%f0 = func(%p_2:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write>):vec4<i32> {  # %p_2: 'p'
+  $B3: {
     %11:ptr<function, array<array<vec4<i32>, 5>, 5>, read_write> = access %p_2, 1u
     %12:vec4<i32> = call %f1, %11
     ret %12
   }
 }
-%main = func():void -> %b4 {
-  %b4 = block {
-    %F:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var
+%main = func():void {
+  $B4: {
+    %F:ptr<function, array<array<array<vec4<i32>, 5>, 5>, 5>, read_write> = var undef
     %15:vec4<i32> = call %f0, %F
     ret
   }
@@ -4977,6 +5673,914 @@ TEST_F(IR_DirectVariableAccessTest_FunctionAS, Disabled_CallChaining2) {
 }
 
 }  // namespace function_as_tests
+
+////////////////////////////////////////////////////////////////////////////////
+// 'handle' address space
+////////////////////////////////////////////////////////////////////////////////
+namespace handle_as_tests {
+
+using IR_DirectVariableAccessTest_HandleAS = TransformTest;
+
+TEST_F(IR_DirectVariableAccessTest_HandleAS, Enabled_LocalTextureSampler) {
+    auto* tex =
+        b.Var("tex", handle, ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32()),
+              core::Access::kRead);
+    tex->SetBindingPoint(0, 0);
+    b.ir.root_block->Append(tex);
+
+    auto* samp = b.Var("samp", handle, ty.sampler(), core::Access::kRead);
+    samp->SetBindingPoint(0, 1);
+    b.ir.root_block->Append(samp);
+
+    auto* fn = b.Function("f", ty.void_());
+    b.Append(fn->Block(), [&] {
+        auto* t = b.Load(tex);
+        auto* s = b.Load(samp);
+
+        b.Let("p", b.Call(ty.vec4f(), core::BuiltinFn::kTextureGather, 0_u, t, s,
+                          b.Splat(ty.vec2f(), 0_f)));
+        b.Return(fn);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func():void {
+  $B2: {
+    %4:texture_2d<f32> = load %tex
+    %5:sampler = load %samp
+    %6:vec4<f32> = textureGather 0u, %4, %5, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %6
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = src;  // Nothing changes
+
+    Run(DirectVariableAccess, kTransformHandle);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_HandleAS, Enabled_LocalTextureParamSampler) {
+    auto* tex =
+        b.Var("tex", handle, ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32()),
+              core::Access::kRead);
+    tex->SetBindingPoint(0, 0);
+    b.ir.root_block->Append(tex);
+
+    auto* samp = b.Var("samp", handle, ty.sampler(), core::Access::kRead);
+    samp->SetBindingPoint(0, 1);
+    b.ir.root_block->Append(samp);
+
+    auto* s = b.FunctionParam("s", ty.sampler());
+
+    auto* fn = b.Function("f", ty.void_());
+    fn->SetParams({s});
+    b.Append(fn->Block(), [&] {
+        auto* t = b.Load(tex);
+
+        b.Let("p", b.Call(ty.vec4f(), core::BuiltinFn::kTextureGather, 0_u, t, s,
+                          b.Splat(ty.vec2f(), 0_f)));
+        b.Return(fn);
+    });
+
+    auto* fn2 = b.Function("g", ty.void_());
+    b.Append(fn2->Block(), [&] {
+        auto* s2 = b.Load(samp);
+        b.Call(ty.void_(), fn, s2);
+        b.Return(fn2);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func(%s:sampler):void {
+  $B2: {
+    %5:texture_2d<f32> = load %tex
+    %6:vec4<f32> = textureGather 0u, %5, %s, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %6
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %9:sampler = load %samp
+    %10:void = call %f, %9
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func():void {
+  $B2: {
+    %4:sampler = load %samp
+    %5:texture_2d<f32> = load %tex
+    %6:vec4<f32> = textureGather 0u, %5, %4, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %6
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %9:void = call %f
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, kTransformHandle);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_HandleAS, Enabled_LocalTextureParamTextureLoad) {
+    auto* tex =
+        b.Var("tex", handle, ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32()),
+              core::Access::kRead);
+    tex->SetBindingPoint(0, 0);
+    b.ir.root_block->Append(tex);
+
+    auto* t = b.FunctionParam("texparam",
+                              ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32()));
+
+    auto* fn = b.Function("f", ty.void_());
+    fn->SetParams({t});
+    b.Append(fn->Block(), [&] {
+        b.Let("p",
+              b.Call(ty.vec4f(), core::BuiltinFn::kTextureLoad, t, b.Splat(ty.vec2u(), 0_u), 0_u));
+        b.Return(fn);
+    });
+
+    auto* fn2 = b.Function("g", ty.void_());
+    b.Append(fn2->Block(), [&] {
+        auto* t2 = b.Load(tex);
+        b.Call(ty.void_(), fn, t2);
+        b.Return(fn2);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+}
+
+%f = func(%texparam:texture_2d<f32>):void {
+  $B2: {
+    %4:vec4<f32> = textureLoad %texparam, vec2<u32>(0u), 0u
+    %p:vec4<f32> = let %4
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %7:texture_2d<f32> = load %tex
+    %8:void = call %f, %7
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+}
+
+%f = func():void {
+  $B2: {
+    %3:texture_2d<f32> = load %tex
+    %4:vec4<f32> = textureLoad %3, vec2<u32>(0u), 0u
+    %p:vec4<f32> = let %4
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %7:void = call %f
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, kTransformHandle);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_HandleAS, Enabled_ParamTextureLocalSampler) {
+    auto* tex_ty = ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32());
+    auto* tex = b.Var("tex", handle, tex_ty, core::Access::kRead);
+    tex->SetBindingPoint(0, 0);
+    b.ir.root_block->Append(tex);
+
+    auto* samp = b.Var("samp", handle, ty.sampler(), core::Access::kRead);
+    samp->SetBindingPoint(0, 1);
+    b.ir.root_block->Append(samp);
+
+    auto* t = b.FunctionParam("t", tex_ty);
+
+    auto* fn = b.Function("f", ty.void_());
+    fn->SetParams({t});
+    b.Append(fn->Block(), [&] {
+        auto* s = b.Load(samp);
+
+        b.Let("p", b.Call(ty.vec4f(), core::BuiltinFn::kTextureGather, 0_u, t, s,
+                          b.Splat(ty.vec2f(), 0_f)));
+        b.Return(fn);
+    });
+
+    auto* fn2 = b.Function("g", ty.void_());
+    b.Append(fn2->Block(), [&] {
+        auto* t2 = b.Load(tex);
+        b.Call(ty.void_(), fn, t2);
+        b.Return(fn2);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func(%t:texture_2d<f32>):void {
+  $B2: {
+    %5:sampler = load %samp
+    %6:vec4<f32> = textureGather 0u, %t, %5, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %6
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %9:texture_2d<f32> = load %tex
+    %10:void = call %f, %9
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func():void {
+  $B2: {
+    %4:texture_2d<f32> = load %tex
+    %5:sampler = load %samp
+    %6:vec4<f32> = textureGather 0u, %4, %5, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %6
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %9:void = call %f
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, kTransformHandle);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_HandleAS, Enabled_ParamTextureParamSampler) {
+    auto* tex_ty = ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32());
+    auto* tex = b.Var("tex", handle, tex_ty, core::Access::kRead);
+    tex->SetBindingPoint(0, 0);
+    b.ir.root_block->Append(tex);
+
+    auto* samp = b.Var("samp", handle, ty.sampler(), core::Access::kRead);
+    samp->SetBindingPoint(0, 1);
+    b.ir.root_block->Append(samp);
+
+    auto* t = b.FunctionParam("t", tex_ty);
+    auto* s = b.FunctionParam("s", ty.sampler());
+
+    auto* fn = b.Function("f", ty.void_());
+    fn->SetParams({t, s});
+    b.Append(fn->Block(), [&] {
+        b.Let("p", b.Call(ty.vec4f(), core::BuiltinFn::kTextureGather, 0_u, t, s,
+                          b.Splat(ty.vec2f(), 0_f)));
+        b.Return(fn);
+    });
+
+    auto* fn2 = b.Function("g", ty.void_());
+    b.Append(fn2->Block(), [&] {
+        auto* s2 = b.Load(samp);
+        auto* t2 = b.Load(tex);
+        b.Call(ty.void_(), fn, t2, s2);
+        b.Return(fn2);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func(%t:texture_2d<f32>, %s:sampler):void {
+  $B2: {
+    %6:vec4<f32> = textureGather 0u, %t, %s, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %6
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %9:sampler = load %samp
+    %10:texture_2d<f32> = load %tex
+    %11:void = call %f, %10, %9
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func():void {
+  $B2: {
+    %4:texture_2d<f32> = load %tex
+    %5:sampler = load %samp
+    %6:vec4<f32> = textureGather 0u, %4, %5, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %6
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %9:void = call %f
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, kTransformHandle);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_HandleAS, Enabled_MultiFunction) {
+    auto* tex_ty = ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32());
+    auto* tex = b.Var("tex", handle, tex_ty, core::Access::kRead);
+    tex->SetBindingPoint(0, 0);
+    b.ir.root_block->Append(tex);
+
+    auto* samp = b.Var("samp", handle, ty.sampler(), core::Access::kRead);
+    samp->SetBindingPoint(0, 1);
+    b.ir.root_block->Append(samp);
+
+    auto* t = b.FunctionParam("t", tex_ty);
+    auto* s = b.FunctionParam("s", ty.sampler());
+
+    auto* fn = b.Function("f", ty.void_());
+    fn->SetParams({t, s});
+    b.Append(fn->Block(), [&] {
+        b.Let("p", b.Call(ty.vec4f(), core::BuiltinFn::kTextureGather, 0_u, t, s,
+                          b.Splat(ty.vec2f(), 0_f)));
+        b.Return(fn);
+    });
+
+    auto* t2 = b.FunctionParam("t", tex_ty);
+    auto* fn2 = b.Function("g", ty.void_());
+    fn2->SetParams({t2});
+    b.Append(fn2->Block(), [&] {
+        auto* s2 = b.Load(samp);
+        b.Call(ty.void_(), fn, t2, s2);
+        b.Return(fn2);
+    });
+
+    auto* fn3 = b.Function("h", ty.void_());
+    b.Append(fn3->Block(), [&] {
+        auto* t3 = b.Load(tex);
+        b.Call(ty.void_(), fn2, t3);
+        b.Return(fn3);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func(%t:texture_2d<f32>, %s:sampler):void {
+  $B2: {
+    %6:vec4<f32> = textureGather 0u, %t, %s, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %6
+    ret
+  }
+}
+%g = func(%t_1:texture_2d<f32>):void {  # %t_1: 't'
+  $B3: {
+    %10:sampler = load %samp
+    %11:void = call %f, %t_1, %10
+    ret
+  }
+}
+%h = func():void {
+  $B4: {
+    %13:texture_2d<f32> = load %tex
+    %14:void = call %g, %13
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func():void {
+  $B2: {
+    %4:texture_2d<f32> = load %tex
+    %5:sampler = load %samp
+    %6:vec4<f32> = textureGather 0u, %4, %5, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %6
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %9:void = call %f
+    ret
+  }
+}
+%h = func():void {
+  $B4: {
+    %11:void = call %g
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, kTransformHandle);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_HandleAS, Disabled_MultiFunction) {
+    auto* tex_ty = ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32());
+    auto* tex = b.Var("tex", handle, tex_ty, core::Access::kRead);
+    tex->SetBindingPoint(0, 0);
+    b.ir.root_block->Append(tex);
+
+    auto* samp = b.Var("samp", handle, ty.sampler(), core::Access::kRead);
+    samp->SetBindingPoint(0, 1);
+    b.ir.root_block->Append(samp);
+
+    auto* t = b.FunctionParam("t", tex_ty);
+    auto* s = b.FunctionParam("s", ty.sampler());
+
+    auto* fn = b.Function("f", ty.void_());
+    fn->SetParams({t, s});
+    b.Append(fn->Block(), [&] {
+        b.Let("p", b.Call(ty.vec4f(), core::BuiltinFn::kTextureGather, 0_u, t, s,
+                          b.Splat(ty.vec2f(), 0_f)));
+        b.Return(fn);
+    });
+
+    auto* t2 = b.FunctionParam("t", tex_ty);
+    auto* fn2 = b.Function("g", ty.void_());
+    fn2->SetParams({t2});
+    b.Append(fn2->Block(), [&] {
+        auto* s2 = b.Load(samp);
+        b.Call(ty.void_(), fn, t2, s2);
+        b.Return(fn2);
+    });
+
+    auto* fn3 = b.Function("h", ty.void_());
+    b.Append(fn3->Block(), [&] {
+        auto* t3 = b.Load(tex);
+        b.Call(ty.void_(), fn2, t3);
+        b.Return(fn3);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func(%t:texture_2d<f32>, %s:sampler):void {
+  $B2: {
+    %6:vec4<f32> = textureGather 0u, %t, %s, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %6
+    ret
+  }
+}
+%g = func(%t_1:texture_2d<f32>):void {  # %t_1: 't'
+  $B3: {
+    %10:sampler = load %samp
+    %11:void = call %f, %t_1, %10
+    ret
+  }
+}
+%h = func():void {
+  $B4: {
+    %13:texture_2d<f32> = load %tex
+    %14:void = call %g, %13
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = src;  // No change
+
+    Run(DirectVariableAccess, DirectVariableAccessOptions{});
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_HandleAS, Enabled_DuplicateParam) {
+    auto* tex_ty = ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32());
+    auto* tex = b.Var("tex", handle, tex_ty, core::Access::kRead);
+    tex->SetBindingPoint(0, 0);
+    b.ir.root_block->Append(tex);
+
+    auto* samp = b.Var("samp", handle, ty.sampler(), core::Access::kRead);
+    samp->SetBindingPoint(0, 1);
+    b.ir.root_block->Append(samp);
+
+    auto* t1 = b.FunctionParam("t1", tex_ty);
+    auto* t2 = b.FunctionParam("t2", tex_ty);
+
+    auto* fn = b.Function("f", ty.void_());
+    fn->SetParams({t1, t2});
+    b.Append(fn->Block(), [&] {
+        auto* s = b.Load(samp);
+
+        b.Let("p1", b.Call(ty.vec4f(), core::BuiltinFn::kTextureGather, 0_u, t1, s,
+                           b.Splat(ty.vec2f(), 0_f)));
+        b.Let("p2", b.Call(ty.vec4f(), core::BuiltinFn::kTextureGather, 0_u, t2, s,
+                           b.Splat(ty.vec2f(), 0_f)));
+        b.Return(fn);
+    });
+
+    auto* fn2 = b.Function("g", ty.void_());
+    b.Append(fn2->Block(), [&] {
+        auto* t3 = b.Load(tex);
+        auto* t4 = b.Load(tex);
+        b.Call(ty.void_(), fn, t3, t4);
+        b.Return(fn2);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func(%t1:texture_2d<f32>, %t2:texture_2d<f32>):void {
+  $B2: {
+    %6:sampler = load %samp
+    %7:vec4<f32> = textureGather 0u, %t1, %6, vec2<f32>(0.0f)
+    %p1:vec4<f32> = let %7
+    %9:vec4<f32> = textureGather 0u, %t2, %6, vec2<f32>(0.0f)
+    %p2:vec4<f32> = let %9
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %12:texture_2d<f32> = load %tex
+    %13:texture_2d<f32> = load %tex
+    %14:void = call %f, %12, %13
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %tex:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 1)
+}
+
+%f = func():void {
+  $B2: {
+    %4:texture_2d<f32> = load %tex
+    %5:texture_2d<f32> = load %tex
+    %6:sampler = load %samp
+    %7:vec4<f32> = textureGather 0u, %4, %6, vec2<f32>(0.0f)
+    %p1:vec4<f32> = let %7
+    %9:vec4<f32> = textureGather 0u, %5, %6, vec2<f32>(0.0f)
+    %p2:vec4<f32> = let %9
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %12:void = call %f
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, kTransformHandle);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_HandleAS, Enabled_Fork) {
+    auto* tex_ty = ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32());
+    auto* tex1 = b.Var("tex1", handle, tex_ty, core::Access::kRead);
+    tex1->SetBindingPoint(0, 0);
+    b.ir.root_block->Append(tex1);
+    auto* tex2 = b.Var("tex2", handle, tex_ty, core::Access::kRead);
+    tex2->SetBindingPoint(0, 1);
+    b.ir.root_block->Append(tex2);
+
+    auto* samp = b.Var("samp", handle, ty.sampler(), core::Access::kRead);
+    samp->SetBindingPoint(0, 2);
+    b.ir.root_block->Append(samp);
+
+    auto* t = b.FunctionParam("t", tex_ty);
+
+    auto* fn = b.Function("f", ty.void_());
+    fn->SetParams({t});
+    b.Append(fn->Block(), [&] {
+        auto* s = b.Load(samp);
+        b.Let("p", b.Call(ty.vec4f(), core::BuiltinFn::kTextureGather, 0_u, t, s,
+                          b.Splat(ty.vec2f(), 0_f)));
+        b.Return(fn);
+    });
+
+    auto* fn2 = b.Function("g", ty.void_());
+    b.Append(fn2->Block(), [&] {
+        auto* t2 = b.Load(tex1);
+        b.Call(ty.void_(), fn, t2);
+        b.Return(fn2);
+    });
+
+    auto* fn3 = b.Function("h", ty.void_());
+    b.Append(fn3->Block(), [&] {
+        auto* t2 = b.Load(tex2);
+        b.Call(ty.void_(), fn, t2);
+        b.Return(fn3);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %tex1:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %tex2:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 1)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 2)
+}
+
+%f = func(%t:texture_2d<f32>):void {
+  $B2: {
+    %6:sampler = load %samp
+    %7:vec4<f32> = textureGather 0u, %t, %6, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %7
+    ret
+  }
+}
+%g = func():void {
+  $B3: {
+    %10:texture_2d<f32> = load %tex1
+    %11:void = call %f, %10
+    ret
+  }
+}
+%h = func():void {
+  $B4: {
+    %13:texture_2d<f32> = load %tex2
+    %14:void = call %f, %13
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %tex1:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 0)
+  %tex2:ptr<handle, texture_2d<f32>, read> = var undef @binding_point(0, 1)
+  %samp:ptr<handle, sampler, read> = var undef @binding_point(0, 2)
+}
+
+%f = func():void {
+  $B2: {
+    %5:texture_2d<f32> = load %tex1
+    %6:sampler = load %samp
+    %7:vec4<f32> = textureGather 0u, %5, %6, vec2<f32>(0.0f)
+    %p:vec4<f32> = let %7
+    ret
+  }
+}
+%f_1 = func():void {  # %f_1: 'f'
+  $B3: {
+    %10:texture_2d<f32> = load %tex2
+    %11:sampler = load %samp
+    %12:vec4<f32> = textureGather 0u, %10, %11, vec2<f32>(0.0f)
+    %p_1:vec4<f32> = let %12  # %p_1: 'p'
+    ret
+  }
+}
+%g = func():void {
+  $B4: {
+    %15:void = call %f
+    ret
+  }
+}
+%h = func():void {
+  $B5: {
+    %17:void = call %f_1
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, kTransformHandle);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_HandleAS, Enabled_TextureBindingArrayParam) {
+    auto* texture_type = ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32());
+    auto* var_ts = b.Var("ts", ty.ptr<handle>(ty.binding_array(texture_type, 3u)));
+    var_ts->SetBindingPoint(0, 0);
+    b.ir.root_block->Append(var_ts);
+
+    auto* fn = b.Function("f", ty.void_());
+    auto* p = b.FunctionParam("p", ty.binding_array(texture_type, 3u));
+    fn->SetParams({p});
+
+    b.Append(fn->Block(), [&] {
+        auto* t = b.Access(texture_type, p, 0_i);
+        b.Call(ty.vec4f(), core::BuiltinFn::kTextureLoad, t, b.Splat(ty.vec2u(), 0_u), 0_u);
+        b.Return(fn);
+    });
+
+    auto* main = b.Function("main", ty.void_(), core::ir::Function::PipelineStage::kFragment);
+    b.Append(main->Block(), [&] {
+        auto* ts = b.Load(var_ts);
+        b.Call(fn, ts);
+        b.Return(main);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %ts:ptr<handle, binding_array<texture_2d<f32>, 3>, read> = var undef @binding_point(0, 0)
+}
+
+%f = func(%p:binding_array<texture_2d<f32>, 3>):void {
+  $B2: {
+    %4:texture_2d<f32> = access %p, 0i
+    %5:vec4<f32> = textureLoad %4, vec2<u32>(0u), 0u
+    ret
+  }
+}
+%main = @fragment func():void {
+  $B3: {
+    %7:binding_array<texture_2d<f32>, 3> = load %ts
+    %8:void = call %f, %7
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %ts:ptr<handle, binding_array<texture_2d<f32>, 3>, read> = var undef @binding_point(0, 0)
+}
+
+%f = func():void {
+  $B2: {
+    %3:binding_array<texture_2d<f32>, 3> = load %ts
+    %4:texture_2d<f32> = access %3, 0i
+    %5:vec4<f32> = textureLoad %4, vec2<u32>(0u), 0u
+    ret
+  }
+}
+%main = @fragment func():void {
+  $B3: {
+    %7:void = call %f
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, kTransformHandle);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(IR_DirectVariableAccessTest_HandleAS, Enabled_TextureFromBindingArrayParam) {
+    auto* texture_type = ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32());
+    auto* var_ts = b.Var("ts", ty.ptr<handle>(ty.binding_array(texture_type, 3u)));
+    var_ts->SetBindingPoint(0, 0);
+    b.ir.root_block->Append(var_ts);
+
+    auto* fn = b.Function("f", ty.void_());
+    auto* p = b.FunctionParam("p", texture_type);
+    fn->SetParams({p});
+
+    b.Append(fn->Block(), [&] {
+        b.Call(ty.vec4f(), core::BuiltinFn::kTextureLoad, p, b.Splat(ty.vec2u(), 0_u), 0_u);
+        b.Return(fn);
+    });
+
+    auto* main = b.Function("main", ty.void_(), core::ir::Function::PipelineStage::kFragment);
+    b.Append(main->Block(), [&] {
+        auto* t_ptr = b.Access(ty.ptr<handle>(texture_type), var_ts, 0_i);
+        auto* t = b.Load(t_ptr);
+
+        b.Call(fn, t);
+        b.Return(main);
+    });
+
+    auto* src = R"(
+$B1: {  # root
+  %ts:ptr<handle, binding_array<texture_2d<f32>, 3>, read> = var undef @binding_point(0, 0)
+}
+
+%f = func(%p:texture_2d<f32>):void {
+  $B2: {
+    %4:vec4<f32> = textureLoad %p, vec2<u32>(0u), 0u
+    ret
+  }
+}
+%main = @fragment func():void {
+  $B3: {
+    %6:ptr<handle, texture_2d<f32>, read> = access %ts, 0i
+    %7:texture_2d<f32> = load %6
+    %8:void = call %f, %7
+    ret
+  }
+}
+)";
+
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+$B1: {  # root
+  %ts:ptr<handle, binding_array<texture_2d<f32>, 3>, read> = var undef @binding_point(0, 0)
+}
+
+%f = func(%p_indices:array<u32, 1>):void {
+  $B2: {
+    %4:u32 = access %p_indices, 0u
+    %5:ptr<handle, texture_2d<f32>, read> = access %ts, %4
+    %6:texture_2d<f32> = load %5
+    %7:vec4<f32> = textureLoad %6, vec2<u32>(0u), 0u
+    ret
+  }
+}
+%main = @fragment func():void {
+  $B3: {
+    %9:u32 = convert 0i
+    %10:array<u32, 1> = construct %9
+    %11:void = call %f, %10
+    ret
+  }
+}
+)";
+
+    Run(DirectVariableAccess, kTransformHandle);
+
+    EXPECT_EQ(expect, str());
+}
+}  // namespace handle_as_tests
 
 ////////////////////////////////////////////////////////////////////////////////
 // builtin function calls
@@ -5008,18 +6612,18 @@ TEST_F(IR_DirectVariableAccessTest_BuiltinFn, ArrayLength) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %S:ptr<storage, array<f32>, read_write> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, array<f32>, read_write> = var undef @binding_point(0, 0)
 }
 
-%len = func(%p:ptr<storage, array<f32>, read_write>):u32 -> %b2 {
-  %b2 = block {
+%len = func(%p:ptr<storage, array<f32>, read_write>):u32 {
+  $B2: {
     %4:u32 = arrayLength %p
     ret %4
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %6:u32 = call %len, %S
     ret
   }
@@ -5029,20 +6633,19 @@ TEST_F(IR_DirectVariableAccessTest_BuiltinFn, ArrayLength) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %S:ptr<storage, array<f32>, read_write> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, array<f32>, read_write> = var undef @binding_point(0, 0)
 }
 
-%len = func():u32 -> %b2 {
-  %b2 = block {
-    %3:ptr<storage, array<f32>, read_write> = access %S
-    %4:u32 = arrayLength %3
-    ret %4
+%len = func():u32 {
+  $B2: {
+    %3:u32 = arrayLength %S
+    ret %3
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
-    %6:u32 = call %len
+%b = func():void {
+  $B3: {
+    %5:u32 = call %len
     ret
   }
 }
@@ -5075,18 +6678,18 @@ TEST_F(IR_DirectVariableAccessTest_BuiltinFn, AtomicLoad) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %W:ptr<workgroup, atomic<i32>, read_write> = var
+$B1: {  # root
+  %W:ptr<workgroup, atomic<i32>, read_write> = var undef
 }
 
-%load = func(%p:ptr<workgroup, atomic<i32>, read_write>):i32 -> %b2 {
-  %b2 = block {
+%load = func(%p:ptr<workgroup, atomic<i32>, read_write>):i32 {
+  $B2: {
     %4:i32 = atomicLoad %p
     ret %4
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
+%b = func():void {
+  $B3: {
     %6:i32 = call %load, %W
     ret
   }
@@ -5096,20 +6699,19 @@ TEST_F(IR_DirectVariableAccessTest_BuiltinFn, AtomicLoad) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %W:ptr<workgroup, atomic<i32>, read_write> = var
+$B1: {  # root
+  %W:ptr<workgroup, atomic<i32>, read_write> = var undef
 }
 
-%load = func():i32 -> %b2 {
-  %b2 = block {
-    %3:ptr<workgroup, atomic<i32>, read_write> = access %W
-    %4:i32 = atomicLoad %3
-    ret %4
+%load = func():i32 {
+  $B2: {
+    %3:i32 = atomicLoad %W
+    ret %3
   }
 }
-%b = func():void -> %b3 {
-  %b3 = block {
-    %6:i32 = call %load
+%b = func():void {
+  $B3: {
+    %5:i32 = call %load
     ret
   }
 }
@@ -5131,7 +6733,7 @@ using IR_DirectVariableAccessTest_Complex = TransformTest;
 
 TEST_F(IR_DirectVariableAccessTest_Complex, Param_ptr_mixed_vec4i32_ViaMultiple) {
     auto* str_ = ty.Struct(mod.symbols.New("str"), {
-                                                       {mod.symbols.Register("i"), ty.vec4<i32>()},
+                                                       {mod.symbols.Register("i"), ty.vec4i()},
                                                    });
 
     Var* U = nullptr;
@@ -5172,17 +6774,17 @@ TEST_F(IR_DirectVariableAccessTest_Complex, Param_ptr_mixed_vec4i32_ViaMultiple)
                  W_arr_arr = b.Var<workgroup, array<array<vec4<i32>, 8>, 4>>("W_arr_arr");
              });
 
-    auto* fn_u = b.Function("fn_u", ty.vec4<i32>());
+    auto* fn_u = b.Function("fn_u", ty.vec4i());
     auto* fn_u_p = b.FunctionParam("p", ty.ptr<uniform, vec4<i32>, read>());
     fn_u->SetParams({fn_u_p});
     b.Append(fn_u->Block(), [&] { b.Return(fn_u, b.Load(fn_u_p)); });
 
-    auto* fn_s = b.Function("fn_s", ty.vec4<i32>());
+    auto* fn_s = b.Function("fn_s", ty.vec4i());
     auto* fn_s_p = b.FunctionParam("p", ty.ptr<storage, vec4<i32>, read>());
     fn_s->SetParams({fn_s_p});
     b.Append(fn_s->Block(), [&] { b.Return(fn_s, b.Load(fn_s_p)); });
 
-    auto* fn_w = b.Function("fn_w", ty.vec4<i32>());
+    auto* fn_w = b.Function("fn_w", ty.vec4i());
     auto* fn_w_p = b.FunctionParam("p", ty.ptr<workgroup, vec4<i32>>());
     fn_w->SetParams({fn_w_p});
     b.Append(fn_w->Block(), [&] { b.Return(fn_w, b.Load(fn_w_p)); });
@@ -5265,41 +6867,41 @@ str = struct @align(16) {
   i:vec4<i32> @offset(0)
 }
 
-%b1 = block {  # root
-  %U:ptr<uniform, vec4<i32>, read> = var @binding_point(0, 0)
-  %U_str:ptr<uniform, str, read> = var @binding_point(0, 1)
-  %U_arr:ptr<uniform, array<vec4<i32>, 8>, read> = var @binding_point(0, 2)
-  %U_arr_arr:ptr<uniform, array<array<vec4<i32>, 8>, 4>, read> = var @binding_point(0, 3)
-  %S:ptr<storage, vec4<i32>, read> = var @binding_point(1, 0)
-  %S_str:ptr<storage, str, read> = var @binding_point(1, 1)
-  %S_arr:ptr<storage, array<vec4<i32>, 8>, read> = var @binding_point(1, 2)
-  %S_arr_arr:ptr<storage, array<array<vec4<i32>, 8>, 4>, read> = var @binding_point(1, 3)
-  %W:ptr<workgroup, vec4<i32>, read_write> = var
-  %W_str:ptr<workgroup, str, read_write> = var
-  %W_arr:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var
-  %W_arr_arr:ptr<workgroup, array<array<vec4<i32>, 8>, 4>, read_write> = var
+$B1: {  # root
+  %U:ptr<uniform, vec4<i32>, read> = var undef @binding_point(0, 0)
+  %U_str:ptr<uniform, str, read> = var undef @binding_point(0, 1)
+  %U_arr:ptr<uniform, array<vec4<i32>, 8>, read> = var undef @binding_point(0, 2)
+  %U_arr_arr:ptr<uniform, array<array<vec4<i32>, 8>, 4>, read> = var undef @binding_point(0, 3)
+  %S:ptr<storage, vec4<i32>, read> = var undef @binding_point(1, 0)
+  %S_str:ptr<storage, str, read> = var undef @binding_point(1, 1)
+  %S_arr:ptr<storage, array<vec4<i32>, 8>, read> = var undef @binding_point(1, 2)
+  %S_arr_arr:ptr<storage, array<array<vec4<i32>, 8>, 4>, read> = var undef @binding_point(1, 3)
+  %W:ptr<workgroup, vec4<i32>, read_write> = var undef
+  %W_str:ptr<workgroup, str, read_write> = var undef
+  %W_arr:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var undef
+  %W_arr_arr:ptr<workgroup, array<array<vec4<i32>, 8>, 4>, read_write> = var undef
 }
 
-%fn_u = func(%p:ptr<uniform, vec4<i32>, read>):vec4<i32> -> %b2 {
-  %b2 = block {
+%fn_u = func(%p:ptr<uniform, vec4<i32>, read>):vec4<i32> {
+  $B2: {
     %15:vec4<i32> = load %p
     ret %15
   }
 }
-%fn_s = func(%p_1:ptr<storage, vec4<i32>, read>):vec4<i32> -> %b3 {  # %p_1: 'p'
-  %b3 = block {
+%fn_s = func(%p_1:ptr<storage, vec4<i32>, read>):vec4<i32> {  # %p_1: 'p'
+  $B3: {
     %18:vec4<i32> = load %p_1
     ret %18
   }
 }
-%fn_w = func(%p_2:ptr<workgroup, vec4<i32>, read_write>):vec4<i32> -> %b4 {  # %p_2: 'p'
-  %b4 = block {
+%fn_w = func(%p_2:ptr<workgroup, vec4<i32>, read_write>):vec4<i32> {  # %p_2: 'p'
+  $B4: {
     %21:vec4<i32> = load %p_2
     ret %21
   }
 }
-%b = func():void -> %b5 {
-  %b5 = block {
+%b = func():void {
+  $B5: {
     %I:i32 = let 3i
     %J:i32 = let 4i
     %u:vec4<i32> = call %fn_u, %U
@@ -5365,199 +6967,196 @@ str = struct @align(16) {
   i:vec4<i32> @offset(0)
 }
 
-%b1 = block {  # root
-  %U:ptr<uniform, vec4<i32>, read> = var @binding_point(0, 0)
-  %U_str:ptr<uniform, str, read> = var @binding_point(0, 1)
-  %U_arr:ptr<uniform, array<vec4<i32>, 8>, read> = var @binding_point(0, 2)
-  %U_arr_arr:ptr<uniform, array<array<vec4<i32>, 8>, 4>, read> = var @binding_point(0, 3)
-  %S:ptr<storage, vec4<i32>, read> = var @binding_point(1, 0)
-  %S_str:ptr<storage, str, read> = var @binding_point(1, 1)
-  %S_arr:ptr<storage, array<vec4<i32>, 8>, read> = var @binding_point(1, 2)
-  %S_arr_arr:ptr<storage, array<array<vec4<i32>, 8>, 4>, read> = var @binding_point(1, 3)
-  %W:ptr<workgroup, vec4<i32>, read_write> = var
-  %W_str:ptr<workgroup, str, read_write> = var
-  %W_arr:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var
-  %W_arr_arr:ptr<workgroup, array<array<vec4<i32>, 8>, 4>, read_write> = var
+$B1: {  # root
+  %U:ptr<uniform, vec4<i32>, read> = var undef @binding_point(0, 0)
+  %U_str:ptr<uniform, str, read> = var undef @binding_point(0, 1)
+  %U_arr:ptr<uniform, array<vec4<i32>, 8>, read> = var undef @binding_point(0, 2)
+  %U_arr_arr:ptr<uniform, array<array<vec4<i32>, 8>, 4>, read> = var undef @binding_point(0, 3)
+  %S:ptr<storage, vec4<i32>, read> = var undef @binding_point(1, 0)
+  %S_str:ptr<storage, str, read> = var undef @binding_point(1, 1)
+  %S_arr:ptr<storage, array<vec4<i32>, 8>, read> = var undef @binding_point(1, 2)
+  %S_arr_arr:ptr<storage, array<array<vec4<i32>, 8>, 4>, read> = var undef @binding_point(1, 3)
+  %W:ptr<workgroup, vec4<i32>, read_write> = var undef
+  %W_str:ptr<workgroup, str, read_write> = var undef
+  %W_arr:ptr<workgroup, array<vec4<i32>, 8>, read_write> = var undef
+  %W_arr_arr:ptr<workgroup, array<array<vec4<i32>, 8>, 4>, read_write> = var undef
 }
 
-%fn_u = func():vec4<i32> -> %b2 {
-  %b2 = block {
-    %14:ptr<uniform, vec4<i32>, read> = access %U
-    %15:vec4<i32> = load %14
-    ret %15
+%fn_u = func():vec4<i32> {
+  $B2: {
+    %14:vec4<i32> = load %U
+    ret %14
   }
 }
-%fn_u_1 = func():vec4<i32> -> %b3 {  # %fn_u_1: 'fn_u'
-  %b3 = block {
-    %17:ptr<uniform, vec4<i32>, read> = access %U_str, 0u
-    %18:vec4<i32> = load %17
-    ret %18
+%fn_u_1 = func():vec4<i32> {  # %fn_u_1: 'fn_u'
+  $B3: {
+    %16:ptr<uniform, vec4<i32>, read> = access %U_str, 0u
+    %17:vec4<i32> = load %16
+    ret %17
   }
 }
-%fn_u_2 = func(%p_indices:array<u32, 1>):vec4<i32> -> %b4 {  # %fn_u_2: 'fn_u'
-  %b4 = block {
-    %21:u32 = access %p_indices, 0u
-    %22:ptr<uniform, vec4<i32>, read> = access %U_arr, %21
-    %23:vec4<i32> = load %22
-    ret %23
+%fn_u_2 = func(%p_indices:array<u32, 1>):vec4<i32> {  # %fn_u_2: 'fn_u'
+  $B4: {
+    %20:u32 = access %p_indices, 0u
+    %21:ptr<uniform, vec4<i32>, read> = access %U_arr, %20
+    %22:vec4<i32> = load %21
+    ret %22
   }
 }
-%fn_u_3 = func(%p_indices_1:array<u32, 2>):vec4<i32> -> %b5 {  # %fn_u_3: 'fn_u', %p_indices_1: 'p_indices'
-  %b5 = block {
-    %26:u32 = access %p_indices_1, 0u
-    %27:u32 = access %p_indices_1, 1u
-    %28:ptr<uniform, vec4<i32>, read> = access %U_arr_arr, %26, %27
-    %29:vec4<i32> = load %28
-    ret %29
+%fn_u_3 = func(%p_indices_1:array<u32, 2>):vec4<i32> {  # %fn_u_3: 'fn_u', %p_indices_1: 'p_indices'
+  $B5: {
+    %25:u32 = access %p_indices_1, 0u
+    %26:u32 = access %p_indices_1, 1u
+    %27:ptr<uniform, vec4<i32>, read> = access %U_arr_arr, %25, %26
+    %28:vec4<i32> = load %27
+    ret %28
   }
 }
-%fn_s = func():vec4<i32> -> %b6 {
-  %b6 = block {
-    %31:ptr<storage, vec4<i32>, read> = access %S
-    %32:vec4<i32> = load %31
-    ret %32
+%fn_s = func():vec4<i32> {
+  $B6: {
+    %30:vec4<i32> = load %S
+    ret %30
   }
 }
-%fn_s_1 = func():vec4<i32> -> %b7 {  # %fn_s_1: 'fn_s'
-  %b7 = block {
-    %34:ptr<storage, vec4<i32>, read> = access %S_str, 0u
-    %35:vec4<i32> = load %34
-    ret %35
+%fn_s_1 = func():vec4<i32> {  # %fn_s_1: 'fn_s'
+  $B7: {
+    %32:ptr<storage, vec4<i32>, read> = access %S_str, 0u
+    %33:vec4<i32> = load %32
+    ret %33
   }
 }
-%fn_s_2 = func(%p_indices_2:array<u32, 1>):vec4<i32> -> %b8 {  # %fn_s_2: 'fn_s', %p_indices_2: 'p_indices'
-  %b8 = block {
-    %38:u32 = access %p_indices_2, 0u
-    %39:ptr<storage, vec4<i32>, read> = access %S_arr, %38
-    %40:vec4<i32> = load %39
-    ret %40
+%fn_s_2 = func(%p_indices_2:array<u32, 1>):vec4<i32> {  # %fn_s_2: 'fn_s', %p_indices_2: 'p_indices'
+  $B8: {
+    %36:u32 = access %p_indices_2, 0u
+    %37:ptr<storage, vec4<i32>, read> = access %S_arr, %36
+    %38:vec4<i32> = load %37
+    ret %38
   }
 }
-%fn_s_3 = func(%p_indices_3:array<u32, 2>):vec4<i32> -> %b9 {  # %fn_s_3: 'fn_s', %p_indices_3: 'p_indices'
-  %b9 = block {
-    %43:u32 = access %p_indices_3, 0u
-    %44:u32 = access %p_indices_3, 1u
-    %45:ptr<storage, vec4<i32>, read> = access %S_arr_arr, %43, %44
-    %46:vec4<i32> = load %45
+%fn_s_3 = func(%p_indices_3:array<u32, 2>):vec4<i32> {  # %fn_s_3: 'fn_s', %p_indices_3: 'p_indices'
+  $B9: {
+    %41:u32 = access %p_indices_3, 0u
+    %42:u32 = access %p_indices_3, 1u
+    %43:ptr<storage, vec4<i32>, read> = access %S_arr_arr, %41, %42
+    %44:vec4<i32> = load %43
+    ret %44
+  }
+}
+%fn_w = func():vec4<i32> {
+  $B10: {
+    %46:vec4<i32> = load %W
     ret %46
   }
 }
-%fn_w = func():vec4<i32> -> %b10 {
-  %b10 = block {
-    %48:ptr<workgroup, vec4<i32>, read_write> = access %W
+%fn_w_1 = func():vec4<i32> {  # %fn_w_1: 'fn_w'
+  $B11: {
+    %48:ptr<workgroup, vec4<i32>, read_write> = access %W_str, 0u
     %49:vec4<i32> = load %48
     ret %49
   }
 }
-%fn_w_1 = func():vec4<i32> -> %b11 {  # %fn_w_1: 'fn_w'
-  %b11 = block {
-    %51:ptr<workgroup, vec4<i32>, read_write> = access %W_str, 0u
-    %52:vec4<i32> = load %51
-    ret %52
+%fn_w_2 = func(%p_indices_4:array<u32, 1>):vec4<i32> {  # %fn_w_2: 'fn_w', %p_indices_4: 'p_indices'
+  $B12: {
+    %52:u32 = access %p_indices_4, 0u
+    %53:ptr<workgroup, vec4<i32>, read_write> = access %W_arr, %52
+    %54:vec4<i32> = load %53
+    ret %54
   }
 }
-%fn_w_2 = func(%p_indices_4:array<u32, 1>):vec4<i32> -> %b12 {  # %fn_w_2: 'fn_w', %p_indices_4: 'p_indices'
-  %b12 = block {
-    %55:u32 = access %p_indices_4, 0u
-    %56:ptr<workgroup, vec4<i32>, read_write> = access %W_arr, %55
-    %57:vec4<i32> = load %56
-    ret %57
+%fn_w_3 = func(%p_indices_5:array<u32, 2>):vec4<i32> {  # %fn_w_3: 'fn_w', %p_indices_5: 'p_indices'
+  $B13: {
+    %57:u32 = access %p_indices_5, 0u
+    %58:u32 = access %p_indices_5, 1u
+    %59:ptr<workgroup, vec4<i32>, read_write> = access %W_arr_arr, %57, %58
+    %60:vec4<i32> = load %59
+    ret %60
   }
 }
-%fn_w_3 = func(%p_indices_5:array<u32, 2>):vec4<i32> -> %b13 {  # %fn_w_3: 'fn_w', %p_indices_5: 'p_indices'
-  %b13 = block {
-    %60:u32 = access %p_indices_5, 0u
-    %61:u32 = access %p_indices_5, 1u
-    %62:ptr<workgroup, vec4<i32>, read_write> = access %W_arr_arr, %60, %61
-    %63:vec4<i32> = load %62
-    ret %63
-  }
-}
-%b = func():void -> %b14 {
-  %b14 = block {
+%b = func():void {
+  $B14: {
     %I:i32 = let 3i
     %J:i32 = let 4i
     %u:vec4<i32> = call %fn_u
     %u_str:vec4<i32> = call %fn_u_1
-    %69:u32 = convert 0i
+    %66:u32 = convert 0i
+    %67:array<u32, 1> = construct %66
+    %u_arr0:vec4<i32> = call %fn_u_2, %67
+    %69:u32 = convert 1i
     %70:array<u32, 1> = construct %69
-    %u_arr0:vec4<i32> = call %fn_u_2, %70
-    %72:u32 = convert 1i
+    %u_arr1:vec4<i32> = call %fn_u_2, %70
+    %72:u32 = convert %I
     %73:array<u32, 1> = construct %72
-    %u_arr1:vec4<i32> = call %fn_u_2, %73
-    %75:u32 = convert %I
-    %76:array<u32, 1> = construct %75
-    %u_arrI:vec4<i32> = call %fn_u_2, %76
-    %78:u32 = convert 1i
-    %79:u32 = convert 0i
-    %80:array<u32, 2> = construct %78, %79
-    %u_arr1_arr0:vec4<i32> = call %fn_u_3, %80
-    %82:u32 = convert 2i
+    %u_arrI:vec4<i32> = call %fn_u_2, %73
+    %75:u32 = convert 1i
+    %76:u32 = convert 0i
+    %77:array<u32, 2> = construct %75, %76
+    %u_arr1_arr0:vec4<i32> = call %fn_u_3, %77
+    %79:u32 = convert 2i
+    %80:u32 = convert %I
+    %81:array<u32, 2> = construct %79, %80
+    %u_arr2_arrI:vec4<i32> = call %fn_u_3, %81
     %83:u32 = convert %I
-    %84:array<u32, 2> = construct %82, %83
-    %u_arr2_arrI:vec4<i32> = call %fn_u_3, %84
-    %86:u32 = convert %I
-    %87:u32 = convert 2i
-    %88:array<u32, 2> = construct %86, %87
-    %u_arrI_arr2:vec4<i32> = call %fn_u_3, %88
-    %90:u32 = convert %I
-    %91:u32 = convert %J
-    %92:array<u32, 2> = construct %90, %91
-    %u_arrI_arrJ:vec4<i32> = call %fn_u_3, %92
+    %84:u32 = convert 2i
+    %85:array<u32, 2> = construct %83, %84
+    %u_arrI_arr2:vec4<i32> = call %fn_u_3, %85
+    %87:u32 = convert %I
+    %88:u32 = convert %J
+    %89:array<u32, 2> = construct %87, %88
+    %u_arrI_arrJ:vec4<i32> = call %fn_u_3, %89
     %s:vec4<i32> = call %fn_s
     %s_str:vec4<i32> = call %fn_s_1
-    %96:u32 = convert 0i
+    %93:u32 = convert 0i
+    %94:array<u32, 1> = construct %93
+    %s_arr0:vec4<i32> = call %fn_s_2, %94
+    %96:u32 = convert 1i
     %97:array<u32, 1> = construct %96
-    %s_arr0:vec4<i32> = call %fn_s_2, %97
-    %99:u32 = convert 1i
+    %s_arr1:vec4<i32> = call %fn_s_2, %97
+    %99:u32 = convert %I
     %100:array<u32, 1> = construct %99
-    %s_arr1:vec4<i32> = call %fn_s_2, %100
-    %102:u32 = convert %I
-    %103:array<u32, 1> = construct %102
-    %s_arrI:vec4<i32> = call %fn_s_2, %103
-    %105:u32 = convert 1i
-    %106:u32 = convert 0i
-    %107:array<u32, 2> = construct %105, %106
-    %s_arr1_arr0:vec4<i32> = call %fn_s_3, %107
-    %109:u32 = convert 2i
+    %s_arrI:vec4<i32> = call %fn_s_2, %100
+    %102:u32 = convert 1i
+    %103:u32 = convert 0i
+    %104:array<u32, 2> = construct %102, %103
+    %s_arr1_arr0:vec4<i32> = call %fn_s_3, %104
+    %106:u32 = convert 2i
+    %107:u32 = convert %I
+    %108:array<u32, 2> = construct %106, %107
+    %s_arr2_arrI:vec4<i32> = call %fn_s_3, %108
     %110:u32 = convert %I
-    %111:array<u32, 2> = construct %109, %110
-    %s_arr2_arrI:vec4<i32> = call %fn_s_3, %111
-    %113:u32 = convert %I
-    %114:u32 = convert 2i
-    %115:array<u32, 2> = construct %113, %114
-    %s_arrI_arr2:vec4<i32> = call %fn_s_3, %115
-    %117:u32 = convert %I
-    %118:u32 = convert %J
-    %119:array<u32, 2> = construct %117, %118
-    %s_arrI_arrJ:vec4<i32> = call %fn_s_3, %119
+    %111:u32 = convert 2i
+    %112:array<u32, 2> = construct %110, %111
+    %s_arrI_arr2:vec4<i32> = call %fn_s_3, %112
+    %114:u32 = convert %I
+    %115:u32 = convert %J
+    %116:array<u32, 2> = construct %114, %115
+    %s_arrI_arrJ:vec4<i32> = call %fn_s_3, %116
     %w:vec4<i32> = call %fn_w
     %w_str:vec4<i32> = call %fn_w_1
-    %123:u32 = convert 0i
+    %120:u32 = convert 0i
+    %121:array<u32, 1> = construct %120
+    %w_arr0:vec4<i32> = call %fn_w_2, %121
+    %123:u32 = convert 1i
     %124:array<u32, 1> = construct %123
-    %w_arr0:vec4<i32> = call %fn_w_2, %124
-    %126:u32 = convert 1i
+    %w_arr1:vec4<i32> = call %fn_w_2, %124
+    %126:u32 = convert %I
     %127:array<u32, 1> = construct %126
-    %w_arr1:vec4<i32> = call %fn_w_2, %127
-    %129:u32 = convert %I
-    %130:array<u32, 1> = construct %129
-    %w_arrI:vec4<i32> = call %fn_w_2, %130
-    %132:u32 = convert 1i
-    %133:u32 = convert 0i
-    %134:array<u32, 2> = construct %132, %133
-    %w_arr1_arr0:vec4<i32> = call %fn_w_3, %134
-    %136:u32 = convert 2i
+    %w_arrI:vec4<i32> = call %fn_w_2, %127
+    %129:u32 = convert 1i
+    %130:u32 = convert 0i
+    %131:array<u32, 2> = construct %129, %130
+    %w_arr1_arr0:vec4<i32> = call %fn_w_3, %131
+    %133:u32 = convert 2i
+    %134:u32 = convert %I
+    %135:array<u32, 2> = construct %133, %134
+    %w_arr2_arrI:vec4<i32> = call %fn_w_3, %135
     %137:u32 = convert %I
-    %138:array<u32, 2> = construct %136, %137
-    %w_arr2_arrI:vec4<i32> = call %fn_w_3, %138
-    %140:u32 = convert %I
-    %141:u32 = convert 2i
-    %142:array<u32, 2> = construct %140, %141
-    %w_arrI_arr2:vec4<i32> = call %fn_w_3, %142
-    %144:u32 = convert %I
-    %145:u32 = convert %J
-    %146:array<u32, 2> = construct %144, %145
-    %w_arrI_arrJ:vec4<i32> = call %fn_w_3, %146
+    %138:u32 = convert 2i
+    %139:array<u32, 2> = construct %137, %138
+    %w_arrI_arr2:vec4<i32> = call %fn_w_3, %139
+    %141:u32 = convert %I
+    %142:u32 = convert %J
+    %143:array<u32, 2> = construct %141, %142
+    %w_arrI_arrJ:vec4<i32> = call %fn_w_3, %143
     ret
   }
 }
@@ -5609,17 +7208,17 @@ TEST_F(IR_DirectVariableAccessTest_Complex, Indexing) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %S:ptr<storage, array<array<array<array<i32, 9>, 9>, 9>, 50>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, array<array<array<array<i32, 9>, 9>, 9>, 50>, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%i:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%i:i32):i32 {
+  $B2: {
     ret %i
   }
 }
-%b = func(%p:ptr<storage, array<array<array<i32, 9>, 9>, 9>, read>):i32 -> %b3 {
-  %b3 = block {
+%b = func(%p:ptr<storage, array<array<array<i32, 9>, 9>, 9>, read>):i32 {
+  $B3: {
     %6:ptr<storage, i32, read> = access %p, 0i, 1i, 2i
     %7:i32 = load %6
     %8:i32 = call %a, %7
@@ -5636,8 +7235,8 @@ TEST_F(IR_DirectVariableAccessTest_Complex, Indexing) {
     ret %18
   }
 }
-%c = func():void -> %b4 {
-  %b4 = block {
+%c = func():void {
+  $B4: {
     %20:ptr<storage, array<array<array<i32, 9>, 9>, 9>, read> = access %S, 42i
     %v:i32 = call %b, %20
     ret
@@ -5648,17 +7247,17 @@ TEST_F(IR_DirectVariableAccessTest_Complex, Indexing) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %S:ptr<storage, array<array<array<array<i32, 9>, 9>, 9>, 50>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, array<array<array<array<i32, 9>, 9>, 9>, 50>, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%i:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%i:i32):i32 {
+  $B2: {
     ret %i
   }
 }
-%b = func(%p_indices:array<u32, 1>):i32 -> %b3 {
-  %b3 = block {
+%b = func(%p_indices:array<u32, 1>):i32 {
+  $B3: {
     %6:u32 = access %p_indices, 0u
     %7:ptr<storage, array<array<array<i32, 9>, 9>, 9>, read> = access %S, %6
     %8:ptr<storage, i32, read> = access %7, 0i, 1i, 2i
@@ -5677,8 +7276,8 @@ TEST_F(IR_DirectVariableAccessTest_Complex, Indexing) {
     ret %20
   }
 }
-%c = func():void -> %b4 {
-  %b4 = block {
+%c = func():void {
+  $B4: {
     %22:u32 = convert 42i
     %23:array<u32, 1> = construct %22
     %v:i32 = call %b, %23
@@ -5738,18 +7337,18 @@ TEST_F(IR_DirectVariableAccessTest_Complex, IndexingInPtrCall) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %S:ptr<storage, array<array<array<array<i32, 9>, 9>, 9>, 50>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, array<array<array<array<i32, 9>, 9>, 9>, 50>, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %i:ptr<storage, i32, read>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %i:ptr<storage, i32, read>, %post:i32):i32 {
+  $B2: {
     %6:i32 = load %i
     ret %6
   }
 }
-%b = func(%p:ptr<storage, array<array<array<i32, 9>, 9>, 9>, read>):i32 -> %b3 {
-  %b3 = block {
+%b = func(%p:ptr<storage, array<array<array<i32, 9>, 9>, 9>, read>):i32 {
+  $B3: {
     %9:ptr<storage, i32, read> = access %p, 0i, 1i, 2i
     %10:i32 = call %a, 20i, %9, 30i
     %11:ptr<storage, i32, read> = access %p, 3i, 4i, 5i
@@ -5761,8 +7360,8 @@ TEST_F(IR_DirectVariableAccessTest_Complex, IndexingInPtrCall) {
     ret %16
   }
 }
-%c = func():void -> %b4 {
-  %b4 = block {
+%c = func():void {
+  $B4: {
     %18:ptr<storage, array<array<array<i32, 9>, 9>, 9>, read> = access %S, 42i
     %v:i32 = call %b, %18
     ret
@@ -5773,12 +7372,12 @@ TEST_F(IR_DirectVariableAccessTest_Complex, IndexingInPtrCall) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %S:ptr<storage, array<array<array<array<i32, 9>, 9>, 9>, 50>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, array<array<array<array<i32, 9>, 9>, 9>, 50>, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%pre:i32, %i_indices:array<u32, 4>, %post:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%pre:i32, %i_indices:array<u32, 4>, %post:i32):i32 {
+  $B2: {
     %6:u32 = access %i_indices, 0u
     %7:u32 = access %i_indices, 1u
     %8:u32 = access %i_indices, 2u
@@ -5788,8 +7387,8 @@ TEST_F(IR_DirectVariableAccessTest_Complex, IndexingInPtrCall) {
     ret %11
   }
 }
-%b = func(%p_indices:array<u32, 1>):i32 -> %b3 {
-  %b3 = block {
+%b = func(%p_indices:array<u32, 1>):i32 {
+  $B3: {
     %14:u32 = access %p_indices, 0u
     %15:u32 = convert 0i
     %16:u32 = convert 1i
@@ -5814,8 +7413,8 @@ TEST_F(IR_DirectVariableAccessTest_Complex, IndexingInPtrCall) {
     ret %34
   }
 }
-%c = func():void -> %b4 {
-  %b4 = block {
+%c = func():void {
+  $B4: {
     %36:u32 = convert 42i
     %37:array<u32, 1> = construct %36
     %v:i32 = call %b, %37
@@ -5872,18 +7471,18 @@ TEST_F(IR_DirectVariableAccessTest_Complex, IndexingDualPointers) {
     });
 
     auto* src = R"(
-%b1 = block {  # root
-  %S:ptr<storage, array<array<array<i32, 9>, 9>, 50>, read> = var @binding_point(0, 0)
-  %U:ptr<uniform, array<array<array<vec4<i32>, 9>, 9>, 50>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, array<array<array<i32, 9>, 9>, 50>, read> = var undef @binding_point(0, 0)
+  %U:ptr<uniform, array<array<array<vec4<i32>, 9>, 9>, 50>, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%i:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%i:i32):i32 {
+  $B2: {
     ret %i
   }
 }
-%b = func(%s:ptr<storage, array<array<i32, 9>, 9>, read>, %u:ptr<uniform, array<array<vec4<i32>, 9>, 9>, read>):i32 -> %b3 {
-  %b3 = block {
+%b = func(%s:ptr<storage, array<array<i32, 9>, 9>, read>, %u:ptr<uniform, array<array<vec4<i32>, 9>, 9>, read>):i32 {
+  $B3: {
     %8:ptr<uniform, vec4<i32>, read> = access %u, 0i, 1i
     %9:i32 = load_vector_element %8, 0u
     %10:i32 = call %a, %9
@@ -5896,8 +7495,8 @@ TEST_F(IR_DirectVariableAccessTest_Complex, IndexingDualPointers) {
     ret %16
   }
 }
-%c = func():void -> %b4 {
-  %b4 = block {
+%c = func():void {
+  $B4: {
     %18:ptr<storage, array<array<i32, 9>, 9>, read> = access %S, 42i
     %19:ptr<uniform, array<array<vec4<i32>, 9>, 9>, read> = access %U, 24i
     %v:i32 = call %b, %18, %19
@@ -5909,18 +7508,18 @@ TEST_F(IR_DirectVariableAccessTest_Complex, IndexingDualPointers) {
     EXPECT_EQ(src, str());
 
     auto* expect = R"(
-%b1 = block {  # root
-  %S:ptr<storage, array<array<array<i32, 9>, 9>, 50>, read> = var @binding_point(0, 0)
-  %U:ptr<uniform, array<array<array<vec4<i32>, 9>, 9>, 50>, read> = var @binding_point(0, 0)
+$B1: {  # root
+  %S:ptr<storage, array<array<array<i32, 9>, 9>, 50>, read> = var undef @binding_point(0, 0)
+  %U:ptr<uniform, array<array<array<vec4<i32>, 9>, 9>, 50>, read> = var undef @binding_point(0, 0)
 }
 
-%a = func(%i:i32):i32 -> %b2 {
-  %b2 = block {
+%a = func(%i:i32):i32 {
+  $B2: {
     ret %i
   }
 }
-%b = func(%s_indices:array<u32, 1>, %u_indices:array<u32, 1>):i32 -> %b3 {
-  %b3 = block {
+%b = func(%s_indices:array<u32, 1>, %u_indices:array<u32, 1>):i32 {
+  $B3: {
     %8:u32 = access %s_indices, 0u
     %9:ptr<storage, array<array<i32, 9>, 9>, read> = access %S, %8
     %10:u32 = access %u_indices, 0u
@@ -5937,8 +7536,8 @@ TEST_F(IR_DirectVariableAccessTest_Complex, IndexingDualPointers) {
     ret %20
   }
 }
-%c = func():void -> %b4 {
-  %b4 = block {
+%c = func():void {
+  $B4: {
     %22:u32 = convert 42i
     %23:array<u32, 1> = construct %22
     %24:u32 = convert 24i

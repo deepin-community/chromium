@@ -7,9 +7,9 @@
 
 #include <bitset>
 #include <set>
+#include <variant>
 
 #include "components/performance_manager/public/resource_attribution/resource_contexts.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 
 namespace resource_attribution {
 
@@ -28,8 +28,8 @@ class ContextCollection {
   ContextCollection(const ContextCollection& other);
   ContextCollection& operator=(const ContextCollection& other);
 
-  friend constexpr bool operator==(const ContextCollection&,
-                                   const ContextCollection&) = default;
+  friend bool operator==(const ContextCollection&,
+                         const ContextCollection&) = default;
 
   // Adds `context` to the collection.
   void AddResourceContext(const ResourceContext& context);
@@ -56,7 +56,7 @@ class ContextCollection {
   // A set of ResourceContextTypeId's (converted to int and stored in a bitset
   // for efficiency). For each of these context types, all contexts that exist
   // will be measured.
-  std::bitset<absl::variant_size<ResourceContext>::value> all_context_types_;
+  std::bitset<std::variant_size<ResourceContext>::value> all_context_types_;
 };
 
 }  // namespace resource_attribution

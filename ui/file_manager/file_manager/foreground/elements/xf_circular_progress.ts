@@ -89,7 +89,7 @@ export class CircularProgress extends HTMLElement {
 
   /**
    * Callback triggered by the browser when our attribute values change.
-   * TODO(crbug.com/947388) Add unit tests to exercise attribute edge cases.
+   * TODO(crbug.com/40620728) Add unit tests to exercise attribute edge cases.
    * @param name Attribute that's changed.
    * @param oldValue Old value of the attribute.
    * @param newValue New value of the attribute.
@@ -133,6 +133,8 @@ export class CircularProgress extends HTMLElement {
       case 'progress':
         const progress = Number(newValue);
         this.progress_ = this.setProgress(progress);
+        break;
+      default:
         break;
     }
   }

@@ -5,17 +5,22 @@
 #ifndef DEVICE_FIDO_VIRTUAL_FIDO_DEVICE_DISCOVERY_H_
 #define DEVICE_FIDO_VIRTUAL_FIDO_DEVICE_DISCOVERY_H_
 
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "device/fido/fido_discovery_factory.h"
 #include "device/fido/virtual_ctap2_device.h"
 
-namespace device::test {
+namespace device {
+
+namespace cablev2 {
+struct Pairing;
+}
+
+namespace test {
 
 // A FidoDeviceDiscovery that always vends a single |VirtualFidoDevice|.
-class VirtualFidoDeviceDiscovery
-    : public FidoDeviceDiscovery,
-      public base::SupportsWeakPtr<VirtualFidoDeviceDiscovery> {
+class VirtualFidoDeviceDiscovery final : public FidoDeviceDiscovery {
  public:
   // Trace contains a history of the discovery objects that have been created by
   // a given factory. VirtualFidoDeviceDiscovery gets a reference to this object
@@ -69,8 +74,11 @@ class VirtualFidoDeviceDiscovery
   std::unique_ptr<EventStream<std::unique_ptr<cablev2::Pairing>>>
       contact_device_stream_;
   std::string id_;
+  base::WeakPtrFactory<VirtualFidoDeviceDiscovery> weak_ptr_factory_{this};
 };
 
-}  // namespace device::test
+}  // namespace test
+
+}  // namespace device
 
 #endif  // DEVICE_FIDO_VIRTUAL_FIDO_DEVICE_DISCOVERY_H_

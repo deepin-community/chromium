@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "ash/app_list/model/app_list_item_observer.h"
 #include "ash/ash_export.h"
@@ -42,7 +43,8 @@ class ASH_EXPORT FolderHeaderView : public views::View,
   bool is_tablet_mode() const { return is_tablet_mode_; }
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 
   views::Textfield* GetFolderNameViewForTest() const;
@@ -65,7 +67,7 @@ class ASH_EXPORT FolderHeaderView : public views::View,
   void UpdateFolderNameAccessibleName();
 
   // Gets and sets the folder name for test.
-  const std::u16string& GetFolderNameForTest();
+  std::u16string_view GetFolderNameForTest();
   void SetFolderNameForTest(const std::u16string& name);
 
   // Returns true if folder name is enabled, only for testing use.

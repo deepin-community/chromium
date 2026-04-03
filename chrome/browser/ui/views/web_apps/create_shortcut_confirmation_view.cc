@@ -13,8 +13,10 @@
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/web_apps/web_app_info_image_source.h"
+#include "chrome/browser/ui/views/web_apps/web_app_install_dialog_delegate.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
+#include "chrome/browser/ui/web_applications/web_app_info_image_source.h"
+#include "chrome/browser/web_applications/icons/icon_masker.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/common/chrome_features.h"
@@ -28,6 +30,8 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/controls/button/checkbox.h"
@@ -35,6 +39,7 @@
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/layout/table_layout.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/widget/widget.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -54,39 +59,6 @@ bool ShowRadioButtons() {
             base::FEATURE_DISABLED_BY_DEFAULT);
   return base::FeatureList::IsEnabled(blink::features::kDesktopPWAsTabStrip) &&
          base::FeatureList::IsEnabled(features::kDesktopPWAsTabStripSettings);
-}
-
-bool AllowOpenInWindowOptions() {
-#if BUILDFLAG(IS_CHROMEOS)
-  return !chromeos::features::IsCrosShortstandEnabled();
-#else
-  return true;
-#endif
-}
-
-// When pre-populating the shortcut name field (using the web app title) we
-// should try to make some effort to not suggest things we know work extra
-// poorly when used as filenames in the OS. This is especially problematic when
-// creating shortcuts to pages that have no title, because then the URL of the
-// page will be used as a suggestion, and (if accepted by the user) the shortcut
-// name will look really weird. For example, MacOS will convert a colon (:) to a
-// forward-slash (/), and Windows will convert the colons to spaces. MacOS even
-// goes a step further and collapses multiple consecutive forward-slashes in
-// localized names into a single forward-slash. That means, using 'https://foo'
-// as an example, a shortcut with a display name of 'https/foo' is created on
-// MacOS and 'https   foo' on Windows. By stripping away the schema, we will be
-// greatly reducing the frequency of shortcuts having weird names. Note: This
-// does not affect user's ability to use URLs as a shortcut name (which would
-// result in a weird filename), it only restricts what we suggest as titles.
-std::u16string NormalizeSuggestedAppTitle(const std::u16string& title) {
-  std::u16string normalized = title;
-  if (base::StartsWith(normalized, u"https://")) {
-    normalized = normalized.substr(8);
-  }
-  if (base::StartsWith(normalized, u"http://")) {
-    normalized = normalized.substr(7);
-  }
-  return normalized;
 }
 
 }  // namespace
@@ -125,24 +97,25 @@ CreateShortcutConfirmationView::CreateShortcutConfirmationView(
                  views::TableLayout::kFixedSize,
                  views::TableLayout::ColumnSize::kFixed, textfield_width, 0)
       .AddRows(1, views::TableLayout::kFixedSize)
-      .AddPaddingRow(
-          views::TableLayout::kFixedSize,
-          layout_provider->GetDistanceMetric(DISTANCE_CONTROL_LIST_VERTICAL))
+      .AddPaddingRow(views::TableLayout::kFixedSize,
+                     layout_provider->GetDistanceMetric(
+                         views::DISTANCE_CONTROL_LIST_VERTICAL))
       .AddRows(ShowRadioButtons() ? 3 : 1, views::TableLayout::kFixedSize);
 
+  auto dialog_model_info = web_app_info_->GetIconBitmapsForSecureSurfaces();
   gfx::Size image_size(web_app::kWebAppIconSmall, web_app::kWebAppIconSmall);
   gfx::ImageSkia image(
-      std::make_unique<WebAppInfoImageSource>(web_app::kWebAppIconSmall,
-                                              web_app_info_->icon_bitmaps.any),
+      std::make_unique<WebAppInfoImageSource>(
+          web_app::kWebAppIconSmall, std::move(dialog_model_info.bitmaps)),
       image_size);
 
   // Builds the header row child views.
   auto builder =
       views::Builder<CreateShortcutConfirmationView>(this)
           .SetButtonLabel(
-              ui::DIALOG_BUTTON_OK,
+              ui::mojom::DialogButton::kOk,
               l10n_util::GetStringUTF16(IDS_CREATE_SHORTCUTS_BUTTON_LABEL))
-          .SetModalType(ui::MODAL_TYPE_CHILD)
+          .SetModalType(ui::mojom::ModalType::kChild)
           .SetTitle(IDS_ADD_TO_OS_LAUNCH_SURFACE_BUBBLE_TITLE)
           .SetAcceptCallback(
               base::BindOnce(&CreateShortcutConfirmationView::OnAccept,
@@ -157,65 +130,72 @@ CreateShortcutConfirmationView::CreateShortcutConfirmationView(
               views::DialogContentType::kControl,
               views::DialogContentType::kText))
           .AddChildren(views::Builder<views::ImageView>()
+                           .CopyAddressTo(&icon_view_)
                            .SetImageSize(image_size)
                            .SetImage(ui::ImageModel::FromImageSkia(image)),
                        views::Builder<views::Textfield>()
                            .CopyAddressTo(&title_tf_)
-                           .SetText(NormalizeSuggestedAppTitle(
+                           .SetText(web_app::NormalizeSuggestedAppTitle(
                                g_title_to_use_for_app != nullptr
                                    ? base::ASCIIToUTF16(g_title_to_use_for_app)
-                                   : web_app_info_->title))
+                                   : web_app_info_->title.value()))
                            .SetAccessibleName(l10n_util::GetStringUTF16(
                                IDS_BOOKMARK_APP_AX_BUBBLE_NAME_LABEL))
                            .SetController(this));
 
+  if (dialog_model_info.is_maskable) {
+    web_app::MaskIconOnOs(
+        *image.bitmap(),
+        base::BindOnce(
+            &CreateShortcutConfirmationView::OnIconMaskedShowOnDialog,
+            weak_ptr_factory_.GetWeakPtr()));
+  }
+
   const auto display_mode = web_app_info_->user_display_mode;
 
-  if (AllowOpenInWindowOptions()) {
-    // Build the content child views.
-    if (ShowRadioButtons()) {
-      constexpr int kRadioGroupId = 0;
-      builder.AddChildren(
-          views::Builder<views::View>(),  // Skip the first column.
-          views::Builder<views::RadioButton>()
-              .CopyAddressTo(&open_as_tab_radio_)
-              .SetText(l10n_util::GetStringUTF16(
-                  IDS_BOOKMARK_APP_BUBBLE_OPEN_AS_TAB))
-              .SetGroup(kRadioGroupId)
-              .SetChecked(display_mode ==
-                          web_app::mojom::UserDisplayMode::kBrowser),
-          views::Builder<views::View>(),  // Column skip.
-          views::Builder<views::RadioButton>()
-              .CopyAddressTo(&open_as_window_radio_)
-              .SetText(l10n_util::GetStringUTF16(
-                  IDS_BOOKMARK_APP_BUBBLE_OPEN_AS_WINDOW))
-              .SetGroup(kRadioGroupId)
-              .SetChecked(
-                  display_mode != web_app::mojom::UserDisplayMode::kBrowser &&
-                  display_mode != web_app::mojom::UserDisplayMode::kTabbed),
-          views::Builder<views::View>(),  // Column skip.
-          views::Builder<views::RadioButton>()
-              .CopyAddressTo(&open_as_tabbed_window_radio_)
-              .SetText(l10n_util::GetStringUTF16(
-                  IDS_BOOKMARK_APP_BUBBLE_OPEN_AS_TABBED_WINDOW))
-              .SetGroup(kRadioGroupId)
-              .SetChecked(display_mode ==
-                          web_app::mojom::UserDisplayMode::kTabbed));
-    } else {
-      builder.AddChildren(
-          views::Builder<views::View>(),  // Column skip.
-          views::Builder<views::Checkbox>()
-              .CopyAddressTo(&open_as_window_checkbox_)
-              .SetText(l10n_util::GetStringUTF16(
-                  IDS_BOOKMARK_APP_BUBBLE_OPEN_AS_WINDOW))
-              .SetChecked(display_mode !=
-                          web_app::mojom::UserDisplayMode::kBrowser));
-    }
+  // Build the content child views.
+  if (ShowRadioButtons()) {
+    constexpr int kRadioGroupId = 0;
+    builder.AddChildren(
+        views::Builder<views::View>(),  // Skip the first column.
+        views::Builder<views::RadioButton>()
+            .CopyAddressTo(&open_as_tab_radio_)
+            .SetText(
+                l10n_util::GetStringUTF16(IDS_BOOKMARK_APP_BUBBLE_OPEN_AS_TAB))
+            .SetGroup(kRadioGroupId)
+            .SetChecked(display_mode ==
+                        web_app::mojom::UserDisplayMode::kBrowser),
+        views::Builder<views::View>(),  // Column skip.
+        views::Builder<views::RadioButton>()
+            .CopyAddressTo(&open_as_window_radio_)
+            .SetText(l10n_util::GetStringUTF16(
+                IDS_BOOKMARK_APP_BUBBLE_OPEN_AS_WINDOW))
+            .SetGroup(kRadioGroupId)
+            .SetChecked(
+                display_mode != web_app::mojom::UserDisplayMode::kBrowser &&
+                display_mode != web_app::mojom::UserDisplayMode::kTabbed),
+        views::Builder<views::View>(),  // Column skip.
+        views::Builder<views::RadioButton>()
+            .CopyAddressTo(&open_as_tabbed_window_radio_)
+            .SetText(l10n_util::GetStringUTF16(
+                IDS_BOOKMARK_APP_BUBBLE_OPEN_AS_TABBED_WINDOW))
+            .SetGroup(kRadioGroupId)
+            .SetChecked(display_mode ==
+                        web_app::mojom::UserDisplayMode::kTabbed));
+  } else {
+    builder.AddChildren(
+        views::Builder<views::View>(),  // Column skip.
+        views::Builder<views::Checkbox>()
+            .CopyAddressTo(&open_as_window_checkbox_)
+            .SetText(l10n_util::GetStringUTF16(
+                IDS_BOOKMARK_APP_BUBBLE_OPEN_AS_WINDOW))
+            .SetChecked(display_mode !=
+                        web_app::mojom::UserDisplayMode::kBrowser));
   }
 
   std::move(builder).BuildChildren();
 
-  if (g_auto_check_open_in_window_for_testing && AllowOpenInWindowOptions()) {
+  if (g_auto_check_open_in_window_for_testing) {
     if (ShowRadioButtons()) {
       open_as_window_radio_->SetChecked(true);
     } else {
@@ -234,8 +214,9 @@ bool CreateShortcutConfirmationView::ShouldShowCloseButton() const {
 }
 
 bool CreateShortcutConfirmationView::IsDialogButtonEnabled(
-    ui::DialogButton button) const {
-  return button == ui::DIALOG_BUTTON_OK ? !GetTrimmedTitle().empty() : true;
+    ui::mojom::DialogButton button) const {
+  return button == ui::mojom::DialogButton::kOk ? !GetTrimmedTitle().empty()
+                                                : true;
 }
 
 void CreateShortcutConfirmationView::ContentsChanged(
@@ -254,27 +235,27 @@ std::u16string CreateShortcutConfirmationView::GetTrimmedTitle() const {
 void CreateShortcutConfirmationView::OnAccept() {
   CHECK(web_app_info_);
   web_app_info_->title = GetTrimmedTitle();
-  if (AllowOpenInWindowOptions()) {
-    if (ShowRadioButtons()) {
-      if (open_as_tabbed_window_radio_->GetChecked()) {
-        web_app_info_->user_display_mode =
-            web_app::mojom::UserDisplayMode::kTabbed;
-      } else {
-        web_app_info_->user_display_mode =
-            open_as_window_radio_->GetChecked()
-                ? web_app::mojom::UserDisplayMode::kStandalone
-                : web_app::mojom::UserDisplayMode::kBrowser;
-      }
+  if (ShowRadioButtons()) {
+    if (open_as_tabbed_window_radio_->GetChecked()) {
+      web_app_info_->user_display_mode =
+          web_app::mojom::UserDisplayMode::kTabbed;
     } else {
       web_app_info_->user_display_mode =
-          open_as_window_checkbox_->GetChecked()
+          open_as_window_radio_->GetChecked()
               ? web_app::mojom::UserDisplayMode::kStandalone
               : web_app::mojom::UserDisplayMode::kBrowser;
     }
   } else {
     web_app_info_->user_display_mode =
-        web_app::mojom::UserDisplayMode::kBrowser;
+        open_as_window_checkbox_->GetChecked()
+            ? web_app::mojom::UserDisplayMode::kStandalone
+            : web_app::mojom::UserDisplayMode::kBrowser;
   }
+
+  if (base::FeatureList::IsEnabled(features::kDisableShortcutsEnableDiy)) {
+    web_app_info_->is_diy_app = true;
+  }
+
   install_tracker_->ReportResult(webapps::MlInstallUserResponse::kAccepted);
   // Some tests repeatedly create this class, and it's not guaranteed this class
   // is destroyed for subsequent calls. So reset the tracker manually here.
@@ -301,6 +282,14 @@ void CreateShortcutConfirmationView::RunCloseCallbackIfExists() {
   }
 }
 
+void CreateShortcutConfirmationView::OnIconMaskedShowOnDialog(
+    SkBitmap masked_bitmap) {
+  CHECK(icon_view_);
+  gfx::Image masked_image =
+      gfx::Image::CreateFrom1xBitmap(std::move(masked_bitmap));
+  icon_view_->SetImage(ui::ImageModel::FromImage(masked_image));
+}
+
 BEGIN_METADATA(CreateShortcutConfirmationView)
 ADD_READONLY_PROPERTY_METADATA(std::u16string, TrimmedTitle)
 END_METADATA
@@ -313,7 +302,6 @@ void ShowCreateShortcutDialog(
     std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker,
     AppInstallationAcceptanceCallback callback) {
   CHECK(web_app_info);
-  CHECK(web_app_info->manifest_id.is_valid());
   CHECK(install_tracker);
   auto* dialog = new CreateShortcutConfirmationView(
       std::move(web_app_info), std::move(install_tracker), std::move(callback));

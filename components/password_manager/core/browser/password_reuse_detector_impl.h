@@ -15,10 +15,12 @@
 #include <string>
 #include <vector>
 
+#include "base/sequence_checker.h"
 #include "components/password_manager/core/browser/hash_password_manager.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_reuse_detector.h"
 #include "components/password_manager/core/browser/password_store/password_store_change.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace password_manager {
 
@@ -45,6 +47,7 @@ class PasswordReuseDetectorImpl : public PasswordReuseDetector {
       const password_manager::PasswordStoreChangeList& changes) override;
 
   void OnLoginsRetained(
+      PasswordForm::Store password_store_type,
       const std::vector<PasswordForm>& retained_passwords) override;
 
   // Clears all the cached passwords which are stored on the account store.
@@ -88,6 +91,21 @@ class PasswordReuseDetectorImpl : public PasswordReuseDetector {
                std::set<MatchingReusedCredential>,
                ReverseStringLess>;
 
+  struct PasswordLengthAndMatchingCredentials {
+    PasswordLengthAndMatchingCredentials();
+    ~PasswordLengthAndMatchingCredentials();
+    PasswordLengthAndMatchingCredentials(
+        const PasswordLengthAndMatchingCredentials&);
+    PasswordLengthAndMatchingCredentials& operator=(
+        const PasswordLengthAndMatchingCredentials&);
+
+    int password_length = 0;
+    std::set<MatchingReusedCredential> matching_credentials;
+  };
+
+  using PasswordsReusedCredentialsHashMap =
+      absl::flat_hash_map<uint64_t, PasswordLengthAndMatchingCredentials>;
+
   using passwords_iterator = PasswordsReusedCredentialsMap::const_iterator;
 
   // Add password from |form| to |passwords_| and
@@ -97,6 +115,10 @@ class PasswordReuseDetectorImpl : public PasswordReuseDetector {
   // Remove password of |form| from
   // |passwords_with_matching_reused_credentials_|;
   void RemovePassword(const PasswordForm& form);
+
+  // Removes all the credentials coming from |store_type| store from
+  // |passwords_with_matching_reused_credentials_|.
+  void RemoveAllLoginsByStoreType(PasswordForm::Store store_type);
 
   // If Gaia password reuse is found, return the PasswordHashData of the reused
   // password. If no reuse is found, return |std::nullopt|.
@@ -110,10 +132,10 @@ class PasswordReuseDetectorImpl : public PasswordReuseDetector {
       const std::u16string& input,
       const std::string& domain);
 
-  // If saved-password reuse is found, fill in the MatchingReusedCredentials
-  // that match any reused password, and return the longest password matched. If
-  // no reuse is found, return an empty string.
-  std::u16string CheckSavedPasswordReuse(
+  // If saved-password reuse is found, fills in the MatchingReusedCredentials
+  // with any reused password, and returns password hash and length of longest
+  // reused password.
+  std::pair<uint64_t, size_t> CheckSavedPasswordReuseBasedOnHash(
       const std::u16string& input,
       const std::string& domain,
       std::vector<MatchingReusedCredential>* matching_reused_credentials_out);
@@ -143,6 +165,10 @@ class PasswordReuseDetectorImpl : public PasswordReuseDetector {
   // sequence.
   SEQUENCE_CHECKER(sequence_checker_);
 
+  // Salt used for hashing passwords in
+  // |password_hashes_with_matching_reused_credentials_|.
+  const std::string salt_;
+
   // Contains all passwords.
   // A key is a password.
   // A value is a set of pairs of signon_realms and username on which the
@@ -154,6 +180,14 @@ class PasswordReuseDetectorImpl : public PasswordReuseDetector {
   // See https://crbug.com/668155.
   PasswordsReusedCredentialsMap passwords_with_matching_reused_credentials_
       GUARDED_BY_CONTEXT(sequence_checker_);
+
+  // Key: 37 bit hash prefix of a password.
+  // Value: reused credentials corresponding to this password and password
+  // length. This map is used to check for hashed suffixes of an input in an
+  // efficient manner.
+  PasswordsReusedCredentialsHashMap
+      password_hashes_with_matching_reused_credentials_
+          GUARDED_BY_CONTEXT(sequence_checker_);
 
   std::optional<std::vector<PasswordHashData>> gaia_password_hash_data_list_
       GUARDED_BY_CONTEXT(sequence_checker_);

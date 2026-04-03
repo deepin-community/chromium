@@ -16,29 +16,26 @@
 
 #include "src/trace_processor/importers/proto/content_analyzer.h"
 
-#include "perfetto/ext/base/string_utils.h"
+#include <cstdint>
+#include <optional>
+#include <string>
+
+#include "perfetto/ext/base/flat_hash_map.h"
+#include "perfetto/ext/base/string_view.h"
+#include "perfetto/trace_processor/trace_blob_view.h"
 #include "src/trace_processor/importers/common/args_tracker.h"
-#include "src/trace_processor/importers/proto/content_analyzer.h"
 #include "src/trace_processor/storage/trace_storage.h"
+#include "src/trace_processor/tables/trace_proto_tables_py.h"
+#include "src/trace_processor/types/trace_processor_context.h"
+#include "src/trace_processor/types/variadic.h"
+#include "src/trace_processor/util/proto_profiler.h"
 
-#include "src/trace_processor/importers/proto/trace.descriptor.h"
-
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
 ProtoContentAnalyzer::ProtoContentAnalyzer(TraceProcessorContext* context)
     : context_(context),
-      pool_([]() {
-        DescriptorPool pool;
-        base::Status status = pool.AddFromFileDescriptorSet(
-            kTraceDescriptor.data(), kTraceDescriptor.size());
-        if (!status.ok()) {
-          PERFETTO_ELOG("Could not add TracePacket proto descriptor %s",
-                        status.c_message());
-        }
-        return pool;
-      }()),
-      computer_(&pool_, ".perfetto.protos.TracePacket") {}
+      computer_(context_->descriptor_pool_.get(),
+                ".perfetto.protos.TracePacket") {}
 
 ProtoContentAnalyzer::~ProtoContentAnalyzer() = default;
 
@@ -59,20 +56,20 @@ void ProtoContentAnalyzer::ProcessPacket(
   }
 }
 
-void ProtoContentAnalyzer::NotifyEndOfFile() {
+void ProtoContentAnalyzer::OnEventsFullyExtracted() {
   // TODO(kraskevich): consider generating a flamegraph-compatable table once
   // Perfetto UI supports custom flamegraphs (b/227644078).
   for (auto annotated_map = aggregated_samples_.GetIterator(); annotated_map;
        ++annotated_map) {
     base::FlatHashMap<util::SizeProfileComputer::FieldPath,
                       tables::ExperimentalProtoPathTable::Id,
-                      util::SizeProfileComputer::FieldPathHasher>
+                      base::MurmurHash<util::SizeProfileComputer::FieldPath>>
         path_ids;
     for (auto sample = annotated_map.value().GetIterator(); sample; ++sample) {
       std::string path_string;
       std::optional<tables::ExperimentalProtoPathTable::Id> previous_path_id;
       util::SizeProfileComputer::FieldPath path;
-      for (const auto& field : sample.key()) {
+      for (const auto& field : sample.key().fields) {
         if (field.has_field_name()) {
           if (!path_string.empty()) {
             path_string += '.';
@@ -84,7 +81,7 @@ void ProtoContentAnalyzer::NotifyEndOfFile() {
         }
         path_string.append(field.type_name());
 
-        path.push_back(field);
+        path.fields.push_back(field);
         // Reuses existing path from |path_ids| if possible.
         {
           auto* path_id = path_ids.Find(path);
@@ -110,7 +107,8 @@ void ProtoContentAnalyzer::NotifyEndOfFile() {
                 .id;
         if (!previous_path_id.has_value()) {
           // Add annotations to the current row as an args set.
-          auto inserter = context_->args_tracker->AddArgsTo(path_id);
+          ArgsTracker args_tracker(context_);
+          auto inserter = args_tracker.AddArgsTo(path_id);
           for (auto& annotation : annotated_map.key()) {
             inserter.AddArg(annotation.first,
                             Variadic::String(annotation.second));
@@ -135,5 +133,4 @@ void ProtoContentAnalyzer::NotifyEndOfFile() {
   aggregated_samples_.Clear();
 }
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

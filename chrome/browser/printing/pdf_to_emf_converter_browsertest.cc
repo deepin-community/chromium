@@ -4,11 +4,13 @@
 
 #include "chrome/browser/printing/pdf_to_emf_converter.h"
 
-#include <stdint.h>
 #include <windows.h>
+
+#include <stdint.h>
 
 #include <limits>
 #include <optional>
+#include <string_view>
 
 #include "base/containers/span.h"
 #include "base/files/file_util.h"
@@ -23,6 +25,7 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
+#include "crypto/hash.h"
 #include "printing/emf_win.h"
 #include "printing/metafile.h"
 #include "printing/pdf_render_settings.h"
@@ -66,15 +69,16 @@ void GetPageCallbackImpl(base::OnceClosure quit_closure,
 // `page_number` is 0-based. Returned result has 1-based page number.
 std::string GetFileNameForPageNumber(const std::string& name, int page_number) {
   std::string ret = name;
-  ret += std::to_string(page_number + 1);
+  ret += base::NumberToString(page_number + 1);
   ret += ".emf";
   return ret;
 }
 
 std::unique_ptr<ENHMETAHEADER> GetEmfHeader(const std::string& emf_data) {
   Emf emf;
-  if (!emf.InitFromData(base::as_bytes(base::make_span(emf_data))))
+  if (!emf.InitFromData(base::as_byte_span(emf_data))) {
     return nullptr;
+  }
 
   auto meta_header = std::make_unique<ENHMETAHEADER>();
   if (GetEnhMetaFileHeader(emf.emf(), kHeaderSize, meta_header.get()) !=
@@ -86,7 +90,7 @@ std::unique_ptr<ENHMETAHEADER> GetEmfHeader(const std::string& emf_data) {
 
 void CompareEmfHeaders(const ENHMETAHEADER& expected_header,
                        const ENHMETAHEADER& actual_header) {
-  // TODO(crbug.com/781403): once the EMF generation is fixed, also compare:
+  // TODO(crbug.com/40548087): once the EMF generation is fixed, also compare:
   //  rclBounds, rclFrame, szlDevice, szlMillimeters and szlMicrometers.
   EXPECT_EQ(expected_header.iType, actual_header.iType);
   EXPECT_EQ(expected_header.nSize, actual_header.nSize);
@@ -104,9 +108,8 @@ void CompareEmfHeaders(const ENHMETAHEADER& expected_header,
   EXPECT_EQ(expected_header.bOpenGL, actual_header.bOpenGL);
 }
 
-std::string HashData(const char* data, size_t len) {
-  auto span = base::make_span(reinterpret_cast<const uint8_t*>(data), len);
-  return base::HexEncode(base::SHA1HashSpan(span));
+std::string HashData(base::span<const uint8_t> data) {
+  return base::HexEncode(crypto::hash::Sha256(data));
 }
 
 class PdfToEmfConverterBrowserTest
@@ -123,8 +126,8 @@ class PdfToEmfConverterBrowserTest
 
   void RunSinglePagePdfToPostScriptConverterTest(
       const PdfRenderSettings& pdf_settings,
-      base::StringPiece input_filename,
-      base::StringPiece output_filename) {
+      std::string_view input_filename,
+      std::string_view output_filename) {
     ASSERT_TRUE(GetTestInput(input_filename));
     ASSERT_TRUE(StartPdfConverter(pdf_settings, 1));
     ASSERT_TRUE(GetPage(0));
@@ -134,7 +137,7 @@ class PdfToEmfConverterBrowserTest
     ComparePageEmfPayload();
   }
 
-  bool GetTestInput(base::StringPiece filename) {
+  bool GetTestInput(std::string_view filename) {
     base::ScopedAllowBlockingForTesting allow_blocking;
 
     if (test_data_dir_.empty())
@@ -180,7 +183,7 @@ class PdfToEmfConverterBrowserTest
     return GetEmfData();
   }
 
-  bool GetPageExpectedEmfData(base::StringPiece filename) {
+  bool GetPageExpectedEmfData(std::string_view filename) {
     base::ScopedAllowBlockingForTesting allow_blocking;
 
     base::FilePath emf_file = test_data_dir_.AppendASCII(filename);
@@ -189,7 +192,7 @@ class PdfToEmfConverterBrowserTest
   }
 
   void ComparePageEmfHeader() {
-    // TODO(crbug.com/781403): the generated data can differ visually. Until
+    // TODO(crbug.com/40548087): the generated data can differ visually. Until
     // this is fixed only checking the output size and parts of the EMF header.
     ASSERT_EQ(expected_current_emf_data_.size(),
               actual_current_emf_data_.size());
@@ -207,9 +210,10 @@ class PdfToEmfConverterBrowserTest
     ASSERT_EQ(expected_current_emf_data_.size(),
               actual_current_emf_data_.size());
     ASSERT_GT(expected_current_emf_data_.size(), kHeaderSize);
-    size_t size = expected_current_emf_data_.size() - kHeaderSize;
-    EXPECT_EQ(HashData(expected_current_emf_data_.data() + kHeaderSize, size),
-              HashData(actual_current_emf_data_.data() + kHeaderSize, size));
+    auto expected_span = base::as_byte_span(expected_current_emf_data_);
+    auto actual_span = base::as_byte_span(actual_current_emf_data_);
+    EXPECT_EQ(HashData(expected_span.subspan(kHeaderSize)),
+              HashData(actual_span.subspan(kHeaderSize)));
   }
 
  private:
@@ -257,7 +261,8 @@ IN_PROC_BROWSER_TEST_P(PdfToEmfConverterBrowserTest, FailureNoTempFile) {
 
 IN_PROC_BROWSER_TEST_P(PdfToEmfConverterBrowserTest, FailureBadPdf) {
   scoped_refptr<base::RefCountedStaticMemory> bad_pdf_data =
-      base::MakeRefCounted<base::RefCountedStaticMemory>("0123456789", 10);
+      base::MakeRefCounted<base::RefCountedStaticMemory>(
+          base::byte_span_from_cstring("0123456789"));
 
   base::RunLoop run_loop;
   uint32_t page_count = kInvalidPageCount;

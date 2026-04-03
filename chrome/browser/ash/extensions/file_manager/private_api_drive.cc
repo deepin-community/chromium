@@ -22,11 +22,13 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_root.h"
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_root_map.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/ash/drive/file_system_util.h"
 #include "chrome/browser/ash/extensions/file_manager/event_router.h"
 #include "chrome/browser/ash/extensions/file_manager/event_router_factory.h"
@@ -41,7 +43,6 @@
 #include "chrome/browser/ash/fileapi/file_system_backend.h"
 #include "chrome/browser/ash/fileapi/recent_drive_source.h"
 #include "chrome/browser/ash/fusebox/fusebox_server.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/drivefs/drivefs_native_message_host.h"
 #include "chrome/browser/chromeos/drivefs/drivefs_native_message_host_origins.h"
 #include "chrome/browser/net/system_network_context_manager.h"
@@ -59,6 +60,7 @@
 #include "components/drive/chromeos/search_metadata.h"
 #include "components/drive/drive_pref_names.h"
 #include "components/drive/event_logger.h"
+#include "components/drive/file_errors.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -349,7 +351,7 @@ class SingleEntryPropertiesGetterForDocumentsProvider {
 void OnSearchDriveFs(
     scoped_refptr<ExtensionFunction> function,
     bool filter_dirs,
-    base::OnceCallback<void(std::optional<base::Value::List>)> callback,
+    base::OnceCallback<void(std::optional<base::ListValue>)> callback,
     drive::FileError error,
     std::optional<std::vector<drivefs::mojom::QueryItemPtr>> items) {
   Profile* const profile =
@@ -357,11 +359,14 @@ void OnSearchDriveFs(
   DriveIntegrationService* const service =
       GetIntegrationServiceByProfile(profile);
   if (!service) {
+    LOG(ERROR) << "No drive service";
     std::move(callback).Run(std::nullopt);
     return;
   }
 
   if (error != drive::FILE_ERROR_OK || !items.has_value()) {
+    LOG_IF(ERROR, error != drive::FILE_ERROR_OK)
+        << "Drive search failed: " << drive::FileErrorToString(error);
     std::move(callback).Run(std::nullopt);
     return;
   }
@@ -373,13 +378,13 @@ void OnSearchDriveFs(
   const auto fs_name = service->GetMountPointPath().BaseName().value();
   const base::FilePath root("/");
 
-  base::Value::List result;
+  base::ListValue result;
   for (const auto& item : *items) {
     base::FilePath path;
     if (!root.AppendRelativePath(item->path, &path)) {
       path = item->path;
     }
-    base::Value::Dict entry;
+    base::DictValue entry;
     entry.Set("fileSystemName", fs_name);
     entry.Set("fileSystemRoot", fs_root);
     entry.Set("fileFullPath", item->path.AsUTF8Unsafe());
@@ -398,16 +403,13 @@ drivefs::mojom::QueryParameters::QuerySource SearchDriveFs(
     scoped_refptr<ExtensionFunction> function,
     drivefs::mojom::QueryParametersPtr query,
     bool filter_dirs,
-    base::OnceCallback<void(std::optional<base::Value::List>)> callback) {
+    base::OnceCallback<void(std::optional<base::ListValue>)> callback) {
   DriveIntegrationService* const service = GetIntegrationServiceByProfile(
       Profile::FromBrowserContext(function->browser_context()));
   auto on_response = base::BindOnce(&OnSearchDriveFs, std::move(function),
                                     filter_dirs, std::move(callback));
-  return service->GetDriveFsHost()->PerformSearch(
-      std::move(query),
-      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-          std::move(on_response), drive::FileError::FILE_ERROR_ABORT,
-          std::optional<std::vector<drivefs::mojom::QueryItemPtr>>()));
+  return service->GetDriveFsHost()->PerformSearch(std::move(query),
+                                                  std::move(on_response));
 }
 
 void UmaEmitSearchOutcome(
@@ -662,7 +664,7 @@ ExtensionFunction::ResponseAction FileManagerPrivateSearchDriveFunction::Run() {
 }
 
 void FileManagerPrivateSearchDriveFunction::OnSearchDriveFs(
-    std::optional<base::Value::List> results) {
+    std::optional<base::ListValue> results) {
   using api::file_manager_private::SearchDriveResponse;
   if (!results) {
     UmaEmitSearchOutcome(
@@ -708,11 +710,11 @@ FileManagerPrivateSearchDriveMetadataFunction::Run() {
 
   Profile* const profile = Profile::FromBrowserContext(browser_context());
   if (drive::EventLogger* logger = file_manager::util::GetLogger(profile)) {
-    logger->Log(
+    UNSAFE_TODO(logger->Log(
         logging::LOGGING_INFO, "%s[%s] called. (types: '%s', maxResults: '%d')",
         name(), request_uuid().AsLowercaseString().c_str(),
         api::file_manager_private::ToString(params->search_params.types),
-        params->search_params.max_results);
+        params->search_params.max_results));
   }
   set_log_on_completion(true);
 
@@ -786,7 +788,7 @@ FileManagerPrivateSearchDriveMetadataFunction::Run() {
 
 void FileManagerPrivateSearchDriveMetadataFunction::OnSearchDriveFs(
     const std::string& query_text,
-    std::optional<base::Value::List> results) {
+    std::optional<base::ListValue> results) {
   if (!results) {
     UmaEmitSearchOutcome(false, !is_offline_, search_type_, operation_start_);
     Respond(Error("No search results"));
@@ -808,11 +810,11 @@ void FileManagerPrivateSearchDriveMetadataFunction::OnSearchDriveFs(
             keyword));
   }
 
-  base::Value::List results_list;
+  base::ListValue results_list;
   for (auto& item : *results) {
-    base::Value::Dict& entry = item.GetDict();
+    base::DictValue& entry = item.GetDict();
 
-    base::Value::Dict dict;
+    base::DictValue dict;
     std::string highlight;
     std::string* value = entry.FindString("fileFullPath");
     if (value) {

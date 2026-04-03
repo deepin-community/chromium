@@ -9,7 +9,6 @@
 
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/views/message_view.h"
-#include "ui/views/metadata/view_factory_internal.h"
 
 using MessageView = message_center::MessageView;
 using Notification = message_center::Notification;
@@ -20,10 +19,13 @@ class NotificationControlButtonsView;
 
 namespace views {
 class FlexLayoutView;
+class Label;
 }
 
 namespace ash {
 
+class NotificationActionsView;
+class AshNotificationExpandButton;
 class TimestampView;
 
 class ASH_EXPORT ConversationNotificationView
@@ -41,6 +43,7 @@ class ASH_EXPORT ConversationNotificationView
     kExpandButton,
     kMainIcon,
     kTitleLabel,
+    kAppNameLabel,
   };
 
   explicit ConversationNotificationView(const Notification& notification);
@@ -55,7 +58,6 @@ class ASH_EXPORT ConversationNotificationView
 
   // message_center::MessageView:
   bool IsExpanded() const override;
-  void OnThemeChanged() override;
   void UpdateWithNotification(
       const message_center::Notification& notification) override;
   message_center::NotificationControlButtonsView* GetControlButtonsView()
@@ -76,13 +78,18 @@ class ASH_EXPORT ConversationNotificationView
   // Whether this notification is expanded or not.
   bool expanded_ = true;
 
+  raw_ptr<NotificationActionsView> actions_view_ = nullptr;
   raw_ptr<views::View> conversations_container_ = nullptr;
   raw_ptr<views::View> collapsed_preview_container_ = nullptr;
   raw_ptr<message_center::NotificationControlButtonsView>
       control_buttons_view_ = nullptr;
+  raw_ptr<AshNotificationExpandButton> expand_button_ = nullptr;
   raw_ptr<views::View> inline_settings_view_ = nullptr;
   raw_ptr<views::View> right_controls_container_ = nullptr;
   raw_ptr<TimestampView> timestamp_ = nullptr;
+  raw_ptr<views::Label> title_ = nullptr;
+  raw_ptr<views::Label> app_name_view_ = nullptr;
+  raw_ptr<views::Label> app_name_divider_ = nullptr;
 };
 }  // namespace ash
 

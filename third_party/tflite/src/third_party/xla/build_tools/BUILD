@@ -13,10 +13,9 @@
 # limitations under the License.
 # ============================================================================
 
-load("//xla:pytype.default.bzl", "pytype_strict_library")
+load("//xla:pytype.bzl", "pytype_strict_library")
 
 package(
-    default_visibility = ["//visibility:public"],
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     licenses = ["notice"],
 )

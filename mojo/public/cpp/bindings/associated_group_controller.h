@@ -9,10 +9,13 @@
 
 #include "base/component_export.h"
 #include "base/memory/ref_counted.h"
-#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/disconnect_reason.h"
 #include "mojo/public/cpp/bindings/interface_id.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
+
+namespace base {
+class SequencedTaskRunner;
+}  // namespace base
 
 namespace mojo {
 
@@ -48,6 +51,13 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) AssociatedGroupController
   virtual void CloseEndpointHandle(
       InterfaceId id,
       const std::optional<DisconnectReason>& reason) = 0;
+
+  // Notifies the controller that the peer of interface `id` has been closed.
+  // Normally this notification comes from a remote client on the underlying
+  // pipe, but in some cases the remote client may never have been made aware of
+  // the new associated interface and will not be able to send such a
+  // notification.
+  virtual void NotifyLocalEndpointOfPeerClosure(InterfaceId id) = 0;
 
   // Attaches a client to the specified endpoint to send and receive messages.
   // The returned object is still owned by the controller. It must only be used

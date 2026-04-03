@@ -12,10 +12,6 @@
 #include "base/values.h"
 #include "components/policy/policy_export.h"
 
-namespace base {
-class Value;
-}
-
 namespace policy {
 
 POLICY_EXPORT extern const char kChromeMetadataVersionKey[];
@@ -78,13 +74,13 @@ struct POLICY_EXPORT JsonGenerationParams {
 // is stored in |params| and also information that is statically available.
 // Expects |policy_values| in the format PolicyValueProvider returns. Expects
 // |status| in the format policy::PolicyStatusProvider returns.
-POLICY_EXPORT std::string GenerateJson(base::Value::Dict policy_values,
-                                       base::Value::Dict status,
+POLICY_EXPORT std::string GenerateJson(base::DictValue policy_values,
+                                       base::DictValue status,
                                        const JsonGenerationParams& params);
 
 // Returns metadata about the current device/build, based both on what
 // is stored in |params| and also information that is statically available.
-POLICY_EXPORT base::Value::Dict GetChromeMetadataValue(
+POLICY_EXPORT base::DictValue GetChromeMetadataValue(
     const JsonGenerationParams& params);
 
 }  // namespace policy

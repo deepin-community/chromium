@@ -5,7 +5,6 @@
 #include "chrome/browser/browsing_data/counters/browsing_data_counter_utils.h"
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
@@ -17,7 +16,7 @@
 #include "components/sync/test/fake_server_network_resources.h"
 #include "content/public/test/browser_test.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #endif
@@ -36,7 +35,7 @@ class BrowsingDataCounterUtilsBrowserTest : public SyncTest {
   ~BrowsingDataCounterUtilsBrowserTest() override = default;
 };
 
-// TODO(https://crbug.com/1491584): Test is flaky on ChromeOS.
+// TODO(crbug.com/40935822): Test is flaky on ChromeOS.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_ShouldShowCookieException DISABLED_ShouldShowCookieException
 #else
@@ -53,8 +52,20 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataCounterUtilsBrowserTest,
   // Sign the profile in.
   EXPECT_TRUE(GetClient(0)->SignInPrimaryAccount());
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  // Users on Dice platforms are explicitly signed in.
+  // Cookies are rebuilt on clearing cookie events.
+  EXPECT_TRUE(ShouldShowCookieException(GetProfile(0)));
+
+  // Verify it's you state.
+  GetClient(0)->SignOutPrimaryAccount();
+
+  // There's no point in showing the cookie exception.
+  EXPECT_FALSE(ShouldShowCookieException(GetProfile(0)));
+#else
   // Sign-in alone shouldn't lead to a cookie exception.
   EXPECT_FALSE(ShouldShowCookieException(GetProfile(0)));
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   // Enable sync.
   EXPECT_TRUE(GetClient(0)->SetupSync());

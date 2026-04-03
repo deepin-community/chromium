@@ -236,15 +236,24 @@ def HaveSrcInternalAccess():
         # Credential Manager for Windows 1.12. See https://crbug.com/755694 and
         # https://github.com/Microsoft/Git-Credential-Manager-for-Windows/issues/482.
         child_env = dict(os.environ, GCM_INTERACTIVE='NEVER')
-        return subprocess.call([
-            'git', '-c', 'core.askpass=true', 'remote', 'show',
-            'https://chrome-internal.googlesource.com/chrome/src-internal/'
-        ],
-                               shell=True,
-                               stdin=nul,
-                               stdout=nul,
-                               stderr=nul,
-                               env=child_env) == 0
+        # If this script is run from an embedded terminal in VSCode, VSCode may
+        # intercept the git call and show an easily-missable username/passsword
+        # prompt. To ensure we can run without user input, just return false if
+        # we don't get a response quickly. See crbug.com/376067358.
+        try:
+            return subprocess.call(
+                [
+                    'git', '-c', 'core.askpass=true', 'remote', 'show',
+                    'https://chrome-internal.googlesource.com/chrome/src-internal/'
+                ],
+                shell=True,
+                stdin=nul,
+                stdout=nul,
+                stderr=nul,
+                timeout=10,  # seconds
+                env=child_env) == 0
+        except subprocess.TimeoutExpired:
+            return False
 
 
 def LooksLikeGoogler():
@@ -465,6 +474,30 @@ def EnableCrashDumpCollection():
             pass
 
 
+def SetupJunction(target_dir):
+    """Sets up junction for toolchain dir."""
+    junction_dir = os.path.join(BASEDIR, 'vs_files')
+    if junction_dir == target_dir:
+        return target_dir
+    if not sys.platform.startswith('win32'):
+        # build/vs_toolchain.py sets up ciopfs on vs_files,
+        # so using different target_dir won't work on Linux?
+        return target_dir
+    if os.path.exists(junction_dir):
+        try:
+            if os.path.samefile(os.readlink(junction_dir), target_dir):
+                return junction_dir
+        except:
+            # os.readlink may fail if junction_dir is not junction or symlink
+            pass
+        RmDir(junction_dir)
+    print('Setup a directory junction %s to %s' % (junction_dir, target_dir))
+    subprocess.run(['mklink', '/J', junction_dir, target_dir],
+                   shell=True,
+                   check=True)
+    return junction_dir
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -485,6 +518,10 @@ def main():
     parser.add_argument('desired_hash',
                         metavar='desired-hash',
                         help='toolchain hash to download')
+    parser.add_argument(
+        '--no-junction',
+        action='store_true',
+        help='don\'t setup junction for toolchain dir on Windows')
     args = parser.parse_args()
 
     if not (sys.platform.startswith(('cygwin', 'win32')) or args.force):
@@ -508,16 +545,20 @@ def main():
     toolchain_dir = os.path.abspath(args.toolchain_dir)
     if not os.path.isdir(toolchain_dir):
         os.makedirs(toolchain_dir)
-    os.chdir(toolchain_dir)
 
+    abs_target_dir = os.path.join(toolchain_dir, 'vs_files')
+    if not os.path.isdir(abs_target_dir):
+        os.mkdir(abs_target_dir)
+    if not args.no_junction:
+        # Set up a directory junction in BASEDIR to toolchain_dir
+        # so toolchain files can be accessible under exec root.
+        abs_target_dir = SetupJunction(abs_target_dir)
     # Move to depot_tools\win_toolchain where we'll store our files, and where
     # the downloader script is.
+    os.chdir(os.path.dirname(abs_target_dir))
     target_dir = 'vs_files'
-    if not os.path.isdir(target_dir):
-        os.mkdir(target_dir)
-    toolchain_target_dir = os.path.join(target_dir, args.desired_hash)
-
-    abs_toolchain_target_dir = os.path.abspath(toolchain_target_dir)
+    toolchain_target_dir = os.path.join('vs_files', args.desired_hash)
+    abs_toolchain_target_dir = os.path.join(abs_target_dir, args.desired_hash)
 
     got_new_toolchain = False
 
@@ -532,7 +573,9 @@ def main():
                 'Toolchain is out of date. Run "gclient runhooks" to '
                 'update the toolchain, or set '
                 'DEPOT_TOOLS_WIN_TOOLCHAIN=0 to use the locally '
-                'installed toolchain.')
+                'installed toolchain.\n'
+                'Note: DEPOT_TOOLS_WIN_TOOLCHAIN=0 does not work with '
+                'remote execution.')
         should_use_file = False
         should_use_http = False
         should_use_gs = False
@@ -557,6 +600,8 @@ def main():
                     '\n\n\nNo downloadable toolchain found. In order to use your '
                     'locally installed version of Visual Studio to build Chrome '
                     'please set DEPOT_TOOLS_WIN_TOOLCHAIN=0.\n'
+                    'Note: DEPOT_TOOLS_WIN_TOOLCHAIN=0 does not work with '
+                    'remote execution.\n'
                     'For details search for DEPOT_TOOLS_WIN_TOOLCHAIN in the '
                     'instructions at %s\n\n' % doc)
             return 1

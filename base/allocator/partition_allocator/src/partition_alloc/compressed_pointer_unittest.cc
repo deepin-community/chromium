@@ -4,8 +4,9 @@
 
 #include "partition_alloc/compressed_pointer.h"
 
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/partition_alloc.h"
-#include "partition_alloc/partition_alloc_buildflags.h"
+#include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_root.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -47,14 +48,14 @@ std::unique_ptr<T[], PADeleter> make_pa_array_unique(PartitionAllocator& alloc,
 }
 
 // Test that pointer types are trivial.
-#if BUILDFLAG(ENABLE_POINTER_COMPRESSION)
+#if PA_BUILDFLAG(ENABLE_POINTER_COMPRESSION)
 static_assert(
     std::is_trivially_default_constructible_v<CompressedPointer<Base>>);
 static_assert(std::is_trivially_copy_constructible_v<CompressedPointer<Base>>);
 static_assert(std::is_trivially_move_constructible_v<CompressedPointer<Base>>);
 static_assert(std::is_trivially_copy_assignable_v<CompressedPointer<Base>>);
 static_assert(std::is_trivially_move_assignable_v<CompressedPointer<Base>>);
-#endif  // BUILDFLAG(ENABLE_POINTER_COMPRESSION)
+#endif  // PA_BUILDFLAG(ENABLE_POINTER_COMPRESSION)
 static_assert(
     std::is_trivially_default_constructible_v<UncompressedPointer<Base>>);
 static_assert(
@@ -72,16 +73,16 @@ struct CompressedTypeTag {};
 template <typename TagType>
 class CompressedPointerTest : public ::testing::Test {
  public:
-#if BUILDFLAG(ENABLE_POINTER_COMPRESSION)
+#if PA_BUILDFLAG(ENABLE_POINTER_COMPRESSION)
   template <typename T>
   using PointerType =
       std::conditional_t<std::is_same_v<TagType, CompressedTypeTag>,
                          CompressedPointer<T>,
                          UncompressedPointer<T>>;
-#else   // BUILDFLAG(ENABLE_POINTER_COMPRESSION)
+#else   // PA_BUILDFLAG(ENABLE_POINTER_COMPRESSION)
   template <typename T>
   using PointerType = UncompressedPointer<T>;
-#endif  // BUILDFLAG(ENABLE_POINTER_COMPRESSION)
+#endif  // PA_BUILDFLAG(ENABLE_POINTER_COMPRESSION)
 
   CompressedPointerTest() : allocator_(PartitionOptions{}) {}
 
@@ -89,7 +90,7 @@ class CompressedPointerTest : public ::testing::Test {
   PartitionAllocator allocator_;
 };
 
-#if BUILDFLAG(ENABLE_POINTER_COMPRESSION)
+#if PA_BUILDFLAG(ENABLE_POINTER_COMPRESSION)
 using ObjectTypes = ::testing::Types<UncompressedTypeTag, CompressedTypeTag>;
 #else
 using ObjectTypes = ::testing::Types<UncompressedTypeTag>;
@@ -345,42 +346,42 @@ template <template <typename> class PointerType,
           typename U>
 void CompareTest(U* array) {
   PointerType<T1> p0 = static_cast<PointerType<T1>>(&array[0]);
-  PointerType<T2> p1 = static_cast<PointerType<T2>>(&array[1]);
+  PointerType<T2> p1 = static_cast<PointerType<T2>>(&PA_UNSAFE_TODO(array[1]));
   {
-    EXPECT_NE(p0, &array[1]);
+    EXPECT_NE(p0, &PA_UNSAFE_TODO(array[1]));
     EXPECT_NE(p0, p1);
     EXPECT_NE(p1, &array[0]);
     EXPECT_NE(p1, p0);
   }
   {
-    EXPECT_LT(p0, &array[1]);
+    EXPECT_LT(p0, &PA_UNSAFE_TODO(array[1]));
     EXPECT_LT(&array[0], p1);
     EXPECT_LT(p0, p1);
   }
   {
     EXPECT_LE(p0, &array[0]);
-    EXPECT_LE(p0, &array[1]);
+    EXPECT_LE(p0, &PA_UNSAFE_TODO(array[1]));
     EXPECT_LE(&array[0], p0);
 
-    EXPECT_LE(&array[1], p1);
-    EXPECT_LE(p1, &array[1]);
+    EXPECT_LE(&PA_UNSAFE_TODO(array[1]), p1);
+    EXPECT_LE(p1, &PA_UNSAFE_TODO(array[1]));
 
     auto p2 = p0;
     EXPECT_LE(p0, p2);
     EXPECT_LE(p2, p1);
   }
   {
-    EXPECT_GT(&array[1], p0);
+    EXPECT_GT(&PA_UNSAFE_TODO(array[1]), p0);
     EXPECT_GT(p1, &array[0]);
     EXPECT_GT(p1, p0);
   }
   {
     EXPECT_GE(&array[0], p0);
-    EXPECT_GE(&array[1], p0);
+    EXPECT_GE(&PA_UNSAFE_TODO(array[1]), p0);
     EXPECT_GE(p0, &array[0]);
 
-    EXPECT_GE(p1, &array[1]);
-    EXPECT_GE(&array[1], p1);
+    EXPECT_GE(p1, &PA_UNSAFE_TODO(array[1]));
+    EXPECT_GE(&PA_UNSAFE_TODO(array[1]), p1);
 
     auto p2 = p1;
     EXPECT_GE(p1, p2);

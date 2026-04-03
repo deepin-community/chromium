@@ -20,10 +20,10 @@
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_pref_names.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/exo/shell_surface_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -77,7 +77,7 @@ void SetFakePluginVmPolicy(Profile* profile,
                            const std::string& license_key) {
   ScopedDictPrefUpdate update(profile->GetPrefs(),
                               plugin_vm::prefs::kPluginVmImage);
-  base::Value::Dict& dict = update.Get();
+  base::DictValue& dict = update.Get();
   dict.SetByDottedPath(prefs::kPluginVmImageUrlKeyName, image_url);
   dict.SetByDottedPath(prefs::kPluginVmImageHashKeyName, image_hash);
   plugin_vm::PluginVmInstallerFactory::GetForProfile(profile)

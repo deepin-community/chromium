@@ -9,9 +9,11 @@
 #include <wayland-server-protocol-core.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include <string_view>
+
 #include "ash/ime/ime_controller_impl.h"
 #include "ash/shell.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/memory/free_deleter.h"
 #include "base/memory/raw_ptr.h"
@@ -43,7 +45,7 @@ class WaylandKeyboardDeviceConfigurationDelegate
     : public ash::input_method::InputMethodManager::ImeMenuObserver,
       public KeyboardDeviceConfigurationDelegate,
       public KeyboardObserver,
-      public ash::ImeControllerImpl::Observer,
+      public ash::ImeController::Observer,
       public ui::InputDeviceEventObserver {
  public:
   WaylandKeyboardDeviceConfigurationDelegate(wl_resource* resource,
@@ -91,7 +93,7 @@ class WaylandKeyboardDeviceConfigurationDelegate
     wl_client_flush(client());
   }
 
-  // Overridden from ImeControllerImpl::Observer:
+  // Overridden from ImeController::Observer:
   void OnCapsLockChanged(bool enabled) override {}
 
   void OnKeyboardLayoutNameChanged(const std::string& layout_name) override {
@@ -129,7 +131,7 @@ class WaylandKeyboardDeviceConfigurationDelegate
 
     for (const auto& descriptor : enabled_ime_descriptors) {
       const std::string& keyboard_layout = descriptor.keyboard_layout();
-      if (!base::Contains(installed_keyboard_layouts_, keyboard_layout)) {
+      if (!installed_keyboard_layouts_.contains(keyboard_layout)) {
         sequenced_task_runner_->PostTaskAndReplyWithResult(
             FROM_HERE,
             base::BindOnce(
@@ -160,7 +162,7 @@ class WaylandKeyboardDeviceConfigurationDelegate
     // Wayland methods should be run in UI Thread.
     DCHECK(base::CurrentUIThread::IsSet());
 
-    base::StringPiece keymap = keymap_str.get();
+    std::string_view keymap = keymap_str.get();
     // Send the content of |keymap| with trailing '\0' termination via shared
     // memory.
     base::UnsafeSharedMemoryRegion shared_keymap_region =
@@ -172,8 +174,10 @@ class WaylandKeyboardDeviceConfigurationDelegate
             std::move(shared_keymap_region));
     DCHECK(shared_keymap.IsValid());
 
-    std::memcpy(shared_keymap.memory(), keymap.data(), keymap.size());
-    static_cast<uint8_t*>(shared_keymap.memory())[keymap.size()] = '\0';
+    UNSAFE_TODO(
+        std::memcpy(shared_keymap.memory(), keymap.data(), keymap.size()));
+    UNSAFE_TODO(static_cast<uint8_t*>(shared_keymap.memory())[keymap.size()]) =
+        '\0';
 
     zcr_keyboard_device_configuration_v1_send_layout_install(
         resource_, layout_name.c_str(), WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
@@ -198,7 +202,7 @@ class WaylandKeyboardDeviceConfigurationDelegate
       wl_array_release(&wl_key_bits);
       return;
     }
-    memset(wl_key_bits_ptr, 0, key_bits_len);
+    UNSAFE_TODO(memset(wl_key_bits_ptr, 0, key_bits_len));
 
     ui::InputController* input_controller =
         ui::OzonePlatform::GetInstance()->GetInputController();
@@ -208,7 +212,7 @@ class WaylandKeyboardDeviceConfigurationDelegate
       const std::vector<uint64_t>& key_bits =
           input_controller->GetKeyboardKeyBits(device.id);
       for (size_t i = 0; i < key_bits.size(); i++) {
-        wl_key_bits_ptr[i] |= key_bits[i];
+        UNSAFE_TODO(wl_key_bits_ptr[i]) |= key_bits[i];
       }
     }
 

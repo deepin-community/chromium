@@ -8,6 +8,7 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
@@ -21,8 +22,11 @@
 #include "media/gpu/test/video_player/decoder_wrapper.h"
 #include "media/gpu/test/video_player/frame_renderer_dummy.h"
 #include "media/gpu/test/video_player/video_player_test_environment.h"
-#include "sandbox/linux/services/resource_limits.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+#include "sandbox/linux/services/resource_limits.h"  // nogncheck
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 
 namespace media {
 namespace test {
@@ -259,7 +263,7 @@ void PerformanceEvaluator::WriteMetricsToFile() const {
   output_folder_path = base::MakeAbsoluteFilePath(output_folder_path);
 
   // Write performance metrics to json.
-  base::Value::Dict metrics;
+  base::DictValue metrics;
   metrics.Set("FramesDecoded",
               base::checked_cast<int>(perf_metrics_.frames_decoded_));
   metrics.Set("TotalDurationMs",
@@ -287,14 +291,14 @@ void PerformanceEvaluator::WriteMetricsToFile() const {
               perf_metrics_.decode_time_stats_.percentile_75_ms_);
 
   // Write frame delivery times to json.
-  base::Value::List delivery_times;
+  base::ListValue delivery_times;
   for (double frame_delivery_time : frame_delivery_times_) {
     delivery_times.Append(frame_delivery_time);
   }
   metrics.Set("FrameDeliveryTimes", std::move(delivery_times));
 
   // Write frame decodes times to json.
-  base::Value::List decode_times;
+  base::ListValue decode_times;
   for (double frame_decode_time : frame_decode_times_) {
     decode_times.Append(frame_decode_time);
   }
@@ -311,9 +315,8 @@ void PerformanceEvaluator::WriteMetricsToFile() const {
   base::File metrics_output_file(
       base::FilePath(metrics_file_path),
       base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
-  int bytes_written = metrics_output_file.WriteAtCurrentPos(
-      metrics_str.data(), metrics_str.length());
-  ASSERT_EQ(bytes_written, static_cast<int>(metrics_str.length()));
+  ASSERT_TRUE(metrics_output_file.WriteAtCurrentPosAndCheck(
+      base::as_byte_span(metrics_str)));
   VLOG(0) << "Wrote performance metrics to: " << metrics_file_path;
 }
 
@@ -406,11 +409,13 @@ TEST_F(VideoDecoderTest, MeasureCappedPerformance) {
 // then decide how to aggregate/report those metrics.
 // Play multiple videos simultaneously from start to finish.
 TEST_F(VideoDecoderTest, MeasureUncappedPerformance_TenConcurrentDecoders) {
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
   // Set RLIMIT_NOFILE soft limit to its hard limit value.
   if (sandbox::ResourceLimits::AdjustCurrent(
           RLIMIT_NOFILE, std::numeric_limits<long long int>::max())) {
     DPLOG(ERROR) << "Unable to increase soft limit of RLIMIT_NOFILE";
   }
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 
   constexpr size_t kNumConcurrentDecoders = 10;
 
@@ -529,12 +534,6 @@ int main(int argc, char** argv) {
   feature_list->InitFromCommandLine(
       cmd_line->GetSwitchValueASCII(switches::kEnableFeatures),
       cmd_line->GetSwitchValueASCII(switches::kDisableFeatures));
-  if (feature_list->IsFeatureOverridden("V4L2FlatStatelessVideoDecoder")) {
-    enabled_features.push_back(media::kV4L2FlatStatelessVideoDecoder);
-  }
-  if (feature_list->IsFeatureOverridden("V4L2FlatStatefulVideoDecoder")) {
-    enabled_features.push_back(media::kV4L2FlatStatefulVideoDecoder);
-  }
 #endif
 
   // Set up our test environment.

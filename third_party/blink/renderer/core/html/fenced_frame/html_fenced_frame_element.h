@@ -7,9 +7,11 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/notreached.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/common/fenced_frame/fenced_frame_utils.h"
 #include "third_party/blink/public/mojom/fenced_frame/fenced_frame.mojom-blink.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/html/fenced_frame/fenced_frame_config.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
@@ -77,7 +79,7 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
   FrameOwnerElementType OwnerType() const override {
     return FrameOwnerElementType::kFencedframe;
   }
-  ParsedPermissionsPolicy ConstructContainerPolicy() const override;
+  network::ParsedPermissionsPolicy ConstructContainerPolicy() const override;
   void SetCollapsed(bool) override;
   void DidChangeContainerPolicy() override;
 
@@ -119,6 +121,12 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
   // `NavigatorAuction::canLoadAdAuctionFencedFrame` instead.
   static bool canLoadOpaqueURL(ScriptState*);
 
+  // Fires an event named `event_type` at `this`. This path is only invoked for
+  // events that were originally fired *inside* of the fenced frame content, and
+  // that have been intentionally propagated outwards to `this`, the frame
+  // owner, for reception by the embedder script.
+  void DispatchFencedEvent(const String& event_type);
+
  private:
   // This method will only navigate the underlying frame if the element
   // `isConnected()`. It will be deferred if the page is currently prerendering.
@@ -150,12 +158,11 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
   void CollectStyleForPresentationAttribute(
       const QualifiedName&,
       const AtomicString&,
-      MutableCSSPropertyValueSet*) override;
+      HeapVector<CSSPropertyValue, 8>&) override;
   bool LayoutObjectIsNeeded(const DisplayStyle&) const override;
   LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
   void AttachLayoutTree(AttachContext& context) override;
-  bool SupportsFocus(UpdateBehavior update_behavior =
-                         UpdateBehavior::kStyleAndLayout) const override;
+  FocusableState SupportsFocus(UpdateBehavior update_behavior) const override;
 
   // Set the size of the fenced frame outer container. Used for container size
   // specified by FencedFrameConfig.
@@ -224,7 +231,7 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
   friend class FencedFrameShadowDOMDelegate;
   friend class ResizeObserverDelegate;
   FRIEND_TEST_ALL_PREFIXES(HTMLFencedFrameElementTest,
-                           FreezeSizePageZoomFactor);
+                           FreezeSizeLayoutZoomFactor);
   FRIEND_TEST_ALL_PREFIXES(HTMLFencedFrameElementTest, CoerceFrameSizeTest);
   FRIEND_TEST_ALL_PREFIXES(HTMLFencedFrameElementTest,
                            HistogramTestResizeAfterFreeze);

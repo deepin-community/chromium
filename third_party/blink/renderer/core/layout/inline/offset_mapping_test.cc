@@ -4,12 +4,13 @@
 
 #include "third_party/blink/renderer/core/layout/inline/offset_mapping.h"
 
+#include "testing/gtest/include/gtest/gtest-death-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/dom/first_letter_pseudo_element.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/position.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_node.h"
-#include "third_party/blink/renderer/core/layout/layout_ng_block_flow.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_text_fragment.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
@@ -40,34 +41,13 @@ bool operator==(const OffsetMappingUnit& unit, const OffsetMappingUnit& other) {
          unit.TextContentEnd() == other.TextContentEnd();
 }
 
-bool operator!=(const OffsetMappingUnit& unit, const OffsetMappingUnit& other) {
-  return !operator==(unit, other);
-}
-
 void PrintTo(const OffsetMappingUnit& unit, std::ostream* ostream) {
-  static const char* kTypeNames[] = {"Identity", "Collapsed", "Expanded"};
+  static const std::array<const char*, 3> kTypeNames = {"Identity", "Collapsed",
+                                                        "Expanded"};
   *ostream << "{" << kTypeNames[static_cast<unsigned>(unit.GetType())] << " "
            << unit.GetLayoutObject() << " dom=" << unit.DOMStart() << "-"
            << unit.DOMEnd() << " tc=" << unit.TextContentStart() << "-"
            << unit.TextContentEnd() << "}";
-}
-
-bool operator==(const HeapVector<OffsetMappingUnit>& units1,
-                const HeapVector<OffsetMappingUnit>& units2) {
-  if (units1.size() != units2.size())
-    return false;
-  auto* it2 = units2.begin();
-  for (const auto& unit1 : units1) {
-    if (unit1 != *it2)
-      return false;
-    ++it2;
-  }
-  return true;
-}
-
-bool operator==(const HeapVector<OffsetMappingUnit>& units,
-                const base::span<const OffsetMappingUnit>& range) {
-  return units == ToVector(range);
 }
 
 void PrintTo(const HeapVector<OffsetMappingUnit>& units,
@@ -95,7 +75,6 @@ class OffsetMappingTest : public RenderingTest {
   void SetupHtml(const char* id, String html) {
     SetBodyInnerHTML(html);
     layout_block_flow_ = To<LayoutBlockFlow>(GetLayoutObjectByElementId(id));
-    DCHECK(layout_block_flow_->IsLayoutNGObject());
     layout_object_ = layout_block_flow_->FirstChild();
   }
 
@@ -119,7 +98,7 @@ class OffsetMappingTest : public RenderingTest {
       Vector<unsigned> collapsed_indexes;
       for (const auto& unit : mapping.GetMappingUnitsForDOMRange(
                EphemeralRange::RangeOfContents(node))) {
-        if (unit.GetType() != OffsetMappingUnitType::kCollapsed) {
+        if (!unit.IsCollapsed()) {
           continue;
         }
         for (unsigned i = unit.DOMStart(); i < unit.DOMEnd(); ++i)
@@ -229,7 +208,6 @@ class OffsetMappingTest : public RenderingTest {
 
   Persistent<LayoutBlockFlow> layout_block_flow_;
   Persistent<LayoutObject> layout_object_;
-  FontCachePurgePreventer purge_preventer_;
 };
 
 TEST_F(OffsetMappingTest, CollapseSpaces) {
@@ -953,7 +931,7 @@ TEST_F(OffsetMappingTest, FirstLetterInDifferentBlock) {
   const OffsetMapping& remaining_text_result = *mapping1;
   ASSERT_EQ(1u, remaining_text_result.GetUnits().size());
   TEST_UNIT(remaining_text_result.GetUnits()[0],
-            OffsetMappingUnitType::kIdentity, text_node, 1u, 3u, 1u, 3u);
+            OffsetMappingUnitType::kIdentity, text_node, 1u, 3u, 0u, 2u);
   ASSERT_EQ(1u, remaining_text_result.GetRanges().size());
   TEST_RANGE(remaining_text_result.GetRanges(), text_node, 0u, 1u);
 
@@ -972,17 +950,18 @@ TEST_F(OffsetMappingTest, FirstLetterInDifferentBlock) {
 
   EXPECT_EQ(0u,
             *first_letter_result.GetTextContentOffset(Position(text_node, 0)));
+
   EXPECT_EQ(
-      1u, *remaining_text_result.GetTextContentOffset(Position(text_node, 1)));
+      0u, *remaining_text_result.GetTextContentOffset(Position(text_node, 1)));
   EXPECT_EQ(
-      2u, *remaining_text_result.GetTextContentOffset(Position(text_node, 2)));
+      1u, *remaining_text_result.GetTextContentOffset(Position(text_node, 2)));
   EXPECT_EQ(
-      3u, *remaining_text_result.GetTextContentOffset(Position(text_node, 3)));
+      2u, *remaining_text_result.GetTextContentOffset(Position(text_node, 3)));
 
   EXPECT_EQ(Position(text_node, 1), first_letter_result.GetFirstPosition(1));
   EXPECT_EQ(Position(text_node, 1), first_letter_result.GetLastPosition(1));
-  EXPECT_EQ(Position(text_node, 1), remaining_text_result.GetFirstPosition(1));
-  EXPECT_EQ(Position(text_node, 1), remaining_text_result.GetLastPosition(1));
+  EXPECT_EQ(Position(text_node, 1), remaining_text_result.GetFirstPosition(0));
+  EXPECT_EQ(Position(text_node, 1), remaining_text_result.GetLastPosition(0));
 }
 
 TEST_F(OffsetMappingTest, WhiteSpaceTextNodeWithoutLayoutText) {
@@ -1178,19 +1157,19 @@ TEST_F(OffsetMappingTest, BiDiAroundForcedBreakInPreLine) {
   const Node* text = GetElementById("bdo")->firstChild();
   const OffsetMapping& mapping = GetOffsetMapping();
 
-  EXPECT_EQ(String(u"\u202Efoo\u202C"
+  EXPECT_EQ(String(u"\u2068\u202Efoo\u202C\u2069"
                    u"\n"
-                   u"\u202Ebar\u202C"),
+                   u"\u2068\u202Ebar\u202C\u2069"),
             mapping.GetText());
 
   // Offset mapping should skip generated BiDi control characters.
   ASSERT_EQ(3u, mapping.GetUnits().size());
   TEST_UNIT(mapping.GetUnits()[0], OffsetMappingUnitType::kIdentity, text, 0u,
-            3u, 1u, 4u);  // "foo"
+            3u, 2u, 5u);  // "foo"
   TEST_UNIT(mapping.GetUnits()[1], OffsetMappingUnitType::kIdentity, text, 3u,
-            4u, 5u, 6u);  // "\n"
+            4u, 7u, 8u);  // "\n"
   TEST_UNIT(mapping.GetUnits()[2], OffsetMappingUnitType::kIdentity, text, 4u,
-            7u, 7u, 10u);  // "bar"
+            7u, 10u, 13u);  // "bar"
   TEST_RANGE(mapping.GetRanges(), text, 0u, 3u);
 }
 
@@ -1202,19 +1181,19 @@ TEST_F(OffsetMappingTest, BiDiAroundForcedBreakInPreWrap) {
   const Node* text = GetElementById("bdo")->firstChild();
   const OffsetMapping& mapping = GetOffsetMapping();
 
-  EXPECT_EQ(String(u"\u202Efoo\u202C"
+  EXPECT_EQ(String(u"\u2068\u202Efoo\u202C\u2069"
                    u"\n"
-                   u"\u202Ebar\u202C"),
+                   u"\u2068\u202Ebar\u202C\u2069"),
             mapping.GetText());
 
   // Offset mapping should skip generated BiDi control characters.
   ASSERT_EQ(3u, mapping.GetUnits().size());
   TEST_UNIT(mapping.GetUnits()[0], OffsetMappingUnitType::kIdentity, text, 0u,
-            3u, 1u, 4u);  // "foo"
+            3u, 2u, 5u);  // "foo"
   TEST_UNIT(mapping.GetUnits()[1], OffsetMappingUnitType::kIdentity, text, 3u,
-            4u, 5u, 6u);  // "\n"
+            4u, 7u, 8u);  // "\n"
   TEST_UNIT(mapping.GetUnits()[2], OffsetMappingUnitType::kIdentity, text, 4u,
-            7u, 7u, 10u);  // "bar"
+            7u, 10u, 13u);  // "bar"
   TEST_RANGE(mapping.GetRanges(), text, 0u, 3u);
 }
 
@@ -1226,19 +1205,19 @@ TEST_F(OffsetMappingTest, BiDiAroundForcedBreakInPre) {
   const Node* text = GetElementById("bdo")->firstChild();
   const OffsetMapping& mapping = GetOffsetMapping();
 
-  EXPECT_EQ(String(u"\u202Efoo\u202C"
+  EXPECT_EQ(String(u"\u2068\u202Efoo\u202C\u2069"
                    u"\n"
-                   u"\u202Ebar\u202C"),
+                   u"\u2068\u202Ebar\u202C\u2069"),
             mapping.GetText());
 
   // Offset mapping should skip generated BiDi control characters.
   ASSERT_EQ(3u, mapping.GetUnits().size());
   TEST_UNIT(mapping.GetUnits()[0], OffsetMappingUnitType::kIdentity, text, 0u,
-            3u, 1u, 4u);  // "foo"
+            3u, 2u, 5u);  // "foo"
   TEST_UNIT(mapping.GetUnits()[1], OffsetMappingUnitType::kIdentity, text, 3u,
-            4u, 5u, 6u);  // "\n"
+            4u, 7u, 8u);  // "\n"
   TEST_UNIT(mapping.GetUnits()[2], OffsetMappingUnitType::kIdentity, text, 4u,
-            7u, 7u, 10u);  // "bar"
+            7u, 10u, 13u);  // "bar"
   TEST_RANGE(mapping.GetRanges(), text, 0u, 3u);
 }
 
@@ -1531,6 +1510,37 @@ TEST_F(OffsetMappingGetterTest, Get) {
 
   const String& text_content = mapping->GetText();
   EXPECT_EQ(text_content, "Whitespaces in this text should be collapsed.");
+}
+
+TEST_F(OffsetMappingTest, LayoutObjectConverter) {
+  SetBodyInnerHTML(R"HTML(
+    <div id=container>
+      <span id="s1">0123456</span>
+      <span id="s2">7890</span>
+    </div>
+  )HTML");
+  auto* layout_block_flow =
+      To<LayoutBlockFlow>(GetLayoutObjectByElementId("container"));
+  const OffsetMapping* mapping =
+      InlineNode::GetOffsetMapping(layout_block_flow);
+  EXPECT_TRUE(mapping);
+
+  const auto* s1 = GetLayoutObjectByElementId("s1");
+  ASSERT_TRUE(s1);
+  OffsetMapping::LayoutObjectConverter converter1{mapping,
+                                                  *s1->SlowFirstChild()};
+  EXPECT_EQ(converter1.TextContentOffset(0), 0u);
+  EXPECT_EQ(converter1.TextContentOffset(3), 3u);
+  EXPECT_EQ(converter1.TextContentOffset(6), 6u);
+  EXPECT_DEATH_IF_SUPPORTED(converter1.TextContentOffset(7), "");
+
+  const auto* s2 = GetLayoutObjectByElementId("s2");
+  ASSERT_TRUE(s2);
+  OffsetMapping::LayoutObjectConverter converter2{mapping,
+                                                  *s2->SlowFirstChild()};
+  EXPECT_EQ(converter2.TextContentOffset(0), 8u);
+  EXPECT_EQ(converter2.TextContentOffset(3), 11u);
+  EXPECT_DEATH_IF_SUPPORTED(converter2.TextContentOffset(4), "");
 }
 
 }  // namespace blink

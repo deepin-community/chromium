@@ -10,14 +10,14 @@
 #include "base/json/json_writer.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/printing/print_view_manager_common.h"
 #include "printing/buildflags/buildflags.h"
 #include "printing/mojom/print.mojom.h"
 #include "printing/print_job_constants.h"
 
 #if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
-#include "chrome/browser/printing/prefs_util.h"
-#include "printing/printing_features.h"
+#include "chrome/browser/printing/oop_features.h"
 #endif
 
 namespace printing::test {
@@ -38,13 +38,11 @@ const std::vector<gfx::Size> kPrinterCapabilitiesDefaultDpis{
 const PrinterBasicInfoOptions kPrintInfoOptions{{"opt1", "123"},
                                                 {"opt2", "456"}};
 
-base::Value::Dict GetPrintTicket(mojom::PrinterType type) {
-  DCHECK_NE(type, mojom::PrinterType::kPrivetDeprecated);
-
-  base::Value::Dict ticket;
+base::DictValue GetPrintTicket(mojom::PrinterType type) {
+  base::DictValue ticket;
 
   // Letter
-  base::Value::Dict media_size;
+  base::DictValue media_size;
   media_size.Set(kSettingMediaSizeIsDefault, true);
   media_size.Set(kSettingMediaSizeWidthMicrons, 215900);
   media_size.Set(kSettingMediaSizeHeightMicrons, 279400);
@@ -75,17 +73,14 @@ base::Value::Dict GetPrintTicket(mojom::PrinterType type) {
   ticket.Set(kSettingShowSystemDialog, false);
 
   if (type == mojom::PrinterType::kExtension) {
-    base::Value::Dict capabilities;
+    base::DictValue capabilities;
     capabilities.Set("duplex", true);  // non-empty
-    std::string caps_string;
-    base::JSONWriter::Write(capabilities, &caps_string);
-    ticket.Set(kSettingCapabilities, caps_string);
-    base::Value::Dict print_ticket;
+    ticket.Set(kSettingCapabilities,
+               base::WriteJson(capabilities).value_or(""));
+    base::DictValue print_ticket;
     print_ticket.Set("version", "1.0");
     print_ticket.Set("print", base::Value());
-    std::string ticket_string;
-    base::JSONWriter::Write(print_ticket, &ticket_string);
-    ticket.Set(kSettingTicket, ticket_string);
+    ticket.Set(kSettingTicket, base::WriteJson(print_ticket).value_or(""));
   }
 
   return ticket;
@@ -113,16 +108,20 @@ std::unique_ptr<PrintSettings> MakeDefaultPrintSettings(
 }
 
 std::unique_ptr<PrintSettings> MakeUserModifiedPrintSettings(
-    const std::string& printer_name) {
+    const std::string& printer_name,
+    const PageRanges* page_ranges) {
   std::unique_ptr<PrintSettings> settings =
       MakeDefaultPrintSettings(printer_name);
   settings->set_copies(kPrintSettingsCopies + 1);
+  if (page_ranges) {
+    settings->set_ranges(*page_ranges);
+  }
 #if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
   if (ShouldPrintJobOop()) {
     // Supply fake data to mimic what might be collected from the system print
     // dialog.  Platform-specific since the fake data still has to be able to
     // pass mojom data validation.
-    base::Value::Dict data;
+    base::DictValue data;
 
 #if BUILDFLAG(IS_MAC)
     data.Set(kMacSystemPrintDialogDataDestinationType, 2);
@@ -148,7 +147,7 @@ std::unique_ptr<PrintSettings> MakeUserModifiedPrintSettings(
 
 void StartPrint(content::WebContents* contents) {
   printing::StartPrint(contents,
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
                        /*print_renderer=*/mojo::NullAssociatedRemote(),
 #endif
                        /*print_preview_disabled=*/false,

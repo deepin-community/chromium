@@ -6,6 +6,10 @@
 
 // VulkanHelper.cpp : Helper for allocating & managing vulkan external objects.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/VulkanHelper.h"
 
 #include <vector>
@@ -14,7 +18,7 @@
 #include "common/debug.h"
 #include "common/system_utils.h"
 #include "common/vulkan/vulkan_icd.h"
-#include "test_utils/ANGLETest.h"
+#include "util/util_gl.h"
 #include "vulkan/vulkan_core.h"
 
 namespace angle
@@ -150,6 +154,23 @@ void ImageMemoryBarrier(VkCommandBuffer commandBuffer,
 
 }  // namespace
 
+void VulkanQueueMutex::init(EGLDisplay dpy)
+{
+    display = dpy;
+}
+
+void VulkanQueueMutex::lock()
+{
+    eglLockVulkanQueueANGLE(display);
+    ASSERT_EGL_SUCCESS();
+}
+
+void VulkanQueueMutex::unlock()
+{
+    eglUnlockVulkanQueueANGLE(display);
+    ASSERT_EGL_SUCCESS();
+}
+
 VulkanHelper::VulkanHelper() {}
 
 VulkanHelper::~VulkanHelper()
@@ -239,9 +260,13 @@ void VulkanHelper::initialize(bool useSwiftshader, bool enableValidationLayers)
 
     ASSERT(physicalDevices.size() > 0);
 
-    VkPhysicalDeviceProperties physicalDeviceProperties;
-    ChoosePhysicalDevice(vkGetPhysicalDeviceProperties, physicalDevices, icd, 0, 0,
-                         &mPhysicalDevice, &physicalDeviceProperties);
+    VkPhysicalDeviceProperties2 physicalDeviceProperties2;
+    VkPhysicalDeviceIDProperties physicalDeviceIDProperties;
+    VkPhysicalDeviceDriverProperties driverProperties;
+    ChoosePhysicalDevice(vkGetPhysicalDeviceProperties2, physicalDevices, icd, 0, 0, nullptr,
+                         nullptr, static_cast<VkDriverId>(0), &mPhysicalDevice,
+                         &physicalDeviceProperties2, &physicalDeviceIDProperties,
+                         &driverProperties);
 
     vkGetPhysicalDeviceMemoryProperties(mPhysicalDevice, &mMemoryProperties);
 
@@ -403,6 +428,8 @@ void VulkanHelper::initializeFromANGLE()
     mGraphicsQueue = reinterpret_cast<VkQueue>(result);
     EXPECT_NE(mGraphicsQueue, static_cast<VkQueue>(VK_NULL_HANDLE));
 
+    mGraphicsQueueMutex.init(display);
+
     EXPECT_EGL_TRUE(eglQueryDeviceAttribEXT(device, EGL_VULKAN_QUEUE_FAMILIY_INDEX_ANGLE, &result));
     mGraphicsQueueFamilyIndex = static_cast<uint32_t>(result);
 
@@ -451,6 +478,22 @@ void VulkanHelper::initializeFromANGLE()
     vkGetSemaphoreZirconHandleFUCHSIA = reinterpret_cast<PFN_vkGetSemaphoreZirconHandleFUCHSIA>(
         vkGetInstanceProcAddr(mInstance, "vkGetSemaphoreZirconHandleFUCHSIA"));
     ASSERT(!mHasExternalSemaphoreFuchsia || vkGetSemaphoreZirconHandleFUCHSIA);
+
+    EGLAttrib featureCount = 0;
+    EXPECT_TRUE(eglQueryDisplayAttribANGLE(display, EGL_FEATURE_COUNT_ANGLE, &featureCount));
+    for (EGLint index = 0; index < featureCount; ++index)
+    {
+        const char *name   = eglQueryStringiANGLE(display, EGL_FEATURE_NAME_ANGLE, index);
+        const char *status = eglQueryStringiANGLE(display, EGL_FEATURE_STATUS_ANGLE, index);
+        ASSERT(name != nullptr);
+        ASSERT(status != nullptr);
+
+        if (strcmp(name, "supportsUnifiedImageLayouts") == 0)
+        {
+            mHasUnifiedImageLayouts = strcmp(status, "enabled") == 0;
+            break;
+        }
+    }
 }
 
 VkResult VulkanHelper::createImage2D(VkFormat format,
@@ -926,6 +969,7 @@ void VulkanHelper::releaseImageAndSignalSemaphore(VkImage image,
     };
     constexpr uint32_t submitCount = std::extent<decltype(submits)>();
 
+    std::unique_lock<VulkanQueueMutex> queueLock = getGraphicsQueueLock();
     const VkFence fence = VK_NULL_HANDLE;
     result              = vkQueueSubmit(mGraphicsQueue, submitCount, submits, fence);
     ASSERT(result == VK_SUCCESS);
@@ -955,6 +999,7 @@ void VulkanHelper::signalSemaphore(VkSemaphore semaphore)
     };
     constexpr uint32_t submitCount = std::extent<decltype(submits)>();
 
+    std::unique_lock<VulkanQueueMutex> queueLock = getGraphicsQueueLock();
     const VkFence fence = VK_NULL_HANDLE;
     result              = vkQueueSubmit(mGraphicsQueue, submitCount, submits, fence);
     ASSERT(result == VK_SUCCESS);
@@ -1021,6 +1066,7 @@ void VulkanHelper::waitSemaphoreAndAcquireImage(VkImage image,
     };
     constexpr uint32_t submitCount = std::extent<decltype(submits)>();
 
+    std::unique_lock<VulkanQueueMutex> queueLock = getGraphicsQueueLock();
     const VkFence fence = VK_NULL_HANDLE;
     result              = vkQueueSubmit(mGraphicsQueue, submitCount, submits, fence);
     ASSERT(result == VK_SUCCESS);
@@ -1121,35 +1167,35 @@ void VulkanHelper::readPixels(VkImage srcImage,
     };
     constexpr uint32_t bufferImageCopyCount = std::extent<decltype(bufferImageCopies)>();
 
-    if (srcImageLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
-    {
-        VkImageMemoryBarrier imageMemoryBarriers = {
-            /* .sType = */ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            /* .pNext = */ nullptr,
-            /* .srcAccessMask = */ VK_ACCESS_TRANSFER_WRITE_BIT,
-            /* .dstAccessMask = */ VK_ACCESS_TRANSFER_READ_BIT,
-            /* .oldLayout = */ srcImageLayout,
-            /* .newLayout = */ VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            /* .srcQueueFamilyIndex = */ mGraphicsQueueFamilyIndex,
-            /* .dstQueueFamilyIndex = */ mGraphicsQueueFamilyIndex,
-            /* .image = */ srcImage,
-            /* .subresourceRange = */
-            {
-                /* .aspectMask = */ VK_IMAGE_ASPECT_COLOR_BIT,
-                /* .baseMipLevel = */ 0,
-                /* .levelCount = */ 1,
-                /* .baseArrayLayer = */ 0,
-                /* .layerCount = */ 1,
-            },
+    const VkImageLayout dstImageLayout =
+        mHasUnifiedImageLayouts ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 
-        };
-        vkCmdPipelineBarrier(commandBuffers[0], VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                             &imageMemoryBarriers);
-        srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    }
+    // Assume the worst and issue a barrier, previous usage is unknown.
+    VkImageMemoryBarrier imageMemoryBarriers = {
+        /* .sType = */ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        /* .pNext = */ nullptr,
+        /* .srcAccessMask = */ VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT,
+        /* .dstAccessMask = */ VK_ACCESS_TRANSFER_READ_BIT,
+        /* .oldLayout = */ srcImageLayout,
+        /* .newLayout = */ dstImageLayout,
+        /* .srcQueueFamilyIndex = */ mGraphicsQueueFamilyIndex,
+        /* .dstQueueFamilyIndex = */ mGraphicsQueueFamilyIndex,
+        /* .image = */ srcImage,
+        /* .subresourceRange = */
+        {
+            /* .aspectMask = */ VK_IMAGE_ASPECT_COLOR_BIT,
+            /* .baseMipLevel = */ 0,
+            /* .levelCount = */ 1,
+            /* .baseArrayLayer = */ 0,
+            /* .layerCount = */ 1,
+        },
 
-    vkCmdCopyImageToBuffer(commandBuffers[0], srcImage, srcImageLayout, stagingBuffer,
+    };
+    vkCmdPipelineBarrier(commandBuffers[0], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                         &imageMemoryBarriers);
+
+    vkCmdCopyImageToBuffer(commandBuffers[0], srcImage, dstImageLayout, stagingBuffer,
                            bufferImageCopyCount, bufferImageCopies);
 
     VkMemoryBarrier memoryBarriers[] = {
@@ -1181,12 +1227,15 @@ void VulkanHelper::readPixels(VkImage srcImage,
     };
     constexpr uint32_t submitCount = std::extent<decltype(submits)>();
 
-    const VkFence fence = VK_NULL_HANDLE;
-    result              = vkQueueSubmit(mGraphicsQueue, submitCount, submits, fence);
-    ASSERT(result == VK_SUCCESS);
+    {
+        std::unique_lock<VulkanQueueMutex> queueLock = getGraphicsQueueLock();
+        const VkFence fence                          = VK_NULL_HANDLE;
+        result = vkQueueSubmit(mGraphicsQueue, submitCount, submits, fence);
+        ASSERT(result == VK_SUCCESS);
 
-    result = vkQueueWaitIdle(mGraphicsQueue);
-    ASSERT(result == VK_SUCCESS);
+        result = vkQueueWaitIdle(mGraphicsQueue);
+        ASSERT(result == VK_SUCCESS);
+    }
 
     vkFreeCommandBuffers(mDevice, mCommandPool, commandBufferCount, commandBuffers);
 
@@ -1218,7 +1267,7 @@ void VulkanHelper::readPixels(VkImage srcImage,
 }
 
 void VulkanHelper::writePixels(VkImage dstImage,
-                               VkImageLayout imageLayout,
+                               VkImageLayout srcImageLayout,
                                VkFormat imageFormat,
                                VkOffset3D imageOffset,
                                VkExtent3D imageExtent,
@@ -1328,34 +1377,33 @@ void VulkanHelper::writePixels(VkImage dstImage,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0 /* dependencyFlags */,
                          memoryBarrierCount, memoryBarriers, 0, nullptr, 0, nullptr);
 
-    // Memory-barrier for image to Transfer-Write.
-    if (imageLayout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-    {
-        VkImageMemoryBarrier imageMemoryBarriers = {
-            /* .sType = */ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            /* .pNext = */ nullptr,
-            /* .srcAccessMask = */ VK_ACCESS_NONE,
-            /* .dstAccessMask = */ VK_ACCESS_TRANSFER_WRITE_BIT,
-            /* .oldLayout = */ imageLayout,
-            /* .newLayout = */ VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            /* .srcQueueFamilyIndex = */ mGraphicsQueueFamilyIndex,
-            /* .dstQueueFamilyIndex = */ mGraphicsQueueFamilyIndex,
-            /* .image = */ dstImage,
-            /* .subresourceRange = */
-            {
-                /* .aspectMask = */ VK_IMAGE_ASPECT_COLOR_BIT,
-                /* .baseMipLevel = */ 0,
-                /* .levelCount = */ 1,
-                /* .baseArrayLayer = */ 0,
-                /* .layerCount = */ 1,
-            },
+    const VkImageLayout dstImageLayout =
+        mHasUnifiedImageLayouts ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
-        };
-        vkCmdPipelineBarrier(commandBuffers[0], VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                             &imageMemoryBarriers);
-        imageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    }
+    // Assume the worst and issue a barrier, previous usage is unknown.
+    VkImageMemoryBarrier imageMemoryBarriers = {
+        /* .sType = */ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        /* .pNext = */ nullptr,
+        /* .srcAccessMask = */ VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT,
+        /* .dstAccessMask = */ VK_ACCESS_TRANSFER_WRITE_BIT,
+        /* .oldLayout = */ srcImageLayout,
+        /* .newLayout = */ dstImageLayout,
+        /* .srcQueueFamilyIndex = */ mGraphicsQueueFamilyIndex,
+        /* .dstQueueFamilyIndex = */ mGraphicsQueueFamilyIndex,
+        /* .image = */ dstImage,
+        /* .subresourceRange = */
+        {
+            /* .aspectMask = */ VK_IMAGE_ASPECT_COLOR_BIT,
+            /* .baseMipLevel = */ 0,
+            /* .levelCount = */ 1,
+            /* .baseArrayLayer = */ 0,
+            /* .layerCount = */ 1,
+        },
+
+    };
+    vkCmdPipelineBarrier(commandBuffers[0], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                         &imageMemoryBarriers);
 
     // Issue the buffer to image copy.
     VkBufferImageCopy bufferImageCopies[] = {
@@ -1377,7 +1425,7 @@ void VulkanHelper::writePixels(VkImage dstImage,
 
     constexpr uint32_t bufferImageCopyCount = std::extent<decltype(bufferImageCopies)>();
 
-    vkCmdCopyBufferToImage(commandBuffers[0], stagingBuffer, dstImage, imageLayout,
+    vkCmdCopyBufferToImage(commandBuffers[0], stagingBuffer, dstImage, dstImageLayout,
                            bufferImageCopyCount, bufferImageCopies);
 
     result = vkEndCommandBuffer(commandBuffers[0]);
@@ -1398,12 +1446,15 @@ void VulkanHelper::writePixels(VkImage dstImage,
     };
     constexpr uint32_t submitCount = std::extent<decltype(submits)>();
 
-    const VkFence fence = VK_NULL_HANDLE;
-    result              = vkQueueSubmit(mGraphicsQueue, submitCount, submits, fence);
-    ASSERT(result == VK_SUCCESS);
+    {
+        std::unique_lock<VulkanQueueMutex> queueLock = getGraphicsQueueLock();
+        const VkFence fence                          = VK_NULL_HANDLE;
+        result = vkQueueSubmit(mGraphicsQueue, submitCount, submits, fence);
+        ASSERT(result == VK_SUCCESS);
 
-    result = vkQueueWaitIdle(mGraphicsQueue);
-    ASSERT(result == VK_SUCCESS);
+        result = vkQueueWaitIdle(mGraphicsQueue);
+        ASSERT(result == VK_SUCCESS);
+    }
 
     vkFreeCommandBuffers(mDevice, mCommandPool, commandBufferCount, commandBuffers);
     vkDestroyBuffer(mDevice, stagingBuffer, nullptr);

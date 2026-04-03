@@ -13,7 +13,7 @@
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/dbus/dlp/dlp_service.pb.h"
-#include "components/enterprise/data_controls/component.h"
+#include "components/enterprise/data_controls/core/browser/component.h"
 #include "components/file_access/scoped_file_access.h"
 #include "content/public/browser/browser_thread.h"
 #include "storage/browser/file_system/file_system_context.h"
@@ -40,13 +40,8 @@ class DlpFilesController {
                    const std::string& referrer_url);
     FileDaemonInfo(const FileDaemonInfo&);
 
-    friend bool operator==(const FileDaemonInfo& a, const FileDaemonInfo& b) {
-      return a.inode == b.inode && a.crtime == b.crtime && a.path == b.path &&
-             a.source_url == b.source_url && a.referrer_url == b.referrer_url;
-    }
-    friend bool operator!=(const FileDaemonInfo& a, const FileDaemonInfo& b) {
-      return !(a == b);
-    }
+    friend bool operator==(const FileDaemonInfo&,
+                           const FileDaemonInfo&) = default;
 
     // File inode.
     ino64_t inode;
@@ -62,7 +57,8 @@ class DlpFilesController {
 
   // Gets all files inside |root| recursively and runs |callback_| with the
   // files list.
-  class FolderRecursionDelegate : public storage::RecursiveOperationDelegate {
+  class FolderRecursionDelegate final
+      : public storage::RecursiveOperationDelegate {
    public:
     using FileURLsCallback =
         base::OnceCallback<void(std::vector<storage::FileSystemURL>)>;
@@ -85,6 +81,7 @@ class DlpFilesController {
                           StatusCallback callback) override;
     void PostProcessDirectory(const storage::FileSystemURL& url,
                               StatusCallback callback) override;
+    base::WeakPtr<storage::RecursiveOperationDelegate> AsWeakPtr() override;
 
    private:
     void OnGetMetadata(const storage::FileSystemURL& url,
@@ -103,8 +100,6 @@ class DlpFilesController {
 
   // Gets all files inside |roots| recursively and runs |callback_| with the
   // whole files list. Deletes itself after |callback_| is run.
-  // TODO(b/259184140): Extract RootsRecursionDelegate to another file to
-  // have better testing coverage.
   class RootsRecursionDelegate {
    public:
     RootsRecursionDelegate(storage::FileSystemContext* file_system_context,
@@ -176,7 +171,7 @@ class DlpFilesController {
                                    std::vector<base::FilePath> blocked_files,
                                    dlp::FileAction action) = 0;
 
-  // Returns true if `file_path` is in My Files directory.
+  // Returns true if `file_path` is in MyFiles directory.
   virtual bool IsInLocalFileSystem(const base::FilePath& file_path) = 0;
 
   // Checks whether pasting or dropping the given `files` to `destination` is

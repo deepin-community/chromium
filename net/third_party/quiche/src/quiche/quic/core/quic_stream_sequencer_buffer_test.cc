@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <list>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -157,16 +159,12 @@ TEST_F(QuicStreamSequencerBufferTest, Move) {
   EXPECT_TRUE(helper2.IsBufferAllocated());
 }
 
-TEST_F(QuicStreamSequencerBufferTest, DISABLED_OnStreamDataInvalidSource) {
-  // Pass in an invalid source, expects to return error.
+TEST_F(QuicStreamSequencerBufferTest, OnStreamDataNull) {
+  // Pass in a null source, expects to return error.
   absl::string_view source;
-  source = absl::string_view(nullptr, 1024);
   EXPECT_THAT(buffer_->OnStreamData(800, source, &written_, &error_details_),
-              IsError(QUIC_STREAM_SEQUENCER_INVALID_STATE));
-  EXPECT_EQ(0u, error_details_.find(absl::StrCat(
-                    "QuicStreamSequencerBuffer error: OnStreamData() "
-                    "dest == nullptr: ",
-                    false, " source == nullptr: ", true)));
+              IsError(QUIC_EMPTY_STREAM_FRAME_NO_FIN));
+  EXPECT_TRUE(helper_->CheckBufferInvariants());
 }
 
 TEST_F(QuicStreamSequencerBufferTest, OnStreamDataWithOverlap) {
@@ -745,6 +743,28 @@ TEST_F(QuicStreamSequencerBufferTest, PeekContinously) {
   // First block is still there.
   EXPECT_TRUE(buffer_->PeekRegion(0, &iov));
   EXPECT_EQ(source1, IovecToStringPiece(iov));
+}
+
+TEST_F(QuicStreamSequencerBufferTest, PeekRegionWithBufferWrapsAround) {
+  ResetMaxCapacityBytes(kBlockSizeBytes * 8);
+  std::string source1(kBlockSizeBytes, 'a');
+  buffer_->OnStreamData(0, source1, &written_, &error_details_);
+
+  iovec iov;
+  EXPECT_TRUE(buffer_->PeekRegion(0, &iov));
+  EXPECT_EQ(source1, IovecToStringPiece(iov));
+  // Consume half of the block.
+  size_t consumed_bytes = kBlockSizeBytes - 4 * 1024;
+  buffer_->MarkConsumed(consumed_bytes);
+
+  // Buffer much more data so that the last bytes are stored into the start of
+  // the first block, which also contains the first unread bytes.
+  std::string source2(max_capacity_bytes_ - 4 * 1024 - 1, 'b');
+  buffer_->OnStreamData(kBlockSizeBytes, source2, &written_, &error_details_);
+  EXPECT_EQ(max_capacity_bytes_ - 1, buffer_->ReadableBytes());
+
+  EXPECT_TRUE(buffer_->PeekRegion(consumed_bytes, &iov));
+  EXPECT_EQ(std::string(4 * 1024, 'a'), IovecToStringPiece(iov));
 }
 
 TEST_F(QuicStreamSequencerBufferTest, MarkConsumedInOneBlock) {

@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,8 @@
 class PrefChangeRegistrar;
 
 namespace ash {
+
+class PrivacyHubDelegate;
 
 // Implements the logic for the geolocation privacy switch.
 class ASH_EXPORT GeolocationPrivacySwitchController : public SessionObserver {
@@ -39,6 +42,10 @@ class ASH_EXPORT GeolocationPrivacySwitchController : public SessionObserver {
   // Called when the preference value is changed.
   void OnPreferenceChanged();
 
+  // Notifies WebUI about the system geolocation access level change.
+  void NotifySystemGeolocationAccessLevelChanged(
+      GeolocationAccessLevel access_level);
+
   // Apps that want to actively use geolocation should register and deregister
   // using the following methods. They are used to decide whether a notification
   // that an app wants to use geolocation should be used. System usages like
@@ -58,6 +65,14 @@ class ASH_EXPORT GeolocationPrivacySwitchController : public SessionObserver {
   // Retrieves the current access level.
   GeolocationAccessLevel AccessLevel() const;
 
+  // Retrieves the previous access level.
+  // The value of the previous access level is always different than the current
+  // access level. This is used to decide into which 'blocking' state the system
+  // should return to in case that a command to disable geolocation comes from a
+  // context that does not distinguish bytween 'system only' and 'disabled for
+  // all' (e.g. ARC).
+  GeolocationAccessLevel PreviousAccessLevel() const;
+
   // Sets the current access level.
   void SetAccessLevel(GeolocationAccessLevel access_level);
 
@@ -65,13 +80,26 @@ class ASH_EXPORT GeolocationPrivacySwitchController : public SessionObserver {
   // or apps started/stopped attempting to use geolocation).
   void UpdateNotification();
 
+  // Handles location change events originated from the ARC world. Enable events
+  // are directly propagated to ChromeOS. ARC doesn't trigger Disable events,
+  // but CrOS need to handle the case when user declines the confirmation dialog
+  // when they switched location from
+  // (`kDisallowed` | `kOnlyAllowedForSystem`) to `kAllowed`. In which case, we
+  // restore to the original state.
+  void ApplyArcLocationUpdate(bool geolocation_enabled);
+
+  // Sets/unsets the UI frontend delegate.
+  void SetFrontend(PrivacyHubDelegate* frontend);
+
  private:
   int usage_cnt_{};
   std::map<std::string, int> usage_per_app_;
-  std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
+  std::unique_ptr<PrefChangeRegistrar> primary_user_pref_change_registrar_;
   base::ScopedObservation<ash::SessionController,
                           GeolocationPrivacySwitchController>
       session_observation_;
+  std::optional<GeolocationAccessLevel> cached_access_level_;
+  raw_ptr<PrivacyHubDelegate> frontend_;
 };
 
 }  // namespace ash

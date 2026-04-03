@@ -26,6 +26,12 @@
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
 #include "v8/include/v8-forward.h"
 
+class GURL;
+
+namespace blink {
+class ExtensionScriptStreamer;
+}
+
 namespace extensions {
 
 class Dispatcher;
@@ -47,8 +53,8 @@ class ExtensionFrameHelper
   ~ExtensionFrameHelper() override;
 
   // Returns a list of extension RenderFrames that match the given filter
-  // criteria. A |browser_window_id| of extension_misc::kUnknownWindowId
-  // specifies "all", as does a |view_type| of mojom::ViewType::kInvalid.
+  // criteria. A `browser_window_id` of extension_misc::kUnknownWindowId
+  // specifies "all", as does a `view_type` of mojom::ViewType::kInvalid.
   static std::vector<content::RenderFrame*> GetExtensionFrames(
       const ExtensionId& extension_id,
       int browser_window_id,
@@ -56,7 +62,7 @@ class ExtensionFrameHelper
       mojom::ViewType view_type);
   // Same as above, but returns a v8::Array of the v8 global objects for those
   // frames, and only includes outermost main frames. Note: This only returns
-  // contexts that are accessible by |context|, and |context| must be the
+  // contexts that are accessible by `context`, and `context` must be the
   // current context.
   // Returns an empty v8::Array if no frames are found.
   static v8::Local<v8::Array> GetV8MainFrames(v8::Local<v8::Context> context,
@@ -78,7 +84,7 @@ class ExtensionFrameHelper
       const ExtensionId& extension_id);
 
   // Finds a neighboring extension frame with the same extension as the one
-  // owning |relative_to_frame| (if |relative_to_frame| is not an extension
+  // owning `relative_to_frame` (if `relative_to_frame` is not an extension
   // frame, returns nullptr). Pierces the browsing instance boundary because
   // certain extensions rely on this behavior.
   // TODO(devlin, lukasza): https://crbug.com/786411: Remove this behavior, and
@@ -94,7 +100,7 @@ class ExtensionFrameHelper
       v8::Isolate* isolate,
       v8::Local<v8::Value> v8_frame_token_string);
 
-  // Returns true if the given |context| is for any frame in the extension's
+  // Returns true if the given `context` is for any frame in the extension's
   // event page.
   // TODO(devlin): This isn't really used properly, and should probably be
   // deleted.
@@ -116,7 +122,7 @@ class ExtensionFrameHelper
   void MessageInvoke(const ExtensionId& extension_id,
                      const std::string& module_name,
                      const std::string& function_name,
-                     base::Value::List args) override;
+                     base::ListValue args) override;
   void ExecuteCode(mojom::ExecuteCodeParamsPtr param,
                    ExecuteCodeCallback callback) override;
   void ExecuteDeclarativeScript(int32_t tab_id,
@@ -162,10 +168,23 @@ class ExtensionFrameHelper
   // Schedule a callback, to be run at the next RunScriptsAtDocumentIdle call.
   void ScheduleAtDocumentIdle(base::OnceClosure callback);
 
+  // Returns the set of active user script worlds for the given `extension_id`
+  // on the current document.
+  const std::set<std::optional<std::string>>* GetActiveUserScriptWorlds(
+      const ExtensionId& extension_id);
+
+  // Adds `world_id` to the set of active user script worlds for the given
+  // `extension_id`.
+  void AddActiveUserScriptWorld(const ExtensionId& extension_id,
+                                const std::optional<std::string>& world_id);
+
   mojom::LocalFrameHost* GetLocalFrameHost();
   mojom::RendererHost* GetRendererHost();
   mojom::EventRouter* GetEventRouter();
   mojom::RendererAutomationRegistry* GetRendererAutomationRegistry();
+
+  std::map<GURL, std::optional<blink::ExtensionScriptStreamer>>&
+  GetScriptStreamersMap();
 
  private:
   void BindLocalFrame(
@@ -176,13 +195,11 @@ class ExtensionFrameHelper
   void DidCreateNewDocument() override;
   void ReadyToCommitNavigation(
       blink::WebDocumentLoader* document_loader) override;
-  void DidCommitProvisionalLoad(ui::PageTransition transition) override;
   void DidCreateScriptContext(v8::Local<v8::Context>,
                               int32_t world_id) override;
   void WillReleaseScriptContext(v8::Local<v8::Context>,
                                 int32_t world_id) override;
   void OnDestruct() override;
-  void DraggableRegionsChanged() override;
   void DidClearWindowObject() override;
 
   // Type of view associated with the RenderFrame.
@@ -194,7 +211,7 @@ class ExtensionFrameHelper
   // The id of the browser window the render frame is attached to.
   int browser_window_id_ = -1;
 
-  raw_ptr<Dispatcher, ExperimentalRenderer> extension_dispatcher_;
+  raw_ptr<Dispatcher> extension_dispatcher_;
 
   // Whether or not the current document element has been created. This starts
   // true as the initial empty document is already created when this class is
@@ -211,6 +228,12 @@ class ExtensionFrameHelper
 
   // Callbacks to be run at the next RunScriptsAtDocumentIdle notification.
   std::vector<base::OnceClosure> document_idle_callbacks_;
+
+  // The map of user script world IDs that are active on the current document,
+  // keyed by extension ID.
+  // Cleared when a new document is created.
+  using UserScriptWorldIdSet = std::set<std::optional<std::string>>;
+  std::map<ExtensionId, UserScriptWorldIdSet> active_user_script_worlds_;
 
   bool delayed_main_world_script_initialization_ = false;
 
@@ -231,6 +254,9 @@ class ExtensionFrameHelper
       renderer_automation_registry_remote_;
 
   mojo::AssociatedReceiver<mojom::LocalFrame> local_frame_receiver_{this};
+
+  std::map<GURL, std::optional<blink::ExtensionScriptStreamer>>
+      extension_script_streamers_;
 
   base::WeakPtrFactory<ExtensionFrameHelper> weak_ptr_factory_{this};
 };

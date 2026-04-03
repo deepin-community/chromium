@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <cmath>
 
 #include "test_utils/ANGLETest.h"
@@ -330,7 +334,7 @@ TEST_P(MaxTextureSizeTest, Render1xTexture)
 }
 
 // TODO(geofflang): Fix the dependence on glBlitFramebufferANGLE without checks and assuming the
-// default framebuffer is BGRA to enable the GL and GLES backends. (http://anglebug.com/1289)
+// default framebuffer is BGRA to enable the GL and GLES backends. (http://anglebug.com/42260299)
 
 // Use this to select which configurations (e.g. which renderer, which GLES major version) these
 // tests should be run against.

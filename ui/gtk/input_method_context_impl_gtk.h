@@ -14,17 +14,21 @@
 #include "ui/base/ime/linux/linux_input_method_context.h"
 #include "ui/gfx/geometry/rect.h"
 
-using GtkIMContext = struct _GtkIMContext;
 using GdkWindow = struct _GdkWindow;
+using GtkIMContext = struct _GtkIMContext;
+using GtkWidget = struct _GtkWidget;
 
 namespace gtk {
+
+class GtkUiPlatform;
 
 // An implementation of LinuxInputMethodContext which uses GtkIMContext
 // (gtk-immodule) as a bridge from/to underlying IMEs.
 class InputMethodContextImplGtk : public ui::LinuxInputMethodContext {
  public:
   explicit InputMethodContextImplGtk(
-      ui::LinuxInputMethodContextDelegate* delegate);
+      ui::LinuxInputMethodContextDelegate* delegate,
+      const GtkUiPlatform* platform);
 
   InputMethodContextImplGtk(const InputMethodContextImplGtk&) = delete;
   InputMethodContextImplGtk& operator=(const InputMethodContextImplGtk&) =
@@ -41,12 +45,10 @@ class InputMethodContextImplGtk : public ui::LinuxInputMethodContext {
                    ui::TextInputType old_type,
                    const TextInputClientAttributes& new_client_attributes,
                    ui::TextInputClient::FocusReason reason) override;
-  void SetSurroundingText(
-      const std::u16string& text,
-      const gfx::Range& text_range,
-      const gfx::Range& selection_range,
-      const std::optional<ui::GrammarFragment>& fragment,
-      const std::optional<ui::AutocorrectInfo>& autocorrect) override;
+  void SetSurroundingText(const std::u16string& text,
+                          const gfx::Range& text_range,
+                          const gfx::Range& composition_range,
+                          const gfx::Range& selection_range) override;
   ui::VirtualKeyboardController* GetVirtualKeyboardController() override;
 
  private:
@@ -57,26 +59,27 @@ class InputMethodContextImplGtk : public ui::LinuxInputMethodContext {
   void OnPreeditEnd(GtkIMContext* context);
   void OnPreeditStart(GtkIMContext* context);
 
-  // Only used on GTK3.
-  void SetContextClientWindow(GdkWindow* window, GtkIMContext* gtk_context);
-
   // Returns the IMContext depending on the currently connected input field
   // type.
   GtkIMContext* GetIMContext();
 
+  GdkWindow* GetTargetWindow(const ui::KeyEvent& key_event);
+
   // A set of callback functions.  Must not be nullptr.
   const raw_ptr<ui::LinuxInputMethodContextDelegate> delegate_;
+
+  const raw_ptr<const GtkUiPlatform> platform_;
 
   // Tracks the input field type.
   ui::TextInputType type_ = ui::TEXT_INPUT_TYPE_NONE;
 
   // IME's input GTK context.
-  raw_ptr<GtkIMContext> gtk_context_ = nullptr;
-  raw_ptr<GtkIMContext> gtk_simple_context_ = nullptr;
+  ScopedGObject<GtkIMContext> gtk_context_ = nullptr;
+  ScopedGObject<GtkIMContext> gtk_simple_context_ = nullptr;
 
-  // Only used on GTK3.
-  gpointer gdk_last_set_client_window_ = nullptr;
-  gpointer gdk_last_set_client_window_for_simple_ = nullptr;
+  // These correspond to the GtkImContexts above.
+  raw_ptr<GdkWindow> last_set_client_window_for_gtk_context_ = nullptr;
+  raw_ptr<GdkWindow> last_set_client_window_for_gtk_simple_comtext_ = nullptr;
 
   // Last known caret bounds relative to the screen coordinates, in DIPs.
   // Effective only on non-simple context.

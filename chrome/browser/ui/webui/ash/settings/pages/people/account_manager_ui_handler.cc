@@ -9,9 +9,12 @@
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/system/toast_data.h"
 #include "ash/public/cpp/system/toast_manager.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/ash/account_manager/account_apps_availability.h"
@@ -20,15 +23,16 @@
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/account_manager/account_migration_welcome_dialog.h"
-#include "chrome/browser/ui/webui/settings/settings_page_ui_handler.h"
 #include "chrome/browser/ui/webui/signin/ash/inline_login_dialog.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/account_manager/account_manager_factory.h"
 #include "components/account_manager_core/account_manager_facade.h"
-#include "components/account_manager_core/chromeos/account_manager_facade_factory.h"
 #include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/identity_manager/tribool.h"
 #include "components/user_manager/user.h"
+#include "content/public/browser/web_ui_message_handler.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -47,7 +51,7 @@ constexpr char kAccountRemovedToastId[] =
     "settings_account_manager_account_removed";
 
 ::account_manager::AccountKey GetAccountKeyFromJsCallback(
-    const base::Value::Dict& dictionary) {
+    const base::DictValue& dictionary) {
   const std::string* id = dictionary.FindString("id");
   DCHECK(id);
   DCHECK(!id->empty());
@@ -55,35 +59,28 @@ constexpr char kAccountRemovedToastId[] =
   const std::optional<int> account_type_value =
       dictionary.FindInt("accountType");
   DCHECK(account_type_value);
+
+  // Currently, we only support `kGaia` account type. Should a new type be added
+  // in the future, consider removing the `CHECK_EQ()` below and handling the
+  // new type accordingly.
   const int account_type_int = *account_type_value;
-  DCHECK((account_type_int >=
-          static_cast<int>(account_manager::AccountType::kGaia)) &&
-         (account_type_int <=
-          static_cast<int>(account_manager::AccountType::kActiveDirectory)));
+  CHECK_EQ(account_type_int,
+           static_cast<int>(account_manager::AccountType::kGaia));
   const account_manager::AccountType account_type =
       static_cast<account_manager::AccountType>(account_type_int);
 
   return ::account_manager::AccountKey{*id, account_type};
 }
 
-::account_manager::Account GetAccountFromJsCallback(
-    const base::Value::Dict& dictionary) {
-  ::account_manager::AccountKey key = GetAccountKeyFromJsCallback(dictionary);
-  const std::string* email = dictionary.FindString("email");
-  DCHECK(email);
-  return ::account_manager::Account{key, *email};
-}
-
 bool IsSameAccount(const ::account_manager::AccountKey& account_key,
                    const AccountId& account_id) {
-  switch (account_key.account_type()) {
-    case account_manager::AccountType::kGaia:
-      return (account_id.GetAccountType() == AccountType::GOOGLE) &&
-             (account_id.GetGaiaId() == account_key.id());
-    case account_manager::AccountType::kActiveDirectory:
-      return (account_id.GetAccountType() == AccountType::ACTIVE_DIRECTORY) &&
-             (account_id.GetObjGuid() == account_key.id());
-  }
+  // Currently, we only support `kGaia` account type. Should a new type be added
+  // in the future, consider removing the `CHECK_EQ()` below and handling the
+  // new type accordingly.
+  CHECK_EQ(account_key.account_type(), account_manager::AccountType::kGaia);
+
+  return (account_id.GetAccountType() == AccountType::GOOGLE) &&
+         (account_id.GetGaiaId() == GaiaId(account_key.id()));
 }
 
 void ShowToast(const std::string& id,
@@ -101,9 +98,7 @@ class AccountBuilder {
 
   ~AccountBuilder() = default;
 
-  void PopulateFrom(base::Value::Dict account) {
-    account_ = std::move(account);
-  }
+  void PopulateFrom(base::DictValue account) { account_ = std::move(account); }
 
   bool IsEmpty() const { return account_.empty(); }
 
@@ -163,7 +158,7 @@ class AccountBuilder {
   }
 
   // Should be called only once.
-  base::Value::Dict Build() {
+  base::DictValue Build() {
     // Check that values were set.
     DCHECK(account_.FindString("id"));
     DCHECK(account_.FindString("email"));
@@ -173,16 +168,14 @@ class AccountBuilder {
     DCHECK(account_.FindBool("isSignedIn"));
     DCHECK(account_.FindBool("unmigrated"));
     DCHECK(account_.FindString("pic"));
-    if (AccountAppsAvailability::IsArcAccountRestrictionsEnabled()) {
-      DCHECK(account_.FindBool("isAvailableInArc"));
-    }
+    DCHECK(account_.FindBool("isAvailableInArc"));
     // "organization" is an optional field.
 
     return std::move(account_);
   }
 
  private:
-  base::Value::Dict account_;
+  base::DictValue account_;
 };
 
 }  // namespace
@@ -198,10 +191,8 @@ AccountManagerUIHandler::AccountManagerUIHandler(
   DCHECK(account_manager_);
   DCHECK(account_manager_facade_);
   DCHECK(identity_manager_);
-  if (AccountAppsAvailability::IsArcAccountRestrictionsEnabled()) {
-    account_apps_availability_ = account_apps_availability;
-    DCHECK(account_apps_availability_);
-  }
+  account_apps_availability_ = account_apps_availability;
+  DCHECK(account_apps_availability_);
 }
 
 AccountManagerUIHandler::~AccountManagerUIHandler() = default;
@@ -231,17 +222,13 @@ void AccountManagerUIHandler::RegisterMessages() {
       "removeAccount",
       base::BindRepeating(&AccountManagerUIHandler::HandleRemoveAccount,
                           weak_factory_.GetWeakPtr()));
-  web_ui()->RegisterMessageCallback(
-      "changeArcAvailability",
-      base::BindRepeating(&AccountManagerUIHandler::HandleChangeArcAvailability,
-                          weak_factory_.GetWeakPtr()));
 }
 
 void AccountManagerUIHandler::SetProfileForTesting(Profile* profile) {
   profile_ = profile;
 }
 
-void AccountManagerUIHandler::HandleGetAccounts(const base::Value::List& args) {
+void AccountManagerUIHandler::HandleGetAccounts(const base::ListValue& args) {
   AllowJavascript();
 
   CHECK_EQ(args.size(), 1u);
@@ -258,16 +245,10 @@ void AccountManagerUIHandler::OnCheckDummyGaiaTokenForAllAccounts(
     base::Value callback_id,
     const std::vector<std::pair<::account_manager::Account, bool>>&
         account_dummy_token_list) {
-  if (AccountAppsAvailability::IsArcAccountRestrictionsEnabled()) {
-    account_apps_availability_->GetAccountsAvailableInArc(
-        base::BindOnce(&AccountManagerUIHandler::FinishHandleGetAccounts,
-                       weak_factory_.GetWeakPtr(), std::move(callback_id),
-                       std::move(account_dummy_token_list)));
-    return;
-  }
-  FinishHandleGetAccounts(std::move(callback_id),
-                          std::move(account_dummy_token_list),
-                          base::flat_set<account_manager::Account>());
+  account_apps_availability_->GetAccountsAvailableInArc(
+      base::BindOnce(&AccountManagerUIHandler::FinishHandleGetAccounts,
+                     weak_factory_.GetWeakPtr(), std::move(callback_id),
+                     std::move(account_dummy_token_list)));
 }
 
 void AccountManagerUIHandler::FinishHandleGetAccounts(
@@ -284,31 +265,13 @@ void AccountManagerUIHandler::FinishHandleGetAccounts(
   user_manager::User* user = ProfileHelper::Get()->GetUserByProfile(profile_);
   DCHECK(user);
 
-  base::Value::Dict gaia_device_account;
-  base::Value::List accounts = GetSecondaryGaiaAccounts(
+  base::DictValue gaia_device_account;
+  base::ListValue accounts = GetSecondaryGaiaAccounts(
       account_dummy_token_list, arc_accounts, user->GetAccountId(),
       profile_->IsChild(), &gaia_device_account);
 
   AccountBuilder device_account;
-  if (user->IsActiveDirectoryUser()) {
-    device_account.SetId(user->GetAccountId().GetObjGuid())
-        .SetAccountType(
-            static_cast<int>(account_manager::AccountType::kActiveDirectory))
-        .SetEmail(user->GetDisplayEmail())
-        .SetFullName(base::UTF16ToUTF8(user->GetDisplayName()))
-        .SetIsSignedIn(true)
-        .SetUnmigrated(false);
-    if (AccountAppsAvailability::IsArcAccountRestrictionsEnabled()) {
-      device_account.SetIsAvailableInArc(true);
-    }
-    gfx::ImageSkia default_icon =
-        *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
-            IDR_LOGIN_DEFAULT_USER);
-    device_account.SetPic(webui::GetBitmapDataUrl(
-        default_icon.GetRepresentation(1.0f).GetBitmap()));
-  } else {
-    device_account.PopulateFrom(std::move(gaia_device_account));
-  }
+  device_account.PopulateFrom(std::move(gaia_device_account));
 
   if (!device_account.IsEmpty()) {
     device_account.SetIsDeviceAccount(true);
@@ -319,14 +282,9 @@ void AccountManagerUIHandler::FinishHandleGetAccounts(
       // Replace space with the non-breaking space.
       base::ReplaceSubstringsAfterOffset(&organization, 0, " ", "&nbsp;");
       device_account.SetOrganization(organization).SetIsManaged(true);
-    } else if (user->IsActiveDirectoryUser()) {
-      device_account
-          .SetOrganization(chrome::enterprise_util::GetDomainFromEmail(
-              user->GetDisplayEmail()))
-          .SetIsManaged(true);
     } else if (profile_->GetProfilePolicyConnector()->IsManaged()) {
       device_account
-          .SetOrganization(chrome::enterprise_util::GetDomainFromEmail(
+          .SetOrganization(enterprise_util::GetDomainFromEmail(
               identity_manager_
                   ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
                   .email))
@@ -340,14 +298,14 @@ void AccountManagerUIHandler::FinishHandleGetAccounts(
   ResolveJavascriptCallback(callback_id, accounts);
 }
 
-base::Value::List AccountManagerUIHandler::GetSecondaryGaiaAccounts(
+base::ListValue AccountManagerUIHandler::GetSecondaryGaiaAccounts(
     const std::vector<std::pair<::account_manager::Account, bool>>&
         account_dummy_token_list,
     const base::flat_set<account_manager::Account>& arc_accounts,
     const AccountId device_account_id,
     const bool is_child_user,
-    base::Value::Dict* device_account) {
-  base::Value::List accounts;
+    base::DictValue* device_account) {
+  base::ListValue accounts;
   for (const auto& account_token_pair : account_dummy_token_list) {
     const ::account_manager::Account& stored_account = account_token_pair.first;
     const ::account_manager::AccountKey& account_key = stored_account.key;
@@ -357,7 +315,8 @@ base::Value::List AccountManagerUIHandler::GetSecondaryGaiaAccounts(
     }
 
     AccountInfo maybe_account_info =
-        identity_manager_->FindExtendedAccountInfoByGaiaId(account_key.id());
+        identity_manager_->FindExtendedAccountInfoByGaiaId(
+            GaiaId(account_key.id()));
     if (maybe_account_info.IsEmpty()) {
       // This account hasn't propagated to IdentityManager yet. When this
       // happens, `IdentityManager` will call `OnRefreshTokenUpdatedForAccount`
@@ -369,20 +328,18 @@ base::Value::List AccountManagerUIHandler::GetSecondaryGaiaAccounts(
     account.SetId(account_key.id())
         .SetAccountType(static_cast<int>(account_key.account_type()))
         .SetIsDeviceAccount(false)
-        .SetFullName(maybe_account_info.full_name)
+        .SetFullName(std::string(maybe_account_info.GetFullName().value_or("")))
         .SetEmail(stored_account.raw_email)
         .SetUnmigrated(!is_child_user && account_token_pair.second)
-        .SetIsManaged(maybe_account_info.IsManaged())
+        .SetIsManaged(maybe_account_info.IsManaged() == signin::Tribool::kTrue)
         .SetIsSignedIn(!identity_manager_
                             ->HasAccountWithRefreshTokenInPersistentErrorState(
-                                maybe_account_info.account_id));
-    if (AccountAppsAvailability::IsArcAccountRestrictionsEnabled()) {
-      account.SetIsAvailableInArc(arc_accounts.contains(stored_account));
-    }
+                                maybe_account_info.GetAccountId()));
+    account.SetIsAvailableInArc(arc_accounts.contains(stored_account));
 
-    if (!maybe_account_info.account_image.IsEmpty()) {
-      account.SetPic(
-          webui::GetBitmapDataUrl(maybe_account_info.account_image.AsBitmap()));
+    if (maybe_account_info.GetAvatarImage().has_value()) {
+      account.SetPic(webui::GetBitmapDataUrl(
+          maybe_account_info.GetAvatarImage()->AsBitmap()));
     } else {
       gfx::ImageSkia default_icon =
           *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
@@ -400,22 +357,24 @@ base::Value::List AccountManagerUIHandler::GetSecondaryGaiaAccounts(
   return accounts;
 }
 
-void AccountManagerUIHandler::HandleAddAccount(const base::Value::List& args) {
+void AccountManagerUIHandler::HandleAddAccount(const base::ListValue& args) {
   AllowJavascript();
-  ::GetAccountManagerFacade(profile_->GetPath().value())
+  AccountManagerFactory::Get()
+      ->GetAccountManagerFacade(profile_->GetPath().value())
       ->ShowAddAccountDialog(
           account_manager::AccountManagerFacade::AccountAdditionSource::
               kSettingsAddAccountButton);
 }
 
 void AccountManagerUIHandler::HandleReauthenticateAccount(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   CHECK(!args.empty());
   const std::string& account_email = args[0].GetString();
 
-  ::GetAccountManagerFacade(profile_->GetPath().value())
+  AccountManagerFactory::Get()
+      ->GetAccountManagerFacade(profile_->GetPath().value())
       ->ShowReauthAccountDialog(
           account_manager::AccountManagerFacade::AccountAdditionSource::
               kSettingsReauthAccountButton,
@@ -423,7 +382,7 @@ void AccountManagerUIHandler::HandleReauthenticateAccount(
 }
 
 void AccountManagerUIHandler::HandleMigrateAccount(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   CHECK(!args.empty());
@@ -432,12 +391,11 @@ void AccountManagerUIHandler::HandleMigrateAccount(
   AccountMigrationWelcomeDialog::Show(account_email);
 }
 
-void AccountManagerUIHandler::HandleRemoveAccount(
-    const base::Value::List& args) {
+void AccountManagerUIHandler::HandleRemoveAccount(const base::ListValue& args) {
   AllowJavascript();
 
   CHECK(!args.empty());
-  const base::Value::Dict* dictionary = args[0].GetIfDict();
+  const base::DictValue* dictionary = args[0].GetIfDict();
   CHECK(dictionary);
 
   const AccountId device_account_id =
@@ -460,24 +418,6 @@ void AccountManagerUIHandler::HandleRemoveAccount(
             l10n_util::GetStringFUTF16(
                 IDS_SETTINGS_ACCOUNT_MANAGER_ACCOUNT_REMOVED_MESSAGE,
                 base::UTF8ToUTF16(*email)));
-}
-
-void AccountManagerUIHandler::HandleChangeArcAvailability(
-    const base::Value::List& args) {
-  DCHECK(AccountAppsAvailability::IsArcAccountRestrictionsEnabled());
-
-  // 2 args: account, is_available.
-  CHECK_GT(args.size(), 1u);
-  const base::Value::Dict* account_dict = args[0].GetIfDict();
-  CHECK(account_dict);
-  const std::optional<bool> is_available = args[1].GetIfBool();
-  CHECK(is_available.has_value());
-
-  const ::account_manager::Account account =
-      GetAccountFromJsCallback(*account_dict);
-  account_apps_availability_->SetIsAccountAvailableInArc(account,
-                                                         is_available.value());
-  // Note: the observer call will update the UI.
 }
 
 void AccountManagerUIHandler::OnJavascriptAllowed() {
@@ -538,7 +478,8 @@ void AccountManagerUIHandler::OnExtendedAccountInfoUpdated(
 
 void AccountManagerUIHandler::OnErrorStateOfRefreshTokenUpdatedForAccount(
     const CoreAccountInfo& account_info,
-    const GoogleServiceAuthError& error) {
+    const GoogleServiceAuthError& error,
+    signin_metrics::SourceForRefreshTokenOperation token_operation_source) {
   if (error.state() != GoogleServiceAuthError::NONE) {
     RefreshUI();
   }

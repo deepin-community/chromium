@@ -108,7 +108,8 @@ class InputRewriter {
   // *new_input_str will be set to the empty string if the input should be
   // removed, which occurs if it is a control dependency for a node in the first
   // function.
-  Status RewriteInput(absl::string_view input_str, string* new_input_str);
+  absl::Status RewriteInput(absl::string_view input_str,
+                            std::string* new_input_str);
 
  private:
   bool IsInFirstFunction(absl::string_view node_name) {
@@ -116,35 +117,36 @@ class InputRewriter {
   }
 
   // Rewrite a control input. input_str is in the form "^node_name"
-  Status RewriteControlInput(absl::string_view input_str,
-                             string* new_input_str);
+  absl::Status RewriteControlInput(absl::string_view input_str,
+                                   std::string* new_input_str);
 
   // Rewrite an input that is an argument to original_function_. input_str is in
   // the form "fun_in" or "fun_in:number".
-  Status RewriteArgumentInput(absl::string_view input_str,
-                              string* new_input_str);
+  absl::Status RewriteArgumentInput(absl::string_view input_str,
+                                    std::string* new_input_str);
 
   // Rewrite an input that is the output of a node. input_str is in the form
   // "node:out" or "node:out:number"
-  Status RewriteNodeInput(absl::string_view input_str, string* new_input_str);
+  absl::Status RewriteNodeInput(absl::string_view input_str,
+                                std::string* new_input_str);
 
   // Rewrites an input, `input_str`, where the node producing `input_str` is in
   // first_function_ and the node consuming `input_str` is in second_function_.
   // This function adds an output argument to first_function_ and an input
   // argument to second_function_. "input_arg_def" is the ArgDef corresponding
   // to input_str, and must have the type() field set.
-  Status RewriteCrossFunctionInput(absl::string_view input_str,
-                                   const OpDef::ArgDef& input_arg_def,
-                                   string* new_input_str);
+  absl::Status RewriteCrossFunctionInput(absl::string_view input_str,
+                                         const OpDef::ArgDef& input_arg_def,
+                                         std::string* new_input_str);
 
-  string unique_name(const std::string& name) {
+  std::string unique_name(const std::string& name) {
     if (used_names_.count(name) == 0) {
       used_names_.insert(name);
       return name;
     }
 
     for (int64_t suffix = 0; true; suffix++) {
-      string new_name = absl::StrCat(name, "_", suffix);
+      std::string new_name = absl::StrCat(name, "_", suffix);
       auto iter = used_names_.insert(new_name);
       if (iter.second) {
         return new_name;
@@ -166,15 +168,15 @@ class InputRewriter {
 
   // Caches results of RewriteInput(), so that if the same input string is
   // passed, it is rewritten to the same string.
-  absl::flat_hash_map<absl::string_view, string> input_map_;
+  absl::flat_hash_map<absl::string_view, std::string> input_map_;
 
   // Node and argument names that are used in either function. Used to uniquify
   // argument names.
-  std::unordered_set<string> used_names_;
+  std::unordered_set<std::string> used_names_;
 };
 
-Status InputRewriter::RewriteInput(absl::string_view input_str,
-                                   string* new_input_str) {
+absl::Status InputRewriter::RewriteInput(absl::string_view input_str,
+                                         std::string* new_input_str) {
   auto iter = input_map_.find(input_str);
   if (iter != input_map_.end()) {
     *new_input_str = iter->second;
@@ -192,26 +194,26 @@ Status InputRewriter::RewriteInput(absl::string_view input_str,
   return absl::OkStatus();
 }
 
-Status InputRewriter::RewriteControlInput(absl::string_view input_str,
-                                          string* new_input_str) {
+absl::Status InputRewriter::RewriteControlInput(absl::string_view input_str,
+                                                std::string* new_input_str) {
   DCHECK_EQ(input_str.at(0), '^');
   absl::string_view node_name = input_str.substr(1);
   if (IsInFirstFunction(node_name)) {
     *new_input_str = "";
   } else {
-    *new_input_str = string{input_str};
+    *new_input_str = std::string{input_str};
   }
   return absl::OkStatus();
 }
 
-Status InputRewriter::RewriteArgumentInput(absl::string_view input_str,
-                                           string* new_input_str) {
-  std::vector<string> components = absl::StrSplit(input_str, ':');
+absl::Status InputRewriter::RewriteArgumentInput(absl::string_view input_str,
+                                                 std::string* new_input_str) {
+  std::vector<std::string> components = absl::StrSplit(input_str, ':');
   if (components.size() != 1 && components.size() != 2) {
     return errors::Internal("Found node with invalid argument input: ",
                             input_str);
   }
-  string argument_name = components[0];
+  std::string argument_name = components[0];
   if (components.size() == 2 && components[1] != "0") {
     // It is required that `original_function` must not have any list arguments.
     return errors::Internal(
@@ -232,7 +234,7 @@ Status InputRewriter::RewriteArgumentInput(absl::string_view input_str,
   if (i >=
       original_function_.signature().input_arg_size() - num_captured_inputs_) {
     // Argument is a captured input. No need to modify argument string.
-    *new_input_str = string{input_str};
+    *new_input_str = std::string{input_str};
     return absl::OkStatus();
   }
   const OpDef::ArgDef* found_arg_def =
@@ -254,18 +256,18 @@ Status InputRewriter::RewriteArgumentInput(absl::string_view input_str,
   return RewriteCrossFunctionInput(input_str, *found_arg_def, new_input_str);
 }
 
-Status InputRewriter::RewriteNodeInput(absl::string_view input_str,
-                                       string* new_input_str) {
-  std::vector<string> components = absl::StrSplit(input_str, ':');
+absl::Status InputRewriter::RewriteNodeInput(absl::string_view input_str,
+                                             std::string* new_input_str) {
+  std::vector<std::string> components = absl::StrSplit(input_str, ':');
   if (components.size() != 2 && components.size() != 3) {
     return errors::Internal("Found node with invalid node input: ", input_str);
   }
-  const string& node_name = components[0];
-  const string& node_output_arg = components[1];
-  const string& list_output_index =
+  const std::string& node_name = components[0];
+  const std::string& node_output_arg = components[1];
+  const std::string& list_output_index =
       components.size() == 3 ? components[2] : "0";
   if (!IsInFirstFunction(node_name)) {
-    *new_input_str = string{input_str};
+    *new_input_str = std::string{input_str};
     return absl::OkStatus();
   }
 
@@ -299,7 +301,7 @@ Status InputRewriter::RewriteNodeInput(absl::string_view input_str,
   }
 
   if (!found_arg_def.type_attr().empty()) {
-    const string& attr = found_arg_def.type_attr();
+    const std::string& attr = found_arg_def.type_attr();
     auto attr_iter = node.attr().find(attr);
     if (attr_iter == node.attr().end()) {
       return errors::Internal("Failed to find attr ", attr, " on node ",
@@ -321,9 +323,9 @@ Status InputRewriter::RewriteNodeInput(absl::string_view input_str,
   return RewriteCrossFunctionInput(input_str, found_arg_def, new_input_str);
 }
 
-Status InputRewriter::RewriteCrossFunctionInput(
+absl::Status InputRewriter::RewriteCrossFunctionInput(
     absl::string_view input_str, const OpDef::ArgDef& input_arg_def,
-    string* new_input_str) {
+    std::string* new_input_str) {
   DCHECK(input_arg_def.type() != DT_INVALID);
   if (input_arg_def.is_ref() || IsRefType(input_arg_def.type())) {
     // This case is untested and is not important to support, so an
@@ -341,7 +343,7 @@ Status InputRewriter::RewriteCrossFunctionInput(
   added_output_arg->set_description(absl::StrCat(
       "Output ", output_index, ", corresponding to input ", input_str));
   first_function_->mutable_ret()->insert(
-      {added_output_arg->name(), string{input_str}});
+      {added_output_arg->name(), std::string{input_str}});
   first_function_output_types_->push_back(input_arg_def.type());
 
   OpDef::ArgDef* added_input_arg =
@@ -400,7 +402,7 @@ void InitializeSignatures(
 
 }  // namespace
 
-StatusOr<SplitResults> SplitFunction(
+absl::StatusOr<SplitResults> SplitFunction(
     const FunctionDef& function,
     const absl::flat_hash_set<absl::string_view>& nodes_in_first_function,
     int64_t num_captured_inputs, const FunctionLibraryDefinition& library) {
@@ -458,8 +460,8 @@ StatusOr<SplitResults> SplitFunction(
       new_node_def = orig_node_def;
       new_node_def.clear_input();
 
-      for (const string& input_str : orig_node_def.input()) {
-        string* new_input_str = new_node_def.add_input();
+      for (const std::string& input_str : orig_node_def.input()) {
+        std::string* new_input_str = new_node_def.add_input();
         TF_RETURN_IF_ERROR(rewriter.RewriteInput(input_str, new_input_str));
         if (new_input_str->empty()) {
           new_node_def.mutable_input()->RemoveLast();
@@ -474,8 +476,8 @@ StatusOr<SplitResults> SplitFunction(
       // Add node to first function, and check that all its inputs are also in
       // the first function.
       *results.first_function.add_node_def() = orig_node_def;
-      for (const string& input_str : orig_node_def.input()) {
-        std::vector<string> components = absl::StrSplit(input_str, ':');
+      for (const std::string& input_str : orig_node_def.input()) {
+        std::vector<std::string> components = absl::StrSplit(input_str, ':');
         if (!IsControlInput(input_str) && !IsFunctionArgument(input_str) &&
             !nodes_in_first_function.contains(components[0])) {
           return errors::Internal("Node ", orig_node_def.name(),
@@ -495,7 +497,8 @@ StatusOr<SplitResults> SplitFunction(
           "Failed to find output_arg '", arg_def.name(),
           "' in 'ret' section. FunctionDef: ", function.DebugString());
     }
-    string& new_ret = (*results.second_function.mutable_ret())[arg_def.name()];
+    std::string& new_ret =
+        (*results.second_function.mutable_ret())[arg_def.name()];
     TF_RETURN_IF_ERROR(rewriter.RewriteInput(it->second, &new_ret));
     DCHECK(!new_ret.empty());
   }

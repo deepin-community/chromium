@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_ARC_INPUT_OVERLAY_UI_ACTION_HIGHLIGHT_H_
 #define CHROME_BROWSER_ASH_ARC_INPUT_OVERLAY_UI_ACTION_HIGHLIGHT_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
@@ -46,7 +47,8 @@ class ActionHighlight : public views::View, public views::ViewObserver {
   int GetOverallRadius() const;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnPaintBackground(gfx::Canvas* canvas) override;
   void VisibilityChanged(views::View* starting_from, bool is_visible) override;
 

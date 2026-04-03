@@ -8,8 +8,8 @@
 
 #include "ash/public/cpp/login_screen.h"
 #include "chrome/browser/ash/login/error_screens_histogram_helper.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/login/wizard_context.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/add_child_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
 #include "chromeos/ash/components/network/network_state.h"
@@ -26,6 +26,7 @@ constexpr char kUserActionChildAccountCreate[] = "child-account-create";
 
 // static
 std::string AddChildScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::CHILD_SIGNIN:
       return "SignInAsChild";
@@ -40,6 +41,7 @@ std::string AddChildScreen::GetResultString(Result result) {
     case Result::SKIPPED:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 AddChildScreen::AddChildScreen(base::WeakPtr<AddChildScreenView> view,
@@ -93,7 +95,7 @@ void AddChildScreen::HideImpl() {
   error_screen_->Hide();
 }
 
-void AddChildScreen::OnUserAction(const base::Value::List& args) {
+void AddChildScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionChildSignIn) {
     context()->sign_in_as_child = true;
